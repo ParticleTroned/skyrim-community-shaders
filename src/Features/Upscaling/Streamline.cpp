@@ -697,7 +697,7 @@ namespace
 		const auto& upscaling = globals::features::upscaling;
 		const auto& plan = upscaling.GetRuntimeResolutionPlan();
 		const char* label = a_diagnostics->label ? a_diagnostics->label : "DLSS Evaluate";
-		const auto* frameToken = a_diagnostics->frameToken ? a_diagnostics->frameToken : upscaling.streamline.frameToken;
+		const auto* frameToken = a_diagnostics->frameToken;
 		const uint32_t frame = a_diagnostics->frame;
 		const std::string result = FormatDLSSDiagnosticResult(a_resultCode, a_resultLabel);
 
@@ -1232,28 +1232,44 @@ void Streamline::PostDevice()
 }
 
 /**
- * @brief Updates and sets camera and frame constants for the current Streamline frame.
- *
- * Populates and submits camera parameters, projection matrices, motion vector settings, and other per-frame constants to the Streamline SDK for the current frame. Uses cached framebuffer data and global state to ensure correct configuration for upscaling and frame generation features.
+ * @brief Resolves one coherently published Streamline token for a logical frame.
  */
-bool Streamline::EnsureFrameToken()
+std::optional<Streamline::FrameTokenSnapshot> Streamline::AcquireFrameToken(
+	uint32_t a_frame,
+	const char* a_consumer)
 {
 	if (!initialized || !slGetNewFrameToken || !globals::state)
-		return false;
+		return std::nullopt;
 
-	if (!frameChecker.IsNewFrame())
-		return frameToken != nullptr;
+	return frameTokenCoordinator.Resolve(
+		a_frame,
+		[this, a_consumer](uint32_t a_requestedFrame)
+			-> std::optional<sl::FrameToken*> {
+			sl::FrameToken* acquiredToken = nullptr;
+			const uint32_t requestedFrame = a_requestedFrame;
+			if (SL_FAILED(result, slGetNewFrameToken(acquiredToken, &requestedFrame))) {
+				logger::error(
+					"[Streamline] Could not get {} frame token for frame {}: {}",
+					a_consumer ? a_consumer : "unknown",
+					a_requestedFrame,
+					magic_enum::enum_name(result));
+				return std::nullopt;
+			}
 
-	if (SL_FAILED(result, slGetNewFrameToken(frameToken, &globals::state->frameCount))) {
-		logger::error("[Streamline] Could not get frame token: {}", magic_enum::enum_name(result));
-		frameToken = nullptr;
-		return false;
-	}
+			if (!acquiredToken || static_cast<uint32_t>(*acquiredToken) != a_requestedFrame) {
+				logger::error(
+					"[Streamline] Rejected incoherent {} frame token for frame {}: token={}",
+					a_consumer ? a_consumer : "unknown",
+					a_requestedFrame,
+					acquiredToken ? static_cast<uint32_t>(*acquiredToken) : 0u);
+				return std::nullopt;
+			}
 
-	return frameToken != nullptr;
+			return acquiredToken;
+		});
 }
 
-bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex, float viewportScaleX, float viewportScaleY, float pinholeOffsetX, float pinholeOffsetY, const DLSSDispatchDiagnostics* diagnostics
+bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameToken* frameToken, uint32_t eyeIndex, float viewportScaleX, float viewportScaleY, float pinholeOffsetX, float pinholeOffsetY, const DLSSDispatchDiagnostics* diagnostics
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	,
 	DLSSDevBenchTraceSignature* outFrameConstantsSignature
@@ -1263,7 +1279,7 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 	if (!globals::features::upscaling.streamline.initialized)
 		return false;
 
-	if (!EnsureFrameToken()) {
+	if (!frameToken) {
 		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::FrameToken, "unavailable", diagnostics);
 		return false;
 	}
@@ -2074,8 +2090,7 @@ void Streamline::ResetDLSSIdleFences()
 
 void Streamline::ResetFrameTracking()
 {
-	frameToken = nullptr;
-	frameChecker = {};
+	frameTokenCoordinator.Reset();
 	dlssFrameConstantsCache = {};
 }
 
@@ -2224,7 +2239,6 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		diagnostics.foveatedDispatchEnabled = upscaling.IsFoveatedVendorDispatchEnabled(upscaling.GetRuntimeUpscaleMethod());
 		diagnostics.peripheryTAAEnabled = upscaling.IsPeripheryTAAEnabled(upscaling.GetRuntimeUpscaleMethod());
 		diagnostics.historyResetRequested = upscaling.ShouldResetHistoryThisFrame();
-		diagnostics.frameToken = frameToken;
 	}
 	const auto updateOptionsCacheDiagnostics = [&]() {
 		if (!collectDLSSDiagnostics)
@@ -2265,8 +2279,17 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	DLSSDevBenchTraceSignature devBenchFrameConstantsSignature{};
 	auto* devBenchFrameConstantsSignaturePtr = IsDLSSDevBenchTraceActive() ? &devBenchFrameConstantsSignature : nullptr;
 #endif
+	const auto frameTokenSnapshot = AcquireFrameToken(diagnostics.frame, "dlss");
+	if (!frameTokenSnapshot) {
+		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::FrameToken, "unavailable", diagnosticsPtr);
+		return false;
+	}
+	auto* const frameToken = frameTokenSnapshot->token;
+	diagnostics.frame = frameTokenSnapshot->frame;
+	diagnostics.frameToken = frameToken;
 	if (!CheckFrameConstants(
 			vp,
+			frameToken,
 			eyeIndex,
 			viewportScaleX,
 			viewportScaleY,
@@ -2895,11 +2918,12 @@ void Streamline::UpdateReflex()
 	if (lastReflexSleepFrame == currentFrame)
 		return;
 
-	if (!EnsureFrameToken())
+	const auto frameTokenSnapshot = AcquireFrameToken(currentFrame, "reflex");
+	if (!frameTokenSnapshot)
 		return;
 
 	lastReflexSleepFrame = currentFrame;
-	if (SL_FAILED(result, slReflexSleep(*frameToken))) {
+	if (SL_FAILED(result, slReflexSleep(*frameTokenSnapshot->token))) {
 		logger::warn("[Streamline] Reflex sleep call failed: {}", magic_enum::enum_name(result));
 	}
 }

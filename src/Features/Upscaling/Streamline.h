@@ -2,6 +2,7 @@
 
 #include "../../Buffer.h"
 #include "../../State.h"
+#include "StreamlineFrameTokenPublication.h"
 
 #include <array>
 #include <cstddef>
@@ -94,8 +95,10 @@ public:
 	PFun_slReflexSetOptions* slReflexSetOptions{};
 	PFun_slPCLSetMarker* slPCLSetMarker{};
 
-	Util::FrameChecker frameChecker;
-	sl::FrameToken* frameToken = nullptr;
+	using FrameTokenCoordinator =
+		StreamlineFrameTokenPublication::Coordinator<sl::FrameToken*>;
+	using FrameTokenSnapshot = FrameTokenCoordinator::Snapshot;
+	FrameTokenCoordinator frameTokenCoordinator;
 
 	bool isRTXBelow40series = false;
 	struct DLSSOptionsCache
@@ -440,13 +443,16 @@ public:
 
 	void PostDevice();
 
-	bool CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex = 0, float viewportScaleX = 1.0f, float viewportScaleY = 1.0f, float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f, const DLSSDispatchDiagnostics* diagnostics = nullptr
+	bool CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameToken* frameToken, uint32_t eyeIndex = 0, float viewportScaleX = 1.0f, float viewportScaleY = 1.0f, float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f, const DLSSDispatchDiagnostics* diagnostics = nullptr
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		,
 		DLSSDevBenchTraceSignature* outFrameConstantsSignature = nullptr
 #endif
 	);
-	bool EnsureFrameToken();
+	/** Acquires or reuses the token published for the exact logical frame. */
+	[[nodiscard]] std::optional<FrameTokenSnapshot> AcquireFrameToken(
+		uint32_t a_frame,
+		const char* a_consumer);
 
 	bool IsRTXAndBelow40Series(IDXGIAdapter* a_adapter);
 

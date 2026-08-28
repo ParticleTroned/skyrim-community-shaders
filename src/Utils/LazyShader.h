@@ -28,12 +28,18 @@ namespace Util
 			const std::vector<std::pair<const char*, const char*>>& a_defines,
 			const char* a_target,
 			const char* a_entry = "main",
-			const char* a_name = nullptr)
+			const char* a_name = nullptr,
+			ShaderCompileTiming* a_timing = nullptr)
 		{
 			if (!shader && !failed) {
 				logger::debug("Compiling {}", Util::WStringToString(a_path));
 				shader.attach(static_cast<ShaderT*>(
-					Util::CompileShader(a_path, a_defines, a_target, a_entry)));
+					Util::CompileShader(
+						a_path,
+						a_defines,
+						a_target,
+						a_entry,
+						a_timing)));
 				failed = !shader;
 				if (shader && a_name)
 					Util::SetResourceName(shader.get(), a_name);

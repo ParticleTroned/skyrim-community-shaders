@@ -204,6 +204,12 @@ if(_expected_start_frame_description_error OR
 endif()
 
 foreach(_required_behavior IN ITEMS
+	"PreparationTelemetryJson"
+	"request_to_prepared"
+	"prepared_to_creator"
+	"shader_cache_busy_wait"
+	"optionsGeneration"
+	"d3dObjectCreationQpcTicks"
     "QualificationPolicy::SaturatingDeadlineTick"
 	"QualificationPolicy::EvaluateMilestones"
 	"QualificationPolicy::IsMilestoneSatisfied"

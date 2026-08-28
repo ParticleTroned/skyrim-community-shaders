@@ -198,6 +198,14 @@ allocator. Normal and abort cleanup pass the exact retained ID as
 `expectedStartFrame` remains a legacy optional secondary check and is not the
 primary ownership identity.
 
+While the stress session is active, render-scale status also exposes the
+bounded `preparation` trace. Use its per-stage QPC timings to distinguish
+shader bytecode compilation, D3D11 shader creation, provider compatibility
+inspection, request-to-prepared latency, and prepared-to-creator latency. The
+trace is diagnostic only and does not alter qualification or transition
+behavior. Its ownership and operation classification are documented in
+[VR render-scale preparation telemetry](vr-render-scale-preparation.md).
+
 ## Recovery barrier 1
 
 After the COC capture is finalized, DevBench waits exactly 30 seconds. The

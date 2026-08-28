@@ -1348,7 +1348,7 @@ void ScreenSpaceGI::ClearShaderCache()
 	CompileComputeShaders();
 }
 
-bool ScreenSpaceGI::CompileComputeShaders()
+bool ScreenSpaceGI::CompileComputeShaders(Util::ShaderCompileTiming* a_timing)
 {
 	struct ShaderCompileInfo
 	{
@@ -1418,7 +1418,12 @@ bool ScreenSpaceGI::CompileComputeShaders()
 		auto& info = shaderInfos[i];
 		auto path = std::filesystem::path("Data\\Shaders\\ScreenSpaceGI") / info.filename;
 		compiledShaders[i].attach(reinterpret_cast<ID3D11ComputeShader*>(
-			Util::CompileShader(path.c_str(), info.defines, "cs_5_0")));
+			Util::CompileShader(
+				path.c_str(),
+				info.defines,
+				"cs_5_0",
+				"main",
+				a_timing)));
 		compilationComplete = compiledShaders[i] && compilationComplete;
 	}
 	if (compilationComplete) {
@@ -1502,10 +1507,10 @@ bool ScreenSpaceGI::RequiredShadersOK() const
 	return baseShadersOK && fullGIShadersOK && centerAOShadersOK && centerGIShadersOK;
 }
 
-bool ScreenSpaceGI::PrewarmShaders()
+bool ScreenSpaceGI::PrewarmShaders(Util::ShaderCompileTiming* a_timing)
 {
 	if ((recompileFlag || !RequiredShadersOK()) &&
-		!CompileComputeShaders()) {
+		!CompileComputeShaders(a_timing)) {
 		return false;
 	}
 	return RequiredShadersOK();

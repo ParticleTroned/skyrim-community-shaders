@@ -139,11 +139,17 @@ public:
 	void InvalidateRaymarchShaders();
 	uint GetScaledSampleCount(bool a_dynamic);
 	uint GetScaledSampleCountForRenderSize(float2 a_screenSize) const;
-	ID3D11ComputeShader* GetOrCreateRaymarchShader(uint a_sampleCount, bool a_rightEye);
+	ID3D11ComputeShader* GetOrCreateRaymarchShader(
+		uint a_sampleCount,
+		bool a_rightEye,
+		Util::ShaderCompileTiming* a_timing = nullptr);
 	ID3D11ComputeShader* GetComputeRaymarch();
 	ID3D11ComputeShader* GetComputeRaymarchRight();
 	/** @brief Compiles the bounded VR raymarch pair for an admitted target size. */
-	bool PrewarmVRRenderScaleShaders(uint32_t a_combinedWidth, uint32_t a_height);
+	bool PrewarmVRRenderScaleShaders(
+		uint32_t a_combinedWidth,
+		uint32_t a_height,
+		Util::ShaderCompileTiming* a_timing = nullptr);
 
 	virtual void Prepass() override;
 

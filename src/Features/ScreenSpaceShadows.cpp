@@ -360,12 +360,13 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetStereoReprojectCS()
 
 ID3D11ComputeShader* ScreenSpaceShadows::GetOrCreateRaymarchShader(
 	uint a_sampleCount,
-	bool a_rightEye)
+	bool a_rightEye,
+	Util::ShaderCompileTiming* a_timing)
 {
 	const bool useTerrainBlendingDepth = UseTerrainBlendingDepth();
 	const std::size_t variantCount = globals::game::isVR ?
-		kRaymarchShaderVariantCount :
-		1u;
+	                                     kRaymarchShaderVariantCount :
+	                                     1u;
 	const auto variantEnd = raymarchShaderVariants.begin() + variantCount;
 	RaymarchShaderVariant* selected = nullptr;
 	for (auto variant = raymarchShaderVariants.begin();
@@ -419,12 +420,14 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetOrCreateRaymarchShader(
 		defines,
 		"cs_5_0",
 		"main",
-		a_rightEye ? "ScreenSpaceShadows::RaymarchRightCS" : "ScreenSpaceShadows::RaymarchCS");
+		a_rightEye ? "ScreenSpaceShadows::RaymarchRightCS" : "ScreenSpaceShadows::RaymarchCS",
+		a_timing);
 }
 
 bool ScreenSpaceShadows::PrewarmVRRenderScaleShaders(
 	uint32_t a_combinedWidth,
-	uint32_t a_height)
+	uint32_t a_height,
+	Util::ShaderCompileTiming* a_timing)
 {
 	if (!globals::game::isVR || !a_combinedWidth || !a_height)
 		return false;
@@ -433,8 +436,10 @@ bool ScreenSpaceShadows::PrewarmVRRenderScaleShaders(
 		static_cast<float>(a_combinedWidth),
 		static_cast<float>(a_height),
 	});
-	return GetOrCreateRaymarchShader(sampleCount, false) &&
-	       GetOrCreateRaymarchShader(sampleCount, true);
+	const bool leftReady =
+		GetOrCreateRaymarchShader(sampleCount, false, a_timing) != nullptr;
+	return leftReady &&
+	       GetOrCreateRaymarchShader(sampleCount, true, a_timing) != nullptr;
 }
 
 void ScreenSpaceShadows::DrawShadows()

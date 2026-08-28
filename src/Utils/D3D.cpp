@@ -6,7 +6,9 @@
 #include "Utils/Format.h"
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
+#include <algorithm>
 #include <d3dcompiler.h>
+#include <limits>
 #include <mutex>
 
 namespace Util
@@ -73,9 +75,7 @@ namespace Util
 	{
 		auto& tb = globals::features::terrainBlending;
 		if (tb.loaded && tb.settings.Enabled) {
-			auto* srv = prefer16bit
-				? (tb.blendedDepthTexture16 ? tb.blendedDepthTexture16->srv.get() : nullptr)
-				: (tb.blendedDepthTexture ? tb.blendedDepthTexture->srv.get() : nullptr);
+			auto* srv = prefer16bit ? (tb.blendedDepthTexture16 ? tb.blendedDepthTexture16->srv.get() : nullptr) : (tb.blendedDepthTexture ? tb.blendedDepthTexture->srv.get() : nullptr);
 			if (srv)
 				return srv;
 		}
@@ -253,8 +253,30 @@ namespace Util
 		}
 	};
 
-	ID3D11DeviceChild* CompileShader(const wchar_t* FilePath, const std::vector<std::pair<const char*, const char*>>& Defines, const char* ProgramType, const char* Program)
+	ID3D11DeviceChild* CompileShader(
+		const wchar_t* FilePath,
+		const std::vector<std::pair<const char*, const char*>>& Defines,
+		const char* ProgramType,
+		const char* Program,
+		ShaderCompileTiming* a_timing)
 	{
+		const auto queryQpc = []() noexcept {
+			LARGE_INTEGER value{};
+			return QueryPerformanceCounter(&value) && value.QuadPart > 0 ?
+			           static_cast<uint64_t>(value.QuadPart) :
+			           0;
+		};
+		const auto accumulateElapsed = [](
+										   uint64_t& a_destination,
+										   uint64_t a_begin,
+										   uint64_t a_end) noexcept {
+			if (a_begin == 0 || a_end < a_begin)
+				return;
+			const uint64_t elapsed = a_end - a_begin;
+			const uint64_t remaining =
+				std::numeric_limits<uint64_t>::max() - a_destination;
+			a_destination += std::min(elapsed, remaining);
+		};
 		auto device = globals::d3d::device;
 
 		CustomInclude include;
@@ -322,7 +344,24 @@ namespace Util
 			return nullptr;
 		}
 		logger::debug("Compiling {} with {}", str, DefinesToString(macros));
-		if (FAILED(D3DCompileFromFile(FilePath, macros.data(), &include, Program, ProgramType, flags, 0, shaderBlob.put(), shaderErrors.put()))) {
+		const uint64_t compilationBegin = a_timing ? queryQpc() : 0;
+		const HRESULT compilationResult = D3DCompileFromFile(
+			FilePath,
+			macros.data(),
+			&include,
+			Program,
+			ProgramType,
+			flags,
+			0,
+			shaderBlob.put(),
+			shaderErrors.put());
+		if (a_timing) {
+			accumulateElapsed(
+				a_timing->bytecodeCompilationQpcTicks,
+				compilationBegin,
+				queryQpc());
+		}
+		if (FAILED(compilationResult)) {
 			logger::warn("Shader compilation failed:\n\n{}", shaderErrors ? static_cast<char*>(shaderErrors->GetBufferPointer()) : "Unknown error");
 			return nullptr;
 		}
@@ -344,6 +383,7 @@ namespace Util
 
 		HRESULT hr = S_OK;
 		winrt::com_ptr<ID3D11DeviceChild> regShader;
+		const uint64_t objectCreationBegin = a_timing ? queryQpc() : 0;
 		if (!_stricmp(ProgramType, "ps_5_0")) {
 			winrt::com_ptr<ID3D11PixelShader> shader;
 			hr = device->CreatePixelShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, shader.put());
@@ -371,6 +411,12 @@ namespace Util
 				regShader.attach(shader.detach());
 		} else {
 			return nullptr;
+		}
+		if (a_timing) {
+			accumulateElapsed(
+				a_timing->d3dObjectCreationQpcTicks,
+				objectCreationBegin,
+				queryQpc());
 		}
 
 		if (FAILED(hr) || !regShader) {

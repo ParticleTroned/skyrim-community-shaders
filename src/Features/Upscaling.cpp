@@ -89,6 +89,113 @@ namespace
 		return frequency;
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	uint64_t VRRenderScaleQpcElapsed(
+		uint64_t a_begin,
+		uint64_t a_end) noexcept
+	{
+		return a_begin != 0 && a_end >= a_begin ? a_end - a_begin : 0;
+	}
+
+	uint64_t SaturatingAddVRRenderScaleTelemetry(
+		uint64_t a_left,
+		uint64_t a_right) noexcept
+	{
+		return a_right > std::numeric_limits<uint64_t>::max() - a_left ?
+		           std::numeric_limits<uint64_t>::max() :
+		           a_left + a_right;
+	}
+#endif
+
+	VRRenderScalePreparationPolicy::Key BuildVRRenderScalePreparationKey(
+		const Upscaling& a_upscaling,
+		const Upscaling::VRRenderScaleDesiredProfile& a_request)
+	{
+		const uint32_t displayEyeWidth = a_upscaling.perfMode.trueHMDEyeWidth;
+		const uint32_t displayEyeHeight = a_upscaling.perfMode.trueHMDEyeHeight;
+		const float renderScale = Upscaling::GetQualityModeResolutionScale(
+			std::min(a_request.qualityMode, Upscaling::kQualityModeMaxIndex));
+		return {
+			.vrRuntime = globals::game::isVR,
+			.requestID = a_request.requestID,
+			.transitionEpoch = a_request.transitionEpoch,
+			.optionsGeneration = a_request.preparationOptionsGeneration,
+			.shaderDefinesGeneration = globals::state ?
+			                               globals::state->GetShaderDefinesGeneration() :
+			                               0,
+			.deviceIdentity = reinterpret_cast<uintptr_t>(globals::d3d::device),
+			.method = static_cast<uint32_t>(a_request.method),
+			.qualityMode = a_request.qualityMode,
+			.dlssPreset = a_request.dlssPreset,
+			.renderEyeWidth = Upscaling::ScaleVRRenderDimension(
+				displayEyeWidth,
+				renderScale),
+			.renderEyeHeight = Upscaling::ScaleVRRenderDimension(
+				displayEyeHeight,
+				renderScale),
+			.displayEyeWidth = displayEyeWidth,
+			.displayEyeHeight = displayEyeHeight,
+			.renderScaleEnabled = a_request.renderScaleModeEnabled,
+			.fsr4RuntimeEnabled = a_request.fsr4RuntimeEnabled,
+		};
+	}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	uint64_t VRRenderScalePreparationReasonMask(
+		Upscaling::VRRenderScalePreparationReason a_reason) noexcept
+	{
+		return static_cast<uint64_t>(a_reason);
+	}
+
+	void AddVRRenderScalePreparationReason(
+		uint64_t& a_mask,
+		Upscaling::VRRenderScalePreparationReason a_reason) noexcept
+	{
+		a_mask |= VRRenderScalePreparationReasonMask(a_reason);
+	}
+
+	Upscaling::VRRenderScalePreparationEvent
+	BuildVRRenderScalePreparationEvent(
+		const VRRenderScalePreparationPolicy::Key& a_key,
+		Upscaling::VRRenderScalePreparationEventType a_type,
+		Upscaling::VRRenderScalePreparationOutcome a_outcome,
+		uint64_t a_reasonMask,
+		uint64_t a_beginQpc,
+		uint64_t a_endQpc,
+		const Util::ShaderCompileTiming& a_shaderTiming = {})
+	{
+		return {
+			.requestID = a_key.requestID,
+			.transitionEpoch = a_key.transitionEpoch,
+			.optionsGeneration = a_key.optionsGeneration,
+			.shaderDefinesGeneration = a_key.shaderDefinesGeneration,
+			.deviceIdentity = a_key.deviceIdentity,
+			.frame = globals::state ? globals::state->frameCount : 0u,
+			.lastFrame = globals::state ? globals::state->frameCount : 0u,
+			.method = static_cast<Upscaling::UpscaleMethod>(a_key.method),
+			.qualityMode = a_key.qualityMode,
+			.dlssPreset = a_key.dlssPreset,
+			.renderEyeWidth = a_key.renderEyeWidth,
+			.renderEyeHeight = a_key.renderEyeHeight,
+			.displayEyeWidth = a_key.displayEyeWidth,
+			.displayEyeHeight = a_key.displayEyeHeight,
+			.fsr4RuntimeEnabled = a_key.fsr4RuntimeEnabled,
+			.type = a_type,
+			.outcome = a_outcome,
+			.reasonMask = a_reasonMask,
+			.beginQpc = a_beginQpc,
+			.endQpc = a_endQpc,
+			.durationQpcTicks = VRRenderScaleQpcElapsed(
+				a_beginQpc,
+				a_endQpc),
+			.bytecodeCompilationQpcTicks =
+				a_shaderTiming.bytecodeCompilationQpcTicks,
+			.d3dObjectCreationQpcTicks =
+				a_shaderTiming.d3dObjectCreationQpcTicks,
+		};
+	}
+#endif
+
 	VRPresentationStretchTelemetryPolicy::ObservationKind
 	GetVRRenderScalePresentationStretchObservationKind(
 		Upscaling::VRRenderScalePresentationPath a_path) noexcept
@@ -16881,6 +16988,8 @@ bool Upscaling::PromoteVRRenderScalePreMutationToNativeRecovery(
 					std::memory_order_acq_rel);
 			}
 			replay.transitionEpoch = AllocateVRRenderScaleTransitionEpoch();
+			replay.preparationOptionsGeneration =
+				AllocateVRRenderScalePreparationOptionsGeneration();
 			replay.queuedFrame = globals::state ?
 			                         std::max(globals::state->frameCount, 1u) :
 			                         supersededProfile.queuedFrame;
@@ -19153,8 +19262,7 @@ std::optional<Upscaling::VRRenderScaleRuntimeOptionsSnapshot> Upscaling::GetVRRe
 			.exactRequestPrepared =
 				target->requestID != 0 &&
 				target->requestID ==
-					preparedVRRenderScaleRequestID.load(
-						std::memory_order_acquire),
+					GetPreparedVRRenderScaleRequestID(),
 		})) {
 		return captureOptions(*target);
 	}
@@ -22249,6 +22357,10 @@ namespace
 				"VR render-scale physical mutation ownership changed before recreation");
 		}
 		context->physicalBoundaryEntered = true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		context->upscaling->RecordVRRenderScalePreparationCreatorEntered(
+			context->transitionEpoch);
+#endif
 		if (context->releaseDeferredTargetsForRelief && globals::deferred) {
 			globals::deferred->ReleaseRenderTargets();
 		}
@@ -23210,8 +23322,7 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(
 		VRVendorRelatchPolicy::CanBypassPreparedMenuRequestDelay(
 			a_origin == VRUpscalingTransitionOrigin::CSMenu,
 			pendingControllerProfile ? pendingControllerProfile->requestID : 0,
-			preparedVRRenderScaleRequestID.load(
-				std::memory_order_acquire));
+			GetPreparedVRRenderScaleRequestID());
 	const uint32_t relatchDelayFrames = std::max(
 		preparedDirectMenuRelatch ? 1u : kVRUpscalingTransitionApplyDelayFrames,
 		a_minDelayFrames);
@@ -24030,8 +24141,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			VRVendorRelatchPolicy::CanBypassPreparedMenuRequestDelay(
 				relatchOrigin == VRUpscalingTransitionOrigin::CSMenu,
 				relatchProfile ? relatchProfile->requestID : 0,
-				preparedVRRenderScaleRequestID.load(
-					std::memory_order_acquire));
+				GetPreparedVRRenderScaleRequestID());
 		postLoadRecoveryEpoch =
 			pendingPerfModeRenderTargetRecreateRecoveryEpoch.load(
 				std::memory_order_acquire);
@@ -25121,6 +25231,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			replay.fsrSharpness = retainedDesiredTarget.fsrSharpness;
 			replay.requestID = retainedDesiredTarget.requestID;
 			replay.transitionEpoch = retainedDesiredTarget.transitionEpoch;
+			replay.preparationOptionsGeneration =
+				retainedDesiredTarget.preparationOptionsGeneration;
 			replay.queuedFrame = std::max(state->frameCount, 1u);
 			replay.origin = retainedDesiredTarget.origin;
 			{
@@ -47542,8 +47654,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			transitionSnapshot.applied.active &&
 			transitionSnapshot.applied.requestID != 0 &&
 			transitionSnapshot.applied.requestID ==
-				preparedVRRenderScaleRequestID.load(
-					std::memory_order_acquire) &&
+				GetPreparedVRRenderScaleRequestID() &&
 			transitionSnapshot.applied.contractGeneration ==
 				activeContractGeneration &&
 			transitionSnapshot.applied.method == upscaleMethod &&
@@ -49067,6 +49178,8 @@ Upscaling::VRRenderScaleRequestQueueResult Upscaling::QueueVRRenderScaleRequest(
 	request.stabilizerDoorHandoff = bufferedAPIDoorHandoff;
 	request.stabilizerDoorHandoffSerial =
 		bufferedAPIDoorHandoff ? a_bufferedStabilizerDoorHandoffSerial : 0;
+	request.preparationOptionsGeneration =
+		AllocateVRRenderScalePreparationOptionsGeneration();
 
 	VRRenderScaleRequestQueueResult result{};
 	bool deferredUntilPhysicalRecovery = false;
@@ -49263,6 +49376,8 @@ namespace
 			IsRenderScaleQualityMode(a_request.qualityMode);
 		profile.requestID = a_request.requestID;
 		profile.transitionEpoch = a_request.transitionEpoch;
+		profile.preparationOptionsGeneration =
+			a_request.preparationOptionsGeneration;
 		profile.method = a_request.method;
 		profile.qualityMode = std::min(a_request.qualityMode, Upscaling::kQualityModeMaxIndex);
 		profile.dlssPreset = Upscaling::ClampDLSSPresetUInt(a_request.dlssPreset);
@@ -49521,6 +49636,178 @@ Upscaling::VRRenderScaleTransitionSnapshot Upscaling::GetVRRenderScaleTransition
 	return snapshot;
 }
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+Upscaling::VRRenderScalePreparationTelemetrySnapshot
+Upscaling::GetVRRenderScalePreparationTelemetrySnapshot() const
+{
+	std::scoped_lock lock(vrRenderScalePreparationTelemetryMutex);
+	auto snapshot = vrRenderScalePreparationTelemetry;
+	snapshot.active = vrRenderScaleStressSessionActive.load(
+		std::memory_order_acquire);
+	return snapshot;
+}
+
+void Upscaling::RecordVRRenderScalePreparationEvent(
+	VRRenderScalePreparationEvent a_event)
+{
+	if (!vrRenderScaleStressSessionActive.load(std::memory_order_acquire))
+		return;
+
+	uint64_t sessionID = 0;
+	{
+		std::scoped_lock sessionLock(vrRenderScaleStressSessionMutex);
+		if (!vrRenderScaleStressSession.active ||
+			vrRenderScaleStressSession.sessionID == 0) {
+			return;
+		}
+		sessionID = vrRenderScaleStressSession.sessionID;
+	}
+	if (a_event.sessionID != 0 && a_event.sessionID != sessionID)
+		return;
+
+	std::scoped_lock telemetryLock(
+		vrRenderScalePreparationTelemetryMutex);
+	auto& telemetry = vrRenderScalePreparationTelemetry;
+	if (telemetry.sessionID != sessionID) {
+		telemetry = {};
+		telemetry.active = true;
+		telemetry.sessionID = sessionID;
+		telemetry.qpcFrequency =
+			GetVRRenderScalePresentationQpcFrequency();
+	}
+	a_event.sessionID = sessionID;
+
+	VRRenderScalePreparationEvent* repeated = nullptr;
+	for (auto& existing : telemetry.events) {
+		if (existing.sequence != 0 &&
+			existing.sessionID == sessionID &&
+			existing.requestID == a_event.requestID &&
+			existing.transitionEpoch == a_event.transitionEpoch &&
+			existing.optionsGeneration == a_event.optionsGeneration &&
+			existing.shaderDefinesGeneration ==
+				a_event.shaderDefinesGeneration &&
+			existing.deviceIdentity == a_event.deviceIdentity &&
+			existing.method == a_event.method &&
+			existing.qualityMode == a_event.qualityMode &&
+			existing.dlssPreset == a_event.dlssPreset &&
+			existing.renderEyeWidth == a_event.renderEyeWidth &&
+			existing.renderEyeHeight == a_event.renderEyeHeight &&
+			existing.displayEyeWidth == a_event.displayEyeWidth &&
+			existing.displayEyeHeight == a_event.displayEyeHeight &&
+			existing.fsr4RuntimeEnabled == a_event.fsr4RuntimeEnabled &&
+			existing.type == a_event.type &&
+			existing.outcome == a_event.outcome &&
+			existing.reasonMask == a_event.reasonMask &&
+			(!repeated || existing.sequence > repeated->sequence)) {
+			repeated = std::addressof(existing);
+		}
+	}
+	if (repeated) {
+		repeated->lastFrame = a_event.lastFrame;
+		if (repeated->type ==
+			VRRenderScalePreparationEventType::ShaderCacheBusyWait) {
+			repeated->endQpc = a_event.endQpc;
+			repeated->durationQpcTicks = VRRenderScaleQpcElapsed(
+				repeated->beginQpc,
+				repeated->endQpc);
+		} else {
+			repeated->beginQpc = a_event.beginQpc;
+			repeated->endQpc = a_event.endQpc;
+			repeated->durationQpcTicks = a_event.durationQpcTicks;
+			repeated->bytecodeCompilationQpcTicks =
+				a_event.bytecodeCompilationQpcTicks;
+			repeated->d3dObjectCreationQpcTicks =
+				a_event.d3dObjectCreationQpcTicks;
+		}
+		if (repeated->occurrences !=
+			std::numeric_limits<uint32_t>::max()) {
+			++repeated->occurrences;
+		}
+		if (telemetry.coalescedEvents !=
+			std::numeric_limits<uint32_t>::max()) {
+			++telemetry.coalescedEvents;
+		}
+		return;
+	}
+
+	a_event.sequence = telemetry.nextSequence++;
+	if (telemetry.nextSequence == 0)
+		telemetry.nextSequence = std::numeric_limits<uint64_t>::max();
+	telemetry.events[telemetry.nextIndex] = a_event;
+	telemetry.nextIndex = static_cast<uint32_t>(
+		(telemetry.nextIndex + 1) % telemetry.events.size());
+	if (telemetry.count < telemetry.events.size()) {
+		++telemetry.count;
+	} else if (telemetry.overwrittenEvents !=
+			   std::numeric_limits<uint32_t>::max()) {
+		++telemetry.overwrittenEvents;
+	}
+}
+
+void Upscaling::RecordVRRenderScalePreparationRequestQueued(
+	const VRRenderScaleDesiredProfile& a_request)
+{
+	const auto key = BuildVRRenderScalePreparationKey(*this, a_request);
+	const uint64_t qpc = QueryVRRenderScalePresentationQpc();
+	RecordVRRenderScalePreparationEvent(
+		BuildVRRenderScalePreparationEvent(
+			key,
+			VRRenderScalePreparationEventType::RequestQueued,
+			VRRenderScalePreparationOutcome::Observed,
+			0,
+			qpc,
+			qpc));
+}
+
+void Upscaling::RecordVRRenderScalePreparationCreatorEntered(
+	uint64_t a_transitionEpoch)
+{
+	if (a_transitionEpoch == 0 ||
+		!vrRenderScaleStressSessionActive.load(std::memory_order_acquire)) {
+		return;
+	}
+
+	VRRenderScalePreparationEvent prepared{};
+	bool found = false;
+	{
+		std::scoped_lock telemetryLock(
+			vrRenderScalePreparationTelemetryMutex);
+		for (const auto& event : vrRenderScalePreparationTelemetry.events) {
+			if (event.sessionID ==
+					vrRenderScalePreparationTelemetry.sessionID &&
+				event.transitionEpoch == a_transitionEpoch &&
+				event.type ==
+					VRRenderScalePreparationEventType::TotalPreparation &&
+				event.outcome ==
+					VRRenderScalePreparationOutcome::Ready &&
+				(!found || event.sequence > prepared.sequence)) {
+				prepared = event;
+				found = true;
+			}
+		}
+	}
+	if (!found)
+		return;
+
+	const uint64_t creatorQpc = QueryVRRenderScalePresentationQpc();
+	prepared.sequence = 0;
+	prepared.type = VRRenderScalePreparationEventType::PreparedToCreator;
+	prepared.outcome = VRRenderScalePreparationOutcome::Observed;
+	prepared.reasonMask = 0;
+	prepared.beginQpc = prepared.endQpc;
+	prepared.endQpc = creatorQpc;
+	prepared.durationQpcTicks = VRRenderScaleQpcElapsed(
+		prepared.beginQpc,
+		creatorQpc);
+	prepared.bytecodeCompilationQpcTicks = 0;
+	prepared.d3dObjectCreationQpcTicks = 0;
+	prepared.frame = globals::state ? globals::state->frameCount : 0u;
+	prepared.lastFrame = prepared.frame;
+	prepared.occurrences = 1;
+	RecordVRRenderScalePreparationEvent(prepared);
+}
+#endif
+
 Upscaling::VRRenderScaleStressSessionSnapshot Upscaling::GetVRRenderScaleStressSessionSnapshot() const
 {
 	std::scoped_lock lock(
@@ -49601,8 +49888,19 @@ void Upscaling::StartVRRenderScaleStressSession()
 		for (auto& eye : presentation.eyes)
 			eye.consecutiveFrames = 0;
 		++vrRenderScaleTransitionController.revision;
-		vrRenderScaleStressSessionActive.store(true, std::memory_order_release);
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	{
+		std::scoped_lock telemetryLock(
+			vrRenderScalePreparationTelemetryMutex);
+		vrRenderScalePreparationTelemetry = {};
+		vrRenderScalePreparationTelemetry.active = true;
+		vrRenderScalePreparationTelemetry.sessionID = sessionID;
+		vrRenderScalePreparationTelemetry.qpcFrequency =
+			presentationQpcFrequency;
+	}
+#endif
+	vrRenderScaleStressSessionActive.store(true, std::memory_order_release);
 	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::SessionStarted);
 	logger::info("[VRRenderScale][Stress] Started deterministic CSX-menu capture session {} at frame {}.", sessionID, frame);
 }
@@ -49667,13 +49965,20 @@ void Upscaling::StopVRRenderScaleStressSession()
 
 void Upscaling::ResetVRRenderScaleStressSession()
 {
-	std::scoped_lock lock(
-		vrRenderScaleTransitionControllerMutex,
-		vrRenderScaleStressSessionMutex);
-	vrRenderScaleStressSessionActive.store(false, std::memory_order_release);
-	VRPresentationStretchTelemetryPolicy::Reset(
-		vrRenderScalePresentationStretchSessionTelemetry);
-	vrRenderScaleStressSession = {};
+	{
+		std::scoped_lock lock(
+			vrRenderScaleTransitionControllerMutex,
+			vrRenderScaleStressSessionMutex);
+		vrRenderScaleStressSessionActive.store(false, std::memory_order_release);
+		VRPresentationStretchTelemetryPolicy::Reset(
+			vrRenderScalePresentationStretchSessionTelemetry);
+		vrRenderScaleStressSession = {};
+	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	std::scoped_lock telemetryLock(
+		vrRenderScalePreparationTelemetryMutex);
+	vrRenderScalePreparationTelemetry = {};
+#endif
 }
 
 json Upscaling::BuildVRRenderScaleIterationRecord() const
@@ -51285,6 +51590,9 @@ bool Upscaling::RecordVRRenderScaleTransitionRequested(
 			frame);
 	}
 	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::Request);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordVRRenderScalePreparationRequestQueued(a_request);
+#endif
 	return true;
 }
 
@@ -51294,6 +51602,20 @@ uint64_t Upscaling::AllocateVRRenderScaleTransitionEpoch()
 	if (epoch == 0)
 		epoch = nextVRRenderScaleTransitionEpoch.fetch_add(1, std::memory_order_acq_rel);
 	return epoch;
+}
+
+uint64_t Upscaling::AllocateVRRenderScalePreparationOptionsGeneration()
+{
+	uint64_t generation =
+		nextVRRenderScalePreparationOptionsGeneration.fetch_add(
+			1,
+			std::memory_order_acq_rel);
+	if (generation == 0) {
+		generation = nextVRRenderScalePreparationOptionsGeneration.fetch_add(
+			1,
+			std::memory_order_acq_rel);
+	}
+	return generation;
 }
 
 void Upscaling::BindVRRenderScaleRelatchEpoch(uint64_t a_epoch)
@@ -52197,67 +52519,352 @@ bool Upscaling::HasPendingVRRenderScaleTransition() const
 	return IsVRRenderScaleCurrentOrTargetRelevant(*this);
 }
 
+uint64_t Upscaling::GetPreparedVRRenderScaleRequestID() const
+{
+	const uint64_t requestID = preparedVRRenderScaleRequestID.load(
+		std::memory_order_acquire);
+	if (requestID == 0 ||
+		preparedVRRenderScaleTransitionEpoch.load(
+			std::memory_order_relaxed) == 0 ||
+		preparedVRRenderScaleOptionsGeneration.load(
+			std::memory_order_relaxed) == 0 ||
+		preparedVRRenderScaleDeviceIdentity.load(
+			std::memory_order_relaxed) !=
+			reinterpret_cast<uintptr_t>(globals::d3d::device)) {
+		return 0;
+	}
+	const uint32_t preparedQualityMode =
+		preparedVRRenderScaleQualityMode.load(std::memory_order_relaxed);
+	const float preparedRenderScale = GetQualityModeResolutionScale(
+		ClampQualityModeUInt(preparedQualityMode));
+	if (preparedVRRenderScaleDisplayEyeWidth.load(
+			std::memory_order_relaxed) != perfMode.trueHMDEyeWidth ||
+		preparedVRRenderScaleDisplayEyeHeight.load(
+			std::memory_order_relaxed) != perfMode.trueHMDEyeHeight ||
+		preparedVRRenderScaleRenderEyeWidth.load(
+			std::memory_order_relaxed) != ScaleVRRenderDimension(perfMode.trueHMDEyeWidth,
+											  preparedRenderScale) ||
+		preparedVRRenderScaleRenderEyeHeight.load(
+			std::memory_order_relaxed) != ScaleVRRenderDimension(perfMode.trueHMDEyeHeight,
+											  preparedRenderScale)) {
+		return 0;
+	}
+	const uint64_t shaderDefinesGeneration = globals::state ?
+	                                             globals::state->GetShaderDefinesGeneration() :
+	                                             0;
+	if (preparedVRRenderScaleShaderDefinesGeneration.load(
+			std::memory_order_relaxed) != shaderDefinesGeneration) {
+		return 0;
+	}
+	return requestID;
+}
+
 void Upscaling::PreparePendingVRRenderScaleTransition(
 	const VRRenderScaleDesiredProfile& a_request)
 {
-	if (!a_request.pending || a_request.requestID == 0 ||
-		a_request.origin != VRUpscalingTransitionOrigin::CSMenu ||
-		!IsRenderScaleMethodEligible(a_request.method) ||
-		!a_request.renderScaleModeEnabled ||
-		!IsRenderScaleQualityMode(a_request.qualityMode) ||
-		!globals::d3d::device ||
-		!perfMode.trueHMDEyeWidth || !perfMode.trueHMDEyeHeight ||
-		IsSubmitStageDeviceLost() ||
-		postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
-		(a_request.method == UpscaleMethod::kDLSS &&
-			pendingDLSSReset.load(std::memory_order_acquire)) ||
-		(a_request.method == UpscaleMethod::kFSR &&
-			pendingFSRReset.load(std::memory_order_acquire)) ||
-		(globals::shaderCache && globals::shaderCache->IsCompiling())) {
-		return;
-	}
-	const uint64_t previousRequestID =
-		attemptedVRRenderScalePreparationRequestID.exchange(
-			a_request.requestID,
-			std::memory_order_acq_rel);
-	if (previousRequestID == a_request.requestID)
+	if (!a_request.pending)
 		return;
 
+	const auto preparationKey =
+		BuildVRRenderScalePreparationKey(*this, a_request);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const uint64_t preparationBeginQpc =
+		QueryVRRenderScalePresentationQpc();
+	uint64_t admissionReasonMask = 0;
+	if (!a_request.pending || a_request.requestID == 0 ||
+		a_request.transitionEpoch == 0 ||
+		a_request.preparationOptionsGeneration == 0) {
+		AddVRRenderScalePreparationReason(
+			admissionReasonMask,
+			VRRenderScalePreparationReason::InactiveRequest);
+	}
+	if (a_request.origin != VRUpscalingTransitionOrigin::CSMenu) {
+		AddVRRenderScalePreparationReason(
+			admissionReasonMask,
+			VRRenderScalePreparationReason::WrongOrigin);
+	}
+	if (!IsRenderScaleMethodEligible(a_request.method)) {
+		AddVRRenderScalePreparationReason(
+			admissionReasonMask,
+			VRRenderScalePreparationReason::MethodIneligible);
+	}
+	if (!a_request.renderScaleModeEnabled) {
+		AddVRRenderScalePreparationReason(
+			admissionReasonMask,
+			VRRenderScalePreparationReason::RenderScaleDisabled);
+	}
+	if (!IsRenderScaleQualityMode(a_request.qualityMode)) {
+		AddVRRenderScalePreparationReason(
+			admissionReasonMask,
+			VRRenderScalePreparationReason::QualityIneligible);
+	}
+	if (!globals::d3d::device) {
+		AddVRRenderScalePreparationReason(
+			admissionReasonMask,
+			VRRenderScalePreparationReason::MissingDevice);
+	}
+	if (!perfMode.trueHMDEyeWidth || !perfMode.trueHMDEyeHeight) {
+		AddVRRenderScalePreparationReason(
+			admissionReasonMask,
+			VRRenderScalePreparationReason::InvalidDimensions);
+	}
+	if (IsSubmitStageDeviceLost()) {
+		AddVRRenderScalePreparationReason(
+			admissionReasonMask,
+			VRRenderScalePreparationReason::DeviceLost);
+	}
+	if (postLoadRuntimeResetPending.load(std::memory_order_acquire)) {
+		AddVRRenderScalePreparationReason(
+			admissionReasonMask,
+			VRRenderScalePreparationReason::PostLoadReset);
+	}
+	if ((a_request.method == UpscaleMethod::kDLSS &&
+			pendingDLSSReset.load(std::memory_order_acquire)) ||
+		(a_request.method == UpscaleMethod::kFSR &&
+			pendingFSRReset.load(std::memory_order_acquire))) {
+		AddVRRenderScalePreparationReason(
+			admissionReasonMask,
+			VRRenderScalePreparationReason::ProviderReset);
+	}
+	const bool shaderCacheBusy =
+		globals::shaderCache && globals::shaderCache->IsCompiling();
+	if (shaderCacheBusy) {
+		AddVRRenderScalePreparationReason(
+			admissionReasonMask,
+			VRRenderScalePreparationReason::ShaderCacheBusy);
+	}
+#else
+	const bool shaderCacheBusy =
+		globals::shaderCache && globals::shaderCache->IsCompiling();
+#endif
+	const bool admissionEligible =
+		a_request.pending &&
+		a_request.requestID != 0 &&
+		a_request.transitionEpoch != 0 &&
+		a_request.preparationOptionsGeneration != 0 &&
+		a_request.origin == VRUpscalingTransitionOrigin::CSMenu &&
+		IsRenderScaleMethodEligible(a_request.method) &&
+		a_request.renderScaleModeEnabled &&
+		IsRenderScaleQualityMode(a_request.qualityMode) &&
+		globals::d3d::device &&
+		perfMode.trueHMDEyeWidth && perfMode.trueHMDEyeHeight &&
+		!IsSubmitStageDeviceLost() &&
+		!postLoadRuntimeResetPending.load(std::memory_order_acquire) &&
+		!(a_request.method == UpscaleMethod::kDLSS &&
+			pendingDLSSReset.load(std::memory_order_acquire)) &&
+		!(a_request.method == UpscaleMethod::kFSR &&
+			pendingFSRReset.load(std::memory_order_acquire)) &&
+		!shaderCacheBusy;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const uint64_t admissionEndQpc = QueryVRRenderScalePresentationQpc();
+	RecordVRRenderScalePreparationEvent(
+		BuildVRRenderScalePreparationEvent(
+			preparationKey,
+			VRRenderScalePreparationEventType::AdmissionCheck,
+			admissionEligible ?
+				VRRenderScalePreparationOutcome::Eligible :
+				(shaderCacheBusy ?
+						VRRenderScalePreparationOutcome::Busy :
+						VRRenderScalePreparationOutcome::ProtectedFallback),
+			admissionReasonMask,
+			preparationBeginQpc,
+			admissionEndQpc));
+#endif
+	if (!admissionEligible) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		const auto type = shaderCacheBusy ?
+		                      VRRenderScalePreparationEventType::ShaderCacheBusyWait :
+		                      VRRenderScalePreparationEventType::EarlyExit;
+		const auto outcome = shaderCacheBusy ?
+		                         VRRenderScalePreparationOutcome::Busy :
+		                         VRRenderScalePreparationOutcome::ProtectedFallback;
+		RecordVRRenderScalePreparationEvent(
+			BuildVRRenderScalePreparationEvent(
+				preparationKey,
+				type,
+				outcome,
+				admissionReasonMask,
+				preparationBeginQpc,
+				admissionEndQpc));
+		RecordVRRenderScalePreparationEvent(
+			BuildVRRenderScalePreparationEvent(
+				preparationKey,
+				VRRenderScalePreparationEventType::TotalPreparation,
+				outcome,
+				admissionReasonMask,
+				preparationBeginQpc,
+				admissionEndQpc));
+#endif
+		return;
+	}
+
+	const uint64_t attemptedRequestID =
+		attemptedVRRenderScalePreparationRequestID.load(
+			std::memory_order_acquire);
+	if (!VRRenderScalePreparationPolicy::ShouldAttempt(
+			a_request.requestID,
+			attemptedRequestID)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		const uint64_t endQpc = QueryVRRenderScalePresentationQpc();
+		const uint64_t reasonMask = VRRenderScalePreparationReasonMask(
+			VRRenderScalePreparationReason::AlreadyAttempted);
+		RecordVRRenderScalePreparationEvent(
+			BuildVRRenderScalePreparationEvent(
+				preparationKey,
+				VRRenderScalePreparationEventType::EarlyExit,
+				VRRenderScalePreparationOutcome::NotNeeded,
+				reasonMask,
+				preparationBeginQpc,
+				endQpc));
+		RecordVRRenderScalePreparationEvent(
+			BuildVRRenderScalePreparationEvent(
+				preparationKey,
+				VRRenderScalePreparationEventType::TotalPreparation,
+				VRRenderScalePreparationOutcome::NotNeeded,
+				reasonMask,
+				preparationBeginQpc,
+				endQpc));
+#endif
+		return;
+	}
+	attemptedVRRenderScalePreparationRequestID.store(
+		a_request.requestID,
+		std::memory_order_release);
+
+	bool memoryReady = false;
 	{
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
 		const auto& memory = vrRenderScaleTransitionController.memory;
-		if (!memory.valid ||
-			memory.pressure != VRRenderScaleMemoryPressure::Normal) {
-			return;
-		}
+		memoryReady = memory.valid &&
+		              memory.pressure == VRRenderScaleMemoryPressure::Normal;
+	}
+	if (!memoryReady) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		const uint64_t endQpc = QueryVRRenderScalePresentationQpc();
+		const uint64_t reasonMask = VRRenderScalePreparationReasonMask(
+			VRRenderScalePreparationReason::MemoryUnavailable);
+		RecordVRRenderScalePreparationEvent(
+			BuildVRRenderScalePreparationEvent(
+				preparationKey,
+				VRRenderScalePreparationEventType::EarlyExit,
+				VRRenderScalePreparationOutcome::ProtectedFallback,
+				reasonMask,
+				preparationBeginQpc,
+				endQpc));
+		RecordVRRenderScalePreparationEvent(
+			BuildVRRenderScalePreparationEvent(
+				preparationKey,
+				VRRenderScalePreparationEventType::TotalPreparation,
+				VRRenderScalePreparationOutcome::ProtectedFallback,
+				reasonMask,
+				preparationBeginQpc,
+				endQpc));
+#endif
+		return;
 	}
 
-	const float renderScale = GetQualityModeResolutionScale(
-		ClampQualityModeUInt(a_request.qualityMode));
-	const uint32_t renderEyeWidth = ScaleVRRenderDimension(
-		perfMode.trueHMDEyeWidth,
-		renderScale);
-	const uint32_t renderEyeHeight = ScaleVRRenderDimension(
-		perfMode.trueHMDEyeHeight,
-		renderScale);
+	const uint32_t renderEyeWidth = preparationKey.renderEyeWidth;
+	const uint32_t renderEyeHeight = preparationKey.renderEyeHeight;
 	bool shadersReady = true;
-	if (globals::features::screenSpaceShadows.loaded &&
-		globals::features::screenSpaceShadows.bendSettings.Enable != 0) {
-		shadersReady =
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	Util::ShaderCompileTiming shadowTiming{};
+#endif
+	const bool shadowsRequired =
+		globals::features::screenSpaceShadows.loaded &&
+		globals::features::screenSpaceShadows.bendSettings.Enable != 0;
+	bool shadowsReady = true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	uint64_t stageBeginQpc = QueryVRRenderScalePresentationQpc();
+#endif
+	if (shadowsRequired) {
+		shadowsReady =
 			globals::features::screenSpaceShadows.PrewarmVRRenderScaleShaders(
 				renderEyeWidth * 2u,
-				renderEyeHeight) &&
-			shadersReady;
+				renderEyeHeight,
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				std::addressof(shadowTiming)
+#else
+				nullptr
+#endif
+			);
+		shadersReady = shadowsReady && shadersReady;
 	}
-	if (globals::features::screenSpaceGI.loaded &&
-		globals::features::screenSpaceGI.settings.Enabled) {
-		shadersReady =
-			globals::features::screenSpaceGI.PrewarmShaders() &&
-			shadersReady;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	uint64_t stageEndQpc = QueryVRRenderScalePresentationQpc();
+	RecordVRRenderScalePreparationEvent(
+		BuildVRRenderScalePreparationEvent(
+			preparationKey,
+			VRRenderScalePreparationEventType::SSSRaymarchPrewarm,
+			!shadowsRequired ?
+				VRRenderScalePreparationOutcome::NotNeeded :
+				(shadowsReady ?
+						VRRenderScalePreparationOutcome::Ready :
+						VRRenderScalePreparationOutcome::Failed),
+			shadowsReady ? 0 : VRRenderScalePreparationReasonMask(VRRenderScalePreparationReason::ShaderFailure),
+			stageBeginQpc,
+			stageEndQpc,
+			shadowTiming));
+#endif
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	Util::ShaderCompileTiming ssgiTiming{};
+#endif
+	const bool ssgiRequired =
+		globals::features::screenSpaceGI.loaded &&
+		globals::features::screenSpaceGI.settings.Enabled;
+	bool ssgiReady = true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	stageBeginQpc = QueryVRRenderScalePresentationQpc();
+#endif
+	if (ssgiRequired) {
+		ssgiReady = globals::features::screenSpaceGI.PrewarmShaders(
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			std::addressof(ssgiTiming)
+#else
+			nullptr
+#endif
+		);
+		shadersReady = ssgiReady && shadersReady;
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	stageEndQpc = QueryVRRenderScalePresentationQpc();
+	RecordVRRenderScalePreparationEvent(
+		BuildVRRenderScalePreparationEvent(
+			preparationKey,
+			VRRenderScalePreparationEventType::SSGIPrewarm,
+			!ssgiRequired ?
+				VRRenderScalePreparationOutcome::NotNeeded :
+				(ssgiReady ?
+						VRRenderScalePreparationOutcome::Ready :
+						VRRenderScalePreparationOutcome::Failed),
+			ssgiReady ? 0 : VRRenderScalePreparationReasonMask(VRRenderScalePreparationReason::ShaderFailure),
+			stageBeginQpc,
+			stageEndQpc,
+			ssgiTiming));
+	const uint64_t d3dObjectCreationQpcTicks =
+		SaturatingAddVRRenderScaleTelemetry(
+			shadowTiming.d3dObjectCreationQpcTicks,
+			ssgiTiming.d3dObjectCreationQpcTicks);
+	auto d3dObjectEvent = BuildVRRenderScalePreparationEvent(
+		preparationKey,
+		VRRenderScalePreparationEventType::D3DObjectCreation,
+		d3dObjectCreationQpcTicks != 0 ?
+			VRRenderScalePreparationOutcome::Observed :
+			VRRenderScalePreparationOutcome::NotNeeded,
+		0,
+		0,
+		0);
+	d3dObjectEvent.durationQpcTicks = d3dObjectCreationQpcTicks;
+	d3dObjectEvent.d3dObjectCreationQpcTicks =
+		d3dObjectCreationQpcTicks;
+	RecordVRRenderScalePreparationEvent(d3dObjectEvent);
+#endif
 
 	bool vendorResourcesReady = true;
 	if (a_request.method == UpscaleMethod::kDLSS) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		stageBeginQpc = QueryVRRenderScalePresentationQpc();
+#endif
 		auto renderer = globals::game::renderer;
 		auto* colorInput = renderer ?
 		                       renderer->GetRuntimeData()
@@ -52276,7 +52883,25 @@ void Upscaling::PreparePendingVRRenderScaleTransition(
 					perfMode.trueHMDEyeHeight,
 					colorInput);
 		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		stageEndQpc = QueryVRRenderScalePresentationQpc();
+		RecordVRRenderScalePreparationEvent(
+			BuildVRRenderScalePreparationEvent(
+				preparationKey,
+				VRRenderScalePreparationEventType::DLSSPreparation,
+				vendorResourcesReady ?
+					VRRenderScalePreparationOutcome::Ready :
+					VRRenderScalePreparationOutcome::Failed,
+				vendorResourcesReady ? 0 :
+									   VRRenderScalePreparationReasonMask(
+										   VRRenderScalePreparationReason::ProviderFailure),
+				stageBeginQpc,
+				stageEndQpc));
+#endif
 	} else if (a_request.method == UpscaleMethod::kFSR) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		stageBeginQpc = QueryVRRenderScalePresentationQpc();
+#endif
 		const bool runtimeFSR =
 			fidelityFX.ShouldUseRuntimeUpscalerForFSR() &&
 			!fidelityFX.IsRuntimeUpscalerFailureLatched();
@@ -52303,19 +52928,156 @@ void Upscaling::PreparePendingVRRenderScaleTransition(
 				perfMode.trueHMDEyeHeight,
 				2u);
 		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		stageEndQpc = QueryVRRenderScalePresentationQpc();
+		RecordVRRenderScalePreparationEvent(
+			BuildVRRenderScalePreparationEvent(
+				preparationKey,
+				runtimeFSR && a_request.fsr4RuntimeEnabled ?
+					VRRenderScalePreparationEventType::FSR4Preparation :
+					VRRenderScalePreparationEventType::FSRPreparation,
+				vendorResourcesReady ?
+					VRRenderScalePreparationOutcome::Ready :
+					VRRenderScalePreparationOutcome::Failed,
+				vendorResourcesReady ? 0 :
+									   VRRenderScalePreparationReasonMask(
+										   VRRenderScalePreparationReason::ProviderFailure),
+				stageBeginQpc,
+				stageEndQpc));
+#endif
 	}
 
+	const auto latestRequest = GetPendingVRRenderScaleDesiredProfile();
+	const auto latestKey =
+		BuildVRRenderScalePreparationKey(*this, latestRequest);
+	const auto completionDisposition =
+		VRRenderScalePreparationPolicy::SelectCompletionDisposition({
+			.candidate = preparationKey,
+			.latest = latestKey,
+			.currentDeviceIdentity =
+				reinterpret_cast<uintptr_t>(globals::d3d::device),
+			.shadersReady = shadersReady,
+			.providerReady = vendorResourcesReady,
+		});
 	const bool preparationComplete =
-		shadersReady && vendorResourcesReady;
+		completionDisposition ==
+		VRRenderScalePreparationPolicy::CompletionDisposition::Publish;
 	if (preparationComplete) {
+		preparedVRRenderScaleRequestID.store(0, std::memory_order_release);
+		preparedVRRenderScaleTransitionEpoch.store(
+			preparationKey.transitionEpoch,
+			std::memory_order_relaxed);
+		preparedVRRenderScaleOptionsGeneration.store(
+			preparationKey.optionsGeneration,
+			std::memory_order_relaxed);
+		preparedVRRenderScaleShaderDefinesGeneration.store(
+			preparationKey.shaderDefinesGeneration,
+			std::memory_order_relaxed);
+		preparedVRRenderScaleDeviceIdentity.store(
+			preparationKey.deviceIdentity,
+			std::memory_order_relaxed);
+		preparedVRRenderScaleQualityMode.store(
+			preparationKey.qualityMode,
+			std::memory_order_relaxed);
+		preparedVRRenderScaleRenderEyeWidth.store(
+			preparationKey.renderEyeWidth,
+			std::memory_order_relaxed);
+		preparedVRRenderScaleRenderEyeHeight.store(
+			preparationKey.renderEyeHeight,
+			std::memory_order_relaxed);
+		preparedVRRenderScaleDisplayEyeWidth.store(
+			preparationKey.displayEyeWidth,
+			std::memory_order_relaxed);
+		preparedVRRenderScaleDisplayEyeHeight.store(
+			preparationKey.displayEyeHeight,
+			std::memory_order_relaxed);
 		preparedVRRenderScaleRequestID.store(
 			a_request.requestID,
 			std::memory_order_release);
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	VRRenderScalePreparationOutcome completionOutcome =
+		VRRenderScalePreparationOutcome::ProtectedFallback;
+	uint64_t completionReasonMask = 0;
+	switch (completionDisposition) {
+	case VRRenderScalePreparationPolicy::CompletionDisposition::Publish:
+		completionOutcome = VRRenderScalePreparationOutcome::Ready;
+		break;
+	case VRRenderScalePreparationPolicy::CompletionDisposition::Cancelled:
+		completionOutcome = VRRenderScalePreparationOutcome::Cancelled;
+		break;
+	case VRRenderScalePreparationPolicy::CompletionDisposition::Superseded:
+		completionOutcome = VRRenderScalePreparationOutcome::Superseded;
+		completionReasonMask = VRRenderScalePreparationReasonMask(
+			VRRenderScalePreparationReason::Superseded);
+		break;
+	case VRRenderScalePreparationPolicy::CompletionDisposition::DeviceChanged:
+		completionOutcome = VRRenderScalePreparationOutcome::DeviceChanged;
+		completionReasonMask = VRRenderScalePreparationReasonMask(
+			VRRenderScalePreparationReason::DeviceChanged);
+		break;
+	case VRRenderScalePreparationPolicy::CompletionDisposition::ShaderFailure:
+		completionOutcome = VRRenderScalePreparationOutcome::Failed;
+		completionReasonMask = VRRenderScalePreparationReasonMask(
+			VRRenderScalePreparationReason::ShaderFailure);
+		break;
+	case VRRenderScalePreparationPolicy::CompletionDisposition::ProviderFailure:
+		completionOutcome = VRRenderScalePreparationOutcome::Failed;
+		completionReasonMask = VRRenderScalePreparationReasonMask(
+			VRRenderScalePreparationReason::ProviderFailure);
+		break;
+	case VRRenderScalePreparationPolicy::CompletionDisposition::NotApplicable:
+		completionOutcome = VRRenderScalePreparationOutcome::ProtectedFallback;
+		break;
+	}
+	const uint64_t preparationEndQpc =
+		QueryVRRenderScalePresentationQpc();
+	RecordVRRenderScalePreparationEvent(
+		BuildVRRenderScalePreparationEvent(
+			preparationKey,
+			VRRenderScalePreparationEventType::TotalPreparation,
+			completionOutcome,
+			completionReasonMask,
+			preparationBeginQpc,
+			preparationEndQpc));
+	if (preparationComplete) {
+		const auto telemetry =
+			GetVRRenderScalePreparationTelemetrySnapshot();
+		const VRRenderScalePreparationEvent* queued = nullptr;
+		for (const auto& event : telemetry.events) {
+			if (event.sessionID == telemetry.sessionID &&
+				event.requestID == preparationKey.requestID &&
+				event.transitionEpoch == preparationKey.transitionEpoch &&
+				event.optionsGeneration ==
+					preparationKey.optionsGeneration &&
+				event.type ==
+					VRRenderScalePreparationEventType::RequestQueued &&
+				(!queued || event.sequence > queued->sequence)) {
+				queued = std::addressof(event);
+			}
+		}
+		if (queued) {
+			auto latencyEvent = BuildVRRenderScalePreparationEvent(
+				preparationKey,
+				VRRenderScalePreparationEventType::RequestToPrepared,
+				VRRenderScalePreparationOutcome::Observed,
+				0,
+				queued->endQpc,
+				preparationEndQpc);
+			latencyEvent.sessionID = telemetry.sessionID;
+			RecordVRRenderScalePreparationEvent(latencyEvent);
+		}
+	}
+#endif
+
 	if (!shadersReady) {
 		logger::warn(
 			"[VRRenderScale] Optional profile preparation was incomplete for request {}; the protected relatch will retain normal fallback and recovery behavior.",
+			a_request.requestID);
+	} else if (!vendorResourcesReady) {
+		logger::warn(
+			"[VRRenderScale] Optional provider preparation was incomplete for request {}; the protected relatch will retain normal fallback and recovery behavior.",
 			a_request.requestID);
 	} else if (ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
@@ -52401,8 +53163,7 @@ bool Upscaling::ShouldWaitForVRUpscalingTransitionDelay() const
 	if (VRVendorRelatchPolicy::CanBypassPreparedMenuRequestDelay(
 			desiredProfile.origin == VRUpscalingTransitionOrigin::CSMenu,
 			desiredProfile.requestID,
-			preparedVRRenderScaleRequestID.load(
-				std::memory_order_acquire))) {
+			GetPreparedVRRenderScaleRequestID())) {
 		return false;
 	}
 

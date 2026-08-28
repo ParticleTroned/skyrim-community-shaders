@@ -8,6 +8,7 @@
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
 #include "Upscaling/VRPresentationStretchTelemetryPolicy.h"
+#include "Upscaling/VRRenderScalePreparationPolicy.h"
 #include "Upscaling/VRVendorRelatchPolicy.h"
 #include "Utils/LazyShader.h"
 #include "VR/InSceneOverlaySubmitPolicy.h"
@@ -410,6 +411,7 @@ public:
 		bool pending = false;
 		uint64_t requestID = 0;
 		uint64_t transitionEpoch = 0;
+		uint64_t preparationOptionsGeneration = 0;
 		UpscaleMethod method = UpscaleMethod::kNONE;
 		uint32_t qualityMode = 0;
 		bool renderScaleModeEnabled = false;
@@ -1176,6 +1178,110 @@ public:
 		bool hamDarkPattern = false;
 		std::array<float, kVRLoadPresentationProbeSampleCount> luminance{};
 	};
+
+	static constexpr std::size_t
+		kVRRenderScalePreparationEventRetentionCapacity = 512;
+
+	enum class VRRenderScalePreparationEventType : uint8_t
+	{
+		RequestQueued,
+		AdmissionCheck,
+		EarlyExit,
+		ShaderCacheBusyWait,
+		SSSRaymarchPrewarm,
+		SSGIPrewarm,
+		DLSSPreparation,
+		FSRPreparation,
+		FSR4Preparation,
+		D3DObjectCreation,
+		TotalPreparation,
+		RequestToPrepared,
+		PreparedToCreator
+	};
+
+	enum class VRRenderScalePreparationOutcome : uint8_t
+	{
+		Observed,
+		Eligible,
+		Busy,
+		Ready,
+		NotNeeded,
+		Failed,
+		Superseded,
+		DeviceChanged,
+		Cancelled,
+		ProtectedFallback
+	};
+
+	enum class VRRenderScalePreparationReason : uint64_t
+	{
+		None = 0,
+		InactiveRequest = 1ull << 0,
+		WrongOrigin = 1ull << 1,
+		MethodIneligible = 1ull << 2,
+		RenderScaleDisabled = 1ull << 3,
+		QualityIneligible = 1ull << 4,
+		MissingDevice = 1ull << 5,
+		InvalidDimensions = 1ull << 6,
+		DeviceLost = 1ull << 7,
+		PostLoadReset = 1ull << 8,
+		ProviderReset = 1ull << 9,
+		ShaderCacheBusy = 1ull << 10,
+		AlreadyAttempted = 1ull << 11,
+		MemoryUnavailable = 1ull << 12,
+		Superseded = 1ull << 13,
+		DeviceChanged = 1ull << 14,
+		ShaderFailure = 1ull << 15,
+		ProviderFailure = 1ull << 16
+	};
+
+	struct VRRenderScalePreparationEvent
+	{
+		uint64_t sequence = 0;
+		uint64_t sessionID = 0;
+		uint64_t requestID = 0;
+		uint64_t transitionEpoch = 0;
+		uint64_t optionsGeneration = 0;
+		uint64_t shaderDefinesGeneration = 0;
+		uintptr_t deviceIdentity = 0;
+		uint32_t frame = 0;
+		uint32_t lastFrame = 0;
+		uint32_t occurrences = 1;
+		UpscaleMethod method = UpscaleMethod::kNONE;
+		uint32_t qualityMode = 0;
+		uint32_t dlssPreset = kDLSSPresetK;
+		uint32_t renderEyeWidth = 0;
+		uint32_t renderEyeHeight = 0;
+		uint32_t displayEyeWidth = 0;
+		uint32_t displayEyeHeight = 0;
+		bool fsr4RuntimeEnabled = false;
+		VRRenderScalePreparationEventType type =
+			VRRenderScalePreparationEventType::AdmissionCheck;
+		VRRenderScalePreparationOutcome outcome =
+			VRRenderScalePreparationOutcome::Observed;
+		uint64_t reasonMask = 0;
+		uint64_t beginQpc = 0;
+		uint64_t endQpc = 0;
+		uint64_t durationQpcTicks = 0;
+		uint64_t bytecodeCompilationQpcTicks = 0;
+		uint64_t d3dObjectCreationQpcTicks = 0;
+	};
+
+	struct VRRenderScalePreparationTelemetrySnapshot
+	{
+		bool active = false;
+		uint64_t sessionID = 0;
+		uint64_t qpcFrequency = 0;
+		uint64_t nextSequence = 1;
+		uint32_t nextIndex = 0;
+		uint32_t count = 0;
+		uint32_t overwrittenEvents = 0;
+		uint32_t coalescedEvents = 0;
+		std::array<
+			VRRenderScalePreparationEvent,
+			kVRRenderScalePreparationEventRetentionCapacity>
+			events{};
+	};
 #endif
 
 	enum class VRRenderScaleStressEventType : uint8_t
@@ -1280,6 +1386,7 @@ public:
 		bool active = false;
 		uint64_t requestID = 0;
 		uint64_t transitionEpoch = 0;
+		uint64_t preparationOptionsGeneration = 0;
 		uint32_t contractGeneration = 0;
 		UpscaleMethod method = UpscaleMethod::kNONE;
 		uint32_t qualityMode = 0;
@@ -1544,6 +1651,8 @@ public:
 	json BuildVRRenderScaleIterationRecord() const;
 	bool WriteVRRenderScaleIterationRecord() const;
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	VRRenderScalePreparationTelemetrySnapshot
+	GetVRRenderScalePreparationTelemetrySnapshot() const;
 	VRRenderScaleCPUPerformanceSnapshot
 	GetVRRenderScaleCPUPerformanceSnapshot() const noexcept;
 	/** @brief Reports whether the current CPU telemetry session is recording. */
@@ -2582,8 +2691,25 @@ public:
 	std::atomic_bool deferredVRRenderScaleRequestPending{ false };
 	std::atomic<uint64_t> nextVRRenderScaleRequestID{ 1 };
 	std::atomic<uint64_t> latestVRRenderScaleRequestID{ 0 };
+	std::atomic<uint64_t> nextVRRenderScalePreparationOptionsGeneration{ 1 };
 	std::atomic<uint64_t> attemptedVRRenderScalePreparationRequestID{ 0 };
+	// Request ID is the release publication; the remaining fields prove the
+	// exact device, options, shader generation, and target dimensions.
 	std::atomic<uint64_t> preparedVRRenderScaleRequestID{ 0 };
+	std::atomic<uint64_t> preparedVRRenderScaleTransitionEpoch{ 0 };
+	std::atomic<uint64_t> preparedVRRenderScaleOptionsGeneration{ 0 };
+	std::atomic<uint64_t> preparedVRRenderScaleShaderDefinesGeneration{ 0 };
+	std::atomic<uintptr_t> preparedVRRenderScaleDeviceIdentity{ 0 };
+	std::atomic<uint32_t> preparedVRRenderScaleQualityMode{ 0 };
+	std::atomic<uint32_t> preparedVRRenderScaleRenderEyeWidth{ 0 };
+	std::atomic<uint32_t> preparedVRRenderScaleRenderEyeHeight{ 0 };
+	std::atomic<uint32_t> preparedVRRenderScaleDisplayEyeWidth{ 0 };
+	std::atomic<uint32_t> preparedVRRenderScaleDisplayEyeHeight{ 0 };
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	mutable std::mutex vrRenderScalePreparationTelemetryMutex;
+	VRRenderScalePreparationTelemetrySnapshot
+		vrRenderScalePreparationTelemetry{};
+#endif
 	std::atomic<uint64_t> nextVRRenderScaleTransitionEpoch{ 1 };
 	mutable std::mutex vrRenderScaleTransitionControllerMutex;
 	VRRenderScaleTransitionSnapshot vrRenderScaleTransitionController{};
@@ -2890,6 +3016,7 @@ public:
 		const VRRenderScaleDesiredProfile& a_request);
 	bool RecordVRRenderScaleTransitionPreparing(const VRRenderScaleDesiredProfile& a_request);
 	uint64_t AllocateVRRenderScaleTransitionEpoch();
+	uint64_t AllocateVRRenderScalePreparationOptionsGeneration();
 	void BindVRRenderScaleRelatchEpoch(uint64_t a_epoch);
 	bool IsVRRenderScaleTransitionEpochCurrent(uint64_t a_epoch) const;
 	bool RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a_plan);
@@ -2979,6 +3106,15 @@ public:
 	bool HasPendingVRRenderScaleTransition() const;
 	void PreparePendingVRRenderScaleTransition(
 		const VRRenderScaleDesiredProfile& a_request);
+	[[nodiscard]] uint64_t GetPreparedVRRenderScaleRequestID() const;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	void RecordVRRenderScalePreparationEvent(
+		VRRenderScalePreparationEvent a_event);
+	void RecordVRRenderScalePreparationRequestQueued(
+		const VRRenderScaleDesiredProfile& a_request);
+	void RecordVRRenderScalePreparationCreatorEntered(
+		uint64_t a_transitionEpoch);
+#endif
 	void QueueVRFpsStabilizerLoadSync(uint32_t a_frame);
 	void ApplyPendingVRFpsStabilizerLoadSync();
 	bool ShouldStageVRRenderScaleTransition(bool a_renderScaleModeEnabled, uint32_t a_qualityMode) const;

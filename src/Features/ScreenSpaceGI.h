@@ -2,6 +2,11 @@
 
 #include "Buffer.h"
 
+namespace Util
+{
+	struct ShaderCompileTiming;
+}
+
 struct ScreenSpaceGI : Feature
 {
 private:
@@ -56,11 +61,11 @@ public:
 	virtual void SetupResources() override;
 	virtual void SetupRenderTargetResources() override;
 	virtual void ClearShaderCache() override;
-	bool CompileComputeShaders();
+	bool CompileComputeShaders(Util::ShaderCompileTiming* a_timing = nullptr);
 	bool RequiredShadersOK() const;
 	bool ShadersOK();
 	/** @brief Compiles the currently admitted SSGI permutation set before relatch. */
-	bool PrewarmShaders();
+	bool PrewarmShaders(Util::ShaderCompileTiming* a_timing = nullptr);
 
 	void DrawSSGI();
 	void UpdateSB();

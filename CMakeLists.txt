@@ -1561,6 +1561,11 @@ if(BUILD_CONTROLLER_TESTS)
         tests/vr_render_scale_qualification_policy_test.cpp
     )
     add_controller_test(
+        vr_render_scale_preparation_policy_test
+        VRRenderScalePreparationPolicy
+        tests/vr_render_scale_preparation_policy_test.cpp
+    )
+    add_controller_test(
         menu_devbench_preflight_policy_test
         MenuDevBenchPreflightPolicy
         tests/menu_devbench_preflight_policy_test.cpp
@@ -1810,6 +1815,7 @@ if(BUILD_CONTROLLER_TESTS)
             perf_mode_restart_state_test
             vr_vendor_relatch_policy_test
             vr_render_scale_qualification_policy_test
+            vr_render_scale_preparation_policy_test
             vr_presentation_stretch_telemetry_policy_test
             reflex_policy_test
             fsr_host_lifecycle_policy_test

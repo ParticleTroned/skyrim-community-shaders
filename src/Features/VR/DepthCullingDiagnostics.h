@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 
@@ -15,8 +17,43 @@ namespace CSX::VRDepthCullingDiagnostics
 	{
 		Lighting,
 		DistantTree,
-		Grass
+		Grass,
+		Count
 	};
+
+	enum class FailOpenReason : std::uint8_t
+	{
+		ContextUnavailable,
+		FeatureDisabled,
+		StateUnavailable,
+		NotInWorld,
+		Reflections,
+		ResultNotReady,
+		GeometryUnavailable,
+		ObjectFrameMismatch,
+		ObjectIndexUnavailable,
+		ObjectIndexOutOfRange,
+		ResultBufferUnavailable,
+		SrvUnavailable,
+		ForcedVisibleSrvUnavailable,
+		Count
+	};
+
+	constexpr auto kDrawCategoryCount = static_cast<std::size_t>(DrawCategory::Count);
+	constexpr auto kFailOpenReasonCount = static_cast<std::size_t>(FailOpenReason::Count);
+	using CategoryCounts = std::array<std::uint64_t, kDrawCategoryCount>;
+	using FailOpenReasonCounts = std::array<std::uint64_t, kFailOpenReasonCount>;
+	using FailOpenByCategory = std::array<FailOpenReasonCounts, kDrawCategoryCount>;
+
+	constexpr std::size_t ToIndex(DrawCategory a_category)
+	{
+		return static_cast<std::size_t>(a_category);
+	}
+
+	constexpr std::size_t ToIndex(FailOpenReason a_reason)
+	{
+		return static_cast<std::size_t>(a_reason);
+	}
 
 	enum class ControlMode : std::uint8_t
 	{
@@ -135,6 +172,8 @@ namespace CSX::VRDepthCullingDiagnostics
 		bool collecting = false;
 		ControlMode controlMode = ControlMode::Live;
 		std::uint64_t collectionEpoch = 0;
+		CategoryCounts bindAttemptsByCategory{};
+		FailOpenByCategory failOpenByCategory{};
 #define CSX_DECLARE_SNAPSHOT_FIELD(type, name, initial) type name = initial;
 		CSX_DEPTH_CULLING_SNAPSHOT_FIELDS(CSX_DECLARE_SNAPSHOT_FIELD)
 #undef CSX_DECLARE_SNAPSHOT_FIELD
@@ -204,10 +243,12 @@ namespace CSX::VRDepthCullingDiagnostics
 			lastObjectCount.store(a_objectCount, std::memory_order_relaxed);
 		}
 
-		void RecordBindAttempt()
+		void RecordBindAttempt(DrawCategory a_category = DrawCategory::Lighting)
 		{
-			if (IsCollecting())
+			if (IsCollecting()) {
 				bindAttempts.fetch_add(1, std::memory_order_relaxed);
+				bindAttemptsByCategory[ToIndex(a_category)].fetch_add(1, std::memory_order_relaxed);
+			}
 		}
 		void RecordBoundDraw(DrawCategory a_category = DrawCategory::Lighting)
 		{
@@ -225,8 +266,34 @@ namespace CSX::VRDepthCullingDiagnostics
 			case DrawCategory::Grass:
 				boundGrassDraws.fetch_add(1, std::memory_order_relaxed);
 				break;
+			case DrawCategory::Count:
+				break;
 			}
 		}
+
+#define CSX_FAIL_OPEN_RECORD(method, field, reason)                                          \
+	void Record##method(DrawCategory a_category = DrawCategory::Lighting)                     \
+	{                                                                                          \
+		if (IsCollecting()) {                                                                    \
+			field.fetch_add(1, std::memory_order_relaxed);                                         \
+			failOpenByCategory[ToIndex(a_category)][ToIndex(FailOpenReason::reason)].fetch_add(     \
+				1, std::memory_order_relaxed);                                                        \
+		}                                                                                        \
+	}
+		CSX_FAIL_OPEN_RECORD(ContextUnavailable, contextUnavailable, ContextUnavailable)
+		CSX_FAIL_OPEN_RECORD(FeatureDisabled, featureDisabled, FeatureDisabled)
+		CSX_FAIL_OPEN_RECORD(StateUnavailable, stateUnavailable, StateUnavailable)
+		CSX_FAIL_OPEN_RECORD(NotInWorld, notInWorld, NotInWorld)
+		CSX_FAIL_OPEN_RECORD(Reflections, reflections, Reflections)
+		CSX_FAIL_OPEN_RECORD(ResultNotReady, resultNotReady, ResultNotReady)
+		CSX_FAIL_OPEN_RECORD(GeometryUnavailable, geometryUnavailable, GeometryUnavailable)
+		CSX_FAIL_OPEN_RECORD(ObjectFrameMismatch, objectFrameMismatch, ObjectFrameMismatch)
+		CSX_FAIL_OPEN_RECORD(ObjectIndexUnavailable, objectIndexUnavailable, ObjectIndexUnavailable)
+		CSX_FAIL_OPEN_RECORD(ObjectIndexOutOfRange, objectIndexOutOfRange, ObjectIndexOutOfRange)
+		CSX_FAIL_OPEN_RECORD(ResultBufferUnavailable, resultBufferUnavailable, ResultBufferUnavailable)
+		CSX_FAIL_OPEN_RECORD(SrvUnavailable, srvUnavailable, SrvUnavailable)
+		CSX_FAIL_OPEN_RECORD(ForcedVisibleSrvUnavailable, forcedVisibleSrvUnavailable, ForcedVisibleSrvUnavailable)
+#undef CSX_FAIL_OPEN_RECORD
 
 #define CSX_SIMPLE_RECORD(method, field)              \
 	void Record##method()                              \
@@ -234,19 +301,6 @@ namespace CSX::VRDepthCullingDiagnostics
 		if (IsCollecting())                              \
 			field.fetch_add(1, std::memory_order_relaxed); \
 	}
-		CSX_SIMPLE_RECORD(ContextUnavailable, contextUnavailable)
-		CSX_SIMPLE_RECORD(FeatureDisabled, featureDisabled)
-		CSX_SIMPLE_RECORD(StateUnavailable, stateUnavailable)
-		CSX_SIMPLE_RECORD(NotInWorld, notInWorld)
-		CSX_SIMPLE_RECORD(Reflections, reflections)
-		CSX_SIMPLE_RECORD(ResultNotReady, resultNotReady)
-		CSX_SIMPLE_RECORD(GeometryUnavailable, geometryUnavailable)
-		CSX_SIMPLE_RECORD(ObjectFrameMismatch, objectFrameMismatch)
-		CSX_SIMPLE_RECORD(ObjectIndexUnavailable, objectIndexUnavailable)
-		CSX_SIMPLE_RECORD(ObjectIndexOutOfRange, objectIndexOutOfRange)
-		CSX_SIMPLE_RECORD(ResultBufferUnavailable, resultBufferUnavailable)
-		CSX_SIMPLE_RECORD(SrvUnavailable, srvUnavailable)
-		CSX_SIMPLE_RECORD(ForcedVisibleSrvUnavailable, forcedVisibleSrvUnavailable)
 		CSX_SIMPLE_RECORD(ReadbackQueued, readbackCopiesQueued)
 		CSX_SIMPLE_RECORD(ReadbackCompleted, readbackCopiesCompleted)
 		CSX_SIMPLE_RECORD(ReadbackDropped, readbackCopiesDropped)
@@ -339,6 +393,14 @@ namespace CSX::VRDepthCullingDiagnostics
 #define CSX_CAPTURE_FIELD(type, name, initial) result.name = name.load(std::memory_order_relaxed);
 			CSX_DEPTH_CULLING_SNAPSHOT_FIELDS(CSX_CAPTURE_FIELD)
 #undef CSX_CAPTURE_FIELD
+			for (std::size_t category = 0; category < kDrawCategoryCount; ++category) {
+				result.bindAttemptsByCategory[category] =
+					bindAttemptsByCategory[category].load(std::memory_order_relaxed);
+				for (std::size_t reason = 0; reason < kFailOpenReasonCount; ++reason) {
+					result.failOpenByCategory[category][reason] =
+						failOpenByCategory[category][reason].load(std::memory_order_relaxed);
+				}
+			}
 			return result;
 		}
 
@@ -348,11 +410,19 @@ namespace CSX::VRDepthCullingDiagnostics
 #define CSX_RESET_FIELD(type, name, initial) name.store(initial, std::memory_order_relaxed);
 			CSX_DEPTH_CULLING_SNAPSHOT_FIELDS(CSX_RESET_FIELD)
 #undef CSX_RESET_FIELD
+			for (auto& category : bindAttemptsByCategory)
+				category.store(0, std::memory_order_relaxed);
+			for (auto& category : failOpenByCategory)
+				for (auto& reason : category)
+					reason.store(0, std::memory_order_relaxed);
 		}
 
 		std::atomic_bool collecting{ false };
 		std::atomic<ControlMode> controlMode{ ControlMode::Live };
 		std::atomic_uint64_t collectionEpoch{ 0 };
+		std::array<std::atomic_uint64_t, kDrawCategoryCount> bindAttemptsByCategory{};
+		std::array<std::array<std::atomic_uint64_t, kFailOpenReasonCount>, kDrawCategoryCount>
+			failOpenByCategory{};
 #define CSX_DECLARE_ATOMIC(type, name, initial) std::atomic<type> name{ initial };
 		CSX_DEPTH_CULLING_SNAPSHOT_FIELDS(CSX_DECLARE_ATOMIC)
 #undef CSX_DECLARE_ATOMIC
@@ -371,22 +441,24 @@ namespace CSX::VRDepthCullingDiagnostics
 		void BeginFrame(std::uint32_t, bool) {}
 		void RecordAccumulation(bool) {}
 		void RecordReady(bool, std::uint32_t, std::uint32_t, std::uint32_t) {}
-		void RecordBindAttempt() {}
+		void RecordBindAttempt(DrawCategory = DrawCategory::Lighting) {}
 		void RecordBoundDraw(DrawCategory = DrawCategory::Lighting) {}
+#define CSX_STUB_FAIL_OPEN(name) void Record##name(DrawCategory = DrawCategory::Lighting) {}
+		CSX_STUB_FAIL_OPEN(ContextUnavailable)
+		CSX_STUB_FAIL_OPEN(FeatureDisabled)
+		CSX_STUB_FAIL_OPEN(StateUnavailable)
+		CSX_STUB_FAIL_OPEN(NotInWorld)
+		CSX_STUB_FAIL_OPEN(Reflections)
+		CSX_STUB_FAIL_OPEN(ResultNotReady)
+		CSX_STUB_FAIL_OPEN(GeometryUnavailable)
+		CSX_STUB_FAIL_OPEN(ObjectFrameMismatch)
+		CSX_STUB_FAIL_OPEN(ObjectIndexUnavailable)
+		CSX_STUB_FAIL_OPEN(ObjectIndexOutOfRange)
+		CSX_STUB_FAIL_OPEN(ResultBufferUnavailable)
+		CSX_STUB_FAIL_OPEN(SrvUnavailable)
+		CSX_STUB_FAIL_OPEN(ForcedVisibleSrvUnavailable)
+#undef CSX_STUB_FAIL_OPEN
 #define CSX_STUB_RECORD(name) void Record##name() {}
-		CSX_STUB_RECORD(ContextUnavailable)
-		CSX_STUB_RECORD(FeatureDisabled)
-		CSX_STUB_RECORD(StateUnavailable)
-		CSX_STUB_RECORD(NotInWorld)
-		CSX_STUB_RECORD(Reflections)
-		CSX_STUB_RECORD(ResultNotReady)
-		CSX_STUB_RECORD(GeometryUnavailable)
-		CSX_STUB_RECORD(ObjectFrameMismatch)
-		CSX_STUB_RECORD(ObjectIndexUnavailable)
-		CSX_STUB_RECORD(ObjectIndexOutOfRange)
-		CSX_STUB_RECORD(ResultBufferUnavailable)
-		CSX_STUB_RECORD(SrvUnavailable)
-		CSX_STUB_RECORD(ForcedVisibleSrvUnavailable)
 		CSX_STUB_RECORD(ReadbackQueued)
 		CSX_STUB_RECORD(ReadbackCompleted)
 		CSX_STUB_RECORD(ReadbackDropped)

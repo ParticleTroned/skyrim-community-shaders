@@ -21,10 +21,19 @@ used as a proximity heuristic. Accepted OpenVR submissions identify the final
 eye texture and bounds without assuming that earlier work used two physical
 draws.
 
-The present gate is a live decision-window capture that proves the native OBB
-result buffer, the candidate-to-draw association, and the resource path from
-the selected draw to an eye-submitted texture. See
-[`depth-culling-observation-sequence.md`](./depth-culling-observation-sequence.md).
+The guarded Bleakwind capture now proves the native OBB result version,
+same-frame producer-to-consumer order, requested-versus-effective SRV identity,
+and 1,691 explicit consumer-to-draw associations in one zero-drop frame. Every
+matched call is a two-instance VR Lighting draw; the shader's `SV_InstanceID`
+mapping proves that the instances select left and right, so the derived draw
+attribution is `eye: both`.
+
+The remaining strict gate is the resource path from the selected draw target to
+the final eye-submitted texture, plus the selected object's full
+scene/material/pass identity and a generated decision-window report. See
+[`depth-culling-observation-sequence.md`](./depth-culling-observation-sequence.md)
+and
+[`guarded-bleakwind-depth-culling-capture-2026-08-28.md`](./guarded-bleakwind-depth-culling-capture-2026-08-28.md).
 
 ## Candidate constraints
 
@@ -122,7 +131,9 @@ Remaining sequence:
 4. Emit capture-local IDs for scene object, property/material, and
    `BSRenderPass` at the narrowest known engine boundary.
 5. Join the selected draw's output resource path to the accepted OpenVR eye
-   submission; preserve `eye: both` where one stereo submission is proved.
+   submissions. Draw-level `eye: both` is already proved for the captured VR
+   Lighting route by two-instance submission and shader eye selection; the
+   output-resource chain is still missing.
 6. Join the capture without relying on pointer equality across frames unless
    object lifetime evidence supports it.
 7. Generate and review the decision-window report before adding more object

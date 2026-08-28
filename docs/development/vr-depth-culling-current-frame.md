@@ -108,13 +108,32 @@ Completed locally:
   vertex work;
 - all 155 shader unit-test assertions pass.
 
-Still required on a physical Skyrim VR run:
+Completed in live Skyrim VR:
 
-- confirm startup and stable world rendering with the option off;
-- enable the option and verify current-frame culling without alternating or
-  missing geometry during head motion;
+- attended Breezehome basement traversal with the option enabled showed no
+  whole-field missing-object flashes at the known occlusion boundary;
+- a qualified null-HMD Bleakwind run observed roughly 2,020 current candidates
+  per frame and about 55.6% occlusion;
+- two paired live-versus-forced-visible exterior samples showed a repeatable
+  `0.20-0.24 ms` reduction in the instrumented covered span;
+- a zero-drop one-frame render-map capture joined 1,691 current-frame consumers
+  to 1,691 draws using the exact same result resource version;
+- all effective slot-127 bindings matched the requested view;
+- every matched Lighting draw was stereo-instanced with two instances, and the
+  shader maps those instances to left and right;
+- no grass or distant-tree draw was visibility-bound in that exterior sample.
+
+The next diagnostic build reports bind attempts and every fail-open reason
+separately for Lighting, DistantTree, and Grass. It is observational only and is
+intended to explain the uncovered Grass path before changing its eligibility.
+
+Detailed provenance and caveats are in
+[`render-map/guarded-bleakwind-depth-culling-capture-2026-08-28.md`](./render-map/guarded-bleakwind-depth-culling-capture-2026-08-28.md).
+
+Still required across further Skyrim VR runs:
+
 - inspect the D3D11 debug/RenderDoc state for SRV/UAV hazards;
-- compare GPU frame time, pixel/vertex workload, and OBB-visible counts against
-  native-on and native-off baselines;
+- compare GPU frame time and OBB-visible counts against native-on and native-off
+  baselines in additional static scenes;
 - exercise alpha-tested foliage, water edges, particles, actors, interiors,
   exteriors, dynamic resolution, and Terrain Blending.

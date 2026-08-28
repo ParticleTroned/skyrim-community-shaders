@@ -25,7 +25,7 @@ namespace
 
 	CSX::Api::ServiceFoundation& Foundation()
 	{
-		static CSX::Api::ServiceFoundation foundation({ kToolName, 1, 4, 5 });
+		static CSX::Api::ServiceFoundation foundation({ kToolName, 1, 5, 6 });
 		static std::once_flag metadataInitialized;
 		std::call_once(metadataInitialized, [&] {
 			foundation.SetServerMetadataProvider([] {
@@ -49,6 +49,34 @@ namespace
 			"live";
 	}
 
+	json FailOpenReasonsJson(
+		const Snapshot& a_snapshot,
+		CSX::VRDepthCullingDiagnostics::DrawCategory a_category)
+	{
+		using Reason = CSX::VRDepthCullingDiagnostics::FailOpenReason;
+		const auto& reasons = a_snapshot.failOpenByCategory[
+			CSX::VRDepthCullingDiagnostics::ToIndex(a_category)];
+		std::uint64_t total = 0;
+		for (const auto count : reasons)
+			total += count;
+		return {
+			{ "total", total },
+			{ "contextUnavailable", reasons[CSX::VRDepthCullingDiagnostics::ToIndex(Reason::ContextUnavailable)] },
+			{ "featureDisabled", reasons[CSX::VRDepthCullingDiagnostics::ToIndex(Reason::FeatureDisabled)] },
+			{ "stateUnavailable", reasons[CSX::VRDepthCullingDiagnostics::ToIndex(Reason::StateUnavailable)] },
+			{ "notInWorld", reasons[CSX::VRDepthCullingDiagnostics::ToIndex(Reason::NotInWorld)] },
+			{ "reflections", reasons[CSX::VRDepthCullingDiagnostics::ToIndex(Reason::Reflections)] },
+			{ "resultNotReady", reasons[CSX::VRDepthCullingDiagnostics::ToIndex(Reason::ResultNotReady)] },
+			{ "geometryUnavailable", reasons[CSX::VRDepthCullingDiagnostics::ToIndex(Reason::GeometryUnavailable)] },
+			{ "objectFrameMismatch", reasons[CSX::VRDepthCullingDiagnostics::ToIndex(Reason::ObjectFrameMismatch)] },
+			{ "objectIndexUnavailable", reasons[CSX::VRDepthCullingDiagnostics::ToIndex(Reason::ObjectIndexUnavailable)] },
+			{ "objectIndexOutOfRange", reasons[CSX::VRDepthCullingDiagnostics::ToIndex(Reason::ObjectIndexOutOfRange)] },
+			{ "resultBufferUnavailable", reasons[CSX::VRDepthCullingDiagnostics::ToIndex(Reason::ResultBufferUnavailable)] },
+			{ "srvUnavailable", reasons[CSX::VRDepthCullingDiagnostics::ToIndex(Reason::SrvUnavailable)] },
+			{ "forcedVisibleSrvUnavailable", reasons[CSX::VRDepthCullingDiagnostics::ToIndex(Reason::ForcedVisibleSrvUnavailable)] },
+		};
+	}
+
 	json SnapshotJson(const Snapshot& a_snapshot)
 	{
 		const auto failOpenDraws =
@@ -56,7 +84,8 @@ namespace
 			a_snapshot.notInWorld + a_snapshot.reflections + a_snapshot.resultNotReady +
 			a_snapshot.geometryUnavailable + a_snapshot.objectFrameMismatch +
 			a_snapshot.objectIndexUnavailable + a_snapshot.objectIndexOutOfRange +
-			a_snapshot.resultBufferUnavailable + a_snapshot.srvUnavailable;
+			a_snapshot.resultBufferUnavailable + a_snapshot.srvUnavailable +
+			a_snapshot.forcedVisibleSrvUnavailable;
 		const auto accountedBindAttempts = a_snapshot.boundDraws + failOpenDraws;
 		const auto unaccountedBindAttempts = a_snapshot.bindAttempts > accountedBindAttempts ?
 			a_snapshot.bindAttempts - accountedBindAttempts : 0;
@@ -116,6 +145,11 @@ namespace
 					{ "lighting", a_snapshot.boundLightingDraws },
 					{ "distantTree", a_snapshot.boundDistantTreeDraws },
 					{ "grass", a_snapshot.boundGrassDraws },
+				} },
+				{ "bindAttemptsByFamily", {
+					{ "lighting", a_snapshot.bindAttemptsByCategory[CSX::VRDepthCullingDiagnostics::ToIndex(CSX::VRDepthCullingDiagnostics::DrawCategory::Lighting)] },
+					{ "distantTree", a_snapshot.bindAttemptsByCategory[CSX::VRDepthCullingDiagnostics::ToIndex(CSX::VRDepthCullingDiagnostics::DrawCategory::DistantTree)] },
+					{ "grass", a_snapshot.bindAttemptsByCategory[CSX::VRDepthCullingDiagnostics::ToIndex(CSX::VRDepthCullingDiagnostics::DrawCategory::Grass)] },
 				} },
 			} },
 			{ "visibilityReadback", {
@@ -218,6 +252,11 @@ namespace
 				{ "srvUnavailable", a_snapshot.srvUnavailable },
 				{ "forcedVisibleSrvUnavailable", a_snapshot.forcedVisibleSrvUnavailable },
 			} },
+			{ "failOpenReasonsByFamily", {
+				{ "lighting", FailOpenReasonsJson(a_snapshot, CSX::VRDepthCullingDiagnostics::DrawCategory::Lighting) },
+				{ "distantTree", FailOpenReasonsJson(a_snapshot, CSX::VRDepthCullingDiagnostics::DrawCategory::DistantTree) },
+				{ "grass", FailOpenReasonsJson(a_snapshot, CSX::VRDepthCullingDiagnostics::DrawCategory::Grass) },
+			} },
 		};
 	}
 
@@ -232,8 +271,8 @@ namespace
 			response["result"] = {
 				{ "service", kToolName },
 				{ "major", 1 },
-				{ "minor", 4 },
-				{ "schemaRevision", 5 },
+				{ "minor", 5 },
+				{ "schemaRevision", 6 },
 				{ "mainThreadAffine", false },
 				{ "actions", json::array({ "registry", "snapshot", "start", "stop", "reset", "configure" }) },
 				{ "mutations", json::array({ "start", "stop", "reset", "configure" }) },
@@ -248,6 +287,7 @@ namespace
 					"Pipeline statistics and coverageSpanTiming begin at the first successfully visibility-bound lighting draw and end at the following frame's early prepass.",
 					"All query results are read with D3D11_ASYNC_GETDATA_DONOTFLUSH; diagnostics never flush or wait for the GPU.",
 					"forced_visible preserves the OBB pass, binding, lookup, branch, and draw submissions but binds an all-visible result buffer to suppress only the shader early exit.",
+					"Fail-open reasons and bind attempts are also reported per Lighting, DistantTree, and Grass family.",
 				}) },
 			};
 			return response;

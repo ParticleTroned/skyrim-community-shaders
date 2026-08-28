@@ -90,6 +90,16 @@ edges to the eye-submitted texture. If one instanced or stereo draw contributes
 to both accepted submissions, the derived report may label it `eye: both` only
 after that resource path is proven.
 
+The guarded Bleakwind capture adds a second, direct draw-level attribution
+route for VR Lighting. All 1,691 visibility-consumer submissions in its complete
+frame join to `DrawIndexedInstanced` with `InstanceCount = 2`. The bound shader
+accepts `SV_InstanceID`; `Stereo::GetEyeIndexVS(instanceID)` maps instance 0 to
+left and instance 1 to right when VR stereo is enabled. These draws may
+therefore be labelled `eye: both` from their proven execution mechanism even
+though the later draw-target-to-OpenVR copy/resolve chain remains incomplete.
+The capture must not use the later compositor submission alone to back-label an
+otherwise unidentified draw.
+
 ## Refined first target
 
 The first decision-window capture should select one persistent, ordinary
@@ -100,13 +110,11 @@ first slice.
 
 The shortest remaining path is:
 
-1. capture the native candidate and exact result-buffer version;
-2. prove one explicit candidate/submission/draw association;
-3. confirm requested and effective VS slot 127 are identical;
-4. trace the draw target to one or both accepted eye submissions;
-5. validate the completed diagnostic readback decision joined to the same
+1. trace the draw target to one or both accepted eye submissions;
+2. add the selected object's scene/material/pass identity;
+3. validate the completed diagnostic readback decision joined to the same
    object index and version;
-6. emit the decision-window report for live and forced-visible controls.
+4. emit the decision-window report for live and forced-visible controls.
 
 Predication is not assumed: `SetPredication` requires an actual
 `ID3D11Predicate`, not the existing arbitrary visibility buffer. Indirect

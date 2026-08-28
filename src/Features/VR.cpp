@@ -1189,7 +1189,7 @@ void VR::BindCurrentFrameDepthCulling(
 	RE::BSGeometry* a_geometry,
 	CSX::VRDepthCullingDiagnostics::DrawCategory a_category)
 {
-	depthCullingDiagnostics.RecordBindAttempt();
+	depthCullingDiagnostics.RecordBindAttempt(a_category);
 	auto& renderMap = CSX::RenderMap::GetRuntime();
 	auto* state = globals::state;
 	constexpr auto enabledDescriptor = static_cast<std::uint32_t>(State::ExtraShaderDescriptors::CurrentFrameDepthCulling);
@@ -1201,32 +1201,32 @@ void VR::BindCurrentFrameDepthCulling(
 	auto* context = globals::d3d::context;
 	renderMap.ClearPendingVisibilitySubmission(reinterpret_cast<std::uintptr_t>(context));
 	if (!context) {
-		depthCullingDiagnostics.RecordContextUnavailable();
+		depthCullingDiagnostics.RecordContextUnavailable(a_category);
 		return;
 	}
 
 	if (!IsCurrentFrameDepthCullingEnabled()) {
-		depthCullingDiagnostics.RecordFeatureDisabled();
+		depthCullingDiagnostics.RecordFeatureDisabled(a_category);
 		return;
 	}
 	if (!state) {
-		depthCullingDiagnostics.RecordStateUnavailable();
+		depthCullingDiagnostics.RecordStateUnavailable(a_category);
 		return;
 	}
 	if (!state->inWorld) {
-		depthCullingDiagnostics.RecordNotInWorld();
+		depthCullingDiagnostics.RecordNotInWorld(a_category);
 		return;
 	}
 	if ((state->permutationData.ExtraShaderDescriptor & static_cast<std::uint32_t>(State::ExtraShaderDescriptors::IsReflections)) != 0) {
-		depthCullingDiagnostics.RecordReflections();
+		depthCullingDiagnostics.RecordReflections(a_category);
 		return;
 	}
 	if (currentFrameDepthCullingReadyFrame != state->frameCount) {
-		depthCullingDiagnostics.RecordResultNotReady();
+		depthCullingDiagnostics.RecordResultNotReady(a_category);
 		return;
 	}
 	if (!a_geometry) {
-		depthCullingDiagnostics.RecordGeometryUnavailable();
+		depthCullingDiagnostics.RecordGeometryUnavailable(a_category);
 		return;
 	}
 
@@ -1235,32 +1235,32 @@ void VR::BindCurrentFrameDepthCulling(
 	const auto objectFrame = *reinterpret_cast<std::uint32_t*>(
 		reinterpret_cast<std::byte*>(geometryObject) + kNiAVObjectDepthCullingFrameOffset);
 	if (objectFrame != *gDepthCullingFrame) {
-		depthCullingDiagnostics.RecordObjectFrameMismatch();
+		depthCullingDiagnostics.RecordObjectFrameMismatch(a_category);
 		return;
 	}
 
 	std::uint32_t objectIndex = 0;
 	if (!TryGetDepthCullingObjectIndex(culler, geometryObject, objectIndex)) {
-		depthCullingDiagnostics.RecordObjectIndexUnavailable();
+		depthCullingDiagnostics.RecordObjectIndexUnavailable(a_category);
 		return;
 	}
 
 	auto* cullerBytes = reinterpret_cast<std::byte*>(culler);
 	const auto objectCount = *reinterpret_cast<std::uint32_t*>(cullerBytes + kDepthCullingObjectCountOffset);
 	if (objectIndex >= std::min(objectCount, kDepthCullingCapacity)) {
-		depthCullingDiagnostics.RecordObjectIndexOutOfRange();
+		depthCullingDiagnostics.RecordObjectIndexOutOfRange(a_category);
 		return;
 	}
 
 	auto* resultBuffer = *reinterpret_cast<std::byte**>(cullerBytes + kDepthCullingGpuResultOffset);
 	if (!resultBuffer) {
-		depthCullingDiagnostics.RecordResultBufferUnavailable();
+		depthCullingDiagnostics.RecordResultBufferUnavailable(a_category);
 		return;
 	}
 
 	auto* liveVisibility = *reinterpret_cast<ID3D11ShaderResourceView**>(resultBuffer + kGpuBufferSrvOffset);
 	if (!liveVisibility) {
-		depthCullingDiagnostics.RecordSrvUnavailable();
+		depthCullingDiagnostics.RecordSrvUnavailable(a_category);
 		return;
 	}
 
@@ -1271,7 +1271,7 @@ void VR::BindCurrentFrameDepthCulling(
 		CSX::VRDepthCullingDiagnostics::ControlMode::ForcedVisible;
 	visibility = GetDepthCullingDiagnosticControlSrv(visibility);
 	if (!visibility) {
-		depthCullingDiagnostics.RecordForcedVisibleSrvUnavailable();
+		depthCullingDiagnostics.RecordForcedVisibleSrvUnavailable(a_category);
 		return;
 	}
 #endif

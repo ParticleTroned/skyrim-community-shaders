@@ -12,7 +12,7 @@ int main()
 	counters.RecordAccumulation(false);
 	counters.RecordAccumulation(true);
 	counters.RecordReady(true, 10, 44, 321);
-	counters.RecordBindAttempt();
+	counters.RecordBindAttempt(CSX::VRDepthCullingDiagnostics::DrawCategory::Grass);
 	counters.RecordBoundDraw(CSX::VRDepthCullingDiagnostics::DrawCategory::Grass);
 	counters.RecordReadbackQueued();
 	CSX::VRDepthCullingDiagnostics::ClassifiedDraws classified{
@@ -42,8 +42,10 @@ int main()
 		.csInvocations = 600,
 	});
 	counters.BeginFrame(11, true);
-	counters.RecordBindAttempt();
-	counters.RecordResultNotReady();
+	counters.RecordBindAttempt(CSX::VRDepthCullingDiagnostics::DrawCategory::Grass);
+	counters.RecordResultNotReady(CSX::VRDepthCullingDiagnostics::DrawCategory::Grass);
+	counters.RecordBindAttempt(CSX::VRDepthCullingDiagnostics::DrawCategory::DistantTree);
+	counters.RecordObjectFrameMismatch(CSX::VRDepthCullingDiagnostics::DrawCategory::DistantTree);
 
 	auto snapshot = counters.Capture();
 	if (!snapshot.collecting ||
@@ -52,7 +54,11 @@ int main()
 		snapshot.framesObserved != 2 || snapshot.enabledFrames != 2 ||
 		snapshot.accumulationCalls != 2 || snapshot.previousResultsNeutralized != 1 ||
 		snapshot.readyPassCalls != 1 || snapshot.readyFrames != 1 ||
-		snapshot.bindAttempts != 2 || snapshot.boundDraws != 1 ||
+		snapshot.bindAttempts != 3 || snapshot.boundDraws != 1 ||
+		snapshot.bindAttemptsByCategory[CSX::VRDepthCullingDiagnostics::ToIndex(
+			CSX::VRDepthCullingDiagnostics::DrawCategory::Grass)] != 2 ||
+		snapshot.bindAttemptsByCategory[CSX::VRDepthCullingDiagnostics::ToIndex(
+			CSX::VRDepthCullingDiagnostics::DrawCategory::DistantTree)] != 1 ||
 		snapshot.controlMode != CSX::VRDepthCullingDiagnostics::ControlMode::ForcedVisible ||
 		snapshot.boundGrassDraws != 1 ||
 		snapshot.currentFrameBoundDraws != 0 || snapshot.lastCompletedFrameBoundDraws != 1 ||
@@ -71,13 +77,21 @@ int main()
 		snapshot.pipelineVSInvocations != 900 || snapshot.pipelineClipperInvocations != 800 ||
 		snapshot.pipelineClipperPrimitives != 400 || snapshot.pipelinePSInvocations != 700 ||
 		snapshot.pipelineCSInvocations != 600 ||
-		snapshot.resultNotReady != 1) {
+		snapshot.resultNotReady != 1 || snapshot.objectFrameMismatch != 1 ||
+		snapshot.failOpenByCategory[CSX::VRDepthCullingDiagnostics::ToIndex(
+			CSX::VRDepthCullingDiagnostics::DrawCategory::Grass)]
+			[CSX::VRDepthCullingDiagnostics::ToIndex(
+				CSX::VRDepthCullingDiagnostics::FailOpenReason::ResultNotReady)] != 1 ||
+		snapshot.failOpenByCategory[CSX::VRDepthCullingDiagnostics::ToIndex(
+			CSX::VRDepthCullingDiagnostics::DrawCategory::DistantTree)]
+			[CSX::VRDepthCullingDiagnostics::ToIndex(
+				CSX::VRDepthCullingDiagnostics::FailOpenReason::ObjectFrameMismatch)] != 1) {
 		return 2;
 	}
 
 	counters.Stop();
 	counters.RecordBindAttempt();
-	if (counters.Capture().bindAttempts != 2)
+	if (counters.Capture().bindAttempts != 3)
 		return 3;
 
 	counters.Reset();
@@ -88,6 +102,12 @@ int main()
 		snapshot.pipelineCoveredLightingDraws == 0 &&
 		snapshot.pipelineTimingSamples == 0 && snapshot.pipelineRegionNanoseconds == 0 &&
 		snapshot.coverageSpanTimingSamples == 0 && snapshot.coverageSpanRegionNanoseconds == 0 &&
+		snapshot.bindAttemptsByCategory[CSX::VRDepthCullingDiagnostics::ToIndex(
+			CSX::VRDepthCullingDiagnostics::DrawCategory::Grass)] == 0 &&
+		snapshot.failOpenByCategory[CSX::VRDepthCullingDiagnostics::ToIndex(
+			CSX::VRDepthCullingDiagnostics::DrawCategory::DistantTree)]
+			[CSX::VRDepthCullingDiagnostics::ToIndex(
+				CSX::VRDepthCullingDiagnostics::FailOpenReason::ObjectFrameMismatch)] == 0 &&
 		snapshot.controlMode == CSX::VRDepthCullingDiagnostics::ControlMode::ForcedVisible ?
 		0 :
 		4;

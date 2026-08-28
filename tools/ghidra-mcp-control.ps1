@@ -643,6 +643,9 @@ function New-StatusResult {
         } else { $null })
         programMatchesExpectation = $programMatchesExpectation
         artifactMatchesImport = $artifactMatchesImport
+        artifactRefresh = $(if ($Session) {
+            Get-OptionalProperty -Value $Session -Name "artifactRefresh"
+        } else { $null })
         logs = $(if ($Session) {
             [pscustomobject][ordered]@{
                 stdout = $Session.stdoutLog
@@ -675,6 +678,34 @@ function Wait-ForReady {
         $lastProbe = Test-GhidrAssistEndpoint
     }
     return $lastProbe
+}
+
+function Test-SessionArtifactMatchesExpected {
+    param([Parameter(Mandatory = $true)] $Session)
+
+    if (-not $script:expectedProgramPath) {
+        return $true
+    }
+
+    $recordedPath = Get-OptionalProperty -Value $Session -Name "programPath"
+    if ([string]::IsNullOrWhiteSpace([string] $recordedPath) -or
+        -not [IO.Path]::GetFullPath([string] $recordedPath).Equals(
+            [IO.Path]::GetFullPath($script:expectedProgramPath),
+            [StringComparison]::OrdinalIgnoreCase
+        )) {
+        return $false
+    }
+
+    if (-not $script:expectedProgramSha256) {
+        return $true
+    }
+
+    $recordedSha256 = Get-OptionalProperty -Value $Session -Name "programSha256"
+    return -not [string]::IsNullOrWhiteSpace([string] $recordedSha256) -and
+        $script:expectedProgramSha256.Equals(
+            [string] $recordedSha256,
+            [StringComparison]::OrdinalIgnoreCase
+        )
 }
 
 function Complete-Command($Result) {
@@ -755,6 +786,7 @@ try {
     } else { $null }
     $trackedProcess = Get-TrackedProcess -Session $session
     $probe = Test-GhidrAssistEndpoint
+    $artifactRefresh = $null
 
     if ($Action -eq "status") {
         if ($trackedProcess -and $probe.ready) {
@@ -835,6 +867,58 @@ try {
                 } else { @() }))
         }
         return
+    }
+
+    if ($trackedProcess -and $programPathExplicit -and
+        -not (Test-SessionArtifactMatchesExpected -Session $session)) {
+        $artifactRefresh = [pscustomobject][ordered]@{
+            action = "graceful-reimport"
+            requestedUtc = [DateTime]::UtcNow.ToString("o")
+            previous = [pscustomobject][ordered]@{
+                path = Get-OptionalProperty -Value $session -Name "programPath"
+                sha256 = Get-OptionalProperty -Value $session -Name "programSha256"
+            }
+            requested = [pscustomobject][ordered]@{
+                path = $script:expectedProgramPath
+                sha256 = $script:expectedProgramSha256
+            }
+        }
+        Set-Content -LiteralPath $completionFile -Value "" -Encoding ascii
+        $deadline = [DateTime]::UtcNow.AddSeconds($StopTimeoutSeconds)
+        do {
+            Start-Sleep -Milliseconds 500
+            $trackedProcess = Get-TrackedProcess -Session $session
+            $probe = Test-GhidrAssistEndpoint
+        } while (($trackedProcess -or $probe.ready) -and [DateTime]::UtcNow -lt $deadline)
+
+        if ($trackedProcess) {
+            Complete-Command (New-StatusResult `
+                -State "refresh_timeout" `
+                -Ok $false `
+                -Session $session `
+                -Process $trackedProcess `
+                -Probe $probe `
+                -Errors @(
+                    "The managed Ghidra session did not stop within " +
+                    "$StopTimeoutSeconds seconds for an artifact refresh; it was not terminated."
+                ))
+            return
+        }
+        if ($probe.ready) {
+            Complete-Command (New-StatusResult `
+                -State "refresh_endpoint_busy" `
+                -Ok $false `
+                -Session $session `
+                -Process $null `
+                -Probe $probe `
+                -Errors @(
+                    "The managed Ghidra process stopped, but another server " +
+                    "still owns the endpoint; the new artifact was not imported."
+                ))
+            return
+        }
+
+        $session = $null
     }
 
     if ($trackedProcess) {
@@ -1038,6 +1122,7 @@ try {
         projectName = $ProjectName
         programPath = $resolvedProgramPath
         programSha256 = $resolvedProgramSha256
+        artifactRefresh = $artifactRefresh
         programName = $ProgramName
         launcherMode = "analyze-headless"
         mode = $mode

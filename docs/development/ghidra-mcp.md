@@ -74,10 +74,14 @@ auto-analysis:
 pwsh ./tools/ghidra-mcp-control.ps1 start
 ```
 
-Passing a different `-ProgramPath` after stopping the managed session imports
-and analyzes that artifact with overwrite semantics, then binds the saved
-session to its path and SHA-256. This prevents a project left on an RC build
-from being accepted for a PR artifact.
+Passing `-ProgramPath` makes that exact path and its current SHA-256 the
+candidate identity. If the controller owns a live session for a different path
+or SHA-256, `start` writes only that session's completion file, waits up to
+`-StopTimeoutSeconds` for its listener to vacate, then reimports the supplied
+artifact with overwrite semantics. It never terminates a process, chooses a
+snapshot, or infers a DLL path from a running game or MO2 profile. A stop or
+endpoint timeout leaves the new artifact unimported and returns a blocked
+receipt.
 
 Stop the managed session cleanly with:
 

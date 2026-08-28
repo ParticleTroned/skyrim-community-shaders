@@ -61,6 +61,36 @@ namespace
 		return facts;
 	}
 
+	constexpr TargetProfile NativeDLAA()
+	{
+		return {
+			.method = Method::DLSS,
+			.qualityMode = 0,
+			.renderScaleMode = false,
+		};
+	}
+
+	constexpr TargetProfile NativeFSR()
+	{
+		return {
+			.method = Method::FSR,
+			.qualityMode = 0,
+			.renderScaleMode = false,
+		};
+	}
+
+	constexpr StabilityFacts NativeVendorStableFacts()
+	{
+		auto facts = CommonStableFacts();
+		facts.apiNativeContract = true;
+		facts.physicalActiveContract = true;
+		facts.presentationPhaseStable = true;
+		facts.fidelityStable = true;
+		facts.vendorPresentationStable = true;
+		facts.lifecycleStable = true;
+		return facts;
+	}
+
 	constexpr bool CoversExactProfileMatching()
 	{
 		const auto target = ActiveDLSS();
@@ -170,7 +200,7 @@ namespace
 		       !MatchesActivePhysicalBackend(Method::DLSS, PhysicalBackend::FSRHost);
 	}
 
-	constexpr bool CoversActiveAndNativeStability()
+	constexpr bool CoversActiveVendorStability()
 	{
 		auto activeFacts = ActiveDLSSStableFacts();
 		if (EvaluateStability(ActiveDLSS(), activeFacts) != kFailureNone)
@@ -187,16 +217,44 @@ namespace
 			return false;
 		}
 
-		TargetProfile native{
-			.method = Method::FSR,
-			.qualityMode = 0,
-			.renderScaleMode = false,
-		};
-		auto nativeFacts = CommonStableFacts();
-		nativeFacts.apiNativeContract = true;
-		nativeFacts.physicalNativeContract = true;
-		nativeFacts.nativePresentationStable = true;
-		return EvaluateStability(native, nativeFacts) == kFailureNone;
+		return true;
+	}
+
+	constexpr bool CoversNativeVendorStability()
+	{
+		if (!UsesVendorEvaluation(NativeDLAA()) ||
+			!UsesNativeVendorEvaluation(NativeDLAA()) ||
+			!UsesNativeVendorEvaluation(NativeFSR()) ||
+			UsesNativeVendorEvaluation(ActiveDLSS()) ||
+			UsesVendorEvaluation(TargetProfile{})) {
+			return false;
+		}
+
+		auto dlaaFacts = NativeVendorStableFacts();
+		if (EvaluateStability(NativeDLAA(), dlaaFacts) != kFailureNone)
+			return false;
+		dlaaFacts.physicalActiveContract = false;
+		if ((EvaluateStability(NativeDLAA(), dlaaFacts) &
+				static_cast<std::uint64_t>(kFailurePhysicalActiveContract)) == 0) {
+			return false;
+		}
+
+		auto fsrFacts = NativeVendorStableFacts();
+		fsrFacts.fsrDispatchStable = true;
+		if (EvaluateStability(NativeFSR(), fsrFacts) != kFailureNone)
+			return false;
+		fsrFacts.fsrDispatchStable = false;
+		if ((EvaluateStability(NativeFSR(), fsrFacts) &
+				static_cast<std::uint64_t>(kFailureFSRDispatch)) == 0) {
+			return false;
+		}
+
+		fsrFacts.fsrDispatchStable = true;
+		fsrFacts.shaderCompilationIdle = false;
+		const auto evaluation = EvaluateMilestones(NativeFSR(), fsrFacts);
+		return evaluation.PresentationStable() && !evaluation.CleanupDrained() &&
+		       (evaluation.cleanupFailures &
+				   static_cast<std::uint64_t>(kFailureShaderCompilation)) != 0;
 	}
 
 	constexpr bool CoversQualificationMilestones()
@@ -443,7 +501,8 @@ namespace
 	static_assert(CoversExactProfileMatching());
 	static_assert(CoversObservedProfileTargets());
 	static_assert(CoversConfiguredRuntimeBackendSeparation());
-	static_assert(CoversActiveAndNativeStability());
+	static_assert(CoversActiveVendorStability());
+	static_assert(CoversNativeVendorStability());
 	static_assert(CoversQualificationMilestones());
 	static_assert(CoversContractSpecificShaderCompilation());
 	static_assert(CoversMilestoneParsingAndFirstTimestamps());

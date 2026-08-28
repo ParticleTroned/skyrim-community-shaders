@@ -2649,8 +2649,11 @@ namespace
 			!PhysicalProfileMatchesTarget(applied, a_target, a_api, true) ||
 			!PhysicalProfileMatchesTarget(stable, a_target, a_api, true) ||
 			!PhysicalProfilesAgree(applied, stable) ||
-			a_api.renderEyeWidth >= a_api.displayEyeWidth ||
-			a_api.renderEyeHeight >= a_api.displayEyeHeight) {
+			(a_target.renderScaleMode ?
+					(a_api.renderEyeWidth >= a_api.displayEyeWidth ||
+						a_api.renderEyeHeight >= a_api.displayEyeHeight) :
+					(a_api.renderEyeWidth != a_api.displayEyeWidth ||
+						a_api.renderEyeHeight != a_api.displayEyeHeight))) {
 			return false;
 		}
 		if (a_foveation &&
@@ -2976,17 +2979,31 @@ namespace
 				kProfileRequested | kProfileEffective | kProfileStable;
 			const bool profilesPresent =
 				(apiSnapshot.profilePresence & requiredProfiles) == requiredProfiles;
-			const auto requested = QualificationProfile(apiSnapshot.requested, profilesPresent);
-			const auto effective = QualificationProfile(apiSnapshot.effective, profilesPresent);
-			const auto stable = QualificationProfile(apiSnapshot.stable, profilesPresent);
+			const bool effectiveProfilePresent =
+				(apiSnapshot.profilePresence & kProfileEffective) != 0;
+			const bool requestedProfilePresent =
+				(apiSnapshot.profilePresence & kProfileRequested) != 0;
+			const bool stableProfilePresent =
+				(apiSnapshot.profilePresence & kProfileStable) != 0;
+			const auto requested = QualificationProfile(
+				apiSnapshot.requested, requestedProfilePresent);
+			const auto effective = QualificationProfile(
+				apiSnapshot.effective, effectiveProfilePresent);
+			const auto stable = QualificationProfile(
+				apiSnapshot.stable, stableProfilePresent);
+			const bool nativeVendorTarget =
+				targetAvailable && QualificationPolicy::UsesNativeVendorEvaluation(target);
 			facts.providerReady =
 				(apiSnapshot.flags & kSnapshotProviderCheckComplete) != 0;
-			facts.profilesAgree = targetAvailable && profilesPresent &&
-			                      QualificationPolicy::MatchesTarget(requested, target) &&
-			                      QualificationPolicy::MatchesTarget(effective, target) &&
-			                      QualificationPolicy::MatchesTarget(stable, target) &&
-			                      QualificationPolicy::ProfilesAgree(requested, effective) &&
-			                      QualificationPolicy::ProfilesAgree(effective, stable);
+			facts.profilesAgree = nativeVendorTarget ?
+			                          effectiveProfilePresent &&
+			                              QualificationPolicy::MatchesTarget(effective, target) :
+			                          targetAvailable && profilesPresent &&
+			                              QualificationPolicy::MatchesTarget(requested, target) &&
+			                              QualificationPolicy::MatchesTarget(effective, target) &&
+			                              QualificationPolicy::MatchesTarget(stable, target) &&
+			                              QualificationPolicy::ProfilesAgree(requested, effective) &&
+			                              QualificationPolicy::ProfilesAgree(effective, stable);
 			facts.dimensionsPositive = apiSnapshot.displayEyeWidth != 0 &&
 			                           apiSnapshot.displayEyeHeight != 0 &&
 			                           apiSnapshot.renderEyeWidth != 0 &&
@@ -3010,7 +3027,7 @@ namespace
 				(apiSnapshot.observedConditions & blockingConditions) == kConditionNone &&
 				(apiSnapshot.flags & kSnapshotRestartRequired) == 0;
 			const bool providerUnavailable = targetAvailable &&
-			                                 target.renderScaleMode &&
+			                                 QualificationPolicy::UsesVendorEvaluation(target) &&
 			                                 (apiSnapshot.flags &
 												 kSnapshotProviderCheckComplete) != 0 &&
 			                                 (apiSnapshot.observedConditions &
@@ -3089,7 +3106,7 @@ namespace
 			Upscaling::VRRenderScalePresentationPath::VendorEvaluated,
 			a_transition.dispatchFrame);
 		facts.lifecycleStable = targetAvailable && LifecycleStable(controller, target);
-		if (targetAvailable && target.renderScaleMode) {
+		if (targetAvailable && QualificationPolicy::UsesVendorEvaluation(target)) {
 			const auto& lifecycle = target.method == QualificationPolicy::Method::DLSS ?
 			                            controller.dlssLifecycle :
 			                            controller.fsrLifecycle;
@@ -3102,7 +3119,7 @@ namespace
 			globals::shaderCache && globals::shaderCache->IsCompiling();
 		facts.shaderCompilationIdle = !shaderCompilationActive;
 		facts.requiredShaderCompilationComplete =
-			!targetAvailable || !target.renderScaleMode ||
+			!targetAvailable || !QualificationPolicy::UsesVendorEvaluation(target) ||
 			target.method != QualificationPolicy::Method::FSR ||
 			facts.shaderCompilationIdle ||
 			(facts.physicalActiveContract && facts.lifecycleStable &&

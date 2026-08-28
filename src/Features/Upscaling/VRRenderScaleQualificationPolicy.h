@@ -96,6 +96,18 @@ namespace VRRenderScaleQualificationPolicy
 		bool fsr4Runtime = false;
 	};
 
+	[[nodiscard]] constexpr bool UsesVendorEvaluation(
+		const TargetProfile& a_target) noexcept
+	{
+		return a_target.method == Method::DLSS || a_target.method == Method::FSR;
+	}
+
+	[[nodiscard]] constexpr bool UsesNativeVendorEvaluation(
+		const TargetProfile& a_target) noexcept
+	{
+		return UsesVendorEvaluation(a_target) && !a_target.renderScaleMode;
+	}
+
 	[[nodiscard]] constexpr bool IsTargetPropertyAllowed(
 		std::string_view a_name) noexcept
 	{
@@ -584,9 +596,13 @@ namespace VRRenderScaleQualificationPolicy
 			kFailureResourcePublication,
 			failures);
 
-		if (a_target.renderScaleMode) {
+		if (UsesVendorEvaluation(a_target)) {
 			RequireFact(
-				a_facts.apiActiveContract, kFailureAPIActiveContract, failures);
+				a_target.renderScaleMode ? a_facts.apiActiveContract :
+										   a_facts.apiNativeContract,
+				a_target.renderScaleMode ? kFailureAPIActiveContract :
+										   kFailureAPINativeContract,
+				failures);
 			RequireFact(
 				a_facts.physicalActiveContract,
 				kFailurePhysicalActiveContract,
@@ -641,7 +657,7 @@ namespace VRRenderScaleQualificationPolicy
 		RequireFact(a_facts.retirementClear, kFailureRetirement, failures);
 		RequireFact(
 			a_facts.physicalMutationClear, kFailurePhysicalMutation, failures);
-		if (a_target.renderScaleMode && a_target.method == Method::FSR) {
+		if (UsesVendorEvaluation(a_target) && a_target.method == Method::FSR) {
 			// Legacy strict qualification waited for the global compiler to drain.
 			// Keep that debt in cleanup while presentation accepts an already-proven
 			// active FSR contract whose required dispatch shaders have completed.

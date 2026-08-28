@@ -232,6 +232,8 @@ foreach(_required_behavior IN ITEMS
     "QualificationPolicy::SaturatingDeadlineTick"
 	"QualificationPolicy::EvaluateMilestones"
 	"QualificationPolicy::IsMilestoneSatisfied"
+	"QualificationPolicy::UsesVendorEvaluation"
+	"QualificationPolicy::UsesNativeVendorEvaluation"
 	"RecordQualificationMilestones"
 	"QualificationPolicy::ExactObservationTarget"
 	"QualificationPolicy::HasCoherentPresentationFrames"

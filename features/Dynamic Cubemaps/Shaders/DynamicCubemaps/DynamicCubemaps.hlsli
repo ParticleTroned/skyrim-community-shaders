@@ -94,7 +94,7 @@ namespace DynamicCubemaps
 		float3 R = reflect(-V, N);
 		float NoV = saturate(dot(N, V));
 
-		float level = roughness * 7.0;
+		float level = roughness * 8.0;
 
 		float3 finalIrradiance = 0;
 
@@ -123,7 +123,8 @@ namespace DynamicCubemaps
 			finalIrradiance = ComputeSpecularIrradiance(R, level, directionalAmbientColorSpecular, skylightingSpecular, skylightingVisibility);
 		} else {
 #		if defined(IBL) && defined(LIGHTING)
-			float3 specularIrradiance = ImageBasedLighting::StaticSpecularIBLTexture.SampleLevel(SampColorSampler, R.xzy, level).xyz;
+			// StaticSpecularIBLTexture is hardcoded to 8 mips (IBL.cpp); do not share the dynamic cubemap scale.
+			float3 specularIrradiance = ImageBasedLighting::StaticSpecularIBLTexture.SampleLevel(SampColorSampler, R.xzy, roughness * 7.0).xyz;
 			finalIrradiance = specularIrradiance;
 #		endif
 		}
@@ -144,7 +145,7 @@ namespace DynamicCubemaps
 		float3 R = reflect(-V, N);
 		float NoV = saturate(dot(N, V));
 
-		float level = roughness * 7.0;
+		float level = roughness * 8.0;
 
 		float2 specularBRDF = BRDF::EnvBRDF(roughness, NoV);
 
@@ -155,7 +156,7 @@ namespace DynamicCubemaps
 
 #		if defined(IBL) && defined(LIGHTING)
 		if (ShouldUseStaticIBL()) {
-			float3 specularIrradiance = ImageBasedLighting::StaticSpecularIBLTexture.SampleLevel(SampColorSampler, R.xzy, level).xyz;
+			float3 specularIrradiance = ImageBasedLighting::StaticSpecularIBLTexture.SampleLevel(SampColorSampler, R.xzy, roughness * 7.0).xyz;
 			return (F0 * specularBRDF.x + specularBRDF.y) * specularIrradiance;
 		}
 #		endif

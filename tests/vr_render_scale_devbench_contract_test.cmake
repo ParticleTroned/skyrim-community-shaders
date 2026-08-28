@@ -22,6 +22,10 @@ file(READ
     "${PROJECT_ROOT}/src/Features/Upscaling/Streamline.cpp"
     _streamline_source
 )
+file(READ
+    "${PROJECT_ROOT}/src/Features/Upscaling/VRRenderScaleMemoryTracePolicy.h"
+    _memory_trace_policy
+)
 
 foreach(_action IN ITEMS
     qualification_status
@@ -262,6 +266,20 @@ foreach(_required_behavior IN ITEMS
     "kElapsedMillisecondsReceiptField"
     "kElapsedFramesReceiptField"
     "controller.retirement.nextCleanupFrame == 0"
+    "kQualificationMemoryTraceCapacity"
+    "QualificationMemoryTraceEvidence"
+    "CaptureQualificationMemoryTraceRecord"
+    "RecordQualificationMemoryTraceObservation"
+    "QualificationMemoryTraceEvidenceJson"
+    "presentationRetainedWhileDeferredObserved"
+    "maximumDeferredResidencyAdmissionRatio"
+    "maximumDeferredSystemCommitAdmissionRatio"
+    "deferredResidencyAdmissionRatioObserved"
+    "deferredSystemCommitAdmissionRatioObserved"
+    "projectedSystemCommitAdditionalBytes"
+    "physicalMutationEpoch"
+    "physicalSerializationEpoch"
+    "memoryTraceRecord"
     "BuildProvenance::ValidateExpectedBuild"
 )
     string(FIND "${_bridge}" "${_required_behavior}" _behavior_position)
@@ -269,6 +287,41 @@ foreach(_required_behavior IN ITEMS
         message(FATAL_ERROR "Render-scale qualification behavior is missing: ${_required_behavior}")
     endif()
 endforeach()
+
+foreach(_required_memory_policy IN ITEMS
+    "struct Sample"
+    "struct Summary"
+    "SaturatingDelta"
+    "SafeRatio"
+    "UpdatePeak"
+    "preMutationAdmissionDeferredObserved"
+    "presentationRetainedWhileDeferredObserved"
+    "deferredResidencyAdmissionRatioObserved"
+    "deferredSystemCommitAdmissionRatioObserved"
+    "a_sample.planValid"
+)
+    string(FIND
+        "${_memory_trace_policy}"
+        "${_required_memory_policy}"
+        _memory_policy_position
+    )
+    if(_memory_policy_position EQUAL -1)
+        message(FATAL_ERROR
+            "Render-scale memory trace policy is missing: ${_required_memory_policy}"
+        )
+    endif()
+endforeach()
+
+string(FIND
+    "${_upscaling_source}\n${_upscaling_header}"
+    "QualificationMemoryTraceEvidence"
+    _memory_trace_production_position
+)
+if(NOT _memory_trace_production_position EQUAL -1)
+    message(FATAL_ERROR
+        "Qualification memory tracing must remain confined to the DevBench bridge"
+    )
+endif()
 
 string(FIND
     "${_bridge}"

@@ -59,7 +59,6 @@ namespace FeatureVersions
         "CSUtility"sv,
         "CloudShadows"sv,
         "DynamicCubemaps"sv,
-        "ExponentialHeightFog"sv,
         "ExtendedMaterials"sv,
         "ExtendedTranslucency"sv,
         "FoliageLighting"sv,

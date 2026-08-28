@@ -85,12 +85,6 @@ public:
 	virtual bool IsForcedDisabledAtBoot() const { return false; }
 
 	/**
-	 * Whether the feature must stay enabled at boot, ignoring user overrides.
-	 * Use for features that are required components of the current build.
-	 */
-	virtual bool IsForcedEnabledAtBoot() const { return false; }
-
-	/**
 	 * Whether the feature will show up in the GUI menu
 	 */
 	virtual bool IsInMenu() const { return true; }

@@ -37,18 +37,17 @@ namespace ExponentialHeightFog
 
 	float GetSceneDepthForFog(float3 positionWS, out float2 volumeUV, out float projectedDepth)
 	{
+		// A single exit avoids fxc misdiagnosing these out-params as uninitialized.
+		volumeUV = 0.0f.xx;
+		projectedDepth = 0.0f;
+
 		float4 clipPosition = mul(FrameBuffer::CameraViewProj, float4(positionWS, 1.0f));
-		[branch] if (clipPosition.w <= 0.0f)
+		[branch] if (clipPosition.w > 0.0f)
 		{
-			volumeUV = 0.0f.xx;
-			projectedDepth = 0.0f;
-			return 0.0f;
+			projectedDepth = GetSceneDepthFromClip(clipPosition);
+			volumeUV = saturate(clipPosition.xy / clipPosition.w * float2(0.5f, -0.5f) + 0.5f);
 		}
 
-		projectedDepth = GetSceneDepthFromClip(clipPosition);
-		volumeUV = clipPosition.xy / clipPosition.w * float2(0.5f, -0.5f) + 0.5f;
-
-		volumeUV = saturate(volumeUV);
 		return projectedDepth;
 	}
 
@@ -64,8 +63,8 @@ namespace ExponentialHeightFog
 		if (volumeWidth == 0 || volumeHeight == 0 || volumeDepth == 0)
 			return float4(0.0f, 0.0f, 0.0f, 1.0f);
 
-		float2 volumeUV;
-		float projectedDepth;
+		float2 volumeUV = 0.0f.xx;
+		float projectedDepth = 0.0f;
 		float sceneDepth = GetSceneDepthForFog(positionWS, volumeUV, projectedDepth);
 		if (projectedDepth <= 0.0f)
 			return float4(0.0f, 0.0f, 0.0f, 1.0f);
@@ -146,8 +145,8 @@ namespace ExponentialHeightFog
 			return 0.0f;
 		}
 		float3 viewToPos = positionWS;
-		float2 volumeUV;
-		float projectedDepth;
+		float2 volumeUV = 0.0f.xx;
+		float projectedDepth = 0.0f;
 		float sceneDepth = GetSceneDepthForFog(positionWS, volumeUV, projectedDepth);
 		[branch] if (projectedDepth > 1e-4f && sceneDepth > projectedDepth)
 		{

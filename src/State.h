@@ -246,7 +246,8 @@ public:
 		GrassSphereNormal = 1 << 3,
 		IsSun = 1 << 4,
 		SuppressExternalEmittance = 1 << 5,
-		IsEye = 1 << 7
+		IsEye = 1 << 7,
+		AdditiveLighting = 1 << 8
 	};
 
 	enum class ExtraFeatureDescriptors : uint32_t
@@ -280,6 +281,11 @@ public:
 
 	void UpdateSharedData(bool a_inWorld, bool a_prepass);
 	void UpdateFeatureData(bool a_inWorld);
+	/**
+	 * @brief Updates the lighting permutation from the current render pass blend state.
+	 * @param a_pass Lighting render pass to inspect.
+	 */
+	void UpdateLightingShaderPermutation(RE::BSRenderPass* a_pass);
 	void UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass);
 	bool HasDirectionalShadows() const;
 

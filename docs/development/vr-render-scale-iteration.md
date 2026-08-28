@@ -112,6 +112,161 @@ stress-capture acceptance object can still fail request-count or memory-trend
 gates when no menu apply occurs, so it is retained as diagnostic evidence and
 is not used to manufacture a COC pass.
 
+### Fixed-delay optimization reference
+
+The fixed-delay assay remains a trend reference for render-scale optimization,
+even though it is not the release qualification protocol. Repeat it only with
+the same mixed harness: arm the current DevBench, build-identity, Ghidra,
+evidence, render-scale stress, and qualification framework, then run 20
+alternating COCs between `WindhelmExterior01` and `WhiterunDragonsreach` with
+one server-owned 10,000 ms wait before every COC. Record all 20 transitions in
+one stress session.
+
+Invoke the saved `$static-coc` skill with `start static coc`. The trigger uses a
+strict two-command handshake: without a fresh exact-PID arm receipt it arms and
+sends no COC; with a fresh receipt, the same phrase dispatches the preserved
+scenario.
+
+The reference measurements below were captured on 2026-08-27. Build IDs, not
+labels or branch names, identify the binaries. The `main-VR reference` label is
+the pinned comparison run; it must not be reinterpreted as the moving branch
+head.
+
+| Label             | Build ID                                                           | Source                        | Commit                                     |
+| ----------------- | ------------------------------------------------------------------ | ----------------------------- | ------------------------------------------ |
+| main-VR reference | `696a5f40404d25ed997c40cb0793bf931361bcf558fb7eff2982ae6cd7917805` | `v3.19.0-pr39-125-ga6ca42849` | `a6ca4284922f4fab7a79353d1462a2ce584fd20c` |
+| RC166 reference   | `03c2adc0e18659ab1deb86b43062446a3794a5d6104664c6d7628c98008f7fd4` | `RC166-13-g94165e2e7`         | `94165e2e70db2bbefd878aecbfa7733ee336ab63` |
+
+| Metric                                  | main-VR reference | RC166 reference | Optimization objective |
+| --------------------------------------- | ----------------: | --------------: | ---------------------: |
+| Fixed server waits                      |        200,000 ms |      200,000 ms |     Exactly 200,000 ms |
+| Main scenario elapsed                   |        200,192 ms |      215,522 ms |     At most 215,522 ms |
+| Harness/control overhead                |            192 ms |       15,522 ms |      At most 15,522 ms |
+| Dragonsreach mean stabilization         |       68.9 frames |     24.0 frames |    At most 24.0 frames |
+| Windhelm mean stabilization             |      139.3 frames |     20.0 frames |    At most 20.0 frames |
+| Overall mean stabilization              |      104.1 frames |     22.0 frames |    At most 22.0 frames |
+| Worst stabilization                     |        142 frames |       24 frames |      At most 24 frames |
+| Recoverable retries                     |                10 |              30 |              At most 9 |
+| Hard transition failures                |                 0 |               0 |              Exactly 0 |
+| Session stretch-eye observations        |                40 |             428 |       Record; minimize |
+| Lifetime stretch-eye observations       |                42 |             430 |       Record; minimize |
+| Completed stretch episodes              |                19 |             n/a |       Record; minimize |
+| Completed stretch frames                |                19 |             n/a |       Record; minimize |
+| Session maximum stretch duration        |           1 frame |       18 frames |      At most 18 frames |
+| Controller lifetime maximum stretch     |          2 frames |       18 frames |      At most 18 frames |
+| Session vendor-failure eye observations |                 2 |               1 |              Exactly 0 |
+| Post-run lifetime vendor failures       |                 6 |               1 |              Exactly 0 |
+| Bounds-mismatch fallback observations   |                 0 |               0 |              Exactly 0 |
+| Process-private steady-state growth     |          3.75 MiB |       11.48 MiB |      At most 11.48 MiB |
+
+Stretch duration times the enclosing presentation-stretch interval; it does
+not time a vendor-failure eye observation independently. One stereo frame can
+contain more than one eye observation, so observation counts must not be
+reported as frame counts. The main-VR record emitted complete episode
+accounting: 19 completed episodes occupied 19 total frames and no session
+episode exceeded one frame. Its controller lifetime maximum, including state
+before the stress-session baseline, was two frames. RC166 emitted the
+18-frame maximum but not completed episode or total-frame counters, so those
+two fields remain `n/a` rather than inferred from its 428 eye observations.
+
+The optimization goal is to preserve or improve RC166 stabilization while
+reducing total recoverable retries below the pinned main-VR reference. A
+candidate therefore needs no more than 24.0 Dragonsreach frames, 20.0 Windhelm
+frames, 22.0 overall frames, and 24 worst-case frames, with at most 9 retries
+across all 20 transitions. It must also retain zero hard transition failures,
+OOMs, device losses, fidelity mismatches, vendor-failure stretches, and
+bounds-mismatch fallbacks. The renderer frame counts are the primary
+performance signal. Scenario elapsed time is secondary because the fixed waits
+consume 200,000 ms and harness calls account for the remaining time.
+
+The two references used the following final render-scale state:
+
+| Health metric              | main-VR reference                            | RC166 reference                      | Future-run requirement        |
+| -------------------------- | -------------------------------------------- | ------------------------------------ | ----------------------------- |
+| Stable profile             | DLSS Q1/K                                    | DLSS Q1/K                            | Same fixture                  |
+| Render resolution          | 2096x2328                                    | 2097x2329                            | Record exact value            |
+| Output resolution          | 2468x2740                                    | 2468x2740                            | `2468x2740`                   |
+| Render scale               | 0.85                                         | 0.85                                 | `0.85`                        |
+| Both eyes valid            | Yes                                          | Yes                                  | Yes                           |
+| Latency gate               | Failed, over 120 frames                      | Passed, maximum 24                   | Pass                          |
+| Fidelity gate              | Failed lifetime counters; transition count 0 | Passed; count 0                      | Pass; count 0                 |
+| Presentation gate          | Failed; 2 session vendor observations        | Failed; 1 session vendor observation | Pass; 0 vendor failures       |
+| Memory pressure            | Normal                                       | Normal                               | Normal                        |
+| Memory trims               | 21/21 successful                             | 12/12 successful                     | No failures                   |
+| Engine-target retirements  | 20 complete                                  | 20 complete                          | Complete and drained          |
+| CPU/GPU performance window | Captured                                     | Did not start                        | Must start for CPU/GPU claims |
+
+The canonical comparison ledger is
+[`vr-render-scale-comparison-ledger.csv`](vr-render-scale-comparison-ledger.csv).
+Its first row names each build by its full source commit; append each later
+measurement as a new column to the right. Do not replace the two pinned
+reference columns. Use `n/a` rather than zero when a capture lane did not start
+or a counter was not preserved, and do not claim a CPU/GPU improvement without
+comparable valid windows.
+
+| Date       | Candidate and Build ID                      | Scenario ms | Dragonsreach mean | Windhelm mean | Overall / worst | Retries | Session stretch observations / max frames | Vendor failures session / lifetime | Private growth | Verdict                                   |
+| ---------- | ------------------------------------------- | ----------: | ----------------: | ------------: | --------------: | ------: | ----------------------------------------: | ---------------------------------: | -------------: | ----------------------------------------- |
+| 2026-08-27 | main-VR reference `696a5f40404d`            |     200,192 |              68.9 |         139.3 |     104.1 / 142 |      10 |                                    40 / 1 |                              2 / 6 |       3.75 MiB | Reference                                 |
+| 2026-08-27 | RC166 reference `03c2adc0e186`              |     215,522 |              24.0 |          20.0 |       22.0 / 24 |      30 |                                  428 / 18 |                              1 / 1 |      11.48 MiB | Stabilization target; retry target missed |
+| 2026-08-28 | interrupted `9e1ac9755e38` / `c881bade50b2` |         n/a |               n/a |           n/a |             n/a |     n/a |                                       n/a |                                n/a |            n/a | CTD during even return COC to Windhelm    |
+
+The `9e1ac9755e38` candidate is an interrupted assay, not a completed
+comparison. At 04:54:49 UTC (05:54:49 BST), Skyrim VR crashed during an
+even-numbered `coc WindhelmExterior01`. CrashLogger recorded an
+`EXCEPTION_ACCESS_VIOLATION` at `SkyrimVR.exe+12FBD94` on a
+`BSJobs::JobThread`, with `BSPortal`, `BSPortalGraph`, and
+`BSMultiBoundRoom` in the crash context. The probable stack contained no
+`CommunityShaders.dll` or `devbench.dll` frame.
+
+The process exited before DevBench returned the scenario transcript, so the
+exact transition count, strict qualification receipts, stabilization and
+retry totals, preparation-stage totals, and final telemetry were not emitted.
+The corresponding ledger cells are `n/a` rather than zero or a pass.
+
+### Monitoring and optimization candidates
+
+Use this section for repeatable observations that may justify optimization but
+are not yet established defects. Give each item a stable ID, retain the build
+and protocol evidence, and state the safety property that an optimization must
+preserve. Valid states are `Monitor`, `Investigating`, `Ready`, and `Closed`.
+
+| ID           | Candidate                                      | Current evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Impact                                                                                                                                                                                                                                                                               | State           | Next check                                                                                                                                                                                                                         | Safety constraint                                                                                                                                                                                                                                            |
+| ------------ | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `RS-OPT-001` | Render-transition compositor hold release time | Every inspected `69aec3546` and `31e383b61` simple-COC sample released at the 1,500 ms hard deadline. The completed `9e1ac9755` repeat spent 88.3 mean frames in `Stabilizing -> Active` (90.9 warm). A fresh RC166-23 repeat reproduced the historical 24/20-frame result and spent only 1.0 mean frame in that phase (1.1 warm); the overall cross-build gap was 82.4 frames and 87.3 frames came from this phase, partly offset by RC166 taking six more frames before `Stabilizing`.                                                                                                                                                  | Approximately 1.5 seconds before the controller becomes `Active`; may extend the covered fade or black presentation.                                                                                                                                                                 | `Monitor`       | Record why coherent-stereo early release does not qualify. Repeat across load routes, then evaluate an early-release correction or a shorter transition-only deadline.                                                             | Do not reintroduce white/lavender HAM surfaces, stretched bounds, mixed-eye or mixed-generation presentation, stale resources, or partially mutated targets.                                                                                                 |
+| `RS-OPT-002` | Coherent Streamline frame-token publication    | Build `c881bade50b2` logged three initial eye-0 `eErrorDuplicatedConstants` failures on isolated submit-stage foveated viewport 4608. A separate completed 20-transition repeat captured four more bounded failures at frames 265900, 267898, 271985, and 276836. The pinned frame 271985 reused token 271984 after that token/viewport succeeded on frame 271984. A fresh RC166-23 session independently logged another active-foveated failure at frame 85373 before measured transition 1; its later bounded trace recorded zero failures. See [`vr-foveated-dlss-duplicated-constants.md`](vr-foveated-dlss-duplicated-constants.md). | Each captured vendor rejection forced full-eye stretch fallback and a 30-frame retry backoff. Presentation recovered and the repeat still completed 20/20 render-scale transitions; these are vendor-dispatch failures on the active foveated path, not render-scale latch failures. | `Investigating` | Trace frame-token acquisition by caller and thread, then reproduce the publish-before-acquire interleaving in a deterministic concurrency test.                                                                                    | Publish frame and token atomically as one logical value; keep one token per CS frame across Reflex and DLSS; hold no acquisition lock across constants, evaluation, marker, or Reflex vendor calls; retain stretch fallback.                                 |
+| `RS-OPT-003` | Native-AA backend identity switching           | In the first `renderscale-CSmenu` RC166-23 matrix, transitions 15 and 22 both requested DLSS native AA while FSR native AA was active. Both `apply` calls returned `queued=false`, request ID zero, and retained FSR as the requested, applying, effective, and stable method.                                                                                                                                                                                                                                                                                                                                                            | DLSS-native menu selection cannot be qualified from the inactive FSR-native state; both entries timed out with `profile_mismatch` and produced no render-scale sample.                                                                                                               | `Investigating` | Trace the CS-menu apply path where `renderScaleMode=false` and determine whether inactive profile identity must be updated without scheduling vendor work.                                                                         | Do not initialize or dispatch an inactive vendor backend, manufacture a latch event for an unchanged physical contract, or lose the authoritative last-active backend used by later activation.                                                              |
+| `RS-OPT-004` | Same-cell CS-menu qualification freshness      | All four native-mode entries without a new latch request (transitions 1, 15, 16, and 22) timed out with `stale_source_observation`. The two genuine no-ops already matched their target profile; the two DLSS-native attempts also had the independent `profile_mismatch` from `RS-OPT-003`. Each timeout consumed approximately 30 seconds.                                                                                                                                                                                                                                                                                              | The COC-oriented destination-freshness condition makes a same-cell menu assay incomplete and adds approximately 120 seconds even when no COC is expected.                                                                                                                            | `Ready`         | Add a CS-menu waiter mode whose freshness evidence is the new dispatch/apply receipt and resulting profile revision; retain the existing destination event requirement for COC protocols.                                          | Never accept an old profile observation, weaken the strict COC destination check, or convert a no-request menu apply into a zero-frame render-scale sample.                                                                                                  |
+| `RS-OPT-005` | NVIDIA FSR host qualification identity         | Build `c1f458f0b` completed all nine active FSR physical latches on `FSRHost`/FSR3 with `Ready` lifecycle state, current matching publication, both-eye fidelity, and stable vendor presentation. The strict waiter nevertheless rejected all nine because the public target retained the `fsr4` label and the checker required `FSR4Runtime`. RC166-23 selected the same NVIDIA `FSRHost`/FSR3 fallback and its earlier checker accepted all nine active FSR entries. The current 30-second waiter expirations are checker diagnostics, not render-scale failures; strict failure status for those entries is recorded as indeterminate. | Hides valid 5--26-frame physical latch timings behind approximately 270 seconds of timeout delay and can falsely attribute a qualification-contract mismatch to FSR relatch behavior.                                                                                                | `Investigating` | Resolve the expected physical backend from adapter/runtime eligibility and compare it with the authoritative applied backend; then repeat the exact 25-entry matrix and require strict completion for all nine active FSR entries. | Never accept a requested runtime label alone. Require the exact physical backend plus ready lifecycle/resources, current device/context/generation/dimensions publication, both-eye fidelity, stable vendor presentation, and zero terminal/vendor failures. |
+
+### Simple CSM memory comparison
+
+Memory values use binary GiB. DXGI local-segment usage is the VRAM-residency
+lane under the operating-system budget. Windows system commit is the
+machine-wide committed-memory charge, not VRAM and not Skyrim-only memory.
+Process-private bytes are therefore shown separately.
+
+| Build                | Local VRAM start -> end (delta)  | Maximum observed VRAM                                          | Final VRAM / budget                               | System commit start -> end (delta) | Peak commit | Final commit / limit                                | Skyrim private start -> end (peak)    | Result                                                   |
+| -------------------- | -------------------------------- | -------------------------------------------------------------- | ------------------------------------------------- | ---------------------------------- | ----------- | --------------------------------------------------- | ------------------------------------- | -------------------------------------------------------- |
+| RC166-23 `86d21fc0a` | 10.172 -> 5.370 GiB (-4.802 GiB) | 10.172 GiB at session start; 6.506 GiB maximum transition peak | 5.359 / 22.826 GiB (23.476%); 17.468 GiB headroom | 63.936 -> 63.956 GiB (+0.021 GiB)  | 66.655 GiB  | 63.862 / 101.644 GiB (62.829%); 37.782 GiB headroom | 26.061 -> 26.812 GiB; 29.587 GiB peak | `Normal`; steady-state local/private/commit growth 0/0/0 |
+| `c1f458f0b`          | 5.342 -> 5.144 GiB (-0.198 GiB)  | 6.745 GiB maximum transition/session observation               | 5.144 / 22.826 GiB (22.537%); 17.682 GiB headroom | 65.660 -> 66.924 GiB (+1.263 GiB)  | 70.039 GiB  | 66.924 / 101.644 GiB (65.841%); 34.720 GiB headroom | 27.429 -> 27.860 GiB; 30.541 GiB peak | `Normal`; steady-state local/private/commit growth 0/0/0 |
+
+The current run ended with 0.215 GiB less local-video usage than RC166 and
+0.214 GiB more local-video headroom. Its final sampled system commit was 3.062
+GiB higher than RC166, but still retained 34.720 GiB of commit headroom.
+Neither run met
+the sustained-growth condition: the evaluated steady-state growth result was
+zero for local video memory, process-private memory, and system commit.
+
+The evidence for `RS-OPT-001` establishes the behavior for the measured
+simple-COC transitions only. It does not establish that every save load, door,
+fast-travel, startup, or manual-menu transition reaches the hard deadline.
+
+`RS-OPT-002` is repeatable failure evidence, but its cross-thread cause remains
+a leading hypothesis until acquisition-side tracing or a deterministic test
+captures the interleaving. It concerns vendor frame-token coordination on an
+active foveated path, not failure to enable foveation and not a render-scale
+timing result.
+
 ## Live Ghidra/DevBench setup
 
 Skyrim VR's Steam executable `.text` is encrypted on disk, so native crash-site

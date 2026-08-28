@@ -147,11 +147,12 @@ the presentation milestone.
 
 The policy classifies the previous strict checks as follows:
 
-| Classification                  | Checks                                                                                                                                                                         |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Presentation mutation authority | API operation and blocking conditions, controller state, relatch, recovery, physical mutation, current resource publication, exact physical/provider ownership                 |
-| Cleanup-only debt               | effective work gate, memory trim, intermediate retirement, engine-target retirement, and legacy global shader-compiler drainage                                                |
-| Terminal error                  | build/session/owner failure at the request boundary, device loss, terminal controller/provider state, lifecycle failure, fidelity/fallback diagnostics, and counter regression |
+| Classification                  | Checks                                                                                                                                                         |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Presentation mutation authority | API operation and blocking conditions, controller state, relatch, recovery, physical mutation, current resource publication, exact physical/provider ownership |
+| Cleanup-only debt               | effective work gate, memory trim, intermediate retirement, engine-target retirement, and legacy global shader-compiler drainage                                |
+| Measured verdict failure        | recovered fidelity/fallback diagnostics, runtime failures, and counter anomalies retained by the transition receipt                                            |
+| Terminal error                  | build/session/owner failure at the request boundary, required telemetry ownership loss, device loss, and terminal controller/provider state                    |
 
 Every receipt retains server-owned dispatch, first `presentationStable`, first
 `cleanupDrained`, and first strict-completion QPC/frame timestamps. It returns
@@ -162,13 +163,15 @@ Timeout receipts include `timedOutMilestone` and the current masks for all three
 decisions.
 
 The strict waiter stops on the first observation that satisfies both
-milestones. The runner validates `satisfied: true` and `outcome: stable` before
-dispatching the next COC. There are no fixed sleeps, menu queries, client
-polling loops, same-cell COCs, or overlapping transitions in the 20-transition
-sequence. A semantic or transport failure stops before the next mutation. The
-per-transition ceiling is 120 seconds, further bounded by the suite deadline.
-`timeoutMs` is a post-dispatch ceiling, not a minimum delay; a satisfied
-observation returns immediately.
+milestones. A frame-level vendor or fidelity failure remains in the receipt and
+fails the final assay verdict, but a later coherent stereo presentation may
+satisfy the waiter without consuming the full deadline. Required telemetry
+ownership loss, a transport failure, or a terminal runtime state stops before
+the next mutation. There are no fixed sleeps, menu queries, client polling
+loops, same-cell COCs, or overlapping transitions in the 20-transition
+sequence. The per-transition ceiling is 120 seconds, further bounded by the
+suite deadline. `timeoutMs` is a post-dispatch ceiling, not a minimum delay; a
+satisfied observation returns immediately.
 
 Native AA requires both eyes to present `NativeOriginal`, native dimensions,
 and cleared render-scale/foveated vendor flags. An active Hoshipa profile

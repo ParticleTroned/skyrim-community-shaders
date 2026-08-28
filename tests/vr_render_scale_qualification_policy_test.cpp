@@ -197,6 +197,7 @@ namespace
 		facts.workGateClear = true;
 		facts.memoryTrimClear = true;
 		facts.retirementClear = true;
+		facts.diagnosticsClear = false;
 		evaluation = EvaluateMilestones(ActiveDLSS(), facts);
 		if (!evaluation.PresentationStable() || !evaluation.CleanupDrained() ||
 			!evaluation.StrictSatisfied() ||
@@ -327,7 +328,8 @@ namespace
 		TerminalDiagnosticDeltas vendorFailure{
 			.vendorFailureStretchEyeObservations = 1,
 		};
-		if (!HasTerminalDiagnosticFailure(vendorFailure))
+		if (!HasTerminalDiagnosticFailure(vendorFailure) ||
+			HasQualificationControlFailure(vendorFailure))
 			return false;
 		TerminalDiagnosticDeltas inactiveTraceFailure{
 			.traceDroppedRecords = 1,
@@ -336,6 +338,12 @@ namespace
 			return false;
 		inactiveTraceFailure.traceApplicable = true;
 		if (!HasTerminalDiagnosticFailure(inactiveTraceFailure))
+			return false;
+		TerminalDiagnosticDeltas traceSessionLost{
+			.traceApplicable = true,
+			.traceSessionLost = true,
+		};
+		if (!HasQualificationControlFailure(traceSessionLost))
 			return false;
 		TerminalDiagnosticDeltas regression{
 			.monotonicCounterRegression = true,

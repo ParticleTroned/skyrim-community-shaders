@@ -2606,27 +2606,33 @@ namespace
 	}
 
 	json ObservedFoveationJson(
-		const Upscaling::Settings& a_settings,
+		const Upscaling& a_upscaling,
 		const Upscaling::VRRenderScaleProfileSnapshot& a_stable)
 	{
+		const auto method = a_upscaling.GetRuntimeUpscaleMethod();
 		return {
 			{ "settings", {
-							  { "foveatedVendorDispatch", a_settings.foveatedVendorDispatch },
-							  { "foveatedCenterArea", a_settings.foveatedCenterArea },
-							  { "peripheryTAAEnable", a_settings.periphery_taa_enable },
-							  { "peripheryTAACenterArea", a_settings.periphery_taa_center_area },
-							  { "peripheryTAAOuterScale", a_settings.periphery_taa_outer_scale },
+							  { "foveatedVendorDispatch", a_upscaling.settings.foveatedVendorDispatch },
+							  { "foveatedCenterArea", a_upscaling.settings.foveatedCenterArea },
+							  { "peripheryTAAEnable", a_upscaling.settings.periphery_taa_enable },
+							  { "peripheryTAACenterArea", a_upscaling.settings.periphery_taa_center_area },
+							  { "peripheryTAAOuterScale", a_upscaling.settings.periphery_taa_outer_scale },
 						  } },
 			{ "physical", {
 							  { "valid", a_stable.resources.valid },
 							  { "foveatedVendorDispatch", a_stable.resources.foveatedVendorDispatch },
 							  { "peripheryTAA", a_stable.resources.peripheryTAA },
 						  } },
+			{ "liveExecution", {
+								   { "foveatedVendorDispatch", a_upscaling.IsFoveatedVendorDispatchEnabled(method) },
+								   { "peripheryTAA", a_upscaling.IsPeripheryTAAEnabled(method) },
+							   } },
 			{ "floatTolerance", kQualificationFoveationFloatTolerance },
 		};
 	}
 
 	bool ActivePhysicalContractStable(
+		const Upscaling& a_upscaling,
 		const Upscaling::VRRenderScaleTransitionSnapshot& a_controller,
 		const CSX::UpscalingAPI::Snapshot001& a_api,
 		const QualificationTarget& a_target,
@@ -2648,8 +2654,10 @@ namespace
 			return false;
 		}
 		if (a_foveation &&
-			(stable.resources.foveatedVendorDispatch != a_foveation->foveatedVendorDispatch ||
-				stable.resources.peripheryTAA != a_foveation->peripheryTAAEnable)) {
+			(a_upscaling.IsFoveatedVendorDispatchEnabled(stable.method) !=
+					a_foveation->foveatedVendorDispatch ||
+				a_upscaling.IsPeripheryTAAEnabled(stable.method) !=
+					a_foveation->peripheryTAAEnable)) {
 			return false;
 		}
 		return true;
@@ -2780,24 +2788,19 @@ namespace
 
 	bool LifecycleStable(
 		const Upscaling::VRRenderScaleTransitionSnapshot& a_controller,
-		const QualificationTarget& a_target,
-		const QualificationDiagnostics& a_delta)
+		const QualificationTarget& a_target)
 	{
 		const auto& stable = a_controller.stable;
 		const auto& lifecycle = a_target.method == QualificationPolicy::Method::DLSS ?
 		                            a_controller.dlssLifecycle :
 		                            a_controller.fsrLifecycle;
-		const uint64_t failures = a_target.method == QualificationPolicy::Method::DLSS ?
-		                              a_delta.dlssLifecycleFailures :
-		                              a_delta.fsrLifecycleFailures;
 		return lifecycle.phase == Upscaling::VRVendorRuntimeLifecyclePhase::Ready &&
 		       lifecycle.resourcesPresent && lifecycle.readyForContract &&
 		       lifecycle.method == stable.method &&
 		       lifecycle.backend == stable.resources.backend &&
 		       lifecycle.transitionEpoch == stable.transitionEpoch &&
 		       lifecycle.requestedGeneration == stable.contractGeneration &&
-		       lifecycle.runtimeGeneration == stable.contractGeneration &&
-		       failures == 0;
+		       lifecycle.runtimeGeneration == stable.contractGeneration;
 	}
 
 	bool FSRDispatchStable(
@@ -3067,7 +3070,7 @@ namespace
 		};
 		if (apiAvailable) {
 			facts.physicalActiveContract = targetAvailable && ActivePhysicalContractStable(
-																  controller, apiSnapshot, target, a_foveation);
+																  upscaling, controller, apiSnapshot, target, a_foveation);
 			facts.physicalNativeContract = targetAvailable && NativePhysicalContractStable(
 																  controller, apiSnapshot, target);
 			if (globals::state) {
@@ -3079,14 +3082,13 @@ namespace
 		facts.presentationPhaseStable =
 			controller.presentationPhase == Upscaling::VRRenderScalePresentationPhase::StereoProven ||
 			controller.presentationPhase == Upscaling::VRRenderScalePresentationPhase::Released;
-		facts.fidelityStable = ActiveFidelityStable(
-								   controller, a_transition.dispatchFrame) &&
-		                       delta.fidelityMismatches == 0;
+		facts.fidelityStable =
+			ActiveFidelityStable(controller, a_transition.dispatchFrame);
 		facts.vendorPresentationStable = PresentationEyesStable(
 			controller,
 			Upscaling::VRRenderScalePresentationPath::VendorEvaluated,
 			a_transition.dispatchFrame);
-		facts.lifecycleStable = targetAvailable && LifecycleStable(controller, target, delta);
+		facts.lifecycleStable = targetAvailable && LifecycleStable(controller, target);
 		if (targetAvailable && target.renderScaleMode) {
 			const auto& lifecycle = target.method == QualificationPolicy::Method::DLSS ?
 			                            controller.dlssLifecycle :
@@ -3155,7 +3157,8 @@ namespace
 		const bool terminalError = !facts.stressSession || !facts.publicSnapshot ||
 		                           !facts.terminalClear ||
 		                           !facts.providerTerminalClear ||
-		                           !facts.diagnosticsClear ||
+		                           QualificationPolicy::HasQualificationControlFailure(
+									   terminalDeltas) ||
 		                           QualificationPolicy::IsFoveationInvariantViolation(
 									   a_foveation.has_value(),
 									   facts.foveationSettingsMatch);
@@ -3290,7 +3293,7 @@ namespace
 							  { "dlssLifecycle", LifecycleJson(controller.dlssLifecycle) },
 							  { "fsrLifecycle", LifecycleJson(controller.fsrLifecycle) },
 						  } },
-			{ "foveation", ObservedFoveationJson(upscaling.settings, controller.stable) },
+			{ "foveation", ObservedFoveationJson(upscaling, controller.stable) },
 			{ "cleanupDebt", QualificationCleanupDebtJson(controller, gate, physicalMutationEpoch, physicalSerializationEpoch, emergencyRecoveryRequested, shaderCompilationActive) },
 			{ "diagnostics", {
 								 { "baseline", QualificationDiagnosticsJson(a_transition.baseline.diagnostics) },
@@ -4161,6 +4164,7 @@ namespace
 						target ? &*target : nullptr, &foveation,
 						beforeTick, lastFrame, std::move(lastObservation),
 						"qualification_cancelled");
+					receipt["error"] = "qualification transition was cancelled";
 					FinishQualification(
 						transitionID, transition.ownershipToken, receipt);
 					return receipt;
@@ -4192,6 +4196,7 @@ namespace
 						target ? &*target : nullptr, &foveation,
 						tick, frame, std::move(observation),
 						"qualification_cancelled");
+					receipt["error"] = "qualification transition was cancelled";
 					FinishQualification(
 						transitionID, transition.ownershipToken, receipt);
 					return receipt;
@@ -4262,6 +4267,7 @@ namespace
 						target ? &*target : nullptr, &foveation,
 						observedTick, observedFrame, std::move(observation),
 						"qualification_terminal_error");
+					receipt["error"] = "qualification reached a terminal state";
 					FinishQualification(
 						transitionID, transition.ownershipToken, receipt);
 					return receipt;
@@ -4987,6 +4993,10 @@ namespace VRRenderScaleDevBenchBridge
 			R"json({"description":"Control and inspect CSX VR render-scale, including bounded exact-owner preparation stage telemetry and a single-owner, QPC-timed server-side qualification barrier that returns the first coherent exact-cell/profile observation without menu queries or client polling. qualification_begin requires an active stress session plus caller-supplied transitionId and ownerId; qualification_dispatch freezes the latency origin immediately before the command and can atomically reset/start CPU plus GPU performance telemetry on that dispatch frame; qualification_wait accepts the same ownership pair, an exact editor ID and/or form ID, an optional target profile, an optional exact foveation fixture, and a timeout that defaults to 120000ms and cannot exceed it. Omit target when an external controller owns profile selection; the waiter then requires a post-dispatch profile change and validates the mutually coherent observed profile without changing it. DLSS dispatch tracing remains opt-in and non-blocking. stop, dlss_trace_stop, and cpu_performance_stop accept expectedSessionId to fail closed if capture ownership changed; gpu_performance_stop accepts expectedStartFrame as its ownership guard; expectedStartFrame remains a legacy optional secondary guard for CPU telemetry. CPU performance status, start, and stop responses expose cpuPerformance.sessionId and state; stop retains the session ID and reset clears it to zero. Every response identifies the producing DLL; expectedBuildId fails closed on a stale build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","qualification_status","qualification_begin","qualification_dispatch","qualification_wait","qualification_cancel","cpu_performance_status","cpu_performance_start","cpu_performance_stop","cpu_performance_reset","gpu_performance_status","gpu_performance_start","gpu_performance_stop","gpu_performance_reset","dlss_trace_status","dlss_trace_start","dlss_trace_read","dlss_trace_stop","dlss_trace_reset","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","ham_status","ham_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"transitionId":{"type":"integer","minimum":1,"description":"Caller-owned nonzero qualification transition ID. Begin, dispatch, wait, and cancel must present it."},"ownerId":{"type":"string","minLength":1,"maxLength":128,"description":"Caller-generated qualification owner identity. Begin, dispatch, wait, and cancel must present the same value."},"startPerformanceTelemetry":{"type":"boolean","default":false,"description":"qualification_dispatch only: require inactive CPU and GPU captures, reset/start both on the dispatch frame, and return their ownership receipts."},"expectedCell":{"type":"integer","minimum":1,"maximum":4294967295,"description":"Optional exact destination cell form ID. qualification_wait requires this or expectedCellEditorId; when both are supplied both must match."},"expectedCellEditorId":{"type":"string","minLength":1,"maxLength":128,"description":"Preferred stable exact destination cell editor ID for qualification_wait."},"timeoutMs":{"type":"integer","minimum":1,"maximum":120000,"default":120000,"description":"Maximum qualification deadline measured from qualification_dispatch on the server QPC clock; the waiter returns immediately when the requested milestone is satisfied."},"target":{"type":"object","additionalProperties":false,"properties":{"method":{"type":"string","enum":["dlss","fsr"]},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"renderScaleMode":{"type":"boolean"},"dlssProfile":{"type":"string","enum":["J","K","L","M","F","E"]},"fsrRuntime":{"type":"string","enum":["fsr3","fsr4"]}},"required":["method","qualityMode","renderScaleMode"],"description":"Optional exact expected profile for a runner-owned selection. Omit it for an externally owned selection; the waiter observes and returns the exact coherent profile without mutating upscaling state."},"foveation":{"type":"object","additionalProperties":false,"properties":{"foveatedVendorDispatch":{"type":"boolean"},"foveatedCenterArea":{"type":"number","minimum":0,"maximum":1},"peripheryTAAEnable":{"type":"boolean"},"peripheryTAACenterArea":{"type":"number","minimum":0,"maximum":1},"peripheryTAAOuterScale":{"type":"number","minimum":0,"maximum":1}},"required":["foveatedVendorDispatch","foveatedCenterArea","peripheryTAAEnable","peripheryTAACenterArea","peripheryTAAOuterScale"],"description":"Optional exact settings fixture. Float comparisons use the tolerance returned in each receipt; active physical flags must agree with the requested enable states."},"afterSequence":{"type":"integer","minimum":0,"description":"For dlss_trace_read, return records after this sequence."},"limit":{"type":"integer","minimum":1,"maximum":256,"description":"Maximum ring records returned by dlss_trace_read; defaults to 32 and pinned failures are returned separately."},"expectedSessionId":{"type":"integer","minimum":1,"description":"Optional ownership guard for stop, dlss_trace_stop, and cpu_performance_stop. The corresponding active session must match before it is stopped."},"expectedStartFrame":{"type":"integer","minimum":0,"description":"Optional ownership guard for gpu_performance_stop and legacy secondary guard for cpu_performance_stop. When present, the active capture window start frame must match before it is stopped."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}},"required":["action"]}})json";
 		static const std::string runtimeDiagnosticDescriptor = [&] {
 			auto descriptor = json::parse(diagnosticDescriptor);
+			descriptor["inputSchema"]["properties"]["foveation"]["description"] =
+				"Optional exact settings fixture. Float comparisons use the "
+				"tolerance returned in each receipt; live execution flags must "
+				"agree with the requested enable states.";
 			descriptor["description"] =
 				descriptor["description"].get<std::string>() +
 				" qualification_wait accepts milestone strict, presentation, or "

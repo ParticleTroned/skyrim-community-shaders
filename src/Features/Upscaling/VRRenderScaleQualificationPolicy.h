@@ -428,6 +428,13 @@ namespace VRRenderScaleQualificationPolicy
 					   a_delta.traceEvaluateFailures != 0));
 	}
 
+	/** Reports loss of a required telemetry owner, not a measured render anomaly. */
+	[[nodiscard]] constexpr bool HasQualificationControlFailure(
+		const TerminalDiagnosticDeltas& a_delta) noexcept
+	{
+		return a_delta.traceApplicable && a_delta.traceSessionLost;
+	}
+
 	enum FailureReason : std::uint64_t
 	{
 		kFailureNone = 0,
@@ -532,7 +539,6 @@ namespace VRRenderScaleQualificationPolicy
 			a_facts.foveationSettingsMatch,
 			kFailureFoveationSettings,
 			failures);
-		RequireFact(a_facts.diagnosticsClear, kFailureDiagnosticDelta, failures);
 		return failures;
 	}
 

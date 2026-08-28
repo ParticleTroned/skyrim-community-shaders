@@ -256,30 +256,6 @@ if ($sourceRevision -ne $pinnedRevision -or $sourceRemote -ne $sourceUrl) {
     throw "The cached GhidrAssistMCP source does not match the repository pin. Use -RefreshSource to replace it."
 }
 
-$pyGhidraPackageRoot = Join-Path `
-    $resolvedGhidraRoot `
-    "Ghidra\Features\PyGhidra\pypkg\dist"
-if (-not (Test-Path -LiteralPath $pyGhidraPackageRoot -PathType Container)) {
-    throw "The Ghidra installation does not contain the bundled PyGhidra package."
-}
-$pythonCommand = if ($onWindows) {
-    Get-Command py, python -ErrorAction SilentlyContinue | Select-Object -First 1
-} else {
-    Get-Command python3, python -ErrorAction SilentlyContinue | Select-Object -First 1
-}
-if (-not $pythonCommand) {
-    throw "Python 3 is required for managed PyGhidra MCP sessions."
-}
-& $pythonCommand.Source -m pip install `
-    --disable-pip-version-check `
-    --no-index `
-    --find-links $pyGhidraPackageRoot `
-    --upgrade `
-    pyghidra
-if ($LASTEXITCODE -ne 0) {
-    throw "Unable to install Ghidra's bundled PyGhidra package."
-}
-
 $gradleWrapperName = if ($onWindows) { "gradlew.bat" } else { "gradlew" }
 $gradleWrapper = Join-Path $sourceRoot $gradleWrapperName
 if (-not (Test-Path -LiteralPath $gradleWrapper -PathType Leaf)) {
@@ -340,6 +316,6 @@ if ($RegisterCodex) {
 }
 
 Write-Host "GhidrAssistMCP is installed from pinned revision $pinnedRevision."
-Write-Host "PyGhidra is installed from the selected Ghidra distribution."
+Write-Host "Managed sessions use native AnalyzeHeadless; PyGhidra is optional."
 Write-Host "Start a managed or GUI Ghidra MCP session bound to $endpoint."
 Write-Host "Managed command: pwsh ./tools/ghidra-mcp-control.ps1 start -GhidraInstallDir <path> -ProgramPath <binary>"

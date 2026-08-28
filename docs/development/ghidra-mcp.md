@@ -39,8 +39,8 @@ task, and restores the caller's Java environment afterward.
 
 The normal automation path does not require a Ghidra window, a manually
 created project, or manual plugin activation. Managed sessions use Ghidra's
-`pyghidraRun --headless` launcher so `eval_python` and debugger helpers are
-available. Start one with the exact binary to import:
+native `analyzeHeadless` launcher and do not require PyGhidra activation. Start
+one with the exact binary to import:
 
 ```powershell
 pwsh ./tools/ghidra-mcp-control.ps1 start `
@@ -60,10 +60,12 @@ pwsh ./tools/ghidra-mcp-control.ps1 status `
   -ProgramPath 'D:\Artifacts\intended-build\CommunityShaders.dll'
 ```
 
-The status receipt is ready only when a harmless `eval_python` probe succeeds
-and its active program path and SHA-256 match `-ProgramPath`. Always pass the
-artifact intended for the current investigation. A listening endpoint or an
-old project program is not sufficient.
+The status receipt is ready only when the harmless `list_binaries` MCP probe
+succeeds and reports the active executable path matching `-ProgramPath`. The
+controller records the exact artifact SHA-256 when it imports the program and
+rechecks that hash for every status request. Always pass the artifact intended
+for the current investigation. A listening endpoint or an old project program
+is not sufficient.
 
 Later starts reuse the saved paths and imported program without rerunning
 auto-analysis:

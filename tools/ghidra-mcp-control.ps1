@@ -181,7 +181,7 @@ function Test-GhidrAssistEndpoint {
             ready = $false
             serverName = $null
             protocolVersion = $null
-            pyGhidraReady = $false
+            binaryListReady = $false
             activeProgram = $null
             error = "The loopback endpoint is not listening."
         }
@@ -222,7 +222,7 @@ function Test-GhidrAssistEndpoint {
             [string] $sessionHeader
         }
 
-        $pyGhidraReady = $false
+        $binaryListReady = $false
         $activeProgram = $null
         $capabilityError = $null
         if ($sessionId) {
@@ -239,23 +239,13 @@ function Test-GhidrAssistEndpoint {
                     -Headers $sessionHeaders `
                     -Body '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}' `
                     -TimeoutSec 3 | Out-Null
-                $probeScript = @'
-import json
-def text(value):
-    return None if value is None else str(value)
-print("CSX_PYGHIDRA_READY:" + json.dumps({
-    "name": text(currentProgram.getName()) if currentProgram else None,
-    "path": text(currentProgram.getExecutablePath()) if currentProgram else None,
-    "sha256": text(currentProgram.getExecutableSHA256()) if currentProgram else None,
-}))
-'@
                 $callBody = @{
                     jsonrpc = "2.0"
                     id = [DateTime]::UtcNow.Ticks
                     method = "tools/call"
                     params = @{
-                        name = "eval_python"
-                        arguments = @{ script = $probeScript }
+                        name = "list_binaries"
+                        arguments = @{}
                     }
                 } | ConvertTo-Json -Depth 10 -Compress
                 $callResponse = Invoke-WebRequest `
@@ -268,24 +258,43 @@ print("CSX_PYGHIDRA_READY:" + json.dumps({
                 $callJson = Get-McpResponseJson -Content $callResponse.Content
                 $isErrorProperty = $callJson.result.PSObject.Properties["isError"]
                 if ($isErrorProperty -and [bool] $isErrorProperty.Value) {
-                    throw "eval_python returned an MCP tool error."
+                    throw "list_binaries returned an MCP tool error."
                 }
                 $text = [string](@(
                     $callJson.result.content |
                         Where-Object type -eq "text" |
                         Select-Object -First 1
                 )[0].text)
-                $marker = "CSX_PYGHIDRA_READY:"
-                $markerIndex = $text.IndexOf($marker, [StringComparison]::Ordinal)
-                if ($markerIndex -lt 0) {
-                    throw "eval_python did not return its readiness marker: $text"
+                $entries = @([regex]::Matches(
+                    $text,
+                    '(?ms)^\s*(?<ordinal>\d+)\.\s*(?<name>.+?)(?<active>\s+\[ACTIVE\])?\s*\r?\n(?<details>.*?)(?=^\s*\d+\.|\z)'
+                ))
+                $activeEntries = @($entries | Where-Object {
+                        $_.Groups['active'].Success
+                    })
+                if ($activeEntries.Count -ne 1) {
+                    throw "list_binaries did not report exactly one active program: $text"
                 }
-                $programJson = $text.Substring($markerIndex + $marker.Length).Trim()
-                $activeProgram = $programJson | ConvertFrom-Json -Depth 10
-                if (-not $activeProgram.path -or -not $activeProgram.sha256) {
-                    throw "eval_python did not identify a loaded program path and SHA-256."
+                $entry = $activeEntries[0]
+                $pathMatch = [regex]::Match(
+                    $entry.Groups['details'].Value,
+                    '(?m)^\s*Executable Path:\s*(?<path>.+?)\s*$'
+                )
+                if (-not $pathMatch.Success) {
+                    throw "list_binaries did not identify the active executable path: $text"
                 }
-                $pyGhidraReady = $true
+                $projectPathMatch = [regex]::Match(
+                    $entry.Groups['details'].Value,
+                    '(?m)^\s*Project Path:\s*(?<path>.+?)\s*$'
+                )
+                $activeProgram = [pscustomobject][ordered]@{
+                    name = $entry.Groups['name'].Value.Trim()
+                    path = $pathMatch.Groups['path'].Value.Trim()
+                    projectPath = $(if ($projectPathMatch.Success) {
+                            $projectPathMatch.Groups['path'].Value.Trim()
+                        } else { $null })
+                }
+                $binaryListReady = $true
             } catch {
                 $capabilityError = $_.Exception.Message
             } finally {
@@ -305,10 +314,10 @@ print("CSX_PYGHIDRA_READY:" + json.dumps({
         }
 
         return [pscustomobject][ordered]@{
-            ready = $serverName -eq "ghidrassistmcp"
+            ready = $serverName -eq "ghidrassistmcp" -and $binaryListReady
             serverName = $serverName
             protocolVersion = [string] $json.result.protocolVersion
-            pyGhidraReady = $pyGhidraReady
+            binaryListReady = $binaryListReady
             activeProgram = $activeProgram
             error = $capabilityError
         }
@@ -317,7 +326,7 @@ print("CSX_PYGHIDRA_READY:" + json.dumps({
             ready = $false
             serverName = $null
             protocolVersion = $null
-            pyGhidraReady = $false
+            binaryListReady = $false
             activeProgram = $null
             error = $_.Exception.Message
         }
@@ -554,14 +563,24 @@ function New-StatusResult {
             "The MCP listener could not be proven to belong to the managed Ghidra process tree."
         )
     }
-    if ($Probe.ready -and -not $Probe.pyGhidraReady) {
-        $effectiveOk = $false
-        $resultErrors.Add(
-            "The managed MCP endpoint did not pass the PyGhidra eval_python probe: $($Probe.error)"
-        )
-    }
     $expectedProgramPath = $script:expectedProgramPath
     $expectedProgramSha256 = $script:expectedProgramSha256
+    $recordedProgramSha256 = if ($Session) {
+        Get-OptionalProperty -Value $Session -Name "programSha256"
+    } else { $null }
+    $artifactMatchesImport = $null
+    if ($expectedProgramSha256 -and $recordedProgramSha256) {
+        $artifactMatchesImport = $expectedProgramSha256.Equals(
+            [string] $recordedProgramSha256,
+            [StringComparison]::OrdinalIgnoreCase
+        )
+        if (-not $artifactMatchesImport) {
+            $effectiveOk = $false
+            $resultErrors.Add(
+                "The current artifact SHA-256 differs from the imported Ghidra program."
+            )
+        }
+    }
     $activeProgramPath = if ($Probe.activeProgram) {
         [string] $Probe.activeProgram.path
     } else { $null }
@@ -570,7 +589,8 @@ function New-StatusResult {
     } else { $null }
     $programMatchesExpectation = $null
     if ($expectedProgramPath) {
-        $programMatchesExpectation = $Probe.pyGhidraReady -and
+        $programMatchesExpectation = $Probe.binaryListReady -and
+            $artifactMatchesImport -ne $false -and
             $activeProgramPath -and
             [IO.Path]::GetFullPath($activeProgramPath).Equals(
                 [IO.Path]::GetFullPath($expectedProgramPath),
@@ -598,7 +618,7 @@ function New-StatusResult {
         endpoint = $endpoint
         endpointReady = [bool] $Probe.ready
         serverName = $Probe.serverName
-        pyGhidraReady = [bool] $Probe.pyGhidraReady
+        binaryListReady = [bool] $Probe.binaryListReady
         processId = $(if ($Process) { $Process.Id } else { $null })
         listenerProcessId = $listenerPid
         listenerOwnedBySession = $ownedListener
@@ -622,6 +642,7 @@ function New-StatusResult {
             }
         } else { $null })
         programMatchesExpectation = $programMatchesExpectation
+        artifactMatchesImport = $artifactMatchesImport
         logs = $(if ($Session) {
             [pscustomobject][ordered]@{
                 stdout = $Session.stdoutLog
@@ -859,16 +880,16 @@ try {
     $resolvedGhidraRoot = Resolve-ExistingDirectory `
         -Path $GhidraInstallDir `
         -Description "Ghidra installation"
-    $pyGhidraRunName = if ($env:OS -eq "Windows_NT") {
-        "pyghidraRun.bat"
+    $analyzeHeadlessName = if ($env:OS -eq "Windows_NT") {
+        "analyzeHeadless.bat"
     } else {
-        "pyghidraRun"
+        "analyzeHeadless"
     }
-    $pyGhidraRun = Join-Path `
+    $analyzeHeadless = Join-Path `
         $resolvedGhidraRoot `
-        "support\$pyGhidraRunName"
-    if (-not (Test-Path -LiteralPath $pyGhidraRun -PathType Leaf)) {
-        throw "Ghidra PyGhidra launcher was not found: $pyGhidraRun"
+        "support\$analyzeHeadlessName"
+    if (-not (Test-Path -LiteralPath $analyzeHeadless -PathType Leaf)) {
+        throw "Ghidra AnalyzeHeadless launcher was not found: $analyzeHeadless"
     }
 
     $resolvedJavaHome = Resolve-JavaHome -RequestedJavaHome $JavaHome
@@ -945,8 +966,6 @@ try {
     )
     $mode = if (-not $projectExists -or $refreshProgram) { "import" } else { "process" }
     $arguments = [Collections.Generic.List[string]]::new()
-    $arguments.Add("--headless")
-    $arguments.Add("--console")
     $arguments.Add($resolvedProjectDirectory)
     $arguments.Add($ProjectName)
     if ($mode -eq "import") {
@@ -971,8 +990,8 @@ try {
 
     $launch = [ordered]@{
         schemaVersion = 1
-        launcher = $pyGhidraRun
-        launcherMode = "pyghidra-headless"
+        launcher = $analyzeHeadless
+        launcherMode = "analyze-headless"
         arguments = @($arguments)
         javaHome = $resolvedJavaHome
         workingDirectory = $repositoryRoot
@@ -1020,7 +1039,7 @@ try {
         programPath = $resolvedProgramPath
         programSha256 = $resolvedProgramSha256
         programName = $ProgramName
-        launcherMode = "pyghidra-headless"
+        launcherMode = "analyze-headless"
         mode = $mode
         completionFile = $completionFile
         stdoutLog = $stdoutLog

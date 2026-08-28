@@ -2,7 +2,6 @@
 
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
-#include <cassert>
 
 #include "I18n/I18n.h"
 #include "ShaderCache.h"
@@ -622,8 +621,8 @@ void DynamicCubemaps::PostDeferred()
 
 void DynamicCubemaps::SetupResources()
 {
-	const auto cubemapResolution = GetCubemapResolutionForResourceCreation();
-	const auto mipLevels = activeCubemapMipLevels;
+	const auto requestedCubemapResolution = GetCubemapResolutionForResourceCreation();
+	auto mipLevels = activeCubemapMipLevels;
 
 	GetComputeShaderUpdate();
 	GetComputeShaderUpdateReflections();
@@ -653,8 +652,17 @@ void DynamicCubemaps::SetupResources()
 	{
 		D3D11_TEXTURE2D_DESC texDesc;
 		cubemap.texture->GetDesc(&texDesc);
-		assert(texDesc.Width == cubemapResolution);
-		assert(texDesc.Height == cubemapResolution);
+		if (texDesc.Width != requestedCubemapResolution || texDesc.Height != requestedCubemapResolution) {
+			logger::warn(
+				"Dynamic cubemap target is {}x{}, expected {}x{}; using the renderer target dimensions",
+				texDesc.Width,
+				texDesc.Height,
+				requestedCubemapResolution,
+				requestedCubemapResolution);
+			activeCubemapResolution = std::min(texDesc.Width, texDesc.Height);
+			activeCubemapMipLevels = std::bit_width(activeCubemapResolution);
+			mipLevels = activeCubemapMipLevels;
+		}
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
 		cubemap.SRV->GetDesc(&srvDesc);

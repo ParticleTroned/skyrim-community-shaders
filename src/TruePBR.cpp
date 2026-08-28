@@ -5,11 +5,14 @@
 
 #include "Features/InteriorSun.h"
 #include "Hooks.h"
+#include "I18n/I18n.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
 
 #include <mutex>
+
+#define I18N_KEY_PREFIX "feature.true_pbr."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	GlintParameters,

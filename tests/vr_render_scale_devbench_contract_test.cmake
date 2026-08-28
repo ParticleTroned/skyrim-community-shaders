@@ -264,6 +264,7 @@ foreach(_required_behavior IN ITEMS
 	"outstandingCleanupDebt"
 	"timedOutMilestone"
 	"resourcePublicationCurrent"
+	"GetCurrentMainRenderTargetResourcePublicationDiagnostics()"
 	"\"resourcePublication\""
 	"\"current\""
 	"\"evaluated\""

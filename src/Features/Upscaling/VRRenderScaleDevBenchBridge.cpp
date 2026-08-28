@@ -3062,8 +3062,8 @@ namespace
 			(!a_foveation || QualificationFoveationValuesMatch(
 								 *a_foveation, a_transition.baseline.foveationSettings));
 		State::RenderTargetResourcePublicationDiagnostics resourcePublication{
-			.expectedWidth = apiSnapshot.renderEyeWidth,
-			.expectedHeight = apiSnapshot.renderEyeHeight,
+			.expectedWidth = 0,
+			.expectedHeight = 0,
 		};
 		if (apiAvailable) {
 			facts.physicalActiveContract = targetAvailable && ActivePhysicalContractStable(
@@ -3071,9 +3071,8 @@ namespace
 			facts.physicalNativeContract = targetAvailable && NativePhysicalContractStable(
 																  controller, apiSnapshot, target);
 			if (globals::state) {
-				resourcePublication = globals::state->GetRenderTargetResourcePublicationDiagnostics(
-					apiSnapshot.renderEyeWidth,
-					apiSnapshot.renderEyeHeight);
+				resourcePublication =
+					globals::state->GetCurrentMainRenderTargetResourcePublicationDiagnostics();
 				facts.resourcePublicationCurrent = resourcePublication.current;
 			}
 		}

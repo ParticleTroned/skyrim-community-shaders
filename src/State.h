@@ -158,6 +158,9 @@ public:
 	RenderTargetResourcePublicationDiagnostics GetRenderTargetResourcePublicationDiagnostics(
 		uint32_t a_expectedWidth,
 		uint32_t a_expectedHeight) const noexcept;
+	/** Returns publication facts compared with the current physical main target. */
+	RenderTargetResourcePublicationDiagnostics
+	GetCurrentMainRenderTargetResourcePublicationDiagnostics() const noexcept;
 	bool HasCompleteRenderTargetResourcePublication(uint32_t a_width, uint32_t a_height) const;
 
 	void Load(ConfigMode a_configMode = ConfigMode::USER, bool a_allowReload = true);

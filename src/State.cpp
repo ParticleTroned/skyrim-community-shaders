@@ -965,6 +965,19 @@ State::RenderTargetResourcePublicationDiagnostics State::GetRenderTargetResource
 	return diagnostics;
 }
 
+State::RenderTargetResourcePublicationDiagnostics
+State::GetCurrentMainRenderTargetResourcePublicationDiagnostics() const noexcept
+{
+	const auto mainRenderTargetSize = GetMainRenderTargetSize();
+	const uint32_t width = mainRenderTargetSize.x > 0.0f ?
+	                           static_cast<uint32_t>(mainRenderTargetSize.x) :
+	                           0u;
+	const uint32_t height = mainRenderTargetSize.y > 0.0f ?
+	                            static_cast<uint32_t>(mainRenderTargetSize.y) :
+	                            0u;
+	return GetRenderTargetResourcePublicationDiagnostics(width, height);
+}
+
 static std::filesystem::path GetConfigPath(State::ConfigMode a_configMode)
 {
 	switch (a_configMode) {

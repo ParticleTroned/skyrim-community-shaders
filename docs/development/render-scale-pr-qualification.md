@@ -132,6 +132,11 @@ terminal provider/lifecycle failure, or shader compilation still required by
 the active contract. A completed vendor stereo cycle remains coherent while
 one live eye advances into the immediately following compositor cycle.
 
+CSX evaluates resource publication against the physical main render target.
+The diagnostic reads the current `kMAIN` texture descriptor directly and does
+not reinterpret per-eye dimensions. Runners preserve the emitted expected and
+published fields and do not calculate, override, or repair `dimensionsMatch`.
+
 Cleanup drain proves that no active operation can create more cleanup debt and
 that passive work has completed. Its outstanding-debt snapshot includes the
 work gate, memory trim, intermediate and engine-target retirement, post-load
@@ -142,11 +147,11 @@ the presentation milestone.
 
 The policy classifies the previous strict checks as follows:
 
-| Classification | Checks |
-| -------------- | ------ |
-| Presentation mutation authority | API operation and blocking conditions, controller state, relatch, recovery, physical mutation, current resource publication, exact physical/provider ownership |
-| Cleanup-only debt | effective work gate, memory trim, intermediate retirement, engine-target retirement, and legacy global shader-compiler drainage |
-| Terminal error | build/session/owner failure at the request boundary, device loss, terminal controller/provider state, lifecycle failure, fidelity/fallback diagnostics, and counter regression |
+| Classification                  | Checks                                                                                                                                                                         |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Presentation mutation authority | API operation and blocking conditions, controller state, relatch, recovery, physical mutation, current resource publication, exact physical/provider ownership                 |
+| Cleanup-only debt               | effective work gate, memory trim, intermediate retirement, engine-target retirement, and legacy global shader-compiler drainage                                                |
+| Terminal error                  | build/session/owner failure at the request boundary, device loss, terminal controller/provider state, lifecycle failure, fidelity/fallback diagnostics, and counter regression |
 
 Every receipt retains server-owned dispatch, first `presentationStable`, first
 `cleanupDrained`, and first strict-completion QPC/frame timestamps. It returns
@@ -162,6 +167,8 @@ dispatching the next COC. There are no fixed sleeps, menu queries, client
 polling loops, same-cell COCs, or overlapping transitions in the 20-transition
 sequence. A semantic or transport failure stops before the next mutation. The
 per-transition ceiling is 120 seconds, further bounded by the suite deadline.
+`timeoutMs` is a post-dispatch ceiling, not a minimum delay; a satisfied
+observation returns immediately.
 
 Native AA requires both eyes to present `NativeOriginal`, native dimensions,
 and cleared render-scale/foveated vendor flags. An active Hoshipa profile

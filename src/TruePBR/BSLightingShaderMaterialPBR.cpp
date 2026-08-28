@@ -2,15 +2,21 @@
 
 #include "TruePBR.h"
 
-static bool IsShaderTextureSet(RE::BSTextureSet* textureSet)
+static bool IsTextureSet(RE::BSTextureSet* textureSet)
 {
-	return textureSet == nullptr || netimmerse_cast<RE::BSShaderTextureSet*>(textureSet) != nullptr;
+	if (textureSet == nullptr) {
+		return true;
+	}
+
+	static const auto* textureSetRTTI = REL::Relocation<const RE::NiRTTI*>{ RE::BSTextureSet::Ni_RTTI }.get();
+	const auto* rtti = textureSet->GetRTTI();
+	return rtti != nullptr && rtti->IsKindOf(textureSetRTTI);
 }
 
 /** @brief Clears malformed links before invoking BSTextureSet virtual methods. */
 static void DiscardMislinkedTextureSet(RE::NiPointer<RE::BSTextureSet>& textureSet)
 {
-	if (!IsShaderTextureSet(textureSet.get())) {
+	if (!IsTextureSet(textureSet.get())) {
 		textureSet.reset();
 	}
 }
@@ -186,7 +192,7 @@ void BSLightingShaderMaterialPBR::OnLoadTextureSet(std::uint64_t arg1, RE::BSTex
 	const auto& stateData = globals::game::graphicsState->GetRuntimeData();
 
 	if (diffuseTexture == nullptr || diffuseTexture == stateData.defaultTextureNormalMap) {
-		if (!IsShaderTextureSet(inTextureSet)) {
+		if (!IsTextureSet(inTextureSet)) {
 			textureSet.reset();
 			inTextureSet = nullptr;
 		}

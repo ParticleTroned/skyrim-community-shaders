@@ -15,6 +15,10 @@ file(READ
     _upscaling_source
 )
 file(READ
+    "${PROJECT_ROOT}/src/State.cpp"
+    _state_source
+)
+file(READ
     "${PROJECT_ROOT}/src/Features/Upscaling/Streamline.h"
     _streamline_header
 )
@@ -110,6 +114,21 @@ if(_timeout_error OR NOT _timeout_default EQUAL 120000)
         "Render-scale qualification timeout default is invalid: ${_timeout_error}"
     )
 endif()
+
+string(JSON _timeout_description ERROR_VARIABLE _timeout_description_error
+    GET "${_descriptor}" inputSchema properties timeoutMs description
+)
+foreach(_timeout_contract IN ITEMS
+    "Maximum qualification deadline"
+    "returns immediately"
+)
+    string(FIND "${_timeout_description}" "${_timeout_contract}" _timeout_contract_position)
+    if(_timeout_description_error OR _timeout_contract_position EQUAL -1)
+        message(FATAL_ERROR
+            "Render-scale timeout contract is ambiguous: ${_timeout_description_error}"
+        )
+    endif()
+endforeach()
 
 string(JSON _target_description ERROR_VARIABLE _target_description_error
     GET "${_descriptor}" inputSchema properties target description
@@ -291,6 +310,19 @@ foreach(_required_behavior IN ITEMS
     string(FIND "${_bridge}" "${_required_behavior}" _behavior_position)
     if(_behavior_position EQUAL -1)
         message(FATAL_ERROR "Render-scale qualification behavior is missing: ${_required_behavior}")
+    endif()
+endforeach()
+
+foreach(_publication_source_contract IN ITEMS
+    "State::GetCurrentMainRenderTargetResourcePublicationDiagnostics() const noexcept"
+    "const auto mainRenderTargetSize = GetMainRenderTargetSize();"
+    "return GetRenderTargetResourcePublicationDiagnostics(width, height);"
+)
+    string(FIND "${_state_source}" "${_publication_source_contract}" _publication_source_position)
+    if(_publication_source_position EQUAL -1)
+        message(FATAL_ERROR
+            "Render-target publication diagnostics do not use the physical main target: ${_publication_source_contract}"
+        )
     endif()
 endforeach()
 

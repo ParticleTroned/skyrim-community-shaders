@@ -2042,20 +2042,24 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float skylightingShadowVisibility = 1.0;
 #		endif
 #		if defined(DEFERRED)
-	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, worldNormal
 #			if defined(SKYLIGHTING_SHADOW_VIS)
-		,
-		skylightingShadowVisibility
+	Skylighting::ShadowedSample skylightingSample = Skylighting::SampleWithShadow(positionMSSkylight, worldNormal);
+	sh2 skylightingSH = skylightingSample.Probe;
+	skylightingShadowVisibility = skylightingSample.Visibility;
+#			else
+	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, worldNormal);
 #			endif
-	);
 #		else
-	sh2 skylightingSH = inWorld ? Skylighting::Sample(positionMSSkylight, worldNormal
 #			if defined(SKYLIGHTING_SHADOW_VIS)
-									  ,
-									  skylightingShadowVisibility
+	sh2 skylightingSH = Skylighting::UNIT_SH;
+	if (inWorld) {
+		Skylighting::ShadowedSample skylightingSample = Skylighting::SampleWithShadow(positionMSSkylight, worldNormal);
+		skylightingSH = skylightingSample.Probe;
+		skylightingShadowVisibility = skylightingSample.Visibility;
+	}
+#			else
+	sh2 skylightingSH = inWorld ? Skylighting::Sample(positionMSSkylight, worldNormal) : Skylighting::UNIT_SH;
 #			endif
-									  ) :
-	                              Skylighting::UNIT_SH;
 #		endif
 
 #	endif

@@ -1458,15 +1458,6 @@ warnings:
                     - Water:Pixel:19
                     - Water:Pixel:1A
                     - Water:Pixel:18
-    x3206:implicit truncation of vector type:
-        code: X3206
-        message: implicit truncation of vector type
-        instances:
-            istemporalaa.hlsl:65,2-45:
-                entries: &id009
-                    - ImageSpace:Pixel:97
-            istemporalaa.hlsl:69,8-55:
-                entries: *id009
 errors: {}
 shaders:
     - file: BloodSplatter.hlsl

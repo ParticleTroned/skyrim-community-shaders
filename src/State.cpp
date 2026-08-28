@@ -839,7 +839,7 @@ void State::CompleteRenderTargetResourcePublication(
 	// optional feature degradation remains owned by each feature.
 	if (a_generation == 0 ||
 		a_generation != renderTargetResourcePublicationGeneration.load(
-			std::memory_order_acquire)) {
+							std::memory_order_acquire)) {
 		return;
 	}
 
@@ -871,7 +871,7 @@ void State::CompleteRenderTargetResourcePublication(
 	auto observedPublication = GetRenderTargetResourcePublication();
 	while (true) {
 		if (a_generation != renderTargetResourcePublicationGeneration.load(
-				std::memory_order_acquire)) {
+								std::memory_order_acquire)) {
 			return;
 		}
 		if (observedPublication &&
@@ -887,7 +887,7 @@ void State::CompleteRenderTargetResourcePublication(
 		}
 	}
 	if (a_generation == renderTargetResourcePublicationGeneration.load(
-			std::memory_order_acquire)) {
+							std::memory_order_acquire)) {
 		completedRenderTargetResourcePublicationGeneration.store(
 			a_generation,
 			std::memory_order_release);
@@ -904,9 +904,9 @@ uint64_t State::GetCompletedRenderTargetResourcePublicationGeneration() const
 	const bool isCurrent =
 		generation != 0 &&
 		generation == renderTargetResourcePublicationGeneration.load(
-			std::memory_order_acquire) &&
+						  std::memory_order_acquire) &&
 		generation == completedRenderTargetResourcePublicationGeneration.load(
-			std::memory_order_acquire);
+						  std::memory_order_acquire);
 	return isCurrent ? generation : 0u;
 }
 
@@ -914,15 +914,55 @@ bool State::HasCompleteRenderTargetResourcePublication(
 	uint32_t a_width,
 	uint32_t a_height) const
 {
+	return GetRenderTargetResourcePublicationDiagnostics(a_width, a_height).current;
+}
+
+State::RenderTargetResourcePublicationDiagnostics State::GetRenderTargetResourcePublicationDiagnostics(
+	uint32_t a_expectedWidth,
+	uint32_t a_expectedHeight) const noexcept
+{
+	RenderTargetResourcePublicationDiagnostics diagnostics{
+		.expectedWidth = a_expectedWidth,
+		.expectedHeight = a_expectedHeight,
+		.evaluated = true,
+	};
 	const auto publication = GetRenderTargetResourcePublication();
-	return publication &&
-	       publication->complete &&
-	       publication->generation ==
-		       GetCompletedRenderTargetResourcePublicationGeneration() &&
-	       publication->width == a_width &&
-	       publication->height == a_height &&
-	       publication->device == globals::d3d::device &&
-	       publication->context == globals::d3d::context;
+	diagnostics.currentGeneration = renderTargetResourcePublicationGeneration.load(
+		std::memory_order_acquire);
+	diagnostics.completedGeneration = completedRenderTargetResourcePublicationGeneration.load(
+		std::memory_order_acquire);
+	if (!publication)
+		return diagnostics;
+
+	diagnostics.publishedGeneration = publication->generation;
+	diagnostics.publishedWidth = publication->width;
+	diagnostics.publishedHeight = publication->height;
+	diagnostics.loadedFeatureSetupCount = publication->loadedFeatureSetupCount;
+	diagnostics.present = publication->generation != 0;
+	diagnostics.complete = publication->complete;
+	diagnostics.deferredSetupAcknowledged = publication->deferredSetupAcknowledged;
+	diagnostics.generationMatchesCurrent =
+		diagnostics.present &&
+		publication->generation == diagnostics.currentGeneration;
+	diagnostics.generationMatchesCompleted =
+		diagnostics.present &&
+		publication->generation == diagnostics.completedGeneration;
+	diagnostics.dimensionsMatch = diagnostics.present &&
+	                              publication->width == a_expectedWidth &&
+	                              publication->height == a_expectedHeight;
+	diagnostics.deviceMatches = diagnostics.present &&
+	                            publication->device != nullptr &&
+	                            publication->device == globals::d3d::device;
+	diagnostics.contextMatches = diagnostics.present &&
+	                             publication->context != nullptr &&
+	                             publication->context == globals::d3d::context;
+	diagnostics.current = diagnostics.complete &&
+	                      diagnostics.generationMatchesCurrent &&
+	                      diagnostics.generationMatchesCompleted &&
+	                      diagnostics.dimensionsMatch &&
+	                      diagnostics.deviceMatches &&
+	                      diagnostics.contextMatches;
+	return diagnostics;
 }
 
 static std::filesystem::path GetConfigPath(State::ConfigMode a_configMode)

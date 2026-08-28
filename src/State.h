@@ -45,6 +45,28 @@ public:
 		bool complete = false;
 	};
 
+	struct RenderTargetResourcePublicationDiagnostics
+	{
+		uint64_t currentGeneration = 0;
+		uint64_t completedGeneration = 0;
+		uint64_t publishedGeneration = 0;
+		uint32_t expectedWidth = 0;
+		uint32_t expectedHeight = 0;
+		uint32_t publishedWidth = 0;
+		uint32_t publishedHeight = 0;
+		uint32_t loadedFeatureSetupCount = 0;
+		bool evaluated = false;
+		bool present = false;
+		bool complete = false;
+		bool deferredSetupAcknowledged = false;
+		bool generationMatchesCurrent = false;
+		bool generationMatchesCompleted = false;
+		bool dimensionsMatch = false;
+		bool deviceMatches = false;
+		bool contextMatches = false;
+		bool current = false;
+	};
+
 	State()
 	{
 		std::lock_guard<std::mutex> lock(statsMutex);
@@ -132,6 +154,10 @@ public:
 		return renderTargetResourcePublicationGeneration.load(
 			std::memory_order_acquire);
 	}
+	/** Returns the publication facts used to evaluate the expected target size. */
+	RenderTargetResourcePublicationDiagnostics GetRenderTargetResourcePublicationDiagnostics(
+		uint32_t a_expectedWidth,
+		uint32_t a_expectedHeight) const noexcept;
 	bool HasCompleteRenderTargetResourcePublication(uint32_t a_width, uint32_t a_height) const;
 
 	void Load(ConfigMode a_configMode = ConfigMode::USER, bool a_allowReload = true);

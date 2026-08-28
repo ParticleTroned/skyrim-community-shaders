@@ -2886,14 +2886,21 @@ namespace
 			FoveationSettingsMatch(upscaling.settings, a_foveation) &&
 			(!a_foveation || QualificationFoveationValuesMatch(
 								 *a_foveation, a_transition.baseline.foveationSettings));
+		State::RenderTargetResourcePublicationDiagnostics resourcePublication{
+			.expectedWidth = apiSnapshot.renderEyeWidth,
+			.expectedHeight = apiSnapshot.renderEyeHeight,
+		};
 		if (apiAvailable) {
 			facts.physicalActiveContract = targetAvailable && ActivePhysicalContractStable(
 																  controller, apiSnapshot, target, a_foveation);
 			facts.physicalNativeContract = targetAvailable && NativePhysicalContractStable(
 																  controller, apiSnapshot, target);
-			facts.resourcePublicationCurrent = globals::state &&
-			                                   globals::state->HasCompleteRenderTargetResourcePublication(
-												   apiSnapshot.renderEyeWidth, apiSnapshot.renderEyeHeight);
+			if (globals::state) {
+				resourcePublication = globals::state->GetRenderTargetResourcePublicationDiagnostics(
+					apiSnapshot.renderEyeWidth,
+					apiSnapshot.renderEyeHeight);
+				facts.resourcePublicationCurrent = resourcePublication.current;
+			}
 		}
 		facts.presentationPhaseStable =
 			controller.presentationPhase == Upscaling::VRRenderScalePresentationPhase::StereoProven ||
@@ -3063,6 +3070,26 @@ namespace
 						   { "providerTerminalClear", facts.providerTerminalClear },
 						   { "requiredShaderCompilationComplete", facts.requiredShaderCompilationComplete },
 					   } },
+			{ "resourcePublication", {
+										 { "current", resourcePublication.current },
+										 { "evaluated", resourcePublication.evaluated },
+										 { "currentGeneration", resourcePublication.currentGeneration },
+										 { "completedGeneration", resourcePublication.completedGeneration },
+										 { "publishedGeneration", resourcePublication.publishedGeneration },
+										 { "expectedWidth", resourcePublication.expectedWidth },
+										 { "expectedHeight", resourcePublication.expectedHeight },
+										 { "publishedWidth", resourcePublication.publishedWidth },
+										 { "publishedHeight", resourcePublication.publishedHeight },
+										 { "loadedFeatureSetupCount", resourcePublication.loadedFeatureSetupCount },
+										 { "present", resourcePublication.present },
+										 { "complete", resourcePublication.complete },
+										 { "deferredSetupAcknowledged", resourcePublication.deferredSetupAcknowledged },
+										 { "generationMatchesCurrent", resourcePublication.generationMatchesCurrent },
+										 { "generationMatchesCompleted", resourcePublication.generationMatchesCompleted },
+										 { "dimensionsMatch", resourcePublication.dimensionsMatch },
+										 { "deviceMatches", resourcePublication.deviceMatches },
+										 { "contextMatches", resourcePublication.contextMatches },
+									 } },
 			{ "apiStatus", static_cast<uint32_t>(apiStatus) },
 			{ "upscalingSnapshot", APISnapshotJson(apiSnapshot) },
 			{ "physical", {

@@ -1,221 +1,31 @@
 {
-  "Adaptive Balance": {
-    "enabled": true,
-    "rendererControlsEnabled": true,
-    "dayStartHour": 9.0,
-    "nightStartHour": 21.0,
-    "transitionHours": 1.0,
-    "lighting": {
-      "skyBrightness": 1.0,
-      "directionalLightMult": 1.0,
-      "pointLightMult": 1.0,
-      "linearPointLightMult": 1.0,
-      "spotlightMult": 1.0,
-      "linearSpotlightMult": 1.0,
-      "omnidirectionalBulbMult": 1.0,
-      "linearOmnidirectionalBulbMult": 1.0
-    },
-    "bloomEnhancement": {
-      "Enabled": 0,
-      "SelectedPreset": 0,
-      "Default": {
-        "EnhancementIntensity": 1.0,
-        "HaloRadius": 3.5,
-        "HaloSpread": 0.85,
-        "BloomSaturation": 0.9,
-        "BloomTint": [
-          1.0,
-          0.98,
-          0.94
-        ],
-        "CompressionThreshold": 0.0,
-        "CompressionCeiling": 1.5
-      },
-      "Fantasy": {
-        "EnhancementIntensity": 4.0,
-        "HaloRadius": 5.0,
-        "HaloSpread": 1.0,
-        "BloomSaturation": 1.3,
-        "BloomTint": [
-          1.0,
-          0.98,
-          0.94
-        ],
-        "CompressionThreshold": 0.0,
-        "CompressionCeiling": 0.67
-      },
-      "Dreamy": {
-        "EnhancementIntensity": 2.5,
-        "HaloRadius": 4.0,
-        "HaloSpread": 0.72,
-        "BloomSaturation": 0.85,
-        "BloomTint": [
-          0.6470588235294118,
-          0.803921568627451,
-          1.0
-        ],
-        "CompressionThreshold": 0.08,
-        "CompressionCeiling": 0.9
-      }
-    },
-    "profiles": [
-      {
-        "brightness": 1.0,
-        "advanced": false,
-        "skyBrightnessMult": 1.0,
-        "directionalLightMult": 1.0,
-        "pointLightMult": 1.0,
-        "ambientMult": 1.0,
-        "emitColorMult": 1.0,
-        "glowmapMult": 1.0,
-        "effectLightingMult": 1.0,
-        "skyGammaOffset": 0.0,
-        "fogGammaOffset": 0.0,
-        "fogAlphaGammaOffset": 0.0,
-        "waterGammaOffset": 0.0,
-        "vlGammaOffset": 0.0,
-        "bloomOverride": false,
-        "bloomEnabled": false,
-        "bloom": {
-          "EnhancementIntensity": 1.0,
-          "HaloRadius": 3.5,
-          "HaloSpread": 0.85,
-          "BloomSaturation": 0.9,
-          "BloomTint": [
-            1.0,
-            0.98,
-            0.94
-          ],
-          "CompressionThreshold": 0.0,
-          "CompressionCeiling": 1.5
-        }
-      },
-      {
-        "brightness": 1.0,
-        "advanced": false,
-        "skyBrightnessMult": 1.0,
-        "directionalLightMult": 1.0,
-        "pointLightMult": 1.0,
-        "ambientMult": 1.0,
-        "emitColorMult": 1.0,
-        "glowmapMult": 1.0,
-        "effectLightingMult": 1.0,
-        "skyGammaOffset": 0.0,
-        "fogGammaOffset": 0.0,
-        "fogAlphaGammaOffset": 0.0,
-        "waterGammaOffset": 0.0,
-        "vlGammaOffset": 0.0,
-        "bloomOverride": false,
-        "bloomEnabled": false,
-        "bloom": {
-          "EnhancementIntensity": 1.0,
-          "HaloRadius": 3.5,
-          "HaloSpread": 0.85,
-          "BloomSaturation": 0.9,
-          "BloomTint": [
-            1.0,
-            0.98,
-            0.94
-          ],
-          "CompressionThreshold": 0.0,
-          "CompressionCeiling": 1.5
-        }
-      },
-      {
-        "brightness": 1.0,
-        "advanced": false,
-        "skyBrightnessMult": 1.0,
-        "directionalLightMult": 1.0,
-        "pointLightMult": 1.0,
-        "ambientMult": 1.0,
-        "emitColorMult": 1.0,
-        "glowmapMult": 1.0,
-        "effectLightingMult": 1.0,
-        "skyGammaOffset": 0.0,
-        "fogGammaOffset": 0.0,
-        "fogAlphaGammaOffset": 0.0,
-        "waterGammaOffset": 0.0,
-        "vlGammaOffset": 0.0,
-        "bloomOverride": false,
-        "bloomEnabled": false,
-        "bloom": {
-          "EnhancementIntensity": 1.0,
-          "HaloRadius": 3.5,
-          "HaloSpread": 0.85,
-          "BloomSaturation": 0.9,
-          "BloomTint": [
-            1.0,
-            0.98,
-            0.94
-          ],
-          "CompressionThreshold": 0.0,
-          "CompressionCeiling": 1.5
-        }
-      },
-      {
-        "brightness": 1.0,
-        "advanced": false,
-        "skyBrightnessMult": 1.0,
-        "directionalLightMult": 1.0,
-        "pointLightMult": 1.0,
-        "ambientMult": 1.0,
-        "emitColorMult": 1.0,
-        "glowmapMult": 1.0,
-        "effectLightingMult": 1.0,
-        "skyGammaOffset": 0.0,
-        "fogGammaOffset": 0.0,
-        "fogAlphaGammaOffset": 0.0,
-        "waterGammaOffset": 0.0,
-        "vlGammaOffset": 0.0,
-        "bloomOverride": false,
-        "bloomEnabled": false,
-        "bloom": {
-          "EnhancementIntensity": 1.0,
-          "HaloRadius": 3.5,
-          "HaloSpread": 0.85,
-          "BloomSaturation": 0.9,
-          "BloomTint": [
-            1.0,
-            0.98,
-            0.94
-          ],
-          "CompressionThreshold": 0.0,
-          "CompressionCeiling": 1.5
-        }
-      },
-      {
-        "brightness": 1.0,
-        "advanced": false,
-        "skyBrightnessMult": 1.0,
-        "directionalLightMult": 1.0,
-        "pointLightMult": 1.0,
-        "ambientMult": 1.0,
-        "emitColorMult": 1.0,
-        "glowmapMult": 1.0,
-        "effectLightingMult": 1.0,
-        "skyGammaOffset": 0.0,
-        "fogGammaOffset": 0.0,
-        "fogAlphaGammaOffset": 0.0,
-        "waterGammaOffset": 0.0,
-        "vlGammaOffset": 0.0,
-        "bloomOverride": false,
-        "bloomEnabled": false,
-        "bloom": {
-          "EnhancementIntensity": 1.0,
-          "HaloRadius": 3.5,
-          "HaloSpread": 0.85,
-          "BloomSaturation": 0.9,
-          "BloomTint": [
-            1.0,
-            0.98,
-            0.94
-          ],
-          "CompressionThreshold": 0.0,
-          "CompressionCeiling": 1.5
-        }
-      }
-    ],
-    "locationOverrides": []
+  "Menu": {
+    "UI Mode": 0,
+    "AutoHideFeatureList": false,
+    "BackgroundShaderCompilationOnBoot": false,
+    "CSEditorToggleKey": 122,
+    "EffectToggleKey": 106,
+    "EnableShaderBlocking": false,
+    "FirstTimeSetupCompleted": false,
+    "OverlayToggleKey": 121,
+    "RequireShiftToDock": true,
+    "ScreenshotKey": 44,
+    "SelectedThemePreset": "Default",
+    "ShaderBlockNextKey": 34,
+    "ShaderBlockPrevKey": 33,
+    "ShowCompilationHUDInVR": false,
+    "SkipClearCacheConfirmation": false,
+    "SkipCompilationKey": 27,
+    "SkipConstraintWarning": false,
+    "SmartClearShaderCacheDefault": false,
+    "ToggleKey": 35,
+    "UseResolutionFont": true
+  },
+  "General": {
+    "Enable Async": true,
+    "Enable Disk Cache": true,
+    "Enable Shaders": true,
+    "Skip Unchanged Shaders": true
   },
   "Advanced": {
     "Dump Shaders": false,
@@ -227,6 +37,72 @@
     "Refraction Scale": 0.25,
     "Shader Defines": "",
     "Use FileWatcher": false
+  },
+  "Disable at Boot": {
+    "RenderDoc": false,
+    "ScreenSpaceGI": false,
+    "ScreenSpaceShadows": false,
+    "Skylighting": false,
+    "SubsurfaceScattering": false,
+    "TruePBR": false,
+    "UnifiedWater": false,
+    "Upscaling": false,
+    "VolumetricLighting": false,
+    "Wetterness": false
+  },
+  "RenderDoc": {
+    "Capture Frame Count": 20,
+    "Enable RenderDoc Capture": false
+  },
+  "Replace Original Shaders": {
+    "BloodSplatter": true,
+    "DistantTree": true,
+    "Effect": true,
+    "Grass": true,
+    "ImageSpace": true,
+    "Lighting": true,
+    "Particle": true,
+    "Sky": true,
+    "Utility": true,
+    "Water": true
+  },
+  "Version": "CSX 3.19-VR",
+  "Upscaling": {
+    "dlssPreset": 1,
+    "dlssSharpener": 1,
+    "foveatedCenterArea": 0.30000001192092896,
+    "foveatedCenterHorizontalScale": 1.0,
+    "foveatedLeftEyeMaskOffsetX": 0.0,
+    "foveatedLeftEyeMaskOffsetY": 0.0,
+    "foveatedPeripheryMaskVisualization": false,
+    "foveatedRightEyeMaskOffsetX": 0.0,
+    "foveatedRightEyeMaskOffsetY": 0.0,
+    "foveatedVendorDispatch": false,
+    "frameGenerationAllowInMenus": false,
+    "frameGenerationForceEnable": 0,
+    "frameGenerationMode": 1,
+    "frameLimitMode": 1,
+    "fsr4RuntimeEnable": true,
+    "fsr4RuntimeSelectionSchemaVersion": 1,
+    "periphery_taa_center_area": 0.30000001192092896,
+    "periphery_taa_center_blend_feather": 0.05000000074505806,
+    "periphery_taa_enable": false,
+    "periphery_taa_outer_scale": 0.800000011920929,
+    "pipelineDiagnostics": false,
+    "pipelineDiagnosticsStructured": false,
+    "qualityMode": 4,
+    "qualityModeSchemaVersion": 2,
+    "reflexFPSLimit": 60.0,
+    "reflexLowLatencyBoost": false,
+    "reflexLowLatencyMode": true,
+    "reflexUseFPSLimit": false,
+    "reflexUseMarkersToOptimize": true,
+    "renderScaleMode": 1,
+    "sharpnessDLSS": 0.699999988079071,
+    "sharpnessFSR": 0.699999988079071,
+    "streamlineLogLevel": 0,
+    "upscaleMethod": 3,
+    "upscaleMethodNoDLSS": 2
   },
   "CS Editor": null,
   "CS Utility": {
@@ -311,48 +187,244 @@
       }
     }
   },
-  "Cloud Shadows": {
-    "Enabled": 1,
-    "Opacity": 0.800000011920929
+  "Performance Overlay": {
+    "BackgroundOpacity": 0.5,
+    "FrameHistorySize": 600,
+    "Position": [
+      10.0,
+      235.0
+    ],
+    "PositionSet": true,
+    "ShowBorder": true,
+    "ShowCSPasses": true,
+    "ShowDrawCalls": true,
+    "ShowFPS": true,
+    "ShowInOverlay": true,
+    "ShowPostFGFrameTimeGraph": true,
+    "ShowPreFGFrameTimeGraph": true,
+    "ShowVRAM": true,
+    "TextSize": 1.0,
+    "UpdateInterval": 0.5
   },
-  "Disable at Boot": {
-    "RenderDoc": false,
-    "ScreenSpaceGI": false,
-    "ScreenSpaceShadows": false,
-    "Skylighting": false,
-    "SubsurfaceScattering": false,
-    "UnifiedWater": false,
-    "Upscaling": false,
-    "VolumetricLighting": false,
-    "Wetterness": false,
-    "TruePBR": false
-  },
-  "Dynamic Cubemaps": {
-    "EnabledCreator": 0,
-    "EnabledSSR": 1
-  },
-  "Extended Materials": {
-    "EnableComplexMaterial": 1,
-    "EnableHeightBlending": 1,
-    "EnableParallax": 1,
-    "EnableParallaxWarpingFix": 1,
-    "EnableShadows": 1,
-    "EnableTerrain": 0,
-    "ExtendShadows": 1
-  },
-  "Extended Translucency": {
-    "AlphaMode": 3,
-    "AlphaReduction": 0.15000000596046448,
-    "AlphaSoftness": 0.0,
-    "AlphaStrength": 0.0,
+  "Screenshot": {
+    "ApplyCropToScreenshot": true,
+    "CopyToClipboard": false,
+    "CropH": 1.0,
+    "CropPresets": [
+      {
+        "name": "Left Eye",
+        "uv": [
+          0.0,
+          0.0,
+          0.5,
+          1.0
+        ]
+      },
+      {
+        "name": "Right Eye",
+        "uv": [
+          0.5,
+          0.0,
+          0.5,
+          1.0
+        ]
+      },
+      {
+        "name": "Both Eyes (Side-by-Side)",
+        "uv": [
+          0.0,
+          0.0,
+          1.0,
+          1.0
+        ]
+      }
+    ],
+    "CropW": 1.0,
+    "CropX": 0.0,
+    "CropY": 0.0,
     "Enabled": true,
-    "SkinnedOnly": true
+    "FrameCaptureEye": "Left",
+    "FrameCapturePath": "Frame Captures",
+    "FrameCaptureUsePng": false,
+    "ScreenshotEye": "Left",
+    "ScreenshotPath": "Screenshots",
+    "SdrUsePng": true,
+    "SelectedPresetIndex": 2,
+    "Sequence": {
+      "Backpressure": {
+        "MaximumConsecutiveSkips": 10,
+        "Policy": "skip"
+      },
+      "FailurePolicy": "continue",
+      "FrameCount": 30,
+      "Outputs": {
+        "SeparateEyes": true
+      },
+      "Packaging": {
+        "PreviewVideo": {
+          "FramesPerSecond": 15,
+          "Requested": true
+        }
+      },
+      "Schedule": {
+        "Basis": "game_frames",
+        "IntervalFrames": 6
+      }
+    },
+    "SettingsSchemaVersion": 2,
+    "VRCaptureSource": "HMDSubmission",
+    "VRFramedDominantEye": "Left",
+    "VRFramedEye": "Left",
+    "VRFramedView": "Left"
   },
-  "General": {
-    "Enable Async": true,
-    "Enable Disk Cache": true,
-    "Enable Shaders": true,
-    "Skip Unchanged Shaders": true
+  "VR": {
+    "EnableDepthBufferCullingExterior": true,
+    "EnableDepthBufferCullingInterior": false,
+    "EnableDragToReposition": false,
+    "EnableDynamicCubemapFoveation": true,
+    "EnableDynamicCubemapVisibilityThrottle": false,
+    "EnableLightingFoveation": true,
+    "EnableLightingFoveationHardCutoff": false,
+    "EnableSSRFoveation": true,
+    "EnableSSRFoveationHardCutoff": false,
+    "EnableStereoBlend": false,
+    "EnableWandPointing": true,
+    "EnableWaterParallaxFoveation": true,
+    "EnableWaterParallaxFoveationHardCutoff": false,
+    "EnableWetternessFoveation": true,
+    "EnableWetternessFoveationHardCutoff": false,
+    "KeepDesktopWindowFocusedForVRMenu": true,
+    "MinOccludeeBoxExtent": 10.0,
+    "StabilizeRenderScaleDesktopMirror": false,
+    "StereoBlendColorThreshold": 0.019999999552965164,
+    "StereoBlendDepthSigma": 0.009999999776482582,
+    "StereoBlendMaxFactor": 0.05000000074505806,
+    "UseRuntimeDefaultMenuNavigation": false,
+    "VRControllerBindingsVersion": 1,
+    "VRMenuAttachController": 1,
+    "VRMenuAutoResetDistance": 1000.0,
+    "VRMenuCloseKeys": [
+      {
+        "Device": "Both",
+        "Key": 2
+      }
+    ],
+    "VRMenuControllerOffsetX": 0.2199999988079071,
+    "VRMenuControllerOffsetY": 0.15000000596046448,
+    "VRMenuControllerOffsetZ": 0.20000000298023224,
+    "VRMenuOffsetX": 0.25999999046325684,
+    "VRMenuOffsetY": -0.03999999910593033,
+    "VRMenuOffsetZ": -2.25,
+    "VRMenuOpenKeys": [
+      {
+        "Device": "Primary",
+        "Key": 7
+      },
+      {
+        "Device": "Primary",
+        "Key": 1
+      }
+    ],
+    "VRMenuPositioningMethod": 1,
+    "VRMenuScale": 2.0,
+    "VROverlayCloseKeys": [],
+    "VROverlayOpenKeys": [],
+    "WandAimPitchTrimDegrees": 0.0,
+    "attachMode": 0,
+    "comboTimeout": 3.0,
+    "dragHighlightColor": [
+      1.0,
+      1.0,
+      0.0,
+      0.30000001192092896
+    ],
+    "kAutoHideSeconds": 30,
+    "menuOverlayPath": 0,
+    "mouseDeadzone": 0.10000000149011612,
+    "mouseSpeed": 10.0
+  },
+  "Weather Picker": {
+    "Enabled": false,
+    "Position": [
+      50.0,
+      50.0
+    ],
+    "PositionSet": false,
+    "ShowInOverlay": false
+  },
+  "Hair Specular": {
+    "BaseColorMult": 0.699999988079071,
+    "DiffuseIndirectMult": 0.699999988079071,
+    "DiffuseMult": 0.699999988079071,
+    "EnableSelfShadow": 1,
+    "EnableTangentShift": 1,
+    "Enabled": 1,
+    "HairGlossiness": 70.0,
+    "HairMode": 1,
+    "HairSaturation": 0.800000011920929,
+    "PrimaryTangentShift": 0.5,
+    "SecondaryTangentShift": -0.25,
+    "SelfShadowExponent": 0.10000000149011612,
+    "SelfShadowScale": 2.5,
+    "SelfShadowStrength": 1.0,
+    "SpecularIndirectMult": 3.0,
+    "SpecularMult": 1.3799999952316284,
+    "Transmission": 1.0
+  },
+  "Subsurface Scattering": {
+    "BaseProfile": {
+      "BlurRadius": 0.5,
+      "Falloff": [
+        0.5600000023841858,
+        0.5600000023841858,
+        0.5600000023841858
+      ],
+      "Strength": [
+        0.47999998927116394,
+        0.4099999964237213,
+        0.2800000011920929
+      ],
+      "Thickness": 1.0
+    },
+    "BurleySamples": 16,
+    "CharacterLightingStrength": 1.0,
+    "EnableCharacterLighting": 0,
+    "EnableSubsurfaceScattering": true,
+    "HumanFemaleSSSBaseSaturation": 1.0,
+    "HumanFemaleSSSBrightness": 0.6000000238418579,
+    "HumanFemaleSSSIntensity": 0.8999999761581421,
+    "HumanFemaleSSSSaturation": 1.0,
+    "HumanMaleSSSBaseSaturation": 1.0,
+    "HumanMaleSSSBrightness": 0.6499999761581421,
+    "HumanMaleSSSIntensity": 0.8999999761581421,
+    "HumanMaleSSSSaturation": 1.0,
+    "HumanProfile": {
+      "BlurRadius": 0.5,
+      "Falloff": [
+        1.0,
+        0.3700000047683716,
+        0.30000001192092896
+      ],
+      "Strength": [
+        0.47999998927116394,
+        0.4099999964237213,
+        0.2800000011920929
+      ],
+      "Thickness": 1.0
+    },
+    "MeanFreePathBase": [
+      0.5600000023841858,
+      0.5600000023841858,
+      0.5600000023841858,
+      2.6700000762939453
+    ],
+    "MeanFreePathHuman": [
+      1.0,
+      0.3700000047683716,
+      0.30000001192092896,
+      2.6700000762939453
+    ],
+    "SSMode": 1
   },
   "Grass Collision": {
     "EnableGrassCollision": false,
@@ -368,24 +440,232 @@
     "SpecularStrength": 0.5,
     "SubsurfaceScatteringAmount": 1.0
   },
-  "Hair Specular": {
-    "BaseColorMult": 0.7,
-    "DiffuseIndirectMult": 0.7,
-    "DiffuseMult": 0.7,
-    "EnableSelfShadow": 1,
-    "EnableTangentShift": 1,
-    "Enabled": 1,
-    "HairGlossiness": 70.0,
-    "HairMode": 1,
-    "HairSaturation": 0.8,
-    "PrimaryTangentShift": 0.5,
-    "SecondaryTangentShift": -0.25,
-    "SelfShadowExponent": 0.10000000149011612,
-    "SelfShadowScale": 2.5,
-    "SelfShadowStrength": 1.0,
-    "SpecularIndirectMult": 3.0,
-    "SpecularMult": 1.38,
-    "Transmission": 1.0
+  "Adaptive Balance": {
+    "dayStartHour": 9.0,
+    "enabled": true,
+    "globalLightingEnabled": true,
+    "lighting": {
+      "directionalLightMult": 1.0,
+      "linearOmnidirectionalBulbMult": 1.0,
+      "linearPointLightMult": 1.0,
+      "linearSpotlightMult": 1.0,
+      "omnidirectionalBulbMult": 1.0,
+      "pointLightMult": 1.0,
+      "skyBrightness": 1.0,
+      "spotlightMult": 1.0
+    },
+    "locationOverrides": [],
+    "nightStartHour": 21.0,
+    "profiles": [
+      {
+        "advanced": false,
+        "ambientMult": 1.0,
+        "bloom": {
+          "BloomSaturation": 0.8999999761581421,
+          "BloomTint": [
+            1.0,
+            0.9800000190734863,
+            0.9399999976158142
+          ],
+          "CompressionCeiling": 1.5,
+          "CompressionThreshold": 0.0,
+          "EnhancementIntensity": 0.0,
+          "HaloRadius": 3.5,
+          "HaloSpread": 0.8500000238418579
+        },
+        "bloomAdvanced": false,
+        "brightness": 1.0,
+        "directionalLightMult": 1.0,
+        "effectLightingMult": 1.0,
+        "emitColorMult": 1.0,
+        "fogAlphaGammaOffset": 0.0,
+        "fogGammaOffset": 0.0,
+        "glowmapMult": 1.0,
+        "pointLightMult": 1.0,
+        "skyBrightnessMult": 1.0,
+        "skyGammaOffset": 0.0,
+        "vlGammaOffset": 0.0,
+        "water": {
+          "FresnelMax": 1.0,
+          "FresnelMin": 0.0,
+          "GlobalReflectionAmount": 1.0,
+          "Muddiness": 1.0,
+          "RefractionAmount": 1.0,
+          "SunSpecularMultiplier": 1.0,
+          "WaterBrightness": 1.0,
+          "WaveAmplitude": 1.0
+        },
+        "waterGammaOffset": 0.0
+      },
+      {
+        "advanced": false,
+        "ambientMult": 1.0,
+        "bloom": {
+          "BloomSaturation": 0.8999999761581421,
+          "BloomTint": [
+            1.0,
+            0.9800000190734863,
+            0.9399999976158142
+          ],
+          "CompressionCeiling": 1.5,
+          "CompressionThreshold": 0.0,
+          "EnhancementIntensity": 0.0,
+          "HaloRadius": 3.5,
+          "HaloSpread": 0.8500000238418579
+        },
+        "bloomAdvanced": false,
+        "brightness": 1.0,
+        "directionalLightMult": 1.0,
+        "effectLightingMult": 1.0,
+        "emitColorMult": 1.0,
+        "fogAlphaGammaOffset": 0.0,
+        "fogGammaOffset": 0.0,
+        "glowmapMult": 1.0,
+        "pointLightMult": 1.0,
+        "skyBrightnessMult": 1.0,
+        "skyGammaOffset": 0.0,
+        "vlGammaOffset": 0.0,
+        "water": {
+          "FresnelMax": 1.0,
+          "FresnelMin": 0.0,
+          "GlobalReflectionAmount": 1.0,
+          "Muddiness": 1.0,
+          "RefractionAmount": 1.0,
+          "SunSpecularMultiplier": 1.0,
+          "WaterBrightness": 1.0,
+          "WaveAmplitude": 1.0
+        },
+        "waterGammaOffset": 0.0
+      },
+      {
+        "advanced": false,
+        "ambientMult": 1.0,
+        "bloom": {
+          "BloomSaturation": 0.8999999761581421,
+          "BloomTint": [
+            1.0,
+            0.9800000190734863,
+            0.9399999976158142
+          ],
+          "CompressionCeiling": 1.5,
+          "CompressionThreshold": 0.0,
+          "EnhancementIntensity": 0.0,
+          "HaloRadius": 3.5,
+          "HaloSpread": 0.8500000238418579
+        },
+        "bloomAdvanced": false,
+        "brightness": 1.0,
+        "directionalLightMult": 1.0,
+        "effectLightingMult": 1.0,
+        "emitColorMult": 1.0,
+        "fogAlphaGammaOffset": 0.0,
+        "fogGammaOffset": 0.0,
+        "glowmapMult": 1.0,
+        "pointLightMult": 1.0,
+        "skyBrightnessMult": 1.0,
+        "skyGammaOffset": 0.0,
+        "vlGammaOffset": 0.0,
+        "water": {
+          "FresnelMax": 1.0,
+          "FresnelMin": 0.0,
+          "GlobalReflectionAmount": 1.0,
+          "Muddiness": 1.0,
+          "RefractionAmount": 1.0,
+          "SunSpecularMultiplier": 1.0,
+          "WaterBrightness": 1.0,
+          "WaveAmplitude": 1.0
+        },
+        "waterGammaOffset": 0.0
+      },
+      {
+        "advanced": false,
+        "ambientMult": 1.0,
+        "bloom": {
+          "BloomSaturation": 0.8999999761581421,
+          "BloomTint": [
+            1.0,
+            0.9800000190734863,
+            0.9399999976158142
+          ],
+          "CompressionCeiling": 1.5,
+          "CompressionThreshold": 0.0,
+          "EnhancementIntensity": 0.0,
+          "HaloRadius": 3.5,
+          "HaloSpread": 0.8500000238418579
+        },
+        "bloomAdvanced": false,
+        "brightness": 1.0,
+        "directionalLightMult": 1.0,
+        "effectLightingMult": 1.0,
+        "emitColorMult": 1.0,
+        "fogAlphaGammaOffset": 0.0,
+        "fogGammaOffset": 0.0,
+        "glowmapMult": 1.0,
+        "pointLightMult": 1.0,
+        "skyBrightnessMult": 1.0,
+        "skyGammaOffset": 0.0,
+        "vlGammaOffset": 0.0,
+        "water": {
+          "FresnelMax": 1.0,
+          "FresnelMin": 0.0,
+          "GlobalReflectionAmount": 1.0,
+          "Muddiness": 1.0,
+          "RefractionAmount": 1.0,
+          "SunSpecularMultiplier": 1.0,
+          "WaterBrightness": 1.0,
+          "WaveAmplitude": 1.0
+        },
+        "waterGammaOffset": 0.0
+      },
+      {
+        "advanced": false,
+        "ambientMult": 1.0,
+        "bloom": {
+          "BloomSaturation": 0.8999999761581421,
+          "BloomTint": [
+            1.0,
+            0.9800000190734863,
+            0.9399999976158142
+          ],
+          "CompressionCeiling": 1.5,
+          "CompressionThreshold": 0.0,
+          "EnhancementIntensity": 0.0,
+          "HaloRadius": 3.5,
+          "HaloSpread": 0.8500000238418579
+        },
+        "bloomAdvanced": false,
+        "brightness": 1.0,
+        "directionalLightMult": 1.0,
+        "effectLightingMult": 1.0,
+        "emitColorMult": 1.0,
+        "fogAlphaGammaOffset": 0.0,
+        "fogGammaOffset": 0.0,
+        "glowmapMult": 1.0,
+        "pointLightMult": 1.0,
+        "skyBrightnessMult": 1.0,
+        "skyGammaOffset": 0.0,
+        "vlGammaOffset": 0.0,
+        "water": {
+          "FresnelMax": 1.0,
+          "FresnelMin": 0.0,
+          "GlobalReflectionAmount": 1.0,
+          "Muddiness": 1.0,
+          "RefractionAmount": 1.0,
+          "SunSpecularMultiplier": 1.0,
+          "WaterBrightness": 1.0,
+          "WaveAmplitude": 1.0
+        },
+        "waterGammaOffset": 0.0
+      }
+    ],
+    "transitionHours": 1.0
+  },
+  "Foliage Lighting": {
+    "EnableFoliageAmbientBoost": 0,
+    "EnableFoliageAmbientFlip": 1,
+    "EnableFoliageScattering": 1,
+    "EnableGrassScattering": 1,
+    "FoliageAmbientAmount": 0.25
   },
   "Image Based Lighting": {
     "CaptureWeatherBaselineOnSliderChange": false,
@@ -411,18 +691,6 @@
   },
   "Inverse Square Lighting": {
     "Enabled": true
-  },
-  "LOD Blending": {
-    "DisableTerrainVertexColors": 0,
-    "Enabled": true,
-    "EnableWaterReflectionStrength": false,
-    "LODObjectBrightness": 1.0,
-    "LODObjectGamma": 1.0,
-    "LODObjectSnowBrightness": 1.0,
-    "LODObjectSnowGamma": 1.0,
-    "LODTerrainBrightness": 1.0,
-    "LODTerrainGamma": 1.0,
-    "WaterReflectionStrength": 1.0
   },
   "Light Limit Fix": {
     "BillboardBrightness": 1.0,
@@ -478,63 +746,6 @@
     "vlGamma": 1.7999999523162842,
     "waterGamma": 1.7999999523162842
   },
-  "Menu": {
-    "AutoHideFeatureList": false,
-    "BackgroundShaderCompilationOnBoot": false,
-    "ShowCompilationHUDInVR": false,
-    "CSEditorToggleKey": 122,
-    "EffectToggleKey": 106,
-    "EnableShaderBlocking": false,
-    "FirstTimeSetupCompleted": false,
-    "OverlayToggleKey": 121,
-    "UI Mode": 0,
-    "RequireShiftToDock": true,
-    "ScreenshotKey": 44,
-    "SelectedThemePreset": "Default",
-    "ShaderBlockNextKey": 34,
-    "ShaderBlockPrevKey": 33,
-    "SkipClearCacheConfirmation": false,
-    "SkipCompilationKey": 27,
-    "SkipConstraintWarning": false,
-    "ToggleKey": 35,
-    "UseResolutionFont": true,
-    "SmartClearShaderCacheDefault": false
-  },
-  "Performance Overlay": {
-    "BackgroundOpacity": 0.5,
-    "FrameHistorySize": 600,
-    "Position": [
-      10.0,
-      235.0
-    ],
-    "PositionSet": true,
-    "ShowBorder": true,
-    "ShowCSPasses": true,
-    "ShowDrawCalls": true,
-    "ShowFPS": true,
-    "ShowInOverlay": true,
-    "ShowPostFGFrameTimeGraph": true,
-    "ShowPreFGFrameTimeGraph": true,
-    "ShowVRAM": true,
-    "TextSize": 1.0,
-    "UpdateInterval": 0.5
-  },
-  "RenderDoc": {
-    "Capture Frame Count": 20,
-    "Enable RenderDoc Capture": false
-  },
-  "Replace Original Shaders": {
-    "BloodSplatter": true,
-    "DistantTree": true,
-    "Effect": true,
-    "Grass": true,
-    "ImageSpace": true,
-    "Lighting": true,
-    "Particle": true,
-    "Sky": true,
-    "Utility": true,
-    "Water": true
-  },
   "Screen Space GI": {
     "AOInteriorsOnly": true,
     "AOPower": 1.7999999523162842,
@@ -583,40 +794,77 @@
     "VRBaseSamplesAtReference": 16.0,
     "VRCullDistance": 20480.0
   },
-  "Screenshot": {
-    "ApplyCropToScreenshot": true,
-    "CopyToClipboard": false,
-    "CropH": 1.0,
-    "CropPresets": [
-      {
-        "name": "Full Frame",
-        "uv": [
-          0.0,
-          0.0,
-          1.0,
-          1.0
-        ]
-      }
-    ],
-    "CropW": 1.0,
-    "CropX": 0.0,
-    "CropY": 0.0,
+  "Skylighting": {
+    "EnableFastProbeSampling": true,
+    "EnableIncrementalProbeUpdates": true,
+    "EnableReducedUpdateFrequency": true,
+    "EnableSkylighting": false,
+    "IncludeMarkedRoofOccluders": true,
+    "MaxZenith": 1.570796251296997,
+    "MinDiffuseVisibility": 0.10000000149011612,
+    "MinSpecularVisibility": 0.0500000007450581,
+    "OcclusionUpdateInterval": 8,
+    "ProbeFieldSize": 10240.0,
+    "ProbeGridQuality": 0,
+    "ProbeUpdateInterval": 16,
+    "StableSliceCount": 8
+  },
+  "Volumetric Lighting": {
+    "CustomColorBlue": 1.0,
+    "CustomColorContribution": 0.0,
+    "CustomColorGreen": 1.0,
+    "CustomColorRed": 1.0,
+    "DisableWeatherInteractionDuringRain": false,
+    "ExteriorCustomSize": {
+      "Depth": 90,
+      "Height": 192,
+      "Width": 320
+    },
+    "ExteriorEnabled": true,
+    "ExteriorQuality": 2,
+    "GodrayIntensity": 1.0,
+    "GodrayOpacity": 1.0,
+    "GodraySaturation": 1.0,
+    "GodrayShaftIntensity": 1.0,
+    "InteriorCustomSize": {
+      "Depth": 90,
+      "Height": 192,
+      "Width": 320
+    },
+    "InteriorEnabled": true,
+    "InteriorQuality": 2
+  },
+  "Volumetric Shadows": {
+    "Enabled": true
+  },
+  "Dynamic Cubemaps": {
+    "EnabledCreator": 0,
+    "EnabledSSR": 1
+  },
+  "Extended Materials": {
+    "EnableComplexMaterial": 1,
+    "EnableHeightBlending": 1,
+    "EnableParallax": 1,
+    "EnableParallaxWarpingFix": 1,
+    "EnableShadows": 1,
+    "EnableTerrain": 0,
+    "ExtendShadows": 1
+  },
+  "Extended Translucency": {
+    "AlphaMode": 3,
+    "AlphaReduction": 0.15000000596046448,
+    "AlphaSoftness": 0.0,
+    "AlphaStrength": 0.0,
     "Enabled": true,
-    "ScreenshotPath": "Screenshots",
-    "SdrUsePng": true,
-    "SelectedPresetIndex": 0,
-    "VRCaptureSource": "HMDSubmission",
-    "SequenceFrameCount": 30,
-    "SequenceFrameInterval": 6,
-    "SequencePreviewFramesPerSecond": 15,
-    "SequenceSaveSeparateEyes": true,
-    "SequenceWritePreviewVideo": true,
-    "VRFramedDominantEye": "Left",
-    "VRFramedEye": "Left",
-    "VRFramedView": "Left"
+    "SkinnedOnly": true
+  },
+  "Cloud Shadows": {
+    "Enabled": 1,
+    "Opacity": 0.800000011920929
   },
   "Sky Sync": {
     "CustomAngle": -35.0,
+    "EnableSunLensFlare": true,
     "Enabled": true,
     "MinShadowElevation": 0.25,
     "MoonLightSource": 0,
@@ -627,75 +875,17 @@
     "SunsetEndOffset": 0.0,
     "UseAlternateSunPath": true
   },
-  "Skylighting": {
-    "EnableFastProbeSampling": true,
-    "EnableIncrementalProbeUpdates": true,
-    "EnableReducedUpdateFrequency": true,
-    "EnableSkylighting": false,
-    "IncludeMarkedRoofOccluders": true,
-    "MaxZenith": 1.570796251296997,
-    "MinDiffuseVisibility": 0.10000000149011612,
-    "MinSpecularVisibility": 0.05000000074505806,
-    "OcclusionUpdateInterval": 8,
-    "ProbeFieldSize": 10240.0,
-    "ProbeGridQuality": 0,
-    "ProbeUpdateInterval": 16,
-    "StableSliceCount": 8
-  },
-  "Subsurface Scattering": {
-    "BaseProfile": {
-      "BlurRadius": 0.5,
-      "Falloff": [
-        0.5600000023841858,
-        0.5600000023841858,
-        0.5600000023841858
-      ],
-      "Strength": [
-        0.47999998927116394,
-        0.4099999964237213,
-        0.2800000011920929
-      ],
-      "Thickness": 1.0
-    },
-    "BurleySamples": 16,
-    "CharacterLightingStrength": 1.0,
-    "EnableCharacterLighting": 0,
-    "EnableSubsurfaceScattering": true,
-    "HumanFemaleSSSBaseSaturation": 1.0,
-    "HumanFemaleSSSBrightness": 0.6,
-    "HumanFemaleSSSIntensity": 0.9,
-    "HumanFemaleSSSSaturation": 1.0,
-    "HumanMaleSSSBaseSaturation": 1.0,
-    "HumanMaleSSSBrightness": 0.65,
-    "HumanMaleSSSIntensity": 0.9,
-    "HumanMaleSSSSaturation": 1.0,
-    "HumanProfile": {
-      "BlurRadius": 0.5,
-      "Falloff": [
-        1.0,
-        0.3700000047683716,
-        0.30000001192092896
-      ],
-      "Strength": [
-        0.47999998927116394,
-        0.4099999964237213,
-        0.2800000011920929
-      ],
-      "Thickness": 1.0
-    },
-    "MeanFreePathBase": [
-      0.5600000023841858,
-      0.5600000023841858,
-      0.5600000023841858,
-      2.6700000762939453
-    ],
-    "MeanFreePathHuman": [
-      1.0,
-      0.3700000047683716,
-      0.30000001192092896,
-      2.6700000762939453
-    ],
-    "SSMode": 1
+  "LOD Blending": {
+    "DisableTerrainVertexColors": 0,
+    "EnableWaterReflectionStrength": false,
+    "Enabled": true,
+    "LODObjectBrightness": 1.0,
+    "LODObjectGamma": 1.0,
+    "LODObjectSnowBrightness": 1.0,
+    "LODObjectSnowGamma": 1.0,
+    "LODTerrainBrightness": 1.0,
+    "LODTerrainGamma": 1.0,
+    "WaterReflectionStrength": 1.0
   },
   "Terrain Blending": {
     "BlendStrength": 0.5,
@@ -726,151 +916,10 @@
     "UseOptimisedMeshes": true,
     "WaterTintColor": [
       0.0,
-      0.35,
+      0.3499999940395355,
       1.0
     ],
     "WaterTintStrength": 0.0
-  },
-  "Upscaling": {
-    "dlssPreset": 1,
-    "dlssSharpener": 1,
-    "foveatedCenterArea": 0.3,
-    "foveatedCenterHorizontalScale": 1.0,
-    "foveatedLeftEyeMaskOffsetX": 0.0,
-    "foveatedLeftEyeMaskOffsetY": 0.0,
-    "foveatedPeripheryMaskVisualization": false,
-    "foveatedRightEyeMaskOffsetX": 0.0,
-    "foveatedRightEyeMaskOffsetY": 0.0,
-    "foveatedVendorDispatch": false,
-    "frameGenerationAllowInMenus": false,
-    "frameGenerationForceEnable": 0,
-    "frameGenerationMode": 1,
-    "frameLimitMode": 1,
-    "fsr4RuntimeEnable": true,
-    "fsr4RuntimeSelectionSchemaVersion": 1,
-    "periphery_taa_center_area": 0.3,
-    "periphery_taa_center_blend_feather": 0.05000000074505806,
-    "periphery_taa_enable": false,
-    "periphery_taa_outer_scale": 0.8,
-    "qualityMode": 4,
-    "qualityModeSchemaVersion": 2,
-    "reflexFPSLimit": 60.0,
-    "reflexLowLatencyBoost": false,
-    "reflexLowLatencyMode": true,
-    "reflexUseFPSLimit": false,
-    "reflexUseMarkersToOptimize": true,
-    "renderScaleMode": 1,
-    "sharpnessDLSS": 0.699999988079071,
-    "sharpnessFSR": 0.699999988079071,
-    "streamlineLogLevel": 0,
-    "upscaleMethod": 3,
-    "upscaleMethodNoDLSS": 2,
-    "pipelineDiagnostics": false,
-    "pipelineDiagnosticsStructured": false
-  },
-  "VR": {
-    "EnableDepthBufferCullingExterior": true,
-        "EnableDepthBufferCullingInterior": false,
-    "EnableDragToReposition": false,
-    "EnableDynamicCubemapFoveation": true,
-    "EnableDynamicCubemapVisibilityThrottle": false,
-    "EnableLightingFoveation": true,
-    "EnableLightingFoveationHardCutoff": false,
-    "EnableSSRFoveation": true,
-    "EnableSSRFoveationHardCutoff": false,
-    "EnableStereoBlend": false,
-    "EnableWandPointing": true,
-    "EnableWaterParallaxFoveation": true,
-    "EnableWaterParallaxFoveationHardCutoff": false,
-    "EnableWetternessFoveation": true,
-    "EnableWetternessFoveationHardCutoff": false,
-    "KeepDesktopWindowFocusedForVRMenu": true,
-    "MinOccludeeBoxExtent": 10.0,
-    "StabilizeRenderScaleDesktopMirror": false,
-    "StereoBlendColorThreshold": 0.019999999552965164,
-    "StereoBlendDepthSigma": 0.009999999776482582,
-    "StereoBlendMaxFactor": 0.05000000074505806,
-    "UseRuntimeDefaultMenuNavigation": false,
-    "VRMenuAttachController": 1,
-    "VRMenuAutoResetDistance": 1000.0,
-    "VRMenuCloseKeys": [
-      {
-        "Device": "Both",
-        "Key": 2
-      }
-    ],
-    "VRMenuControllerOffsetX": 0.2199999988079071,
-    "VRMenuControllerOffsetY": 0.15000000596046448,
-    "VRMenuControllerOffsetZ": 0.20000000298023224,
-    "VRMenuOffsetX": 0.25999999046325684,
-    "VRMenuOffsetY": -0.03999999910593033,
-    "VRMenuOffsetZ": -2.25,
-    "VRMenuOpenKeys": [
-      {
-        "Device": "Primary",
-        "Key": 7
-      },
-      {
-        "Device": "Primary",
-        "Key": 1
-      }
-    ],
-    "VRMenuPositioningMethod": 1,
-    "VRMenuScale": 2.0,
-    "VROverlayCloseKeys": [],
-    "VROverlayOpenKeys": [],
-    "attachMode": 0,
-    "comboTimeout": 3.0,
-    "dragHighlightColor": [
-      1.0,
-      1.0,
-      0.0,
-      0.30000001192092896
-    ],
-    "kAutoHideSeconds": 30,
-    "menuOverlayPath": 0,
-    "mouseDeadzone": 0.10000000149011612,
-    "mouseSpeed": 10.0,
-    "VRControllerBindingsVersion": 1
-  },
-  "Version": "CSX 3.18-VR",
-  "Volumetric Lighting": {
-    "CustomColorBlue": 1.0,
-    "CustomColorContribution": 0.0,
-    "CustomColorGreen": 1.0,
-    "CustomColorRed": 1.0,
-    "DisableWeatherInteractionDuringRain": false,
-    "ExteriorCustomSize": {
-      "Depth": 90,
-      "Height": 192,
-      "Width": 320
-    },
-    "ExteriorEnabled": true,
-    "ExteriorQuality": 2,
-    "GodrayIntensity": 1.0,
-    "GodrayOpacity": 1.0,
-    "GodraySaturation": 1.0,
-    "GodrayShaftIntensity": 1.0,
-    "InteriorCustomSize": {
-      "Depth": 90,
-      "Height": 192,
-      "Width": 320
-    },
-    "InteriorEnabled": true,
-    "InteriorQuality": 2
-  },
-  "Volumetric Shadows": {
-    "Enabled": true
-  },
-  "Water Effects": null,
-  "Weather Picker": {
-    "Enabled": false,
-    "Position": [
-      50.0,
-      50.0
-    ],
-    "PositionSet": false,
-    "ShowInOverlay": false
   },
   "Wetterness": {
     "DebugSettings": {
@@ -919,14 +968,14 @@
     "RainContactWetnessScale": 1.75,
     "RainGrassGlossiness": 60.0,
     "RainGrassSpecularStrength": 1.0,
-    "RainReflectionBalance": 0.1,
-    "RaindropChance": 0.6000000238418579,
+    "RainReflectionBalance": 0.10000000149011612,
+    "RaindropChance": 0.600000023841858,
     "RaindropFxRangeWorldUnits": 700.0,
-    "RaindropGridSize": 3.5999999046325684,
-    "RaindropInterval": 0.6499999761581421,
+    "RaindropGridSize": 3.59999990463257,
+    "RaindropInterval": 0.649999976158142,
     "RaindropTransitionFalloff": 2.0,
     "RippleBreadth": 0.4000000059604645,
-    "RippleLifetime": 0.2199999988079071,
+    "RippleLifetime": 0.219999998807907,
     "RippleRadius": 0.6000000238418579,
     "RippleStrength": 2.0,
     "ShorePersistentDarkeningStrength": 1.100000023841858,

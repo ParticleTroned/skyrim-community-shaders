@@ -1,161 +1,278 @@
 {
-  "schemaVersion": 1,
-  "status": "provisional-development",
-  "generatedAtEvidenceDate": "2026-08-17",
-  "policy": "one shader tier policy with capability-selected DLSS primary and FSR fallback",
-  "schemaDefaults": [
-    { "path": ["Disable at Boot", "TruePBR"], "value": false },
-    { "path": ["Inverse Square Lighting", "Enabled"], "value": true },
-    { "path": ["Menu", "SmartClearShaderCacheDefault"], "value": false },
-    { "path": ["Screenshot", "SettingsSchemaVersion"], "value": 2 },
-    { "path": ["Screenshot", "Sequence", "FrameCount"], "value": 30 },
-    { "path": ["Screenshot", "Sequence", "Schedule", "Basis"], "value": "game_frames" },
-    { "path": ["Screenshot", "Sequence", "Schedule", "IntervalFrames"], "value": 6 },
-    { "path": ["Screenshot", "Sequence", "Backpressure", "Policy"], "value": "skip" },
-    { "path": ["Screenshot", "Sequence", "Backpressure", "MaximumConsecutiveSkips"], "value": 10 },
-    { "path": ["Screenshot", "Sequence", "FailurePolicy"], "value": "continue" },
-    { "path": ["Screenshot", "Sequence", "Outputs", "SeparateEyes"], "value": true },
-    { "path": ["Screenshot", "Sequence", "Packaging", "PreviewVideo", "FramesPerSecond"], "value": 15 },
-    { "path": ["Screenshot", "Sequence", "Packaging", "PreviewVideo", "Requested"], "value": true },
-    { "path": ["Screenshot", "VRFramedDominantEye"], "value": "Left" },
-    { "path": ["Screenshot", "VRFramedEye"], "value": "Left" },
-    { "path": ["Screenshot", "VRFramedView"], "value": "Left" },
-    { "path": ["Upscaling", "pipelineDiagnostics"], "value": false },
-    { "path": ["Upscaling", "pipelineDiagnosticsStructured"], "value": false },
-    { "path": ["VR", "VRControllerBindingsVersion"], "value": 1 }
+  "schemaVersion": 2,
+  "status": "provisional-calibration-v2",
+  "generatedAtEvidenceDate": "2026-08-28",
+  "packageVersion": "d2026.08.28.0",
+  "policy": "one vendor-neutral base with four explicit graphics tiers and capability-selected DLSS or FSR",
+  "tierOrder": ["Performance", "Balanced", "Quality", "Ultra Quality"],
+  "baseTemplate": {
+    "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
+    "sha256": "CF37BBEDC2DC0A7EB7DDDEFE08ACB81961A2D1B0B45A70B8741DC72B0AC21FA7"
+  },
+  "baseNormalization": {
+    "neutralTier": "Balanced",
+    "removePaths": [
+      ["Advanced", "Background Compiler Threads"],
+      ["Advanced", "Compiler Threads"],
+      ["VR", "EnableCurrentFrameDepthCulling"],
+      ["Water Effects"],
+      ["Wetness Effects"]
+    ],
+    "overrides": [
+      { "path": ["Menu", "UI Mode"], "value": 0 },
+      { "path": ["VR", "WandAimPitchTrimDegrees"], "value": 0.0 }
+    ]
+  },
+  "tierForbiddenPrefixes": [
+    ["Advanced"],
+    ["CS Editor"],
+    ["CS Utility"],
+    ["General"],
+    ["Menu"],
+    ["Performance Overlay"],
+    ["RenderDoc"],
+    ["Screenshot"],
+    ["VR"]
+  ],
+  "tierOwnedPaths": [
+    ["Grass Collision", "EnableGrassCollision"],
+    ["Screen Space GI", "Enabled"],
+    ["Screen Space GI", "ResolutionMode"],
+    ["Screen Space Shadows", "VRBaseSamplesAtReference"],
+    ["Screen Space Shadows", "VRCullDistance"],
+    ["Skylighting", "EnableSkylighting"],
+    ["Skylighting", "MinSpecularVisibility"],
+    ["Skylighting", "OcclusionUpdateInterval"],
+    ["Skylighting", "ProbeFieldSize"],
+    ["Skylighting", "ProbeGridQuality"],
+    ["Skylighting", "ProbeUpdateInterval"],
+    ["Skylighting", "StableSliceCount"],
+    ["Terrain Blending", "TerrainCullDistance"],
+    ["Upscaling", "qualityMode"],
+    ["Wetterness", "EnableWetterness"],
+    ["Wetterness", "RaindropChance"],
+    ["Wetterness", "RaindropFxRangeWorldUnits"],
+    ["Wetterness", "RaindropGridSize"],
+    ["Wetterness", "RaindropInterval"],
+    ["Wetterness", "RippleLifetime"],
+    ["Wetterness", "SplashesLifetime"],
+    ["Wetterness", "WetternessFadeRange"]
   ],
   "commonOverrides": [
-    {
-      "path": ["Image Based Lighting", "EnableIBL"],
-      "value": 1,
-      "reason": "retain the measured ambient-replacement baseline in every tier"
-    },
-    {
-      "path": ["Volumetric Shadows", "Enabled"],
-      "value": true,
-      "reason": "retain the low-cost shared directional-shadow provider"
-    },
-    {
-      "path": ["Screen Space GI", "Enabled"],
-      "value": false,
-      "reason": "release-safe fallback until ambient-composition and rotating/physical-stereo gates pass"
-    },
-    {
-      "path": ["Screen Space GI", "AOInteriorsOnly"],
-      "value": true,
-      "reason": "keep the dormant evaluated AO policy interior-gated"
-    },
-    {
-      "path": ["Screen Space GI", "ResourceProfile"],
-      "value": 1,
-      "reason": "AO-only allocation profile"
-    },
-    {
-      "path": ["Screen Space GI", "EnableGI"],
-      "value": false,
-      "reason": "do not activate unqualified indirect lighting"
-    },
-    {
-      "path": ["Screen Space GI", "EnableExperimentalSpecularGI"],
-      "value": false,
-      "reason": "do not activate unqualified specular GI"
-    },
-    {
-      "path": ["Screen Space GI", "EnableVanillaSSAO"],
-      "value": false,
-      "reason": "avoid an unreviewed double-AO path"
-    },
-    {
-      "path": ["Upscaling", "upscaleMethod"],
-      "value": 3,
-      "reason": "prefer DLSS when the Streamline capability check succeeds"
-    },
-    {
-      "path": ["Upscaling", "upscaleMethodNoDLSS"],
-      "value": 2,
-      "reason": "fall back to FSR when DLSS is unavailable"
-    },
-    {
-      "path": ["Upscaling", "fsr4RuntimeEnable"],
-      "value": true,
-      "reason": "retain the AMD runtime preference"
-    },
-    {
-      "path": ["Upscaling", "fsr4RuntimeSelectionSchemaVersion"],
-      "value": 1,
-      "reason": "serialize the current FSR4 provider-selection contract"
-    },
-    {
-      "path": ["Upscaling", "dlssPreset"],
-      "value": 1,
-      "reason": "retain the NVIDIA preset K provider setting"
-    },
-    {
-      "path": ["Upscaling", "dlssSharpener"],
-      "value": 1,
-      "reason": "retain the NVIDIA provider sharpener"
-    },
-    {
-      "path": ["Upscaling", "sharpnessDLSS"],
-      "value": 0.699999988079071,
-      "reason": "retain the active NVIDIA sharpness"
-    },
-    {
-      "path": ["Upscaling", "sharpnessFSR"],
-      "value": 0.699999988079071,
-      "reason": "retain the active AMD sharpness"
-    }
+    { "path": ["Advanced", "Log Level"], "value": 2, "reason": "ship Info shaders, not debug shader variants" },
+    { "path": ["General", "Enable Disk Cache"], "value": true, "reason": "use selective managed shader-cache persistence" },
+    { "path": ["General", "Skip Unchanged Shaders"], "value": true, "reason": "compile only invalidated shader identities" },
+    { "path": ["Menu", "SmartClearShaderCacheDefault"], "value": false, "reason": "presets must not request blanket cache invalidation" },
+    { "path": ["Menu", "UI Mode"], "value": 0, "reason": "retain the shared MGO interface baseline outside tier ownership" },
+    { "path": ["Image Based Lighting", "EnableIBL"], "value": 1, "reason": "shared measured ambient-replacement baseline" },
+    { "path": ["Volumetric Shadows", "Enabled"], "value": true, "reason": "low-cost shared directional-shadow provider" },
+    { "path": ["Volumetric Lighting", "ExteriorQuality"], "value": 2, "reason": "current normalized exterior policy pending a fresh profiler comparison" },
+    { "path": ["Volumetric Lighting", "InteriorQuality"], "value": 2, "reason": "current normalized interior policy pending a fresh profiler comparison" },
+    { "path": ["Screen Space GI", "AOInteriorsOnly"], "value": true },
+    { "path": ["Screen Space GI", "ResourceProfile"], "value": 1 },
+    { "path": ["Screen Space GI", "EnableGI"], "value": false },
+    { "path": ["Screen Space GI", "EnableExperimentalSpecularGI"], "value": false },
+    { "path": ["Screen Space GI", "EnableVanillaSSAO"], "value": false },
+    { "path": ["Upscaling", "upscaleMethod"], "value": 3, "reason": "prefer DLSS when Streamline reports it available" },
+    { "path": ["Upscaling", "upscaleMethodNoDLSS"], "value": 2, "reason": "fall back to FSR when DLSS is unavailable" },
+    { "path": ["Upscaling", "fsr4RuntimeEnable"], "value": true },
+    { "path": ["Upscaling", "fsr4RuntimeSelectionSchemaVersion"], "value": 1 },
+    { "path": ["Upscaling", "dlssPreset"], "value": 1 },
+    { "path": ["Upscaling", "dlssSharpener"], "value": 1 },
+    { "path": ["Upscaling", "sharpnessDLSS"], "value": 0.699999988079071 },
+    { "path": ["Upscaling", "sharpnessFSR"], "value": 0.699999988079071 },
+    { "path": ["Upscaling", "pipelineDiagnostics"], "value": false },
+    { "path": ["Upscaling", "pipelineDiagnosticsStructured"], "value": false },
+    { "path": ["VR", "EnableDepthBufferCullingExterior"], "value": true, "reason": "qualified common exterior policy" },
+    { "path": ["VR", "EnableDepthBufferCullingInterior"], "value": false, "reason": "retain the conservative interior policy" },
+    { "path": ["VR", "EnableDragToReposition"], "value": false },
+    { "path": ["VR", "VRMenuPositioningMethod"], "value": 1 },
+    { "path": ["VR", "VRMenuScale"], "value": 2.0 },
+    { "path": ["VR", "VRMenuOffsetZ"], "value": -2.25 },
+    { "path": ["VR", "WandAimPitchTrimDegrees"], "value": 0.0 }
   ],
+  "qualifications": {
+    "vendor-capability-selection": {
+      "status": "amd-live-nvidia-pending",
+      "note": "AMD fallback is live-tested; native NVIDIA DLSS selection still needs equivalent physical validation."
+    },
+    "runtime-lane-comparison": {
+      "status": "pending",
+      "note": "Compare the same tier under SteamVR and Open Composite Unleashed without changing graphics policy."
+    },
+    "foveation-recalibration": {
+      "status": "required",
+      "note": "Exact tiled HMD-mask work changed the cost and fidelity basis of the inherited common foveation values."
+    },
+    "ssgi-ambient-composition": {
+      "status": "required-for-release",
+      "note": "Quality and Ultra Quality enable AO-only SSGI; complete ambient composition, rotating-view and physical-stereo qualification."
+    },
+    "volumetric-lighting-retier": {
+      "status": "measurement-requested",
+      "note": "All tiers currently retain High volumetric lighting; remeasure before deciding whether lower tiers should diverge."
+    }
+  },
   "tiers": {
     "Performance": {
-      "sourceTemplate": "MGO-Presets/CSX AMD- Performance - Press END on PC to Customize/SKSE/Plugins/CommunityShaders/SettingsUser.json",
-      "sourceSha256": "646046212A34F628E1B5CF8490CBD7111DEF6059925D844C590D2A172FF356C0",
       "outputDirectory": "CSX Unified- Performance - Press END on PC to Customize",
+      "qualificationRefs": ["vendor-capability-selection", "runtime-lane-comparison", "foveation-recalibration", "volumetric-lighting-retier"],
       "overrides": [
-        { "path": ["Screen Space GI", "ResolutionMode"], "value": 2, "reason": "dormant Quarter-resolution AO candidate" },
-        { "path": ["Volumetric Lighting", "ExteriorQuality"], "value": 0, "reason": "measured Low-cost exterior grid" },
-        { "path": ["Volumetric Lighting", "InteriorQuality"], "value": 0, "reason": "matching Low interior policy" }
+        { "path": ["Grass Collision", "EnableGrassCollision"], "value": false },
+        { "path": ["Screen Space GI", "Enabled"], "value": false },
+        { "path": ["Screen Space GI", "ResolutionMode"], "value": 2 },
+        { "path": ["Screen Space Shadows", "VRBaseSamplesAtReference"], "value": 16.0 },
+        { "path": ["Screen Space Shadows", "VRCullDistance"], "value": 20480.0 },
+        { "path": ["Skylighting", "EnableSkylighting"], "value": false },
+        { "path": ["Skylighting", "MinSpecularVisibility"], "value": 0.0500000007450581 },
+        { "path": ["Skylighting", "OcclusionUpdateInterval"], "value": 8 },
+        { "path": ["Skylighting", "ProbeFieldSize"], "value": 10240.0 },
+        { "path": ["Skylighting", "ProbeGridQuality"], "value": 0 },
+        { "path": ["Skylighting", "ProbeUpdateInterval"], "value": 16 },
+        { "path": ["Skylighting", "StableSliceCount"], "value": 8 },
+        { "path": ["Terrain Blending", "TerrainCullDistance"], "value": 725.0 },
+        { "path": ["Upscaling", "qualityMode"], "value": 4 },
+        { "path": ["Wetterness", "EnableWetterness"], "value": 0 },
+        { "path": ["Wetterness", "RaindropChance"], "value": 0.600000023841858 },
+        { "path": ["Wetterness", "RaindropFxRangeWorldUnits"], "value": 700.0 },
+        { "path": ["Wetterness", "RaindropGridSize"], "value": 3.59999990463257 },
+        { "path": ["Wetterness", "RaindropInterval"], "value": 0.649999976158142 },
+        { "path": ["Wetterness", "RippleLifetime"], "value": 0.219999998807907 },
+        { "path": ["Wetterness", "SplashesLifetime"], "value": 4.5 },
+        { "path": ["Wetterness", "WetternessFadeRange"], "value": 5000.0 }
       ]
     },
     "Balanced": {
-      "sourceTemplate": "MGO-Presets/CSX AMD- Balanced - Press END on PC to Customize/SKSE/Plugins/CommunityShaders/SettingsUser.json",
-      "sourceSha256": "29750DF04B9121D96FEC69D593BD0B3BB3FEE1461F8216866E5F0AE47439B60B",
       "outputDirectory": "CSX Unified- Balanced - Press END on PC to Customize",
+      "qualificationRefs": ["vendor-capability-selection", "runtime-lane-comparison", "foveation-recalibration", "volumetric-lighting-retier"],
       "overrides": [
-        { "path": ["Screen Space GI", "ResolutionMode"], "value": 1, "reason": "dormant Half-resolution AO candidate" },
-        { "path": ["Volumetric Lighting", "ExteriorQuality"], "value": 1, "reason": "measured Medium-cost exterior grid" },
-        { "path": ["Volumetric Lighting", "InteriorQuality"], "value": 1, "reason": "matching Medium interior policy" }
+        { "path": ["Grass Collision", "EnableGrassCollision"], "value": true },
+        { "path": ["Screen Space GI", "Enabled"], "value": false },
+        { "path": ["Screen Space GI", "ResolutionMode"], "value": 1 },
+        { "path": ["Screen Space Shadows", "VRBaseSamplesAtReference"], "value": 30.0 },
+        { "path": ["Screen Space Shadows", "VRCullDistance"], "value": 20480.0 },
+        { "path": ["Skylighting", "EnableSkylighting"], "value": true },
+        { "path": ["Skylighting", "MinSpecularVisibility"], "value": 0.100000001490116 },
+        { "path": ["Skylighting", "OcclusionUpdateInterval"], "value": 8 },
+        { "path": ["Skylighting", "ProbeFieldSize"], "value": 10240.0 },
+        { "path": ["Skylighting", "ProbeGridQuality"], "value": 0 },
+        { "path": ["Skylighting", "ProbeUpdateInterval"], "value": 16 },
+        { "path": ["Skylighting", "StableSliceCount"], "value": 8 },
+        { "path": ["Terrain Blending", "TerrainCullDistance"], "value": 1024.0 },
+        { "path": ["Upscaling", "qualityMode"], "value": 3 },
+        { "path": ["Wetterness", "EnableWetterness"], "value": 1 },
+        { "path": ["Wetterness", "RaindropChance"], "value": 0.600000023841858 },
+        { "path": ["Wetterness", "RaindropFxRangeWorldUnits"], "value": 700.0 },
+        { "path": ["Wetterness", "RaindropGridSize"], "value": 3.59999990463257 },
+        { "path": ["Wetterness", "RaindropInterval"], "value": 0.649999976158142 },
+        { "path": ["Wetterness", "RippleLifetime"], "value": 0.219999998807907 },
+        { "path": ["Wetterness", "SplashesLifetime"], "value": 4.5 },
+        { "path": ["Wetterness", "WetternessFadeRange"], "value": 5000.0 }
       ]
     },
     "Quality": {
-      "sourceTemplate": "MGO-Presets/CSX AMD- Quality - Press END on PC to Customize/SKSE/Plugins/CommunityShaders/SettingsUser.json",
-      "sourceSha256": "052F01CBBBFFA0A2A5E017D28EE52FE5AF1D1BE0553CC61B0CDCA17D5A93FE95",
       "outputDirectory": "CSX Unified- Quality - Press END on PC to Customize",
+      "qualificationRefs": ["vendor-capability-selection", "runtime-lane-comparison", "foveation-recalibration", "ssgi-ambient-composition", "volumetric-lighting-retier"],
       "overrides": [
-        { "path": ["Screen Space GI", "ResolutionMode"], "value": 0, "reason": "dormant Full-resolution AO candidate" },
-        { "path": ["Volumetric Lighting", "ExteriorQuality"], "value": 2, "reason": "High exterior quality ceiling" },
-        { "path": ["Volumetric Lighting", "InteriorQuality"], "value": 2, "reason": "High interior quality ceiling" }
+        { "path": ["Grass Collision", "EnableGrassCollision"], "value": true },
+        { "path": ["Screen Space GI", "Enabled"], "value": true },
+        { "path": ["Screen Space GI", "ResolutionMode"], "value": 0 },
+        { "path": ["Screen Space Shadows", "VRBaseSamplesAtReference"], "value": 44.0 },
+        { "path": ["Screen Space Shadows", "VRCullDistance"], "value": 0.0 },
+        { "path": ["Skylighting", "EnableSkylighting"], "value": true },
+        { "path": ["Skylighting", "MinSpecularVisibility"], "value": 0.100000001490116 },
+        { "path": ["Skylighting", "OcclusionUpdateInterval"], "value": 6 },
+        { "path": ["Skylighting", "ProbeFieldSize"], "value": 12970.6669921875 },
+        { "path": ["Skylighting", "ProbeGridQuality"], "value": 1 },
+        { "path": ["Skylighting", "ProbeUpdateInterval"], "value": 13 },
+        { "path": ["Skylighting", "StableSliceCount"], "value": 11 },
+        { "path": ["Terrain Blending", "TerrainCullDistance"], "value": 1024.0 },
+        { "path": ["Upscaling", "qualityMode"], "value": 2 },
+        { "path": ["Wetterness", "EnableWetterness"], "value": 1 },
+        { "path": ["Wetterness", "RaindropChance"], "value": 0.699999988079071 },
+        { "path": ["Wetterness", "RaindropFxRangeWorldUnits"], "value": 1000.0 },
+        { "path": ["Wetterness", "RaindropGridSize"], "value": 3.25 },
+        { "path": ["Wetterness", "RaindropInterval"], "value": 0.5799999833106995 },
+        { "path": ["Wetterness", "RippleLifetime"], "value": 0.25999999046325684 },
+        { "path": ["Wetterness", "SplashesLifetime"], "value": 5.199999809265137 },
+        { "path": ["Wetterness", "WetternessFadeRange"], "value": 7500.0 }
+      ]
+    },
+    "Ultra Quality": {
+      "outputDirectory": "CSX Unified- Ultra Quality - Press END on PC to Customize",
+      "qualificationRefs": ["vendor-capability-selection", "runtime-lane-comparison", "foveation-recalibration", "ssgi-ambient-composition", "volumetric-lighting-retier"],
+      "overrides": [
+        { "path": ["Grass Collision", "EnableGrassCollision"], "value": true },
+        { "path": ["Screen Space GI", "Enabled"], "value": true },
+        { "path": ["Screen Space GI", "ResolutionMode"], "value": 0 },
+        { "path": ["Screen Space Shadows", "VRBaseSamplesAtReference"], "value": 44.0 },
+        { "path": ["Screen Space Shadows", "VRCullDistance"], "value": 0.0 },
+        { "path": ["Skylighting", "EnableSkylighting"], "value": true },
+        { "path": ["Skylighting", "MinSpecularVisibility"], "value": 0.100000001490116 },
+        { "path": ["Skylighting", "OcclusionUpdateInterval"], "value": 5 },
+        { "path": ["Skylighting", "ProbeFieldSize"], "value": 15701.3330078125 },
+        { "path": ["Skylighting", "ProbeGridQuality"], "value": 2 },
+        { "path": ["Skylighting", "ProbeUpdateInterval"], "value": 9 },
+        { "path": ["Skylighting", "StableSliceCount"], "value": 13 },
+        { "path": ["Terrain Blending", "TerrainCullDistance"], "value": 1024.0 },
+        { "path": ["Upscaling", "qualityMode"], "value": 1 },
+        { "path": ["Wetterness", "EnableWetterness"], "value": 1 },
+        { "path": ["Wetterness", "RaindropChance"], "value": 0.800000011920929 },
+        { "path": ["Wetterness", "RaindropFxRangeWorldUnits"], "value": 1400.0 },
+        { "path": ["Wetterness", "RaindropGridSize"], "value": 3.0 },
+        { "path": ["Wetterness", "RaindropInterval"], "value": 0.5 },
+        { "path": ["Wetterness", "RippleLifetime"], "value": 0.300000011920929 },
+        { "path": ["Wetterness", "SplashesLifetime"], "value": 6.0 },
+        { "path": ["Wetterness", "WetternessFadeRange"], "value": 10000.0 }
       ]
     }
   },
   "guards": [
     { "path": ["Advanced", "Log Level"], "value": 2 },
+    { "path": ["General", "Enable Disk Cache"], "value": true },
+    { "path": ["General", "Skip Unchanged Shaders"], "value": true },
+    { "path": ["Menu", "SmartClearShaderCacheDefault"], "value": false },
+    { "path": ["Menu", "UI Mode"], "value": 0 },
     { "path": ["Image Based Lighting", "EnableIBL"], "value": 1 },
     { "path": ["Volumetric Shadows", "Enabled"], "value": true },
-    { "path": ["Screen Space GI", "Enabled"], "value": false },
-    { "path": ["Screen Space GI", "ResourceProfile"], "value": 1 },
     { "path": ["Screen Space GI", "EnableGI"], "value": false },
     { "path": ["Screen Space GI", "EnableExperimentalSpecularGI"], "value": false },
     { "path": ["Screen Space GI", "EnableVanillaSSAO"], "value": false },
     { "path": ["Upscaling", "upscaleMethod"], "value": 3 },
     { "path": ["Upscaling", "upscaleMethodNoDLSS"], "value": 2 },
     { "path": ["Upscaling", "pipelineDiagnostics"], "value": false },
-    { "path": ["Upscaling", "pipelineDiagnosticsStructured"], "value": false }
+    { "path": ["Upscaling", "pipelineDiagnosticsStructured"], "value": false },
+    { "path": ["VR", "EnableDepthBufferCullingExterior"], "value": true },
+    { "path": ["VR", "EnableDepthBufferCullingInterior"], "value": false },
+    { "path": ["VR", "EnableDragToReposition"], "value": false },
+    { "path": ["VR", "VRMenuScale"], "value": 2.0 }
   ],
-  "releaseGates": [
-    "IBL x Skylighting x SSGI ambient-composition screen and Vanilla SSAO audit before enabling SSGI",
-    "rotating and physical-HMD stereo/disocclusion qualification",
-    "native NVIDIA validation of the same policy",
-    "SteamVR OpenXR, VDXR, and Open Composite Unleashed lane comparison"
-  ]
+  "validation": {
+    "stalePaths": [
+      ["Advanced", "Background Compiler Threads"],
+      ["Advanced", "Compiler Threads"],
+      ["VR", "EnableCurrentFrameDepthCulling"],
+      ["Water Effects"],
+      ["Wetness Effects"],
+      ["Adaptive Balance", "rendererControlsEnabled"],
+      ["Adaptive Balance", "bloomEnhancement"],
+      ["Screenshot", "SequenceFrameCount"],
+      ["Screenshot", "SequenceFrameInterval"],
+      ["Screenshot", "SequencePreviewFramesPerSecond"],
+      ["Screenshot", "SequenceSaveSeparateEyes"],
+      ["Screenshot", "SequenceWritePreviewVideo"]
+    ],
+    "requiredValues": [
+      { "path": ["Screenshot", "SettingsSchemaVersion"], "value": 2 },
+      { "path": ["Screenshot", "Sequence", "Schedule", "Basis"], "value": "game_frames" },
+      { "path": ["Adaptive Balance", "globalLightingEnabled"], "value": true },
+      { "path": ["Sky Sync", "EnableSunLensFlare"], "value": true },
+      { "path": ["Foliage Lighting", "EnableFoliageScattering"], "value": 1 },
+      { "path": ["VR", "WandAimPitchTrimDegrees"], "value": 0.0 }
+    ],
+    "requiredArrayLengths": [
+      { "path": ["Adaptive Balance", "profiles"], "length": 5 },
+      { "path": ["Screenshot", "CropPresets"], "length": 3 }
+    ]
+  }
 }

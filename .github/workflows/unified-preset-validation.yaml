@@ -1,0 +1,38 @@
+name: Unified preset validation
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/unified-preset-validation.yaml"
+      - "docs/development/generated-unified-preset-report.json"
+      - "docs/development/unified-preset-policy.json"
+      - "docs/development/unified-preset-templates/**"
+      - "docs/development/unified-presets.md"
+      - "MGO-Presets/CSX Unified-*/**"
+      - "tests/unified_preset_generator_test.ps1"
+      - "tools/generate-unified-presets.ps1"
+  push:
+    branches:
+      - main-VR
+    paths:
+      - ".github/workflows/unified-preset-validation.yaml"
+      - "docs/development/generated-unified-preset-report.json"
+      - "docs/development/unified-preset-policy.json"
+      - "docs/development/unified-preset-templates/**"
+      - "docs/development/unified-presets.md"
+      - "MGO-Presets/CSX Unified-*/**"
+      - "tests/unified_preset_generator_test.ps1"
+      - "tools/generate-unified-presets.ps1"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify generated presets and policy contracts
+        shell: pwsh
+        run: ./tests/unified_preset_generator_test.ps1

@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "policySchemaVersion": 2,
+  "policyStatus": "provisional-calibration-v2",
+  "evidenceDate": "2026-08-28",
+  "baseTemplate": "docs/development/unified-preset-templates/Base.SettingsUser.json",
+  "baseSha256": "CF37BBEDC2DC0A7EB7DDDEFE08ACB81961A2D1B0B45A70B8741DC72B0AC21FA7",
+  "tiers": [
+    {
+      "tier": "Performance",
+      "outputDirectory": "CSX Unified- Performance - Press END on PC to Customize",
+      "settingsSha256": "414DFB88DDBF06CD11D6FF84E9CDE842E2A220C537668FB0EE686E80AA782B06",
+      "qualificationRefs": [
+        "vendor-capability-selection",
+        "runtime-lane-comparison",
+        "foveation-recalibration",
+        "volumetric-lighting-retier"
+      ]
+    },
+    {
+      "tier": "Balanced",
+      "outputDirectory": "CSX Unified- Balanced - Press END on PC to Customize",
+      "settingsSha256": "747925B5102088E1551942F4D50B2C5D5FA5F9A5F868CAA1C6AE54B08D1B0AB4",
+      "qualificationRefs": [
+        "vendor-capability-selection",
+        "runtime-lane-comparison",
+        "foveation-recalibration",
+        "volumetric-lighting-retier"
+      ]
+    },
+    {
+      "tier": "Quality",
+      "outputDirectory": "CSX Unified- Quality - Press END on PC to Customize",
+      "settingsSha256": "A007856E3222D77CA9FF35B29F1CD39443F578BF31F72BC1CA3D4CACB4161C52",
+      "qualificationRefs": [
+        "vendor-capability-selection",
+        "runtime-lane-comparison",
+        "foveation-recalibration",
+        "ssgi-ambient-composition",
+        "volumetric-lighting-retier"
+      ]
+    },
+    {
+      "tier": "Ultra Quality",
+      "outputDirectory": "CSX Unified- Ultra Quality - Press END on PC to Customize",
+      "settingsSha256": "3FB1C27D776B7BCC4DC5EE3AE96E28889428D24DF8780BDE28A31D2FC3232C05",
+      "qualificationRefs": [
+        "vendor-capability-selection",
+        "runtime-lane-comparison",
+        "foveation-recalibration",
+        "ssgi-ambient-composition",
+        "volumetric-lighting-retier"
+      ]
+    }
+  ],
+  "qualifications": {
+    "vendor-capability-selection": {
+      "status": "amd-live-nvidia-pending",
+      "note": "AMD fallback is live-tested; native NVIDIA DLSS selection still needs equivalent physical validation."
+    },
+    "runtime-lane-comparison": {
+      "status": "pending",
+      "note": "Compare the same tier under SteamVR and Open Composite Unleashed without changing graphics policy."
+    },
+    "foveation-recalibration": {
+      "status": "required",
+      "note": "Exact tiled HMD-mask work changed the cost and fidelity basis of the inherited common foveation values."
+    },
+    "ssgi-ambient-composition": {
+      "status": "required-for-release",
+      "note": "Quality and Ultra Quality enable AO-only SSGI; complete ambient composition, rotating-view and physical-stereo qualification."
+    },
+    "volumetric-lighting-retier": {
+      "status": "measurement-requested",
+      "note": "All tiers currently retain High volumetric lighting; remeasure before deciding whether lower tiers should diverge."
+    }
+  }
+}

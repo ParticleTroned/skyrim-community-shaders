@@ -53,6 +53,28 @@ namespace VRRenderScaleQualificationPolicy
 		DLSS
 	};
 
+	enum class PhysicalBackend : std::uint8_t
+	{
+		None,
+		DLSS,
+		FSRHost,
+		FSRRuntime,
+		FSR4Runtime
+	};
+
+	[[nodiscard]] constexpr bool MatchesActivePhysicalBackend(
+		Method a_method,
+		PhysicalBackend a_backend) noexcept
+	{
+		if (a_method == Method::DLSS)
+			return a_backend == PhysicalBackend::DLSS;
+		if (a_method != Method::FSR)
+			return false;
+		return a_backend == PhysicalBackend::FSRHost ||
+		       a_backend == PhysicalBackend::FSRRuntime ||
+		       a_backend == PhysicalBackend::FSR4Runtime;
+	}
+
 	struct TargetProfile
 	{
 		Method method = Method::Unknown;

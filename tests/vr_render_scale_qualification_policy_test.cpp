@@ -144,6 +144,32 @@ namespace
 		       !IsValidTarget(ExactObservationTarget(Profile{}));
 	}
 
+	constexpr bool CoversConfiguredRuntimeBackendSeparation()
+	{
+		TargetProfile configuredFSR4{
+			.method = Method::FSR,
+			.qualityMode = 3,
+			.renderScaleMode = true,
+			.matchFSRRuntime = true,
+			.fsr4Runtime = true,
+		};
+		const Profile configuredProfile{
+			.valid = true,
+			.method = Method::FSR,
+			.qualityMode = 3,
+			.renderScaleMode = true,
+			.fsr4Runtime = true,
+		};
+		return MatchesTarget(configuredProfile, configuredFSR4) &&
+		       MatchesActivePhysicalBackend(Method::FSR, PhysicalBackend::FSRHost) &&
+		       MatchesActivePhysicalBackend(Method::FSR, PhysicalBackend::FSRRuntime) &&
+		       MatchesActivePhysicalBackend(Method::FSR, PhysicalBackend::FSR4Runtime) &&
+		       !MatchesActivePhysicalBackend(Method::FSR, PhysicalBackend::DLSS) &&
+		       !MatchesActivePhysicalBackend(Method::FSR, PhysicalBackend::None) &&
+		       MatchesActivePhysicalBackend(Method::DLSS, PhysicalBackend::DLSS) &&
+		       !MatchesActivePhysicalBackend(Method::DLSS, PhysicalBackend::FSRHost);
+	}
+
 	constexpr bool CoversActiveAndNativeStability()
 	{
 		auto activeFacts = ActiveDLSSStableFacts();
@@ -416,6 +442,7 @@ namespace
 
 	static_assert(CoversExactProfileMatching());
 	static_assert(CoversObservedProfileTargets());
+	static_assert(CoversConfiguredRuntimeBackendSeparation());
 	static_assert(CoversActiveAndNativeStability());
 	static_assert(CoversQualificationMilestones());
 	static_assert(CoversContractSpecificShaderCompilation());

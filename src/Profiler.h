@@ -15,6 +15,8 @@ public:
 	static constexpr uint32_t kMaxTimers = 128;
 	static constexpr uint32_t kFrameLatency = 3;
 	static constexpr uint32_t kHistorySize = 300;
+	// Retain intermittent passes while removing entries absent across sustained capture.
+	static constexpr uint64_t kTimerRetireCycles = 60;
 
 	using PerfEventCallback = std::function<void(std::string_view)>;
 
@@ -259,6 +261,7 @@ private:
 		RollingHistory outermostCpu;
 		bool hasGpu = false;
 		bool hasCpu = false;
+		uint64_t lastSampleCycle = 0;
 	};
 	struct CaptureKnownTimer
 	{
@@ -273,6 +276,7 @@ private:
 	};
 	std::vector<KnownTimer> knownTimers;
 	std::unordered_map<std::string, size_t> knownTimerIndex;
+	uint64_t collectedDetailedCycles = 0;
 	std::vector<CpuTimer> activeCpuTimers;
 	std::vector<CompletedCpuTimer> completedCpuTimers;
 	float totalTimeMs = 0.0f;
@@ -293,6 +297,8 @@ private:
 
 	bool CollectResults();
 	KnownTimer& GetOrCreateTimer(const std::string& name);
+	void RetireStaleTimers();
+	void RebuildTimerIndex();
 	void RebuildResults(const std::unordered_map<std::string, ActiveTimerData>* activeTimers);
 	void StoreBoundedCaptureResults(
 		const std::unordered_map<std::string, ActiveTimerData>& a_activeTimers,

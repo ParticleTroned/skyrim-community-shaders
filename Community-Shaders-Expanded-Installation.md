@@ -442,7 +442,7 @@ To deactivate it, uncheck **Keep Game Window Focused for VR Menu**. The game win
 
 #### Move and Resize the VR Menu
 
-The menu uses a locked, recoverable layout by default. Enable **Unlock Menu Position and Size** under **VR > General > Menu Settings** to customize it.
+The menu uses a locked, recoverable layout by default. Enable **Unlock Menu Position and Size** under **VR** in Essentials mode or under **VR > General > Menu Settings** in Advanced (Full UI) mode to customize it.
 
 -   On the desktop, the CSX window can then be moved, resized, docked, and restored from its saved placement.
 -   In the headset, hold one controller grip to move the panel and use **Menu Scale** to resize it.

@@ -2071,6 +2071,7 @@ namespace
 	void DrawKeepDesktopWindowFocusedForVRMenuSetting();
 	void DrawStabilizeRenderScaleDesktopMirrorSetting();
 	void DrawCSMenuNavigationSettings();
+	void DrawMenuLayoutUnlockSetting();
 	void DrawKeyBindings();
 	void DrawControllerBindingSummary(bool a_includeAutoHideSetting, const char* a_idPrefix);
 }
@@ -2078,6 +2079,11 @@ namespace
 void VR::DrawEssentialSettings()
 {
 	DrawCSMenuNavigationSettings();
+
+	if (openVRInfo.isCompatible) {
+		ImGui::SeparatorText("Menu Layout");
+		DrawMenuLayoutUnlockSetting();
+	}
 
 	ImGui::SeparatorText("Desktop");
 	DrawKeepDesktopWindowFocusedForVRMenuSetting();
@@ -2352,6 +2358,17 @@ namespace
 		}
 	}
 
+	void DrawMenuLayoutUnlockSetting()
+	{
+		auto& vr = globals::features::vr;
+		bool layoutUnlocked = vr.settings.UnlockMenuPositionAndSize;
+		if (ImGui::Checkbox("Unlock Menu Position and Size", &layoutUnlocked))
+			vr.SetMenuLayoutUnlocked(layoutUnlocked);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextWrapped("Allows the desktop CSX window to move, resize, and dock. In the headset, it restores custom placement and controller grip dragging. Locking the layout again preserves the saved headset settings.");
+		}
+	}
+
 	void DrawMenuSettings()
 	{
 		auto& vr = globals::features::vr;
@@ -2359,12 +2376,7 @@ namespace
 		if (!vr.openVRInfo.isCompatible)
 			return;
 		if (ImGui::CollapsingHeader("Menu Settings")) {
-			bool layoutUnlocked = settings.UnlockMenuPositionAndSize;
-			if (ImGui::Checkbox("Unlock Menu Position and Size", &layoutUnlocked))
-				vr.SetMenuLayoutUnlocked(layoutUnlocked);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextWrapped("Allows the desktop CSX window to move, resize, and dock. In the headset, it restores custom placement and controller grip dragging. Locking the layout again preserves the saved headset settings.");
-			}
+			DrawMenuLayoutUnlockSetting();
 
 			ImGui::SliderFloat("Menu Scale", &settings.VRMenuScale, VR::Config::kMinMenuScale, VR::Config::kMaxMenuScale, "%.2f");
 			if (!settings.UnlockMenuPositionAndSize) {

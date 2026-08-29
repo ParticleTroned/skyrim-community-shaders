@@ -23,13 +23,13 @@ namespace
 		const char* Label;
 	};
 
-	constexpr std::array<ProbeGridPreset, 5> kProbeGridPresets = {
+	constexpr std::array<ProbeGridPreset, 3> kProbeGridPresets = {
 		ProbeGridPreset{ 128, 128, 64, "Performance (128 x 128 x 64)" },
 		ProbeGridPreset{ 192, 192, 96, "Balanced (192 x 192 x 96)" },
 		ProbeGridPreset{ 256, 256, 128, "Quality (256 x 256 x 128)" },
-		ProbeGridPreset{ 394, 394, 192, "Ultra Quality (394 x 394 x 192)" },
-		ProbeGridPreset{ 512, 512, 256, "Hoshipa (512 x 512 x 256)" },
 	};
+	constexpr uint kQualityProbeGrid = static_cast<uint>(kProbeGridPresets.size() - 1);
+	static_assert(kQualityProbeGrid == 2);
 
 	struct SkylightingPerformancePreset
 	{
@@ -71,7 +71,7 @@ namespace
 		SkylightingPerformancePreset{
 			"Quality",
 			"Higher quality Skylighting preset, two thirds of the way from Performance toward Hoshipa.",
-			2,
+			kQualityProbeGrid,
 			5,
 			9,
 			13,
@@ -82,7 +82,7 @@ namespace
 		SkylightingPerformancePreset{
 			"Hoshipa",
 			"Highest quality Skylighting preset from the Hoshipa configuration.",
-			4,
+			kQualityProbeGrid,
 			3,
 			6,
 			16,
@@ -94,7 +94,8 @@ namespace
 
 	uint ClampProbeGridQuality(uint a_quality)
 	{
-		return std::min<uint>(a_quality, static_cast<uint>(kProbeGridPresets.size() - 1));
+		// Persisted values above the supported range migrate to Quality.
+		return std::min(a_quality, kQualityProbeGrid);
 	}
 
 	const ProbeGridPreset& GetProbeGridPreset(uint a_quality)
@@ -599,7 +600,7 @@ void Skylighting::DrawSettings()
 		ImGui::EndCombo();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Main quality/performance switch. Performance is fastest; higher tiers increase detail and cost.");
+		ImGui::Text("Main quality/performance switch. Performance is fastest; Quality is most detailed.");
 
 	probeGridQualityUI = std::max(0, std::min(probeGridQualityUI, static_cast<int>(kProbeGridPresets.size() - 1)));
 	if (settings.ProbeGridQuality != static_cast<uint>(probeGridQualityUI)) {

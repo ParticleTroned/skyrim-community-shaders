@@ -36,6 +36,7 @@
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
+#include "Features/VolumetricLighting.h"
 #include "Features/VolumetricShadows.h"
 #include "Features/WaterEffects.h"
 #include "Features/WeatherPicker.h"
@@ -2018,6 +2019,8 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.HasDirectionalShadows = HasDirectionalShadows();
 		const auto& volumetricShadows = globals::features::volumetricShadows;
 		data.VolumetricShadowsEnabled = volumetricShadows.loaded && volumetricShadows.settings.Enabled;
+		data.VolumetricLightingOpacity =
+			a_inWorld ? globals::features::volumetricLighting.GetRuntimeGodrayOpacity() : 1.0f;
 
 		data.SSSHumanMaleIntensity = sssHumanMaleIntensity;
 		data.SSSHumanMaleSaturation = sssHumanMaleSaturation;

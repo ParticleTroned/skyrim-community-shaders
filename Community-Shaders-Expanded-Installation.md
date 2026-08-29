@@ -809,9 +809,14 @@ Most users should leave this page at defaults unless a specific PBR material loo
 
 ![Volumetric Lighting settings](Images-Fork-Installation/CS-UI/volumetric-lighting.png)
 
-**Volumetric Lighting** controls godray intensity, opacity, saturation, custom color contribution, and separate exterior/interior quality and volume dimensions.
+**Volumetric Lighting** provides separate exterior and interior profiles for
+godray intensity, opacity, saturation, and custom color contribution, alongside
+separate quality and volume dimensions.
 
-Higher quality and larger volume dimensions cost more. Use the tooltip ranges when tuning, and avoid pushing godray intensity/opacity too high because it can make weather lighting look washed out.
+Intensity linearly changes brightness, while opacity shapes shaft presence after
+temporal lighting without changing the weather-authored density. Higher quality
+and larger volume dimensions cost more; avoid pushing intensity or opacity too
+high because it can make weather lighting look washed out.
 
 ### Performance Optimization
 

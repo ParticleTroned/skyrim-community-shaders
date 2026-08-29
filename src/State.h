@@ -420,7 +420,7 @@ public:
 		float SSSHumanFemaleBrightness;
 		float SSSHumanFemaleBaseSaturation;
 		uint VolumetricShadowsEnabled;
-		float SharedDataPackingPad2;
+		float VolumetricLightingOpacity;
 		float4 AmbientSHR;
 		float4 AmbientSHG;
 		float4 AmbientSHB;
@@ -435,6 +435,7 @@ public:
 	static_assert(offsetof(SharedDataCB, RefractionScale) % 16 == 0);
 	static_assert(offsetof(SharedDataCB, PBRMetalReflectionScalePad0) % 16 == 0);
 	static_assert(offsetof(SharedDataCB, VolumetricShadowsEnabled) == offsetof(SharedDataCB, SSSHumanFemaleBaseSaturation) + sizeof(float));
+	static_assert(offsetof(SharedDataCB, VolumetricLightingOpacity) == offsetof(SharedDataCB, VolumetricShadowsEnabled) + sizeof(uint));
 	static_assert(offsetof(SharedDataCB, AmbientSHR) % 16 == 0);
 	static_assert(offsetof(SharedDataCB, VRFoveationData0) % 16 == 0);
 	static_assert(offsetof(SharedDataCB, VRFoveationModes) % 16 == 0);

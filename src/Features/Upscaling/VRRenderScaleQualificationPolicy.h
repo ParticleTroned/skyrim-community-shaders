@@ -104,10 +104,19 @@ namespace VRRenderScaleQualificationPolicy
 		return a_target.method == Method::DLSS || a_target.method == Method::FSR;
 	}
 
+	[[nodiscard]] constexpr bool UsesNativeAPIEvaluation(
+		const TargetProfile& a_target) noexcept
+	{
+		return (UsesVendorEvaluation(a_target) ||
+				   a_target.method == Method::None ||
+				   a_target.method == Method::TAA) &&
+		       !a_target.renderScaleMode;
+	}
+
 	[[nodiscard]] constexpr bool UsesNativeVendorEvaluation(
 		const TargetProfile& a_target) noexcept
 	{
-		return UsesVendorEvaluation(a_target) && !a_target.renderScaleMode;
+		return UsesVendorEvaluation(a_target) && UsesNativeAPIEvaluation(a_target);
 	}
 
 	[[nodiscard]] constexpr bool IsTargetPropertyAllowed(

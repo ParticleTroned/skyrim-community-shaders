@@ -3026,7 +3026,8 @@ namespace
 				apiSnapshot.effective, effectiveProfilePresent);
 			const auto stable = QualificationProfile(
 				apiSnapshot.stable, stableProfilePresent);
-			const bool nativeAPITarget = targetAvailable && !target.renderScaleMode;
+			const bool nativeAPITarget =
+				targetAvailable && QualificationPolicy::UsesNativeAPIEvaluation(target);
 			facts.providerReady =
 				(apiSnapshot.flags & kSnapshotProviderCheckComplete) != 0;
 			facts.profilesAgree = nativeAPITarget ?

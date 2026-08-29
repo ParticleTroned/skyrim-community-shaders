@@ -241,9 +241,13 @@ namespace
 	constexpr bool CoversNativeVendorStability()
 	{
 		if (!UsesVendorEvaluation(NativeDLAA()) ||
+			!UsesNativeAPIEvaluation(NativeDLAA()) ||
 			!UsesNativeVendorEvaluation(NativeDLAA()) ||
+			!UsesNativeAPIEvaluation(NativeFSR()) ||
 			!UsesNativeVendorEvaluation(NativeFSR()) ||
+			UsesNativeAPIEvaluation(ActiveDLSS()) ||
 			UsesNativeVendorEvaluation(ActiveDLSS()) ||
+			UsesNativeAPIEvaluation(TargetProfile{}) ||
 			UsesVendorEvaluation(TargetProfile{})) {
 			return false;
 		}
@@ -290,6 +294,8 @@ namespace
 		};
 		if (!IsValidTarget(none) || !IsValidTarget(NativeTAA()) ||
 			UsesVendorEvaluation(none) || UsesVendorEvaluation(NativeTAA()) ||
+			!UsesNativeAPIEvaluation(none) ||
+			!UsesNativeAPIEvaluation(NativeTAA()) ||
 			!MatchesTarget(taaProfile, NativeTAA()) ||
 			MatchesTarget(taaProfile, none) ||
 			IsValidTarget(TargetProfile{ .method = Method::TAA,

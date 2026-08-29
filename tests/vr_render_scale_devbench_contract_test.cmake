@@ -261,7 +261,7 @@ foreach(_required_behavior IN ITEMS
 	"QualificationPolicy::EvaluateMilestones"
 	"QualificationPolicy::IsMilestoneSatisfied"
 	"QualificationPolicy::UsesVendorEvaluation"
-	"QualificationPolicy::UsesNativeVendorEvaluation"
+	"QualificationPolicy::UsesNativeAPIEvaluation"
 	"RecordQualificationMilestones"
 	"QualificationPolicy::ExactObservationTarget"
 	"QualificationPolicy::HasCoherentPresentationFrames"

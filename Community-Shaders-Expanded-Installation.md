@@ -444,11 +444,13 @@ To deactivate it, uncheck **Keep Game Window Focused for VR Menu**. The game win
 
 The menu uses a locked, recoverable layout by default. Enable **Unlock Menu Position and Size** under **VR** in Essentials mode or under **VR > General > Menu Settings** in Advanced (Full UI) mode to customize it.
 
+The desktop toggle remains available in Skyrim VR if headset integration cannot initialize, so an OpenVR interface failure cannot leave the desktop layout locked without a recovery control.
+
 -   On the desktop, the CSX window can then be moved, resized, docked, and restored from its saved placement.
 -   In the headset, hold one controller grip to move the panel and use **Menu Scale** to resize it.
 -   The unlocked controls also restore HMD-relative or fixed-world positioning, HMD/controller presentation modes, offsets, and manual recentering.
 
-Turning the option off restores the default HMD-only layout 2.25 metres ahead at eye height without deleting the saved custom headset placement. Turning it on again restores those custom settings. The rest of the page controls wand pointing, mouse deadzone/speed, controller bindings, and the overlay presentation path. These are comfort and usability settings, not graphics-quality settings.
+Turning the option off restores the default HMD-only layout and scale 2.25 metres ahead at eye height without deleting the saved custom headset placement or scale. Turning it on again restores those custom settings. The rest of the page controls wand pointing, mouse deadzone/speed, controller bindings, and the overlay presentation path. These are comfort and usability settings, not graphics-quality settings.
 
 #### VR > Foveation
 

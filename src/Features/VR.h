@@ -413,6 +413,8 @@ public:
 	[[nodiscard]] Settings::OverlayAttachMode GetEffectiveMenuAttachMode() const;
 	/** Return the controller selected for the effective headset presentation. */
 	[[nodiscard]] ControllerDevice GetEffectiveMenuAttachController() const;
+	/** Return the locked default or saved custom headset menu scale. */
+	[[nodiscard]] float GetEffectiveMenuScale() const;
 	/** Return the locked or saved HMD-relative offset. */
 	[[nodiscard]] Vector3 GetEffectiveHMDMenuOffset() const;
 	/** Return the controller-relative offset for the effective presentation. */
@@ -586,6 +588,7 @@ public:
 		Matrix m = Matrix::Identity;
 		bool initialized = false;
 	} fixedWorldOverlayPosition;
+	OverlayWorldPosition savedUnlockedFixedWorldOverlayPosition;  ///< Custom anchor retained while the recoverable lock is active
 	bool fixedWorldOverlayReanchorRequested = true;
 
 	struct OverlayDragState

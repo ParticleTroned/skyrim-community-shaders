@@ -58,6 +58,9 @@ foreach(_required_behavior IN ITEMS
     "{ \"persisted\", false }"
     "{ \"promptRequired\", true }"
     "{ \"menuLayoutUnlocked\", vr.settings.UnlockMenuPositionAndSize }"
+    "{ \"savedUnlockedFixedWorldPositionInitialized\", vr.savedUnlockedFixedWorldOverlayPosition.initialized }"
+    "{ \"menuScale\", vr.GetEffectiveMenuScale() }"
+    "{ \"savedMenuScale\", vr.settings.VRMenuScale }"
     "globals::features::vr.SetMenuLayoutUnlocked(enabled)"
 )
     string(FIND "${_bridge}" "${_required_behavior}" _behavior_position)

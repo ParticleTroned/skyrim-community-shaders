@@ -541,6 +541,7 @@ void VR::RestoreDefaultSettings()
 
 	overlayDragState = OverlayDragState{};
 	fixedWorldOverlayPosition = OverlayWorldPosition{};
+	savedUnlockedFixedWorldOverlayPosition = OverlayWorldPosition{};
 	fixedWorldOverlayReanchorRequested = true;
 	wandState = WandIntersectionState{};
 	autoHideOverlayStartTimeSecs = 0.0;
@@ -2068,6 +2069,11 @@ void VR::DrawPerformanceSettings(bool a_advanced)
 
 namespace
 {
+	bool CanConfigureMenuLayout()
+	{
+		return REL::Module::IsVR();
+	}
+
 	void DrawKeepDesktopWindowFocusedForVRMenuSetting();
 	void DrawStabilizeRenderScaleDesktopMirrorSetting();
 	void DrawCSMenuNavigationSettings();
@@ -2080,7 +2086,7 @@ void VR::DrawEssentialSettings()
 {
 	DrawCSMenuNavigationSettings();
 
-	if (openVRInfo.isCompatible) {
+	if (CanConfigureMenuLayout()) {
 		ImGui::SeparatorText("Menu Layout");
 		DrawMenuLayoutUnlockSetting();
 	}
@@ -2373,15 +2379,19 @@ namespace
 	{
 		auto& vr = globals::features::vr;
 		auto& settings = vr.settings;
-		if (!vr.openVRInfo.isCompatible)
+		if (!CanConfigureMenuLayout())
 			return;
 		if (ImGui::CollapsingHeader("Menu Settings")) {
 			DrawMenuLayoutUnlockSetting();
+			if (!vr.openVRInfo.isCompatible) {
+				ImGui::TextDisabled("Headset controls require a compatible VR runtime; desktop layout unlocking remains available.");
+				return;
+			}
 
-			ImGui::SliderFloat("Menu Scale", &settings.VRMenuScale, VR::Config::kMinMenuScale, VR::Config::kMaxMenuScale, "%.2f");
 			if (!settings.UnlockMenuPositionAndSize) {
 				ImGui::TextWrapped("The headset menu opens 2.25 metres ahead at eye height. It remains vertical and turns to face you.");
 			} else {
+				ImGui::SliderFloat("Menu Scale", &settings.VRMenuScale, VR::Config::kMinMenuScale, VR::Config::kMaxMenuScale, "%.2f");
 				ImGui::TextWrapped("Move or resize the desktop window directly. Hold a controller grip to move the headset menu; Menu Scale controls its size.");
 				ImGui::Checkbox("Enable Controller Grip Drag", &settings.EnableDragToReposition);
 
@@ -3533,6 +3543,14 @@ ControllerDevice VR::GetEffectiveMenuAttachController() const
 	return settings.VRMenuAttachController;
 }
 
+float VR::GetEffectiveMenuScale() const
+{
+	return VRMenuPositioningPolicy::SelectEffectiveValue(
+		settings.UnlockMenuPositionAndSize,
+		settings.VRMenuScale,
+		Config::kDefaultMenuScale);
+}
+
 Vector3 VR::GetEffectiveHMDMenuOffset() const
 {
 	return VRMenuPositioningPolicy::SelectEffectiveValue(
@@ -3555,9 +3573,21 @@ void VR::SetMenuLayoutUnlocked(bool a_unlocked)
 	if (settings.UnlockMenuPositionAndSize == a_unlocked)
 		return;
 
+	const bool preserveUnlockedFixedWorldPosition =
+		settings.UnlockMenuPositionAndSize &&
+		UseFixedWorldMenuPositioning() &&
+		fixedWorldOverlayPosition.initialized;
+	if (!a_unlocked && preserveUnlockedFixedWorldPosition)
+		savedUnlockedFixedWorldOverlayPosition = fixedWorldOverlayPosition;
+
 	settings.UnlockMenuPositionAndSize = a_unlocked;
-	if (a_unlocked)
+	if (a_unlocked) {
 		settings.EnableDragToReposition = true;
+		if (UseFixedWorldMenuPositioning() && savedUnlockedFixedWorldOverlayPosition.initialized) {
+			fixedWorldOverlayPosition = savedUnlockedFixedWorldOverlayPosition;
+			fixedWorldOverlayReanchorRequested = false;
+		}
+	}
 	settings.ClampToValidRanges();
 	overlayDragState = {};
 	InvalidatePresentedMenuSurfaces();
@@ -3585,7 +3615,8 @@ void VR::UpdateVROverlayPosition()
 
 	// Texture size
 	float baseWidth = 1.0f;
-	float overlayWidth = baseWidth * settings.VRMenuScale;
+	const float menuScale = GetEffectiveMenuScale();
+	float overlayWidth = baseWidth * menuScale;
 	float hmdOverlayHeight = overlayWidth * VR::Config::kHMDOverlayAspect;
 	float controllerOverlayHeight = overlayWidth * VR::Config::kOverlayAspect;
 	const Vector3 hmdOffset = GetEffectiveHMDMenuOffset();
@@ -3611,7 +3642,7 @@ void VR::UpdateVROverlayPosition()
 
 			Util::SetOverlayInputFlags(ctx.overlay, menuOverlayHandle);
 			ctx.overlay->SetOverlayTransformTrackedDeviceRelative(menuOverlayHandle, vr::k_unTrackedDeviceIndex_Hmd, &hmdRelativeTransform);
-			ctx.overlay->SetOverlayWidthInMeters(menuOverlayHandle, baseWidth * settings.VRMenuScale);
+			ctx.overlay->SetOverlayWidthInMeters(menuOverlayHandle, baseWidth * menuScale);
 		}
 
 		if (useFixedWorldPositioning) {
@@ -3627,7 +3658,7 @@ void VR::UpdateVROverlayPosition()
 
 			Util::SetOverlayInputFlags(ctx.overlay, menuOverlayHandle);
 			ctx.overlay->SetOverlayTransformAbsolute(menuOverlayHandle, vr::TrackingUniverseStanding, &fixedTransform);
-			ctx.overlay->SetOverlayWidthInMeters(menuOverlayHandle, baseWidth * settings.VRMenuScale);
+			ctx.overlay->SetOverlayWidthInMeters(menuOverlayHandle, baseWidth * menuScale);
 		}
 	}
 
@@ -3680,7 +3711,7 @@ void VR::UpdateVROverlayControllerPosition()
 
 	// Texture size based on preset
 	float baseWidth = 1.0f;
-	float overlayWidth = baseWidth * settings.VRMenuScale;
+	float overlayWidth = baseWidth * GetEffectiveMenuScale();
 	float overlayHeight = overlayWidth * VR::Config::kOverlayAspect;
 
 	// Find the appropriate controller for the controller overlay

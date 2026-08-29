@@ -2304,6 +2304,7 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 	bool overlayDrawn = false;
 	const auto attachMode = GetEffectiveMenuAttachMode();
 	const auto attachController = GetEffectiveMenuAttachController();
+	const float menuScale = GetEffectiveMenuScale();
 	const Vector3 hmdOffset = GetEffectiveHMDMenuOffset();
 	const Vector3 controllerOffset = GetEffectiveControllerMenuOffset();
 
@@ -2363,12 +2364,12 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 		Matrix worldModelMatrix;
 		Matrix vp;
 		if (UseFixedWorldMenuPositioning()) {  // Fixed World Position
-			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(settings.VRMenuScale) * fixedWorldOverlayPosition.m;
+			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(menuScale) * fixedWorldOverlayPosition.m;
 			worldModelMatrix = modelMatrix;
 			vp = vpWorldSpace;
 		} else {  // HMD Relative
 			Matrix offset = Matrix::CreateTranslation(hmdOffset);
-			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(settings.VRMenuScale) * offset;
+			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(menuScale) * offset;
 			worldModelMatrix = modelMatrix * hmdWorld;
 			vp = vpHeadSpace;
 		}
@@ -2394,7 +2395,7 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 			if (controllerPose.bPoseIsValid) {
 				Matrix controllerWorld = Util::HmdMatrix34ToMatrix(controllerPose.mDeviceToAbsoluteTracking);
 				Matrix offset = Matrix::CreateTranslation(controllerOffset);
-				Matrix modelMatrix = VR::Config::CreateOverlayScaleMatrix(settings.VRMenuScale) * offset * controllerWorld;
+				Matrix modelMatrix = VR::Config::CreateOverlayScaleMatrix(menuScale) * offset * controllerWorld;
 
 				// Backface culling: hide overlay when viewed from behind
 				// Use the unscaled controller+offset transform for correct normal direction
@@ -2526,18 +2527,19 @@ void VR::CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* t
 	OverlayType presentedType = OverlayType::HMD;
 	const auto attachMode = GetEffectiveMenuAttachMode();
 	const auto attachController = GetEffectiveMenuAttachController();
+	const float menuScale = GetEffectiveMenuScale();
 	const Vector3 hmdOffset = GetEffectiveHMDMenuOffset();
 	const Vector3 controllerOffset = GetEffectiveControllerMenuOffset();
 	const bool showOnHMD = attachMode == AttachMode::HMDOnly || attachMode == AttachMode::Both;
 	const bool showOnController = attachMode == AttachMode::ControllerOnly;
 	if (showOnHMD) {
 		if (UseFixedWorldMenuPositioning()) {
-			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(settings.VRMenuScale) * fixedWorldOverlayPosition.m;
+			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(menuScale) * fixedWorldOverlayPosition.m;
 			worldModelMatrix = modelMatrix;
 			viewProjection = vpWorldSpace;
 		} else {
 			Matrix offset = Matrix::CreateTranslation(hmdOffset);
-			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(settings.VRMenuScale) * offset;
+			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(menuScale) * offset;
 			worldModelMatrix = modelMatrix * hmdWorld;
 			viewProjection = vpHeadSpace;
 		}
@@ -2554,7 +2556,7 @@ void VR::CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* t
 
 		Matrix controllerWorld = Util::HmdMatrix34ToMatrix(controllerPose.mDeviceToAbsoluteTracking);
 		Matrix offset = Matrix::CreateTranslation(controllerOffset);
-		modelMatrix = VR::Config::CreateOverlayScaleMatrix(settings.VRMenuScale) * offset * controllerWorld;
+		modelMatrix = VR::Config::CreateOverlayScaleMatrix(menuScale) * offset * controllerWorld;
 		worldModelMatrix = modelMatrix;
 		viewProjection = vpWorldSpace;
 	} else {

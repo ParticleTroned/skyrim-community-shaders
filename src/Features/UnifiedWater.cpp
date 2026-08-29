@@ -1232,13 +1232,19 @@ void UnifiedWater::PostPostLoad()
 	logger::info("[Unified Water] Installed hooks");
 }
 
+namespace
+{
+	// Material CRC excludes normal texture names. Keep their hash out of the live
+	// texture slots so BLEND_NORMALS retains the textures needed for scrolling.
+	thread_local uint32_t t_waterNormalTextureHash = 0;
+	thread_local bool t_hasWaterNormalTextureHash = false;
+}
+
 void UnifiedWater::TESWaterSystem_InitializeWater_SetWaterShaderMaterialParams::thunk(RE::TESWaterForm* form, RE::BSWaterShaderMaterial* material)
 {
-	// The game prefills the material and hashes its contents, it uses this hash to check if there is an existing identical material and swaps
-	// to using that material if so.
-	// Problem is it does not include all data from the form, especially normal textures which can cause problems with existing materials
-	// having their textures swapped out.
-	// This func hash the texture names and temporarily stashes them in a ptr slot, this is added to the hash in ComputeCRC and zeroed back out again
+	t_hasWaterNormalTextureHash = false;
+	t_waterNormalTextureHash = 0;
+
 	func(form, material);
 
 	uint32_t hash = 2166136261u;
@@ -1253,15 +1259,18 @@ void UnifiedWater::TESWaterSystem_InitializeWater_SetWaterShaderMaterialParams::
 	addStrToHash(form->noiseTextures[1].textureName.c_str());
 	addStrToHash(form->noiseTextures[2].textureName.c_str());
 	addStrToHash(form->noiseTextures[3].textureName.c_str());
-	uintptr_t bits = hash;
-	std::memcpy(&material->normalTexture1, &bits, sizeof(uintptr_t));
+	t_waterNormalTextureHash = hash;
+	t_hasWaterNormalTextureHash = true;
 }
 
 int32_t UnifiedWater::BSWaterShaderMaterial_ComputeCRC32::thunk(RE::BSWaterShaderMaterial* material, uint32_t srcHash)
 {
-	srcHash ^= static_cast<uint32_t>(reinterpret_cast<uint64_t>(material->normalTexture1.get())) + (srcHash << 6) + (srcHash >> 2);
-	constexpr auto zero = static_cast<uintptr_t>(0);
-	std::memcpy(&material->normalTexture1, &zero, sizeof(uintptr_t));
+	if (t_hasWaterNormalTextureHash) {
+		srcHash ^= t_waterNormalTextureHash + (srcHash << 6) + (srcHash >> 2);
+		t_hasWaterNormalTextureHash = false;
+		t_waterNormalTextureHash = 0;
+	}
+
 	return func(material, srcHash);
 }
 

@@ -44,7 +44,7 @@ namespace
 
 	float GetVRSettingsWindowAspect()
 	{
-		return globals::features::vr.settings.attachMode == VR::Settings::OverlayAttachMode::ControllerOnly ?
+		return globals::features::vr.GetEffectiveMenuAttachMode() == VR::Settings::OverlayAttachMode::ControllerOnly ?
 		           VR::Config::kOverlayAspect :
 		           VR::Config::kHMDMenuAspect;
 	}

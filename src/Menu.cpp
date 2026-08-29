@@ -3,6 +3,7 @@
 #ifndef DIRECTINPUT_VERSION
 #	define DIRECTINPUT_VERSION 0x0800
 #endif
+#include <Psapi.h>
 #include <algorithm>
 #include <cmath>
 #include <dinput.h>
@@ -15,7 +16,6 @@
 #include <imgui_stdlib.h>
 #include <iomanip>
 #include <limits>
-#include <Psapi.h>
 #include <string>
 #include <vector>
 
@@ -50,6 +50,7 @@
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/VR.h"
+#include "Features/VR/MenuPositioningPolicy.h"
 
 #pragma comment(lib, "Psapi.lib")
 
@@ -249,7 +250,7 @@ namespace
 
 	float GetVRSettingsWindowAspect()
 	{
-		switch (globals::features::vr.settings.attachMode) {
+		switch (globals::features::vr.GetEffectiveMenuAttachMode()) {
 		case VR::Settings::OverlayAttachMode::ControllerOnly:
 			return VR::Config::kOverlayAspect;
 		default:
@@ -971,6 +972,7 @@ void Menu::DrawSettings()
 		REL::Module::IsVR() &&
 		globals::features::vr.openVRInfo.isAvailable &&
 		globals::features::vr.openVRInfo.runtimeType == VRDetection::RuntimeType::SteamVR;
+	const bool vrMenuLayoutUnlocked = globals::features::vr.settings.UnlockMenuPositionAndSize;
 	if (useSteamVRWindowControls) {
 		ImGui::GetIO().ConfigDockingWithShift = false;
 	}
@@ -1003,6 +1005,7 @@ void Menu::DrawSettings()
 			constexpr float kLegacyAspectRepairTolerance = 0.25f;
 			repairSteamVRLegacyWindowSize =
 				useSteamVRWindowControls &&
+				!vrMenuLayoutUnlocked &&
 				!willBeDocked &&
 				!steamVRLegacyWindowSizeRepaired &&
 				(std::abs(windowAspect - GetVRSettingsWindowAspect()) > kLegacyAspectRepairTolerance);
@@ -1017,6 +1020,7 @@ void Menu::DrawSettings()
 	// layout instead of inheriting stale saved placement from an older layout.
 	const bool forceSteamVRFirstUndockedLayout =
 		useSteamVRWindowControls &&
+		!vrMenuLayoutUnlocked &&
 		!willBeDocked &&
 		!steamVRUndockedFirstOpenLayoutApplied;
 	if (forceSteamVRFirstUndockedLayout) {
@@ -1032,6 +1036,7 @@ void Menu::DrawSettings()
 	if (!willBeDocked) {
 		const bool useVRTopStatusWindowLayout =
 			REL::Module::IsVR() &&
+			!vrMenuLayoutUnlocked &&
 			defaultWindowLayout.constrainedByTopStatusWindow;
 		if (useVRTopStatusWindowLayout || (REL::Module::IsVR() && vrTopStatusWindowLayoutWasActive)) {
 			windowPos = defaultWindowPos;
@@ -1060,11 +1065,18 @@ void Menu::DrawSettings()
 		vrTopStatusWindowLayoutWasActive = false;
 	}
 
-	const bool lockVRMenuToCanvas = REL::Module::IsVR();
+	const bool lockVRMenuToCanvas = VRMenuPositioningPolicy::ShouldLockDesktopCanvas(
+		REL::Module::IsVR(),
+		vrMenuLayoutUnlocked);
 	if (lockVRMenuToCanvas) {
 		windowPos = defaultWindowPos;
 		windowSizeForOverlap = defaultWindowSize;
 		willBeDocked = false;
+		if (auto* existingWindow = ImGui::FindWindowByName(title.c_str());
+			existingWindow && existingWindow->DockIsActive) {
+			// A docked window must be detached before fixed canvas geometry can apply.
+			ImGui::DockContextProcessUndockWindow(ImGui::GetCurrentContext(), existingWindow);
+		}
 	}
 	const auto windowPosCond = (lockVRMenuToCanvas || autoOffsetForTopStatusWindow || restoreAfterTopStatusWindow || forceSteamVRFirstUndockedLayout) ? ImGuiCond_Always : layoutCond;
 	ImGui::SetNextWindowPos(windowPos, windowPosCond, centeredPivot);
@@ -1099,7 +1111,7 @@ void Menu::DrawSettings()
 		const bool actualDocked = ImGui::IsWindowDocked();
 		const bool isDocked = actualDocked;
 		wasDocked = actualDocked;
-		const bool showSteamVRWindowControls = useSteamVRWindowControls && !isDocked;
+		const bool showSteamVRWindowControls = useSteamVRWindowControls && vrMenuLayoutUnlocked && !isDocked;
 
 		float globalScale = settings.Theme.GlobalScale;
 
@@ -1361,7 +1373,8 @@ void Menu::OpenMenu()
 	if (globals::features::vr.IsOpenVRCompatible()) {
 		auto& vr = globals::features::vr;
 		vr.ResetMenuInputRuntimeState();
-		vr.RequestFixedWorldMenuReanchor();
+		if (VRMenuPositioningPolicy::ShouldReanchorOnOpen(vr.settings.UnlockMenuPositionAndSize))
+			vr.RequestFixedWorldMenuReanchor();
 	}
 }
 

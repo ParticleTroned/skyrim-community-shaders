@@ -58,14 +58,14 @@ namespace
 
 	PolicyHand ToPolicyHand(ControllerDevice a_controller)
 	{
-		return a_controller == ControllerDevice::Primary ? PolicyHand::Primary :
+		return a_controller == ControllerDevice::Primary   ? PolicyHand::Primary :
 		       a_controller == ControllerDevice::Secondary ? PolicyHand::Secondary :
 		                                                     PolicyHand::None;
 	}
 
 	ControllerDevice FromPolicyHand(PolicyHand a_hand)
 	{
-		return a_hand == PolicyHand::Primary ? ControllerDevice::Primary :
+		return a_hand == PolicyHand::Primary   ? ControllerDevice::Primary :
 		       a_hand == PolicyHand::Secondary ? ControllerDevice::Secondary :
 		                                         ControllerDevice::Both;
 	}
@@ -165,9 +165,9 @@ namespace
 		};
 		const auto role = system->GetControllerRoleForTrackedDeviceIndex(a_controllerIndex);
 		const std::string canonicalHandName =
-			role == vr::TrackedControllerRole_LeftHand ? "renderLeftHand" :
+			role == vr::TrackedControllerRole_LeftHand  ? "renderLeftHand" :
 			role == vr::TrackedControllerRole_RightHand ? "renderRightHand" :
-			                                                "";
+														  "";
 		std::string hardwareRenderModelName;
 		TryGetControllerRenderModelName(a_controllerIndex, hardwareRenderModelName);
 
@@ -257,23 +257,19 @@ namespace
 				if (!Util::GetDeviceToAbsoluteTrackingPoseCompatible(vr::TrackingUniverseStanding, 0, &hmdPose, 1) || !hmdPose.bPoseIsValid)
 					return false;
 				const Matrix hmdWorld = Util::HmdMatrix34ToMatrix(hmdPose.mDeviceToAbsoluteTracking);
-				const Matrix offset = Matrix::CreateTranslation(
-					a_vr.settings.VRMenuOffsetX, a_vr.settings.VRMenuOffsetY, a_vr.settings.VRMenuOffsetZ);
+				const Matrix offset = Matrix::CreateTranslation(a_vr.GetEffectiveHMDMenuOffset());
 				a_overlayWorld = offset * hmdWorld;
 			}
 		} else {
 			const vr::TrackedDeviceIndex_t attachIndex = Util::GetControllerIndexForDevice(
-				a_vr.settings.VRMenuAttachController, a_vr.lastKnownLeftHandedMode);
+				a_vr.GetEffectiveMenuAttachController(), a_vr.lastKnownLeftHandedMode);
 			if (attachIndex == vr::k_unTrackedDeviceIndexInvalid)
 				return false;
 			float attachM[3][4];
 			if (!Util::GetControllerWorldMatrix(attachIndex, attachM))
 				return false;
 			const Matrix attachWorld = Util::HmdMatrix34ToMatrix(Util::Float3x4ToHmdMatrix34(attachM));
-			const Matrix offset = Matrix::CreateTranslation(
-				a_vr.settings.VRMenuControllerOffsetX,
-				a_vr.settings.VRMenuControllerOffsetY,
-				a_vr.settings.VRMenuControllerOffsetZ);
+			const Matrix offset = Matrix::CreateTranslation(a_vr.GetEffectiveControllerMenuOffset());
 			a_overlayWorld = offset * attachWorld;
 		}
 
@@ -354,9 +350,10 @@ namespace
 			}
 		};
 
-		if (a_vr.settings.attachMode == AttachMode::HMDOnly || a_vr.settings.attachMode == AttachMode::Both)
+		const auto attachMode = a_vr.GetEffectiveMenuAttachMode();
+		if (attachMode == AttachMode::HMDOnly || attachMode == AttachMode::Both)
 			considerOverlay(VR::OverlayType::HMD);
-		if (a_vr.settings.attachMode == AttachMode::ControllerOnly || a_vr.settings.attachMode == AttachMode::Both)
+		if (attachMode == AttachMode::ControllerOnly || attachMode == AttachMode::Both)
 			considerOverlay(VR::OverlayType::Controller);
 		return intersected;
 	}
@@ -442,8 +439,9 @@ ControllerDevice VR::GetWandPointingControllerDevice() const
 {
 	if (IsIndividualController(activeWandController))
 		return activeWandController;
-	if (settings.attachMode == AttachMode::ControllerOnly || settings.attachMode == AttachMode::Both) {
-		return settings.VRMenuAttachController == ControllerDevice::Primary ?
+	const auto attachMode = GetEffectiveMenuAttachMode();
+	if (attachMode == AttachMode::ControllerOnly || attachMode == AttachMode::Both) {
+		return GetEffectiveMenuAttachController() == ControllerDevice::Primary ?
 		           ControllerDevice::Secondary :
 		           ControllerDevice::Primary;
 	}

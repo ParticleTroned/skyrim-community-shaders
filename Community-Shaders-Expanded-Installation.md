@@ -4,47 +4,45 @@ For **Skyrim VR / MGO** users setting up CSX, Wetterness, Upscaling, and VR FOV.
 
 ## Index
 
-- [Installation](#installation)
-  - [1. Download the Latest Version](#1-download-the-latest-version)
-  - [2. Install in MO2](#2-install-in-mo2)
-  - [3. Check Overwritten Files](#3-check-overwritten-files)
-  - [4. Disable Old Overwritten Features](#4-disable-old-overwritten-features)
-  - [5. SE/AE Only: Install Optional Community Shaders Features](#5-seae-only-install-optional-community-shaders-features)
-  - [6. Why Old Features Turn Red](#6-why-old-features-turn-red)
-  - [7. VR AIO Summary](#7-vr-aio-summary)
-  - [8. Update SKSE VR Address Library](#8-update-skse-vr-address-library)
-  - [9. Startup Errors](#9-startup-errors)
-  - [10. Clear Shader Cache](#10-clear-shader-cache)
-  - [11. Start Skyrim VR](#11-start-skyrim-vr)
-  - [12. Open the CSX Menu](#12-open-the-csx-menu)
-- [CSX First Setup](#csx-first-setup)
-  - [Menu Basics](#menu-basics)
-  - [Setup Upscaling](#setup-upscaling)
-  - [VR Only: Setup FOV](#vr-only-setup-fov)
-  - [Measure Performance](#measure-performance)
-  - [Optional VR Pages](#optional-vr-pages)
-    - [VR Stereo](#vr-stereo)
-    - [VR Bindings](#vr-bindings)
-  - [Recommended Visual Feature Pages](#recommended-visual-feature-pages)
-    - [Light Limit Fix / Particle Lights](#light-limit-fix-particle-lights)
-    - [Terrain Blending](#terrain-blending)
-    - [Screen Space Shadows](#screen-space-shadows)
-    - [Screen Space GI](#screen-space-gi)
-    - [Wetterness](#wetterness)
-    - [Skylighting](#skylighting)
-  - [Performance Optimization](#performance-optimization)
-  - [Complex Material / Ice Mesh Wobble](#complex-material-ice-mesh-wobble)
-- [Final Notes](#final-notes)
+-   [Installation](#installation)
+    -   [1. Download the Latest Version](#1-download-the-latest-version)
+    -   [2. Install in MO2](#2-install-in-mo2)
+    -   [3. Check Overwritten Files](#3-check-overwritten-files)
+    -   [4. Disable Old Overwritten Features](#4-disable-old-overwritten-features)
+    -   [5. SE/AE Only: Install Optional Community Shaders Features](#5-seae-only-install-optional-community-shaders-features)
+    -   [6. Why Old Features Turn Red](#6-why-old-features-turn-red)
+    -   [7. VR AIO Summary](#7-vr-aio-summary)
+    -   [8. Update SKSE VR Address Library](#8-update-skse-vr-address-library)
+    -   [9. Startup Errors](#9-startup-errors)
+    -   [10. Clear Shader Cache](#10-clear-shader-cache)
+    -   [11. Start Skyrim VR](#11-start-skyrim-vr)
+    -   [12. Open the CSX Menu](#12-open-the-csx-menu)
+-   [CSX First Setup](#csx-first-setup)
+    -   [Menu Basics](#menu-basics)
+    -   [Setup Upscaling](#setup-upscaling)
+    -   [VR Only: Setup FOV](#vr-only-setup-fov)
+    -   [Measure Performance](#measure-performance)
+    -   [Optional VR Pages](#optional-vr-pages)
+        -   [VR Stereo](#vr-stereo)
+        -   [VR Bindings](#vr-bindings)
+    -   [Recommended Visual Feature Pages](#recommended-visual-feature-pages)
+        -   [Light Limit Fix / Particle Lights](#light-limit-fix-particle-lights)
+        -   [Terrain Blending](#terrain-blending)
+        -   [Screen Space Shadows](#screen-space-shadows)
+        -   [Screen Space GI](#screen-space-gi)
+        -   [Wetterness](#wetterness)
+        -   [Skylighting](#skylighting)
+    -   [Performance Optimization](#performance-optimization)
+    -   [Complex Material / Ice Mesh Wobble](#complex-material-ice-mesh-wobble)
+-   [Final Notes](#final-notes)
 
 ---
 
 ## Installation
 
-> [!IMPORTANT]
-> **VR users:** The current **Community Shaders Expanded (CSX) VR** file is an **all-in-one** CSX package. For CSX itself, install only this AIO file. Do not download or keep separate Community Shaders feature files from Nexus under it; old feature files can overwrite newer AIO files and break shader compilation.
+> [!IMPORTANT] > **VR users:** The current **Community Shaders Expanded (CSX) VR** file is an **all-in-one** CSX package. For CSX itself, install only this AIO file. Do not download or keep separate Community Shaders feature files from Nexus under it; old feature files can overwrite newer AIO files and break shader compilation.
 
-> [!NOTE]
-> **SE/AE users:** The SE/AE CSX is **not** all-in-one. SE/AE users still need the separate Community Shaders feature downloads they want to use, matched to the correct feature versions for their Community Shaders/CSX base.
+> [!NOTE] > **SE/AE users:** The SE/AE CSX is **not** all-in-one. SE/AE users still need the separate Community Shaders feature downloads they want to use, matched to the correct feature versions for their Community Shaders/CSX base.
 
 ### 1. Download the Latest Version
 
@@ -168,9 +166,9 @@ This is why, compared to older Community Shaders 1.4.6-based setups, features su
 
 That usually means:
 
-- The feature is already included in the main CSX file.
-- The old separate feature below it would overwrite newer core files.
-- The old separate file should be disabled.
+-   The feature is already included in the main CSX file.
+-   The old separate feature below it would overwrite newer core files.
+-   The old separate file should be disabled.
 
 Disable these old separate files if they are already included in the new core package.
 
@@ -196,10 +194,10 @@ When starting Skyrim VR through MO2, you may see an error message.
 
 This usually means one of the following:
 
-- You forgot to update **SKSE VR Address Library**.
-- You also need to update **Light Placer**.
-- You also need to update **Light Placer VR**.
-- You have an incompatible DLL/mod installed.
+-   You forgot to update **SKSE VR Address Library**.
+-   You also need to update **Light Placer**.
+-   You also need to update **Light Placer VR**.
+-   You have an incompatible DLL/mod installed.
 
 Check compatibility on the CSX description page:
 https://www.nexusmods.com/skyrimspecialedition/mods/166950?tab=description
@@ -247,9 +245,9 @@ Modlists often integrate their CSX user configuration file (`SettingsUser.json`)
 
 The important point is:
 
-- Your CSX settings are saved in these MO2 configuration mods.
-- Deleting Overwrite does not normally remove your saved CSX settings in MGO.
-- You do not have to do anything special here.
+-   Your CSX settings are saved in these MO2 configuration mods.
+-   Deleting Overwrite does not normally remove your saved CSX settings in MGO.
+-   You do not have to do anything special here.
 
 ### 11. Start Skyrim VR
 
@@ -442,7 +440,15 @@ This only applies when **Attach Mode** presents the menu in VR, such as **HMD On
 
 To deactivate it, uncheck **Keep Game Window Focused for VR Menu**. The game window is then released again, so you can move it aside or use other desktop applications while the VR menu remains open. Closing the CSX menu also stops the active window forcing until the menu is opened again.
 
-The rest of the page controls the VR menu itself: controller instructions, menu scale, positioning mode, overlay path, HMD/controller offsets, wand pointing, mouse deadzone/speed, and drag repositioning. These are comfort and usability settings, not graphics-quality settings.
+#### Move and Resize the VR Menu
+
+The menu uses a locked, recoverable layout by default. Enable **Unlock Menu Position and Size** under **VR > General > Menu Settings** to customize it.
+
+-   On the desktop, the CSX window can then be moved, resized, docked, and restored from its saved placement.
+-   In the headset, hold one controller grip to move the panel and use **Menu Scale** to resize it.
+-   The unlocked controls also restore HMD-relative or fixed-world positioning, HMD/controller presentation modes, offsets, and manual recentering.
+
+Turning the option off restores the default HMD-only layout 2.25 metres ahead at eye height without deleting the saved custom headset placement. Turning it on again restores those custom settings. The rest of the page controls wand pointing, mouse deadzone/speed, controller bindings, and the overlay presentation path. These are comfort and usability settings, not graphics-quality settings.
 
 #### VR > Foveation
 
@@ -874,22 +880,22 @@ Maximum saving:
 Performance-first tuning. Uses aggressive culling, smaller FOV areas, hard cutoffs where available, lower presets/resolution, or disabling a feature if needed.
 ```
 
-| Feature | Estimated all-on cost | Moderate saving | Maximum saving | Options that save performance |
-|---|---:|---:|---:|---|
-| Shared VR FOV mask | Can save `0.8-3.5 ms` across FOV-capable features | `0.8-2.0 ms` | `1.5-3.5 ms` | **VR > Foveation**: **Foveated Upscaling (FOV)**, **FOV + Peripheral TAA**, **Upscaling FOV Area**, **Expand FOV Area R/L**, **TAA Peripheral Range**, shader/detail FOV toggles, hard cutoff variants |
-| Light Limit Fix / Particle Lights | `0.5-1.2 ms`, scene dependent | `0.2-0.4 ms` | `0.5-1.0 ms` | **Enable Culling**, **Enable Optimization**, **Cluster Threshold**, **Max Particles per Emitter**, **Max Particle Distance**, **Enable Particle Contact Shadows**, **Cached Lights per Cluster**, **Particle Budget per Cluster**, **Strict Light Budget** |
-| Terrain Blending | `0.3 ms` | `0.1 ms` | `0.2-0.3 ms` | **Terrain Depth Culling Distance**, lower **Blend Strength**, or disable **Enable Terrain Blending** if needed |
-| Screen Space Shadows | `0.4 ms` | `0.15-0.25 ms` | `0.3-0.4 ms` | **Screen Space Shadows FOV**, **Shadow Cull Distance**, **Sample Count Multiplier**, **Baseline Samples**, **Enable**, VR FPS Stabilizer **CS>SSS** weather/interior/location rules |
-| Screen Space GI, AO only | `1.0 ms` | `0.35-0.6 ms` | `0.7-1.0 ms` | Recommended VR mode: enable only AO resources. Use **SSGI FOV**, **AO Interiors Only**, **AO/IL Cull Distance**, **Adaptive Sampling**, **Half Res**, **Quarter Res**, **AO only** preset, **Enable**, VR FPS Stabilizer **CS>SSGI** rules |
-| Screen Space GI, AO + GI | `1.4-1.8 ms` | `0.5-0.9 ms` | `1.0-1.5 ms` | Not recommended as a VR default. Disable **GI/IL** resources for AO-only mode; if testing GI anyway, use **GI Interiors Only**, lower **IL radius**, lower **IL Source Brightness**, and VR FPS Stabilizer **CS>SSGI** rules |
-| Wetterness in heavy rain/storm | Up to `2.0 ms` | `0.4-0.8 ms` | `1.2-2.0 ms` | **Wetterness Preset** at **Quality** for moderate tuning, **Wetterness Dynamic Detail** in **VR > Foveation**, **Wetness Fade Range**, **Raindrop Effect Range**, **Enable Raindrop Effects**, **Enable Splashes**, **Enable Ripples**, **Puddle Radius**, **Shore Range**, lower preset or disable **Enable Wetterness** in worst cases |
-| Subsurface Scattering | `0.3-0.5 ms` | `0.1-0.2 ms` | `0.3-0.5 ms` | **Burley Samples**, **Blur Radius**, **Thickness**, **Enable Character Lighting**, lower profile strength values |
-| Grass Lighting | `0.1-0.3 ms` | `0.05-0.1 ms` | `0.1-0.2 ms` | **Detection Threshold**, complex grass glossiness/specular controls, **Wrapped Lighting for Vanilla Grass**, **Override Complex Grass Lighting Settings** if needed |
-| Skylighting | `1.5 ms` | `0.4-0.8 ms` | `1.0-1.5 ms` | **Probe Grid Quality**, **Enable Reduced Update Frequency**, **Occlusion Update Interval**, **Probe Update Interval**, **Enable Incremental Probe Updates**, **Stable Slice Count**, **Enable Fast Probe Sampling**, **Max Zenith Angle**, or disable the feature |
-| True PBR | `0.2-0.5 ms`, material dependent | `0.05-0.2 ms` | `0.2-0.5 ms` | Lower **PBR Metal Reflection** / **PBR Metal Highlight**, avoid expensive **Glint** settings, reduce displacement/coat/subsurface values, or disable if a material setup is too expensive |
-| Volumetric Lighting | `0.4-0.9 ms` | `0.2-0.4 ms` | `0.5-0.9 ms` | **Exterior Quality**, **Interior Quality**, custom **Width / Height / Depth**, **Disable Weather-Driven Volumetric Lighting During Rain**, **Enable Volumetric Lighting in Exteriors/Interiors**, VR FPS Stabilizer **CS>VLExterior** rules |
-| Cloud Shadows | `0.3 ms` | `0.1-0.2 ms` | `0.3 ms` | Disable if you need easy savings; Skyrim VR already has many imperfect shadows |
-| Estimated subtotal, AO only, heavy rain | `7.0-8.9 ms` | `2.1-4.0 ms` | `5.3-8.3 ms` | Do not add the FOV row again; some savings overlap because FOV, culling, weather state, and feature toggles interact |
+| Feature                                 |                             Estimated all-on cost | Moderate saving | Maximum saving | Options that save performance                                                                                                                                                                                                                                                                                                            |
+| --------------------------------------- | ------------------------------------------------: | --------------: | -------------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Shared VR FOV mask                      | Can save `0.8-3.5 ms` across FOV-capable features |    `0.8-2.0 ms` |   `1.5-3.5 ms` | **VR > Foveation**: **Foveated Upscaling (FOV)**, **FOV + Peripheral TAA**, **Upscaling FOV Area**, **Expand FOV Area R/L**, **TAA Peripheral Range**, shader/detail FOV toggles, hard cutoff variants                                                                                                                                   |
+| Light Limit Fix / Particle Lights       |                     `0.5-1.2 ms`, scene dependent |    `0.2-0.4 ms` |   `0.5-1.0 ms` | **Enable Culling**, **Enable Optimization**, **Cluster Threshold**, **Max Particles per Emitter**, **Max Particle Distance**, **Enable Particle Contact Shadows**, **Cached Lights per Cluster**, **Particle Budget per Cluster**, **Strict Light Budget**                                                                               |
+| Terrain Blending                        |                                          `0.3 ms` |        `0.1 ms` |   `0.2-0.3 ms` | **Terrain Depth Culling Distance**, lower **Blend Strength**, or disable **Enable Terrain Blending** if needed                                                                                                                                                                                                                           |
+| Screen Space Shadows                    |                                          `0.4 ms` |  `0.15-0.25 ms` |   `0.3-0.4 ms` | **Screen Space Shadows FOV**, **Shadow Cull Distance**, **Sample Count Multiplier**, **Baseline Samples**, **Enable**, VR FPS Stabilizer **CS>SSS** weather/interior/location rules                                                                                                                                                      |
+| Screen Space GI, AO only                |                                          `1.0 ms` |   `0.35-0.6 ms` |   `0.7-1.0 ms` | Recommended VR mode: enable only AO resources. Use **SSGI FOV**, **AO Interiors Only**, **AO/IL Cull Distance**, **Adaptive Sampling**, **Half Res**, **Quarter Res**, **AO only** preset, **Enable**, VR FPS Stabilizer **CS>SSGI** rules                                                                                               |
+| Screen Space GI, AO + GI                |                                      `1.4-1.8 ms` |    `0.5-0.9 ms` |   `1.0-1.5 ms` | Not recommended as a VR default. Disable **GI/IL** resources for AO-only mode; if testing GI anyway, use **GI Interiors Only**, lower **IL radius**, lower **IL Source Brightness**, and VR FPS Stabilizer **CS>SSGI** rules                                                                                                             |
+| Wetterness in heavy rain/storm          |                                    Up to `2.0 ms` |    `0.4-0.8 ms` |   `1.2-2.0 ms` | **Wetterness Preset** at **Quality** for moderate tuning, **Wetterness Dynamic Detail** in **VR > Foveation**, **Wetness Fade Range**, **Raindrop Effect Range**, **Enable Raindrop Effects**, **Enable Splashes**, **Enable Ripples**, **Puddle Radius**, **Shore Range**, lower preset or disable **Enable Wetterness** in worst cases |
+| Subsurface Scattering                   |                                      `0.3-0.5 ms` |    `0.1-0.2 ms` |   `0.3-0.5 ms` | **Burley Samples**, **Blur Radius**, **Thickness**, **Enable Character Lighting**, lower profile strength values                                                                                                                                                                                                                         |
+| Grass Lighting                          |                                      `0.1-0.3 ms` |   `0.05-0.1 ms` |   `0.1-0.2 ms` | **Detection Threshold**, complex grass glossiness/specular controls, **Wrapped Lighting for Vanilla Grass**, **Override Complex Grass Lighting Settings** if needed                                                                                                                                                                      |
+| Skylighting                             |                                          `1.5 ms` |    `0.4-0.8 ms` |   `1.0-1.5 ms` | **Probe Grid Quality**, **Enable Reduced Update Frequency**, **Occlusion Update Interval**, **Probe Update Interval**, **Enable Incremental Probe Updates**, **Stable Slice Count**, **Enable Fast Probe Sampling**, **Max Zenith Angle**, or disable the feature                                                                        |
+| True PBR                                |                  `0.2-0.5 ms`, material dependent |   `0.05-0.2 ms` |   `0.2-0.5 ms` | Lower **PBR Metal Reflection** / **PBR Metal Highlight**, avoid expensive **Glint** settings, reduce displacement/coat/subsurface values, or disable if a material setup is too expensive                                                                                                                                                |
+| Volumetric Lighting                     |                                      `0.4-0.9 ms` |    `0.2-0.4 ms` |   `0.5-0.9 ms` | **Exterior Quality**, **Interior Quality**, custom **Width / Height / Depth**, **Disable Weather-Driven Volumetric Lighting During Rain**, **Enable Volumetric Lighting in Exteriors/Interiors**, VR FPS Stabilizer **CS>VLExterior** rules                                                                                              |
+| Cloud Shadows                           |                                          `0.3 ms` |    `0.1-0.2 ms` |       `0.3 ms` | Disable if you need easy savings; Skyrim VR already has many imperfect shadows                                                                                                                                                                                                                                                           |
+| Estimated subtotal, AO only, heavy rain |                                      `7.0-8.9 ms` |    `2.1-4.0 ms` |   `5.3-8.3 ms` | Do not add the FOV row again; some savings overlap because FOV, culling, weather state, and feature toggles interact                                                                                                                                                                                                                     |
 
 The table values are roughly additive only as a first approximation. Some savings overlap because several features reuse the same FOV mask or are active only in certain weather/cell conditions. For example, Wetterness matters most in rain, Skylighting matters when enabled outdoors, and Particle Lights depend heavily on the number of active fire/magic/particle effects.
 
@@ -922,12 +928,12 @@ This was needed in MGO 3.66. I am not sure if it is still required in MGO 3.88.
 
 Before playing, confirm:
 
-- Make sure old overwritten Community Shaders feature mods are disabled.
-- Make sure SKSE VR Address Library is updated.
-- Update Light Placer and Light Placer VR only if required.
-- Clear the shader cache.
-- Start Skyrim VR through MO2.
-- Let shader compilation finish fully before loading into the game.
-- Press **END** to adjust CSX settings in game.
+-   Make sure old overwritten Community Shaders feature mods are disabled.
+-   Make sure SKSE VR Address Library is updated.
+-   Update Light Placer and Light Placer VR only if required.
+-   Clear the shader cache.
+-   Start Skyrim VR through MO2.
+-   Let shader compilation finish fully before loading into the game.
+-   Press **END** to adjust CSX settings in game.
 
 Once everything is compiled and configured, you are ready to play.

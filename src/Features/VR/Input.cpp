@@ -556,6 +556,8 @@ void VR::ResetMenuInputRuntimeState()
 
 void VR::ProcessControllerInputForWandPointingPath(bool testMode, float mouseDeadzone, ImGuiIO& io)
 {
+	const auto attachMode = GetEffectiveMenuAttachMode();
+	const auto attachController = GetEffectiveMenuAttachController();
 	const ImVec2 desktopBaselineMousePos = io.MousePos;
 	const bool desktopCursorUsable = HasUsableCursorPos(desktopBaselineMousePos);
 	bool desktopMouseMoved = false;
@@ -658,13 +660,13 @@ void VR::ProcessControllerInputForWandPointingPath(bool testMode, float mouseDea
 			ProcessThumbstickScroll(primaryControllerState, static_cast<size_t>(RE::ControllerRole::Primary), mouseDeadzone, io);
 			ProcessThumbstickScroll(secondaryControllerState, static_cast<size_t>(RE::ControllerRole::Secondary), mouseDeadzone, io);
 		} else if (!isDragging && thumbstickScrollActive) {
-			bool useAttachedControllerForCursor = (settings.attachMode == VR::Settings::OverlayAttachMode::ControllerOnly ||
-												   settings.attachMode == VR::Settings::OverlayAttachMode::Both);
+			bool useAttachedControllerForCursor = (attachMode == VR::Settings::OverlayAttachMode::ControllerOnly ||
+												   attachMode == VR::Settings::OverlayAttachMode::Both);
 
 			RE::VRControllerState* scrollController = nullptr;
 
 			if (useAttachedControllerForCursor) {
-				if (settings.VRMenuAttachController == ControllerDevice::Primary) {
+				if (attachController == ControllerDevice::Primary) {
 					scrollController = &secondaryControllerState;
 				} else {
 					scrollController = &primaryControllerState;
@@ -691,7 +693,7 @@ void VR::ProcessControllerInputForWandPointingPath(bool testMode, float mouseDea
 		io.WantSetMousePos = true;
 		customVRCursorVisible = true;
 		customVRCursorPos = desktopCursorPos;
-		customVRCursorOverlayType = settings.attachMode == AttachMode::ControllerOnly ? OverlayType::Controller : OverlayType::HMD;
+		customVRCursorOverlayType = attachMode == AttachMode::ControllerOnly ? OverlayType::Controller : OverlayType::HMD;
 	} else if (wandState.isIntersecting && gHasLastControllerCursorPos && gCursorOwner == CursorOwner::Wand) {
 		io.MousePos = gLastControllerCursorPos;
 		io.AddMousePosEvent(gLastControllerCursorPos.x, gLastControllerCursorPos.y);
@@ -704,6 +706,8 @@ void VR::ProcessControllerInputForWandPointingPath(bool testMode, float mouseDea
 
 void VR::ProcessControllerInputForMouseNavigationPath(bool testMode, float mouseDeadzone, float mouseSpeed, ImGuiIO& io)
 {
+	const auto attachMode = GetEffectiveMenuAttachMode();
+	const auto attachController = GetEffectiveMenuAttachController();
 	wandState.isIntersecting = false;
 	wandState.isActivelyDrivingCursor = false;
 	gLastControllerCursorPos = ImVec2(0.0f, 0.0f);
@@ -758,14 +762,14 @@ void VR::ProcessControllerInputForMouseNavigationPath(bool testMode, float mouse
 	}
 
 	if (!testMode && !overlayDragState.dragging) {
-		bool useAttachedControllerForCursor = (settings.attachMode == VR::Settings::OverlayAttachMode::ControllerOnly ||
-											   settings.attachMode == VR::Settings::OverlayAttachMode::Both);
+		bool useAttachedControllerForCursor = (attachMode == VR::Settings::OverlayAttachMode::ControllerOnly ||
+											   attachMode == VR::Settings::OverlayAttachMode::Both);
 
 		RE::VRControllerState* cursorController = nullptr;
 		RE::VRControllerState* scrollController = nullptr;
 
 		if (useAttachedControllerForCursor) {
-			if (settings.VRMenuAttachController == ControllerDevice::Primary) {
+			if (attachController == ControllerDevice::Primary) {
 				cursorController = &primaryControllerState;
 				scrollController = &secondaryControllerState;
 			} else {
@@ -809,7 +813,7 @@ void VR::ProcessControllerInputForMouseNavigationPath(bool testMode, float mouse
 		gHasMouseNavigationCursorPos = true;
 		customVRCursorVisible = true;
 		customVRCursorPos = mouseCursorPos;
-		customVRCursorOverlayType = settings.attachMode == AttachMode::ControllerOnly ? OverlayType::Controller : OverlayType::HMD;
+		customVRCursorOverlayType = attachMode == AttachMode::ControllerOnly ? OverlayType::Controller : OverlayType::HMD;
 	}
 }
 

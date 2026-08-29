@@ -23,6 +23,7 @@ string(JSON _action_count LENGTH
     "${_descriptor}" inputSchema properties action enum
 )
 set(_prepare_coc_found FALSE)
+set(_set_layout_unlocked_found FALSE)
 math(EXPR _action_last "${_action_count} - 1")
 foreach(_index RANGE 0 ${_action_last})
     string(JSON _action GET
@@ -31,9 +32,15 @@ foreach(_index RANGE 0 ${_action_last})
     if(_action STREQUAL "prepare_coc")
         set(_prepare_coc_found TRUE)
     endif()
+    if(_action STREQUAL "set_layout_unlocked")
+        set(_set_layout_unlocked_found TRUE)
+    endif()
 endforeach()
 if(NOT _prepare_coc_found)
     message(FATAL_ERROR "Menu DevBench schema is missing prepare_coc")
+endif()
+if(NOT _set_layout_unlocked_found)
+    message(FATAL_ERROR "Menu DevBench schema is missing set_layout_unlocked")
 endif()
 
 foreach(_required_behavior IN ITEMS
@@ -50,6 +57,8 @@ foreach(_required_behavior IN ITEMS
     "kPeripheryTAAOuterScale"
     "{ \"persisted\", false }"
     "{ \"promptRequired\", true }"
+    "{ \"menuLayoutUnlocked\", vr.settings.UnlockMenuPositionAndSize }"
+    "globals::features::vr.SetMenuLayoutUnlocked(enabled)"
 )
     string(FIND "${_bridge}" "${_required_behavior}" _behavior_position)
     if(_behavior_position EQUAL -1)

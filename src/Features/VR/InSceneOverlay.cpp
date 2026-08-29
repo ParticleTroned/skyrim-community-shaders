@@ -125,7 +125,7 @@ namespace
 		return vr.ShouldUseInSceneOverlay() &&
 		       vr.ShouldPresentOverlayInHeadset() &&
 		       vr.menuTexture &&
-		       vr.settings.attachMode != AttachMode::None;
+		       vr.GetEffectiveMenuAttachMode() != AttachMode::None;
 	}
 
 	bool MatchesSubmitCopyDesc(const D3D11_TEXTURE2D_DESC& lhs, const D3D11_TEXTURE2D_DESC& rhs)
@@ -368,8 +368,8 @@ namespace
 				return false;
 
 			const uint64_t currentGeneration = globals::state ?
-				globals::state->GetRenderTargetResourcePublicationGeneration() :
-				0u;
+			                                       globals::state->GetRenderTargetResourcePublicationGeneration() :
+			                                       0u;
 			return OpenVRSubmitLeasePolicy::CanPublish(
 				publicationLease,
 				currentGeneration,
@@ -474,8 +474,8 @@ namespace
 		}
 
 		const uint64_t publicationGeneration = globals::state ?
-			globals::state->GetCompletedRenderTargetResourcePublicationGeneration() :
-			0u;
+		                                           globals::state->GetCompletedRenderTargetResourcePublicationGeneration() :
+		                                           0u;
 		packet.publicationLease = {
 			.generation = publicationGeneration,
 			.deviceIdentity = reinterpret_cast<std::uintptr_t>(
@@ -1204,8 +1204,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						&presentationObservation :
 						nullptr,
 					nullptr,
-							nativeRestoreCycle.postLoadKeepaliveToken == 0,
-							nativeRestoreCycle.path == VRNativeRestoreCyclePresentationPath::Native);
+					nativeRestoreCycle.postLoadKeepaliveToken == 0,
+					nativeRestoreCycle.path == VRNativeRestoreCyclePresentationPath::Native);
 				const bool currentSubmitSuccess =
 					isCurrentSubmitSuccess(result);
 				if (currentSubmitSuccess &&
@@ -2302,6 +2302,10 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 	}
 
 	bool overlayDrawn = false;
+	const auto attachMode = GetEffectiveMenuAttachMode();
+	const auto attachController = GetEffectiveMenuAttachController();
+	const Vector3 hmdOffset = GetEffectiveHMDMenuOffset();
+	const Vector3 controllerOffset = GetEffectiveControllerMenuOffset();
 
 	// Helper to draw the overlay quad with a given WVP matrix
 	auto drawOverlayQuad = [&](ID3D11DeviceContext* ctx,
@@ -2352,7 +2356,7 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 	};
 
 	// --- Render HMD Overlay ---
-	if ((settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both) && menuTexture) {
+	if ((attachMode == AttachMode::HMDOnly || attachMode == AttachMode::Both) && menuTexture) {
 		InSceneCB cbData;
 
 		Matrix modelMatrix;
@@ -2363,7 +2367,7 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 			worldModelMatrix = modelMatrix;
 			vp = vpWorldSpace;
 		} else {  // HMD Relative
-			Matrix offset = Matrix::CreateTranslation(settings.VRMenuOffsetX, settings.VRMenuOffsetY, settings.VRMenuOffsetZ);
+			Matrix offset = Matrix::CreateTranslation(hmdOffset);
 			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(settings.VRMenuScale) * offset;
 			worldModelMatrix = modelMatrix * hmdWorld;
 			vp = vpHeadSpace;
@@ -2371,25 +2375,25 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 		cbData.wvp = (modelMatrix * vp).Transpose();
 
 		const bool hmdOverlayDrawn = drawOverlayQuad(
-						   context,
-						   cbData,
-						   menuTexture.get(),
-						   inSceneResources.menuSRV,
-						   inSceneResources.cachedMenuTexture,
-						   "HMD");
+			context,
+			cbData,
+			menuTexture.get(),
+			inSceneResources.menuSRV,
+			inSceneResources.cachedMenuTexture,
+			"HMD");
 		if (hmdOverlayDrawn)
 			PublishPresentedMenuSurface(OverlayType::HMD, worldModelMatrix);
 		overlayDrawn = hmdOverlayDrawn || overlayDrawn;
 	}
 
 	// --- Render Controller Overlay ---
-	if ((settings.attachMode == AttachMode::ControllerOnly || settings.attachMode == AttachMode::Both) && (menuControllerTexture || menuTexture)) {
-		vr::TrackedDeviceIndex_t attachIndex = Util::GetControllerIndexForDevice(settings.VRMenuAttachController, lastKnownLeftHandedMode);
+	if ((attachMode == AttachMode::ControllerOnly || attachMode == AttachMode::Both) && (menuControllerTexture || menuTexture)) {
+		vr::TrackedDeviceIndex_t attachIndex = Util::GetControllerIndexForDevice(attachController, lastKnownLeftHandedMode);
 		if (attachIndex != vr::k_unTrackedDeviceIndexInvalid && attachIndex < vr::k_unMaxTrackedDeviceCount) {
 			const vr::TrackedDevicePose_t& controllerPose = inSceneResources.cachedRenderPoses[attachIndex];
 			if (controllerPose.bPoseIsValid) {
 				Matrix controllerWorld = Util::HmdMatrix34ToMatrix(controllerPose.mDeviceToAbsoluteTracking);
-				Matrix offset = Matrix::CreateTranslation(settings.VRMenuControllerOffsetX, settings.VRMenuControllerOffsetY, settings.VRMenuControllerOffsetZ);
+				Matrix offset = Matrix::CreateTranslation(controllerOffset);
 				Matrix modelMatrix = VR::Config::CreateOverlayScaleMatrix(settings.VRMenuScale) * offset * controllerWorld;
 
 				// Backface culling: hide overlay when viewed from behind
@@ -2411,20 +2415,20 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 					bool controllerOverlayDrawn = false;
 					if (menuControllerTexture) {
 						controllerOverlayDrawn = drawOverlayQuad(
-										   context,
-										   cbData,
-										   menuControllerTexture.get(),
-										   inSceneResources.menuControllerSRV,
-										   inSceneResources.cachedMenuControllerTexture,
-										   "controller");
+							context,
+							cbData,
+							menuControllerTexture.get(),
+							inSceneResources.menuControllerSRV,
+							inSceneResources.cachedMenuControllerTexture,
+							"controller");
 					} else {
 						controllerOverlayDrawn = drawOverlayQuad(
-										   context,
-										   cbData,
-										   menuTexture.get(),
-										   inSceneResources.menuSRV,
-										   inSceneResources.cachedMenuTexture,
-										   "HMD");
+							context,
+							cbData,
+							menuTexture.get(),
+							inSceneResources.menuSRV,
+							inSceneResources.cachedMenuTexture,
+							"HMD");
 					}
 					if (controllerOverlayDrawn)
 						PublishPresentedMenuSurface(OverlayType::Controller, modelMatrix);
@@ -2520,22 +2524,26 @@ void VR::CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* t
 	Matrix worldModelMatrix = Matrix::Identity;
 	Matrix viewProjection = vpHeadSpace;
 	OverlayType presentedType = OverlayType::HMD;
-	const bool showOnHMD = settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both;
-	const bool showOnController = settings.attachMode == AttachMode::ControllerOnly;
+	const auto attachMode = GetEffectiveMenuAttachMode();
+	const auto attachController = GetEffectiveMenuAttachController();
+	const Vector3 hmdOffset = GetEffectiveHMDMenuOffset();
+	const Vector3 controllerOffset = GetEffectiveControllerMenuOffset();
+	const bool showOnHMD = attachMode == AttachMode::HMDOnly || attachMode == AttachMode::Both;
+	const bool showOnController = attachMode == AttachMode::ControllerOnly;
 	if (showOnHMD) {
 		if (UseFixedWorldMenuPositioning()) {
 			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(settings.VRMenuScale) * fixedWorldOverlayPosition.m;
 			worldModelMatrix = modelMatrix;
 			viewProjection = vpWorldSpace;
 		} else {
-			Matrix offset = Matrix::CreateTranslation(settings.VRMenuOffsetX, settings.VRMenuOffsetY, settings.VRMenuOffsetZ);
+			Matrix offset = Matrix::CreateTranslation(hmdOffset);
 			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(settings.VRMenuScale) * offset;
 			worldModelMatrix = modelMatrix * hmdWorld;
 			viewProjection = vpHeadSpace;
 		}
 	} else if (showOnController) {
 		presentedType = OverlayType::Controller;
-		vr::TrackedDeviceIndex_t attachIndex = Util::GetControllerIndexForDevice(settings.VRMenuAttachController, lastKnownLeftHandedMode);
+		vr::TrackedDeviceIndex_t attachIndex = Util::GetControllerIndexForDevice(attachController, lastKnownLeftHandedMode);
 		if (attachIndex == vr::k_unTrackedDeviceIndexInvalid || attachIndex >= vr::k_unMaxTrackedDeviceCount) {
 			return;
 		}
@@ -2545,7 +2553,7 @@ void VR::CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* t
 		}
 
 		Matrix controllerWorld = Util::HmdMatrix34ToMatrix(controllerPose.mDeviceToAbsoluteTracking);
-		Matrix offset = Matrix::CreateTranslation(settings.VRMenuControllerOffsetX, settings.VRMenuControllerOffsetY, settings.VRMenuControllerOffsetZ);
+		Matrix offset = Matrix::CreateTranslation(controllerOffset);
 		modelMatrix = VR::Config::CreateOverlayScaleMatrix(settings.VRMenuScale) * offset * controllerWorld;
 		worldModelMatrix = modelMatrix;
 		viewProjection = vpWorldSpace;

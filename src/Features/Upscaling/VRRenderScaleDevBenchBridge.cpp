@@ -49,7 +49,7 @@ namespace
 	static_assert(kDLSSDevBenchTraceDefaultReadLimit <= Streamline::kDLSSDevBenchTraceCapacity);
 	constexpr uint64_t kQualificationMaximumTimeoutMs = 120'000;
 	constexpr double kQualificationFoveationFloatTolerance = 0.0001;
-	constexpr unsigned int kDevBenchToolExtensionRevision = 9;
+	constexpr unsigned int kDevBenchToolExtensionRevision = 10;
 	std::atomic_bool g_registered{ false };
 	std::atomic_uint64_t g_nextDiagnosticTrimEpoch{ 1ull << 63 };
 
@@ -300,6 +300,193 @@ namespace
 			{ "overwrittenEvents", telemetry.overwrittenEvents },
 			{ "coalescedEvents", telemetry.coalescedEvents },
 			{ "events", std::move(events) },
+		};
+	}
+
+	bool IsReplacementAdmissionBlocked(
+		Upscaling::VRRenderScalePreparationOutcome a_outcome)
+	{
+		using Outcome = Upscaling::VRRenderScalePreparationOutcome;
+		switch (a_outcome) {
+		case Outcome::Observed:
+		case Outcome::Eligible:
+		case Outcome::Ready:
+		case Outcome::NotNeeded:
+			return false;
+		case Outcome::Busy:
+		case Outcome::Failed:
+		case Outcome::Superseded:
+		case Outcome::DeviceChanged:
+		case Outcome::Cancelled:
+		case Outcome::ProtectedFallback:
+			return true;
+		default:
+			return true;
+		}
+	}
+
+	bool VendorLifecycleMutationStarted(
+		const Upscaling::VRVendorRuntimeLifecycleSnapshot& a_lifecycle,
+		uint64_t a_transitionEpoch)
+	{
+		using Phase = Upscaling::VRVendorRuntimeLifecyclePhase;
+		if (a_transitionEpoch == 0 ||
+			a_lifecycle.transitionEpoch != a_transitionEpoch) {
+			return false;
+		}
+		return a_lifecycle.phase == Phase::Dirty ||
+		       a_lifecycle.phase == Phase::WaitingForDrain ||
+		       a_lifecycle.phase == Phase::Destroying ||
+		       a_lifecycle.phase == Phase::Creating ||
+		       a_lifecycle.phase == Phase::Inactive ||
+		       a_lifecycle.phase == Phase::Failed;
+	}
+
+	json ReplacementPresentationEvidenceJson(
+		Upscaling& a_upscaling,
+		const Upscaling::VRRenderScaleTransitionSnapshot& a_controller,
+		uint64_t a_physicalMutationEpoch,
+		uint64_t a_physicalSerializationEpoch)
+	{
+		const auto replacement = [&]() -> const Upscaling::VRRenderScaleProfileSnapshot* {
+			for (const auto* profile : {
+					std::addressof(a_controller.requested),
+					std::addressof(a_controller.applying) }) {
+				if (profile->valid &&
+					profile->transitionEpoch == a_controller.targetEpoch) {
+					return profile;
+				}
+			}
+			return nullptr;
+		}();
+		const uint64_t replacementRequestID = replacement ? replacement->requestID : 0;
+		const uint64_t replacementTransitionEpoch =
+			replacement ? replacement->transitionEpoch : a_controller.targetEpoch;
+		const auto admission =
+			a_upscaling.GetVRRenderScalePreparationAdmissionSnapshot(
+				replacementRequestID,
+				replacementTransitionEpoch);
+		const bool admissionBlocked =
+			admission.observed && IsReplacementAdmissionBlocked(admission.outcome);
+
+		const auto& left = a_controller.presentation.eyes[0];
+		const auto& right = a_controller.presentation.eyes[1];
+		const bool acceptedPath =
+			left.path == Upscaling::VRRenderScalePresentationPath::VendorEvaluated ||
+			left.path == Upscaling::VRRenderScalePresentationPath::NativeOriginal ||
+			left.path == Upscaling::VRRenderScalePresentationPath::ValidatedPresentationHold;
+		const bool currentPresentationProven =
+			a_controller.applied.valid && left.valid && right.valid &&
+			acceptedPath && left.path == right.path &&
+			left.frame == right.frame &&
+			left.compositorCycleToken != 0 &&
+			left.compositorCycleToken == right.compositorCycleToken &&
+			left.transitionEpoch == a_controller.applied.transitionEpoch &&
+			right.transitionEpoch == a_controller.applied.transitionEpoch &&
+			left.contractGeneration == a_controller.applied.contractGeneration &&
+			right.contractGeneration == a_controller.applied.contractGeneration &&
+			left.method == a_controller.applied.method &&
+			right.method == a_controller.applied.method &&
+			left.deviceIdentity != 0 &&
+			left.deviceIdentity == right.deviceIdentity &&
+			left.resourceRevision != 0 &&
+			left.resourceRevision == right.resourceRevision &&
+			!left.loadingOrMenuContext && !right.loadingOrMenuContext &&
+			!left.transitionCooldown && !right.transitionCooldown;
+		const auto* currentProviderLifecycle =
+			a_controller.applied.method == Upscaling::UpscaleMethod::kDLSS ?
+				std::addressof(a_controller.dlssLifecycle) :
+			a_controller.applied.method == Upscaling::UpscaleMethod::kFSR ?
+				std::addressof(a_controller.fsrLifecycle) :
+				nullptr;
+		const bool providerLifecycleMutation =
+			currentProviderLifecycle &&
+			VendorLifecycleMutationStarted(
+				*currentProviderLifecycle,
+				replacementTransitionEpoch);
+		const bool creatorEntered =
+			a_physicalMutationEpoch != 0 ||
+			a_physicalSerializationEpoch != 0 ||
+			a_controller.physicalPhase ==
+				Upscaling::VRRenderScalePhysicalPhase::CreatorEntered ||
+			a_controller.physicalPhase ==
+				Upscaling::VRRenderScalePhysicalPhase::TableChanged ||
+			a_controller.physicalPhase ==
+				Upscaling::VRRenderScalePhysicalPhase::Reconciled ||
+			a_controller.physicalPhase ==
+				Upscaling::VRRenderScalePhysicalPhase::ContractPublished;
+		const bool physicalMutationStarted =
+			providerLifecycleMutation || creatorEntered;
+		const bool commonPath = left.valid && right.valid && left.path == right.path;
+		const char* selectedDisposition =
+			commonPath ?
+				Upscaling::GetVRRenderScalePresentationPathName(left.path) :
+			left.valid || right.valid ?
+				"mixed" :
+				"none";
+		const uint32_t providerResourceGeneration =
+			left.method == Upscaling::UpscaleMethod::kDLSS ?
+				a_controller.dlssLifecycle.runtimeGeneration :
+			left.method == Upscaling::UpscaleMethod::kFSR ?
+				a_controller.fsrLifecycle.runtimeGeneration :
+				0;
+		const auto eyeJson = [](const Upscaling::VRRenderScalePresentationEyeSnapshot& a_eye) {
+			return json{
+				{ "valid", a_eye.valid },
+				{ "path", Upscaling::GetVRRenderScalePresentationPathName(a_eye.path) },
+				{ "frame", a_eye.frame },
+				{ "generation", a_eye.contractGeneration },
+				{ "deviceIdentity", static_cast<uint64_t>(a_eye.deviceIdentity) },
+				{ "resourceRevision", a_eye.resourceRevision },
+			};
+		};
+
+		return {
+			{ "currentPresentationProven", currentPresentationProven },
+			{ "currentPresentationGeneration",
+				currentPresentationProven ? json(left.contractGeneration) : json(nullptr) },
+			{ "currentPresentationDeviceIdentity",
+				currentPresentationProven ?
+					json(static_cast<uint64_t>(left.deviceIdentity)) :
+					json(nullptr) },
+			{ "currentPresentationResourceRevision",
+				currentPresentationProven ? json(left.resourceRevision) : json(nullptr) },
+			{ "currentPresentationProviderGeneration",
+				currentPresentationProven ? json(providerResourceGeneration) : json(nullptr) },
+			{ "replacementRequestId", replacementRequestID },
+			{ "replacementTransitionEpoch", replacementTransitionEpoch },
+			{ "replacementAdmissionObserved", admission.observed },
+			{ "replacementAdmissionBlocked", admissionBlocked },
+			{ "replacementAdmissionSequence",
+				admission.observed ? json(admission.sequence) : json(nullptr) },
+			{ "replacementAdmissionFrame",
+				admission.observed ? json(admission.frame) : json(nullptr) },
+			{ "replacementAdmissionOutcome",
+				admission.observed ?
+					json(GetPreparationOutcomeName(admission.outcome)) :
+					json("not_observed") },
+			{ "replacementAdmissionBlockReasonMask", admission.reasonMask },
+			{ "replacementAdmissionBlockReasons",
+				PreparationReasonNames(admission.reasonMask) },
+			{ "physicalMutationStarted", physicalMutationStarted },
+			{ "physicalMutationSource",
+				providerLifecycleMutation ?
+					"provider_lifecycle" :
+				creatorEntered ?
+					"engine_target_creator" :
+					"none" },
+			{ "physicalMutationEpoch", a_physicalMutationEpoch },
+			{ "physicalSerializationEpoch", a_physicalSerializationEpoch },
+			{ "engineTargetCreatorEntered", creatorEntered },
+			{ "selectedPresentationDisposition", selectedDisposition },
+			{ "completedOutputReuse",
+				commonPath && left.path ==
+					Upscaling::VRRenderScalePresentationPath::ValidatedPresentationHold },
+			{ "completedOutputOwnershipProven",
+				currentPresentationProven && left.path ==
+					Upscaling::VRRenderScalePresentationPath::ValidatedPresentationHold },
+			{ "leftEye", eyeJson(left) },
+			{ "rightEye", eyeJson(right) },
 		};
 	}
 
@@ -1343,6 +1530,10 @@ namespace
 		QualificationPolicy::FirstObservation presentationStable{};
 		QualificationPolicy::FirstObservation cleanupDrained{};
 		QualificationPolicy::FirstObservation strictSatisfied{};
+		json dispatchPresentationEvidence = nullptr;
+		json lastPreMutationEvidence = nullptr;
+		json blockedPreMutationEvidence = nullptr;
+		json firstPhysicalMutationEvidence = nullptr;
 		bool waitInProgress = false;
 		QualificationBaseline baseline{};
 		std::shared_ptr<std::atomic_bool> cancelled =
@@ -2318,6 +2509,12 @@ namespace
 					{ "strictSatisfied", QualificationFirstObservationJson(
 											 store.active->strictSatisfied) },
 				};
+				output["replacementTimeline"] = {
+					{ "dispatch", store.active->dispatchPresentationEvidence },
+					{ "lastPreMutation", store.active->lastPreMutationEvidence },
+					{ "blockedPreMutation", store.active->blockedPreMutationEvidence },
+					{ "firstPhysicalMutation", store.active->firstPhysicalMutationEvidence },
+				};
 			}
 		}
 		return output;
@@ -2411,6 +2608,50 @@ namespace
 				a_tick,
 				a_frame,
 				a_value.strictSatisfied);
+		};
+		record(a_transition);
+
+		auto& store = GetQualificationStore();
+		std::lock_guard lock(store.mutex);
+		if (store.active &&
+			QualificationPolicy::OwnsTransitionInstance(
+				store.active->transitionID,
+				store.active->ownershipToken,
+				a_transition.transitionID,
+				a_transition.ownershipToken)) {
+			record(*store.active);
+		}
+	}
+
+	void RecordQualificationReplacementTimeline(
+		QualificationTransition& a_transition,
+		const json& a_observation)
+	{
+		if (!a_observation.is_object() ||
+			!a_observation.contains("replacementPresentation") ||
+			!a_observation["replacementPresentation"].is_object()) {
+			return;
+		}
+		json evidence = a_observation["replacementPresentation"];
+		evidence["tick"] = a_observation.value("tick", 0ull);
+		evidence["frame"] = a_observation.value("frame", 0u);
+		const bool mutationStarted =
+			evidence.value("physicalMutationStarted", false);
+		const bool hasReplacement =
+			evidence.value("replacementRequestId", 0ull) != 0 &&
+			evidence.value("replacementTransitionEpoch", 0ull) != 0;
+
+		const auto record = [&](QualificationTransition& a_value) {
+			if (!mutationStarted && hasReplacement) {
+				a_value.lastPreMutationEvidence = evidence;
+				if (evidence.value("replacementAdmissionBlocked", false) &&
+					a_value.blockedPreMutationEvidence.is_null()) {
+					a_value.blockedPreMutationEvidence = evidence;
+				}
+			} else if (mutationStarted &&
+				a_value.firstPhysicalMutationEvidence.is_null()) {
+				a_value.firstPhysicalMutationEvidence = evidence;
+			}
 		};
 		record(a_transition);
 
@@ -3041,6 +3282,12 @@ namespace
 			upscaling.vrRenderScalePostMutationSerializationEpoch.load(std::memory_order_acquire);
 		const bool emergencyRecoveryRequested =
 			upscaling.vrRenderScaleEmergencyRecoveryRequested.load(std::memory_order_acquire);
+		const auto replacementPresentationEvidence =
+			ReplacementPresentationEvidenceJson(
+				upscaling,
+				controller,
+				physicalMutationEpoch,
+				physicalSerializationEpoch);
 		const auto diagnostics =
 			CaptureQualificationDiagnostics(upscaling, controller, session);
 		const auto delta = QualificationDiagnosticsDelta(
@@ -3434,6 +3681,10 @@ namespace
 													{ "rightPath", Upscaling::GetVRRenderScalePresentationPathName(controller.presentation.eyes[1].path) },
 													{ "leftFrame", controller.presentation.eyes[0].frame },
 													{ "rightFrame", controller.presentation.eyes[1].frame },
+													{ "leftDeviceIdentity", static_cast<uint64_t>(controller.presentation.eyes[0].deviceIdentity) },
+													{ "rightDeviceIdentity", static_cast<uint64_t>(controller.presentation.eyes[1].deviceIdentity) },
+													{ "leftResourceRevision", controller.presentation.eyes[0].resourceRevision },
+													{ "rightResourceRevision", controller.presentation.eyes[1].resourceRevision },
 												} },
 							  { "dlssLifecycle", LifecycleJson(controller.dlssLifecycle) },
 							  { "fsrLifecycle", LifecycleJson(controller.fsrLifecycle) },
@@ -3442,6 +3693,7 @@ namespace
 										 controller,
 										 targetAvailable ? &target : nullptr,
 										 a_transition.dispatchFrame) },
+			{ "replacementPresentation", replacementPresentationEvidence },
 			{ "foveation", ObservedFoveationJson(upscaling, controller.stable) },
 			{ "cleanupDebt", QualificationCleanupDebtJson(controller, gate, physicalMutationEpoch, physicalSerializationEpoch, emergencyRecoveryRequested, shaderCompilationActive) },
 			{ "diagnostics", {
@@ -3627,6 +3879,50 @@ namespace
 						   a_value.frame)) :
 			           json(nullptr);
 		};
+		const auto milestoneJson = [&](const QualificationPolicy::FirstObservation& a_value) {
+			return json{
+				{ "observed", a_value.Observed() },
+				{ "tick", a_value.Observed() ? json(a_value.tick) : json(nullptr) },
+				{ "frame", a_value.Observed() ? json(a_value.frame) : json(nullptr) },
+				{ "elapsedMs", elapsedMilliseconds(a_value) },
+				{ "elapsedFrames", elapsedFrames(a_value) },
+			};
+		};
+		const bool presentationAndCleanupObserved =
+			a_transition.presentationStable.Observed() &&
+			a_transition.cleanupDrained.Observed();
+		const auto presentationToCleanupMilliseconds = [&]() -> json {
+			if (!presentationAndCleanupObserved ||
+				a_transition.baseline.tickFrequency == 0) {
+				return nullptr;
+			}
+			const auto& presentation = a_transition.presentationStable;
+			const auto& cleanup = a_transition.cleanupDrained;
+			const long double ticks = cleanup.tick >= presentation.tick ?
+				static_cast<long double>(cleanup.tick - presentation.tick) :
+				-static_cast<long double>(presentation.tick - cleanup.tick);
+			return static_cast<double>(
+				(ticks * 1000.0L) /
+				static_cast<long double>(a_transition.baseline.tickFrequency));
+		};
+		const auto presentationToCleanupFrames = [&]() -> json {
+			if (!presentationAndCleanupObserved)
+				return nullptr;
+			return static_cast<int64_t>(a_transition.cleanupDrained.frame) -
+			       static_cast<int64_t>(a_transition.presentationStable.frame);
+		};
+		const json cleanupDeltaMs = presentationToCleanupMilliseconds();
+		const json cleanupDeltaFrames = presentationToCleanupFrames();
+		const json cleanupTailMs = cleanupDeltaMs.is_number() ?
+			json(std::max(0.0, cleanupDeltaMs.get<double>())) :
+			json(nullptr);
+		const json cleanupTailFrames = cleanupDeltaFrames.is_number_integer() ?
+			json(std::max<int64_t>(0, cleanupDeltaFrames.get<int64_t>())) :
+			json(nullptr);
+		const bool milestonesShareObservation =
+			presentationAndCleanupObserved &&
+			a_transition.presentationStable.tick == a_transition.cleanupDrained.tick &&
+			a_transition.presentationStable.frame == a_transition.cleanupDrained.frame;
 		const auto observationValue = [&](std::string_view a_name, json a_default) {
 			const std::string key{ a_name };
 			return a_observation.is_object() && a_observation.contains(key) ?
@@ -3665,6 +3961,24 @@ namespace
 										  "strictFailureReasons", json::array()) },
 			{ "strictElapsedMs", elapsedMilliseconds(a_transition.strictSatisfied) },
 			{ "strictElapsedFrames", elapsedFrames(a_transition.strictSatisfied) },
+			{ "milestoneTimings", {
+				{ "presentation", milestoneJson(a_transition.presentationStable) },
+				{ "cleanup", milestoneJson(a_transition.cleanupDrained) },
+				{ "strict", milestoneJson(a_transition.strictSatisfied) },
+				{ "presentationToCleanupMs", cleanupDeltaMs },
+				{ "presentationToCleanupFrames", cleanupDeltaFrames },
+				{ "cleanupTailMs", cleanupTailMs },
+				{ "cleanupTailFrames", cleanupTailFrames },
+				{ "sameObservation", milestonesShareObservation },
+				{ "cleanupPrecededPresentation",
+					cleanupDeltaMs.is_number() && cleanupDeltaMs.get<double>() < 0.0 },
+			} },
+			{ "replacementTimeline", {
+				{ "dispatch", a_transition.dispatchPresentationEvidence },
+				{ "lastPreMutation", a_transition.lastPreMutationEvidence },
+				{ "blockedPreMutation", a_transition.blockedPreMutationEvidence },
+				{ "firstPhysicalMutation", a_transition.firstPhysicalMutationEvidence },
+			} },
 			{ "outstandingCleanupDebt", observationValue(
 											"cleanupDebt", json(nullptr)) },
 			{ "baseline", a_transition.ready ?
@@ -4017,6 +4331,19 @@ namespace
 							{ "errorCode", "monotonic_clock_unavailable" },
 						};
 					}
+					auto& upscaling = globals::features::upscaling;
+					const auto controller =
+						upscaling.GetVRRenderScaleTransitionSnapshot();
+					json dispatchPresentationEvidence =
+						ReplacementPresentationEvidenceJson(
+							upscaling,
+							controller,
+							upscaling.vrRenderScaleUnresolvedPhysicalMutationEpoch.load(
+								std::memory_order_acquire),
+							upscaling.vrRenderScalePostMutationSerializationEpoch.load(
+								std::memory_order_acquire));
+					dispatchPresentationEvidence["tick"] = clockAvailabilityTick;
+					dispatchPresentationEvidence["frame"] = frame;
 					auto& store = GetQualificationStore();
 					std::lock_guard lock(store.mutex);
 					if (!store.active ||
@@ -4041,7 +4368,6 @@ namespace
 
 					json performanceTelemetry = nullptr;
 					if (startPerformanceTelemetry) {
-						auto& upscaling = globals::features::upscaling;
 						if (upscaling.IsVRRenderScaleCPUPerformanceTelemetryActive() ||
 							upscaling.IsVRRenderScaleGPUPerformanceTelemetryActive()) {
 							return json{
@@ -4088,7 +4414,17 @@ namespace
 							{ "gpuPerformance", BuildGPUPerformanceStatus(upscaling) },
 						};
 					}
-					uint64_t tick = clockAvailabilityTick;
+					uint64_t tick = QueryQualificationTick();
+					if (tick == 0) {
+						if (startPerformanceTelemetry) {
+							upscaling.StopVRRenderScaleGPUPerformanceTelemetry();
+							upscaling.StopVRRenderScaleCPUPerformanceTelemetry();
+						}
+						return json{
+							{ "error", "QueryPerformanceCounter became unavailable" },
+							{ "errorCode", "monotonic_clock_unavailable" },
+						};
+					}
 					if (cocCellEditorID) {
 						const auto command = std::format("coc {}", *cocCellEditorID);
 						tick = QueryQualificationTick();
@@ -4097,6 +4433,8 @@ namespace
 					store.active->dispatchTick = tick;
 					store.active->dispatchFrame = frame;
 					store.active->cocCellEditorID = cocCellEditorID;
+					store.active->dispatchPresentationEvidence =
+						std::move(dispatchPresentationEvidence);
 					json result{
 						{ "action", "qualification_dispatch" },
 						{ "transitionId", transitionID },
@@ -4111,6 +4449,8 @@ namespace
 										{ "tickFrequency", store.active->baseline.tickFrequency },
 									} },
 						{ "dispatchFrame", frame },
+						{ "replacementPresentation",
+							store.active->dispatchPresentationEvidence },
 					};
 					if (cocCellEditorID) {
 						result["cocCellEditorId"] = *cocCellEditorID;
@@ -4394,6 +4734,9 @@ namespace
 						milestoneEvaluation.StrictSatisfied(),
 						observedTick,
 						observedFrame);
+					RecordQualificationReplacementTimeline(
+						transition,
+						observation);
 				}
 				if (QualificationPolicy::IsMilestoneSatisfied(
 						milestone, milestoneEvaluation) &&
@@ -5106,7 +5449,10 @@ namespace
 			"qualification_wait then observes the coherent selected profile without "
 			"mutating it. milestone defaults to strict for backward compatibility; "
 			"presentation and cleanup expose their independent first-observed "
-			"timestamps without changing strict qualification.";
+			"timestamps, signed presentation-to-cleanup deltas, and cleanup tail "
+			"without changing strict qualification. The terminal receipt also "
+			"retains dispatch, last pre-mutation, blocked-admission, and first "
+			"physical-mutation presentation evidence.";
 		BuildProvenance::AttachProducer(result);
 		const auto serialized = result.dump();
 		a_write(a_sink, serialized.c_str());
@@ -5172,7 +5518,9 @@ namespace VRRenderScaleDevBenchBridge
 			descriptor["description"] =
 				descriptor["description"].get<std::string>() +
 				" qualification_wait accepts milestone strict, presentation, or "
-				"cleanup; absent milestone preserves strict combined semantics.";
+				"cleanup; absent milestone preserves strict combined semantics. Its "
+				"terminal receipt reports independent milestone timings, cleanup "
+				"tail, and the replacement-presentation timeline.";
 			descriptor["inputSchema"]["properties"]["milestone"] = {
 				{ "type", "string" },
 				{ "enum", json::array({ "strict", "presentation", "cleanup" }) },

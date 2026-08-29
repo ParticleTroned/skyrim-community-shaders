@@ -1027,6 +1027,8 @@ public:
 		uint32_t vendorDispatchFrame = 0;
 		uint64_t vendorDispatchSerial = 0;
 		bool vendorRuntimeFallback = false;
+		uintptr_t deviceIdentity = 0;
+		uint64_t resourceRevision = 0;
 		uint32_t consecutiveFrames = 0;
 		bool loadingOrMenuContext = false;
 		bool transitionCooldown = false;
@@ -1289,6 +1291,18 @@ public:
 			VRRenderScalePreparationEvent,
 			kVRRenderScalePreparationEventRetentionCapacity>
 			events{};
+	};
+
+	struct VRRenderScalePreparationAdmissionSnapshot
+	{
+		bool observed = false;
+		uint64_t sequence = 0;
+		uint64_t requestID = 0;
+		uint64_t transitionEpoch = 0;
+		uint32_t frame = 0;
+		VRRenderScalePreparationOutcome outcome =
+			VRRenderScalePreparationOutcome::Observed;
+		uint64_t reasonMask = 0;
 	};
 #endif
 
@@ -1661,6 +1675,11 @@ public:
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	VRRenderScalePreparationTelemetrySnapshot
 	GetVRRenderScalePreparationTelemetrySnapshot() const;
+	/** @brief Returns the latest admission decision for one exact preparation request. */
+	VRRenderScalePreparationAdmissionSnapshot
+	GetVRRenderScalePreparationAdmissionSnapshot(
+		uint64_t a_requestID,
+		uint64_t a_transitionEpoch) const;
 	VRRenderScaleCPUPerformanceSnapshot
 	GetVRRenderScaleCPUPerformanceSnapshot() const noexcept;
 	/** @brief Reports whether the current CPU telemetry session is recording. */

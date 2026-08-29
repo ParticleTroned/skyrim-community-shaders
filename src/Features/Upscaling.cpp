@@ -31521,6 +31521,14 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 		auto& eye = presentation.eyes[a_observation.eyeIndex];
 		const auto previous = eye;
 		const uint32_t frame = std::max(a_observation.frame, 1u);
+		const uintptr_t deviceIdentity =
+			a_packet && a_packet->resources ?
+				reinterpret_cast<uintptr_t>(a_packet->resources->device.get()) :
+				0;
+		const uint64_t resourceRevision =
+			a_packet && a_packet->resources ?
+				a_packet->resources->revision :
+				0;
 		const bool sameContract =
 			previous.valid &&
 			previous.path == a_observation.path &&
@@ -31536,7 +31544,9 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 			previous.vendorBackend == a_observation.vendorBackend &&
 			previous.vendorDispatchFrame == a_observation.vendorDispatchFrame &&
 			previous.vendorDispatchSerial == a_observation.vendorDispatchSerial &&
-			previous.vendorRuntimeFallback == a_observation.vendorRuntimeFallback;
+			previous.vendorRuntimeFallback == a_observation.vendorRuntimeFallback &&
+			previous.deviceIdentity == deviceIdentity &&
+			previous.resourceRevision == resourceRevision;
 		const bool duplicate =
 			sameContract &&
 			previous.frame == frame &&
@@ -31564,6 +31574,8 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 		eye.vendorDispatchFrame = a_observation.vendorDispatchFrame;
 		eye.vendorDispatchSerial = a_observation.vendorDispatchSerial;
 		eye.vendorRuntimeFallback = a_observation.vendorRuntimeFallback;
+		eye.deviceIdentity = deviceIdentity;
+		eye.resourceRevision = resourceRevision;
 		eye.consecutiveFrames = duplicate ? previous.consecutiveFrames :
 		                        consecutive ?
 		                                    (previous.consecutiveFrames == std::numeric_limits<uint32_t>::max() ? previous.consecutiveFrames : previous.consecutiveFrames + 1u) :
@@ -49715,6 +49727,39 @@ Upscaling::GetVRRenderScalePreparationTelemetrySnapshot() const
 	return snapshot;
 }
 
+Upscaling::VRRenderScalePreparationAdmissionSnapshot
+Upscaling::GetVRRenderScalePreparationAdmissionSnapshot(
+	uint64_t a_requestID,
+	uint64_t a_transitionEpoch) const
+{
+	VRRenderScalePreparationAdmissionSnapshot snapshot{};
+	if (a_requestID == 0 || a_transitionEpoch == 0)
+		return snapshot;
+
+	std::scoped_lock lock(vrRenderScalePreparationTelemetryMutex);
+	for (const auto& event : vrRenderScalePreparationTelemetry.events) {
+		if (event.sequence == 0 ||
+			event.sessionID != vrRenderScalePreparationTelemetry.sessionID ||
+			event.requestID != a_requestID ||
+			event.transitionEpoch != a_transitionEpoch ||
+			(event.type != VRRenderScalePreparationEventType::AdmissionCheck &&
+				event.type != VRRenderScalePreparationEventType::EarlyExit) ||
+			event.sequence <= snapshot.sequence) {
+			continue;
+		}
+		snapshot = {
+			.observed = true,
+			.sequence = event.sequence,
+			.requestID = event.requestID,
+			.transitionEpoch = event.transitionEpoch,
+			.frame = event.lastFrame,
+			.outcome = event.outcome,
+			.reasonMask = event.reasonMask,
+		};
+	}
+	return snapshot;
+}
+
 void Upscaling::RecordVRRenderScalePreparationEvent(
 	VRRenderScalePreparationEvent a_event)
 {
@@ -50427,6 +50472,8 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 			{ "vendorDispatchFrame", a_eye.vendorDispatchFrame },
 			{ "vendorDispatchSerial", a_eye.vendorDispatchSerial },
 			{ "vendorRuntimeFallback", a_eye.vendorRuntimeFallback },
+			{ "deviceIdentity", static_cast<uint64_t>(a_eye.deviceIdentity) },
+			{ "resourceRevision", a_eye.resourceRevision },
 			{ "consecutiveFrames", a_eye.consecutiveFrames },
 			{ "loadingOrMenuContext", a_eye.loadingOrMenuContext },
 			{ "transitionCooldown", a_eye.transitionCooldown }

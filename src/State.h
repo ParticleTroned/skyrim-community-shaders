@@ -192,7 +192,6 @@ public:
 	void LoadFromJson(nlohmann::json& i_json, bool a_loadFeatureSettings = true);
 
 	void LoadTheme();
-	void SaveTheme();
 
 	bool ValidateCache(CSimpleIniA& a_ini);
 	void WriteDiskCacheInfo(CSimpleIniA& a_ini);

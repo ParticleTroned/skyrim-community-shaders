@@ -304,8 +304,7 @@ void MenuHeaderRenderer::RenderHeader(
 			// Save Settings Button
 			ImGui::TableNextColumn();
 			if (Util::ButtonWithFlash("Save Settings", { -1, 0 })) {
-				if (globals::state->Save())
-					globals::state->SaveTheme();
+				globals::state->Save();
 			}
 
 			// Restore Saved Settings Button
@@ -396,8 +395,7 @@ std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons
 			uiIcons.saveSettings.texture,
 			"Save Settings",
 			[]() {
-				if (globals::state->Save())
-					globals::state->SaveTheme();
+				globals::state->Save();
 			} });
 	}
 	if (uiIcons.loadSettings.texture) {

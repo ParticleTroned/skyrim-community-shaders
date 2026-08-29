@@ -39,9 +39,9 @@ SKSE plugin providing advanced DirectX 11 graphics modifications for Skyrim SE/A
 
 ### Build Options
 
-**Configure Presets**: `ALL`, `ALL-VS2022`, `ALL-DEBUG`, `AIO-Release`
+**Configure Presets**: `ALL`, `ALL-DEBUG`, `AIO-Release`
 
-**Build Presets**: `Dev`, `ALL`, `ALL-VS2022`, `Package`, `Shaders`, `Debug`, `AIO-Release`
+**Build Presets**: `Dev`, `ALL`, `Package`, `Shaders`, `Debug`, `AIO-Release`
 
 **CMake Options** (set in user preset):
 

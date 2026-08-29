@@ -140,6 +140,11 @@ namespace
 		return globals::game::isVR && globals::features::upscaling.IsVRRenderScaleModeActive();
 	}
 
+	bool IsClosedMenuStatusOverlayActive()
+	{
+		return globals::menu && globals::menu->HasClosedMenuOverlay();
+	}
+
 	bool BeginTabItemWithFont(const char* label, Menu::FontRole role, ImGuiTabItemFlags flags = ImGuiTabItemFlags_None)
 	{
 		return MenuFonts::BeginTabItemWithFont(label, role, flags);
@@ -987,6 +992,7 @@ bool VR::ShouldPresentOverlayInHeadset() const
 {
 	return globals::menu &&
 	       (globals::menu->IsEnabled ||
+			   IsClosedMenuStatusOverlayActive() ||
 			   globals::menu->overlayVisible ||
 			   ShouldShowAutoHideOverlay() ||
 			   ShouldShowShaderCompilationInHMD());
@@ -3519,6 +3525,9 @@ namespace
 
 bool VR::UseFixedWorldMenuPositioning() const
 {
+	if (IsClosedMenuStatusOverlayActive())
+		return false;
+
 	// Fixed-world mode uses OpenVR's standing tracking space, which is already
 	// available at the Skyrim main menu. The first valid HMD pose establishes a
 	// recoverable anchor; subsequent updates preserve translation and change yaw
@@ -3532,6 +3541,9 @@ bool VR::UseFixedWorldMenuPositioning() const
 
 VR::Settings::OverlayAttachMode VR::GetEffectiveMenuAttachMode() const
 {
+	if (IsClosedMenuStatusOverlayActive())
+		return Settings::OverlayAttachMode::HMDOnly;
+
 	return VRMenuPositioningPolicy::SelectEffectiveValue(
 		settings.UnlockMenuPositionAndSize,
 		settings.attachMode,
@@ -3545,6 +3557,9 @@ ControllerDevice VR::GetEffectiveMenuAttachController() const
 
 float VR::GetEffectiveMenuScale() const
 {
+	if (IsClosedMenuStatusOverlayActive())
+		return Config::kDefaultMenuScale;
+
 	return VRMenuPositioningPolicy::SelectEffectiveValue(
 		settings.UnlockMenuPositionAndSize,
 		settings.VRMenuScale,
@@ -3553,6 +3568,14 @@ float VR::GetEffectiveMenuScale() const
 
 Vector3 VR::GetEffectiveHMDMenuOffset() const
 {
+	if (IsClosedMenuStatusOverlayActive()) {
+		return Vector3{
+			Config::kDefaultHMDOffsetX,
+			Config::kDefaultHMDOffsetY,
+			Config::kDefaultHMDOffsetZ,
+		};
+	}
+
 	return VRMenuPositioningPolicy::SelectEffectiveValue(
 		settings.UnlockMenuPositionAndSize,
 		Vector3{ settings.VRMenuOffsetX, settings.VRMenuOffsetY, settings.VRMenuOffsetZ },
@@ -3620,6 +3643,25 @@ void VR::UpdateVROverlayPosition()
 	float hmdOverlayHeight = overlayWidth * VR::Config::kHMDOverlayAspect;
 	float controllerOverlayHeight = overlayWidth * VR::Config::kOverlayAspect;
 	const Vector3 hmdOffset = GetEffectiveHMDMenuOffset();
+	const bool showingClosedMenuOverlay = IsClosedMenuStatusOverlayActive();
+	if (showingClosedMenuOverlay) {
+		// Keep the status widget in view without consuming or replacing the
+		// user's saved fixed-world menu anchor.
+		const auto statusTransform = Util::CreateControllerOverlayTransform(
+			hmdOffset.x,
+			hmdOffset.y,
+			hmdOffset.z,
+			overlayWidth,
+			hmdOverlayHeight);
+
+		Util::SetOverlayInputFlags(ctx.overlay, menuOverlayHandle);
+		ctx.overlay->SetOverlayTransformTrackedDeviceRelative(
+			menuOverlayHandle,
+			vr::k_unTrackedDeviceIndex_Hmd,
+			&statusTransform);
+		ctx.overlay->SetOverlayWidthInMeters(menuOverlayHandle, overlayWidth);
+		return;
+	}
 
 	const bool useFixedWorldPositioning = UseFixedWorldMenuPositioning();
 	static bool lastUsedFixedWorldPositioning = false;

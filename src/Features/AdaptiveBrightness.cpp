@@ -1397,11 +1397,23 @@ namespace
 		ImGui::PopTextWrapPos();
 	}
 
-	void DrawPresetNameInput(const char* a_label, const char* a_id, std::string& a_name, const std::filesystem::path& a_exportPath, const std::filesystem::path* a_alternateImportPath = nullptr)
+	void DrawPresetNameInput(
+		const char* a_label,
+		const char* a_id,
+		std::string& a_name,
+		const std::filesystem::path& a_exportPath,
+		const std::filesystem::path* a_alternateImportPath = nullptr,
+		float a_width = 0.0f)
 	{
-		ImGui::TextUnformatted(a_label);
-		ImGui::SameLine();
-		const float inputWidth = std::min(280.0f * Util::GetUIScale(), std::max(120.0f, ImGui::GetContentRegionAvail().x * 0.45f));
+		if (a_label && a_label[0] != '\0') {
+			ImGui::TextUnformatted(a_label);
+			ImGui::SameLine();
+		}
+		const float availableWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+		const float requestedWidth = a_width > 0.0f ?
+		                                 a_width :
+		                                 std::min(280.0f * Util::GetUIScale(), std::max(120.0f, availableWidth * 0.45f));
+		const float inputWidth = std::clamp(requestedWidth, 1.0f, availableWidth);
 		ImGui::SetNextItemWidth(inputWidth);
 		ImGui::InputTextWithHint(a_id, "Preset name", &a_name);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1510,8 +1522,8 @@ void AdaptiveBrightness::DrawSettings()
 	if (ImGui::BeginTabBar("##AdaptiveBalanceSections", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem("Global")) {
 			ImGui::TextWrapped("Set the shared Lighting, Bloom, and Water adjustments applied before the active profile and location layers.");
-			DrawGlobalSettings(true);
 			DrawGlobalPresetControls();
+			DrawGlobalSettings(true);
 			ImGui::EndTabItem();
 		}
 
@@ -1624,8 +1636,28 @@ void AdaptiveBrightness::DrawGlobalSettings(bool a_showAdvancedControls)
 void AdaptiveBrightness::DrawEssentialSettings()
 {
 	ImGui::TextWrapped("Set the shared Lighting, Bloom, and Water adjustments.");
-	DrawGlobalSettings(false);
 	DrawGlobalPresetControls();
+	DrawGlobalSettings(false);
+}
+
+void AdaptiveBrightness::DrawPerformanceSettings(bool)
+{
+	if (ImGui::Checkbox("Enable Adaptive Profiles", &settings.enabled))
+		ResetWaterWindSmoothing();
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Blend the time, location, Bloom, Water, and wind profile layers. The global adjustment layer remains active.");
+}
+
+json AdaptiveBrightness::CapturePerformanceSettingsState() const
+{
+	return {
+		{ "enabled", settings.enabled }
+	};
+}
+
+void AdaptiveBrightness::SetPerformanceCostMeasurementEnabled(bool a_enabled)
+{
+	performanceCostMeasurementEnabled = a_enabled;
 }
 
 void AdaptiveBrightness::LoadSettings(json& o_json)
@@ -2094,9 +2126,23 @@ void AdaptiveBrightness::DrawGlobalPresetControls()
 	ImGui::PushID("GlobalPresetControls");
 
 	const auto presetPath = GetPresetPath(globalPresetName, PresetKind::Global);
-	DrawPresetNameInput("Global preset", "##GlobalPresetName", globalPresetName, presetPath);
+	const auto& style = ImGui::GetStyle();
+	const float scale = Util::GetUIScale();
+	const float exportButtonWidth = ImGui::CalcTextSize("Export Global").x + style.FramePadding.x * 2.0f;
+	const float importButtonWidth = ImGui::CalcTextSize("Import Global").x + style.FramePadding.x * 2.0f;
+	const float availableWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+	const float inlineButtonWidth = exportButtonWidth + importButtonWidth + style.ItemSpacing.x * 2.0f;
+	const bool keepButtonsOnOneLine =
+		availableWidth >= exportButtonWidth + importButtonWidth + style.ItemSpacing.x;
+	const float minimumInputWidth = 140.0f * scale;
+	const bool keepControlsOnOneLine = availableWidth >= minimumInputWidth + inlineButtonWidth;
+	const float inputWidth = keepControlsOnOneLine ?
+	                             availableWidth - inlineButtonWidth :
+	                             std::min(280.0f * scale, availableWidth);
+	DrawPresetNameInput(nullptr, "##GlobalPresetName", globalPresetName, presetPath, nullptr, inputWidth);
 
-	ImGui::SameLine();
+	if (keepControlsOnOneLine)
+		ImGui::SameLine();
 	if (ImGui::Button("Export Global")) {
 		ExportGlobalPreset();
 	}
@@ -2104,7 +2150,8 @@ void AdaptiveBrightness::DrawGlobalPresetControls()
 		ImGui::Text("Export the global adjustment layer, exterior timing, and the five Lighting, Bloom, and Water profiles. Location overrides are not included.");
 	}
 
-	ImGui::SameLine();
+	if (keepControlsOnOneLine || keepButtonsOnOneLine)
+		ImGui::SameLine();
 	if (ImGui::Button("Import Global")) {
 		ImportGlobalPreset();
 	}
@@ -2798,9 +2845,14 @@ bool AdaptiveBrightness::IsRuntimeAvailable() const
 	return GetCurrentPlayerCell(RE::PlayerCharacter::GetSingleton()) != nullptr;
 }
 
+bool AdaptiveBrightness::IsAdjustmentRuntimeActive() const
+{
+	return performanceCostMeasurementEnabled && IsRuntimeAvailable();
+}
+
 bool AdaptiveBrightness::IsRuntimeEnabled() const
 {
-	return settings.enabled && IsRuntimeAvailable();
+	return settings.enabled && IsAdjustmentRuntimeActive();
 }
 
 AdaptiveBrightness::Profile AdaptiveBrightness::GetInteriorProfile() const
@@ -3414,7 +3466,7 @@ AdaptiveBrightness::EffectiveLinearLightingSettings AdaptiveBrightness::GetEffec
 	bool a_linearLightingEnabled) const
 {
 	const auto baseSettings = a_linearLightingEnabled ? a_linearLightingSettings : GetNeutralLinearLightingSettings();
-	const bool runtimeAvailable = IsRuntimeAvailable();
+	const bool runtimeAvailable = IsAdjustmentRuntimeActive();
 	auto layeredBase = baseSettings;
 	if (runtimeAvailable)
 		layeredBase = ApplyProfile(layeredBase, settings.globalProfile);
@@ -3443,7 +3495,7 @@ SharedLightingSettings AdaptiveBrightness::GetEffectiveSharedLightingSettings() 
 {
 	SharedLightingSettings neutralSettings{};
 	SanitizeSharedLightingSettings(neutralSettings);
-	const bool runtimeAvailable = IsRuntimeAvailable();
+	const bool runtimeAvailable = IsAdjustmentRuntimeActive();
 	auto layeredBase = neutralSettings;
 	if (runtimeAvailable)
 		layeredBase = ApplyProfile(layeredBase, settings.globalProfile);
@@ -3467,7 +3519,7 @@ SharedLightingSettings AdaptiveBrightness::GetEffectiveSharedLightingSettings() 
 
 Bloom::Settings AdaptiveBrightness::GetEffectiveBloomSettings() const
 {
-	if (!IsRuntimeAvailable())
+	if (!IsAdjustmentRuntimeActive())
 		return Bloom::GetCommonBufferData(Bloom::Profile{}, 0.0f);
 
 	const auto& globalBloom = settings.globalProfile.bloom;
@@ -3489,7 +3541,7 @@ Bloom::Settings AdaptiveBrightness::GetEffectiveBloomSettings() const
 
 WaterAppearance::Settings AdaptiveBrightness::GetEffectiveWaterAppearanceSettings() const
 {
-	if (!IsRuntimeAvailable())
+	if (!IsAdjustmentRuntimeActive())
 		return WaterAppearance::GetCommonBufferData(WaterAppearance::Profile{});
 
 	const auto& globalProfile = settings.globalProfile;

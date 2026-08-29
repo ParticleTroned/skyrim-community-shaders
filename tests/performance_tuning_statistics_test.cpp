@@ -27,7 +27,7 @@ namespace
 
 	bool CoversBlockMeanStandardError()
 	{
-		constexpr std::array means{ 9.0, 10.0, 11.0, 9.0, 10.0, 11.0 };
+		constexpr std::array means{ 9.0, 10.0, 11.0 };
 		const auto sparseBlocks = MakeBlocks(means, 1);
 		const auto denseBlocks = MakeBlocks(means, 90);
 		std::array<Moments, 2> weightedBlocks{};
@@ -81,7 +81,7 @@ namespace
 		return moments.sampleWeight == 1.0 && GetMean(moments) == 10.0;
 	}
 
-	bool CoversBaselineDiscontinuities()
+	bool CoversTimingDiscontinuities()
 	{
 		return !IsTimingSampleInterrupted(10, 11, true) &&
 		       IsTimingSampleInterrupted(10, 11, false) &&
@@ -96,7 +96,7 @@ int main()
 	return CoversBlockMeanStandardError() &&
 	               CoversSignificanceLimits() &&
 	               CoversInvalidSampleExclusion() &&
-	               CoversBaselineDiscontinuities() ?
+	               CoversTimingDiscontinuities() ?
 	           0 :
 	           1;
 }

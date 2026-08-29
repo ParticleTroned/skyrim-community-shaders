@@ -1,6 +1,5 @@
 #include "DynamicCubemaps.h"
 
-#include <cassert>
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
 
@@ -14,12 +13,48 @@
 #include "VR.h"
 #include "Wetterness.h"
 
-constexpr auto MIPLEVELS = 9;
-
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DynamicCubemaps::Settings,
 	EnabledSSR,
-	EnabledCreator);
+	EnabledCreator,
+	CubemapResolution);
+
+uint32_t DynamicCubemaps::SanitizeCubemapResolution(uint32_t a_resolution)
+{
+	return a_resolution == kQualityCubemapResolution ? kQualityCubemapResolution : kPerformanceCubemapResolution;
+}
+
+void DynamicCubemaps::RefreshActiveCubemapResolution()
+{
+	settings.CubemapResolution = SanitizeCubemapResolution(settings.CubemapResolution);
+	if (!cubemapResolutionLocked) {
+		activeCubemapResolution = settings.CubemapResolution;
+		activeCubemapMipLevels = std::bit_width(activeCubemapResolution);
+	}
+}
+
+bool DynamicCubemaps::SetCubemapResolution(uint32_t a_resolution)
+{
+	if (a_resolution != kPerformanceCubemapResolution && a_resolution != kQualityCubemapResolution)
+		return false;
+
+	settings.CubemapResolution = a_resolution;
+	RefreshActiveCubemapResolution();
+	return true;
+}
+
+uint32_t DynamicCubemaps::GetCubemapResolutionForResourceCreation()
+{
+	if (!cubemapResolutionLocked) {
+		logger::info(
+			"Using {}x{} dynamic cubemap reflections with {} mip levels",
+			activeCubemapResolution,
+			activeCubemapResolution,
+			activeCubemapMipLevels);
+	}
+	cubemapResolutionLocked = true;
+	return activeCubemapResolution;
+}
 
 namespace
 {
@@ -117,6 +152,36 @@ std::vector<std::pair<std::string_view, std::string_view>> DynamicCubemaps::GetS
 
 void DynamicCubemaps::DrawSettings()
 {
+	const char* resolutionPreview = settings.CubemapResolution == kPerformanceCubemapResolution ?
+	                                    "128 x 128 (Performance)" :
+	                                    "256 x 256 (Quality)";
+	if (ImGui::BeginCombo("Reflection Resolution", resolutionPreview)) {
+		const bool performanceSelected = settings.CubemapResolution == kPerformanceCubemapResolution;
+		if (ImGui::Selectable("128 x 128 (Performance)", performanceSelected)) {
+			SetCubemapResolution(kPerformanceCubemapResolution);
+		}
+		if (performanceSelected)
+			ImGui::SetItemDefaultFocus();
+
+		const bool qualitySelected = settings.CubemapResolution == kQualityCubemapResolution;
+		if (ImGui::Selectable("256 x 256 (Quality)", qualitySelected)) {
+			SetCubemapResolution(kQualityCubemapResolution);
+		}
+		if (qualitySelected)
+			ImGui::SetItemDefaultFocus();
+		ImGui::EndCombo();
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextWrapped(
+			"Controls dynamic reflection quality and cost. Use 128 x 128 for performance or 256 x 256 for quality.");
+	}
+	if (IsCubemapResolutionRestartRequired()) {
+		Util::Text::WrappedWarning(
+			"Restart the game to apply the new reflection resolution. The current session remains at %u x %u.",
+			activeCubemapResolution,
+			activeCubemapResolution);
+	}
+
 	if (ImGui::TreeNodeEx("Screen Space Reflections")) {
 		bool enabledSSR = settings.EnabledSSR != 0;
 		if (ImGui::Checkbox("Enable Screen Space Reflections", &enabledSSR)) {
@@ -240,6 +305,13 @@ void DynamicCubemaps::DrawEssentialSettings()
 void DynamicCubemaps::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	if (settings.CubemapResolution != kPerformanceCubemapResolution && settings.CubemapResolution != kQualityCubemapResolution) {
+		logger::warn(
+			"Unsupported dynamic cubemap resolution {}; using {}",
+			settings.CubemapResolution,
+			kPerformanceCubemapResolution);
+	}
+	RefreshActiveCubemapResolution();
 	if (REL::Module::IsVR()) {
 		Util::LoadGameSettings(iniVRCubeMapSettings);
 	}
@@ -261,6 +333,7 @@ void DynamicCubemaps::OnSettingsSaved()
 void DynamicCubemaps::RestoreDefaultSettings()
 {
 	settings = {};
+	RefreshActiveCubemapResolution();
 	if (REL::Module::IsVR()) {
 		Util::ResetGameSettingsToDefaults(iniVRCubeMapSettings);
 		Util::ResetGameSettingsToDefaults(hiddenVRCubeMapSettings);
@@ -545,11 +618,12 @@ bool DynamicCubemaps::Irradiance(bool a_reflections)
 	auto* shader = GetComputeShaderSpecularIrradiance();
 	if (!shader)
 		return false;
+	const auto mipLevels = activeCubemapMipLevels;
 
 	// Copy cubemap to other resources
 	for (uint face = 0; face < 6; face++) {
-		uint srcSubresourceIndex = D3D11CalcSubresource(0, face, MIPLEVELS);
-		context->CopySubresourceRegion(a_reflections ? envReflectionsTexture->resource.get() : envTexture->resource.get(), D3D11CalcSubresource(0, face, MIPLEVELS), 0, 0, 0, envInferredTexture->resource.get(), srcSubresourceIndex, nullptr);
+		uint srcSubresourceIndex = D3D11CalcSubresource(0, face, mipLevels);
+		context->CopySubresourceRegion(a_reflections ? envReflectionsTexture->resource.get() : envTexture->resource.get(), D3D11CalcSubresource(0, face, mipLevels), 0, 0, 0, envInferredTexture->resource.get(), srcSubresourceIndex, nullptr);
 	}
 
 	// Compute pre-filtered specular environment map.
@@ -564,12 +638,12 @@ bool DynamicCubemaps::Irradiance(bool a_reflections)
 		ID3D11Buffer* buffer = spmapCB->CB();
 		context->CSSetConstantBuffers(0, 1, &buffer);
 
-		float const delta_roughness = 1.0f / std::max(float(MIPLEVELS - 1), 1.0f);
+		float const delta_roughness = 1.0f / std::max(float(mipLevels - 1), 1.0f);
 
 		std::uint32_t size = std::max(envTexture->desc.Width, envTexture->desc.Height) / 2;
 
 		CS_GPU_PASS_SELECT(a_reflections, "DynamicCubemaps::IrradianceReflections", "DynamicCubemaps::Irradiance");
-		for (std::uint32_t level = 1; level < MIPLEVELS; level++, size /= 2) {
+		for (std::uint32_t level = 1; level < mipLevels; level++, size /= 2) {
 			const UINT numGroups = (UINT)std::max(1u, (size + 7u) / 8u);
 
 			const SpecularMapFilterSettingsCB spmapConstants = { level * delta_roughness };
@@ -831,6 +905,9 @@ void DynamicCubemaps::PostDeferred()
 
 void DynamicCubemaps::SetupResources()
 {
+	const auto requestedCubemapResolution = GetCubemapResolutionForResourceCreation();
+	auto mipLevels = activeCubemapMipLevels;
+
 	GetComputeShaderUpdate();
 	GetComputeShaderUpdateReflections();
 	GetComputeShaderInferrence();
@@ -859,7 +936,17 @@ void DynamicCubemaps::SetupResources()
 	{
 		D3D11_TEXTURE2D_DESC texDesc;
 		cubemap.texture->GetDesc(&texDesc);
-		assert(texDesc.Width == (1u << (MIPLEVELS - 1)));
+		if (texDesc.Width != requestedCubemapResolution || texDesc.Height != requestedCubemapResolution) {
+			logger::warn(
+				"Dynamic cubemap target is {}x{}, expected {}x{}; using the renderer target dimensions",
+				texDesc.Width,
+				texDesc.Height,
+				requestedCubemapResolution,
+				requestedCubemapResolution);
+			activeCubemapResolution = std::max(1u, std::min(texDesc.Width, texDesc.Height));
+			activeCubemapMipLevels = std::bit_width(activeCubemapResolution);
+			mipLevels = activeCubemapMipLevels;
+		}
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
 		cubemap.SRV->GetDesc(&srvDesc);
@@ -868,9 +955,9 @@ void DynamicCubemaps::SetupResources()
 
 		// Create additional resources
 
-		texDesc.MipLevels = MIPLEVELS;
+		texDesc.MipLevels = mipLevels;
 		texDesc.MiscFlags |= D3D11_RESOURCE_MISC_GENERATE_MIPS;
-		srvDesc.TextureCube.MipLevels = MIPLEVELS;
+		srvDesc.TextureCube.MipLevels = mipLevels;
 
 		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
 		uavDesc.Format = texDesc.Format;
@@ -923,7 +1010,7 @@ void DynamicCubemaps::SetupResources()
 			arraySRVDesc.Texture2DArray.FirstArraySlice = 0;
 			arraySRVDesc.Texture2DArray.ArraySize = 6;
 			arraySRVDesc.Texture2DArray.MostDetailedMip = 0;
-			arraySRVDesc.Texture2DArray.MipLevels = MIPLEVELS;
+			arraySRVDesc.Texture2DArray.MipLevels = mipLevels;
 			DX::ThrowIfFailed(device->CreateShaderResourceView(envTexture->resource.get(), &arraySRVDesc, &envTextureArraySRV));
 			Util::SetResourceName(envTextureArraySRV, "DynamicCubemaps::EnvTexture ArraySRV");
 			DX::ThrowIfFailed(device->CreateShaderResourceView(envReflectionsTexture->resource.get(), &arraySRVDesc, &envReflectionsTextureArraySRV));
@@ -943,7 +1030,7 @@ void DynamicCubemaps::SetupResources()
 			for (std::uint32_t d = scratchBase; d > 0; d >>= 1)
 				++bc6hMipLevels;
 			// Clamp: must not exceed envTexture's mip count (source reads) or the UAV array size.
-			bc6hMipLevels = std::min<std::uint32_t>(bc6hMipLevels, MIPLEVELS);
+			bc6hMipLevels = std::min<std::uint32_t>(bc6hMipLevels, mipLevels);
 			bc6hMipLevels = std::min<std::uint32_t>(bc6hMipLevels, static_cast<std::uint32_t>(std::size(bc6hScratchUAVs)));
 
 			D3D11_TEXTURE2D_DESC scratchDesc = {};
@@ -1015,13 +1102,13 @@ void DynamicCubemaps::SetupResources()
 		uavDesc.Texture2DArray.FirstArraySlice = 0;
 		uavDesc.Texture2DArray.ArraySize = envTexture->desc.ArraySize;
 
-		for (std::uint32_t level = 1; level < MIPLEVELS; ++level) {
+		for (std::uint32_t level = 1; level < mipLevels; ++level) {
 			uavDesc.Texture2DArray.MipSlice = level;
 			DX::ThrowIfFailed(device->CreateUnorderedAccessView(envTexture->resource.get(), &uavDesc, &uavArray[level - 1]));
 			Util::SetResourceName(uavArray[level - 1], "DynamicCubemaps::EnvTexture UAV mip%u", level);
 		}
 
-		for (std::uint32_t level = 1; level < MIPLEVELS; ++level) {
+		for (std::uint32_t level = 1; level < mipLevels; ++level) {
 			uavDesc.Texture2DArray.MipSlice = level;
 			DX::ThrowIfFailed(device->CreateUnorderedAccessView(envReflectionsTexture->resource.get(), &uavDesc, &uavReflectionsArray[level - 1]));
 			Util::SetResourceName(uavReflectionsArray[level - 1], "DynamicCubemaps::EnvReflections UAV mip%u", level);

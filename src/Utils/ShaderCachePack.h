@@ -1,11 +1,12 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <mutex>
-#include <shared_mutex>
 #include <optional>
+#include <shared_mutex>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -13,6 +14,8 @@
 
 namespace Util::ShaderCachePack
 {
+	using PackSetId = std::array<std::byte, 16>;
+
 	enum class Lane : std::uint32_t
 	{
 		Optimized = 1,
@@ -63,7 +66,15 @@ namespace Util::ShaderCachePack
 	class Store
 	{
 	public:
-		Store(std::filesystem::path a_pathA, std::filesystem::path a_pathB, Lane a_lane);
+		Store(
+			std::filesystem::path a_pathA,
+			std::filesystem::path a_pathB,
+			Lane a_lane,
+			PackSetId a_packSetId = {});
+		~Store();
+
+		Store(const Store&) = delete;
+		Store& operator=(const Store&) = delete;
 
 		bool Open(std::string* a_error = nullptr);
 		std::optional<Entry> Find(std::string_view a_exactKey, std::string* a_error = nullptr) const;
@@ -99,6 +110,7 @@ namespace Util::ShaderCachePack
 			std::uint64_t fileSize = 0;
 			std::uint64_t validSize = 0;
 			std::uint64_t nextSequence = 1;
+			std::string diagnostic;
 			std::vector<RecordLocation> records;
 		};
 
@@ -106,7 +118,12 @@ namespace Util::ShaderCachePack
 		std::filesystem::path pathA;
 		std::filesystem::path pathB;
 		Lane lane;
+		PackSetId packSetId{};
 		bool opened = false;
+#ifdef _WIN32
+		void* leaseHandle = nullptr;
+		bool leaseOwned = false;
+#endif
 		ScannedFile active;
 		ScannedFile fallback;
 		std::unordered_map<std::string, RecordLocation> exactIndex;
@@ -115,6 +132,8 @@ namespace Util::ShaderCachePack
 		Stats stats;
 
 		bool OpenLocked(std::string* a_error);
+		bool AcquireWriterLease(std::string* a_error);
+		void ReleaseWriterLease() noexcept;
 		bool Scan(const std::filesystem::path& a_path, ScannedFile& a_output, std::string* a_error) const;
 		bool InitializeEmpty(ScannedFile& a_file, std::uint64_t a_generation, std::string* a_error) const;
 		bool AppendLocked(ScannedFile& a_file, const Entry& a_entry, std::uint64_t a_sequence, bool a_checkpoint, std::string* a_error) const;

@@ -6,7 +6,9 @@
 #include <deque>
 #include <efsw/efsw.hpp>
 #include <mutex>
+#include <span>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include <wrl/client.h>
@@ -373,6 +375,7 @@ namespace SIE
 		ShaderCompilationTask::Status status;
 		system_clock::time_point compileTime = system_clock::now();
 		bool loadedFromDisk = false;  ///< true when the shader blob was read from the disk cache rather than compiled
+		std::uint64_t claimGeneration = 0;
 	};
 
 	class UpdateListener;
@@ -453,7 +456,8 @@ namespace SIE
 			const std::filesystem::path& a_shaderPath,
 			const Util::ContentHash::Hash128& a_compileStateDigest,
 			const Util::ContentHash::Hash128& a_packCompileStateDigest,
-			uint64_t a_diskCacheGeneration);
+			uint64_t a_diskCacheGeneration,
+			std::span<const std::string> a_compatibilityFeatures);
 		void SetSaveLoadDiskPersistenceBlocked(bool a_blocked);
 		void DeleteDiskCache();
 		void ValidateDiskCache();
@@ -542,6 +546,7 @@ namespace SIE
 			ID3DBlob* a_blob,
 			const std::wstring& a_diskPath,
 			const Util::ContentHash::Hash128& a_compileStateDigest,
+			std::uint64_t a_claimGeneration,
 			bool fromDisk = false);
 
 		enum class ClaimResult
@@ -549,8 +554,14 @@ namespace SIE
 			CacheHit,  // Already compiled; use the returned blob
 			Claimed    // Claimed as Pending; caller must compile and call AddCompletedShader
 		};
-		std::pair<ClaimResult, ID3DBlob*> ClaimCompilation(const std::string& key);
-		void ResolvePendingFailure(const std::string& key);
+		struct CompilationClaim
+		{
+			ClaimResult result = ClaimResult::Claimed;
+			ID3DBlob* blob = nullptr;
+			std::uint64_t generation = 0;
+		};
+		CompilationClaim ClaimCompilation(const std::string& key);
+		void ResolvePendingFailure(const std::string& key, std::uint64_t a_claimGeneration);
 
 		ID3DBlob* GetCompletedShader(const std::string& a_key);
 		ID3DBlob* GetCompletedShader(const SIE::ShaderCompilationTask& a_task);
@@ -914,6 +925,7 @@ namespace SIE
 			std::wstring diskPath;
 			Util::ContentHash::Hash128 compileStateDigest;
 			Util::ContentHash::Hash128 packCompileStateDigest;
+			std::vector<std::string> compatibilityFeatures;
 			bool developerMode = false;
 
 			bool operator<(const hlslRecord& other) const
@@ -928,6 +940,7 @@ namespace SIE
 			std::filesystem::path shaderPath;
 			Util::ContentHash::Hash128 compileStateDigest;
 			Util::ContentHash::Hash128 packCompileStateDigest;
+			std::vector<std::string> compatibilityFeatures;
 			bool developerMode = false;
 			uint64_t diskCacheGeneration = 0;
 		};
@@ -977,6 +990,7 @@ namespace SIE
 		std::mutex computeShadersMutex;
 		CompilationSet compilationSet;
 		ankerl::unordered_dense::map<std::string, ShaderCacheResult> shaderMap{};
+		std::uint64_t nextCompilationClaimGeneration = 1;                                         // guarded by mapMutex
 		std::mutex mapMutex;                                                                      // guard for shaderMap
 		std::condition_variable mapCV;                                                            // signalled when a Pending entry transitions to Completed/Failed
 		ankerl::unordered_dense::map<std::string, system_clock::time_point> modifiedShaderMap{};  // hashmap when a shader source file last modified
@@ -984,15 +998,18 @@ namespace SIE
 		ankerl::unordered_dense::map<std::string, std::set<hlslRecord>> hlslToShaderMap{};        // hashmap linking specific hlsl files to shader keys in shaderMap
 		std::mutex hlslMapMutex;                                                                  // guard for hlslToShaderMap
 
-		std::deque<DeferredDiskWrite> deferredDiskWrites;
+		std::unordered_map<std::string, DeferredDiskWrite> deferredDiskWrites;
+		std::deque<std::string> deferredDiskWriteOrder;
 		static constexpr std::size_t kMaximumDeferredDiskWrites = 8192;
+		static constexpr std::size_t kDeferredDiskWriteBatchSize = 64;
 		std::mutex deferredDiskWritesMutex;
 		std::condition_variable_any deferredDiskWritesCV;
 		std::jthread deferredDiskWriterJthread;
 		std::atomic_bool acceptDeferredDiskWrites{ true };
 		std::atomic_bool deferredDiskWriteLimitReported{ false };
 		std::atomic_bool saveLoadDiskPersistenceBlocked{ false };
-		bool deferredManifestFlushPending = false;  // guarded by deferredDiskWritesMutex
+		std::size_t deferredDiskWritesInFlight = 0;  // guarded by deferredDiskWritesMutex
+		bool deferredManifestFlushPending = false;   // guarded by deferredDiskWritesMutex
 
 		// efsw file watcher
 		efsw::FileWatcher* fileWatcher = nullptr;

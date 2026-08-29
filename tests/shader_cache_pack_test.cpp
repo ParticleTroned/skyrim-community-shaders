@@ -1,8 +1,12 @@
 #include "Utils/ShaderCachePack.h"
 
+#include <array>
 #include <cassert>
 #include <chrono>
+#include <cstdint>
 #include <fstream>
+#include <limits>
+#include <memory>
 
 using namespace Util::ShaderCachePack;
 
@@ -13,6 +17,22 @@ namespace
 		Entry entry{ std::move(a_logical), std::move(a_exact), "{\"schema\":1}", {} };
 		entry.bytecode.assign(a_size, static_cast<std::byte>(a_value));
 		return entry;
+	}
+
+	std::filesystem::path ActivePack(const std::filesystem::path& a_first, const std::filesystem::path& a_second)
+	{
+		return std::filesystem::file_size(a_first) >= std::filesystem::file_size(a_second) ? a_first : a_second;
+	}
+
+	template <class T>
+	void Overwrite(const std::filesystem::path& a_path, std::uint64_t a_offset, const T& a_value)
+	{
+		std::fstream stream(a_path, std::ios::binary | std::ios::in | std::ios::out);
+		assert(stream);
+		stream.seekp(static_cast<std::streamoff>(a_offset));
+		stream.write(reinterpret_cast<const char*>(std::addressof(a_value)), sizeof(a_value));
+		stream.flush();
+		assert(stream);
 	}
 }
 
@@ -35,6 +55,67 @@ int main(int argc, char** argv)
 	const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
 	const auto root = std::filesystem::temp_directory_path() / ("csx-pack-test-" + unique);
 	std::filesystem::create_directories(root);
+
+	// A live index must not trust payload bytes that changed after Open().
+	{
+		const auto mutationRoot = root / "mutation";
+		std::filesystem::create_directories(mutationRoot);
+		const auto first = mutationRoot / "Optimized.A.csxpack";
+		const auto second = mutationRoot / "Optimized.B.csxpack";
+		std::ofstream(first, std::ios::binary).close();
+		std::ofstream(second, std::ios::binary).close();
+		std::string mutationError;
+		Store mutation(first, second, Lane::Optimized);
+		assert(mutation.Open(&mutationError));
+		assert(mutation.Append(MakeEntry("logical", "exact", 0x71), &mutationError));
+		assert(mutation.Checkpoint(&mutationError));
+		const char changed = 'X';
+		Overwrite(ActivePack(first, second), 160, changed);
+		mutationError.clear();
+		assert(!mutation.Find("exact", &mutationError));
+		assert(!mutationError.empty());
+	}
+
+	// Oversized record dimensions are contained as a corrupt tail instead of
+	// wrapping record arithmetic or addressing beyond the mapped payload.
+	{
+		const auto overflowRoot = root / "overflow";
+		std::filesystem::create_directories(overflowRoot);
+		const auto first = overflowRoot / "Optimized.A.csxpack";
+		const auto second = overflowRoot / "Optimized.B.csxpack";
+		std::ofstream(first, std::ios::binary).close();
+		std::ofstream(second, std::ios::binary).close();
+		std::string overflowError;
+		Store writer(first, second, Lane::Optimized);
+		assert(writer.Open(&overflowError));
+		assert(writer.Append(MakeEntry("logical", "exact", 0x72), &overflowError));
+		assert(writer.Checkpoint(&overflowError));
+		const auto maximum = std::numeric_limits<std::uint32_t>::max();
+		Overwrite(ActivePack(first, second), 104, maximum);
+		Store reader(first, second, Lane::Optimized);
+		assert(reader.Open(&overflowError));
+		assert(reader.GetStats().corruptTailBytes > 0);
+		assert(!reader.Find("exact", &overflowError));
+	}
+
+	// A nonzero pack-set identity is also the cross-process writer lease key.
+	{
+		const auto leaseRoot = root / "lease";
+		std::filesystem::create_directories(leaseRoot);
+		const auto first = leaseRoot / "Optimized.A.csxpack";
+		const auto second = leaseRoot / "Optimized.B.csxpack";
+		std::ofstream(first, std::ios::binary).close();
+		std::ofstream(second, std::ios::binary).close();
+		PackSetId setID{};
+		setID.front() = std::byte{ 0x53 };
+		std::string leaseError;
+		Store owner(first, second, Lane::Optimized, setID);
+		assert(owner.Open(&leaseError));
+		Store contender(first, second, Lane::Optimized, setID);
+		assert(!contender.Open(&leaseError));
+		assert(!leaseError.empty());
+	}
+
 	const auto a = root / "Optimized.A.csxpack";
 	const auto b = root / "Optimized.B.csxpack";
 	std::ofstream(a, std::ios::binary).close();
@@ -88,11 +169,20 @@ int main(int argc, char** argv)
 	assert(recovered.GetStats().activeGeneration == 3);
 	assert(recovered.Find("water|source=newest|provider=1", &error));
 
+	// Reset first commits a new generation barrier, so a failed cleanup cannot
+	// make any record from the prior generation visible again.
+	assert(recovered.Reset(&error));
+	assert(recovered.GetStats().activeGeneration == 5);
+	assert(!recovered.Find("water|source=newest|provider=1", &error));
+	assert(recovered.Append(MakeEntry("water|provider=1", "water|source=reset|provider=1", 0x55), &error));
+	assert(recovered.Checkpoint(&error));
+	assert(recovered.Find("water|source=reset|provider=1", &error));
+
 	// A vanished backing file is an ordinary cache-lane failure, not an
 	// exception escaping through shader compilation.
 	std::filesystem::remove(a);
 	error.clear();
-	assert(!recovered.Find("water|source=newest|provider=1", &error));
+	assert(!recovered.Find("water|source=reset|provider=1", &error));
 	assert(!error.empty());
 	error.clear();
 	assert(!recovered.Compact(&error));

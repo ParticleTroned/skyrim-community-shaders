@@ -4,8 +4,10 @@
 
 #include <cstdint>
 #include <mutex>
+#include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace CSX::Api
@@ -72,7 +74,7 @@ namespace CSX::Api
 		ShaderCompatibilityRequirementSet BuildRequirementSet(
 			std::string_view a_shaderFamily,
 			std::string_view a_shaderSource,
-			std::string_view a_feature = {}) const;
+			std::span<const std::string> a_features = {}) const;
 		void Freeze();
 
 	private:
@@ -82,6 +84,7 @@ namespace CSX::Api
 		std::uint64_t nextHandle = 1;
 		std::vector<ShaderCompatibilityRegistration> registrations;
 		std::string compatibilitySetDigest;
+		mutable std::unordered_map<std::string, ShaderCompatibilityRequirementSet> requirementCache;
 
 		static ShaderCompatibilityResult ValidateAndCopy(
 			const ShaderCompatibilityAPI::Registration001& a_input,
@@ -90,7 +93,7 @@ namespace CSX::Api
 			const ShaderCompatibilityRegistration& a_registration,
 			std::string_view a_shaderFamily,
 			std::string_view a_shaderSource,
-			std::string_view a_feature);
+			std::span<const std::string> a_features);
 	};
 
 	ShaderCompatibilityRegistry& GetShaderCompatibilityRegistry();
@@ -98,5 +101,5 @@ namespace CSX::Api
 	ShaderCompatibilityRequirementSet GetShaderCompatibilityRequirementSet(
 		std::string_view a_shaderFamily,
 		std::string_view a_shaderSource,
-		std::string_view a_feature = {});
+		std::span<const std::string> a_features = {});
 }

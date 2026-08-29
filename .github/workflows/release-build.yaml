@@ -110,6 +110,16 @@ jobs:
                     exit 1
                   fi
 
+            - name: Checkout release packaging tools
+              uses: actions/checkout@v6
+              with:
+                  sparse-checkout: tools
+
+            - name: Setup Python for FOMOD packaging
+              uses: actions/setup-python@v6
+              with:
+                  python-version: "3.12"
+
             - name: Download dist artifacts
               uses: actions/download-artifact@v7
               with:
@@ -188,6 +198,155 @@ jobs:
                   fi
                   echo "body_file=auto-release-notes.md" >> $GITHUB_OUTPUT
                   echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+
+            - name: Build managed-cache FOMOD AIO
+              shell: pwsh
+              env:
+                  RELEASE_TAG: ${{ steps.combined_notes.outputs.release_tag }}
+              run: |
+                  $ErrorActionPreference = 'Stop'
+
+                  function Get-SingleArchive {
+                      param(
+                          [Parameter(Mandatory)] [string] $Pattern,
+                          [Parameter(Mandatory)] [string] $Description
+                      )
+
+                      $archives = @(
+                          Get-ChildItem -LiteralPath 'dist' -Filter $Pattern -File
+                      )
+                      if ($archives.Count -ne 1) {
+                          throw "Expected exactly one $Description matching $Pattern; found $($archives.Count)."
+                      }
+                      return $archives[0]
+                  }
+
+                  function Expand-CMakeArchive {
+                      param(
+                          [Parameter(Mandatory)] [System.IO.FileInfo] $Archive,
+                          [Parameter(Mandatory)] [string] $Destination
+                      )
+
+                      New-Item -ItemType Directory -Path $Destination | Out-Null
+                      Push-Location $Destination
+                      try {
+                          & cmake -E tar xf $Archive.FullName
+                          if ($LASTEXITCODE -ne 0) {
+                              throw "Could not extract $($Archive.FullName)."
+                          }
+                      } finally {
+                          Pop-Location
+                      }
+                  }
+
+                  $aio = Get-SingleArchive 'CSX_AIO-*.7z' 'AIO archive'
+                  $se = Get-SingleArchive 'ShaderCache-SE-*.7z' 'SE shader-cache archive'
+                  $vr = Get-SingleArchive 'ShaderCache-VR-*.7z' 'VR shader-cache archive'
+
+                  $runnerTemp = [System.IO.Path]::GetFullPath($env:RUNNER_TEMP)
+                  $workRoot = Join-Path $runnerTemp "csx-fomod-$([guid]::NewGuid())"
+                  $workRoot = [System.IO.Path]::GetFullPath($workRoot)
+                  $runnerPrefix = $runnerTemp.TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+                  if (-not $workRoot.StartsWith($runnerPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                      throw "FOMOD work directory escaped RUNNER_TEMP: $workRoot"
+                  }
+
+                  $candidate = "$($aio.FullName).fomod-tmp"
+                  $backup = "$($aio.FullName).plain-backup"
+                  if ((Test-Path -LiteralPath $candidate) -or (Test-Path -LiteralPath $backup)) {
+                      throw 'Unexpected FOMOD candidate or backup already exists.'
+                  }
+
+                  try {
+                      New-Item -ItemType Directory -Path $workRoot | Out-Null
+                      $coreRoot = Join-Path $workRoot 'core'
+                      $seRoot = Join-Path $workRoot 'se'
+                      $vrRoot = Join-Path $workRoot 'vr'
+                      $stagedRoot = Join-Path $workRoot 'staged'
+                      Expand-CMakeArchive $aio $coreRoot
+                      Expand-CMakeArchive $se $seRoot
+                      Expand-CMakeArchive $vr $vrRoot
+
+                      & python tools/build-fomod-package.py `
+                          --core $coreRoot `
+                          --se-cache $seRoot `
+                          --vr-cache $vrRoot `
+                          --output $stagedRoot `
+                          --version $env:RELEASE_TAG
+                      if ($LASTEXITCODE -ne 0) {
+                          throw 'FOMOD staging failed.'
+                      }
+
+                      Push-Location $stagedRoot
+                      try {
+                          & cmake -E tar cf $candidate --format=7zip -- .
+                          if ($LASTEXITCODE -ne 0) {
+                              throw 'FOMOD archive creation failed.'
+                          }
+                      } finally {
+                          Pop-Location
+                      }
+
+                      if (-not (Test-Path -LiteralPath $candidate) -or
+                          (Get-Item -LiteralPath $candidate).Length -eq 0) {
+                          throw 'FOMOD archive is missing or empty.'
+                      }
+
+                      $entries = @(& cmake -E tar tf $candidate) |
+                          ForEach-Object {
+                              $entry = $_.Trim().Replace('\', '/')
+                              if ($entry.StartsWith('./')) {
+                                  $entry = $entry.Substring(2)
+                              }
+                              $entry
+                          }
+                      if ($LASTEXITCODE -ne 0) {
+                          throw 'FOMOD archive could not be inspected.'
+                      }
+                      foreach ($required in @(
+                          'fomod/ModuleConfig.xml',
+                          'fomod/info.xml',
+                          'ShaderCache-VR/ShaderCache/Info.ini',
+                          'ShaderCache-VR/ShaderCache/PackManifest.json',
+                          'ShaderCache-VR/ShaderCache/Optimized.A.csxpack',
+                          'ShaderCache-VR/ShaderCache/Optimized.B.csxpack',
+                          'ShaderCache-VR/ShaderCache/Developer.A.csxpack',
+                          'ShaderCache-VR/ShaderCache/Developer.B.csxpack',
+                          'ShaderCache-SE-AE/ShaderCache/Info.ini',
+                          'ShaderCache-SE-AE/ShaderCache/PackManifest.json',
+                          'ShaderCache-SE-AE/ShaderCache/Optimized.A.csxpack',
+                          'ShaderCache-SE-AE/ShaderCache/Optimized.B.csxpack',
+                          'ShaderCache-SE-AE/ShaderCache/Developer.A.csxpack',
+                          'ShaderCache-SE-AE/ShaderCache/Developer.B.csxpack'
+                      )) {
+                          if ($required -notin $entries) {
+                              throw "FOMOD archive is missing $required."
+                          }
+                      }
+
+                      try {
+                          [System.IO.File]::Replace(
+                              $candidate,
+                              $aio.FullName,
+                              $backup
+                          )
+                      } catch {
+                          if (-not (Test-Path -LiteralPath $aio.FullName) -and
+                              (Test-Path -LiteralPath $backup)) {
+                              Move-Item -LiteralPath $backup -Destination $aio.FullName
+                          }
+                          throw
+                      }
+                      Remove-Item -LiteralPath $backup -Force
+                      Write-Host "Replaced $($aio.Name) with the managed-cache FOMOD AIO."
+                  } finally {
+                      if (Test-Path -LiteralPath $candidate) {
+                          Remove-Item -LiteralPath $candidate -Force
+                      }
+                      if (Test-Path -LiteralPath $workRoot) {
+                          Remove-Item -LiteralPath $workRoot -Recurse -Force
+                      }
+                  }
 
             - name: Create or Update Release
               id: create_release

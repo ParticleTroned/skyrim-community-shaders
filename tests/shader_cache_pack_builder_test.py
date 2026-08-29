@@ -37,6 +37,34 @@ def write_loose_cache(root: Path, entries: dict[str, tuple[str, bytes]]) -> None
 
 def main() -> int:
     builder = load_builder()
+    scoped_registration = {
+        "identity": "org.example.scope",
+        "owner": "test",
+        "displayVersion": "1",
+        "contractMajor": 1,
+        "currentMinor": 0,
+        "minimumCompatibleMinor": 0,
+        "maximumCompatibleMinor": 0,
+        "resourceFingerprint": "",
+        "scopes": [{"kind": "shader-source", "value": "Data\\Shaders\\Water.hlsl"}],
+    }
+    assert builder.compatibility_registration_applies(
+        scoped_registration, "water", "Shaders/Water.hlsl", set()
+    )
+    assert "scope=source:shaders/water.hlsl" in builder.canonical_compatibility_registration(
+        scoped_registration
+    )
+    feature_registration = {
+        **scoped_registration,
+        "identity": "org.example.feature",
+        "scopes": [{"kind": "feature", "value": "HorizonFix"}],
+    }
+    assert builder.compatibility_registration_applies(
+        feature_registration, "water", "Shaders/Water.hlsl", {"horizonfix"}
+    )
+    assert not builder.compatibility_registration_applies(
+        feature_registration, "water", "Shaders/Water.hlsl", set()
+    )
     with tempfile.TemporaryDirectory(prefix="csx-pack-builder-test-") as temporary:
         root = Path(temporary)
         standard = root / "ShaderCache"
@@ -74,10 +102,10 @@ def main() -> int:
         developer_b = builder.validate_shader_pack(
             standard / "Developer.B.csxpack", 2
         )
-        assert optimized_a == {"generation": 1, "recordCount": 3}
-        assert optimized_b == {"generation": 0, "recordCount": 0}
-        assert developer_a == {"generation": 1, "recordCount": 0}
-        assert developer_b == {"generation": 0, "recordCount": 0}
+        assert optimized_a["generation"] == 1 and optimized_a["recordCount"] == 3
+        assert optimized_b["generation"] == 0 and optimized_b["recordCount"] == 0
+        assert developer_a["generation"] == 1 and developer_a["recordCount"] == 0
+        assert developer_b["generation"] == 0 and developer_b["recordCount"] == 0
         manifest = json.loads(
             (standard / "PackManifest.json").read_text(encoding="utf-8")
         )
@@ -86,6 +114,10 @@ def main() -> int:
             "legacy-horizon-fix",
         ]
         assert manifest["shaderCacheABI"] == "a" * 64
+        assert all(
+            stats["packSetId"] == manifest["packSetId"]
+            for stats in (optimized_a, optimized_b, developer_a, developer_b)
+        )
         assert not list(standard.rglob("*.pso"))
         (standard / "Info.ini").write_text(
             "[Cache]\nPluginVersion=CSX 3.19-VR\nShaderCacheABI="

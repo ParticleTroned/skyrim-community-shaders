@@ -1,17 +1,17 @@
-#include "Api/ProfilerApiDevBenchBridge.h"
 #include "Api/DepthCullingDevBenchBridge.h"
-#include "Api/ProfilerService.h"
-#include "Api/RuntimeThreadAffinity.h"
-#include "Api/ServiceRegistryProvider.h"
-#include "Api/UpscalingDevBenchBridge.h"
-#include "Api/WeatherDevBenchBridge.h"
-#include "Api/WeatherService.h"
 #include "Api/EditorDevBenchBridge.h"
 #include "Api/EditorService.h"
 #include "Api/FeatureDevBenchBridge.h"
 #include "Api/FeatureService.h"
-#include "Api/ShaderDevBenchBridge.h"
+#include "Api/ProfilerApiDevBenchBridge.h"
+#include "Api/ProfilerService.h"
+#include "Api/RuntimeThreadAffinity.h"
+#include "Api/ServiceRegistryProvider.h"
 #include "Api/ShaderCompatibilityRegistry.h"
+#include "Api/ShaderDevBenchBridge.h"
+#include "Api/UpscalingDevBenchBridge.h"
+#include "Api/WeatherDevBenchBridge.h"
+#include "Api/WeatherService.h"
 #include "BuildProvenance.h"
 #include "Deferred.h"
 #include "Features/InteriorSun.h"
@@ -21,8 +21,8 @@
 #include "Globals.h"
 #include "Hooks.h"
 #include "Menu.h"
-#include "MenuDevBenchBridge.h"
 #include "Menu/ThemeManager.h"
+#include "MenuDevBenchBridge.h"
 #include "ProfilerDevBenchBridge.h"
 #include "RenderMap/DevBenchBridge.h"
 #include "SceneSettingsManager.h"
@@ -75,7 +75,7 @@ namespace
 			return false;
 		}
 
-		logger::info("Registered legacy CSAP and versioned CSXR API message listener during PostLoad");
+		logger::info("Registered legacy CSAP and versioned CSXR API message listener before PostLoad dispatch");
 		return true;
 	}
 
@@ -163,20 +163,18 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 			CSX::Api::InitializeFeatureService();
 			CSX::Api::InitializeProfilerService();
 			CSX::Api::InitializeWeatherService();
-			if (RegisterCommunityShadersAPIMessageListener()) {
-				// Publish diagnostic adapters before cache validation and shader
-				// compilation. If DevBench's PostLoad listener runs later, the
-				// PostPostLoad attempt below provides the deterministic retry.
-				CSX::Api::ProfilerApiDevBenchBridge::Install();
-				ScreenshotDevBenchBridge::Install();
-				CSX::Api::UpscalingDevBenchBridge::Install();
-				CSX::Api::WeatherDevBenchBridge::Install();
-				CSX::Api::EditorDevBenchBridge::Install();
-				CSX::Api::FeatureDevBenchBridge::Install();
-				CSX::Api::DepthCullingDevBenchBridge::Install();
-				CSX::Api::ShaderDevBenchBridge::Install();
-				CSX::RenderMap::DevBenchBridge::Install();
-			}
+			// Publish diagnostic adapters before cache validation and shader
+			// compilation. If DevBench's PostLoad listener runs later, the
+			// PostPostLoad attempt below provides the deterministic retry.
+			CSX::Api::ProfilerApiDevBenchBridge::Install();
+			ScreenshotDevBenchBridge::Install();
+			CSX::Api::UpscalingDevBenchBridge::Install();
+			CSX::Api::WeatherDevBenchBridge::Install();
+			CSX::Api::EditorDevBenchBridge::Install();
+			CSX::Api::FeatureDevBenchBridge::Install();
+			CSX::Api::DepthCullingDevBenchBridge::Install();
+			CSX::Api::ShaderDevBenchBridge::Install();
+			CSX::RenderMap::DevBenchBridge::Install();
 			break;
 		}
 	case SKSE::MessagingInterface::kPostPostLoad:
@@ -380,6 +378,8 @@ bool Load()
 		logger::error("SKSE messaging interface unavailable");
 		return false;
 	}
+	if (!RegisterCommunityShadersAPIMessageListener())
+		return false;
 
 	if (!messaging->RegisterListener("SKSE", MessageHandler)) {
 		logger::error("Failed to register SKSE message listener");

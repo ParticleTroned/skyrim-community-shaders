@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <limits>
+#include <optional>
 #include <ranges>
 #include <sstream>
 
@@ -35,11 +36,44 @@ namespace
 	{
 		if (!a_value)
 			return !a_required;
-		const std::string_view value(a_value);
-		if ((a_required && value.empty()) || value.size() > a_maximum)
+		std::size_t length = 0;
+		while (length <= a_maximum && a_value[length] != '\0')
+			++length;
+		if (length > a_maximum || (a_required && length == 0))
 			return false;
-		a_output.assign(value);
+		a_output.assign(a_value, length);
 		return true;
+	}
+
+	std::optional<std::string> NormalizeSource(std::string_view a_value)
+	{
+		auto normalized = Lower(a_value);
+		std::ranges::replace(normalized, '\\', '/');
+		if (normalized.empty() || normalized.front() == '/' || normalized.find(':') != std::string::npos)
+			return std::nullopt;
+
+		std::vector<std::string_view> components;
+		std::size_t begin = 0;
+		while (begin <= normalized.size()) {
+			const auto end = normalized.find('/', begin);
+			const auto component = std::string_view(normalized).substr(begin, end == std::string::npos ? normalized.size() - begin : end - begin);
+			if (component == "..")
+				return std::nullopt;
+			if (!component.empty() && component != ".")
+				components.push_back(component);
+			if (end == std::string::npos)
+				break;
+			begin = end + 1;
+		}
+		if (!components.empty() && components.front() == "data")
+			components.erase(components.begin());
+		std::string result;
+		for (const auto component : components) {
+			if (!result.empty())
+				result.push_back('/');
+			result.append(component);
+		}
+		return result.empty() ? std::nullopt : std::optional{ std::move(result) };
 	}
 
 	bool IsIdentity(std::string_view a_value)
@@ -54,11 +88,16 @@ namespace
 	std::string ScopeName(ScopeKind a_kind)
 	{
 		switch (a_kind) {
-		case ScopeKind::kShaderFamily: return "family";
-		case ScopeKind::kShaderSource: return "source";
-		case ScopeKind::kFeature: return "feature";
-		case ScopeKind::kGlobal: return "global";
-		default: return "invalid";
+		case ScopeKind::kShaderFamily:
+			return "family";
+		case ScopeKind::kShaderSource:
+			return "source";
+		case ScopeKind::kFeature:
+			return "feature";
+		case ScopeKind::kGlobal:
+			return "global";
+		default:
+			return "invalid";
 		}
 	}
 
@@ -66,9 +105,9 @@ namespace
 	{
 		std::ostringstream value;
 		value << "identity=" << a_registration.identity
-		      << "\ncontract=" << a_registration.contractMajor << '.' << a_registration.currentMinor
-		      << "\ncompatible=" << a_registration.minimumCompatibleMinor << '-' << a_registration.maximumCompatibleMinor
-		      << "\nresource=" << a_registration.resourceFingerprint;
+			  << "\ncontract=" << a_registration.contractMajor << '.' << a_registration.currentMinor
+			  << "\ncompatible=" << a_registration.minimumCompatibleMinor << '-' << a_registration.maximumCompatibleMinor
+			  << "\nresource=" << a_registration.resourceFingerprint;
 		for (const auto& scope : a_registration.scopes)
 			value << "\nscope=" << ScopeName(scope.kind) << ':' << scope.value;
 		return value.str();
@@ -117,7 +156,12 @@ namespace CSX::Api
 				return Failure(Status::kInvalidScope, "invalid-scope-value", "scope value is missing or exceeds its bounded size");
 			if (global)
 				value.clear();
-			else
+			else if (input.kind == ScopeKind::kShaderSource) {
+				const auto normalized = NormalizeSource(value);
+				if (!normalized)
+					return Failure(Status::kInvalidScope, "invalid-source-scope", "shader source scopes must be relative normalized paths without traversal");
+				value = *normalized;
+			} else
 				value = Lower(value);
 			a_output.scopes.push_back({ input.kind, std::move(value) });
 		}
@@ -159,6 +203,7 @@ namespace CSX::Api
 		++revision;
 		result.revision = revision;
 		compatibilitySetDigest.clear();
+		requirementCache.clear();
 		return result;
 	}
 
@@ -190,22 +235,27 @@ namespace CSX::Api
 		const ShaderCompatibilityRegistration& a_registration,
 		std::string_view a_shaderFamily,
 		std::string_view a_shaderSource,
-		std::string_view a_feature)
+		std::span<const std::string> a_features)
 	{
 		const auto family = Lower(a_shaderFamily);
-		auto source = Lower(a_shaderSource);
-		std::ranges::replace(source, '\\', '/');
-		const auto feature = Lower(a_feature);
+		const auto normalizedSource = NormalizeSource(a_shaderSource);
+		const std::string source = normalizedSource.value_or(std::string{});
 		return std::ranges::any_of(a_registration.scopes, [&](const ShaderCompatibilityScope& a_scope) {
 			switch (a_scope.kind) {
-			case ScopeKind::kGlobal: return true;
-			case ScopeKind::kShaderFamily: return a_scope.value == family;
+			case ScopeKind::kGlobal:
+				return true;
+			case ScopeKind::kShaderFamily:
+				return a_scope.value == family;
 			case ScopeKind::kShaderSource:
 				return a_scope.value == source ||
-					(source.size() > a_scope.value.size() && source.ends_with(a_scope.value) &&
-					 source[source.size() - a_scope.value.size() - 1] == '/');
-			case ScopeKind::kFeature: return !feature.empty() && a_scope.value == feature;
-			default: return false;
+				       (source.size() > a_scope.value.size() && source.ends_with(a_scope.value) &&
+						   source[source.size() - a_scope.value.size() - 1] == '/');
+			case ScopeKind::kFeature:
+				return std::ranges::any_of(a_features, [&](const std::string& a_feature) {
+					return a_scope.value == a_feature;
+				});
+			default:
+				return false;
 			}
 		});
 	}
@@ -213,12 +263,29 @@ namespace CSX::Api
 	ShaderCompatibilityRequirementSet ShaderCompatibilityRegistry::BuildRequirementSet(
 		std::string_view a_shaderFamily,
 		std::string_view a_shaderSource,
-		std::string_view a_feature) const
+		std::span<const std::string> a_features) const
 	{
 		std::scoped_lock lock(mutex);
+		auto normalizedFeatures = std::vector<std::string>(a_features.begin(), a_features.end());
+		for (auto& feature : normalizedFeatures)
+			feature = Lower(feature);
+		std::ranges::sort(normalizedFeatures);
+		normalizedFeatures.erase(std::ranges::unique(normalizedFeatures).begin(), normalizedFeatures.end());
+		const auto normalizedSource = NormalizeSource(a_shaderSource).value_or(std::string{});
+		std::ostringstream cacheKeyValue;
+		cacheKeyValue << Lower(a_shaderFamily) << '\n'
+					  << normalizedSource;
+		for (const auto& feature : normalizedFeatures)
+			cacheKeyValue << '\n'
+						  << feature;
+		const auto cacheKey = cacheKeyValue.str();
+		if (phase == ShaderCompatibilityAPI::Phase::kFrozen) {
+			if (const auto cached = requirementCache.find(cacheKey); cached != requirementCache.end())
+				return cached->second;
+		}
 		std::vector<const ShaderCompatibilityRegistration*> applicable;
 		for (const auto& registration : registrations) {
-			if (Applies(registration, a_shaderFamily, a_shaderSource, a_feature))
+			if (Applies(registration, a_shaderFamily, normalizedSource, normalizedFeatures))
 				applicable.push_back(&registration);
 		}
 		std::ranges::sort(applicable, {}, [](const auto* a_registration) { return a_registration->identity; });
@@ -230,6 +297,8 @@ namespace CSX::Api
 		}
 		result.canonical = canonical.str();
 		result.digest = Util::CryptoHash::Sha256Hex(result.canonical);
+		if (phase == ShaderCompatibilityAPI::Phase::kFrozen)
+			requirementCache.insert_or_assign(cacheKey, result);
 		return result;
 	}
 
@@ -265,8 +334,8 @@ namespace CSX::Api
 	ShaderCompatibilityRequirementSet GetShaderCompatibilityRequirementSet(
 		std::string_view a_shaderFamily,
 		std::string_view a_shaderSource,
-		std::string_view a_feature)
+		std::span<const std::string> a_features)
 	{
-		return GetShaderCompatibilityRegistry().BuildRequirementSet(a_shaderFamily, a_shaderSource, a_feature);
+		return GetShaderCompatibilityRegistry().BuildRequirementSet(a_shaderFamily, a_shaderSource, a_features);
 	}
 }

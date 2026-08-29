@@ -15,11 +15,17 @@ scope before returning.
 A provider owns a stable, lower-case identity such as
 `org.example.water-integration`, and reports:
 
-- a shader-facing contract major and current/minimum/maximum compatible minor;
-- an optional resource fingerprint when external shader inputs have identity
-  beyond the contract version;
-- one or more declarative scopes: shader family, shader source, CSX feature, or
-  global.
+-   a shader-facing contract major and current/minimum/maximum compatible minor;
+-   an optional resource fingerprint when external shader inputs have identity
+    beyond the contract version;
+-   one or more declarative scopes: shader family, shader source, CSX feature, or
+    global.
+
+Shader-source scopes are relative to the game `Data` directory. Separators and
+case are normalized, and a leading `Data/` is accepted but removed so runtime
+and offline cache generation produce the same identity. Absolute paths and
+traversal are rejected. Feature scopes apply when that loaded CSX feature adds
+a define to the shader family being compiled.
 
 `displayVersion` is diagnostic only. Updating a mod package without changing its
 shader-facing contract must not invalidate shaders. Conversely, a shader-facing
@@ -71,11 +77,13 @@ it, and selects its higher generation; the prior file remains a searchable
 fallback generation. Fragmentation is measured only within the active file, so
 the intentional fallback generation does not cause endless compaction.
 
-The pack index is authoritative when all four managed files are present. A
-partial installation is not mixed with loose-cache lifecycle handling: CSX
-falls back to the existing loose cache as a unit. Explicit cache clearing
-truncates and reinitializes the existing fixed files rather than creating new
-VFS entries.
+The managed layout is authoritative when all four fixed files are present. Its
+optimized and developer lanes open and fail independently, so damage in one
+lane does not disable the other. An unavailable managed lane recompiles from
+source without consulting or writing legacy loose blobs; cache lifecycle
+operations continue to address the fixed pack files. Explicit cache clearing
+first commits a new empty generation barrier, then reinitializes the superseded
+file, rather than creating or deleting VFS entries.
 
 This storage transition is `engine-cache-v3-managed-pack` in
 `config/shader-cache-abi.json`. The generated pack manifest embeds the exact

@@ -53,7 +53,7 @@ void Bloom::DrawProfileControls(Profile& a_profile)
 
 	const auto drawBloomSlider = [&]() {
 		ImGui::SliderFloat("Bloom", &a_profile.EnhancementIntensity, 0.0f, kEnhancementIntensityMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-		DrawTooltip("Bloom enhancement strength for this profile. 0 turns the enhancement off and keeps Skyrim's vanilla Bloom unchanged; values through 1 blend into the configured enhancement, and higher values amplify it before compression.");
+		DrawTooltip("Bloom strength contributed by this layer. 0 adds no strength; detailed controls can still reshape Bloom inherited from earlier layers.");
 	};
 	const auto& style = ImGui::GetStyle();
 	const float bloomLabelWidth = ImGui::CalcTextSize("Bloom").x + style.ItemInnerSpacing.x;

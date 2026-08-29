@@ -353,9 +353,9 @@
     "ShowInOverlay": false
   },
   "Hair Specular": {
-    "BaseColorMult": 0.699999988079071,
+    "BaseColorMult": 0.81,
     "DiffuseIndirectMult": 0.699999988079071,
-    "DiffuseMult": 0.699999988079071,
+    "DiffuseMult": 1.02,
     "EnableSelfShadow": 1,
     "EnableTangentShift": 1,
     "Enabled": 1,

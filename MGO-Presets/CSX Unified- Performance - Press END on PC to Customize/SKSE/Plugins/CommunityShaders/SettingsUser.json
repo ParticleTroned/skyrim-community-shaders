@@ -353,22 +353,22 @@
     "ShowInOverlay": false
   },
   "Hair Specular": {
-    "BaseColorMult": 0.699999988079071,
-    "DiffuseIndirectMult": 0.699999988079071,
-    "DiffuseMult": 0.699999988079071,
+    "BaseColorMult": 0.81,
+    "DiffuseIndirectMult": 0.7,
+    "DiffuseMult": 1.02,
     "EnableSelfShadow": 1,
     "EnableTangentShift": 1,
     "Enabled": 1,
     "HairGlossiness": 70.0,
     "HairMode": 1,
-    "HairSaturation": 0.800000011920929,
+    "HairSaturation": 0.8,
     "PrimaryTangentShift": 0.5,
     "SecondaryTangentShift": -0.25,
-    "SelfShadowExponent": 0.10000000149011612,
+    "SelfShadowExponent": 0.1,
     "SelfShadowScale": 2.5,
     "SelfShadowStrength": 1.0,
     "SpecularIndirectMult": 3.0,
-    "SpecularMult": 1.3799999952316284,
+    "SpecularMult": 1.38,
     "Transmission": 1.0
   },
   "Subsurface Scattering": {

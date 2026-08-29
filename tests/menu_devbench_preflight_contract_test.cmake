@@ -23,6 +23,7 @@ string(JSON _action_count LENGTH
     "${_descriptor}" inputSchema properties action enum
 )
 set(_prepare_coc_found FALSE)
+set(_truepbr_verbose_found FALSE)
 math(EXPR _action_last "${_action_count} - 1")
 foreach(_index RANGE 0 ${_action_last})
     string(JSON _action GET
@@ -30,10 +31,17 @@ foreach(_index RANGE 0 ${_action_last})
     )
     if(_action STREQUAL "prepare_coc")
         set(_prepare_coc_found TRUE)
+    elseif(_action STREQUAL "set_truepbr_verbose_json_logging")
+        set(_truepbr_verbose_found TRUE)
     endif()
 endforeach()
 if(NOT _prepare_coc_found)
     message(FATAL_ERROR "Menu DevBench schema is missing prepare_coc")
+endif()
+if(NOT _truepbr_verbose_found)
+    message(FATAL_ERROR
+        "Menu DevBench schema is missing set_truepbr_verbose_json_logging"
+    )
 endif()
 
 foreach(_required_behavior IN ITEMS
@@ -48,6 +56,8 @@ foreach(_required_behavior IN ITEMS
     "kFoveatedCenterArea"
     "kPeripheryTAACenterArea"
     "kPeripheryTAAOuterScale"
+    "{ \"truePbrVerboseJsonLogging\", globals::features::truePBR.enableVerboseJsonLogging }"
+    "globals::features::truePBR.enableVerboseJsonLogging = enabled"
     "{ \"persisted\", false }"
     "{ \"promptRequired\", true }"
 )

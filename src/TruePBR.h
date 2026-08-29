@@ -57,6 +57,8 @@ public:
 	static_assert(sizeof(Settings) == 16);
 
 	Settings settings;
+	/** @brief Controls per-file PBR JSON logging; failures remain visible when disabled. */
+	bool enableVerboseJsonLogging = false;
 
 	bool TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land);
 	bool BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material);

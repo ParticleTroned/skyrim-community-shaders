@@ -121,19 +121,22 @@ namespace Util::ShaderCachePack
 	bool Store::Scan(const std::filesystem::path& a_path, ScannedFile& a_output, std::string* a_error) const
 	{
 		(void)a_error;
+		// a_path may refer to a_output.path (InitializeEmpty does exactly that).
+		// Preserve the value before clearing the output object.
+		const auto stablePath = a_path;
 		a_output = {};
-		a_output.path = a_path;
+		a_output.path = stablePath;
 		std::error_code error;
-		a_output.exists = std::filesystem::exists(a_path, error);
+		a_output.exists = std::filesystem::exists(stablePath, error);
 		if (error || !a_output.exists)
 			return true;
-		a_output.fileSize = std::filesystem::file_size(a_path, error);
+		a_output.fileSize = std::filesystem::file_size(stablePath, error);
 		if (error || a_output.fileSize == 0)
 			return true;
 		if (a_output.fileSize < sizeof(FileHeader))
 			return true;
 
-		std::ifstream stream(a_path, std::ios::binary);
+		std::ifstream stream(stablePath, std::ios::binary);
 		FileHeader file{};
 		if (!ReadAt(stream, 0, file))
 			return true;
@@ -170,7 +173,7 @@ namespace Util::ShaderCachePack
 
 			const auto* chars = reinterpret_cast<const char*>(payload.data());
 			RecordLocation location{
-				.path = a_path,
+				.path = stablePath,
 				.offset = offset,
 				.totalSize = totalSize,
 				.sequence = header.sequence,
@@ -191,7 +194,8 @@ namespace Util::ShaderCachePack
 
 	bool Store::InitializeEmpty(ScannedFile& a_file, std::uint64_t a_generation, std::string* a_error) const
 	{
-		if (!a_file.exists) {
+		std::error_code existenceError;
+		if (!a_file.exists || !std::filesystem::is_regular_file(a_file.path, existenceError) || existenceError) {
 			SetError(a_error, "pack file is absent; runtime will not create files outside the shipped managed cache mod");
 			return false;
 		}
@@ -221,8 +225,18 @@ namespace Util::ShaderCachePack
 
 	bool Store::Open(std::string* a_error)
 	{
-		std::scoped_lock lock(mutex);
-		return OpenLocked(a_error);
+		try {
+			std::unique_lock lock(mutex);
+			return OpenLocked(a_error);
+		} catch (const std::exception& e) {
+			SetError(a_error, e.what());
+			opened = false;
+			return false;
+		} catch (...) {
+			SetError(a_error, "unknown shader pack open failure");
+			opened = false;
+			return false;
+		}
 	}
 
 	bool Store::OpenLocked(std::string* a_error)
@@ -254,8 +268,8 @@ namespace Util::ShaderCachePack
 	{
 		exactIndex.clear();
 		liveByLogical.clear();
+		activeLiveByLogical.clear();
 		stats = { .available = opened, .activeGeneration = active.generation };
-		std::unordered_map<std::string, RecordLocation> activeLiveByLogical;
 		for (const auto* file : { &fallback, &active }) {
 			stats.totalBytes += file->fileSize;
 			stats.corruptTailBytes += file->fileSize - file->validSize;
@@ -291,14 +305,27 @@ namespace Util::ShaderCachePack
 
 	std::optional<Entry> Store::Find(std::string_view a_exactKey, std::string* a_error) const
 	{
-		std::scoped_lock lock(mutex);
-		if (!opened)
+		try {
+			std::shared_lock lock(mutex);
+			if (!opened)
+				return std::nullopt;
+			const auto found = exactIndex.find(std::string(a_exactKey));
+			return found == exactIndex.end() ? std::nullopt : Read(found->second, a_error);
+		} catch (const std::exception& e) {
+			SetError(a_error, e.what());
 			return std::nullopt;
-		const auto found = exactIndex.find(std::string(a_exactKey));
-		return found == exactIndex.end() ? std::nullopt : Read(found->second, a_error);
+		} catch (...) {
+			SetError(a_error, "unknown shader pack read failure");
+			return std::nullopt;
+		}
 	}
 
-	bool Store::AppendLocked(ScannedFile& a_file, const Entry& a_entry, std::uint64_t a_sequence, std::string* a_error) const
+	bool Store::AppendLocked(
+		ScannedFile& a_file,
+		const Entry& a_entry,
+		std::uint64_t a_sequence,
+		bool a_checkpoint,
+		std::string* a_error) const
 	{
 		if (a_entry.logicalKey.empty() || a_entry.exactKey.empty() || a_entry.bytecode.empty()) {
 			SetError(a_error, "shader pack records require logical key, exact key, and bytecode");
@@ -341,7 +368,7 @@ namespace Util::ShaderCachePack
 				return false;
 			}
 		}
-		if (!DurableFlush(a_file.path)) {
+		if (a_checkpoint && !DurableFlush(a_file.path)) {
 			SetError(a_error, "failed to durably flush committed shader pack record");
 			return false;
 		}
@@ -350,16 +377,18 @@ namespace Util::ShaderCachePack
 
 	bool Store::Append(const Entry& a_entry, std::string* a_error)
 	{
-		std::scoped_lock lock(mutex);
-		if (!opened && !OpenLocked(a_error))
-			return false;
-		const auto offset = active.validSize;
-		const auto sequence = active.nextSequence;
-		if (!AppendLocked(active, a_entry, sequence, a_error))
-			return false;
-		const std::uint64_t totalSize = sizeof(RecordHeader) + a_entry.logicalKey.size() + a_entry.exactKey.size() +
-			a_entry.metadata.size() + a_entry.bytecode.size() + sizeof(CommitTrailer);
-		active.records.push_back({
+		try {
+			std::unique_lock lock(mutex);
+			if (!opened && !OpenLocked(a_error))
+				return false;
+			const auto offset = active.validSize;
+			const auto sequence = active.nextSequence;
+			const auto removedTailBytes = active.fileSize - active.validSize;
+			if (!AppendLocked(active, a_entry, sequence, false, a_error))
+				return false;
+			const std::uint64_t totalSize = sizeof(RecordHeader) + a_entry.logicalKey.size() + a_entry.exactKey.size() +
+				a_entry.metadata.size() + a_entry.bytecode.size() + sizeof(CommitTrailer);
+			RecordLocation location{
 			.path = active.path,
 			.offset = offset,
 			.totalSize = totalSize,
@@ -370,29 +399,75 @@ namespace Util::ShaderCachePack
 			.metadata = a_entry.metadata,
 			.bytecodeOffset = offset + sizeof(RecordHeader) + a_entry.logicalKey.size() + a_entry.exactKey.size() + a_entry.metadata.size(),
 			.bytecodeSize = a_entry.bytecode.size(),
-		});
-		active.validSize += totalSize;
-		active.fileSize = active.validSize;
-		++active.nextSequence;
-		RebuildIndexes();
-		return true;
+			};
+			active.records.push_back(location);
+			active.validSize += totalSize;
+			active.fileSize = active.validSize;
+			++active.nextSequence;
+
+			stats.totalBytes = stats.totalBytes >= removedTailBytes ? stats.totalBytes - removedTailBytes + totalSize : totalSize;
+			stats.corruptTailBytes = stats.corruptTailBytes >= removedTailBytes ? stats.corruptTailBytes - removedTailBytes : 0;
+			stats.committedBytes += totalSize;
+			++stats.recordCount;
+			if (const auto previous = activeLiveByLogical.find(location.logicalKey); previous != activeLiveByLogical.end())
+				stats.liveBytes -= previous->second.totalSize;
+			activeLiveByLogical.insert_or_assign(location.logicalKey, location);
+			stats.liveBytes += location.totalSize;
+			stats.liveRecordCount = activeLiveByLogical.size();
+			stats.supersededBytes = stats.committedBytes > stats.liveBytes ? stats.committedBytes - stats.liveBytes : 0;
+			exactIndex.insert_or_assign(location.exactKey, location);
+			const auto live = liveByLogical.find(location.logicalKey);
+			if (live == liveByLogical.end() || std::pair{ location.generation, location.sequence } >=
+				std::pair{ live->second.generation, live->second.sequence })
+				liveByLogical.insert_or_assign(location.logicalKey, location);
+			return true;
+		} catch (const std::exception& e) {
+			SetError(a_error, e.what());
+			return false;
+		} catch (...) {
+			SetError(a_error, "unknown shader pack append failure");
+			return false;
+		}
+	}
+
+	bool Store::Checkpoint(std::string* a_error)
+	{
+		try {
+			std::shared_lock lock(mutex);
+			if (!opened) {
+				SetError(a_error, "shader pack is not open");
+				return false;
+			}
+			if (!DurableFlush(active.path)) {
+				SetError(a_error, "failed to durably checkpoint shader pack records");
+				return false;
+			}
+			return true;
+		} catch (const std::exception& e) {
+			SetError(a_error, e.what());
+			return false;
+		} catch (...) {
+			SetError(a_error, "unknown shader pack checkpoint failure");
+			return false;
+		}
 	}
 
 	Stats Store::GetStats() const
 	{
-		std::scoped_lock lock(mutex);
+		std::shared_lock lock(mutex);
 		return stats;
 	}
 
 	bool Store::ShouldCompact(double a_minimumFragmentation, std::uint64_t a_minimumSupersededBytes) const
 	{
-		std::scoped_lock lock(mutex);
+		std::shared_lock lock(mutex);
 		return opened && fallback.exists && stats.supersededBytes >= a_minimumSupersededBytes && stats.Fragmentation() >= a_minimumFragmentation;
 	}
 
 	bool Store::Compact(std::string* a_error)
 	{
-		std::scoped_lock lock(mutex);
+		try {
+		std::unique_lock lock(mutex);
 		if (!opened || !fallback.exists) {
 			SetError(a_error, "both fixed A/B files are required for compaction");
 			return false;
@@ -416,16 +491,28 @@ namespace Util::ShaderCachePack
 			return false;
 		std::uint64_t sequence = 1;
 		for (const auto& entry : live) {
-			if (!AppendLocked(target, entry, sequence++, a_error))
+			if (!AppendLocked(target, entry, sequence++, false, a_error))
 				return false;
 			target.validSize = std::filesystem::file_size(target.path);
 		}
+		if (!DurableFlush(target.path)) {
+			SetError(a_error, "failed to durably checkpoint compacted shader pack");
+			return false;
+		}
 		return OpenLocked(a_error);
+		} catch (const std::exception& e) {
+			SetError(a_error, e.what());
+			return false;
+		} catch (...) {
+			SetError(a_error, "unknown shader pack compaction failure");
+			return false;
+		}
 	}
 
 	bool Store::Reset(std::string* a_error)
 	{
-		std::scoped_lock lock(mutex);
+		try {
+		std::unique_lock lock(mutex);
 		if (!opened && !OpenLocked(a_error))
 			return false;
 		if (!active.exists || !fallback.exists) {
@@ -438,5 +525,12 @@ namespace Util::ShaderCachePack
 		if (!InitializeEmpty(first, nextGeneration, a_error) || !InitializeEmpty(second, 0, a_error))
 			return false;
 		return OpenLocked(a_error);
+		} catch (const std::exception& e) {
+			SetError(a_error, e.what());
+			return false;
+		} catch (...) {
+			SetError(a_error, "unknown shader pack reset failure");
+			return false;
+		}
 	}
 }

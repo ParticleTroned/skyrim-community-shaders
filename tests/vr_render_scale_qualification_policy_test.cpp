@@ -92,11 +92,8 @@ namespace
 	{
 		auto facts = CommonStableFacts();
 		facts.apiNativeContract = true;
-		facts.physicalActiveContract = true;
-		facts.presentationPhaseStable = true;
-		facts.fidelityStable = true;
-		facts.vendorPresentationStable = true;
-		facts.lifecycleStable = true;
+		facts.physicalNativeContract = true;
+		facts.nativePresentationStable = true;
 		return facts;
 	}
 
@@ -255,23 +252,22 @@ namespace
 		auto dlaaFacts = NativeVendorStableFacts();
 		if (EvaluateStability(NativeDLAA(), dlaaFacts) != kFailureNone)
 			return false;
-		dlaaFacts.physicalActiveContract = false;
+		dlaaFacts.physicalNativeContract = false;
 		if ((EvaluateStability(NativeDLAA(), dlaaFacts) &
-				static_cast<std::uint64_t>(kFailurePhysicalActiveContract)) == 0) {
+				static_cast<std::uint64_t>(kFailurePhysicalNativeContract)) == 0) {
 			return false;
 		}
 
 		auto fsrFacts = NativeVendorStableFacts();
-		fsrFacts.fsrDispatchStable = true;
 		if (EvaluateStability(NativeFSR(), fsrFacts) != kFailureNone)
 			return false;
-		fsrFacts.fsrDispatchStable = false;
+		fsrFacts.nativePresentationStable = false;
 		if ((EvaluateStability(NativeFSR(), fsrFacts) &
-				static_cast<std::uint64_t>(kFailureFSRDispatch)) == 0) {
+				static_cast<std::uint64_t>(kFailureNativePresentation)) == 0) {
 			return false;
 		}
 
-		fsrFacts.fsrDispatchStable = true;
+		fsrFacts.nativePresentationStable = true;
 		fsrFacts.shaderCompilationIdle = false;
 		const auto evaluation = EvaluateMilestones(NativeFSR(), fsrFacts);
 		return evaluation.PresentationStable() && !evaluation.CleanupDrained() &&

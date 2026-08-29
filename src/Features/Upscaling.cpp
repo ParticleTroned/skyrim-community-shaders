@@ -4085,22 +4085,29 @@ namespace
 		Upscaling::UpscaleMethod a_method,
 		bool a_renderScaleMode,
 		uint32_t a_qualityMode,
-		uint32_t a_dlssPreset)
+		uint32_t a_dlssPreset,
+		std::optional<bool> a_fsr4RuntimeEnabled)
 	{
 		const auto matches = [&](const Upscaling::VRRenderScaleProfileSnapshot& a_profile) {
-			return VRVendorRelatchPolicy::MatchesStabilizerControllerTarget({
-				.profileValid = a_profile.valid,
-				.targetEpochKnown = a_controller.targetEpoch != 0,
-				.profileOwnsTargetEpoch =
-					a_profile.transitionEpoch == a_controller.targetEpoch,
-				.methodMatches = a_profile.method == a_method,
-				.qualityMatches = a_profile.qualityMode == a_qualityMode,
-				.renderScaleModeMatches =
-					a_profile.renderScaleModeEnabled == a_renderScaleMode,
-				.dlssPresetMatchesOrIrrelevant =
-					a_method != Upscaling::UpscaleMethod::kDLSS ||
-					a_profile.dlssPreset == a_dlssPreset,
-			});
+			const bool profileMatches =
+				VRVendorRelatchPolicy::MatchesStabilizerControllerTarget({
+					.profileValid = a_profile.valid,
+					.targetEpochKnown = a_controller.targetEpoch != 0,
+					.profileOwnsTargetEpoch =
+						a_profile.transitionEpoch == a_controller.targetEpoch,
+					.methodMatches = a_profile.method == a_method,
+					.qualityMatches = a_profile.qualityMode == a_qualityMode,
+					.renderScaleModeMatches =
+						a_profile.renderScaleModeEnabled == a_renderScaleMode,
+					.dlssPresetMatchesOrIrrelevant =
+						a_method != Upscaling::UpscaleMethod::kDLSS ||
+						a_profile.dlssPreset == a_dlssPreset,
+				});
+			const bool runtimeMatches =
+				a_method != Upscaling::UpscaleMethod::kFSR ||
+				!a_fsr4RuntimeEnabled.has_value() ||
+				a_profile.fsr4RuntimeEnabled == a_fsr4RuntimeEnabled.value();
+			return profileMatches && runtimeMatches;
 		};
 
 		return matches(a_controller.requested) ||
@@ -20424,10 +20431,30 @@ Upscaling::UpscalingTransitionApplyResult Upscaling::ApplyCSMenuUpscalingTransit
 					targetMethod,
 					qualityMode,
 					targetFSR4RuntimeEnable)));
+	const auto controllerSnapshot = GetVRRenderScaleTransitionSnapshot();
+	const bool controllerHasTarget = HasCurrentVRRenderScaleControllerTarget(
+		controllerSnapshot,
+		targetMethod,
+		targetRenderScaleMode,
+		qualityMode,
+		dlssPreset,
+		targetFSR4RuntimeEnable);
+	const bool apiControllerPublicationRequired =
+		a_origin == VRUpscalingTransitionOrigin::VRAPI &&
+		!controllerHasTarget;
+	const bool postLoadControllerPublicationRequired =
+		a_origin == VRUpscalingTransitionOrigin::PostLoadSync &&
+		VRVendorRelatchPolicy::ShouldPublishStabilizerDestinationProfile(
+			true,
+			controllerHasTarget);
+	const bool controllerPublicationRequired =
+		apiControllerPublicationRequired ||
+		postLoadControllerPublicationRequired;
 
 	if (!bufferedStabilizerDoorHandoff &&
 		!hasPendingRequest &&
 		!physicalContractRecoveryRequired &&
+		!controllerPublicationRequired &&
 		!methodChanged &&
 		!qualityTargetChanged &&
 		!renderScaleTargetChanged &&
@@ -20441,17 +20468,6 @@ Upscaling::UpscalingTransitionApplyResult Upscaling::ApplyCSMenuUpscalingTransit
 			.disposition = UpscalingTransitionApplyDisposition::AppliedSynchronously,
 		};
 	}
-	const bool postLoadControllerPublicationRequired =
-		a_origin == VRUpscalingTransitionOrigin::PostLoadSync &&
-		VRVendorRelatchPolicy::ShouldPublishStabilizerDestinationProfile(
-			true,
-			HasCurrentVRRenderScaleControllerTarget(
-				GetVRRenderScaleTransitionSnapshot(),
-				targetMethod,
-				targetRenderScaleMode,
-				qualityMode,
-				dlssPreset));
-
 	const bool stageVRUpscalingChange =
 		(startupNativeFallbackActive && startupFallbackControlRequested) ||
 		(bufferedStabilizerDoorHandoff &&
@@ -20459,7 +20475,7 @@ Upscaling::UpscalingTransitionApplyResult Upscaling::ApplyCSMenuUpscalingTransit
 		hasPendingRequest ||
 		physicalContractRecoveryRequired ||
 		fsr4RuntimeRelatchRequired ||
-		postLoadControllerPublicationRequired ||
+		controllerPublicationRequired ||
 		((targetMethodRenderScaleEligible && ShouldStageVRRenderScaleTransition(targetRenderScaleMode, qualityMode)) ||
 			methodRelatchRequired);
 	if (stageVRUpscalingChange && !ShouldAcceptVRUpscalingTransitionRequest(*this, a_origin)) {
@@ -20972,7 +20988,8 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 		target.method,
 		target.renderScaleMode,
 		target.qualityMode,
-		target.dlssPreset);
+		target.dlssPreset,
+		std::nullopt);
 	const bool profileMatches =
 		!VRVendorRelatchPolicy::ShouldPublishStabilizerDestinationProfile(
 			settingsProfileMatches,
@@ -53360,19 +53377,11 @@ void Upscaling::ApplyPendingVRUpscalingTransition()
 		if (pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire))
 			SetVRRenderScaleTransitionState(VRRenderScaleTransitionState::WaitingForSafePoint, "inactive target relatch queued");
 		else {
-			if (PublishVRRenderScaleTransitionApplied(
-					transitionOrigin,
-					false,
-					request.transitionEpoch)) {
-				const float2 nativeSize = perfMode.GetDisplayScreenSize();
-				CompleteVRRenderScaleInfoTransition(
-					request.transitionEpoch,
-					"request already applied",
-					false,
-					targetMethod,
-					nativeSize,
-					nativeSize);
-			}
+			ArmVRNativeRestorePresentationGuard(request.transitionEpoch);
+			(void)PublishVRRenderScaleTransitionApplied(
+				transitionOrigin,
+				true,
+				request.transitionEpoch);
 		}
 		return;
 	}
@@ -53424,21 +53433,26 @@ void Upscaling::ApplyPendingVRUpscalingTransition()
 	if (pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire))
 		SetVRRenderScaleTransitionState(VRRenderScaleTransitionState::WaitingForSafePoint, "profile relatch queued");
 	else {
+		const bool requiresNativePresentationStabilization = !targetPerfMode;
+		if (requiresNativePresentationStabilization)
+			ArmVRNativeRestorePresentationGuard(request.transitionEpoch);
 		if (PublishVRRenderScaleTransitionApplied(
 				transitionOrigin,
-				false,
+				requiresNativePresentationStabilization,
 				request.transitionEpoch)) {
-			const float2 displaySize = perfMode.GetDisplayScreenSize();
-			const float2 renderSize = targetPerfMode ?
-			                              perfMode.GetRenderScreenSize() :
-			                              displaySize;
-			CompleteVRRenderScaleInfoTransition(
-				request.transitionEpoch,
-				"request already applied",
-				targetPerfMode,
-				targetMethod,
-				displaySize,
-				renderSize);
+			if (!requiresNativePresentationStabilization) {
+				const float2 displaySize = perfMode.GetDisplayScreenSize();
+				const float2 renderSize = targetPerfMode ?
+				                              perfMode.GetRenderScreenSize() :
+				                              displaySize;
+				CompleteVRRenderScaleInfoTransition(
+					request.transitionEpoch,
+					"request already applied",
+					targetPerfMode,
+					targetMethod,
+					displaySize,
+					renderSize);
+			}
 		}
 	}
 }

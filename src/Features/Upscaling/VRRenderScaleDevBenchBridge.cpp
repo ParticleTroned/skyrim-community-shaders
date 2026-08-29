@@ -49,7 +49,7 @@ namespace
 	static_assert(kDLSSDevBenchTraceDefaultReadLimit <= Streamline::kDLSSDevBenchTraceCapacity);
 	constexpr uint64_t kQualificationMaximumTimeoutMs = 120'000;
 	constexpr double kQualificationFoveationFloatTolerance = 0.0001;
-	constexpr unsigned int kDevBenchToolExtensionRevision = 7;
+	constexpr unsigned int kDevBenchToolExtensionRevision = 8;
 	std::atomic_bool g_registered{ false };
 	std::atomic_uint64_t g_nextDiagnosticTrimEpoch{ 1ull << 63 };
 
@@ -1409,6 +1409,10 @@ namespace
 		CSX::UpscalingAPI::Method a_method)
 	{
 		switch (a_method) {
+		case CSX::UpscalingAPI::Method::kNone:
+			return QualificationPolicy::Method::None;
+		case CSX::UpscalingAPI::Method::kTAA:
+			return QualificationPolicy::Method::TAA;
 		case CSX::UpscalingAPI::Method::kDLSS:
 			return QualificationPolicy::Method::DLSS;
 		case CSX::UpscalingAPI::Method::kFSR:
@@ -1874,6 +1878,7 @@ namespace
 	{
 		return {
 			{ "method", GetQualificationMethodName(ToQualificationMethod(a_profile.method)) },
+			{ "methodValue", static_cast<uint32_t>(a_profile.method) },
 			{ "qualityMode", static_cast<uint32_t>(a_profile.qualityMode) },
 			{ "renderScaleMode", a_profile.renderScaleMode != 0 },
 			{ "dlssProfile", GetDLSSProfileName(static_cast<uint32_t>(a_profile.dlssProfile)) },
@@ -2679,9 +2684,11 @@ namespace
 	}
 
 	bool NativePhysicalContractStable(
+		const Upscaling& a_upscaling,
 		const Upscaling::VRRenderScaleTransitionSnapshot& a_controller,
 		const CSX::UpscalingAPI::Snapshot001& a_api,
-		const QualificationTarget& a_target)
+		const QualificationTarget& a_target,
+		const std::optional<QualificationFoveationTarget>& a_foveation)
 	{
 		const bool nativePipelineTarget =
 			a_target.method == QualificationPolicy::Method::None ||
@@ -2708,6 +2715,19 @@ namespace
 		}
 		if (a_controller.state != Upscaling::VRRenderScaleTransitionState::Idle &&
 			a_controller.state != Upscaling::VRRenderScaleTransitionState::Active) {
+			return false;
+		}
+		const bool vendorTarget = QualificationPolicy::UsesVendorEvaluation(a_target);
+		if (vendorTarget &&
+			(a_upscaling.GetRuntimeUpscaleMethod() != a_controller.stable.method ||
+				!a_upscaling.IsPresentationUpscalingActive())) {
+			return false;
+		}
+		if (vendorTarget && a_foveation &&
+			(a_upscaling.IsFoveatedVendorDispatchEnabled(a_controller.stable.method) !=
+					a_foveation->foveatedVendorDispatch ||
+				a_upscaling.IsPeripheryTAAEnabled(a_controller.stable.method) !=
+					a_foveation->peripheryTAAEnable)) {
 			return false;
 		}
 		return PhysicalProfileMatchesTarget(a_controller.applied, a_target, a_api, false) &&
@@ -3026,19 +3046,14 @@ namespace
 				apiSnapshot.effective, effectiveProfilePresent);
 			const auto stable = QualificationProfile(
 				apiSnapshot.stable, stableProfilePresent);
-			const bool nativeAPITarget =
-				targetAvailable && QualificationPolicy::UsesNativeAPIEvaluation(target);
 			facts.providerReady =
 				(apiSnapshot.flags & kSnapshotProviderCheckComplete) != 0;
-			facts.profilesAgree = nativeAPITarget ?
-			                          effectiveProfilePresent &&
-			                              QualificationPolicy::MatchesTarget(effective, target) :
-			                          targetAvailable && profilesPresent &&
-			                              QualificationPolicy::MatchesTarget(requested, target) &&
-			                              QualificationPolicy::MatchesTarget(effective, target) &&
-			                              QualificationPolicy::MatchesTarget(stable, target) &&
-			                              QualificationPolicy::ProfilesAgree(requested, effective) &&
-			                              QualificationPolicy::ProfilesAgree(effective, stable);
+			facts.profilesAgree = targetAvailable && profilesPresent &&
+			                      QualificationPolicy::MatchesTarget(requested, target) &&
+			                      QualificationPolicy::MatchesTarget(effective, target) &&
+			                      QualificationPolicy::MatchesTarget(stable, target) &&
+			                      QualificationPolicy::ProfilesAgree(requested, effective) &&
+			                      QualificationPolicy::ProfilesAgree(effective, stable);
 			facts.dimensionsPositive = apiSnapshot.displayEyeWidth != 0 &&
 			                           apiSnapshot.displayEyeHeight != 0 &&
 			                           apiSnapshot.renderEyeWidth != 0 &&
@@ -3124,7 +3139,7 @@ namespace
 			facts.physicalActiveContract = targetAvailable && ActivePhysicalContractStable(
 																  upscaling, controller, apiSnapshot, target, a_foveation);
 			facts.physicalNativeContract = targetAvailable && NativePhysicalContractStable(
-																  controller, apiSnapshot, target);
+																  upscaling, controller, apiSnapshot, target, a_foveation);
 			if (globals::state) {
 				resourcePublication =
 					globals::state->GetCurrentMainRenderTargetResourcePublicationDiagnostics();
@@ -3153,17 +3168,19 @@ namespace
 		const bool shaderCompilationActive =
 			globals::shaderCache && globals::shaderCache->IsCompiling();
 		facts.shaderCompilationIdle = !shaderCompilationActive;
-		facts.requiredShaderCompilationComplete =
-			!targetAvailable || !QualificationPolicy::UsesVendorEvaluation(target) ||
-			target.method != QualificationPolicy::Method::FSR ||
-			facts.shaderCompilationIdle ||
-			(facts.physicalActiveContract && facts.lifecycleStable &&
-				facts.fsrDispatchStable && facts.vendorPresentationStable);
 		facts.nativePresentationStable = PresentationEyesStable(
 			controller,
 			Upscaling::VRRenderScalePresentationPath::NativeOriginal,
 			a_transition.dispatchFrame);
-
+		const bool vendorContractStable = targetAvailable &&
+		                                  (target.renderScaleMode ?
+												  (facts.physicalActiveContract && facts.vendorPresentationStable) :
+												  (facts.physicalNativeContract && facts.nativePresentationStable));
+		facts.requiredShaderCompilationComplete =
+			!targetAvailable || !QualificationPolicy::UsesVendorEvaluation(target) ||
+			target.method != QualificationPolicy::Method::FSR ||
+			facts.shaderCompilationIdle ||
+			(vendorContractStable && facts.fsrDispatchStable);
 		const bool dlssLifecycleRelevant = targetAvailable &&
 		                                   target.method == QualificationPolicy::Method::DLSS;
 		const bool traceApplicable = dlssLifecycleRelevant &&
@@ -5000,9 +5017,9 @@ namespace
 			"exactly one validated COC on its main-thread operation. When present, "
 			"the QPC timer is read immediately before that command and "
 			"startPerformanceTelemetry binds CPU/GPU counters before it. Omit "
-			"target when an external controller owns profile selection. None and "
-			"TAA targets are qualified directly against the authoritative effective "
-			"profile and native presentation; "
+			"target when an external controller owns profile selection. Native targets "
+			"require coherent requested, effective, and stable public profiles plus "
+			"an exact native presentation; "
 			"qualification_wait then observes the coherent selected profile without "
 			"mutating it. milestone defaults to strict for backward compatibility; "
 			"presentation and cleanup expose their independent first-observed "
@@ -5047,6 +5064,24 @@ namespace VRRenderScaleDevBenchBridge
 			R"json({"description":"Control and inspect CSX VR render-scale, including bounded exact-owner preparation stage telemetry and a single-owner, QPC-timed server-side qualification barrier that returns the first coherent exact-cell/profile observation without menu queries or client polling. qualification_begin requires an active stress session plus caller-supplied transitionId and ownerId; qualification_dispatch freezes the latency origin immediately before the command and can atomically reset/start CPU plus GPU performance telemetry on that dispatch frame; qualification_wait accepts the same ownership pair, an exact editor ID and/or form ID, an optional target profile, an optional exact foveation fixture, and a timeout that defaults to 120000ms and cannot exceed it. None and TAA targets validate the authoritative effective profile and native presentation without requiring inactive controller projections to mirror TAA. target.fsrRuntime matches the configured preference; coherent desired, authoritative, resource, lifecycle, and eye-dispatch evidence independently validates the physical FSR backend, including capability fallback. Omit target when an external controller owns profile selection; the waiter then requires a post-dispatch profile change and validates the mutually coherent observed profile without changing it. DLSS dispatch tracing remains opt-in and non-blocking. stop, dlss_trace_stop, and cpu_performance_stop accept expectedSessionId to fail closed if capture ownership changed; gpu_performance_stop accepts expectedStartFrame as its ownership guard; expectedStartFrame remains a legacy optional secondary guard for CPU telemetry. CPU performance status, start, and stop responses expose cpuPerformance.sessionId and state; stop retains the session ID and reset clears it to zero. Every response identifies the producing DLL; expectedBuildId fails closed on a stale build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","qualification_status","qualification_begin","qualification_dispatch","qualification_wait","qualification_cancel","cpu_performance_status","cpu_performance_start","cpu_performance_stop","cpu_performance_reset","gpu_performance_status","gpu_performance_start","gpu_performance_stop","gpu_performance_reset","dlss_trace_status","dlss_trace_start","dlss_trace_read","dlss_trace_stop","dlss_trace_reset","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","ham_status","ham_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"transitionId":{"type":"integer","minimum":1,"description":"Caller-owned nonzero qualification transition ID. Begin, dispatch, wait, and cancel must present it."},"ownerId":{"type":"string","minLength":1,"maxLength":128,"description":"Caller-generated qualification owner identity. Begin, dispatch, wait, and cancel must present the same value."},"startPerformanceTelemetry":{"type":"boolean","default":false,"description":"qualification_dispatch only: require inactive CPU and GPU captures, reset/start both on the dispatch frame, and return their ownership receipts."},"expectedCell":{"type":"integer","minimum":1,"maximum":4294967295,"description":"Optional exact destination cell form ID. qualification_wait requires this or expectedCellEditorId; when both are supplied both must match."},"expectedCellEditorId":{"type":"string","minLength":1,"maxLength":128,"description":"Preferred stable exact destination cell editor ID for qualification_wait."},"timeoutMs":{"type":"integer","minimum":1,"maximum":120000,"default":120000,"description":"Maximum qualification deadline measured from qualification_dispatch on the server QPC clock; the waiter returns immediately when the requested milestone is satisfied."},"target":{"type":"object","additionalProperties":false,"properties":{"method":{"type":"string","enum":["none","taa","dlss","fsr"]},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"renderScaleMode":{"type":"boolean"},"dlssProfile":{"type":"string","enum":["J","K","L","M","F","E"]},"fsrRuntime":{"type":"string","enum":["fsr3","fsr4"],"description":"Configured FSR runtime preference only. Physical backend fallback is validated independently."}},"required":["method","qualityMode","renderScaleMode"],"description":"Optional exact expected profile for a runner-owned selection. None and TAA require qualityMode 0 and renderScaleMode false. Omit it for an externally owned selection; the waiter observes and returns the exact coherent profile without mutating upscaling state."},"foveation":{"type":"object","additionalProperties":false,"properties":{"foveatedVendorDispatch":{"type":"boolean"},"foveatedCenterArea":{"type":"number","minimum":0,"maximum":1},"peripheryTAAEnable":{"type":"boolean"},"peripheryTAACenterArea":{"type":"number","minimum":0,"maximum":1},"peripheryTAAOuterScale":{"type":"number","minimum":0,"maximum":1}},"required":["foveatedVendorDispatch","foveatedCenterArea","peripheryTAAEnable","peripheryTAACenterArea","peripheryTAAOuterScale"],"description":"Optional exact settings fixture. Float comparisons use the tolerance returned in each receipt; active physical flags must agree with the requested enable states."},"afterSequence":{"type":"integer","minimum":0,"description":"For dlss_trace_read, return records after this sequence."},"limit":{"type":"integer","minimum":1,"maximum":256,"description":"Maximum ring records returned by dlss_trace_read; defaults to 32 and pinned failures are returned separately."},"expectedSessionId":{"type":"integer","minimum":1,"description":"Optional ownership guard for stop, dlss_trace_stop, and cpu_performance_stop. The corresponding active session must match before it is stopped."},"expectedStartFrame":{"type":"integer","minimum":0,"description":"Optional ownership guard for gpu_performance_stop and legacy secondary guard for cpu_performance_stop. When present, the active capture window start frame must match before it is stopped."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}},"required":["action"]}})json";
 		static const std::string runtimeDiagnosticDescriptor = [&] {
 			auto descriptor = json::parse(diagnosticDescriptor);
+			auto description = descriptor["description"].get<std::string>();
+			constexpr std::string_view previousNativeDescription =
+				"None and TAA targets validate the authoritative effective profile "
+				"and native presentation without requiring inactive controller "
+				"projections to mirror TAA.";
+			constexpr std::string_view nativeDescription =
+				"Native targets require coherent requested, effective, and stable "
+				"public profiles plus exact target-correlated stereo presentation; "
+				"fixed-resolution vendor targets prove same-frame vendor dispatch "
+				"while their render-scale resource key remains inactive.";
+			if (const auto position = description.find(previousNativeDescription);
+				position != std::string::npos) {
+				description.replace(
+					position,
+					previousNativeDescription.size(),
+					nativeDescription);
+			}
+			descriptor["description"] = description;
 			descriptor["inputSchema"]["properties"]["foveation"]["description"] =
 				"Optional exact settings fixture. Float comparisons use the "
 				"tolerance returned in each receipt; live execution flags must "

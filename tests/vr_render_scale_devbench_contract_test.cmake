@@ -262,6 +262,9 @@ foreach(_required_behavior IN ITEMS
 	"QualificationPolicy::IsMilestoneSatisfied"
 	"QualificationPolicy::UsesVendorEvaluation"
 	"QualificationPolicy::UsesNativeAPIEvaluation"
+	"case CSX::UpscalingAPI::Method::kNone"
+	"case CSX::UpscalingAPI::Method::kTAA"
+	"{ \"methodValue\", static_cast<uint32_t>(a_profile.method) }"
 	"RecordQualificationMilestones"
 	"QualificationPolicy::ExactObservationTarget"
 	"QualificationPolicy::HasCoherentPresentationFrames"
@@ -335,12 +338,29 @@ foreach(_required_behavior IN ITEMS
 	"\"contextMatches\""
 	"providerTerminalClear"
     "controller.retirement.nextCleanupFrame == 0"
-    "BuildProvenance::ValidateExpectedBuild"
+	"BuildProvenance::ValidateExpectedBuild"
 )
     string(FIND "${_bridge}" "${_required_behavior}" _behavior_position)
     if(_behavior_position EQUAL -1)
         message(FATAL_ERROR "Render-scale qualification behavior is missing: ${_required_behavior}")
     endif()
+endforeach()
+
+foreach(_required_controller_behavior IN ITEMS
+	"apiControllerPublicationRequired"
+	"ArmVRNativeRestorePresentationGuard(request.transitionEpoch)"
+	"requiresNativePresentationStabilization"
+)
+	string(FIND
+		"${_upscaling_source}"
+		"${_required_controller_behavior}"
+		_controller_behavior_position
+	)
+	if(_controller_behavior_position EQUAL -1)
+		message(FATAL_ERROR
+			"VR API controller publication behavior is missing: ${_required_controller_behavior}"
+		)
+	endif()
 endforeach()
 
 foreach(_publication_source_contract IN ITEMS

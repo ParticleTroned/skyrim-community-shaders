@@ -612,12 +612,23 @@ namespace VRRenderScaleQualificationPolicy
 			kFailureResourcePublication,
 			failures);
 
-		if (UsesVendorEvaluation(a_target)) {
+		if (UsesNativeVendorEvaluation(a_target)) {
 			RequireFact(
-				a_target.renderScaleMode ? a_facts.apiActiveContract :
-										   a_facts.apiNativeContract,
-				a_target.renderScaleMode ? kFailureAPIActiveContract :
-										   kFailureAPINativeContract,
+				a_facts.apiNativeContract,
+				kFailureAPINativeContract,
+				failures);
+			RequireFact(
+				a_facts.physicalNativeContract,
+				kFailurePhysicalNativeContract,
+				failures);
+			RequireFact(
+				a_facts.nativePresentationStable,
+				kFailureNativePresentation,
+				failures);
+		} else if (UsesVendorEvaluation(a_target)) {
+			RequireFact(
+				a_facts.apiActiveContract,
+				kFailureAPIActiveContract,
 				failures);
 			RequireFact(
 				a_facts.physicalActiveContract,

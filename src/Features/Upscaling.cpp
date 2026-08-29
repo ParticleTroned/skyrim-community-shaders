@@ -15335,9 +15335,6 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 	upscaling.LoadUpscalingSDKs();
 
-	if (upscaling.IsBackendInitialized())
-		upscaling.CheckBackendFeatures(pAdapter);
-
 	// Use better swap effect to prevent tearing and improve performance
 	pSwapChainDesc->SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 	// FLIP_DISCARD requires at least two buffers.
@@ -15408,8 +15405,8 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 				// Keep the D3D12 proxy swap chain as the outermost layer so
 				// GetDevice(IID_ID3D11Device) stays compatible with other SKSE plugins.
 				upscaling.SetBackendD3DDevice(*ppDevice);
-				// Some Streamline features (notably Reflex/PCL) may not report
-				// load/support status reliably until the D3D device is bound.
+				// Streamline feature availability, notably Reflex/PCL, is only reliable
+				// after the D3D device is bound.
 				upscaling.CheckBackendFeatures(pAdapter);
 				upscaling.PostBackendDevice();
 			}
@@ -15437,7 +15434,8 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 		upscaling.UpgradeBackendInterface((void**)&(*ppDevice));
 		upscaling.UpgradeBackendInterface((void**)&(*ppSwapChain));
 		upscaling.SetBackendD3DDevice(*ppDevice);
-		// Re-check after device bind to ensure feature availability is accurate.
+		// Streamline feature availability, notably Reflex/PCL, is only reliable
+		// after the D3D device is bound.
 		upscaling.CheckBackendFeatures(pAdapter);
 		upscaling.PostBackendDevice();
 	}

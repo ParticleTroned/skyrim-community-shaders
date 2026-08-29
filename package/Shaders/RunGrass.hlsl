@@ -463,6 +463,13 @@ cbuffer AlphaTestRefCB : register(b11)
 
 #	include "Common/ShadowSampling.hlsli"
 
+float3 ApplyGrassWetDarkening(float3 baseColor)
+{
+	const float wetDarkening = saturate(SharedData::wetternessSettings.GrassWetnessPhase) *
+	                           saturate(SharedData::wetternessSettings.GrassWetDarkeningStrength);
+	return baseColor * (1.0 - wetDarkening);
+}
+
 // This is the original non-Grass-Lighting shader path. It is shared by the
 // boot-disabled permutation and the runtime-disabled Grass Lighting path.
 // Foliage Lighting can opt in to its small grass-scattering augmentation.
@@ -601,7 +608,7 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 
 	diffuseColor += directionalAmbientColor;
 
-	float3 albedo = baseColor.xyz * vertexColor;
+	float3 albedo = ApplyGrassWetDarkening(baseColor.xyz) * vertexColor;
 
 	diffuseColor *= albedo;
 	directionalAmbientColor *= albedo;
@@ -745,6 +752,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (!complex || SharedData::grassLightingSettings.OverrideComplexGrassSettings)
 		baseColor.xyz *= SharedData::grassLightingSettings.BasicGrassBrightness;
 #			endif  // !TRUE_PBR
+
+	baseColor.xyz = ApplyGrassWetDarkening(baseColor.xyz);
 
 #			if defined(TRUE_PBR)
 	float4 rawRMAOS = TexRMAOSSampler.SampleBias(SampRMAOSSampler, input.TexCoord.xy, SharedData::MipBias) * float4(PBRParams1.x, 1, 1, PBRParams1.y);

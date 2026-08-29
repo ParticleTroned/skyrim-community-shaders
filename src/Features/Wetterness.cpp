@@ -651,6 +651,15 @@ namespace
 		return std::lerp(dryEndpoint, wetEndpoint, phase);
 	}
 
+	float ClampRainGrassDarkening(float darkening)
+	{
+		return ClampFiniteOrDefault(
+			darkening,
+			Wetterness::kMinRainGrassDarkening,
+			Wetterness::kMaxRainGrassDarkening,
+			Wetterness::kDefaultRainGrassDarkening);
+	}
+
 	void SanitizePersistentUiState(
 		Wetterness::Settings& settings,
 		float& modernScale,
@@ -707,6 +716,7 @@ namespace
 		float wetnessDistanceFadeRange = DEFAULT_WETNESS_DISTANCE_FADE_RANGE_GAME_UNITS;
 		float rainGrassGlossiness = Wetterness::kDefaultRainGrassGlossiness;
 		float rainGrassSpecularStrength = Wetterness::kDefaultRainGrassSpecularStrength;
+		float rainGrassDarkening = Wetterness::kDefaultRainGrassDarkening;
 	};
 
 	WetternessUiPresetState BuildWetternessUiPresetState(const WetternessUiPresetDefinition& preset)
@@ -769,6 +779,7 @@ namespace
 		wetterness.wetnessDistanceFadeRange = presetState.wetnessDistanceFadeRange;
 		wetterness.rainGrassGlossiness = presetState.rainGrassGlossiness;
 		wetterness.rainGrassSpecularStrength = presetState.rainGrassSpecularStrength;
+		wetterness.rainGrassDarkening = presetState.rainGrassDarkening;
 		wetterness.modernWetIndirectSpecularScale = presetState.modernWetIndirectSpecularScale;
 		wetterness.legacyWetIndirectSpecularScale = presetState.legacyWetIndirectSpecularScale;
 	}
@@ -840,6 +851,7 @@ namespace
 		       IsNearlyEqual(wetterness.wetnessDistanceFadeRange, expected.wetnessDistanceFadeRange) &&
 		       IsNearlyEqual(wetterness.rainGrassGlossiness, expected.rainGrassGlossiness) &&
 		       IsNearlyEqual(wetterness.rainGrassSpecularStrength, expected.rainGrassSpecularStrength) &&
+		       IsNearlyEqual(wetterness.rainGrassDarkening, expected.rainGrassDarkening) &&
 		       IsNearlyEqual(wetterness.modernWetIndirectSpecularScale, expected.modernWetIndirectSpecularScale) &&
 		       IsNearlyEqual(wetterness.legacyWetIndirectSpecularScale, expected.legacyWetIndirectSpecularScale);
 	}
@@ -1588,6 +1600,20 @@ void Wetterness::DrawSettings()
 				"Dry endpoint for grass specular strength after rain and grass drying finish. This is the same saved value as Grass Lighting > Complex Grass > Specular Strength, so either slider edits the same setting.");
 		}
 
+		ImGui::SliderFloat(
+			"Grass Rain Darkening",
+			&rainGrassDarkening,
+			kMinRainGrassDarkening,
+			kMaxRainGrassDarkening,
+			"%.2f",
+			ImGuiSliderFlags_AlwaysClamp);
+		rainGrassDarkening = ClampRainGrassDarkening(rainGrassDarkening);
+		markPresetDirtyIfEdited();
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted(
+				"Reduces grass albedo while wet. The effect reaches this strength during rain and fades out using the grass drying time. Applies to basic, complex, and TRUE_PBR grass.");
+		}
+
 		ImGui::Separator();
 		ImGui::TextUnformatted("Rain");
 
@@ -2055,7 +2081,8 @@ json Wetterness::CapturePerformanceSettingsState() const
 		{ "ShorePersistentDarkeningStrength", shorePersistentDarkeningStrength },
 		{ "WetnessDistanceFadeRange", wetnessDistanceFadeRange },
 		{ "RainGrassGlossiness", rainGrassGlossiness },
-		{ "RainGrassSpecularStrength", rainGrassSpecularStrength }
+		{ "RainGrassSpecularStrength", rainGrassSpecularStrength },
+		{ "RainGrassDarkening", rainGrassDarkening }
 	};
 }
 
@@ -2101,6 +2128,7 @@ void Wetterness::RestorePerformanceCostMeasurementState(const json& a_state)
 	wetnessDistanceFadeRange = a_state.value("WetnessDistanceFadeRange", wetnessDistanceFadeRange);
 	rainGrassGlossiness = a_state.value("RainGrassGlossiness", rainGrassGlossiness);
 	rainGrassSpecularStrength = a_state.value("RainGrassSpecularStrength", rainGrassSpecularStrength);
+	rainGrassDarkening = ClampRainGrassDarkening(a_state.value("RainGrassDarkening", rainGrassDarkening));
 	enableWeatherDrivenDryingModel = a_state.value("EnableWeatherDrivenDryingModel", enableWeatherDrivenDryingModel);
 
 	SanitizePersistentUiState(settings, modernWetIndirectSpecularScale, legacyWetIndirectSpecularScale, puddleDryingHours, puddleLayout, rainReflectionBalance, puddleSkyReflectionScale, postRainWaterClarity, shorePersistentDarkeningStrength, wetnessDistanceFadeRange);
@@ -2534,6 +2562,7 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 		GrassLighting::ClampGlossiness(rainGrassGlossiness, kDefaultRainGrassGlossiness));
 	data.GrassWetnessPhase = grassLightingWetnessPhase;
 	data.GrassWetRoughness = std::clamp(1.0f - wetGrassGlossiness * 0.01f, 0.0f, 1.0f);
+	data.GrassWetDarkeningStrength = ClampRainGrassDarkening(rainGrassDarkening);
 	const float activePuddleSkyReflectionScale = masterWetnessEnabled ?
 	                                                 ClampFiniteOrDefault(
 														 puddleSkyReflectionScale,
@@ -2635,6 +2664,7 @@ void Wetterness::LoadSettings(json& o_json)
 	wetnessDistanceFadeRange = DEFAULT_WETNESS_DISTANCE_FADE_RANGE_GAME_UNITS;
 	rainGrassGlossiness = kDefaultRainGrassGlossiness;
 	rainGrassSpecularStrength = kDefaultRainGrassSpecularStrength;
+	rainGrassDarkening = kDefaultRainGrassDarkening;
 	modernWetIndirectSpecularScale = DEFAULT_MODERN_WET_REFLECTION_UI;
 	legacyWetIndirectSpecularScale = DEFAULT_LEGACY_WET_REFLECTION_UI;
 	puddleDryingHours = DEFAULT_PUDDLE_DRYING_HOURS;
@@ -2672,6 +2702,8 @@ void Wetterness::LoadSettings(json& o_json)
 	rainGrassSpecularStrength = GrassLighting::ClampSpecularStrength(
 		JsonValueOr<float>(o_json, "RainGrassSpecularStrength", kDefaultRainGrassSpecularStrength),
 		kDefaultRainGrassSpecularStrength);
+	rainGrassDarkening = ClampRainGrassDarkening(
+		JsonValueOr<float>(o_json, "RainGrassDarkening", kDefaultRainGrassDarkening));
 
 	const bool hasModernWetReflectionScale = isObject && o_json.contains("ModernWetIndirectSpecularScale");
 	if (hasModernWetReflectionScale && o_json["ModernWetIndirectSpecularScale"].is_number()) {
@@ -2736,6 +2768,8 @@ void Wetterness::SaveSettings(json& o_json)
 		rainGrassSpecularStrength,
 		kDefaultRainGrassSpecularStrength);
 	o_json["RainGrassSpecularStrength"] = rainGrassSpecularStrength;
+	rainGrassDarkening = ClampRainGrassDarkening(rainGrassDarkening);
+	o_json["RainGrassDarkening"] = rainGrassDarkening;
 	o_json["EnableWeatherDrivenDryingModel"] = enableWeatherDrivenDryingModel;
 
 	o_json["DebugSettings"] = debugSettings;
@@ -2754,6 +2788,7 @@ void Wetterness::RestoreDefaultSettings()
 	wetnessDistanceFadeRange = DEFAULT_WETNESS_DISTANCE_FADE_RANGE_GAME_UNITS;
 	rainGrassGlossiness = kDefaultRainGrassGlossiness;
 	rainGrassSpecularStrength = kDefaultRainGrassSpecularStrength;
+	rainGrassDarkening = kDefaultRainGrassDarkening;
 	modernWetIndirectSpecularScale = DEFAULT_MODERN_WET_REFLECTION_UI;
 	legacyWetIndirectSpecularScale = DEFAULT_LEGACY_WET_REFLECTION_UI;
 	climatePreset = defaultPreset;

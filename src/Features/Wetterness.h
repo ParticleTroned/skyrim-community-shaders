@@ -176,13 +176,14 @@ public:
 		float RainContactWetnessScale = 1.75f;
 		float GrassWetnessPhase = 0.0f;
 		float GrassWetRoughness = 0.4f;
-		float GrassWetnessPad0 = 0.0f;
-		float GrassWetnessPad1 = 0.0f;
+		float GrassWetDarkeningStrength = 0.0f;
+		float GrassWetnessPad = 0.0f;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 	static_assert(offsetof(PerFrame, settings) == 80, "Wetterness::PerFrame settings offset changed.");
 	static_assert(offsetof(PerFrame, PackedPostRainControl) == 240, "Wetterness::PerFrame tail-control offset changed.");
 	static_assert(offsetof(PerFrame, GrassWetnessPhase) == 256, "Wetterness::PerFrame grass controls offset changed.");
+	static_assert(offsetof(PerFrame, GrassWetDarkeningStrength) == 264, "Wetterness::PerFrame grass darkening offset changed.");
 	static_assert(sizeof(PerFrame) == 272, "Wetterness::PerFrame size changed; update wetness shader/CB contract.");
 	static_assert((sizeof(PerFrame) % 16) == 0, "Wetterness::PerFrame must stay 16-byte sized");
 
@@ -210,8 +211,12 @@ public:
 	float wetnessDistanceFadeRange = 10000.0f;
 	static constexpr float kDefaultRainGrassGlossiness = 60.0f;
 	static constexpr float kDefaultRainGrassSpecularStrength = 1.0f;
+	static constexpr float kDefaultRainGrassDarkening = 0.15f;
+	static constexpr float kMinRainGrassDarkening = 0.0f;
+	static constexpr float kMaxRainGrassDarkening = 0.5f;
 	float rainGrassGlossiness = kDefaultRainGrassGlossiness;
 	float rainGrassSpecularStrength = kDefaultRainGrassSpecularStrength;
+	float rainGrassDarkening = kDefaultRainGrassDarkening;
 	// Climate preset system
 	enum class ClimatePreset : uint32_t
 	{

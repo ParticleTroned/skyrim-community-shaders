@@ -1,8 +1,8 @@
 #pragma once
 
 #include "Buffer.h"
-
 #include "LightEditor.h"
+#include "Utils/VanityCamera.h"
 #include "Weather/CellLightingWidget.h"
 #include "Weather/ImageSpaceWidget.h"
 #include "Weather/LensFlareWidget.h"
@@ -114,8 +114,7 @@ public:
 	void AdjustFlySpeed(float scrollDelta);
 
 	// Vanity camera control
-	bool vanityCameraDisabled = false;
-	float savedVanityCameraDelay = 180.0f;
+	Util::VanityCameraSuppressionLease vanityCameraSuppression;
 
 	void ShowObjectsWindow();
 

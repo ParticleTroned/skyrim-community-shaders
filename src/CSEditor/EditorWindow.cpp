@@ -2279,29 +2279,12 @@ void EditorWindow::DrawTimeControls()
 
 void EditorWindow::DisableVanityCamera()
 {
-	if (vanityCameraDisabled)
-		return;
-
-	auto setting = RE::GetINISetting("fAutoVanityModeDelay:Camera");
-	if (setting) {
-		savedVanityCameraDelay = setting->GetFloat();
-		setting->data.f = 10000.0f;
-		vanityCameraDisabled = true;
-		logger::info("Vanity camera disabled (saved delay: {})", savedVanityCameraDelay);
-	}
+	vanityCameraSuppression.Acquire();
 }
 
 void EditorWindow::RestoreVanityCamera()
 {
-	if (!vanityCameraDisabled)
-		return;
-
-	auto setting = RE::GetINISetting("fAutoVanityModeDelay:Camera");
-	if (setting) {
-		setting->data.f = savedVanityCameraDelay;
-		vanityCameraDisabled = false;
-		logger::info("Vanity camera restored (delay: {})", savedVanityCameraDelay);
-	}
+	vanityCameraSuppression.Release();
 }
 
 void EditorWindow::EnterPreviewMode(PreviewMode mode)

@@ -24,6 +24,7 @@
 #include "SettingsSerialization.h"
 #include "Utils/FileSystem.h"
 #include "Utils/UI.h"
+#include "Utils/VanityCamera.h"
 
 namespace
 {
@@ -199,6 +200,7 @@ namespace
 	};
 
 	static std::unordered_map<std::string, FeatureCostMeasurementState> g_costMeasurementStates;
+	static Util::VanityCameraSuppressionLease g_featureCostVanityCameraSuppression;
 	static bool g_profilerStateCaptured = false;
 	static bool g_profilerWasUserEnabled = false;
 	static std::unordered_map<std::string, std::string> g_performanceDefaultsMessages;
@@ -286,6 +288,14 @@ namespace
 		}
 
 		return false;
+	}
+
+	void SyncFeatureCostVanityCameraSuppression()
+	{
+		if (IsAnyFeatureCostMeasurementRunning())
+			g_featureCostVanityCameraSuppression.Acquire();
+		else
+			g_featureCostVanityCameraSuppression.Release();
 	}
 
 	double GetFeatureCostMean(const FeatureCostMetricSample& sample)
@@ -1117,6 +1127,10 @@ namespace
 	{
 		if (!feature || !feature->SupportsPerformanceCostMeasurement() || !feature->IsPerformanceCostMeasurementEnabled())
 			return;
+		if (!g_featureCostVanityCameraSuppression.Acquire()) {
+			logger::error("Actual feature cost measurement was not started because the automatic vanity camera could not be suppressed");
+			return;
+		}
 
 		state = {};
 		state.originalState = feature->CapturePerformanceCostMeasurementState();
@@ -1546,6 +1560,7 @@ namespace
 			ImGui::TextWrapped("GPU and CPU averages use only valid positive samples. Missing and zero samples are excluded; each row only requires valid samples in every A/B/A window and never blocks Game or FPS.");
 			ImGui::TextWrapped("Results are mean differences plus or minus standard error. Uncertainty is estimated from non-overlapping 0.5-second block means so consecutive frames are not counted as independent evidence.");
 			ImGui::TextWrapped("An asterisk after a value marks a two-sided block-mean normal test with p <= 0.05; percentile rows are not included.");
+			ImGui::TextWrapped("The automatic idle/vanity camera remains suppressed for the complete run and its previous delay is restored afterward.");
 			if (feature && feature->GetShortName() == "Skylighting") {
 				ImGui::TextWrapped("For Skylighting, the comparison state is its in-game Enable toggle set to Off, not a lower preset.");
 			}
@@ -1996,6 +2011,7 @@ void PerformanceTuningRenderer::Render()
 	static TuningHighlightState highlightState;
 
 	CaptureProfilerStateForPerformanceTuning();
+	SyncFeatureCostVanityCameraSuppression();
 
 	const auto features = BuildPerformanceFeatureList();
 	auto* selectedFeature = FindSelectedFeature(features, selectedShortName);
@@ -2015,6 +2031,7 @@ void PerformanceTuningRenderer::Render()
 
 		UpdateFeatureCostMeasurement(feature, g_costMeasurementStates[feature->GetShortName()], timingBeforeSettings, currentTime);
 	}
+	SyncFeatureCostVanityCameraSuppression();
 	const bool anyMeasurementRunning = IsAnyFeatureCostMeasurementRunning();
 
 	const float selectorWidth = std::max(180.0f * Util::GetUIScale(), ImGui::GetContentRegionAvail().x * 0.18f);
@@ -2103,6 +2120,7 @@ void PerformanceTuningRenderer::CancelActiveMeasurements(bool includePending)
 		CancelFeatureCostMeasurement(FindFeatureByShortName(shortName), state, includePending);
 	}
 
+	SyncFeatureCostVanityCameraSuppression();
 	RestoreProfilerStateAfterPerformanceTuning();
 }
 
@@ -2135,6 +2153,7 @@ void PerformanceTuningRenderer::NotifyMenuClosed()
 			CompleteFeatureCostPostRestoreActionAfterMenuClose(state, now);
 		}
 	}
+	SyncFeatureCostVanityCameraSuppression();
 }
 
 bool PerformanceTuningRenderer::HasActiveMeasurements()

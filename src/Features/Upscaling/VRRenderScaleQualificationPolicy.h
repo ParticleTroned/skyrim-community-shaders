@@ -240,6 +240,39 @@ namespace VRRenderScaleQualificationPolicy
 		return static_cast<std::int32_t>(a_observedFrame - a_beginFrame) > 0;
 	}
 
+	struct NativeVendorEyeEvidence
+	{
+		bool valid = false;
+		std::uint32_t presentationFrame = 0;
+		std::uint32_t dispatchFrame = 0;
+		PhysicalBackend backend = PhysicalBackend::None;
+		std::uint64_t dispatchSerial = 0;
+		bool runtimeFallback = false;
+	};
+
+	[[nodiscard]] constexpr bool HasCoherentNativeVendorEvaluation(
+		const TargetProfile& a_target,
+		std::uint32_t a_beginFrame,
+		const NativeVendorEyeEvidence& a_left,
+		const NativeVendorEyeEvidence& a_right) noexcept
+	{
+		if (!UsesNativeVendorEvaluation(a_target) ||
+			!a_left.valid || !a_right.valid ||
+			a_left.presentationFrame != a_right.presentationFrame ||
+			!FrameAdvanced(a_beginFrame, a_left.presentationFrame) ||
+			a_left.dispatchFrame != a_left.presentationFrame ||
+			a_right.dispatchFrame != a_right.presentationFrame ||
+			a_left.backend != a_right.backend ||
+			!MatchesActivePhysicalBackend(a_target.method, a_left.backend) ||
+			a_left.runtimeFallback != a_right.runtimeFallback) {
+			return false;
+		}
+		if (a_target.method == Method::DLSS)
+			return !a_left.runtimeFallback;
+		return a_left.dispatchSerial != 0 &&
+		       a_left.dispatchSerial == a_right.dispatchSerial;
+	}
+
 	[[nodiscard]] constexpr std::uint32_t ElapsedFrames(
 		std::uint32_t a_beginFrame,
 		std::uint32_t a_observedFrame) noexcept

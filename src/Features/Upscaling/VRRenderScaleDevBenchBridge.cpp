@@ -49,7 +49,7 @@ namespace
 	static_assert(kDLSSDevBenchTraceDefaultReadLimit <= Streamline::kDLSSDevBenchTraceCapacity);
 	constexpr uint64_t kQualificationMaximumTimeoutMs = 120'000;
 	constexpr double kQualificationFoveationFloatTolerance = 0.0001;
-	constexpr unsigned int kDevBenchToolExtensionRevision = 8;
+	constexpr unsigned int kDevBenchToolExtensionRevision = 9;
 	std::atomic_bool g_registered{ false };
 	std::atomic_uint64_t g_nextDiagnosticTrimEpoch{ 1ull << 63 };
 
@@ -2719,8 +2719,7 @@ namespace
 		}
 		const bool vendorTarget = QualificationPolicy::UsesVendorEvaluation(a_target);
 		if (vendorTarget &&
-			(a_upscaling.GetRuntimeUpscaleMethod() != a_controller.stable.method ||
-				!a_upscaling.IsPresentationUpscalingActive())) {
+			a_upscaling.GetRuntimeUpscaleMethod() != a_controller.stable.method) {
 			return false;
 		}
 		if (vendorTarget && a_foveation &&
@@ -2842,6 +2841,77 @@ namespace
 			return false;
 		}
 		return true;
+	}
+
+	QualificationPolicy::NativeVendorEyeEvidence BuildNativeVendorEyeEvidence(
+		const Upscaling::VRRenderScalePresentationEyeSnapshot& a_eye)
+	{
+		return {
+			.valid = a_eye.valid &&
+			         a_eye.path ==
+					 Upscaling::VRRenderScalePresentationPath::NativeOriginal,
+			.presentationFrame = a_eye.frame,
+			.dispatchFrame = a_eye.vendorDispatchFrame,
+			.backend = ToQualificationPhysicalBackend(a_eye.vendorBackend),
+			.dispatchSerial = a_eye.vendorDispatchSerial,
+			.runtimeFallback = a_eye.vendorRuntimeFallback,
+		};
+	}
+
+	bool NativeVendorPresentationStable(
+		const Upscaling::VRRenderScaleTransitionSnapshot& a_controller,
+		const QualificationTarget& a_target,
+		uint32_t a_beginFrame)
+	{
+		return QualificationPolicy::HasCoherentNativeVendorEvaluation(
+			a_target,
+			a_beginFrame,
+			BuildNativeVendorEyeEvidence(a_controller.presentation.eyes[0]),
+			BuildNativeVendorEyeEvidence(a_controller.presentation.eyes[1]));
+	}
+
+	json NativeVendorExecutionJson(
+		const Upscaling::VRRenderScaleTransitionSnapshot& a_controller,
+		const QualificationTarget* a_target,
+		uint32_t a_beginFrame)
+	{
+		const auto& left = a_controller.presentation.eyes[0];
+		const auto& right = a_controller.presentation.eyes[1];
+		const bool required = a_target &&
+		                      QualificationPolicy::UsesNativeVendorEvaluation(
+						  *a_target);
+		const bool coherent = required && NativeVendorPresentationStable(
+										 a_controller,
+										 *a_target,
+										 a_beginFrame);
+		const bool backendConverged =
+			left.vendorBackend != Upscaling::VRRenderScaleBackendKind::None &&
+			left.vendorBackend == right.vendorBackend;
+		const char* actualBackend = backendConverged ?
+		                                GetBackendName(left.vendorBackend) :
+		                            left.vendorBackend != right.vendorBackend ?
+		                                "mixed" :
+		                                "none";
+		const auto eyeJson = [](const Upscaling::VRRenderScalePresentationEyeSnapshot& a_eye) {
+			return json{
+				{ "valid", a_eye.valid },
+				{ "presentationFrame", a_eye.frame },
+				{ "dispatchFrame", a_eye.vendorDispatchFrame },
+				{ "backend", GetBackendName(a_eye.vendorBackend) },
+				{ "dispatchSerial", a_eye.vendorDispatchSerial },
+				{ "runtimeFallback", a_eye.vendorRuntimeFallback },
+			};
+		};
+		return {
+			{ "required", required },
+			{ "sameFrameBothEyesValid", coherent },
+			{ "actualBackend", actualBackend },
+			{ "actualRuntimeFallbackObserved",
+				left.vendorRuntimeFallback || right.vendorRuntimeFallback },
+			{ "dispatchFrame", coherent ? left.vendorDispatchFrame : 0u },
+			{ "left", eyeJson(left) },
+			{ "right", eyeJson(right) },
+		};
 	}
 
 	bool LifecycleStable(
@@ -3171,7 +3241,13 @@ namespace
 		facts.nativePresentationStable = PresentationEyesStable(
 			controller,
 			Upscaling::VRRenderScalePresentationPath::NativeOriginal,
-			a_transition.dispatchFrame);
+			a_transition.dispatchFrame) &&
+		(!targetAvailable ||
+			!QualificationPolicy::UsesNativeVendorEvaluation(target) ||
+			NativeVendorPresentationStable(
+				controller,
+				target,
+				a_transition.dispatchFrame));
 		const bool vendorContractStable = targetAvailable &&
 		                                  (target.renderScaleMode ?
 												  (facts.physicalActiveContract && facts.vendorPresentationStable) :
@@ -3362,6 +3438,10 @@ namespace
 							  { "dlssLifecycle", LifecycleJson(controller.dlssLifecycle) },
 							  { "fsrLifecycle", LifecycleJson(controller.fsrLifecycle) },
 						  } },
+			{ "nativeVendorExecution", NativeVendorExecutionJson(
+										 controller,
+										 targetAvailable ? &target : nullptr,
+										 a_transition.dispatchFrame) },
 			{ "foveation", ObservedFoveationJson(upscaling, controller.stable) },
 			{ "cleanupDebt", QualificationCleanupDebtJson(controller, gate, physicalMutationEpoch, physicalSerializationEpoch, emergencyRecoveryRequested, shaderCompilationActive) },
 			{ "diagnostics", {
@@ -3377,9 +3457,12 @@ namespace
 		if (a_foveation)
 			output["foveation"]["target"] = QualificationFoveationTargetJson(*a_foveation);
 		if (presentationStable) {
-			output["stereoEvidenceClass"] = target.renderScaleMode ?
-			                                    "render_scale_vendor_frames" :
-			                                    "native_pipeline_frames";
+			output["stereoEvidenceClass"] =
+				target.renderScaleMode ?
+					"render_scale_vendor_frames" :
+				QualificationPolicy::UsesNativeVendorEvaluation(target) ?
+					"native_vendor_frames" :
+					"native_pipeline_frames";
 			output["status"] = BuildStatus(upscaling);
 		}
 		return output;

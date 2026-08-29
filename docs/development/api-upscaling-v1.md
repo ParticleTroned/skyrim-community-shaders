@@ -121,7 +121,9 @@ presentation is observed. Their public requested, effective, and stable
 profiles all retain the logical target. The separate render-scale resource key
 remains inactive with backend `none` at native resolution; fixed-resolution
 vendor execution is proven by the target-correlated presentation path rather
-than by manufacturing an active reduced-resolution contract.
+than by manufacturing an active reduced-resolution contract. DevBench retains
+the actual DLSS or FSR backend, same-frame dispatch identity for both eyes, and
+any FSR runtime-to-host fallback in that native-vendor presentation evidence.
 
 `ApplyProfile` copies every input before returning. It performs validation and
 preflight before admission. The queued main-thread transaction repeats the

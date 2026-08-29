@@ -262,6 +262,7 @@ foreach(_required_behavior IN ITEMS
 	"QualificationPolicy::IsMilestoneSatisfied"
 	"QualificationPolicy::UsesVendorEvaluation"
 	"QualificationPolicy::UsesNativeAPIEvaluation"
+	"QualificationPolicy::HasCoherentNativeVendorEvaluation"
 	"case CSX::UpscalingAPI::Method::kNone"
 	"case CSX::UpscalingAPI::Method::kTAA"
 	"{ \"methodValue\", static_cast<uint32_t>(a_profile.method) }"
@@ -337,6 +338,9 @@ foreach(_required_behavior IN ITEMS
 	"\"deviceMatches\""
 	"\"contextMatches\""
 	"providerTerminalClear"
+	"\"nativeVendorExecution\""
+	"\"actualBackend\""
+	"\"native_vendor_frames\""
     "controller.retirement.nextCleanupFrame == 0"
 	"BuildProvenance::ValidateExpectedBuild"
 )
@@ -350,6 +354,9 @@ foreach(_required_controller_behavior IN ITEMS
 	"apiControllerPublicationRequired"
 	"ArmVRNativeRestorePresentationGuard(request.transitionEpoch)"
 	"requiresNativePresentationStabilization"
+	"GetVRRenderScaleBackendFromFSRDispatchPath"
+	"vendorDispatchFrame ="
+	"vendorDispatchSerial"
 )
 	string(FIND
 		"${_upscaling_source}"

@@ -275,6 +275,44 @@ namespace
 				   static_cast<std::uint64_t>(kFailureShaderCompilation)) != 0;
 	}
 
+	constexpr bool CoversNativeVendorExecutionEvidence()
+	{
+		NativeVendorEyeEvidence left{
+			.valid = true,
+			.presentationFrame = 11,
+			.dispatchFrame = 11,
+			.backend = PhysicalBackend::DLSS,
+		};
+		auto right = left;
+		if (!HasCoherentNativeVendorEvaluation(
+				NativeDLAA(), 10, left, right)) {
+			return false;
+		}
+		right.dispatchFrame = 10;
+		if (HasCoherentNativeVendorEvaluation(
+				NativeDLAA(), 10, left, right)) {
+			return false;
+		}
+
+		left.backend = PhysicalBackend::FSRHost;
+		left.dispatchSerial = 42;
+		left.runtimeFallback = true;
+		right = left;
+		if (!HasCoherentNativeVendorEvaluation(
+				NativeFSR(), 10, left, right)) {
+			return false;
+		}
+		right.dispatchSerial = 43;
+		if (HasCoherentNativeVendorEvaluation(
+				NativeFSR(), 10, left, right)) {
+			return false;
+		}
+		right = left;
+		right.backend = PhysicalBackend::FSRRuntime;
+		return !HasCoherentNativeVendorEvaluation(
+			NativeFSR(), 10, left, right);
+	}
+
 	constexpr bool CoversNativePipelineStability()
 	{
 		const TargetProfile none{
@@ -554,6 +592,7 @@ namespace
 	static_assert(CoversConfiguredRuntimeBackendSeparation());
 	static_assert(CoversActiveVendorStability());
 	static_assert(CoversNativeVendorStability());
+	static_assert(CoversNativeVendorExecutionEvidence());
 	static_assert(CoversNativePipelineStability());
 	static_assert(CoversQualificationMilestones());
 	static_assert(CoversContractSpecificShaderCompilation());

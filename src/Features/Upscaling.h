@@ -1000,6 +1000,10 @@ public:
 		uint32_t expectedInputHeight = 0;
 		uint32_t outputWidth = 0;
 		uint32_t outputHeight = 0;
+		VRRenderScaleBackendKind vendorBackend = VRRenderScaleBackendKind::None;
+		uint32_t vendorDispatchFrame = 0;
+		uint64_t vendorDispatchSerial = 0;
+		bool vendorRuntimeFallback = false;
 		bool loadingOrMenuContext = false;
 		bool transitionCooldown = false;
 	};
@@ -1019,6 +1023,10 @@ public:
 		uint32_t expectedInputHeight = 0;
 		uint32_t outputWidth = 0;
 		uint32_t outputHeight = 0;
+		VRRenderScaleBackendKind vendorBackend = VRRenderScaleBackendKind::None;
+		uint32_t vendorDispatchFrame = 0;
+		uint64_t vendorDispatchSerial = 0;
+		bool vendorRuntimeFallback = false;
 		uint32_t consecutiveFrames = 0;
 		bool loadingOrMenuContext = false;
 		bool transitionCooldown = false;

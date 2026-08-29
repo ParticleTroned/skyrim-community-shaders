@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <unordered_map>
 
 namespace
@@ -11,6 +12,12 @@ namespace
 	bool IsValidProfilerSample(float ms)
 	{
 		return std::isfinite(ms) && ms >= 0.0f && ms <= kMaxSaneProfilerSampleMs;
+	}
+
+	void IncrementSaturating(uint64_t& value)
+	{
+		if (value != std::numeric_limits<uint64_t>::max())
+			++value;
 	}
 }
 
@@ -126,6 +133,7 @@ void Profiler::Release()
 	results.clear();
 	knownTimers.clear();
 	knownTimerIndex.clear();
+	collectedDetailedCycles = 0;
 	activeCpuTimers.clear();
 	completedCpuTimers.clear();
 	totalTimeMs = 0.0f;
@@ -217,6 +225,7 @@ void Profiler::ClearTimers()
 	results.clear();
 	knownTimers.clear();
 	knownTimerIndex.clear();
+	collectedDetailedCycles = 0;
 	activeCpuTimers.clear();
 	completedCpuTimers.clear();
 	totalTimeMs = 0.0f;
@@ -259,10 +268,7 @@ void Profiler::ClearTimersForFeature(const std::string& featureName)
 		}
 	}
 
-	knownTimerIndex.clear();
-	for (size_t i = 0; i < knownTimers.size(); i++) {
-		knownTimerIndex[knownTimers[i].name] = i;
-	}
+	RebuildTimerIndex();
 }
 
 void Profiler::BeginFrame()
@@ -555,6 +561,8 @@ bool Profiler::CollectResults()
 	// Exactly one history sample per named timer and resolved cycle keeps all
 	// histories aligned for percentile-of-sum calculations in the UI.
 	const bool cpuCycleResolved = gpuFrameResolved || hadCpuTimers;
+	if (cpuCycleResolved)
+		IncrementSaturating(collectedDetailedCycles);
 	for (auto& known : knownTimers) {
 		auto it = activeTimers.find(known.name);
 		const bool freshGpu = it != activeTimers.end() && it->second.hasGpu;
@@ -571,7 +579,11 @@ bool Profiler::CollectResults()
 		} else if (cpuCycleResolved && known.hasCpu) {
 			known.cpu.PushSample(0.0f);
 		}
+		if (freshGpu || freshCpu)
+			known.lastSampleCycle = collectedDetailedCycles;
 	}
+	if (cpuCycleResolved)
+		RetireStaleTimers();
 
 	frame.cpuTimers.clear();
 	frame.activeCount = 0;
@@ -673,6 +685,24 @@ Profiler::KnownTimer& Profiler::GetOrCreateTimer(const std::string& name)
 		knownTimers.push_back(std::move(kt));
 	}
 	return knownTimers[it->second];
+}
+
+void Profiler::RetireStaleTimers()
+{
+	const size_t previousSize = knownTimers.size();
+	std::erase_if(knownTimers, [this](const KnownTimer& known) {
+		return collectedDetailedCycles >= known.lastSampleCycle &&
+		       collectedDetailedCycles - known.lastSampleCycle >= kTimerRetireCycles;
+	});
+	if (knownTimers.size() != previousSize)
+		RebuildTimerIndex();
+}
+
+void Profiler::RebuildTimerIndex()
+{
+	knownTimerIndex.clear();
+	for (size_t i = 0; i < knownTimers.size(); ++i)
+		knownTimerIndex[knownTimers[i].name] = i;
 }
 
 void Profiler::StoreCompletedCpuTimers(FrameQueries& frame)

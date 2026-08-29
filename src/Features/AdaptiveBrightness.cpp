@@ -1416,8 +1416,13 @@ void AdaptiveBrightness::DrawSettings()
 		}
 
 		if (ImGui::BeginTabItem("Global")) {
-			ImGui::TextWrapped("Set the shared lighting baseline and weather-driven water behavior used across profiles.");
+			ImGui::TextWrapped("Set the shared lighting baseline used across profiles.");
 			DrawGlobalRendererSettings();
+			ImGui::EndTabItem();
+		}
+
+		if (ImGui::BeginTabItem("Water")) {
+			DrawWaterWindSettings();
 			ImGui::EndTabItem();
 		}
 
@@ -1866,9 +1871,11 @@ void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const c
 
 		if (ImGui::BeginTabItem("Water")) {
 			WaterAppearance::DrawProfileControls(a_profile.water);
-			if (settings.waterWind.enabled)
-				ImGui::TextDisabled("Wind-driven waves use this profile's Wave Amplitude as their baseline.");
 			if (a_showAdvancedControls) {
+				if (settings.waterWind.enabled)
+					ImGui::TextDisabled("Wind-driven waves use this profile's Wave Amplitude as their baseline. Configure the shared response in the top-level Water tab.");
+				else
+					ImGui::TextDisabled("Optional wind-driven waves are configured in the top-level Water tab.");
 				ImGui::Checkbox("Show Detailed Water Controls", &a_profile.waterAdvanced);
 				if (auto _tt = Util::HoverTooltipWrapper())
 					ImGui::Text("Shows detailed water color, surface, reflection, refraction, and clarity controls for this profile.");
@@ -1927,49 +1934,51 @@ void AdaptiveBrightness::DrawGlobalRendererSettings()
 			ImGui::EndTabItem();
 		}
 
-		if (ImGui::BeginTabItem("Water")) {
-			ImGui::TextWrapped("Use the engine's current blended wind speed to scale each profile's Wave Amplitude baseline.");
-			if (ImGui::Checkbox("Enable Wind-Driven Waves", &settings.waterWind.enabled))
-				ResetWaterWindSmoothing();
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Reads the active Sky wind speed, including changes made through weather records by mods.");
-				ImGui::Text("Interior cells are treated as calm so exterior weather cannot drive indoor water.");
-				ImGui::Text("The response is smoothed to avoid visible wave changes when weather switches.");
-			}
-
-			ImGui::BeginDisabled(!settings.waterWind.enabled);
-			ImGui::SliderFloat(
-				"Calm Wave Scale",
-				&settings.waterWind.calmWaveMultiplier,
-				kCalmWaveMultiplierMin,
-				kCalmWaveMultiplierMax,
-				"%.2f",
-				ImGuiSliderFlags_AlwaysClamp);
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Multiplies the active profile's Wave Amplitude when the engine reports no wind.");
-			ImGui::SliderFloat(
-				"Strong Wind Wave Scale",
-				&settings.waterWind.strongWindWaveMultiplier,
-				kStrongWindWaveMultiplierMin,
-				kStrongWindWaveMultiplierMax,
-				"%.2f",
-				ImGuiSliderFlags_AlwaysClamp);
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Multiplies the active profile's Wave Amplitude at maximum engine wind.");
-
-			SanitizeWaterWindSettings(settings.waterWind);
-			const float windSpeed = GetSmoothedWaterWindSpeed();
-			const float waveMultiplier = GetWaterWindWaveMultiplier(settings.waterWind, windSpeed);
-			ImGui::TextDisabled("Smoothed wind: %.0f%%  Wave scale: %.2fx", windSpeed * 100.0f, waveMultiplier);
-			ImGui::EndDisabled();
-			ImGui::EndTabItem();
-		}
-
 		ImGui::EndTabBar();
 	}
 
 	SanitizeSharedLightingSettings(settings.lighting);
+}
+
+void AdaptiveBrightness::DrawWaterWindSettings()
+{
+	ImGui::TextWrapped("Use the engine's current blended wind speed to scale each profile's Wave Amplitude baseline.");
+	if (!settings.enabled)
+		ImGui::TextDisabled("Adaptive profile switching is off, so wind-driven waves are currently inactive.");
+
+	if (ImGui::Checkbox("Enable Wind-Driven Waves", &settings.waterWind.enabled))
+		ResetWaterWindSmoothing();
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Reads the active Sky wind speed, including changes made through weather records by mods.");
+		ImGui::Text("Interior cells are treated as calm so exterior weather cannot drive indoor water.");
+		ImGui::Text("The response is smoothed to avoid visible wave changes when weather switches.");
+	}
+
+	ImGui::BeginDisabled(!settings.waterWind.enabled);
+	ImGui::SliderFloat(
+		"Calm Wave Scale",
+		&settings.waterWind.calmWaveMultiplier,
+		kCalmWaveMultiplierMin,
+		kCalmWaveMultiplierMax,
+		"%.2f",
+		ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Multiplies the active profile's Wave Amplitude when the engine reports no wind.");
+	ImGui::SliderFloat(
+		"Strong Wind Wave Scale",
+		&settings.waterWind.strongWindWaveMultiplier,
+		kStrongWindWaveMultiplierMin,
+		kStrongWindWaveMultiplierMax,
+		"%.2f",
+		ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Multiplies the active profile's Wave Amplitude at maximum engine wind.");
+
 	SanitizeWaterWindSettings(settings.waterWind);
+	const float windSpeed = GetSmoothedWaterWindSpeed();
+	const float waveMultiplier = GetWaterWindWaveMultiplier(settings.waterWind, windSpeed);
+	ImGui::TextDisabled("Smoothed wind: %.0f%%  Wave scale: %.2fx", windSpeed * 100.0f, waveMultiplier);
+	ImGui::EndDisabled();
 }
 
 void AdaptiveBrightness::DrawGlobalPresetControls()

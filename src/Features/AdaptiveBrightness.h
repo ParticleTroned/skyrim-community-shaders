@@ -53,7 +53,7 @@ struct AdaptiveBrightness : Feature
 			{ "Separate exterior day and night balance profiles",
 				"Separate interior, dungeon, and dwelling profiles",
 				"Hierarchical worldspace, region, city, location, and cell profiles with COC codes",
-				"Shared light calibration with per-profile Bloom and wind-responsive water appearance controls" }
+				"Shared light calibration with per-profile Bloom and water appearance plus optional wind response" }
 		};
 	}
 
@@ -318,6 +318,7 @@ struct AdaptiveBrightness : Feature
 		bool a_showAdvancedControls = true,
 		bool a_allowEdits = true);
 	void DrawGlobalRendererSettings();
+	void DrawWaterWindSettings();
 	void DrawGlobalPresetControls();
 	void DrawLocationOverrides(bool a_includePresetControls = true, bool a_showAdvancedControls = true, bool a_allowEdits = true);
 	void DrawLocationOverridePresetControls();

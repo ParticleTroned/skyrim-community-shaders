@@ -78,7 +78,7 @@ private:
 	/** @brief Resolves collision geometry through a verified flat ray or the active VR crosshair target. */
 	static PickedMesh ResolveUnderCursor(bool logResult = true);
 	/** @brief Resolves the nearest flat-runtime effect mesh; unavailable in VR without a world ray. */
-	static PickedMesh ResolveNearestToCursor();
+	static PickedMesh ResolveNearestToCursor(bool logResult = true);
 	/** @brief Resolves a physical VR controller's engine-owned crosshair target. */
 	static PickedMesh ResolveVRCollisionTarget(PointerSource source, bool logResult);
 	/** @brief Copies reference metadata while the caller retains the reference through a smart pointer. */
@@ -90,4 +90,6 @@ private:
 	PointerSource hoverPointerSource = PointerSource::kUnavailable;
 	float lastMouseX = -1.0f;
 	float lastMouseY = -1.0f;
+	double lastHoverTime = 0.0;
+	bool hoverDirty = false;
 };

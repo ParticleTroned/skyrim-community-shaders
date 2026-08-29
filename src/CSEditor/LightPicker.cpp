@@ -309,7 +309,7 @@ LightPicker::PickedMesh LightPicker::ResolveUnderCursor(bool logResult)
 	return out;
 }
 
-LightPicker::PickedMesh LightPicker::ResolveNearestToCursor()
+LightPicker::PickedMesh LightPicker::ResolveNearestToCursor(bool logResult)
 {
 	PickedMesh out;
 	if (GetPointerSource(PickMode::kEffect) != PointerSource::kFlatViewport)
@@ -380,7 +380,7 @@ LightPicker::PickedMesh LightPicker::ResolveNearestToCursor()
 		return out;
 
 	PopulateFromRef(out, bestRef.get(), baseObj);
-	if (out.valid) {
+	if (logResult && out.valid) {
 		logger::info("[LightPicker] Effect-pick ref 0x{:08X} '{}' model '{}' plugin '{}'",
 			bestRef->GetFormID(), out.editorId, out.modelPath, out.sourcePlugin);
 	}
@@ -408,6 +408,7 @@ void LightPicker::InvalidateHover()
 	hoverPointerSource = PointerSource::kUnavailable;
 	lastMouseX = -1.0f;
 	lastMouseY = -1.0f;
+	hoverDirty = false;
 }
 
 void LightPicker::Update()
@@ -435,6 +436,7 @@ void LightPicker::Update()
 		hoverMesh = {};
 		lastMouseX = -1.0f;
 		lastMouseY = -1.0f;
+		hoverDirty = true;
 		hoverPointerSource = pointerSource;
 	}
 	const bool leftClicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
@@ -463,15 +465,20 @@ void LightPicker::Update()
 			return;
 	}
 
+	constexpr double kHoverRefreshSeconds = 0.05;
 	const ImVec2 mouse = ImGui::GetMousePos();
 	const bool mouseMoved = mouse.x != lastMouseX || mouse.y != lastMouseY;
 	const bool vrControllerSource =
 		pointerSource == PointerSource::kVRLeftController ||
 		pointerSource == PointerSource::kVRRightController;
-	if (mouseMoved || vrControllerSource) {
-		lastMouseX = mouse.x;
-		lastMouseY = mouse.y;
-		hoverMesh = pickMode == PickMode::kEffect ? ResolveNearestToCursor() : ResolveUnderCursor(false);
+	lastMouseX = mouse.x;
+	lastMouseY = mouse.y;
+	hoverDirty |= mouseMoved || vrControllerSource;
+	const double now = ImGui::GetTime();
+	if (hoverDirty && now - lastHoverTime >= kHoverRefreshSeconds) {
+		lastHoverTime = now;
+		hoverDirty = false;
+		hoverMesh = pickMode == PickMode::kEffect ? ResolveNearestToCursor(false) : ResolveUnderCursor(false);
 	}
 
 	if (hoverMesh.valid) {
@@ -490,15 +497,15 @@ void LightPicker::Update()
 
 	if (leftClicked) {
 		PickedMesh hit;
-		if (clickPointerSource == hoverPointerSource && hoverMesh.valid) {
-			hit = hoverMesh;
-		} else if (clickPointerSource == PointerSource::kFlatViewport) {
-			hit = pickMode == PickMode::kEffect ? ResolveNearestToCursor() : ResolveUnderCursor();
+		if (clickPointerSource == PointerSource::kFlatViewport) {
+			hit = pickMode == PickMode::kEffect ? ResolveNearestToCursor(false) : ResolveUnderCursor(false);
 		} else if (clickPointerSource == PointerSource::kVRLeftController ||
 				   clickPointerSource == PointerSource::kVRRightController) {
-			hit = ResolveVRCollisionTarget(clickPointerSource, true);
+			hit = ResolveVRCollisionTarget(clickPointerSource, false);
 		}
 		if (hit.valid) {
+			logger::info("[LightPicker] Picked base 0x{:08X} '{}' model '{}' ref '{}' plugin '{}'",
+				hit.baseFormId, hit.editorId, hit.modelPath, hit.refFormEntry, hit.sourcePlugin);
 			result = std::move(hit);
 			picking = false;
 			InvalidateHover();

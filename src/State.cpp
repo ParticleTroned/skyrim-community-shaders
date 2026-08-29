@@ -1286,6 +1286,7 @@ void State::SaveToJson(
 	advanced["Refraction Scale"] = refractionScale;
 	advanced["PBR Metal Reflection Scale"] = pbrMetalReflectionScale;
 	advanced["PBR Metal Highlight Scale"] = pbrMetalHighlightScale;
+	advanced["PBR Verbose JSON Logging"] = globals::features::truePBR.enableVerboseJsonLogging;
 	advanced["Partial Precision"] = enablePartialPrecision.load(std::memory_order_relaxed);
 	settings["Advanced"] = advanced;
 
@@ -1350,6 +1351,7 @@ void State::LoadFromJson(nlohmann::json& settings, bool a_loadFeatureSettings)
 		globals::menu->Load(settings["Menu"]);
 	}
 
+	globals::features::truePBR.enableVerboseJsonLogging = false;
 	if (settings.contains("Advanced") && settings["Advanced"].is_object()) {
 		json& advanced = settings["Advanced"];
 		// The compilation pool is constructed at the responsive hardware-derived
@@ -1381,6 +1383,8 @@ void State::LoadFromJson(nlohmann::json& settings, bool a_loadFeatureSettings)
 			pbrMetalReflectionScale = std::clamp(advanced["PBR Metal Reflection Scale"].get<float>(), 0.0f, 2.0f);
 		if (advanced.contains("PBR Metal Highlight Scale") && advanced["PBR Metal Highlight Scale"].is_number())
 			pbrMetalHighlightScale = std::clamp(advanced["PBR Metal Highlight Scale"].get<float>(), 0.0f, 2.0f);
+		if (advanced.contains("PBR Verbose JSON Logging") && advanced["PBR Verbose JSON Logging"].is_boolean())
+			globals::features::truePBR.enableVerboseJsonLogging = advanced["PBR Verbose JSON Logging"].get<bool>();
 		if (advanced.contains("Partial Precision") && advanced["Partial Precision"].is_boolean())
 			enablePartialPrecision.store(advanced["Partial Precision"].get<bool>(), std::memory_order_relaxed);
 	}

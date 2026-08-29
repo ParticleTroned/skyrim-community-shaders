@@ -2,9 +2,9 @@
   "schemaVersion": 2,
   "status": "provisional-calibration-v2",
   "generatedAtEvidenceDate": "2026-08-28",
-  "packageVersion": "d2026.08.28.0",
-  "policy": "one vendor-neutral base with four explicit graphics tiers and capability-selected DLSS or FSR",
-  "tierOrder": ["Performance", "Balanced", "Quality", "Ultra Quality"],
+  "packageVersion": "d2026.08.29.0",
+  "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
+  "tierOrder": ["Performance", "Balanced", "Quality"],
   "baseTemplate": {
     "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
     "sha256": "CF37BBEDC2DC0A7EB7DDDEFE08ACB81961A2D1B0B45A70B8741DC72B0AC21FA7"
@@ -106,7 +106,7 @@
     },
     "ssgi-ambient-composition": {
       "status": "required-for-release",
-      "note": "Quality and Ultra Quality enable AO-only SSGI; complete ambient composition, rotating-view and physical-stereo qualification."
+      "note": "Quality enables AO-only SSGI; complete ambient composition, rotating-view and physical-stereo qualification."
     },
     "volumetric-lighting-retier": {
       "status": "measurement-requested",
@@ -196,34 +196,6 @@
         { "path": ["Wetterness", "RippleLifetime"], "value": 0.25999999046325684 },
         { "path": ["Wetterness", "SplashesLifetime"], "value": 5.199999809265137 },
         { "path": ["Wetterness", "WetternessFadeRange"], "value": 7500.0 }
-      ]
-    },
-    "Ultra Quality": {
-      "outputDirectory": "CSX Unified- Ultra Quality - Press END on PC to Customize",
-      "qualificationRefs": ["vendor-capability-selection", "runtime-lane-comparison", "foveation-recalibration", "ssgi-ambient-composition", "volumetric-lighting-retier"],
-      "overrides": [
-        { "path": ["Grass Collision", "EnableGrassCollision"], "value": true },
-        { "path": ["Screen Space GI", "Enabled"], "value": true },
-        { "path": ["Screen Space GI", "ResolutionMode"], "value": 0 },
-        { "path": ["Screen Space Shadows", "VRBaseSamplesAtReference"], "value": 44.0 },
-        { "path": ["Screen Space Shadows", "VRCullDistance"], "value": 0.0 },
-        { "path": ["Skylighting", "EnableSkylighting"], "value": true },
-        { "path": ["Skylighting", "MinSpecularVisibility"], "value": 0.100000001490116 },
-        { "path": ["Skylighting", "OcclusionUpdateInterval"], "value": 5 },
-        { "path": ["Skylighting", "ProbeFieldSize"], "value": 15701.3330078125 },
-        { "path": ["Skylighting", "ProbeGridQuality"], "value": 2 },
-        { "path": ["Skylighting", "ProbeUpdateInterval"], "value": 9 },
-        { "path": ["Skylighting", "StableSliceCount"], "value": 13 },
-        { "path": ["Terrain Blending", "TerrainCullDistance"], "value": 1024.0 },
-        { "path": ["Upscaling", "qualityMode"], "value": 1 },
-        { "path": ["Wetterness", "EnableWetterness"], "value": 1 },
-        { "path": ["Wetterness", "RaindropChance"], "value": 0.800000011920929 },
-        { "path": ["Wetterness", "RaindropFxRangeWorldUnits"], "value": 1400.0 },
-        { "path": ["Wetterness", "RaindropGridSize"], "value": 3.0 },
-        { "path": ["Wetterness", "RaindropInterval"], "value": 0.5 },
-        { "path": ["Wetterness", "RippleLifetime"], "value": 0.300000011920929 },
-        { "path": ["Wetterness", "SplashesLifetime"], "value": 6.0 },
-        { "path": ["Wetterness", "WetternessFadeRange"], "value": 10000.0 }
       ]
     }
   },

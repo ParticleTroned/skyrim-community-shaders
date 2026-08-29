@@ -59,8 +59,8 @@ try {
     Assert-True $? 'Temporary unified preset generation failed.'
 
     $tierProperties = @($policy.tiers.psobject.Properties)
-    Assert-True ($tierProperties.Count -eq 4) 'The policy must define exactly four tiers.'
-    Assert-True (($tierProperties.Name -join '|') -eq 'Performance|Balanced|Quality|Ultra Quality') 'The tier order changed unexpectedly.'
+    Assert-True ($tierProperties.Count -eq 3) 'The policy must define exactly three tiers.'
+    Assert-True (($tierProperties.Name -join '|') -eq 'Performance|Balanced|Quality') 'The tier order changed unexpectedly.'
 
     $ownedPaths = @($policy.tierOwnedPaths | ForEach-Object { @($_ | ForEach-Object { [string]$_ }) -join '/' })
     $maps = @{}
@@ -72,7 +72,7 @@ try {
     }
 
     $reference = $maps['Performance']
-    foreach ($tier in 'Balanced', 'Quality', 'Ultra Quality') {
+    foreach ($tier in 'Balanced', 'Quality') {
         $candidate = $maps[$tier]
         $allPaths = @($reference.Keys + $candidate.Keys | Sort-Object -Unique)
         foreach ($path in $allPaths) {
@@ -83,7 +83,7 @@ try {
     }
 
     $report = Get-Content -Raw -LiteralPath $reportPath | ConvertFrom-Json -Depth 100
-    Assert-True ($report.tiers.Count -eq 4) 'Generated evidence report omitted a tier.'
+    Assert-True ($report.tiers.Count -eq 3) 'Generated evidence report omitted a tier.'
     Assert-True ($null -ne $report.qualifications.'ssgi-ambient-composition') 'Generated evidence report omitted qualification metadata.'
 
     $invalidPolicy = Get-Content -Raw -LiteralPath $policyPath | ConvertFrom-Json -Depth 100
@@ -103,6 +103,19 @@ try {
     }
     Assert-True ($null -ne $failure) 'A tier override of an operational path was accepted.'
     Assert-True ($failure.Exception.Message -match 'common/operational path') 'The invalid tier failed for the wrong reason.'
+
+    $extraOutputRoot = Join-Path $scratch 'extra-output'
+    $extraOutput = Join-Path $extraOutputRoot 'CSX Unified- Unmanaged - Press END on PC to Customize'
+    [System.IO.Directory]::CreateDirectory($extraOutput) | Out-Null
+    $failure = $null
+    try {
+        & $generator -OutputRoot $extraOutputRoot -ReportPath (Join-Path $scratch 'extra-report.json') 2>&1 | Out-Null
+    }
+    catch {
+        $failure = $_
+    }
+    Assert-True ($null -ne $failure) 'An unmanaged unified preset output directory was accepted.'
+    Assert-True ($failure.Exception.Message -match 'Unmanaged unified preset output director') 'The unmanaged output failed for the wrong reason.'
 
     Write-Output 'Unified preset generator tests passed.'
 }

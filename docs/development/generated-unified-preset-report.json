@@ -39,18 +39,6 @@
         "ssgi-ambient-composition",
         "volumetric-lighting-retier"
       ]
-    },
-    {
-      "tier": "Ultra Quality",
-      "outputDirectory": "CSX Unified- Ultra Quality - Press END on PC to Customize",
-      "settingsSha256": "3FB1C27D776B7BCC4DC5EE3AE96E28889428D24DF8780BDE28A31D2FC3232C05",
-      "qualificationRefs": [
-        "vendor-capability-selection",
-        "runtime-lane-comparison",
-        "foveation-recalibration",
-        "ssgi-ambient-composition",
-        "volumetric-lighting-retier"
-      ]
     }
   ],
   "qualifications": {
@@ -68,7 +56,7 @@
     },
     "ssgi-ambient-composition": {
       "status": "required-for-release",
-      "note": "Quality and Ultra Quality enable AO-only SSGI; complete ambient composition, rotating-view and physical-stereo qualification."
+      "note": "Quality enables AO-only SSGI; complete ambient composition, rotating-view and physical-stereo qualification."
     },
     "volumetric-lighting-retier": {
       "status": "measurement-requested",

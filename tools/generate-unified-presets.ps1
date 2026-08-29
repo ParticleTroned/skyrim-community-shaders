@@ -216,6 +216,32 @@ function Assert-TierContract {
             }
         }
     }
+
+    $outputDirectories = @($policy.tiers.psobject.Properties.Value.outputDirectory)
+    if (($outputDirectories | Sort-Object -Unique).Count -ne $outputDirectories.Count) {
+        throw 'Tier outputDirectory values must be unique.'
+    }
+    foreach ($outputDirectory in $outputDirectories) {
+        if ($outputDirectory -notmatch '^CSX Unified- .+ - Press END on PC to Customize$') {
+            throw "Tier outputDirectory does not follow the managed unified preset naming contract: $outputDirectory"
+        }
+    }
+}
+
+function Assert-ManagedOutputSet {
+    if (-not (Test-Path -LiteralPath $resolvedOutputRoot -PathType Container)) {
+        return
+    }
+
+    $expected = @($policy.tiers.psobject.Properties.Value.outputDirectory)
+    $actual = @(Get-ChildItem -LiteralPath $resolvedOutputRoot -Directory | Where-Object {
+        $_.Name -match '^CSX Unified- .+ - Press END on PC to Customize$'
+    } | ForEach-Object { $_.Name })
+    $extra = @(Compare-Object -ReferenceObject $expected -DifferenceObject $actual -PassThru | Where-Object { $_ -in $actual })
+    if ($extra.Count -gt 0) {
+        $noun = if ($extra.Count -eq 1) { 'directory' } else { 'directories' }
+        throw "Unmanaged unified preset output ${noun}: $($extra -join ', ')"
+    }
 }
 
 function Assert-NeutralBase {
@@ -283,6 +309,7 @@ size=1
 }
 
 Assert-TierContract
+Assert-ManagedOutputSet
 $basePath = Resolve-RepositoryPath -RelativePath $policy.baseTemplate.path
 
 if ($RefreshBaseFromPath) {

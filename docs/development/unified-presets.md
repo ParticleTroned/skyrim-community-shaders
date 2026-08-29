@@ -1,13 +1,12 @@
 # GPU-unified presets
 
-The four `CSX Unified` MGO presets use one settings policy on AMD and NVIDIA:
+The three `CSX Unified` MGO presets use one settings policy on AMD and NVIDIA:
 
 | Tier | Upscaling quality | SSGI | Skylighting | Wetterness | Grass collision |
 | --- | --- | --- | --- | --- | --- |
 | Performance | Balanced | Off | Off | Off | Off |
 | Balanced | Quality | Off | Low | On | On |
 | Quality | Ultra Quality | AO-only, provisional | Medium | On | On |
-| Ultra Quality | Hoshipa | AO-only, provisional | High | On | On |
 
 The capability boundary remains vendor-neutral:
 
@@ -25,7 +24,7 @@ Preset generation has three layers:
 1. [`Base.SettingsUser.json`](./unified-preset-templates/Base.SettingsUser.json)
    is one pinned, current-schema, vendor-neutral base.
 2. [`unified-preset-policy.json`](./unified-preset-policy.json) defines common
-   CSX/MGO policy, the complete allowlist of tier-owned paths, all four tier
+   CSX/MGO policy, the complete allowlist of tier-owned paths, all three tier
    values, guards, and qualification state.
 3. [`generate-unified-presets.ps1`](../../tools/generate-unified-presets.ps1)
    composes complete MGO `SettingsUser.json` files and a deterministic evidence
@@ -45,11 +44,12 @@ The generator rejects:
 - obsolete Adaptive Balance, screenshot, water, or runtime-derived fields;
 - missing current-schema markers and incorrect profile-array lengths;
 - vendor names in unified output directories;
+- unmanaged extra `CSX Unified` package directories;
 - output settings, metadata, or the generated report that are stale.
 
 ## Generate and verify
 
-Generate all four packages and the evidence report:
+Generate all three packages and the evidence report:
 
 ```powershell
 pwsh -NoProfile -File tools/generate-unified-presets.ps1

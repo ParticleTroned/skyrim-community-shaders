@@ -783,6 +783,8 @@ namespace LightingExtensions
 	{
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
+			globals::state->UpdateLightingShaderPermutation(pass);
+
 			func(shader, pass, renderFlags);
 
 			auto state = globals::state;

@@ -2156,6 +2156,21 @@ std::unordered_map<std::string, bool>& State::GetDisabledFeatures()
 
 // --- Utility Method Implementations ---
 
+void State::UpdateLightingShaderPermutation(RE::BSRenderPass* a_pass)
+{
+	constexpr auto additiveLighting = static_cast<uint32_t>(ExtraShaderDescriptors::AdditiveLighting);
+	permutationData.ExtraShaderDescriptor &= ~additiveLighting;
+
+	if (!a_pass || !a_pass->geometry)
+		return;
+
+	auto* alphaProperty = a_pass->geometry->GetGeometryRuntimeData().alphaProperty.get();
+	if (alphaProperty && alphaProperty->GetAlphaBlending() &&
+		alphaProperty->GetDestBlendMode() == RE::NiAlphaProperty::AlphaFunction::kOne) {
+		permutationData.ExtraShaderDescriptor |= additiveLighting;
+	}
+}
+
 float State::GetTotalSmoothedDrawCalls() const
 {
 	return static_cast<float>(smoothDrawCalls[magic_enum::enum_integer(RE::BSShader::Type::Total)]);

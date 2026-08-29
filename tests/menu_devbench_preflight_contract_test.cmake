@@ -24,6 +24,7 @@ string(JSON _action_count LENGTH
 )
 set(_prepare_coc_found FALSE)
 set(_truepbr_verbose_found FALSE)
+set(_dynamic_cubemap_resolution_found FALSE)
 math(EXPR _action_last "${_action_count} - 1")
 foreach(_index RANGE 0 ${_action_last})
     string(JSON _action GET
@@ -33,6 +34,8 @@ foreach(_index RANGE 0 ${_action_last})
         set(_prepare_coc_found TRUE)
     elseif(_action STREQUAL "set_truepbr_verbose_json_logging")
         set(_truepbr_verbose_found TRUE)
+    elseif(_action STREQUAL "set_dynamic_cubemap_resolution")
+        set(_dynamic_cubemap_resolution_found TRUE)
     endif()
 endforeach()
 if(NOT _prepare_coc_found)
@@ -42,6 +45,27 @@ if(NOT _truepbr_verbose_found)
     message(FATAL_ERROR
         "Menu DevBench schema is missing set_truepbr_verbose_json_logging"
     )
+endif()
+if(NOT _dynamic_cubemap_resolution_found)
+    message(FATAL_ERROR
+        "Menu DevBench schema is missing set_dynamic_cubemap_resolution"
+    )
+endif()
+
+string(JSON _resolution_count LENGTH
+    "${_descriptor}" inputSchema properties resolution enum
+)
+if(NOT _resolution_count EQUAL 2)
+    message(FATAL_ERROR "Dynamic cubemap resolution schema must have two values")
+endif()
+string(JSON _performance_resolution GET
+    "${_descriptor}" inputSchema properties resolution enum 0
+)
+string(JSON _quality_resolution GET
+    "${_descriptor}" inputSchema properties resolution enum 1
+)
+if(NOT _performance_resolution EQUAL 128 OR NOT _quality_resolution EQUAL 256)
+    message(FATAL_ERROR "Dynamic cubemap resolution schema must expose 128 and 256")
 endif()
 
 foreach(_required_behavior IN ITEMS
@@ -58,6 +82,11 @@ foreach(_required_behavior IN ITEMS
     "kPeripheryTAAOuterScale"
     "{ \"truePbrVerboseJsonLogging\", globals::features::truePBR.enableVerboseJsonLogging }"
     "globals::features::truePBR.enableVerboseJsonLogging = enabled"
+    "{ \"configuredResolution\", dynamicCubemaps.settings.CubemapResolution }"
+    "{ \"activeResolution\", dynamicCubemaps.GetActiveCubemapResolution() }"
+    "{ \"restartRequired\", dynamicCubemaps.IsCubemapResolutionRestartRequired() }"
+    "globals::features::dynamicCubemaps.SetCubemapResolution(resolution)"
+    "menu->RequestSettingsDirtyCheck()"
     "{ \"persisted\", false }"
     "{ \"promptRequired\", true }"
 )

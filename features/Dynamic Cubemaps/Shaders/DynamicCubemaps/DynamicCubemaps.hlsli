@@ -98,7 +98,7 @@ namespace DynamicCubemaps
 #	else
 		float NoV = saturate(dot(N, V));
 
-		float level = roughness * 8.0;
+		float level = roughness * SharedData::cubemapCreatorSettings.MaxMipLevel;
 
 		float3 finalIrradiance = 0;
 
@@ -172,7 +172,7 @@ namespace DynamicCubemaps
 		float3 R = reflect(-V, N);
 		float NoV = saturate(dot(N, V));
 
-		float level = roughness * 8.0;
+		float level = roughness * SharedData::cubemapCreatorSettings.MaxMipLevel;
 
 		float2 specularBRDF = BRDF::EnvBRDF(roughness, NoV);
 

@@ -74,7 +74,8 @@ namespace SharedData
 	struct CubemapCreatorSettings
 	{
 		uint Enabled;
-		float3 pad0;
+		float MaxMipLevel;
+		float2 pad0;
 
 		float4 CubemapColor;
 	};

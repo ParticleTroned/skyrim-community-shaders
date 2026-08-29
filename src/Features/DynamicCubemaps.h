@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bit>
+
 #include "Buffer.h"
 #include "Utils/LazyShader.h"
 
@@ -13,6 +15,9 @@ public:
 struct DynamicCubemaps : Feature
 {
 public:
+	static constexpr uint32_t kPerformanceCubemapResolution = 128;
+	static constexpr uint32_t kQualityCubemapResolution = 256;
+
 	const std::string defaultDynamicCubeMapSavePath = "Data\\textures\\DynamicCubemaps";
 
 	// Specular irradiance
@@ -134,14 +139,16 @@ public:
 	{
 		uint EnabledCreator = false;
 		uint EnabledSSR = true;
-		uint pad0[2];
+		uint CubemapResolution = kPerformanceCubemapResolution;
+		uint pad0;
 		float4 CubemapColor{ 1.0f, 1.0f, 1.0f, 0.0f };
 	};
 
 	struct alignas(16) CommonBufferData
 	{
 		uint Enabled = false;
-		float pad0[3]{};
+		float MaxMipLevel = 7.0f;
+		float pad0[2]{};
 		float4 CubemapColor{ 1.0f, 1.0f, 1.0f, 0.0f };
 	};
 	STATIC_ASSERT_ALIGNAS_16(CommonBufferData);
@@ -151,9 +158,21 @@ public:
 	{
 		auto data = CommonBufferData{};
 		data.Enabled = settings.EnabledCreator;
+		data.MaxMipLevel = static_cast<float>(activeCubemapMipLevels - 1);
 		data.CubemapColor = settings.CubemapColor;
 		return data;
 	}
+
+	/** @brief Sets the configured startup resolution when it is supported. */
+	bool SetCubemapResolution(uint32_t a_resolution);
+	/** @brief Returns the resolution requested before renderer resource creation. */
+	uint32_t GetCubemapResolutionForResourceCreation();
+	/** @brief Returns the resolution used by the current renderer resources. */
+	uint32_t GetActiveCubemapResolution() const { return activeCubemapResolution; }
+	/** @brief Returns the mip count used by the current renderer resources. */
+	uint32_t GetActiveCubemapMipLevels() const { return activeCubemapMipLevels; }
+	/** @brief Reports whether the configured resolution requires a restart. */
+	bool IsCubemapResolutionRestartRequired() const { return settings.CubemapResolution != activeCubemapResolution; }
 	bool enabledAtBoot = false;
 	bool IsSSRRuntimeActive() const;
 	void UpdateCubemap();
@@ -233,4 +252,12 @@ public:
 
 	virtual bool SupportsVR() override { return true; };
 	virtual bool IsCore() const override { return true; };
+
+private:
+	static uint32_t SanitizeCubemapResolution(uint32_t a_resolution);
+	void RefreshActiveCubemapResolution();
+
+	uint32_t activeCubemapResolution = kPerformanceCubemapResolution;
+	uint32_t activeCubemapMipLevels = std::bit_width(kPerformanceCubemapResolution);
+	bool cubemapResolutionLocked = false;
 };

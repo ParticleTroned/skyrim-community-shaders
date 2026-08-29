@@ -179,57 +179,73 @@ namespace Skylighting
 	}
 
 #	if defined(SKYLIGHTING_SHADOW_VIS)
-	sh2 Sample(float3 positionMS, float3 normalWS, out float shadowVisibility)
+	struct ShadowedSample
 	{
-		sh2 unoccludedProbe = GetUnoccludedProbe();
-		shadowVisibility = 1.0;
+		sh2 Probe;
+		float Visibility;
+	};
+
+	ShadowedSample SampleWithShadow(float3 positionMS, float3 normalWS)
+	{
+		ShadowedSample result = (ShadowedSample)0;
+		result.Probe = GetUnoccludedProbe();
+		result.Visibility = 1.0;
 
 		// Preserve the existing two-argument sampling cost when the current frame
 		// has no valid directional-shadow inputs. Callers retain their old shadow
 		// fallback and do not read a stale visibility volume.
-		if (SharedData::skylightingSettings.ShadowDataAvailable == 0)
-			return Sample(positionMS, normalWS);
+		if (SharedData::skylightingSettings.ShadowDataAvailable == 0) {
+			result.Probe = Sample(positionMS, normalWS);
+		} else {
+			const SharedData::SkylightingSettings params = SharedData::skylightingSettings;
+			if (IsEnabled(params) && !SharedData::InInterior) {
+				const uint3 arrayDims = GetArrayDims(params);
+				const float3 arraySize = GetArraySize(params);
+				const float3 cellSize = GetCellSize(params);
+				positionMS.xyz += normalWS * cellSize * 0.5;
+				float3 positionMSAdjusted = positionMS - params.PosOffset.xyz;
+				float3 uvw = positionMSAdjusted / arraySize + .5;
+				if (!any(uvw < 0) && !any(uvw > 1)) {
+					float3 cellVxCoord = uvw * arrayDims;
+					int3 cell000 = floor(cellVxCoord - 0.5);
+					float3 trilinearPos = cellVxCoord - 0.5 - cell000;
+					sh2 shSum = 0;
+					float shWeightSum = 0;
+					float shadowSum = 0;
+					float shadowWeightSum = 0;
 
-		if (!IsEnabled() || SharedData::InInterior)
-			return unoccludedProbe;
+					for (int i = 0; i < 2; i++)
+						for (int j = 0; j < 2; j++)
+							for (int k = 0; k < 2; k++) {
+								int3 cellOffset = int3(i, j, k);
+								int3 cellID = cell000 + cellOffset;
+								if (any(cellID < 0) || any((uint3)cellID >= arrayDims))
+									continue;
 
-		positionMS.xyz += normalWS * CELL_SIZE * 0.5;
-		float3 positionMSAdjusted = positionMS - SharedData::skylightingSettings.PosOffset.xyz;
-		float3 uvw = positionMSAdjusted / ARRAY_SIZE + .5;
-		if (any(uvw < 0) || any(uvw > 1))
-			return unoccludedProbe;
+								float3 trilinearWeights = 1 - abs(cellOffset - trilinearPos);
+								float triWeight = trilinearWeights.x * trilinearWeights.y * trilinearWeights.z;
+								uint3 cellTexID = ((uint3)cellID + params.ArrayOrigin.xyz) % arrayDims;
+								float3 cellCentreMS = (float3(cellID) + 0.5 - float3(arrayDims) * 0.5) * cellSize;
+								float tangentWeight = 1.0;
+								[branch] if (params.FastSamplingMode == 0)
+								{
+									tangentWeight = saturate(dot(normalize(cellCentreMS - positionMSAdjusted), normalWS) * 0.5 + 0.5);
+								}
+								float shWeight = triWeight * tangentWeight;
 
-		float3 cellVxCoord = uvw * ARRAY_DIM;
-		int3 cell000 = floor(cellVxCoord - 0.5);
-		float3 trilinearPos = cellVxCoord - 0.5 - cell000;
-		sh2 shSum = 0;
-		float shWeightSum = 0;
-		float shadowSum = 0;
-		float shadowWeightSum = 0;
+								shSum = SphericalHarmonics::Add(shSum, SphericalHarmonics::Scale(SkylightingProbeArray[cellTexID], shWeight));
+								shWeightSum += shWeight;
+								shadowSum += ShadowVisibilityProbeArray[cellTexID] * triWeight;
+								shadowWeightSum += triWeight;
+							}
 
-		for (int i = 0; i < 2; i++)
-			for (int j = 0; j < 2; j++)
-				for (int k = 0; k < 2; k++) {
-					int3 cellOffset = int3(i, j, k);
-					int3 cellID = cell000 + cellOffset;
-					if (any(cellID < 0) || any((uint3)cellID >= ARRAY_DIM))
-						continue;
-
-					float3 trilinearWeights = 1 - abs(cellOffset - trilinearPos);
-					float triWeight = trilinearWeights.x * trilinearWeights.y * trilinearWeights.z;
-					uint3 cellTexID = (cellID + SharedData::skylightingSettings.ArrayOrigin.xyz) % ARRAY_DIM;
-					float3 cellCentreMS = (cellID + 0.5 - ARRAY_DIM / 2) * CELL_SIZE;
-					float tangentWeight = dot(normalize(cellCentreMS - positionMSAdjusted), normalWS) * 0.5 + 0.5;
-					float shWeight = triWeight * tangentWeight;
-
-					shSum = SphericalHarmonics::Add(shSum, SphericalHarmonics::Scale(SkylightingProbeArray[cellTexID], shWeight));
-					shWeightSum += shWeight;
-					shadowSum += ShadowVisibilityProbeArray[cellTexID] * triWeight;
-					shadowWeightSum += triWeight;
+					result.Visibility = lerp(1.0, shadowSum / max(shadowWeightSum, EPSILON_WEIGHT_SUM), GetFadeOutFactor(positionMS));
+					result.Probe = SphericalHarmonics::Scale(shSum, rcp(shWeightSum + EPSILON_WEIGHT_SUM));
 				}
+			}
+		}
 
-		shadowVisibility = lerp(1.0, shadowSum / max(shadowWeightSum, EPSILON_WEIGHT_SUM), GetFadeOutFactor(positionMS));
-		return SphericalHarmonics::Scale(shSum, rcp(shWeightSum + EPSILON_WEIGHT_SUM));
+		return result;
 	}
 #	endif
 

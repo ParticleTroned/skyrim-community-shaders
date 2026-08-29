@@ -146,7 +146,7 @@ namespace ImageBasedLighting
 		return Color::IrradianceToGamma(linEnv + linSky);
 	}
 
-	void ComputeSpecularIBL(
+	float3 ComputeSpecularIBL(
 		TextureCube<float3> envTexture,
 		TextureCube<float3> fullTexture,
 		SamplerState samp,
@@ -154,10 +154,10 @@ namespace ImageBasedLighting
 		float level,
 		float directionalAmbientColorSpecular,
 		float skylightingSpecular,
-		float skylightingVisibility,
-		out float3 envSpecular,
-		out float3 skySpecular)
+		float skylightingVisibility)
 	{
+		float3 envSpecular = 0.0;
+		float3 skySpecular = 0.0;
 		float3 linEnvSample = Color::IrradianceToLinear(envTexture.SampleLevel(samp, rayDir, level));
 		float3 linFullSample = Color::IrradianceToLinear(fullTexture.SampleLevel(samp, rayDir, level));
 		float envLum = Color::RGBToLuminance(Color::IrradianceToLinear(envTexture.SampleLevel(samp, rayDir, 15)));
@@ -181,6 +181,8 @@ namespace ImageBasedLighting
 		if (SharedData::InInterior) {
 			skySpecular = 0;
 		}
+
+		return envSpecular + skySpecular;
 	}
 
 	// ============================================================================

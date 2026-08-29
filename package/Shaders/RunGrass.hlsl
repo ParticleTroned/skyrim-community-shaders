@@ -854,8 +854,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #					else
 	float3 positionMSSkylight = input.WorldPosition.xyz;
 #					endif
-	float skylightingShadowVisibility = 1.0;
-	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, normal, skylightingShadowVisibility);
+	Skylighting::ShadowedSample skylightingSample = Skylighting::SampleWithShadow(positionMSSkylight, normal);
+	sh2 skylightingSH = skylightingSample.Probe;
+	float skylightingShadowVisibility = skylightingSample.Visibility;
 	float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, positionMSSkylight, normal, vertexAO);
 #				endif  // SKYLIGHTING
 

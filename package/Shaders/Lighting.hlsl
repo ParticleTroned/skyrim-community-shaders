@@ -1919,41 +1919,44 @@ WetnessLightingState CreateWetnessLightingState(
 	float vrWetnessDirectDetailWeight,
 	bool vrWetnessDirectDetailEnabled)
 {
-	WetnessLightingState state = (WetnessLightingState)0;
-	[branch] if (!wetLightingVisible)
-	{
-		return state;
-	}
+	WetnessLightingState state;
+#		if defined(DYNAMIC_CUBEMAPS)
+	state.indirectLightState = (WetnessIndirectLightState)0;
+#		endif
+	state.directLightState = (WetnessDirectLightState)0;
 
-	WetReflectionParams wetReflectionParams = CreateWetReflectionParams(CS_WETNESS_SETTINGS.WetIndirectSpecularScale);
-	if (postRainOverridePhase > 1e-4) {
-		// Post-rain puddles keep the general Wet Reflection scale as the baseline.
-		// The post-rain controls only bias that baseline up or down.
-		wetReflectionParams.effectiveScale = lerp(
-			wetReflectionParams.effectiveScale,
-			wetReflectionParams.effectiveScale * postRainPuddleReflectionOverrideScale,
-			postRainOverridePhase);
-	}
+	[branch] if (wetLightingVisible)
+	{
+		WetReflectionParams wetReflectionParams = CreateWetReflectionParams(CS_WETNESS_SETTINGS.WetIndirectSpecularScale);
+		if (postRainOverridePhase > 1e-4) {
+			// Post-rain puddles keep the general Wet Reflection scale as the baseline.
+			// The post-rain controls only bias that baseline up or down.
+			wetReflectionParams.effectiveScale = lerp(
+				wetReflectionParams.effectiveScale,
+				wetReflectionParams.effectiveScale * postRainPuddleReflectionOverrideScale,
+				postRainOverridePhase);
+		}
 
 #		if defined(DYNAMIC_CUBEMAPS)
-	state.indirectLightState = CreateWetnessIndirectLightState(
-		wetIndirectNormal,
-		waterRoughnessSpecular,
-		wetReflectionParams,
-		wetHighlightReflectanceScale,
-		wetPuddleSkyReflectionScale);
+		state.indirectLightState = CreateWetnessIndirectLightState(
+			wetIndirectNormal,
+			waterRoughnessSpecular,
+			wetReflectionParams,
+			wetHighlightReflectanceScale,
+			wetPuddleSkyReflectionScale);
 #		endif
-	state.directLightState = CreateWetnessDirectLightState(
-		wetnessNormal,
-		worldNormal,
-		directViewDirection,
-		waterRoughnessSpecular,
-		wetReflectionParams,
-		wetDirectSpecularScale,
-		raindropRippleMask,
-		pointLightDarkness,
-		vrWetnessDirectDetailWeight,
-		vrWetnessDirectDetailEnabled);
+		state.directLightState = CreateWetnessDirectLightState(
+			wetnessNormal,
+			worldNormal,
+			directViewDirection,
+			waterRoughnessSpecular,
+			wetReflectionParams,
+			wetDirectSpecularScale,
+			raindropRippleMask,
+			pointLightDarkness,
+			vrWetnessDirectDetailWeight,
+			vrWetnessDirectDetailEnabled);
+	}
 	return state;
 }
 
@@ -3060,20 +3063,24 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float skylightingShadowVisibility = 1.0;
 #		endif
 #		if defined(DEFERRED)
-	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, worldNormal
 #			if defined(SKYLIGHTING_SHADOW_VIS)
-		,
-		skylightingShadowVisibility
+	Skylighting::ShadowedSample skylightingSample = Skylighting::SampleWithShadow(positionMSSkylight, worldNormal);
+	sh2 skylightingSH = skylightingSample.Probe;
+	skylightingShadowVisibility = skylightingSample.Visibility;
+#			else
+	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, worldNormal);
 #			endif
-	);
 #		else
-	sh2 skylightingSH = inWorld ? Skylighting::Sample(positionMSSkylight, worldNormal
 #			if defined(SKYLIGHTING_SHADOW_VIS)
-									  ,
-									  skylightingShadowVisibility
+	sh2 skylightingSH = Skylighting::UNIT_SH;
+	if (inWorld) {
+		Skylighting::ShadowedSample skylightingSample = Skylighting::SampleWithShadow(positionMSSkylight, worldNormal);
+		skylightingSH = skylightingSample.Probe;
+		skylightingShadowVisibility = skylightingSample.Visibility;
+	}
+#			else
+	sh2 skylightingSH = inWorld ? Skylighting::Sample(positionMSSkylight, worldNormal) : Skylighting::UNIT_SH;
 #			endif
-									  ) :
-	                              Skylighting::UNIT_SH;
 #		endif
 
 #	endif

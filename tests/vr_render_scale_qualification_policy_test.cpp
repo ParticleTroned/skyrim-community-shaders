@@ -79,6 +79,15 @@ namespace
 		};
 	}
 
+	constexpr TargetProfile NativeTAA()
+	{
+		return {
+			.method = Method::TAA,
+			.qualityMode = 0,
+			.renderScaleMode = false,
+		};
+	}
+
 	constexpr StabilityFacts NativeVendorStableFacts()
 	{
 		auto facts = CommonStableFacts();
@@ -88,6 +97,15 @@ namespace
 		facts.fidelityStable = true;
 		facts.vendorPresentationStable = true;
 		facts.lifecycleStable = true;
+		return facts;
+	}
+
+	constexpr StabilityFacts NativePipelineStableFacts()
+	{
+		auto facts = CommonStableFacts();
+		facts.apiNativeContract = true;
+		facts.physicalNativeContract = true;
+		facts.nativePresentationStable = true;
 		return facts;
 	}
 
@@ -255,6 +273,37 @@ namespace
 		return evaluation.PresentationStable() && !evaluation.CleanupDrained() &&
 		       (evaluation.cleanupFailures &
 				   static_cast<std::uint64_t>(kFailureShaderCompilation)) != 0;
+	}
+
+	constexpr bool CoversNativePipelineStability()
+	{
+		const TargetProfile none{
+			.method = Method::None,
+			.qualityMode = 0,
+			.renderScaleMode = false,
+		};
+		const Profile taaProfile{
+			.valid = true,
+			.method = Method::TAA,
+			.qualityMode = 0,
+			.renderScaleMode = false,
+		};
+		if (!IsValidTarget(none) || !IsValidTarget(NativeTAA()) ||
+			UsesVendorEvaluation(none) || UsesVendorEvaluation(NativeTAA()) ||
+			!MatchesTarget(taaProfile, NativeTAA()) ||
+			MatchesTarget(taaProfile, none) ||
+			IsValidTarget(TargetProfile{ .method = Method::TAA,
+				.qualityMode = 1,
+				.renderScaleMode = true })) {
+			return false;
+		}
+
+		auto facts = NativePipelineStableFacts();
+		if (EvaluateStability(NativeTAA(), facts) != kFailureNone)
+			return false;
+		facts.physicalNativeContract = false;
+		return (EvaluateStability(NativeTAA(), facts) &
+				   static_cast<std::uint64_t>(kFailurePhysicalNativeContract)) != 0;
 	}
 
 	constexpr bool CoversQualificationMilestones()
@@ -503,6 +552,7 @@ namespace
 	static_assert(CoversConfiguredRuntimeBackendSeparation());
 	static_assert(CoversActiveVendorStability());
 	static_assert(CoversNativeVendorStability());
+	static_assert(CoversNativePipelineStability());
 	static_assert(CoversQualificationMilestones());
 	static_assert(CoversContractSpecificShaderCompilation());
 	static_assert(CoversMilestoneParsingAndFirstTimestamps());

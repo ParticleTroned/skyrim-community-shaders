@@ -91,6 +91,34 @@ foreach(_required_text IN ITEMS
     endif()
 endforeach()
 
+string(JSON _target_method_count ERROR_VARIABLE _target_method_error
+    LENGTH "${_descriptor}" inputSchema properties target properties method enum
+)
+if(_target_method_error)
+    message(FATAL_ERROR
+        "Render-scale target method enum is invalid: ${_target_method_error}"
+    )
+endif()
+math(EXPR _target_method_last "${_target_method_count} - 1")
+foreach(_native_target_method IN ITEMS none taa)
+    set(_native_target_found FALSE)
+    foreach(_target_method_index RANGE 0 ${_target_method_last})
+        string(JSON _target_method GET
+            "${_descriptor}"
+            inputSchema properties target properties method enum
+            ${_target_method_index}
+        )
+        if(_target_method STREQUAL _native_target_method)
+            set(_native_target_found TRUE)
+        endif()
+    endforeach()
+    if(NOT _native_target_found)
+        message(FATAL_ERROR
+            "Render-scale target schema is missing native method: ${_native_target_method}"
+        )
+    endif()
+endforeach()
+
 foreach(_milestone_contract IN ITEMS
     "descriptor[\"inputSchema\"][\"properties\"][\"milestone\"]"
     "json::array({ \"strict\", \"presentation\", \"cleanup\" })"

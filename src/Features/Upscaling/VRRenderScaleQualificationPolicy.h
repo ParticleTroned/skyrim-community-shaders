@@ -50,7 +50,9 @@ namespace VRRenderScaleQualificationPolicy
 	{
 		Unknown,
 		FSR,
-		DLSS
+		DLSS,
+		None,
+		TAA
 	};
 
 	enum class PhysicalBackend : std::uint8_t
@@ -133,6 +135,11 @@ namespace VRRenderScaleQualificationPolicy
 		if (a_target.method == Method::Unknown ||
 			a_target.qualityMode > kMaximumQualityMode ||
 			a_target.renderScaleMode != (a_target.qualityMode != 0)) {
+			return false;
+		}
+		if ((a_target.method == Method::None || a_target.method == Method::TAA) &&
+			(a_target.qualityMode != 0 || a_target.matchDLSSProfile ||
+				a_target.matchFSRRuntime)) {
 			return false;
 		}
 		if (a_target.method == Method::DLSS && a_target.matchFSRRuntime)

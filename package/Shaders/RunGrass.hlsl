@@ -435,6 +435,10 @@ cbuffer AlphaTestRefCB : register(b11)
 
 #	define SampColorSampler SampBaseSampler
 
+#	if defined(SKYLIGHTING)
+#		define SKYLIGHTING_SHADOW_VIS
+#	endif
+
 #	if defined(DYNAMIC_CUBEMAPS)
 #		include "DynamicCubemaps/DynamicCubemaps.hlsli"
 #	endif
@@ -448,7 +452,6 @@ cbuffer AlphaTestRefCB : register(b11)
 #	endif
 
 #	if defined(SKYLIGHTING)
-#		define SKYLIGHTING_SHADOW_VIS
 #		include "Skylighting/Skylighting.hlsli"
 #	endif
 

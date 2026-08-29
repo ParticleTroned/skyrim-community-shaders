@@ -66,7 +66,8 @@ namespace
 		kSwallow = 1u << 0,
 		kInvalidHead = 1u << 1,
 		kProcessInputEventsException = 1u << 2,
-		kGetDeviceException = 1u << 3
+		kGetDeviceException = 1u << 3,
+		kMouseWheelReadException = 1u << 4
 	};
 
 	const char* ToString(InputHookSafeguardReason a_reason)
@@ -80,6 +81,8 @@ namespace
 			return "process_input_events_exception";
 		case InputHookSafeguardReason::kGetDeviceException:
 			return "get_device_exception";
+		case InputHookSafeguardReason::kMouseWheelReadException:
+			return "mouse_wheel_read_exception";
 		default:
 			return "unknown";
 		}
@@ -1133,6 +1136,14 @@ struct BSInputDeviceManager_PollInputDevices
 		const bool blockAllDevices = menu->ShouldBlockAllGameInput();
 
 		if (a_events) {
+			__try {
+				if (auto* inputManager = RE::BSInputDeviceManager::GetSingleton()) {
+					if (const auto* mouse = inputManager->GetMouse())
+						menu->RecordDirectInputWheelDelta(mouse->GetRuntimeData().dInputNextState.z);
+				}
+			} __except (EXCEPTION_EXECUTE_HANDLER) {
+				LogInputHookSafeguardOnce(InputHookSafeguardReason::kMouseWheelReadException, a_dispatcher, TryGetInputEventHead(a_events), false);
+			}
 			__try {
 				menu->ProcessInputEvents(a_events);
 			} __except (EXCEPTION_EXECUTE_HANDLER) {

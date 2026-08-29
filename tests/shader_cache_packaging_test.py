@@ -206,6 +206,10 @@ class ShaderCachePackagingTests(unittest.TestCase):
 
         self.assertEqual(
             BUILDER.cache_variants_for(BUILDER.SHIPPED_CACHE_PROFILE),
+            (BUILDER.STANDARD_CACHE_VARIANT,),
+        )
+        self.assertEqual(
+            BUILDER.compile_variants_for(BUILDER.SHIPPED_CACHE_PROFILE),
             BUILDER.CACHE_VARIANTS,
         )
         self.assertEqual(
@@ -476,7 +480,6 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 BUILDER.default_plugin_version(source_root, "VR"),
                 "CSX 12.345-VR",
             )
-
 
 if __name__ == "__main__":
     unittest.main()

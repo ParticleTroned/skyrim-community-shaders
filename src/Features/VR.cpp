@@ -19,6 +19,7 @@
 #include "SubsurfaceScattering.h"
 #include "Upscaling.h"
 #include "VR/MenuPositioningPolicy.h"
+#include "VRDepthCullingCacheRefreshPolicy.h"
 #include "VRDepthCullingEnablePolicy.h"
 #include "VRDepthCullingTemporal.h"
 #include "WaterEffects.h"
@@ -937,6 +938,7 @@ void VR::DataLoaded()
 {
 	// Initialize occlusion culling based on user settings and current interior/exterior state.
 	UpdateDepthBufferCulling();
+	TryApplyDepthBufferCullingCacheRefresh();
 
 	if (gMinOccludeeBoxExtent) {
 		*gMinOccludeeBoxExtent = settings.MinOccludeeBoxExtent;
@@ -949,6 +951,7 @@ void VR::EarlyPrepass()
 {
 	// Apply culling setting each prepass based on current interior/exterior state.
 	UpdateDepthBufferCulling();
+	TryApplyDepthBufferCullingCacheRefresh();
 }
 
 //=============================================================================
@@ -4557,6 +4560,17 @@ void VR::UpdateDepthBufferCulling()
 	const bool previous = *gDepthBufferCulling;
 	*gDepthBufferCulling = desired;
 	VRDepthCullingTemporal::SetCullingEnabled(desired);
+	using namespace VRDepthCullingCacheRefreshPolicy;
+	if (!desired) {
+		// A request may have been queued while background compilation was active.
+		// Do not refresh after the effective location policy has switched culling off.
+		depthCullingCacheRefreshPending.store(false, std::memory_order_release);
+	} else if (ShouldRequest(
+			desired,
+			depthCullingCacheRefreshCompleted.load(std::memory_order_acquire),
+			depthCullingCacheRefreshPending.load(std::memory_order_acquire))) {
+		depthCullingCacheRefreshPending.store(true, std::memory_order_release);
+	}
 
 	if (previous != desired) {
 		logger::info("VR depth buffer culling set to {}", desired);
@@ -4602,6 +4616,48 @@ void VR::SetDepthCullingLegacyMode(bool a_enabled)
 void VR::ApplyDepthCullingMode()
 {
 	SetDepthCullingMode(GetDepthCullingMode());
+}
+
+void VR::TryApplyDepthBufferCullingCacheRefresh()
+{
+	using namespace VRDepthCullingCacheRefreshPolicy;
+	auto* shaderCache = globals::shaderCache;
+	if (!shaderCache)
+		return;
+
+	const VRDepthCullingCacheRefreshPolicy::State state{
+		.requested = depthCullingCacheRefreshPending.load(std::memory_order_acquire),
+		.diskCacheActive = shaderCache->IsDiskCacheActive(),
+		.shaderCompilationActive = shaderCache->IsCompiling()
+	};
+
+	switch (SelectAction(state)) {
+	case Action::None:
+	case Action::WaitForCompiler:
+		return;
+	case Action::ConsumeWithoutRefresh:
+		depthCullingCacheRefreshCompleted.store(true, std::memory_order_release);
+		depthCullingCacheRefreshPending.store(false, std::memory_order_release);
+		logger::info(
+			"[ShaderCacheAction] action=vr-depth-culling-refresh result=not-required reason=disk-cache-inactive");
+		return;
+	case Action::Apply:
+		if (depthCullingCacheRefreshCompleted.exchange(true, std::memory_order_acq_rel)) {
+			depthCullingCacheRefreshPending.store(false, std::memory_order_release);
+			return;
+		}
+		if (!depthCullingCacheRefreshPending.exchange(false, std::memory_order_acq_rel))
+			return;
+
+		// This is an in-memory compatibility rebind, not persistent invalidation.
+		// The 2024 VR workaround fixes ImageSpace objects created before depth
+		// culling reaches its effective CSX state. Keep valid disk blobs intact and
+		// perform the refresh at most once per process.
+		logger::info(
+			"[ShaderCacheAction] action=vr-depth-culling-refresh result=apply scope=memory-imagespace diskCacheAction=none");
+		shaderCache->Clear(RE::BSShader::Type::ImageSpace);
+		return;
+	}
 }
 
 //=============================================================================

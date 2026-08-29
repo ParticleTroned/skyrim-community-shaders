@@ -1670,9 +1670,9 @@ if(BUILD_CONTROLLER_TESTS)
         tests/shader_compilation_scheduling_policy_test.cpp
     )
     add_controller_test(
-        volumetric_lighting_cache_refresh_policy_test
-        VolumetricLightingCacheRefreshPolicy
-        tests/volumetric_lighting_cache_refresh_policy_test.cpp
+        vr_depth_culling_cache_refresh_policy_test
+        VRDepthCullingCacheRefreshPolicy
+        tests/vr_depth_culling_cache_refresh_policy_test.cpp
     )
     add_controller_test(
         volumetric_lighting_tuning_policy_test
@@ -1846,6 +1846,51 @@ if(BUILD_CONTROLLER_TESTS)
     set_tests_properties(ApiShaderServicePolicy PROPERTIES LABELS "ControllerTests")
 
     add_executable(
+        api_shader_compatibility_registry_test
+        EXCLUDE_FROM_ALL
+        tests/api_shader_compatibility_registry_test.cpp
+        src/Api/ShaderCompatibilityRegistry.cpp
+        src/Utils/CryptoHash.cpp
+    )
+    target_compile_features(api_shader_compatibility_registry_test PRIVATE cxx_std_23)
+    target_include_directories(
+        api_shader_compatibility_registry_test
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(api_shader_compatibility_registry_test PRIVATE bcrypt.lib)
+    add_test(NAME ApiShaderCompatibilityRegistry COMMAND api_shader_compatibility_registry_test)
+    set_tests_properties(ApiShaderCompatibilityRegistry PROPERTIES LABELS "ControllerTests")
+
+    add_executable(
+        shader_cache_pack_test
+        EXCLUDE_FROM_ALL
+        tests/shader_cache_pack_test.cpp
+        src/Utils/ShaderCachePack.cpp
+        src/Utils/CryptoHash.cpp
+    )
+    target_compile_features(shader_cache_pack_test PRIVATE cxx_std_23)
+    target_include_directories(
+        shader_cache_pack_test
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(shader_cache_pack_test PRIVATE bcrypt.lib)
+    add_test(NAME ShaderCachePack COMMAND shader_cache_pack_test)
+    set_tests_properties(ShaderCachePack PROPERTIES LABELS "ControllerTests")
+
+    add_test(
+        NAME ShaderCachePackBuilder
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/shader_cache_pack_builder_test.py"
+            "$<TARGET_FILE:shader_cache_pack_test>"
+    )
+    set_tests_properties(ShaderCachePackBuilder PROPERTIES LABELS "ControllerTests")
+
+    add_executable(
         api_weather_service_policy_test
         EXCLUDE_FROM_ALL
         tests/api_weather_service_policy_test.cpp
@@ -1911,8 +1956,8 @@ if(BUILD_CONTROLLER_TESTS)
             shader_cache_provenance_test
             cache_invalidation_test
             shader_compilation_scheduling_policy_test
-            volumetric_lighting_cache_refresh_policy_test
             volumetric_lighting_tuning_policy_test
+            vr_depth_culling_cache_refresh_policy_test
             vr_depth_culling_enable_policy_test
             vr_depth_culling_temporal_policy_test
             vr_wand_interaction_policy_test
@@ -1930,6 +1975,8 @@ if(BUILD_CONTROLLER_TESTS)
             api_upscaling_contract_test
             api_upscaling_service_policy_test
             api_shader_service_policy_test
+            api_shader_compatibility_registry_test
+            shader_cache_pack_test
             api_weather_service_policy_test
             api_profiler_contract_test
             api_editor_contract_test

@@ -179,6 +179,7 @@ public:
 	void SetDepthCullingLegacyMode(bool a_enabled);
 	/** Normalize persisted toggles and publish one effective temporal policy. */
 	void ApplyDepthCullingMode();
+	void TryApplyDepthBufferCullingCacheRefresh();
 	void DrawStereoBlend();
 	bool EnsureStereoBlendResources();
 	static bool AnyScreenSpaceEffectActive();
@@ -579,6 +580,8 @@ public:
 	// Engine hook integration points
 	bool* gDepthBufferCulling = nullptr;
 	float* gMinOccludeeBoxExtent = nullptr;
+	std::atomic<bool> depthCullingCacheRefreshPending = false;
+	std::atomic<bool> depthCullingCacheRefreshCompleted = false;
 
 	// VR Controller state and logging
 	struct VRControllerEventLog

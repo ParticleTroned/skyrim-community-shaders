@@ -8,6 +8,7 @@
 #include "Utils/D3D.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Form.h"
+#include "Utils/Game.h"
 #include "Utils/PointLightFlags.h"
 #include "Utils/UI.h"
 
@@ -16,6 +17,7 @@
 #include "RE/S/Sky.h"
 #include "RE/T/TES.h"
 #include "RE/T/TESObjectCELL.h"
+#include "RE/T/TESWeather.h"
 #include "RE/T/TESWorldSpace.h"
 
 #include <imgui_stdlib.h>
@@ -62,6 +64,12 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	profile)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	AdaptiveBrightness::WaterWindSettings,
+	enabled,
+	calmWaveMultiplier,
+	strongWindWaveMultiplier)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AdaptiveBrightness::Settings,
 	enabled,
 	globalLightingEnabled,
@@ -69,6 +77,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	nightStartHour,
 	transitionHours,
 	lighting,
+	waterWind,
 	profiles,
 	locationOverrides)
 
@@ -82,6 +91,12 @@ namespace
 	constexpr float kGammaOffsetMax = 1.0f;
 	constexpr float kGlobalSkyBrightnessMax = 2.0f;
 	constexpr float kGlobalLightingMultiplierMax = 5.0f;
+	constexpr float kCalmWaveMultiplierMin = 0.0f;
+	constexpr float kCalmWaveMultiplierMax = 1.0f;
+	constexpr float kStrongWindWaveMultiplierMin = 1.0f;
+	constexpr float kStrongWindWaveMultiplierMax = 2.0f;
+	constexpr float kWaterWindSmoothingSeconds = 2.0f;
+	constexpr float kMaxWaterWindSmoothingFrameTime = 0.25f;
 	constexpr std::size_t kMaxOverrideHierarchyDepth = 64;
 
 	using Profile = AdaptiveBrightness::Profile;
@@ -121,7 +136,7 @@ namespace
 	constexpr const char* kOverrideTypeCity = "City";
 	constexpr const char* kOverrideTypeCell = "Cell";
 	constexpr const char* kOverrideTypeWorldspace = "Worldspace";
-	constexpr const char* kPresetVersion = "4.2.0";
+	constexpr const char* kPresetVersion = "4.3.0";
 	constexpr std::string_view kLocationOverridesFieldName = "locationOverrides";
 	constexpr std::string_view kProfilesFieldName = "profiles";
 	constexpr std::string_view kLegacyGlobalWaterAppearanceFieldName = SettingsMigrations::kLegacyWaterAppearanceSettingsKey;
@@ -615,6 +630,35 @@ namespace
 		a_settings.transitionHours = std::clamp(SafeFinite(a_settings.transitionHours, 1.0f), 0.0f, 4.0f);
 	}
 
+	void SanitizeWaterWindSettings(AdaptiveBrightness::WaterWindSettings& a_settings)
+	{
+		const AdaptiveBrightness::WaterWindSettings defaults{};
+		a_settings.calmWaveMultiplier = std::clamp(
+			SafeFinite(a_settings.calmWaveMultiplier, defaults.calmWaveMultiplier),
+			kCalmWaveMultiplierMin,
+			kCalmWaveMultiplierMax);
+		a_settings.strongWindWaveMultiplier = std::clamp(
+			SafeFinite(a_settings.strongWindWaveMultiplier, defaults.strongWindWaveMultiplier),
+			kStrongWindWaveMultiplierMin,
+			kStrongWindWaveMultiplierMax);
+	}
+
+	float GetWaterWindWaveMultiplier(
+		const AdaptiveBrightness::WaterWindSettings& a_settings,
+		float a_windSpeed)
+	{
+		const float windSpeed = std::clamp(SafeFinite(a_windSpeed, 0.0f), 0.0f, 1.0f);
+		return std::lerp(a_settings.calmWaveMultiplier, a_settings.strongWindWaveMultiplier, windSpeed);
+	}
+
+	void NormalizeBaseSettings(AdaptiveBrightness::Settings& a_settings)
+	{
+		SanitizeSharedLightingSettings(a_settings.lighting);
+		SanitizeWaterWindSettings(a_settings.waterWind);
+		NormalizeExteriorTimeSettings(a_settings);
+		NormalizeBaseProfiles(a_settings.profiles);
+	}
+
 	float GetOptionalFloat(const json& a_json, const char* a_key, float a_fallback)
 	{
 		if (!a_json.is_object())
@@ -994,6 +1038,7 @@ namespace
 		return {
 			{ "globalLightingEnabled", a_settings.globalLightingEnabled },
 			{ "lighting", a_settings.lighting },
+			{ "waterWind", a_settings.waterWind },
 			{ "dayStartHour", a_settings.dayStartHour },
 			{ "nightStartHour", a_settings.nightStartHour },
 			{ "transitionHours", a_settings.transitionHours },
@@ -1118,20 +1163,21 @@ namespace
 			const auto migratedPreset = MigrateLegacyProfileSettings(*presetJson);
 			auto importedSettings = a_settings;
 			auto importedProfiles = migratedPreset.at(kProfilesFieldName.data()).get<std::array<AdaptiveBrightness::ProfileSettings, AdaptiveBrightness::kProfileCount>>();
-			NormalizeBaseProfiles(importedProfiles);
 
 			if (const auto it = migratedPreset.find("globalLightingEnabled"); it != migratedPreset.end() && it->is_boolean())
 				importedSettings.globalLightingEnabled = it->get<bool>();
-			if (const auto it = migratedPreset.find("lighting"); it != migratedPreset.end() && it->is_object()) {
+			if (const auto it = migratedPreset.find("lighting"); it != migratedPreset.end() && it->is_object())
 				importedSettings.lighting = it->get<SharedLightingSettings>();
-				SanitizeSharedLightingSettings(importedSettings.lighting);
-			}
+
+			importedSettings.waterWind = {};
+			if (const auto it = migratedPreset.find("waterWind"); it != migratedPreset.end() && it->is_object())
+				importedSettings.waterWind = it->get<AdaptiveBrightness::WaterWindSettings>();
 
 			importedSettings.dayStartHour = GetOptionalFloat(migratedPreset, "dayStartHour", importedSettings.dayStartHour);
 			importedSettings.nightStartHour = GetOptionalFloat(migratedPreset, "nightStartHour", importedSettings.nightStartHour);
 			importedSettings.transitionHours = GetOptionalFloat(migratedPreset, "transitionHours", importedSettings.transitionHours);
-			NormalizeExteriorTimeSettings(importedSettings);
 			importedSettings.profiles = std::move(importedProfiles);
+			NormalizeBaseSettings(importedSettings);
 			a_settings = std::move(importedSettings);
 			return true;
 		} catch (const json::exception& e) {
@@ -1308,7 +1354,8 @@ namespace
 
 void AdaptiveBrightness::DrawSettingsHeaderControls()
 {
-	ImGui::Checkbox("Enable Adaptive Profiles", &settings.enabled);
+	if (ImGui::Checkbox("Enable Adaptive Profiles", &settings.enabled))
+		ResetWaterWindSmoothing();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Blend the active lighting, atmosphere, Bloom, and water appearance profile by location and exterior time.");
 		ImGui::Text("Each profile defines its own scene brightness, Bloom, and water appearance.");
@@ -1369,7 +1416,7 @@ void AdaptiveBrightness::DrawSettings()
 		}
 
 		if (ImGui::BeginTabItem("Global")) {
-			ImGui::TextWrapped("Set the shared lighting baseline applied before each profile.");
+			ImGui::TextWrapped("Set the shared lighting baseline and weather-driven water behavior used across profiles.");
 			DrawGlobalRendererSettings();
 			ImGui::EndTabItem();
 		}
@@ -1438,9 +1485,7 @@ void AdaptiveBrightness::DrawEssentialSettings()
 void AdaptiveBrightness::LoadSettings(json& o_json)
 {
 	settings = MigrateLegacyProfileSettings(o_json);
-	SanitizeSharedLightingSettings(settings.lighting);
-	NormalizeExteriorTimeSettings(settings);
-	NormalizeBaseProfiles(settings.profiles);
+	NormalizeBaseSettings(settings);
 	globalPresetStatus.clear();
 	if (globalPresetName.empty())
 		globalPresetName = kDefaultGlobalPresetName;
@@ -1459,13 +1504,12 @@ void AdaptiveBrightness::LoadSettings(json& o_json)
 	InvalidateProfileTabSync();
 	NormalizeLocationOverrides();
 	MarkLocationOverrideLookupDirty();
+	ResetWaterWindSmoothing();
 }
 
 void AdaptiveBrightness::SaveSettings(json& o_json)
 {
-	SanitizeSharedLightingSettings(settings.lighting);
-	NormalizeExteriorTimeSettings(settings);
-	NormalizeBaseProfiles(settings.profiles);
+	NormalizeBaseSettings(settings);
 	NormalizeLocationOverrides();
 	o_json = settings;
 }
@@ -1473,7 +1517,7 @@ void AdaptiveBrightness::SaveSettings(json& o_json)
 void AdaptiveBrightness::RestoreDefaultSettings()
 {
 	settings = {};
-	NormalizeExteriorTimeSettings(settings);
+	NormalizeBaseSettings(settings);
 	globalPresetName = kDefaultGlobalPresetName;
 	globalPresetStatus.clear();
 	locationOverridePresetName = kDefaultLocationOverridePresetName;
@@ -1485,6 +1529,7 @@ void AdaptiveBrightness::RestoreDefaultSettings()
 	ClearLocationOverrideSelection();
 	InvalidateProfileTabSync();
 	MarkLocationOverrideLookupDirty();
+	ResetWaterWindSmoothing();
 }
 
 void AdaptiveBrightness::SetupResources()
@@ -1821,6 +1866,8 @@ void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const c
 
 		if (ImGui::BeginTabItem("Water")) {
 			WaterAppearance::DrawProfileControls(a_profile.water);
+			if (settings.waterWind.enabled)
+				ImGui::TextDisabled("Wind-driven waves use this profile's Wave Amplitude as their baseline.");
 			if (a_showAdvancedControls) {
 				ImGui::Checkbox("Show Detailed Water Controls", &a_profile.waterAdvanced);
 				if (auto _tt = Util::HoverTooltipWrapper())
@@ -1850,16 +1897,16 @@ void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const c
 
 void AdaptiveBrightness::DrawGlobalRendererSettings()
 {
-	ImGui::Checkbox("Enable Global Lighting Calibration", &settings.globalLightingEnabled);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Applies the shared lighting baseline before each profile's detailed lighting adjustments.");
-		ImGui::Text("Profile brightness, Bloom, and water appearance remain active when this is off.");
-	}
-	if (!settings.globalLightingEnabled)
-		ImGui::TextDisabled("Global lighting calibration is currently inactive.");
-
 	if (ImGui::BeginTabBar("##AdaptiveBalanceGlobalSections", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem("Lighting")) {
+			ImGui::Checkbox("Enable Global Lighting Calibration", &settings.globalLightingEnabled);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Applies the shared lighting baseline before each profile's detailed lighting adjustments.");
+				ImGui::Text("Profile brightness, Bloom, and water appearance remain active when this is off.");
+			}
+			if (!settings.globalLightingEnabled)
+				ImGui::TextDisabled("Global lighting calibration is currently inactive.");
+
 			ImGui::BeginDisabled(!settings.globalLightingEnabled);
 			ImGui::TextWrapped("These baseline values apply to every location. The active profile is multiplied on top.");
 			ImGui::SeparatorText("Shared Baseline");
@@ -1880,16 +1927,55 @@ void AdaptiveBrightness::DrawGlobalRendererSettings()
 			ImGui::EndTabItem();
 		}
 
+		if (ImGui::BeginTabItem("Water")) {
+			ImGui::TextWrapped("Use the engine's current blended wind speed to scale each profile's Wave Amplitude baseline.");
+			if (ImGui::Checkbox("Enable Wind-Driven Waves", &settings.waterWind.enabled))
+				ResetWaterWindSmoothing();
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Reads the active Sky wind speed, including changes made through weather records by mods.");
+				ImGui::Text("Interior cells are treated as calm so exterior weather cannot drive indoor water.");
+				ImGui::Text("The response is smoothed to avoid visible wave changes when weather switches.");
+			}
+
+			ImGui::BeginDisabled(!settings.waterWind.enabled);
+			ImGui::SliderFloat(
+				"Calm Wave Scale",
+				&settings.waterWind.calmWaveMultiplier,
+				kCalmWaveMultiplierMin,
+				kCalmWaveMultiplierMax,
+				"%.2f",
+				ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Multiplies the active profile's Wave Amplitude when the engine reports no wind.");
+			ImGui::SliderFloat(
+				"Strong Wind Wave Scale",
+				&settings.waterWind.strongWindWaveMultiplier,
+				kStrongWindWaveMultiplierMin,
+				kStrongWindWaveMultiplierMax,
+				"%.2f",
+				ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Multiplies the active profile's Wave Amplitude at maximum engine wind.");
+
+			SanitizeWaterWindSettings(settings.waterWind);
+			const float windSpeed = GetSmoothedWaterWindSpeed();
+			const float waveMultiplier = GetWaterWindWaveMultiplier(settings.waterWind, windSpeed);
+			ImGui::TextDisabled("Smoothed wind: %.0f%%  Wave scale: %.2fx", windSpeed * 100.0f, waveMultiplier);
+			ImGui::EndDisabled();
+			ImGui::EndTabItem();
+		}
+
 		ImGui::EndTabBar();
 	}
 
 	SanitizeSharedLightingSettings(settings.lighting);
+	SanitizeWaterWindSettings(settings.waterWind);
 }
 
 void AdaptiveBrightness::DrawGlobalPresetControls()
 {
 	ImGui::SeparatorText("Global Presets");
-	DrawHintText("Global presets store global light calibration, the five profiles (including Bloom and water appearance), and exterior timing.");
+	DrawHintText("Global presets store global light calibration, water wind response, the five profiles (including Bloom and water appearance), and exterior timing.");
 	DrawHintText("Import overwrites those profile tabs in the current settings. Saved location overrides are not changed.");
 	ImGui::PushID("GlobalPresetControls");
 
@@ -1901,7 +1987,7 @@ void AdaptiveBrightness::DrawGlobalPresetControls()
 		ExportGlobalPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Export global lighting calibration, exterior timing, and the five profiles with their Bloom and water appearance settings. Location overrides are not included.");
+		ImGui::Text("Export global lighting calibration, water wind response, exterior timing, and the five profiles with their Bloom and water appearance settings. Location overrides are not included.");
 	}
 
 	ImGui::SameLine();
@@ -1909,7 +1995,7 @@ void AdaptiveBrightness::DrawGlobalPresetControls()
 		ImportGlobalPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Replace global lighting calibration, exterior timing, and the five profiles with their Bloom and water appearance settings. Saved location overrides stay unchanged.");
+		ImGui::Text("Replace global lighting calibration, water wind response, exterior timing, and the five profiles with their Bloom and water appearance settings. Saved location overrides stay unchanged.");
 	}
 
 	if (!globalPresetStatus.empty())
@@ -2206,7 +2292,7 @@ void AdaptiveBrightness::DrawLocationOverridePresetControls()
 void AdaptiveBrightness::DrawFullPresetControls()
 {
 	ImGui::SeparatorText("Full Presets");
-	DrawHintText("Full presets store global calibration, Bloom and water appearance defaults, exterior timing, the five profile tabs, and all saved worldspace, location, and cell overrides.");
+	DrawHintText("Full presets store global calibration, water wind response, Bloom and water appearance defaults, exterior timing, the five profile tabs, and all saved worldspace, location, and cell overrides.");
 	DrawHintText("Import replaces the profile tabs and the saved override list in the current settings.");
 	ImGui::PushID("FullPresetControls");
 
@@ -2218,7 +2304,7 @@ void AdaptiveBrightness::DrawFullPresetControls()
 		ExportFullPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Export global calibration, Bloom and water appearance defaults, exterior timing, the five profiles, and all saved overrides.");
+		ImGui::Text("Export global calibration, water wind response, Bloom and water appearance defaults, exterior timing, the five profiles, and all saved overrides.");
 	}
 
 	ImGui::SameLine();
@@ -2226,7 +2312,7 @@ void AdaptiveBrightness::DrawFullPresetControls()
 		ImportFullPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Replace global calibration, Bloom and water appearance defaults, exterior timing, the five profiles, and the saved override list.");
+		ImGui::Text("Replace global calibration, water wind response, Bloom and water appearance defaults, exterior timing, the five profiles, and the saved override list.");
 	}
 
 	if (!fullPresetStatus.empty())
@@ -2237,8 +2323,7 @@ void AdaptiveBrightness::DrawFullPresetControls()
 
 bool AdaptiveBrightness::ExportGlobalPreset()
 {
-	NormalizeExteriorTimeSettings(settings);
-	NormalizeBaseProfiles(settings.profiles);
+	NormalizeBaseSettings(settings);
 
 	const auto path = GetPresetPath(globalPresetName, PresetKind::Global);
 	try {
@@ -2279,6 +2364,7 @@ bool AdaptiveBrightness::ImportGlobalPreset()
 	if (!ApplyBasePresetJson(importedJson, settings, globalPresetStatus))
 		return false;
 
+	ResetWaterWindSmoothing();
 	globalPresetStatus = std::format("Imported global preset from {}.", resolvedPath->filename().string());
 	return true;
 }
@@ -2500,8 +2586,7 @@ bool AdaptiveBrightness::ImportContextProfile(
 
 bool AdaptiveBrightness::ExportFullPreset()
 {
-	NormalizeExteriorTimeSettings(settings);
-	NormalizeBaseProfiles(settings.profiles);
+	NormalizeBaseSettings(settings);
 	NormalizeLocationOverrides();
 
 	const auto path = GetPresetPath(fullPresetName, PresetKind::Full);
@@ -2566,6 +2651,7 @@ bool AdaptiveBrightness::ImportFullPreset()
 
 	importedSettings.locationOverrides = std::move(importedOverrides);
 	settings = std::move(importedSettings);
+	ResetWaterWindSmoothing();
 	ClearLocationOverrideSelection();
 	NormalizeLocationOverrides();
 	MarkLocationOverrideLookupDirty();
@@ -3192,16 +3278,73 @@ WaterAppearance::Settings AdaptiveBrightness::GetEffectiveWaterAppearanceSetting
 		return WaterAppearance::GetCommonBufferData(WaterAppearance::Profile{});
 
 	const auto activeProfiles = GetActiveProfileBlend();
-	auto fromProfile = activeProfiles.from->water;
-	WaterAppearance::SanitizeProfile(fromProfile);
-	if (activeProfiles.from == activeProfiles.to)
-		return WaterAppearance::GetCommonBufferData(fromProfile);
+	auto effectiveProfile = activeProfiles.from->water;
+	WaterAppearance::SanitizeProfile(effectiveProfile);
+	if (activeProfiles.from != activeProfiles.to) {
+		auto toProfile = activeProfiles.to->water;
+		WaterAppearance::SanitizeProfile(toProfile);
+		const float t = std::clamp(SafeFinite(activeProfiles.factor, 0.0f), 0.0f, 1.0f);
+		effectiveProfile = WaterAppearance::LerpProfiles(effectiveProfile, toProfile, t);
+	}
 
-	auto toProfile = activeProfiles.to->water;
-	WaterAppearance::SanitizeProfile(toProfile);
-	const float t = std::clamp(SafeFinite(activeProfiles.factor, 0.0f), 0.0f, 1.0f);
-	const auto effectiveProfile = WaterAppearance::LerpProfiles(fromProfile, toProfile, t);
+	if (settings.waterWind.enabled) {
+		auto waterWind = settings.waterWind;
+		SanitizeWaterWindSettings(waterWind);
+		effectiveProfile.WaveAmplitude *= GetWaterWindWaveMultiplier(waterWind, GetSmoothedWaterWindSpeed());
+		WaterAppearance::SanitizeProfile(effectiveProfile);
+	}
+
 	return WaterAppearance::GetCommonBufferData(effectiveProfile);
+}
+
+float AdaptiveBrightness::GetSmoothedWaterWindSpeed() const
+{
+	if (LocationContext::Get().inInterior) {
+		ResetWaterWindSmoothing();
+		return 0.0f;
+	}
+
+	float targetWindSpeed = 0.0f;
+	auto* sky = globals::game::sky ? globals::game::sky : RE::Sky::GetSingleton();
+	if (sky) {
+		if (std::isfinite(sky->windSpeed)) {
+			targetWindSpeed = std::clamp(sky->windSpeed, 0.0f, 1.0f);
+		} else if (sky->currentWeather) {
+			targetWindSpeed = Util::Units::WindRawToNormalized(sky->currentWeather->data.windSpeed);
+		}
+	}
+
+	auto* state = globals::state;
+	if (!state) {
+		smoothedWaterWindSpeed = targetWindSpeed;
+		waterWindSmoothingInitialized = true;
+		return targetWindSpeed;
+	}
+
+	const uint32_t currentFrame = state->frameCountAtomic.load(std::memory_order_relaxed);
+	if (!waterWindSmoothingInitialized) {
+		smoothedWaterWindSpeed = targetWindSpeed;
+		smoothedWaterWindFrame = currentFrame;
+		waterWindSmoothingInitialized = true;
+	} else if (currentFrame != smoothedWaterWindFrame) {
+		// Feature data can be assembled more than once per render frame.
+		const float frameTime = std::clamp(
+			SafeFinite(RE::GetSecondsSinceLastFrame(), 0.0f),
+			0.0f,
+			kMaxWaterWindSmoothingFrameTime);
+		const float blend = 1.0f - std::exp(-frameTime / kWaterWindSmoothingSeconds);
+		smoothedWaterWindSpeed = std::lerp(smoothedWaterWindSpeed, targetWindSpeed, blend);
+		smoothedWaterWindFrame = currentFrame;
+	}
+
+	return std::clamp(SafeFinite(smoothedWaterWindSpeed, targetWindSpeed), 0.0f, 1.0f);
+}
+
+void AdaptiveBrightness::ResetWaterWindSmoothing() const
+{
+	smoothedWaterWindSpeed = 0.0f;
+	smoothedWaterWindFrame = 0;
+	waterWindSmoothingInitialized = false;
 }
 
 AdaptiveBrightness::PerFrameData AdaptiveBrightness::GetCommonBufferData() const

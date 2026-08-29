@@ -53,7 +53,7 @@ struct AdaptiveBrightness : Feature
 			{ "Separate exterior day and night balance profiles",
 				"Separate interior, dungeon, and dwelling profiles",
 				"Hierarchical worldspace, region, city, location, and cell profiles with COC codes",
-				"Shared light calibration with per-profile Bloom and water appearance controls" }
+				"Shared light calibration with per-profile Bloom and wind-responsive water appearance controls" }
 		};
 	}
 
@@ -106,6 +106,13 @@ struct AdaptiveBrightness : Feature
 		ProfileSettings profile;
 	};
 
+	struct WaterWindSettings
+	{
+		bool enabled = false;
+		float calmWaveMultiplier = 0.65f;
+		float strongWindWaveMultiplier = 1.35f;
+	};
+
 	struct LocationOverrideTarget
 	{
 		std::string key;
@@ -132,6 +139,7 @@ struct AdaptiveBrightness : Feature
 		float nightStartHour = 21.0f;
 		float transitionHours = 1.0f;
 		SharedLightingSettings lighting;
+		WaterWindSettings waterWind;
 		std::array<ProfileSettings, kProfileCount> profiles{};
 		std::vector<LocationOverride> locationOverrides;
 	} settings;
@@ -235,6 +243,9 @@ struct AdaptiveBrightness : Feature
 	mutable LocationOverrideCache locationOverrideCache;
 	mutable uint64_t locationOverrideLookupVersion = 0;
 	mutable bool locationOverrideLookupDirty = true;
+	mutable float smoothedWaterWindSpeed = 0.0f;
+	mutable uint32_t smoothedWaterWindFrame = 0;
+	mutable bool waterWindSmoothingInitialized = false;
 
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
@@ -269,6 +280,8 @@ struct AdaptiveBrightness : Feature
 	LinearLighting::Settings LerpSettings(const LinearLighting::Settings& a_a, const LinearLighting::Settings& a_b, float a_t) const;
 	SharedLightingSettings ApplyProfile(const SharedLightingSettings& a_base, const ProfileSettings& a_profile) const;
 	SharedLightingSettings LerpSettings(const SharedLightingSettings& a_a, const SharedLightingSettings& a_b, float a_t) const;
+	float GetSmoothedWaterWindSpeed() const;
+	void ResetWaterWindSmoothing() const;
 	ActiveProfileBlend GetActiveProfileBlend() const;
 	Profile GetInteriorProfile() const;
 	Profile GetCurrentProfileForUI() const;

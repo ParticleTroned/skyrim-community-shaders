@@ -634,7 +634,7 @@ frames.
 The final manifest includes:
 
 - contract and CSX identities;
-- request/client IDs and tags;
+- request/client IDs and the accepted command identity;
 - requested and effective sequence/capture descriptors;
 - start/end times and frame counters;
 - scheduled, acquired, written, dropped, failed, and cancelled counts;
@@ -647,6 +647,13 @@ The final manifest includes:
 Large manifests remain on disk. DevBench receipts return counts, recent
 failures, and the manifest path; `request_get` supports paginated child summaries
 rather than returning thousands of frames in one MCP response.
+
+`requested`, `effective`, and `actual` are separate normative objects. A source
+or view fallback is therefore durable sequence evidence rather than an
+in-memory warning only. The schema requires child warning/error arrays and the
+actual view, dimensions, format, and colour contract for every committed frame
+artifact. A missing required final manifest is `failed` or `failed_partial`; it
+is never reported as completion with a warning.
 
 ### Optional video packaging
 

@@ -9,6 +9,7 @@ set(_json_files
     "docs/development/schemas/screenshot-sequence-manifest-v1.schema.json"
     "tests/data/screenshot-api/capture-request-v1.json"
     "tests/data/screenshot-api/sequence-request-v1.json"
+    "tests/data/screenshot-api/sequence-manifest-v1.json"
     "docs/development/unified-preset-policy.json"
 )
 
@@ -26,6 +27,23 @@ foreach(_relative IN LISTS _json_files)
         message(FATAL_ERROR "Expected a JSON object in ${_relative}")
     endif()
 endforeach()
+
+file(READ "${PROJECT_ROOT}/tests/data/screenshot-api/sequence-manifest-v1.json" _manifest_fixture)
+foreach(_manifest_member IN ITEMS
+    producer client acceptedUtc completedUtc requested effective actual counts
+    children warnings errors packaging terminalOutcome
+)
+    string(JSON _manifest_member_type ERROR_VARIABLE _manifest_error TYPE "${_manifest_fixture}" "${_manifest_member}")
+    if(_manifest_error)
+        message(FATAL_ERROR "Sequence manifest fixture is missing ${_manifest_member}: ${_manifest_error}")
+    endif()
+endforeach()
+string(JSON _fixture_cancelled GET "${_manifest_fixture}" counts cancelled)
+string(JSON _fixture_fallback GET "${_manifest_fixture}" actual fallbacksPresent)
+string(JSON _fixture_view GET "${_manifest_fixture}" children 0 artifacts 0 actual view)
+if(NOT _fixture_cancelled EQUAL 0 OR NOT _fixture_fallback OR NOT _fixture_view STREQUAL "source_native")
+    message(FATAL_ERROR "Sequence manifest fixture does not preserve counters, fallback, and artifact provenance")
+endif()
 
 file(READ "${PROJECT_ROOT}/docs/development/unified-preset-policy.json" _policy)
 foreach(_legacy IN ITEMS
@@ -66,8 +84,9 @@ endforeach()
 
 foreach(_required_contract_text IN ITEMS
     runtime_session persistent_user settings_default file_reference
-    maximumOutputsPerFrame retentionSeconds manifest_write_failed
+    maximumOutputsPerFrame retentionSeconds manifest_failed
 	DescribeCommittedArtifact BuildProvenance::GetProducer artifact_hash_failed
+	terminalOutcome completedUtc fallbacksPresent cancelled
 )
     string(FIND "${_implementation}" "${_required_contract_text}" _contract_position)
     if(_contract_position EQUAL -1)

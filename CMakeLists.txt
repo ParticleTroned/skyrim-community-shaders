@@ -1763,6 +1763,26 @@ if(BUILD_CONTROLLER_TESTS)
 	add_test(NAME ApiScreenshotContract COMMAND api_screenshot_contract_test)
 	set_tests_properties(ApiScreenshotContract PROPERTIES LABELS "ControllerTests")
 
+	add_executable(
+		main_thread_dispatch_state_test
+		EXCLUDE_FROM_ALL
+		tests/main_thread_dispatch_state_test.cpp
+	)
+	target_compile_features(main_thread_dispatch_state_test PRIVATE cxx_std_23)
+	target_include_directories(main_thread_dispatch_state_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+	add_test(NAME MainThreadDispatchState COMMAND main_thread_dispatch_state_test)
+	set_tests_properties(MainThreadDispatchState PROPERTIES LABELS "ControllerTests")
+
+	add_executable(
+		screenshot_api_policy_test
+		EXCLUDE_FROM_ALL
+		tests/screenshot_api_policy_test.cpp
+	)
+	target_compile_features(screenshot_api_policy_test PRIVATE cxx_std_23)
+	target_include_directories(screenshot_api_policy_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+	add_test(NAME ScreenshotApiPolicy COMMAND screenshot_api_policy_test)
+	set_tests_properties(ScreenshotApiPolicy PROPERTIES LABELS "ControllerTests")
+
     add_executable(
         api_upscaling_contract_test
         EXCLUDE_FROM_ALL
@@ -1887,6 +1907,8 @@ if(BUILD_CONTROLLER_TESTS)
             api_service_foundation_test
             api_service_registry_test
 			api_screenshot_contract_test
+			main_thread_dispatch_state_test
+			screenshot_api_policy_test
             api_upscaling_contract_test
             api_upscaling_service_policy_test
             api_shader_service_policy_test

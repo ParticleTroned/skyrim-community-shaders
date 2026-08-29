@@ -895,6 +895,10 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		undef SKYLIGHTING
 #	endif
 
+#	if defined(SKYLIGHTING) && (defined(RIM_LIGHTING) || defined(SOFT_LIGHTING) || defined(BACK_LIGHTING))
+#		define SKYLIGHTING_SHADOW_VIS
+#	endif
+
 #	include "Common/LightingCommon.hlsli"
 
 #	if defined(WATER_EFFECTS)
@@ -3503,10 +3507,24 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		else
 	float3 positionMSSkylight = input.WorldPosition.xyz;
 #		endif
+#		if defined(SKYLIGHTING_SHADOW_VIS)
+	float skylightingShadowVisibility = 1.0;
+#		endif
 #		if defined(DEFERRED)
-	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, worldNormal);
+	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, worldNormal
+#			if defined(SKYLIGHTING_SHADOW_VIS)
+		,
+		skylightingShadowVisibility
+#			endif
+	);
 #		else
-	sh2 skylightingSH = inWorld ? Skylighting::Sample(positionMSSkylight, worldNormal) : Skylighting::UNIT_SH;
+	sh2 skylightingSH = inWorld ? Skylighting::Sample(positionMSSkylight, worldNormal
+#			if defined(SKYLIGHTING_SHADOW_VIS)
+									  ,
+									  skylightingShadowVisibility
+#			endif
+									  ) :
+	                              Skylighting::UNIT_SH;
 #		endif
 
 #	endif
@@ -3685,6 +3703,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float dirSoftShadow = 1.0;
 	float dirVSMDetailedShadow = 1.0;
 
+#	if defined(SKYLIGHTING_SHADOW_VIS)
+	const bool useSkylightingShadow = Skylighting::IsEnabled() && SharedData::skylightingSettings.ShadowDataAvailable != 0;
+#	endif
+
 #	if defined(VOLUMETRIC_SHADOWS)
 	bool dirVSMShadowSampled = false;
 	if (inWorld && !inReflection && ShadowSampling::HasDirectionalShadows()) {
@@ -3779,6 +3801,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		vertexNormal.xyz = worldNormal.xyz;
 		worldNormal.xyz = hairT;
 	}
+#	endif
+
+#	if defined(SKYLIGHTING_SHADOW_VIS)
+	if (useSkylightingShadow)
+		dirSoftShadow = min(dirSoftShadow, skylightingShadowVisibility);
 #	endif
 
 	float3 diffuseColor = 0.0.xxx;

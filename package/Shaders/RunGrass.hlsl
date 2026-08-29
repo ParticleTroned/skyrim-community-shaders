@@ -448,6 +448,7 @@ cbuffer AlphaTestRefCB : register(b11)
 #	endif
 
 #	if defined(SKYLIGHTING)
+#		define SKYLIGHTING_SHADOW_VIS
 #		include "Skylighting/Skylighting.hlsli"
 #	endif
 
@@ -829,6 +830,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #			else
 	dirLightColor *= dirLightColorMultiplier;
+	const float3 unshadowedDirLightColor = dirLightColor;
 	dirLightColor *= dirShadow;
 	dirLightColor *= dirDetailShadow;
 
@@ -849,12 +851,20 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #					else
 	float3 positionMSSkylight = input.WorldPosition.xyz;
 #					endif
-	float skylightingDiffuse = Skylighting::GetVertexSkylightingDiffuse(positionMSSkylight, normal, vertexAO);
+	float skylightingShadowVisibility = 1.0;
+	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, normal, skylightingShadowVisibility);
+	float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, positionMSSkylight, normal, vertexAO);
 #				endif  // SKYLIGHTING
 
 	float3 albedo = baseColor.xyz * vertexColor;
 
-	float3 subsurfaceColor = dirLightColor * GetSoftLightMultiplier(dirLightAngle, softLightRolloff) * Color::VanillaNormalization();
+	float dirSoftShadow = dirShadow * dirDetailShadow;
+#				if defined(SKYLIGHTING_SHADOW_VIS)
+	if (Skylighting::IsEnabled() && SharedData::skylightingSettings.ShadowDataAvailable != 0)
+		dirSoftShadow = min(dirSoftShadow, skylightingShadowVisibility);
+#				endif
+
+	float3 subsurfaceColor = unshadowedDirLightColor * dirSoftShadow * GetSoftLightMultiplier(dirLightAngle, softLightRolloff) * Color::VanillaNormalization();
 
 	if (complex)
 		lightsSpecularColor += GrassLighting::GetLightSpecularInput(SharedData::DirLightDirection.xyz, viewDirection, normal, dirLightColor, SharedData::grassLightingSettings.Glossiness) * Color::VanillaNormalization();

@@ -3,10 +3,10 @@
     "name": "csx.render-engine-map",
     "major": 1,
     "minor": 0,
-    "producerVersion": "render-evidence-analysis-2026-08-24"
+    "producerVersion": "render-evidence-analysis-2026-08-29"
   },
   "mapId": "engine-map-skyrim-vr-1.4.15-main-menu-seed",
-  "mapRevision": 2,
+  "mapRevision": 19,
   "engineBuild": {
     "product": "Skyrim VR",
     "runtime": "1.4.15",
@@ -80,15 +80,17 @@
     {
       "id": "engine-virtual-function-0002",
       "kind": "virtual-function",
-      "name": "BSEffectShader::SetupTechnique candidate",
+      "name": "BSEffectShader::SetupTechnique",
       "module": "SkyrimVR.exe",
       "attributes": {
         "rva": "0x1341190",
         "vfuncIndex": 2,
         "shaderType": "Effect",
-        "identityStatus": "family-and-role-inferred; public symbol is FUN_141341190"
+        "vtableRva": "0x1905F58",
+        "vtableByteOffset": "0x10",
+        "identityStatus": "confirmed by the exact Skyrim VR BSEffectShader primary vtable slot 2; public symbol remains FUN_141341190"
       },
-      "evidenceRefs": ["evidence-0001", "evidence-0003", "evidence-0004"],
+      "evidenceRefs": ["evidence-0001", "evidence-0002", "evidence-0003", "evidence-0004", "evidence-0008"],
       "extensions": {}
     },
     {
@@ -138,6 +140,1567 @@
       "extensions": {}
     },
     {
+      "id": "engine-class-0001",
+      "kind": "class",
+      "name": "NiCullingProcess",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "size": "0x128",
+        "vtableRva": "0x17F3720",
+        "roles": ["frustum-state", "visible-set-accumulation"],
+        "virtualSlots": { "Process1": 22, "Process2": 23, "AppendVirtual": 24 }
+      },
+      "evidenceRefs": ["evidence-0007"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-class-0002",
+      "kind": "class",
+      "name": "BSCullingProcess",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "size": "0x301F8",
+        "baseClass": "NiCullingProcess",
+        "vtableRva": "0x1815B40",
+        "roles": ["compound-frustum-culling", "visible-geometry-queueing", "alpha-grouping"],
+        "virtualSlots": { "AppendNonAccum": 25, "TestBaseVisibility1": 26, "TestBaseVisibility2": 27, "TestBaseVisibility3": 28, "targetOnlyOptimizedBoundTest": 29 },
+        "layoutStatus": "the exact VR vtable has an additional bound-test slot 0x1D at byte offset 0xE8 that is absent from the pinned CommonLib declaration"
+      },
+      "evidenceRefs": ["evidence-0007"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-class-0003",
+      "kind": "class",
+      "name": "BSGeometryListCullingProcess",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "size": "0x30200",
+        "baseClass": "BSCullingProcess",
+        "vtableRva": "0x1621068",
+        "roles": ["geometry-list-culling", "depth-culling-candidate-accumulation"]
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0004"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-class-0009",
+      "kind": "class",
+      "name": "BSParabolicCullingProcess",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "baseClass": "BSCullingProcess",
+        "vtableRva": "0x190BEB0",
+        "commonLibSize": "0x30230",
+        "targetDeletingDestructorSize": "0x30248",
+        "roles": ["parabolic-light-culling", "front/back-hemisphere-accumulation"],
+        "verifiedTargetFields": {
+          "backHemisphereAccumulator": "0x30200",
+          "equatorialPlane": "0x30208",
+          "lightPosition": "0x30218",
+          "lightRadius": "0x30224",
+          "additionalReferencedObject": "0x30240"
+        },
+        "layoutStatus": "target disassembly confirms the class identity and principal fields but exposes target state through 0x30240 and a deleting-destructor size of 0x30248; the pinned CommonLib 0x30230 size is therefore incomplete for this exact VR binary"
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-class-0004",
+      "kind": "class",
+      "name": "BSShaderAccumulator",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "sizeVR": "0x1B0",
+        "vtableRva": "0x18FD880",
+        "roles": ["pass-accumulation", "batch-dispatch", "persistent-pass-rendering"]
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-class-0005",
+      "kind": "class",
+      "name": "BSBatchRenderer",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "size": "0x108",
+        "vtableRva": "0x1906E88",
+        "roles": ["technique-pass-groups", "active-pass-range", "draw-submission"],
+        "virtualSlots": { "RegisterPassSorted": 1, "RegisterPass": 2, "RenderActivePassRange": 3 }
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-class-0006",
+      "kind": "class",
+      "name": "BSShader",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "size": "0x90",
+        "primaryVtableRva": "0x190A318",
+        "roles": ["technique-setup", "material-setup", "geometry-setup", "render-pass-creation"]
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-class-0007",
+      "kind": "class",
+      "name": "BSRenderPass",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "size": "0x48",
+        "roles": ["shader-property-geometry join", "technique pass", "light set", "batch-list node"],
+        "verifiedFields": { "shader": "0x00", "shaderProperty": "0x08", "geometry": "0x10", "passEnum": "0x18", "accumulationHint": "0x1C", "extraParam": "0x1D", "lodMode": "0x1E", "numLights": "0x1F", "next": "0x28", "passGroupNext": "0x30", "sceneLights": "0x38", "cachePoolId": "0x40" }
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-class-0008",
+      "kind": "class",
+      "name": "BSLightingShaderProperty",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "sizeVR": "0x178",
+        "vtableRva": "0x18FCE58",
+        "roles": ["lighting render-pass selection", "lighting pass arrays", "depth-pass ownership"]
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0004",
+      "kind": "function",
+      "name": "NiCullingProcess::SetFrustum",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0xCBFAF0", "role": "install frustum and derived culling planes" },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0005",
+      "kind": "function",
+      "name": "BSCullingProcess::AddShared candidate",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0xD9A5E0",
+        "role": "shared scene-object admission",
+        "identityStatus": "PDB alias and CommonLib method agree on role; overlay's derived-class prefix remains ambiguous"
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0005",
+      "kind": "virtual-function",
+      "name": "BSGeometryListCullingProcess::AppendNonAccum",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0xDA1860",
+        "vfuncIndex": 25,
+        "role": "per-object non-accumulator visibility gate and depth-culling candidate assignment",
+        "vtableEntryRva": "0x1621130",
+        "verifiedFields": ["NiAVObject+0x128 result pointer", "NiAVObject+0x130 frame stamp", "BSGeometryListCullingProcess+0x301F8 mode"]
+      },
+      "evidenceRefs": ["evidence-0004", "evidence-0007"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0008",
+      "kind": "virtual-function",
+      "name": "BSCullingProcess::Process1",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0xD99B60",
+        "vfuncIndex": 22,
+        "role": "culling traversal and branch dispatch",
+        "verifiedFields": ["BSCullingProcess+0x30198 cull mode", "BSCullingProcess+0x301A0 compound frustum", "BSCullingProcess+0x301D4 recurse-to-geometry state", "NiCullingProcess+0x11D/+0x11E accumulation/preprocess state"],
+        "branchOrder": [
+          "reject zero-radius objects unless NiAVObject::kAlwaysDraw is set",
+          "handle kAllPass and kAllFail cull modes",
+          "reuse kPreProcessedNode state unless ignorePreprocess is set or cull mode is kForceMultiBoundsNoUpdate",
+          "when compound-frustum state is active and cull mode is not kIgnoreMultiBounds, save its active-plane state, test/process the object, then restore the state",
+          "otherwise use AlwaysDraw or the ordinary active-plane bound test",
+          "route accepted objects through AppendVirtual when not recursing to geometry, or NiAVObject::OnVisible when recursing"
+        ],
+        "accumulatedFlagRule": "when NiCullingProcess+0x11D is set, update NiAVObject::kAccumulated to reflect recurse-to-geometry visibility outcomes"
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0009",
+      "kind": "virtual-function",
+      "name": "BSCullingProcess::Process2",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0xD99E90",
+        "vfuncIndex": 23,
+        "role": "camera and frustum setup followed by scene traversal",
+        "verifiedCalls": ["NiCullingProcess::SetFrustum@0xCBFAF0", "NiFrustumPlanes::operator=@0xD9AE30", "BSCullingProcess::Process1@vtable+0xB0", "NiAVObject::Cull@0xC9C330"],
+        "dispatchRule": "temporarily install the requested visible set; call Process1 when recurseToGeometry is false, otherwise call NiAVObject::Cull; then restore the previous visible set"
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0010",
+      "kind": "virtual-function",
+      "name": "BSCullingProcess::AppendVirtual",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0xD99F80",
+        "vfuncIndex": 24,
+        "role": "alpha-group-aware append dispatch",
+        "dispatchesToVfuncIndex": 25
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0011",
+      "kind": "virtual-function",
+      "name": "BSCullingProcess::AppendNonAccum",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0xD99F60",
+        "vfuncIndex": 25,
+        "role": "base append into the visible-object array",
+        "derivedOverride": "engine:engine-virtual-function-0005"
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0012",
+      "kind": "virtual-function",
+      "name": "BSCullingProcess virtual slot 0x1A (CommonLib: TestBaseVisibility1)",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0xD9A010",
+        "vfuncIndex": 26,
+        "role": "release or reset accumulated visible-object and alpha-group state",
+        "identityStatus": "address and slot confirmed; CommonLib semantic name is provisional because the VR body is dominated by state cleanup"
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0013",
+      "kind": "virtual-function",
+      "name": "BSCullingProcess::TestBaseVisibility2",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0xD9A890",
+        "vfuncIndex": 27,
+        "role": "delegate object visibility testing through the bound object's virtual contract"
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0014",
+      "kind": "virtual-function",
+      "name": "BSCullingProcess::TestBaseVisibility3",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0xD9A870",
+        "vfuncIndex": 28,
+        "role": "test an NiBound against the current camera/frustum planes"
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0006",
+      "kind": "virtual-function",
+      "name": "BSShaderAccumulator::FinishAccumulatingPostResolveDepth",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x1309360",
+        "vfuncIndex": 43,
+        "vtableEntryRva": "0x18FD9D8",
+        "role": "post-depth accumulation completion"
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008", "evidence-0004"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0006",
+      "kind": "function",
+      "name": "BSShaderAccumulator::RenderEffects",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0x130A240", "relocationId": 99940, "role": "effect-pass rendering" },
+      "evidenceRefs": ["evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0007",
+      "kind": "function",
+      "name": "BSShaderAccumulator::RenderBatches",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0x130BA60", "relocationId": 99963, "role": "accumulated batch rendering" },
+      "evidenceRefs": ["evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0008",
+      "kind": "function",
+      "name": "BSShaderAccumulator::RenderPersistentPassList",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0x1347320", "relocationId": 100840, "role": "persistent pass-list rendering" },
+      "evidenceRefs": ["evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0007",
+      "kind": "virtual-function",
+      "name": "BSBatchRenderer::RenderActivePassRange",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0x1348B70", "vfuncIndex": 3, "role": "render a selected active-pass interval" },
+      "evidenceRefs": ["evidence-0007", "evidence-0004"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0009",
+      "kind": "function",
+      "name": "BSBatchRenderer::RenderBatches",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0x1349270", "relocationId": 100852, "role": "batch interval orchestration" },
+      "evidenceRefs": ["evidence-0007", "evidence-0004"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0010",
+      "kind": "function",
+      "name": "BSBatchRenderer::SetupAndDrawPass",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0x1349680", "relocationId": 100854, "role": "render-pass setup and immediate draw submission" },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0011",
+      "kind": "function",
+      "name": "BSShader::MakeRenderPass",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x13401E0",
+        "relocationId": 100717,
+        "role": "obtain a BSRenderPass from the thread-local pool and populate it",
+        "verifiedCalls": ["BSRenderPass initializer@0x1340110"]
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0012",
+      "kind": "function",
+      "name": "BSRenderPass initializer",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x1340110",
+        "role": "populate shader, shader property, geometry, technique, light count, links, and light array",
+        "identityStatus": "function boundary and field writes confirmed; target symbol name reconstructed from layout"
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0013",
+      "kind": "function",
+      "name": "BSRenderPass::ClearRenderPass",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x1340280",
+        "relocationId": 100718,
+        "role": "return a render pass to its cache pool"
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0014",
+      "kind": "function",
+      "name": "BSBatchRenderer technique-to-pass-slot resolver",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x1349E00",
+        "role": "resolve a technique ID to pass-group and pass-index outputs",
+        "identityStatus": "role reconstructed from both exact registration callers"
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0015",
+      "kind": "virtual-function",
+      "name": "BSBatchRenderer::RegisterPassSorted",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0x1348200", "vfuncIndex": 1, "role": "register a render pass in technique group order using property sort state" },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0016",
+      "kind": "virtual-function",
+      "name": "BSBatchRenderer::RegisterPass",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0x13482E0", "vfuncIndex": 2, "role": "prepend a render pass to the resolved technique pass group" },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0017",
+      "kind": "virtual-function",
+      "name": "BSShaderAccumulator::FinishAccumulatingPreResolveDepth / FinishAccumulatingDispatch",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0x13092F0", "vfuncIndex": 42, "role": "dispatch pre-resolve-depth accumulation work by render mode" },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0018",
+      "kind": "virtual-function",
+      "name": "BSShaderAccumulator::FinishAccumulating",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0x1308710", "vfuncIndex": 38, "role": "invoke pre- and post-resolve-depth accumulation stages in order" },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0019",
+      "kind": "virtual-function",
+      "name": "BSLightingShaderProperty::GetRenderPasses",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0x13045F0", "vfuncIndex": 42, "vtableEntryRva": "0x18FCFA8", "role": "construct and return lighting passes for geometry, render mode, and accumulator" },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0015",
+      "kind": "function",
+      "name": "Lighting render-pass prepare helper",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x12CA050",
+        "role": "allocate-or-reuse and populate a BSRenderPass for lighting property paths",
+        "identityStatus": "role reconstructed from exact field writes and repeated calls from BSLightingShaderProperty::GetRenderPasses"
+      },
+      "evidenceRefs": ["evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0016",
+      "kind": "function",
+      "name": "BSShaderAccumulator geometry-to-pass registration routine",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x13089A0",
+        "role": "request render passes from a geometry's shader property and route each returned pass to the accumulator's batch renderer",
+        "identityStatus": "function boundary and role confirmed from exact disassembly; exported target symbol name unavailable",
+        "verifiedFields": ["BSRenderPass+0x18 passEnum", "BSRenderPass+0x1C accumulationHint", "BSRenderPass+0x28 next", "BSShaderAccumulator+0x158 batch renderer", "BSShaderAccumulator+0x178 render mode"]
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0017",
+      "kind": "function",
+      "name": "BSBatchRenderer geometry-group selection helper",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x134A480",
+        "role": "select BSBatchRenderer::geometryGroups[index] and forward a pass to the group registration routine",
+        "identityStatus": "role reconstructed from exact field access and tail-call"
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0018",
+      "kind": "function",
+      "name": "BSBatchRenderer::GeometryGroup pass registration candidate",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x1347150",
+        "role": "link a BSRenderPass into a geometry-group pass list or its grouped pass structure",
+        "identityStatus": "role reconstructed from exact GeometryGroup and BSRenderPass list-field accesses"
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0019",
+      "kind": "function",
+      "name": "BSCullingProcess visible-object and alpha-group accumulator bridge",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0xD9A190",
+        "role": "drain the culling process objectArray into one or two shader accumulators, then drain alpha-group geometry through the same accumulator admission path",
+        "identityStatus": "function boundary and role confirmed from exact disassembly; exported target symbol name unavailable",
+        "verifiedFields": ["BSCullingProcess+0x128 objectArray", "BSCullingProcess+0x138 objectArray size", "BSCullingProcess+0x301D8 alphaGroups", "BSCullingProcess+0x301F0 alphaGroupIndex"]
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0020",
+      "kind": "function",
+      "name": "BSShaderAccumulator single-geometry admission and render-mode dispatch",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x1308570",
+        "role": "accept one geometry, resolve its shader property, defer it when required, or invoke the geometry handler selected by the accumulator render mode",
+        "identityStatus": "function boundary, arguments, property lookup, deferral, and table dispatch confirmed from exact disassembly; exported target symbol name unavailable",
+        "dispatchTableRva": "0x13423E70",
+        "renderModeField": "BSShaderAccumulator+0x178"
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0021",
+      "kind": "function",
+      "name": "BSShaderAccumulator deferred-geometry drain",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x13087D0",
+        "role": "iterate the accumulator's deferred geometry/auxiliary-argument array and invoke the render-mode geometry handler for each entry",
+        "identityStatus": "function boundary, array stride, dispatch table, and state updates confirmed from exact disassembly; exported target symbol name unavailable",
+        "dispatchTableRva": "0x13423E70",
+        "verifiedFields": ["BSShaderAccumulator+0xC0 deferred entries", "BSShaderAccumulator+0xD0 entry count", "BSShaderAccumulator+0xD8 processed count", "BSShaderAccumulator+0x178 render mode"]
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0022",
+      "kind": "function",
+      "name": "BSShaderAccumulator render-mode dispatch-table initializer",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x12CC970",
+        "role": "initialize the 31-entry geometry-handler and pre-resolve handler tables before the main loop uses them",
+        "identityStatus": "initializer boundary and table writes confirmed from exact disassembly; called by Main::MainLoop at 0x5B80D1",
+        "geometryHandlerTableRva": "0x13423E70",
+        "defaultGeometryHandlerRva": "0x13089A0",
+        "specializedGeometryHandlers": {
+          "12-17": "0x13090A0",
+          "18-19": "0x1308E50",
+          "20": "0x1308D90",
+          "21": "0x1308DC0",
+          "23": "0x1308DD0",
+          "24": "0x130B1C0",
+          "25": "0x1309030",
+          "26-27": "0x13091C0",
+          "29": "0x1309240"
+        },
+        "preResolveHandlerTableRva": "0x13423F70",
+        "defaultPreResolveHandlerRva": "0x13092C0",
+        "specializedPreResolveHandlers": {
+          "12-17": "0x130AF00",
+          "20": "0x130AE90",
+          "22": "0x130A970",
+          "23": "0x130AED0",
+          "24": "0x130B260",
+          "25": "0x130AEE0",
+          "26-27": "0x130B090",
+          "29": "0x130B160"
+        }
+      },
+      "evidenceRefs": ["evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0023",
+      "kind": "function",
+      "name": "BSShaderAccumulator current render-mode handler selector",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x12CEB00",
+        "role": "select geometry and pre-resolve handlers for a render mode, falling back to entry zero when the mode is out of range",
+        "identityStatus": "table reads and selected-handler global writes confirmed from exact disassembly",
+        "geometryHandlerTableRva": "0x13423E70",
+        "preResolveHandlerTableRva": "0x13423F70",
+        "selectedGeometryHandlerGlobalRva": "0x13423F68",
+        "selectedPreResolveHandlerGlobalRva": "0x13424068",
+        "modeZeroPreResolveDirectRva": "0x13093A0"
+      },
+      "evidenceRefs": ["evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0024",
+      "kind": "function",
+      "name": "BSCullingProcess alpha-group accumulator drain",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0xD9AF10",
+        "role": "iterate culling alpha-group geometry, derive each auxiliary group argument, dispatch each geometry to a shader accumulator, and close the accumulator group",
+        "identityStatus": "function boundary and alpha-group traversal role confirmed from exact disassembly; exported target symbol name unavailable"
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0025",
+      "kind": "function",
+      "name": "Render-mode 20 geometry-collection handler",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0x1308D90", "renderModes": [20], "commonLibNames": ["kLodLandscapePass"], "role": "append the geometry to an accumulator-owned collection through helper 0x130C630 and report acceptance" },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0026",
+      "kind": "function",
+      "name": "Render-mode 21 accept-without-registration handler",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0x1308DC0", "renderModes": [21], "commonLibNames": ["kWaterReflectionPass"], "role": "return accepted without requesting or registering render passes" },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0027",
+      "kind": "function",
+      "name": "Render-mode 23 ordinary-pass filtered registration handler",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0x1308DD0", "renderModes": [23], "commonLibNames": ["kAlphaTransparencyShadowPass"], "role": "call shader-property GetRenderPasses, retain nonzero pass enums, and submit them through BSBatchRenderer::RegisterPass" },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0028",
+      "kind": "function",
+      "name": "Render-modes 18-19 local-map handler",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0x1308E50", "renderModes": [18, 19], "commonLibNames": ["kLocalMap", null], "role": "apply geometry/property eligibility filters, call shader-property GetRenderPasses_LocalMap, and route returned passes into explicit geometry groups" },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0029",
+      "kind": "function",
+      "name": "Render-mode 25 water-fog pass handler",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0x1309030", "renderModes": [25], "commonLibNames": ["kVolumetricLightingPass"], "role": "when enabled by accumulator state, call shader-property GetWaterFogPassList and submit returned passes through BSBatchRenderer::RegisterPassSorted" },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0030",
+      "kind": "function",
+      "name": "Render-modes 12-17 shadow-map-or-mask handler",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0x13090A0", "renderModes": [12, 13, 14, 15, 16, 17], "commonLibNames": ["kShadowMask", "kShadowMapPlain", "kShadowMapClamped", "kShadowMapPb", null, "kShadowMapCube"], "role": "apply geometry/property eligibility filters, call shader-property GetRenderPasses_ShadowMapOrMask, and route each pass by its accumulation hint" },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0031",
+      "kind": "function",
+      "name": "Render-modes 26-27 pass-hint geometry-group handler",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0x13091C0", "renderModes": [26, 27], "commonLibNames": ["kOcclusion", null], "role": "call shader-property GetRenderPasses and admit only nonzero pass enums whose accumulation hints are 6 or 7, routing them to geometry groups 0 or 1" },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0032",
+      "kind": "function",
+      "name": "Render-mode 29 occlusion-property-pass handler",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0x1309240", "renderModes": [29], "commonLibNames": [null], "role": "call shader-property GetRenderPasses_Occlusion and route every returned pass to geometry group 14", "provenanceWarning": "the pinned CommonLib enum names mode 28, not mode 29, as kPrecipitationOcclusionMap; the target table index and virtual call are exact and the semantic discrepancy remains unresolved" },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0033",
+      "kind": "function",
+      "name": "Render-mode 24 sun-glint/refraction handler",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0x130B1C0", "renderModes": [24], "commonLibNames": ["kSunGlintRefractionPass"], "role": "require the relevant shader-property flag, call GetRenderPasses, filter pass enum and accumulation hint, and route accepted passes to geometry group 16" },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0020",
+      "kind": "virtual-function",
+      "name": "BSParabolicCullingProcess::AppendNonAccum",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x136F4F0",
+        "vfuncIndex": 25,
+        "role": "route a geometry to the inherited visible-object array, the back-hemisphere shader accumulator, or both according to the numeric routing argument",
+        "routing": {
+          "1": "inherited object-array path",
+          "2": "back-hemisphere accumulator path",
+          "3": "both paths"
+        },
+        "accumulatorCallsiteRva": "0x136F55F"
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0034",
+      "kind": "function",
+      "name": "BSShaderAccumulator scene-root traversal entry",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x1308750",
+        "role": "construct a traversal context from an accumulator and filter flag, then recursively walk one scene root",
+        "identityStatus": "function boundary and behavior confirmed from exact disassembly; exported target symbol name unavailable"
+      },
+      "evidenceRefs": ["evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0035",
+      "kind": "function",
+      "name": "Recursive NiAVObject accumulator walker",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x130C0F0",
+        "role": "resolve a node from an NiAVObject, process its immediate children through 0x130C360, and recurse through child nodes",
+        "returnContract": "zero for no node, two for rejected/hidden node, otherwise propagated traversal result"
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0036",
+      "kind": "function",
+      "name": "NiNode child-to-accumulator admission helper",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x130C360",
+        "role": "walk the node child array at +0x140/+0x14A, reject hidden children, apply shader-property/material filtering, and send accepted child geometry to single-geometry accumulator admission",
+        "accumulatorCallsiteRva": "0x130C444"
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0037",
+      "kind": "function",
+      "name": "BSShadowDirectionalLight accumulation focus path",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x134C220",
+        "pdbAlias": "BSShadowDirectionalLight::BSShadowLight__Accumulate__focus__1arg",
+        "role": "configure a shadow accumulator and feed target-global scene roots through the shared scene-root traversal entry"
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0038",
+      "kind": "function",
+      "name": "Main scene-root registry rebuild",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x5BC140",
+        "pdbAlias": "FUN_1405bc140",
+        "role": "clear and repopulate the target-global scene-root registry from a primary scene root and additional distance-ranked roots",
+        "producerCallsites": ["0x5BC1BB", "0x5BC281"],
+        "identityStatus": "function boundary and registry lifecycle confirmed from exact disassembly; precise source-object class names remain unresolved"
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0039",
+      "kind": "function",
+      "name": "BSFadeNode scene-root registry append helper",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x5C4770",
+        "pdbAlias": "BSFadeNode::sub_1405BC350",
+        "role": "append a 16-byte registry entry containing a float ranking value and a reference-counted scene-root pointer",
+        "entryLayout": { "rankingValueOffset": "0x00", "rootPointerOffset": "0x08" }
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0040",
+      "kind": "function",
+      "name": "Main scene-root preparation owner",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x5B9E90",
+        "pdbAlias": "Main::sub_1405B2590",
+        "role": "prepare main scene state and invoke the registry rebuild before returning",
+        "registryRebuildCallsiteRva": "0x5BA565"
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0041",
+      "kind": "function",
+      "name": "Main post-cull visible-object drain callback",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x1321830",
+        "pdbAlias": "FUN_141321830",
+        "role": "drain the main culling-process result into the primary shader accumulator with no secondary accumulator",
+        "bridgeCallsiteRva": "0x13218A5"
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0042",
+      "kind": "function",
+      "name": "Culling accumulation job worker",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x1316190",
+        "pdbAlias": "FUN_141316190",
+        "role": "acquire a culling process for a numeric job mode; mode zero drains it into primary and optional secondary accumulators and finalizes it, while mode one takes the alternate cleanup path",
+        "bridgeCallsiteRva": "0x1316207",
+        "identityStatus": "worker boundary and mode-dependent behavior confirmed; callback registration site remains unresolved"
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0043",
+      "kind": "function",
+      "name": "Main list-accumulation callback",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x13163F0",
+        "pdbAlias": "FUN_1413163f0",
+        "role": "iterate a job-owned culling-process list and drain each entry into the selected accumulator",
+        "bridgeCallsiteRva": "0x1316441"
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0044",
+      "kind": "function",
+      "name": "MainAccum",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x1322130",
+        "pdbAlias": "MainAccum",
+        "role": "configure two accumulation jobs with the main list-accumulation callback, synchronize them, and continue into shadow accumulation"
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0045",
+      "kind": "function",
+      "name": "ListAccumulationJob",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x13224C0",
+        "pdbAlias": "ListAccumulationJob_1412E2DE0",
+        "role": "execute the paired list-accumulation job stages at 0x13162B0 and 0x1316320"
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0046",
+      "kind": "function",
+      "name": "Scene-root registry clear helper",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x5C4C10",
+        "role": "release each reference-counted root pointer in the 16-byte entries and reset the registry count to zero"
+      },
+      "evidenceRefs": ["evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0047",
+      "kind": "function",
+      "name": "Main ranked-reference candidate-list builder",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x5BC2E0",
+        "pdbAlias": "Main::sub_1405B46A0",
+        "role": "rebuild and sort nearby high-process actor candidates subsequently consumed by the scene-root registry rebuild",
+        "ownerCallsiteRva": "0x5BA55D",
+        "inputThresholdRva": "0x1ED6488",
+        "defaultInputThreshold": 450.0,
+        "thresholdRule": "square the input threshold unless it is FLT_MAX; accept adjusted squared distance strictly below that squared threshold",
+        "sortOrder": "ascending adjusted squared distance",
+        "rankingFormula": "max(1.0, squaredDistance(PlayerCharacter.position, actor.position) - square(max(extent.x, extent.y)))",
+        "identityStatus": "source, filters, ranking formula, threshold rule, and ordering are exact; the semantic meaning of the returned extent vector is only partially resolved"
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0048",
+      "kind": "function",
+      "name": "High-process actor candidate enumeration and ranking helper",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x5C1720",
+        "role": "enumerate ProcessLists::highActorHandles, resolve each handle, reject missing or flagged 3D roots, compute adjusted squared distance from PlayerCharacter, and append candidates below the squared threshold",
+        "sourceCollection": "ProcessLists::highActorHandles at ProcessLists+0x30",
+        "sourceEntryType": "ActorHandle",
+        "handleResolverRva": "0x152F40",
+        "handleResolverPdbAlias": "LookupObjectRefHandle2_140142550",
+        "handleResolverRelocationId": 12785,
+        "rootFlagFilter": "reject when bit 20 of NiAVObject flags at +0x10C is set",
+        "rankingFormula": "max(1.0, squaredDistance(PlayerCharacter.position, actor.position) - square(max(extent.x, extent.y)))"
+      },
+      "evidenceRefs": ["evidence-0002", "evidence-0003", "evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0049",
+      "kind": "function",
+      "name": "TESObjectREFR primitive-or-marker extent accessor",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x2B9290",
+        "pdbAlias": "TESObjectREFR::sub_1402A7B20",
+        "role": "return a three-float extent vector backed by ExtraPrimitive primitive data when present, otherwise MultiBoundMarkerData halfExtents for the relevant marker base forms, otherwise a zero vector",
+        "extraPrimitiveType": "0x67",
+        "multiBoundMarkerDataType": "0x5F",
+        "candidateMetricUse": "the ranking helper subtracts the square of max(component 0, component 1) from squared center distance",
+        "identityStatus": "container and returned-vector sources are exact; the BGSPrimitive field's canonical semantic name is unresolved"
+      },
+      "evidenceRefs": ["evidence-0002", "evidence-0003", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-class-0010",
+      "kind": "class",
+      "name": "BSCompoundFrustum",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "size": "0xC8",
+        "roles": ["compound-frustum plane collection", "active-plane state", "object visibility processing"],
+        "verifiedFields": { "planes": "0x00", "viewFrustum": "0x30", "viewPosition": "0xA0", "camera": "0xB0", "freePlane": "0xB8", "freeOp": "0xBC", "firstOp": "0xC0", "skipViewFrustum": "0xC4", "prethreaded": "0xC5" }
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-class-0011",
+      "kind": "class",
+      "name": "NiAVObject",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "sizeVR": "0x138",
+        "roles": ["scene object", "world bound", "culling traversal target"],
+        "verifiedFields": { "worldBound": "0xE4", "flags": "0x10C", "depthCullingResultPointer": "0x128", "depthCullingFrameStamp": "0x130" }
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-class-0012",
+      "kind": "class",
+      "name": "BSOBBOcclusionTestingShader",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "roles": ["draw current-frame oriented-bounding-box occlusion tests", "produce the GPU visibility result consumed by CSX VR depth culling"],
+        "vtableRvasVR": ["0x1908500", "0x1908558", "0x1908570"],
+        "rttiRvaVR": "0x1F80938",
+        "verifiedFieldRoles": {
+          "registeredObbCount": "+0xB0",
+          "transformedObbRecordBuffer": "+0xB8",
+          "activeResultBufferIndex": "+0xC0",
+          "resultBufferPointers": ["+0xD0", "+0xD8"],
+          "drawResourceOwner": "+0xF0",
+          "mappedInstanceResource": "+0xF8",
+          "resultCopyResources": ["+0x100", "+0x108"],
+          "mappedStateByte": "+0xC9"
+        },
+        "registeredObbCapacity": 4096,
+        "transformedObbRecordStride": "0x40",
+        "shaderCachePolicy": "CSX deliberately returns the vanilla OBBOcclusionTesting vertex and pixel shaders in VR",
+        "runtimeValidation": "Breezehome capture observed engine-routed descriptor pair 0/0, 794 objects, a 36-index 1588-instance stereo draw, typed input/result/staging buffers, result publication, reset ordering, 721 covered consumers, and following-frame CPU readback decisions"
+      },
+      "evidenceRefs": ["evidence-0002", "evidence-0003", "evidence-0006", "evidence-0007", "evidence-0008", "evidence-0009"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0023",
+      "kind": "virtual-function",
+      "name": "BSCullingProcess target-only optimized active-plane bound test",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0xD9A7B0",
+        "vfuncIndex": 29,
+        "vtableByteOffset": "0xE8",
+        "vtableEntryRva": "0x1815C28",
+        "role": "test an NiBound against the active frustum-plane mask and clear plane bits proven fully inside when the mutable-plane-state flag is enabled",
+        "identityStatus": "exact target slot and behavior; absent from the pinned CommonLib BSCullingProcess declaration"
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0024",
+      "kind": "virtual-function",
+      "name": "NiAVObject::OnVisible",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "targetVtableByteOffset": "0x1A8",
+        "targetVfuncIndex": 53,
+        "commonLibDeclaredSlot": "0x34",
+        "role": "continue accepted scene-object traversal while recurse-to-geometry is enabled",
+        "identityStatus": "method identity and target dispatch byte offset are exact; the flat/VR slot-number presentation differs because VR inserts an additional virtual"
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0050",
+      "kind": "function",
+      "name": "BSCompoundFrustum::Process",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0xDA33C0", "role": "evaluate an NiAVObject against the active compound-frustum operators" },
+      "evidenceRefs": ["evidence-0003", "evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0051",
+      "kind": "function",
+      "name": "BSCompoundFrustum::GetActivePlaneState",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0xDA4B90", "role": "save the compound frustum's active-plane state around an object test" },
+      "evidenceRefs": ["evidence-0003", "evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0052",
+      "kind": "function",
+      "name": "BSCompoundFrustum::SetActivePlaneState",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0xDA4BE0", "role": "restore the compound frustum's active-plane state after an object test" },
+      "evidenceRefs": ["evidence-0003", "evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0053",
+      "kind": "function",
+      "name": "NiAVObject::Cull",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0xC9C330", "pdbAlias": "NiAVObject::Cull_140C57140", "role": "enter object-owned recursive culling with the current NiCullingProcess" },
+      "evidenceRefs": ["evidence-0003", "evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0054",
+      "kind": "function",
+      "name": "BSOBBOcclusionTestingShader::Draw",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x13561F0",
+        "pdbAlias": "BSOBBOcclusionTestingShader::Draw",
+        "role": "submit the current-frame oriented-bounding-box occlusion-test batch; CSX marks the frame result ready after this producer boundary",
+        "knownCallsiteRva": "0x1323601",
+        "knownCallsiteOwner": "Main::RenderDepth",
+        "knownArgument": 0,
+        "resourceInputs": ["draw-object field +0xB0", "draw-object field +0xF0, then nested resource fields +0x178 and +0x188"],
+        "internalSubmissionRva": "0xDBDF60",
+        "internalSubmissionCountArgument": 12,
+        "submissionShape": "one indexed-instanced 12-triangle/36-index box draw with N instances, or 2N when Renderer draw-stereo is enabled",
+        "postDrawTailcallRva": "0x1365B80",
+        "liveSubmission": { "captureId": "capture-live-0000e3919eb04500-5", "sequence": 919, "objectCount": 794, "indexCountPerInstance": 36, "instanceCount": 1588, "immediateContext": "typed capture-local identity", "targetState": "depth-only" },
+        "identityStatus": "exact PDB identity and target body; the structured input/result/staging resources, depth-only target state, immediate-context submission, and 2N stereo instance count are now live-validated; stable cross-run view identity and eye ownership remain unresolved"
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0004", "evidence-0006", "evidence-0008", "evidence-0009"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0025",
+      "kind": "virtual-function",
+      "name": "BSOBBOcclusionTestingShader::SetupTechnique",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x1355A70",
+        "vfuncIndex": 2,
+        "vtableByteOffset": "0x10",
+        "role": "begin the vanilla OBB occlusion-testing technique and configure its renderer state and constants",
+        "beginTechniqueRva": "0x1365A70",
+        "vertexDescriptor": 0,
+        "pixelDescriptor": 0,
+        "skipPixelShader": false,
+        "resourceBindings": [
+          { "callsiteRva": "0x1355D80", "resource": "+0xF8 SRV", "slot": 0, "recordStride": 64, "elementCount": "registered count +0xB0" },
+          { "callsiteRva": "0x1355DA2", "resource": "+0x100 UAV", "slot": 0, "recordStride": 4, "elementCount": "registered count +0xB0" }
+        ],
+        "identityStatus": "semantic identity is fixed by the BSShader virtual slot, the OBB vtable dispatch, and the exact target body; the paired PDB exposes only a generic bool(BSShader*) alias"
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0007", "evidence-0008", "evidence-0009"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0055",
+      "kind": "function",
+      "name": "BSOBBOcclusionTestingShader::RegisterGeometry",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x13560A0",
+        "role": "atomically reserve one of 4096 OBB instances, write its transformed 64-byte bound record, and clear its active result slot",
+        "capacity": 4096,
+        "recordStride": "0x40",
+        "knownCallsiteRva": "0xDA1957",
+        "knownCallsiteOwner": "BSGeometryListCullingProcess::AppendNonAccum"
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0056",
+      "kind": "function",
+      "name": "BSOBBOcclusionTestingShader::CopyOcclusionTestResults",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x1356270",
+        "role": "read the +0x100 staging result into the active +0xD0/+0xD8 CPU buffer, then reset +0x100 primary from the zero-initialized +0x108 source for the current registered count",
+        "knownCallsiteRva": "0x132208B",
+        "knownCallsiteOwner": "Main::RenderFirstPersonView",
+        "stagingReadCallsiteRva": "0x13562A6",
+        "resetCopyTailcallRva": "0x13562C5",
+        "liveResetValidation": "frame-spanning capture observed one post-publication CopyResource into the exact primary result allocation per frame; the reduced catalogue omitted the source ID, whose +0x108 identity remains fixed by static disassembly"
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0008", "evidence-0009"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0057",
+      "kind": "function",
+      "name": "BSOBBOcclusionTestingShader::MapOcclusionBox",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x13562D0",
+        "role": "upload the CPU OBB records at +0xB8 into the dynamic structured instance buffer at +0xF8 with D3D11_MAP_WRITE_DISCARD, then mark the mapped-state byte",
+        "uploadCallsiteRva": "0x13562FE",
+        "knownCallsites": [
+          { "rva": "0x13220FE", "owner": "Main::RenderFirstPersonView" },
+          { "rva": "0x132336A", "owner": "Main::RenderDepth" }
+        ]
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0058",
+      "kind": "function",
+      "name": "OBB transformed-bound record writer",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x1356320",
+        "role": "transform one object's bound and world data into the 64-byte per-instance OBB record",
+        "knownCallsiteRva": "0x135618D",
+        "knownCallsiteOwner": "BSOBBOcclusionTestingShader::RegisterGeometry",
+        "canonicalNameStatus": "unresolved"
+      },
+      "evidenceRefs": ["evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0059",
+      "kind": "function",
+      "name": "OBB indexed-instanced submission helper",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0xDBDF60",
+        "pdbAlias": "fDrawGrass_140D6C1E0",
+        "role": "bind triangle-list OBB inputs and issue one 36-index instanced draw",
+        "boxTriangleCount": 12,
+        "boxIndexCount": 36,
+        "instanceCount": "registered OBB count, doubled when Renderer draw-stereo is true",
+        "canonicalNameStatus": "PDB alias does not describe this observed OBB caller role"
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0060",
+      "kind": "function",
+      "name": "Main::DownscaleDepthBuffer",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x1322D80",
+        "role": "downscale the current depth buffer and set the OBB draw-readiness flag after successful setup",
+        "readinessFlagRva": "0x1ED4180"
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0061",
+      "kind": "function",
+      "name": "GetDepthStencilTarget_MAIN",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0xDC7C90",
+        "role": "return RENDER_TARGET_DEPTHSTENCIL::kMAIN",
+        "returnValue": 0
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0062",
+      "kind": "function",
+      "name": "RenderTargetManager::SetDepthStencilRenderTarget",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0xDC7B50",
+        "role": "update the selected engine depth-stencil target and its two associated numeric state arguments"
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0063",
+      "kind": "function",
+      "name": "SetRenderTarget",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0xDC7B30",
+        "role": "forward an engine render-target slot selection to the renderer state"
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0064",
+      "kind": "function",
+      "name": "Main::RenderFirstPersonView",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x13218C0",
+        "role": "render first-person views and close the OBB result-consumption epoch by copying results, publishing/reset-swapping counters and frame state, then remapping the OBB resource after intervening view work",
+        "obbCopyCallsiteRva": "0x132208B",
+        "obbMapCallsiteRva": "0x13220FE",
+        "obbGateRva": "0x1EC6B88",
+        "frameCounterRva": "0x3186C5C"
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0065",
+      "kind": "function",
+      "name": "BSLightingShader::CreateOBBOcclusionTestingShader",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x1355770",
+        "pdbAlias": "BSLightingShader::CreateOBBOcclusionTestingShader",
+        "role": "construct the OBB occlusion-testing shader singleton, allocate its 4096-entry CPU stores, and create its instance, result, staging, and reset-source GPU resources",
+        "knownCallsiteRva": "0x12CCFAB",
+        "ownerPointerRva": "0x36F1870",
+        "cpuAllocations": [
+          { "field": "+0xB8", "bytes": "0x40000", "shape": "4096 records of 0x40 bytes" },
+          { "field": "+0xD0", "bytes": "0x4000", "shape": "4096 uint32 results" },
+          { "field": "+0xD8", "bytes": "0x4000", "shape": "4096 uint32 results" }
+        ],
+        "qualification": "the PDB public at 0x13559F0 is named CreategBSOBBOcclusionTestingShader but its body is the destructor; it is not used as the constructor identity"
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0026",
+      "kind": "virtual-function",
+      "name": "BSOBBOcclusionTestingShader::RestoreTechnique",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x1355EA0",
+        "vfuncIndex": 3,
+        "vtableByteOffset": "0x18",
+        "role": "restore OBB renderer state, unbind the OBB SRV/UAV, and copy the just-written result buffer into its staging readback resource",
+        "resultStagingCopyCallsiteRva": "0x1356057",
+        "identityStatus": "fixed by the OBB vtable slot and Draw's virtual dispatch after submission; the primary-to-staging CopyResource is live-observed immediately after the 36-index instanced draw"
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008", "evidence-0009"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0066",
+      "kind": "function",
+      "name": "Structured GPU buffer wrapper factory",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0xDC0CA0",
+        "role": "create a 0x30-byte wrapper around a structured D3D11 buffer, SRV, optional UAV, and optional staging buffer",
+        "wrapperFields": { "primaryBuffer": "+0x00", "srv": "+0x08", "uav": "+0x10", "stagingBuffer": "+0x18", "elementCount": "+0x28" },
+        "primaryDescriptor": { "miscFlags": "D3D11_RESOURCE_MISC_BUFFER_STRUCTURED (0x40)", "bindFlags": "D3D11_BIND_SHADER_RESOURCE (0x8), plus D3D11_BIND_UNORDERED_ACCESS (0x80) when requested", "usage": "D3D11_USAGE_DYNAMIC with CPU_WRITE when cpuWritable; otherwise D3D11_USAGE_DEFAULT" },
+        "stagingDescriptor": { "usage": "D3D11_USAGE_STAGING (3)", "bindFlags": 0, "cpuAccessFlags": "D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE (0x30000)" }
+      },
+      "evidenceRefs": ["evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0067",
+      "kind": "function",
+      "name": "Structured-buffer CPU upload helper",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0xDC0E90",
+        "role": "map the wrapper primary buffer with D3D11_MAP_WRITE_DISCARD, copy count times stride bytes from CPU memory, and unmap"
+      },
+      "evidenceRefs": ["evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0068",
+      "kind": "function",
+      "name": "Structured-buffer staging refresh helper",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0xDC0F30",
+        "role": "resolve the wrapper SRV's underlying resource and CopyResource from the primary GPU resource into wrapper+0x18 staging"
+      },
+      "evidenceRefs": ["evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0069",
+      "kind": "function",
+      "name": "Structured-buffer reset copy helper",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0xDC0F80",
+        "role": "resolve a source wrapper SRV's underlying resource and CopyResource it into the destination wrapper primary buffer"
+      },
+      "evidenceRefs": ["evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0070",
+      "kind": "function",
+      "name": "Structured-buffer staging read helper",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0xDC11B0",
+        "role": "map wrapper+0x18 staging subresource 0 with D3D11_MAP_READ and flags 0, copy count times stride bytes into CPU memory, and unmap",
+        "completionSemantics": "successful immediate-context Map return makes prior commands affecting this staging allocation CPU-visible; this is an allocation-scoped synchronization boundary, not whole-frame GPU completion",
+        "latencyStatus": "unmeasured"
+      },
+      "evidenceRefs": ["evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0021",
+      "kind": "virtual-function",
+      "name": "TESObjectREFR::Get3D1",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "vfuncIndex": 111,
+        "vtableByteOffset": "0x378",
+        "role": "obtain the primary PlayerCharacter 3D root with first-person argument false",
+        "callsiteRva": "0x5BC17D"
+      },
+      "evidenceRefs": ["evidence-0002", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0022",
+      "kind": "virtual-function",
+      "name": "TESObjectREFR::Get3D2",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "vfuncIndex": 112,
+        "vtableByteOffset": "0x380",
+        "role": "obtain the 3D root of each resolved ranked reference",
+        "callsiteRva": "0x5BC274"
+      },
+      "evidenceRefs": ["evidence-0002", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-data-0001",
+      "kind": "resource-role",
+      "name": "Target-global scene-root registry",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "tablePointerRva": "0x34232C0",
+        "countRva": "0x34232D0",
+        "entryStride": "0x10",
+        "rootPointerOffset": "0x08",
+        "role": "ranked, reference-counted scene roots rebuilt by the main scene-preparation path and consumed by Main::RenderDepth and shadow-directional accumulation",
+        "entryRankingValueOffset": "0x00",
+        "semanticOwner": "Main scene-root registry rebuild at 0x5BC140"
+      },
+      "evidenceRefs": ["evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-data-0002",
+      "kind": "resource-role",
+      "name": "PlayerCharacter singleton",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "pointerRva": "0x2FEB9F0",
+        "relocationId": 517014,
+        "role": "source reference for the primary scene-root registry entry"
+      },
+      "evidenceRefs": ["evidence-0002", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-data-0003",
+      "kind": "resource-role",
+      "name": "Ranked reference candidate list",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "tablePointerRva": "0x2FEBA18",
+        "countRva": "0x2FEBA28",
+        "tableElementStride": "0x08",
+        "candidateRankingValueOffset": "0x00",
+        "candidateReferenceHandleOffset": "0x04",
+        "sourceCollection": "ProcessLists::highActorHandles",
+        "sourceCollectionOffset": "0x30",
+        "rankingFormula": "max(1.0, squaredDistance(PlayerCharacter.position, actor.position) - square(max(extent.x, extent.y)))",
+        "sortOrder": "ascending ranking value",
+        "role": "ordered high-process actor candidates resolved to Get3D2 roots for additional scene-root registry entries"
+      },
+      "evidenceRefs": ["evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-data-0004",
+      "kind": "resource-role",
+      "name": "ProcessLists singleton and high-process actor handles",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "singletonPointerRva": "0x1F831B0",
+        "singletonRelocationId": 514167,
+        "highActorHandlesOffset": "0x30",
+        "collectionType": "BSTArray<ActorHandle>",
+        "role": "source collection enumerated to construct the additional scene-root candidates"
+      },
+      "evidenceRefs": ["evidence-0002", "evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-data-0005",
+      "kind": "resource-role",
+      "name": "BSOBBOcclusionTestingShader working and result resources",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "ownerPointerRva": "0x36F1870",
+        "instanceCapacity": 4096,
+        "transformedRecordBufferBytes": "0x40000",
+        "resultBufferBytesEach": "0x4000",
+        "fieldRoles": {
+          "registeredCount": "+0xB0",
+          "transformedRecords": "+0xB8",
+          "activeResultBufferIndex": "+0xC0",
+          "resultBuffers": ["+0xD0", "+0xD8"],
+          "drawResourceOwner": "+0xF0",
+          "mappedInstanceResource": "+0xF8: dynamic structured buffer, 4096 x 0x40, SRV only, CPU_WRITE, no staging",
+          "resultResource": "+0x100: default structured buffer, 4096 x uint32, SRV and UAV, plus read/write staging buffer",
+          "resultResetSource": "+0x108: default structured buffer, 4096 x uint32, SRV only, initialized from the zeroed +0xD0 CPU store"
+        },
+        "resourceLifecycle": "MapOcclusionBox uploads +0xB8 into +0xF8 with WRITE_DISCARD; SetupTechnique binds +0xF8 SRV and +0x100 UAV; RestoreTechnique copies +0x100 primary to its staging resource; CopyOcclusionTestResults reads staging into the selected +0xD0/+0xD8 CPU buffer and resets +0x100 primary from +0x108",
+        "canonicalResourceTypes": "D3D11 structured buffers and views confirmed; concrete runtime object/view identities remain capture-local",
+        "liveCaptureShape": { "objectCount": 794, "instanceCount": 1588, "input": "262144-byte dynamic CPU-write structured buffer, stride 64, SRV", "result": "16384-byte default structured buffer, stride 4, SRV+UAV", "engineStaging": "16384-byte staging structured buffer, stride 4", "resultVersionReadiness": "same-immediate-context-order" }
+      },
+      "evidenceRefs": ["evidence-0008", "evidence-0009"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-data-0006",
+      "kind": "resource-role",
+      "name": "BSGraphics::Renderer draw-stereo flag",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x3181708",
+        "rendererSingletonRva": "0x3181700",
+        "role": "enable stereo geometry-shader instancing; doubles the OBB submission instance count"
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-data-0007",
+      "kind": "resource-role",
+      "name": "Downscaled-depth OBB draw-readiness flag",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x1ED4180",
+        "role": "set by Main::DownscaleDepthBuffer after successful setup and gate the subsequent OBB visibility draw"
+      },
+      "evidenceRefs": ["evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-data-0008",
+      "kind": "resource-role",
+      "name": "BSGraphics::RenderTargetManager singleton",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "pointerRva": "0x3185600",
+        "relocationId": 524970,
+        "role": "own engine render-target, depth-stencil-target, and cubemap-target properties"
+      },
+      "evidenceRefs": ["evidence-0002", "evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-data-0009",
+      "kind": "resource-role",
+      "name": "Inherited subtree OBB-occlusion bypass state",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "processField": "low byte of BSCullingProcess+0x301D6",
+        "objectSourceField": "NiAVObject+0x122",
+        "role": "temporarily propagate an object-owned subtree exemption through recursive culling; when set, BSGeometryListCullingProcess::AppendNonAccum bypasses delayed OBB result consumption and new OBB registration for that object",
+        "propagation": "BSCullingProcess::Process1 saves the process byte, sets it to saved OR object+0x122, and restores the saved value on return",
+        "canonicalFieldNameStatus": "unresolved; functional semantics are confirmed"
+      },
+      "evidenceRefs": ["evidence-0007", "evidence-0008"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-render-phase-0008",
+      "kind": "render-phase",
+      "name": "Main::RenderDepth",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0x1323250", "relocationId": 100421, "role": "world depth and VR depth-culling producer phase" },
+      "evidenceRefs": ["evidence-0004", "evidence-0007"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-hook-boundary-0001",
+      "kind": "hook-boundary",
+      "name": "Main::RenderDepth OBB visibility-render callsite",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x1323601",
+        "ownerRva": "0x1323250",
+        "ownerOffset": "0x3B1",
+        "role": "current-frame GPU visibility result producer",
+        "calleeIdentity": "BSOBBOcclusionTestingShader::Draw",
+        "calleeRva": "0x13561F0",
+        "conditionFlagRva": "0x1ED4180",
+        "drawObjectPointerRva": "0x36F1870",
+        "argument": 0,
+        "engineTargetSelection": { "depthStencilTarget": "MAIN (0)", "renderTargetSlots0Through2": "NONE (-1)" },
+        "preDrawMapCallsiteRva": "0x132336A",
+        "drawStereoScope": { "forcedValue": true, "setRva": "0x13235E8", "restoreRva": "0x1323607" },
+        "submittedInstanceCountInThisPath": "2 * registered OBB count"
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0004", "evidence-0006", "evidence-0008"],
+      "extensions": {}
+    },
+    {
       "id": "engine-technique-0001",
       "kind": "technique",
       "name": "ImageSpace descriptor pair 0x0/0x0",
@@ -152,6 +1715,25 @@
         "observedBegins": 1680
       },
       "evidenceRefs": ["evidence-0001"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-technique-0009",
+      "kind": "technique",
+      "name": "OBBOcclusionTesting descriptor pair 0x0/0x0",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "shaderType": "OBBOcclusionTesting",
+        "techniqueId": "vertex=0x0,pixel=0x0",
+        "vertexDescriptor": 0,
+        "pixelDescriptor": 0,
+        "skipPixelShader": false,
+        "setupTechniqueRva": "0x1355A70",
+        "beginTechniqueCallsiteRva": "0x1355A83",
+        "identityQualification": "descriptor values are shader-family scoped; this is distinct from ImageSpace descriptor pair 0/0",
+        "liveValidation": "capture sequence 905 entered from RVA 0x1355A88 and resolved both vertex and pixel stages through the engine route"
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0008", "evidence-0009"],
       "extensions": {}
     },
     {
@@ -336,7 +1918,7 @@
   ],
   "relations": [
     { "id": "relation-0001", "type": "implements", "from": "engine:engine-virtual-function-0001", "to": "engine:engine-shader-family-0002", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0002", "evidence-0003"], "attributes": {}, "extensions": {} },
-    { "id": "relation-0002", "type": "implements", "from": "engine:engine-virtual-function-0002", "to": "engine:engine-shader-family-0003", "evidenceClass": "correlated", "confidence": "high", "evidenceRefs": ["evidence-0001", "evidence-0004"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0002", "type": "implements", "from": "engine:engine-virtual-function-0002", "to": "engine:engine-shader-family-0003", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0001", "evidence-0002", "evidence-0004", "evidence-0008"], "attributes": { "vtableRva": "0x1905F58", "vfuncIndex": 2, "vtableByteOffset": "0x10" }, "extensions": {} },
     { "id": "relation-0003", "type": "implements", "from": "engine:engine-virtual-function-0003", "to": "engine:engine-shader-family-0001", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0002", "evidence-0003"], "attributes": {}, "extensions": {} },
     { "id": "relation-0004", "type": "implements", "from": "engine:engine-virtual-function-0004", "to": "engine:engine-shader-family-0004", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0002", "evidence-0003"], "attributes": {}, "extensions": {} },
     { "id": "relation-0005", "type": "invokes", "from": "engine:engine-virtual-function-0001", "to": "engine:engine-function-0001", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0004"], "attributes": { "returnAddressRva": "0x1337D7B" }, "extensions": {} },
@@ -350,7 +1932,7 @@
     { "id": "relation-0013", "type": "corresponds-to", "from": "engine:engine-shader-family-0004", "to": "shader:pass-0120", "evidenceClass": "source-proven", "confidence": "confirmed", "evidenceRefs": ["evidence-0005"], "attributes": { "compileUnit": "compile-0120", "source": "Utility.hlsl" }, "extensions": {} },
     { "id": "relation-0014", "type": "corresponds-to", "from": "engine:engine-technique-0002", "to": "shader:pass-0115", "evidenceClass": "correlated", "confidence": "high", "evidenceRefs": ["evidence-0001", "evidence-0005", "evidence-0006"], "attributes": {}, "extensions": {} },
     { "id": "relation-0015", "type": "corresponds-to", "from": "engine:engine-technique-0003", "to": "shader:pass-0074", "evidenceClass": "correlated", "confidence": "high", "evidenceRefs": ["evidence-0001", "evidence-0005", "evidence-0006"], "attributes": {}, "extensions": {} },
-    { "id": "relation-0016", "type": "corresponds-to", "from": "engine:engine-technique-0004", "to": "shader:pass-0074", "evidenceClass": "correlated", "confidence": "high", "evidenceRefs": ["evidence-0001", "evidence-0005", "evidence-0006"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0016", "type": "corresponds-to", "from": "engine:engine-technique-0004", "to": "shader:pass-0074", "evidenceClass": "validated-across-runs", "confidence": "confirmed", "evidenceRefs": ["evidence-0001", "evidence-0005", "evidence-0006", "evidence-0011"], "attributes": { "compileUnit": "compile-0074", "source": "Effect.hlsl", "baseDescriptorDefines": { "vertex": ["TEXCOORD", "TEXTURE"], "pixel": ["TEXCOORD", "TEXTURE"] }, "runtimeStageDefines": { "vertex": ["VR", "VSHADER"], "pixel": ["VR", "PSHADER"] }, "defineQualification": "The resident CSX feature-define snapshot was unavailable in this capture; bytecode hashes identify the exact compiled stages without reconstructing that missing define set." }, "extensions": {} },
     { "id": "relation-0017", "type": "corresponds-to", "from": "engine:engine-technique-0005", "to": "shader:pass-0074", "evidenceClass": "correlated", "confidence": "high", "evidenceRefs": ["evidence-0001", "evidence-0005", "evidence-0006"], "attributes": {}, "extensions": {} },
     { "id": "relation-0018", "type": "corresponds-to", "from": "engine:engine-technique-0006", "to": "shader:pass-0120", "evidenceClass": "correlated", "confidence": "high", "evidenceRefs": ["evidence-0001", "evidence-0005", "evidence-0006"], "attributes": {}, "extensions": {} },
     { "id": "relation-0019", "type": "corresponds-to", "from": "engine:engine-technique-0007", "to": "shader:pass-0120", "evidenceClass": "correlated", "confidence": "high", "evidenceRefs": ["evidence-0001", "evidence-0005", "evidence-0006"], "attributes": {}, "extensions": {} },
@@ -361,7 +1943,166 @@
     { "id": "relation-0024", "type": "selects", "from": "engine:engine-render-phase-0004", "to": "engine:engine-technique-0005", "evidenceClass": "runtime-observed", "confidence": "confirmed", "evidenceRefs": ["evidence-0001"], "attributes": { "observedFrames": 120 }, "extensions": {} },
     { "id": "relation-0025", "type": "selects", "from": "engine:engine-render-phase-0005", "to": "engine:engine-technique-0002", "evidenceClass": "runtime-observed", "confidence": "confirmed", "evidenceRefs": ["evidence-0001"], "attributes": { "observedFrames": 120 }, "extensions": {} },
     { "id": "relation-0026", "type": "selects", "from": "engine:engine-render-phase-0006", "to": "engine:engine-technique-0003", "evidenceClass": "runtime-observed", "confidence": "confirmed", "evidenceRefs": ["evidence-0001"], "attributes": { "observedFrames": 120 }, "extensions": {} },
-    { "id": "relation-0027", "type": "selects", "from": "engine:engine-render-phase-0007", "to": "engine:engine-technique-0004", "evidenceClass": "runtime-observed", "confidence": "confirmed", "evidenceRefs": ["evidence-0001"], "attributes": { "observedFrames": 120 }, "extensions": {} }
+    { "id": "relation-0027", "type": "selects", "from": "engine:engine-render-phase-0007", "to": "engine:engine-technique-0004", "evidenceClass": "runtime-observed", "confidence": "confirmed", "evidenceRefs": ["evidence-0001"], "attributes": { "observedFrames": 120 }, "extensions": {} },
+    { "id": "relation-0028", "type": "declares", "from": "engine:engine-class-0001", "to": "engine:engine-function-0004", "evidenceClass": "source-proven", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0029", "type": "implements", "from": "engine:engine-class-0003", "to": "engine:engine-virtual-function-0005", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0004", "evidence-0007"], "attributes": { "vtableEntryRva": "0x1621130", "vtablePointerRva": "0xDA1860" }, "extensions": {} },
+    { "id": "relation-0030", "type": "declares", "from": "engine:engine-class-0002", "to": "engine:engine-function-0005", "evidenceClass": "correlated", "confidence": "high", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "identityQualification": "derived-class prefix in coverage alias is unresolved" }, "extensions": {} },
+    { "id": "relation-0031", "type": "implements", "from": "engine:engine-class-0004", "to": "engine:engine-virtual-function-0006", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0004", "evidence-0007", "evidence-0008"], "attributes": { "vtableEntryRva": "0x18FD9D8", "vtablePointerRva": "0x1309360" }, "extensions": {} },
+    { "id": "relation-0032", "type": "declares", "from": "engine:engine-class-0004", "to": "engine:engine-function-0006", "evidenceClass": "static-reverse-engineered", "confidence": "high", "evidenceRefs": ["evidence-0008"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0033", "type": "declares", "from": "engine:engine-class-0004", "to": "engine:engine-function-0007", "evidenceClass": "static-reverse-engineered", "confidence": "high", "evidenceRefs": ["evidence-0008"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0034", "type": "declares", "from": "engine:engine-class-0004", "to": "engine:engine-function-0008", "evidenceClass": "static-reverse-engineered", "confidence": "high", "evidenceRefs": ["evidence-0008"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0035", "type": "implements", "from": "engine:engine-class-0005", "to": "engine:engine-virtual-function-0007", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0004", "evidence-0007"], "attributes": { "vtableEntryRva": "0x1906EA0", "vtablePointerRva": "0x1348B70" }, "extensions": {} },
+    { "id": "relation-0036", "type": "declares", "from": "engine:engine-class-0005", "to": "engine:engine-function-0009", "evidenceClass": "source-proven", "confidence": "confirmed", "evidenceRefs": ["evidence-0007"], "attributes": { "relocationId": 100852 }, "extensions": {} },
+    { "id": "relation-0037", "type": "declares", "from": "engine:engine-class-0005", "to": "engine:engine-function-0010", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "relocationId": 100854 }, "extensions": {} },
+    { "id": "relation-0038", "type": "invokes", "from": "engine:engine-render-phase-0008", "to": "engine:engine-hook-boundary-0001", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0004"], "attributes": { "callsiteOffset": "0x3B1" }, "extensions": {} },
+    { "id": "relation-0039", "type": "implements", "from": "engine:engine-class-0002", "to": "engine:engine-virtual-function-0008", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "vfuncIndex": 22, "vtablePointerRva": "0xD99B60" }, "extensions": {} },
+    { "id": "relation-0040", "type": "implements", "from": "engine:engine-class-0002", "to": "engine:engine-virtual-function-0009", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "vfuncIndex": 23, "vtablePointerRva": "0xD99E90" }, "extensions": {} },
+    { "id": "relation-0041", "type": "implements", "from": "engine:engine-class-0002", "to": "engine:engine-virtual-function-0010", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "vfuncIndex": 24, "vtablePointerRva": "0xD99F80" }, "extensions": {} },
+    { "id": "relation-0042", "type": "implements", "from": "engine:engine-class-0002", "to": "engine:engine-virtual-function-0011", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "vfuncIndex": 25, "vtablePointerRva": "0xD99F60" }, "extensions": {} },
+    { "id": "relation-0043", "type": "implements", "from": "engine:engine-class-0002", "to": "engine:engine-virtual-function-0012", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "vfuncIndex": 26, "vtablePointerRva": "0xD9A010", "semanticNameProvisional": true }, "extensions": {} },
+    { "id": "relation-0044", "type": "implements", "from": "engine:engine-class-0002", "to": "engine:engine-virtual-function-0013", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "vfuncIndex": 27, "vtablePointerRva": "0xD9A890" }, "extensions": {} },
+    { "id": "relation-0045", "type": "implements", "from": "engine:engine-class-0002", "to": "engine:engine-virtual-function-0014", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "vfuncIndex": 28, "vtablePointerRva": "0xD9A870" }, "extensions": {} },
+    { "id": "relation-0046", "type": "declares", "from": "engine:engine-class-0006", "to": "engine:engine-function-0011", "evidenceClass": "source-proven", "confidence": "confirmed", "evidenceRefs": ["evidence-0007"], "attributes": { "relocationId": 100717 }, "extensions": {} },
+    { "id": "relation-0047", "type": "creates", "from": "engine:engine-function-0011", "to": "engine:engine-class-0007", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "allocation": "thread-local pass pool" }, "extensions": {} },
+    { "id": "relation-0048", "type": "invokes", "from": "engine:engine-function-0011", "to": "engine:engine-function-0012", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsiteRva": "0x1340262" }, "extensions": {} },
+    { "id": "relation-0049", "type": "declares", "from": "engine:engine-class-0007", "to": "engine:engine-function-0013", "evidenceClass": "source-proven", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "relocationId": 100718 }, "extensions": {} },
+    { "id": "relation-0050", "type": "implements", "from": "engine:engine-class-0005", "to": "engine:engine-virtual-function-0015", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "vfuncIndex": 1, "vtablePointerRva": "0x1348200" }, "extensions": {} },
+    { "id": "relation-0051", "type": "implements", "from": "engine:engine-class-0005", "to": "engine:engine-virtual-function-0016", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "vfuncIndex": 2, "vtablePointerRva": "0x13482E0" }, "extensions": {} },
+    { "id": "relation-0052", "type": "invokes", "from": "engine:engine-virtual-function-0015", "to": "engine:engine-function-0014", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsiteRva": "0x1348266" }, "extensions": {} },
+    { "id": "relation-0053", "type": "invokes", "from": "engine:engine-virtual-function-0016", "to": "engine:engine-function-0014", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsiteRva": "0x1348346" }, "extensions": {} },
+    { "id": "relation-0054", "type": "reads", "from": "engine:engine-virtual-function-0015", "to": "engine:engine-class-0007", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "fields": ["shaderProperty", "passGroupNext"] }, "extensions": {} },
+    { "id": "relation-0055", "type": "reads", "from": "engine:engine-virtual-function-0016", "to": "engine:engine-class-0007", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "fields": ["passGroupNext"] }, "extensions": {} },
+    { "id": "relation-0056", "type": "reads", "from": "engine:engine-function-0010", "to": "engine:engine-class-0007", "evidenceClass": "source-proven", "confidence": "confirmed", "evidenceRefs": ["evidence-0007"], "attributes": { "role": "draw submission consumes the fully populated pass" }, "extensions": {} },
+    { "id": "relation-0057", "type": "implements", "from": "engine:engine-class-0004", "to": "engine:engine-virtual-function-0017", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "vfuncIndex": 42, "vtablePointerRva": "0x13092F0" }, "extensions": {} },
+    { "id": "relation-0058", "type": "implements", "from": "engine:engine-class-0004", "to": "engine:engine-virtual-function-0018", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "vfuncIndex": 38, "vtablePointerRva": "0x1308710" }, "extensions": {} },
+    { "id": "relation-0059", "type": "invokes", "from": "engine:engine-virtual-function-0018", "to": "engine:engine-virtual-function-0017", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "dispatch": "vtable+0x150" }, "extensions": {} },
+    { "id": "relation-0060", "type": "invokes", "from": "engine:engine-virtual-function-0018", "to": "engine:engine-virtual-function-0006", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "dispatch": "tail-call vtable+0x158" }, "extensions": {} },
+    { "id": "relation-0061", "type": "implements", "from": "engine:engine-class-0008", "to": "engine:engine-virtual-function-0019", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "vfuncIndex": 42, "vtableEntryRva": "0x18FCFA8", "vtablePointerRva": "0x13045F0" }, "extensions": {} },
+    { "id": "relation-0062", "type": "invokes", "from": "engine:engine-virtual-function-0019", "to": "engine:engine-function-0015", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "repeatedCallsites": true }, "extensions": {} },
+    { "id": "relation-0063", "type": "creates", "from": "engine:engine-function-0015", "to": "engine:engine-class-0007", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "allocation": "allocate-or-reuse lighting pass path" }, "extensions": {} },
+    { "id": "relation-0064", "type": "invokes", "from": "engine:engine-function-0016", "to": "engine:engine-virtual-function-0019", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "callsiteRva": "0x1308A80", "dispatch": "shader-property vtable+0x150" }, "extensions": {} },
+    { "id": "relation-0065", "type": "reads", "from": "engine:engine-function-0016", "to": "engine:engine-class-0007", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "fields": ["passEnum", "accumulationHint", "next"] }, "extensions": {} },
+    { "id": "relation-0066", "type": "invokes", "from": "engine:engine-function-0016", "to": "engine:engine-function-0017", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "representativeCallsites": ["0x1308B12", "0x1308B2D", "0x1308C81", "0x1308D07"] }, "extensions": {} },
+    { "id": "relation-0067", "type": "invokes", "from": "engine:engine-function-0017", "to": "engine:engine-function-0018", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "dispatch": "tail-call after geometryGroups[index] selection" }, "extensions": {} },
+    { "id": "relation-0068", "type": "reads", "from": "engine:engine-function-0018", "to": "engine:engine-class-0007", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "fields": ["passEnum", "passGroupNext"] }, "extensions": {} },
+    { "id": "relation-0069", "type": "writes", "from": "engine:engine-function-0018", "to": "engine:engine-class-0005", "evidenceClass": "static-reverse-engineered", "confidence": "high", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "role": "updates a BSBatchRenderer-owned GeometryGroup pass list", "ownershipQualification": "helper receives the selected GeometryGroup rather than the renderer directly" }, "extensions": {} },
+    { "id": "relation-0070", "type": "writes", "from": "engine:engine-virtual-function-0011", "to": "engine:engine-class-0002", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "field": "objectArray", "role": "base visible-object admission" }, "extensions": {} },
+    { "id": "relation-0071", "type": "reads", "from": "engine:engine-function-0019", "to": "engine:engine-class-0002", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "fields": ["objectArray", "alphaGroups", "alphaGroupIndex"] }, "extensions": {} },
+    { "id": "relation-0072", "type": "invokes", "from": "engine:engine-function-0019", "to": "engine:engine-function-0020", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsites": ["0xD9A1F3", "0xD9A221"], "role": "feed every admitted visible object to the primary and optional secondary accumulator" }, "extensions": {} },
+    { "id": "relation-0073", "type": "invokes", "from": "engine:engine-function-0019", "to": "engine:engine-function-0024", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsites": ["0xD9A23D", "0xD9A24F"] }, "extensions": {} },
+    { "id": "relation-0074", "type": "invokes", "from": "engine:engine-function-0024", "to": "engine:engine-function-0020", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsiteRva": "0xD9B009", "role": "feed grouped-alpha geometry and its derived group argument to the accumulator" }, "extensions": {} },
+    { "id": "relation-0075", "type": "reads", "from": "engine:engine-function-0020", "to": "engine:engine-class-0004", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "fields": ["renderMode", "deferred geometry entries"] }, "extensions": {} },
+    { "id": "relation-0076", "type": "selects", "from": "engine:engine-function-0020", "to": "engine:engine-function-0016", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "dispatchTableRva": "0x13423E70", "qualification": "0x13089A0 is the default handler for most of the 31 render-mode entries; specialized modes select other handlers" }, "extensions": {} },
+    { "id": "relation-0077", "type": "reads", "from": "engine:engine-function-0021", "to": "engine:engine-class-0004", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "fields": ["deferred geometry entries", "entry count", "processed count", "renderMode"] }, "extensions": {} },
+    { "id": "relation-0078", "type": "selects", "from": "engine:engine-function-0021", "to": "engine:engine-function-0016", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "dispatchTableRva": "0x13423E70", "qualification": "default render-mode handler" }, "extensions": {} },
+    { "id": "relation-0079", "type": "invokes", "from": "engine:engine-virtual-function-0017", "to": "engine:engine-function-0023", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsiteRva": "0x1309305", "role": "select current render-mode handlers before pre-resolve work" }, "extensions": {} },
+    { "id": "relation-0080", "type": "selects", "from": "engine:engine-function-0023", "to": "engine:engine-function-0016", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "dispatchTableRva": "0x13423E70", "qualification": "entry zero and most normal-mode entries resolve to the ordinary geometry-to-pass handler" }, "extensions": {} },
+    { "id": "relation-0081", "type": "selects", "from": "engine:engine-function-0022", "to": "engine:engine-function-0016", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "dispatchTableRva": "0x13423E70", "role": "install default handler in 31-entry table before specialized overrides" }, "extensions": {} },
+    { "id": "relation-0082", "type": "selects", "from": "engine:engine-function-0022", "to": "engine:engine-function-0025", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "renderModes": [20] }, "extensions": {} },
+    { "id": "relation-0083", "type": "selects", "from": "engine:engine-function-0022", "to": "engine:engine-function-0026", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "renderModes": [21] }, "extensions": {} },
+    { "id": "relation-0084", "type": "selects", "from": "engine:engine-function-0022", "to": "engine:engine-function-0027", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "renderModes": [23] }, "extensions": {} },
+    { "id": "relation-0085", "type": "selects", "from": "engine:engine-function-0022", "to": "engine:engine-function-0028", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "renderModes": [18, 19] }, "extensions": {} },
+    { "id": "relation-0086", "type": "selects", "from": "engine:engine-function-0022", "to": "engine:engine-function-0029", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "renderModes": [25] }, "extensions": {} },
+    { "id": "relation-0087", "type": "selects", "from": "engine:engine-function-0022", "to": "engine:engine-function-0030", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "renderModes": [12, 13, 14, 15, 16, 17] }, "extensions": {} },
+    { "id": "relation-0088", "type": "selects", "from": "engine:engine-function-0022", "to": "engine:engine-function-0031", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "renderModes": [26, 27] }, "extensions": {} },
+    { "id": "relation-0089", "type": "selects", "from": "engine:engine-function-0022", "to": "engine:engine-function-0032", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "renderModes": [29] }, "extensions": {} },
+    { "id": "relation-0090", "type": "selects", "from": "engine:engine-function-0022", "to": "engine:engine-function-0033", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "renderModes": [24] }, "extensions": {} },
+    { "id": "relation-0091", "type": "invokes", "from": "engine:engine-render-phase-0008", "to": "engine:engine-function-0034", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsiteRva": "0x1323487", "role": "feed each registered scene root to the depth accumulator" }, "extensions": {} },
+    { "id": "relation-0092", "type": "reads", "from": "engine:engine-render-phase-0008", "to": "engine:engine-data-0001", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "loopRange": "count at 0x34232D0", "rootSelection": "table pointer at 0x34232C0 plus index*0x10 plus 0x08" }, "extensions": {} },
+    { "id": "relation-0093", "type": "invokes", "from": "engine:engine-function-0037", "to": "engine:engine-function-0034", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsiteRva": "0x134C343", "role": "reuse the scene-root traversal after configuring shadow render mode 0x0E" }, "extensions": {} },
+    { "id": "relation-0094", "type": "reads", "from": "engine:engine-function-0037", "to": "engine:engine-data-0001", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "role": "iterate the same target-global scene roots for directional-shadow accumulation" }, "extensions": {} },
+    { "id": "relation-0095", "type": "invokes", "from": "engine:engine-function-0034", "to": "engine:engine-function-0035", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsiteRva": "0x13087A1" }, "extensions": {} },
+    { "id": "relation-0096", "type": "invokes", "from": "engine:engine-function-0035", "to": "engine:engine-function-0036", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsiteRva": "0x130C126", "role": "process the resolved node's immediate children" }, "extensions": {} },
+    { "id": "relation-0097", "type": "invokes", "from": "engine:engine-function-0035", "to": "engine:engine-function-0035", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsiteRva": "0x130C174", "role": "recurse into child nodes" }, "extensions": {} },
+    { "id": "relation-0098", "type": "invokes", "from": "engine:engine-function-0036", "to": "engine:engine-function-0020", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsiteRva": "0x130C444", "role": "send accepted child geometry to the common accumulator admission path" }, "extensions": {} },
+    { "id": "relation-0099", "type": "writes", "from": "engine:engine-virtual-function-0020", "to": "engine:engine-class-0002", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "field": "objectArray", "whenRoutingArgument": [1, 3] }, "extensions": {} },
+    { "id": "relation-0100", "type": "invokes", "from": "engine:engine-virtual-function-0020", "to": "engine:engine-function-0020", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsiteRva": "0x136F55F", "whenRoutingArgument": [2, 3], "accumulatorField": "BSParabolicCullingProcess+0x30200" }, "extensions": {} },
+    { "id": "relation-0101", "type": "reads", "from": "engine:engine-virtual-function-0020", "to": "engine:engine-class-0009", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "field": "backHemisphereAccumulator", "offset": "0x30200" }, "extensions": {} },
+    { "id": "relation-0102", "type": "invokes", "from": "engine:engine-function-0040", "to": "engine:engine-function-0038", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsiteRva": "0x5BA565", "role": "rebuild the per-frame scene-root registry" }, "extensions": {} },
+    { "id": "relation-0103", "type": "invokes", "from": "engine:engine-function-0038", "to": "engine:engine-function-0046", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsiteRva": "0x5BC15F", "condition": "existing registry count is nonzero" }, "extensions": {} },
+    { "id": "relation-0104", "type": "invokes", "from": "engine:engine-function-0038", "to": "engine:engine-function-0039", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsites": ["0x5BC1BB", "0x5BC281"], "role": "append the primary root with rank zero and each accepted additional root with its ranking value" }, "extensions": {} },
+    { "id": "relation-0105", "type": "writes", "from": "engine:engine-function-0039", "to": "engine:engine-data-0001", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "entryStride": "0x10", "fields": ["float ranking value at +0x00", "reference-counted root pointer at +0x08"] }, "extensions": {} },
+    { "id": "relation-0106", "type": "writes", "from": "engine:engine-function-0046", "to": "engine:engine-data-0001", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "operation": "release root references and reset count" }, "extensions": {} },
+    { "id": "relation-0107", "type": "invokes", "from": "engine:engine-function-0041", "to": "engine:engine-function-0019", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsiteRva": "0x13218A5", "primaryAccumulator": "global at 0x34859F0", "secondaryAccumulator": null, "cullingProcess": "global at 0x34857F0" }, "extensions": {} },
+    { "id": "relation-0108", "type": "invokes", "from": "engine:engine-function-0042", "to": "engine:engine-function-0019", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsiteRva": "0x1316207", "condition": "numeric job mode zero", "role": "drain acquired culling-process output into primary and optional secondary accumulators" }, "extensions": {} },
+    { "id": "relation-0109", "type": "invokes", "from": "engine:engine-function-0043", "to": "engine:engine-function-0019", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsiteRva": "0x1316441", "role": "drain each culling-process list entry into the selected accumulator" }, "extensions": {} },
+    { "id": "relation-0110", "type": "selects", "from": "engine:engine-function-0044", "to": "engine:engine-function-0043", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callbackRegistrationCallsites": ["0x13221E8", "0x1322274"], "schedulerCallsites": ["0x13221F6", "0x1322282"], "role": "install the same list-drain callback for both accumulation jobs" }, "extensions": {} },
+    { "id": "relation-0111", "type": "invokes", "from": "engine:engine-function-0040", "to": "engine:engine-function-0047", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsiteRva": "0x5BA55D", "role": "prepare ranked reference candidates immediately before rebuilding the scene-root registry" }, "extensions": {} },
+    { "id": "relation-0112", "type": "writes", "from": "engine:engine-function-0047", "to": "engine:engine-data-0003", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "role": "clear, populate, and order reference candidates" }, "extensions": {} },
+    { "id": "relation-0113", "type": "reads", "from": "engine:engine-function-0038", "to": "engine:engine-data-0002", "evidenceClass": "source-proven", "confidence": "confirmed", "evidenceRefs": ["evidence-0002", "evidence-0008"], "attributes": { "role": "obtain the primary PlayerCharacter reference" }, "extensions": {} },
+    { "id": "relation-0114", "type": "invokes", "from": "engine:engine-function-0038", "to": "engine:engine-virtual-function-0021", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0002", "evidence-0008"], "attributes": { "callsiteRva": "0x5BC17D", "argument": "firstPerson=false" }, "extensions": {} },
+    { "id": "relation-0115", "type": "reads", "from": "engine:engine-function-0038", "to": "engine:engine-data-0003", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "role": "iterate accepted candidates in ranked order" }, "extensions": {} },
+    { "id": "relation-0116", "type": "invokes", "from": "engine:engine-function-0038", "to": "engine:engine-virtual-function-0022", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0002", "evidence-0008"], "attributes": { "callsiteRva": "0x5BC274", "role": "resolve each candidate reference to its current 3D root" }, "extensions": {} },
+    { "id": "relation-0117", "type": "invokes", "from": "engine:engine-function-0047", "to": "engine:engine-function-0048", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsiteRva": "0x5BC37E", "role": "enumerate and rank the source actor handles before ascending sort" }, "extensions": {} },
+    { "id": "relation-0118", "type": "reads", "from": "engine:engine-function-0048", "to": "engine:engine-data-0004", "evidenceClass": "source-proven", "confidence": "confirmed", "evidenceRefs": ["evidence-0002", "evidence-0007", "evidence-0008"], "attributes": { "field": "ProcessLists::highActorHandles", "offset": "0x30" }, "extensions": {} },
+    { "id": "relation-0119", "type": "reads", "from": "engine:engine-function-0048", "to": "engine:engine-data-0002", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0002", "evidence-0008"], "attributes": { "fields": ["TESObjectREFR::data.location.x", "TESObjectREFR::data.location.y", "TESObjectREFR::data.location.z"], "offsets": ["0x54", "0x58", "0x5C"], "role": "ranking origin" }, "extensions": {} },
+    { "id": "relation-0120", "type": "invokes", "from": "engine:engine-function-0048", "to": "engine:engine-virtual-function-0022", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0002", "evidence-0008"], "attributes": { "callsiteRvas": ["0x5C17B5", "0x5C17CA"], "role": "require an available, eligible actor 3D root" }, "extensions": {} },
+    { "id": "relation-0121", "type": "invokes", "from": "engine:engine-function-0048", "to": "engine:engine-function-0049", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0008"], "attributes": { "callsiteRva": "0x5C181E", "role": "obtain horizontal extent components used to adjust center distance" }, "extensions": {} },
+    { "id": "relation-0122", "type": "writes", "from": "engine:engine-function-0048", "to": "engine:engine-data-0003", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "appendCallsiteRva": "0x5C186C", "condition": "adjustedSquaredDistance < squaredThreshold", "fields": ["adjusted squared distance at +0x00", "ActorHandle at +0x04"] }, "extensions": {} },
+    { "id": "relation-0123", "type": "implements", "from": "engine:engine-class-0002", "to": "engine:engine-virtual-function-0023", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "vfuncIndex": 29, "vtableEntryRva": "0x1815C28", "targetRva": "0xD9A7B0" }, "extensions": {} },
+    { "id": "relation-0124", "type": "implements", "from": "engine:engine-class-0011", "to": "engine:engine-virtual-function-0024", "evidenceClass": "source-proven", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "targetDispatchByteOffset": "0x1A8" }, "extensions": {} },
+    { "id": "relation-0125", "type": "declares", "from": "engine:engine-class-0010", "to": "engine:engine-function-0050", "evidenceClass": "source-proven", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0007"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0126", "type": "declares", "from": "engine:engine-class-0010", "to": "engine:engine-function-0051", "evidenceClass": "source-proven", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0007"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0127", "type": "declares", "from": "engine:engine-class-0010", "to": "engine:engine-function-0052", "evidenceClass": "source-proven", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0007"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0128", "type": "invokes", "from": "engine:engine-virtual-function-0008", "to": "engine:engine-virtual-function-0010", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsites": ["0xD99C17", "0xD99CF6", "0xD99DE4", "0xD99E1F"], "condition": "accepted object while recurseToGeometry is false" }, "extensions": {} },
+    { "id": "relation-0129", "type": "invokes", "from": "engine:engine-virtual-function-0008", "to": "engine:engine-virtual-function-0023", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsites": ["0xD99CC5", "0xD99D14", "0xD99DCA"], "role": "ordinary or compound-frustum initial world-bound test" }, "extensions": {} },
+    { "id": "relation-0130", "type": "invokes", "from": "engine:engine-virtual-function-0008", "to": "engine:engine-virtual-function-0024", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "callsites": ["0xD99D3D", "0xD99E30"], "condition": "accepted object while recurseToGeometry is true" }, "extensions": {} },
+    { "id": "relation-0131", "type": "invokes", "from": "engine:engine-virtual-function-0008", "to": "engine:engine-function-0050", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0008"], "attributes": { "callsites": ["0xD99CDD", "0xD99D28"], "role": "compound-frustum object processing after initial bound acceptance" }, "extensions": {} },
+    { "id": "relation-0132", "type": "invokes", "from": "engine:engine-virtual-function-0008", "to": "engine:engine-function-0051", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0008"], "attributes": { "callsiteRva": "0xD99C97", "role": "save compound-frustum plane state" }, "extensions": {} },
+    { "id": "relation-0133", "type": "invokes", "from": "engine:engine-virtual-function-0008", "to": "engine:engine-function-0052", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0008"], "attributes": { "callsiteRva": "0xD99D7D", "role": "restore compound-frustum plane state" }, "extensions": {} },
+    { "id": "relation-0134", "type": "invokes", "from": "engine:engine-virtual-function-0009", "to": "engine:engine-function-0004", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsiteRva": "0xD99EDA", "source": "NiCamera frustum at +0x1CC" }, "extensions": {} },
+    { "id": "relation-0135", "type": "invokes", "from": "engine:engine-virtual-function-0009", "to": "engine:engine-virtual-function-0008", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsiteRva": "0xD99F1E", "condition": "recurseToGeometry is false" }, "extensions": {} },
+    { "id": "relation-0136", "type": "invokes", "from": "engine:engine-virtual-function-0009", "to": "engine:engine-function-0053", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0008"], "attributes": { "callsiteRva": "0xD99F30", "condition": "recurseToGeometry is true" }, "extensions": {} },
+    { "id": "relation-0137", "type": "declares", "from": "engine:engine-class-0011", "to": "engine:engine-function-0053", "evidenceClass": "source-proven", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0007"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0138", "type": "declares", "from": "engine:engine-class-0012", "to": "engine:engine-function-0054", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0007", "evidence-0008"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0139", "type": "invokes", "from": "engine:engine-render-phase-0008", "to": "engine:engine-function-0054", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0004", "evidence-0008"], "attributes": { "callsiteRva": "0x1323601", "conditionFlagRva": "0x1ED4180", "drawObjectPointerRva": "0x36F1870", "argument": 0 }, "extensions": {} },
+    { "id": "relation-0140", "type": "implements", "from": "engine:engine-class-0012", "to": "engine:engine-virtual-function-0025", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0007", "evidence-0008"], "attributes": { "vfuncIndex": 2, "vtableByteOffset": "0x10", "targetRva": "0x1355A70" }, "extensions": {} },
+    { "id": "relation-0141", "type": "invokes", "from": "engine:engine-virtual-function-0025", "to": "engine:engine-function-0001", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0008"], "attributes": { "callsiteRva": "0x1355A83", "vertexDescriptor": 0, "pixelDescriptor": 0, "skipPixelShader": false }, "extensions": {} },
+    { "id": "relation-0142", "type": "selects", "from": "engine:engine-virtual-function-0025", "to": "engine:engine-technique-0009", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0008"], "attributes": { "familyScope": "OBBOcclusionTesting", "descriptorPair": "0/0" }, "extensions": {} },
+    { "id": "relation-0143", "type": "invokes", "from": "engine:engine-function-0054", "to": "engine:engine-virtual-function-0025", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "dispatch": "vtable+0x10", "role": "setup OBB technique before submission" }, "extensions": {} },
+    { "id": "relation-0144", "type": "invokes", "from": "engine:engine-function-0054", "to": "engine:engine-function-0059", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0008"], "attributes": { "primitiveTopology": "triangle list", "boxTriangleCount": 12, "boxIndexCount": 36 }, "extensions": {} },
+    { "id": "relation-0145", "type": "declares", "from": "engine:engine-class-0012", "to": "engine:engine-function-0055", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0008"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0146", "type": "declares", "from": "engine:engine-class-0012", "to": "engine:engine-function-0056", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0008"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0147", "type": "declares", "from": "engine:engine-class-0012", "to": "engine:engine-function-0057", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0008"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0148", "type": "invokes", "from": "engine:engine-function-0055", "to": "engine:engine-function-0058", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsiteRva": "0x135618D", "recordStride": "0x40" }, "extensions": {} },
+    { "id": "relation-0149", "type": "writes", "from": "engine:engine-function-0055", "to": "engine:engine-data-0005", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "fields": ["registered count +0xB0", "transformed records +0xB8", "active result slot via +0xC0 and +0xD0/+0xD8"], "capacity": 4096 }, "extensions": {} },
+    { "id": "relation-0150", "type": "reads", "from": "engine:engine-function-0054", "to": "engine:engine-data-0005", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "fields": ["registered count +0xB0", "draw resource owner +0xF0", "nested resources +0x178/+0x188"] }, "extensions": {} },
+    { "id": "relation-0151", "type": "reads", "from": "engine:engine-function-0056", "to": "engine:engine-data-0005", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "fields": ["registered count +0xB0", "active result buffer index +0xC0", "result buffers +0xD0/+0xD8", "copy resources +0x100/+0x108"] }, "extensions": {} },
+    { "id": "relation-0152", "type": "writes", "from": "engine:engine-function-0057", "to": "engine:engine-data-0005", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "fields": ["mapped instance resource +0xF8", "mapped-state byte +0xC9"], "recordStride": "0x40" }, "extensions": {} },
+    { "id": "relation-0153", "type": "reads", "from": "engine:engine-function-0059", "to": "engine:engine-data-0006", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "effect": "double registered instance count for stereo submission" }, "extensions": {} },
+    { "id": "relation-0154", "type": "invokes", "from": "engine:engine-render-phase-0008", "to": "engine:engine-function-0060", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0008"], "attributes": { "callsiteRva": "0x13235CF", "conditionRva": "0x1EC6B88", "ordering": "before OBB Draw" }, "extensions": {} },
+    { "id": "relation-0155", "type": "writes", "from": "engine:engine-function-0060", "to": "engine:engine-data-0007", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "writeRva": "0x1322F61", "value": true, "condition": "successful downscaled-depth setup" }, "extensions": {} },
+    { "id": "relation-0156", "type": "reads", "from": "engine:engine-hook-boundary-0001", "to": "engine:engine-data-0007", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "role": "gate the subsequent OBB visibility draw" }, "extensions": {} },
+    { "id": "relation-0157", "type": "reads", "from": "engine:engine-render-phase-0008", "to": "engine:engine-data-0008", "evidenceClass": "source-proven", "confidence": "confirmed", "evidenceRefs": ["evidence-0002", "evidence-0007", "evidence-0008"], "attributes": { "role": "configure depth-only engine target state at phase entry" }, "extensions": {} },
+    { "id": "relation-0158", "type": "invokes", "from": "engine:engine-render-phase-0008", "to": "engine:engine-function-0061", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0008"], "attributes": { "callsiteRva": "0x1323275", "result": "RENDER_TARGET_DEPTHSTENCIL::kMAIN (0)" }, "extensions": {} },
+    { "id": "relation-0159", "type": "invokes", "from": "engine:engine-render-phase-0008", "to": "engine:engine-function-0062", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0008"], "attributes": { "callsiteRva": "0x132328E", "depthStencilTarget": "MAIN (0)", "rawArgumentsAfterManager": { "edx": 0, "r8d": 0, "r9d": 0, "stackByte": false }, "qualification": "the target enum is exact; canonical names for the two numeric state arguments are not assigned" }, "extensions": {} },
+    { "id": "relation-0160", "type": "invokes", "from": "engine:engine-render-phase-0008", "to": "engine:engine-function-0063", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0008"], "attributes": { "callsites": ["0x13232AB", "0x13232CA", "0x13232E9"], "renderTargetSlots": [0, 1, 2], "renderTarget": "NONE (-1)", "rawStateArgumentR9": 3, "rawStackByte": true, "role": "make the phase depth-only at the engine target-state boundary" }, "extensions": {} },
+    { "id": "relation-0161", "type": "writes", "from": "engine:engine-render-phase-0008", "to": "engine:engine-data-0006", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "setRva": "0x13235E8", "restoreRva": "0x1323607", "scopedValue": true, "scope": "immediately around BSOBBOcclusionTestingShader::Draw" }, "extensions": {} },
+    { "id": "relation-0162", "type": "selects", "from": "engine:engine-hook-boundary-0001", "to": "engine:engine-data-0008", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "depthStencilTarget": "MAIN (0)", "renderTargetSlots0Through2": "NONE (-1)", "qualification": "engine target state is exact; concrete ID3D11 view and array-slice identities still require the output-merger observation join" }, "extensions": {} },
+    { "id": "relation-0163", "type": "invokes", "from": "engine:engine-virtual-function-0005", "to": "engine:engine-function-0055", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0008"], "attributes": { "callsiteRva": "0xDA1957", "resultUse": "store returned candidate-result pointer in NiAVObject+0x128", "frameStampWrite": "current frame counter to NiAVObject+0x130" }, "extensions": {} },
+    { "id": "relation-0164", "type": "invokes", "from": "engine:engine-function-0064", "to": "engine:engine-function-0056", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0008"], "attributes": { "callsiteRva": "0x132208B", "conditionRva": "0x1EC6B88", "ordering": "before active counter/result-index publication and reset-swap" }, "extensions": {} },
+    { "id": "relation-0165", "type": "invokes", "from": "engine:engine-function-0064", "to": "engine:engine-function-0057", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0008"], "attributes": { "callsiteRva": "0x13220FE", "conditionRva": "0x1EC6B88", "ordering": "after result copy, counter publication/reset-swap, and intervening view work at function tail" }, "extensions": {} },
+    { "id": "relation-0166", "type": "invokes", "from": "engine:engine-render-phase-0008", "to": "engine:engine-function-0057", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0008"], "attributes": { "callsiteRva": "0x132336A", "outerConditionRva": "0x1ED4118", "conditionRva": "0x1EC6B88", "ordering": "at depth-pass entry before scene accumulation and OBB draw" }, "extensions": {} },
+    { "id": "relation-0167", "type": "reads", "from": "engine:engine-function-0064", "to": "engine:engine-data-0005", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "fields": ["registered count +0xB0", "pending count +0xB4", "active result buffer index +0xC0", "mapped-state byte +0xC9"], "role": "publish consumed results and prepare the next registration epoch" }, "extensions": {} },
+    { "id": "relation-0168", "type": "declares", "from": "engine:engine-class-0012", "to": "engine:engine-function-0065", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0003", "evidence-0008"], "attributes": { "role": "construct singleton and allocate CPU/GPU stores" }, "extensions": {} },
+    { "id": "relation-0169", "type": "implements", "from": "engine:engine-class-0012", "to": "engine:engine-virtual-function-0026", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0007", "evidence-0008"], "attributes": { "vfuncIndex": 3, "vtableByteOffset": "0x18", "targetRva": "0x1355EA0" }, "extensions": {} },
+    { "id": "relation-0170", "type": "invokes", "from": "engine:engine-function-0054", "to": "engine:engine-virtual-function-0026", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "dispatchRva": "0x1356254", "dispatch": "vtable+0x18", "ordering": "immediately after indexed-instanced submission" }, "extensions": {} },
+    { "id": "relation-0171", "type": "invokes", "from": "engine:engine-function-0065", "to": "engine:engine-function-0066", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "calls": [ { "callsiteRva": "0x1355949", "ownerField": "+0xF8", "stride": 64, "count": 4096, "cpuWritable": true, "srv": true, "uav": false, "staging": false, "initialData": null }, { "callsiteRva": "0x1355980", "ownerField": "+0x100", "stride": 4, "count": 4096, "cpuWritable": false, "srv": true, "uav": true, "staging": true, "initialData": "+0xD0" }, { "callsiteRva": "0x13559B6", "ownerField": "+0x108", "stride": 4, "count": 4096, "cpuWritable": false, "srv": true, "uav": false, "staging": false, "initialData": "+0xD0" } ] }, "extensions": {} },
+    { "id": "relation-0172", "type": "writes", "from": "engine:engine-function-0065", "to": "engine:engine-data-0005", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "role": "allocate and zero the CPU stores, create three structured-buffer wrappers, and publish singleton 0x36F1870" }, "extensions": {} },
+    { "id": "relation-0173", "type": "invokes", "from": "engine:engine-function-0057", "to": "engine:engine-function-0067", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsiteRva": "0x13562FE", "mapType": "D3D11_MAP_WRITE_DISCARD", "source": "+0xB8 CPU records", "destination": "+0xF8 primary buffer", "stride": 64 }, "extensions": {} },
+    { "id": "relation-0174", "type": "invokes", "from": "engine:engine-virtual-function-0026", "to": "engine:engine-function-0068", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "callsiteRva": "0x1356057", "source": "+0x100 primary result buffer", "destination": "+0x100 staging buffer", "ordering": "after OBB draw, before later CPU result consumption" }, "extensions": {} },
+    { "id": "relation-0175", "type": "invokes", "from": "engine:engine-function-0056", "to": "engine:engine-function-0070", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008", "evidence-0010"], "attributes": { "callsiteRva": "0x13562A6", "subresource": 0, "mapType": "D3D11_MAP_READ", "mapFlags": 0, "source": "+0x100 staging buffer", "destination": "active +0xD0/+0xD8 CPU result buffer", "stride": 4, "completionBoundary": "successful Map return proves CPU visibility for prior commands affecting the staging allocation", "wholeFrameCompletionClaim": false }, "extensions": {} },
+    { "id": "relation-0176", "type": "invokes", "from": "engine:engine-function-0056", "to": "engine:engine-function-0069", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "tailcallRva": "0x13562C5", "source": "+0x108 zero-initialized SRV resource", "destination": "+0x100 primary result buffer", "ordering": "after staging readback" }, "extensions": {} },
+    { "id": "relation-0177", "type": "reads", "from": "engine:engine-virtual-function-0026", "to": "engine:engine-data-0005", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "fields": ["result resource wrapper +0x100"], "role": "stage GPU-written visibility results for later CPU readback" }, "extensions": {} },
+    { "id": "relation-0178", "type": "reads", "from": "engine:engine-function-0056", "to": "engine:engine-data-0005", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "fields": ["result resource +0x100", "reset source +0x108", "active CPU result buffer +0xD0/+0xD8"], "role": "consume staged results and reset GPU output storage" }, "extensions": {} },
+    { "id": "relation-0179", "type": "reads", "from": "engine:engine-virtual-function-0025", "to": "engine:engine-data-0005", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "fields": ["registered count +0xB0", "instance SRV wrapper +0xF8", "result UAV wrapper +0x100"], "bindings": ["+0xF8 SRV to slot 0 at 0x1355D80", "+0x100 UAV to slot 0 at 0x1355DA2"] }, "extensions": {} },
+    { "id": "relation-0180", "type": "writes", "from": "engine:engine-virtual-function-0026", "to": "engine:engine-data-0005", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "role": "unbind SRV/UAV slots and refresh +0x100 staging from primary after submission", "unbindCallsites": ["0x1356027", "0x1356044"], "stagingCopyCallsiteRva": "0x1356057" }, "extensions": {} },
+    { "id": "relation-0181", "type": "writes", "from": "engine:engine-virtual-function-0008", "to": "engine:engine-data-0009", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "sourceReadRva": "0xD99BB6", "propagatedWriteRva": "0xD99BCE", "restoreRva": "0xD99E6B", "operation": "save process byte; set to saved OR NiAVObject+0x122 for recursive traversal; restore saved byte before return" }, "extensions": {} },
+    { "id": "relation-0182", "type": "reads", "from": "engine:engine-virtual-function-0005", "to": "engine:engine-data-0009", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0008"], "attributes": { "readRva": "0xDA18CC", "effectWhenSet": "branch to ordinary object admission at 0xDA1971 without consuming delayed OBB result state and without calling RegisterGeometry" }, "extensions": {} },
+    { "id": "relation-0183", "type": "submits", "from": "engine:engine-function-0054", "to": "engine:engine-data-0005", "evidenceClass": "runtime-observed", "confidence": "confirmed", "evidenceRefs": ["evidence-0009"], "attributes": { "captureId": "capture-live-0000e3919eb04500-5", "sequence": 919, "operation": "DrawIndexedInstanced", "indexCountPerInstance": 36, "instanceCount": 1588, "objectCount": 794, "context": "typed immediate context", "targetState": "depth-only" }, "extensions": {} },
+    { "id": "relation-0184", "type": "writes", "from": "engine:engine-virtual-function-0026", "to": "engine:engine-data-0005", "evidenceClass": "runtime-observed", "confidence": "confirmed", "evidenceRefs": ["evidence-0009"], "attributes": { "captureId": "capture-live-0000e3919eb04500-5", "sequence": 921, "operation": "copy-resource", "source": "capture-local +0x100 primary result resource", "destination": "capture-local +0x100 staging resource", "ordering": "immediately after OBB draw" }, "extensions": {} },
+    { "id": "relation-0185", "type": "writes", "from": "engine:engine-function-0056", "to": "engine:engine-data-0005", "evidenceClass": "correlated", "confidence": "high", "evidenceRefs": ["evidence-0008", "evidence-0009"], "attributes": { "captureId": "capture-live-0000e3919eb04500-5", "sequences": [10633, 57633], "operation": "copy-resource", "destination": "capture-local +0x100 primary result resource", "source": "+0x108 reset resource from exact static call boundary; live source observation ID unavailable after catalogue exhaustion", "ordering": "after result publication and CPU result-consumption phase" }, "extensions": {} },
+    { "id": "relation-0186", "type": "observed-at", "from": "engine:engine-technique-0009", "to": "engine:engine-virtual-function-0025", "evidenceClass": "runtime-observed", "confidence": "confirmed", "evidenceRefs": ["evidence-0009"], "attributes": { "captureId": "capture-live-0000e3919eb04500-5", "sequence": 905, "callerRva": "0x1355A88", "vertexDescriptor": 0, "pixelDescriptor": 0, "vertexRoute": "engine", "pixelRoute": "engine" }, "extensions": {} }
   ],
   "evidence": [
     {
@@ -403,8 +2144,8 @@
     {
       "id": "evidence-0005",
       "class": "source-proven",
-      "statement": "The deterministic shader manifest maps Effect, Lighting, and Utility engine-cache families to compile units and passes 0073, 0114, and 0119 respectively.",
-      "artifact": { "kind": "source", "name": "shader-manifest.generated.json", "version": "schema-1", "sha256": "0b87bcfbe8828991c650537b57b03ce434c00c8387f44adf75e3beb2984b6e6f" },
+      "statement": "The deterministic shader manifest maps Effect, Lighting, and Utility engine-cache families to compile units and passes 0074, 0115, and 0120 respectively.",
+      "artifact": { "kind": "source", "name": "shader-manifest.generated.json", "version": "schema-2", "sha256": "b78fe890dbc42e865a3d6e659416ef086e39b253c56bbd9c16516268020fa2b2" },
       "locator": "docs/development/shader-analysis/shader-manifest.generated.json",
       "confidence": "confirmed",
       "extensions": {}
@@ -417,6 +2158,88 @@
       "locator": "src/ShaderCache.cpp:GetShaderDefines/GetDiskPath and src/ShaderCache.h descriptor enums",
       "confidence": "confirmed",
       "extensions": {}
+    },
+    {
+      "id": "evidence-0007",
+      "class": "source-proven",
+      "statement": "Pinned CommonLibSSE-NG headers define the exact VR class sizes, inheritance declarations, virtual slots, member layouts, vtable RVAs, and relocation IDs for the culling hierarchy, shader accumulator, and batch renderer.",
+      "artifact": { "kind": "commonlib", "name": "CommonLibSSE-NG render and culling headers", "version": "worktree-pinned", "sha256": "a1e9959b31186af291e3ff7ccd4683f8c98facff460949e44d021e7060691e85" },
+      "locator": "extern/CommonLibSSE-NG/include/RE/B/BSCullingProcess.h and related headers",
+      "confidence": "confirmed",
+      "extensions": {
+        "additionalHeaderHashes": {
+          "NiCullingProcess.h": "0787a488c25646e7c944cd79455c744f36f7211d220588481b320b1789b426f5",
+          "BSGeometryListCullingProcess.h": "1a8047e075e3894c73d28c30564425841b213ee343afee0b461f25ab2b6435a9",
+          "BSBatchRenderer.h": "b9bac67c49b5b69dd779b5bbb26381b33670955fe9d90cdabefde6d14a751e53",
+          "BSShaderAccumulator.h": "31eeaa580338843ea2f7d861435b0c10aef77c040ccc20167e389653b0794db9",
+          "ProcessLists.h": "da2a7301e8fc598a2de030e97cab8479757fd892bad48a867c83719807b925ab",
+          "BSPointerHandle.h": "cdf67c3c5beba592a4b4c015339ef065e536269e461614820031f4149110be4a",
+          "ExtraPrimitive.h": "5889d5e43653753dd4351e327270b4660b68074406306a280a9cc89eb3da0ac2",
+          "MultiBoundMarkerData.h": "e6d86c18d238348784979c4b83387903eb8f566b61609c1d27fd9714bec7c789",
+          "BSCompoundFrustum.h": "2b539327bc21fbd7f8f445e14778546975229344f8f4c6bacbfe6954c26e0d47",
+          "NiAVObject.h": "bf4945e55a738001718f53c7a6ce0688681f444186f5f91d3099013ea71cbe65",
+          "Offsets_VTABLE.h": "6ec0764fa37004e5e886f07d8df15c96ea437a9260c13f1b95dab30599056293"
+        },
+        "addressLibrary": "extern/CommonLibSSE-NG/tests/REL/version-1-4-15-0.csv"
+      }
+    },
+    {
+      "id": "evidence-0008",
+      "class": "static-reverse-engineered",
+      "statement": "The exact Skyrim VR coverage overlay assigns culling, shader-accumulator, batch-renderer, and OBB-occlusion aliases at the recorded RVAs. Raw analysis-image vtable reads independently confirm BSGeometryListCullingProcess slot 0x19, BSShaderAccumulator slot 0x2B, BSBatchRenderer slot 0x03, and the BSOBBOcclusionTestingShader virtual layout. Exact disassembly additionally proves the culling drains and accumulator dispatch paths, the 31-entry render-mode table, and the OBB producer lifecycle from transformed-bound registration through a 36-index instanced stereo-aware draw, GPU-to-staging CopyResource, CPU readback, result reset, and dynamic instance-buffer upload.",
+      "artifact": { "kind": "ghidra", "name": "SkyrimVR.pdb-coverage-overlay.json", "version": "Skyrim VR 1.4.15 paired-PDB analysis", "sha256": "dd51691262e70f7cde27adec050c3934a95ef78ad5b63e4e38a59542c0b081e8" },
+      "locator": "L:/Codex/artifacts/vanilla-skyrimvr-reference-20260822/derived-analysis/SkyrimVR.pdb-coverage-overlay.json",
+      "confidence": "high",
+      "extensions": {
+        "pairedAnalysisSha256": "73783a5ba387a3ce0fee05541080f8720f3fb153e485a4ff361393ab9fea167d",
+        "analysisProvenanceSha256": "94add42529e7317f2ed918df2f6dd0f703881df8f10a6d528230cbe2220cd629",
+        "analysisBinarySha256": "1e08d17ca4195c1d7296c076034577cc05c98c26a0d9b8f38ae5c6edbba4e8fe"
+      }
+    },
+    {
+      "id": "evidence-0009",
+      "class": "runtime-observed",
+      "statement": "The verified Breezehome live capture joins the engine-routed OBBOcclusionTesting 0/0 technique to a depth-only immediate-context submission, a 4096 x 64-byte dynamic input SRV, a 4096 x uint32 result UAV, one 36-index/1588-instance draw for 794 objects, primary-to-staging CopyResource, result version publication, per-frame reset copies, 721 same-version lighting consumers, and 721 following-frame CPU-readback cull decisions (489 visible, 232 occluded).",
+      "artifact": { "kind": "runtime-capture", "name": "capture-live-0000e3919eb04500-5/events.jsonl", "version": "communityshaders.render-map 1.6 schema revision 7", "sha256": "6aafb2d98bb3b2331cfb10bbddfbc2ae81537ef1f37beb6c6aaeec84be6ea5e1" },
+      "locator": "L:/Codex/evidence/render-map/20260829-obb-resource-live-join/capture/capture-live-0000e3919eb04500-5/events.jsonl",
+      "confidence": "confirmed",
+      "extensions": {
+        "captureManifestSha256": "f340746ea1baa9edd27fcd54b82ae98a7b85edae65f61064f94c5aac4a14c78d",
+        "renderGraphSha256": "7d5e407e6b290fc4f5102bb4c14a8cc6d6bb1d158d2b031d07442fef066d2854",
+        "buildId": "aa2f9b2040fb72d9e1404fd07f7913d6cb7b6fd69e65e0c6e4ec1e9ef49db305",
+        "sourceCommit": "b223489b6b2afb5441409b3e17e826ff964efb50",
+        "scenario": "verified Breezehome interior fixture under Valve null HMD",
+        "complete": false,
+        "completionReason": "event-limit"
+      }
+    },
+    {
+      "id": "evidence-0010",
+      "class": "source-proven",
+      "statement": "The Direct3D 11 Map contract and map-flag contract establish that DO_NOT_WAIT returns DXGI_ERROR_WAS_STILL_DRAWING when the GPU still owns a resource; the Windows allocation-usage contract requires a synchronizing map without that flag to wait until the allocation is available for CPU access. Paired with exact target disassembly showing D3D11_MAP_READ and flags zero, successful return from Skyrim's staging Map is the allocation-scoped CPU-visibility boundary.",
+      "artifact": { "kind": "other", "name": "Microsoft Direct3D 11 Map and allocation synchronization contracts", "version": "retrieved 2026-08-29", "sha256": null },
+      "locator": "https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-map",
+      "confidence": "confirmed",
+      "extensions": {
+        "mapFlagContract": "https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ne-d3d11-d3d11_map_flag",
+        "allocationUsageContract": "https://learn.microsoft.com/en-us/windows-hardware/drivers/display/allocation-usage-tracking",
+        "scope": "CPU access synchronization for the mapped staging allocation only"
+      }
+    },
+    {
+      "id": "evidence-0011",
+      "class": "validated-across-runs",
+      "statement": "A dependency-complete ordinary capture, with diagnostic technique events disabled, joins the final accepted-eye producer draw to exact Effect descriptor 0x42 vertex and pixel loader aliases, managed cache paths, compiled bytecode hashes, the deterministic Effect compile unit, and both compositor submissions. The derived graph resolves the pair to engine-technique-0004 and compile-0074 without ambiguity.",
+      "artifact": { "kind": "runtime-capture", "name": "capture-live-0000edcb824d3ac8-1/events.jsonl", "version": "communityshaders.render-map 1.9", "sha256": "057599dc1654b946edaaa5501169ccfbffa988251ab8889fb3501ba09864da3f" },
+      "locator": "L:/Codex/evidence/render-map/20260829-semantic-state-final-live/events.jsonl",
+      "confidence": "confirmed",
+      "extensions": {
+        "captureManifestSha256": "278f111adac5341d25197e34904c708162f9be5cb859a7a9618dda526a726be9",
+        "shaderManifestSha256": "e6f6f0bdbf38916f43fe1975363e29ea2eea234f101c1f3eb1146c9f89c68522",
+        "sourceCommit": "b223489b6b2afb5441409b3e17e826ff964efb50",
+        "vertex": { "descriptor": 66, "cachePath": "Data/ShaderCache/Effect/42.vso", "bytecodeSha256": "0d26605c847407eefd513eda14498f2e7834187c7ebe0f4b59139228ef3c94c3" },
+        "pixel": { "descriptor": 66, "cachePath": "Data/ShaderCache/Effect/42.pso", "bytecodeSha256": "59edd046541167da07698d5a3d4027f490d457fdffaa40e5200a212c039fbe58" }
+      }
     }
   ],
   "unresolved": [
@@ -425,23 +2248,15 @@
       "question": "Which concrete ImageSpace shader names and compile units produced the observed 0/0 descriptor calls?",
       "relatedRefs": ["engine:engine-shader-family-0001", "engine:engine-technique-0001"],
       "blocking": true,
-      "nextEvidence": "Record BSImagespaceShader::name/fxpFilename and the descriptor resolved by GetImagespaceShaderDescriptor at the technique boundary.",
-      "extensions": {}
-    },
-    {
-      "id": "unresolved-0002",
-      "question": "Can the candidate function at RVA 0x1341190 be independently named BSEffectShader::SetupTechnique?",
-      "relatedRefs": ["engine:engine-virtual-function-0002", "engine:engine-shader-family-0003"],
-      "blocking": false,
-      "nextEvidence": "Identify the Effect shader vtable or a typed instance and verify that slot 2 targets RVA 0x1341190.",
+      "nextEvidence": "Record BSImagespaceShader::name/fxpFilename and the descriptor resolved by GetImagespaceShaderDescriptor at the technique boundary. Do not merge this family-scoped identity with the independently mapped OBBOcclusionTesting 0/0 pair.",
       "extensions": {}
     },
     {
       "id": "unresolved-0003",
-      "question": "Which exact compiled cache files backed each observed descriptor pair?",
-      "relatedRefs": ["engine:engine-technique-0002", "engine:engine-technique-0003", "engine:engine-technique-0004", "engine:engine-technique-0005", "engine:engine-technique-0006", "engine:engine-technique-0007", "engine:engine-technique-0008"],
+      "question": "Which exact compiled cache files backed the observed descriptor pairs other than the now-closed Effect 0x42/0x42 final producer?",
+      "relatedRefs": ["engine:engine-technique-0002", "engine:engine-technique-0003", "engine:engine-technique-0005", "engine:engine-technique-0006", "engine:engine-technique-0007", "engine:engine-technique-0008"],
       "blocking": true,
-      "nextEvidence": "Supply the shader-define snapshot, cache inventory identity, resolved disk path, and selected vertex/pixel shader object identity in the same capture.",
+      "nextEvidence": "For each remaining pair, supply the shader-define snapshot, cache inventory identity, resolved disk path, and selected vertex/pixel shader object identity in the same capture. Effect 0x42/0x42 already has exact paths and bytecode identity; it still needs the resident feature-define snapshot only if reproducible source-to-bytecode reconstruction is required.",
       "extensions": {}
     },
     {
@@ -454,10 +2269,34 @@
     },
     {
       "id": "unresolved-0005",
-      "question": "Which eye, command context, render/depth targets, and draw calls consumed each selected technique?",
-      "relatedRefs": ["engine:engine-function-0001"],
+      "question": "Which exact eye submissions, depth array slices, reset-source live identity, and measured engine Map stall complete the now-live-mapped OBB producer and its wider selected-technique consumers?",
+      "relatedRefs": ["engine:engine-function-0001", "engine:engine-class-0012", "engine:engine-virtual-function-0025", "engine:engine-virtual-function-0026", "engine:engine-function-0054", "engine:engine-function-0055", "engine:engine-function-0056", "engine:engine-function-0057", "engine:engine-function-0059", "engine:engine-function-0060", "engine:engine-function-0064", "engine:engine-function-0065", "engine:engine-function-0066", "engine:engine-function-0067", "engine:engine-function-0068", "engine:engine-function-0069", "engine:engine-function-0070", "engine:engine-data-0005", "engine:engine-data-0006", "engine:engine-data-0007", "engine:engine-hook-boundary-0001", "engine:engine-technique-0009"],
       "blocking": true,
-      "nextEvidence": "Add typed observation declarations, device-context command sequence, target bindings, bound pipeline identity, and bounded Draw/Dispatch events.",
+      "nextEvidence": "The Breezehome live join now fixes the engine-routed OBB 0/0 technique, depth-only output-merger state, typed immediate context, 4096 x 64-byte input SRV, 4096 x uint32 result UAV/staging resources, one 36-index 2N draw, result version, consumers, reset destination, and following-frame CPU-readback decisions. Exact disassembly plus the D3D11 contract now fixes successful staging Map return as the allocation-scoped CPU-visibility boundary. Capture the +0x108 reset source before catalogue exhaustion, measured Map stall latency, exact depth array slice, and accepted eye submissions under both null-HMD and physical SteamVR routes. Use event-class filtering or segmented identity persistence so a >20,000-event loaded frame does not trade event truncation for catalogue truncation.",
+      "extensions": {}
+    },
+    {
+      "id": "unresolved-0006",
+      "question": "Which Skyrim VR 1.4.15 owners populate the separate culling-process inputs, and what canonical engine name should be assigned to the primitive-or-marker extent vector used by the now-mapped high-process actor ranking path?",
+      "relatedRefs": ["engine:engine-class-0001", "engine:engine-class-0002", "engine:engine-class-0003", "engine:engine-data-0001", "engine:engine-data-0002", "engine:engine-data-0003", "engine:engine-data-0004", "engine:engine-function-0034", "engine:engine-function-0035", "engine:engine-function-0036", "engine:engine-function-0038", "engine:engine-function-0039", "engine:engine-function-0040", "engine:engine-function-0047", "engine:engine-function-0048", "engine:engine-function-0049", "engine:engine-virtual-function-0021", "engine:engine-virtual-function-0022", "engine:engine-render-phase-0008"],
+      "blocking": true,
+      "nextEvidence": "The additional scene-root source is now exact: ProcessLists::highActorHandles is filtered to actors with eligible 3D, ranked by max(1, squared center distance from PlayerCharacter minus squared maximum horizontal extent), thresholded against 450 squared by default, and sorted ascending. Resolve the BGSPrimitive vector's canonical field name, then trace owners into BSGeometryListCullingProcess::AppendNonAccum and correlate the separate producer systems with shadow-scene nodes, cell, portal, water, grass, and LOD sources without importing the SSE 1.6.1170 BuildSceneLists identity.",
+      "extensions": { "priorArtClaim": "prior-claim-0003" }
+    },
+    {
+      "id": "unresolved-0007",
+      "question": "What canonical Bethesda field name, if any, belongs to the now-functionally-mapped NiAVObject+0x122 subtree OBB-occlusion bypass source?",
+      "relatedRefs": ["engine:engine-class-0002", "engine:engine-class-0010", "engine:engine-class-0011", "engine:engine-virtual-function-0005", "engine:engine-virtual-function-0008", "engine:engine-virtual-function-0009", "engine:engine-virtual-function-0010", "engine:engine-virtual-function-0011", "engine:engine-virtual-function-0012", "engine:engine-virtual-function-0013", "engine:engine-virtual-function-0014", "engine:engine-virtual-function-0023", "engine:engine-virtual-function-0024", "engine:engine-function-0050", "engine:engine-function-0051", "engine:engine-function-0052", "engine:engine-function-0053", "engine:engine-data-0009"],
+      "blocking": false,
+      "nextEvidence": "Functional semantics are exact: Process1 propagates object+0x122 through the low byte at BSCullingProcess+0x301D6 for the subtree and restores the prior value; AppendNonAccum bypasses delayed OBB result handling and new OBB registration when it is set. Retain the descriptive name unless a paired symbol/type source supplies Bethesda's canonical field name. Live evidence may add bounded per-branch counts but is not needed to establish this control-flow role.",
+      "extensions": { "priorArtClaim": "prior-claim-0004" }
+    },
+    {
+      "id": "unresolved-0008",
+      "question": "What registers the remaining culling accumulation worker at 0x1316190, and what are the exact semantics of each specialized render-mode geometry and pre-resolve handler?",
+      "relatedRefs": ["engine:engine-virtual-function-0005", "engine:engine-class-0002", "engine:engine-class-0009", "engine:engine-virtual-function-0020", "engine:engine-function-0019", "engine:engine-function-0024", "engine:engine-function-0020", "engine:engine-function-0021", "engine:engine-function-0022", "engine:engine-function-0023", "engine:engine-function-0016", "engine:engine-virtual-function-0019", "engine:engine-class-0007", "engine:engine-class-0005", "engine:engine-function-0010", "engine:engine-function-0041", "engine:engine-function-0042", "engine:engine-function-0043", "engine:engine-function-0044", "engine:engine-function-0045"],
+      "blocking": false,
+      "nextEvidence": "Main's direct post-cull callback at 0x1321830 and MainAccum's two registered list callbacks at 0x13163F0 now identify concrete owners of 0xD9A190; the mode-dependent worker at 0x1316190 is also exact but its registration site is not. Resolve that registration, the numeric-mode 28/29 semantic discrepancy, the target/CommonLib BSParabolic layout discrepancy, and detailed mapped pre-resolve semantics; live evidence should add capture-local object, geometry, material, accumulator, and BSRenderPass identities without process-global last-seen state.",
       "extensions": {}
     }
   ],
@@ -466,6 +2305,18 @@
     "captureId": "capture-live-00008b13098138bc-1",
     "semanticFrameSignatures": 1,
     "observedFrames": 120,
-    "rawPointersAreStableIdentity": false
+    "rawPointersAreStableIdentity": false,
+    "latestWorldCapture": {
+      "scenario": "verified Breezehome interior under Valve null HMD",
+      "captureId": "capture-live-0000e3919eb04500-5",
+      "cpuFramesRepresented": [58827, 58828, 58829],
+      "eventCount": 60000,
+      "truncated": true,
+      "obbObjectCount": 794,
+      "obbInstanceCount": 1588,
+      "cullDecisionCount": 721,
+      "eventSha256": "6aafb2d98bb3b2331cfb10bbddfbc2ae81537ef1f37beb6c6aaeec84be6ea5e1",
+      "renderGraphSha256": "7d5e407e6b290fc4f5102bb4c14a8cc6d6bb1d158d2b031d07442fef066d2854"
+    }
   }
 }

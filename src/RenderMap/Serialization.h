@@ -10,6 +10,8 @@
 namespace CSX::RenderMap
 {
 	nlohmann::json SerializeBounds(const CollectorConfig& a_config);
+	nlohmann::json SerializeEventKindMask(EventKindMask a_mask);
+	nlohmann::json SerializeGeometryShaderTypeMask(std::uint64_t a_mask);
 	nlohmann::json SerializeControllerStatus(const ControllerSnapshot& a_status);
 	nlohmann::json SerializeCaptureSummary(const CompletedCapture& a_capture);
 	nlohmann::json SerializeEvent(

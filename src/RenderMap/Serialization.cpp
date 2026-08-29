@@ -12,24 +12,6 @@ namespace CSX::RenderMap
 	{
 		using json = nlohmann::json;
 
-		const char* EventKindName(EventKind a_kind) noexcept
-		{
-			static constexpr std::array names{
-				"capture-marker", "gap", "frame-begin", "frame-end",
-				"scene-accumulation-begin", "scene-accumulation-end", "eye-begin", "eye-end",
-				"object-observed", "geometry-observed", "material-observed", "render-pass-created",
-				"render-pass-enter", "render-pass-exit", "technique-begin", "technique-end",
-				"geometry-setup-begin", "geometry-setup-end", "pipeline-object-created", "pipeline-bind",
-				"render-target-bind", "depth-source-ready", "visibility-candidate", "visibility-result-ready",
-				"visibility-consumed", "cull-decision", "draw", "dispatch", "finish-command-list",
-				"execute-command-list", "shader-observed", "stage-shader-observed", "technique-resolved",
-				"device-context-observed", "target-view-observed", "resource-observed",
-				"resource-view-bind", "resource-flow", "resource-version-observed", "eye-submitted",
-			};
-			const auto index = static_cast<std::size_t>(a_kind);
-			return index < names.size() ? names[index] : "gap";
-		}
-
 		const char* StopReasonName(StopReason a_reason) noexcept
 		{
 			switch (a_reason) {
@@ -92,10 +74,22 @@ namespace CSX::RenderMap
 				json(std::format("obs-resource-version-{}-g{}", a_observationId, a_generation));
 		}
 
+		json CpuMapObservationId(std::uint64_t a_observationId, std::uint64_t a_generation)
+		{
+			return a_observationId == 0 ? json(nullptr) :
+				json(std::format("obs-cpu-map-{}-g{}", a_observationId, a_generation));
+		}
+
 		json SubmissionObservationId(std::uint64_t a_observationId, std::uint64_t a_generation)
 		{
 			return a_observationId == 0 ? json(nullptr) :
 				json(std::format("obs-submission-{}-g{}", a_observationId, a_generation));
+		}
+
+		json GeometrySetupObservationId(std::uint64_t a_observationId, std::uint64_t a_generation)
+		{
+			return a_observationId == 0 ? json(nullptr) :
+				json(std::format("obs-geometry-{}-g{}", a_observationId, a_generation));
 		}
 
 		float UnpackFloat(std::uint64_t a_value, bool a_high) noexcept
@@ -182,6 +176,18 @@ namespace CSX::RenderMap
 			}
 		}
 
+		const char* ResourceMapTypeName(std::uint32_t a_mapType) noexcept
+		{
+			switch (a_mapType) {
+			case 1: return "read";
+			case 2: return "write";
+			case 3: return "read-write";
+			case 4: return "write-discard";
+			case 5: return "write-no-overwrite";
+			default: return "unknown";
+			}
+		}
+
 		const char* ResourceStageName(ResourceStage a_stage) noexcept
 		{
 			switch (a_stage) {
@@ -192,6 +198,24 @@ namespace CSX::RenderMap
 			case ResourceStage::kCompute: return "compute";
 			case ResourceStage::kOutputMerger: return "output-merger";
 			default: return "vertex";
+			}
+		}
+
+		const char* ResourceBindingSourceName(ResourceBindingSource a_source) noexcept
+		{
+			switch (a_source) {
+			case ResourceBindingSource::kPostCallQuery: return "post-call-query";
+			case ResourceBindingSource::kCaptureStateSnapshot: return "capture-state-snapshot";
+			default: return "requested-call";
+			}
+		}
+
+		const char* TargetBindingSourceName(TargetBindingSource a_source) noexcept
+		{
+			switch (a_source) {
+			case TargetBindingSource::kCaptureStateSnapshot: return "capture-state-snapshot";
+			case TargetBindingSource::kPostCallQuery: return "post-call-query";
+			default: return "observed-call";
 			}
 		}
 
@@ -214,6 +238,24 @@ namespace CSX::RenderMap
 		{
 			return a_observationId == 0 ? json(nullptr) :
 				json(std::format("obs-target-binding-{}-g{}", a_observationId, a_generation));
+		}
+
+		json SceneObjectObservationId(std::uint64_t a_observationId, std::uint64_t a_generation)
+		{
+			return a_observationId == 0 ? json(nullptr) :
+				json(std::format("obs-scene-object-{}-g{}", a_observationId, a_generation));
+		}
+
+		json GeometryObservationId(std::uint64_t a_observationId, std::uint64_t a_generation)
+		{
+			return a_observationId == 0 ? json(nullptr) :
+				json(std::format("obs-geometry-{}-g{}", a_observationId, a_generation));
+		}
+
+		json MaterialStateObservationId(std::uint64_t a_observationId, std::uint64_t a_generation)
+		{
+			return a_observationId == 0 ? json(nullptr) :
+				json(std::format("obs-material-state-{}-g{}", a_observationId, a_generation));
 		}
 
 		const ShaderObservationRecord* FindShaderObservation(
@@ -286,10 +328,58 @@ namespace CSX::RenderMap
 			return found == a_snapshot->targetBindingObservations.end() ? nullptr : std::addressof(*found);
 		}
 
+		const SceneObjectObservationRecord* FindSceneObjectObservation(
+			const CaptureSnapshot* a_snapshot, std::uint64_t a_observationId) noexcept
+		{
+			if (!a_snapshot || a_observationId == 0)
+				return nullptr;
+			const auto found = std::find_if(
+				a_snapshot->sceneObjectObservations.begin(), a_snapshot->sceneObjectObservations.end(),
+				[&](const SceneObjectObservationRecord& a_record) { return a_record.observationId == a_observationId; });
+			return found == a_snapshot->sceneObjectObservations.end() ? nullptr : std::addressof(*found);
+		}
+
+		const GeometryObservationRecord* FindGeometryObservation(
+			const CaptureSnapshot* a_snapshot, std::uint64_t a_observationId) noexcept
+		{
+			if (!a_snapshot || a_observationId == 0)
+				return nullptr;
+			const auto found = std::find_if(
+				a_snapshot->geometryObservations.begin(), a_snapshot->geometryObservations.end(),
+				[&](const GeometryObservationRecord& a_record) { return a_record.observationId == a_observationId; });
+			return found == a_snapshot->geometryObservations.end() ? nullptr : std::addressof(*found);
+		}
+
+		const MaterialStateObservationRecord* FindMaterialStateObservation(
+			const CaptureSnapshot* a_snapshot, std::uint64_t a_observationId) noexcept
+		{
+			if (!a_snapshot || a_observationId == 0)
+				return nullptr;
+			const auto found = std::find_if(
+				a_snapshot->materialStateObservations.begin(), a_snapshot->materialStateObservations.end(),
+				[&](const MaterialStateObservationRecord& a_record) { return a_record.observationId == a_observationId; });
+			return found == a_snapshot->materialStateObservations.end() ? nullptr : std::addressof(*found);
+		}
+
 		template <std::size_t N>
 		json OptionalStoredString(const std::array<char, N>& a_value)
 		{
 			return a_value[0] == '\0' ? json(nullptr) : json(a_value.data());
+		}
+
+		const char* MaterialTextureRoleName(MaterialTextureRole a_role) noexcept
+		{
+			switch (a_role) {
+			case MaterialTextureRole::kRuntimeMaterialList: return "runtime-material-list";
+			case MaterialTextureRole::kEffectSource: return "effect-source";
+			case MaterialTextureRole::kEffectGreyscale: return "effect-greyscale";
+			case MaterialTextureRole::kWaterStaticReflection: return "water-static-reflection";
+			case MaterialTextureRole::kWaterNormal1: return "water-normal-1";
+			case MaterialTextureRole::kWaterNormal2: return "water-normal-2";
+			case MaterialTextureRole::kWaterNormal3: return "water-normal-3";
+			case MaterialTextureRole::kWaterNormal4: return "water-normal-4";
+			default: return "unknown";
+			}
 		}
 
 		json SerializeShaderObservation(
@@ -300,7 +390,7 @@ namespace CSX::RenderMap
 			const auto observationId = a_payload.words[0];
 			if (!a_observation) {
 				return {
-					{ "schema", "shader-observation-v1" },
+					{ "schema", "shader-observation-v2" },
 					{ "shaderObservationId", ShaderObservationId(observationId, a_generation) },
 					{ "shaderPointer", PointerEvidence(a_payload.words[1]) },
 					{ "pointerGeneration", a_payload.words[2] },
@@ -309,21 +399,23 @@ namespace CSX::RenderMap
 				};
 			}
 			return {
-				{ "schema", "shader-observation-v1" },
+				{ "schema", "shader-observation-v2" },
 				{ "shaderObservationId", ShaderObservationId(observationId, a_generation) },
 				{ "shaderPointer", PointerEvidence(a_observation->pointerEvidence) },
 				{ "pointerGeneration", a_observation->pointerGeneration },
 				{ "shaderType", a_observation->shaderType },
 				{ "fxpFilename", OptionalStoredString(a_observation->fxpFilename) },
 				{ "imageSpaceName", OptionalStoredString(a_observation->imageSpaceName) },
+				{ "compileSourceName", OptionalStoredString(a_observation->compileSourceName) },
 				{ "definesSuffix", OptionalStoredString(a_observation->definesSuffix) },
 				{ "truncated", {
 					{ "fxpFilename", a_observation->fxpFilenameTruncated },
 					{ "imageSpaceName", a_observation->imageSpaceNameTruncated },
+					{ "compileSourceName", a_observation->compileSourceNameTruncated },
 					{ "definesSuffix", a_observation->definesSuffixTruncated },
 				} },
 				{ "identityDetailsAvailable", true },
-				{ "identityBasis", json::array({ "pointer", "shaderType", "fxpFilename", "imageSpaceName", "definesSuffix" }) },
+				{ "identityBasis", json::array({ "pointer", "shaderType", "fxpFilename", "imageSpaceName", "compileSourceName", "definesSuffix" }) },
 			};
 		}
 
@@ -336,7 +428,7 @@ namespace CSX::RenderMap
 			const auto observationId = a_payload.words[0];
 			if (!a_observation) {
 				return {
-					{ "schema", "stage-shader-observation-v1" },
+					{ "schema", "stage-shader-observation-v3" },
 					{ "stageShaderObservationId", StageShaderObservationId(stage, observationId, a_generation) },
 					{ "stage", ShaderStageName(stage) },
 					{ "d3dObjectPointer", PointerEvidence(a_payload.words[1]) },
@@ -344,11 +436,25 @@ namespace CSX::RenderMap
 					{ "pointerGeneration", a_payload.words[3] },
 					{ "wrapperDescriptor", a_payload.words[5] },
 					{ "bytecodeSize", a_payload.words[6] },
+					{ "engineAliases", json::array() },
+					{ "engineAliasTotalCount", 0 },
 					{ "identityDetailsAvailable", false },
 				};
 			}
+			json engineAliases = json::array();
+			for (std::uint32_t index = 0; index < a_observation->engineAliasCount; ++index) {
+				engineAliases.push_back({
+					{ "loaderType", OptionalStoredString(a_observation->engineAliases[index].loaderType) },
+					{ "compileSourceName", OptionalStoredString(a_observation->engineAliases[index].compileSourceName) },
+					{ "descriptor", a_observation->engineAliases[index].descriptor },
+					{ "truncated", {
+						{ "loaderType", a_observation->engineAliases[index].loaderTypeTruncated },
+						{ "compileSourceName", a_observation->engineAliases[index].compileSourceNameTruncated },
+					} },
+				});
+			}
 			return {
-				{ "schema", "stage-shader-observation-v1" },
+				{ "schema", "stage-shader-observation-v3" },
 				{ "stageShaderObservationId", StageShaderObservationId(
 					a_observation->stage, observationId, a_generation) },
 				{ "stage", ShaderStageName(a_observation->stage) },
@@ -359,20 +465,151 @@ namespace CSX::RenderMap
 				{ "bytecodeSize", a_observation->bytecodeSize },
 				{ "bytecodeSha256", OptionalStoredString(a_observation->bytecodeSha256) },
 				{ "cachePath", OptionalStoredString(a_observation->cachePath) },
+				{ "engineAliases", std::move(engineAliases) },
+				{ "engineAliasTotalCount", a_observation->engineAliasTotalCount },
 				{ "truncated", {
 					{ "bytecodeSha256", a_observation->bytecodeSha256Truncated },
 					{ "cachePath", a_observation->cachePathTruncated },
+					{ "engineAliases", a_observation->engineAliasesTruncated },
 				} },
 				{ "identityDetailsAvailable", true },
 				{ "identityBasis", json::array({
-					"stage", "wrapper", "d3dObject", "wrapperDescriptor", "bytecodeSha256", "cachePath" }) },
+					"stage", "wrapper", "d3dObject", "wrapperDescriptor", "bytecodeSha256", "cachePath",
+					"engineAliases" }) },
+			};
+		}
+
+		json SerializeSceneObjectObservation(
+			const SceneObjectObservationRecord* a_observation,
+			const EventPayload& a_payload,
+			std::uint64_t a_generation)
+		{
+			const auto observationId = a_payload.words[0];
+			if (!a_observation) {
+				return {
+					{ "schema", "scene-object-observation-v1" },
+					{ "sceneObjectObservationId", SceneObjectObservationId(observationId, a_generation) },
+					{ "referencePointer", PointerEvidence(a_payload.words[1]) },
+					{ "pointerGeneration", a_payload.words[2] },
+					{ "identityDetailsAvailable", false },
+				};
+			}
+			return {
+				{ "schema", "scene-object-observation-v1" },
+				{ "sceneObjectObservationId", SceneObjectObservationId(observationId, a_generation) },
+				{ "referencePointer", PointerEvidence(a_observation->pointerEvidence) },
+				{ "pointerGeneration", a_observation->pointerGeneration },
+				{ "referenceFormId", std::format("0x{:08X}", a_observation->referenceFormId) },
+				{ "baseFormId", a_observation->baseFormId == 0 ? json(nullptr) : json(std::format("0x{:08X}", a_observation->baseFormId)) },
+				{ "referenceName", OptionalStoredString(a_observation->referenceName) },
+				{ "baseFormName", OptionalStoredString(a_observation->baseFormName) },
+				{ "referenceFormDynamic", a_observation->referenceFormDynamic },
+				{ "baseFormDynamic", a_observation->baseFormDynamic },
+				{ "truncated", {
+					{ "referenceName", a_observation->referenceNameTruncated },
+					{ "baseFormName", a_observation->baseFormNameTruncated },
+				} },
+				{ "identityDetailsAvailable", true },
+			};
+		}
+
+		json SerializeGeometryObservation(
+			const GeometryObservationRecord* a_observation,
+			const EventPayload& a_payload,
+			std::uint64_t a_generation)
+		{
+			const auto observationId = a_payload.words[0];
+			if (!a_observation) {
+				return {
+					{ "schema", "geometry-observation-v1" },
+					{ "geometryObservationId", GeometryObservationId(observationId, a_generation) },
+					{ "geometryPointer", PointerEvidence(a_payload.words[1]) },
+					{ "pointerGeneration", a_payload.words[2] },
+					{ "identityDetailsAvailable", false },
+				};
+			}
+			return {
+				{ "schema", "geometry-observation-v1" },
+				{ "geometryObservationId", GeometryObservationId(observationId, a_generation) },
+				{ "geometryPointer", PointerEvidence(a_observation->pointerEvidence) },
+				{ "pointerGeneration", a_observation->pointerGeneration },
+				{ "runtimeTypeName", OptionalStoredString(a_observation->runtimeTypeName) },
+				{ "name", OptionalStoredString(a_observation->name) },
+				{ "geometryType", a_observation->geometryType },
+				{ "vertexDescriptor", a_observation->vertexDescriptor },
+				{ "sceneObjectObservationId", SceneObjectObservationId(
+					a_observation->sceneObjectObservationId, a_generation) },
+				{ "worldTransform", a_observation->worldTransformAvailable ? json(a_observation->worldTransform) : json(nullptr) },
+				{ "worldBound", a_observation->worldBoundAvailable ? json(a_observation->worldBound) : json(nullptr) },
+				{ "truncated", {
+					{ "runtimeTypeName", a_observation->runtimeTypeNameTruncated },
+					{ "name", a_observation->nameTruncated },
+				} },
+				{ "identityDetailsAvailable", true },
+			};
+		}
+
+		json SerializeMaterialStateObservation(
+			const MaterialStateObservationRecord* a_observation,
+			const EventPayload& a_payload,
+			std::uint64_t a_generation)
+		{
+			const auto observationId = a_payload.words[0];
+			if (!a_observation) {
+				return {
+					{ "schema", "material-state-observation-v1" },
+					{ "materialStateObservationId", MaterialStateObservationId(observationId, a_generation) },
+					{ "shaderPropertyPointer", PointerEvidence(a_payload.words[1]) },
+					{ "materialPointer", PointerEvidence(a_payload.words[2]) },
+					{ "stateRevision", a_payload.words[3] },
+					{ "fingerprint", std::format("0x{:016X}", a_payload.words[4]) },
+					{ "textureBindings", json::array() },
+					{ "textureBindingsTruncated", false },
+					{ "identityDetailsAvailable", false },
+				};
+			}
+			json textureBindings = json::array();
+			for (std::size_t index = 0; index < a_observation->textureBindingCount; ++index) {
+				const auto& binding = a_observation->textureBindings[index];
+				textureBindings.push_back({
+					{ "role", MaterialTextureRoleName(binding.role) },
+					{ "bindingIndex", binding.bindingIndex },
+					{ "niSourceTexturePointer", PointerEvidence(binding.niSourceTextureEvidence) },
+					{ "path", OptionalStoredString(binding.path) },
+					{ "resourceObservationId", ResourceObservationId(binding.resourceObservationId, a_generation) },
+					{ "pathTruncated", binding.pathTruncated },
+				});
+			}
+			return {
+				{ "schema", "material-state-observation-v1" },
+				{ "materialStateObservationId", MaterialStateObservationId(observationId, a_generation) },
+				{ "stateRevision", a_observation->stateRevision },
+				{ "fingerprint", std::format("0x{:016X}", a_observation->fingerprint) },
+				{ "shaderPropertyPointer", PointerEvidence(a_observation->shaderPropertyEvidence) },
+				{ "shaderPropertyRuntimeTypeName", OptionalStoredString(a_observation->shaderPropertyRuntimeTypeName) },
+				{ "shaderPropertyFlags", a_observation->shaderPropertyFlags },
+				{ "alpha", a_observation->alpha },
+				{ "engineMaterialType", a_observation->engineMaterialType },
+				{ "materialPointer", PointerEvidence(a_observation->materialEvidence) },
+				{ "materialType", a_observation->materialType },
+				{ "feature", a_observation->feature },
+				{ "hashKey", a_observation->hashKey },
+				{ "textureBindings", std::move(textureBindings) },
+				{ "textureBindingsTruncated", a_observation->textureBindingsTruncated },
+				{ "shaderPropertyAvailable", a_observation->shaderPropertyAvailable },
+				{ "materialAvailable", a_observation->materialAvailable },
+				{ "truncated", {
+					{ "shaderPropertyRuntimeTypeName", a_observation->shaderPropertyRuntimeTypeNameTruncated },
+				} },
+				{ "identityDetailsAvailable", true },
 			};
 		}
 
 		json SerializeTargetBinding(
 			const TargetBindingObservationRecord* a_binding,
 			std::uint64_t a_observationId,
-			std::uint64_t a_generation)
+			std::uint64_t a_generation,
+			TargetBindingSource a_source)
 		{
 			json renderTargets = json::array();
 			if (a_binding) {
@@ -383,7 +620,8 @@ namespace CSX::RenderMap
 				}
 			}
 			return {
-				{ "schema", "render-target-binding-v1" },
+				{ "schema", "render-target-binding-v2" },
+				{ "source", TargetBindingSourceName(a_source) },
 				{ "targetBindingObservationId", TargetBindingObservationId(a_observationId, a_generation) },
 				{ "renderTargetObservationIds", std::move(renderTargets) },
 				{ "depthTargetObservationId", TargetViewObservationId(
@@ -450,6 +688,60 @@ namespace CSX::RenderMap
 			std::uint64_t pointerEvidence = 0;
 			const char* role = nullptr;
 			switch (static_cast<PayloadSchema>(a_event.payload.schema)) {
+			case PayloadSchema::kSceneObjectObservation:
+				return json::array({ {
+					{ "id", SceneObjectObservationId(a_event.payload.words[0], a_event.sessionGeneration) },
+					{ "kind", "scene-object" },
+					{ "role", "first-observed" },
+					{ "pointerEvidence", PointerEvidence(a_event.payload.words[1]) },
+				} });
+			case PayloadSchema::kGeometryObservation: {
+				json refs = json::array({ {
+					{ "id", GeometryObservationId(a_event.payload.words[0], a_event.sessionGeneration) },
+					{ "kind", "geometry" },
+					{ "role", "first-observed" },
+					{ "pointerEvidence", PointerEvidence(a_event.payload.words[1]) },
+				} });
+				if (a_event.payload.words[5] != 0) {
+					const auto* object = FindSceneObjectObservation(a_snapshot, a_event.payload.words[5]);
+					refs.push_back({
+						{ "id", SceneObjectObservationId(a_event.payload.words[5], a_event.sessionGeneration) },
+						{ "kind", "scene-object" },
+						{ "role", "represented-object" },
+						{ "pointerEvidence", PointerEvidence(object ? object->pointerEvidence : 0) },
+					});
+				}
+				return refs;
+			}
+			case PayloadSchema::kMaterialStateObservation:
+				return json::array({ {
+					{ "id", MaterialStateObservationId(a_event.payload.words[0], a_event.sessionGeneration) },
+					{ "kind", "material" },
+					{ "role", "first-observed" },
+					{ "pointerEvidence", PointerEvidence(a_event.payload.words[1]) },
+				} });
+			case PayloadSchema::kGeometryBoundaryV2: {
+				json refs = json::array();
+				if (a_event.payload.words[6] != 0) {
+					const auto* geometry = FindGeometryObservation(a_snapshot, a_event.payload.words[6]);
+					refs.push_back({
+						{ "id", GeometryObservationId(a_event.payload.words[6], a_event.sessionGeneration) },
+						{ "kind", "geometry" },
+						{ "role", "setup-geometry" },
+						{ "pointerEvidence", PointerEvidence(geometry ? geometry->pointerEvidence : a_event.payload.words[2]) },
+					});
+				}
+				if (a_event.payload.words[7] != 0) {
+					const auto* material = FindMaterialStateObservation(a_snapshot, a_event.payload.words[7]);
+					refs.push_back({
+						{ "id", MaterialStateObservationId(a_event.payload.words[7], a_event.sessionGeneration) },
+						{ "kind", "material" },
+						{ "role", "setup-material" },
+						{ "pointerEvidence", PointerEvidence(material ? material->shaderPropertyEvidence : 0) },
+					});
+				}
+				return refs;
+			}
 			case PayloadSchema::kTechniqueBoundary:
 				observationId = a_event.payload.words[0];
 				pointerEvidence = a_event.payload.words[1];
@@ -492,6 +784,15 @@ namespace CSX::RenderMap
 				json refs = json::array();
 				appendDeviceContext(refs, "immediate-context", a_event.payload.words[0]);
 				appendTargetBinding(refs);
+				if (a_event.preparedGeometrySetupObservationId != 0) {
+					refs.push_back({
+						{ "id", GeometrySetupObservationId(
+							a_event.preparedGeometrySetupObservationId, a_event.sessionGeneration) },
+						{ "kind", "geometry-setup" },
+						{ "role", "prepared-at-draw" },
+						{ "pointerEvidence", nullptr },
+					});
+				}
 				for (const auto [stage, word] : std::array{
 					std::pair{ ShaderStage::kVertex, std::size_t{ 2 } },
 					std::pair{ ShaderStage::kPixel, std::size_t{ 3 } } }) {
@@ -560,6 +861,8 @@ namespace CSX::RenderMap
 					{ "kind", TargetViewKindName(kind) }, { "role", "bound-view" }, { "pointerEvidence", nullptr },
 				} });
 			}
+			case PayloadSchema::kResourceViewStateObserved:
+				return json::array();
 			case PayloadSchema::kResourceFlow: {
 				json refs = json::array();
 				for (const auto [word, roleName] : std::array{
@@ -571,6 +874,22 @@ namespace CSX::RenderMap
 						});
 					}
 				}
+				return refs;
+			}
+			case PayloadSchema::kResourceCpuAccess: {
+				json refs = json::array();
+				if (a_event.payload.words[1] != 0) {
+					refs.push_back({
+						{ "id", CpuMapObservationId(a_event.payload.words[1], a_event.sessionGeneration) },
+						{ "kind", "resource-cpu-access" }, { "role", "map-lifetime" },
+						{ "pointerEvidence", nullptr },
+					});
+				}
+				refs.push_back({
+						{ "id", ResourceObservationId(a_event.payload.words[2], a_event.sessionGeneration) },
+						{ "kind", "resource" }, { "role", "cpu-accessed-resource" },
+						{ "pointerEvidence", nullptr },
+					});
 				return refs;
 			}
 			case PayloadSchema::kResourceVersion:
@@ -636,7 +955,8 @@ namespace CSX::RenderMap
 			std::uint64_t a_generation,
 			const CaptureSnapshot* a_snapshot,
 			std::uint64_t a_targetBindingObservationId,
-			std::uint64_t a_submissionObservationId)
+			std::uint64_t a_submissionObservationId,
+			std::uint64_t a_preparedGeometrySetupObservationId)
 		{
 			switch (static_cast<PayloadSchema>(a_payload.schema)) {
 			case PayloadSchema::kRenderPassBoundary:
@@ -670,6 +990,27 @@ namespace CSX::RenderMap
 					{ "passEnum", a_payload.words[4] },
 					{ "renderFlags", a_payload.words[5] },
 				};
+			case PayloadSchema::kGeometryBoundaryV2:
+				return {
+					{ "schema", "geometry-boundary-v2" },
+					{ "shaderPointer", PointerEvidence(a_payload.words[0]) },
+					{ "renderPassPointer", PointerEvidence(a_payload.words[1]) },
+					{ "geometryPointer", PointerEvidence(a_payload.words[2]) },
+					{ "shaderType", a_payload.words[3] },
+					{ "passEnum", a_payload.words[4] },
+					{ "renderFlags", a_payload.words[5] },
+					{ "geometryObservationId", GeometryObservationId(a_payload.words[6], a_generation) },
+					{ "materialStateObservationId", MaterialStateObservationId(a_payload.words[7], a_generation) },
+				};
+			case PayloadSchema::kSceneObjectObservation:
+				return SerializeSceneObjectObservation(
+					FindSceneObjectObservation(a_snapshot, a_payload.words[0]), a_payload, a_generation);
+			case PayloadSchema::kGeometryObservation:
+				return SerializeGeometryObservation(
+					FindGeometryObservation(a_snapshot, a_payload.words[0]), a_payload, a_generation);
+			case PayloadSchema::kMaterialStateObservation:
+				return SerializeMaterialStateObservation(
+					FindMaterialStateObservation(a_snapshot, a_payload.words[0]), a_payload, a_generation);
 			case PayloadSchema::kShaderObservation:
 				return SerializeShaderObservation(
 					FindShaderObservation(a_snapshot, a_payload.words[0]), a_payload, a_generation);
@@ -732,7 +1073,7 @@ namespace CSX::RenderMap
 					break;
 				}
 				return {
-					{ "schema", "draw-call-v2" },
+					{ "schema", "draw-call-v3" },
 					{ "operation", DrawOperationName(operation) },
 					{ "immediateContextPointer", PointerEvidence(a_payload.words[0]) },
 					{ "vertexShaderObservationId", StageShaderObservationId(
@@ -743,6 +1084,8 @@ namespace CSX::RenderMap
 						a_targetBindingObservationId, a_generation) },
 					{ "submissionObservationId", SubmissionObservationId(
 						a_submissionObservationId, a_generation) },
+					{ "preparedGeometrySetupObservationId", GeometrySetupObservationId(
+						a_preparedGeometrySetupObservationId, a_generation) },
 					{ "arguments", std::move(arguments) },
 				};
 			}
@@ -828,13 +1171,27 @@ namespace CSX::RenderMap
 				const auto viewKind = bindingKind == ResourceBindingKind::kShaderResource ?
 					TargetViewKind::kShaderResource : TargetViewKind::kUnorderedAccess;
 				return {
-					{ "schema", "resource-view-binding-v1" },
+					{ "schema", "resource-view-binding-v2" },
 					{ "viewObservationId", TargetViewObservationId(viewKind, a_payload.words[0], a_generation) },
 					{ "bindingKind", bindingKind == ResourceBindingKind::kShaderResource ? "shader-resource" : "unordered-access" },
 					{ "stage", ResourceStageName(static_cast<ResourceStage>(a_payload.words[2])) },
 					{ "slot", a_payload.words[3] },
+					{ "source", ResourceBindingSourceName(
+						static_cast<ResourceBindingSource>(a_payload.words[4])) },
 				};
 			}
+			case PayloadSchema::kResourceViewStateObserved:
+				return {
+					{ "schema", "resource-view-state-observed-v1" },
+					{ "bindingKind", static_cast<ResourceBindingKind>(a_payload.words[0]) ==
+						ResourceBindingKind::kShaderResource ? "shader-resource" : "unordered-access" },
+					{ "stage", ResourceStageName(static_cast<ResourceStage>(a_payload.words[1])) },
+					{ "startSlot", a_payload.words[2] },
+					{ "count", a_payload.words[3] },
+					{ "source", ResourceBindingSourceName(
+						static_cast<ResourceBindingSource>(a_payload.words[4])) },
+					{ "changedSlotCount", a_payload.words[5] },
+				};
 			case PayloadSchema::kResourceFlow: {
 				const auto operation = static_cast<ResourceFlowOperation>(a_payload.words[0]);
 				const char* name = "unknown";
@@ -855,6 +1212,40 @@ namespace CSX::RenderMap
 					{ "destinationResourceObservationId", ResourceObservationId(a_payload.words[2], a_generation) },
 					{ "sourceSubresource", a_payload.words[3] },
 					{ "destinationSubresource", a_payload.words[4] },
+				};
+			}
+			case PayloadSchema::kResourceCpuAccess: {
+				const auto phase = static_cast<ResourceCpuAccessPhase>(a_payload.words[0]);
+				const auto mapType = static_cast<std::uint32_t>(a_payload.words[4]);
+				const auto mapFlags = static_cast<std::uint32_t>(a_payload.words[4] >> 32u);
+				const auto result = static_cast<std::uint32_t>(a_payload.words[6]);
+				const auto succeeded = phase == ResourceCpuAccessPhase::kUnmap ||
+					(result & 0x80000000u) == 0;
+				const auto readable = mapType == 1 || mapType == 3;
+				const auto writable = mapType >= 2 && mapType <= 5;
+				return {
+					{ "schema", "resource-cpu-access-v1" },
+					{ "phase", phase == ResourceCpuAccessPhase::kMap ? "map" : "unmap" },
+					{ "mapObservationId", CpuMapObservationId(a_payload.words[1], a_generation) },
+					{ "resourceObservationId", ResourceObservationId(a_payload.words[2], a_generation) },
+					{ "subresource", a_payload.words[3] },
+					{ "mapType", ResourceMapTypeName(mapType) },
+					{ "mapTypeValue", mapType },
+					{ "mapFlags", mapFlags },
+					{ "doNotWait", (mapFlags & 0x100000u) != 0 },
+					{ "resultHresult", phase == ResourceCpuAccessPhase::kMap ?
+						json(std::format("0x{:08X}", result)) : json(nullptr) },
+					{ "succeeded", succeeded },
+					{ "matchedMap", phase == ResourceCpuAccessPhase::kUnmap ?
+						json(a_payload.words[1] != 0) : json(nullptr) },
+					{ "readable", readable }, { "writable", writable },
+					{ "durationQpcTicks", a_payload.words[5] },
+					{ "rowPitch", static_cast<std::uint32_t>(a_payload.words[7]) },
+					{ "depthPitch", static_cast<std::uint32_t>(a_payload.words[7] >> 32u) },
+					{ "visibilityBoundary", phase == ResourceCpuAccessPhase::kMap && succeeded && readable ?
+						"cpu-readable-after-map-return" : nullptr },
+					{ "publicationBoundary", phase == ResourceCpuAccessPhase::kUnmap &&
+						a_payload.words[1] != 0 && writable ? "gpu-visible-after-unmap-return" : nullptr },
 				};
 			}
 			case PayloadSchema::kResourceVersion: {
@@ -941,7 +1332,8 @@ namespace CSX::RenderMap
 			case PayloadSchema::kTargetBinding:
 				return SerializeTargetBinding(
 					FindTargetBindingObservation(a_snapshot, a_payload.words[0]),
-					a_payload.words[0], a_generation);
+					a_payload.words[0], a_generation,
+					static_cast<TargetBindingSource>(a_payload.words[2]));
 			default:
 				return {
 					{ "schema", std::format("unknown-{}", a_payload.schema) },
@@ -951,9 +1343,32 @@ namespace CSX::RenderMap
 		}
 	}
 
+	nlohmann::json SerializeEventKindMask(EventKindMask a_mask)
+	{
+		json result = json::array();
+		for (std::uint16_t index = 0; index < static_cast<std::uint16_t>(EventKind::kCount); ++index) {
+			const auto kind = static_cast<EventKind>(index);
+			if ((a_mask & EventKindBit(kind)) != 0)
+				result.push_back(EventKindName(kind));
+		}
+		return result;
+	}
+
+	nlohmann::json SerializeGeometryShaderTypeMask(std::uint64_t a_mask)
+	{
+		json result = json::array();
+		for (std::uint32_t shaderType = 0; shaderType < 64; ++shaderType) {
+			if ((a_mask & (std::uint64_t{ 1 } << shaderType)) != 0)
+				result.push_back(shaderType);
+		}
+		return result;
+	}
+
 	nlohmann::json SerializeBounds(const CollectorConfig& a_config)
 	{
 		return {
+			{ "requestedEventKinds", SerializeEventKindMask(a_config.requestedEventKindMask) },
+			{ "resolvedEventKinds", SerializeEventKindMask(a_config.eventKindMask) },
 			{ "maxFrames", a_config.maxFrames },
 			{ "maxDurationMs", std::chrono::duration_cast<std::chrono::milliseconds>(a_config.maxDuration).count() },
 			{ "maxEvents", a_config.maxEvents },
@@ -964,6 +1379,11 @@ namespace CSX::RenderMap
 			{ "maxResourceObservations", a_config.maxResourceObservations },
 			{ "maxTargetViewObservations", a_config.maxTargetViewObservations },
 			{ "maxTargetBindingObservations", a_config.maxTargetBindingObservations },
+			{ "maxSceneObjectObservations", a_config.maxSceneObjectObservations },
+			{ "maxGeometryObservations", a_config.maxGeometryObservations },
+			{ "maxMaterialStateObservations", a_config.maxMaterialStateObservations },
+			{ "geometryShaderTypes", SerializeGeometryShaderTypeMask(a_config.geometryShaderTypeMask) },
+			{ "executionWithinSelectedGeometry", a_config.executionWithinSelectedGeometry },
 			{ "pointerPolicy", "retain" },
 		};
 	}
@@ -995,7 +1415,10 @@ namespace CSX::RenderMap
 			snapshot.statistics.droppedStageShaderObservations != 0 ||
 			snapshot.statistics.droppedResourceObservations != 0 ||
 			snapshot.statistics.droppedTargetViewObservations != 0 ||
-			snapshot.statistics.droppedTargetBindingObservations != 0;
+			snapshot.statistics.droppedTargetBindingObservations != 0 ||
+			snapshot.statistics.droppedSceneObjectObservations != 0 ||
+			snapshot.statistics.droppedGeometryObservations != 0 ||
+			snapshot.statistics.droppedMaterialStateObservations != 0;
 		return {
 			{ "captureId", a_capture.descriptor.captureId },
 			{ "numericId", a_capture.descriptor.numericId },
@@ -1011,6 +1434,7 @@ namespace CSX::RenderMap
 				{ "reason", StopReasonName(snapshot.stopReason) },
 				{ "eventCount", snapshot.events.size() },
 				{ "attemptedEventCount", snapshot.statistics.attempted },
+				{ "filteredEventCount", snapshot.statistics.filtered },
 				{ "droppedEventCount", dropped },
 				{ "boundaryRejectionCount", snapshot.statistics.droppedFrameLimit + snapshot.statistics.droppedTimeLimit },
 				{ "stopRaceRejectionCount", snapshot.statistics.droppedStopped },
@@ -1026,6 +1450,12 @@ namespace CSX::RenderMap
 				{ "droppedTargetViewObservationCount", snapshot.statistics.droppedTargetViewObservations },
 				{ "targetBindingObservationCount", snapshot.targetBindingObservations.size() },
 				{ "droppedTargetBindingObservationCount", snapshot.statistics.droppedTargetBindingObservations },
+				{ "sceneObjectObservationCount", snapshot.sceneObjectObservations.size() },
+				{ "droppedSceneObjectObservationCount", snapshot.statistics.droppedSceneObjectObservations },
+				{ "geometryObservationCount", snapshot.geometryObservations.size() },
+				{ "droppedGeometryObservationCount", snapshot.statistics.droppedGeometryObservations },
+				{ "materialStateObservationCount", snapshot.materialStateObservations.size() },
+				{ "droppedMaterialStateObservationCount", snapshot.statistics.droppedMaterialStateObservations },
 				{ "truncated", dropped != 0 || structurallyTruncated },
 			} },
 		};
@@ -1079,7 +1509,8 @@ namespace CSX::RenderMap
 			{ "payload", SerializePayload(
 				a_event.payload, a_event.sessionGeneration, a_snapshot,
 				a_event.targetBindingObservationId,
-				a_event.submissionObservationId) },
+				a_event.submissionObservationId,
+				a_event.preparedGeometrySetupObservationId) },
 			{ "extensions", {
 				{ "csx.captureNumericId", a_event.captureNumericId },
 				{ "csx.sessionGeneration", a_event.sessionGeneration },

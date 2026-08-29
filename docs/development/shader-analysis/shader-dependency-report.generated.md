@@ -6,14 +6,14 @@
 
 | Measure | Count |
 |---|---:|
-| Tracked source contributions | 174 |
-| Deployed virtual sources | 174 |
+| Tracked source contributions | 175 |
+| Deployed virtual sources | 175 |
 | Production entry candidates | 100 |
-| Include sources | 59 |
+| Include sources | 60 |
 | Test entry sources | 15 |
 | Features | 40 |
 | Compile units | 121 |
-| Resolved include edges | 423 |
+| Resolved include edges | 427 |
 | Unresolved include edges | 1 |
 | Unaccepted unresolved include edges | 0 |
 | Unresolved compile sites | 0 |

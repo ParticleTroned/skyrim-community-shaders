@@ -18,6 +18,7 @@ namespace CSX::RenderMap
 		nlohmann::json inputs;
 		nlohmann::json environment;
 		nlohmann::json scenario;
+		nlohmann::json extensions = nlohmann::json::object();
 	};
 
 	struct CaptureArtifactBundle

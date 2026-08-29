@@ -72,6 +72,12 @@ namespace
 				{ "worldspace", nullptr }, { "weather", nullptr }, { "gameHour", nullptr },
 				{ "cameraMarker", nullptr }, { "notes", "unit test" },
 			},
+			.extensions = {
+				{ "csx.shaderCompilation", {
+					{ "availability", "observed" }, { "evidenceClass", "runtime-observed" },
+					{ "capturedAt", "capture-start" },
+				} },
+			},
 		};
 	}
 
@@ -120,8 +126,8 @@ namespace
 			"wrong capture ID stopped the active capture");
 		Check(a_controller.Stop(descriptor.captureId, completed) == ControlStatus::kSuccess,
 			"capture did not stop");
-		Check(completed && completed->snapshot.events.size() == 7,
-			std::format("completed capture event count is {}, expected 7",
+		Check(completed && completed->snapshot.events.size() == 8,
+			std::format("completed capture event count is {}, expected 8",
 				completed ? completed->snapshot.events.size() : 0));
 		std::shared_ptr<const CompletedCapture> replay;
 		Check(a_controller.Stop(descriptor.captureId, replay) == ControlStatus::kSuccess && replay == completed,
@@ -140,7 +146,7 @@ namespace
 
 		const auto summary = SerializeCaptureSummary(*capture);
 		Check(summary["captureId"] == capture->descriptor.captureId, "summary capture ID is wrong");
-		Check(summary["completion"]["eventCount"] == 7, "summary event count is wrong");
+		Check(summary["completion"]["eventCount"] == 8, "summary event count is wrong");
 		Check(summary["completion"]["shaderObservationCount"] == 1, "summary shader observation count is wrong");
 		Check(summary["completion"]["reason"] == "requested", "summary stop reason is wrong");
 
@@ -167,7 +173,7 @@ namespace
 		Check(technique["payload"]["shaderObservationId"] == observed["payload"]["shaderObservationId"],
 			"technique did not join to the shader observation");
 
-		const auto finalPage = SerializeEventPage(*capture, 6, 100, 42);
+		const auto finalPage = SerializeEventPage(*capture, 7, 100, 42);
 		Check(finalPage["returnedCount"] == 1, "final page count is wrong");
 		Check(finalPage["moreAvailable"] == false, "final page incorrectly reports more data");
 	}
@@ -201,10 +207,14 @@ namespace
 		Check(controller.Start(Config(), descriptor) == ControlStatus::kSuccess,
 			"stage serialization capture did not start");
 		auto& runtime = GetRuntime();
+		const StageShaderObservationInput::EngineAlias vertexEngineAliases[] = {
+			{ .loaderType = "ISHDRDownSample4", .compileSourceName = "ISHDR", .descriptor = 17 },
+		};
 		{
 			auto technique = runtime.EnterTechnique({
 				.shader = 0x1000, .shaderType = 6, .vertexDescriptor = 7, .pixelDescriptor = 8,
-				.fxpFilename = "Lighting",
+				.fxpFilename = "ISHDRDownSample4", .imageSpaceName = "BSImagespaceShaderISHDRDownSample4",
+				.compileSourceName = "ISHDR",
 			});
 			runtime.RecordTechniqueResolution({
 				.inputVertexDescriptor = 7,
@@ -219,6 +229,9 @@ namespace
 						.wrapperDescriptor = 17, .bytecodeSize = 128,
 						.bytecodeSha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 						.cachePath = "Data/ShaderCache/Lighting/11.vso",
+						.engineAliases = vertexEngineAliases,
+						.engineAliasCount = 1,
+						.engineAliasTotalCount = 1,
 					},
 				},
 				.pixel = { .route = ShaderSelectionRoute::kSkipped },
@@ -226,6 +239,26 @@ namespace
 		}
 		runtime.SetImmediateContext(0x9000);
 		runtime.BindStage(0x9000, ShaderStage::kVertex, 0x3000);
+		const ResourceViewInput shaderResource{
+			.resource = {
+				.d3dObject = 0x9400, .dimension = ResourceDimension::kTexture2D,
+				.widthOrBytes = 64, .height = 64, .depthOrArraySize = 1, .mipLevels = 1,
+				.format = 28, .sampleCount = 1, .bindFlags = 0x28,
+			},
+			.view = {
+				.kind = TargetViewKind::kShaderResource, .d3dObject = 0x9500,
+				.format = 28, .dimension = 4,
+			},
+		};
+		runtime.BindResourceViews(
+			0x9000, ResourceBindingKind::kShaderResource, ResourceStage::kPixel,
+			0, 1, &shaderResource);
+		runtime.BindResourceViews(
+			0x9000, ResourceBindingKind::kShaderResource, ResourceStage::kPixel,
+			0, 1, &shaderResource, false, ResourceBindingSource::kPostCallQuery);
+		runtime.BindResourceViews(
+			0x9000, ResourceBindingKind::kShaderResource, ResourceStage::kPixel,
+			0, 1, nullptr, false, ResourceBindingSource::kPostCallQuery);
 		const std::uintptr_t renderTargets[] = { 0x9100, 0x9200 };
 		runtime.BindRenderTargets(0x9000, 2, renderTargets, 0x9300);
 		runtime.RecordDraw(0x9000, DrawOperation::kDrawIndexed, 24, 3, 2);
@@ -233,18 +266,31 @@ namespace
 		Check(controller.Stop(descriptor.captureId, capture) == ControlStatus::kSuccess,
 			"stage serialization capture did not stop");
 		const auto summary = SerializeCaptureSummary(*capture);
-		Check(summary["completion"]["targetViewObservationCount"] == 3 &&
+		Check(summary["completion"]["targetViewObservationCount"] == 4 &&
 			summary["completion"]["targetBindingObservationCount"] == 1,
 			"target catalogue counts are missing from the capture summary");
 		const auto page = SerializeEventPage(*capture, 0, 20, 42);
+		const auto& shaderObserved = page["events"][0];
+		Check(shaderObserved["type"] == "shader-observed" &&
+			shaderObserved["payload"]["schema"] == "shader-observation-v2" &&
+			shaderObserved["payload"]["compileSourceName"] == "ISHDR",
+			"engine shader observation did not retain its effective compile source");
 		const auto& observed = page["events"][2];
 		Check(observed["type"] == "stage-shader-observed", "stage first-seen event type is wrong");
 		Check(observed["payload"]["stage"] == "vertex", "stage observation type is wrong");
+		Check(observed["payload"]["schema"] == "stage-shader-observation-v3",
+			"stage observation schema did not advance");
 		Check(observed["payload"]["bytecodeSha256"] ==
 			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			"stage bytecode identity is missing");
 		Check(observed["payload"]["cachePath"] == "Data/ShaderCache/Lighting/11.vso",
 			"stage cache path is missing");
+		Check(observed["payload"]["engineAliasTotalCount"] == 1 &&
+			observed["payload"]["engineAliases"].size() == 1 &&
+			observed["payload"]["engineAliases"][0]["loaderType"] == "ISHDRDownSample4" &&
+			observed["payload"]["engineAliases"][0]["compileSourceName"] == "ISHDR" &&
+			observed["payload"]["engineAliases"][0]["descriptor"] == 17,
+			"stage engine alias is missing");
 		const auto& resolved = page["events"][3];
 		Check(resolved["type"] == "technique-resolved", "technique resolution event type is wrong");
 		Check(resolved["payload"]["vertexRoute"] == "csx-cache", "vertex selection route is wrong");
@@ -256,8 +302,34 @@ namespace
 			page["events"].begin(), page["events"].end(),
 			[](const nlohmann::json& a_event) { return a_event["type"] == "draw"; });
 		Check(drawIterator != page["events"].end(), "serialized draw event is missing");
+		const auto targetBindingIterator = std::find_if(
+			page["events"].begin(), page["events"].end(),
+			[](const nlohmann::json& a_event) { return a_event["type"] == "render-target-bind"; });
+		Check(targetBindingIterator != page["events"].end() &&
+			(*targetBindingIterator)["payload"]["schema"] == "render-target-binding-v2" &&
+			(*targetBindingIterator)["payload"]["source"] == "observed-call",
+			"output-merger binding provenance was not serialized");
+		const auto effectiveBindingIterator = std::find_if(
+			page["events"].begin(), page["events"].end(),
+			[](const nlohmann::json& a_event) {
+				return a_event["type"] == "resource-view-bind" &&
+					a_event["payload"].value("source", "") == "post-call-query";
+			});
+		Check(effectiveBindingIterator != page["events"].end() &&
+			(*effectiveBindingIterator)["payload"]["schema"] == "resource-view-binding-v2",
+			"post-call resource-view provenance was not serialized");
+		const auto effectiveSummaryIterator = std::find_if(
+			page["events"].begin(), page["events"].end(),
+			[](const nlohmann::json& a_event) {
+				return a_event["type"] == "resource-view-state-observed";
+			});
+		Check(effectiveSummaryIterator != page["events"].end() &&
+			(*effectiveSummaryIterator)["payload"]["schema"] == "resource-view-state-observed-v1" &&
+			(*effectiveSummaryIterator)["payload"]["changedSlotCount"] == 1,
+			"effective resource-view query summary was not serialized");
 		const auto& draw = *drawIterator;
-		Check(draw["type"] == "draw" && draw["payload"]["schema"] == "draw-call-v2",
+		Check(draw["type"] == "draw" && draw["payload"]["schema"] == "draw-call-v3" &&
+			draw["payload"]["preparedGeometrySetupObservationId"].is_null(),
 			"draw event schema is wrong");
 		Check(draw["payload"]["targetBindingObservationId"].is_string(),
 			"draw did not serialize its output-merger binding");
@@ -274,7 +346,7 @@ namespace
 			"draw did not join to its selected shader and output-merger state");
 		Check(draw["deviceContextObservationId"].is_string(),
 			"draw did not serialize its typed immediate-context identity");
-		Check(draw["execution"]["commandStreamSequence"] == 3,
+		Check(draw["execution"]["commandStreamSequence"] == 6,
 			"draw did not serialize its context-local command sequence");
 		const auto contextIterator = std::find_if(
 			page["events"].begin(), page["events"].end(),
@@ -283,6 +355,88 @@ namespace
 		Check((*contextIterator)["payload"]["schema"] == "device-context-observation-v1" &&
 			(*contextIterator)["payload"]["kind"] == "immediate",
 			"serialized context declaration is malformed");
+	}
+
+	void TestSemanticIdentitySerialization()
+	{
+		CaptureController controller;
+		CaptureDescriptor descriptor;
+		Check(controller.Start(Config(), descriptor) == ControlStatus::kSuccess,
+			"semantic serialization capture did not start");
+		GetRuntime().SetImmediateContext(0x7000);
+		{
+			auto geometry = GetRuntime().EnterGeometry({
+				.shader = 0x1000,
+				.renderPass = 0x2000,
+				.geometry = 0x3000,
+				.shaderType = 6,
+				.passEnum = 7,
+				.renderFlags = 8,
+				.sceneObject = {
+					.reference = 0x4000,
+					.referenceFormId = 0x01000001,
+					.baseFormId = 0x00000002,
+					.referenceName = "Observed reference",
+					.baseFormName = "Observed base",
+				},
+				.geometryObservation = {
+					.runtimeTypeName = "BSTriShape",
+					.name = "Observed geometry",
+					.geometryType = 1,
+					.vertexDescriptor = 0x1234,
+					.worldTransformAvailable = true,
+					.worldBoundAvailable = true,
+				},
+				.materialState = {
+					.shaderProperty = 0x5000,
+					.shaderPropertyRuntimeTypeName = "BSLightingShaderProperty",
+					.shaderPropertyFlags = 0x80,
+					.alpha = 1.0f,
+					.material = 0x6000,
+					.materialType = 2,
+					.feature = 3,
+					.hashKey = 4,
+					.shaderPropertyAvailable = true,
+					.materialAvailable = true,
+				},
+			});
+			Check(geometry.IsActive(), "semantic serialization boundary did not enter");
+		}
+		GetRuntime().RecordDraw(0x7000, DrawOperation::kDrawIndexed, 6);
+		std::shared_ptr<const CompletedCapture> capture;
+		Check(controller.Stop(descriptor.captureId, capture) == ControlStatus::kSuccess && capture,
+			"semantic serialization capture did not stop");
+		const auto page = SerializeEventPage(*capture, 0, 10, 42);
+		const auto bounds = SerializeBounds(capture->snapshot.config);
+		Check(bounds["geometryShaderTypes"].size() == 64 &&
+			bounds["executionWithinSelectedGeometry"] == false,
+			"geometry selector defaults were not serialized");
+		Check(page["returnedCount"] == 7, "semantic serialization emitted the wrong event count");
+		const auto& object = page["events"][0];
+		const auto& observedGeometry = page["events"][1];
+		const auto& material = page["events"][2];
+		const auto& setup = page["events"][3];
+		Check(object["schema"]["minor"] == 13 && object["payload"]["schema"] == "scene-object-observation-v1",
+			"scene-object declaration schema is wrong");
+		Check(observedGeometry["payload"]["schema"] == "geometry-observation-v1" &&
+			observedGeometry["payload"]["sceneObjectObservationId"] == object["payload"]["sceneObjectObservationId"],
+			"geometry declaration did not serialize its exact scene-object join");
+		Check(material["payload"]["schema"] == "material-state-observation-v1" &&
+			material["payload"]["stateRevision"] == 1,
+			"material-state declaration schema is wrong");
+		Check(setup["payload"]["schema"] == "geometry-boundary-v2" &&
+			setup["payload"]["geometryObservationId"] == observedGeometry["payload"]["geometryObservationId"] &&
+			setup["payload"]["materialStateObservationId"] == material["payload"]["materialStateObservationId"],
+			"geometry setup did not serialize its exact semantic joins");
+		Check(setup["observationRefs"].size() == 2,
+			"geometry setup did not publish both typed semantic references");
+		const auto& draw = page["events"][6];
+		Check(draw["payload"]["schema"] == "draw-call-v3" &&
+			draw["scopes"]["geometry"].is_null() &&
+			draw["payload"]["preparedGeometrySetupObservationId"] == setup["scopes"]["geometry"] &&
+			draw["observationRefs"][1]["kind"] == "geometry-setup" &&
+			draw["observationRefs"][1]["role"] == "prepared-at-draw",
+			"draw did not serialize the post-setup prepared geometry handoff");
 	}
 
 	void TestDurableArtifacts()
@@ -300,9 +454,18 @@ namespace
 		nlohmann::json manifest;
 		manifestStream >> manifest;
 		Check(manifest["status"] == "complete", "complete capture manifest has the wrong status");
-		Check(manifest["completion"]["eventCount"] == 7, "manifest event count is wrong");
+		Check(manifest["completion"]["eventCount"] == 8, "manifest event count is wrong");
+		Check(manifest["schema"]["minor"] == 7, "capture manifest schema revision is wrong");
+		Check(manifest["bounds"]["requestedEventKinds"].is_array() &&
+			manifest["bounds"]["resolvedEventKinds"].is_array() &&
+			manifest["bounds"]["observedEventKinds"].is_array(),
+			"capture selector and observed event-kind inventories are missing");
 		Check(manifest["artifacts"][0]["sha256"].get<std::string>().size() == 64, "events hash is missing");
 		Check(bundle.manifestArtifact["sha256"].get<std::string>().size() == 64, "manifest hash is missing");
+		Check(manifest["extensions"]["csx.shaderCompilation"]["evidenceClass"] == "runtime-observed",
+			"capture-start shader compilation provenance was not preserved");
+		Check(manifest["extensions"]["csx.processId"] == 42,
+			"artifact metrics were not merged with capture-start provenance");
 
 		const auto collision = WriteCaptureArtifacts(*capture, ArtifactContext(root), 42);
 		Check(!collision.success && collision.error.find("already exists") != std::string::npos,
@@ -356,6 +519,7 @@ int main()
 		TestStopActiveWithoutCaptureId();
 		TestCompletedHistoryBound();
 		TestResolvedStageSerialization();
+		TestSemanticIdentitySerialization();
 		TestDurableArtifacts();
 		TestGapArtifact();
 		return 0;

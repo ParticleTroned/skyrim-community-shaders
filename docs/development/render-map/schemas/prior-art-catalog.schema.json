@@ -1,0 +1,286 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:csx:schema:render-prior-art-catalog:1",
+  "title": "CSX render-system prior-art catalogue",
+  "type": "object",
+  "required": [
+    "schema",
+    "catalogId",
+    "catalogRevision",
+    "target",
+    "sources",
+    "claims",
+    "integrationPolicy",
+    "extensions"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "$ref": "#/$defs/schemaIdentity" },
+    "catalogId": { "type": "string", "pattern": "^prior-art-catalog-[a-z0-9][a-z0-9.-]*$" },
+    "catalogRevision": { "type": "integer", "minimum": 1 },
+    "target": { "$ref": "#/$defs/target" },
+    "sources": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/source" }
+    },
+    "claims": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/claim" }
+    },
+    "integrationPolicy": { "$ref": "#/$defs/integrationPolicy" },
+    "extensions": { "$ref": "#/$defs/extensions" }
+  },
+  "$defs": {
+    "schemaIdentity": {
+      "type": "object",
+      "required": ["name", "major", "minor", "producerVersion"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "const": "csx.render-prior-art-catalog" },
+        "major": { "const": 1 },
+        "minor": { "type": "integer", "minimum": 0 },
+        "producerVersion": { "type": "string", "minLength": 1 }
+      }
+    },
+    "sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
+    "commitSha": { "type": "string", "pattern": "^[A-Fa-f0-9]{40}$" },
+    "confidence": {
+      "enum": ["confirmed", "high", "medium", "low", "unknown"]
+    },
+    "target": {
+      "type": "object",
+      "required": ["engine", "shaderSystem"],
+      "additionalProperties": false,
+      "properties": {
+        "engine": {
+          "type": "object",
+          "required": ["product", "runtime", "executableName", "executableVersion", "executableSha256"],
+          "additionalProperties": false,
+          "properties": {
+            "product": { "type": "string", "minLength": 1 },
+            "runtime": { "type": "string", "minLength": 1 },
+            "executableName": { "type": "string", "minLength": 1 },
+            "executableVersion": { "type": "string", "minLength": 1 },
+            "executableSha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "shaderSystem": {
+          "type": "object",
+          "required": ["name", "version", "sourceRevision", "manifestPath", "manifestSha256"],
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "version": { "type": "string", "minLength": 1 },
+            "sourceRevision": { "$ref": "#/$defs/commitSha" },
+            "manifestPath": { "type": "string", "minLength": 1 },
+            "manifestSha256": { "$ref": "#/$defs/sha256" }
+          }
+        }
+      }
+    },
+    "revision": {
+      "type": "object",
+      "required": ["branch", "commitSha"],
+      "additionalProperties": false,
+      "properties": {
+        "branch": { "type": ["string", "null"] },
+        "commitSha": { "$ref": "#/$defs/commitSha" }
+      }
+    },
+    "engineApplicability": {
+      "type": "object",
+      "required": ["product", "runtime", "basis"],
+      "additionalProperties": false,
+      "properties": {
+        "product": { "type": "string", "minLength": 1 },
+        "runtime": { "type": ["string", "null"] },
+        "basis": { "enum": ["declared", "inferred", "unknown"] }
+      }
+    },
+    "shaderSystemApplicability": {
+      "type": "object",
+      "required": ["name", "version", "revision", "basis"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": ["string", "null"] },
+        "revision": { "anyOf": [{ "$ref": "#/$defs/commitSha" }, { "type": "null" }] },
+        "basis": { "enum": ["declared", "inferred", "unknown"] }
+      }
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "repository",
+        "revision",
+        "accessedAtUtc",
+        "evidenceClass",
+        "engineApplicability",
+        "shaderSystemApplicability",
+        "lineageRefs",
+        "license",
+        "notes",
+        "extensions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^prior-source-[0-9]{4}$" },
+        "name": { "type": "string", "minLength": 1 },
+        "repository": { "type": "string", "format": "uri" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "accessedAtUtc": { "type": "string", "format": "date-time" },
+        "evidenceClass": {
+          "enum": [
+            "tracked-source",
+            "static-reconstruction",
+            "library-contract",
+            "extension-architecture",
+            "secondary-documentation"
+          ]
+        },
+        "engineApplicability": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/engineApplicability" }
+        },
+        "shaderSystemApplicability": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/shaderSystemApplicability" }
+        },
+        "lineageRefs": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^prior-source-[0-9]{4}$" },
+          "uniqueItems": true
+        },
+        "license": { "type": ["string", "null"] },
+        "notes": { "type": "string" },
+        "extensions": { "$ref": "#/$defs/extensions" }
+      }
+    },
+    "locator": {
+      "type": "object",
+      "required": ["path", "symbol", "url"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "symbol": { "type": ["string", "null"] },
+        "url": { "type": "string", "format": "uri" }
+      }
+    },
+    "spotCheck": {
+      "type": "object",
+      "required": ["id", "status", "method", "evidenceRefs", "result"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^spot-check-[0-9]{4}$" },
+        "status": { "enum": ["pending", "matched", "partial", "mismatched"] },
+        "method": { "type": "string", "minLength": 1 },
+        "evidenceRefs": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^evidence-[0-9]{4}$" },
+          "uniqueItems": true
+        },
+        "result": { "type": "string", "minLength": 1 }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "required": [
+        "id",
+        "sourceRef",
+        "statement",
+        "locators",
+        "domains",
+        "targetAssessment",
+        "targetRefs",
+        "reuseDecision",
+        "extensions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^prior-claim-[0-9]{4}$" },
+        "sourceRef": { "type": "string", "pattern": "^prior-source-[0-9]{4}$" },
+        "statement": { "type": "string", "minLength": 1 },
+        "locators": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/locator" }
+        },
+        "domains": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "scene-accumulation",
+              "culling",
+              "batch-rendering",
+              "shader-family",
+              "shader-selection",
+              "shader-permutation",
+              "shader-constants",
+              "resource-lifecycle",
+              "d3d11-state",
+              "render-graph",
+              "vr",
+              "cs-feature"
+            ]
+          }
+        },
+        "targetAssessment": {
+          "type": "object",
+          "required": ["status", "confidence", "rationale", "spotChecks"],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "enum": [
+                "unverified",
+                "candidate",
+                "partially-corroborated",
+                "corroborated",
+                "contradicted",
+                "not-applicable"
+              ]
+            },
+            "confidence": { "$ref": "#/$defs/confidence" },
+            "rationale": { "type": "string", "minLength": 1 },
+            "spotChecks": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/spotCheck" }
+            }
+          }
+        },
+        "targetRefs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/namespacedRef" },
+          "uniqueItems": true
+        },
+        "reuseDecision": {
+          "enum": ["reuse-after-verification", "reference-only", "already-corroborated", "reject"]
+        },
+        "extensions": { "$ref": "#/$defs/extensions" }
+      }
+    },
+    "namespacedRef": {
+      "type": "string",
+      "pattern": "^(engine:engine-[a-z][a-z0-9-]*-[0-9]{4}|shader:(compile|pass)-[0-9]{4})$"
+    },
+    "integrationPolicy": {
+      "type": "object",
+      "required": ["promotionRule", "unknownRuntimeRule", "shaderVersionRule", "contradictionRule"],
+      "additionalProperties": false,
+      "properties": {
+        "promotionRule": { "type": "string", "minLength": 1 },
+        "unknownRuntimeRule": { "type": "string", "minLength": 1 },
+        "shaderVersionRule": { "type": "string", "minLength": 1 },
+        "contradictionRule": { "type": "string", "minLength": 1 }
+      }
+    },
+    "extensions": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$" },
+      "additionalProperties": true
+    }
+  }
+}

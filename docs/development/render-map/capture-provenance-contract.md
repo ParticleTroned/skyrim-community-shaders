@@ -131,6 +131,96 @@ Merely supplying the manifest and engine-map files as graph inputs does not
 authorize the join. This preserves the boundary exposed by the retained
 Breezehome semantic projection.
 
+## Runtime-observed shader compilation identity
+
+Capture-manifest 1.6 adds the optional
+`extensions["csx.shaderCompilation"]` snapshot. The bridge freezes it before
+the collector starts; no draw or dispatch hook reads configuration state.
+When CSX runtime state is available, the snapshot records:
+
+- the embedded shader-cache ABI and loaded D3D compiler identity;
+- optimized/debug mode, VR mode, partial-precision and avoid-flow-control
+  compiler flags;
+- the exact accepted global shader-define text and its cache-path suffix;
+- the exact XXH3-128 global compile-state digest used by managed-pack lookup;
+  and
+- the compatibility registry phase, revision, set digest, and a complete
+  structured copy of each registration, its canonical identity, and scopes.
+
+The global digest deliberately excludes the shader-specific compatibility
+requirement set. Offline analysis derives that set by applying the retained
+registration scopes to an observed shader family/source, then combines its
+canonical digest exactly as the runtime cache does. A capture must not call the
+global digest a complete bytecode recipe without that shader-specific step and
+the source-closure digest from the shader manifest.
+
+If shader state is not initialized, the extension remains present with
+`availability: unavailable`; the bridge does not substitute build defaults.
+The compatibility registration list is marked `complete` only when every
+entry named by the frozen snapshot was copied successfully.
+
+Capture-manifest 1.7 also records independent catalogue bounds and completion
+counters for scene objects, geometries, and material-state revisions. These
+are structural identity limits: exceeding one makes the capture incomplete,
+because a later setup or draw must never be silently joined to an older
+observation. Render-event 1.9 declares those identities before their first
+`geometry-boundary-v2` consumer.
+
+Render-event 1.10 adds bounded runtime texture bindings to each material-state
+revision. Each non-null resource reference is an exact capture-local
+observation declared before the material event. The recorded binding index is
+only a runtime material-list position; shader-register semantics remain
+unproven until a later pipeline-binding correlation slice.
+
+Render-event 1.14 adds `resource-cpu-access-v1` for immediate-context Map/Unmap
+boundaries. It records resource and subresource identity, map type and flags,
+HRESULT, pitches, measured QPC duration, and capture-local pairing. It never
+records the mapped address or mapped bytes. A successful readable Map is valid
+evidence that the allocation was CPU-readable after return; it does not prove
+which bytes the application consumed. A matched writable Unmap proves D3D11
+publication after return; it does not prove a later shader read. Failed Maps
+and unmatched Unmaps must remain negative/incomplete evidence and must not be
+promoted into resource-version edges.
+
+## Performance-context extension
+
+Identity and ordering captures remain useful when frame pacing is abnormal,
+but a shader or feature cost comparison does not. Timing-sensitive capture
+reports therefore use the optional
+`capture-manifest.json` extension `extensions.csx.performanceContext`:
+
+```json
+{
+  "observedFps": null,
+  "frameTimeDistributionMs": null,
+  "configuredCapFps": null,
+  "presentInterval": null,
+  "compositorRefreshHz": null,
+  "framePacingMode": "unknown",
+  "reprojectionMode": "unknown",
+  "externalLimiter": "unknown",
+  "gpuUtilizationPercent": null,
+  "bottleneck": "unknown",
+  "captureLoad": [],
+  "shaderCompilationActive": null,
+  "loadingOrMenuState": "unknown",
+  "timingEvidenceUsable": false,
+  "invalidationReasons": ["unexplained-fps-throttle"]
+}
+```
+
+The namespace is optional in schema major 1 and preserves old producers. A
+timing report must set `timingEvidenceUsable: false` when observed FPS is
+materially below both the configured cap and demonstrated GPU capability and
+no compositor, reprojection, driver, external limiter, capture overhead, CPU
+stall, loading, or shader-compilation cause has been established. Structural
+identity, resource, and command-order facts from such a capture remain
+eligible; absolute and comparative performance claims do not.
+
+A screenshot overlay may corroborate observed FPS, headset route, or runtime
+mode, but it does not independently prove limiter configuration, GPU
+saturation, or the absence of reprojection.
+
 ## Implementation order
 
 1. Add bounded parsing and verification helpers with isolated unit tests.
@@ -143,4 +233,3 @@ Breezehome semantic projection.
 5. Add a guard test for producer/hash/schema mismatch and a legacy-start test.
 6. Build and run the existing controller/artifact tests.
 7. Perform one bounded live capture with all three static inputs verified.
-

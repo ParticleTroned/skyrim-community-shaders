@@ -380,6 +380,19 @@ namespace SIE
 	class ShaderCache
 	{
 	public:
+		struct CompileContextSnapshot
+		{
+			bool developerMode = false;
+			bool virtualReality = false;
+			bool partialPrecision = false;
+			bool avoidFlowControl = false;
+			std::string shaderDefinesCanonical;
+			std::string shaderDefinesSuffix;
+			std::string globalCompileStateDigest;
+			std::string shaderCacheAbiId;
+			std::string shaderCompilerIdentity;
+		};
+
 		static ShaderCache& Instance()
 		{
 			static ShaderCache instance;
@@ -431,6 +444,7 @@ namespace SIE
 		void StopCompilation();
 
 		bool IsDiskCache() const;
+		CompileContextSnapshot GetCompileContextSnapshot() const;
 		void SetDiskCache(bool value);
 		void PersistCompiledShaderBlob(
 			ID3DBlob* a_shaderBlob,

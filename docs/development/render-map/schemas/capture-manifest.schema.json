@@ -194,6 +194,22 @@
           "items": { "type": "string", "minLength": 1 },
           "uniqueItems": true
         },
+        "requestedEventKinds": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "resolvedEventKinds": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "observedEventKinds": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
         "maxFrames": { "type": "integer", "minimum": 1 },
         "maxDurationMs": { "type": "integer", "minimum": 1 },
         "maxEvents": { "type": "integer", "minimum": 1 },
@@ -203,6 +219,17 @@
         "maxResourceObservations": { "type": "integer", "minimum": 1 },
         "maxTargetViewObservations": { "type": "integer", "minimum": 1 },
         "maxTargetBindingObservations": { "type": "integer", "minimum": 1 },
+        "maxSceneObjectObservations": { "type": "integer", "minimum": 1 },
+        "maxGeometryObservations": { "type": "integer", "minimum": 1 },
+        "maxMaterialStateObservations": { "type": "integer", "minimum": 1 },
+        "geometryShaderTypes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "type": "integer", "minimum": 0, "maximum": 63 },
+          "uniqueItems": true
+        },
+        "executionWithinSelectedGeometry": { "type": "boolean" },
         "pointerPolicy": { "enum": ["retain", "hash", "redact"] }
       }
     },
@@ -234,9 +261,111 @@
         "errors": { "type": "array", "items": { "type": "string" } }
       }
     },
+    "shaderCompilationProvenance": {
+      "type": "object",
+      "required": ["availability", "evidenceClass", "capturedAt"],
+      "additionalProperties": false,
+      "properties": {
+        "availability": { "enum": ["observed", "unavailable"] },
+        "evidenceClass": { "enum": ["runtime-observed", "unavailable"] },
+        "capturedAt": { "const": "capture-start" },
+        "shaderCacheAbiId": { "type": "string", "minLength": 1 },
+        "shaderCompilerIdentity": { "type": "string", "minLength": 1 },
+        "compileMode": { "enum": ["optimized", "debug"] },
+        "virtualReality": { "type": "boolean" },
+        "compilerFlags": {
+          "type": "object",
+          "required": ["partialPrecision", "avoidFlowControl"],
+          "additionalProperties": false,
+          "properties": {
+            "partialPrecision": { "type": "boolean" },
+            "avoidFlowControl": { "type": "boolean" }
+          }
+        },
+        "globalDefines": {
+          "type": "object",
+          "required": ["canonicalText", "cachePathSuffix"],
+          "additionalProperties": false,
+          "properties": {
+            "canonicalText": { "type": "string" },
+            "cachePathSuffix": { "type": "string", "pattern": "^$|^_[A-F0-9]{8}$" }
+          }
+        },
+        "globalCompileState": {
+          "type": "object",
+          "required": ["algorithm", "digest", "identityBasis"],
+          "additionalProperties": false,
+          "properties": {
+            "algorithm": { "const": "xxh3-128" },
+            "digest": { "type": "string", "pattern": "^[A-Fa-f0-9]{32}$" },
+            "identityBasis": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "uniqueItems": true
+            }
+          }
+        },
+        "compatibilityRegistry": {
+          "type": "object",
+          "required": ["phase", "revision", "registrationCount", "compatibilitySetDigest", "complete", "registrations"],
+          "additionalProperties": false,
+          "properties": {
+            "phase": { "enum": ["accepting-registrations", "frozen", "unknown"] },
+            "revision": { "type": "integer", "minimum": 1 },
+            "registrationCount": { "type": "integer", "minimum": 0 },
+            "compatibilitySetDigest": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+            "complete": { "type": "boolean" },
+            "registrations": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["handle", "identity", "owner", "displayVersion", "contractMajor", "currentMinor", "minimumCompatibleMinor", "maximumCompatibleMinor", "resourceFingerprint", "canonical", "canonicalDigest", "scopes"],
+                "additionalProperties": false,
+                "properties": {
+                  "handle": { "type": "integer", "minimum": 1 },
+                  "identity": { "type": "string", "minLength": 1 },
+                  "owner": { "type": "string" },
+                  "displayVersion": { "type": "string" },
+                  "contractMajor": { "type": "integer", "minimum": 0 },
+                  "currentMinor": { "type": "integer", "minimum": 0 },
+                  "minimumCompatibleMinor": { "type": "integer", "minimum": 0 },
+                  "maximumCompatibleMinor": { "type": "integer", "minimum": 0 },
+                  "resourceFingerprint": { "type": "string" },
+                  "canonical": { "type": "string", "minLength": 1 },
+                  "canonicalDigest": { "$ref": "#/$defs/sha256" },
+                  "scopes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["kind", "value"],
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": { "enum": ["shader-family", "shader-source", "feature", "global", "unknown"] },
+                        "value": { "type": "string" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "qualification": { "type": "string" }
+      },
+      "allOf": [{
+        "if": { "properties": { "availability": { "const": "observed" } } },
+        "then": {
+          "required": ["shaderCacheAbiId", "shaderCompilerIdentity", "compileMode", "virtualReality", "compilerFlags", "globalDefines", "globalCompileState", "compatibilityRegistry", "qualification"],
+          "properties": { "evidenceClass": { "const": "runtime-observed" } }
+        }
+      }]
+    },
     "extensions": {
       "type": "object",
       "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$" },
+      "properties": {
+        "csx.shaderCompilation": { "$ref": "#/$defs/shaderCompilationProvenance" }
+      },
       "additionalProperties": true
     }
   }

@@ -153,7 +153,7 @@ namespace CSX::RenderMap
 		{
 			return {
 				{ "schema", {
-					{ "name", "csx.render-event" }, { "major", 1 }, { "minor", 6 },
+					{ "name", "csx.render-event" }, { "major", 1 }, { "minor", 9 },
 					{ "producerVersion", "collector-v1" },
 				} },
 				{ "captureId", a_capture.descriptor.captureId },
@@ -216,6 +216,10 @@ namespace CSX::RenderMap
 					a_capture, a_processId, a_capture.snapshot.events.size(), lostEvents).dump();
 				eventsJsonl.push_back('\n');
 			}
+			const auto observedEventKinds = eventKinds;
+			// Retain the legacy non-empty field for manifest 1.x consumers. It is an
+			// output inventory, not the capture selector; an empty events artifact has
+			// historically been represented by the synthetic capture-marker label.
 			if (eventKinds.empty())
 				eventKinds.insert("capture-marker");
 
@@ -230,7 +234,10 @@ namespace CSX::RenderMap
 				snapshot.statistics.droppedStageShaderObservations != 0 ||
 				snapshot.statistics.droppedResourceObservations != 0 ||
 				snapshot.statistics.droppedTargetViewObservations != 0 ||
-				snapshot.statistics.droppedTargetBindingObservations != 0;
+				snapshot.statistics.droppedTargetBindingObservations != 0 ||
+				snapshot.statistics.droppedSceneObjectObservations != 0 ||
+				snapshot.statistics.droppedGeometryObservations != 0 ||
+				snapshot.statistics.droppedMaterialStateObservations != 0;
 			const bool terminalFailure = snapshot.stopReason == StopReason::kShutdown ||
 				snapshot.stopReason == StopReason::kFailure;
 			const bool incomplete = truncated || structurallyIncomplete || terminalFailure;
@@ -252,12 +259,46 @@ namespace CSX::RenderMap
 				completionErrors.push_back("target view observation capacity was exceeded during capture");
 			if (snapshot.statistics.droppedTargetBindingObservations != 0)
 				completionErrors.push_back("target binding observation capacity was exceeded during capture");
+			if (snapshot.statistics.droppedSceneObjectObservations != 0)
+				completionErrors.push_back("scene object observation capacity was exceeded during capture");
+			if (snapshot.statistics.droppedGeometryObservations != 0)
+				completionErrors.push_back("geometry observation capacity was exceeded during capture");
+			if (snapshot.statistics.droppedMaterialStateObservations != 0)
+				completionErrors.push_back("material state observation capacity was exceeded during capture");
 			if (terminalFailure)
 				completionErrors.push_back("capture ended during shutdown or failure handling");
 			const auto summary = SerializeCaptureSummary(a_capture);
+			json extensions = a_context.extensions.is_object() ?
+				a_context.extensions : json::object();
+			extensions.update({
+				{ "csx.processId", a_processId }, { "csx.sessionGeneration", snapshot.sessionGeneration },
+				{ "csx.acceptedEventCount", snapshot.events.size() },
+				{ "csx.filteredEventCount", snapshot.statistics.filtered },
+				{ "csx.requestedEventKinds", SerializeEventKindMask(snapshot.config.requestedEventKindMask) },
+				{ "csx.resolvedEventKinds", SerializeEventKindMask(snapshot.config.eventKindMask) },
+				{ "csx.boundaryRejectionCount", snapshot.statistics.droppedFrameLimit + snapshot.statistics.droppedTimeLimit },
+				{ "csx.stopRaceRejectionCount", snapshot.statistics.droppedStopped },
+				{ "csx.shaderObservationCount", snapshot.shaderObservations.size() },
+				{ "csx.droppedShaderObservationCount", snapshot.statistics.droppedShaderObservations },
+				{ "csx.stageShaderObservationCount", snapshot.stageShaderObservations.size() },
+				{ "csx.droppedStageShaderObservationCount", snapshot.statistics.droppedStageShaderObservations },
+				{ "csx.resourceObservationCount", snapshot.resourceObservations.size() },
+				{ "csx.droppedResourceObservationCount", snapshot.statistics.droppedResourceObservations },
+				{ "csx.targetViewObservationCount", snapshot.targetViewObservations.size() },
+				{ "csx.droppedTargetViewObservationCount", snapshot.statistics.droppedTargetViewObservations },
+				{ "csx.targetBindingObservationCount", snapshot.targetBindingObservations.size() },
+				{ "csx.droppedTargetBindingObservationCount", snapshot.statistics.droppedTargetBindingObservations },
+				{ "csx.sceneObjectObservationCount", snapshot.sceneObjectObservations.size() },
+				{ "csx.droppedSceneObjectObservationCount", snapshot.statistics.droppedSceneObjectObservations },
+				{ "csx.geometryObservationCount", snapshot.geometryObservations.size() },
+				{ "csx.droppedGeometryObservationCount", snapshot.statistics.droppedGeometryObservations },
+				{ "csx.materialStateObservationCount", snapshot.materialStateObservations.size() },
+				{ "csx.droppedMaterialStateObservationCount", snapshot.statistics.droppedMaterialStateObservations },
+			});
+
 			json manifest = {
 				{ "schema", {
-					{ "name", "csx.render-capture-manifest" }, { "major", 1 }, { "minor", 4 },
+					{ "name", "csx.render-capture-manifest" }, { "major", 1 }, { "minor", 7 },
 					{ "producerVersion", "collector-v1" },
 				} },
 				{ "captureId", a_capture.descriptor.captureId },
@@ -270,6 +311,9 @@ namespace CSX::RenderMap
 				{ "scenario", a_context.scenario },
 				{ "bounds", {
 					{ "eventKinds", eventKinds },
+					{ "requestedEventKinds", SerializeEventKindMask(snapshot.config.requestedEventKindMask) },
+					{ "resolvedEventKinds", SerializeEventKindMask(snapshot.config.eventKindMask) },
+					{ "observedEventKinds", observedEventKinds },
 					{ "maxFrames", snapshot.config.maxFrames },
 					{ "maxDurationMs", std::chrono::duration_cast<std::chrono::milliseconds>(snapshot.config.maxDuration).count() },
 					{ "maxEvents", snapshot.config.maxEvents }, { "maxBytes", snapshot.config.maxBytes },
@@ -278,6 +322,11 @@ namespace CSX::RenderMap
 					{ "maxResourceObservations", snapshot.config.maxResourceObservations },
 					{ "maxTargetViewObservations", snapshot.config.maxTargetViewObservations },
 					{ "maxTargetBindingObservations", snapshot.config.maxTargetBindingObservations },
+					{ "maxSceneObjectObservations", snapshot.config.maxSceneObjectObservations },
+					{ "maxGeometryObservations", snapshot.config.maxGeometryObservations },
+					{ "maxMaterialStateObservations", snapshot.config.maxMaterialStateObservations },
+					{ "geometryShaderTypes", SerializeGeometryShaderTypeMask(snapshot.config.geometryShaderTypeMask) },
+					{ "executionWithinSelectedGeometry", snapshot.config.executionWithinSelectedGeometry },
 					{ "pointerPolicy", "retain" },
 				} },
 				{ "clock", {
@@ -292,22 +341,7 @@ namespace CSX::RenderMap
 					{ "eventCount", serializedEventCount }, { "droppedEventCount", lostEvents },
 					{ "truncated", truncated }, { "collectorOverheadUs", nullptr }, { "errors", completionErrors },
 				} },
-				{ "extensions", {
-					{ "csx.processId", a_processId }, { "csx.sessionGeneration", snapshot.sessionGeneration },
-					{ "csx.acceptedEventCount", snapshot.events.size() },
-					{ "csx.boundaryRejectionCount", snapshot.statistics.droppedFrameLimit + snapshot.statistics.droppedTimeLimit },
-					{ "csx.stopRaceRejectionCount", snapshot.statistics.droppedStopped },
-					{ "csx.shaderObservationCount", snapshot.shaderObservations.size() },
-					{ "csx.droppedShaderObservationCount", snapshot.statistics.droppedShaderObservations },
-					{ "csx.stageShaderObservationCount", snapshot.stageShaderObservations.size() },
-					{ "csx.droppedStageShaderObservationCount", snapshot.statistics.droppedStageShaderObservations },
-					{ "csx.resourceObservationCount", snapshot.resourceObservations.size() },
-					{ "csx.droppedResourceObservationCount", snapshot.statistics.droppedResourceObservations },
-					{ "csx.targetViewObservationCount", snapshot.targetViewObservations.size() },
-					{ "csx.droppedTargetViewObservationCount", snapshot.statistics.droppedTargetViewObservations },
-					{ "csx.targetBindingObservationCount", snapshot.targetBindingObservations.size() },
-					{ "csx.droppedTargetBindingObservationCount", snapshot.statistics.droppedTargetBindingObservations },
-				} },
+				{ "extensions", std::move(extensions) },
 			};
 
 			const auto manifestPath = bundle.directory / "capture-manifest.json";

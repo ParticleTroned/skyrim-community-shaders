@@ -1,0 +1,547 @@
+{
+  "schema": {
+    "name": "csx.render-prior-art-catalog",
+    "major": 1,
+    "minor": 0,
+    "producerVersion": "render-prior-art-integration-1"
+  },
+  "catalogId": "prior-art-catalog-skyrim-vr-1.4.15-csx-3.19-vr",
+  "catalogRevision": 2,
+  "target": {
+    "engine": {
+      "product": "Skyrim VR",
+      "runtime": "1.4.15",
+      "executableName": "SkyrimVR.exe",
+      "executableVersion": "1.4.15.0",
+      "executableSha256": "6961efb4f4775a307b0fc9a3d637542c1e090be207d3b09467eab216b7f87971"
+    },
+    "shaderSystem": {
+      "name": "CSX",
+      "version": "3.19-VR",
+      "sourceRevision": "b223489b6b2afb5441409b3e17e826ff964efb50",
+      "manifestPath": "docs/development/shader-analysis/shader-manifest.generated.json",
+      "manifestSha256": "e6f6f0bdbf38916f43fe1975363e29ea2eea234f101c1f3eb1146c9f89c68522"
+    }
+  },
+  "sources": [
+    {
+      "id": "prior-source-0001",
+      "name": "Nukem9/skyrimse-test",
+      "repository": "https://github.com/Nukem9/skyrimse-test",
+      "revision": {
+        "branch": "master",
+        "commitSha": "328916305165a46c4e4b527735bbcfd46b09a0ca"
+      },
+      "accessedAtUtc": "2026-08-28T00:00:00Z",
+      "evidenceClass": "static-reconstruction",
+      "engineApplicability": [
+        {
+          "product": "Skyrim Special Edition",
+          "runtime": null,
+          "basis": "unknown"
+        }
+      ],
+      "shaderSystemApplicability": [
+        {
+          "name": "Skyrim Special Edition native shaders",
+          "version": null,
+          "revision": "328916305165a46c4e4b527735bbcfd46b09a0ca",
+          "basis": "inferred"
+        }
+      ],
+      "lineageRefs": [],
+      "license": null,
+      "notes": "The README identifies Skyrim Special Edition but does not pin an executable runtime. Treat reconstructed code and tables as version-sensitive candidate evidence, not as Skyrim VR truth.",
+      "extensions": {}
+    },
+    {
+      "id": "prior-source-0002",
+      "name": "aers/skyrim-rendering",
+      "repository": "https://github.com/aers/skyrim-rendering",
+      "revision": {
+        "branch": "main",
+        "commitSha": "328ab57699353a901ebf51580d567819fc49cb46"
+      },
+      "accessedAtUtc": "2026-08-28T00:00:00Z",
+      "evidenceClass": "static-reconstruction",
+      "engineApplicability": [
+        {
+          "product": "Skyrim Special Edition / Anniversary Edition",
+          "runtime": "1.6.1170",
+          "basis": "declared"
+        }
+      ],
+      "shaderSystemApplicability": [],
+      "lineageRefs": [],
+      "license": null,
+      "notes": "The project describes itself as reconstructed functions for understanding accumulation and culling. Its plugin declaration explicitly limits compatibility to RUNTIME_SSE_1_6_1170.",
+      "extensions": {}
+    },
+    {
+      "id": "prior-source-0003",
+      "name": "aers/SSEShaderTools",
+      "repository": "https://github.com/aers/SSEShaderTools",
+      "revision": {
+        "branch": "master",
+        "commitSha": "4d235dc7861f62e04bd8b889f667a4d8d6c68fb8"
+      },
+      "accessedAtUtc": "2026-08-28T00:00:00Z",
+      "evidenceClass": "tracked-source",
+      "engineApplicability": [
+        {
+          "product": "Skyrim Special Edition",
+          "runtime": null,
+          "basis": "inferred"
+        }
+      ],
+      "shaderSystemApplicability": [
+        {
+          "name": "SSE Shader Tools",
+          "version": null,
+          "revision": "4d235dc7861f62e04bd8b889f667a4d8d6c68fb8",
+          "basis": "declared"
+        }
+      ],
+      "lineageRefs": [],
+      "license": null,
+      "notes": "Origin repository for the shader-load replacement approach later ported to CommonLib NG and VR.",
+      "extensions": {}
+    },
+    {
+      "id": "prior-source-0004",
+      "name": "alandtse/SSEShaderTools",
+      "repository": "https://github.com/alandtse/SSEShaderTools",
+      "revision": {
+        "branch": "main",
+        "commitSha": "731f1d126319eecaf0ed9178c8b77e22926cf3f9"
+      },
+      "accessedAtUtc": "2026-08-28T00:00:00Z",
+      "evidenceClass": "tracked-source",
+      "engineApplicability": [
+        {
+          "product": "Skyrim Special Edition / Anniversary Edition",
+          "runtime": null,
+          "basis": "declared"
+        },
+        {
+          "product": "Skyrim VR",
+          "runtime": null,
+          "basis": "declared"
+        }
+      ],
+      "shaderSystemApplicability": [
+        {
+          "name": "SSE Shader Tools CommonLib NG / VR port",
+          "version": null,
+          "revision": "731f1d126319eecaf0ed9178c8b77e22926cf3f9",
+          "basis": "declared"
+        }
+      ],
+      "lineageRefs": ["prior-source-0003"],
+      "license": null,
+      "notes": "The README explicitly distinguishes SSE/AE and VR releases and credits the VR offsets and shader port. Exact supported executable versions are not declared at this revision.",
+      "extensions": {}
+    },
+    {
+      "id": "prior-source-0005",
+      "name": "CharmedBaryon/CommonLibSSE-NG",
+      "repository": "https://github.com/CharmedBaryon/CommonLibSSE-NG",
+      "revision": {
+        "branch": "main",
+        "commitSha": "b93280e832f263dbef44e44cbe2936622a02f91a"
+      },
+      "accessedAtUtc": "2026-08-28T00:00:00Z",
+      "evidenceClass": "library-contract",
+      "engineApplicability": [
+        {
+          "product": "Skyrim Special Edition",
+          "runtime": "multiple",
+          "basis": "declared"
+        },
+        {
+          "product": "Skyrim Anniversary Edition",
+          "runtime": "multiple",
+          "basis": "declared"
+        },
+        {
+          "product": "Skyrim VR",
+          "runtime": "multiple",
+          "basis": "declared"
+        }
+      ],
+      "shaderSystemApplicability": [],
+      "lineageRefs": [],
+      "license": null,
+      "notes": "CommonLibSSE NG explicitly supports SE, AE, and VR. Individual layouts, vtables, and relocations still require runtime-specific verification.",
+      "extensions": {}
+    },
+    {
+      "id": "prior-source-0006",
+      "name": "community-shaders/skyrim-community-shaders",
+      "repository": "https://github.com/community-shaders/skyrim-community-shaders",
+      "revision": {
+        "branch": "dev",
+        "commitSha": "e6a6d82def967a4bb9a4e497db004451839a4c44"
+      },
+      "accessedAtUtc": "2026-08-28T00:00:00Z",
+      "evidenceClass": "tracked-source",
+      "engineApplicability": [
+        {
+          "product": "Skyrim Special Edition / Anniversary Edition",
+          "runtime": null,
+          "basis": "declared"
+        }
+      ],
+      "shaderSystemApplicability": [
+        {
+          "name": "Community Shaders",
+          "version": "dev",
+          "revision": "e6a6d82def967a4bb9a4e497db004451839a4c44",
+          "basis": "declared"
+        }
+      ],
+      "lineageRefs": ["prior-source-0004"],
+      "license": null,
+      "notes": "This is upstream Community Shaders, not CSX 3.19-VR. Shared ancestry makes it valuable, but every implementation claim must be checked for fork divergence and VR-specific behaviour.",
+      "extensions": {}
+    },
+    {
+      "id": "prior-source-0007",
+      "name": "Gistix/CreationEngineRaytracing",
+      "repository": "https://github.com/Gistix/CreationEngineRaytracing",
+      "revision": {
+        "branch": "main",
+        "commitSha": "ea6f80483ce457778efed863e1af869c05b77745"
+      },
+      "accessedAtUtc": "2026-08-28T00:00:00Z",
+      "evidenceClass": "extension-architecture",
+      "engineApplicability": [
+        {
+          "product": "Skyrim Special Edition / Anniversary Edition",
+          "runtime": null,
+          "basis": "declared"
+        }
+      ],
+      "shaderSystemApplicability": [
+        {
+          "name": "Creation Engine Raytracing with Community Shaders",
+          "version": null,
+          "revision": "ea6f80483ce457778efed863e1af869c05b77745",
+          "basis": "declared"
+        }
+      ],
+      "lineageRefs": ["prior-source-0006"],
+      "license": null,
+      "notes": "Its RenderGraph models the extension's own NVRHI passes and resources. It is useful design prior art but is not evidence of Skyrim's native execution graph.",
+      "extensions": {}
+    }
+  ],
+  "claims": [
+    {
+      "id": "prior-claim-0001",
+      "sourceRef": "prior-source-0001",
+      "statement": "The reconstructed Special Edition batch renderer organizes work around BeginPass, EndPass, RenderBatches, pass groups, active pass lists, and immediate render-pass submission.",
+      "locators": [
+        {
+          "path": "skyrim64_test/src/patches/TES/BSBatchRenderer.cpp",
+          "symbol": "BSBatchRenderer::BeginPass / EndPass / RenderBatches",
+          "url": "https://github.com/Nukem9/skyrimse-test/blob/328916305165a46c4e4b527735bbcfd46b09a0ca/skyrim64_test/src/patches/TES/BSBatchRenderer.cpp"
+        }
+      ],
+      "domains": ["batch-rendering", "shader-selection"],
+      "targetAssessment": {
+        "status": "partially-corroborated",
+        "confidence": "high",
+        "rationale": "Skyrim VR 1.4.15 now has exact BSBatchRenderer class/layout evidence and identified RenderActivePassRange, RenderBatches, and SetupAndDrawPass functions, while captures independently observe technique setup nested beneath render-pass boundaries. BeginPass/EndPass and the reconstruction's exact pass-list control flow remain version-specific and unverified.",
+        "spotChecks": [
+          {
+            "id": "spot-check-0001",
+            "status": "partial",
+            "method": "Compare the prior-art batch boundaries with the existing bounded Skyrim VR render-pass and technique event ordering.",
+            "evidenceRefs": ["evidence-0001"],
+            "result": "The high-level nesting agrees; exact functions, layouts, and pass-list semantics remain version-specific and unverified."
+          },
+          {
+            "id": "spot-check-0006",
+            "status": "partial",
+            "method": "Compare the reconstruction's batch objects and submission stages with pinned CommonLib VR layouts, Skyrim VR relocation data, PDB coverage aliases, and exact vtable entries.",
+            "evidenceRefs": ["evidence-0004", "evidence-0007", "evidence-0008"],
+            "result": "BSBatchRenderer, its active-pass list and pass groups, RenderActivePassRange, RenderBatches, and SetupAndDrawPass are now target-specific facts. The precise control-flow equivalence to the Special Edition reconstruction is not yet claimed."
+          }
+        ]
+      },
+      "targetRefs": ["engine:engine-class-0005", "engine:engine-virtual-function-0007", "engine:engine-function-0009", "engine:engine-function-0010", "engine:engine-function-0001"],
+      "reuseDecision": "reuse-after-verification",
+      "extensions": {}
+    },
+    {
+      "id": "prior-claim-0002",
+      "sourceRef": "prior-source-0001",
+      "statement": "The reconstruction provides shader-family classes, shader tables, material and geometry setup paths, render-target roles, and shader constant-offset tables that can seed targeted Skyrim VR spot checks.",
+      "locators": [
+        {
+          "path": "skyrim64_test/src/patches/TES/BSShader",
+          "symbol": "BSShader and family-specific reconstructions",
+          "url": "https://github.com/Nukem9/skyrimse-test/tree/328916305165a46c4e4b527735bbcfd46b09a0ca/skyrim64_test/src/patches/TES/BSShader"
+        },
+        {
+          "path": "shader_analyzer/ShaderAnalyzer.cs",
+          "symbol": "ShaderAnalyzer",
+          "url": "https://github.com/Nukem9/skyrimse-test/blob/328916305165a46c4e4b527735bbcfd46b09a0ca/shader_analyzer/ShaderAnalyzer.cs"
+        }
+      ],
+      "domains": ["shader-family", "shader-permutation", "shader-constants", "resource-lifecycle", "d3d11-state"],
+      "targetAssessment": {
+        "status": "candidate",
+        "confidence": "medium",
+        "rationale": "Family names and broad roles align with the Skyrim VR/CommonLib vocabulary, but descriptor bits, constant slots, layouts, and render-target identities are executable- and shader-bundle-sensitive.",
+        "spotChecks": []
+      },
+      "targetRefs": [
+        "engine:engine-shader-family-0001",
+        "engine:engine-shader-family-0002",
+        "engine:engine-shader-family-0003",
+        "engine:engine-shader-family-0004"
+      ],
+      "reuseDecision": "reuse-after-verification",
+      "extensions": {}
+    },
+    {
+      "id": "prior-claim-0003",
+      "sourceRef": "prior-source-0002",
+      "statement": "The 1.6.1170 reconstruction splits world scene-list accumulation across main and worker arrays, seeds them from the shadow-scene-node hierarchy, and distributes cell, portal, water, grass, and LOD objects to culling work.",
+      "locators": [
+        {
+          "path": "src/draw/DrawWorld.cpp",
+          "symbol": "Draw::DrawWorld::hk_BuildSceneLists",
+          "url": "https://github.com/aers/skyrim-rendering/blob/328ab57699353a901ebf51580d567819fc49cb46/src/draw/DrawWorld.cpp"
+        },
+        {
+          "path": "src/main.cpp",
+          "symbol": "SKSEPlugin_Version",
+          "url": "https://github.com/aers/skyrim-rendering/blob/328ab57699353a901ebf51580d567819fc49cb46/src/main.cpp"
+        }
+      ],
+      "domains": ["scene-accumulation", "culling"],
+      "targetAssessment": {
+        "status": "candidate",
+        "confidence": "low",
+        "rationale": "The source explicitly targets SSE/AE 1.6.1170. Skyrim VR 1.4.15 now has a verified geometry-list culling admission boundary and culling class hierarchy, but no target-specific function yet proves the reconstructed main/worker scene-list topology or its shadow-node, cell, portal, water, grass, and LOD distribution.",
+        "spotChecks": []
+      },
+      "targetRefs": ["engine:engine-class-0001", "engine:engine-class-0002", "engine:engine-class-0003", "engine:engine-virtual-function-0005"],
+      "reuseDecision": "reuse-after-verification",
+      "extensions": {}
+    },
+    {
+      "id": "prior-claim-0004",
+      "sourceRef": "prior-source-0002",
+      "statement": "The 1.6.1170 culling reconstruction describes AlwaysDraw handling, preprocessed visibility flags, compound-frustum tests, frustum-plane optimization, recursive traversal, and visible-geometry queueing.",
+      "locators": [
+        {
+          "path": "src/culling/BSCullingProcess.cpp",
+          "symbol": "Culling::BSCullingProcess::hk_Process1 / hk_Process2 / hk_TestBaseVisibility3",
+          "url": "https://github.com/aers/skyrim-rendering/blob/328ab57699353a901ebf51580d567819fc49cb46/src/culling/BSCullingProcess.cpp"
+        },
+        {
+          "path": "src/culling/NiCullingProcess.cpp",
+          "symbol": "Culling::NiCullingProcess",
+          "url": "https://github.com/aers/skyrim-rendering/blob/328ab57699353a901ebf51580d567819fc49cb46/src/culling/NiCullingProcess.cpp"
+        }
+      ],
+      "domains": ["culling", "scene-accumulation"],
+      "targetAssessment": {
+        "status": "partially-corroborated",
+        "confidence": "medium",
+        "rationale": "Skyrim VR 1.4.15 independently confirms the NiCullingProcess/BSCullingProcess/BSGeometryListCullingProcess hierarchy, exact virtual-function RVAs for slots 0x16 through 0x1C, compound-frustum and culling-mode state, geometry-list AppendNonAccum implementation, broad traversal/frustum/append/bound-test roles, and the per-object delayed depth-culling gate. The individual AlwaysDraw, preprocess, plane-optimization, recursion, and queueing predicates are not yet matched instruction-for-instruction; slot 0x1A's CommonLib semantic name is specifically retained as provisional.",
+        "spotChecks": [
+          {
+            "id": "spot-check-0007",
+            "status": "partial",
+            "method": "Match pinned CommonLib VR layouts and exact Skyrim VR vtable/disassembly evidence against the reconstruction's culling classes and entry points.",
+            "evidenceRefs": ["evidence-0004", "evidence-0007", "evidence-0008"],
+            "result": "The class topology, geometry-list admission boundary, and exact VR slot 0x16-0x1C function addresses are target-specific facts. Broad roles are disassembly-backed; detailed branch semantics remain hypotheses until the functions are decomposed and observed."
+          }
+        ]
+      },
+      "targetRefs": ["engine:engine-class-0001", "engine:engine-class-0002", "engine:engine-class-0003", "engine:engine-virtual-function-0005", "engine:engine-virtual-function-0008", "engine:engine-virtual-function-0009", "engine:engine-virtual-function-0010", "engine:engine-virtual-function-0011", "engine:engine-virtual-function-0012", "engine:engine-virtual-function-0013", "engine:engine-virtual-function-0014"],
+      "reuseDecision": "reuse-after-verification",
+      "extensions": {}
+    },
+    {
+      "id": "prior-claim-0005",
+      "sourceRef": "prior-source-0003",
+      "statement": "The original SSE Shader Tools line demonstrates a shader-load interception and technique-ID-keyed replacement approach that is ancestral to later Community Shaders tooling.",
+      "locators": [
+        {
+          "path": "src/BSShaderHooks.cpp",
+          "symbol": "BSShaderHooks",
+          "url": "https://github.com/aers/SSEShaderTools/blob/4d235dc7861f62e04bd8b889f667a4d8d6c68fb8/src/BSShaderHooks.cpp"
+        }
+      ],
+      "domains": ["shader-selection", "shader-permutation"],
+      "targetAssessment": {
+        "status": "candidate",
+        "confidence": "low",
+        "rationale": "The architecture is lineage evidence, not proof of the current CSX or Skyrim VR implementation. The VR/CommonLib NG fork and CSX sources are closer comparison points.",
+        "spotChecks": []
+      },
+      "targetRefs": [],
+      "reuseDecision": "reference-only",
+      "extensions": {}
+    },
+    {
+      "id": "prior-claim-0006",
+      "sourceRef": "prior-source-0004",
+      "statement": "The CommonLib NG/VR fork intercepts BSShader::LoadShaders, indexes replacement pixel shaders by technique ID and loader type, and explicitly installs the hook on VR.",
+      "locators": [
+        {
+          "path": "src/BSShaderHooks.cpp",
+          "symbol": "BSShaderHooks::hk_LoadShaders / Install",
+          "url": "https://github.com/alandtse/SSEShaderTools/blob/731f1d126319eecaf0ed9178c8b77e22926cf3f9/src/BSShaderHooks.cpp"
+        },
+        {
+          "path": "README.md",
+          "symbol": null,
+          "url": "https://github.com/alandtse/SSEShaderTools/blob/731f1d126319eecaf0ed9178c8b77e22926cf3f9/README.md"
+        }
+      ],
+      "domains": ["shader-selection", "shader-permutation", "vr"],
+      "targetAssessment": {
+        "status": "partially-corroborated",
+        "confidence": "medium",
+        "rationale": "The source is explicitly VR-aware and shares ancestry with CSX. CSX now has a materially different descriptor, compile, cache, and fallback system, so only the hook lineage and broad replacement role are reusable without further comparison.",
+        "spotChecks": [
+          {
+            "id": "spot-check-0002",
+            "status": "partial",
+            "method": "Compare the fork's loader-type and technique-ID replacement route with CSX ShaderCache and BSShader hook sources.",
+            "evidenceRefs": ["evidence-0006"],
+            "result": "Shared replacement lineage is visible, while current CSX selection routes and cache identity are substantially richer."
+          }
+        ]
+      },
+      "targetRefs": ["engine:engine-function-0001"],
+      "reuseDecision": "reuse-after-verification",
+      "extensions": {}
+    },
+    {
+      "id": "prior-claim-0007",
+      "sourceRef": "prior-source-0005",
+      "statement": "CommonLibSSE NG supplies cross-runtime SE/AE/VR type, layout, vtable, and relocation abstractions; those declarations are useful naming and layout evidence but do not themselves prove renderer control flow.",
+      "locators": [
+        {
+          "path": "README.md",
+          "symbol": "Multiple Runtime Targets",
+          "url": "https://github.com/CharmedBaryon/CommonLibSSE-NG/blob/b93280e832f263dbef44e44cbe2936622a02f91a/README.md"
+        },
+        {
+          "path": "include/RE/B/BSShader.h",
+          "symbol": "RE::BSShader",
+          "url": "https://github.com/CharmedBaryon/CommonLibSSE-NG/blob/b93280e832f263dbef44e44cbe2936622a02f91a/include/RE/B/BSShader.h"
+        }
+      ],
+      "domains": ["shader-family", "shader-selection", "vr"],
+      "targetAssessment": {
+        "status": "corroborated",
+        "confidence": "confirmed",
+        "rationale": "The current Skyrim VR engine map already uses separately hashed, worktree-pinned CommonLib headers together with PDB/disassembly evidence. The external revision is catalogue context, not a replacement for that local provenance.",
+        "spotChecks": [
+          {
+            "id": "spot-check-0003",
+            "status": "matched",
+            "method": "Compare external cross-runtime declarations with the worktree-pinned headers cited by the Skyrim VR engine map.",
+            "evidenceRefs": ["evidence-0002", "evidence-0003", "evidence-0004"],
+            "result": "Names, shader type values, virtual slot use, and VR-specific vtable evidence are independently represented in the target map."
+          }
+        ]
+      },
+      "targetRefs": [
+        "engine:engine-shader-family-0001",
+        "engine:engine-shader-family-0002",
+        "engine:engine-shader-family-0003",
+        "engine:engine-shader-family-0004",
+        "engine:engine-function-0001"
+      ],
+      "reuseDecision": "already-corroborated",
+      "extensions": {}
+    },
+    {
+      "id": "prior-claim-0008",
+      "sourceRef": "prior-source-0006",
+      "statement": "Upstream Community Shaders derives shader permutations and cache identities from engine shader descriptors, feature state, macro expansion, and source paths, and intercepts engine shader loading and binding routes.",
+      "locators": [
+        {
+          "path": "src/ShaderCache.cpp",
+          "symbol": "SShaderCache descriptor, define, compile, and cache-path logic",
+          "url": "https://github.com/community-shaders/skyrim-community-shaders/blob/e6a6d82def967a4bb9a4e497db004451839a4c44/src/ShaderCache.cpp"
+        },
+        {
+          "path": "src/ShaderTools/BSShaderHooks.cpp",
+          "symbol": "BSShaderHooks",
+          "url": "https://github.com/community-shaders/skyrim-community-shaders/blob/e6a6d82def967a4bb9a4e497db004451839a4c44/src/ShaderTools/BSShaderHooks.cpp"
+        }
+      ],
+      "domains": ["shader-selection", "shader-permutation", "shader-family", "cs-feature"],
+      "targetAssessment": {
+        "status": "partially-corroborated",
+        "confidence": "high",
+        "rationale": "CSX retains direct source ancestry and corresponding systems, but the target is a later VR fork with selective invalidation, external compatibility identity, managed pack work, and VR-specific routes. File-by-file comparison is required before importing implementation details.",
+        "spotChecks": [
+          {
+            "id": "spot-check-0004",
+            "status": "partial",
+            "method": "Compare upstream ShaderCache and BSShaderHooks concepts with the target CSX sources and generated manifest.",
+            "evidenceRefs": ["evidence-0005", "evidence-0006"],
+            "result": "Core descriptor and hook ancestry remains recognizable; target cache/version behaviour is not equivalent to the pinned upstream revision."
+          }
+        ]
+      },
+      "targetRefs": [
+        "engine:engine-function-0001",
+        "shader:compile-0074",
+        "shader:compile-0115",
+        "shader:compile-0120"
+      ],
+      "reuseDecision": "reuse-after-verification",
+      "extensions": {}
+    },
+    {
+      "id": "prior-claim-0009",
+      "sourceRef": "prior-source-0007",
+      "statement": "Creation Engine Raytracing implements an explicit NVRHI render graph with named extension-owned resources, passes, enablement, and command-list execution.",
+      "locators": [
+        {
+          "path": "src/Renderer/RenderGraph.h",
+          "symbol": "RenderGraph",
+          "url": "https://github.com/Gistix/CreationEngineRaytracing/blob/ea6f80483ce457778efed863e1af869c05b77745/src/Renderer/RenderGraph.h"
+        },
+        {
+          "path": "src/Renderer/RenderGraph.cpp",
+          "symbol": "RenderGraph::Execute",
+          "url": "https://github.com/Gistix/CreationEngineRaytracing/blob/ea6f80483ce457778efed863e1af869c05b77745/src/Renderer/RenderGraph.cpp"
+        }
+      ],
+      "domains": ["render-graph", "resource-lifecycle", "d3d11-state", "cs-feature"],
+      "targetAssessment": {
+        "status": "not-applicable",
+        "confidence": "confirmed",
+        "rationale": "This graph describes the extension's own raytracing pipeline for Skyrim SE/AE. It is useful for graph API and resource-lifetime design, but it is not evidence for Skyrim VR's native render graph or current CSX execution.",
+        "spotChecks": []
+      },
+      "targetRefs": [],
+      "reuseDecision": "reference-only",
+      "extensions": {}
+    }
+  ],
+  "integrationPolicy": {
+    "promotionRule": "A prior-art claim may enter the version-specific engine map only after a target spot check establishes the claim against the declared Skyrim executable and cites new target evidence. Catalogue status alone never promotes a claim.",
+    "unknownRuntimeRule": "A source with an unknown or different runtime remains candidate or reference-only evidence even when names and broad architecture appear to match.",
+    "shaderVersionRule": "Shader-system implementation claims are scoped to the exact named system and pinned source revision. Fork ancestry is not behavioural equivalence.",
+    "contradictionRule": "Retain mismatches and contradicted claims with their source provenance and target evidence; do not rewrite or delete the prior claim to make the graph look consistent."
+  },
+  "extensions": {
+    "engineMapPath": "docs/development/render-map/engine-map.skyrim-vr-1.4.15.main-menu-seed.json",
+    "catalogueRole": "candidate-evidence-layer"
+  }
+}

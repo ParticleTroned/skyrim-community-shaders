@@ -6,6 +6,8 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $renderMapRoot = Join-Path $repoRoot 'docs/development/render-map'
 $schemaRoot = Join-Path $renderMapRoot 'schemas'
 $exampleRoot = Join-Path $renderMapRoot 'examples'
+$renderMapBridgePath = Join-Path $repoRoot 'src/RenderMap/DevBenchBridge.cpp'
+$d3dContextHooksPath = Join-Path $repoRoot 'src/RenderMap/D3DContextHooks.cpp'
 
 function Assert-True {
     param(
@@ -45,6 +47,7 @@ function Assert-JsonSchema {
 }
 
 $schemaFiles = @(
+    'prior-art-catalog.schema.json',
     'engine-map.schema.json',
     'capture-manifest.schema.json',
     'render-event.schema.json',
@@ -56,9 +59,29 @@ foreach ($schemaFile in $schemaFiles) {
     $null = Get-Content -Raw -LiteralPath $schemaPath | ConvertFrom-Json
 }
 
+$renderMapBridgeSource = Get-Content -Raw -LiteralPath $renderMapBridgePath
+$d3dContextHooksSource = Get-Content -Raw -LiteralPath $d3dContextHooksPath
+Assert-True ($renderMapBridgeSource.Contains('"geometryShaderTypes":{"type":"array","minItems":1,"uniqueItems":true,"items":{"type":"integer","minimum":0,"maximum":63}}')) 'Render-map MCP schema does not advertise geometryShaderTypes'
+Assert-True ($renderMapBridgeSource.Contains('"executionWithinSelectedGeometry":{"type":"boolean"}')) 'Render-map MCP schema does not advertise executionWithinSelectedGeometry'
+Assert-True ($renderMapBridgeSource.Contains('{ "plannedEventKinds", CSX::RenderMap::SerializeEventKindMask(kPlannedEventKinds) }')) 'Render-map registry does not distinguish planned event kinds'
+Assert-True ($renderMapBridgeSource.Contains('{ "plannedKindsSelectable", false }')) 'Render-map registry does not declare planned event kinds non-selectable'
+Assert-True ($renderMapBridgeSource.Contains('{ "defaults", {')) 'Render-map registry does not advertise the admitted default capture profile'
+Assert-True ($renderMapBridgeSource.Contains('const auto maxBytes = a_args.value("maxBytes", kDefaultBytes);')) 'Render-map start does not default maxBytes to the admitted service budget'
+Assert-True ($renderMapBridgeSource.Contains('constexpr std::uint64_t kMaximumBytes = 64ull * 1024ull * 1024ull;')) 'Render-map service storage ceiling is not the qualified 64 MiB envelope'
+Assert-True ($renderMapBridgeSource.Contains('"maxBytes":{"type":"integer","minimum":1,"maximum":67108864}')) 'Render-map MCP schema does not advertise the 64 MiB storage ceiling'
+Assert-True ($renderMapBridgeSource.Contains('{ "fixedCatalogueBytes", CSX::RenderMap::Collector::RequiredStorageBytes(defaultCatalogueConfig) }')) 'Render-map registry does not expose fixed default catalogue admission cost'
+Assert-True ($renderMapBridgeSource.Contains('{ "minimumMaxBytes", fixedCatalogueBytes + 1 }')) 'Render-map invalid-bounds error does not report the minimum admitted byte budget'
+Assert-True ($renderMapBridgeSource.Contains('constexpr std::uint32_t kContractMinor = 17;')) 'Render-map service contract does not advertise CPU-access minor 17'
+Assert-True ($renderMapBridgeSource.Contains('constexpr std::uint32_t kSchemaRevision = 18;')) 'Render-map service contract does not advertise CPU-access schema revision 18'
+Assert-True ($renderMapBridgeSource.Contains('"resource-cpu-access-v1"')) 'Render-map registry does not advertise resource-cpu-access-v1'
+Assert-True ($d3dContextHooksSource.Contains('stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);')) 'Immediate-context Map is not installed at D3D11 vtable slot 14'
+Assert-True ($d3dContextHooksSource.Contains('stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);')) 'Immediate-context Unmap is not installed at D3D11 vtable slot 15'
+
 Assert-JsonSchema (Join-Path $exampleRoot 'engine-map.example.json') (Join-Path $schemaRoot 'engine-map.schema.json')
 $engineMapSeedPath = Join-Path $renderMapRoot 'engine-map.skyrim-vr-1.4.15.main-menu-seed.json'
 Assert-JsonSchema $engineMapSeedPath (Join-Path $schemaRoot 'engine-map.schema.json')
+$priorArtCatalogPath = Join-Path $renderMapRoot 'prior-art-catalog.json'
+Assert-JsonSchema $priorArtCatalogPath (Join-Path $schemaRoot 'prior-art-catalog.schema.json')
 Assert-JsonSchema (Join-Path $exampleRoot 'capture-manifest.example.json') (Join-Path $schemaRoot 'capture-manifest.schema.json')
 Assert-JsonSchema (Join-Path $exampleRoot 'render-graph.example.json') (Join-Path $schemaRoot 'render-graph.schema.json')
 
@@ -112,6 +135,7 @@ foreach ($relation in $engineMap.relations) {
 }
 
 $engineMapSeed = Get-Content -Raw -LiteralPath $engineMapSeedPath | ConvertFrom-Json
+$priorArtCatalog = Get-Content -Raw -LiteralPath $priorArtCatalogPath | ConvertFrom-Json
 $seedEngineRefs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 foreach ($entity in $engineMapSeed.entities) {
     $null = $seedEngineRefs.Add([string] $entity.id)
@@ -148,6 +172,60 @@ foreach ($relation in $engineMapSeed.relations) {
 
     foreach ($evidenceRef in $relation.evidenceRefs) {
         Assert-True ($seedEvidenceRefs.Contains([string] $evidenceRef)) "Seed engine relation $($relation.id) refers to missing evidence $evidenceRef"
+    }
+}
+
+$priorSourceRefs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+foreach ($source in $priorArtCatalog.sources) {
+    $null = $priorSourceRefs.Add([string] $source.id)
+}
+
+Assert-Unique @($priorArtCatalog.sources.id) 'Prior-art source IDs'
+Assert-Unique @($priorArtCatalog.claims.id) 'Prior-art claim IDs'
+$spotCheckIds = [System.Collections.Generic.List[string]]::new()
+foreach ($claim in $priorArtCatalog.claims) {
+    foreach ($spotCheck in $claim.targetAssessment.spotChecks) {
+        $spotCheckIds.Add([string] $spotCheck.id)
+    }
+}
+if ($spotCheckIds.Count -gt 0) {
+    Assert-Unique @($spotCheckIds) 'Prior-art spot-check IDs'
+}
+
+$targetManifestPath = Join-Path $repoRoot ([string] $priorArtCatalog.target.shaderSystem.manifestPath)
+Assert-True (Test-Path -LiteralPath $targetManifestPath -PathType Leaf) "Prior-art target manifest does not exist: $targetManifestPath"
+$targetManifestHash = (Get-FileHash -LiteralPath $targetManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+Assert-True ($targetManifestHash -eq ([string] $priorArtCatalog.target.shaderSystem.manifestSha256).ToLowerInvariant()) 'Prior-art target manifest hash does not match the declared file'
+Assert-True ([string] $priorArtCatalog.target.engine.executableSha256 -eq [string] $engineMapSeed.engineBuild.executable.sha256) 'Prior-art target executable hash does not match the seed engine map'
+Assert-True ([string] $priorArtCatalog.target.engine.runtime -eq [string] $engineMapSeed.engineBuild.runtime) 'Prior-art target runtime does not match the seed engine map'
+
+foreach ($source in $priorArtCatalog.sources) {
+    foreach ($lineageRef in $source.lineageRefs) {
+        Assert-True ($priorSourceRefs.Contains([string] $lineageRef)) "Prior-art source $($source.id) refers to missing lineage source $lineageRef"
+        Assert-True ([string] $lineageRef -ne [string] $source.id) "Prior-art source $($source.id) refers to itself as lineage"
+    }
+}
+
+foreach ($claim in $priorArtCatalog.claims) {
+    Assert-True ($priorSourceRefs.Contains([string] $claim.sourceRef)) "Prior-art claim $($claim.id) refers to missing source $($claim.sourceRef)"
+
+    foreach ($targetRef in $claim.targetRefs) {
+        $namespace, $value = ([string] $targetRef).Split(':', 2)
+        if ($namespace -eq 'engine') {
+            Assert-True ($seedEngineRefs.Contains($value)) "Prior-art claim $($claim.id) refers to missing seed engine entity $value"
+        }
+        elseif ($namespace -eq 'shader') {
+            Assert-True ($shaderRefs.Contains($value)) "Prior-art claim $($claim.id) refers to missing shader manifest ID $value"
+        }
+        else {
+            throw "Prior-art claim $($claim.id) has unknown target namespace $namespace"
+        }
+    }
+
+    foreach ($spotCheck in $claim.targetAssessment.spotChecks) {
+        foreach ($evidenceRef in $spotCheck.evidenceRefs) {
+            Assert-True ($seedEvidenceRefs.Contains([string] $evidenceRef)) "Prior-art spot check $($spotCheck.id) refers to missing seed evidence $evidenceRef"
+        }
     }
 }
 
@@ -261,4 +339,4 @@ foreach ($window in $renderGraph.decisionWindows) {
     }
 }
 
-Write-Output "Render-map contracts passed: $($schemaFiles.Count) schemas, 2 engine maps, $($events.Count + $mutationEventCount) events, $($renderGraph.nodes.Count) graph nodes."
+Write-Output "Render-map contracts passed: $($schemaFiles.Count) schemas, 1 prior-art catalogue with $($priorArtCatalog.claims.Count) claims, 2 engine maps, $($events.Count + $mutationEventCount) events, $($renderGraph.nodes.Count) graph nodes."

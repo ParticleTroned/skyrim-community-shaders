@@ -4337,6 +4337,22 @@ namespace SIE
 			Plugin::VERSION_LABEL, BuildProvenance::GetBuildId(), BuildProvenance::GetShaderCacheAbiId());
 	}
 
+	ShaderCache::CompileContextSnapshot ShaderCache::GetCompileContextSnapshot() const
+	{
+		const auto state = CaptureGlobalCompileState();
+		return {
+			.developerMode = state.developerMode,
+			.virtualReality = state.isVR,
+			.partialPrecision = state.partialPrecision,
+			.avoidFlowControl = state.avoidFlowControl,
+			.shaderDefinesCanonical = state.shaderDefines->canonicalText,
+			.shaderDefinesSuffix = Util::GetShaderDefinesSuffix(state.shaderDefines->canonicalText),
+			.globalCompileStateDigest = state.digest.ToHex(),
+			.shaderCacheAbiId = std::string(BuildProvenance::GetShaderCacheAbiId()),
+			.shaderCompilerIdentity = BuildProvenance::GetShaderCompilerIdentity(),
+		};
+	}
+
 	static bool IsEnvVarTruthy(const char* a_name)
 	{
 		char buffer[16] = {};

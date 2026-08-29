@@ -5,6 +5,10 @@
 #include <cstdint>
 #include <mutex>
 #include <optional>
+#include <shared_mutex>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace CSX::RenderMap
 {
@@ -30,12 +34,38 @@ namespace CSX::RenderMap
 		kVisibilitySubmission = 18,
 		kEyeSubmission = 19,
 		kCullDecision = 20,
+		kSceneObjectObservation = 21,
+		kGeometryObservation = 22,
+		kMaterialStateObservation = 23,
+		kGeometryBoundaryV2 = 24,
+		kResourceViewStateObserved = 25,
+		kResourceCpuAccess = 26,
+	};
+
+	enum class ResourceCpuAccessPhase : std::uint8_t
+	{
+		kMap = 1,
+		kUnmap = 2,
 	};
 
 	enum class ResourceReadinessDomain : std::uint8_t
 	{
 		kUnknown = 0,
 		kSameImmediateContextOrder = 1,
+	};
+
+	enum class TargetBindingSource : std::uint8_t
+	{
+		kObservedCall = 1,
+		kCaptureStateSnapshot = 2,
+		kPostCallQuery = 3,
+	};
+
+	enum class ResourceBindingSource : std::uint8_t
+	{
+		kRequestedCall = 1,
+		kPostCallQuery = 2,
+		kCaptureStateSnapshot = 3,
 	};
 
 	enum class ResourceFlowOperation : std::uint8_t
@@ -130,6 +160,7 @@ namespace CSX::RenderMap
 		bool skipPixelShader{ false };
 		std::string_view fxpFilename;
 		std::string_view imageSpaceName;
+		std::string_view compileSourceName;
 		std::string_view definesSuffix;
 	};
 
@@ -141,6 +172,9 @@ namespace CSX::RenderMap
 		std::uint32_t shaderType{ 0 };
 		std::uint32_t passEnum{ 0 };
 		std::uint32_t renderFlags{ 0 };
+		SceneObjectObservationInput sceneObject;
+		GeometryObservationInput geometryObservation;
+		MaterialStateObservationInput materialState;
 	};
 
 	struct TechniqueStageSelection
@@ -195,7 +229,10 @@ namespace CSX::RenderMap
 			std::uint32_t a_renderTargetCount,
 			const ResourceViewInput* a_renderTargets,
 			const ResourceViewInput* a_depthTarget,
-			bool a_keepTargets = false) noexcept;
+			bool a_keepTargets = false,
+			TargetBindingSource a_source = TargetBindingSource::kObservedCall,
+			std::uint64_t a_expectedCaptureGeneration = 0) noexcept;
+		std::uint64_t ClaimRenderTargetStateSeed(std::uintptr_t a_context) noexcept;
 		void BindResourceViews(
 			std::uintptr_t a_context,
 			ResourceBindingKind a_bindingKind,
@@ -203,7 +240,10 @@ namespace CSX::RenderMap
 			std::uint32_t a_startSlot,
 			std::uint32_t a_viewCount,
 			const ResourceViewInput* a_views,
-			bool a_keepViews = false) noexcept;
+			bool a_keepViews = false,
+			ResourceBindingSource a_source = ResourceBindingSource::kRequestedCall,
+			std::uint64_t a_expectedCaptureGeneration = 0) noexcept;
+		std::uint64_t ClaimResourceViewStateSeed(std::uintptr_t a_context) noexcept;
 		void RecordResourceFlow(
 			std::uintptr_t a_context,
 			ResourceFlowOperation a_operation,
@@ -211,6 +251,24 @@ namespace CSX::RenderMap
 			const ResourceObservationInput& a_destination,
 			std::uint32_t a_sourceSubresource = 0,
 			std::uint32_t a_destinationSubresource = 0) noexcept;
+		void RecordCpuMap(
+			std::uintptr_t a_context,
+			const ResourceObservationInput& a_resource,
+			std::uint32_t a_subresource,
+			std::uint32_t a_mapType,
+			std::uint32_t a_mapFlags,
+			std::int32_t a_result,
+			std::uint64_t a_callDurationQpcTicks,
+			std::uint64_t a_completedQpcTick,
+			std::uint32_t a_rowPitch,
+			std::uint32_t a_depthPitch,
+			std::uint64_t a_expectedCaptureGeneration) noexcept;
+		void RecordCpuUnmap(
+			std::uintptr_t a_context,
+			const ResourceObservationInput& a_resource,
+			std::uint32_t a_subresource,
+			std::uint64_t a_completedQpcTick,
+			std::uint64_t a_expectedCaptureGeneration) noexcept;
 		void RecordVisibilityCandidate(
 			std::uintptr_t a_object,
 			std::uint32_t a_objectIndex,
@@ -258,14 +316,85 @@ namespace CSX::RenderMap
 			std::uint64_t a_argument1 = 0,
 			std::uint64_t a_argument2 = 0,
 			std::uint64_t a_argument3 = 0) noexcept;
+		void RegisterCreatedStageShader(
+			ShaderStage a_stage,
+			std::uintptr_t a_d3dObject,
+			std::uint64_t a_bytecodeSize,
+			std::string_view a_bytecodeSha256) noexcept;
+		void RegisterEngineStageShader(
+			ShaderStage a_stage,
+			std::uintptr_t a_d3dObject,
+			std::string_view a_loaderType,
+			std::uint32_t a_descriptor,
+			std::string_view a_compileSourceName = {}) noexcept;
 		void RetireShaderObservation(std::uintptr_t a_shader) noexcept;
 
 	private:
+		struct PersistentStageShaderKey
+		{
+			ShaderStage stage{ ShaderStage::kVertex };
+			std::uintptr_t d3dObject{ 0 };
+
+			bool operator==(const PersistentStageShaderKey&) const noexcept = default;
+		};
+
+		struct PersistentStageShaderKeyHash
+		{
+			std::size_t operator()(const PersistentStageShaderKey& a_key) const noexcept;
+		};
+
+		struct PersistentStageShaderIdentity
+		{
+			struct EngineAlias
+			{
+				std::string loaderType;
+				std::string compileSourceName;
+				std::uint32_t descriptor{ 0 };
+
+				bool operator==(const EngineAlias&) const noexcept = default;
+			};
+
+			std::uint64_t bytecodeSize{ 0 };
+			std::array<char, kSha256HexLength + 1> bytecodeSha256{};
+			std::vector<EngineAlias> engineAliases;
+		};
+
+		struct ActiveCpuMapKey
+		{
+			std::uintptr_t context{ 0 };
+			std::uintptr_t resource{ 0 };
+			std::uint32_t subresource{ 0 };
+
+			bool operator==(const ActiveCpuMapKey&) const noexcept = default;
+		};
+
+		struct ActiveCpuMapKeyHash
+		{
+			std::size_t operator()(const ActiveCpuMapKey& a_key) const noexcept;
+		};
+
+		struct ActiveCpuMap
+		{
+			std::uint64_t captureGeneration{ 0 };
+			std::uint64_t observationId{ 0 };
+			std::uint64_t completedQpcTick{ 0 };
+			std::uint32_t mapType{ 0 };
+			std::uint32_t mapFlags{ 0 };
+			std::uint32_t rowPitch{ 0 };
+			std::uint32_t depthPitch{ 0 };
+		};
+
 		std::uint64_t EnsureImmediateContextObservation() noexcept;
 		std::uint64_t NextCommandStreamSequence() noexcept;
+		std::uint64_t EnsureBoundStageObservation(ShaderStage a_stage) noexcept;
 		StageShaderObservationResult ObserveBoundStage(
 			ShaderStage a_stage,
 			std::uintptr_t a_d3dObject) noexcept;
+		StageShaderObservationResult ObserveStageShaderWithPersistent(
+			const StageShaderObservationInput& a_input) noexcept;
+		std::optional<PersistentStageShaderIdentity> FindCreatedStageShader(
+			ShaderStage a_stage,
+			std::uintptr_t a_d3dObject) const noexcept;
 		void PublishBoundStageObservation(
 			ShaderStage a_stage,
 			std::uintptr_t a_d3dObject,
@@ -288,11 +417,22 @@ namespace CSX::RenderMap
 		std::atomic_uint64_t boundPixelShaderObservationId{ 0 };
 		std::atomic_uint64_t boundComputeShaderObservationId{ 0 };
 		std::atomic_uint64_t boundTargetBindingObservationId{ 0 };
+		std::atomic_uint64_t targetStateObservationGeneration{ 0 };
+		std::atomic_uint64_t resourceViewStateObservationGeneration{ 0 };
 		std::atomic_uint64_t immediateContextPointerGeneration{ 0 };
 		std::atomic_uint64_t immediateContextObservationId{ 0 };
 		std::atomic_uint64_t immediateContextObservationGeneration{ 0 };
 		std::atomic_uint64_t immediateContextCommandSequence{ 0 };
 		std::mutex immediateContextObservationMutex;
+		std::mutex resourceViewStateMutex;
+		std::mutex activeCpuMapMutex;
+		std::unordered_map<ActiveCpuMapKey, ActiveCpuMap, ActiveCpuMapKeyHash> activeCpuMaps;
+		std::uint64_t resourceViewStateGeneration{ 0 };
+		std::array<std::array<std::array<std::uintptr_t, kMaximumShaderResourceSlots>, 7>, 2>
+			effectiveResourceViews{};
+		mutable std::shared_mutex persistentStageShaderMutex;
+		std::unordered_map<PersistentStageShaderKey, PersistentStageShaderIdentity,
+			PersistentStageShaderKeyHash> persistentStageShaders;
 	};
 
 	Runtime& GetRuntime() noexcept;

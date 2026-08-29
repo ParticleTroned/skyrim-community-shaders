@@ -83,14 +83,15 @@ namespace
 
 		auto snapshot = runtime.StopCapture();
 		Check(snapshot.has_value(), "runtime capture did not stop");
-		Check(snapshot->events.size() == 7, "runtime boundary event count is wrong");
+		Check(snapshot->events.size() == 8, "runtime boundary event count is wrong");
 		Check(snapshot->events[0].kind == EventKind::kRenderPassEnter, "render-pass begin is missing");
 		Check(snapshot->events[1].kind == EventKind::kShaderObserved, "first-seen shader event is missing");
 		Check(snapshot->events[2].kind == EventKind::kTechniqueBegin, "technique begin is missing");
 		Check(snapshot->events[3].kind == EventKind::kTechniqueEnd, "technique end is missing");
-		Check(snapshot->events[4].kind == EventKind::kGeometrySetupBegin, "geometry begin is missing");
-		Check(snapshot->events[5].kind == EventKind::kGeometrySetupEnd, "geometry end is missing");
-		Check(snapshot->events[6].kind == EventKind::kRenderPassExit, "render-pass end is missing");
+		Check(snapshot->events[4].kind == EventKind::kGeometryObserved, "geometry declaration is missing");
+		Check(snapshot->events[5].kind == EventKind::kGeometrySetupBegin, "geometry begin is missing");
+		Check(snapshot->events[6].kind == EventKind::kGeometrySetupEnd, "geometry end is missing");
+		Check(snapshot->events[7].kind == EventKind::kRenderPassExit, "render-pass end is missing");
 
 		const auto passObservation = snapshot->events[0].scopes.renderPass.observationId;
 		Check(passObservation != 0, "render-pass observation is missing");
@@ -106,9 +107,11 @@ namespace
 			"technique payload schema is wrong");
 		Check(snapshot->events[2].payload.words[4] == 9, "technique descriptor evidence is wrong");
 		Check(snapshot->events[2].payload.words[0] != 0, "technique did not reference its shader observation");
-		Check(snapshot->events[4].payload.schema == static_cast<std::uint16_t>(PayloadSchema::kGeometryBoundary),
+		Check(snapshot->events[5].payload.schema == static_cast<std::uint16_t>(PayloadSchema::kGeometryBoundaryV2),
 			"geometry payload schema is wrong");
-		Check(snapshot->events[4].payload.words[2] == 0x2000, "geometry pointer evidence is wrong");
+		Check(snapshot->events[5].payload.words[2] == 0x2000, "geometry pointer evidence is wrong");
+		Check(snapshot->events[5].payload.words[6] == snapshot->geometryObservations[0].observationId,
+			"geometry boundary did not reference its semantic declaration");
 		Check(snapshot->shaderObservations.size() == 1, "shader observation catalog is wrong");
 		Check(std::string_view(snapshot->shaderObservations[0].fxpFilename.data()) == "Lighting",
 			"shader filename was not retained");
@@ -358,6 +361,172 @@ namespace
 			"dispatch command-stream sequence is not monotonic after draw");
 	}
 
+	void TestCaptureStartSeedsInheritedStageIdentity()
+	{
+		Runtime runtime;
+		auto config = Config();
+		config.maxEvents = 16;
+		config.maxStageShaderObservations = 4;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		runtime.SetImmediateContext(0xA000);
+		runtime.RegisterCreatedStageShader(
+			ShaderStage::kVertex, 0xA100, 128,
+			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+		runtime.RegisterCreatedStageShader(
+			ShaderStage::kPixel, 0xA200, 256,
+			"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+		runtime.RegisterEngineStageShader(ShaderStage::kVertex, 0xA100, "Lighting", 17, "Lighting");
+		runtime.RegisterEngineStageShader(ShaderStage::kVertex, 0xA100, "Lighting", 17, "Lighting");
+		runtime.RegisterEngineStageShader(ShaderStage::kVertex, 0xA100, "Utility", 9, "Utility");
+		runtime.RegisterEngineStageShader(ShaderStage::kPixel, 0xA200, "ISHDRDownSample4", 18, "ISHDR");
+		// These binds predate the capture. StartCapture clears only capture-local
+		// observation IDs, while retaining the actual immediate-context state.
+		runtime.BindStage(0xA000, ShaderStage::kVertex, 0xA100);
+		runtime.BindStage(0xA000, ShaderStage::kPixel, 0xA200);
+
+		Check(runtime.StartCapture(config) == StartResult::kStarted,
+			"inherited-stage capture did not start");
+		runtime.RecordDraw(0xA000, DrawOperation::kDrawIndexed, 6, 0, 0);
+		auto snapshot = runtime.StopCapture();
+
+		Check(snapshot && snapshot->stageShaderObservations.size() == 2,
+			"first captured draw did not seed inherited stage identities");
+		Check(snapshot->stageShaderObservations[0].bytecodeSize == 128 &&
+			std::string_view(snapshot->stageShaderObservations[0].bytecodeSha256.data()) ==
+				"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"inherited vertex bytecode provenance is missing");
+		Check(snapshot->stageShaderObservations[1].bytecodeSize == 256 &&
+			std::string_view(snapshot->stageShaderObservations[1].bytecodeSha256.data()) ==
+				"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			"inherited pixel bytecode provenance is missing");
+		Check(snapshot->stageShaderObservations[0].engineAliasCount == 2 &&
+			snapshot->stageShaderObservations[0].engineAliasTotalCount == 2 &&
+			std::string_view(snapshot->stageShaderObservations[0].engineAliases[0].loaderType.data()) == "Lighting" &&
+			std::string_view(snapshot->stageShaderObservations[0].engineAliases[0].compileSourceName.data()) == "Lighting" &&
+			snapshot->stageShaderObservations[0].engineAliases[0].descriptor == 17 &&
+			std::string_view(snapshot->stageShaderObservations[0].engineAliases[1].loaderType.data()) == "Utility" &&
+			std::string_view(snapshot->stageShaderObservations[0].engineAliases[1].compileSourceName.data()) == "Utility" &&
+			snapshot->stageShaderObservations[0].engineAliases[1].descriptor == 9 &&
+			!snapshot->stageShaderObservations[0].engineAliasesTruncated,
+			"inherited engine shader aliases were not retained or deduplicated");
+		Check(snapshot->stageShaderObservations[1].engineAliasCount == 1 &&
+			std::string_view(snapshot->stageShaderObservations[1].engineAliases[0].loaderType.data()) ==
+				"ISHDRDownSample4" &&
+			std::string_view(snapshot->stageShaderObservations[1].engineAliases[0].compileSourceName.data()) ==
+				"ISHDR",
+			"ImageSpace loader alias did not retain its distinct shared compile source");
+		const auto draw = std::find_if(snapshot->events.begin(), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; });
+		Check(draw != snapshot->events.end() && draw->payload.words[2] != 0 && draw->payload.words[3] != 0,
+			"first captured draw did not join inherited VS/PS identities");
+		Check(draw->commandStreamSequence == 1,
+			"synthetic inherited-state declarations changed command ordering");
+	}
+
+	void TestCreatedStagePointerReuseAdvancesIdentity()
+	{
+		Runtime runtime;
+		auto config = Config();
+		config.maxEvents = 16;
+		config.maxStageShaderObservations = 4;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		runtime.SetImmediateContext(0xB000);
+		Check(runtime.StartCapture(config) == StartResult::kStarted,
+			"stage-reuse capture did not start");
+
+		runtime.RegisterCreatedStageShader(
+			ShaderStage::kVertex, 0xB100, 64,
+			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+		runtime.BindStage(0xB000, ShaderStage::kVertex, 0xB100);
+		runtime.RecordDraw(0xB000, DrawOperation::kDraw, 3);
+
+		runtime.RegisterCreatedStageShader(
+			ShaderStage::kVertex, 0xB100, 96,
+			"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
+		runtime.BindStage(0xB000, ShaderStage::kVertex, 0xB100);
+		runtime.RecordDraw(0xB000, DrawOperation::kDraw, 4);
+		auto snapshot = runtime.StopCapture();
+
+		Check(snapshot && snapshot->stageShaderObservations.size() == 2,
+			"reused D3D pointer was merged across creation identities");
+		Check(snapshot->stageShaderObservations[0].pointerGeneration == 1 &&
+			snapshot->stageShaderObservations[1].pointerGeneration == 2,
+			"reused D3D pointer did not advance its capture-local generation");
+		Check(snapshot->stageShaderObservations[1].bytecodeSize == 96 &&
+			std::string_view(snapshot->stageShaderObservations[1].bytecodeSha256.data()) ==
+				"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+			"reused D3D pointer retained stale creation provenance");
+		std::vector<std::uint64_t> vertexIds;
+		for (const auto& event : snapshot->events) {
+			if (event.kind == EventKind::kDraw)
+				vertexIds.push_back(event.payload.words[2]);
+		}
+		Check(vertexIds.size() == 2 && vertexIds[0] != 0 && vertexIds[1] != 0 &&
+			vertexIds[0] != vertexIds[1],
+			"draws did not distinguish reused stage objects");
+	}
+
+	void TestStageShaderEvidenceEnrichesWithoutPointerReuse()
+	{
+		Runtime runtime;
+		auto config = Config();
+		config.maxEvents = 32;
+		config.maxStageShaderObservations = 4;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		runtime.SetImmediateContext(0xC000);
+		Check(runtime.StartCapture(config) == StartResult::kStarted,
+			"stage-enrichment capture did not start");
+
+		constexpr auto bytecodeSha =
+			"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+		runtime.RegisterCreatedStageShader(ShaderStage::kVertex, 0xC100, 128, bytecodeSha);
+		runtime.BindStage(0xC000, ShaderStage::kVertex, 0xC100);
+		runtime.RegisterEngineStageShader(ShaderStage::kVertex, 0xC100, "Effect", 66, "Effect");
+		runtime.RecordTechniqueResolution({
+			.inputVertexDescriptor = 66,
+			.resolvedVertexDescriptor = 66,
+			.shaderFound = true,
+			.vertex = {
+				.route = ShaderSelectionRoute::kCSXCache,
+				.shader = {
+					.stage = ShaderStage::kVertex,
+					.wrapper = 0xC200,
+					.d3dObject = 0xC100,
+					.wrapperDescriptor = 66,
+					.bytecodeSize = 128,
+					.bytecodeSha256 = bytecodeSha,
+					.cachePath = "Data/ShaderCache/Effect/42.vso",
+				},
+			},
+		});
+		runtime.RecordDraw(0xC000, DrawOperation::kDrawIndexedInstanced, 6, 2);
+		auto snapshot = runtime.StopCapture();
+
+		Check(snapshot && snapshot->stageShaderObservations.size() == 1,
+			"compatible selected-stage evidence was mistaken for pointer reuse");
+		const auto& shader = snapshot->stageShaderObservations[0];
+		Check(shader.pointerGeneration == 1 && shader.wrapperEvidence == 0xC200 &&
+			shader.wrapperDescriptor == 66,
+			"selected-stage wrapper evidence did not enrich the original observation");
+		Check(shader.bytecodeSize == 128 && std::string_view(shader.bytecodeSha256.data()) == bytecodeSha &&
+			std::string_view(shader.cachePath.data()) == "Data/ShaderCache/Effect/42.vso",
+			"selected-stage bytecode or cache provenance was not retained");
+		Check(shader.engineAliasCount == 1 && shader.engineAliasTotalCount == 1 &&
+			std::string_view(shader.engineAliases[0].loaderType.data()) == "Effect" &&
+			std::string_view(shader.engineAliases[0].compileSourceName.data()) == "Effect" &&
+			shader.engineAliases[0].descriptor == 66,
+			"selected-stage engine alias did not enrich the original observation");
+
+		const auto resolved = std::find_if(snapshot->events.begin(), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kTechniqueResolved; });
+		const auto draw = std::find_if(snapshot->events.begin(), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; });
+		Check(resolved != snapshot->events.end() && draw != snapshot->events.end() &&
+			resolved->payload.words[4] == shader.observationId &&
+			draw->payload.words[2] == shader.observationId,
+			"technique resolution and draw did not join the enriched stage identity");
+	}
+
 	void TestImmediateContextOutputMergerState()
 	{
 		Runtime runtime;
@@ -411,6 +580,46 @@ namespace
 			snapshot->targetBindingObservations[0].renderTargetObservationIds[2] == 0 &&
 			snapshot->targetBindingObservations[0].depthTargetObservationId != 0,
 			"output-merger binding did not preserve slots, nulls, and depth target");
+	}
+
+	void TestCaptureStartClaimsOneEffectiveOutputMergerSnapshot()
+	{
+		Runtime runtime;
+		auto config = Config();
+		config.maxEvents = 32;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		runtime.SetImmediateContext(0xB800);
+		Check(runtime.StartCapture(config) == StartResult::kStarted,
+			"effective output-merger snapshot capture did not start");
+
+		const auto generation = runtime.ClaimRenderTargetStateSeed(0xB800);
+		Check(generation != 0, "first draw could not claim effective output-merger state");
+		Check(runtime.ClaimRenderTargetStateSeed(0xB800) == 0,
+			"effective output-merger state could be claimed twice in one capture");
+		ResourceViewInput target{};
+		target.view.kind = TargetViewKind::kRenderTarget;
+		target.view.d3dObject = 0xB810;
+		runtime.BindRenderTargetViews(
+			0xB800, 1, &target, nullptr, false,
+			TargetBindingSource::kCaptureStateSnapshot, generation);
+		runtime.RecordDraw(0xB800, DrawOperation::kDraw, 3);
+		auto snapshot = runtime.StopCapture();
+
+		const auto binding = std::find_if(snapshot->events.begin(), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kRenderTargetBind; });
+		const auto draw = std::find_if(snapshot->events.begin(), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; });
+		Check(binding != snapshot->events.end() &&
+			binding->payload.words[2] == static_cast<std::uint64_t>(TargetBindingSource::kCaptureStateSnapshot),
+			"effective output-merger snapshot provenance was not retained");
+		Check(draw != snapshot->events.end() && draw->targetBindingObservationId != 0,
+			"first draw did not consume the effective output-merger snapshot");
+
+		Check(runtime.StartCapture(config) == StartResult::kStarted,
+			"second effective output-merger capture did not start");
+		Check(runtime.ClaimRenderTargetStateSeed(0xB800) != 0,
+			"effective output-merger seed leaked across capture generations");
+		runtime.StopCapture();
 	}
 
 	void TestOutputMergerBoundsAreExplicit()
@@ -526,6 +735,122 @@ namespace
 		Check(clear != snapshot->events.end() && clear->payload.words[1] == 0 && clear->payload.words[2] != 0 &&
 			clear->commandStreamSequence == 5,
 			"destination-only resource mutation did not retain an ordered typed destination");
+	}
+
+	void TestEffectiveResourceViewQueriesAreRevisionedAndDeltaEncoded()
+	{
+		Runtime runtime;
+		auto config = Config();
+		config.maxEvents = 64;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		runtime.SetImmediateContext(0xF000);
+		Check(runtime.StartCapture(config) == StartResult::kStarted,
+			"effective resource-state capture did not start");
+		const ResourceViewInput srv{
+			.resource = {
+				.d3dObject = 0xF100, .dimension = ResourceDimension::kTexture2D,
+				.widthOrBytes = 64, .height = 64, .depthOrArraySize = 1, .mipLevels = 1,
+				.format = 28, .sampleCount = 1, .bindFlags = 0x28,
+			},
+			.view = {
+				.kind = TargetViewKind::kShaderResource, .d3dObject = 0xF200,
+				.format = 28, .dimension = 4,
+			},
+		};
+		runtime.BindResourceViews(
+			0xF000, ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, 1, &srv);
+		runtime.BindResourceViews(
+			0xF000, ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, 1, &srv,
+			false, ResourceBindingSource::kPostCallQuery);
+		runtime.BindResourceViews(
+			0xF000, ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, 1, &srv,
+			false, ResourceBindingSource::kPostCallQuery);
+		runtime.BindResourceViews(
+			0xF000, ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, 1, nullptr,
+			false, ResourceBindingSource::kPostCallQuery);
+
+		auto snapshot = runtime.StopCapture();
+		Check(snapshot.has_value(), "effective resource-state capture did not stop");
+		std::vector<const EventRecord*> bindings;
+		std::vector<const EventRecord*> summaries;
+		for (const auto& event : snapshot->events) {
+			if (event.kind == EventKind::kResourceViewBind)
+				bindings.push_back(&event);
+			if (event.kind == EventKind::kResourceViewStateObserved)
+				summaries.push_back(&event);
+		}
+		Check(bindings.size() == 3 && summaries.size() == 3,
+			"effective resource state was not delta encoded with one summary per query");
+		Check(bindings[0]->payload.words[4] ==
+				static_cast<std::uint64_t>(ResourceBindingSource::kRequestedCall) &&
+			bindings[1]->payload.words[4] ==
+				static_cast<std::uint64_t>(ResourceBindingSource::kPostCallQuery) &&
+			bindings[2]->payload.words[0] == 0,
+			"requested, effective, and auto-null evidence were not distinguished");
+		Check(summaries[0]->payload.words[5] == 1 &&
+			summaries[1]->payload.words[5] == 0 && summaries[2]->payload.words[5] == 1,
+			"effective query summaries did not retain changed-slot counts");
+		const auto generation = runtime.StartCapture(config) == StartResult::kStarted ?
+			runtime.ActiveCaptureGeneration() : 0;
+		Check(generation != 0 && runtime.ClaimResourceViewStateSeed(0xF000) == generation &&
+			runtime.ClaimResourceViewStateSeed(0xF000) == 0,
+			"capture-generation resource-state snapshot claim was not one-shot");
+		runtime.BindResourceViews(
+			0xF000, ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, 1, &srv,
+			false, ResourceBindingSource::kCaptureStateSnapshot, generation);
+		auto second = runtime.StopCapture();
+		Check(second && std::count_if(second->events.begin(), second->events.end(),
+			[](const EventRecord& event) {
+				return event.kind == EventKind::kResourceViewBind && event.payload.words[0] != 0;
+			}) == 1,
+			"effective resource-state tracking leaked across capture generations");
+	}
+
+	void TestCpuMapUnmapBoundariesArePairedAndTimed()
+	{
+		Runtime runtime;
+		auto config = Config();
+		config.maxEvents = 32;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		runtime.SetImmediateContext(0xFA00);
+		Check(runtime.StartCapture(config) == StartResult::kStarted,
+			"CPU resource-access capture did not start");
+		const auto generation = runtime.ActiveCaptureGeneration();
+		const ResourceObservationInput staging{
+			.d3dObject = 0xFA10, .dimension = ResourceDimension::kTexture2D,
+			.widthOrBytes = 64, .height = 64, .depthOrArraySize = 1, .mipLevels = 1,
+			.format = 28, .sampleCount = 1, .usage = 3, .cpuAccessFlags = 0x30000,
+		};
+		runtime.RecordCpuMap(0xFA00, staging, 0, 1, 0, 0, 25, 200, 256, 16384, generation);
+		runtime.RecordCpuUnmap(0xFA00, staging, 0, 250, generation);
+		runtime.RecordCpuMap(0xFA00, staging, 0, 4, 0, 0, 10, 300, 256, 16384, generation);
+		runtime.RecordCpuUnmap(0xFA00, staging, 0, 345, generation);
+		runtime.RecordCpuMap(0xFA00, staging, 0, 1, 0x100000, -1, 5, 400, 0, 0, generation);
+		runtime.RecordCpuUnmap(0xFA00, staging, 0, 410, generation);
+
+		auto snapshot = runtime.StopCapture();
+		Check(snapshot.has_value(), "CPU resource-access capture did not stop");
+		std::vector<const EventRecord*> access;
+		for (const auto& event : snapshot->events) {
+			if (event.kind == EventKind::kResourceCpuAccess)
+				access.push_back(&event);
+		}
+		Check(access.size() == 6, "CPU resource-access events were not retained");
+		Check(access[0]->payload.words[0] == static_cast<std::uint64_t>(ResourceCpuAccessPhase::kMap) &&
+			access[0]->payload.words[5] == 25 && access[0]->payload.words[7] == (16384ull << 32u | 256u),
+			"successful read Map did not retain timing and pitch evidence");
+		Check(access[1]->payload.words[0] == static_cast<std::uint64_t>(ResourceCpuAccessPhase::kUnmap) &&
+			access[1]->payload.words[1] == access[0]->payload.words[1] && access[1]->payload.words[5] == 50,
+			"read Map/Unmap lifetime was not paired");
+		Check(access[3]->payload.words[1] == access[2]->payload.words[1] && access[3]->payload.words[5] == 45,
+			"write Map/Unmap lifetime was not paired");
+		Check(static_cast<std::uint32_t>(access[4]->payload.words[6]) == 0xFFFFFFFFu,
+			"failed Map HRESULT was not retained losslessly");
+		Check(access[5]->payload.words[1] == 0 && access[5]->payload.words[4] == 0,
+			"Unmap after failed Map was falsely paired");
+		Check(access[0]->commandStreamSequence < access[1]->commandStreamSequence &&
+			access[1]->commandStreamSequence < access[2]->commandStreamSequence,
+			"CPU access calls were not ordered in the immediate-context stream");
 	}
 
 	void TestExecutionJoinsDeclaredScopes()
@@ -722,6 +1047,311 @@ namespace
 			[](const EventRecord& a_event) { return a_event.kind == EventKind::kCullDecision; }),
 			"stale readback version crossed a capture generation boundary");
 	}
+
+	void TestEventKindSelectionPreservesDependenciesAndCapacity()
+	{
+		const auto eyeOnly = EventKindBit(EventKind::kEyeSubmitted);
+		const auto resolved = ResolveEventKindDependencies(eyeOnly);
+		Check((resolved & eyeOnly) != 0, "requested eye event was not retained");
+		Check((resolved & EventKindBit(EventKind::kResourceObserved)) != 0,
+			"eye submission did not resolve its resource identity dependency");
+		Check((resolved & EventKindBit(EventKind::kDraw)) == 0,
+			"eye submission unexpectedly enabled draw capture");
+
+		const auto techniquePair = ResolveEventKindDependencies(EventKindBit(EventKind::kTechniqueBegin));
+		Check((techniquePair & EventKindBit(EventKind::kTechniqueEnd)) != 0 &&
+			(techniquePair & EventKindBit(EventKind::kShaderObserved)) != 0,
+			"scope selection did not resolve its paired boundary and identity");
+
+		Runtime runtime;
+		auto config = Config();
+		config.maxEvents = 2;
+		config.requestedEventKindMask = eyeOnly;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		Check(runtime.StartCapture(config) == StartResult::kStarted,
+			"filtered eye capture did not start");
+		for (std::uint32_t index = 0; index < 100; ++index)
+			runtime.RecordVisibilityCandidate(0x1000 + index, index, 1);
+		runtime.RecordEyeSubmission(
+			{ .d3dObject = 0x9000, .dimension = ResourceDimension::kTexture2D,
+				.widthOrBytes = 2048, .height = 2048, .depthOrArraySize = 1, .mipLevels = 1 },
+			Eye::kRight, 2, 0.5f, 0.0f, 1.0f, 1.0f, 0, 9);
+
+		auto snapshot = runtime.StopCapture();
+		Check(snapshot && snapshot->events.size() == 2,
+			"filtered calls consumed selected-event capacity");
+		Check(snapshot->events[0].kind == EventKind::kResourceObserved &&
+			snapshot->events[1].kind == EventKind::kEyeSubmitted,
+			"eye capture did not retain its resolved event sequence");
+		Check(snapshot->statistics.filtered == 100 &&
+			snapshot->statistics.droppedEventLimit == 0 &&
+			snapshot->statistics.droppedByteLimit == 0,
+			"filtered calls were reported as loss or truncation");
+		Check(snapshot->config.requestedEventKindMask == eyeOnly &&
+			snapshot->config.eventKindMask == resolved,
+			"capture did not retain requested and resolved event selections");
+	}
+
+	void TestSemanticIdentityCataloguesAreBoundedAndRevisioned()
+	{
+		Collector collector;
+		auto config = Config();
+		config.maxSceneObjectObservations = 2;
+		config.maxGeometryObservations = 2;
+		config.maxMaterialStateObservations = 2;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		Check(collector.Start(config) == StartResult::kStarted,
+			"semantic identity capture did not start");
+
+		const SceneObjectObservationInput object{
+			.reference = 0x1100,
+			.referenceFormId = 0x01001234,
+			.baseFormId = 0x0000ABCD,
+			.referenceName = "Breezehome chair reference",
+			.baseFormName = "Chair",
+		};
+		const auto objectFirst = collector.ObserveSceneObject(object);
+		const auto objectRepeated = collector.ObserveSceneObject(object);
+		auto objectChanged = object;
+		objectChanged.baseFormId = 0x0000ABCE;
+		const auto objectSecond = collector.ObserveSceneObject(objectChanged);
+		const auto objectOverflow = collector.ObserveSceneObject({ .reference = 0x1200 });
+
+		GeometryObservationInput geometry{
+			.geometry = 0x2100,
+			.runtimeTypeName = "BSTriShape",
+			.name = "Chair01:0",
+			.geometryType = 1,
+			.vertexDescriptor = 0x12345678,
+			.sceneObjectObservationId = objectFirst.observationId,
+			.worldTransformAvailable = true,
+			.worldBoundAvailable = true,
+		};
+		geometry.worldTransform[0] = 1.0f;
+		geometry.worldTransform[5] = 1.0f;
+		geometry.worldTransform[10] = 1.0f;
+		geometry.worldBound = { 1.0f, 2.0f, 3.0f, 4.0f };
+		const auto geometryFirst = collector.ObserveGeometry(geometry);
+		const auto geometryRepeated = collector.ObserveGeometry(geometry);
+		geometry.worldBound[0] = 5.0f;
+		const auto geometrySecond = collector.ObserveGeometry(geometry);
+		const auto geometryOverflow = collector.ObserveGeometry({ .geometry = 0x2200 });
+
+		MaterialStateObservationInput material{
+			.shaderProperty = 0x3100,
+			.shaderPropertyRuntimeTypeName = "BSLightingShaderProperty",
+			.shaderPropertyFlags = 0x40,
+			.alpha = 1.0f,
+			.engineMaterialType = 2,
+			.material = 0x3200,
+			.materialType = 3,
+			.feature = 4,
+			.hashKey = 5,
+			.shaderPropertyAvailable = true,
+			.materialAvailable = true,
+		};
+		material.textureBindings[0] = {
+			.role = MaterialTextureRole::kRuntimeMaterialList,
+			.bindingIndex = 0,
+			.niSourceTexture = 0x3210,
+			.path = "textures\\architecture\\whiterun\\wrwood.dds",
+			.resourceObservationId = 42,
+		};
+		material.textureBindingCount = 1;
+		const auto materialFirst = collector.ObserveMaterialState(material);
+		const auto materialRepeated = collector.ObserveMaterialState(material);
+		material.textureBindings[0].resourceObservationId = 43;
+		const auto materialSecond = collector.ObserveMaterialState(material);
+		const auto materialOverflow = collector.ObserveMaterialState({
+			.shaderProperty = 0x3300,
+			.shaderPropertyAvailable = true,
+		});
+
+		auto snapshot = collector.Stop();
+		Check(snapshot.has_value(), "semantic identity capture did not stop");
+		Check(objectFirst.firstSeen && objectRepeated.observationId == objectFirst.observationId &&
+			!objectRepeated.firstSeen && objectSecond.pointerGeneration == 2 &&
+			objectOverflow.observationId == 0,
+			"scene-object identity was not deduplicated, versioned, and bounded");
+		Check(geometryFirst.firstSeen && geometryRepeated.observationId == geometryFirst.observationId &&
+			!geometryRepeated.firstSeen && geometrySecond.pointerGeneration == 2 &&
+			geometryOverflow.observationId == 0,
+			"geometry identity was not deduplicated, versioned, and bounded");
+		Check(materialFirst.firstSeen && materialRepeated.observationId == materialFirst.observationId &&
+			!materialRepeated.firstSeen && materialSecond.stateRevision == 2 &&
+			materialSecond.fingerprint != materialFirst.fingerprint && materialOverflow.observationId == 0,
+			"material state was not deduplicated, revisioned, and bounded");
+		Check(snapshot->sceneObjectObservations.size() == 2 &&
+			snapshot->geometryObservations.size() == 2 &&
+			snapshot->materialStateObservations.size() == 2,
+			"semantic catalogues did not preserve their exact admitted records");
+		Check(snapshot->statistics.droppedSceneObjectObservations == 1 &&
+			snapshot->statistics.droppedGeometryObservations == 1 &&
+			snapshot->statistics.droppedMaterialStateObservations == 1,
+			"semantic catalogue overflow was not reported independently");
+		Check(snapshot->geometryObservations[0].sceneObjectObservationId == objectFirst.observationId &&
+			std::string_view(snapshot->geometryObservations[0].name.data()) == "Chair01:0",
+			"geometry did not retain its scene-object link and bounded name");
+		Check(snapshot->materialStateObservations[0].textureBindingCount == 1 &&
+			snapshot->materialStateObservations[0].textureBindings[0].role == MaterialTextureRole::kRuntimeMaterialList &&
+			snapshot->materialStateObservations[0].textureBindings[0].resourceObservationId == 42 &&
+			std::string_view(snapshot->materialStateObservations[0].textureBindings[0].path.data()) ==
+				"textures\\architecture\\whiterun\\wrwood.dds" &&
+			snapshot->materialStateObservations[1].textureBindings[0].resourceObservationId == 43,
+			"material revisions did not preserve their bounded texture bindings");
+	}
+
+	void TestGeometrySelectionFiltersBeforeSemanticWork()
+	{
+		Runtime runtime;
+		auto config = Config();
+		config.geometryShaderTypeMask = std::uint64_t{ 1 } << 7;
+		config.executionWithinSelectedGeometry = true;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		Check(runtime.StartCapture(config) == StartResult::kStarted,
+			"geometry-filtered capture did not start");
+		runtime.SetImmediateContext(0x9000);
+		runtime.RecordDraw(0x9000, DrawOperation::kDraw, 3);
+		{
+			auto rejected = runtime.EnterGeometry({
+				.geometry = 0x1000, .shaderType = 6,
+				.geometryObservation = { .name = "rejected" },
+			});
+			Check(!rejected.IsActive(), "unselected shader type entered a geometry scope");
+		}
+		{
+			auto selected = runtime.EnterGeometry({
+				.geometry = 0x2000, .shaderType = 7,
+				.geometryObservation = { .name = "selected" },
+			});
+			Check(selected.IsActive(), "selected shader type did not enter a geometry scope");
+		}
+		runtime.RecordDraw(0x9000, DrawOperation::kDraw, 3);
+
+		auto snapshot = runtime.StopCapture();
+		Check(snapshot && snapshot->statistics.filtered == 3,
+			"geometry and out-of-scope execution filtering was not reported exactly");
+		Check(snapshot->geometryObservations.size() == 1 &&
+			std::string_view(snapshot->geometryObservations[0].name.data()) == "selected",
+			"unselected geometry polluted the semantic catalogue");
+		const auto draw = std::find_if(snapshot->events.begin(), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; });
+		const auto setup = std::find_if(snapshot->events.begin(), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kGeometrySetupBegin; });
+		Check(draw != snapshot->events.end() && setup != snapshot->events.end() &&
+			draw->scopes.geometry.observationId == 0 &&
+			draw->preparedGeometrySetupObservationId == setup->scopes.geometry.observationId,
+			"selected draw did not consume the prepared geometry identity after setup returned");
+		Check(draw->commandStreamSequence == 2,
+			"filtered execution did not advance the observed command-stream sequence");
+	}
+
+	void TestPreparedGeometryHandoffRejectsStaleCandidates()
+	{
+		Runtime runtime;
+		auto config = Config();
+		config.geometryShaderTypeMask = std::uint64_t{ 1 } << 7;
+		config.executionWithinSelectedGeometry = true;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		Check(runtime.StartCapture(config) == StartResult::kStarted,
+			"stale prepared-geometry capture did not start");
+		runtime.SetImmediateContext(0xA000);
+		{
+			auto selected = runtime.EnterGeometry({ .geometry = 0x1000, .shaderType = 7 });
+			Check(selected.IsActive(), "selected geometry was not prepared");
+		}
+		{
+			auto rejected = runtime.EnterGeometry({ .geometry = 0x2000, .shaderType = 6 });
+			Check(!rejected.IsActive(), "unselected geometry unexpectedly entered");
+		}
+		runtime.RecordDraw(0xA000, DrawOperation::kDraw, 3);
+		auto first = runtime.StopCapture();
+		Check(first && std::none_of(first->events.begin(), first->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; }) &&
+			first->statistics.filtered == 3,
+			"unselected geometry did not invalidate the prior prepared draw candidate");
+
+		Check(runtime.StartCapture(config) == StartResult::kStarted,
+			"generation-source capture did not start");
+		{
+			auto selected = runtime.EnterGeometry({ .geometry = 0x3000, .shaderType = 7 });
+			Check(selected.IsActive(), "generation-source geometry was not prepared");
+		}
+		Check(runtime.StopCapture().has_value(), "generation-source capture did not stop");
+
+		Check(runtime.StartCapture(config) == StartResult::kStarted,
+			"generation-isolation capture did not start");
+		runtime.RecordDraw(0xA000, DrawOperation::kDraw, 3);
+		auto isolated = runtime.StopCapture();
+		Check(isolated && std::none_of(isolated->events.begin(), isolated->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; }) &&
+			isolated->statistics.filtered == 1,
+			"a prepared geometry identity leaked into a later capture generation");
+	}
+
+	void TestGeometryBoundaryBindsExactSemanticObservations()
+	{
+		Runtime runtime;
+		Check(runtime.StartCapture(Config()) == StartResult::kStarted,
+			"semantic geometry capture did not start");
+		{
+			auto scope = runtime.EnterGeometry({
+				.shader = 0x1000,
+				.renderPass = 0x2000,
+				.geometry = 0x3000,
+				.shaderType = 7,
+				.passEnum = 8,
+				.renderFlags = 9,
+				.sceneObject = {
+					.reference = 0x4000,
+					.referenceFormId = 0x01000001,
+					.baseFormId = 0x00000002,
+					.referenceName = "Observed reference",
+					.baseFormName = "Observed base",
+				},
+				.geometryObservation = {
+					.runtimeTypeName = "BSTriShape",
+					.name = "Observed geometry",
+					.geometryType = 1,
+					.vertexDescriptor = 0x1234,
+				},
+				.materialState = {
+					.shaderProperty = 0x5000,
+					.shaderPropertyRuntimeTypeName = "BSLightingShaderProperty",
+					.shaderPropertyFlags = 0x80,
+					.alpha = 1.0f,
+					.material = 0x6000,
+					.materialType = 2,
+					.feature = 3,
+					.hashKey = 4,
+					.shaderPropertyAvailable = true,
+					.materialAvailable = true,
+				},
+			});
+			Check(scope.IsActive(), "semantic geometry boundary did not enter");
+		}
+
+		auto snapshot = runtime.StopCapture();
+		Check(snapshot && snapshot->events.size() == 5,
+			"semantic geometry boundary emitted the wrong event sequence");
+		Check(snapshot->events[0].kind == EventKind::kObjectObserved &&
+			snapshot->events[1].kind == EventKind::kGeometryObserved &&
+			snapshot->events[2].kind == EventKind::kMaterialObserved &&
+			snapshot->events[3].kind == EventKind::kGeometrySetupBegin &&
+			snapshot->events[4].kind == EventKind::kGeometrySetupEnd,
+			"semantic declarations were not emitted before their setup consumer");
+		Check(snapshot->sceneObjectObservations.size() == 1 &&
+			snapshot->geometryObservations.size() == 1 &&
+			snapshot->materialStateObservations.size() == 1,
+			"semantic geometry declarations were not retained");
+		const auto& setup = snapshot->events[3];
+		Check(setup.payload.words[6] == snapshot->geometryObservations[0].observationId &&
+			setup.payload.words[7] == snapshot->materialStateObservations[0].observationId,
+			"geometry boundary did not bind exact geometry and material identities");
+		Check(snapshot->geometryObservations[0].sceneObjectObservationId ==
+			snapshot->sceneObjectObservations[0].observationId,
+			"geometry declaration did not bind its optional scene object");
+	}
 }
 
 int main()
@@ -735,11 +1365,22 @@ int main()
 		TestResolvedStageShaderIdentity();
 		TestStageShaderObservationBoundIsExplicit();
 		TestImmediateContextDrawAndDispatchState();
+		TestCaptureStartSeedsInheritedStageIdentity();
+		TestCreatedStagePointerReuseAdvancesIdentity();
+		TestStageShaderEvidenceEnrichesWithoutPointerReuse();
 		TestImmediateContextOutputMergerState();
+		TestCaptureStartClaimsOneEffectiveOutputMergerSnapshot();
 		TestOutputMergerBoundsAreExplicit();
 		TestResourceFlowStateIsTypedAndOrdered();
+		TestCpuMapUnmapBoundariesArePairedAndTimed();
+		TestEffectiveResourceViewQueriesAreRevisionedAndDeltaEncoded();
 		TestExecutionJoinsDeclaredScopes();
 		TestVisibilitySubmissionJoinsActualDraw();
+		TestEventKindSelectionPreservesDependenciesAndCapacity();
+		TestSemanticIdentityCataloguesAreBoundedAndRevisioned();
+		TestGeometrySelectionFiltersBeforeSemanticWork();
+		TestPreparedGeometryHandoffRejectsStaleCandidates();
+		TestGeometryBoundaryBindsExactSemanticObservations();
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

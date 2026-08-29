@@ -20,10 +20,16 @@ namespace CSX::RenderMap
 	inline constexpr std::size_t kMaximumShaderNameLength = 127;
 	inline constexpr std::size_t kMaximumShaderDefinesSuffixLength = 95;
 	inline constexpr std::size_t kMaximumShaderCachePathLength = 383;
+	inline constexpr std::size_t kMaximumEngineShaderAliasesPerStage = 8;
 	inline constexpr std::size_t kSha256HexLength = 64;
 	inline constexpr std::size_t kMaximumRenderTargets = 8;
 	inline constexpr std::size_t kMaximumShaderResourceSlots = 128;
 	inline constexpr std::size_t kMaximumUnorderedAccessSlots = 64;
+	inline constexpr std::size_t kMaximumSceneObjectNameLength = 127;
+	inline constexpr std::size_t kMaximumGeometryNameLength = 127;
+	inline constexpr std::size_t kMaximumRuntimeTypeNameLength = 95;
+	inline constexpr std::size_t kMaximumMaterialTextureBindings = 32;
+	inline constexpr std::size_t kMaximumTexturePathLength = 383;
 
 	enum class EventKind : std::uint16_t
 	{
@@ -64,10 +70,29 @@ namespace CSX::RenderMap
 		kTargetViewObserved,
 		kResourceObserved,
 		kResourceViewBind,
+		kResourceViewStateObserved,
 		kResourceFlow,
+		kResourceCpuAccess,
 		kResourceVersionObserved,
 		kEyeSubmitted,
+		kCount,
 	};
+
+	using EventKindMask = std::uint64_t;
+	static_assert(static_cast<std::size_t>(EventKind::kCount) <= 64);
+
+	inline constexpr EventKindMask EventKindBit(EventKind a_kind) noexcept
+	{
+		return a_kind < EventKind::kCount ?
+			EventKindMask{ 1 } << static_cast<std::uint16_t>(a_kind) : 0;
+	}
+
+	inline constexpr EventKindMask kAllEventKindsMask =
+		(EventKindMask{ 1 } << static_cast<std::uint16_t>(EventKind::kCount)) - 1;
+
+	const char* EventKindName(EventKind a_kind) noexcept;
+	EventKindMask ResolveEventKindDependencies(EventKindMask a_requested) noexcept;
+	void NormalizeEventKindSelection(struct CollectorConfig& a_config) noexcept;
 
 	enum class Eye : std::uint8_t
 	{
@@ -98,6 +123,7 @@ namespace CSX::RenderMap
 	enum class RecordResult : std::uint8_t
 	{
 		kRecorded,
+		kFiltered,
 		kInactive,
 		kStopped,
 		kEventLimit,
@@ -130,6 +156,13 @@ namespace CSX::RenderMap
 		std::uint32_t maxResourceObservations{ 4096 };
 		std::uint32_t maxTargetViewObservations{ 4096 };
 		std::uint32_t maxTargetBindingObservations{ 4096 };
+		std::uint32_t maxSceneObjectObservations{ 2048 };
+		std::uint32_t maxGeometryObservations{ 4096 };
+		std::uint32_t maxMaterialStateObservations{ 4096 };
+		std::uint64_t geometryShaderTypeMask{ (std::numeric_limits<std::uint64_t>::max)() };
+		bool executionWithinSelectedGeometry{ false };
+		EventKindMask requestedEventKindMask{ kAllEventKindsMask };
+		EventKindMask eventKindMask{ kAllEventKindsMask };
 	};
 
 	struct FrameContext
@@ -164,7 +197,7 @@ namespace CSX::RenderMap
 	struct EventRecord
 	{
 		std::uint16_t schemaMajor{ 1 };
-		std::uint16_t schemaMinor{ 8 };
+		std::uint16_t schemaMinor{ 14 };
 		EventKind kind{ EventKind::kCaptureMarker };
 		std::uint16_t reserved{ 0 };
 		std::uint64_t captureNumericId{ 0 };
@@ -176,6 +209,7 @@ namespace CSX::RenderMap
 		std::uint64_t commandStreamSequence{ 0 };
 		std::uint64_t targetBindingObservationId{ 0 };
 		std::uint64_t submissionObservationId{ 0 };
+		std::uint64_t preparedGeometrySetupObservationId{ 0 };
 		FrameContext frame;
 		ScopeSnapshot scopes;
 		EventPayload payload;
@@ -188,6 +222,7 @@ namespace CSX::RenderMap
 	{
 		std::uint64_t attempted{ 0 };
 		std::uint64_t recorded{ 0 };
+		std::uint64_t filtered{ 0 };
 		std::uint64_t droppedStopped{ 0 };
 		std::uint64_t droppedEventLimit{ 0 };
 		std::uint64_t droppedByteLimit{ 0 };
@@ -200,6 +235,9 @@ namespace CSX::RenderMap
 		std::uint64_t droppedResourceObservations{ 0 };
 		std::uint64_t droppedTargetViewObservations{ 0 };
 		std::uint64_t droppedTargetBindingObservations{ 0 };
+		std::uint64_t droppedSceneObjectObservations{ 0 };
+		std::uint64_t droppedGeometryObservations{ 0 };
+		std::uint64_t droppedMaterialStateObservations{ 0 };
 	};
 
 	enum class ShaderStage : std::uint8_t
@@ -215,6 +253,7 @@ namespace CSX::RenderMap
 		std::uint32_t shaderType{ 0 };
 		std::string_view fxpFilename;
 		std::string_view imageSpaceName;
+		std::string_view compileSourceName;
 		std::string_view definesSuffix;
 	};
 
@@ -226,9 +265,11 @@ namespace CSX::RenderMap
 		std::uint32_t shaderType{ 0 };
 		std::array<char, kMaximumShaderNameLength + 1> fxpFilename{};
 		std::array<char, kMaximumShaderNameLength + 1> imageSpaceName{};
+		std::array<char, kMaximumShaderNameLength + 1> compileSourceName{};
 		std::array<char, kMaximumShaderDefinesSuffixLength + 1> definesSuffix{};
 		bool fxpFilenameTruncated{ false };
 		bool imageSpaceNameTruncated{ false };
+		bool compileSourceNameTruncated{ false };
 		bool definesSuffixTruncated{ false };
 	};
 
@@ -242,6 +283,13 @@ namespace CSX::RenderMap
 
 	struct StageShaderObservationInput
 	{
+		struct EngineAlias
+		{
+			std::string_view loaderType;
+			std::string_view compileSourceName;
+			std::uint32_t descriptor{ 0 };
+		};
+
 		ShaderStage stage{ ShaderStage::kVertex };
 		std::uintptr_t wrapper{ 0 };
 		std::uintptr_t d3dObject{ 0 };
@@ -249,6 +297,18 @@ namespace CSX::RenderMap
 		std::uint64_t bytecodeSize{ 0 };
 		std::string_view bytecodeSha256;
 		std::string_view cachePath;
+		const EngineAlias* engineAliases{ nullptr };
+		std::uint32_t engineAliasCount{ 0 };
+		std::uint32_t engineAliasTotalCount{ 0 };
+	};
+
+	struct EngineShaderAliasRecord
+	{
+		std::array<char, kMaximumShaderNameLength + 1> loaderType{};
+		std::array<char, kMaximumShaderNameLength + 1> compileSourceName{};
+		std::uint32_t descriptor{ 0 };
+		bool loaderTypeTruncated{ false };
+		bool compileSourceNameTruncated{ false };
 	};
 
 	struct StageShaderObservationRecord
@@ -262,8 +322,12 @@ namespace CSX::RenderMap
 		std::uint64_t bytecodeSize{ 0 };
 		std::array<char, kSha256HexLength + 1> bytecodeSha256{};
 		std::array<char, kMaximumShaderCachePathLength + 1> cachePath{};
+		std::array<EngineShaderAliasRecord, kMaximumEngineShaderAliasesPerStage> engineAliases{};
+		std::uint32_t engineAliasCount{ 0 };
+		std::uint32_t engineAliasTotalCount{ 0 };
 		bool bytecodeSha256Truncated{ false };
 		bool cachePathTruncated{ false };
+		bool engineAliasesTruncated{ false };
 	};
 
 	struct StageShaderObservationResult
@@ -402,6 +466,162 @@ namespace CSX::RenderMap
 		bool firstSeen{ false };
 	};
 
+	struct SceneObjectObservationInput
+	{
+		std::uintptr_t reference{ 0 };
+		std::uint32_t referenceFormId{ 0 };
+		std::uint32_t baseFormId{ 0 };
+		std::string_view referenceName;
+		std::string_view baseFormName;
+		bool referenceFormDynamic{ false };
+		bool baseFormDynamic{ false };
+	};
+
+	struct SceneObjectObservationRecord
+	{
+		std::uint64_t observationId{ 0 };
+		std::uintptr_t pointerEvidence{ 0 };
+		std::uint32_t pointerGeneration{ 0 };
+		std::uint32_t referenceFormId{ 0 };
+		std::uint32_t baseFormId{ 0 };
+		std::array<char, kMaximumSceneObjectNameLength + 1> referenceName{};
+		std::array<char, kMaximumSceneObjectNameLength + 1> baseFormName{};
+		bool referenceFormDynamic{ false };
+		bool baseFormDynamic{ false };
+		bool referenceNameTruncated{ false };
+		bool baseFormNameTruncated{ false };
+	};
+
+	struct SceneObjectObservationResult
+	{
+		std::uint64_t observationId{ 0 };
+		std::uint64_t sessionGeneration{ 0 };
+		std::uint32_t pointerGeneration{ 0 };
+		bool firstSeen{ false };
+	};
+
+	struct GeometryObservationInput
+	{
+		std::uintptr_t geometry{ 0 };
+		std::string_view runtimeTypeName;
+		std::string_view name;
+		std::uint32_t geometryType{ 0 };
+		std::uint64_t vertexDescriptor{ 0 };
+		std::array<float, 13> worldTransform{};
+		std::array<float, 4> worldBound{};
+		std::uint64_t sceneObjectObservationId{ 0 };
+		bool worldTransformAvailable{ false };
+		bool worldBoundAvailable{ false };
+	};
+
+	struct GeometryObservationRecord
+	{
+		std::uint64_t observationId{ 0 };
+		std::uintptr_t pointerEvidence{ 0 };
+		std::uint32_t pointerGeneration{ 0 };
+		std::array<char, kMaximumRuntimeTypeNameLength + 1> runtimeTypeName{};
+		std::array<char, kMaximumGeometryNameLength + 1> name{};
+		std::uint32_t geometryType{ 0 };
+		std::uint64_t vertexDescriptor{ 0 };
+		std::array<float, 13> worldTransform{};
+		std::array<float, 4> worldBound{};
+		std::uint64_t sceneObjectObservationId{ 0 };
+		bool worldTransformAvailable{ false };
+		bool worldBoundAvailable{ false };
+		bool runtimeTypeNameTruncated{ false };
+		bool nameTruncated{ false };
+	};
+
+	struct GeometryObservationResult
+	{
+		std::uint64_t observationId{ 0 };
+		std::uint64_t sessionGeneration{ 0 };
+		std::uint32_t pointerGeneration{ 0 };
+		bool firstSeen{ false };
+	};
+
+	enum class MaterialTextureRole : std::uint8_t
+	{
+		kUnknown,
+		kRuntimeMaterialList,
+		kEffectSource,
+		kEffectGreyscale,
+		kWaterStaticReflection,
+		kWaterNormal1,
+		kWaterNormal2,
+		kWaterNormal3,
+		kWaterNormal4,
+	};
+
+	struct MaterialTextureBindingInput
+	{
+		MaterialTextureRole role{ MaterialTextureRole::kUnknown };
+		std::uint32_t bindingIndex{ 0 };
+		std::uintptr_t niSourceTexture{ 0 };
+		std::string_view path;
+		ResourceObservationInput resource;
+		std::uint64_t resourceObservationId{ 0 };
+	};
+
+	struct MaterialTextureBindingRecord
+	{
+		MaterialTextureRole role{ MaterialTextureRole::kUnknown };
+		std::uint32_t bindingIndex{ 0 };
+		std::uintptr_t niSourceTextureEvidence{ 0 };
+		std::array<char, kMaximumTexturePathLength + 1> path{};
+		std::uint64_t resourceObservationId{ 0 };
+		bool pathTruncated{ false };
+	};
+
+	struct MaterialStateObservationInput
+	{
+		std::uintptr_t shaderProperty{ 0 };
+		std::string_view shaderPropertyRuntimeTypeName;
+		std::uint64_t shaderPropertyFlags{ 0 };
+		float alpha{ 0.0f };
+		std::uint32_t engineMaterialType{ 0 };
+		std::uintptr_t material{ 0 };
+		std::uint32_t materialType{ 0 };
+		std::uint32_t feature{ 0 };
+		std::uint32_t hashKey{ 0 };
+		std::array<MaterialTextureBindingInput, kMaximumMaterialTextureBindings> textureBindings{};
+		std::uint8_t textureBindingCount{ 0 };
+		bool shaderPropertyAvailable{ false };
+		bool materialAvailable{ false };
+		bool textureBindingsTruncated{ false };
+	};
+
+	struct MaterialStateObservationRecord
+	{
+		std::uint64_t observationId{ 0 };
+		std::uint32_t stateRevision{ 0 };
+		std::uint64_t fingerprint{ 0 };
+		std::uintptr_t shaderPropertyEvidence{ 0 };
+		std::array<char, kMaximumRuntimeTypeNameLength + 1> shaderPropertyRuntimeTypeName{};
+		std::uint64_t shaderPropertyFlags{ 0 };
+		float alpha{ 0.0f };
+		std::uint32_t engineMaterialType{ 0 };
+		std::uintptr_t materialEvidence{ 0 };
+		std::uint32_t materialType{ 0 };
+		std::uint32_t feature{ 0 };
+		std::uint32_t hashKey{ 0 };
+		std::array<MaterialTextureBindingRecord, kMaximumMaterialTextureBindings> textureBindings{};
+		std::uint8_t textureBindingCount{ 0 };
+		bool shaderPropertyAvailable{ false };
+		bool materialAvailable{ false };
+		bool textureBindingsTruncated{ false };
+		bool shaderPropertyRuntimeTypeNameTruncated{ false };
+	};
+
+	struct MaterialStateObservationResult
+	{
+		std::uint64_t observationId{ 0 };
+		std::uint64_t sessionGeneration{ 0 };
+		std::uint32_t stateRevision{ 0 };
+		std::uint64_t fingerprint{ 0 };
+		bool firstSeen{ false };
+	};
+
 	struct CaptureSnapshot
 	{
 		CollectorConfig config;
@@ -417,6 +637,9 @@ namespace CSX::RenderMap
 		std::vector<ResourceObservationRecord> resourceObservations;
 		std::vector<TargetViewObservationRecord> targetViewObservations;
 		std::vector<TargetBindingObservationRecord> targetBindingObservations;
+		std::vector<SceneObjectObservationRecord> sceneObjectObservations;
+		std::vector<GeometryObservationRecord> geometryObservations;
+		std::vector<MaterialStateObservationRecord> materialStateObservations;
 	};
 
 	class Collector
@@ -470,6 +693,10 @@ namespace CSX::RenderMap
 		bool IsCapturing() const noexcept;
 		bool IsDraining() const noexcept;
 		std::uint64_t ActiveGeneration() const noexcept;
+		bool IsGeometryShaderTypeSelected(std::uint32_t a_shaderType) const noexcept;
+		bool IsExecutionAllowedByGeometryScope(
+			std::uint64_t a_preparedGeometrySetupObservationId = 0) const noexcept;
+		void CountFiltered(std::uint64_t a_count = 1) noexcept;
 
 		RecordResult Record(
 			EventKind a_kind,
@@ -477,7 +704,8 @@ namespace CSX::RenderMap
 			std::uint64_t a_deviceContextObservationId = 0,
 			std::uint64_t a_commandStreamSequence = 0,
 			std::uint64_t a_targetBindingObservationId = 0,
-			std::uint64_t a_submissionObservationId = 0) noexcept;
+			std::uint64_t a_submissionObservationId = 0,
+			std::uint64_t a_preparedGeometrySetupObservationId = 0) noexcept;
 		RecordResult RecordForGeneration(
 			EventKind a_kind,
 			const EventPayload& a_payload,
@@ -485,7 +713,8 @@ namespace CSX::RenderMap
 			std::uint64_t a_expectedGeneration,
 			std::uint64_t a_commandStreamSequence = 0,
 			std::uint64_t a_targetBindingObservationId = 0,
-			std::uint64_t a_submissionObservationId = 0) noexcept;
+			std::uint64_t a_submissionObservationId = 0,
+			std::uint64_t a_preparedGeometrySetupObservationId = 0) noexcept;
 
 		ScopeGuard EnterScope(
 			ScopeKind a_kind,
@@ -505,6 +734,9 @@ namespace CSX::RenderMap
 		ResourceObservationResult ObserveResource(const ResourceObservationInput& a_input) noexcept;
 		TargetViewObservationResult ObserveTargetView(const TargetViewObservationInput& a_input) noexcept;
 		TargetBindingObservationResult ObserveTargetBinding(const TargetBindingObservationInput& a_input) noexcept;
+		SceneObjectObservationResult ObserveSceneObject(const SceneObjectObservationInput& a_input) noexcept;
+		GeometryObservationResult ObserveGeometry(const GeometryObservationInput& a_input) noexcept;
+		MaterialStateObservationResult ObserveMaterialState(const MaterialStateObservationInput& a_input) noexcept;
 		void RetireShaderObservation(std::uintptr_t a_shader) noexcept;
 		void SetThreadFrameContext(const FrameContext& a_context) noexcept;
 		FrameContext GetThreadFrameContext() const noexcept;

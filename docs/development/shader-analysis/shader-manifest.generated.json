@@ -3,15 +3,15 @@
   "status": "static-classified",
   "generatedBy": "tools/shader_dependency_manifest.py",
   "inventory": {
-    "sourceContributionCount": 174,
-    "virtualSourceCount": 174,
+    "sourceContributionCount": 175,
+    "virtualSourceCount": 175,
     "productionEntryCount": 100,
-    "includeSourceCount": 59,
+    "includeSourceCount": 60,
     "testEntryCount": 15,
     "featureCount": 40,
     "compileUnitCount": 121,
     "passCount": 121,
-    "includeEdgeCount": 423,
+    "includeEdgeCount": 427,
     "virtualCollisionCount": 0,
     "unresolvedIncludeCount": 1,
     "unacceptedUnresolvedIncludeCount": 0,
@@ -2532,6 +2532,55 @@
       "classificationStatus": "static-classified"
     },
     {
+      "id": "Common/CurrentFrameDepthCulling.hlsli",
+      "virtualPath": "Common/CurrentFrameDepthCulling.hlsli",
+      "sourcePath": "package/Shaders/Common/CurrentFrameDepthCulling.hlsli",
+      "contributors": [
+        "package/Shaders/Common/CurrentFrameDepthCulling.hlsli"
+      ],
+      "owner": "core",
+      "ownerKind": "core",
+      "sha256": "AED1FC7309ADB0DC1B12DE623510C5E76B31C2BE5EE321F2DC85CDE96E1C31C6",
+      "role": "include",
+      "stageHint": "include",
+      "entryPoints": [],
+      "directIncludes": [],
+      "externalIncludes": [],
+      "includeClosure": [],
+      "dependedOnByEntryPoints": [
+        "DistantTree.hlsl",
+        "Lighting.hlsl",
+        "RunGrass.hlsl"
+      ],
+      "macroReferences": [
+        "CURRENT_FRAME_DEPTH_CULLING_HLSLI",
+        "VSHADER"
+      ],
+      "resources": {
+        "constantBuffers": [],
+        "srvs": [
+          {
+            "name": "Visibility",
+            "type": "Buffer<uint>",
+            "register": "t127",
+            "line": 7
+          }
+        ],
+        "uavs": [],
+        "samplers": []
+      },
+      "semantics": [],
+      "routes": {
+        "flat": true,
+        "vr": false,
+        "stereo": false,
+        "overlay": false,
+        "vendor": false,
+        "compatibility": false
+      },
+      "classificationStatus": "static-classified"
+    },
+    {
       "id": "Common/DisplayMapping.hlsli",
       "virtualPath": "Common/DisplayMapping.hlsli",
       "sourcePath": "package/Shaders/Common/DisplayMapping.hlsli",
@@ -3659,7 +3708,7 @@
       ],
       "owner": "core",
       "ownerKind": "core",
-      "sha256": "66395FCA9BD8E2FEFC1C2B15B4566C49A2A014EFB5AE7B2A9EAF3D3F9EF4BC10",
+      "sha256": "B03043CC4F73EDFA6D42FB9F2AF9FC8149EE2609A9C7EF2C71C6A53C8F42AC3B",
       "role": "include",
       "stageHint": "include",
       "entryPoints": [],
@@ -3700,7 +3749,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           }
         ],
         "srvs": [],
@@ -4744,7 +4793,7 @@
       ],
       "owner": "core",
       "ownerKind": "core",
-      "sha256": "C0EDFE40FE7971DE4CDCFCDB8ADB8F2D687D38D715708B157AE988BEA222AD9C",
+      "sha256": "B17112F321B756442A372C02BDD3E7CC00F3A59EA60607499D8B7540FB4BF524",
       "role": "production-entry",
       "stageHint": "runtime-selected",
       "entryPoints": [
@@ -4776,50 +4825,62 @@
           "resolvedVirtualPath": "Common/MotionBlur.hlsli"
         },
         {
-          "token": "Common/Random.hlsli",
+          "token": "Common/Permutation.hlsli",
           "line": 5,
+          "condition": null,
+          "resolvedVirtualPath": "Common/Permutation.hlsli"
+        },
+        {
+          "token": "Common/Random.hlsli",
+          "line": 6,
           "condition": null,
           "resolvedVirtualPath": "Common/Random.hlsli"
         },
         {
           "token": "Common/SharedData.hlsli",
-          "line": 6,
+          "line": 7,
           "condition": null,
           "resolvedVirtualPath": "Common/SharedData.hlsli"
         },
         {
           "token": "Common/VR.hlsli",
-          "line": 7,
+          "line": 8,
           "condition": null,
           "resolvedVirtualPath": "Common/VR.hlsli"
         },
         {
+          "token": "Common/CurrentFrameDepthCulling.hlsli",
+          "line": 9,
+          "condition": null,
+          "resolvedVirtualPath": "Common/CurrentFrameDepthCulling.hlsli"
+        },
+        {
           "token": "ScreenSpaceShadows/ScreenSpaceShadows.hlsli",
-          "line": 167,
+          "line": 177,
           "condition": "ifdef PSHADER && if defined(SCREEN_SPACE_SHADOWS)",
           "resolvedVirtualPath": "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
         },
         {
           "token": "TerrainShadows/TerrainShadows.hlsli",
-          "line": 171,
+          "line": 181,
           "condition": "ifdef PSHADER && if defined(TERRAIN_SHADOWS)",
           "resolvedVirtualPath": "TerrainShadows/TerrainShadows.hlsli"
         },
         {
           "token": "CloudShadows/CloudShadows.hlsli",
-          "line": 175,
+          "line": 185,
           "condition": "ifdef PSHADER && if defined(CLOUD_SHADOWS)",
           "resolvedVirtualPath": "CloudShadows/CloudShadows.hlsli"
         },
         {
           "token": "IBL/IBL.hlsli",
-          "line": 179,
+          "line": 189,
           "condition": "ifdef PSHADER && if defined(IBL)",
           "resolvedVirtualPath": "IBL/IBL.hlsli"
         },
         {
           "token": "Common/ShadowSampling.hlsli",
-          "line": 184,
+          "line": 194,
           "condition": "ifdef PSHADER",
           "resolvedVirtualPath": "Common/ShadowSampling.hlsli"
         }
@@ -4828,6 +4889,7 @@
       "includeClosure": [
         "CloudShadows/CloudShadows.hlsli",
         "Common/Color.hlsli",
+        "Common/CurrentFrameDepthCulling.hlsli",
         "Common/FrameBuffer.hlsli",
         "Common/Game.hlsli",
         "Common/GBuffer.hlsli",
@@ -4863,31 +4925,31 @@
             "name": "PerTechnique",
             "type": "cbuffer",
             "register": "b0",
-            "line": 47
+            "line": 49
           },
           {
             "name": "PerTechnique",
             "type": "cbuffer",
             "register": "b0",
-            "line": 140
+            "line": 150
           },
           {
             "name": "PerGeometry",
             "type": "cbuffer",
             "register": "b2",
-            "line": 51
+            "line": 53
           },
           {
             "name": "AlphaTestRefCB",
             "type": "cbuffer",
             "register": "b11",
-            "line": 128
+            "line": 138
           },
           {
             "name": "PerFrame",
             "type": "cbuffer",
             "register": "b12",
-            "line": 133
+            "line": 143
           }
         ],
         "srvs": [
@@ -4895,7 +4957,7 @@
             "name": "TexDiffuse",
             "type": "Texture2D<float4>",
             "register": "t0",
-            "line": 124
+            "line": 134
           }
         ],
         "uavs": [],
@@ -4904,7 +4966,7 @@
             "name": "SampDiffuse",
             "type": "SamplerState",
             "register": "s0",
-            "line": 123
+            "line": 133
           }
         ]
       },
@@ -10584,7 +10646,7 @@
       ],
       "owner": "core",
       "ownerKind": "core",
-      "sha256": "505BC63D748889F65E8F2FB48F770151E8017A553D3545135A2E8408503E410E",
+      "sha256": "A947696FF7159B935BE39E36737818A841F3293485F0E8264F4BD0253067A44D",
       "role": "production-entry",
       "stageHint": "runtime-selected",
       "entryPoints": [
@@ -10658,116 +10720,122 @@
           "resolvedVirtualPath": "Common/Triplanar.hlsli"
         },
         {
+          "token": "Common/CurrentFrameDepthCulling.hlsli",
+          "line": 15,
+          "condition": null,
+          "resolvedVirtualPath": "Common/CurrentFrameDepthCulling.hlsli"
+        },
+        {
           "token": "Common/LightingCommon.hlsli",
-          "line": 898,
+          "line": 907,
           "condition": "ifdef PSHADER",
           "resolvedVirtualPath": "Common/LightingCommon.hlsli"
         },
         {
           "token": "WaterEffects/WaterCaustics.hlsli",
-          "line": 901,
+          "line": 910,
           "condition": "ifdef PSHADER && if defined(WATER_EFFECTS)",
           "resolvedVirtualPath": "WaterEffects/WaterCaustics.hlsli"
         },
         {
           "token": "DynamicCubemaps/DynamicCubemaps.hlsli",
-          "line": 918,
+          "line": 927,
           "condition": "ifdef PSHADER && if defined(DYNAMIC_CUBEMAPS)",
           "resolvedVirtualPath": "DynamicCubemaps/DynamicCubemaps.hlsli"
         },
         {
           "token": "Common/PBR.hlsli",
-          "line": 922,
+          "line": 931,
           "condition": "ifdef PSHADER && if defined(TRUE_PBR)",
           "resolvedVirtualPath": "Common/PBR.hlsli"
         },
         {
           "token": "ExtendedMaterials/ExtendedMaterials.hlsli",
-          "line": 926,
+          "line": 935,
           "condition": "ifdef PSHADER && if defined(EMAT)",
           "resolvedVirtualPath": "ExtendedMaterials/ExtendedMaterials.hlsli"
         },
         {
           "token": "ScreenSpaceShadows/ScreenSpaceShadows.hlsli",
-          "line": 930,
+          "line": 939,
           "condition": "ifdef PSHADER && if defined(SCREEN_SPACE_SHADOWS)",
           "resolvedVirtualPath": "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
         },
         {
           "token": "LightLimitFix/LightLimitFix.hlsli",
-          "line": 934,
+          "line": 943,
           "condition": "ifdef PSHADER && if defined(LIGHT_LIMIT_FIX)",
           "resolvedVirtualPath": "LightLimitFix/LightLimitFix.hlsli"
         },
         {
           "token": "InverseSquareLighting/InverseSquareLighting.hlsli",
-          "line": 938,
+          "line": 947,
           "condition": "ifdef PSHADER && if defined(ISL) && defined(LIGHT_LIMIT_FIX)",
           "resolvedVirtualPath": "InverseSquareLighting/InverseSquareLighting.hlsli"
         },
         {
           "token": "Wetterness/WetternessLighting.hlsli",
-          "line": 947,
+          "line": 956,
           "condition": "ifdef PSHADER && if defined(WETTERNESS)",
           "resolvedVirtualPath": "Wetterness/WetternessLighting.hlsli"
         },
         {
           "token": "WetnessEffects/WetnessEffects.hlsli",
-          "line": 953,
+          "line": 962,
           "condition": "ifdef PSHADER && elif defined(WETNESS_EFFECTS)",
           "resolvedVirtualPath": "WetnessEffects/WetnessEffects.hlsli"
         },
         {
           "token": "TerrainBlending/TerrainBlending.hlsli",
-          "line": 960,
+          "line": 969,
           "condition": "ifdef PSHADER && if defined(TERRAIN_BLENDING)",
           "resolvedVirtualPath": "TerrainBlending/TerrainBlending.hlsli"
         },
         {
           "token": "Skylighting/Skylighting.hlsli",
-          "line": 968,
+          "line": 977,
           "condition": "ifdef PSHADER && if defined(SKYLIGHTING)",
           "resolvedVirtualPath": "Skylighting/Skylighting.hlsli"
         },
         {
           "token": "Common/FoveatedShaderDetail.hlsli",
-          "line": 972,
+          "line": 981,
           "condition": "ifdef PSHADER && if defined(VR)",
           "resolvedVirtualPath": "Common/FoveatedShaderDetail.hlsli"
         },
         {
           "token": "Hair/Hair.hlsli",
-          "line": 976,
+          "line": 985,
           "condition": "ifdef PSHADER && if defined(HAIR) && defined(CS_HAIR)",
           "resolvedVirtualPath": "Hair/Hair.hlsli"
         },
         {
           "token": "TerrainVariation/TerrainVariation.hlsli",
-          "line": 980,
+          "line": 989,
           "condition": "ifdef PSHADER && if defined(TERRAIN_VARIATION)",
           "resolvedVirtualPath": "TerrainVariation/TerrainVariation.hlsli"
         },
         {
           "token": "ExtendedTranslucency/ExtendedTranslucency.hlsli",
-          "line": 984,
+          "line": 993,
           "condition": "ifdef PSHADER && if defined(EXTENDED_TRANSLUCENCY) && !(defined(LOD) || defined(SKIN) || defined(HAIR) || defined(EYE) || defined(TREE_ANIM) || defined(LODOBJECTSHD) || defined(LODOBJECTS) || defined(DEPTH_WRITE_DECALS))",
           "resolvedVirtualPath": "ExtendedTranslucency/ExtendedTranslucency.hlsli"
         },
         {
           "token": "Common/ShadowSampling.hlsli",
-          "line": 990,
+          "line": 999,
           "condition": "ifdef PSHADER",
           "resolvedVirtualPath": "Common/ShadowSampling.hlsli"
         },
         {
           "token": "IBL/IBL.hlsli",
-          "line": 993,
+          "line": 1002,
           "condition": "ifdef PSHADER && if defined(IBL)",
           "resolvedVirtualPath": "IBL/IBL.hlsli"
         },
         {
           "token": "Common/LightingEval.hlsli",
-          "line": 996,
+          "line": 1005,
           "condition": "ifdef PSHADER",
           "resolvedVirtualPath": "Common/LightingEval.hlsli"
         }
@@ -10777,6 +10845,7 @@
         "CloudShadows/CloudShadows.hlsli",
         "Common/BRDF.hlsli",
         "Common/Color.hlsli",
+        "Common/CurrentFrameDepthCulling.hlsli",
         "Common/FoveatedMask.hlsli",
         "Common/FoveatedShaderDetail.hlsli",
         "Common/FrameBuffer.hlsli",
@@ -10889,49 +10958,49 @@
             "name": "PerTechnique",
             "type": "cbuffer",
             "register": "b0",
-            "line": 101
+            "line": 102
           },
           {
             "name": "PerTechnique",
             "type": "cbuffer",
             "register": "b0",
-            "line": 545
+            "line": 554
           },
           {
             "name": "PerMaterial",
             "type": "cbuffer",
             "register": "b1",
-            "line": 116
+            "line": 117
           },
           {
             "name": "PerMaterial",
             "type": "cbuffer",
             "register": "b1",
-            "line": 552
+            "line": 561
           },
           {
             "name": "PerGeometry",
             "type": "cbuffer",
             "register": "b2",
-            "line": 123
+            "line": 124
           },
           {
             "name": "PerGeometry",
             "type": "cbuffer",
             "register": "b2",
-            "line": 599
+            "line": 608
           },
           {
             "name": "AlphaTestRefBuffer",
             "type": "cbuffer",
             "register": "b11",
-            "line": 642
+            "line": 651
           },
           {
             "name": "VS_PerFrame",
             "type": "cbuffer",
             "register": "b12",
-            "line": 148
+            "line": 149
           }
         ],
         "srvs": [
@@ -10939,319 +11008,319 @@
             "name": "TexColorSampler",
             "type": "Texture2D<float4>",
             "register": "t0",
-            "line": 446
+            "line": 455
           },
           {
             "name": "TexColorSampler",
             "type": "Texture2D<float4>",
             "register": "t0",
-            "line": 486
+            "line": 495
           },
           {
             "name": "TexLandColor2Sampler",
             "type": "Texture2D<float4>",
             "register": "t1",
-            "line": 448
+            "line": 457
           },
           {
             "name": "TexNormalSampler",
             "type": "Texture2D<float4>",
             "register": "t1",
-            "line": 488
+            "line": 497
           },
           {
             "name": "TexLandColor3Sampler",
             "type": "Texture2D<float4>",
             "register": "t2",
-            "line": 449
+            "line": 458
           },
           {
             "name": "TexSpecularSampler",
             "type": "Texture2D<float4>",
             "register": "t2",
-            "line": 491
+            "line": 500
           },
           {
             "name": "TexLandColor4Sampler",
             "type": "Texture2D<float4>",
             "register": "t3",
-            "line": 450
+            "line": 459
           },
           {
             "name": "TexParallaxSampler",
             "type": "Texture2D<float4>",
             "register": "t3",
-            "line": 497
+            "line": 506
           },
           {
             "name": "TexProjDiffuseSampler",
             "type": "Texture2D<float4>",
             "register": "t3",
-            "line": 499
+            "line": 508
           },
           {
             "name": "TexTintSampler",
             "type": "Texture2D<float4>",
             "register": "t3",
-            "line": 494
+            "line": 503
           },
           {
             "name": "TexDetailSampler",
             "type": "Texture2D<float4>",
             "register": "t4",
-            "line": 495
+            "line": 504
           },
           {
             "name": "TexEnvSampler",
             "type": "TextureCube<float4>",
             "register": "t4",
-            "line": 503
+            "line": 512
           },
           {
             "name": "TexLandColor5Sampler",
             "type": "Texture2D<float4>",
             "register": "t4",
-            "line": 451
+            "line": 460
           },
           {
             "name": "TexParallaxSampler",
             "type": "Texture2D<float4>",
             "register": "t4",
-            "line": 508
+            "line": 517
           },
           {
             "name": "TexEnvMaskSampler",
             "type": "Texture2D<float4>",
             "register": "t5",
-            "line": 504
+            "line": 513
           },
           {
             "name": "TexLandColor6Sampler",
             "type": "Texture2D<float4>",
             "register": "t5",
-            "line": 452
+            "line": 461
           },
           {
             "name": "TexRMAOSSampler",
             "type": "Texture2D<float4>",
             "register": "t5",
-            "line": 511
+            "line": 520
           },
           {
             "name": "TexGlowSampler",
             "type": "Texture2D<float4>",
             "register": "t6",
-            "line": 513
+            "line": 522
           },
           {
             "name": "TexNormalSampler",
             "type": "Texture2D<float4>",
             "register": "t7",
-            "line": 453
+            "line": 462
           },
           {
             "name": "TexLandNormal2Sampler",
             "type": "Texture2D<float4>",
             "register": "t8",
-            "line": 454
+            "line": 463
           },
           {
             "name": "TexLayerSampler",
             "type": "Texture2D<float4>",
             "register": "t8",
-            "line": 517
+            "line": 526
           },
           {
             "name": "TexProjNormalSampler",
             "type": "Texture2D<float4>",
             "register": "t8",
-            "line": 519
+            "line": 528
           },
           {
             "name": "TexBackLightSampler",
             "type": "Texture2D<float4>",
             "register": "t9",
-            "line": 521
+            "line": 530
           },
           {
             "name": "TexLandNormal3Sampler",
             "type": "Texture2D<float4>",
             "register": "t9",
-            "line": 455
+            "line": 464
           },
           {
             "name": "TexLandNormal4Sampler",
             "type": "Texture2D<float4>",
             "register": "t10",
-            "line": 456
+            "line": 465
           },
           {
             "name": "TexProjDetail",
             "type": "Texture2D<float4>",
             "register": "t10",
-            "line": 525
+            "line": 534
           },
           {
             "name": "TexCharacterLightProjNoiseSampler",
             "type": "Texture2D<float4>",
             "register": "t11",
-            "line": 527
+            "line": 536
           },
           {
             "name": "TexLandNormal5Sampler",
             "type": "Texture2D<float4>",
             "register": "t11",
-            "line": 457
+            "line": 466
           },
           {
             "name": "TexLandNormal6Sampler",
             "type": "Texture2D<float4>",
             "register": "t12",
-            "line": 458
+            "line": 467
           },
           {
             "name": "TexRimSoftLightWorldMapOverlaySampler",
             "type": "Texture2D<float4>",
             "register": "t12",
-            "line": 529
+            "line": 538
           },
           {
             "name": "TexLandLodBlend1Sampler",
             "type": "Texture2D<float4>",
             "register": "t13",
-            "line": 538
+            "line": 547
           },
           {
             "name": "TexWorldMapOverlaySnowSampler",
             "type": "Texture2D<float4>",
             "register": "t13",
-            "line": 532
+            "line": 541
           },
           {
             "name": "TexShadowMaskSampler",
             "type": "Texture2D<float4>",
             "register": "t14",
-            "line": 543
+            "line": 552
           },
           {
             "name": "TexLandLodBlend2Sampler",
             "type": "Texture2D<float4>",
             "register": "t15",
-            "line": 539
+            "line": 548
           },
           {
             "name": "TexLandLodNoiseSampler",
             "type": "Texture2D<float4>",
             "register": "t15",
-            "line": 541
+            "line": 550
           },
           {
             "name": "TexLandDisplacement0Sampler",
             "type": "Texture2D<float4>",
             "register": "t80",
-            "line": 468
+            "line": 477
           },
           {
             "name": "TexLandDisplacement1Sampler",
             "type": "Texture2D<float4>",
             "register": "t81",
-            "line": 470
+            "line": 479
           },
           {
             "name": "TexLandDisplacement2Sampler",
             "type": "Texture2D<float4>",
             "register": "t82",
-            "line": 471
+            "line": 480
           },
           {
             "name": "TexLandDisplacement3Sampler",
             "type": "Texture2D<float4>",
             "register": "t83",
-            "line": 472
+            "line": 481
           },
           {
             "name": "TexLandDisplacement4Sampler",
             "type": "Texture2D<float4>",
             "register": "t84",
-            "line": 473
+            "line": 482
           },
           {
             "name": "TexLandDisplacement5Sampler",
             "type": "Texture2D<float4>",
             "register": "t85",
-            "line": 474
+            "line": 483
           },
           {
             "name": "TexRMAOSSampler",
             "type": "Texture2D<float4>",
             "register": "t86",
-            "line": 475
+            "line": 484
           },
           {
             "name": "TexLandRMAOS2Sampler",
             "type": "Texture2D<float4>",
             "register": "t87",
-            "line": 477
+            "line": 486
           },
           {
             "name": "TexLandRMAOS3Sampler",
             "type": "Texture2D<float4>",
             "register": "t88",
-            "line": 478
+            "line": 487
           },
           {
             "name": "TexLandRMAOS4Sampler",
             "type": "Texture2D<float4>",
             "register": "t89",
-            "line": 479
+            "line": 488
           },
           {
             "name": "TexLandRMAOS5Sampler",
             "type": "Texture2D<float4>",
             "register": "t90",
-            "line": 480
+            "line": 489
           },
           {
             "name": "TexLandRMAOS6Sampler",
             "type": "Texture2D<float4>",
             "register": "t91",
-            "line": 481
+            "line": 490
           },
           {
             "name": "TexLandTHDisp0Sampler",
             "type": "Texture2D<float4>",
             "register": "t92",
-            "line": 459
+            "line": 468
           },
           {
             "name": "TexLandTHDisp1Sampler",
             "type": "Texture2D<float4>",
             "register": "t93",
-            "line": 461
+            "line": 470
           },
           {
             "name": "TexLandTHDisp2Sampler",
             "type": "Texture2D<float4>",
             "register": "t94",
-            "line": 462
+            "line": 471
           },
           {
             "name": "TexLandTHDisp3Sampler",
             "type": "Texture2D<float4>",
             "register": "t95",
-            "line": 463
+            "line": 472
           },
           {
             "name": "TexLandTHDisp4Sampler",
             "type": "Texture2D<float4>",
             "register": "t96",
-            "line": 464
+            "line": 473
           },
           {
             "name": "TexLandTHDisp5Sampler",
             "type": "Texture2D<float4>",
             "register": "t97",
-            "line": 465
+            "line": 474
           }
         ],
         "uavs": [],
@@ -11260,145 +11329,145 @@
             "name": "SampColorSampler",
             "type": "SamplerState",
             "register": "s0",
-            "line": 362
+            "line": 371
           },
           {
             "name": "SampColorSampler",
             "type": "SamplerState",
             "register": "s0",
-            "line": 384
+            "line": 393
           },
           {
             "name": "SampTerrainParallaxSampler",
             "type": "SamplerState",
             "register": "s1",
-            "line": 358
+            "line": 367
           },
           {
             "name": "SampSpecularSampler",
             "type": "SamplerState",
             "register": "s2",
-            "line": 390
+            "line": 399
           },
           {
             "name": "SampParallaxSampler",
             "type": "SamplerState",
             "register": "s3",
-            "line": 396
+            "line": 405
           },
           {
             "name": "SampProjDiffuseSampler",
             "type": "SamplerState",
             "register": "s3",
-            "line": 398
+            "line": 407
           },
           {
             "name": "SampTintSampler",
             "type": "SamplerState",
             "register": "s3",
-            "line": 393
+            "line": 402
           },
           {
             "name": "SampDetailSampler",
             "type": "SamplerState",
             "register": "s4",
-            "line": 394
+            "line": 403
           },
           {
             "name": "SampEnvSampler",
             "type": "SamplerState",
             "register": "s4",
-            "line": 402
+            "line": 411
           },
           {
             "name": "SampParallaxSampler",
             "type": "SamplerState",
             "register": "s4",
-            "line": 407
+            "line": 416
           },
           {
             "name": "SampEnvMaskSampler",
             "type": "SamplerState",
             "register": "s5",
-            "line": 403
+            "line": 412
           },
           {
             "name": "SampRMAOSSampler",
             "type": "SamplerState",
             "register": "s5",
-            "line": 410
+            "line": 419
           },
           {
             "name": "SampGlowSampler",
             "type": "SamplerState",
             "register": "s6",
-            "line": 412
+            "line": 421
           },
           {
             "name": "SampLayerSampler",
             "type": "SamplerState",
             "register": "s8",
-            "line": 416
+            "line": 425
           },
           {
             "name": "SampProjNormalSampler",
             "type": "SamplerState",
             "register": "s8",
-            "line": 418
+            "line": 427
           },
           {
             "name": "SampBackLightSampler",
             "type": "SamplerState",
             "register": "s9",
-            "line": 420
+            "line": 429
           },
           {
             "name": "SampProjDetailSampler",
             "type": "SamplerState",
             "register": "s10",
-            "line": 424
+            "line": 433
           },
           {
             "name": "SampCharacterLightProjNoiseSampler",
             "type": "SamplerState",
             "register": "s11",
-            "line": 426
+            "line": 435
           },
           {
             "name": "SampRimSoftLightWorldMapOverlaySampler",
             "type": "SamplerState",
             "register": "s12",
-            "line": 428
+            "line": 437
           },
           {
             "name": "SampLandLodBlend1Sampler",
             "type": "SamplerState",
             "register": "s13",
-            "line": 437
+            "line": 446
           },
           {
             "name": "SampWorldMapOverlaySnowSampler",
             "type": "SamplerState",
             "register": "s13",
-            "line": 431
+            "line": 440
           },
           {
             "name": "SampShadowMaskSampler",
             "type": "SamplerState",
             "register": "s14",
-            "line": 442
+            "line": 451
           },
           {
             "name": "SampLandLodBlend2Sampler",
             "type": "SamplerState",
             "register": "s15",
-            "line": 438
+            "line": 447
           },
           {
             "name": "SampLandLodNoiseSampler",
             "type": "SamplerState",
             "register": "s15",
-            "line": 440
+            "line": 449
           }
         ]
       },
@@ -12100,7 +12169,7 @@
       ],
       "owner": "core",
       "ownerKind": "core",
-      "sha256": "88ADB1CBF614D73FF31AFFA14DD5EE659534550C0DFFB310B5E109CAFFF15FFD",
+      "sha256": "E952E51A3A22153E67F39BA6E37B72C8A5327A4AA3D1860122F548019DFD3B0C",
       "role": "production-entry",
       "stageHint": "runtime-selected",
       "entryPoints": [
@@ -12144,92 +12213,98 @@
           "resolvedVirtualPath": "Common/Permutation.hlsli"
         },
         {
-          "token": "Common/Random.hlsli",
+          "token": "Common/CurrentFrameDepthCulling.hlsli",
           "line": 7,
+          "condition": null,
+          "resolvedVirtualPath": "Common/CurrentFrameDepthCulling.hlsli"
+        },
+        {
+          "token": "Common/Random.hlsli",
+          "line": 8,
           "condition": null,
           "resolvedVirtualPath": "Common/Random.hlsli"
         },
         {
           "token": "Common/SharedData.hlsli",
-          "line": 8,
+          "line": 9,
           "condition": null,
           "resolvedVirtualPath": "Common/SharedData.hlsli"
         },
         {
           "token": "Common/LightingCommon.hlsli",
-          "line": 11,
+          "line": 12,
           "condition": "if defined(PSHADER)",
           "resolvedVirtualPath": "Common/LightingCommon.hlsli"
         },
         {
           "token": "GrassCollision/GrassCollision.hlsli",
-          "line": 136,
+          "line": 137,
           "condition": "ifdef VSHADER && ifdef GRASS_COLLISION",
           "resolvedVirtualPath": "GrassCollision/GrassCollision.hlsli"
         },
         {
           "token": "ScreenSpaceShadows/ScreenSpaceShadows.hlsli",
-          "line": 425,
+          "line": 442,
           "condition": "ifdef PSHADER && if defined(SCREEN_SPACE_SHADOWS)",
           "resolvedVirtualPath": "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
         },
         {
           "token": "LightLimitFix/LightLimitFix.hlsli",
-          "line": 429,
+          "line": 446,
           "condition": "ifdef PSHADER && if defined(LIGHT_LIMIT_FIX)",
           "resolvedVirtualPath": "LightLimitFix/LightLimitFix.hlsli"
         },
         {
           "token": "InverseSquareLighting/InverseSquareLighting.hlsli",
-          "line": 433,
+          "line": 450,
           "condition": "ifdef PSHADER && if defined(ISL) && defined(LIGHT_LIMIT_FIX)",
           "resolvedVirtualPath": "InverseSquareLighting/InverseSquareLighting.hlsli"
         },
         {
           "token": "DynamicCubemaps/DynamicCubemaps.hlsli",
-          "line": 439,
+          "line": 456,
           "condition": "ifdef PSHADER && if defined(DYNAMIC_CUBEMAPS)",
           "resolvedVirtualPath": "DynamicCubemaps/DynamicCubemaps.hlsli"
         },
         {
           "token": "TerrainShadows/TerrainShadows.hlsli",
-          "line": 443,
+          "line": 460,
           "condition": "ifdef PSHADER && if defined(TERRAIN_SHADOWS)",
           "resolvedVirtualPath": "TerrainShadows/TerrainShadows.hlsli"
         },
         {
           "token": "CloudShadows/CloudShadows.hlsli",
-          "line": 447,
+          "line": 464,
           "condition": "ifdef PSHADER && if defined(CLOUD_SHADOWS)",
           "resolvedVirtualPath": "CloudShadows/CloudShadows.hlsli"
         },
         {
           "token": "Skylighting/Skylighting.hlsli",
-          "line": 451,
+          "line": 468,
           "condition": "ifdef PSHADER && if defined(SKYLIGHTING)",
           "resolvedVirtualPath": "Skylighting/Skylighting.hlsli"
         },
         {
           "token": "IBL/IBL.hlsli",
-          "line": 459,
+          "line": 476,
           "condition": "ifdef PSHADER && if defined(IBL)",
           "resolvedVirtualPath": "IBL/IBL.hlsli"
         },
         {
           "token": "Common/ShadowSampling.hlsli",
-          "line": 464,
+          "line": 481,
           "condition": "ifdef PSHADER",
           "resolvedVirtualPath": "Common/ShadowSampling.hlsli"
         },
         {
           "token": "Common/PBR.hlsli",
-          "line": 644,
+          "line": 661,
           "condition": "ifdef PSHADER && ifdef GRASS_LIGHTING && if defined(TRUE_PBR)",
           "resolvedVirtualPath": "Common/PBR.hlsli"
         },
         {
           "token": "GrassLighting/GrassLighting.hlsli",
-          "line": 648,
+          "line": 665,
           "condition": "ifdef PSHADER && ifdef GRASS_LIGHTING",
           "resolvedVirtualPath": "GrassLighting/GrassLighting.hlsli"
         }
@@ -12239,6 +12314,7 @@
         "CloudShadows/CloudShadows.hlsli",
         "Common/BRDF.hlsli",
         "Common/Color.hlsli",
+        "Common/CurrentFrameDepthCulling.hlsli",
         "Common/FrameBuffer.hlsli",
         "Common/Game.hlsli",
         "Common/GBuffer.hlsli",
@@ -12293,31 +12369,31 @@
             "name": "PerFrame",
             "type": "cbuffer",
             "register": "b0",
-            "line": 400
+            "line": 417
           },
           {
             "name": "PerMaterial",
             "type": "cbuffer",
             "register": "b1",
-            "line": 636
+            "line": 653
           },
           {
             "name": "cb7",
             "type": "cbuffer",
             "register": "b7",
-            "line": 138
+            "line": 139
           },
           {
             "name": "cb8",
             "type": "cbuffer",
             "register": "b8",
-            "line": 143
+            "line": 144
           },
           {
             "name": "AlphaTestRefCB",
             "type": "cbuffer",
             "register": "b11",
-            "line": 418
+            "line": 435
           }
         ],
         "srvs": [
@@ -12325,31 +12401,31 @@
             "name": "TexBaseSampler",
             "type": "Texture2D<float4>",
             "register": "t0",
-            "line": 397
+            "line": 414
           },
           {
             "name": "TexShadowMaskSampler",
             "type": "Texture2D<float4>",
             "register": "t1",
-            "line": 399
+            "line": 416
           },
           {
             "name": "TexNormalSampler",
             "type": "Texture2D<float4>",
             "register": "t2",
-            "line": 410
+            "line": 427
           },
           {
             "name": "TexRMAOSSampler",
             "type": "Texture2D<float4>",
             "register": "t3",
-            "line": 411
+            "line": 428
           },
           {
             "name": "TexSubsurfaceSampler",
             "type": "Texture2D<float4>",
             "register": "t4",
-            "line": 412
+            "line": 429
           }
         ],
         "uavs": [],
@@ -12358,31 +12434,31 @@
             "name": "SampBaseSampler",
             "type": "SamplerState",
             "register": "s0",
-            "line": 387
+            "line": 404
           },
           {
             "name": "SampShadowMaskSampler",
             "type": "SamplerState",
             "register": "s1",
-            "line": 388
+            "line": 405
           },
           {
             "name": "SampNormalSampler",
             "type": "SamplerState",
             "register": "s2",
-            "line": 392
+            "line": 409
           },
           {
             "name": "SampRMAOSSampler",
             "type": "SamplerState",
             "register": "s3",
-            "line": 393
+            "line": 410
           },
           {
             "name": "SampSubsurfaceSampler",
             "type": "SamplerState",
             "register": "s4",
-            "line": 394
+            "line": 411
           }
         ]
       },
@@ -18946,7 +19022,7 @@
       "entryPoint": "DistantTree.hlsl",
       "owner": "core",
       "stageHint": "runtime-selected",
-      "includeCount": 18,
+      "includeCount": 19,
       "featureOwnersInClosure": [
         "Cloud Shadows",
         "IBL",
@@ -18961,6 +19037,7 @@
         "CLOUD_SHADOWS",
         "COMPUTESHADER",
         "CSHADER",
+        "CURRENT_FRAME_DEPTH_CULLING_HLSLI",
         "DEFERRED",
         "DYNAMIC_CUBEMAPS",
         "EFFECT",
@@ -20300,7 +20377,7 @@
       "entryPoint": "Lighting.hlsl",
       "owner": "core",
       "stageHint": "runtime-selected",
-      "includeCount": 44,
+      "includeCount": 45,
       "featureOwnersInClosure": [
         "Cloud Shadows",
         "Dynamic Cubemaps",
@@ -20332,6 +20409,7 @@
         "CREATOR",
         "CS_HAIR",
         "CSHADER",
+        "CURRENT_FRAME_DEPTH_CULLING_HLSLI",
         "DEBUG_WETNESS_EFFECTS",
         "DEFERRED",
         "DEPTH_WRITE_DECALS",
@@ -20565,7 +20643,7 @@
       "entryPoint": "RunGrass.hlsl",
       "owner": "core",
       "stageHint": "runtime-selected",
-      "includeCount": 31,
+      "includeCount": 32,
       "featureOwnersInClosure": [
         "Cloud Shadows",
         "Dynamic Cubemaps",
@@ -20588,6 +20666,7 @@
         "COMPUTESHADER",
         "CS_HAIR",
         "CSHADER",
+        "CURRENT_FRAME_DEPTH_CULLING_HLSLI",
         "DEFERRED",
         "DYNAMIC_CUBEMAPS",
         "DYNAMICCUBEMAPS_HLSLI",
@@ -22042,7 +22121,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -22364,7 +22443,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -22679,7 +22758,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -22852,7 +22931,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -23025,7 +23104,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -23196,7 +23275,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -23353,7 +23432,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -23510,7 +23589,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -23665,7 +23744,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -23983,7 +24062,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -24870,7 +24949,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -25603,7 +25682,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -26868,7 +26947,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -27044,7 +27123,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -27222,7 +27301,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -29901,7 +29980,7 @@
       "entryPoint": "main",
       "compileDefines": [],
       "defineMode": "none",
-      "compileSite": "src/Features/VR/InSceneOverlay.cpp:1566",
+      "compileSite": "src/Features/VR/InSceneOverlay.cpp:1616",
       "shaderObject": null,
       "invocationSites": [],
       "routes": {
@@ -29943,7 +30022,7 @@
       "entryPoint": "main",
       "compileDefines": [],
       "defineMode": "none",
-      "compileSite": "src/Features/VR/InSceneOverlay.cpp:1580",
+      "compileSite": "src/Features/VR/InSceneOverlay.cpp:1630",
       "shaderObject": null,
       "invocationSites": [],
       "routes": {
@@ -29999,7 +30078,7 @@
       "entryPoint": "main",
       "compileDefines": [],
       "defineMode": "inline-source",
-      "compileSite": "src/Features/VR/InSceneOverlay.cpp:1740",
+      "compileSite": "src/Features/VR/InSceneOverlay.cpp:1790",
       "shaderObject": null,
       "invocationSites": [],
       "routes": {
@@ -30030,7 +30109,7 @@
       "entryPoint": "main",
       "compileDefines": [],
       "defineMode": "inline-source",
-      "compileSite": "src/Features/VR/InSceneOverlay.cpp:1772",
+      "compileSite": "src/Features/VR/InSceneOverlay.cpp:1822",
       "shaderObject": null,
       "invocationSites": [],
       "routes": {
@@ -30061,7 +30140,7 @@
       "entryPoint": "main",
       "compileDefines": [],
       "defineMode": "dynamic",
-      "compileSite": "src/Features/VR.cpp:763",
+      "compileSite": "src/Features/VR.cpp:894",
       "shaderObject": "shader",
       "invocationSites": [],
       "routes": {
@@ -30554,6 +30633,7 @@
       "dependencyClosure": [
         "CloudShadows/CloudShadows.hlsli",
         "Common/Color.hlsli",
+        "Common/CurrentFrameDepthCulling.hlsli",
         "Common/FrameBuffer.hlsli",
         "Common/Game.hlsli",
         "Common/GBuffer.hlsli",
@@ -30612,7 +30692,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -30644,7 +30724,7 @@
             "name": "AlphaTestRefCB",
             "type": "cbuffer",
             "register": "b11",
-            "line": 128
+            "line": 138
           },
           {
             "kind": "constantBuffers",
@@ -30652,7 +30732,7 @@
             "name": "PerFrame",
             "type": "cbuffer",
             "register": "b12",
-            "line": 133
+            "line": 143
           },
           {
             "kind": "constantBuffers",
@@ -30660,7 +30740,7 @@
             "name": "PerGeometry",
             "type": "cbuffer",
             "register": "b2",
-            "line": 51
+            "line": 53
           },
           {
             "kind": "constantBuffers",
@@ -30668,7 +30748,7 @@
             "name": "PerTechnique",
             "type": "cbuffer",
             "register": "b0",
-            "line": 47
+            "line": 49
           },
           {
             "kind": "constantBuffers",
@@ -30676,7 +30756,7 @@
             "name": "PerTechnique",
             "type": "cbuffer",
             "register": "b0",
-            "line": 140
+            "line": 150
           },
           {
             "kind": "samplers",
@@ -30684,7 +30764,7 @@
             "name": "SampDiffuse",
             "type": "SamplerState",
             "register": "s0",
-            "line": 123
+            "line": 133
           },
           {
             "kind": "srvs",
@@ -30693,6 +30773,14 @@
             "type": "TextureCube<float>",
             "register": "t25",
             "line": 8
+          },
+          {
+            "kind": "srvs",
+            "source": "Common/CurrentFrameDepthCulling.hlsli",
+            "name": "Visibility",
+            "type": "Buffer<uint>",
+            "register": "t127",
+            "line": 7
           },
           {
             "kind": "srvs",
@@ -30732,7 +30820,7 @@
             "name": "TexDiffuse",
             "type": "Texture2D<float4>",
             "register": "t0",
-            "line": 124
+            "line": 134
           },
           {
             "kind": "srvs",
@@ -30903,7 +30991,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -31972,7 +32060,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -32129,7 +32217,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -32682,7 +32770,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -32997,7 +33085,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -33461,7 +33549,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -33958,7 +34046,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -34257,7 +34345,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -34768,7 +34856,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -34942,7 +35030,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -35493,7 +35581,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -36215,6 +36303,7 @@
         "CloudShadows/CloudShadows.hlsli",
         "Common/BRDF.hlsli",
         "Common/Color.hlsli",
+        "Common/CurrentFrameDepthCulling.hlsli",
         "Common/FoveatedMask.hlsli",
         "Common/FoveatedShaderDetail.hlsli",
         "Common/FrameBuffer.hlsli",
@@ -36298,7 +36387,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -36346,7 +36435,7 @@
             "name": "AlphaTestRefBuffer",
             "type": "cbuffer",
             "register": "b11",
-            "line": 642
+            "line": 651
           },
           {
             "kind": "constantBuffers",
@@ -36354,7 +36443,7 @@
             "name": "PerGeometry",
             "type": "cbuffer",
             "register": "b2",
-            "line": 123
+            "line": 124
           },
           {
             "kind": "constantBuffers",
@@ -36362,7 +36451,7 @@
             "name": "PerGeometry",
             "type": "cbuffer",
             "register": "b2",
-            "line": 599
+            "line": 608
           },
           {
             "kind": "constantBuffers",
@@ -36370,7 +36459,7 @@
             "name": "PerMaterial",
             "type": "cbuffer",
             "register": "b1",
-            "line": 116
+            "line": 117
           },
           {
             "kind": "constantBuffers",
@@ -36378,7 +36467,7 @@
             "name": "PerMaterial",
             "type": "cbuffer",
             "register": "b1",
-            "line": 552
+            "line": 561
           },
           {
             "kind": "constantBuffers",
@@ -36386,7 +36475,7 @@
             "name": "PerTechnique",
             "type": "cbuffer",
             "register": "b0",
-            "line": 101
+            "line": 102
           },
           {
             "kind": "constantBuffers",
@@ -36394,7 +36483,7 @@
             "name": "PerTechnique",
             "type": "cbuffer",
             "register": "b0",
-            "line": 545
+            "line": 554
           },
           {
             "kind": "constantBuffers",
@@ -36402,7 +36491,7 @@
             "name": "VS_PerFrame",
             "type": "cbuffer",
             "register": "b12",
-            "line": 148
+            "line": 149
           },
           {
             "kind": "constantBuffers",
@@ -36418,7 +36507,7 @@
             "name": "SampBackLightSampler",
             "type": "SamplerState",
             "register": "s9",
-            "line": 420
+            "line": 429
           },
           {
             "kind": "samplers",
@@ -36426,7 +36515,7 @@
             "name": "SampCharacterLightProjNoiseSampler",
             "type": "SamplerState",
             "register": "s11",
-            "line": 426
+            "line": 435
           },
           {
             "kind": "samplers",
@@ -36434,7 +36523,7 @@
             "name": "SampColorSampler",
             "type": "SamplerState",
             "register": "s0",
-            "line": 362
+            "line": 371
           },
           {
             "kind": "samplers",
@@ -36442,7 +36531,7 @@
             "name": "SampColorSampler",
             "type": "SamplerState",
             "register": "s0",
-            "line": 384
+            "line": 393
           },
           {
             "kind": "samplers",
@@ -36450,7 +36539,7 @@
             "name": "SampDetailSampler",
             "type": "SamplerState",
             "register": "s4",
-            "line": 394
+            "line": 403
           },
           {
             "kind": "samplers",
@@ -36458,7 +36547,7 @@
             "name": "SampEnvMaskSampler",
             "type": "SamplerState",
             "register": "s5",
-            "line": 403
+            "line": 412
           },
           {
             "kind": "samplers",
@@ -36466,7 +36555,7 @@
             "name": "SampEnvSampler",
             "type": "SamplerState",
             "register": "s4",
-            "line": 402
+            "line": 411
           },
           {
             "kind": "samplers",
@@ -36474,7 +36563,7 @@
             "name": "SampGlowSampler",
             "type": "SamplerState",
             "register": "s6",
-            "line": 412
+            "line": 421
           },
           {
             "kind": "samplers",
@@ -36482,7 +36571,7 @@
             "name": "SampLandLodBlend1Sampler",
             "type": "SamplerState",
             "register": "s13",
-            "line": 437
+            "line": 446
           },
           {
             "kind": "samplers",
@@ -36490,7 +36579,7 @@
             "name": "SampLandLodBlend2Sampler",
             "type": "SamplerState",
             "register": "s15",
-            "line": 438
+            "line": 447
           },
           {
             "kind": "samplers",
@@ -36498,7 +36587,7 @@
             "name": "SampLandLodNoiseSampler",
             "type": "SamplerState",
             "register": "s15",
-            "line": 440
+            "line": 449
           },
           {
             "kind": "samplers",
@@ -36506,7 +36595,7 @@
             "name": "SampLayerSampler",
             "type": "SamplerState",
             "register": "s8",
-            "line": 416
+            "line": 425
           },
           {
             "kind": "samplers",
@@ -36514,7 +36603,7 @@
             "name": "SampParallaxSampler",
             "type": "SamplerState",
             "register": "s3",
-            "line": 396
+            "line": 405
           },
           {
             "kind": "samplers",
@@ -36522,7 +36611,7 @@
             "name": "SampParallaxSampler",
             "type": "SamplerState",
             "register": "s4",
-            "line": 407
+            "line": 416
           },
           {
             "kind": "samplers",
@@ -36530,7 +36619,7 @@
             "name": "SampProjDetailSampler",
             "type": "SamplerState",
             "register": "s10",
-            "line": 424
+            "line": 433
           },
           {
             "kind": "samplers",
@@ -36538,7 +36627,7 @@
             "name": "SampProjDiffuseSampler",
             "type": "SamplerState",
             "register": "s3",
-            "line": 398
+            "line": 407
           },
           {
             "kind": "samplers",
@@ -36546,7 +36635,7 @@
             "name": "SampProjNormalSampler",
             "type": "SamplerState",
             "register": "s8",
-            "line": 418
+            "line": 427
           },
           {
             "kind": "samplers",
@@ -36554,7 +36643,7 @@
             "name": "SampRimSoftLightWorldMapOverlaySampler",
             "type": "SamplerState",
             "register": "s12",
-            "line": 428
+            "line": 437
           },
           {
             "kind": "samplers",
@@ -36562,7 +36651,7 @@
             "name": "SampRMAOSSampler",
             "type": "SamplerState",
             "register": "s5",
-            "line": 410
+            "line": 419
           },
           {
             "kind": "samplers",
@@ -36570,7 +36659,7 @@
             "name": "SampShadowMaskSampler",
             "type": "SamplerState",
             "register": "s14",
-            "line": 442
+            "line": 451
           },
           {
             "kind": "samplers",
@@ -36578,7 +36667,7 @@
             "name": "SampSpecularSampler",
             "type": "SamplerState",
             "register": "s2",
-            "line": 390
+            "line": 399
           },
           {
             "kind": "samplers",
@@ -36586,7 +36675,7 @@
             "name": "SampTerrainParallaxSampler",
             "type": "SamplerState",
             "register": "s1",
-            "line": 358
+            "line": 367
           },
           {
             "kind": "samplers",
@@ -36594,7 +36683,7 @@
             "name": "SampTintSampler",
             "type": "SamplerState",
             "register": "s3",
-            "line": 393
+            "line": 402
           },
           {
             "kind": "samplers",
@@ -36602,7 +36691,7 @@
             "name": "SampWorldMapOverlaySnowSampler",
             "type": "SamplerState",
             "register": "s13",
-            "line": 431
+            "line": 440
           },
           {
             "kind": "srvs",
@@ -36611,6 +36700,14 @@
             "type": "TextureCube<float>",
             "register": "t25",
             "line": 8
+          },
+          {
+            "kind": "srvs",
+            "source": "Common/CurrentFrameDepthCulling.hlsli",
+            "name": "Visibility",
+            "type": "Buffer<uint>",
+            "register": "t127",
+            "line": 7
           },
           {
             "kind": "srvs",
@@ -36730,7 +36827,7 @@
             "name": "TexBackLightSampler",
             "type": "Texture2D<float4>",
             "register": "t9",
-            "line": 521
+            "line": 530
           },
           {
             "kind": "srvs",
@@ -36738,7 +36835,7 @@
             "name": "TexCharacterLightProjNoiseSampler",
             "type": "Texture2D<float4>",
             "register": "t11",
-            "line": 527
+            "line": 536
           },
           {
             "kind": "srvs",
@@ -36746,7 +36843,7 @@
             "name": "TexColorSampler",
             "type": "Texture2D<float4>",
             "register": "t0",
-            "line": 446
+            "line": 455
           },
           {
             "kind": "srvs",
@@ -36754,7 +36851,7 @@
             "name": "TexColorSampler",
             "type": "Texture2D<float4>",
             "register": "t0",
-            "line": 486
+            "line": 495
           },
           {
             "kind": "srvs",
@@ -36762,7 +36859,7 @@
             "name": "TexDetailSampler",
             "type": "Texture2D<float4>",
             "register": "t4",
-            "line": 495
+            "line": 504
           },
           {
             "kind": "srvs",
@@ -36770,7 +36867,7 @@
             "name": "TexEnvMaskSampler",
             "type": "Texture2D<float4>",
             "register": "t5",
-            "line": 504
+            "line": 513
           },
           {
             "kind": "srvs",
@@ -36778,7 +36875,7 @@
             "name": "TexEnvSampler",
             "type": "TextureCube<float4>",
             "register": "t4",
-            "line": 503
+            "line": 512
           },
           {
             "kind": "srvs",
@@ -36786,7 +36883,7 @@
             "name": "TexGlowSampler",
             "type": "Texture2D<float4>",
             "register": "t6",
-            "line": 513
+            "line": 522
           },
           {
             "kind": "srvs",
@@ -36794,7 +36891,7 @@
             "name": "TexLandColor2Sampler",
             "type": "Texture2D<float4>",
             "register": "t1",
-            "line": 448
+            "line": 457
           },
           {
             "kind": "srvs",
@@ -36802,7 +36899,7 @@
             "name": "TexLandColor3Sampler",
             "type": "Texture2D<float4>",
             "register": "t2",
-            "line": 449
+            "line": 458
           },
           {
             "kind": "srvs",
@@ -36810,7 +36907,7 @@
             "name": "TexLandColor4Sampler",
             "type": "Texture2D<float4>",
             "register": "t3",
-            "line": 450
+            "line": 459
           },
           {
             "kind": "srvs",
@@ -36818,7 +36915,7 @@
             "name": "TexLandColor5Sampler",
             "type": "Texture2D<float4>",
             "register": "t4",
-            "line": 451
+            "line": 460
           },
           {
             "kind": "srvs",
@@ -36826,7 +36923,7 @@
             "name": "TexLandColor6Sampler",
             "type": "Texture2D<float4>",
             "register": "t5",
-            "line": 452
+            "line": 461
           },
           {
             "kind": "srvs",
@@ -36834,7 +36931,7 @@
             "name": "TexLandDisplacement0Sampler",
             "type": "Texture2D<float4>",
             "register": "t80",
-            "line": 468
+            "line": 477
           },
           {
             "kind": "srvs",
@@ -36842,7 +36939,7 @@
             "name": "TexLandDisplacement1Sampler",
             "type": "Texture2D<float4>",
             "register": "t81",
-            "line": 470
+            "line": 479
           },
           {
             "kind": "srvs",
@@ -36850,7 +36947,7 @@
             "name": "TexLandDisplacement2Sampler",
             "type": "Texture2D<float4>",
             "register": "t82",
-            "line": 471
+            "line": 480
           },
           {
             "kind": "srvs",
@@ -36858,7 +36955,7 @@
             "name": "TexLandDisplacement3Sampler",
             "type": "Texture2D<float4>",
             "register": "t83",
-            "line": 472
+            "line": 481
           },
           {
             "kind": "srvs",
@@ -36866,7 +36963,7 @@
             "name": "TexLandDisplacement4Sampler",
             "type": "Texture2D<float4>",
             "register": "t84",
-            "line": 473
+            "line": 482
           },
           {
             "kind": "srvs",
@@ -36874,7 +36971,7 @@
             "name": "TexLandDisplacement5Sampler",
             "type": "Texture2D<float4>",
             "register": "t85",
-            "line": 474
+            "line": 483
           },
           {
             "kind": "srvs",
@@ -36882,7 +36979,7 @@
             "name": "TexLandLodBlend1Sampler",
             "type": "Texture2D<float4>",
             "register": "t13",
-            "line": 538
+            "line": 547
           },
           {
             "kind": "srvs",
@@ -36890,7 +36987,7 @@
             "name": "TexLandLodBlend2Sampler",
             "type": "Texture2D<float4>",
             "register": "t15",
-            "line": 539
+            "line": 548
           },
           {
             "kind": "srvs",
@@ -36898,7 +36995,7 @@
             "name": "TexLandLodNoiseSampler",
             "type": "Texture2D<float4>",
             "register": "t15",
-            "line": 541
+            "line": 550
           },
           {
             "kind": "srvs",
@@ -36906,7 +37003,7 @@
             "name": "TexLandNormal2Sampler",
             "type": "Texture2D<float4>",
             "register": "t8",
-            "line": 454
+            "line": 463
           },
           {
             "kind": "srvs",
@@ -36914,7 +37011,7 @@
             "name": "TexLandNormal3Sampler",
             "type": "Texture2D<float4>",
             "register": "t9",
-            "line": 455
+            "line": 464
           },
           {
             "kind": "srvs",
@@ -36922,7 +37019,7 @@
             "name": "TexLandNormal4Sampler",
             "type": "Texture2D<float4>",
             "register": "t10",
-            "line": 456
+            "line": 465
           },
           {
             "kind": "srvs",
@@ -36930,7 +37027,7 @@
             "name": "TexLandNormal5Sampler",
             "type": "Texture2D<float4>",
             "register": "t11",
-            "line": 457
+            "line": 466
           },
           {
             "kind": "srvs",
@@ -36938,7 +37035,7 @@
             "name": "TexLandNormal6Sampler",
             "type": "Texture2D<float4>",
             "register": "t12",
-            "line": 458
+            "line": 467
           },
           {
             "kind": "srvs",
@@ -36946,7 +37043,7 @@
             "name": "TexLandRMAOS2Sampler",
             "type": "Texture2D<float4>",
             "register": "t87",
-            "line": 477
+            "line": 486
           },
           {
             "kind": "srvs",
@@ -36954,7 +37051,7 @@
             "name": "TexLandRMAOS3Sampler",
             "type": "Texture2D<float4>",
             "register": "t88",
-            "line": 478
+            "line": 487
           },
           {
             "kind": "srvs",
@@ -36962,7 +37059,7 @@
             "name": "TexLandRMAOS4Sampler",
             "type": "Texture2D<float4>",
             "register": "t89",
-            "line": 479
+            "line": 488
           },
           {
             "kind": "srvs",
@@ -36970,7 +37067,7 @@
             "name": "TexLandRMAOS5Sampler",
             "type": "Texture2D<float4>",
             "register": "t90",
-            "line": 480
+            "line": 489
           },
           {
             "kind": "srvs",
@@ -36978,7 +37075,7 @@
             "name": "TexLandRMAOS6Sampler",
             "type": "Texture2D<float4>",
             "register": "t91",
-            "line": 481
+            "line": 490
           },
           {
             "kind": "srvs",
@@ -36986,7 +37083,7 @@
             "name": "TexLandTHDisp0Sampler",
             "type": "Texture2D<float4>",
             "register": "t92",
-            "line": 459
+            "line": 468
           },
           {
             "kind": "srvs",
@@ -36994,7 +37091,7 @@
             "name": "TexLandTHDisp1Sampler",
             "type": "Texture2D<float4>",
             "register": "t93",
-            "line": 461
+            "line": 470
           },
           {
             "kind": "srvs",
@@ -37002,7 +37099,7 @@
             "name": "TexLandTHDisp2Sampler",
             "type": "Texture2D<float4>",
             "register": "t94",
-            "line": 462
+            "line": 471
           },
           {
             "kind": "srvs",
@@ -37010,7 +37107,7 @@
             "name": "TexLandTHDisp3Sampler",
             "type": "Texture2D<float4>",
             "register": "t95",
-            "line": 463
+            "line": 472
           },
           {
             "kind": "srvs",
@@ -37018,7 +37115,7 @@
             "name": "TexLandTHDisp4Sampler",
             "type": "Texture2D<float4>",
             "register": "t96",
-            "line": 464
+            "line": 473
           },
           {
             "kind": "srvs",
@@ -37026,7 +37123,7 @@
             "name": "TexLandTHDisp5Sampler",
             "type": "Texture2D<float4>",
             "register": "t97",
-            "line": 465
+            "line": 474
           },
           {
             "kind": "srvs",
@@ -37034,7 +37131,7 @@
             "name": "TexLayerSampler",
             "type": "Texture2D<float4>",
             "register": "t8",
-            "line": 517
+            "line": 526
           },
           {
             "kind": "srvs",
@@ -37042,7 +37139,7 @@
             "name": "TexNormalSampler",
             "type": "Texture2D<float4>",
             "register": "t1",
-            "line": 488
+            "line": 497
           },
           {
             "kind": "srvs",
@@ -37050,7 +37147,7 @@
             "name": "TexNormalSampler",
             "type": "Texture2D<float4>",
             "register": "t7",
-            "line": 453
+            "line": 462
           },
           {
             "kind": "srvs",
@@ -37058,7 +37155,7 @@
             "name": "TexParallaxSampler",
             "type": "Texture2D<float4>",
             "register": "t3",
-            "line": 497
+            "line": 506
           },
           {
             "kind": "srvs",
@@ -37066,7 +37163,7 @@
             "name": "TexParallaxSampler",
             "type": "Texture2D<float4>",
             "register": "t4",
-            "line": 508
+            "line": 517
           },
           {
             "kind": "srvs",
@@ -37074,7 +37171,7 @@
             "name": "TexProjDetail",
             "type": "Texture2D<float4>",
             "register": "t10",
-            "line": 525
+            "line": 534
           },
           {
             "kind": "srvs",
@@ -37082,7 +37179,7 @@
             "name": "TexProjDiffuseSampler",
             "type": "Texture2D<float4>",
             "register": "t3",
-            "line": 499
+            "line": 508
           },
           {
             "kind": "srvs",
@@ -37090,7 +37187,7 @@
             "name": "TexProjNormalSampler",
             "type": "Texture2D<float4>",
             "register": "t8",
-            "line": 519
+            "line": 528
           },
           {
             "kind": "srvs",
@@ -37098,7 +37195,7 @@
             "name": "TexRimSoftLightWorldMapOverlaySampler",
             "type": "Texture2D<float4>",
             "register": "t12",
-            "line": 529
+            "line": 538
           },
           {
             "kind": "srvs",
@@ -37106,7 +37203,7 @@
             "name": "TexRMAOSSampler",
             "type": "Texture2D<float4>",
             "register": "t5",
-            "line": 511
+            "line": 520
           },
           {
             "kind": "srvs",
@@ -37114,7 +37211,7 @@
             "name": "TexRMAOSSampler",
             "type": "Texture2D<float4>",
             "register": "t86",
-            "line": 475
+            "line": 484
           },
           {
             "kind": "srvs",
@@ -37122,7 +37219,7 @@
             "name": "TexShadowMaskSampler",
             "type": "Texture2D<float4>",
             "register": "t14",
-            "line": 543
+            "line": 552
           },
           {
             "kind": "srvs",
@@ -37130,7 +37227,7 @@
             "name": "TexSpecularSampler",
             "type": "Texture2D<float4>",
             "register": "t2",
-            "line": 491
+            "line": 500
           },
           {
             "kind": "srvs",
@@ -37138,7 +37235,7 @@
             "name": "TexTintSampler",
             "type": "Texture2D<float4>",
             "register": "t3",
-            "line": 494
+            "line": 503
           },
           {
             "kind": "srvs",
@@ -37146,7 +37243,7 @@
             "name": "TexWorldMapOverlaySnowSampler",
             "type": "Texture2D<float4>",
             "register": "t13",
-            "line": 532
+            "line": 541
           },
           {
             "kind": "srvs",
@@ -37344,7 +37441,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -37645,6 +37742,7 @@
         "CloudShadows/CloudShadows.hlsli",
         "Common/BRDF.hlsli",
         "Common/Color.hlsli",
+        "Common/CurrentFrameDepthCulling.hlsli",
         "Common/FrameBuffer.hlsli",
         "Common/Game.hlsli",
         "Common/GBuffer.hlsli",
@@ -37715,7 +37813,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -37763,7 +37861,7 @@
             "name": "AlphaTestRefCB",
             "type": "cbuffer",
             "register": "b11",
-            "line": 418
+            "line": 435
           },
           {
             "kind": "constantBuffers",
@@ -37771,7 +37869,7 @@
             "name": "cb7",
             "type": "cbuffer",
             "register": "b7",
-            "line": 138
+            "line": 139
           },
           {
             "kind": "constantBuffers",
@@ -37779,7 +37877,7 @@
             "name": "cb8",
             "type": "cbuffer",
             "register": "b8",
-            "line": 143
+            "line": 144
           },
           {
             "kind": "constantBuffers",
@@ -37787,7 +37885,7 @@
             "name": "PerFrame",
             "type": "cbuffer",
             "register": "b0",
-            "line": 400
+            "line": 417
           },
           {
             "kind": "constantBuffers",
@@ -37795,7 +37893,7 @@
             "name": "PerMaterial",
             "type": "cbuffer",
             "register": "b1",
-            "line": 636
+            "line": 653
           },
           {
             "kind": "samplers",
@@ -37803,7 +37901,7 @@
             "name": "SampBaseSampler",
             "type": "SamplerState",
             "register": "s0",
-            "line": 387
+            "line": 404
           },
           {
             "kind": "samplers",
@@ -37811,7 +37909,7 @@
             "name": "SampNormalSampler",
             "type": "SamplerState",
             "register": "s2",
-            "line": 392
+            "line": 409
           },
           {
             "kind": "samplers",
@@ -37819,7 +37917,7 @@
             "name": "SampRMAOSSampler",
             "type": "SamplerState",
             "register": "s3",
-            "line": 393
+            "line": 410
           },
           {
             "kind": "samplers",
@@ -37827,7 +37925,7 @@
             "name": "SampShadowMaskSampler",
             "type": "SamplerState",
             "register": "s1",
-            "line": 388
+            "line": 405
           },
           {
             "kind": "samplers",
@@ -37835,7 +37933,7 @@
             "name": "SampSubsurfaceSampler",
             "type": "SamplerState",
             "register": "s4",
-            "line": 394
+            "line": 411
           },
           {
             "kind": "srvs",
@@ -37844,6 +37942,14 @@
             "type": "TextureCube<float>",
             "register": "t25",
             "line": 8
+          },
+          {
+            "kind": "srvs",
+            "source": "Common/CurrentFrameDepthCulling.hlsli",
+            "name": "Visibility",
+            "type": "Buffer<uint>",
+            "register": "t127",
+            "line": 7
           },
           {
             "kind": "srvs",
@@ -38003,7 +38109,7 @@
             "name": "TexBaseSampler",
             "type": "Texture2D<float4>",
             "register": "t0",
-            "line": 397
+            "line": 414
           },
           {
             "kind": "srvs",
@@ -38011,7 +38117,7 @@
             "name": "TexNormalSampler",
             "type": "Texture2D<float4>",
             "register": "t2",
-            "line": 410
+            "line": 427
           },
           {
             "kind": "srvs",
@@ -38019,7 +38125,7 @@
             "name": "TexRMAOSSampler",
             "type": "Texture2D<float4>",
             "register": "t3",
-            "line": 411
+            "line": 428
           },
           {
             "kind": "srvs",
@@ -38027,7 +38133,7 @@
             "name": "TexShadowMaskSampler",
             "type": "Texture2D<float4>",
             "register": "t1",
-            "line": 399
+            "line": 416
           },
           {
             "kind": "srvs",
@@ -38035,7 +38141,7 @@
             "name": "TexSubsurfaceSampler",
             "type": "Texture2D<float4>",
             "register": "t4",
-            "line": 412
+            "line": 429
           },
           {
             "kind": "srvs",
@@ -38154,7 +38260,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -38759,7 +38865,7 @@
             "name": "PerShader",
             "type": "cbuffer",
             "register": "b4",
-            "line": 79
+            "line": 82
           },
           {
             "kind": "constantBuffers",
@@ -39325,7 +39431,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -39619,7 +39725,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -39913,7 +40019,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -40063,7 +40169,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -40213,7 +40319,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -40363,7 +40469,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -40497,7 +40603,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -40631,7 +40737,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -40765,7 +40871,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -41031,7 +41137,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -41785,7 +41891,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -42433,7 +42539,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -43529,7 +43635,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -43679,7 +43785,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -43829,7 +43935,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -46625,7 +46731,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -46657,7 +46763,7 @@
           "name": "AlphaTestRefCB",
           "type": "cbuffer",
           "register": "b11",
-          "line": 128
+          "line": 138
         },
         {
           "kind": "constantBuffers",
@@ -46665,7 +46771,7 @@
           "name": "PerFrame",
           "type": "cbuffer",
           "register": "b12",
-          "line": 133
+          "line": 143
         },
         {
           "kind": "constantBuffers",
@@ -46673,7 +46779,7 @@
           "name": "PerGeometry",
           "type": "cbuffer",
           "register": "b2",
-          "line": 51
+          "line": 53
         },
         {
           "kind": "constantBuffers",
@@ -46681,7 +46787,7 @@
           "name": "PerTechnique",
           "type": "cbuffer",
           "register": "b0",
-          "line": 47
+          "line": 49
         },
         {
           "kind": "constantBuffers",
@@ -46689,7 +46795,7 @@
           "name": "PerTechnique",
           "type": "cbuffer",
           "register": "b0",
-          "line": 140
+          "line": 150
         },
         {
           "kind": "samplers",
@@ -46697,7 +46803,7 @@
           "name": "SampDiffuse",
           "type": "SamplerState",
           "register": "s0",
-          "line": 123
+          "line": 133
         },
         {
           "kind": "srvs",
@@ -46706,6 +46812,14 @@
           "type": "TextureCube<float>",
           "register": "t25",
           "line": 8
+        },
+        {
+          "kind": "srvs",
+          "source": "Common/CurrentFrameDepthCulling.hlsli",
+          "name": "Visibility",
+          "type": "Buffer<uint>",
+          "register": "t127",
+          "line": 7
         },
         {
           "kind": "srvs",
@@ -46745,7 +46859,7 @@
           "name": "TexDiffuse",
           "type": "Texture2D<float4>",
           "register": "t0",
-          "line": 124
+          "line": 134
         },
         {
           "kind": "srvs",
@@ -46880,7 +46994,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -47867,7 +47981,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -48002,7 +48116,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -48469,7 +48583,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -48730,7 +48844,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -49143,7 +49257,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -49554,7 +49668,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -49799,7 +49913,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -50243,7 +50357,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -50394,7 +50508,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -50863,7 +50977,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -51539,7 +51653,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -51587,7 +51701,7 @@
           "name": "AlphaTestRefBuffer",
           "type": "cbuffer",
           "register": "b11",
-          "line": 642
+          "line": 651
         },
         {
           "kind": "constantBuffers",
@@ -51595,7 +51709,7 @@
           "name": "PerGeometry",
           "type": "cbuffer",
           "register": "b2",
-          "line": 123
+          "line": 124
         },
         {
           "kind": "constantBuffers",
@@ -51603,7 +51717,7 @@
           "name": "PerGeometry",
           "type": "cbuffer",
           "register": "b2",
-          "line": 599
+          "line": 608
         },
         {
           "kind": "constantBuffers",
@@ -51611,7 +51725,7 @@
           "name": "PerMaterial",
           "type": "cbuffer",
           "register": "b1",
-          "line": 116
+          "line": 117
         },
         {
           "kind": "constantBuffers",
@@ -51619,7 +51733,7 @@
           "name": "PerMaterial",
           "type": "cbuffer",
           "register": "b1",
-          "line": 552
+          "line": 561
         },
         {
           "kind": "constantBuffers",
@@ -51627,7 +51741,7 @@
           "name": "PerTechnique",
           "type": "cbuffer",
           "register": "b0",
-          "line": 101
+          "line": 102
         },
         {
           "kind": "constantBuffers",
@@ -51635,7 +51749,7 @@
           "name": "PerTechnique",
           "type": "cbuffer",
           "register": "b0",
-          "line": 545
+          "line": 554
         },
         {
           "kind": "constantBuffers",
@@ -51643,7 +51757,7 @@
           "name": "VS_PerFrame",
           "type": "cbuffer",
           "register": "b12",
-          "line": 148
+          "line": 149
         },
         {
           "kind": "constantBuffers",
@@ -51659,7 +51773,7 @@
           "name": "SampBackLightSampler",
           "type": "SamplerState",
           "register": "s9",
-          "line": 420
+          "line": 429
         },
         {
           "kind": "samplers",
@@ -51667,7 +51781,7 @@
           "name": "SampCharacterLightProjNoiseSampler",
           "type": "SamplerState",
           "register": "s11",
-          "line": 426
+          "line": 435
         },
         {
           "kind": "samplers",
@@ -51675,7 +51789,7 @@
           "name": "SampColorSampler",
           "type": "SamplerState",
           "register": "s0",
-          "line": 362
+          "line": 371
         },
         {
           "kind": "samplers",
@@ -51683,7 +51797,7 @@
           "name": "SampColorSampler",
           "type": "SamplerState",
           "register": "s0",
-          "line": 384
+          "line": 393
         },
         {
           "kind": "samplers",
@@ -51691,7 +51805,7 @@
           "name": "SampDetailSampler",
           "type": "SamplerState",
           "register": "s4",
-          "line": 394
+          "line": 403
         },
         {
           "kind": "samplers",
@@ -51699,7 +51813,7 @@
           "name": "SampEnvMaskSampler",
           "type": "SamplerState",
           "register": "s5",
-          "line": 403
+          "line": 412
         },
         {
           "kind": "samplers",
@@ -51707,7 +51821,7 @@
           "name": "SampEnvSampler",
           "type": "SamplerState",
           "register": "s4",
-          "line": 402
+          "line": 411
         },
         {
           "kind": "samplers",
@@ -51715,7 +51829,7 @@
           "name": "SampGlowSampler",
           "type": "SamplerState",
           "register": "s6",
-          "line": 412
+          "line": 421
         },
         {
           "kind": "samplers",
@@ -51723,7 +51837,7 @@
           "name": "SampLandLodBlend1Sampler",
           "type": "SamplerState",
           "register": "s13",
-          "line": 437
+          "line": 446
         },
         {
           "kind": "samplers",
@@ -51731,7 +51845,7 @@
           "name": "SampLandLodBlend2Sampler",
           "type": "SamplerState",
           "register": "s15",
-          "line": 438
+          "line": 447
         },
         {
           "kind": "samplers",
@@ -51739,7 +51853,7 @@
           "name": "SampLandLodNoiseSampler",
           "type": "SamplerState",
           "register": "s15",
-          "line": 440
+          "line": 449
         },
         {
           "kind": "samplers",
@@ -51747,7 +51861,7 @@
           "name": "SampLayerSampler",
           "type": "SamplerState",
           "register": "s8",
-          "line": 416
+          "line": 425
         },
         {
           "kind": "samplers",
@@ -51755,7 +51869,7 @@
           "name": "SampParallaxSampler",
           "type": "SamplerState",
           "register": "s3",
-          "line": 396
+          "line": 405
         },
         {
           "kind": "samplers",
@@ -51763,7 +51877,7 @@
           "name": "SampParallaxSampler",
           "type": "SamplerState",
           "register": "s4",
-          "line": 407
+          "line": 416
         },
         {
           "kind": "samplers",
@@ -51771,7 +51885,7 @@
           "name": "SampProjDetailSampler",
           "type": "SamplerState",
           "register": "s10",
-          "line": 424
+          "line": 433
         },
         {
           "kind": "samplers",
@@ -51779,7 +51893,7 @@
           "name": "SampProjDiffuseSampler",
           "type": "SamplerState",
           "register": "s3",
-          "line": 398
+          "line": 407
         },
         {
           "kind": "samplers",
@@ -51787,7 +51901,7 @@
           "name": "SampProjNormalSampler",
           "type": "SamplerState",
           "register": "s8",
-          "line": 418
+          "line": 427
         },
         {
           "kind": "samplers",
@@ -51795,7 +51909,7 @@
           "name": "SampRimSoftLightWorldMapOverlaySampler",
           "type": "SamplerState",
           "register": "s12",
-          "line": 428
+          "line": 437
         },
         {
           "kind": "samplers",
@@ -51803,7 +51917,7 @@
           "name": "SampRMAOSSampler",
           "type": "SamplerState",
           "register": "s5",
-          "line": 410
+          "line": 419
         },
         {
           "kind": "samplers",
@@ -51811,7 +51925,7 @@
           "name": "SampShadowMaskSampler",
           "type": "SamplerState",
           "register": "s14",
-          "line": 442
+          "line": 451
         },
         {
           "kind": "samplers",
@@ -51819,7 +51933,7 @@
           "name": "SampSpecularSampler",
           "type": "SamplerState",
           "register": "s2",
-          "line": 390
+          "line": 399
         },
         {
           "kind": "samplers",
@@ -51827,7 +51941,7 @@
           "name": "SampTerrainParallaxSampler",
           "type": "SamplerState",
           "register": "s1",
-          "line": 358
+          "line": 367
         },
         {
           "kind": "samplers",
@@ -51835,7 +51949,7 @@
           "name": "SampTintSampler",
           "type": "SamplerState",
           "register": "s3",
-          "line": 393
+          "line": 402
         },
         {
           "kind": "samplers",
@@ -51843,7 +51957,7 @@
           "name": "SampWorldMapOverlaySnowSampler",
           "type": "SamplerState",
           "register": "s13",
-          "line": 431
+          "line": 440
         },
         {
           "kind": "srvs",
@@ -51852,6 +51966,14 @@
           "type": "TextureCube<float>",
           "register": "t25",
           "line": 8
+        },
+        {
+          "kind": "srvs",
+          "source": "Common/CurrentFrameDepthCulling.hlsli",
+          "name": "Visibility",
+          "type": "Buffer<uint>",
+          "register": "t127",
+          "line": 7
         },
         {
           "kind": "srvs",
@@ -51971,7 +52093,7 @@
           "name": "TexBackLightSampler",
           "type": "Texture2D<float4>",
           "register": "t9",
-          "line": 521
+          "line": 530
         },
         {
           "kind": "srvs",
@@ -51979,7 +52101,7 @@
           "name": "TexCharacterLightProjNoiseSampler",
           "type": "Texture2D<float4>",
           "register": "t11",
-          "line": 527
+          "line": 536
         },
         {
           "kind": "srvs",
@@ -51987,7 +52109,7 @@
           "name": "TexColorSampler",
           "type": "Texture2D<float4>",
           "register": "t0",
-          "line": 446
+          "line": 455
         },
         {
           "kind": "srvs",
@@ -51995,7 +52117,7 @@
           "name": "TexColorSampler",
           "type": "Texture2D<float4>",
           "register": "t0",
-          "line": 486
+          "line": 495
         },
         {
           "kind": "srvs",
@@ -52003,7 +52125,7 @@
           "name": "TexDetailSampler",
           "type": "Texture2D<float4>",
           "register": "t4",
-          "line": 495
+          "line": 504
         },
         {
           "kind": "srvs",
@@ -52011,7 +52133,7 @@
           "name": "TexEnvMaskSampler",
           "type": "Texture2D<float4>",
           "register": "t5",
-          "line": 504
+          "line": 513
         },
         {
           "kind": "srvs",
@@ -52019,7 +52141,7 @@
           "name": "TexEnvSampler",
           "type": "TextureCube<float4>",
           "register": "t4",
-          "line": 503
+          "line": 512
         },
         {
           "kind": "srvs",
@@ -52027,7 +52149,7 @@
           "name": "TexGlowSampler",
           "type": "Texture2D<float4>",
           "register": "t6",
-          "line": 513
+          "line": 522
         },
         {
           "kind": "srvs",
@@ -52035,7 +52157,7 @@
           "name": "TexLandColor2Sampler",
           "type": "Texture2D<float4>",
           "register": "t1",
-          "line": 448
+          "line": 457
         },
         {
           "kind": "srvs",
@@ -52043,7 +52165,7 @@
           "name": "TexLandColor3Sampler",
           "type": "Texture2D<float4>",
           "register": "t2",
-          "line": 449
+          "line": 458
         },
         {
           "kind": "srvs",
@@ -52051,7 +52173,7 @@
           "name": "TexLandColor4Sampler",
           "type": "Texture2D<float4>",
           "register": "t3",
-          "line": 450
+          "line": 459
         },
         {
           "kind": "srvs",
@@ -52059,7 +52181,7 @@
           "name": "TexLandColor5Sampler",
           "type": "Texture2D<float4>",
           "register": "t4",
-          "line": 451
+          "line": 460
         },
         {
           "kind": "srvs",
@@ -52067,7 +52189,7 @@
           "name": "TexLandColor6Sampler",
           "type": "Texture2D<float4>",
           "register": "t5",
-          "line": 452
+          "line": 461
         },
         {
           "kind": "srvs",
@@ -52075,7 +52197,7 @@
           "name": "TexLandDisplacement0Sampler",
           "type": "Texture2D<float4>",
           "register": "t80",
-          "line": 468
+          "line": 477
         },
         {
           "kind": "srvs",
@@ -52083,7 +52205,7 @@
           "name": "TexLandDisplacement1Sampler",
           "type": "Texture2D<float4>",
           "register": "t81",
-          "line": 470
+          "line": 479
         },
         {
           "kind": "srvs",
@@ -52091,7 +52213,7 @@
           "name": "TexLandDisplacement2Sampler",
           "type": "Texture2D<float4>",
           "register": "t82",
-          "line": 471
+          "line": 480
         },
         {
           "kind": "srvs",
@@ -52099,7 +52221,7 @@
           "name": "TexLandDisplacement3Sampler",
           "type": "Texture2D<float4>",
           "register": "t83",
-          "line": 472
+          "line": 481
         },
         {
           "kind": "srvs",
@@ -52107,7 +52229,7 @@
           "name": "TexLandDisplacement4Sampler",
           "type": "Texture2D<float4>",
           "register": "t84",
-          "line": 473
+          "line": 482
         },
         {
           "kind": "srvs",
@@ -52115,7 +52237,7 @@
           "name": "TexLandDisplacement5Sampler",
           "type": "Texture2D<float4>",
           "register": "t85",
-          "line": 474
+          "line": 483
         },
         {
           "kind": "srvs",
@@ -52123,7 +52245,7 @@
           "name": "TexLandLodBlend1Sampler",
           "type": "Texture2D<float4>",
           "register": "t13",
-          "line": 538
+          "line": 547
         },
         {
           "kind": "srvs",
@@ -52131,7 +52253,7 @@
           "name": "TexLandLodBlend2Sampler",
           "type": "Texture2D<float4>",
           "register": "t15",
-          "line": 539
+          "line": 548
         },
         {
           "kind": "srvs",
@@ -52139,7 +52261,7 @@
           "name": "TexLandLodNoiseSampler",
           "type": "Texture2D<float4>",
           "register": "t15",
-          "line": 541
+          "line": 550
         },
         {
           "kind": "srvs",
@@ -52147,7 +52269,7 @@
           "name": "TexLandNormal2Sampler",
           "type": "Texture2D<float4>",
           "register": "t8",
-          "line": 454
+          "line": 463
         },
         {
           "kind": "srvs",
@@ -52155,7 +52277,7 @@
           "name": "TexLandNormal3Sampler",
           "type": "Texture2D<float4>",
           "register": "t9",
-          "line": 455
+          "line": 464
         },
         {
           "kind": "srvs",
@@ -52163,7 +52285,7 @@
           "name": "TexLandNormal4Sampler",
           "type": "Texture2D<float4>",
           "register": "t10",
-          "line": 456
+          "line": 465
         },
         {
           "kind": "srvs",
@@ -52171,7 +52293,7 @@
           "name": "TexLandNormal5Sampler",
           "type": "Texture2D<float4>",
           "register": "t11",
-          "line": 457
+          "line": 466
         },
         {
           "kind": "srvs",
@@ -52179,7 +52301,7 @@
           "name": "TexLandNormal6Sampler",
           "type": "Texture2D<float4>",
           "register": "t12",
-          "line": 458
+          "line": 467
         },
         {
           "kind": "srvs",
@@ -52187,7 +52309,7 @@
           "name": "TexLandRMAOS2Sampler",
           "type": "Texture2D<float4>",
           "register": "t87",
-          "line": 477
+          "line": 486
         },
         {
           "kind": "srvs",
@@ -52195,7 +52317,7 @@
           "name": "TexLandRMAOS3Sampler",
           "type": "Texture2D<float4>",
           "register": "t88",
-          "line": 478
+          "line": 487
         },
         {
           "kind": "srvs",
@@ -52203,7 +52325,7 @@
           "name": "TexLandRMAOS4Sampler",
           "type": "Texture2D<float4>",
           "register": "t89",
-          "line": 479
+          "line": 488
         },
         {
           "kind": "srvs",
@@ -52211,7 +52333,7 @@
           "name": "TexLandRMAOS5Sampler",
           "type": "Texture2D<float4>",
           "register": "t90",
-          "line": 480
+          "line": 489
         },
         {
           "kind": "srvs",
@@ -52219,7 +52341,7 @@
           "name": "TexLandRMAOS6Sampler",
           "type": "Texture2D<float4>",
           "register": "t91",
-          "line": 481
+          "line": 490
         },
         {
           "kind": "srvs",
@@ -52227,7 +52349,7 @@
           "name": "TexLandTHDisp0Sampler",
           "type": "Texture2D<float4>",
           "register": "t92",
-          "line": 459
+          "line": 468
         },
         {
           "kind": "srvs",
@@ -52235,7 +52357,7 @@
           "name": "TexLandTHDisp1Sampler",
           "type": "Texture2D<float4>",
           "register": "t93",
-          "line": 461
+          "line": 470
         },
         {
           "kind": "srvs",
@@ -52243,7 +52365,7 @@
           "name": "TexLandTHDisp2Sampler",
           "type": "Texture2D<float4>",
           "register": "t94",
-          "line": 462
+          "line": 471
         },
         {
           "kind": "srvs",
@@ -52251,7 +52373,7 @@
           "name": "TexLandTHDisp3Sampler",
           "type": "Texture2D<float4>",
           "register": "t95",
-          "line": 463
+          "line": 472
         },
         {
           "kind": "srvs",
@@ -52259,7 +52381,7 @@
           "name": "TexLandTHDisp4Sampler",
           "type": "Texture2D<float4>",
           "register": "t96",
-          "line": 464
+          "line": 473
         },
         {
           "kind": "srvs",
@@ -52267,7 +52389,7 @@
           "name": "TexLandTHDisp5Sampler",
           "type": "Texture2D<float4>",
           "register": "t97",
-          "line": 465
+          "line": 474
         },
         {
           "kind": "srvs",
@@ -52275,7 +52397,7 @@
           "name": "TexLayerSampler",
           "type": "Texture2D<float4>",
           "register": "t8",
-          "line": 517
+          "line": 526
         },
         {
           "kind": "srvs",
@@ -52283,7 +52405,7 @@
           "name": "TexNormalSampler",
           "type": "Texture2D<float4>",
           "register": "t1",
-          "line": 488
+          "line": 497
         },
         {
           "kind": "srvs",
@@ -52291,7 +52413,7 @@
           "name": "TexNormalSampler",
           "type": "Texture2D<float4>",
           "register": "t7",
-          "line": 453
+          "line": 462
         },
         {
           "kind": "srvs",
@@ -52299,7 +52421,7 @@
           "name": "TexParallaxSampler",
           "type": "Texture2D<float4>",
           "register": "t3",
-          "line": 497
+          "line": 506
         },
         {
           "kind": "srvs",
@@ -52307,7 +52429,7 @@
           "name": "TexParallaxSampler",
           "type": "Texture2D<float4>",
           "register": "t4",
-          "line": 508
+          "line": 517
         },
         {
           "kind": "srvs",
@@ -52315,7 +52437,7 @@
           "name": "TexProjDetail",
           "type": "Texture2D<float4>",
           "register": "t10",
-          "line": 525
+          "line": 534
         },
         {
           "kind": "srvs",
@@ -52323,7 +52445,7 @@
           "name": "TexProjDiffuseSampler",
           "type": "Texture2D<float4>",
           "register": "t3",
-          "line": 499
+          "line": 508
         },
         {
           "kind": "srvs",
@@ -52331,7 +52453,7 @@
           "name": "TexProjNormalSampler",
           "type": "Texture2D<float4>",
           "register": "t8",
-          "line": 519
+          "line": 528
         },
         {
           "kind": "srvs",
@@ -52339,7 +52461,7 @@
           "name": "TexRimSoftLightWorldMapOverlaySampler",
           "type": "Texture2D<float4>",
           "register": "t12",
-          "line": 529
+          "line": 538
         },
         {
           "kind": "srvs",
@@ -52347,7 +52469,7 @@
           "name": "TexRMAOSSampler",
           "type": "Texture2D<float4>",
           "register": "t5",
-          "line": 511
+          "line": 520
         },
         {
           "kind": "srvs",
@@ -52355,7 +52477,7 @@
           "name": "TexRMAOSSampler",
           "type": "Texture2D<float4>",
           "register": "t86",
-          "line": 475
+          "line": 484
         },
         {
           "kind": "srvs",
@@ -52363,7 +52485,7 @@
           "name": "TexShadowMaskSampler",
           "type": "Texture2D<float4>",
           "register": "t14",
-          "line": 543
+          "line": 552
         },
         {
           "kind": "srvs",
@@ -52371,7 +52493,7 @@
           "name": "TexSpecularSampler",
           "type": "Texture2D<float4>",
           "register": "t2",
-          "line": 491
+          "line": 500
         },
         {
           "kind": "srvs",
@@ -52379,7 +52501,7 @@
           "name": "TexTintSampler",
           "type": "Texture2D<float4>",
           "register": "t3",
-          "line": 494
+          "line": 503
         },
         {
           "kind": "srvs",
@@ -52387,7 +52509,7 @@
           "name": "TexWorldMapOverlaySnowSampler",
           "type": "Texture2D<float4>",
           "register": "t13",
-          "line": 532
+          "line": 541
         },
         {
           "kind": "srvs",
@@ -52554,7 +52676,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -52881,7 +53003,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -52929,7 +53051,7 @@
           "name": "AlphaTestRefCB",
           "type": "cbuffer",
           "register": "b11",
-          "line": 418
+          "line": 435
         },
         {
           "kind": "constantBuffers",
@@ -52937,7 +53059,7 @@
           "name": "cb7",
           "type": "cbuffer",
           "register": "b7",
-          "line": 138
+          "line": 139
         },
         {
           "kind": "constantBuffers",
@@ -52945,7 +53067,7 @@
           "name": "cb8",
           "type": "cbuffer",
           "register": "b8",
-          "line": 143
+          "line": 144
         },
         {
           "kind": "constantBuffers",
@@ -52953,7 +53075,7 @@
           "name": "PerFrame",
           "type": "cbuffer",
           "register": "b0",
-          "line": 400
+          "line": 417
         },
         {
           "kind": "constantBuffers",
@@ -52961,7 +53083,7 @@
           "name": "PerMaterial",
           "type": "cbuffer",
           "register": "b1",
-          "line": 636
+          "line": 653
         },
         {
           "kind": "samplers",
@@ -52969,7 +53091,7 @@
           "name": "SampBaseSampler",
           "type": "SamplerState",
           "register": "s0",
-          "line": 387
+          "line": 404
         },
         {
           "kind": "samplers",
@@ -52977,7 +53099,7 @@
           "name": "SampNormalSampler",
           "type": "SamplerState",
           "register": "s2",
-          "line": 392
+          "line": 409
         },
         {
           "kind": "samplers",
@@ -52985,7 +53107,7 @@
           "name": "SampRMAOSSampler",
           "type": "SamplerState",
           "register": "s3",
-          "line": 393
+          "line": 410
         },
         {
           "kind": "samplers",
@@ -52993,7 +53115,7 @@
           "name": "SampShadowMaskSampler",
           "type": "SamplerState",
           "register": "s1",
-          "line": 388
+          "line": 405
         },
         {
           "kind": "samplers",
@@ -53001,7 +53123,7 @@
           "name": "SampSubsurfaceSampler",
           "type": "SamplerState",
           "register": "s4",
-          "line": 394
+          "line": 411
         },
         {
           "kind": "srvs",
@@ -53010,6 +53132,14 @@
           "type": "TextureCube<float>",
           "register": "t25",
           "line": 8
+        },
+        {
+          "kind": "srvs",
+          "source": "Common/CurrentFrameDepthCulling.hlsli",
+          "name": "Visibility",
+          "type": "Buffer<uint>",
+          "register": "t127",
+          "line": 7
         },
         {
           "kind": "srvs",
@@ -53169,7 +53299,7 @@
           "name": "TexBaseSampler",
           "type": "Texture2D<float4>",
           "register": "t0",
-          "line": 397
+          "line": 414
         },
         {
           "kind": "srvs",
@@ -53177,7 +53307,7 @@
           "name": "TexNormalSampler",
           "type": "Texture2D<float4>",
           "register": "t2",
-          "line": 410
+          "line": 427
         },
         {
           "kind": "srvs",
@@ -53185,7 +53315,7 @@
           "name": "TexRMAOSSampler",
           "type": "Texture2D<float4>",
           "register": "t3",
-          "line": 411
+          "line": 428
         },
         {
           "kind": "srvs",
@@ -53193,7 +53323,7 @@
           "name": "TexShadowMaskSampler",
           "type": "Texture2D<float4>",
           "register": "t1",
-          "line": 399
+          "line": 416
         },
         {
           "kind": "srvs",
@@ -53201,7 +53331,7 @@
           "name": "TexSubsurfaceSampler",
           "type": "Texture2D<float4>",
           "register": "t4",
-          "line": 412
+          "line": 429
         },
         {
           "kind": "srvs",
@@ -53296,7 +53426,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -53821,7 +53951,7 @@
           "name": "PerShader",
           "type": "cbuffer",
           "register": "b4",
-          "line": 79
+          "line": 82
         },
         {
           "kind": "constantBuffers",
@@ -54415,6 +54545,19 @@
           "compile-0117",
           "compile-0118",
           "compile-0121"
+        ]
+      },
+      {
+        "sourceVirtualPath": "Common/CurrentFrameDepthCulling.hlsli",
+        "affectedEntryPoints": [
+          "DistantTree.hlsl",
+          "Lighting.hlsl",
+          "RunGrass.hlsl"
+        ],
+        "compileUnitIds": [
+          "compile-0073",
+          "compile-0115",
+          "compile-0117"
         ]
       },
       {
@@ -58017,7 +58160,7 @@
       {
         "sourceVirtualPath": "RunGrass.hlsl",
         "token": "WaterLighting/WaterCaustics.hlsli",
-        "line": 455,
+        "line": 472,
         "condition": "ifdef PSHADER && if defined(WATER_LIGHTING)",
         "acceptedClassification": "dormant-stale-reference",
         "acceptedReason": "No CSX feature or compile site emits WATER_LIGHTING. The current feature is WATER_EFFECTS and its deployed include is WaterEffects/WaterCaustics.hlsli. This edge does not enter a current preprocessed permutation, but must remain visible until the dormant block is removed or migrated."

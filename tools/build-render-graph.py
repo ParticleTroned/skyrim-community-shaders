@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import argparse
-from collections import deque
+from collections import defaultdict, deque
 import hashlib
 import json
 import re
@@ -58,6 +58,15 @@ def git_commit(repo: Path) -> str | None:
         return None
 
 
+def input_schema_major(kind: str, data: dict[str, Any]) -> int:
+    schema = data.get("schema")
+    if isinstance(schema, dict) and isinstance(schema.get("major"), int):
+        return schema["major"]
+    if kind == "shader-manifest" and isinstance(data.get("schemaVersion"), int):
+        return data["schemaVersion"]
+    return 1
+
+
 class Graph:
     def __init__(self, capture_id: str) -> None:
         self.capture_id = capture_id
@@ -69,6 +78,17 @@ class Graph:
         self._node_ids: dict[tuple[str, str], str] = {}
         self._kind_counts: dict[str, int] = {}
         self.eye_attribution_observed = False
+        self.material_input_match_count = 0
+        self.prepared_geometry_draw_count = 0
+        self.effective_state_contract = False
+        self.effective_state_query_count = 0
+        self.effective_state_verified_slots = 0
+        self.effective_state_mismatch_slots = 0
+        self.cpu_access_count = 0
+        self.cpu_read_visibility_count = 0
+        self.cpu_write_publication_count = 0
+        self.cpu_map_stall_ticks = 0
+        self.cpu_map_max_stall_ticks = 0
         self._edge_keys: set[tuple[str, str, str, str]] = set()
 
     def node(self, key: str, kind: str, label: str, sequence: int | None, attributes: dict[str, Any],
@@ -177,13 +197,93 @@ class Graph:
         return visited == len(node_ids)
 
 
-def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
+def parse_descriptor_pair(value: Any) -> tuple[int, int] | None:
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(
+        r"vertex\s*=\s*(0x[0-9a-fA-F]+|\d+)\s*,\s*pixel\s*=\s*(0x[0-9a-fA-F]+|\d+)",
+        value,
+    )
+    if not match:
+        return None
+    return int(match.group(1), 0), int(match.group(2), 0)
+
+
+def static_identity_indexes(
+    shader_manifest: dict[str, Any] | None,
+    engine_map: dict[str, Any] | None,
+) -> tuple[dict[str, list[dict[str, Any]]], dict[tuple[str, int, int], list[dict[str, Any]]]]:
+    compile_units_by_family: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    if shader_manifest:
+        for unit in shader_manifest.get("compileUnits", []):
+            if unit.get("kind") != "engine-shader-cache-family":
+                continue
+            source = unit.get("sourceVirtualPath")
+            if isinstance(source, str) and source:
+                compile_units_by_family[Path(source).stem.casefold()].append(unit)
+
+    techniques_by_pair: dict[tuple[str, int, int], list[dict[str, Any]]] = defaultdict(list)
+    if engine_map:
+        for entity in engine_map.get("entities", []):
+            if entity.get("kind") != "technique":
+                continue
+            attributes = entity.get("attributes", {})
+            shader_type = attributes.get("shaderType")
+            descriptor_pair = parse_descriptor_pair(attributes.get("techniqueId"))
+            if isinstance(shader_type, str) and descriptor_pair:
+                techniques_by_pair[(shader_type.casefold(), *descriptor_pair)].append(entity)
+
+    return dict(compile_units_by_family), dict(techniques_by_pair)
+
+
+def compatibility_requirement(
+    registrations: list[dict[str, Any]], shader_family: str, shader_source: str
+) -> dict[str, Any]:
+    family = shader_family.casefold()
+    source = shader_source.replace("\\", "/").casefold()
+    applicable: list[dict[str, Any]] = []
+    for registration in registrations:
+        applies = False
+        for scope in registration.get("scopes", []):
+            kind = scope.get("kind")
+            value = str(scope.get("value", "")).casefold()
+            if kind == "global":
+                applies = True
+            elif kind == "shader-family" and value == family:
+                applies = True
+            elif kind == "shader-source" and (
+                value == source or (source.endswith("/" + value) and len(source) > len(value))
+            ):
+                applies = True
+            if applies:
+                break
+        if applies:
+            applicable.append(registration)
+    applicable.sort(key=lambda item: str(item.get("identity", "")))
+    canonical = "".join(
+        f"{len(str(item.get('canonical', '')).encode('utf-8'))}:{item.get('canonical', '')}\n"
+        for item in applicable
+    )
+    return {
+        "canonicalSha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        "registrationIdentities": [item.get("identity") for item in applicable],
+        "registrationHandles": [item.get("handle") for item in applicable],
+    }
+
+
+def derive(
+    manifest: dict[str, Any],
+    events: list[dict[str, Any]],
+    shader_manifest: dict[str, Any] | None = None,
+    engine_map: dict[str, Any] | None = None,
+) -> Graph:
     capture_id = manifest["captureId"]
     graph = Graph(capture_id)
     resources: dict[str, dict[str, Any]] = {}
     views: dict[str, dict[str, Any]] = {}
     target_bindings: dict[str, dict[str, Any]] = {}
     resource_versions: dict[str, dict[str, Any]] = {}
+    cpu_maps: dict[str, dict[str, Any]] = {}
     submissions: dict[str, dict[str, Any]] = {}
     submissions_by_candidate: dict[tuple[int, int], list[dict[str, Any]]] = {}
     draws_by_submission: dict[str, dict[str, Any]] = {}
@@ -195,11 +295,51 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
     srv_state: dict[tuple[str, int], str | None] = {}
     uav_state: dict[tuple[str, int], str | None] = {}
     active_target_binding: str | None = None
+    effective_state_contract = any(
+        event.get("type") == "resource-view-state-observed" for event in events
+    )
+    predicted_srv_state: dict[tuple[str, int], str | None] = {}
+    predicted_uav_state: dict[tuple[str, int], str | None] = {}
+    predicted_target_binding: str | None = None
+    effective_state_query_count = 0
+    effective_state_verified_slots = 0
+    effective_state_mismatch_slots = 0
     version_number: dict[str, int] = {}
     current_version: dict[str, str] = {}
     last_writer: dict[str, tuple[str, int]] = {}
     readers_since_write: dict[str, dict[str, int]] = {}
     hazard_adjustment_count = 0
+    hazard_overlap_fallback_count = 0
+    stage_shader_payloads: dict[str, dict[str, Any]] = {}
+    scene_objects: dict[str, dict[str, Any]] = {}
+    geometry_observations: dict[str, dict[str, Any]] = {}
+    material_observations: dict[str, dict[str, Any]] = {}
+    geometry_setup_bindings: dict[str, dict[str, Any]] = {}
+    compile_units_by_family, techniques_by_pair = static_identity_indexes(shader_manifest, engine_map)
+    qpc_frequency = int(manifest.get("clock", {}).get("frequencyHz") or 0)
+    shader_compilation = manifest.get("extensions", {}).get("csx.shaderCompilation", {})
+    compile_context_node: str | None = None
+    compatibility_registrations: list[dict[str, Any]] = []
+    if shader_compilation.get("availability") == "observed":
+        compile_state = shader_compilation.get("globalCompileState", {})
+        digest = compile_state.get("digest")
+        compile_context_node = graph.node(
+            f"shader-compilation-{digest or 'unknown'}",
+            "shader-compilation-context",
+            f"capture-start shader compilation context {digest or 'unknown'}",
+            None,
+            shader_compilation,
+            [{"kind": "capture-manifest", "value": "extensions.csx.shaderCompilation"}],
+        )
+        registry = shader_compilation.get("compatibilityRegistry", {})
+        if registry.get("complete") is True and isinstance(registry.get("registrations"), list):
+            compatibility_registrations = registry["registrations"]
+        else:
+            graph.gap(
+                "The capture-start shader compatibility registration snapshot is incomplete; "
+                "shader-specific compile requirements cannot be fully derived.",
+                [compile_context_node], True, "incomplete-capture",
+            )
 
     def event_source_refs(event: dict[str, Any], observation_id: str | None = None) -> list[dict[str, Any]]:
         refs: list[dict[str, Any]] = [{"kind": "capture-event", "value": event["sequence"]}]
@@ -304,29 +444,158 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
         view = views.get(view_id or "")
         return view and view["payload"].get("resourceObservationId")
 
-    def active_output_resources() -> set[str]:
-        result: set[str] = set()
-        binding = target_bindings.get(active_target_binding or "")
+    def view_subresource_spans(view_id: str | None) -> list[tuple[int, int]] | None:
+        view = views.get(view_id or "")
+        if not view:
+            return None
+        payload = view["payload"]
+        resource = resources.get(str(payload.get("resourceObservationId") or ""))
+        if not resource:
+            return None
+        resource_payload = resource["payload"]
+        resource_dimension = str(resource_payload.get("dimension") or "")
+        if resource_dimension == "buffer":
+            # Direct3D 11 defines a buffer as one subresource. Element ranges are
+            # view metadata, not distinct D3D11 subresource identities.
+            return [(0, 1)]
+        if resource_dimension not in {"texture-1d", "texture-2d", "texture-3d"}:
+            return None
+
+        mip_levels = max(1, int(resource_payload.get("mipLevels") or 1))
+        array_slices = 1 if resource_dimension == "texture-3d" else max(
+            1, int(resource_payload.get("depthOrArraySize") or 1)
+        )
+        raw = payload.get("subresources") or {}
+        first_mip = int(raw.get("mipSliceOrFirstMip") or 0)
+        first_array = int(raw.get("firstArraySlice") or 0)
+        overloaded_count = int(raw.get("arraySizeOrMipCount") or 0)
+        second_count = int(raw.get("elementCountOrArraySize") or 0)
+        kind = str(payload.get("kind") or "")
+        dimension = int(payload.get("viewDimension") or 0)
+
+        mip_count = 1
+        array_count = 1
+        if kind == "render-target":
+            if dimension in {3, 5, 7}:
+                array_count = overloaded_count
+            elif dimension not in {1, 2, 4, 6, 8}:
+                return None
+        elif kind == "depth-target":
+            if dimension in {2, 4, 6}:
+                array_count = overloaded_count
+            elif dimension not in {1, 3, 5}:
+                return None
+        elif kind == "shader-resource-view":
+            if dimension in {1, 11}:
+                return [(0, 1)]
+            if dimension in {2, 4, 8, 9}:
+                mip_count = overloaded_count
+                if dimension == 9:
+                    array_count = 6
+            elif dimension in {3, 5}:
+                mip_count = overloaded_count
+                array_count = second_count
+            elif dimension == 6:
+                first_mip = 0
+            elif dimension == 7:
+                first_mip = 0
+                array_count = overloaded_count
+            elif dimension == 10:
+                mip_count = overloaded_count
+                array_count = second_count
+            else:
+                return None
+        elif kind == "unordered-access-view":
+            if dimension == 1:
+                return [(0, 1)]
+            if dimension in {3, 5}:
+                array_count = overloaded_count
+            elif dimension not in {2, 4, 8}:
+                return None
+        else:
+            return None
+
+        def resolve_count(value: int, available: int) -> int | None:
+            if available <= 0:
+                return None
+            if value in {0, 0xFFFFFFFF}:
+                return available
+            return min(value, available)
+
+        if first_mip < 0 or first_mip >= mip_levels or first_array < 0 or first_array >= array_slices:
+            return None
+        mip_count = resolve_count(mip_count, mip_levels - first_mip)
+        array_count = resolve_count(array_count, array_slices - first_array)
+        if not mip_count or not array_count:
+            return None
+        return [
+            (array_index * mip_levels + first_mip, mip_count)
+            for array_index in range(first_array, first_array + array_count)
+        ]
+
+    def views_overlap(left_view_id: str | None, right_view_id: str | None) -> tuple[bool, bool]:
+        if not left_view_id or not right_view_id:
+            return False, True
+        if view_resource(left_view_id) != view_resource(right_view_id):
+            return False, True
+        left_spans = view_subresource_spans(left_view_id)
+        right_spans = view_subresource_spans(right_view_id)
+        if left_spans is None or right_spans is None:
+            return True, False
+        for left_first, left_count in left_spans:
+            left_end = left_first + left_count
+            for right_first, right_count in right_spans:
+                right_end = right_first + right_count
+                if left_first < right_end and right_first < left_end:
+                    return True, True
+        return False, True
+
+    def conflicts_any(view_id: str | None, output_view_ids: list[str]) -> bool:
+        nonlocal hazard_overlap_fallback_count
+        for output_view_id in output_view_ids:
+            overlaps, exact = views_overlap(view_id, output_view_id)
+            if not exact:
+                hazard_overlap_fallback_count += 1
+            if overlaps:
+                return True
+        return False
+
+    def output_views(
+        target_binding_id: str | None,
+        unordered_state: dict[tuple[str, int], str | None],
+    ) -> list[str]:
+        result: list[str] = []
+        binding = target_bindings.get(target_binding_id or "")
         if binding:
             target_payload = binding["payload"]
             for view_id in target_payload.get("renderTargetObservationIds", []):
-                resource_id = view_resource(view_id)
-                if resource_id:
-                    result.add(resource_id)
-            resource_id = view_resource(target_payload.get("depthTargetObservationId"))
-            if resource_id:
-                result.add(resource_id)
-        for view_id in uav_state.values():
-            resource_id = view_resource(view_id)
-            if resource_id:
-                result.add(resource_id)
+                if view_id:
+                    result.append(view_id)
+            depth_view_id = target_payload.get("depthTargetObservationId")
+            if depth_view_id:
+                result.append(depth_view_id)
+        for view_id in unordered_state.values():
+            if view_id:
+                result.append(view_id)
         return result
 
-    def clear_conflicting_srvs(output_resources: set[str]) -> int:
+    def active_output_views() -> list[str]:
+        return output_views(active_target_binding, uav_state)
+
+    def active_output_resources() -> set[str]:
+        return {
+            resource_id for resource_id in (view_resource(view_id) for view_id in active_output_views())
+            if resource_id
+        }
+
+    def clear_conflicting_srvs(
+        shader_state: dict[tuple[str, int], str | None],
+        output_view_ids: list[str],
+    ) -> int:
         cleared = 0
-        for key, view_id in list(srv_state.items()):
-            if view_id and view_resource(view_id) in output_resources:
-                srv_state[key] = None
+        for key, view_id in list(shader_state.items()):
+            if view_id and conflicts_any(view_id, output_view_ids):
+                shader_state[key] = None
                 cleared += 1
         return cleared
 
@@ -347,11 +616,184 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
             )
         elif event_type == "stage-shader-observed":
             stage_shader_id = payload.get("stageShaderObservationId")
-            observed_identity_node(
+            stage_node = observed_identity_node(
                 event, stage_shader_id, "pipeline-state",
                 f"{payload.get('stage', 'unknown')} shader {stage_shader_id}",
                 {**payload, "pipelineRole": "stage-shader"},
             )
+            if stage_shader_id:
+                stage_shader_payloads[stage_shader_id] = payload
+            if stage_node:
+                aliases = [
+                    alias for alias in payload.get("engineAliases", [])
+                    if isinstance(alias.get("loaderType"), str) and isinstance(alias.get("descriptor"), int)
+                ]
+                for alias in aliases:
+                    family = alias["loaderType"]
+                    compile_source = alias.get("compileSourceName")
+                    compile_identity = (
+                        Path(compile_source).stem.casefold()
+                        if isinstance(compile_source, str) and compile_source else family.casefold()
+                    )
+                    compile_candidates = compile_units_by_family.get(compile_identity, [])
+                    candidate_edges: list[str] = []
+                    for unit in compile_candidates:
+                        compile_id = unit.get("id")
+                        if not isinstance(compile_id, str):
+                            continue
+                        compile_node = graph.node(
+                            compile_id,
+                            "shader-compile-unit",
+                            f"{compile_id} {unit.get('sourceVirtualPath', family)}",
+                            None,
+                            {
+                                "compileUnitId": compile_id,
+                                "kind": unit.get("kind"),
+                                "owner": unit.get("owner"),
+                                "sourceVirtualPath": unit.get("sourceVirtualPath"),
+                                "sourcePath": unit.get("sourcePath"),
+                                "entryPoint": unit.get("entryPoint"),
+                                "defineMode": unit.get("defineMode"),
+                                "dependencyClosure": unit.get("dependencyClosure", []),
+                            },
+                            [{"kind": "shader-manifest", "value": compile_id}],
+                        )
+                        candidate_edges.append(graph.edge(
+                            "implemented-by", stage_node, compile_node, [sequence],
+                            "The runtime compile-source identity names this engine shader-cache compile family in the supplied static shader manifest; older captures fall back to loader-family identity.",
+                            {
+                                "loaderType": family,
+                                "compileSourceName": compile_source,
+                                "joinBasis": "compile-source" if compile_source else "loader-family-fallback",
+                                "descriptor": alias["descriptor"],
+                                "stage": payload.get("stage"),
+                            },
+                            "correlated", "confirmed" if len(compile_candidates) == 1 else "medium",
+                        ))
+                        if compile_context_node:
+                            requirement = compatibility_requirement(
+                                compatibility_registrations,
+                                family,
+                                str(unit.get("sourceVirtualPath") or unit.get("sourcePath") or ""),
+                            )
+                            graph.edge(
+                                "compiled-under", stage_node, compile_context_node, [sequence],
+                                "The capture-start global compile state and retained compatibility registrations "
+                                "deterministically describe the dynamic inputs used for this observed shader family/source.",
+                                {
+                                    "compileUnitId": compile_id,
+                                    "loaderType": family,
+                                    "compileSourceName": compile_source,
+                                    "descriptor": alias["descriptor"],
+                                    "globalCompileStateDigest": shader_compilation.get("globalCompileState", {}).get("digest"),
+                                    "compatibilityRequirementSha256": requirement["canonicalSha256"],
+                                    "compatibilityRegistrationIdentities": requirement["registrationIdentities"],
+                                    "compatibilityRegistrationHandles": requirement["registrationHandles"],
+                                },
+                                "correlated", "confirmed" if len(compile_candidates) == 1 else "medium",
+                            )
+                    graph.ambiguity(
+                        f"Which static compile unit implements runtime shader source {compile_source or family}?",
+                        candidate_edges,
+                        "Capture the effective compile-source name or refine the shader manifest until the runtime source has one compile-unit match.",
+                    )
+        elif event_type == "object-observed":
+            object_id = payload.get("sceneObjectObservationId")
+            object_node = observed_identity_node(
+                event, object_id, "scene-object",
+                payload.get("referenceName") or payload.get("baseFormName") or object_id or "scene object",
+            )
+            if object_id and object_node:
+                scene_objects[object_id] = {
+                    "event": event, "payload": payload, "node": object_node,
+                }
+        elif event_type == "geometry-observed":
+            geometry_id = payload.get("geometryObservationId")
+            geometry_node = observed_identity_node(
+                event, geometry_id, "geometry",
+                payload.get("name") or payload.get("runtimeTypeName") or geometry_id or "geometry",
+                {**payload, "identityRole": "observed-geometry"},
+            )
+            if geometry_id and geometry_node:
+                geometry_observations[geometry_id] = {
+                    "event": event, "payload": payload, "node": geometry_node,
+                }
+                object_id = payload.get("sceneObjectObservationId")
+                if object_id:
+                    object = scene_objects.get(object_id)
+                    if object:
+                        graph.edge(
+                            "represented-by", object["node"], geometry_node,
+                            [object["event"]["sequence"], sequence],
+                            "The geometry declaration names this exact earlier scene-object observation as its represented object.",
+                            {"sceneObjectObservationId": object_id, "geometryObservationId": geometry_id},
+                        )
+                    else:
+                        graph.gap(
+                            f"Geometry observation {geometry_id} refers to undeclared scene object {object_id}.",
+                            [geometry_node], True,
+                        )
+        elif event_type == "material-observed":
+            material_id = payload.get("materialStateObservationId")
+            material_node = observed_identity_node(
+                event, material_id, "material",
+                payload.get("shaderPropertyRuntimeTypeName") or material_id or "material state",
+                {**payload, "identityRole": "observed-material-state"},
+            )
+            if material_id and material_node:
+                material_observations[material_id] = {
+                    "event": event, "payload": payload, "node": material_node,
+                    "bindings": [],
+                }
+                for binding_ordinal, binding in enumerate(payload.get("textureBindings", [])):
+                    binding_index = binding.get("bindingIndex", binding_ordinal)
+                    binding_role = binding.get("role", "unknown")
+                    binding_path = binding.get("path")
+                    binding_node = graph.node(
+                        f"{material_id}-texture-{binding_ordinal}",
+                        "material-texture-binding",
+                        binding_path or f"{binding_role}[{binding_index}]",
+                        sequence,
+                        {
+                            **binding,
+                            "materialStateObservationId": material_id,
+                            "bindingOrdinal": binding_ordinal,
+                            "bindingIndexSemantics": "runtime-material-list-position-not-shader-register",
+                        },
+                        event_source_refs(event, material_id),
+                    )
+                    graph.edge(
+                        "binds-texture", material_node, binding_node, [sequence],
+                        "The observed material-state revision declared this bounded runtime texture binding.",
+                        {
+                            "role": binding_role,
+                            "bindingIndex": binding_index,
+                            "bindingIndexSemantics": "runtime-material-list-position-not-shader-register",
+                        },
+                    )
+                    material_observations[material_id]["bindings"].append({
+                        "node": binding_node,
+                        "resourceObservationId": binding.get("resourceObservationId"),
+                        "role": binding_role,
+                        "bindingIndex": binding_index,
+                        "bindingOrdinal": binding_ordinal,
+                    })
+                    resource_id = binding.get("resourceObservationId")
+                    if resource_id:
+                        resource = resources.get(resource_id)
+                        allocation_node = resource_node(resource_id)
+                        if resource and allocation_node:
+                            graph.edge(
+                                "resolves-to-resource", binding_node, allocation_node,
+                                [resource["sequence"], sequence],
+                                "The material binding names this exact earlier capture-local D3D resource observation.",
+                                {"resourceObservationId": resource_id},
+                            )
+                        else:
+                            graph.gap(
+                                f"Material texture binding {binding_ordinal} in {material_id} refers to undeclared resource {resource_id}.",
+                                [binding_node], True,
+                            )
         elif event_type == "render-pass-enter":
             render_pass_id = event.get("scopes", {}).get("renderPass")
             observed_identity_node(
@@ -404,21 +846,59 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
                         {"stage": stage, "route": payload.get(f"{stage}Route")},
                     )
         elif event_type == "geometry-setup-begin":
-            geometry_id = event.get("scopes", {}).get("geometry")
-            geometry_node = observed_identity_node(
-                event, geometry_id, "geometry",
-                f"geometry {payload.get('geometryPointer', geometry_id)}",
+            geometry_scope_id = event.get("scopes", {}).get("geometry")
+            geometry_scope_node = observed_identity_node(
+                event, geometry_scope_id, "geometry-setup",
+                f"geometry setup {payload.get('geometryPointer', geometry_scope_id)}",
+                {**payload, "identityRole": "geometry-setup-scope"},
             )
             render_pass_id = event.get("scopes", {}).get("renderPass")
-            if geometry_node and render_pass_id:
+            if geometry_scope_node and render_pass_id:
                 render_pass_node = observed_identity_node(
                     event, render_pass_id, "render-pass", f"render pass {render_pass_id}",
                     {"identityDeclaredByScope": True},
                 )
                 graph.edge(
-                    "uses", render_pass_node, geometry_node, [sequence],
+                    "uses", render_pass_node, geometry_scope_node, [sequence],
                     "Geometry setup occurred inside this exact capture-local render-pass scope.",
                 )
+            observed_geometry_id = payload.get("geometryObservationId")
+            material_id = payload.get("materialStateObservationId")
+            observed_geometry = geometry_observations.get(observed_geometry_id or "")
+            material = material_observations.get(material_id or "")
+            if geometry_scope_id and geometry_scope_node:
+                geometry_setup_bindings[geometry_scope_id] = {
+                    "event": event,
+                    "node": geometry_scope_node,
+                    "geometry": observed_geometry,
+                    "material": material,
+                }
+            if observed_geometry_id:
+                if observed_geometry and geometry_scope_node:
+                    graph.edge(
+                        "same-observed-object", geometry_scope_node, observed_geometry["node"],
+                        [observed_geometry["event"]["sequence"], sequence],
+                        "The v2 setup boundary binds this exact earlier geometry observation to the temporal setup scope.",
+                        {"geometryObservationId": observed_geometry_id},
+                    )
+                elif geometry_scope_node:
+                    graph.gap(
+                        f"Geometry setup {geometry_scope_id} refers to undeclared geometry observation {observed_geometry_id}.",
+                        [geometry_scope_node], True,
+                    )
+            if material_id:
+                if material and geometry_scope_node:
+                    graph.edge(
+                        "uses-material-state", geometry_scope_node, material["node"],
+                        [material["event"]["sequence"], sequence],
+                        "The v2 setup boundary binds this exact earlier material-state revision to the temporal setup scope.",
+                        {"materialStateObservationId": material_id},
+                    )
+                elif geometry_scope_node:
+                    graph.gap(
+                        f"Geometry setup {geometry_scope_id} refers to undeclared material-state observation {material_id}.",
+                        [geometry_scope_node], True,
+                    )
         elif event_type == "resource-observed":
             resource_id = payload.get("resourceObservationId")
             if resource_id:
@@ -431,23 +911,62 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
             binding_id = payload.get("targetBindingObservationId")
             if binding_id:
                 target_bindings[binding_id] = {"sequence": sequence, "payload": payload}
-                active_target_binding = binding_id
-                hazard_adjustment_count += clear_conflicting_srvs(active_output_resources())
+                source = payload.get("source")
+                if effective_state_contract and source == "observed-call":
+                    predicted_target_binding = binding_id
+                    hazard_adjustment_count += clear_conflicting_srvs(
+                        predicted_srv_state,
+                        output_views(predicted_target_binding, predicted_uav_state),
+                    )
+                else:
+                    active_target_binding = binding_id
+                    if not effective_state_contract:
+                        hazard_adjustment_count += clear_conflicting_srvs(
+                            srv_state, active_output_views()
+                        )
         elif event_type == "resource-view-bind":
             key = (str(payload.get("stage")), int(payload.get("slot", 0)))
             view_id = payload.get("viewObservationId")
+            source = payload.get("source")
+            requested = effective_state_contract and source == "requested-call"
+            shader_state = predicted_srv_state if requested else srv_state
+            unordered_state = predicted_uav_state if requested else uav_state
+            target_binding_id = predicted_target_binding if requested else active_target_binding
             if payload.get("bindingKind") == "shader-resource":
-                resource_id = view_resource(view_id)
-                if view_id and resource_id and resource_id in active_output_resources():
-                    srv_state[key] = None
+                if requested and view_id and conflicts_any(
+                    view_id, output_views(target_binding_id, unordered_state)
+                ):
+                    shader_state[key] = None
+                    hazard_adjustment_count += 1
+                elif not effective_state_contract and view_id and conflicts_any(view_id, active_output_views()):
+                    shader_state[key] = None
                     hazard_adjustment_count += 1
                 else:
-                    srv_state[key] = view_id
+                    shader_state[key] = view_id
             else:
-                uav_state[key] = view_id
-                resource_id = view_resource(view_id)
-                if resource_id:
-                    hazard_adjustment_count += clear_conflicting_srvs({resource_id})
+                unordered_state[key] = view_id
+                if requested and view_id:
+                    hazard_adjustment_count += clear_conflicting_srvs(shader_state, [view_id])
+                elif not effective_state_contract and view_id:
+                    hazard_adjustment_count += clear_conflicting_srvs(srv_state, [view_id])
+        elif event_type == "resource-view-state-observed":
+            effective_state_query_count += 1
+            stage = str(payload.get("stage"))
+            start_slot = int(payload.get("startSlot", 0))
+            count = int(payload.get("count", 0))
+            actual_state = srv_state if payload.get("bindingKind") == "shader-resource" else uav_state
+            predicted_state = (
+                predicted_srv_state if payload.get("bindingKind") == "shader-resource"
+                else predicted_uav_state
+            )
+            for slot in range(start_slot, start_slot + count):
+                key = (stage, slot)
+                if key not in predicted_state:
+                    continue
+                if actual_state.get(key) == predicted_state.get(key):
+                    effective_state_verified_slots += 1
+                else:
+                    effective_state_mismatch_slots += 1
         elif event_type == "resource-version-observed":
             version_id = payload.get("resourceVersionObservationId")
             resource_id = payload.get("resourceObservationId")
@@ -586,8 +1105,10 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
                     f"Eye submission event {sequence} refers to undeclared resource {resource_id}.",
                     [eye_node], True,
                 )
-        elif event_type in {"draw", "dispatch", "resource-flow"}:
+        elif event_type in {"draw", "dispatch", "resource-flow", "resource-cpu-access"}:
             operation = payload.get("operation", event_type)
+            if event_type == "resource-cpu-access":
+                operation = str(payload.get("phase") or "cpu-access")
             execution_kind = "draw" if event_type == "draw" else ("dispatch" if event_type == "dispatch" else
                 ("copy" if operation in {"copy-resource", "copy-subresource-region", "resolve-subresource", "copy-structure-count"}
                  else "resource-operation"))
@@ -598,6 +1119,23 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
                 "eye": event.get("frame", {}).get("eye", "unknown"),
                 "operation": operation,
             }
+            if event_type == "resource-cpu-access":
+                duration_ticks = int(payload.get("durationQpcTicks") or 0)
+                execution_attributes.update({
+                    "mapObservationId": payload.get("mapObservationId"),
+                    "resourceObservationId": payload.get("resourceObservationId"),
+                    "subresource": payload.get("subresource"),
+                    "mapType": payload.get("mapType"),
+                    "mapFlags": payload.get("mapFlags"),
+                    "succeeded": payload.get("succeeded"),
+                    "matchedMap": payload.get("matchedMap"),
+                    "durationQpcTicks": duration_ticks,
+                    "durationMicroseconds": (
+                        duration_ticks * 1_000_000.0 / qpc_frequency if qpc_frequency > 0 else None
+                    ),
+                    "visibilityBoundary": payload.get("visibilityBoundary"),
+                    "publicationBoundary": payload.get("publicationBoundary"),
+                })
             if event_type == "resource-flow":
                 execution_attributes["sourceSubresource"] = payload.get("sourceSubresource")
                 execution_attributes["destinationSubresource"] = payload.get("destinationSubresource")
@@ -605,13 +1143,38 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
                 f"event-{sequence}", execution_kind, f"{operation} at event {sequence}", sequence,
                 execution_attributes, event_source_refs(event),
             )
+            if event_type == "resource-cpu-access":
+                graph.cpu_access_count += 1
+                map_id = payload.get("mapObservationId")
+                if operation == "map":
+                    if map_id:
+                        cpu_maps[map_id] = {"node": execution, "event": event, "payload": payload}
+                    if payload.get("succeeded") is True:
+                        duration_ticks = int(payload.get("durationQpcTicks") or 0)
+                        graph.cpu_map_stall_ticks += duration_ticks
+                        graph.cpu_map_max_stall_ticks = max(graph.cpu_map_max_stall_ticks, duration_ticks)
+                elif operation == "unmap":
+                    mapped = cpu_maps.get(map_id or "")
+                    if mapped:
+                        graph.edge(
+                            "precedes", mapped["node"], execution,
+                            [mapped["event"]["sequence"], sequence],
+                            "The capture-local map identity pairs this successful Map return with its Unmap publication boundary.",
+                            {"mapObservationId": map_id, "hazard": "CPU-map-lifetime"},
+                        )
+                    else:
+                        graph.gap(
+                            f"Unmap event {sequence} has no observed successful Map identity.",
+                            [execution], False, "incomplete-capture",
+                        )
 
             if event_type in {"draw", "dispatch"}:
+                active_material_observation: dict[str, Any] | None = None
                 scopes = event.get("scopes", {})
                 scope_kinds = (
                     ("renderPass", "render-pass", "draws"),
                     ("technique", "technique", "draws"),
-                    ("geometry", "geometry", "draws"),
+                    ("geometry", "geometry-setup", "draws"),
                 )
                 for scope_name, node_kind, edge_type in scope_kinds:
                     scope_id = scopes.get(scope_name)
@@ -624,6 +1187,67 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
                             edge_type, scope_node, execution, [sequence],
                             f"The execution event carried this exact active {scope_name} scope.",
                         )
+                geometry_scope_id = scopes.get("geometry")
+                prepared_geometry_id = (
+                    payload.get("preparedGeometrySetupObservationId")
+                    if event_type == "draw" else None
+                )
+                if geometry_scope_id and prepared_geometry_id and geometry_scope_id != prepared_geometry_id:
+                    graph.gap(
+                        f"Execution event {sequence} carries conflicting active and prepared geometry setup identities.",
+                        [execution], True,
+                    )
+                geometry_binding_id = geometry_scope_id or prepared_geometry_id
+                association_basis = (
+                    "active-geometry-scope" if geometry_scope_id
+                    else "same-thread-next-immediate-context-draw" if prepared_geometry_id
+                    else None
+                )
+                if prepared_geometry_id and not geometry_scope_id:
+                    prepared_node = observed_identity_node(
+                        event, prepared_geometry_id, "geometry-setup",
+                        f"prepared geometry {prepared_geometry_id}",
+                        {"identityDeclaredByReference": True},
+                    )
+                    graph.edge(
+                        "prepares", prepared_node, execution, [sequence],
+                        "The draw explicitly consumed the one-shot prepared geometry identity published by the same-thread selected SetupGeometry call.",
+                        {"associationBasis": association_basis,
+                         "geometrySetupObservationId": prepared_geometry_id},
+                    )
+                    graph.prepared_geometry_draw_count += 1
+                binding = geometry_setup_bindings.get(geometry_binding_id or "")
+                if binding:
+                    active_material_observation = binding.get("material")
+                    for semantic, role in (
+                        (binding.get("geometry"), "geometry"),
+                        (binding.get("material"), "material-state"),
+                    ):
+                        if semantic:
+                            graph.edge(
+                                "same-observed-object", semantic["node"], execution,
+                                [semantic["event"]["sequence"], binding["event"]["sequence"], sequence],
+                                f"This exact {role} observation reaches the execution through its v2 geometry-setup identity.",
+                                {"projection": role, "geometrySetupObservationId": geometry_binding_id,
+                                 "associationBasis": association_basis},
+                            )
+                    observed_geometry = binding.get("geometry")
+                    object_id = observed_geometry and observed_geometry["payload"].get("sceneObjectObservationId")
+                    scene_object = scene_objects.get(object_id or "")
+                    if scene_object:
+                        graph.edge(
+                            "same-observed-object", scene_object["node"], execution,
+                            [scene_object["event"]["sequence"], observed_geometry["event"]["sequence"],
+                             binding["event"]["sequence"], sequence],
+                            "This exact scene-object observation reaches the execution through its v2 geometry-setup identity and geometry declaration.",
+                            {"projection": "scene-object", "geometrySetupObservationId": geometry_binding_id,
+                             "associationBasis": association_basis},
+                        )
+                elif prepared_geometry_id:
+                    graph.gap(
+                        f"Draw event {sequence} refers to undeclared prepared geometry setup {prepared_geometry_id}.",
+                        [execution], True,
+                    )
                 stage_fields = (
                     ("vertex", payload.get("vertexShaderObservationId")),
                     ("pixel", payload.get("pixelShaderObservationId")),
@@ -642,10 +1266,75 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
                             {"stage": stage},
                         )
 
+                vertex_id = payload.get("vertexShaderObservationId")
+                pixel_id = payload.get("pixelShaderObservationId")
+                vertex_payload = stage_shader_payloads.get(vertex_id or "", {})
+                pixel_payload = stage_shader_payloads.get(pixel_id or "", {})
+                vertex_aliases = {
+                    (alias.get("loaderType", "").casefold(), alias.get("descriptor"))
+                    for alias in vertex_payload.get("engineAliases", [])
+                    if isinstance(alias.get("loaderType"), str) and isinstance(alias.get("descriptor"), int)
+                }
+                pixel_aliases = {
+                    (alias.get("loaderType", "").casefold(), alias.get("descriptor"))
+                    for alias in pixel_payload.get("engineAliases", [])
+                    if isinstance(alias.get("loaderType"), str) and isinstance(alias.get("descriptor"), int)
+                }
+                technique_candidates: list[dict[str, Any]] = []
+                for vertex_family, vertex_descriptor in sorted(vertex_aliases):
+                    for pixel_family, pixel_descriptor in sorted(pixel_aliases):
+                        if vertex_family == pixel_family:
+                            technique_candidates.extend(techniques_by_pair.get(
+                                (vertex_family, vertex_descriptor, pixel_descriptor), []
+                            ))
+                technique_edges: list[str] = []
+                for entity in technique_candidates:
+                    entity_id = entity.get("id")
+                    if not isinstance(entity_id, str):
+                        continue
+                    technique_node = graph.node(
+                        entity_id,
+                        "technique",
+                        entity.get("name", entity_id),
+                        None,
+                        {
+                            **entity.get("attributes", {}),
+                            "engineEntityId": entity_id,
+                        },
+                        [{"kind": "engine-map", "value": entity_id}],
+                    )
+                    technique_edges.append(graph.edge(
+                        "draws", technique_node, execution, [sequence],
+                        "The draw bound a vertex/pixel loader-family descriptor pair that uniquely matches this supplied engine-map technique.",
+                        {
+                            "vertexShaderObservationId": vertex_id,
+                            "pixelShaderObservationId": pixel_id,
+                        },
+                        "correlated", "confirmed" if len(technique_candidates) == 1 else "medium",
+                    ))
+                    for stage, stage_id in (("vertex", vertex_id), ("pixel", pixel_id)):
+                        if stage_id:
+                            stage_node = observed_identity_node(
+                                event, stage_id, "pipeline-state", f"{stage} shader {stage_id}",
+                                {"pipelineRole": "stage-shader", "stage": stage, "identityDeclaredByReference": True},
+                            )
+                            graph.edge(
+                                "selects", technique_node, stage_node, [sequence],
+                                "The engine-map descriptor pair matches this exact bound runtime stage alias.",
+                                {"stage": stage}, "correlated",
+                                "confirmed" if len(technique_candidates) == 1 else "medium",
+                            )
+                graph.ambiguity(
+                    "Which engine-map technique owns the bound vertex/pixel descriptor pair?",
+                    technique_edges,
+                    "Refine the engine map until the loader family and descriptor pair have one technique match.",
+                )
+
             read_views: list[tuple[str, str, int]] = []
             write_views: list[tuple[str, str, int]] = []
             direct_reads: list[tuple[str, str]] = []
             direct_writes: list[tuple[str, str]] = []
+            material_input_matches: dict[str, list[dict[str, Any]]] = defaultdict(list)
             if event_type == "draw":
                 submission_id = event.get("submissionObservationId") or payload.get("submissionObservationId")
                 submission = submissions.get(submission_id)
@@ -694,6 +1383,14 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
                 for (stage, slot), view_id in sorted(uav_state.items()):
                     if stage == "compute" and view_id:
                         write_views.append((view_id, stage, slot))
+            elif event_type == "resource-cpu-access":
+                resource_id = payload.get("resourceObservationId")
+                if operation == "map" and payload.get("succeeded") is True and payload.get("readable") is True:
+                    direct_reads.append((resource_id, "cpu-readable-after-map-return"))
+                    graph.cpu_read_visibility_count += 1
+                elif operation == "unmap" and payload.get("matchedMap") is True and payload.get("writable") is True:
+                    direct_writes.append((resource_id, "gpu-visible-after-unmap-return"))
+                    graph.cpu_write_publication_count += 1
             else:
                 source = payload.get("sourceResourceObservationId")
                 destination = payload.get("destinationResourceObservationId")
@@ -716,6 +1413,25 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
                 resource_id = view and view["payload"].get("resourceObservationId")
                 if resource_id:
                     direct_reads.append((resource_id, f"{stage}-slot-{slot}"))
+                    if event_type == "draw" and active_material_observation:
+                        for material_binding in active_material_observation.get("bindings", []):
+                            if material_binding.get("resourceObservationId") != resource_id:
+                                continue
+                            material_input_matches[resource_id].append({
+                                "materialTextureBindingNodeId": material_binding["node"],
+                                "materialStateObservationId": active_material_observation["payload"].get(
+                                    "materialStateObservationId"
+                                ),
+                                "materialObservationSequence": active_material_observation["event"]["sequence"],
+                                "role": material_binding["role"],
+                                "bindingIndex": material_binding["bindingIndex"],
+                                "bindingOrdinal": material_binding["bindingOrdinal"],
+                                "resourceObservationId": resource_id,
+                                "viewObservationId": view_id,
+                                "viewObservationSequence": view["sequence"],
+                                "stage": stage,
+                                "slot": slot,
+                            })
                 else:
                     graph.gap(f"Read view {view_id} at event {sequence} has no resource declaration.", [execution], True)
             for view_id, stage, slot in write_views:
@@ -741,10 +1457,30 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
                 version = ensure_version(resource_id)
                 if not version:
                     continue
+                input_matches = material_input_matches.get(resource_id, [])
+                read_attributes: dict[str, Any] = {
+                    "roles": sorted(set(roles)),
+                    "versionScope": "whole-resource-conservative",
+                }
+                evidence_sequences = [resource["sequence"], sequence]
+                read_note = "Ordered immediate-context state identifies the current content version as an execution input."
+                if input_matches:
+                    read_attributes["materialInputMatches"] = input_matches
+                    evidence_sequences.extend(
+                        match["materialObservationSequence"] for match in input_matches
+                    )
+                    evidence_sequences.extend(
+                        match["viewObservationSequence"] for match in input_matches
+                    )
+                    read_note = (
+                        "Ordered immediate-context state identifies the current content version as an execution input; "
+                        "the active geometry material independently names the same capture-local allocation."
+                    )
+                    graph.material_input_match_count += len(input_matches)
                 graph.edge(
-                    "reads", version, execution, [resource["sequence"], sequence],
-                    "Ordered immediate-context state identifies the current content version as an execution input.",
-                    {"roles": sorted(set(roles)), "versionScope": "whole-resource-conservative"},
+                    "reads", version, execution, sorted(set(evidence_sequences)),
+                    read_note,
+                    read_attributes,
                 )
                 writer = last_writer.get(resource_id)
                 if writer and writer[0] != execution:
@@ -1096,11 +1832,17 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
         graph.gap("The source capture is incomplete or truncated; absence of an edge is not evidence of absence.", blocking=True)
     if not resources:
         graph.gap("The capture contains no typed resource declarations.", blocking=True)
-    graph.gap(
-        "Resource versions and hazard edges are allocation-wide. Exact view-subresource overlap and the actual state returned by D3D11 hazard resolution are not yet observed.",
-        blocking=False, kind="unsupported-route",
-    )
+    if not effective_state_contract:
+        graph.gap(
+            "Automatic D3D11 hazard resolution is derived from ordered setter calls and exact observed view-subresource overlap where descriptors are complete; this capture predates post-call effective-state queries.",
+            blocking=False, kind="unsupported-route",
+        )
     graph.hazard_adjustment_count = hazard_adjustment_count
+    graph.hazard_overlap_fallback_count = hazard_overlap_fallback_count
+    graph.effective_state_contract = effective_state_contract
+    graph.effective_state_query_count = effective_state_query_count
+    graph.effective_state_verified_slots = effective_state_verified_slots
+    graph.effective_state_mismatch_slots = effective_state_mismatch_slots
     return graph
 
 
@@ -1115,7 +1857,9 @@ def main() -> int:
 
     manifest = json.loads(args.capture_manifest.read_text(encoding="utf-8-sig"))
     events = load_events(args.events)
-    graph = derive(manifest, events)
+    shader_manifest = json.loads(args.shader_manifest.read_text(encoding="utf-8-sig")) if args.shader_manifest else None
+    engine_map = json.loads(args.engine_map.read_text(encoding="utf-8-sig")) if args.engine_map else None
+    graph = derive(manifest, events, shader_manifest, engine_map)
     if not graph.is_acyclic():
         raise ValueError("derived resource-version graph contains a cycle")
     repo = Path(__file__).resolve().parent.parent
@@ -1126,12 +1870,12 @@ def main() -> int:
     for kind, path in (("shader-manifest", args.shader_manifest), ("engine-map", args.engine_map)):
         if path:
             data = json.loads(path.read_text(encoding="utf-8-sig"))
-            inputs.append({"kind": kind, "path": str(path), "sha256": sha256(path), "schemaMajor": int(data.get("schema", {}).get("major", 1))})
+            inputs.append({"kind": kind, "path": str(path), "sha256": sha256(path), "schemaMajor": input_schema_major(kind, data)})
     output = {
-        "schema": {"name": "csx.derived-render-graph", "major": 1, "minor": 3, "producerVersion": "semantic-resource-graph-1"},
+        "schema": {"name": "csx.derived-render-graph", "major": 1, "minor": 11, "producerVersion": "static-semantic-resource-graph-8"},
         "reportId": f"render-graph-{manifest['captureId'].removeprefix('capture-')}",
         "generatedAtUtc": manifest.get("createdAtUtc", "1970-01-01T00:00:00Z"),
-        "generatedBy": {"name": "csx-render-map-join", "version": "0.5.0", "gitCommit": git_commit(repo)},
+        "generatedBy": {"name": "csx-render-map-join", "version": "0.11.0", "gitCommit": git_commit(repo)},
         "inputs": inputs,
         "nodes": graph.nodes,
         "edges": graph.edges,
@@ -1141,12 +1885,29 @@ def main() -> int:
         "extensions": {
             "csx.executionGranularity": "individual-immediate-context-call",
             "csx.resourceVersionModel": "whole-resource-write-epoch-v1",
-            "csx.hazardModel": "conservative-same-allocation-v1",
+            "csx.hazardModel": "observed-post-call-effective-state-v1" if graph.effective_state_contract else "exact-view-subresource-v1",
             "csx.effectiveStateAdjustments": graph.hazard_adjustment_count,
+            "csx.hazardOverlapFallbacks": graph.hazard_overlap_fallback_count,
+            "csx.effectiveStateQueryCount": graph.effective_state_query_count,
+            "csx.effectiveStateVerifiedSlots": graph.effective_state_verified_slots,
+            "csx.effectiveStateMismatchSlots": graph.effective_state_mismatch_slots,
+            "csx.cpuAccessCount": graph.cpu_access_count,
+            "csx.cpuReadVisibilityCount": graph.cpu_read_visibility_count,
+            "csx.cpuWritePublicationCount": graph.cpu_write_publication_count,
+            "csx.cpuMapStallTicks": graph.cpu_map_stall_ticks,
+            "csx.cpuMapMaxStallTicks": graph.cpu_map_max_stall_ticks,
+            "csx.cpuMapStallMicroseconds": (
+                graph.cpu_map_stall_ticks * 1_000_000.0 / int(manifest.get("clock", {}).get("frequencyHz") or 1)
+            ),
             "csx.graphAcyclic": True,
             "csx.deferredContextCoverage": False,
             "csx.vrEyeAttribution": graph.eye_attribution_observed,
             "csx.semanticIdentityProjection": True,
+            "csx.materialInputExecutionCorrelation": True,
+            "csx.materialInputMatchCount": graph.material_input_match_count,
+            "csx.preparedGeometryDrawCorrelation": True,
+            "csx.preparedGeometryDrawCount": graph.prepared_geometry_draw_count,
+            "csx.samplerStateCoverage": False,
         },
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

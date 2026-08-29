@@ -31,6 +31,7 @@ namespace CSX::RenderMap
 
 		const auto numericId = nextCaptureNumericId.fetch_add(1, std::memory_order_relaxed);
 		a_config.captureNumericId = numericId;
+		NormalizeEventKindSelection(a_config);
 		// Allocate and publish all controller-owned state before activating hooks.
 		// A failed runtime start rolls this state back while the controller lock is held.
 		try {

@@ -15,6 +15,7 @@ The joined model is:
 scene object
   -> geometry
   -> shader property / material
+  -> temporal geometry setup
   -> BSRenderPass
   -> Skyrim shader family / technique / permutation
   -> CSX compile unit / pass
@@ -24,6 +25,38 @@ scene object
 
 This is a graph, not a row in the shader manifest. Every arrow may be absent,
 ambiguous, or many-to-many.
+
+The stable, capture-local geometry declaration and the temporal setup scope are
+different node kinds. A `geometry` node is one observed engine geometry
+identity. A `geometry-setup` node is one invocation scope that binds that
+geometry and an exact material-state revision into a render pass. Keeping them
+separate prevents repeated or particle-generated setup work from being
+misreported as thousands of distinct meshes.
+
+## Layer 0: prior-art candidate catalogue
+
+`prior-art-catalog.json` records reusable public reverse engineering and
+extension architecture before it is admitted to the target map. Source and
+target provenance are deliberately separate:
+
+- the source repository is pinned to a full commit;
+- source applicability records its Skyrim product/runtime and the basis for
+  that attribution;
+- shader claims record their originating shader system, version, and revision;
+- the target records the exact Skyrim VR executable, CSX version/source
+  revision, and generated shader-manifest hash;
+- each claim has a target assessment and zero or more explicit spot checks.
+
+A Special Edition or Anniversary Edition reconstruction can provide an
+excellent hypothesis for Skyrim VR, but not a fact. Likewise, shared ancestry
+between SSE Shader Tools, Community Shaders, and CSX does not establish current
+behaviour. The catalogue retains useful hypotheses without weakening the
+version boundary of the engine map.
+
+Prior-art claims are never promoted automatically. A target-specific static or
+runtime check must produce new evidence, after which a separately reviewed
+engine-map change may cite that target evidence. Mismatches remain recorded;
+they are often the most useful indication of executable or fork divergence.
 
 ## Layer 1: deterministic shader map
 
@@ -102,12 +135,14 @@ submission epoch.
 
 `BSShader_BeginTechnique` registers the engine shader as a typed, capture-local
 `shader` observation before opening the technique scope. The identity key is the
-bounded tuple `(pointer, shaderType, fxpFilename, imageSpaceName, definesSuffix)`.
+bounded tuple `(pointer, shaderType, fxpFilename, imageSpaceName, compileSourceName,
+definesSuffix)`. `compileSourceName` is the exact input CSX uses to construct the
+HLSL path: `originalShaderName` for ImageSpace and `fxpFilename` otherwise.
 Repeated observations of the same tuple reuse one ID. A changed tuple at the same
 pointer, or an explicit retirement followed by reuse, creates the next pointer
 generation. Capture generation remains part of every serialized observation ID.
 
-The first sighting emits `shader-observed` with `shader-observation-v1`; technique
+The first sighting emits `shader-observed` with `shader-observation-v2`; technique
 events use `technique-boundary-v2` and carry the same typed shader observation ID.
 The registry is separately bounded by `maxShaderObservations`. Exhausting that
 bound is reported as structural incompleteness rather than silently merging an
@@ -129,26 +164,52 @@ Each completed attempt emits `technique-resolved` with input and modified
 descriptors, success/skip state, and a route for each stage: `engine`,
 `csx-cache`, `csx-fallback`, `skipped`, `missing`, or `unknown`. Selected D3D
 objects are capture-local typed `vertex-shader` or `pixel-shader` observations.
-Their first sighting emits `stage-shader-observed` with wrapper and D3D pointer
+Their first sighting emits `stage-shader-observed` v3 with wrapper and D3D pointer
 evidence, pointer generation, wrapper descriptor, bytecode size and SHA-256
 when the D3D creation hook observed it, and the resolved cache path only when a
 CSX cache route actually supplied the object.
 
+At `BSShader::LoadShaders`, process-lifetime provenance also joins each loaded
+VS/PS D3D object to its exact loader-family string, effective compile-source name,
+and descriptor. This distinction is required for ImageSpace: a specific runtime
+alias such as `ISHDRDownSample4` can compile the shared `ISHDR.hlsl` family. A stage
+observation retains up to eight aliases plus the exact total; overflow or a
+truncated family name is explicit. The mapping remains one-to-many because
+different Skyrim descriptors may legitimately share one D3D object or one
+bytecode hash.
+
 The stage registry has its own `maxStageShaderObservations` bound. Its overflow
 is explicit structural incompleteness and cannot silently merge an unknown
 object. SHA-256 is calculated once at D3D shader creation; the render-thread
-observation path only copies the retained digest. Bound targets and explicit
-COM destruction remain later observation layers.
+observation path only copies the retained digest. Vertex, pixel, and compute
+shader creation hooks retain the lightweight size/digest identity regardless of
+the `Dump Shaders` setting; full bytecode remains opt-in and is retained only
+for the existing dump workflow. Bound targets and explicit COM destruction
+remain later observation layers.
 
 ### Implemented immediate-context execution slice
 
 The immediate D3D11 context now tracks the actual object supplied to
 `VSSetShader`, `PSSetShader`, and `CSSetShader`. Draw and dispatch detours emit
-`draw-call-v2` and `dispatch-call-v1` only during an explicitly armed capture.
+`draw-call-v3` and `dispatch-call-v1` only during an explicitly armed capture.
 Each execution event joins the effective bound stage objects to the typed stage
 catalogue. If an object has no richer engine-wrapper observation, the collector
-creates an explicitly minimal pointer-based stage observation rather than
-inventing a wrapper, descriptor, cache path, or bytecode digest.
+creates a stage observation from process-lifetime creation provenance when
+available, otherwise an explicitly minimal pointer-based observation. Capture
+start clears capture-local observation IDs but retains the actual bound D3D
+objects. The first captured draw or dispatch lazily declares those inherited
+objects, so starting between a stage bind and its execution no longer loses the
+VS/PS/CS join. It reuses shader-load aliases where they were actually observed;
+it does not invent wrapper, descriptor, cache-path, or
+other pipeline state that creation-time evidence cannot provide.
+
+Skyrim's shader `SetupGeometry` call returns before the corresponding D3D11
+draw, so its RAII scope cannot honestly enclose execution. A selected setup now
+publishes one prepared-geometry observation for the next same-thread draw on
+the same capture generation and immediate context. The draw consumes that
+identity exactly once; any later selected or unselected geometry setup replaces
+or clears it. `draw-call-v3.preparedGeometrySetupObservationId` therefore
+expresses a bounded handoff, not an active call-stack scope.
 
 The first observed context call in a capture emits a
 `device-context-observation-v1` declaration with capture-local identity, pointer
@@ -168,18 +229,22 @@ depth-stencil view objects as capture-local, generation-scoped identities. An
 exact binding-set identity preserves the render-target count, slot positions
 (including null slots), and depth target. Repeated calls to the same set reuse
 the binding identity but remain separate ordered `render-target-bind` events.
-Draw events use `draw-call-v2` and join the last successfully catalogued binding
+Draw events use `draw-call-v3` and join the last successfully catalogued binding
 set. `D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL` advances observed command
 order without changing or re-declaring target state.
 
 Both target-view and binding-set catalogues have explicit bounds. Overflow is
 reported as structural incompleteness and an uncatalogued binding is never
-silently joined to an existing identity. Capture start deliberately clears the
-observed binding: the observer does not call `OMGetRenderTargets`, so draws
-before the first in-capture bind retain a null target-binding identity. Pointer
-evidence plus a capture-local pointer generation is not yet equivalent to a
-creation/destruction proof. No render-target role or VR eye is inferred from
-slot number, pointer reuse, call order, or dimensions.
+silently joined to an existing identity. Capture start clears the capture-local
+binding identity. If no non-keep OM bind is subsequently observed, the first
+immediate-context draw claims a one-shot seed and calls `OMGetRenderTargets` on
+that render thread. The queried effective state is emitted as
+`render-target-binding-v2` with source `capture-state-snapshot`; a real bind is
+source `observed-call`. This is an ordered CPU state query, not a claim that the
+original bind occurred inside the capture. Pointer evidence plus a capture-local
+pointer generation is not yet equivalent to a creation/destruction proof. No
+render-target role or VR eye is inferred from slot number, pointer reuse, call
+order, or dimensions.
 
 This slice covers the immediate context only. It does not interpret a deferred
 context, command list, or command-list replay as immediate execution. Those
@@ -206,6 +271,16 @@ as state changes. `resource-flow` events cover `CopyResource`,
 `DrawIndexed` are observed alongside the instanced, auto, and indirect calls;
 this closes a coverage gap in the earlier execution slice.
 
+Render-event 1.13 separates requested setter arguments from effective queried
+state. Each hooked SRV setter is followed by the corresponding stage getter for
+the affected slots. Output-merger and compute-UAV setters additionally query
+the effective UAV range and all six SRV stages because D3D11 can clear a
+conflicting input in a different stage. Changed effective slots are emitted as
+`resource-view-binding-v2`; `resource-view-state-observed-v1` records every
+queried range, including zero-change results. The first draw performs a
+generation-scoped full snapshot only if a prior full post-call scan has not
+already seeded the capture.
+
 `tools/build-render-graph.py` deterministically joins a completed capture into
 execution and resource nodes. An SRV resource points to the draw or dispatch
 that reads it; a draw, dispatch, RTV/DSV/UAV output, copy, or resolve points to
@@ -215,12 +290,41 @@ state, incomplete captures, and unsupported routes become explicit graph gaps.
 The builder does not invent pass names, eye identity, GPU completion, or
 deferred-context execution.
 
-The current binding stream records the effective application-level state calls.
-D3D11 may automatically null an overlapping input/output binding. The first
-graph builder conservatively preserves the observed call order but does not yet
-prove subresource-overlap hazards or query the entire effective pipeline state.
-Graphs that require exact alias/hazard resolution must treat this as an
-unsupported semantic layer until automatic unbinds are represented explicitly.
+When a draw also carries an exact v2 geometry/material scope, the builder
+matches the material's capture-local resource identities against the ordered
+SRV state effective at that draw. Exact matches are retained on the
+resource-version `reads` edge with the material binding identity, stage, slot,
+view and evidence sequences. The material-list index remains an engine list
+position, not a shader register. Sampler state and proof that shader control
+flow reads the bound slot remain separate evidence gaps.
+
+The original binding stream recorded application setter intent. D3D11 may
+automatically null an overlapping input/output binding. Graph 1.9 resolved
+complete view descriptors into exact D3D11 mip/array subresource spans and
+applied the documented overlap rule; unknown descriptor families remained
+counted conservative fallbacks. Graph 1.10 retains that deterministic
+prediction but uses post-call getter results as the effective draw/dispatch
+state. Prediction/query disagreements are explicit counters rather than being
+silently resolved in favour of either source.
+
+The capture-start output-merger seed has been qualified in a zero-loss loaded
+scene capture. One queried `capture-state-snapshot` preceded the first draw on
+the immediate context; normal `observed-call` binds then superseded it. The
+derived graph eliminated all 301 previously reported pre-capture target-state
+gaps. Re-derivation with graph 1.9 retained all 719 predicted hazard
+adjustments with zero range fallbacks, showing that every conflict in this
+capture overlaps an exact subresource. This validates effective-state seeding
+and exact overlap classification while keeping the remaining post-call state
+boundary explicit.
+
+Immediate-context CPU access is represented by `resource-cpu-access-v1`.
+Successful `READ` and `READ_WRITE` Map return establishes a CPU read of the
+current resource version. A matched writable Unmap publishes a new resource
+version. Failed Maps and unmatched Unmaps remain explicit observations but do
+not synthesize resource edges. Map/Unmap pairs are keyed by capture generation,
+context, allocation and subresource; no pair crosses a capture boundary.
+Measured Map-call time is retained as QPC ticks, while mapped lifetime is kept
+separate so neither is mislabelled as pure GPU execution time.
 
 ## Layer 4: derived render graph
 
@@ -322,9 +426,21 @@ draw is a diagnostic fallback, not the default collector design.
   thread or after capture.
 - Capture records QPC frequency, buffer pressure, dropped events, and collector
   overhead samples.
+- A performance conclusion additionally requires a retained frame-pacing
+  context: observed FPS/frame-time distribution, configured cap and present
+  interval, compositor refresh/runtime route, reprojection or frame-doubling
+  mode, limiter state, GPU saturation, capture load, and loading/menu/compiler
+  activity. An unexplained rate below both cap and demonstrated GPU capability
+  marks timing evidence contaminated without discarding structural identity or
+  command-order evidence.
 - A capture option may redact pointers while retaining observation IDs.
 - Instrumentation changes observation only; culling policy changes are tested
   separately so measurement cannot silently alter the thing being measured.
+- A loaded Breezehome frame has now been observed to exceed 20,000 render-map
+  events. A complete high-density frame therefore also needs event-class
+  selection, an initial D3D-state snapshot, or catalogue identity persistence
+  across bounded segments; merely increasing one fixed aggregate budget trades
+  event truncation for catalogue truncation.
 
 ## Ownership boundary with depth culling
 

@@ -9,17 +9,15 @@
 
 namespace CSX::RenderMap
 {
-	namespace
+	ResourceObservationInput DescribeResource(ID3D11Resource* a_resource) noexcept
 	{
-		ResourceObservationInput DescribeResource(ID3D11Resource* a_resource)
-		{
-			ResourceObservationInput result;
-			if (!a_resource)
-				return result;
-			result.d3dObject = reinterpret_cast<std::uintptr_t>(a_resource);
-			D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
-			a_resource->GetType(&dimension);
-			switch (dimension) {
+		ResourceObservationInput result;
+		if (!a_resource)
+			return result;
+		result.d3dObject = reinterpret_cast<std::uintptr_t>(a_resource);
+		D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+		a_resource->GetType(&dimension);
+		switch (dimension) {
 			case D3D11_RESOURCE_DIMENSION_BUFFER: {
 				D3D11_BUFFER_DESC desc{};
 				reinterpret_cast<ID3D11Buffer*>(a_resource)->GetDesc(&desc);
@@ -80,8 +78,16 @@ namespace CSX::RenderMap
 			}
 			default:
 				break;
-			}
-			return result;
+		}
+		return result;
+	}
+
+	namespace
+	{
+		std::uint64_t ReadQpc() noexcept
+		{
+			LARGE_INTEGER value{};
+			return ::QueryPerformanceCounter(&value) ? static_cast<std::uint64_t>(value.QuadPart) : 0;
 		}
 
 		template <class T>
@@ -171,6 +177,12 @@ namespace CSX::RenderMap
 			case D3D11_SRV_DIMENSION_TEXTURE2DMSARRAY: result.view.firstArraySlice = desc.Texture2DMSArray.FirstArraySlice; result.view.arraySize = desc.Texture2DMSArray.ArraySize; break;
 			case D3D11_SRV_DIMENSION_TEXTURE3D: result.view.mipSlice = desc.Texture3D.MostDetailedMip; result.view.arraySize = desc.Texture3D.MipLevels; break;
 			case D3D11_SRV_DIMENSION_TEXTURECUBE: result.view.mipSlice = desc.TextureCube.MostDetailedMip; result.view.arraySize = desc.TextureCube.MipLevels; break;
+			case D3D11_SRV_DIMENSION_TEXTURECUBEARRAY:
+				result.view.mipSlice = desc.TextureCubeArray.MostDetailedMip;
+				result.view.arraySize = desc.TextureCubeArray.MipLevels;
+				result.view.firstArraySlice = desc.TextureCubeArray.First2DArrayFace;
+				result.view.elementCount = desc.TextureCubeArray.NumCubes * 6u;
+				break;
 			case D3D11_SRV_DIMENSION_BUFFEREX: result.view.firstElement = desc.BufferEx.FirstElement; result.view.elementCount = desc.BufferEx.NumElements; result.view.flags = desc.BufferEx.Flags; break;
 			default: break;
 			}
@@ -211,7 +223,9 @@ namespace CSX::RenderMap
 			UINT a_renderTargetCount,
 			ID3D11RenderTargetView* const* a_renderTargets,
 			ID3D11DepthStencilView* a_depthTarget,
-			bool a_keepTargets = false)
+			bool a_keepTargets = false,
+			TargetBindingSource a_source = TargetBindingSource::kObservedCall,
+			std::uint64_t a_expectedCaptureGeneration = 0)
 		{
 			if (!GetRuntime().IsCapturing())
 				return;
@@ -227,7 +241,54 @@ namespace CSX::RenderMap
 				a_keepTargets ? 0u : a_renderTargetCount,
 				views.data(),
 				a_depthTarget ? &depth : nullptr,
-				a_keepTargets);
+				a_keepTargets,
+				a_source,
+				a_expectedCaptureGeneration);
+		}
+
+		void ObserveEffectiveRenderTargets(
+			ID3D11DeviceContext* a_context,
+			TargetBindingSource a_source,
+			std::uint64_t a_expectedCaptureGeneration = 0)
+		{
+			if (!a_context || !GetRuntime().IsCapturing())
+				return;
+
+			std::array<ID3D11RenderTargetView*, kMaximumRenderTargets> targets{};
+			ID3D11DepthStencilView* depth = nullptr;
+			a_context->OMGetRenderTargets(
+				static_cast<UINT>(targets.size()), targets.data(), &depth);
+			std::array<ResourceViewInput, kMaximumRenderTargets> views{};
+			std::uint32_t targetCount = 0;
+			for (std::size_t index = 0; index < targets.size(); ++index) {
+				views[index] = DescribeView(targets[index]);
+				if (targets[index])
+					targetCount = static_cast<std::uint32_t>(index + 1);
+			}
+			const auto depthView = DescribeView(depth);
+			GetRuntime().BindRenderTargetViews(
+				reinterpret_cast<std::uintptr_t>(a_context), targetCount, views.data(),
+				depth ? &depthView : nullptr, false,
+				a_source, a_expectedCaptureGeneration);
+			for (auto* target : targets) {
+				if (target)
+					target->Release();
+			}
+			if (depth)
+				depth->Release();
+			if (a_source == TargetBindingSource::kPostCallQuery)
+				GetRuntime().ClaimRenderTargetStateSeed(reinterpret_cast<std::uintptr_t>(a_context));
+		}
+
+		void ObserveEffectiveStateBeforeDraw(ID3D11DeviceContext* a_context);
+
+		template <class... Args>
+		void RecordDrawWithEffectiveState(
+			ID3D11DeviceContext* a_context, DrawOperation a_operation, Args... a_arguments)
+		{
+			ObserveEffectiveStateBeforeDraw(a_context);
+			GetRuntime().RecordDraw(
+				reinterpret_cast<std::uintptr_t>(a_context), a_operation, a_arguments...);
 		}
 
 		void ObserveShaderResources(
@@ -235,7 +296,9 @@ namespace CSX::RenderMap
 			ResourceStage a_stage,
 			UINT a_startSlot,
 			UINT a_viewCount,
-			ID3D11ShaderResourceView* const* a_views)
+			ID3D11ShaderResourceView* const* a_views,
+			ResourceBindingSource a_source = ResourceBindingSource::kRequestedCall,
+			std::uint64_t a_expectedCaptureGeneration = 0)
 		{
 			if (!GetRuntime().IsCapturing())
 				return;
@@ -245,7 +308,55 @@ namespace CSX::RenderMap
 				views[index] = DescribeView(a_views ? a_views[index] : nullptr);
 			GetRuntime().BindResourceViews(
 				reinterpret_cast<std::uintptr_t>(a_context), ResourceBindingKind::kShaderResource,
-				a_stage, a_startSlot, count, views.data());
+				a_stage, a_startSlot, count, views.data(), false, a_source,
+				a_expectedCaptureGeneration);
+		}
+
+		void ObserveEffectiveShaderResources(
+			ID3D11DeviceContext* a_context,
+			ResourceStage a_stage,
+			UINT a_startSlot,
+			UINT a_viewCount,
+			ResourceBindingSource a_source,
+			std::uint64_t a_expectedCaptureGeneration = 0)
+		{
+			if (!a_context || !GetRuntime().IsCapturing() ||
+				a_startSlot >= kMaximumShaderResourceSlots) {
+				return;
+			}
+			const auto count = std::min<UINT>(
+				a_viewCount, static_cast<UINT>(kMaximumShaderResourceSlots - a_startSlot));
+			std::array<ID3D11ShaderResourceView*, kMaximumShaderResourceSlots> views{};
+			switch (a_stage) {
+			case ResourceStage::kVertex: a_context->VSGetShaderResources(a_startSlot, count, views.data()); break;
+			case ResourceStage::kHull: a_context->HSGetShaderResources(a_startSlot, count, views.data()); break;
+			case ResourceStage::kDomain: a_context->DSGetShaderResources(a_startSlot, count, views.data()); break;
+			case ResourceStage::kGeometry: a_context->GSGetShaderResources(a_startSlot, count, views.data()); break;
+			case ResourceStage::kPixel: a_context->PSGetShaderResources(a_startSlot, count, views.data()); break;
+			case ResourceStage::kCompute: a_context->CSGetShaderResources(a_startSlot, count, views.data()); break;
+			default: return;
+			}
+			ObserveShaderResources(
+				a_context, a_stage, a_startSlot, count, views.data(), a_source,
+				a_expectedCaptureGeneration);
+			for (UINT index = 0; index < count; ++index) {
+				if (views[index])
+					views[index]->Release();
+			}
+		}
+
+		void ObserveAllEffectiveShaderResources(
+			ID3D11DeviceContext* a_context,
+			ResourceBindingSource a_source,
+			std::uint64_t a_expectedCaptureGeneration = 0)
+		{
+			for (const auto stage : std::array{
+				ResourceStage::kVertex, ResourceStage::kHull, ResourceStage::kDomain,
+				ResourceStage::kGeometry, ResourceStage::kPixel, ResourceStage::kCompute }) {
+				ObserveEffectiveShaderResources(
+					a_context, stage, 0, static_cast<UINT>(kMaximumShaderResourceSlots),
+					a_source, a_expectedCaptureGeneration);
+			}
 		}
 
 		void ObserveUnorderedAccessViews(
@@ -269,6 +380,86 @@ namespace CSX::RenderMap
 				a_stage, a_startSlot, a_viewCount, views.data(), a_keepViews);
 		}
 
+		void ObserveEffectiveUnorderedAccessViews(
+			ID3D11DeviceContext* a_context,
+			ResourceStage a_stage,
+			UINT a_startSlot,
+			UINT a_viewCount,
+			ResourceBindingSource a_source,
+			std::uint64_t a_expectedCaptureGeneration = 0)
+		{
+			if (!a_context || !GetRuntime().IsCapturing() ||
+				a_startSlot >= kMaximumUnorderedAccessSlots) {
+				return;
+			}
+			const auto count = std::min<UINT>(
+				a_viewCount, static_cast<UINT>(kMaximumUnorderedAccessSlots - a_startSlot));
+			std::array<ID3D11UnorderedAccessView*, kMaximumUnorderedAccessSlots> views{};
+			if (a_stage == ResourceStage::kCompute) {
+				a_context->CSGetUnorderedAccessViews(a_startSlot, count, views.data());
+			} else if (a_stage == ResourceStage::kOutputMerger) {
+				a_context->OMGetRenderTargetsAndUnorderedAccessViews(
+					0, nullptr, nullptr, a_startSlot, count, views.data());
+			} else {
+				return;
+			}
+			std::array<ResourceViewInput, kMaximumUnorderedAccessSlots> described{};
+			for (UINT index = 0; index < count; ++index)
+				described[index] = DescribeView(views[index]);
+			GetRuntime().BindResourceViews(
+				reinterpret_cast<std::uintptr_t>(a_context), ResourceBindingKind::kUnorderedAccess,
+				a_stage, a_startSlot, count, described.data(), false, a_source,
+				a_expectedCaptureGeneration);
+			for (UINT index = 0; index < count; ++index) {
+				if (views[index])
+					views[index]->Release();
+			}
+		}
+
+		void ObserveEffectiveStateBeforeDraw(ID3D11DeviceContext* a_context)
+		{
+			if (!a_context)
+				return;
+			auto& runtime = GetRuntime();
+			const auto context = reinterpret_cast<std::uintptr_t>(a_context);
+			const auto targetGeneration = runtime.ClaimRenderTargetStateSeed(context);
+			if (targetGeneration != 0) {
+				ObserveEffectiveRenderTargets(
+					a_context, TargetBindingSource::kCaptureStateSnapshot, targetGeneration);
+			}
+			const auto resourceGeneration = runtime.ClaimResourceViewStateSeed(context);
+			if (resourceGeneration != 0) {
+				ObserveAllEffectiveShaderResources(
+					a_context, ResourceBindingSource::kCaptureStateSnapshot, resourceGeneration);
+				ObserveEffectiveUnorderedAccessViews(
+					a_context, ResourceStage::kCompute, 0,
+					static_cast<UINT>(kMaximumUnorderedAccessSlots),
+					ResourceBindingSource::kCaptureStateSnapshot, resourceGeneration);
+				ObserveEffectiveUnorderedAccessViews(
+					a_context, ResourceStage::kOutputMerger, 0,
+					D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT,
+					ResourceBindingSource::kCaptureStateSnapshot, resourceGeneration);
+			}
+		}
+
+		void ObserveAllEffectiveResourceViews(
+			ID3D11DeviceContext* a_context,
+			ResourceBindingSource a_source,
+			std::uint64_t a_expectedCaptureGeneration = 0)
+		{
+			ObserveAllEffectiveShaderResources(a_context, a_source, a_expectedCaptureGeneration);
+			ObserveEffectiveUnorderedAccessViews(
+				a_context, ResourceStage::kCompute, 0,
+				static_cast<UINT>(kMaximumUnorderedAccessSlots),
+				a_source, a_expectedCaptureGeneration);
+			ObserveEffectiveUnorderedAccessViews(
+				a_context, ResourceStage::kOutputMerger, 0,
+				D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT,
+				a_source, a_expectedCaptureGeneration);
+			if (a_source == ResourceBindingSource::kPostCallQuery)
+				GetRuntime().ClaimResourceViewStateSeed(reinterpret_cast<std::uintptr_t>(a_context));
+		}
+
 		struct ID3D11DeviceContext_OMSetRenderTargets
 		{
 			static void thunk(ID3D11DeviceContext* a_context, UINT a_renderTargetCount,
@@ -276,6 +467,8 @@ namespace CSX::RenderMap
 			{
 				func(a_context, a_renderTargetCount, a_renderTargets, a_depthTarget);
 				ObserveRenderTargets(a_context, a_renderTargetCount, a_renderTargets, a_depthTarget);
+				ObserveEffectiveRenderTargets(a_context, TargetBindingSource::kPostCallQuery);
+				ObserveAllEffectiveResourceViews(a_context, ResourceBindingSource::kPostCallQuery);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -295,6 +488,8 @@ namespace CSX::RenderMap
 				ObserveUnorderedAccessViews(
 					a_context, ResourceStage::kOutputMerger, a_uavStartSlot, a_uavCount, a_uavs,
 					a_uavCount == D3D11_KEEP_UNORDERED_ACCESS_VIEWS);
+				ObserveEffectiveRenderTargets(a_context, TargetBindingSource::kPostCallQuery);
+				ObserveAllEffectiveResourceViews(a_context, ResourceBindingSource::kPostCallQuery);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -307,6 +502,8 @@ namespace CSX::RenderMap
 			{ \
 				func(a_context, a_startSlot, a_viewCount, a_views); \
 				ObserveShaderResources(a_context, Stage, a_startSlot, a_viewCount, a_views); \
+				ObserveEffectiveShaderResources( \
+					a_context, Stage, a_startSlot, a_viewCount, ResourceBindingSource::kPostCallQuery); \
 			} \
 			static inline REL::Relocation<decltype(thunk)> func; \
 		}
@@ -328,6 +525,7 @@ namespace CSX::RenderMap
 				func(a_context, a_startSlot, a_viewCount, a_views, a_initialCounts);
 				ObserveUnorderedAccessViews(
 					a_context, ResourceStage::kCompute, a_startSlot, a_viewCount, a_views);
+				ObserveAllEffectiveResourceViews(a_context, ResourceBindingSource::kPostCallQuery);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -374,7 +572,7 @@ namespace CSX::RenderMap
 				UINT a_instanceCount, UINT a_startIndexLocation, INT a_baseVertexLocation,
 				UINT a_startInstanceLocation)
 			{
-				GetRuntime().RecordDraw(reinterpret_cast<std::uintptr_t>(a_context),
+				RecordDrawWithEffectiveState(a_context,
 					DrawOperation::kDrawIndexedInstanced, a_indexCountPerInstance, a_instanceCount,
 					a_startIndexLocation, PackSignedAndUnsigned(a_baseVertexLocation, a_startInstanceLocation));
 				func(a_context, a_indexCountPerInstance, a_instanceCount, a_startIndexLocation,
@@ -388,7 +586,7 @@ namespace CSX::RenderMap
 			static void thunk(ID3D11DeviceContext* a_context, UINT a_indexCount,
 				UINT a_startIndexLocation, INT a_baseVertexLocation)
 			{
-				GetRuntime().RecordDraw(reinterpret_cast<std::uintptr_t>(a_context),
+				RecordDrawWithEffectiveState(a_context,
 					DrawOperation::kDrawIndexed, a_indexCount, a_startIndexLocation,
 					static_cast<std::uint32_t>(a_baseVertexLocation));
 				func(a_context, a_indexCount, a_startIndexLocation, a_baseVertexLocation);
@@ -400,7 +598,7 @@ namespace CSX::RenderMap
 		{
 			static void thunk(ID3D11DeviceContext* a_context, UINT a_vertexCount, UINT a_startVertexLocation)
 			{
-				GetRuntime().RecordDraw(reinterpret_cast<std::uintptr_t>(a_context),
+				RecordDrawWithEffectiveState(a_context,
 					DrawOperation::kDraw, a_vertexCount, a_startVertexLocation);
 				func(a_context, a_vertexCount, a_startVertexLocation);
 			}
@@ -412,7 +610,7 @@ namespace CSX::RenderMap
 			static void thunk(ID3D11DeviceContext* a_context, UINT a_vertexCountPerInstance,
 				UINT a_instanceCount, UINT a_startVertexLocation, UINT a_startInstanceLocation)
 			{
-				GetRuntime().RecordDraw(reinterpret_cast<std::uintptr_t>(a_context),
+				RecordDrawWithEffectiveState(a_context,
 					DrawOperation::kDrawInstanced, a_vertexCountPerInstance, a_instanceCount,
 					a_startVertexLocation, a_startInstanceLocation);
 				func(a_context, a_vertexCountPerInstance, a_instanceCount,
@@ -425,7 +623,7 @@ namespace CSX::RenderMap
 		{
 			static void thunk(ID3D11DeviceContext* a_context)
 			{
-				GetRuntime().RecordDraw(reinterpret_cast<std::uintptr_t>(a_context), DrawOperation::kDrawAuto);
+				RecordDrawWithEffectiveState(a_context, DrawOperation::kDrawAuto);
 				func(a_context);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
@@ -436,7 +634,7 @@ namespace CSX::RenderMap
 			static void thunk(ID3D11DeviceContext* a_context, ID3D11Buffer* a_argumentBuffer,
 				UINT a_alignedByteOffset)
 			{
-				GetRuntime().RecordDraw(reinterpret_cast<std::uintptr_t>(a_context),
+				RecordDrawWithEffectiveState(a_context,
 					DrawOperation::kDrawIndexedInstancedIndirect,
 					reinterpret_cast<std::uintptr_t>(a_argumentBuffer), a_alignedByteOffset);
 				func(a_context, a_argumentBuffer, a_alignedByteOffset);
@@ -449,7 +647,7 @@ namespace CSX::RenderMap
 			static void thunk(ID3D11DeviceContext* a_context, ID3D11Buffer* a_argumentBuffer,
 				UINT a_alignedByteOffset)
 			{
-				GetRuntime().RecordDraw(reinterpret_cast<std::uintptr_t>(a_context),
+				RecordDrawWithEffectiveState(a_context,
 					DrawOperation::kDrawInstancedIndirect,
 					reinterpret_cast<std::uintptr_t>(a_argumentBuffer), a_alignedByteOffset);
 				func(a_context, a_argumentBuffer, a_alignedByteOffset);
@@ -497,6 +695,48 @@ namespace CSX::RenderMap
 					reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kCopySubresourceRegion,
 					DescribeResource(a_source), DescribeResource(a_destination),
 					a_sourceSubresource, a_destinationSubresource);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct ID3D11DeviceContext_Map
+		{
+			static HRESULT thunk(ID3D11DeviceContext* a_context, ID3D11Resource* a_resource,
+				UINT a_subresource, D3D11_MAP a_mapType, UINT a_mapFlags,
+				D3D11_MAPPED_SUBRESOURCE* a_mappedResource)
+			{
+				const auto generation = GetRuntime().ActiveCaptureGeneration();
+				const auto started = generation != 0 ? ReadQpc() : 0;
+				const auto result = func(
+					a_context, a_resource, a_subresource, a_mapType, a_mapFlags, a_mappedResource);
+				if (generation != 0) {
+					const auto completed = ReadQpc();
+					GetRuntime().RecordCpuMap(
+						reinterpret_cast<std::uintptr_t>(a_context), DescribeResource(a_resource),
+						a_subresource, static_cast<std::uint32_t>(a_mapType), a_mapFlags,
+						static_cast<std::int32_t>(result),
+						completed >= started ? completed - started : 0, completed,
+						SUCCEEDED(result) && a_mappedResource ? a_mappedResource->RowPitch : 0,
+						SUCCEEDED(result) && a_mappedResource ? a_mappedResource->DepthPitch : 0,
+						generation);
+				}
+				return result;
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct ID3D11DeviceContext_Unmap
+		{
+			static void thunk(ID3D11DeviceContext* a_context, ID3D11Resource* a_resource,
+				UINT a_subresource)
+			{
+				const auto generation = GetRuntime().ActiveCaptureGeneration();
+				func(a_context, a_resource, a_subresource);
+				if (generation != 0) {
+					GetRuntime().RecordCpuUnmap(
+						reinterpret_cast<std::uintptr_t>(a_context), DescribeResource(a_resource),
+						a_subresource, ReadQpc(), generation);
+				}
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -649,6 +889,8 @@ namespace CSX::RenderMap
 		stl::detour_vfunc<11, ID3D11DeviceContext_VSSetShader>(a_context);
 		stl::detour_vfunc<12, ID3D11DeviceContext_DrawIndexed>(a_context);
 		stl::detour_vfunc<13, ID3D11DeviceContext_Draw>(a_context);
+		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
+		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
 		stl::detour_vfunc<20, ID3D11DeviceContext_DrawIndexedInstanced>(a_context);
 		stl::detour_vfunc<21, ID3D11DeviceContext_DrawInstanced>(a_context);
 		stl::detour_vfunc<25, ID3D11DeviceContext_VSSetShaderResources>(a_context);

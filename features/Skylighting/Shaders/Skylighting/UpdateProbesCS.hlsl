@@ -105,7 +105,7 @@ static const float3 noise3D[32] = {
 		outAccumFramesArray[probeTexID] = 0;
 	}
 
-	uint bitIndex = SharedData::FrameCount % 32;
+	uint bitIndex = SharedData::FrameCountAlwaysActive % 32;
 	uint bitmask = isValid ? outShadowBitmask[dtid] : 0xFFFFFFFFu;
 	float shadowSample = 1.0;
 	bool advanceShadowHistory = settings.ShadowDataAvailable == 0;

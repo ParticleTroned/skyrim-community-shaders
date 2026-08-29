@@ -83,7 +83,7 @@ the supplied cache.
 | Plugin versions written to `Info.ini`           | `CMakePresets.json`                                 |
 | Feature versions written to `Info.ini`          | `features/*/Shaders/Features/*.ini`                 |
 | Standalone/reusable cache CI                    | `.github/workflows/shader-cache.yaml`               |
-| Manual four-cache FOMOD assembly                | `tools/build-fomod-package.py`                      |
+| Managed-cache FOMOD assembly                    | `tools/build-fomod-package.py`                      |
 | Release integration                             | `.github/workflows/release-build.yaml`              |
 
 The manifest algorithm exists in C++ and in pinned hlslkit because it must run
@@ -215,17 +215,12 @@ This compiles HLSL but does not build the C++ plugin. The builder:
 5. writes `Manifest.json` from source and recursive-include content;
 6. writes `Info.ini` with plugin and feature versions;
 7. validates metadata, every manifest entry, every blob, the `DXBC` signature,
-	and the bounded Water-only delta between each runtime's variants;
-	8. packages each runtime's standard and Horizon Fix caches into a raw archive
-	   with no installer metadata or automatic runtime detection;
-	9. publishes output only after every requested runtime has passed the earlier
-	and the bounded Water-only delta between each runtime's inputs;
+   and the bounded Water-only delta between each runtime's inputs;
 8. writes optimized and developer A/B packs, verifies every SHA-256 committed
    record and generation, and removes the thousands of loose runtime blobs;
-9. derives an exact `CSX<major>.<minor>-<SE|VR>.marker` dependency from each
-   runtime's `Info.ini`, adds visible MO2 setup guidance to the FOMOD, and
-   prepares install-ready archives;
-	10. publishes output only after every requested runtime has passed the earlier
+9. packages each runtime's managed cache into a raw archive with no installer
+   metadata or automatic runtime detection;
+10. publishes output only after every requested runtime has passed the earlier
    stages.
 
 An existing runtime output is replaced only when it has the expected,
@@ -418,18 +413,11 @@ Successful builder completion already proves:
 -   the manifest contains no entry without a blob;
 -   `Info.ini` contains the requested plugin version;
 -   the archive was created and is nonempty;
--   every shipped archive contains `ShaderCache/Info.ini`,
-    `ShaderCache/Manifest.json`, and the corresponding
-    `ShaderCache-HorizonFix` metadata;
--   raw runtime archives contain no `fomod` installer tree.
 -   every archive contains `ShaderCache/Info.ini`, `Manifest.json`,
-    `PackManifest.json`, all four managed pack files, both required FOMOD
-    installer files, and the MO2 help image;
+    `PackManifest.json`, and all four managed pack files;
+-   raw runtime archives contain no `fomod` installer tree;
 -   every pack header, SHA-256 record, commit trailer, record count, lane, and
-    A/B generation validates using the same binary layout consumed by C++;
--   each FOMOD recommendation checks both the active Community Shaders DLL and
-    the exact generated CSX compatibility marker with `operator="And"`;
--   the FOMOD maps the single managed cache to `Data/ShaderCache`.
+    A/B generation validates using the same binary layout consumed by C++.
 
 Optional operator checks:
 
@@ -464,77 +452,37 @@ contract and rerun the supported builder.
 ## Install and ship
 
 The standalone SE and VR archives are validated release inputs and optional
-manual-install artifacts. Each shipped archive contains two top-level cache
-directories:
+manual-install artifacts. Each contains one top-level managed `ShaderCache`
+directory. Its optimized pack contains both the standard and Horizon-compatible
+Water records; runtime compatibility registration selects the exact record.
 
--   `ShaderCache` for Horizon Fix not installed;
--   `ShaderCache-HorizonFix` for Horizon Fix installed.
-Each cache archive contains one top-level managed `ShaderCache` directory and
-FOMOD metadata. The FOMOD recommends it only when both `CommunityShaders.dll`
-and its exact version marker are active. Those two checks remain one package handshake:
-FOMOD cannot inspect the DLL's embedded product-version bytes, so core packages
-must never ship a marker from another build. The runtime independently selects
-the exact compatible record and compiles only a missing identity.
+For manual installation, copy the matching runtime's `ShaderCache` directory
+to `<Skyrim>\\Data\\ShaderCache`. Never merge the SE/AE and VR caches.
 
-For manual installation, copy the contents of exactly one matching source
-directory into `<Skyrim>\\Data\\ShaderCache`. Never merge the SE/AE and VR
-caches or the standard and Horizon Fix variants.
-
-The normal release path bundles the AIO and all four cache variants into one
-FOMOD archive. Its first page requires a manual choice between **Skyrim VR**,
-**Skyrim SE/AE**, and **No prebuilt shader cache**. Selecting either runtime
-shows a second page requiring **Horizon Fix installed** or **Horizon Fix not
-installed**. Selecting no cache hides the second page and installs only the AIO.
--   For manual installation, the one managed directory becomes
-    `<Skyrim>\Data\ShaderCache`.
--   In Mod Organizer 2, use the included FOMOD installer. Do not select
-    `ShaderCache` and choose **Set data directory** in the manual installer;
-    that strips the required directory and incorrectly exposes the cache as
-    `Data\Info.ini`, `Data\Lighting`, and so on.
--   In a mod-manager package whose root maps to Skyrim's `Data`, place
-    `ShaderCache` alongside `Shaders` and `SKSE`.
--   Offer separate, clearly labelled SE and VR files.
--   Ship the cache with the exact DLL, shaders, and feature versions from the
-	    same ref.
-
-The FOMOD performs no game-version, DLL, settings-file, marker-file, load-order,
-or mod-manager-specific detection. It never preselects or recommends a cache.
-The selected flags map exactly one of these staged sources to
-`Data/ShaderCache`:
+The normal release path bundles the AIO and both runtime caches into one FOMOD.
+Its only selection page offers **Skyrim VR**, **Skyrim SE/AE**, or
+**No prebuilt shader cache**. It performs no automatic game, DLL, marker,
+settings, load-order, or mod-manager detection. The selected runtime maps
+exactly one staged source to `Data/ShaderCache`:
 
 ```text
 ShaderCache-VR/ShaderCache
-ShaderCache-VR-HorizonFix/ShaderCache
 ShaderCache-SE-AE/ShaderCache
-ShaderCache-SE-AE-HorizonFix/ShaderCache
 ```
 
-The plugin independently validates cache identity and feature state at runtime.
-A mismatched cache is rejected and compiled locally; installer heuristics are
-not part of that safety contract. Reinstall the AIO after enabling or disabling
-Horizon Fix so the selected Water bytecode and `Info.ini` agree with the active
-setup.
+The plugin independently validates cache identity, shader ABI, source content,
+and registered compatibility requirements. A missing or mismatched record is
+compiled locally. Enabling or disabling Horizon Fix does not require reinstalling
+the cache because both compatible Water records coexist in the managed pack.
 
-Ship the caches, DLL, shaders, and feature metadata from the same ref. Do not
-package a cache from one commit with the AIO from another commit.
-![MO2 Fomod Installer use_any_file setting](../images/mo2-fomod-use-any-file.png)
-
-The generated FOMOD presents those directions as two short required pages so
-they remain visible before any file dependency is evaluated. The second page
-includes the screenshot above, and the FOMOD Website link opens this section.
-If `use_any_file` remains disabled, automatic recommendations are unavailable;
-verify the active DLL, exact marker, and selected cache manually.
-
-For shipped SE and VR archives, standard and Horizon Water bytecode coexist in
-the optimized pack. The temporary runtime adapter registers Horizon's Water
-requirement when its DLL is loaded, so enabling or disabling it no longer
-requires reinstalling the cache.
+Ship the caches, DLL, shaders, compatibility manifest, and feature metadata from
+the same ref. Do not package a cache from one commit with the AIO from another.
 
 For a smoke test, use a clean mod-manager profile, move any existing
-`ShaderCache` aside so it can be restored, and install each of the four
-runtime/Horizon combinations plus the no-cache path. Start the matching runtime
-and inspect `CommunityShaders.log` for cache validation, invalidation, and
-unexpected compilation.
+`ShaderCache` aside so it can be restored, and test the VR, SE/AE, and
+no-cache installer paths. For each runtime, test once with Horizon Fix disabled
+and once enabled; inspect `CommunityShaders.log` for pack validation,
+compatibility selection, fallback compilation, and unexpected invalidation.
 
 ## CI and release workflow
 
@@ -568,8 +516,8 @@ gh run download $runId -n ShaderCache-VR -D dist/downloaded-cache
 For normal releases, `.github/workflows/release-build.yaml` calls the reusable
 cache workflow for both runtimes. The release job is gated on cache success,
 downloads both artifacts into `dist`, and extracts them beside the plain AIO.
-`tools/build-fomod-package.py` validates and stages all four cache variants,
-writes the two-page manual FOMOD, and replaces the plain AIO archive only after
+`tools/build-fomod-package.py` validates and stages both managed runtime caches,
+writes the one-page manual FOMOD, and replaces the plain AIO archive only after
 the replacement is nonempty and contains every required payload. Artifact
 attestation and draft-release publication happen after that replacement. The
 standalone runtime archives remain attached for operators and manual installs.
@@ -582,9 +530,7 @@ Core/
 fomod/ModuleConfig.xml
 fomod/info.xml
 ShaderCache-VR/ShaderCache/
-ShaderCache-VR-HorizonFix/ShaderCache/
 ShaderCache-SE-AE/ShaderCache/
-ShaderCache-SE-AE-HorizonFix/ShaderCache/
 ```
 
 ## When a cache rebuild is required

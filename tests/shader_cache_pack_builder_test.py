@@ -87,28 +87,6 @@ def main() -> int:
         ]
         assert manifest["shaderCacheABI"] == "a" * 64
         assert not list(standard.rglob("*.pso"))
-        (standard / "Info.ini").write_text(
-            "[Cache]\nPluginVersion=CSX 3.19-VR\nShaderCacheABI="
-            + "a" * 64
-            + "\n",
-            encoding="utf-8",
-        )
-        fomod = builder.write_fomod_installer(
-            root,
-            "VR",
-            "test",
-            "CSX 3.19-VR",
-            source_root=REPO,
-            horizon_variants=False,
-        )
-        builder.validate_fomod_installer(
-            fomod,
-            builder.csx_compatibility_tag("CSX 3.19-VR"),
-            horizon_variants=False,
-        )
-        module_config = (fomod / "ModuleConfig.xml").read_text(encoding="utf-8")
-        assert "ShaderCache-HorizonFix" not in module_config
-        assert "HorizonFix.dll" not in module_config
         if len(sys.argv) == 2:
             default_requirement = builder.canonical_compatibility_requirement_set([])
             exact_key = (

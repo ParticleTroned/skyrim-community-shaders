@@ -51,21 +51,39 @@ void Bloom::DrawProfileControls(Profile& a_profile)
 	SanitizeProfile(a_profile);
 	ImGui::PushID(&a_profile);
 
-	ImGui::SliderFloat("Bloom", &a_profile.EnhancementIntensity, 0.0f, kEnhancementIntensityMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	DrawTooltip("Bloom enhancement strength for this profile. 0 turns the enhancement off and keeps Skyrim's vanilla Bloom unchanged; values through 1 blend into the configured enhancement, and higher values amplify it before compression.");
+	const auto drawBloomSlider = [&]() {
+		ImGui::SliderFloat("Bloom", &a_profile.EnhancementIntensity, 0.0f, kEnhancementIntensityMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		DrawTooltip("Bloom enhancement strength for this profile. 0 turns the enhancement off and keeps Skyrim's vanilla Bloom unchanged; values through 1 blend into the configured enhancement, and higher values amplify it before compression.");
+	};
+	const auto& style = ImGui::GetStyle();
+	const float bloomLabelWidth = ImGui::CalcTextSize("Bloom").x + style.ItemInnerSpacing.x;
+	const float minimumSliderWidth = ImGui::CalcTextSize("0.00").x + style.FramePadding.x * 4.0f;
+	float minimumInlineWidth = bloomLabelWidth + minimumSliderWidth + style.CellPadding.x * 2.0f * (kPresetCount + 1);
+	for (uint preset = 0; preset < kPresetCount; ++preset) {
+		minimumInlineWidth += ImGui::CalcTextSize(GetPresetName(preset)).x + style.FramePadding.x * 2.0f;
+	}
+	const bool drawInline = ImGui::GetContentRegionAvail().x >= minimumInlineWidth;
 
-	if (ImGui::BeginTable("##BloomPresets", 4, ImGuiTableFlags_SizingStretchProp)) {
+	if (!drawInline)
+		drawBloomSlider();
+
+	if (ImGui::BeginTable("##BloomQuickControls", 4, ImGuiTableFlags_SizingStretchProp)) {
 		ImGui::TableSetupColumn("Bloom Presets", ImGuiTableColumnFlags_WidthStretch, 1.0f);
 		for (uint preset = 0; preset < kPresetCount; ++preset) {
 			const auto* name = GetPresetName(preset);
-			const float width = ImGui::CalcTextSize(name).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+			const float width = ImGui::CalcTextSize(name).x + style.FramePadding.x * 2.0f;
 			ImGui::TableSetupColumn(name, ImGuiTableColumnFlags_WidthFixed, width);
 		}
 
 		ImGui::TableNextRow();
 		ImGui::TableNextColumn();
-		ImGui::AlignTextToFramePadding();
-		ImGui::TextUnformatted("Bloom Presets");
+		if (drawInline) {
+			ImGui::SetNextItemWidth(std::max(1.0f, ImGui::GetContentRegionAvail().x - bloomLabelWidth));
+			drawBloomSlider();
+		} else {
+			ImGui::AlignTextToFramePadding();
+			ImGui::TextUnformatted("Bloom Presets");
+		}
 
 		for (uint preset = 0; preset < kPresetCount; ++preset) {
 			ImGui::TableNextColumn();
@@ -144,11 +162,12 @@ Bloom::Profile Bloom::GetPresetProfile(uint a_preset)
 		return { 4.0f, 5.0f, 1.0f, 1.3f, { 1.0f, 0.98f, 0.94f }, 0.0f, 0.67f };
 	case 2:
 		return { 2.5f, 4.0f, 0.72f, 0.85f, { 165.0f / 255.0f, 205.0f / 255.0f, 1.0f }, 0.08f, 0.9f };
-	default: {
-		auto profile = Profile{};
-		profile.EnhancementIntensity = 1.0f;
-		return profile;
-	}
+	default:
+		{
+			auto profile = Profile{};
+			profile.EnhancementIntensity = 1.0f;
+			return profile;
+		}
 	}
 }
 

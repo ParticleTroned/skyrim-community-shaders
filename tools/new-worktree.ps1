@@ -26,9 +26,20 @@ if (-not $commonDir) {
     exit 1
 }
 
-$mainRepoRoot = Split-Path $commonDir -Parent
-$repoName = Split-Path $mainRepoRoot -Leaf
-$defaultWorktreeRoot = Join-Path (Split-Path $mainRepoRoot -Parent) ($repoName + ".worktrees")
+$commonIsBare = ([string](& git --git-dir=$commonDir config --get --bool core.bare 2>$null)).Trim() -eq "true"
+if ($commonIsBare) {
+    $repoName = [System.IO.Path]::GetFileNameWithoutExtension($commonDir)
+    $repositoryArguments = @("--git-dir=$commonDir")
+    $presetSourceRoot = $repoRoot
+    $defaultWorktreeRoot = Join-Path (Split-Path $repoRoot -Parent) ($repoName + ".worktrees")
+}
+else {
+    $mainRepoRoot = Split-Path $commonDir -Parent
+    $repoName = Split-Path $mainRepoRoot -Leaf
+    $repositoryArguments = @("-C", $mainRepoRoot)
+    $presetSourceRoot = $mainRepoRoot
+    $defaultWorktreeRoot = Join-Path (Split-Path $mainRepoRoot -Parent) ($repoName + ".worktrees")
+}
 
 if (-not $Path) {
     $Path = Join-Path $defaultWorktreeRoot $Name
@@ -45,20 +56,51 @@ if (Test-Path $Path) {
     exit 1
 }
 
-& git -C $mainRepoRoot show-ref --verify --quiet "refs/heads/$Branch"
+& git @repositoryArguments show-ref --verify --quiet "refs/heads/$Branch"
 $branchExists = $LASTEXITCODE -eq 0
 
 if ($branchExists) {
     Write-Host "Creating worktree for existing branch '$Branch' at $Path"
-    & git -C $mainRepoRoot worktree add $Path $Branch
+    & git @repositoryArguments worktree add $Path $Branch
 }
 else {
     Write-Host "Creating worktree at $Path with new branch '$Branch' from '$StartPoint'"
-    & git -C $mainRepoRoot worktree add -b $Branch $Path $StartPoint
+    & git @repositoryArguments worktree add -b $Branch $Path $StartPoint
 }
 
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
+}
+
+if ($commonIsBare) {
+    $worktreeConfigEnabled = ([string](& git --git-dir=$commonDir config --get --bool extensions.worktreeConfig 2>$null)).Trim() -eq "true"
+    if (-not $worktreeConfigEnabled) {
+        Write-Error "The common repository is bare but extensions.worktreeConfig is not enabled. The worktree was created but cannot be made operational safely."
+        exit 1
+    }
+
+    $dotGitFile = Join-Path $Path ".git"
+    $gitDirLine = (Get-Content -LiteralPath $dotGitFile -Raw).Trim()
+    if ($gitDirLine -notmatch '^gitdir:\s*(.+)$') {
+        Write-Error "The new worktree has a malformed .git file: $dotGitFile"
+        exit 1
+    }
+    $worktreeAdminDir = $Matches[1].Trim()
+    if (-not [System.IO.Path]::IsPathRooted($worktreeAdminDir)) {
+        $worktreeAdminDir = [System.IO.Path]::GetFullPath((Join-Path $Path $worktreeAdminDir))
+    }
+
+    & git --git-dir=$worktreeAdminDir --work-tree=$Path config --worktree core.bare false
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to set core.bare=false for the new linked worktree. The worktree was created but is not operational."
+        exit $LASTEXITCODE
+    }
+}
+
+$insideWorktree = ([string](& git -C $Path rev-parse --is-inside-work-tree 2>$null)).Trim()
+if ($LASTEXITCODE -ne 0 -or $insideWorktree -ne "true") {
+    Write-Error "Git does not recognize the newly created path as a working tree."
+    exit 1
 }
 
 if (-not $NoSubmodules) {
@@ -70,7 +112,7 @@ if (-not $NoSubmodules) {
     }
 }
 
-$sourcePreset = Join-Path $mainRepoRoot "CMakeUserPresets.json"
+$sourcePreset = Join-Path $presetSourceRoot "CMakeUserPresets.json"
 $targetPreset = Join-Path $Path "CMakeUserPresets.json"
 
 if (Test-Path $sourcePreset) {

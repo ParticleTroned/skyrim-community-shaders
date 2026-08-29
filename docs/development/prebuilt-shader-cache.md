@@ -1,5 +1,13 @@
 # Prebuilt Shader Cache Runbook
 
+> **Upcoming shader-management work:** test distributions now have a separate
+> identity such as `CSX 3.19-VR RC204 (2026-08-22)`. That identity is
+> deliberately excluded from `Plugin::VERSION_LABEL`, compatibility markers,
+> cache metadata, and cache validation for now. The shader-management revamp
+> must explicitly decide whether and how test-build identity should participate
+> in cache ownership or invalidation. See
+> [test-build-versioning.md](test-build-versioning.md).
+
 This is the authoritative maintainer and AI-agent procedure for building,
 updating, validating, and shipping CSX' prebuilt shader cache.
 Use `tools/build-shader-cache.py` for cache generation and

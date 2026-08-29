@@ -1,0 +1,90 @@
+name: "Test Build: Allocate After Merge"
+
+on:
+    pull_request_target:
+        types: [closed]
+
+permissions:
+    actions: write
+    contents: write
+    pull-requests: read
+
+# A newer merge restarts the quiet period. Once allocation begins, the state
+# script and the remote-head check make an interrupted/repeated run idempotent.
+concurrency:
+    group: csx-test-build-allocation
+    cancel-in-progress: true
+
+jobs:
+    allocate:
+        name: Allocate merged test-build batch
+        if: >
+            github.event.pull_request.merged == true &&
+            github.event.pull_request.base.ref == github.event.repository.default_branch
+        runs-on: ubuntu-latest
+        steps:
+            - name: Wait for a merge batch to settle
+              run: sleep 180
+
+            # pull_request_target is intentional: only the trusted default
+            # branch is checked out and executed; PR-head code is never used.
+            - name: Checkout current default branch
+              uses: actions/checkout@v6
+              with:
+                  ref: ${{ github.event.repository.default_branch }}
+                  fetch-depth: 0
+                  persist-credentials: true
+                  token: ${{ secrets.RELEASE_PAT || github.token }}
+
+            - name: Allocate the next test-build identity
+              id: allocation
+              env:
+                  MERGED_PR: ${{ github.event.pull_request.number }}
+              run: |
+                  set -euo pipefail
+                  BASE_VERSION=$(jq -r '.configurePresets[] | select(.name == "VR") | .cacheVariables.CSX_VERSION' CMakePresets.json)
+                  SOURCE_SHA=$(git rev-parse HEAD)
+                  python tools/csx_test_build.py allocate \
+                    --state version/test-build.json \
+                    --base-version "$BASE_VERSION" \
+                    --source-sha "$SOURCE_SHA" \
+                    --date "$(date -u +%Y-%m-%d)" \
+                    --pr "$MERGED_PR" \
+                    --discover-git-range \
+                    --github-output "$GITHUB_OUTPUT"
+
+            - name: Commit allocated state
+              id: publish
+              if: steps.allocation.outputs.allocated == 'true'
+              env:
+                  DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+                  SOURCE_SHA: ${{ steps.allocation.outputs.source_sha }}
+                  DISPLAY_VERSION: ${{ steps.allocation.outputs.display_version }}
+              run: |
+                  set -euo pipefail
+                  git fetch origin "$DEFAULT_BRANCH"
+                  REMOTE_SHA=$(git rev-parse "origin/$DEFAULT_BRANCH")
+                  if [ "$REMOTE_SHA" != "$SOURCE_SHA" ]; then
+                    echo "Default branch moved from $SOURCE_SHA to $REMOTE_SHA; a later merge event will allocate the complete batch."
+                    exit 0
+                  fi
+
+                  git config user.name "github-actions[bot]"
+                  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+                  git add version/test-build.json
+                  git commit -m "chore(build): allocate $DISPLAY_VERSION [skip ci]"
+                  git push origin "HEAD:$DEFAULT_BRANCH"
+                  echo "state_pushed=true" >> "$GITHUB_OUTPUT"
+
+            # The state commit uses [skip ci] to avoid duplicate runs when a PAT
+            # performs the push. workflow_dispatch is exempt from skip rules and
+            # is also permitted when checkout fell back to GITHUB_TOKEN.
+            - name: Start the allocated distribution build
+              if: steps.publish.outputs.state_pushed == 'true'
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+              run: |
+                  gh workflow run test-build-distribution.yaml \
+                    --repo "${{ github.repository }}" \
+                    --ref "$DEFAULT_BRANCH"

@@ -2,6 +2,25 @@
 
 #include "TruePBR.h"
 
+static bool IsTextureSet(RE::BSTextureSet* textureSet)
+{
+	if (textureSet == nullptr) {
+		return true;
+	}
+
+	static const auto* textureSetRTTI = REL::Relocation<const RE::NiRTTI*>{ RE::BSTextureSet::Ni_RTTI }.get();
+	const auto* rtti = textureSet->GetRTTI();
+	return rtti != nullptr && rtti->IsKindOf(textureSetRTTI);
+}
+
+/** @brief Clears malformed links before invoking BSTextureSet virtual methods. */
+static void DiscardMislinkedTextureSet(RE::NiPointer<RE::BSTextureSet>& textureSet)
+{
+	if (!IsTextureSet(textureSet.get())) {
+		textureSet.reset();
+	}
+}
+
 BSLightingShaderMaterialPBR::~BSLightingShaderMaterialPBR()
 {
 	All.erase(this);
@@ -107,6 +126,7 @@ std::uint32_t BSLightingShaderMaterialPBR::ComputeCRC32(uint32_t srcHash)
 	hashes.projectedMaterialLogMicrofacetDensity = projectedMaterialGlintParameters.logMicrofacetDensity * 100.f;
 	hashes.projectedMaterialMicrofacetRoughness = projectedMaterialGlintParameters.microfacetRoughness * 100.f;
 	hashes.projectedMaterialDensityRandomization = projectedMaterialGlintParameters.densityRandomization * 100.f;
+	DiscardMislinkedTextureSet(textureSet);
 	if (textureSet != nullptr) {
 		hashes.rmaodHash = RE::BSCRC32<const char*>()(textureSet->GetTexturePath(RmaosTexture));
 		hashes.emissiveHash = RE::BSCRC32<const char*>()(textureSet->GetTexturePath(EmissiveTexture));
@@ -173,6 +193,10 @@ void BSLightingShaderMaterialPBR::OnLoadTextureSet(std::uint64_t arg1, RE::BSTex
 	const auto& stateData = globals::game::graphicsState->GetRuntimeData();
 
 	if (diffuseTexture == nullptr || diffuseTexture == stateData.defaultTextureNormalMap) {
+		if (!IsTextureSet(inTextureSet)) {
+			textureSet.reset();
+			inTextureSet = nullptr;
+		}
 		BSLightingShaderMaterialBase::OnLoadTextureSet(arg1, inTextureSet);
 
 		auto* lock = &unk98;
@@ -184,6 +208,7 @@ void BSLightingShaderMaterialPBR::OnLoadTextureSet(std::uint64_t arg1, RE::BSTex
 		if (inTextureSet != nullptr) {
 			textureSet = RE::NiPointer(inTextureSet);
 		}
+		DiscardMislinkedTextureSet(textureSet);
 		if (textureSet != nullptr) {
 			textureSet->SetTexture(RmaosTexture, rmaosTexture);
 			textureSet->SetTexture(EmissiveTexture, emissiveTexture);

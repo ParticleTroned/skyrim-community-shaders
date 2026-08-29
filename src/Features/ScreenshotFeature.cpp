@@ -1713,19 +1713,32 @@ namespace
 
 }
 
-ScreenshotFeature::ScreenshotFeature() = default;
+ScreenshotFeature::ScreenshotFeature() :
+	screenshotWorkerState(std::make_shared<ScreenshotWorkerState>()),
+	sourceDeadlineWatchdog([this](std::stop_token token) { SourceDeadlineLoop(token); })
+{}
 
 ScreenshotFeature::~ScreenshotFeature()
 {
-	if (screenshotApi) {
-		screenshotApi->CancelAll("screenshot feature shutdown");
-	}
+	sourceDeadlineWatchdog.request_stop();
+	sourceDeadlineCondition.notify_all();
+	if (sourceDeadlineWatchdog.joinable())
+		sourceDeadlineWatchdog.join();
+	if (screenshotApi)
+		screenshotApi->BeginShutdown("screenshot feature shutdown");
+	std::string cancelledRequestId;
 	{
 		std::lock_guard lock(captureStateMutex);
+		if (activeCapture.pending)
+			cancelledRequestId = activeCapture.options.requestId;
 		ClearActiveCapture(activeCapture);
 		capturePending.store(false, std::memory_order_release);
 	}
+	if (!cancelledRequestId.empty() && screenshotApi)
+		screenshotApi->OnSourceTerminal(cancelledRequestId, "cancelled", "shutdown");
 	StopWorkerThread();
+	if (screenshotApi && !screenshotApi->DrainForShutdown(std::chrono::seconds(2)))
+		logger::error("Screenshot manifest work did not drain within the shutdown bound.");
 	RestoreReadbackContextProtectionIfIdle();
 }
 
@@ -2355,8 +2368,10 @@ void ScreenshotFeature::RequestUiCapture()
 
 void ScreenshotFeature::EnsureScreenshotApi()
 {
-	if (!screenshotApi)
-		screenshotApi = std::make_unique<ScreenshotApi>();
+	std::lock_guard lock(screenshotWorkerState->mutex);
+	if (!screenshotWorkerState->api)
+		screenshotWorkerState->api = std::make_shared<ScreenshotApi>();
+	screenshotApi = screenshotWorkerState->api;
 }
 
 nlohmann::json ScreenshotFeature::HandleApiRequest(const nlohmann::json& a_request)
@@ -2480,6 +2495,7 @@ bool ScreenshotFeature::TryStartApiCapture(
 	activeCapture.ownsQueueSlot = true;
 	activeCapture.options = std::move(options);
 	activeCapture.source = requestedSource;
+	activeCapture.sourceDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
 
 	if (globals::game::isVR && globals::state && globals::state->isLoadingMenuOpen) {
 		if (activeCapture.source == VRCaptureSource::HMDSubmission && fallback == "desktop_mirror") {
@@ -2494,6 +2510,7 @@ bool ScreenshotFeature::TryStartApiCapture(
 	}
 
 	capturePending.store(true, std::memory_order_release);
+	sourceDeadlineCondition.notify_all();
 	EnsureScreenshotApi();
 	screenshotApi->OnSourceWaiting(activeCapture.options.requestId);
 	logger::debug("Screenshot request {} is waiting for {}", activeCapture.options.requestId, DescribeCaptureSource(activeCapture.source));
@@ -2536,12 +2553,48 @@ void ScreenshotFeature::SetEnabled(bool a_enabled)
 		EnsureScreenshotApi();
 		screenshotApi->OnSourceTerminal(cancelledRequestId, "cancelled", "feature_disabled");
 	}
+	if (!a_enabled) {
+		EnsureScreenshotApi();
+		screenshotApi->OnFeatureDisabled("feature_disabled");
+	}
+}
+
+void ScreenshotFeature::SourceDeadlineLoop(std::stop_token a_stopToken)
+{
+	while (!a_stopToken.stop_requested()) {
+		{
+			std::unique_lock lock(sourceDeadlineMutex);
+			sourceDeadlineCondition.wait_for(lock, a_stopToken, std::chrono::milliseconds(100), [] { return false; });
+		}
+		if (a_stopToken.stop_requested())
+			break;
+		std::string expiredRequestId;
+		{
+			std::lock_guard lock(captureStateMutex);
+			if (activeCapture.pending &&
+				activeCapture.sourceDeadline != std::chrono::steady_clock::time_point{} &&
+				std::chrono::steady_clock::now() >= activeCapture.sourceDeadline) {
+				expiredRequestId = activeCapture.options.requestId;
+				ClearActiveCapture(activeCapture);
+				capturePending.store(false, std::memory_order_release);
+			}
+		}
+		if (!expiredRequestId.empty()) {
+			std::shared_ptr<ScreenshotApi> api;
+			{
+				std::lock_guard lock(screenshotWorkerState->mutex);
+				api = screenshotWorkerState->api;
+			}
+			if (api)
+				api->OnSourceTerminal(expiredRequestId, "failed", "source_timeout");
+		}
+	}
 }
 
 std::size_t ScreenshotFeature::GetOutstandingArtifactCount() const
 {
-	std::lock_guard lock(screenshotQueueMutex);
-	return outstandingScreenshotCount;
+	std::lock_guard lock(screenshotWorkerState->mutex);
+	return screenshotWorkerState->outstandingCount;
 }
 
 std::string ScreenshotFeature::GetActiveCaptureRequestId() const
@@ -2552,22 +2605,29 @@ std::string ScreenshotFeature::GetActiveCaptureRequestId() const
 
 bool ScreenshotFeature::TryReserveScreenshotSlot()
 {
-	std::lock_guard queueLock(screenshotQueueMutex);
-	if (outstandingScreenshotCount >= kMaxOutstandingScreenshots) {
+	std::lock_guard queueLock(screenshotWorkerState->mutex);
+	if (!screenshotWorkerState->accepting ||
+		screenshotWorkerState->outstandingCount >= kMaxOutstandingScreenshots) {
 		return false;
 	}
-	++outstandingScreenshotCount;
+	++screenshotWorkerState->outstandingCount;
 	return true;
 }
 
 void ScreenshotFeature::ReleaseScreenshotSlot()
 {
-	std::lock_guard queueLock(screenshotQueueMutex);
-	if (outstandingScreenshotCount == 0) {
+	ReleaseScreenshotSlot(screenshotWorkerState);
+}
+
+void ScreenshotFeature::ReleaseScreenshotSlot(const std::shared_ptr<ScreenshotWorkerState>& a_state)
+{
+	std::lock_guard queueLock(a_state->mutex);
+	if (a_state->outstandingCount == 0) {
 		logger::error("Screenshot queue-slot accounting underflow was prevented.");
 		return;
 	}
-	--outstandingScreenshotCount;
+	--a_state->outstandingCount;
+	a_state->condition.notify_all();
 }
 
 bool ScreenshotFeature::EnsureReadbackContextProtection(ID3D11DeviceContext* a_context)
@@ -2577,14 +2637,14 @@ bool ScreenshotFeature::EnsureReadbackContextProtection(ID3D11DeviceContext* a_c
 		return false;
 	}
 
-	std::lock_guard queueLock(screenshotQueueMutex);
+	std::lock_guard queueLock(screenshotWorkerState->mutex);
 	const auto existing = std::find_if(
-		readbackContextProtections.begin(),
-		readbackContextProtections.end(),
+		screenshotWorkerState->readbackProtections.begin(),
+		screenshotWorkerState->readbackProtections.end(),
 		[a_context](const ReadbackContextProtection& protection) {
 			return protection.context.get() == a_context;
 		});
-	if (existing != readbackContextProtections.end()) {
+	if (existing != screenshotWorkerState->readbackProtections.end()) {
 		multithread->SetMultithreadProtected(TRUE);
 		return true;
 	}
@@ -2592,7 +2652,7 @@ bool ScreenshotFeature::EnsureReadbackContextProtection(ID3D11DeviceContext* a_c
 	try {
 		ReadbackContextProtection protection;
 		protection.context.copy_from(a_context);
-		readbackContextProtections.push_back(std::move(protection));
+		screenshotWorkerState->readbackProtections.push_back(std::move(protection));
 	} catch (const std::exception& e) {
 		logger::error("Failed to track screenshot readback protection: {}", e.what());
 		return false;
@@ -2602,23 +2662,24 @@ bool ScreenshotFeature::EnsureReadbackContextProtection(ID3D11DeviceContext* a_c
 	}
 
 	const BOOL wasProtected = multithread->SetMultithreadProtected(TRUE);
-	readbackContextProtections.back().restoreToUnprotected = wasProtected == FALSE;
-	readbackProtectionCleanupPending.store(true, std::memory_order_release);
+	screenshotWorkerState->readbackProtections.back().restoreToUnprotected = wasProtected == FALSE;
+	screenshotWorkerState->restoreReadbackProtection = true;
 	return true;
 }
 
 void ScreenshotFeature::RestoreReadbackContextProtectionIfIdle()
 {
-	if (!readbackProtectionCleanupPending.load(std::memory_order_acquire)) {
+	RestoreReadbackContextProtectionIfIdle(screenshotWorkerState);
+}
+
+void ScreenshotFeature::RestoreReadbackContextProtectionIfIdle(const std::shared_ptr<ScreenshotWorkerState>& a_state)
+{
+	std::lock_guard queueLock(a_state->mutex);
+	if (!a_state->restoreReadbackProtection || a_state->outstandingCount != 0) {
 		return;
 	}
 
-	std::lock_guard queueLock(screenshotQueueMutex);
-	if (outstandingScreenshotCount != 0) {
-		return;
-	}
-
-	for (const auto& protection : readbackContextProtections) {
+	for (const auto& protection : a_state->readbackProtections) {
 		if (!protection.restoreToUnprotected || !protection.context) {
 			continue;
 		}
@@ -2627,8 +2688,8 @@ void ScreenshotFeature::RestoreReadbackContextProtectionIfIdle()
 			multithread->SetMultithreadProtected(FALSE);
 		}
 	}
-	readbackContextProtections.clear();
-	readbackProtectionCleanupPending.store(false, std::memory_order_release);
+	a_state->readbackProtections.clear();
+	a_state->restoreReadbackProtection = false;
 }
 
 bool ScreenshotFeature::QueueScreenshot(PendingScreenshot&& screenshot)
@@ -2641,26 +2702,14 @@ bool ScreenshotFeature::QueueScreenshot(PendingScreenshot&& screenshot)
 	std::lock_guard lifecycleLock(screenshotWorkerLifecycleMutex);
 
 	if (!screenshotWorker.joinable()) {
-		{
-			std::lock_guard queueLock(screenshotQueueMutex);
-			screenshotWorkerRunning = true;
-		}
 		try {
-			screenshotWorker = std::thread(&ScreenshotFeature::ScreenshotWorkerLoop, this);
+			screenshotWorker = std::thread(&ScreenshotFeature::ScreenshotWorkerLoop, screenshotWorkerState);
 		} catch (const std::exception& e) {
-			{
-				std::lock_guard queueLock(screenshotQueueMutex);
-				screenshotWorkerRunning = false;
-			}
 			logger::error("Failed to start screenshot worker: {}", e.what());
 			screenshot = {};
 			ReleaseScreenshotSlot();
 			return false;
 		} catch (...) {
-			{
-				std::lock_guard queueLock(screenshotQueueMutex);
-				screenshotWorkerRunning = false;
-			}
 			logger::error("Failed to start screenshot worker.");
 			screenshot = {};
 			ReleaseScreenshotSlot();
@@ -2671,26 +2720,31 @@ bool ScreenshotFeature::QueueScreenshot(PendingScreenshot&& screenshot)
 	const auto queuedRequestId = screenshot.requestId;
 	const auto queuedPath = screenshot.outputPath;
 	{
-		std::lock_guard queueLock(screenshotQueueMutex);
+		std::lock_guard queueLock(screenshotWorkerState->mutex);
+		if (!screenshotWorkerState->accepting) {
+			if (screenshotWorkerState->outstandingCount > 0)
+				--screenshotWorkerState->outstandingCount;
+			return false;
+		}
 		try {
-			screenshotQueue.push(std::move(screenshot));
+			screenshotWorkerState->queue.push(std::move(screenshot));
 		} catch (const std::exception& e) {
 			logger::error("Failed to enqueue screenshot: {}", e.what());
 			screenshot = {};
-			if (outstandingScreenshotCount > 0) {
-				--outstandingScreenshotCount;
+			if (screenshotWorkerState->outstandingCount > 0) {
+				--screenshotWorkerState->outstandingCount;
 			}
 			return false;
 		} catch (...) {
 			logger::error("Failed to enqueue screenshot.");
 			screenshot = {};
-			if (outstandingScreenshotCount > 0) {
-				--outstandingScreenshotCount;
+			if (screenshotWorkerState->outstandingCount > 0) {
+				--screenshotWorkerState->outstandingCount;
 			}
 			return false;
 		}
 	}
-	screenshotQueueCV.notify_one();
+	screenshotWorkerState->condition.notify_one();
 	if (!queuedRequestId.empty()) {
 		EnsureScreenshotApi();
 		screenshotApi->OnArtifactQueued(queuedRequestId, queuedPath);
@@ -2702,52 +2756,68 @@ void ScreenshotFeature::StopWorkerThread()
 {
 	std::lock_guard lifecycleLock(screenshotWorkerLifecycleMutex);
 	{
-		std::lock_guard queueLock(screenshotQueueMutex);
-		screenshotWorkerRunning = false;
+		std::lock_guard queueLock(screenshotWorkerState->mutex);
+		screenshotWorkerState->notifyAllowed.store(false, std::memory_order_release);
+		screenshotWorkerState->accepting = false;
+		screenshotWorkerState->stopRequested = true;
 	}
-	screenshotQueueCV.notify_all();
+	screenshotWorkerState->condition.notify_all();
 
-	if (screenshotWorker.joinable()) {
+	if (!screenshotWorker.joinable())
+		return;
+	bool exited = false;
+	{
+		std::unique_lock queueLock(screenshotWorkerState->mutex);
+		exited = screenshotWorkerState->condition.wait_for(queueLock, std::chrono::seconds(5), [this] {
+			return screenshotWorkerState->exited;
+		});
+	}
+	if (exited) {
 		screenshotWorker.join();
+	} else {
+		logger::error("Screenshot encoder worker did not stop within five seconds; preserving its isolated work state until it exits.");
+		screenshotWorker.detach();
 	}
 }
 
-void ScreenshotFeature::ScreenshotWorkerLoop()
+void ScreenshotFeature::ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerState> a_state)
 {
+	const auto screenshotApi = a_state->api;
 	const HRESULT comResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 	const bool uninitializeCom = SUCCEEDED(comResult);
 	if (FAILED(comResult) && comResult != RPC_E_CHANGED_MODE) {
 		logger::warn("Screenshot worker COM initialization failed: 0x{:08X}", static_cast<uint32_t>(comResult));
 	}
-	auto reportFailure = [](std::string_view message) {
+	auto reportFailure = [a_state](std::string_view message) {
 		logger::error("{}", message);
-		ShowInGameNotification("Screenshot failed - see CommunityShaders.log");
+		if (a_state->notifyAllowed.load(std::memory_order_acquire))
+			ShowInGameNotification("Screenshot failed - see CommunityShaders.log");
 	};
 
 	while (true) {
 		bool ownsQueueSlot = false;
-		const SKSE::stl::scope_exit finishScreenshot([this, &ownsQueueSlot]() noexcept {
+		const SKSE::stl::scope_exit finishScreenshot([a_state, &ownsQueueSlot]() noexcept {
 			if (ownsQueueSlot) {
-				ReleaseScreenshotSlot();
+				ReleaseScreenshotSlot(a_state);
 			}
 		});
 		PendingScreenshot screenshot;
 		{
-			std::unique_lock queueLock(screenshotQueueMutex);
-			screenshotQueueCV.wait(queueLock, [this] {
-				return !screenshotQueue.empty() || !screenshotWorkerRunning;
+			std::unique_lock queueLock(a_state->mutex);
+			a_state->condition.wait(queueLock, [&] {
+				return !a_state->queue.empty() || a_state->stopRequested;
 			});
 
-			if (!screenshotWorkerRunning && screenshotQueue.empty()) {
+			if (a_state->stopRequested && a_state->queue.empty()) {
 				break;
 			}
 
-			screenshot = std::move(screenshotQueue.front());
-			screenshotQueue.pop();
+			screenshot = std::move(a_state->queue.front());
+			a_state->queue.pop();
 		}
 		ownsQueueSlot = screenshot.ownsQueueSlot;
 		uint32_t reportedArtifacts = 0;
-		const SKSE::stl::scope_exit reportUnclassifiedFailure([this, &screenshot, &reportedArtifacts]() noexcept {
+		const SKSE::stl::scope_exit reportUnclassifiedFailure([screenshotApi, &screenshot, &reportedArtifacts]() noexcept {
 			const auto expected = std::max<std::size_t>(1, screenshot.outputs.size());
 			while (reportedArtifacts < expected && !screenshot.requestId.empty() && screenshotApi) {
 				const auto& path = screenshot.outputs.empty() ?
@@ -2831,6 +2901,18 @@ void ScreenshotFeature::ScreenshotWorkerLoop()
 			}
 
 			if (!screenshot.outputs.empty()) {
+				auto outputViewName = [](OutputView view) -> std::string_view {
+					switch (view) {
+					case OutputView::LeftEye: return "left_eye";
+					case OutputView::RightEye: return "right_eye";
+					case OutputView::SideBySide: return "side_by_side";
+					case OutputView::FramedLeft: return "framed_left";
+					case OutputView::FramedRight: return "framed_right";
+					case OutputView::FramedCombined: return "framed_combined";
+					case OutputView::SourceNative:
+					default: return "source_native";
+					}
+				};
 				auto getPlane = [&](std::size_t a_eye) -> std::pair<DirectX::ScratchImage*, const DirectX::Image*> {
 					const std::size_t index = screenshot.planeCount > 1 ? std::min(a_eye, static_cast<std::size_t>(screenshot.planeCount - 1)) : 0u;
 					const auto& plane = screenshot.planes[index];
@@ -2942,8 +3024,21 @@ void ScreenshotFeature::ScreenshotWorkerLoop()
 							throw std::runtime_error("failed to save requested screenshot output");
 						CopySavedPathToClipboard(output.copyToClipboard, output.outputPath);
 						logger::info("Saved screenshot output to {}", output.outputPath.string());
-						if (screenshotApi)
-							screenshotApi->OnArtifactTerminal(screenshot.requestId, true, output.outputPath);
+						if (screenshotApi) {
+							const auto* savedImage = imageToSave->GetImage(0, 0, 0);
+							screenshotApi->OnArtifactTerminal(
+								screenshot.requestId,
+								true,
+								output.outputPath,
+								{},
+								{
+									{ "view", outputViewName(output.view) },
+									{ "width", savedImage ? savedImage->width : 0 },
+									{ "height", savedImage ? savedImage->height : 0 },
+									{ "format", output.saveAsPng ? "png" : "bmp" },
+									{ "colourContract", "sdr_srgb" },
+								});
+						}
 						++reportedArtifacts;
 					} catch (const std::exception& e) {
 						reportFailure(e.what());
@@ -3124,22 +3219,42 @@ void ScreenshotFeature::ScreenshotWorkerLoop()
 				CopySavedPathToClipboard(screenshot.copyToClipboard, screenshot.outputPath);
 				logger::info("Saved screenshot to {}", screenshot.outputPath.string());
 				if (!screenshot.requestId.empty() && screenshotApi) {
-					screenshotApi->OnArtifactTerminal(screenshot.requestId, true, screenshot.outputPath);
+					const auto* savedImage = imageToSave->GetImage(0, 0, 0);
+					screenshotApi->OnArtifactTerminal(
+						screenshot.requestId,
+						true,
+						screenshot.outputPath,
+						{},
+						{
+							{ "view", "source_native" },
+							{ "width", savedImage ? savedImage->width : 0 },
+							{ "height", savedImage ? savedImage->height : 0 },
+							{ "format", screenshot.saveAsPng ? "png" : "bmp" },
+							{ "colourContract", "sdr_srgb" },
+						});
 					++reportedArtifacts;
 				}
-				ShowInGameNotification(std::format("Screenshot saved: {}",
-					screenshot.outputPath.filename().string()));
+				if (a_state->notifyAllowed.load(std::memory_order_acquire)) {
+					ShowInGameNotification(std::format("Screenshot saved: {}",
+						screenshot.outputPath.filename().string()));
+				}
 			}
 		} catch (const std::exception& e) {
 			logger::error("Screenshot worker failed with an exception: {}", e.what());
-			ShowInGameNotification("Screenshot failed - see CommunityShaders.log");
+			if (a_state->notifyAllowed.load(std::memory_order_acquire))
+				ShowInGameNotification("Screenshot failed - see CommunityShaders.log");
 		} catch (...) {
 			reportFailure("Screenshot worker failed with an unknown exception.");
 		}
 	}
-	if (uninitializeCom) {
+	RestoreReadbackContextProtectionIfIdle(a_state);
+	if (uninitializeCom)
 		CoUninitialize();
+	{
+		std::lock_guard lock(a_state->mutex);
+		a_state->exited = true;
 	}
+	a_state->condition.notify_all();
 }
 
 void ScreenshotFeature::ShowInGameNotification(std::string message)

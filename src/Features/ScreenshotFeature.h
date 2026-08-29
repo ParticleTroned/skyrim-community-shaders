@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <mutex>
+#include <memory>
 #include <openvr.h>
 #include <queue>
 #include <string>
@@ -208,6 +209,7 @@ private:
 		std::array<StagedPlane, 2> eyes{};
 		uint32_t presentsWaited = 0;
 		bool ownsQueueSlot = false;
+		std::chrono::steady_clock::time_point sourceDeadline{};
 	};
 
 	struct ReadbackContextProtection
@@ -216,22 +218,34 @@ private:
 		bool restoreToUnprotected = false;
 	};
 
-	mutable std::mutex screenshotQueueMutex;
-	std::condition_variable screenshotQueueCV;
-	std::queue<PendingScreenshot> screenshotQueue;
+	struct ScreenshotWorkerState
+	{
+		std::mutex mutex;
+		std::condition_variable condition;
+		std::queue<PendingScreenshot> queue;
+		std::vector<ReadbackContextProtection> readbackProtections;
+		std::shared_ptr<ScreenshotApi> api;
+		std::size_t outstandingCount = 0;
+		std::atomic_bool notifyAllowed{ true };
+		bool accepting = true;
+		bool stopRequested = false;
+		bool exited = false;
+		bool restoreReadbackProtection = false;
+	};
+
+	std::shared_ptr<ScreenshotWorkerState> screenshotWorkerState;
 	std::thread screenshotWorker;
 	std::mutex screenshotWorkerLifecycleMutex;
-	bool screenshotWorkerRunning = false;
-	std::size_t outstandingScreenshotCount = 0;
-	std::vector<ReadbackContextProtection> readbackContextProtections;
-	std::atomic_bool readbackProtectionCleanupPending{ false };
 	Util::Subrect::Controller subrect;
 
 	std::atomic_bool enabled{ true };
 	std::atomic_bool capturePending{ false };
 	mutable std::mutex captureStateMutex;
 	ActiveCapture activeCapture;
-	std::unique_ptr<ScreenshotApi> screenshotApi;
+	std::shared_ptr<ScreenshotApi> screenshotApi;
+	std::jthread sourceDeadlineWatchdog;
+	std::mutex sourceDeadlineMutex;
+	std::condition_variable_any sourceDeadlineCondition;
 
 	// SRV-readable copy used when the capture source's own SRV can't be sampled
 	// directly (kFRAMEBUFFER on flat aliases the swap-chain backbuffer).
@@ -243,8 +257,10 @@ private:
 	void RestoreReadbackContextProtectionIfIdle();
 	bool TryReserveScreenshotSlot();
 	void ReleaseScreenshotSlot();
+	static void ReleaseScreenshotSlot(const std::shared_ptr<ScreenshotWorkerState>& a_state);
 	void StopWorkerThread();
-	void ScreenshotWorkerLoop();
+	static void ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerState> a_state);
+	void SourceDeadlineLoop(std::stop_token a_stopToken);
 	void EnsurePreviewCache(ID3D11Texture2D* sourceTexture);
 	CaptureOptions SnapshotCaptureOptions() const;
 	bool SnapshotStereoGeometry(CaptureOptions& a_options) const;
@@ -268,5 +284,6 @@ private:
 		uint32_t a_sequenceOrdinal = 0);
 	bool CancelApiCapture(std::string_view a_requestId);
 	void EnsureScreenshotApi();
+	static void RestoreReadbackContextProtectionIfIdle(const std::shared_ptr<ScreenshotWorkerState>& a_state);
 	static void ShowInGameNotification(std::string message);
 };

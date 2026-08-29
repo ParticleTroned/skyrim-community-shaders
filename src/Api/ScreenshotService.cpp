@@ -1,6 +1,7 @@
 #include "Api/ScreenshotService.h"
 
 #include "Api/RuntimeThreadAffinity.h"
+#include "Api/MainThreadDispatchState.h"
 #include "Api/ServiceRegistry.h"
 #include "Features/ScreenshotFeature.h"
 #include "Globals.h"
@@ -11,9 +12,7 @@
 #include <nlohmann/json.hpp>
 
 #include <limits>
-#include <atomic>
 #include <chrono>
-#include <future>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -37,32 +36,29 @@ namespace
 		auto* tasks = SKSE::GetTaskInterface();
 		if (!tasks)
 			return std::nullopt;
-		auto promise = std::make_shared<std::promise<nlohmann::json>>();
-		auto cancelled = std::make_shared<std::atomic_bool>(false);
-		auto future = promise->get_future();
+		using DispatchState = CSX::Api::MainThreadDispatchState<nlohmann::json>;
+		auto state = std::make_shared<DispatchState>();
 		try {
-			tasks->AddTask([promise, cancelled, handle = std::move(handle)]() mutable {
+			tasks->AddTask([state, handle = std::move(handle)]() mutable {
 				CSX::Api::EnterRuntimeMainThreadTask();
-				if (cancelled->load(std::memory_order_acquire))
+				if (!state->TryBegin())
 					return;
 				try {
-					promise->set_value(handle());
+					state->Complete(handle());
 				} catch (...) {
-					try {
-						promise->set_exception(std::current_exception());
-					} catch (...) {
-					}
+					state->Fail(std::current_exception());
 				}
 			});
 		} catch (...) {
 			return std::nullopt;
 		}
-		if (future.wait_for(kMainThreadTimeout) != std::future_status::ready) {
-			cancelled->store(true, std::memory_order_release);
+		const auto deadline = std::chrono::steady_clock::now() + kMainThreadTimeout;
+		const auto phase = state->WaitUntil(deadline);
+		if (phase == DispatchState::Phase::queued && state->CancelIfQueued())
 			return std::nullopt;
-		}
+		// Once admission wins, a failure response cannot safely precede mutation.
 		try {
-			return future.get();
+			return state->WaitForCompletion();
 		} catch (...) {
 			return std::nullopt;
 		}
@@ -88,6 +84,10 @@ namespace
 		}
 		if (!a_request->jsonUtf8 || a_request->jsonBytes == 0) {
 			a_response->status = Status::kInvalidArgument;
+			return a_response->status;
+		}
+		if (a_request->jsonBytes > CSX::ScreenshotAPI::MaximumRequestBytes) {
+			a_response->status = Status::kRequestTooLarge;
 			return a_response->status;
 		}
 		try {

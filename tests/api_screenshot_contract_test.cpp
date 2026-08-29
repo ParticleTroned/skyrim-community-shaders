@@ -16,5 +16,8 @@ int main()
 		throw std::runtime_error("screenshot service metadata defaults are invalid");
 	if (std::string_view(CSX::ScreenshotAPI::ServiceName) != "csx.screenshot")
 		throw std::runtime_error("screenshot service identity is invalid");
+	if (CSX::ScreenshotAPI::MaximumRequestBytes != 256u * 1024u ||
+		CSX::ScreenshotAPI::Status::kRequestTooLarge == CSX::ScreenshotAPI::Status::kSuccess)
+		throw std::runtime_error("screenshot request-size contract is invalid");
 	return 0;
 }

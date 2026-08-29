@@ -8,6 +8,7 @@ namespace CSX::ScreenshotAPI
 	inline constexpr std::uint32_t ServiceMajor = 1;
 	inline constexpr std::uint32_t ServiceMinor = 0;
 	inline constexpr std::uint32_t SchemaRevision = 1;
+	inline constexpr std::uint32_t MaximumRequestBytes = 256u * 1024u;
 
 	/** Transport-level result. Command acceptance and operation state are in the JSON response. */
 	enum class Status : std::uint32_t
@@ -18,7 +19,8 @@ namespace CSX::ScreenshotAPI
 		kWrongThread = 3,
 		kInvalidJson = 4,
 		kServiceUnavailable = 5,
-		kInternalError = 6
+		kInternalError = 6,
+		kRequestTooLarge = 7
 	};
 
 	/** UTF-8 JSON request. jsonBytes excludes any optional trailing NUL. */
@@ -45,7 +47,9 @@ namespace CSX::ScreenshotAPI
 	 * Native adapter for the asynchronous Screenshot API v1 JSON contract.
 	 * Dispatch is synchronous only for validation/admission. Calls from other
 	 * threads are marshalled to Skyrim's runtime main thread with a bounded
-	 * wait. Accepted capture work remains asynchronous and is observed through
+	 * queue-admission wait. Once execution begins, Dispatch waits for its
+	 * admission response so a transport failure can never precede mutation.
+	 * Accepted capture work remains asynchronous and is observed through
 	 * request_get or events_poll.
 	 */
 	struct Interface001

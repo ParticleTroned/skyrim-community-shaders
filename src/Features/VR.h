@@ -418,6 +418,13 @@ public:
 	bool IsWandControllerIntersecting(ControllerDevice a_controller) const;
 	bool TryCaptureWandController(ControllerDevice a_controller);
 	void ReleaseWandControllerCapture(ControllerDevice a_controller);
+	/**
+	 * @brief Returns the wand that generated this ImGui frame's left click.
+	 * @return Both when the click has no unambiguous VR provenance.
+	 */
+	[[nodiscard]] ControllerDevice GetImGuiLeftClickWandController() const;
+	/** @brief Discards click provenance when ImGui's queued input events are discarded. */
+	void DiscardQueuedImGuiClickOwners();
 	void TriggerWandHaptic(ControllerDevice a_controller, float a_duration);
 	void UpdateWandHoverFeedback();
 	void ResetWandPointingRuntimeState();

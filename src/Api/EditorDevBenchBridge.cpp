@@ -6,6 +6,7 @@
 #	include "Api/RuntimeThreadAffinity.h"
 #	include "Api/ServiceFoundation.h"
 #	include "BuildProvenance.h"
+#	include "CSEditor/EditorWindow.h"
 
 #	include <DevBenchAPI.h>
 #	include <nlohmann/json.hpp>
@@ -34,7 +35,12 @@ namespace
 
 	CSX::Api::ServiceFoundation& Foundation()
 	{
-		static CSX::Api::ServiceFoundation foundation({ CSX::EditorAPI::ServiceName, 1, 0, 1 });
+		static CSX::Api::ServiceFoundation foundation({
+			CSX::EditorAPI::ServiceName,
+			CSX::EditorAPI::ServiceMajor,
+			CSX::EditorAPI::ServiceMinor,
+			CSX::EditorAPI::SchemaRevision,
+		});
 		static std::once_flag initialized;
 		std::call_once(initialized, [&] {
 			foundation.SetServerMetadataProvider([] {
@@ -80,6 +86,12 @@ namespace
 		if (a_action == "toggle") return MutationAction::kToggle;
 		if (a_action == "reset_layout") return MutationAction::kResetLayout;
 		if (a_action == "exit_preview") return MutationAction::kExitPreview;
+		if (a_action == "open_light_editor")
+			return MutationAction::kOpenLightEditor;
+		if (a_action == "begin_light_pick")
+			return MutationAction::kBeginLightPick;
+		if (a_action == "cancel_light_pick")
+			return MutationAction::kCancelLightPick;
 		return std::nullopt;
 	}
 
@@ -107,7 +119,7 @@ namespace
 
 	json SnapshotJson(const Snapshot001& a_value)
 	{
-		return {
+		auto value = json{
 			{ "available", a_value.available != 0 }, { "dataAvailable", a_value.dataAvailable != 0 },
 			{ "canOpen", a_value.canOpen != 0 }, { "resourcesInitialized", a_value.resourcesInitialized != 0 },
 			{ "editorOpen", a_value.editorOpen != 0 }, { "menuSessionOpen", a_value.menuSessionOpen != 0 },
@@ -120,6 +132,15 @@ namespace
 			{ "unavailableReason", a_value.unavailableReason ? a_value.unavailableReason : "" },
 			{ "buildId", a_value.buildId ? a_value.buildId : "" },
 		};
+		const auto* editor = EditorWindow::GetSingleton();
+		value["lightEditor"] = {
+			{ "selected", editor && editor->IsLightEditorSelected() },
+			{ "enabled", editor && editor->IsLightEditorEnabled() },
+			{ "viewportVisible", editor && editor->IsEditorViewportVisible() },
+			{ "pickerActive", editor && editor->IsLightPickerActive() },
+			{ "deferredWorkPending", editor && editor->HasLightEditorDeferredWork() },
+		};
+		return value;
 	}
 
 	MutationRequest001 ParseMutation(const json& a_args, std::string& a_token)
@@ -147,11 +168,15 @@ namespace
 		if (action == "registry") {
 			auto response = Foundation().MakeEnvelope(a_args, true);
 			response["result"] = {
-				{ "service", CSX::EditorAPI::ServiceName }, { "major", 1 }, { "minor", 0 }, { "schemaRevision", 1 },
+				{ "service", CSX::EditorAPI::ServiceName },
+				{ "major", CSX::EditorAPI::ServiceMajor },
+				{ "minor", CSX::EditorAPI::ServiceMinor },
+				{ "schemaRevision", CSX::EditorAPI::SchemaRevision },
 				{ "capabilities", CSX::EditorAPI::ServiceCapabilities }, { "mainThreadAffine", true },
 				{ "registryMainThreadAffine", false }, { "preflightTokenLifetimeMs", 30000 },
 				{ "actions", json::array({ "registry", "snapshot", "preflight", "execute" }) },
-				{ "mutations", json::array({ "open", "close", "toggle", "reset_layout", "exit_preview" }) },
+				{ "mutations", json::array({ "open", "close", "toggle", "reset_layout", "exit_preview",
+								   "open_light_editor", "begin_light_pick", "cancel_light_pick" }) },
 				{ "legacyInterfacesPreserved", true },
 			};
 			return response;
@@ -218,14 +243,14 @@ namespace CSX::Api::EditorDevBenchBridge
 		auto* devBench = DevBenchAPI::GetDevBenchInterface001();
 		if (!devBench) { logger::info("EditorDevBenchBridge: devbench host not present; editor API tool not registered"); return; }
 		const char* descriptor = R"({
-			"description":"Versioned CSX Editor state and bounded window lifecycle API. Mutations require preflight then execute with identical arguments and the returned token.",
+			"description":"Versioned CSX Editor state, bounded window lifecycle, and Light Editor picker control API. Mutations require preflight then execute with identical arguments and the returned token.",
 			"inputSchema":{"type":"object","required":["contractMajor","clientId","commandId","action"],"properties":{
 				"contractMajor":{"type":"integer","const":1},"clientId":{"type":"string","minLength":1,"maxLength":128},
 				"commandId":{"type":"string","minLength":1,"maxLength":128},"expectedBuildId":{"type":"string"},
 				"action":{"type":"string","enum":["registry","snapshot","preflight","execute"]},
 				"mutation":{"type":"object","required":["action","expectedStateRevision"],"properties":{
-					"action":{"type":"string","enum":["open","close","toggle","reset_layout","exit_preview"]},
-					"expectedStateRevision":{"type":"integer","minimum":0},"allowDisruptive":{"type":"boolean"},"preflightToken":{"type":"string"}
+					"action":{"type":"string","enum":["open","close","toggle","reset_layout","exit_preview","open_light_editor","begin_light_pick","cancel_light_pick"],"description":"open_light_editor selects and enables Light Editor; begin_light_pick starts pointer capture after a fresh snapshot reports lightEditor.viewportVisible=true; cancel_light_pick stops only the active picker."},
+					"expectedStateRevision":{"type":"integer","minimum":0},"allowDisruptive":{"type":"boolean","description":"Required for open_light_editor and begin_light_pick, and for preview-disrupting lifecycle actions."},"preflightToken":{"type":"string"}
 				}}
 			}}
 		})";

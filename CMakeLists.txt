@@ -1533,6 +1533,17 @@ if(BUILD_CONTROLLER_TESTS)
         MenuDevBenchPreflightContract
         PROPERTIES LABELS "ControllerTests"
     )
+    add_test(
+        NAME EditorLightPickerContract
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            -P "${PROJECT_SOURCE_DIR}/tests/editor_light_picker_contract_test.cmake"
+    )
+    set_tests_properties(
+        EditorLightPickerContract
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     function(add_controller_test TARGET_NAME TEST_NAME SOURCE_FILE)
         add_executable(${TARGET_NAME} EXCLUDE_FROM_ALL ${SOURCE_FILE})

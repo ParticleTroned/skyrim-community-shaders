@@ -37,6 +37,12 @@ namespace
 		owners.fill(ControllerDevice::Both);
 		return owners;
 	}();
+	struct QueuedWandClickOwner
+	{
+		ControllerDevice controller = ControllerDevice::Both;
+		int frame = -1;
+	};
+	std::array<QueuedWandClickOwner, ImGuiMouseButton_COUNT> gQueuedWandClickOwners{};
 	bool gLastVRInputHandedness = false;
 	std::unordered_map<size_t, ScrollAccum> gVRScrollAccums;
 	CursorOwner gCursorOwner = CursorOwner::Desktop;
@@ -58,6 +64,22 @@ namespace
 		std::fill_n(gVRMouseButtonDown, ImGuiMouseButton_COUNT, false);
 		std::fill_n(gLastObservedMouseButtonDown, ImGuiMouseButton_COUNT, false);
 		gVRMouseButtonOwners.fill(ControllerDevice::Both);
+		gQueuedWandClickOwners.fill(QueuedWandClickOwner{});
+	}
+
+	void RecordQueuedWandClickOwner(int a_button, ControllerDevice a_controller)
+	{
+		if (a_button < 0 || a_button >= ImGuiMouseButton_COUNT)
+			return;
+
+		auto& click = gQueuedWandClickOwners[a_button];
+		const int targetFrame = ImGui::GetFrameCount() + 1;
+		if (click.frame != targetFrame) {
+			click.controller = a_controller;
+			click.frame = targetFrame;
+		} else if (click.controller != a_controller) {
+			click.controller = ControllerDevice::Both;
+		}
 	}
 
 	bool IsThumbstickActive(const RE::VRControllerState& controllerState, size_t thumbstickIndex, float deadzone)
@@ -387,6 +409,8 @@ void VR::ProcessVRButtonEvent(const Menu::KeyEvent& event)
 					if (emitMouseEvent) {
 						gVRMouseButtonDown[logicalButton] = curr;
 						io.AddMouseButtonEvent(logicalButton, curr);
+						if (curr && useWandPointing)
+							RecordQueuedWandClickOwner(logicalButton, eventController);
 						if (!curr && useWandPointing) {
 							gVRMouseButtonOwners[logicalButton] = ControllerDevice::Both;
 							const bool anyWandMouseButtonDown = std::any_of(
@@ -418,6 +442,19 @@ void VR::ProcessVRButtonEvent(const Menu::KeyEvent& event)
 	if (vrControllerEventLog.size() > 32) {
 		vrControllerEventLog.erase(vrControllerEventLog.begin());
 	}
+}
+
+ControllerDevice VR::GetImGuiLeftClickWandController() const
+{
+	const auto& click = gQueuedWandClickOwners[ImGuiMouseButton_Left];
+	if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left) || click.frame != ImGui::GetFrameCount())
+		return ControllerDevice::Both;
+	return click.controller;
+}
+
+void VR::DiscardQueuedImGuiClickOwners()
+{
+	gQueuedWandClickOwners.fill(QueuedWandClickOwner{});
 }
 
 void VR::UpdateControllerState(const Menu::KeyEvent& event)

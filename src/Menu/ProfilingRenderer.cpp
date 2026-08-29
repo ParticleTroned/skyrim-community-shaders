@@ -313,11 +313,9 @@ static void TextWithTuningDelta(int direction, const char* fmt, ...)
 	va_end(args);
 }
 
-static void RenderFeatureTimingStats(float avgMs, float p95Ms, float p99Ms, int direction)
+static void RenderFeatureTimingStats(float avgMs, int direction)
 {
 	TextWithTuningDelta(direction, "Avg %.3f ms", avgMs);
-	TextWithTuningDelta(direction, "P95 %.3f", p95Ms);
-	TextWithTuningDelta(direction, "P99 %.3f", p99Ms);
 }
 
 static int ScaleToUiInt(float value)
@@ -792,12 +790,21 @@ void ProfilingRenderer::RenderGraph()
 	ImGui::Spacing();
 }
 
-ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData(const std::string& featurePrefix, bool cpuMode)
+ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData(
+	const std::string& featurePrefix,
+	bool cpuMode,
+	bool includePercentiles)
 {
-	return CollectFeatureTimingData(std::vector<std::string>{ featurePrefix }, cpuMode);
+	return CollectFeatureTimingData(
+		std::vector<std::string>{ featurePrefix },
+		cpuMode,
+		includePercentiles);
 }
 
-ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData(const std::vector<std::string>& featurePrefixes, bool cpuMode)
+ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData(
+	const std::vector<std::string>& featurePrefixes,
+	bool cpuMode,
+	bool includePercentiles)
 {
 	const auto& results = globals::profiler->GetResults();
 
@@ -821,7 +828,7 @@ ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData
 		if (sampleCount == 0)
 			continue;
 
-		const auto stats = ComputeDisplayTimingStats(samples, sampleCount);
+		const auto stats = ComputeDisplayTimingStats(samples, sampleCount, includePercentiles);
 		float timeMs = stats.timeMs;
 		float avg = stats.avgMs;
 		float p95 = stats.p95Ms;
@@ -836,7 +843,7 @@ ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData
 		totalSamples.Add(outermostSamples, outermostSampleCount);
 	}
 
-	const auto totalStats = totalSamples.GetStats();
+	const auto totalStats = totalSamples.GetStats(includePercentiles);
 	data.totalAvg = totalStats.avgMs;
 	data.totalP95 = totalStats.p95Ms;
 	data.totalP99 = totalStats.p99Ms;
@@ -1374,14 +1381,14 @@ void ProfilingRenderer::RenderFeaturePerformanceSummary(
 		return;
 	}
 
-	const auto gpuData = CollectFeatureTimingData(featurePrefixes, false);
-	const auto cpuData = CollectFeatureTimingData(featurePrefixes, true);
+	const auto gpuData = CollectFeatureTimingData(featurePrefixes, false, false);
+	const auto cpuData = CollectFeatureTimingData(featurePrefixes, true, false);
 	auto& graphState = featureGraphs[BuildTimingPrefixKey(featurePrefixes)];
 
 	ImGui::TextUnformatted("GPU");
 	ImGui::PushID("PerformanceSummaryGPU");
 	if (RenderFeatureTimingGraph(featurePrefixes.front(), gpuData, graphState.gpuGraph, 82)) {
-		RenderFeatureTimingStats(gpuData.totalAvg, gpuData.totalP95, gpuData.totalP99, highlight ? highlight->featureGpuDirection : 0);
+		RenderFeatureTimingStats(gpuData.totalAvg, highlight ? highlight->featureGpuDirection : 0);
 	} else {
 		ImGui::TextDisabled("No GPU timing data");
 	}
@@ -1391,7 +1398,7 @@ void ProfilingRenderer::RenderFeaturePerformanceSummary(
 	ImGui::TextUnformatted("CPU");
 	ImGui::PushID("PerformanceSummaryCPU");
 	if (RenderFeatureTimingGraph(featurePrefixes.front(), cpuData, graphState.cpuGraph, 82)) {
-		RenderFeatureTimingStats(cpuData.totalAvg, cpuData.totalP95, cpuData.totalP99, highlight ? highlight->featureCpuDirection : 0);
+		RenderFeatureTimingStats(cpuData.totalAvg, highlight ? highlight->featureCpuDirection : 0);
 	} else {
 		ImGui::TextDisabled("No CPU timing data");
 	}

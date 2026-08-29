@@ -1558,6 +1558,11 @@ if(BUILD_CONTROLLER_TESTS)
         tests/perf_mode_restart_state_test.cpp
     )
     add_controller_test(
+        performance_tuning_statistics_test
+        PerformanceTuningStatistics
+        tests/performance_tuning_statistics_test.cpp
+    )
+    add_controller_test(
         vr_vendor_relatch_policy_test
         VRVendorRelatchPolicy
         tests/vr_vendor_relatch_policy_test.cpp

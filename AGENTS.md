@@ -76,7 +76,7 @@ contradict this policy.
 
 ### Commit hygiene
 
--   Commit only files required by the requested change. Leave unrelated tracked changes and untracked user files untouched.
+-   An explicit request to commit authorizes a local commit only, not a push. Review the final status and diff, stage only files required by the requested change, and leave unrelated tracked changes and untracked user files untouched.
 -   Every commit body must contain distinct `Rationale:` and `Implementation:` sections and be wrapped at 72 columns where practical.
 -   When implementation is copied, ported, adapted, or materially based on another contributor's commit or pull request, add an `Acknowledgements:` section. No acknowledgement is required when the source is exclusively the current user's own work.
 -   Each acknowledgement must name the contributor's GitHub-associated email, the source repository in `owner/repository` form, the source commit SHA, pull request number, or direct link, and the precise subset of code, behavior, or approach used. Do not imply an entire change was ported when only part was used.

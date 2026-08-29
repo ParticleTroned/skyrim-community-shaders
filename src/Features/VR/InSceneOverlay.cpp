@@ -864,9 +864,6 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					a_probeObservation);
 #endif
 				vr::EVRCompositorError result = submitPacket.captureError;
-				const bool observeScreenshot =
-					a_allowScreenshotCapture &&
-					globals::features::screenshotFeature.HasPendingCapture();
 				if (submitPacket.valid) {
 					result = func(
 						_this,

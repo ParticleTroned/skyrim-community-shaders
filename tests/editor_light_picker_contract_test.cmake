@@ -153,4 +153,16 @@ foreach(_picker_input_contract IN ITEMS
     endif()
 endforeach()
 
+foreach(_picker_hover_contract IN ITEMS
+    "kHoverRefreshSeconds = 0.05"
+    "ResolveNearestToCursor(false) : ResolveUnderCursor(false)"
+    "ResolveVRCollisionTarget(clickPointerSource, false)"
+    "[LightPicker] Picked base"
+)
+    string(FIND "${_picker}" "${_picker_hover_contract}" _picker_hover_position)
+    if(_picker_hover_position EQUAL -1)
+        message(FATAL_ERROR "Light picker hover throttling or committed-pick logging is missing: ${_picker_hover_contract}")
+    endif()
+endforeach()
+
 message(STATUS "Editor Light Picker lifecycle and DevBench contract is coherent")

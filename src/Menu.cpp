@@ -881,6 +881,9 @@ void Menu::Init()
 
 	auto& imgui_io = ImGui::GetIO();
 	imgui_io.ConfigFlags = ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_DockingEnable;
+	// Skyrim provides frame-sized input batches; ImGui trickling can backlog high-rate device input.
+	// Consume each complete batch at the next NewFrame to prevent stale input replay.
+	imgui_io.ConfigInputTrickleEventQueue = false;
 	imgui_io.ConfigDockingWithShift = settings.RequireShiftToDock;
 	imgui_io.BackendFlags = ImGuiBackendFlags_HasMouseCursors | ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_HasGamepad;
 
@@ -1470,8 +1473,6 @@ void Menu::ProcessInputEventQueue()
 			if (event.keyCode > 7) {  // middle scroll
 				if (ew && ew->previewMode == EditorWindow::PreviewMode::FreeCamera) {
 					ew->AdjustFlySpeed(event.keyCode == 8 ? 1.0f : -1.0f);
-				} else if (!flying) {
-					io.AddMouseWheelEvent(0, event.value * (event.keyCode == 8 ? 1 : -1));
 				}
 			} else if (!flying) {
 				if (event.keyCode > 5)
@@ -1692,7 +1693,18 @@ void Menu::ProcessInputEventQueue()
 		}
 	}
 
+	const auto directInputWheelRaw = _directInputWheelDelta.exchange(0, std::memory_order_relaxed);
+	const float wheelY = static_cast<float>(directInputWheelRaw) / static_cast<float>(WHEEL_DELTA);
+	if (wheelY != 0.0f)
+		io.AddMouseWheelEvent(0.0f, wheelY);
+
 	_keyEventQueue.clear();
+}
+
+void Menu::RecordDirectInputWheelDelta(std::int32_t a_delta)
+{
+	if (a_delta != 0)
+		_directInputWheelDelta.fetch_add(a_delta, std::memory_order_relaxed);
 }
 
 bool Menu::IsCapturingHotkeyInput() const

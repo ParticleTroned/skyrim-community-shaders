@@ -144,7 +144,10 @@ public:
 	/// Closes the main menu and any active CS Editor surface as one UI session.
 	void CloseMenu();
 
+	/** @brief Translates raw Skyrim input events into the internal key event queue. */
 	void ProcessInputEvents(RE::InputEvent* const* a_events);
+	/** @brief Records raw DirectInput wheel movement before Skyrim quantizes it. */
+	void RecordDirectInputWheelDelta(std::int32_t a_delta);
 	bool ShouldSwallowInput();
 	bool ShouldBlockAllGameInput();
 	bool IsPreviewFlying();
@@ -526,6 +529,7 @@ private:
 	// Input event handling
 	std::vector<KeyEvent> _keyEventQueue;
 	mutable std::shared_mutex _inputEventMutex;
+	std::atomic<std::int64_t> _directInputWheelDelta = 0;
 
 	// Keys whose key-down already fired a combo hotkey. Their matching key-up is
 	// suppressed so a shared single-key binding does not also fire after modifier release.

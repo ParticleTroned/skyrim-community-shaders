@@ -19,6 +19,7 @@ override or weaken `AGENTS.md`.
 
 -   Target `main-VR` unless the user explicitly selects another release line.
 -   Use `type(scope): description`; keep the title current and release-aware.
+-   Give every commit the `Rationale:`/`Implementation:` body and accurate attribution required by `AGENTS.md`.
 -   Use the PR body structure and validation evidence required by `AGENTS.md`.
 -   Treat the PR title as the eventual squash commit consumed by release automation.
 

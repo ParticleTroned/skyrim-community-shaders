@@ -458,8 +458,9 @@ Feature versions are automatically extracted from `.ini` files and compiled into
 ### Pull request and commit standards
 
 `AGENTS.md` is canonical for PR targets, title/body format, release-aware type
-selection, commit hygiene, and attribution. Keep those rules in one place so
-Claude, Codex, and Copilot cannot drift onto different release semantics.
+selection, the mandatory `Rationale:`/`Implementation:` commit body, commit
+hygiene, and attribution. Keep those rules in one place so Claude, Codex, and
+Copilot cannot drift onto different release semantics.
 
 ### Code Organization and Refactoring Patterns
 

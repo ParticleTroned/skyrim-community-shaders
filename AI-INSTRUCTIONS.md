@@ -35,7 +35,7 @@ SKSE plugin providing advanced DirectX 11 graphics modifications for Skyrim SE/A
 -   **Tooling diagnostics**: `pwsh ./tools/dev-doctor.ps1 -Network`
 -   **Shader Test**: `hlslkit-compile --shader-dir [target]` (install via pip first)
 -   **Feature Access**: `globals::features::*` namespace
--   **PR and commit format**: `type(scope): description`; target `main-VR` and follow the release-aware type rules in `AGENTS.md`
+-   **PR and commit format**: `type(scope): description`; target `main-VR`, follow the release-aware type rules, and use the mandatory `Rationale:`/`Implementation:` commit body and attribution contract in `AGENTS.md`
 
 ### Build Options
 

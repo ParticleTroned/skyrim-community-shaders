@@ -40,6 +40,14 @@ fixture_foveation,0.3/0.3/0.7,0.3/0.3/0.7,0.3/0.3/0.8,0.3/0.3/0.7,0.3/0.3/0.7,0.
 both_eyes_valid,yes,yes,yes,yes,yes,yes at setup; final unavailable,yes,yes,yes,24/33 strict; 8 vendor-native physical mismatches; 1 FSR Quality timeout
 dlss_lifecycle,Ready,Ready,Ready,Ready,Ready,Ready at setup; final unavailable,Ready,Ready,Ready,scaled DLSS 8/8 PASS; DLAA 0/4 strict
 memory_pressure,Normal,Normal,Normal,Normal,Normal,Normal at setup; final unavailable,Normal,Normal,Normal,Normal
+memory_confirmation_passes,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,1/2
+memory_process_private_mib_pass1_pass2_ratio,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,3505.34/n/a/n/a
+memory_system_commit_mib_pass1_pass2_ratio,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,3374.78/n/a/n/a
+memory_dxgi_usage_mib_pass1_pass2_ratio,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,438.83/n/a/n/a
+memory_live_textures_pass1_cooldown_pass2,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,281/n/a/n/a
+memory_live_texture_mib_pass1_cooldown_pass2,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,6167.48/n/a/n/a
+memory_pressure_pass1_cooldown_pass2,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,Normal/n/a/n/a
+memory_confirmation_verdict,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,repeat_required
 memory_trim_completed_failed,21/0,12/0,21/0,20/0,21/0,n/a (CTD before transcript),21/0,21/0,12/0,n/a
 engine_target_retirements_completed,20,20,20,20,20,n/a (CTD before transcript),20,20,20,n/a
 terminal_device_loss,no,no,no,no,no,n/a; final receipt unavailable,no,no,no,0

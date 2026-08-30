@@ -189,11 +189,22 @@ namespace
 			return false;
 		stale = facts;
 		stale.replacementContractGeneration = 0;
-		if (OwnsMutationBoundary(stale))
+		if (!OwnsMutationBoundary(stale))
 			return false;
 		stale = facts;
 		stale.currentDeviceIdentity = 0x5678;
 		return !OwnsMutationBoundary(stale);
+	}
+
+	constexpr bool CoversGenerationCorrelation()
+	{
+		return MatchesTargetContractGeneration(false, 0, 0) &&
+		       !MatchesTargetContractGeneration(true, 0, 0) &&
+		       MatchesTargetContractGeneration(true, 8, 8) &&
+		       !MatchesTargetContractGeneration(true, 8, 9) &&
+		       MatchesMutationBoundaryGeneration(0, 8) &&
+		       MatchesMutationBoundaryGeneration(8, 8) &&
+		       !MatchesMutationBoundaryGeneration(8, 9);
 	}
 
 	constexpr bool CoversProofKinds()
@@ -413,6 +424,7 @@ namespace
 	static_assert(CoversMutationExpectation());
 	static_assert(CoversAdmissions());
 	static_assert(CoversMutationBoundaryOwnership());
+	static_assert(CoversGenerationCorrelation());
 	static_assert(CoversProofKinds());
 	static_assert(CoversTargetProofKindRequirements());
 	static_assert(CoversPartialAndCompleteCycles());

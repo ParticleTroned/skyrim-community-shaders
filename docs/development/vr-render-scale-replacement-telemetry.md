@@ -52,8 +52,12 @@ proven independently. Moving from a scaled contract to a native target remains
 `RecordPhysicalMutationBoundary` is the sole destructive-mutation authority.
 It retains the first exact qualification session, transition, owner token,
 replacement request and epoch, contract generation, device, source, frame, and
-QPC tick. Provider lifecycle phases remain diagnostic and cannot move an
-observation across this boundary.
+QPC tick. The boundary may precede contract publication, so generation zero is
+retained there and later correlated through the same request, epoch, owner, and
+device; a nonzero published generation must still match exactly. Provider
+lifecycle phases remain diagnostic and cannot move an observation across this
+boundary. Native None and TAA no-mutation proofs likewise permit their valid
+zero contract generation while vendor targets still require a nonzero one.
 
 ## Authoritative presentation-cycle audit
 

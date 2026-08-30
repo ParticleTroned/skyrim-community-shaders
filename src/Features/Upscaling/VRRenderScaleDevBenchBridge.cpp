@@ -1966,7 +1966,6 @@ namespace
 		                 boundary.ownershipToken == a_ownershipToken &&
 		                 boundary.requestID != 0 &&
 		                 boundary.transitionEpoch != 0 &&
-		                 boundary.contractGeneration != 0 &&
 		                 boundary.deviceIdentity != 0 &&
 		                 boundary.frame != 0 && boundary.tick != 0 &&
 		                 !boundary.source.empty();
@@ -3239,9 +3238,10 @@ namespace
 			requestID != a_transition.expectedReplacementRequestID ||
 			transitionEpoch == 0 ||
 			transitionEpoch != a_transition.expectedReplacementTransitionEpoch ||
-			contractGeneration == 0 ||
-			contractGeneration !=
-				a_transition.expectedReplacementContractGeneration ||
+			!ReplacementTelemetry::MatchesTargetContractGeneration(
+				vendorTarget,
+				static_cast<uint32_t>(contractGeneration),
+				a_transition.expectedReplacementContractGeneration) ||
 			publicationGeneration == 0 ||
 			resourceRevision == 0 || deviceIdentity == 0 ||
 			deviceIdentity != a_transition.expectedReplacementDeviceIdentity ||
@@ -3287,7 +3287,6 @@ namespace
 					evidence, "replacementDeviceIdentity"));
 			if (a_value.expectedReplacementRequestID == 0 &&
 				replacementRequestID != 0 && replacementTransitionEpoch != 0 &&
-				replacementContractGeneration != 0 &&
 				replacementDeviceIdentity != 0) {
 				a_value.expectedReplacementRequestID = replacementRequestID;
 				a_value.expectedReplacementTransitionEpoch =
@@ -3296,6 +3295,16 @@ namespace
 					replacementContractGeneration;
 				a_value.expectedReplacementDeviceIdentity =
 					replacementDeviceIdentity;
+			} else if (a_value.expectedReplacementRequestID ==
+						   replacementRequestID &&
+					   a_value.expectedReplacementTransitionEpoch ==
+						   replacementTransitionEpoch &&
+					   a_value.expectedReplacementDeviceIdentity ==
+						   replacementDeviceIdentity &&
+					   a_value.expectedReplacementContractGeneration == 0 &&
+					   replacementContractGeneration != 0) {
+				a_value.expectedReplacementContractGeneration =
+					replacementContractGeneration;
 			}
 			const bool firstMutationRecorded =
 				!a_value.firstPhysicalMutationEvidence.is_null();
@@ -6347,8 +6356,7 @@ namespace VRRenderScaleDevBenchBridge
 						 std::addressof(controller.requested),
 						 std::addressof(controller.applying) }) {
 					if (profile->valid && profile->requestID != 0 &&
-						profile->transitionEpoch == a_transitionEpoch &&
-						profile->contractGeneration != 0) {
+						profile->transitionEpoch == a_transitionEpoch) {
 						return profile;
 					}
 				}
@@ -6516,7 +6524,6 @@ namespace VRRenderScaleDevBenchBridge
 			                                  store.active->ownershipToken &&
 			                              boundaryRequestID != 0 &&
 			                              boundaryTransitionEpoch != 0 &&
-			                              boundaryContractGeneration != 0 &&
 			                              boundaryDeviceIdentity != 0 &&
 			                              boundaryFrame != 0 && boundaryTick != 0;
 			const bool physicalMutationStarted =
@@ -6630,8 +6637,9 @@ namespace VRRenderScaleDevBenchBridge
 				return boundaryRecorded && a_profile.valid &&
 				       a_profile.requestID == boundaryRequestID &&
 				       a_profile.transitionEpoch == boundaryTransitionEpoch &&
-				       a_profile.contractGeneration ==
-				           boundaryContractGeneration &&
+				       ReplacementTelemetry::MatchesMutationBoundaryGeneration(
+						   boundaryContractGeneration,
+						   a_profile.contractGeneration) &&
 				       a_observation.deviceIdentity == boundaryDeviceIdentity;
 			};
 			const auto exactPathMatchesProfile = [&](const auto& a_profile) {
@@ -6788,7 +6796,9 @@ namespace VRRenderScaleDevBenchBridge
 				store.active->firstNewGenerationProvenEvidence.is_null() &&
 				boundaryRequestID == completed.requestID &&
 				boundaryTransitionEpoch == completed.transitionEpoch &&
-				boundaryContractGeneration == completed.contractGeneration &&
+				ReplacementTelemetry::MatchesMutationBoundaryGeneration(
+					boundaryContractGeneration,
+					completed.contractGeneration) &&
 				boundaryDeviceIdentity == completed.deviceIdentity) {
 				const auto eyeEvidence = [&](uint32_t a_eyeIndex) {
 					return json{

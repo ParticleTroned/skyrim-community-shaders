@@ -336,12 +336,27 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 		       a_facts.replacementRequestID != 0 &&
 		       a_facts.replacementTransitionEpoch ==
 		           a_facts.boundaryTransitionEpoch &&
-		       a_facts.replacementContractGeneration != 0 &&
 		       a_facts.dispatchTransitionEpoch !=
 		           a_facts.boundaryTransitionEpoch &&
 		       a_facts.dispatchDeviceIdentity != 0 &&
 		       a_facts.dispatchDeviceIdentity ==
 		           a_facts.currentDeviceIdentity;
+	}
+
+	[[nodiscard]] constexpr bool MatchesTargetContractGeneration(
+		bool a_vendorTarget,
+		std::uint32_t a_observed,
+		std::uint32_t a_expected) noexcept
+	{
+		return a_observed == a_expected &&
+		       (!a_vendorTarget || a_observed != 0);
+	}
+
+	[[nodiscard]] constexpr bool MatchesMutationBoundaryGeneration(
+		std::uint32_t a_boundary,
+		std::uint32_t a_published) noexcept
+	{
+		return a_boundary == 0 || a_boundary == a_published;
 	}
 
 	inline constexpr std::uint64_t kPreparationNotApplicableReasonMask =

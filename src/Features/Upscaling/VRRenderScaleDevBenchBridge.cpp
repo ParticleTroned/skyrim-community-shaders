@@ -5379,13 +5379,18 @@ namespace
 
 				const auto before = upscaling.GetPendingVRRenderScaleDesiredProfile();
 				const uint32_t dlssPreset = requestedPreset.value_or(before.dlssPreset);
+				const bool directMenuEdit = true;
 				const auto applied = upscaling.ApplyCSMenuUpscalingTransition(
 					method,
 					enabled,
 					qualityMode,
 					dlssPreset,
 					"devbench render-scale iteration",
-					Upscaling::VRUpscalingTransitionOrigin::CSMenu);
+					Upscaling::VRUpscalingTransitionOrigin::CSMenu,
+					0,
+					std::nullopt,
+					VRVendorRelatchPolicy::StartupNativeFallbackControl::None,
+					directMenuEdit);
 
 				const bool accepted = applied.disposition != Upscaling::UpscalingTransitionApplyDisposition::Rejected;
 				const bool asynchronous =
@@ -5398,6 +5403,7 @@ namespace
 					{ "enabled", enabled },
 					{ "qualityMode", qualityMode },
 					{ "dlssPreset", dlssPreset },
+					{ "directMenuEdit", directMenuEdit },
 					{ "accepted", accepted },
 					{ "asynchronous", asynchronous },
 					{ "disposition", GetApplyDispositionName(applied.disposition) },

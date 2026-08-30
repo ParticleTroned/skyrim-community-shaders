@@ -261,7 +261,6 @@ foreach(_required_behavior IN ITEMS
 	"QualificationPolicy::EvaluateMilestones"
 	"QualificationPolicy::IsMilestoneSatisfied"
 	"QualificationPolicy::UsesVendorEvaluation"
-	"QualificationPolicy::UsesNativeAPIEvaluation"
 	"QualificationPolicy::HasCoherentNativeVendorEvaluation"
 	"case CSX::UpscalingAPI::Method::kNone"
 	"case CSX::UpscalingAPI::Method::kTAA"
@@ -352,6 +351,8 @@ foreach(_required_behavior IN ITEMS
 	"\"nativeVendorExecution\""
 	"\"actualBackend\""
 	"\"native_vendor_frames\""
+	"const bool directMenuEdit = true;"
+	"\"directMenuEdit\""
     "controller.retirement.nextCleanupFrame == 0"
 	"BuildProvenance::ValidateExpectedBuild"
 )

@@ -599,13 +599,20 @@ namespace VRVendorRelatchPolicy
 		       a_requestID == a_preparedRequestID;
 	}
 
+	[[nodiscard]] constexpr bool HasDirectMenuRequestAuthority(
+		bool a_directMenuEdit,
+		std::uint64_t a_requestID) noexcept
+	{
+		// Origin alone is insufficient because reload and measurement share
+		// CSMenu. Only the immutable committed-edit bit grants direct privileges.
+		return a_directMenuEdit && a_requestID != 0;
+	}
+
 	[[nodiscard]] constexpr bool CanUseDirectMenuRequestPacing(
 		bool a_directMenuEdit,
 		std::uint64_t a_requestID) noexcept
 	{
-		// A committed menu edit publishes one immutable latest-wins request. Its
-		// origin alone is insufficient because reload and measurement share CSMenu.
-		return a_directMenuEdit && a_requestID != 0;
+		return HasDirectMenuRequestAuthority(a_directMenuEdit, a_requestID);
 	}
 
 	struct MenuEditDispatch

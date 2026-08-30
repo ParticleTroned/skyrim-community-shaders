@@ -353,6 +353,7 @@ foreach(_required_behavior IN ITEMS
 	"\"native_vendor_frames\""
 	"const bool directMenuEdit = true;"
 	"\"directMenuEdit\""
+	"non_direct_edit"
     "controller.retirement.nextCleanupFrame == 0"
 	"BuildProvenance::ValidateExpectedBuild"
 )
@@ -378,6 +379,45 @@ foreach(_required_controller_behavior IN ITEMS
 	if(_controller_behavior_position EQUAL -1)
 		message(FATAL_ERROR
 			"VR API controller publication behavior is missing: ${_required_controller_behavior}"
+		)
+	endif()
+endforeach()
+
+foreach(_required_direct_menu_mapping IN ITEMS
+	"VRVendorRelatchPolicy::HasDirectMenuRequestAuthority("
+	"target->directMenuEdit,"
+	"relatchProfile->directMenuEdit,"
+	".directMenuRelatch = directMenuRelatch"
+	"transitionSnapshot.applied.directMenuEdit,"
+	"VRRenderScalePreparationReason::NonDirectEdit"
+	"a_request.origin == VRUpscalingTransitionOrigin::CSMenu &&\n\t\tdirectMenuRequest &&"
+)
+	string(FIND
+		"${_upscaling_source}"
+		"${_required_direct_menu_mapping}"
+		_direct_menu_mapping_position
+	)
+	if(_direct_menu_mapping_position EQUAL -1)
+		message(FATAL_ERROR
+			"Direct-menu authority is not mapped through production code: ${_required_direct_menu_mapping}"
+		)
+	endif()
+endforeach()
+
+foreach(_forbidden_origin_only_mapping IN ITEMS
+	"target->origin == VRUpscalingTransitionOrigin::CSMenu"
+	".directMenuRelatch =\n\t\t\t\t\trelatchOrigin == VRUpscalingTransitionOrigin::CSMenu"
+	"relatchOrigin == VRUpscalingTransitionOrigin::CSMenu &&\n\t\t\trelatchTargetRenderScaleActive"
+	"transitionSnapshot.applied.origin ==\n\t\t\t\tVRUpscalingTransitionOrigin::CSMenu"
+)
+	string(FIND
+		"${_upscaling_source}"
+		"${_forbidden_origin_only_mapping}"
+		_origin_only_mapping_position
+	)
+	if(NOT _origin_only_mapping_position EQUAL -1)
+		message(FATAL_ERROR
+			"Direct-menu authority is still reconstructed from origin: ${_forbidden_origin_only_mapping}"
 		)
 	endif()
 endforeach()

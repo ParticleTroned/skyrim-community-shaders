@@ -218,6 +218,7 @@ namespace
 			std::pair{ Reason::DeviceChanged, "device_changed" },
 			std::pair{ Reason::ShaderFailure, "shader_failure" },
 			std::pair{ Reason::ProviderFailure, "provider_failure" },
+			std::pair{ Reason::NonDirectEdit, "non_direct_edit" },
 		};
 		json output = json::array();
 		for (const auto& [reason, name] : reasons) {

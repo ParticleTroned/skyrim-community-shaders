@@ -19356,7 +19356,9 @@ std::optional<Upscaling::VRRenderScaleRuntimeOptionsSnapshot> Upscaling::GetVRRe
 			.targetActive = target->active,
 			.sameMethod = target->method == stable.method,
 			.directMenuRequest =
-				target->origin == VRUpscalingTransitionOrigin::CSMenu,
+				VRVendorRelatchPolicy::HasDirectMenuRequestAuthority(
+					target->directMenuEdit,
+					target->requestID),
 			.exactRequestPrepared =
 				target->requestID != 0 &&
 				target->requestID ==
@@ -23986,6 +23988,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	uint32_t retryDelayFrames = 0;
 	uint32_t relatchContractGeneration = 0;
 	uint64_t admittedMutationSourceEpoch = 0;
+	bool directMenuRelatch = false;
 	bool preparedDirectMenuRelatch = false;
 	{
 		const std::scoped_lock queueLock(
@@ -24249,9 +24252,14 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			relatchProfile =
 				std::addressof(controllerAdmissionSnapshot.applying);
 		}
+		directMenuRelatch =
+			relatchProfile &&
+			VRVendorRelatchPolicy::HasDirectMenuRequestAuthority(
+				relatchProfile->directMenuEdit,
+				relatchProfile->requestID);
 		preparedDirectMenuRelatch =
 			VRVendorRelatchPolicy::CanBypassPreparedMenuRequestDelay(
-				relatchOrigin == VRUpscalingTransitionOrigin::CSMenu,
+				directMenuRelatch,
 				relatchProfile ? relatchProfile->requestID : 0,
 				GetPreparedVRRenderScaleRequestID());
 		postLoadRecoveryEpoch =
@@ -25967,7 +25975,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		}
 		const bool memoryReliefActiveForRelatch = IsVRRenderScaleMemoryReliefActive();
 		const bool retainWarmInactiveVendorResourcesForRelatch =
-			relatchOrigin == VRUpscalingTransitionOrigin::CSMenu &&
+			directMenuRelatch &&
 			relatchTargetRenderScaleActive &&
 			previousBootWasActiveVendorRenderScale &&
 			plannedRelatchSizeKnown &&
@@ -26006,8 +26014,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				relatchColorInput);
 		const bool reusePreparedDLSSResourcesForActivation =
 			VRVendorRelatchPolicy::CanReusePreparedDLSSForActivation({
-				.directMenuRelatch =
-					relatchOrigin == VRUpscalingTransitionOrigin::CSMenu,
+				.directMenuRelatch = directMenuRelatch,
 				.targetActive = relatchTargetRenderScaleActive,
 				.targetIsDLSS = relatchUpscaleMethod == UpscaleMethod::kDLSS,
 				.previousWasDLSS = previousVendorWasDLSS,
@@ -26064,8 +26071,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		};
 		const bool reuseCompatibleFSRResourcesForRelatch =
 			VRVendorRelatchPolicy::CanReuseCompatibleFSRResources({
-				.directMenuRelatch =
-					relatchOrigin == VRUpscalingTransitionOrigin::CSMenu,
+				.directMenuRelatch = directMenuRelatch,
 				.recoveryRelatch =
 					relatchOrigin == VRUpscalingTransitionOrigin::RecoveryRelatch,
 				.targetIsFSR = relatchUpscaleMethod == UpscaleMethod::kFSR,
@@ -47810,14 +47816,14 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		const bool directMenuRelatch =
 			transitionSnapshot.applied.valid &&
 			transitionSnapshot.applied.active &&
-			transitionSnapshot.applied.requestID != 0 &&
+			VRVendorRelatchPolicy::HasDirectMenuRequestAuthority(
+				transitionSnapshot.applied.directMenuEdit,
+				transitionSnapshot.applied.requestID) &&
 			transitionSnapshot.applied.requestID ==
 				GetPreparedVRRenderScaleRequestID() &&
 			transitionSnapshot.applied.contractGeneration ==
 				activeContractGeneration &&
-			transitionSnapshot.applied.method == upscaleMethod &&
-			transitionSnapshot.applied.origin ==
-				VRUpscalingTransitionOrigin::CSMenu;
+			transitionSnapshot.applied.method == upscaleMethod;
 		TryPromoteVRRenderScaleSubmitStageContract(
 			currentFrame,
 			a_compositorCycleToken,
@@ -49296,6 +49302,7 @@ Upscaling::VRRenderScaleRequestQueueResult Upscaling::QueueVRRenderScaleRequest(
 		startupNativeFallbackActive &&
 		a_startupFallbackControl ==
 			VRVendorRelatchPolicy::StartupNativeFallbackControl::RetrySavedProfile &&
+		a_directMenuEdit &&
 		a_origin == VRUpscalingTransitionOrigin::CSMenu &&
 		CanRetryVRStartupNativeFallbackFromCSMenu(true);
 	const auto startupFallbackControlAction =
@@ -52785,6 +52792,15 @@ void Upscaling::PreparePendingVRRenderScaleTransition(
 			admissionReasonMask,
 			VRRenderScalePreparationReason::WrongOrigin);
 	}
+	const bool directMenuRequest =
+		VRVendorRelatchPolicy::HasDirectMenuRequestAuthority(
+			a_request.directMenuEdit,
+			a_request.requestID);
+	if (!directMenuRequest) {
+		AddVRRenderScalePreparationReason(
+			admissionReasonMask,
+			VRRenderScalePreparationReason::NonDirectEdit);
+	}
 	if (!IsRenderScaleMethodEligible(a_request.method)) {
 		AddVRRenderScalePreparationReason(
 			admissionReasonMask,
@@ -52845,6 +52861,7 @@ void Upscaling::PreparePendingVRRenderScaleTransition(
 		a_request.transitionEpoch != 0 &&
 		a_request.preparationOptionsGeneration != 0 &&
 		a_request.origin == VRUpscalingTransitionOrigin::CSMenu &&
+		directMenuRequest &&
 		IsRenderScaleMethodEligible(a_request.method) &&
 		a_request.renderScaleModeEnabled &&
 		IsRenderScaleQualityMode(a_request.qualityMode) &&

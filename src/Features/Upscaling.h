@@ -1243,7 +1243,8 @@ public:
 		Superseded = 1ull << 13,
 		DeviceChanged = 1ull << 14,
 		ShaderFailure = 1ull << 15,
-		ProviderFailure = 1ull << 16
+		ProviderFailure = 1ull << 16,
+		NonDirectEdit = 1ull << 17
 	};
 
 	struct VRRenderScalePreparationEvent

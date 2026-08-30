@@ -59,6 +59,27 @@ wet-grass darkening, locked VR menu placement, depth-culling policy modes, and
 opt-in verbose PBR diagnostics. Their retired keys are explicitly rejected so
 a package cannot silently fall back through legacy migration on first load.
 
+## CSX compatibility contract
+
+The generated packages target CSX 3.19-VR only. Each `SettingsUser.json`
+contains a versioned `Preset Compatibility` object with a stable preset ID,
+package version, VR runtime, inclusive minimum `3.19`, exclusive maximum
+`3.20`, and the settings-contract fingerprint used to generate it.
+
+CSX validates marked settings before canonicalization, migration, or merge.
+Malformed metadata, an unsupported compatibility-contract version, the wrong
+runtime, or a CSX version outside the declared range rejects the complete user
+layer without rewriting it. Defaults remain active, saving is blocked to
+protect the rejected file, and the decision is recorded in the log and exposed
+through the Feature DevBench API's `preset_compatibility` action. Unmarked
+legacy and user-authored settings remain accepted because strict metadata
+cannot be added retroactively.
+
+The three generated presets never hard-disable a feature: every `Disable at
+Boot` value is false. Tier exclusions use feature-owned live/soft settings.
+CS Editor is not present in the boot-disable map, and Weather Picker remains
+enabled because both are operational tools rather than shader tiers.
+
 Generation and `-Check` take the same exclusive publication lock. A normal
 generation builds and validates all seven outputs in memory, stages each file
 beside its destination, flushes and reads the staged content back, then replaces

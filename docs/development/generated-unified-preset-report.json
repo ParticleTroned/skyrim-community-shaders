@@ -1,19 +1,27 @@
 {
   "schemaVersion": 1,
-  "policySchemaVersion": 3,
+  "policySchemaVersion": 4,
   "policyStatus": "provisional-calibration-v2",
   "evidenceDate": "2026-08-30",
   "baseTemplate": "docs/development/unified-preset-templates/Base.SettingsUser.json",
   "baseSha256": "E0064B1E4D16B6D93C0D47161FFC21FFA139A5F072FA90D1356293CE00D366FE",
   "runtimeSettingsContract": {
-    "revision": 2,
-    "sourceTreeSha256": "A02078A0C47CCD2A3B143C93F38750C7032EB209EAEE882EFA56E93897FA7744"
+    "revision": 3,
+    "sourceTreeSha256": "151197F39F7F787D7AC6A52A716EE937A8CC980CB1F4F0AD1817525AF762637C"
+  },
+  "presetCompatibility": {
+    "contractVersion": 1,
+    "target": {
+      "runtime": "VR",
+      "minimumVersion": "3.19",
+      "maximumVersionExclusive": "3.20"
+    }
   },
   "tiers": [
     {
       "tier": "Performance",
       "outputDirectory": "CSX Unified- Performance - Press END on PC to Customize",
-      "settingsSha256": "5A69B7015945F85BA04C35BF07FAC43E70748938F5ECFC3CE05976D47F1FA507",
+      "settingsSha256": "032CDDD4567FBE3C4306810B531FA9D562A9C940F5B851444C4DC7CB11E4ADE1",
       "qualificationRefs": [
         "vendor-capability-selection",
         "runtime-lane-comparison",
@@ -24,7 +32,7 @@
     {
       "tier": "Balanced",
       "outputDirectory": "CSX Unified- Balanced - Press END on PC to Customize",
-      "settingsSha256": "19413D3B922687D60469504A1FCE6433B09DC0A5E2455A9C70A5223D53A3668D",
+      "settingsSha256": "DB87AC536DC171661237F932732986BF3A9EC17640F21A037402852E9A088EA9",
       "qualificationRefs": [
         "vendor-capability-selection",
         "runtime-lane-comparison",
@@ -35,7 +43,7 @@
     {
       "tier": "Quality",
       "outputDirectory": "CSX Unified- Quality - Press END on PC to Customize",
-      "settingsSha256": "E3E82BFADEB3B9CFB2286B99782261A6613067293344D60BCD7829E4488E065E",
+      "settingsSha256": "2E8D3F4A5DFD1AEDB1CFE12A7B8134F6CE566E083855BEEDFFEECB32FCC07AA1",
       "qualificationRefs": [
         "vendor-capability-selection",
         "runtime-lane-comparison",

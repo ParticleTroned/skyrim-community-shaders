@@ -1,20 +1,29 @@
 {
-    "schemaVersion": 3,
+    "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.08.30.1",
+    "packageVersion": "d2026.08.30.2",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
+    "presetCompatibility": {
+        "contractVersion": 1,
+        "target": {
+            "runtime": "VR",
+            "minimumVersion": "3.19",
+            "maximumVersionExclusive": "3.20"
+        }
+    },
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
         "sha256": "E0064B1E4D16B6D93C0D47161FFC21FFA139A5F072FA90D1356293CE00D366FE"
     },
     "runtimeSettingsContract": {
-        "revision": 2,
-        "sourceTreeSha256": "A02078A0C47CCD2A3B143C93F38750C7032EB209EAEE882EFA56E93897FA7744",
+        "revision": 3,
+        "sourceTreeSha256": "151197F39F7F787D7AC6A52A716EE937A8CC980CB1F4F0AD1817525AF762637C",
         "sources": [
             "src/Feature.cpp",
             "src/Feature.h",
+            "src/Api/FeatureDevBenchBridge.cpp",
             "src/Menu.cpp",
             "src/Menu.h",
             "src/SettingsSerialization.cpp",
@@ -23,6 +32,8 @@
             "src/SettingsMigrations.h",
             "src/State.cpp",
             "src/State.h",
+            "src/PresetCompatibility.cpp",
+            "src/PresetCompatibility.h",
             "src/Features/AdaptiveBrightness.cpp",
             "src/Features/AdaptiveBrightness.h",
             "src/Features/FoliageLighting.cpp",
@@ -138,6 +149,11 @@
             "path": ["Menu", "UI Mode"],
             "value": 0,
             "reason": "retain the shared MGO interface baseline outside tier ownership"
+        },
+        {
+            "path": ["Weather Picker", "Enabled"],
+            "value": true,
+            "reason": "the weather editor is an operational tool, not a shader tier"
         },
         {
             "path": ["Image Based Lighting", "EnableIBL"],
@@ -392,6 +408,7 @@
         { "path": ["General", "Skip Unchanged Shaders"], "value": true },
         { "path": ["Menu", "SmartClearShaderCacheDefault"], "value": false },
         { "path": ["Menu", "UI Mode"], "value": 0 },
+        { "path": ["Weather Picker", "Enabled"], "value": true },
         { "path": ["Image Based Lighting", "EnableIBL"], "value": 1 },
         { "path": ["Volumetric Shadows", "Enabled"], "value": true },
         { "path": ["Hair Specular", "Enabled"], "value": 1 },

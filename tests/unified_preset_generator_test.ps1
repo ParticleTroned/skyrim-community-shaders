@@ -134,6 +134,19 @@ try {
         $settingsPath = Join-Path $outputRoot "$($tierProperty.Value.outputDirectory)\SKSE\Plugins\CommunityShaders\SettingsUser.json"
         Assert-True (Test-Path -LiteralPath $settingsPath -PathType Leaf) "Missing generated settings for $($tierProperty.Name)."
         $settings = Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json -Depth 100
+        $compatibility = $settings.'Preset Compatibility'
+        Assert-True ($compatibility.contractVersion -eq 1) "Missing compatibility contract for $($tierProperty.Name)."
+        Assert-True ($compatibility.presetId -ceq "csx-unified-$($tierProperty.Name.ToLowerInvariant())") "Wrong preset identity for $($tierProperty.Name)."
+        Assert-True ($compatibility.presetVersion -ceq $policy.packageVersion) "Wrong preset version for $($tierProperty.Name)."
+        Assert-True ($compatibility.target.runtime -ceq 'VR') "Wrong runtime target for $($tierProperty.Name)."
+        Assert-True ($compatibility.target.minimumVersion -ceq '3.19') "Wrong minimum CSX version for $($tierProperty.Name)."
+        Assert-True ($compatibility.target.maximumVersionExclusive -ceq '3.20') "Wrong maximum CSX version for $($tierProperty.Name)."
+        Assert-True ($settings.'Weather Picker'.Enabled -eq $true) "Weather Picker was disabled for $($tierProperty.Name)."
+        Assert-True ($null -eq $settings.'Disable at Boot'.psobject.Properties['CS Editor']) "CS Editor appeared in Disable at Boot for $($tierProperty.Name)."
+        Assert-True ($null -eq $settings.'Disable at Boot'.psobject.Properties['Weather Picker']) "Weather Picker appeared in Disable at Boot for $($tierProperty.Name)."
+        foreach ($disabledAtBootEntry in $settings.'Disable at Boot'.psobject.Properties) {
+            Assert-True ($disabledAtBootEntry.Value -eq $false) "Feature was hard-disabled for $($tierProperty.Name): $($disabledAtBootEntry.Name)"
+        }
         $maps[$tierProperty.Name] = Get-LeafMap $settings
     }
 
@@ -142,7 +155,9 @@ try {
         $candidate = $maps[$tier]
         $allPaths = @($reference.Keys + $candidate.Keys | Sort-Object -Unique)
         foreach ($path in $allPaths) {
-            if ($reference[$path] -cne $candidate[$path] -and $path -notin $ownedPaths) {
+            if ($reference[$path] -cne $candidate[$path] -and
+                $path -notin $ownedPaths -and
+                -not $path.StartsWith('Preset Compatibility/', [System.StringComparison]::Ordinal)) {
                 throw "Non-tier path diverged between Performance and ${tier}: $path"
             }
         }
@@ -165,6 +180,15 @@ try {
         OutputRoot = $outputRoot; ReportPath = $reportPath
     } -Pattern 'tierOrder must be exactly' -Message 'A non-three-tier policy was accepted.'
     Assert-True ($baselineSnapshot -ceq (Get-PublicationSnapshot -OutputRoot $outputRoot -ReportPath $reportPath)) 'A rejected tier contract mutated the published generation.'
+    [System.IO.File]::WriteAllText($isolatedPolicyPath, $baselinePolicyText, $utf8)
+
+    $invalidPolicy = $baselinePolicyText | ConvertFrom-Json -Depth 100
+    $invalidPolicy.presetCompatibility.target.maximumVersionExclusive = '3.19'
+    Write-JsonFile -Path $isolatedPolicyPath -Value $invalidPolicy
+    $null = Invoke-ExpectedFailure -GeneratorPath $isolatedGenerator -Arguments @{
+        OutputRoot = $outputRoot; ReportPath = $reportPath
+    } -Pattern 'Preset compatibility must target' -Message 'An invalid preset compatibility range was accepted.'
+    Assert-True ($baselineSnapshot -ceq (Get-PublicationSnapshot -OutputRoot $outputRoot -ReportPath $reportPath)) 'A rejected compatibility contract mutated the published generation.'
     [System.IO.File]::WriteAllText($isolatedPolicyPath, $baselinePolicyText, $utf8)
 
     $invalidPolicy = $baselinePolicyText | ConvertFrom-Json -Depth 100

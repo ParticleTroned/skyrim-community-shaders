@@ -24,7 +24,7 @@ $authorizedBasePath = [System.IO.Path]::GetFullPath(
     (Join-Path $repositoryRoot 'docs\development\unified-preset-templates\Base.SettingsUser.json'))
 $policy = Get-Content -Raw -LiteralPath $resolvedPolicyPath | ConvertFrom-Json -Depth 100
 
-if ($policy.schemaVersion -ne 3) {
+if ($policy.schemaVersion -ne 4) {
     throw "Unsupported unified preset policy schema: $($policy.schemaVersion)"
 }
 if ($Check -and $RefreshBaseFromPath) {
@@ -224,6 +224,76 @@ function Assert-CurrentSchema {
     }
 }
 
+function Assert-NoHardDisabledFeatures {
+    param([Parameter(Mandatory = $true)]$Settings)
+
+    $disabledAtBoot = Get-JsonPathValue -Root $Settings -Path @('Disable at Boot')
+    if ($disabledAtBoot -isnot [System.Management.Automation.PSCustomObject]) {
+        throw 'Disable at Boot must be a JSON object.'
+    }
+    foreach ($entry in $disabledAtBoot.psobject.Properties) {
+        if ($entry.Value -isnot [bool]) {
+            throw "Disable at Boot value must be boolean: $($entry.Name)"
+        }
+        if ($entry.Value) {
+            throw "Unified presets must not hard-disable features: $($entry.Name)"
+        }
+    }
+    foreach ($operationalFeature in 'CS Editor', 'Weather Picker') {
+        if ($null -ne $disabledAtBoot.psobject.Properties[$operationalFeature]) {
+            throw "Operational tool must not appear in Disable at Boot: $operationalFeature"
+        }
+    }
+}
+
+function New-PresetCompatibilityMarker {
+    param(
+        [Parameter(Mandatory = $true)][string]$Tier,
+        [Parameter(Mandatory = $true)][string]$RuntimeSettingsContractHash
+    )
+
+    $target = $policy.presetCompatibility.target
+    [ordered]@{
+        contractVersion = [int]$policy.presetCompatibility.contractVersion
+        presetId = "csx-unified-$($Tier.ToLowerInvariant())"
+        presetVersion = [string]$policy.packageVersion
+        target = [ordered]@{
+            runtime = [string]$target.runtime
+            minimumVersion = [string]$target.minimumVersion
+            maximumVersionExclusive = [string]$target.maximumVersionExclusive
+        }
+        settingsContract = [ordered]@{
+            revision = [int]$policy.runtimeSettingsContract.revision
+            sourceTreeSha256 = $RuntimeSettingsContractHash
+        }
+    }
+}
+
+function Add-PresetCompatibilityMarker {
+    param(
+        [Parameter(Mandatory = $true)]$Settings,
+        [Parameter(Mandatory = $true)][string]$Tier,
+        [Parameter(Mandatory = $true)][string]$RuntimeSettingsContractHash
+    )
+
+    if ($null -ne $Settings.psobject.Properties['Preset Compatibility']) {
+        throw 'The pinned base must not contain generated preset compatibility metadata.'
+    }
+    $result = [ordered]@{}
+    foreach ($property in $Settings.psobject.Properties) {
+        $result[$property.Name] = $property.Value
+        if ($property.Name -ceq 'Version') {
+            $result['Preset Compatibility'] = New-PresetCompatibilityMarker `
+                -Tier $Tier `
+                -RuntimeSettingsContractHash $RuntimeSettingsContractHash
+        }
+    }
+    if (-not $result.Contains('Preset Compatibility')) {
+        throw 'The pinned base has no Version field after which compatibility metadata can be placed.'
+    }
+    [pscustomobject]$result
+}
+
 function Test-OrdinalSequenceEqual {
     param([object[]]$Left, [object[]]$Right)
 
@@ -309,6 +379,12 @@ function Assert-TierContract {
     $actualTierOrder = @($policy.tiers.psobject.Properties.Name)
     if (-not (Test-OrdinalSequenceEqual -Left $requiredTierOrder -Right $actualTierOrder)) {
         throw 'tiers must contain exactly Performance, Balanced, and Quality in that order.'
+    }
+    if ($policy.presetCompatibility.contractVersion -ne 1 -or
+        $policy.presetCompatibility.target.runtime -cne 'VR' -or
+        $policy.presetCompatibility.target.minimumVersion -cne '3.19' -or
+        $policy.presetCompatibility.target.maximumVersionExclusive -cne '3.20') {
+        throw 'Preset compatibility must target CSX VR >= 3.19 and < 3.20 with contract version 1.'
     }
 
     $ownedPaths = @($policy.tierOwnedPaths | ForEach-Object { ConvertTo-CanonicalPath $_ })
@@ -456,7 +532,7 @@ installationFile=CSX-Unified-$slug-Provisional.7z
 repository=Nexus
 ignoredVersion=
 comments=WABBAJACK_ALWAYS_ENABLE
-notes=PROVISIONAL unified $Tier preset generated from policy schema v3; qualification=$qualificationSummary
+notes=PROVISIONAL unified $Tier preset generated from policy schema v4 for CSX 3.19-VR; qualification=$qualificationSummary
 nexusDescription=
 url=
 hasCustomURL=false
@@ -697,6 +773,7 @@ try {
     Assert-CurrentSchema -Settings $baseSettings
     Assert-NeutralBase -Settings $baseSettings
     Assert-AllPolicyPathsAgainstSettings -Settings $baseSettings
+    Assert-NoHardDisabledFeatures -Settings $baseSettings
 
     $results = @()
     $publicationFiles = [System.Collections.Generic.List[object]]::new()
@@ -707,8 +784,13 @@ try {
         foreach ($override in @($policy.commonOverrides) + @($definition.overrides)) {
             Set-ExistingJsonPathValue -Root $settings -Path $override.path -Value $override.value
         }
+        $settings = Add-PresetCompatibilityMarker `
+            -Settings $settings `
+            -Tier $tier `
+            -RuntimeSettingsContractHash $runtimeSettingsContractHash
         Assert-CurrentSchema -Settings $settings
         Assert-GuardValues -Settings $settings
+        Assert-NoHardDisabledFeatures -Settings $settings
 
         $json = ConvertTo-CanonicalJson $settings
         $meta = Get-GeneratedMetaIni -Tier $tier -Definition $definition
@@ -738,6 +820,7 @@ try {
             revision = $policy.runtimeSettingsContract.revision
             sourceTreeSha256 = $runtimeSettingsContractHash
         }
+        presetCompatibility = $policy.presetCompatibility
         tiers = @($results | ForEach-Object {
             [ordered]@{
                 tier = $_.tier

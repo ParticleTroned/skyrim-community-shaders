@@ -1530,6 +1530,13 @@ if(BUILD_CONTROLLER_TESTS)
             -P "${PROJECT_SOURCE_DIR}/tests/menu_devbench_preflight_contract_test.cmake"
     )
     add_test(
+        NAME FeaturePresetCompatibilityContract
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            -P "${PROJECT_SOURCE_DIR}/tests/feature_preset_compatibility_contract_test.cmake"
+    )
+    add_test(
         NAME VRMenuUiContract
         COMMAND
             "${CMAKE_COMMAND}"
@@ -1537,7 +1544,7 @@ if(BUILD_CONTROLLER_TESTS)
             -P "${PROJECT_SOURCE_DIR}/tests/vr_menu_ui_contract_test.cmake"
     )
     set_tests_properties(
-        MenuDevBenchPreflightContract VRMenuUiContract
+        MenuDevBenchPreflightContract VRMenuUiContract FeaturePresetCompatibilityContract
         PROPERTIES LABELS "ControllerTests"
     )
     add_test(
@@ -1706,6 +1713,21 @@ if(BUILD_CONTROLLER_TESTS)
     )
 
     add_executable(
+        preset_compatibility_test
+        EXCLUDE_FROM_ALL
+        tests/preset_compatibility_test.cpp
+        src/PresetCompatibility.cpp
+    )
+    target_compile_features(preset_compatibility_test PRIVATE cxx_std_23)
+    target_include_directories(
+        preset_compatibility_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(preset_compatibility_test PRIVATE nlohmann_json::nlohmann_json)
+    add_test(NAME PresetCompatibility COMMAND preset_compatibility_test)
+    set_tests_properties(PresetCompatibility PROPERTIES LABELS "ControllerTests")
+
+    add_executable(
         api_runtime_thread_affinity_test
         EXCLUDE_FROM_ALL
         tests/api_runtime_thread_affinity_test.cpp
@@ -1870,6 +1892,7 @@ if(BUILD_CONTROLLER_TESTS)
             vr_wand_surface_geometry_test
             vr_menu_positioning_policy_test
             water_appearance_migration_test
+            preset_compatibility_test
             api_runtime_thread_affinity_test
             api_service_foundation_test
             api_service_registry_test

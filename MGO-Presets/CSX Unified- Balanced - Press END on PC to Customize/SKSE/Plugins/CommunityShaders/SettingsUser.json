@@ -68,6 +68,20 @@
     "Water": true
   },
   "Version": "CSX 3.19-VR",
+  "Preset Compatibility": {
+    "contractVersion": 1,
+    "presetId": "csx-unified-balanced",
+    "presetVersion": "d2026.08.30.2",
+    "target": {
+      "runtime": "VR",
+      "minimumVersion": "3.19",
+      "maximumVersionExclusive": "3.20"
+    },
+    "settingsContract": {
+      "revision": 3,
+      "sourceTreeSha256": "151197F39F7F787D7AC6A52A716EE937A8CC980CB1F4F0AD1817525AF762637C"
+    }
+  },
   "Upscaling": {
     "dlssPreset": 1,
     "dlssSharpener": 1,
@@ -348,7 +362,7 @@
     "mouseSpeed": 10.0
   },
   "Weather Picker": {
-    "Enabled": false,
+    "Enabled": true,
     "Position": [
       50.0,
       50.0

@@ -599,6 +599,15 @@ namespace VRVendorRelatchPolicy
 		       a_requestID == a_preparedRequestID;
 	}
 
+	[[nodiscard]] constexpr bool CanUseDirectMenuRequestPacing(
+		bool a_directMenuRequest,
+		std::uint64_t a_requestID) noexcept
+	{
+		// A CS-menu combo/toggle publishes one immutable latest-wins request.
+		// It needs the same-frame floor, but not the API coalescing interval.
+		return a_directMenuRequest && a_requestID != 0;
+	}
+
 	struct DispatchAdmission
 	{
 		bool isVR = false;

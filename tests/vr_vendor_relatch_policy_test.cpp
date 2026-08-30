@@ -504,6 +504,11 @@ namespace
 			CanBypassPreparedMenuRequestDelay(true, 7, 8)) {
 			return false;
 		}
+		if (!CanUseDirectMenuRequestPacing(true, 7) ||
+			CanUseDirectMenuRequestPacing(false, 7) ||
+			CanUseDirectMenuRequestPacing(true, 0)) {
+			return false;
+		}
 
 		for (std::uint32_t bits = 0; bits < (1u << 7); ++bits) {
 			const StabilizerControllerTargetAdmission admission{

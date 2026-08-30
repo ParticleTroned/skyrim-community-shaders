@@ -102,7 +102,9 @@ public:
 		Util::LazyShader<ID3D11ComputeShader> left;
 		Util::LazyShader<ID3D11ComputeShader> right;
 	};
-	static constexpr std::size_t kRaymarchShaderVariantCount = 2;
+	// Retain native plus every supported render-scale quality profile so a
+	// previously used size does not recompile after ordinary profile cycling.
+	static constexpr std::size_t kRaymarchShaderVariantCount = 8;
 	std::array<RaymarchShaderVariant, kRaymarchShaderVariantCount> raymarchShaderVariants{};
 	uint64_t raymarchShaderUseCounter = 0;
 	uint compiledSampleCount = 0;

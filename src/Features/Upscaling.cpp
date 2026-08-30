@@ -20604,8 +20604,6 @@ Upscaling::UpscalingTransitionApplyResult Upscaling::ApplyCSMenuUpscalingTransit
 		physicalContractRecoveryRequired) {
 		SetPerfModeRequested(targetRenderScaleMode, a_reason, false, a_origin);
 	}
-	if (qualityChanged || renderScaleModeChanged)
-		RequestPerfModeRenderTargetRecreate(a_reason, a_origin);
 
 	return {
 		.disposition = methodChanged || qualitySettingChanged ||
@@ -23352,13 +23350,12 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(
 				   controllerSnapshot.targetEpoch) {
 		pendingControllerProfile = std::addressof(controllerSnapshot.applying);
 	}
-	const bool preparedDirectMenuRelatch =
-		VRVendorRelatchPolicy::CanBypassPreparedMenuRequestDelay(
+	const bool directMenuRequestRelatch =
+		VRVendorRelatchPolicy::CanUseDirectMenuRequestPacing(
 			a_origin == VRUpscalingTransitionOrigin::CSMenu,
-			pendingControllerProfile ? pendingControllerProfile->requestID : 0,
-			GetPreparedVRRenderScaleRequestID());
+			pendingControllerProfile ? pendingControllerProfile->requestID : 0);
 	const uint32_t relatchDelayFrames = std::max(
-		preparedDirectMenuRelatch ? 1u : kVRUpscalingTransitionApplyDelayFrames,
+		directMenuRequestRelatch ? 1u : kVRUpscalingTransitionApplyDelayFrames,
 		a_minDelayFrames);
 	const bool requirePostLoadSettle = UsesVRRenderScalePostLoadSettle(*this, configuredMethod, a_origin);
 	const auto currentOrigin = LoadVRUpscalingTransitionOrigin(pendingPerfModeRenderTargetRecreateOrigin);
@@ -53277,13 +53274,13 @@ bool Upscaling::ShouldWaitForVRUpscalingTransitionDelay() const
 		IsBufferedVRFpsStabilizerDoorHandoff(desiredProfile);
 	if (!HasPendingVRRenderScaleTransition() && !bufferedStabilizerDoorHandoff)
 		return false;
-	if (VRVendorRelatchPolicy::CanBypassPreparedMenuRequestDelay(
+	if (VRVendorRelatchPolicy::CanUseDirectMenuRequestPacing(
 			desiredProfile.origin == VRUpscalingTransitionOrigin::CSMenu,
-			desiredProfile.requestID,
-			GetPreparedVRRenderScaleRequestID())) {
+			desiredProfile.requestID)) {
+		// The next physical queue still enforces the hard same-frame boundary.
+		// Waiting here as well would duplicate coalescing for a discrete menu edit.
 		return false;
 	}
-
 	const uint32_t queuedFrame = desiredProfile.queuedFrame;
 	if (queuedFrame == 0)
 		return false;
@@ -53486,6 +53483,7 @@ void Upscaling::ApplyPendingVRUpscalingTransition()
 		return;
 	}
 
+	bool perfModeRelatchRequested = false;
 	if (ClampToggleUInt(settings.perfMode) != static_cast<uint32_t>(targetPerfMode) ||
 		IsVRRenderScaleModeLatched() != targetPerfMode ||
 		perfMode.HasRestartRequiredChange() ||
@@ -53495,16 +53493,28 @@ void Upscaling::ApplyPendingVRUpscalingTransition()
 				targetQualityMode,
 				request.fsr4RuntimeEnabled))) {
 		SetPerfModeRequested(targetPerfMode, "VR upscaling deferred transition", false, transitionOrigin);
+		perfModeRelatchRequested = true;
 	}
-	if (targetPerfMode && methodChangedFromActiveContract)
-		RequestPerfModeRenderTargetRecreate("VR upscaling method change", transitionOrigin);
-	if (targetPerfMode &&
+	const bool methodRelatchRequired =
+		targetPerfMode && methodChangedFromActiveContract;
+	const bool fsrRuntimeRelatchRequired =
+		targetPerfMode &&
 		fsr4RuntimeSelectionChanged &&
 		!IsVRRenderScalePhysicalContractConverged(
 			targetMethod,
 			targetQualityMode,
-			request.fsr4RuntimeEnabled)) {
-		RequestPerfModeRenderTargetRecreate("VR FSR runtime path change", transitionOrigin);
+			request.fsr4RuntimeEnabled);
+	const bool profileRelatchRequired =
+		(qualityChanged || renderScaleModeChanged) &&
+		(IsVRRenderScaleModeLatched() || GetPerfModeRequested());
+	if (!perfModeRelatchRequested &&
+		(methodRelatchRequired || fsrRuntimeRelatchRequired ||
+			profileRelatchRequired)) {
+		const char* relatchReason =
+			methodRelatchRequired     ? "VR upscaling method change" :
+			fsrRuntimeRelatchRequired ? "VR FSR runtime path change" :
+										"VR render-scale profile change";
+		RequestPerfModeRenderTargetRecreate(relatchReason, transitionOrigin);
 	}
 
 	if (changed || renderScaleModeChanged || methodChangedFromActiveContract) {
@@ -53512,8 +53522,6 @@ void Upscaling::ApplyPendingVRUpscalingTransition()
 		RequestHistoryReset();
 		if (targetMethod == UpscaleMethod::kDLSS)
 			pendingDLSSHistoryReset.store(true, std::memory_order_release);
-		if ((qualityChanged || renderScaleModeChanged) && (IsVRRenderScaleModeLatched() || GetPerfModeRequested()))
-			RequestPerfModeRenderTargetRecreate("VR render-scale profile change", transitionOrigin);
 	}
 
 	if (ShouldEmitUpscalingDiagLogs()) {

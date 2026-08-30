@@ -4063,6 +4063,8 @@ namespace
 				receipt["diagnostics"] = observation["diagnostics"];
 			if (observation.contains("foveation"))
 				receipt["foveation"] = observation["foveation"];
+			if (observation.contains("nativeVendorExecution"))
+				receipt["nativeVendorExecution"] = observation["nativeVendorExecution"];
 			if (observation.contains("status"))
 				receipt["status"] = observation["status"];
 		}

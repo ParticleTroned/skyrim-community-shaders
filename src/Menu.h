@@ -139,6 +139,8 @@ public:
 	void DrawOverlay();
 	/// True while either the main menu or its CS Editor surface is open.
 	bool IsMenuSessionOpen() const;
+	/// True when a status-only overlay must remain visible with the menu closed.
+	bool HasClosedMenuOverlay() const;
 	/// Opens a fresh main-menu session and prepares VR positioning/input state.
 	void OpenMenu();
 	/// Closes the main menu and any active CS Editor surface as one UI session.

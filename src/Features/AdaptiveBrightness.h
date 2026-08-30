@@ -245,10 +245,20 @@ struct AdaptiveBrightness : Feature
 	mutable float smoothedWaterWindSpeed = 0.0f;
 	mutable uint32_t smoothedWaterWindFrame = 0;
 	mutable bool waterWindSmoothingInitialized = false;
+	bool performanceCostMeasurementEnabled = true;
 
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual void DrawPerformanceSettings(bool a_advanced) override;
+	virtual json CapturePerformanceSettingsState() const override;
+	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override { return performanceCostMeasurementEnabled && IsRuntimeAvailable(); }
+	virtual bool UsesTotalPerformanceCostMeasurement() const override { return true; }
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
+	virtual bool IsPerformanceCostMeasurementReady() const override { return IsRuntimeAvailable(); }
+	virtual const char* GetPerformanceCostMeasurementWaitText() const override { return "Waiting for a gameplay cell"; }
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
@@ -257,6 +267,7 @@ struct AdaptiveBrightness : Feature
 	virtual void PostPostLoad() override;
 
 	bool IsRuntimeAvailable() const;
+	bool IsAdjustmentRuntimeActive() const;
 	bool IsRuntimeEnabled() const;
 	PerFrameData GetCommonBufferData() const;
 	bool NeedsVanillaPointLightData() const;

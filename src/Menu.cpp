@@ -1192,7 +1192,6 @@ void Menu::DrawSettings()
 	if (!IsEnabled) {
 		systemCommitLastRefreshTime = -1.0;
 		PerformanceTuningRenderer::NotifyMenuClosed();
-		PerformanceTuningRenderer::CancelActiveMeasurements();
 	}
 }
 
@@ -1367,9 +1366,14 @@ bool Menu::IsMenuSessionOpen() const
 	return IsEnabled || (editorWindow && editorWindow->open);
 }
 
+bool Menu::HasClosedMenuOverlay() const
+{
+	return PerformanceTuningRenderer::HasActiveMeasurements();
+}
+
 void Menu::OpenMenu()
 {
-	if (IsEnabled)
+	if (IsEnabled || HasClosedMenuOverlay())
 		return;
 
 	IsEnabled = true;
@@ -1396,7 +1400,6 @@ void Menu::CloseMenu()
 	systemCommitLastRefreshTime = -1.0;
 
 	PerformanceTuningRenderer::NotifyMenuClosed();
-	PerformanceTuningRenderer::CancelActiveMeasurements();
 
 	if (globals::features::vr.IsOpenVRCompatible())
 		globals::features::vr.ResetMenuInputRuntimeState();
@@ -1523,6 +1526,8 @@ void Menu::ProcessInputEventQueue()
 					{ settings.ShaderBlockNextKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(false); } },
 					{ settings.OverlayToggleKey, []() { Menu::GetSingleton()->overlayVisible = !Menu::GetSingleton()->overlayVisible; } },
 					{ settings.CSEditorToggleKey, []() {
+						 if (Menu::GetSingleton()->HasClosedMenuOverlay())
+							 return;
 						 auto* ew = EditorWindow::GetSingleton();
 						 if (!ew)
 							 return;

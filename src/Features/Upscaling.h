@@ -22,6 +22,7 @@
 #include <mutex>
 #include <openvr.h>
 #include <optional>
+#include <string_view>
 #include <vector>
 #include <winrt/base.h>
 
@@ -183,6 +184,85 @@ public:
 	static constexpr uint32_t ClampDLSSPresetUInt(uint32_t a_preset)
 	{
 		return a_preset <= kDLSSPresetMaxIndex ? a_preset : kDLSSPresetMaxIndex;
+	}
+
+	/** Return the stable one-letter name used by settings and automation. */
+	static constexpr const char* GetDLSSPresetName(uint32_t a_preset)
+	{
+		switch (a_preset) {
+		case kDLSSPresetJ:
+			return "J";
+		case kDLSSPresetL:
+			return "L";
+		case kDLSSPresetM:
+			return "M";
+		case kDLSSPresetF:
+			return "F";
+		case kDLSSPresetE:
+			return "E";
+		case kDLSSPresetK:
+		default:
+			return "K";
+		}
+	}
+
+	/** Parse a one-letter DLSS profile without accepting clamped aliases. */
+	static constexpr bool TryParseDLSSPresetName(
+		std::string_view a_name,
+		uint32_t& a_preset)
+	{
+		if (a_name.size() != 1)
+			return false;
+
+		switch (a_name.front()) {
+		case 'J':
+		case 'j':
+			a_preset = kDLSSPresetJ;
+			return true;
+		case 'K':
+		case 'k':
+			a_preset = kDLSSPresetK;
+			return true;
+		case 'L':
+		case 'l':
+			a_preset = kDLSSPresetL;
+			return true;
+		case 'M':
+		case 'm':
+			a_preset = kDLSSPresetM;
+			return true;
+		case 'F':
+		case 'f':
+			a_preset = kDLSSPresetF;
+			return true;
+		case 'E':
+		case 'e':
+			a_preset = kDLSSPresetE;
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	/** Return the shared user-facing quality label for DLSS or FSR. */
+	static constexpr const char* GetQualityModeName(uint32_t a_qualityMode, bool a_isDLSS)
+	{
+		switch (a_qualityMode <= kQualityModeMaxIndex ? a_qualityMode : kQualityModeMaxIndex) {
+		case 1:
+			return "Hoshipa";
+		case 2:
+			return "Ultra Quality";
+		case 3:
+			return "Quality";
+		case 4:
+			return "Balanced";
+		case 5:
+			return "Performance";
+		case 6:
+			return "Ultra Performance";
+		default:
+			return a_isDLSS ? "DLAA" : "Native AA";
+		}
 	}
 
 	static constexpr float GetQualityModeResolutionScale(uint32_t a_qualityMode)
@@ -1962,6 +2042,10 @@ public:
 	virtual const char* GetPerformanceCostMeasurementWaitText() const override;
 	virtual bool RequiresMenuCloseForPerformanceCostMeasurement(bool a_targetEnabled) const override;
 	virtual bool RequiresMenuCloseForPerformanceCostMeasurementRestore(const json& a_state) const override;
+	/** Resolve a captured primary/fallback pair against current DLSS capability. */
+	static UpscaleMethod ResolvePerformanceCostMeasurementMethod(
+		uint32_t a_primaryMethod,
+		uint32_t a_fallbackMethod);
 	virtual json CapturePerformanceCostMeasurementState() const override;
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
 	void DrawFoveatedSetupInstructions();

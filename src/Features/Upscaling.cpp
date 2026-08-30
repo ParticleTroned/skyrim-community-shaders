@@ -15313,7 +15313,7 @@ namespace
 		return adapter;
 	}
 
-	void ActivateStreamlineBackend(
+	bool ActivateStreamlineBackend(
 		Upscaling& a_upscaling,
 		IDXGIAdapter* a_adapter,
 		ID3D11Device** a_device,
@@ -15322,13 +15322,13 @@ namespace
 	{
 		if (!a_adapter || !a_device || !*a_device) {
 			a_upscaling.streamline.MarkAdapterUnavailable("created device adapter could not be resolved");
-			return;
+			return false;
 		}
 
 		DXGI_ADAPTER_DESC adapterDesc{};
 		if (FAILED(a_adapter->GetDesc(&adapterDesc))) {
 			a_upscaling.streamline.MarkAdapterUnavailable("created device adapter description is unavailable");
-			return;
+			return false;
 		}
 		if (globals::state)
 			globals::state->SetAdapterDescription(adapterDesc.Description);
@@ -15337,31 +15337,44 @@ namespace
 			FidelityFX::GetFsr4AdapterSupport(adapterDesc));
 		if (adapterDesc.VendorId != kNvidiaVendorId) {
 			a_upscaling.streamline.MarkAdapterUnavailable("created device is not on an NVIDIA adapter");
-			return;
+			return false;
 		}
 		if (!a_upscaling.IsBackendInitialized())
-			return;
+			return false;
 
+		void* const originalDevice = *a_device;
+		void* const originalSwapChain = a_swapChain ? *a_swapChain : nullptr;
+		auto releaseReplacement = [](void* a_candidate, void* a_original) {
+			if (a_candidate && a_candidate != a_original)
+				static_cast<IUnknown*>(a_candidate)->Release();
+		};
 		void* upgradedDevice = *a_device;
 		if (!a_upscaling.UpgradeBackendInterface(&upgradedDevice)) {
+			releaseReplacement(upgradedDevice, originalDevice);
 			a_upscaling.streamline.MarkAdapterUnavailable("D3D device interface upgrade failed");
-			return;
+			return false;
 		}
 		void* upgradedSwapChain = a_swapChain ? *a_swapChain : nullptr;
 		if (a_upgradeSwapChain &&
 			(!upgradedSwapChain || !a_upscaling.UpgradeBackendInterface(&upgradedSwapChain))) {
+			releaseReplacement(upgradedDevice, originalDevice);
 			a_upscaling.streamline.MarkAdapterUnavailable("DXGI swap-chain interface upgrade failed");
-			return;
+			return false;
+		}
+
+		if (!a_upscaling.SetBackendD3DDevice(static_cast<ID3D11Device*>(upgradedDevice)) ||
+			!a_upscaling.CheckBackendFeatures(a_adapter) ||
+			!a_upscaling.PostBackendDevice()) {
+			releaseReplacement(upgradedSwapChain, originalSwapChain);
+			releaseReplacement(upgradedDevice, originalDevice);
+			a_upscaling.streamline.MarkAdapterUnavailable("backend activation did not complete");
+			return false;
 		}
 
 		*a_device = static_cast<ID3D11Device*>(upgradedDevice);
 		if (a_upgradeSwapChain)
 			*a_swapChain = static_cast<IDXGISwapChain*>(upgradedSwapChain);
-		if (!a_upscaling.SetBackendD3DDevice(*a_device) ||
-			!a_upscaling.CheckBackendFeatures(a_adapter)) {
-			return;
-		}
-		(void)a_upscaling.PostBackendDevice();
+		return true;
 	}
 }
 
@@ -15472,13 +15485,10 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 					upscaling.SetProxyD3D11DeviceContext(candidateContext.get());
 					upscaling.CreateProxySwapChain(resolvedAdapter.get(), proxyDesc);
 					upscaling.CreateProxyInterop();
-					auto* proxySwapChain = upscaling.GetProxySwapChain();
-					if (!proxySwapChain)
-						throw std::runtime_error("proxy swap chain was not published");
 
 					auto* activatedDevice = candidateDevice.detach();
 					try {
-						ActivateStreamlineBackend(
+						(void)ActivateStreamlineBackend(
 							upscaling,
 							resolvedAdapter.get(),
 							&activatedDevice,
@@ -15489,6 +15499,9 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 							activatedDevice->Release();
 						throw;
 					}
+					auto* proxySwapChain = upscaling.GetProxySwapChain();
+					if (!proxySwapChain)
+						throw std::runtime_error("proxy swap chain was not published");
 
 					*ppDevice = activatedDevice;
 					*ppImmediateContext = candidateContext.detach();
@@ -42727,6 +42740,7 @@ bool Upscaling::ShouldUseFrameGenerationThisFrame() const
 
 	return IsFrameGenerationDx12PathActive() &&
 	       settings.frameGenerationMode &&
+	       fidelityFX.IsFrameGenerationRuntimeReady() &&
 	       !streamline.IsFrameGenerationQuarantinedByReflex() &&
 	       (settings.frameGenerationAllowInMenus || !menuOpen);
 }
@@ -54178,7 +54192,7 @@ bool Upscaling::HasFrameGenModule() const
 	if (IsRenderDocUpscalingBlocked())
 		return false;
 
-	return fidelityFX.featureFSR3FG;
+	return fidelityFX.IsFrameGenerationRuntimeReady();
 }
 
 // Proxy interface methods
@@ -54204,14 +54218,16 @@ void Upscaling::CreateProxyInterop()
 
 IDXGISwapChain* Upscaling::GetProxySwapChain()
 {
-	return dx12SwapChain.GetSwapChainProxy();
+	return dx12SwapChain.TakeSwapChainProxy();
 }
 
-void Upscaling::ResetProxyCreationState() noexcept
+bool Upscaling::ResetProxyCreationState() noexcept
 {
 	d3d12SwapChainActive = false;
-	fidelityFX.ResetFrameGenerationContexts();
+	if (!fidelityFX.ResetFrameGenerationContexts())
+		return false;
 	dx12SwapChain.ResetUnpublished();
+	return true;
 }
 
 bool Upscaling::IsOpenCompositeUpscalingBlocked(bool a_forceRefresh) const

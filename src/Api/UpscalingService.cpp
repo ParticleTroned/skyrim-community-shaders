@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <deque>
 #include <future>
@@ -330,7 +331,7 @@ namespace
 					return found->second.ready ? found->second.status : Status::kBusy;
 				}
 				if (!CSX::Api::HasUpscalingServiceCapacity(
-						commands.size(), operations.size(), kMaximumCommands)) {
+						commands.size(), operations.size(), pendingOperationReservations, kMaximumCommands)) {
 					a_output = ApplyResult001{};
 					a_output.status = Status::kBusy;
 					a_output.disposition = ApplyDisposition::kRejected;
@@ -343,7 +344,16 @@ namespace
 				reservation.result.disposition = ApplyDisposition::kRejected;
 				commands.emplace(key, std::move(reservation));
 				commandOrder.push_back(key);
+				++pendingOperationReservations;
 			}
+			bool ownsOperationReservation = true;
+			const SKSE::stl::scope_exit releaseOperationReservation([&]() noexcept {
+				if (!ownsOperationReservation)
+					return;
+				std::lock_guard lock(mutex);
+				assert(pendingOperationReservations != 0);
+				--pendingOperationReservations;
+			});
 
 			PreflightRequest001 preflightRequest;
 			preflightRequest.expectedStateRevision = signature.expectedStateRevision;
@@ -420,6 +430,9 @@ namespace
 				operation.snapshot.latestStateRevision = preflight.evaluatedStateRevision;
 				operation.snapshot.target = signature.target;
 				operations.emplace(operationId, std::move(operation));
+				assert(pendingOperationReservations != 0);
+				--pendingOperationReservations;
+				ownsOperationReservation = false;
 				AppendEventLocked(operationId, EventType::kAccepted, OperationState::kQueued, Status::kSuccess);
 				AppendEventLocked(operationId, EventType::kQueued, OperationState::kQueued, Status::kSuccess);
 			}
@@ -512,6 +525,7 @@ namespace
 		std::uint64_t capabilityRevision = 0;
 		std::uint64_t nextOperationId = 1;
 		std::uint64_t nextEventId = 1;
+		std::size_t pendingOperationReservations = 0;
 		std::unordered_map<std::string, StoredCommand> commands;
 		std::deque<std::string> commandOrder;
 		std::unordered_map<std::uint64_t, LiveOperation> operations;

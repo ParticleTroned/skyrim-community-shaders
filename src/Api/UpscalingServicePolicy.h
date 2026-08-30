@@ -27,5 +27,6 @@ namespace CSX::Api
 	bool HasUpscalingServiceCapacity(
 		std::size_t a_commandCount,
 		std::size_t a_operationCount,
+		std::size_t a_pendingOperationCount,
 		std::size_t a_maximumCount) noexcept;
 }

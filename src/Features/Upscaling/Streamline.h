@@ -536,6 +536,8 @@ public:
 		ID3D11Resource* mvec, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask,
 		uint32_t renderWidth, uint32_t renderHeight, uint32_t outputWidth, uint32_t outputHeight,
 		float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f);
+	/** @brief Enforces the same-frame Reflex exclusion required before frame generation admission. */
+	bool EnsureReflexDisabledForFrameGeneration();
 	void UpdateReflex();
 
 	DLSSResourceTeardownResult DestroyDLSSResources();

@@ -3211,6 +3211,39 @@ Streamline::DLSSResourceTeardownResult Streamline::DestroyDLSSResources()
 	           DLSSResourceTeardownResult::FailedAfterMutation;
 }
 
+bool Streamline::EnsureReflexDisabledForFrameGeneration()
+{
+	if (!initialized || !reflexSupportedOnCurrentAdapter || !featureReflex || !slReflexSetOptions)
+		return true;
+	if (frameGenerationQuarantinedByReflex.load(std::memory_order_acquire))
+		return false;
+
+	const bool reflexAlreadyOff = reflexOptionsCache.valid &&
+	                              reflexOptionsCache.mode == sl::ReflexMode::eOff &&
+	                              reflexOptionsCache.frameLimitUs == 0 &&
+	                              !reflexOptionsCache.useMarkersToOptimize;
+	if (reflexAlreadyOff)
+		return true;
+
+	sl::ReflexOptions disableOptions{};
+	disableOptions.mode = sl::ReflexMode::eOff;
+	disableOptions.frameLimitUs = 0;
+	disableOptions.useMarkersToOptimize = false;
+	if (SL_FAILED(result, slReflexSetOptions(disableOptions))) {
+		frameGenerationQuarantinedByReflex.store(true, std::memory_order_release);
+		logger::error(
+			"[Streamline] Failed to disable Reflex before Frame Generation: {}. Frame Generation is quarantined until restart.",
+			magic_enum::enum_name(result));
+		return false;
+	}
+
+	reflexOptionsCache.valid = true;
+	reflexOptionsCache.mode = disableOptions.mode;
+	reflexOptionsCache.frameLimitUs = disableOptions.frameLimitUs;
+	reflexOptionsCache.useMarkersToOptimize = disableOptions.useMarkersToOptimize;
+	return true;
+}
+
 void Streamline::UpdateReflex()
 {
 	if (!initialized || !reflexSupportedOnCurrentAdapter || !featureReflex || !slReflexSetOptions)
@@ -3219,30 +3252,7 @@ void Streamline::UpdateReflex()
 	const auto& upscaling = globals::features::upscaling;
 	const bool reflexBlockedByFrameGeneration = upscaling.IsFrameGenerationDx12PathActive();
 	if (reflexBlockedByFrameGeneration) {
-		if (frameGenerationQuarantinedByReflex.load(std::memory_order_acquire))
-			return;
-		const bool reflexAlreadyOff = reflexOptionsCache.valid &&
-		                              reflexOptionsCache.mode == sl::ReflexMode::eOff &&
-		                              reflexOptionsCache.frameLimitUs == 0 &&
-		                              !reflexOptionsCache.useMarkersToOptimize;
-		if (!reflexAlreadyOff) {
-			sl::ReflexOptions disableOptions{};
-			disableOptions.mode = sl::ReflexMode::eOff;
-			disableOptions.frameLimitUs = 0;
-			disableOptions.useMarkersToOptimize = false;
-			if (SL_FAILED(result, slReflexSetOptions(disableOptions))) {
-				frameGenerationQuarantinedByReflex.store(true, std::memory_order_release);
-				logger::error(
-					"[Streamline] Failed to disable Reflex while Frame Generation is active: {}. Frame Generation is quarantined until restart.",
-					magic_enum::enum_name(result));
-			} else {
-				frameGenerationQuarantinedByReflex.store(false, std::memory_order_release);
-				reflexOptionsCache.valid = true;
-				reflexOptionsCache.mode = disableOptions.mode;
-				reflexOptionsCache.frameLimitUs = disableOptions.frameLimitUs;
-				reflexOptionsCache.useMarkersToOptimize = disableOptions.useMarkersToOptimize;
-			}
-		}
+		(void)EnsureReflexDisabledForFrameGeneration();
 		lastReflexSleepFrame = UINT32_MAX;
 		return;
 	}

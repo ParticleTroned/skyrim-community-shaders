@@ -2,6 +2,7 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
+#	include "Api/MainThreadDispatchPolicy.h"
 #	include "Api/RuntimeThreadAffinity.h"
 #	include "Api/ServiceRegistry.h"
 #	include "BuildProvenance.h"
@@ -350,8 +351,8 @@ namespace
 	{
 		const auto replacement = [&]() -> const Upscaling::VRRenderScaleProfileSnapshot* {
 			for (const auto* profile : {
-					std::addressof(a_controller.requested),
-					std::addressof(a_controller.applying) }) {
+					 std::addressof(a_controller.requested),
+					 std::addressof(a_controller.applying) }) {
 				if (profile->valid &&
 					profile->transitionEpoch == a_controller.targetEpoch) {
 					return profile;
@@ -481,10 +482,10 @@ namespace
 			{ "selectedPresentationDisposition", selectedDisposition },
 			{ "completedOutputReuse",
 				commonPath && left.path ==
-					Upscaling::VRRenderScalePresentationPath::ValidatedPresentationHold },
+								  Upscaling::VRRenderScalePresentationPath::ValidatedPresentationHold },
 			{ "completedOutputOwnershipProven",
 				currentPresentationProven && left.path ==
-					Upscaling::VRRenderScalePresentationPath::ValidatedPresentationHold },
+												 Upscaling::VRRenderScalePresentationPath::ValidatedPresentationHold },
 			{ "leftEye", eyeJson(left) },
 			{ "rightEye", eyeJson(right) },
 		};
@@ -2649,7 +2650,7 @@ namespace
 					a_value.blockedPreMutationEvidence = evidence;
 				}
 			} else if (mutationStarted &&
-				a_value.firstPhysicalMutationEvidence.is_null()) {
+					   a_value.firstPhysicalMutationEvidence.is_null()) {
 				a_value.firstPhysicalMutationEvidence = evidence;
 			}
 		};
@@ -3090,7 +3091,7 @@ namespace
 		return {
 			.valid = a_eye.valid &&
 			         a_eye.path ==
-					 Upscaling::VRRenderScalePresentationPath::NativeOriginal,
+			             Upscaling::VRRenderScalePresentationPath::NativeOriginal,
 			.presentationFrame = a_eye.frame,
 			.dispatchFrame = a_eye.vendorDispatchFrame,
 			.backend = ToQualificationPhysicalBackend(a_eye.vendorBackend),
@@ -3120,11 +3121,11 @@ namespace
 		const auto& right = a_controller.presentation.eyes[1];
 		const bool required = a_target &&
 		                      QualificationPolicy::UsesNativeVendorEvaluation(
-						  *a_target);
+								  *a_target);
 		const bool coherent = required && NativeVendorPresentationStable(
-										 a_controller,
-										 *a_target,
-										 a_beginFrame);
+											  a_controller,
+											  *a_target,
+											  a_beginFrame);
 		const bool backendConverged =
 			left.vendorBackend != Upscaling::VRRenderScaleBackendKind::None &&
 			left.vendorBackend == right.vendorBackend;
@@ -3486,15 +3487,15 @@ namespace
 			globals::shaderCache && globals::shaderCache->IsCompiling();
 		facts.shaderCompilationIdle = !shaderCompilationActive;
 		facts.nativePresentationStable = PresentationEyesStable(
-			controller,
-			Upscaling::VRRenderScalePresentationPath::NativeOriginal,
-			a_transition.dispatchFrame) &&
-		(!targetAvailable ||
-			!QualificationPolicy::UsesNativeVendorEvaluation(target) ||
-			NativeVendorPresentationStable(
-				controller,
-				target,
-				a_transition.dispatchFrame));
+											 controller,
+											 Upscaling::VRRenderScalePresentationPath::NativeOriginal,
+											 a_transition.dispatchFrame) &&
+		                                 (!targetAvailable ||
+											 !QualificationPolicy::UsesNativeVendorEvaluation(target) ||
+											 NativeVendorPresentationStable(
+												 controller,
+												 target,
+												 a_transition.dispatchFrame));
 		const bool vendorContractStable = targetAvailable &&
 		                                  (target.renderScaleMode ?
 												  (facts.physicalActiveContract && facts.vendorPresentationStable) :
@@ -3689,10 +3690,7 @@ namespace
 							  { "dlssLifecycle", LifecycleJson(controller.dlssLifecycle) },
 							  { "fsrLifecycle", LifecycleJson(controller.fsrLifecycle) },
 						  } },
-			{ "nativeVendorExecution", NativeVendorExecutionJson(
-										 controller,
-										 targetAvailable ? &target : nullptr,
-										 a_transition.dispatchFrame) },
+			{ "nativeVendorExecution", NativeVendorExecutionJson(controller, targetAvailable ? &target : nullptr, a_transition.dispatchFrame) },
 			{ "replacementPresentation", replacementPresentationEvidence },
 			{ "foveation", ObservedFoveationJson(upscaling, controller.stable) },
 			{ "cleanupDebt", QualificationCleanupDebtJson(controller, gate, physicalMutationEpoch, physicalSerializationEpoch, emergencyRecoveryRequested, shaderCompilationActive) },
@@ -3802,11 +3800,11 @@ namespace
 			return { { "error", "SKSE task interface unavailable" } };
 
 		auto promise = std::make_shared<std::promise<json>>();
-		auto cancelled = std::make_shared<std::atomic_bool>(false);
+		auto claim = std::make_shared<CSX::Api::MainThreadDispatchClaim>();
 		auto future = promise->get_future();
-		taskInterface->AddTask([promise, cancelled, run = std::move(a_run)]() mutable {
+		taskInterface->AddTask([promise, claim, run = std::move(a_run)]() mutable {
 			CSX::Api::EnterRuntimeMainThreadTask();
-			if (cancelled->load(std::memory_order_acquire))
+			if (!claim->TryClaim())
 				return;
 			try {
 				promise->set_value(run());
@@ -3815,10 +3813,17 @@ namespace
 			} catch (...) {
 				promise->set_value(json{ { "error", "main-thread task failed" } });
 			}
+			claim->Complete();
 		});
 
 		if (future.wait_for(a_timeout) != std::future_status::ready) {
-			cancelled->store(true, std::memory_order_release);
+			if (!claim->TryCancel()) {
+				return {
+					{ "status", "in_progress" },
+					{ "errorCode", "main_thread_in_progress" },
+					{ "timeoutMs", a_timeout.count() },
+				};
+			}
 			return {
 				{ "error", "main thread did not run before the request deadline" },
 				{ "errorCode", "main_thread_timeout" },
@@ -3899,8 +3904,8 @@ namespace
 			const auto& presentation = a_transition.presentationStable;
 			const auto& cleanup = a_transition.cleanupDrained;
 			const long double ticks = cleanup.tick >= presentation.tick ?
-				static_cast<long double>(cleanup.tick - presentation.tick) :
-				-static_cast<long double>(presentation.tick - cleanup.tick);
+			                              static_cast<long double>(cleanup.tick - presentation.tick) :
+			                              -static_cast<long double>(presentation.tick - cleanup.tick);
 			return static_cast<double>(
 				(ticks * 1000.0L) /
 				static_cast<long double>(a_transition.baseline.tickFrequency));
@@ -3914,11 +3919,11 @@ namespace
 		const json cleanupDeltaMs = presentationToCleanupMilliseconds();
 		const json cleanupDeltaFrames = presentationToCleanupFrames();
 		const json cleanupTailMs = cleanupDeltaMs.is_number() ?
-			json(std::max(0.0, cleanupDeltaMs.get<double>())) :
-			json(nullptr);
+		                               json(std::max(0.0, cleanupDeltaMs.get<double>())) :
+		                               json(nullptr);
 		const json cleanupTailFrames = cleanupDeltaFrames.is_number_integer() ?
-			json(std::max<int64_t>(0, cleanupDeltaFrames.get<int64_t>())) :
-			json(nullptr);
+		                                   json(std::max<int64_t>(0, cleanupDeltaFrames.get<int64_t>())) :
+		                                   json(nullptr);
 		const bool milestonesShareObservation =
 			presentationAndCleanupObserved &&
 			a_transition.presentationStable.tick == a_transition.cleanupDrained.tick &&
@@ -3962,63 +3967,37 @@ namespace
 			{ "strictElapsedMs", elapsedMilliseconds(a_transition.strictSatisfied) },
 			{ "strictElapsedFrames", elapsedFrames(a_transition.strictSatisfied) },
 			{ "milestoneTimings", {
-				{ "presentation", milestoneJson(a_transition.presentationStable) },
-				{ "cleanup", milestoneJson(a_transition.cleanupDrained) },
-				{ "strict", milestoneJson(a_transition.strictSatisfied) },
-				{ "presentationToCleanupMs", cleanupDeltaMs },
-				{ "presentationToCleanupFrames", cleanupDeltaFrames },
-				{ "cleanupTailMs", cleanupTailMs },
-				{ "cleanupTailFrames", cleanupTailFrames },
-				{ "sameObservation", milestonesShareObservation },
-				{ "cleanupPrecededPresentation",
-					cleanupDeltaMs.is_number() && cleanupDeltaMs.get<double>() < 0.0 },
-			} },
+									  { "presentation", milestoneJson(a_transition.presentationStable) },
+									  { "cleanup", milestoneJson(a_transition.cleanupDrained) },
+									  { "strict", milestoneJson(a_transition.strictSatisfied) },
+									  { "presentationToCleanupMs", cleanupDeltaMs },
+									  { "presentationToCleanupFrames", cleanupDeltaFrames },
+									  { "cleanupTailMs", cleanupTailMs },
+									  { "cleanupTailFrames", cleanupTailFrames },
+									  { "sameObservation", milestonesShareObservation },
+									  { "cleanupPrecededPresentation",
+										  cleanupDeltaMs.is_number() && cleanupDeltaMs.get<double>() < 0.0 },
+								  } },
 			{ "replacementTimeline", {
-				{ "dispatch", a_transition.dispatchPresentationEvidence },
-				{ "lastPreMutation", a_transition.lastPreMutationEvidence },
-				{ "blockedPreMutation", a_transition.blockedPreMutationEvidence },
-				{ "firstPhysicalMutation", a_transition.firstPhysicalMutationEvidence },
-			} },
-			{ "outstandingCleanupDebt", observationValue(
-											"cleanupDebt", json(nullptr)) },
-			{ "baseline", a_transition.ready ?
-							  QualificationBaselineJson(a_transition.baseline) :
-							  json(nullptr) },
+										 { "dispatch", a_transition.dispatchPresentationEvidence },
+										 { "lastPreMutation", a_transition.lastPreMutationEvidence },
+										 { "blockedPreMutation", a_transition.blockedPreMutationEvidence },
+										 { "firstPhysicalMutation", a_transition.firstPhysicalMutationEvidence },
+									 } },
+			{ "outstandingCleanupDebt", observationValue("cleanupDebt", json(nullptr)) },
+			{ "baseline", a_transition.ready ? QualificationBaselineJson(a_transition.baseline) : json(nullptr) },
 			{ "timing", {
 							{ "clock", "query_performance_counter" },
-							{ "elapsedOrigin", a_transition.cocCellEditorID ?
-												   "coc_command" :
-												   "qualification_dispatch" },
+							{ "elapsedOrigin", a_transition.cocCellEditorID ? "coc_command" : "qualification_dispatch" },
 							{ "tickFrequency", a_transition.baseline.tickFrequency },
-							{ "beginTick", a_transition.ready ?
-											   json(a_transition.baseline.beginTick) :
-											   json(nullptr) },
-							{ "dispatchTick", dispatched ?
-												  json(a_transition.dispatchTick) :
-												  json(nullptr) },
-							{ "presentationStableTick", a_transition.presentationStable.Observed() ?
-															json(a_transition.presentationStable.tick) :
-															json(nullptr) },
-							{ "cleanupDrainedTick", a_transition.cleanupDrained.Observed() ?
-														json(a_transition.cleanupDrained.tick) :
-														json(nullptr) },
-							{ "strictSatisfiedTick", a_transition.strictSatisfied.Observed() ?
-														 json(a_transition.strictSatisfied.tick) :
-														 json(nullptr) },
+							{ "beginTick", a_transition.ready ? json(a_transition.baseline.beginTick) : json(nullptr) },
+							{ "dispatchTick", dispatched ? json(a_transition.dispatchTick) : json(nullptr) },
+							{ "presentationStableTick", a_transition.presentationStable.Observed() ? json(a_transition.presentationStable.tick) : json(nullptr) },
+							{ "cleanupDrainedTick", a_transition.cleanupDrained.Observed() ? json(a_transition.cleanupDrained.tick) : json(nullptr) },
+							{ "strictSatisfiedTick", a_transition.strictSatisfied.Observed() ? json(a_transition.strictSatisfied.tick) : json(nullptr) },
 							{ satisfied ? "stableTick" : "terminalTick", a_terminalTick },
-							{ QualificationPolicy::kElapsedMillisecondsReceiptField.data(),
-								dispatched ?
-									json(QualificationPolicy::ElapsedMilliseconds(
-										a_transition.dispatchTick,
-										a_terminalTick,
-										a_transition.baseline.tickFrequency)) :
-									json(nullptr) },
-							{ QualificationPolicy::kElapsedFramesReceiptField.data(),
-								dispatched ?
-									json(QualificationPolicy::ElapsedFrames(
-										a_transition.dispatchFrame,
-										a_terminalFrame)) :
-									json(nullptr) },
+							{ QualificationPolicy::kElapsedMillisecondsReceiptField.data(), dispatched ? json(QualificationPolicy::ElapsedMilliseconds(a_transition.dispatchTick, a_terminalTick, a_transition.baseline.tickFrequency)) : json(nullptr) },
+							{ QualificationPolicy::kElapsedFramesReceiptField.data(), dispatched ? json(QualificationPolicy::ElapsedFrames(a_transition.dispatchFrame, a_terminalFrame)) : json(nullptr) },
 						} },
 			{ "frames", {
 							{ "begin", a_transition.ready ? json(a_transition.baseline.beginFrame) : json(nullptr) },
@@ -4449,8 +4428,7 @@ namespace
 										{ "tickFrequency", store.active->baseline.tickFrequency },
 									} },
 						{ "dispatchFrame", frame },
-						{ "replacementPresentation",
-							store.active->dispatchPresentationEvidence },
+						{ "replacementPresentation", store.active->dispatchPresentationEvidence },
 					};
 					if (cocCellEditorID) {
 						result["cocCellEditorId"] = *cocCellEditorID;
@@ -5521,6 +5499,11 @@ namespace VRRenderScaleDevBenchBridge
 				"cleanup; absent milestone preserves strict combined semantics. Its "
 				"terminal receipt reports independent milestone timings, cleanup "
 				"tail, and the replacement-presentation timeline.";
+			descriptor["description"] =
+				descriptor["description"].get<std::string>() +
+				" Main-thread actions cancelled before admission return "
+				"main_thread_timeout; an action already admitted returns "
+				"main_thread_in_progress and may complete after the response.";
 			descriptor["inputSchema"]["properties"]["milestone"] = {
 				{ "type", "string" },
 				{ "enum", json::array({ "strict", "presentation", "cleanup" }) },

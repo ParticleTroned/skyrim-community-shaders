@@ -94,6 +94,16 @@ int main()
 				true,
 				true),
 			"an active transition was reported as no-change");
+
+		Check(
+			CSX::Api::HasUpscalingServiceCapacity(1023, 1023, 1024),
+			"available command capacity was rejected");
+		Check(
+			!CSX::Api::HasUpscalingServiceCapacity(1024, 0, 1024),
+			"command capacity did not fail closed");
+		Check(
+			!CSX::Api::HasUpscalingServiceCapacity(0, 1024, 1024),
+			"operation capacity did not fail closed");
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

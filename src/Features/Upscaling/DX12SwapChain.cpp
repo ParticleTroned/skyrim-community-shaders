@@ -4,6 +4,7 @@
 #include <dxgi1_6.h>
 
 #include <memory>
+#include <stdexcept>
 
 #include "../Upscaling.h"
 #include "FidelityFX.h"
@@ -32,8 +33,8 @@ void DX12SwapChain::CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC 
 {
 	CreateD3D12Device(adapter);
 
-	IDXGIFactory4* dxgiFactory;
-	DX::ThrowIfFailed(adapter->GetParent(IID_PPV_ARGS(&dxgiFactory)));
+	winrt::com_ptr<IDXGIFactory4> dxgiFactory;
+	DX::ThrowIfFailed(adapter->GetParent(IID_PPV_ARGS(dxgiFactory.put())));
 
 	swapChainDesc = {};
 	swapChainDesc.Width = a_swapChainDesc.BufferDesc.Width;
@@ -48,7 +49,7 @@ void DX12SwapChain::CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC 
 	ffx::CreateContextDescFrameGenerationSwapChainForHwndDX12 ffxSwapChainDesc{};
 
 	ffxSwapChainDesc.desc = &swapChainDesc;
-	ffxSwapChainDesc.dxgiFactory = dxgiFactory;
+	ffxSwapChainDesc.dxgiFactory = dxgiFactory.get();
 	ffxSwapChainDesc.fullscreenDesc = nullptr;
 	ffxSwapChainDesc.gameQueue = commandQueue.get();
 	ffxSwapChainDesc.hwnd = a_swapChainDesc.OutputWindow;
@@ -56,8 +57,12 @@ void DX12SwapChain::CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC 
 
 	auto& fidelityFX = globals::features::upscaling.fidelityFX;
 
-	if (ffx::CreateContext(fidelityFX.swapChainContext, nullptr, ffxSwapChainDesc) != ffx::ReturnCode::Ok) {
-		logger::critical("[FidelityFX] Failed to create swap chain context!");
+	const auto swapChainContextResult =
+		ffx::CreateContext(fidelityFX.swapChainContext, nullptr, ffxSwapChainDesc);
+	fidelityFX.swapChainContextValid = fidelityFX.swapChainContext != nullptr;
+	if (swapChainContextResult != ffx::ReturnCode::Ok ||
+		!fidelityFX.swapChainContextValid) {
+		throw std::runtime_error("FidelityFX swap-chain context creation failed");
 	}
 
 	DX::ThrowIfFailed(swapChain->GetBuffer(0, IID_PPV_ARGS(&swapChainBuffers[0])));
@@ -65,7 +70,8 @@ void DX12SwapChain::CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC 
 
 	frameIndex = swapChain->GetCurrentBackBufferIndex();
 
-	fidelityFX.SetupFrameGeneration();
+	if (!fidelityFX.SetupFrameGeneration())
+		throw std::runtime_error("FidelityFX frame-generation context creation failed");
 }
 
 void DX12SwapChain::CreateInterop()
@@ -78,6 +84,32 @@ void DX12SwapChain::CreateInterop()
 	swapChainProxy = new DXGISwapChainProxy(swapChain);
 
 	RecreateWrappedResources(swapChainDesc);
+}
+
+void DX12SwapChain::ResetUnpublished() noexcept
+{
+	delete swapChainProxy;
+	swapChainProxy = nullptr;
+	swapChain = nullptr;
+	swapChainBufferWrapped.reset();
+	uiBufferWrapped.reset();
+	depthBufferShared12.reset();
+	motionVectorBufferShared12.reset();
+	for (auto& buffer : swapChainBuffers)
+		buffer = nullptr;
+	d3d11Fence = nullptr;
+	d3d12Fence = nullptr;
+	d3d11Context = nullptr;
+	d3d11Device = nullptr;
+	for (auto& list : commandLists)
+		list = nullptr;
+	for (auto& allocator : commandAllocators)
+		allocator = nullptr;
+	commandQueue = nullptr;
+	d3d12Device = nullptr;
+	swapChainDesc = {};
+	frameIndex = 0;
+	fenceValue = 0;
 }
 
 void DX12SwapChain::RecreateWrappedResources(const DXGI_SWAP_CHAIN_DESC1& desc)

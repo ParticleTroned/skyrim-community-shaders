@@ -3253,10 +3253,10 @@ public:
 
 	// Backend interface methods
 	bool IsBackendInitialized() const;
-	void CheckBackendFeatures(IDXGIAdapter* adapter);
-	void UpgradeBackendInterface(void** ppInterface);
-	void SetBackendD3DDevice(ID3D11Device* device);
-	void PostBackendDevice();
+	bool CheckBackendFeatures(IDXGIAdapter* adapter);
+	bool UpgradeBackendInterface(void** ppInterface);
+	bool SetBackendD3DDevice(ID3D11Device* device);
+	bool PostBackendDevice();
 
 	// Module availability methods
 	bool HasFrameGenModule() const;
@@ -3276,11 +3276,13 @@ public:
 	void CreateProxySwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC swapChainDesc);
 	void CreateProxyInterop();
 	IDXGISwapChain* GetProxySwapChain();
+	void ResetProxyCreationState() noexcept;
 	bool IsOpenCompositeUpscalingBlocked(bool a_forceRefresh = false) const;
 	void ClearVRDirectUpscaledEyeOutput(uint32_t eyeIndex, ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
 		uint32_t depthWidthPerEye, uint32_t depthHeight, uint32_t colorWidthPerEye, uint32_t colorHeight, uint32_t colorOffsetX = 0);
 
 private:
+	std::once_flag upscalingSDKLoadOnce;
 	enum class VRPostLoadCompositorHoldState : uint32_t
 	{
 		Idle,

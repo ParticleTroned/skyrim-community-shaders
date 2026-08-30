@@ -70,6 +70,8 @@
 
 namespace
 {
+	constexpr UINT kNvidiaVendorId = 0x10DE;
+
 	uint64_t QueryVRRenderScalePresentationQpc() noexcept
 	{
 		LARGE_INTEGER value{};
@@ -15287,10 +15289,82 @@ namespace
 /**
  * @brief Creates a Direct3D 11 device and swap chain, with support for advanced upscaling and frame generation features.
  *
- * This function intercepts the standard D3D11 device and swap chain creation process to enable integration with Streamline and FidelityFX technologies, as well as optional D3D12 proxying for frame generation. It adjusts swap chain flags for tearing support, manages feature checks, and conditionally routes device creation through Streamline or FidelityFX proxies based on runtime settings and hardware capabilities. If frame generation is enabled and supported, a D3D12 proxy is used; otherwise, the standard D3D11 creation path is followed.
+ * This function preserves the caller's D3D11 contract while activating optional
+ * Streamline integration or an isolated FidelityFX D3D12 proxy. Backend failure
+ * always falls back to the original D3D11 creation path.
  *
  * @return HRESULT indicating the success or failure of device and swap chain creation.
  */
+namespace
+{
+	winrt::com_ptr<IDXGIAdapter> ResolveCreatedAdapter(
+		ID3D11Device* a_device,
+		IDXGIAdapter* a_requestedAdapter)
+	{
+		winrt::com_ptr<IDXGIAdapter> adapter;
+		winrt::com_ptr<IDXGIDevice> dxgiDevice;
+		if (a_device &&
+			SUCCEEDED(a_device->QueryInterface(IID_PPV_ARGS(dxgiDevice.put()))) &&
+			SUCCEEDED(dxgiDevice->GetAdapter(adapter.put()))) {
+			return adapter;
+		}
+		if (a_requestedAdapter)
+			adapter.copy_from(a_requestedAdapter);
+		return adapter;
+	}
+
+	void ActivateStreamlineBackend(
+		Upscaling& a_upscaling,
+		IDXGIAdapter* a_adapter,
+		ID3D11Device** a_device,
+		IDXGISwapChain** a_swapChain,
+		bool a_upgradeSwapChain)
+	{
+		if (!a_adapter || !a_device || !*a_device) {
+			a_upscaling.streamline.MarkAdapterUnavailable("created device adapter could not be resolved");
+			return;
+		}
+
+		DXGI_ADAPTER_DESC adapterDesc{};
+		if (FAILED(a_adapter->GetDesc(&adapterDesc))) {
+			a_upscaling.streamline.MarkAdapterUnavailable("created device adapter description is unavailable");
+			return;
+		}
+		if (globals::state)
+			globals::state->SetAdapterDescription(adapterDesc.Description);
+		ApplyLegacyFsr4RuntimeSelectionMigration(
+			a_upscaling.settings,
+			FidelityFX::GetFsr4AdapterSupport(adapterDesc));
+		if (adapterDesc.VendorId != kNvidiaVendorId) {
+			a_upscaling.streamline.MarkAdapterUnavailable("created device is not on an NVIDIA adapter");
+			return;
+		}
+		if (!a_upscaling.IsBackendInitialized())
+			return;
+
+		void* upgradedDevice = *a_device;
+		if (!a_upscaling.UpgradeBackendInterface(&upgradedDevice)) {
+			a_upscaling.streamline.MarkAdapterUnavailable("D3D device interface upgrade failed");
+			return;
+		}
+		void* upgradedSwapChain = a_swapChain ? *a_swapChain : nullptr;
+		if (a_upgradeSwapChain &&
+			(!upgradedSwapChain || !a_upscaling.UpgradeBackendInterface(&upgradedSwapChain))) {
+			a_upscaling.streamline.MarkAdapterUnavailable("DXGI swap-chain interface upgrade failed");
+			return;
+		}
+
+		*a_device = static_cast<ID3D11Device*>(upgradedDevice);
+		if (a_upgradeSwapChain)
+			*a_swapChain = static_cast<IDXGISwapChain*>(upgradedSwapChain);
+		if (!a_upscaling.SetBackendD3DDevice(*a_device) ||
+			!a_upscaling.CheckBackendFeatures(a_adapter)) {
+			return;
+		}
+		(void)a_upscaling.PostBackendDevice();
+	}
+}
+
 HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	IDXGIAdapter* pAdapter,
 	D3D_DRIVER_TYPE DriverType,
@@ -15306,13 +15380,6 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	ID3D11DeviceContext** ppImmediateContext)
 {
 	auto& upscaling = globals::features::upscaling;
-	DXGI_ADAPTER_DESC adapterDesc{};
-	if (pAdapter && SUCCEEDED(pAdapter->GetDesc(&adapterDesc))) {
-		globals::state->SetAdapterDescription(adapterDesc.Description);
-		ApplyLegacyFsr4RuntimeSelectionMigration(
-			upscaling.settings,
-			FidelityFX::GetFsr4AdapterSupport(adapterDesc));
-	}
 	if (IsRenderDocUpscalingBlocked(true)) {
 		if (!g_renderDocUpscalingD3DHookBypassLogged.exchange(true, std::memory_order_acq_rel)) {
 			logger::warn(
@@ -15333,28 +15400,24 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 			ppImmediateContext);
 	}
 
-	upscaling.LoadUpscalingSDKs();
-
-	// Use better swap effect to prevent tearing and improve performance
-	pSwapChainDesc->SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-	// FLIP_DISCARD requires at least two buffers.
-	if (pSwapChainDesc->BufferCount < 2)
-		pSwapChainDesc->BufferCount = 2;
-	// This branch currently runs without HDRDisplay integration; normalize sRGB
-	// swapchain formats to UNORM for the D3D12 proxy/inter-op path.
-	if (pSwapChainDesc->BufferDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) {
-		pSwapChainDesc->BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-	} else if (pSwapChainDesc->BufferDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB) {
-		pSwapChainDesc->BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	try {
+		upscaling.LoadUpscalingSDKs();
+	} catch (const std::exception& error) {
+		logger::error("[Upscaling] Backend initialization failed before D3D creation: {}", error.what());
+		upscaling.streamline.MarkAdapterUnavailable("backend initialization threw an exception");
+	} catch (...) {
+		logger::error("[Upscaling] Backend initialization failed before D3D creation");
+		upscaling.streamline.MarkAdapterUnavailable("backend initialization threw an unknown exception");
 	}
 
 	const bool isVR = REL::Module::IsVR();
-	bool shouldProxy = !isVR;
+	bool shouldProxy = !isVR && pSwapChainDesc && ppSwapChain && ppDevice && ppImmediateContext &&
+	                   !upscaling.d3d12SwapChainActive;
 	if (shouldProxy)
 		if (!pSwapChainDesc->Windowed)
 			shouldProxy = false;
 
-	auto refreshRate = Upscaling::GetRefreshRate(pSwapChainDesc->OutputWindow);
+	auto refreshRate = pSwapChainDesc ? Upscaling::GetRefreshRate(pSwapChainDesc->OutputWindow) : 60.0;
 	upscaling.refreshRate = refreshRate;
 
 	if (shouldProxy) {
@@ -15370,48 +15433,82 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	}
 
 	upscaling.lowRefreshRate = refreshRate < 120;
-	upscaling.isWindowed = pSwapChainDesc->Windowed;
-
-	const D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_1;
+	upscaling.isWindowed = pSwapChainDesc && pSwapChainDesc->Windowed;
 
 	if (shouldProxy) {
 		logger::info("[Frame Generation] Frame Generation enabled, using D3D12 proxy");
 
 		const bool hasFrameGenModule = upscaling.HasFrameGenModule();
 		if (hasFrameGenModule) {
-			DX::ThrowIfFailed(D3D11CreateDevice(
+			winrt::com_ptr<ID3D11Device> candidateDevice;
+			winrt::com_ptr<ID3D11DeviceContext> candidateContext;
+			D3D_FEATURE_LEVEL candidateFeatureLevel{};
+			const HRESULT proxyDeviceResult = D3D11CreateDevice(
 				pAdapter,
 				DriverType,
 				Software,
 				Flags,
-				&featureLevel,
-				1,
+				pFeatureLevels,
+				FeatureLevels,
 				SDKVersion,
-				ppDevice,
-				pFeatureLevel,
-				ppImmediateContext));
+				candidateDevice.put(),
+				&candidateFeatureLevel,
+				candidateContext.put());
 
-			upscaling.SetProxyD3D11Device(*ppDevice);
-			upscaling.SetProxyD3D11DeviceContext(*ppImmediateContext);
-			upscaling.CreateProxySwapChain(pAdapter, *pSwapChainDesc);
-			upscaling.CreateProxyInterop();
+			if (SUCCEEDED(proxyDeviceResult) && candidateDevice && candidateContext) {
+				try {
+					DXGI_SWAP_CHAIN_DESC proxyDesc = *pSwapChainDesc;
+					proxyDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+					proxyDesc.BufferCount = std::max(proxyDesc.BufferCount, 2u);
+					if (proxyDesc.BufferDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB)
+						proxyDesc.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+					else if (proxyDesc.BufferDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB)
+						proxyDesc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 
-			*ppSwapChain = upscaling.GetProxySwapChain();
+					auto resolvedAdapter = ResolveCreatedAdapter(candidateDevice.get(), pAdapter);
+					if (!resolvedAdapter)
+						throw std::runtime_error("proxy device adapter resolution failed");
+					upscaling.SetProxyD3D11Device(candidateDevice.get());
+					upscaling.SetProxyD3D11DeviceContext(candidateContext.get());
+					upscaling.CreateProxySwapChain(resolvedAdapter.get(), proxyDesc);
+					upscaling.CreateProxyInterop();
+					auto* proxySwapChain = upscaling.GetProxySwapChain();
+					if (!proxySwapChain)
+						throw std::runtime_error("proxy swap chain was not published");
 
-			upscaling.d3d12SwapChainActive = true;
+					auto* activatedDevice = candidateDevice.detach();
+					try {
+						ActivateStreamlineBackend(
+							upscaling,
+							resolvedAdapter.get(),
+							&activatedDevice,
+							nullptr,
+							false);
+					} catch (...) {
+						if (activatedDevice)
+							activatedDevice->Release();
+						throw;
+					}
 
-			if (upscaling.IsBackendInitialized()) {
-				upscaling.UpgradeBackendInterface((void**)&(*ppDevice));
-				// Keep the D3D12 proxy swap chain as the outermost layer so
-				// GetDevice(IID_ID3D11Device) stays compatible with other SKSE plugins.
-				upscaling.SetBackendD3DDevice(*ppDevice);
-				// Streamline feature availability, notably Reflex/PCL, is only reliable
-				// after the D3D device is bound.
-				upscaling.CheckBackendFeatures(pAdapter);
-				upscaling.PostBackendDevice();
+					*ppDevice = activatedDevice;
+					*ppImmediateContext = candidateContext.detach();
+					*ppSwapChain = proxySwapChain;
+					if (pFeatureLevel)
+						*pFeatureLevel = candidateFeatureLevel;
+					upscaling.d3d12SwapChainActive = true;
+					return S_OK;
+				} catch (const std::exception& error) {
+					logger::error("[Frame Generation] Proxy creation failed; using the original D3D path: {}", error.what());
+					upscaling.ResetProxyCreationState();
+				} catch (...) {
+					logger::error("[Frame Generation] Proxy creation failed; using the original D3D path");
+					upscaling.ResetProxyCreationState();
+				}
+			} else {
+				logger::warn(
+					"[Frame Generation] Proxy D3D11 device creation failed with 0x{:08X}; using the original D3D path",
+					static_cast<uint32_t>(proxyDeviceResult));
 			}
-
-			return S_OK;
 		} else {
 			logger::warn("[Frame Generation] FidelityFX DLLs are not loaded, skipping proxy");
 		}
@@ -15421,8 +15518,8 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 		DriverType,
 		Software,
 		Flags,
-		&featureLevel,
-		1,
+		pFeatureLevels,
+		FeatureLevels,
 		SDKVersion,
 		pSwapChainDesc,
 		ppSwapChain,
@@ -15430,14 +15527,23 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 		pFeatureLevel,
 		ppImmediateContext);
 
-	if (upscaling.IsBackendInitialized()) {
-		upscaling.UpgradeBackendInterface((void**)&(*ppDevice));
-		upscaling.UpgradeBackendInterface((void**)&(*ppSwapChain));
-		upscaling.SetBackendD3DDevice(*ppDevice);
-		// Streamline feature availability, notably Reflex/PCL, is only reliable
-		// after the D3D device is bound.
-		upscaling.CheckBackendFeatures(pAdapter);
-		upscaling.PostBackendDevice();
+	if (FAILED(ret) || !ppDevice || !*ppDevice) {
+		return ret;
+	}
+	if (!ppSwapChain || !*ppSwapChain) {
+		upscaling.streamline.MarkAdapterUnavailable("D3D creation returned no swap chain");
+		return ret;
+	}
+
+	try {
+		auto resolvedAdapter = ResolveCreatedAdapter(*ppDevice, pAdapter);
+		ActivateStreamlineBackend(upscaling, resolvedAdapter.get(), ppDevice, ppSwapChain, true);
+	} catch (const std::exception& error) {
+		logger::error("[Streamline] Device activation failed without affecting D3D creation: {}", error.what());
+		upscaling.streamline.MarkAdapterUnavailable("device activation threw an exception");
+	} catch (...) {
+		logger::error("[Streamline] Device activation failed without affecting D3D creation");
+		upscaling.streamline.MarkAdapterUnavailable("device activation threw an unknown exception");
 	}
 
 	return ret;
@@ -42599,7 +42705,10 @@ double Upscaling::GetRefreshRate(HWND a_window)
 
 bool Upscaling::IsFrameGenerationActive() const
 {
-	return IsFrameGenerationDx12PathActive() && settings.frameGenerationMode && fidelityFX.isFrameGenActive;
+	return IsFrameGenerationDx12PathActive() &&
+	       settings.frameGenerationMode &&
+	       fidelityFX.isFrameGenActive &&
+	       !streamline.IsFrameGenerationQuarantinedByReflex();
 }
 
 bool Upscaling::IsFrameGenerationDx12PathActive() const
@@ -42616,7 +42725,10 @@ bool Upscaling::ShouldUseFrameGenerationThisFrame() const
 	const bool mainOrLoadingMenuOpen = state && state->IsMainOrLoadingMenuOpen(ui);
 	const bool menuOpen = pausedMenuOpen || mainOrLoadingMenuOpen;
 
-	return IsFrameGenerationDx12PathActive() && settings.frameGenerationMode && (settings.frameGenerationAllowInMenus || !menuOpen);
+	return IsFrameGenerationDx12PathActive() &&
+	       settings.frameGenerationMode &&
+	       !streamline.IsFrameGenerationQuarantinedByReflex() &&
+	       (settings.frameGenerationAllowInMenus || !menuOpen);
 }
 
 bool Upscaling::IsUpscalingActive() const
@@ -53951,40 +54063,50 @@ float Upscaling::GetFrameGenerationFrameTime() const
 // Unified interface methods
 void Upscaling::LoadUpscalingSDKs()
 {
-	ApplyOpenCompositeUpscalingBlocker(true);
-	const auto blocker = GetOpenCompositeUpscalingBlocker();
-	if (blocker.active) {
-		if (!openCompositeUpscalingBackendSkipLogged) {
-			if (blocker.configPath.empty()) {
-				logger::warn(
-					"[Upscaling] Skipping CSX Streamline/FidelityFX backend initialization because Open Composite has {}=true.",
-					blocker.settingName);
-			} else {
-				logger::warn(
-					"[Upscaling] Skipping CSX Streamline/FidelityFX backend initialization because Open Composite has {}=true in {}.",
-					blocker.settingName,
-					blocker.configPath);
+	std::call_once(upscalingSDKLoadOnce, [this] {
+		ApplyOpenCompositeUpscalingBlocker(true);
+		const auto blocker = GetOpenCompositeUpscalingBlocker();
+		if (blocker.active) {
+			if (!openCompositeUpscalingBackendSkipLogged) {
+				if (blocker.configPath.empty()) {
+					logger::warn(
+						"[Upscaling] Skipping CSX Streamline/FidelityFX backend initialization because Open Composite has {}=true.",
+						blocker.settingName);
+				} else {
+					logger::warn(
+						"[Upscaling] Skipping CSX Streamline/FidelityFX backend initialization because Open Composite has {}=true in {}.",
+						blocker.settingName,
+						blocker.configPath);
+				}
+				openCompositeUpscalingBackendSkipLogged = true;
 			}
-			openCompositeUpscalingBackendSkipLogged = true;
+			streamline.MarkAdapterUnavailable("Open Composite owns upscaling");
+			return;
 		}
-		return;
-	}
-	if (IsRenderDocUpscalingBlocked(true)) {
-		if (!renderDocUpscalingBackendSkipLogged) {
-			logger::warn(
-				"[Upscaling] Skipping CSX Streamline/FidelityFX backend initialization because {}.",
-				GetRenderDocUpscalingBlockReason());
-			renderDocUpscalingBackendSkipLogged = true;
+		if (IsRenderDocUpscalingBlocked(true)) {
+			if (!renderDocUpscalingBackendSkipLogged) {
+				logger::warn(
+					"[Upscaling] Skipping CSX Streamline/FidelityFX backend initialization because {}.",
+					GetRenderDocUpscalingBlockReason());
+				renderDocUpscalingBackendSkipLogged = true;
+			}
+			streamline.MarkAdapterUnavailable("RenderDoc capture is active");
+			return;
 		}
-		return;
-	}
 
-	// Initialize upscaling SDK components during plugin startup
-	// This ensures all SDKs are available before any D3D device creation
-	streamline.LoadInterposer();
-	fidelityFX.LoadFFX();
-	if (streamline.featureCheckComplete)
-		CompleteDelayedVRPerfModeBootLatchForDLSSAvailability(*this, "Streamline DLSS availability resolved after deferred VR boot latch");
+		try {
+			streamline.LoadInterposer();
+			fidelityFX.LoadFFX();
+			if (streamline.featureCheckComplete)
+				CompleteDelayedVRPerfModeBootLatchForDLSSAvailability(*this, "Streamline DLSS availability resolved after deferred VR boot latch");
+		} catch (const std::exception& error) {
+			logger::error("[Upscaling] Optional backend initialization failed: {}", error.what());
+			streamline.MarkAdapterUnavailable("optional backend initialization threw an exception");
+		} catch (...) {
+			logger::error("[Upscaling] Optional backend initialization failed");
+			streamline.MarkAdapterUnavailable("optional backend initialization threw an unknown exception");
+		}
+	});
 }
 
 void Upscaling::SetUIBuffer()
@@ -54011,42 +54133,43 @@ bool Upscaling::IsBackendInitialized() const
 	return streamline.initialized;
 }
 
-void Upscaling::CheckBackendFeatures(IDXGIAdapter* adapter)
+bool Upscaling::CheckBackendFeatures(IDXGIAdapter* adapter)
 {
 	if (IsRenderDocUpscalingBlocked())
-		return;
+		return false;
 
-	streamline.CheckFeatures(adapter);
-	CompleteDelayedVRPerfModeBootLatchForDLSSAvailability(*this, "Streamline DLSS availability resolved after deferred VR boot latch");
+	return streamline.CheckFeatures(adapter);
 }
 
-void Upscaling::UpgradeBackendInterface(void** ppInterface)
+bool Upscaling::UpgradeBackendInterface(void** ppInterface)
 {
 	if (IsRenderDocUpscalingBlocked())
-		return;
+		return false;
 
-	streamline.slUpgradeInterface(ppInterface);
+	return streamline.TryUpgradeInterface(ppInterface);
 }
 
-void Upscaling::SetBackendD3DDevice(ID3D11Device* device)
+bool Upscaling::SetBackendD3DDevice(ID3D11Device* device)
 {
 	if (IsRenderDocUpscalingBlocked())
-		return;
+		return false;
 
 	submitStageDeviceLost.store(false, std::memory_order_release);
 	ClearSubmitStageVendorResumeCooldown();
 	ClearSubmitStageBoundsFallbackWatchdog();
 	ClearSubmitStageFoveatedVendorRetryBackoff();
 	streamline.ResetDLSSIdleFences();
-	streamline.slSetD3DDevice(device);
+	return streamline.TrySetD3DDevice(device);
 }
 
-void Upscaling::PostBackendDevice()
+bool Upscaling::PostBackendDevice()
 {
 	if (IsRenderDocUpscalingBlocked())
-		return;
+		return false;
 
-	streamline.PostDevice();
+	const bool ready = streamline.PostDevice();
+	CompleteDelayedVRPerfModeBootLatchForDLSSAvailability(*this, "Streamline DLSS availability resolved after device activation");
+	return ready;
 }
 
 // Module availability methods
@@ -54082,6 +54205,13 @@ void Upscaling::CreateProxyInterop()
 IDXGISwapChain* Upscaling::GetProxySwapChain()
 {
 	return dx12SwapChain.GetSwapChainProxy();
+}
+
+void Upscaling::ResetProxyCreationState() noexcept
+{
+	d3d12SwapChainActive = false;
+	fidelityFX.ResetFrameGenerationContexts();
+	dx12SwapChain.ResetUnpublished();
 }
 
 bool Upscaling::IsOpenCompositeUpscalingBlocked(bool a_forceRefresh) const

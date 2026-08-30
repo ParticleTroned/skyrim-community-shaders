@@ -123,4 +123,5 @@ public:
 
 	// D3D12 interop resource management
 	void CreateSharedResources();
+	void ResetUnpublished() noexcept;
 };

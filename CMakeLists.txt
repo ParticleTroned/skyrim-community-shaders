@@ -1593,6 +1593,11 @@ if(BUILD_CONTROLLER_TESTS)
         tests/vr_render_scale_qualification_policy_test.cpp
     )
     add_controller_test(
+        vr_render_scale_replacement_telemetry_policy_test
+        VRRenderScaleReplacementTelemetryPolicy
+        tests/vr_render_scale_replacement_telemetry_policy_test.cpp
+    )
+    add_controller_test(
         streamline_frame_token_publication_test
         StreamlineFrameTokenPublication
         tests/streamline_frame_token_publication_test.cpp
@@ -1861,6 +1866,7 @@ if(BUILD_CONTROLLER_TESTS)
             perf_mode_restart_state_test
             vr_vendor_relatch_policy_test
             vr_render_scale_qualification_policy_test
+            vr_render_scale_replacement_telemetry_policy_test
             streamline_frame_token_publication_test
             vr_render_scale_preparation_policy_test
             vr_presentation_stretch_telemetry_policy_test

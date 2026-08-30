@@ -7,6 +7,10 @@ set(_bridge_path
 )
 file(READ "${_bridge_path}" _bridge)
 file(READ
+    "${PROJECT_ROOT}/src/Features/Upscaling/VRRenderScaleReplacementTelemetryPolicy.h"
+    _replacement_policy
+)
+file(READ
     "${PROJECT_ROOT}/src/Features/Upscaling.h"
     _upscaling_header
 )
@@ -261,7 +265,7 @@ foreach(_required_behavior IN ITEMS
 	"QualificationPolicy::EvaluateMilestones"
 	"QualificationPolicy::IsMilestoneSatisfied"
 	"QualificationPolicy::UsesVendorEvaluation"
-	"QualificationPolicy::UsesNativeAPIEvaluation"
+	"ReplacementTelemetry::ClassifyPresentationProof"
 	"QualificationPolicy::HasCoherentNativeVendorEvaluation"
 	"case CSX::UpscalingAPI::Method::kNone"
 	"case CSX::UpscalingAPI::Method::kTAA"
@@ -319,6 +323,38 @@ foreach(_required_behavior IN ITEMS
 	"cleanupTailMs"
 	"sameObservation"
 	"replacementTimeline"
+	"schemaRevision"
+	"presentationProof"
+	"exact_vendor_evaluation"
+	"exact_native_presentation"
+	"validated_completed_output_hold"
+	"preparationAdmission"
+	"replacementMutationAdmission"
+	"mutationExpectation"
+	"SeedNativeTargetMutationExpectation"
+	"MergeQualificationMutationExpectation"
+	"MergeMutationExpectation"
+	"OwnsMutationBoundary"
+	"native_contract_reuse"
+	"scaled_contract_retirement"
+	"RecordPhysicalMutationBoundary"
+	"provider_lifecycle_invalidation"
+	"ImportQualificationReplacementTimeline"
+	"firstPostMutation"
+	"firstNewGenerationProven"
+	"OptionalNonNegativeIntegerOrZero"
+	"TryRecordQualificationReplacementTimeline"
+	"VendorLifecycleMutationStarted"
+	"provider_lifecycle"
+	"exactStableAfterMutation"
+	"presentationCycleAudit"
+	"eyeObservations"
+	"incompleteStereoCycles"
+	"preMutationExactPresentationSuppressed"
+	"preMutationStretchWithoutMutation"
+	"postMutationOldGenerationPresented"
+	"postMutationUnprovenStereoSubmitted"
+	"phaseDurations"
 	"currentPresentationProven"
 	"currentPresentationGeneration"
 	"replacementAdmissionBlocked"
@@ -355,11 +391,39 @@ foreach(_required_behavior IN ITEMS
     "controller.retirement.nextCleanupFrame == 0"
 	"BuildProvenance::ValidateExpectedBuild"
 )
-    string(FIND "${_bridge}" "${_required_behavior}" _behavior_position)
+    string(FIND "${_bridge}\n${_replacement_policy}" "${_required_behavior}" _behavior_position)
     if(_behavior_position EQUAL -1)
         message(FATAL_ERROR "Render-scale qualification behavior is missing: ${_required_behavior}")
     endif()
 endforeach()
+
+foreach(_unsafe_nullable_proof_read IN ITEMS
+	"dispatchProof->value(\"contractGeneration\""
+	"proof->value(\"contractGeneration\""
+	"dispatchProof.value(\"contractGeneration\""
+	"dispatchProof.value(\"transitionEpoch\""
+	"dispatchProof.value(\"deviceIdentity\""
+	"dispatchProof.value(\"resourceRevision\""
+	"dispatchProof.value(\"methodValue\""
+)
+	string(FIND "${_bridge}" "${_unsafe_nullable_proof_read}" _unsafe_nullable_proof_position)
+	if(NOT _unsafe_nullable_proof_position EQUAL -1)
+		message(FATAL_ERROR
+			"Nullable replacement proof field is read as a required number: ${_unsafe_nullable_proof_read}"
+		)
+	endif()
+endforeach()
+
+string(FIND
+	"${_upscaling_source}"
+	"#ifdef DEVBENCH_BRIDGE_ENABLED\n\tVRRenderScaleDevBenchBridge::RecordPresentationAuditObservation"
+	_audit_compile_guard_position
+)
+if(_audit_compile_guard_position EQUAL -1)
+	message(FATAL_ERROR
+		"Authoritative presentation auditing is not compiled out without DevBench"
+	)
+endif()
 
 foreach(_required_controller_behavior IN ITEMS
 	"apiControllerPublicationRequired"

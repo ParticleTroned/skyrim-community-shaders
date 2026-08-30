@@ -22340,6 +22340,10 @@ namespace
 		}
 		context->physicalBoundaryEntered = true;
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
+			context->transitionEpoch,
+			VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
+				EngineTargetCreator);
 		context->upscaling->RecordVRRenderScalePreparationCreatorEntered(
 			context->transitionEpoch);
 #endif
@@ -31625,6 +31629,25 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 			a_observation.compositorCycleToken,
 			frame);
 	}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	VRRenderScaleDevBenchBridge::RecordPresentationAuditObservation({
+		.valid = true,
+		.eyeIndex = a_observation.eyeIndex,
+		.frame = published.frame,
+		.compositorCycleToken = published.compositorCycleToken,
+		.transitionEpoch = published.transitionEpoch,
+		.contractGeneration = published.contractGeneration,
+		.method = static_cast<uint32_t>(published.method),
+		.backend = static_cast<uint32_t>(published.vendorBackend),
+		.path = static_cast<uint32_t>(published.path),
+		.deviceIdentity = published.deviceIdentity,
+		.resourceRevision = published.resourceRevision,
+		.loadingOrMenuContext = published.loadingOrMenuContext,
+		.transitionCooldown = published.transitionCooldown,
+		.submitted = true,
+	});
+#endif
 
 	if (pathChanged && ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
@@ -52303,6 +52326,20 @@ void Upscaling::RecordVRVendorRuntimeLifecycle(UpscaleMethod a_upscaleMethod, VR
 		lifecycle = target;
 		revision = ++vrRenderScaleTransitionController.revision;
 	}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (a_phase == VRVendorRuntimeLifecyclePhase::Dirty ||
+		a_phase == VRVendorRuntimeLifecyclePhase::WaitingForDrain ||
+		a_phase == VRVendorRuntimeLifecyclePhase::Destroying ||
+		a_phase == VRVendorRuntimeLifecyclePhase::Inactive ||
+		a_phase == VRVendorRuntimeLifecyclePhase::Failed) {
+		VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
+			lifecycle.transitionEpoch,
+			VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
+				ProviderLifecycle,
+			static_cast<uint32_t>(lifecycle.method));
+	}
+#endif
 
 	if (ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(

@@ -481,14 +481,14 @@
       "spotlightMult": 1.0,
       "vlGammaOffset": 0.0,
       "water": {
-        "FresnelMax": 1.0,
+        "FresnelMax": 0.9,
         "FresnelMin": 0.0,
-        "GlobalReflectionAmount": 1.0,
+        "GlobalReflectionAmount": 1.25,
         "Muddiness": 1.0,
         "RefractionAmount": 1.0,
         "SunSpecularMultiplier": 1.0,
         "WaterBrightness": 1.0,
-        "WaveAmplitude": 1.0
+        "WaveAmplitude": 0.5
       },
       "waterAdvanced": true,
       "waterGammaOffset": 0.0,
@@ -1025,7 +1025,7 @@
     "ShallowFallbackStrength": 1.0,
     "ShallowSurfaceDepthRangeUnits": 256.0,
     "ShoreContactMinFadePixels": 2.0,
-    "ShoreDepthBlendRangeUnits": 10.0,
+    "ShoreDepthBlendRangeUnits": 15.0,
     "SurfaceVisibilityModelVersion": 11,
     "UseOpenShadersDepthBehaviour": false,
     "UseOptimisedMeshes": true,
@@ -1034,7 +1034,7 @@
       0.3499999940395355,
       1.0
     ],
-    "WaterTintStrength": 0.0
+    "WaterTintStrength": 0.15
   },
   "Wetterness": {
     "DebugSettings": {

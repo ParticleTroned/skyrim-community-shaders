@@ -7,7 +7,7 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "CAD7DE6FE2FC8E4E6F527728D9CC4AB934DE47A6E327BFD0204519E97F65C605"
+        "sha256": "E0064B1E4D16B6D93C0D47161FFC21FFA139A5F072FA90D1356293CE00D366FE"
     },
     "runtimeSettingsContract": {
         "revision": 2,
@@ -182,6 +182,47 @@
         { "path": ["Hair Specular", "SelfShadowStrength"], "value": 1.0 },
         { "path": ["Hair Specular", "SelfShadowExponent"], "value": 0.1 },
         { "path": ["Hair Specular", "SelfShadowScale"], "value": 2.5 },
+        {
+            "path": ["Adaptive Balance", "globalProfile", "water", "WaterBrightness"],
+            "value": 1.0,
+            "reason": "requested shared water appearance baseline"
+        },
+        {
+            "path": ["Adaptive Balance", "globalProfile", "water", "WaveAmplitude"],
+            "value": 0.5
+        },
+        {
+            "path": ["Adaptive Balance", "globalProfile", "water", "FresnelMin"],
+            "value": 0.0
+        },
+        {
+            "path": ["Adaptive Balance", "globalProfile", "water", "FresnelMax"],
+            "value": 0.9
+        },
+        {
+            "path": ["Adaptive Balance", "globalProfile", "water", "GlobalReflectionAmount"],
+            "value": 1.25
+        },
+        {
+            "path": ["Adaptive Balance", "globalProfile", "water", "SunSpecularMultiplier"],
+            "value": 1.0
+        },
+        {
+            "path": ["Adaptive Balance", "globalProfile", "water", "RefractionAmount"],
+            "value": 1.0
+        },
+        {
+            "path": ["Adaptive Balance", "globalProfile", "water", "Muddiness"],
+            "value": 1.0
+        },
+        { "path": ["Unified Water", "UseOptimisedMeshes"], "value": true },
+        {
+            "path": ["Unified Water", "WaterTintColor"],
+            "value": [0.0, 0.3499999940395355, 1.0]
+        },
+        { "path": ["Unified Water", "WaterTintStrength"], "value": 0.15 },
+        { "path": ["Unified Water", "ShoreDepthBlendRangeUnits"], "value": 15.0 },
+        { "path": ["Unified Water", "ShallowFallbackMaxDistance"], "value": 26000.0 },
         { "path": ["Screen Space GI", "AOInteriorsOnly"], "value": true },
         { "path": ["Screen Space GI", "ResourceProfile"], "value": 1 },
         { "path": ["Screen Space GI", "EnableGI"], "value": false },
@@ -368,6 +409,31 @@
         { "path": ["Hair Specular", "SelfShadowStrength"], "value": 1.0 },
         { "path": ["Hair Specular", "SelfShadowExponent"], "value": 0.1 },
         { "path": ["Hair Specular", "SelfShadowScale"], "value": 2.5 },
+        { "path": ["Adaptive Balance", "globalProfile", "water", "WaterBrightness"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "globalProfile", "water", "WaveAmplitude"], "value": 0.5 },
+        { "path": ["Adaptive Balance", "globalProfile", "water", "FresnelMin"], "value": 0.0 },
+        { "path": ["Adaptive Balance", "globalProfile", "water", "FresnelMax"], "value": 0.9 },
+        {
+            "path": ["Adaptive Balance", "globalProfile", "water", "GlobalReflectionAmount"],
+            "value": 1.25
+        },
+        {
+            "path": ["Adaptive Balance", "globalProfile", "water", "SunSpecularMultiplier"],
+            "value": 1.0
+        },
+        {
+            "path": ["Adaptive Balance", "globalProfile", "water", "RefractionAmount"],
+            "value": 1.0
+        },
+        { "path": ["Adaptive Balance", "globalProfile", "water", "Muddiness"], "value": 1.0 },
+        { "path": ["Unified Water", "UseOptimisedMeshes"], "value": true },
+        {
+            "path": ["Unified Water", "WaterTintColor"],
+            "value": [0.0, 0.3499999940395355, 1.0]
+        },
+        { "path": ["Unified Water", "WaterTintStrength"], "value": 0.15 },
+        { "path": ["Unified Water", "ShoreDepthBlendRangeUnits"], "value": 15.0 },
+        { "path": ["Unified Water", "ShallowFallbackMaxDistance"], "value": 26000.0 },
         { "path": ["Screen Space GI", "EnableGI"], "value": false },
         { "path": ["Screen Space GI", "EnableExperimentalSpecularGI"], "value": false },
         { "path": ["Screen Space GI", "EnableVanillaSSAO"], "value": false },

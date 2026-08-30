@@ -92,6 +92,11 @@ volumetric setting, while confirming Skylighting as the strongest measured
 tier lever. Rain and character-focused anchors remain necessary for Wetterness,
 Subsurface Scattering, and Hair Specular.
 
+The requested Hair Specular and water-appearance settings are shared appearance
+baselines rather than tier levers. The water baseline includes the blue tint,
+0.15 tint strength, 15-unit shore fade, 0.5 wave amplitude, 0.90 Fresnel maximum,
+and 1.25 global reflection amount recorded in the policy.
+
 Shader-cache packing, selective invalidation, and compiler thread/priority
 policy are deliberately not graphics-tier settings. Presets keep disk caching
 and `Skip Unchanged Shaders` enabled and never request blanket cache clearing.

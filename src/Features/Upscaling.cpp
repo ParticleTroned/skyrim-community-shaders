@@ -15479,7 +15479,8 @@ namespace
 					Upscaling::VRUpscalingTransitionOrigin::CSMenu,
 					0,
 					std::nullopt,
-					VRVendorRelatchPolicy::StartupNativeFallbackControl::RetrySavedProfile);
+					VRVendorRelatchPolicy::StartupNativeFallbackControl::RetrySavedProfile,
+					true);
 			}
 		}
 		if (!retryReady) {
@@ -15568,6 +15569,11 @@ void Upscaling::DrawSettings()
 	if (openCompositeBlocksUpscaling)
 		ImGui::BeginDisabled();
 	const bool methodChanged = ImGui::SliderInt("Method", &methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1), currentMethodLabel);
+	const bool methodEditCommitted = ImGui::IsItemDeactivatedAfterEdit();
+	const auto methodEditDispatch =
+		VRVendorRelatchPolicy::SelectMenuEditDispatch(
+			methodChanged,
+			methodEditCommitted);
 	if (openCompositeBlocksUpscaling)
 		ImGui::EndDisabled();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -15585,7 +15591,7 @@ void Upscaling::DrawSettings()
 	}
 	methodUiIndex = std::clamp(methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1));
 	const auto& selectedUpscaleChoice = upscaleChoices[methodUiIndex];
-	if (methodChanged) {
+	if (methodEditDispatch.publishRequest) {
 		const bool targetRenderScaleMode = IsRenderScaleModeRequested();
 		const uint32_t targetQualityMode = GetEffectiveUpscalingQualityMode();
 		const uint32_t targetDLSSPreset = GetEffectiveDLSSPreset();
@@ -15601,7 +15607,9 @@ void Upscaling::DrawSettings()
 			"upscaling menu method change",
 			VRUpscalingTransitionOrigin::CSMenu,
 			0,
-			targetFSR4RuntimeEnable);
+			targetFSR4RuntimeEnable,
+			VRVendorRelatchPolicy::StartupNativeFallbackControl::None,
+			methodEditDispatch.directMenuEdit);
 	}
 	if (openCompositeBlocksUpscaling) {
 		ApplyOpenCompositeUpscalingBlocker();
@@ -15694,7 +15702,13 @@ void Upscaling::DrawSettings()
 		int renderScaleMode = publicRenderScaleRequested ? 1 : 0;
 		{
 			auto disabledGuard = Util::DisableGuard(!publicRenderScaleCanEdit);
-			if (ImGui::SliderInt("Render Scale", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)])) {
+			const bool renderScaleChanged = ImGui::SliderInt("Render Scale", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)]);
+			const bool renderScaleEditCommitted = ImGui::IsItemDeactivatedAfterEdit();
+			const auto renderScaleEditDispatch =
+				VRVendorRelatchPolicy::SelectMenuEditDispatch(
+					renderScaleChanged,
+					renderScaleEditCommitted);
+			if (renderScaleEditDispatch.publishRequest) {
 				const bool enableRenderScaleMode = std::clamp(renderScaleMode, 0, 1) != 0;
 				const auto fallbackControl =
 					startupNativeFallbackActive && !enableRenderScaleMode ?
@@ -15709,7 +15723,8 @@ void Upscaling::DrawSettings()
 					VRUpscalingTransitionOrigin::CSMenu,
 					0,
 					std::nullopt,
-					fallbackControl);
+					fallbackControl,
+					renderScaleEditDispatch.directMenuEdit);
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -15784,12 +15799,18 @@ void Upscaling::DrawSettings()
 			Upscaling::GetQualityModeResolutionScale(effectiveQualityMode));
 
 		int qualityMode = static_cast<int>(effectiveQualityMode);
-		if (ImGui::SliderInt(
-				"Upscale Preset",
-				&qualityMode,
-				0,
-				static_cast<int>(kQualityModeMaxIndex),
-				labelWithScale.c_str())) {
+		const bool qualityChanged = ImGui::SliderInt(
+			"Upscale Preset",
+			&qualityMode,
+			0,
+			static_cast<int>(kQualityModeMaxIndex),
+			labelWithScale.c_str());
+		const bool qualityEditCommitted = ImGui::IsItemDeactivatedAfterEdit();
+		const auto qualityEditDispatch =
+			VRVendorRelatchPolicy::SelectMenuEditDispatch(
+				qualityChanged,
+				qualityEditCommitted);
+		if (qualityEditDispatch.publishRequest) {
 			const uint32_t requestedQualityMode = static_cast<uint32_t>(std::clamp(qualityMode, 0, static_cast<int>(kQualityModeMaxIndex)));
 			const bool targetRenderScaleMode = IsRenderScaleModeRequested() && IsRenderScaleQualityMode(requestedQualityMode);
 			ApplyCSMenuUpscalingTransition(
@@ -15797,7 +15818,12 @@ void Upscaling::DrawSettings()
 				targetRenderScaleMode,
 				requestedQualityMode,
 				GetEffectiveDLSSPreset(),
-				"upscaling menu preset change");
+				"upscaling menu preset change",
+				VRUpscalingTransitionOrigin::CSMenu,
+				0,
+				std::nullopt,
+				VRVendorRelatchPolicy::StartupNativeFallbackControl::None,
+				qualityEditDispatch.directMenuEdit);
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Controls the shared DLSS/FSR3/FSR4 internal render scale / quality level.");
@@ -15825,7 +15851,13 @@ void Upscaling::DrawSettings()
 
 			const int dlssProfileUiMaxIndex = static_cast<int>(kDLSSProfileDisplayOrder.size()) - 1;
 			uint32_t displayedDLSSPreset = kDLSSProfileDisplayOrder[dlssProfileUiIndex];
-			if (ImGui::SliderInt("DLSS Profile", &dlssProfileUiIndex, 0, dlssProfileUiMaxIndex, GetDLSSPresetLabel(displayedDLSSPreset))) {
+			const bool dlssProfileChanged = ImGui::SliderInt("DLSS Profile", &dlssProfileUiIndex, 0, dlssProfileUiMaxIndex, GetDLSSPresetLabel(displayedDLSSPreset));
+			const bool dlssProfileEditCommitted = ImGui::IsItemDeactivatedAfterEdit();
+			const auto dlssProfileEditDispatch =
+				VRVendorRelatchPolicy::SelectMenuEditDispatch(
+					dlssProfileChanged,
+					dlssProfileEditCommitted);
+			if (dlssProfileEditDispatch.publishRequest) {
 				dlssProfileUiIndex = std::clamp(dlssProfileUiIndex, 0, dlssProfileUiMaxIndex);
 				displayedDLSSPreset = kDLSSProfileDisplayOrder[dlssProfileUiIndex];
 				ApplyCSMenuUpscalingTransition(
@@ -15833,7 +15865,12 @@ void Upscaling::DrawSettings()
 					IsRenderScaleModeRequested(),
 					GetEffectiveUpscalingQualityMode(),
 					displayedDLSSPreset,
-					"upscaling menu DLSS profile change");
+					"upscaling menu DLSS profile change",
+					VRUpscalingTransitionOrigin::CSMenu,
+					0,
+					std::nullopt,
+					VRVendorRelatchPolicy::StartupNativeFallbackControl::None,
+					dlssProfileEditDispatch.directMenuEdit);
 			}
 
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -16310,12 +16347,17 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 	if (openCompositeBlocksUpscaling)
 		ImGui::BeginDisabled();
 	const bool methodChanged = ImGui::SliderInt("Upscale Method", &methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1), upscaleChoices[methodUiIndex].label);
+	const bool methodEditCommitted = ImGui::IsItemDeactivatedAfterEdit();
+	const auto methodEditDispatch =
+		VRVendorRelatchPolicy::SelectMenuEditDispatch(
+			methodChanged,
+			methodEditCommitted);
 	if (openCompositeBlocksUpscaling)
 		ImGui::EndDisabled();
 
 	methodUiIndex = std::clamp(methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1));
 	const auto& selectedUpscaleChoice = upscaleChoices[methodUiIndex];
-	if (methodChanged) {
+	if (methodEditDispatch.publishRequest) {
 		const bool targetRenderScaleMode = IsRenderScaleModeRequested();
 		const uint32_t targetQualityMode = GetEffectiveUpscalingQualityMode();
 		const uint32_t targetDLSSPreset = GetEffectiveDLSSPreset();
@@ -16331,7 +16373,9 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 			"performance tuning method change",
 			VRUpscalingTransitionOrigin::CSMenu,
 			0,
-			targetFSR4RuntimeEnable);
+			targetFSR4RuntimeEnable,
+			VRVendorRelatchPolicy::StartupNativeFallbackControl::None,
+			methodEditDispatch.directMenuEdit);
 	}
 	if (openCompositeBlocksUpscaling) {
 		Util::Text::Warning("Upscaling is locked to None while Open Composite has %s=true.", openCompositeBlocker.settingName.c_str());
@@ -16349,7 +16393,13 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 			Upscaling::GetQualityModeResolutionScale(effectiveQualityMode));
 
 		int qualityMode = static_cast<int>(effectiveQualityMode);
-		if (ImGui::SliderInt("Upscale Preset", &qualityMode, 0, static_cast<int>(kQualityModeMaxIndex), labelWithScale.c_str())) {
+		const bool qualityChanged = ImGui::SliderInt("Upscale Preset", &qualityMode, 0, static_cast<int>(kQualityModeMaxIndex), labelWithScale.c_str());
+		const bool qualityEditCommitted = ImGui::IsItemDeactivatedAfterEdit();
+		const auto qualityEditDispatch =
+			VRVendorRelatchPolicy::SelectMenuEditDispatch(
+				qualityChanged,
+				qualityEditCommitted);
+		if (qualityEditDispatch.publishRequest) {
 			const uint32_t requestedQualityMode = static_cast<uint32_t>(std::clamp(qualityMode, 0, static_cast<int>(kQualityModeMaxIndex)));
 			const bool targetRenderScaleMode = IsRenderScaleModeRequested() && IsRenderScaleQualityMode(requestedQualityMode);
 			ApplyCSMenuUpscalingTransition(
@@ -16357,7 +16407,12 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 				targetRenderScaleMode,
 				requestedQualityMode,
 				GetEffectiveDLSSPreset(),
-				"performance tuning preset change");
+				"performance tuning preset change",
+				VRUpscalingTransitionOrigin::CSMenu,
+				0,
+				std::nullopt,
+				VRVendorRelatchPolicy::StartupNativeFallbackControl::None,
+				qualityEditDispatch.directMenuEdit);
 		}
 
 		if (upscaleMethod == UpscaleMethod::kDLSS) {
@@ -16374,7 +16429,13 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 
 			const int dlssProfileUiMaxIndex = static_cast<int>(kDLSSProfileDisplayOrder.size()) - 1;
 			uint32_t displayedDLSSPreset = kDLSSProfileDisplayOrder[dlssProfileUiIndex];
-			if (ImGui::SliderInt("DLSS Profile", &dlssProfileUiIndex, 0, dlssProfileUiMaxIndex, GetDLSSPresetLabel(displayedDLSSPreset))) {
+			const bool dlssProfileChanged = ImGui::SliderInt("DLSS Profile", &dlssProfileUiIndex, 0, dlssProfileUiMaxIndex, GetDLSSPresetLabel(displayedDLSSPreset));
+			const bool dlssProfileEditCommitted = ImGui::IsItemDeactivatedAfterEdit();
+			const auto dlssProfileEditDispatch =
+				VRVendorRelatchPolicy::SelectMenuEditDispatch(
+					dlssProfileChanged,
+					dlssProfileEditCommitted);
+			if (dlssProfileEditDispatch.publishRequest) {
 				dlssProfileUiIndex = std::clamp(dlssProfileUiIndex, 0, dlssProfileUiMaxIndex);
 				displayedDLSSPreset = kDLSSProfileDisplayOrder[dlssProfileUiIndex];
 				ApplyCSMenuUpscalingTransition(
@@ -16382,7 +16443,12 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 					IsRenderScaleModeRequested(),
 					GetEffectiveUpscalingQualityMode(),
 					displayedDLSSPreset,
-					"performance tuning DLSS profile change");
+					"performance tuning DLSS profile change",
+					VRUpscalingTransitionOrigin::CSMenu,
+					0,
+					std::nullopt,
+					VRVendorRelatchPolicy::StartupNativeFallbackControl::None,
+					dlssProfileEditDispatch.directMenuEdit);
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				DrawDLSSPresetTooltip(displayedDLSSPreset);
@@ -16417,7 +16483,13 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 		int renderScaleMode = publicRenderScaleRequested ? 1 : 0;
 		{
 			auto disabledGuard = Util::DisableGuard(!publicRenderScaleCanEdit);
-			if (ImGui::SliderInt("Render Scale", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)])) {
+			const bool renderScaleChanged = ImGui::SliderInt("Render Scale", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)]);
+			const bool renderScaleEditCommitted = ImGui::IsItemDeactivatedAfterEdit();
+			const auto renderScaleEditDispatch =
+				VRVendorRelatchPolicy::SelectMenuEditDispatch(
+					renderScaleChanged,
+					renderScaleEditCommitted);
+			if (renderScaleEditDispatch.publishRequest) {
 				const bool enableRenderScaleMode = std::clamp(renderScaleMode, 0, 1) != 0;
 				const auto fallbackControl =
 					startupNativeFallbackActive && !enableRenderScaleMode ?
@@ -16432,7 +16504,8 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 					VRUpscalingTransitionOrigin::CSMenu,
 					0,
 					std::nullopt,
-					fallbackControl);
+					fallbackControl,
+					renderScaleEditDispatch.directMenuEdit);
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -17018,6 +17091,7 @@ bool Upscaling::PromoteVRRenderScalePreMutationToNativeRecovery(
 			                         std::max(globals::state->frameCount, 1u) :
 			                         supersededProfile.queuedFrame;
 			replay.origin = supersededProfile.origin;
+			replay.directMenuEdit = supersededProfile.directMenuEdit;
 			replay.stabilizerDoorHandoff =
 				supersededProfile.stabilizerDoorHandoff;
 			replay.stabilizerDoorHandoffSerial =
@@ -20292,7 +20366,7 @@ void Upscaling::SetPerfModeRequested(bool a_enabled, const char* a_reason, bool 
 	RequestPerfModeRenderTargetRecreate(a_reason, a_origin);
 }
 
-Upscaling::UpscalingTransitionApplyResult Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason, VRUpscalingTransitionOrigin a_origin, uint64_t a_bufferedStabilizerDoorHandoffSerial, std::optional<bool> a_targetFSR4RuntimeEnable, VRVendorRelatchPolicy::StartupNativeFallbackControl a_startupFallbackControl)
+Upscaling::UpscalingTransitionApplyResult Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason, VRUpscalingTransitionOrigin a_origin, uint64_t a_bufferedStabilizerDoorHandoffSerial, std::optional<bool> a_targetFSR4RuntimeEnable, VRVendorRelatchPolicy::StartupNativeFallbackControl a_startupFallbackControl, bool a_directMenuEdit)
 {
 	if (ApplyOpenCompositeUpscalingBlocker(true))
 		return {
@@ -20301,6 +20375,9 @@ Upscaling::UpscalingTransitionApplyResult Upscaling::ApplyCSMenuUpscalingTransit
 		};
 
 	const bool isVR = globals::game::isVR;
+	const bool directMenuEdit =
+		a_directMenuEdit &&
+		a_origin == VRUpscalingTransitionOrigin::CSMenu;
 	const bool allowPendingDLSSSelection =
 		a_targetMethod == UpscaleMethod::kDLSS &&
 		!streamline.featureCheckComplete;
@@ -20381,7 +20458,8 @@ Upscaling::UpscalingTransitionApplyResult Upscaling::ApplyCSMenuUpscalingTransit
 		currentDesiredProfile.renderScaleModeEnabled == targetRenderScaleMode &&
 		currentDesiredProfile.perfModeEnabled == targetRenderScaleMode &&
 		currentDesiredProfile.dlssPreset == dlssPreset &&
-		currentDesiredProfile.fsr4RuntimeEnabled == targetFSR4RuntimeEnable;
+		currentDesiredProfile.fsr4RuntimeEnabled == targetFSR4RuntimeEnable &&
+		currentDesiredProfile.directMenuEdit == directMenuEdit;
 	if (duplicatePendingTarget) {
 		return {
 			.disposition = UpscalingTransitionApplyDisposition::Coalesced,
@@ -20513,7 +20591,8 @@ Upscaling::UpscalingTransitionApplyResult Upscaling::ApplyCSMenuUpscalingTransit
 			bufferedStabilizerDoorHandoff ?
 				a_bufferedStabilizerDoorHandoffSerial :
 				0,
-			a_startupFallbackControl);
+			a_startupFallbackControl,
+			directMenuEdit);
 		if (!queueResult.Accepted()) {
 			return {
 				.disposition = UpscalingTransitionApplyDisposition::Rejected,
@@ -23352,7 +23431,9 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(
 	}
 	const bool directMenuRequestRelatch =
 		VRVendorRelatchPolicy::CanUseDirectMenuRequestPacing(
-			a_origin == VRUpscalingTransitionOrigin::CSMenu,
+			pendingControllerProfile ?
+				pendingControllerProfile->directMenuEdit :
+				false,
 			pendingControllerProfile ? pendingControllerProfile->requestID : 0);
 	const uint32_t relatchDelayFrames = std::max(
 		directMenuRequestRelatch ? 1u : kVRUpscalingTransitionApplyDelayFrames,
@@ -24354,6 +24435,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			physicalProfile.dlssSharpener = failedRequest->dlssSharpener;
 			physicalProfile.dlssSharpness = failedRequest->dlssSharpness;
 			physicalProfile.fsrSharpness = failedRequest->fsrSharpness;
+			physicalProfile.directMenuEdit = failedRequest->directMenuEdit;
 			physicalProfile.stabilizerDoorHandoff = failedRequest->stabilizerDoorHandoff;
 			physicalProfile.stabilizerDoorHandoffSerial = failedRequest->stabilizerDoorHandoffSerial;
 		}
@@ -25266,6 +25348,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				retainedDesiredTarget.preparationOptionsGeneration;
 			replay.queuedFrame = std::max(state->frameCount, 1u);
 			replay.origin = retainedDesiredTarget.origin;
+			replay.directMenuEdit = retainedDesiredTarget.directMenuEdit;
 			{
 				std::scoped_lock requestLock(
 					pendingVRRenderScaleRequestMutex);
@@ -49197,7 +49280,8 @@ Upscaling::VRRenderScaleRequestQueueResult Upscaling::QueueVRRenderScaleRequest(
 	bool a_fsr4RuntimeEnabled,
 	VRUpscalingTransitionOrigin a_origin,
 	uint64_t a_bufferedStabilizerDoorHandoffSerial,
-	VRVendorRelatchPolicy::StartupNativeFallbackControl a_startupFallbackControl)
+	VRVendorRelatchPolicy::StartupNativeFallbackControl a_startupFallbackControl,
+	bool a_directMenuEdit)
 {
 	const uint32_t qualityMode = std::min(a_qualityMode, kQualityModeMaxIndex);
 	const bool renderScaleModeEnabled =
@@ -49250,6 +49334,9 @@ Upscaling::VRRenderScaleRequestQueueResult Upscaling::QueueVRRenderScaleRequest(
 	request.fsrSharpness = settings.sharpnessFSR;
 	request.queuedFrame = frame;
 	request.origin = a_origin;
+	request.directMenuEdit =
+		a_directMenuEdit &&
+		a_origin == VRUpscalingTransitionOrigin::CSMenu;
 	request.stabilizerDoorHandoff = bufferedAPIDoorHandoff;
 	request.stabilizerDoorHandoffSerial =
 		bufferedAPIDoorHandoff ? a_bufferedStabilizerDoorHandoffSerial : 0;
@@ -49473,6 +49560,7 @@ namespace
 		                              profile.displayEyeHeight;
 		profile.queuedFrame = a_request.queuedFrame;
 		profile.origin = a_request.origin;
+		profile.directMenuEdit = a_request.directMenuEdit;
 		profile.stabilizerDoorHandoff = a_request.stabilizerDoorHandoff;
 		profile.stabilizerDoorHandoffSerial = a_request.stabilizerDoorHandoffSerial;
 		profile.resources = a_upscaling.BuildVRRenderScaleResourceKey(profile);
@@ -53275,7 +53363,7 @@ bool Upscaling::ShouldWaitForVRUpscalingTransitionDelay() const
 	if (!HasPendingVRRenderScaleTransition() && !bufferedStabilizerDoorHandoff)
 		return false;
 	if (VRVendorRelatchPolicy::CanUseDirectMenuRequestPacing(
-			desiredProfile.origin == VRUpscalingTransitionOrigin::CSMenu,
+			desiredProfile.directMenuEdit,
 			desiredProfile.requestID)) {
 		// The next physical queue still enforces the hard same-frame boundary.
 		// Waiting here as well would duplicate coalescing for a discrete menu edit.

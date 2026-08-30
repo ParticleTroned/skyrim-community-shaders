@@ -509,6 +509,17 @@ namespace
 			CanUseDirectMenuRequestPacing(true, 0)) {
 			return false;
 		}
+		for (std::uint32_t bits = 0; bits < (1u << 2); ++bits) {
+			const bool valueChanged = (bits & (1u << 0)) != 0;
+			const bool editCommitted = (bits & (1u << 1)) != 0;
+			const auto dispatch = SelectMenuEditDispatch(
+				valueChanged,
+				editCommitted);
+			if (dispatch.publishRequest != (valueChanged || editCommitted) ||
+				dispatch.directMenuEdit != editCommitted) {
+				return false;
+			}
+		}
 
 		for (std::uint32_t bits = 0; bits < (1u << 7); ++bits) {
 			const StabilizerControllerTargetAdmission admission{

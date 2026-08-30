@@ -600,12 +600,30 @@ namespace VRVendorRelatchPolicy
 	}
 
 	[[nodiscard]] constexpr bool CanUseDirectMenuRequestPacing(
-		bool a_directMenuRequest,
+		bool a_directMenuEdit,
 		std::uint64_t a_requestID) noexcept
 	{
-		// A CS-menu combo/toggle publishes one immutable latest-wins request.
-		// It needs the same-frame floor, but not the API coalescing interval.
-		return a_directMenuRequest && a_requestID != 0;
+		// A committed menu edit publishes one immutable latest-wins request. Its
+		// origin alone is insufficient because reload and measurement share CSMenu.
+		return a_directMenuEdit && a_requestID != 0;
+	}
+
+	struct MenuEditDispatch
+	{
+		bool publishRequest = false;
+		bool directMenuEdit = false;
+	};
+
+	[[nodiscard]] constexpr MenuEditDispatch SelectMenuEditDispatch(
+		bool a_valueChanged,
+		bool a_editCommitted) noexcept
+	{
+		// Continuous controls remain on the ordinary latest-wins coalescing path
+		// until ImGui reports the final committed value.
+		return {
+			.publishRequest = a_valueChanged || a_editCommitted,
+			.directMenuEdit = a_editCommitted,
+		};
 	}
 
 	struct DispatchAdmission
@@ -1911,9 +1929,9 @@ namespace VRVendorRelatchPolicy
 	{
 		return a_immutableRequestPublished &&
 		       (a_action ==
-				   StartupNativeFallbackControlAction::ResolveDisabled ||
-			   a_action ==
-				   StartupNativeFallbackControlAction::ResolveRetry);
+					   StartupNativeFallbackControlAction::ResolveDisabled ||
+				   a_action ==
+					   StartupNativeFallbackControlAction::ResolveRetry);
 	}
 
 	struct PostLoadRecoveryTransitionBinding

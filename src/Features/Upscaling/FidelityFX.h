@@ -99,7 +99,9 @@ public:
 	HMODULE module = nullptr;
 
 	ffx::Context swapChainContext{};
-	ffx::Context frameGenContext;
+	ffx::Context frameGenContext{};
+	bool swapChainContextValid = false;
+	bool frameGenContextValid = false;
 	FfxFsr3Context fsrContext[2];
 
 	bool featureFSR3FG = false;
@@ -112,7 +114,8 @@ public:
 	static std::vector<std::pair<std::string, std::string>> dllVersions;
 
 	void LoadFFX();
-	void SetupFrameGeneration();
+	bool SetupFrameGeneration();
+	void ResetFrameGenerationContexts() noexcept;
 	void Present(bool a_useFrameGeneration);
 
 	LifecycleResult CreateFSRResources();

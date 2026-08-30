@@ -32,17 +32,19 @@ namespace
 	constexpr float kTuningDeltaThresholdMs = 0.099f;
 	constexpr int kTuningSettleFrames = 20;
 	constexpr int kTuningHighlightFrames = 240;
-	constexpr double kFeatureCostMeasurementSeconds = 3.0;
+	constexpr double kFeatureCostMeasurementSeconds = 5.0;
 	constexpr double kFeatureCostMeasurementMilliseconds = kFeatureCostMeasurementSeconds * 1000.0;
 	constexpr double kFeatureCostIntervalMilliseconds = 1000.0;
 	constexpr double kFeatureCostInitialWaitSeconds = 0.5;
-	constexpr double kFeatureCostComparisonWaitSeconds = 7.0;
+	constexpr double kFeatureCostComparisonWaitSeconds = 9.0;
 	constexpr double kFeatureCostRestoreWaitSeconds = 0.5;
+	constexpr double kFeatureCostRestartCooldownSeconds = 10.0;
 	constexpr double kFeatureCostMaximumRunSeconds = 45.0;
+	constexpr std::size_t kFeatureCostMaximumMissingMetricSamples = 2;
 	constexpr std::size_t kFeatureCostMeasurementBlockCount =
 		static_cast<std::size_t>(kFeatureCostMeasurementMilliseconds / kFeatureCostIntervalMilliseconds);
 	static_assert(
-		kFeatureCostMeasurementBlockCount == 3 &&
+		kFeatureCostMeasurementBlockCount == 5 &&
 		kFeatureCostMeasurementBlockCount * kFeatureCostIntervalMilliseconds == kFeatureCostMeasurementMilliseconds);
 
 	bool IsRenderScaleDesktopMirrorQualityAvailable()
@@ -93,6 +95,8 @@ namespace
 	struct FeatureCostMetricSample
 	{
 		std::array<FeatureCostMoments, kFeatureCostMeasurementBlockCount> blocks{};
+		std::size_t missingSampleCount = 0;
+		bool accumulationValid = true;
 	};
 
 	struct FeatureCostSample
@@ -108,6 +112,7 @@ namespace
 	{
 		float value = 0.0f;
 		float standardError = 0.0f;
+		std::size_t missingSampleCount = 0;
 		bool available = false;
 		bool hasStandardError = false;
 		bool significant = false;
@@ -162,6 +167,7 @@ namespace
 	};
 
 	static std::unordered_map<std::string, FeatureCostMeasurementState> g_costMeasurementStates;
+	static double g_costMeasurementRestartAllowedTime = 0.0;
 	static Util::VanityCameraSuppressionLease g_featureCostVanityCameraSuppression;
 	static bool g_profilerStateCaptured = false;
 	static bool g_profilerWasUserEnabled = false;
@@ -228,23 +234,22 @@ namespace
 		return false;
 	}
 
+	double GetFeatureCostRestartCooldownRemaining(double currentTime)
+	{
+		return std::max(0.0, g_costMeasurementRestartAllowedTime - currentTime);
+	}
+
+	void StartFeatureCostRestartCooldown(double currentTime)
+	{
+		g_costMeasurementRestartAllowedTime = currentTime + kFeatureCostRestartCooldownSeconds;
+	}
+
 	void SyncFeatureCostVanityCameraSuppression()
 	{
 		if (IsAnyFeatureCostMeasurementActive())
 			g_featureCostVanityCameraSuppression.Acquire();
 		else
 			g_featureCostVanityCameraSuppression.Release();
-	}
-
-	double GetFeatureCostMean(const FeatureCostMetricSample& sample)
-	{
-		return PerformanceTuningStatistics::GetMean(
-			PerformanceTuningStatistics::CombineMoments(sample.blocks));
-	}
-
-	double GetFeatureCostSampleWeight(const FeatureCostMetricSample& sample)
-	{
-		return PerformanceTuningStatistics::CombineMoments(sample.blocks).sampleWeight;
 	}
 
 	bool IsPositiveFiniteTiming(float value)
@@ -263,15 +268,31 @@ namespace
 		float value,
 		double sampleWeight)
 	{
-		if (blockIndex >= sample.blocks.size())
-			return;
-
-		PerformanceTuningStatistics::AddMoment(sample.blocks[blockIndex], value, sampleWeight);
+		if (blockIndex >= sample.blocks.size() ||
+			!PerformanceTuningStatistics::AddMoment(sample.blocks[blockIndex], value, sampleWeight)) {
+			sample.accumulationValid = false;
+		}
 	}
 
-	bool TryGetFeatureCostMeanVariance(const FeatureCostMetricSample& sample, double& meanVariance)
+	void RecordMissingFeatureCostSample(FeatureCostMetricSample& sample)
 	{
-		return PerformanceTuningStatistics::TryGetBlockMeanVariance(sample.blocks, meanVariance);
+		sample.missingSampleCount = std::min(
+			sample.missingSampleCount + 1,
+			kFeatureCostMaximumMissingMetricSamples + 1);
+	}
+
+	bool TryGetFeatureCostMeanStatistics(
+		const FeatureCostMetricSample& sample,
+		double& mean,
+		double& meanVariance)
+	{
+		if (!sample.accumulationValid) {
+			mean = 0.0;
+			meanVariance = 0.0;
+			return false;
+		}
+
+		return PerformanceTuningStatistics::TryGetBlockMeanStatistics(sample.blocks, mean, meanVariance);
 	}
 
 	void SetFeatureCostSignificance(FeatureCostMetricDelta& delta, double standardError)
@@ -296,28 +317,36 @@ namespace
 
 	FeatureCostMetricAnalysis AnalyzeFeatureCostMetric(
 		const FeatureCostMetricSample& current,
-		const FeatureCostMetricSample& comparison,
-		bool available)
+		const FeatureCostMetricSample& comparison)
 	{
 		FeatureCostMetricAnalysis analysis;
-		analysis.delta.available = available &&
-		                           GetFeatureCostSampleWeight(current) > 0.0 &&
-		                           GetFeatureCostSampleWeight(comparison) > 0.0;
-		if (!analysis.delta.available)
+		if (!PerformanceTuningStatistics::IsMissingSampleCountWithinLimit(
+				current.missingSampleCount,
+				comparison.missingSampleCount,
+				kFeatureCostMaximumMissingMetricSamples)) {
 			return analysis;
+		}
+		analysis.delta.missingSampleCount =
+			current.missingSampleCount + comparison.missingSampleCount;
 
-		analysis.currentMean = GetFeatureCostMean(current);
-		analysis.comparisonMean = GetFeatureCostMean(comparison);
-		analysis.delta.value = static_cast<float>(analysis.currentMean - analysis.comparisonMean);
-
-		if (!TryGetFeatureCostMeanVariance(current, analysis.currentMeanVariance) ||
-			!TryGetFeatureCostMeanVariance(comparison, analysis.comparisonMeanVariance)) {
+		if (!TryGetFeatureCostMeanStatistics(
+				current,
+				analysis.currentMean,
+				analysis.currentMeanVariance) ||
+			!TryGetFeatureCostMeanStatistics(
+				comparison,
+				analysis.comparisonMean,
+				analysis.comparisonMeanVariance)) {
 			return analysis;
 		}
 
+		analysis.delta.value = static_cast<float>(analysis.currentMean - analysis.comparisonMean);
+		analysis.delta.available = true;
 		SetFeatureCostSignificance(
 			analysis.delta,
 			std::sqrt(analysis.currentMeanVariance + analysis.comparisonMeanVariance));
+		if (!analysis.delta.hasStandardError)
+			analysis.delta.available = false;
 		return analysis;
 	}
 
@@ -342,15 +371,9 @@ namespace
 			currentDerivative * currentDerivative * frame.currentMeanVariance +
 			comparisonDerivative * comparisonDerivative * frame.comparisonMeanVariance;
 		SetFeatureCostSignificance(fps, std::sqrt(fpsMeanVariance));
+		if (!fps.hasStandardError)
+			fps.available = false;
 		return fps;
-	}
-
-	bool HasFeatureCostMetricSamples(
-		const FeatureCostSample& sample,
-		const FeatureCostMetricSample& metric)
-	{
-		return GetFeatureCostSampleWeight(sample.frame) > 0.0 &&
-		       GetFeatureCostSampleWeight(metric) > 0.0;
 	}
 
 	bool TryGetDisplayTimingMs(bool hasGameTiming, float gameTimingMs, float& value)
@@ -754,6 +777,15 @@ namespace
 			return FeatureCostSampleResult::Complete;
 
 		const double frameMs = static_cast<double>(summary.frameSampleMs);
+		const bool validGameGpuSample =
+			summary.hasGameGpuSample && IsValidFeatureCostTiming(summary.gameGpuSampleMs);
+		const bool validGameCpuSample =
+			summary.hasGameCpuSample && IsValidFeatureCostTiming(summary.gameCpuSampleMs);
+		if (!validGameGpuSample)
+			RecordMissingFeatureCostSample(sample.gameGpu);
+		if (!validGameCpuSample)
+			RecordMissingFeatureCostSample(sample.gameCpu);
+
 		double remainingSampleWeight = std::min(1.0, remainingDurationMs / frameMs);
 		while (remainingSampleWeight > 1.0e-9) {
 			const auto blockIndex = std::min(
@@ -770,9 +802,9 @@ namespace
 				break;
 
 			AddFeatureCostMoment(sample.frame, blockIndex, summary.frameSampleMs, chunkWeight);
-			if (summary.hasGameGpuSample)
+			if (validGameGpuSample)
 				AddFeatureCostMoment(sample.gameGpu, blockIndex, summary.gameGpuSampleMs, chunkWeight);
-			if (summary.hasGameCpuSample)
+			if (validGameCpuSample)
 				AddFeatureCostMoment(sample.gameCpu, blockIndex, summary.gameCpuSampleMs, chunkWeight);
 
 			sample.sampledDurationMs = completesBlock ?
@@ -870,30 +902,17 @@ namespace
 
 	void FinalizeFeatureCostMeasurement(FeatureCostMeasurementState& state)
 	{
-		const bool hasFrame =
-			GetFeatureCostSampleWeight(state.currentSample.frame) > 0.0 &&
-			GetFeatureCostSampleWeight(state.testSample.frame) > 0.0;
-		const bool hasGameGpu =
-			HasFeatureCostMetricSamples(state.currentSample, state.currentSample.gameGpu) &&
-			HasFeatureCostMetricSamples(state.testSample, state.testSample.gameGpu);
-		const bool hasGameCpu =
-			HasFeatureCostMetricSamples(state.currentSample, state.currentSample.gameCpu) &&
-			HasFeatureCostMetricSamples(state.testSample, state.testSample.gameCpu);
-
 		const auto frame = AnalyzeFeatureCostMetric(
 			state.currentSample.frame,
-			state.testSample.frame,
-			hasFrame);
+			state.testSample.frame);
 		state.delta.frame = frame.delta;
 		state.delta.fps = AnalyzeFeatureCostFps(frame);
 		const auto gameGpu = AnalyzeFeatureCostMetric(
 			state.currentSample.gameGpu,
-			state.testSample.gameGpu,
-			hasGameGpu);
+			state.testSample.gameGpu);
 		const auto gameCpu = AnalyzeFeatureCostMetric(
 			state.currentSample.gameCpu,
-			state.testSample.gameCpu,
-			hasGameCpu);
+			state.testSample.gameCpu);
 		state.delta.gameGpu = gameGpu.delta;
 		state.delta.gameCpu = gameCpu.delta;
 	}
@@ -990,6 +1009,10 @@ namespace
 	{
 		if (!feature || !feature->SupportsPerformanceCostMeasurement() || !feature->IsPerformanceCostMeasurementEnabled())
 			return;
+		if (GetFeatureCostRestartCooldownRemaining(currentTime) > 0.0) {
+			logger::warn("Actual feature cost measurement was not started because the 10-second restart cooldown is active");
+			return;
+		}
 		if (IsAnyFeatureCostMeasurementActive()) {
 			logger::warn("Actual feature cost measurement was not started because another measurement is active");
 			return;
@@ -1095,6 +1118,7 @@ namespace
 
 			FinalizeFeatureCostMeasurement(state);
 			state.phase = FeatureCostMeasurementPhase::Complete;
+			StartFeatureCostRestartCooldown(currentTime);
 			return;
 		}
 
@@ -1165,7 +1189,7 @@ namespace
 		ImGui::TableSetColumnIndex(0);
 		ImGui::TextDisabled("%s", label);
 		ImGui::TableSetColumnIndex(1);
-		if (!metric.available) {
+		if (!metric.available || !metric.hasStandardError) {
 			ImGui::TextDisabled("--");
 			return;
 		}
@@ -1175,16 +1199,13 @@ namespace
 			ImGui::PushStyleColor(ImGuiCol_Text, Util::Color::PerformanceDelta(colorDirection));
 
 		const char* significanceMarker = metric.significant ? "*" : "";
-		if (metric.hasStandardError) {
-			if (fps) {
-				ImGui::Text("%+.1f%s \xC2\xB1 %.1f", metric.value, significanceMarker, metric.standardError);
-			} else {
-				ImGui::Text("%+.3f%s \xC2\xB1 %.3f ms", metric.value, significanceMarker, metric.standardError);
-			}
-		} else if (fps) {
-			ImGui::Text("%+.1f (SE --)", metric.value);
+		std::string missingSampleMarker;
+		if (metric.missingSampleCount > 0)
+			missingSampleMarker = fmt::format(" \xE2\x80\xA0{}", metric.missingSampleCount);
+		if (fps) {
+			ImGui::Text("%+.1f%s \xC2\xB1 %.1f%s", metric.value, significanceMarker, metric.standardError, missingSampleMarker.c_str());
 		} else {
-			ImGui::Text("%+.3f ms (SE --)", metric.value);
+			ImGui::Text("%+.3f%s \xC2\xB1 %.3f ms%s", metric.value, significanceMarker, metric.standardError, missingSampleMarker.c_str());
 		}
 
 		if (colorDirection != 0)
@@ -1307,22 +1328,24 @@ namespace
 
 		const bool running = IsFeatureCostMeasurementActive(state);
 		const bool anyMeasurementRunning = IsAnyFeatureCostMeasurementActive();
+		const double currentTime = ImGui::GetTime();
+		const double restartCooldownRemaining =
+			GetFeatureCostRestartCooldownRemaining(currentTime);
 		const bool canStartMeasurement =
 			feature->IsPerformanceCostMeasurementEnabled() &&
 			!running &&
-			!anyMeasurementRunning;
+			!anyMeasurementRunning &&
+			restartCooldownRemaining <= 0.0;
 		ImGui::BeginDisabled(!canStartMeasurement);
 		if (ImGui::Button("Actual feature cost")) {
-			StartFeatureCostMeasurement(feature, state, ImGui::GetTime());
+			StartFeatureCostMeasurement(feature, state, currentTime);
 		}
 		ImGui::EndDisabled();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextWrapped("CS closes automatically for the complete run. Keep the headset and scene still for about 15 seconds; a small overlay shows progress and CS reopens with the results.");
-			ImGui::TextWrapped("After a 0.5-second preparation, current settings are measured as three one-second intervals. The feature then changes to Off/None, waits seven seconds, and measures three more one-second intervals before restoring the exact prior state.");
-			ImGui::TextWrapped("If game-frame timing is interrupted during capture, only that three-second measurement restarts.");
-			ImGui::TextWrapped("GPU and CPU averages use only valid positive samples. Missing and zero samples are excluded; each row requires valid samples in both states and never blocks Game or FPS.");
-			ImGui::TextWrapped("Results are mean differences plus or minus standard error. Uncertainty is estimated from the three non-overlapping one-second interval means in each state.");
-			ImGui::TextWrapped("An asterisk after a value marks a two-sided block-mean normal test with p <= 0.05; percentile rows are not included.");
+			ImGui::TextWrapped("CS closes automatically for the complete run. Keep the headset and scene still for about 20 seconds; a small overlay shows progress and CS reopens with the results.");
+			ImGui::TextWrapped("After a 0.5-second preparation, current settings are measured as five one-second intervals. The feature then changes to Off/None, waits nine seconds, and measures five more one-second intervals before restoring the exact prior state.");
+			ImGui::TextWrapped("If game-frame timing is interrupted during capture, only that five-second measurement restarts.");
+			ImGui::TextWrapped("GPU and CPU rows tolerate up to two missing raw samples across both states. Three or more make only that row unavailable; missing data never blocks Game or FPS.");
 			ImGui::TextWrapped("The automatic idle/vanity camera remains suppressed for the complete run and its previous delay is restored afterward.");
 			if (feature && feature->GetShortName() == "Skylighting") {
 				ImGui::TextWrapped("For Skylighting, the comparison state is its in-game Enable toggle set to Off, not a lower preset.");
@@ -1331,6 +1354,10 @@ namespace
 				"Comparison: %s - %s",
 				GetFeatureCostComparisonLabel(feature),
 				GetFeatureCostComparisonDetails(feature));
+		}
+		if (restartCooldownRemaining > 0.0) {
+			ImGui::SameLine();
+			ImGui::TextDisabled("Ready in %.0fs", std::ceil(restartCooldownRemaining));
 		}
 		if (!running && anyMeasurementRunning && !IsFeatureCostMeasurementActive(state)) {
 			ImGui::SameLine();
@@ -1362,11 +1389,9 @@ namespace
 		}
 
 		ImGui::Spacing();
-		ImGui::TextDisabled("Difference vs %s", GetFeatureCostComparisonLabel(feature));
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextWrapped("Difference is current minus the comparison. Standard error comes from the three non-overlapping one-second interval means collected in each state.");
-			ImGui::TextWrapped("Significant frame-time increases are positive and magenta; significant decreases are negative and green. Non-significant values keep their measured sign and use normal white text. FPS uses its natural direction: gains are green and losses are magenta.");
-		}
+		const std::string differenceHeader = fmt::format(
+			"Current - {} \xC2\xB1 SE",
+			GetFeatureCostComparisonLabel(feature));
 		if (ImGui::BeginTable(
 				"##FeatureCostResults",
 				2,
@@ -1375,7 +1400,7 @@ namespace
 					ImGuiTableFlags_SizingStretchProp |
 					ImGuiTableFlags_NoSavedSettings)) {
 			ImGui::TableSetupColumn("Metric", ImGuiTableColumnFlags_WidthFixed);
-			ImGui::TableSetupColumn("Difference \xC2\xB1 SE", ImGuiTableColumnFlags_WidthStretch);
+			ImGui::TableSetupColumn(differenceHeader.c_str(), ImGuiTableColumnFlags_WidthStretch);
 			ImGui::TableHeadersRow();
 			RenderFeatureCostMetricRow(
 				"Game",
@@ -1399,7 +1424,10 @@ namespace
 				false);
 			ImGui::EndTable();
 		}
-		ImGui::TextDisabled("* p <= 0.05");
+		ImGui::TextDisabled(
+			"* p <= 0.05    \xE2\x80\xA0"
+			"1/\xE2\x80\xA0"
+			"2: raw samples missing; 3+ = --");
 	}
 
 	int GetFeatureListDirection(const TuningHighlightState& state, const std::string& shortName)
@@ -1759,6 +1787,7 @@ void PerformanceTuningRenderer::UpdateClosedMenuMeasurement()
 			state.delta = {};
 			state.failureMessage = "Measurement stopped: timing did not complete.";
 			state.phase = FeatureCostMeasurementPhase::Complete;
+			StartFeatureCostRestartCooldown(currentTime);
 			logger::warn("Actual feature cost measurement for '{}' timed out after {} seconds", shortName, kFeatureCostMaximumRunSeconds);
 			continue;
 		}

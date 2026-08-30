@@ -70,7 +70,7 @@ public:
 		float MinDiffuseVisibility = 0.1f;
 		float MinSpecularVisibility = 0.1f;
 		float ProbeFieldSize = kDefaultProbeFieldSize;  // XY probe field size in world units
-		uint ProbeGridQuality = 1;                      // 0: performance, 1: balanced, 2: quality, 3: ultra quality, 4: hoshipa
+		uint ProbeGridQuality = 1;                      // 0: performance, 1: balanced, 2: quality
 		bool EnableSkylighting = true;
 		bool EnableIncrementalProbeUpdates = true;
 		uint StableSliceCount = 11;
@@ -98,11 +98,14 @@ public:
 		float MinSpecularVisibility;
 		uint ProbeUpdateSliceStart;
 		uint ProbeUpdateSliceCount;
+		uint ShadowDataAvailable;
+		uint ShadowDataPadding[3];
 	};
 	static_assert(sizeof(SkylightingCB) % 16 == 0);
 
 	SkylightingCB GetCommonBufferData(bool a_inWorld);
 	bool IsRuntimeActive() const { return loaded && settings.EnableSkylighting; }
+	bool HasCurrentShadowData() const;
 
 	winrt::com_ptr<ID3D11SamplerState> comparisonSampler = nullptr;
 
@@ -110,6 +113,8 @@ public:
 	Texture3D* texProbeArray = nullptr;
 	Texture3D* texAccumFramesArray = nullptr;
 	ID3D11Device* resourceDevice = nullptr;
+	Texture3D* texShadowBitmask = nullptr;
+	Texture3D* texShadowVisibility = nullptr;
 
 	winrt::com_ptr<ID3D11ComputeShader> probeUpdateCompute = nullptr;
 

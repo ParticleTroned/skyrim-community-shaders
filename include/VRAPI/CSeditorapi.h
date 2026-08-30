@@ -6,8 +6,10 @@ namespace CSX::EditorAPI
 {
 	inline constexpr char ServiceName[] = "csx.editor";
 	inline constexpr std::uint32_t ServiceMajor = 1;
-	inline constexpr std::uint32_t ServiceMinor = 0;
-	inline constexpr std::uint32_t SchemaRevision = 1;
+	inline constexpr std::uint32_t MinimumServiceMinor = 0;
+	inline constexpr std::uint32_t LegacySchemaRevision = 1;
+	inline constexpr std::uint32_t ServiceMinor = 1;
+	inline constexpr std::uint32_t SchemaRevision = 2;
 
 	enum class Status : std::uint32_t
 	{
@@ -38,7 +40,10 @@ namespace CSX::EditorAPI
 		kClose = 2,
 		kToggle = 3,
 		kResetLayout = 4,
-		kExitPreview = 5
+		kExitPreview = 5,
+		kOpenLightEditor = 6,
+		kBeginLightPick = 7,
+		kCancelLightPick = 8
 	};
 
 	enum MutationFlag : std::uint64_t
@@ -54,12 +59,36 @@ namespace CSX::EditorAPI
 		kCapabilityLayoutReset = 1ull << 2,
 		kCapabilityPreviewInspection = 1ull << 3,
 		kCapabilityPreviewExit = 1ull << 4,
-		kCapabilityPreflightTokens = 1ull << 5
+		kCapabilityPreflightTokens = 1ull << 5,
+		kCapabilityLightPickerControl = 1ull << 6
 	};
 
 	inline constexpr std::uint64_t ServiceCapabilities =
 		kCapabilitySnapshot | kCapabilityWindowControl | kCapabilityLayoutReset |
-		kCapabilityPreviewInspection | kCapabilityPreviewExit | kCapabilityPreflightTokens;
+		kCapabilityPreviewInspection | kCapabilityPreviewExit | kCapabilityPreflightTokens |
+		kCapabilityLightPickerControl;
+	inline constexpr std::uint64_t LegacyServiceCapabilities =
+		ServiceCapabilities & ~kCapabilityLightPickerControl;
+
+	[[nodiscard]] constexpr bool SupportsMutationAction(
+		std::uint64_t a_capabilities,
+		MutationAction a_action) noexcept
+	{
+		switch (a_action) {
+		case MutationAction::kOpen:
+		case MutationAction::kClose:
+		case MutationAction::kToggle:
+		case MutationAction::kResetLayout:
+		case MutationAction::kExitPreview:
+			return true;
+		case MutationAction::kOpenLightEditor:
+		case MutationAction::kBeginLightPick:
+		case MutationAction::kCancelLightPick:
+			return (a_capabilities & kCapabilityLightPickerControl) != 0;
+		default:
+			return false;
+		}
+	}
 
 	struct Snapshot001
 	{

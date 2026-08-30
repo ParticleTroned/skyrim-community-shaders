@@ -1529,8 +1529,26 @@ if(BUILD_CONTROLLER_TESTS)
             "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
             -P "${PROJECT_SOURCE_DIR}/tests/menu_devbench_preflight_contract_test.cmake"
     )
+    add_test(
+        NAME VRMenuUiContract
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            -P "${PROJECT_SOURCE_DIR}/tests/vr_menu_ui_contract_test.cmake"
+    )
     set_tests_properties(
-        MenuDevBenchPreflightContract
+        MenuDevBenchPreflightContract VRMenuUiContract
+        PROPERTIES LABELS "ControllerTests"
+    )
+    add_test(
+        NAME EditorLightPickerContract
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            -P "${PROJECT_SOURCE_DIR}/tests/editor_light_picker_contract_test.cmake"
+    )
+    set_tests_properties(
+        EditorLightPickerContract
         PROPERTIES LABELS "ControllerTests"
     )
 
@@ -1549,6 +1567,11 @@ if(BUILD_CONTROLLER_TESTS)
         perf_mode_restart_state_test
         PerfModeRestartState
         tests/perf_mode_restart_state_test.cpp
+    )
+    add_controller_test(
+        performance_tuning_statistics_test
+        PerformanceTuningStatistics
+        tests/performance_tuning_statistics_test.cpp
     )
     add_controller_test(
         vr_vendor_relatch_policy_test
@@ -1636,6 +1659,15 @@ if(BUILD_CONTROLLER_TESTS)
         volumetric_lighting_cache_refresh_policy_test
         VolumetricLightingCacheRefreshPolicy
         tests/volumetric_lighting_cache_refresh_policy_test.cpp
+    )
+    add_controller_test(
+        volumetric_lighting_tuning_policy_test
+        VolumetricLightingTuningPolicy
+        tests/volumetric_lighting_tuning_policy_test.cpp
+    )
+    target_link_libraries(
+        volumetric_lighting_tuning_policy_test
+        PRIVATE nlohmann_json::nlohmann_json
     )
     add_controller_test(
         vr_depth_culling_enable_policy_test
@@ -1831,6 +1863,7 @@ if(BUILD_CONTROLLER_TESTS)
             cache_invalidation_test
             shader_compilation_scheduling_policy_test
             volumetric_lighting_cache_refresh_policy_test
+            volumetric_lighting_tuning_policy_test
             vr_depth_culling_enable_policy_test
             vr_depth_culling_temporal_policy_test
             vr_wand_interaction_policy_test

@@ -52,25 +52,28 @@ float3 GetSamplingVector(uint3 ThreadID, in RWTexture2DArray<float4> OutputTextu
 	float4 color = EnvCaptureTexture.SampleLevel(LinearSampler, uv, 0);
 
 	float mipLevel = 0.0;
+	const float maxMipLevel = max(SharedData::cubemapCreatorSettings.MaxMipLevel, 1.0);
+	const float mipLevels = maxMipLevel + 1.0;
 
 #if !defined(REFLECTIONS)
 	float k = 1.5;
 	float brightness = k;
 #endif
 
-	while (color.w < 1.0 && mipLevel <= 8) {
+	while (color.w < 1.0 && mipLevel <= mipLevels) {
 		mipLevel++;
 
 		float4 tempColor = 0.0;
-		if (mipLevel < 8) {
+		if (mipLevel < mipLevels) {
 			tempColor = EnvCaptureTexture.SampleLevel(LinearSampler, uv, mipLevel);
 		} else {
-			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, float3(-1.0, 0.0, 0.0), 9);
-			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, float3(1.0, 0.0, 0.0), 9);
-			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, float3(0.0, -1.0, 0.0), 9);
-			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, float3(0.0, 1.0, 0.0), 9);
-			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, float3(0.0, 0.0, -1.0), 9);
-			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, float3(0.0, 0.0, 1.0), 9);
+			const float fallbackMipLevel = mipLevels + 1.0;
+			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, float3(-1.0, 0.0, 0.0), fallbackMipLevel);
+			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, float3(1.0, 0.0, 0.0), fallbackMipLevel);
+			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, float3(0.0, -1.0, 0.0), fallbackMipLevel);
+			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, float3(0.0, 1.0, 0.0), fallbackMipLevel);
+			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, float3(0.0, 0.0, -1.0), fallbackMipLevel);
+			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, float3(0.0, 0.0, 1.0), fallbackMipLevel);
 		}
 
 #if !defined(REFLECTIONS)
@@ -90,9 +93,9 @@ float3 GetSamplingVector(uint3 ThreadID, in RWTexture2DArray<float4> OutputTextu
 	}
 
 #if defined(REFLECTIONS)
-	color.rgb = lerp(color.rgb, Color::IrradianceToLinear(ReflectionsTexture.SampleLevel(LinearSampler, uv, 0.0).rgb), saturate(mipLevel / 7.0));
+	color.rgb = lerp(color.rgb, Color::IrradianceToLinear(ReflectionsTexture.SampleLevel(LinearSampler, uv, 0.0).rgb), saturate(mipLevel / maxMipLevel));
 #else
-	color.rgb = lerp(color.rgb, color.rgb * DefaultCubemap.SampleLevel(LinearSampler, uv, 0.0).xyz, saturate(mipLevel / 7.0));
+	color.rgb = lerp(color.rgb, color.rgb * DefaultCubemap.SampleLevel(LinearSampler, uv, 0.0).xyz, saturate(mipLevel / maxMipLevel));
 #endif
 
 	color.rgb = Color::IrradianceToGamma(color.rgb);

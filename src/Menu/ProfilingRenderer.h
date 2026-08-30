@@ -144,8 +144,14 @@ private:
 	static void SetupTimingTableColumns(float passColumnWidth, bool includePercentColumn);
 	static void RenderGraph();
 	static bool RenderFeatureOverview();
-	static FeatureTimingData CollectFeatureTimingData(const std::string& featurePrefix, bool cpuMode);
-	static FeatureTimingData CollectFeatureTimingData(const std::vector<std::string>& featurePrefixes, bool cpuMode);
+	static FeatureTimingData CollectFeatureTimingData(
+		const std::string& featurePrefix,
+		bool cpuMode,
+		bool includePercentiles = true);
+	static FeatureTimingData CollectFeatureTimingData(
+		const std::vector<std::string>& featurePrefixes,
+		bool cpuMode,
+		bool includePercentiles = true);
 	static bool RenderFeatureTimingGraph(const std::string& featurePrefix, const FeatureTimingData& data, ImGuiUtils::ProfilerGraph& graph, int graphHeight);
 	static bool RenderFeatureTimingData(const std::string& featurePrefix, FeatureTimingMode featureMode, bool showTable);
 };

@@ -1,4 +1,5 @@
 #include "Features/VR.h"
+#include "Features/VR/MenuPositioningPolicy.h"
 #include "RE/B/BSOpenVR.h"
 #include "RE/P/PlayerCharacter.h"
 #include "Utils/VRUtils.h"
@@ -14,6 +15,30 @@ using AttachMode = VR::Settings::OverlayAttachMode;
 
 namespace
 {
+	bool IsFiniteVector(const Vector3& a_value)
+	{
+		return std::isfinite(a_value.x) &&
+		       std::isfinite(a_value.y) &&
+		       std::isfinite(a_value.z);
+	}
+
+	bool TryApplyOffsetDelta(
+		const Vector3& a_initialOffset,
+		const Vector3& a_delta,
+		Vector3& a_offset)
+	{
+		const Vector3 candidate = a_initialOffset + a_delta;
+		if (!IsFiniteVector(candidate))
+			return false;
+
+		a_offset = {
+			VR::Config::SanitizeMenuOffset(candidate.x, a_initialOffset.x),
+			VR::Config::SanitizeMenuOffset(candidate.y, a_initialOffset.y),
+			VR::Config::SanitizeMenuOffset(candidate.z, a_initialOffset.z),
+		};
+		return true;
+	}
+
 	bool TryGetHMDWorld(Matrix& a_hmdWorld)
 	{
 		vr::TrackedDevicePose_t hmdPose{};
@@ -41,8 +66,8 @@ namespace
 			0.0f,
 			a_hmdPosition.z - a_anchor.z,
 		};
-		if (!std::isfinite(panelToPlayer.x) ||
-			!std::isfinite(panelToPlayer.z) ||
+		if (!IsFiniteVector(a_anchor) ||
+			!IsFiniteVector(a_hmdPosition) ||
 			panelToPlayer.LengthSquared() < 1e-6f) {
 			return false;
 		}
@@ -89,6 +114,7 @@ static bool CanStartAny(vr::ETrackedControllerRole role)
 void VR::UpdateOverlayDrag()
 {
 	if (!CanPerformDrag()) {
+		overlayDragState = {};
 		return;
 	}
 
@@ -101,7 +127,9 @@ void VR::UpdateOverlayDrag()
 
 bool VR::CanPerformDrag()
 {
-	if (!settings.EnableDragToReposition)
+	if (!VRMenuPositioningPolicy::ShouldAllowOverlayDrag(
+			settings.UnlockMenuPositionAndSize,
+			settings.EnableDragToReposition))
 		return false;
 
 	if (!globals::menu || !globals::menu->IsEnabled)
@@ -123,8 +151,10 @@ void VR::UpdateActiveDrag()
 {
 	RE::BSOpenVR* openvr = RE::BSOpenVR::GetSingleton();
 	auto* system = openvr ? openvr->vrSystem : nullptr;
-	if (!system)
+	if (!system) {
+		overlayDragState = {};
 		return;
+	}
 
 	auto resetDragState = [&]() {
 		overlayDragState.dragging = false;
@@ -134,91 +164,127 @@ void VR::UpdateActiveDrag()
 	};
 
 	float rawMatrix[3][4];
-	if (Util::GetControllerWorldMatrix(overlayDragState.controllerIndex, rawMatrix)) {
-		vr::HmdMatrix34_t mat = Util::Float3x4ToHmdMatrix34(rawMatrix);
-		Matrix controllerMatrix = Util::HmdMatrix34ToMatrix(mat);
+	if (!Util::GetControllerWorldMatrix(overlayDragState.controllerIndex, rawMatrix)) {
+		resetDragState();
+		return;
+	}
+	vr::HmdMatrix34_t mat = Util::Float3x4ToHmdMatrix34(rawMatrix);
+	Matrix controllerMatrix = Util::HmdMatrix34ToMatrix(mat);
+	if (!IsFiniteVector(controllerMatrix.Translation())) {
+		resetDragState();
+		return;
+	}
 
-		switch (overlayDragState.mode) {
-		case OverlayDragState::DragMode::Controller:
-			{
-				vr::TrackedDeviceIndex_t attachedControllerIndex = Util::GetControllerIndexForDevice(settings.VRMenuAttachController, lastKnownLeftHandedMode);
+	switch (overlayDragState.mode) {
+	case OverlayDragState::DragMode::Controller:
+		{
+			vr::TrackedDeviceIndex_t attachedControllerIndex = Util::GetControllerIndexForDevice(GetEffectiveMenuAttachController(), lastKnownLeftHandedMode);
 
-				if (attachedControllerIndex != vr::k_unTrackedDeviceIndexInvalid) {
-					float attachedM[3][4];
-					if (!Util::GetControllerWorldMatrix(attachedControllerIndex, attachedM))
-						break;
-					{
-						Matrix attachedControllerMatrix = Util::HmdMatrix34ToMatrix(Util::Float3x4ToHmdMatrix34(attachedM));
-
-						Vector3 worldDelta(
-							controllerMatrix._41 - overlayDragState.initialControllerMatrix._41,
-							controllerMatrix._42 - overlayDragState.initialControllerMatrix._42,
-							controllerMatrix._43 - overlayDragState.initialControllerMatrix._43);
-
-						Matrix worldToLocal = attachedControllerMatrix.Invert();
-						Vector3 localDelta = Vector3::TransformNormal(worldDelta, worldToLocal);
-
-						settings.VRMenuControllerOffsetX = overlayDragState.initialControllerOffset.x + localDelta.x;
-						settings.VRMenuControllerOffsetY = overlayDragState.initialControllerOffset.y + localDelta.y;
-						settings.VRMenuControllerOffsetZ = overlayDragState.initialControllerOffset.z + localDelta.z;
-					}
+			if (attachedControllerIndex != vr::k_unTrackedDeviceIndexInvalid) {
+				float attachedM[3][4];
+				if (!Util::GetControllerWorldMatrix(attachedControllerIndex, attachedM)) {
+					resetDragState();
+					return;
 				}
-				break;
-			}
-		case OverlayDragState::DragMode::FixedWorld:
-			{
-				Vector3 worldDelta(
-					controllerMatrix._41 - overlayDragState.initialControllerMatrix._41,
-					controllerMatrix._42 - overlayDragState.initialControllerMatrix._42,
-					controllerMatrix._43 - overlayDragState.initialControllerMatrix._43);
-				Matrix translated = overlayDragState.initialOverlayMatrix;
-				translated._41 += worldDelta.x;
-				translated._42 += worldDelta.y;
-				translated._43 += worldDelta.z;
-				fixedWorldOverlayPosition.m = translated;
-				break;
-			}
-		case OverlayDragState::DragMode::HMD:
-			{
-				vr::TrackedDevicePose_t hmdPose;
-				if (!Util::GetDeviceToAbsoluteTrackingPoseCompatible(vr::TrackingUniverseStanding, 0, &hmdPose, 1))
-					break;
-				if (hmdPose.bPoseIsValid) {
-					Matrix hmdMatrix = Util::HmdMatrix34ToMatrix(hmdPose.mDeviceToAbsoluteTracking);
+				{
+					Matrix attachedControllerMatrix = Util::HmdMatrix34ToMatrix(Util::Float3x4ToHmdMatrix34(attachedM));
 
 					Vector3 worldDelta(
 						controllerMatrix._41 - overlayDragState.initialControllerMatrix._41,
 						controllerMatrix._42 - overlayDragState.initialControllerMatrix._42,
 						controllerMatrix._43 - overlayDragState.initialControllerMatrix._43);
 
-					Matrix worldToLocal = hmdMatrix.Invert();
+					Matrix worldToLocal = attachedControllerMatrix.Invert();
 					Vector3 localDelta = Vector3::TransformNormal(worldDelta, worldToLocal);
-
-					static auto lastDeltaLog = std::chrono::steady_clock::now();
-					auto nowDelta = std::chrono::steady_clock::now();
-					if (std::chrono::duration_cast<std::chrono::milliseconds>(nowDelta - lastDeltaLog).count() > 500) {
-						logger::debug("VR Drag Delta - Local: ({:.3f}, {:.3f}, {:.3f})", localDelta.x, localDelta.y, localDelta.z);
-						lastDeltaLog = nowDelta;
+					Vector3 offset;
+					if (!IsFiniteVector(worldDelta) ||
+						!TryApplyOffsetDelta(overlayDragState.initialControllerOffset, localDelta, offset)) {
+						resetDragState();
+						return;
 					}
 
-					settings.VRMenuOffsetX = overlayDragState.initialHMDOffset.x + localDelta.x;
-					settings.VRMenuOffsetY = overlayDragState.initialHMDOffset.y + localDelta.y;
-					settings.VRMenuOffsetZ = overlayDragState.initialHMDOffset.z + localDelta.z;
-					settings.VRMenuScale = overlayDragState.initialHMDScale;
-
-					static std::chrono::steady_clock::time_point lastLog = std::chrono::steady_clock::now();
-					auto now = std::chrono::steady_clock::now();
-					if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastLog).count() > 500) {
-						logger::debug("VR Dragging (3D Mode): Offset ({:.2f}, {:.2f}, {:.2f}), Scale {:.2f}",
-							settings.VRMenuOffsetX, settings.VRMenuOffsetY, settings.VRMenuOffsetZ, settings.VRMenuScale);
-						lastLog = now;
-					}
+					settings.VRMenuControllerOffsetX = offset.x;
+					settings.VRMenuControllerOffsetY = offset.y;
+					settings.VRMenuControllerOffsetZ = offset.z;
 				}
-				break;
+			} else {
+				resetDragState();
+				return;
 			}
-		default:
 			break;
 		}
+	case OverlayDragState::DragMode::FixedWorld:
+		{
+			Vector3 worldDelta(
+				controllerMatrix._41 - overlayDragState.initialControllerMatrix._41,
+				controllerMatrix._42 - overlayDragState.initialControllerMatrix._42,
+				controllerMatrix._43 - overlayDragState.initialControllerMatrix._43);
+			if (!IsFiniteVector(worldDelta)) {
+				resetDragState();
+				return;
+			}
+			Matrix translated = overlayDragState.initialOverlayMatrix;
+			translated._41 += worldDelta.x;
+			translated._42 += worldDelta.y;
+			translated._43 += worldDelta.z;
+			if (!IsFiniteVector(translated.Translation())) {
+				resetDragState();
+				return;
+			}
+			fixedWorldOverlayPosition.m = translated;
+			break;
+		}
+	case OverlayDragState::DragMode::HMD:
+		{
+			vr::TrackedDevicePose_t hmdPose{};
+			if (!Util::GetDeviceToAbsoluteTrackingPoseCompatible(
+					vr::TrackingUniverseStanding,
+					0,
+					&hmdPose,
+					1) ||
+				!hmdPose.bPoseIsValid) {
+				resetDragState();
+				return;
+			}
+			Matrix hmdMatrix = Util::HmdMatrix34ToMatrix(hmdPose.mDeviceToAbsoluteTracking);
+
+			Vector3 worldDelta(
+				controllerMatrix._41 - overlayDragState.initialControllerMatrix._41,
+				controllerMatrix._42 - overlayDragState.initialControllerMatrix._42,
+				controllerMatrix._43 - overlayDragState.initialControllerMatrix._43);
+
+			Matrix worldToLocal = hmdMatrix.Invert();
+			Vector3 localDelta = Vector3::TransformNormal(worldDelta, worldToLocal);
+			Vector3 offset;
+			if (!IsFiniteVector(worldDelta) ||
+				!TryApplyOffsetDelta(overlayDragState.initialHMDOffset, localDelta, offset)) {
+				resetDragState();
+				return;
+			}
+
+			static auto lastDeltaLog = std::chrono::steady_clock::now();
+			auto nowDelta = std::chrono::steady_clock::now();
+			if (std::chrono::duration_cast<std::chrono::milliseconds>(nowDelta - lastDeltaLog).count() > 500) {
+				logger::debug("VR Drag Delta - Local: ({:.3f}, {:.3f}, {:.3f})", localDelta.x, localDelta.y, localDelta.z);
+				lastDeltaLog = nowDelta;
+			}
+
+			settings.VRMenuOffsetX = offset.x;
+			settings.VRMenuOffsetY = offset.y;
+			settings.VRMenuOffsetZ = offset.z;
+			settings.VRMenuScale = overlayDragState.initialHMDScale;
+
+			static std::chrono::steady_clock::time_point lastLog = std::chrono::steady_clock::now();
+			auto now = std::chrono::steady_clock::now();
+			if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastLog).count() > 500) {
+				logger::debug("VR Dragging (3D Mode): Offset ({:.2f}, {:.2f}, {:.2f}), Scale {:.2f}",
+					settings.VRMenuOffsetX, settings.VRMenuOffsetY, settings.VRMenuOffsetZ, settings.VRMenuScale);
+				lastLog = now;
+			}
+			break;
+		}
+	default:
+		break;
 	}
 
 	bool gripPressed = GetGripPressed(overlayDragState.isPrimary, overlayDragState.isSecondary);
@@ -243,17 +309,19 @@ void VR::TryStartNewDrag()
 	};
 
 	std::vector<DragMode> dragModes;
+	const auto attachMode = GetEffectiveMenuAttachMode();
+	const auto attachController = GetEffectiveMenuAttachController();
 
 	// Controller mode - only for opposite hand (highest priority)
-	if (settings.attachMode == AttachMode::ControllerOnly || settings.attachMode == AttachMode::Both) {
+	if (attachMode == AttachMode::ControllerOnly || attachMode == AttachMode::Both) {
 		dragModes.push_back({ OverlayDragState::DragMode::Controller,
 			true,
 			[&](vr::ETrackedControllerRole role) {
-				vr::TrackedDeviceIndex_t attachedControllerIndex = Util::GetControllerIndexForDevice(settings.VRMenuAttachController, lastKnownLeftHandedMode);
+				vr::TrackedDeviceIndex_t attachedControllerIndex = Util::GetControllerIndexForDevice(attachController, lastKnownLeftHandedMode);
 				if (attachedControllerIndex == vr::k_unTrackedDeviceIndexInvalid)
 					return false;
 
-				ControllerDevice oppositeDevice = (settings.VRMenuAttachController == ControllerDevice::Primary) ?
+				ControllerDevice oppositeDevice = (attachController == ControllerDevice::Primary) ?
 			                                          ControllerDevice::Secondary :
 			                                          ControllerDevice::Primary;
 				vr::TrackedDeviceIndex_t oppositeControllerIndex = Util::GetControllerIndexForDevice(oppositeDevice, lastKnownLeftHandedMode);
@@ -278,11 +346,11 @@ void VR::TryStartNewDrag()
 	}
 
 	// Fixed world mode
-	if (settings.VRMenuPositioningMethod == 1) {
+	if (UseFixedWorldMenuPositioning() && fixedWorldOverlayPosition.initialized) {
 		std::function<bool(vr::ETrackedControllerRole)> fixedWorldCanStart;
-		if (settings.attachMode == AttachMode::Both) {
+		if (attachMode == AttachMode::Both) {
 			fixedWorldCanStart = [&](vr::ETrackedControllerRole role) {
-				vr::TrackedDeviceIndex_t attachedControllerIndex = Util::GetControllerIndexForDevice(settings.VRMenuAttachController, lastKnownLeftHandedMode);
+				vr::TrackedDeviceIndex_t attachedControllerIndex = Util::GetControllerIndexForDevice(attachController, lastKnownLeftHandedMode);
 				if (attachedControllerIndex != vr::k_unTrackedDeviceIndexInvalid) {
 					vr::ETrackedControllerRole actualAttachedRole = system->GetControllerRoleForTrackedDeviceIndex(attachedControllerIndex);
 					return role == actualAttachedRole;
@@ -303,11 +371,11 @@ void VR::TryStartNewDrag()
 	}
 
 	// HMD mode
-	if (settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both) {
+	if (attachMode == AttachMode::HMDOnly || attachMode == AttachMode::Both) {
 		std::function<bool(vr::ETrackedControllerRole)> hmdCanStart;
-		if (settings.attachMode == AttachMode::Both) {
+		if (attachMode == AttachMode::Both) {
 			hmdCanStart = [&](vr::ETrackedControllerRole role) {
-				vr::TrackedDeviceIndex_t attachedControllerIndex = Util::GetControllerIndexForDevice(settings.VRMenuAttachController, lastKnownLeftHandedMode);
+				vr::TrackedDeviceIndex_t attachedControllerIndex = Util::GetControllerIndexForDevice(attachController, lastKnownLeftHandedMode);
 				if (attachedControllerIndex != vr::k_unTrackedDeviceIndexInvalid) {
 					vr::ETrackedControllerRole actualAttachedRole = system->GetControllerRoleForTrackedDeviceIndex(attachedControllerIndex);
 					return role == actualAttachedRole;
@@ -349,6 +417,8 @@ void VR::TryStartNewDrag()
 				continue;
 			vr::HmdMatrix34_t mat = Util::Float3x4ToHmdMatrix34(rawMatrix);
 			Matrix controllerMatrix = Util::HmdMatrix34ToMatrix(mat);
+			if (!IsFiniteVector(controllerMatrix.Translation()))
+				continue;
 			overlayDragState.dragging = true;
 			overlayDragState.mode = mode.mode;
 			overlayDragState.controllerIndex = i;
@@ -377,6 +447,7 @@ void VR::TryStartNewDrag()
 
 void VR::SetFixedOverlayToCurrentHMD()
 {
+	fixedWorldOverlayReanchorRequested = true;
 	Matrix hmdWorld;
 	if (!TryGetHMDWorld(hmdWorld))
 		return;
@@ -390,15 +461,17 @@ void VR::RequestFixedWorldMenuReanchor()
 
 void VR::UpdateFixedWorldPositioning(const Matrix& a_hmdWorld)
 {
-	if (settings.VRMenuPositioningMethod != 1)
+	if (!UseFixedWorldMenuPositioning())
 		return;
 
 	const Vector3 hmdPosition = a_hmdWorld.Translation();
+	if (!IsFiniteVector(hmdPosition))
+		return;
 	if (!fixedWorldOverlayPosition.initialized || fixedWorldOverlayReanchorRequested) {
 		// The safe anchor uses fixed defaults, rather than accumulating mutable
 		// offsets, so opening the menu can always recover it.
 		Vector3 hmdBackward{ a_hmdWorld._31, 0.0f, a_hmdWorld._33 };
-		if (hmdBackward.LengthSquared() < 1e-6f)
+		if (!IsFiniteVector(hmdBackward) || hmdBackward.LengthSquared() < 1e-6f)
 			hmdBackward = Vector3::UnitZ;
 		else
 			hmdBackward.Normalize();
@@ -423,6 +496,9 @@ void VR::UpdateFixedWorldPositioning(const Matrix& a_hmdWorld)
 		return;
 	}
 
+	if (!VRMenuPositioningPolicy::ShouldTrackHMDYaw(settings.UnlockMenuPositionAndSize))
+		return;
+
 	// Preserve the anchor exactly; only yaw the vertical panel toward the HMD.
 	const Vector3 anchor = fixedWorldOverlayPosition.m.Translation();
 	Matrix facingTransform;
@@ -432,7 +508,7 @@ void VR::UpdateFixedWorldPositioning(const Matrix& a_hmdWorld)
 
 void VR::UpdateFixedWorldPositioning()
 {
-	if (settings.VRMenuPositioningMethod != 1)
+	if (!UseFixedWorldMenuPositioning())
 		return;
 
 	Matrix hmdWorld;

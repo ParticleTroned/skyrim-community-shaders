@@ -53,13 +53,11 @@ struct AdaptiveBrightness : Feature
 			{ "Separate exterior day and night balance profiles",
 				"Separate interior, dungeon, and dwelling profiles",
 				"Hierarchical worldspace, region, city, location, and cell profiles with COC codes",
-				"Shared light calibration with per-profile Bloom and water appearance controls" }
+				"Unified global and per-profile Lighting, Bloom, Water, and wind adjustment layers" }
 		};
 	}
 
 	virtual bool SupportsVR() override { return true; }
-	virtual void DrawSettingsHeaderControls() override;
-
 	enum class Profile : uint32_t
 	{
 		ExteriorDay,
@@ -72,6 +70,14 @@ struct AdaptiveBrightness : Feature
 
 	static constexpr std::size_t kProfileCount = static_cast<std::size_t>(Profile::Count);
 
+	struct WaterWindSettings
+	{
+		bool overrideEnabled = false;
+		bool enabled = false;
+		float calmWaveMultiplier = 1.0f;
+		float strongWindWaveMultiplier = 1.0f;
+	};
+
 	struct ProfileSettings
 	{
 		float brightness = 1.0f;
@@ -82,6 +88,11 @@ struct AdaptiveBrightness : Feature
 		float skyBrightnessMult = 1.0f;
 		float directionalLightMult = 1.0f;
 		float pointLightMult = 1.0f;
+		float linearPointLightMult = 1.0f;
+		float spotlightMult = 1.0f;
+		float linearSpotlightMult = 1.0f;
+		float omnidirectionalBulbMult = 1.0f;
+		float linearOmnidirectionalBulbMult = 1.0f;
 		float ambientMult = 1.0f;
 		float emitColorMult = 1.0f;
 		float glowmapMult = 1.0f;
@@ -95,6 +106,10 @@ struct AdaptiveBrightness : Feature
 
 		Bloom::Profile bloom;
 		WaterAppearance::Profile water;
+		WaterWindSettings waterWind;
+
+		static ProfileSettings AdjustmentDefaults();
+		static ProfileSettings GlobalDefaults();
 	};
 
 	struct LocationOverride
@@ -104,6 +119,7 @@ struct AdaptiveBrightness : Feature
 		std::string type = "Location";
 		std::string cocCode;
 		ProfileSettings profile;
+		bool layered = false;
 	};
 
 	struct LocationOverrideTarget
@@ -127,11 +143,10 @@ struct AdaptiveBrightness : Feature
 	struct Settings
 	{
 		bool enabled = true;
-		bool globalLightingEnabled = true;
 		float dayStartHour = 9.0f;
 		float nightStartHour = 21.0f;
 		float transitionHours = 1.0f;
-		SharedLightingSettings lighting;
+		ProfileSettings globalProfile = ProfileSettings::GlobalDefaults();
 		std::array<ProfileSettings, kProfileCount> profiles{};
 		std::vector<LocationOverride> locationOverrides;
 	} settings;
@@ -173,22 +188,14 @@ struct AdaptiveBrightness : Feature
 	static constexpr const char* kDefaultFullPresetName = "Default";
 	static constexpr std::size_t kInvalidLocationOverrideIndex = static_cast<std::size_t>(-1);
 
-	struct LocationOverrideCache
+	struct LocationLayerCache
 	{
 		uint32_t worldspaceFormID = 0;
 		uint32_t locationFormID = 0;
 		uint32_t cellFormID = 0;
 		uint64_t lookupVersion = 0;
-		std::size_t overrideIndex = kInvalidLocationOverrideIndex;
-		bool inInterior = true;
+		std::vector<const LocationOverride*> layers;
 		bool valid = false;
-	};
-
-	enum class ProfileTabSurface : std::size_t
-	{
-		Advanced,
-		Essentials,
-		Count
 	};
 
 	enum class ContextProfileScope : std::size_t
@@ -227,14 +234,17 @@ struct AdaptiveBrightness : Feature
 	std::string fullPresetStatus;
 	std::string locationOverrideEditKey;
 	std::optional<ProfileSettings> locationOverrideEditProfile;
-	std::array<ProfileTabSyncState, static_cast<std::size_t>(ProfileTabSurface::Count)> profileTabSyncStates{};
+	ProfileTabSyncState profileTabSyncState{};
 	std::string contextSectionSyncKey;
 	bool contextSectionSyncInitialized = false;
 	int contextSectionLastDrawFrame = -1;
 	mutable std::unordered_map<std::string, std::size_t> locationOverrideLookup;
-	mutable LocationOverrideCache locationOverrideCache;
+	mutable LocationLayerCache locationLayerCache;
 	mutable uint64_t locationOverrideLookupVersion = 0;
 	mutable bool locationOverrideLookupDirty = true;
+	mutable float smoothedWaterWindSpeed = 0.0f;
+	mutable uint32_t smoothedWaterWindFrame = 0;
+	mutable bool waterWindSmoothingInitialized = false;
 
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
@@ -246,6 +256,7 @@ struct AdaptiveBrightness : Feature
 	virtual void SetupResources() override;
 	virtual void PostPostLoad() override;
 
+	bool IsRuntimeAvailable() const;
 	bool IsRuntimeEnabled() const;
 	PerFrameData GetCommonBufferData() const;
 	bool NeedsVanillaPointLightData() const;
@@ -269,7 +280,13 @@ struct AdaptiveBrightness : Feature
 	LinearLighting::Settings LerpSettings(const LinearLighting::Settings& a_a, const LinearLighting::Settings& a_b, float a_t) const;
 	SharedLightingSettings ApplyProfile(const SharedLightingSettings& a_base, const ProfileSettings& a_profile) const;
 	SharedLightingSettings LerpSettings(const SharedLightingSettings& a_a, const SharedLightingSettings& a_b, float a_t) const;
+	Bloom::Profile ApplyProfile(const Bloom::Profile& a_base, const ProfileSettings& a_profile) const;
+	WaterAppearance::Profile ApplyProfile(const WaterAppearance::Profile& a_base, const ProfileSettings& a_profile) const;
+	WaterWindSettings ApplyProfile(const WaterWindSettings& a_base, const ProfileSettings& a_profile) const;
+	float GetSmoothedWaterWindSpeed() const;
+	void ResetWaterWindSmoothing() const;
 	ActiveProfileBlend GetActiveProfileBlend() const;
+	const std::vector<const LocationOverride*>& GetActiveLocationLayers() const;
 	Profile GetInteriorProfile() const;
 	Profile GetCurrentProfileForUI() const;
 	const LocationOverride* GetActiveLocationOverride() const;
@@ -278,7 +295,7 @@ struct AdaptiveBrightness : Feature
 	float GetExteriorNightFactor() const;
 	std::string GetContextLabel() const;
 	static const char* GetProfileName(Profile a_profile);
-	std::optional<Profile> SyncSelectedProfileTabToContext(ProfileTabSurface a_surface);
+	std::optional<Profile> SyncSelectedProfileTabToContext();
 	std::optional<ContextSection> SyncContextSection();
 	void DrawExteriorTimeSettings();
 	void DrawProfile(Profile a_profile, bool a_allowEdits = true);
@@ -304,7 +321,17 @@ struct AdaptiveBrightness : Feature
 		const char* a_sectionTitle = "Profile Values",
 		bool a_showAdvancedControls = true,
 		bool a_allowEdits = true);
-	void DrawGlobalRendererSettings();
+	void DrawProfileControlTabs(
+		ProfileSettings& a_profile,
+		const char* a_tabBarID,
+		bool a_showAdvancedControls,
+		bool a_globalLayer,
+		bool a_allowEdits);
+	void DrawGlobalSettings(bool a_showAdvancedControls);
+	void DrawLightingSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_globalLayer);
+	void DrawBloomSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_globalLayer);
+	void DrawWaterSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_globalLayer);
+	void DrawWaterWindSettings(ProfileSettings& a_profile, bool a_globalLayer);
 	void DrawGlobalPresetControls();
 	void DrawLocationOverrides(bool a_includePresetControls = true, bool a_showAdvancedControls = true, bool a_allowEdits = true);
 	void DrawLocationOverridePresetControls();
@@ -333,7 +360,6 @@ struct AdaptiveBrightness : Feature
 	std::size_t FindLocationOverrideIndexByForm(const RE::TESForm* a_form) const;
 	std::size_t ResolveWorldspaceHierarchyOverrideIndex(const RE::TESWorldSpace* a_worldspace) const;
 	std::size_t ResolveLocationHierarchyOverrideIndex(const RE::BGSLocation* a_location) const;
-	std::size_t ResolveLocationOverrideIndex() const;
 	void NormalizeLocationOverrides();
 	void MarkLocationOverrideLookupDirty();
 	void EnsureLocationOverrideLookup() const;

@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <numbers>
 
+#include "Deferred.h"
 #include "GpuPass.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -23,13 +23,13 @@ namespace
 		const char* Label;
 	};
 
-	constexpr std::array<ProbeGridPreset, 5> kProbeGridPresets = {
+	constexpr std::array<ProbeGridPreset, 3> kProbeGridPresets = {
 		ProbeGridPreset{ 128, 128, 64, "Performance (128 x 128 x 64)" },
 		ProbeGridPreset{ 192, 192, 96, "Balanced (192 x 192 x 96)" },
 		ProbeGridPreset{ 256, 256, 128, "Quality (256 x 256 x 128)" },
-		ProbeGridPreset{ 394, 394, 192, "Ultra Quality (394 x 394 x 192)" },
-		ProbeGridPreset{ 512, 512, 256, "Hoshipa (512 x 512 x 256)" },
 	};
+	constexpr uint kQualityProbeGrid = static_cast<uint>(kProbeGridPresets.size() - 1);
+	static_assert(kQualityProbeGrid == 2);
 
 	struct SkylightingPerformancePreset
 	{
@@ -71,7 +71,7 @@ namespace
 		SkylightingPerformancePreset{
 			"Quality",
 			"Higher quality Skylighting preset, two thirds of the way from Performance toward Hoshipa.",
-			2,
+			kQualityProbeGrid,
 			5,
 			9,
 			13,
@@ -82,7 +82,7 @@ namespace
 		SkylightingPerformancePreset{
 			"Hoshipa",
 			"Highest quality Skylighting preset from the Hoshipa configuration.",
-			4,
+			kQualityProbeGrid,
 			3,
 			6,
 			16,
@@ -94,7 +94,8 @@ namespace
 
 	uint ClampProbeGridQuality(uint a_quality)
 	{
-		return std::min<uint>(a_quality, static_cast<uint>(kProbeGridPresets.size() - 1));
+		// Persisted values above the supported range migrate to Quality.
+		return std::min(a_quality, kQualityProbeGrid);
 	}
 
 	const ProbeGridPreset& GetProbeGridPreset(uint a_quality)
@@ -215,6 +216,35 @@ namespace
 		a_settings.ProbeGridQuality = ClampProbeGridQuality(a_settings.ProbeGridQuality);
 		a_settings.OcclusionUpdateInterval = ClampUpdateInterval(a_settings.OcclusionUpdateInterval);
 		a_settings.ProbeUpdateInterval = ClampUpdateInterval(a_settings.ProbeUpdateInterval);
+	}
+
+	bool IsTexture2DArraySRV(ID3D11ShaderResourceView* a_srv, uint32_t a_requiredSlices)
+	{
+		if (!a_srv)
+			return false;
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};
+		a_srv->GetDesc(&viewDesc);
+		if (viewDesc.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2DARRAY ||
+			viewDesc.Texture2DArray.ArraySize < a_requiredSlices) {
+			return false;
+		}
+
+		winrt::com_ptr<ID3D11Resource> resource;
+		a_srv->GetResource(resource.put());
+		if (!resource)
+			return false;
+
+		winrt::com_ptr<ID3D11Texture2D> texture;
+		if (FAILED(resource->QueryInterface(__uuidof(ID3D11Texture2D), texture.put_void())) || !texture)
+			return false;
+
+		D3D11_TEXTURE2D_DESC textureDesc{};
+		texture->GetDesc(&textureDesc);
+		return textureDesc.Width > 0 &&
+		       textureDesc.Height > 0 &&
+		       textureDesc.ArraySize >= a_requiredSlices &&
+		       textureDesc.SampleDesc.Count == 1;
 	}
 
 	void ApplySkylightingRuntimeEnabledChange(Skylighting& a_skylighting, bool a_previousEnabled)
@@ -488,16 +518,34 @@ void Skylighting::ApplyProbeGridQuality()
 void Skylighting::ResetSkylighting()
 {
 	auto context = globals::d3d::context;
-	if (!context || !texProbeArray || !texProbeArray->uav || !texAccumFramesArray || !texAccumFramesArray->uav) {
+	if (!context ||
+		!texProbeArray || !texProbeArray->srv.get() || !texProbeArray->uav.get() ||
+		!texAccumFramesArray || !texAccumFramesArray->uav.get() ||
+		!texShadowBitmask || !texShadowBitmask->srv.get() || !texShadowBitmask->uav.get() ||
+		!texShadowVisibility || !texShadowVisibility->srv.get() || !texShadowVisibility->uav.get()) {
 		queuedResetSkylighting = true;
 		return;
 	}
 
-	const float unitSH[4] = { std::sqrt(4.0f * std::numbers::pi_v<float>), 0.0f, 0.0f, 0.0f };
+	std::array<ID3D11ShaderResourceView*, 2> nullPixelSRVs{};
+	context->PSSetShaderResources(50, 1, nullPixelSRVs.data());
+	context->PSSetShaderResources(53, 1, nullPixelSRVs.data() + 1);
+
+	// D3D11 does not initialize newly allocated textures. A neutral SH clear keeps
+	// rebuilds deterministic instead of exposing stale or undefined probe data.
+	constexpr float unitSH[4] = { 3.5449077f, 0.0f, 0.0f, 0.0f };
 	context->ClearUnorderedAccessViewFloat(texProbeArray->uav.get(), unitSH);
 
-	UINT clr[1] = { 0 };
-	context->ClearUnorderedAccessViewUint(texAccumFramesArray->uav.get(), clr);
+	UINT clearZero[4] = { 0, 0, 0, 0 };
+	context->ClearUnorderedAccessViewUint(texAccumFramesArray->uav.get(), clearZero);
+
+	// Start new probes fully lit and replace one history bit per frame. Clearing
+	// to zero would make the first valid sample appear only 1/32 visible.
+	UINT clearLit[4] = { UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX };
+	context->ClearUnorderedAccessViewUint(texShadowBitmask->uav.get(), clearLit);
+
+	float clearVisibility[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+	context->ClearUnorderedAccessViewFloat(texShadowVisibility->uav.get(), clearVisibility);
 
 	ResetProbeUpdateWindow(*this);
 	forcedFullUpdateFrames = 1;
@@ -599,7 +647,7 @@ void Skylighting::DrawSettings()
 		ImGui::EndCombo();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Main quality/performance switch. Performance is fastest; higher tiers increase detail and cost.");
+		ImGui::Text("Main quality/performance switch. Performance is fastest; Quality is most detailed.");
 
 	probeGridQualityUI = std::max(0, std::min(probeGridQualityUI, static_cast<int>(kProbeGridPresets.size() - 1)));
 	if (settings.ProbeGridQuality != static_cast<uint>(probeGridQualityUI)) {
@@ -768,6 +816,10 @@ void Skylighting::SetupResources()
 	texProbeArray = nullptr;
 	delete texAccumFramesArray;
 	texAccumFramesArray = nullptr;
+	delete texShadowBitmask;
+	texShadowBitmask = nullptr;
+	delete texShadowVisibility;
+	texShadowVisibility = nullptr;
 
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
@@ -830,8 +882,22 @@ void Skylighting::SetupResources()
 		texAccumFramesArray = new Texture3D(texDesc, "Skylighting::AccumFramesArray");
 		texAccumFramesArray->CreateSRV(srvDesc);
 		texAccumFramesArray->CreateUAV(uavDesc);
+
+		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R32_UINT;
+
+		texShadowBitmask = new Texture3D(texDesc, "Skylighting::ShadowBitmask");
+		texShadowBitmask->CreateSRV(srvDesc);
+		texShadowBitmask->CreateUAV(uavDesc);
+
+		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R8_UNORM;
+
+		texShadowVisibility = new Texture3D(texDesc, "Skylighting::ShadowVisibility");
+		texShadowVisibility->CreateSRV(srvDesc);
+		texShadowVisibility->CreateUAV(uavDesc);
 	}
 
+	// Initialize every history volume before sampler or shader compilation. This
+	// also makes a disabled-at-load performance baseline immediately ready.
 	ResetSkylighting();
 
 	{
@@ -861,12 +927,16 @@ void Skylighting::SetupRenderTargetResources()
 		texProbeArray = nullptr;
 		delete texAccumFramesArray;
 		texAccumFramesArray = nullptr;
+		delete texShadowBitmask;
+		texShadowBitmask = nullptr;
+		delete texShadowVisibility;
+		texShadowVisibility = nullptr;
 		comparisonSampler = nullptr;
 		probeUpdateCompute = nullptr;
 		resourceDevice = device;
 	}
 
-	if (!texProbeArray || !texAccumFramesArray) {
+	if (!texProbeArray || !texAccumFramesArray || !texShadowBitmask || !texShadowVisibility) {
 		SetupResources();
 		return;
 	}
@@ -907,6 +977,26 @@ void Skylighting::SetupRenderTargetResources()
 		CompileComputeShaders();
 }
 
+bool Skylighting::HasCurrentShadowData() const
+{
+	auto state = globals::state;
+	auto renderer = globals::game::renderer;
+	auto deferred = globals::deferred;
+	auto shaderManager = globals::game::smState;
+	if (!state || !renderer || !deferred || !shaderManager ||
+		!state->HasDirectionalShadows() ||
+		!deferred->directionalShadowLights || !deferred->directionalShadowLights->srv.get()) {
+		return false;
+	}
+
+	auto shadowSceneNode = shaderManager->shadowSceneNode[0];
+	if (!shadowSceneNode || !shadowSceneNode->GetRuntimeData().sunShadowDirLight)
+		return false;
+
+	auto& cascadeDepthStencil = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kSHADOWMAPS_ESRAM];
+	return IsTexture2DArraySRV(cascadeDepthStencil.depthSRV, 2);
+}
+
 void Skylighting::ClearShaderCache()
 {
 	static const std::vector<winrt::com_ptr<ID3D11ComputeShader>*> shaderPtrs = {
@@ -932,6 +1022,8 @@ void Skylighting::CompileComputeShaders()
 		shaderInfos = {
 			{ &probeUpdateCompute, "UpdateProbesCS.hlsl", {} },
 		};
+	if (REL::Module::IsVR())
+		shaderInfos.front().defines.emplace_back("VR", nullptr);
 
 	for (auto& info : shaderInfos) {
 		auto path = std::filesystem::path("Data\\Shaders\\Skylighting") / info.filename;
@@ -1007,7 +1099,8 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 		.MinDiffuseVisibility = settings.MinDiffuseVisibility,
 		.MinSpecularVisibility = settings.MinSpecularVisibility,
 		.ProbeUpdateSliceStart = probeUpdateSliceStart,
-		.ProbeUpdateSliceCount = probeUpdateSliceCount
+		.ProbeUpdateSliceCount = probeUpdateSliceCount,
+		.ShadowDataAvailable = HasCurrentShadowData() ? 1u : 0u
 	};
 }
 
@@ -1018,6 +1111,7 @@ void Skylighting::Prepass()
 		if (context) {
 			ID3D11ShaderResourceView* srv = nullptr;
 			context->PSSetShaderResources(50, 1, &srv);
+			context->PSSetShaderResources(53, 1, &srv);
 		}
 		return;
 	}
@@ -1030,12 +1124,42 @@ void Skylighting::Prepass()
 	if (auto sky = globals::game::sky)
 		interior = sky->mode.get() != RE::Sky::Mode::kFull;
 
-	if (interior)
+	if (interior ||
+		!probeUpdateCompute.get() || !comparisonSampler.get() ||
+		!texOcclusion || !texOcclusion->srv.get() ||
+		!texProbeArray || !texProbeArray->srv.get() || !texProbeArray->uav.get() ||
+		!texAccumFramesArray || !texAccumFramesArray->uav.get() ||
+		!texShadowBitmask || !texShadowBitmask->uav.get() ||
+		!texShadowVisibility || !texShadowVisibility->srv.get() || !texShadowVisibility->uav.get())
 		return;
 
-	if (probeUpdateCompute) {
-		std::array<ID3D11ShaderResourceView*, 1> srvs = { texOcclusion->srv.get() };
-		std::array<ID3D11UnorderedAccessView*, 2> uavs = { texProbeArray->uav.get(), texAccumFramesArray->uav.get() };
+	{
+		// Both probe volumes were exposed to pixel shaders by the previous frame.
+		// Unbind them before writing the same resources through compute UAVs.
+		std::array<ID3D11ShaderResourceView*, 2> nullPixelSRVs{};
+		context->PSSetShaderResources(50, 1, nullPixelSRVs.data());
+		context->PSSetShaderResources(53, 1, nullPixelSRVs.data() + 1);
+
+		ID3D11ShaderResourceView* directionalShadowLightsSRV = nullptr;
+		ID3D11ShaderResourceView* cascadeDepthSRV = nullptr;
+		if (HasCurrentShadowData()) {
+			directionalShadowLightsSRV = globals::deferred->directionalShadowLights->srv.get();
+			auto& cascadeDepthStencil = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kSHADOWMAPS_ESRAM];
+			cascadeDepthSRV = cascadeDepthStencil.depthSRV;
+		}
+
+		std::array<ID3D11ShaderResourceView*, 4> srvs = {
+			texOcclusion->srv.get(),
+			nullptr,
+			directionalShadowLightsSRV,
+			cascadeDepthSRV
+		};
+		std::array<ID3D11UnorderedAccessView*, 4> uavs = {
+			texProbeArray->uav.get(),
+			texAccumFramesArray->uav.get(),
+			texShadowBitmask->uav.get(),
+			texShadowVisibility->uav.get()
+		};
 		std::array<ID3D11SamplerState*, 1> samplers = { comparisonSampler.get() };
 
 		// Update probe array
@@ -1100,6 +1224,9 @@ void Skylighting::Prepass()
 	{
 		ID3D11ShaderResourceView* srv = texProbeArray->srv.get();
 		context->PSSetShaderResources(50, 1, &srv);
+
+		srv = texShadowVisibility->srv.get();
+		context->PSSetShaderResources(53, 1, &srv);
 	}
 }
 

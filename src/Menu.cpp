@@ -3,6 +3,7 @@
 #ifndef DIRECTINPUT_VERSION
 #	define DIRECTINPUT_VERSION 0x0800
 #endif
+#include <Psapi.h>
 #include <algorithm>
 #include <cmath>
 #include <dinput.h>
@@ -15,7 +16,6 @@
 #include <imgui_stdlib.h>
 #include <iomanip>
 #include <limits>
-#include <Psapi.h>
 #include <string>
 #include <vector>
 
@@ -50,6 +50,7 @@
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/VR.h"
+#include "Features/VR/MenuPositioningPolicy.h"
 
 #pragma comment(lib, "Psapi.lib")
 
@@ -249,7 +250,7 @@ namespace
 
 	float GetVRSettingsWindowAspect()
 	{
-		switch (globals::features::vr.settings.attachMode) {
+		switch (globals::features::vr.GetEffectiveMenuAttachMode()) {
 		case VR::Settings::OverlayAttachMode::ControllerOnly:
 			return VR::Config::kOverlayAspect;
 		default:
@@ -880,6 +881,9 @@ void Menu::Init()
 
 	auto& imgui_io = ImGui::GetIO();
 	imgui_io.ConfigFlags = ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_DockingEnable;
+	// Skyrim provides frame-sized input batches; ImGui trickling can backlog high-rate device input.
+	// Consume each complete batch at the next NewFrame to prevent stale input replay.
+	imgui_io.ConfigInputTrickleEventQueue = false;
 	imgui_io.ConfigDockingWithShift = settings.RequireShiftToDock;
 	imgui_io.BackendFlags = ImGuiBackendFlags_HasMouseCursors | ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_HasGamepad;
 
@@ -971,6 +975,7 @@ void Menu::DrawSettings()
 		REL::Module::IsVR() &&
 		globals::features::vr.openVRInfo.isAvailable &&
 		globals::features::vr.openVRInfo.runtimeType == VRDetection::RuntimeType::SteamVR;
+	const bool vrMenuLayoutUnlocked = globals::features::vr.settings.UnlockMenuPositionAndSize;
 	if (useSteamVRWindowControls) {
 		ImGui::GetIO().ConfigDockingWithShift = false;
 	}
@@ -1003,6 +1008,7 @@ void Menu::DrawSettings()
 			constexpr float kLegacyAspectRepairTolerance = 0.25f;
 			repairSteamVRLegacyWindowSize =
 				useSteamVRWindowControls &&
+				!vrMenuLayoutUnlocked &&
 				!willBeDocked &&
 				!steamVRLegacyWindowSizeRepaired &&
 				(std::abs(windowAspect - GetVRSettingsWindowAspect()) > kLegacyAspectRepairTolerance);
@@ -1017,6 +1023,7 @@ void Menu::DrawSettings()
 	// layout instead of inheriting stale saved placement from an older layout.
 	const bool forceSteamVRFirstUndockedLayout =
 		useSteamVRWindowControls &&
+		!vrMenuLayoutUnlocked &&
 		!willBeDocked &&
 		!steamVRUndockedFirstOpenLayoutApplied;
 	if (forceSteamVRFirstUndockedLayout) {
@@ -1032,6 +1039,7 @@ void Menu::DrawSettings()
 	if (!willBeDocked) {
 		const bool useVRTopStatusWindowLayout =
 			REL::Module::IsVR() &&
+			!vrMenuLayoutUnlocked &&
 			defaultWindowLayout.constrainedByTopStatusWindow;
 		if (useVRTopStatusWindowLayout || (REL::Module::IsVR() && vrTopStatusWindowLayoutWasActive)) {
 			windowPos = defaultWindowPos;
@@ -1060,11 +1068,18 @@ void Menu::DrawSettings()
 		vrTopStatusWindowLayoutWasActive = false;
 	}
 
-	const bool lockVRMenuToCanvas = REL::Module::IsVR();
+	const bool lockVRMenuToCanvas = VRMenuPositioningPolicy::ShouldLockDesktopCanvas(
+		REL::Module::IsVR(),
+		vrMenuLayoutUnlocked);
 	if (lockVRMenuToCanvas) {
 		windowPos = defaultWindowPos;
 		windowSizeForOverlap = defaultWindowSize;
 		willBeDocked = false;
+		if (auto* existingWindow = ImGui::FindWindowByName(title.c_str());
+			existingWindow && existingWindow->DockIsActive) {
+			// A docked window must be detached before fixed canvas geometry can apply.
+			ImGui::DockContextProcessUndockWindow(ImGui::GetCurrentContext(), existingWindow);
+		}
 	}
 	const auto windowPosCond = (lockVRMenuToCanvas || autoOffsetForTopStatusWindow || restoreAfterTopStatusWindow || forceSteamVRFirstUndockedLayout) ? ImGuiCond_Always : layoutCond;
 	ImGui::SetNextWindowPos(windowPos, windowPosCond, centeredPivot);
@@ -1099,7 +1114,7 @@ void Menu::DrawSettings()
 		const bool actualDocked = ImGui::IsWindowDocked();
 		const bool isDocked = actualDocked;
 		wasDocked = actualDocked;
-		const bool showSteamVRWindowControls = useSteamVRWindowControls && !isDocked;
+		const bool showSteamVRWindowControls = useSteamVRWindowControls && vrMenuLayoutUnlocked && !isDocked;
 
 		float globalScale = settings.Theme.GlobalScale;
 
@@ -1361,7 +1376,8 @@ void Menu::OpenMenu()
 	if (globals::features::vr.IsOpenVRCompatible()) {
 		auto& vr = globals::features::vr;
 		vr.ResetMenuInputRuntimeState();
-		vr.RequestFixedWorldMenuReanchor();
+		if (VRMenuPositioningPolicy::ShouldReanchorOnOpen(vr.settings.UnlockMenuPositionAndSize))
+			vr.RequestFixedWorldMenuReanchor();
 	}
 }
 
@@ -1457,8 +1473,6 @@ void Menu::ProcessInputEventQueue()
 			if (event.keyCode > 7) {  // middle scroll
 				if (ew && ew->previewMode == EditorWindow::PreviewMode::FreeCamera) {
 					ew->AdjustFlySpeed(event.keyCode == 8 ? 1.0f : -1.0f);
-				} else if (!flying) {
-					io.AddMouseWheelEvent(0, event.value * (event.keyCode == 8 ? 1 : -1));
 				}
 			} else if (!flying) {
 				if (event.keyCode > 5)
@@ -1679,7 +1693,18 @@ void Menu::ProcessInputEventQueue()
 		}
 	}
 
+	const auto directInputWheelRaw = _directInputWheelDelta.exchange(0, std::memory_order_relaxed);
+	const float wheelY = static_cast<float>(directInputWheelRaw) / static_cast<float>(WHEEL_DELTA);
+	if (wheelY != 0.0f)
+		io.AddMouseWheelEvent(0.0f, wheelY);
+
 	_keyEventQueue.clear();
+}
+
+void Menu::RecordDirectInputWheelDelta(std::int32_t a_delta)
+{
+	if (a_delta != 0)
+		_directInputWheelDelta.fetch_add(a_delta, std::memory_order_relaxed);
 }
 
 bool Menu::IsCapturingHotkeyInput() const

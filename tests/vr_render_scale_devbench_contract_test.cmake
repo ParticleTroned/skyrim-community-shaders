@@ -91,6 +91,34 @@ foreach(_required_text IN ITEMS
     endif()
 endforeach()
 
+string(JSON _target_method_count ERROR_VARIABLE _target_method_error
+    LENGTH "${_descriptor}" inputSchema properties target properties method enum
+)
+if(_target_method_error)
+    message(FATAL_ERROR
+        "Render-scale target method enum is invalid: ${_target_method_error}"
+    )
+endif()
+math(EXPR _target_method_last "${_target_method_count} - 1")
+foreach(_native_target_method IN ITEMS none taa)
+    set(_native_target_found FALSE)
+    foreach(_target_method_index RANGE 0 ${_target_method_last})
+        string(JSON _target_method GET
+            "${_descriptor}"
+            inputSchema properties target properties method enum
+            ${_target_method_index}
+        )
+        if(_target_method STREQUAL _native_target_method)
+            set(_native_target_found TRUE)
+        endif()
+    endforeach()
+    if(NOT _native_target_found)
+        message(FATAL_ERROR
+            "Render-scale target schema is missing native method: ${_native_target_method}"
+        )
+    endif()
+endforeach()
+
 foreach(_milestone_contract IN ITEMS
     "descriptor[\"inputSchema\"][\"properties\"][\"milestone\"]"
     "json::array({ \"strict\", \"presentation\", \"cleanup\" })"
@@ -233,7 +261,11 @@ foreach(_required_behavior IN ITEMS
 	"QualificationPolicy::EvaluateMilestones"
 	"QualificationPolicy::IsMilestoneSatisfied"
 	"QualificationPolicy::UsesVendorEvaluation"
-	"QualificationPolicy::UsesNativeVendorEvaluation"
+	"QualificationPolicy::UsesNativeAPIEvaluation"
+	"QualificationPolicy::HasCoherentNativeVendorEvaluation"
+	"case CSX::UpscalingAPI::Method::kNone"
+	"case CSX::UpscalingAPI::Method::kTAA"
+	"{ \"methodValue\", static_cast<uint32_t>(a_profile.method) }"
 	"RecordQualificationMilestones"
 	"QualificationPolicy::ExactObservationTarget"
 	"QualificationPolicy::HasCoherentPresentationFrames"
@@ -282,6 +314,17 @@ foreach(_required_behavior IN ITEMS
 	"strictFailureMask"
 	"strictElapsedMs"
 	"strictElapsedFrames"
+	"milestoneTimings"
+	"presentationToCleanupMs"
+	"cleanupTailMs"
+	"sameObservation"
+	"replacementTimeline"
+	"currentPresentationProven"
+	"currentPresentationGeneration"
+	"replacementAdmissionBlocked"
+	"replacementAdmissionBlockReasons"
+	"physicalMutationStarted"
+	"selectedPresentationDisposition"
 	"outstandingCleanupDebt"
 	"timedOutMilestone"
 	"resourcePublicationCurrent"
@@ -306,13 +349,36 @@ foreach(_required_behavior IN ITEMS
 	"\"deviceMatches\""
 	"\"contextMatches\""
 	"providerTerminalClear"
+	"\"nativeVendorExecution\""
+	"\"actualBackend\""
+	"\"native_vendor_frames\""
     "controller.retirement.nextCleanupFrame == 0"
-    "BuildProvenance::ValidateExpectedBuild"
+	"BuildProvenance::ValidateExpectedBuild"
 )
     string(FIND "${_bridge}" "${_required_behavior}" _behavior_position)
     if(_behavior_position EQUAL -1)
         message(FATAL_ERROR "Render-scale qualification behavior is missing: ${_required_behavior}")
     endif()
+endforeach()
+
+foreach(_required_controller_behavior IN ITEMS
+	"apiControllerPublicationRequired"
+	"ArmVRNativeRestorePresentationGuard(request.transitionEpoch)"
+	"requiresNativePresentationStabilization"
+	"GetVRRenderScaleBackendFromFSRDispatchPath"
+	"vendorDispatchFrame ="
+	"vendorDispatchSerial"
+)
+	string(FIND
+		"${_upscaling_source}"
+		"${_required_controller_behavior}"
+		_controller_behavior_position
+	)
+	if(_controller_behavior_position EQUAL -1)
+		message(FATAL_ERROR
+			"VR API controller publication behavior is missing: ${_required_controller_behavior}"
+		)
+	endif()
 endforeach()
 
 foreach(_publication_source_contract IN ITEMS

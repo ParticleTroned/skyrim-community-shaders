@@ -44,7 +44,7 @@ namespace
 
 	float GetVRSettingsWindowAspect()
 	{
-		return globals::features::vr.settings.attachMode == VR::Settings::OverlayAttachMode::ControllerOnly ?
+		return globals::features::vr.GetEffectiveMenuAttachMode() == VR::Settings::OverlayAttachMode::ControllerOnly ?
 		           VR::Config::kOverlayAspect :
 		           VR::Config::kHMDMenuAspect;
 	}
@@ -368,11 +368,18 @@ void OverlayRenderer::RenderOverlay(
 	ApplyVROverlayDisplaySize();
 	processInputEventQueue();
 
+	// Keep delayed light-reference cleanup moving before processing any close
+	// transition that can enqueue another refresh, and before a no-overlay return.
+	auto* editorWindow = EditorWindow::GetSingleton();
+	editorWindow->AdvanceLightEditorDeferredWork();
+	editorWindow->UpdateOpenState();
+
 	auto drawableOverlays = CollectDrawableFeatureOverlays(menu);
 	if (ShouldSkipRendering(menu, !drawableOverlays.empty())) {
 		auto& io = ImGui::GetIO();
 		io.ClearInputKeys();
 		io.ClearEventsQueue();
+		globals::features::vr.DiscardQueuedImGuiClickOwners();
 		s_windowOverlapAlpha.clear();
 		globals::features::vr.HideOverlaysIfPresent();
 		return;
@@ -385,7 +392,6 @@ void OverlayRenderer::RenderOverlay(
 		RenderShaderCompilationStatus(keyIdToString);
 	RenderShaderBlockingStatus();
 
-	auto* editorWindow = EditorWindow::GetSingleton();
 	if (editorWindow->open) {
 		bool flying = editorWindow->IsPreviewFlying();
 		auto& io = ImGui::GetIO();

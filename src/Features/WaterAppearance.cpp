@@ -72,7 +72,7 @@ void WaterAppearance::DrawAdvancedProfileSettings(Profile& a_profile)
 {
 	SanitizeProfile(a_profile);
 
-	ImGui::TextWrapped("Identity values disable all water appearance processing and preserve the native water output path.");
+	ImGui::TextWrapped("Identity values make this layer neutral. Water appearance processing is disabled when the composed result is also neutral.");
 
 	ImGui::SeparatorText("Surface");
 	DrawWaterSlider(

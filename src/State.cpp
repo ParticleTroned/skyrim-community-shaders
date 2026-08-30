@@ -36,6 +36,7 @@
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
+#include "Features/VolumetricLighting.h"
 #include "Features/VolumetricShadows.h"
 #include "Features/WaterEffects.h"
 #include "Features/WeatherPicker.h"
@@ -1285,6 +1286,7 @@ void State::SaveToJson(
 	advanced["Refraction Scale"] = refractionScale;
 	advanced["PBR Metal Reflection Scale"] = pbrMetalReflectionScale;
 	advanced["PBR Metal Highlight Scale"] = pbrMetalHighlightScale;
+	advanced["PBR Verbose JSON Logging"] = globals::features::truePBR.enableVerboseJsonLogging;
 	advanced["Partial Precision"] = enablePartialPrecision.load(std::memory_order_relaxed);
 	settings["Advanced"] = advanced;
 
@@ -1349,6 +1351,7 @@ void State::LoadFromJson(nlohmann::json& settings, bool a_loadFeatureSettings)
 		globals::menu->Load(settings["Menu"]);
 	}
 
+	globals::features::truePBR.enableVerboseJsonLogging = false;
 	if (settings.contains("Advanced") && settings["Advanced"].is_object()) {
 		json& advanced = settings["Advanced"];
 		// The compilation pool is constructed at the responsive hardware-derived
@@ -1380,6 +1383,8 @@ void State::LoadFromJson(nlohmann::json& settings, bool a_loadFeatureSettings)
 			pbrMetalReflectionScale = std::clamp(advanced["PBR Metal Reflection Scale"].get<float>(), 0.0f, 2.0f);
 		if (advanced.contains("PBR Metal Highlight Scale") && advanced["PBR Metal Highlight Scale"].is_number())
 			pbrMetalHighlightScale = std::clamp(advanced["PBR Metal Highlight Scale"].get<float>(), 0.0f, 2.0f);
+		if (advanced.contains("PBR Verbose JSON Logging") && advanced["PBR Verbose JSON Logging"].is_boolean())
+			globals::features::truePBR.enableVerboseJsonLogging = advanced["PBR Verbose JSON Logging"].get<bool>();
 		if (advanced.contains("Partial Precision") && advanced["Partial Precision"].is_boolean())
 			enablePartialPrecision.store(advanced["Partial Precision"].get<bool>(), std::memory_order_relaxed);
 	}
@@ -2018,6 +2023,8 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.HasDirectionalShadows = HasDirectionalShadows();
 		const auto& volumetricShadows = globals::features::volumetricShadows;
 		data.VolumetricShadowsEnabled = volumetricShadows.loaded && volumetricShadows.settings.Enabled;
+		data.VolumetricLightingOpacity =
+			a_inWorld ? globals::features::volumetricLighting.GetRuntimeGodrayOpacity() : 1.0f;
 
 		data.SSSHumanMaleIntensity = sssHumanMaleIntensity;
 		data.SSSHumanMaleSaturation = sssHumanMaleSaturation;
@@ -2152,6 +2159,21 @@ std::unordered_map<std::string, bool>& State::GetDisabledFeatures()
 
 // --- Utility Method Implementations ---
 
+void State::UpdateLightingShaderPermutation(RE::BSRenderPass* a_pass)
+{
+	constexpr auto additiveLighting = static_cast<uint32_t>(ExtraShaderDescriptors::AdditiveLighting);
+	permutationData.ExtraShaderDescriptor &= ~additiveLighting;
+
+	if (!a_pass || !a_pass->geometry)
+		return;
+
+	auto* alphaProperty = a_pass->geometry->GetGeometryRuntimeData().alphaProperty.get();
+	if (alphaProperty && alphaProperty->GetAlphaBlending() &&
+		alphaProperty->GetDestBlendMode() == RE::NiAlphaProperty::AlphaFunction::kOne) {
+		permutationData.ExtraShaderDescriptor |= additiveLighting;
+	}
+}
+
 float State::GetTotalSmoothedDrawCalls() const
 {
 	return static_cast<float>(smoothDrawCalls[magic_enum::enum_integer(RE::BSShader::Type::Total)]);
@@ -2191,11 +2213,4 @@ void State::LoadTheme()
 			logger::warn("Fallback to 'Default' theme failed");
 		}
 	}
-}
-
-void State::SaveTheme()
-{
-	// SelectedThemePreset is now persisted via SettingsUser.json (State::Save)
-	// Keep this function as a no-op for backward compatibility and to avoid writing separate theme files.
-	logger::info("SaveTheme() no longer writes SettingsTheme.json; SelectedThemePreset is saved with SettingsUser.json");
 }

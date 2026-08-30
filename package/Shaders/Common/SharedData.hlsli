@@ -38,7 +38,7 @@ namespace SharedData
 		float SSSHumanFemaleBrightness;
 		float SSSHumanFemaleBaseSaturation;
 		uint VolumetricShadowsEnabled;
-		float SharedDataPackingPad2;
+		float VolumetricLightingOpacity;
 		float4 AmbientSHR;
 		float4 AmbientSHG;
 		float4 AmbientSHB;
@@ -67,15 +67,15 @@ namespace SharedData
 		bool EnableTerrainParallax;
 		bool EnableHeightBlending;
 		bool EnableShadows;
-		bool ExtendShadows;
 		bool EnableParallaxWarpingFix;
-		float1 pad0;
+		uint2 pad0;
 	};
 
 	struct CubemapCreatorSettings
 	{
 		uint Enabled;
-		float3 pad0;
+		float MaxMipLevel;
+		float2 pad0;
 
 		float4 CubemapColor;
 	};
@@ -206,7 +206,8 @@ namespace SharedData
 
 		float GrassWetnessPhase;
 		float GrassWetRoughness;
-		float2 GrassWetnessPad;
+		float GrassWetDarkeningStrength;
+		float GrassWetnessPad;
 	};
 
 	struct SkylightingSettings
@@ -226,6 +227,8 @@ namespace SharedData
 		float MinSpecularVisibility;
 		uint ProbeUpdateSliceStart;
 		uint ProbeUpdateSliceCount;
+		uint ShadowDataAvailable;
+		uint3 ShadowDataPadding;
 	};
 
 	struct CloudShadowsSettings
@@ -269,11 +272,11 @@ namespace SharedData
 		uint3 pad;
 	};
 
+	/** @brief Terrain Variation feature settings. */
 	struct TerrainVariationSettings
 	{
-		uint enableTilingFix;
-		uint enableLODTerrainTilingFix;
-		float2 pad0;
+		uint enableLODTerrainTilingFix;  ///< 1 = apply variation to LOD terrain.
+		uint3 pad;
 	};
 
 	struct IBLSettings

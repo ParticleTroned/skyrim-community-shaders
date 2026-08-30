@@ -50,7 +50,9 @@ namespace VRRenderScaleQualificationPolicy
 	{
 		Unknown,
 		FSR,
-		DLSS
+		DLSS,
+		None,
+		TAA
 	};
 
 	enum class PhysicalBackend : std::uint8_t
@@ -102,10 +104,19 @@ namespace VRRenderScaleQualificationPolicy
 		return a_target.method == Method::DLSS || a_target.method == Method::FSR;
 	}
 
+	[[nodiscard]] constexpr bool UsesNativeAPIEvaluation(
+		const TargetProfile& a_target) noexcept
+	{
+		return (UsesVendorEvaluation(a_target) ||
+				   a_target.method == Method::None ||
+				   a_target.method == Method::TAA) &&
+		       !a_target.renderScaleMode;
+	}
+
 	[[nodiscard]] constexpr bool UsesNativeVendorEvaluation(
 		const TargetProfile& a_target) noexcept
 	{
-		return UsesVendorEvaluation(a_target) && !a_target.renderScaleMode;
+		return UsesVendorEvaluation(a_target) && UsesNativeAPIEvaluation(a_target);
 	}
 
 	[[nodiscard]] constexpr bool IsTargetPropertyAllowed(
@@ -133,6 +144,11 @@ namespace VRRenderScaleQualificationPolicy
 		if (a_target.method == Method::Unknown ||
 			a_target.qualityMode > kMaximumQualityMode ||
 			a_target.renderScaleMode != (a_target.qualityMode != 0)) {
+			return false;
+		}
+		if ((a_target.method == Method::None || a_target.method == Method::TAA) &&
+			(a_target.qualityMode != 0 || a_target.matchDLSSProfile ||
+				a_target.matchFSRRuntime)) {
 			return false;
 		}
 		if (a_target.method == Method::DLSS && a_target.matchFSRRuntime)
@@ -222,6 +238,39 @@ namespace VRRenderScaleQualificationPolicy
 		std::uint32_t a_observedFrame) noexcept
 	{
 		return static_cast<std::int32_t>(a_observedFrame - a_beginFrame) > 0;
+	}
+
+	struct NativeVendorEyeEvidence
+	{
+		bool valid = false;
+		std::uint32_t presentationFrame = 0;
+		std::uint32_t dispatchFrame = 0;
+		PhysicalBackend backend = PhysicalBackend::None;
+		std::uint64_t dispatchSerial = 0;
+		bool runtimeFallback = false;
+	};
+
+	[[nodiscard]] constexpr bool HasCoherentNativeVendorEvaluation(
+		const TargetProfile& a_target,
+		std::uint32_t a_beginFrame,
+		const NativeVendorEyeEvidence& a_left,
+		const NativeVendorEyeEvidence& a_right) noexcept
+	{
+		if (!UsesNativeVendorEvaluation(a_target) ||
+			!a_left.valid || !a_right.valid ||
+			a_left.presentationFrame != a_right.presentationFrame ||
+			!FrameAdvanced(a_beginFrame, a_left.presentationFrame) ||
+			a_left.dispatchFrame != a_left.presentationFrame ||
+			a_right.dispatchFrame != a_right.presentationFrame ||
+			a_left.backend != a_right.backend ||
+			!MatchesActivePhysicalBackend(a_target.method, a_left.backend) ||
+			a_left.runtimeFallback != a_right.runtimeFallback) {
+			return false;
+		}
+		if (a_target.method == Method::DLSS)
+			return !a_left.runtimeFallback;
+		return a_left.dispatchSerial != 0 &&
+		       a_left.dispatchSerial == a_right.dispatchSerial;
 	}
 
 	[[nodiscard]] constexpr std::uint32_t ElapsedFrames(
@@ -596,12 +645,23 @@ namespace VRRenderScaleQualificationPolicy
 			kFailureResourcePublication,
 			failures);
 
-		if (UsesVendorEvaluation(a_target)) {
+		if (UsesNativeVendorEvaluation(a_target)) {
 			RequireFact(
-				a_target.renderScaleMode ? a_facts.apiActiveContract :
-										   a_facts.apiNativeContract,
-				a_target.renderScaleMode ? kFailureAPIActiveContract :
-										   kFailureAPINativeContract,
+				a_facts.apiNativeContract,
+				kFailureAPINativeContract,
+				failures);
+			RequireFact(
+				a_facts.physicalNativeContract,
+				kFailurePhysicalNativeContract,
+				failures);
+			RequireFact(
+				a_facts.nativePresentationStable,
+				kFailureNativePresentation,
+				failures);
+		} else if (UsesVendorEvaluation(a_target)) {
+			RequireFact(
+				a_facts.apiActiveContract,
+				kFailureAPIActiveContract,
 				failures);
 			RequireFact(
 				a_facts.physicalActiveContract,

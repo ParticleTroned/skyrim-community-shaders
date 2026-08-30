@@ -201,7 +201,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 		float3 R = reflect(-V, normalWS);
 
 		float roughness = 1.0 - glossiness;
-		float level = roughness * 7.0;
+		float level = roughness * SharedData::cubemapCreatorSettings.MaxMipLevel;
 
 		sh2 specularLobe = SphericalHarmonics::FauxSpecularLobe(normalWS, V, roughness);
 
@@ -229,8 +229,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 
 #	if defined(IBL)
 		if (SharedData::iblSettings.EnableIBL) {
-			float3 envSpecular, skySpecular;
-			ImageBasedLighting::ComputeSpecularIBL(
+			finalIrradiance = ImageBasedLighting::ComputeSpecularIBL(
 				EnvTexture,
 				EnvReflectionsTexture,
 				LinearSampler,
@@ -238,10 +237,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 				level,
 				directionalAmbientColorSpecular,
 				skylightingSpecular,
-				skylightingVisibility,
-				envSpecular,
-				skySpecular);
-			finalIrradiance = envSpecular + skySpecular;
+				skylightingVisibility);
 		} else
 #	endif
 		{

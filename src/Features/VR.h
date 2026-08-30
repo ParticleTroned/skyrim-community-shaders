@@ -6,6 +6,7 @@
 #include "Utils/Input.h"
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <d3d11.h>
 #include <d3d11_1.h>
@@ -101,14 +102,16 @@ public:
 		static constexpr float kDefaultMenuScale = 2.0f;      ///< Default overlay scale factor
 		static constexpr float kMinMenuScale = 0.5f;          ///< Minimum allowed overlay scale
 		static constexpr float kMaxMenuScale = 2.0f;          ///< Maximum allowed overlay scale
+		static constexpr float kMinMenuOffset = -5.0f;        ///< Minimum configurable overlay offset in metres
+		static constexpr float kMaxMenuOffset = 5.0f;         ///< Maximum configurable overlay offset in metres
 		static constexpr float kDefaultComboTimeout = 3.0f;   ///< Default timeout for button combos (seconds)
 		static constexpr float kDefaultMouseDeadzone = 0.1f;  ///< Default thumbstick deadzone for mouse input
 		static constexpr float kDefaultMouseSpeed = 10.0f;    ///< Default mouse speed multiplier
 		static constexpr float kDefaultWandAimPitchTrimDegrees = 0.0f;
 		static constexpr float kMinWandAimPitchTrimDegrees = -90.0f;
 		static constexpr float kMaxWandAimPitchTrimDegrees = 90.0f;
-		static constexpr int kDefaultAutoHideSeconds = 30;    ///< Default auto-hide timeout for overlay messages
-		static constexpr int kMaxAutoHideSeconds = 300;       ///< Maximum auto-hide timeout (5 minutes)
+		static constexpr int kDefaultAutoHideSeconds = 30;  ///< Default auto-hide timeout for overlay messages
+		static constexpr int kMaxAutoHideSeconds = 300;     ///< Maximum auto-hide timeout (5 minutes)
 		static constexpr float kMinStereoBlendDepthSigma = 0.001f;
 		static constexpr float kMaxStereoBlendDepthSigma = 0.1f;
 		static constexpr float kDefaultStereoBlendDepthSigma = 0.01f;
@@ -120,14 +123,21 @@ public:
 		static constexpr float kDefaultStereoBlendColorThreshold = 0.02f;
 
 		// Default HMD overlay offset values (in meters, relative to HMD)
-		static constexpr float kDefaultHMDOffsetX = 0.26f;      ///< Default horizontal offset from HMD
-		static constexpr float kDefaultHMDOffsetY = -0.04f;     ///< Default vertical offset from HMD
-		static constexpr float kDefaultHMDOffsetZ = -2.25f;     ///< Default depth offset from HMD
+		static constexpr float kDefaultHMDOffsetX = 0.26f;   ///< Default horizontal offset from HMD
+		static constexpr float kDefaultHMDOffsetY = -0.04f;  ///< Default vertical offset from HMD
+		static constexpr float kDefaultHMDOffsetZ = -2.25f;  ///< Default depth offset from HMD
 
 		// Default controller overlay offset values (in meters, relative to controller)
 		static constexpr float kDefaultControllerOffsetX = 0.22f;  ///< Default horizontal offset from controller
 		static constexpr float kDefaultControllerOffsetY = 0.15f;  ///< Default vertical offset from controller
 		static constexpr float kDefaultControllerOffsetZ = 0.20f;  ///< Default depth offset from controller
+
+		[[nodiscard]] static float SanitizeMenuOffset(float a_value, float a_fallback) noexcept
+		{
+			return std::isfinite(a_value) ?
+			           std::clamp(a_value, kMinMenuOffset, kMaxMenuOffset) :
+			           a_fallback;
+		}
 	};
 
 	//=============================================================================
@@ -243,6 +253,7 @@ public:
 		bool EnableDynamicCubemapVisibilityThrottle = false;
 
 		// VR Menu Overlay positioning settings
+		bool UnlockMenuPositionAndSize = false;         ///< Allow custom desktop and headset menu placement
 		float VRMenuScale = Config::kDefaultMenuScale;  ///< Scale factor for overlay UI (0.5-2.0)
 		int VRMenuPositioningMethod = 1;                ///< 0 = HMD relative, 1 = Fixed world position
 
@@ -285,8 +296,8 @@ public:
 		bool StabilizeRenderScaleDesktopMirror = false;           ///< Publish render-scale eye outputs to the desktop mirror
 
 		// CSX menu navigation settings
-		bool UseRuntimeDefaultMenuNavigation = true;   ///< Use mouse navigation by default until the user selects a mode explicitly
-		bool EnableWandPointing = true;                ///< True uses wand/ray-cast navigation, false uses mouse/thumbstick navigation
+		bool UseRuntimeDefaultMenuNavigation = true;                              ///< Use mouse navigation by default until the user selects a mode explicitly
+		bool EnableWandPointing = true;                                           ///< True uses wand/ray-cast navigation, false uses mouse/thumbstick navigation
 		float WandAimPitchTrimDegrees = Config::kDefaultWandAimPitchTrimDegrees;  ///< Optional local pitch trim after resolving the runtime aim component
 
 		// Visual customization
@@ -357,15 +368,24 @@ public:
 		 */
 		void ClampToValidRanges()
 		{
-			VRMenuScale = std::clamp(VRMenuScale, Config::kMinMenuScale, Config::kMaxMenuScale);
-			// Keep one safe, always-recoverable headset presentation. Legacy fields
-			// remain serialized so old presets still load, but they cannot lose the menu.
-			VRMenuPositioningMethod = 1;
-			attachMode = OverlayAttachMode::HMDOnly;
-			VRMenuOffsetX = Config::kDefaultHMDOffsetX;
-			VRMenuOffsetY = Config::kDefaultHMDOffsetY;
-			VRMenuOffsetZ = Config::kDefaultHMDOffsetZ;
-			EnableDragToReposition = false;
+			VRMenuScale = std::isfinite(VRMenuScale) ?
+			                  std::clamp(VRMenuScale, Config::kMinMenuScale, Config::kMaxMenuScale) :
+			                  Config::kDefaultMenuScale;
+			VRMenuPositioningMethod = std::clamp(VRMenuPositioningMethod, 0, 1);
+			attachMode = static_cast<OverlayAttachMode>(std::clamp(
+				static_cast<int>(attachMode),
+				static_cast<int>(OverlayAttachMode::HMDOnly),
+				static_cast<int>(OverlayAttachMode::None)));
+			VRMenuAttachController = static_cast<ControllerDevice>(std::clamp(
+				static_cast<int>(VRMenuAttachController),
+				static_cast<int>(ControllerDevice::Primary),
+				static_cast<int>(ControllerDevice::Secondary)));
+			VRMenuOffsetX = Config::SanitizeMenuOffset(VRMenuOffsetX, Config::kDefaultHMDOffsetX);
+			VRMenuOffsetY = Config::SanitizeMenuOffset(VRMenuOffsetY, Config::kDefaultHMDOffsetY);
+			VRMenuOffsetZ = Config::SanitizeMenuOffset(VRMenuOffsetZ, Config::kDefaultHMDOffsetZ);
+			VRMenuControllerOffsetX = Config::SanitizeMenuOffset(VRMenuControllerOffsetX, Config::kDefaultControllerOffsetX);
+			VRMenuControllerOffsetY = Config::SanitizeMenuOffset(VRMenuControllerOffsetY, Config::kDefaultControllerOffsetY);
+			VRMenuControllerOffsetZ = Config::SanitizeMenuOffset(VRMenuControllerOffsetZ, Config::kDefaultControllerOffsetZ);
 			mouseDeadzone = std::clamp(mouseDeadzone, 0.0f, 1.0f);
 			mouseSpeed = std::clamp(mouseSpeed, 0.1f, 50.0f);
 			WandAimPitchTrimDegrees = std::clamp(
@@ -389,6 +409,18 @@ public:
 
 	void UpdateVROverlayPosition();
 	bool UseFixedWorldMenuPositioning() const;
+	/** Return the locked or saved headset presentation mode. */
+	[[nodiscard]] Settings::OverlayAttachMode GetEffectiveMenuAttachMode() const;
+	/** Return the controller selected for the effective headset presentation. */
+	[[nodiscard]] ControllerDevice GetEffectiveMenuAttachController() const;
+	/** Return the locked default or saved custom headset menu scale. */
+	[[nodiscard]] float GetEffectiveMenuScale() const;
+	/** Return the locked or saved HMD-relative offset. */
+	[[nodiscard]] Vector3 GetEffectiveHMDMenuOffset() const;
+	/** Return the controller-relative offset for the effective presentation. */
+	[[nodiscard]] Vector3 GetEffectiveControllerMenuOffset() const;
+	/** @brief Enables or restores the safe lock for desktop and headset menu placement. */
+	void SetMenuLayoutUnlocked(bool a_unlocked);
 	void UpdateVROverlayControllerPosition();
 
 	void ProcessVREvents(std::vector<Menu::KeyEvent>& vrEvents);
@@ -418,6 +450,13 @@ public:
 	bool IsWandControllerIntersecting(ControllerDevice a_controller) const;
 	bool TryCaptureWandController(ControllerDevice a_controller);
 	void ReleaseWandControllerCapture(ControllerDevice a_controller);
+	/**
+	 * @brief Returns the wand that generated this ImGui frame's left click.
+	 * @return Both when the click has no unambiguous VR provenance.
+	 */
+	[[nodiscard]] ControllerDevice GetImGuiLeftClickWandController() const;
+	/** @brief Discards click provenance when ImGui's queued input events are discarded. */
+	void DiscardQueuedImGuiClickOwners();
 	void TriggerWandHaptic(ControllerDevice a_controller, float a_duration);
 	void UpdateWandHoverFeedback();
 	void ResetWandPointingRuntimeState();
@@ -556,6 +595,7 @@ public:
 		Matrix m = Matrix::Identity;
 		bool initialized = false;
 	} fixedWorldOverlayPosition;
+	OverlayWorldPosition savedUnlockedFixedWorldOverlayPosition;  ///< Custom anchor retained while the recoverable lock is active
 	bool fixedWorldOverlayReanchorRequested = true;
 
 	struct OverlayDragState

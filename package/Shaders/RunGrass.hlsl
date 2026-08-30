@@ -435,6 +435,10 @@ cbuffer AlphaTestRefCB : register(b11)
 
 #	define SampColorSampler SampBaseSampler
 
+#	if defined(SKYLIGHTING)
+#		define SKYLIGHTING_SHADOW_VIS
+#	endif
+
 #	if defined(DYNAMIC_CUBEMAPS)
 #		include "DynamicCubemaps/DynamicCubemaps.hlsli"
 #	endif
@@ -462,6 +466,13 @@ cbuffer AlphaTestRefCB : register(b11)
 #	define LinearSampler SampBaseSampler
 
 #	include "Common/ShadowSampling.hlsli"
+
+float3 ApplyGrassWetDarkening(float3 baseColor)
+{
+	const float wetDarkening = saturate(SharedData::wetternessSettings.GrassWetnessPhase) *
+	                           saturate(SharedData::wetternessSettings.GrassWetDarkeningStrength);
+	return baseColor * (1.0 - wetDarkening);
+}
 
 // This is the original non-Grass-Lighting shader path. It is shared by the
 // boot-disabled permutation and the runtime-disabled Grass Lighting path.
@@ -601,7 +612,7 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 
 	diffuseColor += directionalAmbientColor;
 
-	float3 albedo = baseColor.xyz * vertexColor;
+	float3 albedo = ApplyGrassWetDarkening(baseColor.xyz) * vertexColor;
 
 	diffuseColor *= albedo;
 	directionalAmbientColor *= albedo;
@@ -746,6 +757,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		baseColor.xyz *= SharedData::grassLightingSettings.BasicGrassBrightness;
 #			endif  // !TRUE_PBR
 
+	baseColor.xyz = ApplyGrassWetDarkening(baseColor.xyz);
+
 #			if defined(TRUE_PBR)
 	float4 rawRMAOS = TexRMAOSSampler.SampleBias(SampRMAOSSampler, input.TexCoord.xy, SharedData::MipBias) * float4(PBRParams1.x, 1, 1, PBRParams1.y);
 
@@ -820,6 +833,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #			else
 	dirLightColor *= dirLightColorMultiplier;
+	const float3 unshadowedDirLightColor = dirLightColor;
 	dirLightColor *= dirShadow;
 	dirLightColor *= dirDetailShadow;
 
@@ -840,12 +854,21 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #					else
 	float3 positionMSSkylight = input.WorldPosition.xyz;
 #					endif
-	float skylightingDiffuse = Skylighting::GetVertexSkylightingDiffuse(positionMSSkylight, normal, vertexAO);
+	Skylighting::ShadowedSample skylightingSample = Skylighting::SampleWithShadow(positionMSSkylight, normal);
+	sh2 skylightingSH = skylightingSample.Probe;
+	float skylightingShadowVisibility = skylightingSample.Visibility;
+	float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, positionMSSkylight, normal, vertexAO);
 #				endif  // SKYLIGHTING
 
 	float3 albedo = baseColor.xyz * vertexColor;
 
-	float3 subsurfaceColor = dirLightColor * GetSoftLightMultiplier(dirLightAngle, softLightRolloff) * Color::VanillaNormalization();
+	float dirSoftShadow = dirShadow * dirDetailShadow;
+#				if defined(SKYLIGHTING_SHADOW_VIS)
+	if (Skylighting::IsEnabled() && SharedData::skylightingSettings.ShadowDataAvailable != 0)
+		dirSoftShadow = min(dirSoftShadow, skylightingShadowVisibility);
+#				endif
+
+	float3 subsurfaceColor = unshadowedDirLightColor * dirSoftShadow * GetSoftLightMultiplier(dirLightAngle, softLightRolloff) * Color::VanillaNormalization();
 
 	if (complex)
 		lightsSpecularColor += GrassLighting::GetLightSpecularInput(SharedData::DirLightDirection.xyz, viewDirection, normal, dirLightColor, SharedData::grassLightingSettings.Glossiness) * Color::VanillaNormalization();

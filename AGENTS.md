@@ -12,7 +12,7 @@ contradict this policy.
 -   **PR title:** Use `type(scope): description`. Keep it at or below 50 characters when practical, target `main-VR`, and keep the title current because squash merge and release automation consume it.
 -   **PR body:** Wrap prose at 72 columns where practical and use `Why`, `What changed`, applicable safety/failure behavior, and exact validation evidence. Update stale text before merge.
 -   **Release-aware type:** Use `feat`, `fix`, or `perf` only for user-visible release changes. Developer tooling and build infrastructure are `build`; CI is `ci`; documentation and agent guidance are `docs`.
--   **Commits:** Use the same Conventional Commit format. For non-trivial changes, add a wrapped body explaining the rationale and implementation. Stage only in-scope files.
+-   **Commits:** Use the same Conventional Commit format. Every agent-created or rewritten commit must have a wrapped body with explicit `Rationale:` and `Implementation:` sections and accurate attribution. Stage only in-scope files.
 -   **Comments:** Keep inline comments to one or two lines. Explain why, not what. Describe present invariants, not removed code, one-off incidents, commits, PRs, or tools.
 -   **Minimal churn:** Do not reformat unrelated code, rename adjacent symbols, or mix opportunistic cleanup into the requested change.
 -   **DRY review:** Search the full codebase for an existing utility or pattern before adding another implementation.
@@ -77,8 +77,22 @@ contradict this policy.
 ### Commit hygiene
 
 -   Commit only files required by the requested change. Leave unrelated tracked changes and untracked user files untouched.
--   A non-trivial commit body must explain both rationale and implementation and be wrapped at 72 columns where practical.
--   When manually porting another author's work rather than preserving commits through a merge, credit the original author in the commit body using an appropriate `Co-authored-by` trailer when their identity is known.
+-   Every commit created or rewritten by an agent must use this structure, even when the change is small:
+
+    ```text
+    type(scope): imperative summary
+
+    Rationale:
+    Explain why the change is needed and the constraint or impact it addresses.
+
+    Implementation:
+    Explain what changed, how it works, and material safety or failure behavior.
+    ```
+
+-   Keep each section specific to the final diff and wrap its prose at 72 columns where practical. Do not substitute a change list for the rationale or omit implementation details because a commit is small.
+-   Preserve accurate Git authorship. Before creating a commit, inspect the configured author and committer identities; do not invent or silently replace either identity. When rewriting a commit, preserve its existing author name, email, and author date unless the user explicitly directs a correction.
+-   Preserve original author metadata when carrying an existing commit through a merge or cherry-pick. When manually porting another person's material contribution, add their verified identity with a `Co-authored-by: Name <email>` trailer instead of claiming sole authorship.
+-   Add co-author trailers only for people who materially authored the committed work. Do not invent names or email addresses, and do not credit reviewers, tools, or assistants merely for reviewing, generating, or applying a change.
 -   Keep mechanical formatting separate from behavioral changes when that materially improves reviewability.
 
 ## Comments and documentation

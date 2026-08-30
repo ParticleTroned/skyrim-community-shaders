@@ -1,8 +1,8 @@
 #pragma once
 
 #include "Buffer.h"
-
 #include "LightEditor.h"
+#include "Utils/VanityCamera.h"
 #include "Weather/CellLightingWidget.h"
 #include "Weather/ImageSpaceWidget.h"
 #include "Weather/LensFlareWidget.h"
@@ -40,6 +40,18 @@ public:
 
 	// Owned by EditorWindow, created in Draw(), released in destructor
 	Texture2D* tempTexture = nullptr;
+
+	/** @brief Screen-space bounds and source dimensions of the current game preview image. */
+	struct ViewportImageRect
+	{
+		ImVec2 min{};
+		ImVec2 max{};
+		ImVec2 renderSize{};
+		bool valid = false;
+	};
+
+	/** @brief Returns the mapping from the most recent rendered Viewport window. */
+	[[nodiscard]] const ViewportImageRect& GetViewportImageRect() const noexcept { return viewportImageRect; }
 
 	// Widget collections owned by EditorWindow, created in SetupResources(), released in destructor
 	using WidgetVec = std::vector<std::unique_ptr<Widget>>;
@@ -102,8 +114,7 @@ public:
 	void AdjustFlySpeed(float scrollDelta);
 
 	// Vanity camera control
-	bool vanityCameraDisabled = false;
-	float savedVanityCameraDelay = 180.0f;
+	Util::VanityCameraSuppressionLease vanityCameraSuppression;
 
 	void ShowObjectsWindow();
 
@@ -117,7 +128,20 @@ public:
 	void EnsureResources();
 
 	void Draw();
+	/** @brief Advances delayed light-reference work independently of editor visibility. */
+	void AdvanceLightEditorDeferredWork();
 	void UpdateOpenState();
+
+	/** @brief Selects and enables the Light Editor after its parent editor has opened. */
+	void ActivateLightEditor();
+	[[nodiscard]] bool IsLightEditorSelected() const;
+	[[nodiscard]] bool IsLightEditorEnabled() const { return lightEditor.IsEnabled(); }
+	[[nodiscard]] bool IsLightPickerActive() const { return lightEditor.IsPicking(); }
+	[[nodiscard]] bool HasLightEditorDeferredWork() const { return lightEditor.HasDeferredWork(); }
+	/** @brief True only when the most recent editor UI pass published a valid preview. */
+	[[nodiscard]] bool IsEditorViewportVisible() const { return open && settings.showViewport && viewportImageRect.valid; }
+	void BeginLightPick() { lightEditor.BeginPick(); }
+	void CancelLightPick() { lightEditor.CancelPick(); }
 
 	void LockWeather(RE::TESWeather* weather);
 	void UnlockWeather();
@@ -147,8 +171,11 @@ public:
 	bool DrawGameHourSlider(const char* label = "Game Time", const char* format = "%.2f");
 	void DrawTimeControls();
 
-	// Check if ESC key should close the editor (no popups open)
-	bool ShouldHandleEscapeKey() const;
+	/** @brief Returns true if ESC should close the editor rather than a child interaction. */
+	bool ShouldHandleEscapeKey();
+
+	/** @brief One-shot handoff set when a picker or popup consumes ESC on key-down. */
+	bool suppressNextEditorEscape = false;
 
 	void DisableVanityCamera();
 	void RestoreVanityCamera();
@@ -257,6 +284,7 @@ private:
 	bool showSettingsWindow = false;
 	std::string settingsSelectedCategory = "Flags";
 	bool wasOpen = false;
+	ViewportImageRect viewportImageRect;
 
 	// Widget focus tracking for Ctrl+W
 	Widget* lastFocusedWidget = nullptr;

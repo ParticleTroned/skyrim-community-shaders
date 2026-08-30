@@ -1,36 +1,22 @@
 #include "TerrainVariation.h"
-#include "../FeatureBuffer.h"
-#include "../Globals.h"
-#include "../State.h"
 #include "../Util.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TerrainVariation::Settings,
-	enableTilingFix,
 	enableLODTerrainTilingFix)
 
 void TerrainVariation::DrawSettings()
 {
-	bool oldEnabled = settings.enableTilingFix;
-	ImGui::Checkbox("Enable", (bool*)&settings.enableTilingFix);
-	if (oldEnabled != (bool)settings.enableTilingFix) {
-		// Update the shader settings when the checkbox is toggled
-		UpdateShaderSettings();
-		logger::info("TerrainVariation setting changed to: {}", settings.enableTilingFix);
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text(
-			"Reduces the repeating pattern effect on terrain textures.\n"
-			"This technique creates more natural-looking terrain by adding variation to texture sampling.");
-	}
+	ImGui::TextWrapped(
+		"Terrain Variation is always enabled when installed. "
+		"To turn it off, use Disable at Boot.");
 
-	ImGui::Separator();
+	ImGui::Spacing();
 
-	bool oldLODEnabled = settings.enableLODTerrainTilingFix;
-	ImGui::Checkbox("Apply to LOD Terrain", (bool*)&settings.enableLODTerrainTilingFix);
-	if (oldLODEnabled != (bool)settings.enableLODTerrainTilingFix) {
-		UpdateShaderSettings();
-		logger::info("TerrainVariation LOD setting changed to: {}", settings.enableLODTerrainTilingFix);
+	bool lodTilingFix = settings.enableLODTerrainTilingFix != 0;
+	if (ImGui::Checkbox("Apply to LOD Terrain", &lodTilingFix)) {
+		settings.enableLODTerrainTilingFix = lodTilingFix ? 1u : 0u;
+		logger::info("TerrainVariation LOD setting changed to: {}", settings.enableLODTerrainTilingFix != 0);
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
@@ -41,41 +27,17 @@ void TerrainVariation::DrawSettings()
 
 void TerrainVariation::DrawEssentialSettings()
 {
-	bool oldEnabled = settings.enableTilingFix;
-	ImGui::Checkbox("Enable", (bool*)&settings.enableTilingFix);
-	if (oldEnabled != (bool)settings.enableTilingFix) {
-		UpdateShaderSettings();
-		logger::info("TerrainVariation setting changed to: {}", settings.enableTilingFix);
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text(
-			"Reduces the repeating pattern effect on terrain textures.\n"
-			"This technique creates more natural-looking terrain by adding variation to texture sampling.");
-	}
-}
-
-void TerrainVariation::UpdateShaderSettings()
-{
-	if (!globals::state) {
-		return;
-	}
-
-	// Mark the vertex descriptor as dirty to trigger an update
-	if (globals::game::stateUpdateFlags) {
-		globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
-	}
+	DrawSettings();
 }
 
 void TerrainVariation::PostPostLoad()
 {
 	logger::info("TerrainVariation: Feature initialized");
-	UpdateShaderSettings();
 }
 
 void TerrainVariation::LoadSettings(json& o_json)
 {
 	settings = o_json;
-	UpdateShaderSettings();
 }
 
 void TerrainVariation::SaveSettings(json& o_json)

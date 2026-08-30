@@ -192,7 +192,6 @@ public:
 	void LoadFromJson(nlohmann::json& i_json, bool a_loadFeatureSettings = true);
 
 	void LoadTheme();
-	void SaveTheme();
 
 	bool ValidateCache(CSimpleIniA& a_ini);
 	void WriteDiskCacheInfo(CSimpleIniA& a_ini);
@@ -321,7 +320,8 @@ public:
 		IsTree = 1 << 4,
 		GrassSphereNormal = 1 << 5,
 		IsFemale = 1 << 6,
-		SuppressExternalEmittance = 1 << 7
+		SuppressExternalEmittance = 1 << 7,
+		AdditiveLighting = 1 << 8
 	};
 
 	enum class ExtraFeatureDescriptors : uint32_t
@@ -366,6 +366,11 @@ public:
 
 	void UpdateSharedData(bool a_inWorld, bool a_prepass);
 	void UpdateFeatureData(bool a_inWorld);
+	/**
+	 * @brief Updates the lighting permutation from the current render pass blend state.
+	 * @param a_pass Lighting render pass to inspect.
+	 */
+	void UpdateLightingShaderPermutation(RE::BSRenderPass* a_pass);
 	bool HasDirectionalShadows() const;
 
 	struct PermutationCB
@@ -420,7 +425,7 @@ public:
 		float SSSHumanFemaleBrightness;
 		float SSSHumanFemaleBaseSaturation;
 		uint VolumetricShadowsEnabled;
-		float SharedDataPackingPad2;
+		float VolumetricLightingOpacity;
 		float4 AmbientSHR;
 		float4 AmbientSHG;
 		float4 AmbientSHB;
@@ -435,6 +440,7 @@ public:
 	static_assert(offsetof(SharedDataCB, RefractionScale) % 16 == 0);
 	static_assert(offsetof(SharedDataCB, PBRMetalReflectionScalePad0) % 16 == 0);
 	static_assert(offsetof(SharedDataCB, VolumetricShadowsEnabled) == offsetof(SharedDataCB, SSSHumanFemaleBaseSaturation) + sizeof(float));
+	static_assert(offsetof(SharedDataCB, VolumetricLightingOpacity) == offsetof(SharedDataCB, VolumetricShadowsEnabled) + sizeof(uint));
 	static_assert(offsetof(SharedDataCB, AmbientSHR) % 16 == 0);
 	static_assert(offsetof(SharedDataCB, VRFoveationData0) % 16 == 0);
 	static_assert(offsetof(SharedDataCB, VRFoveationModes) % 16 == 0);

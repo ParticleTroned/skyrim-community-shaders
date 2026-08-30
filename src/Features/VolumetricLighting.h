@@ -3,10 +3,13 @@
 #include <atomic>
 
 #include "RE/B/BSVolumetricLightingRenderData.h"
+#include "VolumetricLightingTuning.h"
 
 struct VolumetricLighting : Feature
 {
 public:
+	using GodrayProfile = VolumetricLightingTuning::Profile;
+
 	struct TextureSize
 	{
 		int32_t Width = 320;
@@ -18,17 +21,11 @@ public:
 	{
 		bool ExteriorEnabled = true;
 		bool DisableWeatherInteractionDuringRain = false;
-		float GodrayIntensity = 1.0f;
-		float GodrayShaftIntensity = 1.0f;
-		float GodrayOpacity = 1.0f;
-		float GodraySaturation = 1.0f;
-		float CustomColorContribution = 0.0f;
-		float CustomColorRed = 1.0f;
-		float CustomColorGreen = 1.0f;
-		float CustomColorBlue = 1.0f;
+		GodrayProfile ExteriorGodrays;
 		int32_t ExteriorQuality = 2;
 		TextureSize ExteriorCustomSize;
 		bool InteriorEnabled = true;
+		GodrayProfile InteriorGodrays;
 		int32_t InteriorQuality = 2;
 		TextureSize InteriorCustomSize;
 	};
@@ -70,6 +67,8 @@ public:
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
 	bool IsExteriorEnabled() const;
 	void SetExteriorEnabled(bool enabled);
+	/** @return The active context's finite-safe shader opacity, or neutral when tuning is unavailable. */
+	float GetRuntimeGodrayOpacity() const;
 	virtual void DataLoaded() override;
 	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;
@@ -136,8 +135,10 @@ private:
 	static void RenderVolumetricLighting(VolumetricLightingDescriptor* descriptor, RE::NiCamera* camera, bool flag);
 
 	void DrawGodrayTuningSettings();
+	void DrawGodrayProfileSettings(const char* label, GodrayProfile& profile);
 	void DrawVolumetricLightingSettings(int32_t& quality, TextureSize& customSize, bool isInterior, bool inLocationType);
 	TextureSize& FetchCurrentSizeInUnits(bool interior);
+	bool TryGetActiveGodrayProfile(GodrayProfile& profile) const;
 	void SanitizeSettings();
 	void SetupVL();
 	void ClearVolumetricLightingTargets();
@@ -169,6 +170,7 @@ private:
 	bool inInteriorWithSun = false;
 	bool rainOnlySuppressionActive = false;
 	std::atomic<bool> vrImageSpaceCacheRefreshPending = false;
+	VolumetricLightingDescriptor runtimeDescriptor{};
 
 	struct VLData
 	{

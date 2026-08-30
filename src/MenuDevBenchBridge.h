@@ -1,6 +1,6 @@
 #pragma once
 
-/** Diagnostic-only DevBench control and state inspection for the CSX VR menu. */
+/** Diagnostic-only DevBench control and state inspection for CSX runtime UI settings. */
 namespace MenuDevBenchBridge
 {
 	void Install();

@@ -1,4 +1,5 @@
 #include "Api/ServiceRegistry.h"
+#include "VRAPI/CSeditorapi.h"
 
 #include <iostream>
 #include <stdexcept>
@@ -72,6 +73,46 @@ int RunTest()
 	Check(registry.Query(query, selected, nullptr) == Status::kIncompatibleServiceVersion, "incompatible major was not reported");
 	query.name = "csx.missing";
 	Check(registry.Query(query, selected, nullptr) == Status::kServiceNotFound, "missing service was not reported");
+
+	CSX::EditorAPI::Interface001 editor10{
+		.minor = CSX::EditorAPI::MinimumServiceMinor,
+		.schemaRevision = CSX::EditorAPI::LegacySchemaRevision,
+		.capabilities = CSX::EditorAPI::LegacyServiceCapabilities,
+	};
+	CSX::EditorAPI::Interface001 editor11{
+		.minor = CSX::EditorAPI::ServiceMinor,
+		.schemaRevision = CSX::EditorAPI::SchemaRevision,
+		.capabilities = CSX::EditorAPI::ServiceCapabilities,
+	};
+	Check(registry.Register({ CSX::EditorAPI::ServiceName, CSX::EditorAPI::ServiceMajor,
+			  CSX::EditorAPI::MinimumServiceMinor, CSX::EditorAPI::LegacySchemaRevision, inspect, &editor10 }) == Status::kSuccess,
+		"editor 1.0 compatibility registration failed");
+	Check(registry.Register({ CSX::EditorAPI::ServiceName, CSX::EditorAPI::ServiceMajor,
+			  CSX::EditorAPI::ServiceMinor, CSX::EditorAPI::SchemaRevision, inspect, &editor11 }) == Status::kSuccess,
+		"editor 1.1 registration failed");
+
+	ServiceQuery001 editorQuery;
+	editorQuery.name = CSX::EditorAPI::ServiceName;
+	editorQuery.major = CSX::EditorAPI::ServiceMajor;
+	editorQuery.minimumMinor = CSX::EditorAPI::MinimumServiceMinor;
+	editorQuery.maximumMinor = CSX::EditorAPI::MinimumServiceMinor;
+	editorQuery.requiredCapabilities = inspect;
+	Check(registry.Query(editorQuery, selected, &descriptor) == Status::kSuccess && selected == &editor10,
+		"editor client capped at 1.0 lost its compatible interface");
+	Check(descriptor.minor == CSX::EditorAPI::MinimumServiceMinor && descriptor.schemaRevision == CSX::EditorAPI::LegacySchemaRevision,
+		"editor 1.0 descriptor metadata changed");
+	Check((static_cast<const CSX::EditorAPI::Interface001*>(selected)->capabilities &
+			  CSX::EditorAPI::kCapabilityLightPickerControl) == 0,
+		"editor 1.0 interface advertised the 1.1 picker capability");
+
+	editorQuery.maximumMinor = CSX::EditorAPI::ServiceMinor;
+	Check(registry.Query(editorQuery, selected, &descriptor) == Status::kSuccess && selected == &editor11,
+		"editor client accepting 1.1 did not receive the highest compatible interface");
+	Check(descriptor.minor == CSX::EditorAPI::ServiceMinor && descriptor.schemaRevision == CSX::EditorAPI::SchemaRevision,
+		"editor 1.1 descriptor metadata is incorrect");
+	Check((static_cast<const CSX::EditorAPI::Interface001*>(selected)->capabilities &
+			  CSX::EditorAPI::kCapabilityLightPickerControl) != 0,
+		"editor 1.1 interface omitted the picker capability");
 
 	auto& processRegistry = CSX::Api::GetProcessServiceRegistry();
 	ProducerIdentity nativeProducer;

@@ -3,6 +3,7 @@
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
 #	include "BuildProvenance.h"
+#	include "Features/DynamicCubemaps.h"
 #	include "Features/ScreenshotFeature.h"
 #	include "Features/Upscaling.h"
 #	include "Features/VR.h"
@@ -11,6 +12,7 @@
 #	include "Menu.h"
 #	include "MenuDevBenchPreflightPolicy.h"
 #	include "State.h"
+#	include "TruePBR.h"
 
 #	include <DevBenchAPI.h>
 #	include <nlohmann/json.hpp>
@@ -317,11 +319,14 @@ namespace
 		auto* menu = globals::menu;
 		auto& vr = globals::features::vr;
 		auto& screenshot = globals::features::screenshotFeature;
+		auto& dynamicCubemaps = globals::features::dynamicCubemaps;
 		const auto inSceneSubmitSuppressionReasons =
 			globals::features::upscaling.GetVRInSceneOverlaySubmitSuppressionReasons();
 		const auto depthCullingTemporal = VRDepthCullingTemporal::GetStatus();
 		auto* drawData = ImGui::GetCurrentContext() ? ImGui::GetDrawData() : nullptr;
 		const auto fixedWorldPosition = vr.fixedWorldOverlayPosition.m.Translation();
+		const auto effectiveAttachMode = vr.GetEffectiveMenuAttachMode();
+		const auto effectiveHMDOffset = vr.GetEffectiveHMDMenuOffset();
 		const json depthCullingTemporalStatus = {
 			{ "installed", depthCullingTemporal.installed },
 			{ "cullingEnabled", depthCullingTemporal.cullingEnabled },
@@ -335,6 +340,9 @@ namespace
 		return {
 			{ "menuEnabled", menu && menu->IsEnabled },
 			{ "menuSessionOpen", menu && menu->IsMenuSessionOpen() },
+			{ "menuLayoutUnlocked", vr.settings.UnlockMenuPositionAndSize },
+			{ "desktopMenuCanvasLocked", globals::game::isVR && !vr.settings.UnlockMenuPositionAndSize },
+			{ "controllerGripDragEnabled", vr.settings.UnlockMenuPositionAndSize && vr.settings.EnableDragToReposition },
 			{ "performanceOverlayVisible", menu && menu->overlayVisible },
 			{ "mainMenuOpen", globals::state && globals::state->isMainMenuOpen },
 			{ "loadingMenuOpen", globals::state && globals::state->isLoadingMenuOpen },
@@ -347,26 +355,40 @@ namespace
 					VRInSceneOverlaySubmitPolicy::SuppressionReason::None },
 			{ "inSceneSubmitSuppressionReasons", static_cast<std::uint32_t>(inSceneSubmitSuppressionReasons) },
 			{ "shouldPresentOverlayInHeadset", vr.ShouldPresentOverlayInHeadset() },
-			{ "attachMode", static_cast<int>(vr.settings.attachMode) },
+			{ "attachMode", static_cast<int>(effectiveAttachMode) },
+			{ "savedAttachMode", static_cast<int>(vr.settings.attachMode) },
 			{ "menuOverlayPath", static_cast<int>(vr.settings.menuOverlayPath) },
-			{ "menuPositioningMethod", vr.settings.VRMenuPositioningMethod },
+			{ "menuPositioningMethod", vr.UseFixedWorldMenuPositioning() ? 1 : 0 },
+			{ "savedMenuPositioningMethod", vr.settings.VRMenuPositioningMethod },
 			{ "effectiveFixedWorldPositioning", vr.UseFixedWorldMenuPositioning() },
 			{ "fixedWorldPositionInitialized", vr.fixedWorldOverlayPosition.initialized },
+			{ "savedUnlockedFixedWorldPositionInitialized", vr.savedUnlockedFixedWorldOverlayPosition.initialized },
 			{ "fixedWorldReanchorRequested", vr.fixedWorldOverlayReanchorRequested },
 			{ "fixedWorldPosition", {
 										{ "x", fixedWorldPosition.x },
 										{ "y", fixedWorldPosition.y },
 										{ "z", fixedWorldPosition.z },
 									} },
-			{ "menuScale", vr.settings.VRMenuScale },
+			{ "menuScale", vr.GetEffectiveMenuScale() },
+			{ "savedMenuScale", vr.settings.VRMenuScale },
 			{ "depthCullingExteriorEnabled", vr.settings.EnableDepthBufferCullingExterior },
 			{ "depthCullingInteriorEnabled", vr.settings.EnableDepthBufferCullingInterior },
 			{ "depthCullingPerformanceMode", vr.settings.DepthCullingPerformanceMode },
 			{ "depthCullingLegacyMode", vr.settings.DepthCullingLegacyMode },
+			{ "truePbrVerboseJsonLogging", globals::features::truePBR.enableVerboseJsonLogging },
+			{ "dynamicCubemaps", {
+									 { "configuredResolution", dynamicCubemaps.settings.CubemapResolution },
+									 { "activeResolution", dynamicCubemaps.GetActiveCubemapResolution() },
+									 { "activeMipLevels", dynamicCubemaps.GetActiveCubemapMipLevels() },
+									 { "restartRequired", dynamicCubemaps.IsCubemapResolutionRestartRequired() },
+								 } },
 			{ "depthCullingTemporal", depthCullingTemporalStatus },
-			{ "menuOffsetX", vr.settings.VRMenuOffsetX },
-			{ "menuOffsetY", vr.settings.VRMenuOffsetY },
-			{ "menuOffsetZ", vr.settings.VRMenuOffsetZ },
+			{ "menuOffsetX", effectiveHMDOffset.x },
+			{ "menuOffsetY", effectiveHMDOffset.y },
+			{ "menuOffsetZ", effectiveHMDOffset.z },
+			{ "savedMenuOffsetX", vr.settings.VRMenuOffsetX },
+			{ "savedMenuOffsetY", vr.settings.VRMenuOffsetY },
+			{ "savedMenuOffsetZ", vr.settings.VRMenuOffsetZ },
 			{ "menuTexture", vr.menuTexture != nullptr },
 			{ "menuRenderTarget", vr.menuRTV != nullptr },
 			{ "hmdOverlayHandle", vr.menuOverlayHandle != vr::k_ulOverlayHandleInvalid },
@@ -385,11 +407,11 @@ namespace
 	json BuildResult(const json& a_args)
 	{
 		const std::string action = a_args.value("action", std::string("status"));
-		if (action != "status" && action != "open" && action != "close" && action != "screenshot" && action != "set_path" && action != "texture_stats" && action != "set_depth_culling_performance_mode" && action != "set_depth_culling_legacy_mode" && action != "prepare_coc") {
+		if (action != "status" && action != "open" && action != "close" && action != "screenshot" && action != "set_path" && action != "set_layout_unlocked" && action != "texture_stats" && action != "set_depth_culling_performance_mode" && action != "set_depth_culling_legacy_mode" && action != "set_truepbr_verbose_json_logging" && action != "set_dynamic_cubemap_resolution" && action != "prepare_coc") {
 			return {
 				{ "error", "unknown action" },
 				{ "action", action },
-				{ "supported", json::array({ "status", "open", "close", "screenshot", "set_path", "texture_stats", "set_depth_culling_performance_mode", "set_depth_culling_legacy_mode", "prepare_coc" }) },
+				{ "supported", json::array({ "status", "open", "close", "screenshot", "set_path", "set_layout_unlocked", "texture_stats", "set_depth_culling_performance_mode", "set_depth_culling_legacy_mode", "set_truepbr_verbose_json_logging", "set_dynamic_cubemap_resolution", "prepare_coc" }) },
 			};
 		}
 		const std::string path = a_args.value("path", std::string());
@@ -400,16 +422,33 @@ namespace
 				{ "path", path },
 			};
 		}
-		if ((action == "set_depth_culling_performance_mode" || action == "set_depth_culling_legacy_mode") &&
+		if ((action == "set_layout_unlocked" || action == "set_depth_culling_performance_mode" || action == "set_depth_culling_legacy_mode" || action == "set_truepbr_verbose_json_logging") &&
 			(!a_args.contains("enabled") || !a_args.at("enabled").is_boolean())) {
 			return {
 				{ "error", action + " requires boolean enabled" },
 				{ "action", action },
 			};
 		}
+		if (action == "set_dynamic_cubemap_resolution" &&
+			(!a_args.contains("resolution") || !a_args.at("resolution").is_number_integer())) {
+			return {
+				{ "error", "set_dynamic_cubemap_resolution requires integer resolution" },
+				{ "action", action },
+			};
+		}
 		const bool enabled = a_args.value("enabled", false);
+		const uint32_t resolution = a_args.value("resolution", 0u);
+		if (action == "set_dynamic_cubemap_resolution" &&
+			resolution != DynamicCubemaps::kPerformanceCubemapResolution &&
+			resolution != DynamicCubemaps::kQualityCubemapResolution) {
+			return {
+				{ "error", "set_dynamic_cubemap_resolution requires resolution 128 or 256" },
+				{ "action", action },
+				{ "resolution", resolution },
+			};
+		}
 
-		return RunOnMainThread([action, path, enabled]() -> json {
+		return RunOnMainThread([action, path, enabled, resolution]() -> json {
 			if (action == "prepare_coc")
 				return PrepareCocPreflight();
 			auto* menu = globals::menu;
@@ -433,13 +472,22 @@ namespace
 					vr.settings.menuOverlayPath = VR::Settings::MenuOverlayPath::Auto;
 				vr.InvalidatePresentedMenuSurfaces();
 				vr.ResetMenuInputRuntimeState();
+			} else if (action == "set_layout_unlocked") {
+				globals::features::vr.SetMenuLayoutUnlocked(enabled);
 			} else if (action == "set_depth_culling_performance_mode") {
 				globals::features::vr.SetDepthCullingPerformanceMode(enabled);
 			} else if (action == "set_depth_culling_legacy_mode") {
 				globals::features::vr.SetDepthCullingLegacyMode(enabled);
+			} else if (action == "set_truepbr_verbose_json_logging") {
+				globals::features::truePBR.enableVerboseJsonLogging = enabled;
+			} else if (action == "set_dynamic_cubemap_resolution") {
+				globals::features::dynamicCubemaps.SetCubemapResolution(resolution);
+				menu->RequestSettingsDirtyCheck();
 			}
 			if (action == "texture_stats")
 				return { { "action", action }, { "texture", InspectMenuTexture() }, { "status", BuildStatus() } };
+			if (action == "set_dynamic_cubemap_resolution")
+				return { { "action", action }, { "resolution", resolution }, { "persisted", false }, { "status", BuildStatus() } };
 			return { { "action", action }, { "path", path }, { "delegatedRequest", std::move(delegatedRequest) }, { "status", BuildStatus() } };
 		});
 	}
@@ -486,7 +534,7 @@ namespace MenuDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Inspect and control the CSX VR menu and depth-culling A/B policy. prepare_coc is a one-shot pre-assay gate: it requires in-game Skyrim VR and startup-active VR FPS Stabilizer profile sync, then enables runtime-only developer mode and the fixed FOV plus TAA 0.3/0.7 fixture without saving settings. Every response identifies the exact producing DLL. expectedBuildId makes requests fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","open","close","screenshot","set_path","texture_stats","set_depth_culling_performance_mode","set_depth_culling_legacy_mode","prepare_coc"],"default":"status"},"path":{"type":"string","enum":["auto","overlay","in_scene"]},"enabled":{"type":"boolean","description":"Mode state required by a depth-culling setter action."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
+			R"({"description":"Inspect and control the CSX VR menu, desktop/headset layout lock, depth-culling A/B policy, TruePBR verbose JSON logging, and dynamic cubemap resolution. set_layout_unlocked enables desktop move, resize, and docking plus headset custom placement and grip dragging. Resolution changes are staged in memory; save settings and restart to apply them. prepare_coc is a one-shot pre-assay gate: it requires in-game Skyrim VR and startup-active VR FPS Stabilizer profile sync, then enables runtime-only developer mode and the fixed FOV plus TAA 0.3/0.7 fixture without saving settings. Every response identifies the exact producing DLL. expectedBuildId makes requests fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","open","close","screenshot","set_path","set_layout_unlocked","texture_stats","set_depth_culling_performance_mode","set_depth_culling_legacy_mode","set_truepbr_verbose_json_logging","set_dynamic_cubemap_resolution","prepare_coc"],"default":"status"},"path":{"type":"string","enum":["auto","overlay","in_scene"]},"enabled":{"type":"boolean","description":"Boolean state required by a setter action."},"resolution":{"type":"integer","enum":[128,256],"description":"Dynamic cubemap resolution staged for the next game restart."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
 		devBench->RegisterTool("communityshaders.menu", descriptor, &ToolHandler, nullptr);
 		g_registered.store(true, std::memory_order_release);
 		logger::info("MenuDevBenchBridge: registered communityshaders.menu with devbench build {}", devBench->GetBuildNumber());

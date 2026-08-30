@@ -14,6 +14,10 @@ namespace Skylighting
 	Texture3D<sh2> SkylightingProbeArray : register(t50);
 #endif
 
+#if defined(SKYLIGHTING_SHADOW_VIS)
+	Texture3D<float> ShadowVisibilityProbeArray : register(t53);
+#endif
+
 	const static sh2 UNIT_SH = float4(sqrt(4.0 * Math::PI), 0, 0, 0);
 	const static float DEFAULT_PROBE_FIELD_SIZE = 4096.f * 2.5f;
 
@@ -174,6 +178,88 @@ namespace Skylighting
 		return SphericalHarmonics::Scale(sum, rcp(wsum + EPSILON_WEIGHT_SUM));
 	}
 
+#	if defined(SKYLIGHTING_SHADOW_VIS)
+	struct ShadowedSample
+	{
+		sh2 Probe;
+		float Visibility;
+	};
+
+	ShadowedSample SampleWithShadow(float3 positionMS, float3 normalWS)
+	{
+		ShadowedSample result = (ShadowedSample)0;
+		result.Probe = GetUnoccludedProbe();
+		result.Visibility = 1.0;
+
+		// Preserve the existing two-argument sampling cost when the current frame
+		// has no valid directional-shadow inputs. Callers retain their old shadow
+		// fallback and do not read a stale visibility volume.
+		if (SharedData::skylightingSettings.ShadowDataAvailable == 0) {
+			result.Probe = Sample(positionMS, normalWS);
+		} else {
+			const SharedData::SkylightingSettings params = SharedData::skylightingSettings;
+			if (IsEnabled(params) && !SharedData::InInterior) {
+				const uint3 arrayDims = GetArrayDims(params);
+				const float3 arraySize = GetArraySize(params);
+				const float3 cellSize = GetCellSize(params);
+				positionMS.xyz += normalWS * cellSize * 0.5;
+				float3 positionMSAdjusted = positionMS - params.PosOffset.xyz;
+				float3 uvw = positionMSAdjusted / arraySize + .5;
+				if (!any(uvw < 0) && !any(uvw > 1)) {
+					float3 cellVxCoord = uvw * arrayDims;
+					int3 cell000 = floor(cellVxCoord - 0.5);
+					float3 trilinearPos = cellVxCoord - 0.5 - cell000;
+					sh2 shSum = 0;
+					float shWeightSum = 0;
+					float shadowSum = 0;
+					float shadowWeightSum = 0;
+
+					for (int i = 0; i < 2; i++)
+						for (int j = 0; j < 2; j++)
+							for (int k = 0; k < 2; k++) {
+								int3 cellOffset = int3(i, j, k);
+								int3 cellID = cell000 + cellOffset;
+								if (any(cellID < 0) || any((uint3)cellID >= arrayDims))
+									continue;
+
+								float3 trilinearWeights = 1 - abs(cellOffset - trilinearPos);
+								float triWeight = trilinearWeights.x * trilinearWeights.y * trilinearWeights.z;
+								uint3 cellTexID = ((uint3)cellID + params.ArrayOrigin.xyz) % arrayDims;
+								float3 cellCentreMS = (float3(cellID) + 0.5 - float3(arrayDims) * 0.5) * cellSize;
+								float tangentWeight = 1.0;
+								[branch] if (params.FastSamplingMode == 0)
+								{
+									tangentWeight = saturate(dot(normalize(cellCentreMS - positionMSAdjusted), normalWS) * 0.5 + 0.5);
+								}
+								float shWeight = triWeight * tangentWeight;
+
+								shSum = SphericalHarmonics::Add(shSum, SphericalHarmonics::Scale(SkylightingProbeArray[cellTexID], shWeight));
+								shWeightSum += shWeight;
+								shadowSum += ShadowVisibilityProbeArray[cellTexID] * triWeight;
+								shadowWeightSum += triWeight;
+							}
+
+					result.Visibility = lerp(1.0, shadowSum / max(shadowWeightSum, EPSILON_WEIGHT_SUM), GetFadeOutFactor(positionMS));
+					result.Probe = SphericalHarmonics::Scale(shSum, rcp(shWeightSum + EPSILON_WEIGHT_SUM));
+				}
+			}
+		}
+
+		return result;
+	}
+#	endif
+
+	float GetSkylightingDiffuse(sh2 skylightingSH, float3 positionMS, float3 evalNormal, float vertexAO = 1.0)
+	{
+		if (!IsEnabled() || SharedData::InInterior)
+			return 1.0;
+
+		float3 candidateNormal = float3(evalNormal.xy, max(0.0, evalNormal.z));
+		float3 biasedNormal = dot(candidateNormal, candidateNormal) > 1e-6 ? normalize(candidateNormal) : float3(0, 0, 1);
+		float skylightingDiffuse = EvaluateDiffuse(skylightingSH, biasedNormal, GetFadeOutFactor(positionMS));
+		return saturate(skylightingDiffuse / max(vertexAO, EPSILON_DIVISION));
+	}
+
 	// Compute skylighting diffuse for a receiver biased to face upward (grass/foliage).
 	// The result is pre-divided by vertexAO so that a subsequent multiply by vertexAO
 	// yields min(skylightingDiffuse, vertexAO). Pass vertexAO = 1 to skip this compensation.
@@ -182,16 +268,8 @@ namespace Skylighting
 		if (!IsEnabled() || SharedData::InInterior)
 			return 1.0;
 
-		float fadeOutFactor = GetFadeOutFactor(positionMS);
-
-		float3 biasedNormal = normalWS;
-		biasedNormal.z = max(0.0, biasedNormal.z);
-		biasedNormal = normalize(biasedNormal);
-
 		sh2 skylightingSH = Sample(positionMS, normalWS);
-		float skylightingDiffuse = EvaluateDiffuse(skylightingSH, biasedNormal, fadeOutFactor);
-
-		return saturate(skylightingDiffuse / max(vertexAO, 1e-5));
+		return GetSkylightingDiffuse(skylightingSH, positionMS, normalWS, vertexAO);
 	}
 
 	sh2 SampleNoBias(float3 positionMS)

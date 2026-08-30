@@ -1,8 +1,8 @@
 #pragma once
 
-// Global renderer-light calibration shared by Adaptive Balance's profile
-// compositor and CS Utility's shader-buffer plumbing. These are baseline
-// values; Adaptive Balance applies the active time/location profile on top.
+// Composed renderer-light state shared by Adaptive Balance and CS Utility's
+// shader-buffer plumbing. Adaptive Balance builds it from the global and
+// active time/location adjustment layers.
 struct SharedLightingSettings
 {
 	float skyBrightness = 1.0f;

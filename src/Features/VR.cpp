@@ -1,5 +1,4 @@
 #include "VR.h"
-#include "VR/MenuPositioningPolicy.h"
 #include "Diagnostics/VRPipelineDiagnostics.h"
 #include "DynamicCubemaps.h"
 #include "FoveatedCommon.h"
@@ -19,6 +18,7 @@
 #include "ShaderCache.h"
 #include "SubsurfaceScattering.h"
 #include "Upscaling.h"
+#include "VR/MenuPositioningPolicy.h"
 #include "VRDepthCullingEnablePolicy.h"
 #include "VRDepthCullingTemporal.h"
 #include "WaterEffects.h"
@@ -432,6 +432,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DepthCullingPerformanceMode,
 	DepthCullingLegacyMode,
 	MinOccludeeBoxExtent,
+	UnlockMenuPositionAndSize,
 	VRMenuScale,
 	VRMenuPositioningMethod,
 	attachMode,
@@ -481,7 +482,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void VR::LoadSettings(json& o_json)
 {
 	settings = o_json.get<Settings>();
-	if (o_json.is_object() &&
+	if (!settings.UnlockMenuPositionAndSize &&
+		o_json.is_object() &&
 		o_json.contains("VRMenuScale") &&
 		std::abs(o_json.value("VRMenuScale", Config::kDefaultMenuScale) - kPreviousDefaultMenuScale) < kDefaultOffsetEpsilon) {
 		settings.VRMenuScale = Config::kDefaultMenuScale;
@@ -491,7 +493,8 @@ void VR::LoadSettings(json& o_json)
 	LoadVRControllerBinding(o_json, "VRMenuCloseKeys", settings.VRMenuCloseKeys);
 	LoadVRControllerBinding(o_json, "VROverlayOpenKeys", settings.VROverlayOpenKeys);
 	LoadVRControllerBinding(o_json, "VROverlayCloseKeys", settings.VROverlayCloseKeys);
-	if (o_json.is_object() &&
+	if (!settings.UnlockMenuPositionAndSize &&
+		o_json.is_object() &&
 		o_json.contains("VRMenuOffsetZ") &&
 		(std::abs(o_json.value("VRMenuOffsetZ", Config::kDefaultHMDOffsetZ) - kLegacyDefaultHMDOffsetZ) < kDefaultOffsetEpsilon ||
 			std::abs(o_json.value("VRMenuOffsetZ", Config::kDefaultHMDOffsetZ) - kPreviousDefaultHMDOffsetZ) < kDefaultOffsetEpsilon ||
@@ -538,6 +541,7 @@ void VR::RestoreDefaultSettings()
 
 	overlayDragState = OverlayDragState{};
 	fixedWorldOverlayPosition = OverlayWorldPosition{};
+	savedUnlockedFixedWorldOverlayPosition = OverlayWorldPosition{};
 	fixedWorldOverlayReanchorRequested = true;
 	wandState = WandIntersectionState{};
 	autoHideOverlayStartTimeSecs = 0.0;
@@ -956,7 +960,7 @@ bool VR::ShouldShowAutoHideOverlay() const
 	}
 
 	if (autoHideOverlayStartTimeSecs <= 0.0) {
-		if (settings.attachMode != AttachMode::None) {
+		if (GetEffectiveMenuAttachMode() != AttachMode::None) {
 			return true;
 		}
 		autoHideOverlayStartTimeSecs = Util::GetNowSecs();
@@ -1016,7 +1020,7 @@ bool VR::CanOpenMenuFromWorld() const
 	return openVRInfo.isCompatible &&
 	       !ShouldUseInSceneOverlay() &&
 	       openVRInfo.hasOverlayInterface &&
-	       settings.attachMode != AttachMode::None;
+	       GetEffectiveMenuAttachMode() != AttachMode::None;
 }
 
 bool VR::IsOverlayVisible() const
@@ -2065,9 +2069,15 @@ void VR::DrawPerformanceSettings(bool a_advanced)
 
 namespace
 {
+	bool CanConfigureMenuLayout()
+	{
+		return REL::Module::IsVR();
+	}
+
 	void DrawKeepDesktopWindowFocusedForVRMenuSetting();
 	void DrawStabilizeRenderScaleDesktopMirrorSetting();
 	void DrawCSMenuNavigationSettings();
+	void DrawMenuLayoutUnlockSetting();
 	void DrawKeyBindings();
 	void DrawControllerBindingSummary(bool a_includeAutoHideSetting, const char* a_idPrefix);
 }
@@ -2075,6 +2085,11 @@ namespace
 void VR::DrawEssentialSettings()
 {
 	DrawCSMenuNavigationSettings();
+
+	if (CanConfigureMenuLayout()) {
+		ImGui::SeparatorText("Menu Layout");
+		DrawMenuLayoutUnlockSetting();
+	}
 
 	ImGui::SeparatorText("Desktop");
 	DrawKeepDesktopWindowFocusedForVRMenuSetting();
@@ -2235,9 +2250,10 @@ namespace
 			ImGui::EndTable();
 		}
 
+		const auto attachMode = globals::features::vr.GetEffectiveMenuAttachMode();
 		const bool useAttachedControllerForCursor =
-			settings.attachMode == VR::Settings::OverlayAttachMode::ControllerOnly ||
-			settings.attachMode == VR::Settings::OverlayAttachMode::Both;
+			attachMode == VR::Settings::OverlayAttachMode::ControllerOnly ||
+			attachMode == VR::Settings::OverlayAttachMode::Both;
 		if (ImGui::BeginTable("ThumbstickInstructionsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
 			if (globals::features::vr.CanUseWandPointing()) {
 				ImGui::TableNextRow();
@@ -2348,15 +2364,78 @@ namespace
 		}
 	}
 
+	void DrawMenuLayoutUnlockSetting()
+	{
+		auto& vr = globals::features::vr;
+		bool layoutUnlocked = vr.settings.UnlockMenuPositionAndSize;
+		if (ImGui::Checkbox("Unlock Menu Position and Size", &layoutUnlocked))
+			vr.SetMenuLayoutUnlocked(layoutUnlocked);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextWrapped("Allows the desktop CSX window to move, resize, and dock. In the headset, it restores custom placement and controller grip dragging. Locking the layout again preserves the saved headset settings.");
+		}
+	}
+
 	void DrawMenuSettings()
 	{
 		auto& vr = globals::features::vr;
 		auto& settings = vr.settings;
-		if (!vr.openVRInfo.isCompatible)
+		if (!CanConfigureMenuLayout())
 			return;
 		if (ImGui::CollapsingHeader("Menu Settings")) {
-			ImGui::SliderFloat("Menu Scale", &settings.VRMenuScale, VR::Config::kMinMenuScale, VR::Config::kMaxMenuScale, "%.2f");
-			ImGui::TextWrapped("The headset menu opens 2.25 metres ahead at eye height. It remains vertical and turns to face you.");
+			DrawMenuLayoutUnlockSetting();
+			if (!vr.openVRInfo.isCompatible) {
+				ImGui::TextDisabled("Headset controls require a compatible VR runtime; desktop layout unlocking remains available.");
+				return;
+			}
+
+			if (!settings.UnlockMenuPositionAndSize) {
+				ImGui::TextWrapped("The headset menu opens 2.25 metres ahead at eye height. It remains vertical and turns to face you.");
+			} else {
+				ImGui::SliderFloat("Menu Scale", &settings.VRMenuScale, VR::Config::kMinMenuScale, VR::Config::kMaxMenuScale, "%.2f");
+				ImGui::TextWrapped("Move or resize the desktop window directly. Hold a controller grip to move the headset menu; Menu Scale controls its size.");
+				ImGui::Checkbox("Enable Controller Grip Drag", &settings.EnableDragToReposition);
+
+				const char* positioningMethods[] = { "HMD Relative", "Fixed World Position" };
+				if (ImGui::Combo("Headset Positioning", &settings.VRMenuPositioningMethod, positioningMethods, IM_ARRAYSIZE(positioningMethods)) &&
+					settings.VRMenuPositioningMethod == 1) {
+					vr.SetFixedOverlayToCurrentHMD();
+				}
+
+				const char* attachModes[] = { "HMD Only", "Controller Only", "Both", "Desktop Only" };
+				int attachMode = static_cast<int>(settings.attachMode);
+				if (ImGui::Combo("Headset Presentation", &attachMode, attachModes, IM_ARRAYSIZE(attachModes))) {
+					settings.attachMode = static_cast<VR::Settings::OverlayAttachMode>(attachMode);
+					vr.InvalidatePresentedMenuSurfaces();
+					vr.ResetMenuInputRuntimeState();
+				}
+
+				const bool showOnHMD = settings.attachMode == VR::Settings::OverlayAttachMode::HMDOnly ||
+				                       settings.attachMode == VR::Settings::OverlayAttachMode::Both;
+				if (showOnHMD && settings.VRMenuPositioningMethod == 0) {
+					ImGui::SeparatorText("HMD-relative offset");
+					ImGui::SliderFloat("Horizontal##HMDMenuOffset", &settings.VRMenuOffsetX, VR::Config::kMinMenuOffset, VR::Config::kMaxMenuOffset, "%.2f m");
+					ImGui::SliderFloat("Vertical##HMDMenuOffset", &settings.VRMenuOffsetY, VR::Config::kMinMenuOffset, VR::Config::kMaxMenuOffset, "%.2f m");
+					ImGui::SliderFloat("Depth##HMDMenuOffset", &settings.VRMenuOffsetZ, VR::Config::kMinMenuOffset, VR::Config::kMaxMenuOffset, "%.2f m");
+				} else if (showOnHMD) {
+					if (ImGui::Button("Recenter Headset Menu")) {
+						vr.SetFixedOverlayToCurrentHMD();
+					}
+				}
+
+				const bool showOnController = settings.attachMode == VR::Settings::OverlayAttachMode::ControllerOnly ||
+				                              settings.attachMode == VR::Settings::OverlayAttachMode::Both;
+				if (showOnController) {
+					const char* controllers[] = { "Primary Controller", "Secondary Controller" };
+					int controller = static_cast<int>(settings.VRMenuAttachController);
+					if (ImGui::Combo("Attach to Controller", &controller, controllers, IM_ARRAYSIZE(controllers)))
+						settings.VRMenuAttachController = static_cast<ControllerDevice>(controller);
+					ImGui::SeparatorText("Controller-relative offset");
+					ImGui::SliderFloat("Horizontal##ControllerMenuOffset", &settings.VRMenuControllerOffsetX, VR::Config::kMinMenuOffset, VR::Config::kMaxMenuOffset, "%.2f m");
+					ImGui::SliderFloat("Vertical##ControllerMenuOffset", &settings.VRMenuControllerOffsetY, VR::Config::kMinMenuOffset, VR::Config::kMaxMenuOffset, "%.2f m");
+					ImGui::SliderFloat("Depth##ControllerMenuOffset", &settings.VRMenuControllerOffsetZ, VR::Config::kMinMenuOffset, VR::Config::kMaxMenuOffset, "%.2f m");
+				}
+			}
+
 			const char* menuOverlayPaths[] = { "Auto", "IVROverlay", "In-scene" };
 			int menuOverlayPath = static_cast<int>(settings.menuOverlayPath);
 			if (ImGui::Combo("Menu Overlay Path", &menuOverlayPath, menuOverlayPaths, IM_ARRAYSIZE(menuOverlayPaths))) {
@@ -3324,9 +3403,9 @@ namespace
 				ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 				ImGui::TableHeadersRow();
 				const auto controllerName = [](ControllerDevice a_controller) {
-					return a_controller == ControllerDevice::Primary ? "Primary" :
+					return a_controller == ControllerDevice::Primary   ? "Primary" :
 					       a_controller == ControllerDevice::Secondary ? "Secondary" :
-					                                                    "None";
+					                                                     "None";
 				};
 
 				ImGui::TableNextRow();
@@ -3444,7 +3523,79 @@ bool VR::UseFixedWorldMenuPositioning() const
 	// available at the Skyrim main menu. The first valid HMD pose establishes a
 	// recoverable anchor; subsequent updates preserve translation and change yaw
 	// only, so the menu faces the player without following the headset.
-	return VRMenuPositioningPolicy::UseFixedWorld(settings.VRMenuPositioningMethod);
+	const int positioningMethod = VRMenuPositioningPolicy::SelectEffectiveValue(
+		settings.UnlockMenuPositionAndSize,
+		settings.VRMenuPositioningMethod,
+		1);
+	return VRMenuPositioningPolicy::UseFixedWorld(positioningMethod);
+}
+
+VR::Settings::OverlayAttachMode VR::GetEffectiveMenuAttachMode() const
+{
+	return VRMenuPositioningPolicy::SelectEffectiveValue(
+		settings.UnlockMenuPositionAndSize,
+		settings.attachMode,
+		Settings::OverlayAttachMode::HMDOnly);
+}
+
+ControllerDevice VR::GetEffectiveMenuAttachController() const
+{
+	return settings.VRMenuAttachController;
+}
+
+float VR::GetEffectiveMenuScale() const
+{
+	return VRMenuPositioningPolicy::SelectEffectiveValue(
+		settings.UnlockMenuPositionAndSize,
+		settings.VRMenuScale,
+		Config::kDefaultMenuScale);
+}
+
+Vector3 VR::GetEffectiveHMDMenuOffset() const
+{
+	return VRMenuPositioningPolicy::SelectEffectiveValue(
+		settings.UnlockMenuPositionAndSize,
+		Vector3{ settings.VRMenuOffsetX, settings.VRMenuOffsetY, settings.VRMenuOffsetZ },
+		Vector3{ Config::kDefaultHMDOffsetX, Config::kDefaultHMDOffsetY, Config::kDefaultHMDOffsetZ });
+}
+
+Vector3 VR::GetEffectiveControllerMenuOffset() const
+{
+	return Vector3{
+		settings.VRMenuControllerOffsetX,
+		settings.VRMenuControllerOffsetY,
+		settings.VRMenuControllerOffsetZ,
+	};
+}
+
+void VR::SetMenuLayoutUnlocked(bool a_unlocked)
+{
+	if (settings.UnlockMenuPositionAndSize == a_unlocked)
+		return;
+
+	const bool preserveUnlockedFixedWorldPosition =
+		settings.UnlockMenuPositionAndSize &&
+		UseFixedWorldMenuPositioning() &&
+		fixedWorldOverlayPosition.initialized;
+	if (!a_unlocked && preserveUnlockedFixedWorldPosition)
+		savedUnlockedFixedWorldOverlayPosition = fixedWorldOverlayPosition;
+
+	settings.UnlockMenuPositionAndSize = a_unlocked;
+	if (a_unlocked) {
+		settings.EnableDragToReposition = true;
+		if (UseFixedWorldMenuPositioning() && savedUnlockedFixedWorldOverlayPosition.initialized) {
+			fixedWorldOverlayPosition = savedUnlockedFixedWorldOverlayPosition;
+			fixedWorldOverlayReanchorRequested = false;
+		}
+	}
+	settings.ClampToValidRanges();
+	overlayDragState = {};
+	InvalidatePresentedMenuSurfaces();
+	ResetMenuInputRuntimeState();
+
+	if (!a_unlocked) {
+		SetFixedOverlayToCurrentHMD();
+	}
 }
 
 void VR::UpdateVROverlayPosition()
@@ -3458,17 +3609,17 @@ void VR::UpdateVROverlayPosition()
 	}
 
 	// Determine positioning strategy based on settings
-	bool showOnController = (settings.attachMode == AttachMode::ControllerOnly || settings.attachMode == AttachMode::Both);
-	bool showOnHMD = (settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both);
+	const auto attachMode = GetEffectiveMenuAttachMode();
+	const bool showOnController = attachMode == AttachMode::ControllerOnly || attachMode == AttachMode::Both;
+	const bool showOnHMD = attachMode == AttachMode::HMDOnly || attachMode == AttachMode::Both;
 
 	// Texture size
 	float baseWidth = 1.0f;
-	float overlayWidth = baseWidth * settings.VRMenuScale;
+	const float menuScale = GetEffectiveMenuScale();
+	float overlayWidth = baseWidth * menuScale;
 	float hmdOverlayHeight = overlayWidth * VR::Config::kHMDOverlayAspect;
 	float controllerOverlayHeight = overlayWidth * VR::Config::kOverlayAspect;
-	float offsetX = settings.VRMenuOffsetX;
-	float offsetY = settings.VRMenuOffsetY;
-	float offsetZ = settings.VRMenuOffsetZ;
+	const Vector3 hmdOffset = GetEffectiveHMDMenuOffset();
 
 	const bool useFixedWorldPositioning = UseFixedWorldMenuPositioning();
 	static bool lastUsedFixedWorldPositioning = false;
@@ -3483,15 +3634,15 @@ void VR::UpdateVROverlayPosition()
 			// motion application. That avoids the subtle frame-to-frame instability from
 			// rebuilding an absolute world transform from noisy HMD poses every frame.
 			vr::HmdMatrix34_t hmdRelativeTransform = Util::CreateControllerOverlayTransform(
-				offsetX,
-				offsetY,
-				offsetZ,
+				hmdOffset.x,
+				hmdOffset.y,
+				hmdOffset.z,
 				overlayWidth,
 				hmdOverlayHeight);
 
 			Util::SetOverlayInputFlags(ctx.overlay, menuOverlayHandle);
 			ctx.overlay->SetOverlayTransformTrackedDeviceRelative(menuOverlayHandle, vr::k_unTrackedDeviceIndex_Hmd, &hmdRelativeTransform);
-			ctx.overlay->SetOverlayWidthInMeters(menuOverlayHandle, baseWidth * settings.VRMenuScale);
+			ctx.overlay->SetOverlayWidthInMeters(menuOverlayHandle, baseWidth * menuScale);
 		}
 
 		if (useFixedWorldPositioning) {
@@ -3507,7 +3658,7 @@ void VR::UpdateVROverlayPosition()
 
 			Util::SetOverlayInputFlags(ctx.overlay, menuOverlayHandle);
 			ctx.overlay->SetOverlayTransformAbsolute(menuOverlayHandle, vr::TrackingUniverseStanding, &fixedTransform);
-			ctx.overlay->SetOverlayWidthInMeters(menuOverlayHandle, baseWidth * settings.VRMenuScale);
+			ctx.overlay->SetOverlayWidthInMeters(menuOverlayHandle, baseWidth * menuScale);
 		}
 	}
 
@@ -3519,14 +3670,16 @@ void VR::UpdateVROverlayPosition()
 		}
 
 		// Attach to controller
-		vr::TrackedDeviceIndex_t controllerIndex = Util::GetControllerIndexForDevice(settings.VRMenuAttachController, lastKnownLeftHandedMode);
+		const auto attachController = GetEffectiveMenuAttachController();
+		const Vector3 controllerOffset = GetEffectiveControllerMenuOffset();
+		vr::TrackedDeviceIndex_t controllerIndex = Util::GetControllerIndexForDevice(attachController, lastKnownLeftHandedMode);
 
 		if (controllerIndex != vr::k_unTrackedDeviceIndexInvalid) {
 			// Position relative to controller using offset settings
 			vr::HmdMatrix34_t transform = Util::CreateControllerOverlayTransform(
-				settings.VRMenuControllerOffsetX,
-				settings.VRMenuControllerOffsetY,
-				settings.VRMenuControllerOffsetZ,
+				controllerOffset.x,
+				controllerOffset.y,
+				controllerOffset.z,
 				overlayWidth,
 				controllerOverlayHeight);
 
@@ -3558,11 +3711,13 @@ void VR::UpdateVROverlayControllerPosition()
 
 	// Texture size based on preset
 	float baseWidth = 1.0f;
-	float overlayWidth = baseWidth * settings.VRMenuScale;
+	float overlayWidth = baseWidth * GetEffectiveMenuScale();
 	float overlayHeight = overlayWidth * VR::Config::kOverlayAspect;
 
 	// Find the appropriate controller for the controller overlay
-	vr::TrackedDeviceIndex_t controllerIndex = Util::GetControllerIndexForDevice(settings.VRMenuAttachController, lastKnownLeftHandedMode);
+	const auto attachController = GetEffectiveMenuAttachController();
+	const Vector3 controllerOffset = GetEffectiveControllerMenuOffset();
+	vr::TrackedDeviceIndex_t controllerIndex = Util::GetControllerIndexForDevice(attachController, lastKnownLeftHandedMode);
 	if (controllerIndex == vr::k_unTrackedDeviceIndexInvalid) {
 		ctx.overlay->HideOverlay(menuControllerOverlayHandle);
 		return;
@@ -3570,9 +3725,9 @@ void VR::UpdateVROverlayControllerPosition()
 
 	// Position relative to controller using offset settings
 	vr::HmdMatrix34_t transform = Util::CreateControllerOverlayTransform(
-		settings.VRMenuControllerOffsetX,
-		settings.VRMenuControllerOffsetY,
-		settings.VRMenuControllerOffsetZ,
+		controllerOffset.x,
+		controllerOffset.y,
+		controllerOffset.z,
 		overlayWidth,
 		overlayHeight);
 
@@ -3605,9 +3760,10 @@ void VR::EnsureOverlayInitialized()
 		return;
 	}
 	auto* vrSystem = openvr->vrSystem;
+	const auto attachMode = GetEffectiveMenuAttachMode();
 	const bool wantsControllerOverlay =
-		settings.attachMode == Settings::OverlayAttachMode::ControllerOnly ||
-		settings.attachMode == Settings::OverlayAttachMode::Both;
+		attachMode == Settings::OverlayAttachMode::ControllerOnly ||
+		attachMode == Settings::OverlayAttachMode::Both;
 	RecreateOverlayTexturesIfNeeded(wantsControllerOverlay);
 
 	auto* overlay = openVRInfo.hasOverlayInterface ? RE::BSOpenVR::GetIVROverlayFromContext(&openvr->vrContext) : nullptr;
@@ -3700,10 +3856,11 @@ bool VR::GetMenuCanvasSize(uint32_t& a_width, uint32_t& a_height) const
 {
 	a_width = 0;
 	a_height = 0;
-	if (!globals::game::isVR || settings.attachMode == Settings::OverlayAttachMode::None)
+	const auto attachMode = GetEffectiveMenuAttachMode();
+	if (!globals::game::isVR || attachMode == Settings::OverlayAttachMode::None)
 		return false;
 
-	const bool controllerCanvas = settings.attachMode == Settings::OverlayAttachMode::ControllerOnly;
+	const bool controllerCanvas = attachMode == Settings::OverlayAttachMode::ControllerOnly;
 	ID3D11Texture2D* canvasTexture = controllerCanvas ? menuControllerTexture.get() : menuTexture.get();
 	if (canvasTexture) {
 		D3D11_TEXTURE2D_DESC desc{};
@@ -3804,7 +3961,7 @@ void VR::HideOverlaysIfPresent()
 void VR::UpdateMenuDesktopWindowManagement(bool force)
 {
 	const bool menuActive = globals::menu && globals::menu->IsEnabled;
-	const bool wantsVROverlay = settings.attachMode != AttachMode::None;
+	const bool wantsVROverlay = GetEffectiveMenuAttachMode() != AttachMode::None;
 	const bool shouldManage =
 		settings.KeepDesktopWindowFocusedForVRMenu &&
 		openVRInfo.isCompatible &&
@@ -3962,20 +4119,22 @@ void VR::SubmitOverlayFrame()
 
 	UpdateMenuDesktopWindowManagement(menuJustOpened);
 
-	// Re-anchor on every open. If the runtime has not published a valid HMD pose
-	// yet (notably at the Skyrim main menu), the first render pose completes it.
+	// Locked mode re-anchors on every open. If no HMD pose is available yet, the
+	// first render pose completes the pending request.
+	const auto attachMode = GetEffectiveMenuAttachMode();
 	if (menuJustOpened &&
-		settings.VRMenuPositioningMethod == 1 &&
-		(settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both)) {
-		fixedWorldOverlayReanchorRequested = true;
+		VRMenuPositioningPolicy::ShouldReanchorOnOpen(settings.UnlockMenuPositionAndSize) &&
+		UseFixedWorldMenuPositioning() &&
+		(attachMode == AttachMode::HMDOnly || attachMode == AttachMode::Both)) {
 		SetFixedOverlayToCurrentHMD();
 		if (auto* player = RE::PlayerCharacter::GetSingleton()) {
 			savedPlayerWorldPos = player->GetPosition();
 		}
 	}
+	UpdateOverlayDrag();
 
-	const bool wantsHMDOverlay = settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both;
-	const bool wantsControllerOverlay = settings.attachMode == AttachMode::ControllerOnly || settings.attachMode == AttachMode::Both;
+	const bool wantsHMDOverlay = attachMode == AttachMode::HMDOnly || attachMode == AttachMode::Both;
+	const bool wantsControllerOverlay = attachMode == AttachMode::ControllerOnly || attachMode == AttachMode::Both;
 	const bool wantsAnyVROverlay = wantsHMDOverlay || wantsControllerOverlay;
 
 	if (shouldRenderOverlay && wantsAnyVROverlay) {
@@ -4056,8 +4215,8 @@ void VR::SubmitOverlayFrame()
 			}
 			globals::d3d::context->OMSetRenderTargets(1, &oldRTV, nullptr);
 			ID3D11ShaderResourceView* mipSRV = targetOverlayType == OverlayType::HMD ?
-			                                      menuSamplingSRV.get() :
-			                                      menuControllerSamplingSRV.get();
+			                                       menuSamplingSRV.get() :
+			                                       menuControllerSamplingSRV.get();
 			if (mipSRV) {
 				globals::d3d::context->GenerateMips(mipSRV);
 			}
@@ -4085,7 +4244,7 @@ void VR::SubmitOverlayFrame()
 			// Update overlay position and submit to SteamVR
 			UpdateVROverlayPosition();
 			vr::Texture_t tex = { menuTexture.get(), vr::TextureType_DirectX, vr::ColorSpace_Auto };
-			if (settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both) {
+			if (wantsHMDOverlay) {
 				Util::SetOverlayInputFlags(cleanOverlay, menuOverlayHandle);
 				const vr::EVROverlayError textureError = cleanOverlay->SetOverlayTexture(menuOverlayHandle, &tex);
 				if (textureError != vr::VROverlayError_None) {
@@ -4100,7 +4259,7 @@ void VR::SubmitOverlayFrame()
 				cleanOverlay->HideOverlay(menuOverlayHandle);
 			}
 			// Controller overlay
-			if (settings.attachMode == AttachMode::ControllerOnly || settings.attachMode == AttachMode::Both) {
+			if (wantsControllerOverlay) {
 				// Position controller overlay and submit
 				UpdateVROverlayControllerPosition();
 

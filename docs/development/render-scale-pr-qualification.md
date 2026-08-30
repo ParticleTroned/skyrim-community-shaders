@@ -162,6 +162,21 @@ First-observed timestamps remain immutable if a later observation changes.
 Timeout receipts include `timedOutMilestone` and the current masks for all three
 decisions.
 
+The `milestoneTimings` object preserves those three observations separately,
+reports the signed presentation-to-cleanup frame/time delta, and reports the
+nonnegative cleanup tail. `sameObservation: true` therefore means a measured
+zero tail, not missing data. A single strict waiter records all three values;
+collectors must not add a second wait or another deadline.
+
+The same terminal receipt preserves a compact `replacementTimeline` containing
+dispatch, last pre-mutation, first blocked-admission, and first destructive-
+mutation evidence. Each entry includes current-presentation proof and
+generation, replacement admission state and decoded reasons, the first
+physical-mutation marker, selected presentation disposition, device/resource
+identity, and per-eye path/generation. Provider invalidation, dirtying, or
+teardown starts physical mutation even when engine-target creation has not yet
+begun.
+
 The strict waiter stops on the first observation that satisfies both
 milestones. A frame-level vendor or fidelity failure remains in the receipt and
 fails the final assay verdict, but a later coherent stereo presentation may

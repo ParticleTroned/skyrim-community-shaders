@@ -852,13 +852,27 @@ void EditorWindow::ShowObjectsWindow()
 
 void EditorWindow::ShowViewportWindow()
 {
-	Util::BeginWithRoundedClose("Viewport", nullptr, ImGuiWindowFlags_NoFocusOnAppearing);
+	viewportImageRect = {};
+	const bool visible = Util::BeginWithRoundedClose("Viewport", nullptr, ImGuiWindowFlags_NoFocusOnAppearing);
+	if (!visible) {
+		ImGui::End();
+		return;
+	}
 
 	// The size of the image in ImGui																														   // Get the available space in the current window
 	ImVec2 availableSpace = ImGui::GetContentRegionAvail();
+	const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+	if (!std::isfinite(availableSpace.x) || !std::isfinite(availableSpace.y) ||
+		!std::isfinite(displaySize.x) || !std::isfinite(displaySize.y) ||
+		availableSpace.x <= 0.0f || availableSpace.y <= 0.0f ||
+		displaySize.x <= 0.0f || displaySize.y <= 0.0f) {
+		ImGui::TextDisabled("Viewport unavailable");
+		ImGui::End();
+		return;
+	}
 
 	// Calculate aspect ratio of the image
-	float aspectRatio = ImGui::GetIO().DisplaySize.x / ImGui::GetIO().DisplaySize.y;
+	float aspectRatio = displaySize.x / displaySize.y;
 
 	// Determine the size to fit while preserving the aspect ratio
 	ImVec2 imageSize;
@@ -875,7 +889,21 @@ void EditorWindow::ShowViewportWindow()
 	if (tempTexture && tempTexture->srv) {
 		// The preview is a render target SRV; draw it opaque so RT alpha does
 		// not create a transparent cutout in the VR menu plate.
+		const ImVec2 imageMin = ImGui::GetCursorScreenPos();
 		Util::Subrect::ImageOpaque(tempTexture->srv.get(), imageSize);
+		if (std::isfinite(imageMin.x) && std::isfinite(imageMin.y) &&
+			std::isfinite(imageSize.x) && std::isfinite(imageSize.y) &&
+			imageSize.x > 0.0f && imageSize.y > 0.0f &&
+			tempTexture->desc.Width > 0 && tempTexture->desc.Height > 0) {
+			viewportImageRect = {
+				.min = imageMin,
+				.max = ImVec2(imageMin.x + imageSize.x, imageMin.y + imageSize.y),
+				.renderSize = ImVec2(
+					static_cast<float>(tempTexture->desc.Width),
+					static_cast<float>(tempTexture->desc.Height)),
+				.valid = true,
+			};
+		}
 	} else {
 		ImGui::TextDisabled("Viewport unavailable");
 	}
@@ -1306,8 +1334,10 @@ void EditorWindow::RenderUI()
 	const float viewportWidth = availableWidth - browserWidth;
 	ImGui::SetNextWindowSize(ImVec2(browserWidth, availableHeight), layoutCond);
 	ImGui::SetNextWindowPos(ImVec2(pad, menuBarHeight + pad), layoutCond);
+	lightEditor.GatherLights();
 	ShowObjectsWindow();
 
+	viewportImageRect = {};
 	if (settings.showViewport) {
 		// Size viewport height to match game aspect ratio so the preview fits snugly
 		const float aspectRatio = width / height;
@@ -1321,6 +1351,9 @@ void EditorWindow::RenderUI()
 	} else {
 		viewportBottomY = menuBarHeight + pad;
 	}
+
+	// Picker input needs the exact preview-image mapping published this frame.
+	lightEditor.UpdatePicker();
 
 	auto settingsWindowHeight = height * 0.25f;
 	auto settingsWindowWidth = width * 0.25f;
@@ -1490,6 +1523,8 @@ void EditorWindow::UpdateOpenState()
 		if (previewMode != PreviewMode::None)
 			ExitPreviewMode();
 		lightEditor.ResetOverrides();
+		suppressNextEditorEscape = false;
+		viewportImageRect = {};
 		RestoreVanityCamera();
 		lastFocusedWidget = nullptr;
 	}
@@ -1497,14 +1532,25 @@ void EditorWindow::UpdateOpenState()
 	wasOpen = open;
 }
 
+void EditorWindow::AdvanceLightEditorDeferredWork()
+{
+	lightEditor.TickDeferredWork();
+}
+
+void EditorWindow::ActivateLightEditor()
+{
+	m_selectedCategory = "Light Editor";
+	lightEditor.SetEnabled(true);
+}
+
+bool EditorWindow::IsLightEditorSelected() const
+{
+	return m_selectedCategory == "Light Editor";
+}
+
 void EditorWindow::Draw()
 {
-	UpdateOpenState();
 	EnsureResources();
-
-	if (open) {
-		lightEditor.GatherLights();
-	}
 
 	if (!settings.showViewport) {
 		delete tempTexture;
@@ -2233,29 +2279,12 @@ void EditorWindow::DrawTimeControls()
 
 void EditorWindow::DisableVanityCamera()
 {
-	if (vanityCameraDisabled)
-		return;
-
-	auto setting = RE::GetINISetting("fAutoVanityModeDelay:Camera");
-	if (setting) {
-		savedVanityCameraDelay = setting->GetFloat();
-		setting->data.f = 10000.0f;
-		vanityCameraDisabled = true;
-		logger::info("Vanity camera disabled (saved delay: {})", savedVanityCameraDelay);
-	}
+	vanityCameraSuppression.Acquire();
 }
 
 void EditorWindow::RestoreVanityCamera()
 {
-	if (!vanityCameraDisabled)
-		return;
-
-	auto setting = RE::GetINISetting("fAutoVanityModeDelay:Camera");
-	if (setting) {
-		setting->data.f = savedVanityCameraDelay;
-		vanityCameraDisabled = false;
-		logger::info("Vanity camera restored (delay: {})", savedVanityCameraDelay);
-	}
+	vanityCameraSuppression.Release();
 }
 
 void EditorWindow::EnterPreviewMode(PreviewMode mode)
@@ -2330,8 +2359,19 @@ void EditorWindow::AdjustFlySpeed(float scrollDelta)
 	RE::Console::ExecuteCommand(std::format("sucsm {:.0f}", flySpeed).c_str());
 }
 
-bool EditorWindow::ShouldHandleEscapeKey() const
+bool EditorWindow::ShouldHandleEscapeKey()
 {
+	// Input backlogs can deliver press and release before the next ImGui frame.
+	// Cancel an active picker directly so the same release cannot close its parent.
+	if (lightEditor.IsPicking()) {
+		lightEditor.CancelPick();
+		suppressNextEditorEscape = false;
+		return false;
+	}
+	if (suppressNextEditorEscape) {
+		suppressNextEditorEscape = false;
+		return false;
+	}
 	return !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
 }
 

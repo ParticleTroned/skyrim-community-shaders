@@ -63,6 +63,11 @@ namespace
 		bool weatherLocked = false;
 		bool timePaused = false;
 		bool undoAvailable = false;
+		bool lightEditorSelected = false;
+		bool lightEditorEnabled = false;
+		bool lightPickerActive = false;
+		bool lightDeferredWorkPending = false;
+		bool lightViewportVisible = false;
 		CSX::EditorAPI::PreviewMode previewMode = CSX::EditorAPI::PreviewMode::kNone;
 		bool operator==(const StateSignature&) const = default;
 	};
@@ -85,7 +90,7 @@ namespace
 	class EditorService
 	{
 	public:
-		Status GetSnapshot(Snapshot001& a_output)
+		Status GetSnapshot(Snapshot001& a_output, std::uint64_t a_capabilities)
 		{
 			if (!IsOwnerThread())
 				return Status::kWrongThread;
@@ -109,14 +114,17 @@ namespace
 				.undoAvailable = signature.undoAvailable ? 1u : 0u,
 				.previewMode = signature.previewMode,
 				.stateRevision = revision,
-				.capabilities = CSX::EditorAPI::ServiceCapabilities,
+				.capabilities = a_capabilities,
 				.unavailableReason = strings.unavailableReason.c_str(),
 				.buildId = BuildProvenance::GetBuildId().data(),
 			};
 			return Status::kSuccess;
 		}
 
-		Status Preflight(const MutationRequest001& a_request, Preflight001& a_output)
+		Status Preflight(
+			const MutationRequest001& a_request,
+			Preflight001& a_output,
+			std::uint64_t a_capabilities)
 		{
 			if (!IsOwnerThread())
 				return FillPreflight(a_output, Status::kWrongThread, false, "wrong_thread", "editor API calls are main-thread-affine");
@@ -126,7 +134,7 @@ namespace
 			const auto mutation = Own(a_request);
 			if (mutation.expectedStateRevision != revision)
 				return FillPreflight(a_output, Status::kRevisionConflict, false, "revision_conflict", "state changed; request a fresh snapshot");
-			if (!IsKnownAction(mutation.action))
+			if (!CSX::EditorAPI::SupportsMutationAction(a_capabilities, mutation.action))
 				return FillPreflight(a_output, Status::kInvalidArgument, false, "invalid_action", "mutation action is unknown");
 
 			const bool disruptive = IsDisruptive(mutation.action, signature);
@@ -152,7 +160,10 @@ namespace
 			return Status::kSuccess;
 		}
 
-		Status Execute(const MutationRequest001& a_request, MutationReceipt001& a_output)
+		Status Execute(
+			const MutationRequest001& a_request,
+			MutationReceipt001& a_output,
+			std::uint64_t a_capabilities)
 		{
 			if (!IsOwnerThread())
 				return FillReceipt(a_output, Status::kWrongThread, "editor API calls are main-thread-affine");
@@ -161,6 +172,8 @@ namespace
 			UpdateRevision(before);
 			const auto previousRevision = revision;
 			const auto mutation = Own(a_request);
+			if (!CSX::EditorAPI::SupportsMutationAction(a_capabilities, mutation.action))
+				return FillReceipt(a_output, Status::kInvalidArgument, "mutation action is unknown");
 			if (!a_request.preflightToken || !*a_request.preflightToken)
 				return FillReceipt(a_output, Status::kPreflightRequired, "preflightToken is required");
 			const std::string token = a_request.preflightToken;
@@ -195,6 +208,17 @@ namespace
 				break;
 			case CSX::EditorAPI::MutationAction::kExitPreview:
 				editor->ExitPreviewMode();
+				break;
+			case CSX::EditorAPI::MutationAction::kOpenLightEditor:
+				CSEditor::OpenEditorWindow();
+				editor->ActivateLightEditor();
+				editor->UpdateOpenState();
+				break;
+			case CSX::EditorAPI::MutationAction::kBeginLightPick:
+				editor->BeginLightPick();
+				break;
+			case CSX::EditorAPI::MutationAction::kCancelLightPick:
+				editor->CancelLightPick();
 				break;
 			default:
 				return FillReceipt(a_output, Status::kInvalidArgument, "mutation action is unknown");
@@ -241,6 +265,11 @@ namespace
 				.weatherLocked = editor && editor->IsWeatherLocked(),
 				.timePaused = editor && editor->IsTimePaused(),
 				.undoAvailable = editor && editor->CanUndo(),
+				.lightEditorSelected = editor && editor->IsLightEditorSelected(),
+				.lightEditorEnabled = editor && editor->IsLightEditorEnabled(),
+				.lightPickerActive = editor && editor->IsLightPickerActive(),
+				.lightDeferredWorkPending = editor && editor->HasLightEditorDeferredWork(),
+				.lightViewportVisible = editor && editor->IsEditorViewportVisible(),
 				.previewMode = editor ? ConvertPreviewMode(editor->GetPreviewMode()) : CSX::EditorAPI::PreviewMode::kNone,
 			};
 		}
@@ -261,13 +290,12 @@ namespace
 			return "CS Editor feature is not loaded";
 		}
 
-		static bool IsKnownAction(CSX::EditorAPI::MutationAction a_action)
-		{
-			return a_action >= CSX::EditorAPI::MutationAction::kOpen && a_action <= CSX::EditorAPI::MutationAction::kExitPreview;
-		}
-
 		static bool IsDisruptive(CSX::EditorAPI::MutationAction a_action, const StateSignature& a_state)
 		{
+			if (a_action == CSX::EditorAPI::MutationAction::kOpenLightEditor ||
+				a_action == CSX::EditorAPI::MutationAction::kBeginLightPick) {
+				return true;
+			}
 			return a_state.previewMode != CSX::EditorAPI::PreviewMode::kNone &&
 			       (a_action == CSX::EditorAPI::MutationAction::kClose || a_action == CSX::EditorAPI::MutationAction::kToggle ||
 				       a_action == CSX::EditorAPI::MutationAction::kExitPreview);
@@ -286,6 +314,23 @@ namespace
 				return a_state.editorOpen;
 			case CSX::EditorAPI::MutationAction::kExitPreview:
 				return a_state.previewMode != CSX::EditorAPI::PreviewMode::kNone;
+			case CSX::EditorAPI::MutationAction::kOpenLightEditor:
+				return a_state.available && a_state.canOpen &&
+				       !a_state.persistentMutationBlocked &&
+				       !a_state.saveLoadSafeModeActive &&
+				       a_state.previewMode == CSX::EditorAPI::PreviewMode::kNone;
+			case CSX::EditorAPI::MutationAction::kBeginLightPick:
+				return a_state.available && a_state.canOpen && a_state.editorOpen &&
+				       a_state.lightEditorSelected &&
+				       a_state.lightEditorEnabled &&
+				       a_state.lightViewportVisible &&
+				       !a_state.lightPickerActive &&
+				       !a_state.lightDeferredWorkPending &&
+				       !a_state.persistentMutationBlocked &&
+				       !a_state.saveLoadSafeModeActive &&
+				       a_state.previewMode == CSX::EditorAPI::PreviewMode::kNone;
+			case CSX::EditorAPI::MutationAction::kCancelLightPick:
+				return a_state.lightPickerActive;
 			default:
 				return false;
 			}
@@ -308,6 +353,46 @@ namespace
 				return "editor must be open before resetting its layout";
 			if (a_action == CSX::EditorAPI::MutationAction::kExitPreview)
 				return "editor is not in preview mode";
+			if (a_action == CSX::EditorAPI::MutationAction::kOpenLightEditor) {
+				if (!a_state.available)
+					return UnavailableReason(a_state);
+				if (a_state.persistentMutationBlocked || a_state.saveLoadSafeModeActive)
+					return "Light Editor cannot open while persistent mutations are blocked";
+				if (a_state.previewMode != CSX::EditorAPI::PreviewMode::kNone)
+					return "exit editor preview mode before opening Light Editor";
+				if (a_state.loadingMenuOpen)
+					return "Light Editor cannot open during a loading screen";
+				if (a_state.mainMenuOpen)
+					return "enter the game world before opening Light Editor";
+				return "player world context is unavailable";
+			}
+			if (a_action == CSX::EditorAPI::MutationAction::kBeginLightPick) {
+				if (!a_state.available)
+					return UnavailableReason(a_state);
+				if (a_state.loadingMenuOpen)
+					return "Light Editor picking is unavailable during a loading screen";
+				if (a_state.mainMenuOpen || !a_state.canOpen)
+					return "enter the game world before beginning a Light Editor pick";
+				if (!a_state.editorOpen)
+					return "open Light Editor before beginning a pick";
+				if (!a_state.lightEditorSelected)
+					return "select Light Editor before beginning a pick";
+				if (!a_state.lightEditorEnabled)
+					return "enable Light Editor before beginning a pick";
+				if (!a_state.lightViewportVisible)
+					return "wait for a rendered editor Viewport before beginning a pick";
+				if (a_state.lightPickerActive)
+					return "Light Editor picker is already active";
+				if (a_state.lightDeferredWorkPending)
+					return "wait for Light Editor reference work to finish before beginning a pick";
+				if (a_state.persistentMutationBlocked || a_state.saveLoadSafeModeActive)
+					return "Light Editor picking is blocked during save/load mutation guards";
+				if (a_state.previewMode != CSX::EditorAPI::PreviewMode::kNone)
+					return "exit editor preview mode before beginning a pick";
+				return "Light Editor picker is unavailable";
+			}
+			if (a_action == CSX::EditorAPI::MutationAction::kCancelLightPick)
+				return "Light Editor picker is not active";
 			return "mutation action is unsupported";
 		}
 
@@ -346,34 +431,85 @@ namespace
 		return service;
 	}
 
+	struct EditorServiceContext
+	{
+		EditorService* service = nullptr;
+		std::uint64_t capabilities = 0;
+	};
+
+	EditorServiceContext& GetLegacyEditorServiceContext()
+	{
+		static EditorServiceContext context{ &GetEditorService(), CSX::EditorAPI::LegacyServiceCapabilities };
+		return context;
+	}
+
+	EditorServiceContext& GetCurrentEditorServiceContext()
+	{
+		static EditorServiceContext context{ &GetEditorService(), CSX::EditorAPI::ServiceCapabilities };
+		return context;
+	}
+
+	const EditorServiceContext* ContextFrom(const void* a_context)
+	{
+		return static_cast<const EditorServiceContext*>(a_context);
+	}
+
 	Status GetSnapshotFn(const void* a_context, Snapshot001* a_output)
 	{
-		if (!a_context || !a_output)
+		auto* context = ContextFrom(a_context);
+		if (!context || !context->service || !a_output)
 			return Status::kInvalidArgument;
 		if (a_output->structSize < sizeof(Snapshot001))
 			return Status::kStructureTooSmall;
-		try { return static_cast<EditorService*>(const_cast<void*>(a_context))->GetSnapshot(*a_output); }
-		catch (...) { return Status::kInternalError; }
+		try {
+			return context->service->GetSnapshot(*a_output, context->capabilities);
+		} catch (...) {
+			return Status::kInternalError;
+		}
 	}
 
 	Status PreflightFn(const void* a_context, const MutationRequest001* a_request, Preflight001* a_output)
 	{
-		if (!a_context || !a_request || !a_output)
+		auto* context = ContextFrom(a_context);
+		if (!context || !context->service || !a_request || !a_output)
 			return Status::kInvalidArgument;
 		if (a_request->structSize < sizeof(MutationRequest001) || a_output->structSize < sizeof(Preflight001))
 			return Status::kStructureTooSmall;
-		try { return static_cast<EditorService*>(const_cast<void*>(a_context))->Preflight(*a_request, *a_output); }
-		catch (...) { return Status::kInternalError; }
+		try {
+			return context->service->Preflight(*a_request, *a_output, context->capabilities);
+		} catch (...) {
+			return Status::kInternalError;
+		}
 	}
 
 	Status ExecuteFn(const void* a_context, const MutationRequest001* a_request, MutationReceipt001* a_output)
 	{
-		if (!a_context || !a_request || !a_output)
+		auto* context = ContextFrom(a_context);
+		if (!context || !context->service || !a_request || !a_output)
 			return Status::kInvalidArgument;
 		if (a_request->structSize < sizeof(MutationRequest001) || a_output->structSize < sizeof(MutationReceipt001))
 			return Status::kStructureTooSmall;
-		try { return static_cast<EditorService*>(const_cast<void*>(a_context))->Execute(*a_request, *a_output); }
-		catch (...) { return Status::kInternalError; }
+		try {
+			return context->service->Execute(*a_request, *a_output, context->capabilities);
+		} catch (...) {
+			return Status::kInternalError;
+		}
+	}
+
+	const CSX::EditorAPI::Interface001* GetLegacyEditorService001()
+	{
+		static const CSX::EditorAPI::Interface001 service{
+			.structSize = sizeof(CSX::EditorAPI::Interface001),
+			.major = CSX::EditorAPI::ServiceMajor,
+			.minor = CSX::EditorAPI::MinimumServiceMinor,
+			.schemaRevision = CSX::EditorAPI::LegacySchemaRevision,
+			.capabilities = CSX::EditorAPI::LegacyServiceCapabilities,
+			.context = &GetLegacyEditorServiceContext(),
+			.GetSnapshot = &GetSnapshotFn,
+			.Preflight = &PreflightFn,
+			.Execute = &ExecuteFn,
+		};
+		return &service;
 	}
 }
 
@@ -384,7 +520,8 @@ namespace CSX::Api
 		static const EditorAPI::Interface001 service{
 			.structSize = sizeof(EditorAPI::Interface001), .major = EditorAPI::ServiceMajor,
 			.minor = EditorAPI::ServiceMinor, .schemaRevision = EditorAPI::SchemaRevision,
-			.capabilities = EditorAPI::ServiceCapabilities, .context = &GetEditorService(),
+			.capabilities = EditorAPI::ServiceCapabilities,
+			.context = &GetCurrentEditorServiceContext(),
 			.GetSnapshot = &GetSnapshotFn, .Preflight = &PreflightFn, .Execute = &ExecuteFn,
 		};
 		return &service;
@@ -394,14 +531,34 @@ namespace CSX::Api
 	{
 		static std::once_flag initialized;
 		std::call_once(initialized, [] {
-			const auto status = GetProcessServiceRegistry().Register({ EditorAPI::ServiceName, EditorAPI::ServiceMajor,
-				EditorAPI::ServiceMinor, EditorAPI::SchemaRevision,
-				ServiceAPI::kCapabilityInspection | ServiceAPI::kCapabilityRuntimeMutation | ServiceAPI::kCapabilityTransactions,
-				GetEditorService001() });
-			if (status != ServiceAPI::Status::kSuccess)
-				logger::error("Failed to register CSX editor service ({})", static_cast<std::uint32_t>(status));
-			else
-				logger::info("Registered CSX editor service ABI {}.{}", EditorAPI::ServiceMajor, EditorAPI::ServiceMinor);
+			constexpr auto registryCapabilities =
+				ServiceAPI::kCapabilityInspection |
+				ServiceAPI::kCapabilityRuntimeMutation |
+				ServiceAPI::kCapabilityTransactions;
+			auto& registry = GetProcessServiceRegistry();
+			const auto legacyStatus = registry.Register({ EditorAPI::ServiceName, EditorAPI::ServiceMajor,
+				EditorAPI::MinimumServiceMinor, EditorAPI::LegacySchemaRevision, registryCapabilities, GetLegacyEditorService001() });
+			const auto currentStatus = registry.Register({ EditorAPI::ServiceName, EditorAPI::ServiceMajor,
+				EditorAPI::ServiceMinor, EditorAPI::SchemaRevision, registryCapabilities, GetEditorService001() });
+			const auto registrationAccepted = [](ServiceAPI::Status a_status) {
+				return a_status == ServiceAPI::Status::kSuccess ||
+				       a_status == ServiceAPI::Status::kAlreadyRegistered;
+			};
+			if (!registrationAccepted(legacyStatus) || !registrationAccepted(currentStatus)) {
+				logger::error("Failed to register CSX editor service ABI {}.{} ({}) / {}.{} ({})",
+					EditorAPI::ServiceMajor,
+					EditorAPI::MinimumServiceMinor,
+					static_cast<std::uint32_t>(legacyStatus),
+					EditorAPI::ServiceMajor,
+					EditorAPI::ServiceMinor,
+					static_cast<std::uint32_t>(currentStatus));
+			} else {
+				logger::info("Registered CSX editor service ABI {}.{}-{}.{}",
+					EditorAPI::ServiceMajor,
+					EditorAPI::MinimumServiceMinor,
+					EditorAPI::ServiceMajor,
+					EditorAPI::ServiceMinor);
+			}
 		});
 	}
 }

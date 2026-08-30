@@ -17,6 +17,7 @@
 #endif
 
 #include "Features/AdaptiveBrightness.h"
+#include "Features/DynamicCubemaps.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
 #include "Features/ScreenshotFeature.h"
@@ -65,7 +66,8 @@ namespace
 		kSwallow = 1u << 0,
 		kInvalidHead = 1u << 1,
 		kProcessInputEventsException = 1u << 2,
-		kGetDeviceException = 1u << 3
+		kGetDeviceException = 1u << 3,
+		kMouseWheelReadException = 1u << 4
 	};
 
 	const char* ToString(InputHookSafeguardReason a_reason)
@@ -79,6 +81,8 @@ namespace
 			return "process_input_events_exception";
 		case InputHookSafeguardReason::kGetDeviceException:
 			return "get_device_exception";
+		case InputHookSafeguardReason::kMouseWheelReadException:
+			return "mouse_wheel_read_exception";
 		default:
 			return "unknown";
 		}
@@ -779,6 +783,8 @@ namespace LightingExtensions
 	{
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
+			globals::state->UpdateLightingShaderPermutation(pass);
+
 			func(shader, pass, renderFlags);
 
 			auto state = globals::state;
@@ -1132,6 +1138,14 @@ struct BSInputDeviceManager_PollInputDevices
 		const bool blockAllDevices = menu->ShouldBlockAllGameInput();
 
 		if (a_events) {
+			__try {
+				if (auto* inputManager = RE::BSInputDeviceManager::GetSingleton()) {
+					if (const auto* mouse = inputManager->GetMouse())
+						menu->RecordDirectInputWheelDelta(mouse->GetRuntimeData().dInputNextState.z);
+				}
+			} __except (EXCEPTION_EXECUTE_HANDLER) {
+				LogInputHookSafeguardOnce(InputHookSafeguardReason::kMouseWheelReadException, a_dispatcher, TryGetInputEventHead(a_events), false);
+			}
 			__try {
 				menu->ProcessInputEvents(a_events);
 			} __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -1490,8 +1504,9 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, uint32_t a_target, RE::BSGraphics::CubeMapRenderTargetProperties* a_properties)
 		{
-			a_properties->height = 128;
-			a_properties->width = 128;
+			const auto resolution = globals::features::dynamicCubemaps.GetCubemapResolutionForResourceCreation();
+			a_properties->height = resolution;
+			a_properties->width = resolution;
 			func(This, a_target, a_properties);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -1501,8 +1516,9 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, uint32_t a_target, RE::BSGraphics::DepthStencilTargetProperties* a_properties)
 		{
-			a_properties->height = 128;
-			a_properties->width = 128;
+			const auto resolution = globals::features::dynamicCubemaps.GetCubemapResolutionForResourceCreation();
+			a_properties->height = resolution;
+			a_properties->width = resolution;
 			func(This, a_target, a_properties);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;

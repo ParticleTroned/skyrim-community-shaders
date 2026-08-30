@@ -15,6 +15,8 @@ public:
 	static constexpr uint32_t kMaxTimers = 128;
 	static constexpr uint32_t kFrameLatency = 3;
 	static constexpr uint32_t kHistorySize = 300;
+	// Retain intermittent passes while removing entries absent across sustained capture.
+	static constexpr uint64_t kTimerRetireCycles = 60;
 
 	using PerfEventCallback = std::function<void(std::string_view)>;
 
@@ -63,6 +65,9 @@ public:
 		const float* cpuHistoryBuffer = nullptr;
 		uint32_t cpuHistoryHead = 0;
 		uint32_t cpuHistoryCount = 0;
+		// Outermost histories are written in lockstep with their full histories.
+		const float* outermostGpuHistoryBuffer = nullptr;
+		const float* outermostCpuHistoryBuffer = nullptr;
 
 		float GetHistorySample(uint32_t index) const
 		{
@@ -76,6 +81,22 @@ public:
 			if (!cpuHistoryBuffer || index >= cpuHistoryCount)
 				return 0.0f;
 			return cpuHistoryBuffer[(cpuHistoryHead - cpuHistoryCount + index + kHistorySize) % kHistorySize];
+		}
+
+		/** @brief Reads GPU work not already covered by an ancestor in this timer root. */
+		float GetOutermostGpuHistorySample(uint32_t index) const
+		{
+			if (!outermostGpuHistoryBuffer || index >= historyCount)
+				return 0.0f;
+			return outermostGpuHistoryBuffer[(historyHead - historyCount + index + kHistorySize) % kHistorySize];
+		}
+
+		/** @brief Reads CPU work not already covered by an ancestor in this timer root. */
+		float GetOutermostCpuHistorySample(uint32_t index) const
+		{
+			if (!outermostCpuHistoryBuffer || index >= cpuHistoryCount)
+				return 0.0f;
+			return outermostCpuHistoryBuffer[(cpuHistoryHead - cpuHistoryCount + index + kHistorySize) % kHistorySize];
 		}
 	};
 
@@ -122,6 +143,8 @@ public:
 	void EndFrame(uint32_t a_frameCount);
 
 	const std::vector<TimerResult>& GetResults() const { return results; }
+	/** @brief Returns the namespace used to group and aggregate a timer name. */
+	static std::string_view GetTimerRootName(std::string_view name);
 	float GetTotalTimeMs() const { return totalTimeMs; }
 	float GetCpuTotalTimeMs() const { return cpuTotalTimeMs; }
 	float GetResolvedTotalTimeMs() const { return resolvedTotalMs; }
@@ -165,6 +188,8 @@ private:
 		float gpuMs = 0.0f;
 		float topLevelMs = 0.0f;
 		float cpuMs = 0.0f;
+		float outermostGpuMs = 0.0f;
+		float outermostCpuMs = 0.0f;
 		bool hasGpu = false;
 		bool hasCpu = false;
 	};
@@ -174,6 +199,7 @@ private:
 		std::string name;
 		float cpuMs = 0.0f;
 		uint32_t depth = 0;
+		bool outermostCpuInRoot = true;
 	};
 
 	struct FrameQueries
@@ -188,6 +214,8 @@ private:
 			float cpuMs = 0.0f;
 			uint32_t depth = 0;
 			bool ended = false;
+			bool outermostGpuInRoot = true;
+			bool outermostCpuInRoot = true;
 		};
 		std::vector<TimerPair> timers;
 		std::vector<CompletedCpuTimer> cpuTimers;
@@ -221,6 +249,7 @@ private:
 		std::string name;
 		LARGE_INTEGER cpuBegin{};
 		uint32_t depth = 0;
+		bool outermostCpuInRoot = true;
 	};
 
 	struct KnownTimer
@@ -228,20 +257,26 @@ private:
 		std::string name;
 		RollingHistory gpu;
 		RollingHistory cpu;
+		RollingHistory outermostGpu;
+		RollingHistory outermostCpu;
 		bool hasGpu = false;
 		bool hasCpu = false;
+		uint64_t lastSampleCycle = 0;
 	};
 	struct CaptureKnownTimer
 	{
 		std::string name;
 		RollingHistory gpu;
 		RollingHistory cpu;
+		RollingHistory outermostGpu;
+		RollingHistory outermostCpu;
 		float topLevelMs = 0.0f;
 		bool hasGpu = false;
 		bool hasCpu = false;
 	};
 	std::vector<KnownTimer> knownTimers;
 	std::unordered_map<std::string, size_t> knownTimerIndex;
+	uint64_t collectedDetailedCycles = 0;
 	std::vector<CpuTimer> activeCpuTimers;
 	std::vector<CompletedCpuTimer> completedCpuTimers;
 	float totalTimeMs = 0.0f;
@@ -262,6 +297,8 @@ private:
 
 	bool CollectResults();
 	KnownTimer& GetOrCreateTimer(const std::string& name);
+	void RetireStaleTimers();
+	void RebuildTimerIndex();
 	void RebuildResults(const std::unordered_map<std::string, ActiveTimerData>* activeTimers);
 	void StoreBoundedCaptureResults(
 		const std::unordered_map<std::string, ActiveTimerData>& a_activeTimers,
@@ -269,6 +306,8 @@ private:
 		bool a_cpuCycleResolved);
 	void RebuildBoundedCaptureResults();
 	void StoreCompletedCpuTimers(FrameQueries& frame);
+	bool HasActiveGpuAncestorWithSameRoot(std::string_view name) const;
+	bool HasActiveCpuAncestorWithSameRoot(std::string_view name) const;
 	void ResetFrameState(FrameQueries& frame);
 	void ResetPendingFrames();
 	static bool HasPendingFrameData(const FrameQueries& frame);

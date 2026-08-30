@@ -13,11 +13,11 @@ optimistic success response is published.
 
 ## Contract identity
 
-| Field | Value |
-|---|---|
-| Service name | `csx.upscaling` |
-| ABI | 1.0 |
-| Schema revision | 1 |
+| Field                        | Value                                                                                                                  |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Service name                 | `csx.upscaling`                                                                                                        |
+| ABI                          | 1.0                                                                                                                    |
+| Schema revision              | 1                                                                                                                      |
 | Registry coarse capabilities | inspection, runtime mutation, asynchronous operations, events, transactions; persistent mutation only when implemented |
 
 Major versions are ABI-breaking. Minor versions append function-table entries
@@ -30,32 +30,32 @@ metadata additions and do not override ABI negotiation.
 The legacy API remains supported, but new clients should not copy its mutation
 pattern:
 
-- Individual `void` setters can silently clamp, ignore, or partially apply a
-  profile. V1 accepts one complete profile and returns a structured result.
-- A separate `IsAllowed`/setter sequence races loading-menu handoff and renderer
-  ownership. V1 preflight is advisory; `ApplyProfile` repeats validation,
-  preflight, admission, and queue publication as one controller transaction.
-- “Configured” is not the same as “physically active.” V1 exposes configured,
-  requested, applying, effective, stable, and persisted profiles separately.
-- Loading is an observed condition, not always an unconditional blocker. An
-  environment-profile transition can be admitted through CSX's loading-door
-  handoff without exposing or accepting internal serial tokens.
-- FSR4 is an FSR runtime selection, not a fourth upscale method.
-- DLSS currently has six selectable profiles: J, K, L, M, F, and E. V1 does not
-  repeat the earlier five-value assumption.
-- Caller-created fades are not part of this API. CSX owns presentation coverage
-  for renderer transitions and must not stack a second timed fade.
+-   Individual `void` setters can silently clamp, ignore, or partially apply a
+    profile. V1 accepts one complete profile and returns a structured result.
+-   A separate `IsAllowed`/setter sequence races loading-menu handoff and renderer
+    ownership. V1 preflight is advisory; `ApplyProfile` repeats validation,
+    preflight, admission, and queue publication as one controller transaction.
+-   “Configured” is not the same as “physically active.” V1 exposes configured,
+    requested, applying, effective, stable, and persisted profiles separately.
+-   Loading is an observed condition, not always an unconditional blocker. An
+    environment-profile transition can be admitted through CSX's loading-door
+    handoff without exposing or accepting internal serial tokens.
+-   FSR4 is an FSR runtime selection, not a fourth upscale method.
+-   DLSS currently has six selectable profiles: J, K, L, M, F, and E. V1 does not
+    repeat the earlier five-value assumption.
+-   Caller-created fades are not part of this API. CSX owns presentation coverage
+    for renderer transitions and must not stack a second timed fade.
 
 ## Complete profile model
 
 `Profile001` contains the canonical settings which must change together:
 
-- method: None, TAA, FSR, or DLSS;
-- shared quality mode: Native AA, Hoshipa, Ultra Quality, Quality, Balanced,
-  Performance, or Ultra Performance;
-- VR render-scale-mode request;
-- selected DLSS profile;
-- selected FSR runtime (FSR3 or FSR4).
+-   method: None, TAA, FSR, or DLSS;
+-   shared quality mode: Native AA, Hoshipa, Ultra Quality, Quality, Balanced,
+    Performance, or Ultra Performance;
+-   VR render-scale-mode request;
+-   selected DLSS profile;
+-   selected FSR runtime (FSR3 or FSR4).
 
 DLSS and FSR selections remain meaningful configuration when their backend is
 inactive. A switch from DLSS to TAA therefore does not erase the user's DLSS
@@ -76,13 +76,13 @@ do not need to reverse-engineer why DLSS or FSR4 is pending or unavailable.
 `GetSnapshot` returns one coherent read model and a monotonic `stateRevision`.
 The profile-presence mask says which profile copies are authoritative:
 
-- **configured**: current in-memory configuration, without runtime gates such
-  as startup presentation or the master shader switch;
-- **requested**: latest admitted target;
-- **applying**: target whose physical work is in progress;
-- **effective**: logical backend and settings used for current dispatch;
-- **stable**: last physically converged renderer/resource contract;
-- **persisted**: last configuration known to have been durably saved.
+-   **configured**: current in-memory configuration, without runtime gates such
+    as startup presentation or the master shader switch;
+-   **requested**: latest admitted target;
+-   **applying**: target whose physical work is in progress;
+-   **effective**: logical backend and settings used for current dispatch;
+-   **stable**: last physically converged renderer/resource contract;
+-   **persisted**: last configuration known to have been durably saved.
 
 Unknown state is represented by an absent presence bit, never by manufacturing
 a default profile. Runtime dimensions and render-scale/transition state are
@@ -99,9 +99,9 @@ for an automation controller performing a read/modify/write sequence.
 decision predicts no-change, synchronous apply, queued apply, blocked, or
 unsupported. The result reports both:
 
-- `observedConditions`: everything relevant that was present; and
-- `blockingConditions`: the subset which blocks this request after its purpose
-  and admission route are considered.
+-   `observedConditions`: everything relevant that was present; and
+-   `blockingConditions`: the subset which blocks this request after its purpose
+    and admission route are considered.
 
 The distinction prevents a valid loading-door handoff from hiding the fact
 that a loading transition exists.
@@ -114,16 +114,27 @@ rewriting the user's stored configuration source. A successfully admitted API
 target is then published as the latest requested profile once the controller
 is settled at that target.
 
+VR API profile changes publish through the render-scale transition controller
+even when render-scale mode is disabled. Native None, TAA, DLAA, and FSR Native
+AA operations do not become stable until one exact target-correlated stereo
+presentation is observed. Their public requested, effective, and stable
+profiles all retain the logical target. The separate render-scale resource key
+remains inactive with backend `none` at native resolution; fixed-resolution
+vendor execution is proven by the target-correlated presentation path rather
+than by manufacturing an active reduced-resolution contract. DevBench retains
+the actual DLSS or FSR backend, same-frame dispatch identity for both eyes, and
+any FSR runtime-to-host fallback in that native-vendor presentation evidence.
+
 `ApplyProfile` copies every input before returning. It performs validation and
 preflight before admission. The queued main-thread transaction repeats the
 revision comparison and admission checks immediately before immutable request
 publication, closing the advisory-preflight race. It then
 returns exactly one disposition:
 
-- rejected (with status and conditions);
-- no change;
-- applied synchronously; or
-- queued (with a non-zero operation ID).
+-   rejected (with status and conditions);
+-   no change;
+-   applied synchronously; or
+-   queued (with a non-zero operation ID).
 
 The receipt also says whether rejection is retryable, whether the accepted
 route requires a restart, and whether persistence will occur after stability.

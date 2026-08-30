@@ -53,6 +53,12 @@ The generator rejects:
 -   unmanaged extra `CSX Unified` package directories;
 -   output settings, metadata, or the generated report that are stale.
 
+The current base includes the main-VR settings migrations for Adaptive
+Balance's unified global profile, separate exterior/interior godray profiles,
+wet-grass darkening, locked VR menu placement, depth-culling policy modes, and
+opt-in verbose PBR diagnostics. Their retired keys are explicitly rejected so
+a package cannot silently fall back through legacy migration on first load.
+
 Generation and `-Check` take the same exclusive publication lock. A normal
 generation builds and validates all seven outputs in memory, stages each file
 beside its destination, flushes and reads the staged content back, then replaces

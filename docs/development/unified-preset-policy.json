@@ -7,11 +7,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "BE2798778F9D95FEABB229916594B96A02897A7E8A145CEB40E41C43C3711178"
+        "sha256": "CAD7DE6FE2FC8E4E6F527728D9CC4AB934DE47A6E327BFD0204519E97F65C605"
     },
     "runtimeSettingsContract": {
-        "revision": 1,
-        "sourceTreeSha256": "B5B0BE10DB272DA22CEB802E0C98270801FC9C1337E1BB82C7DDF006F27562F0",
+        "revision": 2,
+        "sourceTreeSha256": "A02078A0C47CCD2A3B143C93F38750C7032EB209EAEE882EFA56E93897FA7744",
         "sources": [
             "src/Feature.cpp",
             "src/Feature.h",
@@ -19,6 +19,8 @@
             "src/Menu.h",
             "src/SettingsSerialization.cpp",
             "src/SettingsSerialization.h",
+            "src/SettingsMigrations.cpp",
+            "src/SettingsMigrations.h",
             "src/State.cpp",
             "src/State.h",
             "src/Features/AdaptiveBrightness.cpp",
@@ -49,8 +51,11 @@
             "src/Features/Upscaling.h",
             "src/Features/VR.cpp",
             "src/Features/VR.h",
+            "src/Features/VR/MenuPositioningPolicy.h",
             "src/Features/VolumetricLighting.cpp",
             "src/Features/VolumetricLighting.h",
+            "src/Features/VolumetricLightingTuning.h",
+            "src/Features/VolumetricLightingTuningMigration.h",
             "src/Features/VolumetricShadows.cpp",
             "src/Features/VolumetricShadows.h",
             "src/Features/WetnessEffects.cpp",
@@ -383,7 +388,17 @@
             ["Water Effects"],
             ["Wetness Effects"],
             ["Adaptive Balance", "rendererControlsEnabled"],
+            ["Adaptive Balance", "globalLightingEnabled"],
+            ["Adaptive Balance", "lighting"],
             ["Adaptive Balance", "bloomEnhancement"],
+            ["Volumetric Lighting", "CustomColorBlue"],
+            ["Volumetric Lighting", "CustomColorContribution"],
+            ["Volumetric Lighting", "CustomColorGreen"],
+            ["Volumetric Lighting", "CustomColorRed"],
+            ["Volumetric Lighting", "GodrayIntensity"],
+            ["Volumetric Lighting", "GodrayOpacity"],
+            ["Volumetric Lighting", "GodraySaturation"],
+            ["Volumetric Lighting", "GodrayShaftIntensity"],
             ["Screenshot", "SequenceFrameCount"],
             ["Screenshot", "SequenceFrameInterval"],
             ["Screenshot", "SequencePreviewFramesPerSecond"],
@@ -393,9 +408,20 @@
         "requiredValues": [
             { "path": ["Screenshot", "SettingsSchemaVersion"], "value": 2 },
             { "path": ["Screenshot", "Sequence", "Schedule", "Basis"], "value": "game_frames" },
-            { "path": ["Adaptive Balance", "globalLightingEnabled"], "value": true },
+            { "path": ["Advanced", "PBR Verbose JSON Logging"], "value": false },
+            { "path": ["Adaptive Balance", "globalProfile", "advanced"], "value": true },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "waterWind", "overrideEnabled"],
+                "value": true
+            },
             { "path": ["Sky Sync", "EnableSunLensFlare"], "value": true },
             { "path": ["Foliage Lighting", "EnableFoliageScattering"], "value": 1 },
+            { "path": ["VR", "DepthCullingLegacyMode"], "value": false },
+            { "path": ["VR", "DepthCullingPerformanceMode"], "value": false },
+            { "path": ["VR", "UnlockMenuPositionAndSize"], "value": false },
+            { "path": ["Volumetric Lighting", "ExteriorGodrays", "ShaftIntensity"], "value": 1.0 },
+            { "path": ["Volumetric Lighting", "InteriorGodrays", "ShaftIntensity"], "value": 1.0 },
+            { "path": ["Wetterness", "RainGrassDarkening"], "value": 0.15000000596046448 },
             { "path": ["VR", "WandAimPitchTrimDegrees"], "value": 0.0 }
         ],
         "requiredArrayLengths": [

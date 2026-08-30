@@ -33,6 +33,7 @@
     "Log Level": 2,
     "PBR Metal Highlight Scale": 0.25,
     "PBR Metal Reflection Scale": 1.0,
+    "PBR Verbose JSON Logging": false,
     "Partial Precision": false,
     "Refraction Scale": 0.25,
     "Shader Defines": "",
@@ -278,6 +279,8 @@
     "VRFramedView": "Left"
   },
   "VR": {
+    "DepthCullingLegacyMode": false,
+    "DepthCullingPerformanceMode": false,
     "EnableDepthBufferCullingExterior": true,
     "EnableDepthBufferCullingInterior": false,
     "EnableDragToReposition": false,
@@ -299,6 +302,7 @@
     "StereoBlendColorThreshold": 0.019999999552965164,
     "StereoBlendDepthSigma": 0.009999999776482582,
     "StereoBlendMaxFactor": 0.05000000074505806,
+    "UnlockMenuPositionAndSize": false,
     "UseRuntimeDefaultMenuNavigation": false,
     "VRControllerBindingsVersion": 1,
     "VRMenuAttachController": 1,
@@ -443,16 +447,57 @@
   "Adaptive Balance": {
     "dayStartHour": 9.0,
     "enabled": true,
-    "globalLightingEnabled": true,
-    "lighting": {
+    "globalProfile": {
+      "advanced": true,
+      "ambientMult": 1.0,
+      "bloom": {
+        "BloomSaturation": 0.8999999761581421,
+        "BloomTint": [
+          1.0,
+          0.9800000190734863,
+          0.9399999976158142
+        ],
+        "CompressionCeiling": 1.5,
+        "CompressionThreshold": 0.0,
+        "EnhancementIntensity": 0.0,
+        "HaloRadius": 3.5,
+        "HaloSpread": 0.8500000238418579
+      },
+      "bloomAdvanced": true,
+      "brightness": 1.0,
       "directionalLightMult": 1.0,
+      "effectLightingMult": 1.0,
+      "emitColorMult": 1.0,
+      "fogAlphaGammaOffset": 0.0,
+      "fogGammaOffset": 0.0,
+      "glowmapMult": 1.0,
       "linearOmnidirectionalBulbMult": 1.0,
       "linearPointLightMult": 1.0,
       "linearSpotlightMult": 1.0,
       "omnidirectionalBulbMult": 1.0,
       "pointLightMult": 1.0,
-      "skyBrightness": 1.0,
-      "spotlightMult": 1.0
+      "skyBrightnessMult": 1.0,
+      "skyGammaOffset": 0.0,
+      "spotlightMult": 1.0,
+      "vlGammaOffset": 0.0,
+      "water": {
+        "FresnelMax": 1.0,
+        "FresnelMin": 0.0,
+        "GlobalReflectionAmount": 1.0,
+        "Muddiness": 1.0,
+        "RefractionAmount": 1.0,
+        "SunSpecularMultiplier": 1.0,
+        "WaterBrightness": 1.0,
+        "WaveAmplitude": 1.0
+      },
+      "waterAdvanced": true,
+      "waterGammaOffset": 0.0,
+      "waterWind": {
+        "calmWaveMultiplier": 0.6499999761581421,
+        "enabled": false,
+        "overrideEnabled": true,
+        "strongWindWaveMultiplier": 1.350000023841858
+      }
     },
     "locationOverrides": [],
     "nightStartHour": 21.0,
@@ -481,9 +526,14 @@
         "fogAlphaGammaOffset": 0.0,
         "fogGammaOffset": 0.0,
         "glowmapMult": 1.0,
+        "linearOmnidirectionalBulbMult": 1.0,
+        "linearPointLightMult": 1.0,
+        "linearSpotlightMult": 1.0,
+        "omnidirectionalBulbMult": 1.0,
         "pointLightMult": 1.0,
         "skyBrightnessMult": 1.0,
         "skyGammaOffset": 0.0,
+        "spotlightMult": 1.0,
         "vlGammaOffset": 0.0,
         "water": {
           "FresnelMax": 1.0,
@@ -495,7 +545,14 @@
           "WaterBrightness": 1.0,
           "WaveAmplitude": 1.0
         },
-        "waterGammaOffset": 0.0
+        "waterAdvanced": false,
+        "waterGammaOffset": 0.0,
+        "waterWind": {
+          "calmWaveMultiplier": 1.0,
+          "enabled": false,
+          "overrideEnabled": false,
+          "strongWindWaveMultiplier": 1.0
+        }
       },
       {
         "advanced": false,
@@ -521,9 +578,14 @@
         "fogAlphaGammaOffset": 0.0,
         "fogGammaOffset": 0.0,
         "glowmapMult": 1.0,
+        "linearOmnidirectionalBulbMult": 1.0,
+        "linearPointLightMult": 1.0,
+        "linearSpotlightMult": 1.0,
+        "omnidirectionalBulbMult": 1.0,
         "pointLightMult": 1.0,
         "skyBrightnessMult": 1.0,
         "skyGammaOffset": 0.0,
+        "spotlightMult": 1.0,
         "vlGammaOffset": 0.0,
         "water": {
           "FresnelMax": 1.0,
@@ -535,7 +597,14 @@
           "WaterBrightness": 1.0,
           "WaveAmplitude": 1.0
         },
-        "waterGammaOffset": 0.0
+        "waterAdvanced": false,
+        "waterGammaOffset": 0.0,
+        "waterWind": {
+          "calmWaveMultiplier": 1.0,
+          "enabled": false,
+          "overrideEnabled": false,
+          "strongWindWaveMultiplier": 1.0
+        }
       },
       {
         "advanced": false,
@@ -561,9 +630,14 @@
         "fogAlphaGammaOffset": 0.0,
         "fogGammaOffset": 0.0,
         "glowmapMult": 1.0,
+        "linearOmnidirectionalBulbMult": 1.0,
+        "linearPointLightMult": 1.0,
+        "linearSpotlightMult": 1.0,
+        "omnidirectionalBulbMult": 1.0,
         "pointLightMult": 1.0,
         "skyBrightnessMult": 1.0,
         "skyGammaOffset": 0.0,
+        "spotlightMult": 1.0,
         "vlGammaOffset": 0.0,
         "water": {
           "FresnelMax": 1.0,
@@ -575,7 +649,14 @@
           "WaterBrightness": 1.0,
           "WaveAmplitude": 1.0
         },
-        "waterGammaOffset": 0.0
+        "waterAdvanced": false,
+        "waterGammaOffset": 0.0,
+        "waterWind": {
+          "calmWaveMultiplier": 1.0,
+          "enabled": false,
+          "overrideEnabled": false,
+          "strongWindWaveMultiplier": 1.0
+        }
       },
       {
         "advanced": false,
@@ -601,9 +682,14 @@
         "fogAlphaGammaOffset": 0.0,
         "fogGammaOffset": 0.0,
         "glowmapMult": 1.0,
+        "linearOmnidirectionalBulbMult": 1.0,
+        "linearPointLightMult": 1.0,
+        "linearSpotlightMult": 1.0,
+        "omnidirectionalBulbMult": 1.0,
         "pointLightMult": 1.0,
         "skyBrightnessMult": 1.0,
         "skyGammaOffset": 0.0,
+        "spotlightMult": 1.0,
         "vlGammaOffset": 0.0,
         "water": {
           "FresnelMax": 1.0,
@@ -615,7 +701,14 @@
           "WaterBrightness": 1.0,
           "WaveAmplitude": 1.0
         },
-        "waterGammaOffset": 0.0
+        "waterAdvanced": false,
+        "waterGammaOffset": 0.0,
+        "waterWind": {
+          "calmWaveMultiplier": 1.0,
+          "enabled": false,
+          "overrideEnabled": false,
+          "strongWindWaveMultiplier": 1.0
+        }
       },
       {
         "advanced": false,
@@ -641,9 +734,14 @@
         "fogAlphaGammaOffset": 0.0,
         "fogGammaOffset": 0.0,
         "glowmapMult": 1.0,
+        "linearOmnidirectionalBulbMult": 1.0,
+        "linearPointLightMult": 1.0,
+        "linearSpotlightMult": 1.0,
+        "omnidirectionalBulbMult": 1.0,
         "pointLightMult": 1.0,
         "skyBrightnessMult": 1.0,
         "skyGammaOffset": 0.0,
+        "spotlightMult": 1.0,
         "vlGammaOffset": 0.0,
         "water": {
           "FresnelMax": 1.0,
@@ -655,7 +753,14 @@
           "WaterBrightness": 1.0,
           "WaveAmplitude": 1.0
         },
-        "waterGammaOffset": 0.0
+        "waterAdvanced": false,
+        "waterGammaOffset": 0.0,
+        "waterWind": {
+          "calmWaveMultiplier": 1.0,
+          "enabled": false,
+          "overrideEnabled": false,
+          "strongWindWaveMultiplier": 1.0
+        }
       }
     ],
     "transitionHours": 1.0
@@ -810,10 +915,6 @@
     "StableSliceCount": 11
   },
   "Volumetric Lighting": {
-    "CustomColorBlue": 1.0,
-    "CustomColorContribution": 0.0,
-    "CustomColorGreen": 1.0,
-    "CustomColorRed": 1.0,
     "DisableWeatherInteractionDuringRain": false,
     "ExteriorCustomSize": {
       "Depth": 90,
@@ -821,17 +922,31 @@
       "Width": 320
     },
     "ExteriorEnabled": true,
+    "ExteriorGodrays": {
+      "CustomColorBlue": 1.0,
+      "CustomColorContribution": 0.0,
+      "CustomColorGreen": 1.0,
+      "CustomColorRed": 1.0,
+      "Opacity": 1.0,
+      "Saturation": 1.0,
+      "ShaftIntensity": 1.0
+    },
     "ExteriorQuality": 2,
-    "GodrayIntensity": 1.0,
-    "GodrayOpacity": 1.0,
-    "GodraySaturation": 1.0,
-    "GodrayShaftIntensity": 1.0,
     "InteriorCustomSize": {
       "Depth": 90,
       "Height": 192,
       "Width": 320
     },
     "InteriorEnabled": true,
+    "InteriorGodrays": {
+      "CustomColorBlue": 1.0,
+      "CustomColorContribution": 0.0,
+      "CustomColorGreen": 1.0,
+      "CustomColorRed": 1.0,
+      "Opacity": 1.0,
+      "Saturation": 1.0,
+      "ShaftIntensity": 1.0
+    },
     "InteriorQuality": 2
   },
   "Volumetric Shadows": {
@@ -966,6 +1081,7 @@
     "PuddleRadiusWorldUnits": 119.05000305175781,
     "PuddleSkyReflectionScale": 0.5,
     "RainContactWetnessScale": 1.75,
+    "RainGrassDarkening": 0.15000000596046448,
     "RainGrassGlossiness": 60.0,
     "RainGrassSpecularStrength": 1.0,
     "RainReflectionBalance": 0.10000000149011612,

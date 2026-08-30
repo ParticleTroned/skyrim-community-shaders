@@ -3276,7 +3276,7 @@ public:
 	void CreateProxySwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC swapChainDesc);
 	void CreateProxyInterop();
 	IDXGISwapChain* GetProxySwapChain();
-	void ResetProxyCreationState() noexcept;
+	bool ResetProxyCreationState() noexcept;
 	bool IsOpenCompositeUpscalingBlocked(bool a_forceRefresh = false) const;
 	void ClearVRDirectUpscaledEyeOutput(uint32_t eyeIndex, ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
 		uint32_t depthWidthPerEye, uint32_t depthHeight, uint32_t colorWidthPerEye, uint32_t colorHeight, uint32_t colorOffsetX = 0);

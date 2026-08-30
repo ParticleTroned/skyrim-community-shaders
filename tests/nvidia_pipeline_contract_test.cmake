@@ -39,10 +39,63 @@ foreach(_required IN ITEMS
     "ComputeConstantsIdentity"
     "a_constants.minRelativeLinearDepthObjectSeparation"
     "frameGenerationQuarantinedByReflex.store(true"
+    "EnsureReflexDisabledForFrameGeneration"
 )
     string(FIND "${_streamline}" "${_required}" _position)
     if(_position EQUAL -1)
         message(FATAL_ERROR "Streamline hardening is missing contract behavior: ${_required}")
+    endif()
+endforeach()
+
+file(READ "${PROJECT_ROOT}/src/Features/Upscaling/DX12SwapChain.h" _swapchain_header)
+file(READ "${PROJECT_ROOT}/src/Features/Upscaling/DX12SwapChain.cpp" _swapchain)
+foreach(_required IN ITEMS
+    "DXGISwapChainProxy : IDXGISwapChain4"
+    "std::atomic_ulong referenceCount"
+    "if (!ppvObj)"
+    "AddRef();"
+    "return d3d11Device ? d3d11Device->QueryInterface"
+    "PresentInternal"
+    "runtimeQuarantined = true"
+    "EnsureReflexDisabledForFrameGeneration"
+    "const std::array beforeCopy"
+)
+    string(FIND "${_swapchain_header}${_swapchain}" "${_required}" _position)
+    if(_position EQUAL -1)
+        message(FATAL_ERROR "DXGI frame-generation proxy is missing contract behavior: ${_required}")
+    endif()
+endforeach()
+
+file(READ "${PROJECT_ROOT}/src/Features/Upscaling/FidelityFX.cpp" _fidelityfx)
+foreach(_required IN ITEMS
+    "completeLoaderInterface"
+    "frameGenerationSessionQuarantined.exchange(true"
+    "ConfigureFrameGenerationProtected"
+    "DispatchFrameGenerationProtected"
+    "frameGenContextIndeterminate"
+    "swapChainContextIndeterminate"
+)
+    string(FIND "${_fidelityfx}" "${_required}" _position)
+    if(_position EQUAL -1)
+        message(FATAL_ERROR "FidelityFX frame-generation boundary is missing contract behavior: ${_required}")
+    endif()
+endforeach()
+
+file(READ "${PROJECT_ROOT}/src/Hooks.cpp" _hooks)
+string(FIND "${_hooks}" "streamline.UpdateReflex()" _reflex_caller)
+if(_reflex_caller EQUAL -1)
+    message(FATAL_ERROR "The early-frame Reflex update caller is missing")
+endif()
+
+file(READ "${PROJECT_ROOT}/src/Api/UpscalingService.cpp" _upscaling_service)
+foreach(_required IN ITEMS
+    "pendingOperationReservations"
+    "releaseOperationReservation"
+    "--pendingOperationReservations"
+)
+    string(FIND "${_upscaling_service}" "${_required}" _position)
+    if(_position EQUAL -1)
+        message(FATAL_ERROR "Upscaling service admission is missing bounded reservation behavior: ${_required}")
     endif()
 endforeach()
 

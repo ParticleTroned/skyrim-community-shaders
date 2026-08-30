@@ -7,12 +7,12 @@
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <optional>
-#include <memory>
-#include <thread>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -36,8 +36,11 @@ public:
 	json HandleRequest(ScreenshotFeature& a_feature, const json& a_request);
 	void Tick(ScreenshotFeature& a_feature, uint64_t a_engineFrame);
 
-	void OnSourceWaiting(std::string_view a_requestId);
-	void OnSourceFallback(std::string_view a_requestId, std::string_view a_reason);
+	void OnSourceWaiting(std::string_view a_requestId, std::string_view a_actualSourceKind);
+	void OnSourceFallback(
+		std::string_view a_requestId,
+		std::string_view a_reason,
+		std::string_view a_actualSourceKind = {});
 	void OnArtifactQueued(std::string_view a_requestId, const std::filesystem::path& a_path);
 	void OnArtifactEncoding(std::string_view a_requestId);
 	void OnArtifactTerminal(
@@ -189,7 +192,10 @@ private:
 	static constexpr uint32_t kMaximumSequenceFrames = 10000;
 
 	json HandleValidatedRequest(ScreenshotFeature& a_feature, const json& a_request);
-	json NormalizeCaptureDescriptor(const ScreenshotFeature& a_feature, const json& a_request) const;
+	json NormalizeCaptureDescriptor(
+		const ScreenshotFeature& a_feature,
+		const json& a_request,
+		bool a_addSeparateEyeOutputs = false) const;
 	json ValidateSettingsPatch(const json& a_patch) const;
 	void ApplySettingsPatch(ScreenshotFeature& a_feature, const json& a_patch) const;
 	json BuildSettings(const ScreenshotFeature& a_feature) const;

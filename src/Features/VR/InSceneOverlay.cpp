@@ -803,8 +803,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						return packet;
 
 					screenshotTextureLifetime = a_screenshotTexture ?
-						RetainExactOpenVRSubmitTexture(screenshotTexture->handle) :
-						packet.colorLifetime;
+					                                RetainExactOpenVRSubmitTexture(screenshotTexture->handle) :
+					                                packet.colorLifetime;
 					if (!screenshotTextureLifetime)
 						return packet;
 
@@ -821,8 +821,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					screenshotColorSpace = screenshotTexture->eColorSpace;
 					screenshotLease = {
 						.generation = globals::state ?
-							globals::state->GetCompletedRenderTargetResourcePublicationGeneration() :
-							0u,
+						                  globals::state->GetCompletedRenderTargetResourcePublicationGeneration() :
+						                  0u,
 						.deviceIdentity = reinterpret_cast<std::uintptr_t>(screenshotDevice.get()),
 						.colorTextureRetained = true,
 						.depthTextureRequired = false,
@@ -834,18 +834,6 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					const std::shared_lock renderTargetReadLock(
 						Hooks::GetRenderTargetRecreationMutex());
 					return submitPacket.valid && submitPacket.IsCurrent();
-				};
-				const auto isScreenshotCurrent = [&]() {
-					if (!screenshotTextureLifetime || !screenshotLease.IsValid())
-						return false;
-					const std::shared_lock renderTargetReadLock(
-						Hooks::GetRenderTargetRecreationMutex());
-					return OpenVRSubmitLeasePolicy::CanPublish(
-						screenshotLease,
-						globals::state ?
-							globals::state->GetRenderTargetResourcePublicationGeneration() :
-							0u,
-						reinterpret_cast<std::uintptr_t>(globals::d3d::device));
 				};
 				const auto* retainedTexture =
 					submitPacket.directX && !submitPacket.GetColorTexture() ?
@@ -889,16 +877,31 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				}
 				if (result == vr::VRCompositorError_None &&
 					submitPacketCurrentAfterSubmit &&
-					isSubmitPacketCurrent() &&
 					observeScreenshot &&
-					isScreenshotCurrent() &&
 					globals::features::screenshotFeature.HasPendingCapture()) {
-					globals::features::screenshotFeature.ObserveAcceptedVRSubmit(
-						compositorCycleToken,
-						submitPacket.eye,
-						screenshotTextureLifetime.get(),
-						hasScreenshotBounds ? &retainedScreenshotBounds : nullptr,
-						screenshotColorSpace);
+					// Publication validity and the D3D staging copy form one claim/use
+					// interval. Once staged, slower CPU work owns independent resources.
+					const std::shared_lock renderTargetReadLock(
+						Hooks::GetRenderTargetRecreationMutex());
+					const bool screenshotCurrent =
+						submitPacket.IsCurrent() &&
+						screenshotTextureLifetime &&
+						screenshotLease.IsValid() &&
+						OpenVRSubmitLeasePolicy::CanPublish(
+							screenshotLease,
+							globals::state ?
+								globals::state->GetRenderTargetResourcePublicationGeneration() :
+								0u,
+							reinterpret_cast<std::uintptr_t>(globals::d3d::device));
+					if (screenshotCurrent &&
+						globals::features::screenshotFeature.HasPendingCapture()) {
+						globals::features::screenshotFeature.ObserveAcceptedVRSubmit(
+							compositorCycleToken,
+							submitPacket.eye,
+							screenshotTextureLifetime.get(),
+							hasScreenshotBounds ? &retainedScreenshotBounds : nullptr,
+							screenshotColorSpace);
+					}
 				}
 				uint64_t completionScopeEpoch =
 					postLoadSubmitScopeEpoch;
@@ -1607,10 +1610,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 								upscaledTexture.handle &&
 								upscaledTexture.eType == vr::TextureType_DirectX) {
 								if (vr.PrepareInSceneOverlaySubmitTexture(
-									eEye,
-									&upscaledTexture,
-									&upscaledBounds,
-									inSceneTexture)) {
+										eEye,
+										&upscaledTexture,
+										&upscaledBounds,
+										inSceneTexture)) {
 									presentedTexture = &inSceneTexture;
 									inSceneOverlayComposited = true;
 								}

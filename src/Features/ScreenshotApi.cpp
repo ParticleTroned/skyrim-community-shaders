@@ -1,12 +1,12 @@
 #include "Features/ScreenshotApi.h"
 
-#include "Features/ScreenshotFeature.h"
-#include "Features/ScreenshotApiPolicy.h"
 #include "BuildProvenance.h"
+#include "Features/ScreenshotApiPolicy.h"
+#include "Features/ScreenshotFeature.h"
 #include "Globals.h"
-#include "Utils/WinApi.h"
 #include "ScreenshotDevBenchBridge.h"
 #include "State.h"
+#include "Utils/WinApi.h"
 #include "VRAPI/CSpluginapi.h"
 
 #include <Plugin.h>
@@ -15,8 +15,8 @@
 #include <array>
 #include <bcrypt.h>
 #include <cmath>
-#include <fstream>
 #include <format>
+#include <fstream>
 #include <iomanip>
 #include <sstream>
 #include <unordered_set>
@@ -29,6 +29,25 @@ namespace
 	{
 		const auto value = a_path.u8string();
 		return { reinterpret_cast<const char*>(value.data()), value.size() };
+	}
+
+	std::filesystem::path ResolveConfiguredCaptureDirectory(
+		const std::filesystem::path& a_configured,
+		bool a_sequence)
+	{
+		if (a_configured.empty())
+			throw std::runtime_error("the configured screenshot directory is empty");
+		if (a_configured.is_absolute())
+			return std::filesystem::weakly_canonical(a_configured);
+
+		const auto knownFolder = a_sequence ? Util::GetVideosPath() : Util::GetPicturesPath();
+		if (!knownFolder)
+			throw std::runtime_error("the Windows capture folder is unavailable");
+		const auto root = std::filesystem::weakly_canonical(*knownFolder / "Community Shaders");
+		const auto resolved = std::filesystem::weakly_canonical(root / a_configured);
+		if (!CSX::ScreenshotPolicy::IsContainedPath(root, resolved))
+			throw std::runtime_error("the configured screenshot directory escapes its Windows capture root");
+		return resolved;
 	}
 
 	std::string FileSha256(const std::filesystem::path& a_path)
@@ -69,8 +88,7 @@ namespace
 		if (!stream.eof() && hashStatus >= 0)
 			hashStatus = static_cast<NTSTATUS>(0xC0000185L);  // STATUS_IO_DEVICE_ERROR
 		std::array<UCHAR, 32> digest{};
-		const auto finishStatus = hashStatus < 0 ? hashStatus : BCryptFinishHash(
-			hash, digest.data(), static_cast<ULONG>(digest.size()), 0);
+		const auto finishStatus = hashStatus < 0 ? hashStatus : BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0);
 		BCryptDestroyHash(hash);
 		BCryptCloseAlgorithmProvider(algorithm, 0);
 		if (finishStatus < 0)
@@ -190,9 +208,10 @@ ScreenshotApi::ScreenshotApi() :
 			{ "featureVersion", "1.0.0" },
 			{ "serviceSessionId", service.SessionId() },
 			{ "runtime", {
-				{ "game", globals::game::isVR ? "SkyrimVR" : "SkyrimSE" },
-				{ "presentation", globals::game::isVR ? "openvr" : "dxgi" }, { "hmd", "unknown" },
-			} },
+							 { "game", globals::game::isVR ? "SkyrimVR" : "SkyrimSE" },
+							 { "presentation", globals::game::isVR ? "openvr" : "dxgi" },
+							 { "hmd", "unknown" },
+						 } },
 			{ "devBenchBuilt", ScreenshotDevBenchBridge::IsBuilt() },
 			{ "devBenchRegistered", ScreenshotDevBenchBridge::IsRegistered() },
 		});
@@ -389,7 +408,10 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 		descriptorRequest["useSettings"] = sequenceUsesSettings;
 		json descriptor;
 		try {
-			descriptor = NormalizeCaptureDescriptor(a_feature, descriptorRequest);
+			descriptor = NormalizeCaptureDescriptor(
+				a_feature,
+				descriptorRequest,
+				sequenceUsesSettings && a_feature.sequenceDefaults.saveSeparateEyes);
 			descriptor["destination"]["resolvedDirectory"] =
 				PathUtf8(ResolveDestinationDirectory(a_feature, descriptor, true));
 		} catch (const std::exception& e) {
@@ -397,20 +419,6 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 			const bool pathError = message.find("destination") != std::string::npos || message.find("directory") != std::string::npos;
 			return MakeError(a_request, pathError ? "unsafe_path" : "invalid_capture_descriptor", message);
 		}
-		if (sequenceUsesSettings && a_feature.sequenceDefaults.saveSeparateEyes &&
-			descriptor["source"].value("kind", std::string{}) == "hmd_submission") {
-			const auto encoding = descriptor["outputs"].front().value("encoding", json::object());
-			auto containsView = [&descriptor](std::string_view a_view) {
-				return std::any_of(descriptor["outputs"].begin(), descriptor["outputs"].end(), [a_view](const json& output) {
-					return output.value("view", std::string{}) == a_view;
-				});
-			};
-			if (!containsView("left_eye"))
-				descriptor["outputs"].push_back({ { "view", "left_eye" }, { "encoding", encoding }, { "nameSuffix", "left" } });
-			if (!containsView("right_eye"))
-				descriptor["outputs"].push_back({ { "view", "right_eye" }, { "encoding", encoding }, { "nameSuffix", "right" } });
-		}
-
 		SequenceRecord sequence;
 		sequence.requested = requestedSequence;
 		sequence.capture = descriptor;
@@ -444,14 +452,14 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 			return MakeError(a_request, "optional_component_unavailable", "required preview video packaging is not available", "validation", false, "sequence.packaging.previewVideo");
 		sequence.packaging = {
 			{ "frameManifest", {
-				{ "requested", sequence.frameManifest },
-				{ "state", sequence.frameManifest ? "pending" : "not_requested" },
-			} },
+								   { "requested", sequence.frameManifest },
+								   { "state", sequence.frameManifest ? "pending" : "not_requested" },
+							   } },
 			{ "previewVideo", {
-				{ "requested", preview.value("requested", false) },
-				{ "required", false },
-				{ "state", preview.value("requested", false) ? "unsupported" : "not_requested" },
-			} },
+								  { "requested", preview.value("requested", false) },
+								  { "required", false },
+								  { "state", preview.value("requested", false) ? "unsupported" : "not_requested" },
+							  } },
 		};
 
 		std::string requestId;
@@ -462,19 +470,18 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 			if (!CSX::ScreenshotPolicy::CanAdmitPendingOperations(CountPendingOperationsLocked()))
 				return MakeError(a_request, "operation_capacity", "the screenshot pending-operation limit is full", "admission", true);
 			auto& record = CreateRequestLocked("sequence", a_request, requestedSequence);
+			record.expectedArtifacts = CSX::ScreenshotPolicy::ExpectedSequenceArtifacts(sequence.frameManifest);
 			requestId = record.requestId;
 			sequence.requestId = requestId;
 			sequence.nextEngineFrame = (globals::state ? globals::state->frameCount : 0u) + sequence.startDelayFrames;
 			sequence.nextWallClock = std::chrono::steady_clock::now() + std::chrono::milliseconds(startDelayMs);
 			sequence.directory = ResolveDestinationDirectory(a_feature, descriptor, true) /
-				("CS_sequence_" + ShortId(requestId));
+			                     ("CS_sequence_" + ShortId(requestId));
 			sequence.partialManifestPath = sequence.directory / "sequence.json.partial";
 			sequence.finalManifestPath = sequence.directory / "sequence.json";
 			sequences.emplace(requestId, std::move(sequence));
 			auto& stored = sequences.at(requestId);
-			TransitionLocked(record, "running", "sequence.started", {
-				{ "frameCount", frameCount }, { "manifestPath", PathUtf8(stored.partialManifestPath) }
-			});
+			TransitionLocked(record, "running", "sequence.started", { { "frameCount", frameCount }, { "manifestPath", PathUtf8(stored.partialManifestPath) } });
 			QueueSequenceManifestLocked(stored, false);
 		}
 		auto response = MakeEnvelope(a_request, true);
@@ -581,7 +588,10 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 	return MakeError(a_request, "unknown_action", "action is not supported", "validation", false, "action");
 }
 
-ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(const ScreenshotFeature& a_feature, const json& a_request) const
+ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(
+	const ScreenshotFeature& a_feature,
+	const json& a_request,
+	bool a_addSeparateEyeOutputs) const
 {
 	json capture = a_request.value("capture", json::object());
 	const bool useSettings = a_request.value("useSettings", capture.empty());
@@ -605,6 +615,8 @@ ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(const ScreenshotFe
 		throw std::runtime_error("capture.source.fallback must be reject or desktop_mirror");
 
 	json outputs = capture.value("outputs", json::array());
+	if (!outputs.is_array())
+		throw std::runtime_error("capture outputs must be an array");
 	if (outputs.empty()) {
 		outputs.push_back({
 			{ "view", useSettings ? ViewName(a_feature) : "source_native" },
@@ -612,7 +624,24 @@ ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(const ScreenshotFe
 			{ "encoding", { { "format", a_feature.sdrUsePng ? "png" : "bmp" }, { "colourContract", "sdr_srgb" } } },
 		});
 	}
-	if (!outputs.is_array() || outputs.empty() || outputs.size() > 4)
+	if (a_addSeparateEyeOutputs && sourceKind == "hmd_submission") {
+		const auto encoding = outputs.front().value("encoding", json::object());
+		auto containsView = [&outputs](std::string_view a_view) {
+			return std::any_of(outputs.begin(), outputs.end(), [a_view](const json& output) {
+				return output.value("view", std::string{}) == a_view;
+			});
+		};
+		const bool addLeft = !containsView("left_eye");
+		const bool addRight = !containsView("right_eye");
+		const std::size_t additions = static_cast<std::size_t>(addLeft) + static_cast<std::size_t>(addRight);
+		if (!CSX::ScreenshotPolicy::CanAugmentOutputs(outputs.size(), additions))
+			throw std::runtime_error("settings-derived eye outputs exceed the 4-output limit");
+		if (addLeft)
+			outputs.push_back({ { "view", "left_eye" }, { "encoding", encoding }, { "nameSuffix", "left" } });
+		if (addRight)
+			outputs.push_back({ { "view", "right_eye" }, { "encoding", encoding }, { "nameSuffix", "right" } });
+	}
+	if (outputs.empty() || outputs.size() > CSX::ScreenshotPolicy::MaximumOutputsPerFrame)
 		throw std::runtime_error("capture outputs must contain 1 to 4 entries");
 	static constexpr std::array views = {
 		"source_native", "left_eye", "right_eye", "side_by_side", "framed_left", "framed_right", "framed_combined"
@@ -689,11 +718,11 @@ ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(const ScreenshotFe
 		{ "source", { { "kind", sourceKind }, { "fallback", fallback } } },
 		{ "outputs", outputs },
 		{ "destination", {
-			{ "policy", policy },
-			{ "directory", destination.value("directory", json(nullptr)) },
-			{ "baseName", destination.value("baseName", json(nullptr)) },
-			{ "overwrite", "never" },
-		} },
+							 { "policy", policy },
+							 { "directory", destination.value("directory", json(nullptr)) },
+							 { "baseName", destination.value("baseName", json(nullptr)) },
+							 { "overwrite", "never" },
+						 } },
 		{ "clipboard", clipboard },
 		{ "tags", std::move(tags) },
 	};
@@ -709,21 +738,21 @@ ScreenshotApi::json ScreenshotApi::BuildSettings(const ScreenshotFeature& a_feat
 		{ "Encoding", { { "Format", a_feature.sdrUsePng ? "png" : "bmp" }, { "ColourContract", "sdr_srgb" } } },
 		{ "Clipboard", a_feature.copyToClipboard ? "file_reference" : "none" },
 		{ "VR", {
-			{ "Source", SourceName(a_feature.vrCaptureSource) },
-			{ "View", ViewName(a_feature) },
-			{ "DominantEye", a_feature.vrFramedDominantEye == vr::Eye_Right ? "right" : "left" },
-			{ "ApplyCrop", a_feature.applyCropToScreenshot },
-		} },
+					{ "Source", SourceName(a_feature.vrCaptureSource) },
+					{ "View", ViewName(a_feature) },
+					{ "DominantEye", a_feature.vrFramedDominantEye == vr::Eye_Right ? "right" : "left" },
+					{ "ApplyCrop", a_feature.applyCropToScreenshot },
+				} },
 		{ "Sequence", {
-			{ "Destination", { { "Policy", "settings_default" }, { "Directory", a_feature.frameCapturePath }, { "Overwrite", "never" } } },
-			{ "Encoding", { { "Format", a_feature.frameCaptureUsePng ? "png" : "bmp" }, { "ColourContract", "sdr_srgb" } } },
-			{ "FrameCount", a_feature.sequenceDefaults.frameCount },
-			{ "Schedule", { { "Basis", "game_frames" }, { "IntervalFrames", a_feature.sequenceDefaults.intervalFrames } } },
-			{ "Backpressure", { { "Policy", "skip" }, { "MaximumConsecutiveSkips", 10 } } },
-			{ "FailurePolicy", "continue" },
-			{ "Outputs", { { "SeparateEyes", a_feature.sequenceDefaults.saveSeparateEyes } } },
-			{ "Packaging", { { "PreviewVideo", { { "Requested", a_feature.sequenceDefaults.writePreviewVideo }, { "FramesPerSecond", a_feature.sequenceDefaults.previewFramesPerSecond } } } } },
-		} },
+						  { "Destination", { { "Policy", "settings_default" }, { "Directory", a_feature.frameCapturePath }, { "Overwrite", "never" } } },
+						  { "Encoding", { { "Format", a_feature.frameCaptureUsePng ? "png" : "bmp" }, { "ColourContract", "sdr_srgb" } } },
+						  { "FrameCount", a_feature.sequenceDefaults.frameCount },
+						  { "Schedule", { { "Basis", "game_frames" }, { "IntervalFrames", a_feature.sequenceDefaults.intervalFrames } } },
+						  { "Backpressure", { { "Policy", "skip" }, { "MaximumConsecutiveSkips", 10 } } },
+						  { "FailurePolicy", "continue" },
+						  { "Outputs", { { "SeparateEyes", a_feature.sequenceDefaults.saveSeparateEyes } } },
+						  { "Packaging", { { "PreviewVideo", { { "Requested", a_feature.sequenceDefaults.writePreviewVideo }, { "FramesPerSecond", a_feature.sequenceDefaults.previewFramesPerSecond } } } } },
+					  } },
 	};
 }
 
@@ -733,13 +762,28 @@ ScreenshotApi::json ScreenshotApi::ValidateSettingsPatch(const json& a_patch) co
 	if (!a_patch.is_object())
 		errors.push_back({ { "field", "patch" }, { "code", "wrong_type" }, { "message", "patch must be an object" } });
 	auto checkUInt = [&errors](const json& object, std::string_view key, uint32_t min, uint32_t max, std::string_view path) {
-		if (!object.contains(key)) return;
+		if (!object.contains(key))
+			return;
 		if (!object[key].is_number_unsigned() && !object[key].is_number_integer())
 			errors.push_back({ { "field", path }, { "code", "wrong_type" } });
 		else {
 			const auto value = object[key].get<int64_t>();
 			if (value < min || value > max)
 				errors.push_back({ { "field", path }, { "code", "out_of_range" } });
+		}
+	};
+	auto checkConfiguredDirectory = [&errors](
+										const json& a_destination,
+										std::string_view a_field,
+										bool a_sequence) {
+		if (!a_destination.contains("Directory") || !a_destination["Directory"].is_string())
+			return;
+		try {
+			(void)ResolveConfiguredCaptureDirectory(
+				std::filesystem::u8path(a_destination["Directory"].get<std::string>()),
+				a_sequence);
+		} catch (const std::exception& e) {
+			errors.push_back({ { "field", a_field }, { "code", "unsafe_path" }, { "message", e.what() } });
 		}
 	};
 	if (a_patch.is_object()) {
@@ -751,6 +795,8 @@ ScreenshotApi::json ScreenshotApi::ValidateSettingsPatch(const json& a_patch) co
 			} else {
 				if (destination->contains("Directory") && !(*destination)["Directory"].is_string())
 					errors.push_back({ { "field", "Destination.Directory" }, { "code", "wrong_type" } });
+				else
+					checkConfiguredDirectory(*destination, "Destination.Directory", false);
 				if (destination->contains("Policy") && (!(*destination)["Policy"].is_string() || (*destination)["Policy"] != "settings_default"))
 					errors.push_back({ { "field", "Destination.Policy" }, { "code", "unsupported_value" } });
 				if (destination->contains("Overwrite") && (!(*destination)["Overwrite"].is_string() || (*destination)["Overwrite"] != "never"))
@@ -768,13 +814,27 @@ ScreenshotApi::json ScreenshotApi::ValidateSettingsPatch(const json& a_patch) co
 			}
 		}
 		if (a_patch.contains("Clipboard") && (!a_patch["Clipboard"].is_string() ||
-			(a_patch["Clipboard"] != "none" && a_patch["Clipboard"] != "file_reference")))
+												 (a_patch["Clipboard"] != "none" && a_patch["Clipboard"] != "file_reference")))
 			errors.push_back({ { "field", "Clipboard" }, { "code", "unsupported_value" } });
 		if (const auto seq = a_patch.find("Sequence"); seq != a_patch.end()) {
 			if (!seq->is_object())
 				errors.push_back({ { "field", "Sequence" }, { "code", "wrong_type" } });
 			else {
 				checkUInt(*seq, "FrameCount", 1, kMaximumSequenceFrames, "Sequence.FrameCount");
+				if (const auto destination = seq->find("Destination"); destination != seq->end()) {
+					if (!destination->is_object()) {
+						errors.push_back({ { "field", "Sequence.Destination" }, { "code", "wrong_type" } });
+					} else {
+						if (destination->contains("Directory") && !(*destination)["Directory"].is_string())
+							errors.push_back({ { "field", "Sequence.Destination.Directory" }, { "code", "wrong_type" } });
+						else
+							checkConfiguredDirectory(*destination, "Sequence.Destination.Directory", true);
+						if (destination->contains("Policy") && (!(*destination)["Policy"].is_string() || (*destination)["Policy"] != "settings_default"))
+							errors.push_back({ { "field", "Sequence.Destination.Policy" }, { "code", "unsupported_value" } });
+						if (destination->contains("Overwrite") && (!(*destination)["Overwrite"].is_string() || (*destination)["Overwrite"] != "never"))
+							errors.push_back({ { "field", "Sequence.Destination.Overwrite" }, { "code", "unsupported_value" } });
+					}
+				}
 				if (seq->contains("Schedule")) {
 					if (!(*seq)["Schedule"].is_object())
 						errors.push_back({ { "field", "Sequence.Schedule" }, { "code", "wrong_type" } });
@@ -812,22 +872,29 @@ ScreenshotApi::json ScreenshotApi::ValidateSettingsPatch(const json& a_patch) co
 
 void ScreenshotApi::ApplySettingsPatch(ScreenshotFeature& a_feature, const json& a_patch) const
 {
-	if (a_patch.contains("Enabled")) a_feature.SetEnabled(a_patch["Enabled"].get<bool>());
+	if (a_patch.contains("Enabled"))
+		a_feature.SetEnabled(a_patch["Enabled"].get<bool>());
 	if (a_patch.contains("Destination") && a_patch["Destination"].is_object() && a_patch["Destination"].contains("Directory"))
 		a_feature.screenshotPath = a_patch["Destination"]["Directory"].get<std::string>();
 	if (a_patch.contains("Encoding") && a_patch["Encoding"].is_object() && a_patch["Encoding"].contains("Format"))
 		a_feature.sdrUsePng = a_patch["Encoding"]["Format"].get<std::string>() != "bmp";
-	if (a_patch.contains("Clipboard")) a_feature.copyToClipboard = a_patch["Clipboard"].get<std::string>() == "file_reference";
+	if (a_patch.contains("Clipboard"))
+		a_feature.copyToClipboard = a_patch["Clipboard"].get<std::string>() == "file_reference";
 	if (const auto seq = a_patch.find("Sequence"); seq != a_patch.end() && seq->is_object()) {
-		if (seq->contains("FrameCount")) a_feature.sequenceDefaults.frameCount = (*seq)["FrameCount"].get<uint32_t>();
+		if (seq->contains("Destination") && (*seq)["Destination"].is_object() && (*seq)["Destination"].contains("Directory"))
+			a_feature.frameCapturePath = (*seq)["Destination"]["Directory"].get<std::string>();
+		if (seq->contains("FrameCount"))
+			a_feature.sequenceDefaults.frameCount = (*seq)["FrameCount"].get<uint32_t>();
 		if (seq->contains("Schedule") && (*seq)["Schedule"].is_object() && (*seq)["Schedule"].contains("IntervalFrames"))
 			a_feature.sequenceDefaults.intervalFrames = (*seq)["Schedule"]["IntervalFrames"].get<uint32_t>();
 		if (seq->contains("Outputs") && (*seq)["Outputs"].is_object() && (*seq)["Outputs"].contains("SeparateEyes"))
 			a_feature.sequenceDefaults.saveSeparateEyes = (*seq)["Outputs"]["SeparateEyes"].get<bool>();
 		if (seq->contains("Packaging") && (*seq)["Packaging"].is_object() && (*seq)["Packaging"].contains("PreviewVideo")) {
 			const auto& preview = (*seq)["Packaging"]["PreviewVideo"];
-			if (preview.contains("Requested")) a_feature.sequenceDefaults.writePreviewVideo = preview["Requested"].get<bool>();
-			if (preview.contains("FramesPerSecond")) a_feature.sequenceDefaults.previewFramesPerSecond = preview["FramesPerSecond"].get<uint32_t>();
+			if (preview.contains("Requested"))
+				a_feature.sequenceDefaults.writePreviewVideo = preview["Requested"].get<bool>();
+			if (preview.contains("FramesPerSecond"))
+				a_feature.sequenceDefaults.previewFramesPerSecond = preview["FramesPerSecond"].get<uint32_t>();
 		}
 	}
 }
@@ -843,18 +910,22 @@ ScreenshotApi::json ScreenshotApi::BuildCapabilities(const ScreenshotFeature&) c
 		{ "scheduleBases", { "game_frames", "wall_clock" } },
 		{ "pathPolicies", { "settings_default", "game_relative", "absolute" } },
 		{ "optional", {
-			{ "separateEyeArtifacts", true },
-			{ "clipboardFileReference", true },
-			{ "previewVideo", { { "available", false }, { "encoders", json::array() }, { "runsAfterFrameFinalization", true } } },
-		} },
+						  { "separateEyeArtifacts", true },
+						  { "clipboardFileReference", true },
+						  { "previewVideo", { { "available", false }, { "encoders", json::array() }, { "runsAfterFrameFinalization", true } } },
+					  } },
 		{ "limits", {
-			{ "activeSourceCaptures", 1 }, { "outstandingArtifacts", 2 }, { "pendingOperations", CSX::ScreenshotPolicy::MaximumPendingOperations },
-			{ "maximumOutputsPerFrame", 4 }, { "maximumSequenceFrames", kMaximumSequenceFrames },
-			{ "maximumSequenceDurationMs", CSX::ScreenshotPolicy::MaximumSequenceDurationMs },
-			{ "maximumSequenceSpanFrames", CSX::ScreenshotPolicy::MaximumSequenceSpanFrames },
-			{ "maximumRetainedTerminalRequests", kMaximumRequests }, { "maximumRetainedEvents", kMaximumEvents },
-			{ "retentionSeconds", std::chrono::duration_cast<std::chrono::seconds>(kRetention).count() },
-		} },
+						{ "activeSourceCaptures", 1 },
+						{ "outstandingArtifacts", 2 },
+						{ "pendingOperations", CSX::ScreenshotPolicy::MaximumPendingOperations },
+						{ "maximumOutputsPerFrame", 4 },
+						{ "maximumSequenceFrames", kMaximumSequenceFrames },
+						{ "maximumSequenceDurationMs", CSX::ScreenshotPolicy::MaximumSequenceDurationMs },
+						{ "maximumSequenceSpanFrames", CSX::ScreenshotPolicy::MaximumSequenceSpanFrames },
+						{ "maximumRetainedTerminalRequests", kMaximumRequests },
+						{ "maximumRetainedEvents", kMaximumEvents },
+						{ "retentionSeconds", std::chrono::duration_cast<std::chrono::seconds>(kRetention).count() },
+					} },
 	};
 }
 
@@ -876,18 +947,20 @@ ScreenshotApi::json ScreenshotApi::BuildStatus(const ScreenshotFeature& a_featur
 	std::size_t pending = 0;
 	std::size_t activeSequences = 0;
 	for (const auto& [_, record] : requests)
-		if (!IsTerminal(record.state)) ++pending;
+		if (!IsTerminal(record.state))
+			++pending;
 	for (const auto& [_, sequence] : sequences)
-		if (!sequence.finalizing) ++activeSequences;
+		if (!sequence.finalizing)
+			++activeSequences;
 	journal["retainedRequests"] = requests.size();
 	return {
 		{ "feature", { { "loaded", a_feature.loaded }, { "enabled", a_feature.IsRuntimeEnabled() }, { "settingsSchemaVersion", 2 } } },
 		{ "sourceReadiness", {
-			{ "desktopPresentObserved", globals::state && globals::state->frameCount != 0 },
-			{ "openVrSubmitHookInstalled", globals::game::isVR },
-			{ "lastAcceptedEyeFrame", nullptr },
-			{ "loadingMenuOpen", globals::state && globals::state->isLoadingMenuOpen },
-		} },
+								 { "desktopPresentObserved", globals::state && globals::state->frameCount != 0 },
+								 { "openVrSubmitHookInstalled", globals::game::isVR },
+								 { "lastAcceptedEyeFrame", nullptr },
+								 { "loadingMenuOpen", globals::state && globals::state->isLoadingMenuOpen },
+							 } },
 		{ "dispatcher", { { "activeAcquisitionRequestId", activeRequestId.empty() ? json(nullptr) : json(activeRequestId) }, { "pendingOperations", pending }, { "activeSequences", activeSequences } } },
 		{ "worker", { { "outstandingArtifacts", outstandingArtifacts }, { "capacity", 2 }, { "completedArtifacts", completedArtifacts }, { "failedArtifacts", failedArtifacts } } },
 		{ "journal", std::move(journal) },
@@ -960,12 +1033,21 @@ void ScreenshotApi::TransitionLocked(RequestRecord& a_record, std::string a_stat
 ScreenshotApi::json ScreenshotApi::MakeReceipt(const RequestRecord& a_record) const
 {
 	json receipt = {
-		{ "requestId", a_record.requestId }, { "kind", a_record.kind }, { "state", a_record.state },
-		{ "clientId", a_record.clientId }, { "commandId", a_record.commandId }, { "acceptedUtc", a_record.acceptedUtc },
+		{ "requestId", a_record.requestId },
+		{ "kind", a_record.kind },
+		{ "state", a_record.state },
+		{ "clientId", a_record.clientId },
+		{ "commandId", a_record.commandId },
+		{ "acceptedUtc", a_record.acceptedUtc },
 		{ "terminalUtc", a_record.terminalUtc.empty() ? json(nullptr) : json(a_record.terminalUtc) },
-		{ "requested", a_record.requested }, { "effective", a_record.effective }, { "actual", a_record.actual },
-		{ "artifacts", a_record.artifacts }, { "warnings", a_record.warnings }, { "errors", a_record.errors },
-		{ "error", a_record.error }, { "acknowledged", a_record.acknowledged },
+		{ "requested", a_record.requested },
+		{ "effective", a_record.effective },
+		{ "actual", a_record.actual },
+		{ "artifacts", a_record.artifacts },
+		{ "warnings", a_record.warnings },
+		{ "errors", a_record.errors },
+		{ "error", a_record.error },
+		{ "acknowledged", a_record.acknowledged },
 		{ "artifactProgress", { { "expected", a_record.expectedArtifacts }, { "terminal", a_record.terminalArtifacts }, { "successful", a_record.successfulArtifacts } } },
 	};
 	if (!a_record.parentRequestId.empty()) {
@@ -981,15 +1063,21 @@ ScreenshotApi::json ScreenshotApi::MakeSequenceReceipt(const RequestRecord& a_re
 	if (!a_sequence)
 		return receipt;
 	receipt["counts"] = {
-		{ "requested", a_sequence->frameCount }, { "scheduled", a_sequence->scheduled }, { "acquired", a_sequence->acquired },
-		{ "written", a_sequence->written }, { "dropped", a_sequence->dropped }, { "failed", a_sequence->failed },
-		{ "cancelled", a_sequence->cancelled }, { "inFlight", a_sequence->inFlight },
+		{ "requested", a_sequence->frameCount },
+		{ "scheduled", a_sequence->scheduled },
+		{ "acquired", a_sequence->acquired },
+		{ "written", a_sequence->written },
+		{ "dropped", a_sequence->dropped },
+		{ "failed", a_sequence->failed },
+		{ "cancelled", a_sequence->cancelled },
+		{ "inFlight", a_sequence->inFlight },
 	};
 	receipt["manifest"] = {
 		{ "partialPath", a_sequence->frameManifest ? json(PathUtf8(a_sequence->partialManifestPath)) : json(nullptr) },
 		{ "finalPath", a_sequence->frameManifest &&
-				a_sequence->packaging["frameManifest"].value("state", std::string{}) == "written" ?
-				json(PathUtf8(a_sequence->finalManifestPath)) : json(nullptr) },
+							   a_sequence->packaging["frameManifest"].value("state", std::string{}) == "written" ?
+						   json(PathUtf8(a_sequence->finalManifestPath)) :
+						   json(nullptr) },
 	};
 	receipt["packaging"] = a_sequence->packaging;
 	return receipt;
@@ -1022,7 +1110,7 @@ void ScreenshotApi::TrimLocked()
 			continue;
 		}
 		const bool expired = IsTerminal(found->second.state) && found->second.terminalAt != std::chrono::steady_clock::time_point{} &&
-			now - found->second.terminalAt >= kRetention;
+		                     now - found->second.terminalAt >= kRetention;
 		if (IsTerminal(found->second.state) && (found->second.acknowledged || expired))
 			position = eraseRequest(position);
 		else
@@ -1047,16 +1135,24 @@ std::size_t ScreenshotApi::CountPendingOperationsLocked() const
 	});
 }
 
-void ScreenshotApi::OnSourceWaiting(std::string_view a_requestId)
+void ScreenshotApi::OnSourceWaiting(
+	std::string_view a_requestId,
+	std::string_view a_actualSourceKind)
 {
 	std::lock_guard lock(mutex);
 	if (auto found = requests.find(std::string(a_requestId)); found != requests.end() && !IsTerminal(found->second.state)) {
-		found->second.actual["source"] = found->second.effective.value("source", json::object());
+		auto& actualSource = found->second.actual["source"];
+		if (!actualSource.is_object())
+			actualSource = found->second.effective.value("source", json::object());
+		actualSource["kind"] = a_actualSourceKind;
 		TransitionLocked(found->second, "waiting_source", "source.waiting");
 	}
 }
 
-void ScreenshotApi::OnSourceFallback(std::string_view a_requestId, std::string_view a_reason)
+void ScreenshotApi::OnSourceFallback(
+	std::string_view a_requestId,
+	std::string_view a_reason,
+	std::string_view a_actualSourceKind)
 {
 	std::lock_guard lock(mutex);
 	if (auto found = requests.find(std::string(a_requestId)); found != requests.end()) {
@@ -1064,6 +1160,8 @@ void ScreenshotApi::OnSourceFallback(std::string_view a_requestId, std::string_v
 		found->second.actual["fallbacks"].push_back({ { "reason", a_reason } });
 		found->second.actual["source"]["fallbackApplied"] = true;
 		found->second.actual["source"]["fallbackReason"] = a_reason;
+		if (!a_actualSourceKind.empty())
+			found->second.actual["source"]["kind"] = a_actualSourceKind;
 		AppendEventLocked(found->second, "source.fallback", { { "reason", a_reason } });
 	}
 }
@@ -1161,7 +1259,8 @@ void ScreenshotApi::FinishSequenceChildLocked(RequestRecord& a_child)
 	if (sequenceIt == sequences.end())
 		return;
 	auto& sequence = sequenceIt->second;
-	if (sequence.inFlight > 0) --sequence.inFlight;
+	if (sequence.inFlight > 0)
+		--sequence.inFlight;
 	if (sequence.activeChildRequestId == a_child.requestId)
 		sequence.activeChildRequestId.clear();
 	if (a_child.sourceAcquired)
@@ -1180,12 +1279,18 @@ void ScreenshotApi::FinishSequenceChildLocked(RequestRecord& a_child)
 		++sequence.failed;
 	}
 	sequence.children.push_back({
-		{ "ordinal", a_child.sequenceOrdinal }, { "requestId", a_child.requestId }, { "state", a_child.state },
+		{ "ordinal", a_child.sequenceOrdinal },
+		{ "requestId", a_child.requestId },
+		{ "state", a_child.state },
 		{ "scheduledEngineFrame", a_child.scheduledEngineFrame },
 		{ "scheduledTimestampUs", a_child.scheduledTimestampUs },
-		{ "requested", a_child.requested }, { "effective", a_child.effective }, { "actual", a_child.actual },
-		{ "artifacts", a_child.artifacts }, { "warnings", a_child.warnings },
-		{ "errors", a_child.errors }, { "error", a_child.error },
+		{ "requested", a_child.requested },
+		{ "effective", a_child.effective },
+		{ "actual", a_child.actual },
+		{ "artifacts", a_child.artifacts },
+		{ "warnings", a_child.warnings },
+		{ "errors", a_child.errors },
+		{ "error", a_child.error },
 	});
 	const bool childSucceeded = a_child.state == "completed" || a_child.state == "completed_with_warnings";
 	if ((sequence.failurePolicy == "abort" && !childSucceeded) ||
@@ -1228,7 +1333,7 @@ void ScreenshotApi::FinalizeSequenceLocked(
 	if (parent == requests.end() || IsTerminal(parent->second.state))
 		return;
 	const bool manifestWritten = !a_sequence.frameManifest ||
-		(a_manifestResult && a_manifestResult->success);
+	                             (a_manifestResult && a_manifestResult->success);
 	if (a_sequence.frameManifest) {
 		parent->second.expectedArtifacts = 1;
 		parent->second.terminalArtifacts = 1;
@@ -1257,13 +1362,11 @@ void ScreenshotApi::FinalizeSequenceLocked(
 	else if (a_sequence.failed != 0)
 		terminal = a_sequence.written == 0 ? "failed" : "failed_partial";
 	else if (a_sequence.dropped != 0 || !parent->second.warnings.empty() ||
-		a_sequence.packaging["previewVideo"].value("state", std::string{}) == "unsupported")
+			 a_sequence.packaging["previewVideo"].value("state", std::string{}) == "unsupported")
 		terminal = "completed_with_warnings";
 	else
 		terminal = "completed";
-	TransitionLocked(parent->second, terminal, "request.terminal", {
-		{ "manifestPath", a_sequence.frameManifest && manifestWritten ? json(PathUtf8(a_sequence.finalManifestPath)) : json(nullptr) }
-	});
+	TransitionLocked(parent->second, terminal, "request.terminal", { { "manifestPath", a_sequence.frameManifest && manifestWritten ? json(PathUtf8(a_sequence.finalManifestPath)) : json(nullptr) } });
 }
 
 ScreenshotApi::json ScreenshotApi::BuildSequenceManifestLocked(
@@ -1286,8 +1389,8 @@ ScreenshotApi::json ScreenshotApi::BuildSequenceManifestLocked(
 	else if (a_sequence.failed != 0)
 		terminalOutcome = a_sequence.written == 0 ? "failed" : "failed_partial";
 	else if (a_sequence.dropped != 0 ||
-		(parent != requests.end() && !parent->second.warnings.empty()) ||
-		a_sequence.packaging["previewVideo"].value("state", std::string{}) == "unsupported")
+			 (parent != requests.end() && !parent->second.warnings.empty()) ||
+			 a_sequence.packaging["previewVideo"].value("state", std::string{}) == "unsupported")
 		terminalOutcome = "completed_with_warnings";
 	else
 		terminalOutcome = "completed";
@@ -1299,17 +1402,22 @@ ScreenshotApi::json ScreenshotApi::BuildSequenceManifestLocked(
 	return {
 		{ "contract", { { "name", "csx.screenshot" }, { "major", kContractMajor }, { "minor", kContractMinor }, { "schemaRevision", kSchemaRevision } } },
 		{ "producer", BuildProvenance::GetProducer() },
-		{ "sessionId", service.SessionId() }, { "requestId", a_sequence.requestId }, { "state", a_final ? "final" : "partial" },
+		{ "sessionId", service.SessionId() },
+		{ "requestId", a_sequence.requestId },
+		{ "state", a_final ? "final" : "partial" },
 		{ "terminalOutcome", a_final ? json(terminalOutcome) : json(nullptr) },
 		{ "client", parent != requests.end() ? json({ { "clientId", parent->second.clientId }, { "commandId", parent->second.commandId } }) : json::object() },
 		{ "acceptedUtc", parent != requests.end() ? json(parent->second.acceptedUtc) : json(nullptr) },
 		{ "completedUtc", a_final ? json(updatedUtc) : json(nullptr) },
-		{ "requested", a_sequence.requested }, { "effective", a_sequence.capture },
+		{ "requested", a_sequence.requested },
+		{ "effective", a_sequence.capture },
 		{ "actual", { { "children", a_sequence.children.size() }, { "fallbacksPresent", fallbacksPresent } } },
 		{ "counts", { { "requested", a_sequence.frameCount }, { "scheduled", a_sequence.scheduled }, { "acquired", a_sequence.acquired }, { "written", a_sequence.written }, { "dropped", a_sequence.dropped }, { "failed", a_sequence.failed }, { "cancelled", a_sequence.cancelled }, { "inFlight", a_sequence.inFlight } } },
-		{ "children", a_sequence.children }, { "warnings", parent != requests.end() ? parent->second.warnings : json::array() },
+		{ "children", a_sequence.children },
+		{ "warnings", parent != requests.end() ? parent->second.warnings : json::array() },
 		{ "errors", parent != requests.end() ? parent->second.errors : json::array() },
-		{ "packaging", packaging }, { "updatedUtc", updatedUtc },
+		{ "packaging", packaging },
+		{ "updatedUtc", updatedUtc },
 	};
 }
 
@@ -1361,8 +1469,8 @@ void ScreenshotApi::DrainManifestResultsLocked()
 			if (result.generation != record.finalManifestGeneration)
 				continue;
 			record.packaging["frameManifest"] = result.success ?
-				json({ { "requested", true }, { "state", "written" }, { "path", PathUtf8(result.destination) } }) :
-				json({ { "requested", true }, { "state", "failed" }, { "error", result.error } });
+			                                        json({ { "requested", true }, { "state", "written" }, { "path", PathUtf8(result.destination) } }) :
+			                                        json({ { "requested", true }, { "state", "failed" }, { "error", result.error } });
 			FinalizeSequenceLocked(record, &result);
 		} else if (result.success && result.generation <= record.manifestGeneration) {
 			record.packaging["frameManifest"] = {
@@ -1400,17 +1508,20 @@ std::optional<ScreenshotApi::DueFrame> ScreenshotApi::PrepareDueFrameLocked(uint
 		sequence.nextEngineFrame = a_engineFrame + sequence.intervalFrames;
 		sequence.nextWallClock = now + std::chrono::milliseconds(sequence.intervalMs);
 		json childRequest = {
-			{ "action", "capture" }, { "clientId", "sequence:" + sequence.requestId },
-			{ "commandId", std::format("frame:{}", dueFrame.ordinal) }, { "contractMajor", kContractMajor },
+			{ "action", "capture" },
+			{ "clientId", "sequence:" + sequence.requestId },
+			{ "commandId", std::format("frame:{}", dueFrame.ordinal) },
+			{ "contractMajor", kContractMajor },
 		};
 		auto& child = CreateRequestLocked("sequence_frame", childRequest, dueFrame.capture, sequence.requestId, dueFrame.ordinal, dueFrame.childRequestId);
 		child.scheduledEngineFrame = a_engineFrame;
 		child.scheduledTimestampUs = static_cast<uint64_t>(
 			std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count());
 		AppendEventLocked(child, "sequence.frame_scheduled", {
-			{ "ordinal", dueFrame.ordinal }, { "engineFrame", a_engineFrame },
-			{ "monotonicTimestampUs", child.scheduledTimestampUs },
-		});
+																 { "ordinal", dueFrame.ordinal },
+																 { "engineFrame", a_engineFrame },
+																 { "monotonicTimestampUs", child.scheduledTimestampUs },
+															 });
 		return dueFrame;
 	}
 	return std::nullopt;
@@ -1503,15 +1614,7 @@ std::filesystem::path ScreenshotApi::ResolveDestinationDirectory(
 	std::filesystem::path requested;
 	if (policy == "settings_default") {
 		requested = a_sequence ? a_feature.frameCapturePath : a_feature.screenshotPath;
-		if (requested.empty())
-			throw std::runtime_error("the configured screenshot directory is empty");
-		if (requested.is_relative()) {
-			const auto knownFolder = a_sequence ? Util::GetVideosPath() : Util::GetPicturesPath();
-			if (!knownFolder)
-				throw std::runtime_error("the Windows capture folder is unavailable");
-			requested = *knownFolder / "Community Shaders" / requested;
-		}
-		return std::filesystem::weakly_canonical(requested);
+		return ResolveConfiguredCaptureDirectory(requested, a_sequence);
 	}
 
 	const auto directory = destination.value("directory", std::string{});

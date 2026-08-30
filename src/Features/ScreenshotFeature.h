@@ -4,20 +4,20 @@
 #include "Utils/Subrect.h"
 #include <array>
 #include <atomic>
-#include <condition_variable>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <mutex>
 #include <memory>
+#include <mutex>
+#include <nlohmann/json_fwd.hpp>
 #include <openvr.h>
 #include <queue>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <vector>
-#include <nlohmann/json_fwd.hpp>
 
 class ScreenshotApi;
 
@@ -199,6 +199,7 @@ private:
 		std::string parentRequestId;
 		uint32_t sequenceOrdinal = 0;
 		std::vector<OutputPlan> outputs;
+		bool desktopSource = false;
 	};
 
 	struct ActiveCapture
@@ -245,9 +246,11 @@ private:
 	mutable std::mutex captureStateMutex;
 	ActiveCapture activeCapture;
 	std::shared_ptr<ScreenshotApi> screenshotApi;
-	std::jthread sourceDeadlineWatchdog;
 	std::mutex sourceDeadlineMutex;
 	std::condition_variable_any sourceDeadlineCondition;
+	// Declared last so construction starts it after its synchronization state
+	// and destruction joins it before that state is destroyed.
+	std::jthread sourceDeadlineWatchdog;
 
 	// SRV-readable copy used when the capture source's own SRV can't be sampled
 	// directly (kFRAMEBUFFER on flat aliases the swap-chain backbuffer).

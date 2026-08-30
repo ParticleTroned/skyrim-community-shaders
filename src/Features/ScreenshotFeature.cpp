@@ -6,6 +6,7 @@
 #include "Features/ScreenshotFeature.h"
 #include "Api/ScreenshotService.h"
 #include "Features/ScreenshotApi.h"
+#include "Features/ScreenshotApiPolicy.h"
 #include "Features/VR.h"
 #include "Globals.h"
 #include "Menu.h"
@@ -17,8 +18,8 @@
 #include <DirectXTex.h>
 #include <PCH.h>
 #include <algorithm>
-#include <chrono>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -124,9 +125,9 @@ namespace
 
 		return {
 			{ "source", {
-				{ "kind", vrRuntime && a_feature.vrCaptureSource != ScreenshotFeature::VRCaptureSource::DesktopMirror ? "hmd_submission" : "desktop_mirror" },
-				{ "fallback", "reject" },
-			} },
+							{ "kind", vrRuntime && a_feature.vrCaptureSource != ScreenshotFeature::VRCaptureSource::DesktopMirror ? "hmd_submission" : "desktop_mirror" },
+							{ "fallback", "reject" },
+						} },
 			{ "outputs", std::move(outputs) },
 			{ "destination", { { "policy", "settings_default" }, { "overwrite", "never" } } },
 			{ "clipboard", a_clipboard ? "file_reference" : "none" },
@@ -172,6 +173,13 @@ namespace
 		default:
 			return "the desktop mirror";
 		}
+	}
+
+	const char* ActualSourceKind(ScreenshotFeature::VRCaptureSource a_source)
+	{
+		return a_source == ScreenshotFeature::VRCaptureSource::DesktopMirror ?
+		           "desktop_mirror" :
+		           "hmd_submission";
 	}
 
 	// Capture source for the current runtime. SRV is non-owning - the texture's
@@ -1595,9 +1603,9 @@ namespace
 		                        DirectX::GetWICCodec(DirectX::WIC_CODEC_BMP);
 		const auto wicFlags = saveAsPng ? DirectX::WIC_FLAGS_FORCE_SRGB : DirectX::WIC_FLAGS_NONE;
 		const auto temporaryPath = outputPath.parent_path() /
-			(outputPath.stem().wstring() +
-			 std::format(L".writing-{}-{}", GetCurrentProcessId(), GetTickCount64()) +
-			 outputPath.extension().wstring());
+		                           (outputPath.stem().wstring() +
+									   std::format(L".writing-{}-{}", GetCurrentProcessId(), GetTickCount64()) +
+									   outputPath.extension().wstring());
 		std::error_code ec;
 		std::filesystem::remove(temporaryPath, ec);
 		if (FAILED(DirectX::SaveToWICFile(*saveImage, wicFlags, codec, temporaryPath.c_str())))
@@ -1714,9 +1722,12 @@ namespace
 }
 
 ScreenshotFeature::ScreenshotFeature() :
-	screenshotWorkerState(std::make_shared<ScreenshotWorkerState>()),
-	sourceDeadlineWatchdog([this](std::stop_token token) { SourceDeadlineLoop(token); })
-{}
+	screenshotWorkerState(std::make_shared<ScreenshotWorkerState>())
+{
+	// Start only after every member used by the watchdog has begun lifetime.
+	sourceDeadlineWatchdog = std::jthread(
+		[this](std::stop_token token) { SourceDeadlineLoop(token); });
+}
 
 ScreenshotFeature::~ScreenshotFeature()
 {
@@ -2128,7 +2139,8 @@ void ScreenshotFeature::DrawSettings()
 	if (!uiSequenceRequestId.empty() && now >= nextUiSequencePoll) {
 		nextUiSequencePoll = now + std::chrono::milliseconds(500);
 		const auto response = CSX::Api::DispatchScreenshotServiceRequest({
-			{ "contractMajor", 1 }, { "action", "request_get" },
+			{ "contractMajor", 1 },
+			{ "action", "request_get" },
 			{ "clientId", "csx.menu.sequence" },
 			{ "commandId", std::format("status:{}:{}", GetTickCount64(), sequenceCommand.fetch_add(1, std::memory_order_relaxed)) },
 			{ "requestId", uiSequenceRequestId },
@@ -2145,23 +2157,27 @@ void ScreenshotFeature::DrawSettings()
 		if (ImGui::Button("Start Frame Capture")) {
 			auto capture = BuildCaptureDescriptor(*this, frameCaptureEye, frameCaptureUsePng, false);
 			const auto response = CSX::Api::DispatchScreenshotServiceRequest({
-				{ "contractMajor", 1 }, { "action", "sequence_start" },
+				{ "contractMajor", 1 },
+				{ "action", "sequence_start" },
 				{ "clientId", "csx.menu.sequence" },
 				{ "commandId", std::format("start:{}:{}", GetTickCount64(), sequenceCommand.fetch_add(1, std::memory_order_relaxed)) },
 				{ "sequence", {
-					{ "frameCount", sequenceDefaults.frameCount }, { "useSettings", false },
-					{ "schedule", { { "basis", "game_frames" }, { "intervalFrames", sequenceDefaults.intervalFrames } } },
-					{ "backpressure", { { "policy", "skip" }, { "maximumConsecutiveSkips", 5 } } },
-					{ "failurePolicy", "continue" }, { "capture", std::move(capture) },
-					{ "packaging", { { "frameManifest", true }, { "previewVideo", { { "requested", false } } } } },
-				} },
+								  { "frameCount", sequenceDefaults.frameCount },
+								  { "useSettings", false },
+								  { "schedule", { { "basis", "game_frames" }, { "intervalFrames", sequenceDefaults.intervalFrames } } },
+								  { "backpressure", { { "policy", "skip" }, { "maximumConsecutiveSkips", 5 } } },
+								  { "failurePolicy", "continue" },
+								  { "capture", std::move(capture) },
+								  { "packaging", { { "frameManifest", true }, { "previewVideo", { { "requested", false } } } } },
+							  } },
 			});
 			if (response.value("ok", false) && response.contains("result"))
 				uiSequenceRequestId = response["result"].value("requestId", std::string{});
 		}
 	} else if (ImGui::Button("Stop Frame Capture")) {
 		const auto response = CSX::Api::DispatchScreenshotServiceRequest({
-			{ "contractMajor", 1 }, { "action", "sequence_stop" },
+			{ "contractMajor", 1 },
+			{ "action", "sequence_stop" },
 			{ "clientId", "csx.menu.sequence" },
 			{ "commandId", std::format("stop:{}:{}", GetTickCount64(), sequenceCommand.fetch_add(1, std::memory_order_relaxed)) },
 			{ "requestId", uiSequenceRequestId },
@@ -2353,7 +2369,7 @@ void ScreenshotFeature::FallBackToDesktopCapture(ActiveCapture& a_capture, std::
 {
 	logger::warn("HMD screenshot capture is falling back to the desktop mirror: {}", a_reason);
 	if (!a_capture.options.requestId.empty() && screenshotApi)
-		screenshotApi->OnSourceFallback(a_capture.options.requestId, a_reason);
+		screenshotApi->OnSourceFallback(a_capture.options.requestId, a_reason, "desktop_mirror");
 	a_capture.source = VRCaptureSource::DesktopMirror;
 	a_capture.compositorCycleToken = 0;
 	a_capture.eyeMask = 0;
@@ -2428,9 +2444,11 @@ bool ScreenshotFeature::TryStartApiCapture(
 		baseName = BuildScreenshotPath(options.screenshotPath, true).stem().string();
 		std::string shortRequestId;
 		for (char c : options.requestId) {
-			if (c == '-') continue;
+			if (c == '-')
+				continue;
 			shortRequestId.push_back(c);
-			if (shortRequestId.size() == 8) break;
+			if (shortRequestId.size() == 8)
+				break;
 		}
 		baseName += '_' + shortRequestId;
 	}
@@ -2440,13 +2458,20 @@ bool ScreenshotFeature::TryStartApiCapture(
 	for (const auto& output : outputs) {
 		OutputPlan plan;
 		const auto view = output.value("view", std::string("source_native"));
-		if (view == "left_eye") plan.view = OutputView::LeftEye;
-		else if (view == "right_eye") plan.view = OutputView::RightEye;
-		else if (view == "side_by_side") plan.view = OutputView::SideBySide;
-		else if (view == "framed_left") plan.view = OutputView::FramedLeft;
-		else if (view == "framed_right") plan.view = OutputView::FramedRight;
-		else if (view == "framed_combined") plan.view = OutputView::FramedCombined;
-		else plan.view = OutputView::SourceNative;
+		if (view == "left_eye")
+			plan.view = OutputView::LeftEye;
+		else if (view == "right_eye")
+			plan.view = OutputView::RightEye;
+		else if (view == "side_by_side")
+			plan.view = OutputView::SideBySide;
+		else if (view == "framed_left")
+			plan.view = OutputView::FramedLeft;
+		else if (view == "framed_right")
+			plan.view = OutputView::FramedRight;
+		else if (view == "framed_combined")
+			plan.view = OutputView::FramedCombined;
+		else
+			plan.view = OutputView::SourceNative;
 		requiresBothEyes = requiresBothEyes || plan.view == OutputView::SourceNative ||
 		                   plan.view == OutputView::SideBySide || plan.view == OutputView::FramedCombined;
 		requiresStereoGeometry = requiresStereoGeometry || plan.view == OutputView::FramedCombined;
@@ -2461,7 +2486,7 @@ bool ScreenshotFeature::TryStartApiCapture(
 		plan.copyToClipboard = clipboard;
 		plan.dominantEye = output.value("dominantEye", std::string("left")) == "right" ? vr::Eye_Right : vr::Eye_Left;
 		plan.outputPath = ResolveToAbsoluteGamePath(std::filesystem::u8path(options.screenshotPath)) /
-			(baseName + '_' + output.value("nameSuffix", view) + (plan.saveAsPng ? ".png" : ".bmp"));
+		                  (baseName + '_' + output.value("nameSuffix", view) + (plan.saveAsPng ? ".png" : ".bmp"));
 		options.outputs.push_back(std::move(plan));
 	}
 
@@ -2501,7 +2526,10 @@ bool ScreenshotFeature::TryStartApiCapture(
 		if (activeCapture.source == VRCaptureSource::HMDSubmission && fallback == "desktop_mirror") {
 			activeCapture.source = VRCaptureSource::DesktopMirror;
 			EnsureScreenshotApi();
-			screenshotApi->OnSourceFallback(activeCapture.options.requestId, "loading screen does not provide a coherent HMD submission");
+			screenshotApi->OnSourceFallback(
+				activeCapture.options.requestId,
+				"loading screen does not provide a coherent HMD submission",
+				"desktop_mirror");
 		} else if (IsSubmittedEyeCapture(activeCapture.source)) {
 			ClearActiveCapture(activeCapture);
 			capturePending.store(false, std::memory_order_release);
@@ -2512,7 +2540,9 @@ bool ScreenshotFeature::TryStartApiCapture(
 	capturePending.store(true, std::memory_order_release);
 	sourceDeadlineCondition.notify_all();
 	EnsureScreenshotApi();
-	screenshotApi->OnSourceWaiting(activeCapture.options.requestId);
+	screenshotApi->OnSourceWaiting(
+		activeCapture.options.requestId,
+		ActualSourceKind(activeCapture.source));
 	logger::debug("Screenshot request {} is waiting for {}", activeCapture.options.requestId, DescribeCaptureSource(activeCapture.source));
 	return true;
 }
@@ -2711,7 +2741,16 @@ bool ScreenshotFeature::QueueScreenshot(PendingScreenshot&& screenshot)
 
 	std::lock_guard lifecycleLock(screenshotWorkerLifecycleMutex);
 
-	if (!screenshotWorker.joinable()) {
+	{
+		std::lock_guard queueLock(screenshotWorkerState->mutex);
+		if (!screenshotWorkerState->accepting) {
+			if (screenshotWorkerState->outstandingCount > 0)
+				--screenshotWorkerState->outstandingCount;
+			return false;
+		}
+	}
+
+	if (CSX::ScreenshotPolicy::CanStartWorker(true, screenshotWorker.joinable())) {
 		try {
 			screenshotWorker = std::thread(&ScreenshotFeature::ScreenshotWorkerLoop, screenshotWorkerState);
 		} catch (const std::exception& e) {
@@ -2731,11 +2770,6 @@ bool ScreenshotFeature::QueueScreenshot(PendingScreenshot&& screenshot)
 	const auto queuedPath = screenshot.outputPath;
 	{
 		std::lock_guard queueLock(screenshotWorkerState->mutex);
-		if (!screenshotWorkerState->accepting) {
-			if (screenshotWorkerState->outstandingCount > 0)
-				--screenshotWorkerState->outstandingCount;
-			return false;
-		}
 		try {
 			screenshotWorkerState->queue.push(std::move(screenshot));
 		} catch (const std::exception& e) {
@@ -2913,14 +2947,21 @@ void ScreenshotFeature::ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerSta
 			if (!screenshot.outputs.empty()) {
 				auto outputViewName = [](OutputView view) -> std::string_view {
 					switch (view) {
-					case OutputView::LeftEye: return "left_eye";
-					case OutputView::RightEye: return "right_eye";
-					case OutputView::SideBySide: return "side_by_side";
-					case OutputView::FramedLeft: return "framed_left";
-					case OutputView::FramedRight: return "framed_right";
-					case OutputView::FramedCombined: return "framed_combined";
+					case OutputView::LeftEye:
+						return "left_eye";
+					case OutputView::RightEye:
+						return "right_eye";
+					case OutputView::SideBySide:
+						return "side_by_side";
+					case OutputView::FramedLeft:
+						return "framed_left";
+					case OutputView::FramedRight:
+						return "framed_right";
+					case OutputView::FramedCombined:
+						return "framed_combined";
 					case OutputView::SourceNative:
-					default: return "source_native";
+					default:
+						return "source_native";
 					}
 				};
 				auto getPlane = [&](std::size_t a_eye) -> std::pair<DirectX::ScratchImage*, const DirectX::Image*> {
@@ -2951,6 +2992,9 @@ void ScreenshotFeature::ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerSta
 
 				for (auto& output : screenshot.outputs) {
 					try {
+						const auto requestedView = outputViewName(output.view);
+						if (screenshot.desktopSource && output.view != OutputView::SourceNative)
+							throw std::runtime_error("requested HMD view is unavailable after desktop fallback");
 						DirectX::ScratchImage sideBySide;
 						DirectX::ScratchImage stereoComposite;
 						DirectX::ScratchImage* sourceScratch = nullptr;
@@ -2958,6 +3002,7 @@ void ScreenshotFeature::ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerSta
 						vr::EColorSpace colourSpace = screenshot.planes[0].colorSpace;
 						bool tonemapSceneHdr = screenshot.planes[0].tonemapSceneHdr;
 						bool needsFraming = false;
+						bool dominantEyeFallback = false;
 						switch (output.view) {
 						case OutputView::LeftEye:
 						case OutputView::FramedLeft:
@@ -2986,6 +3031,7 @@ void ScreenshotFeature::ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerSta
 							} else {
 								std::tie(sourceScratch, sourceImage) = getPlane(output.dominantEye == vr::Eye_Right ? 1u : 0u);
 								needsFraming = true;
+								dominantEyeFallback = true;
 								if (screenshotApi)
 									screenshotApi->OnSourceFallback(screenshot.requestId, "framed-combined composition failed; dominant eye used");
 							}
@@ -2999,6 +3045,13 @@ void ScreenshotFeature::ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerSta
 						}
 						if (!sourceScratch || !sourceImage)
 							throw std::runtime_error("failed to compose requested screenshot view");
+						const auto actualView = CSX::ScreenshotPolicy::ResolveActualOutputView(
+							requestedView,
+							screenshot.desktopSource,
+							dominantEyeFallback,
+							output.dominantEye == vr::Eye_Right);
+						if (actualView.empty())
+							throw std::runtime_error("requested output view is incompatible with the resolved source");
 
 						DirectX::ScratchImage cropped;
 						DirectX::ScratchImage* imageToSave = sourceScratch;
@@ -3042,7 +3095,7 @@ void ScreenshotFeature::ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerSta
 								output.outputPath,
 								{},
 								{
-									{ "view", outputViewName(output.view) },
+									{ "view", actualView },
 									{ "width", savedImage ? savedImage->width : 0 },
 									{ "height", savedImage ? savedImage->height : 0 },
 									{ "format", output.saveAsPng ? "png" : "bmp" },
@@ -3487,6 +3540,7 @@ bool ScreenshotFeature::QueueDesktopCapture(
 		}
 
 		screenshot.planeCount = 1;
+		screenshot.desktopSource = true;
 		screenshot.cropUV = a_options.cropUV;
 		screenshot.applyCrop = false;
 		screenshot.saveAsPng = a_options.saveAsPng;
@@ -3497,9 +3551,9 @@ bool ScreenshotFeature::QueueDesktopCapture(
 		screenshot.sequenceOrdinal = a_options.sequenceOrdinal;
 		screenshot.outputs = a_options.outputs;
 		screenshot.outputPath = !screenshot.outputs.empty() ? screenshot.outputs.front().outputPath :
-		                        (a_options.explicitOutputPath.empty() ?
-							 BuildScreenshotPath(a_options.screenshotPath, screenshot.saveAsPng) :
-							 a_options.explicitOutputPath);
+		                                                      (a_options.explicitOutputPath.empty() ?
+																	  BuildScreenshotPath(a_options.screenshotPath, screenshot.saveAsPng) :
+																	  a_options.explicitOutputPath);
 		logger::debug("Capturing from {}", sourceDescription);
 		ownsQueueSlot = false;
 		return QueueScreenshot(std::move(screenshot));
@@ -3624,16 +3678,17 @@ void ScreenshotFeature::ObserveAcceptedVRSubmit(
 			completedScreenshot.outputPath = !completedScreenshot.outputs.empty() ?
 			                                     completedScreenshot.outputs.front().outputPath :
 			                                     (activeCapture.options.explicitOutputPath.empty() ?
-			                                     BuildScreenshotPath(
-										 activeCapture.options.screenshotPath,
-										 completedScreenshot.saveAsPng) :
-			                                     activeCapture.options.explicitOutputPath);
+														 BuildScreenshotPath(
+															 activeCapture.options.screenshotPath,
+															 completedScreenshot.saveAsPng) :
+														 activeCapture.options.explicitOutputPath);
 		} catch (const std::exception& e) {
 			logger::error("Failed to prepare the VR screenshot output path: {}", e.what());
 			const auto failedRequestId = activeCapture.options.requestId;
 			ClearActiveCapture(activeCapture);
 			capturePending.store(false, std::memory_order_release);
-			if (screenshotApi) screenshotApi->OnSourceTerminal(failedRequestId, "failed", "unsafe_output_path");
+			if (screenshotApi)
+				screenshotApi->OnSourceTerminal(failedRequestId, "failed", "unsafe_output_path");
 			ShowInGameNotification("Screenshot failed - see CommunityShaders.log");
 			return;
 		} catch (...) {
@@ -3641,7 +3696,8 @@ void ScreenshotFeature::ObserveAcceptedVRSubmit(
 			const auto failedRequestId = activeCapture.options.requestId;
 			ClearActiveCapture(activeCapture);
 			capturePending.store(false, std::memory_order_release);
-			if (screenshotApi) screenshotApi->OnSourceTerminal(failedRequestId, "failed", "unsafe_output_path");
+			if (screenshotApi)
+				screenshotApi->OnSourceTerminal(failedRequestId, "failed", "unsafe_output_path");
 			ShowInGameNotification("Screenshot failed - see CommunityShaders.log");
 			return;
 		}

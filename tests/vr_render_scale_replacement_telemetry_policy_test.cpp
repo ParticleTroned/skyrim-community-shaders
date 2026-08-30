@@ -27,7 +27,13 @@ namespace
 			.publicationGeneration = a_exactReplacement ? 101u : 100u,
 			.resourceRevision = a_exactReplacement ? 41u : 40u,
 			.deviceIdentity = 0x1234,
+			.renderWidth = a_exactReplacement ? 120u : 100u,
+			.renderHeight = a_exactReplacement ? 120u : 100u,
+			.displayWidth = 200,
+			.displayHeight = 200,
 			.method = 3,
+			.qualityMode = a_exactReplacement ? 4u : 3u,
+			.renderScaleMode = true,
 			.backend = 1,
 			.disposition = a_disposition,
 			.submitted = true,
@@ -146,6 +152,8 @@ namespace
 			.ownerActive = true,
 			.auditActive = true,
 			.stressSessionMatches = true,
+			.qualificationTransitionID = 12,
+			.ownershipToken = 13,
 			.dispatchTick = 100,
 			.boundaryTick = 101,
 			.dispatchTransitionEpoch = 8,
@@ -161,6 +169,14 @@ namespace
 			return false;
 		auto stale = facts;
 		stale.stressSessionMatches = false;
+		if (OwnsMutationBoundary(stale))
+			return false;
+		stale = facts;
+		stale.qualificationTransitionID = 0;
+		if (OwnsMutationBoundary(stale))
+			return false;
+		stale = facts;
+		stale.ownershipToken = 0;
 		if (OwnsMutationBoundary(stale))
 			return false;
 		stale = facts;
@@ -215,6 +231,18 @@ namespace
 		       PresentationProofKind::None;
 	}
 
+	constexpr bool CoversTargetProofKindRequirements()
+	{
+		return IsExactTargetProofKind(
+				   PresentationProofKind::ExactNativePresentation, false) &&
+		       !IsExactTargetProofKind(
+				   PresentationProofKind::ExactVendorEvaluation, false) &&
+		       IsExactTargetProofKind(
+				   PresentationProofKind::ExactVendorEvaluation, true) &&
+		       !IsExactTargetProofKind(
+				   PresentationProofKind::ExactNativePresentation, true);
+	}
+
 	constexpr bool CoversPartialAndCompleteCycles()
 	{
 		auto state = StartedAudit();
@@ -230,6 +258,63 @@ namespace
 		       state.counters.eyeObservations == 2 &&
 		       CountIncompleteStereoCycles(state) == 0 &&
 		       state.counters.completeStereoCyclesBeforeMutation == 1 &&
+		       state.counters.exactPreviousGenerationCycles == 1;
+	}
+
+	constexpr bool CoversExactBoundaryClassification()
+	{
+		const MutationBoundaryTimestamp boundary{
+			.valid = true,
+			.frame = 20,
+			.qpcTick = 101,
+		};
+		return !IsAtOrAfterMutationBoundary(19, 102, boundary) &&
+		       !IsAtOrAfterMutationBoundary(20, 100, boundary) &&
+		       IsAtOrAfterMutationBoundary(20, 101, boundary) &&
+		       IsAtOrAfterMutationBoundary(21, 102, boundary) &&
+		       !IsAtOrAfterMutationBoundary(21, 102, {});
+	}
+
+	constexpr bool CoversBoundarySpanningStereo()
+	{
+		auto state = StartedAudit();
+		CompleteCycle completed{};
+		auto left = Eye(
+			0, 13, PresentationDisposition::ExactVendor, true, true, false);
+		auto right = Eye(
+			1, 13, PresentationDisposition::ExactVendor, false, false, true);
+		left.qpcTick = 100;
+		right.qpcTick = 102;
+		(void)ObserveEye(state, 3, 5, left, completed);
+		(void)ObserveEye(state, 3, 5, right, completed);
+		return completed.boundarySpanning && !completed.beforeMutation &&
+		       !completed.afterMutation && !completed.coherent &&
+		       completed.leftQpcTick == 100 &&
+		       completed.rightQpcTick == 102 &&
+		       state.counters.boundarySpanningStereoCycles == 1 &&
+		       state.counters.completeStereoCyclesAfterMutation == 0 &&
+		       state.counters.postMutationUnprovenStereoSubmitted == 1 &&
+		       state.counters.postMutationOldGenerationPresented == 0;
+	}
+
+	constexpr bool CoversOutOfOrderPreBoundaryEye()
+	{
+		auto state = StartedAudit();
+		CompleteCycle completed{};
+		(void)ObserveEye(
+			state, 3, 5,
+			Eye(0, 30, PresentationDisposition::ExactVendor, false, false, true),
+			completed);
+		(void)ObserveEye(
+			state, 3, 5,
+			Eye(0, 31, PresentationDisposition::ExactVendor, true, true, false),
+			completed);
+		(void)ObserveEye(
+			state, 3, 5,
+			Eye(1, 31, PresentationDisposition::ExactVendor, true, true, false),
+			completed);
+		return completed.beforeMutation && !completed.afterMutation &&
+		       completed.exactCurrent &&
 		       state.counters.exactPreviousGenerationCycles == 1;
 	}
 
@@ -259,6 +344,19 @@ namespace
 		       state.counters.firstPostMutationOldGenerationPresented.valid;
 	}
 
+	constexpr bool CoversStretchAfterMutation()
+	{
+		auto state = StartedAudit();
+		CompleteCycle completed{};
+		(void)ObserveEye(state, 3, 5,
+			Eye(0, 17, PresentationDisposition::PresentationStretch, false, false, false), completed);
+		(void)ObserveEye(state, 3, 5,
+			Eye(1, 17, PresentationDisposition::PresentationStretch, false, false, false), completed);
+		return completed.afterMutation &&
+		       state.counters.postMutationUnprovenStereoSubmitted == 1 &&
+		       state.counters.firstPostMutationUnprovenStereoSubmitted.valid;
+	}
+
 	constexpr bool CoversPreMutationViolations()
 	{
 		auto state = StartedAudit();
@@ -279,6 +377,10 @@ namespace
 			Eye(0, 20, PresentationDisposition::ExactVendor, false, false, true), completed);
 		(void)ObserveEye(state, 3, 5,
 			Eye(1, 20, PresentationDisposition::ExactVendor, false, false, true), completed);
+		(void)ObserveEye(state, 3, 5,
+			Eye(0, 21, PresentationDisposition::ExactVendor, false, false, true), completed);
+		(void)ObserveEye(state, 3, 5,
+			Eye(1, 21, PresentationDisposition::ExactVendor, false, false, true), completed);
 		return state.counters.firstExactNewGenerationCycles == 1 &&
 		       state.counters.postMutationUnprovenStereoSubmitted == 0;
 	}
@@ -312,9 +414,14 @@ namespace
 	static_assert(CoversAdmissions());
 	static_assert(CoversMutationBoundaryOwnership());
 	static_assert(CoversProofKinds());
+	static_assert(CoversTargetProofKindRequirements());
 	static_assert(CoversPartialAndCompleteCycles());
+	static_assert(CoversExactBoundaryClassification());
+	static_assert(CoversBoundarySpanningStereo());
+	static_assert(CoversOutOfOrderPreBoundaryEye());
 	static_assert(CoversMixedSubmittedViolation());
 	static_assert(CoversOldGenerationAfterMutation());
+	static_assert(CoversStretchAfterMutation());
 	static_assert(CoversPreMutationViolations());
 	static_assert(CoversNewGenerationProof());
 	static_assert(CoversStaleOwnership());

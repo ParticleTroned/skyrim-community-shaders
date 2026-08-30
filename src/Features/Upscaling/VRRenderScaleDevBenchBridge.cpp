@@ -334,22 +334,20 @@ namespace
 		}
 	}
 
-	bool VendorLifecycleMutationStarted(
-		const Upscaling::VRVendorRuntimeLifecycleSnapshot& a_lifecycle,
-		uint64_t a_transitionEpoch)
+	struct OwnedMutationBoundary
 	{
-		using Phase = Upscaling::VRVendorRuntimeLifecyclePhase;
-		if (a_transitionEpoch == 0 ||
-			a_lifecycle.transitionEpoch != a_transitionEpoch) {
-			return false;
-		}
-		return a_lifecycle.phase == Phase::Dirty ||
-		       a_lifecycle.phase == Phase::WaitingForDrain ||
-		       a_lifecycle.phase == Phase::Destroying ||
-		       a_lifecycle.phase == Phase::Creating ||
-		       a_lifecycle.phase == Phase::Inactive ||
-		       a_lifecycle.phase == Phase::Failed;
-	}
+		bool valid = false;
+		uint64_t stressSessionID = 0;
+		uint64_t transitionID = 0;
+		uint64_t ownershipToken = 0;
+		uint64_t requestID = 0;
+		uint64_t transitionEpoch = 0;
+		uint32_t contractGeneration = 0;
+		uintptr_t deviceIdentity = 0;
+		uint32_t frame = 0;
+		uint64_t tick = 0;
+		std::string source;
+	};
 
 	ReplacementTelemetry::PresentationDisposition ToAuditDisposition(
 		Upscaling::VRRenderScalePresentationPath a_path);
@@ -357,6 +355,7 @@ namespace
 	json ReplacementPresentationEvidenceJson(
 		Upscaling& a_upscaling,
 		const Upscaling::VRRenderScaleTransitionSnapshot& a_controller,
+		const OwnedMutationBoundary& a_boundary,
 		uint64_t a_physicalMutationEpoch,
 		uint64_t a_physicalSerializationEpoch,
 		uint64_t a_tick,
@@ -376,6 +375,12 @@ namespace
 		const uint64_t replacementRequestID = replacement ? replacement->requestID : 0;
 		const uint64_t replacementTransitionEpoch =
 			replacement ? replacement->transitionEpoch : a_controller.targetEpoch;
+		const uint32_t replacementContractGeneration =
+			replacement ? replacement->contractGeneration : 0;
+		const uint64_t replacementDeviceIdentity = replacement ?
+		                                               static_cast<uint64_t>(
+														   reinterpret_cast<uintptr_t>(globals::d3d::device)) :
+		                                               0;
 		const auto admission =
 			a_upscaling.GetVRRenderScalePreparationAdmissionSnapshot(
 				replacementRequestID,
@@ -469,13 +474,6 @@ namespace
 			left.method == Upscaling::UpscaleMethod::kFSR ?
 				a_controller.fsrLifecycle.runtimeGeneration :
 				0;
-		const bool providerLifecycleMutation =
-			VendorLifecycleMutationStarted(
-				a_controller.dlssLifecycle,
-				replacementTransitionEpoch) ||
-			VendorLifecycleMutationStarted(
-				a_controller.fsrLifecycle,
-				replacementTransitionEpoch);
 		const bool creatorEntered =
 			a_physicalMutationEpoch != 0 ||
 			a_physicalSerializationEpoch != 0 ||
@@ -487,8 +485,16 @@ namespace
 				Upscaling::VRRenderScalePhysicalPhase::Reconciled ||
 			a_controller.physicalPhase ==
 				Upscaling::VRRenderScalePhysicalPhase::ContractPublished;
+		const uint32_t presentationFrame = left.valid ? left.frame : a_frame;
 		const bool physicalMutationStarted =
-			providerLifecycleMutation || creatorEntered;
+			ReplacementTelemetry::IsAtOrAfterMutationBoundary(
+				presentationFrame,
+				a_tick,
+				{
+					.valid = a_boundary.valid,
+					.frame = a_boundary.frame,
+					.qpcTick = a_boundary.tick,
+				});
 		ReplacementTelemetry::MutationAdmissionFacts mutationFacts{
 			.hasReplacement = replacement != nullptr,
 			.superseded = a_controller.metrics.current.valid &&
@@ -586,14 +592,19 @@ namespace
 			left.valid || right.valid ?
 				"mixed" :
 				"none";
-		const auto eyeJson = [](const Upscaling::VRRenderScalePresentationEyeSnapshot& a_eye) {
+		const auto eyeJson = [a_tick](const Upscaling::VRRenderScalePresentationEyeSnapshot& a_eye) {
 			return json{
 				{ "valid", a_eye.valid },
 				{ "path", Upscaling::GetVRRenderScalePresentationPathName(a_eye.path) },
 				{ "frame", a_eye.frame },
+				{ "qpcTick", a_tick },
 				{ "generation", a_eye.contractGeneration },
 				{ "deviceIdentity", static_cast<uint64_t>(a_eye.deviceIdentity) },
 				{ "resourceRevision", a_eye.resourceRevision },
+				{ "renderWidth", a_eye.inputWidth },
+				{ "renderHeight", a_eye.inputHeight },
+				{ "displayWidth", a_eye.outputWidth },
+				{ "displayHeight", a_eye.outputHeight },
 				{ "compositorCycleToken", a_eye.compositorCycleToken },
 				{ "transitionEpoch", a_eye.transitionEpoch },
 				{ "method", GetUpscaleMethodName(a_eye.method) },
@@ -613,6 +624,13 @@ namespace
 			{ "methodValue", currentPresentationProven ?
 								 json(static_cast<uint32_t>(left.method)) :
 								 json(nullptr) },
+			{ "qualityMode", currentPresentationProven && currentProfile.valid ?
+								 json(currentProfile.qualityMode) :
+								 json(nullptr) },
+			{ "renderScaleMode", currentPresentationProven ?
+									 json(currentProfile.valid &&
+										  currentProfile.renderScaleModeEnabled) :
+									 json(nullptr) },
 			{ "backend", currentPresentationProven ?
 							 json(GetBackendName(left.vendorBackend)) :
 							 json(nullptr) },
@@ -660,7 +678,7 @@ namespace
 		};
 
 		return {
-			{ "schemaRevision", 11 },
+			{ "schemaRevision", 12 },
 			{ "observationFrame", a_frame },
 			{ "presentationProof", presentationProof },
 			{ "currentPresentationProven", currentPresentationProven },
@@ -676,6 +694,8 @@ namespace
 				currentPresentationProven ? json(providerResourceGeneration) : json(nullptr) },
 			{ "replacementRequestId", replacementRequestID },
 			{ "replacementTransitionEpoch", replacementTransitionEpoch },
+			{ "replacementContractGeneration", replacementContractGeneration },
+			{ "replacementDeviceIdentity", replacementDeviceIdentity },
 			{ "replacementAdmissionObserved", admission.observed },
 			{ "preparationAdmission", {
 										  { "status", ReplacementTelemetry::GetPreparationAdmissionName(
@@ -704,8 +724,7 @@ namespace
 			{ "mutationExpectation", ReplacementTelemetry::GetMutationExpectationName(mutationExpectation) },
 			{ "mutationExpectationReason", mutationExpectationReason },
 			{ "physicalMutationStarted", physicalMutationStarted },
-			{ "physicalMutationSource", providerLifecycleMutation ? "provider_lifecycle" : creatorEntered ? "engine_target_creator" :
-																											"none" },
+			{ "physicalMutationSource", physicalMutationStarted ? json(a_boundary.source) : json("none") },
 			{ "physicalMutationEpoch", a_physicalMutationEpoch },
 			{ "physicalSerializationEpoch", a_physicalSerializationEpoch },
 			{ "engineTargetCreatorEntered", creatorEntered },
@@ -1779,6 +1798,12 @@ namespace
 		json firstPhysicalMutationEvidence = nullptr;
 		json firstPostMutationEvidence = nullptr;
 		json firstNewGenerationProvenEvidence = nullptr;
+		json mutationNotRequiredTerminalProofEvidence = nullptr;
+		std::optional<QualificationTarget> expectedTarget;
+		uint64_t expectedReplacementRequestID = 0;
+		uint64_t expectedReplacementTransitionEpoch = 0;
+		uint32_t expectedReplacementContractGeneration = 0;
+		uintptr_t expectedReplacementDeviceIdentity = 0;
 		ReplacementTelemetry::MutationExpectation mutationExpectation =
 			ReplacementTelemetry::MutationExpectation::Unknown;
 		std::string mutationExpectationReason = "replacement_not_observed";
@@ -1897,6 +1922,57 @@ namespace
 		return store;
 	}
 
+	OwnedMutationBoundary ReadOwnedMutationBoundary(
+		uint64_t a_transitionID,
+		uint64_t a_ownershipToken)
+	{
+		OwnedMutationBoundary boundary{};
+		auto& store = GetQualificationStore();
+		std::lock_guard lock(store.mutex);
+		if (!store.active ||
+			!QualificationPolicy::OwnsTransitionInstance(
+				store.active->transitionID,
+				store.active->ownershipToken,
+				a_transitionID,
+				a_ownershipToken) ||
+			!store.active->firstPhysicalMutationEvidence.is_object()) {
+			return boundary;
+		}
+
+		const auto& evidence = store.active->firstPhysicalMutationEvidence;
+		boundary.stressSessionID =
+			OptionalNonNegativeIntegerOrZero(evidence, "stressSessionId");
+		boundary.transitionID =
+			OptionalNonNegativeIntegerOrZero(evidence, "qualificationTransitionId");
+		boundary.ownershipToken =
+			OptionalNonNegativeIntegerOrZero(evidence, "ownershipToken");
+		boundary.requestID =
+			OptionalNonNegativeIntegerOrZero(evidence, "replacementRequestId");
+		boundary.transitionEpoch =
+			OptionalNonNegativeIntegerOrZero(evidence, "replacementTransitionEpoch");
+		boundary.contractGeneration = static_cast<uint32_t>(
+			OptionalNonNegativeIntegerOrZero(
+				evidence, "replacementContractGeneration"));
+		boundary.deviceIdentity = static_cast<uintptr_t>(
+			OptionalNonNegativeIntegerOrZero(evidence, "replacementDeviceIdentity"));
+		boundary.frame = static_cast<uint32_t>(
+			OptionalNonNegativeIntegerOrZero(evidence, "frame"));
+		boundary.tick = OptionalNonNegativeIntegerOrZero(evidence, "tick");
+		boundary.source = evidence.value("physicalMutationSource", std::string{});
+		boundary.valid = boundary.stressSessionID != 0 &&
+		                 boundary.stressSessionID ==
+		                     store.active->baseline.stressSessionID &&
+		                 boundary.transitionID == a_transitionID &&
+		                 boundary.ownershipToken == a_ownershipToken &&
+		                 boundary.requestID != 0 &&
+		                 boundary.transitionEpoch != 0 &&
+		                 boundary.contractGeneration != 0 &&
+		                 boundary.deviceIdentity != 0 &&
+		                 boundary.frame != 0 && boundary.tick != 0 &&
+		                 !boundary.source.empty();
+		return boundary;
+	}
+
 	uint64_t AllocateQualificationOwnershipTokenLocked(
 		QualificationStore& a_store) noexcept
 	{
@@ -1954,6 +2030,10 @@ namespace
 		return {
 			{ "frame", a_cycle.frame },
 			{ "qpcTick", a_cycle.qpcTick },
+			{ "leftFrame", a_cycle.leftFrame },
+			{ "leftQpcTick", a_cycle.leftQpcTick },
+			{ "rightFrame", a_cycle.rightFrame },
+			{ "rightQpcTick", a_cycle.rightQpcTick },
 			{ "compositorCycleToken", a_cycle.compositorCycleToken },
 			{ "requestId", a_cycle.requestID },
 			{ "transitionEpoch", a_cycle.transitionEpoch },
@@ -1962,13 +2042,21 @@ namespace
 			{ "resourcePublicationGeneration", a_cycle.publicationGeneration },
 			{ "resourceRevision", a_cycle.resourceRevision },
 			{ "deviceIdentity", static_cast<uint64_t>(a_cycle.deviceIdentity) },
+			{ "renderWidth", a_cycle.renderWidth },
+			{ "renderHeight", a_cycle.renderHeight },
+			{ "displayWidth", a_cycle.displayWidth },
+			{ "displayHeight", a_cycle.displayHeight },
 			{ "methodValue", a_cycle.method },
+			{ "qualityMode", a_cycle.qualityMode },
+			{ "renderScaleMode", a_cycle.renderScaleMode },
 			{ "backendValue", a_cycle.backend },
 			{ "disposition", ReplacementTelemetry::GetDispositionName(
 								 a_cycle.disposition) },
 			{ "submitted", a_cycle.submitted },
 			{ "coherent", a_cycle.coherent },
 			{ "beforeMutation", a_cycle.beforeMutation },
+			{ "afterMutation", a_cycle.afterMutation },
+			{ "boundarySpanning", a_cycle.boundarySpanning },
 			{ "exactCurrent", a_cycle.exactCurrent },
 			{ "exactReplacement", a_cycle.exactReplacement },
 			{ "blockedPreMutation", a_cycle.blockedPreMutation },
@@ -2016,6 +2104,7 @@ namespace
 			{ "blackKeepaliveCyclesBeforeMutation", counters.blackKeepaliveCyclesBeforeMutation },
 			{ "quarantineCyclesBeforeMutation", counters.quarantineCyclesBeforeMutation },
 			{ "completeStereoCyclesAfterMutation", counters.completeStereoCyclesAfterMutation },
+			{ "boundarySpanningStereoCycles", counters.boundarySpanningStereoCycles },
 			{ "oldGenerationEvaluationsAfterMutation", counters.oldGenerationEvaluationsAfterMutation },
 			{ "oldGenerationCompletedOutputReuseAfterMutation", counters.oldGenerationCompletedOutputReuseAfterMutation },
 			{ "mixedOrUnprovenStereoPairsSubmitted", counters.mixedOrUnprovenStereoPairsSubmitted },
@@ -2972,6 +3061,8 @@ namespace
 					{ "firstPostMutation", store.active->firstPostMutationEvidence },
 					{ "firstNewGenerationProven",
 						store.active->firstNewGenerationProvenEvidence },
+					{ "mutationNotRequiredTerminalProof",
+						store.active->mutationNotRequiredTerminalProofEvidence },
 					{ "mutationExpectation",
 						ReplacementTelemetry::GetMutationExpectationName(
 							store.active->mutationExpectation) },
@@ -3088,6 +3179,81 @@ namespace
 		}
 	}
 
+	bool HasExactTargetCorrelatedPresentationProof(
+		const json& a_evidence,
+		const QualificationTransition& a_transition)
+	{
+		if (!a_transition.expectedTarget)
+			return false;
+		const auto& target = *a_transition.expectedTarget;
+		if (!a_evidence.is_object() ||
+			!a_evidence.contains("presentationProof") ||
+			!a_evidence["presentationProof"].is_object()) {
+			return false;
+		}
+		const auto& proof = a_evidence["presentationProof"];
+		const bool vendorTarget =
+			target.method == QualificationPolicy::Method::DLSS ||
+			target.method == QualificationPolicy::Method::FSR;
+		const auto proofKind =
+			proof.value("kind", std::string{}) == "exact_vendor_evaluation" ?
+				ReplacementTelemetry::PresentationProofKind::ExactVendorEvaluation :
+			proof.value("kind", std::string{}) == "exact_native_presentation" ?
+				ReplacementTelemetry::PresentationProofKind::ExactNativePresentation :
+				ReplacementTelemetry::PresentationProofKind::None;
+		if (!proof.value("proven", false) ||
+			!ReplacementTelemetry::IsExactTargetProofKind(
+				proofKind, vendorTarget) ||
+			proof.value("method", std::string{}) !=
+				GetQualificationMethodName(target.method) ||
+			OptionalNonNegativeIntegerOrZero(proof, "qualityMode") !=
+				target.qualityMode ||
+			!proof.contains("renderScaleMode") ||
+			!proof["renderScaleMode"].is_boolean() ||
+			proof["renderScaleMode"].get<bool>() != target.renderScaleMode) {
+			return false;
+		}
+
+		const uint64_t requestID =
+			OptionalNonNegativeIntegerOrZero(proof, "requestId");
+		const uint64_t transitionEpoch =
+			OptionalNonNegativeIntegerOrZero(proof, "transitionEpoch");
+		const uint64_t contractGeneration =
+			OptionalNonNegativeIntegerOrZero(proof, "contractGeneration");
+		const uint64_t publicationGeneration =
+			OptionalNonNegativeIntegerOrZero(
+				proof, "resourcePublicationGeneration");
+		const uint64_t resourceRevision =
+			OptionalNonNegativeIntegerOrZero(proof, "resourceRevision");
+		const uint64_t deviceIdentity =
+			OptionalNonNegativeIntegerOrZero(proof, "deviceIdentity");
+		const uint64_t renderWidth =
+			OptionalNonNegativeIntegerOrZero(proof, "renderWidth");
+		const uint64_t renderHeight =
+			OptionalNonNegativeIntegerOrZero(proof, "renderHeight");
+		const uint64_t displayWidth =
+			OptionalNonNegativeIntegerOrZero(proof, "displayWidth");
+		const uint64_t displayHeight =
+			OptionalNonNegativeIntegerOrZero(proof, "displayHeight");
+		if (requestID == 0 ||
+			requestID != a_transition.expectedReplacementRequestID ||
+			transitionEpoch == 0 ||
+			transitionEpoch != a_transition.expectedReplacementTransitionEpoch ||
+			contractGeneration == 0 ||
+			contractGeneration !=
+				a_transition.expectedReplacementContractGeneration ||
+			publicationGeneration == 0 ||
+			resourceRevision == 0 || deviceIdentity == 0 ||
+			deviceIdentity != a_transition.expectedReplacementDeviceIdentity ||
+			renderWidth == 0 || renderHeight == 0 || displayWidth == 0 ||
+			displayHeight == 0) {
+			return false;
+		}
+		return target.renderScaleMode ?
+		           renderWidth < displayWidth && renderHeight < displayHeight :
+		           renderWidth == displayWidth && renderHeight == displayHeight;
+	}
+
 	void RecordQualificationReplacementTimeline(
 		QualificationTransition& a_transition,
 		const json& a_observation)
@@ -3107,6 +3273,30 @@ namespace
 			OptionalNonNegativeIntegerOrZero(evidence, "replacementTransitionEpoch") != 0;
 
 		const auto record = [&](QualificationTransition& a_value) {
+			const uint64_t replacementRequestID =
+				OptionalNonNegativeIntegerOrZero(
+					evidence, "replacementRequestId");
+			const uint64_t replacementTransitionEpoch =
+				OptionalNonNegativeIntegerOrZero(
+					evidence, "replacementTransitionEpoch");
+			const uint32_t replacementContractGeneration =
+				static_cast<uint32_t>(OptionalNonNegativeIntegerOrZero(
+					evidence, "replacementContractGeneration"));
+			const uintptr_t replacementDeviceIdentity =
+				static_cast<uintptr_t>(OptionalNonNegativeIntegerOrZero(
+					evidence, "replacementDeviceIdentity"));
+			if (a_value.expectedReplacementRequestID == 0 &&
+				replacementRequestID != 0 && replacementTransitionEpoch != 0 &&
+				replacementContractGeneration != 0 &&
+				replacementDeviceIdentity != 0) {
+				a_value.expectedReplacementRequestID = replacementRequestID;
+				a_value.expectedReplacementTransitionEpoch =
+					replacementTransitionEpoch;
+				a_value.expectedReplacementContractGeneration =
+					replacementContractGeneration;
+				a_value.expectedReplacementDeviceIdentity =
+					replacementDeviceIdentity;
+			}
 			const bool firstMutationRecorded =
 				!a_value.firstPhysicalMutationEvidence.is_null();
 			if (ReplacementTelemetry::ShouldUpdateLastPreMutation(
@@ -3118,15 +3308,16 @@ namespace
 					a_value.blockedPreMutationEvidence.is_null()) {
 					a_value.blockedPreMutationEvidence = evidence;
 				}
-			} else if (mutationStarted &&
-					   a_value.firstPhysicalMutationEvidence.is_null()) {
-				a_value.firstPhysicalMutationEvidence = evidence;
 			}
 			if (!a_value.firstPhysicalMutationEvidence.is_null() &&
 				a_value.firstPostMutationEvidence.is_null() &&
-				OptionalNonNegativeIntegerOrZero(evidence, "tick") >
+				mutationStarted &&
+				OptionalNonNegativeIntegerOrZero(evidence, "tick") >=
 					OptionalNonNegativeIntegerOrZero(
-						a_value.firstPhysicalMutationEvidence, "tick")) {
+						a_value.firstPhysicalMutationEvidence, "tick") &&
+				OptionalNonNegativeIntegerOrZero(evidence, "frame") >=
+					OptionalNonNegativeIntegerOrZero(
+						a_value.firstPhysicalMutationEvidence, "frame")) {
 				a_value.firstPostMutationEvidence = evidence;
 			}
 			if (evidence.contains("mutationExpectation") &&
@@ -3157,16 +3348,6 @@ namespace
 				a_value.dispatchPresentationEvidence.is_object() ?
 					a_value.dispatchPresentationEvidence.find("presentationProof") :
 					a_value.dispatchPresentationEvidence.end();
-			const uint64_t dispatchGeneration =
-				dispatchProof != a_value.dispatchPresentationEvidence.end() &&
-						dispatchProof->is_object() ?
-					OptionalNonNegativeIntegerOrZero(
-						*dispatchProof, "contractGeneration") :
-					0u;
-			const uint64_t proofGeneration =
-				proof != evidence.end() && proof->is_object() ?
-					OptionalNonNegativeIntegerOrZero(*proof, "contractGeneration") :
-					0u;
 			const auto proofValueChanged = [&](const char* a_name) {
 				if (proof == evidence.end() || !proof->is_object() ||
 					dispatchProof == a_value.dispatchPresentationEvidence.end() ||
@@ -3193,15 +3374,19 @@ namespace
 					dimensionsReplaced ? "physical_dimensions_replaced" :
 										 "publication_generation_replaced");
 			}
-			if (a_value.firstNewGenerationProvenEvidence.is_null() &&
-				proof != evidence.end() && proof->is_object() &&
-				proof->value("proven", false) &&
-				proofGeneration != 0 &&
-				proofGeneration != dispatchGeneration &&
-				(firstMutationRecorded || mutationStarted ||
-					a_value.mutationExpectation ==
-						ReplacementTelemetry::MutationExpectation::NotRequired)) {
-				a_value.firstNewGenerationProvenEvidence = evidence;
+			if (a_value.mutationExpectation ==
+					ReplacementTelemetry::MutationExpectation::NotRequired &&
+				a_value.expectedTarget &&
+				a_value.mutationNotRequiredTerminalProofEvidence.is_null() &&
+				HasExactTargetCorrelatedPresentationProof(
+					evidence, a_value)) {
+				a_value.mutationNotRequiredTerminalProofEvidence = evidence;
+				a_value.mutationNotRequiredTerminalProofEvidence["stressSessionId"] =
+					a_value.baseline.stressSessionID;
+				a_value.mutationNotRequiredTerminalProofEvidence
+					["qualificationTransitionId"] = a_value.transitionID;
+				a_value.mutationNotRequiredTerminalProofEvidence["ownershipToken"] =
+					a_value.ownershipToken;
 			}
 		};
 		record(a_transition);
@@ -3264,6 +3449,8 @@ namespace
 			store.active->firstPostMutationEvidence;
 		a_transition.firstNewGenerationProvenEvidence =
 			store.active->firstNewGenerationProvenEvidence;
+		a_transition.mutationNotRequiredTerminalProofEvidence =
+			store.active->mutationNotRequiredTerminalProofEvidence;
 		a_transition.mutationExpectation =
 			store.active->mutationExpectation;
 		a_transition.mutationExpectationReason =
@@ -3887,10 +4074,14 @@ namespace
 			upscaling.vrRenderScaleEmergencyRecoveryRequested.load(std::memory_order_acquire);
 		const uint32_t frame = globals::state ? globals::state->frameCount : 0;
 		const uint64_t tick = QueryQualificationTick();
+		const auto mutationBoundary = ReadOwnedMutationBoundary(
+			a_transition.transitionID,
+			a_transition.ownershipToken);
 		const auto replacementPresentationEvidence =
 			ReplacementPresentationEvidenceJson(
 				upscaling,
 				controller,
+				mutationBoundary,
 				physicalMutationEpoch,
 				physicalSerializationEpoch,
 				tick,
@@ -4578,7 +4769,7 @@ namespace
 			a_transition.firstNewGenerationProvenEvidence);
 
 		json receipt{
-			{ "schemaRevision", 11 },
+			{ "schemaRevision", 12 },
 			{ "action", "qualification_wait" },
 			{ "transitionId", a_transition.transitionID },
 			{ "ownerId", a_transition.ownerID },
@@ -4628,6 +4819,7 @@ namespace
 										 { "firstPhysicalMutation", a_transition.firstPhysicalMutationEvidence },
 										 { "firstPostMutation", a_transition.firstPostMutationEvidence },
 										 { "firstNewGenerationProven", a_transition.firstNewGenerationProvenEvidence },
+										 { "mutationNotRequiredTerminalProof", a_transition.mutationNotRequiredTerminalProofEvidence },
 										 { "terminal", terminalPresentationEvidence },
 										 { "mutationExpectation", ReplacementTelemetry::GetMutationExpectationName(a_transition.mutationExpectation) },
 										 { "mutationExpectationReason", a_transition.mutationExpectationReason },
@@ -4975,6 +5167,7 @@ namespace
 						ReplacementPresentationEvidenceJson(
 							upscaling,
 							controller,
+							{},
 							upscaling.vrRenderScaleUnresolvedPhysicalMutationEpoch.load(
 								std::memory_order_acquire),
 							upscaling.vrRenderScalePostMutationSerializationEpoch.load(
@@ -5280,6 +5473,7 @@ namespace
 					SeedNativeTargetMutationExpectation(
 						*store.active, *target, controllerAtWait);
 				}
+				store.active->expectedTarget = target;
 				store.active->waitInProgress = true;
 				store.active->milestone = milestone;
 				transition = *store.active;
@@ -6101,10 +6295,11 @@ namespace
 			"mutating it. milestone defaults to strict for backward compatibility; "
 			"presentation and cleanup expose their independent first-observed "
 			"timestamps, signed presentation-to-cleanup deltas, and cleanup tail "
-			"without changing strict qualification. The schema-revision-11 "
+			"without changing strict qualification. The schema-revision-12 "
 			"terminal receipt retains the immutable dispatch, blocked and last "
 			"pre-mutation, first physical mutation, first post-mutation, first "
-			"proven new-generation, and terminal facets. It also reports the "
+			"proven new-generation, exact owner-bound no-mutation proof, and "
+			"terminal facets. It also reports the "
 			"owner-bound authoritative compositor-cycle audit and independent "
 			"preparation and replacement-mutation admissions.";
 		BuildProvenance::AttachProducer(result);
@@ -6184,7 +6379,7 @@ namespace VRRenderScaleDevBenchBridge
 					json(nullptr);
 			if (!dispatchProof.is_object() ||
 				!dispatchProof.value("proven", false) ||
-				(a_source == PhysicalMutationBoundarySource::ProviderLifecycle &&
+				(a_source == PhysicalMutationBoundarySource::ProviderInvalidation &&
 					(dispatchProof.value("kind", std::string{}) !=
 							"exact_vendor_evaluation" ||
 						OptionalNonNegativeIntegerOrZero(
@@ -6194,6 +6389,8 @@ namespace VRRenderScaleDevBenchBridge
 					.auditActive = store.active->presentationAudit.active,
 					.stressSessionMatches =
 						store.active->baseline.stressSessionID == session.sessionID,
+					.qualificationTransitionID = store.active->transitionID,
+					.ownershipToken = store.active->ownershipToken,
 					.dispatchTick = store.active->dispatchTick,
 					.boundaryTick = tick,
 					.dispatchTransitionEpoch =
@@ -6214,16 +6411,19 @@ namespace VRRenderScaleDevBenchBridge
 			}
 
 			const std::string_view source =
-				a_source == PhysicalMutationBoundarySource::ProviderLifecycle ?
-					"provider_lifecycle" :
+				a_source == PhysicalMutationBoundarySource::ProviderInvalidation ?
+					"provider_invalidation" :
 					"engine_target_creator";
 			const std::string_view reason =
-				a_source == PhysicalMutationBoundarySource::ProviderLifecycle ?
-					"provider_lifecycle_invalidation" :
+				a_source == PhysicalMutationBoundarySource::ProviderInvalidation ?
+					"provider_resource_invalidation" :
 					"engine_target_creator";
 			store.active->firstPhysicalMutationEvidence = {
 				{ "tick", tick },
 				{ "frame", frame },
+				{ "stressSessionId", session.sessionID },
+				{ "qualificationTransitionId", store.active->transitionID },
+				{ "ownershipToken", store.active->ownershipToken },
 				{ "ownerTransitionId", store.active->transitionID },
 				{ "ownerToken", store.active->ownershipToken },
 				{ "replacementRequestId", replacement->requestID },
@@ -6255,25 +6455,8 @@ namespace VRRenderScaleDevBenchBridge
 			auto& upscaling = globals::features::upscaling;
 			const auto controller = upscaling.GetVRRenderScaleTransitionSnapshot();
 			const auto gate = upscaling.GetVRVendorWorkGateSnapshot();
-			const uint64_t mutationEpoch =
-				upscaling.vrRenderScaleUnresolvedPhysicalMutationEpoch.load(
-					std::memory_order_acquire);
-			const uint64_t serializationEpoch =
-				upscaling.vrRenderScalePostMutationSerializationEpoch.load(
-					std::memory_order_acquire);
 			const uint64_t targetEpoch = controller.targetEpoch;
-			const bool physicalMutationStarted = mutationEpoch != 0 ||
-			                                     serializationEpoch != 0 ||
-			                                     VendorLifecycleMutationStarted(controller.dlssLifecycle, targetEpoch) ||
-			                                     VendorLifecycleMutationStarted(controller.fsrLifecycle, targetEpoch) ||
-			                                     controller.physicalPhase ==
-			                                         Upscaling::VRRenderScalePhysicalPhase::CreatorEntered ||
-			                                     controller.physicalPhase ==
-			                                         Upscaling::VRRenderScalePhysicalPhase::TableChanged ||
-			                                     controller.physicalPhase ==
-			                                         Upscaling::VRRenderScalePhysicalPhase::Reconciled ||
-			                                     controller.physicalPhase ==
-			                                         Upscaling::VRRenderScalePhysicalPhase::ContractPublished;
+			const uint64_t observationTick = QueryQualificationTick();
 			State::RenderTargetResourcePublicationDiagnostics publication{};
 			if (globals::state) {
 				publication = globals::state->GetCurrentMainRenderTargetResourcePublicationDiagnostics();
@@ -6296,6 +6479,55 @@ namespace VRRenderScaleDevBenchBridge
 				!store.active->presentationAudit.active) {
 				return;
 			}
+			const auto& boundaryEvidence =
+				store.active->firstPhysicalMutationEvidence;
+			const uint64_t boundaryStressSessionID =
+				OptionalNonNegativeIntegerOrZero(
+					boundaryEvidence, "stressSessionId");
+			const uint64_t boundaryTransitionID =
+				OptionalNonNegativeIntegerOrZero(
+					boundaryEvidence, "qualificationTransitionId");
+			const uint64_t boundaryOwnershipToken =
+				OptionalNonNegativeIntegerOrZero(
+					boundaryEvidence, "ownershipToken");
+			const uint32_t boundaryFrame = static_cast<uint32_t>(
+				OptionalNonNegativeIntegerOrZero(boundaryEvidence, "frame"));
+			const uint64_t boundaryTick =
+				OptionalNonNegativeIntegerOrZero(boundaryEvidence, "tick");
+			const uint64_t boundaryRequestID =
+				OptionalNonNegativeIntegerOrZero(
+					boundaryEvidence, "replacementRequestId");
+			const uint64_t boundaryTransitionEpoch =
+				OptionalNonNegativeIntegerOrZero(
+					boundaryEvidence, "replacementTransitionEpoch");
+			const uint32_t boundaryContractGeneration =
+				static_cast<uint32_t>(OptionalNonNegativeIntegerOrZero(
+					boundaryEvidence, "replacementContractGeneration"));
+			const uintptr_t boundaryDeviceIdentity =
+				static_cast<uintptr_t>(OptionalNonNegativeIntegerOrZero(
+					boundaryEvidence, "replacementDeviceIdentity"));
+			const bool boundaryRecorded = boundaryEvidence.is_object() &&
+			                              boundaryStressSessionID != 0 &&
+			                              boundaryStressSessionID ==
+			                                  store.active->baseline.stressSessionID &&
+			                              boundaryTransitionID ==
+			                                  store.active->transitionID &&
+			                              boundaryOwnershipToken ==
+			                                  store.active->ownershipToken &&
+			                              boundaryRequestID != 0 &&
+			                              boundaryTransitionEpoch != 0 &&
+			                              boundaryContractGeneration != 0 &&
+			                              boundaryDeviceIdentity != 0 &&
+			                              boundaryFrame != 0 && boundaryTick != 0;
+			const bool physicalMutationStarted =
+				ReplacementTelemetry::IsAtOrAfterMutationBoundary(
+					a_observation.frame,
+					observationTick,
+					{
+						.valid = boundaryRecorded,
+						.frame = boundaryFrame,
+						.qpcTick = boundaryTick,
+					});
 			const auto& dispatchEvidence =
 				store.active->dispatchPresentationEvidence;
 			const json dispatchProof =
@@ -6320,19 +6552,38 @@ namespace VRRenderScaleDevBenchBridge
 				OptionalNonNegativeIntegerOrZero(dispatchProof, "deviceIdentity");
 			const auto dispatchMethod = static_cast<uint32_t>(
 				OptionalNonNegativeIntegerOrZero(dispatchProof, "methodValue"));
+			const auto dispatchQualityMode = static_cast<uint32_t>(
+				OptionalNonNegativeIntegerOrZero(dispatchProof, "qualityMode"));
+			const bool dispatchRenderScaleMode =
+				dispatchProof.contains("renderScaleMode") &&
+				dispatchProof["renderScaleMode"].is_boolean() &&
+				dispatchProof["renderScaleMode"].get<bool>();
 			const auto dispatchBackend = static_cast<uint32_t>(
 				OptionalNonNegativeIntegerOrZero(dispatchProof, "backendValue"));
-			const bool mutationPreviouslyObserved =
-				store.active->presentationAudit.physicalMutationObserved ||
-				!store.active->firstPhysicalMutationEvidence.is_null();
 			const bool selectionSuppressesCurrent =
 				a_observation.selection ==
 					PresentationAuditSelection::BlackKeepalive ||
 				a_observation.selection ==
 					PresentationAuditSelection::Quarantine;
 			const bool suppressesPreviousBeforeMutation =
-				selectionSuppressesCurrent && !physicalMutationStarted &&
-				!mutationPreviouslyObserved;
+				selectionSuppressesCurrent && !physicalMutationStarted;
+			const bool observedDispatchDimensions =
+				a_observation.renderWidth != 0 &&
+				a_observation.renderHeight != 0 &&
+				a_observation.displayWidth != 0 &&
+				a_observation.displayHeight != 0 &&
+				a_observation.renderWidth ==
+					OptionalNonNegativeIntegerOrZero(
+						dispatchProof, "renderWidth") &&
+				a_observation.renderHeight ==
+					OptionalNonNegativeIntegerOrZero(
+						dispatchProof, "renderHeight") &&
+				a_observation.displayWidth ==
+					OptionalNonNegativeIntegerOrZero(
+						dispatchProof, "displayWidth") &&
+				a_observation.displayHeight ==
+					OptionalNonNegativeIntegerOrZero(
+						dispatchProof, "displayHeight");
 			const bool exactCurrent = dispatchProven &&
 			                          (suppressesPreviousBeforeMutation ||
 										  (a_observation.contractGeneration ==
@@ -6343,6 +6594,12 @@ namespace VRRenderScaleDevBenchBridge
 												  dispatchDeviceIdentity &&
 											  a_observation.resourceRevision ==
 												  dispatchResourceRevision &&
+											  a_observation.backend ==
+												  dispatchBackend &&
+											  observedDispatchDimensions &&
+											  publication.current &&
+											  publication.publishedGeneration ==
+												  dispatchPublicationGeneration &&
 											  a_observation.method ==
 												  dispatchMethod));
 			const bool differsFromDispatch = !dispatchProven ||
@@ -6356,30 +6613,80 @@ namespace VRRenderScaleDevBenchBridge
 			                                 a_observation.resourceRevision !=
 			                                     dispatchResourceRevision;
 			const auto& stable = controller.stable;
-			const bool exactStableAfterMutation = mutationPreviouslyObserved &&
+			const auto exactProfileMatches = [&](const auto& a_profile) {
+				return a_profile.valid &&
+				       a_observation.transitionEpoch == a_profile.transitionEpoch &&
+				       a_observation.contractGeneration == a_profile.contractGeneration &&
+				       a_observation.method == static_cast<uint32_t>(a_profile.method) &&
+				       a_observation.renderWidth == a_profile.renderEyeWidth &&
+				       a_observation.renderHeight == a_profile.renderEyeHeight &&
+				       a_observation.displayWidth == a_profile.displayEyeWidth &&
+				       a_observation.displayHeight == a_profile.displayEyeHeight &&
+				       a_observation.deviceIdentity ==
+				           reinterpret_cast<uintptr_t>(globals::d3d::device) &&
+				       a_observation.resourceRevision != 0 && publication.current;
+			};
+			const auto boundaryMatchesProfile = [&](const auto& a_profile) {
+				return boundaryRecorded && a_profile.valid &&
+				       a_profile.requestID == boundaryRequestID &&
+				       a_profile.transitionEpoch == boundaryTransitionEpoch &&
+				       a_profile.contractGeneration ==
+				           boundaryContractGeneration &&
+				       a_observation.deviceIdentity == boundaryDeviceIdentity;
+			};
+			const auto exactPathMatchesProfile = [&](const auto& a_profile) {
+				if (a_profile.method == Upscaling::UpscaleMethod::kDLSS) {
+					return a_observation.path ==
+					           static_cast<uint32_t>(
+								   Upscaling::VRRenderScalePresentationPath::VendorEvaluated) &&
+					       a_observation.backend == static_cast<uint32_t>(
+														Upscaling::VRRenderScaleBackendKind::DLSS);
+				}
+				if (a_profile.method == Upscaling::UpscaleMethod::kFSR) {
+					return a_observation.path ==
+					           static_cast<uint32_t>(
+								   Upscaling::VRRenderScalePresentationPath::VendorEvaluated) &&
+					       a_observation.backend != static_cast<uint32_t>(
+														Upscaling::VRRenderScaleBackendKind::None);
+				}
+				return a_observation.path == static_cast<uint32_t>(
+												 Upscaling::VRRenderScalePresentationPath::NativeOriginal) &&
+				       a_observation.backend == static_cast<uint32_t>(
+													Upscaling::VRRenderScaleBackendKind::None);
+			};
+			const bool exactStableAfterMutation = physicalMutationStarted &&
 			                                      differsFromDispatch &&
-			                                      stable.valid &&
 			                                      a_observation.selection == PresentationAuditSelection::Observed &&
-			                                      a_observation.transitionEpoch == stable.transitionEpoch &&
-			                                      a_observation.contractGeneration == stable.contractGeneration &&
-			                                      a_observation.method == static_cast<uint32_t>(stable.method) &&
-			                                      a_observation.deviceIdentity != 0 &&
-			                                      a_observation.resourceRevision != 0 && publication.current;
+			                                      exactProfileMatches(stable) &&
+			                                      boundaryMatchesProfile(stable) &&
+			                                      exactPathMatchesProfile(stable);
 			const bool exactReplacement = exactStableAfterMutation ||
 			                              (replacement &&
 											  differsFromDispatch &&
 											  a_observation.selection == PresentationAuditSelection::Observed &&
-											  a_observation.transitionEpoch == replacement->transitionEpoch &&
-											  a_observation.contractGeneration == replacement->contractGeneration &&
-											  a_observation.method == static_cast<uint32_t>(replacement->method) &&
-											  a_observation.deviceIdentity != 0 &&
-											  a_observation.resourceRevision != 0 && publication.current);
+											  physicalMutationStarted &&
+											  exactProfileMatches(*replacement) &&
+											  boundaryMatchesProfile(*replacement) &&
+											  exactPathMatchesProfile(*replacement));
 			const uint32_t identityMethod = suppressesPreviousBeforeMutation ?
 			                                    dispatchMethod :
 			                                    a_observation.method;
 			const uint32_t identityBackend = suppressesPreviousBeforeMutation ?
 			                                     dispatchBackend :
 			                                     a_observation.backend;
+			const auto* identityProfile = exactReplacement && stable.valid ?
+			                                  std::addressof(stable) :
+			                              exactReplacement ? replacement :
+			                                                 nullptr;
+			const uint32_t identityQualityMode = exactCurrent ?
+			                                         dispatchQualityMode :
+			                                     identityProfile ? identityProfile->qualityMode :
+			                                                       0;
+			const bool identityRenderScaleMode = exactCurrent ?
+			                                         dispatchRenderScaleMode :
+			                                     identityProfile ?
+			                                         identityProfile->renderScaleModeEnabled :
+			                                         false;
 			const uint32_t providerGeneration =
 				identityMethod ==
 						static_cast<uint32_t>(Upscaling::UpscaleMethod::kDLSS) ?
@@ -6442,7 +6749,7 @@ namespace VRRenderScaleDevBenchBridge
 				.valid = true,
 				.eyeIndex = a_observation.eyeIndex,
 				.frame = a_observation.frame,
-				.qpcTick = QueryQualificationTick(),
+				.qpcTick = observationTick,
 				.compositorCycleToken = a_observation.compositorCycleToken,
 				.requestID = identityRequestID,
 				.transitionEpoch = identityTransitionEpoch,
@@ -6451,7 +6758,13 @@ namespace VRRenderScaleDevBenchBridge
 				.publicationGeneration = identityPublicationGeneration,
 				.resourceRevision = identityResourceRevision,
 				.deviceIdentity = identityDevice,
+				.renderWidth = a_observation.renderWidth,
+				.renderHeight = a_observation.renderHeight,
+				.displayWidth = a_observation.displayWidth,
+				.displayHeight = a_observation.displayHeight,
 				.method = identityMethod,
+				.qualityMode = identityQualityMode,
+				.renderScaleMode = identityRenderScaleMode,
 				.backend = identityBackend,
 				.disposition = disposition,
 				.loadingOrMenuContext = identityLoadingOrMenuContext,
@@ -6460,16 +6773,87 @@ namespace VRRenderScaleDevBenchBridge
 				.exactCurrent = exactCurrent,
 				.exactReplacement = exactReplacement,
 				.blockedPreMutation = blockedPreMutation,
-				.physicalMutationStarted =
-					physicalMutationStarted || mutationPreviouslyObserved,
+				.physicalMutationStarted = physicalMutationStarted,
 			};
 			ReplacementTelemetry::CompleteCycle completed{};
-			(void)ReplacementTelemetry::ObserveEye(
+			const bool cycleCompleted = ReplacementTelemetry::ObserveEye(
 				store.active->presentationAudit,
 				store.active->transitionID,
 				store.active->ownershipToken,
 				eye,
 				completed);
+			if (cycleCompleted && completed.afterMutation &&
+				completed.coherent && completed.submitted &&
+				completed.exactReplacement &&
+				store.active->firstNewGenerationProvenEvidence.is_null() &&
+				boundaryRequestID == completed.requestID &&
+				boundaryTransitionEpoch == completed.transitionEpoch &&
+				boundaryContractGeneration == completed.contractGeneration &&
+				boundaryDeviceIdentity == completed.deviceIdentity) {
+				const auto eyeEvidence = [&](uint32_t a_eyeIndex) {
+					return json{
+						{ "frame", a_eyeIndex == 0 ? completed.leftFrame : completed.rightFrame },
+						{ "qpcTick", a_eyeIndex == 0 ? completed.leftQpcTick : completed.rightQpcTick },
+						{ "compositorCycleToken", completed.compositorCycleToken },
+						{ "transitionEpoch", completed.transitionEpoch },
+						{ "generation", completed.contractGeneration },
+						{ "method", GetUpscaleMethodName(
+										static_cast<Upscaling::UpscaleMethod>(completed.method)) },
+						{ "backend", GetBackendName(
+										 static_cast<Upscaling::VRRenderScaleBackendKind>(completed.backend)) },
+						{ "deviceIdentity", static_cast<uint64_t>(completed.deviceIdentity) },
+						{ "resourceRevision", completed.resourceRevision },
+						{ "renderWidth", completed.renderWidth },
+						{ "renderHeight", completed.renderHeight },
+						{ "displayWidth", completed.displayWidth },
+						{ "displayHeight", completed.displayHeight },
+					};
+				};
+				const json presentationProof{
+					{ "proven", true },
+					{ "kind", completed.disposition ==
+									  ReplacementTelemetry::PresentationDisposition::ExactVendor ?
+								  "exact_vendor_evaluation" :
+								  "exact_native_presentation" },
+					{ "frame", completed.frame },
+					{ "qpcTick", completed.qpcTick },
+					{ "requestId", completed.requestID },
+					{ "transitionEpoch", completed.transitionEpoch },
+					{ "contractGeneration", completed.contractGeneration },
+					{ "providerRuntimeGeneration", completed.providerGeneration },
+					{ "resourcePublicationGeneration", completed.publicationGeneration },
+					{ "resourceRevision", completed.resourceRevision },
+					{ "deviceIdentity", static_cast<uint64_t>(completed.deviceIdentity) },
+					{ "renderWidth", completed.renderWidth },
+					{ "renderHeight", completed.renderHeight },
+					{ "displayWidth", completed.displayWidth },
+					{ "displayHeight", completed.displayHeight },
+					{ "method", GetUpscaleMethodName(
+									static_cast<Upscaling::UpscaleMethod>(completed.method)) },
+					{ "methodValue", completed.method },
+					{ "qualityMode", completed.qualityMode },
+					{ "renderScaleMode", completed.renderScaleMode },
+					{ "backend", GetBackendName(
+									 static_cast<Upscaling::VRRenderScaleBackendKind>(completed.backend)) },
+					{ "backendValue", completed.backend },
+					{ "compositorCycleToken", completed.compositorCycleToken },
+					{ "leftEye", eyeEvidence(0) },
+					{ "rightEye", eyeEvidence(1) },
+				};
+				store.active->firstNewGenerationProvenEvidence = {
+					{ "tick", completed.qpcTick },
+					{ "frame", completed.frame },
+					{ "stressSessionId", boundaryStressSessionID },
+					{ "qualificationTransitionId", store.active->transitionID },
+					{ "ownershipToken", store.active->ownershipToken },
+					{ "physicalMutationStarted", true },
+					{ "physicalMutationSource", boundaryEvidence.value(
+													"physicalMutationSource", std::string{}) },
+					{ "selectedPresentationDisposition",
+						ReplacementTelemetry::GetDispositionName(completed.disposition) },
+					{ "presentationProof", presentationProof },
+				};
+			}
 		} catch (...) {
 			// DevBench evidence must never affect the production submit path.
 		}

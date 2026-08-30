@@ -16,7 +16,7 @@ namespace VRRenderScaleDevBenchBridge
 	enum class PhysicalMutationBoundarySource : std::uint8_t
 	{
 		EngineTargetCreator,
-		ProviderLifecycle
+		ProviderInvalidation
 	};
 
 	struct PresentationAuditObservation
@@ -32,6 +32,10 @@ namespace VRRenderScaleDevBenchBridge
 		std::uint32_t path = 0;
 		std::uintptr_t deviceIdentity = 0;
 		std::uint64_t resourceRevision = 0;
+		std::uint32_t renderWidth = 0;
+		std::uint32_t renderHeight = 0;
+		std::uint32_t displayWidth = 0;
+		std::uint32_t displayHeight = 0;
 		bool loadingOrMenuContext = false;
 		bool transitionCooldown = false;
 		bool submitted = false;
@@ -42,7 +46,7 @@ namespace VRRenderScaleDevBenchBridge
 	void RecordPresentationAuditObservation(
 		const PresentationAuditObservation& a_observation) noexcept;
 
-	/** Retains a destructive boundary that later qualification polling may miss. */
+	/** Retains the first owner-bound destructive boundary before polling can miss it. */
 	void RecordPhysicalMutationBoundary(
 		std::uint64_t a_transitionEpoch,
 		PhysicalMutationBoundarySource a_source,

@@ -335,17 +335,25 @@ foreach(_required_behavior IN ITEMS
 	"MergeQualificationMutationExpectation"
 	"MergeMutationExpectation"
 	"OwnsMutationBoundary"
+	"IsAtOrAfterMutationBoundary"
 	"native_contract_reuse"
 	"scaled_contract_retirement"
 	"RecordPhysicalMutationBoundary"
-	"provider_lifecycle_invalidation"
+	"provider_resource_invalidation"
+	"stressSessionId"
+	"qualificationTransitionId"
+	"ownershipToken"
 	"ImportQualificationReplacementTimeline"
 	"firstPostMutation"
 	"firstNewGenerationProven"
+	"mutationNotRequiredTerminalProof"
+	"boundarySpanningStereoCycles"
+	"expectedReplacementRequestID"
+	"replacementContractGeneration"
+	"replacementDeviceIdentity"
+	"IsExactTargetProofKind"
 	"OptionalNonNegativeIntegerOrZero"
 	"TryRecordQualificationReplacementTimeline"
-	"VendorLifecycleMutationStarted"
-	"provider_lifecycle"
 	"exactStableAfterMutation"
 	"presentationCycleAudit"
 	"eyeObservations"
@@ -396,6 +404,73 @@ foreach(_required_behavior IN ITEMS
         message(FATAL_ERROR "Render-scale qualification behavior is missing: ${_required_behavior}")
     endif()
 endforeach()
+
+string(FIND
+	"${_upscaling_source}"
+	"PhysicalMutationBoundarySource::\n\t\t\t\t\tProviderInvalidation"
+	_provider_invalidation_boundary_position
+)
+if(_provider_invalidation_boundary_position EQUAL -1)
+	message(FATAL_ERROR
+		"Provider resource invalidation does not emit the explicit DevBench boundary"
+	)
+endif()
+
+string(FIND
+	"${_upscaling_source}"
+	"void Upscaling::RecordVRVendorRuntimeLifecycle"
+	_lifecycle_function_start
+)
+string(FIND
+	"${_upscaling_source}"
+	"void Upscaling::ArchiveVRRenderScaleTransitionMetricsLocked"
+	_lifecycle_function_end
+)
+if(_lifecycle_function_start EQUAL -1 OR
+	_lifecycle_function_end EQUAL -1 OR
+	_lifecycle_function_end LESS_EQUAL _lifecycle_function_start)
+	message(FATAL_ERROR "Provider lifecycle function boundaries were not found")
+endif()
+math(EXPR _lifecycle_function_length
+	"${_lifecycle_function_end} - ${_lifecycle_function_start}")
+string(SUBSTRING
+	"${_upscaling_source}"
+	${_lifecycle_function_start}
+	${_lifecycle_function_length}
+	_lifecycle_function
+)
+string(FIND
+	"${_lifecycle_function}"
+	"RecordPhysicalMutationBoundary"
+	_lifecycle_boundary_position
+)
+if(NOT _lifecycle_boundary_position EQUAL -1)
+	message(FATAL_ERROR
+		"Dirty, WaitingForDrain, or Creating lifecycle state can still publish the destructive boundary"
+	)
+endif()
+
+string(FIND
+	"${_upscaling_source}"
+	"PhysicalMutationBoundarySource::\n\t\t\t\tEngineTargetCreator"
+	_engine_creator_boundary_position
+)
+if(_engine_creator_boundary_position EQUAL -1)
+	message(FATAL_ERROR
+		"Engine-target creator entry does not emit the explicit DevBench boundary"
+	)
+endif()
+
+string(FIND
+	"${_bridge}"
+	"VendorLifecycleMutationStarted"
+	_lifecycle_mutation_authority_position
+)
+if(NOT _lifecycle_mutation_authority_position EQUAL -1)
+	message(FATAL_ERROR
+		"Provider lifecycle phases still act as a destructive mutation authority"
+	)
+endif()
 
 foreach(_unsafe_nullable_proof_read IN ITEMS
 	"dispatchProof->value(\"contractGeneration\""

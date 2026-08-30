@@ -1,6 +1,6 @@
 # VR render-scale replacement telemetry
 
-DevBench render-scale qualification receipts at schema revision 11 separate
+DevBench render-scale qualification receipts at schema revision 12 separate
 render success from evidence completeness. This diagnostic contract does not
 change render-scale preparation, admission, presentation, cleanup, or failure
 policy.
@@ -15,6 +15,7 @@ Each owner-bound transition can retain these observations exactly once:
 -   `firstPhysicalMutation`
 -   `firstPostMutation`
 -   `firstNewGenerationProven`
+-   `mutationNotRequiredTerminalProof`
 -   `terminal`
 
 Every presentation facet contains a generic `presentationProof` rather than a
@@ -28,9 +29,9 @@ provider-specific proxy. Its kind is one of:
 The proof records both-eye identity, method and backend values, dimensions,
 request and transition identity, provider and publication generations,
 resource revision, D3D device identity, compositor-cycle token, frame, and QPC
-tick. DLSS and FSR use the same proof shape. Native None, TAA, DLAA, and FSR
-Native AA use the native proof without pretending render-scale submission is
-active.
+tick. DLSS and FSR use the same proof shape. None and TAA use exact native
+presentation. DLAA and FSR Native AA retain exact target-correlated provider
+evaluation even though render-scale mode is disabled.
 
 ## Admission and physical mutation
 
@@ -48,12 +49,20 @@ expectation is explicitly `not_required`; native vendor evaluation remains
 proven independently. Moving from a scaled contract to a native target remains
 `required` because the scaled resources must be retired.
 
+`RecordPhysicalMutationBoundary` is the sole destructive-mutation authority.
+It retains the first exact qualification session, transition, owner token,
+replacement request and epoch, contract generation, device, source, frame, and
+QPC tick. Provider lifecycle phases remain diagnostic and cannot move an
+observation across this boundary.
+
 ## Authoritative presentation-cycle audit
 
 The audit is compiled only into DevBench builds and records decisions at the
 actual presentation boundary. Left and right eyes are paired by compositor
 cycle and must agree on the complete identity tuple before the cycle is
-coherent. Quarantine and black-keepalive decisions are recorded explicitly.
+coherent. Each eye retains its own frame and QPC tick. A pair that spans the
+destructive boundary is reported separately and fails closed when submitted.
+Quarantine and black-keepalive decisions are recorded explicitly.
 Bounded storage, saturating counters, owner validation, and an overflow flag
 make incomplete evidence visible without affecting rendering.
 
@@ -77,7 +86,9 @@ Task 2 is:
     every decisive invariant counter is zero;
 -   `FAIL` when authoritative evidence proves an invariant violation; or
 -   `INCONCLUSIVE` when evidence is missing, ambiguous, overflowed, or cannot
-    establish whether physical mutation was required.
+    establish whether physical mutation was required. A claimed post-mutation
+    offender whose frame or QPC tick precedes the canonical boundary is also
+    producer-invalid and `INCONCLUSIVE`, never silently discarded.
 
 An `INCONCLUSIVE` evidence verdict does not relabel a successful render
 transition as a render failure. Full receipts are stored during the measured

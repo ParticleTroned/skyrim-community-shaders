@@ -31643,6 +31643,10 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 		.path = static_cast<uint32_t>(published.path),
 		.deviceIdentity = published.deviceIdentity,
 		.resourceRevision = published.resourceRevision,
+		.renderWidth = published.inputWidth,
+		.renderHeight = published.inputHeight,
+		.displayWidth = published.outputWidth,
+		.displayHeight = published.outputHeight,
 		.loadingOrMenuContext = published.loadingOrMenuContext,
 		.transitionCooldown = published.transitionCooldown,
 		.submitted = true,
@@ -35566,8 +35570,25 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRSubmitStageState(bool a
 	UnbindUpscalingResources();
 	auto dlssResetResult = VRVendorResourceResetResult::Ready;
 	if (a_destroyDLSSResources) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		const bool hadDLSSResources =
+			streamline.HasDLSSResourcesPendingTeardown();
+#endif
+		const auto dlssTeardownResult = streamline.DestroyDLSSResources();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (hadDLSSResources &&
+			(dlssTeardownResult == Streamline::DLSSResourceTeardownResult::Ready ||
+				dlssTeardownResult ==
+					Streamline::DLSSResourceTeardownResult::FailedAfterMutation)) {
+			VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
+				transitionEpoch,
+				VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
+					ProviderInvalidation,
+				static_cast<uint32_t>(UpscaleMethod::kDLSS));
+		}
+#endif
 		dlssResetResult = HandleVRDLSSResourceTeardownResult(
-			streamline.DestroyDLSSResources(),
+			dlssTeardownResult,
 			0,
 			"submit-stage teardown",
 			"VR submit-stage DLSS resource teardown");
@@ -35798,7 +35819,20 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRVendorRuntimeResources(
 		return submitStageResetResult;
 
 	if (destroyFSRResources) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		const bool hadFSRResources = fidelityFX.HasFSRResources();
+#endif
 		const auto destroyResult = fidelityFX.DestroyFSRResources(a_waitForFSRIdleTeardown && !a_fsrTeardownAlreadyReady);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (hadFSRResources &&
+			destroyResult == FidelityFX::LifecycleResult::Ready) {
+			VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
+				GetVRRenderScaleTransitionSnapshot().targetEpoch,
+				VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
+					ProviderInvalidation,
+				static_cast<uint32_t>(UpscaleMethod::kFSR));
+		}
+#endif
 		if (destroyResult != FidelityFX::LifecycleResult::Ready) {
 			HandleFSRLifecycleDeviceLoss(
 				destroyResult,
@@ -36001,7 +36035,20 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 				return false;
 			}
 			UnbindUpscalingResources();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			const bool hadFSRResources = fidelityFX.HasFSRResources();
+#endif
 			const auto destroyResult = fidelityFX.DestroyFSRResources(false);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (hadFSRResources &&
+				destroyResult == FidelityFX::LifecycleResult::Ready) {
+				VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
+					GetVRRenderScaleTransitionSnapshot().targetEpoch,
+					VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
+						ProviderInvalidation,
+					static_cast<uint32_t>(UpscaleMethod::kFSR));
+			}
+#endif
 			if (destroyResult != FidelityFX::LifecycleResult::Ready) {
 				MarkVendorRuntimeResourcesDirty(UpscaleMethod::kFSR, pendingFSRResetContractGeneration);
 				RecordVRVendorRuntimeLifecycle(
@@ -36025,8 +36072,25 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 			RecordVRVendorRuntimeLifecycle(UpscaleMethod::kDLSS, VRVendorRuntimeLifecyclePhase::Destroying, pendingDLSSResetContractGeneration, "inactive runtime retirement");
 			logger::debug("[Upscaling] Retiring {}inactive DLSS resources before {} runtime reset", context, magic_enum::enum_name(a_upscaleMethod));
 			UnbindUpscalingResources();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			const bool hadDLSSResources =
+				streamline.HasDLSSResourcesPendingTeardown();
+#endif
+			const auto dlssTeardownResult = streamline.DestroyDLSSResources();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (hadDLSSResources &&
+				(dlssTeardownResult == Streamline::DLSSResourceTeardownResult::Ready ||
+					dlssTeardownResult ==
+						Streamline::DLSSResourceTeardownResult::FailedAfterMutation)) {
+				VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
+					GetVRRenderScaleTransitionSnapshot().targetEpoch,
+					VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
+						ProviderInvalidation,
+					static_cast<uint32_t>(UpscaleMethod::kDLSS));
+			}
+#endif
 			const auto dlssResetResult = HandleVRDLSSResourceTeardownResult(
-				streamline.DestroyDLSSResources(),
+				dlssTeardownResult,
 				pendingDLSSResetContractGeneration,
 				"inactive runtime retirement",
 				"inactive DLSS resource teardown before vendor runtime reset");
@@ -36059,8 +36123,25 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 			RecordVRVendorRuntimeLifecycle(UpscaleMethod::kDLSS, VRVendorRuntimeLifecyclePhase::Creating, activeContractGeneration, "runtime reset rebuild");
 			logger::debug("[Upscaling] Rebuilding {}DLSS feature after VR reset", context);
 			UnbindUpscalingResources();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			const bool hadDLSSResources =
+				streamline.HasDLSSResourcesPendingTeardown();
+#endif
+			const auto dlssTeardownResult = streamline.DestroyDLSSResources();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (hadDLSSResources &&
+				(dlssTeardownResult == Streamline::DLSSResourceTeardownResult::Ready ||
+					dlssTeardownResult ==
+						Streamline::DLSSResourceTeardownResult::FailedAfterMutation)) {
+				VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
+					GetVRRenderScaleTransitionSnapshot().targetEpoch,
+					VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
+						ProviderInvalidation,
+					static_cast<uint32_t>(UpscaleMethod::kDLSS));
+			}
+#endif
 			const auto dlssResetResult = HandleVRDLSSResourceTeardownResult(
-				streamline.DestroyDLSSResources(),
+				dlssTeardownResult,
 				activeContractGeneration,
 				"runtime reset rebuild",
 				"vendor runtime DLSS resource teardown");
@@ -36105,7 +36186,20 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 				return false;
 			}
 			UnbindUpscalingResources();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			const bool hadFSRResources = fidelityFX.HasFSRResources();
+#endif
 			const auto destroyResult = fidelityFX.DestroyFSRResources(false);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (hadFSRResources &&
+				destroyResult == FidelityFX::LifecycleResult::Ready) {
+				VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
+					GetVRRenderScaleTransitionSnapshot().targetEpoch,
+					VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
+						ProviderInvalidation,
+					static_cast<uint32_t>(UpscaleMethod::kFSR));
+			}
+#endif
 			if (destroyResult != FidelityFX::LifecycleResult::Ready) {
 				MarkVendorRuntimeResourcesDirty(UpscaleMethod::kFSR, activeContractGeneration);
 				RecordVRVendorRuntimeLifecycle(
@@ -36679,6 +36773,16 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 						RequestHistoryReset();
 					} else {
 						const auto destroyResult = fidelityFX.DestroyFSRResources();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+						if (globals::game::isVR &&
+							destroyResult == FidelityFX::LifecycleResult::Ready) {
+							VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
+								GetVRRenderScaleTransitionSnapshot().targetEpoch,
+								VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
+									ProviderInvalidation,
+								static_cast<uint32_t>(UpscaleMethod::kFSR));
+						}
+#endif
 						if (!acceptFSRResourceLifecycleResult(
 								destroyResult,
 								"quality-change FSR resource teardown")) {
@@ -36709,7 +36813,25 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		if (upscaleModeChanged) {
 			if (previousVendorUpscalerSelected) {
 				if (previousUpscaleMode == UpscaleMethod::kDLSS) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					const bool hadDLSSResources =
+						globals::game::isVR &&
+						streamline.HasDLSSResourcesPendingTeardown();
+#endif
 					const auto dlssTeardownResult = streamline.DestroyDLSSResources();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					if (hadDLSSResources &&
+						(dlssTeardownResult ==
+								Streamline::DLSSResourceTeardownResult::Ready ||
+							dlssTeardownResult ==
+								Streamline::DLSSResourceTeardownResult::FailedAfterMutation)) {
+						VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
+							GetVRRenderScaleTransitionSnapshot().targetEpoch,
+							VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
+								ProviderInvalidation,
+							static_cast<uint32_t>(UpscaleMethod::kDLSS));
+					}
+#endif
 					if (globals::game::isVR) {
 						const auto resetResult = HandleVRDLSSResourceTeardownResult(
 							dlssTeardownResult,
@@ -36740,7 +36862,21 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 							"upscale-method FSR resource drain")) {
 						return false;
 					}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					const bool hadFSRResources =
+						globals::game::isVR && fidelityFX.HasFSRResources();
+#endif
 					const auto destroyResult = fidelityFX.DestroyFSRResources(!renderScaleTransitionRelevant);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					if (hadFSRResources &&
+						destroyResult == FidelityFX::LifecycleResult::Ready) {
+						VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
+							GetVRRenderScaleTransitionSnapshot().targetEpoch,
+							VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
+								ProviderInvalidation,
+							static_cast<uint32_t>(UpscaleMethod::kFSR));
+					}
+#endif
 					if (!acceptFSRResourceLifecycleResult(
 							destroyResult,
 							"upscale-method FSR resource teardown")) {
@@ -36778,6 +36914,16 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		if (!upscaleModeChanged && fsrRuntimePathChanged && a_upscalemethod == UpscaleMethod::kFSR && !fsrResourcesRecreatedForQuality) {
 			if (!runtimeFailureFallbackCanPreserveHostFSR) {
 				const auto destroyResult = fidelityFX.DestroyFSRResources();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (globals::game::isVR &&
+					destroyResult == FidelityFX::LifecycleResult::Ready) {
+					VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
+						GetVRRenderScaleTransitionSnapshot().targetEpoch,
+						VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
+							ProviderInvalidation,
+						static_cast<uint32_t>(UpscaleMethod::kFSR));
+				}
+#endif
 				if (!acceptFSRResourceLifecycleResult(
 						destroyResult,
 						"runtime-path FSR resource teardown")) {
@@ -52327,20 +52473,8 @@ void Upscaling::RecordVRVendorRuntimeLifecycle(UpscaleMethod a_upscaleMethod, VR
 		revision = ++vrRenderScaleTransitionController.revision;
 	}
 
-#ifdef DEVBENCH_BRIDGE_ENABLED
-	if (a_phase == VRVendorRuntimeLifecyclePhase::Dirty ||
-		a_phase == VRVendorRuntimeLifecyclePhase::WaitingForDrain ||
-		a_phase == VRVendorRuntimeLifecyclePhase::Destroying ||
-		a_phase == VRVendorRuntimeLifecyclePhase::Inactive ||
-		a_phase == VRVendorRuntimeLifecyclePhase::Failed) {
-		VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
-			lifecycle.transitionEpoch,
-			VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
-				ProviderLifecycle,
-			static_cast<uint32_t>(lifecycle.method));
-	}
-#endif
-
+	// Lifecycle phases can precede mutation, so only destructive creator or
+	// provider-invalidation sites publish the DevBench boundary.
 	if (ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
 			"[VRRenderScale][VendorLifecycle] revision={} epoch={} method={} backend={} phase={} requestedGeneration={} runtimeGeneration={} resources={} ready={} attempts={} deferrals={} failures={}{}{}",

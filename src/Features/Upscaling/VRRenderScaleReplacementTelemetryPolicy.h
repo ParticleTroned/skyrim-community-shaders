@@ -133,6 +133,15 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 		return PresentationProofKind::None;
 	}
 
+	[[nodiscard]] constexpr bool IsExactTargetProofKind(
+		PresentationProofKind a_kind,
+		bool a_requiresVendorEvaluation) noexcept
+	{
+		return a_requiresVendorEvaluation ?
+		           a_kind == PresentationProofKind::ExactVendorEvaluation :
+		           a_kind == PresentationProofKind::ExactNativePresentation;
+	}
+
 	[[nodiscard]] constexpr std::string_view GetPreparationAdmissionName(
 		PreparationAdmission a_value) noexcept
 	{
@@ -298,6 +307,8 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 		bool ownerActive = false;
 		bool auditActive = false;
 		bool stressSessionMatches = false;
+		std::uint64_t qualificationTransitionID = 0;
+		std::uint64_t ownershipToken = 0;
 		std::uint64_t dispatchTick = 0;
 		std::uint64_t boundaryTick = 0;
 		std::uint64_t dispatchTransitionEpoch = 0;
@@ -315,6 +326,8 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 	{
 		return a_facts.ownerActive && a_facts.auditActive &&
 		       a_facts.stressSessionMatches &&
+		       a_facts.qualificationTransitionID != 0 &&
+		       a_facts.ownershipToken != 0 &&
 		       a_facts.dispatchTick != 0 &&
 		       a_facts.boundaryTick >= a_facts.dispatchTick &&
 		       a_facts.boundaryTransitionEpoch != 0 &&
@@ -401,7 +414,13 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 		std::uint64_t publicationGeneration = 0;
 		std::uint64_t resourceRevision = 0;
 		std::uintptr_t deviceIdentity = 0;
+		std::uint32_t renderWidth = 0;
+		std::uint32_t renderHeight = 0;
+		std::uint32_t displayWidth = 0;
+		std::uint32_t displayHeight = 0;
 		std::uint32_t method = 0;
+		std::uint32_t qualityMode = 0;
+		bool renderScaleMode = false;
 		std::uint32_t backend = 0;
 		PresentationDisposition disposition = PresentationDisposition::None;
 		bool loadingOrMenuContext = false;
@@ -419,11 +438,17 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 		bool coherent = false;
 		bool submitted = false;
 		bool beforeMutation = true;
+		bool afterMutation = false;
+		bool boundarySpanning = false;
 		bool exactCurrent = false;
 		bool exactReplacement = false;
 		bool blockedPreMutation = false;
 		std::uint32_t frame = 0;
 		std::uint64_t qpcTick = 0;
+		std::uint32_t leftFrame = 0;
+		std::uint64_t leftQpcTick = 0;
+		std::uint32_t rightFrame = 0;
+		std::uint64_t rightQpcTick = 0;
 		std::uint64_t compositorCycleToken = 0;
 		std::uint64_t requestID = 0;
 		std::uint64_t transitionEpoch = 0;
@@ -432,7 +457,13 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 		std::uint64_t publicationGeneration = 0;
 		std::uint64_t resourceRevision = 0;
 		std::uintptr_t deviceIdentity = 0;
+		std::uint32_t renderWidth = 0;
+		std::uint32_t renderHeight = 0;
+		std::uint32_t displayWidth = 0;
+		std::uint32_t displayHeight = 0;
 		std::uint32_t method = 0;
+		std::uint32_t qualityMode = 0;
+		bool renderScaleMode = false;
 		std::uint32_t backend = 0;
 		PresentationDisposition disposition = PresentationDisposition::None;
 		bool loadingOrMenuContext = false;
@@ -456,6 +487,7 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 		std::uint64_t blackKeepaliveCyclesBeforeMutation = 0;
 		std::uint64_t quarantineCyclesBeforeMutation = 0;
 		std::uint64_t completeStereoCyclesAfterMutation = 0;
+		std::uint64_t boundarySpanningStereoCycles = 0;
 		std::uint64_t oldGenerationEvaluationsAfterMutation = 0;
 		std::uint64_t oldGenerationCompletedOutputReuseAfterMutation = 0;
 		std::uint64_t mixedOrUnprovenStereoPairsSubmitted = 0;
@@ -492,6 +524,23 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 		std::array<PendingCycle, kPendingCycleCapacity> pending{};
 	};
 
+	struct MutationBoundaryTimestamp
+	{
+		bool valid = false;
+		std::uint32_t frame = 0;
+		std::uint64_t qpcTick = 0;
+	};
+
+	[[nodiscard]] constexpr bool IsAtOrAfterMutationBoundary(
+		std::uint32_t a_frame,
+		std::uint64_t a_qpcTick,
+		const MutationBoundaryTimestamp& a_boundary) noexcept
+	{
+		return a_boundary.valid && a_boundary.frame != 0 &&
+		       a_boundary.qpcTick != 0 && a_frame >= a_boundary.frame &&
+		       a_qpcTick >= a_boundary.qpcTick;
+	}
+
 	constexpr void SaturatingIncrement(std::uint64_t& a_value) noexcept
 	{
 		if (a_value != std::numeric_limits<std::uint64_t>::max())
@@ -525,7 +574,17 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 		       a_left.resourceRevision == a_right.resourceRevision &&
 		       a_left.deviceIdentity != 0 &&
 		       a_left.deviceIdentity == a_right.deviceIdentity &&
+		       a_left.renderWidth != 0 &&
+		       a_left.renderWidth == a_right.renderWidth &&
+		       a_left.renderHeight != 0 &&
+		       a_left.renderHeight == a_right.renderHeight &&
+		       a_left.displayWidth != 0 &&
+		       a_left.displayWidth == a_right.displayWidth &&
+		       a_left.displayHeight != 0 &&
+		       a_left.displayHeight == a_right.displayHeight &&
 		       a_left.method == a_right.method &&
+		       a_left.qualityMode == a_right.qualityMode &&
+		       a_left.renderScaleMode == a_right.renderScaleMode &&
 		       a_left.backend == a_right.backend &&
 		       a_left.disposition == a_right.disposition &&
 		       a_left.loadingOrMenuContext == a_right.loadingOrMenuContext &&
@@ -538,17 +597,28 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 	{
 		CompleteCycle cycle{};
 		cycle.valid = a_left.valid && a_right.valid;
-		cycle.coherent = SameSubmittedIdentity(a_left, a_right);
+		cycle.boundarySpanning =
+			a_left.physicalMutationStarted != a_right.physicalMutationStarted;
+		cycle.coherent = SameSubmittedIdentity(a_left, a_right) &&
+		                 !cycle.boundarySpanning;
 		cycle.submitted = a_left.submitted && a_right.submitted;
 		cycle.beforeMutation = !a_left.physicalMutationStarted &&
 		                       !a_right.physicalMutationStarted;
+		cycle.afterMutation = a_left.physicalMutationStarted &&
+		                      a_right.physicalMutationStarted;
 		cycle.exactCurrent = a_left.exactCurrent && a_right.exactCurrent;
 		cycle.exactReplacement = a_left.exactReplacement &&
 		                         a_right.exactReplacement;
 		cycle.blockedPreMutation = a_left.blockedPreMutation ||
 		                           a_right.blockedPreMutation;
-		cycle.frame = a_right.frame;
-		cycle.qpcTick = a_right.qpcTick;
+		cycle.leftFrame = a_left.frame;
+		cycle.leftQpcTick = a_left.qpcTick;
+		cycle.rightFrame = a_right.frame;
+		cycle.rightQpcTick = a_right.qpcTick;
+		cycle.frame = a_left.frame > a_right.frame ? a_left.frame : a_right.frame;
+		cycle.qpcTick = a_left.qpcTick > a_right.qpcTick ?
+		                    a_left.qpcTick :
+		                    a_right.qpcTick;
 		cycle.compositorCycleToken = a_right.compositorCycleToken;
 		cycle.requestID = a_right.requestID;
 		cycle.transitionEpoch = a_right.transitionEpoch;
@@ -557,7 +627,13 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 		cycle.publicationGeneration = a_right.publicationGeneration;
 		cycle.resourceRevision = a_right.resourceRevision;
 		cycle.deviceIdentity = a_right.deviceIdentity;
+		cycle.renderWidth = a_right.renderWidth;
+		cycle.renderHeight = a_right.renderHeight;
+		cycle.displayWidth = a_right.displayWidth;
+		cycle.displayHeight = a_right.displayHeight;
 		cycle.method = a_right.method;
+		cycle.qualityMode = a_right.qualityMode;
+		cycle.renderScaleMode = a_right.renderScaleMode;
 		cycle.backend = a_right.backend;
 		cycle.disposition = cycle.coherent ? a_right.disposition :
 		                                     PresentationDisposition::Mixed;
@@ -613,10 +689,14 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 			if (a_cycle.disposition == PresentationDisposition::Quarantine)
 				SaturatingIncrement(counters.quarantineCyclesBeforeMutation);
 		} else {
-			SaturatingIncrement(counters.completeStereoCyclesAfterMutation);
-			if (dispositionIndex < counters.dispositionsAfterMutation.size())
-				SaturatingIncrement(counters.dispositionsAfterMutation[dispositionIndex]);
-			if (a_cycle.exactCurrent) {
+			if (a_cycle.boundarySpanning) {
+				SaturatingIncrement(counters.boundarySpanningStereoCycles);
+			} else if (a_cycle.afterMutation) {
+				SaturatingIncrement(counters.completeStereoCyclesAfterMutation);
+				if (dispositionIndex < counters.dispositionsAfterMutation.size())
+					SaturatingIncrement(counters.dispositionsAfterMutation[dispositionIndex]);
+			}
+			if (a_cycle.afterMutation && a_cycle.exactCurrent) {
 				if (a_cycle.disposition == PresentationDisposition::CompletedOutputHold)
 					SaturatingIncrement(counters.oldGenerationCompletedOutputReuseAfterMutation);
 				else
@@ -632,7 +712,8 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 				RecordFirstOffender(
 					counters.firstPostMutationUnprovenStereoSubmitted, a_cycle);
 			}
-			if (a_cycle.exactReplacement && a_cycle.coherent && a_cycle.submitted &&
+			if (a_cycle.afterMutation && a_cycle.exactReplacement &&
+				a_cycle.coherent && a_cycle.submitted &&
 				counters.firstExactNewGenerationCycles == 0) {
 				SaturatingIncrement(counters.firstExactNewGenerationCycles);
 			}
@@ -654,11 +735,9 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 			a_observation.compositorCycleToken == 0) {
 			return false;
 		}
-		EyeObservation observation = a_observation;
+		const EyeObservation observation = a_observation;
 		if (observation.physicalMutationStarted)
 			a_state.physicalMutationObserved = true;
-		observation.physicalMutationStarted =
-			a_state.physicalMutationObserved;
 
 		PendingCycle* slot = nullptr;
 		for (auto& pending : a_state.pending) {

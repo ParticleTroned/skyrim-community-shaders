@@ -30,13 +30,19 @@ namespace PerformanceTuningStatistics
 		return std::isfinite(value) && value > 0.0 && value <= kMaximumTimingSampleMs;
 	}
 
-	inline void AddMoment(Moments& moments, double value, double sampleWeight)
+	inline bool AddMoment(Moments& moments, double value, double sampleWeight)
 	{
 		if (!IsValidTiming(value) || !std::isfinite(sampleWeight) || sampleWeight <= 0.0)
-			return;
+			return false;
 
-		moments.sum += value * sampleWeight;
-		moments.sampleWeight += sampleWeight;
+		const double candidateSum = moments.sum + value * sampleWeight;
+		const double candidateWeight = moments.sampleWeight + sampleWeight;
+		if (!std::isfinite(candidateSum) || !std::isfinite(candidateWeight))
+			return false;
+
+		moments.sum = candidateSum;
+		moments.sampleWeight = candidateWeight;
+		return true;
 	}
 
 	[[nodiscard]] inline double GetMean(const Moments& moments)
@@ -44,48 +50,55 @@ namespace PerformanceTuningStatistics
 		return moments.sampleWeight > 0.0 ? moments.sum / moments.sampleWeight : 0.0;
 	}
 
-	[[nodiscard]] inline Moments CombineMoments(std::span<const Moments> blocks)
+	/** Check combined missing-sample coverage without overflowing the count. */
+	[[nodiscard]] inline bool IsMissingSampleCountWithinLimit(
+		std::size_t currentMissingSampleCount,
+		std::size_t comparisonMissingSampleCount,
+		std::size_t maximumMissingSampleCount)
 	{
-		Moments combined;
-		for (const auto& block : blocks) {
-			combined.sum += block.sum;
-			combined.sampleWeight += block.sampleWeight;
-		}
-		return combined;
+		return currentMissingSampleCount <= maximumMissingSampleCount &&
+		       comparisonMissingSampleCount <= maximumMissingSampleCount - currentMissingSampleCount;
 	}
 
-	[[nodiscard]] inline bool TryGetBlockMeanVariance(std::span<const Moments> blocks, double& meanVariance)
+	/** Calculate an equal-weight mean and its variance from complete intervals. */
+	[[nodiscard]] inline bool TryGetBlockMeanStatistics(
+		std::span<const Moments> blocks,
+		double& mean,
+		double& meanVariance)
 	{
+		mean = 0.0;
 		meanVariance = 0.0;
-		const auto combined = CombineMoments(blocks);
-		std::size_t blockCount = 0;
-		for (const auto& block : blocks) {
-			if (block.sampleWeight <= 0.0)
-				continue;
-
-			blockCount++;
-		}
-
-		if (blockCount <= 1 || combined.sampleWeight <= 0.0)
+		if (blocks.size() <= 1)
 			return false;
 
-		const double weightedMean = GetMean(combined);
-		double weightedDeviation = 0.0;
+		double blockMeanSum = 0.0;
 		for (const auto& block : blocks) {
-			if (block.sampleWeight <= 0.0)
-				continue;
+			if (!std::isfinite(block.sum) || !std::isfinite(block.sampleWeight) || block.sampleWeight <= 0.0)
+				return false;
 
-			const double normalizedWeight = block.sampleWeight / combined.sampleWeight;
-			const double difference = GetMean(block) - weightedMean;
-			weightedDeviation += normalizedWeight * normalizedWeight * difference * difference;
+			const double blockMean = GetMean(block);
+			if (!std::isfinite(blockMean))
+				return false;
+			blockMeanSum += blockMean;
+		}
+		const double candidateMean = blockMeanSum / static_cast<double>(blocks.size());
+		if (!std::isfinite(candidateMean))
+			return false;
+
+		double squaredDeviation = 0.0;
+		for (const auto& block : blocks) {
+			const double difference = GetMean(block) - candidateMean;
+			squaredDeviation += difference * difference;
 		}
 
-		// The finite-block correction reduces to sample variance / N for
-		// equally weighted blocks without treating their frames as independent.
-		const double finiteBlockCorrection =
-			static_cast<double>(blockCount) / static_cast<double>(blockCount - 1);
-		meanVariance = finiteBlockCorrection * weightedDeviation;
-		return std::isfinite(meanVariance);
+		const double blockCount = static_cast<double>(blocks.size());
+		const double candidateMeanVariance = squaredDeviation / (blockCount * (blockCount - 1.0));
+		if (!std::isfinite(candidateMeanVariance))
+			return false;
+
+		mean = candidateMean;
+		meanVariance = candidateMeanVariance;
+		return true;
 	}
 
 	[[nodiscard]] inline Significance EvaluateSignificance(double delta, double standardError)

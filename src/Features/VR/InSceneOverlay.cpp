@@ -1,5 +1,6 @@
 #include "Features/ScreenshotFeature.h"
 #include "Features/Upscaling.h"
+#include "Features/Upscaling/VRRenderScaleDevBenchBridge.h"
 #include "Features/VR.h"
 #include "Features/VR/InSceneOverlaySubmitPolicy.h"
 #include "Features/VR/OpenVRSubmitLeasePolicy.h"
@@ -732,6 +733,15 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 													 const vr::Texture_t* a_texture,
 													 const vr::VRTextureBounds_t* a_bounds) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
+				VRRenderScaleDevBenchBridge::RecordPresentationAuditObservation({
+					.valid = true,
+					.eyeIndex = static_cast<uint32_t>(eEye),
+					.frame = globals::state ? globals::state->frameCount : 0,
+					.compositorCycleToken = compositorCycleToken,
+					.submitted = false,
+					.selection = VRRenderScaleDevBenchBridge::
+						PresentationAuditSelection::Quarantine,
+				});
 				const uint64_t probeSequence =
 					upscaling.BeginVRLoadPresentationProbeSubmit(
 						"compositor-quarantine",
@@ -771,9 +781,11 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 							  Upscaling::VRPostLoadCompositorKeepaliveDisposition* a_keepaliveDisposition = nullptr,
 							  bool a_allowPostLoadScopeRebase = false,
 							  bool a_allowScreenshotCapture = true,
+							  bool a_auditBlackKeepalive = false,
 							  const vr::Texture_t* a_screenshotTexture = nullptr,
 							  const vr::VRTextureBounds_t* a_screenshotBounds = nullptr) {
 				(void)a_probeObservation;
+				(void)a_auditBlackKeepalive;
 				const bool observeScreenshot =
 					a_allowScreenshotCapture &&
 					globals::features::screenshotFeature.HasPendingCapture();
@@ -934,6 +946,17 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					*a_keepaliveDisposition = keepaliveDisposition;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				upscaling.CompleteVRLoadPresentationProbeSubmit(probeSequence, result);
+				if (a_auditBlackKeepalive) {
+					VRRenderScaleDevBenchBridge::RecordPresentationAuditObservation({
+						.valid = true,
+						.eyeIndex = static_cast<uint32_t>(submitPacket.eye),
+						.frame = globals::state ? globals::state->frameCount : 0,
+						.compositorCycleToken = compositorCycleToken,
+						.submitted = result == vr::VRCompositorError_None,
+						.selection = VRRenderScaleDevBenchBridge::
+							PresentationAuditSelection::BlackKeepalive,
+					});
+				}
 #endif
 				Upscaling::TraceVRMenuPresentationOpenVRSubmit(
 					a_path,
@@ -1020,7 +1043,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					nullptr,
 					&keepaliveDisposition,
 					false,
-					false);
+					false,
+					true);
 				switch (keepaliveDisposition) {
 				case Upscaling::VRPostLoadCompositorKeepaliveDisposition::
 					Accepted:
@@ -1629,6 +1653,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 								nullptr,
 								false,
 								true,
+								false,
 								&upscaledTexture,
 								&upscaledBounds);
 							if (isCurrentSubmitSuccess(result)) {
@@ -1821,6 +1846,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 							nullptr,
 							false,
 							true,
+							false,
 							pTexture,
 							pBounds);
 						if (isCurrentSubmitSuccess(result)) {

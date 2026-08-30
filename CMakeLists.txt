@@ -1530,6 +1530,14 @@ if(BUILD_CONTROLLER_TESTS)
             -P "${PROJECT_SOURCE_DIR}/tests/menu_devbench_preflight_contract_test.cmake"
     )
     add_test(
+        NAME PerformanceTuningDevBenchContract
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            -P
+            "${PROJECT_SOURCE_DIR}/tests/performance_tuning_devbench_contract_test.cmake"
+    )
+    add_test(
         NAME VRMenuUiContract
         COMMAND
             "${CMAKE_COMMAND}"
@@ -1537,7 +1545,8 @@ if(BUILD_CONTROLLER_TESTS)
             -P "${PROJECT_SOURCE_DIR}/tests/vr_menu_ui_contract_test.cmake"
     )
     set_tests_properties(
-        MenuDevBenchPreflightContract VRMenuUiContract
+        MenuDevBenchPreflightContract PerformanceTuningDevBenchContract
+        VRMenuUiContract
         PROPERTIES LABELS "ControllerTests"
     )
     add_test(
@@ -1582,6 +1591,11 @@ if(BUILD_CONTROLLER_TESTS)
         vr_render_scale_qualification_policy_test
         VRRenderScaleQualificationPolicy
         tests/vr_render_scale_qualification_policy_test.cpp
+    )
+    add_controller_test(
+        vr_render_scale_replacement_telemetry_policy_test
+        VRRenderScaleReplacementTelemetryPolicy
+        tests/vr_render_scale_replacement_telemetry_policy_test.cpp
     )
     add_controller_test(
         streamline_frame_token_publication_test
@@ -1885,6 +1899,7 @@ if(BUILD_CONTROLLER_TESTS)
             perf_mode_restart_state_test
             vr_vendor_relatch_policy_test
             vr_render_scale_qualification_policy_test
+            vr_render_scale_replacement_telemetry_policy_test
             streamline_frame_token_publication_test
             vr_render_scale_preparation_policy_test
             vr_presentation_stretch_telemetry_policy_test

@@ -22,6 +22,7 @@
 #include "Menu.h"
 #include "MenuDevBenchBridge.h"
 #include "Menu/ThemeManager.h"
+#include "PerformanceTuningDevBenchBridge.h"
 #include "ProfilerDevBenchBridge.h"
 #include "SceneSettingsManager.h"
 #include "ScreenshotDevBenchBridge.h"
@@ -249,6 +250,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				CSX::Api::FeatureDevBenchBridge::Install();
 				ProfilerDevBenchBridge::Install();
 				MenuDevBenchBridge::Install();
+				PerformanceTuningDevBenchBridge::Install();
 				ScreenshotDevBenchBridge::Install();
 				CSX::Api::ProfilerApiDevBenchBridge::Install();
 				CSX::Api::UpscalingDevBenchBridge::Install();

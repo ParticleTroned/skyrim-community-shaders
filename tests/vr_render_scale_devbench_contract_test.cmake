@@ -7,6 +7,10 @@ set(_bridge_path
 )
 file(READ "${_bridge_path}" _bridge)
 file(READ
+    "${PROJECT_ROOT}/src/Features/Upscaling/VRRenderScaleReplacementTelemetryPolicy.h"
+    _replacement_policy
+)
+file(READ
     "${PROJECT_ROOT}/src/Features/Upscaling.h"
     _upscaling_header
 )
@@ -261,7 +265,7 @@ foreach(_required_behavior IN ITEMS
 	"QualificationPolicy::EvaluateMilestones"
 	"QualificationPolicy::IsMilestoneSatisfied"
 	"QualificationPolicy::UsesVendorEvaluation"
-	"QualificationPolicy::UsesNativeAPIEvaluation"
+	"ReplacementTelemetry::ClassifyPresentationProof"
 	"QualificationPolicy::HasCoherentNativeVendorEvaluation"
 	"case CSX::UpscalingAPI::Method::kNone"
 	"case CSX::UpscalingAPI::Method::kTAA"
@@ -319,6 +323,46 @@ foreach(_required_behavior IN ITEMS
 	"cleanupTailMs"
 	"sameObservation"
 	"replacementTimeline"
+	"schemaRevision"
+	"presentationProof"
+	"exact_vendor_evaluation"
+	"exact_native_presentation"
+	"validated_completed_output_hold"
+	"preparationAdmission"
+	"replacementMutationAdmission"
+	"mutationExpectation"
+	"SeedNativeTargetMutationExpectation"
+	"MergeQualificationMutationExpectation"
+	"MergeMutationExpectation"
+	"OwnsMutationBoundary"
+	"IsAtOrAfterMutationBoundary"
+	"native_contract_reuse"
+	"scaled_contract_retirement"
+	"RecordPhysicalMutationBoundary"
+	"provider_resource_invalidation"
+	"stressSessionId"
+	"qualificationTransitionId"
+	"ownershipToken"
+	"ImportQualificationReplacementTimeline"
+	"firstPostMutation"
+	"firstNewGenerationProven"
+	"mutationNotRequiredTerminalProof"
+	"boundarySpanningStereoCycles"
+	"expectedReplacementRequestID"
+	"replacementContractGeneration"
+	"replacementDeviceIdentity"
+	"IsExactTargetProofKind"
+	"OptionalNonNegativeIntegerOrZero"
+	"TryRecordQualificationReplacementTimeline"
+	"exactStableAfterMutation"
+	"presentationCycleAudit"
+	"eyeObservations"
+	"incompleteStereoCycles"
+	"preMutationExactPresentationSuppressed"
+	"preMutationStretchWithoutMutation"
+	"postMutationOldGenerationPresented"
+	"postMutationUnprovenStereoSubmitted"
+	"phaseDurations"
 	"currentPresentationProven"
 	"currentPresentationGeneration"
 	"replacementAdmissionBlocked"
@@ -355,11 +399,106 @@ foreach(_required_behavior IN ITEMS
     "controller.retirement.nextCleanupFrame == 0"
 	"BuildProvenance::ValidateExpectedBuild"
 )
-    string(FIND "${_bridge}" "${_required_behavior}" _behavior_position)
+    string(FIND "${_bridge}\n${_replacement_policy}" "${_required_behavior}" _behavior_position)
     if(_behavior_position EQUAL -1)
         message(FATAL_ERROR "Render-scale qualification behavior is missing: ${_required_behavior}")
     endif()
 endforeach()
+
+string(FIND
+	"${_upscaling_source}"
+	"PhysicalMutationBoundarySource::\n\t\t\t\t\tProviderInvalidation"
+	_provider_invalidation_boundary_position
+)
+if(_provider_invalidation_boundary_position EQUAL -1)
+	message(FATAL_ERROR
+		"Provider resource invalidation does not emit the explicit DevBench boundary"
+	)
+endif()
+
+string(FIND
+	"${_upscaling_source}"
+	"void Upscaling::RecordVRVendorRuntimeLifecycle"
+	_lifecycle_function_start
+)
+string(FIND
+	"${_upscaling_source}"
+	"void Upscaling::ArchiveVRRenderScaleTransitionMetricsLocked"
+	_lifecycle_function_end
+)
+if(_lifecycle_function_start EQUAL -1 OR
+	_lifecycle_function_end EQUAL -1 OR
+	_lifecycle_function_end LESS_EQUAL _lifecycle_function_start)
+	message(FATAL_ERROR "Provider lifecycle function boundaries were not found")
+endif()
+math(EXPR _lifecycle_function_length
+	"${_lifecycle_function_end} - ${_lifecycle_function_start}")
+string(SUBSTRING
+	"${_upscaling_source}"
+	${_lifecycle_function_start}
+	${_lifecycle_function_length}
+	_lifecycle_function
+)
+string(FIND
+	"${_lifecycle_function}"
+	"RecordPhysicalMutationBoundary"
+	_lifecycle_boundary_position
+)
+if(NOT _lifecycle_boundary_position EQUAL -1)
+	message(FATAL_ERROR
+		"Dirty, WaitingForDrain, or Creating lifecycle state can still publish the destructive boundary"
+	)
+endif()
+
+string(FIND
+	"${_upscaling_source}"
+	"PhysicalMutationBoundarySource::\n\t\t\t\tEngineTargetCreator"
+	_engine_creator_boundary_position
+)
+if(_engine_creator_boundary_position EQUAL -1)
+	message(FATAL_ERROR
+		"Engine-target creator entry does not emit the explicit DevBench boundary"
+	)
+endif()
+
+string(FIND
+	"${_bridge}"
+	"VendorLifecycleMutationStarted"
+	_lifecycle_mutation_authority_position
+)
+if(NOT _lifecycle_mutation_authority_position EQUAL -1)
+	message(FATAL_ERROR
+		"Provider lifecycle phases still act as a destructive mutation authority"
+	)
+endif()
+
+foreach(_unsafe_nullable_proof_read IN ITEMS
+	"dispatchProof->value(\"contractGeneration\""
+	"proof->value(\"contractGeneration\""
+	"dispatchProof.value(\"contractGeneration\""
+	"dispatchProof.value(\"transitionEpoch\""
+	"dispatchProof.value(\"deviceIdentity\""
+	"dispatchProof.value(\"resourceRevision\""
+	"dispatchProof.value(\"methodValue\""
+)
+	string(FIND "${_bridge}" "${_unsafe_nullable_proof_read}" _unsafe_nullable_proof_position)
+	if(NOT _unsafe_nullable_proof_position EQUAL -1)
+		message(FATAL_ERROR
+			"Nullable replacement proof field is read as a required number: ${_unsafe_nullable_proof_read}"
+		)
+	endif()
+endforeach()
+
+string(FIND
+	"${_upscaling_source}"
+	"#ifdef DEVBENCH_BRIDGE_ENABLED\n\tVRRenderScaleDevBenchBridge::RecordPresentationAuditObservation"
+	_audit_compile_guard_position
+)
+if(_audit_compile_guard_position EQUAL -1)
+	message(FATAL_ERROR
+		"Authoritative presentation auditing is not compiled out without DevBench"
+	)
+endif()
 
 foreach(_required_controller_behavior IN ITEMS
 	"apiControllerPublicationRequired"

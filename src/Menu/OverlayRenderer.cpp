@@ -2,6 +2,7 @@
 #include "BackgroundBlur.h"
 #include "HomePageRenderer.h"
 #include "OverlayPolicy.h"
+#include "PerformanceTuningRenderer.h"
 #include "ThemeManager.h"
 
 #include <dxgi.h>
@@ -364,6 +365,9 @@ void OverlayRenderer::RenderOverlay(
 	float& cachedFontSize,
 	float currentFontSize)
 {
+	// Advance closed-menu work before choosing the VR canvas. Completion can
+	// reopen CS and restore the user's saved headset presentation this frame.
+	PerformanceTuningRenderer::UpdateClosedMenuMeasurement();
 	HandleVRSetup();
 	ApplyVROverlayDisplaySize();
 	processInputEventQueue();
@@ -391,6 +395,7 @@ void OverlayRenderer::RenderOverlay(
 	if (ShouldShowShaderCompilationStatus(menu))
 		RenderShaderCompilationStatus(keyIdToString);
 	RenderShaderBlockingStatus();
+	PerformanceTuningRenderer::RenderClosedMenuMeasurementOverlay();
 
 	if (editorWindow->open) {
 		bool flying = editorWindow->IsPreviewFlying();
@@ -530,6 +535,7 @@ bool OverlayRenderer::ShouldSkipRendering(const Menu& menu, bool hasDrawableFeat
 
 	return !(hasShaderCompilationStatus ||
 			 menu.IsEnabled ||
+			 menu.HasClosedMenuOverlay() ||
 			 HomePageRenderer::ShouldShowFirstTimeSetup() ||
 			 EditorWindow::GetSingleton()->open ||
 			 abTestingManager->IsEnabled() ||

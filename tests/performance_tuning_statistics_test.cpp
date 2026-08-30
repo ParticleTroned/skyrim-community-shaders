@@ -27,23 +27,36 @@ namespace
 
 	bool CoversBlockMeanStandardError()
 	{
-		constexpr std::array means{ 9.0, 10.0, 11.0, 9.0, 10.0, 11.0 };
+		constexpr std::array means{ 8.0, 9.0, 10.0, 11.0, 12.0 };
 		const auto sparseBlocks = MakeBlocks(means, 1);
 		const auto denseBlocks = MakeBlocks(means, 90);
 		std::array<Moments, 2> weightedBlocks{};
+		std::array<Moments, 5> incompleteBlocks{};
 		AddMoment(weightedBlocks[0], 10.0, 1.0);
 		AddMoment(weightedBlocks[1], 20.0, 3.0);
+		for (std::size_t index = 0; index + 1 < incompleteBlocks.size(); ++index)
+			AddMoment(incompleteBlocks[index], 10.0, 1.0);
 		double sparseVariance = 0.0;
 		double denseVariance = 0.0;
 		double weightedVariance = 0.0;
+		double incompleteVariance = 0.0;
+		double sparseMean = 0.0;
+		double denseMean = 0.0;
+		double weightedMean = 0.0;
+		double incompleteMean = 0.0;
 
-		return TryGetBlockMeanVariance(sparseBlocks, sparseVariance) &&
-		       TryGetBlockMeanVariance(denseBlocks, denseVariance) &&
-		       TryGetBlockMeanVariance(weightedBlocks, weightedVariance) &&
-		       Near(GetMean(CombineMoments(weightedBlocks)), 17.5) &&
+		return TryGetBlockMeanStatistics(sparseBlocks, sparseMean, sparseVariance) &&
+		       TryGetBlockMeanStatistics(denseBlocks, denseMean, denseVariance) &&
+		       TryGetBlockMeanStatistics(weightedBlocks, weightedMean, weightedVariance) &&
+		       !TryGetBlockMeanStatistics(incompleteBlocks, incompleteMean, incompleteVariance) &&
+		       incompleteMean == 0.0 &&
+		       incompleteVariance == 0.0 &&
+		       Near(sparseMean, 10.0) &&
+		       Near(sparseMean, denseMean) &&
+		       Near(weightedMean, 15.0) &&
 		       Near(sparseVariance, denseVariance) &&
 		       sparseVariance > 0.0 &&
-		       Near(weightedVariance, 14.0625);
+		       Near(weightedVariance, 25.0);
 	}
 
 	bool CoversSignificanceLimits()
@@ -67,6 +80,18 @@ namespace
 		       !invalid.hasStandardError;
 	}
 
+	bool CoversMissingSampleTolerance()
+	{
+		return IsMissingSampleCountWithinLimit(0, 0, 2) &&
+		       IsMissingSampleCountWithinLimit(1, 1, 2) &&
+		       IsMissingSampleCountWithinLimit(2, 0, 2) &&
+		       !IsMissingSampleCountWithinLimit(2, 1, 2) &&
+		       !IsMissingSampleCountWithinLimit(
+				   std::numeric_limits<std::size_t>::max(),
+				   1,
+				   2);
+	}
+
 	bool CoversInvalidSampleExclusion()
 	{
 		Moments moments;
@@ -77,11 +102,12 @@ namespace
 		AddMoment(moments, kMaximumTimingSampleMs + 1.0, 1.0);
 		AddMoment(moments, 10.0, 0.0);
 		AddMoment(moments, 10.0, std::numeric_limits<double>::quiet_NaN());
+		AddMoment(moments, 10.0, std::numeric_limits<double>::max());
 		AddMoment(moments, 10.0, 1.0);
 		return moments.sampleWeight == 1.0 && GetMean(moments) == 10.0;
 	}
 
-	bool CoversBaselineDiscontinuities()
+	bool CoversTimingDiscontinuities()
 	{
 		return !IsTimingSampleInterrupted(10, 11, true) &&
 		       IsTimingSampleInterrupted(10, 11, false) &&
@@ -95,8 +121,9 @@ int main()
 {
 	return CoversBlockMeanStandardError() &&
 	               CoversSignificanceLimits() &&
+	               CoversMissingSampleTolerance() &&
 	               CoversInvalidSampleExclusion() &&
-	               CoversBaselineDiscontinuities() ?
+	               CoversTimingDiscontinuities() ?
 	           0 :
 	           1;
 }

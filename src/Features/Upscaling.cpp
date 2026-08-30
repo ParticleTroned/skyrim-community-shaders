@@ -4217,26 +4217,6 @@ namespace
 		Upscaling::kDLSSPresetM
 	};
 
-	const char* GetDLSSPresetLabel(uint32_t preset)
-	{
-		switch (preset) {
-		case Upscaling::kDLSSPresetE:
-			return "E";
-		case Upscaling::kDLSSPresetF:
-			return "F";
-		case Upscaling::kDLSSPresetJ:
-			return "J";
-		case Upscaling::kDLSSPresetK:
-			return "K";
-		case Upscaling::kDLSSPresetL:
-			return "L";
-		case Upscaling::kDLSSPresetM:
-			return "M";
-		default:
-			return "K";
-		}
-	}
-
 	void DrawDLSSPresetTooltip(uint32_t preset)
 	{
 		switch (preset) {
@@ -4265,26 +4245,6 @@ namespace
 		default:
 			ImGui::TextUnformatted("Default for DLAA/Quality/Balanced. Best all-round stability and image quality. Speed: fast. Recommended for most users.");
 			break;
-		}
-	}
-
-	const char* GetQualityModeName(uint value, bool isDLSS)
-	{
-		switch (ClampQualityModeUInt(value)) {
-		case 1:
-			return "Hoshipa";
-		case 2:
-			return "Ultra Quality";
-		case 3:
-			return "Quality";
-		case 4:
-			return "Balanced";
-		case 5:
-			return "Performance";
-		case 6:
-			return "Ultra Performance";
-		default:
-			return isDLSS ? "DLAA" : "Native AA";
 		}
 	}
 
@@ -15825,7 +15785,7 @@ void Upscaling::DrawSettings()
 
 			const int dlssProfileUiMaxIndex = static_cast<int>(kDLSSProfileDisplayOrder.size()) - 1;
 			uint32_t displayedDLSSPreset = kDLSSProfileDisplayOrder[dlssProfileUiIndex];
-			if (ImGui::SliderInt("DLSS Profile", &dlssProfileUiIndex, 0, dlssProfileUiMaxIndex, GetDLSSPresetLabel(displayedDLSSPreset))) {
+			if (ImGui::SliderInt("DLSS Profile", &dlssProfileUiIndex, 0, dlssProfileUiMaxIndex, GetDLSSPresetName(displayedDLSSPreset))) {
 				dlssProfileUiIndex = std::clamp(dlssProfileUiIndex, 0, dlssProfileUiMaxIndex);
 				displayedDLSSPreset = kDLSSProfileDisplayOrder[dlssProfileUiIndex];
 				ApplyCSMenuUpscalingTransition(
@@ -16374,7 +16334,7 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 
 			const int dlssProfileUiMaxIndex = static_cast<int>(kDLSSProfileDisplayOrder.size()) - 1;
 			uint32_t displayedDLSSPreset = kDLSSProfileDisplayOrder[dlssProfileUiIndex];
-			if (ImGui::SliderInt("DLSS Profile", &dlssProfileUiIndex, 0, dlssProfileUiMaxIndex, GetDLSSPresetLabel(displayedDLSSPreset))) {
+			if (ImGui::SliderInt("DLSS Profile", &dlssProfileUiIndex, 0, dlssProfileUiMaxIndex, GetDLSSPresetName(displayedDLSSPreset))) {
 				dlssProfileUiIndex = std::clamp(dlssProfileUiIndex, 0, dlssProfileUiMaxIndex);
 				displayedDLSSPreset = kDLSSProfileDisplayOrder[dlssProfileUiIndex];
 				ApplyCSMenuUpscalingTransition(
@@ -19525,6 +19485,20 @@ bool Upscaling::IsPerformanceCostMeasurementEnabled() const
 	return GetUpscaleMethod() != UpscaleMethod::kNONE;
 }
 
+Upscaling::UpscaleMethod Upscaling::ResolvePerformanceCostMeasurementMethod(
+	uint32_t a_primaryMethod,
+	uint32_t a_fallbackMethod)
+{
+	const auto primaryMethod = ClampUpscaleMethod(a_primaryMethod, UpscaleMethod::kDLSS);
+	if (primaryMethod != UpscaleMethod::kDLSS)
+		return primaryMethod;
+
+	if (streamline.featureDLSS || !streamline.featureCheckComplete)
+		return UpscaleMethod::kDLSS;
+
+	return ClampUpscaleMethod(a_fallbackMethod, UpscaleMethod::kFSR);
+}
+
 namespace
 {
 	bool IsVRRenderScalePerformanceCostMeasurement(const Upscaling& a_upscaling)
@@ -19548,35 +19522,9 @@ namespace
 		if (IsRenderDocUpscalingBlocked())
 			return Upscaling::UpscaleMethod::kNONE;
 
-		const auto primaryMethod = ClampUpscaleMethod(defaults.upscaleMethod, Upscaling::UpscaleMethod::kDLSS);
-		if (primaryMethod != Upscaling::UpscaleMethod::kDLSS)
-			return primaryMethod;
-
-		if (Upscaling::streamline.featureDLSS || !Upscaling::streamline.featureCheckComplete)
-			return Upscaling::UpscaleMethod::kDLSS;
-
-		return ClampUpscaleMethod(defaults.upscaleMethodNoDLSS, Upscaling::UpscaleMethod::kFSR);
-	}
-
-	Upscaling::UpscaleMethod ResolveCapturedPerformanceUpscaleMethod(
-		uint32_t a_primaryMethod,
-		uint32_t a_fallbackMethod)
-	{
-		const auto primaryMethod =
-			ClampUpscaleMethod(
-				a_primaryMethod,
-				Upscaling::UpscaleMethod::kDLSS);
-		if (primaryMethod != Upscaling::UpscaleMethod::kDLSS)
-			return primaryMethod;
-
-		if (Upscaling::streamline.featureDLSS ||
-			!Upscaling::streamline.featureCheckComplete) {
-			return Upscaling::UpscaleMethod::kDLSS;
-		}
-
-		return ClampUpscaleMethod(
-			a_fallbackMethod,
-			Upscaling::UpscaleMethod::kFSR);
+		return Upscaling::ResolvePerformanceCostMeasurementMethod(
+			defaults.upscaleMethod,
+			defaults.upscaleMethodNoDLSS);
 	}
 
 	bool IsTargetVRRenderScalePerformanceCostMeasurement(const Upscaling& a_upscaling, bool a_targetEnabled)
@@ -19602,7 +19550,7 @@ namespace
 		const uint32_t primaryMethod = a_state.value("upscaleMethod", a_upscaling.settings.upscaleMethod);
 		const uint32_t fallbackMethod = a_state.value("upscaleMethodNoDLSS", a_upscaling.settings.upscaleMethodNoDLSS);
 		const Upscaling::UpscaleMethod targetMethod =
-			ResolveCapturedPerformanceUpscaleMethod(
+			Upscaling::ResolvePerformanceCostMeasurementMethod(
 				primaryMethod,
 				fallbackMethod);
 		const uint32_t qualityMode = ClampQualityModeUInt(a_state.value("qualityMode", a_upscaling.settings.qualityMode));
@@ -19725,7 +19673,7 @@ void Upscaling::RestorePerformanceCostMeasurementState(const json& a_state)
 		a_state.value("fsr4RuntimeEnable", settings.fsr4RuntimeEnable);
 
 	const UpscaleMethod targetMethod =
-		ResolveCapturedPerformanceUpscaleMethod(
+		ResolvePerformanceCostMeasurementMethod(
 			primaryMethod,
 			fallbackMethod);
 
@@ -22392,6 +22340,10 @@ namespace
 		}
 		context->physicalBoundaryEntered = true;
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
+			context->transitionEpoch,
+			VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
+				EngineTargetCreator);
 		context->upscaling->RecordVRRenderScalePreparationCreatorEntered(
 			context->transitionEpoch);
 #endif
@@ -31678,6 +31630,29 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 			frame);
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	VRRenderScaleDevBenchBridge::RecordPresentationAuditObservation({
+		.valid = true,
+		.eyeIndex = a_observation.eyeIndex,
+		.frame = published.frame,
+		.compositorCycleToken = published.compositorCycleToken,
+		.transitionEpoch = published.transitionEpoch,
+		.contractGeneration = published.contractGeneration,
+		.method = static_cast<uint32_t>(published.method),
+		.backend = static_cast<uint32_t>(published.vendorBackend),
+		.path = static_cast<uint32_t>(published.path),
+		.deviceIdentity = published.deviceIdentity,
+		.resourceRevision = published.resourceRevision,
+		.renderWidth = published.inputWidth,
+		.renderHeight = published.inputHeight,
+		.displayWidth = published.outputWidth,
+		.displayHeight = published.outputHeight,
+		.loadingOrMenuContext = published.loadingOrMenuContext,
+		.transitionCooldown = published.transitionCooldown,
+		.submitted = true,
+	});
+#endif
+
 	if (pathChanged && ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
 			"[VRRenderScale][Presentation] eye={} path={} frame={} compositorCycle={} epoch={} generation={} method={} input={}x{} expected={}x{} output={}x{} vendorBackend={} vendorDispatchFrame={} vendorDispatchSerial={} runtimeFallback={} loadingOrMenu={} cooldown={}",
@@ -35595,8 +35570,25 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRSubmitStageState(bool a
 	UnbindUpscalingResources();
 	auto dlssResetResult = VRVendorResourceResetResult::Ready;
 	if (a_destroyDLSSResources) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		const bool hadDLSSResources =
+			streamline.HasDLSSResourcesPendingTeardown();
+#endif
+		const auto dlssTeardownResult = streamline.DestroyDLSSResources();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (hadDLSSResources &&
+			(dlssTeardownResult == Streamline::DLSSResourceTeardownResult::Ready ||
+				dlssTeardownResult ==
+					Streamline::DLSSResourceTeardownResult::FailedAfterMutation)) {
+			VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
+				transitionEpoch,
+				VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
+					ProviderInvalidation,
+				static_cast<uint32_t>(UpscaleMethod::kDLSS));
+		}
+#endif
 		dlssResetResult = HandleVRDLSSResourceTeardownResult(
-			streamline.DestroyDLSSResources(),
+			dlssTeardownResult,
 			0,
 			"submit-stage teardown",
 			"VR submit-stage DLSS resource teardown");
@@ -35827,7 +35819,20 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRVendorRuntimeResources(
 		return submitStageResetResult;
 
 	if (destroyFSRResources) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		const bool hadFSRResources = fidelityFX.HasFSRResources();
+#endif
 		const auto destroyResult = fidelityFX.DestroyFSRResources(a_waitForFSRIdleTeardown && !a_fsrTeardownAlreadyReady);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (hadFSRResources &&
+			destroyResult == FidelityFX::LifecycleResult::Ready) {
+			VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
+				GetVRRenderScaleTransitionSnapshot().targetEpoch,
+				VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
+					ProviderInvalidation,
+				static_cast<uint32_t>(UpscaleMethod::kFSR));
+		}
+#endif
 		if (destroyResult != FidelityFX::LifecycleResult::Ready) {
 			HandleFSRLifecycleDeviceLoss(
 				destroyResult,
@@ -36030,7 +36035,20 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 				return false;
 			}
 			UnbindUpscalingResources();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			const bool hadFSRResources = fidelityFX.HasFSRResources();
+#endif
 			const auto destroyResult = fidelityFX.DestroyFSRResources(false);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (hadFSRResources &&
+				destroyResult == FidelityFX::LifecycleResult::Ready) {
+				VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
+					GetVRRenderScaleTransitionSnapshot().targetEpoch,
+					VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
+						ProviderInvalidation,
+					static_cast<uint32_t>(UpscaleMethod::kFSR));
+			}
+#endif
 			if (destroyResult != FidelityFX::LifecycleResult::Ready) {
 				MarkVendorRuntimeResourcesDirty(UpscaleMethod::kFSR, pendingFSRResetContractGeneration);
 				RecordVRVendorRuntimeLifecycle(
@@ -36054,8 +36072,25 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 			RecordVRVendorRuntimeLifecycle(UpscaleMethod::kDLSS, VRVendorRuntimeLifecyclePhase::Destroying, pendingDLSSResetContractGeneration, "inactive runtime retirement");
 			logger::debug("[Upscaling] Retiring {}inactive DLSS resources before {} runtime reset", context, magic_enum::enum_name(a_upscaleMethod));
 			UnbindUpscalingResources();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			const bool hadDLSSResources =
+				streamline.HasDLSSResourcesPendingTeardown();
+#endif
+			const auto dlssTeardownResult = streamline.DestroyDLSSResources();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (hadDLSSResources &&
+				(dlssTeardownResult == Streamline::DLSSResourceTeardownResult::Ready ||
+					dlssTeardownResult ==
+						Streamline::DLSSResourceTeardownResult::FailedAfterMutation)) {
+				VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
+					GetVRRenderScaleTransitionSnapshot().targetEpoch,
+					VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
+						ProviderInvalidation,
+					static_cast<uint32_t>(UpscaleMethod::kDLSS));
+			}
+#endif
 			const auto dlssResetResult = HandleVRDLSSResourceTeardownResult(
-				streamline.DestroyDLSSResources(),
+				dlssTeardownResult,
 				pendingDLSSResetContractGeneration,
 				"inactive runtime retirement",
 				"inactive DLSS resource teardown before vendor runtime reset");
@@ -36088,8 +36123,25 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 			RecordVRVendorRuntimeLifecycle(UpscaleMethod::kDLSS, VRVendorRuntimeLifecyclePhase::Creating, activeContractGeneration, "runtime reset rebuild");
 			logger::debug("[Upscaling] Rebuilding {}DLSS feature after VR reset", context);
 			UnbindUpscalingResources();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			const bool hadDLSSResources =
+				streamline.HasDLSSResourcesPendingTeardown();
+#endif
+			const auto dlssTeardownResult = streamline.DestroyDLSSResources();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (hadDLSSResources &&
+				(dlssTeardownResult == Streamline::DLSSResourceTeardownResult::Ready ||
+					dlssTeardownResult ==
+						Streamline::DLSSResourceTeardownResult::FailedAfterMutation)) {
+				VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
+					GetVRRenderScaleTransitionSnapshot().targetEpoch,
+					VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
+						ProviderInvalidation,
+					static_cast<uint32_t>(UpscaleMethod::kDLSS));
+			}
+#endif
 			const auto dlssResetResult = HandleVRDLSSResourceTeardownResult(
-				streamline.DestroyDLSSResources(),
+				dlssTeardownResult,
 				activeContractGeneration,
 				"runtime reset rebuild",
 				"vendor runtime DLSS resource teardown");
@@ -36134,7 +36186,20 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 				return false;
 			}
 			UnbindUpscalingResources();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			const bool hadFSRResources = fidelityFX.HasFSRResources();
+#endif
 			const auto destroyResult = fidelityFX.DestroyFSRResources(false);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (hadFSRResources &&
+				destroyResult == FidelityFX::LifecycleResult::Ready) {
+				VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
+					GetVRRenderScaleTransitionSnapshot().targetEpoch,
+					VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
+						ProviderInvalidation,
+					static_cast<uint32_t>(UpscaleMethod::kFSR));
+			}
+#endif
 			if (destroyResult != FidelityFX::LifecycleResult::Ready) {
 				MarkVendorRuntimeResourcesDirty(UpscaleMethod::kFSR, activeContractGeneration);
 				RecordVRVendorRuntimeLifecycle(
@@ -36708,6 +36773,16 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 						RequestHistoryReset();
 					} else {
 						const auto destroyResult = fidelityFX.DestroyFSRResources();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+						if (globals::game::isVR &&
+							destroyResult == FidelityFX::LifecycleResult::Ready) {
+							VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
+								GetVRRenderScaleTransitionSnapshot().targetEpoch,
+								VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
+									ProviderInvalidation,
+								static_cast<uint32_t>(UpscaleMethod::kFSR));
+						}
+#endif
 						if (!acceptFSRResourceLifecycleResult(
 								destroyResult,
 								"quality-change FSR resource teardown")) {
@@ -36738,7 +36813,25 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		if (upscaleModeChanged) {
 			if (previousVendorUpscalerSelected) {
 				if (previousUpscaleMode == UpscaleMethod::kDLSS) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					const bool hadDLSSResources =
+						globals::game::isVR &&
+						streamline.HasDLSSResourcesPendingTeardown();
+#endif
 					const auto dlssTeardownResult = streamline.DestroyDLSSResources();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					if (hadDLSSResources &&
+						(dlssTeardownResult ==
+								Streamline::DLSSResourceTeardownResult::Ready ||
+							dlssTeardownResult ==
+								Streamline::DLSSResourceTeardownResult::FailedAfterMutation)) {
+						VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
+							GetVRRenderScaleTransitionSnapshot().targetEpoch,
+							VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
+								ProviderInvalidation,
+							static_cast<uint32_t>(UpscaleMethod::kDLSS));
+					}
+#endif
 					if (globals::game::isVR) {
 						const auto resetResult = HandleVRDLSSResourceTeardownResult(
 							dlssTeardownResult,
@@ -36769,7 +36862,21 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 							"upscale-method FSR resource drain")) {
 						return false;
 					}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					const bool hadFSRResources =
+						globals::game::isVR && fidelityFX.HasFSRResources();
+#endif
 					const auto destroyResult = fidelityFX.DestroyFSRResources(!renderScaleTransitionRelevant);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					if (hadFSRResources &&
+						destroyResult == FidelityFX::LifecycleResult::Ready) {
+						VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
+							GetVRRenderScaleTransitionSnapshot().targetEpoch,
+							VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
+								ProviderInvalidation,
+							static_cast<uint32_t>(UpscaleMethod::kFSR));
+					}
+#endif
 					if (!acceptFSRResourceLifecycleResult(
 							destroyResult,
 							"upscale-method FSR resource teardown")) {
@@ -36807,6 +36914,16 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		if (!upscaleModeChanged && fsrRuntimePathChanged && a_upscalemethod == UpscaleMethod::kFSR && !fsrResourcesRecreatedForQuality) {
 			if (!runtimeFailureFallbackCanPreserveHostFSR) {
 				const auto destroyResult = fidelityFX.DestroyFSRResources();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (globals::game::isVR &&
+					destroyResult == FidelityFX::LifecycleResult::Ready) {
+					VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
+						GetVRRenderScaleTransitionSnapshot().targetEpoch,
+						VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
+							ProviderInvalidation,
+						static_cast<uint32_t>(UpscaleMethod::kFSR));
+				}
+#endif
 				if (!acceptFSRResourceLifecycleResult(
 						destroyResult,
 						"runtime-path FSR resource teardown")) {
@@ -52356,6 +52473,8 @@ void Upscaling::RecordVRVendorRuntimeLifecycle(UpscaleMethod a_upscaleMethod, VR
 		revision = ++vrRenderScaleTransitionController.revision;
 	}
 
+	// Lifecycle phases can precede mutation, so only destructive creator or
+	// provider-invalidation sites publish the DevBench boundary.
 	if (ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
 			"[VRRenderScale][VendorLifecycle] revision={} epoch={} method={} backend={} phase={} requestedGeneration={} runtimeGeneration={} resources={} ready={} attempts={} deferrals={} failures={}{}{}",

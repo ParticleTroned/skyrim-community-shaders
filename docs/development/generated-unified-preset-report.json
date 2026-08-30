@@ -1,10 +1,14 @@
 {
   "schemaVersion": 1,
-  "policySchemaVersion": 2,
+  "policySchemaVersion": 3,
   "policyStatus": "provisional-calibration-v2",
-  "evidenceDate": "2026-08-28",
+  "evidenceDate": "2026-08-30",
   "baseTemplate": "docs/development/unified-preset-templates/Base.SettingsUser.json",
   "baseSha256": "BE2798778F9D95FEABB229916594B96A02897A7E8A145CEB40E41C43C3711178",
+  "runtimeSettingsContract": {
+    "revision": 1,
+    "sourceTreeSha256": "B5B0BE10DB272DA22CEB802E0C98270801FC9C1337E1BB82C7DDF006F27562F0"
+  },
   "tiers": [
     {
       "tier": "Performance",
@@ -59,8 +63,8 @@
       "note": "Quality enables AO-only SSGI; complete ambient composition, rotating-view and physical-stereo qualification."
     },
     "volumetric-lighting-retier": {
-      "status": "measurement-requested",
-      "note": "All tiers currently retain High volumetric lighting; remeasure before deciding whether lower tiers should diverge."
+      "status": "exterior-screened-interior-pending",
+      "note": "A locked-time OCU exterior A-B-A screen found no significant tier-sized cost; retain shared High while an interior comparison remains pending."
     }
   }
 }

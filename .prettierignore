@@ -3,3 +3,6 @@ extern/
 include/
 build/
 dist/
+
+# Deterministic output owned by tools/generate-unified-presets.ps1
+docs/development/generated-unified-preset-report.json

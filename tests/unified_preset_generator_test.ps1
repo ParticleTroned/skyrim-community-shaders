@@ -7,12 +7,18 @@ $generator = Join-Path $repositoryRoot 'tools\generate-unified-presets.ps1'
 $policyPath = Join-Path $repositoryRoot 'docs\development\unified-preset-policy.json'
 $policy = Get-Content -Raw -LiteralPath $policyPath | ConvertFrom-Json -Depth 100
 $scratch = Join-Path ([System.IO.Path]::GetTempPath()) ("csx-unified-preset-test-" + [guid]::NewGuid().ToString('N'))
+$utf8 = [System.Text.UTF8Encoding]::new($false)
 
 function Assert-True {
     param([bool]$Condition, [string]$Message)
-    if (-not $Condition) {
-        throw $Message
-    }
+    if (-not $Condition) { throw $Message }
+}
+
+function Write-JsonFile {
+    param([string]$Path, $Value)
+    [System.IO.Directory]::CreateDirectory((Split-Path -Parent $Path)) | Out-Null
+    $json = (($Value | ConvertTo-Json -Depth 100) -replace "`r`n", "`n") + "`n"
+    [System.IO.File]::WriteAllText($Path, $json, $utf8)
 }
 
 function Get-LeafMap {
@@ -26,41 +32,101 @@ function Get-LeafMap {
         foreach ($property in $Value.psobject.Properties) {
             $path = if ($Prefix) { "$Prefix/$($property.Name)" } else { $property.Name }
             $child = Get-LeafMap -Value $property.Value -Prefix $path
-            foreach ($key in $child.Keys) {
-                $result[$key] = $child[$key]
-            }
+            foreach ($key in $child.Keys) { $result[$key] = $child[$key] }
         }
     }
     elseif ($Value -is [System.Collections.IEnumerable] -and $Value -isnot [string]) {
         $index = 0
         foreach ($entry in $Value) {
             $child = Get-LeafMap -Value $entry -Prefix "$Prefix[$index]"
-            foreach ($key in $child.Keys) {
-                $result[$key] = $child[$key]
-            }
+            foreach ($key in $child.Keys) { $result[$key] = $child[$key] }
             $index++
         }
     }
     else {
-        $result[$Prefix] = [string]$Value
+        $result[$Prefix] = "$($Value.GetType().FullName):$Value"
     }
     $result
 }
 
+function Get-PublicationSnapshot {
+    param([string]$OutputRoot, [string]$ReportPath)
+
+    $entries = [ordered]@{}
+    if (Test-Path -LiteralPath $OutputRoot -PathType Container) {
+        foreach ($file in Get-ChildItem -LiteralPath $OutputRoot -Recurse -File | Sort-Object FullName) {
+            $relative = $file.FullName.Substring($OutputRoot.Length + 1)
+            $entries["output/$relative"] = [ordered]@{
+                sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash
+                length = $file.Length
+                lastWriteTicks = $file.LastWriteTimeUtc.Ticks
+            }
+        }
+    }
+    if (Test-Path -LiteralPath $ReportPath -PathType Leaf) {
+        $file = Get-Item -LiteralPath $ReportPath
+        $entries['report'] = [ordered]@{
+            sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash
+            length = $file.Length
+            lastWriteTicks = $file.LastWriteTimeUtc.Ticks
+        }
+    }
+    ($entries | ConvertTo-Json -Depth 10 -Compress)
+}
+
+function Invoke-ExpectedFailure {
+    param(
+        [string]$GeneratorPath,
+        [hashtable]$Arguments,
+        [string]$Pattern,
+        [string]$Message
+    )
+
+    $failure = $null
+    try { & $GeneratorPath @Arguments 2>&1 | Out-Null }
+    catch { $failure = $_ }
+    Assert-True ($null -ne $failure) $Message
+    Assert-True ($failure.Exception.Message -match $Pattern) "$Message Actual: $($failure.Exception.Message)"
+    $failure.Exception.Message
+}
+
+function Copy-RepositoryFile {
+    param([string]$RelativePath, [string]$FixtureRoot)
+
+    $source = Join-Path $repositoryRoot $RelativePath
+    $destination = Join-Path $FixtureRoot $RelativePath
+    [System.IO.Directory]::CreateDirectory((Split-Path -Parent $destination)) | Out-Null
+    Copy-Item -LiteralPath $source -Destination $destination -Force
+}
+
 try {
     [System.IO.Directory]::CreateDirectory($scratch) | Out-Null
-    $outputRoot = Join-Path $scratch 'outputs'
-    $reportPath = Join-Path $scratch 'report.json'
 
     & $generator -Check | Out-Null
     Assert-True $? 'Committed unified preset outputs did not pass -Check.'
 
-    & $generator -OutputRoot $outputRoot -ReportPath $reportPath | Out-Null
+    $fixtureRoot = Join-Path $scratch 'repo'
+    Copy-RepositoryFile -RelativePath 'tools\generate-unified-presets.ps1' -FixtureRoot $fixtureRoot
+    Copy-RepositoryFile -RelativePath 'docs\development\unified-preset-policy.json' -FixtureRoot $fixtureRoot
+    Copy-RepositoryFile -RelativePath 'docs\development\unified-preset-templates\Base.SettingsUser.json' -FixtureRoot $fixtureRoot
+    foreach ($sourcePath in $policy.runtimeSettingsContract.sources) {
+        Copy-RepositoryFile -RelativePath ([string]$sourcePath) -FixtureRoot $fixtureRoot
+    }
+
+    $isolatedGenerator = Join-Path $fixtureRoot 'tools\generate-unified-presets.ps1'
+    $isolatedPolicyPath = Join-Path $fixtureRoot 'docs\development\unified-preset-policy.json'
+    $isolatedBasePath = Join-Path $fixtureRoot 'docs\development\unified-preset-templates\Base.SettingsUser.json'
+    $baselinePolicyText = Get-Content -Raw -LiteralPath $isolatedPolicyPath
+    $baselineBaseText = Get-Content -Raw -LiteralPath $isolatedBasePath
+    $outputRoot = Join-Path $fixtureRoot 'outputs'
+    $reportPath = Join-Path $fixtureRoot 'report.json'
+
+    & $isolatedGenerator -OutputRoot $outputRoot -ReportPath $reportPath | Out-Null
     Assert-True $? 'Temporary unified preset generation failed.'
 
     $tierProperties = @($policy.tiers.psobject.Properties)
     Assert-True ($tierProperties.Count -eq 3) 'The policy must define exactly three tiers.'
-    Assert-True (($tierProperties.Name -join '|') -eq 'Performance|Balanced|Quality') 'The tier order changed unexpectedly.'
+    Assert-True (($tierProperties.Name -join '|') -ceq 'Performance|Balanced|Quality') 'The tier order changed unexpectedly.'
 
     $ownedPaths = @($policy.tierOwnedPaths | ForEach-Object { @($_ | ForEach-Object { [string]$_ }) -join '/' })
     $maps = @{}
@@ -76,7 +142,7 @@ try {
         $candidate = $maps[$tier]
         $allPaths = @($reference.Keys + $candidate.Keys | Sort-Object -Unique)
         foreach ($path in $allPaths) {
-            if ($reference[$path] -ne $candidate[$path] -and $path -notin $ownedPaths) {
+            if ($reference[$path] -cne $candidate[$path] -and $path -notin $ownedPaths) {
                 throw "Non-tier path diverged between Performance and ${tier}: $path"
             }
         }
@@ -84,38 +150,134 @@ try {
 
     $report = Get-Content -Raw -LiteralPath $reportPath | ConvertFrom-Json -Depth 100
     Assert-True ($report.tiers.Count -eq 3) 'Generated evidence report omitted a tier.'
+    Assert-True ($null -ne $report.runtimeSettingsContract.sourceTreeSha256) 'Generated evidence report omitted the runtime settings contract.'
     Assert-True ($null -ne $report.qualifications.'ssgi-ambient-composition') 'Generated evidence report omitted qualification metadata.'
 
-    $invalidPolicy = Get-Content -Raw -LiteralPath $policyPath | ConvertFrom-Json -Depth 100
-    $invalidPolicy.tiers.Performance.overrides[0].path = @('Menu', 'UI Mode')
-    $invalidPolicyPath = Join-Path $scratch 'invalid-policy.json'
-    [System.IO.File]::WriteAllText(
-        $invalidPolicyPath,
-        (($invalidPolicy | ConvertTo-Json -Depth 100) -replace "`r`n", "`n") + "`n",
-        [System.Text.UTF8Encoding]::new($false))
+    $baselineSnapshot = Get-PublicationSnapshot -OutputRoot $outputRoot -ReportPath $reportPath
+    & $isolatedGenerator -OutputRoot $outputRoot -ReportPath $reportPath -Check | Out-Null
+    $afterCheckSnapshot = Get-PublicationSnapshot -OutputRoot $outputRoot -ReportPath $reportPath
+    Assert-True ($baselineSnapshot -ceq $afterCheckSnapshot) '-Check mutated the generated package set.'
 
-    $failure = $null
-    try {
-        & $generator -PolicyPath $invalidPolicyPath -OutputRoot (Join-Path $scratch 'invalid') -ReportPath (Join-Path $scratch 'invalid-report.json') 2>&1 | Out-Null
-    }
-    catch {
-        $failure = $_
-    }
-    Assert-True ($null -ne $failure) 'A tier override of an operational path was accepted.'
-    Assert-True ($failure.Exception.Message -match 'common/operational path') 'The invalid tier failed for the wrong reason.'
+    $invalidPolicy = $baselinePolicyText | ConvertFrom-Json -Depth 100
+    $invalidPolicy.tierOrder = @('Performance', 'Balanced')
+    Write-JsonFile -Path $isolatedPolicyPath -Value $invalidPolicy
+    $null = Invoke-ExpectedFailure -GeneratorPath $isolatedGenerator -Arguments @{
+        OutputRoot = $outputRoot; ReportPath = $reportPath
+    } -Pattern 'tierOrder must be exactly' -Message 'A non-three-tier policy was accepted.'
+    Assert-True ($baselineSnapshot -ceq (Get-PublicationSnapshot -OutputRoot $outputRoot -ReportPath $reportPath)) 'A rejected tier contract mutated the published generation.'
+    [System.IO.File]::WriteAllText($isolatedPolicyPath, $baselinePolicyText, $utf8)
 
-    $extraOutputRoot = Join-Path $scratch 'extra-output'
-    $extraOutput = Join-Path $extraOutputRoot 'CSX Unified- Unmanaged - Press END on PC to Customize'
+    $invalidPolicy = $baselinePolicyText | ConvertFrom-Json -Depth 100
+    $invalidPolicy.tierOwnedPaths[0] = @('menu', 'UI Mode')
+    foreach ($tier in $invalidPolicy.tiers.psobject.Properties) {
+        $tier.Value.overrides[0].path = @('menu', 'UI Mode')
+        $tier.Value.overrides[0].value = 0
+    }
+    Write-JsonFile -Path $isolatedPolicyPath -Value $invalidPolicy
+    $null = Invoke-ExpectedFailure -GeneratorPath $isolatedGenerator -Arguments @{
+        OutputRoot = $outputRoot; ReportPath = $reportPath
+    } -Pattern 'commonOverrides and tierOwnedPaths|common/operational path' -Message 'A case-variant operational tier path was accepted.'
+    Assert-True ($baselineSnapshot -ceq (Get-PublicationSnapshot -OutputRoot $outputRoot -ReportPath $reportPath)) 'A rejected case-variant path mutated the published generation.'
+    [System.IO.File]::WriteAllText($isolatedPolicyPath, $baselinePolicyText, $utf8)
+
+    $invalidBase = $baselineBaseText | ConvertFrom-Json -Depth 100
+    $invalidBase.Advanced.psobject.Properties.Remove('Log Level')
+    Write-JsonFile -Path $isolatedBasePath -Value $invalidBase
+    $invalidPolicy = $baselinePolicyText | ConvertFrom-Json -Depth 100
+    $invalidPolicy.baseTemplate.sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $isolatedBasePath).Hash
+    Write-JsonFile -Path $isolatedPolicyPath -Value $invalidPolicy
+    $null = Invoke-ExpectedFailure -GeneratorPath $isolatedGenerator -Arguments @{
+        OutputRoot = $outputRoot; ReportPath = $reportPath
+    } -Pattern 'JSON path is absent.*Advanced/Log Level' -Message 'A missing common settings path was fabricated.'
+    Assert-True ($baselineSnapshot -ceq (Get-PublicationSnapshot -OutputRoot $outputRoot -ReportPath $reportPath)) 'A missing base path mutated the published generation.'
+
+    $invalidBase = $baselineBaseText | ConvertFrom-Json -Depth 100
+    $invalidBase.Advanced.'Log Level' = '2'
+    Write-JsonFile -Path $isolatedBasePath -Value $invalidBase
+    $invalidPolicy.baseTemplate.sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $isolatedBasePath).Hash
+    Write-JsonFile -Path $isolatedPolicyPath -Value $invalidPolicy
+    $null = Invoke-ExpectedFailure -GeneratorPath $isolatedGenerator -Arguments @{
+        OutputRoot = $outputRoot; ReportPath = $reportPath
+    } -Pattern 'Required settings value mismatch|type mismatch' -Message 'A wrong-type common settings value was accepted.'
+    Assert-True ($baselineSnapshot -ceq (Get-PublicationSnapshot -OutputRoot $outputRoot -ReportPath $reportPath)) 'A wrong-type base value mutated the published generation.'
+    [System.IO.File]::WriteAllText($isolatedBasePath, $baselineBaseText, $utf8)
+    [System.IO.File]::WriteAllText($isolatedPolicyPath, $baselinePolicyText, $utf8)
+
+    $invalidPolicy = $baselinePolicyText | ConvertFrom-Json -Depth 100
+    $invalidPolicy.tiers.Performance.outputDirectory = 'CSX Unified- Alias\..\CSX Unified- Performance - Press END on PC to Customize'
+    Write-JsonFile -Path $isolatedPolicyPath -Value $invalidPolicy
+    $null = Invoke-ExpectedFailure -GeneratorPath $isolatedGenerator -Arguments @{
+        OutputRoot = $outputRoot; ReportPath = $reportPath
+    } -Pattern 'outputDirectory must be exactly' -Message 'An aliased tier output directory was accepted.'
+    Assert-True ($baselineSnapshot -ceq (Get-PublicationSnapshot -OutputRoot $outputRoot -ReportPath $reportPath)) 'A rejected output alias mutated the published generation.'
+    [System.IO.File]::WriteAllText($isolatedPolicyPath, $baselinePolicyText, $utf8)
+
+    $refreshSource = Join-Path $scratch 'refresh-source.json'
+    [System.IO.File]::WriteAllText($refreshSource, $baselineBaseText, $utf8)
+    $invalidPolicy = $baselinePolicyText | ConvertFrom-Json -Depth 100
+    $invalidPolicy.baseTemplate.path = 'tools/generate-unified-presets.ps1'
+    Write-JsonFile -Path $isolatedPolicyPath -Value $invalidPolicy
+    $generatorHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $isolatedGenerator).Hash
+    $null = Invoke-ExpectedFailure -GeneratorPath $isolatedGenerator -Arguments @{
+        OutputRoot = $outputRoot; ReportPath = $reportPath; RefreshBaseFromPath = $refreshSource
+    } -Pattern 'authorized template' -Message 'Refresh accepted an arbitrary repository target.'
+    Assert-True ((Get-FileHash -Algorithm SHA256 -LiteralPath $isolatedGenerator).Hash -ceq $generatorHash) 'Rejected refresh altered the generator.'
+    Assert-True ($baselineSnapshot -ceq (Get-PublicationSnapshot -OutputRoot $outputRoot -ReportPath $reportPath)) 'A rejected refresh target mutated the published generation.'
+    [System.IO.File]::WriteAllText($isolatedPolicyPath, $baselinePolicyText, $utf8)
+
+    $contractSource = Join-Path $fixtureRoot ([string]$policy.runtimeSettingsContract.sources[0])
+    $contractSourceText = Get-Content -Raw -LiteralPath $contractSource
+    [System.IO.File]::AppendAllText($contractSource, "`n", $utf8)
+    $null = Invoke-ExpectedFailure -GeneratorPath $isolatedGenerator -Arguments @{
+        OutputRoot = $outputRoot; ReportPath = $reportPath
+    } -Pattern 'Runtime settings contract changed' -Message 'A runtime settings source change did not invalidate the preset contract.'
+    Assert-True ($baselineSnapshot -ceq (Get-PublicationSnapshot -OutputRoot $outputRoot -ReportPath $reportPath)) 'Runtime source drift mutated the published generation.'
+    [System.IO.File]::WriteAllText($contractSource, $contractSourceText, $utf8)
+
+    $changedPolicy = $baselinePolicyText | ConvertFrom-Json -Depth 100
+    $changedPolicy.packageVersion = 'd2099.01.01.1'
+    Write-JsonFile -Path $isolatedPolicyPath -Value $changedPolicy
+    foreach ($failurePoint in 'after-stage', 'after-publish-1', 'before-final-verify') {
+        $beforeFailure = Get-PublicationSnapshot -OutputRoot $outputRoot -ReportPath $reportPath
+        $null = Invoke-ExpectedFailure -GeneratorPath $isolatedGenerator -Arguments @{
+            OutputRoot = $outputRoot; ReportPath = $reportPath; InternalTestFailurePoint = $failurePoint
+        } -Pattern 'previous complete generation was restored' -Message "Failure point $failurePoint did not fail safely."
+        $afterFailure = Get-PublicationSnapshot -OutputRoot $outputRoot -ReportPath $reportPath
+        Assert-True ($beforeFailure -ceq $afterFailure) "Failure point $failurePoint changed the published generation."
+    }
+    Assert-True (@(Get-ChildItem -LiteralPath $fixtureRoot -Recurse -File | Where-Object { $_.Name -match '\.csx-[^.]+\.(tmp|bak)$' }).Count -eq 0) 'Publication left temporary or backup files behind.'
+    [System.IO.File]::WriteAllText($isolatedPolicyPath, $baselinePolicyText, $utf8)
+
+    $stdoutPath = Join-Path $scratch 'lock-owner.stdout.txt'
+    $stderrPath = Join-Path $scratch 'lock-owner.stderr.txt'
+    $lockSignalPath = Join-Path $scratch 'lock-owner.ready.txt'
+    $lockOwner = Start-Process -FilePath 'pwsh' -ArgumentList @(
+        '-NoProfile', '-File', $isolatedGenerator,
+        '-OutputRoot', $outputRoot,
+        '-ReportPath', $reportPath,
+        '-InternalTestLockSignalPath', $lockSignalPath,
+        '-InternalTestLockHoldMilliseconds', '1500') -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    $lockDeadline = [DateTime]::UtcNow.AddSeconds(5)
+    while (-not (Test-Path -LiteralPath $lockSignalPath -PathType Leaf) -and
+        -not $lockOwner.HasExited -and [DateTime]::UtcNow -lt $lockDeadline) {
+        Start-Sleep -Milliseconds 50
+    }
+    Assert-True (Test-Path -LiteralPath $lockSignalPath -PathType Leaf) 'The lock-owner process did not signal lock acquisition.'
+    Assert-True (-not $lockOwner.HasExited) 'The lock-owner process exited before the overlap test.'
+    $null = Invoke-ExpectedFailure -GeneratorPath $isolatedGenerator -Arguments @{
+        OutputRoot = $outputRoot; ReportPath = $reportPath
+    } -Pattern 'Another unified-preset generator or checker owns' -Message 'A concurrent generator acquired the same publication identity.'
+    $lockOwner.WaitForExit()
+    $lockOwnerExitCode = $lockOwner.ExitCode
+    $lockOwner.Dispose()
+    Assert-True ($lockOwnerExitCode -eq 0) "The lock-owner generation failed: $(Get-Content -Raw -LiteralPath $stderrPath)"
+
+    $extraOutput = Join-Path $outputRoot 'CSX Unified- Unmanaged - Press END on PC to Customize'
     [System.IO.Directory]::CreateDirectory($extraOutput) | Out-Null
-    $failure = $null
-    try {
-        & $generator -OutputRoot $extraOutputRoot -ReportPath (Join-Path $scratch 'extra-report.json') 2>&1 | Out-Null
-    }
-    catch {
-        $failure = $_
-    }
-    Assert-True ($null -ne $failure) 'An unmanaged unified preset output directory was accepted.'
-    Assert-True ($failure.Exception.Message -match 'Unmanaged unified preset output director') 'The unmanaged output failed for the wrong reason.'
+    $null = Invoke-ExpectedFailure -GeneratorPath $isolatedGenerator -Arguments @{
+        OutputRoot = $outputRoot; ReportPath = $reportPath
+    } -Pattern 'Unmanaged unified preset output director' -Message 'An unmanaged unified preset output directory was accepted.'
+    Assert-True (Test-Path -LiteralPath $extraOutput -PathType Container) 'Rejected unmanaged output was deleted.'
 
     Write-Output 'Unified preset generator tests passed.'
 }

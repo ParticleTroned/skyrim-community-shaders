@@ -100,7 +100,7 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 		bool publicationCurrent = false;
 		bool exactDimensions = false;
 		bool nativeDimensions = false;
-		bool vendorBackendPresent = false;
+		bool vendorDispatchProven = false;
 		bool renderScaleDisabled = false;
 		bool foveatedVendorDisabled = false;
 		bool staleVendorGenerationAbsent = false;
@@ -108,14 +108,45 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 		PresentationDisposition disposition = PresentationDisposition::None;
 	};
 
+	struct VendorDispatchProofFacts
+	{
+		bool backendCoherent = false;
+		bool dispatchFramesCurrent = false;
+		bool runtimeFallbackCoherent = false;
+		bool dlssBackend = false;
+		bool fsrBackend = false;
+		bool runtimeFallback = false;
+		std::uint64_t leftDispatchSerial = 0;
+		std::uint64_t rightDispatchSerial = 0;
+		bool sharedFSRDispatchRequired = false;
+	};
+
+	[[nodiscard]] constexpr bool HasCoherentVendorDispatch(
+		const VendorDispatchProofFacts& a_facts) noexcept
+	{
+		if (!a_facts.backendCoherent || !a_facts.dispatchFramesCurrent ||
+			!a_facts.runtimeFallbackCoherent) {
+			return false;
+		}
+		if (a_facts.dlssBackend)
+			return !a_facts.runtimeFallback;
+		if (!a_facts.fsrBackend || a_facts.leftDispatchSerial == 0 ||
+			a_facts.rightDispatchSerial == 0) {
+			return false;
+		}
+		return !a_facts.sharedFSRDispatchRequired ||
+		       a_facts.leftDispatchSerial == a_facts.rightDispatchSerial;
+	}
+
 	[[nodiscard]] constexpr PresentationProofKind ClassifyPresentationProof(
 		const PresentationProofFacts& a_facts) noexcept
 	{
 		if (!a_facts.coherentStereoCycle || !a_facts.publicationCurrent)
 			return PresentationProofKind::None;
-		if (a_facts.disposition == PresentationDisposition::ExactVendor &&
+		if ((a_facts.disposition == PresentationDisposition::ExactVendor ||
+				a_facts.disposition == PresentationDisposition::ExactNative) &&
 			a_facts.currentProfileMatches && a_facts.exactDimensions &&
-			a_facts.vendorBackendPresent) {
+			a_facts.vendorDispatchProven) {
 			return PresentationProofKind::ExactVendorEvaluation;
 		}
 		if (a_facts.disposition == PresentationDisposition::ExactNative &&
@@ -344,12 +375,12 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 	}
 
 	[[nodiscard]] constexpr bool MatchesTargetContractGeneration(
-		bool a_vendorTarget,
+		bool a_requiresPublishedGeneration,
 		std::uint32_t a_observed,
 		std::uint32_t a_expected) noexcept
 	{
 		return a_observed == a_expected &&
-		       (!a_vendorTarget || a_observed != 0);
+		       (!a_requiresPublishedGeneration || a_observed != 0);
 	}
 
 	[[nodiscard]] constexpr bool MatchesMutationBoundaryGeneration(
@@ -437,6 +468,11 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 		std::uint32_t qualityMode = 0;
 		bool renderScaleMode = false;
 		std::uint32_t backend = 0;
+		std::uint32_t vendorDispatchFrame = 0;
+		std::uint64_t vendorDispatchSerial = 0;
+		bool vendorRuntimeFallback = false;
+		bool vendorDispatchProven = false;
+		bool sharedVendorDispatchRequired = false;
 		PresentationDisposition disposition = PresentationDisposition::None;
 		bool loadingOrMenuContext = false;
 		bool transitionCooldown = false;
@@ -480,6 +516,13 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 		std::uint32_t qualityMode = 0;
 		bool renderScaleMode = false;
 		std::uint32_t backend = 0;
+		std::uint32_t leftVendorDispatchFrame = 0;
+		std::uint64_t leftVendorDispatchSerial = 0;
+		std::uint32_t rightVendorDispatchFrame = 0;
+		std::uint64_t rightVendorDispatchSerial = 0;
+		bool vendorRuntimeFallback = false;
+		bool vendorDispatchProven = false;
+		bool sharedVendorDispatchRequired = false;
 		PresentationDisposition disposition = PresentationDisposition::None;
 		bool loadingOrMenuContext = false;
 		bool transitionCooldown = false;
@@ -601,6 +644,12 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 		       a_left.qualityMode == a_right.qualityMode &&
 		       a_left.renderScaleMode == a_right.renderScaleMode &&
 		       a_left.backend == a_right.backend &&
+		       a_left.vendorRuntimeFallback == a_right.vendorRuntimeFallback &&
+		       a_left.vendorDispatchProven == a_right.vendorDispatchProven &&
+		       a_left.sharedVendorDispatchRequired ==
+		           a_right.sharedVendorDispatchRequired &&
+		       (!a_left.sharedVendorDispatchRequired ||
+				   a_left.vendorDispatchSerial == a_right.vendorDispatchSerial) &&
 		       a_left.disposition == a_right.disposition &&
 		       a_left.loadingOrMenuContext == a_right.loadingOrMenuContext &&
 		       a_left.transitionCooldown == a_right.transitionCooldown;
@@ -650,6 +699,15 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 		cycle.qualityMode = a_right.qualityMode;
 		cycle.renderScaleMode = a_right.renderScaleMode;
 		cycle.backend = a_right.backend;
+		cycle.leftVendorDispatchFrame = a_left.vendorDispatchFrame;
+		cycle.leftVendorDispatchSerial = a_left.vendorDispatchSerial;
+		cycle.rightVendorDispatchFrame = a_right.vendorDispatchFrame;
+		cycle.rightVendorDispatchSerial = a_right.vendorDispatchSerial;
+		cycle.vendorRuntimeFallback = a_right.vendorRuntimeFallback;
+		cycle.vendorDispatchProven = a_left.vendorDispatchProven &&
+		                             a_right.vendorDispatchProven;
+		cycle.sharedVendorDispatchRequired =
+			a_right.sharedVendorDispatchRequired;
 		cycle.disposition = cycle.coherent ? a_right.disposition :
 		                                     PresentationDisposition::Mixed;
 		cycle.loadingOrMenuContext = a_left.loadingOrMenuContext ||

@@ -215,7 +215,7 @@ namespace
 			.publicationCurrent = true,
 			.exactDimensions = true,
 			.nativeDimensions = true,
-			.vendorBackendPresent = true,
+			.vendorDispatchProven = true,
 			.renderScaleDisabled = true,
 			.foveatedVendorDisabled = true,
 			.staleVendorGenerationAbsent = true,
@@ -227,7 +227,11 @@ namespace
 			return false;
 		}
 		facts.disposition = PresentationDisposition::ExactNative;
-		facts.vendorBackendPresent = false;
+		if (ClassifyPresentationProof(facts) !=
+			PresentationProofKind::ExactVendorEvaluation) {
+			return false;
+		}
+		facts.vendorDispatchProven = false;
 		if (ClassifyPresentationProof(facts) !=
 			PresentationProofKind::ExactNativePresentation) {
 			return false;
@@ -240,6 +244,64 @@ namespace
 		facts.completedOutputStronglyOwned = false;
 		return ClassifyPresentationProof(facts) ==
 		       PresentationProofKind::None;
+	}
+
+	constexpr bool CoversVendorDispatchProof()
+	{
+		VendorDispatchProofFacts facts{
+			.backendCoherent = true,
+			.dispatchFramesCurrent = true,
+			.runtimeFallbackCoherent = true,
+			.dlssBackend = true,
+		};
+		if (!HasCoherentVendorDispatch(facts))
+			return false;
+		facts.runtimeFallback = true;
+		if (HasCoherentVendorDispatch(facts))
+			return false;
+
+		facts = {
+			.backendCoherent = true,
+			.dispatchFramesCurrent = true,
+			.runtimeFallbackCoherent = true,
+			.fsrBackend = true,
+			.leftDispatchSerial = 41,
+			.rightDispatchSerial = 42,
+		};
+		if (!HasCoherentVendorDispatch(facts))
+			return false;
+		facts.sharedFSRDispatchRequired = true;
+		if (HasCoherentVendorDispatch(facts))
+			return false;
+		facts.rightDispatchSerial = facts.leftDispatchSerial;
+		if (!HasCoherentVendorDispatch(facts))
+			return false;
+		facts.dispatchFramesCurrent = false;
+		return !HasCoherentVendorDispatch(facts);
+	}
+
+	constexpr bool CoversVendorAuditIdentity()
+	{
+		auto left = Eye(0, 12, PresentationDisposition::ExactVendor);
+		auto right = Eye(1, 12, PresentationDisposition::ExactVendor);
+		left.vendorDispatchFrame = left.frame;
+		right.vendorDispatchFrame = right.frame;
+		left.vendorDispatchSerial = 41;
+		right.vendorDispatchSerial = 42;
+		left.vendorDispatchProven = true;
+		right.vendorDispatchProven = true;
+		if (!SameSubmittedIdentity(left, right))
+			return false;
+
+		left.sharedVendorDispatchRequired = true;
+		right.sharedVendorDispatchRequired = true;
+		if (SameSubmittedIdentity(left, right))
+			return false;
+		right.vendorDispatchSerial = left.vendorDispatchSerial;
+		if (!SameSubmittedIdentity(left, right))
+			return false;
+		right.vendorRuntimeFallback = true;
+		return !SameSubmittedIdentity(left, right);
 	}
 
 	constexpr bool CoversTargetProofKindRequirements()
@@ -426,6 +488,8 @@ namespace
 	static_assert(CoversMutationBoundaryOwnership());
 	static_assert(CoversGenerationCorrelation());
 	static_assert(CoversProofKinds());
+	static_assert(CoversVendorDispatchProof());
+	static_assert(CoversVendorAuditIdentity());
 	static_assert(CoversTargetProofKindRequirements());
 	static_assert(CoversPartialAndCompleteCycles());
 	static_assert(CoversExactBoundaryClassification());

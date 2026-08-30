@@ -132,6 +132,31 @@ namespace
 		}
 	}
 
+	bool IsFSRBackend(Upscaling::VRRenderScaleBackendKind a_backend)
+	{
+		return a_backend == Upscaling::VRRenderScaleBackendKind::FSRHost ||
+		       a_backend == Upscaling::VRRenderScaleBackendKind::FSRRuntime ||
+		       a_backend == Upscaling::VRRenderScaleBackendKind::FSR4Runtime;
+	}
+
+	bool HasCurrentVendorDispatch(
+		Upscaling::UpscaleMethod a_method,
+		Upscaling::VRRenderScaleBackendKind a_backend,
+		uint32_t a_presentationFrame,
+		uint32_t a_dispatchFrame,
+		uint64_t a_dispatchSerial,
+		bool a_runtimeFallback)
+	{
+		if (a_presentationFrame == 0 || a_dispatchFrame != a_presentationFrame)
+			return false;
+		if (a_method == Upscaling::UpscaleMethod::kDLSS) {
+			return a_backend == Upscaling::VRRenderScaleBackendKind::DLSS &&
+			       !a_runtimeFallback;
+		}
+		return a_method == Upscaling::UpscaleMethod::kFSR &&
+		       IsFSRBackend(a_backend) && a_dispatchSerial != 0;
+	}
+
 	const char* GetPreparationEventTypeName(
 		Upscaling::VRRenderScalePreparationEventType a_type)
 	{
@@ -441,6 +466,34 @@ namespace
 		const bool nativeDimensions = exactDimensions &&
 		                              left.inputWidth == left.outputWidth &&
 		                              left.inputHeight == left.outputHeight;
+		const bool vendorBackendCoherent =
+			left.vendorBackend != Upscaling::VRRenderScaleBackendKind::None &&
+			left.vendorBackend == right.vendorBackend;
+		const bool dlssBackend =
+			left.vendorBackend == Upscaling::VRRenderScaleBackendKind::DLSS;
+		const bool fsrBackend = IsFSRBackend(left.vendorBackend);
+		const bool vendorDispatchProven =
+			ReplacementTelemetry::HasCoherentVendorDispatch({
+				.backendCoherent = vendorBackendCoherent,
+				.dispatchFramesCurrent =
+					HasCurrentVendorDispatch(
+						left.method, left.vendorBackend, left.frame,
+						left.vendorDispatchFrame, left.vendorDispatchSerial,
+						left.vendorRuntimeFallback) &&
+					HasCurrentVendorDispatch(
+						right.method, right.vendorBackend, right.frame,
+						right.vendorDispatchFrame, right.vendorDispatchSerial,
+						right.vendorRuntimeFallback),
+				.runtimeFallbackCoherent =
+					left.vendorRuntimeFallback == right.vendorRuntimeFallback,
+				.dlssBackend = dlssBackend,
+				.fsrBackend = fsrBackend,
+				.runtimeFallback = left.vendorRuntimeFallback,
+				.leftDispatchSerial = left.vendorDispatchSerial,
+				.rightDispatchSerial = right.vendorDispatchSerial,
+				.sharedFSRDispatchRequired =
+					left.path == Upscaling::VRRenderScalePresentationPath::NativeOriginal,
+			});
 		const auto proofKind = ReplacementTelemetry::ClassifyPresentationProof({
 			.coherentStereoCycle = commonStereoIdentity,
 			.currentProfileMatches = currentContractMatches,
@@ -448,8 +501,7 @@ namespace
 			.exactDimensions = exactDimensions &&
 		                       left.vendorBackend == right.vendorBackend,
 			.nativeDimensions = nativeDimensions,
-			.vendorBackendPresent =
-				left.vendorBackend != Upscaling::VRRenderScaleBackendKind::None,
+			.vendorDispatchProven = vendorDispatchProven,
 			.renderScaleDisabled = exactNativeWithoutProfile ||
 		                           (currentProfile.valid &&
 									   !currentProfile.renderScaleModeEnabled),
@@ -609,6 +661,9 @@ namespace
 				{ "transitionEpoch", a_eye.transitionEpoch },
 				{ "method", GetUpscaleMethodName(a_eye.method) },
 				{ "backend", GetBackendName(a_eye.vendorBackend) },
+				{ "vendorDispatchFrame", a_eye.vendorDispatchFrame },
+				{ "vendorDispatchSerial", a_eye.vendorDispatchSerial },
+				{ "vendorRuntimeFallback", a_eye.vendorRuntimeFallback },
 				{ "loadingOrMenuContext", a_eye.loadingOrMenuContext },
 				{ "transitionCooldown", a_eye.transitionCooldown },
 			};
@@ -637,6 +692,9 @@ namespace
 			{ "backendValue", currentPresentationProven ?
 								  json(static_cast<uint32_t>(left.vendorBackend)) :
 								  json(nullptr) },
+			{ "vendorDispatchProven", currentPresentationProven ?
+										  json(vendorDispatchProven) :
+										  json(nullptr) },
 			{ "requestId", currentPresentationProven ?
 							   json(currentProfile.requestID) :
 							   json(nullptr) },
@@ -678,7 +736,7 @@ namespace
 		};
 
 		return {
-			{ "schemaRevision", 12 },
+			{ "schemaRevision", 13 },
 			{ "observationFrame", a_frame },
 			{ "presentationProof", presentationProof },
 			{ "currentPresentationProven", currentPresentationProven },
@@ -2049,6 +2107,14 @@ namespace
 			{ "qualityMode", a_cycle.qualityMode },
 			{ "renderScaleMode", a_cycle.renderScaleMode },
 			{ "backendValue", a_cycle.backend },
+			{ "leftVendorDispatchFrame", a_cycle.leftVendorDispatchFrame },
+			{ "leftVendorDispatchSerial", a_cycle.leftVendorDispatchSerial },
+			{ "rightVendorDispatchFrame", a_cycle.rightVendorDispatchFrame },
+			{ "rightVendorDispatchSerial", a_cycle.rightVendorDispatchSerial },
+			{ "vendorRuntimeFallback", a_cycle.vendorRuntimeFallback },
+			{ "vendorDispatchProven", a_cycle.vendorDispatchProven },
+			{ "sharedVendorDispatchRequired",
+				a_cycle.sharedVendorDispatchRequired },
 			{ "disposition", ReplacementTelemetry::GetDispositionName(
 								 a_cycle.disposition) },
 			{ "submitted", a_cycle.submitted },
@@ -3239,7 +3305,7 @@ namespace
 			transitionEpoch == 0 ||
 			transitionEpoch != a_transition.expectedReplacementTransitionEpoch ||
 			!ReplacementTelemetry::MatchesTargetContractGeneration(
-				vendorTarget,
+				target.renderScaleMode,
 				static_cast<uint32_t>(contractGeneration),
 				a_transition.expectedReplacementContractGeneration) ||
 			publicationGeneration == 0 ||
@@ -4778,7 +4844,7 @@ namespace
 			a_transition.firstNewGenerationProvenEvidence);
 
 		json receipt{
-			{ "schemaRevision", 12 },
+			{ "schemaRevision", 13 },
 			{ "action", "qualification_wait" },
 			{ "transitionId", a_transition.transitionID },
 			{ "ownerId", a_transition.ownerID },
@@ -6567,6 +6633,38 @@ namespace VRRenderScaleDevBenchBridge
 				dispatchProof["renderScaleMode"].get<bool>();
 			const auto dispatchBackend = static_cast<uint32_t>(
 				OptionalNonNegativeIntegerOrZero(dispatchProof, "backendValue"));
+			const auto observationMethod = static_cast<Upscaling::UpscaleMethod>(
+				a_observation.method);
+			const auto observationBackend =
+				static_cast<Upscaling::VRRenderScaleBackendKind>(
+					a_observation.backend);
+			const bool observationVendorDispatchProven =
+				HasCurrentVendorDispatch(
+					observationMethod,
+					observationBackend,
+					a_observation.frame,
+					a_observation.vendorDispatchFrame,
+					a_observation.vendorDispatchSerial,
+					a_observation.vendorRuntimeFallback);
+			const bool sharedVendorDispatchRequired =
+				observationMethod == Upscaling::UpscaleMethod::kFSR &&
+				a_observation.path == static_cast<uint32_t>(
+										  Upscaling::VRRenderScalePresentationPath::NativeOriginal);
+			const auto exactPathMatchesTarget =
+				[&](Upscaling::UpscaleMethod a_method, bool a_renderScaleMode) {
+					if (a_method == Upscaling::UpscaleMethod::kDLSS ||
+						a_method == Upscaling::UpscaleMethod::kFSR) {
+						const auto expectedPath = a_renderScaleMode ?
+					                                  Upscaling::VRRenderScalePresentationPath::VendorEvaluated :
+					                                  Upscaling::VRRenderScalePresentationPath::NativeOriginal;
+						return a_observation.path == static_cast<uint32_t>(expectedPath) &&
+					           observationVendorDispatchProven;
+					}
+					return a_observation.path == static_cast<uint32_t>(
+													 Upscaling::VRRenderScalePresentationPath::NativeOriginal) &&
+				           observationBackend ==
+				               Upscaling::VRRenderScaleBackendKind::None;
+				};
 			const bool selectionSuppressesCurrent =
 				a_observation.selection ==
 					PresentationAuditSelection::BlackKeepalive ||
@@ -6608,7 +6706,10 @@ namespace VRRenderScaleDevBenchBridge
 											  publication.publishedGeneration ==
 												  dispatchPublicationGeneration &&
 											  a_observation.method ==
-												  dispatchMethod));
+												  dispatchMethod &&
+											  exactPathMatchesTarget(
+												  static_cast<Upscaling::UpscaleMethod>(dispatchMethod),
+												  dispatchRenderScaleMode)));
 			const bool differsFromDispatch = !dispatchProven ||
 			                                 a_observation.transitionEpoch !=
 			                                     dispatchTransitionEpoch ||
@@ -6643,24 +6744,9 @@ namespace VRRenderScaleDevBenchBridge
 				       a_observation.deviceIdentity == boundaryDeviceIdentity;
 			};
 			const auto exactPathMatchesProfile = [&](const auto& a_profile) {
-				if (a_profile.method == Upscaling::UpscaleMethod::kDLSS) {
-					return a_observation.path ==
-					           static_cast<uint32_t>(
-								   Upscaling::VRRenderScalePresentationPath::VendorEvaluated) &&
-					       a_observation.backend == static_cast<uint32_t>(
-														Upscaling::VRRenderScaleBackendKind::DLSS);
-				}
-				if (a_profile.method == Upscaling::UpscaleMethod::kFSR) {
-					return a_observation.path ==
-					           static_cast<uint32_t>(
-								   Upscaling::VRRenderScalePresentationPath::VendorEvaluated) &&
-					       a_observation.backend != static_cast<uint32_t>(
-														Upscaling::VRRenderScaleBackendKind::None);
-				}
-				return a_observation.path == static_cast<uint32_t>(
-												 Upscaling::VRRenderScalePresentationPath::NativeOriginal) &&
-				       a_observation.backend == static_cast<uint32_t>(
-													Upscaling::VRRenderScaleBackendKind::None);
+				return exactPathMatchesTarget(
+					a_profile.method,
+					a_profile.renderScaleModeEnabled);
 			};
 			const bool exactStableAfterMutation = physicalMutationStarted &&
 			                                      differsFromDispatch &&
@@ -6712,6 +6798,14 @@ namespace VRRenderScaleDevBenchBridge
 			ReplacementTelemetry::PresentationDisposition disposition =
 				ToAuditDisposition(static_cast<
 					Upscaling::VRRenderScalePresentationPath>(a_observation.path));
+			const bool exactVendorObservationPath =
+				a_observation.path == static_cast<uint32_t>(
+										  Upscaling::VRRenderScalePresentationPath::VendorEvaluated) ||
+				a_observation.path == static_cast<uint32_t>(
+										  Upscaling::VRRenderScalePresentationPath::NativeOriginal);
+			if (observationVendorDispatchProven && exactVendorObservationPath)
+				disposition =
+					ReplacementTelemetry::PresentationDisposition::ExactVendor;
 			if (a_observation.selection ==
 				PresentationAuditSelection::BlackKeepalive) {
 				disposition =
@@ -6774,6 +6868,11 @@ namespace VRRenderScaleDevBenchBridge
 				.qualityMode = identityQualityMode,
 				.renderScaleMode = identityRenderScaleMode,
 				.backend = identityBackend,
+				.vendorDispatchFrame = a_observation.vendorDispatchFrame,
+				.vendorDispatchSerial = a_observation.vendorDispatchSerial,
+				.vendorRuntimeFallback = a_observation.vendorRuntimeFallback,
+				.vendorDispatchProven = observationVendorDispatchProven,
+				.sharedVendorDispatchRequired = sharedVendorDispatchRequired,
 				.disposition = disposition,
 				.loadingOrMenuContext = identityLoadingOrMenuContext,
 				.transitionCooldown = identityTransitionCooldown,
@@ -6801,9 +6900,10 @@ namespace VRRenderScaleDevBenchBridge
 					completed.contractGeneration) &&
 				boundaryDeviceIdentity == completed.deviceIdentity) {
 				const auto eyeEvidence = [&](uint32_t a_eyeIndex) {
+					const bool leftEye = a_eyeIndex == 0;
 					return json{
-						{ "frame", a_eyeIndex == 0 ? completed.leftFrame : completed.rightFrame },
-						{ "qpcTick", a_eyeIndex == 0 ? completed.leftQpcTick : completed.rightQpcTick },
+						{ "frame", leftEye ? completed.leftFrame : completed.rightFrame },
+						{ "qpcTick", leftEye ? completed.leftQpcTick : completed.rightQpcTick },
 						{ "compositorCycleToken", completed.compositorCycleToken },
 						{ "transitionEpoch", completed.transitionEpoch },
 						{ "generation", completed.contractGeneration },
@@ -6811,6 +6911,13 @@ namespace VRRenderScaleDevBenchBridge
 										static_cast<Upscaling::UpscaleMethod>(completed.method)) },
 						{ "backend", GetBackendName(
 										 static_cast<Upscaling::VRRenderScaleBackendKind>(completed.backend)) },
+						{ "vendorDispatchFrame", leftEye ?
+													 completed.leftVendorDispatchFrame :
+													 completed.rightVendorDispatchFrame },
+						{ "vendorDispatchSerial", leftEye ?
+													  completed.leftVendorDispatchSerial :
+													  completed.rightVendorDispatchSerial },
+						{ "vendorRuntimeFallback", completed.vendorRuntimeFallback },
 						{ "deviceIdentity", static_cast<uint64_t>(completed.deviceIdentity) },
 						{ "resourceRevision", completed.resourceRevision },
 						{ "renderWidth", completed.renderWidth },
@@ -6846,6 +6953,9 @@ namespace VRRenderScaleDevBenchBridge
 					{ "backend", GetBackendName(
 									 static_cast<Upscaling::VRRenderScaleBackendKind>(completed.backend)) },
 					{ "backendValue", completed.backend },
+					{ "vendorDispatchProven", completed.vendorDispatchProven },
+					{ "sharedVendorDispatchRequired",
+						completed.sharedVendorDispatchRequired },
 					{ "compositorCycleToken", completed.compositorCycleToken },
 					{ "leftEye", eyeEvidence(0) },
 					{ "rightEye", eyeEvidence(1) },

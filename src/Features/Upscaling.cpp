@@ -31640,6 +31640,9 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 		.contractGeneration = published.contractGeneration,
 		.method = static_cast<uint32_t>(published.method),
 		.backend = static_cast<uint32_t>(published.vendorBackend),
+		.vendorDispatchFrame = published.vendorDispatchFrame,
+		.vendorDispatchSerial = published.vendorDispatchSerial,
+		.vendorRuntimeFallback = published.vendorRuntimeFallback,
 		.path = static_cast<uint32_t>(published.path),
 		.deviceIdentity = published.deviceIdentity,
 		.resourceRevision = published.resourceRevision,
@@ -47475,6 +47478,62 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		a_presentationObservation.loadingOrMenuContext = a_loadingOrMenuContext;
 		a_presentationObservation.transitionCooldown = a_transitionCooldown;
 	};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const auto captureSubmitStageVendorDispatchEvidence =
+		[&](SubmitStageVendorEyeState& a_eyeState) {
+			a_eyeState.vendorBackend = VRRenderScaleBackendKind::None;
+			a_eyeState.vendorDispatchFrame = 0;
+			a_eyeState.vendorDispatchSerial = 0;
+			a_eyeState.vendorRuntimeFallback = false;
+			if (upscaleMethod == UpscaleMethod::kDLSS) {
+				a_eyeState.vendorBackend = VRRenderScaleBackendKind::DLSS;
+				a_eyeState.vendorDispatchFrame = std::max(currentFrame, 1u);
+				return;
+			}
+			if (upscaleMethod != UpscaleMethod::kFSR)
+				return;
+
+			const auto dispatch =
+				fidelityFX.GetRuntimeUpscalerDispatchSnapshotForRenderThread();
+			const auto backend =
+				GetVRRenderScaleBackendFromFSRDispatchPath(dispatch.path);
+			if (!dispatch.valid || dispatch.frame != std::max(currentFrame, 1u) ||
+				dispatch.serial == 0 || backend == VRRenderScaleBackendKind::None) {
+				return;
+			}
+
+			a_eyeState.vendorBackend = backend;
+			a_eyeState.vendorDispatchFrame = dispatch.frame;
+			a_eyeState.vendorDispatchSerial = dispatch.serial;
+			a_eyeState.vendorRuntimeFallback =
+				dispatch.path ==
+				FidelityFX::RuntimeUpscalerFramePath::kHostFsr31Fallback;
+		};
+	const auto applySubmitStageVendorDispatchEvidence =
+		[&](const SubmitStageVendorEyeState& a_eyeState) {
+			a_presentationObservation.vendorBackend = a_eyeState.vendorBackend;
+			a_presentationObservation.vendorDispatchFrame =
+				a_eyeState.vendorDispatchFrame;
+			a_presentationObservation.vendorDispatchSerial =
+				a_eyeState.vendorDispatchSerial;
+			a_presentationObservation.vendorRuntimeFallback =
+				a_eyeState.vendorRuntimeFallback;
+		};
+#endif
+	const auto setVendorPresentationObservation =
+		[&](const SubmitStageVendorEyeState& a_eyeState) {
+			setPresentationObservation(
+				VRRenderScalePresentationPath::VendorEvaluated,
+				eyeWidthIn,
+				eyeHeightIn,
+				eyeWidthIn,
+				eyeHeightIn,
+				false,
+				false);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			applySubmitStageVendorDispatchEvidence(a_eyeState);
+#endif
+		};
 	if (!sourceRegion.valid) {
 		if (vrRenderScaleMode) {
 			setPresentationObservation(
@@ -48123,14 +48182,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		a_outputTexture.eType = vr::TextureType_DirectX;
 		a_outputBounds = { 0.0f, 0.0f, 1.0f, 1.0f };
 		menuPresentationSucceeded = menuPresentationAttempt;
-		setPresentationObservation(
-			VRRenderScalePresentationPath::VendorEvaluated,
-			eyeWidthIn,
-			eyeHeightIn,
-			eyeWidthIn,
-			eyeHeightIn,
-			false,
-			false);
+		setVendorPresentationObservation(cachedEyeState);
 		return true;
 	}
 
@@ -48363,6 +48415,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		submitStageVendorEyeState[targetEyeIndex].usedDLSSSharpening = replaySubmitDLSSSharpening;
 		submitStageVendorEyeState[targetEyeIndex].usedMenuFinalComposite = submitStageMenuFinalCompositeRequested;
 		submitStageVendorEyeState[targetEyeIndex].menuLayerGeneration = submitStageMenuLayerGeneration;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		captureSubmitStageVendorDispatchEvidence(
+			submitStageVendorEyeState[targetEyeIndex]);
+#endif
 		return true;
 	};
 
@@ -48646,6 +48702,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 							otherEyeState.usedDLSSSharpening = false;
 							otherEyeState.usedMenuFinalComposite = submitStageMenuFinalCompositeRequested;
 							otherEyeState.menuLayerGeneration = submitStageMenuLayerGeneration;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+							captureSubmitStageVendorDispatchEvidence(otherEyeState);
+#endif
 						}
 					} else if (stereoResult == FidelityFX::StereoUpscaleResult::Failed) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -48804,6 +48863,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	submitStageVendorEyeState[eyeIndex].depthHeight = sourceRegion.depthHeight;
 	submitStageVendorEyeState[eyeIndex].depthOffsetX = sourceRegion.depthOffsetX;
 	submitStageVendorEyeState[eyeIndex].depthOffsetY = sourceRegion.depthOffsetY;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	captureSubmitStageVendorDispatchEvidence(
+		submitStageVendorEyeState[eyeIndex]);
+#endif
 	RecordVRRenderScaleFidelityObservation(
 		upscaleMethod,
 		eyeIndex,
@@ -48906,14 +48969,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		a_outputTexture.eType = vr::TextureType_DirectX;
 		a_outputBounds = { 0.0f, 0.0f, 1.0f, 1.0f };
 		menuPresentationSucceeded = menuPresentationAttempt;
-		setPresentationObservation(
-			VRRenderScalePresentationPath::VendorEvaluated,
-			eyeWidthIn,
-			eyeHeightIn,
-			eyeWidthIn,
-			eyeHeightIn,
-			false,
-			false);
+		setVendorPresentationObservation(
+			submitStageVendorEyeState[eyeIndex]);
 		return true;
 	}
 
@@ -48958,14 +49015,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	a_outputTexture = *a_inputTexture;
 	a_outputTexture.eType = vr::TextureType_DirectX;
 	a_outputBounds = a_inputBounds ? *a_inputBounds : vr::VRTextureBounds_t{ 0.0f, 0.0f, 1.0f, 1.0f };
-	setPresentationObservation(
-		VRRenderScalePresentationPath::VendorEvaluated,
-		eyeWidthIn,
-		eyeHeightIn,
-		eyeWidthIn,
-		eyeHeightIn,
-		false,
-		false);
+	setVendorPresentationObservation(
+		submitStageVendorEyeState[eyeIndex]);
 	return true;
 }
 

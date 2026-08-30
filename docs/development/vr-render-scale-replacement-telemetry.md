@@ -1,6 +1,6 @@
 # VR render-scale replacement telemetry
 
-DevBench render-scale qualification receipts at schema revision 12 separate
+DevBench render-scale qualification receipts at schema revision 13 separate
 render success from evidence completeness. This diagnostic contract does not
 change render-scale preparation, admission, presentation, cleanup, or failure
 policy.
@@ -29,9 +29,17 @@ provider-specific proxy. Its kind is one of:
 The proof records both-eye identity, method and backend values, dimensions,
 request and transition identity, provider and publication generations,
 resource revision, D3D device identity, compositor-cycle token, frame, and QPC
-tick. DLSS and FSR use the same proof shape. None and TAA use exact native
-presentation. DLAA and FSR Native AA retain exact target-correlated provider
-evaluation even though render-scale mode is disabled.
+tick. Vendor eye records also retain dispatch frame, dispatch serial, and
+runtime-fallback state. DLSS and FSR use the same proof shape. None and TAA use
+exact native presentation. DLAA and FSR Native AA retain exact
+target-correlated provider evaluation even though render-scale mode is
+disabled.
+
+Vendor proof requires coherent backends and a dispatch frame matching each
+eye's presentation frame. DLSS uses backend and same-frame identity because
+Streamline does not publish a dispatch serial. FSR requires a nonzero serial
+for each eye. Render-scale FSR may use separate per-eye dispatches, while the
+fixed native FSR path requires both eyes to identify the shared stereo batch.
 
 ## Admission and physical mutation
 
@@ -46,7 +54,9 @@ and cleanup-only states. `mutationExpectation` states whether the transition
 requires a physical mutation, does not require one, or could not be determined.
 When both the source and target use the native physical contract, the
 expectation is explicitly `not_required`; native vendor evaluation remains
-proven independently. Moving from a scaled contract to a native target remains
+proven independently. Fixed native targets, including DLAA and FSR Native AA,
+use generation zero. Only scaled render-scale targets require a nonzero
+contract generation. Moving from a scaled contract to a native target remains
 `required` because the scaled resources must be retired.
 
 `RecordPhysicalMutationBoundary` is the sole destructive-mutation authority.
@@ -56,8 +66,8 @@ QPC tick. The boundary may precede contract publication, so generation zero is
 retained there and later correlated through the same request, epoch, owner, and
 device; a nonzero published generation must still match exactly. Provider
 lifecycle phases remain diagnostic and cannot move an observation across this
-boundary. Native None and TAA no-mutation proofs likewise permit their valid
-zero contract generation while vendor targets still require a nonzero one.
+boundary. Fixed native no-mutation proofs permit their valid zero contract
+generation, while scaled render-scale targets still require a nonzero one.
 
 ## Authoritative presentation-cycle audit
 

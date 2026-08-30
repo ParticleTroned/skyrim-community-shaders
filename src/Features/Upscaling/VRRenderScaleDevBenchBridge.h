@@ -29,6 +29,9 @@ namespace VRRenderScaleDevBenchBridge
 		std::uint32_t contractGeneration = 0;
 		std::uint32_t method = 0;
 		std::uint32_t backend = 0;
+		std::uint32_t vendorDispatchFrame = 0;
+		std::uint64_t vendorDispatchSerial = 0;
+		bool vendorRuntimeFallback = false;
 		std::uint32_t path = 0;
 		std::uintptr_t deviceIdentity = 0;
 		std::uint64_t resourceRevision = 0;

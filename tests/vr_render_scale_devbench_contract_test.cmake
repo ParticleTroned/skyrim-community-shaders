@@ -520,6 +520,37 @@ foreach(_required_controller_behavior IN ITEMS
 	endif()
 endforeach()
 
+foreach(_required_vendor_presentation_evidence IN ITEMS
+	"captureSubmitStageVendorDispatchEvidence"
+	"applySubmitStageVendorDispatchEvidence"
+	"setVendorPresentationObservation(cachedEyeState)"
+	"captureSubmitStageVendorDispatchEvidence("
+	"submitStageVendorEyeState[eyeIndex])"
+	"ReplacementTelemetry::HasCoherentVendorDispatch"
+	".vendorDispatchProven = vendorDispatchProven"
+	"sharedFSRDispatchRequired"
+	".vendorDispatchFrame = published.vendorDispatchFrame"
+	".vendorDispatchSerial = published.vendorDispatchSerial"
+	".vendorRuntimeFallback = published.vendorRuntimeFallback"
+	"leftVendorDispatchFrame"
+	"rightVendorDispatchSerial"
+	"observationVendorDispatchProven"
+	".vendorDispatchProven = observationVendorDispatchProven"
+	"MatchesTargetContractGeneration("
+	"target.renderScaleMode"
+)
+	string(FIND
+		"${_upscaling_source}\n${_bridge}"
+		"${_required_vendor_presentation_evidence}"
+		_vendor_presentation_evidence_position
+	)
+	if(_vendor_presentation_evidence_position EQUAL -1)
+		message(FATAL_ERROR
+			"Submit-stage vendor presentation evidence is incomplete: ${_required_vendor_presentation_evidence}"
+		)
+	endif()
+endforeach()
+
 foreach(_publication_source_contract IN ITEMS
     "State::GetCurrentMainRenderTargetResourcePublicationDiagnostics() const noexcept"
     "const auto mainRenderTargetSize = GetMainRenderTargetSize();"

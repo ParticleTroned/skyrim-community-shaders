@@ -4217,26 +4217,6 @@ namespace
 		Upscaling::kDLSSPresetM
 	};
 
-	const char* GetDLSSPresetLabel(uint32_t preset)
-	{
-		switch (preset) {
-		case Upscaling::kDLSSPresetE:
-			return "E";
-		case Upscaling::kDLSSPresetF:
-			return "F";
-		case Upscaling::kDLSSPresetJ:
-			return "J";
-		case Upscaling::kDLSSPresetK:
-			return "K";
-		case Upscaling::kDLSSPresetL:
-			return "L";
-		case Upscaling::kDLSSPresetM:
-			return "M";
-		default:
-			return "K";
-		}
-	}
-
 	void DrawDLSSPresetTooltip(uint32_t preset)
 	{
 		switch (preset) {
@@ -4265,26 +4245,6 @@ namespace
 		default:
 			ImGui::TextUnformatted("Default for DLAA/Quality/Balanced. Best all-round stability and image quality. Speed: fast. Recommended for most users.");
 			break;
-		}
-	}
-
-	const char* GetQualityModeName(uint value, bool isDLSS)
-	{
-		switch (ClampQualityModeUInt(value)) {
-		case 1:
-			return "Hoshipa";
-		case 2:
-			return "Ultra Quality";
-		case 3:
-			return "Quality";
-		case 4:
-			return "Balanced";
-		case 5:
-			return "Performance";
-		case 6:
-			return "Ultra Performance";
-		default:
-			return isDLSS ? "DLAA" : "Native AA";
 		}
 	}
 
@@ -15825,7 +15785,7 @@ void Upscaling::DrawSettings()
 
 			const int dlssProfileUiMaxIndex = static_cast<int>(kDLSSProfileDisplayOrder.size()) - 1;
 			uint32_t displayedDLSSPreset = kDLSSProfileDisplayOrder[dlssProfileUiIndex];
-			if (ImGui::SliderInt("DLSS Profile", &dlssProfileUiIndex, 0, dlssProfileUiMaxIndex, GetDLSSPresetLabel(displayedDLSSPreset))) {
+			if (ImGui::SliderInt("DLSS Profile", &dlssProfileUiIndex, 0, dlssProfileUiMaxIndex, GetDLSSPresetName(displayedDLSSPreset))) {
 				dlssProfileUiIndex = std::clamp(dlssProfileUiIndex, 0, dlssProfileUiMaxIndex);
 				displayedDLSSPreset = kDLSSProfileDisplayOrder[dlssProfileUiIndex];
 				ApplyCSMenuUpscalingTransition(
@@ -16374,7 +16334,7 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 
 			const int dlssProfileUiMaxIndex = static_cast<int>(kDLSSProfileDisplayOrder.size()) - 1;
 			uint32_t displayedDLSSPreset = kDLSSProfileDisplayOrder[dlssProfileUiIndex];
-			if (ImGui::SliderInt("DLSS Profile", &dlssProfileUiIndex, 0, dlssProfileUiMaxIndex, GetDLSSPresetLabel(displayedDLSSPreset))) {
+			if (ImGui::SliderInt("DLSS Profile", &dlssProfileUiIndex, 0, dlssProfileUiMaxIndex, GetDLSSPresetName(displayedDLSSPreset))) {
 				dlssProfileUiIndex = std::clamp(dlssProfileUiIndex, 0, dlssProfileUiMaxIndex);
 				displayedDLSSPreset = kDLSSProfileDisplayOrder[dlssProfileUiIndex];
 				ApplyCSMenuUpscalingTransition(
@@ -19525,6 +19485,20 @@ bool Upscaling::IsPerformanceCostMeasurementEnabled() const
 	return GetUpscaleMethod() != UpscaleMethod::kNONE;
 }
 
+Upscaling::UpscaleMethod Upscaling::ResolvePerformanceCostMeasurementMethod(
+	uint32_t a_primaryMethod,
+	uint32_t a_fallbackMethod)
+{
+	const auto primaryMethod = ClampUpscaleMethod(a_primaryMethod, UpscaleMethod::kDLSS);
+	if (primaryMethod != UpscaleMethod::kDLSS)
+		return primaryMethod;
+
+	if (streamline.featureDLSS || !streamline.featureCheckComplete)
+		return UpscaleMethod::kDLSS;
+
+	return ClampUpscaleMethod(a_fallbackMethod, UpscaleMethod::kFSR);
+}
+
 namespace
 {
 	bool IsVRRenderScalePerformanceCostMeasurement(const Upscaling& a_upscaling)
@@ -19548,35 +19522,9 @@ namespace
 		if (IsRenderDocUpscalingBlocked())
 			return Upscaling::UpscaleMethod::kNONE;
 
-		const auto primaryMethod = ClampUpscaleMethod(defaults.upscaleMethod, Upscaling::UpscaleMethod::kDLSS);
-		if (primaryMethod != Upscaling::UpscaleMethod::kDLSS)
-			return primaryMethod;
-
-		if (Upscaling::streamline.featureDLSS || !Upscaling::streamline.featureCheckComplete)
-			return Upscaling::UpscaleMethod::kDLSS;
-
-		return ClampUpscaleMethod(defaults.upscaleMethodNoDLSS, Upscaling::UpscaleMethod::kFSR);
-	}
-
-	Upscaling::UpscaleMethod ResolveCapturedPerformanceUpscaleMethod(
-		uint32_t a_primaryMethod,
-		uint32_t a_fallbackMethod)
-	{
-		const auto primaryMethod =
-			ClampUpscaleMethod(
-				a_primaryMethod,
-				Upscaling::UpscaleMethod::kDLSS);
-		if (primaryMethod != Upscaling::UpscaleMethod::kDLSS)
-			return primaryMethod;
-
-		if (Upscaling::streamline.featureDLSS ||
-			!Upscaling::streamline.featureCheckComplete) {
-			return Upscaling::UpscaleMethod::kDLSS;
-		}
-
-		return ClampUpscaleMethod(
-			a_fallbackMethod,
-			Upscaling::UpscaleMethod::kFSR);
+		return Upscaling::ResolvePerformanceCostMeasurementMethod(
+			defaults.upscaleMethod,
+			defaults.upscaleMethodNoDLSS);
 	}
 
 	bool IsTargetVRRenderScalePerformanceCostMeasurement(const Upscaling& a_upscaling, bool a_targetEnabled)
@@ -19602,7 +19550,7 @@ namespace
 		const uint32_t primaryMethod = a_state.value("upscaleMethod", a_upscaling.settings.upscaleMethod);
 		const uint32_t fallbackMethod = a_state.value("upscaleMethodNoDLSS", a_upscaling.settings.upscaleMethodNoDLSS);
 		const Upscaling::UpscaleMethod targetMethod =
-			ResolveCapturedPerformanceUpscaleMethod(
+			Upscaling::ResolvePerformanceCostMeasurementMethod(
 				primaryMethod,
 				fallbackMethod);
 		const uint32_t qualityMode = ClampQualityModeUInt(a_state.value("qualityMode", a_upscaling.settings.qualityMode));
@@ -19725,7 +19673,7 @@ void Upscaling::RestorePerformanceCostMeasurementState(const json& a_state)
 		a_state.value("fsr4RuntimeEnable", settings.fsr4RuntimeEnable);
 
 	const UpscaleMethod targetMethod =
-		ResolveCapturedPerformanceUpscaleMethod(
+		ResolvePerformanceCostMeasurementMethod(
 			primaryMethod,
 			fallbackMethod);
 

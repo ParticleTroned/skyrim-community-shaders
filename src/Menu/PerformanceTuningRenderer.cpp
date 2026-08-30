@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <initializer_list>
@@ -14,6 +15,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "CSEditor/EditorWindow.h"
 #include "Feature.h"
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
@@ -35,12 +37,15 @@ namespace
 	constexpr double kFeatureCostMeasurementSeconds = 5.0;
 	constexpr double kFeatureCostMeasurementMilliseconds = kFeatureCostMeasurementSeconds * 1000.0;
 	constexpr double kFeatureCostIntervalMilliseconds = 1000.0;
-	constexpr double kFeatureCostInitialWaitSeconds = 0.5;
+	constexpr double kFeatureCostInitialWaitSeconds = 5.0;
 	constexpr double kFeatureCostComparisonWaitSeconds = 9.0;
 	constexpr double kFeatureCostRestoreWaitSeconds = 0.5;
 	constexpr double kFeatureCostRestartCooldownSeconds = 10.0;
 	constexpr double kFeatureCostMaximumRunSeconds = 45.0;
 	constexpr std::size_t kFeatureCostMaximumMissingMetricSamples = 2;
+	constexpr double kFeatureCostTraceIntervalSeconds = 0.1;
+	constexpr std::size_t kFeatureCostTraceCapacity = 8192;
+	constexpr std::size_t kFeatureCostMaximumTracePageSize = 512;
 	constexpr std::size_t kFeatureCostMeasurementBlockCount =
 		static_cast<std::size_t>(kFeatureCostMeasurementMilliseconds / kFeatureCostIntervalMilliseconds);
 	static_assert(
@@ -112,6 +117,7 @@ namespace
 	{
 		float value = 0.0f;
 		float standardError = 0.0f;
+		float pValue = 1.0f;
 		std::size_t missingSampleCount = 0;
 		bool available = false;
 		bool hasStandardError = false;
@@ -159,6 +165,7 @@ namespace
 		json originalState;
 		bool testStateApplied = false;
 		double phaseDeadlineTime = 0.0;
+		double phaseStartTime = 0.0;
 		double runStartTime = 0.0;
 		FeatureCostSample currentSample;
 		FeatureCostSample testSample;
@@ -166,7 +173,70 @@ namespace
 		std::string failureMessage;
 	};
 
+	enum class UpscalingCostSweepPhase
+	{
+		Idle,
+		AwaitingMenuClose,
+		Measuring,
+		InterCaseCooldown,
+		RestoringOriginal,
+		Complete,
+		Failed,
+		Cancelled
+	};
+
+	enum class UpscalingCostSweepMatrix
+	{
+		Nvidia,
+		Amd
+	};
+
+	struct UpscalingCostSweepCase
+	{
+		std::string id;
+		std::string label;
+		json profile;
+		FeatureCostDelta delta;
+	};
+
+	struct UpscalingCostSweepState
+	{
+		UpscalingCostSweepPhase phase = UpscalingCostSweepPhase::Idle;
+		UpscalingCostSweepPhase terminalPhase = UpscalingCostSweepPhase::Complete;
+		UpscalingCostSweepMatrix matrix = UpscalingCostSweepMatrix::Nvidia;
+		uint32_t dlssPreset = Upscaling::kDLSSPresetK;
+		json originalState;
+		bool mainMenuWasOpen = false;
+		bool editorWasOpen = false;
+		double runStartTime = 0.0;
+		double phaseStartTime = 0.0;
+		std::size_t currentCaseIndex = 0;
+		std::vector<UpscalingCostSweepCase> cases;
+		std::vector<UpscalingCostSweepCase> results;
+		std::string failureMessage;
+	};
+
+	struct FeatureCostTraceSample
+	{
+		std::uint64_t sequence = 0;
+		double runElapsedMs = 0.0;
+		double phaseElapsedMs = 0.0;
+		std::uint32_t frameCount = 0;
+		float frameMs = 0.0f;
+		float gameGpuMs = 0.0f;
+		float gameCpuMs = 0.0f;
+		bool hasFrame = false;
+		bool hasGameGpu = false;
+		bool hasGameCpu = false;
+		std::string phase;
+		std::string caseId;
+	};
+
 	static std::unordered_map<std::string, FeatureCostMeasurementState> g_costMeasurementStates;
+	static UpscalingCostSweepState g_upscalingCostSweep;
+	static std::deque<FeatureCostTraceSample> g_featureCostTrace;
+	static std::uint64_t g_featureCostTraceNextSequence = 1;
+	static double g_featureCostTraceLastTime = -1.0;
 	static double g_costMeasurementRestartAllowedTime = 0.0;
 	static Util::VanityCameraSuppressionLease g_featureCostVanityCameraSuppression;
 	static bool g_profilerStateCaptured = false;
@@ -234,6 +304,90 @@ namespace
 		return false;
 	}
 
+	bool IsUpscalingCostSweepRunning()
+	{
+		return g_upscalingCostSweep.phase == UpscalingCostSweepPhase::AwaitingMenuClose ||
+		       g_upscalingCostSweep.phase == UpscalingCostSweepPhase::Measuring ||
+		       g_upscalingCostSweep.phase == UpscalingCostSweepPhase::InterCaseCooldown ||
+		       g_upscalingCostSweep.phase == UpscalingCostSweepPhase::RestoringOriginal;
+	}
+
+	const char* GetFeatureCostPhaseName(FeatureCostMeasurementPhase phase)
+	{
+		switch (phase) {
+		case FeatureCostMeasurementPhase::AwaitingMenuClose:
+			return "awaiting_menu_close";
+		case FeatureCostMeasurementPhase::PreparingCurrent:
+			return "initial_cooldown";
+		case FeatureCostMeasurementPhase::MeasuringCurrent:
+			return "measuring_current";
+		case FeatureCostMeasurementPhase::PreparingTest:
+			return "comparison_wait";
+		case FeatureCostMeasurementPhase::MeasuringTest:
+			return "measuring_none";
+		case FeatureCostMeasurementPhase::Restoring:
+			return "restoring";
+		case FeatureCostMeasurementPhase::Complete:
+			return "complete";
+		case FeatureCostMeasurementPhase::Idle:
+		default:
+			return "idle";
+		}
+	}
+
+	const char* GetUpscalingCostSweepPhaseName(UpscalingCostSweepPhase phase)
+	{
+		switch (phase) {
+		case UpscalingCostSweepPhase::AwaitingMenuClose:
+			return "awaiting_menu_close";
+		case UpscalingCostSweepPhase::Measuring:
+			return "measuring";
+		case UpscalingCostSweepPhase::InterCaseCooldown:
+			return "inter_case_cooldown";
+		case UpscalingCostSweepPhase::RestoringOriginal:
+			return "restoring_original";
+		case UpscalingCostSweepPhase::Complete:
+			return "complete";
+		case UpscalingCostSweepPhase::Failed:
+			return "failed";
+		case UpscalingCostSweepPhase::Cancelled:
+			return "cancelled";
+		case UpscalingCostSweepPhase::Idle:
+		default:
+			return "idle";
+		}
+	}
+
+	const char* GetUpscalingCostSweepMatrixName(UpscalingCostSweepMatrix matrix)
+	{
+		switch (matrix) {
+		case UpscalingCostSweepMatrix::Amd:
+			return "amd";
+		case UpscalingCostSweepMatrix::Nvidia:
+		default:
+			return "nvidia";
+		}
+	}
+
+	std::string_view GetUpscalingCostSweepTraceCaseId()
+	{
+		const auto& sweep = g_upscalingCostSweep;
+		if (sweep.cases.empty())
+			return {};
+		if (sweep.phase == UpscalingCostSweepPhase::InterCaseCooldown &&
+			sweep.currentCaseIndex > 0) {
+			return sweep.cases[sweep.currentCaseIndex - 1].id;
+		}
+		if (sweep.currentCaseIndex < sweep.cases.size())
+			return sweep.cases[sweep.currentCaseIndex].id;
+		return sweep.cases.back().id;
+	}
+
+	json GetDLSSPresetChoicesJson()
+	{
+		return json::array({ "J", "K", "L", "M", "F", "E" });
+	}
+
 	double GetFeatureCostRestartCooldownRemaining(double currentTime)
 	{
 		return std::max(0.0, g_costMeasurementRestartAllowedTime - currentTime);
@@ -244,9 +398,67 @@ namespace
 		g_costMeasurementRestartAllowedTime = currentTime + kFeatureCostRestartCooldownSeconds;
 	}
 
+	struct UpscalingCostSweepReadiness
+	{
+		bool idle = false;
+		bool vr = false;
+		bool inGame = false;
+		bool menuAvailable = false;
+		bool measurementSupported = false;
+		bool restartCooldownComplete = false;
+
+		[[nodiscard]] bool Ready() const
+		{
+			return idle && vr && inGame && menuAvailable &&
+			       measurementSupported && restartCooldownComplete;
+		}
+	};
+
+	UpscalingCostSweepReadiness CaptureUpscalingCostSweepReadiness(double currentTime)
+	{
+		return {
+			.idle = !IsAnyFeatureCostMeasurementActive() && !IsUpscalingCostSweepRunning(),
+			.vr = globals::game::isVR,
+			.inGame = globals::state &&
+			          !globals::state->isMainMenuOpen &&
+			          !globals::state->isLoadingMenuOpen &&
+			          RE::PlayerCharacter::GetSingleton(),
+			.menuAvailable = globals::menu != nullptr,
+			.measurementSupported = globals::features::upscaling.SupportsPerformanceCostMeasurement(),
+			.restartCooldownComplete = GetFeatureCostRestartCooldownRemaining(currentTime) <= 0.0,
+		};
+	}
+
+	const char* GetUpscalingCostSweepReadinessError(const UpscalingCostSweepReadiness& readiness)
+	{
+		if (!readiness.idle)
+			return "measurement_active";
+		if (!readiness.vr)
+			return "skyrim_vr_required";
+		if (!readiness.inGame)
+			return "in_game_state_required";
+		if (!readiness.menuAvailable)
+			return "menu_unavailable";
+		if (!readiness.restartCooldownComplete)
+			return "restart_cooldown_active";
+		if (!readiness.measurementSupported)
+			return "upscaling_measurement_unavailable";
+		return nullptr;
+	}
+
+	bool IsFsr4UpscalingCostSweepAvailable()
+	{
+		const auto& fidelityFX = Upscaling::fidelityFX;
+		return fidelityFX.IsRuntimeFsr4Available() &&
+		       !fidelityFX.IsRuntimeUpscalerFailureLatched() &&
+		       !fidelityFX.IsRuntimeFsr4FailureLatched() &&
+		       (!fidelityFX.HasRuntimeUpscalerSupportCheckResult() ||
+				   fidelityFX.IsRuntimeUpscalerSupportConfirmed());
+	}
+
 	void SyncFeatureCostVanityCameraSuppression()
 	{
-		if (IsAnyFeatureCostMeasurementActive())
+		if (IsAnyFeatureCostMeasurementActive() || IsUpscalingCostSweepRunning())
 			g_featureCostVanityCameraSuppression.Acquire();
 		else
 			g_featureCostVanityCameraSuppression.Release();
@@ -260,6 +472,44 @@ namespace
 	bool IsValidFeatureCostTiming(float value)
 	{
 		return PerformanceTuningStatistics::IsValidTiming(static_cast<double>(value));
+	}
+
+	void ResetFeatureCostTrace()
+	{
+		g_featureCostTrace.clear();
+		g_featureCostTraceLastTime = -1.0;
+	}
+
+	void RecordFeatureCostTrace(
+		const ProfilingRenderer::PerformanceTimingSummary& summary,
+		double currentTime,
+		double runStartTime,
+		double phaseStartTime,
+		std::string_view phase,
+		std::string_view caseId)
+	{
+		if (g_featureCostTraceLastTime >= 0.0 &&
+			currentTime - g_featureCostTraceLastTime < kFeatureCostTraceIntervalSeconds) {
+			return;
+		}
+
+		FeatureCostTraceSample sample;
+		sample.sequence = g_featureCostTraceNextSequence++;
+		sample.runElapsedMs = std::max(0.0, currentTime - runStartTime) * 1000.0;
+		sample.phaseElapsedMs = std::max(0.0, currentTime - phaseStartTime) * 1000.0;
+		sample.frameCount = summary.frameCount;
+		sample.hasFrame = summary.hasFrameSample && IsValidFeatureCostTiming(summary.frameSampleMs);
+		sample.hasGameGpu = summary.hasGameGpuSample && IsValidFeatureCostTiming(summary.gameGpuSampleMs);
+		sample.hasGameCpu = summary.hasGameCpuSample && IsValidFeatureCostTiming(summary.gameCpuSampleMs);
+		sample.frameMs = sample.hasFrame ? summary.frameSampleMs : 0.0f;
+		sample.gameGpuMs = sample.hasGameGpu ? summary.gameGpuSampleMs : 0.0f;
+		sample.gameCpuMs = sample.hasGameCpu ? summary.gameCpuSampleMs : 0.0f;
+		sample.phase = phase;
+		sample.caseId = caseId;
+		g_featureCostTrace.push_back(std::move(sample));
+		while (g_featureCostTrace.size() > kFeatureCostTraceCapacity)
+			g_featureCostTrace.pop_front();
+		g_featureCostTraceLastTime = currentTime;
 	}
 
 	void AddFeatureCostMoment(
@@ -302,6 +552,7 @@ namespace
 			return;
 
 		delta.standardError = static_cast<float>(significance.standardError);
+		delta.pValue = static_cast<float>(significance.pValue);
 		delta.hasStandardError = true;
 		delta.significant = significance.significant;
 	}
@@ -399,6 +650,7 @@ namespace
 		const ProfilingRenderer::PerformanceTimingSummary& summary,
 		const std::string& shortName);
 	std::vector<std::string> BuildProfilingPrefixesForFeature(const std::string& shortName);
+	void CancelFeatureCostMeasurement(Feature* feature, FeatureCostMeasurementState& state);
 
 	json MakeJsonMask(std::initializer_list<std::string_view> keys)
 	{
@@ -924,6 +1176,7 @@ namespace
 		double waitSeconds)
 	{
 		state.phase = phase;
+		state.phaseStartTime = currentTime;
 		state.phaseDeadlineTime = currentTime + waitSeconds;
 	}
 
@@ -1002,37 +1255,69 @@ namespace
 		return IsFeatureCostMeasurementActive(state) ? std::max(1.0, remainingSeconds) : 0.0;
 	}
 
+	bool BeginFeatureCostMeasurement(
+		Feature* feature,
+		FeatureCostMeasurementState& state,
+		double currentTime,
+		const json& originalState,
+		bool allowClosedMenu,
+		bool resetTrace)
+	{
+		if (!feature || !feature->SupportsPerformanceCostMeasurement() || !feature->IsPerformanceCostMeasurementEnabled())
+			return false;
+		if (GetFeatureCostRestartCooldownRemaining(currentTime) > 0.0) {
+			logger::warn("Actual feature cost measurement was not started because the 10-second restart cooldown is active");
+			return false;
+		}
+		if (IsAnyFeatureCostMeasurementActive()) {
+			logger::warn("Actual feature cost measurement was not started because another measurement is active");
+			return false;
+		}
+		if (!g_featureCostVanityCameraSuppression.Acquire()) {
+			logger::error("Actual feature cost measurement was not started because the automatic vanity camera could not be suppressed");
+			return false;
+		}
+		auto* menu = globals::menu;
+		if (!menu || (!menu->IsEnabled && !allowClosedMenu)) {
+			g_featureCostVanityCameraSuppression.Release();
+			logger::error("Actual feature cost measurement was not started because the CSX menu could not be closed");
+			return false;
+		}
+
+		CaptureProfilerStateForPerformanceTuning();
+		if (resetTrace)
+			ResetFeatureCostTrace();
+		state = {};
+		state.originalState = originalState;
+		state.runStartTime = currentTime;
+		if (menu->IsEnabled) {
+			state.phase = FeatureCostMeasurementPhase::AwaitingMenuClose;
+			state.phaseStartTime = currentTime;
+			menu->CloseMenu();
+		} else {
+			PrepareFeatureCostPhase(
+				FeatureCostMeasurementPhase::PreparingCurrent,
+				state,
+				currentTime,
+				kFeatureCostInitialWaitSeconds);
+		}
+		return true;
+	}
+
 	void StartFeatureCostMeasurement(
 		Feature* feature,
 		FeatureCostMeasurementState& state,
 		double currentTime)
 	{
-		if (!feature || !feature->SupportsPerformanceCostMeasurement() || !feature->IsPerformanceCostMeasurementEnabled())
+		if (!feature)
 			return;
-		if (GetFeatureCostRestartCooldownRemaining(currentTime) > 0.0) {
-			logger::warn("Actual feature cost measurement was not started because the 10-second restart cooldown is active");
-			return;
-		}
-		if (IsAnyFeatureCostMeasurementActive()) {
-			logger::warn("Actual feature cost measurement was not started because another measurement is active");
-			return;
-		}
-		if (!g_featureCostVanityCameraSuppression.Acquire()) {
-			logger::error("Actual feature cost measurement was not started because the automatic vanity camera could not be suppressed");
-			return;
-		}
-		auto* menu = globals::menu;
-		if (!menu || !menu->IsEnabled) {
-			g_featureCostVanityCameraSuppression.Release();
-			logger::error("Actual feature cost measurement was not started because the CSX menu could not be closed");
-			return;
-		}
-
-		state = {};
-		state.originalState = feature->CapturePerformanceCostMeasurementState();
-		state.phase = FeatureCostMeasurementPhase::AwaitingMenuClose;
-		state.runStartTime = currentTime;
-		menu->CloseMenu();
+		(void)BeginFeatureCostMeasurement(
+			feature,
+			state,
+			currentTime,
+			feature->CapturePerformanceCostMeasurementState(),
+			false,
+			true);
 	}
 
 	void ApplyFeatureCostMeasurementTestState(Feature* feature, FeatureCostMeasurementState& state)
@@ -1057,24 +1342,29 @@ namespace
 		FeatureCostSample& sample,
 		FeatureCostMeasurementPhase phase,
 		FeatureCostMeasurementState& state,
-		const ProfilingRenderer::PerformanceTimingSummary& current)
+		const ProfilingRenderer::PerformanceTimingSummary& current,
+		double currentTime)
 	{
 		sample = {};
 		// The frame which completed preparation belongs to the wait period.
 		sample.lastFrameCount = current.frameCount;
 		state.phase = phase;
+		state.phaseStartTime = currentTime;
 	}
 
 	bool RestartInterruptedFeatureCostSample(
 		FeatureCostSampleResult result,
 		FeatureCostSample& sample,
-		uint32_t currentFrameCount)
+		uint32_t currentFrameCount,
+		FeatureCostMeasurementState& state,
+		double currentTime)
 	{
 		if (result != FeatureCostSampleResult::Interrupted)
 			return false;
 
 		sample = {};
 		sample.lastFrameCount = currentFrameCount;
+		state.phaseStartTime = currentTime;
 		return true;
 	}
 
@@ -1096,7 +1386,8 @@ namespace
 				state.currentSample,
 				FeatureCostMeasurementPhase::MeasuringCurrent,
 				state,
-				current);
+				current,
+				currentTime);
 			return;
 		}
 
@@ -1108,7 +1399,8 @@ namespace
 				state.testSample,
 				FeatureCostMeasurementPhase::MeasuringTest,
 				state,
-				current);
+				current,
+				currentTime);
 			return;
 		}
 
@@ -1136,7 +1428,9 @@ namespace
 			if (RestartInterruptedFeatureCostSample(
 					sampleResult,
 					state.currentSample,
-					current.frameCount)) {
+					current.frameCount,
+					state,
+					currentTime)) {
 				return;
 			}
 			if (sampleResult == FeatureCostSampleResult::Complete) {
@@ -1165,7 +1459,9 @@ namespace
 			if (RestartInterruptedFeatureCostSample(
 					sampleResult,
 					state.testSample,
-					current.frameCount)) {
+					current.frameCount,
+					state,
+					currentTime)) {
 				return;
 			}
 			if (sampleResult == FeatureCostSampleResult::Complete) {
@@ -1177,6 +1473,392 @@ namespace
 					kFeatureCostRestoreWaitSeconds);
 			}
 		}
+	}
+
+	const char* GetQualityModeId(std::uint32_t qualityMode)
+	{
+		switch (qualityMode) {
+		case 1:
+			return "hoshipa";
+		case 2:
+			return "ultra_quality";
+		case 3:
+			return "quality";
+		case 4:
+			return "balanced";
+		case 5:
+			return "performance";
+		case 6:
+			return "ultra_performance";
+		case 0:
+		default:
+			return "native_aa";
+		}
+	}
+
+	UpscalingCostSweepCase BuildUpscalingCostSweepCase(
+		const json& baseState,
+		Upscaling::UpscaleMethod method,
+		std::uint32_t qualityMode,
+		bool renderScaleMode,
+		bool fsr4RuntimeEnabled = false,
+		uint32_t dlssPreset = Upscaling::kDLSSPresetK)
+	{
+		const bool isDLSS = method == Upscaling::UpscaleMethod::kDLSS;
+		const bool isFSR = method == Upscaling::UpscaleMethod::kFSR;
+		const std::string methodId = method == Upscaling::UpscaleMethod::kTAA ? "taa" :
+		                                                                        (isDLSS ? "dlss" : (fsr4RuntimeEnabled ? "fsr4" : "fsr3"));
+		const std::string qualityId = method == Upscaling::UpscaleMethod::kTAA ? "native" :
+		                                                                         GetQualityModeId(qualityMode);
+		const char* qualityName = method == Upscaling::UpscaleMethod::kTAA ?
+		                              "Native" :
+		                              Upscaling::GetQualityModeName(qualityMode, isDLSS);
+
+		UpscalingCostSweepCase result;
+		result.id = fmt::format("{}_{}", methodId, qualityId);
+		if (method == Upscaling::UpscaleMethod::kTAA) {
+			result.label = "TAA";
+		} else if (isDLSS) {
+			result.label = fmt::format(
+				"DLSS {} (Profile {})",
+				qualityName,
+				Upscaling::GetDLSSPresetName(dlssPreset));
+		} else if (isFSR) {
+			result.label = fmt::format("{} {}", fsr4RuntimeEnabled ? "FSR4" : "FSR3", qualityName);
+		}
+
+		result.profile = baseState;
+		result.profile["upscaleMethod"] = static_cast<std::uint32_t>(method);
+		result.profile["upscaleMethodNoDLSS"] = static_cast<std::uint32_t>(Upscaling::UpscaleMethod::kFSR);
+		result.profile["qualityMode"] = qualityMode;
+		result.profile["dlssPreset"] = isDLSS ?
+		                                   dlssPreset :
+		                                   baseState.value("dlssPreset", Upscaling::kDLSSPresetK);
+		result.profile["renderScaleMode"] = renderScaleMode ? 1u : 0u;
+		result.profile["perfMode"] = renderScaleMode ? 1u : 0u;
+		result.profile["fsr4RuntimeEnable"] = fsr4RuntimeEnabled;
+		return result;
+	}
+
+	std::vector<UpscalingCostSweepCase> BuildNvidiaUpscalingCostSweepCases(
+		const json& baseState,
+		uint32_t dlssPreset)
+	{
+		std::vector<UpscalingCostSweepCase> cases;
+		cases.reserve(15);
+		cases.push_back(BuildUpscalingCostSweepCase(
+			baseState,
+			Upscaling::UpscaleMethod::kTAA,
+			0,
+			false));
+		for (std::uint32_t qualityMode = 0; qualityMode <= Upscaling::kQualityModeMaxIndex; ++qualityMode) {
+			cases.push_back(BuildUpscalingCostSweepCase(
+				baseState,
+				Upscaling::UpscaleMethod::kDLSS,
+				qualityMode,
+				qualityMode != 0,
+				false,
+				dlssPreset));
+		}
+		for (std::uint32_t qualityMode = 0; qualityMode <= Upscaling::kQualityModeMaxIndex; ++qualityMode) {
+			cases.push_back(BuildUpscalingCostSweepCase(
+				baseState,
+				Upscaling::UpscaleMethod::kFSR,
+				qualityMode,
+				qualityMode != 0));
+		}
+		return cases;
+	}
+
+	std::vector<UpscalingCostSweepCase> BuildAmdUpscalingCostSweepCases(const json& baseState)
+	{
+		std::vector<UpscalingCostSweepCase> cases;
+		cases.reserve(15);
+		cases.push_back(BuildUpscalingCostSweepCase(
+			baseState,
+			Upscaling::UpscaleMethod::kTAA,
+			0,
+			false));
+		for (const bool fsr4RuntimeEnabled : { false, true }) {
+			for (std::uint32_t qualityMode = 0; qualityMode <= Upscaling::kQualityModeMaxIndex; ++qualityMode) {
+				cases.push_back(BuildUpscalingCostSweepCase(
+					baseState,
+					Upscaling::UpscaleMethod::kFSR,
+					qualityMode,
+					qualityMode != 0,
+					fsr4RuntimeEnabled));
+			}
+		}
+		return cases;
+	}
+
+	bool IsUpscalingCostSweepStateSelected(const json& profile)
+	{
+		const auto& upscaling = globals::features::upscaling;
+		const auto desired = upscaling.GetPendingVRRenderScaleDesiredProfile();
+		const auto method = Upscaling::ResolvePerformanceCostMeasurementMethod(
+			profile.value("upscaleMethod", 0u),
+			profile.value("upscaleMethodNoDLSS", 0u));
+		const uint32_t qualityMode = profile.value("qualityMode", 0u);
+		const bool renderScaleMode = profile.value("renderScaleMode", 0u) != 0;
+		if (desired.method != method ||
+			desired.qualityMode != qualityMode ||
+			desired.renderScaleModeEnabled != renderScaleMode ||
+			desired.perfModeEnabled != renderScaleMode) {
+			return false;
+		}
+		if (method == Upscaling::UpscaleMethod::kDLSS &&
+			desired.dlssPreset != profile.value("dlssPreset", Upscaling::kDLSSPresetK)) {
+			return false;
+		}
+		if (method == Upscaling::UpscaleMethod::kFSR &&
+			desired.fsr4RuntimeEnabled != profile.value("fsr4RuntimeEnable", false)) {
+			return false;
+		}
+
+		return upscaling.settings.foveatedVendorDispatch ==
+		           profile.value(
+					   "foveatedVendorDispatch",
+					   upscaling.settings.foveatedVendorDispatch) &&
+		       upscaling.settings.periphery_taa_enable ==
+		           profile.value(
+					   "periphery_taa_enable",
+					   upscaling.settings.periphery_taa_enable);
+	}
+
+	bool IsUpscalingCostSweepProfileSelected(const UpscalingCostSweepCase& sweepCase)
+	{
+		return IsUpscalingCostSweepStateSelected(sweepCase.profile);
+	}
+
+	bool IsUpscalingCostSweepFsr4ProviderReady(const UpscalingCostSweepCase& sweepCase)
+	{
+		const auto method = static_cast<Upscaling::UpscaleMethod>(
+			sweepCase.profile.value("upscaleMethod", 0u));
+		if (method != Upscaling::UpscaleMethod::kFSR ||
+			!sweepCase.profile.value("fsr4RuntimeEnable", false)) {
+			return true;
+		}
+
+		const auto& fidelityFX = Upscaling::fidelityFX;
+		return !fidelityFX.IsRuntimeUpscalerFailureLatched() &&
+		       !fidelityFX.IsRuntimeFsr4FailureLatched() &&
+		       fidelityFX.HasRuntimeUpscalerSupportCheckResult() &&
+		       fidelityFX.IsRuntimeUpscalerSupportConfirmed() &&
+		       fidelityFX.IsRuntimeUpscalerProviderMatchingRequestedVersion();
+	}
+
+	bool IsUpscalingCostSweepNoneSelected()
+	{
+		const auto& upscaling = globals::features::upscaling;
+		const auto desired = upscaling.GetPendingVRRenderScaleDesiredProfile();
+		return desired.method == Upscaling::UpscaleMethod::kNONE &&
+		       !desired.renderScaleModeEnabled &&
+		       !desired.perfModeEnabled &&
+		       !upscaling.settings.foveatedVendorDispatch &&
+		       !upscaling.settings.periphery_taa_enable;
+	}
+
+	bool IsUpscalingCostSweepMeasurementStateExpected(
+		const UpscalingCostSweepCase& sweepCase,
+		FeatureCostMeasurementPhase phase)
+	{
+		if (phase == FeatureCostMeasurementPhase::PreparingTest ||
+			phase == FeatureCostMeasurementPhase::MeasuringTest) {
+			return IsUpscalingCostSweepNoneSelected();
+		}
+
+		if (!IsUpscalingCostSweepProfileSelected(sweepCase))
+			return false;
+		if (phase == FeatureCostMeasurementPhase::MeasuringCurrent ||
+			phase == FeatureCostMeasurementPhase::Complete) {
+			return IsUpscalingCostSweepFsr4ProviderReady(sweepCase);
+		}
+		return true;
+	}
+
+	void BeginUpscalingCostSweepRestore(
+		double currentTime,
+		UpscalingCostSweepPhase terminalPhase,
+		std::string failureMessage = {})
+	{
+		auto& sweep = g_upscalingCostSweep;
+		sweep.terminalPhase = terminalPhase;
+		sweep.failureMessage = std::move(failureMessage);
+		globals::features::upscaling.RestorePerformanceCostMeasurementState(sweep.originalState);
+		sweep.phase = UpscalingCostSweepPhase::RestoringOriginal;
+		sweep.phaseStartTime = currentTime;
+	}
+
+	bool StartCurrentUpscalingCostSweepCase(double currentTime)
+	{
+		auto& sweep = g_upscalingCostSweep;
+		if (sweep.currentCaseIndex >= sweep.cases.size())
+			return false;
+
+		auto* feature = FindFeatureByShortName("Upscaling");
+		if (!feature)
+			return false;
+
+		auto& currentCase = sweep.cases[sweep.currentCaseIndex];
+		globals::features::upscaling.RestorePerformanceCostMeasurementState(currentCase.profile);
+		if (!IsUpscalingCostSweepProfileSelected(currentCase))
+			return false;
+		auto& measurement = g_costMeasurementStates["Upscaling"];
+		if (!BeginFeatureCostMeasurement(
+				feature,
+				measurement,
+				currentTime,
+				currentCase.profile,
+				true,
+				false)) {
+			return false;
+		}
+
+		sweep.phase = UpscalingCostSweepPhase::Measuring;
+		sweep.phaseStartTime = currentTime;
+		return true;
+	}
+
+	void FinishUpscalingCostSweepRestore(double currentTime)
+	{
+		auto& sweep = g_upscalingCostSweep;
+		const bool reopenMainMenu = sweep.mainMenuWasOpen;
+		const bool reopenEditor = sweep.editorWasOpen;
+		sweep.phase = sweep.terminalPhase;
+		sweep.phaseStartTime = currentTime;
+		SyncFeatureCostVanityCameraSuppression();
+		RestoreProfilerStateAfterPerformanceTuning();
+		if (reopenMainMenu && globals::menu && !globals::menu->IsEnabled)
+			globals::menu->OpenMenu();
+		if (reopenEditor) {
+			auto* editor = EditorWindow::GetSingleton();
+			if (editor && !editor->open) {
+				editor->open = true;
+				editor->UpdateOpenState();
+			}
+		}
+	}
+
+	void UpdateUpscalingCostSweep(double currentTime)
+	{
+		auto& sweep = g_upscalingCostSweep;
+		if (!IsUpscalingCostSweepRunning())
+			return;
+
+		auto& upscaling = globals::features::upscaling;
+		auto& measurement = g_costMeasurementStates["Upscaling"];
+		if (sweep.phase == UpscalingCostSweepPhase::AwaitingMenuClose)
+			return;
+
+		if (sweep.phase == UpscalingCostSweepPhase::Measuring) {
+			if (measurement.phase == FeatureCostMeasurementPhase::Idle) {
+				BeginUpscalingCostSweepRestore(
+					currentTime,
+					UpscalingCostSweepPhase::Failed,
+					"The active Upscaling measurement was lost.");
+				return;
+			}
+			if (sweep.currentCaseIndex >= sweep.cases.size() ||
+				!IsUpscalingCostSweepMeasurementStateExpected(
+					sweep.cases[sweep.currentCaseIndex],
+					measurement.phase)) {
+				const bool fsr4ProviderFallback =
+					sweep.currentCaseIndex < sweep.cases.size() &&
+					IsUpscalingCostSweepProfileSelected(sweep.cases[sweep.currentCaseIndex]) &&
+					(measurement.phase == FeatureCostMeasurementPhase::MeasuringCurrent ||
+						measurement.phase == FeatureCostMeasurementPhase::Complete) &&
+					!IsUpscalingCostSweepFsr4ProviderReady(sweep.cases[sweep.currentCaseIndex]);
+				// The sweep restores its captured original directly; avoid queuing an
+				// intermediate case transition before that authoritative restore.
+				measurement = {};
+				BeginUpscalingCostSweepRestore(
+					currentTime,
+					UpscalingCostSweepPhase::Failed,
+					fsr4ProviderFallback ?
+						"The FSR4 provider fell back before its measurement could complete." :
+						"The active Upscaling profile changed outside the measurement protocol.");
+				return;
+			}
+			if (measurement.phase != FeatureCostMeasurementPhase::Complete)
+				return;
+
+			if (!measurement.failureMessage.empty()) {
+				const std::string failure = fmt::format(
+					"{}: {}",
+					sweep.cases[sweep.currentCaseIndex].id,
+					measurement.failureMessage);
+				measurement = {};
+				BeginUpscalingCostSweepRestore(currentTime, UpscalingCostSweepPhase::Failed, failure);
+				return;
+			}
+
+			auto result = sweep.cases[sweep.currentCaseIndex];
+			result.delta = measurement.delta;
+			sweep.results.push_back(std::move(result));
+			measurement = {};
+			++sweep.currentCaseIndex;
+			if (sweep.currentCaseIndex >= sweep.cases.size()) {
+				BeginUpscalingCostSweepRestore(currentTime, UpscalingCostSweepPhase::Complete);
+				return;
+			}
+
+			sweep.phase = UpscalingCostSweepPhase::InterCaseCooldown;
+			sweep.phaseStartTime = currentTime;
+			return;
+		}
+
+		if (sweep.phase == UpscalingCostSweepPhase::InterCaseCooldown) {
+			if (GetFeatureCostRestartCooldownRemaining(currentTime) > 0.0)
+				return;
+			if (!StartCurrentUpscalingCostSweepCase(currentTime)) {
+				BeginUpscalingCostSweepRestore(
+					currentTime,
+					UpscalingCostSweepPhase::Failed,
+					"The next Upscaling measurement could not start.");
+			}
+			return;
+		}
+
+		if (sweep.phase == UpscalingCostSweepPhase::RestoringOriginal) {
+			const double restoreElapsed = currentTime - sweep.phaseStartTime;
+			if (restoreElapsed >= kFeatureCostMaximumRunSeconds) {
+				sweep.terminalPhase = UpscalingCostSweepPhase::Failed;
+				if (sweep.failureMessage.empty())
+					sweep.failureMessage = "Timed out while restoring the original Upscaling profile.";
+				FinishUpscalingCostSweepRestore(currentTime);
+				return;
+			}
+			if (restoreElapsed < kFeatureCostRestoreWaitSeconds ||
+				!upscaling.IsPerformanceCostMeasurementReady() ||
+				!IsUpscalingCostSweepStateSelected(sweep.originalState)) {
+				return;
+			}
+			FinishUpscalingCostSweepRestore(currentTime);
+		}
+	}
+
+	bool CancelUpscalingCostSweep(double currentTime)
+	{
+		if (!IsUpscalingCostSweepRunning())
+			return false;
+
+		auto& measurement = g_costMeasurementStates["Upscaling"];
+		if (IsFeatureCostMeasurementActive(measurement) ||
+			measurement.phase == FeatureCostMeasurementPhase::Complete) {
+			measurement = {};
+		}
+
+		if (g_upscalingCostSweep.phase == UpscalingCostSweepPhase::RestoringOriginal) {
+			g_upscalingCostSweep.terminalPhase = UpscalingCostSweepPhase::Cancelled;
+			g_upscalingCostSweep.failureMessage = "Cancelled by DevBench.";
+		} else {
+			BeginUpscalingCostSweepRestore(
+				currentTime,
+				UpscalingCostSweepPhase::Cancelled,
+				"Cancelled by DevBench.");
+		}
+		return true;
 	}
 
 	void RenderFeatureCostMetricRow(
@@ -1342,8 +2024,8 @@ namespace
 		}
 		ImGui::EndDisabled();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextWrapped("CS closes automatically for the complete run. Keep the headset and scene still for about 20 seconds; a small overlay shows progress and CS reopens with the results.");
-			ImGui::TextWrapped("After a 0.5-second preparation, current settings are measured as five one-second intervals. The feature then changes to Off/None, waits nine seconds, and measures five more one-second intervals before restoring the exact prior state.");
+			ImGui::TextWrapped("CS closes automatically for the complete run. Keep the headset and scene still for about 25 seconds; a small overlay shows progress and CS reopens with the results.");
+			ImGui::TextWrapped("After a five-second cooldown following menu closure, current settings are measured as five one-second intervals. The feature then changes to Off/None, waits nine seconds, and measures five more one-second intervals before restoring the exact prior state.");
 			ImGui::TextWrapped("If game-frame timing is interrupted during capture, only that five-second measurement restarts.");
 			ImGui::TextWrapped("GPU and CPU rows tolerate up to two missing raw samples across both states. Three or more make only that row unavailable; missing data never blocks Game or FPS.");
 			ImGui::TextWrapped("The automatic idle/vanity camera remains suppressed for the complete run and its previous delay is restored afterward.");
@@ -1670,6 +2352,215 @@ namespace
 
 		return highlight;
 	}
+
+	json FeatureCostMetricDeltaJson(const FeatureCostMetricDelta& metric, std::string_view unit)
+	{
+		json result = {
+			{ "available", metric.available && metric.hasStandardError },
+			{ "unit", unit },
+			{ "missingSampleCount", metric.missingSampleCount },
+		};
+		if (metric.available && metric.hasStandardError) {
+			result["delta"] = metric.value;
+			result["standardError"] = metric.standardError;
+			result["pValue"] = metric.pValue;
+			result["significant"] = metric.significant;
+		}
+		return result;
+	}
+
+	json UpscalingCostSweepProfileJson(const UpscalingCostSweepCase& sweepCase)
+	{
+		const std::uint32_t method = sweepCase.profile.value("upscaleMethod", 0u);
+		const std::uint32_t qualityMode = sweepCase.profile.value("qualityMode", 0u);
+		const bool renderScaleMode = sweepCase.profile.value("renderScaleMode", 0u) != 0;
+		const bool isDLSS = method == static_cast<std::uint32_t>(Upscaling::UpscaleMethod::kDLSS);
+		const bool isFSR = method == static_cast<std::uint32_t>(Upscaling::UpscaleMethod::kFSR);
+		const bool fsr4RuntimeEnabled = sweepCase.profile.value("fsr4RuntimeEnable", false);
+		const uint32_t dlssPreset = sweepCase.profile.value("dlssPreset", Upscaling::kDLSSPresetK);
+		return {
+			{ "id", sweepCase.id },
+			{ "label", sweepCase.label },
+			{ "method", method },
+			{ "qualityMode", qualityMode },
+			{ "qualityName", method == static_cast<std::uint32_t>(Upscaling::UpscaleMethod::kTAA) ?
+								 "Native" :
+								 Upscaling::GetQualityModeName(
+									 qualityMode,
+									 isDLSS) },
+			{ "renderScaleMode", renderScaleMode },
+			{ "renderScale", renderScaleMode ? Upscaling::GetQualityModeResolutionScale(qualityMode) : 1.0f },
+			{ "dlssPreset", isDLSS ? json(dlssPreset) : json(nullptr) },
+			{ "dlssPresetName", isDLSS ? json(Upscaling::GetDLSSPresetName(dlssPreset)) : json(nullptr) },
+			{ "fsrRuntime", isFSR ? json(fsr4RuntimeEnabled ? "FSR4" : "FSR3") : json(nullptr) },
+		};
+	}
+
+	json UpscalingCostSweepResultJson(const UpscalingCostSweepCase& result)
+	{
+		return {
+			{ "profile", UpscalingCostSweepProfileJson(result) },
+			{ "relativeTo", "none" },
+			{ "game", FeatureCostMetricDeltaJson(result.delta.frame, "ms") },
+			{ "fps", FeatureCostMetricDeltaJson(result.delta.fps, "fps") },
+			{ "gpu", FeatureCostMetricDeltaJson(result.delta.gameGpu, "ms") },
+			{ "cpu", FeatureCostMetricDeltaJson(result.delta.gameCpu, "ms") },
+		};
+	}
+
+	json FeatureCostTraceJson(std::uint64_t afterSequence, std::size_t maximumSamples)
+	{
+		maximumSamples = std::clamp<std::size_t>(maximumSamples, 1, kFeatureCostMaximumTracePageSize);
+		const std::uint64_t retainedFirstSequence =
+			g_featureCostTrace.empty() ? 0 : g_featureCostTrace.front().sequence;
+		const bool cursorPrecedesRetainedTrace =
+			afterSequence != 0 &&
+			retainedFirstSequence > 0 &&
+			afterSequence < retainedFirstSequence - 1;
+		json samples = json::array();
+		std::uint64_t nextAfterSequence = afterSequence;
+		bool hasMore = false;
+		for (const auto& sample : g_featureCostTrace) {
+			if (sample.sequence <= afterSequence)
+				continue;
+			if (samples.size() >= maximumSamples) {
+				hasMore = true;
+				break;
+			}
+
+			samples.push_back({
+				{ "sequence", sample.sequence },
+				{ "runElapsedMs", sample.runElapsedMs },
+				{ "phaseElapsedMs", sample.phaseElapsedMs },
+				{ "phase", sample.phase },
+				{ "caseId", sample.caseId },
+				{ "frameCount", sample.frameCount },
+				{ "frameMs", sample.hasFrame ? json(sample.frameMs) : json(nullptr) },
+				{ "gameGpuMs", sample.hasGameGpu ? json(sample.gameGpuMs) : json(nullptr) },
+				{ "gameCpuMs", sample.hasGameCpu ? json(sample.gameCpuMs) : json(nullptr) },
+			});
+			nextAfterSequence = sample.sequence;
+		}
+
+		return {
+			{ "sampleIntervalMs", kFeatureCostTraceIntervalSeconds * 1000.0 },
+			{ "requestedAfterSequence", afterSequence },
+			{ "cursorPrecedesRetainedTrace", cursorPrecedesRetainedTrace },
+			{ "retainedFirstSequence", retainedFirstSequence },
+			{ "retainedLastSequence", g_featureCostTrace.empty() ? 0 : g_featureCostTrace.back().sequence },
+			{ "nextAfterSequence", nextAfterSequence },
+			{ "hasMore", hasMore },
+			{ "samples", std::move(samples) },
+		};
+	}
+
+	json BuildDevBenchMeasurementStatus(std::uint64_t traceAfterSequence, std::size_t maximumTraceSamples)
+	{
+		const double currentTime = ImGui::GetTime();
+		const FeatureCostMeasurementState* activeMeasurement = nullptr;
+		std::string activeFeature;
+		for (const auto& [shortName, state] : g_costMeasurementStates) {
+			if (!IsFeatureCostMeasurementActive(state))
+				continue;
+			activeMeasurement = &state;
+			activeFeature = shortName;
+			break;
+		}
+
+		json results = json::array();
+		for (const auto& result : g_upscalingCostSweep.results)
+			results.push_back(UpscalingCostSweepResultJson(result));
+
+		json currentCase = nullptr;
+		if (g_upscalingCostSweep.currentCaseIndex < g_upscalingCostSweep.cases.size()) {
+			currentCase = UpscalingCostSweepProfileJson(
+				g_upscalingCostSweep.cases[g_upscalingCostSweep.currentCaseIndex]);
+			currentCase["index"] = g_upscalingCostSweep.currentCaseIndex;
+		}
+
+		json measurement = nullptr;
+		if (activeMeasurement) {
+			measurement = {
+				{ "feature", activeFeature },
+				{ "phase", GetFeatureCostPhaseName(activeMeasurement->phase) },
+				{ "phaseElapsedMs", std::max(0.0, currentTime - activeMeasurement->phaseStartTime) * 1000.0 },
+				{ "runElapsedMs", std::max(0.0, currentTime - activeMeasurement->runStartTime) * 1000.0 },
+				{ "estimatedRemainingMs", GetFeatureCostRemainingSeconds(
+											  *activeMeasurement,
+											  FindFeatureByShortName(activeFeature),
+											  currentTime) *
+											  1000.0 },
+			};
+		}
+
+		json latestTiming = nullptr;
+		if (!g_featureCostTrace.empty()) {
+			const auto& sample = g_featureCostTrace.back();
+			latestTiming = {
+				{ "sequence", sample.sequence },
+				{ "phase", sample.phase },
+				{ "caseId", sample.caseId },
+				{ "runElapsedMs", sample.runElapsedMs },
+				{ "phaseElapsedMs", sample.phaseElapsedMs },
+				{ "frameCount", sample.frameCount },
+				{ "frameMs", sample.hasFrame ? json(sample.frameMs) : json(nullptr) },
+				{ "gameGpuMs", sample.hasGameGpu ? json(sample.gameGpuMs) : json(nullptr) },
+				{ "gameCpuMs", sample.hasGameCpu ? json(sample.gameCpuMs) : json(nullptr) },
+			};
+		}
+
+		const bool sweepKnown = g_upscalingCostSweep.phase != UpscalingCostSweepPhase::Idle;
+		const bool sweepRunning = IsUpscalingCostSweepRunning();
+		const bool nvidiaSweep = sweepKnown &&
+		                         g_upscalingCostSweep.matrix == UpscalingCostSweepMatrix::Nvidia;
+		const auto readiness = CaptureUpscalingCostSweepReadiness(currentTime);
+		const auto& fidelityFX = Upscaling::fidelityFX;
+		return {
+			{ "active", IsAnyFeatureCostMeasurementActive() || sweepRunning },
+			{ "owner", sweepRunning ? "devbench_upscaling_sweep" : (activeMeasurement ? "ui" : "none") },
+			{ "sweepPhase", GetUpscalingCostSweepPhaseName(g_upscalingCostSweep.phase) },
+			{ "measurement", std::move(measurement) },
+			{ "currentCase", std::move(currentCase) },
+			{ "currentCaseIndex", g_upscalingCostSweep.currentCaseIndex },
+			{ "caseCount", g_upscalingCostSweep.cases.size() },
+			{ "resultCount", g_upscalingCostSweep.results.size() },
+			{ "baseline", "none" },
+			{ "matrix", sweepKnown ? json(GetUpscalingCostSweepMatrixName(g_upscalingCostSweep.matrix)) : json(nullptr) },
+			{ "dlssPreset", nvidiaSweep ? json(Upscaling::GetDLSSPresetName(g_upscalingCostSweep.dlssPreset)) : json(nullptr) },
+			{ "readiness", {
+							   { "ready", readiness.Ready() },
+							   { "idle", readiness.idle },
+							   { "vr", readiness.vr },
+							   { "inGame", readiness.inGame },
+							   { "menuAvailable", readiness.menuAvailable },
+							   { "measurementSupported", readiness.measurementSupported },
+							   { "restartCooldownComplete", readiness.restartCooldownComplete },
+						   } },
+			{ "capabilities", {
+								  { "amdAdapter", fidelityFX.IsAmdAdapterDetected() },
+								  { "nvidiaAdapter", fidelityFX.IsNvidiaAdapterDetected() },
+								  { "dlssCheckComplete", Upscaling::streamline.featureCheckComplete },
+								  { "dlssAvailable", Upscaling::streamline.featureDLSS },
+								  { "fsr4Available", fidelityFX.IsRuntimeFsr4Available() },
+								  { "fsr4SweepAvailable", IsFsr4UpscalingCostSweepAvailable() },
+								  { "fsrRuntimeFailureLatched", fidelityFX.IsRuntimeUpscalerFailureLatched() },
+								  { "fsr4FailureLatched", fidelityFX.IsRuntimeFsr4FailureLatched() },
+								  { "fsrSupportCheckComplete", fidelityFX.HasRuntimeUpscalerSupportCheckResult() },
+								  { "fsrSupportConfirmed", fidelityFX.IsRuntimeUpscalerSupportConfirmed() },
+							  } },
+			{ "failure", g_upscalingCostSweep.failureMessage.empty() ? json(nullptr) : json(g_upscalingCostSweep.failureMessage) },
+			{ "restartCooldownRemainingMs", GetFeatureCostRestartCooldownRemaining(currentTime) * 1000.0 },
+			{ "timing", {
+							{ "initialCooldownMs", kFeatureCostInitialWaitSeconds * 1000.0 },
+							{ "measurementWindowMs", kFeatureCostMeasurementMilliseconds },
+							{ "comparisonWaitMs", kFeatureCostComparisonWaitSeconds * 1000.0 },
+							{ "postRunCooldownMs", kFeatureCostRestartCooldownSeconds * 1000.0 },
+						} },
+			{ "latestTiming", std::move(latestTiming) },
+			{ "trace", FeatureCostTraceJson(traceAfterSequence, maximumTraceSamples) },
+			{ "results", std::move(results) },
+		};
+	}
 }
 
 void PerformanceTuningRenderer::Render()
@@ -1768,6 +2659,7 @@ void PerformanceTuningRenderer::Render()
 
 void PerformanceTuningRenderer::UpdateClosedMenuMeasurement()
 {
+	const double currentTime = ImGui::GetTime();
 	bool hadActiveMeasurement = false;
 	for (auto& [shortName, state] : g_costMeasurementStates) {
 		if (!IsFeatureCostMeasurementActive(state))
@@ -1781,7 +2673,6 @@ void PerformanceTuningRenderer::UpdateClosedMenuMeasurement()
 			continue;
 		}
 
-		const double currentTime = ImGui::GetTime();
 		if (currentTime - state.runStartTime >= kFeatureCostMaximumRunSeconds) {
 			RestoreFeatureCostMeasurementOriginalState(feature, state);
 			state.delta = {};
@@ -1794,12 +2685,39 @@ void PerformanceTuningRenderer::UpdateClosedMenuMeasurement()
 
 		const auto prefixes = BuildProfilingPrefixesForFeature(shortName);
 		const auto timing = ProfilingRenderer::CapturePerformanceTimingSummary(prefixes, true);
+		const bool sweepMeasurement =
+			g_upscalingCostSweep.phase == UpscalingCostSweepPhase::Measuring &&
+			shortName == "Upscaling" &&
+			g_upscalingCostSweep.currentCaseIndex < g_upscalingCostSweep.cases.size();
+		RecordFeatureCostTrace(
+			timing,
+			currentTime,
+			sweepMeasurement ? g_upscalingCostSweep.runStartTime : state.runStartTime,
+			state.phaseStartTime,
+			GetFeatureCostPhaseName(state.phase),
+			sweepMeasurement ? g_upscalingCostSweep.cases[g_upscalingCostSweep.currentCaseIndex].id : shortName);
 		UpdateFeatureCostMeasurement(feature, state, timing, currentTime);
 	}
 
+	UpdateUpscalingCostSweep(currentTime);
+	if (IsUpscalingCostSweepRunning() && !IsAnyFeatureCostMeasurementActive()) {
+		const auto timing = ProfilingRenderer::CapturePerformanceTimingSummary(
+			BuildProfilingPrefixesForFeature("Upscaling"),
+			true);
+		RecordFeatureCostTrace(
+			timing,
+			currentTime,
+			g_upscalingCostSweep.runStartTime,
+			g_upscalingCostSweep.phaseStartTime,
+			GetUpscalingCostSweepPhaseName(g_upscalingCostSweep.phase),
+			GetUpscalingCostSweepTraceCaseId());
+	}
+
 	SyncFeatureCostVanityCameraSuppression();
-	if (hadActiveMeasurement && !IsAnyFeatureCostMeasurementActive() && globals::menu && !globals::menu->IsEnabled)
+	if (hadActiveMeasurement && !IsAnyFeatureCostMeasurementActive() && !IsUpscalingCostSweepRunning() &&
+		globals::menu && !globals::menu->IsEnabled) {
 		globals::menu->OpenMenu();
+	}
 }
 
 void PerformanceTuningRenderer::RenderClosedMenuMeasurementOverlay()
@@ -1814,16 +2732,37 @@ void PerformanceTuningRenderer::RenderClosedMenuMeasurementOverlay()
 		activeFeature = FindFeatureByShortName(shortName);
 		break;
 	}
-	if (!activeState)
+	const bool sweepRunning = IsUpscalingCostSweepRunning();
+	if (!activeState && !sweepRunning)
 		return;
 
 	const double currentTime = ImGui::GetTime();
-	const double estimatedTotalSeconds = GetFeatureCostExpectedRunSeconds(activeFeature);
-	const double remainingSeconds = GetFeatureCostRemainingSeconds(*activeState, activeFeature, currentTime);
-	const float progress = static_cast<float>(std::clamp(
-		1.0 - remainingSeconds / estimatedTotalSeconds,
-		0.0,
-		0.99));
+	double remainingSeconds = 1.0;
+	float caseProgress = 0.0f;
+	if (activeState) {
+		const double estimatedTotalSeconds = GetFeatureCostExpectedRunSeconds(activeFeature);
+		remainingSeconds = GetFeatureCostRemainingSeconds(*activeState, activeFeature, currentTime);
+		caseProgress = static_cast<float>(std::clamp(
+			1.0 - remainingSeconds / estimatedTotalSeconds,
+			0.0,
+			0.99));
+	} else if (g_upscalingCostSweep.phase == UpscalingCostSweepPhase::InterCaseCooldown) {
+		remainingSeconds = std::max(1.0, GetFeatureCostRestartCooldownRemaining(currentTime));
+	} else if (g_upscalingCostSweep.phase == UpscalingCostSweepPhase::RestoringOriginal) {
+		remainingSeconds = std::max(
+			1.0,
+			kFeatureCostRestoreWaitSeconds - (currentTime - g_upscalingCostSweep.phaseStartTime));
+		caseProgress = 0.99f;
+	}
+
+	float progress = caseProgress;
+	if (sweepRunning && !g_upscalingCostSweep.cases.empty()) {
+		progress = static_cast<float>(std::clamp(
+			(static_cast<double>(g_upscalingCostSweep.currentCaseIndex) + caseProgress) /
+				static_cast<double>(g_upscalingCostSweep.cases.size()),
+			0.0,
+			0.99));
+	}
 
 	const ImGuiViewport* viewport = ImGui::GetMainViewport();
 	if (!viewport)
@@ -1847,11 +2786,24 @@ void PerformanceTuningRenderer::RenderClosedMenuMeasurementOverlay()
 		ImGuiWindowFlags_NoSavedSettings |
 		ImGuiWindowFlags_NoInputs;
 	if (ImGui::Begin("ActualFeatureCostProgress", nullptr, flags)) {
-		if (activeFeature)
+		if (sweepRunning) {
+			if (g_upscalingCostSweep.phase == UpscalingCostSweepPhase::RestoringOriginal) {
+				ImGui::TextUnformatted("Upscaling sweep: restoring settings");
+			} else {
+				const std::size_t displayedCase = std::min(
+					g_upscalingCostSweep.currentCaseIndex + 1,
+					g_upscalingCostSweep.cases.size());
+				ImGui::Text(
+					"Measuring Upscaling %zu/%zu",
+					displayedCase,
+					g_upscalingCostSweep.cases.size());
+			}
+		} else if (activeFeature) {
 			ImGui::Text("Measuring %s", activeFeature->GetDisplayName().c_str());
-		else
+		} else {
 			ImGui::TextUnformatted("Measuring");
-		ImGui::TextColored(Util::Colors::GetWarning(), "Keep still until CS reopens.");
+		}
+		ImGui::TextColored(Util::Colors::GetWarning(), "Keep still until measurement completes.");
 		const std::string progressText = fmt::format(
 			"{:.0f} seconds remaining",
 			std::ceil(remainingSeconds));
@@ -1862,6 +2814,8 @@ void PerformanceTuningRenderer::RenderClosedMenuMeasurementOverlay()
 
 void PerformanceTuningRenderer::CancelActiveMeasurements()
 {
+	const double currentTime = ImGui::GetTime();
+	(void)CancelUpscalingCostSweep(currentTime);
 	for (auto& [shortName, state] : g_costMeasurementStates) {
 		ClearFinishedFeatureCostMeasurement(state);
 		if (IsFeatureCostMeasurementActive(state))
@@ -1869,11 +2823,13 @@ void PerformanceTuningRenderer::CancelActiveMeasurements()
 	}
 
 	SyncFeatureCostVanityCameraSuppression();
-	RestoreProfilerStateAfterPerformanceTuning();
+	if (!IsUpscalingCostSweepRunning())
+		RestoreProfilerStateAfterPerformanceTuning();
 }
 
 void PerformanceTuningRenderer::NotifyMenuClosed()
 {
+	const double currentTime = ImGui::GetTime();
 	bool startedMeasurement = false;
 	for (auto& [shortName, state] : g_costMeasurementStates) {
 		if (state.phase != FeatureCostMeasurementPhase::AwaitingMenuClose)
@@ -1884,7 +2840,6 @@ void PerformanceTuningRenderer::NotifyMenuClosed()
 			continue;
 		}
 
-		const double currentTime = ImGui::GetTime();
 		state.runStartTime = currentTime;
 		PrepareFeatureCostPhase(
 			FeatureCostMeasurementPhase::PreparingCurrent,
@@ -1893,12 +2848,167 @@ void PerformanceTuningRenderer::NotifyMenuClosed()
 			kFeatureCostInitialWaitSeconds);
 		startedMeasurement = true;
 	}
+	if (g_upscalingCostSweep.phase == UpscalingCostSweepPhase::AwaitingMenuClose) {
+		g_upscalingCostSweep.runStartTime = currentTime;
+		g_upscalingCostSweep.phaseStartTime = currentTime;
+		if (StartCurrentUpscalingCostSweepCase(currentTime)) {
+			startedMeasurement = true;
+		} else {
+			BeginUpscalingCostSweepRestore(
+				currentTime,
+				UpscalingCostSweepPhase::Failed,
+				"The first Upscaling measurement could not start after CS closed.");
+		}
+	}
 	SyncFeatureCostVanityCameraSuppression();
-	if (!startedMeasurement && !IsAnyFeatureCostMeasurementActive())
+	if (!startedMeasurement && !IsAnyFeatureCostMeasurementActive() && !IsUpscalingCostSweepRunning())
 		RestoreProfilerStateAfterPerformanceTuning();
 }
 
 bool PerformanceTuningRenderer::HasActiveMeasurements()
 {
-	return IsAnyFeatureCostMeasurementActive();
+	return IsAnyFeatureCostMeasurementActive() || IsUpscalingCostSweepRunning();
+}
+
+nlohmann::json PerformanceTuningRenderer::StartDevBenchUpscalingCostSweep(
+	std::string_view a_matrix,
+	std::string_view a_dlssPreset)
+{
+	const double currentTime = ImGui::GetTime();
+	json response = {
+		{ "action", "start_upscaling_sweep" },
+		{ "accepted", false },
+		{ "requestedMatrix", std::string(a_matrix) },
+	};
+	if (a_matrix != "auto" && a_matrix != "nvidia" && a_matrix != "amd") {
+		response["errorCode"] = "invalid_matrix";
+		response["supportedMatrices"] = json::array({ "auto", "nvidia", "amd" });
+		response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+		return response;
+	}
+	const auto readiness = CaptureUpscalingCostSweepReadiness(currentTime);
+	if (const char* errorCode = GetUpscalingCostSweepReadinessError(readiness)) {
+		response["errorCode"] = errorCode;
+		response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+		return response;
+	}
+
+	auto& upscaling = globals::features::upscaling;
+	UpscalingCostSweepMatrix matrix = UpscalingCostSweepMatrix::Nvidia;
+	const bool amdAdapter = Upscaling::fidelityFX.IsAmdAdapterDetected();
+	const bool fsr4Available = IsFsr4UpscalingCostSweepAvailable();
+	if (a_matrix == "amd" || (a_matrix == "auto" && amdAdapter)) {
+		if (!amdAdapter) {
+			response["errorCode"] = "amd_adapter_required";
+			response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+			return response;
+		}
+		if (!fsr4Available) {
+			response["errorCode"] = "fsr4_unavailable";
+			response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+			return response;
+		}
+		matrix = UpscalingCostSweepMatrix::Amd;
+	} else {
+		if (!Upscaling::fidelityFX.IsNvidiaAdapterDetected()) {
+			response["errorCode"] = "nvidia_adapter_required";
+			response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+			return response;
+		}
+		if (!Upscaling::streamline.featureCheckComplete) {
+			response["errorCode"] = "dlss_capability_pending";
+			response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+			return response;
+		}
+		if (!Upscaling::streamline.featureDLSS) {
+			response["errorCode"] = "dlss_unavailable";
+			response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+			return response;
+		}
+	}
+
+	uint32_t dlssPreset = Upscaling::kDLSSPresetK;
+	if (matrix == UpscalingCostSweepMatrix::Nvidia) {
+		if (a_dlssPreset.empty()) {
+			response["promptRequired"] = true;
+			response["prompt"] = "Choose one DLSS profile for the sweep (J, K, L, M, F, or E).";
+			response["allowedDlssPresets"] = GetDLSSPresetChoicesJson();
+			response["matrix"] = "nvidia";
+			response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+			return response;
+		}
+		if (!Upscaling::TryParseDLSSPresetName(a_dlssPreset, dlssPreset)) {
+			response["errorCode"] = "invalid_dlss_preset";
+			response["allowedDlssPresets"] = GetDLSSPresetChoicesJson();
+			response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+			return response;
+		}
+	} else if (!a_dlssPreset.empty()) {
+		response["errorCode"] = "dlss_preset_not_applicable";
+		response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+		return response;
+	}
+
+	g_upscalingCostSweep = {};
+	g_upscalingCostSweep.matrix = matrix;
+	g_upscalingCostSweep.dlssPreset = dlssPreset;
+	g_upscalingCostSweep.originalState = upscaling.CapturePerformanceCostMeasurementState();
+	g_upscalingCostSweep.mainMenuWasOpen = globals::menu->IsEnabled;
+	if (auto* editor = EditorWindow::GetSingleton())
+		g_upscalingCostSweep.editorWasOpen = editor->open;
+	g_upscalingCostSweep.runStartTime = currentTime;
+	g_upscalingCostSweep.phaseStartTime = currentTime;
+	g_upscalingCostSweep.cases = matrix == UpscalingCostSweepMatrix::Nvidia ?
+	                                 BuildNvidiaUpscalingCostSweepCases(
+										 g_upscalingCostSweep.originalState,
+										 dlssPreset) :
+	                                 BuildAmdUpscalingCostSweepCases(
+										 g_upscalingCostSweep.originalState);
+	ResetFeatureCostTrace();
+	CaptureProfilerStateForPerformanceTuning();
+	bool started = false;
+	if (g_upscalingCostSweep.mainMenuWasOpen || g_upscalingCostSweep.editorWasOpen) {
+		g_upscalingCostSweep.phase = UpscalingCostSweepPhase::AwaitingMenuClose;
+		SyncFeatureCostVanityCameraSuppression();
+		globals::menu->CloseMenu();
+		started = g_upscalingCostSweep.phase == UpscalingCostSweepPhase::AwaitingMenuClose ||
+		          g_upscalingCostSweep.phase == UpscalingCostSweepPhase::Measuring;
+	} else {
+		started = StartCurrentUpscalingCostSweepCase(currentTime);
+	}
+	if (!started) {
+		if (g_upscalingCostSweep.phase != UpscalingCostSweepPhase::RestoringOriginal) {
+			BeginUpscalingCostSweepRestore(
+				currentTime,
+				UpscalingCostSweepPhase::Failed,
+				"The first Upscaling measurement could not start.");
+		}
+		response["errorCode"] = "measurement_start_failed";
+		response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+		return response;
+	}
+
+	SyncFeatureCostVanityCameraSuppression();
+	response["accepted"] = true;
+	response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+	return response;
+}
+
+nlohmann::json PerformanceTuningRenderer::GetDevBenchMeasurementStatus(
+	std::uint64_t a_traceAfterSequence,
+	std::size_t a_maximumTraceSamples)
+{
+	return BuildDevBenchMeasurementStatus(a_traceAfterSequence, a_maximumTraceSamples);
+}
+
+nlohmann::json PerformanceTuningRenderer::CancelDevBenchMeasurements()
+{
+	const double currentTime = ImGui::GetTime();
+	const bool cancelled = CancelUpscalingCostSweep(currentTime);
+	SyncFeatureCostVanityCameraSuppression();
+	return {
+		{ "action", "cancel" },
+		{ "accepted", cancelled },
+		{ "status", BuildDevBenchMeasurementStatus(0, 128) },
+	};
 }

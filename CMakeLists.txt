@@ -1530,6 +1530,14 @@ if(BUILD_CONTROLLER_TESTS)
             -P "${PROJECT_SOURCE_DIR}/tests/menu_devbench_preflight_contract_test.cmake"
     )
     add_test(
+        NAME PerformanceTuningDevBenchContract
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            -P
+            "${PROJECT_SOURCE_DIR}/tests/performance_tuning_devbench_contract_test.cmake"
+    )
+    add_test(
         NAME VRMenuUiContract
         COMMAND
             "${CMAKE_COMMAND}"
@@ -1537,7 +1545,8 @@ if(BUILD_CONTROLLER_TESTS)
             -P "${PROJECT_SOURCE_DIR}/tests/vr_menu_ui_contract_test.cmake"
     )
     set_tests_properties(
-        MenuDevBenchPreflightContract VRMenuUiContract
+        MenuDevBenchPreflightContract PerformanceTuningDevBenchContract
+        VRMenuUiContract
         PROPERTIES LABELS "ControllerTests"
     )
     add_test(

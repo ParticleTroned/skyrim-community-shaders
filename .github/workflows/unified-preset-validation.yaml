@@ -13,6 +13,7 @@ on:
             - "tools/generate-unified-presets.ps1"
             - "src/Feature.cpp"
             - "src/Feature.h"
+            - "src/Api/FeatureDevBenchBridge.cpp"
             - "src/Menu.cpp"
             - "src/Menu.h"
             - "src/SettingsSerialization.cpp"
@@ -21,6 +22,8 @@ on:
             - "src/SettingsMigrations.h"
             - "src/State.cpp"
             - "src/State.h"
+            - "src/PresetCompatibility.cpp"
+            - "src/PresetCompatibility.h"
             - "src/Features/**"
     push:
         branches:
@@ -36,6 +39,7 @@ on:
             - "tools/generate-unified-presets.ps1"
             - "src/Feature.cpp"
             - "src/Feature.h"
+            - "src/Api/FeatureDevBenchBridge.cpp"
             - "src/Menu.cpp"
             - "src/Menu.h"
             - "src/SettingsSerialization.cpp"
@@ -44,6 +48,8 @@ on:
             - "src/SettingsMigrations.h"
             - "src/State.cpp"
             - "src/State.h"
+            - "src/PresetCompatibility.cpp"
+            - "src/PresetCompatibility.h"
             - "src/Features/**"
 
 permissions:

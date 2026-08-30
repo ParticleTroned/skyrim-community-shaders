@@ -6,13 +6,15 @@ param(
     [string]$RefreshBaseFromPath,
     [switch]$Check,
     [Parameter(DontShow)]
-    [ValidateSet('', 'after-stage', 'after-publish-1', 'before-final-verify')]
+    [ValidateSet('', 'after-stage', 'after-publish-1', 'before-final-verify', 'during-cleanup', 'during-rollback', 'hard-stop-after-publish-1')]
     [string]$InternalTestFailurePoint = '',
     [Parameter(DontShow)]
     [ValidateRange(0, 30000)]
     [int]$InternalTestLockHoldMilliseconds = 0,
     [Parameter(DontShow)]
-    [string]$InternalTestLockSignalPath
+    [string]$InternalTestLockSignalPath,
+    [Parameter(DontShow)]
+    [string]$InternalTestCrashSignalPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -22,6 +24,8 @@ $resolvedOutputRoot = [System.IO.Path]::GetFullPath($OutputRoot)
 $resolvedReportPath = [System.IO.Path]::GetFullPath($ReportPath)
 $authorizedBasePath = [System.IO.Path]::GetFullPath(
     (Join-Path $repositoryRoot 'docs\development\unified-preset-templates\Base.SettingsUser.json'))
+$transactionJournalPath = Join-Path $repositoryRoot '.csx-unified-presets.transaction.json'
+$generatorLockPath = Join-Path $repositoryRoot '.csx-unified-presets.lock'
 $policy = Get-Content -Raw -LiteralPath $resolvedPolicyPath | ConvertFrom-Json -Depth 100
 
 if ($policy.schemaVersion -ne 4) {
@@ -52,6 +56,73 @@ function ConvertTo-CanonicalPath {
     param([Parameter(Mandatory = $true)][object[]]$Path)
 
     (@($Path | ForEach-Object { [string]$_ }) -join '/')
+}
+
+if (-not ('UnifiedPresetPathIdentity' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+
+public static class UnifiedPresetPathIdentity
+{
+    private const uint FileReadAttributes = 0x80;
+    private const uint ShareAll = 0x7;
+    private const uint OpenExisting = 3;
+    private const uint BackupSemantics = 0x02000000;
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFileW(
+        string name, uint access, uint share, IntPtr security,
+        uint disposition, uint flags, IntPtr templateFile);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetFinalPathNameByHandleW(
+        SafeFileHandle handle, [Out] char[] path, uint length, uint flags);
+
+    public static string ResolveExisting(string path)
+    {
+        using (var handle = CreateFileW(path, FileReadAttributes, ShareAll, IntPtr.Zero,
+            OpenExisting, BackupSemantics, IntPtr.Zero))
+        {
+            if (handle.IsInvalid)
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot resolve path identity: " + path);
+            var buffer = new char[32768];
+            uint length = GetFinalPathNameByHandleW(handle, buffer, (uint)buffer.Length, 0);
+            if (length == 0 || length >= buffer.Length)
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot resolve path identity: " + path);
+            var result = new string(buffer, 0, (int)length);
+            if (result.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase))
+                return @"\\" + result.Substring(8);
+            if (result.StartsWith(@"\\?\", StringComparison.OrdinalIgnoreCase))
+                return result.Substring(4);
+            return result;
+        }
+    }
+}
+'@
+}
+
+function Resolve-PhysicalPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $suffix = [System.Collections.Generic.List[string]]::new()
+    $probe = $fullPath
+    while (-not (Test-Path -LiteralPath $probe)) {
+        $leaf = [System.IO.Path]::GetFileName($probe)
+        if ([string]::IsNullOrEmpty($leaf)) {
+            throw "No existing ancestor can establish path identity: $fullPath"
+        }
+        $suffix.Insert(0, $leaf)
+        $probe = [System.IO.Path]::GetDirectoryName($probe)
+    }
+    $physical = [UnifiedPresetPathIdentity]::ResolveExisting($probe)
+    foreach ($segment in $suffix) {
+        $physical = Join-Path $physical $segment
+    }
+    [System.IO.Path]::GetFullPath($physical)
 }
 
 function Get-TextSha256 {
@@ -123,13 +194,26 @@ function Test-JsonPathPresent {
         [Parameter(Mandatory = $true)][object[]]$Path
     )
 
-    try {
-        $null = Get-JsonPathValue -Root $Root -Path $Path
-        $true
+    $current = $Root
+    foreach ($segmentValue in $Path) {
+        if ($null -eq $current) {
+            throw "JSON path has a null parent: $(ConvertTo-CanonicalPath $Path)"
+        }
+        if ($current -isnot [System.Management.Automation.PSCustomObject]) {
+            throw "JSON path has a non-object parent: $(ConvertTo-CanonicalPath $Path)"
+        }
+        $segment = [string]$segmentValue
+        $exact = @($current.psobject.Properties | Where-Object { $_.Name -ceq $segment })
+        if ($exact.Count -eq 0) {
+            $caseVariant = @($current.psobject.Properties | Where-Object { $_.Name -ieq $segment })
+            if ($caseVariant.Count -gt 0) {
+                throw "JSON path case mismatch at $(ConvertTo-CanonicalPath $Path): expected '$segment', found '$($caseVariant[0].Name)'"
+            }
+            return $false
+        }
+        $current = $exact[0].Value
     }
-    catch {
-        $false
-    }
+    $true
 }
 
 function Set-ExistingJsonPathValue {
@@ -335,6 +419,40 @@ function Assert-AllPolicyPathsAgainstSettings {
     }
 }
 
+function Get-RuntimeSettingsInventoryPaths {
+    $contract = $policy.runtimeSettingsContract
+    $inventory = $contract.inventory
+    if ($null -eq $inventory -or $null -eq $inventory.fixedSources -or
+        $null -eq $inventory.roots -or [string]::IsNullOrWhiteSpace([string]$inventory.ownerPattern)) {
+        throw 'The runtime settings contract inventory is incomplete.'
+    }
+
+    $paths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($fixedSource in $inventory.fixedSources) {
+        $null = $paths.Add(([string]$fixedSource).Replace('\', '/'))
+    }
+    $extensions = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($extension in $inventory.extensions) {
+        $null = $extensions.Add([string]$extension)
+    }
+    foreach ($rootValue in $inventory.roots) {
+        $root = Resolve-RepositoryPath -RelativePath ([string]$rootValue)
+        if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+            throw "Runtime settings inventory root is absent: $rootValue"
+        }
+        foreach ($candidate in Get-ChildItem -LiteralPath $root -Recurse -File) {
+            if (-not $extensions.Contains($candidate.Extension)) {
+                continue
+            }
+            if (Select-String -LiteralPath $candidate.FullName -Pattern ([string]$inventory.ownerPattern) -Quiet) {
+                $relative = [System.IO.Path]::GetRelativePath($repositoryRoot, $candidate.FullName).Replace('\', '/')
+                $null = $paths.Add($relative)
+            }
+        }
+    }
+    @($paths | Sort-Object)
+}
+
 function Get-RuntimeSettingsContractHash {
     $contract = $policy.runtimeSettingsContract
     if ($null -eq $contract -or $contract.revision -lt 1) {
@@ -343,6 +461,16 @@ function Get-RuntimeSettingsContractHash {
     $sourcePaths = @($contract.sources | ForEach-Object { [string]$_ })
     if ($sourcePaths.Count -eq 0) {
         throw 'The runtime settings contract does not name any source files.'
+    }
+    $inventoryPaths = @(Get-RuntimeSettingsInventoryPaths)
+    $declaredSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($sourcePath in $sourcePaths) { $null = $declaredSet.Add($sourcePath) }
+    $inventorySet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($inventoryPath in $inventoryPaths) { $null = $inventorySet.Add($inventoryPath) }
+    $missing = @($inventoryPaths | Where-Object { -not $declaredSet.Contains($_) })
+    $unexpected = @($sourcePaths | Where-Object { -not $inventorySet.Contains($_) })
+    if ($missing.Count -gt 0 -or $unexpected.Count -gt 0) {
+        throw "Runtime settings source inventory differs from the declared contract. Missing: $($missing -join ', ') Unexpected: $($unexpected -join ', ')"
     }
     $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $records = foreach ($sourcePath in $sourcePaths) {
@@ -359,7 +487,8 @@ function Get-RuntimeSettingsContractHash {
         }
         "${sourcePath}`0$((Get-FileHash -Algorithm SHA256 -LiteralPath $resolved).Hash)"
     }
-    Get-TextSha256 ((@($records | Sort-Object) -join "`n") + "`n")
+    $inventoryRecord = "inventory`0$(Get-TextSha256 (ConvertTo-CanonicalJson $contract.inventory))"
+    Get-TextSha256 (((@($records | Sort-Object) + $inventoryRecord) -join "`n") + "`n")
 }
 
 function Assert-RuntimeSettingsContract {
@@ -550,10 +679,53 @@ size=1
 "@
 }
 
+function Get-ProtectedInputPaths {
+    $paths = [System.Collections.Generic.List[string]]::new()
+    foreach ($path in @(
+            $resolvedPolicyPath,
+            $authorizedBasePath,
+            [System.IO.Path]::GetFullPath($PSCommandPath),
+            (Join-Path $repositoryRoot 'tests\unified_preset_generator_test.ps1'),
+            (Join-Path $repositoryRoot '.github\workflows\unified-preset-validation.yaml'),
+            (Join-Path $repositoryRoot 'docs\development\unified-presets.md'))) {
+        $paths.Add([System.IO.Path]::GetFullPath($path))
+    }
+    foreach ($sourcePath in $policy.runtimeSettingsContract.sources) {
+        $paths.Add((Resolve-RepositoryPath -RelativePath ([string]$sourcePath)))
+    }
+    @($paths)
+}
+
+function Assert-PublicationPathOwnership {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$OutputPaths,
+        [string[]]$AdditionalInputPaths = @()
+    )
+
+    $inputs = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($inputPath in @((Get-ProtectedInputPaths)) + @($AdditionalInputPaths)) {
+        $physical = Resolve-PhysicalPath -Path $inputPath
+        if (-not $inputs.ContainsKey($physical)) { $inputs[$physical] = $inputPath }
+    }
+    $outputs = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($outputPath in $OutputPaths) {
+        $fullPath = [System.IO.Path]::GetFullPath($outputPath)
+        if (Test-Path -LiteralPath $fullPath -PathType Container) {
+            throw "Publication target is a directory: $fullPath"
+        }
+        $physical = Resolve-PhysicalPath -Path $fullPath
+        if ($outputs.ContainsKey($physical)) {
+            throw "Publication contains duplicate or physically aliased targets: $fullPath and $($outputs[$physical])"
+        }
+        if ($inputs.ContainsKey($physical)) {
+            throw "Publication output overlaps protected input '$($inputs[$physical])': $fullPath"
+        }
+        $outputs[$physical] = $fullPath
+    }
+}
+
 function Enter-GeneratorLock {
-    $identity = "$repositoryRoot`n$resolvedOutputRoot`n$resolvedReportPath`n$authorizedBasePath"
-    $lockName = "csx-unified-presets-$((Get-TextSha256 $identity).Substring(0, 24)).lock"
-    $lockPath = Join-Path ([System.IO.Path]::GetTempPath()) $lockName
+    $lockPath = Resolve-PhysicalPath -Path $generatorLockPath
     try {
         $stream = [System.IO.FileStream]::new(
             $lockPath,
@@ -588,119 +760,275 @@ function Write-StagedText {
     }
 }
 
+function Copy-DurableFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+
+    $sourceInfo = Get-Item -LiteralPath $Source
+    $input = [System.IO.FileStream]::new(
+        $Source, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+    try {
+        $output = [System.IO.FileStream]::new(
+            $Destination, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+        try {
+            $input.CopyTo($output)
+            $output.Flush($true)
+        }
+        finally { $output.Dispose() }
+    }
+    finally { $input.Dispose() }
+    [System.IO.File]::SetLastWriteTimeUtc($Destination, $sourceInfo.LastWriteTimeUtc)
+}
+
+function Write-TransactionJournal {
+    param([Parameter(Mandatory = $true)]$Journal)
+
+    $content = ConvertTo-CanonicalJson $Journal
+    $temporary = "$transactionJournalPath.tmp"
+    if (Test-Path -LiteralPath $temporary -PathType Leaf) {
+        Remove-Item -LiteralPath $temporary -Force
+    }
+    Write-StagedText -Path $temporary -Content $content
+    if (Test-Path -LiteralPath $transactionJournalPath -PathType Leaf) {
+        [System.IO.File]::Move($temporary, $transactionJournalPath, $true)
+    }
+    else {
+        [System.IO.File]::Move($temporary, $transactionJournalPath)
+    }
+}
+
+function Remove-TransactionArtifacts {
+    param([Parameter(Mandatory = $true)]$Journal)
+
+    $failures = [System.Collections.Generic.List[string]]::new()
+    foreach ($record in $Journal.records) {
+        foreach ($artifact in @([string]$record.temporary, [string]$record.backup)) {
+            if (Test-Path -LiteralPath $artifact -PathType Leaf) {
+                try { Remove-Item -LiteralPath $artifact -Force }
+                catch { $failures.Add("${artifact}: $($_.Exception.Message)") }
+            }
+        }
+    }
+    if ($InternalTestFailurePoint -ceq 'during-cleanup') {
+        $failures.Add('Injected unified-preset cleanup failure.')
+    }
+    if ($failures.Count -eq 0) {
+        foreach ($directory in @($Journal.createdDirectories | Sort-Object Length -Descending)) {
+            if ((Test-Path -LiteralPath $directory -PathType Container) -and
+                (@(Get-ChildItem -LiteralPath $directory -Force).Count -eq 0)) {
+                try { Remove-Item -LiteralPath $directory -Force }
+                catch { $failures.Add("${directory}: $($_.Exception.Message)") }
+            }
+        }
+    }
+    if ($failures.Count -eq 0 -and (Test-Path -LiteralPath $transactionJournalPath -PathType Leaf)) {
+        try { Remove-Item -LiteralPath $transactionJournalPath -Force }
+        catch { $failures.Add("${transactionJournalPath}: $($_.Exception.Message)") }
+    }
+    @($failures)
+}
+
+function Restore-TransactionJournal {
+    param([Parameter(Mandatory = $true)]$Journal)
+
+    $failures = [System.Collections.Generic.List[string]]::new()
+    if ($InternalTestFailurePoint -ceq 'during-rollback') {
+        $failures.Add('Injected unified-preset rollback failure.')
+    }
+    for ($index = @($Journal.records).Count - 1; $index -ge 0; $index--) {
+        $record = @($Journal.records)[$index]
+        try {
+            $target = [string]$record.target
+            if ([bool]$record.existed) {
+                $targetIsOld = (Test-Path -LiteralPath $target -PathType Leaf) -and
+                    ((Get-FileHash -Algorithm SHA256 -LiteralPath $target).Hash -ceq [string]$record.oldSha256)
+                if (-not $targetIsOld) {
+                    if (-not (Test-Path -LiteralPath $record.backup -PathType Leaf) -or
+                        (Get-FileHash -Algorithm SHA256 -LiteralPath $record.backup).Hash -cne [string]$record.oldSha256) {
+                        throw 'A verified original backup is unavailable.'
+                    }
+                    $restore = "$target.csx-restore.tmp"
+                    Copy-DurableFile -Source $record.backup -Destination $restore
+                    if (Test-Path -LiteralPath $target -PathType Leaf) {
+                        [System.IO.File]::Move($restore, $target, $true)
+                    }
+                    else {
+                        [System.IO.File]::Move($restore, $target)
+                    }
+                }
+            }
+            elseif (Test-Path -LiteralPath $target -PathType Leaf) {
+                if ((Get-FileHash -Algorithm SHA256 -LiteralPath $target).Hash -cne [string]$record.newSha256) {
+                    throw 'A newly created target was changed by another owner.'
+                }
+                Remove-Item -LiteralPath $target -Force
+            }
+        }
+        catch {
+            $failures.Add("$($record.target): $($_.Exception.Message)")
+        }
+    }
+    if ($failures.Count -gt 0) {
+        throw "Unified-preset rollback was incomplete; recovery artifacts were preserved. $($failures -join '; ')"
+    }
+    $cleanupFailures = @(Remove-TransactionArtifacts -Journal $Journal)
+    if ($cleanupFailures.Count -gt 0) {
+        throw "Unified-preset rollback restored all targets but cleanup was incomplete. $($cleanupFailures -join '; ')"
+    }
+}
+
+function Repair-PendingPublication {
+    if (-not (Test-Path -LiteralPath $transactionJournalPath -PathType Leaf)) {
+        return
+    }
+    $journal = Get-Content -Raw -LiteralPath $transactionJournalPath | ConvertFrom-Json -Depth 20
+    if ($journal.schemaVersion -ne 1 -or $journal.repositoryRoot -ine $repositoryRoot) {
+        throw "Unified-preset transaction journal is invalid; preserve it for manual recovery: $transactionJournalPath"
+    }
+    if ($journal.state -ceq 'committed') {
+        foreach ($record in $journal.records) {
+            if (-not (Test-Path -LiteralPath $record.target -PathType Leaf) -or
+                (Get-FileHash -Algorithm SHA256 -LiteralPath $record.target).Hash -cne [string]$record.newSha256) {
+                throw "Committed unified-preset generation failed verification; recovery artifacts were preserved: $($record.target)"
+            }
+        }
+        $cleanupFailures = @(Remove-TransactionArtifacts -Journal $journal)
+        if ($cleanupFailures.Count -gt 0) {
+            throw "Committed unified-preset generation is valid but cleanup remains incomplete. $($cleanupFailures -join '; ')"
+        }
+        return
+    }
+    if ($journal.state -notin @('preparing', 'prepared', 'publishing')) {
+        throw "Unified-preset transaction journal has an unknown state '$($journal.state)'."
+    }
+    Restore-TransactionJournal -Journal $journal
+}
+
 function Invoke-PublicationTransaction {
     param([Parameter(Mandatory = $true)][object[]]$Files)
 
     $transactionId = [guid]::NewGuid().ToString('N')
-    $targets = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    Assert-PublicationPathOwnership -OutputPaths @($Files | ForEach-Object { [string]$_.Path })
     $records = [System.Collections.Generic.List[object]]::new()
+    $createdDirectories = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($file in $Files) {
+        $target = [System.IO.Path]::GetFullPath([string]$file.Path)
+        $parent = [System.IO.Path]::GetDirectoryName($target)
+        $missing = [System.Collections.Generic.List[string]]::new()
+        while (-not (Test-Path -LiteralPath $parent)) {
+            $missing.Insert(0, $parent)
+            $parent = [System.IO.Path]::GetDirectoryName($parent)
+        }
+        foreach ($directory in $missing) { $null = $createdDirectories.Add($directory) }
+        $content = [string]$file.Content
+        $existed = Test-Path -LiteralPath $target -PathType Leaf
+        $records.Add([ordered]@{
+                target = $target
+                temporary = "$target.csx-$transactionId.tmp"
+                backup = "$target.csx-$transactionId.bak"
+                existed = $existed
+                oldSha256 = if ($existed) { (Get-FileHash -Algorithm SHA256 -LiteralPath $target).Hash } else { $null }
+                newSha256 = Get-TextSha256 $content
+                content = $content
+            })
+    }
+    $journal = [ordered]@{
+        schemaVersion = 1
+        transactionId = $transactionId
+        repositoryRoot = $repositoryRoot
+        state = 'preparing'
+        createdDirectories = @($createdDirectories)
+        records = @($records | ForEach-Object {
+                [ordered]@{
+                    target = $_.target; temporary = $_.temporary; backup = $_.backup
+                    existed = $_.existed; oldSha256 = $_.oldSha256; newSha256 = $_.newSha256
+                }
+            })
+    }
+    Write-TransactionJournal -Journal $journal
     try {
-        foreach ($file in $Files) {
-            $target = [System.IO.Path]::GetFullPath([string]$file.Path)
-            if (-not $targets.Add($target)) {
-                throw "Publication contains a duplicate or aliased target: $target"
+        foreach ($directory in $createdDirectories) {
+            [System.IO.Directory]::CreateDirectory($directory) | Out-Null
+        }
+        foreach ($record in $records) {
+            Write-StagedText -Path $record.temporary -Content $record.content
+            if ((Get-FileHash -Algorithm SHA256 -LiteralPath $record.temporary).Hash -cne $record.newSha256) {
+                throw "Staged publication readback failed: $($record.target)"
             }
-            [System.IO.Directory]::CreateDirectory((Split-Path -Parent $target)) | Out-Null
-            $temporary = "$target.csx-$transactionId.tmp"
-            $backup = "$target.csx-$transactionId.bak"
-            $record = [pscustomobject]@{
-                Target = $target
-                Temporary = $temporary
-                Backup = $backup
-                Content = [string]$file.Content
-                Existed = Test-Path -LiteralPath $target -PathType Leaf
-                Published = $false
-            }
-            $records.Add($record)
-            Write-StagedText -Path $temporary -Content $record.Content
-            if ((Get-Content -Raw -LiteralPath $temporary) -cne $record.Content) {
-                throw "Staged publication readback failed: $target"
+            if ($record.existed) {
+                Copy-DurableFile -Source $record.target -Destination $record.backup
+                if ((Get-FileHash -Algorithm SHA256 -LiteralPath $record.backup).Hash -cne $record.oldSha256) {
+                    throw "Publication backup verification failed: $($record.target)"
+                }
             }
         }
         if ($InternalTestFailurePoint -ceq 'after-stage') {
             throw 'Injected unified-preset failure after staging.'
         }
+        $journal.state = 'prepared'
+        Write-TransactionJournal -Journal $journal
+        $journal.state = 'publishing'
+        Write-TransactionJournal -Journal $journal
         $publishedCount = 0
         foreach ($record in $records) {
-            if ($record.Existed) {
-                [System.IO.File]::Replace($record.Temporary, $record.Target, $record.Backup, $true)
+            if ($record.existed) {
+                [System.IO.File]::Move($record.temporary, $record.target, $true)
             }
             else {
-                [System.IO.File]::Move($record.Temporary, $record.Target)
+                [System.IO.File]::Move($record.temporary, $record.target)
             }
-            $record.Published = $true
             $publishedCount++
             if ($InternalTestFailurePoint -ceq 'after-publish-1' -and $publishedCount -eq 1) {
                 throw 'Injected unified-preset failure after the first publication.'
+            }
+            if ($InternalTestFailurePoint -ceq 'during-rollback' -and $publishedCount -eq 1) {
+                throw 'Injected unified-preset publication failure before rollback.'
+            }
+            if ($InternalTestFailurePoint -ceq 'hard-stop-after-publish-1' -and $publishedCount -eq 1) {
+                if ([string]::IsNullOrWhiteSpace($InternalTestCrashSignalPath)) {
+                    throw 'A crash-test signal path is required.'
+                }
+                [System.IO.File]::WriteAllText(
+                    [System.IO.Path]::GetFullPath($InternalTestCrashSignalPath),
+                    $transactionId,
+                    [System.Text.UTF8Encoding]::new($false))
+                Start-Sleep -Seconds 30
+                throw 'The crash-test owner was not stopped within its bounded pause.'
             }
         }
         if ($InternalTestFailurePoint -ceq 'before-final-verify') {
             throw 'Injected unified-preset failure before final verification.'
         }
         foreach ($record in $records) {
-            if ((Get-Content -Raw -LiteralPath $record.Target) -cne $record.Content) {
-                throw "Published unified-preset readback failed: $($record.Target)"
+            if ((Get-FileHash -Algorithm SHA256 -LiteralPath $record.target).Hash -cne $record.newSha256) {
+                throw "Published unified-preset readback failed: $($record.target)"
             }
         }
-        foreach ($record in $records) {
-            if (Test-Path -LiteralPath $record.Backup -PathType Leaf) {
-                Remove-Item -LiteralPath $record.Backup -Force
-            }
-        }
+        $journal.state = 'committed'
+        Write-TransactionJournal -Journal $journal
     }
     catch {
         $publicationFailure = $_
-        $rollbackFailures = [System.Collections.Generic.List[string]]::new()
-        for ($recordIndex = $records.Count - 1; $recordIndex -ge 0; $recordIndex--) {
-            $record = $records[$recordIndex]
-            try {
-                if ($record.Published) {
-                    if ($record.Existed) {
-                        if (-not (Test-Path -LiteralPath $record.Backup -PathType Leaf)) {
-                            throw 'Original backup is absent.'
-                        }
-                        if (Test-Path -LiteralPath $record.Target -PathType Leaf) {
-                            $rollbackDiscard = "$($record.Target).csx-$transactionId.rollback"
-                            [System.IO.File]::Replace($record.Backup, $record.Target, $rollbackDiscard, $true)
-                            Remove-Item -LiteralPath $rollbackDiscard -Force
-                        }
-                        else {
-                            [System.IO.File]::Move($record.Backup, $record.Target)
-                        }
-                    }
-                    elseif (Test-Path -LiteralPath $record.Target -PathType Leaf) {
-                        Remove-Item -LiteralPath $record.Target -Force
-                    }
-                }
-            }
-            catch {
-                $rollbackFailures.Add("$($record.Target): $($_.Exception.Message)")
-            }
+        try {
+            Restore-TransactionJournal -Journal $journal
         }
-        foreach ($record in $records) {
-            foreach ($artifact in $record.Temporary, $record.Backup, "$($record.Target).csx-$transactionId.rollback") {
-                if (Test-Path -LiteralPath $artifact -PathType Leaf) {
-                    Remove-Item -LiteralPath $artifact -Force -ErrorAction SilentlyContinue
-                }
-            }
-        }
-        if ($rollbackFailures.Count -gt 0) {
-            throw "Unified-preset publication failed and rollback was incomplete. Failure: $($publicationFailure.Exception.Message) Rollback: $($rollbackFailures -join '; ')"
+        catch {
+            throw "Unified-preset publication failed and rollback was incomplete. Failure: $($publicationFailure.Exception.Message) Rollback: $($_.Exception.Message)"
         }
         throw "Unified-preset publication failed; the previous complete generation was restored. $($publicationFailure.Exception.Message)"
     }
-    finally {
-        foreach ($record in $records) {
-            if (Test-Path -LiteralPath $record.Temporary -PathType Leaf) {
-                Remove-Item -LiteralPath $record.Temporary -Force -ErrorAction SilentlyContinue
-            }
-        }
+    $cleanupFailures = @(Remove-TransactionArtifacts -Journal $journal)
+    if ($cleanupFailures.Count -gt 0) {
+        Write-Warning "Unified-preset generation committed successfully; cleanup will resume on the next run. $($cleanupFailures -join '; ')"
     }
 }
 
 $generatorLock = $null
 try {
     $generatorLock = Enter-GeneratorLock
+    Repair-PendingPublication
     if ($InternalTestLockSignalPath) {
         [System.IO.File]::WriteAllText(
             [System.IO.Path]::GetFullPath($InternalTestLockSignalPath),
@@ -752,6 +1080,7 @@ try {
         Assert-NeutralBase -Settings $settings
 
         $baseJson = ConvertTo-CanonicalJson $settings
+        Assert-PublicationPathOwnership -OutputPaths @($basePath) -AdditionalInputPaths @($sourcePath)
         Invoke-PublicationTransaction -Files @([pscustomobject]@{ Path = $basePath; Content = $baseJson })
         [ordered]@{
             state = 'base-refreshed'
@@ -833,6 +1162,7 @@ try {
     }
     $reportJson = ConvertTo-CanonicalJson $report
     $publicationFiles.Add([pscustomobject]@{ Path = $resolvedReportPath; Content = $reportJson })
+    Assert-PublicationPathOwnership -OutputPaths @($publicationFiles | ForEach-Object { [string]$_.Path })
 
     if ($Check) {
         foreach ($file in $publicationFiles) {

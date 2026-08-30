@@ -227,6 +227,40 @@ try {
     [System.IO.File]::WriteAllText($isolatedBasePath, $baselineBaseText, $utf8)
     [System.IO.File]::WriteAllText($isolatedPolicyPath, $baselinePolicyText, $utf8)
 
+    $invalidBase = $baselineBaseText | ConvertFrom-Json -Depth 100
+    $invalidBase | Add-Member -NotePropertyName 'water effects' -NotePropertyValue ([pscustomobject]@{})
+    Write-JsonFile -Path $isolatedBasePath -Value $invalidBase
+    $invalidPolicy = $baselinePolicyText | ConvertFrom-Json -Depth 100
+    $invalidPolicy.baseTemplate.sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $isolatedBasePath).Hash
+    Write-JsonFile -Path $isolatedPolicyPath -Value $invalidPolicy
+    $null = Invoke-ExpectedFailure -GeneratorPath $isolatedGenerator -Arguments @{
+        OutputRoot = $outputRoot; ReportPath = $reportPath
+    } -Pattern 'JSON path case mismatch.*Water Effects' -Message 'A case-variant stale path was treated as absent.'
+
+    $invalidBase = $baselineBaseText | ConvertFrom-Json -Depth 100
+    $invalidBase.Screenshot = 1
+    Write-JsonFile -Path $isolatedBasePath -Value $invalidBase
+    $invalidPolicy.baseTemplate.sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $isolatedBasePath).Hash
+    Write-JsonFile -Path $isolatedPolicyPath -Value $invalidPolicy
+    $null = Invoke-ExpectedFailure -GeneratorPath $isolatedGenerator -Arguments @{
+        OutputRoot = $outputRoot; ReportPath = $reportPath
+    } -Pattern 'JSON path has a non-object parent.*Screenshot/SequenceFrameCount' -Message 'A malformed stale-path ancestor was treated as absent.'
+    [System.IO.File]::WriteAllText($isolatedBasePath, $baselineBaseText, $utf8)
+    [System.IO.File]::WriteAllText($isolatedPolicyPath, $baselinePolicyText, $utf8)
+
+    $generatorHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $isolatedGenerator).Hash
+    $null = Invoke-ExpectedFailure -GeneratorPath $isolatedGenerator -Arguments @{
+        OutputRoot = $outputRoot; ReportPath = $isolatedGenerator
+    } -Pattern 'Publication output overlaps protected input' -Message 'ReportPath was allowed to overwrite the generator.'
+    Assert-True ((Get-FileHash -Algorithm SHA256 -LiteralPath $isolatedGenerator).Hash -ceq $generatorHash) 'Rejected ReportPath overlap altered the generator.'
+
+    $protectedRuntimeSource = Join-Path $fixtureRoot ([string]$policy.runtimeSettingsContract.sources[0])
+    $protectedRuntimeHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $protectedRuntimeSource).Hash
+    $null = Invoke-ExpectedFailure -GeneratorPath $isolatedGenerator -Arguments @{
+        OutputRoot = $outputRoot; ReportPath = $protectedRuntimeSource
+    } -Pattern 'Publication output overlaps protected input' -Message 'ReportPath was allowed to overwrite a runtime contract source.'
+    Assert-True ((Get-FileHash -Algorithm SHA256 -LiteralPath $protectedRuntimeSource).Hash -ceq $protectedRuntimeHash) 'Rejected ReportPath overlap altered a runtime source.'
+
     $invalidPolicy = $baselinePolicyText | ConvertFrom-Json -Depth 100
     $invalidPolicy.tiers.Performance.outputDirectory = 'CSX Unified- Alias\..\CSX Unified- Performance - Press END on PC to Customize'
     Write-JsonFile -Path $isolatedPolicyPath -Value $invalidPolicy
@@ -258,6 +292,13 @@ try {
     Assert-True ($baselineSnapshot -ceq (Get-PublicationSnapshot -OutputRoot $outputRoot -ReportPath $reportPath)) 'Runtime source drift mutated the published generation.'
     [System.IO.File]::WriteAllText($contractSource, $contractSourceText, $utf8)
 
+    $unlistedSettingsOwner = Join-Path $fixtureRoot 'src\Features\UnlistedSettingsOwner.h'
+    [System.IO.File]::WriteAllText($unlistedSettingsOwner, 'void SaveSettings(json&);', $utf8)
+    $null = Invoke-ExpectedFailure -GeneratorPath $isolatedGenerator -Arguments @{
+        OutputRoot = $outputRoot; ReportPath = $reportPath
+    } -Pattern 'source inventory differs.*UnlistedSettingsOwner' -Message 'An unlisted settings owner did not invalidate the runtime source inventory.'
+    Remove-Item -LiteralPath $unlistedSettingsOwner -Force
+
     $changedPolicy = $baselinePolicyText | ConvertFrom-Json -Depth 100
     $changedPolicy.packageVersion = 'd2099.01.01.1'
     Write-JsonFile -Path $isolatedPolicyPath -Value $changedPolicy
@@ -269,18 +310,70 @@ try {
         $afterFailure = Get-PublicationSnapshot -OutputRoot $outputRoot -ReportPath $reportPath
         Assert-True ($beforeFailure -ceq $afterFailure) "Failure point $failurePoint changed the published generation."
     }
-    Assert-True (@(Get-ChildItem -LiteralPath $fixtureRoot -Recurse -File | Where-Object { $_.Name -match '\.csx-[^.]+\.(tmp|bak)$' }).Count -eq 0) 'Publication left temporary or backup files behind.'
+
+    $null = & $isolatedGenerator -OutputRoot $outputRoot -ReportPath $reportPath -InternalTestFailurePoint during-cleanup 3>&1
+    Assert-True $? 'A post-commit cleanup failure incorrectly failed the committed generation.'
+    $committedSnapshot = Get-PublicationSnapshot -OutputRoot $outputRoot -ReportPath $reportPath
+    Assert-True ($committedSnapshot -cne $baselineSnapshot) 'The cleanup-failure test did not commit the new generation.'
+    Assert-True (Test-Path -LiteralPath (Join-Path $fixtureRoot '.csx-unified-presets.transaction.json') -PathType Leaf) 'Cleanup failure did not preserve the committed transaction journal.'
+    & $isolatedGenerator -OutputRoot $outputRoot -ReportPath $reportPath -Check | Out-Null
+    Assert-True $? 'The next run did not finish committed-generation cleanup.'
+
+    [System.IO.File]::WriteAllText($isolatedPolicyPath, $baselinePolicyText, $utf8)
+    & $isolatedGenerator -OutputRoot $outputRoot -ReportPath $reportPath | Out-Null
+    $baselineSnapshot = Get-PublicationSnapshot -OutputRoot $outputRoot -ReportPath $reportPath
+
+    Write-JsonFile -Path $isolatedPolicyPath -Value $changedPolicy
+    $null = Invoke-ExpectedFailure -GeneratorPath $isolatedGenerator -Arguments @{
+        OutputRoot = $outputRoot; ReportPath = $reportPath; InternalTestFailurePoint = 'during-rollback'
+    } -Pattern 'rollback was incomplete' -Message 'An incomplete rollback did not fail closed.'
+    Assert-True (Test-Path -LiteralPath (Join-Path $fixtureRoot '.csx-unified-presets.transaction.json') -PathType Leaf) 'Incomplete rollback deleted its recovery journal.'
+    Assert-True (@(Get-ChildItem -LiteralPath $fixtureRoot -Recurse -File | Where-Object { $_.Name -match '\.csx-[^.]+\.(tmp|bak)$' }).Count -gt 0) 'Incomplete rollback deleted all recovery artifacts.'
+    [System.IO.File]::WriteAllText($isolatedPolicyPath, $baselinePolicyText, $utf8)
+    & $isolatedGenerator -OutputRoot $outputRoot -ReportPath $reportPath -Check | Out-Null
+    Assert-True $? 'A later run did not complete the preserved rollback.'
+
+    Write-JsonFile -Path $isolatedPolicyPath -Value $changedPolicy
+    $crashSignalPath = Join-Path $scratch 'crash-owner.ready.txt'
+    $crashStdoutPath = Join-Path $scratch 'crash-owner.stdout.txt'
+    $crashStderrPath = Join-Path $scratch 'crash-owner.stderr.txt'
+    $crashOwner = Start-Process -FilePath 'pwsh' -ArgumentList @(
+        '-NoProfile', '-File', $isolatedGenerator,
+        '-OutputRoot', $outputRoot,
+        '-ReportPath', $reportPath,
+        '-InternalTestFailurePoint', 'hard-stop-after-publish-1',
+        '-InternalTestCrashSignalPath', $crashSignalPath) -PassThru -RedirectStandardOutput $crashStdoutPath -RedirectStandardError $crashStderrPath
+    $crashDeadline = [DateTime]::UtcNow.AddSeconds(10)
+    while (-not (Test-Path -LiteralPath $crashSignalPath -PathType Leaf) -and
+        -not $crashOwner.HasExited -and [DateTime]::UtcNow -lt $crashDeadline) {
+        Start-Sleep -Milliseconds 50
+    }
+    Assert-True (Test-Path -LiteralPath $crashSignalPath -PathType Leaf) 'The crash-test process did not reach a partially published generation.'
+    Stop-Process -Id $crashOwner.Id -Force
+    $crashOwner.WaitForExit()
+    $crashOwner.Dispose()
+    [System.IO.File]::WriteAllText($isolatedPolicyPath, $baselinePolicyText, $utf8)
+    & $isolatedGenerator -OutputRoot $outputRoot -ReportPath $reportPath -Check | Out-Null
+    Assert-True $? 'The next run did not recover a hard-stopped publication.'
+    Assert-True ($baselineSnapshot -ceq (Get-PublicationSnapshot -OutputRoot $outputRoot -ReportPath $reportPath)) 'Hard-stop recovery did not restore the complete prior generation.'
+
+    Assert-True (@(Get-ChildItem -LiteralPath $fixtureRoot -Recurse -File | Where-Object {
+                $_.Name -match '\.csx-[^.]+\.(tmp|bak)$|\.csx-restore\.tmp$|\.csx-unified-presets\.transaction\.json'
+            }).Count -eq 0) 'Successful recovery left transaction artifacts behind.'
     [System.IO.File]::WriteAllText($isolatedPolicyPath, $baselinePolicyText, $utf8)
 
     $stdoutPath = Join-Path $scratch 'lock-owner.stdout.txt'
     $stderrPath = Join-Path $scratch 'lock-owner.stderr.txt'
     $lockSignalPath = Join-Path $scratch 'lock-owner.ready.txt'
+    $fixtureAlias = Join-Path $scratch 'repo-alias'
+    New-Item -ItemType Junction -Path $fixtureAlias -Target $fixtureRoot | Out-Null
+    $aliasGenerator = Join-Path $fixtureAlias 'tools\generate-unified-presets.ps1'
     $lockOwner = Start-Process -FilePath 'pwsh' -ArgumentList @(
         '-NoProfile', '-File', $isolatedGenerator,
         '-OutputRoot', $outputRoot,
         '-ReportPath', $reportPath,
         '-InternalTestLockSignalPath', $lockSignalPath,
-        '-InternalTestLockHoldMilliseconds', '1500') -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+        '-InternalTestLockHoldMilliseconds', '5000') -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
     $lockDeadline = [DateTime]::UtcNow.AddSeconds(5)
     while (-not (Test-Path -LiteralPath $lockSignalPath -PathType Leaf) -and
         -not $lockOwner.HasExited -and [DateTime]::UtcNow -lt $lockDeadline) {
@@ -289,12 +382,16 @@ try {
     Assert-True (Test-Path -LiteralPath $lockSignalPath -PathType Leaf) 'The lock-owner process did not signal lock acquisition.'
     Assert-True (-not $lockOwner.HasExited) 'The lock-owner process exited before the overlap test.'
     $null = Invoke-ExpectedFailure -GeneratorPath $isolatedGenerator -Arguments @{
-        OutputRoot = $outputRoot; ReportPath = $reportPath
-    } -Pattern 'Another unified-preset generator or checker owns' -Message 'A concurrent generator acquired the same publication identity.'
+        OutputRoot = $outputRoot; ReportPath = (Join-Path $fixtureRoot 'different-report.json')
+    } -Pattern 'Another unified-preset generator or checker owns' -Message 'A concurrent generator with a different argument tuple bypassed repository ownership.'
+    $null = Invoke-ExpectedFailure -GeneratorPath $aliasGenerator -Arguments @{
+        OutputRoot = (Join-Path $fixtureAlias 'outputs'); ReportPath = (Join-Path $fixtureAlias 'report.json')
+    } -Pattern 'Another unified-preset generator or checker owns' -Message 'A physical repository alias bypassed generator ownership.'
     $lockOwner.WaitForExit()
     $lockOwnerExitCode = $lockOwner.ExitCode
     $lockOwner.Dispose()
     Assert-True ($lockOwnerExitCode -eq 0) "The lock-owner generation failed: $(Get-Content -Raw -LiteralPath $stderrPath)"
+    Remove-Item -LiteralPath $fixtureAlias -Force
 
     $extraOutput = Join-Path $outputRoot 'CSX Unified- Unmanaged - Press END on PC to Customize'
     [System.IO.Directory]::CreateDirectory($extraOutput) | Out-Null

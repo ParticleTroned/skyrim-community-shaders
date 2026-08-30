@@ -41,6 +41,8 @@ The generator rejects:
 
 -   a base whose SHA-256 does not match the policy;
 -   a change to any pinned runtime settings source;
+-   a settings-owning feature source that is not present in the pinned runtime
+    inventory;
 -   a policy path that is absent, differs only by case, or has the wrong JSON
     value kind in the base;
 -   any tier count, name, order, or output directory outside the fixed
@@ -80,13 +82,21 @@ Boot` value is false. Tier exclusions use feature-owned live/soft settings.
 CS Editor is not present in the boot-disable map, and Weather Picker remains
 enabled because both are operational tools rather than shader tiers.
 
-Generation and `-Check` take the same exclusive publication lock. A normal
-generation builds and validates all seven outputs in memory, stages each file
-beside its destination, flushes and reads the staged content back, then replaces
-the complete package set. A publication error restores the prior complete set.
-`-Check` compares expected content without writing repository files. This makes
-concurrent writers fail closed and prevents an interrupted run from leaving a
-partly updated preset family.
+Generation and `-Check` take one physical-repository publication lock,
+independent of command-line paths. Before writing, the generator resolves path
+aliases and proves that all outputs are distinct from the policy, base,
+generator, focused test, workflow, documentation, refresh source, and complete
+runtime-source inventory.
+
+A normal generation records a durable transaction journal before staging,
+backs up every existing target, publishes all seven outputs, verifies their
+hashes, and only then records the `committed` boundary. The generated report is
+the final output and contains the hashes by which a consumer accepts the
+generation. A process stopped before that boundary is rolled back on the next
+locked run. A process stopped after it is committed finishes cleanup without
+rolling back valid outputs. Failed recovery preserves the journal and every
+remaining recovery artifact for diagnosis. `-Check` performs recovery first,
+then compares expected content without rewriting a valid generation.
 
 ## Generate and verify
 

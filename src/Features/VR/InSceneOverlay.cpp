@@ -7,7 +7,9 @@
 #include "Globals.h"
 #include "Hooks.h"
 #include "Menu.h"
-#include "RenderMap/Runtime.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "RenderMap/Runtime.h"
+#endif
 #include "State.h"
 #include "Util.h"
 #include "Utils/VRUtils.h"
@@ -35,6 +37,7 @@ using AttachMode = VR::Settings::OverlayAttachMode;
 
 namespace
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	CSX::RenderMap::ResourceObservationInput DescribeSubmittedTexture(
 		ID3D11Texture2D* a_texture)
 	{
@@ -63,6 +66,7 @@ namespace
 	{
 		return a_eye == vr::Eye_Left ? CSX::RenderMap::Eye::kLeft : CSX::RenderMap::Eye::kRight;
 	}
+#endif
 
 	// Publish the cycle token and its promotion-sensitive cooldown policy as one
 	// atomic snapshot. Bit zero is the cycle-start cooldown; the remaining bits
@@ -945,6 +949,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 							screenshotColorSpace);
 					}
 				}
+#ifdef DEVBENCH_BRIDGE_ENABLED
 				if (result == vr::VRCompositorError_None &&
 					submitPacketCurrentAfterSubmit &&
 					isSubmitPacketCurrent() &&
@@ -963,6 +968,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						static_cast<std::uint32_t>(submitPacket.flags),
 						compositorCycleToken);
 				}
+#endif
 				uint64_t completionScopeEpoch =
 					postLoadSubmitScopeEpoch;
 				if (a_allowPostLoadScopeRebase &&

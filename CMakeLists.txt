@@ -2,11 +2,11 @@ cmake_minimum_required(VERSION 4.2)
 cmake_policy(SET CMP0116 NEW)
 set(CMAKE_POLICY_WARNING_CMP0116 OFF)
 
-# The bridge is optional at build time and inert when the devbench SKSE host is
-# absent. Select the manifest feature before project() loads the vcpkg toolchain.
+# Developer instrumentation is optional at build time. Select the DevBench
+# manifest feature before project() loads the vcpkg toolchain.
 option(
     DEVBENCH_BRIDGE
-    "Expose render-scale iteration controls through the devbench MCP host"
+    "Compile developer instrumentation and expose it through the DevBench MCP host"
     OFF
 )
 if(DEVBENCH_BRIDGE)

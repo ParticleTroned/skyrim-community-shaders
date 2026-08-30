@@ -22,6 +22,9 @@ function(add_cxx_files TARGET)
 		"src/*.hxx"
 		"src/*.inl"
 	)
+	if(NOT DEVBENCH_BRIDGE)
+		list(FILTER HEADER_FILES EXCLUDE REGEX "[/\\\\]src[/\\\\]RenderMap[/\\\\]")
+	endif()
 
 	source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR}/src
 		PREFIX "Header Files"
@@ -35,6 +38,9 @@ function(add_cxx_files TARGET)
 		"src/*.cpp"
 		"src/*.cxx"
 	)
+	if(NOT DEVBENCH_BRIDGE)
+		list(FILTER SOURCE_FILES EXCLUDE REGEX "[/\\\\]src[/\\\\]RenderMap[/\\\\]")
+	endif()
 
 	source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR}/src
 		PREFIX "Source Files"

@@ -3,6 +3,7 @@
 #include "Api/ServiceRegistry.h"
 #include "Api/ShaderService.h"
 #include "Api/ShaderCompatibilityService.h"
+#include "Api/ScreenshotService.h"
 #include "Api/UpscalingService.h"
 #include "BuildProvenance.h"
 
@@ -37,6 +38,7 @@ namespace CSX::Api
 
 			InitializeShaderService();
 			InitializeShaderCompatibilityService();
+			InitializeScreenshotService();
 			InitializeUpscalingService();
 		});
 	}

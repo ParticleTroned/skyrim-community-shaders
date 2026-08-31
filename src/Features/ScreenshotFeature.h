@@ -4,18 +4,20 @@
 #include "Utils/Subrect.h"
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <mutex>
+#include <nlohmann/json_fwd.hpp>
 #include <openvr.h>
 #include <queue>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <vector>
-#include <nlohmann/json_fwd.hpp>
 
 class ScreenshotApi;
 
@@ -36,6 +38,12 @@ struct ScreenshotFeature : public Feature
 		Right,
 		Combined
 	};
+	enum class CaptureEye : uint8_t
+	{
+		Left,
+		Right,
+		Both
+	};
 
 	virtual ~ScreenshotFeature();
 	virtual std::string GetName() override { return "Screenshot"; }
@@ -53,12 +61,12 @@ struct ScreenshotFeature : public Feature
 	virtual void SaveSettings(json& a_json) override;
 	virtual void PostPostLoad() override;
 
-	/** Requests one capture from the render thread using an immutable settings snapshot. */
-	void RequestCapture();
+	/** Submits one contract-v1 capture for the native UI or screenshot hotkey. */
+	void RequestUiCapture();
 	/** Executes one versioned screenshot API command. Mutating calls must run on the game thread. */
 	nlohmann::json HandleApiRequest(const nlohmann::json& a_request);
-	/** Legacy menu delegation, returning the accepted request receipt. */
-	nlohmann::json RequestLegacyCapture(std::string_view a_origin = "csx_menu");
+	/** Dispatches a settings-based capture through the public screenshot service and returns its receipt. */
+	nlohmann::json RequestApiCapture(std::string_view a_origin = "csx_menu");
 	/** Returns whether Community Shaders screenshot capture is enabled at runtime. */
 	bool IsRuntimeEnabled() const noexcept { return loaded && enabled.load(std::memory_order_acquire); }
 	/** Toggles new captures, cancelling active source acquisition while committed encoder work finishes. */
@@ -81,13 +89,19 @@ struct ScreenshotFeature : public Feature
 		vr::EColorSpace a_colorSpace);
 	/** Maintains readback protection and services capture immediately before Present. */
 	void OnBeforePresent(IDXGISwapChain* a_swapChain);
+	/** Draws the recording indicator only after this frame's source has been staged. */
+	void DrawPostCaptureIndicator();
 
 	bool applyCropToScreenshot = true;
 
 	// Settings
 	std::string screenshotPath = "Screenshots";
+	std::string frameCapturePath = "Frame Captures";
 	bool sdrUsePng = true;
+	bool frameCaptureUsePng = false;
 	bool copyToClipboard = false;
+	CaptureEye screenshotEye = CaptureEye::Left;
+	CaptureEye frameCaptureEye = CaptureEye::Left;
 	VRCaptureSource vrCaptureSource = VRCaptureSource::HMDSubmission;
 	VRFramedView vrFramedView = VRFramedView::Left;
 	vr::EVREye vrFramedDominantEye = vr::Eye_Left;
@@ -104,6 +118,8 @@ struct ScreenshotFeature : public Feature
 
 private:
 	friend class ScreenshotApi;
+	std::string uiSequenceRequestId;
+	std::chrono::steady_clock::time_point nextUiSequencePoll{};
 	struct StagedPlane
 	{
 		winrt::com_ptr<ID3D11Texture2D> stagingTexture;
@@ -183,6 +199,7 @@ private:
 		std::string parentRequestId;
 		uint32_t sequenceOrdinal = 0;
 		std::vector<OutputPlan> outputs;
+		bool desktopSource = false;
 	};
 
 	struct ActiveCapture
@@ -195,6 +212,7 @@ private:
 		std::array<StagedPlane, 2> eyes{};
 		uint32_t presentsWaited = 0;
 		bool ownsQueueSlot = false;
+		std::chrono::steady_clock::time_point sourceDeadline{};
 	};
 
 	struct ReadbackContextProtection
@@ -203,22 +221,36 @@ private:
 		bool restoreToUnprotected = false;
 	};
 
-	mutable std::mutex screenshotQueueMutex;
-	std::condition_variable screenshotQueueCV;
-	std::queue<PendingScreenshot> screenshotQueue;
+	struct ScreenshotWorkerState
+	{
+		std::mutex mutex;
+		std::condition_variable condition;
+		std::queue<PendingScreenshot> queue;
+		std::vector<ReadbackContextProtection> readbackProtections;
+		std::shared_ptr<ScreenshotApi> api;
+		std::size_t outstandingCount = 0;
+		std::atomic_bool notifyAllowed{ true };
+		bool accepting = true;
+		bool stopRequested = false;
+		bool exited = false;
+		bool restoreReadbackProtection = false;
+	};
+
+	std::shared_ptr<ScreenshotWorkerState> screenshotWorkerState;
 	std::thread screenshotWorker;
 	std::mutex screenshotWorkerLifecycleMutex;
-	bool screenshotWorkerRunning = false;
-	std::size_t outstandingScreenshotCount = 0;
-	std::vector<ReadbackContextProtection> readbackContextProtections;
-	std::atomic_bool readbackProtectionCleanupPending{ false };
 	Util::Subrect::Controller subrect;
 
 	std::atomic_bool enabled{ true };
 	std::atomic_bool capturePending{ false };
 	mutable std::mutex captureStateMutex;
 	ActiveCapture activeCapture;
-	std::unique_ptr<ScreenshotApi> screenshotApi;
+	std::shared_ptr<ScreenshotApi> screenshotApi;
+	std::mutex sourceDeadlineMutex;
+	std::condition_variable_any sourceDeadlineCondition;
+	// Declared last so construction starts it after its synchronization state
+	// and destruction joins it before that state is destroyed.
+	std::jthread sourceDeadlineWatchdog;
 
 	// SRV-readable copy used when the capture source's own SRV can't be sampled
 	// directly (kFRAMEBUFFER on flat aliases the swap-chain backbuffer).
@@ -230,8 +262,10 @@ private:
 	void RestoreReadbackContextProtectionIfIdle();
 	bool TryReserveScreenshotSlot();
 	void ReleaseScreenshotSlot();
+	static void ReleaseScreenshotSlot(const std::shared_ptr<ScreenshotWorkerState>& a_state);
 	void StopWorkerThread();
-	void ScreenshotWorkerLoop();
+	static void ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerState> a_state);
+	void SourceDeadlineLoop(std::stop_token a_stopToken);
 	void EnsurePreviewCache(ID3D11Texture2D* sourceTexture);
 	CaptureOptions SnapshotCaptureOptions() const;
 	bool SnapshotStereoGeometry(CaptureOptions& a_options) const;
@@ -255,5 +289,6 @@ private:
 		uint32_t a_sequenceOrdinal = 0);
 	bool CancelApiCapture(std::string_view a_requestId);
 	void EnsureScreenshotApi();
+	static void RestoreReadbackContextProtectionIfIdle(const std::shared_ptr<ScreenshotWorkerState>& a_state);
 	static void ShowInGameNotification(std::string message);
 };

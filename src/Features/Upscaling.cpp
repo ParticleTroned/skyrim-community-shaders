@@ -52776,6 +52776,10 @@ void Upscaling::PreparePendingVRRenderScaleTransition(
 
 	const auto preparationKey =
 		BuildVRRenderScalePreparationKey(*this, a_request);
+	const bool directMenuRequest =
+		VRVendorRelatchPolicy::HasDirectMenuRequestAuthority(
+			a_request.directMenuEdit,
+			a_request.requestID);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	const uint64_t preparationBeginQpc =
 		QueryVRRenderScalePresentationQpc();
@@ -52792,10 +52796,6 @@ void Upscaling::PreparePendingVRRenderScaleTransition(
 			admissionReasonMask,
 			VRRenderScalePreparationReason::WrongOrigin);
 	}
-	const bool directMenuRequest =
-		VRVendorRelatchPolicy::HasDirectMenuRequestAuthority(
-			a_request.directMenuEdit,
-			a_request.requestID);
 	if (!directMenuRequest) {
 		AddVRRenderScalePreparationReason(
 			admissionReasonMask,

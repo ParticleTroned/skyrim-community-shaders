@@ -2,6 +2,8 @@
 
 #include "VRAPI/CSupscalingapi.h"
 
+#include <cstddef>
+
 namespace CSX::Api
 {
 	struct UpscalingAdmissionDecision
@@ -21,4 +23,10 @@ namespace CSX::Api
 		bool a_transitionActive,
 		bool a_effectiveMatches,
 		bool a_stableMatches) noexcept;
+
+	bool HasUpscalingServiceCapacity(
+		std::size_t a_commandCount,
+		std::size_t a_operationCount,
+		std::size_t a_pendingOperationCount,
+		std::size_t a_maximumCount) noexcept;
 }

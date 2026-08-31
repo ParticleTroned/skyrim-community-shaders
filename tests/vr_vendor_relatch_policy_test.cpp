@@ -504,6 +504,62 @@ namespace
 			CanBypassPreparedMenuRequestDelay(true, 7, 8)) {
 			return false;
 		}
+		if (!CanUseDirectMenuRequestPacing(true, 7) ||
+			CanUseDirectMenuRequestPacing(false, 7) ||
+			CanUseDirectMenuRequestPacing(true, 0)) {
+			return false;
+		}
+		if (!HasDirectMenuRequestAuthority(true, 7) ||
+			HasDirectMenuRequestAuthority(false, 7) ||
+			HasDirectMenuRequestAuthority(true, 0)) {
+			return false;
+		}
+		for (std::uint32_t bits = 0; bits < (1u << 3); ++bits) {
+			const bool directMenuEdit = (bits & (1u << 0)) != 0;
+			const bool validRequestID = (bits & (1u << 1)) != 0;
+			const bool exactRequestPrepared = (bits & (1u << 2)) != 0;
+			const std::uint64_t requestID = validRequestID ? 7 : 0;
+			const std::uint64_t preparedRequestID =
+				exactRequestPrepared ? requestID : 8;
+			const bool directAuthority = directMenuEdit && validRequestID;
+			if (HasDirectMenuRequestAuthority(directMenuEdit, requestID) !=
+				directAuthority) {
+				return false;
+			}
+			if (CanUseDirectMenuRequestPacing(directMenuEdit, requestID) !=
+				directAuthority) {
+				return false;
+			}
+			if (CanBypassPreparedMenuRequestDelay(
+					directAuthority,
+					requestID,
+					preparedRequestID) !=
+				(directAuthority && exactRequestPrepared)) {
+				return false;
+			}
+			if (CanQueuedMenuProfileOwnRuntimeOptions({
+					.stableValid = true,
+					.stableActive = false,
+					.targetValid = true,
+					.targetActive = true,
+					.sameMethod = true,
+					.directMenuRequest = directAuthority,
+					.exactRequestPrepared = exactRequestPrepared,
+				}) != (directAuthority && exactRequestPrepared)) {
+				return false;
+			}
+		}
+		for (std::uint32_t bits = 0; bits < (1u << 2); ++bits) {
+			const bool valueChanged = (bits & (1u << 0)) != 0;
+			const bool editCommitted = (bits & (1u << 1)) != 0;
+			const auto dispatch = SelectMenuEditDispatch(
+				valueChanged,
+				editCommitted);
+			if (dispatch.publishRequest != (valueChanged || editCommitted) ||
+				dispatch.directMenuEdit != editCommitted) {
+				return false;
+			}
+		}
 
 		for (std::uint32_t bits = 0; bits < (1u << 7); ++bits) {
 			const StabilizerControllerTargetAdmission admission{

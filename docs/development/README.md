@@ -65,7 +65,9 @@ Changes to the VR master custom-shader switch also require a headset runtime che
 Use `tools/new-worktree.ps1` when creating a new worktree for development. The script:
 
 -   Creates the worktree under a sibling `<repo>.worktrees/` directory by default
--   Reuses an existing local branch or creates a new one from `HEAD`
+-   Reuses an existing local branch or creates a new one from the explicit
+    `-StartPoint`, the repository-local `csx.worktreeStartPoint` setting, or
+    `origin/HEAD` in that order; `HEAD` is only the final fallback
 -   Runs `git submodule update --init --recursive` in the new worktree
 -   Copies `CMakeUserPresets.json` from the main checkout if it exists there
 -   Does not overwrite an existing `CMakeUserPresets.json` unless `-ForcePresetCopy` is passed
@@ -75,6 +77,14 @@ Examples:
 -   `pwsh ./tools/new-worktree.ps1 -Name reproj_fixes`
 -   `pwsh ./tools/new-worktree.ps1 -Name vr-debug -StartPoint dev`
 -   `pwsh ./tools/new-worktree.ps1 -Name clean-build -NoSubmodules`
+
+Set a rolling integration branch as the repository-local default when feature
+branches should consistently start from a maintained local baseline:
+
+-   `pwsh ./tools/git.ps1 config csx.worktreeStartPoint codex/local-main-VR`
+
+Use `-StartPoint origin/main-VR` explicitly for work intended to begin directly
+from the upstream integration branch.
 
 If you want a Git-native command, install the optional repo-local alias:
 

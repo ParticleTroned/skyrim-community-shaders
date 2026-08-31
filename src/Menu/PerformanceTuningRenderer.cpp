@@ -2515,51 +2515,51 @@ namespace
 		                         g_upscalingCostSweep.matrix == UpscalingCostSweepMatrix::Nvidia;
 		const auto readiness = CaptureUpscalingCostSweepReadiness(currentTime);
 		const auto& fidelityFX = Upscaling::fidelityFX;
-		return {
-			{ "active", IsAnyFeatureCostMeasurementActive() || sweepRunning },
-			{ "owner", sweepRunning ? "devbench_upscaling_sweep" : (activeMeasurement ? "ui" : "none") },
-			{ "sweepPhase", GetUpscalingCostSweepPhaseName(g_upscalingCostSweep.phase) },
-			{ "measurement", std::move(measurement) },
-			{ "currentCase", std::move(currentCase) },
-			{ "currentCaseIndex", g_upscalingCostSweep.currentCaseIndex },
-			{ "caseCount", g_upscalingCostSweep.cases.size() },
-			{ "resultCount", g_upscalingCostSweep.results.size() },
-			{ "baseline", "none" },
-			{ "matrix", sweepKnown ? json(GetUpscalingCostSweepMatrixName(g_upscalingCostSweep.matrix)) : json(nullptr) },
-			{ "dlssPreset", nvidiaSweep ? json(Upscaling::GetDLSSPresetName(g_upscalingCostSweep.dlssPreset)) : json(nullptr) },
-			{ "readiness", {
-							   { "ready", readiness.Ready() },
-							   { "idle", readiness.idle },
-							   { "vr", readiness.vr },
-							   { "inGame", readiness.inGame },
-							   { "menuAvailable", readiness.menuAvailable },
-							   { "measurementSupported", readiness.measurementSupported },
-							   { "restartCooldownComplete", readiness.restartCooldownComplete },
-						   } },
-			{ "capabilities", {
-								  { "amdAdapter", fidelityFX.IsAmdAdapterDetected() },
-								  { "nvidiaAdapter", fidelityFX.IsNvidiaAdapterDetected() },
-								  { "dlssCheckComplete", Upscaling::streamline.featureCheckComplete },
-								  { "dlssAvailable", Upscaling::streamline.featureDLSS },
-								  { "fsr4Available", fidelityFX.IsRuntimeFsr4Available() },
-								  { "fsr4SweepAvailable", IsFsr4UpscalingCostSweepAvailable() },
-								  { "fsrRuntimeFailureLatched", fidelityFX.IsRuntimeUpscalerFailureLatched() },
-								  { "fsr4FailureLatched", fidelityFX.IsRuntimeFsr4FailureLatched() },
-								  { "fsrSupportCheckComplete", fidelityFX.HasRuntimeUpscalerSupportCheckResult() },
-								  { "fsrSupportConfirmed", fidelityFX.IsRuntimeUpscalerSupportConfirmed() },
-							  } },
-			{ "failure", g_upscalingCostSweep.failureMessage.empty() ? json(nullptr) : json(g_upscalingCostSweep.failureMessage) },
-			{ "restartCooldownRemainingMs", GetFeatureCostRestartCooldownRemaining(currentTime) * 1000.0 },
-			{ "timing", {
-							{ "initialCooldownMs", kFeatureCostInitialWaitSeconds * 1000.0 },
-							{ "measurementWindowMs", kFeatureCostMeasurementMilliseconds },
-							{ "comparisonWaitMs", kFeatureCostComparisonWaitSeconds * 1000.0 },
-							{ "postRunCooldownMs", kFeatureCostRestartCooldownSeconds * 1000.0 },
-						} },
-			{ "latestTiming", std::move(latestTiming) },
-			{ "trace", FeatureCostTraceJson(traceAfterSequence, maximumTraceSamples) },
-			{ "results", std::move(results) },
+		json response = json::object();
+		response["active"] = IsAnyFeatureCostMeasurementActive() || sweepRunning;
+		response["owner"] = sweepRunning ? "devbench_upscaling_sweep" : (activeMeasurement ? "ui" : "none");
+		response["sweepPhase"] = GetUpscalingCostSweepPhaseName(g_upscalingCostSweep.phase);
+		response["measurement"] = std::move(measurement);
+		response["currentCase"] = std::move(currentCase);
+		response["currentCaseIndex"] = g_upscalingCostSweep.currentCaseIndex;
+		response["caseCount"] = g_upscalingCostSweep.cases.size();
+		response["resultCount"] = g_upscalingCostSweep.results.size();
+		response["baseline"] = "none";
+		response["matrix"] = sweepKnown ? json(GetUpscalingCostSweepMatrixName(g_upscalingCostSweep.matrix)) : json(nullptr);
+		response["dlssPreset"] = nvidiaSweep ? json(Upscaling::GetDLSSPresetName(g_upscalingCostSweep.dlssPreset)) : json(nullptr);
+		response["readiness"] = {
+			{ "ready", readiness.Ready() },
+			{ "idle", readiness.idle },
+			{ "vr", readiness.vr },
+			{ "inGame", readiness.inGame },
+			{ "menuAvailable", readiness.menuAvailable },
+			{ "measurementSupported", readiness.measurementSupported },
+			{ "restartCooldownComplete", readiness.restartCooldownComplete },
 		};
+		response["capabilities"] = {
+			{ "amdAdapter", fidelityFX.IsAmdAdapterDetected() },
+			{ "nvidiaAdapter", fidelityFX.IsNvidiaAdapterDetected() },
+			{ "dlssCheckComplete", Upscaling::streamline.featureCheckComplete },
+			{ "dlssAvailable", Upscaling::streamline.featureDLSS },
+			{ "fsr4Available", fidelityFX.IsRuntimeFsr4Available() },
+			{ "fsr4SweepAvailable", IsFsr4UpscalingCostSweepAvailable() },
+			{ "fsrRuntimeFailureLatched", fidelityFX.IsRuntimeUpscalerFailureLatched() },
+			{ "fsr4FailureLatched", fidelityFX.IsRuntimeFsr4FailureLatched() },
+			{ "fsrSupportCheckComplete", fidelityFX.HasRuntimeUpscalerSupportCheckResult() },
+			{ "fsrSupportConfirmed", fidelityFX.IsRuntimeUpscalerSupportConfirmed() },
+		};
+		response["failure"] = g_upscalingCostSweep.failureMessage.empty() ? json(nullptr) : json(g_upscalingCostSweep.failureMessage);
+		response["restartCooldownRemainingMs"] = GetFeatureCostRestartCooldownRemaining(currentTime) * 1000.0;
+		response["timing"] = {
+			{ "initialCooldownMs", kFeatureCostInitialWaitSeconds * 1000.0 },
+			{ "measurementWindowMs", kFeatureCostMeasurementMilliseconds },
+			{ "comparisonWaitMs", kFeatureCostComparisonWaitSeconds * 1000.0 },
+			{ "postRunCooldownMs", kFeatureCostRestartCooldownSeconds * 1000.0 },
+		};
+		response["latestTiming"] = std::move(latestTiming);
+		response["trace"] = FeatureCostTraceJson(traceAfterSequence, maximumTraceSamples);
+		response["results"] = std::move(results);
+		return response;
 	}
 }
 

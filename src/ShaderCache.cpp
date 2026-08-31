@@ -3223,6 +3223,22 @@ namespace SIE
 		return isDiskCache.load(std::memory_order_acquire);
 	}
 
+	ShaderCache::CompileContextSnapshot ShaderCache::GetCompileContextSnapshot() const
+	{
+		const auto state = CaptureGlobalCompileState();
+		return {
+			.developerMode = state.developerMode,
+			.virtualReality = state.isVR,
+			.partialPrecision = state.partialPrecision,
+			.avoidFlowControl = state.avoidFlowControl,
+			.shaderDefinesCanonical = state.shaderDefines->canonicalText,
+			.shaderDefinesSuffix = Util::GetShaderDefinesSuffix(state.shaderDefines->canonicalText),
+			.globalCompileStateDigest = state.digest.ToHex(),
+			.shaderCacheAbiId = std::string(BuildProvenance::GetShaderCacheAbiId()),
+			.shaderCompilerIdentity = BuildProvenance::GetShaderCompilerIdentity(),
+		};
+	}
+
 	void ShaderCache::SetDiskCache(bool value)
 	{
 		std::unique_lock lock{ g_diskCacheMutationMutex };

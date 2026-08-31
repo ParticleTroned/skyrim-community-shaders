@@ -103,9 +103,57 @@ namespace
 			});
 		return reacquired && reacquired->acquired && acquisitions == 3;
 	}
+
+	bool TestStaleFrameCannotReplacePublication()
+	{
+		Coordinator coordinator;
+		Token frameN{ 10 };
+		Token frameNPlusOne{ 11 };
+		Token duplicateFrameN{ 99 };
+		std::atomic_uint32_t acquisitions = 0;
+
+		auto first = coordinator.Resolve(10, [&](std::uint32_t) -> std::optional<Token*> {
+			++acquisitions;
+			return &frameN;
+		});
+		auto next = coordinator.Resolve(11, [&](std::uint32_t) -> std::optional<Token*> {
+			++acquisitions;
+			return &frameNPlusOne;
+		});
+		auto stale = coordinator.Resolve(10, [&](std::uint32_t) -> std::optional<Token*> {
+			++acquisitions;
+			return &duplicateFrameN;
+		});
+
+		return first && next && !stale && acquisitions == 2;
+	}
+
+	bool TestFrameCounterWrapRemainsMonotonic()
+	{
+		Coordinator coordinator;
+		Token beforeWrap{ UINT32_MAX };
+		Token afterWrap{ 0 };
+		std::atomic_uint32_t acquisitions = 0;
+
+		auto first = coordinator.Resolve(UINT32_MAX, [&](std::uint32_t) -> std::optional<Token*> {
+			++acquisitions;
+			return &beforeWrap;
+		});
+		auto wrapped = coordinator.Resolve(0, [&](std::uint32_t) -> std::optional<Token*> {
+			++acquisitions;
+			return &afterWrap;
+		});
+
+		return first && wrapped && wrapped->token == &afterWrap && acquisitions == 2;
+	}
 }
 
 int main()
 {
-	return TestConcurrentPublication() && TestFailureAndReset() ? 0 : 1;
+	return TestConcurrentPublication() &&
+	               TestFailureAndReset() &&
+	               TestStaleFrameCannotReplacePublication() &&
+	               TestFrameCounterWrapRemainsMonotonic() ?
+	           0 :
+	           1;
 }

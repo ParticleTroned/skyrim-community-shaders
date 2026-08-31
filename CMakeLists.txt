@@ -149,10 +149,16 @@ include(XSEPlugin)
 # a checkout, submodule update, or local edit in an existing build directory.
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(CSX_PROVENANCE_SCRIPT "${CMAKE_SOURCE_DIR}/tools/build_provenance.py")
-set(CSX_PROVENANCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/BuildProvenance/$<CONFIG>")
+set(CSX_PROVENANCE_DIR
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/BuildProvenance/$<CONFIG>"
+)
 set(CSX_PROVENANCE_HEADER "${CSX_PROVENANCE_DIR}/BuildProvenance.generated.h")
-set(CSX_PROVENANCE_BASE_MANIFEST "${CSX_PROVENANCE_DIR}/CSX.BuildManifest.base.json")
-set(CSX_PROVENANCE_FINAL_MANIFEST "$<TARGET_FILE_DIR:${PROJECT_NAME}>/CSX.BuildManifest.json")
+set(CSX_PROVENANCE_BASE_MANIFEST
+    "${CSX_PROVENANCE_DIR}/CSX.BuildManifest.base.json"
+)
+set(CSX_PROVENANCE_FINAL_MANIFEST
+    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/CSX.BuildManifest.json"
+)
 set(_CSX_PROVENANCE_CLEAN_ARG)
 if(CSX_REQUIRE_CLEAN_PROVENANCE)
     set(_CSX_PROVENANCE_CLEAN_ARG --require-clean)
@@ -161,31 +167,27 @@ add_custom_target(
     refresh_build_provenance
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CSX_PROVENANCE_DIR}"
     COMMAND
-        "${Python3_EXECUTABLE}" "${CSX_PROVENANCE_SCRIPT}" generate
-        --source-dir "${CMAKE_SOURCE_DIR}"
-        --output-header "${CSX_PROVENANCE_HEADER}"
-        --output-manifest "${CSX_PROVENANCE_BASE_MANIFEST}"
-        --runtime "${CSX_RUNTIME}"
-        --plugin-version "${CSX_PLUGIN_VERSION}"
-        --configuration "$<CONFIG>"
-        --artifact-name "$<TARGET_FILE_NAME:${PROJECT_NAME}>"
-        --compiler-id "${CMAKE_CXX_COMPILER_ID}"
-        --compiler-version "${CMAKE_CXX_COMPILER_VERSION}"
-        --compiler-path "${CMAKE_CXX_COMPILER}"
-        --generator "${CMAKE_GENERATOR}"
-        --generator-platform "${CMAKE_GENERATOR_PLATFORM}"
-        --generator-toolset "${CMAKE_GENERATOR_TOOLSET}"
-        --windows-sdk-version "${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}"
-        --cmake-version "${CMAKE_VERSION}"
-        --target-triplet "${VCPKG_TARGET_TRIPLET}"
-        --toolchain-file "${CMAKE_TOOLCHAIN_FILE}"
-        --overlay-dir "${VCPKG_OVERLAY_PORTS}"
-        --build-option "DEVBENCH_BRIDGE=${DEVBENCH_BRIDGE}"
-        --build-option "TRACY_SUPPORT=${TRACY_SUPPORT}"
-        --build-option "ENABLE_SKYRIM_AE=${ENABLE_SKYRIM_AE}"
-        --build-option "ENABLE_SKYRIM_SE=${ENABLE_SKYRIM_SE}"
-        --build-option "ENABLE_SKYRIM_VR=${ENABLE_SKYRIM_VR}"
-        --build-option "MSVC_RUNTIME=${CMAKE_MSVC_RUNTIME_LIBRARY}"
+        "${Python3_EXECUTABLE}" "${CSX_PROVENANCE_SCRIPT}" generate --source-dir
+        "${CMAKE_SOURCE_DIR}" --output-header "${CSX_PROVENANCE_HEADER}"
+        --output-manifest "${CSX_PROVENANCE_BASE_MANIFEST}" --runtime
+        "${CSX_RUNTIME}" --plugin-version "${CSX_PLUGIN_VERSION}"
+        --configuration "$<CONFIG>" --artifact-name
+        "$<TARGET_FILE_NAME:${PROJECT_NAME}>" --compiler-id
+        "${CMAKE_CXX_COMPILER_ID}" --compiler-version
+        "${CMAKE_CXX_COMPILER_VERSION}" --compiler-path "${CMAKE_CXX_COMPILER}"
+        --generator "${CMAKE_GENERATOR}" --generator-platform
+        "${CMAKE_GENERATOR_PLATFORM}" --generator-toolset
+        "${CMAKE_GENERATOR_TOOLSET}" --windows-sdk-version
+        "${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}" --cmake-version
+        "${CMAKE_VERSION}" --target-triplet "${VCPKG_TARGET_TRIPLET}"
+        --toolchain-file "${CMAKE_TOOLCHAIN_FILE}" --overlay-dir
+        "${VCPKG_OVERLAY_PORTS}" --build-option
+        "DEVBENCH_BRIDGE=${DEVBENCH_BRIDGE}" --build-option
+        "TRACY_SUPPORT=${TRACY_SUPPORT}" --build-option
+        "ENABLE_SKYRIM_AE=${ENABLE_SKYRIM_AE}" --build-option
+        "ENABLE_SKYRIM_SE=${ENABLE_SKYRIM_SE}" --build-option
+        "ENABLE_SKYRIM_VR=${ENABLE_SKYRIM_VR}" --build-option
+        "MSVC_RUNTIME=${CMAKE_MSVC_RUNTIME_LIBRARY}"
         ${_CSX_PROVENANCE_CLEAN_ARG}
     VERBATIM
     COMMENT "Refreshing canonical CSX build provenance"
@@ -197,9 +199,9 @@ add_custom_command(
     POST_BUILD
     COMMAND
         "${Python3_EXECUTABLE}" "${CSX_PROVENANCE_SCRIPT}" finalize
-        --base-manifest "${CSX_PROVENANCE_BASE_MANIFEST}"
-        --artifact "$<TARGET_FILE:${PROJECT_NAME}>"
-        --output-manifest "${CSX_PROVENANCE_FINAL_MANIFEST}"
+        --base-manifest "${CSX_PROVENANCE_BASE_MANIFEST}" --artifact
+        "$<TARGET_FILE:${PROJECT_NAME}>" --output-manifest
+        "${CSX_PROVENANCE_FINAL_MANIFEST}"
     VERBATIM
     COMMENT "Binding CSX build manifest to linked DLL"
 )
@@ -234,6 +236,23 @@ find_library(DETOURS_LIBRARY detours REQUIRED)
 include(FidelityFX-SDK)
 include(FidelityFX-Runtime)
 include(Streamline-Runtime)
+
+string(
+    REPLACE "."
+    ";"
+    _streamline_runtime_version_parts
+    "${STREAMLINE_RUNTIME_VERSION}"
+)
+list(GET _streamline_runtime_version_parts 0 _streamline_runtime_version_major)
+list(GET _streamline_runtime_version_parts 1 _streamline_runtime_version_minor)
+list(GET _streamline_runtime_version_parts 2 _streamline_runtime_version_patch)
+target_compile_definitions(
+    ${PROJECT_NAME}
+    PRIVATE
+        CSX_STREAMLINE_RUNTIME_VERSION_MAJOR=${_streamline_runtime_version_major}
+        CSX_STREAMLINE_RUNTIME_VERSION_MINOR=${_streamline_runtime_version_minor}
+        CSX_STREAMLINE_RUNTIME_VERSION_PATCH=${_streamline_runtime_version_patch}
+)
 
 target_compile_definitions(
     ${PROJECT_NAME}
@@ -285,7 +304,7 @@ target_link_libraries(
         Tracy::TracyClient
         Streamline
         d3d12.lib
-		bcrypt.lib
+        bcrypt.lib
         Microsoft::DirectX-Headers
         ${DETOURS_LIBRARY}
 )
@@ -728,8 +747,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     set(_feature_paths_list_file
         "${CMAKE_CURRENT_BINARY_DIR}/feature_paths.txt"
     )
-    set(
-        _aio_source_paths
+    set(_aio_source_paths
         ${FEATURE_PATHS}
         "${FFX_RUNTIME_FEATURE_ROOT}"
         "${STREAMLINE_RUNTIME_FEATURE_ROOT}"
@@ -882,8 +900,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         list(REMOVE_DUPLICATES _shader_feature_paths)
     endif()
 
-    set(
-        _feature_shader_paths
+    set(_feature_shader_paths
         "${FFX_RUNTIME_SHADER_ROOT}"
         "${STREAMLINE_RUNTIME_SHADER_ROOT}"
     )
@@ -1257,8 +1274,7 @@ if(ZIP_TO_DIST)
             "Zipping ${FEATURE_PATH} to ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${UTC_NOW}.7z"
         )
         if(FEATURE STREQUAL "Upscaling")
-            set(
-                FEATURE_ZIP_STAGE
+            set(FEATURE_ZIP_STAGE
                 "${CMAKE_CURRENT_BINARY_DIR}/feature_zip/${FEATURE}"
             )
             add_custom_command(
@@ -1379,8 +1395,7 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
     set(FEATURE_PACKAGE "${DIST_PATH}/${FEATURE}-${UTC_NOW}.7z")
 
     if(FEATURE STREQUAL "Upscaling")
-        set(
-            FEATURE_PACKAGE_STAGE
+        set(FEATURE_PACKAGE_STAGE
             "${CMAKE_CURRENT_BINARY_DIR}/feature_package/${FEATURE}"
         )
         add_custom_command(
@@ -1398,8 +1413,8 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
                 "${FEATURE_PACKAGE_STAGE}" --component StreamlineRuntime
             COMMAND
                 ${CMAKE_COMMAND} -E chdir "${FEATURE_PACKAGE_STAGE}"
-                ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE}
-                --format=7zip -- .
+                ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE} --format=7zip --
+                .
             DEPENDS
                 ${FEATURE_SOURCES}
                 ${FFX_RUNTIME_FILES}
@@ -1410,8 +1425,8 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
         add_custom_command(
             OUTPUT ${FEATURE_PACKAGE}
             COMMAND
-                ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE}
-                --format=7zip -- .
+                ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE} --format=7zip --
+                .
             WORKING_DIRECTORY "${FEATURE_PATH}"
             DEPENDS ${FEATURE_SOURCES}
             COMMENT "Creating ${FEATURE} zip package"
@@ -1518,16 +1533,14 @@ if(BUILD_CONTROLLER_TESTS)
     add_test(
         NAME ScreenshotApiContract
         COMMAND
-            "${CMAKE_COMMAND}"
-            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
-            -P "${PROJECT_SOURCE_DIR}/tests/screenshot_api_contract_test.cmake"
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
+            "${PROJECT_SOURCE_DIR}/tests/screenshot_api_contract_test.cmake"
     )
     add_test(
         NAME MenuDevBenchPreflightContract
         COMMAND
-            "${CMAKE_COMMAND}"
-            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
-            -P "${PROJECT_SOURCE_DIR}/tests/menu_devbench_preflight_contract_test.cmake"
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
+            "${PROJECT_SOURCE_DIR}/tests/menu_devbench_preflight_contract_test.cmake"
     )
     add_test(
         NAME PerformanceTuningDevBenchContract
@@ -1540,9 +1553,8 @@ if(BUILD_CONTROLLER_TESTS)
     add_test(
         NAME VRMenuUiContract
         COMMAND
-            "${CMAKE_COMMAND}"
-            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
-            -P "${PROJECT_SOURCE_DIR}/tests/vr_menu_ui_contract_test.cmake"
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
+            "${PROJECT_SOURCE_DIR}/tests/vr_menu_ui_contract_test.cmake"
     )
     set_tests_properties(
         MenuDevBenchPreflightContract PerformanceTuningDevBenchContract
@@ -1552,12 +1564,21 @@ if(BUILD_CONTROLLER_TESTS)
     add_test(
         NAME EditorLightPickerContract
         COMMAND
-            "${CMAKE_COMMAND}"
-            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
-            -P "${PROJECT_SOURCE_DIR}/tests/editor_light_picker_contract_test.cmake"
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
+            "${PROJECT_SOURCE_DIR}/tests/editor_light_picker_contract_test.cmake"
     )
     set_tests_properties(
         EditorLightPickerContract
+        PROPERTIES LABELS "ControllerTests"
+    )
+    add_test(
+        NAME NvidiaPipelineContract
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
+            "${PROJECT_SOURCE_DIR}/tests/nvidia_pipeline_contract_test.cmake"
+    )
+    set_tests_properties(
+        NvidiaPipelineContract
         PROPERTIES LABELS "ControllerTests"
     )
 
@@ -1603,6 +1624,11 @@ if(BUILD_CONTROLLER_TESTS)
         tests/streamline_frame_token_publication_test.cpp
     )
     add_controller_test(
+        main_thread_dispatch_policy_test
+        MainThreadDispatchPolicy
+        tests/main_thread_dispatch_policy_test.cpp
+    )
+    add_controller_test(
         vr_render_scale_preparation_policy_test
         VRRenderScalePreparationPolicy
         tests/vr_render_scale_preparation_policy_test.cpp
@@ -1620,9 +1646,7 @@ if(BUILD_CONTROLLER_TESTS)
     add_test(
         NAME VRRenderScaleDevBenchContract
         COMMAND
-            "${CMAKE_COMMAND}"
-            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
-            -P
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
             "${PROJECT_SOURCE_DIR}/tests/vr_render_scale_devbench_contract_test.cmake"
     )
     set_tests_properties(
@@ -1730,8 +1754,14 @@ if(BUILD_CONTROLLER_TESTS)
         api_runtime_thread_affinity_test
         PRIVATE "${PROJECT_SOURCE_DIR}/src"
     )
-    add_test(NAME ApiRuntimeThreadAffinity COMMAND api_runtime_thread_affinity_test)
-    set_tests_properties(ApiRuntimeThreadAffinity PROPERTIES LABELS "ControllerTests")
+    add_test(
+        NAME ApiRuntimeThreadAffinity
+        COMMAND api_runtime_thread_affinity_test
+    )
+    set_tests_properties(
+        ApiRuntimeThreadAffinity
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     add_executable(
         api_service_foundation_test
@@ -1744,9 +1774,15 @@ if(BUILD_CONTROLLER_TESTS)
         api_service_foundation_test
         PRIVATE "${PROJECT_SOURCE_DIR}/src"
     )
-    target_link_libraries(api_service_foundation_test PRIVATE nlohmann_json::nlohmann_json)
+    target_link_libraries(
+        api_service_foundation_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
     add_test(NAME ApiServiceFoundation COMMAND api_service_foundation_test)
-    set_tests_properties(ApiServiceFoundation PROPERTIES LABELS "ControllerTests")
+    set_tests_properties(
+        ApiServiceFoundation
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     add_executable(
         api_service_registry_test
@@ -1757,9 +1793,7 @@ if(BUILD_CONTROLLER_TESTS)
     target_compile_features(api_service_registry_test PRIVATE cxx_std_23)
     target_include_directories(
         api_service_registry_test
-        PRIVATE
-            "${PROJECT_SOURCE_DIR}/include"
-            "${PROJECT_SOURCE_DIR}/src"
+        PRIVATE "${PROJECT_SOURCE_DIR}/include" "${PROJECT_SOURCE_DIR}/src"
     )
     add_test(NAME ApiServiceRegistry COMMAND api_service_registry_test)
     set_tests_properties(ApiServiceRegistry PROPERTIES LABELS "ControllerTests")
@@ -1806,12 +1840,13 @@ if(BUILD_CONTROLLER_TESTS)
     target_compile_features(api_upscaling_contract_test PRIVATE cxx_std_23)
     target_include_directories(
         api_upscaling_contract_test
-        PRIVATE
-            "${PROJECT_SOURCE_DIR}/include"
-            "${PROJECT_SOURCE_DIR}/src"
+        PRIVATE "${PROJECT_SOURCE_DIR}/include" "${PROJECT_SOURCE_DIR}/src"
     )
     add_test(NAME ApiUpscalingContract COMMAND api_upscaling_contract_test)
-    set_tests_properties(ApiUpscalingContract PROPERTIES LABELS "ControllerTests")
+    set_tests_properties(
+        ApiUpscalingContract
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     add_executable(
         api_upscaling_service_policy_test
@@ -1819,15 +1854,22 @@ if(BUILD_CONTROLLER_TESTS)
         tests/api_upscaling_service_policy_test.cpp
         src/Api/UpscalingServicePolicy.cpp
     )
-    target_compile_features(api_upscaling_service_policy_test PRIVATE cxx_std_23)
+    target_compile_features(
+        api_upscaling_service_policy_test
+        PRIVATE cxx_std_23
+    )
     target_include_directories(
         api_upscaling_service_policy_test
-        PRIVATE
-            "${PROJECT_SOURCE_DIR}/include"
-            "${PROJECT_SOURCE_DIR}/src"
+        PRIVATE "${PROJECT_SOURCE_DIR}/include" "${PROJECT_SOURCE_DIR}/src"
     )
-    add_test(NAME ApiUpscalingServicePolicy COMMAND api_upscaling_service_policy_test)
-    set_tests_properties(ApiUpscalingServicePolicy PROPERTIES LABELS "ControllerTests")
+    add_test(
+        NAME ApiUpscalingServicePolicy
+        COMMAND api_upscaling_service_policy_test
+    )
+    set_tests_properties(
+        ApiUpscalingServicePolicy
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     add_executable(
         api_shader_service_policy_test
@@ -1838,12 +1880,13 @@ if(BUILD_CONTROLLER_TESTS)
     target_compile_features(api_shader_service_policy_test PRIVATE cxx_std_23)
     target_include_directories(
         api_shader_service_policy_test
-        PRIVATE
-            "${PROJECT_SOURCE_DIR}/include"
-            "${PROJECT_SOURCE_DIR}/src"
+        PRIVATE "${PROJECT_SOURCE_DIR}/include" "${PROJECT_SOURCE_DIR}/src"
     )
     add_test(NAME ApiShaderServicePolicy COMMAND api_shader_service_policy_test)
-    set_tests_properties(ApiShaderServicePolicy PROPERTIES LABELS "ControllerTests")
+    set_tests_properties(
+        ApiShaderServicePolicy
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     add_executable(
         api_shader_compatibility_registry_test
@@ -1899,12 +1942,16 @@ if(BUILD_CONTROLLER_TESTS)
     target_compile_features(api_weather_service_policy_test PRIVATE cxx_std_23)
     target_include_directories(
         api_weather_service_policy_test
-        PRIVATE
-            "${PROJECT_SOURCE_DIR}/include"
-            "${PROJECT_SOURCE_DIR}/src"
+        PRIVATE "${PROJECT_SOURCE_DIR}/include" "${PROJECT_SOURCE_DIR}/src"
     )
-    add_test(NAME ApiWeatherServicePolicy COMMAND api_weather_service_policy_test)
-    set_tests_properties(ApiWeatherServicePolicy PROPERTIES LABELS "ControllerTests")
+    add_test(
+        NAME ApiWeatherServicePolicy
+        COMMAND api_weather_service_policy_test
+    )
+    set_tests_properties(
+        ApiWeatherServicePolicy
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     add_executable(
         api_profiler_contract_test
@@ -1928,13 +1975,23 @@ if(BUILD_CONTROLLER_TESTS)
         tests/api_editor_contract_test.cpp
     )
     target_compile_features(api_editor_contract_test PRIVATE cxx_std_23)
-    target_include_directories(api_editor_contract_test PRIVATE "${PROJECT_SOURCE_DIR}/include")
+    target_include_directories(
+        api_editor_contract_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
     add_test(NAME ApiEditorContract COMMAND api_editor_contract_test)
     set_tests_properties(ApiEditorContract PROPERTIES LABELS "ControllerTests")
 
-    add_executable(api_feature_contract_test EXCLUDE_FROM_ALL tests/api_feature_contract_test.cpp)
+    add_executable(
+        api_feature_contract_test
+        EXCLUDE_FROM_ALL
+        tests/api_feature_contract_test.cpp
+    )
     target_compile_features(api_feature_contract_test PRIVATE cxx_std_23)
-    target_include_directories(api_feature_contract_test PRIVATE "${PROJECT_SOURCE_DIR}/include")
+    target_include_directories(
+        api_feature_contract_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
     add_test(NAME ApiFeatureContract COMMAND api_feature_contract_test)
     set_tests_properties(ApiFeatureContract PROPERTIES LABELS "ControllerTests")
 

@@ -53,4 +53,16 @@ namespace CSX::Api
 		       a_effectiveMatches &&
 		       a_stableMatches;
 	}
+
+	bool HasUpscalingServiceCapacity(
+		std::size_t a_commandCount,
+		std::size_t a_operationCount,
+		std::size_t a_pendingOperationCount,
+		std::size_t a_maximumCount) noexcept
+	{
+		return a_maximumCount != 0 &&
+		       a_commandCount < a_maximumCount &&
+		       a_pendingOperationCount < a_maximumCount &&
+		       a_operationCount < a_maximumCount - a_pendingOperationCount;
+	}
 }

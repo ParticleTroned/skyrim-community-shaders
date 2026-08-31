@@ -632,10 +632,6 @@ namespace
 
 	constexpr bool CoversBoundedNativeRestorePresentationRecovery()
 	{
-		if (kNativeRestoreMaximumRecoveryAttempts != 2u) {
-			return false;
-		}
-
 		for (std::uint32_t attempt = 0; attempt <= 4u; ++attempt) {
 			for (std::uint32_t bits = 0; bits < (1u << 2); ++bits) {
 				const bool candidatePending = (bits & (1u << 0)) != 0;
@@ -2774,6 +2770,7 @@ namespace
 	static_assert(CoversDispatchAdmission());
 	static_assert(CoversNativeRestorePresentationAdmission());
 	static_assert(CoversInactiveContractNativeReleaseAdmission());
+	static_assert(kNativeRestoreMaximumRecoveryAttempts == 2u);
 	static_assert(CoversBoundedNativeRestorePresentationRecovery());
 	static_assert(CoversVendorResourcePredicates());
 	static_assert(CoversStereoRelatchAdmission());

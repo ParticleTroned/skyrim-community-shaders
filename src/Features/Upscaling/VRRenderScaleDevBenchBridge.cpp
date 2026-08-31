@@ -2,6 +2,7 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
+#	include "Api/MainThreadDispatchPolicy.h"
 #	include "Api/RuntimeThreadAffinity.h"
 #	include "Api/ServiceRegistry.h"
 #	include "BuildProvenance.h"
@@ -219,6 +220,7 @@ namespace
 			std::pair{ Reason::DeviceChanged, "device_changed" },
 			std::pair{ Reason::ShaderFailure, "shader_failure" },
 			std::pair{ Reason::ProviderFailure, "provider_failure" },
+			std::pair{ Reason::NonDirectEdit, "non_direct_edit" },
 		};
 		json output = json::array();
 		for (const auto& [reason, name] : reasons) {
@@ -3308,8 +3310,12 @@ namespace
 					a_value.blockedPreMutationEvidence.is_null()) {
 					a_value.blockedPreMutationEvidence = evidence;
 				}
+			} else if (mutationStarted &&
+					   a_value.firstPhysicalMutationEvidence.is_null()) {
+				a_value.firstPhysicalMutationEvidence = evidence;
 			}
-			if (!a_value.firstPhysicalMutationEvidence.is_null() &&
+			if (firstMutationRecorded &&
+				!a_value.firstPhysicalMutationEvidence.is_null() &&
 				a_value.firstPostMutationEvidence.is_null() &&
 				mutationStarted &&
 				OptionalNonNegativeIntegerOrZero(evidence, "tick") >=
@@ -4594,11 +4600,11 @@ namespace
 			return { { "error", "SKSE task interface unavailable" } };
 
 		auto promise = std::make_shared<std::promise<json>>();
-		auto cancelled = std::make_shared<std::atomic_bool>(false);
+		auto claim = std::make_shared<CSX::Api::MainThreadDispatchClaim>();
 		auto future = promise->get_future();
-		taskInterface->AddTask([promise, cancelled, run = std::move(a_run)]() mutable {
+		taskInterface->AddTask([promise, claim, run = std::move(a_run)]() mutable {
 			CSX::Api::EnterRuntimeMainThreadTask();
-			if (cancelled->load(std::memory_order_acquire))
+			if (!claim->TryClaim())
 				return;
 			try {
 				promise->set_value(run());
@@ -4607,10 +4613,17 @@ namespace
 			} catch (...) {
 				promise->set_value(json{ { "error", "main-thread task failed" } });
 			}
+			claim->Complete();
 		});
 
 		if (future.wait_for(a_timeout) != std::future_status::ready) {
-			cancelled->store(true, std::memory_order_release);
+			if (!claim->TryCancel()) {
+				return {
+					{ "status", "in_progress" },
+					{ "errorCode", "main_thread_in_progress" },
+					{ "timeoutMs", a_timeout.count() },
+				};
+			}
 			return {
 				{ "error", "main thread did not run before the request deadline" },
 				{ "errorCode", "main_thread_timeout" },
@@ -4816,8 +4829,8 @@ namespace
 										 { "dispatch", a_transition.dispatchPresentationEvidence },
 										 { "lastPreMutation", a_transition.lastPreMutationEvidence },
 										 { "blockedPreMutation", a_transition.blockedPreMutationEvidence },
-										 { "firstPhysicalMutation", a_transition.firstPhysicalMutationEvidence },
-										 { "firstPostMutation", a_transition.firstPostMutationEvidence },
+									 { "firstPhysicalMutation", a_transition.firstPhysicalMutationEvidence },
+									 { "firstPostMutation", a_transition.firstPostMutationEvidence },
 										 { "firstNewGenerationProven", a_transition.firstNewGenerationProvenEvidence },
 										 { "mutationNotRequiredTerminalProof", a_transition.mutationNotRequiredTerminalProofEvidence },
 										 { "terminal", terminalPresentationEvidence },
@@ -6224,13 +6237,18 @@ namespace
 
 				const auto before = upscaling.GetPendingVRRenderScaleDesiredProfile();
 				const uint32_t dlssPreset = requestedPreset.value_or(before.dlssPreset);
+				const bool directMenuEdit = true;
 				const auto applied = upscaling.ApplyCSMenuUpscalingTransition(
 					method,
 					enabled,
 					qualityMode,
 					dlssPreset,
 					"devbench render-scale iteration",
-					Upscaling::VRUpscalingTransitionOrigin::CSMenu);
+					Upscaling::VRUpscalingTransitionOrigin::CSMenu,
+					0,
+					std::nullopt,
+					VRVendorRelatchPolicy::StartupNativeFallbackControl::None,
+					directMenuEdit);
 
 				const bool accepted = applied.disposition != Upscaling::UpscalingTransitionApplyDisposition::Rejected;
 				const bool asynchronous =
@@ -6243,6 +6261,7 @@ namespace
 					{ "enabled", enabled },
 					{ "qualityMode", qualityMode },
 					{ "dlssPreset", dlssPreset },
+					{ "directMenuEdit", directMenuEdit },
 					{ "accepted", accepted },
 					{ "asynchronous", asynchronous },
 					{ "disposition", GetApplyDispositionName(applied.disposition) },
@@ -6900,6 +6919,11 @@ namespace VRRenderScaleDevBenchBridge
 				"cleanup; absent milestone preserves strict combined semantics. Its "
 				"terminal receipt reports independent milestone timings, cleanup "
 				"tail, and the replacement-presentation timeline.";
+			descriptor["description"] =
+				descriptor["description"].get<std::string>() +
+				" Main-thread actions cancelled before admission return "
+				"main_thread_timeout; an action already admitted returns "
+				"main_thread_in_progress and may complete after the response.";
 			descriptor["inputSchema"]["properties"]["milestone"] = {
 				{ "type", "string" },
 				{ "enum", json::array({ "strict", "presentation", "cleanup" }) },

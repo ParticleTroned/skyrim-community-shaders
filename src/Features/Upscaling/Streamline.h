@@ -5,10 +5,12 @@
 #include "StreamlineFrameTokenPublication.h"
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <d3d11_4.h>
 #include <directx/d3d12.h>
+#include <mutex>
 #include <vector>
 
 #define NV_WINDOWS
@@ -34,14 +36,14 @@ public:
 	inline std::string GetShortName() { return "Streamline"; }
 
 	bool enabledAtBoot = false;
-	bool initialized = false;
-	bool triedInitialization = false;
-	bool featureCheckComplete = false;
+	std::atomic_bool initialized{ false };
+	std::atomic_bool triedInitialization{ false };
+	std::atomic_bool featureCheckComplete{ false };
 
-	bool featureDLSS = false;
-	bool featureReflex = false;
-	bool featurePCL = false;
-	bool reflexSupportedOnCurrentAdapter = false;
+	std::atomic_bool featureDLSS{ false };
+	std::atomic_bool featureReflex{ false };
+	std::atomic_bool featurePCL{ false };
+	std::atomic_bool reflexSupportedOnCurrentAdapter{ false };
 
 	sl::ViewportHandle viewport{ 0 };
 	sl::ViewportHandle viewportRight{ 1 };
@@ -126,8 +128,12 @@ public:
 		uint32_t dlssPreset = 0;
 		uint32_t extentInWidth = 0;
 		uint32_t extentInHeight = 0;
+		uint32_t extentInLeft = 0;
+		uint32_t extentInTop = 0;
 		uint32_t extentOutWidth = 0;
 		uint32_t extentOutHeight = 0;
+		uint32_t extentOutLeft = 0;
+		uint32_t extentOutTop = 0;
 		int32_t viewportScaleXQ = 0;
 		int32_t viewportScaleYQ = 0;
 		int32_t pinholeOffsetXQ = 0;
@@ -135,6 +141,7 @@ public:
 		int32_t jitterXQ = 0;
 		int32_t jitterYQ = 0;
 		bool historyResetRequested = false;
+		uint64_t constantsIdentity = 0;
 	};
 
 	struct VRDLSSViewportSlot
@@ -437,11 +444,15 @@ public:
 	// Cached DLL version info for Streamline plugin directory
 	static std::vector<std::pair<std::string, std::string>> dllVersions;
 
-	void LoadInterposer();
+	bool LoadInterposer();
+	void Shutdown();
+	bool TryUpgradeInterface(void** a_interface);
+	bool TrySetD3DDevice(ID3D11Device* a_device);
+	void MarkAdapterUnavailable(const char* a_reason);
 
-	void CheckFeatures(IDXGIAdapter* a_adapter);
+	bool CheckFeatures(IDXGIAdapter* a_adapter);
 
-	void PostDevice();
+	bool PostDevice();
 
 	bool CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameToken* frameToken, uint32_t eyeIndex = 0, float viewportScaleX = 1.0f, float viewportScaleY = 1.0f, float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f, const DLSSDispatchDiagnostics* diagnostics = nullptr
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -454,7 +465,11 @@ public:
 		uint32_t a_frame,
 		const char* a_consumer);
 
-	bool IsRTXAndBelow40Series(IDXGIAdapter* a_adapter);
+	bool IsRTXAndBelow40Series(const DXGI_ADAPTER_DESC& a_adapterDesc) const;
+	[[nodiscard]] bool IsFrameGenerationQuarantinedByReflex() const noexcept
+	{
+		return frameGenerationQuarantinedByReflex.load(std::memory_order_acquire);
+	}
 
 	/** @brief Makes the bounded VR viewport slot for a DLSS profile safe to use without dispatching DLSS. */
 	DLSSViewportPreparationResult PrepareVRDLSSViewport(DLSSViewportRole viewportRole, uint32_t qualityMode, uint32_t dlssPreset);
@@ -521,7 +536,25 @@ public:
 		ID3D11Resource* mvec, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask,
 		uint32_t renderWidth, uint32_t renderHeight, uint32_t outputWidth, uint32_t outputHeight,
 		float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f);
+	/** @brief Enforces the same-frame Reflex exclusion required before frame generation admission. */
+	bool EnsureReflexDisabledForFrameGeneration();
 	void UpdateReflex();
 
 	DLSSResourceTeardownResult DestroyDLSSResources();
+
+	enum class LifecycleState : uint8_t
+	{
+		Uninitialized,
+		Initializing,
+		Initialized,
+		Unavailable,
+		ShuttingDown,
+	};
+	std::mutex lifecycleMutex;
+	std::atomic<LifecycleState> lifecycleState{ LifecycleState::Uninitialized };
+	ID3D11Device* boundDeviceIdentity = nullptr;
+	bool adapterSupportsDLSS = false;
+	bool adapterSupportsReflex = false;
+	bool adapterSupportsPCL = false;
+	std::atomic_bool frameGenerationQuarantinedByReflex{ false };
 };

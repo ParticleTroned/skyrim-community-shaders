@@ -398,6 +398,9 @@ foreach(_required_behavior IN ITEMS
 	"\"nativeVendorExecution\""
 	"\"actualBackend\""
 	"\"native_vendor_frames\""
+	"const bool directMenuEdit = true;"
+	"\"directMenuEdit\""
+	"non_direct_edit"
     "controller.retirement.nextCleanupFrame == 0"
 	"BuildProvenance::ValidateExpectedBuild"
 )
@@ -633,6 +636,27 @@ foreach(_required_vendor_presentation_evidence IN ITEMS
 	endif()
 endforeach()
 
+foreach(_required_direct_menu_mapping IN ITEMS
+	"VRVendorRelatchPolicy::HasDirectMenuRequestAuthority("
+	"target->directMenuEdit,"
+	"relatchProfile->directMenuEdit,"
+	".directMenuRelatch = directMenuRelatch"
+	"transitionSnapshot.applied.directMenuEdit,"
+	"VRRenderScalePreparationReason::NonDirectEdit"
+	"a_request.origin == VRUpscalingTransitionOrigin::CSMenu &&\n\t\tdirectMenuRequest &&"
+)
+	string(FIND
+		"${_upscaling_source}"
+		"${_required_direct_menu_mapping}"
+		_direct_menu_mapping_position
+	)
+	if(_direct_menu_mapping_position EQUAL -1)
+		message(FATAL_ERROR
+			"Direct-menu authority is not mapped through production code: ${_required_direct_menu_mapping}"
+		)
+	endif()
+endforeach()
+
 string(FIND "${_upscaling_source}" "const bool sameContract =" _same_contract_start)
 string(FIND "${_upscaling_source}" "const bool duplicate =" _duplicate_start)
 string(FIND "${_upscaling_source}" "const bool consecutive =" _consecutive_start)
@@ -671,6 +695,24 @@ foreach(_required_duplicate_field IN ITEMS
 	if(_required_duplicate_position EQUAL -1)
 		message(FATAL_ERROR
 			"Duplicate presentation identity is incomplete: ${_required_duplicate_field}"
+		)
+	endif()
+endforeach()
+
+foreach(_forbidden_origin_only_mapping IN ITEMS
+	"target->origin == VRUpscalingTransitionOrigin::CSMenu"
+	".directMenuRelatch =\n\t\t\t\t\trelatchOrigin == VRUpscalingTransitionOrigin::CSMenu"
+	"relatchOrigin == VRUpscalingTransitionOrigin::CSMenu &&\n\t\t\trelatchTargetRenderScaleActive"
+	"transitionSnapshot.applied.origin ==\n\t\t\t\tVRUpscalingTransitionOrigin::CSMenu"
+)
+	string(FIND
+		"${_upscaling_source}"
+		"${_forbidden_origin_only_mapping}"
+		_origin_only_mapping_position
+	)
+	if(NOT _origin_only_mapping_position EQUAL -1)
+		message(FATAL_ERROR
+			"Direct-menu authority is still reconstructed from origin: ${_forbidden_origin_only_mapping}"
 		)
 	endif()
 endforeach()

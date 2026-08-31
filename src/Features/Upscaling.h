@@ -503,6 +503,7 @@ public:
 		float fsrSharpness = 0.0f;
 		uint32_t queuedFrame = 0;
 		VRUpscalingTransitionOrigin origin = VRUpscalingTransitionOrigin::CSMenu;
+		bool directMenuEdit = false;
 		bool stabilizerDoorHandoff = false;
 		uint64_t stabilizerDoorHandoffSerial = 0;
 
@@ -1322,7 +1323,8 @@ public:
 		Superseded = 1ull << 13,
 		DeviceChanged = 1ull << 14,
 		ShaderFailure = 1ull << 15,
-		ProviderFailure = 1ull << 16
+		ProviderFailure = 1ull << 16,
+		NonDirectEdit = 1ull << 17
 	};
 
 	struct VRRenderScalePreparationEvent
@@ -1506,6 +1508,7 @@ public:
 		uint32_t renderEyeHeight = 0;
 		uint32_t queuedFrame = 0;
 		VRUpscalingTransitionOrigin origin = VRUpscalingTransitionOrigin::CSMenu;
+		bool directMenuEdit = false;
 		bool stabilizerDoorHandoff = false;
 		uint64_t stabilizerDoorHandoffSerial = 0;
 		VRRenderScaleResourceKey resources{};
@@ -1739,7 +1742,8 @@ public:
 		VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu,
 		uint64_t a_bufferedStabilizerDoorHandoffSerial = 0,
 		VRVendorRelatchPolicy::StartupNativeFallbackControl a_startupFallbackControl =
-			VRVendorRelatchPolicy::StartupNativeFallbackControl::None);
+			VRVendorRelatchPolicy::StartupNativeFallbackControl::None,
+		bool a_directMenuEdit = false);
 	/** @brief Atomically removes and returns the complete pending request. */
 	std::optional<VRRenderScaleDesiredProfile> TakePendingVRRenderScaleRequest();
 	/** @brief Rejects a request that was cleared or superseded before application began. */
@@ -2125,7 +2129,8 @@ public:
 		uint64_t a_bufferedStabilizerDoorHandoffSerial = 0,
 		std::optional<bool> a_targetFSR4RuntimeEnable = std::nullopt,
 		VRVendorRelatchPolicy::StartupNativeFallbackControl a_startupFallbackControl =
-			VRVendorRelatchPolicy::StartupNativeFallbackControl::None);
+			VRVendorRelatchPolicy::StartupNativeFallbackControl::None,
+		bool a_directMenuEdit = false);
 	void SetVRUpscalingTransitionProfile(bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
 	uint32_t GetVRUpscalingApplyBlockReasonsForAPI() const;
 	/** @return The admitted LoadingMenu serial when an atomic Stabilizer profile may be staged; otherwise zero. */

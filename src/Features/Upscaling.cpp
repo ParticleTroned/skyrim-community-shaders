@@ -31492,13 +31492,13 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 			previous.outputWidth == a_observation.outputWidth &&
 			previous.outputHeight == a_observation.outputHeight &&
 			previous.vendorBackend == a_observation.vendorBackend &&
-			previous.vendorDispatchFrame == a_observation.vendorDispatchFrame &&
-			previous.vendorDispatchSerial == a_observation.vendorDispatchSerial &&
 			previous.vendorRuntimeFallback == a_observation.vendorRuntimeFallback &&
 			previous.deviceIdentity == deviceIdentity &&
 			previous.resourceRevision == resourceRevision;
 		const bool duplicate =
 			sameContract &&
+			previous.vendorDispatchFrame == a_observation.vendorDispatchFrame &&
+			previous.vendorDispatchSerial == a_observation.vendorDispatchSerial &&
 			previous.frame == frame &&
 			previous.compositorCycleToken == a_observation.compositorCycleToken &&
 			previous.loadingOrMenuContext == a_observation.loadingOrMenuContext &&

@@ -551,6 +551,48 @@ foreach(_required_vendor_presentation_evidence IN ITEMS
 	endif()
 endforeach()
 
+string(FIND "${_upscaling_source}" "const bool sameContract =" _same_contract_start)
+string(FIND "${_upscaling_source}" "const bool duplicate =" _duplicate_start)
+string(FIND "${_upscaling_source}" "const bool consecutive =" _consecutive_start)
+if(_same_contract_start EQUAL -1 OR _duplicate_start EQUAL -1 OR
+   _consecutive_start EQUAL -1 OR
+   _same_contract_start GREATER _duplicate_start OR
+   _duplicate_start GREATER _consecutive_start)
+	message(FATAL_ERROR "Presentation-history contract blocks are missing or reordered")
+endif()
+
+math(EXPR _same_contract_length "${_duplicate_start} - ${_same_contract_start}")
+string(SUBSTRING "${_upscaling_source}" ${_same_contract_start}
+	${_same_contract_length} _same_contract_block)
+foreach(_per_frame_dispatch_field IN ITEMS
+	"previous.vendorDispatchFrame"
+	"previous.vendorDispatchSerial"
+)
+	string(FIND "${_same_contract_block}" "${_per_frame_dispatch_field}"
+		_per_frame_dispatch_position)
+	if(NOT _per_frame_dispatch_position EQUAL -1)
+		message(FATAL_ERROR
+			"Per-frame dispatch identity resets presentation history: ${_per_frame_dispatch_field}"
+		)
+	endif()
+endforeach()
+
+math(EXPR _duplicate_length "${_consecutive_start} - ${_duplicate_start}")
+string(SUBSTRING "${_upscaling_source}" ${_duplicate_start}
+	${_duplicate_length} _duplicate_block)
+foreach(_required_duplicate_field IN ITEMS
+	"previous.vendorDispatchFrame == a_observation.vendorDispatchFrame"
+	"previous.vendorDispatchSerial == a_observation.vendorDispatchSerial"
+)
+	string(FIND "${_duplicate_block}" "${_required_duplicate_field}"
+		_required_duplicate_position)
+	if(_required_duplicate_position EQUAL -1)
+		message(FATAL_ERROR
+			"Duplicate presentation identity is incomplete: ${_required_duplicate_field}"
+		)
+	endif()
+endforeach()
+
 foreach(_publication_source_contract IN ITEMS
     "State::GetCurrentMainRenderTargetResourcePublicationDiagnostics() const noexcept"
     "const auto mainRenderTargetSize = GetMainRenderTargetSize();"

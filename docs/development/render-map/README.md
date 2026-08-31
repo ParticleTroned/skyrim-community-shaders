@@ -12,6 +12,12 @@ gaps are represented explicitly. Stopping a capture produces an immutable
 completed-capture snapshot which the artifact layer can serialize without
 holding render-thread state.
 
+The runtime, its D3D and engine hooks, and its integration call sites are
+developer instrumentation. They are compiled only when
+`DEVBENCH_BRIDGE=ON`. A normal release build with `DEVBENCH_BRIDGE=OFF`
+excludes the `src/RenderMap` translation units and retains the original
+non-mapping hook paths.
+
 This runtime does not change depth-culling decisions or apply culling results.
 Depth-culling events are observations of the existing upstream behaviour.
 
@@ -29,8 +35,8 @@ Depth-culling events are observations of the existing upstream behaviour.
 
 ## Deliberately separate
 
-The DevBench registration adapter is reviewed separately because it is an
+The DevBench registration adapter is reviewed separately because it is the
 optional external control surface over this runtime. Offline graph building,
 shader dependency analysis, generated shader manifests, engine maps, Ghidra
 helpers, prior-art catalogues, and captured-analysis reports remain development
-work and are not part of this upstream runtime change.
+tools; they do not enter the Community Shaders binary in either build mode.

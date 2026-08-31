@@ -5,6 +5,7 @@
 #include <winrt/base.h>
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -99,7 +100,9 @@ public:
 	HMODULE module = nullptr;
 
 	ffx::Context swapChainContext{};
-	ffx::Context frameGenContext;
+	ffx::Context frameGenContext{};
+	bool swapChainContextValid = false;
+	bool frameGenContextValid = false;
 	FfxFsr3Context fsrContext[2];
 
 	bool featureFSR3FG = false;
@@ -112,8 +115,13 @@ public:
 	static std::vector<std::pair<std::string, std::string>> dllVersions;
 
 	void LoadFFX();
-	void SetupFrameGeneration();
-	void Present(bool a_useFrameGeneration);
+	bool IsFrameGenerationRuntimeReady() const noexcept;
+	bool IsFrameGenerationQuarantined() const noexcept;
+	bool CreateFrameGenerationContext(ffx::Context& a_context, ffxCreateContextDescHeader* a_desc) noexcept;
+	bool SetupFrameGeneration();
+	bool ResetFrameGenerationContexts() noexcept;
+	bool Present(bool a_useFrameGeneration) noexcept;
+	ffxReturnCode_t DispatchFrameGenerationCallback(ffxDispatchDescFrameGeneration* a_parameters) noexcept;
 
 	LifecycleResult CreateFSRResources();
 
@@ -149,6 +157,8 @@ public:
 	bool IsRuntimeUpscalerProviderMatchingRequestedVersion() const;
 	bool IsRuntimeUpscalerFailureLatched() const;
 	bool IsRuntimeFsr4FailureLatched() const;
+	/** @brief Validates that the provider which produced a dispatch proof remains usable. */
+	bool IsRuntimeUpscalerDispatchProofUsable(RuntimeUpscalerFramePath a_path) const;
 	const std::string& GetRuntimeUpscalerLastFramePathLabel() const;
 	const std::string& GetConfiguredFsrPathLabel() const;
 	const std::string& GetDisplayedFsrPathLabel() const;
@@ -170,6 +180,11 @@ public:
 	StereoUpscaleResult UpscaleStereoRegions(const std::array<UpscaleRegionParameters, 2>& a_regions);
 
 private:
+	void QuarantineFrameGenerationForSession(const char* a_reason) noexcept;
+	std::atomic_bool frameGenerationSessionQuarantined{ false };
+	bool frameGenContextIndeterminate = false;
+	bool swapChainContextIndeterminate = false;
+
 	LifecycleResult RecordFSRDeviceStatus() noexcept;
 	LifecycleResult RecordRuntimeUpscalerDeviceStatus() noexcept;
 	LifecycleResult ResolveFSRLifecycleFailure(const char* a_operation);

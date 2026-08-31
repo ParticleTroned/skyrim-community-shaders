@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <dxgi.h>
 #include <dxgi1_3.h>
@@ -29,6 +30,48 @@ namespace
 	constexpr uint32_t kDLSSDiagnosticRepeatFrameGap = 300;
 	constexpr int32_t kDLSSDiagnosticTextResultCode = std::numeric_limits<int32_t>::min();
 	void* s_streamlineDllDirectoryCookie = nullptr;
+
+	struct StreamlineCoreBindings
+	{
+		PFun_slInit* init = nullptr;
+		PFun_slShutdown* shutdown = nullptr;
+		PFun_slIsFeatureSupported* isFeatureSupported = nullptr;
+		PFun_slIsFeatureLoaded* isFeatureLoaded = nullptr;
+		PFun_slSetFeatureLoaded* setFeatureLoaded = nullptr;
+		PFun_slEvaluateFeature* evaluateFeature = nullptr;
+		PFun_slAllocateResources* allocateResources = nullptr;
+		PFun_slFreeResources* freeResources = nullptr;
+		PFun_slGetFeatureRequirements* getFeatureRequirements = nullptr;
+		PFun_slGetFeatureVersion* getFeatureVersion = nullptr;
+		PFun_slUpgradeInterface* upgradeInterface = nullptr;
+		PFun_slSetConstants* setConstants = nullptr;
+		PFun_slGetNativeInterface* getNativeInterface = nullptr;
+		PFun_slGetFeatureFunction* getFeatureFunction = nullptr;
+		PFun_slGetNewFrameToken* getNewFrameToken = nullptr;
+		PFun_slSetD3DDevice* setD3DDevice = nullptr;
+
+		[[nodiscard]] std::vector<std::string_view> MissingRequired() const
+		{
+			std::vector<std::string_view> missing;
+			const auto require = [&](const void* a_function, std::string_view a_name) {
+				if (!a_function)
+					missing.push_back(a_name);
+			};
+			require(reinterpret_cast<const void*>(init), "slInit");
+			require(reinterpret_cast<const void*>(shutdown), "slShutdown");
+			require(reinterpret_cast<const void*>(isFeatureSupported), "slIsFeatureSupported");
+			require(reinterpret_cast<const void*>(isFeatureLoaded), "slIsFeatureLoaded");
+			require(reinterpret_cast<const void*>(evaluateFeature), "slEvaluateFeature");
+			require(reinterpret_cast<const void*>(freeResources), "slFreeResources");
+			require(reinterpret_cast<const void*>(getFeatureRequirements), "slGetFeatureRequirements");
+			require(reinterpret_cast<const void*>(upgradeInterface), "slUpgradeInterface");
+			require(reinterpret_cast<const void*>(setConstants), "slSetConstants");
+			require(reinterpret_cast<const void*>(getFeatureFunction), "slGetFeatureFunction");
+			require(reinterpret_cast<const void*>(getNewFrameToken), "slGetNewFrameToken");
+			require(reinterpret_cast<const void*>(setD3DDevice), "slSetD3DDevice");
+			return missing;
+		}
+	};
 
 	enum class D3D11IdleFenceResult : uint8_t
 	{
@@ -116,6 +159,93 @@ namespace
 		}
 	}
 
+	void ReleaseStreamlineDllDirectory()
+	{
+		if (!s_streamlineDllDirectoryCookie)
+			return;
+
+		auto kernel32 = GetModuleHandleW(L"kernel32.dll");
+		using RemoveDllDirectoryFn = BOOL(WINAPI*)(void*);
+		auto removeDllDirectory = kernel32 ?
+		                              reinterpret_cast<RemoveDllDirectoryFn>(GetProcAddress(kernel32, "RemoveDllDirectory")) :
+		                              nullptr;
+		if (removeDllDirectory && !removeDllDirectory(s_streamlineDllDirectoryCookie)) {
+			logger::warn("[Streamline] Failed to remove the Streamline DLL directory (error {})", GetLastError());
+		}
+		s_streamlineDllDirectoryCookie = nullptr;
+	}
+
+	bool ValidateStreamlineRuntime(const std::filesystem::path& a_pluginDir)
+	{
+		struct RequiredFile
+		{
+			const wchar_t* name;
+			bool requireStreamlineVersion;
+		};
+		constexpr std::array requiredFiles{
+			RequiredFile{ L"nvngx_dlss.dll", false },
+			RequiredFile{ L"sl.common.dll", true },
+			RequiredFile{ L"sl.dlss.dll", true },
+			RequiredFile{ L"sl.interposer.dll", true },
+			RequiredFile{ L"sl.pcl.dll", true },
+			RequiredFile{ L"sl.reflex.dll", true },
+		};
+		const REL::Version expectedVersion(
+			CSX_STREAMLINE_RUNTIME_VERSION_MAJOR,
+			CSX_STREAMLINE_RUNTIME_VERSION_MINOR,
+			CSX_STREAMLINE_RUNTIME_VERSION_PATCH,
+			0);
+
+		for (const auto& required : requiredFiles) {
+			const auto path = a_pluginDir / required.name;
+			std::error_code fileError;
+			if (!std::filesystem::is_regular_file(path, fileError)) {
+				logger::error(
+					"[Streamline] Required runtime file is unavailable: {}",
+					stl::utf16_to_utf8(path.wstring()).value_or("<unknown>"));
+				return false;
+			}
+			const auto version = Util::GetDllVersion(path.wstring());
+			if (!version) {
+				logger::error(
+					"[Streamline] Required runtime file has no readable version: {}",
+					stl::utf16_to_utf8(path.wstring()).value_or("<unknown>"));
+				return false;
+			}
+			if (required.requireStreamlineVersion && version->compare(expectedVersion) != std::strong_ordering::equal) {
+				logger::error(
+					"[Streamline] Runtime version mismatch for {}: expected {}, found {}",
+					stl::utf16_to_utf8(required.name).value_or("<unknown>"),
+					Util::GetFormattedVersion(expectedVersion),
+					Util::GetFormattedVersion(*version));
+				return false;
+			}
+		}
+		return true;
+	}
+
+	StreamlineCoreBindings BindStreamlineCore(HMODULE a_module)
+	{
+		StreamlineCoreBindings bindings;
+		bindings.init = reinterpret_cast<PFun_slInit*>(GetProcAddress(a_module, "slInit"));
+		bindings.shutdown = reinterpret_cast<PFun_slShutdown*>(GetProcAddress(a_module, "slShutdown"));
+		bindings.isFeatureSupported = reinterpret_cast<PFun_slIsFeatureSupported*>(GetProcAddress(a_module, "slIsFeatureSupported"));
+		bindings.isFeatureLoaded = reinterpret_cast<PFun_slIsFeatureLoaded*>(GetProcAddress(a_module, "slIsFeatureLoaded"));
+		bindings.setFeatureLoaded = reinterpret_cast<PFun_slSetFeatureLoaded*>(GetProcAddress(a_module, "slSetFeatureLoaded"));
+		bindings.evaluateFeature = reinterpret_cast<PFun_slEvaluateFeature*>(GetProcAddress(a_module, "slEvaluateFeature"));
+		bindings.allocateResources = reinterpret_cast<PFun_slAllocateResources*>(GetProcAddress(a_module, "slAllocateResources"));
+		bindings.freeResources = reinterpret_cast<PFun_slFreeResources*>(GetProcAddress(a_module, "slFreeResources"));
+		bindings.getFeatureRequirements = reinterpret_cast<PFun_slGetFeatureRequirements*>(GetProcAddress(a_module, "slGetFeatureRequirements"));
+		bindings.getFeatureVersion = reinterpret_cast<PFun_slGetFeatureVersion*>(GetProcAddress(a_module, "slGetFeatureVersion"));
+		bindings.upgradeInterface = reinterpret_cast<PFun_slUpgradeInterface*>(GetProcAddress(a_module, "slUpgradeInterface"));
+		bindings.setConstants = reinterpret_cast<PFun_slSetConstants*>(GetProcAddress(a_module, "slSetConstants"));
+		bindings.getNativeInterface = reinterpret_cast<PFun_slGetNativeInterface*>(GetProcAddress(a_module, "slGetNativeInterface"));
+		bindings.getFeatureFunction = reinterpret_cast<PFun_slGetFeatureFunction*>(GetProcAddress(a_module, "slGetFeatureFunction"));
+		bindings.getNewFrameToken = reinterpret_cast<PFun_slGetNewFrameToken*>(GetProcAddress(a_module, "slGetNewFrameToken"));
+		bindings.setD3DDevice = reinterpret_cast<PFun_slSetD3DDevice*>(GetProcAddress(a_module, "slSetD3DDevice"));
+		return bindings;
+	}
+
 	HMODULE LoadStreamlineDll(const std::filesystem::path& a_path, DWORD& a_error)
 	{
 		a_error = ERROR_SUCCESS;
@@ -156,6 +286,64 @@ namespace
 			return true;
 
 		return IsHDRDLSSInputFormat(desc.Format);
+	}
+
+	uint64_t ComputeConstantsIdentity(const sl::Constants& a_constants) noexcept
+	{
+		uint64_t hash = 14695981039346656037ull;
+		const auto mix = [&](uint32_t a_value) {
+			hash ^= a_value;
+			hash *= 1099511628211ull;
+		};
+		const auto mixFloat = [&](float a_value) {
+			mix(std::bit_cast<uint32_t>(a_value));
+		};
+		const auto mixMatrix = [&](const sl::float4x4& a_matrix) {
+			for (uint32_t row = 0; row < 4; ++row) {
+				mixFloat(a_matrix[row].x);
+				mixFloat(a_matrix[row].y);
+				mixFloat(a_matrix[row].z);
+				mixFloat(a_matrix[row].w);
+			}
+		};
+
+		mixMatrix(a_constants.cameraViewToClip);
+		mixMatrix(a_constants.clipToCameraView);
+		mixMatrix(a_constants.clipToLensClip);
+		mixMatrix(a_constants.clipToPrevClip);
+		mixMatrix(a_constants.prevClipToClip);
+		mixFloat(a_constants.jitterOffset.x);
+		mixFloat(a_constants.jitterOffset.y);
+		mixFloat(a_constants.mvecScale.x);
+		mixFloat(a_constants.mvecScale.y);
+		mixFloat(a_constants.cameraPinholeOffset.x);
+		mixFloat(a_constants.cameraPinholeOffset.y);
+		mixFloat(a_constants.cameraPos.x);
+		mixFloat(a_constants.cameraPos.y);
+		mixFloat(a_constants.cameraPos.z);
+		mixFloat(a_constants.cameraUp.x);
+		mixFloat(a_constants.cameraUp.y);
+		mixFloat(a_constants.cameraUp.z);
+		mixFloat(a_constants.cameraRight.x);
+		mixFloat(a_constants.cameraRight.y);
+		mixFloat(a_constants.cameraRight.z);
+		mixFloat(a_constants.cameraFwd.x);
+		mixFloat(a_constants.cameraFwd.y);
+		mixFloat(a_constants.cameraFwd.z);
+		mixFloat(a_constants.cameraNear);
+		mixFloat(a_constants.cameraFar);
+		mixFloat(a_constants.cameraFOV);
+		mixFloat(a_constants.cameraAspectRatio);
+		mixFloat(a_constants.motionVectorsInvalidValue);
+		mix(static_cast<uint32_t>(a_constants.depthInverted));
+		mix(static_cast<uint32_t>(a_constants.cameraMotionIncluded));
+		mix(static_cast<uint32_t>(a_constants.motionVectors3D));
+		mix(static_cast<uint32_t>(a_constants.reset));
+		mix(static_cast<uint32_t>(a_constants.orthographicProjection));
+		mix(static_cast<uint32_t>(a_constants.motionVectorsDilated));
+		mix(static_cast<uint32_t>(a_constants.motionVectorsJittered));
+		mixFloat(a_constants.minRelativeLinearDepthObjectSeparation);
+		return hash;
 	}
 
 	std::string FormatExtent(const sl::Extent& a_extent)
@@ -837,7 +1025,7 @@ namespace
 
 Streamline::~Streamline()
 {
-	ResetDLSSIdleFences();
+	Shutdown();
 }
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -993,30 +1181,49 @@ void LoggingCallback(sl::LogType type, const char* msg)
 
 std::vector<std::pair<std::string, std::string>> Streamline::dllVersions = {};
 
-void Streamline::LoadInterposer()
+bool Streamline::LoadInterposer()
 {
-	triedInitialization = true;
+	std::scoped_lock lifecycleLock(lifecycleMutex);
+	if (lifecycleState.load(std::memory_order_acquire) == LifecycleState::Initialized)
+		return true;
+	if (triedInitialization.exchange(true, std::memory_order_acq_rel))
+		return false;
+
+	lifecycleState.store(LifecycleState::Initializing, std::memory_order_release);
 	featureCheckComplete = false;
+	initialized = false;
+	featureDLSS = false;
+	featureReflex = false;
+	featurePCL = false;
+	reflexSupportedOnCurrentAdapter = false;
+	adapterSupportsDLSS = false;
+	adapterSupportsReflex = false;
+	adapterSupportsPCL = false;
+	boundDeviceIdentity = nullptr;
+	frameGenerationQuarantinedByReflex = false;
 
 	const std::filesystem::path pluginDir = std::filesystem::path(Streamline::PluginDir);
 	std::error_code pluginPathError;
 	auto pluginDirAbsolute = std::filesystem::absolute(pluginDir, pluginPathError);
 	if (pluginPathError)
 		pluginDirAbsolute = pluginDir;
+	if (!ValidateStreamlineRuntime(pluginDirAbsolute)) {
+		featureCheckComplete = true;
+		lifecycleState.store(LifecycleState::Unavailable, std::memory_order_release);
+		return false;
+	}
 	const std::filesystem::path interposerPath = pluginDirAbsolute / L"sl.interposer.dll";
 	EnsureStreamlineDllDirectory(pluginDirAbsolute);
 	DWORD errorCode = ERROR_SUCCESS;
-	interposer = LoadStreamlineDll(interposerPath, errorCode);
-	if (interposer == nullptr) {
+	HMODULE candidateInterposer = LoadStreamlineDll(interposerPath, errorCode);
+	if (candidateInterposer == nullptr) {
 		logger::info("[Streamline] Failed to load interposer: Error Code {0:x}", errorCode);
-		featureDLSS = false;
-		featureReflex = false;
-		featurePCL = false;
-		reflexSupportedOnCurrentAdapter = false;
 		featureCheckComplete = true;
-		return;
+		ReleaseStreamlineDllDirectory();
+		lifecycleState.store(LifecycleState::Unavailable, std::memory_order_release);
+		return false;
 	} else {
-		logger::info("[Streamline] Interposer loaded at address: {0:p}", static_cast<void*>(interposer));
+		logger::info("[Streamline] Interposer loaded at address: {0:p}", static_cast<void*>(candidateInterposer));
 	}
 
 	// Dynamically log all DLL versions in the Streamline plugin directory
@@ -1063,51 +1270,197 @@ void Streamline::LoadInterposer()
 	pref.renderAPI = sl::RenderAPI::eD3D11;
 	pref.flags = sl::PreferenceFlags::eUseManualHooking | sl::PreferenceFlags::eUseFrameBasedResourceTagging;
 
-	// Hook up all of the functions exported by the SL Interposer Library
-	slInit = (PFun_slInit*)GetProcAddress(interposer, "slInit");
-	slShutdown = (PFun_slShutdown*)GetProcAddress(interposer, "slShutdown");
-	slIsFeatureSupported = (PFun_slIsFeatureSupported*)GetProcAddress(interposer, "slIsFeatureSupported");
-	slIsFeatureLoaded = (PFun_slIsFeatureLoaded*)GetProcAddress(interposer, "slIsFeatureLoaded");
-	slSetFeatureLoaded = (PFun_slSetFeatureLoaded*)GetProcAddress(interposer, "slSetFeatureLoaded");
-	slEvaluateFeature = (PFun_slEvaluateFeature*)GetProcAddress(interposer, "slEvaluateFeature");
-	slAllocateResources = (PFun_slAllocateResources*)GetProcAddress(interposer, "slAllocateResources");
-	slFreeResources = (PFun_slFreeResources*)GetProcAddress(interposer, "slFreeResources");
-	slGetFeatureRequirements = (PFun_slGetFeatureRequirements*)GetProcAddress(interposer, "slGetFeatureRequirements");
-	slGetFeatureVersion = (PFun_slGetFeatureVersion*)GetProcAddress(interposer, "slGetFeatureVersion");
-	slUpgradeInterface = (PFun_slUpgradeInterface*)GetProcAddress(interposer, "slUpgradeInterface");
-	slSetConstants = (PFun_slSetConstants*)GetProcAddress(interposer, "slSetConstants");
-	slGetNativeInterface = (PFun_slGetNativeInterface*)GetProcAddress(interposer, "slGetNativeInterface");
-	slGetFeatureFunction = (PFun_slGetFeatureFunction*)GetProcAddress(interposer, "slGetFeatureFunction");
-	slGetNewFrameToken = (PFun_slGetNewFrameToken*)GetProcAddress(interposer, "slGetNewFrameToken");
-	slSetD3DDevice = (PFun_slSetD3DDevice*)GetProcAddress(interposer, "slSetD3DDevice");
-
-	if (SL_FAILED(res, slInit(pref, sl::kSDKVersion))) {
-		logger::critical("[Streamline] Failed to initialize Streamline");
-		featureDLSS = false;
-		featureReflex = false;
-		featurePCL = false;
-		reflexSupportedOnCurrentAdapter = false;
+	const auto bindings = BindStreamlineCore(candidateInterposer);
+	const auto missing = bindings.MissingRequired();
+	if (!missing.empty()) {
+		std::string missingList;
+		for (const auto name : missing) {
+			if (!missingList.empty())
+				missingList += ", ";
+			missingList += name;
+		}
+		logger::critical("[Streamline] Interposer is missing required exports: {}", missingList);
+		FreeLibrary(candidateInterposer);
+		ReleaseStreamlineDllDirectory();
 		featureCheckComplete = true;
-	} else {
-		initialized = true;
-		featureDLSS = false;
-		featureReflex = false;
-		featurePCL = false;
-		reflexSupportedOnCurrentAdapter = false;
-		InvalidateDLSSOptionsCache();
-		reflexOptionsCache = {};
-		lastReflexSleepFrame = UINT32_MAX;
-		logger::info("[Streamline] Successfully initialized Streamline");
+		lifecycleState.store(LifecycleState::Unavailable, std::memory_order_release);
+		return false;
 	}
+
+	if (SL_FAILED(res, bindings.init(pref, sl::kSDKVersion))) {
+		logger::critical("[Streamline] Failed to initialize Streamline: {}", magic_enum::enum_name(res));
+		FreeLibrary(candidateInterposer);
+		ReleaseStreamlineDllDirectory();
+		featureCheckComplete = true;
+		lifecycleState.store(LifecycleState::Unavailable, std::memory_order_release);
+		return false;
+	}
+
+	interposer = candidateInterposer;
+	slInit = bindings.init;
+	slShutdown = bindings.shutdown;
+	slIsFeatureSupported = bindings.isFeatureSupported;
+	slIsFeatureLoaded = bindings.isFeatureLoaded;
+	slSetFeatureLoaded = bindings.setFeatureLoaded;
+	slEvaluateFeature = bindings.evaluateFeature;
+	slAllocateResources = bindings.allocateResources;
+	slFreeResources = bindings.freeResources;
+	slGetFeatureRequirements = bindings.getFeatureRequirements;
+	slGetFeatureVersion = bindings.getFeatureVersion;
+	slUpgradeInterface = bindings.upgradeInterface;
+	slSetConstants = bindings.setConstants;
+	slGetNativeInterface = bindings.getNativeInterface;
+	slGetFeatureFunction = bindings.getFeatureFunction;
+	slGetNewFrameToken = bindings.getNewFrameToken;
+	slSetD3DDevice = bindings.setD3DDevice;
+	initialized = true;
+	InvalidateDLSSOptionsCache();
+	reflexOptionsCache = {};
+	lastReflexSleepFrame = UINT32_MAX;
+	lifecycleState.store(LifecycleState::Initialized, std::memory_order_release);
+	logger::info("[Streamline] Successfully initialized Streamline");
+	return true;
 }
 
-void Streamline::CheckFeatures(IDXGIAdapter* a_adapter)
+void Streamline::Shutdown()
+{
+	std::scoped_lock lifecycleLock(lifecycleMutex);
+	const auto state = lifecycleState.load(std::memory_order_acquire);
+	if (state == LifecycleState::Uninitialized || state == LifecycleState::ShuttingDown)
+		return;
+
+	lifecycleState.store(LifecycleState::ShuttingDown, std::memory_order_release);
+	ResetDLSSIdleFences();
+	if (initialized && slShutdown) {
+		const sl::Result shutdownResult = slShutdown();
+		if (shutdownResult != sl::Result::eOk) {
+			logger::warn("[Streamline] Shutdown returned {}", magic_enum::enum_name(shutdownResult));
+		}
+	}
+
+	initialized = false;
+	featureDLSS = false;
+	featureReflex = false;
+	featurePCL = false;
+	reflexSupportedOnCurrentAdapter = false;
+	adapterSupportsDLSS = false;
+	adapterSupportsReflex = false;
+	adapterSupportsPCL = false;
+	boundDeviceIdentity = nullptr;
+	frameGenerationQuarantinedByReflex = false;
+	slDLSSGetOptimalSettings = nullptr;
+	slDLSSGetState = nullptr;
+	slDLSSSetOptions = nullptr;
+	slReflexGetState = nullptr;
+	slReflexSleep = nullptr;
+	slReflexSetOptions = nullptr;
+	slPCLSetMarker = nullptr;
+	slInit = nullptr;
+	slShutdown = nullptr;
+	slIsFeatureSupported = nullptr;
+	slIsFeatureLoaded = nullptr;
+	slSetFeatureLoaded = nullptr;
+	slEvaluateFeature = nullptr;
+	slAllocateResources = nullptr;
+	slFreeResources = nullptr;
+	slGetFeatureRequirements = nullptr;
+	slGetFeatureVersion = nullptr;
+	slUpgradeInterface = nullptr;
+	slSetConstants = nullptr;
+	slGetNativeInterface = nullptr;
+	slGetFeatureFunction = nullptr;
+	slGetNewFrameToken = nullptr;
+	slSetD3DDevice = nullptr;
+	if (interposer) {
+		FreeLibrary(interposer);
+		interposer = nullptr;
+	}
+	ReleaseStreamlineDllDirectory();
+	featureCheckComplete = true;
+	lifecycleState.store(LifecycleState::Uninitialized, std::memory_order_release);
+}
+
+bool Streamline::TryUpgradeInterface(void** a_interface)
+{
+	if (!initialized || !slUpgradeInterface || !a_interface || !*a_interface)
+		return false;
+
+	void* candidate = *a_interface;
+	const sl::Result result = slUpgradeInterface(&candidate);
+	if (result != sl::Result::eOk || !candidate) {
+		logger::error("[Streamline] Interface upgrade failed: {}", magic_enum::enum_name(result));
+		featureDLSS = false;
+		featureReflex = false;
+		featurePCL = false;
+		featureCheckComplete = true;
+		return false;
+	}
+	*a_interface = candidate;
+	return true;
+}
+
+bool Streamline::TrySetD3DDevice(ID3D11Device* a_device)
+{
+	if (!initialized || !slSetD3DDevice || !a_device)
+		return false;
+	if (boundDeviceIdentity == a_device)
+		return true;
+
+	const sl::Result result = slSetD3DDevice(a_device);
+	if (result != sl::Result::eOk) {
+		logger::error("[Streamline] D3D device binding failed: {}", magic_enum::enum_name(result));
+		featureDLSS = false;
+		featureReflex = false;
+		featurePCL = false;
+		featureCheckComplete = true;
+		return false;
+	}
+
+	boundDeviceIdentity = a_device;
+	featureCheckComplete = false;
+	InvalidateDLSSOptionsCache();
+	ResetFrameTracking();
+	return true;
+}
+
+void Streamline::MarkAdapterUnavailable(const char* a_reason)
+{
+	adapterSupportsDLSS = false;
+	adapterSupportsReflex = false;
+	adapterSupportsPCL = false;
+	featureDLSS = false;
+	featureReflex = false;
+	featurePCL = false;
+	reflexSupportedOnCurrentAdapter = false;
+	featureCheckComplete = true;
+	if (a_reason && *a_reason)
+		logger::info("[Streamline] NVIDIA features unavailable: {}", a_reason);
+}
+
+bool Streamline::CheckFeatures(IDXGIAdapter* a_adapter)
 {
 	featureCheckComplete = false;
+	adapterSupportsDLSS = false;
+	adapterSupportsReflex = false;
+	adapterSupportsPCL = false;
+	featureDLSS = false;
+	featureReflex = false;
+	featurePCL = false;
+	if (!initialized || !a_adapter) {
+		MarkAdapterUnavailable("no initialized runtime or resolved adapter");
+		return false;
+	}
 	logger::info("[Streamline] Checking features");
-	DXGI_ADAPTER_DESC adapterDesc;
-	a_adapter->GetDesc(&adapterDesc);
+	DXGI_ADAPTER_DESC adapterDesc{};
+	if (FAILED(a_adapter->GetDesc(&adapterDesc))) {
+		MarkAdapterUnavailable("adapter description query failed");
+		return false;
+	}
 	reflexSupportedOnCurrentAdapter = adapterDesc.VendorId == NVIDIA_VENDOR_ID;
+	if (!reflexSupportedOnCurrentAdapter) {
+		MarkAdapterUnavailable("resolved adapter is not NVIDIA");
+		return false;
+	}
 
 	sl::AdapterInfo adapterInfo;
 	adapterInfo.deviceLUID = (uint8_t*)&adapterDesc.AdapterLuid;
@@ -1134,17 +1487,14 @@ void Streamline::CheckFeatures(IDXGIAdapter* a_adapter)
 		outAvailable = slIsFeatureSupported(feature, adapterInfo) == sl::Result::eOk;
 	};
 
-	checkFeatureAvailability(sl::kFeatureDLSS, "DLSS", featureDLSS);
+	checkFeatureAvailability(sl::kFeatureDLSS, "DLSS", adapterSupportsDLSS);
 	if (reflexSupportedOnCurrentAdapter) {
-		checkFeatureAvailability(sl::kFeatureReflex, "Reflex", featureReflex);
-		checkFeatureAvailability(sl::kFeaturePCL, "PCL", featurePCL);
-	} else {
-		featureReflex = false;
-		featurePCL = false;
+		checkFeatureAvailability(sl::kFeatureReflex, "Reflex", adapterSupportsReflex);
+		checkFeatureAvailability(sl::kFeaturePCL, "PCL", adapterSupportsPCL);
 	}
 
-	if (featureDLSS) {
-		isRTXBelow40series = IsRTXAndBelow40Series(a_adapter);
+	if (adapterSupportsDLSS) {
+		isRTXBelow40series = IsRTXAndBelow40Series(adapterDesc);
 
 		if (isRTXBelow40series)
 			logger::info("[Streamline] Older RTX GPU detected, DLSS 4.0 will be used instead of DLSS 4.5");
@@ -1152,37 +1502,58 @@ void Streamline::CheckFeatures(IDXGIAdapter* a_adapter)
 			logger::info("[Streamline] Newer RTX GPU detected, DLSS 4.5 will be used instead of DLSS 4.0");
 	}
 
-	logger::info("[Streamline] DLSS {} available", featureDLSS ? "is" : "is not");
+	logger::info("[Streamline] DLSS {} supported by the adapter", adapterSupportsDLSS ? "is" : "is not");
 	if (reflexSupportedOnCurrentAdapter) {
-		logger::info("[Streamline] Reflex {} available", featureReflex ? "is" : "is not");
-		logger::info("[Streamline] PCL {} available", featurePCL ? "is" : "is not");
+		logger::info("[Streamline] Reflex {} supported by the adapter", adapterSupportsReflex ? "is" : "is not");
+		logger::info("[Streamline] PCL {} supported by the adapter", adapterSupportsPCL ? "is" : "is not");
 	} else {
 		logger::info("[Streamline] Reflex/PCL disabled on non-NVIDIA adapter");
 	}
 	InvalidateDLSSOptionsCache();
 	reflexOptionsCache = {};
 	lastReflexSleepFrame = UINT32_MAX;
-	featureCheckComplete = true;
+	return true;
 }
 
-void Streamline::PostDevice()
+bool Streamline::PostDevice()
 {
-	// Hook up all of the feature functions using the sl function slGetFeatureFunction
-
-	if (featureDLSS) {
-		slGetFeatureFunction(sl::kFeatureDLSS, "slDLSSGetOptimalSettings", (void*&)slDLSSGetOptimalSettings);
-		slGetFeatureFunction(sl::kFeatureDLSS, "slDLSSGetState", (void*&)slDLSSGetState);
-		slGetFeatureFunction(sl::kFeatureDLSS, "slDLSSSetOptions", (void*&)slDLSSSetOptions);
-	}
-
+	slDLSSGetOptimalSettings = nullptr;
+	slDLSSGetState = nullptr;
+	slDLSSSetOptions = nullptr;
 	slReflexGetState = nullptr;
 	slReflexSleep = nullptr;
 	slReflexSetOptions = nullptr;
 	slPCLSetMarker = nullptr;
+	featureDLSS = false;
 	featureReflex = false;
 	featurePCL = false;
+	if (!initialized || !slGetFeatureFunction || !boundDeviceIdentity) {
+		featureCheckComplete = true;
+		logger::error("[Streamline] Feature binding skipped because core activation is incomplete");
+		return false;
+	}
 
-	if (slGetFeatureFunction && reflexSupportedOnCurrentAdapter) {
+	const auto bindFeatureFn = [&](sl::Feature feature, const char* functionName, void*& fn) {
+		fn = nullptr;
+		const sl::Result bindResult = slGetFeatureFunction(feature, functionName, fn);
+		if (bindResult != sl::Result::eOk || !fn) {
+			logger::warn("[Streamline] {} bind failed with {}", functionName, magic_enum::enum_name(bindResult));
+			return false;
+		}
+		return true;
+	};
+
+	if (adapterSupportsDLSS) {
+		bool dlssFunctionsBound = true;
+		dlssFunctionsBound &= bindFeatureFn(sl::kFeatureDLSS, "slDLSSGetOptimalSettings", (void*&)slDLSSGetOptimalSettings);
+		dlssFunctionsBound &= bindFeatureFn(sl::kFeatureDLSS, "slDLSSGetState", (void*&)slDLSSGetState);
+		dlssFunctionsBound &= bindFeatureFn(sl::kFeatureDLSS, "slDLSSSetOptions", (void*&)slDLSSSetOptions);
+		featureDLSS = dlssFunctionsBound;
+		if (!featureDLSS)
+			logger::error("[Streamline] DLSS support was reported but its required interface is incomplete");
+	}
+
+	if (reflexSupportedOnCurrentAdapter) {
 		if (slSetFeatureLoaded) {
 			const auto requestFeatureLoad = [&](sl::Feature feature, const char* featureName) {
 				const sl::Result loadResult = slSetFeatureLoaded(feature, true);
@@ -1190,37 +1561,36 @@ void Streamline::PostDevice()
 					logger::warn("[Streamline] Failed to request {} load: {}", featureName, magic_enum::enum_name(loadResult));
 			};
 
-			requestFeatureLoad(sl::kFeatureReflex, "Reflex");
-			requestFeatureLoad(sl::kFeaturePCL, "PCL");
+			if (adapterSupportsReflex)
+				requestFeatureLoad(sl::kFeatureReflex, "Reflex");
+			if (adapterSupportsPCL)
+				requestFeatureLoad(sl::kFeaturePCL, "PCL");
 		}
 
-		const auto bindFeatureFn = [&](sl::Feature feature, const char* functionName, void*& fn) {
-			fn = nullptr;
-			const sl::Result bindResult = slGetFeatureFunction(feature, functionName, fn);
-			if (bindResult != sl::Result::eOk)
-				logger::warn("[Streamline] {} bind failed with {}", functionName, magic_enum::enum_name(bindResult));
-			return bindResult == sl::Result::eOk && fn != nullptr;
-		};
+		if (adapterSupportsReflex) {
+			bool reflexFunctionsBound = true;
+			reflexFunctionsBound &= bindFeatureFn(sl::kFeatureReflex, "slReflexGetState", (void*&)slReflexGetState);
+			reflexFunctionsBound &= bindFeatureFn(sl::kFeatureReflex, "slReflexSleep", (void*&)slReflexSleep);
+			reflexFunctionsBound &= bindFeatureFn(sl::kFeatureReflex, "slReflexSetOptions", (void*&)slReflexSetOptions);
+			featureReflex = reflexFunctionsBound;
+		}
 
-		bool reflexFnsBound = true;
-		reflexFnsBound &= bindFeatureFn(sl::kFeatureReflex, "slReflexGetState", (void*&)slReflexGetState);
-		reflexFnsBound &= bindFeatureFn(sl::kFeatureReflex, "slReflexSleep", (void*&)slReflexSleep);
-		reflexFnsBound &= bindFeatureFn(sl::kFeatureReflex, "slReflexSetOptions", (void*&)slReflexSetOptions);
-		featureReflex = reflexFnsBound && slReflexSetOptions && slReflexSleep;
-
-		if (!featureReflex) {
+		if (adapterSupportsReflex && !featureReflex) {
 			logger::warn("[Streamline] Reflex functions are missing; Reflex runtime controls will be disabled");
-		} else {
+		} else if (featureReflex) {
 			logger::info("[Streamline] Reflex runtime controls are available");
+		} else {
+			logger::info("[Streamline] Reflex is not supported by the current adapter");
 		}
 
-		slPCLSetMarker = nullptr;
-		bool pclFnBound = bindFeatureFn(sl::kFeaturePCL, "slPCLSetMarker", (void*&)slPCLSetMarker);
-		featurePCL = pclFnBound && slPCLSetMarker;
-		if (!featurePCL) {
+		if (adapterSupportsPCL)
+			featurePCL = bindFeatureFn(sl::kFeaturePCL, "slPCLSetMarker", (void*&)slPCLSetMarker);
+		if (adapterSupportsPCL && !featurePCL) {
 			logger::warn("[Streamline] PCL marker function is unavailable; marker optimization requests will be ignored");
-		} else {
+		} else if (featurePCL) {
 			logger::info("[Streamline] PCL marker interface is available");
+		} else {
+			logger::info("[Streamline] PCL is not supported by the current adapter");
 		}
 	} else if (!reflexSupportedOnCurrentAdapter) {
 		logger::info("[Streamline] Skipping Reflex/PCL binding on non-NVIDIA adapter");
@@ -1229,6 +1599,8 @@ void Streamline::PostDevice()
 	InvalidateDLSSOptionsCache();
 	reflexOptionsCache = {};
 	lastReflexSleepFrame = UINT32_MAX;
+	featureCheckComplete = true;
+	return !adapterSupportsDLSS || featureDLSS;
 }
 
 /**
@@ -1419,8 +1791,12 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 		signature.dlssPreset = diagnostics ? diagnostics->dlssPreset : 0u;
 		signature.extentInWidth = diagnostics ? diagnostics->extentIn.width : 0u;
 		signature.extentInHeight = diagnostics ? diagnostics->extentIn.height : 0u;
+		signature.extentInLeft = diagnostics ? diagnostics->extentIn.left : 0u;
+		signature.extentInTop = diagnostics ? diagnostics->extentIn.top : 0u;
 		signature.extentOutWidth = diagnostics ? diagnostics->extentOut.width : 0u;
 		signature.extentOutHeight = diagnostics ? diagnostics->extentOut.height : 0u;
+		signature.extentOutLeft = diagnostics ? diagnostics->extentOut.left : 0u;
+		signature.extentOutTop = diagnostics ? diagnostics->extentOut.top : 0u;
 		signature.viewportScaleXQ = QuantizeDLSSDiagnosticFloat(clampedViewportScaleX);
 		signature.viewportScaleYQ = QuantizeDLSSDiagnosticFloat(clampedViewportScaleY);
 		signature.pinholeOffsetXQ = QuantizeDLSSDiagnosticFloat(clampedPinholeOffsetX);
@@ -1428,6 +1804,7 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 		signature.jitterXQ = QuantizeDLSSDiagnosticFloat(upscaling.jitter.x);
 		signature.jitterYQ = QuantizeDLSSDiagnosticFloat(upscaling.jitter.y);
 		signature.historyResetRequested = requestHistoryReset;
+		signature.constantsIdentity = ComputeConstantsIdentity(slConstants);
 		return signature;
 	};
 	const auto frameConstantsMatch = [](const DLSSFrameConstantsCache& a_cached, const DLSSFrameConstantsCache& a_signature) {
@@ -1443,15 +1820,20 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 		       a_cached.dlssPreset == a_signature.dlssPreset &&
 		       a_cached.extentInWidth == a_signature.extentInWidth &&
 		       a_cached.extentInHeight == a_signature.extentInHeight &&
+		       a_cached.extentInLeft == a_signature.extentInLeft &&
+		       a_cached.extentInTop == a_signature.extentInTop &&
 		       a_cached.extentOutWidth == a_signature.extentOutWidth &&
 		       a_cached.extentOutHeight == a_signature.extentOutHeight &&
+		       a_cached.extentOutLeft == a_signature.extentOutLeft &&
+		       a_cached.extentOutTop == a_signature.extentOutTop &&
 		       a_cached.viewportScaleXQ == a_signature.viewportScaleXQ &&
 		       a_cached.viewportScaleYQ == a_signature.viewportScaleYQ &&
 		       a_cached.pinholeOffsetXQ == a_signature.pinholeOffsetXQ &&
 		       a_cached.pinholeOffsetYQ == a_signature.pinholeOffsetYQ &&
 		       a_cached.jitterXQ == a_signature.jitterXQ &&
 		       a_cached.jitterYQ == a_signature.jitterYQ &&
-		       a_cached.historyResetRequested == a_signature.historyResetRequested;
+		       a_cached.historyResetRequested == a_signature.historyResetRequested &&
+		       a_cached.constantsIdentity == a_signature.constantsIdentity;
 	};
 	const bool canAcceptDuplicateConstants =
 		diagnostics &&
@@ -1563,14 +1945,10 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 	return true;
 }
 
-bool Streamline::IsRTXAndBelow40Series(IDXGIAdapter* a_adapter)
+bool Streamline::IsRTXAndBelow40Series(const DXGI_ADAPTER_DESC& a_adapterDesc) const
 {
-	DXGI_ADAPTER_DESC adapterDesc = {};
-
-	a_adapter->GetDesc(&adapterDesc);
-
-	UINT vendorId = adapterDesc.VendorId;
-	UINT deviceId = adapterDesc.DeviceId;
+	UINT vendorId = a_adapterDesc.VendorId;
+	UINT deviceId = a_adapterDesc.DeviceId;
 
 	// Check if NVIDIA
 	if (vendorId != 0x10DE)
@@ -2023,6 +2401,17 @@ bool Streamline::HasCompleteVRDLSSViewportResources(
 		}
 	}
 	return true;
+}
+
+bool Streamline::IsDLSSRuntimeReady() const noexcept
+{
+	return lifecycleState.load(std::memory_order_acquire) == LifecycleState::Initialized &&
+	       initialized.load(std::memory_order_acquire) &&
+	       featureCheckComplete.load(std::memory_order_acquire) &&
+	       featureDLSS.load(std::memory_order_acquire) &&
+	       boundDeviceIdentity &&
+	       slEvaluateFeature && slSetConstants && slGetNewFrameToken &&
+	       slDLSSGetOptimalSettings && slDLSSGetState && slDLSSSetOptions;
 }
 
 bool Streamline::ResolveDLSSViewport(DLSSViewportRole viewportRole, sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset, sl::ViewportHandle& outViewport)
@@ -2833,6 +3222,39 @@ Streamline::DLSSResourceTeardownResult Streamline::DestroyDLSSResources()
 	           DLSSResourceTeardownResult::FailedAfterMutation;
 }
 
+bool Streamline::EnsureReflexDisabledForFrameGeneration()
+{
+	if (!initialized || !reflexSupportedOnCurrentAdapter || !featureReflex || !slReflexSetOptions)
+		return true;
+	if (frameGenerationQuarantinedByReflex.load(std::memory_order_acquire))
+		return false;
+
+	const bool reflexAlreadyOff = reflexOptionsCache.valid &&
+	                              reflexOptionsCache.mode == sl::ReflexMode::eOff &&
+	                              reflexOptionsCache.frameLimitUs == 0 &&
+	                              !reflexOptionsCache.useMarkersToOptimize;
+	if (reflexAlreadyOff)
+		return true;
+
+	sl::ReflexOptions disableOptions{};
+	disableOptions.mode = sl::ReflexMode::eOff;
+	disableOptions.frameLimitUs = 0;
+	disableOptions.useMarkersToOptimize = false;
+	if (SL_FAILED(result, slReflexSetOptions(disableOptions))) {
+		frameGenerationQuarantinedByReflex.store(true, std::memory_order_release);
+		logger::error(
+			"[Streamline] Failed to disable Reflex before Frame Generation: {}. Frame Generation is quarantined until restart.",
+			magic_enum::enum_name(result));
+		return false;
+	}
+
+	reflexOptionsCache.valid = true;
+	reflexOptionsCache.mode = disableOptions.mode;
+	reflexOptionsCache.frameLimitUs = disableOptions.frameLimitUs;
+	reflexOptionsCache.useMarkersToOptimize = disableOptions.useMarkersToOptimize;
+	return true;
+}
+
 void Streamline::UpdateReflex()
 {
 	if (!initialized || !reflexSupportedOnCurrentAdapter || !featureReflex || !slReflexSetOptions)
@@ -2841,24 +3263,7 @@ void Streamline::UpdateReflex()
 	const auto& upscaling = globals::features::upscaling;
 	const bool reflexBlockedByFrameGeneration = upscaling.IsFrameGenerationDx12PathActive();
 	if (reflexBlockedByFrameGeneration) {
-		const bool reflexAlreadyOff = reflexOptionsCache.valid &&
-		                              reflexOptionsCache.mode == sl::ReflexMode::eOff &&
-		                              reflexOptionsCache.frameLimitUs == 0 &&
-		                              !reflexOptionsCache.useMarkersToOptimize;
-		if (!reflexAlreadyOff) {
-			sl::ReflexOptions disableOptions{};
-			disableOptions.mode = sl::ReflexMode::eOff;
-			disableOptions.frameLimitUs = 0;
-			disableOptions.useMarkersToOptimize = false;
-			if (SL_FAILED(result, slReflexSetOptions(disableOptions))) {
-				logger::error("[Streamline] Failed to disable Reflex while Frame Generation is active: {}", magic_enum::enum_name(result));
-			} else {
-				reflexOptionsCache.valid = true;
-				reflexOptionsCache.mode = disableOptions.mode;
-				reflexOptionsCache.frameLimitUs = disableOptions.frameLimitUs;
-				reflexOptionsCache.useMarkersToOptimize = disableOptions.useMarkersToOptimize;
-			}
-		}
+		(void)EnsureReflexDisabledForFrameGeneration();
 		lastReflexSleepFrame = UINT32_MAX;
 		return;
 	}

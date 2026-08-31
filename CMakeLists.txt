@@ -235,6 +235,23 @@ include(FidelityFX-SDK)
 include(FidelityFX-Runtime)
 include(Streamline-Runtime)
 
+string(
+    REPLACE "."
+    ";"
+    _streamline_runtime_version_parts
+    "${STREAMLINE_RUNTIME_VERSION}"
+)
+list(GET _streamline_runtime_version_parts 0 _streamline_runtime_version_major)
+list(GET _streamline_runtime_version_parts 1 _streamline_runtime_version_minor)
+list(GET _streamline_runtime_version_parts 2 _streamline_runtime_version_patch)
+target_compile_definitions(
+    ${PROJECT_NAME}
+    PRIVATE
+        CSX_STREAMLINE_RUNTIME_VERSION_MAJOR=${_streamline_runtime_version_major}
+        CSX_STREAMLINE_RUNTIME_VERSION_MINOR=${_streamline_runtime_version_minor}
+        CSX_STREAMLINE_RUNTIME_VERSION_PATCH=${_streamline_runtime_version_patch}
+)
+
 target_compile_definitions(
     ${PROJECT_NAME}
     PRIVATE "$<$<BOOL:${TRACY_SUPPORT}>:TRACY_SUPPORT>"
@@ -1560,6 +1577,17 @@ if(BUILD_CONTROLLER_TESTS)
         EditorLightPickerContract
         PROPERTIES LABELS "ControllerTests"
     )
+    add_test(
+        NAME NvidiaPipelineContract
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            -P "${PROJECT_SOURCE_DIR}/tests/nvidia_pipeline_contract_test.cmake"
+    )
+    set_tests_properties(
+        NvidiaPipelineContract
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     function(add_controller_test TARGET_NAME TEST_NAME SOURCE_FILE)
         add_executable(${TARGET_NAME} EXCLUDE_FROM_ALL ${SOURCE_FILE})
@@ -1601,6 +1629,11 @@ if(BUILD_CONTROLLER_TESTS)
         streamline_frame_token_publication_test
         StreamlineFrameTokenPublication
         tests/streamline_frame_token_publication_test.cpp
+    )
+    add_controller_test(
+        main_thread_dispatch_policy_test
+        MainThreadDispatchPolicy
+        tests/main_thread_dispatch_policy_test.cpp
     )
     add_controller_test(
         vr_render_scale_preparation_policy_test
@@ -1946,6 +1979,7 @@ if(BUILD_CONTROLLER_TESTS)
             vr_render_scale_qualification_policy_test
             vr_render_scale_replacement_telemetry_policy_test
             streamline_frame_token_publication_test
+            main_thread_dispatch_policy_test
             vr_render_scale_preparation_policy_test
             vr_presentation_stretch_telemetry_policy_test
             reflex_policy_test

@@ -289,7 +289,8 @@ foreach(_required_behavior IN ITEMS
 	"gpu_performance_start_frame_mismatch"
 	"performance_telemetry_already_active"
 	"performance_telemetry_dispatch_frame_mismatch"
-	"cpuStartFrame != frame || gpuStartFrame != frame"
+	"cpuStartFrame != dispatchFrame ||"
+	"gpuStartFrame != dispatchFrame"
 	"result[\"performanceTelemetry\"]"
     "cpu_performance_session_id_unavailable"
     "GetVRRenderScaleCPUPerformanceSessionID()"
@@ -404,6 +405,86 @@ foreach(_required_behavior IN ITEMS
     if(_behavior_position EQUAL -1)
         message(FATAL_ERROR "Render-scale qualification behavior is missing: ${_required_behavior}")
     endif()
+endforeach()
+
+foreach(_required_explicit_frame_api IN ITEMS
+	"StartVRRenderScaleCPUPerformanceTelemetry(uint32_t a_startFrame) noexcept"
+	"StartVRRenderScaleGPUPerformanceTelemetry(uint32_t a_startFrame) noexcept"
+	"CurrentVRRenderScaleTelemetryFrame()"
+	"frameCountAtomic.load(std::memory_order_relaxed)"
+)
+	string(FIND "${_upscaling_header}\n${_upscaling_source}"
+		"${_required_explicit_frame_api}" _explicit_frame_api_position)
+	if(_explicit_frame_api_position EQUAL -1)
+		message(FATAL_ERROR
+			"Explicit telemetry frame API is missing: ${_required_explicit_frame_api}"
+		)
+	endif()
+endforeach()
+
+string(FIND "${_bridge}" "if (action == \"qualification_dispatch\")"
+	_qualification_dispatch_start)
+string(FIND "${_bridge}" "if (action == \"qualification_cancel\")"
+	_qualification_dispatch_end)
+if(_qualification_dispatch_start EQUAL -1 OR
+	_qualification_dispatch_end EQUAL -1 OR
+	_qualification_dispatch_end LESS_EQUAL _qualification_dispatch_start)
+	message(FATAL_ERROR "Qualification dispatch block was not found")
+endif()
+math(EXPR _qualification_dispatch_length
+	"${_qualification_dispatch_end} - ${_qualification_dispatch_start}")
+string(SUBSTRING "${_bridge}" ${_qualification_dispatch_start}
+	${_qualification_dispatch_length} _qualification_dispatch_block)
+foreach(_required_shared_frame_behavior IN ITEMS
+	"frameCountAtomic.load("
+	"const uint64_t observationTick = QueryQualificationTick()"
+	"dispatchPresentationEvidence[\"observationTick\"] = observationTick"
+	"dispatchPresentationEvidence[\"observationFrame\"] = observationFrame"
+	"const uint64_t dispatchTick = QueryQualificationTick()"
+	"dispatchPresentationEvidence[\"tick\"] = dispatchTick"
+	"dispatchPresentationEvidence[\"frame\"] = dispatchFrame"
+	"StartVRRenderScaleCPUPerformanceTelemetry(\n\t\t\t\t\t\t\t\tdispatchFrame)"
+	"StartVRRenderScaleGPUPerformanceTelemetry(\n\t\t\t\t\t\t\tdispatchFrame)"
+	"store.active->dispatchTick = dispatchTick"
+	"store.active->dispatchFrame = dispatchFrame"
+	"{ \"dispatchTick\", dispatchTick }"
+	"{ \"dispatchFrame\", dispatchFrame }"
+)
+	string(FIND "${_qualification_dispatch_block}"
+		"${_required_shared_frame_behavior}" _shared_frame_position)
+	if(_shared_frame_position EQUAL -1)
+		message(FATAL_ERROR
+			"Qualification dispatch does not share its frame boundary: ${_required_shared_frame_behavior}"
+		)
+	endif()
+endforeach()
+
+foreach(_forbidden_mixed_dispatch_boundary IN ITEMS
+	"dispatchPresentationEvidence[\"tick\"] = observationTick"
+	"dispatchPresentationEvidence[\"frame\"] = observationFrame"
+	"store.active->dispatchTick = observationTick"
+	"store.active->dispatchFrame = observationFrame"
+)
+	string(FIND "${_qualification_dispatch_block}"
+		"${_forbidden_mixed_dispatch_boundary}" _mixed_boundary_position)
+	if(NOT _mixed_boundary_position EQUAL -1)
+		message(FATAL_ERROR
+			"Qualification dispatch mixes observation and dispatch boundaries: ${_forbidden_mixed_dispatch_boundary}"
+		)
+	endif()
+endforeach()
+
+foreach(_forbidden_unbound_start IN ITEMS
+	"StartVRRenderScaleCPUPerformanceTelemetry();"
+	"StartVRRenderScaleGPUPerformanceTelemetry();"
+)
+	string(FIND "${_qualification_dispatch_block}"
+		"${_forbidden_unbound_start}" _unbound_start_position)
+	if(NOT _unbound_start_position EQUAL -1)
+		message(FATAL_ERROR
+			"Qualification dispatch uses an unbound telemetry start: ${_forbidden_unbound_start}"
+		)
+	endif()
 endforeach()
 
 string(FIND

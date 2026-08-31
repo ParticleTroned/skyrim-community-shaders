@@ -105,6 +105,13 @@ namespace
 		           std::numeric_limits<uint64_t>::max() :
 		           a_left + a_right;
 	}
+
+	uint32_t CurrentVRRenderScaleTelemetryFrame() noexcept
+	{
+		return globals::state ?
+		           globals::state->frameCountAtomic.load(std::memory_order_relaxed) :
+		           0u;
+	}
 #endif
 
 	VRRenderScalePreparationPolicy::Key BuildVRRenderScalePreparationKey(
@@ -330,6 +337,13 @@ uint64_t Upscaling::GetVRRenderScaleCPUPerformanceSessionID() const noexcept
 
 uint64_t Upscaling::StartVRRenderScaleCPUPerformanceTelemetry() noexcept
 {
+	return StartVRRenderScaleCPUPerformanceTelemetry(
+		CurrentVRRenderScaleTelemetryFrame());
+}
+
+uint64_t Upscaling::StartVRRenderScaleCPUPerformanceTelemetry(
+	uint32_t a_startFrame) noexcept
+{
 	uint64_t sessionID = nextVRRenderScaleCPUPerformanceSessionID.load(
 		std::memory_order_relaxed);
 	while (sessionID != 0) {
@@ -352,7 +366,7 @@ uint64_t Upscaling::StartVRRenderScaleCPUPerformanceTelemetry() noexcept
 	vrRenderScaleCPUPerformanceCounters[static_cast<std::size_t>(
 											VRRenderScaleCPUPerformanceCounter::WindowStartFrame)]
 		.store(
-			globals::state ? globals::state->frameCount : 0u,
+			a_startFrame,
 			std::memory_order_relaxed);
 	vrRenderScaleCPUPerformanceSessionID.store(
 		sessionID,
@@ -422,7 +436,17 @@ bool Upscaling::IsVRRenderScaleGPUPerformanceTelemetryActive() const noexcept
 
 void Upscaling::StartVRRenderScaleGPUPerformanceTelemetry() noexcept
 {
+	StartVRRenderScaleGPUPerformanceTelemetry(
+		CurrentVRRenderScaleTelemetryFrame());
+}
+
+void Upscaling::StartVRRenderScaleGPUPerformanceTelemetry(
+	uint32_t a_startFrame) noexcept
+{
 	ResetVRRenderScaleGPUPerformanceTelemetry();
+	vrRenderScaleGPUPerformanceCounters[static_cast<std::size_t>(
+											VRRenderScaleGPUPerformanceCounter::WindowStartFrame)]
+		.store(a_startFrame, std::memory_order_relaxed);
 	vrRenderScaleGPUPerformanceTelemetryActive.store(true, std::memory_order_relaxed);
 }
 
@@ -437,7 +461,7 @@ void Upscaling::ResetVRRenderScaleGPUPerformanceTelemetry() noexcept
 	for (auto& counter : vrRenderScaleGPUPerformanceCounters)
 		counter.store(0, std::memory_order_relaxed);
 	vrRenderScaleGPUPerformanceCounters[static_cast<std::size_t>(VRRenderScaleGPUPerformanceCounter::WindowStartFrame)]
-		.store(globals::state ? globals::state->frameCount : 0u, std::memory_order_relaxed);
+		.store(CurrentVRRenderScaleTelemetryFrame(), std::memory_order_relaxed);
 }
 
 void Upscaling::RecordVRRenderScaleGPUPerformanceCounter(VRRenderScaleGPUPerformanceCounter a_counter, uint64_t a_delta) const noexcept

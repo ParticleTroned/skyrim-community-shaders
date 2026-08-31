@@ -1768,6 +1768,8 @@ public:
 	[[nodiscard]] uint64_t GetVRRenderScaleCPUPerformanceSessionID() const noexcept;
 	/** @brief Starts a new monotonically identified session, or returns zero if IDs are exhausted. */
 	[[nodiscard]] uint64_t StartVRRenderScaleCPUPerformanceTelemetry() noexcept;
+	/** @brief Starts CPU telemetry at an exact caller-owned frame boundary. */
+	[[nodiscard]] uint64_t StartVRRenderScaleCPUPerformanceTelemetry(uint32_t a_startFrame) noexcept;
 	/** @brief Stops recording while retaining the current session ID and counters. */
 	void StopVRRenderScaleCPUPerformanceTelemetry() noexcept;
 	/** @brief Clears retained telemetry and its session ID without rewinding ID allocation. */
@@ -1775,6 +1777,8 @@ public:
 	VRRenderScaleGPUPerformanceSnapshot GetVRRenderScaleGPUPerformanceSnapshot() const noexcept;
 	[[nodiscard]] bool IsVRRenderScaleGPUPerformanceTelemetryActive() const noexcept;
 	void StartVRRenderScaleGPUPerformanceTelemetry() noexcept;
+	/** @brief Starts GPU telemetry at an exact caller-owned frame boundary. */
+	void StartVRRenderScaleGPUPerformanceTelemetry(uint32_t a_startFrame) noexcept;
 	void StopVRRenderScaleGPUPerformanceTelemetry() noexcept;
 	void ResetVRRenderScaleGPUPerformanceTelemetry() noexcept;
 	void RecordVRRenderScaleGPUPerformanceCounter(VRRenderScaleGPUPerformanceCounter a_counter, uint64_t a_delta = 1) const noexcept;

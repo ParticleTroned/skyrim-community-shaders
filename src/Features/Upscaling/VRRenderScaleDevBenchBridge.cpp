@@ -5227,9 +5227,12 @@ namespace
 					ownerID,
 					cocCellEditorID,
 					startPerformanceTelemetry]() {
-					const uint64_t clockAvailabilityTick = QueryQualificationTick();
-					const uint32_t frame = globals::state ? globals::state->frameCount : 0;
-					if (clockAvailabilityTick == 0) {
+					const uint64_t observationTick = QueryQualificationTick();
+					const uint32_t observationFrame =
+						globals::state ?
+							globals::state->frameCountAtomic.load(std::memory_order_relaxed) :
+							0u;
+					if (observationTick == 0) {
 						return json{
 							{ "error", "QueryPerformanceCounter is unavailable" },
 							{ "errorCode", "monotonic_clock_unavailable" },
@@ -5247,10 +5250,10 @@ namespace
 								std::memory_order_acquire),
 							upscaling.vrRenderScalePostMutationSerializationEpoch.load(
 								std::memory_order_acquire),
-							clockAvailabilityTick,
-							frame);
-					dispatchPresentationEvidence["tick"] = clockAvailabilityTick;
-					dispatchPresentationEvidence["frame"] = frame;
+							observationTick,
+							observationFrame);
+					dispatchPresentationEvidence["observationTick"] = observationTick;
+					dispatchPresentationEvidence["observationFrame"] = observationFrame;
 					auto& store = GetQualificationStore();
 					std::lock_guard lock(store.mutex);
 					if (!store.active ||
@@ -5273,20 +5276,33 @@ namespace
 						};
 					}
 
+					if (startPerformanceTelemetry &&
+						(upscaling.IsVRRenderScaleCPUPerformanceTelemetryActive() ||
+							upscaling.IsVRRenderScaleGPUPerformanceTelemetryActive())) {
+						return json{
+							{ "error", "qualification dispatch requires inactive CPU and GPU performance telemetry" },
+							{ "errorCode", "performance_telemetry_already_active" },
+							{ "cpuPerformance", CPUPerformanceJson(upscaling) },
+							{ "gpuPerformance", BuildGPUPerformanceStatus(upscaling) },
+						};
+					}
+
+					const uint64_t dispatchTick = QueryQualificationTick();
+					const uint32_t dispatchFrame =
+						globals::state ?
+							globals::state->frameCountAtomic.load(std::memory_order_relaxed) :
+							0u;
+					if (dispatchTick == 0) {
+						return json{
+							{ "error", "QueryPerformanceCounter became unavailable" },
+							{ "errorCode", "monotonic_clock_unavailable" },
+						};
+					}
 					json performanceTelemetry = nullptr;
 					if (startPerformanceTelemetry) {
-						if (upscaling.IsVRRenderScaleCPUPerformanceTelemetryActive() ||
-							upscaling.IsVRRenderScaleGPUPerformanceTelemetryActive()) {
-							return json{
-								{ "error", "qualification dispatch requires inactive CPU and GPU performance telemetry" },
-								{ "errorCode", "performance_telemetry_already_active" },
-								{ "cpuPerformance", CPUPerformanceJson(upscaling) },
-								{ "gpuPerformance", BuildGPUPerformanceStatus(upscaling) },
-							};
-						}
-
 						const uint64_t cpuSessionID =
-							upscaling.StartVRRenderScaleCPUPerformanceTelemetry();
+							upscaling.StartVRRenderScaleCPUPerformanceTelemetry(
+								dispatchFrame);
 						if (cpuSessionID == 0) {
 							return json{
 								{ "error", "the CPU telemetry session ID allocator failed" },
@@ -5294,7 +5310,8 @@ namespace
 								{ "cpuPerformance", CPUPerformanceJson(upscaling) },
 							};
 						}
-						upscaling.StartVRRenderScaleGPUPerformanceTelemetry();
+						upscaling.StartVRRenderScaleGPUPerformanceTelemetry(
+							dispatchFrame);
 						const auto cpuSnapshot =
 							upscaling.GetVRRenderScaleCPUPerformanceSnapshot();
 						const auto gpuSnapshot =
@@ -5303,42 +5320,33 @@ namespace
 							Upscaling::VRRenderScaleCPUPerformanceCounter::WindowStartFrame)];
 						const uint64_t gpuStartFrame = gpuSnapshot[static_cast<std::size_t>(
 							Upscaling::VRRenderScaleGPUPerformanceCounter::WindowStartFrame)];
-						if (cpuStartFrame != frame || gpuStartFrame != frame) {
+						if (cpuStartFrame != dispatchFrame ||
+							gpuStartFrame != dispatchFrame) {
 							upscaling.StopVRRenderScaleGPUPerformanceTelemetry();
 							upscaling.StopVRRenderScaleCPUPerformanceTelemetry();
 							return json{
 								{ "error", "performance telemetry did not bind to the qualification dispatch frame" },
 								{ "errorCode", "performance_telemetry_dispatch_frame_mismatch" },
-								{ "dispatchFrame", frame },
+								{ "dispatchFrame", dispatchFrame },
 								{ "cpuStartFrame", cpuStartFrame },
 								{ "gpuStartFrame", gpuStartFrame },
 							};
 						}
 						performanceTelemetry = {
 							{ "started", true },
-							{ "dispatchFrame", frame },
+							{ "dispatchFrame", dispatchFrame },
 							{ "cpuPerformance", CPUPerformanceJson(upscaling) },
 							{ "gpuPerformance", BuildGPUPerformanceStatus(upscaling) },
 						};
 					}
-					uint64_t tick = QueryQualificationTick();
-					if (tick == 0) {
-						if (startPerformanceTelemetry) {
-							upscaling.StopVRRenderScaleGPUPerformanceTelemetry();
-							upscaling.StopVRRenderScaleCPUPerformanceTelemetry();
-						}
-						return json{
-							{ "error", "QueryPerformanceCounter became unavailable" },
-							{ "errorCode", "monotonic_clock_unavailable" },
-						};
-					}
+					dispatchPresentationEvidence["tick"] = dispatchTick;
+					dispatchPresentationEvidence["frame"] = dispatchFrame;
 					if (cocCellEditorID) {
 						const auto command = std::format("coc {}", *cocCellEditorID);
-						tick = QueryQualificationTick();
 						RE::Console::ExecuteCommand(command.c_str());
 					}
-					store.active->dispatchTick = tick;
-					store.active->dispatchFrame = frame;
+					store.active->dispatchTick = dispatchTick;
+					store.active->dispatchFrame = dispatchFrame;
 					store.active->cocCellEditorID = cocCellEditorID;
 					store.active->dispatchPresentationEvidence =
 						std::move(dispatchPresentationEvidence);
@@ -5356,10 +5364,10 @@ namespace
 										{ "elapsedOrigin", cocCellEditorID ?
 															   "coc_command" :
 															   "qualification_dispatch" },
-										{ "dispatchTick", tick },
+										{ "dispatchTick", dispatchTick },
 										{ "tickFrequency", store.active->baseline.tickFrequency },
 									} },
-						{ "dispatchFrame", frame },
+						{ "dispatchFrame", dispatchFrame },
 						{ "replacementPresentation", store.active->dispatchPresentationEvidence },
 					};
 					if (cocCellEditorID) {

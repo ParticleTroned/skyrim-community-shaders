@@ -26316,7 +26316,10 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		};
 		const bool reuseCompatibleFSRResourcesForRelatch =
 			VRVendorRelatchPolicy::CanReuseCompatibleFSRResources({
-				.directMenuRelatch = directMenuRelatch,
+				// Compatible FSR reuse is a lifecycle invariant, not a direct-edit
+				// privilege; replayed CS-menu requests retain the same safe resources.
+				.directMenuRelatch =
+					relatchOrigin == VRUpscalingTransitionOrigin::CSMenu,
 				.recoveryRelatch =
 					relatchOrigin == VRUpscalingTransitionOrigin::RecoveryRelatch,
 				.targetIsFSR = relatchUpscaleMethod == UpscaleMethod::kFSR,

@@ -632,10 +632,6 @@ namespace
 
 	constexpr bool CoversBoundedNativeRestorePresentationRecovery()
 	{
-		if (kNativeRestoreMaximumRecoveryAttempts != 2u) {
-			return false;
-		}
-
 		for (std::uint32_t attempt = 0; attempt <= 4u; ++attempt) {
 			for (std::uint32_t bits = 0; bits < (1u << 2); ++bits) {
 				const bool candidatePending = (bits & (1u << 0)) != 0;
@@ -1806,21 +1802,50 @@ namespace
 		for (std::uint32_t bit = 0; bit < 14; ++bit) {
 			auto rejected = admission;
 			switch (bit) {
-			case 0: rejected.fallbackActive = false; break;
-			case 1: rejected.explicitCSMenuRequest = false; break;
-			case 2: rejected.savedTargetActive = false; break;
-			case 3: rejected.startupPresentationReleased = false; break;
-			case 4: rejected.completedWorldFrame = false; break;
-			case 5: rejected.exactNativeRuntimePlan = false; break;
-			case 6: rejected.bootLatchAbsent = false; break;
-			case 7: rejected.transitionIdle = false; break;
-			case 8: rejected.physicalRecoveryResolved = false; break;
-			case 9: rejected.memorySampleFresh = false; break;
-			case 10: rejected.memoryPressureRecovered = false; break;
-			case 11: rejected.deviceHealthy = false; break;
-			case 12: rejected.noRecentOutOfMemory = false; break;
-			case 13: rejected.shaderPipelineEnabled = false; break;
-			default: return false;
+			case 0:
+				rejected.fallbackActive = false;
+				break;
+			case 1:
+				rejected.explicitCSMenuRequest = false;
+				break;
+			case 2:
+				rejected.savedTargetActive = false;
+				break;
+			case 3:
+				rejected.startupPresentationReleased = false;
+				break;
+			case 4:
+				rejected.completedWorldFrame = false;
+				break;
+			case 5:
+				rejected.exactNativeRuntimePlan = false;
+				break;
+			case 6:
+				rejected.bootLatchAbsent = false;
+				break;
+			case 7:
+				rejected.transitionIdle = false;
+				break;
+			case 8:
+				rejected.physicalRecoveryResolved = false;
+				break;
+			case 9:
+				rejected.memorySampleFresh = false;
+				break;
+			case 10:
+				rejected.memoryPressureRecovered = false;
+				break;
+			case 11:
+				rejected.deviceHealthy = false;
+				break;
+			case 12:
+				rejected.noRecentOutOfMemory = false;
+				break;
+			case 13:
+				rejected.shaderPipelineEnabled = false;
+				break;
+			default:
+				return false;
 			}
 			if (CanAdmitStartupNativeFallbackExplicitRetry(rejected))
 				return false;
@@ -2774,6 +2799,7 @@ namespace
 	static_assert(CoversDispatchAdmission());
 	static_assert(CoversNativeRestorePresentationAdmission());
 	static_assert(CoversInactiveContractNativeReleaseAdmission());
+	static_assert(kNativeRestoreMaximumRecoveryAttempts == 2u);
 	static_assert(CoversBoundedNativeRestorePresentationRecovery());
 	static_assert(CoversVendorResourcePredicates());
 	static_assert(CoversStereoRelatchAdmission());

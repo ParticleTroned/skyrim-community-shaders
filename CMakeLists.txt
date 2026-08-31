@@ -1670,11 +1670,6 @@ if(BUILD_CONTROLLER_TESTS)
         tests/shader_compilation_scheduling_policy_test.cpp
     )
     add_controller_test(
-        volumetric_lighting_cache_refresh_policy_test
-        VolumetricLightingCacheRefreshPolicy
-        tests/volumetric_lighting_cache_refresh_policy_test.cpp
-    )
-    add_controller_test(
         vr_depth_culling_cache_refresh_policy_test
         VRDepthCullingCacheRefreshPolicy
         tests/vr_depth_culling_cache_refresh_policy_test.cpp
@@ -1927,7 +1922,6 @@ if(BUILD_CONTROLLER_TESTS)
             shader_cache_provenance_test
             cache_invalidation_test
             shader_compilation_scheduling_policy_test
-            volumetric_lighting_cache_refresh_policy_test
             volumetric_lighting_tuning_policy_test
             vr_depth_culling_cache_refresh_policy_test
             vr_depth_culling_enable_policy_test

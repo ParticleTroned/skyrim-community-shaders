@@ -7,7 +7,6 @@
 #include "RE/N/NiDirectionalLight.h"
 #include "SkySync.h"
 #include "State.h"
-#include "VolumetricLightingCacheRefreshPolicy.h"
 #include "VolumetricLightingTuningMigration.h"
 
 namespace

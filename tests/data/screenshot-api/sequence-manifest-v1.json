@@ -1,0 +1,71 @@
+{
+    "contract": { "name": "csx.screenshot", "major": 1, "minor": 0, "schemaRevision": 1 },
+    "producer": { "component": "CommunityShaders", "buildId": "fixture" },
+    "sessionId": "fixture-session",
+    "requestId": "fixture-sequence",
+    "state": "final",
+    "terminalOutcome": "completed_with_warnings",
+    "client": { "clientId": "contract-test", "commandId": "sequence-0001" },
+    "acceptedUtc": "2026-08-29T20:00:00.000Z",
+    "completedUtc": "2026-08-29T20:00:01.000Z",
+    "requested": { "frameCount": 1, "capture": { "source": { "kind": "hmd_submission" } } },
+    "effective": { "source": { "kind": "hmd_submission" }, "outputs": [{ "view": "left_eye" }] },
+    "actual": { "children": 1, "fallbacksPresent": true },
+    "counts": {
+        "requested": 1,
+        "scheduled": 1,
+        "acquired": 1,
+        "written": 1,
+        "dropped": 0,
+        "failed": 0,
+        "cancelled": 0,
+        "inFlight": 0
+    },
+    "children": [
+        {
+            "ordinal": 1,
+            "requestId": "fixture-frame-1",
+            "state": "completed_with_warnings",
+            "scheduledEngineFrame": 100,
+            "scheduledTimestampUs": 1000000,
+            "requested": { "source": { "kind": "hmd_submission" } },
+            "effective": {
+                "source": { "kind": "hmd_submission" },
+                "outputs": [{ "view": "left_eye" }]
+            },
+            "actual": {
+                "source": { "kind": "desktop_mirror", "fallbackApplied": true },
+                "artifacts": [{ "view": "source_native" }]
+            },
+            "artifacts": [
+                {
+                    "path": "C:/captures/frame_000001.png",
+                    "bytes": 1234,
+                    "committed": true,
+                    "sha256": "0123456789abcdef",
+                    "actual": {
+                        "view": "source_native",
+                        "width": 1920,
+                        "height": 1080,
+                        "format": "png",
+                        "colourContract": "sdr_srgb"
+                    }
+                }
+            ],
+            "warnings": [{ "code": "source_fallback", "message": "HMD source unavailable" }],
+            "errors": [],
+            "error": null
+        }
+    ],
+    "warnings": [],
+    "errors": [],
+    "packaging": {
+        "frameManifest": {
+            "requested": true,
+            "state": "written",
+            "path": "C:/captures/sequence.json"
+        },
+        "previewVideo": { "requested": false, "required": false, "state": "not_requested" }
+    },
+    "updatedUtc": "2026-08-29T20:00:01.000Z"
+}

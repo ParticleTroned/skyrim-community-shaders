@@ -455,12 +455,22 @@ namespace
 			if (!menu)
 				return { { "error", "CSX menu unavailable" } };
 			json delegatedRequest = nullptr;
+			json deprecation = nullptr;
 			if (action == "open") {
 				menu->OpenMenu();
 			} else if (action == "close") {
 				menu->CloseMenu();
 			} else if (action == "screenshot") {
-				delegatedRequest = globals::features::screenshotFeature.RequestLegacyCapture("communityshaders.menu");
+				delegatedRequest = globals::features::screenshotFeature.RequestApiCapture("communityshaders.menu");
+				deprecation = {
+					{ "obsolete", true },
+					{ "message", "communityshaders.menu screenshot is obsolete; migrate to communityshaders.screenshot contractMajor 1" },
+					{ "replacement", {
+						{ "tool", "communityshaders.screenshot" },
+						{ "contractMajor", 1 },
+						{ "action", "capture" },
+					} },
+				};
 			} else if (action == "set_path") {
 				auto& vr = globals::features::vr;
 				vr.HideOverlaysIfPresent();
@@ -488,7 +498,15 @@ namespace
 				return { { "action", action }, { "texture", InspectMenuTexture() }, { "status", BuildStatus() } };
 			if (action == "set_dynamic_cubemap_resolution")
 				return { { "action", action }, { "resolution", resolution }, { "persisted", false }, { "status", BuildStatus() } };
-			return { { "action", action }, { "path", path }, { "delegatedRequest", std::move(delegatedRequest) }, { "status", BuildStatus() } };
+			json result = {
+				{ "action", action },
+				{ "path", path },
+				{ "delegatedRequest", std::move(delegatedRequest) },
+				{ "status", BuildStatus() },
+			};
+			if (!deprecation.is_null())
+				result["deprecation"] = std::move(deprecation);
+			return result;
 		});
 	}
 
@@ -534,7 +552,7 @@ namespace MenuDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Inspect and control the CSX VR menu, desktop/headset layout lock, depth-culling A/B policy, TruePBR verbose JSON logging, and dynamic cubemap resolution. set_layout_unlocked enables desktop move, resize, and docking plus headset custom placement and grip dragging. Resolution changes are staged in memory; save settings and restart to apply them. prepare_coc is a one-shot pre-assay gate: it requires in-game Skyrim VR and startup-active VR FPS Stabilizer profile sync, then enables runtime-only developer mode and the fixed FOV plus TAA 0.3/0.7 fixture without saving settings. Every response identifies the exact producing DLL. expectedBuildId makes requests fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","open","close","screenshot","set_path","set_layout_unlocked","texture_stats","set_depth_culling_performance_mode","set_depth_culling_legacy_mode","set_truepbr_verbose_json_logging","set_dynamic_cubemap_resolution","prepare_coc"],"default":"status"},"path":{"type":"string","enum":["auto","overlay","in_scene"]},"enabled":{"type":"boolean","description":"Boolean state required by a setter action."},"resolution":{"type":"integer","enum":[128,256],"description":"Dynamic cubemap resolution staged for the next game restart."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
+			R"({"description":"Inspect and control the CSX VR menu, desktop/headset layout lock, depth-culling A/B policy, TruePBR verbose JSON logging, and dynamic cubemap resolution. The screenshot action is obsolete and retained temporarily for migration; use communityshaders.screenshot contractMajor 1 instead. set_layout_unlocked enables desktop move, resize, and docking plus headset custom placement and grip dragging. Resolution changes are staged in memory; save settings and restart to apply them. prepare_coc is a one-shot pre-assay gate: it requires in-game Skyrim VR and startup-active VR FPS Stabilizer profile sync, then enables runtime-only developer mode and the fixed FOV plus TAA 0.3/0.7 fixture without saving settings. Every response identifies the exact producing DLL. expectedBuildId makes requests fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","description":"screenshot is obsolete; use communityshaders.screenshot contractMajor 1 action capture","enum":["status","open","close","screenshot","set_path","set_layout_unlocked","texture_stats","set_depth_culling_performance_mode","set_depth_culling_legacy_mode","set_truepbr_verbose_json_logging","set_dynamic_cubemap_resolution","prepare_coc"],"default":"status"},"path":{"type":"string","enum":["auto","overlay","in_scene"]},"enabled":{"type":"boolean","description":"Boolean state required by a setter action."},"resolution":{"type":"integer","enum":[128,256],"description":"Dynamic cubemap resolution staged for the next game restart."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
 		devBench->RegisterTool("communityshaders.menu", descriptor, &ToolHandler, nullptr);
 		g_registered.store(true, std::memory_order_release);
 		logger::info("MenuDevBenchBridge: registered communityshaders.menu with devbench build {}", devBench->GetBuildNumber());

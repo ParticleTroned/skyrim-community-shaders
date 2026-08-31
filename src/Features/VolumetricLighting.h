@@ -1,7 +1,5 @@
 #pragma once
 
-#include <atomic>
-
 #include "RE/B/BSVolumetricLightingRenderData.h"
 #include "VolumetricLightingTuning.h"
 
@@ -142,7 +140,6 @@ private:
 	void SanitizeSettings();
 	void SetupVL();
 	void ClearVolumetricLightingTargets();
-	void TryApplyVRImageSpaceCacheRefresh();
 	static int32_t ClampQualityIndex(int32_t quality);
 	static TextureSize ClampTextureSize(const TextureSize& size);
 

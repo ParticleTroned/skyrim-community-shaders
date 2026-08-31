@@ -1,6 +1,6 @@
 # VR render-scale replacement telemetry
 
-DevBench render-scale qualification receipts at schema revision 13 separate
+DevBench render-scale qualification receipts at schema revision 14 separate
 render success from evidence completeness. This diagnostic contract does not
 change render-scale preparation, admission, presentation, cleanup, or failure
 policy.
@@ -86,6 +86,14 @@ The decisive counters are:
 -   `preMutationStretchWithoutMutation`
 -   `postMutationOldGenerationPresented`
 -   `postMutationUnprovenStereoSubmitted`
+
+Coherent `PresentationStretch` stereo pairs submitted after mutation during
+the transition cooldown remain visible in disposition counts and
+`mixedOrUnprovenStereoPairsSubmitted`, but do not increment the decisive
+`postMutationUnprovenStereoSubmitted` counter. That stretch is the protected
+deferred-relatch presentation path. Pre-mutation stretch, boundary-spanning or
+mixed stereo, and post-mutation stretch outside the cooldown remain decisive
+violations.
 
 The receipt also retains the first offending cycle for each nonzero counter,
 disposition counts before and after physical mutation, partial-eye observation

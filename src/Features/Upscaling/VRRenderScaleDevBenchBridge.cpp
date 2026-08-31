@@ -736,7 +736,7 @@ namespace
 		};
 
 		return {
-			{ "schemaRevision", 13 },
+			{ "schemaRevision", 14 },
 			{ "observationFrame", a_frame },
 			{ "presentationProof", presentationProof },
 			{ "currentPresentationProven", currentPresentationProven },
@@ -4844,7 +4844,7 @@ namespace
 			a_transition.firstNewGenerationProvenEvidence);
 
 		json receipt{
-			{ "schemaRevision", 13 },
+			{ "schemaRevision", 14 },
 			{ "action", "qualification_wait" },
 			{ "transitionId", a_transition.transitionID },
 			{ "ownerId", a_transition.ownerID },

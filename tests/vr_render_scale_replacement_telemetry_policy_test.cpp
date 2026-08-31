@@ -12,7 +12,8 @@ namespace
 		PresentationDisposition a_disposition,
 		bool a_beforeMutation = true,
 		bool a_exactCurrent = true,
-		bool a_exactReplacement = false)
+		bool a_exactReplacement = false,
+		bool a_transitionCooldown = false)
 	{
 		return {
 			.valid = true,
@@ -36,6 +37,7 @@ namespace
 			.renderScaleMode = true,
 			.backend = 1,
 			.disposition = a_disposition,
+			.transitionCooldown = a_transitionCooldown,
 			.submitted = true,
 			.exactCurrent = a_exactCurrent,
 			.exactReplacement = a_exactReplacement,
@@ -417,7 +419,21 @@ namespace
 		       state.counters.firstPostMutationOldGenerationPresented.valid;
 	}
 
-	constexpr bool CoversStretchAfterMutation()
+	constexpr bool CoversProtectedStretchAfterMutation()
+	{
+		auto state = StartedAudit();
+		CompleteCycle completed{};
+		(void)ObserveEye(state, 3, 5,
+			Eye(0, 17, PresentationDisposition::PresentationStretch, false, false, false, true), completed);
+		(void)ObserveEye(state, 3, 5,
+			Eye(1, 17, PresentationDisposition::PresentationStretch, false, false, false, true), completed);
+		return completed.afterMutation &&
+		       state.counters.mixedOrUnprovenStereoPairsSubmitted == 1 &&
+		       state.counters.postMutationUnprovenStereoSubmitted == 0 &&
+		       !state.counters.firstPostMutationUnprovenStereoSubmitted.valid;
+	}
+
+	constexpr bool CoversUnprotectedStretchAfterMutation()
 	{
 		auto state = StartedAudit();
 		CompleteCycle completed{};
@@ -426,6 +442,7 @@ namespace
 		(void)ObserveEye(state, 3, 5,
 			Eye(1, 17, PresentationDisposition::PresentationStretch, false, false, false), completed);
 		return completed.afterMutation &&
+		       state.counters.mixedOrUnprovenStereoPairsSubmitted == 1 &&
 		       state.counters.postMutationUnprovenStereoSubmitted == 1 &&
 		       state.counters.firstPostMutationUnprovenStereoSubmitted.valid;
 	}
@@ -497,7 +514,8 @@ namespace
 	static_assert(CoversOutOfOrderPreBoundaryEye());
 	static_assert(CoversMixedSubmittedViolation());
 	static_assert(CoversOldGenerationAfterMutation());
-	static_assert(CoversStretchAfterMutation());
+	static_assert(CoversProtectedStretchAfterMutation());
+	static_assert(CoversUnprotectedStretchAfterMutation());
 	static_assert(CoversPreMutationViolations());
 	static_assert(CoversNewGenerationProof());
 	static_assert(CoversStaleOwnership());

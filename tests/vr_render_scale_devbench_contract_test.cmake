@@ -324,6 +324,7 @@ foreach(_required_behavior IN ITEMS
 	"sameObservation"
 	"replacementTimeline"
 	"schemaRevision"
+	"{ \"schemaRevision\", 14 }"
 	"presentationProof"
 	"exact_vendor_evaluation"
 	"exact_native_presentation"

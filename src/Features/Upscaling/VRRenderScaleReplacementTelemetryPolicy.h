@@ -778,12 +778,17 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 				RecordFirstOffender(
 					counters.firstPostMutationOldGenerationPresented, a_cycle);
 			}
+			const bool protectedCooldownStretch =
+				a_cycle.afterMutation && a_cycle.coherent && a_cycle.transitionCooldown &&
+				a_cycle.disposition == PresentationDisposition::PresentationStretch;
 			if (a_cycle.submitted && (!a_cycle.coherent ||
 										 (!a_cycle.exactReplacement && !a_cycle.exactCurrent))) {
 				SaturatingIncrement(counters.mixedOrUnprovenStereoPairsSubmitted);
-				SaturatingIncrement(counters.postMutationUnprovenStereoSubmitted);
-				RecordFirstOffender(
-					counters.firstPostMutationUnprovenStereoSubmitted, a_cycle);
+				if (!protectedCooldownStretch) {
+					SaturatingIncrement(counters.postMutationUnprovenStereoSubmitted);
+					RecordFirstOffender(
+						counters.firstPostMutationUnprovenStereoSubmitted, a_cycle);
+				}
 			}
 			if (a_cycle.afterMutation && a_cycle.exactReplacement &&
 				a_cycle.coherent && a_cycle.submitted &&

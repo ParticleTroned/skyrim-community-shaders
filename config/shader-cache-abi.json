@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "globalAbi": "engine-cache-v3-managed-pack",
+  "policy": {
+    "releaseVersionsAreProvenance": true,
+    "sourceClosureIsEntryValidity": true,
+    "featureAbiIsExplicit": true,
+    "externalCompatibilityIsScoped": true,
+    "managedPackFormat": 1,
+    "managedPackHash": "sha256"
+  }
+}

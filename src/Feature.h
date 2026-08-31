@@ -230,6 +230,13 @@ public:
 
 	virtual bool ValidateCache(CSimpleIniA& a_ini);
 	virtual void WriteDiskCacheInfo(CSimpleIniA& a_ini);
+	/**
+	 * Explicit cache contract for non-HLSL changes that alter this feature's
+	 * compiled shader inputs, bindings, or resource layout. Release versions are
+	 * provenance only; override this with a stable value and bump it only when
+	 * already-compiled blobs for this feature must be discarded.
+	 */
+	virtual std::string_view GetShaderCacheAbiVersion() const { return {}; }
 	virtual void ClearShaderCache() {}
 	/** @brief Invalidates this feature's shader cache during a scene-scoped clear.
 	 *  Features may override this when they can avoid an eager full-cache rebuild. */

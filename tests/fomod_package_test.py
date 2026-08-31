@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for the manual four-cache release FOMOD."""
+"""Regression tests for the managed-cache release FOMOD."""
 
 from __future__ import annotations
 
@@ -24,21 +24,31 @@ SPEC.loader.exec_module(BUILDER)
 
 class FomodPackageTests(unittest.TestCase):
     @staticmethod
-    def _write_cache(cache_directory: Path, horizon: bool) -> None:
+    def _write_cache(cache_directory: Path) -> None:
         cache_directory.mkdir(parents=True, exist_ok=True)
         (cache_directory / BUILDER.CACHE_INFO_FILE).write_text(
             "[Cache]\n"
             "PluginVersion = CSX 3.18-VR\n"
-            "ShaderCacheABI = test\n\n"
-            "[HorizonFix]\n"
-            f"Enabled = {'true' if horizon else 'false'}\n"
-            "Version = 1-0-0\n",
+            "ShaderCacheABI = test\n",
             encoding="utf-8",
         )
         (cache_directory / BUILDER.MANIFEST_FILE).write_text(
-            json.dumps({"schemaVersion": 1, "entries": {"test.pso": "0" * 32}}),
+            json.dumps({"schemaVersion": 1, "entries": {}}),
             encoding="utf-8",
         )
+        (cache_directory / BUILDER.PACK_MANIFEST_FILE).write_text(
+            json.dumps(
+                {
+                    "schema": "csx.shader-cache.pack-manifest",
+                    "schemaVersion": 1,
+                    "formatVersion": 1,
+                    "compatibilityVariants": ["default", "legacy-horizon-fix"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        for pack_name in BUILDER.PACK_FILES:
+            (cache_directory / pack_name).write_bytes(b"pack")
 
     def _inputs(self, root: Path) -> tuple[Path, Path, Path]:
         core = root / "core"
@@ -48,11 +58,10 @@ class FomodPackageTests(unittest.TestCase):
         se_cache = root / "se"
         vr_cache = root / "vr"
         for runtime_root in (se_cache, vr_cache):
-            self._write_cache(runtime_root / BUILDER.CACHE_DIRECTORY, False)
-            self._write_cache(runtime_root / BUILDER.HORIZON_CACHE_DIRECTORY, True)
+            self._write_cache(runtime_root / BUILDER.CACHE_DIRECTORY)
         return core, se_cache, vr_cache
 
-    def test_stages_manual_two_page_four_cache_fomod(self) -> None:
+    def test_stages_one_page_two_managed_cache_fomod(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             core, se_cache, vr_cache = self._inputs(root)
@@ -67,10 +76,7 @@ class FomodPackageTests(unittest.TestCase):
             steps = config.findall("./installSteps/installStep")
             self.assertEqual(
                 [step.get("name") for step in steps],
-                [
-                    "Choose the Skyrim runtime",
-                    "Choose the Horizon Fix state",
-                ],
+                ["Choose the Skyrim runtime"],
             )
 
             runtime_options = steps[0].findall(
@@ -88,20 +94,10 @@ class FomodPackageTests(unittest.TestCase):
                 [BUILDER.RUNTIME_VR, BUILDER.RUNTIME_SE_AE, BUILDER.RUNTIME_NONE],
             )
 
-            visible = steps[1].find("./visible/dependencies")
-            self.assertEqual(visible.get("operator"), "Or")
-            self.assertEqual(
-                BUILDER.flag_pairs(visible),
-                (
-                    (BUILDER.RUNTIME_FLAG, BUILDER.RUNTIME_VR),
-                    (BUILDER.RUNTIME_FLAG, BUILDER.RUNTIME_SE_AE),
-                ),
-            )
-
             mappings = config.findall(
                 "./conditionalFileInstalls/patterns/pattern/files/folder"
             )
-            self.assertEqual(len(mappings), 4)
+            self.assertEqual(len(mappings), 2)
             self.assertEqual(
                 {folder.get("destination") for folder in mappings},
                 {BUILDER.CACHE_DIRECTORY},
@@ -140,14 +136,11 @@ class FomodPackageTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, serialized)
 
-    def test_rejects_cache_with_wrong_horizon_state(self) -> None:
+    def test_rejects_cache_with_missing_managed_pack(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             core, se_cache, vr_cache = self._inputs(root)
-            self._write_cache(
-                vr_cache / BUILDER.HORIZON_CACHE_DIRECTORY,
-                False,
-            )
+            (vr_cache / BUILDER.CACHE_DIRECTORY / BUILDER.PACK_FILES[0]).unlink()
             with self.assertRaises(SystemExit):
                 BUILDER.stage_package(
                     core,

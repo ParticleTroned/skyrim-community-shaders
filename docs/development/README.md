@@ -8,6 +8,7 @@
 -   [VR depth-culling evidence](vr-depth-culling-temporal-evidence.md) — source history, live Skyrim VR layout evidence, and exact local validation.
 -   [API service registry](api-service-registry.md) — parallel versioned service discovery while retaining the legacy CSAP interface.
 -   [Shader API v1](api-shader-v1.md) — versioned inspection, feature-state, compilation, and cache-lifecycle controls with preflight safety.
+-   [Shader compatibility API v1](api-shader-compatibility-v1.md) — startup registration of external shader-facing contracts and narrowly scoped cache identities.
 
 ## Getting Started
 

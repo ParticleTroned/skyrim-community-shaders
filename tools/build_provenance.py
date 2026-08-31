@@ -23,13 +23,8 @@ SCHEMA_VERSION = 1
 BUILD_ID_ALGORITHM = "sha256-canonical-json-v1"
 SHADER_ABI_SCHEMA_VERSION = 1
 DEFAULT_SHADER_CONTRACT_FILES = [
-    "src/ShaderCache.cpp",
-    "src/ShaderCache.h",
-    "src/State.cpp",
-    "src/State.h",
-    "src/Utils/CacheInvalidation.h",
-    "src/Utils/ContentHash.h",
-    "src/Utils/ShaderCacheManifest.h",
+    "config/shader-cache-abi.json",
+    "config/shader-compatibility-variants.json",
 ]
 
 

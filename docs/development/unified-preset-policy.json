@@ -542,11 +542,7 @@
             ["Volumetric Lighting", "GodrayIntensity"],
             ["Volumetric Lighting", "GodrayOpacity"],
             ["Volumetric Lighting", "GodraySaturation"],
-            ["Volumetric Lighting", "GodrayShaftIntensity"],
-            ["Screenshot", "SequenceFrameInterval"],
-            ["Screenshot", "SequencePreviewFramesPerSecond"],
-            ["Screenshot", "SequenceSaveSeparateEyes"],
-            ["Screenshot", "SequenceWritePreviewVideo"]
+            ["Volumetric Lighting", "GodrayShaftIntensity"]
         ],
         "requiredValues": [
             { "path": ["Screenshot", "SettingsSchemaVersion"], "value": 2 },

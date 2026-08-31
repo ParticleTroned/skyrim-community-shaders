@@ -238,13 +238,13 @@ try {
     } -Pattern 'JSON path case mismatch.*Water Effects' -Message 'A case-variant stale path was treated as absent.'
 
     $invalidBase = $baselineBaseText | ConvertFrom-Json -Depth 100
-    $invalidBase.Screenshot = 1
+    $invalidBase.'Volumetric Lighting' = 1
     Write-JsonFile -Path $isolatedBasePath -Value $invalidBase
     $invalidPolicy.baseTemplate.sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $isolatedBasePath).Hash
     Write-JsonFile -Path $isolatedPolicyPath -Value $invalidPolicy
     $null = Invoke-ExpectedFailure -GeneratorPath $isolatedGenerator -Arguments @{
         OutputRoot = $outputRoot; ReportPath = $reportPath
-    } -Pattern 'JSON path has a non-object parent.*Screenshot/SequenceFrameInterval' -Message 'A malformed stale-path ancestor was treated as absent.'
+    } -Pattern 'JSON path has a non-object parent.*Volumetric Lighting/CustomColorBlue' -Message 'A malformed stale-path ancestor was treated as absent.'
     [System.IO.File]::WriteAllText($isolatedBasePath, $baselineBaseText, $utf8)
     [System.IO.File]::WriteAllText($isolatedPolicyPath, $baselinePolicyText, $utf8)
 

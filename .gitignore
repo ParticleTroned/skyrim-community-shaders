@@ -23,3 +23,8 @@ tests/shaders/Shaders/
 features/Upscaling/Shaders/Upscaling/Streamline/sl.pcl.dll
 features/Upscaling/Shaders/Upscaling/Streamline/sl.reflex.dll
 **/__pycache__/
+
+# Unified-preset generator ownership and crash-recovery state
+/.csx-unified-presets.lock
+/.csx-unified-presets.transaction.json
+/.csx-unified-presets.transaction.json.tmp

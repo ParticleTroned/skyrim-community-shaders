@@ -2539,8 +2539,8 @@ namespace
 		response["capabilities"] = {
 			{ "amdAdapter", fidelityFX.IsAmdAdapterDetected() },
 			{ "nvidiaAdapter", fidelityFX.IsNvidiaAdapterDetected() },
-			{ "dlssCheckComplete", Upscaling::streamline.featureCheckComplete },
-			{ "dlssAvailable", Upscaling::streamline.featureDLSS },
+			{ "dlssCheckComplete", Upscaling::streamline.featureCheckComplete.load(std::memory_order_relaxed) },
+			{ "dlssAvailable", Upscaling::streamline.featureDLSS.load(std::memory_order_relaxed) },
 			{ "fsr4Available", fidelityFX.IsRuntimeFsr4Available() },
 			{ "fsr4SweepAvailable", IsFsr4UpscalingCostSweepAvailable() },
 			{ "fsrRuntimeFailureLatched", fidelityFX.IsRuntimeUpscalerFailureLatched() },

@@ -3,17 +3,125 @@
   "$id": "urn:csx:devbench:screenshot:sequence-manifest:1",
   "title": "CSX screenshot sequence manifest v1",
   "type": "object",
-  "required": ["contract", "sessionId", "requestId", "state", "capture", "counts", "children", "packaging", "updatedUtc"],
+  "required": [
+    "contract", "producer", "sessionId", "requestId", "state",
+    "terminalOutcome", "client", "acceptedUtc", "completedUtc",
+    "requested", "effective", "actual", "counts", "children",
+    "warnings", "errors", "packaging", "updatedUtc"
+  ],
   "properties": {
-    "contract": { "type": "object" },
-    "sessionId": { "type": "string" },
-    "requestId": { "type": "string" },
+    "contract": {
+      "type": "object",
+      "required": ["name", "major", "minor", "schemaRevision"],
+      "properties": {
+        "name": { "const": "csx.screenshot" },
+        "major": { "const": 1 },
+        "minor": { "type": "integer", "minimum": 0 },
+        "schemaRevision": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "producer": { "type": "object" },
+    "sessionId": { "type": "string", "minLength": 1 },
+    "requestId": { "type": "string", "minLength": 1 },
     "state": { "enum": ["partial", "final"] },
-    "capture": { "type": "object" },
-    "counts": { "type": "object" },
-    "children": { "type": "array", "items": { "type": "object" } },
+    "terminalOutcome": {
+      "type": ["string", "null"],
+      "enum": [null, "completed", "completed_with_warnings", "stopped", "cancelled", "cancelled_partial", "failed", "failed_partial"]
+    },
+    "client": {
+      "type": "object",
+      "required": ["clientId", "commandId"],
+      "properties": {
+        "clientId": { "type": "string", "minLength": 1 },
+        "commandId": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "acceptedUtc": { "type": ["string", "null"], "format": "date-time" },
+    "completedUtc": { "type": ["string", "null"], "format": "date-time" },
+    "requested": { "type": "object" },
+    "effective": { "type": "object" },
+    "actual": {
+      "type": "object",
+      "required": ["children", "fallbacksPresent"],
+      "properties": {
+        "children": { "type": "integer", "minimum": 0 },
+        "fallbacksPresent": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "counts": {
+      "type": "object",
+      "required": ["requested", "scheduled", "acquired", "written", "dropped", "failed", "cancelled", "inFlight"],
+      "properties": {
+        "requested": { "type": "integer", "minimum": 1 },
+        "scheduled": { "type": "integer", "minimum": 0 },
+        "acquired": { "type": "integer", "minimum": 0 },
+        "written": { "type": "integer", "minimum": 0 },
+        "dropped": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "cancelled": { "type": "integer", "minimum": 0 },
+        "inFlight": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "children": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "ordinal", "requestId", "state", "scheduledEngineFrame",
+          "scheduledTimestampUs", "requested", "effective", "actual",
+          "artifacts", "warnings", "errors", "error"
+        ],
+        "properties": {
+          "ordinal": { "type": "integer", "minimum": 1 },
+          "requestId": { "type": "string", "minLength": 1 },
+          "state": { "type": "string", "minLength": 1 },
+          "scheduledEngineFrame": { "type": "integer", "minimum": 0 },
+          "scheduledTimestampUs": { "type": "integer", "minimum": 0 },
+          "requested": { "type": "object" },
+          "effective": { "type": "object" },
+          "actual": { "type": "object" },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["path", "bytes", "committed", "sha256"],
+              "properties": {
+                "path": { "type": "string", "minLength": 1 },
+                "bytes": { "type": ["integer", "null"], "minimum": 0 },
+                "committed": { "const": true },
+                "sha256": { "type": ["string", "null"] },
+                "integrityError": { "type": "string" },
+                "actual": {
+                  "type": "object",
+                  "required": ["view", "width", "height", "format", "colourContract"],
+                  "properties": {
+                    "view": { "type": "string", "minLength": 1 },
+                    "width": { "type": "integer", "minimum": 0 },
+                    "height": { "type": "integer", "minimum": 0 },
+                    "format": { "type": "string", "minLength": 1 },
+                    "colourContract": { "type": "string", "minLength": 1 }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "warnings": { "type": "array", "items": { "type": "object" } },
+          "errors": { "type": "array", "items": { "type": "object" } },
+          "error": { "type": ["object", "null"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "warnings": { "type": "array", "items": { "type": "object" } },
+    "errors": { "type": "array", "items": { "type": "object" } },
     "packaging": { "type": "object" },
     "updatedUtc": { "type": "string", "format": "date-time" }
   },
-  "additionalProperties": true
+  "additionalProperties": false
 }

@@ -6,8 +6,9 @@ qualification. This document is normative where it uses **must**, **must not**,
 **required**, or **terminal**.
 
 Implemented in the candidate are the screenshot coordinator and the shared API
-service foundation for envelopes, idempotency, session identity, and journaling; the DevBench
-adapter and legacy-menu delegation, still and bounded sequence capture,
+service foundation for envelopes, idempotency, session identity, and journaling;
+the DevBench adapter, native service, obsolete-menu compatibility delegation,
+in-game control delegation, still and bounded sequence capture,
 multi-output/separate-eye processing, partial/final manifests, settings-schema
 migration, idempotency, acknowledgement, cancellation, and retention. Offline
 preview-video packaging remains capability-reported as unavailable. The test
@@ -21,12 +22,14 @@ scheduled frame sequences. It communicates validation, acceptance, source
 selection, fallback, staging, encoder progress, artifacts, partial results,
 failures, cancellation, and client acknowledgement.
 
-The first external adapter is the optional DevBench tool
-`communityshaders.screenshot`. The current `communityshaders.menu` screenshot
-action remains as a compatibility convenience and delegates to the same
-service. Screenshot and profiler methods are not added to the existing general
-CSX SKSE interface merely for automation. A future native consumer API can be a
-separate interface over the same internal service.
+External adapters are the optional DevBench tool
+`communityshaders.screenshot` and the native `csx.screenshot` service published
+through the `CSXR` registry. The old `communityshaders.menu` screenshot action
+is **obsolete**. It remains temporarily as a compatibility adapter so legacy
+clients can migrate, and delegates through that same native service. New
+clients must not use it. CSX's in-game capture controls also dispatch through
+the native service. Screenshot methods are not appended to the legacy general
+`CSAP` vtable.
 
 A sequence is complete when its frame artifacts and final manifest are safely
 written. Creating a playable video is an optional post-capture packaging step.
@@ -81,12 +84,19 @@ operation state.
    submits child frame captures without reserving future encoder slots.
 5. **RequestJournal** owns bounded request records and monotonically ordered
    events, including terminal receipts and client acknowledgements.
-6. **Adapters** translate UI/hotkey, DevBench JSON, and any future native API
+6. **Adapters** translate UI/hotkey, DevBench JSON, and the native CSXR service
    into the same coordinator commands.
 
 No adapter may reach into `ActiveCapture`, the encoder queue, or source hooks
 directly. UI and hotkey requests receive IDs and receipts too, even if they only
 surface a HUD message to the player.
+
+While a sequence is actively recording, CSX presents one red status dot at eye
+height, one eighth of the submitted eye width left of centre. In VR it is
+headset-locked (including the OpenComposite per-eye path), and it is composed
+only after the lossless source for that frame has been staged. It therefore
+remains visible without entering the saved frame set. Stop/finalize messages
+may use the ordinary HUD; no second recording overlay is drawn.
 
 ## Contract identity and versioning
 
@@ -97,7 +107,23 @@ surface a HUD message to the player.
 - Initial contract: major `1`, minor `0`
 - Schema URN: `urn:csx:devbench:screenshot:1`
 
-Every request except legacy menu delegation must include `contractMajor`.
+### Native discovery
+
+Native SKSE consumers request the `CSXR` registry described by
+`include/VRAPI/CSserviceapi.h`, then query `csx.screenshot` major 1 with the
+inspection, runtime-mutation, asynchronous-operation, and event-stream
+capabilities. `include/VRAPI/CSscreenshotapi.h` exposes one ABI-stable
+`Dispatch` function over this document's UTF-8 JSON contract.
+
+`Dispatch` validates or admits a request synchronously; calls from Papyrus or
+other native threads are marshalled to Skyrim's runtime main thread with a
+bounded wait. Capture, encoding, hashing, and sequence finalization remain
+asynchronous. The returned JSON bytes are owned by CSX and remain valid until
+the caller's next `Dispatch` on the same thread, so clients must copy them.
+Transport failures use `CSX::ScreenshotAPI::Status`; command rejection and
+operation state remain in the normal JSON response envelope.
+
+Every request must include `contractMajor`.
 Clients may include `contractMinor`; absence means zero. A major mismatch is a
 structured `unsupported_contract_version` error and must not perform work.
 
@@ -432,7 +458,10 @@ capability explicitly permits both.
 
 ### Destination safety
 
-- `settings_default` uses the frozen screenshot folder setting.
+- `settings_default` uses the frozen screenshot or frame-sequence folder
+  setting. Relative still paths resolve below
+  `Pictures\Community Shaders`; relative sequence paths resolve below
+  `Videos\Community Shaders`.
 - `game_relative` resolves under the canonical game directory.
 - `absolute` is accepted only when advertised and must be an absolute canonical
   path.
@@ -605,7 +634,7 @@ frames.
 The final manifest includes:
 
 - contract and CSX identities;
-- request/client IDs and tags;
+- request/client IDs and the accepted command identity;
 - requested and effective sequence/capture descriptors;
 - start/end times and frame counters;
 - scheduled, acquired, written, dropped, failed, and cancelled counts;
@@ -618,6 +647,13 @@ The final manifest includes:
 Large manifests remain on disk. DevBench receipts return counts, recent
 failures, and the manifest path; `request_get` supports paginated child summaries
 rather than returning thousands of frames in one MCP response.
+
+`requested`, `effective`, and `actual` are separate normative objects. A source
+or view fallback is therefore durable sequence evidence rather than an
+in-memory warning only. The schema requires child warning/error arrays and the
+actual view, dimensions, format, and colour contract for every committed frame
+artifact. A missing required final manifest is `failed` or `failed_partial`; it
+is never reported as completion with a warning.
 
 ### Optional video packaging
 
@@ -887,24 +923,54 @@ not become parent errors unless the selected failure policy says so.
 10. Disabling capture cancels acquisition and sequence scheduling; committed
     encoder work remains owned until terminal.
 
-## Compatibility behavior
+## Obsolete compatibility behavior
 
-The current `communityshaders.menu` action
-`{"action":"screenshot"}` delegates to `capture` with the current settings.
-For compatibility it retains its existing `action`, `path`, and menu `status`
-fields and adds `delegatedRequest` containing the screenshot request ID and
-acceptance receipt. New clients use `communityshaders.screenshot` directly.
+The old `communityshaders.menu` action `{"action":"screenshot"}` is obsolete
+and scheduled for removal after a migration window. While retained, it
+delegates to `capture` with the current settings. Its response preserves the
+existing `action`, `path`, and menu `status` fields, adds `delegatedRequest`
+containing the screenshot request ID and acceptance receipt, and adds explicit
+`deprecation` metadata naming `communityshaders.screenshot`, contract major 1,
+action `capture` as the replacement. New clients must use
+`communityshaders.screenshot` directly.
 
-`ScreenshotFeature::RequestCapture()` remains temporarily as a UI/hotkey
-adapter. It calls the coordinator and logs/HUD-reports rejection or terminal
-failure. New code must not use it when a receipt is required.
+An obsolete-action response includes migration metadata alongside its normal
+compatibility response:
 
-The public CSX SKSE interface remains unchanged in the first implementation.
-If a real mod consumer is identified, add a separately negotiated
-`IScreenshotInterface001` with opaque request handles, fixed-width POD types,
-caller-provided buffers, and explicit structure sizes. Do not append a broad
-screenshot surface to the upscaling-oriented interface without a consumer and
-ABI review.
+```json
+{
+  "action": "screenshot",
+  "delegatedRequest": { "ok": true, "request": { "requestId": "..." } },
+  "deprecation": {
+    "obsolete": true,
+    "message": "communityshaders.menu screenshot is obsolete; migrate to communityshaders.screenshot contractMajor 1",
+    "replacement": {
+      "tool": "communityshaders.screenshot",
+      "contractMajor": 1,
+      "action": "capture"
+    }
+  }
+}
+```
+
+Removal must not occur before at least one published migration release has
+carried this notice. Before removal, repeat the repository and automation-tool
+call-site audit for `communityshaders.menu` plus action `screenshot`, and record
+the removal in the release notes. Absence of known clients is not, by itself, a
+reason to skip the migration release.
+
+The native screenshot settings button and screenshot hotkey use
+`ScreenshotFeature::RequestUiCapture()`. That adapter dispatches through the
+same public `CSX::ScreenshotAPI::Interface001` entry point as native mods. It is
+not coupled to the obsolete menu action. Code requiring a receipt uses
+`RequestApiCapture()` and its returned JSON or calls the versioned service
+directly.
+
+The legacy general CSAP vtable remains unchanged. Screenshot consumers query
+the separately negotiated `csx.screenshot` service and use fixed-width POD
+transport structures plus UTF-8 JSON. Do not append a broad
+screenshot surface to the upscaling-oriented interface; screenshot evolves
+independently behind its own service major.
 
 ## Testing requirements
 

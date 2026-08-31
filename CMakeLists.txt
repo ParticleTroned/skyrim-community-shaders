@@ -240,7 +240,7 @@ target_compile_definitions(
     PRIVATE "$<$<BOOL:${TRACY_SUPPORT}>:TRACY_SUPPORT>"
 )
 if(WIN32)
-    target_link_libraries(${PROJECT_NAME} PRIVATE bcrypt)
+    target_link_libraries(${PROJECT_NAME} PRIVATE bcrypt shell32)
 endif()
 
 file(
@@ -1764,6 +1764,39 @@ if(BUILD_CONTROLLER_TESTS)
     add_test(NAME ApiServiceRegistry COMMAND api_service_registry_test)
     set_tests_properties(ApiServiceRegistry PROPERTIES LABELS "ControllerTests")
 
+	add_executable(
+		api_screenshot_contract_test
+		EXCLUDE_FROM_ALL
+		tests/api_screenshot_contract_test.cpp
+	)
+	target_compile_features(api_screenshot_contract_test PRIVATE cxx_std_23)
+	target_include_directories(
+		api_screenshot_contract_test
+		PRIVATE "${PROJECT_SOURCE_DIR}/include"
+	)
+	add_test(NAME ApiScreenshotContract COMMAND api_screenshot_contract_test)
+	set_tests_properties(ApiScreenshotContract PROPERTIES LABELS "ControllerTests")
+
+	add_executable(
+		main_thread_dispatch_state_test
+		EXCLUDE_FROM_ALL
+		tests/main_thread_dispatch_state_test.cpp
+	)
+	target_compile_features(main_thread_dispatch_state_test PRIVATE cxx_std_23)
+	target_include_directories(main_thread_dispatch_state_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+	add_test(NAME MainThreadDispatchState COMMAND main_thread_dispatch_state_test)
+	set_tests_properties(MainThreadDispatchState PROPERTIES LABELS "ControllerTests")
+
+	add_executable(
+		screenshot_api_policy_test
+		EXCLUDE_FROM_ALL
+		tests/screenshot_api_policy_test.cpp
+	)
+	target_compile_features(screenshot_api_policy_test PRIVATE cxx_std_23)
+	target_include_directories(screenshot_api_policy_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+	add_test(NAME ScreenshotApiPolicy COMMAND screenshot_api_policy_test)
+	set_tests_properties(ScreenshotApiPolicy PROPERTIES LABELS "ControllerTests")
+
     add_executable(
         api_upscaling_contract_test
         EXCLUDE_FROM_ALL
@@ -1918,6 +1951,7 @@ if(BUILD_CONTROLLER_TESTS)
             reflex_policy_test
             fsr_host_lifecycle_policy_test
             overlay_policy_test
+            performance_tuning_statistics_test
             shader_cache_disable_policy_test
             shader_cache_provenance_test
             cache_invalidation_test
@@ -1929,10 +1963,15 @@ if(BUILD_CONTROLLER_TESTS)
             vr_wand_interaction_policy_test
             vr_wand_surface_geometry_test
             vr_menu_positioning_policy_test
+            menu_devbench_preflight_policy_test
             water_appearance_migration_test
+            generation_claim_test
             api_runtime_thread_affinity_test
             api_service_foundation_test
             api_service_registry_test
+			api_screenshot_contract_test
+			main_thread_dispatch_state_test
+			screenshot_api_policy_test
             api_upscaling_contract_test
             api_upscaling_service_policy_test
             api_shader_service_policy_test

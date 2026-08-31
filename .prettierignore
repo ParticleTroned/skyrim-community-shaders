@@ -3,3 +3,8 @@ extern/
 include/
 build/
 dist/
+
+# Deterministic output owned by tools/generate-unified-presets.ps1
+docs/development/generated-unified-preset-report.json
+docs/development/unified-preset-templates/Base.SettingsUser.json
+MGO-Presets/CSX Unified-*/SKSE/Plugins/CommunityShaders/SettingsUser.json

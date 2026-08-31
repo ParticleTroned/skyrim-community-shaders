@@ -68,20 +68,6 @@
     "Water": true
   },
   "Version": "CSX 3.19-VR",
-  "Preset Compatibility": {
-    "contractVersion": 1,
-    "presetId": "csx-unified-performance",
-    "presetVersion": "d2026.08.30.2",
-    "target": {
-      "runtime": "VR",
-      "minimumVersion": "3.19",
-      "maximumVersionExclusive": "3.20"
-    },
-    "settingsContract": {
-      "revision": 4,
-      "sourceTreeSha256": "33E60CC203260F9CB677F0C1D39AF8C2BA2F75DC1D2D2A83C6CF92F4B1173D38"
-    }
-  },
   "Upscaling": {
     "dlssPreset": 1,
     "dlssSharpener": 1,
@@ -105,7 +91,7 @@
     "periphery_taa_outer_scale": 0.800000011920929,
     "pipelineDiagnostics": false,
     "pipelineDiagnosticsStructured": false,
-    "qualityMode": 4,
+    "qualityMode": 3,
     "qualityModeSchemaVersion": 2,
     "reflexFPSLimit": 60.0,
     "reflexLowLatencyBoost": false,
@@ -296,7 +282,7 @@
     "DepthCullingLegacyMode": false,
     "DepthCullingPerformanceMode": false,
     "EnableDepthBufferCullingExterior": true,
-    "EnableDepthBufferCullingInterior": false,
+    "EnableDepthBufferCullingInterior": true,
     "EnableDragToReposition": false,
     "EnableDynamicCubemapFoveation": true,
     "EnableDynamicCubemapVisibilityThrottle": false,
@@ -362,7 +348,7 @@
     "mouseSpeed": 10.0
   },
   "Weather Picker": {
-    "Enabled": true,
+    "Enabled": false,
     "Position": [
       50.0,
       50.0
@@ -372,21 +358,21 @@
   },
   "Hair Specular": {
     "BaseColorMult": 0.81,
-    "DiffuseIndirectMult": 0.7,
+    "DiffuseIndirectMult": 0.699999988079071,
     "DiffuseMult": 1.02,
     "EnableSelfShadow": 1,
     "EnableTangentShift": 1,
     "Enabled": 1,
     "HairGlossiness": 70.0,
     "HairMode": 1,
-    "HairSaturation": 0.8,
+    "HairSaturation": 0.800000011920929,
     "PrimaryTangentShift": 0.5,
     "SecondaryTangentShift": -0.25,
-    "SelfShadowExponent": 0.1,
+    "SelfShadowExponent": 0.10000000149011612,
     "SelfShadowScale": 2.5,
     "SelfShadowStrength": 1.0,
     "SpecularIndirectMult": 3.0,
-    "SpecularMult": 1.38,
+    "SpecularMult": 1.3799999952316284,
     "Transmission": 1.0
   },
   "Subsurface Scattering": {
@@ -445,7 +431,7 @@
     "SSMode": 1
   },
   "Grass Collision": {
-    "EnableGrassCollision": false,
+    "EnableGrassCollision": true,
     "TrackRagdolls": true
   },
   "Grass Lighting": {
@@ -895,7 +881,7 @@
     "NormalDisocclusion": 0.10000000149011612,
     "NumSlices": 3,
     "NumSteps": 6,
-    "ResolutionMode": 2,
+    "ResolutionMode": 1,
     "ResourceProfile": 1,
     "Thickness": 32.0,
     "UseStereoReproject": false,
@@ -910,18 +896,18 @@
     "ShadowContrast": 1.0,
     "SurfaceThickness": 0.019999999552965164,
     "UseStereoReproject": false,
-    "VRBaseSamplesAtReference": 16.0,
+    "VRBaseSamplesAtReference": 30.0,
     "VRCullDistance": 20480.0
   },
   "Skylighting": {
     "EnableFastProbeSampling": true,
     "EnableIncrementalProbeUpdates": true,
     "EnableReducedUpdateFrequency": true,
-    "EnableSkylighting": false,
+    "EnableSkylighting": true,
     "IncludeMarkedRoofOccluders": true,
     "MaxZenith": 1.570796251296997,
     "MinDiffuseVisibility": 0.10000000149011612,
-    "MinSpecularVisibility": 0.0500000007450581,
+    "MinSpecularVisibility": 0.100000001490116,
     "OcclusionUpdateInterval": 8,
     "ProbeFieldSize": 10240.0,
     "ProbeGridQuality": 0,
@@ -1019,7 +1005,7 @@
   "Terrain Blending": {
     "BlendStrength": 0.5,
     "Enabled": 1,
-    "TerrainCullDistance": 725.0
+    "TerrainCullDistance": 1024.0
   },
   "Terrain Helper": {
     "EnableTerrainHelper": true
@@ -1078,7 +1064,7 @@
     "EnableSplashes": 1,
     "EnableVanillaReflectionCompensation": 1,
     "EnableWeatherDrivenDryingModel": true,
-    "EnableWetterness": 0,
+    "EnableWetterness": 1,
     "GrassDryingMultiplier": 3.0,
     "LegacyWetIndirectSpecularScale": 0.5,
     "MaxPuddleWetness": 2.5,

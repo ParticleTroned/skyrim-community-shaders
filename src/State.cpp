@@ -43,6 +43,7 @@
 #include "Features/WetnessEffects.h"
 #include "Features/Wetterness.h"
 #include "Menu.h"
+#include "PresetCompatibility.h"
 #include "Profiler.h"
 #include "SceneSettingsManager.h"
 #include "SettingsMigrations.h"
@@ -1089,41 +1090,59 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 		json userSettings;
 		const auto userResult = tryLoadConfig(configPath, userSettings);
 		if (userResult == Util::FileHelpers::JsonFileReadResult::Success) {
-			if (canonicalizeConfig(configPath, userSettings) == SettingsSerialization::CanonicalizationResult::Error)
+			auto presetCompatibility = PresetCompatibility::Evaluate(userSettings, Plugin::VERSION_LABEL);
+			PresetCompatibility::Publish(presetCompatibility);
+			if (!presetCompatibility.ShouldApply()) {
 				sourceConfigSafeForAutomaticSave = false;
-			const auto adaptiveBalanceIt = userSettings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
-			const auto legacyAdaptiveBrightnessIt =
-				userSettings.find(SettingsMigrations::kLegacyAdaptiveBrightnessSettingsName.data());
-			const bool userDefinedAdaptiveBalance =
-				(adaptiveBalanceIt != userSettings.end() && adaptiveBalanceIt->is_object()) ||
-				(legacyAdaptiveBrightnessIt != userSettings.end() && legacyAdaptiveBrightnessIt->is_object());
-			SettingsMigrations::MigrateAdaptiveBalanceRootLayer(userSettings, true);
-			if (const auto sourceAdaptiveIt = userSettings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
-				sourceAdaptiveIt != userSettings.end() && SettingsMigrations::HasForcedLegacyWaterAppearance(*sourceAdaptiveIt)) {
-				if (auto targetAdaptiveIt = settings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
-					targetAdaptiveIt != settings.end())
-					SettingsMigrations::ClearExplicitAdaptiveBalanceWaterProfiles(*targetAdaptiveIt);
-			}
-			if (auto adaptiveIt = userSettings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
-				adaptiveIt != userSettings.end())
-				SettingsMigrations::MarkExplicitAdaptiveBalanceWaterProfiles(*adaptiveIt);
-			for (const auto& [key, value] : userSettings.items()) {
-				auto existingIt = settings.find(key);
-				if (!userDefinedAdaptiveBalance &&
-					key == SettingsMigrations::kAdaptiveBalanceSettingsName &&
-					existingIt != settings.end() && existingIt->is_object() && value.is_object()) {
-					// Migration can synthesize a partial destination section in an
-					// otherwise-CSUtility-only user file. Overlay that patch so it does
-					// not replace richer Adaptive Balance defaults from Settings.json.
-					existingIt->merge_patch(value);
-				} else {
-					settings[key] = value;
+				logger::error(
+					"Rejected user settings without modifying {}: {}",
+					configPath.string(),
+					presetCompatibility.message);
+			} else {
+				if (presetCompatibility.disposition == PresetCompatibility::Disposition::kCompatible)
+					logger::info("Accepted marked preset: {}", presetCompatibility.message);
+				if (canonicalizeConfig(configPath, userSettings) == SettingsSerialization::CanonicalizationResult::Error)
+					sourceConfigSafeForAutomaticSave = false;
+				const auto adaptiveBalanceIt = userSettings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+				const auto legacyAdaptiveBrightnessIt =
+					userSettings.find(SettingsMigrations::kLegacyAdaptiveBrightnessSettingsName.data());
+				const bool userDefinedAdaptiveBalance =
+					(adaptiveBalanceIt != userSettings.end() && adaptiveBalanceIt->is_object()) ||
+					(legacyAdaptiveBrightnessIt != userSettings.end() && legacyAdaptiveBrightnessIt->is_object());
+				SettingsMigrations::MigrateAdaptiveBalanceRootLayer(userSettings, true);
+				if (const auto sourceAdaptiveIt = userSettings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+					sourceAdaptiveIt != userSettings.end() && SettingsMigrations::HasForcedLegacyWaterAppearance(*sourceAdaptiveIt)) {
+					if (auto targetAdaptiveIt = settings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+						targetAdaptiveIt != settings.end())
+						SettingsMigrations::ClearExplicitAdaptiveBalanceWaterProfiles(*targetAdaptiveIt);
 				}
+				if (auto adaptiveIt = userSettings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+					adaptiveIt != userSettings.end())
+					SettingsMigrations::MarkExplicitAdaptiveBalanceWaterProfiles(*adaptiveIt);
+				for (const auto& [key, value] : userSettings.items()) {
+					auto existingIt = settings.find(key);
+					if (!userDefinedAdaptiveBalance &&
+						key == SettingsMigrations::kAdaptiveBalanceSettingsName &&
+						existingIt != settings.end() && existingIt->is_object() && value.is_object()) {
+						// Migration can synthesize a partial destination section in an
+						// otherwise-CSUtility-only user file. Overlay that patch so it does
+						// not replace richer Adaptive Balance defaults from Settings.json.
+						existingIt->merge_patch(value);
+					} else {
+						settings[key] = value;
+					}
+				}
+				logger::info("Applied user settings from: {}", configPath.string());
 			}
-			logger::info("Applied user settings from: {}", configPath.string());
 		} else if (userResult == Util::FileHelpers::JsonFileReadResult::NotFound) {
+			PresetCompatibility::Publish(PresetCompatibility::Evaluate(json::object(), Plugin::VERSION_LABEL));
 			logger::info("No user config file found at: {}", configPath.string());
 		} else {
+			PresetCompatibility::Evaluation evaluation;
+			evaluation.disposition = PresetCompatibility::Disposition::kRejected;
+			evaluation.currentVersion = std::string{ Plugin::VERSION_LABEL };
+			evaluation.message = "SettingsUser.json is unreadable; defaults remain active and the source file is protected from overwrite.";
+			PresetCompatibility::Publish(std::move(evaluation));
 			sourceConfigSafeForAutomaticSave = false;
 		}
 	}
@@ -1440,6 +1459,16 @@ bool State::Save(ConfigMode a_configMode)
 			globals::menu->ReportSettingsSaveResult(false, std::move(a_userMessage));
 		return false;
 	};
+	if (a_configMode == ConfigMode::USER) {
+		const auto compatibility = PresetCompatibility::GetPublished();
+		if (!compatibility.ShouldApply()) {
+			return reportFailure(
+				std::format("Refusing to overwrite rejected user settings: {}", compatibility.message),
+				std::format(
+					"Settings were not saved because SettingsUser.json was rejected: {} Replace or remove that file, then reload CSX.",
+					compatibility.message));
+		}
+	}
 	json settings = json::object();
 
 	// Seed every save with its existing JSON so settings belonging to an unavailable

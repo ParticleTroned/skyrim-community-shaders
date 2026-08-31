@@ -7,6 +7,7 @@
 -   [VR depth-culling temporal policy](vr-depth-culling-temporal-policy.md) — bounded recovery for one-frame-late Skyrim VR OBB results.
 -   [VR depth-culling evidence](vr-depth-culling-temporal-evidence.md) — source history, live Skyrim VR layout evidence, and exact local validation.
 -   [API service registry](api-service-registry.md) — parallel versioned service discovery while retaining the legacy CSAP interface.
+-   [Screenshot API and sequences](screenshot-api-and-sequences.md) — asynchronous still/sequence contract, native CSXR discovery, receipts, events, and manifests.
 -   [Shader API v1](api-shader-v1.md) — versioned inspection, feature-state, compilation, and cache-lifecycle controls with preflight safety.
 
 ## Getting Started

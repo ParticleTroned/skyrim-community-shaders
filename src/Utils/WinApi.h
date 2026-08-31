@@ -1,5 +1,8 @@
 #pragma once
 
+#include <filesystem>
+#include <optional>
+
 namespace Util
 {
 	std::optional<REL::Version> GetDllVersion(const std::wstring& dllPath);
@@ -17,4 +20,8 @@ namespace Util
 
 	/// Applies the process-class-aware cooperative priority to the calling thread.
 	bool SetCurrentThreadCooperativeBackgroundPriority();
+
+	/** Windows user-owned capture roots; unavailable only when shell discovery fails. */
+	std::optional<std::filesystem::path> GetPicturesPath();
+	std::optional<std::filesystem::path> GetVideosPath();
 }  // namespace Util

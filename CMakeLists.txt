@@ -1906,6 +1906,7 @@ if(BUILD_CONTROLLER_TESTS)
             reflex_policy_test
             fsr_host_lifecycle_policy_test
             overlay_policy_test
+            performance_tuning_statistics_test
             shader_cache_disable_policy_test
             shader_cache_provenance_test
             cache_invalidation_test
@@ -1917,7 +1918,9 @@ if(BUILD_CONTROLLER_TESTS)
             vr_wand_interaction_policy_test
             vr_wand_surface_geometry_test
             vr_menu_positioning_policy_test
+            menu_devbench_preflight_policy_test
             water_appearance_migration_test
+            generation_claim_test
             api_runtime_thread_affinity_test
             api_service_foundation_test
             api_service_registry_test

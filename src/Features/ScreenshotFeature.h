@@ -75,7 +75,7 @@ struct ScreenshotFeature : public Feature
 	bool HasPendingCapture() const noexcept { return capturePending.load(std::memory_order_acquire); }
 	/** Returns whether the pending capture consumes the desktop backbuffer. */
 	bool HasPendingDesktopMirrorCapture() const;
-	std::size_t GetOutstandingArtifactCount() const;
+	std::size_t GetOutstandingCaptureJobCount() const;
 	std::string GetActiveCaptureRequestId() const;
 	/**
 	 * Observes one texture from a successful, screenshot-eligible OpenVR Submit.
@@ -83,6 +83,8 @@ struct ScreenshotFeature : public Feature
 	 */
 	void ObserveAcceptedVRSubmit(
 		uint64_t a_compositorCycleToken,
+		uint64_t a_publicationGeneration,
+		std::uintptr_t a_deviceIdentity,
 		vr::EVREye a_eye,
 		ID3D11Texture2D* a_texture,
 		const vr::VRTextureBounds_t* a_bounds,
@@ -127,6 +129,13 @@ private:
 		DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
 		uint32_t width = 0;
 		uint32_t height = 0;
+		uint32_t sourceWidth = 0;
+		uint32_t sourceHeight = 0;
+		uint32_t eyeIndex = 0;
+		uint64_t publicationGeneration = 0;
+		std::uintptr_t deviceIdentity = 0;
+		std::array<float, 4> submittedBounds{ 0.0f, 0.0f, 1.0f, 1.0f };
+		bool boundsApplied = false;
 		bool flipHorizontal = false;
 		bool flipVertical = false;
 		bool tonemapSceneHdr = false;
@@ -215,6 +224,16 @@ private:
 		std::chrono::steady_clock::time_point sourceDeadline{};
 	};
 
+	enum class CaptureStartResult : uint8_t
+	{
+		Started,
+		SourceBusy,
+		EncoderBackpressure,
+		FeatureDisabled,
+		SourceUnavailable,
+		InvalidDescriptor
+	};
+
 	struct ReadbackContextProtection
 	{
 		winrt::com_ptr<ID3D11DeviceContext> context;
@@ -263,6 +282,11 @@ private:
 	bool TryReserveScreenshotSlot();
 	void ReleaseScreenshotSlot();
 	static void ReleaseScreenshotSlot(const std::shared_ptr<ScreenshotWorkerState>& a_state);
+	static nlohmann::json BuildAcquisitionRecord(
+		const PendingScreenshot& a_screenshot,
+		std::string_view a_sourceKind,
+		uint64_t a_engineFrame,
+		std::optional<uint64_t> a_compositorCycle);
 	void StopWorkerThread();
 	static void ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerState> a_state);
 	void SourceDeadlineLoop(std::stop_token a_stopToken);
@@ -275,6 +299,8 @@ private:
 		uint32_t a_eyeIndex,
 		vr::EColorSpace a_colorSpace,
 		bool a_tonemapSceneHdr,
+		uint64_t a_publicationGeneration,
+		std::uintptr_t a_deviceIdentity,
 		StagedPlane& a_plane);
 	bool QueueDesktopCapture(
 		IDXGISwapChain* a_swapChain,
@@ -282,7 +308,7 @@ private:
 		bool a_ownsQueueSlot);
 	void ClearActiveCapture(ActiveCapture& a_capture);
 	void FallBackToDesktopCapture(ActiveCapture& a_capture, std::string_view a_reason);
-	bool TryStartApiCapture(
+	CaptureStartResult TryStartApiCapture(
 		std::string a_requestId,
 		const nlohmann::json& a_effectiveDescriptor,
 		std::string a_parentRequestId = {},

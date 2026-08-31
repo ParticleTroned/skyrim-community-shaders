@@ -296,7 +296,8 @@ The response includes at least:
   },
   "limits": {
     "activeSourceCaptures": 1,
-    "outstandingArtifacts": 2,
+    "outstandingCaptureJobs": 2,
+    "maximumOutputsPerCaptureJob": 4,
     "pendingOperations": 64,
     "maximumOutputsPerFrame": 4,
     "maximumSequenceFrames": 10000,
@@ -309,7 +310,7 @@ The response includes at least:
 ```
 
 These numbers are examples, not frozen limits. The implementation reports its
-actual values. The present worker's two-outstanding-artifact limit may remain
+actual values. The present worker's two-outstanding-capture-job limit may remain
 initially; a sequence scheduler must adapt rather than enlarge it blindly.
 
 ### Operational status
@@ -334,12 +335,14 @@ worker backlog, and journal retention without initiating work:
   "dispatcher": {
     "activeAcquisitionRequestId": null,
     "pendingOperations": 0,
+    "queuedManualCaptures": 0,
+    "queuedSequenceFrames": 0,
     "activeSequences": 0
   },
   "worker": {
     "running": true,
-    "outstandingArtifacts": 0,
-    "capacity": 2,
+    "outstandingCaptureJobs": 0,
+    "captureJobCapacity": 2,
     "completedArtifacts": 18,
     "failedArtifacts": 0
   },

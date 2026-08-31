@@ -9,6 +9,12 @@
 
 namespace CSX::ScreenshotPolicy
 {
+	enum class DispatchClass : std::uint8_t
+	{
+		None,
+		Manual,
+		Sequence
+	};
 	inline constexpr std::uint32_t MaximumPendingOperations = 64;
 	inline constexpr std::uint32_t MaximumOutputsPerFrame = 4;
 	inline constexpr std::uint32_t MaximumSequenceDurationMs = 3'600'000;
@@ -34,6 +40,40 @@ namespace CSX::ScreenshotPolicy
 	inline bool CanStartWorker(bool a_accepting, bool a_joinable)
 	{
 		return a_accepting && !a_joinable;
+	}
+
+	inline std::uint8_t RequiredEyeMask(std::string_view a_view)
+	{
+		if (a_view == "left_eye" || a_view == "framed_left")
+			return 0x1;
+		if (a_view == "right_eye" || a_view == "framed_right")
+			return 0x2;
+		return 0x3;
+	}
+
+	inline DispatchClass SelectDispatchClass(
+		bool a_hasManual,
+		bool a_hasSequence,
+		bool a_preferManual)
+	{
+		if (a_hasManual && a_hasSequence)
+			return a_preferManual ? DispatchClass::Manual : DispatchClass::Sequence;
+		if (a_hasManual)
+			return DispatchClass::Manual;
+		if (a_hasSequence)
+			return DispatchClass::Sequence;
+		return DispatchClass::None;
+	}
+
+	inline bool IsSamePublication(
+		std::uint64_t a_leftGeneration,
+		std::uintptr_t a_leftDevice,
+		std::uint64_t a_rightGeneration,
+		std::uintptr_t a_rightDevice)
+	{
+		return a_leftGeneration != 0 && a_leftDevice != 0 &&
+		       a_leftGeneration == a_rightGeneration &&
+		       a_leftDevice == a_rightDevice;
 	}
 
 	inline bool IsContainedPath(

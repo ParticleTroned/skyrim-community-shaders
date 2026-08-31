@@ -240,7 +240,7 @@ jobs:
                   echo "body_file=auto-release-notes.md" >> $GITHUB_OUTPUT
                   echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
 
-            - name: Build manual four-cache FOMOD AIO
+            - name: Build managed-cache FOMOD AIO
               shell: pwsh
               env:
                   RELEASE_TAG: ${{ steps.combined_notes.outputs.release_tag }}
@@ -348,9 +348,17 @@ jobs:
                           'fomod/ModuleConfig.xml',
                           'fomod/info.xml',
                           'ShaderCache-VR/ShaderCache/Info.ini',
-                          'ShaderCache-VR-HorizonFix/ShaderCache/Info.ini',
+                          'ShaderCache-VR/ShaderCache/PackManifest.json',
+                          'ShaderCache-VR/ShaderCache/Optimized.A.csxpack',
+                          'ShaderCache-VR/ShaderCache/Optimized.B.csxpack',
+                          'ShaderCache-VR/ShaderCache/Developer.A.csxpack',
+                          'ShaderCache-VR/ShaderCache/Developer.B.csxpack',
                           'ShaderCache-SE-AE/ShaderCache/Info.ini',
-                          'ShaderCache-SE-AE-HorizonFix/ShaderCache/Info.ini'
+                          'ShaderCache-SE-AE/ShaderCache/PackManifest.json',
+                          'ShaderCache-SE-AE/ShaderCache/Optimized.A.csxpack',
+                          'ShaderCache-SE-AE/ShaderCache/Optimized.B.csxpack',
+                          'ShaderCache-SE-AE/ShaderCache/Developer.A.csxpack',
+                          'ShaderCache-SE-AE/ShaderCache/Developer.B.csxpack'
                       )) {
                           if ($required -notin $entries) {
                               throw "FOMOD archive is missing $required."
@@ -371,7 +379,7 @@ jobs:
                           throw
                       }
                       Remove-Item -LiteralPath $backup -Force
-                      Write-Host "Replaced $($aio.Name) with the manual four-cache FOMOD AIO."
+                      Write-Host "Replaced $($aio.Name) with the managed-cache FOMOD AIO."
                   } finally {
                       if (Test-Path -LiteralPath $candidate) {
                           Remove-Item -LiteralPath $candidate -Force

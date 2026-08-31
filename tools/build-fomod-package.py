@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Stage the release AIO with four manually selected shader caches.
+"""Stage the release AIO with one managed shader cache per runtime.
 
 The caller supplies extracted AIO, SE, and VR archive roots. Each runtime
-archive must contain both ``ShaderCache`` and ``ShaderCache-HorizonFix``.
-The staged result installs the AIO unconditionally and uses two manual FOMOD
-pages to select a runtime and, when a runtime is selected, a Horizon Fix state.
+archive must contain one ``ShaderCache`` whose managed pack contains all
+supported compatibility variants. The staged result installs the AIO
+unconditionally and uses one manual FOMOD page to select a runtime.
 
 No game version, DLL, marker, settings file, or mod-manager state is inspected.
 """
@@ -12,7 +12,6 @@ No game version, DLL, marker, settings file, or mod-manager state is inspected.
 from __future__ import annotations
 
 import argparse
-import configparser
 import json
 import shutil
 import sys
@@ -23,20 +22,23 @@ from pathlib import Path
 
 CORE_DIRECTORY = "Core"
 CACHE_DIRECTORY = "ShaderCache"
-HORIZON_CACHE_DIRECTORY = "ShaderCache-HorizonFix"
 FOMOD_DIRECTORY = "fomod"
 MODULE_CONFIG_FILE = "ModuleConfig.xml"
 INFO_FILE = "info.xml"
 MANIFEST_FILE = "Manifest.json"
+PACK_MANIFEST_FILE = "PackManifest.json"
+PACK_FILES = (
+    "Optimized.A.csxpack",
+    "Optimized.B.csxpack",
+    "Developer.A.csxpack",
+    "Developer.B.csxpack",
+)
 CACHE_INFO_FILE = "Info.ini"
 
 RUNTIME_FLAG = "CSXRuntime"
-HORIZON_FLAG = "CSXHorizonFix"
 RUNTIME_VR = "VR"
 RUNTIME_SE_AE = "SE-AE"
 RUNTIME_NONE = "None"
-HORIZON_INSTALLED = "Installed"
-HORIZON_NOT_INSTALLED = "NotInstalled"
 
 MODULE_NAME = "Community Shaders Expanded AIO"
 MODULE_AUTHOR = "Community Shaders Expanded Contributors"
@@ -48,35 +50,17 @@ MODULE_WEBSITE = (
 @dataclass(frozen=True)
 class CacheVariant:
     runtime: str
-    horizon_state: str
-    runtime_source: str
     staging_directory: str
 
 
 CACHE_VARIANTS = (
     CacheVariant(
         RUNTIME_VR,
-        HORIZON_NOT_INSTALLED,
-        CACHE_DIRECTORY,
         "ShaderCache-VR",
     ),
     CacheVariant(
-        RUNTIME_VR,
-        HORIZON_INSTALLED,
-        HORIZON_CACHE_DIRECTORY,
-        "ShaderCache-VR-HorizonFix",
-    ),
-    CacheVariant(
         RUNTIME_SE_AE,
-        HORIZON_NOT_INSTALLED,
-        CACHE_DIRECTORY,
         "ShaderCache-SE-AE",
-    ),
-    CacheVariant(
-        RUNTIME_SE_AE,
-        HORIZON_INSTALLED,
-        HORIZON_CACHE_DIRECTORY,
-        "ShaderCache-SE-AE-HorizonFix",
     ),
 )
 
@@ -88,13 +72,13 @@ def parse_args() -> argparse.Namespace:
         "--se-cache",
         required=True,
         type=Path,
-        help="Extracted SE archive root containing both cache variants.",
+        help="Extracted SE archive root containing one managed cache.",
     )
     parser.add_argument(
         "--vr-cache",
         required=True,
         type=Path,
-        help="Extracted VR archive root containing both cache variants.",
+        help="Extracted VR archive root containing one managed cache.",
     )
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--version", required=True)
@@ -189,41 +173,6 @@ def build_module_config() -> ET.ElementTree:
         value=RUNTIME_NONE,
     )
 
-    horizon_step, horizon_plugins = add_selection_page(
-        install_steps,
-        name="Choose the Horizon Fix state",
-        group_name="Horizon Fix installation",
-    )
-    visible = ET.Element("visible")
-    visible_dependencies = ET.SubElement(
-        visible, "dependencies", {"operator": "Or"}
-    )
-    ET.SubElement(
-        visible_dependencies,
-        "flagDependency",
-        {"flag": RUNTIME_FLAG, "value": RUNTIME_VR},
-    )
-    ET.SubElement(
-        visible_dependencies,
-        "flagDependency",
-        {"flag": RUNTIME_FLAG, "value": RUNTIME_SE_AE},
-    )
-    horizon_step.insert(0, visible)
-    add_option(
-        horizon_plugins,
-        name="Horizon Fix installed",
-        description="Use the cache compiled with Horizon Fix compatibility.",
-        flag=HORIZON_FLAG,
-        value=HORIZON_INSTALLED,
-    )
-    add_option(
-        horizon_plugins,
-        name="Horizon Fix not installed",
-        description="Use the standard cache compiled without Horizon Fix.",
-        flag=HORIZON_FLAG,
-        value=HORIZON_NOT_INSTALLED,
-    )
-
     conditional_installs = ET.SubElement(root, "conditionalFileInstalls")
     patterns = ET.SubElement(conditional_installs, "patterns")
     for variant in CACHE_VARIANTS:
@@ -233,11 +182,6 @@ def build_module_config() -> ET.ElementTree:
             dependencies,
             "flagDependency",
             {"flag": RUNTIME_FLAG, "value": variant.runtime},
-        )
-        ET.SubElement(
-            dependencies,
-            "flagDependency",
-            {"flag": HORIZON_FLAG, "value": variant.horizon_state},
         )
         files = ET.SubElement(pattern, "files")
         ET.SubElement(
@@ -272,23 +216,17 @@ def build_info(version: str) -> ET.ElementTree:
     return ET.ElementTree(root)
 
 
-def read_horizon_state(cache_directory: Path) -> bool:
-    info = configparser.ConfigParser(interpolation=None)
-    info_path = cache_directory / CACHE_INFO_FILE
-    try:
-        with info_path.open("r", encoding="utf-8-sig") as stream:
-            info.read_file(stream)
-        return info.getboolean("HorizonFix", "Enabled")
-    except (configparser.Error, OSError, UnicodeError, ValueError) as exc:
-        raise SystemExit(f"invalid cache metadata {info_path}: {exc}") from exc
-
-
-def validate_cache_source(cache_directory: Path, expect_horizon: bool) -> None:
+def validate_cache_source(cache_directory: Path) -> None:
     manifest_path = cache_directory / MANIFEST_FILE
+    pack_manifest_path = cache_directory / PACK_MANIFEST_FILE
     if not cache_directory.is_dir():
         raise SystemExit(f"missing shader cache directory: {cache_directory}")
+    if not (cache_directory / CACHE_INFO_FILE).is_file():
+        raise SystemExit(f"missing shader cache metadata: {cache_directory / CACHE_INFO_FILE}")
     if not manifest_path.is_file():
         raise SystemExit(f"missing shader cache manifest: {manifest_path}")
+    if not pack_manifest_path.is_file():
+        raise SystemExit(f"missing managed pack manifest: {pack_manifest_path}")
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
@@ -301,10 +239,24 @@ def validate_cache_source(cache_directory: Path, expect_horizon: bool) -> None:
         or not isinstance(manifest.get("entries"), dict)
     ):
         raise SystemExit(f"unsupported shader cache manifest: {manifest_path}")
-    if read_horizon_state(cache_directory) is not expect_horizon:
-        expected = "enabled" if expect_horizon else "disabled"
+    try:
+        pack_manifest = json.loads(pack_manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"invalid managed pack manifest {pack_manifest_path}: {exc}") from exc
+    if (
+        not isinstance(pack_manifest, dict)
+        or pack_manifest.get("schema") != "csx.shader-cache.pack-manifest"
+        or pack_manifest.get("schemaVersion") != 1
+        or pack_manifest.get("formatVersion") != 1
+        or not isinstance(pack_manifest.get("compatibilityVariants"), list)
+        or "default" not in pack_manifest["compatibilityVariants"]
+    ):
+        raise SystemExit(f"unsupported managed pack manifest: {pack_manifest_path}")
+    missing_packs = [name for name in PACK_FILES if not (cache_directory / name).is_file()]
+    if missing_packs:
         raise SystemExit(
-            f"cache {cache_directory} must record Horizon Fix {expected}"
+            f"managed shader cache {cache_directory} is missing pack files: "
+            + ", ".join(missing_packs)
         )
 
 
@@ -371,8 +323,8 @@ def validate_module_config(config_path: Path) -> None:
         raise SystemExit("FOMOD must install the complete AIO Core directory")
 
     steps = root.findall("./installSteps/installStep")
-    if len(steps) != 2:
-        raise SystemExit("FOMOD must contain exactly two manual selection pages")
+    if len(steps) != 1:
+        raise SystemExit("FOMOD must contain exactly one manual runtime page")
 
     expected_pages = (
         (
@@ -381,17 +333,6 @@ def validate_module_config(config_path: Path) -> None:
                 ("Skyrim VR", RUNTIME_FLAG, RUNTIME_VR),
                 ("Skyrim SE/AE", RUNTIME_FLAG, RUNTIME_SE_AE),
                 ("No prebuilt shader cache", RUNTIME_FLAG, RUNTIME_NONE),
-            ),
-        ),
-        (
-            "Choose the Horizon Fix state",
-            (
-                ("Horizon Fix installed", HORIZON_FLAG, HORIZON_INSTALLED),
-                (
-                    "Horizon Fix not installed",
-                    HORIZON_FLAG,
-                    HORIZON_NOT_INSTALLED,
-                ),
             ),
         ),
     )
@@ -427,16 +368,9 @@ def validate_module_config(config_path: Path) -> None:
         if any(plugin.find("./files") is not None for plugin in plugins):
             raise SystemExit("manual FOMOD choices must set flags, not install files")
 
-    visible = steps[1].find("./visible/dependencies")
-    if visible is None or visible.get("operator") != "Or" or flag_pairs(visible) != (
-        (RUNTIME_FLAG, RUNTIME_VR),
-        (RUNTIME_FLAG, RUNTIME_SE_AE),
-    ):
-        raise SystemExit("Horizon Fix page must be hidden when no cache is selected")
-
     patterns = root.findall("./conditionalFileInstalls/patterns/pattern")
     if len(patterns) != len(CACHE_VARIANTS):
-        raise SystemExit("FOMOD must contain exactly four cache install patterns")
+        raise SystemExit("FOMOD must contain exactly two cache install patterns")
     actual_mappings: dict[tuple[tuple[str, str], ...], tuple[str, str, str]] = {}
     for pattern in patterns:
         dependencies = pattern.find("./dependencies")
@@ -455,10 +389,7 @@ def validate_module_config(config_path: Path) -> None:
         )
 
     expected_mappings = {
-        (
-            (RUNTIME_FLAG, variant.runtime),
-            (HORIZON_FLAG, variant.horizon_state),
-        ): (
+        ((RUNTIME_FLAG, variant.runtime),): (
             f"{variant.staging_directory}/{CACHE_DIRECTORY}",
             CACHE_DIRECTORY,
             "0",
@@ -466,7 +397,7 @@ def validate_module_config(config_path: Path) -> None:
         for variant in CACHE_VARIANTS
     }
     if actual_mappings != expected_mappings:
-        raise SystemExit("FOMOD does not map all four manual cache combinations")
+        raise SystemExit("FOMOD does not map both managed runtime caches")
 
 
 def validate_staged_package(output: Path, version: str) -> None:
@@ -474,10 +405,7 @@ def validate_staged_package(output: Path, version: str) -> None:
         raise SystemExit("staged FOMOD is missing its AIO Core directory")
     for variant in CACHE_VARIANTS:
         cache_directory = output / variant.staging_directory / CACHE_DIRECTORY
-        validate_cache_source(
-            cache_directory,
-            expect_horizon=variant.horizon_state == HORIZON_INSTALLED,
-        )
+        validate_cache_source(cache_directory)
 
     fomod_directory = output / FOMOD_DIRECTORY
     validate_module_config(fomod_directory / MODULE_CONFIG_FILE)
@@ -517,11 +445,8 @@ def stage_package(
     runtime_roots = {RUNTIME_SE_AE: se_cache, RUNTIME_VR: vr_cache}
     sources: dict[CacheVariant, Path] = {}
     for variant in CACHE_VARIANTS:
-        source = runtime_roots[variant.runtime] / variant.runtime_source
-        validate_cache_source(
-            source,
-            expect_horizon=variant.horizon_state == HORIZON_INSTALLED,
-        )
+        source = runtime_roots[variant.runtime] / CACHE_DIRECTORY
+        validate_cache_source(source)
         sources[variant] = source
 
     try:
@@ -560,7 +485,7 @@ def main() -> int:
         args.output.resolve(),
         args.version,
     )
-    print(f"staged manual four-cache FOMOD at {args.output.resolve()}")
+    print(f"staged managed-cache FOMOD at {args.output.resolve()}")
     return 0
 
 

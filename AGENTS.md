@@ -9,7 +9,8 @@ contradict this policy.
 
 ## Quick checklist
 
--   **PR title:** Use `type(scope): description`. Keep it at or below 50 characters when practical, target `main-VR`, and keep the title current because squash merge and release automation consume it.
+-   **PR identity:** Format PR titles as `type(scope): description (#<number>)`. A branch created for an already-numbered PR must contain `pr<number>`; do not rename an open PR's head merely to retrofit the number.
+-   **PR title:** Keep the descriptive portion at or below 50 characters when practical, target `main-VR`, and keep the title current because squash merge and release automation consume it.
 -   **PR body:** Wrap prose at 72 columns where practical and use `Why`, `What changed`, applicable safety/failure behavior, and exact validation evidence. Update stale text before merge.
 -   **Release-aware type:** Use `feat`, `fix`, or `perf` only for user-visible release changes. Developer tooling and build infrastructure are `build`; CI is `ci`; documentation and agent guidance are `docs`.
 -   **Commits:** Use the same Conventional Commit format. Every agent-created or rewritten commit must have a wrapped body with explicit `Rationale:` and `Implementation:` sections and accurate attribution. Stage only in-scope files.
@@ -40,7 +41,8 @@ contradict this policy.
 ### Target and title
 
 -   Target the repository's integration branch, currently `main-VR`. Do not target `main`, `dev`, or another release line unless the user explicitly directs it.
--   Use `type(scope): description` for PR titles and commits. The scope should identify the affected domain, such as `shaders`, `water`, `vr`, `tooling`, `build`, or `ci`.
+-   Use `type(scope): description (#<number>)` for GitHub PR titles and `type(scope): description` for commits. The scope should identify the affected domain, such as `shaders`, `water`, `vr`, `tooling`, `build`, or `ci`.
+-   Every local and remote branch created for work on an already-numbered PR must contain its lowercase `pr<number>` identity, for example `codex/pr58-focused-forward-port`. A new PR needs a stable descriptive head because GitHub assigns its number only after creation; append the assigned number to its title immediately. Never rename or delete an open PR's head solely to retrofit its number because GitHub closes the PR instead of retargeting it.
 -   Use an imperative, specific description. Keep titles at or below 50 characters when practical; never shorten them into ambiguity merely to satisfy the limit.
 -   Re-evaluate the PR title after every material scope change. Correct stale metadata with `gh pr edit <number> --title "..." --body-file <file>` before merge.
 -   The PR title becomes the squash commit and drives semantic-release behavior. Select the type for its release effect, not for rhetorical emphasis.

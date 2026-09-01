@@ -1683,6 +1683,11 @@ if(BUILD_CONTROLLER_TESTS)
         tests/shader_cache_disable_policy_test.cpp
     )
     add_controller_test(
+        shader_cache_enable_policy_test
+        ShaderCacheEnablePolicy
+        tests/shader_cache_enable_policy_test.cpp
+    )
+    add_controller_test(
         shader_cache_provenance_test
         ShaderCacheProvenance
         tests/shader_cache_provenance_test.cpp
@@ -1987,6 +1992,7 @@ if(BUILD_CONTROLLER_TESTS)
             overlay_policy_test
             performance_tuning_statistics_test
             shader_cache_disable_policy_test
+            shader_cache_enable_policy_test
             shader_cache_provenance_test
             cache_invalidation_test
             shader_compilation_scheduling_policy_test

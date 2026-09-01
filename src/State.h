@@ -136,6 +136,11 @@ public:
 		TEST,
 		THEME
 	};
+	enum class SettingsApplyMode
+	{
+		Runtime,
+		StartupHydration,
+	};
 
 	void Draw();
 	void Debug();
@@ -163,7 +168,10 @@ public:
 	GetCurrentMainRenderTargetResourcePublicationDiagnostics() const noexcept;
 	bool HasCompleteRenderTargetResourcePublication(uint32_t a_width, uint32_t a_height) const;
 
-	void Load(ConfigMode a_configMode = ConfigMode::USER, bool a_allowReload = true);
+	void Load(
+		ConfigMode a_configMode = ConfigMode::USER,
+		bool a_allowReload = true,
+		SettingsApplyMode a_applyMode = SettingsApplyMode::Runtime);
 	// Returns true only when the main settings file and every required
 	// persistence layer have been saved successfully.
 	bool Save(ConfigMode a_configMode = ConfigMode::USER);
@@ -189,7 +197,10 @@ public:
 	void SaveToJson(
 		nlohmann::json& o_json,
 		bool a_includeMissingUnloadedFeatures = true);
-	void LoadFromJson(nlohmann::json& i_json, bool a_loadFeatureSettings = true);
+	void LoadFromJson(
+		nlohmann::json& i_json,
+		bool a_loadFeatureSettings = true,
+		SettingsApplyMode a_applyMode = SettingsApplyMode::Runtime);
 
 	void LoadTheme();
 

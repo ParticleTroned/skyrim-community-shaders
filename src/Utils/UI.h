@@ -79,6 +79,9 @@ namespace Util
 	/// Returns a scale factor for search controls using this branch's established menu baseline.
 	inline float GetSearchUIScale() { return GetUIScale(); }
 
+	/** Draws a checkbox for an unsigned-integer boolean and normalizes the stored value. */
+	bool UIntCheckbox(const char* a_label, unsigned int& a_value);
+
 	/**
 	 * Usage:
 	 * if (auto _tt = Util::HoverTooltipWrapper()){

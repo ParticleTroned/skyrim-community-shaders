@@ -42,11 +42,19 @@ namespace
 	constexpr uint32_t kPerGeometryCBRegister = 8;
 }
 
+void LinearLighting::SanitizeSettings(Settings& a_settings)
+{
+	a_settings.enableLinearLighting = a_settings.enableLinearLighting != 0;
+	a_settings.DisableInInteriors = a_settings.DisableInInteriors != 0;
+	a_settings.DisableInExteriors = a_settings.DisableInExteriors != 0;
+}
+
 void LinearLighting::DrawSettings()
 {
-	ImGui::Checkbox("Enable", (bool*)&settings.enableLinearLighting);
-	ImGui::Checkbox("Disable in interiors", (bool*)&settings.DisableInInteriors);
-	ImGui::Checkbox("Disable in exteriors", (bool*)&settings.DisableInExteriors);
+	SanitizeSettings(settings);
+	Util::UIntCheckbox("Enable", settings.enableLinearLighting);
+	Util::UIntCheckbox("Disable in interiors", settings.DisableInInteriors);
+	Util::UIntCheckbox("Disable in exteriors", settings.DisableInExteriors);
 
 	if (ImGui::BeginTabBar("##LinearLightingTabs", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem("Gamma")) {
@@ -90,16 +98,46 @@ void LinearLighting::DrawSettings()
 
 void LinearLighting::DrawEssentialSettings()
 {
-	ImGui::Checkbox("Enable", (bool*)&settings.enableLinearLighting);
+	SanitizeSettings(settings);
+	Util::UIntCheckbox("Enable", settings.enableLinearLighting);
+}
+
+void LinearLighting::DrawPerformanceSettings(bool)
+{
+	SanitizeSettings(settings);
+	const bool availableInCurrentCell = !IsDisabledForCurrentCell();
+	ImGui::BeginDisabled(!availableInCurrentCell);
+	Util::UIntCheckbox("Enable", settings.enableLinearLighting);
+	ImGui::EndDisabled();
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(
+			"Disabling bypasses linear color-space conversions and per-geometry updates.");
+	}
+	if (!availableInCurrentCell)
+		ImGui::TextDisabled("Linear Lighting is disabled for the current location type.");
+}
+
+json LinearLighting::CapturePerformanceSettingsState() const
+{
+	return {
+		{ "enableLinearLighting", settings.enableLinearLighting != 0 }
+	};
+}
+
+bool LinearLighting::IsPerformanceCostMeasurementEnabled() const
+{
+	return IsRuntimeEnabled();
 }
 
 void LinearLighting::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	SanitizeSettings(settings);
 }
 
 void LinearLighting::SaveSettings(json& o_json)
 {
+	SanitizeSettings(settings);
 	o_json = settings;
 }
 

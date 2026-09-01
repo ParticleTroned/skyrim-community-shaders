@@ -20203,8 +20203,12 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 			return std::isfinite(scaled) && scaled > 0.0f ? std::max(1.0f, std::floor(scaled + 0.5f)) : 1.0f;
 		};
 
-		const float scaleX = resolveScale(resolutionScale.x);
-		const float scaleY = resolveScale(resolutionScale.y);
+		// The plan owns this frame's resource and render dimensions. Derive both
+		// from the requested quality instead of the previous frame's applied scale.
+		const float qualityScale = resolveScale(
+			GetQualityModeResolutionScale(plan.qualityMode));
+		const float scaleX = qualityScale;
+		const float scaleY = qualityScale;
 		return float2{
 			scaleDimension(a_displaySize.x, scaleX),
 			scaleDimension(a_displaySize.y, scaleY)
@@ -20222,7 +20226,9 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 		plan.finalOutputSize = plan.trueHMDDisplaySize;
 		plan.owner = ResolutionOwner::VRRenderScaleMode;
 		plan.outputTarget = UpscalingOutputTarget::SubmitStageIntermediate;
-	} else if (plan.vendorMethod && IsUpscalingActive()) {
+	} else if (plan.vendorMethod &&
+			   GetQualityModeResolutionScale(plan.qualityMode) <
+				   kDynamicResolutionUpscalingScaleThreshold) {
 		if (globals::game::isVR)
 			plan.engineRenderSize = resolveVendorDynamicRenderSize(plan.trueHMDDisplaySize);
 		plan.owner = ResolutionOwner::VendorDynamicResolution;
@@ -42479,13 +42485,14 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 
 	const bool vendorUpscalingMethod = IsVendorUpscalingMethod(upscaleMethod);
 	EnsureRuntimeResolutionStateCurrent();
-	auto applyFullResolutionPresentation = [&](UpscaleMethod a_upscaleMethod, const char* a_context) {
+	auto applyFullResolutionPresentation = [&](UpscaleMethod a_upscaleMethod, const char* a_context, bool a_serviceResources = true) {
 		float2 presentationDisplaySize = runtimeResolutionPlan.trueHMDDisplaySize;
 		if (presentationDisplaySize.x <= 0.0f || presentationDisplaySize.y <= 0.0f)
 			presentationDisplaySize = screenSize;
 		PrepareFullResolutionPostProcessing(a_viewport, true);
 		LogVRRenderScalePresentationPlanIfChanged(a_upscaleMethod, a_context, presentationDisplaySize, screenSize);
-		EnsureResourcesCurrent(a_upscaleMethod);
+		if (a_serviceResources)
+			EnsureResourcesCurrent(a_upscaleMethod);
 	};
 
 	if (runtimeResolutionPlan.owner == ResolutionOwner::VRRenderScaleMode) {
@@ -42528,6 +42535,18 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		IsVRTransitionPresentationProtectionActive(*this, state) &&
 		IsVRLoadingPresentationContextActive(state)) {
 		applyFullResolutionPresentation(upscaleMethod, "loading/full-resolution");
+		return;
+	}
+	if (globals::game::isVR &&
+		vendorUpscalingMethod &&
+		runtimeResolutionPlan.owner == ResolutionOwner::VendorDynamicResolution &&
+		!EnsureResourcesCurrent(upscaleMethod)) {
+		// Provider teardown/recreation may span frames. Do not reduce the engine
+		// viewport until the exact backend and common resources can service it.
+		applyFullResolutionPresentation(
+			upscaleMethod,
+			"vendor-lifecycle/full-resolution",
+			false);
 		return;
 	}
 
@@ -54833,7 +54852,6 @@ bool Upscaling::IsOpenCompositeUpscalingBlocked(bool a_forceRefresh) const
 void Upscaling::Upscale()
 {
 	ZoneScoped;
-	auto upscaleMethod = GetRuntimeUpscaleMethod();
 	dlssUpscaleOutputInSharpenerTexture = false;
 
 	auto state = globals::state;
@@ -54843,6 +54861,9 @@ void Upscaling::Upscale()
 	if (!state || !context || !renderer || !deferred)
 		return;
 	EnsureRuntimeResolutionStateCurrent();
+	// Settings can change from the CS menu after ConfigureUpscaling has latched
+	// this frame. Dispatch only the method whose dimensions/resources it planned.
+	const auto upscaleMethod = runtimeResolutionPlan.upscaleMethod;
 	bool vendorLifecycleMutationDeferred = false;
 	if (globals::game::isVR) {
 		vrMainPassVendorDispatchCompletedFrame.store(

@@ -492,7 +492,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 			if (pTexture && pTexture->handle && pTexture->eType == vr::TextureType_DirectX) {
 				vr::Texture_t upscaledTexture{};
 				vr::VRTextureBounds_t upscaledBounds{};
-				if (upscaling.SubmitVRUpscaledFrame(eEye, pTexture, pBounds, upscaledTexture, upscaledBounds, presentationObservation)) {
+				if (upscaling.SubmitVRUpscaledFrame(eEye, compositorCycleToken, pTexture, pBounds, upscaledTexture, upscaledBounds, presentationObservation)) {
 					probePresentationObservation = &presentationObservation;
 					if (upscaling.ShouldSuppressVRPostLoadCompositorSubmit(
 							eEye,

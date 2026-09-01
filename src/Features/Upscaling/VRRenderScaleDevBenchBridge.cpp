@@ -3,6 +3,8 @@
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
 #	include "Features/Upscaling.h"
+#	include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
+#	include "Features/Upscaling/NeuralRendering/Renderer.h"
 #	include "Features/VR.h"
 #	include "Globals.h"
 #	include "State.h"
@@ -10,8 +12,12 @@
 #	include <DevBenchAPI.h>
 #	include <nlohmann/json.hpp>
 
+#	include <algorithm>
 #	include <atomic>
+#	include <array>
 #	include <chrono>
+#	include <cmath>
+#	include <format>
 #	include <functional>
 #	include <future>
 #	include <memory>
@@ -117,6 +123,253 @@ namespace
 		};
 	}
 
+	json NeuralRenderingStatusJson(const Upscaling& a_upscaling)
+	{
+		const auto snapshot = NeuralRendering::Renderer::Instance().GetSnapshot();
+		json failuresByStage = json::array();
+		for (std::size_t index = 0;
+			index < static_cast<std::size_t>(NeuralRendering::RendererStage::Count);
+			++index) {
+			const auto stage = static_cast<NeuralRendering::RendererStage>(index);
+			failuresByStage.push_back({
+				{ "stage", NeuralRendering::ToString(stage) },
+				{ "stageValue", index },
+				{ "failures", snapshot.counters.failuresByStage[index] },
+			});
+		}
+
+		json slots = json::array();
+		for (std::size_t index = 0;
+			index < NeuralRendering::Runtime::kFeatureSlotCount;
+			++index) {
+			slots.push_back({
+				{ "slot", index },
+				{ "successes", snapshot.counters.slotSuccesses[index] },
+				{ "failures", snapshot.counters.slotFailures[index] },
+			});
+		}
+
+		const auto routeSnapshots = a_upscaling.GetNeuralStereoRouteSnapshot();
+		const auto submitCycle = a_upscaling.GetLatestNeuralSubmitCycleSnapshot();
+		const uint32_t observedFrame = globals::state ? globals::state->frameCount : 0u;
+		const bool developerMode = globals::state && globals::state->IsDeveloperMode();
+		const bool submitCycleCurrentFrame =
+			submitCycle.entryObserved && submitCycle.frame == observedFrame;
+		uint64_t latestRouteSequence = 0;
+		json routes = json::array();
+		for (const auto& route : routeSnapshots) {
+			latestRouteSequence = std::max(latestRouteSequence, route.sequence);
+			const bool submitRole =
+				route.role == Upscaling::NeuralStereoRouteRole::Submit;
+			const bool freshForCurrentFrame = route.valid && route.frame == observedFrame;
+			const bool freshForCurrentCycle =
+				!submitRole ||
+				(submitCycleCurrentFrame && submitCycle.compositorCycle != 0 &&
+					route.valid && route.compositorCycle == submitCycle.compositorCycle);
+			json eyes = json::array();
+			for (uint32_t eye = 0; eye < 2; ++eye) {
+				const uint32_t eyeBit = 1u << eye;
+				eyes.push_back({
+					{ "eye", eye },
+					{ "prepared", (route.preparedEyeMask & eyeBit) != 0 },
+					{ "attempted", (route.attemptedEyeMask & eyeBit) != 0 },
+					{ "applied", (route.appliedEyeMask & eyeBit) != 0 },
+					{ "neuralCommitted", (route.committedEyeMask & eyeBit) != 0 },
+					{ "dlssEvaluated", (route.dlssEyeMask & eyeBit) != 0 },
+				});
+			}
+			routes.push_back({
+				{ "valid", route.valid },
+				{ "role", Upscaling::GetNeuralStereoRouteRoleName(route.role) },
+				{ "roleValue", static_cast<uint32_t>(route.role) },
+				{ "sequence", route.sequence },
+				{ "compositorCycle", route.compositorCycle },
+				{ "frame", route.frame },
+				{ "fresh", freshForCurrentFrame && freshForCurrentCycle },
+				{ "freshForCurrentFrame", freshForCurrentFrame },
+				{ "freshForCurrentCycle", freshForCurrentCycle },
+				{ "generation", route.generation },
+				{ "arrangement", NeuralRendering::GetPipelineArrangementName(
+									 static_cast<NeuralRendering::PipelineArrangement>(route.arrangement)) },
+				{ "arrangementValue", route.arrangement },
+				{ "requested", route.requested },
+				{ "eligible", route.eligible },
+				{ "sourceBatchEligible", route.sourceBatchEligible },
+				{ "sourceSignatureProven", route.sourceSignatureProven },
+				{ "pairComplete", route.pairComplete },
+				{ "gates", {
+							   { "colorBuffersHDRKnown", route.colorBuffersHDRKnown },
+							   { "colorBuffersHDR", route.colorBuffersHDRKnown ? json(route.colorBuffersHDR) : json(nullptr) },
+							   { "hdrRequired", route.hdrRequired },
+							   { "hdrClassification", route.colorBuffersHDRKnown ? (route.colorBuffersHDR ? "hdr" : "ldr") : "unknown" },
+							   { "frameGenerationActive", route.frameGenerationActive },
+							   { "frameGenerationPassed", route.frameGenerationGatePassed },
+						   } },
+				{ "pairDisposition", Upscaling::GetNeuralStereoPairDispositionName(route.disposition) },
+				{ "fallbackReason", Upscaling::GetNeuralStereoFallbackReasonName(route.fallbackReason) },
+				{ "eyeMasks", {
+								  { "prepared", route.preparedEyeMask },
+								  { "attempted", route.attemptedEyeMask },
+								  { "applied", route.appliedEyeMask },
+								  { "neuralCommitted", route.committedEyeMask },
+								  { "dlss", route.dlssEyeMask },
+							  } },
+				{ "eyes", std::move(eyes) },
+			});
+		}
+
+		const bool batchedStereo = a_upscaling.settings.neuralRenderingBatchedStereo;
+		const bool directCommit = a_upscaling.settings.neuralRenderingDirectCommit;
+		return {
+			{ "apiVersion", 4 },
+			{ "arrangement", NeuralRendering::GetPipelineArrangementName() },
+			{ "settings", {
+							  { "enabled", a_upscaling.settings.neuralRenderingEnabled },
+							  { "batchedStereo", batchedStereo },
+							  { "directCommit", directCommit },
+							  { "stereoSubmission", NeuralRendering::GetStereoSubmissionName(batchedStereo) },
+							  { "outputCommit", NeuralRendering::GetOutputCommitName(directCommit) },
+							  { "implementation", NeuralRendering::GetImplementationName(batchedStereo, directCommit) },
+							  { "comparisonPurpose", NeuralRendering::GetImplementationPurposeName(batchedStereo, directCommit) },
+							  { "comparisonPurposeLabel", NeuralRendering::GetImplementationPurpose(batchedStereo, directCommit) },
+							  { "preset", a_upscaling.settings.neuralRenderingPreset },
+							  { "intensity", a_upscaling.settings.neuralRenderingIntensity },
+							  { "localToneStrength", a_upscaling.settings.neuralRenderingLocalTone },
+							  { "localStructureStrength", a_upscaling.settings.neuralRenderingLocalStructure },
+							  { "skinStructureStrength", a_upscaling.settings.neuralRenderingSkinStructure },
+							  { "style", a_upscaling.settings.neuralRenderingStyle },
+							  { "useAutoMask", a_upscaling.settings.neuralRenderingAutoMask },
+							  { "uiCorrection", a_upscaling.settings.neuralRenderingUICorrection },
+						  } },
+			{ "safeControlContract", {
+										 { "useAutoMask", { { "fixed", true }, { "requiredValue", true } } },
+										 { "uiCorrection", { { "fixed", true }, { "requiredValue", false } } },
+									 } },
+			{ "routeObservation", {
+									  { "currentFrame", observedFrame },
+									  { "currentSubmitCycle", submitCycleCurrentFrame ? submitCycle.compositorCycle : 0u },
+									  { "submitCycleSource", "submit_entry" },
+									  { "submitEntryObserved", submitCycle.entryObserved },
+									  { "submitCycleCurrentFrame", submitCycleCurrentFrame },
+									  { "latestSubmitFrame", submitCycle.frame },
+									  { "latestSubmitCycle", submitCycle.compositorCycle },
+									  { "latestSequence", latestRouteSequence },
+								  } },
+			{ "eyeMaskSemantics", {
+									  { "prepared", "complete renderer arguments were prepared for the eye" },
+									  { "attempted", "NVIDIA Feature 18 evaluation was entered for the eye" },
+									  { "applied", "the renderer committed a successful eye output before pair-level fallback" },
+									  { "neuralCommitted", "the final coherent stereo pair retained the neural output" },
+								  } },
+			{ "stereoRoutes", std::move(routes) },
+			{ "runtime", {
+							 { "status", snapshot.status },
+							 { "trust", snapshot.trust },
+							 { "developerMode", developerMode },
+							 { "patchedRuntimeAllowed", true },
+							 { "failureStage", snapshot.runtimeFailureStage },
+							 { "detail", snapshot.detail },
+							 { "path", snapshot.runtimePath },
+							 { "sha256", snapshot.runtimeHash },
+							 { "version", snapshot.runtimeVersion },
+							 { "proxyHits", snapshot.runtimeProxyHits },
+							 { "proxyInstalled", snapshot.runtimeProxyInstalled },
+							 { "successfulFrames", snapshot.runtimeSuccessfulFrames },
+							 { "ngxResult", snapshot.ngxResult },
+							 { "parameterCore", {
+													{ "path", snapshot.parameterCorePath },
+													{ "sha256", snapshot.parameterCoreHash },
+													{ "trust", snapshot.parameterCoreTrust },
+													{ "source", snapshot.parameterCoreSource },
+												} },
+						 } },
+			{ "renderer", {
+							  { "lastCompletedStage", NeuralRendering::ToString(snapshot.lastCompletedStage) },
+							  { "failureStage", NeuralRendering::ToString(snapshot.failureStage) },
+							  { "lastResult", snapshot.lastResult },
+							  { "featureSlot", snapshot.featureSlot },
+							  { "failureFeatureSlot", snapshot.failureFeatureSlot },
+							  { "generation", snapshot.generation },
+							  { "successes", snapshot.successes },
+							  { "failures", snapshot.failures },
+							  { "featureUpscaling", snapshot.featureUpscaling },
+							  { "failureLatched", snapshot.failureLatched },
+							  { "quarantined", snapshot.quarantined },
+							  { "outputCommitted", snapshot.outputCommitted },
+						  } },
+			{ "dimensions", {
+								{ "color", { { "width", snapshot.colorWidth }, { "height", snapshot.colorHeight } } },
+								{ "guide", { { "width", snapshot.guideWidth }, { "height", snapshot.guideHeight } } },
+								{ "output", { { "width", snapshot.outputWidth }, { "height", snapshot.outputHeight } } },
+							} },
+			{ "resources", { { "formats", {
+											  { "color", snapshot.colorFormat },
+											  { "depthSource", snapshot.depthSourceFormat },
+											  { "depthView", snapshot.depthViewFormat },
+											  { "motionVectors", snapshot.motionVectorFormat },
+											  { "output", snapshot.outputFormat },
+										  } } } },
+			{ "counters", {
+							  { "attempts", snapshot.counters.attempts },
+							  { "successes", snapshot.counters.successes },
+							  { "failures", snapshot.counters.failures },
+							  { "validationFailures", snapshot.counters.validationFailures },
+							  { "interopInitializations", snapshot.counters.interopInitializations },
+							  { "runtimeInitializations", snapshot.counters.runtimeInitializations },
+							  { "resourceRebuilds", snapshot.counters.resourceRebuilds },
+							  { "depthGuideCopies", snapshot.counters.depthGuideCopies },
+							  { "featureEvaluations", snapshot.counters.featureEvaluations },
+							  { "outputCommits", snapshot.counters.outputCommits },
+							  { "stereoAttempts", snapshot.counters.stereoAttempts },
+							  { "stereoSuccesses", snapshot.counters.stereoSuccesses },
+							  { "stereoFailures", snapshot.counters.stereoFailures },
+							  { "callerHistoryResets", snapshot.counters.callerHistoryResets },
+							  { "forcedHistoryResets", snapshot.counters.forcedHistoryResets },
+							  { "resetAttempts", snapshot.counters.resetAttempts },
+							  { "resetSuccesses", snapshot.counters.resetSuccesses },
+							  { "resetFailures", snapshot.counters.resetFailures },
+							  { "deviceRemovals", snapshot.counters.deviceRemovals },
+							  { "quarantines", snapshot.counters.quarantines },
+							  { "latchedBypasses", snapshot.counters.latchedBypasses },
+							  { "quarantinedBypasses", snapshot.counters.quarantinedBypasses },
+							  { "failuresByStage", std::move(failuresByStage) },
+						  } },
+			{ "performance", {
+								 { "d3d11PreparationCpuEnqueueSamples", snapshot.performance.d3d11PreparationCpuEnqueueSamples },
+								 { "d3d11PreparationCpuEnqueueMicroseconds", snapshot.performance.d3d11PreparationCpuEnqueueMicroseconds },
+								 { "lastD3D11PreparationCpuEnqueueMicroseconds", snapshot.performance.lastD3D11PreparationCpuEnqueueMicroseconds },
+								 { "maximumD3D11PreparationCpuEnqueueMicroseconds", snapshot.performance.maximumD3D11PreparationCpuEnqueueMicroseconds },
+								 { "outputCommitCpuEnqueueSamples", snapshot.performance.outputCommitCpuEnqueueSamples },
+								 { "outputCommitCpuEnqueueMicroseconds", snapshot.performance.outputCommitCpuEnqueueMicroseconds },
+								 { "lastOutputCommitCpuEnqueueMicroseconds", snapshot.performance.lastOutputCommitCpuEnqueueMicroseconds },
+								 { "maximumOutputCommitCpuEnqueueMicroseconds", snapshot.performance.maximumOutputCommitCpuEnqueueMicroseconds },
+								 { "commandSubmissions", snapshot.performance.commandSubmissions },
+								 { "mainCommandSubmissions", snapshot.performance.mainCommandSubmissions },
+								 { "submitCommandSubmissions", snapshot.performance.submitCommandSubmissions },
+								 { "stereoCommandSubmissions", snapshot.performance.stereoCommandSubmissions },
+								 { "mainStereoCommandSubmissions", snapshot.performance.mainStereoCommandSubmissions },
+								 { "submitStereoCommandSubmissions", snapshot.performance.submitStereoCommandSubmissions },
+								 { "backpressureWaits", snapshot.performance.backpressureWaits },
+								 { "backpressureWaitMicroseconds", snapshot.performance.backpressureWaitMicroseconds },
+								 { "maximumBackpressureWaitMicroseconds", snapshot.performance.maximumBackpressureWaitMicroseconds },
+								 { "featureGpuSamples", snapshot.performance.featureGpuSamples },
+								 { "featureGpuReadbackFailures", snapshot.performance.featureGpuReadbackFailures },
+								 { "featureGpuMicroseconds", snapshot.performance.featureGpuMicroseconds },
+								 { "mainFeatureGpuSamples", snapshot.performance.mainFeatureGpuSamples },
+								 { "mainFeatureGpuMicroseconds", snapshot.performance.mainFeatureGpuMicroseconds },
+								 { "submitFeatureGpuSamples", snapshot.performance.submitFeatureGpuSamples },
+								 { "submitFeatureGpuMicroseconds", snapshot.performance.submitFeatureGpuMicroseconds },
+								 { "unexpectedFeatureSlotMaskSamples", snapshot.performance.unexpectedFeatureSlotMaskSamples },
+								 { "lastFeatureGpuMicroseconds", snapshot.performance.lastFeatureGpuMicroseconds },
+								 { "maximumFeatureGpuMicroseconds", snapshot.performance.maximumFeatureGpuMicroseconds },
+								 { "lastFeaturePixelCount", snapshot.performance.lastFeaturePixelCount },
+								 { "lastFeatureEvaluationCount", snapshot.performance.lastFeatureEvaluationCount },
+								 { "lastFeatureSlotMask", snapshot.performance.lastFeatureSlotMask },
+							 } },
+			{ "slots", std::move(slots) },
+		};
+	}
+
 	json BuildStatus(Upscaling& a_upscaling)
 	{
 		const auto controller = a_upscaling.GetVRRenderScaleTransitionSnapshot();
@@ -164,6 +417,7 @@ namespace
 			{ "frame", frame },
 			{ "modeStatus", Upscaling::GetVRRenderScaleModeStatusName(a_upscaling.GetVRRenderScaleModeStatus()) },
 			{ "loadPresentationProbe", a_upscaling.BuildVRLoadPresentationProbeStatus() },
+			{ "neuralRendering", NeuralRenderingStatusJson(a_upscaling) },
 			{ "session", {
 							 { "id", session.sessionID },
 							 { "active", session.active },
@@ -382,9 +636,389 @@ namespace
 		return future.get();
 	}
 
+	struct NeuralRenderingConfigurationRequest
+	{
+		std::optional<bool> enabled;
+		std::optional<uint32_t> preset;
+		std::optional<float> intensity;
+		std::optional<float> localToneStrength;
+		std::optional<float> localStructureStrength;
+		std::optional<float> skinStructureStrength;
+		std::optional<uint32_t> style;
+		std::optional<bool> batchedStereo;
+		std::optional<bool> directCommit;
+		std::optional<std::string> implementation;
+		std::optional<bool> legacyOptimizedStereoPath;
+		std::optional<bool> useAutoMask;
+		std::optional<bool> uiCorrection;
+
+		[[nodiscard]] bool HasImageTuningOverrides() const noexcept
+		{
+			return intensity || localToneStrength || localStructureStrength ||
+			       skinStructureStrength || style;
+		}
+
+		[[nodiscard]] bool HasAnyControl() const noexcept
+		{
+			return enabled || preset || HasImageTuningOverrides() ||
+			       batchedStereo || directCommit || implementation ||
+			       legacyOptimizedStereoPath || useAutoMask || uiCorrection;
+		}
+	};
+
+	bool TryParseNeuralRenderingConfiguration(
+		const json& a_args,
+		NeuralRenderingConfigurationRequest& a_request,
+		json& a_error)
+	{
+		if (const auto enabled = a_args.find("enabled"); enabled != a_args.end()) {
+			if (!enabled->is_boolean()) {
+				a_error = { { "error", "enabled must be a boolean" } };
+				return false;
+			}
+			a_request.enabled = enabled->get<bool>();
+		}
+
+		if (const auto preset = a_args.find("preset"); preset != a_args.end()) {
+			if (preset->is_number_unsigned()) {
+				const auto requested = preset->get<uint64_t>();
+				if (requested > 4u) {
+					a_error = {
+						{ "error", "preset is outside 0..4" },
+						{ "errorCode", "nr_preset_out_of_range" },
+						{ "field", "preset" },
+						{ "requested", requested },
+					};
+					return false;
+				}
+				a_request.preset = static_cast<uint32_t>(requested);
+			} else if (preset->is_number_integer()) {
+				const auto requested = preset->get<int64_t>();
+				if (requested < 0 || requested > 4) {
+					a_error = {
+						{ "error", "preset is outside 0..4" },
+						{ "errorCode", "nr_preset_out_of_range" },
+						{ "field", "preset" },
+						{ "requested", requested },
+					};
+					return false;
+				}
+				a_request.preset = static_cast<uint32_t>(requested);
+			} else {
+				a_error = {
+					{ "error", "preset must be an integer" },
+					{ "errorCode", "nr_preset_type_invalid" },
+					{ "field", "preset" },
+				};
+				return false;
+			}
+		}
+
+		const auto parseStrength =
+			[&](const char* a_name, std::optional<float>& a_output) {
+				const auto value = a_args.find(a_name);
+				if (value == a_args.end())
+					return true;
+				if (!value->is_number()) {
+					a_error = {
+						{ "error", std::format("{} must be a number", a_name) },
+						{ "errorCode", "nr_tuning_type_invalid" },
+						{ "field", a_name },
+					};
+					return false;
+				}
+				const double requested = value->get<double>();
+				if (!std::isfinite(requested)) {
+					a_error = {
+						{ "error", std::format("{} must be finite", a_name) },
+						{ "errorCode", "nr_tuning_non_finite" },
+						{ "field", a_name },
+					};
+					return false;
+				}
+				if (requested < 0.0 || requested > 2.0) {
+					a_error = {
+						{ "error", std::format("{} is outside 0..2", a_name) },
+						{ "errorCode", "nr_tuning_out_of_range" },
+						{ "field", a_name },
+						{ "requested", requested },
+					};
+					return false;
+				}
+				a_output = static_cast<float>(requested);
+				return true;
+			};
+		if (!parseStrength("intensity", a_request.intensity) ||
+			!parseStrength("localToneStrength", a_request.localToneStrength) ||
+			!parseStrength("localStructureStrength", a_request.localStructureStrength) ||
+			!parseStrength("skinStructureStrength", a_request.skinStructureStrength)) {
+			return false;
+		}
+
+		if (const auto style = a_args.find("style"); style != a_args.end()) {
+			if (style->is_number_unsigned()) {
+				const auto requested = style->get<uint64_t>();
+				if (requested > 3u) {
+					a_error = {
+						{ "error", "style is outside 0..3" },
+						{ "errorCode", "nr_style_out_of_range" },
+						{ "field", "style" },
+						{ "requested", requested },
+					};
+					return false;
+				}
+				a_request.style = static_cast<uint32_t>(requested);
+			} else if (style->is_number_integer()) {
+				const auto requested = style->get<int64_t>();
+				if (requested < 0 || requested > 3) {
+					a_error = {
+						{ "error", "style is outside 0..3" },
+						{ "errorCode", "nr_style_out_of_range" },
+						{ "field", "style" },
+						{ "requested", requested },
+					};
+					return false;
+				}
+				a_request.style = static_cast<uint32_t>(requested);
+			} else {
+				a_error = {
+					{ "error", "style must be an integer" },
+					{ "errorCode", "nr_style_type_invalid" },
+					{ "field", "style" },
+				};
+				return false;
+			}
+		}
+
+		const auto parseBoolean =
+			[&](const char* a_name, std::optional<bool>& a_output) {
+				const auto value = a_args.find(a_name);
+				if (value == a_args.end())
+					return true;
+				if (!value->is_boolean()) {
+					a_error = { { "error", std::format("{} must be a boolean", a_name) } };
+					return false;
+				}
+				a_output = value->get<bool>();
+				return true;
+			};
+		if (!parseBoolean("batchedStereo", a_request.batchedStereo) ||
+			!parseBoolean("directCommit", a_request.directCommit) ||
+			!parseBoolean("optimizedStereoPath", a_request.legacyOptimizedStereoPath) ||
+			!parseBoolean("useAutoMask", a_request.useAutoMask) ||
+			!parseBoolean("uiCorrection", a_request.uiCorrection)) {
+			return false;
+		}
+
+		if (const auto implementation = a_args.find("implementation");
+			implementation != a_args.end()) {
+			if (!implementation->is_string()) {
+				a_error = { { "error", "implementation must be a string" } };
+				return false;
+			}
+			a_request.implementation = implementation->get<std::string>();
+			const auto parsed =
+				NeuralRendering::ParseImplementationName(*a_request.implementation);
+			if (!parsed) {
+				a_error = {
+					{ "error", "implementation is not a supported Neural Rendering lane" },
+					{ "errorCode", "nr_implementation_unknown" },
+				};
+				return false;
+			}
+			a_request.batchedStereo = parsed->batchedStereo;
+			a_request.directCommit = parsed->directCommit;
+		}
+		if (a_request.implementation &&
+			(a_args.contains("batchedStereo") ||
+				a_args.contains("directCommit") ||
+				a_args.contains("optimizedStereoPath"))) {
+			a_error = {
+				{ "error", "implementation cannot be combined with batchedStereo, directCommit, or optimizedStereoPath" },
+				{ "errorCode", "nr_implementation_controls_ambiguous" },
+			};
+			return false;
+		}
+		if (a_request.legacyOptimizedStereoPath &&
+			(a_request.batchedStereo || a_request.directCommit)) {
+			a_error = {
+				{ "error", "optimizedStereoPath cannot be combined with batchedStereo or directCommit" },
+				{ "errorCode", "nr_implementation_controls_ambiguous" },
+			};
+			return false;
+		}
+		if (a_request.useAutoMask && !*a_request.useAutoMask) {
+			a_error = {
+				{ "error", "manual neural masks require an unimplemented ControlMask input" },
+				{ "errorCode", "nr_manual_mask_unsupported" },
+			};
+			return false;
+		}
+		if (a_request.uiCorrection && *a_request.uiCorrection) {
+			a_error = {
+				{ "error", "neural UI correction requires unimplemented UI resources" },
+				{ "errorCode", "nr_ui_correction_unsupported" },
+			};
+			return false;
+		}
+		if (!a_request.HasAnyControl()) {
+			a_error = {
+				{ "error", "nr_configure requires at least one Neural Rendering control" },
+				{ "errorCode", "nr_configure_empty" },
+			};
+			return false;
+		}
+		return true;
+	}
+
 	json BuildRenderScaleResult(const json& a_args)
 	{
 		const std::string action = a_args.value("action", std::string("status"));
+		if (action == "nr_status") {
+			return RunOnMainThread([]() {
+				if (!globals::game::isVR) {
+					return json{
+						{ "error", "neural-rendering diagnostics require Skyrim VR" },
+						{ "errorCode", "unsupported_runtime" },
+					};
+				}
+				auto& upscaling = globals::features::upscaling;
+				return json{
+					{ "action", "nr_status" },
+					{ "neuralRendering", NeuralRenderingStatusJson(upscaling) },
+				};
+			});
+		}
+
+		if (action == "nr_configure") {
+			NeuralRenderingConfigurationRequest request;
+			json error;
+			if (!TryParseNeuralRenderingConfiguration(a_args, request, error))
+				return error;
+
+			return RunOnMainThread([request]() {
+				if (!globals::game::isVR) {
+					return json{
+						{ "error", "neural-rendering configuration requires Skyrim VR" },
+						{ "errorCode", "unsupported_runtime" },
+					};
+				}
+				auto& upscaling = globals::features::upscaling;
+				auto& settings = upscaling.settings;
+				const auto previousSettings = settings;
+				auto requestedSettings = previousSettings;
+				if (request.enabled)
+					requestedSettings.neuralRenderingEnabled = *request.enabled;
+				if (request.preset)
+					(void)Upscaling::ApplyNeuralRenderingPreset(requestedSettings, *request.preset);
+				if (request.legacyOptimizedStereoPath) {
+					requestedSettings.neuralRenderingBatchedStereo =
+						*request.legacyOptimizedStereoPath;
+					requestedSettings.neuralRenderingDirectCommit =
+						*request.legacyOptimizedStereoPath;
+				}
+				if (request.batchedStereo)
+					requestedSettings.neuralRenderingBatchedStereo = *request.batchedStereo;
+				if (request.directCommit)
+					requestedSettings.neuralRenderingDirectCommit = *request.directCommit;
+				if (request.intensity)
+					requestedSettings.neuralRenderingIntensity = *request.intensity;
+				if (request.localToneStrength)
+					requestedSettings.neuralRenderingLocalTone = *request.localToneStrength;
+				if (request.localStructureStrength)
+					requestedSettings.neuralRenderingLocalStructure = *request.localStructureStrength;
+				if (request.skinStructureStrength)
+					requestedSettings.neuralRenderingSkinStructure = *request.skinStructureStrength;
+				if (request.style)
+					requestedSettings.neuralRenderingStyle = *request.style;
+				if (request.useAutoMask)
+					requestedSettings.neuralRenderingAutoMask = *request.useAutoMask;
+				if (request.uiCorrection)
+					requestedSettings.neuralRenderingUICorrection = *request.uiCorrection;
+				if (request.HasImageTuningOverrides())
+					requestedSettings.neuralRenderingPreset = 0;
+
+				const bool settingsChanged =
+					!Upscaling::HasSameNeuralRenderingSettingsKey(
+						previousSettings, requestedSettings);
+				if (!settingsChanged) {
+					return json{
+						{ "error", "requested Neural Rendering settings already match the active settings" },
+						{ "errorCode", "nr_configure_noop" },
+						{ "action", "nr_configure" },
+						{ "settingsChanged", false },
+						{ "neuralRendering", NeuralRenderingStatusJson(upscaling) },
+					};
+				}
+
+				const bool enableStateChanged =
+					previousSettings.neuralRenderingEnabled !=
+					requestedSettings.neuralRenderingEnabled;
+				const bool stereoSubmissionChanged =
+					previousSettings.neuralRenderingBatchedStereo !=
+					requestedSettings.neuralRenderingBatchedStereo;
+				const bool outputCommitChanged =
+					previousSettings.neuralRenderingDirectCommit !=
+					requestedSettings.neuralRenderingDirectCommit;
+				const bool implementationChanged =
+					stereoSubmissionChanged || outputCommitChanged;
+				const char* transition = enableStateChanged ?
+				                             (previousSettings.neuralRenderingEnabled ? "disable" : "enable") :
+				                         implementationChanged ? "implementation" :
+				                                                 "tuning";
+
+				settings = requestedSettings;
+				const bool transitionSucceeded =
+					upscaling.HandleNeuralRenderingSettingsTransition(
+						previousSettings,
+						"DevBench neural-rendering configuration");
+				json response{
+					{ "action", "nr_configure" },
+					{ "settingsChanged", true },
+					{ "implementationChanged", implementationChanged },
+					{ "stereoSubmissionChanged", stereoSubmissionChanged },
+					{ "outputCommitChanged", outputCommitChanged },
+					{ "transition", transition },
+					{ "transitionSucceeded", transitionSucceeded },
+					{ "historyResetRequested", true },
+					{ "resetAttempted", enableStateChanged },
+					{ "resetSucceeded", enableStateChanged ? json(transitionSucceeded) : json(nullptr) },
+					{ "neuralRendering", NeuralRenderingStatusJson(upscaling) },
+				};
+				if (!transitionSucceeded) {
+					response["error"] = "neural-rendering backend reset did not complete";
+					response["errorCode"] = "nr_transition_reset_failed";
+				}
+				return response;
+			});
+		}
+
+		if (action == "nr_reset") {
+			return RunOnMainThread([]() {
+				if (!globals::game::isVR) {
+					return json{
+						{ "error", "neural-rendering reset requires Skyrim VR" },
+						{ "errorCode", "unsupported_runtime" },
+					};
+				}
+				auto& upscaling = globals::features::upscaling;
+				const bool resetSucceeded =
+					NeuralRendering::Renderer::Instance().Reset();
+				upscaling.RequestHistoryReset();
+				json response{
+					{ "action", "nr_reset" },
+					{ "resetSucceeded", resetSucceeded },
+					{ "historyResetRequested", true },
+					{ "neuralRendering", NeuralRenderingStatusJson(upscaling) },
+				};
+				if (!resetSucceeded) {
+					response["error"] = "neural-rendering backend reset did not complete";
+					response["errorCode"] = "nr_reset_failed";
+				}
+				return response;
+			});
+		}
+
 		if (action == "status") {
 			return RunOnMainThread([]() {
 				if (!globals::game::isVR)
@@ -585,7 +1219,7 @@ namespace
 		return {
 			{ "error", "unknown action" },
 			{ "action", action },
-			{ "supported", json::array({ "status", "record", "start", "apply", "stop", "reset", "probe_start", "probe_stop", "probe_record", "probe_reset" }) },
+			{ "supported", json::array({ "status", "record", "start", "apply", "stop", "reset", "probe_start", "probe_stop", "probe_record", "probe_reset", "nr_status", "nr_configure", "nr_reset" }) },
 		};
 	}
 
@@ -611,7 +1245,7 @@ namespace VRRenderScaleDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Control and inspect Community Shaders VR render-scale stress iterations. status returns a compact live controller, local-video and system-commit memory, retirement, backend, both-eye fidelity, compositor-accepted per-eye presentation paths, and load-presentation probe status. record returns the complete schema-v8 iteration artifact. start begins a fixed-memory stress capture. apply performs the same latest-wins transition used by the CS menu and requires method=dlss|fsr, enabled, qualityMode=0..6 (enabled requires 1..6), and optional dlssPreset=0..5. stop closes the stress capture, writes its artifact, and returns the complete record. reset clears only a stopped stress capture. probe_start enables a bounded diagnostic-only asynchronous 5x5 per-eye luminance and HAM-clear capture at the final OpenVR submission boundary; probe_stop disables new samples, probe_record returns its timeline, and probe_reset clears a stopped probe. Mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5}},"required":["action"]}})";
+			R"({"description":"Control and inspect Community Shaders VR render-scale stress iterations and DLSS Neural Rendering. nr_status returns the API-v4 NR runtime, trust, route, stereo-mask, failure, and per-route GPU telemetry. nr_configure applies one or more NR settings through the same reset/history contract as the in-game UI; an empty or unchanged request is rejected. nr_reset resets the NR backend and requests a history reset. Existing render-scale mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","nr_status","nr_configure","nr_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"implementation":{"type":"string","enum":["per_eye_staged_commit","stereo_batched_staged_commit","per_eye_direct_commit","stereo_batched_direct_commit"]},"preset":{"type":"integer","minimum":0,"maximum":4},"intensity":{"type":"number","minimum":0,"maximum":2},"localToneStrength":{"type":"number","minimum":0,"maximum":2},"localStructureStrength":{"type":"number","minimum":0,"maximum":2},"skinStructureStrength":{"type":"number","minimum":0,"maximum":2},"style":{"type":"integer","minimum":0,"maximum":3},"batchedStereo":{"type":"boolean"},"directCommit":{"type":"boolean"},"optimizedStereoPath":{"type":"boolean"},"useAutoMask":{"type":"boolean"},"uiCorrection":{"type":"boolean"}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.renderscale",
 			descriptor,

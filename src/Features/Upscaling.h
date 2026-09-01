@@ -25,6 +25,11 @@ namespace RE
 	class RaceSexMenu;
 }
 
+namespace NeuralRendering
+{
+	struct RendererApplyArgs;
+}
+
 /**
  * @brief Provides upscaling functionality including DLSS, FSR and TAA.
  *
@@ -60,6 +65,80 @@ public:
 		kTAA,
 		kFSR,
 		kDLSS
+	};
+
+	enum class NeuralStereoRouteRole : uint8_t
+	{
+		Main,
+		Submit,
+		Count
+	};
+
+	enum class NeuralStereoPairDisposition : uint8_t
+	{
+		Unknown,
+		NotRequested,
+		NormalDLSSPair,
+		NeuralPair,
+		FallbackRequired
+	};
+
+	enum class NeuralStereoFallbackReason : uint8_t
+	{
+		None,
+		NeuralDisabled,
+		MethodIneligible,
+		RouteIneligible,
+		MaskVisualization,
+		FrameGeneration,
+		SubmitDeviceUnavailable,
+		SubmitPresentationGate,
+		SubmitSourceContractRejected,
+		SubmitResourcePreparationFailed,
+		SubmitVendorDispatchFailed,
+		SourceBatchUnavailable,
+		SourceSignatureUnproven,
+		StereoPreflightFailed,
+		CachedPairSignatureMismatch,
+		NeuralEvaluationFailed,
+		StereoDispatchFailed
+	};
+
+	/** @brief One coherent two-eye neural-rendering routing decision. */
+	struct NeuralStereoRouteSnapshot
+	{
+		bool valid = false;
+		NeuralStereoRouteRole role = NeuralStereoRouteRole::Main;
+		uint64_t sequence = 0;
+		uint64_t compositorCycle = 0;
+		uint32_t frame = 0;
+		uint64_t generation = 0;
+		uint32_t arrangement = 0;
+		bool requested = false;
+		bool eligible = false;
+		bool sourceBatchEligible = false;
+		bool sourceSignatureProven = false;
+		bool pairComplete = false;
+		bool colorBuffersHDRKnown = false;
+		bool colorBuffersHDR = false;
+		bool hdrRequired = false;
+		bool frameGenerationActive = false;
+		bool frameGenerationGatePassed = false;
+		NeuralStereoPairDisposition disposition = NeuralStereoPairDisposition::Unknown;
+		NeuralStereoFallbackReason fallbackReason = NeuralStereoFallbackReason::None;
+		uint32_t preparedEyeMask = 0;
+		uint32_t attemptedEyeMask = 0;
+		uint32_t appliedEyeMask = 0;
+		uint32_t committedEyeMask = 0;
+		uint32_t dlssEyeMask = 0;
+	};
+
+	/** @brief Latest valid-eye submit entry, independent of later route admission. */
+	struct NeuralSubmitCycleSnapshot
+	{
+		bool entryObserved = false;
+		uint64_t compositorCycle = 0;
+		uint32_t frame = 0;
 	};
 
 	enum class ResolutionOwner : uint8_t
@@ -179,6 +258,17 @@ public:
 		bool fsr4RuntimeEnable = true;
 		uint fsr4RuntimeSelectionSchemaVersion = kFsr4RuntimeSelectionSchemaVersion;
 		bool foveatedVendorDispatch = false;
+		bool neuralRenderingEnabled = false;
+		bool neuralRenderingBatchedStereo = true;
+		bool neuralRenderingDirectCommit = true;
+		uint neuralRenderingPreset = 3;
+		float neuralRenderingIntensity = 0.8f;
+		float neuralRenderingLocalTone = 0.75f;
+		float neuralRenderingLocalStructure = 0.9f;
+		float neuralRenderingSkinStructure = 0.9f;
+		uint neuralRenderingStyle = 3;
+		bool neuralRenderingAutoMask = true;
+		bool neuralRenderingUICorrection = false;
 		float foveatedCenterArea = 0.6f;
 		float foveatedCenterHorizontalScale = 1.0f;
 		float foveatedLeftEyeMaskOffsetX = 0.0f;
@@ -743,6 +833,7 @@ public:
 		VRRenderScalePresentationPath path = VRRenderScalePresentationPath::Unknown;
 		uint32_t eyeIndex = 0;
 		uint32_t frame = 0;
+		uint64_t compositorCycleToken = 0;
 		uint32_t contractGeneration = 0;
 		UpscaleMethod method = UpscaleMethod::kNONE;
 		uint32_t inputWidth = 0;
@@ -1054,6 +1145,13 @@ public:
 	/** @brief Returns one lock-consistent copy of requested, applying, applied, and stable state. */
 	VRRenderScaleTransitionSnapshot GetVRRenderScaleTransitionSnapshot() const;
 	VRRenderScaleStressSessionSnapshot GetVRRenderScaleStressSessionSnapshot() const;
+	/** @brief Returns lock-consistent main- and submit-stage stereo NR route decisions. */
+	std::array<NeuralStereoRouteSnapshot, 2> GetNeuralStereoRouteSnapshot() const;
+	/** @brief Returns the latest valid-eye submit entry used to judge route freshness. */
+	NeuralSubmitCycleSnapshot GetLatestNeuralSubmitCycleSnapshot() const;
+	static const char* GetNeuralStereoRouteRoleName(NeuralStereoRouteRole a_role);
+	static const char* GetNeuralStereoPairDispositionName(NeuralStereoPairDisposition a_disposition);
+	static const char* GetNeuralStereoFallbackReasonName(NeuralStereoFallbackReason a_reason);
 	void StartVRRenderScaleStressSession();
 	void StopVRRenderScaleStressSession();
 	void ResetVRRenderScaleStressSession();
@@ -1302,11 +1400,24 @@ public:
 	virtual bool RequiresMenuCloseForPerformanceCostMeasurementRestore(const json& a_state) const override;
 	virtual json CapturePerformanceCostMeasurementState() const override;
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
+	void DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod);
 	void DrawFoveatedSetupInstructions();
 	void DrawFoveatedSettings(bool a_essentialsLayout = false);
 	virtual void SaveSettings(json& o_json) override;
 	virtual void LoadSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
+	/** Retires NR on enable transitions and invalidates history on tuning or implementation changes. */
+	bool HandleNeuralRenderingSettingsTransition(
+		const Settings& a_previousSettings,
+		const char* a_reason);
+	/** Applies one complete NR preset; preset zero preserves custom tuning values. */
+	static bool ApplyNeuralRenderingPreset(
+		Settings& a_settings,
+		uint32_t a_preset) noexcept;
+	/** Compares the canonical key for settings that affect an NR dispatch or lane. */
+	static bool HasSameNeuralRenderingSettingsKey(
+		const Settings& a_left,
+		const Settings& a_right) noexcept;
 	virtual void DataLoaded() override;
 
 	/**
@@ -1624,7 +1735,7 @@ public:
 		uint64_t a_keepaliveToken,
 		uint64_t a_compositorCycleToken,
 		uint64_t a_initialLoadProtectionEpochAtSubmitEntry);
-	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
+	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCycleToken, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 		vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds, VRRenderScalePresentationObservation& a_presentationObservation);
 	void RecordVRRenderScalePresentationObservation(const VRRenderScalePresentationObservation& a_observation);
 	static bool ShouldTraceVRMenuBridgeDirectDrawCandidate(UINT a_indexCount, UINT a_instanceCount,
@@ -1663,6 +1774,7 @@ public:
 	bool dlssUpscaleOutputInSharpenerTexture = false;
 	eastl::unique_ptr<Texture2D> foveatedCenterColorIn[2];
 	eastl::unique_ptr<Texture2D> foveatedCenterColorOut[2];
+	eastl::unique_ptr<Texture2D> foveatedCenterNeuralOut[2];
 	eastl::unique_ptr<Texture2D> foveatedCenterDepth[2];
 	eastl::unique_ptr<Texture2D> foveatedCenterMotionVectors[2];
 	eastl::unique_ptr<Texture2D> foveatedCenterReactiveMask[2];
@@ -1776,6 +1888,7 @@ public:
 		bool usedDLSSSharpening = false;
 		bool usedMenuFinalComposite = false;
 		uint64_t menuLayerGeneration = 0;
+		uint64_t compositorCycle = 0;
 		uint32_t method = static_cast<uint32_t>(UpscaleMethod::kNONE);
 		uint32_t generation = 0;
 		uint32_t inputWidth = 0;
@@ -1795,6 +1908,7 @@ public:
 	struct SubmitStageFoveatedCenterState
 	{
 		bool ready = false;
+		bool stageTelemetryReady = false;
 		uint32_t frame = std::numeric_limits<uint32_t>::max();
 		uint32_t method = static_cast<uint32_t>(UpscaleMethod::kNONE);
 		uint32_t generation = 0;
@@ -1826,12 +1940,61 @@ public:
 		ID3D11Resource* reactiveMaskIn = nullptr;
 		ID3D11Resource* transparencyMaskIn = nullptr;
 		ID3D11Resource* colorOut = nullptr;
+		ID3D11Resource* neuralOut = nullptr;
+		uint64_t neuralSettingsKey = 0;
+		bool neuralRequested = false;
+		bool neuralAttempted = false;
+		bool neuralApplied = false;
+		bool dlssEvaluated = false;
+	};
+	struct SubmitStageNeuralStereoState
+	{
+		bool decisionReady = false;
+		bool outputsReady = false;
+		bool sourceBatchEligible = false;
+		bool sourceSignatureProven = false;
+		bool preflightFailed = false;
+		bool neuralRequested = false;
+		bool neuralApplied = false;
+		NeuralStereoFallbackReason fallbackReason = NeuralStereoFallbackReason::None;
+		uint64_t compositorCycle = 0;
+		uint32_t frame = std::numeric_limits<uint32_t>::max();
+		uint32_t generation = 0;
+		uint64_t settingsKey = 0;
+		ID3D11Texture2D* sourceTexture = nullptr;
+		uint32_t preparedEyeMask = 0;
+		uint32_t attemptedEyeMask = 0;
+		uint32_t successfulEyeMask = 0;
+		uint32_t committedEyeMask = 0;
+		uint32_t dlssEyeMask = 0;
+		NeuralStereoRouteSnapshot publishedRoute{};
+		std::array<VRRenderScalePresentationObservation, 2> publishedPresentationObservations{};
+		vr::EColorSpace publishedColorSpace = vr::ColorSpace_Auto;
+		D3D11_TEXTURE2D_DESC publishedSourceDesc{};
+		uint32_t publishedSourceEyeWidth = 0;
+		uint32_t publishedSourceEyeHeight = 0;
+		bool publishedSourceUsesCombinedStereoLayout = false;
+		std::array<bool, 2> publishedSourceRegionValid{};
+		std::array<UINT, 2> publishedSourceSubresources{};
+		std::array<D3D11_BOX, 2> publishedSourceBoxes{};
+		std::array<uint32_t, 2> publishedDepthOffsetX{};
+		std::array<uint32_t, 2> publishedDepthOffsetY{};
+		std::array<uint32_t, 2> publishedDepthWidth{};
+		std::array<uint32_t, 2> publishedDepthHeight{};
+		eastl::unique_ptr<Texture2D> publishedOutputs[2];
+		bool mirrorConsumed = false;
+
+		[[nodiscard]] bool IsCycleLatched() const noexcept
+		{
+			return compositorCycle != 0 && (outputsReady || preflightFailed);
+		}
 	};
 	uint32_t submitStageVendorOutputFrame = std::numeric_limits<uint32_t>::max();
 	uint32_t submitStageVendorOutputGeneration = 0;
 	ID3D11Texture2D* submitStageVendorOutputSourceTexture = nullptr;
 	std::array<SubmitStageVendorEyeState, 2> submitStageVendorEyeState = {};
 	std::array<SubmitStageFoveatedCenterState, 2> submitStageFoveatedCenterState = {};
+	SubmitStageNeuralStereoState submitStageNeuralStereoState{};
 	bool submitStageForceFullEyeVendorFallback = false;
 	std::atomic<uint32_t> submitStageVendorResumeFrame{ 0 };
 	std::atomic<uint32_t> submitStageVendorResumeStartFrame{ 0 };
@@ -1868,7 +2031,7 @@ public:
 	void PerformUpscaling();
 	void UpscaleDepth();
 	void RefreshSubmitStageUnderwaterMask();
-	void RequestHistoryReset();
+	void RequestHistoryReset() noexcept;
 	void RecordVRRenderScaleTransitionRequested(const VRRenderScaleDesiredProfile& a_request);
 	bool RecordVRRenderScaleTransitionPreparing(const VRRenderScaleDesiredProfile& a_request);
 	uint64_t AllocateVRRenderScaleTransitionEpoch();
@@ -1958,17 +2121,33 @@ public:
 	bool EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool copyDepthInput = true, bool allowFoveatedRegionEncode = false, bool* encodedFoveatedRegions = nullptr, uint32_t contractGeneration = 0);
 	bool StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight);
 	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3D11Resource* source, uint32_t width, uint32_t height, bool copyBindFlags, bool createSRV, bool createUAV, bool createRTV, const char* name);
+	bool EnsureFoveatedDepthGuideSRV(Texture2D& texture, const char* name);
 	void DestroySubmitStageDLSSSharpenerTextures();
 	void DestroyCommonUpscalingTextures();
 	void DestroyVRIntermediateTextures(bool a_clearRapidTransitionGuard = true);
 	void UnbindUpscalingResources();
+	void AbandonFoveatedResourcesUnsafe();
 	void DestroyFoveatedResources();
 	bool EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t outputHeight, ID3D11Resource* colorSource);
 	bool EnsurePeripheryTAATileBuffer(uint32_t eyeIndex, uint32_t tileCapacity);
 	bool BuildPeripheryTAATileList(uint32_t eyeIndex, uint32_t outputWidth, uint32_t outputHeight, float centerScale, float taaOuterScale, float centerHorizontalScale, float centerOffsetX, float centerOffsetY, uint32_t coveragePadding, uint32_t& outTileCount);
 	void DestroyPeripheryTAAResources();
 	bool DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, ID3D11Resource* colorTexture, ID3D11Resource* depthTexture, ID3D11Resource* motionVectors, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask, ID3D11Resource* colorOutput = nullptr);
-	bool DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, ID3D11Resource* outputResource = nullptr, ID3D11UnorderedAccessView* outputUAV = nullptr, UINT submitSourceSubresource = 0, const D3D11_BOX* submitSourceBox = nullptr);
+	enum class NeuralCenterPhase : uint8_t
+	{
+		Disabled,
+		Stage,
+		Resolve,
+	};
+	struct NeuralCenterDispatchResult
+	{
+		bool requested = false;
+		bool attempted = false;
+		bool prepared = false;
+		bool applied = false;
+		bool dlssEvaluated = false;
+	};
+	bool DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool protectPostProcessInput, ID3D11Resource* outputResource = nullptr, ID3D11UnorderedAccessView* outputUAV = nullptr, UINT submitSourceSubresource = 0, const D3D11_BOX* submitSourceBox = nullptr, NeuralCenterPhase neuralCenterPhase = NeuralCenterPhase::Disabled, bool neuralPairApplied = false, NeuralCenterDispatchResult* neuralResult = nullptr, bool neuralDirectCommit = false, NeuralRendering::RendererApplyArgs* neuralBatchArgs = nullptr);
 	struct FoveatedEyeDispatchParams
 	{
 		uint32_t inputWidthPerEye = 0;
@@ -2003,11 +2182,13 @@ public:
 		UINT submitSourceSubresource = 0;
 		D3D11_BOX submitSourceBox{};
 		bool submitSourceBoxValid = false;
+		bool centerAlreadyPrepared = false;
 		Streamline::DLSSViewportRole dlssViewportRole = Streamline::DLSSViewportRole::FoveatedCenter;
 	};
 	void ConfigureFoveatedPeripherySourceRegion(FoveatedEyeDispatchParams& params, const eastl::unique_ptr<Texture2D>& sourceTexture, uint32_t validWidth, uint32_t validHeight) const;
 	bool DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, const FoveatedEyeDispatchParams& params);
-	bool DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX = 0, uint32_t depthInputBaseOffsetX = 0, uint32_t auxInputBaseOffsetX = 0, ID3D11UnorderedAccessView* outputUAV = nullptr, Streamline::DLSSViewportRole dlssViewportRole = Streamline::DLSSViewportRole::FoveatedCenter, UINT submitSourceSubresource = 0, const D3D11_BOX* submitSourceBox = nullptr);
+	bool DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX = 0, uint32_t depthInputBaseOffsetX = 0, uint32_t auxInputBaseOffsetX = 0, ID3D11UnorderedAccessView* outputUAV = nullptr, Streamline::DLSSViewportRole dlssViewportRole = Streamline::DLSSViewportRole::FoveatedCenter, UINT submitSourceSubresource = 0, const D3D11_BOX* submitSourceBox = nullptr, bool compositeCenter = true, NeuralCenterPhase neuralCenterPhase = NeuralCenterPhase::Disabled, bool neuralPairApplied = false, NeuralCenterDispatchResult* neuralResult = nullptr, bool neuralDirectCommit = false, NeuralRendering::RendererApplyArgs* neuralBatchArgs = nullptr);
+	bool DispatchFoveatedVendorCenterStereo(UpscaleMethod a_upscaleMethod, const std::array<FoveatedEyeDispatchParams, 2>& params, bool& neuralPairApplied, std::array<NeuralCenterDispatchResult, 2>* neuralResults = nullptr) noexcept;
 	void DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t sourceWidth, uint32_t sourceHeight, uint32_t outputWidth, uint32_t outputHeight, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, bool keepBindingsBound = false, float sourceScaleX = 1.0f, float sourceScaleY = 1.0f, float sourceOffsetX = 0.0f, float sourceOffsetY = 0.0f, float centerOffsetX = 0.0f, float centerOffsetY = 0.0f);
 	void DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorSRV, ID3D11ShaderResourceView* currentDepthSRV, ID3D11ShaderResourceView* currentMotionVectorSRV,
 		ID3D11ShaderResourceView* currentReactiveSRV, ID3D11ShaderResourceView* currentTransparencySRV, ID3D11ShaderResourceView* historyColorSRV,
@@ -2069,6 +2250,16 @@ public:
 		uint32_t depthWidthPerEye, uint32_t depthHeight, uint32_t colorWidthPerEye, uint32_t colorHeight, uint32_t colorOffsetX = 0);
 
 private:
+	void PublishNeuralSubmitCycleSnapshot(uint64_t a_compositorCycle, uint32_t a_frame) noexcept;
+	void PublishNeuralStereoRouteSnapshot(const NeuralStereoRouteSnapshot& a_snapshot) noexcept;
+	mutable std::mutex neuralStereoRouteSnapshotMutex;
+	NeuralSubmitCycleSnapshot latestNeuralSubmitCycleSnapshot{};
+	uint64_t neuralStereoRouteSnapshotSequence = 0;
+	std::array<NeuralStereoRouteSnapshot, 2> neuralStereoRouteSnapshots{
+		NeuralStereoRouteSnapshot{ .role = NeuralStereoRouteRole::Main },
+		NeuralStereoRouteSnapshot{ .role = NeuralStereoRouteRole::Submit }
+	};
+
 	enum class VRPostLoadCompositorHoldState : uint32_t
 	{
 		Idle,
@@ -2181,7 +2372,7 @@ private:
 	void RecordSubmitStageBoundsFallback(UpscaleMethod a_upscaleMethod, uint32_t a_currentFrame, uint32_t a_generation, uint32_t a_actualWidth, uint32_t a_actualHeight, uint32_t a_expectedWidth, uint32_t a_expectedHeight);
 	void ClearSubmitStageBoundsFallbackWatchdog();
 	void ServiceSubmitStageBoundsFallbackWatchdog(bool a_forceRecovery = false);
-	void ArmSubmitStageFoveatedVendorRetryBackoff(uint32_t a_currentFrame, UpscaleMethod a_upscaleMethod);
+	void ArmSubmitStageFoveatedVendorRetryBackoff(uint32_t a_currentFrame, UpscaleMethod a_upscaleMethod) noexcept;
 	void ClearSubmitStageFoveatedVendorRetryBackoff();
 	void ClearVRFSRRelatchDrainGuard();
 	void MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_context);

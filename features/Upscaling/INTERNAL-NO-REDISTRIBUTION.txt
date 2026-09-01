@@ -1,0 +1,27 @@
+INTERNAL DLSS5 NEURAL RENDERING TEST BUILD
+DO NOT REDISTRIBUTE OR PUBLISH THIS BUILD.
+
+This experiment contains user-supplied NVIDIA runtime binaries. They are not
+covered by the Community Shaders GPL license, and this repository grants no
+right to redistribute them.
+
+Automatically staged identities:
+
+- nvngx_dlss.dll 310.8
+  C85F971CE023C9F3492FC7455F0B01A24BA18EA39636407A846902C4360B0B7E
+- nvngx_dlssnr.dll 310.8, patched; Authenticode status HashMismatch
+  8270B350CD82DE5CE89806872CDD6B6A9249B80836B91BBEB3573470744CC206
+- sl.common.dll 2.13
+  A4B2B5ACBE49FBC6D44DD432CAC19CD53218F698B2539DC7ED0FB268C72CFC8D
+- sl.dlss.dll 2.13
+  1EB5FB3D6F01D340FE086D981CC2DE4F18AA6D05EE276E5CF28ECD54818DCC8B
+- sl.interposer.dll 2.13
+  27B2190057994C0B287C2C5716953BF1586F6499AC12FBBB2092B9AAF8396570
+- sl.pcl.dll 2.13
+  12AA4E76C28A27C735E4ECB3072F44D09428ACB107B70AC38E4BD48DDB05F88D
+- sl.reflex.dll 2.13
+  ECF12973CDCEC2FFCED2EA77B1C7E45F4D387E7C864DDB5531B66A6F947EFFB3
+
+The patched Neural Rendering DLL is admitted only when its exact pinned SHA-256
+and 310.8 version match. CSX log level does not affect this allowlist. Hash
+pinning and prior malware screening do not certify a binary as malware-free.

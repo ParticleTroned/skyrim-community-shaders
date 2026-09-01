@@ -1616,6 +1616,11 @@ if(BUILD_CONTROLLER_TESTS)
         tests/vr_vendor_relatch_policy_test.cpp
     )
     add_controller_test(
+        screen_space_shadows_cache_policy_test
+        ScreenSpaceShadowsCachePolicy
+        tests/screen_space_shadows_cache_policy_test.cpp
+    )
+    add_controller_test(
         vr_render_scale_qualification_policy_test
         VRRenderScaleQualificationPolicy
         tests/vr_render_scale_qualification_policy_test.cpp
@@ -1976,6 +1981,7 @@ if(BUILD_CONTROLLER_TESTS)
         DEPENDS
             perf_mode_restart_state_test
             vr_vendor_relatch_policy_test
+            screen_space_shadows_cache_policy_test
             vr_render_scale_qualification_policy_test
             vr_render_scale_replacement_telemetry_policy_test
             streamline_frame_token_publication_test

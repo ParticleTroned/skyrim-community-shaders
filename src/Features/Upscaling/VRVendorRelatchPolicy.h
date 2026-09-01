@@ -1929,6 +1929,7 @@ namespace VRVendorRelatchPolicy
 		bool fallbackActive = false;
 		bool targetActive = false;
 		bool csMenuOrigin = false;
+		bool directMenuEdit = false;
 		bool retryAdmitted = false;
 		StartupNativeFallbackControl control =
 			StartupNativeFallbackControl::None;
@@ -1936,15 +1937,15 @@ namespace VRVendorRelatchPolicy
 
 	// Once terminal native fallback is armed, ordinary UI edits, API requests,
 	// and post-load profile sync must not release or mutate it. Only an explicit
-	// CS-menu disable, or a CS-menu retry that passed the full recovery admission,
-	// may publish the request which resolves the fallback.
+	// committed CS-menu disable, or a committed CS-menu retry that passed the full
+	// recovery admission, may publish the request which resolves the fallback.
 	[[nodiscard]] constexpr StartupNativeFallbackControlAction
 	SelectStartupNativeFallbackControlAction(
 		const StartupNativeFallbackControlRequest& a_request) noexcept
 	{
 		if (!a_request.fallbackActive)
 			return StartupNativeFallbackControlAction::PassThrough;
-		if (!a_request.csMenuOrigin)
+		if (!a_request.csMenuOrigin || !a_request.directMenuEdit)
 			return StartupNativeFallbackControlAction::Reject;
 
 		if (a_request.targetActive) {

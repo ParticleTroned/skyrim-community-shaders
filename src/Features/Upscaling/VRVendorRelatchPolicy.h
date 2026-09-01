@@ -1276,6 +1276,208 @@ namespace VRVendorRelatchPolicy
 		       a_resetGeneration == a_providerGeneration;
 	}
 
+	struct NativeRestoreSuccessorAdmission
+	{
+		bool recoveryOrigin = false;
+		std::uint64_t incomingEpoch = 0;
+		std::uint64_t presentationGuardEpoch = 0;
+		NativeRestoreProgress progress{};
+	};
+
+	// Ordinary successors cannot replace an incomplete native restore owner. The
+	// recovery path may transfer that ownership explicitly under its stronger locks.
+	[[nodiscard]] constexpr bool ShouldDeferNativeRestoreSuccessor(
+		const NativeRestoreSuccessorAdmission& a_state) noexcept
+	{
+		if (a_state.recoveryOrigin)
+			return false;
+
+		const bool foreignPresentationGuard =
+			a_state.presentationGuardEpoch != 0 &&
+			(a_state.incomingEpoch == 0 ||
+				a_state.presentationGuardEpoch != a_state.incomingEpoch);
+		const bool foreignRestoreTransaction =
+			HasNativeRestoreTransaction(a_state.progress) &&
+			(a_state.incomingEpoch == 0 ||
+				a_state.progress.ownerEpoch != a_state.incomingEpoch);
+		return foreignPresentationGuard || foreignRestoreTransaction;
+	}
+
+	struct ProviderRetirementSuccessorAdmission
+	{
+		bool recoveryOrigin = false;
+		bool incomingUsesProvider = false;
+		bool stableProfileValid = false;
+		bool stableUsesProvider = false;
+		bool resetPending = false;
+		bool lifecycleRetiring = false;
+	};
+
+	// A provider cannot be re-entered while its last non-owning stable contract is
+	// still retiring it. Let the inactive contract keep presenting until teardown.
+	[[nodiscard]] constexpr bool ShouldDeferProviderRetirementSuccessor(
+		const ProviderRetirementSuccessorAdmission& a_state) noexcept
+	{
+		return !a_state.recoveryOrigin &&
+		       a_state.incomingUsesProvider &&
+		       a_state.stableProfileValid &&
+		       !a_state.stableUsesProvider &&
+		       (a_state.resetPending || a_state.lifecycleRetiring);
+	}
+
+	struct AppliedContractGenerationSelection
+	{
+		bool bootContractActive = false;
+		bool vendorEvaluationSelected = false;
+		bool relatchPlanOwnsTransition = false;
+		std::uint32_t bootGeneration = 0;
+		std::uint32_t sourceGeneration = 0;
+		std::uint32_t relatchGeneration = 0;
+	};
+
+	// Render Scale-off vendor evaluation owns a real provider contract even though
+	// the physical boot latch is inactive. Preserve only an exact relatch owner.
+	[[nodiscard]] constexpr std::uint32_t SelectAppliedContractGeneration(
+		const AppliedContractGenerationSelection& a_state) noexcept
+	{
+		if (a_state.bootContractActive)
+			return a_state.bootGeneration;
+		if (!a_state.vendorEvaluationSelected)
+			return a_state.bootGeneration;
+		if (a_state.relatchPlanOwnsTransition && a_state.relatchGeneration != 0)
+			return a_state.relatchGeneration;
+		return a_state.sourceGeneration;
+	}
+
+	struct VendorEvaluationRelatchSelection
+	{
+		bool isVR = false;
+		bool methodChanged = false;
+		bool previousMethodUsesVendor = false;
+		bool targetMethodUsesVendor = false;
+		bool targetMethodIsFSR = false;
+		bool fsrRuntimeSelectionChanged = false;
+	};
+
+	// A fixed-resolution vendor selection still owns provider resources. Method
+	// and FSR runtime-path changes must therefore cross the relatch boundary.
+	[[nodiscard]] constexpr bool NeedsVendorEvaluationRelatch(
+		const VendorEvaluationRelatchSelection& a_state) noexcept
+	{
+		if (!a_state.isVR)
+			return false;
+
+		const bool vendorMethodBoundary =
+			a_state.methodChanged &&
+			(a_state.previousMethodUsesVendor ||
+				a_state.targetMethodUsesVendor);
+		const bool fsrRuntimeBoundary =
+			a_state.targetMethodIsFSR &&
+			a_state.fsrRuntimeSelectionChanged;
+		return vendorMethodBoundary || fsrRuntimeBoundary;
+	}
+
+	struct PhysicalRelatchAdmission
+	{
+		bool renderScaleActive = false;
+		bool renderScaleEligible = false;
+		bool restartRequired = false;
+		bool postLoadRecovery = false;
+		bool nativeRestoreRecovery = false;
+		bool providerNeutralRecovery = false;
+		bool vendorEvaluationSelected = false;
+	};
+
+	// Fixed-resolution vendor evaluation owns a physical provider contract even
+	// though the reduced render-target latch is inactive.
+	[[nodiscard]] constexpr bool AllowsPhysicalRelatch(
+		const PhysicalRelatchAdmission& a_state) noexcept
+	{
+		return a_state.renderScaleActive ||
+		       a_state.renderScaleEligible ||
+		       a_state.restartRequired ||
+		       a_state.postLoadRecovery ||
+		       a_state.nativeRestoreRecovery ||
+		       a_state.providerNeutralRecovery ||
+		       a_state.vendorEvaluationSelected;
+	}
+
+	struct VendorEvaluationGenerationSelection
+	{
+		bool renderScaleActive = false;
+		bool publishedProviderMatches = false;
+		std::uint32_t renderScaleGeneration = 0;
+		std::uint32_t publishedProviderGeneration = 0;
+	};
+
+	// The encode intermediates must carry the same generation as the provider
+	// they feed, including the native-sized Render Scale-off path.
+	[[nodiscard]] constexpr std::uint32_t SelectVendorEvaluationGeneration(
+		const VendorEvaluationGenerationSelection& a_state) noexcept
+	{
+		if (a_state.renderScaleActive)
+			return a_state.renderScaleGeneration;
+		if (a_state.publishedProviderMatches)
+			return a_state.publishedProviderGeneration;
+		return 0;
+	}
+
+	struct RelatchResourceTrackingSyncAdmission
+	{
+		bool syncPending = false;
+		bool physicalRelatchPending = false;
+		bool physicalRelatchInProgress = false;
+		bool appliedProfileValid = false;
+		bool appliedOwnsCurrentTarget = false;
+		bool appliedStatePublishable = false;
+		bool frameGenerationChanged = false;
+		bool foveatedChanged = false;
+		bool peripheryTAAChanged = false;
+	};
+
+	// The relatch owns method, quality, Render Scale, and FSR runtime selection.
+	// Only resource changes outside that transaction require a second teardown.
+	[[nodiscard]] constexpr bool CanSyncRelatchResourceTracking(
+		const RelatchResourceTrackingSyncAdmission& a_state) noexcept
+	{
+		return a_state.syncPending &&
+		       !a_state.physicalRelatchPending &&
+		       !a_state.physicalRelatchInProgress &&
+		       a_state.appliedProfileValid &&
+		       a_state.appliedOwnsCurrentTarget &&
+		       a_state.appliedStatePublishable &&
+		       !a_state.frameGenerationChanged &&
+		       !a_state.foveatedChanged &&
+		       !a_state.peripheryTAAChanged;
+	}
+
+	struct VendorPresentationContractAdmission
+	{
+		bool appliedProfileValid = false;
+		bool vendorMethodSelected = false;
+		bool appliedProfileActive = false;
+		bool bootContractActive = false;
+		bool activeBootMatchesApplied = false;
+		bool nativeDimensionsMatch = false;
+	};
+
+	// Both reduced-resolution and native-sized vendor providers require stereo
+	// presentation proof. The inactive boot latch is valid only for the latter.
+	[[nodiscard]] constexpr bool CanStabilizeVendorPresentationContract(
+		const VendorPresentationContractAdmission& a_state) noexcept
+	{
+		if (!a_state.appliedProfileValid || !a_state.vendorMethodSelected)
+			return false;
+
+		if (a_state.appliedProfileActive) {
+			return a_state.bootContractActive &&
+			       a_state.activeBootMatchesApplied;
+		}
+
+		return !a_state.bootContractActive &&
+		       a_state.nativeDimensionsMatch;
+	}
+
 	enum class PostLoadRecoverySettleAction : std::uint8_t
 	{
 		WaitForCleanup,
@@ -2190,10 +2392,44 @@ namespace VRVendorRelatchPolicy
 		return a_fsrEvaluation;
 	}
 
+	struct PresentationStabilizationAdmission
+	{
+		bool renderScaleActive = false;
+		bool vendorMethod = false;
+		bool nativeTargetConvergenceDeferred = false;
+		bool nativeGuardOwned = false;
+	};
+
+	struct PresentationStabilizationPlan
+	{
+		bool vendorSubmitStage = false;
+		bool nativePresentation = false;
+
+		[[nodiscard]] constexpr bool RequiresProof() const noexcept
+		{
+			return vendorSubmitStage || nativePresentation;
+		}
+	};
+
+	// Vendor evaluation does not imply vendor presentation. Fixed-resolution
+	// DLSS/FSR evaluates in the main pass and must prove the native submit path.
+	[[nodiscard]] constexpr PresentationStabilizationPlan
+	SelectPresentationStabilization(
+		const PresentationStabilizationAdmission& a_state) noexcept
+	{
+		return {
+			.vendorSubmitStage =
+				a_state.renderScaleActive && a_state.vendorMethod,
+			.nativePresentation =
+				!a_state.renderScaleActive &&
+				(a_state.vendorMethod ||
+					a_state.nativeTargetConvergenceDeferred ||
+					a_state.nativeGuardOwned),
+		};
+	}
+
 	struct CompatibleFSRRelatchReuseAdmission
 	{
-		bool directMenuRelatch = false;
-		bool recoveryRelatch = false;
 		bool targetIsFSR = false;
 		bool previousWasFSR = false;
 		bool resetPending = false;
@@ -2204,14 +2440,12 @@ namespace VRVendorRelatchPolicy
 		bool resourcesCompatible = false;
 	};
 
-	// A presentation-only recovery relatch must not turn a compatible, live FSR
-	// context into teardown/recreation work. Explicit reset, incompatibility,
-	// pressure, or device-loss evidence still owns replacement.
+	// Request origin does not change resource ownership. Preserve compatible live
+	// FSR contexts unless concrete reset, pressure, or failure evidence owns them.
 	[[nodiscard]] constexpr bool CanReuseCompatibleFSRResources(
 		const CompatibleFSRRelatchReuseAdmission& a_state) noexcept
 	{
-		return (a_state.directMenuRelatch || a_state.recoveryRelatch) &&
-		       a_state.targetIsFSR &&
+		return a_state.targetIsFSR &&
 		       a_state.previousWasFSR &&
 		       !a_state.resetPending &&
 		       a_state.memoryPressureNormal &&

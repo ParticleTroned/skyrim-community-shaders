@@ -485,6 +485,84 @@ public:
 		FoveatedRegionPlan foveatedRegion{};
 	};
 
+	enum class VRNativeRestorePreparationReject : uint64_t
+	{
+		None = 0,
+		InvalidInput = 1ull << 0,
+		TransitionOwnership = 1ull << 1,
+		FrameNotReady = 1ull << 2,
+		MenuOrLoadContext = 1ull << 3,
+		RelatchPending = 1ull << 4,
+		VendorResetPending = 1ull << 5,
+		StabilizerPending = 1ull << 6,
+		PhysicalTargets = 1ull << 7,
+		ResolutionPlan = 1ull << 8,
+		SourceIdentity = 1ull << 9,
+		VendorDispatchFrame = 1ull << 10,
+		TextureLayout = 1ull << 11,
+		RuntimeContract = 1ull << 12,
+	};
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	enum class VRMainPassDispatchStage : uint8_t
+	{
+		None,
+		Entered,
+		MissingGlobals,
+		LifecycleDeferred,
+		SubmitStageOwned,
+		MissingMotionVectors,
+		EncodingStarted,
+		EncodePrerequisitesMissing,
+		EncodeResolutionInvalid,
+		EncodeStereoLayoutInvalid,
+		EncodeActiveIntermediatesIncompatible,
+		EncodeIntermediateCreationFailed,
+		EncodeIntermediateResourcesMissing,
+		EncodeCompleted,
+		VendorResetBlocked,
+		FidelityDispatchStarted,
+		FidelityDispatchFailed,
+		FidelityDispatchSucceeded,
+		Completed
+	};
+
+	struct VRMainPassDispatchDiagnosticSnapshot
+	{
+		VRMainPassDispatchStage lastStage = VRMainPassDispatchStage::None;
+		uint32_t lastFrame = 0;
+		uint64_t callCount = 0;
+		uint64_t encodeAttemptCount = 0;
+		uint64_t encodeSuccessCount = 0;
+		uint64_t vendorResetBlockedCount = 0;
+		uint64_t fidelityAttemptCount = 0;
+		uint64_t fidelitySuccessCount = 0;
+	};
+
+	struct VRNativeRestorePreparationDiagnosticSnapshot
+	{
+		uint64_t rejectMask = 0;
+		uint32_t frame = 0;
+		uint64_t compositorCycleToken = 0;
+		uint32_t commitOutcome = 0;
+		uint32_t commitFrame = 0;
+		uint64_t commitCompositorCycleToken = 0;
+		uint64_t commitAttemptCount = 0;
+		uint64_t commitSuccessCount = 0;
+	};
+
+	enum class VRNativeRestoreCommitDiagnosticOutcome : uint32_t
+	{
+		NotAttempted,
+		PreSubmitProtectionRejected,
+		SubmitLeaseRejected,
+		PostSubmitPreparationRejected,
+		PostSubmitProtectionRejected,
+		ControllerCommitRejected,
+		Recorded,
+	};
+#endif
+
 	/** @brief Complete, immutable target captured for one deferred VR render-scale request. */
 	struct VRRenderScaleDesiredProfile
 	{
@@ -1732,6 +1810,8 @@ public:
 	RuntimeResolutionPlan runtimeResolutionPlan;
 	/** @brief Returns the pending request, or a non-pending snapshot of current settings. */
 	VRRenderScaleDesiredProfile GetPendingVRRenderScaleDesiredProfile() const;
+	/** @brief Resolves a queued portable DLSS preference after adapter capability is known. */
+	bool ResolvePendingVRUpscalingProviderSelection();
 	/** @brief Publishes or coalesces one complete latest-wins request. */
 	VRRenderScaleRequestQueueResult QueueVRRenderScaleRequest(
 		UpscaleMethod a_method,
@@ -1822,6 +1902,8 @@ public:
 		const VRRenderScaleResourceKey& a_target);
 	static uint64_t EstimateVRRenderScaleResourceBytes(const VRRenderScaleResourceKey& a_key);
 	uint32_t GetActiveVRRenderScaleContractGeneration() const;
+	uint32_t GetVRVendorEvaluationContractGeneration(
+		UpscaleMethod a_upscaleMethod) const;
 	bool IsVendorRuntimeReadyForActiveContract(UpscaleMethod a_upscaleMethod) const;
 	void MarkVendorRuntimeResourcesDirty(UpscaleMethod a_upscaleMethod, uint32_t a_generation = 0);
 	void MarkVendorRuntimeResourcesReady(UpscaleMethod a_upscaleMethod, uint32_t a_generation = 0);
@@ -2090,6 +2172,17 @@ public:
 	bool ShouldApplyDLSSSharpening() const;
 	bool ShouldRouteDLSSMainPassThroughSharpener() const;
 	const RuntimeResolutionPlan& GetRuntimeResolutionPlan() const;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** @brief Returns fixed-path progress without affecting release dispatch behavior. */
+	VRMainPassDispatchDiagnosticSnapshot GetVRMainPassDispatchDiagnosticSnapshot() const noexcept;
+	/** @brief Returns the latest strict native-presentation proof rejection. */
+	VRNativeRestorePreparationDiagnosticSnapshot GetVRNativeRestorePreparationDiagnosticSnapshot() const noexcept;
+	/** @brief Records the exact DevBench-only post-submit proof outcome. */
+	void RecordVRNativeRestoreCommitDiagnostic(
+		VRNativeRestoreCommitDiagnosticOutcome a_outcome,
+		uint32_t a_frame,
+		uint64_t a_compositorCycleToken) noexcept;
+#endif
 	/** @brief Resolve material mip bias from the active resolution owner or OpenComposite Unleashed. */
 	float ResolveRuntimeMipBias(bool a_temporal);
 	// Refresh both the cached plan and restart-required state from the current VR render-scale settings.
@@ -3145,12 +3238,18 @@ public:
 	bool RecordVRRenderScaleTransitionPreparing(const VRRenderScaleDesiredProfile& a_request);
 	uint64_t AllocateVRRenderScaleTransitionEpoch();
 	uint64_t AllocateVRRenderScalePreparationOptionsGeneration();
-	void BindVRRenderScaleRelatchEpoch(uint64_t a_epoch);
+	void BindVRRenderScaleRelatchEpoch(
+		uint64_t a_epoch,
+		uint32_t a_contractGeneration);
 	bool IsVRRenderScaleTransitionEpochCurrent(uint64_t a_epoch) const;
 	bool RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a_plan);
 	void StoreVRRenderScaleTransitionStateLocked(VRRenderScaleTransitionState a_state) noexcept;
 	void SetVRRenderScaleTransitionState(VRRenderScaleTransitionState a_state, const char* a_reason = nullptr);
-	bool PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigin a_origin, bool a_requiresStabilization, uint64_t a_epoch);
+	bool PublishVRRenderScaleTransitionApplied(
+		VRUpscalingTransitionOrigin a_origin,
+		bool a_requiresStabilization,
+		uint64_t a_epoch,
+		uint32_t a_relatchContractGeneration = 0);
 	bool PublishVRRenderScaleTransitionStable(
 		uint64_t a_expectedEpoch,
 		uint32_t a_expectedGeneration,
@@ -3388,6 +3487,27 @@ public:
 
 private:
 	std::once_flag upscalingSDKLoadOnce;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	std::atomic<VRMainPassDispatchStage> vrMainPassDispatchLastStage{ VRMainPassDispatchStage::None };
+	std::atomic_uint32_t vrMainPassDispatchLastFrame{ 0 };
+	std::atomic_uint64_t vrMainPassDispatchCallCount{ 0 };
+	std::atomic_uint64_t vrMainPassEncodeAttemptCount{ 0 };
+	std::atomic_uint64_t vrMainPassEncodeSuccessCount{ 0 };
+	std::atomic_uint64_t vrMainPassVendorResetBlockedCount{ 0 };
+	std::atomic_uint64_t vrMainPassFidelityAttemptCount{ 0 };
+	std::atomic_uint64_t vrMainPassFidelitySuccessCount{ 0 };
+	mutable std::atomic_uint64_t vrNativeRestorePreparationRejectMask{ 0 };
+	mutable std::atomic_uint32_t vrNativeRestorePreparationRejectFrame{ 0 };
+	mutable std::atomic_uint64_t vrNativeRestorePreparationRejectCycle{ 0 };
+	std::atomic<VRNativeRestoreCommitDiagnosticOutcome> vrNativeRestoreCommitOutcome{
+		VRNativeRestoreCommitDiagnosticOutcome::NotAttempted
+	};
+	std::atomic_uint32_t vrNativeRestoreCommitFrame{ 0 };
+	std::atomic_uint64_t vrNativeRestoreCommitCycle{ 0 };
+	std::atomic_uint64_t vrNativeRestoreCommitAttemptCount{ 0 };
+	std::atomic_uint64_t vrNativeRestoreCommitSuccessCount{ 0 };
+	void RecordVRMainPassDispatchStage(VRMainPassDispatchStage a_stage, uint32_t a_frame) noexcept;
+#endif
 	enum class VRPostLoadCompositorHoldState : uint32_t
 	{
 		Idle,

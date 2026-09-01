@@ -326,6 +326,7 @@ private:
 	void RecordRuntimeUpscalerFramePath(RuntimeUpscalerFramePath a_path);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	void RecordDevBenchSuccessfulDispatch(RuntimeUpscalerFramePath a_path);
+	mutable std::mutex devBenchSuccessfulDispatchMutex;
 	RuntimeUpscalerDispatchSnapshot devBenchSuccessfulDispatch{};
 	uint64_t devBenchSuccessfulDispatchSerial = 0;
 #endif

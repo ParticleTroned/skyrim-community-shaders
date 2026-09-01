@@ -1233,6 +1233,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					uint64_t a_expectedGuardEpoch,
 					uint32_t a_expectedContractGeneration,
 					ID3D11Texture2D* a_expectedTexture) {
+					const uint32_t diagnosticFrame =
+						globals::state ? globals::state->frameCount : 0u;
 					if (a_expectedGuardEpoch == 0 ||
 						!a_expectedTexture ||
 						upscaling.GetVRNativeRestorePresentationGuardActiveEpoch() !=
@@ -1241,6 +1243,13 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						upscaling.IsVRPostLoadCompositorHoldActive() ||
 						upscaling.ShouldQuarantineVRPostLoadCompositorCycle(
 							compositorCycleToken)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+						upscaling.RecordVRNativeRestoreCommitDiagnostic(
+							Upscaling::VRNativeRestoreCommitDiagnosticOutcome::
+								PreSubmitProtectionRejected,
+							diagnosticFrame,
+							compositorCycleToken);
+#endif
 						return;
 					}
 
@@ -1248,6 +1257,13 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						!lastSubmitPacket.GetColorTexture() ||
 						lastSubmitPacket.GetColorTexture() !=
 							a_expectedTexture) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+						upscaling.RecordVRNativeRestoreCommitDiagnostic(
+							Upscaling::VRNativeRestoreCommitDiagnosticOutcome::
+								SubmitLeaseRejected,
+							diagnosticFrame,
+							compositorCycleToken);
+#endif
 						return;
 					}
 
@@ -1263,19 +1279,45 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						freshObservation.transitionEpoch !=
 							a_expectedGuardEpoch ||
 						freshObservation.contractGeneration !=
-							a_expectedContractGeneration ||
+							a_expectedContractGeneration) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+						upscaling.RecordVRNativeRestoreCommitDiagnostic(
+							Upscaling::VRNativeRestoreCommitDiagnosticOutcome::
+								PostSubmitPreparationRejected,
+							diagnosticFrame,
+							compositorCycleToken);
+#endif
+						return;
+					}
+					if (
 						upscaling.GetVRNativeRestorePresentationGuardActiveEpoch() !=
 							a_expectedGuardEpoch ||
 						upscaling.IsVRInitialLoadPresentationProtectionActive() ||
 						upscaling.IsVRPostLoadCompositorHoldActive() ||
 						upscaling.ShouldQuarantineVRPostLoadCompositorCycle(
 							compositorCycleToken)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+						upscaling.RecordVRNativeRestoreCommitDiagnostic(
+							Upscaling::VRNativeRestoreCommitDiagnosticOutcome::
+								PostSubmitProtectionRejected,
+							diagnosticFrame,
+							compositorCycleToken);
+#endif
 						return;
 					}
-					(void)upscaling
-						.RecordVRNativeRestorePresentationObservationIfUnprotected(
-							freshObservation,
-							renderScalePresentationPacketPtr);
+					const bool recorded = upscaling
+				                              .RecordVRNativeRestorePresentationObservationIfUnprotected(
+												  freshObservation,
+												  renderScalePresentationPacketPtr);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					upscaling.RecordVRNativeRestoreCommitDiagnostic(
+						recorded ?
+							Upscaling::VRNativeRestoreCommitDiagnosticOutcome::Recorded :
+							Upscaling::VRNativeRestoreCommitDiagnosticOutcome::
+								ControllerCommitRejected,
+						diagnosticFrame,
+						compositorCycleToken);
+#endif
 				};
 			const auto submitLatchedNativeRestoreCycle = [&](
 															 const char* a_path,

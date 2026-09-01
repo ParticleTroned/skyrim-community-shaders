@@ -29,8 +29,8 @@
 #include "State.h"
 #include "Utils/ContentHash.h"
 #include "Utils/GenerationClaim.h"
-#include "Utils/ShaderCachePack.h"
 #include "Utils/ShaderCacheManifest.h"
+#include "Utils/ShaderCachePack.h"
 
 #include "Features/DynamicCubemaps.h"
 #include "Features/Upscaling.h"
@@ -494,10 +494,10 @@ namespace SIE
 		{
 			std::error_code error;
 			for (const auto* path : {
-					L"Data/ShaderCache/Optimized.A.csxpack",
-					L"Data/ShaderCache/Optimized.B.csxpack",
-					L"Data/ShaderCache/Developer.A.csxpack",
-					L"Data/ShaderCache/Developer.B.csxpack" }) {
+					 L"Data/ShaderCache/Optimized.A.csxpack",
+					 L"Data/ShaderCache/Optimized.B.csxpack",
+					 L"Data/ShaderCache/Developer.A.csxpack",
+					 L"Data/ShaderCache/Developer.B.csxpack" }) {
 				error.clear();
 				if (!std::filesystem::is_regular_file(path, error) || error)
 					return false;
@@ -510,11 +510,13 @@ namespace SIE
 			Util::ShaderCachePack::Store optimized{
 				L"Data/ShaderCache/Optimized.A.csxpack",
 				L"Data/ShaderCache/Optimized.B.csxpack",
-				Util::ShaderCachePack::Lane::Optimized };
+				Util::ShaderCachePack::Lane::Optimized
+			};
 			Util::ShaderCachePack::Store developer{
 				L"Data/ShaderCache/Developer.A.csxpack",
 				L"Data/ShaderCache/Developer.B.csxpack",
-				Util::ShaderCachePack::Lane::Developer };
+				Util::ShaderCachePack::Lane::Developer
+			};
 			std::once_flag opened;
 			std::atomic_bool optimizedAvailable{ false };
 			std::atomic_bool developerAvailable{ false };
@@ -539,7 +541,6 @@ namespace SIE
 
 		Util::ShaderCachePack::Store* GetShaderPackStore(bool a_developerMode)
 		{
-
 			if (!ManagedShaderPackFilesPresent())
 				return nullptr;
 
@@ -646,10 +647,10 @@ namespace SIE
 				if (!store || !identity)
 					return false;
 				Util::ShaderCachePack::Entry entry{
-				.logicalKey = identity->logicalKey,
-				.exactKey = identity->exactKey,
-				.metadata = identity->metadata,
-				.bytecode = {},
+					.logicalKey = identity->logicalKey,
+					.exactKey = identity->exactKey,
+					.metadata = identity->metadata,
+					.bytecode = {},
 				};
 				const auto* begin = static_cast<const std::byte*>(a_shaderBlob->GetBufferPointer());
 				entry.bytecode.assign(begin, begin + a_shaderBlob->GetBufferSize());
@@ -3483,14 +3484,18 @@ namespace SIE
 	void ShaderCache::SetEnabled(bool value)
 	{
 		if (value) {
-			enableRequested.store(true, std::memory_order_release);
+			const bool enableAlreadyRequested =
+				enableRequested.exchange(true, std::memory_order_acq_rel);
 			pendingDisableAfterVRNativeRestore.store(false, std::memory_order_release);
 			isEnabled.store(true, std::memory_order_release);
 
 			if (globals::game::isVR) {
 				auto& upscaling = globals::features::upscaling;
-				if (upscaling.IsRenderScaleModeRequested() &&
-					!upscaling.IsVRRenderScaleModeLatched()) {
+				if (ShaderCacheDisablePolicy::ShouldRequestRelatchOnEnable({
+						.enableAlreadyRequested = enableAlreadyRequested,
+						.vrRenderScaleRequested = upscaling.IsRenderScaleModeRequested(),
+						.vrRenderScaleLatched = upscaling.IsVRRenderScaleModeLatched(),
+					})) {
 					upscaling.RequestPerfModeRenderTargetRecreate(
 						"custom shaders re-enabled",
 						Upscaling::VRUpscalingTransitionOrigin::CSMenu);
@@ -3642,8 +3647,8 @@ namespace SIE
 				deferredDiskWrites.end(),
 				[&](const DeferredDiskWrite& a_write) {
 					return a_write.diskCacheGeneration == a_diskCacheGeneration &&
-					       a_write.developerMode == a_developerMode &&
-					       a_write.diskPath == a_diskPath;
+				           a_write.developerMode == a_developerMode &&
+				           a_write.diskPath == a_diskPath;
 				});
 			if (existing != deferredDiskWrites.end())
 				*existing = std::move(deferredWrite);
@@ -3902,7 +3907,7 @@ namespace SIE
 		const auto plan = Util::CacheInvalidation::PlanCacheFamilies(
 			DiskCachePath(), L"Data/Shaders", defines);
 		const bool ok = plan.has_value() && Util::CacheInvalidation::ApplyCacheFamilyPlan(
-			*plan, &deleted, &kept);
+												*plan, &deleted, &kept);
 		if (ok) {
 			auto& manifest = GetShaderCacheManifest();
 			const auto removedEntries = manifest.PruneIf([](const std::string& a_key) {
@@ -5331,7 +5336,7 @@ namespace SIE
 			}
 
 			for (const auto [developerMode, written] : {
-					std::pair{ false, optimizedPackWritten }, std::pair{ true, developerPackWritten } }) {
+					 std::pair{ false, optimizedPackWritten }, std::pair{ true, developerPackWritten } }) {
 				if (!written)
 					continue;
 				try {

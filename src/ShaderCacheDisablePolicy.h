@@ -2,6 +2,21 @@
 
 namespace ShaderCacheDisablePolicy
 {
+	struct EnableRequestInputs
+	{
+		bool enableAlreadyRequested = false;
+		bool vrRenderScaleRequested = false;
+		bool vrRenderScaleLatched = false;
+	};
+
+	[[nodiscard]] constexpr bool ShouldRequestRelatchOnEnable(
+		const EnableRequestInputs& a_inputs) noexcept
+	{
+		return !a_inputs.enableAlreadyRequested &&
+		       a_inputs.vrRenderScaleRequested &&
+		       !a_inputs.vrRenderScaleLatched;
+	}
+
 	enum class DisableRequestAction
 	{
 		DisableImmediately,

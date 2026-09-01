@@ -1,5 +1,6 @@
 #include "FidelityFX.h"
 #include "FSRHostLifecyclePolicy.h"
+#include "FSRRuntimeLifecyclePolicy.h"
 
 #include <algorithm>
 #include <array>
@@ -1200,6 +1201,7 @@ std::string FidelityFX::GetRuntimeUpscalerRequestedVersionString() const
 #ifdef DEVBENCH_BRIDGE_ENABLED
 FidelityFX::RuntimeUpscalerDispatchSnapshot FidelityFX::GetRuntimeUpscalerDispatchSnapshotForRenderThread() const
 {
+	const std::scoped_lock lock(devBenchSuccessfulDispatchMutex);
 	return {
 		devBenchSuccessfulDispatch.valid,
 		devBenchSuccessfulDispatch.frame,
@@ -1223,7 +1225,10 @@ void FidelityFX::ResetRuntimeUpscalerTracking(bool a_invalidateProviderCache)
 	runtimeUpscalerLastFrameIndex = 0;
 	runtimeUpscalerLastFramePath = RuntimeUpscalerFramePath::kInactive;
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	devBenchSuccessfulDispatch = {};
+	{
+		const std::scoped_lock lock(devBenchSuccessfulDispatchMutex);
+		devBenchSuccessfulDispatch = {};
+	}
 #endif
 
 	if (!a_invalidateProviderCache)
@@ -1288,6 +1293,7 @@ void FidelityFX::RecordRuntimeUpscalerFramePath(RuntimeUpscalerFramePath a_path)
 #ifdef DEVBENCH_BRIDGE_ENABLED
 void FidelityFX::RecordDevBenchSuccessfulDispatch(RuntimeUpscalerFramePath a_path)
 {
+	const std::scoped_lock lock(devBenchSuccessfulDispatchMutex);
 	uint64_t serial = ++devBenchSuccessfulDispatchSerial;
 	if (serial == 0)
 		serial = ++devBenchSuccessfulDispatchSerial;
@@ -2160,35 +2166,40 @@ bool FidelityFX::AreFSRProviderContextsCompatible(
 
 bool FidelityFX::HasRuntimeUpscalerResources() const
 {
-	bool hasRuntimeResources =
-		runtimeUpscalerContextCount != 0 ||
-		pendingRuntimeTeardownD3D11FenceValue != 0 ||
-		pendingRuntimeTeardownD3D12FenceValue != 0 ||
-		runtimeD3D11Fence.get() != nullptr ||
-		runtimeD3D12Fence.get() != nullptr;
+	FSRRuntimeLifecyclePolicy::RetirementState state{
+		.providerContext = runtimeUpscalerContextCount != 0,
+		.teardownFencePending =
+			pendingRuntimeTeardownD3D11FenceValue != 0 ||
+			pendingRuntimeTeardownD3D12FenceValue != 0,
+		.interopFencePresent =
+			runtimeD3D11Fence.get() != nullptr ||
+			runtimeD3D12Fence.get() != nullptr,
+	};
 	for (const bool indeterminate : runtimeUpscalerContextIndeterminate)
-		hasRuntimeResources = hasRuntimeResources || indeterminate;
+		state.providerContext = state.providerContext || indeterminate;
 	for (const auto& context : runtimeUpscalerContexts)
-		hasRuntimeResources = hasRuntimeResources || context != nullptr;
+		state.providerContext = state.providerContext || context != nullptr;
 	for (const auto& commandContext : runtimeCommandContexts) {
-		hasRuntimeResources = hasRuntimeResources ||
-		                      commandContext.commandAllocator.get() != nullptr ||
-		                      commandContext.commandList.get() != nullptr ||
-		                      commandContext.fenceValue != 0;
+		state.commandInfrastructurePresent =
+			state.commandInfrastructurePresent ||
+			commandContext.commandAllocator.get() != nullptr ||
+			commandContext.commandList.get() != nullptr;
+		state.commandWorkInFlight =
+			state.commandWorkInFlight || commandContext.fenceValue != 0;
 	}
 	for (const auto& resource : runtimeColorShared)
-		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
+		state.sharedResource = state.sharedResource || resource != nullptr;
 	for (const auto& resource : runtimeDepthShared)
-		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
+		state.sharedResource = state.sharedResource || resource != nullptr;
 	for (const auto& resource : runtimeMotionShared)
-		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
+		state.sharedResource = state.sharedResource || resource != nullptr;
 	for (const auto& resource : runtimeReactiveShared)
-		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
+		state.sharedResource = state.sharedResource || resource != nullptr;
 	for (const auto& resource : runtimeTransparencyShared)
-		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
+		state.sharedResource = state.sharedResource || resource != nullptr;
 	for (const auto& resource : runtimeOutputShared)
-		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
-	return hasRuntimeResources;
+		state.sharedResource = state.sharedResource || resource != nullptr;
+	return FSRRuntimeLifecyclePolicy::HasRetirementRelevantState(state);
 }
 
 bool FidelityFX::HasCompleteRuntimeUpscalerSharedResources(
@@ -2266,25 +2277,34 @@ bool FidelityFX::AreRuntimeUpscalerResourcesCompatible(
 		[](const RuntimeCommandContext& a_context) {
 			return a_context.commandAllocator && a_context.commandList;
 		});
-	if (runtimeUpscalerFailureLatched || runtimeUpscalerSessionQuarantined ||
-		runtimeHostFallbackActive ||
-		IsRuntimeUpscalerOwnershipDetached() ||
-		pendingRuntimeTeardownD3D11FenceValue != 0 ||
-		pendingRuntimeTeardownD3D12FenceValue != 0 ||
-		!globals::d3d::device || !globals::d3d::context ||
-		!swapChain.d3d11Device || !swapChain.d3d11Context ||
-		!swapChain.d3d12Device || !swapChain.commandQueue ||
-		!runtimeD3D11Fence || !runtimeD3D12Fence ||
-		!commandContextsReady ||
-		!IsRuntimeUpscalerProviderMatchingRequestedVersion() ||
-		!AreRuntimeUpscalerContextsCompatible(
+	const FSRRuntimeLifecyclePolicy::ResourceCompatibilityState compatibility{
+		.terminalFailure = runtimeUpscalerFailureLatched,
+		.sessionQuarantined = runtimeUpscalerSessionQuarantined,
+		.ownershipDetached = IsRuntimeUpscalerOwnershipDetached(),
+		.teardownFencePending =
+			pendingRuntimeTeardownD3D11FenceValue != 0 ||
+			pendingRuntimeTeardownD3D12FenceValue != 0,
+		.devicesReady =
+			globals::d3d::device && globals::d3d::context &&
+			swapChain.d3d11Device && swapChain.d3d11Context &&
+			swapChain.d3d12Device && swapChain.commandQueue,
+		.interopFencesReady = runtimeD3D11Fence && runtimeD3D12Fence,
+		.commandContextsReady = commandContextsReady,
+		.providerVersionMatches =
+			IsRuntimeUpscalerProviderMatchingRequestedVersion(),
+		.contextsCompatible = AreRuntimeUpscalerContextsCompatible(
 			a_fullRenderWidth,
 			a_fullRenderHeight,
 			a_fullDisplayWidth,
 			a_fullDisplayHeight,
 			a_contextCount,
-			a_requestedVersion) ||
-		!HasCompleteRuntimeUpscalerSharedResources(a_contextCount)) {
+			a_requestedVersion),
+		.sharedResourcesComplete =
+			HasCompleteRuntimeUpscalerSharedResources(a_contextCount),
+		.transientHostFallback = runtimeHostFallbackActive,
+	};
+	if (!FSRRuntimeLifecyclePolicy::HasStructurallyCompatibleRuntimeResources(
+			compatibility)) {
 		return false;
 	}
 

@@ -103,13 +103,24 @@ caller-path substitution that can affect vendor caller validation, not a
 signature or authentication mechanism. It requires explicit legal and license
 review before any distribution or use beyond this internal experiment.
 
-Local runtime staging is disabled by default. When explicitly enabled, it
+All runtime staging is disabled by default. When local staging is explicitly enabled, it
 stages exactly seven files into `Shaders/Upscaling/Streamline`: the six
 normal-DLSS runtime modules and the patched 310.8 `nvngx_dlssnr.dll`. Configure
-fails if a source is absent or does not match its declared SHA-256. No runtime
-is downloaded. Set `CSX_STAGE_LOCAL_DLSS_RUNTIME=ON` and supply
+fails if a source is absent or does not match its declared SHA-256. Set
+`CSX_STAGE_LOCAL_DLSS_RUNTIME=ON` and supply
 `CSX_LOCAL_DLSS_RUNTIME_DIRECTORY` and `CSX_LOCAL_DLSSNR_RUNTIME_FILE` through
-the CMake cache to select the private source files.
+the CMake cache to select the private source files. The directories are not
+encoded in source control and may point at any developer-controlled location.
+
+`CSX_FETCH_OFFICIAL_STREAMLINE_RUNTIME=ON` is a separate, explicit opt-in that
+restores the official SDK acquisition path used by the baseline project. The
+release archive is downloaded from NVIDIA's Streamline GitHub release, checked
+against its declared SHA-256, and searched for exactly one production x64 copy
+of each of the six normal-DLSS modules. This mode does not stage
+`nvngx_dlssnr.dll` and is mutually exclusive with local staging. A default
+configure performs no runtime download. Builds made without either mode retain
+the runtime-free `Shaders/Upscaling/Streamline` directory; a developer can copy an
+applicable DLL package into that final output after the build.
 
 The staged NR identity is the malware-screened but modified `8270...206` file
 selected by `CSX_LOCAL_DLSSNR_RUNTIME_FILE`. Its embedded NVIDIA signature

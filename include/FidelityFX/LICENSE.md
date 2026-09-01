@@ -15,4 +15,4 @@ This notice applies to vendored source headers only.
 
 Redistributed runtime binaries are covered separately by:
 
-- [features/Upscaling/Shaders/Upscaling/FidelityFX/license.md](D:/Coding/GitHub/skyrim-community-shaders/features/Upscaling/Shaders/Upscaling/FidelityFX/license.md)
+- [FidelityFX runtime license](../../features/Upscaling/Shaders/Upscaling/FidelityFX/license.md)

@@ -130,6 +130,24 @@ public:
 	LifecycleResult DestroyFSRResources(bool a_waitForIdle = true);
 	bool HasFSRResources() const;
 	bool AreFSRResourcesCompatible(uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight, uint32_t a_contextCount) const;
+	/** @brief Returns whether the active D3D11 feature level can execute the host FSR3 shader set. */
+	bool IsHostFSR3Supported() const noexcept;
+	/** @brief Prepares the primary runtime FSR contexts without requiring dispatch resources. */
+	LifecycleResult PrepareRuntimeUpscalerContextsForFSR(
+		uint32_t a_renderWidth,
+		uint32_t a_renderHeight,
+		uint32_t a_displayWidth,
+		uint32_t a_displayHeight,
+		uint32_t a_contextCount,
+		bool a_requestFsr4);
+	/** @brief Proves a compatible host or primary runtime FSR context generation. */
+	bool AreFSRProviderContextsCompatible(
+		uint32_t a_renderWidth,
+		uint32_t a_renderHeight,
+		uint32_t a_displayWidth,
+		uint32_t a_displayHeight,
+		uint32_t a_contextCount,
+		bool a_requestFsr4) const;
 	/** @brief Proves a complete reusable runtime FSR provider generation. */
 	bool AreRuntimeUpscalerResourcesCompatible(
 		uint32_t a_fullRenderWidth,

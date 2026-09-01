@@ -1674,6 +1674,30 @@ FidelityFX::LifecycleResult FidelityFX::CreateFSRResources()
 		}
 	}
 
+	if (!IsHostFSR3Supported()) {
+		if (!ShouldUseRuntimeUpscalerForFSR() || !CanUseRuntimeUpscalerPath()) {
+			logger::error(
+				"[FidelityFX] Host FSR3 requires D3D feature level 11_1, but the active device reports 0x{:X} and no usable runtime provider is available.",
+				static_cast<uint32_t>(globals::d3d::device->GetFeatureLevel()));
+			return LifecycleResult::Failed;
+		}
+
+		static bool loggedRuntimeOnlyHostBypass = false;
+		if (!loggedRuntimeOnlyHostBypass) {
+			logger::info(
+				"[FidelityFX] D3D feature level 0x{:X} cannot execute the host FSR3 shader set; preparing the DX12 runtime provider without creating host contexts.",
+				static_cast<uint32_t>(globals::d3d::device->GetFeatureLevel()));
+			loggedRuntimeOnlyHostBypass = true;
+		}
+		return PrepareRuntimeUpscalerContextsForFSR(
+			requestedRenderWidth,
+			requestedRenderHeight,
+			displayWidth,
+			displayHeight,
+			numContexts,
+			ShouldRequestRuntimeFsr4());
+	}
+
 	if (!IsRuntimeUpscalerOwnershipDetached()) {
 		const auto runtimeIdleResult = PollRuntimeUpscalerTeardownReady("host FSR resource creation");
 		if (runtimeIdleResult != LifecycleResult::Ready)
@@ -1772,8 +1796,9 @@ FidelityFX::LifecycleResult FidelityFX::CreateFSRResources()
 		}
 		if (FSRHostLifecyclePolicy::RequiresOwnershipQuarantine(createDisposition)) {
 			logger::critical(
-				"[FidelityFX] FSR3 context creation for eye {} returned an error; quarantining potentially partial SDK ownership.",
-				i);
+				"[FidelityFX] FSR3 context creation for eye {} returned error 0x{:08X}; quarantining potentially partial SDK ownership.",
+				i,
+				static_cast<uint32_t>(createResult));
 			const auto failureResult = ResolveFSRLifecycleFailure("FSR3 context creation");
 			QuarantineHostFSRContext(i, "an FSR3 context creation error");
 			return failureResult;
@@ -2059,6 +2084,78 @@ bool FidelityFX::AreFSRResourcesCompatible(uint32_t a_renderWidth, uint32_t a_re
 	       a_renderHeight <= fsrContextMaxRenderHeight &&
 	       a_displayWidth == fsrContextDisplayWidth &&
 	       a_displayHeight == fsrContextDisplayHeight;
+}
+
+bool FidelityFX::IsHostFSR3Supported() const noexcept
+{
+	return globals::d3d::device &&
+	       FSRHostLifecyclePolicy::SupportsHostFsr3FeatureLevel(
+			   static_cast<uint32_t>(globals::d3d::device->GetFeatureLevel()));
+}
+
+FidelityFX::LifecycleResult FidelityFX::PrepareRuntimeUpscalerContextsForFSR(
+	uint32_t a_renderWidth,
+	uint32_t a_renderHeight,
+	uint32_t a_displayWidth,
+	uint32_t a_displayHeight,
+	uint32_t a_contextCount,
+	bool a_requestFsr4)
+{
+	if (!ShouldUseRuntimeUpscalerForFSR() || !CanUseRuntimeUpscalerPath())
+		return LifecycleResult::Failed;
+
+	const bool useFsr4 = a_requestFsr4 &&
+	                     !runtimeFsr4FailureLatched &&
+	                     IsRuntimeFsr4Available();
+	const uint32_t requestedVersion = useFsr4 ? FFX_UPSCALER_VERSION : Fsr3Version;
+	// Split-eye contexts retain display-sized bounds so quality changes do not
+	// require provider recreation; dispatch still supplies the active extent.
+	const bool useDisplayBounds = a_contextCount > 1 || useFsr4;
+	const uint32_t maxRenderWidth = useDisplayBounds ? a_displayWidth : a_renderWidth;
+	const uint32_t maxRenderHeight = useDisplayBounds ? a_displayHeight : a_renderHeight;
+	return EnsureRuntimeUpscalerContexts(
+		maxRenderWidth,
+		maxRenderHeight,
+		a_displayWidth,
+		a_displayHeight,
+		a_contextCount,
+		requestedVersion);
+}
+
+bool FidelityFX::AreFSRProviderContextsCompatible(
+	uint32_t a_renderWidth,
+	uint32_t a_renderHeight,
+	uint32_t a_displayWidth,
+	uint32_t a_displayHeight,
+	uint32_t a_contextCount,
+	bool a_requestFsr4) const
+{
+	if (AreFSRResourcesCompatible(
+			a_renderWidth,
+			a_renderHeight,
+			a_displayWidth,
+			a_displayHeight,
+			a_contextCount)) {
+		return true;
+	}
+	if (!ShouldUseRuntimeUpscalerForFSR() ||
+		runtimeUpscalerFailureLatched ||
+		runtimeUpscalerSessionQuarantined) {
+		return false;
+	}
+
+	const bool useFsr4 = a_requestFsr4 &&
+	                     !runtimeFsr4FailureLatched &&
+	                     IsRuntimeFsr4Available();
+	const uint32_t requestedVersion = useFsr4 ? FFX_UPSCALER_VERSION : Fsr3Version;
+	const bool useDisplayBounds = a_contextCount > 1 || useFsr4;
+	return AreRuntimeUpscalerContextsCompatible(
+		useDisplayBounds ? a_displayWidth : a_renderWidth,
+		useDisplayBounds ? a_displayHeight : a_renderHeight,
+		a_displayWidth,
+		a_displayHeight,
+		a_contextCount,
+		requestedVersion);
 }
 
 bool FidelityFX::HasRuntimeUpscalerResources() const

@@ -4,6 +4,9 @@ namespace
 {
 	using namespace FSRHostLifecyclePolicy;
 
+	static_assert(!SupportsHostFsr3FeatureLevel(0xB000));
+	static_assert(SupportsHostFsr3FeatureLevel(0xB100));
+	static_assert(SupportsHostFsr3FeatureLevel(0xC000));
 	static_assert(!RequiresOwnershipQuarantine(CallDisposition::Succeeded));
 	static_assert(RequiresOwnershipQuarantine(CallDisposition::ReturnedError));
 	static_assert(RequiresOwnershipQuarantine(CallDisposition::Faulted));

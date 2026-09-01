@@ -115,6 +115,19 @@ namespace
 
 	constexpr bool CoversGameEntryConvergence()
 	{
+		constexpr GameEntryConvergence ready{
+			.hasGateOwner = true,
+			.completedWorldFrame = true,
+		};
+		auto queuedRelatch = ready;
+		queuedRelatch.relatchPending = true;
+		auto queuedProfileTransition = ready;
+		queuedProfileTransition.profileTransitionPending = true;
+		if (!CanReleaseGameEntryVendorGate(queuedRelatch) ||
+			!CanReleaseGameEntryVendorGate(queuedProfileTransition)) {
+			return false;
+		}
+
 		for (std::uint32_t bits = 0; bits < (1u << 9); ++bits) {
 			const GameEntryConvergence state{
 				.hasGateOwner = (bits & (1u << 0)) != 0,
@@ -134,9 +147,7 @@ namespace
 				!state.raceSexPresentationActive &&
 				!state.saveLoadProtectionActive &&
 				state.completedWorldFrame &&
-				!state.recoveryPending &&
-				!state.relatchPending &&
-				!state.profileTransitionPending;
+				!state.recoveryPending;
 			if (CanReleaseGameEntryVendorGate(state) != expected) {
 				return false;
 			}

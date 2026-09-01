@@ -555,6 +555,9 @@ namespace NeuralRendering
 		void RefreshRuntimeTelemetryLocked();
 		void RefreshInteropTelemetryLocked();
 		void SetRequestTelemetryLocked(const RendererApplyArgs& a_args) noexcept;
+		void SetActiveFeatureSlotLocked(std::uint32_t a_slot) noexcept;
+		[[nodiscard]] std::uint32_t ActiveFeatureSlotOrLocked(
+			std::uint32_t a_fallback) const noexcept;
 		HRESULT GetDeviceRemovalReasonLocked(HRESULT a_candidate) const noexcept;
 		bool FailLocked(
 			RendererStage a_stage,
@@ -580,6 +583,7 @@ namespace NeuralRendering
 		bool runtimeInitializationResultLogged_ = false;
 		std::array<bool, Runtime::kFeatureSlotCount> slotEvaluateSuccessLogged_{};
 		RendererStage activeStage_ = RendererStage::None;
+		std::uint32_t activeFeatureSlot_ = Runtime::kFeatureSlotCount;
 	};
 
 	Renderer::State::ValidationFailure Renderer::State::ValidateLocked(
@@ -869,6 +873,24 @@ namespace NeuralRendering
 		snapshot_.outputCommitted = false;
 	}
 
+	void Renderer::State::SetActiveFeatureSlotLocked(
+		std::uint32_t a_slot) noexcept
+	{
+		activeFeatureSlot_ = a_slot < Runtime::kFeatureSlotCount ?
+		                         a_slot :
+		                         Runtime::kFeatureSlotCount;
+	}
+
+	std::uint32_t Renderer::State::ActiveFeatureSlotOrLocked(
+		std::uint32_t a_fallback) const noexcept
+	{
+		if (activeFeatureSlot_ < Runtime::kFeatureSlotCount)
+			return activeFeatureSlot_;
+		return a_fallback < Runtime::kFeatureSlotCount ?
+		           a_fallback :
+		           Runtime::kFeatureSlotCount;
+	}
+
 	HRESULT Renderer::State::GetDeviceRemovalReasonLocked(
 		HRESULT a_candidate) const noexcept
 	{
@@ -894,6 +916,7 @@ namespace NeuralRendering
 		bool a_forceQuarantine,
 		bool a_countApplyFailure)
 	{
+		SetActiveFeatureSlotLocked(a_slot);
 		if (a_countApplyFailure) {
 			Increment(snapshot_.counters.failures);
 			if (a_slot < Runtime::kFeatureSlotCount)
@@ -1347,6 +1370,7 @@ namespace NeuralRendering
 	{
 		if (a_args.empty() || a_args.size() != a_slots.size())
 			return false;
+		SetActiveFeatureSlotLocked(a_args.front().featureSlot);
 		auto* shader = copyDepthGuideCS_.Get(
 			L"Data/Shaders/Upscaling/NeuralRendering/CopyDepthGuideCS.hlsl",
 			{},
@@ -1362,6 +1386,7 @@ namespace NeuralRendering
 
 		a_args.front().context->CSSetShader(shader, nullptr, 0);
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
 			auto* source = a_args[index].depthGuideSRV;
 			auto* destination = a_slots[index]->depth.uav11.Get();
 			a_args.front().context->CSSetShaderResources(0, 1, &source);
@@ -1397,13 +1422,16 @@ namespace NeuralRendering
 		RendererApplyOutcome& a_outcome)
 	{
 		a_outcome = {};
+		SetActiveFeatureSlotLocked(a_args.front().featureSlot);
 		if (quarantined_ || failureLatched_)
 			return ApplyBatchLocked(a_args, a_outcome);
+		SetActiveFeatureSlotLocked(a_args[1].featureSlot);
 		if (!GetStereoPairContractViolation(a_args).empty())
 			return ApplyBatchLocked(a_args, a_outcome);
 
 		std::array<ValidatedResources, 2> resources{};
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
 			if (ValidateLocked(a_args[index], resources[index]))
 				return ApplyBatchLocked(a_args, a_outcome);
 		}
@@ -1420,6 +1448,7 @@ namespace NeuralRendering
 		}
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			const auto& args = a_args[index];
+			SetActiveFeatureSlotLocked(args.featureSlot);
 			const auto& slot = slots_[args.featureSlot];
 			const bool discontinuous =
 				slot.historyValid &&
@@ -1435,6 +1464,7 @@ namespace NeuralRendering
 				synchronizeDiscontinuousReset || discontinuous;
 		}
 
+		SetActiveFeatureSlotLocked(a_args.front().featureSlot);
 		auto synchronizedArgs = a_args;
 		for (auto& args : synchronizedArgs) {
 			args.synchronizedHistoryReset = synchronizeForcedReset;
@@ -1443,6 +1473,7 @@ namespace NeuralRendering
 		}
 
 		RendererApplyOutcome leftOutcome{};
+		SetActiveFeatureSlotLocked(synchronizedArgs[0].featureSlot);
 		if (!ApplyBatchLocked(
 				std::span(&synchronizedArgs[0], 1),
 				leftOutcome,
@@ -1453,6 +1484,7 @@ namespace NeuralRendering
 		a_outcome.evaluationAttemptedFeatureSlotMask =
 			leftOutcome.evaluationAttemptedFeatureSlotMask;
 		RendererApplyOutcome rightOutcome{};
+		SetActiveFeatureSlotLocked(synchronizedArgs[1].featureSlot);
 		const bool rightSucceeded = ApplyBatchLocked(
 			std::span(&synchronizedArgs[1], 1),
 			rightOutcome,
@@ -1470,11 +1502,13 @@ namespace NeuralRendering
 		a_outcome = {};
 		if (a_args.empty() || a_args.size() > 2)
 			return false;
+		SetActiveFeatureSlotLocked(a_args.front().featureSlot);
 		if (!a_validatedResources.empty() &&
 			a_validatedResources.size() != a_args.size()) {
 			return false;
 		}
 		for (const auto& args : a_args) {
+			SetActiveFeatureSlotLocked(args.featureSlot);
 			Increment(snapshot_.counters.attempts);
 			SetRequestTelemetryLocked(args);
 		}
@@ -1512,6 +1546,7 @@ namespace NeuralRendering
 			std::array<RendererApplyArgs, 2> stereoArgs{
 				a_args[0], a_args[1]
 			};
+			SetActiveFeatureSlotLocked(stereoArgs[1].featureSlot);
 			if (auto violation = GetStereoPairContractViolation(stereoArgs);
 				!violation.empty()) {
 				return FailLocked(
@@ -1526,6 +1561,7 @@ namespace NeuralRendering
 		std::array<ValidatedResources, 2> resources{};
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			const auto& args = a_args[index];
+			SetActiveFeatureSlotLocked(args.featureSlot);
 			ValidationFailure validation{};
 			if (a_validatedResources.empty()) {
 				validation = ValidateLocked(args, resources[index]);
@@ -1554,11 +1590,13 @@ namespace NeuralRendering
 		snapshot_.lastCompletedStage = RendererStage::Validation;
 
 		activeStage_ = RendererStage::DeviceCompatibility;
+		SetActiveFeatureSlotLocked(a_args.front().featureSlot);
 		if (!EnsureBackendLocked(a_args.front()))
 			return false;
 		activeStage_ = RendererStage::ResourceCreation;
 		std::array<Slot*, 2> slots{};
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
 			if (!EnsureSlotLocked(a_args[index].featureSlot, resources[index]))
 				return false;
 			slots[index] = &slots_[a_args[index].featureSlot];
@@ -1567,9 +1605,11 @@ namespace NeuralRendering
 		const auto preparationStarted = std::chrono::steady_clock::now();
 		activeStage_ = RendererStage::ColorInputCopy;
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
 			a_args.front().context->CopyResource(
 				slots[index]->color.resource11.Get(), resources[index].color.texture.Get());
 		}
+		SetActiveFeatureSlotLocked(a_args.front().featureSlot);
 		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
 			return FailLocked(
 				RendererStage::ColorInputCopy,
@@ -1603,10 +1643,12 @@ namespace NeuralRendering
 
 		activeStage_ = RendererStage::MotionVectorCopy;
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
 			a_args.front().context->CopyResource(
 				slots[index]->motionVectors.resource11.Get(),
 				resources[index].motionVectors.texture.Get());
 		}
+		SetActiveFeatureSlotLocked(a_args.front().featureSlot);
 		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
 			return FailLocked(
 				RendererStage::MotionVectorCopy,
@@ -1624,6 +1666,7 @@ namespace NeuralRendering
 			preparationStarted);
 
 		activeStage_ = RendererStage::CommandBegin;
+		SetActiveFeatureSlotLocked(a_args.front().featureSlot);
 		ID3D12GraphicsCommandList* commandList = nullptr;
 		if (!interop_.BeginD3D12(&commandList) || !commandList) {
 			return FailLocked(
@@ -1640,6 +1683,7 @@ namespace NeuralRendering
 		std::uint64_t pixelCount = 0;
 		std::uint32_t featureSlotMask = 0;
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
 			const std::size_t base = index * 4u;
 			sharedResources[base] = slots[index]->color.resource12.Get();
 			sharedResources[base + 1u] = slots[index]->depth.resource12.Get();
@@ -1651,6 +1695,7 @@ namespace NeuralRendering
 					a_args[index].outputHeight);
 			featureSlotMask |= 1u << a_args[index].featureSlot;
 		}
+		SetActiveFeatureSlotLocked(a_args.front().featureSlot);
 		const auto resourceSpan = std::span(sharedResources.data(), a_args.size() * 4u);
 		TransitionResources(commandList, resourceSpan, true);
 		if (!interop_.BeginFeatureTiming(
@@ -1676,6 +1721,7 @@ namespace NeuralRendering
 		bool synchronizeForcedReset = false;
 		bool synchronizeDiscontinuousReset = false;
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
 			const auto& slot = *slots[index];
 			discontinuousHistoryReset[index] =
 				a_args[index].synchronizedHistoryDiscontinuity ||
@@ -1697,6 +1743,7 @@ namespace NeuralRendering
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			auto& slot = *slots[index];
 			const auto& args = a_args[index];
+			SetActiveFeatureSlotLocked(args.featureSlot);
 			const bool forcedReset = stereoBatch ?
 			                             synchronizeForcedReset :
 			                             forcedHistoryReset[index];
@@ -1769,6 +1816,7 @@ namespace NeuralRendering
 		}
 		snapshot_.lastCompletedStage = RendererStage::FeatureEvaluate;
 
+		SetActiveFeatureSlotLocked(a_args.front().featureSlot);
 		if (!interop_.EndFeatureTiming(commandList)) {
 			const bool aborted = interop_.AbortD3D12();
 			recordingGuard.active = interop_.IsRecording();
@@ -1795,6 +1843,7 @@ namespace NeuralRendering
 		snapshot_.lastCompletedStage = RendererStage::CommandEnd;
 
 		activeStage_ = RendererStage::OutputCommit;
+		SetActiveFeatureSlotLocked(a_args.front().featureSlot);
 		RefreshRuntimeTelemetryLocked();
 		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
 			return FailLocked(
@@ -1809,9 +1858,11 @@ namespace NeuralRendering
 		// output is written until every eye has recorded successfully.
 		const auto outputCommitStarted = std::chrono::steady_clock::now();
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
 			a_args.front().context->CopyResource(
 				resources[index].output.texture.Get(), slots[index]->output.resource11.Get());
 		}
+		SetActiveFeatureSlotLocked(a_args.front().featureSlot);
 		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
 			return FailLocked(
 				RendererStage::OutputCommit,
@@ -1827,13 +1878,17 @@ namespace NeuralRendering
 			snapshot_.performance.maximumOutputCommitCpuEnqueueMicroseconds,
 			outputCommitStarted);
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
 			slots[index]->historyKey = resources[index].historyKey;
 			slots[index]->lastSuccessfulFrame = a_args[index].frameId;
 			slots[index]->historyValid = true;
 		}
 		activeStage_ = RendererStage::Complete;
-		for (const auto& args : a_args)
+		for (const auto& args : a_args) {
+			SetActiveFeatureSlotLocked(args.featureSlot);
 			SucceedLocked(args.featureSlot);
+		}
+		SetActiveFeatureSlotLocked(a_args.front().featureSlot);
 		RefreshInteropTelemetryLocked();
 		return true;
 	}
@@ -1886,6 +1941,7 @@ namespace NeuralRendering
 		std::scoped_lock lock(state_->mutex_);
 		RendererApplyOutcome outcome{};
 		const auto failuresBefore = state_->snapshot_.counters.failures;
+		state_->SetActiveFeatureSlotLocked(a_args.featureSlot);
 		try {
 			CS_PROFILE_SCOPE("Upscaling::DLSSNeuralRendering");
 			const bool succeeded = state_->ApplyLocked(a_args, outcome);
@@ -1895,7 +1951,7 @@ namespace NeuralRendering
 		} catch (...) {
 			state_->QuarantineAfterUnexpectedFailureLocked(
 				state_->activeStage_,
-				a_args.featureSlot,
+				state_->ActiveFeatureSlotOrLocked(a_args.featureSlot),
 				true,
 				failuresBefore);
 			if (a_outcome)
@@ -1912,6 +1968,7 @@ namespace NeuralRendering
 		RendererApplyOutcome outcome{};
 		Increment(state_->snapshot_.counters.stereoAttempts);
 		const auto failuresBefore = state_->snapshot_.counters.failures;
+		state_->SetActiveFeatureSlotLocked(a_args[0].featureSlot);
 		try {
 			CS_PROFILE_SCOPE("Upscaling::DLSSNeuralRenderingStereo");
 			const bool succeeded = state_->ApplyStereoLocked(a_args, outcome);
@@ -1922,13 +1979,9 @@ namespace NeuralRendering
 				*a_outcome = outcome;
 			return succeeded;
 		} catch (...) {
-			const auto failureFeatureSlot =
-				state_->snapshot_.featureSlot < Runtime::kFeatureSlotCount ?
-					state_->snapshot_.featureSlot :
-					a_args[0].featureSlot;
 			state_->QuarantineAfterUnexpectedFailureLocked(
 				state_->activeStage_,
-				failureFeatureSlot,
+				state_->ActiveFeatureSlotOrLocked(a_args[0].featureSlot),
 				true,
 				failuresBefore);
 			Increment(state_->snapshot_.counters.stereoFailures);
@@ -1945,6 +1998,7 @@ namespace NeuralRendering
 		std::scoped_lock lock(state_->mutex_);
 		RendererApplyOutcome outcome{};
 		const auto failuresBefore = state_->snapshot_.counters.failures;
+		state_->SetActiveFeatureSlotLocked(a_args[0].featureSlot);
 		try {
 			CS_PROFILE_SCOPE("Upscaling::DLSSNeuralRenderingSequentialStereo");
 			const bool succeeded =
@@ -1953,13 +2007,9 @@ namespace NeuralRendering
 				*a_outcome = outcome;
 			return succeeded;
 		} catch (...) {
-			const auto failureFeatureSlot =
-				state_->snapshot_.featureSlot < Runtime::kFeatureSlotCount ?
-					state_->snapshot_.featureSlot :
-					a_args[0].featureSlot;
 			state_->QuarantineAfterUnexpectedFailureLocked(
 				state_->activeStage_,
-				failureFeatureSlot,
+				state_->ActiveFeatureSlotOrLocked(a_args[0].featureSlot),
 				true,
 				failuresBefore);
 			if (a_outcome)

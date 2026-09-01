@@ -11898,8 +11898,10 @@ void Upscaling::NotifyVRMenuPresentationContextChange(const char* a_reason)
 {
 	g_neuralMenuQueryEpoch.fetch_add(1, std::memory_order_acq_rel);
 	neuralPresentationContractEpoch.fetch_add(1, std::memory_order_acq_rel);
-	RequestNeuralHistoryReset();
-	RequestHistoryReset();
+	if (settings.neuralRenderingEnabled) {
+		RequestNeuralHistoryReset();
+		RequestHistoryReset();
+	}
 	InvalidateVRMenuCommittedLayer(a_reason);
 	if (!globals::game::isVR || !globals::state)
 		return;
@@ -35005,7 +35007,7 @@ void Upscaling::ObserveNeuralRenderingMenuSuppression(bool a_suppressed)
 		return;
 
 	neuralPresentationContractEpoch.fetch_add(1, std::memory_order_acq_rel);
-	if (a_suppressed) {
+	if (a_suppressed && settings.neuralRenderingEnabled) {
 		RequestNeuralHistoryReset();
 		RequestHistoryReset();
 	}

@@ -59,6 +59,31 @@ foreach(_validation_contract IN ITEMS
     endif()
 endforeach()
 
+foreach(_cycle_contract IN ITEMS
+    [[if (action == "nr_cycle_modes")]]
+    [[const auto matrixIndex = a_args.find("matrixIndex")]]
+    [["nr_matrix_index_invalid"]]
+    [[requestedIndex.value_or(]]
+    [[(previousIndex + 1u) % NeuralRendering::kPipelineImplementations.size()]]
+    [[requestedSettings.neuralRenderingBatchedStereo = (currentIndex & 1u) != 0]]
+    [[requestedSettings.neuralRenderingDirectCommit = (currentIndex & 2u) != 0]]
+    [[upscaling.HandleNeuralRenderingSettingsTransition(]]
+    [[{ "action", "nr_cycle_modes" }]]
+    [[{ "currentIndex", currentIndex }]]
+    [[{ "noOp", !settingsChanged }]]
+    [["nr_configure", "nr_cycle_modes", "nr_reset"]]
+    [["matrixIndex": { "type": "integer", "minimum": 0, "maximum": 3 }]]
+    [[devBench->RegisterTool(]]
+    [["communityshaders.renderscale"]]
+)
+    string(FIND "${_bridge}" "${_cycle_contract}" _cycle_position)
+    if(_cycle_position EQUAL -1)
+        message(FATAL_ERROR
+            "Neural Rendering mode-cycle contract is missing: ${_cycle_contract}"
+        )
+    endif()
+endforeach()
+
 foreach(_forbidden_clamp IN ITEMS
     [[std::min<uint64_t>(preset->get<uint64_t>(), 5u)]]
     [[std::clamp<int64_t>(preset->get<int64_t>(), 0, 5)]]

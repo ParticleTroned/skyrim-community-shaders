@@ -107,6 +107,7 @@
                         "device-context",
                         "command-recording",
                         "command-list",
+                        "command-list-finish",
                         "command-execution",
                         "resource",
                         "resource-version",
@@ -192,6 +193,7 @@
                         "contributes-to",
                         "carries-forward",
                         "records",
+                        "finishes",
                         "materializes",
                         "executes"
                     ]

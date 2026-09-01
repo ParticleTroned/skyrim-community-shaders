@@ -98,7 +98,6 @@
                                 "required": [
                                     "schema",
                                     "operation",
-                                    "immediateContextPointer",
                                     "vertexShaderObservationId",
                                     "pixelShaderObservationId",
                                     "targetBindingObservationId",
@@ -106,7 +105,9 @@
                                     "arguments"
                                 ],
                                 "properties": {
-                                    "schema": { "enum": ["draw-call-v2", "draw-call-v3"] },
+                                    "schema": {
+                                        "enum": ["draw-call-v2", "draw-call-v3", "draw-call-v4"]
+                                    },
                                     "operation": {
                                         "enum": [
                                             "draw",
@@ -119,6 +120,7 @@
                                         ]
                                     },
                                     "immediateContextPointer": { "type": ["string", "null"] },
+                                    "deviceContextPointer": { "type": ["string", "null"] },
                                     "vertexShaderObservationId": {
                                         "anyOf": [
                                             { "$ref": "#/$defs/observationId" },
@@ -154,7 +156,18 @@
                                 "allOf": [
                                     {
                                         "if": {
-                                            "properties": { "schema": { "const": "draw-call-v3" } }
+                                            "properties": { "schema": { "const": "draw-call-v4" } }
+                                        },
+                                        "then": { "required": ["deviceContextPointer"] },
+                                        "else": { "required": ["immediateContextPointer"] }
+                                    },
+                                    {
+                                        "if": {
+                                            "properties": {
+                                                "schema": {
+                                                    "enum": ["draw-call-v3", "draw-call-v4"]
+                                                }
+                                            }
                                         },
                                         "then": {
                                             "required": ["preparedGeometrySetupObservationId"]
@@ -190,14 +203,14 @@
                                 "required": [
                                     "schema",
                                     "operation",
-                                    "immediateContextPointer",
                                     "computeShaderObservationId",
                                     "arguments"
                                 ],
                                 "properties": {
-                                    "schema": { "const": "dispatch-call-v1" },
+                                    "schema": { "enum": ["dispatch-call-v1", "dispatch-call-v2"] },
                                     "operation": { "enum": ["dispatch", "dispatch-indirect"] },
                                     "immediateContextPointer": { "type": ["string", "null"] },
+                                    "deviceContextPointer": { "type": ["string", "null"] },
                                     "computeShaderObservationId": {
                                         "anyOf": [
                                             { "$ref": "#/$defs/observationId" },
@@ -206,6 +219,17 @@
                                     },
                                     "arguments": { "type": "object" }
                                 },
+                                "allOf": [
+                                    {
+                                        "if": {
+                                            "properties": {
+                                                "schema": { "const": "dispatch-call-v2" }
+                                            }
+                                        },
+                                        "then": { "required": ["deviceContextPointer"] },
+                                        "else": { "required": ["immediateContextPointer"] }
+                                    }
+                                ],
                                 "additionalProperties": true
                             }
                         ]
@@ -301,10 +325,11 @@
                             "pointerGeneration",
                             "sourceDeviceContextObservationId",
                             "sourceCommandRecordingObservationId",
-                            "sourceRecordingComplete"
+                            "sourceRecordingComplete",
+                            "sourceRecordingIncompleteReasons"
                         ],
                         "properties": {
-                            "schema": { "const": "command-list-observation-v1" },
+                            "schema": { "const": "command-list-observation-v2" },
                             "commandListObservationId": { "$ref": "#/$defs/observationId" },
                             "commandListPointer": { "type": ["string", "null"] },
                             "pointerGeneration": { "type": "integer", "minimum": 1 },
@@ -314,7 +339,10 @@
                             "sourceCommandRecordingObservationId": {
                                 "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }]
                             },
-                            "sourceRecordingComplete": { "type": "boolean" }
+                            "sourceRecordingComplete": { "type": "boolean" },
+                            "sourceRecordingIncompleteReasons": {
+                                "$ref": "#/$defs/commandRecordingIncompleteReasons"
+                            }
                         },
                         "additionalProperties": false
                     }
@@ -334,10 +362,12 @@
                             "commandListPointer",
                             "restoreDeferredContextState",
                             "hresult",
-                            "succeeded"
+                            "succeeded",
+                            "sourceRecordingComplete",
+                            "sourceRecordingIncompleteReasons"
                         ],
                         "properties": {
-                            "schema": { "const": "finish-command-list-v1" },
+                            "schema": { "const": "finish-command-list-v2" },
                             "commandRecordingObservationId": { "$ref": "#/$defs/observationId" },
                             "commandListObservationId": {
                                 "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }]
@@ -345,7 +375,11 @@
                             "commandListPointer": { "type": ["string", "null"] },
                             "restoreDeferredContextState": { "type": "boolean" },
                             "hresult": { "type": "integer" },
-                            "succeeded": { "type": "boolean" }
+                            "succeeded": { "type": "boolean" },
+                            "sourceRecordingComplete": { "type": "boolean" },
+                            "sourceRecordingIncompleteReasons": {
+                                "$ref": "#/$defs/commandRecordingIncompleteReasons"
+                            }
                         },
                         "additionalProperties": false
                     }
@@ -1563,6 +1597,18 @@
                 }
             }
         },
+        "commandRecordingIncompleteReasons": {
+            "type": "array",
+            "items": {
+                "enum": [
+                    "partial-at-capture-start",
+                    "declaration-unavailable",
+                    "event-not-recorded",
+                    "hook-coverage-unqualified"
+                ]
+            },
+            "uniqueItems": true
+        },
         "observationRef": {
             "type": "object",
             "required": ["id", "kind", "role", "pointerEvidence"],
@@ -1581,6 +1627,7 @@
                         "visibility-test",
                         "device",
                         "device-context",
+                        "command-recording",
                         "command-list",
                         "shader",
                         "vertex-shader",

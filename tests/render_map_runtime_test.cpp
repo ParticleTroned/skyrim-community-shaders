@@ -1112,6 +1112,10 @@ namespace
 		Check((techniquePair & EventKindBit(EventKind::kTechniqueEnd)) != 0 &&
 				  (techniquePair & EventKindBit(EventKind::kShaderObserved)) != 0,
 			"scope selection did not resolve its paired boundary and identity");
+		const auto drawDependencies = ResolveEventKindDependencies(EventKindBit(EventKind::kDraw));
+		Check((drawDependencies & EventKindBit(EventKind::kCommandRecordingObserved)) != 0 &&
+				  (drawDependencies & EventKindBit(EventKind::kDeviceContextObserved)) != 0,
+			"draw selection did not retain deferred recording and context provenance");
 
 		Runtime runtime;
 		auto config = Config();
@@ -1443,8 +1447,13 @@ namespace
 			"recorded draw did not retain its deferred context and recording epoch");
 		Check(list != snapshot->events.end() && finish != snapshot->events.end() &&
 				  list->payload.words[4] == recording->payload.words[0] &&
+				  list->payload.words[5] == 0 &&
+				  (list->payload.words[6] & static_cast<std::uint64_t>(
+												CommandRecordingIncompleteReason::kHookCoverageUnqualified)) != 0 &&
 				  finish->payload.words[0] == recording->payload.words[0] &&
-				  finish->payload.words[1] == list->payload.words[0],
+				  finish->payload.words[1] == list->payload.words[0] &&
+				  finish->payload.words[5] == 0 &&
+				  finish->payload.words[6] == list->payload.words[6],
 			"FinishCommandList did not materialize the exact source recording");
 		std::vector<const EventRecord*> executions;
 		for (const auto& event : snapshot->events) {
@@ -1460,6 +1469,44 @@ namespace
 			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; });
 		Check(immediateDraw != snapshot->events.end() && immediateDraw->payload.words[2] == 0,
 			"RestoreContextState=false did not invalidate the immediate pipeline tracker");
+	}
+
+	void TestDeferredRecordingReportsPartialFilteredAndFailedFinishes()
+	{
+		Runtime runtime;
+		runtime.RegisterDeferredContext(0x2100, 0);
+		auto config = Config();
+		config.maxEvents = 32;
+		config.requestedEventKindMask = EventKindBit(EventKind::kFinishCommandList);
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		Check(runtime.StartCapture(config) == StartResult::kStarted,
+			"partial deferred recording capture did not start");
+		runtime.RecordDraw(0x2100, DrawOperation::kDraw, 3);
+		runtime.RecordFinishCommandList(0x2100, 0x5100, true, 0);
+		auto partial = runtime.StopCapture();
+		Check(partial.has_value(), "partial deferred recording capture did not stop");
+		const auto list = std::find_if(partial->events.begin(), partial->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kCommandListObserved; });
+		Check(list != partial->events.end() && list->payload.words[5] == 0 &&
+				  (list->payload.words[6] & static_cast<std::uint64_t>(
+												CommandRecordingIncompleteReason::kPartialAtCaptureStart)) != 0 &&
+				  (list->payload.words[6] & static_cast<std::uint64_t>(
+												CommandRecordingIncompleteReason::kEventNotRecorded)) != 0,
+			"partial or filtered deferred work was incorrectly reported as complete");
+
+		config.requestedEventKindMask = kAllEventKindsMask;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		Check(runtime.StartCapture(config) == StartResult::kStarted,
+			"failed FinishCommandList capture did not start");
+		runtime.RecordFinishCommandList(0x2100, 0, false, static_cast<std::int32_t>(0x80004005u));
+		auto failed = runtime.StopCapture();
+		Check(failed.has_value(), "failed FinishCommandList capture did not stop");
+		const auto finish = std::find_if(failed->events.begin(), failed->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kFinishCommandList; });
+		Check(finish != failed->events.end() && finish->payload.words[1] == 0 &&
+				  static_cast<std::int32_t>(finish->payload.words[4]) < 0 &&
+				  finish->payload.words[5] == 0,
+			"failed FinishCommandList did not preserve its no-list failure outcome");
 	}
 }
 
@@ -1491,6 +1538,7 @@ int main()
 		TestPreparedGeometryHandoffRejectsStaleCandidates();
 		TestGeometryBoundaryBindsExactSemanticObservations();
 		TestDeferredRecordingMaterializesAndExecutesCommandList();
+		TestDeferredRecordingReportsPartialFilteredAndFailedFinishes();
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

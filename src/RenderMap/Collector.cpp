@@ -145,6 +145,7 @@ namespace CSX::RenderMap
 			}
 
 			if (has(EventKind::kDraw) || has(EventKind::kDispatch)) {
+				add(EventKind::kCommandRecordingObserved);
 				add(EventKind::kStageShaderObserved);
 				add(EventKind::kRenderTargetBind);
 				add(EventKind::kResourceViewBind);
@@ -1234,12 +1235,14 @@ namespace CSX::RenderMap
 		std::uint64_t a_targetBindingObservationId,
 		std::uint64_t a_submissionObservationId,
 		std::uint64_t a_preparedGeometrySetupObservationId,
-		std::uint64_t a_commandRecordingObservationId) noexcept
+		std::uint64_t a_commandRecordingObservationId,
+		bool a_deferredContext) noexcept
 	{
 		return RecordForGeneration(
 			a_kind, a_payload, a_deviceContextObservationId, 0, a_commandStreamSequence,
 			a_targetBindingObservationId, a_submissionObservationId,
-			a_preparedGeometrySetupObservationId, a_commandRecordingObservationId);
+			a_preparedGeometrySetupObservationId, a_commandRecordingObservationId,
+			a_deferredContext);
 	}
 
 	RecordResult Collector::RecordForGeneration(
@@ -1251,7 +1254,8 @@ namespace CSX::RenderMap
 		std::uint64_t a_targetBindingObservationId,
 		std::uint64_t a_submissionObservationId,
 		std::uint64_t a_preparedGeometrySetupObservationId,
-		std::uint64_t a_commandRecordingObservationId) noexcept
+		std::uint64_t a_commandRecordingObservationId,
+		bool a_deferredContext) noexcept
 	{
 		auto session = activeSession.load(std::memory_order_acquire);
 		if (!session)
@@ -1314,6 +1318,7 @@ namespace CSX::RenderMap
 
 		EventRecord record;
 		record.kind = a_kind;
+		record.reserved = a_deferredContext ? kEventFlagDeferredContext : 0;
 		record.captureNumericId = session->config.captureNumericId;
 		record.sessionGeneration = session->generation;
 		record.sequence = index;

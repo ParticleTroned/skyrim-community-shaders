@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace
 {
@@ -361,7 +362,7 @@ namespace
 				  (*effectiveSummaryIterator)["payload"]["changedSlotCount"] == 1,
 			"effective resource-view query summary was not serialized");
 		const auto& draw = *drawIterator;
-		Check(draw["type"] == "draw" && draw["payload"]["schema"] == "draw-call-v3" &&
+		Check(draw["type"] == "draw" && draw["payload"]["schema"] == "draw-call-v4" &&
 				  draw["payload"]["preparedGeometrySetupObservationId"].is_null(),
 			"draw event schema is wrong");
 		Check(draw["payload"]["targetBindingObservationId"].is_string(),
@@ -451,7 +452,7 @@ namespace
 		const auto& observedGeometry = page["events"][1];
 		const auto& material = page["events"][2];
 		const auto& setup = page["events"][3];
-		Check(object["schema"]["minor"] == 15 && object["payload"]["schema"] == "scene-object-observation-v1",
+		Check(object["schema"]["minor"] == 16 && object["payload"]["schema"] == "scene-object-observation-v1",
 			"scene-object declaration schema is wrong");
 		Check(observedGeometry["payload"]["schema"] == "geometry-observation-v1" &&
 				  observedGeometry["payload"]["sceneObjectObservationId"] == object["payload"]["sceneObjectObservationId"],
@@ -466,12 +467,63 @@ namespace
 		Check(setup["observationRefs"].size() == 2,
 			"geometry setup did not publish both typed semantic references");
 		const auto& draw = page["events"][6];
-		Check(draw["payload"]["schema"] == "draw-call-v3" &&
+		Check(draw["payload"]["schema"] == "draw-call-v4" &&
 				  draw["scopes"]["geometry"].is_null() &&
 				  draw["payload"]["preparedGeometrySetupObservationId"] == setup["scopes"]["geometry"] &&
 				  draw["observationRefs"][1]["kind"] == "geometry-setup" &&
 				  draw["observationRefs"][1]["role"] == "prepared-at-draw",
 			"draw did not serialize the post-setup prepared geometry handoff");
+	}
+
+	void TestDeferredCommandSerialization()
+	{
+		CaptureController controller;
+		auto config = Config();
+		config.maxEvents = 64;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		CaptureDescriptor descriptor;
+		Check(controller.Start(config, descriptor) == ControlStatus::kSuccess,
+			"deferred serialization capture did not start");
+		auto& runtime = GetRuntime();
+		runtime.SetImmediateContext(0xA000);
+		runtime.RegisterDeferredContext(0xA100, 0);
+		runtime.RecordDraw(0xA100, DrawOperation::kDraw, 3);
+		runtime.RecordFinishCommandList(0xA100, 0xA200, false, 0);
+		runtime.RecordExecuteCommandList(0xA000, 0xA200, true);
+		std::shared_ptr<const CompletedCapture> capture;
+		Check(controller.Stop(descriptor.captureId, capture) == ControlStatus::kSuccess && capture,
+			"deferred serialization capture did not stop");
+		const auto page = SerializeEventPage(*capture, 0, 64, 42);
+		const auto findEvent = [&](std::string_view a_type) {
+			return std::find_if(page["events"].begin(), page["events"].end(),
+				[&](const nlohmann::json& a_event) {
+					return a_event["type"].get<std::string>() == a_type;
+				});
+		};
+		const auto draw = findEvent("draw");
+		const auto list = findEvent("command-list-observed");
+		const auto finish = findEvent("finish-command-list");
+		const auto execute = findEvent("execute-command-list");
+		Check(draw != page["events"].end() &&
+				  (*draw)["payload"]["schema"] == "draw-call-v4" &&
+				  (*draw)["payload"]["deviceContextPointer"] == "0xA100" &&
+				  (*draw)["execution"]["observationDomain"] == "command-recording" &&
+				  std::any_of((*draw)["observationRefs"].begin(), (*draw)["observationRefs"].end(),
+					  [](const nlohmann::json& a_ref) { return a_ref["kind"] == "command-recording"; }),
+			"deferred draw did not serialize its versioned context and recording provenance");
+		Check(list != page["events"].end() && finish != page["events"].end() &&
+				  (*list)["payload"]["schema"] == "command-list-observation-v2" &&
+				  (*finish)["payload"]["schema"] == "finish-command-list-v2" &&
+				  (*list)["payload"]["sourceRecordingComplete"] == false &&
+				  (*finish)["payload"]["sourceRecordingComplete"] == false &&
+				  (*list)["payload"]["sourceRecordingIncompleteReasons"].get<std::vector<std::string>>() ==
+					  std::vector<std::string>{ "hook-coverage-unqualified" },
+			"deferred command-list serialization overstated recording completeness");
+		Check(execute != page["events"].end() &&
+				  (*execute)["execution"]["observationDomain"] == "cpu-call" &&
+				  (*execute)["commandRecordingObservationId"].is_null() &&
+				  (*execute)["payload"]["sourceCommandRecordingObservationId"].is_string(),
+			"ExecuteCommandList was mislabelled as a recorded deferred command");
 	}
 
 	void TestDurableArtifacts()
@@ -555,6 +607,7 @@ int main()
 		TestCompletedHistoryBound();
 		TestResolvedStageSerialization();
 		TestSemanticIdentitySerialization();
+		TestDeferredCommandSerialization();
 		TestDurableArtifacts();
 		TestGapArtifact();
 		return 0;

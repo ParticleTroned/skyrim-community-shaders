@@ -56,6 +56,10 @@ $eventSchemaPath = Join-Path $schemaRoot 'render-event.schema.json'
 $graphSchemaPath = Join-Path $schemaRoot 'render-graph.schema.json'
 $eventSchema = Get-Content -Raw -LiteralPath $eventSchemaPath | ConvertFrom-Json -Depth 100
 $null = Get-Content -Raw -LiteralPath $graphSchemaPath | ConvertFrom-Json -Depth 100
+$fixtureRoot = Join-Path $repoRoot 'tests/fixtures/render-map'
+$fixtureEventsPath = Join-Path $fixtureRoot 'deferred-command-events.json'
+$fixtureManifestPath = Join-Path $fixtureRoot 'deferred-command-capture-manifest.json'
+$fixtureEvents = Get-Content -Raw -LiteralPath $fixtureEventsPath | ConvertFrom-Json -Depth 100
 
 $eventKinds = @($eventSchema.allOf | ForEach-Object {
     $_.if.properties.type.const
@@ -67,6 +71,12 @@ foreach ($requiredKind in @(
     'execute-command-list'
 )) {
     Assert-True ($eventKinds -contains $requiredKind) "Render-event schema is missing $requiredKind"
+}
+
+foreach ($event in $fixtureEvents) {
+    $eventJson = $event | ConvertTo-Json -Depth 100 -Compress
+    $eventValid = Test-Json -Json $eventJson -SchemaFile $eventSchemaPath -ErrorAction Stop
+    Assert-True $eventValid "Deferred-command fixture event $($event.sequence) does not conform to the render-event schema"
 }
 
 $hooksSource = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'src/Hooks.cpp')
@@ -85,4 +95,30 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Render-graph builder regression suite failed.'
 }
 
-Write-Output 'Render-map contracts passed: 2 schemas, 4 command-list events, 3 hook slots, and the offline graph suite.'
+$temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("csx-render-map-contract-" + [guid]::NewGuid().ToString('N'))
+try {
+    $null = New-Item -ItemType Directory -Path $temporaryRoot -Force
+    $eventsJsonlPath = Join-Path $temporaryRoot 'events.jsonl'
+    $graphOutputPath = Join-Path $temporaryRoot 'render-graph.json'
+    $fixtureEvents |
+        ForEach-Object { $_ | ConvertTo-Json -Depth 100 -Compress } |
+        Set-Content -LiteralPath $eventsJsonlPath -Encoding utf8
+    $graphArguments = @(
+        (Join-Path $repoRoot 'tools/build-render-graph.py'),
+        '--capture-manifest', $fixtureManifestPath,
+        '--events', $eventsJsonlPath,
+        '--output', $graphOutputPath
+    )
+    & $python @graphArguments
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Deferred-command schema fixture failed graph generation.'
+    }
+    $graphValid = Test-Json -LiteralPath $graphOutputPath -SchemaFile $graphSchemaPath -ErrorAction Stop
+    Assert-True $graphValid 'Generated deferred-command graph does not conform to the render-graph schema'
+} finally {
+    if (Test-Path -LiteralPath $temporaryRoot) {
+        Remove-Item -LiteralPath $temporaryRoot -Recurse -Force
+    }
+}
+
+Write-Output 'Render-map contracts passed: 2 schemas, 6 deferred-command fixtures, 4 command-list events, 3 hook slots, and the offline graph suite.'

@@ -219,37 +219,42 @@ namespace
 	{
 		using namespace CSX::NvidiaPipelinePolicy;
 
+		std::atomic_bool quarantinedActive{ false };
 		ProxyLifecycleGate quarantined;
 		if (!quarantined.TryBeginConstruction())
 			return false;
 		auto competingConstruction = std::async(std::launch::async, [&]() {
 			return quarantined.TryBeginConstruction();
 		});
-		if (competingConstruction.get() || !quarantined.Publish() ||
+		if (competingConstruction.get() || !quarantined.Publish(quarantinedActive) ||
 			!quarantined.BeginRetirement())
 			return false;
 		auto duringRetirement = std::async(std::launch::async, [&]() {
 			return quarantined.TryBeginConstruction();
 		});
-		quarantined.CompleteRetirement(false);
+		quarantined.CompleteRetirement(false, quarantinedActive);
 		if (duringRetirement.get() ||
+			quarantinedActive.load(std::memory_order_acquire) ||
 			quarantined.GetState() != ProxyLifecycleState::TeardownQuarantined ||
 			quarantined.TryBeginConstruction())
 			return false;
 
+		std::atomic_bool reusableActive{ false };
 		ProxyLifecycleGate reusable;
-		if (!reusable.TryBeginConstruction() || !reusable.Publish() ||
+		if (!reusable.TryBeginConstruction() || !reusable.Publish(reusableActive) ||
 			!reusable.BeginRetirement())
 			return false;
-		reusable.CompleteRetirement(true);
+		reusable.CompleteRetirement(true, reusableActive);
 		if (reusable.GetState() != ProxyLifecycleState::Available ||
+			reusableActive.load(std::memory_order_acquire) ||
 			!reusable.TryBeginConstruction())
 			return false;
-		reusable.CancelConstruction(true);
+		reusable.CancelConstruction(true, reusableActive);
 		ProxyLifecycleGate failedCandidate;
+		std::atomic_bool failedCandidateActive{ false };
 		if (!failedCandidate.TryBeginConstruction())
 			return false;
-		failedCandidate.CancelConstruction(false);
+		failedCandidate.CancelConstruction(false, failedCandidateActive);
 		if (failedCandidate.GetState() != ProxyLifecycleState::TeardownQuarantined ||
 			failedCandidate.TryBeginConstruction())
 			return false;
@@ -261,12 +266,20 @@ namespace
 			.format = 28,
 			.windowed = true,
 			.hasOutputWindow = true,
-			.renderTargetOutput = true,
+			.usage = kRenderTargetOutputUsage,
 		};
 		auto unsupported = supported;
 		unsupported.sampleCount = 4;
+		auto unsupportedUsage = supported;
+		unsupportedUsage.usage |= 0x10;
 		if (!IsPublicSwapChainContractSupported(supported) ||
-			IsPublicSwapChainContractSupported(unsupported))
+			IsPublicSwapChainContractSupported(unsupported) ||
+			IsPublicSwapChainContractSupported(unsupportedUsage))
+			return false;
+
+		if (ClassifyPresentResult(false, false) != PresentResultDisposition::Presented ||
+			ClassifyPresentResult(true, true) != PresentResultDisposition::Retryable ||
+			ClassifyPresentResult(true, false) != PresentResultDisposition::Fatal)
 			return false;
 
 		return ClassifyBoundedCopy(true, true) == BoundedCopyResult::Complete &&

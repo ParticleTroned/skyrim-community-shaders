@@ -101,9 +101,10 @@ void DX12SwapChain::CreateInterop()
 
 bool DX12SwapChain::ResetUnpublished() noexcept
 {
+	auto& upscaling = globals::features::upscaling;
 	auto& fidelityFX = globals::features::upscaling.fidelityFX;
 	if (!fidelityFX.ResetFrameGenerationContexts()) {
-		lifecycle.CancelConstruction(false);
+		lifecycle.CancelConstruction(false, upscaling.d3d12SwapChainActive);
 		logger::critical(
 			"[DX12SwapChain] Unpublished proxy cleanup left FidelityFX ownership indeterminate; retaining the complete candidate generation");
 		return false;
@@ -114,7 +115,7 @@ bool DX12SwapChain::ResetUnpublished() noexcept
 		unpublishedProxy->Release();
 	}
 	ResetResources();
-	lifecycle.CancelConstruction(true);
+	lifecycle.CancelConstruction(true, upscaling.d3d12SwapChainActive);
 	return true;
 }
 
@@ -174,7 +175,8 @@ bool DX12SwapChain::TryBeginConstruction() noexcept
 
 DXGISwapChainProxy* DX12SwapChain::TakeSwapChainProxy()
 {
-	if (!swapChainProxy || !lifecycle.Publish())
+	if (!swapChainProxy ||
+		!lifecycle.Publish(globals::features::upscaling.d3d12SwapChainActive))
 		return nullptr;
 	return std::exchange(swapChainProxy, nullptr);
 }
@@ -190,13 +192,11 @@ void DX12SwapChain::OnProxyDestroyed(IDXGISwapChain4* a_swapChain) noexcept
 	if (!upscaling.fidelityFX.ResetFrameGenerationContexts()) {
 		logger::critical(
 			"[DX12SwapChain] Published proxy destruction left FidelityFX ownership indeterminate; retaining every dependent D3D resource");
-		lifecycle.CompleteRetirement(false);
-		upscaling.d3d12SwapChainActive.store(false, std::memory_order_release);
+		lifecycle.CompleteRetirement(false, upscaling.d3d12SwapChainActive);
 		return;
 	}
 	ResetResources();
-	lifecycle.CompleteRetirement(true);
-	upscaling.d3d12SwapChainActive.store(false, std::memory_order_release);
+	lifecycle.CompleteRetirement(true, upscaling.d3d12SwapChainActive);
 }
 
 CSX::NvidiaPipelinePolicy::ProxyLifecycleState DX12SwapChain::GetLifecycleState() const noexcept
@@ -390,7 +390,6 @@ HRESULT DX12SwapChain::RefreshAfterResize(DXGI_FORMAT publicFormat) noexcept
 		publicSwapChainDesc.BufferDesc.Format = publicFormat;
 		publicSwapChainDesc.BufferDesc.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED;
 		publicSwapChainDesc.BufferDesc.Scaling = DXGI_MODE_SCALING_UNSPECIFIED;
-		publicSwapChainDesc.BufferUsage = resizedDesc.BufferUsage;
 		publicSwapChainDesc.Flags = resizedDesc.Flags;
 		frameIndex = swapChain->GetCurrentBackBufferIndex();
 		return S_OK;
@@ -442,6 +441,14 @@ HRESULT DX12SwapChain::PresentInternal(
 	UINT flags,
 	const DXGI_PRESENT_PARAMETERS* presentParameters) noexcept
 {
+	if (!swapChain)
+		return DXGI_ERROR_INVALID_CALL;
+	if ((flags & DXGI_PRESENT_TEST) != 0) {
+		return presentParameters ?
+		           swapChain->Present1(syncInterval, flags, presentParameters) :
+		           swapChain->Present(syncInterval, flags);
+	}
+
 	if (runtimeQuarantined || !swapChain || frameIndex >= std::size(commandAllocators) ||
 		!d3d11Context || !d3d11Fence || !d3d12Fence || !commandQueue ||
 		!commandAllocators[frameIndex] || !commandLists[frameIndex] ||
@@ -517,8 +524,8 @@ HRESULT DX12SwapChain::PresentInternal(
 		const HRESULT presentResult = presentParameters ?
 		                                  swapChain->Present1(syncInterval, flags, presentParameters) :
 		                                  swapChain->Present(syncInterval, flags);
-		if (auto result = check(presentResult, "swap-chain present"))
-			return *result;
+		const auto presentDisposition = CSX::NvidiaPipelinePolicy::ClassifyPresentResult(
+			FAILED(presentResult), presentResult == DXGI_ERROR_WAS_STILL_DRAWING);
 
 		// Wait for D3D12 to finish
 		const auto consumerFenceValue = fenceSequence.Next();
@@ -528,6 +535,10 @@ HRESULT DX12SwapChain::PresentInternal(
 			return *result;
 		if (auto result = check(d3d11Context->Wait(d3d11Fence.get(), *consumerFenceValue), "D3D11 fence wait"))
 			return *result;
+		if (presentDisposition == CSX::NvidiaPipelinePolicy::PresentResultDisposition::Retryable)
+			return presentResult;
+		if (presentDisposition == CSX::NvidiaPipelinePolicy::PresentResultDisposition::Fatal)
+			return fail(presentResult, "swap-chain present");
 
 		// Update the frame index
 		frameIndex = swapChain->GetCurrentBackBufferIndex();
@@ -539,7 +550,7 @@ HRESULT DX12SwapChain::PresentInternal(
 		if (syncInterval == 0)
 			upscaling.FrameLimiter();
 
-		return S_OK;
+		return presentResult;
 	} catch (const std::exception& error) {
 		logger::error("[DX12SwapChain] Present raised an exception; quarantining the proxy: {}", error.what());
 	} catch (...) {

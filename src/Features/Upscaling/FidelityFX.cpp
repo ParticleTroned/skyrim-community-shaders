@@ -1433,7 +1433,14 @@ bool FidelityFX::ResetFrameGenerationRenderContext() noexcept
 
 bool FidelityFX::ResetFrameGenerationContexts() noexcept
 {
-	bool resetComplete = ResetFrameGenerationRenderContext();
+	if (!ResetFrameGenerationRenderContext()) {
+		// The swap-chain context may still be referenced by an indeterminate
+		// frame-generation context, so no dependent provider state may be released.
+		QuarantineFrameGenerationForSession("context destruction");
+		return false;
+	}
+
+	bool resetComplete = true;
 	bool crashed = false;
 	if (swapChainContextIndeterminate) {
 		resetComplete = false;

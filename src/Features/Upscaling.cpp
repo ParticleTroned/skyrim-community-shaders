@@ -15307,7 +15307,7 @@ namespace
 			.format = static_cast<std::uint32_t>(a_desc.BufferDesc.Format),
 			.windowed = a_desc.Windowed != FALSE,
 			.hasOutputWindow = a_desc.OutputWindow != nullptr,
-			.renderTargetOutput = (a_desc.BufferUsage & DXGI_USAGE_RENDER_TARGET_OUTPUT) != 0,
+			.usage = a_desc.BufferUsage,
 		});
 	}
 
@@ -15531,7 +15531,6 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 					*ppSwapChain = proxySwapChain;
 					if (pFeatureLevel)
 						*pFeatureLevel = candidateFeatureLevel;
-					upscaling.d3d12SwapChainActive = true;
 					return S_OK;
 				} catch (const std::exception& error) {
 					logger::error("[Frame Generation] Proxy creation failed; using the original D3D path: {}", error.what());
@@ -54773,7 +54772,6 @@ IDXGISwapChain* Upscaling::GetProxySwapChain()
 
 bool Upscaling::ResetProxyCreationState() noexcept
 {
-	d3d12SwapChainActive.store(false, std::memory_order_release);
 	return dx12SwapChain.ResetUnpublished();
 }
 

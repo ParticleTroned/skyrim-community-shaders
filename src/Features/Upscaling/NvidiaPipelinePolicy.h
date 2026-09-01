@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <limits>
 #include <mutex>
@@ -7,6 +8,8 @@
 
 namespace CSX::NvidiaPipelinePolicy
 {
+	inline constexpr std::uint32_t kRenderTargetOutputUsage = 0x20;
+
 	enum class ProxyLifecycleState : std::uint8_t
 	{
 		Available,
@@ -28,11 +31,12 @@ namespace CSX::NvidiaPipelinePolicy
 			return true;
 		}
 
-		[[nodiscard]] bool Publish() noexcept
+		[[nodiscard]] bool Publish(std::atomic_bool& a_active) noexcept
 		{
 			std::scoped_lock lock(mutex);
 			if (state != ProxyLifecycleState::Constructing)
 				return false;
+			a_active.store(true, std::memory_order_release);
 			state = ProxyLifecycleState::Published;
 			return true;
 		}
@@ -46,22 +50,26 @@ namespace CSX::NvidiaPipelinePolicy
 			return true;
 		}
 
-		void CompleteRetirement(bool a_teardownComplete) noexcept
+		void CompleteRetirement(bool a_teardownComplete, std::atomic_bool& a_active) noexcept
 		{
 			std::scoped_lock lock(mutex);
-			if (state == ProxyLifecycleState::Retiring)
+			if (state == ProxyLifecycleState::Retiring) {
+				a_active.store(false, std::memory_order_release);
 				state = a_teardownComplete ?
 				            ProxyLifecycleState::Available :
 				            ProxyLifecycleState::TeardownQuarantined;
+			}
 		}
 
-		void CancelConstruction(bool a_teardownComplete) noexcept
+		void CancelConstruction(bool a_teardownComplete, std::atomic_bool& a_active) noexcept
 		{
 			std::scoped_lock lock(mutex);
-			if (state == ProxyLifecycleState::Constructing)
+			if (state == ProxyLifecycleState::Constructing) {
+				a_active.store(false, std::memory_order_release);
 				state = a_teardownComplete ?
 				            ProxyLifecycleState::Available :
 				            ProxyLifecycleState::TeardownQuarantined;
+			}
 		}
 
 		[[nodiscard]] ProxyLifecycleState GetState() const noexcept
@@ -83,7 +91,7 @@ namespace CSX::NvidiaPipelinePolicy
 		std::uint32_t format = 0;
 		bool windowed = false;
 		bool hasOutputWindow = false;
-		bool renderTargetOutput = false;
+		std::uint32_t usage = 0;
 	};
 
 	[[nodiscard]] constexpr bool IsPublicSwapChainContractSupported(
@@ -95,7 +103,23 @@ namespace CSX::NvidiaPipelinePolicy
 		       a_contract.format != 0 &&
 		       a_contract.windowed &&
 		       a_contract.hasOutputWindow &&
-		       a_contract.renderTargetOutput;
+		       a_contract.usage == kRenderTargetOutputUsage;
+	}
+
+	enum class PresentResultDisposition : std::uint8_t
+	{
+		Presented,
+		Retryable,
+		Fatal,
+	};
+
+	[[nodiscard]] constexpr PresentResultDisposition ClassifyPresentResult(
+		bool a_failed,
+		bool a_retryable) noexcept
+	{
+		if (!a_failed)
+			return PresentResultDisposition::Presented;
+		return a_retryable ? PresentResultDisposition::Retryable : PresentResultDisposition::Fatal;
 	}
 
 	enum class BoundedCopyResult : std::uint8_t

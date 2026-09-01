@@ -16,6 +16,7 @@ foreach(_required IN ITEMS
     "a_requireSameDeviceIdentity"
     "IsFrameGenerationProxyContractSupported"
     "TryBeginProxyCreation()"
+    ".usage = a_desc.BufferUsage"
 )
     string(FIND "${_upscaling}" "${_required}" _position)
     if(_position EQUAL -1)
@@ -84,8 +85,10 @@ foreach(_required IN ITEMS
     "ResolveBackendBufferCount"
     "ProxyLifecycleGate lifecycle"
     "lifecycle.BeginRetirement()"
-    "lifecycle.CompleteRetirement(false)"
+    "lifecycle.CompleteRetirement(false,"
     "retaining every dependent D3D resource"
+    "DXGI_PRESENT_TEST"
+    "DXGI_ERROR_WAS_STILL_DRAWING"
     "return owner.GetDesc(pDesc)"
     "return 0;"
     "ResetFrameGenerationContexts()"

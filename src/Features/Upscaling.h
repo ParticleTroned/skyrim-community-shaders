@@ -2374,6 +2374,7 @@ public:
 		bool valid = false;
 		bool renderScaleActive = false;
 		UpscaleMethod method = UpscaleMethod::kNONE;
+		VRRenderScaleBackendKind backend = VRRenderScaleBackendKind::None;
 		uint32_t qualityMode = 0;
 		uint32_t dlssPreset = kDLSSPresetK;
 		uint32_t renderEyeWidth = 0;
@@ -2381,6 +2382,7 @@ public:
 		uint32_t displayEyeWidth = 0;
 		uint32_t displayEyeHeight = 0;
 		uint32_t contractGeneration = 0;
+		VRRenderScaleResourceKey resources{};
 	};
 
 	// Helper: Create a Texture2D matching source format at a given size

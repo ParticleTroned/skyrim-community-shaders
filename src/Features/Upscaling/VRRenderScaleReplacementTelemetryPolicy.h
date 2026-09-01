@@ -121,6 +121,31 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 		bool sharedFSRDispatchRequired = false;
 	};
 
+	struct PublishedReplacementProofFacts
+	{
+		bool physicalMutationStarted = false;
+		bool differsFromDispatch = false;
+		bool observed = false;
+		bool profileMatches = false;
+		bool mutationBoundaryMatches = false;
+		bool presentationPathMatches = false;
+		bool resourceContractMatches = false;
+		bool providerGenerationMatches = false;
+		bool publicationCurrent = false;
+	};
+
+	[[nodiscard]] constexpr bool IsPublishedReplacementProven(
+		const PublishedReplacementProofFacts& a_facts) noexcept
+	{
+		return a_facts.physicalMutationStarted &&
+		       a_facts.differsFromDispatch && a_facts.observed &&
+		       a_facts.profileMatches && a_facts.mutationBoundaryMatches &&
+		       a_facts.presentationPathMatches &&
+		       a_facts.resourceContractMatches &&
+		       a_facts.providerGenerationMatches &&
+		       a_facts.publicationCurrent;
+	}
+
 	[[nodiscard]] constexpr bool HasCoherentVendorDispatch(
 		const VendorDispatchProofFacts& a_facts) noexcept
 	{

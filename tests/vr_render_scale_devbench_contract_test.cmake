@@ -30,6 +30,10 @@ file(READ
     "${PROJECT_ROOT}/src/Features/Upscaling/Streamline.cpp"
     _streamline_source
 )
+file(READ
+    "${PROJECT_ROOT}/src/Features/Upscaling/FidelityFX.cpp"
+    _fidelityfx_source
+)
 
 foreach(_action IN ITEMS
     qualification_status
@@ -57,6 +61,35 @@ foreach(_action IN ITEMS
         message(FATAL_ERROR "Missing DevBench qualification handler: ${_action}")
     endif()
 endforeach()
+
+foreach(_task2_contract IN ITEMS
+	"DeferredDispatchAction::FailClosed"
+	"admittedExistingVendorProvider"
+	"submitStageVendorAdmissionExactProviderReady ="
+	"exactCurrentProviderReady"
+	"existingProvider.backend =="
+	"IsPublishedReplacementProven"
+	"std::addressof(controller.applied)"
+	"publishedReplacement"
+	"exactResourceContractMatches"
+)
+	string(FIND
+		"${_upscaling_source}\n${_fidelityfx_source}\n${_bridge}\n${_replacement_policy}"
+		"${_task2_contract}" _task2_contract_position)
+	if(_task2_contract_position EQUAL -1)
+		message(FATAL_ERROR
+			"Task 2 presentation contract is missing: ${_task2_contract}"
+		)
+	endif()
+endforeach()
+
+string(FIND "${_upscaling_source}" "admittedExistingDLSSProvider"
+	_dlss_only_admission_position)
+if(NOT _dlss_only_admission_position EQUAL -1)
+	message(FATAL_ERROR
+		"Deferred current-provider admission remains DLSS-specific"
+	)
+endif()
 
 string(REGEX MATCH
     "R\"json\\((\\{[^\r\n]*\\})\\)json\""
@@ -356,7 +389,7 @@ foreach(_required_behavior IN ITEMS
 	"IsExactTargetProofKind"
 	"OptionalNonNegativeIntegerOrZero"
 	"TryRecordQualificationReplacementTimeline"
-	"exactStableAfterMutation"
+	"IsPublishedReplacementProven"
 	"presentationCycleAudit"
 	"eyeObservations"
 	"incompleteStereoCycles"

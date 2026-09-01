@@ -1390,13 +1390,22 @@ namespace
 
 	constexpr bool CoversDeferredDispatchSelection()
 	{
-		for (std::uint32_t bits = 0; bits < (1u << 2); ++bits) {
+		for (std::uint32_t bits = 0; bits < (1u << 5); ++bits) {
 			const DeferredDispatchAdmission state{
 				.mutationDeferred = (bits & (1u << 0)) != 0,
-				.exactProviderReady = (bits & (1u << 1)) != 0,
+				.physicalMutationStarted = (bits & (1u << 1)) != 0,
+				.hardFailure = (bits & (1u << 2)) != 0,
+				.exactProviderReady = (bits & (1u << 3)) != 0,
+				.completedOutputReady = (bits & (1u << 4)) != 0,
 			};
 			auto expected = DeferredDispatchAction::PresentationStretch;
-			if (!state.mutationDeferred || state.exactProviderReady) {
+			if (state.hardFailure || state.physicalMutationStarted) {
+				expected = DeferredDispatchAction::FailClosed;
+			} else if (state.exactProviderReady) {
+				expected = DeferredDispatchAction::EvaluateExisting;
+			} else if (state.completedOutputReady) {
+				expected = DeferredDispatchAction::ReuseCompletedOutput;
+			} else if (!state.mutationDeferred) {
 				expected = DeferredDispatchAction::EvaluateExisting;
 			}
 			if (SelectDeferredDispatchAction(state) != expected)
@@ -1404,6 +1413,23 @@ namespace
 		}
 
 		return true;
+	}
+
+	constexpr bool CoversStereoDispatchContractIdentity()
+	{
+		return IsSameStereoDispatchContract(7, 7, 2, 2) &&
+		       IsSameStereoDispatchContract(0, 0, 2, 2) &&
+		       !IsSameStereoDispatchContract(7, 8, 2, 2) &&
+		       !IsSameStereoDispatchContract(7, 7, 2, 3);
+	}
+
+	constexpr bool CoversPendingVendorResetOwnership()
+	{
+		return !DoesPendingVendorResetInvalidateProvider(false, 0, 7) &&
+		       !DoesPendingVendorResetInvalidateProvider(true, 8, 7) &&
+		       DoesPendingVendorResetInvalidateProvider(true, 7, 7) &&
+		       DoesPendingVendorResetInvalidateProvider(true, 0, 7) &&
+		       DoesPendingVendorResetInvalidateProvider(true, 8, 0);
 	}
 
 	constexpr bool CoversPostLoadRecoverySettleDeadline()
@@ -1858,21 +1884,50 @@ namespace
 		for (std::uint32_t bit = 0; bit < 14; ++bit) {
 			auto rejected = admission;
 			switch (bit) {
-			case 0: rejected.fallbackActive = false; break;
-			case 1: rejected.explicitCSMenuRequest = false; break;
-			case 2: rejected.savedTargetActive = false; break;
-			case 3: rejected.startupPresentationReleased = false; break;
-			case 4: rejected.completedWorldFrame = false; break;
-			case 5: rejected.exactNativeRuntimePlan = false; break;
-			case 6: rejected.bootLatchAbsent = false; break;
-			case 7: rejected.transitionIdle = false; break;
-			case 8: rejected.physicalRecoveryResolved = false; break;
-			case 9: rejected.memorySampleFresh = false; break;
-			case 10: rejected.memoryPressureRecovered = false; break;
-			case 11: rejected.deviceHealthy = false; break;
-			case 12: rejected.noRecentOutOfMemory = false; break;
-			case 13: rejected.shaderPipelineEnabled = false; break;
-			default: return false;
+			case 0:
+				rejected.fallbackActive = false;
+				break;
+			case 1:
+				rejected.explicitCSMenuRequest = false;
+				break;
+			case 2:
+				rejected.savedTargetActive = false;
+				break;
+			case 3:
+				rejected.startupPresentationReleased = false;
+				break;
+			case 4:
+				rejected.completedWorldFrame = false;
+				break;
+			case 5:
+				rejected.exactNativeRuntimePlan = false;
+				break;
+			case 6:
+				rejected.bootLatchAbsent = false;
+				break;
+			case 7:
+				rejected.transitionIdle = false;
+				break;
+			case 8:
+				rejected.physicalRecoveryResolved = false;
+				break;
+			case 9:
+				rejected.memorySampleFresh = false;
+				break;
+			case 10:
+				rejected.memoryPressureRecovered = false;
+				break;
+			case 11:
+				rejected.deviceHealthy = false;
+				break;
+			case 12:
+				rejected.noRecentOutOfMemory = false;
+				break;
+			case 13:
+				rejected.shaderPipelineEnabled = false;
+				break;
+			default:
+				return false;
 			}
 			if (CanAdmitStartupNativeFallbackExplicitRetry(rejected))
 				return false;
@@ -2841,6 +2896,8 @@ namespace
 	static_assert(CoversStableDoorContractRetention());
 	static_assert(CoversNativeRestoreMemoryReliefOwnership());
 	static_assert(CoversDeferredDispatchSelection());
+	static_assert(CoversStereoDispatchContractIdentity());
+	static_assert(CoversPendingVendorResetOwnership());
 	static_assert(CoversPostLoadRecoverySettleDeadline());
 	static_assert(CoversPostLoadRecoveryDeadlineAdmission());
 	static_assert(CoversPostLoadVendorTeardownOnlyAdmission());

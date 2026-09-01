@@ -6560,9 +6560,10 @@ namespace VRRenderScaleDevBenchBridge
 			}
 			const auto* replacement = [&]() -> const Upscaling::VRRenderScaleProfileSnapshot* {
 				for (const auto* profile : {
-						 std::addressof(controller.requested),
+						 std::addressof(controller.applied),
+						 std::addressof(controller.stable),
 						 std::addressof(controller.applying),
-						 std::addressof(controller.stable) }) {
+						 std::addressof(controller.requested) }) {
 					if (profile->valid && targetEpoch != 0 &&
 						profile->transitionEpoch == targetEpoch) {
 						return profile;
@@ -6570,6 +6571,14 @@ namespace VRRenderScaleDevBenchBridge
 				}
 				return nullptr;
 			}();
+			const auto* publishedReplacement =
+				controller.applied.valid && targetEpoch != 0 &&
+						controller.applied.transitionEpoch == targetEpoch ?
+					std::addressof(controller.applied) :
+				controller.stable.valid && targetEpoch != 0 &&
+						controller.stable.transitionEpoch == targetEpoch ?
+					std::addressof(controller.stable) :
+					nullptr;
 			auto& store = GetQualificationStore();
 			std::lock_guard lock(store.mutex);
 			if (!store.active || store.active->dispatchTick == 0 ||
@@ -6743,9 +6752,55 @@ namespace VRRenderScaleDevBenchBridge
 			                                     dispatchDeviceIdentity ||
 			                                 a_observation.resourceRevision !=
 			                                     dispatchResourceRevision;
-			const auto& stable = controller.stable;
+			const auto providerGenerationForProfile =
+				[&](const auto& a_profile) {
+					if (a_profile.method == Upscaling::UpscaleMethod::kDLSS)
+						return controller.dlssLifecycle.runtimeGeneration;
+					if (a_profile.method == Upscaling::UpscaleMethod::kFSR)
+						return controller.fsrLifecycle.runtimeGeneration;
+					return uint32_t{ 0 };
+				};
+			const auto providerBackendForProfile =
+				[&](const auto& a_profile) {
+					if (a_profile.method == Upscaling::UpscaleMethod::kDLSS)
+						return controller.dlssLifecycle.backend;
+					if (a_profile.method == Upscaling::UpscaleMethod::kFSR)
+						return controller.fsrLifecycle.backend;
+					return Upscaling::VRRenderScaleBackendKind::None;
+				};
+			const auto exactResourceContractMatches =
+				[&](const auto& a_profile) {
+					const auto& resources = a_profile.resources;
+					const bool vendorProfile =
+						a_profile.method == Upscaling::UpscaleMethod::kDLSS ||
+						a_profile.method == Upscaling::UpscaleMethod::kFSR;
+					const auto expectedBackend =
+						vendorProfile && !a_profile.active ?
+							providerBackendForProfile(a_profile) :
+							resources.backend;
+					return resources.valid &&
+				           resources.active == a_profile.active &&
+				           resources.method == a_profile.method &&
+				           resources.qualityMode == a_profile.qualityMode &&
+				           (a_profile.method != Upscaling::UpscaleMethod::kDLSS ||
+							   resources.dlssPreset == a_profile.dlssPreset) &&
+				           resources.renderEyeWidth == a_profile.renderEyeWidth &&
+				           resources.renderEyeHeight == a_profile.renderEyeHeight &&
+				           resources.displayEyeWidth == a_profile.displayEyeWidth &&
+				           resources.displayEyeHeight == a_profile.displayEyeHeight &&
+				           resources.contextCount == 2u &&
+				           a_observation.backend ==
+				               static_cast<uint32_t>(expectedBackend) &&
+				           (vendorProfile ?
+								   (a_profile.active ?
+										   resources.backend != Upscaling::VRRenderScaleBackendKind::None :
+										   resources.backend == Upscaling::VRRenderScaleBackendKind::None &&
+											   expectedBackend != Upscaling::VRRenderScaleBackendKind::None) :
+								   resources.backend == Upscaling::VRRenderScaleBackendKind::None);
+				};
 			const auto exactProfileMatches = [&](const auto& a_profile) {
 				return a_profile.valid &&
+				       a_profile.contractGeneration != 0 &&
 				       a_observation.transitionEpoch == a_profile.transitionEpoch &&
 				       a_observation.contractGeneration == a_profile.contractGeneration &&
 				       a_observation.method == static_cast<uint32_t>(a_profile.method) &&
@@ -6755,7 +6810,7 @@ namespace VRRenderScaleDevBenchBridge
 				       a_observation.displayHeight == a_profile.displayEyeHeight &&
 				       a_observation.deviceIdentity ==
 				           reinterpret_cast<uintptr_t>(globals::d3d::device) &&
-				       a_observation.resourceRevision != 0 && publication.current;
+				       a_observation.resourceRevision != 0;
 			};
 			const auto boundaryMatchesProfile = [&](const auto& a_profile) {
 				return boundaryRecorded && a_profile.valid &&
@@ -6771,30 +6826,37 @@ namespace VRRenderScaleDevBenchBridge
 					a_profile.method,
 					a_profile.renderScaleModeEnabled);
 			};
-			const bool exactStableAfterMutation = physicalMutationStarted &&
-			                                      differsFromDispatch &&
-			                                      a_observation.selection == PresentationAuditSelection::Observed &&
-			                                      exactProfileMatches(stable) &&
-			                                      boundaryMatchesProfile(stable) &&
-			                                      exactPathMatchesProfile(stable);
-			const bool exactReplacement = exactStableAfterMutation ||
-			                              (replacement &&
-											  differsFromDispatch &&
-											  a_observation.selection == PresentationAuditSelection::Observed &&
-											  physicalMutationStarted &&
-											  exactProfileMatches(*replacement) &&
-											  boundaryMatchesProfile(*replacement) &&
-											  exactPathMatchesProfile(*replacement));
+			const bool exactReplacement =
+				publishedReplacement &&
+				ReplacementTelemetry::IsPublishedReplacementProven({
+					.physicalMutationStarted = physicalMutationStarted,
+					.differsFromDispatch = differsFromDispatch,
+					.observed =
+						a_observation.selection ==
+						PresentationAuditSelection::Observed,
+					.profileMatches = exactProfileMatches(*publishedReplacement),
+					.mutationBoundaryMatches =
+						boundaryMatchesProfile(*publishedReplacement),
+					.presentationPathMatches =
+						exactPathMatchesProfile(*publishedReplacement),
+					.resourceContractMatches =
+						exactResourceContractMatches(*publishedReplacement),
+					.providerGenerationMatches =
+						(!publishedReplacement->active ||
+							(publishedReplacement->method != Upscaling::UpscaleMethod::kDLSS &&
+								publishedReplacement->method != Upscaling::UpscaleMethod::kFSR) ||
+							providerGenerationForProfile(*publishedReplacement) ==
+								publishedReplacement->contractGeneration),
+					.publicationCurrent = publication.current,
+				});
 			const uint32_t identityMethod = suppressesPreviousBeforeMutation ?
 			                                    dispatchMethod :
 			                                    a_observation.method;
 			const uint32_t identityBackend = suppressesPreviousBeforeMutation ?
 			                                     dispatchBackend :
 			                                     a_observation.backend;
-			const auto* identityProfile = exactReplacement && stable.valid ?
-			                                  std::addressof(stable) :
-			                              exactReplacement ? replacement :
-			                                                 nullptr;
+			const auto* identityProfile =
+				exactReplacement ? publishedReplacement : nullptr;
 			const uint32_t identityQualityMode = exactCurrent ?
 			                                         dispatchQualityMode :
 			                                     identityProfile ? identityProfile->qualityMode :
@@ -6840,9 +6902,10 @@ namespace VRRenderScaleDevBenchBridge
 			}
 			const uint64_t identityRequestID = exactCurrent ?
 			                                       dispatchRequestID :
-			                                   exactReplacement && stable.valid ? stable.requestID :
-			                                   replacement                      ? replacement->requestID :
-			                                                                      controller.stable.requestID;
+			                                   identityProfile ?
+			                                       identityProfile->requestID :
+			                                   replacement ? replacement->requestID :
+			                                                 controller.stable.requestID;
 			const uint64_t identityTransitionEpoch = suppressesPreviousBeforeMutation ?
 			                                             dispatchTransitionEpoch :
 			                                             a_observation.transitionEpoch;

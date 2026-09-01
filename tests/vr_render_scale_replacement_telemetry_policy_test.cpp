@@ -282,6 +282,27 @@ namespace
 		return !HasCoherentVendorDispatch(facts);
 	}
 
+	constexpr bool CoversPublishedReplacementProof()
+	{
+		constexpr std::uint32_t allFacts = (1u << 9) - 1u;
+		for (std::uint32_t bits = 0; bits <= allFacts; ++bits) {
+			const PublishedReplacementProofFacts facts{
+				.physicalMutationStarted = (bits & (1u << 0)) != 0,
+				.differsFromDispatch = (bits & (1u << 1)) != 0,
+				.observed = (bits & (1u << 2)) != 0,
+				.profileMatches = (bits & (1u << 3)) != 0,
+				.mutationBoundaryMatches = (bits & (1u << 4)) != 0,
+				.presentationPathMatches = (bits & (1u << 5)) != 0,
+				.resourceContractMatches = (bits & (1u << 6)) != 0,
+				.providerGenerationMatches = (bits & (1u << 7)) != 0,
+				.publicationCurrent = (bits & (1u << 8)) != 0,
+			};
+			if (IsPublishedReplacementProven(facts) != (bits == allFacts))
+				return false;
+		}
+		return true;
+	}
+
 	constexpr bool CoversVendorAuditIdentity()
 	{
 		auto left = Eye(0, 12, PresentationDisposition::ExactVendor);
@@ -506,6 +527,7 @@ namespace
 	static_assert(CoversGenerationCorrelation());
 	static_assert(CoversProofKinds());
 	static_assert(CoversVendorDispatchProof());
+	static_assert(CoversPublishedReplacementProof());
 	static_assert(CoversVendorAuditIdentity());
 	static_assert(CoversTargetProofKindRequirements());
 	static_assert(CoversPartialAndCompleteCycles());

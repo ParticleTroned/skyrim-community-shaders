@@ -1969,19 +1969,20 @@ bool FidelityFX::IsRuntimeUpscalerDispatchProofUsable(
 	case RuntimeUpscalerFramePath::kHostFsr31Fallback:
 		return HasFSRResources();
 	case RuntimeUpscalerFramePath::kRuntimeFsr31:
-	case RuntimeUpscalerFramePath::kRuntimeFsr4: {
-		const uint32_t requestedVersion =
-			a_path == RuntimeUpscalerFramePath::kRuntimeFsr4 ?
-				FFX_UPSCALER_VERSION :
-				Fsr3Version;
-		return AreRuntimeUpscalerResourcesCompatible(
-			runtimeUpscalerMaxRenderWidth,
-			runtimeUpscalerMaxRenderHeight,
-			runtimeUpscalerMaxDisplayWidth,
-			runtimeUpscalerMaxDisplayHeight,
-			runtimeUpscalerContextCount,
-			requestedVersion);
-	}
+	case RuntimeUpscalerFramePath::kRuntimeFsr4:
+		{
+			const uint32_t requestedVersion =
+				a_path == RuntimeUpscalerFramePath::kRuntimeFsr4 ?
+					FFX_UPSCALER_VERSION :
+					Fsr3Version;
+			return AreRuntimeUpscalerResourcesCompatible(
+				runtimeUpscalerMaxRenderWidth,
+				runtimeUpscalerMaxRenderHeight,
+				runtimeUpscalerMaxDisplayWidth,
+				runtimeUpscalerMaxDisplayHeight,
+				runtimeUpscalerContextCount,
+				requestedVersion);
+		}
 	default:
 		return false;
 	}
@@ -2559,6 +2560,14 @@ FidelityFX::RuntimeDispatchPlan FidelityFX::ResolveRuntimeDispatchPlan()
 	plan.vendorLifecycleMutationDeferred =
 		globals::game::isVR &&
 		upscaling.ShouldDeferVRVendorLifecycleMutation();
+	Upscaling::VRExistingVendorProviderSnapshot existingProvider{};
+	if (plan.vendorLifecycleMutationDeferred)
+		existingProvider = upscaling.GetExistingVRVendorProviderSnapshot();
+	const bool exactCurrentProviderReady =
+		plan.vendorLifecycleMutationDeferred &&
+		upscaling.CanDispatchExistingVRVendorEvaluation(
+			Upscaling::UpscaleMethod::kFSR,
+			existingProvider);
 
 	const uint32_t currentFrame = state->frameCount;
 	if (!runtimeHostFallbackFrameValid || runtimeHostFallbackFrame != currentFrame) {
@@ -2578,37 +2587,59 @@ FidelityFX::RuntimeDispatchPlan FidelityFX::ResolveRuntimeDispatchPlan()
 		}
 	}
 
-	plan.runtimeFsr4Requested = ShouldRequestRuntimeFsr4();
-	plan.runtimeRequested = plan.runtimeFsr4Requested || ShouldUseRuntimeUpscalerForFSR();
+	plan.runtimeFsr4Requested = exactCurrentProviderReady ?
+	                                existingProvider.backend ==
+	                                    Upscaling::VRRenderScaleBackendKind::FSR4Runtime :
+	                                ShouldRequestRuntimeFsr4();
+	plan.runtimeRequested = exactCurrentProviderReady ?
+	                            existingProvider.backend ==
+	                                    Upscaling::VRRenderScaleBackendKind::FSRRuntime ||
+	                                existingProvider.backend ==
+	                                    Upscaling::VRRenderScaleBackendKind::FSR4Runtime :
+	                            plan.runtimeFsr4Requested ||
+	                                ShouldUseRuntimeUpscalerForFSR();
 	plan.requestedVersion = plan.runtimeFsr4Requested ? FFX_UPSCALER_VERSION : Fsr3Version;
 	const bool splitPerEyeContexts = UseSplitPerEyeFSRContexts();
-	plan.contextCount = splitPerEyeContexts ? 2u : 1u;
+	plan.contextCount = exactCurrentProviderReady ?
+	                        existingProvider.resources.contextCount :
+	                        (splitPerEyeContexts ? 2u : 1u);
 	const bool shaderCompilationActive =
 		globals::shaderCache &&
 		globals::shaderCache->IsCompiling();
 	const bool awaitingInitialVRRenderScaleLatch =
 		globals::game::isVR &&
 		upscaling.IsRenderScaleModeRequested() &&
-		!upscaling.IsVRRenderScaleModeLatched();
+		!upscaling.IsVRRenderScaleModeLatched() &&
+		!exactCurrentProviderReady;
 	const bool runtimePathEligible =
 		plan.runtimeRequested &&
 		CanUseRuntimeUpscalerPath() &&
 		!awaitingInitialVRRenderScaleLatch &&
-		!plan.vendorLifecycleMutationDeferred;
+		(!plan.vendorLifecycleMutationDeferred || exactCurrentProviderReady);
 
 	bool runtimeContextsCompatible = false;
 	if (runtimePathEligible) {
-		float2 screenSize{};
-		float2 renderSize{};
-		GetRuntimeUpscaleSizes(screenSize, renderSize);
-		plan.fullDisplayWidth = static_cast<uint32_t>(splitPerEyeContexts ? screenSize.x / 2.0f : screenSize.x);
-		plan.fullDisplayHeight = static_cast<uint32_t>(screenSize.y);
-		const uint32_t requestedFullRenderWidth = static_cast<uint32_t>(splitPerEyeContexts ? renderSize.x / 2.0f : renderSize.x);
-		const uint32_t requestedFullRenderHeight = static_cast<uint32_t>(renderSize.y);
-		// Stable runtime contexts use display bounds so quality changes do not relatch interop ownership.
-		const bool useFullRenderBounds = splitPerEyeContexts || plan.runtimeFsr4Requested;
-		plan.fullRenderWidth = useFullRenderBounds ? plan.fullDisplayWidth : requestedFullRenderWidth;
-		plan.fullRenderHeight = useFullRenderBounds ? plan.fullDisplayHeight : requestedFullRenderHeight;
+		if (exactCurrentProviderReady) {
+			// A queued replacement may already own mutable settings. Keep the
+			// admitted provider's immutable dimensions so this path cannot create
+			// replacement contexts before mutation authority is granted.
+			plan.fullDisplayWidth = existingProvider.displayEyeWidth;
+			plan.fullDisplayHeight = existingProvider.displayEyeHeight;
+			plan.fullRenderWidth = existingProvider.displayEyeWidth;
+			plan.fullRenderHeight = existingProvider.displayEyeHeight;
+		} else {
+			float2 screenSize{};
+			float2 renderSize{};
+			GetRuntimeUpscaleSizes(screenSize, renderSize);
+			plan.fullDisplayWidth = static_cast<uint32_t>(splitPerEyeContexts ? screenSize.x / 2.0f : screenSize.x);
+			plan.fullDisplayHeight = static_cast<uint32_t>(screenSize.y);
+			const uint32_t requestedFullRenderWidth = static_cast<uint32_t>(splitPerEyeContexts ? renderSize.x / 2.0f : renderSize.x);
+			const uint32_t requestedFullRenderHeight = static_cast<uint32_t>(renderSize.y);
+			// Stable runtime contexts use display bounds so quality changes do not relatch interop ownership.
+			const bool useFullRenderBounds = splitPerEyeContexts || plan.runtimeFsr4Requested;
+			plan.fullRenderWidth = useFullRenderBounds ? plan.fullDisplayWidth : requestedFullRenderWidth;
+			plan.fullRenderHeight = useFullRenderBounds ? plan.fullDisplayHeight : requestedFullRenderHeight;
+		}
 		runtimeContextsCompatible = AreRuntimeUpscalerContextsCompatible(
 			plan.fullRenderWidth,
 			plan.fullRenderHeight,
@@ -2622,7 +2653,8 @@ FidelityFX::RuntimeDispatchPlan FidelityFX::ResolveRuntimeDispatchPlan()
 	const bool runtimeDeferredByGate =
 		plan.runtimeRequested &&
 		!runtimeUpscalerSessionQuarantined &&
-		(plan.vendorLifecycleMutationDeferred ||
+		((plan.vendorLifecycleMutationDeferred &&
+			 !exactCurrentProviderReady) ||
 			awaitingInitialVRRenderScaleLatch ||
 			(runtimePathEligible && shaderCompilationActive && !runtimeContextsCompatible));
 	if (runtimeDeferredByGate)

@@ -10,6 +10,7 @@
 #include <string_view>
 #include <unordered_map>
 
+#include "Features/Upscaling.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "Util.h"
@@ -707,10 +708,10 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 				"Profiling"));
 		ImGui::SameLine();
 		if (ImGui::Checkbox(
-			    T(
-				    "menu.profiling.enable",
-				    "Enable"),
-			    &profilingEnabled)) {
+				T(
+					"menu.profiling.enable",
+					"Enable"),
+				&profilingEnabled)) {
 			profiler.SetUserEnabled(profilingEnabled);
 			timeSinceLastUpdate = 1.0f;
 		}
@@ -871,7 +872,7 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 
 		if (ImGui::BeginTable("##Profiler", 5,
 				ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_ScrollY,
-			ImVec2(0.0f, availHeight))) {
+				ImVec2(0.0f, availHeight))) {
 			ImGui::TableSetupScrollFreeze(0, 1);
 			ImGui::TableSetupColumn(passLabel, ImGuiTableColumnFlags_WidthFixed, passColumnWidth);
 			ImGui::TableSetupColumn(T("menu.profiling.avg", "Avg"), ImGuiTableColumnFlags_WidthFixed, 55.0f);
@@ -1098,6 +1099,18 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 	summary.wholeFrameCpuSampleId = profiler.GetWholeFrameCpuSampleId();
 	summary.presentDiscontinuityEpoch = profiler.GetPresentDiscontinuityEpoch();
 	summary.skippedWholeFrameCaptureCount = profiler.GetSkippedWholeFrameCaptureCount();
+	const auto outputTiming =
+		globals::features::upscaling.GetOutputPresentationTiming();
+	summary.outputPresentSampleId = outputTiming.sampleId;
+	summary.outputPresentDiscontinuityEpoch =
+		outputTiming.discontinuityEpoch;
+	if (outputTiming.valid) {
+		summary.outputPresentSampleDurationMs =
+			outputTiming.sampledDurationMs;
+		summary.outputPresentedFrameCount =
+			outputTiming.presentedFrameCount;
+		summary.hasOutputPresentSample = true;
+	}
 	if (profiler.HasWholeFrameGpuTime()) {
 		summary.wholeFrameGpuMs = profiler.GetWholeFrameGpuTimeAverageMs(kDisplayedRollingFrameCount);
 		summary.hasWholeFrameGpu = IsPositiveFinite(summary.wholeFrameGpuMs);

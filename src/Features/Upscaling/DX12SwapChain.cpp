@@ -1,6 +1,7 @@
 #include "DX12SwapChain.h"
 
 #include <FidelityFX/api/include/dx12/ffx_api_dx12.hpp>
+#include <cmath>
 #include <dxgi1_6.h>
 
 #include "../HDRDisplay.h"
@@ -10,6 +11,9 @@
 
 namespace
 {
+	constexpr double kMaximumOutputSampleDurationMs = 1000.0;
+	constexpr double kOutputTimingStaleSeconds = 2.0;
+
 	struct ScopedHandle
 	{
 		~ScopedHandle()
@@ -102,6 +106,8 @@ void DX12SwapChain::CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC 
 	}
 	if (!swapChain)
 		DX::ThrowIfFailed(E_POINTER);
+	QueryPerformanceFrequency(&qpf);
+	ResetOutputPresentationTiming(true);
 
 	DX::ThrowIfFailed(swapChain->GetBuffer(0, IID_PPV_ARGS(&swapChainBuffers[0])));
 	DX::ThrowIfFailed(swapChain->GetBuffer(1, IID_PPV_ARGS(&swapChainBuffers[1])));
@@ -289,6 +295,7 @@ HRESULT DX12SwapChain::ResizeBuffers(UINT BufferCount, UINT Width, UINT Height, 
 		swapChainBuffers[i] = std::move(resizedBuffers[i]);
 	swapChainDesc = resizedDesc;
 	frameIndex = swapChain->GetCurrentBackBufferIndex();
+	ResetOutputPresentationTiming(true);
 
 	logger::info(
 		"[DX12SwapChain] Resized interop buffers to {}x{} format={} (wrappers recreated={})",
@@ -314,10 +321,6 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 	const bool frameGenerationInputsReady =
 		upscaling.ConsumeFrameGenerationInputsForPresent();
 	upscaling.fidelityFX.isFrameGenActive = false;
-	upscaling.RecordPerformanceCostFrameGenerationPresent(
-		frameGenerationRequested,
-		false,
-		false);
 	if (FAILED(presentInteropFailure))
 		return presentInteropFailure;
 	static bool loggedIncompletePresentResources = false;
@@ -430,31 +433,21 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 		frameGenerationResult.successful &&
 		frameGenerationResult.active;
 	upscaling.fidelityFX.isFrameGenActive = frameGenerationActive;
-	upscaling.RecordPerformanceCostFrameGenerationPresent(
-		frameGenerationRequested,
-		acceptedPresent &&
-			frameGenerationResult.successful &&
-			(!frameGenerationRequested || useFrameGeneration),
-		frameGenerationActive);
+	if (acceptedPresent)
+		UpdateOutputPresentationTiming();
+	else
+		ResetOutputPresentationTiming();
 
 	// Wait for D3D12 to finish
 	const UINT64 postPresentFenceValue = fenceValue++;
 	if (const HRESULT result = commandQueue->Signal(d3d12Fence.get(), postPresentFenceValue); FAILED(result)) {
 		logger::error("[DX12SwapChain] D3D12 post-Present fence signal failed: 0x{:08X}", static_cast<unsigned>(result));
 		presentInteropFailure = result;
-		upscaling.RecordPerformanceCostFrameGenerationPresent(
-			frameGenerationRequested,
-			false,
-			frameGenerationActive);
 		return presentResult;
 	}
 	if (const HRESULT result = d3d11Context->Wait(d3d11Fence.get(), postPresentFenceValue); FAILED(result)) {
 		logger::error("[DX12SwapChain] D3D11 post-Present fence wait failed: 0x{:08X}", static_cast<unsigned>(result));
 		presentInteropFailure = result;
-		upscaling.RecordPerformanceCostFrameGenerationPresent(
-			frameGenerationRequested,
-			false,
-			frameGenerationActive);
 		return presentResult;
 	}
 	float clearColor[4]{ 0, 0, 0, 0 };
@@ -496,27 +489,116 @@ HANDLE DX12SwapChain::GetFrameLatencyWaitableObject()
 	return swapChain->GetFrameLatencyWaitableObject();
 }
 
-float DX12SwapChain::GetFrameTime() const
+DX12SwapChain::OutputPresentationTiming DX12SwapChain::GetOutputPresentationTiming() const
 {
-	// Calculate frame time based on swap chain presentation
-	static float lastPresentTime = 0.0f;
-	static float frameTime = 1.0f / 60.0f;  // Default to 60 fps
-	static LARGE_INTEGER frequency = {};
-	static LARGE_INTEGER currentTime = {};
+	std::lock_guard lock(outputPresentationTimingMutex);
+	auto result = outputPresentationTiming;
+	if (!result.valid || qpf.QuadPart <= 0)
+		return result;
 
-	if (frequency.QuadPart == 0) {
-		QueryPerformanceFrequency(&frequency);
+	LARGE_INTEGER now{};
+	if (!QueryPerformanceCounter(&now) ||
+		now.QuadPart < previousOutputFrameStatistics.SyncQPCTime.QuadPart ||
+		static_cast<double>(
+			now.QuadPart - previousOutputFrameStatistics.SyncQPCTime.QuadPart) /
+				static_cast<double>(qpf.QuadPart) >
+			kOutputTimingStaleSeconds) {
+		result.valid = false;
+		result.averageFrameTimeMs = 0.0;
+		result.fps = 0.0;
+		result.sampledDurationMs = 0.0;
+		result.presentedFrameCount = 0;
+	}
+	return result;
+}
+
+void DX12SwapChain::UpdateOutputPresentationTiming()
+{
+	if (!swapChain || qpf.QuadPart <= 0) {
+		ResetOutputPresentationTiming();
+		return;
 	}
 
-	QueryPerformanceCounter(&currentTime);
-	float time = static_cast<float>(currentTime.QuadPart) / static_cast<float>(frequency.QuadPart);
-
-	if (lastPresentTime > 0.0f) {
-		frameTime = time - lastPresentTime;
+	DXGI_FRAME_STATISTICS statistics{};
+	// The FidelityFX proxy forwards these statistics to the real swap chain,
+	// where both interpolated and game frames cross the display boundary.
+	if (FAILED(swapChain->GetFrameStatistics(&statistics))) {
+		ResetOutputPresentationTiming();
+		return;
 	}
-	lastPresentTime = time;
 
-	return frameTime;
+	std::lock_guard lock(outputPresentationTimingMutex);
+	if (!hasOutputFrameStatisticsBaseline) {
+		previousOutputFrameStatistics = statistics;
+		hasOutputFrameStatisticsBaseline = true;
+		outputPresentationTiming.valid = false;
+		return;
+	}
+
+	const auto previousPresentCount =
+		previousOutputFrameStatistics.PresentCount;
+	const auto previousSyncQpc =
+		previousOutputFrameStatistics.SyncQPCTime.QuadPart;
+	if (statistics.PresentCount < previousPresentCount ||
+		statistics.SyncQPCTime.QuadPart < previousSyncQpc) {
+		previousOutputFrameStatistics = statistics;
+		InvalidateOutputPresentationTimingLocked();
+		return;
+	}
+
+	const uint32_t presentedFrameCount =
+		statistics.PresentCount - previousPresentCount;
+	const int64_t elapsedQpc =
+		statistics.SyncQPCTime.QuadPart - previousSyncQpc;
+	if (presentedFrameCount == 0 || elapsedQpc <= 0)
+		return;
+
+	const double sampledDurationMs =
+		1000.0 * static_cast<double>(elapsedQpc) /
+		static_cast<double>(qpf.QuadPart);
+	const double frameTimeMs =
+		sampledDurationMs / static_cast<double>(presentedFrameCount);
+	if (!std::isfinite(sampledDurationMs) ||
+		!std::isfinite(frameTimeMs) ||
+		sampledDurationMs > kMaximumOutputSampleDurationMs ||
+		frameTimeMs <= 0.0) {
+		previousOutputFrameStatistics = statistics;
+		InvalidateOutputPresentationTimingLocked();
+		return;
+	}
+
+	previousOutputFrameStatistics = statistics;
+	outputPresentationTiming.averageFrameTimeMs = frameTimeMs;
+	outputPresentationTiming.fps = 1000.0 / frameTimeMs;
+	outputPresentationTiming.sampledDurationMs = sampledDurationMs;
+	outputPresentationTiming.presentedFrameCount = presentedFrameCount;
+	++outputPresentationTiming.sampleId;
+	outputPresentationTiming.valid = true;
+}
+
+void DX12SwapChain::ResetOutputPresentationTiming(bool force)
+{
+	std::lock_guard lock(outputPresentationTimingMutex);
+	if (!force &&
+		!hasOutputFrameStatisticsBaseline &&
+		!outputPresentationTiming.valid) {
+		return;
+	}
+
+	previousOutputFrameStatistics = {};
+	hasOutputFrameStatisticsBaseline = false;
+	InvalidateOutputPresentationTimingLocked();
+}
+
+void DX12SwapChain::InvalidateOutputPresentationTimingLocked()
+{
+	const auto sampleId = outputPresentationTiming.sampleId;
+	const auto discontinuityEpoch =
+		outputPresentationTiming.discontinuityEpoch + 1;
+	outputPresentationTiming = {};
+	outputPresentationTiming.sampleId = sampleId;
+	outputPresentationTiming.discontinuityEpoch =
+		discontinuityEpoch;
 }
 
 WrappedResource::WrappedResource(

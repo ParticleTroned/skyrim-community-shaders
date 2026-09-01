@@ -954,27 +954,6 @@ bool ScreenSpaceGI::IsRuntimeReady() const
 	return RuntimeResourcesOK() && ShadersOK();
 }
 
-bool ScreenSpaceGI::IsPerformanceTuningApplicable() const
-{
-	return IsRuntimeReady();
-}
-
-const char* ScreenSpaceGI::GetPerformanceTuningApplicabilityReason() const
-{
-	if (IsPerformanceTuningApplicable())
-		return nullptr;
-
-	if (!RuntimeResourcesOK()) {
-		return T(
-			"menu.performance_tuning.feature.screen_space_gi.runtime_resources_unavailable",
-			"Screen Space GI cannot be measured because its runtime resources are unavailable.");
-	}
-
-	return T(
-		"menu.performance_tuning.feature.screen_space_gi.shaders_unavailable",
-		"Screen Space GI cannot be measured because one or more required compute shaders failed to compile.");
-}
-
 void ScreenSpaceGI::UpdateSB()
 {
 	float2 res = { (float)texRadiance->desc.Width, (float)texRadiance->desc.Height };

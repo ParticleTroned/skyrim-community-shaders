@@ -35,6 +35,15 @@ namespace Util
 	void DisableVanillaTAA();
 	float GetVerticalFOVRad();
 
+	/** @brief Returns whether the player camera is already in automatic vanity mode. */
+	[[nodiscard]] bool IsAutoVanityCameraActive();
+	/** @brief Acquires shared suppression of automatic vanity-camera transitions. */
+	[[nodiscard]] bool AcquireAutoVanityCameraSuppression();
+	/** @brief Refreshes automatic vanity-camera suppression while an owner is active. */
+	void MaintainAutoVanityCameraSuppression();
+	/** @brief Releases one suppression owner and restores the original delay for the last. */
+	[[nodiscard]] bool ReleaseAutoVanityCameraSuppression();
+
 	RE::NiPoint3 GetEyePosition();
 
 	float2 ConvertToDynamic(float2 a_size, bool a_ignoreLock = false);

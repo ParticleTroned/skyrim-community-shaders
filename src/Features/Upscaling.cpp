@@ -104,12 +104,6 @@ namespace
 		return std::min<uint>(value, Upscaling::kQualityModeMaxIndex);
 	}
 
-	bool IsFrameEvidenceRecent(uint32_t a_currentFrame, uint32_t a_evidenceFrame, uint32_t a_maxAgeFrames)
-	{
-		return a_evidenceFrame != std::numeric_limits<uint32_t>::max() &&
-		       a_currentFrame - a_evidenceFrame <= a_maxAgeFrames;
-	}
-
 	bool TryGetTexture2DDesc(ID3D11Resource* a_resource, D3D11_TEXTURE2D_DESC& a_desc)
 	{
 		if (!a_resource)
@@ -149,7 +143,7 @@ namespace
 		return true;
 	}
 
-	D3D11_TEXTURE2D_DESC BuildFlatRuntimeFsrDepthDesc(const D3D11_TEXTURE2D_DESC& a_mainDesc)
+	D3D11_TEXTURE2D_DESC BuildFlatFsrDepthDesc(const D3D11_TEXTURE2D_DESC& a_mainDesc)
 	{
 		D3D11_TEXTURE2D_DESC depthDesc{};
 		depthDesc.Width = a_mainDesc.Width;
@@ -624,15 +618,15 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 void Upscaling::DrawSettings()
 {
-	DrawSettingsPanel(true);
+	DrawSettingsPanel(true, true);
 }
 
 void Upscaling::DrawPerformanceSettings(bool)
 {
-	DrawSettingsPanel(false);
+	DrawSettingsPanel(false, false);
 }
 
-void Upscaling::DrawSettingsPanel(bool a_showEmbeddedInfo)
+void Upscaling::DrawSettingsPanel(bool a_showEmbeddedInfo, bool a_allowNone)
 {
 	struct UpscaleUiChoice
 	{
@@ -649,15 +643,19 @@ void Upscaling::DrawSettingsPanel(bool a_showEmbeddedInfo)
 	uint32_t* currentUpscaleMode = &settings.upscaleMethod;
 	if (!featureDLSS)
 		currentUpscaleMode = &settings.upscaleMethodNoDLSS;
+	const bool noneIsCurrent =
+		*currentUpscaleMode == static_cast<uint32_t>(UpscaleMethod::kNONE);
+	const bool showNoneChoice =
+		a_allowNone || renderDocBlocksUpscaling || noneIsCurrent;
 
 	if (!renderDocBlocksUpscaling &&
 		*currentUpscaleMode == static_cast<uint32_t>(UpscaleMethod::kFSR) &&
 		!runtimeFsr4AutoEligible)
 		settings.fsr4RuntimeEnable = false;
 
-	std::vector<UpscaleUiChoice> upscaleChoices = {
-		{ UpscaleMethod::kNONE, false, "None" }
-	};
+	std::vector<UpscaleUiChoice> upscaleChoices;
+	if (showNoneChoice)
+		upscaleChoices.push_back({ UpscaleMethod::kNONE, false, "None" });
 	if (!renderDocBlocksUpscaling) {
 		upscaleChoices.push_back({ UpscaleMethod::kTAA, false, "TAA" });
 		upscaleChoices.push_back({ UpscaleMethod::kFSR, false, "AMD FSR3" });
@@ -704,9 +702,13 @@ void Upscaling::DrawSettingsPanel(bool a_showEmbeddedInfo)
 		} else {
 			ImGui::TextUnformatted("Selects the upscaling backend.");
 			if (runtimeFsr4AutoEligible)
-				ImGui::TextUnformatted("Range: choose between TAA, DLSS, FSR3, FSR4, or None.");
+				ImGui::TextUnformatted(showNoneChoice ?
+										   "Range: choose between TAA, DLSS, FSR3, FSR4, or None." :
+										   "Range: choose between TAA, DLSS, FSR3, or FSR4.");
 			else
-				ImGui::TextUnformatted("Range: choose between TAA, DLSS, FSR3, or None.");
+				ImGui::TextUnformatted(showNoneChoice ?
+										   "Range: choose between TAA, DLSS, FSR3, or None." :
+										   "Range: choose between TAA, DLSS, or FSR3.");
 		}
 	}
 	methodUiIndex = std::clamp(methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1));
@@ -1286,13 +1288,10 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 		}
 	}
 
-	// The D3D11/D3D12 runtime bridge cannot portably share the game's
-	// typeless R24G8 depth allocation. The encode pass copies it into this
-	// typed resource before runtime FSR receives it.
-	if (a_upscalemethod == UpscaleMethod::kFSR &&
-		fidelityFX.ShouldUseRuntimeUpscalerForFSR() &&
-		!runtimeFsrDepthTexture) {
-		const auto depthDesc = BuildFlatRuntimeFsrDepthDesc(texDesc);
+	// FidelityFX must not infer depth semantics from Skyrim's typeless R24G8
+	// allocation. Both host and runtime paths consume this typed copy.
+	if (a_upscalemethod == UpscaleMethod::kFSR && !fsrDepthTexture) {
+		const auto depthDesc = BuildFlatFsrDepthDesc(texDesc);
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC depthSrvDesc{};
 		depthSrvDesc.Format = depthDesc.Format;
@@ -1303,9 +1302,19 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 		depthUavDesc.Format = depthDesc.Format;
 		depthUavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
 
-		runtimeFsrDepthTexture = std::make_unique<Texture2D>(depthDesc, "Upscaling::RuntimeFsrDepth");
-		runtimeFsrDepthTexture->CreateSRV(depthSrvDesc);
-		runtimeFsrDepthTexture->CreateUAV(depthUavDesc);
+		fsrDepthTexture = std::make_unique<Texture2D>(depthDesc, "Upscaling::FsrDepth");
+		fsrDepthTexture->CreateSRV(depthSrvDesc);
+		fsrDepthTexture->CreateUAV(depthUavDesc);
+	}
+
+	if (a_upscalemethod == UpscaleMethod::kFSR && !fsrOutputTexture) {
+		main.texture->GetDesc(&texDesc);
+		main.SRV->GetDesc(&srvDesc);
+		main.UAV->GetDesc(&uavDesc);
+		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		fsrOutputTexture = std::make_unique<Texture2D>(texDesc, "Upscaling::FsrOutput");
+		fsrOutputTexture->CreateSRV(srvDesc);
+		fsrOutputTexture->CreateUAV(uavDesc);
 	}
 
 	// Encoded motion vectors are used by DLSS and by FSR's full-frame path.
@@ -1367,7 +1376,8 @@ void Upscaling::DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 	}
 
 	if (a_upscalemethod != UpscaleMethod::kFSR) {
-		runtimeFsrDepthTexture.reset();
+		fsrDepthTexture.reset();
+		fsrOutputTexture.reset();
 	}
 
 	if (a_upscalemethod != UpscaleMethod::kDLSS) {
@@ -1542,10 +1552,9 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		expectedMaskDesc.Format = DXGI_FORMAT_R8_UNORM;
 
 		D3D11_TEXTURE2D_DESC expectedMotionVectorDesc = motionVectorDesc;
-		const auto expectedRuntimeFsrDepthDesc = BuildFlatRuntimeFsrDepthDesc(mainDesc);
-		const bool requiresRuntimeFsrDepth =
-			a_upscalemethod == UpscaleMethod::kFSR &&
-			fidelityFX.ShouldUseRuntimeUpscalerForFSR();
+		const auto expectedFsrDepthDesc = BuildFlatFsrDepthDesc(mainDesc);
+		const bool requiresFsrDepth =
+			a_upscalemethod == UpscaleMethod::kFSR;
 
 		D3D11_TEXTURE2D_DESC expectedSharpenerDesc = mainDesc;
 		expectedSharpenerDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
@@ -1554,7 +1563,8 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			!TextureMatchesRequirements(reactiveMaskTexture, expectedMaskDesc, true, true) ||
 			!TextureMatchesRequirements(transparencyCompositionMaskTexture, expectedMaskDesc, true, true) ||
 			!TextureMatchesRequirements(motionVectorCopyTexture, expectedMotionVectorDesc, true, true) ||
-			(requiresRuntimeFsrDepth && !TextureMatchesRequirements(runtimeFsrDepthTexture, expectedRuntimeFsrDepthDesc, true, true)) ||
+			(requiresFsrDepth && !TextureMatchesRequirements(fsrDepthTexture, expectedFsrDepthDesc, true, true)) ||
+			(a_upscalemethod == UpscaleMethod::kFSR && !TextureMatchesRequirements(fsrOutputTexture, expectedSharpenerDesc, true, true)) ||
 			(a_upscalemethod == UpscaleMethod::kDLSS && !TextureMatchesRequirements(sharpenerTexture, expectedSharpenerDesc, true, true));
 
 		if (sourceTextureDescChanged || vendorTextureStateInvalid) {
@@ -1597,112 +1607,8 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	}
 	previousTextureSourceDescsValid = currentTextureSourceDescsValid;
 
-	const bool appliedStateValid = !vendorUpscalerActive || currentTextureSourceDescsValid;
-	const bool appliedStateChanged =
-		performanceCostAppliedStateValid != appliedStateValid ||
-		performanceCostAppliedUpscaleMethod != a_upscalemethod ||
-		performanceCostAppliedQualityMode != qualityModeCurrent ||
-		performanceCostAppliedDLSSPreset != dlssPresetCurrent ||
-		performanceCostAppliedFrameGenerationMode != frameGenModeCurrent ||
-		performanceCostAppliedFSRRuntimePathActive != fsrRuntimePathCurrent ||
-		performanceCostAppliedFSRRuntimeFsr4Configured != fsrRuntimeFsr4Configured ||
-		performanceCostAppliedFSRRuntimeFsr4Active != fsrRuntimeFsr4Current ||
-		std::abs(performanceCostAppliedResolutionScale.x - resolutionScale.x) > 1.0e-4f ||
-		std::abs(performanceCostAppliedResolutionScale.y - resolutionScale.y) > 1.0e-4f;
-
-	performanceCostAppliedStateValid = appliedStateValid;
-	performanceCostAppliedUpscaleMethod = a_upscalemethod;
-	performanceCostAppliedQualityMode = qualityModeCurrent;
-	performanceCostAppliedDLSSPreset = dlssPresetCurrent;
-	performanceCostAppliedFrameGenerationMode = frameGenModeCurrent;
-	performanceCostAppliedFSRRuntimePathActive = fsrRuntimePathCurrent;
-	performanceCostAppliedFSRRuntimeFsr4Configured = fsrRuntimeFsr4Configured;
-	performanceCostAppliedFSRRuntimeFsr4Active = fsrRuntimeFsr4Current;
-	performanceCostAppliedResolutionScale = resolutionScale;
-	if (appliedStateChanged) {
-		++performanceCostAppliedRevision;
-		if (performanceCostAppliedRevision == 0)
-			++performanceCostAppliedRevision;
-		if (globals::state)
-			performanceCostAppliedFrame = globals::state->frameCount;
-	}
-
 	fsrResourceTransitionPending = false;
 	return true;
-}
-
-bool Upscaling::IsPerformanceCostMeasurementReady() const
-{
-	const auto* state = globals::state;
-	if (!state || !upscalingResourcesReady || fsrResourceTransitionPending ||
-		!performanceCostAppliedStateValid || performanceCostAppliedRevision == 0) {
-		return false;
-	}
-
-	const auto configuredMethod = static_cast<UpscaleMethod>(
-		streamline.featureDLSS ? settings.upscaleMethod : settings.upscaleMethodNoDLSS);
-	if (GetUpscaleMethod() != configuredMethod)
-		return false;
-
-	const uint32_t qualityMode = ClampQualityModeUInt(settings.qualityMode);
-	const uint32_t dlssPreset = std::min<uint>(settings.dlssPreset, kDLSSPresetMaxIndex);
-	const bool frameGenerationConfigured = IsFrameGenerationConfigured();
-	const bool appliedFrameGenerationMode = frameGenerationConfigured && d3d12SwapChainActive;
-	const bool fsrRuntimePathActive = IsFSRRuntimePathActive(configuredMethod);
-	const bool fsrRuntimeFsr4Configured =
-		configuredMethod == UpscaleMethod::kFSR &&
-		settings.fsr4RuntimeEnable &&
-		fidelityFX.IsRuntimeFsr4Available();
-	const bool fsrRuntimeFsr4Active = IsFSRRuntimeFsr4PathActive(configuredMethod);
-	const bool appliedConfigurationMatches =
-		performanceCostAppliedUpscaleMethod == configuredMethod &&
-		performanceCostAppliedQualityMode == qualityMode &&
-		performanceCostAppliedDLSSPreset == dlssPreset &&
-		performanceCostAppliedFrameGenerationMode == appliedFrameGenerationMode &&
-		performanceCostAppliedFSRRuntimePathActive == fsrRuntimePathActive &&
-		performanceCostAppliedFSRRuntimeFsr4Configured == fsrRuntimeFsr4Configured &&
-		performanceCostAppliedFSRRuntimeFsr4Active == fsrRuntimeFsr4Active &&
-		std::abs(performanceCostAppliedResolutionScale.x - resolutionScale.x) <= 1.0e-4f &&
-		std::abs(performanceCostAppliedResolutionScale.y - resolutionScale.y) <= 1.0e-4f;
-	if (!appliedConfigurationMatches)
-		return false;
-
-	// A configured-on D3D12 path is restart-owned. Do not claim readiness while
-	// settings request FG but the proxy that can execute it has not been installed.
-	if (frameGenerationConfigured && !d3d12SwapChainActive)
-		return false;
-
-	if (performanceCostLastSuccessfulExecutedRevision != performanceCostAppliedRevision ||
-		performanceCostLastSuccessfulExecutedMethod != configuredMethod ||
-		!IsFrameEvidenceRecent(
-			state->frameCount,
-			performanceCostLastSuccessfulExecutedFrame,
-			kPerformanceMeasurementRecentEvidenceFrames)) {
-		return false;
-	}
-
-	return IsFrameGenerationQuiescentForPerformanceMeasurement();
-}
-
-void Upscaling::RecordPerformanceCostExecutedPath(
-	UpscaleMethod a_method,
-	bool a_successful)
-{
-	auto* state = globals::state;
-	performanceCostExecutedPathValid = state != nullptr;
-	performanceCostExecutedPathSuccessful = a_successful;
-	performanceCostExecutedUpscaleMethod = a_method;
-	performanceCostExecutedFrame = state ?
-	                                   state->frameCount :
-	                                   std::numeric_limits<uint32_t>::max();
-	if (!state || !a_successful || !performanceCostAppliedStateValid ||
-		a_method != performanceCostAppliedUpscaleMethod) {
-		return;
-	}
-
-	performanceCostLastSuccessfulExecutedRevision = performanceCostAppliedRevision;
-	performanceCostLastSuccessfulExecutedMethod = a_method;
-	performanceCostLastSuccessfulExecutedFrame = state->frameCount;
 }
 
 void Upscaling::RecordFrameGenerationCopy(
@@ -1716,27 +1622,12 @@ void Upscaling::RecordFrameGenerationCopy(
 	frameGenerationCopyConsumed = !a_requested || !a_successful;
 }
 
-void Upscaling::RecordPerformanceCostFrameGenerationPresent(
-	bool a_requested,
-	bool a_successful,
-	bool a_active)
-{
-	auto* state = globals::state;
-	performanceCostFrameGenerationPresentValid = state != nullptr;
-	performanceCostFrameGenerationPresentRequested = a_requested;
-	performanceCostFrameGenerationPresentSuccessful = a_successful;
-	performanceCostFrameGenerationPresentActive = a_active;
-	performanceCostFrameGenerationPresentFrame = state ?
-	                                                 state->frameCount :
-	                                                 std::numeric_limits<uint32_t>::max();
-}
-
 ID3D11ComputeShader* Upscaling::GetEncodeTexturesCS()
 {
 	auto upscaleMethod = GetUpscaleMethod();
 	uint methodIndex = (uint)upscaleMethod;
 
-	if (upscaleMethod == UpscaleMethod::kFSR && runtimeFsrDepthTexture) {
+	if (upscaleMethod == UpscaleMethod::kFSR && fsrDepthTexture) {
 		std::vector<std::pair<const char*, const char*>> defines = {
 			{ "FSR", "" },
 			{ "DEPTH_OUTPUT", "" }
@@ -2241,6 +2132,16 @@ bool Upscaling::IsFrameGenerationConfigured() const
 	return settings.frameGenerationMode != 0;
 }
 
+bool Upscaling::IsFrameRateLimitConfigured() const
+{
+	if (IsFrameGenerationDx12PathActive())
+		return settings.frameLimitMode != 0;
+
+	return streamline.initialized &&
+	       streamline.reflexSupportedOnCurrentAdapter &&
+	       streamline.featureReflex && settings.reflexUseFPSLimit;
+}
+
 bool Upscaling::IsFrameGenerationActive() const
 {
 	return IsFrameGenerationDx12PathActive() && settings.frameGenerationMode && fidelityFX.isFrameGenActive;
@@ -2252,83 +2153,6 @@ bool Upscaling::ShouldUseFrameGenerationThisFrame() const
 	auto* state = globals::state;
 	const bool menuOpen = (ui && ui->GameIsPaused()) || (state && state->IsMainOrLoadingMenuOpen(ui));
 	return IsFrameGenerationDx12PathActive() && settings.frameGenerationMode && (settings.frameGenerationAllowInMenus || !menuOpen);
-}
-
-Upscaling::PerformanceMeasurementFrameGenerationSettings Upscaling::CaptureFrameGenerationSettingsForPerformanceMeasurement() const
-{
-	return {
-		.mode = settings.frameGenerationMode,
-		.forceEnable = settings.frameGenerationForceEnable,
-		.allowInMenus = settings.frameGenerationAllowInMenus
-	};
-}
-
-void Upscaling::DisableFrameGenerationForPerformanceMeasurement()
-{
-	settings.frameGenerationMode = 0;
-	settings.frameGenerationForceEnable = 0;
-	settings.frameGenerationAllowInMenus = false;
-}
-
-void Upscaling::RestoreFrameGenerationSettingsAfterPerformanceMeasurement(
-	const PerformanceMeasurementFrameGenerationSettings& a_settings)
-{
-	// This is a transactional restore, not settings normalization. Preserve the
-	// exact captured values so cancellation cannot silently rewrite user state.
-	settings.frameGenerationMode = a_settings.mode;
-	settings.frameGenerationForceEnable = a_settings.forceEnable;
-	settings.frameGenerationAllowInMenus = a_settings.allowInMenus;
-}
-
-Upscaling::PerformanceMeasurementFrameGenerationStatus Upscaling::GetFrameGenerationStatusForPerformanceMeasurement(
-	uint32_t a_recentEvidenceFrames) const
-{
-	PerformanceMeasurementFrameGenerationStatus status;
-	status.configured = IsFrameGenerationConfigured();
-	status.dx12PathActive = IsFrameGenerationDx12PathActive();
-	status.requestedNow = ShouldUseFrameGenerationThisFrame();
-	// Report the runtime latch directly. IsFrameGenerationActive() intentionally
-	// also checks the setting, which would hide one last active Present immediately
-	// after the measurement override switches that setting off.
-	status.activeNow = status.dx12PathActive && fidelityFX.isFrameGenActive;
-	status.lastPresentRequested =
-		performanceCostFrameGenerationPresentValid &&
-		performanceCostFrameGenerationPresentRequested;
-	status.lastPresentSuccessful =
-		performanceCostFrameGenerationPresentValid &&
-		performanceCostFrameGenerationPresentSuccessful;
-	status.lastPresentActive =
-		performanceCostFrameGenerationPresentValid &&
-		performanceCostFrameGenerationPresentActive;
-
-	const auto* state = globals::state;
-	if (!state)
-		return status;
-
-	const uint32_t currentFrame = state->frameCount;
-	status.hasRecentPresentEvidence =
-		performanceCostFrameGenerationPresentValid &&
-		IsFrameEvidenceRecent(
-			currentFrame,
-			performanceCostFrameGenerationPresentFrame,
-			a_recentEvidenceFrames);
-	return status;
-}
-
-bool Upscaling::IsFrameGenerationQuiescentForPerformanceMeasurement(
-	uint32_t a_recentEvidenceFrames) const
-{
-	const auto status = GetFrameGenerationStatusForPerformanceMeasurement(
-		a_recentEvidenceFrames);
-	if (status.configured || status.requestedNow || status.activeNow)
-		return false;
-	if (!status.dx12PathActive)
-		return true;
-
-	return status.hasRecentPresentEvidence &&
-	       status.lastPresentSuccessful &&
-	       !status.lastPresentRequested &&
-	       !status.lastPresentActive;
 }
 
 bool Upscaling::ConsumeFrameGenerationInputsForPresent()
@@ -2560,25 +2384,9 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 	previousHistoryFSRRuntimeFsr4Active = fsrRuntimeFsr4Active;
 }
 
-/**
- * @brief Retrieves the current frame time for frame generation.
- *
- * Returns the frame time from the D3D12 swap chain if frame generation is active; otherwise, returns 0.
- *
- * @return float The current frame time in seconds, or 0 if frame generation is inactive.
- */
-float Upscaling::GetFrameGenerationFrameTime() const
+DX12SwapChain::OutputPresentationTiming Upscaling::GetOutputPresentationTiming() const
 {
-	if (!IsFrameGenerationActive())
-		return 0.0f;
-
-	// Get the current frame time from D3D12 swapchain
-	if (dx12SwapChain.swapChain) {
-		// Get frame time from the D3D12 SwapChain
-		return GetFrameTime();
-	}
-
-	return 0.0f;
+	return dx12SwapChain.GetOutputPresentationTiming();
 }
 
 // Unified interface methods
@@ -2603,11 +2411,6 @@ void Upscaling::LoadUpscalingSDKs()
 HANDLE Upscaling::GetFrameLatencyWaitableObject() const
 {
 	return dx12SwapChain.GetFrameLatencyWaitableObject();
-}
-
-float Upscaling::GetFrameTime() const
-{
-	return dx12SwapChain.GetFrameTime();
 }
 
 // Backend interface methods
@@ -2726,9 +2529,8 @@ bool Upscaling::Upscale()
 	auto& normals = renderer->GetRuntimeData().renderTargets[deferred->forwardRenderTargets[2]];
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-	const bool requiresFlatRuntimeFsrDepth =
-		upscaleMethod == UpscaleMethod::kFSR &&
-		fidelityFX.ShouldUseRuntimeUpscalerForFSR();
+	const bool requiresFsrDepth =
+		upscaleMethod == UpscaleMethod::kFSR;
 	const bool hasEncodeResources =
 		main.texture &&
 		temporalAAMask.SRV &&
@@ -2745,8 +2547,10 @@ bool Upscaling::Upscale()
 		motionVectorCopyTexture &&
 		motionVectorCopyTexture->resource &&
 		motionVectorCopyTexture->uav &&
-		(!requiresFlatRuntimeFsrDepth ||
-			(runtimeFsrDepthTexture && runtimeFsrDepthTexture->resource && runtimeFsrDepthTexture->uav));
+		(upscaleMethod != UpscaleMethod::kFSR ||
+			(fsrOutputTexture && fsrOutputTexture->resource)) &&
+		(!requiresFsrDepth ||
+			(fsrDepthTexture && fsrDepthTexture->resource && fsrDepthTexture->uav));
 	if (!hasEncodeResources)
 		return false;
 
@@ -2797,7 +2601,7 @@ bool Upscaling::Upscale()
 			reactiveMaskTexture->uav.get(),
 			transparencyCompositionMaskTexture->uav.get(),
 			motionVectorCopyTexture->uav.get(),
-			runtimeFsrDepthTexture ? runtimeFsrDepthTexture->uav.get() : nullptr
+			fsrDepthTexture ? fsrDepthTexture->uav.get() : nullptr
 		};
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
@@ -2829,8 +2633,10 @@ bool Upscaling::Upscale()
 		if (upscaleMethod == UpscaleMethod::kDLSS) {
 			upscaleSuccessful = streamline.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource);
 		} else if (upscaleMethod == UpscaleMethod::kFSR) {
-			ID3D11Resource* fsrDepth = runtimeFsrDepthTexture ? runtimeFsrDepthTexture->resource.get() : depth.texture;
-			upscaleSuccessful = fidelityFX.Upscale(main.texture, fsrDepth, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource, settings.sharpnessFSR);
+			ID3D11Resource* fsrDepth = fsrDepthTexture->resource.get();
+			upscaleSuccessful = fidelityFX.Upscale(main.texture, fsrOutputTexture->resource.get(), fsrDepth, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource, settings.sharpnessFSR);
+			if (upscaleSuccessful)
+				context->CopyResource(main.texture, fsrOutputTexture->resource.get());
 		}
 
 		state->EndPerfEvent();
@@ -2853,7 +2659,9 @@ bool Upscaling::PerformUpscaling()
 	const bool upscaleSuccessful = Upscale();
 	if (!upscaleSuccessful)
 		RequestHistoryReset();
-	const bool depthSuccessful = UpscaleDepth();
+	const bool depthSuccessful = upscaleSuccessful && UpscaleDepth();
+	if (upscaleSuccessful && !depthSuccessful)
+		RequestHistoryReset();
 
 	auto& runtimeData = graphicsState->GetRuntimeData();
 
@@ -2862,7 +2670,7 @@ bool Upscaling::PerformUpscaling()
 
 	// Updates the PerFrame constant buffer so that dynamic resolution settings are disabled
 	UpdateCameraData();
-	return upscaleSuccessful && depthSuccessful;
+	return upscaleSuccessful;
 }
 
 bool Upscaling::UpscaleDepth()
@@ -3122,7 +2930,6 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	if (upscaleMethod == UpscaleMethod::kNONE) {
 		// Keep vanilla TAA/water stabilization state untouched when no upscaler is active.
 		func(a_this, a3, a_target, a_4, a_5);
-		upscaling.RecordPerformanceCostExecutedPath(upscaleMethod, true);
 		return;
 	}
 
@@ -3130,10 +2937,12 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	if (upscaleMethod != UpscaleMethod::kTAA)
 		pathSuccessful = upscaling.PerformUpscaling();
 
-	if (upscaleMethod == UpscaleMethod::kDLSS)
-		pathSuccessful = upscaling.ApplySharpening() && pathSuccessful;
+	if (upscaleMethod == UpscaleMethod::kDLSS && pathSuccessful)
+		pathSuccessful = upscaling.ApplySharpening();
 
-	Util::SetTemporal(upscaleMethod == UpscaleMethod::kTAA);
+	// Vendor outputs are published only on success. When setup or dispatch is
+	// pending, keep the untouched scene texture and use temporal processing.
+	Util::SetTemporal(upscaleMethod == UpscaleMethod::kTAA || !pathSuccessful);
 
 	// Redirect kFRAMEBUFFER to float texture before ISHDR runs so HDR values >1.0 survive
 	// When HDR Display is not loaded, ISHDR writes to vanilla kFRAMEBUFFER (SDR path)
@@ -3148,7 +2957,6 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		globals::features::hdrDisplay.RestoreFramebuffer();
 
 	Util::SetTemporal(false);
-	upscaling.RecordPerformanceCostExecutedPath(upscaleMethod, pathSuccessful);
 }
 
 void Upscaling::SetScissorRect::thunk(RE::BSGraphics::Renderer* This, int a_left, int a_top, int a_right, int a_bottom)

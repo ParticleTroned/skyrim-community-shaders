@@ -1,6 +1,8 @@
 #include "Game.h"
 
 #include <atomic>
+#include <cmath>
+#include <limits>
 
 #include "Globals.h"
 #include "State.h"
@@ -13,6 +15,11 @@ namespace
 	std::atomic_bool celestialTransitionHandlerAvailable{ false };
 	std::atomic_uint32_t pendingCelestialTransitions{ 0 };
 	std::atomic_uint32_t completedCelestialTransitionGeneration{ 0 };
+
+	constexpr float automaticVanityCameraSuppressionDelay = 10000.0f;
+	// Editor and measurement owners can overlap; only the last release restores the setting.
+	std::uint32_t automaticVanityCameraSuppressionOwners = 0;
+	float savedAutomaticVanityCameraDelay = 0.0f;
 
 	void MarkCelestialTransitionComplete()
 	{
@@ -201,6 +208,66 @@ namespace Util
 		float unitHalfHeight = unitHalfWidth / (static_cast<float>(viewport->screenWidth) / static_cast<float>(viewport->screenHeight));  // frustum TB
 		float vFOVRad = 2.0f * atan(unitHalfHeight);
 		return vFOVRad;
+	}
+
+	bool IsAutoVanityCameraActive()
+	{
+		const auto* camera = RE::PlayerCamera::GetSingleton();
+		return camera && camera->IsCurrentState(
+							 RE::CameraState::kAutoVanity,
+							 RE::CameraState::kAutoVanity);
+	}
+
+	bool AcquireAutoVanityCameraSuppression()
+	{
+		auto* setting = RE::GetINISetting("fAutoVanityModeDelay:Camera");
+		if (!setting)
+			return false;
+		if (automaticVanityCameraSuppressionOwners ==
+			std::numeric_limits<std::uint32_t>::max()) {
+			return false;
+		}
+
+		if (automaticVanityCameraSuppressionOwners == 0)
+			savedAutomaticVanityCameraDelay = setting->GetFloat();
+		++automaticVanityCameraSuppressionOwners;
+		MaintainAutoVanityCameraSuppression();
+		return true;
+	}
+
+	void MaintainAutoVanityCameraSuppression()
+	{
+		if (automaticVanityCameraSuppressionOwners == 0)
+			return;
+
+		if (auto* setting = RE::GetINISetting("fAutoVanityModeDelay:Camera")) {
+			const float currentDelay = setting->GetFloat();
+			if (!std::isfinite(currentDelay) ||
+				currentDelay < automaticVanityCameraSuppressionDelay) {
+				setting->data.f = automaticVanityCameraSuppressionDelay;
+			}
+		}
+		if (auto* camera = RE::PlayerCamera::GetSingleton())
+			camera->GetRuntimeData2().idleTimer = 0.0f;
+	}
+
+	bool ReleaseAutoVanityCameraSuppression()
+	{
+		if (automaticVanityCameraSuppressionOwners == 0)
+			return false;
+
+		if (automaticVanityCameraSuppressionOwners > 1) {
+			--automaticVanityCameraSuppressionOwners;
+			return true;
+		}
+
+		auto* setting = RE::GetINISetting("fAutoVanityModeDelay:Camera");
+		if (!setting)
+			return false;
+
+		setting->data.f = savedAutomaticVanityCameraDelay;
+		automaticVanityCameraSuppressionOwners = 0;
+		return true;
 	}
 
 	float2 ConvertToDynamic(float2 a_size, bool a_ignoreLock)

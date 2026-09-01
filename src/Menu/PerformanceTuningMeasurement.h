@@ -9,8 +9,8 @@
 
 namespace PerformanceTuning
 {
-	inline constexpr std::size_t kMeasurementBlockCount = 4;
-	inline constexpr double kMeasurementBlockDurationMs = 500.0;
+	inline constexpr std::size_t kMeasurementBlockCount = 5;
+	inline constexpr double kMeasurementBlockDurationMs = 1000.0;
 	inline constexpr double kMeasurementDurationMs =
 		kMeasurementBlockCount * kMeasurementBlockDurationMs;
 	inline constexpr uint32_t kMinimumPresentSampleCount = 24;
@@ -18,9 +18,9 @@ namespace PerformanceTuning
 	inline constexpr double kSampleWeightEpsilon = 1.0e-6;
 	inline constexpr double kDefaultMinimumMetricCoverage = 0.90;
 	inline constexpr double kPracticalFloorAbsoluteMs = 0.10;
+	inline constexpr double kPracticalFloorAbsoluteFps = 0.50;
 	inline constexpr double kPracticalFloorRelative = 0.01;
-	inline constexpr uint32_t kRequiredAgreeingBlockCount = 3;
-	inline constexpr double kDriftDominanceRatio = 2.0;
+	inline constexpr double kStatisticalSignificanceLevel = 0.05;
 
 	struct Moments
 	{
@@ -30,31 +30,6 @@ namespace PerformanceTuning
 		bool Add(double value, double weight);
 		std::optional<double> Mean() const;
 	};
-
-	struct TransitionGateState
-	{
-		bool continuouslyReady = false;
-		double readyStartTime = 0.0;
-		uint64_t readyStartPresentSampleId = 0;
-		bool soakStarted = false;
-		double soakStartTime = 0.0;
-	};
-
-	enum class TransitionGateResult
-	{
-		Pending,
-		Ready,
-		TimingReset
-	};
-
-	TransitionGateResult UpdateTransitionGate(
-		TransitionGateState& state,
-		bool featureReady,
-		double currentTime,
-		uint64_t currentPresentSampleId,
-		double minimumReadySeconds,
-		uint64_t minimumFreshPresentCount,
-		double postFreshSoakSeconds);
 
 	struct PresentSampleContribution
 	{
@@ -66,6 +41,8 @@ namespace PerformanceTuning
 	struct SampleBlock
 	{
 		double sampledDurationMs = 0.0;
+		double outputPresentDurationMs = 0.0;
+		double outputPresentedFrameCount = 0.0;
 		Moments present;
 		Moments wholeFrameGpu;
 		Moments wholeFrameCpu;
@@ -76,8 +53,8 @@ namespace PerformanceTuning
 
 	struct SampleWindow
 	{
-		double captureStartTimeSeconds = 0.0;
 		double sampledDurationMs = 0.0;
+		double outputPresentDurationMs = 0.0;
 		Moments present;
 		Moments wholeFrameGpu;
 		Moments wholeFrameCpu;
@@ -93,10 +70,13 @@ namespace PerformanceTuning
 		uint64_t endPresentSampleId = 0;
 		uint64_t lastPresentSampleId = 0;
 		uint64_t lastWholeFrameSampleId = 0;
+		uint64_t lastOutputPresentSampleId = 0;
+		uint64_t outputPresentDiscontinuityEpoch = 0;
 		uint64_t latestWholeFramePresentSampleId = 0;
 		bool wholeFrameSourceDiscontinuous = false;
 		bool wholeFrameGpuCoverageDiscontinuous = false;
 		bool wholeFrameCpuCoverageDiscontinuous = false;
+		bool outputPresentSourceDiscontinuous = false;
 		std::unordered_map<uint64_t, PresentSampleContribution> presentSamples;
 		std::unordered_set<uint64_t> wholeFrameGpuPresentSampleIds;
 		std::unordered_set<uint64_t> wholeFrameCpuPresentSampleIds;
@@ -118,8 +98,9 @@ namespace PerformanceTuning
 		SampleWindow& window,
 		uint64_t currentPresentSampleId,
 		uint64_t currentWholeFrameSampleId,
-		double captureStartTimeSeconds,
-		bool framePacingInferenceValid = true);
+		bool framePacingInferenceValid = true,
+		uint64_t currentOutputPresentSampleId = 0,
+		uint64_t outputPresentDiscontinuityEpoch = 0);
 
 	AddSampleResult AddPresentSample(
 		SampleWindow& window,
@@ -134,6 +115,13 @@ namespace PerformanceTuning
 		std::optional<double> gpuMs,
 		std::optional<double> cpuMs,
 		double framePacingEpsilonMs = 1.0);
+
+	AddSampleResult AddOutputPresentSample(
+		SampleWindow& window,
+		uint64_t sampleId,
+		uint64_t discontinuityEpoch,
+		double sampledDurationMs,
+		uint32_t presentedFrameCount);
 
 	enum class MetricKind
 	{
@@ -192,44 +180,31 @@ namespace PerformanceTuning
 	std::optional<double> GetBlockFps(
 		const SampleWindow& window,
 		std::size_t blockIndex);
-	std::optional<double> GetWindowMidpointTimeSeconds(
-		const SampleWindow& window);
-	std::optional<double> GetBlockMidpointTimeSeconds(
+	std::optional<double> GetBlockOutputFps(
 		const SampleWindow& window,
 		std::size_t blockIndex);
 
 	bool IsFramePaced(const SampleWindow& window);
 
-	struct RepeatabilityBand
-	{
-		std::array<std::optional<double>, kMeasurementBlockCount> blockDeltas{};
-		std::optional<double> median;
-		std::optional<double> minimum;
-		std::optional<double> maximum;
-		uint32_t availableBlockCount = 0;
-		uint32_t agreeingBlockCount = 0;
-	};
-
 	enum class MetricReliability
 	{
 		Unavailable,
-		InsufficientBlockCoverage,
+		InsufficientSampleCoverage,
 		BelowPracticalFloor,
-		DriftDominated,
-		MixedBlockDirections,
+		NotStatisticallySignificant,
 		Reliable
 	};
 
 	struct MetricDelta
 	{
-		std::optional<double> currentBeforeMeanMs;
+		std::optional<double> currentMeanMs;
+		std::optional<double> currentStandardErrorMs;
 		std::optional<double> comparisonMeanMs;
-		std::optional<double> currentAfterMeanMs;
-		std::optional<double> interpolatedCurrentMeanMs;
+		std::optional<double> comparisonStandardErrorMs;
 		std::optional<double> valueMs;
-		std::optional<double> currentDriftMs;
+		std::optional<double> standardErrorMs;
+		std::optional<double> pValue;
 		std::optional<double> practicalFloorMs;
-		RepeatabilityBand repeatability;
 		MetricReliability reliability = MetricReliability::Unavailable;
 		int direction = 0;
 
@@ -239,15 +214,19 @@ namespace PerformanceTuning
 
 	struct FpsDelta
 	{
-		std::optional<double> currentBefore;
+		std::optional<double> current;
+		std::optional<double> currentStandardError;
 		std::optional<double> comparison;
-		std::optional<double> currentAfter;
-		std::optional<double> interpolatedCurrent;
+		std::optional<double> comparisonStandardError;
 		std::optional<double> value;
-		std::optional<double> currentDrift;
-		RepeatabilityBand repeatability;
+		std::optional<double> standardError;
+		std::optional<double> pValue;
+		std::optional<double> practicalFloor;
+		MetricReliability reliability = MetricReliability::Unavailable;
+		int direction = 0;
 
 		bool IsAvailable() const { return value.has_value(); }
+		bool IsReliable() const { return reliability == MetricReliability::Reliable; }
 	};
 
 	struct CostResult
@@ -256,16 +235,15 @@ namespace PerformanceTuning
 		MetricDelta wholeFrameGpu;
 		MetricDelta wholeFrameCpu;
 		FpsDelta fps;
-		WindowDiagnostics currentBeforeDiagnostics;
+		FpsDelta outputFps;
+		WindowDiagnostics currentDiagnostics;
 		WindowDiagnostics comparisonDiagnostics;
-		WindowDiagnostics currentAfterDiagnostics;
 		bool presentSynced = false;
 		bool framePaced = false;
 	};
 
 	CostResult CalculateCostResult(
-		const SampleWindow& currentBefore,
+		const SampleWindow& current,
 		const SampleWindow& comparison,
-		const SampleWindow& currentAfter,
 		double minimumMetricCoverage = kDefaultMinimumMetricCoverage);
 }

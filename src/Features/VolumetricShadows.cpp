@@ -427,43 +427,6 @@ void VolumetricShadows::SetSharedShadowMapSRV(ID3D11DeviceContext* a_context, ID
 		a_context->PSSetShaderResources(kSharedShadowMapShaderSlot, 1, &a_srv);
 }
 
-bool VolumetricShadows::IsPerformanceTuningApplicable() const
-{
-	return GetRuntimeReadiness(shadowView.get(), true) == RuntimeReadiness::Ready;
-}
-
-const char* VolumetricShadows::GetPerformanceTuningApplicabilityReason() const
-{
-	switch (GetRuntimeReadiness(shadowView.get(), true)) {
-	case RuntimeReadiness::Ready:
-		return nullptr;
-	case RuntimeReadiness::NoDirectionalShadows:
-		return T(
-			"menu.performance_tuning.feature.volumetric_shadows.no_directional_shadows",
-			"Volumetric Shadows only perform runtime work while the scene has an active directional shadow light.");
-	case RuntimeReadiness::NoCapturedShadowMap:
-		return T(
-			"menu.performance_tuning.feature.volumetric_shadows.no_shadow_map",
-			"Volumetric Shadows cannot be measured because no valid directional shadow map was captured this frame.");
-	case RuntimeReadiness::ShaderUnavailable:
-		return T(
-			"menu.performance_tuning.feature.volumetric_shadows.shader_unavailable",
-			"Volumetric Shadows cannot be measured because one or more downsample or blur shaders are unavailable.");
-	case RuntimeReadiness::OutputResourcesUnavailable:
-		return T(
-			"menu.performance_tuning.feature.volumetric_shadows.output_resources_unavailable",
-			"Volumetric Shadows cannot be measured because their downsample or blur textures are incomplete.");
-	case RuntimeReadiness::NoRuntimeResources:
-		return T(
-			"menu.performance_tuning.feature.volumetric_shadows.no_runtime_resources",
-			"Volumetric Shadows cannot be measured because required rendering resources are unavailable.");
-	default:
-		return T(
-			"menu.performance_tuning.feature.volumetric_shadows.not_applicable",
-			"Volumetric Shadows cannot perform runtime work in the current scene.");
-	}
-}
-
 void VolumetricShadows::DrawSettings()
 {
 	DrawEnabledCheckbox(settings);

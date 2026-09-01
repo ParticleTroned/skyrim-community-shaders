@@ -4,6 +4,8 @@
 #include "OverlayFeature.h"
 #include "PerformanceOverlay/ABTesting/ABTestAggregator.h"
 #include "Utils/PerfUtils.h"
+#include <algorithm>
+#include <cstdint>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <unordered_map>
@@ -109,6 +111,12 @@ public:
 		data[headIdx++] = val;
 		if (headIdx >= data.size())
 			headIdx = 0;
+	}
+
+	void Clear()
+	{
+		std::ranges::fill(data, T{});
+		headIdx = 0;
 	}
 
 	std::span<const T> GetData() const { return { data }; }
@@ -222,6 +230,7 @@ struct PerformanceOverlay : OverlayFeature
 
 		// State flags
 		bool isFrameGenerationActive = false;
+		bool hasOutputPresentationTiming = false;
 
 		// Performance counters
 		int64_t frequency;
@@ -233,6 +242,10 @@ struct PerformanceOverlay : OverlayFeature
 		float fps = 0.0f;
 		float postFGFrameTimeMs = 0.0f;
 		float postFGFps = 0.0f;
+		uint64_t outputPresentationSampleId = 0;
+		uint64_t outputPresentationDiscontinuityEpoch = 0;
+		double outputPresentationAccumulatedDurationMs = 0.0;
+		uint64_t outputPresentationAccumulatedFrameCount = 0;
 
 		// Smoothed metrics
 		float smoothFps = 0.0f;
@@ -250,6 +263,22 @@ struct PerformanceOverlay : OverlayFeature
 		float maxFrameTime = 0.0f;
 		float smoothedMinFrameTime = 0.0f;
 		float smoothedMaxFrameTime = 50.0f;
+
+		void ResetOutputPresentationTiming(
+			uint64_t discontinuityEpoch = 0)
+		{
+			hasOutputPresentationTiming = false;
+			postFGFrameTimeMs = 0.0f;
+			postFGFps = 0.0f;
+			postFGSmoothFps = 0.0f;
+			postFGSmoothFrameTimeMs = 0.0f;
+			outputPresentationSampleId = 0;
+			outputPresentationDiscontinuityEpoch =
+				discontinuityEpoch;
+			outputPresentationAccumulatedDurationMs = 0.0;
+			outputPresentationAccumulatedFrameCount = 0;
+			postFGFrameTimeHistory.Clear();
+		}
 	};
 	State state;
 
@@ -269,7 +298,6 @@ struct PerformanceOverlay : OverlayFeature
 		static constexpr float kGraphSpreadMultiplier = 2.0f;        // Standard deviation multiplier for graph range
 		static constexpr float kGraphMinSpread = 2.0f;               // ms - Minimum graph spread
 		static constexpr float kGraphMaxSpread = 20.0f;              // ms - Maximum graph spread
-		static constexpr float kFrameGenerationMultiplier = 2.0f;    // Frame generation doubles frame rate
 		static constexpr float kMaxUpdateInterval = 2.0f;            // seconds - Maximum update interval
 		static constexpr float kDefaultWindowPadding = 10.0f;        // pixels - Default window padding
 		static constexpr float kLabelPadding = 100.0f;               // pixels - Padding for labels

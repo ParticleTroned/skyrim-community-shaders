@@ -137,8 +137,6 @@ public:
 		std::string_view comparisonDetails = "the feature's measurement state is switched off.";
 	};
 	virtual PerformanceTuningConfig GetPerformanceTuningConfig() const { return {}; }
-	virtual bool IsPerformanceTuningApplicable() const { return true; }
-	virtual const char* GetPerformanceTuningApplicabilityReason() const { return nullptr; }
 	// Leaves identify the feature settings exposed by DrawPerformanceSettings().
 	virtual json GetPerformanceTuningUserSettingsMask() const { return CapturePerformanceSettingsState(); }
 	// Migrates legacy values from SettingsUser.json before the masked values are
@@ -158,31 +156,8 @@ public:
 		return true;
 	}
 	virtual bool SupportsPerformanceCostMeasurement() const { return false; }
-	virtual const char* GetPerformanceCostMeasurementUnavailableReason() const { return nullptr; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const { return false; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) { (void)a_enabled; }
-	virtual bool IsPerformanceCostMeasurementReady() const { return true; }
-	virtual const char* GetPerformanceCostMeasurementWaitText() const
-	{
-		return T(
-			"menu.performance_tuning.measurement.wait.settings_apply",
-			"Waiting for settings to apply");
-	}
-	virtual double GetPerformanceCostMeasurementSettleSeconds(bool a_targetEnabled) const
-	{
-		(void)a_targetEnabled;
-		return 2.0;
-	}
-	virtual uint64_t GetPerformanceCostMeasurementFreshPresentCount(bool a_targetEnabled) const
-	{
-		(void)a_targetEnabled;
-		return 0;
-	}
-	virtual double GetPerformanceCostMeasurementPostFreshSoakSeconds(bool a_targetEnabled) const
-	{
-		(void)a_targetEnabled;
-		return 0.0;
-	}
 	virtual json CapturePerformanceCostMeasurementState() const { return IsPerformanceCostMeasurementEnabled(); }
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state)
 	{

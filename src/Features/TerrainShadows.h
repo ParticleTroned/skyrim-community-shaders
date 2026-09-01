@@ -106,8 +106,6 @@ public:
 			T("menu.performance_tuning.feature.terrain_shadows.comparison_label", "Off"),
 			T("menu.performance_tuning.feature.terrain_shadows.comparison_details", "Terrain Shadows are switched off.") };
 	}
-	virtual bool IsPerformanceTuningApplicable() const override;
-	virtual const char* GetPerformanceTuningApplicabilityReason() const override;
 	virtual json GetPerformanceTuningUserSettingsMask() const override
 	{
 		return { { "EnableTerrainShadow", true } };
@@ -115,8 +113,6 @@ public:
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnableTerrainShadow; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
-	virtual bool IsPerformanceCostMeasurementReady() const override;
-	virtual const char* GetPerformanceCostMeasurementWaitText() const override;
 	virtual json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override
 	{

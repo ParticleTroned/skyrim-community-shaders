@@ -349,46 +349,6 @@ void ScreenSpaceShadows::Prepass()
 	context->PSSetShaderResources(45, 1, &view);
 }
 
-bool ScreenSpaceShadows::IsPerformanceTuningApplicable() const
-{
-	return GetRuntimeReadiness(bendSettings.Enable != 0) ==
-	       RuntimeReadiness::Ready;
-}
-
-bool ScreenSpaceShadows::IsPerformanceCostMeasurementReady() const
-{
-	return GetRuntimeReadiness(bendSettings.Enable != 0) ==
-	       RuntimeReadiness::Ready;
-}
-
-const char* ScreenSpaceShadows::GetPerformanceTuningApplicabilityReason() const
-{
-	switch (GetRuntimeReadiness(bendSettings.Enable != 0)) {
-	case RuntimeReadiness::Ready:
-		return nullptr;
-	case RuntimeReadiness::NoFullSky:
-		return T(
-			"menu.performance_tuning.feature.screen_space_shadows.no_full_sky",
-			"Screen Space Shadows only perform runtime work while the current sky is in full exterior mode.");
-	case RuntimeReadiness::NoRuntimeResources:
-		return T(
-			"menu.performance_tuning.feature.screen_space_shadows.no_runtime_resources",
-			"Screen Space Shadows cannot be measured because their required rendering resources are unavailable.");
-	case RuntimeReadiness::NoDirectionalLight:
-		return T(
-			"menu.performance_tuning.feature.screen_space_shadows.no_directional_light",
-			"Screen Space Shadows cannot be measured because the current scene has no active directional sun or moon light.");
-	case RuntimeReadiness::ShaderUnavailable:
-		return T(
-			"menu.performance_tuning.feature.screen_space_shadows.shader_unavailable",
-			"Screen Space Shadows cannot be measured because the raymarch shader has not compiled successfully for the current resolution.");
-	default:
-		return T(
-			"menu.performance_tuning.feature.screen_space_shadows.not_applicable",
-			"Screen Space Shadows cannot perform runtime work in the current scene.");
-	}
-}
-
 void ScreenSpaceShadows::DrawEssentialSettings()
 {
 	bool enabled = bendSettings.Enable != 0;

@@ -449,48 +449,6 @@ bool VolumetricLighting::IsExteriorEnabled() const
 	return settings.ExteriorEnabled;
 }
 
-bool VolumetricLighting::IsPerformanceTuningApplicable() const
-{
-	if (!initialised)
-		return false;
-	if (!gVolumetricLightingSizeHigh || !globals::game::bEnableVolumetricLighting)
-		return false;
-	if (inInterior)
-		return inInteriorWithSun;
-
-	return !rainOnlySuppressionActive;
-}
-
-const char* VolumetricLighting::GetPerformanceTuningApplicabilityReason() const
-{
-	if (IsPerformanceTuningApplicable())
-		return nullptr;
-	if (!initialised) {
-		return T(
-			"menu.performance_tuning.feature.volumetric_lighting.not_initialized",
-			"Volumetric Lighting has not initialized for the current scene yet.");
-	}
-	if (!gVolumetricLightingSizeHigh || !globals::game::bEnableVolumetricLighting) {
-		return T(
-			"menu.performance_tuning.feature.volumetric_lighting.runtime_unavailable",
-			"Volumetric Lighting cannot be measured because its runtime controls are unavailable.");
-	}
-	if (inInterior && !inInteriorWithSun) {
-		return T(
-			"menu.performance_tuning.feature.volumetric_lighting.interior_without_sun",
-			"The current interior does not support sunlight volumetric lighting, so there is no runtime work to measure.");
-	}
-	if (rainOnlySuppressionActive) {
-		return T(
-			"menu.performance_tuning.feature.volumetric_lighting.rain_suppressed",
-			"Exterior Volumetric Lighting is currently suppressed by the Disable During Rain setting.");
-	}
-
-	return T(
-		"menu.performance_tuning.feature.volumetric_lighting.not_applicable",
-		"Volumetric Lighting has no measurable runtime work in the current scene.");
-}
-
 void VolumetricLighting::SetExteriorEnabled(bool enabled)
 {
 	settings.ExteriorEnabled = enabled;

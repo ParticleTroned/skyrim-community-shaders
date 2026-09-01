@@ -401,30 +401,6 @@ bool TerrainShadows::IsShadowMapRefreshPending() const
 	       Util::GetCompletedCelestialTransitionGeneration() != handledTimeJumpRefreshGeneration;
 }
 
-bool TerrainShadows::IsPerformanceTuningApplicable() const
-{
-	return GetShadowUpdateSunLight() != nullptr;
-}
-
-const char* TerrainShadows::GetPerformanceTuningApplicabilityReason() const
-{
-	if (IsPerformanceTuningApplicable())
-		return nullptr;
-	if (!IsHeightMapReady() || !texHeightMap) {
-		return T(
-			"menu.performance_tuning.feature.terrain_shadows.no_heightmap",
-			"Terrain Shadows have no loaded heightmap for the current worldspace, so there is no runtime work to measure.");
-	}
-	if (!HasShadowUpdateResources()) {
-		return T(
-			"menu.performance_tuning.feature.terrain_shadows.no_runtime_resources",
-			"Terrain Shadows cannot be measured because their runtime update resources are unavailable.");
-	}
-	return T(
-		"menu.performance_tuning.feature.terrain_shadows.no_active_sun",
-		"Terrain Shadows cannot be measured because the current scene has no active directional sunlight.");
-}
-
 void TerrainShadows::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 {
 	if (settings.EnableTerrainShadow == a_enabled)
@@ -432,19 +408,6 @@ void TerrainShadows::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 
 	settings.EnableTerrainShadow = a_enabled;
 	InvalidateShadowMap();
-}
-
-bool TerrainShadows::IsPerformanceCostMeasurementReady() const
-{
-	return !settings.EnableTerrainShadow ||
-	       (!IsShadowMapRefreshPending() && GetShadowUpdateSunLight() != nullptr);
-}
-
-const char* TerrainShadows::GetPerformanceCostMeasurementWaitText() const
-{
-	return T(
-		"menu.performance_tuning.feature.terrain_shadows.wait",
-		"Waiting for Terrain Shadows to refresh");
 }
 
 TerrainShadows::PerFrame TerrainShadows::GetCommonBufferData()

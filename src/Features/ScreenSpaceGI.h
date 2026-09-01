@@ -54,8 +54,6 @@ public:
 	}
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enabled; }
-	virtual bool IsPerformanceTuningApplicable() const override;
-	virtual const char* GetPerformanceTuningApplicabilityReason() const override;
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
 	virtual json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;

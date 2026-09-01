@@ -104,7 +104,6 @@ public:
 
 	// Vanity camera control
 	bool vanityCameraDisabled = false;
-	float savedVanityCameraDelay = 180.0f;
 
 	// Game HUD hiding (tm equivalent)
 	bool gameMenusHidden = false;

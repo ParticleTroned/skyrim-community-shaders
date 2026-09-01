@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <vector>
 
 namespace PerformanceTuning
 {
@@ -86,182 +85,232 @@ namespace PerformanceTuning
 				return true;
 			case MetricKind::WholeFrameGpu:
 				return !window.wholeFrameSourceDiscontinuous &&
-			       !window.wholeFrameGpuCoverageDiscontinuous;
+				       !window.wholeFrameGpuCoverageDiscontinuous;
 			case MetricKind::WholeFrameCpu:
 			default:
 				return !window.wholeFrameSourceDiscontinuous &&
-			       !window.wholeFrameCpuCoverageDiscontinuous;
+				       !window.wholeFrameCpuCoverageDiscontinuous;
 			}
 		}
 
-		std::optional<double> InterpolateAt(
-			double firstTime,
-			double firstValue,
-			double secondTime,
-			double secondValue,
-			double targetTime)
+		double BetaContinuedFraction(double a, double b, double x)
 		{
-			if (!std::isfinite(firstTime) ||
-				!std::isfinite(secondTime) ||
-				!std::isfinite(targetTime) ||
-				!std::isfinite(firstValue) ||
-				!std::isfinite(secondValue) ||
-				secondTime <= firstTime ||
-				targetTime < firstTime ||
-				targetTime > secondTime) {
-				return std::nullopt;
-			}
+			constexpr int kMaximumIterations = 200;
+			constexpr double kConvergenceEpsilon = 3.0e-14;
+			constexpr double kMinimumMagnitude = 1.0e-300;
+			const double qab = a + b;
+			const double qap = a + 1.0;
+			const double qam = a - 1.0;
+			double c = 1.0;
+			double d = 1.0 - qab * x / qap;
+			if (std::abs(d) < kMinimumMagnitude)
+				d = kMinimumMagnitude;
+			d = 1.0 / d;
+			double result = d;
 
-			const double secondWeight =
-				(targetTime - firstTime) /
-				(secondTime - firstTime);
-			return firstValue +
-			       (secondValue - firstValue) * secondWeight;
-		}
+			for (int iteration = 1;
+				iteration <= kMaximumIterations;
+				++iteration) {
+				const int doubledIteration = 2 * iteration;
+				double coefficient =
+					static_cast<double>(iteration) *
+					(b - static_cast<double>(iteration)) * x /
+					((qam + doubledIteration) *
+						(a + doubledIteration));
+				d = 1.0 + coefficient * d;
+				if (std::abs(d) < kMinimumMagnitude)
+					d = kMinimumMagnitude;
+				c = 1.0 + coefficient / c;
+				if (std::abs(c) < kMinimumMagnitude)
+					c = kMinimumMagnitude;
+				d = 1.0 / d;
+				result *= d * c;
 
-		template <class ValueGetter>
-		RepeatabilityBand CalculateRepeatabilityBand(
-			const SampleWindow& currentBefore,
-			const SampleWindow& comparison,
-			const SampleWindow& currentAfter,
-			ValueGetter&& getValue)
-		{
-			RepeatabilityBand result;
-			std::vector<double> availableDeltas;
-			availableDeltas.reserve(kMeasurementBlockCount);
-
-			for (std::size_t blockIndex = 0;
-				 blockIndex < kMeasurementBlockCount;
-				 ++blockIndex) {
-				const auto currentBeforeValue =
-					getValue(currentBefore, blockIndex);
-				const auto comparisonValue =
-					getValue(comparison, blockIndex);
-				const auto currentAfterValue =
-					getValue(currentAfter, blockIndex);
-				const auto currentBeforeTime =
-					GetBlockMidpointTimeSeconds(
-						currentBefore,
-						blockIndex);
-				const auto comparisonTime =
-					GetBlockMidpointTimeSeconds(
-						comparison,
-						blockIndex);
-				const auto currentAfterTime =
-					GetBlockMidpointTimeSeconds(
-						currentAfter,
-						blockIndex);
-				if (!currentBeforeValue ||
-					!comparisonValue ||
-					!currentAfterValue ||
-					!currentBeforeTime ||
-					!comparisonTime ||
-					!currentAfterTime) {
-					continue;
-				}
-
-				const auto interpolatedCurrent = InterpolateAt(
-					*currentBeforeTime,
-					*currentBeforeValue,
-					*currentAfterTime,
-					*currentAfterValue,
-					*comparisonTime);
-				if (!interpolatedCurrent)
-					continue;
-
-				const double delta =
-					*interpolatedCurrent - *comparisonValue;
-				result.blockDeltas[blockIndex] = delta;
-				availableDeltas.push_back(delta);
-			}
-
-			result.availableBlockCount =
-				static_cast<uint32_t>(availableDeltas.size());
-			if (availableDeltas.empty())
-				return result;
-
-			std::ranges::sort(availableDeltas);
-			result.minimum = availableDeltas.front();
-			result.maximum = availableDeltas.back();
-			const std::size_t middle = availableDeltas.size() / 2;
-			if ((availableDeltas.size() & 1u) != 0u) {
-				result.median = availableDeltas[middle];
-			} else {
-				result.median =
-					(availableDeltas[middle - 1] +
-						availableDeltas[middle]) *
-					0.5;
+				coefficient =
+					-(a + static_cast<double>(iteration)) *
+					(qab + static_cast<double>(iteration)) * x /
+					((a + doubledIteration) *
+						(qap + doubledIteration));
+				d = 1.0 + coefficient * d;
+				if (std::abs(d) < kMinimumMagnitude)
+					d = kMinimumMagnitude;
+				c = 1.0 + coefficient / c;
+				if (std::abs(c) < kMinimumMagnitude)
+					c = kMinimumMagnitude;
+				d = 1.0 / d;
+				const double delta = d * c;
+				result *= delta;
+				if (std::abs(delta - 1.0) <= kConvergenceEpsilon)
+					break;
 			}
 			return result;
 		}
 
-		void CountAgreeingBlocks(
-			RepeatabilityBand& band,
-			double delta)
+		double RegularizedIncompleteBeta(double x, double a, double b)
 		{
-			if (delta == 0.0)
-				return;
+			if (x <= 0.0)
+				return 0.0;
+			if (x >= 1.0)
+				return 1.0;
 
-			for (const auto& blockDelta : band.blockDeltas) {
-				if (blockDelta &&
-					((*blockDelta > 0.0 && delta > 0.0) ||
-						(*blockDelta < 0.0 && delta < 0.0))) {
-					band.agreeingBlockCount++;
-				}
+			const double scale = std::exp(
+				std::lgamma(a + b) - std::lgamma(a) - std::lgamma(b) +
+				a * std::log(x) + b * std::log1p(-x));
+			if (x < (a + 1.0) / (a + b + 2.0)) {
+				return scale * BetaContinuedFraction(a, b, x) / a;
 			}
+			return 1.0 -
+			       scale * BetaContinuedFraction(b, a, 1.0 - x) / b;
+		}
+
+		struct SampleStatistics
+		{
+			std::optional<double> mean;
+			std::optional<double> standardError;
+			double variance = 0.0;
+			uint32_t sampleCount = 0;
+		};
+
+		template <class ValueGetter>
+		SampleStatistics CalculateSampleStatistics(ValueGetter&& getValue)
+		{
+			std::array<double, kMeasurementBlockCount> values{};
+			SampleStatistics result;
+			double sum = 0.0;
+			for (std::size_t index = 0;
+				index < kMeasurementBlockCount;
+				++index) {
+				const auto value = getValue(index);
+				if (!value || !std::isfinite(*value))
+					continue;
+				values[result.sampleCount++] = *value;
+				sum += *value;
+			}
+			if (result.sampleCount == 0)
+				return result;
+
+			result.mean = sum / result.sampleCount;
+			if (result.sampleCount < 2)
+				return result;
+
+			double squaredDeviationSum = 0.0;
+			for (uint32_t index = 0; index < result.sampleCount; ++index) {
+				const double deviation = values[index] - *result.mean;
+				squaredDeviationSum += deviation * deviation;
+			}
+			result.variance = squaredDeviationSum /
+			                  (static_cast<double>(result.sampleCount) - 1.0);
+			result.standardError = std::sqrt(
+				result.variance /
+				static_cast<double>(result.sampleCount));
+			return result;
+		}
+
+		std::optional<double> CalculateWelchPValue(
+			const SampleStatistics& current,
+			const SampleStatistics& comparison)
+		{
+			if (!current.mean || !comparison.mean ||
+				current.sampleCount < 2 || comparison.sampleCount < 2) {
+				return std::nullopt;
+			}
+
+			const double currentVarianceOfMean =
+				current.variance / current.sampleCount;
+			const double comparisonVarianceOfMean =
+				comparison.variance / comparison.sampleCount;
+			const double varianceOfDifference =
+				currentVarianceOfMean + comparisonVarianceOfMean;
+			const double meanDifference =
+				*current.mean - *comparison.mean;
+			if (varianceOfDifference <= 0.0)
+				return meanDifference == 0.0 ? 1.0 : 0.0;
+
+			const double degreesOfFreedomNumerator =
+				varianceOfDifference * varianceOfDifference;
+			const double degreesOfFreedomDenominator =
+				currentVarianceOfMean * currentVarianceOfMean /
+					(current.sampleCount - 1.0) +
+				comparisonVarianceOfMean * comparisonVarianceOfMean /
+					(comparison.sampleCount - 1.0);
+			if (degreesOfFreedomDenominator <= 0.0)
+				return std::nullopt;
+
+			const double degreesOfFreedom =
+				degreesOfFreedomNumerator /
+				degreesOfFreedomDenominator;
+			const double t = std::abs(meanDifference) /
+			                 std::sqrt(varianceOfDifference);
+			const double x = degreesOfFreedom /
+			                 (degreesOfFreedom + t * t);
+			return std::clamp(
+				RegularizedIncompleteBeta(
+					x,
+					degreesOfFreedom * 0.5,
+					0.5),
+				0.0,
+				1.0);
+		}
+
+		MetricReliability ClassifyDelta(
+			double value,
+			double practicalFloor,
+			const std::optional<double>& pValue)
+		{
+			if (std::abs(value) <= practicalFloor)
+				return MetricReliability::BelowPracticalFloor;
+			if (!pValue || *pValue > kStatisticalSignificanceLevel)
+				return MetricReliability::NotStatisticallySignificant;
+			return MetricReliability::Reliable;
 		}
 
 		MetricDelta CalculateMetricDelta(
-			const SampleWindow& currentBefore,
+			const SampleWindow& current,
 			const SampleWindow& comparison,
-			const SampleWindow& currentAfter,
 			MetricKind metric,
 			double minimumMetricCoverage)
 		{
 			MetricDelta result;
-			result.currentBeforeMeanMs = GetWindowMeanMs(
-				currentBefore,
-				metric,
-				minimumMetricCoverage);
-			result.comparisonMeanMs = GetWindowMeanMs(
-				comparison,
-				metric,
-				minimumMetricCoverage);
-			result.currentAfterMeanMs = GetWindowMeanMs(
-				currentAfter,
-				metric,
-				minimumMetricCoverage);
+			const auto currentStatistics = CalculateSampleStatistics(
+				[&](std::size_t blockIndex) {
+					return GetBlockMeanMs(
+						current,
+						blockIndex,
+						metric,
+						minimumMetricCoverage);
+				});
+			const auto comparisonStatistics = CalculateSampleStatistics(
+				[&](std::size_t blockIndex) {
+					return GetBlockMeanMs(
+						comparison,
+						blockIndex,
+						metric,
+						minimumMetricCoverage);
+				});
 
-			const auto currentBeforeTime =
-				GetWindowMidpointTimeSeconds(currentBefore);
-			const auto comparisonTime =
-				GetWindowMidpointTimeSeconds(comparison);
-			const auto currentAfterTime =
-				GetWindowMidpointTimeSeconds(currentAfter);
-			if (!result.currentBeforeMeanMs ||
-				!result.comparisonMeanMs ||
-				!result.currentAfterMeanMs ||
-				!currentBeforeTime ||
-				!comparisonTime ||
-				!currentAfterTime) {
+			result.currentMeanMs = currentStatistics.mean;
+			result.currentStandardErrorMs =
+				currentStatistics.standardError;
+			result.comparisonMeanMs = comparisonStatistics.mean;
+			result.comparisonStandardErrorMs =
+				comparisonStatistics.standardError;
+			if (currentStatistics.sampleCount < kMeasurementBlockCount ||
+				comparisonStatistics.sampleCount < kMeasurementBlockCount ||
+				!result.currentMeanMs || !result.comparisonMeanMs) {
+				result.reliability =
+					MetricReliability::InsufficientSampleCoverage;
 				return result;
 			}
 
-			result.interpolatedCurrentMeanMs = InterpolateAt(
-				*currentBeforeTime,
-				*result.currentBeforeMeanMs,
-				*currentAfterTime,
-				*result.currentAfterMeanMs,
-				*comparisonTime);
-			if (!result.interpolatedCurrentMeanMs)
-				return result;
-
 			result.valueMs =
-				*result.interpolatedCurrentMeanMs -
-				*result.comparisonMeanMs;
-			result.currentDriftMs =
-				*result.currentAfterMeanMs -
-				*result.currentBeforeMeanMs;
+				*result.currentMeanMs - *result.comparisonMeanMs;
+			result.standardErrorMs = std::sqrt(
+				currentStatistics.variance / currentStatistics.sampleCount +
+				comparisonStatistics.variance /
+					comparisonStatistics.sampleCount);
+			result.pValue = CalculateWelchPValue(
+				currentStatistics,
+				comparisonStatistics);
 			result.practicalFloorMs = std::max(
 				kPracticalFloorAbsoluteMs,
 				std::abs(*result.comparisonMeanMs) *
@@ -269,104 +318,64 @@ namespace PerformanceTuning
 			result.direction = *result.valueMs > 0.0 ?
 			                       1 :
 			                       (*result.valueMs < 0.0 ? -1 : 0);
-
-			result.repeatability = CalculateRepeatabilityBand(
-				currentBefore,
-				comparison,
-				currentAfter,
-				[metric, minimumMetricCoverage](
-					const SampleWindow& window,
-					std::size_t blockIndex) {
-					return GetBlockMeanMs(
-						window,
-						blockIndex,
-						metric,
-						minimumMetricCoverage);
-				});
-			CountAgreeingBlocks(
-				result.repeatability,
-				*result.valueMs);
-
-			if (result.repeatability.availableBlockCount <
-				kMeasurementBlockCount) {
-				result.reliability =
-					MetricReliability::InsufficientBlockCoverage;
-				return result;
-			}
-			if (std::abs(*result.valueMs) <=
-				*result.practicalFloorMs) {
-				result.reliability =
-					MetricReliability::BelowPracticalFloor;
-				return result;
-			}
-			if (std::abs(*result.currentDriftMs) >
-				std::max(
-					*result.practicalFloorMs,
-					std::abs(*result.valueMs) *
-						kDriftDominanceRatio)) {
-				result.reliability =
-					MetricReliability::DriftDominated;
-				return result;
-			}
-			if (result.repeatability.agreeingBlockCount <
-				kRequiredAgreeingBlockCount) {
-				result.reliability =
-					MetricReliability::MixedBlockDirections;
-				return result;
-			}
-
-			result.reliability = MetricReliability::Reliable;
+			result.reliability = ClassifyDelta(
+				*result.valueMs,
+				*result.practicalFloorMs,
+				result.pValue);
 			return result;
 		}
 
+		using BlockFpsGetter = std::optional<double> (*)(
+			const SampleWindow&,
+			std::size_t);
+
 		FpsDelta CalculateFpsDelta(
-			const SampleWindow& currentBefore,
+			const SampleWindow& current,
 			const SampleWindow& comparison,
-			const SampleWindow& currentAfter)
+			BlockFpsGetter getBlockFps)
 		{
 			FpsDelta result;
-			result.currentBefore = GetWindowFps(currentBefore);
-			result.comparison = GetWindowFps(comparison);
-			result.currentAfter = GetWindowFps(currentAfter);
+			const auto currentStatistics = CalculateSampleStatistics(
+				[&](std::size_t blockIndex) {
+					return getBlockFps(current, blockIndex);
+				});
+			const auto comparisonStatistics = CalculateSampleStatistics(
+				[&](std::size_t blockIndex) {
+					return getBlockFps(comparison, blockIndex);
+				});
 
-			const auto currentBeforeTime =
-				GetWindowMidpointTimeSeconds(currentBefore);
-			const auto comparisonTime =
-				GetWindowMidpointTimeSeconds(comparison);
-			const auto currentAfterTime =
-				GetWindowMidpointTimeSeconds(currentAfter);
-			if (!result.currentBefore ||
-				!result.comparison ||
-				!result.currentAfter ||
-				!currentBeforeTime ||
-				!comparisonTime ||
-				!currentAfterTime) {
+			result.current = currentStatistics.mean;
+			result.currentStandardError =
+				currentStatistics.standardError;
+			result.comparison = comparisonStatistics.mean;
+			result.comparisonStandardError =
+				comparisonStatistics.standardError;
+			if (currentStatistics.sampleCount < kMeasurementBlockCount ||
+				comparisonStatistics.sampleCount < kMeasurementBlockCount ||
+				!result.current || !result.comparison) {
+				result.reliability =
+					MetricReliability::InsufficientSampleCoverage;
 				return result;
 			}
 
-			result.interpolatedCurrent = InterpolateAt(
-				*currentBeforeTime,
-				*result.currentBefore,
-				*currentAfterTime,
-				*result.currentAfter,
-				*comparisonTime);
-			if (!result.interpolatedCurrent)
-				return result;
-
-			result.value =
-				*result.interpolatedCurrent - *result.comparison;
-			result.currentDrift =
-				*result.currentAfter - *result.currentBefore;
-			result.repeatability = CalculateRepeatabilityBand(
-				currentBefore,
-				comparison,
-				currentAfter,
-				[](const SampleWindow& window, std::size_t blockIndex) {
-					return GetBlockFps(window, blockIndex);
-				});
-			CountAgreeingBlocks(
-				result.repeatability,
-				*result.value);
+			result.value = *result.current - *result.comparison;
+			result.standardError = std::sqrt(
+				currentStatistics.variance / currentStatistics.sampleCount +
+				comparisonStatistics.variance /
+					comparisonStatistics.sampleCount);
+			result.pValue = CalculateWelchPValue(
+				currentStatistics,
+				comparisonStatistics);
+			result.practicalFloor = std::max(
+				kPracticalFloorAbsoluteFps,
+				std::abs(*result.comparison) * kPracticalFloorRelative);
+			result.direction = *result.value > 0.0 ?
+			                       1 :
+			                       (*result.value < 0.0 ? -1 : 0);
+			result.reliability = ClassifyDelta(
+				*result.value,
+				*result.practicalFloor,
+				result.pValue);
 			return result;
 		}
 	}
@@ -393,76 +402,24 @@ namespace PerformanceTuning
 		           std::nullopt;
 	}
 
-	TransitionGateResult UpdateTransitionGate(
-		TransitionGateState& state,
-		bool featureReady,
-		double currentTime,
-		uint64_t currentPresentSampleId,
-		double minimumReadySeconds,
-		uint64_t minimumFreshPresentCount,
-		double postFreshSoakSeconds)
-	{
-		if (!featureReady) {
-			state = {};
-			return TransitionGateResult::Pending;
-		}
-
-		if (!state.continuouslyReady) {
-			state.continuouslyReady = true;
-			state.readyStartTime = currentTime;
-			state.readyStartPresentSampleId =
-				currentPresentSampleId;
-			return TransitionGateResult::Pending;
-		}
-
-		if (currentPresentSampleId <
-			state.readyStartPresentSampleId) {
-			state = {};
-			return TransitionGateResult::TimingReset;
-		}
-
-		const bool readyLongEnough =
-			currentTime - state.readyStartTime >=
-			std::max(0.0, minimumReadySeconds);
-		const bool hasFreshSamples =
-			currentPresentSampleId -
-				state.readyStartPresentSampleId >=
-			minimumFreshPresentCount;
-		if (!readyLongEnough || !hasFreshSamples)
-			return TransitionGateResult::Pending;
-
-		const double soakSeconds =
-			std::max(0.0, postFreshSoakSeconds);
-		if (soakSeconds <= 0.0)
-			return TransitionGateResult::Ready;
-
-		if (!state.soakStarted) {
-			state.soakStarted = true;
-			state.soakStartTime = currentTime;
-			return TransitionGateResult::Pending;
-		}
-
-		return currentTime - state.soakStartTime >= soakSeconds ?
-		           TransitionGateResult::Ready :
-		           TransitionGateResult::Pending;
-	}
-
 	void BeginSampleWindow(
 		SampleWindow& window,
 		uint64_t currentPresentSampleId,
 		uint64_t currentWholeFrameSampleId,
-		double captureStartTimeSeconds,
-		bool framePacingInferenceValid)
+		bool framePacingInferenceValid,
+		uint64_t currentOutputPresentSampleId,
+		uint64_t outputPresentDiscontinuityEpoch)
 	{
 		window = {};
-		window.captureStartTimeSeconds = captureStartTimeSeconds;
 		window.startPresentSampleId = currentPresentSampleId;
 		window.lastPresentSampleId = currentPresentSampleId;
 		window.lastWholeFrameSampleId = currentWholeFrameSampleId;
+		window.lastOutputPresentSampleId =
+			currentOutputPresentSampleId;
+		window.outputPresentDiscontinuityEpoch =
+			outputPresentDiscontinuityEpoch;
 		window.framePacingInferenceValid =
 			framePacingInferenceValid;
-		if (!std::isfinite(captureStartTimeSeconds))
-			window.presentSourceDiscontinuous = true;
 	}
 
 	AddSampleResult AddPresentSample(
@@ -502,9 +459,9 @@ namespace PerformanceTuning
 			window.presentSampleCount + 1;
 		// Keep the completing frame in full. Trimming it to the nominal window
 		// boundary would almost erase a real end-of-window hitch, bias the
-		// arithmetic mean, and make the midpoint/FPS describe time that was not
-		// actually captured. The final block may therefore extend past 500 ms,
-		// bounded by kMaximumPresentIntervalMs and the renderer's 3 s deadline.
+		// arithmetic mean, and make FPS describe time that was not actually
+		// captured. The final block may therefore extend past one second,
+		// bounded by kMaximumPresentIntervalMs and the renderer's capture deadline.
 		const double contributedDurationMs = presentIntervalMs;
 
 		const double totalWeight =
@@ -564,6 +521,92 @@ namespace PerformanceTuning
 			return AddSampleResult::Complete;
 		}
 		return AddSampleResult::Added;
+	}
+
+	AddSampleResult AddOutputPresentSample(
+		SampleWindow& window,
+		uint64_t sampleId,
+		uint64_t discontinuityEpoch,
+		double sampledDurationMs,
+		uint32_t presentedFrameCount)
+	{
+		if (window.outputPresentDurationMs + kDurationEpsilonMs >=
+			kMeasurementDurationMs) {
+			return AddSampleResult::Complete;
+		}
+		if (sampleId == 0 ||
+			sampleId == window.lastOutputPresentSampleId) {
+			return AddSampleResult::Ignored;
+		}
+		if (discontinuityEpoch !=
+			window.outputPresentDiscontinuityEpoch) {
+			window.outputPresentSourceDiscontinuous = true;
+			window.outputPresentDiscontinuityEpoch =
+				discontinuityEpoch;
+			window.lastOutputPresentSampleId = sampleId;
+			return AddSampleResult::SourceReset;
+		}
+		if (window.lastOutputPresentSampleId != 0 &&
+			sampleId < window.lastOutputPresentSampleId) {
+			window.outputPresentSourceDiscontinuous = true;
+			return AddSampleResult::SourceReset;
+		}
+		if (window.lastOutputPresentSampleId != 0 &&
+			sampleId - window.lastOutputPresentSampleId > 1) {
+			window.outputPresentSourceDiscontinuous = true;
+			window.lastOutputPresentSampleId = sampleId;
+			return AddSampleResult::SourceGap;
+		}
+
+		window.lastOutputPresentSampleId = sampleId;
+		if (!IsPositiveFinite(sampledDurationMs) ||
+			presentedFrameCount == 0) {
+			window.outputPresentSourceDiscontinuous = true;
+			return AddSampleResult::InvalidValue;
+		}
+		if (sampledDurationMs > kMaximumPresentIntervalMs) {
+			window.outputPresentSourceDiscontinuous = true;
+			return AddSampleResult::IntervalTooLarge;
+		}
+		const double contributedDurationMs = std::min(
+			sampledDurationMs,
+			kMeasurementDurationMs -
+				window.outputPresentDurationMs);
+		const double contributedFrameCount =
+			static_cast<double>(presentedFrameCount) *
+			(contributedDurationMs / sampledDurationMs);
+		double offsetMs = window.outputPresentDurationMs;
+		double remainingDurationMs = contributedDurationMs;
+		while (remainingDurationMs > kDurationEpsilonMs) {
+			const auto blockIndex = std::min(
+				static_cast<std::size_t>(
+					offsetMs / kMeasurementBlockDurationMs),
+				kMeasurementBlockCount - 1);
+			const double blockEndMs =
+				static_cast<double>(blockIndex + 1) *
+				kMeasurementBlockDurationMs;
+			const double segmentDurationMs = std::min(
+				remainingDurationMs,
+				std::max(0.0, blockEndMs - offsetMs));
+			if (segmentDurationMs <= kDurationEpsilonMs) {
+				offsetMs = blockEndMs;
+				continue;
+			}
+
+			auto& block = window.blocks[blockIndex];
+			block.outputPresentDurationMs += segmentDurationMs;
+			block.outputPresentedFrameCount +=
+				contributedFrameCount *
+				(segmentDurationMs / contributedDurationMs);
+			offsetMs += segmentDurationMs;
+			remainingDurationMs -= segmentDurationMs;
+		}
+
+		window.outputPresentDurationMs += contributedDurationMs;
+		return window.outputPresentDurationMs + kDurationEpsilonMs >=
+		               kMeasurementDurationMs ?
+		           AddSampleResult::Complete :
+		           AddSampleResult::Added;
 	}
 
 	AddSampleResult AddWholeFrameSample(
@@ -645,8 +688,8 @@ namespace PerformanceTuning
 		}
 
 		for (std::size_t blockIndex = 0;
-			 blockIndex < kMeasurementBlockCount;
-			 ++blockIndex) {
+			blockIndex < kMeasurementBlockCount;
+			++blockIndex) {
 			const double blockWeight =
 				contribution.blockWeights[blockIndex];
 			if (blockWeight <= 0.0)
@@ -781,8 +824,8 @@ namespace PerformanceTuning
 			GetMetricCoverage(window, MetricKind::WholeFrameCpu);
 
 		for (std::size_t blockIndex = 0;
-			 blockIndex < kMeasurementBlockCount;
-			 ++blockIndex) {
+			blockIndex < kMeasurementBlockCount;
+			++blockIndex) {
 			auto& blockResult = result.blocks[blockIndex];
 			blockResult.wholeFrameGpu = GetMetricCoverage(
 				window,
@@ -803,7 +846,7 @@ namespace PerformanceTuning
 	{
 		if (!window.complete ||
 			!GetMetricCoverage(window, metric)
-				 .Meets(minimumCoverage)) {
+				.Meets(minimumCoverage)) {
 			return std::nullopt;
 		}
 		return GetWindowMoments(window, metric).Mean();
@@ -818,13 +861,13 @@ namespace PerformanceTuning
 		if (!window.complete ||
 			blockIndex >= kMeasurementBlockCount ||
 			!GetMetricCoverage(window, blockIndex, metric)
-				 .Meets(minimumCoverage)) {
+				.Meets(minimumCoverage)) {
 			return std::nullopt;
 		}
 		return GetBlockMoments(
 			window.blocks[blockIndex],
 			metric)
-			.Mean();
+		    .Mean();
 	}
 
 	std::optional<double> GetWindowFps(
@@ -859,97 +902,84 @@ namespace PerformanceTuning
 		       block.sampledDurationMs;
 	}
 
-	std::optional<double> GetWindowMidpointTimeSeconds(
-		const SampleWindow& window)
-	{
-		if (!std::isfinite(window.captureStartTimeSeconds) ||
-			window.sampledDurationMs <= 0.0) {
-			return std::nullopt;
-		}
-		return window.captureStartTimeSeconds +
-		       window.sampledDurationMs / 2000.0;
-	}
-
-	std::optional<double> GetBlockMidpointTimeSeconds(
+	std::optional<double> GetBlockOutputFps(
 		const SampleWindow& window,
 		std::size_t blockIndex)
 	{
-		if (!std::isfinite(window.captureStartTimeSeconds) ||
-			blockIndex >= kMeasurementBlockCount ||
-			window.blocks[blockIndex].sampledDurationMs <= 0.0) {
+		if (!window.complete ||
+			window.outputPresentSourceDiscontinuous ||
+			blockIndex >= kMeasurementBlockCount) {
 			return std::nullopt;
 		}
-		return window.captureStartTimeSeconds +
-		       (static_cast<double>(blockIndex) *
-				   kMeasurementBlockDurationMs +
-			   window.blocks[blockIndex].sampledDurationMs * 0.5) /
-			   1000.0;
+
+		const auto& block = window.blocks[blockIndex];
+		if (block.outputPresentDurationMs + kDurationEpsilonMs <
+				kMeasurementBlockDurationMs ||
+			block.outputPresentedFrameCount <= 0.0) {
+			return std::nullopt;
+		}
+		return 1000.0 * block.outputPresentedFrameCount /
+		       block.outputPresentDurationMs;
 	}
 
 	bool IsFramePaced(const SampleWindow& window)
 	{
 		return window.framePacingInferenceValid &&
 		       GetMetricCoverage(
-			   window,
-			   MetricKind::WholeFrameGpu)
-			   .Meets(kDefaultMinimumMetricCoverage) &&
+				   window,
+				   MetricKind::WholeFrameGpu)
+		           .Meets(kDefaultMinimumMetricCoverage) &&
 		       GetMetricCoverage(
-			   window,
-			   MetricKind::WholeFrameCpu)
-			   .Meets(kDefaultMinimumMetricCoverage) &&
+				   window,
+				   MetricKind::WholeFrameCpu)
+		           .Meets(kDefaultMinimumMetricCoverage) &&
 		       window.framePacingEligibleSampleWeight > 0.0 &&
 		       window.framePacedSampleWeight * 2.0 >=
-			   window.framePacingEligibleSampleWeight;
+		           window.framePacingEligibleSampleWeight;
 	}
 
 	CostResult CalculateCostResult(
-		const SampleWindow& currentBefore,
+		const SampleWindow& current,
 		const SampleWindow& comparison,
-		const SampleWindow& currentAfter,
 		double minimumMetricCoverage)
 	{
 		CostResult result;
-		result.currentBeforeDiagnostics =
-			BuildWindowDiagnostics(currentBefore);
+		result.currentDiagnostics =
+			BuildWindowDiagnostics(current);
 		result.comparisonDiagnostics =
 			BuildWindowDiagnostics(comparison);
-		result.currentAfterDiagnostics =
-			BuildWindowDiagnostics(currentAfter);
 
 		result.present = CalculateMetricDelta(
-			currentBefore,
+			current,
 			comparison,
-			currentAfter,
 			MetricKind::Present,
 			minimumMetricCoverage);
 		result.wholeFrameGpu = CalculateMetricDelta(
-			currentBefore,
+			current,
 			comparison,
-			currentAfter,
 			MetricKind::WholeFrameGpu,
 			minimumMetricCoverage);
 		result.wholeFrameCpu = CalculateMetricDelta(
-			currentBefore,
+			current,
 			comparison,
-			currentAfter,
 			MetricKind::WholeFrameCpu,
 			minimumMetricCoverage);
 		result.fps = CalculateFpsDelta(
-			currentBefore,
+			current,
 			comparison,
-			currentAfter);
+			GetBlockFps);
+		result.outputFps = CalculateFpsDelta(
+			current,
+			comparison,
+			GetBlockOutputFps);
 
 		result.presentSynced =
-			currentBefore.presentSyncedSampleCount > 0 ||
-			comparison.presentSyncedSampleCount > 0 ||
-			currentAfter.presentSyncedSampleCount > 0;
+			current.presentSyncedSampleCount > 0 ||
+			comparison.presentSyncedSampleCount > 0;
 		result.framePaced =
-			currentBefore.framePacingInferenceValid &&
+			current.framePacingInferenceValid &&
 			comparison.framePacingInferenceValid &&
-			currentAfter.framePacingInferenceValid &&
-			(IsFramePaced(currentBefore) ||
-				IsFramePaced(comparison) ||
-				IsFramePaced(currentAfter));
+			(IsFramePaced(current) || IsFramePaced(comparison));
 		return result;
 	}
 }

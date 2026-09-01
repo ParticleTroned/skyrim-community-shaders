@@ -1,7 +1,9 @@
 #pragma once
 
 #include <Windows.Foundation.h>
+#include <cstdint>
 #include <memory>
+#include <mutex>
 #include <stdio.h>
 #include <string_view>
 #include <winrt/base.h>
@@ -68,6 +70,18 @@ public:
 class DX12SwapChain
 {
 public:
+	/** @brief One validated delta from the real swap chain's presentation statistics. */
+	struct OutputPresentationTiming
+	{
+		double averageFrameTimeMs = 0.0;
+		double fps = 0.0;
+		double sampledDurationMs = 0.0;
+		uint32_t presentedFrameCount = 0;
+		uint64_t sampleId = 0;
+		uint64_t discontinuityEpoch = 0;
+		bool valid = false;
+	};
+
 	winrt::com_ptr<ID3D12Device> d3d12Device;
 	winrt::com_ptr<ID3D12CommandQueue> commandQueue;
 	winrt::com_ptr<ID3D12CommandAllocator> commandAllocators[2];
@@ -99,14 +113,19 @@ public:
 	UINT64 fenceValue = 1;
 	HRESULT presentInteropFailure = S_OK;
 
-	LARGE_INTEGER qpf;
+	LARGE_INTEGER qpf{};
 
 	double refreshRate = 0;
 
 	std::unique_ptr<DXGISwapChainProxy> swapChainProxy;
 
-	// Returns the current frame time (in seconds) for accurate FPS calculation when frame generation is active
-	float GetFrameTime() const;
+	/**
+	 * @brief Returns an average measured at the final DXGI presentation boundary.
+	 *
+	 * The sample is invalid when DXGI statistics are stale, discontinuous, or
+	 * unavailable. Callers must not infer a frame-generation multiplier.
+	 */
+	[[nodiscard]] OutputPresentationTiming GetOutputPresentationTiming() const;
 
 	void CreateD3D12Device(IDXGIAdapter* a_adapter);
 	void CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC swapChainDesc);
@@ -141,4 +160,14 @@ public:
 
 	// D3D12 interop resource management
 	void CreateSharedResources();
+
+private:
+	void UpdateOutputPresentationTiming();
+	void ResetOutputPresentationTiming(bool force = false);
+	void InvalidateOutputPresentationTimingLocked();
+
+	mutable std::mutex outputPresentationTimingMutex;
+	DXGI_FRAME_STATISTICS previousOutputFrameStatistics{};
+	OutputPresentationTiming outputPresentationTiming{};
+	bool hasOutputFrameStatisticsBaseline = false;
 };

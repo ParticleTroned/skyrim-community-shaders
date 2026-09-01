@@ -68,8 +68,6 @@ public:
 			T("menu.performance_tuning.feature.volumetric_lighting.comparison_label", "Off"),
 			T("menu.performance_tuning.feature.volumetric_lighting.comparison_details", "Volumetric Lighting is switched off for the current interior/exterior context.") };
 	}
-	virtual bool IsPerformanceTuningApplicable() const override;
-	virtual const char* GetPerformanceTuningApplicabilityReason() const override;
 	virtual json GetPerformanceTuningUserSettingsMask() const override
 	{
 		return {

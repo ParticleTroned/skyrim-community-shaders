@@ -151,79 +151,19 @@ public:
 	float2 resolutionScale = { 1.0f, 1.0f };
 	LARGE_INTEGER qpf;
 
-	// FG FPS Measurement for Overlay
+	// Final-output timing for the overlay and performance measurements
 	bool IsFrameGenerationDx12PathActive() const;
 	bool IsFrameGenerationActive() const;
 	bool ShouldUseFrameGenerationThisFrame() const;
 	bool ConsumeFrameGenerationInputsForPresent();
-	float GetFrameGenerationFrameTime() const;
+	/** @brief Returns the latest validated final-presentation timing sample. */
+	[[nodiscard]] DX12SwapChain::OutputPresentationTiming GetOutputPresentationTiming() const;
 	bool IsUpscalingActive() const;
-
-	/** @brief Default inclusive age window for applied-path and Present evidence. */
-	static constexpr uint32_t kPerformanceMeasurementRecentEvidenceFrames = 8;
-
-	struct PerformanceMeasurementFrameGenerationSettings
-	{
-		uint32_t mode = 0;
-		uint32_t forceEnable = 0;
-		bool allowInMenus = false;
-	};
-
-	struct PerformanceMeasurementFrameGenerationStatus
-	{
-		bool configured = false;
-		bool dx12PathActive = false;
-		bool requestedNow = false;
-		bool activeNow = false;
-		bool hasRecentPresentEvidence = false;
-		bool lastPresentRequested = false;
-		bool lastPresentSuccessful = false;
-		bool lastPresentActive = false;
-	};
 
 	/** @brief Returns whether frame generation is requested by persistent settings. */
 	[[nodiscard]] bool IsFrameGenerationConfigured() const;
-
-	/**
-	 * @brief Captures every frame-generation setting changed by the measurement override.
-	 *
-	 * Capture once before disabling frame generation and retain the value until all
-	 * measurement legs and their failure/cancellation cleanup have completed.
-	 */
-	[[nodiscard]] PerformanceMeasurementFrameGenerationSettings CaptureFrameGenerationSettingsForPerformanceMeasurement() const;
-
-	/**
-	 * @brief Configures frame generation off without clearing recent Present evidence.
-	 *
-	 * The caller must wait for IsFrameGenerationQuiescentForPerformanceMeasurement()
-	 * before consuming samples; retained evidence prevents the last generated frame
-	 * from being mistaken for an immediately clean transition.
-	 */
-	void DisableFrameGenerationForPerformanceMeasurement();
-
-	/** @brief Restores a snapshot returned by CaptureFrameGenerationSettingsForPerformanceMeasurement(). */
-	void RestoreFrameGenerationSettingsAfterPerformanceMeasurement(const PerformanceMeasurementFrameGenerationSettings& a_settings);
-
-	/**
-	 * @brief Returns configured, current, and latest-Present FG state.
-	 *
-	 * Present evidence must fall inside the inclusive frame-age window supplied by
-	 * the caller; the owning transition gate then requires additional fresh Presents.
-	 */
-	[[nodiscard]] PerformanceMeasurementFrameGenerationStatus GetFrameGenerationStatusForPerformanceMeasurement(
-		uint32_t a_recentEvidenceFrames = kPerformanceMeasurementRecentEvidenceFrames) const;
-
-	/**
-	 * @brief Returns true once FG is configured off and the D3D12 Present path is clean.
-	 *
-	 * With an active D3D12 proxy, the latest recent Present must have succeeded
-	 * without requesting or activating FG. Without that proxy, configured-off is
-	 * sufficient because FG cannot run.
-	 * The caller must still impose its own wall-clock transition deadline; unavailable
-	 * Present evidence is a real not-ready result and must not create an endless wait.
-	 */
-	[[nodiscard]] bool IsFrameGenerationQuiescentForPerformanceMeasurement(
-		uint32_t a_recentEvidenceFrames = kPerformanceMeasurementRecentEvidenceFrames) const;
+	/** @brief Returns whether the active backend is configured to limit game FPS. */
+	[[nodiscard]] bool IsFrameRateLimitConfigured() const;
 
 	// Feature interface overrides
 	virtual void DrawSettings() override;
@@ -271,29 +211,6 @@ public:
 		return configuredMethod != UpscaleMethod::kNONE ||
 		       (d3d12SwapChainActive && settings.frameGenerationMode != 0);
 	}
-	/**
-	 * @brief Proves the desired configuration has applied and its render path recently succeeded.
-	 *
-	 * A recent successful execution must match the applied configuration revision.
-	 * The owning transition gate remains responsible for a wall-clock timeout.
-	 */
-	virtual bool IsPerformanceCostMeasurementReady() const override;
-	virtual const char* GetPerformanceCostMeasurementWaitText() const override
-	{
-		return T(
-			"menu.performance_tuning.feature.upscaling.wait",
-			"Waiting for upscaling and frame pacing to settle");
-	}
-	virtual uint64_t GetPerformanceCostMeasurementFreshPresentCount(bool) const override
-	{
-		// The profiler ring is eight frames deep. Twelve fresh Presents flush it
-		// without making the bounded transition impossible at low game FPS.
-		return 12;
-	}
-	virtual double GetPerformanceCostMeasurementPostFreshSoakSeconds(bool) const override
-	{
-		return 0.5;
-	}
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
 	{
 		if (a_enabled) {
@@ -335,7 +252,7 @@ public:
 	void DestroyAllUpscalingTextureResources();
 
 	Util::LazyShader<ID3D11ComputeShader> encodeTexturesCS[4];          // One for each UpscaleMethod
-	Util::LazyShader<ID3D11ComputeShader> encodeTexturesCSDepthOutput;  // Runtime FSR: converts game depth to typed R32_FLOAT
+	Util::LazyShader<ID3D11ComputeShader> encodeTexturesCSDepthOutput;  // FSR: converts game depth to typed R32_FLOAT
 	ID3D11ComputeShader* GetEncodeTexturesCS();
 
 	Util::LazyShader<ID3D11PixelShader> depthRefractionUpscalePS;
@@ -364,7 +281,8 @@ public:
 	std::unique_ptr<Texture2D> reactiveMaskTexture;
 	std::unique_ptr<Texture2D> transparencyCompositionMaskTexture;
 	std::unique_ptr<Texture2D> motionVectorCopyTexture;
-	std::unique_ptr<Texture2D> runtimeFsrDepthTexture;
+	std::unique_ptr<Texture2D> fsrDepthTexture;
+	std::unique_ptr<Texture2D> fsrOutputTexture;
 	std::unique_ptr<Texture2D> sharpenerTexture;
 
 	virtual void ClearShaderCache() override;
@@ -386,7 +304,7 @@ public:
 	bool previousVendorUpscalerSelected = false;
 	// FidelityFX teardown/recreation can span frames while GPU ownership drains.
 	// Keep the transition pending until CheckResources observes Ready and commits
-	// its previous/applied configuration snapshots.
+	// the previous resource and configuration state.
 	bool fsrResourceTransitionPending = false;
 	bool upscalingResourcesReady = false;
 	bool depthUpscaleUseWideKernel = false;
@@ -406,46 +324,16 @@ public:
 	bool previousHistoryFSRRuntimePathActive = false;
 	bool previousHistoryFSRRuntimeFsr4Active = false;
 
-	// Last configuration observed by CheckResources. Performance cost sampling
-	// must not begin while menu settings are still pending on the render path.
-	bool performanceCostAppliedStateValid = false;
-	UpscaleMethod performanceCostAppliedUpscaleMethod = UpscaleMethod::kNONE;
-	uint32_t performanceCostAppliedQualityMode = 0;
-	uint32_t performanceCostAppliedDLSSPreset = 0;
-	bool performanceCostAppliedFrameGenerationMode = false;
-	bool performanceCostAppliedFSRRuntimePathActive = false;
-	bool performanceCostAppliedFSRRuntimeFsr4Configured = false;
-	bool performanceCostAppliedFSRRuntimeFsr4Active = false;
-	float2 performanceCostAppliedResolutionScale = { 1.0f, 1.0f };
-	uint32_t performanceCostAppliedFrame = std::numeric_limits<uint32_t>::max();
-	uint64_t performanceCostAppliedRevision = 0;
-	bool performanceCostExecutedPathValid = false;
-	bool performanceCostExecutedPathSuccessful = false;
-	UpscaleMethod performanceCostExecutedUpscaleMethod = UpscaleMethod::kNONE;
-	uint32_t performanceCostExecutedFrame = std::numeric_limits<uint32_t>::max();
-	uint64_t performanceCostLastSuccessfulExecutedRevision = 0;
-	UpscaleMethod performanceCostLastSuccessfulExecutedMethod = UpscaleMethod::kNONE;
-	uint32_t performanceCostLastSuccessfulExecutedFrame = std::numeric_limits<uint32_t>::max();
 	bool frameGenerationCopyValid = false;
 	bool frameGenerationCopyRequested = false;
 	bool frameGenerationCopySuccessful = false;
 	bool frameGenerationCopyConsumed = true;
-	bool performanceCostFrameGenerationPresentValid = false;
-	bool performanceCostFrameGenerationPresentRequested = false;
-	bool performanceCostFrameGenerationPresentSuccessful = false;
-	bool performanceCostFrameGenerationPresentActive = false;
-	uint32_t performanceCostFrameGenerationPresentFrame = std::numeric_limits<uint32_t>::max();
 
 	bool CopySharedD3D12Resources();
 	void PostDisplay();
 	bool PerformUpscaling();
 	bool UpscaleDepth();
-	void RecordPerformanceCostExecutedPath(UpscaleMethod a_method, bool a_successful);
 	void RecordFrameGenerationCopy(bool a_requested, bool a_successful);
-	void RecordPerformanceCostFrameGenerationPresent(
-		bool a_requested,
-		bool a_successful,
-		bool a_active);
 	void RequestHistoryReset();
 	bool ShouldResetHistoryThisFrame() const;
 	void UpdateHistoryResetState(UpscaleMethod a_upscaleMethod);
@@ -470,7 +358,6 @@ public:
 	// Unified interface methods - external code should use these instead of direct access
 	void LoadUpscalingSDKs();  // Loads all SDKs at once
 	HANDLE GetFrameLatencyWaitableObject() const;
-	float GetFrameTime() const;
 
 	// Backend interface methods
 	bool IsBackendInitialized() const;
@@ -495,7 +382,7 @@ public:
 	BlurResources GetBlurResources() const;
 
 private:
-	void DrawSettingsPanel(bool a_showEmbeddedInfo);
+	void DrawSettingsPanel(bool a_showEmbeddedInfo, bool a_allowNone);
 	bool renderDocUpscalingBackendSkipLogged = false;
 
 	struct Main_UpdateJitter

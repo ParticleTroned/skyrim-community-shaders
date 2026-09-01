@@ -140,53 +140,6 @@ bool Skylighting::IsPerformanceCostMeasurementEnabled() const
 	return IsRuntimeActive();
 }
 
-bool Skylighting::IsPerformanceCostMeasurementReady() const
-{
-	if (!loaded || queuedResetSkylighting || inOcclusion)
-		return false;
-
-	// The disabled comparison is ready once its accumulation reset has been
-	// applied. The common transition gate then drains the rendering pipeline.
-	if (!settings.EnableSkylighting)
-		return true;
-
-	auto state = globals::state;
-	auto sky = globals::game::sky;
-	auto precip = sky ? sky->precip : nullptr;
-	if (!state || state->isMapMenuOpen ||
-		!sky || sky->mode.get() != RE::Sky::Mode::kFull ||
-		Util::IsInterior() ||
-		!precip || !precip->occlusionData.camera ||
-		!globals::shaderCache || !globals::shaderCache->IsEnabled() ||
-		!globals::d3d::context || !probeUpdateCompute.get() ||
-		!comparisonSampler.get() ||
-		!texOcclusion || !texOcclusion->srv.get() || !texOcclusion->dsv.get() ||
-		!texProbeArray || !texProbeArray->srv.get() || !texProbeArray->uav.get() ||
-		!texAccumFramesArray || !texAccumFramesArray->uav.get() ||
-		!texShadowBitmask || !texShadowBitmask->srv.get() || !texShadowBitmask->uav.get() ||
-		!texShadowVisibility || !texShadowVisibility->srv.get() || !texShadowVisibility->uav.get()) {
-		return false;
-	}
-
-	for (const auto refreshCount : probeRefreshCounts) {
-		if (refreshCount < kProbeConfidenceSampleCount)
-			return false;
-	}
-	return true;
-}
-
-const char* Skylighting::GetPerformanceCostMeasurementWaitText() const
-{
-	return T(
-		"menu.performance_tuning.feature.skylighting.wait",
-		"Waiting for Skylighting probes to refresh");
-}
-
-double Skylighting::GetPerformanceCostMeasurementSettleSeconds(bool a_targetEnabled) const
-{
-	return a_targetEnabled ? 5.0 : 1.0;
-}
-
 void Skylighting::RestorePerformanceCostMeasurementState(const json& a_state)
 {
 	if (!a_state.is_object())

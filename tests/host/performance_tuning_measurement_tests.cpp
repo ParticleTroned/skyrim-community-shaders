@@ -17,15 +17,12 @@ namespace
 	using PerformanceTuning::MetricReliability;
 	using PerformanceTuning::Moments;
 	using PerformanceTuning::SampleWindow;
-	using PerformanceTuning::TransitionGateResult;
-	using PerformanceTuning::TransitionGateState;
 
 	using BlockValues =
 		std::array<double, PerformanceTuning::kMeasurementBlockCount>;
 
 	SampleWindow MakeWindow(
 		const BlockValues& presentIntervalsMs,
-		double captureStartTimeSeconds,
 		std::optional<double> wholeFrameGpuMs = 8.0,
 		std::optional<double> wholeFrameCpuMs = 5.0,
 		uint32_t omitEveryGpuSample = 0,
@@ -37,13 +34,12 @@ namespace
 		PerformanceTuning::BeginSampleWindow(
 			window,
 			firstSampleId - 1,
-			firstSampleId - 1,
-			captureStartTimeSeconds);
+			firstSampleId - 1);
 
 		bool complete = false;
 		for (uint32_t sampleIndex = 1;
-			 sampleIndex <= 10000;
-			 ++sampleIndex) {
+			sampleIndex <= 10000;
+			++sampleIndex) {
 			const auto blockIndex = std::min(
 				static_cast<std::size_t>(
 					window.sampledDurationMs /
@@ -59,12 +55,12 @@ namespace
 					false);
 			REQUIRE(
 				(presentResult == AddSampleResult::Added ||
-				 presentResult == AddSampleResult::Complete));
+					presentResult == AddSampleResult::Complete));
 
 			const bool omitGpu =
 				sampleIndex <= omitInitialGpuSampleCount ||
 				(omitEveryGpuSample != 0 &&
-				 sampleIndex % omitEveryGpuSample == 0);
+					sampleIndex % omitEveryGpuSample == 0);
 			const bool omitCpu =
 				omitEveryCpuSample != 0 &&
 				sampleIndex % omitEveryCpuSample == 0;
@@ -89,7 +85,6 @@ namespace
 
 	SampleWindow MakeConstantWindow(
 		double presentIntervalMs,
-		double captureStartTimeSeconds,
 		std::optional<double> wholeFrameGpuMs = 8.0,
 		std::optional<double> wholeFrameCpuMs = 5.0,
 		uint32_t omitEveryGpuSample = 0,
@@ -97,12 +92,10 @@ namespace
 		uint32_t omitInitialGpuSampleCount = 0,
 		uint64_t firstSampleId = 1)
 	{
+		BlockValues presentIntervalsMs{};
+		presentIntervalsMs.fill(presentIntervalMs);
 		return MakeWindow(
-			{ presentIntervalMs,
-				presentIntervalMs,
-				presentIntervalMs,
-				presentIntervalMs },
-			captureStartTimeSeconds,
+			presentIntervalsMs,
 			wholeFrameGpuMs,
 			wholeFrameCpuMs,
 			omitEveryGpuSample,
@@ -110,64 +103,30 @@ namespace
 			omitInitialGpuSampleCount,
 			firstSampleId);
 	}
-}
 
-TEST_CASE(
-	"Transition gate waits for readiness, fresh Presents, and post-flush soak",
-	"[performance-tuning][transition]")
-{
-	TransitionGateState state;
-	REQUIRE(
-		PerformanceTuning::UpdateTransitionGate(
-			state, false, 0.0, 100, 2.0, 60, 4.0) ==
-		TransitionGateResult::Pending);
-	REQUIRE_FALSE(state.continuouslyReady);
-
-	REQUIRE(
-		PerformanceTuning::UpdateTransitionGate(
-			state, true, 1.0, 100, 2.0, 60, 4.0) ==
-		TransitionGateResult::Pending);
-	REQUIRE(
-		PerformanceTuning::UpdateTransitionGate(
-			state, true, 3.0, 159, 2.0, 60, 4.0) ==
-		TransitionGateResult::Pending);
-	REQUIRE_FALSE(state.soakStarted);
-	REQUIRE(
-		PerformanceTuning::UpdateTransitionGate(
-			state, true, 3.0, 160, 2.0, 60, 4.0) ==
-		TransitionGateResult::Pending);
-	REQUIRE(state.soakStarted);
-	REQUIRE(state.soakStartTime == Catch::Approx(3.0));
-	REQUIRE(
-		PerformanceTuning::UpdateTransitionGate(
-			state, true, 7.0, 201, 2.0, 60, 4.0) ==
-		TransitionGateResult::Ready);
-}
-
-TEST_CASE(
-	"Transition gate resets on readiness loss and Present rollback",
-	"[performance-tuning][transition][reset]")
-{
-	TransitionGateState state;
-	REQUIRE(
-		PerformanceTuning::UpdateTransitionGate(
-			state, true, 10.0, 500, 2.0, 60, 4.0) ==
-		TransitionGateResult::Pending);
-	REQUIRE(
-		PerformanceTuning::UpdateTransitionGate(
-			state, true, 12.0, 499, 2.0, 60, 4.0) ==
-		TransitionGateResult::TimingReset);
-	REQUIRE_FALSE(state.continuouslyReady);
-
-	REQUIRE(
-		PerformanceTuning::UpdateTransitionGate(
-			state, true, 13.0, 600, 2.0, 60, 4.0) ==
-		TransitionGateResult::Pending);
-	REQUIRE(
-		PerformanceTuning::UpdateTransitionGate(
-			state, false, 14.0, 601, 2.0, 60, 4.0) ==
-		TransitionGateResult::Pending);
-	REQUIRE_FALSE(state.continuouslyReady);
+	void AddConstantOutputCadence(
+		SampleWindow& window,
+		uint32_t framesPerSample,
+		double sampleDurationMs = 100.0,
+		uint64_t firstSampleId = 1,
+		uint64_t discontinuityEpoch = 0)
+	{
+		for (uint64_t sampleId = firstSampleId;
+			window.outputPresentDurationMs <
+			PerformanceTuning::kMeasurementDurationMs;
+			++sampleId) {
+			const auto result =
+				PerformanceTuning::AddOutputPresentSample(
+					window,
+					sampleId,
+					discontinuityEpoch,
+					sampleDurationMs,
+					framesPerSample);
+			REQUIRE(
+				result == AddSampleResult::Added ||
+				result == AddSampleResult::Complete);
+		}
+	}
 }
 
 TEST_CASE(
@@ -189,21 +148,18 @@ TEST_CASE(
 }
 
 TEST_CASE(
-	"A complete window contains four elapsed-time blocks and diagnostics",
+	"A complete window contains five one-second samples and diagnostics",
 	"[performance-tuning][blocks][diagnostics]")
 {
-	const auto window = MakeConstantWindow(10.0, 2.0);
+	const auto window = MakeConstantWindow(10.0);
 	REQUIRE(window.complete);
-	REQUIRE(window.sampledDurationMs == Catch::Approx(2000.0));
-	REQUIRE(window.presentSampleCount == 200);
-	REQUIRE(
-		PerformanceTuning::GetWindowMidpointTimeSeconds(window) ==
-		Catch::Approx(3.0));
+	REQUIRE(window.sampledDurationMs == Catch::Approx(5000.0));
+	REQUIRE(window.presentSampleCount == 500);
 	REQUIRE(PerformanceTuning::GetWindowFps(window) == Catch::Approx(100.0));
 
 	for (std::size_t blockIndex = 0;
-		 blockIndex < PerformanceTuning::kMeasurementBlockCount;
-		 ++blockIndex) {
+		blockIndex < PerformanceTuning::kMeasurementBlockCount;
+		++blockIndex) {
 		REQUIRE(
 			PerformanceTuning::GetBlockFps(window, blockIndex) ==
 			Catch::Approx(100.0));
@@ -219,18 +175,18 @@ TEST_CASE(
 	"[performance-tuning][minimum-samples][fps]")
 {
 	SampleWindow window;
-	PerformanceTuning::BeginSampleWindow(window, 0, 0, 0.0);
+	PerformanceTuning::BeginSampleWindow(window, 0, 0);
 
-	for (uint64_t sampleId = 1; sampleId <= 20; ++sampleId) {
+	for (uint64_t sampleId = 1; sampleId <= 24; ++sampleId) {
 		REQUIRE(
 			PerformanceTuning::AddPresentSample(
 				window, sampleId, 100.0, false) ==
 			AddSampleResult::Added);
 	}
-	REQUIRE(window.sampledDurationMs == Catch::Approx(2000.0));
+	REQUIRE(window.sampledDurationMs == Catch::Approx(2400.0));
 	REQUIRE_FALSE(window.complete);
 
-	for (uint64_t sampleId = 21; sampleId <= 23; ++sampleId) {
+	for (uint64_t sampleId = 25; sampleId <= 49; ++sampleId) {
 		REQUIRE(
 			PerformanceTuning::AddPresentSample(
 				window, sampleId, 100.0, false) ==
@@ -238,12 +194,12 @@ TEST_CASE(
 	}
 	REQUIRE(
 		PerformanceTuning::AddPresentSample(
-			window, 24, 100.0, false) ==
+			window, 50, 100.0, false) ==
 		AddSampleResult::Complete);
 
-	REQUIRE(window.sampledDurationMs == Catch::Approx(2400.0));
-	REQUIRE(window.presentSampleCount == 24);
-	REQUIRE(window.blocks[3].sampledDurationMs == Catch::Approx(900.0));
+	REQUIRE(window.sampledDurationMs == Catch::Approx(5000.0));
+	REQUIRE(window.presentSampleCount == 50);
+	REQUIRE(window.blocks[4].sampledDurationMs == Catch::Approx(1000.0));
 	REQUIRE(PerformanceTuning::GetWindowFps(window) == Catch::Approx(10.0));
 }
 
@@ -252,7 +208,7 @@ TEST_CASE(
 	"[performance-tuning][present][interruption]")
 {
 	SampleWindow accepted;
-	PerformanceTuning::BeginSampleWindow(accepted, 0, 0, 0.0);
+	PerformanceTuning::BeginSampleWindow(accepted, 0, 0);
 	REQUIRE(
 		PerformanceTuning::AddPresentSample(
 			accepted, 1, 1000.0, false) ==
@@ -265,7 +221,7 @@ TEST_CASE(
 	REQUIRE(accepted.presentSampleCount == 2);
 
 	SampleWindow interrupted;
-	PerformanceTuning::BeginSampleWindow(interrupted, 0, 0, 0.0);
+	PerformanceTuning::BeginSampleWindow(interrupted, 0, 0);
 	REQUIRE(
 		PerformanceTuning::AddPresentSample(
 			interrupted, 1, 1000.001, false) ==
@@ -280,14 +236,14 @@ TEST_CASE(
 	"[performance-tuning][present][hitch]")
 {
 	SampleWindow window;
-	PerformanceTuning::BeginSampleWindow(window, 0, 0, 0.0);
+	PerformanceTuning::BeginSampleWindow(window, 0, 0);
 	REQUIRE(
 		PerformanceTuning::AddPresentSample(
 			window, 1, 750.0, false) ==
 		AddSampleResult::Added);
 	REQUIRE_FALSE(window.complete);
 
-	for (uint64_t sampleId = 2; sampleId <= 125; ++sampleId) {
+	for (uint64_t sampleId = 2; sampleId <= 425; ++sampleId) {
 		REQUIRE(
 			PerformanceTuning::AddPresentSample(
 				window, sampleId, 10.0, false) ==
@@ -295,11 +251,13 @@ TEST_CASE(
 	}
 	REQUIRE(
 		PerformanceTuning::AddPresentSample(
-			window, 126, 10.0, false) ==
+			window, 426, 10.0, false) ==
 		AddSampleResult::Complete);
 
-	REQUIRE(*window.present.Mean() == Catch::Approx(2000.0 / 126.0));
-	REQUIRE(PerformanceTuning::GetWindowFps(window) == Catch::Approx(63.0));
+	REQUIRE(*window.present.Mean() == Catch::Approx(5000.0 / 426.0));
+	REQUIRE(
+		PerformanceTuning::GetWindowFps(window) ==
+		Catch::Approx(426000.0 / 5000.0));
 }
 
 TEST_CASE(
@@ -307,9 +265,9 @@ TEST_CASE(
 	"[performance-tuning][present][hitch][boundary]")
 {
 	SampleWindow window;
-	PerformanceTuning::BeginSampleWindow(window, 0, 0, 5.0);
+	PerformanceTuning::BeginSampleWindow(window, 0, 0);
 
-	for (uint64_t sampleId = 1; sampleId <= 199; ++sampleId) {
+	for (uint64_t sampleId = 1; sampleId <= 499; ++sampleId) {
 		REQUIRE(
 			PerformanceTuning::AddPresentSample(
 				window, sampleId, 10.0, false) ==
@@ -317,18 +275,15 @@ TEST_CASE(
 	}
 	REQUIRE(
 		PerformanceTuning::AddPresentSample(
-			window, 200, 900.0, false) ==
+			window, 500, 900.0, false) ==
 		AddSampleResult::Complete);
 
-	REQUIRE(window.sampledDurationMs == Catch::Approx(2890.0));
-	REQUIRE(window.blocks[3].sampledDurationMs == Catch::Approx(1390.0));
-	REQUIRE(*window.present.Mean() == Catch::Approx(14.45));
+	REQUIRE(window.sampledDurationMs == Catch::Approx(5890.0));
+	REQUIRE(window.blocks[4].sampledDurationMs == Catch::Approx(1890.0));
+	REQUIRE(*window.present.Mean() == Catch::Approx(5890.0 / 500.0));
 	REQUIRE(
 		PerformanceTuning::GetWindowFps(window) ==
-		Catch::Approx(200000.0 / 2890.0));
-	REQUIRE(
-		PerformanceTuning::GetWindowMidpointTimeSeconds(window) ==
-		Catch::Approx(6.445));
+		Catch::Approx(500000.0 / 5890.0));
 }
 
 TEST_CASE(
@@ -336,7 +291,7 @@ TEST_CASE(
 	"[performance-tuning][missing][zero]")
 {
 	SampleWindow window;
-	PerformanceTuning::BeginSampleWindow(window, 0, 0, 0.0);
+	PerformanceTuning::BeginSampleWindow(window, 0, 0);
 
 	for (uint64_t sampleId = 1;; ++sampleId) {
 		const auto presentResult =
@@ -348,7 +303,7 @@ TEST_CASE(
 				sampleId,
 				sampleId,
 				sampleId == 1 ? std::optional<double>(0.0) :
-				                std::nullopt,
+								std::nullopt,
 				5.0);
 		if (sampleId == 1)
 			REQUIRE(wholeFrameResult == AddSampleResult::InvalidValue);
@@ -377,7 +332,6 @@ TEST_CASE(
 {
 	const auto window = MakeConstantWindow(
 		10.0,
-		0.0,
 		8.0,
 		5.0,
 		20);
@@ -385,17 +339,17 @@ TEST_CASE(
 		PerformanceTuning::GetMetricCoverage(
 			window, MetricKind::WholeFrameGpu);
 
-	REQUIRE(gpuCoverage.expectedSampleCount == 200);
-	REQUIRE(gpuCoverage.validSampleCount == 190);
-	REQUIRE(gpuCoverage.expectedSampleWeight == Catch::Approx(200.0));
-	REQUIRE(gpuCoverage.validSampleWeight == Catch::Approx(190.0));
+	REQUIRE(gpuCoverage.expectedSampleCount == 500);
+	REQUIRE(gpuCoverage.validSampleCount == 475);
+	REQUIRE(gpuCoverage.expectedSampleWeight == Catch::Approx(500.0));
+	REQUIRE(gpuCoverage.validSampleWeight == Catch::Approx(475.0));
 	REQUIRE(gpuCoverage.sampleCoverage == Catch::Approx(0.95));
 	REQUIRE(gpuCoverage.weightCoverage == Catch::Approx(0.95));
 	REQUIRE(gpuCoverage.Meets(0.90));
 	REQUIRE_FALSE(gpuCoverage.Meets(1.0));
 	for (std::size_t blockIndex = 0;
-		 blockIndex < PerformanceTuning::kMeasurementBlockCount;
-		 ++blockIndex) {
+		blockIndex < PerformanceTuning::kMeasurementBlockCount;
+		++blockIndex) {
 		REQUIRE(
 			PerformanceTuning::GetMetricCoverage(
 				window, blockIndex, MetricKind::WholeFrameGpu)
@@ -407,14 +361,12 @@ TEST_CASE(
 	"Default coverage accepts small loss and rejects materially missing data",
 	"[performance-tuning][coverage][result]")
 {
-	const auto currentBefore = MakeConstantWindow(16.0, 0.0, 8.0, 5.0);
+	const auto current = MakeConstantWindow(16.0, 8.0, 5.0);
 	const auto comparison95 =
-		MakeConstantWindow(14.0, 3.0, 6.0, 4.0, 20);
-	const auto currentAfter = MakeConstantWindow(16.0, 6.0, 8.0, 5.0);
+		MakeConstantWindow(14.0, 6.0, 4.0, 20);
 	const auto mostlyCovered = PerformanceTuning::CalculateCostResult(
-		currentBefore,
-		comparison95,
-		currentAfter);
+		current,
+		comparison95);
 
 	REQUIRE(mostlyCovered.wholeFrameGpu.IsAvailable());
 	REQUIRE(
@@ -422,15 +374,14 @@ TEST_CASE(
 	REQUIRE(mostlyCovered.wholeFrameCpu.IsAvailable());
 
 	const auto comparison80 =
-		MakeConstantWindow(14.0, 3.0, 6.0, 4.0, 5);
+		MakeConstantWindow(14.0, 6.0, 4.0, 5);
 	const auto insufficient = PerformanceTuning::CalculateCostResult(
-		currentBefore,
-		comparison80,
-		currentAfter);
+		current,
+		comparison80);
 	REQUIRE_FALSE(insufficient.wholeFrameGpu.IsAvailable());
 	REQUIRE(
 		insufficient.wholeFrameGpu.reliability ==
-		MetricReliability::Unavailable);
+		MetricReliability::InsufficientSampleCoverage);
 	REQUIRE(insufficient.wholeFrameCpu.IsAvailable());
 }
 
@@ -438,16 +389,14 @@ TEST_CASE(
 	"A locally sparse block prevents a reliable label despite good total coverage",
 	"[performance-tuning][coverage][blocks]")
 {
-	const auto currentBefore = MakeConstantWindow(16.0, 0.0, 8.0, 5.0);
+	const auto current = MakeConstantWindow(16.0, 8.0, 5.0);
 	const auto comparison = MakeConstantWindow(
 		14.0,
-		3.0,
 		6.0,
 		4.0,
 		0,
 		0,
-		6);
-	const auto currentAfter = MakeConstantWindow(16.0, 6.0, 8.0, 5.0);
+		11);
 
 	const auto totalCoverage = PerformanceTuning::GetMetricCoverage(
 		comparison,
@@ -460,124 +409,69 @@ TEST_CASE(
 	REQUIRE_FALSE(firstBlockCoverage.Meets(0.90));
 
 	const auto result = PerformanceTuning::CalculateCostResult(
-		currentBefore,
-		comparison,
-		currentAfter);
-	REQUIRE(result.wholeFrameGpu.IsAvailable());
-	REQUIRE(
-		result.wholeFrameGpu.repeatability.availableBlockCount == 3);
+		current,
+		comparison);
+	REQUIRE_FALSE(result.wholeFrameGpu.IsAvailable());
 	REQUIRE(
 		result.wholeFrameGpu.reliability ==
-		MetricReliability::InsufficientBlockCoverage);
+		MetricReliability::InsufficientSampleCoverage);
 }
 
 TEST_CASE(
-	"Asymmetric A-B-A timing interpolates the current state at B's midpoint",
-	"[performance-tuning][drift][timing]")
+	"Five one-second samples produce means, SE, and a Welch p-value",
+	"[performance-tuning][statistics]")
 {
-	const auto currentBefore = MakeConstantWindow(10.0, 0.0);
-	const auto comparison = MakeConstantWindow(12.0, 3.0);
-	const auto currentAfter = MakeConstantWindow(20.0, 10.0);
+	const auto current = MakeWindow({ 20.0, 20.0, 20.0, 20.0, 30.0 });
+	const auto comparison = MakeConstantWindow(10.0);
 
 	const auto result = PerformanceTuning::CalculateCostResult(
-		currentBefore,
-		comparison,
-		currentAfter);
+		current,
+		comparison);
 
-	REQUIRE(result.present.currentBeforeMeanMs == Catch::Approx(10.0));
-	REQUIRE(result.present.comparisonMeanMs == Catch::Approx(12.0));
-	REQUIRE(result.present.currentAfterMeanMs == Catch::Approx(20.0));
-	const auto currentBeforeTime =
-		PerformanceTuning::GetWindowMidpointTimeSeconds(currentBefore);
-	const auto comparisonTime =
-		PerformanceTuning::GetWindowMidpointTimeSeconds(comparison);
-	const auto currentAfterTime =
-		PerformanceTuning::GetWindowMidpointTimeSeconds(currentAfter);
-	REQUIRE(currentBeforeTime);
-	REQUIRE(comparisonTime);
-	REQUIRE(currentAfterTime);
-	const double expectedInterpolatedCurrent =
-		10.0 + 10.0 *
-			(*comparisonTime - *currentBeforeTime) /
-			(*currentAfterTime - *currentBeforeTime);
+	REQUIRE(result.present.currentMeanMs == Catch::Approx(22.0));
 	REQUIRE(
-		result.present.interpolatedCurrentMeanMs ==
-		Catch::Approx(expectedInterpolatedCurrent));
+		result.present.currentStandardErrorMs ==
+		Catch::Approx(2.0));
+	REQUIRE(result.present.comparisonMeanMs == Catch::Approx(10.0));
 	REQUIRE(
-		result.present.valueMs ==
-		Catch::Approx(expectedInterpolatedCurrent - 12.0));
-	REQUIRE(result.present.currentDriftMs == Catch::Approx(10.0));
+		result.present.comparisonStandardErrorMs ==
+		Catch::Approx(0.0));
+	REQUIRE(result.present.valueMs == Catch::Approx(12.0));
+	REQUIRE(result.present.standardErrorMs == Catch::Approx(2.0));
+	REQUIRE(result.present.pValue);
 	REQUIRE(
-		result.present.reliability == MetricReliability::DriftDominated);
-	for (std::size_t blockIndex = 0;
-		 blockIndex < PerformanceTuning::kMeasurementBlockCount;
-		 ++blockIndex) {
-		const auto beforeBlockTime =
-			PerformanceTuning::GetBlockMidpointTimeSeconds(
-				currentBefore,
-				blockIndex);
-		const auto comparisonBlockTime =
-			PerformanceTuning::GetBlockMidpointTimeSeconds(
-				comparison,
-				blockIndex);
-		const auto afterBlockTime =
-			PerformanceTuning::GetBlockMidpointTimeSeconds(
-				currentAfter,
-				blockIndex);
-		REQUIRE(beforeBlockTime);
-		REQUIRE(comparisonBlockTime);
-		REQUIRE(afterBlockTime);
-		const double expectedBlockDelta =
-			10.0 + 10.0 *
-				(*comparisonBlockTime - *beforeBlockTime) /
-				(*afterBlockTime - *beforeBlockTime) -
-			12.0;
-		REQUIRE(
-			result.present.repeatability.blockDeltas[blockIndex] ==
-			Catch::Approx(expectedBlockDelta));
-	}
-}
-
-TEST_CASE(
-	"Four position-matched blocks produce a median range and 3-of-4 decision",
-	"[performance-tuning][blocks][repeatability]")
-{
-	const auto currentBefore = MakeConstantWindow(50.0, 0.0);
-	const auto comparison = MakeWindow(
-		{ 10.0, 20.0, 25.0, 50.0 },
-		3.0);
-	const auto currentAfter = MakeConstantWindow(50.0, 6.0);
-
-	const auto result = PerformanceTuning::CalculateCostResult(
-		currentBefore,
-		comparison,
-		currentAfter);
-	const auto& band = result.present.repeatability;
-
+		*result.present.pValue ==
+		Catch::Approx(0.003882537046961).margin(1e-12));
 	REQUIRE(result.present.reliability == MetricReliability::Reliable);
-	REQUIRE(band.availableBlockCount == 4);
-	REQUIRE(band.agreeingBlockCount == 3);
-	REQUIRE(band.blockDeltas[0] == Catch::Approx(40.0));
-	REQUIRE(band.blockDeltas[1] == Catch::Approx(30.0));
-	REQUIRE(band.blockDeltas[2] == Catch::Approx(25.0));
-	REQUIRE(band.blockDeltas[3] == Catch::Approx(0.0));
-	REQUIRE(band.median == Catch::Approx(27.5));
-	REQUIRE(band.minimum == Catch::Approx(0.0));
-	REQUIRE(band.maximum == Catch::Approx(40.0));
+}
+
+TEST_CASE(
+	"Constant samples with a material delta report zero sampling uncertainty",
+	"[performance-tuning][statistics][constant]")
+{
+	const auto current = MakeConstantWindow(50.0);
+	const auto comparison = MakeConstantWindow(25.0);
+
+	const auto result = PerformanceTuning::CalculateCostResult(
+		current,
+		comparison);
+
+	REQUIRE(result.present.valueMs == Catch::Approx(25.0));
+	REQUIRE(result.present.standardErrorMs == Catch::Approx(0.0));
+	REQUIRE(result.present.pValue == Catch::Approx(0.0));
+	REQUIRE(result.present.reliability == MetricReliability::Reliable);
 }
 
 TEST_CASE(
 	"A constant-data micro-difference does not become false certainty",
 	"[performance-tuning][practical-floor][constant]")
 {
-	const auto currentBefore = MakeConstantWindow(16.0, 0.0);
-	const auto comparison = MakeConstantWindow(15.95, 3.0);
-	const auto currentAfter = MakeConstantWindow(16.0, 6.0);
+	const auto current = MakeConstantWindow(16.0);
+	const auto comparison = MakeConstantWindow(15.95);
 
 	const auto result = PerformanceTuning::CalculateCostResult(
-		currentBefore,
-		comparison,
-		currentAfter);
+		current,
+		comparison);
 
 	REQUIRE(result.present.valueMs == Catch::Approx(0.05));
 	REQUIRE(result.present.practicalFloorMs == Catch::Approx(0.1595));
@@ -588,30 +482,24 @@ TEST_CASE(
 }
 
 TEST_CASE(
-	"Autocorrelated block reversals are not reported as reliable",
-	"[performance-tuning][blocks][autocorrelation]")
+	"Variable samples without significance are not reported as reliable",
+	"[performance-tuning][statistics][significance]")
 {
-	const auto currentBefore = MakeWindow(
-		{ 20.0, 10.0, 20.0, 10.0 },
-		0.0);
+	const auto current = MakeWindow({ 20.0, 10.0, 20.0, 10.0, 20.0 });
 	const auto comparison = MakeWindow(
-		{ 10.0, 20.0, 10.0, 16.0 },
-		3.0);
-	const auto currentAfter = MakeWindow(
-		{ 20.0, 10.0, 20.0, 10.0 },
-		6.0);
+		{ 10.0, 20.0, 10.0, 20.0, 10.0 });
 
 	const auto result = PerformanceTuning::CalculateCostResult(
-		currentBefore,
-		comparison,
-		currentAfter);
+		current,
+		comparison);
 
 	REQUIRE(result.present.valueMs);
 	REQUIRE(*result.present.valueMs > *result.present.practicalFloorMs);
-	REQUIRE(result.present.repeatability.agreeingBlockCount == 2);
+	REQUIRE(result.present.pValue);
+	REQUIRE(*result.present.pValue > 0.05);
 	REQUIRE(
 		result.present.reliability ==
-		MetricReliability::MixedBlockDirections);
+		MetricReliability::NotStatisticallySignificant);
 	REQUIRE_FALSE(result.present.IsReliable());
 }
 
@@ -619,27 +507,92 @@ TEST_CASE(
 	"FPS is secondary and uses real Presents over actual window duration",
 	"[performance-tuning][fps][secondary]")
 {
-	const auto currentBefore = MakeConstantWindow(100.0, 0.0);
-	const auto comparison = MakeConstantWindow(125.0, 4.0);
-	const auto currentAfter = MakeConstantWindow(100.0, 10.0);
+	const auto current = MakeConstantWindow(100.0);
+	const auto comparison = MakeConstantWindow(125.0);
 
 	const auto result = PerformanceTuning::CalculateCostResult(
-		currentBefore,
-		comparison,
-		currentAfter);
+		current,
+		comparison);
 
 	REQUIRE(
-		result.currentBeforeDiagnostics.sampledDurationMs ==
-		Catch::Approx(2400.0));
+		result.currentDiagnostics.sampledDurationMs ==
+		Catch::Approx(5000.0));
 	REQUIRE(
 		result.comparisonDiagnostics.sampledDurationMs ==
-		Catch::Approx(3000.0));
-	REQUIRE(result.fps.currentBefore == Catch::Approx(10.0));
+		Catch::Approx(5000.0));
+	REQUIRE(result.fps.current == Catch::Approx(10.0));
 	REQUIRE(result.fps.comparison == Catch::Approx(8.0));
-	REQUIRE(result.fps.currentAfter == Catch::Approx(10.0));
-	REQUIRE(result.fps.interpolatedCurrent == Catch::Approx(10.0));
 	REQUIRE(result.fps.value == Catch::Approx(2.0));
+	REQUIRE(result.fps.standardError == Catch::Approx(0.0));
+	REQUIRE(result.fps.pValue == Catch::Approx(0.0));
 	REQUIRE(result.present.valueMs == Catch::Approx(-25.0));
+}
+
+TEST_CASE(
+	"Output FPS uses final presentation counts instead of game cadence",
+	"[performance-tuning][fps][output]")
+{
+	auto current = MakeConstantWindow(20.0);
+	auto comparison = MakeConstantWindow(20.0);
+	AddConstantOutputCadence(current, 12);
+	AddConstantOutputCadence(comparison, 6);
+
+	const auto result = PerformanceTuning::CalculateCostResult(
+		current,
+		comparison);
+
+	REQUIRE(result.fps.value == Catch::Approx(0.0));
+	REQUIRE(result.outputFps.current == Catch::Approx(120.0));
+	REQUIRE(result.outputFps.comparison == Catch::Approx(60.0));
+	REQUIRE(result.outputFps.value == Catch::Approx(60.0));
+	REQUIRE(result.outputFps.standardError == Catch::Approx(0.0));
+	REQUIRE(result.outputFps.pValue == Catch::Approx(0.0));
+}
+
+TEST_CASE(
+	"Discontinuous output statistics fail closed without invalidating game FPS",
+	"[performance-tuning][fps][output][discontinuity]")
+{
+	auto current = MakeConstantWindow(20.0);
+	auto comparison = MakeConstantWindow(20.0);
+	AddConstantOutputCadence(current, 12);
+	REQUIRE(
+		PerformanceTuning::AddOutputPresentSample(
+			comparison,
+			1,
+			0,
+			100.0,
+			6) == AddSampleResult::Added);
+	REQUIRE(
+		PerformanceTuning::AddOutputPresentSample(
+			comparison,
+			3,
+			0,
+			100.0,
+			6) == AddSampleResult::SourceGap);
+
+	const auto result = PerformanceTuning::CalculateCostResult(
+		current,
+		comparison);
+	REQUIRE(result.fps.IsAvailable());
+	REQUIRE_FALSE(result.outputFps.IsAvailable());
+}
+
+TEST_CASE(
+	"Long output-statistic intervals are rejected instead of smeared across blocks",
+	"[performance-tuning][fps][output][stale]")
+{
+	auto window = MakeConstantWindow(20.0);
+	REQUIRE(
+		PerformanceTuning::AddOutputPresentSample(
+			window,
+			1,
+			0,
+			1001.0,
+			60) == AddSampleResult::IntervalTooLarge);
+	REQUIRE(window.outputPresentSourceDiscontinuous);
+	REQUIRE_FALSE(
+		PerformanceTuning::GetBlockOutputFps(window, 0).has_value());
 }
 
 TEST_CASE(
@@ -647,7 +600,7 @@ TEST_CASE(
 	"[performance-tuning][source][association]")
 {
 	SampleWindow window;
-	PerformanceTuning::BeginSampleWindow(window, 100, 200, 0.0);
+	PerformanceTuning::BeginSampleWindow(window, 100, 200);
 
 	REQUIRE(
 		PerformanceTuning::AddPresentSample(window, 101, 16.0, false) ==

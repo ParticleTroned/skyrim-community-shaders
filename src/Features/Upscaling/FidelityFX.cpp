@@ -682,7 +682,8 @@ FidelityFX::LifecycleResult FidelityFX::RecordFSRDeviceStatus() noexcept
 	auto* device = globals::d3d::device;
 	if (!device) {
 		return IsD3DDeviceLossReason(fsrLastDeviceRemovedReason) ?
-			LifecycleResult::DeviceLost : LifecycleResult::Failed;
+		           LifecycleResult::DeviceLost :
+		           LifecycleResult::Failed;
 	}
 
 	const HRESULT reason = device->GetDeviceRemovedReason();
@@ -702,7 +703,8 @@ FidelityFX::LifecycleResult FidelityFX::RecordRuntimeUpscalerDeviceStatus() noex
 	auto* device = globals::features::upscaling.dx12SwapChain.d3d12Device.get();
 	if (!device) {
 		return IsD3DDeviceLossReason(runtimeUpscalerLastDeviceRemovedReason) ?
-			LifecycleResult::RuntimeDeviceLost : LifecycleResult::Failed;
+		           LifecycleResult::RuntimeDeviceLost :
+		           LifecycleResult::Failed;
 	}
 
 	const HRESULT reason = device->GetDeviceRemovedReason();
@@ -1795,8 +1797,8 @@ FidelityFX::LifecycleResult FidelityFX::PollFSRResourceTeardownReady(const char*
 	}
 
 	const bool hasHostResources = fsrContextCount != 0 || fsrScratchBuffer ||
-		std::ranges::any_of(fsrContextValid, [](bool a_valid) { return a_valid; }) ||
-		std::ranges::any_of(fsrContextIndeterminate, [](bool a_indeterminate) { return a_indeterminate; });
+	                              std::ranges::any_of(fsrContextValid, [](bool a_valid) { return a_valid; }) ||
+	                              std::ranges::any_of(fsrContextIndeterminate, [](bool a_indeterminate) { return a_indeterminate; });
 	if (hasHostResources) {
 		auto result = BeginOrPollD3D11IdleFence(globals::d3d::context, pendingFSRResourceFreeIdleFence, reason);
 		if (result == LifecycleResult::Failed)
@@ -2120,7 +2122,6 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerInterop()
 			clearRuntimeD3D12State();
 			return ResolveRuntimeUpscalerLifecycleFailure("runtime D3D12 device creation");
 		}
-
 	}
 
 	if (!swapChain.commandQueue) {
@@ -2422,9 +2423,9 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a
 			auto providerName = RuntimeProviderDisplayName(providerQuery.versionId, providerVersionName);
 			if (providerName.empty())
 				providerName = "unknown";
-			const char* reason = !providerIdentityKnown ? "identity is unknown" :
+			const char* reason = !providerIdentityKnown  ? "identity is unknown" :
 			                     !providerVersionMatches ? "does not match the requested version" :
-			                                                "differs from the other runtime contexts";
+			                                               "differs from the other runtime contexts";
 			logger::error("[FidelityFX] Runtime context {} provider '{}' {} for FSR version {} (query code {}, Render: {}x{}, Display: {}x{}).",
 				i, providerName, reason, UpscalerVersionToString(a_requestedVersion), static_cast<uint32_t>(queryResult),
 				a_fullRenderWidth, a_fullRenderHeight, a_fullDisplayWidth, a_fullDisplayHeight);
@@ -2613,17 +2614,17 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a
 	}
 
 	const auto sharedResourceResult = EnsureRuntimeUpscalerSharedResources(
-			runtimeUpscalerContextCount,
-			runtimeUpscalerMaxRenderWidth,
-			runtimeUpscalerMaxRenderHeight,
-			runtimeUpscalerMaxDisplayWidth,
-			runtimeUpscalerMaxDisplayHeight,
-			colorDesc,
-			depthDesc,
-			motionDesc,
-			reactiveDesc,
-			transparencyDesc,
-			outputDesc);
+		runtimeUpscalerContextCount,
+		runtimeUpscalerMaxRenderWidth,
+		runtimeUpscalerMaxRenderHeight,
+		runtimeUpscalerMaxDisplayWidth,
+		runtimeUpscalerMaxDisplayHeight,
+		colorDesc,
+		depthDesc,
+		motionDesc,
+		reactiveDesc,
+		transparencyDesc,
+		outputDesc);
 	if (sharedResourceResult != LifecycleResult::Ready)
 		return sharedResourceResult;
 
@@ -2946,20 +2947,20 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 					return contextResult;
 
 				const auto dispatchResult = DispatchRuntimeUpscalerSingle(
-						a_contextIndex,
-						a_color,
-						a_depth,
-						a_motionVectors,
-						a_reactiveMask,
-						a_transparencyCompositionMask,
-						a_output,
-						a_renderWidth,
-						a_renderHeight,
-						a_displayWidth,
-						a_displayHeight,
-						a_motionVectorScaleX,
-						a_motionVectorScaleY,
-						a_sharpness);
+					a_contextIndex,
+					a_color,
+					a_depth,
+					a_motionVectors,
+					a_reactiveMask,
+					a_transparencyCompositionMask,
+					a_output,
+					a_renderWidth,
+					a_renderHeight,
+					a_displayWidth,
+					a_displayHeight,
+					a_motionVectorScaleX,
+					a_motionVectorScaleY,
+					a_sharpness);
 				if (dispatchResult == LifecycleResult::Ready)
 					RecordRuntimeUpscalerFramePath(GetRuntimeUpscalerProviderFramePath(a_requestedVersion));
 				return dispatchResult;
@@ -3102,10 +3103,10 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 	return dispatchOK;
 }
 
-bool FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_depth, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness)
+bool FidelityFX::Upscale(ID3D11Resource* a_input, ID3D11Resource* a_output, ID3D11Resource* a_depth, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness)
 {
 	auto state = globals::state;
-	if (!a_upscalingTexture || !a_depth || !a_reactiveMask || !a_transparencyCompositionMask || !a_motionVectors || !state)
+	if (!a_input || !a_output || a_input == a_output || !a_depth || !a_reactiveMask || !a_transparencyCompositionMask || !a_motionVectors || !state)
 		return false;
 
 	const auto* viewport = globals::game::graphicsState;
@@ -3116,20 +3117,20 @@ bool FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_d
 	const auto renderSize = Util::ConvertToDynamic(screenSize);
 
 	const bool dispatched = UpscaleRegion(
-			0,
-			a_upscalingTexture,
-			a_depth,
-			a_motionVectors,
-			a_reactiveMask,
-			a_transparencyCompositionMask,
-			a_upscalingTexture,
-			static_cast<uint32_t>(renderSize.x),
-			static_cast<uint32_t>(renderSize.y),
-			static_cast<uint32_t>(screenSize.x),
-			static_cast<uint32_t>(screenSize.y),
-			renderSize.x,
-			renderSize.y,
-			a_sharpness);
+		0,
+		a_input,
+		a_depth,
+		a_motionVectors,
+		a_reactiveMask,
+		a_transparencyCompositionMask,
+		a_output,
+		static_cast<uint32_t>(renderSize.x),
+		static_cast<uint32_t>(renderSize.y),
+		static_cast<uint32_t>(screenSize.x),
+		static_cast<uint32_t>(screenSize.y),
+		renderSize.x,
+		renderSize.y,
+		a_sharpness);
 	if (!dispatched) {
 		logger::error("[FidelityFX] Upscale dispatch failed.");
 	}

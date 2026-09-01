@@ -18,6 +18,7 @@
 #include "I18n/I18n.h"
 #include "Menu.h"
 #include "Menu/CursorLoader.h"
+#include "Menu/PerformanceTuningRenderer.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
@@ -141,6 +142,8 @@ void OverlayRenderer::RenderOverlay(
 			editorWindow->ExitPreviewMode();
 	}
 	editorWindow->UpdateOpenState();
+	if (!menu.IsEnabled)
+		PerformanceTuningRenderer::UpdateActiveMeasurements();
 
 	if (ShouldSkipRendering()) {
 		auto& io = ImGui::GetIO();
@@ -177,6 +180,7 @@ void OverlayRenderer::RenderOverlay(
 	} else {
 		ImGui::GetIO().MouseDrawCursor = false;
 	}
+	PerformanceTuningRenderer::RenderMeasurementOverlay();
 
 	RenderFeatureOverlays();
 	RenderFirstTimeSetupOverlay();
@@ -197,6 +201,7 @@ bool OverlayRenderer::ShouldSkipRendering()
 			 Menu::GetSingleton()->IsEnabled ||
 			 HomePageRenderer::ShouldShowFirstTimeSetup() ||
 			 EditorWindow::GetSingleton()->open ||
+			 PerformanceTuningRenderer::HasActiveMeasurements() ||
 			 abTestingManager->IsEnabled() ||
 			 (failed && !hide) ||
 			 globals::features::performanceOverlay.settings.ShowInOverlay ||

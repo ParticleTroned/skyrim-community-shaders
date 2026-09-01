@@ -55966,20 +55966,24 @@ void Upscaling::Upscale()
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				recordMainPassStage(VRMainPassDispatchStage::FidelityDispatchStarted);
 #endif
-				vendorDispatchCompleted = fidelityFX.Upscale(
+				const auto fsrResult = fidelityFX.Upscale(
 					main.texture,
 					fsrDepth,
 					reactiveMaskTexture->resource.get(),
 					transparencyCompositionMaskTexture->resource.get(),
 					motionVectorResource,
 					settings.sharpnessFSR);
+				vendorDispatchCompleted =
+					fsrResult == FidelityFX::UpscaleResult::Ready;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				recordMainPassStage(
+					fsrResult == FidelityFX::UpscaleResult::Deferred ?
+						VRMainPassDispatchStage::LifecycleDeferred :
 					vendorDispatchCompleted ?
 						VRMainPassDispatchStage::FidelityDispatchSucceeded :
 						VRMainPassDispatchStage::FidelityDispatchFailed);
 #endif
-				if (!vendorDispatchCompleted) {
+				if (fsrResult == FidelityFX::UpscaleResult::Failed) {
 					HandleFSRLifecycleDeviceLoss(
 						fidelityFX.ProbeFSRDeviceStatus(),
 						"FSR main-pass dispatch");

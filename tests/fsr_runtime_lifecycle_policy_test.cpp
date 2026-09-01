@@ -19,6 +19,15 @@ namespace
 		ResolveDispatchFenceAction(true) ==
 		DispatchFenceAction::PollPendingFence);
 	static_assert(
+		ResolveDispatchAdmission(DispatchFencePollResult::Ready) ==
+		DispatchAdmission::Proceed);
+	static_assert(
+		ResolveDispatchAdmission(DispatchFencePollResult::Pending) ==
+		DispatchAdmission::Defer);
+	static_assert(
+		ResolveDispatchAdmission(DispatchFencePollResult::Failed) ==
+		DispatchAdmission::Fail);
+	static_assert(
 		ResolveIdleProofAction(true, false) == IdleProofAction::ReuseProof);
 	static_assert(
 		ResolveIdleProofAction(false, false) == IdleProofAction::PollForIdle);

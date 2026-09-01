@@ -8,6 +8,20 @@ namespace FSRRuntimeLifecyclePolicy
 		PollPendingFence
 	};
 
+	enum class DispatchFencePollResult
+	{
+		Ready,
+		Pending,
+		Failed
+	};
+
+	enum class DispatchAdmission
+	{
+		Proceed,
+		Defer,
+		Fail
+	};
+
 	enum class IdleProofAction
 	{
 		ReuseProof,
@@ -58,6 +72,19 @@ namespace FSRRuntimeLifecyclePolicy
 		return a_teardownFencePending ?
 		           DispatchFenceAction::PollPendingFence :
 		           DispatchFenceAction::Proceed;
+	}
+
+	[[nodiscard]] constexpr DispatchAdmission ResolveDispatchAdmission(
+		DispatchFencePollResult a_result) noexcept
+	{
+		switch (a_result) {
+		case DispatchFencePollResult::Ready:
+			return DispatchAdmission::Proceed;
+		case DispatchFencePollResult::Pending:
+			return DispatchAdmission::Defer;
+		default:
+			return DispatchAdmission::Fail;
+		}
 	}
 
 	[[nodiscard]] constexpr IdleProofAction ResolveIdleProofAction(

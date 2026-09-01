@@ -2761,8 +2761,17 @@ FidelityFX::RuntimeDispatchPlan FidelityFX::ResolveRuntimeDispatchPlan()
 	auto state = globals::state;
 	if (!state)
 		return plan;
-	if (PollPendingRuntimeUpscalerTeardownFence(
-			"runtime upscaler dispatch admission") != LifecycleResult::Ready) {
+	const auto fenceResult = PollPendingRuntimeUpscalerTeardownFence(
+		"runtime upscaler dispatch admission");
+	const auto fenceAdmission = FSRRuntimeLifecyclePolicy::ResolveDispatchAdmission(
+		fenceResult == LifecycleResult::Ready ?
+			FSRRuntimeLifecyclePolicy::DispatchFencePollResult::Ready :
+		fenceResult == LifecycleResult::Pending ?
+			FSRRuntimeLifecyclePolicy::DispatchFencePollResult::Pending :
+			FSRRuntimeLifecyclePolicy::DispatchFencePollResult::Failed);
+	if (fenceAdmission != FSRRuntimeLifecyclePolicy::DispatchAdmission::Proceed) {
+		plan.deferred =
+			fenceAdmission == FSRRuntimeLifecyclePolicy::DispatchAdmission::Defer;
 		return plan;
 	}
 
@@ -3917,11 +3926,11 @@ FidelityFX::StereoUpscaleResult FidelityFX::UpscaleStereoRegions(
 	return StereoUpscaleResult::NotHandled;
 }
 
-bool FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_depth, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness)
+FidelityFX::UpscaleResult FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_depth, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness)
 {
 	auto state = globals::state;
 	if (!state || !a_depth)
-		return false;
+		return UpscaleResult::Failed;
 
 	float2 screenSize{};
 	float2 renderSize{};
@@ -3929,7 +3938,11 @@ bool FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_d
 
 	auto& upscaling = globals::features::upscaling;
 	if (globals::game::isVR && upscaling.IsPresentationUpscalingActive())
-		return false;
+		return UpscaleResult::Deferred;
+
+	const auto dispatchAdmission = ResolveRuntimeDispatchPlan();
+	if (dispatchAdmission.deferred)
+		return UpscaleResult::Deferred;
 
 	const bool splitPerEyeContexts = UseSplitPerEyeFSRContexts();
 
@@ -3940,7 +3953,7 @@ bool FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_d
 				logger::warn("[FidelityFX] VR FSR skipped because per-eye input preparation failed.");
 				loggedPrepareFailure = true;
 			}
-			return false;
+			return UpscaleResult::Failed;
 		}
 
 		const bool perEyeResourcesReady = upscaling.AreVRPerEyeUpscalingResourcesReady(false, true);
@@ -3950,7 +3963,7 @@ bool FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_d
 				logger::warn("[FidelityFX] VR FSR skipped because prepared per-eye resources are incomplete.");
 				loggedMissingResource = true;
 			}
-			return false;
+			return UpscaleResult::Failed;
 		}
 
 		const uint32_t eyeDisplayWidth = static_cast<uint32_t>(screenSize.x / 2.0f);
@@ -4047,7 +4060,7 @@ bool FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_d
 				loggedVREvaluateFailure[outcomeIndex] = true;
 			}
 		}
-		return allEvaluated;
+		return allEvaluated ? UpscaleResult::Ready : UpscaleResult::Failed;
 	}
 
 	const bool evaluated = UpscaleRegion(
@@ -4069,5 +4082,5 @@ bool FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_d
 	if (!evaluated) {
 		logger::error("[FidelityFX] Upscale dispatch failed.");
 	}
-	return evaluated;
+	return evaluated ? UpscaleResult::Ready : UpscaleResult::Failed;
 }

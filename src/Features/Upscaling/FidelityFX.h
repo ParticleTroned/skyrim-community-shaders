@@ -63,6 +63,15 @@ public:
 		Ready,
 		Failed
 	};
+	enum class UpscaleResult : uint8_t
+	{
+		/** The runtime lifecycle intentionally withheld this frame's dispatch. */
+		Deferred,
+		/** The dispatch produced an output suitable for the current frame. */
+		Ready,
+		/** Dispatch preparation or execution failed. */
+		Failed
+	};
 	/** @brief Complete resource and active-extent contract for one FSR context. */
 	struct UpscaleRegionParameters
 	{
@@ -191,7 +200,7 @@ public:
 	RuntimeUpscalerDispatchSnapshot GetRuntimeUpscalerDispatchSnapshotForRenderThread() const;
 #endif
 
-	bool Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_depth, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness);
+	UpscaleResult Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_depth, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness);
 	bool UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color, ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
 		ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_output,
 		uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight,
@@ -304,6 +313,7 @@ private:
 	struct RuntimeDispatchPlan
 	{
 		bool valid = false;
+		bool deferred = false;
 		bool runtimeFsr4Requested = false;
 		bool runtimeRequested = false;
 		bool vendorLifecycleMutationDeferred = false;

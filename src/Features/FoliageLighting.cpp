@@ -56,11 +56,21 @@ void FoliageLighting::SanitizeSettings(Settings& a_settings)
 	}
 }
 
+void FoliageLighting::DrawSettingsHeaderControls()
+{
+	bool foliageLightingEnabled = IsEnabled();
+	if (ImGui::Checkbox("Enable", &foliageLightingEnabled))
+		SetEnabled(foliageLightingEnabled);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted("Controls all tree foliage and grass lighting additions while preserving their saved tuning.");
+}
+
 void FoliageLighting::DrawSettings()
 {
 	SanitizeSettings(settings);
 	const auto& truePBR = globals::features::truePBR;
 	const bool truePBRActive = truePBR.loaded && truePBR.settings.Enabled != 0;
+	ImGui::BeginDisabled(!IsEnabled());
 
 	if (ImGui::TreeNodeEx("Tree Foliage")) {
 		bool enableFoliageScattering = settings.EnableFoliageScattering != 0;
@@ -119,12 +129,14 @@ void FoliageLighting::DrawSettings()
 		ImGui::TreePop();
 	}
 
+	ImGui::EndDisabled();
 	SanitizeSettings(settings);
 }
 
 void FoliageLighting::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	SetEnabled(o_json.value("Enabled", true));
 	SanitizeSettings(settings);
 }
 
@@ -132,16 +144,18 @@ void FoliageLighting::SaveSettings(json& o_json)
 {
 	SanitizeSettings(settings);
 	o_json = settings;
+	o_json["Enabled"] = IsEnabled();
 }
 
 void FoliageLighting::RestoreDefaultSettings()
 {
 	settings = {};
+	SetEnabled(true);
 }
 
 FoliageLighting::Settings FoliageLighting::GetCommonBufferData() const
 {
-	if (!loaded)
+	if (!IsRuntimeEnabled())
 		return GetDisabledSettings();
 
 	auto data = settings;

@@ -2,6 +2,12 @@
 
 namespace FSRRuntimeLifecyclePolicy
 {
+	enum class DispatchFenceAction
+	{
+		Proceed,
+		PollPendingFence
+	};
+
 	struct RetirementState
 	{
 		bool providerContext = false;
@@ -36,6 +42,16 @@ namespace FSRRuntimeLifecyclePolicy
 		       a_state.sharedResource ||
 		       a_state.commandWorkInFlight ||
 		       a_state.teardownFencePending;
+	}
+
+	[[nodiscard]] constexpr DispatchFenceAction ResolveDispatchFenceAction(
+		bool a_teardownFencePending) noexcept
+	{
+		// A pending fence must keep dispatch fail-closed, but admission also owns
+		// the non-blocking poll that lets the fence eventually retire.
+		return a_teardownFencePending ?
+		           DispatchFenceAction::PollPendingFence :
+		           DispatchFenceAction::Proceed;
 	}
 
 	[[nodiscard]] constexpr bool HasStructurallyCompatibleRuntimeResources(

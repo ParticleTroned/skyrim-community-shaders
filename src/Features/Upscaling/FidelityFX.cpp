@@ -2208,6 +2208,18 @@ bool FidelityFX::IsRuntimeUpscalerTeardownFencePending() const
 	       pendingRuntimeTeardownD3D12FenceValue != 0;
 }
 
+FidelityFX::LifecycleResult FidelityFX::PollPendingRuntimeUpscalerTeardownFence(
+	const char* a_reason)
+{
+	if (FSRRuntimeLifecyclePolicy::ResolveDispatchFenceAction(
+			IsRuntimeUpscalerTeardownFencePending()) ==
+		FSRRuntimeLifecyclePolicy::DispatchFenceAction::Proceed) {
+		return LifecycleResult::Ready;
+	}
+
+	return PollRuntimeUpscalerTeardownReady(a_reason);
+}
+
 bool FidelityFX::HasCompleteRuntimeUpscalerSharedResources(
 	uint32_t a_contextCount) const
 {
@@ -2735,8 +2747,12 @@ FidelityFX::RuntimeDispatchPlan FidelityFX::ResolveRuntimeDispatchPlan()
 {
 	RuntimeDispatchPlan plan{};
 	auto state = globals::state;
-	if (!state || IsRuntimeUpscalerTeardownFencePending())
+	if (!state)
 		return plan;
+	if (PollPendingRuntimeUpscalerTeardownFence(
+			"runtime upscaler dispatch admission") != LifecycleResult::Ready) {
+		return plan;
+	}
 
 	auto& upscaling = globals::features::upscaling;
 	plan.vendorLifecycleMutationDeferred =
@@ -2940,8 +2956,10 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerInterop()
 
 FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight, uint32_t a_contextCount, uint32_t a_requestedVersion)
 {
-	if (IsRuntimeUpscalerTeardownFencePending())
-		return LifecycleResult::Pending;
+	const auto pendingFenceResult = PollPendingRuntimeUpscalerTeardownFence(
+		"runtime upscaler context dispatch admission");
+	if (pendingFenceResult != LifecycleResult::Ready)
+		return pendingFenceResult;
 
 	auto recordRuntimeProviderResult = [&](bool a_supported) {
 		runtimeUpscalerSupportCheckKnown = true;
@@ -3274,8 +3292,10 @@ FidelityFX::LifecycleResult FidelityFX::ExecuteRuntimeUpscalerBatch(
 	const RuntimeDispatchPlan& a_plan,
 	std::span<const UpscaleRegionParameters> a_regions)
 {
-	if (IsRuntimeUpscalerTeardownFencePending())
-		return LifecycleResult::Pending;
+	const auto pendingFenceResult = PollPendingRuntimeUpscalerTeardownFence(
+		"runtime upscaler batch dispatch admission");
+	if (pendingFenceResult != LifecycleResult::Ready)
+		return pendingFenceResult;
 
 	try {
 		const auto contextResult = EnsureRuntimeUpscalerContexts(

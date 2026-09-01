@@ -337,6 +337,7 @@ private:
 	void ReleaseIdleRuntimeUpscalerInterop();
 	bool HasRuntimeUpscalerResources() const;
 	bool IsRuntimeUpscalerTeardownFencePending() const;
+	LifecycleResult PollPendingRuntimeUpscalerTeardownFence(const char* a_reason);
 	bool HasCompleteRuntimeUpscalerSharedResources(uint32_t a_contextCount) const;
 	bool AreRuntimeUpscalerContextsCompatible(uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight, uint32_t a_contextCount, uint32_t a_requestedVersion) const;
 	LifecycleResult PollRuntimeUpscalerTeardownReady(const char* a_reason = nullptr);

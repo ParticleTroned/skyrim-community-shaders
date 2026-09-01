@@ -13,6 +13,11 @@ namespace
 	static_assert(HasRetirementRelevantState({ .sharedResource = true }));
 	static_assert(HasRetirementRelevantState({ .commandWorkInFlight = true }));
 	static_assert(HasRetirementRelevantState({ .teardownFencePending = true }));
+	static_assert(
+		ResolveDispatchFenceAction(false) == DispatchFenceAction::Proceed);
+	static_assert(
+		ResolveDispatchFenceAction(true) ==
+		DispatchFenceAction::PollPendingFence);
 
 	constexpr bool CoversRetirementAdmission()
 	{

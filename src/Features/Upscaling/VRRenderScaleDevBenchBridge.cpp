@@ -123,6 +123,35 @@ namespace
 		};
 	}
 
+	json NeuralImplementationJson(bool a_batchedStereo, bool a_directCommit)
+	{
+		return {
+			{ "id", NeuralRendering::GetImplementationName(a_batchedStereo, a_directCommit) },
+			{ "displayName", NeuralRendering::GetImplementationDisplayName(a_batchedStereo, a_directCommit) },
+			{ "purpose", NeuralRendering::GetImplementationPurposeName(a_batchedStereo, a_directCommit) },
+			{ "purposeDescription", NeuralRendering::GetImplementationPurpose(a_batchedStereo, a_directCommit) },
+			{ "stereoSubmission", NeuralRendering::GetStereoSubmissionName(a_batchedStereo) },
+			{ "outputCommit", NeuralRendering::GetOutputCommitName(a_directCommit) },
+			{ "batchedStereo", a_batchedStereo },
+			{ "directCommit", a_directCommit },
+		};
+	}
+
+	json NeuralImplementationMatrixJson()
+	{
+		json matrix = json::array();
+		for (uint32_t index = 0;
+			index < NeuralRendering::kPipelineImplementations.size(); ++index) {
+			const auto implementation =
+				NeuralRendering::kPipelineImplementations[index];
+			auto lane = NeuralImplementationJson(
+				implementation.batchedStereo, implementation.directCommit);
+			lane["index"] = index;
+			matrix.push_back(std::move(lane));
+		}
+		return matrix;
+	}
+
 	json NeuralRenderingStatusJson(const Upscaling& a_upscaling)
 	{
 		const auto snapshot = NeuralRendering::Renderer::Instance().GetSnapshot();
@@ -223,6 +252,7 @@ namespace
 		return {
 			{ "apiVersion", 4 },
 			{ "arrangement", NeuralRendering::GetPipelineArrangementName() },
+			{ "implementationMatrix", NeuralImplementationMatrixJson() },
 			{ "settings", {
 							  { "enabled", a_upscaling.settings.neuralRenderingEnabled },
 							  { "batchedStereo", batchedStereo },
@@ -232,6 +262,7 @@ namespace
 							  { "implementation", NeuralRendering::GetImplementationName(batchedStereo, directCommit) },
 							  { "comparisonPurpose", NeuralRendering::GetImplementationPurposeName(batchedStereo, directCommit) },
 							  { "comparisonPurposeLabel", NeuralRendering::GetImplementationPurpose(batchedStereo, directCommit) },
+							  { "selectedImplementation", NeuralImplementationJson(batchedStereo, directCommit) },
 							  { "preset", a_upscaling.settings.neuralRenderingPreset },
 							  { "intensity", a_upscaling.settings.neuralRenderingIntensity },
 							  { "localToneStrength", a_upscaling.settings.neuralRenderingLocalTone },
@@ -995,6 +1026,86 @@ namespace
 			});
 		}
 
+		if (action == "nr_cycle_modes") {
+			std::optional<uint32_t> requestedIndex;
+			if (const auto matrixIndex = a_args.find("matrixIndex");
+				matrixIndex != a_args.end()) {
+				uint64_t parsedIndex = 0;
+				if (matrixIndex->is_number_unsigned()) {
+					parsedIndex = matrixIndex->get<uint64_t>();
+				} else if (matrixIndex->is_number_integer()) {
+					const auto signedIndex = matrixIndex->get<int64_t>();
+					if (signedIndex < 0) {
+						return {
+							{ "error", "matrixIndex must be an integer in range 0..3" },
+							{ "errorCode", "nr_matrix_index_invalid" },
+						};
+					}
+					parsedIndex = static_cast<uint64_t>(signedIndex);
+				} else {
+					return {
+						{ "error", "matrixIndex must be an integer in range 0..3" },
+						{ "errorCode", "nr_matrix_index_invalid" },
+					};
+				}
+				if (parsedIndex >= NeuralRendering::kPipelineImplementations.size()) {
+					return {
+						{ "error", "matrixIndex must be an integer in range 0..3" },
+						{ "errorCode", "nr_matrix_index_invalid" },
+					};
+				}
+				requestedIndex = static_cast<uint32_t>(parsedIndex);
+			}
+
+			return RunOnMainThread([requestedIndex]() {
+				if (!globals::game::isVR) {
+					return json{
+						{ "error", "neural-rendering mode cycling requires Skyrim VR" },
+						{ "errorCode", "unsupported_runtime" },
+					};
+				}
+				auto& upscaling = globals::features::upscaling;
+				auto& settings = upscaling.settings;
+				const auto previousSettings = settings;
+				const uint32_t previousIndex =
+					(previousSettings.neuralRenderingBatchedStereo ? 1u : 0u) |
+					(previousSettings.neuralRenderingDirectCommit ? 2u : 0u);
+				const uint32_t matrixSize = static_cast<uint32_t>(
+					NeuralRendering::kPipelineImplementations.size());
+				const uint32_t currentIndex = requestedIndex.value_or(
+					(previousIndex + 1u) % matrixSize);
+				const auto implementation =
+					NeuralRendering::kPipelineImplementations[currentIndex];
+				auto requestedSettings = previousSettings;
+				requestedSettings.neuralRenderingBatchedStereo =
+					implementation.batchedStereo;
+				requestedSettings.neuralRenderingDirectCommit =
+					implementation.directCommit;
+				const bool settingsChanged = previousIndex != currentIndex;
+				if (settingsChanged)
+					settings = requestedSettings;
+				const bool transitionSucceeded = !settingsChanged ||
+				                                 upscaling.HandleNeuralRenderingSettingsTransition(
+													 previousSettings,
+													 "DevBench neural-rendering matrix cycle");
+				return json{
+					{ "action", "nr_cycle_modes" },
+					{ "previousIndex", previousIndex },
+					{ "currentIndex", currentIndex },
+					{ "nextIndex", (currentIndex + 1u) % matrixSize },
+					{ "settingsChanged", settingsChanged },
+					{ "noOp", !settingsChanged },
+					{ "transitionSucceeded", transitionSucceeded },
+					{ "historyResetRequested", settingsChanged },
+					{ "selectedLane", NeuralImplementationJson(
+										  implementation.batchedStereo,
+										  implementation.directCommit) },
+					{ "executionClaimed", false },
+					{ "neuralRendering", NeuralRenderingStatusJson(upscaling) },
+				};
+			});
+		}
+
 		if (action == "nr_reset") {
 			return RunOnMainThread([]() {
 				if (!globals::game::isVR) {
@@ -1221,7 +1332,7 @@ namespace
 		return {
 			{ "error", "unknown action" },
 			{ "action", action },
-			{ "supported", json::array({ "status", "record", "start", "apply", "stop", "reset", "probe_start", "probe_stop", "probe_record", "probe_reset", "nr_status", "nr_configure", "nr_reset" }) },
+			{ "supported", json::array({ "status", "record", "start", "apply", "stop", "reset", "probe_start", "probe_stop", "probe_record", "probe_reset", "nr_status", "nr_configure", "nr_cycle_modes", "nr_reset" }) },
 		};
 	}
 
@@ -1247,7 +1358,7 @@ namespace VRRenderScaleDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Control and inspect Community Shaders VR render-scale stress iterations and DLSS Neural Rendering. nr_status returns the API-v4 NR runtime, trust, route, stereo-mask, failure, and per-route GPU telemetry. nr_configure applies one or more NR settings through the same reset/history contract as the in-game UI; an empty or unchanged request is rejected. nr_reset resets the NR backend and requests a history reset. Existing render-scale mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","nr_status","nr_configure","nr_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"implementation":{"type":"string","enum":["per_eye_staged_commit","stereo_batched_staged_commit","per_eye_direct_commit","stereo_batched_direct_commit"]},"preset":{"type":"integer","minimum":0,"maximum":4},"intensity":{"type":"number","minimum":0,"maximum":2},"localToneStrength":{"type":"number","minimum":0,"maximum":2},"localStructureStrength":{"type":"number","minimum":0,"maximum":2},"skinStructureStrength":{"type":"number","minimum":0,"maximum":2},"style":{"type":"integer","minimum":0,"maximum":3},"batchedStereo":{"type":"boolean"},"directCommit":{"type":"boolean"},"optimizedStereoPath":{"type":"boolean"},"useAutoMask":{"type":"boolean"},"uiCorrection":{"type":"boolean"}},"required":["action"]}})";
+			R"({"description":"Control and inspect Community Shaders VR render-scale stress iterations and DLSS Neural Rendering. nr_status returns the API-v4 NR runtime, trust, route, stereo-mask, failure, and per-route GPU telemetry. nr_configure applies one or more NR settings through the same reset/history contract as the in-game UI; an empty or unchanged request is rejected. nr_cycle_modes selects or advances through the four stereo implementation lanes. nr_reset resets the NR backend and requests a history reset. Existing render-scale mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","nr_status","nr_configure","nr_cycle_modes","nr_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"implementation":{"type":"string","enum":["per_eye_staged_commit","stereo_batched_staged_commit","per_eye_direct_commit","stereo_batched_direct_commit"]},"matrixIndex":{"type":"integer","minimum":0,"maximum":3},"preset":{"type":"integer","minimum":0,"maximum":4},"intensity":{"type":"number","minimum":0,"maximum":2},"localToneStrength":{"type":"number","minimum":0,"maximum":2},"localStructureStrength":{"type":"number","minimum":0,"maximum":2},"skinStructureStrength":{"type":"number","minimum":0,"maximum":2},"style":{"type":"integer","minimum":0,"maximum":3},"batchedStereo":{"type":"boolean"},"directCommit":{"type":"boolean"},"optimizedStereoPath":{"type":"boolean"},"useAutoMask":{"type":"boolean"},"uiCorrection":{"type":"boolean"}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.renderscale",
 			descriptor,

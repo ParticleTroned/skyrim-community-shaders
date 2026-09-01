@@ -13,6 +13,7 @@ set(
     "${PROJECT_ROOT}/docs/development/dlss-neural-rendering-experiments.md"
 )
 set(_upscaling_path "${PROJECT_ROOT}/src/Features/Upscaling.cpp")
+set(_upscaling_header_path "${PROJECT_ROOT}/src/Features/Upscaling.h")
 set(
     _renderer_header_path
     "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/Renderer.h"
@@ -29,6 +30,7 @@ foreach(_required_path IN ITEMS
     "${_bridge_path}"
     "${_experiment_doc_path}"
     "${_upscaling_path}"
+    "${_upscaling_header_path}"
     "${_renderer_header_path}"
     "${_renderer_source_path}"
     "${_pipeline_policy_path}"
@@ -41,16 +43,18 @@ endforeach()
 file(READ "${_bridge_path}" _bridge)
 file(READ "${_experiment_doc_path}" _experiment_doc)
 file(READ "${_upscaling_path}" _upscaling)
+file(READ "${_upscaling_header_path}" _upscaling_header)
 file(READ "${_renderer_header_path}" _renderer_header)
 file(READ "${_renderer_source_path}" _renderer_source)
 file(READ "${_pipeline_policy_path}" _pipeline_policy)
 set(
     _source_contract_text
-    "${_upscaling}\n${_renderer_header}\n${_renderer_source}\n${_pipeline_policy}"
+    "${_upscaling}\n${_upscaling_header}\n${_renderer_header}\n${_renderer_source}\n${_pipeline_policy}"
 )
 
 foreach(_status_contract IN ITEMS
     [[{ "apiVersion", 4 }]]
+    [[{ "implementationMatrix", NeuralImplementationMatrixJson() }]]
     [[{ "frame", snapshot.frameId }]]
     [[{ "submitCycleSource", "submit_entry" }]]
     [[{ "eyeMaskSemantics", {]]
@@ -80,13 +84,17 @@ foreach(_source_contract IN ITEMS
     [[submitStageNeuralStereoState.outputsReady = false;]]
     [[bool IsNeuralRenderingMenuSuppressed()]]
     [[ObserveNeuralRenderingMenuSuppression(neuralMenuSuppressed);]]
-    [[if (previous != a_suppressed)]]
+    [[if (settings.neuralRenderingEnabled)
+		RequestHistoryReset();]]
+    [[if (settings.neuralRenderingEnabled && previous != a_suppressed)]]
     [[phase == NeuralCenterPhase::Resolve ?]]
     [[neuralPairApplied = neuralPairApplied &&]]
     [[args.frameId =]]
     [[ApplySequentialStereo(]]
     [[evaluationAttemptedFeatureSlotMask]]
     [[IsSequentialFrame(]]
+    [[activeFeatureSlot_]]
+    [[ActiveFeatureSlotOrLocked(]]
 )
     string(FIND "${_source_contract_text}" "${_source_contract}" _source_position)
     if(_source_position EQUAL -1)
@@ -96,10 +104,25 @@ foreach(_source_contract IN ITEMS
     endif()
 endforeach()
 
+string(REGEX MATCHALL
+    "SetActiveFeatureSlotLocked\\(a_args\\[1\\]\\.featureSlot\\);"
+    _stereo_preflight_slot_attributions
+    "${_renderer_source}"
+)
+list(LENGTH _stereo_preflight_slot_attributions _stereo_preflight_slot_count)
+if(_stereo_preflight_slot_count LESS 2)
+    message(FATAL_ERROR
+        "Stereo preflight exceptions do not preserve the active right-eye slot"
+    )
+endif()
+
 foreach(_forbidden_source_contract IN ITEMS
     [[neuralPrepared = neuralSubmitted && neuralBatchArgs;]]
     [[WasFeatureEvaluated(]]
     [[evaluatedFeatureSlotMask]]
+    [[observedEyeMask]]
+    [[provenEyeMask]]
+    [[state_->snapshot_.featureSlot < Runtime::kFeatureSlotCount]]
 )
     string(FIND
         "${_source_contract_text}"
@@ -109,6 +132,23 @@ foreach(_forbidden_source_contract IN ITEMS
     if(NOT _forbidden_source_position EQUAL -1)
         message(FATAL_ERROR
             "Stale Neural Rendering source contract remains: ${_forbidden_source_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_cycle_contract IN ITEMS
+    [[if (action == "nr_cycle_modes")]]
+    [["nr_matrix_index_invalid"]]
+    [[{ "selectedLane", NeuralImplementationJson(]]
+    [[{ "executionClaimed", false }]]
+    [[{ "implementationMatrix", NeuralImplementationMatrixJson() }]]
+    [["nr_cycle_modes","nr_reset"]]
+    [["matrixIndex":{"type":"integer","minimum":0,"maximum":3}]]
+)
+    string(FIND "${_bridge}" "${_cycle_contract}" _cycle_position)
+    if(_cycle_position EQUAL -1)
+        message(FATAL_ERROR
+            "Neural Rendering matrix-cycle contract is missing: ${_cycle_contract}"
         )
     endif()
 endforeach()

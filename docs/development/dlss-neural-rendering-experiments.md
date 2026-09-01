@@ -161,7 +161,9 @@ the axes independently with `batchedStereo` and `directCommit`. It also exposes
 the menu's `enabled`, `preset`, `intensity`, `localToneStrength`,
 `localStructureStrength`, `skinStructureStrength`, and `style` controls.
 Preset selection applies the same values as the in-game UI; subsequent tuning
-overrides select Custom. `nr_reset` operates the runtime-reset button. The
+overrides select Custom. `nr_cycle_modes` advances through the four lanes, or
+selects an exact lane with `matrixIndex` 0 through 3. `nr_reset` operates the
+runtime-reset button. The
 deprecated `optimizedStereoPath` alias remains accepted only by itself and sets
 both axes for compatibility. Invalid preset, style, and tuning ranges are
 rejected rather than silently clamped so automated comparisons retain their

@@ -11813,7 +11813,8 @@ void Upscaling::InvalidateVRMenuCommittedLayer(const char* a_reason)
 void Upscaling::NotifyVRMenuPresentationContextChange(const char* a_reason)
 {
 	g_neuralMenuQueryEpoch.fetch_add(1, std::memory_order_acq_rel);
-	RequestHistoryReset();
+	if (settings.neuralRenderingEnabled)
+		RequestHistoryReset();
 	InvalidateVRMenuCommittedLayer(a_reason);
 	if (!globals::game::isVR || !globals::state)
 		return;
@@ -33870,7 +33871,7 @@ void Upscaling::ObserveNeuralRenderingMenuSuppression(bool a_suppressed)
 {
 	const bool previous = neuralMenuSuppressionLatched.exchange(
 		a_suppressed, std::memory_order_acq_rel);
-	if (previous != a_suppressed)
+	if (settings.neuralRenderingEnabled && previous != a_suppressed)
 		RequestHistoryReset();
 }
 
@@ -34176,8 +34177,6 @@ uint64_t Upscaling::ObserveNeuralSubmitPairBoundaryEye(
 		auto& active = neuralSubmitPairBoundaryState;
 		if (!active.active)
 			return 0;
-		const uint32_t eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
-		active.observedEyeMask |= 1u << eyeIndex;
 
 		D3D11_TEXTURE2D_DESC sourceDesc{};
 		const bool sourceDescValid =
@@ -34212,7 +34211,6 @@ uint64_t Upscaling::ObserveNeuralSubmitPairBoundaryEye(
 		if (!proven)
 			return 0;
 
-		active.provenEyeMask |= 1u << eyeIndex;
 		return active.token;
 	} catch (...) {
 		return 0;

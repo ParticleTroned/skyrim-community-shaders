@@ -2287,8 +2287,6 @@ private:
 		uint64_t compositorCycle = 0;
 		uint32_t frame = 0;
 		uint32_t threadId = 0;
-		uint32_t observedEyeMask = 0;
-		uint32_t provenEyeMask = 0;
 		vr::Texture_t texture{};
 		vr::EVRSubmitFlags flags = vr::Submit_Default;
 		D3D11_TEXTURE2D_DESC sourceDesc{};

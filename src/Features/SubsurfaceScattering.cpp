@@ -12,7 +12,7 @@
 #include <memory>
 #include <stdexcept>
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(SubsurfaceScattering::DiffusionProfile,
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SubsurfaceScattering::DiffusionProfile,
 	BlurRadius, Thickness, Strength, Falloff)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -40,6 +40,14 @@ namespace
 	constexpr float kHumanSkinControlMin = 0.0f;
 	constexpr float kHumanSkinControlMax = 2.0f;
 	constexpr uint32_t kBlurHorizontalTempAllocationRetryFrames = 120;
+
+	SubsurfaceScattering::Settings ReadSettingsWithDefaults(const json& a_json)
+	{
+		// Partial profiles need their enclosing base/human defaults, including runtime blur radii.
+		json merged = SubsurfaceScattering::Settings{};
+		merged.update(a_json, true);
+		return merged.get<SubsurfaceScattering::Settings>();
+	}
 
 	template <class TNPC>
 	auto IsFemaleImpl(TNPC* npc, int) -> decltype(npc->IsFemale(), bool{})
@@ -226,6 +234,7 @@ void SubsurfaceScattering::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 {
 	if (a_enabled) {
 		settings = Settings{};
+		updateKernels = true;
 		return;
 	}
 
@@ -242,7 +251,8 @@ void SubsurfaceScattering::RestorePerformanceCostMeasurementState(const json& a_
 	if (!a_state.is_object())
 		return;
 
-	settings = a_state.get<Settings>();
+	settings = ReadSettingsWithDefaults(a_state);
+	updateKernels = true;
 }
 
 float3 SubsurfaceScattering::Gaussian(DiffusionProfile& a_profile, float variance, float r)
@@ -684,11 +694,13 @@ void SubsurfaceScattering::Reset()
 void SubsurfaceScattering::RestoreDefaultSettings()
 {
 	settings = {};
+	updateKernels = true;
 }
 
 void SubsurfaceScattering::LoadSettings(json& o_json)
 {
-	settings = o_json;
+	settings = ReadSettingsWithDefaults(o_json);
+	updateKernels = true;
 
 	// Backward compatibility: older configs used one Human* control set.
 	ApplyLegacyHumanControl(o_json, "HumanSSSIntensity", "HumanMaleSSSIntensity", settings.HumanMaleSSSIntensity, settings.HumanFemaleSSSIntensity);
@@ -741,7 +753,9 @@ ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderBurley()
 
 void SubsurfaceScattering::DataLoaded()
 {
-	isBeastRaceKeyword = RE::TESForm::LookupByEditorID("IsBeastRace")->As<RE::BGSKeyword>();
+	isBeastRaceKeyword = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("IsBeastRace");
+	if (!isBeastRaceKeyword)
+		logger::warn("[Subsurface Scattering] IsBeastRace keyword was not found; using conservative race classification");
 }
 
 void SubsurfaceScattering::PostPostLoad()
@@ -765,7 +779,7 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 			if (geometry) {
 				if (auto userData = geometry->GetUserData()) {
 					if (auto actor = userData->As<RE::Actor>()) {
-						if (auto race = actor->GetRace())
+						if (auto race = actor->GetRace(); race && isBeastRaceKeyword)
 							isBeastRace = race->HasKeyword(isBeastRaceKeyword);
 						if (auto base = actor->GetActorBase())
 							isFemale = GetNPCIsFemale(base);

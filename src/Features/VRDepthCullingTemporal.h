@@ -1,22 +1,31 @@
 #pragma once
 
-#include <cstdint>
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "VRDepthCullingTelemetryPolicy.h"
+
+#	include <array>
+#	include <cstddef>
+#	include <cstdint>
+#endif
 
 namespace VRDepthCullingTemporal
 {
 	enum class Mode
 	{
-		Balanced,
-		Performance,
-		Legacy
+		Balanced = 0,
+		Legacy = 2
 	};
 
-	/** Resolve persisted toggles to one policy; malformed conflicts fall back to Balanced. */
-	constexpr Mode SelectMode(bool a_performanceMode, bool a_legacyMode)
+	/** Resolve the persisted legacy preference independently of logging mode. */
+	constexpr Mode SelectMode(bool a_legacyMode)
 	{
-		if (a_performanceMode == a_legacyMode)
-			return Mode::Balanced;
-		return a_performanceMode ? Mode::Performance : Mode::Legacy;
+		return a_legacyMode ? Mode::Legacy : Mode::Balanced;
+	}
+
+	/** Preserve supported mode identities; retired or unknown values use the default. */
+	constexpr Mode NormalizeMode(Mode a_mode)
+	{
+		return SelectMode(a_mode == Mode::Legacy);
 	}
 
 	/** Return the stable DevBench name for an effective temporal policy. */
@@ -25,25 +34,37 @@ namespace VRDepthCullingTemporal
 		switch (a_mode) {
 		case Mode::Balanced:
 			return "balanced";
-		case Mode::Performance:
-			return "performance";
 		case Mode::Legacy:
 			return "legacy";
 		}
 		return "unknown";
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	struct Status
 	{
+		static constexpr std::size_t DurationBinCount = VRDepthCullingTelemetryPolicy::DurationBinCount;
+
 		bool installed = false;
 		bool cullingEnabled = false;
+		bool telemetryEnabled = true;
 		Mode mode = Mode::Balanced;
 		std::uint64_t envelopeMisses = 0;
+		std::uint64_t recoveryAttempts = 0;
+		std::uint64_t objectsInspected = 0;
+		std::uint64_t invalidTransforms = 0;
+		std::uint64_t invalidMotionEnvelopes = 0;
+		std::uint64_t frustumTests = 0;
+		std::uint64_t totalEligible = 0;
 		std::uint64_t totalPromoted = 0;
+		std::uint64_t totalDurationNanoseconds = 0;
+		std::uint64_t maximumDurationNanoseconds = 0;
+		std::array<std::uint64_t, DurationBinCount> durationHistogram{};
 		std::uint32_t lastObjectCount = 0;
 		std::uint32_t lastEligibleCount = 0;
 		std::uint32_t lastPromotedCount = 0;
 	};
+#endif
 
 	/** Install the Skyrim VR 1.4.15 producer and readback hooks. */
 	void Install();
@@ -53,6 +74,12 @@ namespace VRDepthCullingTemporal
 	void SetMode(Mode a_mode);
 	/** Return the mode currently observed by the render thread. */
 	[[nodiscard]] Mode GetMode();
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	/** Return thread-safe diagnostics for DevBench inspection. */
 	[[nodiscard]] Status GetStatus();
+	/** Enable or disable recovery-path telemetry without changing culling behavior. */
+	void SetTelemetryEnabled(bool a_enabled);
+	/** Reset recovery telemetry when no render-depth writer is active. */
+	[[nodiscard]] bool TryResetStatus();
+#endif
 }

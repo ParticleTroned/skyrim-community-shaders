@@ -1,7 +1,12 @@
 #include "Hooks.h"
+#include "Api/AcceptedDrawService.h"
+#include "EngineFixes/VRShadowBatch.h"
 
 #include "ShaderTools/BSShaderHooks.h"
+#include "Utils/D3DContextProtection.h"
 #include "Utils/ExternalEmittance.h"
+#include "Utils/TracyVRFrameTiming.h"
+#include "Utils/VRLoadingMenuClear.h"
 
 #include "Feature.h"
 #include "Globals.h"
@@ -24,6 +29,8 @@
 #include "Features/ScreenshotFeature.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
+#include "Features/TerrainVariation.h"
+#include "Features/UnifiedWater.h"
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
@@ -32,17 +39,75 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstring>
+#include <d3d11_1.h>
 #include <intrin.h>
+#include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <string>
 #include <string_view>
+#include <winrt/base.h>
 
 std::unordered_map<void*, std::pair<std::unique_ptr<uint8_t[]>, size_t>> ShaderBytecodeMap;
 
 namespace
 {
 	std::shared_mutex g_renderTargetRecreationMutex;
+
+	void LogGraphicsAdapterInfoOnce(ID3D11Device* a_device)
+	{
+		if (!spdlog::should_log(spdlog::level::info))
+			return;
+
+		static std::once_flag logged;
+		std::call_once(logged, [a_device]() {
+			winrt::com_ptr<IDXGIDevice> dxgiDevice;
+			const auto deviceResult = a_device ? a_device->QueryInterface(IID_PPV_ARGS(dxgiDevice.put())) : E_POINTER;
+			if (FAILED(deviceResult)) {
+				logger::info("[GPU] Adapter information unavailable: DXGI device query failed (0x{:08X}).", static_cast<uint32_t>(deviceResult));
+				return;
+			}
+
+			winrt::com_ptr<IDXGIAdapter> adapter;
+			const auto adapterResult = dxgiDevice->GetAdapter(adapter.put());
+			if (FAILED(adapterResult)) {
+				logger::info("[GPU] Adapter information unavailable: adapter query failed (0x{:08X}).", static_cast<uint32_t>(adapterResult));
+				return;
+			}
+
+			DXGI_ADAPTER_DESC description{};
+			const auto descriptionResult = adapter->GetDesc(&description);
+			if (FAILED(descriptionResult)) {
+				logger::info("[GPU] Adapter information unavailable: description query failed (0x{:08X}).", static_cast<uint32_t>(descriptionResult));
+				return;
+			}
+
+			logger::info("[GPU] {} (vendor=0x{:04X}, device=0x{:04X}, dedicated VRAM={} MiB).",
+				stl::utf16_to_utf8(description.Description).value_or("<GPU name conversion failed>"),
+				description.VendorId,
+				description.DeviceId,
+				description.DedicatedVideoMemory / (1024u * 1024u));
+
+			LARGE_INTEGER driverVersion{};
+			// DXGI accepts IDXGIDevice for the Windows driver version, not D3D11 interfaces.
+			const auto driverResult = adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &driverVersion);
+			if (SUCCEEDED(driverResult)) {
+				const auto high = static_cast<uint32_t>(driverVersion.HighPart);
+				const auto low = driverVersion.LowPart;
+				logger::info("[GPU] Windows driver version: {}.{}.{}.{}.",
+					HIWORD(high), LOWORD(high), HIWORD(low), LOWORD(low));
+			} else {
+				logger::info("[GPU] Windows driver version unavailable: DXGI query failed (0x{:08X}).", static_cast<uint32_t>(driverResult));
+			}
+		});
+	}
+
+	bool UseNativeWaterShaders(const RE::BSShader& shader)
+	{
+		return shader.shaderType.get() == RE::BSShader::Type::Water && globals::features::unifiedWater.RequiresVanillaWaterShaders();
+	}
 }
 
 void RegisterShaderBytecode(void* Shader, const void* Bytecode, size_t BytecodeLength)
@@ -713,7 +778,7 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 		phaseStartTicks = phaseEndTicks;
 	}
 
-	if (!shaderFound && shader->shaderType.get() != RE::BSShader::Type::Effect) {
+	if (!shaderFound && shader->shaderType.get() != RE::BSShader::Type::Effect && !UseNativeWaterShaders(*shader)) {
 		RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*shader, state->modifiedVertexDescriptor);
 		RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*shader, state->modifiedPixelDescriptor);
 		if (phaseDiagActive) {
@@ -761,6 +826,8 @@ namespace EffectExtensions
 	{
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
+			if (globals::game::isVR)
+				CSX::Api::BeginAcceptedDrawGeometry(pass);
 			func(shader, pass, renderFlags);
 
 			auto state = globals::state;
@@ -773,6 +840,8 @@ namespace EffectExtensions
 					state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::EffectShadows);
 				}
 			}
+			if (globals::game::isVR)
+				CSX::Api::ActivateAcceptedDrawGeometry(pass);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -785,6 +854,7 @@ namespace LightingExtensions
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
 			globals::state->UpdateLightingShaderPermutation(pass);
+			globals::features::terrainVariation.UpdateMeshPermutation(pass);
 
 			auto& meshBlending = globals::features::meshBlending;
 			if (meshBlending.loaded) {
@@ -797,6 +867,9 @@ namespace LightingExtensions
 				state->permutationData.ExtraShaderDescriptor &= ~meshBlendingMask;
 				state->permutationData.ExtraFeatureDescriptor &= ~landscapeClassMask;
 			}
+
+			if (globals::game::isVR)
+				CSX::Api::BeginAcceptedDrawGeometry(pass);
 			func(shader, pass, renderFlags);
 
 			auto state = globals::state;
@@ -807,10 +880,24 @@ namespace LightingExtensions
 				if (auto baseObject = userData->GetBaseObject())
 					if (baseObject->As<RE::TESObjectTREE>())
 						state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::IsTree);
+			if (globals::game::isVR)
+				CSX::Api::ActivateAcceptedDrawGeometry(pass);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 }
+
+template <unsigned ShaderKind>
+struct AcceptedDrawRestoreGeometry
+{
+	static void thunk(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_flags)
+	{
+		CSX::Api::SuspendAcceptedDrawGeometry();
+		func(a_shader, a_pass, a_flags);
+		CSX::Api::EndAcceptedDrawGeometry(a_pass);
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
 
 namespace GrassExtensions
 {
@@ -884,6 +971,10 @@ struct IDXGISwapChain_Present
 {
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
+		// Flat-screen status probes must not draw or advance frame accounting.
+		if (!globals::game::isVR && (Flags & DXGI_PRESENT_TEST) != 0)
+			return func(This, SyncInterval, Flags);
+
 		auto state = globals::state;
 		const bool armStartupMenuBlurSource =
 			!state->startupMenuBlurSourceReady &&
@@ -904,12 +995,19 @@ struct IDXGISwapChain_Present
 		}
 		globals::features::upscaling.PresentVRMenuDesktopMirror(This);
 		state->Reset();
+		if (globals::game::isVR)
+			CSX::Api::AdvanceAcceptedDrawFrame(globals::d3d::context);
 		menu->DrawOverlay();
 		globals::features::screenshotFeature.OnBeforePresent(This);
 		globals::features::screenshotFeature.DrawPostCaptureIndicator();
 
 		const uint64_t beforePresentTicks = frameDiagActive ? ReadFrameDiagCounterTicks() : 0;
+		const bool flatPresent = !globals::game::isVR &&
+		                         globals::profiler->BeginFlatPresent(state->frameCount - 1, Flags,
+									 !globals::features::upscaling.IsFrameGenerationDx12PathActive());
 		HRESULT retval = func(This, SyncInterval, Flags);
+		if (flatPresent)
+			globals::profiler->CompleteFlatPresent(retval);
 		const uint64_t afterPresentTicks = frameDiagActive ? ReadFrameDiagCounterTicks() : 0;
 		if (SUCCEEDED(retval) && armStartupMenuBlurSource)
 			state->startupMenuBlurSourceReady = true;
@@ -955,7 +1053,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 	auto ret = ptrD3D11CreateDeviceAndSwapChain(pAdapter,
 		DriverType,
 		Software,
-		Flags,
+		Util::ThreadSafeDeviceFlags(Flags),
 		&featureLevel,
 		1,
 		SDKVersion,
@@ -965,7 +1063,10 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 		pFeatureLevel,
 		ppImmediateContext);
 
-	return ret;
+	const auto validationResult = Util::ValidateDeviceCreation(ret, ppDevice, ppImmediateContext, ppSwapChain);
+	if (SUCCEEDED(ret) && FAILED(validationResult))
+		logger::error("D3D11 immediate-context validation failed: 0x{:08X}", static_cast<uint32_t>(validationResult));
+	return validationResult;
 }
 
 void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
@@ -1312,6 +1413,13 @@ namespace Hooks
 
 			logger::info("Accessing render device information");
 			globals::ReInit();
+			LogGraphicsAdapterInfoOnce(globals::d3d::device);
+			const auto validationResult = Util::ValidateImmediateContext(globals::d3d::context);
+			if (FAILED(validationResult)) {
+				logger::critical("Renderer immediate-context validation failed: 0x{:08X}", static_cast<uint32_t>(validationResult));
+				stl::report_and_fail("The graphics context cannot support renderer-owned access. See CommunityShaders.log.");
+			}
+			logger::info("D3D11 immediate context validated; auxiliary access uses native renderer ownership");
 
 			logger::info("Detouring virtual function tables");
 			stl::detour_vfunc<8, IDXGISwapChain_Present>(globals::d3d::swapChain);
@@ -1328,6 +1436,7 @@ namespace Hooks
 			stl::detour_vfunc<23, ID3D11Device_CreateSamplerState>(globals::d3d::device);
 
 			globals::InstallD3DHooks(globals::d3d::context);
+			CSX::Api::InitializeAcceptedDrawService(globals::d3d::context);
 
 			globals::menu->Init();
 		}
@@ -1448,15 +1557,13 @@ namespace Hooks
 				if (shaderCache->IsEnabled()) {
 					auto currentShader = state->currentShader;
 					auto type = currentShader->shaderType.get();
-					if (type > 0 && type < RE::BSShader::Type::Total) {
-						if (state->enabledClasses[type - 1]) {
-							RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*currentShader, state->modifiedVertexDescriptor);
-							if (vertexShader) {
-								globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
-								*globals::game::currentVertexShader = a_vertexShader;
-								globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
-								return;
-							}
+					if (state->ShaderEnabled(type) && !UseNativeWaterShaders(*currentShader)) {
+						RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*currentShader, state->modifiedVertexDescriptor);
+						if (vertexShader) {
+							globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
+							*globals::game::currentVertexShader = a_vertexShader;
+							globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
+							return;
 						}
 					}
 				}
@@ -1481,14 +1588,12 @@ namespace Hooks
 				if (shaderCache->IsEnabled()) {
 					auto currentShader = state->currentShader;
 					auto type = currentShader->shaderType.get();
-					if (type > 0 && type < RE::BSShader::Type::Total) {
-						if (state->enabledClasses[type - 1]) {
-							RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*currentShader, state->modifiedPixelDescriptor);
-							if (pixelShader) {
-								globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
-								*globals::game::currentPixelShader = a_pixelShader;
-								return;
-							}
+					if (state->ShaderEnabled(type) && !UseNativeWaterShaders(*currentShader)) {
+						RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*currentShader, state->modifiedPixelDescriptor);
+						if (pixelShader) {
+							globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
+							*globals::game::currentPixelShader = a_pixelShader;
+							return;
 						}
 					}
 				}
@@ -1598,8 +1703,13 @@ namespace Hooks
 
 			// setup material for PBR
 			auto& truePBR = globals::features::truePBR;
-			if (truePBR.loaded && truePBR.BSLightingShader_SetupMaterial(shader, material)) {
+			if (truePBR.BSLightingShader_SetupMaterial(shader, material)) {
 				// if PBR, we are done
+				return;
+			}
+
+			// Vanilla setup dereferences these textures unless a render target supplies diffuse.
+			if ((material->diffuseRenderTargetSourceIndex == -1 && !material->diffuseTexture) || !material->normalTexture) {
 				return;
 			}
 
@@ -1614,18 +1724,105 @@ namespace Hooks
 		};
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
-	bool ShouldSkipRenderPassForParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique)
+	enum class VRLightingMaterialRejection : uint32_t
 	{
+		None = 0,
+		InvalidPass = 1u << 0,
+		InvalidShader = 1u << 1,
+		InvalidProperty = 1u << 2,
+		InvalidMaterial = 1u << 3,
+		InvalidRenderTarget = 1u << 4,
+		Unreadable = 1u << 5
+	};
+
+	struct VRLightingMaterialSnapshot
+	{
+		const RE::BSLightingShaderMaterialBase* material = nullptr;
+		int32_t renderTargetIndex = -1;
+		bool indexRead = false;
+	};
+
+	__forceinline VRLightingMaterialRejection ProbeVRLightingMaterial(RE::BSRenderPass* a_pass, uint32_t a_technique, VRLightingMaterialSnapshot& a_snapshot)
+	{
+		if (!Util::IsLikelyValidPointer(a_pass))
+			return VRLightingMaterialRejection::InvalidPass;
+		if (!Util::IsLikelyValidPointer(a_pass->shader))
+			return VRLightingMaterialRejection::InvalidShader;
+		if (a_pass->shader->shaderType.get() != RE::BSShader::Type::Lighting)
+			return VRLightingMaterialRejection::None;
+		if (!Util::IsLikelyValidPointer(a_pass->shaderProperty))
+			return VRLightingMaterialRejection::InvalidProperty;
+
+		a_snapshot.material = static_cast<const RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
+		if (!Util::IsLikelyValidPointer(a_snapshot.material))
+			return VRLightingMaterialRejection::InvalidMaterial;
+		a_snapshot.renderTargetIndex = a_snapshot.material->diffuseRenderTargetSourceIndex;
+		a_snapshot.indexRead = true;
+		if (a_snapshot.renderTargetIndex == -1 || Util::IsValidRenderTargetIndex(a_snapshot.renderTargetIndex))
+			return VRLightingMaterialRejection::None;
+
+		// The shader's current technique can still belong to the previous draw at admission.
+		if (a_technique >= RE::BSLightingShader::kTechniqueIDBase &&
+			globals::features::truePBR.UsesCustomMaterialSetup(a_technique - RE::BSLightingShader::kTechniqueIDBase))
+			return VRLightingMaterialRejection::None;
+		return VRLightingMaterialRejection::InvalidRenderTarget;
+	}
+
+	__declspec(noinline) void LogRejectedVRLightingMaterial(RE::BSRenderPass* a_pass, uint32_t a_technique,
+		VRLightingMaterialRejection a_rejection, const VRLightingMaterialSnapshot& a_snapshot)
+	{
+		static std::atomic<uint32_t> loggedReasons = 0;
+		const auto reasonBit = static_cast<uint32_t>(a_rejection);
+		if ((loggedReasons.load(std::memory_order_relaxed) & reasonBit) == 0 &&
+			(loggedReasons.fetch_or(reasonBit, std::memory_order_relaxed) & reasonBit) == 0) {
+			logger::warn("[LightingMaterial] Skipping malformed VR draw: reason={} pass={:X} material={:X} technique={:X} diffuseTarget={} indexRead={} targetCount={}",
+				reasonBit, reinterpret_cast<std::uintptr_t>(a_pass), reinterpret_cast<std::uintptr_t>(a_snapshot.material),
+				a_technique, a_snapshot.renderTargetIndex, a_snapshot.indexRead, Util::GetRenderTargetCount());
+		}
+	}
+
+	bool ShouldSkipInvalidVRLightingMaterial(RE::BSRenderPass* a_pass, uint32_t a_technique)
+	{
+		if (!REL::Module::IsVR())
+			return false;
+
+		VRLightingMaterialSnapshot snapshot;
+		VRLightingMaterialRejection rejection;
+#if defined(_MSC_VER)
+		__try
+#endif
+		{
+			rejection = ProbeVRLightingMaterial(a_pass, a_technique, snapshot);
+		}
+#if defined(_MSC_VER)
+		__except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
+			rejection = VRLightingMaterialRejection::Unreadable;
+		}
+#endif
+		if (rejection == VRLightingMaterialRejection::None)
+			return false;
+
+		// Keep formatting and warning state out of successful draw admission.
+		LogRejectedVRLightingMaterial(a_pass, a_technique, rejection, snapshot);
+		return true;
+	}
+
+	bool ShouldSkipRenderPassForParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique, bool* a_admissionInvalidated = nullptr)
+	{
+		if (a_admissionInvalidated)
+			*a_admissionInvalidated = false;
 #if defined(_MSC_VER)
 		__try
 #endif
 		{
 			return globals::features::lightLimitFix.loaded &&
-			       !globals::features::lightLimitFix.CheckParticleLights(a_pass, a_technique);
+			       !globals::features::lightLimitFix.CheckParticleLights(a_pass, a_technique, a_admissionInvalidated);
 		}
 #if defined(_MSC_VER)
 		__except (1) {
 			// Fail open on transient invalid render-pass data to avoid crashing render-thread hooks.
+			if (a_admissionInvalidated)
+				*a_admissionInvalidated = true;
 			return false;
 		}
 #endif
@@ -1638,13 +1835,16 @@ namespace Hooks
 		bool a_alphaTest,
 		uint32_t a_renderFlags)
 	{
-		if (ShouldSkipRenderPassForParticleLights(a_pass, a_technique)) {
+		if (ShouldSkipInvalidVRLightingMaterial(a_pass, a_technique) ||
+			ShouldSkipRenderPassForParticleLights(a_pass, a_technique)) {
 			return;
 		}
 
 		// Original call from 1.4.0
 		func(a_pass, a_technique, a_alphaTest, a_renderFlags);
 	}
+
+	static void DrawAdmittedRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags);
 
 	struct BSBatchRenderer_RenderPassImmediately2  // This is from 1.4.0 but absent in 1.4.6
 	{
@@ -1653,21 +1853,33 @@ namespace Hooks
 			bool a_alphaTest,
 			uint32_t a_renderFlags)
 		{
-			if (ShouldSkipRenderPassForParticleLights(a_pass, a_technique)) {
+			bool particleInvalidated = true;
+			if (ShouldSkipInvalidVRLightingMaterial(a_pass, a_technique) ||
+				ShouldSkipRenderPassForParticleLights(a_pass, a_technique, &particleInvalidated)) {
 				return;
 			}
 
+			bool terrainInvalidated = false;
+			auto action = TerrainBlending::RenderPassImmediatelyAction::Draw;
 			if (globals::features::terrainBlending.loaded) {
-				const auto action = globals::features::terrainBlending.OnRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
+				terrainInvalidated = true;
+				action = globals::features::terrainBlending.OnRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags, &terrainInvalidated);
 				if (action == TerrainBlending::RenderPassImmediatelyAction::Skip) {
 					return;
 				}
-				if (action == TerrainBlending::RenderPassImmediatelyAction::DrawTwice) {
-					DrawRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
-				}
 			}
 
-			DrawRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
+			if (particleInvalidated || terrainInvalidated) {
+				if (ShouldSkipInvalidVRLightingMaterial(a_pass, a_technique))
+					return;
+			}
+			DrawAdmittedRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
+
+			if (action == TerrainBlending::RenderPassImmediatelyAction::DrawTwice) {
+				// Native setup can replace material state, even within the same terrain pair.
+				if (!ShouldSkipInvalidVRLightingMaterial(a_pass, a_technique))
+					DrawAdmittedRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
+			}
 		}
 
 		// This is from 1.4.0 but absent in 1.4.6
@@ -1681,7 +1893,8 @@ namespace Hooks
 			bool a_alphaTest,
 			uint32_t a_renderFlags)
 		{
-			if (ShouldSkipRenderPassForParticleLights(a_pass, a_technique)) {
+			if (ShouldSkipInvalidVRLightingMaterial(a_pass, a_technique) ||
+				ShouldSkipRenderPassForParticleLights(a_pass, a_technique)) {
 				return;
 			}
 
@@ -1692,7 +1905,7 @@ namespace Hooks
 		static inline REL::Relocation<decltype(thunk)> func;  // This is from 1.4.0 but absent in 1.4.6
 	};
 
-	void DrawRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
+	static void DrawAdmittedRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
 	{
 		if (globals::features::interiorSun.loaded) {
 			globals::features::interiorSun.UpdateRasterStateCullMode(a_pass, a_technique);
@@ -1701,13 +1914,32 @@ namespace Hooks
 		BSBatchRenderer_RenderPassImmediately2::func(a_pass, a_technique, a_alphaTest, a_renderFlags);
 	}
 
+	void DrawRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
+	{
+		// Stored passes must be admitted afresh after any intervening engine work.
+		if (!ShouldSkipInvalidVRLightingMaterial(a_pass, a_technique))
+			DrawAdmittedRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
+	}
+
 #ifdef TRACY_ENABLE
 	struct Main_Update
 	{
 		static void thunk(RE::Main* a_this, float a2)
 		{
-			func(a_this, a2);
+			const bool isVR = REL::Module::IsVR();
+			{
+				ZoneNamedN(mainUpdateCpuZone, "Game::MainUpdateCpu", isVR);
+				static constexpr tracy::SourceLocationData gpuSource{
+					"Game::MainUpdateD3D11", __FUNCTION__, __FILE__, static_cast<std::uint32_t>(__LINE__), 0
+				};
+				std::optional<tracy::D3D11ZoneScope> gpuZone;
+				if (auto* state = globals::state; isVR && state && state->tracyCtx)
+					gpuZone.emplace(state->tracyCtx, &gpuSource, true);
+				func(a_this, a2);
+			}
 			FrameMark;
+			if (isVR)
+				Util::TracyVRFrameTiming::Record(globals::state ? globals::state->frameCount : 0);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -1768,10 +2000,26 @@ namespace Hooks
 				auto shaderCache = globals::shaderCache;
 				auto& vl = globals::features::volumetricLighting;
 				const char* profileName = nullptr;
+				bool blurBufferBound = false;
+				winrt::com_ptr<ID3D11Buffer> previousBlurBuffer;
+				winrt::com_ptr<ID3D11DeviceContext1> blurContext1;
+				UINT firstConstant = 0;
+				UINT numConstants = 0;
+				const SKSE::stl::scope_exit restoreBlurBuffer([&]() noexcept {
+					if (blurBufferBound) {
+						auto buffer = previousBlurBuffer.get();
+						if (blurContext1)
+							blurContext1->CSSetConstantBuffers1(1, 1, &buffer, &firstConstant, &numConstants);
+						else
+							globals::d3d::context->CSSetConstantBuffers(1, 1, &buffer);
+					}
+				});
 
-				if (state->enabledClasses[RE::BSShader::Type::ImageSpace]) {
+				if (state->ShaderEnabled(RE::BSShader::Type::ImageSpace)) {
 					RE::BSImagespaceShader* isShader = CurrentlyDispatchedShader;
 					uint32_t techniqueId = CurrentComputeShaderTechniqueId;
+					bool horizontalBlur = false;
+					bool verticalBlur = false;
 					if (vl.loaded && CurrentlyDispatchedComputeShader) {
 						profileName = GetVolumetricLightingProfileName(CurrentlyDispatchedComputeShader);
 
@@ -1784,19 +2032,31 @@ namespace Hooks
 							}
 						} else if (CurrentlyDispatchedComputeShader->name == "ISVolumetricLightingBlurHCS"sv) {
 							techniqueId = 0;
-							isShader = vl.GetOrCreateBlurHCS(CurrentlyDispatchedComputeShader);
-							vl.SetDimensionsCB();
-							vl.SetGroupCountsHCS(threadGroupCountX);
+							horizontalBlur = true;
+							isShader = vl.HasValidBlurDimensions() ? vl.GetOrCreateBlurHCS(CurrentlyDispatchedComputeShader) : nullptr;
 						} else if (CurrentlyDispatchedComputeShader->name == "ISVolumetricLightingBlurVCS"sv) {
 							techniqueId = 0;
-							isShader = vl.GetOrCreateBlurVCS(CurrentlyDispatchedComputeShader);
-							vl.SetDimensionsCB();
-							vl.SetGroupCountsVCS(threadGroupCountY);
+							verticalBlur = true;
+							isShader = vl.HasValidBlurDimensions() ? vl.GetOrCreateBlurVCS(CurrentlyDispatchedComputeShader) : nullptr;
 						}
 					}
 					if (isShader != nullptr) {
 						if (auto* computeShader = shaderCache->GetComputeShader(*isShader, techniqueId)) {
 							shader = computeShader;
+							// Native fallback must keep its original dispatch and constant-buffer layout.
+							if (horizontalBlur || verticalBlur) {
+								auto* context = globals::d3d::context;
+								if (SUCCEEDED(context->QueryInterface(__uuidof(ID3D11DeviceContext1), blurContext1.put_void())))
+									blurContext1->CSGetConstantBuffers1(1, 1, previousBlurBuffer.put(), &firstConstant, &numConstants);
+								else
+									context->CSGetConstantBuffers(1, 1, previousBlurBuffer.put());
+								blurBufferBound = true;
+								vl.SetDimensionsCB();
+								if (horizontalBlur)
+									vl.SetGroupCountsHCS(threadGroupCountX, threadGroupCountY);
+								else
+									vl.SetGroupCountsVCS(threadGroupCountX, threadGroupCountY);
+							}
 						}
 					}
 				}
@@ -1870,6 +2130,8 @@ namespace Hooks
 	 */
 	void Install()
 	{
+		VRShadowBatch::Install();
+		Util::VRLoadingMenuClear::Install();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		InstallVRFaceGenTintAssignmentDiagnostic();
 #endif
@@ -1936,6 +2198,11 @@ namespace Hooks
 		logger::info("Installing SetupGeometry hooks");
 		stl::write_vfunc<0x6, EffectExtensions::BSEffectShader_SetupGeometry>(RE::VTABLE_BSEffectShader[0]);
 		stl::write_vfunc<0x6, LightingExtensions::BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
+		if (globals::game::isVR) {
+			stl::write_vfunc<0x7, AcceptedDrawRestoreGeometry<0>>(RE::VTABLE_BSEffectShader[0]);
+			stl::write_vfunc<0x7, AcceptedDrawRestoreGeometry<1>>(RE::VTABLE_BSLightingShader[0]);
+			CSX::Api::AcceptedDrawGeometryHooksInstalled();
+		}
 		stl::write_thunk_call<GrassExtensions::BSGrassShaderProperty_ctor>(REL::RelocationID(15214, 15383).address() + REL::Relocate(0x45B, 0x4F5));
 		stl::write_vfunc<0x6, GrassExtensions::BSGrassShader_SetupGeometry>(RE::VTABLE_BSGrassShader[0]);
 

@@ -24,6 +24,11 @@ on:
                 type: boolean
                 required: false
                 default: true
+            include-se-ae:
+                description: "Include SE/AE shader cache (disable for VR-only testing)"
+                type: boolean
+                required: false
+                default: true
 
 permissions:
     contents: read
@@ -89,9 +94,8 @@ jobs:
 
     feature-audit:
         name: Feature Version Audit (Release)
-        if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release') && github.event.action != 'published'
+        if: (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/csx') || github.event_name == 'release') && github.event.action != 'published'
         runs-on: ubuntu-latest
-        continue-on-error: true
         steps:
             - name: Checkout code
               uses: actions/checkout@v6
@@ -105,8 +109,16 @@ jobs:
                   python-version: "3.11"
 
             - name: Run feature version audit
+              env:
+                  RELEASE_TAG: ${{ github.ref_name }}
+              shell: bash
               run: |
-                  python tools/feature_version_audit.py --output feature-version-audit-latest.md
+                  set -euo pipefail
+                  audit_args=()
+                  if [[ "$RELEASE_TAG" == csx* ]]; then
+                    audit_args+=(--base "$(python tools/csx_release.py audit-base --tag "$RELEASE_TAG")")
+                  fi
+                  python tools/feature_version_audit.py "${audit_args[@]}" --output feature-version-audit-latest.md
                   cat feature-version-audit-latest.md
 
             - name: Upload feature audit markdown
@@ -121,7 +133,7 @@ jobs:
         uses: ./.github/workflows/shader-cache.yaml
         with:
             target_ref: ${{ github.ref }}
-            runtime: both
+            runtime: ${{ (github.event_name != 'workflow_dispatch' || inputs.include-se-ae == true) && 'both' || 'VR' }}
 
     release:
         name: Post Release for Draft, Manual Run, or Tag
@@ -129,10 +141,12 @@ jobs:
         if: >
             always() && !cancelled() &&
             needs.build.outputs.cpp-built == 'true' &&
+            needs.feature-audit.result == 'success' &&
             needs.shader-cache.result == 'success' &&
             github.event.action != 'published' &&
             (github.event_name == 'workflow_dispatch' ||
              startsWith(github.ref, 'refs/tags/v') ||
+             startsWith(github.ref, 'refs/tags/csx') ||
              (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')))
         runs-on: windows-2025
         outputs:
@@ -154,7 +168,9 @@ jobs:
             - name: Checkout release packaging tools
               uses: actions/checkout@v6
               with:
-                  sparse-checkout: tools
+                  sparse-checkout: |
+                      tools
+                      config
 
             - name: Setup Python for FOMOD packaging
               uses: actions/setup-python@v6
@@ -168,6 +184,7 @@ jobs:
                   path: dist/
 
             - name: Download SE shader cache
+              if: github.event_name != 'workflow_dispatch' || inputs.include-se-ae == true
               uses: actions/download-artifact@v7
               with:
                   name: ShaderCache-SE
@@ -180,7 +197,6 @@ jobs:
                   path: dist/
 
             - name: Download feature audit artifact
-              continue-on-error: true
               uses: actions/download-artifact@v7
               with:
                   name: feature-version-audit
@@ -221,31 +237,19 @@ jobs:
                     fi
                   fi
 
-                  if [ -f feature-version-audit-latest.md ]; then
-                    # Strip any prior audit section so re-runs don't duplicate
-                    # it. Find the first "# Feature Version Audit" heading and
-                    # drop everything from the preceding "---" separator
-                    # onward.
-                    audit_line=$(grep -nx '# Feature Version Audit' auto-release-notes.md | head -1 | cut -d: -f1 || true)
-                    if [ -n "${audit_line:-}" ]; then
-                      sep_line=$(awk -v target="$audit_line" 'NR < target && /^---$/ { last = NR } END { print last }' auto-release-notes.md)
-                      if [ -n "${sep_line:-}" ]; then
-                        head -n $((sep_line - 1)) auto-release-notes.md > auto-release-notes.tmp
-                        mv auto-release-notes.tmp auto-release-notes.md
-                      fi
-                    fi
-                    echo -e "\n---\n\n" >> auto-release-notes.md
-                    cat feature-version-audit-latest.md >> auto-release-notes.md
-                  fi
+                  python tools/csx_release.py merge-audit --notes auto-release-notes.md --audit feature-version-audit-latest.md
                   echo "body_file=auto-release-notes.md" >> $GITHUB_OUTPUT
                   echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+                  echo "release_name=CSX ${RELEASE_TAG#csx}" >> $GITHUB_OUTPUT
 
             - name: Build managed-cache FOMOD AIO
               shell: pwsh
               env:
                   RELEASE_TAG: ${{ steps.combined_notes.outputs.release_tag }}
+                  INCLUDE_SE_AE: ${{ github.event_name != 'workflow_dispatch' || inputs.include-se-ae == true }}
               run: |
                   $ErrorActionPreference = 'Stop'
+                  $includeSeAe = [bool]::Parse($env:INCLUDE_SE_AE)
 
                   function Get-SingleArchive {
                       param(
@@ -281,7 +285,10 @@ jobs:
                   }
 
                   $aio = Get-SingleArchive 'CSX_AIO-*.7z' 'AIO archive'
-                  $se = Get-SingleArchive 'ShaderCache-SE-*.7z' 'SE shader-cache archive'
+                  $se = $null
+                  if ($includeSeAe) {
+                      $se = Get-SingleArchive 'ShaderCache-SE-*.7z' 'SE shader-cache archive'
+                  }
                   $vr = Get-SingleArchive 'ShaderCache-VR-*.7z' 'VR shader-cache archive'
 
                   $runnerTemp = [System.IO.Path]::GetFullPath($env:RUNNER_TEMP)
@@ -301,19 +308,28 @@ jobs:
                   try {
                       New-Item -ItemType Directory -Path $workRoot | Out-Null
                       $coreRoot = Join-Path $workRoot 'core'
-                      $seRoot = Join-Path $workRoot 'se'
                       $vrRoot = Join-Path $workRoot 'vr'
                       $stagedRoot = Join-Path $workRoot 'staged'
                       Expand-CMakeArchive $aio $coreRoot
-                      Expand-CMakeArchive $se $seRoot
                       Expand-CMakeArchive $vr $vrRoot
 
-                      & python tools/build-fomod-package.py `
-                          --core $coreRoot `
-                          --se-cache $seRoot `
-                          --vr-cache $vrRoot `
-                          --output $stagedRoot `
-                          --version $env:RELEASE_TAG
+                      $fomodArgs = @(
+                          'tools/build-fomod-package.py',
+                          '--core', $coreRoot,
+                          '--vr-cache', $vrRoot,
+                          '--output', $stagedRoot,
+                          '--version', $env:RELEASE_TAG
+                      )
+                      $cacheRoots = @('ShaderCache-VR')
+                      if ($includeSeAe) {
+                          $seRoot = Join-Path $workRoot 'se'
+                          Expand-CMakeArchive $se $seRoot
+                          $fomodArgs += @('--include-se-ae', '--se-cache', $seRoot)
+                          $cacheRoots += 'ShaderCache-SE-AE'
+                      } else {
+                          $fomodArgs += '--no-include-se-ae'
+                      }
+                      & python @fomodArgs
                       if ($LASTEXITCODE -ne 0) {
                           throw 'FOMOD staging failed.'
                       }
@@ -344,25 +360,29 @@ jobs:
                       if ($LASTEXITCODE -ne 0) {
                           throw 'FOMOD archive could not be inspected.'
                       }
-                      foreach ($required in @(
+                      $requiredEntries = @(
                           'fomod/ModuleConfig.xml',
-                          'fomod/info.xml',
-                          'ShaderCache-VR/ShaderCache/Info.ini',
-                          'ShaderCache-VR/ShaderCache/PackManifest.json',
-                          'ShaderCache-VR/ShaderCache/Optimized.A.csxpack',
-                          'ShaderCache-VR/ShaderCache/Optimized.B.csxpack',
-                          'ShaderCache-VR/ShaderCache/Developer.A.csxpack',
-                          'ShaderCache-VR/ShaderCache/Developer.B.csxpack',
-                          'ShaderCache-SE-AE/ShaderCache/Info.ini',
-                          'ShaderCache-SE-AE/ShaderCache/PackManifest.json',
-                          'ShaderCache-SE-AE/ShaderCache/Optimized.A.csxpack',
-                          'ShaderCache-SE-AE/ShaderCache/Optimized.B.csxpack',
-                          'ShaderCache-SE-AE/ShaderCache/Developer.A.csxpack',
-                          'ShaderCache-SE-AE/ShaderCache/Developer.B.csxpack'
-                      )) {
+                          'fomod/info.xml'
+                      )
+                      foreach ($cacheRoot in $cacheRoots) {
+                          foreach ($member in @(
+                              'Info.ini',
+                              'PackManifest.json',
+                              'Optimized.A.csxpack',
+                              'Optimized.B.csxpack',
+                              'Developer.A.csxpack',
+                              'Developer.B.csxpack'
+                          )) {
+                              $requiredEntries += "$cacheRoot/ShaderCache/$member"
+                          }
+                      }
+                      foreach ($required in $requiredEntries) {
                           if ($required -notin $entries) {
                               throw "FOMOD archive is missing $required."
                           }
+                      }
+                      if (-not $includeSeAe -and ($entries -match '^ShaderCache-SE-AE(/|$)')) {
+                          throw 'VR-only FOMOD archive contains an excluded SE/AE cache.'
                       }
 
                       try {
@@ -392,17 +412,17 @@ jobs:
             - name: Generate artifact attestations
               uses: actions/attest-build-provenance@v4
               with:
-                  subject-path: "dist/*.7z"
+                  subject-path: "dist/CSX_AIO-*.7z"
 
             - name: Create or Update Release
               id: create_release
               uses: ncipollo/release-action@v1
               with:
-                  name: "CSX ${{ steps.combined_notes.outputs.release_tag }}"
+                  name: ${{ steps.combined_notes.outputs.release_name }}
                   draft: true
                   omitDraftDuringUpdate: true
                   tag: ${{ steps.combined_notes.outputs.release_tag }}
-                  artifacts: "${{ github.workspace }}/dist/*.7z"
+                  artifacts: "${{ github.workspace }}/dist/CSX_AIO-*.7z"
                   bodyFile: ${{ steps.combined_notes.outputs.body_file }}
                   generateReleaseNotes: false
                   replacesArtifacts: true
@@ -423,7 +443,7 @@ jobs:
         uses: ./.github/workflows/nexus-upload.yaml
         with:
             tag: ${{ github.event.release.tag_name }}
-            artifact_pattern: "CSX-*.7z"
+            artifact_pattern: "CSX_AIO-*.7z"
             dry_run: "true"
         secrets:
             UNEX_NEXUSMODS_SESSION_COOKIE: ${{ secrets.UNEX_NEXUSMODS_SESSION_COOKIE }}

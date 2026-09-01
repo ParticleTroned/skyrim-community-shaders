@@ -2,9 +2,9 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
+#	include "Api/DevBenchMainThreadDispatch.h"
 #	include "Api/ServiceFoundation.h"
 #	include "Api/ShaderService.h"
-#	include "Api/RuntimeThreadAffinity.h"
 #	include "BuildProvenance.h"
 #	include "Globals.h"
 #	include "ShaderCache.h"
@@ -15,12 +15,10 @@
 
 #	include <algorithm>
 #	include <atomic>
-#	include <chrono>
 #	include <cstdint>
+#	include <exception>
 #	include <filesystem>
 #	include <functional>
-#	include <future>
-#	include <memory>
 #	include <mutex>
 #	include <optional>
 #	include <stdexcept>
@@ -35,7 +33,6 @@ namespace
 	using CSX::ShaderAPI::Preflight001;
 	using CSX::ShaderAPI::Snapshot001;
 	using CSX::ShaderAPI::Status;
-	constexpr auto kMainThreadTimeout = std::chrono::milliseconds(5000);
 	std::atomic_bool g_registered{ false };
 
 	CSX::Api::ServiceFoundation& Foundation()
@@ -156,25 +153,7 @@ namespace
 
 	json RunOnMainThread(std::function<json()> a_run)
 	{
-		auto* tasks = SKSE::GetTaskInterface();
-		if (!tasks)
-			return { { "error", "SKSE task interface unavailable" } };
-		auto promise = std::make_shared<std::promise<json>>();
-		auto cancelled = std::make_shared<std::atomic_bool>(false);
-		auto future = promise->get_future();
-		tasks->AddTask([promise, cancelled, run = std::move(a_run)]() mutable {
-			CSX::Api::EnterRuntimeMainThreadTask();
-			if (cancelled->load(std::memory_order_acquire))
-				return;
-			try { promise->set_value(run()); }
-			catch (const std::exception& e) { promise->set_value(json{ { "error", "main-thread task failed" }, { "detail", e.what() } }); }
-			catch (...) { promise->set_value(json{ { "error", "main-thread task failed" } }); }
-		});
-		if (future.wait_for(kMainThreadTimeout) != std::future_status::ready) {
-			cancelled->store(true, std::memory_order_release);
-			return { { "error", "main thread did not run within 5000ms" } };
-		}
-		return future.get();
+		return CSX::Api::RunDevBenchMainThreadTask(SKSE::GetTaskInterface(), std::move(a_run));
 	}
 
 	json ReadSnapshot(const CSX::ShaderAPI::Interface001& a_api)
@@ -255,7 +234,7 @@ namespace
 			auto* cache = globals::shaderCache;
 			if (!cache)
 				return Foundation().MakeError(a_args, "service_unavailable", "shader cache is not initialized", "dispatch", true);
-			const bool wasEnabled = cache->backgroundCompilation.exchange(true, std::memory_order_relaxed);
+			const bool wasEnabled = cache->SetBackgroundCompilation(true);
 			auto response = Foundation().MakeEnvelope(a_args, true);
 			response["result"] = {
 				{ "action", "backgroundCompile" },
@@ -449,7 +428,7 @@ namespace CSX::Api::ShaderDevBenchBridge
 			return;
 		}
 		const char* descriptor = R"({
-			"description":"Versioned CSX shader, feature, compilation, and cache lifecycle API. snapshot.compilation.recentFailures contains the last 32 source compile failures as {key,path,error,epoch,frame}; error text is capped at 2000 bytes. Mutations use preflight followed by execute with the exact same arguments and returned token. backgroundCompile releases the boot compile wait while compilation continues on the background thread budget. exportTrace writes completed task timings as Chrome Trace JSON after a build finishes.",
+			"description":"Versioned CSX shader, feature, compilation, and cache lifecycle API. snapshot.compilation.recentFailures contains the last 32 source compile failures as {key,path,error,epoch,frame}; error text is capped at 2000 bytes. Mutations use preflight followed by execute with the exact same arguments and returned token. backgroundCompile releases the boot compile wait and wakes the dispatcher to apply the background thread budget. exportTrace writes completed task timings as Chrome Trace JSON after a build finishes. set_skip_unchanged permits only content-verified disk hits when true; false skips disk reads while preserving disk writes.",
 			"inputSchema":{
 				"type":"object",
 				"required":["contractMajor","clientId","commandId","action"],
@@ -458,7 +437,7 @@ namespace CSX::Api::ShaderDevBenchBridge
 					"clientId":{"type":"string","minLength":1,"maxLength":128},
 					"commandId":{"type":"string","minLength":1,"maxLength":128},
 					"expectedBuildId":{"type":"string"},
-					"action":{"type":"string","enum":["registry","snapshot","features","preflight","execute","backgroundCompile","exportTrace"]},
+					"action":{"type":"string","enum":["registry","snapshot","features","preflight","execute","backgroundCompile","exportTrace"],"description":"backgroundCompile atomically enables background compilation and wakes the dispatcher; result.changed reports whether the mode changed."},
 					"path":{"type":"string","description":"exportTrace only: destination relative to the Community Shaders log directory; defaults to compile-trace.json."},
 					"mutation":{
 						"type":"object",
@@ -466,7 +445,7 @@ namespace CSX::Api::ShaderDevBenchBridge
 						"properties":{
 							"action":{"type":"string","enum":["set_custom_shaders","set_disk_cache","set_async_compilation","set_skip_unchanged","set_feature_disabled_at_boot","clear_memory_cache","clear_disk_cache","clear_all_caches","restore_previous_disk_cache","accept_cache_rebuild","stop_compilation","capture_active_shaders"]},
 							"expectedStateRevision":{"type":"integer","minimum":0},
-							"value":{"type":"boolean"},
+							"value":{"type":"boolean","description":"For set_skip_unchanged, true permits verified disk reuse; false forces source compilation for disk requests while retaining disk writes."},
 							"featureName":{"type":"string"},
 							"persist":{"type":"boolean"},
 							"allowDisruptive":{"type":"boolean"},

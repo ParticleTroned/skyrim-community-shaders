@@ -52,6 +52,7 @@ namespace Permutation
 		static const uint GrayscaleToColor = (1 << 19);
 		static const uint GrayscaleToAlpha = (1 << 20);
 		static const uint IgnoreTexAlpha = (1 << 21);
+		static const uint SkyObject = (1 << 24);
 	}
 
 	namespace ExtraFlags
@@ -77,8 +78,9 @@ namespace Permutation
 		static const int THLand4HasDisplacement = (1 << 4);
 		static const int THLand5HasDisplacement = (1 << 5);
 		static const int THLandHasDisplacement = (1 << 9);
-		// Six two-bit Mesh Blending LAND material classes occupy bits 10-21.
-		static const uint MeshBlendingLandscapeClasses = 0x003FFC00u;
+		static const int TVMeshVariation = (1 << 10);
+		// Six two-bit Mesh Blending LAND material classes occupy bits 11-22.
+		static const uint MeshBlendingLandscapeClasses = 0x007FF800u;
 	}
 
 	cbuffer PerShader : register(b4)

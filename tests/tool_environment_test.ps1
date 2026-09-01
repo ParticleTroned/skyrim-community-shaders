@@ -25,6 +25,33 @@ function Invoke-Git {
     }
 }
 
+function Restore-TestEnvironment {
+    param([Parameter(Mandatory = $true)][System.Collections.IDictionary] $Snapshot)
+
+    foreach ($name in [Environment]::GetEnvironmentVariables("Process").Keys) {
+        if (-not $Snapshot.Contains($name)) {
+            Remove-Item -LiteralPath "Env:$name"
+        }
+    }
+    foreach ($entry in $Snapshot.GetEnumerator()) {
+        [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, "Process")
+    }
+}
+
+function Assert-TestEnvironment {
+    param([Parameter(Mandatory = $true)][System.Collections.IDictionary] $Snapshot)
+
+    $actualEnvironment = [Environment]::GetEnvironmentVariables("Process")
+    Assert-Equal -Expected $Snapshot.Count -Actual $actualEnvironment.Count `
+        -Message "Environment restoration must preserve the exact set of variables."
+    foreach ($entry in $Snapshot.GetEnumerator()) {
+        if (-not $actualEnvironment.Contains($entry.Key) -or
+            $actualEnvironment[$entry.Key] -cne $entry.Value) {
+            throw "Environment restoration changed '$($entry.Key)'."
+        }
+    }
+}
+
 $testParent = Join-Path $repositoryRoot "build\test-temp"
 $testRoot = Join-Path `
     $testParent `
@@ -59,25 +86,10 @@ try {
         -Message "The standalone clone was not marked safe."
 
     if ($env:OS -eq "Windows_NT") {
-        $savedEnvironment = @{}
-        foreach ($name in @(
-            "VCToolsInstallDir",
-            "INCLUDE",
-            "LIB",
-            "CSX_VSDEVCMD",
-            "CSX_MSVC_TEST_MARKER",
-            "VSINSTALLDIR"
-        )) {
-            $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
-        }
+        $savedEnvironment = [Environment]::GetEnvironmentVariables("Process")
 
         try {
-            $testVisualStudio = Join-Path $testRoot "Visual Studio"
-            $vsDevCmdDirectory = Join-Path $testVisualStudio "Common7\Tools"
-            New-Item -ItemType Directory -Force -Path $vsDevCmdDirectory | Out-Null
-            New-Item -ItemType Directory -Force `
-                -Path (Join-Path $testVisualStudio "VC\Tools\MSVC") | Out-Null
-            $vsDevCmd = Join-Path $vsDevCmdDirectory "VsDevCmd.bat"
+            $vsDevCmd = Join-Path $testRoot "VsDevCmd.bat"
             [IO.File]::WriteAllLines($vsDevCmd, @(
                 "@echo off",
                 "set `"VCToolsInstallDir=C:\csx-test\VC\Tools\`"",
@@ -86,10 +98,60 @@ try {
                 "set `"CSX_MSVC_TEST_MARKER=initialized`""
             ))
 
+            $env:CSX_VSDEVCMD = $null
+            $env:VSINSTALLDIR = $null
+            $discoveredVsDevCmd = Resolve-CsxVsDevCmd -Required
+            $env:VSINSTALLDIR = Join-Path $testRoot "Missing Visual Studio"
+            Assert-Equal -Expected $discoveredVsDevCmd -Actual (Resolve-CsxVsDevCmd -Required) `
+                -Message "An absent active installation must fall back to discovery."
+
+            $missingDrive = [char[]](90..68) | Where-Object {
+                -not (Get-PSDrive -Name $_ -ErrorAction SilentlyContinue)
+            } | Select-Object -First 1
+            if (-not $missingDrive) {
+                throw "No unused drive letter is available for the missing-drive regression."
+            }
+            $env:VSINSTALLDIR = "${missingDrive}:\Missing Visual Studio"
+            Assert-Equal -Expected $discoveredVsDevCmd -Actual (Resolve-CsxVsDevCmd -Required) `
+                -Message "An unavailable active drive must fall back to discovery."
+
+            $activeInstallation = Join-Path $testRoot "Active Visual Studio"
+            $activeTools = Join-Path $activeInstallation "Common7\Tools"
+            New-Item -ItemType Directory -Force -Path $activeTools | Out-Null
+            $activeVsDevCmd = Join-Path $activeTools "VsDevCmd.bat"
+            $env:VSINSTALLDIR = $activeInstallation
+            New-Item -ItemType Directory -Force -Path (Join-Path $activeInstallation "VC\Tools\MSVC") | Out-Null
+            Assert-Equal -Expected $discoveredVsDevCmd -Actual (Resolve-CsxVsDevCmd -Required) `
+                -Message "An active installation without VsDevCmd must fall back to discovery."
+            Copy-Item -LiteralPath $vsDevCmd -Destination $activeVsDevCmd
+            $installationWithoutMsvc = Join-Path $testRoot "Visual Studio Without MSVC"
+            $toolsWithoutMsvc = Join-Path $installationWithoutMsvc "Common7\Tools"
+            New-Item -ItemType Directory -Force -Path $toolsWithoutMsvc | Out-Null
+            Copy-Item -LiteralPath $vsDevCmd -Destination (Join-Path $toolsWithoutMsvc "VsDevCmd.bat")
+            $env:VSINSTALLDIR = $installationWithoutMsvc
+            Assert-Equal -Expected $discoveredVsDevCmd -Actual (Resolve-CsxVsDevCmd -Required) `
+                -Message "An active installation without MSVC must fall back to discovery."
+            $env:VSINSTALLDIR = $activeInstallation
+            Assert-Equal -Expected $activeVsDevCmd -Actual (Resolve-CsxVsDevCmd -Required) `
+                -Message "The active installation must take precedence over discovered installations."
+
+            $env:CSX_VSDEVCMD = Join-Path $testRoot "Missing-VsDevCmd.bat"
+            $overrideError = $null
+            try {
+                Resolve-CsxVsDevCmd -Required | Out-Null
+            } catch {
+                $overrideError = $_.Exception.Message
+            }
+            if ($overrideError -notlike "CSX_VSDEVCMD does not point to VsDevCmd.bat:*") {
+                throw "An invalid explicit override must fail instead of selecting the active installation."
+            }
+
             foreach ($name in @("VCToolsInstallDir", "INCLUDE", "LIB")) {
                 [Environment]::SetEnvironmentVariable($name, $null, "Process")
             }
             $env:CSX_VSDEVCMD = $vsDevCmd
+            Assert-Equal -Expected $vsDevCmd -Actual (Resolve-CsxVsDevCmd -Required) `
+                -Message "An explicit override must take precedence over the active installation."
 
             $cmakeLauncher = Join-Path $repositoryRoot "tools\cmake.ps1"
             [string[]] $cmakeOutput = @(
@@ -102,6 +164,51 @@ try {
                 throw "The CMake launcher did not initialize the missing MSVC environment."
             }
 
+            $selectedCmakeDirectory = Join-Path $testRoot "Selected CMake"
+            $shadowCmakeDirectory = Join-Path $testRoot "Visual Studio CMake"
+            New-Item -ItemType Directory -Path $selectedCmakeDirectory, $shadowCmakeDirectory | Out-Null
+            [IO.File]::WriteAllLines((Join-Path $selectedCmakeDirectory "cmake.cmd"), @(
+                '@echo off',
+                'if not "%~1"=="--version" exit /b 24',
+                'echo selected-cmake-wrapper',
+                'exit /b 0'
+            ))
+            [IO.File]::WriteAllLines((Join-Path $shadowCmakeDirectory "cmake.cmd"), @(
+                '@echo off', 'echo unexpected-visual-studio-cmake', 'exit /b 0'
+            ))
+            $shadowVsDevCmd = Join-Path $testRoot "Shadow-VsDevCmd.bat"
+            [IO.File]::WriteAllLines($shadowVsDevCmd, @(
+                Get-Content -LiteralPath $vsDevCmd
+                "set `"PATH=$shadowCmakeDirectory;%PATH%`""
+            ))
+            $selectedCmakePath = $env:PATH
+            try {
+                $env:PATH = "$selectedCmakeDirectory;$env:PATH"
+                $env:CSX_VSDEVCMD = $shadowVsDevCmd
+                $selectedOutput = @(& (Join-Path $PSHOME "pwsh.exe") -NoProfile -File $cmakeLauncher --version)
+                Assert-Equal -Expected 0 -Actual $LASTEXITCODE -Message "The selected CMake wrapper must succeed."
+                if ($selectedOutput -notcontains "selected-cmake-wrapper" -or $selectedOutput -contains "unexpected-visual-studio-cmake") {
+                    throw "Visual Studio initialization replaced the caller's selected CMake wrapper."
+                }
+                & (Join-Path $PSHOME "pwsh.exe") -NoProfile -File $cmakeLauncher --invalid-probe
+                Assert-Equal -Expected 24 -Actual $LASTEXITCODE -Message "The CMake wrapper must preserve arguments and failure codes."
+            } finally {
+                $env:PATH = $selectedCmakePath
+                $env:CSX_VSDEVCMD = $vsDevCmd
+            }
+
+            $commandProbe = Join-Path $testRoot "command probe.ps1"
+            [IO.File]::WriteAllLines($commandProbe, @(
+                'if ($env:CSX_MSVC_TEST_MARKER -ne "initialized") { exit 24 }',
+                'if ($args.Count -ne 1 -or $args[0] -ne "argument with spaces") { exit 25 }',
+                'exit 23'
+            ))
+            & (Join-Path $PSHOME "pwsh.exe") -NoProfile -File `
+                (Join-Path $repositoryRoot "tools/run-msvc-command.ps1") `
+                (Join-Path $PSHOME "pwsh.exe") -NoProfile -File $commandProbe "argument with spaces"
+            Assert-Equal -Expected 23 -Actual $LASTEXITCODE `
+                -Message "The MSVC command launcher must initialize the environment and preserve arguments and failure codes."
+
             $initializedWith = Initialize-CsxMsvcEnvironment -Required
 
             Assert-Equal -Expected $vsDevCmd -Actual $initializedWith `
@@ -112,22 +219,25 @@ try {
                 throw "The imported Visual Studio environment is incomplete."
             }
 
-            [Environment]::SetEnvironmentVariable("CSX_VSDEVCMD", $null, "Process")
-            $env:VSINSTALLDIR = $testVisualStudio
-            $activeVsDevCmd = Resolve-CsxVsDevCmd -Required
-            Assert-Equal -Expected $vsDevCmd -Actual $activeVsDevCmd `
-                -Message "The active Visual Studio installation was not preferred."
+            $env:CSX_MSVC_TEST_MARKER = "retained"
+            if ($null -ne (Initialize-CsxMsvcEnvironment -Required)) {
+                throw "An initialized MSVC environment must be reused."
+            }
+            Assert-Equal -Expected "retained" -Actual $env:CSX_MSVC_TEST_MARKER `
+                -Message "The active Visual Studio environment was initialized again."
 
-            [Environment]::SetEnvironmentVariable(
-                "VSINSTALLDIR",
-                $savedEnvironment["VSINSTALLDIR"],
-                "Process"
-            )
-            foreach ($name in @("VCToolsInstallDir", "INCLUDE", "LIB", "CSX_VSDEVCMD")) {
+            # VsDevCmd imports PATH, SDK and installation state as one environment.
+            Restore-TestEnvironment -Snapshot $savedEnvironment
+            Assert-TestEnvironment -Snapshot $savedEnvironment
+            Initialize-CsxMsvcEnvironment -Required | Out-Null
+            $expectedVsDevCmd = Resolve-CsxVsDevCmd -Required
+            foreach ($name in @("VCToolsInstallDir", "INCLUDE", "LIB")) {
                 [Environment]::SetEnvironmentVariable($name, $null, "Process")
             }
 
             $actualVsDevCmd = Initialize-CsxMsvcEnvironment -Required
+            Assert-Equal -Expected $expectedVsDevCmd -Actual $actualVsDevCmd `
+                -Message "Repairing a partial environment must retain the active installation."
             $compiler = Get-Command cl.exe -ErrorAction SilentlyContinue
             if (-not $compiler) {
                 throw "cl.exe was not added to PATH by $actualVsDevCmd."
@@ -145,10 +255,9 @@ try {
                 throw "The initialized MSVC environment could not compile standard-library headers."
             }
         } finally {
-            foreach ($entry in $savedEnvironment.GetEnumerator()) {
-                [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, "Process")
-            }
+            Restore-TestEnvironment -Snapshot $savedEnvironment
         }
+        Assert-TestEnvironment -Snapshot $savedEnvironment
     }
 } finally {
     if (Test-Path -LiteralPath $testRoot) {

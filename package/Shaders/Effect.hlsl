@@ -533,6 +533,12 @@ cbuffer PerGeometry : register(b2)
 
 #	include "Common/ShadowSampling.hlsli"
 
+bool UseAmbientEffectLighting()
+{
+	return SharedData::adaptiveBalanceSettings.useAmbientEffectLighting &&
+	       (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld);
+}
+
 float3 GetEffectAmbientLighting(float skylightingDiffuse)
 {
 	float3 ambientColor = ShadowSampling::GetRawAmbientLighting(ShadowSampling::LightingSampleNormal);
@@ -548,9 +554,9 @@ float3 GetEffectAmbientLighting(float skylightingDiffuse)
 #	endif
 
 #	if defined(SKYLIGHTING)
-	ambientColor = Color::IrradianceToLinear(ambientColor);
-	ambientColor *= skylightingDiffuse;
-	ambientColor = Color::IrradianceToGamma(ambientColor);
+		ambientColor = Color::IrradianceToLinear(ambientColor);
+		ambientColor *= skylightingDiffuse;
+		ambientColor = Color::IrradianceToGamma(ambientColor);
 #	endif
 
 #	if defined(IBL)
@@ -560,11 +566,71 @@ float3 GetEffectAmbientLighting(float skylightingDiffuse)
 	return ambientColor;
 }
 
+float GetEffectSkylightingDiffuse(float3 worldPosition, uint eyeIndex)
+{
+	float skylightingDiffuse = 1.0;
+#	if defined(SKYLIGHTING)
+	if (!SharedData::InInterior) {
+#		if defined(VR)
+		float3 positionMSSkylight = worldPosition + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
+#		else
+		float3 positionMSSkylight = worldPosition;
+#		endif
+		sh2 skylightingSH = Skylighting::SampleNoBias(positionMSSkylight);
+		skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, ShadowSampling::LightingSampleNormal, Skylighting::GetFadeOutFactor(positionMSSkylight));
+	}
+#	endif
+
+	return skylightingDiffuse;
+}
+
+float3 GetAmbientEffectLighting(float3 worldPosition, float2 screenPosition, uint eyeIndex, float maxShadowDistance, inout float shadowVariance)
+{
+	static const float EffectDirectionalLightScale = 0.5;
+	float skylightingDiffuse = 1.0;
+#	if defined(LIGHTING)
+	skylightingDiffuse = GetEffectSkylightingDiffuse(worldPosition, eyeIndex);
+#	endif
+	float3 ambientColor = Color::ApplyAmbientBalance(GetEffectAmbientLighting(skylightingDiffuse));
+	float3 dirColor = ShadowSampling::GetDirectionalLighting() * EffectDirectionalLightScale;
+	[branch] if (!any(dirColor != 0.0))
+	{
+		shadowVariance = 1.0;
+		return ambientColor;
+	}
+	float3 viewDirection = worldPosition / max(length(worldPosition), 1e-5);
+	float shadow = 1.0;
+#	if defined(LIGHTING)
+	if (ShadowSampling::HasDirectionalShadows()) {
+		shadow = ShadowSampling::Get3DFilteredShadow(worldPosition, viewDirection, screenPosition, eyeIndex);
+	}
+#	else
+	// Sky statics use world shadows without depending on the scene shadow-mask pass.
+	if (!SharedData::InInterior && !SharedData::HideSky && !SharedData::InMapMenu) {
+		static const uint SampleCount = 8;
+		static const float ViewRayLength = 2048.0;
+		float3 startPosition = worldPosition - viewDirection * ViewRayLength;
+		float3 endPosition = worldPosition + viewDirection * clamp(maxShadowDistance, 0.0, ViewRayLength);
+		float noise = Random::InterleavedGradientNoise(Stereo::EyeStableNoiseCoord(screenPosition, SharedData::BufferDim.xy), SharedData::FrameCount);
+		shadow = 0.0;
+		for (uint i = 0; i < SampleCount; i++) {
+			float3 samplePosition = lerp(startPosition, endPosition, (float(i) + noise) / float(SampleCount));
+			shadow += ShadowSampling::GetWorldShadow(samplePosition, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
+		}
+		shadow /= float(SampleCount);
+	}
+#	endif
+	dirColor *= shadow;
+	shadowVariance = 1.0 - sqrt(saturate(fwidth(shadow)));
+	return ambientColor + dirColor;
+}
+
 void ExtractEffectLighting(float3 inputColor, out float3 dirColor, out float3 ambientColor, float skylightingDiffuse)
 {
 	float3 ambientColorAmb = GetEffectAmbientLighting(skylightingDiffuse);
 	float3 dirLightColorDir = ShadowSampling::GetDirectionalLighting();
 	ShadowSampling::DecomposeLighting(inputColor, ambientColorAmb, dirLightColorDir, dirColor, ambientColor);
+	ambientColor = Color::ApplyAmbientBalance(ambientColor);
 }
 
 #	if defined(LIGHTING)
@@ -576,30 +642,25 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 	const bool inWorld = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld);
 
 	bool suppressExternalEmittance = SharedData::InInterior && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::SuppressExternalEmittance);
-	if (suppressExternalEmittance) {
-		color = ShadowSampling::GetSceneLightingColor();
-	} else if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::EffectShadows)) {
-#		if defined(SKYLIGHTING)
-		float skylightingDiffuse = 1.0;
-		if (!SharedData::InInterior) {
-#			if defined(VR)
-			float3 positionMSSkylight = worldPosition + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
-#			else
-			float3 positionMSSkylight = worldPosition;
-#			endif
-
-			sh2 skylightingSH = Skylighting::SampleNoBias(positionMSSkylight);
-			skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, ShadowSampling::LightingSampleNormal, Skylighting::GetFadeOutFactor(positionMSSkylight));
+	[branch] if (UseAmbientEffectLighting())
+	{
+		const bool isSkyObject = Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject;
+		float brightness = isSkyObject ? SharedData::adaptiveBalanceSettings.skyStaticBrightness : SharedData::adaptiveBalanceSettings.effectBrightness;
+		color = 0.0;
+		[branch] if (LightingInfluence.x != 0.0 && brightness != 0.0 && Color::EffectLightingMult() != 0.0)
+		{
+			color = GetAmbientEffectLighting(worldPosition, screenPosition, eyeIndex, 0.0, shadowVariance) * brightness * Color::EffectLightingMult();
 		}
-#		endif
-
+	}
+	else if (suppressExternalEmittance)
+	{
+		color = ShadowSampling::GetSceneLightingColor();
+	}
+	else if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::EffectShadows))
+	{
 		float3 dirLightColor;
 		float3 ambientColor;
-#		if defined(SKYLIGHTING)
-		ExtractEffectLighting(color, dirLightColor, ambientColor, skylightingDiffuse);
-#		else
-		ExtractEffectLighting(color, dirLightColor, ambientColor, 1.0);
-#		endif
+		ExtractEffectLighting(color, dirLightColor, ambientColor, GetEffectSkylightingDiffuse(worldPosition, eyeIndex));
 
 		if (inWorld && ShadowSampling::HasDirectionalShadows()) {
 			float shadow = ShadowSampling::Get3DFilteredShadow(worldPosition.xyz, normalize(worldPosition.xyz), screenPosition, eyeIndex);
@@ -608,17 +669,12 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 		} else {
 			color = ambientColor + dirLightColor;
 		}
-	} else {
+	}
+	else
+	{
 #		if defined(SKYLIGHTING)
 		if (!SharedData::InInterior) {
-#			if defined(VR)
-			float3 positionMSSkylight = worldPosition + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
-#			else
-			float3 positionMSSkylight = worldPosition;
-#			endif
-
-			sh2 skylightingSH = Skylighting::SampleNoBias(positionMSSkylight);
-			float skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, float3(0, 0, 1), Skylighting::GetFadeOutFactor(positionMSSkylight));
+			float skylightingDiffuse = GetEffectSkylightingDiffuse(worldPosition, eyeIndex);
 
 			color = Color::IrradianceToLinear(color);
 			color *= skylightingDiffuse;
@@ -820,6 +876,32 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 lightColor = lerp(baseColor.xyz, propertyColor * baseColor.xyz, lightingInfluence.xxx);
 
+#	if !defined(LIGHTING) && defined(VC) && defined(TEXCOORD) && defined(NORMALS) && defined(TEXTURE) && defined(FALLOFF) && defined(SOFT)
+	const bool isSkyStatic = Color::IsSceneColorDraw() && (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha) && lightingInfluence == 1.0;
+#	else
+	const bool isSkyStatic = false;
+#	endif
+	const float skyStaticTransparency = isSkyStatic ? SharedData::adaptiveBalanceSettings.skyStaticTransparency : 0.0;
+	if (isSkyStatic) {
+		if (skyStaticTransparency == 1.0)
+			discard;
+	}
+#	if !defined(LIGHTING) && !defined(MEMBRANE)
+	[branch] if (UseAmbientEffectLighting() && lightingInfluence != 0.0 && (isSkyStatic || (Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject)))
+	{
+#		if defined(SOFT)
+		float maxShadowDistance = max(0.0, SharedData::GetScreenDepth(depth));
+#		else
+		float maxShadowDistance = 0.0;
+#		endif
+		float3 ambientLighting = 0.0;
+		[branch] if (SharedData::adaptiveBalanceSettings.skyStaticBrightness != 0.0)
+		{
+			ambientLighting = GetAmbientEffectLighting(input.WorldPosition.xyz, input.Position.xy, eyeIndex, maxShadowDistance, shadowVariance);
+		}
+		lightColor = lerp(baseColor.xyz, baseColor.xyz * ambientLighting * SharedData::adaptiveBalanceSettings.skyStaticBrightness, lightingInfluence);
+	}
+#	endif
 #	if !defined(MOTIONVECTORS_NORMALS)
 	if (alpha * fogMul.w - AlphaTestRefRS < 0) {
 		discard;
@@ -848,12 +930,21 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 
 	alpha = Color::EffectAlpha(alpha);
+#	if !defined(ADDBLEND) && !defined(MULTBLEND) && !defined(MULTBLEND_DECAL)
+	alpha *= 1.0 - skyStaticTransparency;
+#	endif
 
 	float4 finalColor = float4(Color::EffectMult(blendedColor), alpha);
 #	if defined(MULTBLEND_DECAL)
 	finalColor.xyz *= alpha;
 #	else
 	finalColor *= fogMul;
+#	endif
+#	if defined(ADDBLEND)
+	finalColor.xyz *= 1.0 - skyStaticTransparency;
+#	elif defined(MULTBLEND) || defined(MULTBLEND_DECAL)
+	if (skyStaticTransparency != 0.0)
+		finalColor.xyz = lerp(finalColor.xyz, 1.0.xxx, skyStaticTransparency);
 #	endif
 	psout.Diffuse = finalColor;
 #	if defined(LIGHTING) && defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)

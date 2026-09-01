@@ -1,4 +1,5 @@
 #include "Common/SharedData.hlsli"
+#include "Upscaling/EncodeTexturesBounds.hlsli"
 
 cbuffer UpscalingData : register(b0)
 {
@@ -11,6 +12,7 @@ cbuffer UpscalingData : register(b0)
 	float VRSeamHardening;
 	float2 SourceOffset;
 	float2 OutputOffset;
+	float2 SourceSamplingXBounds;  // Full-eye bounds, not the foveated dispatch crop
 };
 
 Texture2D<float2> TAAMask : register(t0);
@@ -42,10 +44,10 @@ float ComputeMaskEdgeFactor(uint2 sourcePos)
 	float centerMasked = IsMaskedDepth(DepthMask[sourcePos]);
 	float edge = 0.0;
 
-	[unroll]
-	for (uint i = 0; i < 4; ++i) {
+	[unroll] for (uint i = 0; i < 4; ++i)
+	{
 		int2 samplePos = int2(sourcePos) + offsets[i];
-		if (any(samplePos < 0) || any(samplePos >= int2(TrueSamplingDim)))
+		if (!IsEncodeTextureSourceSampleInBounds(samplePos, int2(TrueSamplingDim), SourceSamplingXBounds))
 			continue;
 
 		float neighborMasked = IsMaskedDepth(DepthMask[samplePos]);
@@ -91,14 +93,14 @@ float ComputeSeamFactor(uint2 sourcePos)
 	float2 longestMotionVector = motionVector;
 	float maxMotionLengthSq = dot(motionVector, motionVector);
 
-	[unroll]
-	for (int y = -2; y <= 2; y++) {
-		[unroll]
-		for (int x = -2; x <= 2; x++) {
+	[unroll] for (int y = -2; y <= 2; y++)
+	{
+		[unroll] for (int x = -2; x <= 2; x++)
+		{
 			int2 samplePos = int2(sourcePos) + int2(x, y);
 
-			// Skip samples outside true sampling dimensions
-			if (any(samplePos < 0) || any(samplePos >= int2(TrueSamplingDim)))
+			// Never source temporal data from outside this eye in packed-stereo VR.
+			if (!IsEncodeTextureSourceSampleInBounds(samplePos, int2(TrueSamplingDim), SourceSamplingXBounds))
 				continue;
 
 			float neighborDepth = DepthMask[samplePos];

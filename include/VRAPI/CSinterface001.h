@@ -1,3 +1,9 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// This consumer API file is available under LGPL-3.0-or-later.
+// See API.md, "Consumer licensing", for distribution requirements,
+// including those applicable when compiling the helper into a consumer DLL.
+// Licence texts: COPYING and COPYING.LESSER.
+
 #pragma once
 
 #include <RE/Skyrim.h>
@@ -128,9 +134,8 @@ namespace CSPluginAPI
 		// preset, and DLSS profile together. FSR-specific callers should use
 		// SetVRUpscalingTransitionProfileForMethod in revision 2. When active VR
 		// FPS Stabilizer Interior/Exterior profiles are available, the provider
-		// accepts the configured destination profile at either supported door
-		// timing: before the cell-type flip, or during the destination LoadingMenu.
-		// Ordinary current-cell reconciliation outside that handoff is ignored.
+		// accepts either configured cell profile when the safety gate allows it,
+		// including current-cell reconciliation after a live configuration reload.
 		virtual void SetVRUpscalingTransitionProfile(bool renderScaleModeEnabled, UpscalePreset preset, DLSSProfile profile) = 0;
 
 		// Revision 2. Explicit upscaler method control for callers that must
@@ -155,6 +160,7 @@ namespace CSPluginAPI
 		// invoke the setter. kApply means immediately call
 		// SetVRUpscalingTransitionProfileForMethod. CSX covers actual renderer work
 		// with Skyrim's existing loading fade; callers must not add a timed fade.
+		// Build 12 also admits a configured current-cell profile when unblocked.
 		virtual VRUpscalingTransitionProfileDecision GetVRUpscalingTransitionProfileDecision(
 			UpscaleMethod method,
 			bool renderScaleModeEnabled,

@@ -1,0 +1,52 @@
+# Keep the configured policy in the dependency graph when skip mode changes.
+# SKIP_RUNTIME_DOWNLOADS=@SKIP_RUNTIME_DOWNLOADS@
+function(
+    csx_check_install_runtime
+    _label
+    _component
+    _missing
+    _files
+    _hashes
+)
+    if(
+        CMAKE_INSTALL_COMPONENT
+        AND NOT CMAKE_INSTALL_COMPONENT STREQUAL _component
+    )
+        return()
+    endif()
+    if(_missing)
+        message(
+            FATAL_ERROR
+            "${_label} runtime payload is missing or unverified. Reconfigure with "
+            "SKIP_RUNTIME_DOWNLOADS=OFF before installing or packaging."
+        )
+    endif()
+
+    # Cached inputs may change after configure; reject them before staging resets.
+    foreach(_file _expected IN ZIP_LISTS _files _hashes)
+        set(_actual "missing")
+        if(EXISTS "${_file}" AND NOT IS_DIRECTORY "${_file}")
+            file(SHA256 "${_file}" _actual)
+        endif()
+        if(_actual STREQUAL "missing" OR NOT _actual STREQUAL _expected)
+            message(
+                FATAL_ERROR
+                "${_label} runtime payload is missing or changed since configuration: ${_file}. "
+                "Reconfigure with SKIP_RUNTIME_DOWNLOADS=OFF before installing or packaging."
+            )
+        endif()
+    endforeach()
+endfunction()
+
+csx_check_install_runtime(
+    "FidelityFX" "FidelityFXRuntime"
+    [==[@FFX_RUNTIME_PAYLOAD_MISSING@]==]
+    [==[@FFX_RUNTIME_PAYLOAD_FILES@]==]
+    [==[@FFX_RUNTIME_PAYLOAD_HASHES@]==]
+)
+csx_check_install_runtime(
+    "Streamline" "StreamlineRuntime"
+    [==[@STREAMLINE_RUNTIME_PAYLOAD_MISSING@]==]
+    [==[@STREAMLINE_RUNTIME_PAYLOAD_FILES@]==]
+    [==[@STREAMLINE_RUNTIME_PAYLOAD_HASHES@]==]
+)

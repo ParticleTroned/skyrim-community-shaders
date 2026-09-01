@@ -1,10 +1,10 @@
 #include "VolumetricLighting.h"
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 
 #include "LocationContext.h"
-#include "RE/N/NiDirectionalLight.h"
 #include "SkySync.h"
 #include "State.h"
 #include "VolumetricLightingTuningMigration.h"
@@ -53,77 +53,6 @@ namespace
 		return IsRainWeatherActive(sky->currentWeather, currentWeight) ||
 		       IsRainWeatherActive(sky->lastWeather, lastWeight);
 	}
-
-	VolumetricLightingTuning::Color ToTuningColor(const RE::NiColor& color)
-	{
-		return { color.red, color.green, color.blue };
-	}
-
-	RE::NiColor ToNiColor(const VolumetricLightingTuning::Color& color)
-	{
-		return { color.red, color.green, color.blue };
-	}
-
-	bool TryGetCurrentSunColor(VolumetricLightingTuning::Color& color)
-	{
-		auto* sky = globals::game::sky;
-		if (!sky || !sky->sun || !sky->sun->light)
-			return false;
-
-		color = ToTuningColor(sky->sun->light->GetLightRuntimeData().diffuse);
-		if (!VolumetricLightingTuning::IsFinite(color))
-			return false;
-
-		color = VolumetricLightingTuning::SanitizeColor(color);
-		return true;
-	}
-
-	void ApplyGodrayColorTuning(
-		RE::BSVolumetricLightingRenderData& descriptor,
-		const VolumetricLighting::GodrayProfile& profile)
-	{
-		const VolumetricLightingTuning::ColorBlend authoredColor{
-			ToTuningColor(descriptor.color),
-			descriptor.customColor.contribution
-		};
-		const VolumetricLightingTuning::Color userColor{
-			profile.CustomColorRed,
-			profile.CustomColorGreen,
-			profile.CustomColorBlue
-		};
-		const auto applyComposedUserColor = [&]() {
-			const auto composedColor = VolumetricLightingTuning::ComposeUserColor(
-				authoredColor,
-				userColor,
-				profile.CustomColorContribution);
-			descriptor.color = ToNiColor(composedColor.color);
-			descriptor.customColor.contribution = composedColor.contribution;
-		};
-
-		if (VolumetricLightingTuning::IsNear(profile.Saturation, 1.0f)) {
-			applyComposedUserColor();
-			return;
-		}
-
-		VolumetricLightingTuning::Color sunColor{};
-		if (!TryGetCurrentSunColor(sunColor)) {
-			if (!VolumetricLightingTuning::IsNear(profile.CustomColorContribution, 0.0f))
-				applyComposedUserColor();
-			return;
-		}
-
-		const auto baselineColor = VolumetricLightingTuning::ResolveEffectiveColor(authoredColor, std::addressof(sunColor));
-		const auto saturatedColor = VolumetricLightingTuning::SaturateColor(baselineColor, profile.Saturation);
-		const auto finalColor = VolumetricLightingTuning::LerpColor(
-			saturatedColor,
-			VolumetricLightingTuning::ClampColor01(userColor),
-			profile.CustomColorContribution);
-
-		// A local descriptor can force the already-resolved result without losing authored state.
-		descriptor.customColor.contribution = 1.0f;
-		descriptor.color = ToNiColor(VolumetricLightingTuning::SanitizeColor(finalColor));
-	}
-
 }
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -319,7 +248,7 @@ void VolumetricLighting::DrawGodrayProfileSettings(const char* label, GodrayProf
 
 	drawSlider("Godray Intensity", profile.ShaftIntensity, 0.0f, VolumetricLightingTuning::kShaftIntensityMax, "Linearly scales volumetric godray brightness.");
 	drawSlider("Godray Opacity", profile.Opacity, 0.0f, VolumetricLightingTuning::kOpacityMax, "Shapes shaft visibility after temporal blending without changing weather density. 1.0 is default.");
-	drawSlider("Godray Saturation", profile.Saturation, 0.0f, VolumetricLightingTuning::kSaturationMax, "Adjusts the authored godray color with gamut-preserving saturation. 1.0 is default.");
+	drawSlider("Godray Saturation", profile.Saturation, 0.0f, VolumetricLightingTuning::kSaturationMax, "Adjusts weather godray saturation while preserving brightness. 1.0 is default.");
 
 	drawSlider("Custom Color Contribution", profile.CustomColorContribution, 0.0f, 1.0f, "Blends your custom color into the authored weather godray color.");
 	const bool customColorDisabled = profile.CustomColorContribution <= VolumetricLightingTuning::kFloatEpsilon;
@@ -518,13 +447,12 @@ bool VolumetricLighting::TryGetActiveGodrayProfile(GodrayProfile& profile) const
 	return true;
 }
 
-float VolumetricLighting::GetRuntimeGodrayOpacity() const
+VolumetricLighting::GodrayProfile VolumetricLighting::GetRuntimeGodrayProfile() const
 {
-	if (!loaded || !IsImageSpaceReplacementEnabled())
-		return 1.0f;
-
 	GodrayProfile profile{};
-	return TryGetActiveGodrayProfile(profile) ? profile.Opacity : 1.0f;
+	if (loaded && IsImageSpaceReplacementEnabled())
+		TryGetActiveGodrayProfile(profile);
+	return profile;
 }
 
 bool VolumetricLighting::IsPerformanceCostMeasurementEnabled() const
@@ -612,26 +540,53 @@ void VolumetricLighting::PostPostLoad()
 
 void VolumetricLighting::SetupResources()
 {
-	vlDataCB = new ConstantBuffer(ConstantBufferDesc<VLData>());
+	vlDataCB = new ConstantBuffer(ConstantBufferDesc<VLData>(), "VolumetricLighting::Dimensions");
+}
+
+void VolumetricLighting::UpdateBlurDimensions()
+{
+	blurDimensionsValid = false;
+	if (!globals::state || !globals::game::graphicsState || !vlDataCB)
+		return;
+
+	const auto fullSize = globals::state->screenSize;
+	const auto renderSize = Util::ConvertToDynamic(fullSize);
+	const float minimumWidth = globals::game::isVR ? 2.0f : 1.0f;
+	const auto validDimension = [](float size, float minimum, float maximum) {
+		return std::isfinite(size) && size >= minimum && size <= maximum;
+	};
+	if (!validDimension(fullSize.x, minimumWidth, D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION) ||
+		!validDimension(fullSize.y, 1.0f, D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION) ||
+		!validDimension(renderSize.x, minimumWidth, fullSize.x) ||
+		!validDimension(renderSize.y, 1.0f, fullSize.y)) {
+		return;
+	}
+
+	const auto fullWidth = static_cast<int32_t>(fullSize.x);
+	const auto fullHeight = static_cast<int32_t>(fullSize.y);
+	// Dynamic bounds live in the constant buffer, not the cached shader wrapper.
+	if (fullWidth != fullScreenX || fullHeight != fullScreenY) {
+		blurHCS = nullptr;
+		blurVCS = nullptr;
+	}
+	fullScreenX = fullWidth;
+	fullScreenY = fullHeight;
+
+	vlData.screenX = static_cast<int32_t>(renderSize.x);
+	vlData.screenY = static_cast<int32_t>(renderSize.y);
+	vlData.screenXMin1 = vlData.screenX - 1;
+	vlData.screenYMin1 = vlData.screenY - 1;
+	vlData.eyeWidth = globals::game::isVR ? vlData.screenX / 2 : vlData.screenX;
+	const int32_t maximumEyeWidth = globals::game::isVR ? vlData.screenX - vlData.eyeWidth : vlData.screenX;
+	vlData.horizontalGroupsPerEye =
+		(maximumEyeWidth + BlurThreadGroupSizeX - BlurWindow * 2u - 1u) / (BlurThreadGroupSizeX - BlurWindow * 2u);
+	vlDataCB->Update(vlData);
+	blurDimensionsValid = true;
 }
 
 void VolumetricLighting::EarlyPrepass()
 {
-	auto renderSize = Util::ConvertToDynamic(globals::state->screenSize);
-
-	int32_t width = static_cast<int32_t>(renderSize.x);
-	int32_t height = static_cast<int32_t>(renderSize.y);
-
-	if (width != vlData.screenX || height != vlData.screenY) {
-		blurHCS = nullptr;
-		blurVCS = nullptr;
-	}
-
-	vlData.screenX = width;
-	vlData.screenY = height;
-	vlData.screenXMin1 = width - 1;
-	vlData.screenYMin1 = height - 1;
-	vlDataCB->Update(vlData);
+	UpdateBlurDimensions();
 
 	const bool currentlyInInterior = LocationContext::HasInteriorCell();
 	const bool nextInteriorWithSun = LocationContext::IsInteriorWithSun();
@@ -758,23 +713,15 @@ VolumetricLighting::VolumetricLightingDescriptor* VolumetricLighting::ApplyVolum
 		return descriptor;
 	}
 
-	GodrayProfile profile{};
-	const bool hasActiveProfile = feature.TryGetActiveGodrayProfile(profile);
+	const auto profile = feature.GetRuntimeGodrayProfile();
 	const float skySyncIntensity = globals::features::skySync.GetVolumetricLightingIntensityFactor();
-	const float intensityScale = skySyncIntensity * (hasActiveProfile ? profile.ShaftIntensity : 1.0f);
-	const bool needsColorTuning =
-		hasActiveProfile &&
-		(!VolumetricLightingTuning::IsNear(profile.Saturation, 1.0f) ||
-		 !VolumetricLightingTuning::IsNear(profile.CustomColorContribution, 0.0f));
-	if (VolumetricLightingTuning::IsNear(intensityScale, 1.0f) && !needsColorTuning)
+	const float intensityScale = skySyncIntensity * profile.ShaftIntensity;
+	if (VolumetricLightingTuning::IsNear(intensityScale, 1.0f))
 		return descriptor;
 
 	feature.runtimeDescriptor = *descriptor;
 	auto& runtimeDescriptor = feature.runtimeDescriptor;
-	if (!VolumetricLightingTuning::IsNear(intensityScale, 1.0f))
-		runtimeDescriptor.intensity *= intensityScale;
-	if (needsColorTuning)
-		ApplyGodrayColorTuning(runtimeDescriptor, profile);
+	runtimeDescriptor.intensity *= intensityScale;
 
 	return std::addressof(runtimeDescriptor);
 }
@@ -825,13 +772,15 @@ void VolumetricLighting::SetDimensionsCB() const
 	globals::d3d::context->CSSetConstantBuffers(1, 1, &cb);
 }
 
-void VolumetricLighting::SetGroupCountsHCS(uint32_t& threadGroupCountX) const
+void VolumetricLighting::SetGroupCountsHCS(uint32_t& threadGroupCountX, uint32_t& threadGroupCountY) const
 {
-	threadGroupCountX = (vlData.screenX + BlurThreadGroupSizeX - BlurWindow * 2u - 1u) / (BlurThreadGroupSizeX - BlurWindow * 2u);
+	threadGroupCountX = vlData.horizontalGroupsPerEye * (globals::game::isVR ? 2u : 1u);
+	threadGroupCountY = static_cast<uint32_t>(vlData.screenY);
 }
 
-void VolumetricLighting::SetGroupCountsVCS(uint32_t& threadGroupCountY) const
+void VolumetricLighting::SetGroupCountsVCS(uint32_t& threadGroupCountX, uint32_t& threadGroupCountY) const
 {
+	threadGroupCountX = static_cast<uint32_t>(vlData.screenX);
 	threadGroupCountY = (vlData.screenY + BlurThreadGroupSizeY - BlurWindow * 2u - 1u) / (BlurThreadGroupSizeY - BlurWindow * 2u);
 }
 

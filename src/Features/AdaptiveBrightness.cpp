@@ -7,10 +7,12 @@
 #include "State.h"
 #include "Utils/D3D.h"
 #include "Utils/FileSystem.h"
+#include "Utils/Finite.h"
 #include "Utils/Form.h"
 #include "Utils/Game.h"
 #include "Utils/PointLightFlags.h"
 #include "Utils/UI.h"
+#include "WeatherColorAdjustment.h"
 
 #include "RE/B/BGSLocation.h"
 #include "RE/P/PlayerCharacter.h"
@@ -23,8 +25,10 @@
 #include <imgui_stdlib.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cmath>
+#include <exception>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -44,10 +48,20 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AdaptiveBrightness::ProfileSettings,
 	brightness,
+	contrast,
+	saturation,
 	advanced,
 	bloomAdvanced,
 	waterAdvanced,
 	skyBrightnessMult,
+	skySaturation,
+	cloudBrightnessMult,
+	cloudSaturation,
+	fogIntensity,
+	sunGlareIntensity,
+	effectBrightness,
+	skyStaticBrightness,
+	skyStaticTransparency,
 	directionalLightMult,
 	pointLightMult,
 	linearPointLightMult,
@@ -60,6 +74,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	glowmapMult,
 	effectLightingMult,
 	skyGammaOffset,
+	cloudGammaOffset,
 	fogGammaOffset,
 	fogAlphaGammaOffset,
 	waterGammaOffset,
@@ -80,6 +95,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AdaptiveBrightness::Settings,
 	enabled,
+	useAmbientEffectLighting,
 	dayStartHour,
 	nightStartHour,
 	transitionHours,
@@ -113,6 +129,10 @@ namespace
 	constexpr float kGammaOffsetMin = -1.0f;
 	constexpr float kGammaOffsetMax = 1.0f;
 	constexpr float kGlobalSkyBrightnessMax = 2.0f;
+	constexpr float kSkySaturationMax = 2.0f;
+	constexpr float kContrastMin = 0.5f;
+	constexpr float kContrastMax = 2.0f;
+	constexpr float kSaturationMax = 2.0f;
 	constexpr float kGlobalLightingMultiplierMax = 5.0f;
 	constexpr float kWaterWindMultiplierMin = 0.0f;
 	constexpr float kWaterWindMultiplierMax = 2.0f;
@@ -321,6 +341,17 @@ namespace
 		};
 
 		a_settings.skyBrightness = clamp(a_settings.skyBrightness, kGlobalSkyBrightnessMax, defaults.skyBrightness);
+		a_settings.skySaturation = clamp(a_settings.skySaturation, kSkySaturationMax, defaults.skySaturation);
+		a_settings.cloudBrightness = clamp(a_settings.cloudBrightness, kGlobalSkyBrightnessMax, defaults.cloudBrightness);
+		a_settings.cloudSaturation = clamp(a_settings.cloudSaturation, kSkySaturationMax, defaults.cloudSaturation);
+		a_settings.fogIntensity = clamp(a_settings.fogIntensity, kGlobalLightingMultiplierMax, defaults.fogIntensity);
+		a_settings.sunGlareIntensity = clamp(a_settings.sunGlareIntensity, kGlobalLightingMultiplierMax, defaults.sunGlareIntensity);
+		a_settings.effectBrightness = clamp(a_settings.effectBrightness, kGlobalSkyBrightnessMax, defaults.effectBrightness);
+		a_settings.skyStaticBrightness = clamp(a_settings.skyStaticBrightness, kGlobalSkyBrightnessMax, defaults.skyStaticBrightness);
+		a_settings.skyStaticTransparency = clamp(a_settings.skyStaticTransparency, 1.0f, defaults.skyStaticTransparency);
+		a_settings.contrast = Util::ClampFinite(a_settings.contrast, kContrastMin, kContrastMax, defaults.contrast);
+		a_settings.saturation = clamp(a_settings.saturation, kSaturationMax, defaults.saturation);
+		a_settings.ambientMult = ClampMultiplier(a_settings.ambientMult);
 		a_settings.directionalLightMult = clamp(a_settings.directionalLightMult, kGlobalLightingMultiplierMax, defaults.directionalLightMult);
 		a_settings.pointLightMult = clamp(a_settings.pointLightMult, kGlobalLightingMultiplierMax, defaults.pointLightMult);
 		a_settings.linearPointLightMult = clamp(a_settings.linearPointLightMult, kGlobalLightingMultiplierMax, defaults.linearPointLightMult);
@@ -622,7 +653,17 @@ namespace
 	void ClampProfileSettings(AdaptiveBrightness::ProfileSettings& a_profile)
 	{
 		a_profile.brightness = ClampBrightness(a_profile.brightness);
+		a_profile.contrast = Util::ClampFinite(a_profile.contrast, kContrastMin, kContrastMax, 1.0f);
+		a_profile.saturation = Util::ClampFinite(a_profile.saturation, 0.0f, kSaturationMax, 1.0f);
 		a_profile.skyBrightnessMult = ClampMultiplier(a_profile.skyBrightnessMult);
+		a_profile.skySaturation = Util::ClampFinite(a_profile.skySaturation, 0.0f, kSkySaturationMax, 1.0f);
+		a_profile.cloudBrightnessMult = ClampMultiplier(a_profile.cloudBrightnessMult);
+		a_profile.cloudSaturation = Util::ClampFinite(a_profile.cloudSaturation, 0.0f, kSkySaturationMax, 1.0f);
+		a_profile.fogIntensity = Util::ClampFinite(a_profile.fogIntensity, 0.0f, kGlobalLightingMultiplierMax, 1.0f);
+		a_profile.sunGlareIntensity = Util::ClampFinite(a_profile.sunGlareIntensity, 0.0f, kGlobalLightingMultiplierMax, 1.0f);
+		a_profile.skyStaticBrightness = Util::ClampFinite(a_profile.skyStaticBrightness, 0.0f, kGlobalSkyBrightnessMax, 1.0f);
+		a_profile.effectBrightness = Util::ClampFinite(a_profile.effectBrightness, 0.0f, kGlobalSkyBrightnessMax, 1.0f);
+		a_profile.skyStaticTransparency = Util::ClampFinite(a_profile.skyStaticTransparency, 0.0f, 1.0f, 0.0f);
 		a_profile.directionalLightMult = ClampMultiplier(a_profile.directionalLightMult);
 		a_profile.pointLightMult = ClampMultiplier(a_profile.pointLightMult);
 		a_profile.linearPointLightMult = ClampMultiplier(a_profile.linearPointLightMult);
@@ -635,6 +676,7 @@ namespace
 		a_profile.glowmapMult = ClampMultiplier(a_profile.glowmapMult);
 		a_profile.effectLightingMult = ClampMultiplier(a_profile.effectLightingMult);
 		a_profile.skyGammaOffset = ClampGammaOffset(a_profile.skyGammaOffset);
+		a_profile.cloudGammaOffset = ClampGammaOffset(a_profile.cloudGammaOffset);
 		a_profile.fogGammaOffset = ClampGammaOffset(a_profile.fogGammaOffset);
 		a_profile.fogAlphaGammaOffset = ClampGammaOffset(a_profile.fogAlphaGammaOffset);
 		a_profile.waterGammaOffset = ClampGammaOffset(a_profile.waterGammaOffset);
@@ -817,12 +859,20 @@ namespace
 		a_profile["bloomAdvanced"] = a_advanced;
 	}
 
-	std::optional<WaterAppearance::Profile> TryGetWaterAppearanceProfile(const json& a_value)
+	std::optional<WaterAppearance::Profile> TryGetWaterAppearanceProfile(json a_value)
 	{
 		if (!a_value.is_object())
 			return std::nullopt;
 
 		try {
+			// Bound quality before the JSON serializer narrows it to an integer.
+			if (auto qualityIt = a_value.find("ParallaxQuality"); qualityIt != a_value.end() && qualityIt->is_number()) {
+				*qualityIt = static_cast<int>(Util::ClampFinite(
+					qualityIt->get<double>(),
+					static_cast<double>(WaterAppearance::Profile::kMinParallaxQuality),
+					static_cast<double>(WaterAppearance::Profile::kMaxParallaxQuality),
+					static_cast<double>(WaterAppearance::Profile::kDefaultParallaxQuality)));
+			}
 			auto profile = a_value.get<WaterAppearance::Profile>();
 			WaterAppearance::SanitizeProfile(profile);
 			return profile;
@@ -842,6 +892,7 @@ namespace
 	{
 		if (!a_profile.is_object())
 			return;
+		SettingsMigrations::MigrateCloudProfileSettings(a_profile);
 
 		if (const auto linearPointIt = a_profile.find("linearPointLightMult");
 			linearPointIt != a_profile.end() && linearPointIt->is_number())
@@ -864,16 +915,15 @@ namespace
 		const bool hasExplicitWater = waterIt != a_profile.end() && waterIt->is_object() &&
 		                              GetOptionalBool(*waterIt, SettingsMigrations::kLegacyWaterProfileExplicitKey.data(), false);
 		if ((!a_forceGlobal || hasExplicitWater) && waterIt != a_profile.end() && waterIt->is_object()) {
-			// A profile-native value wins field-by-field. Missing fields inherit the
-			// migrated global value so a formerly global Unified Water configuration
-			// remains global across every Adaptive Balance profile and override.
+			// Preserve every supported profile field; missing or malformed values
+			// inherit the legacy global value or the current default.
 			json mergedWater = a_hasLegacyGlobal ? json(a_globalProfile) : json(WaterAppearance::Profile{});
-			for (const auto fieldName : SettingsMigrations::kLegacyUnifiedWaterAppearanceKeys) {
-				if (const auto fieldIt = waterIt->find(fieldName.data()); fieldIt != waterIt->end() && fieldIt->is_number())
-					mergedWater[std::string(fieldName)] = *fieldIt;
+			for (auto& [fieldName, value] : mergedWater.items()) {
+				if (const auto fieldIt = waterIt->find(fieldName); fieldIt != waterIt->end() && SettingsMigrations::MatchesJsonSchema(*fieldIt, value))
+					value = *fieldIt;
 			}
 
-			if (const auto nativeWater = TryGetWaterAppearanceProfile(mergedWater))
+			if (const auto nativeWater = TryGetWaterAppearanceProfile(std::move(mergedWater)))
 				SetProfileWaterAppearance(a_profile, *nativeWater);
 			else
 				SetProfileWaterAppearance(a_profile, WaterAppearance::Profile{});
@@ -1117,6 +1167,7 @@ namespace
 		}
 		if (removedGlobalLayerWasDisabled)
 			globalProfile = AdaptiveBrightness::ProfileSettings::GlobalDefaults();
+		SettingsMigrations::MigrateCloudProfileSettings(globalProfile);
 		migrated["globalProfile"] = std::move(globalProfile);
 
 		const auto legacyBloomIt = migrated.find("bloomEnhancement");
@@ -1189,6 +1240,7 @@ namespace
 	json MakeBasePresetJson(const AdaptiveBrightness::Settings& a_settings, std::string_view a_name, PresetKind a_kind, std::string_view a_type, std::string_view a_description)
 	{
 		return {
+			{ "useAmbientEffectLighting", a_settings.useAmbientEffectLighting },
 			{ "globalProfile", a_settings.globalProfile },
 			{ "dayStartHour", a_settings.dayStartHour },
 			{ "nightStartHour", a_settings.nightStartHour },
@@ -1320,6 +1372,7 @@ namespace
 			if (const auto it = migratedPreset.find("globalProfile"); it != migratedPreset.end() && it->is_object())
 				importedSettings.globalProfile = it->get<AdaptiveBrightness::ProfileSettings>();
 
+			importedSettings.useAmbientEffectLighting = GetOptionalBool(migratedPreset, "useAmbientEffectLighting", false);
 			importedSettings.dayStartHour = GetOptionalFloat(migratedPreset, "dayStartHour", importedSettings.dayStartHour);
 			importedSettings.nightStartHour = GetOptionalFloat(migratedPreset, "nightStartHour", importedSettings.nightStartHour);
 			importedSettings.transitionHours = GetOptionalFloat(migratedPreset, "transitionHours", importedSettings.transitionHours);
@@ -1511,6 +1564,25 @@ namespace
 	}
 }
 
+void AdaptiveBrightness::DrawSettingsHeaderControls()
+{
+	bool enabled = settings.enabled;
+	if (ImGui::Checkbox("Enable", &enabled))
+		SetEnabled(enabled);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Enable all Adaptive Balance adjustments across Global, profile, and location layers.");
+		ImGui::Text("When off, its lighting, color, Bloom, water appearance, and wind response adjustments are bypassed.");
+		ImGui::Text("Engine wind and independent renderer features keep their own settings.");
+	}
+
+	if (settings.enabled) {
+		const auto contextLabel = GetContextLabel();
+		ImGui::TextWrapped("%s", contextLabel.c_str());
+	} else {
+		ImGui::TextDisabled("Adaptive Balance is off. Saved adjustments are preserved.");
+	}
+}
+
 void AdaptiveBrightness::DrawSettings()
 {
 	const auto contextSectionToSelect = SyncContextSection();
@@ -1521,27 +1593,16 @@ void AdaptiveBrightness::DrawSettings()
 
 	if (ImGui::BeginTabBar("##AdaptiveBalanceSections", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem("Global")) {
-			ImGui::TextWrapped("Set the shared Lighting, Bloom, and Water adjustments applied before the active profile and location layers.");
+			ImGui::TextWrapped("Set the shared Lighting, Color, Bloom, and Water adjustments applied before the active profile and location layers.");
 			DrawGlobalPresetControls();
 			DrawGlobalSettings(true);
 			ImGui::EndTabItem();
 		}
 
 		if (ImGui::BeginTabItem("Profiles", nullptr, profileSectionFlags)) {
-			if (ImGui::Checkbox("Enable Adaptive Profiles", &settings.enabled))
-				ResetWaterWindSmoothing();
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Blend the active lighting, atmosphere, Bloom, and water appearance profile by location and exterior time.");
-				ImGui::Text("Every base and location layer uses the same Lighting, Bloom, Water, and wind controls.");
-			}
-			if (settings.enabled) {
-				const auto contextLabel = GetContextLabel();
-				ImGui::TextWrapped("%s", contextLabel.c_str());
-			}
-
 			ImGui::TextWrapped("Tune the lighting, atmosphere, Bloom, and water appearance used for each time and location type. Context profiles are ordered from broad Worldspace and Location scopes to specific Cities; exact locations and cells remain under Locations.");
 			if (!settings.enabled)
-				ImGui::TextDisabled("Adaptive profile switching is off. Saved profile values can still be reviewed.");
+				ImGui::TextDisabled("Adaptive Balance is off. Saved profile values can still be reviewed.");
 
 			ImGui::BeginDisabled(!settings.enabled);
 			DrawExteriorTimeSettings();
@@ -1580,7 +1641,7 @@ void AdaptiveBrightness::DrawSettings()
 		if (ImGui::BeginTabItem("Locations", nullptr, locationSectionFlags)) {
 			ImGui::TextWrapped("Create precise profile overrides for worldspaces, regional locations, cities, specific locations, or exact cells.");
 			if (!settings.enabled)
-				ImGui::TextDisabled("Adaptive profile switching is off. Saved overrides can still be reviewed.");
+				ImGui::TextDisabled("Adaptive Balance is off. Saved overrides can still be reviewed.");
 			DrawLocationOverrides(false, true, settings.enabled);
 			ImGui::EndTabItem();
 		}
@@ -1614,6 +1675,7 @@ void AdaptiveBrightness::DrawProfileControlTabs(
 			ImGui::EndTabItem();
 		};
 		drawTab("Lighting", [&] { DrawLightingSettings(a_profile, a_showAdvancedControls, a_globalLayer); });
+		drawTab("Color", [&] { DrawColorSettings(a_profile); });
 		drawTab("Bloom", [&] { DrawBloomSettings(a_profile, a_showAdvancedControls, a_globalLayer); });
 		drawTab("Water", [&] { DrawWaterSettings(a_profile, a_showAdvancedControls, a_globalLayer); });
 
@@ -1629,35 +1691,38 @@ void AdaptiveBrightness::DrawGlobalSettings(bool a_showAdvancedControls)
 		"##AdaptiveBalanceGlobalSettings",
 		a_showAdvancedControls,
 		true,
-		true);
+		settings.enabled);
 	ClampProfileSettings(settings.globalProfile);
 }
 
 void AdaptiveBrightness::DrawEssentialSettings()
 {
-	ImGui::TextWrapped("Set the shared Lighting, Bloom, and Water adjustments.");
+	ImGui::TextWrapped("Set the shared Lighting, Color, Bloom, and Water adjustments.");
 	DrawGlobalPresetControls();
 	DrawGlobalSettings(false);
 }
 
-void AdaptiveBrightness::DrawPerformanceSettings(bool)
+void AdaptiveBrightness::DrawPerformanceSettings(bool a_advanced)
 {
-	if (ImGui::Checkbox("Enable Adaptive Profiles", &settings.enabled))
-		ResetWaterWindSmoothing();
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Blend the time, location, Bloom, Water, and wind profile layers. The global adjustment layer remains active.");
+	DrawSettingsHeaderControls();
+	DrawGlobalSettings(a_advanced);
 }
 
 json AdaptiveBrightness::CapturePerformanceSettingsState() const
 {
 	return {
-		{ "enabled", settings.enabled }
+		{ "enabled", settings.enabled },
+		{ "useAmbientEffectLighting", settings.useAmbientEffectLighting },
+		{ "globalProfile", settings.globalProfile }
 	};
 }
 
 void AdaptiveBrightness::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 {
+	if (performanceCostMeasurementEnabled == a_enabled)
+		return;
 	performanceCostMeasurementEnabled = a_enabled;
+	ResetWaterWindSmoothing();
 }
 
 void AdaptiveBrightness::LoadSettings(json& o_json)
@@ -1909,9 +1974,9 @@ void AdaptiveBrightness::DrawCurrentContextProfileTab(
 
 	if (!contextProfile) {
 		if (inheritedProfile) {
-			ImGui::TextWrapped("%s currently inherits the saved broader profile %s. Create an adjustment layer here to refine Lighting, Bloom, and Water.", target->name.c_str(), inheritedProfile->name.c_str());
+			ImGui::TextWrapped("%s currently inherits the saved broader profile %s. Create an adjustment layer here to refine Lighting, Color, Bloom, and Water.", target->name.c_str(), inheritedProfile->name.c_str());
 		} else {
-			ImGui::TextWrapped("%s currently inherits the %s base profile. Create an adjustment layer here to refine Lighting, Bloom, and Water.", target->name.c_str(), GetProfileName(target->defaultProfile));
+			ImGui::TextWrapped("%s currently inherits the %s base profile. Create an adjustment layer here to refine Lighting, Color, Bloom, and Water.", target->name.c_str(), GetProfileName(target->defaultProfile));
 		}
 		ImGui::BeginDisabled(!a_allowEdits);
 		const auto createLabel = std::format("Create {} Profile", GetContextScopeName(a_scope));
@@ -1942,7 +2007,7 @@ void AdaptiveBrightness::DrawContextProfilePresetControls(
 	bool a_allowEdits)
 {
 	ImGui::SeparatorText("Share Profile");
-	DrawHintText("Export stores this scope's Lighting, Bloom, Water, wind, and layer mode as a portable JSON profile. Import applies them to the current scope without changing other saved profiles.");
+	DrawHintText("Export stores this scope's Lighting, Color, Bloom, Water, wind, and layer mode as a portable JSON profile. Import applies them to the current scope without changing other saved profiles.");
 
 	const auto scopeIndex = ContextScopeIndex(a_scope);
 	auto& presetName = contextPresetNames[scopeIndex];
@@ -1986,6 +2051,17 @@ void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const c
 	ClampProfileSettings(a_profile);
 }
 
+void AdaptiveBrightness::DrawColorSettings(ProfileSettings& a_profile)
+{
+	ImGui::TextWrapped("Adjust the whole scene, including sky, lighting and bloom. One is neutral; Global and active profile adjustments multiply.");
+	ImGui::SliderFloat("Contrast", &a_profile.contrast, kContrastMin, kContrastMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted("Adjusts luminance around middle gray while preserving hue. Lower values soften contrast; higher values deepen shadows and brighten highlights.");
+	ImGui::SliderFloat("Saturation", &a_profile.saturation, 0.0f, kSaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted("Zero makes the scene monochrome; one preserves its colors; higher values increase color intensity. Works with Linear Lighting on or off.");
+}
+
 void AdaptiveBrightness::DrawLightingSettings(
 	ProfileSettings& a_profile,
 	bool a_showAdvancedControls,
@@ -1994,6 +2070,12 @@ void AdaptiveBrightness::DrawLightingSettings(
 	ImGui::SliderFloat("Scene Brightness", &a_profile.brightness, kBrightnessMin, kBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Master lighting adjustment for this %s layer.", a_globalLayer ? "global" : "profile");
+
+	if (a_globalLayer) {
+		ImGui::Checkbox("Ambient Lighting for Effects and Sky Statics", &settings.useAmbientEffectLighting);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextWrapped("Replaces weather lighting on effect meshes and sky statics with ambient light, including IBL when enabled, and shadowed directional light. Effect and Sky Static Brightness still apply. This global switch is independent of detailed lighting controls.");
+	}
 
 	if (!a_showAdvancedControls)
 		return;
@@ -2005,8 +2087,29 @@ void AdaptiveBrightness::DrawLightingSettings(
 		return;
 
 	ImGui::Indent();
-	ImGui::SeparatorText("Direct Lighting");
+	ImGui::SeparatorText("Sky and Atmosphere");
 	ImGui::SliderFloat("Sky Brightness", &a_profile.skyBrightnessMult, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat("Sky Saturation", &a_profile.skySaturation, 0.0f, kSkySaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Scales sky color saturation independently of clouds. One preserves the current colors; zero makes them monochrome.");
+	ImGui::SliderFloat("Cloud Brightness", &a_profile.cloudBrightnessMult, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat("Cloud Saturation", &a_profile.cloudSaturation, 0.0f, kSkySaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat("Vanilla Fog Intensity", &a_profile.fogIntensity, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Scales distance-fog opacity. Zero removes it; one preserves its current strength. Fog gamma remains independent.");
+	ImGui::SliderFloat("Effect Brightness", &a_profile.effectBrightness, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Scales weather or ambient/directional effect lighting. One preserves brightness; the Effects lighting multiplier remains independent.");
+	ImGui::SliderFloat("Sky Static Brightness", &a_profile.skyStaticBrightness, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Scales weather or ambient/directional sky-static lighting. One preserves brightness.");
+	ImGui::SliderFloat("Sky Static Transparency", &a_profile.skyStaticTransparency, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Fades sky-static effect meshes such as mountain mist. Zero preserves visibility; one hides them.");
+	ImGui::SliderFloat("Sun Glare Intensity", &a_profile.sunGlareIntensity, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Scales glare already drawn by the engine. Zero removes it; one preserves its brightness. Does not restore missing glare or weather lens flares.");
+	ImGui::SeparatorText("Direct Lighting");
 	ImGui::SliderFloat("Directional Light", &a_profile.directionalLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	ImGui::SliderFloat("Point Lights", &a_profile.pointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
@@ -2021,12 +2124,15 @@ void AdaptiveBrightness::DrawLightingSettings(
 
 	ImGui::SeparatorText("Indirect and Material Lighting");
 	ImGui::SliderFloat("Ambient", &a_profile.ambientMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Scales ambient lighting after vanilla or image-based lighting is selected. One preserves the lighting; zero removes its ambient contribution.");
 	ImGui::SliderFloat("Emissive", &a_profile.emitColorMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	ImGui::SliderFloat("Glowmaps", &a_profile.glowmapMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	ImGui::SliderFloat("Effects", &a_profile.effectLightingMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
 	ImGui::SeparatorText("Atmosphere Gamma Offsets");
 	ImGui::SliderFloat("Sky", &a_profile.skyGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat("Clouds", &a_profile.cloudGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	ImGui::SliderFloat("Fog", &a_profile.fogGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	ImGui::SliderFloat("Fog Transparency", &a_profile.fogAlphaGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	ImGui::SliderFloat("Volumetric Lighting", &a_profile.vlGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
@@ -2064,9 +2170,15 @@ void AdaptiveBrightness::DrawWaterSettings(
 	if (!a_showAdvancedControls)
 		return;
 
+	ImGui::SeparatorText("Waves and Wind");
+	WaterAppearance::DrawWaveAmplitudeControl(a_profile.water);
+	DrawHintText("Wind Response multiplies Base Wave Amplitude between the calm and strong-wind scales. With wind off, only the base applies.");
+	DrawWaterWindSettings(a_profile, a_globalLayer);
+
+	ImGui::Separator();
 	ImGui::Checkbox("Show Detailed Water Controls", &a_profile.waterAdvanced);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Shows detailed water color, surface, reflection, refraction, and clarity adjustments for this layer.");
+		ImGui::Text("Shows detailed water color, surface, reflection, refraction, clarity, caustics, and parallax adjustments for this layer.");
 	if (a_profile.waterAdvanced) {
 		ImGui::Indent();
 		ImGui::SliderFloat("Water Color Gamma", &a_profile.waterGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
@@ -2075,9 +2187,6 @@ void AdaptiveBrightness::DrawWaterSettings(
 		WaterAppearance::DrawAdvancedProfileSettings(a_profile.water);
 		ImGui::Unindent();
 	}
-
-	ImGui::SeparatorText("Wind Response");
-	DrawWaterWindSettings(a_profile, a_globalLayer);
 }
 
 void AdaptiveBrightness::DrawWaterWindSettings(ProfileSettings& a_profile, bool a_globalLayer)
@@ -2107,10 +2216,10 @@ void AdaptiveBrightness::DrawWaterWindSettings(ProfileSettings& a_profile, bool 
 	ImGui::BeginDisabled(layerDisabled);
 	ImGui::SliderFloat("Calm Wave Scale", &waterWind.calmWaveMultiplier, kWaterWindMultiplierMin, kWaterWindMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Multiplies Wave Amplitude at zero wind after the earlier layers are composed.");
+		ImGui::Text("Multiplies Base Wave Amplitude in calm weather after profile layers are composed. The final amplitude is capped at 2.");
 	ImGui::SliderFloat("Strong Wind Wave Scale", &waterWind.strongWindWaveMultiplier, kWaterWindMultiplierMin, kWaterWindMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Multiplies Wave Amplitude at maximum wind after the earlier layers are composed.");
+		ImGui::Text("Multiplies Base Wave Amplitude at maximum wind after profile layers are composed. The final amplitude is capped at 2.");
 
 	const float windSpeed = GetSmoothedWaterWindSpeed();
 	const float waveMultiplier = GetWaterWindWaveMultiplier(waterWind, windSpeed);
@@ -2121,7 +2230,7 @@ void AdaptiveBrightness::DrawWaterWindSettings(ProfileSettings& a_profile, bool 
 void AdaptiveBrightness::DrawGlobalPresetControls()
 {
 	ImGui::SeparatorText("Global Presets");
-	DrawHintText("Global presets store the shared Lighting, Bloom, Water, and wind adjustment layer, the five profiles, and exterior timing.");
+	DrawHintText("Global presets store the shared Lighting, Color, Bloom, Water, and wind adjustment layer, the five profiles, and exterior timing.");
 	DrawHintText("Import overwrites those profile tabs in the current settings. Saved location overrides are not changed.");
 	ImGui::PushID("GlobalPresetControls");
 
@@ -2147,7 +2256,7 @@ void AdaptiveBrightness::DrawGlobalPresetControls()
 		ExportGlobalPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Export the global adjustment layer, exterior timing, and the five Lighting, Bloom, and Water profiles. Location overrides are not included.");
+		ImGui::Text("Export the global adjustment layer, exterior timing, and the five Lighting, Color, Bloom, and Water profiles. Location overrides are not included.");
 	}
 
 	if (keepControlsOnOneLine || keepButtonsOnOneLine)
@@ -2156,7 +2265,7 @@ void AdaptiveBrightness::DrawGlobalPresetControls()
 		ImportGlobalPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Replace the global adjustment layer, exterior timing, and the five Lighting, Bloom, and Water profiles. Saved location overrides stay unchanged.");
+		ImGui::Text("Replace the global adjustment layer, exterior timing, and the five Lighting, Color, Bloom, and Water profiles. Saved location overrides stay unchanged.");
 	}
 
 	if (!globalPresetStatus.empty())
@@ -2845,14 +2954,17 @@ bool AdaptiveBrightness::IsRuntimeAvailable() const
 	return GetCurrentPlayerCell(RE::PlayerCharacter::GetSingleton()) != nullptr;
 }
 
-bool AdaptiveBrightness::IsAdjustmentRuntimeActive() const
+void AdaptiveBrightness::SetEnabled(bool a_enabled)
 {
-	return performanceCostMeasurementEnabled && IsRuntimeAvailable();
+	if (settings.enabled == a_enabled)
+		return;
+	settings.enabled = a_enabled;
+	ResetWaterWindSmoothing();
 }
 
 bool AdaptiveBrightness::IsRuntimeEnabled() const
 {
-	return settings.enabled && IsAdjustmentRuntimeActive();
+	return settings.enabled && performanceCostMeasurementEnabled && IsRuntimeAvailable();
 }
 
 AdaptiveBrightness::Profile AdaptiveBrightness::GetInteriorProfile() const
@@ -3250,6 +3362,7 @@ LinearLighting::Settings AdaptiveBrightness::GetNeutralLinearLightingSettings() 
 	neutral.effectGamma = 1.0f;
 	neutral.effectAlphaGamma = 1.0f;
 	neutral.skyGamma = 1.0f;
+	neutral.cloudGamma = 1.0f;
 	neutral.waterGamma = 1.0f;
 	neutral.vlGamma = 1.0f;
 	neutral.glowmapMult = 1.0f;
@@ -3275,12 +3388,12 @@ LinearLighting::Settings AdaptiveBrightness::ApplyProfile(const LinearLighting::
 		return a_profile.advanced ? ClampGammaOffset(a_offset) : 0.0f;
 	};
 
-	out.ambientMult = ClampMultiplier(out.ambientMult * masterScale(0.95f) * advancedMult(a_profile.ambientMult));
 	out.emitColorMult = ClampMultiplier(out.emitColorMult * masterScale(0.35f) * advancedMult(a_profile.emitColorMult));
 	out.glowmapMult = ClampMultiplier(out.glowmapMult * masterScale(0.35f) * advancedMult(a_profile.glowmapMult));
 	out.effectLightingMult = ClampMultiplier(out.effectLightingMult * masterScale(0.55f) * advancedMult(a_profile.effectLightingMult));
 
 	out.skyGamma = ClampGamma(out.skyGamma + masterGammaOffset * 0.90f + advancedOffset(a_profile.skyGammaOffset));
+	out.cloudGamma = ClampGamma(out.cloudGamma + masterGammaOffset * 0.90f + advancedOffset(a_profile.cloudGammaOffset));
 	out.fogGamma = ClampGamma(out.fogGamma + masterGammaOffset * 0.75f + advancedOffset(a_profile.fogGammaOffset));
 	out.fogAlphaGamma = ClampGamma(out.fogAlphaGamma + masterGammaOffset * 0.50f + advancedOffset(a_profile.fogAlphaGammaOffset));
 	out.waterGamma = ClampGamma(out.waterGamma + masterGammaOffset * 0.75f + ClampGammaOffset(a_profile.waterGammaOffset));
@@ -3298,11 +3411,11 @@ namespace
 		// Keep this list aligned with the fields changed by the Linear Lighting
 		// ApplyProfile overload. Exact comparisons preserve the original shader
 		// path for a fully neutral profile instead of evaluating identity curves.
-		return a_effective.ambientMult != a_base.ambientMult ||
-		       a_effective.emitColorMult != a_base.emitColorMult ||
+		return a_effective.emitColorMult != a_base.emitColorMult ||
 		       a_effective.glowmapMult != a_base.glowmapMult ||
 		       a_effective.effectLightingMult != a_base.effectLightingMult ||
 		       a_effective.skyGamma != a_base.skyGamma ||
+		       a_effective.cloudGamma != a_base.cloudGamma ||
 		       a_effective.fogGamma != a_base.fogGamma ||
 		       a_effective.fogAlphaGamma != a_base.fogAlphaGamma ||
 		       a_effective.waterGamma != a_base.waterGamma ||
@@ -3324,6 +3437,18 @@ SharedLightingSettings AdaptiveBrightness::ApplyProfile(const SharedLightingSett
 	};
 
 	out.skyBrightness = ClampMultiplier(out.skyBrightness * advancedMult(a_profile.skyBrightnessMult));
+	out.skySaturation = Util::ClampFinite(out.skySaturation * advancedMult(a_profile.skySaturation), 0.0f, kSkySaturationMax, 1.0f);
+	out.cloudBrightness = ClampMultiplier(out.cloudBrightness * advancedMult(a_profile.cloudBrightnessMult));
+	out.cloudSaturation = Util::ClampFinite(out.cloudSaturation * advancedMult(a_profile.cloudSaturation), 0.0f, kSkySaturationMax, 1.0f);
+	out.fogIntensity = Util::ClampFinite(out.fogIntensity * advancedMult(a_profile.fogIntensity), 0.0f, kGlobalLightingMultiplierMax, 1.0f);
+	out.sunGlareIntensity = Util::ClampFinite(out.sunGlareIntensity * advancedMult(a_profile.sunGlareIntensity), 0.0f, kGlobalLightingMultiplierMax, 1.0f);
+	out.effectBrightness = Util::ClampFinite(out.effectBrightness * advancedMult(a_profile.effectBrightness), 0.0f, kGlobalSkyBrightnessMax, 1.0f);
+	out.skyStaticBrightness = Util::ClampFinite(out.skyStaticBrightness * advancedMult(a_profile.skyStaticBrightness), 0.0f, kGlobalSkyBrightnessMax, 1.0f);
+	const float transparency = a_profile.advanced ? Util::ClampFinite(a_profile.skyStaticTransparency, 0.0f, 1.0f, 0.0f) : 0.0f;
+	out.skyStaticTransparency = 1.0f - (1.0f - out.skyStaticTransparency) * (1.0f - transparency);
+	out.contrast = Util::ClampFinite(out.contrast * Util::ClampFinite(a_profile.contrast, kContrastMin, kContrastMax, 1.0f), kContrastMin, kContrastMax, 1.0f);
+	out.saturation = Util::ClampFinite(out.saturation * Util::ClampFinite(a_profile.saturation, 0.0f, kSaturationMax, 1.0f), 0.0f, kSaturationMax, 1.0f);
+	out.ambientMult = ClampMultiplier(out.ambientMult * masterScale(0.95f) * advancedMult(a_profile.ambientMult));
 	out.directionalLightMult = ClampMultiplier(out.directionalLightMult * masterScale(0.70f) * advancedMult(a_profile.directionalLightMult));
 
 	const float pointLightBrightness = masterScale(0.75f);
@@ -3384,7 +3509,13 @@ WaterAppearance::Profile AdaptiveBrightness::ApplyProfile(
 		ApplyRelativeValue(base.WaveAmplitude, layer.WaveAmplitude, identity.WaveAmplitude),
 		ApplyRelativeValue(base.FresnelMin, layer.FresnelMin, identity.FresnelMin),
 		ApplyRelativeValue(base.FresnelMax, layer.FresnelMax, identity.FresnelMax),
-		ApplyRelativeValue(base.Muddiness, layer.Muddiness, identity.Muddiness)
+		ApplyRelativeValue(base.Muddiness, layer.Muddiness, identity.Muddiness),
+		ApplyRelativeValue(base.CausticsStrength, layer.CausticsStrength, identity.CausticsStrength),
+		ApplyRelativeValue(base.CausticsTiling, layer.CausticsTiling, identity.CausticsTiling),
+		ApplyRelativeValue(base.CausticsSpeed, layer.CausticsSpeed, identity.CausticsSpeed),
+		ApplyRelativeValue(base.CausticsDispersion, layer.CausticsDispersion, identity.CausticsDispersion),
+		ApplyRelativeValue(base.ParallaxStrength, layer.ParallaxStrength, identity.ParallaxStrength),
+		static_cast<int>(std::lround(ApplyRelativeValue(static_cast<float>(base.ParallaxQuality), static_cast<float>(layer.ParallaxQuality), static_cast<float>(identity.ParallaxQuality))))
 	};
 	WaterAppearance::SanitizeProfile(out);
 	return out;
@@ -3425,6 +3556,7 @@ LinearLighting::Settings AdaptiveBrightness::LerpSettings(const LinearLighting::
 	out.effectGamma = lerp(a_a.effectGamma, a_b.effectGamma);
 	out.effectAlphaGamma = lerp(a_a.effectAlphaGamma, a_b.effectAlphaGamma);
 	out.skyGamma = lerp(a_a.skyGamma, a_b.skyGamma);
+	out.cloudGamma = lerp(a_a.cloudGamma, a_b.cloudGamma);
 	out.waterGamma = lerp(a_a.waterGamma, a_b.waterGamma);
 	out.vlGamma = lerp(a_a.vlGamma, a_b.vlGamma);
 	out.vanillaDiffuseColorMult = lerp(a_a.vanillaDiffuseColorMult, a_b.vanillaDiffuseColorMult);
@@ -3450,6 +3582,17 @@ SharedLightingSettings AdaptiveBrightness::LerpSettings(const SharedLightingSett
 	};
 
 	out.skyBrightness = lerp(a_a.skyBrightness, a_b.skyBrightness);
+	out.skySaturation = lerp(a_a.skySaturation, a_b.skySaturation);
+	out.cloudBrightness = lerp(a_a.cloudBrightness, a_b.cloudBrightness);
+	out.cloudSaturation = lerp(a_a.cloudSaturation, a_b.cloudSaturation);
+	out.fogIntensity = lerp(a_a.fogIntensity, a_b.fogIntensity);
+	out.sunGlareIntensity = lerp(a_a.sunGlareIntensity, a_b.sunGlareIntensity);
+	out.effectBrightness = lerp(a_a.effectBrightness, a_b.effectBrightness);
+	out.skyStaticBrightness = lerp(a_a.skyStaticBrightness, a_b.skyStaticBrightness);
+	out.skyStaticTransparency = lerp(a_a.skyStaticTransparency, a_b.skyStaticTransparency);
+	out.contrast = lerp(a_a.contrast, a_b.contrast);
+	out.saturation = lerp(a_a.saturation, a_b.saturation);
+	out.ambientMult = lerp(a_a.ambientMult, a_b.ambientMult);
 	out.directionalLightMult = lerp(a_a.directionalLightMult, a_b.directionalLightMult);
 	out.pointLightMult = lerp(a_a.pointLightMult, a_b.pointLightMult);
 	out.linearPointLightMult = lerp(a_a.linearPointLightMult, a_b.linearPointLightMult);
@@ -3465,14 +3608,15 @@ AdaptiveBrightness::EffectiveLinearLightingSettings AdaptiveBrightness::GetEffec
 	const LinearLighting::Settings& a_linearLightingSettings,
 	bool a_linearLightingEnabled) const
 {
-	const auto baseSettings = a_linearLightingEnabled ? a_linearLightingSettings : GetNeutralLinearLightingSettings();
-	const bool runtimeAvailable = IsAdjustmentRuntimeActive();
+	auto baseSettings = a_linearLightingEnabled ? a_linearLightingSettings : GetNeutralLinearLightingSettings();
+	baseSettings.cloudGamma = baseSettings.skyGamma;
+	const bool runtimeAvailable = IsRuntimeEnabled();
 	auto layeredBase = baseSettings;
 	if (runtimeAvailable)
 		layeredBase = ApplyProfile(layeredBase, settings.globalProfile);
 	auto effectiveSettings = layeredBase;
 
-	if (runtimeAvailable && settings.enabled) {
+	if (runtimeAvailable) {
 		const auto activeProfiles = GetActiveProfileBlend();
 		const auto& locationLayers = GetActiveLocationLayers();
 		const auto branches = ComposeProfileBranches(
@@ -3495,13 +3639,13 @@ SharedLightingSettings AdaptiveBrightness::GetEffectiveSharedLightingSettings() 
 {
 	SharedLightingSettings neutralSettings{};
 	SanitizeSharedLightingSettings(neutralSettings);
-	const bool runtimeAvailable = IsAdjustmentRuntimeActive();
+	const bool runtimeAvailable = IsRuntimeEnabled();
 	auto layeredBase = neutralSettings;
 	if (runtimeAvailable)
 		layeredBase = ApplyProfile(layeredBase, settings.globalProfile);
 	auto effectiveSettings = layeredBase;
 
-	if (runtimeAvailable && settings.enabled) {
+	if (runtimeAvailable) {
 		const auto activeProfiles = GetActiveProfileBlend();
 		const auto& locationLayers = GetActiveLocationLayers();
 		const auto branches = ComposeProfileBranches(
@@ -3519,12 +3663,10 @@ SharedLightingSettings AdaptiveBrightness::GetEffectiveSharedLightingSettings() 
 
 Bloom::Settings AdaptiveBrightness::GetEffectiveBloomSettings() const
 {
-	if (!IsAdjustmentRuntimeActive())
+	if (!IsRuntimeEnabled())
 		return Bloom::GetCommonBufferData(Bloom::Profile{}, 0.0f);
 
 	const auto& globalBloom = settings.globalProfile.bloom;
-	if (!settings.enabled)
-		return Bloom::GetCommonBufferData(globalBloom, 1.0f);
 
 	const auto activeProfiles = GetActiveProfileBlend();
 	const auto& locationLayers = GetActiveLocationLayers();
@@ -3541,8 +3683,10 @@ Bloom::Settings AdaptiveBrightness::GetEffectiveBloomSettings() const
 
 WaterAppearance::Settings AdaptiveBrightness::GetEffectiveWaterAppearanceSettings() const
 {
-	if (!IsAdjustmentRuntimeActive())
+	if (!IsRuntimeEnabled()) {
+		ResetWaterWindSmoothing();
 		return WaterAppearance::GetCommonBufferData(WaterAppearance::Profile{});
+	}
 
 	const auto& globalProfile = settings.globalProfile;
 	const auto applyWind = [&](WaterAppearance::Profile water, const WaterWindSettings& waterWind) {
@@ -3552,8 +3696,6 @@ WaterAppearance::Settings AdaptiveBrightness::GetEffectiveWaterAppearanceSetting
 		}
 		return water;
 	};
-	if (!settings.enabled)
-		return WaterAppearance::GetCommonBufferData(applyWind(globalProfile.water, globalProfile.waterWind));
 
 	struct WaterLayerState
 	{
@@ -3641,6 +3783,18 @@ AdaptiveBrightness::PerFrameData AdaptiveBrightness::GetCommonBufferData() const
 
 	PerFrameData data{};
 	data.skyBrightness = effectiveSettings.skyBrightness;
+	data.skySaturation = effectiveSettings.skySaturation;
+	data.cloudBrightness = effectiveSettings.cloudBrightness;
+	data.cloudSaturation = effectiveSettings.cloudSaturation;
+	data.fogIntensity = effectiveSettings.fogIntensity;
+	data.sunGlareIntensity = effectiveSettings.sunGlareIntensity;
+	data.useAmbientEffectLighting = IsRuntimeEnabled() && settings.useAmbientEffectLighting;
+	data.skyStaticTransparency = effectiveSettings.skyStaticTransparency;
+	data.effectBrightness = effectiveSettings.effectBrightness;
+	data.skyStaticBrightness = effectiveSettings.skyStaticBrightness;
+	data.contrast = effectiveSettings.contrast;
+	data.saturation = effectiveSettings.saturation;
+	data.ambientMult = effectiveSettings.ambientMult;
 	data.directionalLightMult = effectiveSettings.directionalLightMult;
 	data.pointLightMult = effectiveSettings.pointLightMult;
 	data.linearPointLightMult = effectiveSettings.linearPointLightMult;
@@ -3672,21 +3826,35 @@ void AdaptiveBrightness::UpdateVanillaPointLightData(
 
 	VanillaPointLightData data{};
 	const uint32_t lightCount = std::min(a_lightCount, kMaxVanillaPointLights);
-	for (uint32_t lightIndex = 0; lightIndex < lightCount; ++lightIndex) {
-		const uint32_t sceneLightIndex = lightIndex + kFirstPointLightSceneIndex;
-		if (sceneLightIndex >= a_pass->numLights)
-			break;
+#if defined(_MSC_VER)
+	__try
+#endif
+	{
+		for (uint32_t lightIndex = 0; lightIndex < lightCount; ++lightIndex) {
+			const uint32_t sceneLightIndex = lightIndex + kFirstPointLightSceneIndex;
+			if (sceneLightIndex >= a_pass->numLights)
+				break;
 
-		auto* bsLight = a_pass->sceneLights[sceneLightIndex];
-		if (!bsLight)
-			continue;
+			auto* bsLight = a_pass->sceneLights[sceneLightIndex];
+			if (!bsLight)
+				continue;
 
-		auto* niLight = bsLight->light.get();
-		auto pointLightFlags = PointLightFlags::GetVanillaPointLightFlags(bsLight, niLight);
-		if (!globals::features::inverseSquareLighting.IsEnabled())
-			pointLightFlags &= ~PointLightFlags::ToMask(PointLightFlags::Flags::Linear);
-		data.pointLightFlags[lightIndex] = pointLightFlags;
+			auto* niLight = bsLight->light.get();
+			auto pointLightFlags = PointLightFlags::GetVanillaPointLightFlags(bsLight, niLight);
+			if (!globals::features::inverseSquareLighting.IsEnabled())
+				pointLightFlags &= ~PointLightFlags::ToMask(PointLightFlags::Flags::Linear);
+			data.pointLightFlags[lightIndex] = pointLightFlags;
+		}
 	}
+#if defined(_MSC_VER)
+	__except (1) {
+		// A fault invalidates the batch, including its already-classified prefix.
+		data = {};
+		static std::atomic_bool loggedRecovery{ false };
+		if (!loggedRecovery.exchange(true, std::memory_order_relaxed))
+			logger::warn("[AdaptiveBalance] Invalid scene light; uploading neutral point-light classification (further warnings suppressed)");
+	}
+#endif
 
 	vanillaPointLightCB->Update(data);
 
@@ -3737,6 +3905,38 @@ std::string AdaptiveBrightness::GetContextLabel() const
 
 struct AdaptiveBrightness::Hooks
 {
+	struct Sky_UpdateColors
+	{
+		static void thunk(RE::Sky* a_sky, float a_delta)
+		{
+			if (a_sky) {
+				effect.Restore(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kEffectLighting]);
+				statics.Restore(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kSkyStatics]);
+			} else {
+				effect = {};
+				statics = {};
+			}
+			func(a_sky, a_delta);
+			if (!a_sky || !a_sky->currentWeather)
+				return;
+
+			try {
+				const auto lighting = globals::features::adaptiveBrightness.GetEffectiveSharedLightingSettings();
+				effect.Apply(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kEffectLighting], lighting.effectBrightness);
+				statics.Apply(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kSkyStatics], lighting.skyStaticBrightness);
+				loggedFailure = false;
+			} catch (const std::exception& error) {
+				if (!loggedFailure)
+					logger::warn("[AdaptiveBalance] Weather color adjustment skipped: {}", error.what());
+				loggedFailure = true;
+			}
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+		static inline WeatherColorAdjustment<RE::NiColor> effect;
+		static inline WeatherColorAdjustment<RE::NiColor> statics;
+		static inline bool loggedFailure = false;
+	};
+
 	struct BSWaterShader_SetupGeometry
 	{
 		static void thunk(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_renderFlags)
@@ -3763,6 +3963,12 @@ struct AdaptiveBrightness::Hooks
 	{
 		stl::write_vfunc<0x6, BSWaterShader_SetupGeometry>(RE::VTABLE_BSWaterShader[0]);
 		logger::info("[AdaptiveBalance] Installed shared-light water hook");
+		const auto error = stl::detour_thunk<Sky_UpdateColors>(REL::RelocationID(25686, 26233));
+		globals::features::adaptiveBrightness.weatherColorHookInstalled = error == NO_ERROR;
+		if (error == NO_ERROR)
+			logger::info("[AdaptiveBalance] Installed weather color hook");
+		else
+			logger::error("[AdaptiveBalance] Weather color hook failed ({}); weather brightness controls are unavailable", error);
 	}
 };
 

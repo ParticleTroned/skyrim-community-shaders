@@ -1,0 +1,213 @@
+#pragma once
+
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <limits>
+
+namespace VRSubmitTemporalSnapshot
+{
+	inline constexpr std::uint64_t MaxCompositorCycle = std::numeric_limits<std::uint64_t>::max() >> 1u;
+
+	struct Key
+	{
+		std::uint32_t frame = 0;
+		std::uint32_t generation = 0;
+		std::uint32_t method = 0;
+		std::uint32_t inputWidth = 0;
+		std::uint32_t inputHeight = 0;
+		std::uint32_t outputWidth = 0;
+		std::uint32_t outputHeight = 0;
+		std::uint64_t compositorCycle = 0;
+
+		bool operator==(const Key&) const = default;
+	};
+
+	struct Scalars
+	{
+		float jitterX = 0.0f;
+		float jitterY = 0.0f;
+		float cameraNear = 0.0f;
+		float cameraFar = 0.0f;
+		float verticalFov = 0.0f;
+		float frameTimeMilliseconds = 0.0f;
+		bool historyReset = false;
+	};
+
+	[[nodiscard]] constexpr bool IsValid(const Key& a_key) noexcept
+	{
+		constexpr std::uint32_t maxTextureDimension = 16384;
+		const auto validDimension = [](std::uint32_t a_dimension) {
+			return a_dimension != 0 && a_dimension <= maxTextureDimension;
+		};
+		return a_key.frame != std::numeric_limits<std::uint32_t>::max() && a_key.method != 0 &&
+		       a_key.compositorCycle <= MaxCompositorCycle &&
+		       validDimension(a_key.inputWidth) && validDimension(a_key.inputHeight) &&
+		       validDimension(a_key.outputWidth) && validDimension(a_key.outputHeight);
+	}
+
+	[[nodiscard]] inline bool IsValid(const Scalars& a_scalars) noexcept
+	{
+		return std::isfinite(a_scalars.jitterX) && std::isfinite(a_scalars.jitterY) &&
+		       std::isfinite(a_scalars.cameraNear) && a_scalars.cameraNear > 0.0f &&
+		       std::isfinite(a_scalars.cameraFar) && a_scalars.cameraFar > a_scalars.cameraNear &&
+		       std::isfinite(a_scalars.verticalFov) && a_scalars.verticalFov > 0.0f && a_scalars.verticalFov < 3.141592654f &&
+		       std::isfinite(a_scalars.frameTimeMilliseconds) && a_scalars.frameTimeMilliseconds >= 0.0f;
+	}
+
+	/** A late recovery reset can strengthen the producer's decision, never clear it. */
+	[[nodiscard]] constexpr bool ResolveHistoryReset(bool a_capturedReset, bool a_lateReset, bool a_pendingReset = false) noexcept
+	{
+		return a_capturedReset || a_lateReset || a_pendingReset;
+	}
+
+	[[nodiscard]] constexpr bool HasMatchingCameraContract(const Key& a_previous, const Key& a_candidate) noexcept
+	{
+		return a_previous.generation == a_candidate.generation &&
+		       a_previous.method == a_candidate.method &&
+		       a_previous.inputWidth == a_candidate.inputWidth &&
+		       a_previous.inputHeight == a_candidate.inputHeight &&
+		       a_previous.outputWidth == a_candidate.outputWidth &&
+		       a_previous.outputHeight == a_candidate.outputHeight;
+	}
+
+	[[nodiscard]] constexpr bool IsImmediateCameraHistorySuccessor(const Key& a_previous, const Key& a_candidate) noexcept
+	{
+		if (!IsValid(a_previous) || !IsValid(a_candidate) || !HasMatchingCameraContract(a_previous, a_candidate))
+			return false;
+		if (a_previous.compositorCycle != 0 && a_candidate.compositorCycle != 0) {
+			const auto distance = a_candidate.compositorCycle >= a_previous.compositorCycle ?
+			                          a_candidate.compositorCycle - a_previous.compositorCycle :
+			                          MaxCompositorCycle - a_previous.compositorCycle + a_candidate.compositorCycle;
+			return distance == 1;
+		}
+		if (a_previous.compositorCycle != 0)
+			return false;
+		return a_candidate.frame - a_previous.frame == 1;
+	}
+
+	/** Tracks history only after all consumers contributing to it have completed. */
+	class CommittedHistory
+	{
+	public:
+		[[nodiscard]] constexpr bool HasHistory() const noexcept { return IsValid(producer); }
+		[[nodiscard]] constexpr bool CanReuse(const Key& a_candidate) const noexcept
+		{
+			return IsImmediateCameraHistorySuccessor(producer, a_candidate);
+		}
+		/** Publish only after both eyes have successfully written their history. */
+		constexpr void Commit(const Key& a_producer) noexcept { producer = a_producer; }
+		constexpr void Reset() noexcept { producer = {}; }
+
+	private:
+		Key producer{};
+	};
+
+	/** A reset frame may seed unavailable history; an adjacent frame may use retained history. */
+	template <class EyeCamera>
+	[[nodiscard]] bool PrepareCameraHistoryForPublication(
+		EyeCamera& a_eye,
+		bool a_historyReset,
+		bool a_currentCameraValid,
+		bool a_previousCameraValid,
+		const EyeCamera* a_retainedPrevious = nullptr)
+	{
+		if (!a_currentCameraValid)
+			return false;
+		if (a_previousCameraValid)
+			return true;
+		if (!a_historyReset && !a_retainedPrevious)
+			return false;
+
+		const auto& previous = a_historyReset ? a_eye : *a_retainedPrevious;
+		a_eye.previousViewProjectionUnjittered = previous.viewProjectionUnjittered;
+		a_eye.previousPosition = previous.position;
+		return true;
+	}
+
+	[[nodiscard]] constexpr bool MatchesProducer(std::uint32_t a_cachedFrame, std::uint64_t a_cachedCycle, std::uint32_t a_frame, std::uint64_t a_cycle) noexcept
+	{
+		return a_cachedFrame != std::numeric_limits<std::uint32_t>::max() &&
+		       a_frame != std::numeric_limits<std::uint32_t>::max() &&
+		       a_cachedCycle == a_cycle && (a_cycle != 0 || a_cachedFrame == a_frame);
+	}
+
+	[[nodiscard]] constexpr bool IsSameProducer(const Key& a_left, const Key& a_right) noexcept
+	{
+		return MatchesProducer(a_left.frame, a_left.compositorCycle, a_right.frame, a_right.compositorCycle);
+	}
+
+	[[nodiscard]] constexpr bool IsNewerCompositorCycle(std::uint64_t a_candidate, std::uint64_t a_published) noexcept
+	{
+		if (a_candidate == 0 || a_published == 0 || a_candidate > MaxCompositorCycle || a_published > MaxCompositorCycle)
+			return false;
+		const auto distance = a_candidate >= a_published ? a_candidate - a_published : MaxCompositorCycle - a_published + a_candidate;
+		return distance != 0 && distance <= MaxCompositorCycle / 2u;
+	}
+
+	/** Owns one producer's immutable stereo constants; the caller validates its camera payload. */
+	template <class EyeCamera>
+	struct Snapshot
+	{
+		Key key{};
+		Scalars scalars{};
+		std::array<EyeCamera, 2> eyes{};
+		bool valid = false;
+
+		[[nodiscard]] bool Matches(const Key& a_key) const noexcept
+		{
+			return valid && key == a_key;
+		}
+
+		/** A desktop Present may advance the engine frame before the same compositor cycle submits. */
+		[[nodiscard]] bool MatchesForDispatch(const Key& a_key) const noexcept
+		{
+			return valid && IsValid(a_key) && IsSameProducer(key, a_key) &&
+			       HasMatchingCameraContract(key, a_key);
+		}
+
+		/** Returns immutable current cameras only for the immediately following matching producer. */
+		[[nodiscard]] const std::array<EyeCamera, 2>* PreviousCamerasFor(const Key& a_key) const noexcept
+		{
+			return valid && IsImmediateCameraHistorySuccessor(key, a_key) ? &eyes : nullptr;
+		}
+
+		/** Repeated producer visits retain the first capture; a changed producer contract invalidates it. */
+		[[nodiscard]] bool Publish(const Key& a_key, const Scalars& a_scalars, const std::array<EyeCamera, 2>& a_eyes)
+		{
+			const bool repeatedLogicalFrame = attempted && key.frame == a_key.frame;
+			if (attempted && IsSameProducer(key, a_key)) {
+				if (a_key != key)
+					valid = false;
+				return Matches(a_key);
+			}
+			if (attempted) {
+				if (key.compositorCycle == 0 && a_key.compositorCycle == 0) {
+					if (key.frame - a_key.frame < 0x80000000u)
+						return false;
+				} else if (a_key.compositorCycle == 0 ||
+						   (key.compositorCycle != 0 && !IsNewerCompositorCycle(a_key.compositorCycle, key.compositorCycle))) {
+					return false;
+				}
+			}
+
+			attempted = true;
+			valid = false;
+			key = a_key;
+			// Jitter and vendor frame tokens permit one temporal sample per engine frame.
+			if (repeatedLogicalFrame || !IsValid(a_key) || !IsValid(a_scalars))
+				return false;
+
+			scalars = a_scalars;
+			eyes = a_eyes;
+			valid = true;
+			return true;
+		}
+
+		/** Prevents reuse or recapture until a later producer cycle, or frame before pose tracking starts. */
+		void Invalidate() noexcept { valid = false; }
+
+	private:
+		bool attempted = false;
+	};
+}

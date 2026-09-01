@@ -33,7 +33,9 @@ namespace CSX::ShaderCompatibilityAPI
 	enum class ScopeKind : std::uint32_t
 	{
 		kShaderFamily = 1,
+		// Reserved in API v1 until runtime and offline source identities match.
 		kShaderSource = 2,
+		// Reserved in API v1 until runtime feature provenance is authoritative.
 		kFeature = 3,
 		kGlobal = 4
 	};

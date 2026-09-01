@@ -7,7 +7,9 @@
 #include <efsw/efsw.hpp>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include <wrl/client.h>
@@ -144,29 +146,6 @@ namespace ShaderConstants
 		const int32_t PreviousWorldMat = -1;
 	};
 
-	struct GrassPS
-	{
-		static const GrassPS& Get()
-		{
-			static GrassPS instance = REL::Module::IsVR() ? GetVR() : GetFlat();
-			return instance;
-		}
-
-		static GrassPS GetFlat()
-		{
-			return GrassPS{};
-		}
-
-		static GrassPS GetVR()
-		{
-			return GrassPS{};
-		}
-
-		const int32_t PBRFlags = 0;
-		const int32_t PBRParams1 = 1;
-		const int32_t PBRParams2 = 2;
-	};
-
 	struct EffectPS
 	{
 		static const EffectPS& Get()
@@ -291,6 +270,8 @@ namespace SIE
 
 	class CompilationSet
 	{
+		friend class ShaderCache;
+
 	public:
 		LARGE_INTEGER lastReset;
 		std::atomic<int64_t> lastResetQpc{ 0 };
@@ -460,6 +441,8 @@ namespace SIE
 		void TryCompleteStartupCompilationPhase();
 		bool IsEnabled() const;
 		bool IsEnableRequested() const;
+		/** Restores the persisted startup state without scheduling runtime transitions. */
+		void RestoreEnabledSetting(bool value);
 		void SetEnabled(bool value);
 		void ServicePendingDisable();
 		bool IsAsync() const;
@@ -477,6 +460,7 @@ namespace SIE
 			const std::filesystem::path& a_shaderPath,
 			const Util::ContentHash::Hash128& a_compileStateDigest,
 			const Util::ContentHash::Hash128& a_packCompileStateDigest,
+			const Util::ContentHash::Hash128& a_sourceDigest,
 			uint64_t a_diskCacheGeneration);
 		void SetSaveLoadDiskPersistenceBlocked(bool a_blocked);
 		void DeleteDiskCache();
@@ -566,14 +550,18 @@ namespace SIE
 		/** @brief Publishes a result unless its task is stale or an eviction consumes it.
 		 *  @return True when a_blob remains usable by the caller. */
 		bool AddCompletedShader(
+			const std::string& key,
 			ShaderClass shaderClass,
 			const RE::BSShader& shader,
 			uint32_t descriptor,
 			ID3DBlob* a_blob,
 			const std::wstring& a_diskPath,
 			const Util::ContentHash::Hash128& a_compileStateDigest,
+			const Util::ContentHash::Hash128& a_packCompileStateDigest,
+			bool a_developerMode,
 			bool fromDisk = false,
-			std::optional<uint64_t> a_taskGeneration = std::nullopt);
+			std::optional<uint64_t> a_taskGeneration = std::nullopt,
+			std::optional<Util::ContentHash::Hash128> a_sourceDigest = std::nullopt);
 
 		enum class ClaimResult
 		{
@@ -596,6 +584,8 @@ namespace SIE
 		std::string GetShaderStatsString(bool a_timeOnly = false, bool a_elapsedOnly = false);
 
 		RE::BSGraphics::VertexShader* GetVertexShader(const RE::BSShader& shader, uint32_t descriptor);
+		/** Return an existing vertex shader by exact descriptor without compiling or scheduling work. */
+		RE::BSGraphics::VertexShader* GetVertexShaderIfCached(const RE::BSShader& shader, uint32_t descriptor);
 		RE::BSGraphics::PixelShader* GetPixelShader(const RE::BSShader& shader,
 			uint32_t descriptor);
 		RE::BSGraphics::ComputeShader* GetComputeShader(const RE::BSShader& shader,
@@ -699,6 +689,8 @@ namespace SIE
 		int32_t backgroundCompilationThreadCount = std::max(static_cast<int32_t>(Util::GetPerformanceCoreCount()) / 2, 1);
 		BS::thread_pool<> compilationPool{ static_cast<std::size_t>(compilationThreadCount) };
 		std::jthread managementJthread;  // dedicated thread for ManageCompilationSet (not in pool)
+		/** @brief Sets compilation mode and wakes the dispatcher; returns the previous mode. */
+		bool SetBackgroundCompilation(bool value);
 		std::atomic<bool> backgroundCompilation = false;
 		std::atomic<bool> menuLoaded = false;
 		// Set only after DataLoaded and the initial compilation batch have both
@@ -791,7 +783,6 @@ namespace SIE
 		enum class GrassShaderTechniques
 		{
 			RenderDepth = 8,
-			TruePbr = 9,
 		};
 
 		enum class GrassShaderFlags
@@ -960,6 +951,11 @@ namespace SIE
 		}
 
 		void StartActiveShaderCaptureWindow(ActiveShaderCaptureStage a_stage);
+		/** @brief Releases one runtime variant; callers own bytecode, disk and task eviction. */
+		void EvictShaderResources(
+			RE::BSShader::Type a_type,
+			uint32_t a_descriptor,
+			ShaderClass a_shaderClass);
 		void EvictShader(
 			const std::string& a_key,
 			RE::BSShader::Type a_type,
@@ -972,8 +968,9 @@ namespace SIE
 		std::chrono::steady_clock::time_point activeShaderCaptureDeadline;
 		bool activeShaderCaptureMenuWasVisible = false;
 		std::atomic<std::thread::id> activeShaderCaptureThread{};
-		ankerl::unordered_dense::map<std::string, ActiveShaderInfo> capturedShaders;
-		std::unordered_set<std::string> clearedThisCaptureCycle;
+		ankerl::unordered_dense::map<size_t, ActiveShaderInfo> capturedShaders;
+		std::unordered_set<size_t> clearedThisCaptureCycle;
+		std::unordered_set<std::string> clearedBytecodeThisCaptureCycle;
 		size_t lastScopedClearCount = 0;
 		double lastScopedClearMs = 0.0;
 
@@ -987,6 +984,8 @@ namespace SIE
 			Util::ContentHash::Hash128 compileStateDigest;
 			Util::ContentHash::Hash128 packCompileStateDigest;
 			bool developerMode = false;
+			std::optional<Util::ContentHash::Hash128> sourceDigest;
+			Microsoft::WRL::ComPtr<ID3DBlob> compiledBlob;
 
 			bool operator<(const hlslRecord& other) const
 			{
@@ -1012,6 +1011,7 @@ namespace SIE
 			std::filesystem::path shaderPath;
 			Util::ContentHash::Hash128 compileStateDigest;
 			Util::ContentHash::Hash128 packCompileStateDigest;
+			Util::ContentHash::Hash128 sourceDigest;
 			bool developerMode = false;
 			uint64_t diskCacheGeneration = 0;
 		};
@@ -1050,7 +1050,7 @@ namespace SIE
 		mutable std::mutex compileFailuresMutex;
 		std::deque<CompileFailure> recentCompileFailures;
 		std::vector<std::string> heldMismatchDefines;
-		bool isSkipUnchangedShaders = true;  ///< when true, recompile a disk-cached shader only if its source is newer
+		std::atomic<bool> isSkipUnchangedShaders = true;  ///< Permit verified disk hits; false compiles from source while retaining disk writes.
 		bool isAsync = true;
 		bool isDump = false;
 		bool hideError = false;
@@ -1074,15 +1074,18 @@ namespace SIE
 		ankerl::unordered_dense::map<std::string, DeferredEviction> deferredEvictions;            // pending hot-reload evictions; guarded by mapMutex
 		std::atomic<size_t> deferredEvictionCount{ 0 };                                           // lock-free empty fast path
 
-		std::deque<DeferredDiskWrite> deferredDiskWrites;
+		std::unordered_map<std::string, DeferredDiskWrite> deferredDiskWrites;
+		std::deque<std::string> deferredDiskWriteOrder;
 		static constexpr std::size_t kMaximumDeferredDiskWrites = 8192;
+		static constexpr std::size_t kDeferredDiskWriteBatchSize = 64;
 		std::mutex deferredDiskWritesMutex;
 		std::condition_variable_any deferredDiskWritesCV;
 		std::jthread deferredDiskWriterJthread;
 		std::atomic_bool acceptDeferredDiskWrites{ true };
 		std::atomic_bool deferredDiskWriteLimitReported{ false };
 		std::atomic_bool saveLoadDiskPersistenceBlocked{ false };
-		bool deferredManifestFlushPending = false;  // guarded by deferredDiskWritesMutex
+		std::size_t deferredDiskWritesInFlight = 0;  // guarded by deferredDiskWritesMutex
+		bool deferredManifestFlushPending = false;   // guarded by deferredDiskWritesMutex
 
 		// efsw file watcher
 		efsw::FileWatcher* fileWatcher = nullptr;

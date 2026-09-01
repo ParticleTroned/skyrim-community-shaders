@@ -818,8 +818,8 @@ namespace FeatureIssues
 							FeatureIssueInfo::IssueType::OBSOLETE, fileInfo);
 
 						logger::warn("Found orphaned obsolete feature INI: {} version {}", featureName, version);
-					} else {
-						// Unknown orphaned feature
+					} else if (!Feature::IsFeatureKnown(featureName)) {
+						// Built-in menus have versioned INIs without runtime Feature objects.
 						FeatureFileInfo fileInfo = GetFeatureFileInfo(featureName);
 						AddFeatureIssue(featureName, "unknown",
 							std::format("{} is not recognized by this CSX version", featureName),

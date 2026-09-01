@@ -31,7 +31,7 @@ powershell.exe -Command "./BuildRelease.bat [PRESET_NAME]"
 -   `VR` - Skyrim VR only (compile-time targeting)
 -   `PRE-AE` - SE + VR (excludes AE)
 -   `FLATRIM` - SE + AE (excludes VR)
--   `ALL-TRACY` - Universal binary with Tracy profiler support enabled
+-   `ALL-TRACY` - Universal binary with Tracy support and capture/viewer tools from the same pinned source; see [the build instructions](../README.md#tracy_support)
 
 **User Preset Template**:
 
@@ -48,6 +48,7 @@ powershell.exe -Command "./BuildRelease.bat [PRESET_NAME]"
 -   `AUTO_PLUGIN_DEPLOYMENT` (default: OFF) - Auto-copy build output to `CommunityShadersOutputDir`
 -   `ZIP_TO_DIST` (default: ON) - Creates individual feature packages as 7z files in `/dist`
 -   `AIO_ZIP_TO_DIST` (default: ON) - Creates all-in-one distribution package as 7z in `/dist`
+-   `SKIP_RUNTIME_DOWNLOADS` (default: OFF) - Allows [DLL development without upscaler runtime downloads](../docs/development/runtime-downloads.md); incomplete runtime payloads block installation and packaging.
 -   `TRACY_SUPPORT` (default: OFF) - Enables Tracy profiler integration for performance analysis
 
 **Auto-Deployment Configuration**:

@@ -6,6 +6,7 @@
 #include "Api/UpscalingContract.h"
 #include "Api/UpscalingServicePolicy.h"
 #include "Features/Upscaling.h"
+#include "Features/Upscaling/VRRenderScaleModePolicy.h"
 #include "Globals.h"
 #include "State.h"
 #include "VRAPI/CSserviceapi.h"
@@ -342,10 +343,18 @@ namespace
 				reservation.signature = signature;
 				reservation.result.status = Status::kBusy;
 				reservation.result.disposition = ApplyDisposition::kRejected;
-				commands.emplace(key, std::move(reservation));
-				commandOrder.push_back(key);
+				const auto [inserted, didInsert] = commands.emplace(key, std::move(reservation));
+				assert(didInsert);
+				try {
+					commandOrder.push_back(key);
+				} catch (...) {
+					commands.erase(inserted);
+					throw;
+				}
 				++pendingOperationReservations;
 			}
+			std::uint64_t operationId = 0;
+			bool commandTerminal = false;
 			bool ownsOperationReservation = true;
 			const SKSE::stl::scope_exit releaseOperationReservation([&]() noexcept {
 				if (!ownsOperationReservation)
@@ -354,6 +363,14 @@ namespace
 				assert(pendingOperationReservations != 0);
 				--pendingOperationReservations;
 			});
+			const SKSE::stl::scope_exit rollbackUnreadyCommand([&]() noexcept {
+				if (!commandTerminal)
+					DiscardUnreadyAdmission(key, operationId);
+			});
+			const auto completeCommand = [&](Status a_status, const ApplyResult001& a_result) {
+				CompleteCommand(key, a_status, a_result);
+				commandTerminal = true;
+			};
 
 			PreflightRequest001 preflightRequest;
 			preflightRequest.expectedStateRevision = signature.expectedStateRevision;
@@ -383,7 +400,7 @@ namespace
 					receipt.status = preflight.decision == PreflightDecision::kUnsupported ?
 					                     Status::kUnsupportedProfile :
 					                     Status::kBlocked;
-				CompleteCommand(key, receipt.status, receipt);
+				completeCommand(receipt.status, receipt);
 				a_output = receipt;
 				return receipt.status;
 			}
@@ -399,7 +416,7 @@ namespace
 					std::lock_guard lock(mutex);
 					receipt.resultingStateRevision = snapshot.stateRevision;
 				}
-				CompleteCommand(key, receipt.status, receipt);
+				completeCommand(receipt.status, receipt);
 				a_output = receipt;
 				return Status::kSuccess;
 			}
@@ -408,12 +425,11 @@ namespace
 			if (!tasks) {
 				receipt.status = Status::kServiceUnavailable;
 				receipt.disposition = ApplyDisposition::kRejected;
-				CompleteCommand(key, receipt.status, receipt);
+				completeCommand(receipt.status, receipt);
 				a_output = receipt;
 				return receipt.status;
 			}
 
-			std::uint64_t operationId = 0;
 			{
 				std::lock_guard lock(mutex);
 				operationId = AllocateOperationIdLocked();
@@ -450,11 +466,11 @@ namespace
 				receipt.disposition = ApplyDisposition::kRejected;
 				receipt.operationId = 0;
 				FailOperation(operationId, receipt.status, kConditionNone);
-				CompleteCommand(key, receipt.status, receipt);
+				completeCommand(receipt.status, receipt);
 				a_output = receipt;
 				return receipt.status;
 			}
-			CompleteCommand(key, Status::kSuccess, receipt);
+			completeCommand(Status::kSuccess, receipt);
 			a_output = receipt;
 			return Status::kSuccess;
 		}
@@ -744,10 +760,17 @@ namespace
 			auto& upscaling = globals::features::upscaling;
 			Snapshot001 output;
 			output.profilePresence = kProfileConfigured | kProfileEffective;
+			const auto configuredMethod = upscaling.GetConfiguredUpscaleMethodForTransition();
+			// Public profiles describe executable modes, not a preference retained during native AA.
+			const auto configuredRenderScale = VRRenderScaleModePolicy::Resolve(
+				configuredMethod == Upscaling::UpscaleMethod::kDLSS ||
+					configuredMethod == Upscaling::UpscaleMethod::kFSR,
+				upscaling.settings.qualityMode != 0,
+				upscaling.settings.renderScaleMode != 0);
 			output.configured = MakeProfile(
-				upscaling.GetConfiguredUpscaleMethodForTransition(),
+				configuredMethod,
 				upscaling.settings.qualityMode,
-				upscaling.settings.renderScaleMode != 0,
+				configuredRenderScale.enabled,
 				upscaling.settings.dlssPreset,
 				upscaling.settings.fsr4RuntimeEnable);
 			output.effective = MakeProfile(
@@ -886,15 +909,18 @@ namespace
 				observed |= kConditionProviderCheckPending;
 			else if ((currentCapabilities.availableMethodMask & methodBit) == 0)
 				observed |= kConditionProviderUnavailable;
-			if (a_request.target.method == Method::kFSR &&
-				a_request.target.fsrRuntime == FSRRuntime::kFSR4) {
-				observed |= currentCapabilities.fsrRuntimeUnavailableConditions[static_cast<std::uint32_t>(FSRRuntime::kFSR4)];
-			}
+			// FSR4 is a preference. FidelityFX keeps the FSR method usable by
+			// selecting its host or FSR3 provider when FSR4 is unavailable.
+			const auto fsrRuntimeFallbackConditions =
+				CSX::Api::ResolveFSRRuntimeFallbackConditions(
+					a_request.target,
+					currentCapabilities);
 			const auto admission = CSX::Api::ResolveUpscalingAdmission(
 				observed,
 				a_request.purpose,
 				a_request.persistence,
-				false);
+				false,
+				fsrRuntimeFallbackConditions);
 			result.observedConditions = admission.observedConditions;
 			result.blockingConditions = admission.blockingConditions;
 			result.admissionRoute = admission.route;
@@ -1138,6 +1164,33 @@ namespace
 			found->second.result = a_result;
 			found->second.ready = true;
 			TrimLocked();
+		}
+
+		void DiscardUnreadyAdmission(
+			const std::string& a_key,
+			std::uint64_t a_operationId) noexcept
+		{
+			try {
+				std::lock_guard lock(mutex);
+				const auto command = commands.find(a_key);
+				if (command == commands.end() || command->second.ready)
+					return;
+
+				commands.erase(command);
+				if (const auto ordered = std::ranges::find(commandOrder, a_key);
+					ordered != commandOrder.end()) {
+					commandOrder.erase(ordered);
+				}
+				if (a_operationId != 0) {
+					operations.erase(a_operationId);
+					std::erase_if(events, [a_operationId](const Event001& a_event) {
+						return a_event.operationId == a_operationId;
+					});
+				}
+			} catch (...) {
+				OutputDebugStringA(
+					"[UpscalingAPI] Exceptional command admission rollback failed; service capacity may be degraded.\n");
+			}
 		}
 
 		void TrimLocked()

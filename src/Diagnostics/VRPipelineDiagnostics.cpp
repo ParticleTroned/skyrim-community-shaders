@@ -1,12 +1,14 @@
-#include "Diagnostics/VRPipelineDiagnostics.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
 
-#include <Windows.h>
-#include <cstdint>
-#include <filesystem>
-#include <format>
-#include <fstream>
-#include <limits>
-#include <mutex>
+#	include "Diagnostics/VRPipelineDiagnostics.h"
+
+#	include <Windows.h>
+#	include <cstdint>
+#	include <filesystem>
+#	include <format>
+#	include <fstream>
+#	include <limits>
+#	include <mutex>
 
 namespace VRPipelineDiagnostics
 {
@@ -148,7 +150,7 @@ namespace VRPipelineDiagnostics
 			}
 
 			g_reportedStructuredOpenFailure = false;
-			logger::info("[VRPIPE v1][CS][STRUCTURED] path={}", path.string());
+			logger::debug("[VRPIPE v1][CS][STRUCTURED] path={}", path.string());
 			return true;
 		}
 	}
@@ -176,7 +178,7 @@ namespace VRPipelineDiagnostics
 		const std::string serializedRecord = record.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 		g_latestRecord = nlohmann::json::parse(serializedRecord);
 		if (writeText)
-			logger::info("[VRPIPE v1][{}][{}] seq={} {}", source, event.type, sequence, textPayload);
+			logger::debug("[VRPIPE v1][{}][{}] seq={} {}", source, event.type, sequence, textPayload);
 
 		if (!writeStructured || !EnsureStructuredStream())
 			return !writeStructured;
@@ -208,3 +210,5 @@ namespace VRPipelineDiagnostics
 		};
 	}
 }
+
+#endif

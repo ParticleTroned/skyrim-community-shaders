@@ -21,7 +21,6 @@ public:
 	virtual bool SupportsVR() override { return true; }
 	virtual bool IsInMenu() const override { return true; }
 	virtual bool DrawFailLoadMessage() const override { return false; }
-	virtual bool HasFeatureSettings() const override { return false; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
@@ -39,6 +38,12 @@ public:
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual void DrawPerformanceSettings(bool) override;
+	virtual json CapturePerformanceSettingsState() const override;
+	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enabled != 0; }
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { settings.Enabled = a_enabled ? 1u : 0u; }
 	virtual void SetupResources() override;
 	virtual void Prepass() override;
 	virtual void PostPostLoad() override;
@@ -46,6 +51,7 @@ public:
 	virtual void SaveSettings(json& o_json) override;
 	virtual void LoadSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
+	virtual void RestoreDefaultSettingsForLoad() override { settings = {}; }
 
 	struct alignas(16) Settings
 	{
@@ -61,6 +67,8 @@ public:
 	bool enableVerboseJsonLogging = false;
 
 	bool TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land);
+	/** @brief Reports whether the raw lighting technique uses custom material setup instead of native setup. */
+	[[nodiscard]] bool UsesCustomMaterialSetup(uint32_t rawTechnique) const;
 	bool BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material);
 
 	void SetShaderResouces(ID3D11DeviceContext* a_context);
@@ -110,7 +118,7 @@ public:
 	{
 		std::array<float, 3> baseColorScale = { 1.f, 1.f, 1.f };
 		float roughness = 1.f;
-		float specularLevel = 1.f;
+		float specularLevel = 0.04f;
 
 		GlintParameters glintParameters;
 	};

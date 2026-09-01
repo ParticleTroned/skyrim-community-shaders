@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import tempfile
+import sys
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -18,6 +21,25 @@ SPEC.loader.exec_module(PROVENANCE)
 
 
 class BuildProvenanceTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows executable version metadata")
+    def test_executable_version_is_read_from_file(self) -> None:
+        actual = PROVENANCE.windows_file_version(Path(sys.executable))
+        self.assertEqual(tuple(map(int, actual.split('.')[:2])), sys.version_info[:2])
+        with self.assertRaises(OSError):
+            PROVENANCE.windows_file_version(Path(sys.executable).with_name('missing-csx-compiler.exe'))
+
+    @unittest.skipUnless(os.name == "nt", "MSVC is a Windows toolchain")
+    def test_msvc_update_replaces_stale_cmake_version_and_fails_closed(self) -> None:
+        with patch.object(PROVENANCE, 'windows_file_version', return_value='19.51.36256.0'):
+            self.assertEqual(PROVENANCE.compiler_version('MSVC', '19.51.36248.0', 'cl.exe'), '19.51.36256.0')
+        with patch.object(PROVENANCE, 'windows_file_version', side_effect=OSError('unreadable compiler')):
+            with self.assertRaisesRegex(OSError, 'unreadable compiler'):
+                PROVENANCE.compiler_version('MSVC', '19.51.36248.0', 'cl.exe')
+
+    def test_other_compilers_keep_their_configured_version(self) -> None:
+        with patch.object(PROVENANCE, 'windows_file_version', side_effect=AssertionError('unexpected Windows query')):
+            self.assertEqual(PROVENANCE.compiler_version('Clang', '20.1.0', 'clang++'), '20.1.0')
+
     def test_canonical_identity_is_order_independent(self) -> None:
         left = {"z": [3, 2, 1], "a": {"second": 2, "first": 1}}
         right = {"a": {"first": 1, "second": 2}, "z": [3, 2, 1]}
@@ -26,7 +48,7 @@ class BuildProvenanceTests(unittest.TestCase):
             PROVENANCE.sha256_bytes(PROVENANCE.canonical_bytes(right)),
         )
 
-    def test_shader_cache_abi_changes_only_with_explicit_contract(self) -> None:
+    def test_shader_cache_abi_is_runtime_neutral_and_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             contract = root / "config/shader-cache-abi.json"
@@ -37,17 +59,18 @@ class BuildProvenanceTests(unittest.TestCase):
             unrelated.write_text("first implementation\n", encoding="utf-8")
 
             first = PROVENANCE.shader_contract_identity(
-                root, ["config/shader-cache-abi.json"], "VR"
+                root, ["config/shader-cache-abi.json"]
             )
+            self.assertNotIn("runtime", first)
             unrelated.write_text("second implementation\n", encoding="utf-8")
             second = PROVENANCE.shader_contract_identity(
-                root, ["config/shader-cache-abi.json"], "VR"
+                root, ["config/shader-cache-abi.json"]
             )
             self.assertEqual(first, second)
 
             contract.write_text('{"schemaVersion":1,"globalAbi":"two"}\n', encoding="utf-8")
             third = PROVENANCE.shader_contract_identity(
-                root, ["config/shader-cache-abi.json"], "VR"
+                root, ["config/shader-cache-abi.json"]
             )
             self.assertNotEqual(first, third)
 

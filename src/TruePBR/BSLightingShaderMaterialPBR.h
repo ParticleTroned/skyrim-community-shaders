@@ -1,5 +1,6 @@
 #pragma once
 
+#include "MaterialRegistry.h"
 #include "TruePBR.h"
 
 enum class PBRFlags : uint32_t
@@ -104,7 +105,7 @@ public:
 
 	const GlintParameters& GetGlintParameters() const;
 
-	inline static std::unordered_map<BSLightingShaderMaterialPBR*, MaterialExtensions> All;
+	inline static PBRMaterialRegistry<BSLightingShaderMaterialPBR, MaterialExtensions> All;
 
 	// members
 	RE::BSShaderMaterial::Feature loadedWithFeature = RE::BSShaderMaterial::Feature::kDefault;

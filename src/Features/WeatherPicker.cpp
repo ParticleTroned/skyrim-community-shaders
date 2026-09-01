@@ -646,7 +646,7 @@ void WeatherPicker::RenderWeatherControls(RE::Sky* sky)
 
 				const bool transientPreview = s_accelerateWeatherChange && s_transientAcceleratedWeatherPreview;
 				if (transientPreview)
-					sky->ForceWeather(selectedWeather, false);
+					EditorWindow::ForceWeather(sky, selectedWeather, false);
 				else
 					sky->SetWeather(selectedWeather, true, s_accelerateWeatherChange);
 

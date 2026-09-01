@@ -35,6 +35,35 @@ Use the interface contract only:
 
 You do **not** need provider internals like `CSpluginapi.*`.
 
+### Consumer licensing
+
+CSinterface001.h and CSinterface001.cpp are available under
+LGPL-3.0-or-later. A consumer's independently written application
+code does not have to be released under the LGPL.
+
+Compiling CSinterface001.cpp into a distributed consumer DLL
+incorporates the LGPL helper into that binary. Consumers using
+this approach must comply with LGPLv3's combined-work requirements,
+including the required notices and licence copies, availability
+of the corresponding LGPL source, and a usable method for
+recombining the application with a modified helper.
+
+The application-side materials may be supplied as suitable object
+code rather than application source code. Necessary relinking
+materials and permissions must also be provided.
+
+These requirements apply even when the helper is unchanged.
+Publishing only the final consumer DLL is not sufficient for
+this embedded-helper compliance route.
+
+Required materials must be provided using an applicable GPLv3
+section 6 distribution method. For ordinary download releases,
+provide equivalent access to matching source and relinking
+materials alongside the binary download.
+
+There is no requirement to submit changes upstream to CSX.
+This summary does not replace the licence terms.
+
 ## Handshake Details
 
 -   Target plugin name: `CommunityShaders`
@@ -161,7 +190,7 @@ The former advisory timed-fade constants remain as deprecated, zero-valued sourc
 -   Render Scale Mode is only eligible in VR with DLSS/FSR upscaling presets below native scale. Selecting Native AA/DLAA disables Render Scale Mode and clears the relatch request.
 -   `SetVRUpscalingTransitionProfile` is the legacy transition call. On DLSS-capable systems, it stages DLSS, Render Scale Mode, the shared render-scale preset, and the DLSS profile together so CSX can apply one relatch. If DLSS is known unavailable, it falls back to the configured non-DLSS method. This preserves old `DLSSMode`/`DLSSProfile` caller expectations; FSR-specific callers should use the revision-2 method-specific call. During VR save/load safe mode, RaceSex startup, loading presentation windows, or pending relatches, external upscaling setters are blocked by the revision-3 safety mask and should be buffered by the caller.
 -   `SetUpscaleMethod` selects the CSX upscaler method explicitly while preserving the current preset, DLSS profile, and Render Scale Mode request where valid.
--   `SetVRUpscalingTransitionProfileForMethod` is the preferred revision-2 call for interior/exterior controllers that need deterministic DLSS/FSR behavior. It stages method, Render Scale Mode, shared preset, and DLSS profile together, so `DLSS + NativeAA + K` is unambiguously DLAA/K and `FSR + Hoshipa` is unambiguously FSR render scale. When active unconditional VR FPS Stabilizer Interior/Exterior profiles are available, the two atomic transition-profile calls accept the configured destination profile at either supported timing: before the cell type changes or during the destination-cell `LoadingMenu` handoff. Current-cell profile reassertions during ordinary gameplay remain ignored. Individual setters and consumers without active stabilizer profiles retain their existing behavior.
+-   `SetVRUpscalingTransitionProfileForMethod` is the preferred revision-2 call for interior/exterior controllers that need deterministic DLSS/FSR behavior. It stages method, Render Scale Mode, shared preset, and DLSS profile together, so `DLSS + NativeAA + K` is unambiguously DLAA/K and `FSR + Hoshipa` is unambiguously FSR render scale. When active unconditional VR FPS Stabilizer Interior/Exterior profiles are available, the two atomic transition-profile calls accept either configured profile when the safety gate permits it. This includes current-cell reconciliation after a live INI reload, pre-move requests and destination-cell `LoadingMenu` handoffs. Individual setters and consumers without active stabilizer profiles retain their existing behavior.
 -   External VR transition controllers should call `GetVRUpscalingApplyBlockReasons()` or `IsVRUpscalingProfileApplyAllowed()` before applying ordinary CSX changes; both revision-3 queries remain strictly blocked for every non-zero reason mask. Revision 4 / build 10 adds `GetVRUpscalingTransitionProfileDecision(...)` for the method-specific atomic upscaling profile only. It returns `kBlocked` when the caller must buffer and retry, `kNoChange` when settings and the physical render-scale contract already match (do not call the setter), and `kApply` when the caller should immediately call `SetVRUpscalingTransitionProfileForMethod`. During a real in-game Stabilizer `LoadingMenu` handoff, this intent-specific preflight may stage the immutable destination profile while only soft loading/transition blockers remain; renderer mutation still waits until Skyrim releases loading-target ownership.
 -   `kOpenCompositeUpscaling` means Open Composite owns the active upscaling path. CSX remains locked to `None`, and callers must not retry an upscaling profile until the game has restarted without Open Composite upscaling.
 -   The individual legacy `SetUpscalePreset`, `SetDLSSProfile`, and `SetRenderAtUpscaleResEnabled` setters use the same VR transition staging when called separately. `SetUpscalePreset` and `SetDLSSProfile` prefer DLSS on DLSS-capable systems for backwards compatibility with consumers built around the old DLSS naming.
@@ -185,4 +214,5 @@ The former advisory timed-fade constants remain as deprecated, zero-valued sourc
 -   `GetVRUpscalingApplyBlockReasons`/`IsVRUpscalingProfileApplyAllowed` require interface revision `3` and `getBuildNumber() >= 8`.
 -   `VRUpscalingApplyBlockReason::kOpenCompositeUpscaling` requires `getBuildNumber() >= 9`.
 -   `GetVRUpscalingTransitionProfileDecision` and atomic Stabilizer door-profile staging while only soft LoadingMenu blockers remain require interface revision `4` and `getBuildNumber() >= 10`. Revision-3 queries and individual setters retain their fail-closed behavior.
+-   `getBuildNumber() >= 12` accepts configured current-cell profiles outside LoadingMenu and checks completed requests before profile admission. Retry `kBlocked` on a later game frame/task, never in a loop that occupies the game thread. Log the four target arguments and `GetVRUpscalingApplyBlockReasons()` to distinguish renderer safety blockers from invalid or unconfigured targets; those targets require correction instead of endless retries.
 -   Treat missing API as optional integration and continue without hard failure.

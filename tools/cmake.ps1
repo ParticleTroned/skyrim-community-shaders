@@ -1,6 +1,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $cmakeArguments = [string[]] $args
+$cmake = Get-Command cmake -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 
 . (Join-Path $PSScriptRoot "tool-environment.ps1")
 
@@ -29,9 +30,11 @@ if ($vsDevCmd) {
 $vcpkgRoot = Resolve-CsxVcpkgRoot -Required
 Write-Host "Using vcpkg at $vcpkgRoot"
 
-$cmake = Get-Command cmake.exe -ErrorAction SilentlyContinue
 if (-not $cmake) {
-    throw "cmake.exe was not found on PATH. Install CMake or the Visual Studio CMake component."
+    $cmake = Get-Command cmake -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+}
+if (-not $cmake) {
+    throw "CMake was not found on PATH. Install CMake or the Visual Studio CMake component."
 }
 
 & $cmake.Source @cmakeArguments

@@ -7,6 +7,12 @@
 
 namespace StreamlineFrameTokenPublication
 {
+	enum class ResetScope
+	{
+		Lifecycle,
+		DispatchFailure,
+	};
+
 	template <class Token>
 	class Coordinator
 	{
@@ -18,15 +24,15 @@ namespace StreamlineFrameTokenPublication
 			bool acquired = false;
 		};
 
-		/** Returns one coherent frame/token pair, acquiring it at most once per frame. */
+		/** Publishes one frame/token pair, reused until a newer frame or lifecycle reset. */
 		template <class Acquire>
 		[[nodiscard]] std::optional<Snapshot> Resolve(
 			std::uint32_t a_frame,
 			Acquire&& a_acquire)
 		{
 			std::lock_guard lock(mutex_);
-			if (published_ && published_->frame == a_frame) {
-				return Snapshot{ published_->frame, published_->token, false };
+			if (published_ && published_->frame == a_frame && published_->token) {
+				return Snapshot{ published_->frame, *published_->token, false };
 			}
 			if (published_ && IsOlderFrame(a_frame, published_->frame))
 				return std::nullopt;
@@ -39,11 +45,14 @@ namespace StreamlineFrameTokenPublication
 			return Snapshot{ a_frame, *token, true };
 		}
 
-		/** Invalidates the published pair under the acquisition lock. */
-		void Reset()
+		/** Lifecycle resets invalidate the token; frame ordering survives every reset. */
+		void Reset(ResetScope a_scope = ResetScope::Lifecycle)
 		{
+			if (a_scope == ResetScope::DispatchFailure)
+				return;
 			std::lock_guard lock(mutex_);
-			published_.reset();
+			if (published_)
+				published_->token.reset();
 		}
 
 	private:
@@ -58,7 +67,7 @@ namespace StreamlineFrameTokenPublication
 		struct Published
 		{
 			std::uint32_t frame = 0;
-			Token token{};
+			std::optional<Token> token;
 		};
 
 		std::mutex mutex_;

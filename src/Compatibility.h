@@ -23,6 +23,8 @@ namespace Compatibility
 		{ L"Data/SKSE/Plugins/SSEReShadeHelper.dll" },
 		{ L"Data/SKSE/Plugins/TAASharpen.dll" },
 		{ L"Data/SKSE/Plugins/NVIDIA_Reflex.dll" },
-		{ L"Data/SKSE/Plugins/MARA.dll" }
+		{ L"Data/SKSE/Plugins/MARA.dll" },
+		{ L"Data/SKSE/Plugins/NativeMeshLightFlickerFix.dll",
+			"superseded by Light Limit Fix; both replace the same lighting hooks" }
 	};
 }

@@ -1,28 +1,32 @@
-#include "Api/ProfilerApiDevBenchBridge.h"
-#include "Api/ProfilerService.h"
-#include "Api/RuntimeThreadAffinity.h"
-#include "Api/ServiceRegistryProvider.h"
-#include "Api/UpscalingDevBenchBridge.h"
-#include "Api/WeatherDevBenchBridge.h"
-#include "Api/WeatherService.h"
+#include "Api/AcceptedDrawService.h"
 #include "Api/EditorDevBenchBridge.h"
 #include "Api/EditorService.h"
 #include "Api/FeatureDevBenchBridge.h"
 #include "Api/FeatureService.h"
-#include "Api/ShaderDevBenchBridge.h"
+#include "Api/ProfilerApiDevBenchBridge.h"
+#include "Api/ProfilerService.h"
+#include "Api/RuntimeThreadAffinity.h"
+#include "Api/ServiceRegistryProvider.h"
 #include "Api/ShaderCompatibilityRegistry.h"
+#include "Api/ShaderDevBenchBridge.h"
+#include "Api/UpscalingDevBenchBridge.h"
+#include "Api/WeatherDevBenchBridge.h"
+#include "Api/WeatherService.h"
 #include "BuildProvenance.h"
 #include "Compatibility.h"
 #include "Deferred.h"
+#include "Features/HorizonFix.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
+#include "Features/Skylighting.h"
 #include "Features/Upscaling.h"
+#include "Features/VR/StabilizerIntegration.h"
 #include "FrameAnnotations.h"
 #include "Globals.h"
 #include "Hooks.h"
 #include "Menu.h"
-#include "MenuDevBenchBridge.h"
 #include "Menu/ThemeManager.h"
+#include "MenuDevBenchBridge.h"
 #include "PerformanceTuningDevBenchBridge.h"
 #include "ProfilerDevBenchBridge.h"
 #include "SceneSettingsManager.h"
@@ -69,18 +73,18 @@ namespace
 			return false;
 		}
 
-		CSX::Api::InitializeServiceRegistryProvider();
 		if (!messaging->RegisterListener(nullptr, CommunityShadersAPIMessageHandler)) {
 			PushStartupError("Failed to register CSX API message listener. Check CommunityShaders.log for details.");
 			return false;
 		}
 
-		logger::info("Registered legacy CSAP and versioned CSXR API message listener during PostLoad");
+		logger::info("Registered legacy CSAP and versioned CSXR API listener for currently loaded plugins");
 		return true;
 	}
 
 	void ResetRuntimeStateAfterGameLoad()
 	{
+		globals::features::skylighting.QueueResetSkylighting();
 		if (globals::state) {
 			globals::state->pendingPostLoadRuntimeReset = true;
 		}
@@ -127,9 +131,9 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 	while (!REX::W32::IsDebuggerPresent()) {};
 #endif
 	InitializeLog();
-	logger::info("Loaded {} {}", Plugin::NAME, Plugin::VERSION_LABEL);
+	logger::info("Loaded {} {}", Plugin::NAME, Plugin::BUILD_LABEL);
 	BuildProvenance::LogRuntimeIdentity();
-	SKSE::Init(a_skse);
+	SKSE::Init(a_skse, false);
 	SKSE::AllocTrampoline(kTrampolineCapacity);
 	return Load();
 }
@@ -156,6 +160,11 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	switch (message->type) {
 	case SKSE::MessagingInterface::kPostLoad:
 		{
+			// Keep early consumers reachable; refresh the wildcard registration
+			// for plugins loaded after CSX before their PostLoad callbacks.
+			if (!RegisterCommunityShadersAPIMessageListener())
+				break;
+
 			// Establish the API owner from an actual SKSE game-thread task. The
 			// lifecycle callback itself is not a reliable thread-affinity oracle.
 			CSX::Api::ScheduleRuntimeMainThreadBinding();
@@ -163,23 +172,23 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 			CSX::Api::InitializeFeatureService();
 			CSX::Api::InitializeProfilerService();
 			CSX::Api::InitializeWeatherService();
-			if (RegisterCommunityShadersAPIMessageListener()) {
-				// Publish diagnostic adapters before cache validation and shader
-				// compilation. If DevBench's PostLoad listener runs later, the
-				// PostPostLoad attempt below provides the deterministic retry.
-				CSX::Api::ProfilerApiDevBenchBridge::Install();
-				ScreenshotDevBenchBridge::Install();
-				CSX::Api::UpscalingDevBenchBridge::Install();
-				CSX::Api::WeatherDevBenchBridge::Install();
-				CSX::Api::EditorDevBenchBridge::Install();
-				CSX::Api::FeatureDevBenchBridge::Install();
-				CSX::Api::ShaderDevBenchBridge::Install();
-			}
+			// Publish diagnostic adapters before cache validation and shader
+			// compilation. If DevBench's PostLoad listener runs later, the
+			// PostPostLoad attempt below provides the deterministic retry.
+			CSX::Api::ProfilerApiDevBenchBridge::Install();
+			ScreenshotDevBenchBridge::Install();
+			CSX::Api::UpscalingDevBenchBridge::Install();
+			CSX::Api::WeatherDevBenchBridge::Install();
+			CSX::Api::EditorDevBenchBridge::Install();
+			CSX::Api::FeatureDevBenchBridge::Install();
+			CSX::Api::ShaderDevBenchBridge::Install();
 			break;
 		}
 	case SKSE::MessagingInterface::kPostPostLoad:
 		{
 			if (errors.empty()) {
+				VRFpsStabilizer::Initialize();
+				VRFpsStabilizer::InstallDevBench();
 				ScreenshotDevBenchBridge::Install();
 				CSX::Api::ProfilerApiDevBenchBridge::Install();
 				// DevBench publishes its interface from its own PostLoad listener. If
@@ -192,6 +201,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				CSX::Api::ShaderDevBenchBridge::Install();
 				Deferred::Hooks::Install();
 				Hooks::Install();
+				CSX::Api::RegisterAcceptedDrawService();
 				EngineFix::InstallOnPostPostLoadFixes();
 				FrameAnnotations::OnPostPostLoad();
 
@@ -203,7 +213,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				// Temporary adapter for the existing Horizon Fix integration. Future
 				// external shader providers register their own identity through
 				// csx.shader.compatibility instead of requiring a CSX exception.
-				if (GetModuleHandleW(L"HorizonFix.dll")) {
+				if (globals::features::horizonFix.loaded) {
 					const CSX::ShaderCompatibilityAPI::Scope001 scope{
 						.structSize = sizeof(CSX::ShaderCompatibilityAPI::Scope001),
 						.kind = CSX::ShaderCompatibilityAPI::ScopeKind::kShaderFamily,
@@ -320,8 +330,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	case SKSE::MessagingInterface::kSaveGame:
 		{
 			if (errors.empty() && globals::state) {
-				const uint32_t frame = globals::state->frameCount;
-				globals::state->ExtendSaveLoadSafeMode(frame, State::kSaveLoadSafeModeGraceFrames);
+				const uint32_t frame = globals::state->frameCountAtomic.load(std::memory_order_acquire);
+				globals::state->NotifyOrdinarySave(frame);
 				globals::state->ExtendPersistentMutationBlock(frame, State::kSaveMutationBlockGraceFrames);
 			}
 
@@ -363,7 +373,7 @@ bool Load()
 	}
 
 	if (REL::Module::IsVR()) {
-		REL::IDDB::get().IsVRAddressLibraryAtLeastVersion("0.207.0", true);
+		REL::IDDB::get().IsVRAddressLibraryAtLeastVersion("0.269.0", true);
 	}
 
 	auto privateProfileRedirectorVersion = Util::GetDllVersion(L"Data/SKSE/Plugins/PrivateProfileRedirector.dll");
@@ -376,6 +386,9 @@ bool Load()
 		logger::error("SKSE messaging interface unavailable");
 		return false;
 	}
+	CSX::Api::InitializeServiceRegistryProvider();
+	if (!RegisterCommunityShadersAPIMessageListener())
+		return false;
 
 	if (!messaging->RegisterListener("SKSE", MessageHandler)) {
 		logger::error("Failed to register SKSE message listener");
@@ -386,7 +399,10 @@ bool Load()
 	globals::ReInit();
 
 	auto state = globals::state;
-	state->Load();
+	state->Load(
+		State::ConfigMode::USER,
+		true,
+		State::SettingsApplyMode::StartupHydration);
 	state->LoadTheme();  // Load theme settings from SettingsTheme.json
 
 	// Initialize theme system - create default themes and discover existing ones

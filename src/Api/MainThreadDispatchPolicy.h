@@ -5,7 +5,7 @@
 
 namespace CSX::Api
 {
-	enum class MainThreadDispatchState : std::uint8_t
+	enum class MainThreadDispatchPhase : std::uint8_t
 	{
 		Queued,
 		Running,
@@ -18,35 +18,35 @@ namespace CSX::Api
 	public:
 		[[nodiscard]] bool TryClaim() noexcept
 		{
-			auto expected = MainThreadDispatchState::Queued;
+			auto expected = MainThreadDispatchPhase::Queued;
 			return state.compare_exchange_strong(
 				expected,
-				MainThreadDispatchState::Running,
+				MainThreadDispatchPhase::Running,
 				std::memory_order_acq_rel,
 				std::memory_order_acquire);
 		}
 
 		[[nodiscard]] bool TryCancel() noexcept
 		{
-			auto expected = MainThreadDispatchState::Queued;
+			auto expected = MainThreadDispatchPhase::Queued;
 			return state.compare_exchange_strong(
 				expected,
-				MainThreadDispatchState::Cancelled,
+				MainThreadDispatchPhase::Cancelled,
 				std::memory_order_acq_rel,
 				std::memory_order_acquire);
 		}
 
 		void Complete() noexcept
 		{
-			state.store(MainThreadDispatchState::Completed, std::memory_order_release);
+			state.store(MainThreadDispatchPhase::Completed, std::memory_order_release);
 		}
 
-		[[nodiscard]] MainThreadDispatchState Get() const noexcept
+		[[nodiscard]] MainThreadDispatchPhase Get() const noexcept
 		{
 			return state.load(std::memory_order_acquire);
 		}
 
 	private:
-		std::atomic<MainThreadDispatchState> state{ MainThreadDispatchState::Queued };
+		std::atomic<MainThreadDispatchPhase> state{ MainThreadDispatchPhase::Queued };
 	};
 }

@@ -41,8 +41,13 @@ endforeach()
 string(JSON _fixture_cancelled GET "${_manifest_fixture}" counts cancelled)
 string(JSON _fixture_fallback GET "${_manifest_fixture}" actual fallbacksPresent)
 string(JSON _fixture_view GET "${_manifest_fixture}" children 0 artifacts 0 actual view)
-if(NOT _fixture_cancelled EQUAL 0 OR NOT _fixture_fallback OR NOT _fixture_view STREQUAL "source_native")
-    message(FATAL_ERROR "Sequence manifest fixture does not preserve counters, fallback, and artifact provenance")
+string(JSON _fixture_effective_frames GET "${_manifest_fixture}" effective frameCount)
+string(JSON _fixture_effective_source GET "${_manifest_fixture}" effective capture source kind)
+if(NOT _fixture_cancelled EQUAL 0 OR NOT _fixture_fallback OR
+   NOT _fixture_view STREQUAL "source_native" OR
+   NOT _fixture_effective_frames EQUAL 1 OR
+   NOT _fixture_effective_source STREQUAL "hmd_submission")
+    message(FATAL_ERROR "Sequence manifest fixture does not preserve effective settings, counters, fallback, and artifact provenance")
 endif()
 
 file(READ "${PROJECT_ROOT}/docs/development/unified-preset-policy.json" _policy)
@@ -72,9 +77,10 @@ foreach(_action IN ITEMS
 endforeach()
 
 foreach(_event IN ITEMS
-    request.accepted source.waiting source.fallback artifact.queued
+    request.accepted source.waiting source.acquired source.timeout source.fallback artifact.queued
     artifact.encoding artifact.written artifact.failed sequence.frame_scheduled
-    sequence.stop_requested sequence.finalizing request.terminal
+    sequence.frame_dropped sequence.stop_requested sequence.finalizing
+    packaging.queued packaging.completed packaging.failed request.terminal
 )
     string(FIND "${_implementation}" "\"${_event}\"" _event_position)
     if(_event_position EQUAL -1)
@@ -85,14 +91,40 @@ endforeach()
 foreach(_required_contract_text IN ITEMS
     runtime_session persistent_user settings_default file_reference
     maximumOutputsPerFrame retentionSeconds manifest_failed
-	DescribeCommittedArtifact BuildProvenance::GetProducer artifact_hash_failed
-	terminalOutcome completedUtc fallbacksPresent cancelled
+	DescribeCommittedArtifact BuildProvenance::GetProducer
+	terminalOutcome completedUtc fallbacksPresent cancelled manifestChildren
+	screenshotEye frameCaptureEye frameCaptureUsePng a_sequenceSettings
+	effectiveSequence RelativeContainedArtifactPath relativeSequencePath
+	DirectoryLease::CreateExclusive directoryLease VerifyDirectChild
+	SelectSettingsCaptureSource sequence.effective a_sequence.effective
 )
     string(FIND "${_implementation}" "${_required_contract_text}" _contract_position)
     if(_contract_position EQUAL -1)
         message(FATAL_ERROR "Screenshot API implementation is missing contract behavior: ${_required_contract_text}")
     endif()
 endforeach()
+
+string(FIND "${_implementation}" "result.artifact = DescribeCommittedArtifact(job.destination, committed);" _manifest_describe_position)
+string(FIND "${_implementation}" "result.success = true;" _manifest_success_position)
+string(FIND "${_implementation}" "integrityError" _integrity_warning_position)
+if(_manifest_describe_position EQUAL -1 OR _manifest_success_position LESS _manifest_describe_position OR
+   NOT _integrity_warning_position EQUAL -1)
+    message(FATAL_ERROR "Manifest publication must fail closed when same-handle integrity metadata cannot be produced")
+endif()
+
+file(READ "${PROJECT_ROOT}/src/Features/ScreenshotFeature.cpp" _feature_implementation)
+foreach(_required_custody_text IN ITEMS
+    SaveToWICMemory CommittedFile::WriteAtomically a_committedArtifact
+)
+    string(FIND "${_feature_implementation}${_implementation}" "${_required_custody_text}" _custody_position)
+    if(_custody_position EQUAL -1)
+        message(FATAL_ERROR "Screenshot publication is missing producer-owned custody behavior: ${_required_custody_text}")
+    endif()
+endforeach()
+string(FIND "${_feature_implementation}" "SaveToWICFile" _path_reopen_position)
+if(NOT _path_reopen_position EQUAL -1)
+    message(FATAL_ERROR "Screenshot encoding must not close a path-written file before committed-file custody")
+endif()
 
 file(READ "${PROJECT_ROOT}/docs/development/schemas/screenshot-request-v1.schema.json" _request_schema)
 foreach(_required_schema_text IN ITEMS runtime_session persistent_user settings_apply frameManifest previewVideo)
@@ -128,6 +160,30 @@ string(FIND "${_feature_controls}" "DispatchScreenshotServiceRequest" _control_d
 if(_ui_adapter_position EQUAL -1 OR _ui_v1_position EQUAL -1 OR _control_dispatch_position EQUAL -1)
     message(FATAL_ERROR "Native screenshot UI must submit through the public contract-v1 screenshot service")
 endif()
+foreach(_settings_migration_text IN ITEMS
+    "const bool hasCanonicalFrameCaptureEye"
+    "if (!hasCanonicalFrameCaptureEye && hasLegacyFrameCaptureEye)"
+    "frameCaptureEye == CaptureEye::Both"
+    "output[\"dominantEye\"] = vrFramedDominantEye"
+)
+    string(FIND "${_feature_controls}" "${_settings_migration_text}" _settings_migration_position)
+    if(_settings_migration_position EQUAL -1)
+        message(FATAL_ERROR "Screenshot settings migration is missing: ${_settings_migration_text}")
+    endif()
+endforeach()
+string(FIND "${_implementation}" "a_feature.sequenceDefaults.saveSeparateEyes =\n\t\t\ta_feature.frameCaptureEye == ScreenshotFeature::CaptureEye::Both" _legacy_eye_sync_position)
+if(_legacy_eye_sync_position EQUAL -1)
+    message(FATAL_ERROR "Sequence settings_apply must synchronize the legacy SeparateEyes mirror")
+endif()
+foreach(_acquisition_contract_text IN ITEMS
+    BuildAcquisitionRecord publicationGeneration deviceIdentity
+    submittedBounds requiredEyeMask IsSamePublication
+)
+    string(FIND "${_feature_controls}" "${_acquisition_contract_text}" _acquisition_position)
+    if(_acquisition_position EQUAL -1)
+        message(FATAL_ERROR "Screenshot acquisition provenance is missing: ${_acquisition_contract_text}")
+    endif()
+endforeach()
 
 file(READ "${PROJECT_ROOT}/src/Menu.cpp" _menu)
 string(FIND "${_menu}" "screenshotFeature.RequestUiCapture()" _hotkey_v1_position)
@@ -161,8 +217,19 @@ endif()
 
 file(READ "${PROJECT_ROOT}/src/XSEPlugin.cpp" _plugin_lifecycle)
 string(FIND "${_plugin_lifecycle}" "case SKSE::MessagingInterface::kPostLoad:" _postload_position)
+string(FIND "${_plugin_lifecycle}" "if (!RegisterCommunityShadersAPIMessageListener())" _api_listener_position)
 string(FIND "${_plugin_lifecycle}" "ScreenshotDevBenchBridge::Install();" _early_install_position)
-if(_postload_position EQUAL -1 OR _early_install_position LESS _postload_position)
+if(_postload_position EQUAL -1 OR _api_listener_position LESS _postload_position)
+	message(FATAL_ERROR "The wildcard CSX API listener must be registered during PostLoad after every plugin is loaded")
+endif()
+string(FIND "${_plugin_lifecycle}" "bool Load()" _load_start)
+string(SUBSTRING "${_plugin_lifecycle}" ${_load_start} -1 _load_body)
+string(FIND "${_load_body}" "if (!RegisterCommunityShadersAPIMessageListener())" _load_api_listener)
+string(FIND "${_load_body}" "RegisterListener(\"SKSE\", MessageHandler)" _load_skse_listener)
+if(_load_api_listener EQUAL -1 OR _load_skse_listener EQUAL -1 OR _load_api_listener GREATER _load_skse_listener)
+    message(FATAL_ERROR "Early API discovery must remain available before registering lifecycle callbacks")
+endif()
+if(_early_install_position LESS _postload_position)
     message(FATAL_ERROR "Screenshot DevBench discovery must be attempted during PostLoad")
 endif()
 

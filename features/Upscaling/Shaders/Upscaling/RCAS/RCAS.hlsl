@@ -23,32 +23,69 @@
 
 #define FSR_RCAS_LIMIT (0.25 - (1.0 / 16.0))
 
+#ifdef MOTION_ADAPTIVE
+#	include "Upscaling/MotionSharpening.hlsli"
+#endif
+
 cbuffer RCASConfig : register(b0)
 {
 	float sharpness;
 	float3 pad;
+#ifdef MOTION_ADAPTIVE
+	uint4 outputRect;
+	uint4 motionRect;
+	float2 motionToOutputPixels;
+	float baseStrength;
+	float adjustment;
+	float thresholdPixels;
+	float strengthCap;
+	float maximumGain;
+	float motionPad;
+#endif
 };
 
 Texture2D<float4> Source : register(t0);
+#ifdef MOTION_ADAPTIVE
+Texture2D<float2> Motion : register(t1);
+#endif
 RWTexture2D<float4> Dest : register(u0);
 
 [numthreads(8, 8, 1)] void main(uint3 DTid : SV_DispatchThreadID) {
+#ifdef MOTION_ADAPTIVE
+	if (any(DTid.xy >= outputRect.zw))
+		return;
+	uint2 localOutput = DTid.xy;
+	DTid.xy += outputRect.xy;
+#else
 	uint2 texDim;
 	Dest.GetDimensions(texDim.x, texDim.y);
 
 	if (DTid.x >= texDim.x || DTid.y >= texDim.y)
 		return;
+#endif
 
 	// Algorithm uses minimal 3x3 pixel neighborhood.
 	//    b
 	//  d e f
 	//    h
 	int2 sp = int2(DTid.xy);
+#ifdef MOTION_ADAPTIVE
+	float3 b = Source.Load(int3(MotionSharpeningColorPixel(sp + int2(0, -1), outputRect), 0)).rgb;
+	float3 d = Source.Load(int3(MotionSharpeningColorPixel(sp + int2(-1, 0), outputRect), 0)).rgb;
+	float3 e = Source.Load(int3(sp, 0)).rgb;
+	float3 f = Source.Load(int3(MotionSharpeningColorPixel(sp + int2(1, 0), outputRect), 0)).rgb;
+	float3 h = Source.Load(int3(MotionSharpeningColorPixel(sp + int2(0, 1), outputRect), 0)).rgb;
+	uint2 motionPixel = MotionSharpeningSourcePixel(localOutput, outputRect.zw, motionRect);
+	float strength = MotionSharpeningStrength(baseStrength, adjustment, thresholdPixels,
+		strengthCap, Motion.Load(int3(motionPixel, 0)), motionToOutputPixels);
+	float pixelSharpness = MotionSharpeningGain(strength, maximumGain);
+#else
 	float3 b = Source.Load(int3(sp + int2(0, -1), 0)).rgb;
 	float3 d = Source.Load(int3(sp + int2(-1, 0), 0)).rgb;
 	float3 e = Source.Load(int3(sp, 0)).rgb;
 	float3 f = Source.Load(int3(sp + int2(1, 0), 0)).rgb;
 	float3 h = Source.Load(int3(sp + int2(0, 1), 0)).rgb;
+#endif
 
 	// Rename (32-bit) or regroup (16-bit).
 	float bR = b.r;
@@ -100,7 +137,11 @@ RWTexture2D<float4> Dest : register(u0);
 	float lobeR = max(-hitMinR, hitMaxR);
 	float lobeG = max(-hitMinG, hitMaxG);
 	float lobeB = max(-hitMinB, hitMaxB);
+#ifdef MOTION_ADAPTIVE
+	float lobe = max(-FSR_RCAS_LIMIT, min(max(lobeR, max(lobeG, lobeB)), 0.0)) * pixelSharpness;
+#else
 	float lobe = max(-FSR_RCAS_LIMIT, min(max(lobeR, max(lobeG, lobeB)), 0.0)) * sharpness;
+#endif
 
 	// Apply noise removal.
 	lobe *= nz;

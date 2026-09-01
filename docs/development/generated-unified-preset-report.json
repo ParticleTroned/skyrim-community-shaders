@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "policySchemaVersion": 4,
+  "policyStatus": "provisional-calibration-v2",
+  "evidenceDate": "2026-08-30",
+  "baseTemplate": "docs/development/unified-preset-templates/Base.SettingsUser.json",
+  "baseSha256": "6E58C90B498296193E189839ECFFC70367673A7D4DBAA3CE37AC4F7A282C1407",
+  "runtimeSettingsContract": {
+    "revision": 5,
+    "sourceTreeSha256": "54D9165BC2450408C22DCA37015E483BE844696A228EA7CA29F95ED40C6663B6"
+  },
+  "presetCompatibility": {
+    "contractVersion": 1,
+    "target": {
+      "runtime": "VR",
+      "minimumVersion": "3.20",
+      "maximumVersionExclusive": "3.21"
+    }
+  },
+  "tiers": [
+    {
+      "tier": "Performance",
+      "outputDirectory": "CSX Unified- Performance - Press END on PC to Customize",
+      "settingsSha256": "7803BD94954666F30E0ED69C260F31D0000BCD1BCF0D018167B70BF8FB21DCB2",
+      "qualificationRefs": [
+        "vendor-capability-selection",
+        "runtime-lane-comparison",
+        "foveation-recalibration",
+        "volumetric-lighting-retier"
+      ]
+    },
+    {
+      "tier": "Balanced",
+      "outputDirectory": "CSX Unified- Balanced - Press END on PC to Customize",
+      "settingsSha256": "EDA60CE82DB56CD50EB31B6FB2633ACE16AB1679A18F67350C5E529C02B6B01F",
+      "qualificationRefs": [
+        "vendor-capability-selection",
+        "runtime-lane-comparison",
+        "foveation-recalibration",
+        "volumetric-lighting-retier"
+      ]
+    },
+    {
+      "tier": "Quality",
+      "outputDirectory": "CSX Unified- Quality - Press END on PC to Customize",
+      "settingsSha256": "00A8AB7F0C30ECF52B3B4FADFE9791F007316703A240D1D1E2D903C131A0D30F",
+      "qualificationRefs": [
+        "vendor-capability-selection",
+        "runtime-lane-comparison",
+        "foveation-recalibration",
+        "ssgi-ambient-composition",
+        "volumetric-lighting-retier"
+      ]
+    }
+  ],
+  "qualifications": {
+    "vendor-capability-selection": {
+      "status": "amd-live-nvidia-pending",
+      "note": "AMD fallback is live-tested; native NVIDIA DLSS selection still needs equivalent physical validation."
+    },
+    "runtime-lane-comparison": {
+      "status": "pending",
+      "note": "Compare the same tier under SteamVR and Open Composite Unleashed without changing graphics policy."
+    },
+    "foveation-recalibration": {
+      "status": "required",
+      "note": "Exact tiled HMD-mask work changed the cost and fidelity basis of the inherited common foveation values."
+    },
+    "ssgi-ambient-composition": {
+      "status": "required-for-release",
+      "note": "Quality enables AO-only SSGI; complete ambient composition, rotating-view and physical-stereo qualification."
+    },
+    "volumetric-lighting-retier": {
+      "status": "exterior-screened-interior-pending",
+      "note": "A locked-time OCU exterior A-B-A screen found no significant tier-sized cost; retain shared High while an interior comparison remains pending."
+    }
+  }
+}

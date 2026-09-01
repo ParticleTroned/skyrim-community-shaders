@@ -190,10 +190,19 @@ cbuffer AlphaTestRefCB : register(b11)
 
 Texture2D<float> TexDepthSampler : register(t17);
 
+/// Compose authored inputs before LL adjustment; legacy textures are already adjusted.
+float3 ComposeSkyColor(float3 skyColor, float3 textureColor, float3 skyOffset, bool composeAuthoredSky)
+{
+	if (composeAuthoredSky)
+		return Color::Sky(skyColor * textureColor + skyOffset);
+	return Color::Sky(skyColor) * textureColor + Color::Sky(skyOffset);
+}
+
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
-	float3 yyy = Color::Sky(PParams.yyy);
+	float3 skyOffset = PParams.yyy;
+	const bool composeAuthoredSky = Color::UseLinearLightingColorAdjustments();
 #	if !defined(VR)
 	uint eyeIndex = 0;
 #	else
@@ -203,19 +212,26 @@ PS_OUTPUT main(PS_INPUT input)
 #	ifndef OCCLUSION
 #		ifndef TEXLERP
 	float4 baseColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
-	baseColor.xyz = Color::Sky(baseColor.xyz);
+	if (!composeAuthoredSky)
+		baseColor.xyz = Color::Sky(baseColor.xyz);
 #			ifdef TEXFADE
 	baseColor.w *= PParams.x;
 #			endif
 #		else
 	float4 blendColor = TexBlendSampler.Sample(SampBlendSampler, input.TexCoord1.xy);
 	float4 baseColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
-	blendColor.xyz = Color::Sky(blendColor.xyz);
-	baseColor.xyz = Color::Sky(baseColor.xyz);
+	if (!composeAuthoredSky) {
+		blendColor.xyz = Color::Sky(blendColor.xyz);
+		baseColor.xyz = Color::Sky(baseColor.xyz);
+	}
 	baseColor = PParams.xxxx * (-baseColor + blendColor) + baseColor;
 #		endif
 
+#		if defined(CLOUDS)
+	float skyBrightnessMultiplier = SharedData::adaptiveBalanceSettings.cloudBrightness;
+#		else
 	float skyBrightnessMultiplier = SharedData::adaptiveBalanceSettings.skyBrightness;
+#		endif
 
 #		if defined(DITHER)
 #			if defined(VR)
@@ -223,10 +239,10 @@ PS_OUTPUT main(PS_INPUT input)
 	// If VR sky banding becomes visible, add a very small post-transform dither
 	// here using sky-stable coords: input.TexCoord0.zw for TEX, input.TexCoord0.xy otherwise.
 #				ifdef TEX
-	psout.Color.xyz = (Color::Sky(input.Color.xyz) * baseColor.xyz + yyy) * skyBrightnessMultiplier;
+	psout.Color.xyz = ComposeSkyColor(input.Color.xyz, baseColor.xyz, skyOffset, composeAuthoredSky) * skyBrightnessMultiplier;
 	psout.Color.w = baseColor.w * input.Color.w;
 #				else
-	psout.Color.xyz = (yyy + Color::Sky(input.Color.xyz)) * skyBrightnessMultiplier;
+	psout.Color.xyz = ComposeSkyColor(input.Color.xyz, 1.0, skyOffset, composeAuthoredSky) * skyBrightnessMultiplier;
 	psout.Color.w = input.Color.w;
 #				endif  // TEX
 #			else
@@ -237,35 +253,54 @@ PS_OUTPUT main(PS_INPUT input)
 		(TexNoiseGradSampler.Sample(SampNoiseGradSampler, noiseGradUv).x - noiseGradCenter) * 0.03125;
 
 #				ifdef TEX
-	float3 skyVertColor = Color::UseLinearLightingColorAdjustments() ? (input.Color.xyz + noiseGrad) : input.Color.xyz;
-	float3 sunGlareColor = Color::Sky(skyVertColor) * baseColor.xyz;
+	float3 skyVertColor = composeAuthoredSky ? (input.Color.xyz + noiseGrad) : input.Color.xyz;
+	float3 sunGlareColor = ComposeSkyColor(skyVertColor, baseColor.xyz, skyOffset, composeAuthoredSky);
 	// Dither/noise term is the legacy sky path contribution for gradient smoothing.
-	psout.Color.xyz = ((sunGlareColor + yyy) * skyBrightnessMultiplier) + (Color::UseLinearLightingColorAdjustments() ? 0.0 : noiseGrad);
+	psout.Color.xyz = (sunGlareColor * skyBrightnessMultiplier) + (composeAuthoredSky ? 0.0 : noiseGrad);
 	psout.Color.w = baseColor.w * input.Color.w;
 #				else
-	psout.Color.xyz = (yyy + Color::Sky(input.Color.xyz + noiseGrad)) * skyBrightnessMultiplier;
+	psout.Color.xyz = ComposeSkyColor(input.Color.xyz + noiseGrad, 1.0, skyOffset, composeAuthoredSky) * skyBrightnessMultiplier;
 	psout.Color.w = input.Color.w;
 #				endif  // TEX
 #			endif      // VR
 
 #		elif defined(MOONMASK)
 	psout.Color.xyzw = baseColor;
+	if (composeAuthoredSky)
+		psout.Color.xyz = Color::Sky(psout.Color.xyz);
 
 	if (baseColor.w - AlphaTestRefRS.x < 0) {
 		discard;
 	}
 
 #		elif defined(HORIZFADE)
-	psout.Color.xyz = float3(1.5, 1.5, 1.5) * ((Color::Sky(input.Color.xyz) * baseColor.xyz + yyy) * skyBrightnessMultiplier);
+	if (composeAuthoredSky)
+		psout.Color.xyz = Color::Sky(1.5 * (input.Color.xyz * baseColor.xyz + skyOffset)) * skyBrightnessMultiplier;
+	else
+		psout.Color.xyz = 1.5 * (ComposeSkyColor(input.Color.xyz, baseColor.xyz, skyOffset, false) * skyBrightnessMultiplier);
 	psout.Color.w = input.TexCoord2.x * (baseColor.w * input.Color.w);
 #		else
 	psout.Color.w = input.Color.w * baseColor.w;
-	psout.Color.xyz = (Color::Sky(input.Color.xyz) * baseColor.xyz + yyy) * skyBrightnessMultiplier;
+	psout.Color.xyz = ComposeSkyColor(input.Color.xyz, baseColor.xyz, skyOffset, composeAuthoredSky) * skyBrightnessMultiplier;
 #		endif
 
 #	else
 	psout.Color = float4(0, 0, 0, 1.0);
 #	endif  // OCCLUSION
+
+#	if defined(DITHER) && defined(TEX) && !defined(OCCLUSION)
+	psout.Color.xyz *= SharedData::adaptiveBalanceSettings.sunGlareIntensity;
+#	endif
+
+#	if !defined(OCCLUSION) && !defined(MOONMASK)
+#		if defined(CLOUDS)
+	float saturation = SharedData::adaptiveBalanceSettings.cloudSaturation;
+#		else
+	float saturation = SharedData::adaptiveBalanceSettings.skySaturation;
+#		endif
+	if (saturation != 1.0)
+		psout.Color.xyz = Color::Saturation(psout.Color.xyz, saturation);
+#	endif
 
 	float2 screenMotionVector = MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "NvidiaPipelinePolicy.h"
+
 #include <Windows.Foundation.h>
 #include <stdio.h>
 #include <winrt/base.h>
@@ -11,15 +13,20 @@
 
 #include <directx/d3dx12.h>
 
+#include <array>
 #include <atomic>
 #include <memory>
+#include <string>
 
 class DX12SwapChain;
 
 class WrappedResource
 {
 public:
-	WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* a_d3d11Device, ID3D12Device* a_d3d12Device);
+	/** Creates a named shared texture and views, publishing ownership only after success. */
+	WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* a_d3d11Device, ID3D12Device* a_d3d12Device, const std::string& a_name);
+	/** Retains an NT-shared texture and names its D3D12 alias, preserving the source name. */
+	WrappedResource(ID3D11Texture2D* a_texture, ID3D12Device* a_d3d12Device, const std::string& a_name, HANDLE a_sharedHandle = nullptr);
 	~WrappedResource() = default;
 	WrappedResource(const WrappedResource&) = delete;
 	WrappedResource& operator=(const WrappedResource&) = delete;
@@ -114,8 +121,10 @@ public:
 	winrt::com_ptr<ID3D12GraphicsCommandList4> commandLists[2];
 
 	IDXGISwapChain4* swapChain = nullptr;
+	winrt::com_ptr<IDXGISwapChain4> swapChainOwner;
 
 	DXGI_SWAP_CHAIN_DESC1 swapChainDesc{};
+	DXGI_SWAP_CHAIN_DESC publicSwapChainDesc{};
 
 	std::unique_ptr<WrappedResource> swapChainBufferWrapped;
 	std::unique_ptr<WrappedResource> uiBufferWrapped;
@@ -133,7 +142,7 @@ public:
 	winrt::com_ptr<ID3D12Resource> swapChainBuffers[2];
 
 	UINT frameIndex = 0;
-	UINT64 fenceValue = 0;
+	CSX::NvidiaPipelinePolicy::InteropFenceSequence fenceSequence;
 
 	LARGE_INTEGER qpf;
 
@@ -145,11 +154,15 @@ public:
 	float GetFrameTime() const;
 
 	void CreateD3D12Device(IDXGIAdapter* a_adapter);
-	void CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC swapChainDesc);
+	void CreateSwapChain(
+		IDXGIAdapter* adapter,
+		DXGI_SWAP_CHAIN_DESC backendSwapChainDesc,
+		DXGI_SWAP_CHAIN_DESC publicSwapChainDesc);
 
 	void CreateInterop();
 	void RecreateWrappedResources(const DXGI_SWAP_CHAIN_DESC1& desc);
 
+	bool TryBeginConstruction() noexcept;
 	DXGISwapChainProxy* TakeSwapChainProxy();
 	void SetD3D11Device(ID3D11Device* a_d3d11Device);
 	void SetD3D11DeviceContext(ID3D11DeviceContext* a_d3d11Context);
@@ -161,17 +174,28 @@ public:
 	HRESULT Present(UINT SyncInterval, UINT Flags);
 	HRESULT Present1(UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* presentParameters);
 	HRESULT GetDevice(_In_ REFIID riid, _COM_Outptr_ void** ppDevice);
+	HRESULT GetDesc(_Out_ DXGI_SWAP_CHAIN_DESC* desc) const noexcept;
+	HRESULT GetDesc1(_Out_ DXGI_SWAP_CHAIN_DESC1* desc) const noexcept;
+	HRESULT SetFullscreenState(BOOL fullscreen, IDXGIOutput* target) noexcept;
+	HRESULT GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC* desc) const noexcept;
+	HRESULT ResizeTarget(const DXGI_MODE_DESC* target) noexcept;
 	HANDLE GetFrameLatencyWaitableObject();
 
 	void SetUIBuffer();
 
 	// D3D12 interop resource management
 	void CreateSharedResources();
-	void ResetUnpublished() noexcept;
+	bool ResetUnpublished() noexcept;
 	void OnProxyDestroyed(IDXGISwapChain4* a_swapChain) noexcept;
+	[[nodiscard]] CSX::NvidiaPipelinePolicy::ProxyLifecycleState GetLifecycleState() const noexcept;
 
 private:
+	void ResetResources() noexcept;
 	HRESULT PresentInternal(UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* presentParameters) noexcept;
-	HRESULT RefreshAfterResize() noexcept;
+	HRESULT RefreshAfterResize(DXGI_FORMAT publicFormat) noexcept;
+	HRESULT RestoreFrameGenerationAfterFailedResize() noexcept;
+	static DXGI_FORMAT ResolveBackendFormat(DXGI_FORMAT publicFormat) noexcept;
+	std::array<UINT64, 2> allocatorFenceValues{};
+	CSX::NvidiaPipelinePolicy::ProxyLifecycleGate lifecycle;
 	bool runtimeQuarantined = false;
 };

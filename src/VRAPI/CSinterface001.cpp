@@ -1,3 +1,9 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// This consumer API file is available under LGPL-3.0-or-later.
+// See API.md, "Consumer licensing", for distribution requirements,
+// including those applicable when compiling the helper into a consumer DLL.
+// Licence texts: COPYING and COPYING.LESSER.
+
 #include "VRAPI/CSinterface001.h"
 
 // Stores the API after it has already been fetched.

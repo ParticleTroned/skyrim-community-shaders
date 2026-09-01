@@ -147,12 +147,14 @@ inline bool InteriorSun::IsInteriorWithSun(const RE::TESObjectCELL* cell)
 
 RE::TESWorldSpace* InteriorSun::GetWorldSpace::thunk(RE::TES* tes)
 {
-	if (!globals::features::interiorSun.IsEnabled())
-		return func(tes);
-
 	if (tes) {
-		if (const auto cell = tes->interiorCell)
+		if (const auto cell = tes->interiorCell) {
+			// Patched interior callers dereference this result, so disabled mode must still return a non-null sentinel.
+			if (!globals::features::interiorSun.IsEnabled())
+				return disableInteriorSun;
+
 			return IsInteriorWithSun(cell) ? enableInteriorSun : disableInteriorSun;
+		}
 	}
 	return func(tes);
 }

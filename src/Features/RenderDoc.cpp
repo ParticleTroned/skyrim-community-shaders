@@ -892,7 +892,7 @@ std::string RenderDoc::BuildAutomaticCaptureComments(const std::string& userComm
 	comments += std::format("Skyrim {} {}\n", runtimeName, gameVersion);
 
 	// Plugin version
-	comments += std::format("{}\n", Plugin::VERSION_LABEL);
+	comments += std::format("{}\n", Plugin::BUILD_LABEL);
 
 	// Enabled features
 	const auto& features = Feature::GetFeatureList();

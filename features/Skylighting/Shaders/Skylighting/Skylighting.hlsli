@@ -121,6 +121,12 @@ namespace Skylighting
 #endif
 
 #if defined(PSHADER) || defined(SKYLIGHTING_PROBE_REGISTER)
+	float GetProbeTangentWeight(float3 cellCentreMS, float3 positionMS, float3 normalWS)
+	{
+		// Favor probes on the receiver's side of the surface to limit light leaking.
+		return saturate(dot(normalize(cellCentreMS - positionMS), normalWS) * 0.5 + 0.5);
+	}
+
 	sh2 Sample(float3 positionMS, float3 normalWS)
 	{
 		const SharedData::SkylightingSettings params = SharedData::skylightingSettings;
@@ -157,13 +163,7 @@ namespace Skylighting
 
 					float3 cellCentreMS = (float3(cellID) + 0.5 - float3(arrayDims) * 0.5) * cellSize;
 
-					float tangentWeight = 1.0;
-					[branch] if (params.FastSamplingMode == 0)
-					{
-						// https://handmade.network/p/75/monter/blog/p/7288-engine_work__global_illumination_with_irradiance_probes
-						// Basic tangent checks. This branch can be skipped for fast-sampling mode.
-						tangentWeight = saturate(dot(normalize(cellCentreMS - positionMSAdjusted), normalWS) * 0.5 + 0.5);
-					}
+					float tangentWeight = GetProbeTangentWeight(cellCentreMS, positionMSAdjusted, normalWS);
 
 					float3 trilinearWeights = 1 - abs(offset - trilinearPos);
 					float w = trilinearWeights.x * trilinearWeights.y * trilinearWeights.z * tangentWeight;
@@ -226,11 +226,7 @@ namespace Skylighting
 								float triWeight = trilinearWeights.x * trilinearWeights.y * trilinearWeights.z;
 								uint3 cellTexID = ((uint3)cellID + params.ArrayOrigin.xyz) % arrayDims;
 								float3 cellCentreMS = (float3(cellID) + 0.5 - float3(arrayDims) * 0.5) * cellSize;
-								float tangentWeight = 1.0;
-								[branch] if (params.FastSamplingMode == 0)
-								{
-									tangentWeight = saturate(dot(normalize(cellCentreMS - positionMSAdjusted), normalWS) * 0.5 + 0.5);
-								}
+								float tangentWeight = GetProbeTangentWeight(cellCentreMS, positionMSAdjusted, normalWS);
 								float shWeight = triWeight * tangentWeight;
 
 								shSum = SphericalHarmonics::Add(shSum, SphericalHarmonics::Scale(SkylightingProbeArray[cellTexID], shWeight));

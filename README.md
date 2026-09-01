@@ -2,6 +2,8 @@
 > This is an unofficial fork of [Skyrim Community Shaders](https://github.com/doodlum/skyrim-community-shaders)
 > by Doodlum & contributors. It is not affiliated with or endorsed by the Community Shaders team.
 
+NOTE: This repository does not contain any effects 11-related code from upstream !!!
+
 # Community Shaders Expanded (CSX) – Unofficial Fork
 
 SKSE core plugin for community-driven advanced graphics modifications.
@@ -9,6 +11,17 @@ SKSE core plugin for community-driven advanced graphics modifications.
 Community Shaders Expanded (CSX) restores (and extends) Particle Lights functionality removed after Community Shaders 1.3.6. It also enables Screen Space Shadows (SSS) in VR again while remaining compatible with SE and AE. While SSS is not perfect in VR, especially when using upscaling, the visual benefits outweigh the potential bugs for me. Using SSS version 1.2.1 is recommended.
 
 This fork inherits the original GPL-3.0-or-later license with the Modding Exception and Linking Exception (see below).
+
+## Installing a CSX release
+
+Download the single `CSX_AIO-*.7z` asset from the
+[CSX releases page](https://github.com/ParticleTroned/skyrim-community-shaders/releases).
+All shipped features are bundled, including Adaptive Balance, Performance
+Tuning, Wetterness, Unified Water, Hair Specular and the terrain features.
+The FOMOD offers VR, SE/AE, or no prebuilt shader cache; each runtime cache
+includes both standard and Horizon Fix Water variants. Optional integrations
+still require their companion plugins. GitHub's source archives are for
+development, not installation.
 
 ## Requirements
 
@@ -42,7 +55,7 @@ Install them manually only if you want them in everywhere.
 -   [Address Library for SKSE](https://www.nexusmods.com/skyrimspecialedition/mods/32444)
     -   Needed for SSE/AE
 -   [VR Address Library for SKSEVR](https://www.nexusmods.com/skyrimspecialedition/mods/58101)
-    -   Needed for VR
+    -   Version 0.269.0 or later is required for VR, including forced-weather sky model cleanup.
 
 ## Build Instructions
 
@@ -80,19 +93,25 @@ cmake --preset ALL
 # Build using the preset
 cmake --build --preset ALL
 
-# Install an AIO package somewhere, e.g. $MOD_FOLDER
-cmake --install --preset ALL -- --prefix $MOD_FOLDER
+# Refresh the isolated AIO staging package in ./build/ALL/aio
+cmake --install ./build/ALL --config Release
+
+# Copy the staged package into the mod folder without deleting that folder
+cmake -E copy_directory ./build/ALL/aio $MOD_FOLDER
 ```
 
 # Notes
 
 -   If you prefer to run the VC environment manually, launch Developer PowerShell or the x64 Native Tools prompt instead of calling vcvarsall.bat directly from PowerShell.
--   The convenience wrapper `BuildRelease.bat` also captures these steps.
+-   `BuildRelease.bat ALL` performs the configure and package build. Use an auto-deployment preset when the output should be copied directly to a mod folder.
 
 #### Build a zip package
 
 You can build zip packages for optional cmake targets.
-Currently support `AIO_ZIP_PACKAGE`, `Package-AIO-Manual`, `Package-Core`, and `Package-<Feature>`:
+Developer packaging supports `AIO_ZIP_PACKAGE`, `Package-AIO-Manual`,
+`Package-Core`, and `Package-<Feature>`. Core-only and individual feature
+packages are internal build outputs; public CSX releases use the
+[complete AIO with its cache FOMOD](docs/development/csx-release-distribution.md):
 
 ```pwsh
 # Create a AIO package in ./dist/
@@ -124,8 +143,24 @@ If you want an example CMakeUserPreset to start off with you can copy the `CMake
 #### TRACY_SUPPORT
 
 -   This option is default `"OFF"`
--   This will enable tracy support, might need to delete build folder when this option is changed
--   The client is pinned to Tracy protocol v82 (`ef099b05`); use a protocol-v82 profiler because protocol-v81 tools cannot connect
+-   Enables Tracy instrumentation in the DLL. Reconfigure after changing it.
+-   With this option off, the DLL uses only Tracy's disabled macros and does not link the Tracy client. DevBench capture controls are independently gated by `DEVBENCH_BRIDGE`.
+-   The client is pinned to Tracy `0.14.2-a8db9bd8`, protocol **83**. Capture and viewer tools must use the same protocol.
+-   The `ALL-TRACY` configure preset also selects the `tracy-tools` manifest feature, building the CLI tools and viewer from the same pinned source. Custom presets can select `VCPKG_MANIFEST_FEATURES=tracy-tools` alongside `TRACY_SUPPORT=ON`.
+
+To build the matched profiling configuration:
+
+```powershell
+pwsh ./tools/cmake.ps1 --preset ALL-TRACY
+pwsh ./tools/cmake.ps1 --build build/ALL-TRACY --config Release --target CommunityShaders
+```
+
+With the default install layout, use `tracy-capture.exe`, `tracy-csvexport.exe`
+and `tracy-profiler.exe` under
+`build/ALL-TRACY/vcpkg_installed/x64-windows-static-md/tools/tracy`.
+The tools build in Release; production presets keep them optional and keep
+Tracy instrumentation disabled. Existing binaries remain at their original
+protocol until rebuilt, so retain their matched tools for older captures.
 
 When using custom preset you can call BuildRelease.bat with an parameter to specify which preset to configure eg:
 `.\BuildRelease.bat ALL-WITH-AUTO-DEPLOYMENT`
@@ -192,19 +227,51 @@ In Launch Application Menu, use the following settings:
 
 [GPL-3.0-or-later](COPYING) WITH [Modding Exception AND GPL-3.0 Linking Exception (with Corresponding Source)](EXCEPTIONS.md).  
 Specifically, the “Modded Code” includes:
-- The Elder Scrolls V: Skyrim (and its variants)
-- Third-party components used to enable optional upscaling / frame generation features, which are distributed under their own licenses, for example:
-  - NVIDIA DLSS (proprietary SDK/runtime; e.g., nvngx_dlss.dll) — https://developer.nvidia.com/rtx/dlss/get-started
-  - AMD FidelityFX FSR 3 (MIT-licensed, via GPUOpen) — https://gpuopen.com/fidelityfx-super-resolution-3/
 
-NVIDIA DLSS / Streamline Notice
-If this distribution includes NVIDIA components (e.g., nvngx_dlss.dll and/or sl.*.dll), those binaries are NOT covered by the GPL license of this project and are redistributed (if at all) under the applicable NVIDIA RTX SDK / Streamline license terms provided alongside the binaries. This project does not grant any rights to NVIDIA components beyond what NVIDIA’s own licenses permit.
-The GPL applies only to this project’s source code (and any other components explicitly licensed under GPL-compatible terms).
+-   The Elder Scrolls V: Skyrim (and its variants)
+-   Third-party components used to enable optional upscaling / frame generation features, which are distributed under their own licenses, for example:
+    -   NVIDIA DLSS (proprietary SDK/runtime; e.g., nvngx_dlss.dll) — https://developer.nvidia.com/rtx/dlss/get-started
+    -   AMD FidelityFX FSR 3 (MIT-licensed, via GPUOpen) — https://gpuopen.com/fidelityfx-super-resolution-3/
 
 The Modding Libraries include:
 
 -   [SKSE](https://skse.silverlock.org/)
 -   Commonlib (and variants).
+
+#### NVIDIA DLSS / Streamline
+
+NVIDIA components retain their own licenses; this project's GPL and linking
+exceptions do not change NVIDIA's terms or grant additional rights to its SDKs.
+Streamline's source license and the separate DLSS/NGX and Reflex SDK terms are
+included with the packaged runtime.
+
+The build downloads the production x64 DLLs directly from
+[NVIDIA's Streamline 2.14.1 SDK release](https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.14.1)
+and verifies the archive's pinned SHA-256 in
+[Streamline-Runtime.cmake](cmake/Streamline-Runtime.cmake). These runtime DLLs are
+not checked into this repository. The same archive supplies all five license
+and notice files, copied without modification beside the DLLs under
+`Shaders/Upscaling/Streamline/` in both Core and AIO packages:
+
+-   `license.txt` — Streamline source license.
+-   `nvngx_dlss.license.txt` — NVIDIA RTX SDK terms for DLSS/NGX.
+-   `reflex.license.txt` — NVIDIA Reflex SDK terms.
+-   `3rd-party-licenses.md` — Streamline third-party notices.
+-   `NVIDIA Nsight Graphics SDK License (Apache 2.0).txt` — Nsight Graphics SDK terms.
+
+The `StreamlineRuntime` CMake install component includes these notices with its
+DLLs. Source builds obtain the Streamline source license and third-party notices
+through the pinned [Streamline submodule](extern/Streamline-DX12).
+
+The public 2.14.1 SDK archive does not contain `sl.dlss_nr.dll`,
+`nvngx_dlssnr.dll`, or their implementation sources. This update does not package
+DLSS Neural Rendering or add support for it.
+
+### SKSE Plugin API
+
+[LGPL-3.0-or-later](COPYING.LESSER): `include/VRAPI/CSinterface001.h` and
+`src/VRAPI/CSinterface001.cpp` only (see [API.md](API.md)). Everything else
+under `VRAPI/` remains [Default](#default).
 
 ### Shaders
 

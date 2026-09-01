@@ -1,5 +1,13 @@
 #include "GameSetting.h"
 
+#include <ClibUtil/detail/SimpleIni.h>
+#include <charconv>
+#include <cmath>
+#include <cstring>
+#include <fstream>
+
+#include "Utils/FileSystem.h"
+#include "Utils/Format.h"
 #include "Utils/UI.h"
 
 namespace Util
@@ -358,117 +366,192 @@ namespace Util
 		}
 	}
 
-	void SaveGameSettings(const std::map<std::string, GameSetting>& settingsMap)
+	namespace
 	{
-		auto ini = globals::game::iniSettingCollection;
+		bool ReadGameSettingsIni(CSimpleIniA& a_ini, bool& a_utf16)
+		{
+			a_ini.SetUnicode();
+			a_ini.SetMultiKey();
+			a_utf16 = false;
+			std::ifstream input(std::filesystem::path{ CS_SETTINGS_PATH }, std::ios::binary | std::ios::ate);
+			if (!input.is_open()) {
+				std::error_code error;
+				if (!std::filesystem::exists(CS_SETTINGS_PATH, error) && !error)
+					return false;
+				throw std::runtime_error(std::format("Could not open {} for reading", CS_SETTINGS_PATH));
+			}
+			const std::streamsize size = input.tellg();
+			if (size < 0)
+				throw std::runtime_error(std::format("Could not determine the size of {}", CS_SETTINGS_PATH));
+			std::string contents(static_cast<size_t>(size), '\0');
+			input.seekg(0);
+			if (!input.read(contents.data(), size))
+				throw std::runtime_error(std::format("Could not finish reading {}", CS_SETTINGS_PATH));
+			a_utf16 = contents.starts_with("\xff\xfe");
+			if (a_utf16 && contents.size() > 2) {
+				if (contents.size() % sizeof(wchar_t) != 0)
+					throw std::runtime_error(std::format("Incomplete UTF-16 text in {}", CS_SETTINGS_PATH));
+				std::wstring wide((contents.size() - 2) / sizeof(wchar_t), L'\0');
+				std::memcpy(wide.data(), contents.data() + 2, contents.size() - 2);
+				const auto converted = SKSE::stl::utf16_to_utf8(wide);
+				if (!converted || SKSE::stl::utf8_to_utf16(*converted) != wide)
+					throw std::runtime_error(std::format("Invalid UTF-16 text in {}", CS_SETTINGS_PATH));
+				contents = *converted;
+			} else if (a_utf16) {
+				contents.clear();
+			}
+			// Embedded NULs would make SimpleIni silently discard the rest of the file.
+			if (contents.find('\0') != std::string::npos)
+				throw std::runtime_error(std::format("Unexpected NUL in {}", CS_SETTINGS_PATH));
+			const auto result = a_ini.LoadData(contents);
+			if (result >= 0)
+				return true;
+			throw std::runtime_error(std::format("Could not read {} (INI error {})", CS_SETTINGS_PATH, result));
+		}
 
-		char subKeyBackup[0x104];
-		strcpy_s(subKeyBackup, 260, ini->subKey);
-		strcpy_s(ini->subKey, 260, CS_SETTINGS_PATH.data());
+		std::pair<std::string, std::string> SplitGameSettingName(const std::string& a_name)
+		{
+			const auto separator = a_name.find(':');
+			if (separator == std::string::npos || separator == 0 || separator + 1 == a_name.size())
+				throw std::runtime_error(std::format("Invalid INI setting name '{}'", a_name));
+			return { a_name.substr(0, separator), a_name.substr(separator + 1) };
+		}
 
-		auto iniPref = globals::game::iniPrefSettingCollection;
+		template <class F>
+		void VisitGameSettingValue(const std::string& a_name, F&& a_visit)
+		{
+			RE::Setting* setting = nullptr;
+			for (auto* collection : { globals::game::iniSettingCollection,
+					 static_cast<RE::INISettingCollection*>(globals::game::iniPrefSettingCollection) }) {
+				if (collection && (setting = collection->GetSetting(a_name)))
+					break;
+			}
+			if (!setting && globals::game::gameSettingCollection)
+				setting = globals::game::gameSettingCollection->GetSetting(a_name.c_str());
+			if (!setting)
+				throw std::runtime_error(std::format("Game setting '{}' not found", a_name));
 
-		char subKeyPrefBackup[0x104];
-		strcpy_s(subKeyPrefBackup, 260, iniPref->subKey);
-		strcpy_s(iniPref->subKey, 260, CS_SETTINGS_PATH.data());
-
-		// Initialize collections
-		std::vector<std::pair<RE::INISettingCollection*, std::string>> iniCollections = {
-			{ ini, "INISettingCollection" },
-			{ iniPref, "INIPrefSettingCollection" }
-		};
-
-		auto gameSettingCollection = globals::game::gameSettingCollection;
-
-		// Single iteration for settings
-		for (const auto& [settingName, settingData] : settingsMap) {
-			// Only process settings without an offset (INI-based settings)
-			if (settingData.offset == 0) {  // INI-based settings
-				bool processed = false;
-				for (const auto& [collection, collectionName] : iniCollections) {
-					if (auto setting = collection->GetSetting(settingName); setting) {
-						if (collection->WriteSetting(setting)) {
-							logger::debug("Saved {} setting {}", collectionName, settingName);
-						} else {
-							logger::warn("Failed to save {} setting {}", collectionName, settingName);
-						}
-						processed = true;
-						break;  // Exit once the setting is found and processed
-					}
-				}
-
-				// Handle game settings if not processed by INI collections
-				if (!processed) {
-					if (auto setting = gameSettingCollection->GetSetting(settingName.data()); setting) {
-						if (gameSettingCollection->WriteSetting(setting)) {
-							logger::debug("Saved Game setting '{}'", settingName);
-						} else {
-							logger::warn("Failed to save Game setting {}", settingName);
-						}
-					} else {
-						logger::warn("Setting '{}' not found.", settingName);
-					}
-				}
+			switch (setting->GetType()) {
+			case RE::Setting::Type::kBool:
+				a_visit(setting->data.b);
+				break;
+			case RE::Setting::Type::kInteger:
+				a_visit(setting->data.i);
+				break;
+			case RE::Setting::Type::kUnsignedInteger:
+				a_visit(setting->data.u);
+				break;
+			case RE::Setting::Type::kFloat:
+				a_visit(setting->data.f);
+				break;
+			default:
+				throw std::runtime_error(std::format("Unsupported INI setting type for '{}'", a_name));
 			}
 		}
-		strcpy_s(ini->subKey, 260, subKeyBackup);
-		strcpy_s(iniPref->subKey, 260, subKeyPrefBackup);
+
+		template <class T>
+		bool ParseGameSettingValue(std::string_view a_text, T& a_value)
+		{
+			if (a_text.size() >= 2 && (a_text.front() == '"' || a_text.front() == '\'') && a_text.back() == a_text.front())
+				a_text = a_text.substr(1, a_text.size() - 2);
+			if constexpr (std::is_same_v<T, bool>) {
+				if (a_text == "1" || IEquals(a_text, "true")) {
+					a_value = true;
+					return true;
+				}
+				if (a_text == "0" || IEquals(a_text, "false")) {
+					a_value = false;
+					return true;
+				}
+				return false;
+			} else {
+				T parsed{};
+				const auto [end, error] = std::from_chars(a_text.data(), a_text.data() + a_text.size(), parsed);
+				if (error != std::errc{} || end != a_text.data() + a_text.size())
+					return false;
+				if constexpr (std::is_floating_point_v<T>) {
+					if (!std::isfinite(parsed))
+						return false;
+				}
+				a_value = parsed;
+				return true;
+			}
+		}
+	}
+
+	void SaveGameSettings(const std::map<std::string, GameSetting>& settingsMap)
+	{
+		CSimpleIniA ini;
+		bool utf16 = false;
+		ReadGameSettingsIni(ini, utf16);
+		bool changed = false;
+		for (const auto& [name, metadata] : settingsMap) {
+			if (metadata.offset != 0)
+				continue;
+			const auto [key, section] = SplitGameSettingName(name);
+			VisitGameSettingValue(name, [&](auto& value) {
+				using T = std::remove_cvref_t<decltype(value)>;
+				if constexpr (std::is_floating_point_v<T>) {
+					if (!std::isfinite(value))
+						throw std::runtime_error(std::format("Non-finite value for INI setting '{}'", name));
+				}
+				std::string text;
+				if constexpr (std::is_same_v<T, bool>)
+					text = value ? "1" : "0";
+				else
+					text = std::format("{}", value);
+				if (ini.SetValue(section.c_str(), key.c_str(), text.c_str(), nullptr, true) < 0)
+					throw std::runtime_error(std::format("Could not serialize INI setting '{}'", name));
+			});
+			changed = true;
+		}
+		if (!changed)
+			return;
+
+		std::string contents;
+		if (ini.Save(contents) < 0)
+			throw std::runtime_error(std::format("Could not serialize {}", CS_SETTINGS_PATH));
+		if (utf16) {
+			const auto wide = SKSE::stl::utf8_to_utf16(contents);
+			if (!wide)
+				throw std::runtime_error(std::format("Could not encode {} as UTF-16", CS_SETTINGS_PATH));
+			contents.assign("\xff\xfe", 2);
+			contents.append(reinterpret_cast<const char*>(wide->data()), wide->size() * sizeof(wchar_t));
+		}
+		std::string error;
+		if (!FileHelpers::WriteTextFileAtomic(CS_SETTINGS_PATH, contents, error))
+			throw std::runtime_error(std::format("Could not save {}: {}", CS_SETTINGS_PATH, error));
+		logger::debug("Saved game settings to {}", CS_SETTINGS_PATH);
 	}
 
 	void LoadGameSettings(const std::map<std::string, GameSetting>& settingsMap)
 	{
-		auto ini = globals::game::iniSettingCollection;
+		CSimpleIniA ini;
+		bool utf16 = false;
+		try {
+			if (!ReadGameSettingsIni(ini, utf16))
+				return;
+		} catch (const std::exception& e) {
+			logger::warn("{}; retaining current game settings", e.what());
+			return;
+		}
 
-		char subKeyBackup[0x104];
-		strcpy_s(subKeyBackup, 260, ini->subKey);
-		strcpy_s(ini->subKey, 260, CS_SETTINGS_PATH.data());
-
-		auto iniPref = globals::game::iniPrefSettingCollection;
-
-		char subKeyPrefBackup[0x104];
-		strcpy_s(subKeyPrefBackup, 260, iniPref->subKey);
-		strcpy_s(iniPref->subKey, 260, CS_SETTINGS_PATH.data());
-
-		// Handle INI and Game settings in a single loop
-		std::vector<std::pair<RE::INISettingCollection*, std::string>> iniCollections = {
-			{ ini, "INISettingCollection" },
-			{ iniPref, "INIPrefSettingCollection" }
-		};
-
-		auto gameSettingCollection = globals::game::gameSettingCollection;
-
-		for (const auto& [settingName, settingData] : settingsMap) {
-			if (settingData.offset == 0) {  // INI-based or Game settings
-				bool found = false;
-
-				// First, check the INI and INIPref collections
-				for (const auto& [collection, collectionName] : iniCollections) {
-					if (auto setting = collection->GetSetting(settingName); setting) {
-						if (collection->ReadSetting(setting)) {
-							logger::debug("Loaded {} setting {}", collectionName, settingName);
-						} else {
-							logger::warn("Failed to load {} setting {}", collectionName, settingName);
-						}
-						found = true;
-						break;  // Exit once setting is found and processed
-					}
-				}
-
-				// If not found in INI collections, check the game settings collection
-				if (!found) {
-					if (auto setting = gameSettingCollection->GetSetting(settingName.data()); setting) {
-						if (gameSettingCollection->ReadSetting(setting)) {
-							logger::debug("Loaded Game setting '{}'", settingName);
-						} else {
-							logger::warn("Failed to load Game setting {}", settingName);
-						}
-					} else {
-						logger::warn("Setting '{}' not found.", settingName);
-					}
-				}
+		for (const auto& [name, metadata] : settingsMap) {
+			if (metadata.offset != 0)
+				continue;
+			try {
+				const auto [key, section] = SplitGameSettingName(name);
+				const auto* text = ini.GetValue(section.c_str(), key.c_str());
+				if (!text)
+					continue;
+				VisitGameSettingValue(name, [&](auto& value) {
+					if (!ParseGameSettingValue(text, value))
+						throw std::runtime_error(std::format("Invalid value for INI setting '{}'", name));
+				});
+				logger::debug("Loaded game setting {} from {}", name, CS_SETTINGS_PATH);
+			} catch (const std::exception& e) {
+				logger::warn("{} in {}; retaining its current value", e.what(), CS_SETTINGS_PATH);
 			}
 		}
-		strcpy_s(ini->subKey, 260, subKeyBackup);
-		strcpy_s(iniPref->subKey, 260, subKeyPrefBackup);
 	}
 }  // namespace Util

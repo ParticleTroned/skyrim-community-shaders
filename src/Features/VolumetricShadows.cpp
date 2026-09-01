@@ -16,6 +16,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 namespace
 {
+	bool HasActiveDirectionalShadows()
+	{
+		return globals::state && globals::state->HasDirectionalShadows();
+	}
+
 	void DrawEnabledCheckbox(VolumetricShadows::Settings& a_settings)
 	{
 		ImGui::Checkbox("Enable", &a_settings.Enabled);
@@ -413,6 +418,37 @@ void VolumetricShadows::DrawSettings()
 void VolumetricShadows::DrawEssentialSettings()
 {
 	DrawEnabledCheckbox(settings);
+}
+
+void VolumetricShadows::DrawPerformanceSettings(bool)
+{
+	const bool hasActiveDirectionalShadows = HasActiveDirectionalShadows();
+	ImGui::BeginDisabled(!hasActiveDirectionalShadows);
+	DrawEnabledCheckbox(settings);
+	ImGui::EndDisabled();
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(
+			"Disabling skips the directional shadow-map copy, downsample, and blur passes.");
+	}
+	if (!hasActiveDirectionalShadows)
+		ImGui::TextDisabled("Volumetric Shadows has no active directional shadows in the current scene.");
+}
+
+json VolumetricShadows::CapturePerformanceSettingsState() const
+{
+	return {
+		{ "Enabled", settings.Enabled }
+	};
+}
+
+bool VolumetricShadows::IsPerformanceCostMeasurementEnabled() const
+{
+	return settings.Enabled && HasActiveDirectionalShadows();
+}
+
+bool VolumetricShadows::IsPerformanceCostMeasurementReady() const
+{
+	return HasActiveDirectionalShadows();
 }
 
 void VolumetricShadows::LoadSettings(json& o_json)

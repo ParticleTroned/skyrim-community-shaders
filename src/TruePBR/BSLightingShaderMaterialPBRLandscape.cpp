@@ -10,7 +10,7 @@ BSLightingShaderMaterialPBRLandscape::BSLightingShaderMaterialPBRLandscape()
 
 BSLightingShaderMaterialPBRLandscape::~BSLightingShaderMaterialPBRLandscape()
 {
-	All.erase(this);
+	All.Unregister(this);
 }
 
 BSLightingShaderMaterialPBRLandscape* BSLightingShaderMaterialPBRLandscape::Make()
@@ -30,7 +30,7 @@ RE::BSShaderMaterial* BSLightingShaderMaterialPBRLandscape::Create()
 	// calls ScrapHeap::Free() after LinkMaterial — if Create() used scrap heap, it would pop
 	// the canonical off the stack, causing immediate use-after-free in property->material.
 	auto* material = new BSLightingShaderMaterialPBRLandscape();
-	All.try_emplace(material, std::array<TruePBR::PBRTextureSetData*, NumTiles>{});
+	All.Register(material);
 	return material;
 }
 
@@ -60,11 +60,7 @@ void BSLightingShaderMaterialPBRLandscape::CopyMembers(RE::BSShaderMaterial* tha
 	terrainTexFade = pbrThat->terrainTexFade;
 	glintParameters = pbrThat->glintParameters;
 
-	if (auto it = All.find(pbrThat); it != All.end()) {
-		All[this] = it->second;
-	} else {
-		All[this] = std::array<TruePBR::PBRTextureSetData*, NumTiles>{};
-	}
+	All.Copy(this, pbrThat);
 }
 
 RE::BSShaderMaterial::Feature BSLightingShaderMaterialPBRLandscape::GetFeature() const

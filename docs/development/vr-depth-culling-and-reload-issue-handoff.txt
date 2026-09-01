@@ -1,0 +1,731 @@
+CSX 3.19 VR DEPTH-CULLING PERFORMANCE REGRESSION AND PR24 RELOAD RECOVERY
+TECHNICAL HANDOFF FOR MAIN-VR
+
+Prepared: 22 August 2026
+Repository: ParticleTroned/skyrim-community-shaders
+Target branch: main-VR
+
+
+1. EXECUTIVE CONCLUSION
+=======================
+
+There are two independent problems whose visible symptoms can overlap. They
+must not be fixed or tested as if they were one problem.
+
+Issue A - movement-dependent performance regression in CSX 3.19
+----------------------------------------------------------------
+
+The strong current diagnosis is that InstallDepthCullingTemporalValidityFix()
+causes the movement-dependent 3.19 frame-rate regression.
+
+The hook treats the previous frame's occlusion result as invalid after only:
+
+  - 0.05 degrees of camera rotation; or
+  - 0.1 Skyrim world units of translation.
+
+On an invalid frame it changes every zero (occluded) result in the readback
+array to one (visible), for as many as 4096 candidates. Normal HMD rotation and
+locomotion exceed those limits routinely. The practical result is that depth
+culling is largely defeated while the player moves, so dense scenes render
+objects that 3.18 culled. This matches the exact tester pattern: normal
+performance while still, a large drop while moving, and a particularly large
+drop while looking toward dense Markarth geometry.
+
+The decisive A/B kept CSX 3.19 and Depth Culling, but removed only the call to
+InstallDepthCullingTemporalValidityFix(). The tester then reported that 3.19
+performed like 3.18 and remained stable. The log contains the expected unique
+build marker and no GPU-memory-pressure event that could explain the result.
+
+Issue B - death/load fuzzy output and severe post-load frame-time episodes
+-------------------------------------------------------------------------
+
+This is the separate PR24 render-scale recovery investigation. Some affected
+logs show repeated emergency relatches; others show a bounded temporary native
+full-resolution fallback under reload or critical GPU pressure. PR24 addresses
+the recovery ownership/relatch loop and adds bounded fallback behaviour. It
+does not change VR.cpp or remove the temporal depth-culling hook, so PR24 cannot
+by itself fix Issue A.
+
+The pagefile/RAM hypothesis is not the primary explanation for either issue.
+The clearest pressure evidence is DXGI GPU-local budget pressure. There is no
+logged E_OUTOFMEMORY, device loss, or proof of system commit exhaustion in the
+latest test. A larger pagefile cannot restore occlusion culling and cannot add
+GPU-local VRAM.
+
+Recommended release-safe action
+-------------------------------
+
+On the current main-VR head, stop installing the temporal-validity hook by
+default while leaving Skyrim VR Depth Culling enabled. Preserve the PR17
+ImageSpace shader-cache refresh, the corrected FrameAnnotations hook signature,
+and all PR24 recovery work. Then develop a replacement that invalidates or
+widens individual occlusion candidates rather than making all occluded objects
+visible whenever the HMD moves.
+
+
+2. EVIDENCE STREAMS AND FILE NAMING
+===================================
+
+The tester clarified the file grouping as follows:
+
+  - message(2).txt, message(3).txt, and message(4).txt are the controlled
+    3.18-versus-3.19 movement-slowdown investigation.
+
+  - CommunityShaders(23).log through CommunityShaders(29).log are the parallel
+    death/load and PR24 recovery investigation.
+
+  - message(1).txt is an older, long 3.18 capture with load/recovery and memory
+    evidence. Its filename is misleading, and it is not needed to establish the
+    movement-regression diagnosis.
+
+Tester comments and log evidence are kept separate below. An Info-level CSX log
+does not contain frame-time samples or per-object culling counters, so a tester's
+reported FPS cannot be reconstructed from the log alone.
+
+
+3. ISSUE A: MOVEMENT-DEPENDENT 3.19 SLOWDOWN
+============================================
+
+3.1 Reported behaviour
+----------------------
+
+The same tester compared the older 3.18 build with 3.19 using the same headset
+path and reported:
+
+  - about 72 FPS, the Virtual Desktop native target, while standing still;
+  - a drop to about 50 FPS as soon as movement began in 3.19;
+  - constant or nearly constant 72 FPS in 3.18;
+  - a much more noticeable loss when looking toward Markarth city;
+  - 3.19 sometimes appearing sharper in the distance and showing fewer
+    artifacts, consistent with more distant/occluded geometry being drawn;
+  - a test with Depth Culling disabled in both versions was not cleanly
+    diagnostic: 3.18 lost only a little performance, while 3.19 became slow all
+    the time rather than only during motion;
+  - the later one-change 3.19 build, with the temporal-validity hook not
+    installed and Depth Culling otherwise retained, performed like 3.18 and
+    kept stable FPS.
+
+Rain was present in one earlier run and may have increased total scene cost, but
+it does not explain the stationary-versus-moving or hook-enabled-versus-disabled
+correlation.
+
+3.2 Controlled-log comparison
+-----------------------------
+
+message(2).txt - 3.19 with temporal hook
+
+  - Line 1: CommunityShaders v3-19-0-0.
+  - Line 27: Info log level.
+  - Line 217: "VR: installed per-frame depth-culling view-coherence fix".
+  - Line 1617: PR17-style VR ImageSpace shader-cache refresh executes.
+  - Lines 1633/1636: DLSS quality 2, display 6144x3264 combined,
+    render 4724x2510 combined, stable vendor presentation.
+  - No GPU-pressure transition is logged.
+  - Tester result: large movement-dependent FPS loss.
+
+message(3).txt - 3.18 baseline without temporal hook
+
+  - Line 1: CommunityShaders v3-18-0-0.
+  - Line 27: Info log level.
+  - No temporal-hook installation marker.
+  - Line 1586: older global "Force clearing cache due to
+    bDepthBufferCulling" behaviour.
+  - Lines 1602/1606: the same DLSS quality, 6144x3264 display, and 4724x2510
+    render dimensions as message(2).
+  - No GPU-pressure transition is logged.
+  - Tester result: stable or nearly stable 72 FPS.
+
+message(4).txt - decisive 3.19 no-hook A/B
+
+  - Line 1: CommunityShaders v3-19-0-0.
+  - Line 27: Info log level.
+  - Line 217 contains the unique test marker:
+      "VR: temporal depth-culling view-coherence fix intentionally disabled
+       for PR24 A/B test"
+  - Line 1550: the PR17-style VR ImageSpace shader-cache refresh still runs.
+  - Lines 1574/1577: DLSS quality 2 uses the same 6144x3264 display and
+    4724x2510 render dimensions and reaches stable presentation.
+  - A post-load at 10:15:56 returns to stable DLSS after 28 frames.
+  - Quality 1 and quality 2 changes also become stable.
+  - No High/Critical GPU-pressure transition, hard fallback, OOM, or device
+    loss is logged.
+  - Tester result: "3.19 is as 3.18 again ... now the FPS stays stable."
+
+The logs list the name bDepthBufferCulling:VRPerformance in an INI-setting dump,
+but do not print its value. The A/B instructions explicitly required interior
+and exterior Depth Culling to remain enabled. Future test builds should log the
+actual value so this no longer depends on test protocol.
+
+3.3 Provenance of the A/B build
+-------------------------------
+
+The temporary build was based on commit:
+
+  a97fc9552351a5d73a375853c2c1da27d7574b43
+
+Its only source modification was:
+
+  if (globals::game::isVR)
+  -    InstallDepthCullingTemporalValidityFix();
+  +    logger::info("VR: temporal depth-culling view-coherence fix
+                    intentionally disabled for PR24 A/B test");
+
+The local worktree was:
+
+  build/worktrees/pr24-no-depth-coherence-hook-a97fc9552
+
+This artifact is evidence, not a current release candidate. The final PR24 head
+aa594ba89 and the A/B base have diverged (three commits unique to the A/B side
+and eight unique to the final PR24 side). The same one-line comparison must be
+rebuilt on the current main-VR head before distributing a final fix/cache pair.
+
+3.4 How the 3.19 implementation works
+-------------------------------------
+
+The implementation is in src/Features/VR.cpp and is installed unconditionally
+for VR from VR::PostPostLoad(). It adds two hooks:
+
+  1. After the Skyrim VR OBB occlusion pass renders, capture the world-root
+     camera rotation and translation that produced the GPU result.
+
+  2. After the following frame's normal readback, compare the consuming camera
+     with the stored producer pose. If the poses are not "coherent", walk the
+     returned visibility array and replace every zero with one.
+
+The policy is in src/Features/VRDepthCullingPolicy.h:
+
+  kMinimumCoherentRotationCosine = 0.9999996192282494  // cos(0.05 degrees)
+  kMaximumCoherentTranslationSquared = 0.01f           // 0.1 units squared
+
+The culler accepts up to 0x1000 (4096) objects. The policy operation is:
+
+  previous result 0 + incoherent view -> 1 (force visible)
+  previous result 0 + coherent view   -> 0 (keep occluded)
+  any positive result                 -> unchanged
+
+The original correctness problem was real: the OBB result is produced from one
+view, read back, and consumed during accumulation of the following view. During
+HMD rotation, a previous-view zero could incorrectly hide newly visible
+foreground geometry for one frame, exposing fog, sky, or the clear colour as a
+white/blue flash.
+
+The new policy is conservative for visual correctness, but globally expensive.
+At 72 Hz, 0.05 degrees per frame corresponds to only 3.6 degrees per second.
+Ordinary head motion is faster. The translation threshold corresponds to only
+7.2 world units per second at 72 Hz. Therefore normal play can mark nearly every
+moving frame incoherent.
+
+The loop over at most 4096 integers is unlikely by itself to explain a 20 ms
+loss. The probable cost is downstream: every previously occluded candidate is
+made visible, increasing scene accumulation, draw submission, per-eye geometry,
+shadow/material work, and driver/CPU load. This also explains why GPU "headroom"
+does not disprove the diagnosis and why the loss is worst in a dense city view.
+
+3.5 Why those thresholds were introduced
+----------------------------------------
+
+Commit 42e94d004 used correctness-first tolerances to reject any result whose
+producer and consumer views were not almost identical. The accompanying test in
+Abandoned Prison, a fog-heavy interior, reported that rapid head turns no longer
+produced the missing-geometry flashes. The documentation contains no broad scene
+performance test, no promotion-rate telemetry, and no calibration against normal
+HMD angular velocity or locomotion.
+
+The values therefore make sense as a strict stale-result safety check, but not
+as a production performance policy. They answer "could this old zero possibly
+be unsafe?" by making almost all moving frames unsafe.
+
+Simply increasing the two values is not a robust final fix. Larger values would
+recover culling but silently accept more stale zeros, eventually reintroducing
+the original flashes. It would move the failure boundary instead of correcting
+the global all-or-nothing decision.
+
+
+4. PR17 AND COMMIT OWNERSHIP
+============================
+
+PR17:
+  https://github.com/ParticleTroned/skyrim-community-shaders/pull/17
+
+Merged PR17 head:
+  14f1bd19f0e5c6ad9f76558661b51235cfe6c890
+
+Merge commit:
+  3168870e1e05428f7201c84c1702593055dee182
+
+The PR description identifies an original five-commit behavioural stack:
+
+  7e7a3b61f  fix(vr): stabilize RS-off FSR recovery
+  0be3e4638  fix(vr): restore renderer-owned RS-off sizing
+  9cfe458a5  fix(vr): preserve memory shaders when disk cache is held
+  6b460547c  fix(vr): limit depth-culling cache refresh
+  2c01d6e58  fix(vr): retain validated startup handoff policy
+
+The final merged PR17 branch also contains later commits, including:
+
+  42e94d004  fix(vr): validate depth-culling results across frames
+  348e37b7e  fix(vr): harden PR17 recovery boundaries
+  14f1bd19f  release(vr): advance CSX to 3.19
+
+This distinction matters:
+
+  - 6b460547c is the scoped ImageSpace shader-cache refresh. It fixed first-load
+    shader drawing-in caused by a broad cache clear. It is not the movement
+    regression and should be preserved.
+
+  - 42e94d004 introduced the temporal pose hooks and also corrected the
+    FrameAnnotations OBB hook's second argument from a pointer to uint32_t.
+    Preserve the signature correction even if the temporal policy is removed.
+
+  - 348e37b7e extracted the thresholds/visibility rule into
+    VRDepthCullingPolicy.h and added tests, but it also contains unrelated
+    upscaling and volumetric-lighting hardening. Do not revert this whole commit.
+    Remove or replace only the temporal-depth-culling portions.
+
+The existing unit test proves that the code implements the specified thresholds
+and force-visible policy. It does not test culling efficiency, normal HMD motion,
+or whether the result-array transformation causes downstream rendering cost.
+
+
+5. ISSUE B: DEATH/LOAD AND PR24 RECOVERY
+=======================================
+
+5.1 Why it is separate
+----------------------
+
+The death/load issue is stateful: it begins around kPostLoadGame, render-target
+relatching, vendor teardown/recreation, a presentation deadline, or GPU budget
+pressure. The movement issue occurs during ordinary gameplay and follows camera
+motion. PR24 only changes Upscaling.cpp, Upscaling.h, the DevBench bridge, the
+vendor-relatch policy, and tests. It does not touch the temporal culling hook.
+
+A player can encounter both in the same run:
+
+  - the temporal hook can cause the initial 22-35 ms movement cost; and
+  - a death/load can temporarily switch presentation to full-resolution native
+    or enter recovery, increasing frame time further and making the image look
+    fuzzy or as if AA/upscaling stopped.
+
+5.2 PR24 status and scope
+-------------------------
+
+PR24:
+  https://github.com/ParticleTroned/skyrim-community-shaders/pull/24
+
+Title:
+  fix(vr): prevent repeated emergency relatches
+
+Final head:
+  aa594ba89f038431e4337d6fa4b8e87cf01a6169
+
+Merge commit/current fetched main-VR:
+  42829b4431d1265fe8c08309206e09738e978aa6
+
+PR24 commits:
+
+  466d6aa7d  fix(vr): prevent repeated emergency relatches
+  89da25f8b  fix(vr): continue pending relatch recovery
+  6fd4e3dcd  fix(vr): drain DLSS before pressured relatch
+  aa594ba89  fix(vr): bound render-scale recovery fallback
+
+The central bug was that the watchdog could publish another recovery after the
+queue's pending flag had cleared even though the owned attempt was still
+stabilizing. That could cause continuous render-target/vendor relatches and a
+large sustained FPS collapse.
+
+PR24 preserves a single owner, safely drains/tears down DLSS when required,
+bounds an attempt to 15 seconds in a normal build, and provides a
+provider-neutral native fail-open for terminal teardown, device loss, or an
+expired recovery budget. It also permits an exact-owner vendor-teardown-only
+operation under High GPU pressure because that operation frees memory rather
+than allocating new resources.
+
+That High-pressure exception is deliberately narrow: it is available only to
+the exact active recovery owner and only for the vendor teardown phase. It is not
+a general permission for new allocations or unrelated gameplay transitions.
+
+5.3 Relevant CommunityShaders logs
+-----------------------------------
+
+CommunityShaders(23).log
+
+  - Binary self-identifies as v3-18-0-0 despite the accompanying report calling
+    the installed build 3.19; use the log identity, not the filename/comment.
+  - First death/load around 12:45:31 returns to stable DLSS after 25 frames.
+  - Second load at 12:48:03 reaches the 3.5-second presentation hard deadline
+    and requests exact provider-neutral native recovery.
+  - It then boot-latches DLSS continuously: 2259 Boot-latched lines, reaching
+    generation 2261 before logging stops.
+  - Debug memory samples during the loop are Normal, including roughly 18-60%
+    GPU-budget use and about 47% system-commit use. This is strong evidence for
+    a recovery state-machine loop, not a pagefile or VRAM exhaustion trigger.
+  - This is the clearest pre-PR24 repeated-relatch failure.
+
+CommunityShaders(24).log
+
+  - v3.19, Debug after gameplay begins, temporal hook installed.
+  - Three post-load events; only one Stable line in the capture.
+  - Multiple Elevated/High pressure transitions, but no Critical transition,
+    OOM, or device loss.
+  - Treat as an earlier PR24 diagnostic capture, not movement evidence.
+
+CommunityShaders(25).log
+
+  - v3.19, Info, temporal hook installed.
+  - Initial and first post-load DLSS reach stable presentation.
+  - A later reload reaches the 3.5-second hard deadline and requests exact
+    provider-neutral native recovery, then returns to stable DLSS within the
+    logged interval.
+  - No High/Critical pressure transition is logged.
+  - The tester nevertheless reported grainy shaders and a frame-time increase
+    after deaths. Info logging cannot show actual frame time, and the visual
+    report may cover the unlogged transient between contracts.
+
+CommunityShaders(26).log
+
+  - v3.19, Info, temporal hook installed.
+  - High pressure is logged at 88.5% with 1673 MiB headroom.
+  - Post-load DLSS becomes stable after 28 frames.
+  - Tester reported no issue. This shows that a High classification by itself
+    is not sufficient to reproduce the death/load failure.
+
+CommunityShaders(27).log
+
+  - v3.19, Info, temporal hook installed.
+  - Four post-load events and several High-pressure transitions.
+  - Only the initial DLSS contract is logged Stable.
+  - Two "Presentation deadline expired after coherent contract publication"
+    errors occur late in the log.
+  - This correlates with the tester's persistent fuzzy image and large frame-time
+    report, but it still contains no device loss or OOM.
+
+CommunityShaders(28).log
+
+  - v3.18/RC166 comparison, Info, no temporal-hook marker.
+  - High pressure occurs at 88.7% and 89.6%.
+  - Reload returns to stable DLSS after 25 frames.
+  - Tester reported no problem after death. This shows that High pressure alone
+    does not explain the 3.19 behaviour and supports investigating the changed
+    recovery response separately from the pressure thresholds.
+
+CommunityShaders(29).log - latest PR24 tester
+
+  - v3.19, Info, temporal hook still installed.
+  - Initial DLSS quality 2 becomes stable at 08:17:31.
+  - High pressure: 88.1% use, 1759 MiB headroom at 08:18:04.
+  - First reload at 08:19:10 becomes stable DLSS at 08:19:14 after 31 frames;
+    the tester said the shaders looked correct.
+  - High pressure: 87.6%, 1839 MiB at 08:20:12.
+  - Second reload reaches the 3.5-second hard deadline at 08:20:58 and promotes
+    an exact provider-neutral native recovery.
+  - Critical pressure follows at 08:21:00: 98.1% GPU-local budget use with only
+    281 MiB headroom.
+  - At 08:21:02 presentation is stable with upscaling off and native combined
+    4992x2688 rendering.
+  - DLSS quality 2 is boot-latched at 08:21:07 and becomes stable again at
+    08:21:16. Quality 3 is stable at 08:21:31.
+  - The tester reported approximately 50+ ms during the second episode.
+
+The native per-eye dimensions are 2496x2688, while DLSS quality 2 renders
+1920x2066 per eye. Native therefore renders about 1.69 times as many pixels.
+If a 30 ms cost scaled roughly with pixels, it would become approximately
+50.7 ms, closely matching the observed transient.
+
+The specific PR24 warning for the High-pressure exact-owner vendor-teardown-only
+path is absent from CommunityShaders(29).log. The path that actually ran was the
+presentation-hard-deadline provider-neutral native fallback. Do not claim that
+the new High-pressure exception was exercised by this log.
+
+If performance remained bad after the 08:21:16 Stable DLSS line, this Info log
+does not explain that persistent part. The movement hook is the leading
+explanation for the baseline moving-scene cost; a profiler capture is required
+for anything additional.
+
+5.4 Memory/pagefile interpretation
+----------------------------------
+
+The current memory classifications are based primarily on the DXGI local GPU
+budget. The old 3.18/RC166 code already used the same broad thresholds:
+
+  Critical: at least 95% use or no more than 256 MiB headroom
+  High:     at least 87.5% use or no more than 512 MiB headroom
+  Elevated: at least 75% use or no more than 1024 MiB headroom
+
+Thus 3.19 is not simply declaring pressure sooner than 3.18. PR24 changes what
+recovery is allowed to do and how it is bounded; it does not establish a new
+basic High threshold.
+
+message(1).txt includes an older system-commit admission deferral and later
+High/Critical GPU pressure, so more pagefile could increase system-commit
+headroom in that particular environment. It would not correct the temporal
+culling regression, the repeated-relatch ownership bug, or a 98% local GPU
+budget. No supplied log records an E_OUTOFMEMORY or DXGI device-loss failure.
+
+
+6. RECOMMENDED FIX DESIGN
+=========================
+
+6.1 Immediate production mitigation
+-----------------------------------
+
+Apply this on the current main-VR state after PR24, not on the obsolete a97 A/B
+worktree:
+
+  1. Do not call InstallDepthCullingTemporalValidityFix() by default.
+
+  2. Keep Depth Culling itself enabled. Do not solve this by changing the
+     interior/exterior bDepthBufferCulling settings.
+
+  3. Preserve the FrameAnnotations OBB hook signature correction to uint32_t.
+
+  4. Preserve PR17's active-disk-cache plus ImageSpace-only refresh. That is the
+     first-load shader fix and is proven to remain active in the successful
+     message(4) A/B.
+
+  5. Preserve all PR24 recovery ownership, teardown, and bounded-fallback work.
+
+  6. Either remove the now-unused temporal policy, hooks, test target, and
+     outdated documentation cleanly, or retain them behind an explicitly named
+     experimental setting that defaults off. Do not leave documentation saying
+     the production correction is active when it is not.
+
+  7. Build a fresh AIO and matching compiled shader-cache package from the exact
+     new head. Do not reuse the a97 A/B AIO or its cache with final main-VR.
+
+This mitigation knowingly permits the original one-frame missing-geometry flash
+to return. That trade is preferable to shipping a severe normal-movement
+regression while a correct replacement is developed. If the flash must remain
+fixed in the same PR, use an opt-in test matrix until the replacement satisfies
+both correctness and performance criteria below.
+
+6.2 Why threshold tuning is insufficient
+----------------------------------------
+
+The current decision is global: either accept all old zeros or promote all old
+zeros. No single angular/translation threshold can make that correct for every
+object, distance, occluder, FOV, frame rate, and head velocity. Loosening the
+threshold improves performance by accepting stale data; tightening it avoids
+flashes by disabling culling. The design needs per-candidate conservatism.
+
+6.3 Preferred replacement direction
+------------------------------------
+
+The best long-term direction is to preserve occlusion for objects whose prior
+result remains conservatively valid and promote only candidates that could have
+become newly visible between the producer and consumer views.
+
+Candidate implementation approaches, in preferred investigation order:
+
+  A. Swept/projected candidate bounds
+
+     Retain enough per-result OBB/bounding-sphere information and the producer
+     stereo view to test a zero against the motion swept between old and current
+     views. Promote only objects whose conservative projected bounds can enter a
+     newly exposed screen region or change occlusion relationship. This directly
+     addresses the missing-foreground mechanism without discarding every zero.
+
+  B. Expand the producer-frame occlusion test for a bounded motion envelope
+
+     Inflate/project candidate bounds so an occluded result is valid for a
+     realistic one-frame HMD-motion envelope. Treat teleport, load, camera reset,
+     or a motion delta beyond that envelope as a discontinuity. The envelope
+     must be derived from headset sampling and verified at 72/80/90/120 Hz, not
+     guessed from one scene.
+
+  C. Per-object visibility hysteresis
+
+     Require a stable object to receive consecutive occluded results before it
+     is removed, so one stale zero cannot create a one-frame hole. This requires
+     a stable object identity. Do not assume result-array indices identify the
+     same object across frames; prove the culler ordering or key state by an
+     object pointer/ID.
+
+  D. Current-frame pipeline restructuring
+
+     Produce and consume a current-view result without a CPU/GPU stall, for
+     example through a later accumulation stage. This is architecturally clean
+     but likely the most invasive option. A synchronous readback should be
+     rejected because it would replace the draw-call regression with a GPU
+     synchronization regression.
+
+Using a large "camera cut only" threshold is a reasonable diagnostic or
+temporary compromise, but it does not solve the original head-rotation flash and
+should not be presented as the final correction.
+
+6.4 Instrumentation required before choosing a replacement
+-----------------------------------------------------------
+
+Add aggregated counters, preferably exposed through DevBench/profiler and logged
+at most once per second when explicitly enabled:
+
+  - producer-to-consumer rotation delta;
+  - producer-to-consumer translation delta;
+  - coherent versus incoherent frame counts;
+  - OBB candidate count;
+  - number of zero results;
+  - number and percentage of zeros promoted to visible;
+  - CPU time in the readback hook;
+  - downstream visible-object/draw-call/triangle counts if available;
+  - GPU timings for depth culling, shadows, world geometry, and post processing;
+  - actual interior and exterior Depth Culling setting values;
+  - current render/display dimensions and vendor presentation state;
+  - GPU local usage, budget, headroom, and pressure state.
+
+The most useful question is not merely "was the camera incoherent?" but "how
+many objects that Skyrim classified as occluded were forced visible, and which
+downstream stage became expensive?"
+
+
+7. REQUIRED TEST MATRIX
+=======================
+
+Use one exact current main-VR base and make only the intended source change
+between candidates. Keep the same game save, headset/runtime, Virtual Desktop
+refresh target, resolution, upscaler, quality mode, preset, weather where
+possible, and shader cache.
+
+Core movement matrix, Depth Culling enabled in every row:
+
+  A. CSX 3.18/RC166 baseline.
+  B. Current main-VR with the existing temporal hook.
+  C. Current main-VR with only hook installation removed.
+  D. Current main-VR with the proposed replacement.
+
+Movement scenes/actions:
+
+  - stand completely still for a baseline;
+  - slow head yaw/pitch without locomotion;
+  - rapid head rotation;
+  - walk and strafe while keeping the head relatively still;
+  - combined locomotion and head movement;
+  - look toward and away from Markarth city geometry;
+  - repeat with rain off and on;
+  - repeat the Abandoned Prison fog/geometry-boundary flash test;
+  - test at the actual 72 Hz path and at least one higher refresh rate.
+
+Record CPU and GPU frame time separately. Also record candidate/zero/promotion
+counts and visible/draw counts. A plain FPS number cannot distinguish GPU pixel
+cost from CPU/driver submission cost.
+
+Death/load matrix, run separately from movement calibration:
+
+  - start from a stable DLSS contract;
+  - die/reload twice at Normal pressure;
+  - repeat near High pressure if safely reproducible;
+  - record whether native fallback begins, how long it remains, and whether DLSS
+    becomes stable again;
+  - verify that fuzzy/AA-off appearance does not persist after stable DLSS;
+  - verify that no recovery attempt republishes every frame;
+  - verify the exact-owner High-pressure vendor-teardown marker when that path is
+    intentionally exercised.
+
+Depth Culling disabled can remain an additional diagnostic row, but it is not a
+substitute for the one-variable hook A/B because disabling the feature changes
+the workload being measured.
+
+
+8. ACCEPTANCE CRITERIA
+======================
+
+A release candidate should satisfy all of the following:
+
+  - Moving-scene CPU/GPU frame time is within a small agreed tolerance of the
+    3.18 or current-head no-hook baseline in Markarth.
+
+  - Normal HMD motion does not force most occluded results visible.
+
+  - The Abandoned Prison rapid-turn test does not show the original one-frame
+    foreground holes/white-blue flashes.
+
+  - Depth Culling remains enabled and provides a measurable benefit while still
+    being conservative for both eyes.
+
+  - Two death/reload cycles return to a stable vendor-upscaled contract without
+    repeated relatches, persistent fuzzy output, or sustained native full-size
+    rendering.
+
+  - High/Critical GPU pressure does not cause unbounded allocation/recovery
+    loops; teardown-only remains exact-owner and memory-releasing.
+
+  - The log clearly identifies whether the old hook, no hook, or replacement is
+    active and prints the actual Depth Culling setting.
+
+  - AIO, DLL, source commit, and shader-cache package are built from the same
+    exact head and have recorded SHA-256 hashes.
+
+
+9. KNOWN LIMITATIONS OF THE CURRENT EVIDENCE
+============================================
+
+  - The no-hook A/B is based on a97fc9552, not the final PR24/main-VR head. Its
+    one-variable result is strong causal evidence, but a fresh current-head build
+    remains necessary.
+
+  - message(4).txt does not print the boolean value of bDepthBufferCulling. The
+    enabled state comes from the controlled test instructions.
+
+  - message(4)'s tester is the movement-regression tester and showed no logged
+    memory pressure. It is not a substitute for the separate high-VRAM tester.
+
+  - Info logs do not contain frame-time or per-object culling measurements.
+
+  - The exact moment described by a tester is not always timestamped, so visual
+    symptom duration must be correlated with a video or DevBench capture in the
+    next test.
+
+  - The successful original anti-flash validation covered a physical HMD on the
+    SteamVR/OpenVR path in Abandoned Prison. It did not establish performance or
+    behavioural equivalence across VDXR/OpenXR paths or dense exterior scenes.
+
+
+10. SOURCE AND EVIDENCE REFERENCES
+==================================
+
+Primary source paths:
+
+  src/Features/VR.cpp
+  src/Features/VRDepthCullingPolicy.h
+  src/FrameAnnotations.cpp
+  tests/vr_depth_culling_policy_test.cpp
+  docs/development/vr-depth-culling-temporal-validity.md
+  src/Features/Upscaling.cpp
+  src/Features/Upscaling/VRVendorRelatchPolicy.h
+  tests/vr_vendor_relatch_policy_test.cpp
+
+Important commits:
+
+  6b460547c  PR17 scoped depth-culling ImageSpace cache refresh
+  42e94d004  temporal depth-culling validity hook
+  348e37b7e  extracted policy/tests plus unrelated recovery hardening
+  3168870e1  PR17 merge
+  aa594ba89  final PR24 head
+  42829b443  PR24 merge/current fetched main-VR at preparation time
+
+Local evidence files supplied for this investigation:
+
+  C:\Users\quartus\Downloads\message(1).txt
+  C:\Users\quartus\Downloads\message(2).txt
+  C:\Users\quartus\Downloads\message(3).txt
+  C:\Users\quartus\Downloads\message(4).txt
+  C:\Users\quartus\Downloads\CommunityShaders(23).log
+  C:\Users\quartus\Downloads\CommunityShaders(24).log
+  C:\Users\quartus\Downloads\CommunityShaders(25).log
+  C:\Users\quartus\Downloads\CommunityShaders(26).log
+  C:\Users\quartus\Downloads\CommunityShaders(27).log
+  C:\Users\quartus\Downloads\CommunityShaders(28).log
+  C:\Users\quartus\Downloads\CommunityShaders(29).log
+
+
+11. SHORT HANDOFF CHECKLIST
+===========================
+
+  [ ] Start from current main-VR including PR24 merge 42829b443.
+  [ ] Preserve PR17 ImageSpace-only cache refresh.
+  [ ] Preserve the FrameAnnotations uint32_t signature correction.
+  [ ] Preserve PR24 recovery changes.
+  [ ] Disable/remove only temporal-hook installation for the control build.
+  [ ] Add culling promotion and frame-time telemetry.
+  [ ] Replace global invalidation with per-candidate conservatism.
+  [ ] Test still/head-only/locomotion/Markarth/Abandoned Prison.
+  [ ] Test death/reload separately at Normal and controlled High pressure.
+  [ ] Build matching current-head AIO and shader cache and record hashes.

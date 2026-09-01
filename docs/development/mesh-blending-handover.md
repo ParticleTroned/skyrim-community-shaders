@@ -29,7 +29,7 @@
 - User sliders and toggles remain in `SettingsUser.json`, while manual policy, detected mesh candidates, and LAND/LTEX material assignments are isolated in the atomically written `Data/SKSE/Plugins/CommunityShaders/MeshBlendingRules.json`.
 - The normal feature UI exposes **Record Visible Material Identities**. It records bounded, unique NIF and LTEX identities only as they stream or render; it does not scan installed files and performs no disk I/O until **Save Detected Materials** is pressed.
 - LAND material capture occurs after vanilla or True PBR installs the final quadrant properties. A bounded 32-object search registers every eligible multi-texture geometry in each quadrant instead of assuming child zero. Each matching draw records the default LTEX plus five overlays and publishes six 2-bit classes through a bounded registry; unsupported or over-limit layouts remain unblended with rate-limited diagnostics.
-- LAND classes occupy `ExtraFeatureDescriptor` bits 10–21. They do not overlap Terrain Helper bits 0–5 and 9 or Extended Translucency bits 6–8.
+- LAND classes occupy `ExtraFeatureDescriptor` bits 11–22. They do not overlap Terrain Helper bits 0–5 and 9, Extended Translucency bits 6–8, or Terrain Variation bit 10.
 - The LAND shader remaps the six existing weights before texture sampling. It never activates an authored-inactive layer and therefore adds no texture samples.
 - Unknown or reserved material classes fail open. Soft-over-hard favours the soft layer, every already-active soft/soft overlap converges toward equal coverage, and hard/hard keeps the dominant hard layer.
 

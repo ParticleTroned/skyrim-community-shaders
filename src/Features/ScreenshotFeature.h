@@ -1,5 +1,9 @@
 #pragma once
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Features/ScreenshotBurstPolicy.h"
+#endif
+
 #include "Feature.h"
 #include "Utils/Subrect.h"
 #include <array>
@@ -9,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <nlohmann/json_fwd.hpp>
@@ -57,7 +62,9 @@ struct ScreenshotFeature : public Feature
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override { DrawSettings(); }
+	/** Load a settings layer, migrating a supplied legacy eye only when canonical selection is absent. */
 	virtual void LoadSettings(json& a_json) override;
+	/** Persist canonical capture choices and their backward-compatible sequence mirror. */
 	virtual void SaveSettings(json& a_json) override;
 	virtual void PostPostLoad() override;
 
@@ -65,6 +72,10 @@ struct ScreenshotFeature : public Feature
 	void RequestUiCapture();
 	/** Executes one versioned screenshot API command. Mutating calls must run on the game thread. */
 	nlohmann::json HandleApiRequest(const nlohmann::json& a_request);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** Capture the host's native reference PNG using the normal screenshot service. */
+	nlohmann::json HandleReferenceCapture(const nlohmann::json& a_request, std::function<void(const nlohmann::json&)> a_completion);
+#endif
 	/** Dispatches a settings-based capture through the public screenshot service and returns its receipt. */
 	nlohmann::json RequestApiCapture(std::string_view a_origin = "csx_menu");
 	/** Returns whether Community Shaders screenshot capture is enabled at runtime. */
@@ -75,7 +86,7 @@ struct ScreenshotFeature : public Feature
 	bool HasPendingCapture() const noexcept { return capturePending.load(std::memory_order_acquire); }
 	/** Returns whether the pending capture consumes the desktop backbuffer. */
 	bool HasPendingDesktopMirrorCapture() const;
-	std::size_t GetOutstandingArtifactCount() const;
+	std::size_t GetOutstandingCaptureJobCount() const;
 	std::string GetActiveCaptureRequestId() const;
 	/**
 	 * Observes one texture from a successful, screenshot-eligible OpenVR Submit.
@@ -83,6 +94,8 @@ struct ScreenshotFeature : public Feature
 	 */
 	void ObserveAcceptedVRSubmit(
 		uint64_t a_compositorCycleToken,
+		uint64_t a_publicationGeneration,
+		std::uintptr_t a_deviceIdentity,
 		vr::EVREye a_eye,
 		ID3D11Texture2D* a_texture,
 		const vr::VRTextureBounds_t* a_bounds,
@@ -111,13 +124,15 @@ struct ScreenshotFeature : public Feature
 		uint32_t frameCount = 30;
 		uint32_t intervalFrames = 6;
 		uint32_t previewFramesPerSecond = 15;
-		bool saveSeparateEyes = true;
+		bool saveSeparateEyes = false;
 		bool writePreviewVideo = false;
 	};
 	SequenceDefaults sequenceDefaults{};
 
 private:
 	friend class ScreenshotApi;
+	/** Expand one eye/format selection into outputs without adding other views. */
+	nlohmann::json BuildCaptureDescriptor(CaptureEye a_eye, bool a_usePng, bool a_clipboard) const;
 	std::string uiSequenceRequestId;
 	std::chrono::steady_clock::time_point nextUiSequencePoll{};
 	struct StagedPlane
@@ -127,6 +142,16 @@ private:
 		DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
 		uint32_t width = 0;
 		uint32_t height = 0;
+		uint32_t sourceWidth = 0;
+		uint32_t sourceHeight = 0;
+		uint32_t eyeIndex = 0;
+		uint64_t publicationGeneration = 0;
+		std::uintptr_t deviceIdentity = 0;
+		std::array<float, 4> submittedBounds{ 0.0f, 0.0f, 1.0f, 1.0f };
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		nlohmann::json burstRegions = nlohmann::json::array();
+#endif
+		bool boundsApplied = false;
 		bool flipHorizontal = false;
 		bool flipVertical = false;
 		bool tonemapSceneHdr = false;
@@ -150,6 +175,9 @@ private:
 		Util::Subrect::UVRegion cropUV{};
 		bool applyCrop = false;
 		std::filesystem::path outputPath;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		bool exactPath = false;
+#endif
 		uint32_t width = 0;
 		uint32_t height = 0;
 		bool saveAsPng = true;
@@ -159,6 +187,10 @@ private:
 
 	struct CaptureOptions
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		ScreenshotBurst::Plan burst;
+		bool strictNative = false;
+#endif
 		std::string screenshotPath;
 		Util::Subrect::UVRegion cropUV{};
 		bool applyCrop = true;
@@ -200,6 +232,9 @@ private:
 		uint32_t sequenceOrdinal = 0;
 		std::vector<OutputPlan> outputs;
 		bool desktopSource = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		bool nativePixels = false;
+#endif
 	};
 
 	struct ActiveCapture
@@ -208,6 +243,9 @@ private:
 		VRCaptureSource source = VRCaptureSource::HMDSubmission;
 		CaptureOptions options{};
 		uint64_t compositorCycleToken = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		uint64_t engineFrameToken = 0;
+#endif
 		uint8_t eyeMask = 0;
 		std::array<StagedPlane, 2> eyes{};
 		uint32_t presentsWaited = 0;
@@ -215,10 +253,14 @@ private:
 		std::chrono::steady_clock::time_point sourceDeadline{};
 	};
 
-	struct ReadbackContextProtection
+	enum class CaptureStartResult : uint8_t
 	{
-		winrt::com_ptr<ID3D11DeviceContext> context;
-		bool restoreToUnprotected = false;
+		Started,
+		SourceBusy,
+		EncoderBackpressure,
+		FeatureDisabled,
+		SourceUnavailable,
+		InvalidDescriptor
 	};
 
 	struct ScreenshotWorkerState
@@ -226,14 +268,15 @@ private:
 		std::mutex mutex;
 		std::condition_variable condition;
 		std::queue<PendingScreenshot> queue;
-		std::vector<ReadbackContextProtection> readbackProtections;
 		std::shared_ptr<ScreenshotApi> api;
 		std::size_t outstandingCount = 0;
 		std::atomic_bool notifyAllowed{ true };
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		bool deferEncoding = false;
+#endif
 		bool accepting = true;
 		bool stopRequested = false;
 		bool exited = false;
-		bool restoreReadbackProtection = false;
 	};
 
 	std::shared_ptr<ScreenshotWorkerState> screenshotWorkerState;
@@ -258,11 +301,22 @@ private:
 	winrt::com_ptr<ID3D11ShaderResourceView> previewCacheSRV;
 
 	bool QueueScreenshot(PendingScreenshot&& screenshot);
-	bool EnsureReadbackContextProtection(ID3D11DeviceContext* a_context);
-	void RestoreReadbackContextProtectionIfIdle();
-	bool TryReserveScreenshotSlot();
+	bool ValidateReadbackContext(ID3D11DeviceContext* a_context);
+	bool TryReserveScreenshotSlot(
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		bool a_burst = false
+#endif
+	);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	void SetBurstDeferral(bool a_defer);
+#endif
 	void ReleaseScreenshotSlot();
 	static void ReleaseScreenshotSlot(const std::shared_ptr<ScreenshotWorkerState>& a_state);
+	static nlohmann::json BuildAcquisitionRecord(
+		const PendingScreenshot& a_screenshot,
+		std::string_view a_sourceKind,
+		uint64_t a_engineFrame,
+		std::optional<uint64_t> a_compositorCycle);
 	void StopWorkerThread();
 	static void ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerState> a_state);
 	void SourceDeadlineLoop(std::stop_token a_stopToken);
@@ -275,20 +329,27 @@ private:
 		uint32_t a_eyeIndex,
 		vr::EColorSpace a_colorSpace,
 		bool a_tonemapSceneHdr,
-		StagedPlane& a_plane);
+		uint64_t a_publicationGeneration,
+		std::uintptr_t a_deviceIdentity,
+		StagedPlane& a_plane
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		,
+		const ScreenshotBurst::Plan* a_burst = nullptr,
+		bool a_strictNative = false
+#endif
+	);
 	bool QueueDesktopCapture(
 		IDXGISwapChain* a_swapChain,
 		const CaptureOptions& a_options,
 		bool a_ownsQueueSlot);
 	void ClearActiveCapture(ActiveCapture& a_capture);
 	void FallBackToDesktopCapture(ActiveCapture& a_capture, std::string_view a_reason);
-	bool TryStartApiCapture(
+	CaptureStartResult TryStartApiCapture(
 		std::string a_requestId,
 		const nlohmann::json& a_effectiveDescriptor,
 		std::string a_parentRequestId = {},
 		uint32_t a_sequenceOrdinal = 0);
 	bool CancelApiCapture(std::string_view a_requestId);
 	void EnsureScreenshotApi();
-	static void RestoreReadbackContextProtectionIfIdle(const std::shared_ptr<ScreenshotWorkerState>& a_state);
 	static void ShowInGameNotification(std::string message);
 };

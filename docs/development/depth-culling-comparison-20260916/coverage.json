@@ -1,0 +1,1454 @@
+{
+    "schema": "csx-depth-culling-publication-coverage-v1",
+    "ledger": "vr-render-scale-ledger-0004-investigation.csv",
+    "ledgerSha256": "de3350f2de3913e75156d1be9b84f45f4c6e991fffeff537d59daa5ffc68d52e",
+    "ledgerBytes": 33399439,
+    "runs": 8,
+    "saveWindows": 48,
+    "executionOrder": ["08", "11", "09", "12", "10", "13"],
+    "metricRows": 168,
+    "allCellsRoundTripEqual": true,
+    "allSourceDetailsReconstructedExactly": true,
+    "allQuickSummariesMatchActualSaveNames": true,
+    "allFinalLifecycleSuccessful": true,
+    "sources": [
+        {
+            "runColumn": 1,
+            "metric": "quick_summary",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T152832143Z-3828ffef\\quick-summary.json",
+            "sha256": "d20cbbc435d3a4209aa28ae0e6cf1f1b0117d6a7ca866a2af3a12c38b7a8dde2",
+            "bytes": 325097,
+            "selector": "whole JSON",
+            "decodedLeafCount": 9041
+        },
+        {
+            "runColumn": 1,
+            "metric": "provenance",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T152832143Z-3828ffef\\provenance.json",
+            "sha256": "93174a24e75bf6cee91b7b85724ef2f8d4da588c8761b72061ea7deb383d04b4",
+            "bytes": 6908,
+            "selector": "whole JSON",
+            "decodedLeafCount": 100
+        },
+        {
+            "runColumn": 1,
+            "metric": "CSX.BuildManifest",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T152832143Z-3828ffef\\CSX.BuildManifest.json",
+            "sha256": "2ca4f9d7742d3f516917895ec990731213acd08b8d9e419f03d3865625428b03",
+            "bytes": 4228,
+            "selector": "whole JSON",
+            "decodedLeafCount": 73
+        },
+        {
+            "runColumn": 1,
+            "metric": "aio_receipt",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T152832143Z-3828ffef\\aio-receipt.json",
+            "sha256": "c876aac8ce865f2ca004602e420ce9d05150ad08b935695721520b347827f1f2",
+            "bytes": 7101,
+            "selector": "whole JSON",
+            "decodedLeafCount": 122
+        },
+        {
+            "runColumn": 1,
+            "metric": "gameft_sw",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T152832143Z-3828ffef\\gameft-sw.json",
+            "sha256": "a7f6ef0601d03805768024f82e87f62165c2d17e9dd72cbd01f737bf55f1bad6",
+            "bytes": 1651,
+            "selector": "whole JSON",
+            "decodedLeafCount": 29
+        },
+        {
+            "runColumn": 1,
+            "metric": "verified_archives",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T152832143Z-3828ffef\\verified-archives.json",
+            "sha256": "08dce2544bb3e4af2d9c0994563861f0ecc05e799976f48acad489cbfc323ed7",
+            "bytes": 1321,
+            "selector": "whole JSON",
+            "decodedLeafCount": 14
+        },
+        {
+            "runColumn": 1,
+            "metric": "depth_culling_context",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T152832143Z-3828ffef\\depth-culling-context.json",
+            "sha256": "9617e0f2aba05ed59d2c3fb65a3059925468074b6d8c4d806b9cfdf493466e44",
+            "bytes": 585,
+            "selector": "whole JSON",
+            "decodedLeafCount": 16
+        },
+        {
+            "runColumn": 1,
+            "metric": "culling_before",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T152832143Z-3828ffef\\culling-before.json",
+            "sha256": "7df33144d06ab314786c26b88d9176444e2f4dca86d3f67a17bb78d05d444441",
+            "bytes": 9999,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 149
+        },
+        {
+            "runColumn": 1,
+            "metric": "culling_after",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T152832143Z-3828ffef\\culling-after.json",
+            "sha256": "e5dad318d47667e20d3c70022c03778d927cb675e2fdb78abadb1c729990e7cd",
+            "bytes": 10083,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 149
+        },
+        {
+            "runColumn": 1,
+            "metric": "stack_wait_before",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T152832143Z-3828ffef\\stack-wait\\before.json",
+            "sha256": "8e13a89de80af30258c4bd2de2f5e12b86745a57a6f7a6d08ddd41a41c103c3b",
+            "bytes": 85970,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 1201
+        },
+        {
+            "runColumn": 1,
+            "metric": "stack_wait_after",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T152832143Z-3828ffef\\stack-wait\\after.json",
+            "sha256": "152eaa718ac27b314ad07ee58907dab8fd3ff6b970e022fa51e1fafff65e6143",
+            "bytes": 85968,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 1201
+        },
+        {
+            "runColumn": 1,
+            "metric": "save_08_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T152832143Z-3828ffef\\save-1-health-stop.json",
+            "sha256": "505e7ce78166a9507f418498ba8f896651cd69750177e2f102cb5f362d729a1e",
+            "bytes": 142565,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2123
+        },
+        {
+            "runColumn": 1,
+            "metric": "save_11_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T152832143Z-3828ffef\\save-2-health-stop.json",
+            "sha256": "8d70b587c201e6d28d81a1432fe4d42bd9093842581e617030edbc37ae483a3d",
+            "bytes": 177506,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2710
+        },
+        {
+            "runColumn": 1,
+            "metric": "save_09_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T152832143Z-3828ffef\\save-3-health-stop.json",
+            "sha256": "8609f5ea7c4001d68fab0c5246979fedd12a519ff3eae54c1f5f908d208f4e7d",
+            "bytes": 136577,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2008
+        },
+        {
+            "runColumn": 1,
+            "metric": "save_12_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T152832143Z-3828ffef\\save-4-health-stop.json",
+            "sha256": "59e52b3c895216a31b9ded8f5de9695c574abc5f1badffea69bffadb3913e6eb",
+            "bytes": 171926,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2614
+        },
+        {
+            "runColumn": 1,
+            "metric": "save_10_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T152832143Z-3828ffef\\save-5-health-stop.json",
+            "sha256": "551d98c055946efdf5fe92f601f456e1baede3542f7233d7da5c600f0f12d28c",
+            "bytes": 136659,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2008
+        },
+        {
+            "runColumn": 1,
+            "metric": "save_13_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T152832143Z-3828ffef\\save-6-health-stop.json",
+            "sha256": "940d1f2222255bd173199410cb9d8549b5c3ed2f132be330a32a619275fc6d86",
+            "bytes": 171938,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2614
+        },
+        {
+            "runColumn": 1,
+            "metric": "wpr_analysis",
+            "source": "build\\bisect\\measurements\\depth-culling-wpr-20260916\\gameft-sw-20260916T152832143Z-3828ffef-analysis.json",
+            "sha256": "d1727dc5310f57130b9bbcb78949229c4520aaacc314a70257bebd152c9f2842",
+            "bytes": 3957848,
+            "selector": "whole JSON",
+            "decodedLeafCount": 34127
+        },
+        {
+            "runColumn": 1,
+            "metric": "wpr_contexts",
+            "source": "build\\bisect\\measurements\\depth-culling-wpr-20260916\\gameft-sw-20260916T152832143Z-3828ffef-contexts.json",
+            "sha256": "fe17d84dc7d027464fe8fec04438f9e1c9ee7ca8f23d523e57792ca2e0d027db",
+            "bytes": 333164,
+            "selector": "whole JSON",
+            "decodedLeafCount": 8044
+        },
+        {
+            "runColumn": 2,
+            "metric": "quick_summary",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T154518977Z-a6e09be6\\quick-summary.json",
+            "sha256": "07a5ae229d7754b3d83fd4de8cbd6004f181b7526de444dbdfa2b9a582c3a216",
+            "bytes": 333804,
+            "selector": "whole JSON",
+            "decodedLeafCount": 9273
+        },
+        {
+            "runColumn": 2,
+            "metric": "provenance",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T154518977Z-a6e09be6\\provenance.json",
+            "sha256": "9cbd108b00d38b361ec94dbd959798da4314b8e7c3765e1b42e4c30d4c75fa71",
+            "bytes": 6908,
+            "selector": "whole JSON",
+            "decodedLeafCount": 100
+        },
+        {
+            "runColumn": 2,
+            "metric": "CSX.BuildManifest",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T154518977Z-a6e09be6\\CSX.BuildManifest.json",
+            "sha256": "2ca4f9d7742d3f516917895ec990731213acd08b8d9e419f03d3865625428b03",
+            "bytes": 4228,
+            "selector": "whole JSON",
+            "decodedLeafCount": 73
+        },
+        {
+            "runColumn": 2,
+            "metric": "aio_receipt",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T154518977Z-a6e09be6\\aio-receipt.json",
+            "sha256": "c876aac8ce865f2ca004602e420ce9d05150ad08b935695721520b347827f1f2",
+            "bytes": 7101,
+            "selector": "whole JSON",
+            "decodedLeafCount": 122
+        },
+        {
+            "runColumn": 2,
+            "metric": "gameft_sw",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T154518977Z-a6e09be6\\gameft-sw.json",
+            "sha256": "b52907ed0cf12b47efa013d87c11d3b2dda29dca3b5ed882709d97f1cb713c1e",
+            "bytes": 1651,
+            "selector": "whole JSON",
+            "decodedLeafCount": 29
+        },
+        {
+            "runColumn": 2,
+            "metric": "verified_archives",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T154518977Z-a6e09be6\\verified-archives.json",
+            "sha256": "5edc669d8e9dfff16fadd42d1a6c26796da93fb8661aa8eb756e71e2528a0b89",
+            "bytes": 1274,
+            "selector": "whole JSON",
+            "decodedLeafCount": 14
+        },
+        {
+            "runColumn": 2,
+            "metric": "depth_culling_context",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T154518977Z-a6e09be6\\depth-culling-context.json",
+            "sha256": "266a2253225ec376b0a0bef18dc676b88d9036cc7fcc84105a2dbcdc9262f0dd",
+            "bytes": 725,
+            "selector": "whole JSON",
+            "decodedLeafCount": 17
+        },
+        {
+            "runColumn": 2,
+            "metric": "culling_before",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T154518977Z-a6e09be6\\culling-before.json",
+            "sha256": "1b119d1ac603694997421b228c392893465ccd52a294a98c29b73138dd19c74c",
+            "bytes": 10007,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 149
+        },
+        {
+            "runColumn": 2,
+            "metric": "culling_after",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T154518977Z-a6e09be6\\culling-after.json",
+            "sha256": "c60a9d7e5ad4d4ca5ddf3e115964a3bbb372f4808c6f04b238886ebd743b9385",
+            "bytes": 9999,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 149
+        },
+        {
+            "runColumn": 2,
+            "metric": "stack_wait_before",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T154518977Z-a6e09be6\\stack-wait\\before.json",
+            "sha256": "9d27517a3d4427f1ac6cd37730fcd673e2721b0a63e6dba048189dd5fc95d65d",
+            "bytes": 85968,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 1201
+        },
+        {
+            "runColumn": 2,
+            "metric": "stack_wait_after",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T154518977Z-a6e09be6\\stack-wait\\after.json",
+            "sha256": "d1d1c9637e59b808e91b1865257d28e89daa385551bab9382eccb5c3db5cd031",
+            "bytes": 85966,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 1201
+        },
+        {
+            "runColumn": 2,
+            "metric": "save_08_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T154518977Z-a6e09be6\\save-1-health-stop.json",
+            "sha256": "621feda78eca81ba43c15446be17c2783c25833fd0d1c150a79445793e1b2f5e",
+            "bytes": 142599,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2123
+        },
+        {
+            "runColumn": 2,
+            "metric": "save_11_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T154518977Z-a6e09be6\\save-2-health-stop.json",
+            "sha256": "0628d1ba898929ff8db232f144244d0a668e9d8ac2292e2623e8a3ab9a84e5b2",
+            "bytes": 177542,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2710
+        },
+        {
+            "runColumn": 2,
+            "metric": "save_09_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T154518977Z-a6e09be6\\save-3-health-stop.json",
+            "sha256": "9d2926f6cfb42d3de646ba60f61edc760358ff1984d6cb2fde72c469ad1ea384",
+            "bytes": 136613,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2008
+        },
+        {
+            "runColumn": 2,
+            "metric": "save_12_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T154518977Z-a6e09be6\\save-4-health-stop.json",
+            "sha256": "f6ea16566225a64adf11652a112eb3adbcbd020332c049f8d10d5bd186c5c465",
+            "bytes": 171946,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2614
+        },
+        {
+            "runColumn": 2,
+            "metric": "save_10_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T154518977Z-a6e09be6\\save-5-health-stop.json",
+            "sha256": "cf7c12622a3f46fa1cc6885c6b5ee0568e0e2c0d88f98eb8af972ccd52e5ba10",
+            "bytes": 136677,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2008
+        },
+        {
+            "runColumn": 2,
+            "metric": "save_13_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T154518977Z-a6e09be6\\save-6-health-stop.json",
+            "sha256": "8b71d4b49fce38d0c6dd1c64411384503dedab40533ce4fa69f80b13ea8a40d1",
+            "bytes": 177714,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2710
+        },
+        {
+            "runColumn": 2,
+            "metric": "wpr_analysis",
+            "source": "build\\bisect\\measurements\\depth-culling-wpr-20260916\\gameft-sw-20260916T154518977Z-a6e09be6-analysis.json",
+            "sha256": "f3f1a2bb56029081ef5cb2f115448779320f1746c94132f19043b7c6002e5ca4",
+            "bytes": 4053262,
+            "selector": "whole JSON",
+            "decodedLeafCount": 34840
+        },
+        {
+            "runColumn": 2,
+            "metric": "wpr_contexts",
+            "source": "build\\bisect\\measurements\\depth-culling-wpr-20260916\\gameft-sw-20260916T154518977Z-a6e09be6-contexts.json",
+            "sha256": "ea12ea2f0bcaa15b46decbc09bf91b6ceae5d26b58e7798afc54d2bf5aa5c52a",
+            "bytes": 353026,
+            "selector": "whole JSON",
+            "decodedLeafCount": 8234
+        },
+        {
+            "runColumn": 3,
+            "metric": "quick_summary",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T155929972Z-2a6a7693\\quick-summary.json",
+            "sha256": "987e5257726a25dc8237503660828bac3b4602573ff58bdc800ac9850313bb16",
+            "bytes": 325373,
+            "selector": "whole JSON",
+            "decodedLeafCount": 9053
+        },
+        {
+            "runColumn": 3,
+            "metric": "provenance",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T155929972Z-2a6a7693\\provenance.json",
+            "sha256": "7c6f297b20d7ed56114a03868a33795435f402505296aa6d4e0aeaea3f63be7d",
+            "bytes": 6909,
+            "selector": "whole JSON",
+            "decodedLeafCount": 100
+        },
+        {
+            "runColumn": 3,
+            "metric": "CSX.BuildManifest",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T155929972Z-2a6a7693\\CSX.BuildManifest.json",
+            "sha256": "2ca4f9d7742d3f516917895ec990731213acd08b8d9e419f03d3865625428b03",
+            "bytes": 4228,
+            "selector": "whole JSON",
+            "decodedLeafCount": 73
+        },
+        {
+            "runColumn": 3,
+            "metric": "aio_receipt",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T155929972Z-2a6a7693\\aio-receipt.json",
+            "sha256": "c876aac8ce865f2ca004602e420ce9d05150ad08b935695721520b347827f1f2",
+            "bytes": 7101,
+            "selector": "whole JSON",
+            "decodedLeafCount": 122
+        },
+        {
+            "runColumn": 3,
+            "metric": "gameft_sw",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T155929972Z-2a6a7693\\gameft-sw.json",
+            "sha256": "1f025f3f51610e739912c08ee6ca0fad9f965ac275276e4325a1de52311e6245",
+            "bytes": 1652,
+            "selector": "whole JSON",
+            "decodedLeafCount": 29
+        },
+        {
+            "runColumn": 3,
+            "metric": "verified_archives",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T155929972Z-2a6a7693\\verified-archives.json",
+            "sha256": "d934840c8f11fea13d737529e62ecedaf64155c8373f7d78cba05917a8fea797",
+            "bytes": 1264,
+            "selector": "whole JSON",
+            "decodedLeafCount": 14
+        },
+        {
+            "runColumn": 3,
+            "metric": "depth_culling_context",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T155929972Z-2a6a7693\\depth-culling-context.json",
+            "sha256": "92fc52b3951ab05c314d750fb18b1542ce159cd0a8c67cc9b9ecf906c0f2576d",
+            "bytes": 853,
+            "selector": "whole JSON",
+            "decodedLeafCount": 18
+        },
+        {
+            "runColumn": 3,
+            "metric": "culling_before",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T155929972Z-2a6a7693\\culling-before.json",
+            "sha256": "a6d193a6d63eb14e485bdee691258862fa2a067c2b8424102ce186148bc1fa39",
+            "bytes": 9983,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 149
+        },
+        {
+            "runColumn": 3,
+            "metric": "culling_after",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T155929972Z-2a6a7693\\culling-after.json",
+            "sha256": "bc0053595983c10022c02f9cf66a19c431caf2b00b60927c0c31b7092ba0fa33",
+            "bytes": 9987,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 149
+        },
+        {
+            "runColumn": 3,
+            "metric": "stack_wait_before",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T155929972Z-2a6a7693\\stack-wait\\before.json",
+            "sha256": "8f7423a6a62dd677b330789df162a731772416b65349cec1d1fbf0b8f5f15b60",
+            "bytes": 85970,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 1201
+        },
+        {
+            "runColumn": 3,
+            "metric": "stack_wait_after",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T155929972Z-2a6a7693\\stack-wait\\after.json",
+            "sha256": "9e78802e375ea2f8bb54e1367c4d311845c067bb7025f6431c640fc8435ab904",
+            "bytes": 85968,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 1201
+        },
+        {
+            "runColumn": 3,
+            "metric": "save_08_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T155929972Z-2a6a7693\\save-1-health-stop.json",
+            "sha256": "15e00ceb40c3d20d56c2be387a58ff9d33731831f1ca7f2d76d768eb6d4d67e0",
+            "bytes": 142577,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2123
+        },
+        {
+            "runColumn": 3,
+            "metric": "save_11_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T155929972Z-2a6a7693\\save-2-health-stop.json",
+            "sha256": "06e1282fd6d4d10dbaa25347fe710eb26d22a2e1bfc76d988ad8cd7914b1dea7",
+            "bytes": 177514,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2710
+        },
+        {
+            "runColumn": 3,
+            "metric": "save_09_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T155929972Z-2a6a7693\\save-3-health-stop.json",
+            "sha256": "397ff2bbd9cd8bcf1193ff3498ba5ede50cd6a5d2c7a198fde886d2a5db6554e",
+            "bytes": 136583,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2008
+        },
+        {
+            "runColumn": 3,
+            "metric": "save_12_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T155929972Z-2a6a7693\\save-4-health-stop.json",
+            "sha256": "21e58213d4ed0a780095c36bc9059d15247a288d2939c0515d3f557dbf16203c",
+            "bytes": 171926,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2614
+        },
+        {
+            "runColumn": 3,
+            "metric": "save_10_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T155929972Z-2a6a7693\\save-5-health-stop.json",
+            "sha256": "7af677a77ea9f086cd8949b20319db8c1e200f36a3ec4c60ea078d2540a5b034",
+            "bytes": 136647,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2008
+        },
+        {
+            "runColumn": 3,
+            "metric": "save_13_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T155929972Z-2a6a7693\\save-6-health-stop.json",
+            "sha256": "2fcbcbbdf1f21a7ea03c976e3a50623c6025098ba97e4c28dd4e58c37ce2becc",
+            "bytes": 171946,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2614
+        },
+        {
+            "runColumn": 3,
+            "metric": "wpr_analysis",
+            "source": "build\\bisect\\measurements\\depth-culling-wpr-20260916\\gameft-sw-20260916T155929972Z-2a6a7693-analysis.json",
+            "sha256": "2869fde0fe6ee50d306041ad4290700e60d55bd6e643b49c299f6ef0acc662cb",
+            "bytes": 3965722,
+            "selector": "whole JSON",
+            "decodedLeafCount": 34274
+        },
+        {
+            "runColumn": 3,
+            "metric": "wpr_contexts",
+            "source": "build\\bisect\\measurements\\depth-culling-wpr-20260916\\gameft-sw-20260916T155929972Z-2a6a7693-contexts.json",
+            "sha256": "6ee323803aa8a0f9e2003237c870f706c54031e654989dc72b00d2d48db3a438",
+            "bytes": 344490,
+            "selector": "whole JSON",
+            "decodedLeafCount": 7988
+        },
+        {
+            "runColumn": 4,
+            "metric": "quick_summary",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T161424154Z-401a5499\\quick-summary.json",
+            "sha256": "84a4d6b18e9a17a3afa8a555f07c0da840011a75dfb398ca9cd64b1f07fdecf5",
+            "bytes": 322514,
+            "selector": "whole JSON",
+            "decodedLeafCount": 8982
+        },
+        {
+            "runColumn": 4,
+            "metric": "provenance",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T161424154Z-401a5499\\provenance.json",
+            "sha256": "ab0a4884de4b7b162fc725facf72410806f9cd1c1c1030d557c08a96ff7a1888",
+            "bytes": 6909,
+            "selector": "whole JSON",
+            "decodedLeafCount": 100
+        },
+        {
+            "runColumn": 4,
+            "metric": "CSX.BuildManifest",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T161424154Z-401a5499\\CSX.BuildManifest.json",
+            "sha256": "2ca4f9d7742d3f516917895ec990731213acd08b8d9e419f03d3865625428b03",
+            "bytes": 4228,
+            "selector": "whole JSON",
+            "decodedLeafCount": 73
+        },
+        {
+            "runColumn": 4,
+            "metric": "aio_receipt",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T161424154Z-401a5499\\aio-receipt.json",
+            "sha256": "c876aac8ce865f2ca004602e420ce9d05150ad08b935695721520b347827f1f2",
+            "bytes": 7101,
+            "selector": "whole JSON",
+            "decodedLeafCount": 122
+        },
+        {
+            "runColumn": 4,
+            "metric": "gameft_sw",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T161424154Z-401a5499\\gameft-sw.json",
+            "sha256": "22929360ec4c768f0381f5af97c29016b415b14c698f1cc1b3f2c18eb49f2939",
+            "bytes": 1652,
+            "selector": "whole JSON",
+            "decodedLeafCount": 29
+        },
+        {
+            "runColumn": 4,
+            "metric": "verified_archives",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T161424154Z-401a5499\\verified-archives.json",
+            "sha256": "cb6ce44521cb0fcb3973d64bbb935612accdda3958090c0b8b3f3172fc130cc2",
+            "bytes": 1282,
+            "selector": "whole JSON",
+            "decodedLeafCount": 14
+        },
+        {
+            "runColumn": 4,
+            "metric": "depth_culling_context",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T161424154Z-401a5499\\depth-culling-context.json",
+            "sha256": "908527a746f880dcabc0256346d0bc8ddf65f935dffed34206d012589b0ec2d8",
+            "bytes": 1012,
+            "selector": "whole JSON",
+            "decodedLeafCount": 20
+        },
+        {
+            "runColumn": 4,
+            "metric": "save13_interaction_uncertainty",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T161424154Z-401a5499\\save13-interaction-uncertainty.json",
+            "sha256": "7342c118d7236c0b5b5d37715fad6f38d2096224ec3873e0ac791ccde9d8b1ce",
+            "bytes": 510,
+            "selector": "whole JSON",
+            "decodedLeafCount": 8
+        },
+        {
+            "runColumn": 4,
+            "metric": "culling_campaign_audit",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T161424154Z-401a5499\\culling-campaign-audit.json",
+            "sha256": "5600e236b8a965481c5363ef55a74592d79c59cc2fb08bee3c2512063b7a60b9",
+            "bytes": 39173,
+            "selector": "whole JSON",
+            "decodedLeafCount": 996
+        },
+        {
+            "runColumn": 4,
+            "metric": "culling_before",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T161424154Z-401a5499\\culling-before.json",
+            "sha256": "0fd521c50c114024795679216983aa1bb83938a5063f72a186bf09fab5635586",
+            "bytes": 10011,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 149
+        },
+        {
+            "runColumn": 4,
+            "metric": "culling_after",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T161424154Z-401a5499\\culling-after.json",
+            "sha256": "6cfaaa6ab965bd3e658af074500b8ecafaa3535c5bea22ecdd50a078ed3b047a",
+            "bytes": 10089,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 149
+        },
+        {
+            "runColumn": 4,
+            "metric": "stack_wait_before",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T161424154Z-401a5499\\stack-wait\\before.json",
+            "sha256": "9e6b13279f71383983630aef7d3b5ab38466846ea0a5d83fdeff1ff2388a560d",
+            "bytes": 85970,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 1201
+        },
+        {
+            "runColumn": 4,
+            "metric": "stack_wait_after",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T161424154Z-401a5499\\stack-wait\\after.json",
+            "sha256": "6d3f5ff4f5e53d600d079b443a5274e4814c27220cfd6a1e0fa084b279a73b98",
+            "bytes": 85968,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 1201
+        },
+        {
+            "runColumn": 4,
+            "metric": "save_08_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T161424154Z-401a5499\\save-1-health-stop.json",
+            "sha256": "b1448f5fb40cde8ea125fbaeabcd1d9956e102d43d702aedcd6215084b29893c",
+            "bytes": 142561,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2123
+        },
+        {
+            "runColumn": 4,
+            "metric": "save_11_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T161424154Z-401a5499\\save-2-health-stop.json",
+            "sha256": "053dfc89981fa7248114a1ab1c863800a5190b7ce387fbcafc6dde9e8c048d7f",
+            "bytes": 177516,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2710
+        },
+        {
+            "runColumn": 4,
+            "metric": "save_09_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T161424154Z-401a5499\\save-3-health-stop.json",
+            "sha256": "df16af10e127bff901d4de703caffd3cdcaa8829a39abbcc12b3b534b66067c9",
+            "bytes": 136591,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2008
+        },
+        {
+            "runColumn": 4,
+            "metric": "save_12_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T161424154Z-401a5499\\save-4-health-stop.json",
+            "sha256": "de7f40d694a831f9ba6ed6ae503ca17d519b442e8af69c4ca1b55c80d34a24b3",
+            "bytes": 171918,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2614
+        },
+        {
+            "runColumn": 4,
+            "metric": "save_10_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T161424154Z-401a5499\\save-5-health-stop.json",
+            "sha256": "7bf3b3e5b7b624b31f3fcf6218904090a3e59ae885a0b7b31d4a2f05a13eafec",
+            "bytes": 136663,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2008
+        },
+        {
+            "runColumn": 4,
+            "metric": "save_13_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T161424154Z-401a5499\\save-6-health-stop.json",
+            "sha256": "2c79bf9a098574ce4d072afaccb515dbae5f752585f055e2b4c023f487feb887",
+            "bytes": 184073,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2812
+        },
+        {
+            "runColumn": 4,
+            "metric": "wpr_analysis",
+            "source": "build\\bisect\\measurements\\depth-culling-wpr-20260916\\gameft-sw-20260916T161424154Z-401a5499-analysis.json",
+            "sha256": "450ed0b067f17f1f0b0520b962e3eb976512f3a77e37ebca4facbc5f818182f7",
+            "bytes": 4050559,
+            "selector": "whole JSON",
+            "decodedLeafCount": 34394
+        },
+        {
+            "runColumn": 4,
+            "metric": "wpr_contexts",
+            "source": "build\\bisect\\measurements\\depth-culling-wpr-20260916\\gameft-sw-20260916T161424154Z-401a5499-contexts.json",
+            "sha256": "ae4f5aeb2e529ae730a3149431a117b4571ca721159562f82cbe3c686db9e72d",
+            "bytes": 348060,
+            "selector": "whole JSON",
+            "decodedLeafCount": 8216
+        },
+        {
+            "runColumn": 5,
+            "metric": "quick_summary",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T163602908Z-a26f2ef1\\quick-summary.json",
+            "sha256": "5f70dae0c4c3febd1ee39fdd3f492ce33c990b9b05b7aace8cfdd974da349f4f",
+            "bytes": 327471,
+            "selector": "whole JSON",
+            "decodedLeafCount": 9103
+        },
+        {
+            "runColumn": 5,
+            "metric": "provenance",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T163602908Z-a26f2ef1\\provenance.json",
+            "sha256": "3b065b22496a4d33504aa4f55476ebbb803ad93b20c8c648d9da4289fb250b4c",
+            "bytes": 6909,
+            "selector": "whole JSON",
+            "decodedLeafCount": 100
+        },
+        {
+            "runColumn": 5,
+            "metric": "CSX.BuildManifest",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T163602908Z-a26f2ef1\\CSX.BuildManifest.json",
+            "sha256": "2ca4f9d7742d3f516917895ec990731213acd08b8d9e419f03d3865625428b03",
+            "bytes": 4228,
+            "selector": "whole JSON",
+            "decodedLeafCount": 73
+        },
+        {
+            "runColumn": 5,
+            "metric": "aio_receipt",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T163602908Z-a26f2ef1\\aio-receipt.json",
+            "sha256": "c876aac8ce865f2ca004602e420ce9d05150ad08b935695721520b347827f1f2",
+            "bytes": 7101,
+            "selector": "whole JSON",
+            "decodedLeafCount": 122
+        },
+        {
+            "runColumn": 5,
+            "metric": "gameft_sw",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T163602908Z-a26f2ef1\\gameft-sw.json",
+            "sha256": "bcf6c8606db63bbbdd6fb31849d15265c8a864f2ec8171048ce724f0687ce360",
+            "bytes": 1652,
+            "selector": "whole JSON",
+            "decodedLeafCount": 29
+        },
+        {
+            "runColumn": 5,
+            "metric": "verified_archives",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T163602908Z-a26f2ef1\\verified-archives.json",
+            "sha256": "b8d3cadbb23b8a5f47ca9ac4cbad7b0cf09d385c0550db4f76a5f5ebed6c89aa",
+            "bytes": 1284,
+            "selector": "whole JSON",
+            "decodedLeafCount": 14
+        },
+        {
+            "runColumn": 5,
+            "metric": "depth_culling_context",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T163602908Z-a26f2ef1\\depth-culling-context.json",
+            "sha256": "e8840a2aaab47fe86d3dd6b9567751cacadab8721c796147e2edab892ef4ca2f",
+            "bytes": 1156,
+            "selector": "whole JSON",
+            "decodedLeafCount": 21
+        },
+        {
+            "runColumn": 5,
+            "metric": "culling_campaign_audit",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T163602908Z-a26f2ef1\\culling-campaign-audit.json",
+            "sha256": "e2de28595a5954bfeb1d86191d133660df69b3b79a22b5a944672856c539bec0",
+            "bytes": 39487,
+            "selector": "whole JSON",
+            "decodedLeafCount": 1011
+        },
+        {
+            "runColumn": 5,
+            "metric": "culling_before",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T163602908Z-a26f2ef1\\culling-before.json",
+            "sha256": "90d1c67b4068e84c8b5999e944820da70db3256665d9f0786cb85b215995fc11",
+            "bytes": 10009,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 149
+        },
+        {
+            "runColumn": 5,
+            "metric": "culling_after",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T163602908Z-a26f2ef1\\culling-after.json",
+            "sha256": "c49e0cb5f872139ee94fb8fdf6abaa0d8cfddd40bf340f39a9eab42fa045b01a",
+            "bytes": 10077,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 149
+        },
+        {
+            "runColumn": 5,
+            "metric": "stack_wait_before",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T163602908Z-a26f2ef1\\stack-wait\\before.json",
+            "sha256": "83e4e4b2ce2d2b4be9686da0fbd8c4a0e8de8a07a729a6f5f8da856e880a900b",
+            "bytes": 85970,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 1201
+        },
+        {
+            "runColumn": 5,
+            "metric": "stack_wait_after",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T163602908Z-a26f2ef1\\stack-wait\\after.json",
+            "sha256": "25bae2734c8bbbdd90285ccd88988d0575453e1533728304d9f66e5b0cf8c676",
+            "bytes": 85968,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 1201
+        },
+        {
+            "runColumn": 5,
+            "metric": "save_08_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T163602908Z-a26f2ef1\\save-1-health-stop.json",
+            "sha256": "b96fa5dd8da20341136d48356ef92e2cb734c29069c680586c6c625763c9dbeb",
+            "bytes": 142581,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2123
+        },
+        {
+            "runColumn": 5,
+            "metric": "save_11_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T163602908Z-a26f2ef1\\save-2-health-stop.json",
+            "sha256": "c963b4010dd8274b018f28f80b233a031728c0ef6fe534e5e9ad2049fc808f61",
+            "bytes": 177520,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2710
+        },
+        {
+            "runColumn": 5,
+            "metric": "save_09_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T163602908Z-a26f2ef1\\save-3-health-stop.json",
+            "sha256": "c2dc9f80dc0eaf167d32adf6ee62b5be643d701929566aeefc0768be83a33f78",
+            "bytes": 136597,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2008
+        },
+        {
+            "runColumn": 5,
+            "metric": "save_12_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T163602908Z-a26f2ef1\\save-4-health-stop.json",
+            "sha256": "df32e21146a7bf714d01ad8debd46045a269e9e697ba351c58fea2ee23eb7864",
+            "bytes": 171950,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2614
+        },
+        {
+            "runColumn": 5,
+            "metric": "save_10_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T163602908Z-a26f2ef1\\save-5-health-stop.json",
+            "sha256": "d06122bbdef58226b4c5f45c62c56fbb124e3a3161c9970f05922d47e2b8dd00",
+            "bytes": 136679,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2008
+        },
+        {
+            "runColumn": 5,
+            "metric": "save_13_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T163602908Z-a26f2ef1\\save-6-health-stop.json",
+            "sha256": "fb284977427ca19d3320febd130b8159589bdba29aba5d89a9140a8e2399aa6d",
+            "bytes": 187450,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2883
+        },
+        {
+            "runColumn": 5,
+            "metric": "wpr_analysis",
+            "source": "build\\bisect\\measurements\\depth-culling-wpr-20260916\\gameft-sw-20260916T163602908Z-a26f2ef1-analysis.json",
+            "sha256": "59515971b45f1eb961edf7d7ded7abfbfd4c05c792b809266c985c1f178ccfbe",
+            "bytes": 4039450,
+            "selector": "whole JSON",
+            "decodedLeafCount": 34684
+        },
+        {
+            "runColumn": 5,
+            "metric": "wpr_contexts",
+            "source": "build\\bisect\\measurements\\depth-culling-wpr-20260916\\gameft-sw-20260916T163602908Z-a26f2ef1-contexts.json",
+            "sha256": "810cf49b64327d083e63a904d7aebeea7a77330c9a33d6b53da96a1de4fac574",
+            "bytes": 354324,
+            "selector": "whole JSON",
+            "decodedLeafCount": 8186
+        },
+        {
+            "runColumn": 6,
+            "metric": "quick_summary",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T165146902Z-36b2c165\\quick-summary.json",
+            "sha256": "dc1e16ea9035529bcd1ce9a5750bf51078416bb92d68d461c4391d63a55084ce",
+            "bytes": 309744,
+            "selector": "whole JSON",
+            "decodedLeafCount": 8639
+        },
+        {
+            "runColumn": 6,
+            "metric": "provenance",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T165146902Z-36b2c165\\provenance.json",
+            "sha256": "3402461629c04a200826be4faaf7f02928f3deec05fefc8cc1f4b805eac77ba6",
+            "bytes": 6909,
+            "selector": "whole JSON",
+            "decodedLeafCount": 100
+        },
+        {
+            "runColumn": 6,
+            "metric": "CSX.BuildManifest",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T165146902Z-36b2c165\\CSX.BuildManifest.json",
+            "sha256": "2ca4f9d7742d3f516917895ec990731213acd08b8d9e419f03d3865625428b03",
+            "bytes": 4228,
+            "selector": "whole JSON",
+            "decodedLeafCount": 73
+        },
+        {
+            "runColumn": 6,
+            "metric": "aio_receipt",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T165146902Z-36b2c165\\aio-receipt.json",
+            "sha256": "c876aac8ce865f2ca004602e420ce9d05150ad08b935695721520b347827f1f2",
+            "bytes": 7101,
+            "selector": "whole JSON",
+            "decodedLeafCount": 122
+        },
+        {
+            "runColumn": 6,
+            "metric": "gameft_sw",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T165146902Z-36b2c165\\gameft-sw.json",
+            "sha256": "fa9315574c214afb7c5f7b7b10da256de1807ef9c53435f58c8e4d1db3817377",
+            "bytes": 1652,
+            "selector": "whole JSON",
+            "decodedLeafCount": 29
+        },
+        {
+            "runColumn": 6,
+            "metric": "verified_archives",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T165146902Z-36b2c165\\verified-archives.json",
+            "sha256": "eb917cdcb8398f5d7e257771a22c5dbfdf7d80b2afbfed5c7a47e30656b4fcdf",
+            "bytes": 1284,
+            "selector": "whole JSON",
+            "decodedLeafCount": 14
+        },
+        {
+            "runColumn": 6,
+            "metric": "depth_culling_context",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T165146902Z-36b2c165\\depth-culling-context.json",
+            "sha256": "b86e9f78f2688f7e351f859ec560dc7ef405cfbe34ed15837b15289628f947bb",
+            "bytes": 1302,
+            "selector": "whole JSON",
+            "decodedLeafCount": 22
+        },
+        {
+            "runColumn": 6,
+            "metric": "culling_campaign_audit",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T165146902Z-36b2c165\\culling-campaign-audit.json",
+            "sha256": "d0b86fc856ad0b07592d27881845a9f6cfe94b7480c6aa96fa888027e4fbb8dd",
+            "bytes": 41607,
+            "selector": "whole JSON",
+            "decodedLeafCount": 1079
+        },
+        {
+            "runColumn": 6,
+            "metric": "culling_before",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T165146902Z-36b2c165\\culling-before.json",
+            "sha256": "a4de520cd643fd13e443bd9f4679ad3948d51c4b0643a69d0119c115ff7c67de",
+            "bytes": 10007,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 149
+        },
+        {
+            "runColumn": 6,
+            "metric": "culling_after",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T165146902Z-36b2c165\\culling-after.json",
+            "sha256": "1e7dd2053caf26da15d502dfaa5623a414e11266376df90a872c0232f894fc1d",
+            "bytes": 10077,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 149
+        },
+        {
+            "runColumn": 6,
+            "metric": "stack_wait_before",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T165146902Z-36b2c165\\stack-wait\\before.json",
+            "sha256": "e97b1ebf6019f1e5bc1b1f780917edd32abf9530ff16b9bf84f85e76d1be2878",
+            "bytes": 85972,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 1201
+        },
+        {
+            "runColumn": 6,
+            "metric": "stack_wait_after",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T165146902Z-36b2c165\\stack-wait\\after.json",
+            "sha256": "5638ec7de52647438c5ae7f837783495a12973ef516063243d0e39c811e96498",
+            "bytes": 85970,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 1201
+        },
+        {
+            "runColumn": 6,
+            "metric": "save_08_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T165146902Z-36b2c165\\save-1-health-stop.json",
+            "sha256": "a15aa6c2b62fc402737030402bffb4c48f4210c64adbbdb24b90ad0fe6d91f63",
+            "bytes": 142573,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2123
+        },
+        {
+            "runColumn": 6,
+            "metric": "save_11_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T165146902Z-36b2c165\\save-2-health-stop.json",
+            "sha256": "a8526b83b70fa1fa50817724f479aae49a01fecfb8a27df35bcc7acb57aa1a1d",
+            "bytes": 177514,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2710
+        },
+        {
+            "runColumn": 6,
+            "metric": "save_09_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T165146902Z-36b2c165\\save-3-health-stop.json",
+            "sha256": "481018c4cacdd89cbc9741c9db42a094c0ccf279495cd6648f236ec305a44274",
+            "bytes": 136585,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2008
+        },
+        {
+            "runColumn": 6,
+            "metric": "save_12_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T165146902Z-36b2c165\\save-4-health-stop.json",
+            "sha256": "90bc18e34c2af342617846c3631296f44dfb298f93e4c89a98872168a1a65af5",
+            "bytes": 171928,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2614
+        },
+        {
+            "runColumn": 6,
+            "metric": "save_10_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T165146902Z-36b2c165\\save-5-health-stop.json",
+            "sha256": "874b14bec7bf08481a0d2b9026e01485f488370ab913cadd305eb5f6eba74b44",
+            "bytes": 136661,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2008
+        },
+        {
+            "runColumn": 6,
+            "metric": "save_13_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T165146902Z-36b2c165\\save-6-health-stop.json",
+            "sha256": "547ab6d2d3027aba09f72ffff887ea9f1f7b32841de6ac5c3041b51ef9ffa1dc",
+            "bytes": 193188,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2979
+        },
+        {
+            "runColumn": 6,
+            "metric": "wpr_analysis",
+            "source": "build\\bisect\\measurements\\depth-culling-wpr-20260916\\gameft-sw-20260916T165146902Z-36b2c165-analysis.json",
+            "sha256": "aa40c0a1078dacbf91b7b9581ae25f1f353294cfad06a83beca4d458c88a5914",
+            "bytes": 4066071,
+            "selector": "whole JSON",
+            "decodedLeafCount": 33967
+        },
+        {
+            "runColumn": 6,
+            "metric": "wpr_contexts",
+            "source": "build\\bisect\\measurements\\depth-culling-wpr-20260916\\gameft-sw-20260916T165146902Z-36b2c165-contexts.json",
+            "sha256": "96dbd1fef2a79488664928325a66a8bea9c16ecf717f75f5feb9d6d4d0287d40",
+            "bytes": 317077,
+            "selector": "whole JSON",
+            "decodedLeafCount": 7547
+        },
+        {
+            "runColumn": 7,
+            "metric": "quick_summary",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T172315555Z-43f348bd\\quick-summary.json",
+            "sha256": "cbc7704f4390b57b629a1c3cf51074523fc8278cf3c66c402454000b6a151078",
+            "bytes": 295730,
+            "selector": "whole JSON",
+            "decodedLeafCount": 8273
+        },
+        {
+            "runColumn": 7,
+            "metric": "provenance",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T172315555Z-43f348bd\\provenance.json",
+            "sha256": "d096881c0c395eaff7f175dc87fce12e94f4846a7e925a7b1f08af71bbbb9e14",
+            "bytes": 6909,
+            "selector": "whole JSON",
+            "decodedLeafCount": 100
+        },
+        {
+            "runColumn": 7,
+            "metric": "CSX.BuildManifest",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T172315555Z-43f348bd\\CSX.BuildManifest.json",
+            "sha256": "2ca4f9d7742d3f516917895ec990731213acd08b8d9e419f03d3865625428b03",
+            "bytes": 4228,
+            "selector": "whole JSON",
+            "decodedLeafCount": 73
+        },
+        {
+            "runColumn": 7,
+            "metric": "aio_receipt",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T172315555Z-43f348bd\\aio-receipt.json",
+            "sha256": "c876aac8ce865f2ca004602e420ce9d05150ad08b935695721520b347827f1f2",
+            "bytes": 7101,
+            "selector": "whole JSON",
+            "decodedLeafCount": 122
+        },
+        {
+            "runColumn": 7,
+            "metric": "gameft_sw",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T172315555Z-43f348bd\\gameft-sw.json",
+            "sha256": "9b60c7f458a925e283500c2280f12cb1215f6ed07d5f339bb67819af6630790b",
+            "bytes": 1652,
+            "selector": "whole JSON",
+            "decodedLeafCount": 29
+        },
+        {
+            "runColumn": 7,
+            "metric": "verified_archives",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T172315555Z-43f348bd\\verified-archives.json",
+            "sha256": "e96ae01a86564dc377b4ed336d8e8c03c422c7487f89555e9679ec70d4aca203",
+            "bytes": 1280,
+            "selector": "whole JSON",
+            "decodedLeafCount": 14
+        },
+        {
+            "runColumn": 7,
+            "metric": "depth_culling_context",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T172315555Z-43f348bd\\depth-culling-context.json",
+            "sha256": "13e25708a0e99d60c356e7148a8dbb93128fc7271cfc58dfffd0bb6730836e3e",
+            "bytes": 1438,
+            "selector": "whole JSON",
+            "decodedLeafCount": 23
+        },
+        {
+            "runColumn": 7,
+            "metric": "culling_before",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T172315555Z-43f348bd\\culling-before.json",
+            "sha256": "04177c1726052761cbb8c94e7d560fcfb585542f83a968ad11194475f20b2772",
+            "bytes": 19424,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 149
+        },
+        {
+            "runColumn": 7,
+            "metric": "culling_after",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T172315555Z-43f348bd\\culling-after.json",
+            "sha256": "132fdd75bba55945db3065ca3ee4a3a001b14589905e5299a9a596bf7e85efed",
+            "bytes": 19400,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 149
+        },
+        {
+            "runColumn": 7,
+            "metric": "stack_wait_before",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T172315555Z-43f348bd\\stack-wait\\before.json",
+            "sha256": "d12c1fd9e4b79db346ee77b3555ea85cf80d5220b78aeb52cbba507673d7a2ab",
+            "bytes": 85968,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 1201
+        },
+        {
+            "runColumn": 7,
+            "metric": "stack_wait_after",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T172315555Z-43f348bd\\stack-wait\\after.json",
+            "sha256": "ba866f4c913c3ef5ab1f8bd98b6d7dcd429555256496562b8d7329a89b04f36c",
+            "bytes": 85966,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 1201
+        },
+        {
+            "runColumn": 7,
+            "metric": "save_08_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T172315555Z-43f348bd\\save-1-health-stop.json",
+            "sha256": "ab603b08d2ae6a48f7a5d398639823d487d7b926eb5f4bfdfdc624f988be2a33",
+            "bytes": 142559,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2123
+        },
+        {
+            "runColumn": 7,
+            "metric": "save_11_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T172315555Z-43f348bd\\save-2-health-stop.json",
+            "sha256": "0f17eb26a936dc6601745b882b7c1c9eee213aeadbc1718df048cc58e704d304",
+            "bytes": 177488,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2710
+        },
+        {
+            "runColumn": 7,
+            "metric": "save_09_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T172315555Z-43f348bd\\save-3-health-stop.json",
+            "sha256": "cfd371022be6dc86963d63b0b95b63cf318b02e7ada3ddf94296c3a77bd52bfd",
+            "bytes": 136591,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2008
+        },
+        {
+            "runColumn": 7,
+            "metric": "save_12_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T172315555Z-43f348bd\\save-4-health-stop.json",
+            "sha256": "94645af22b272bc6b1537348bbf4abf1812f1676904f93e7bc439b3ca78c634b",
+            "bytes": 171934,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2614
+        },
+        {
+            "runColumn": 7,
+            "metric": "save_10_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T172315555Z-43f348bd\\save-5-health-stop.json",
+            "sha256": "2434698745502b792047f64e086ce77e3f68403e2119ed407101b2fc93665ca2",
+            "bytes": 136667,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2008
+        },
+        {
+            "runColumn": 7,
+            "metric": "save_13_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T172315555Z-43f348bd\\save-6-health-stop.json",
+            "sha256": "19de832a32ef5f9493e372fa983c468912fcead50e5a36272195d21ceacce3ed",
+            "bytes": 177696,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2710
+        },
+        {
+            "runColumn": 7,
+            "metric": "wpr_analysis",
+            "source": "build\\bisect\\measurements\\depth-culling-wpr-20260916\\gameft-sw-20260916T172315555Z-43f348bd-analysis.json",
+            "sha256": "37c58eb934c1488bcfec7f62c51b9cf7d52b5badb8842b912774007b84794921",
+            "bytes": 4066118,
+            "selector": "whole JSON",
+            "decodedLeafCount": 33293
+        },
+        {
+            "runColumn": 7,
+            "metric": "wpr_contexts",
+            "source": "build\\bisect\\measurements\\depth-culling-wpr-20260916\\gameft-sw-20260916T172315555Z-43f348bd-contexts.json",
+            "sha256": "6289c1e302fe91a78a491c03c5a3aa747f56a4248217abd2b3cea077761e8dce",
+            "bytes": 327972,
+            "selector": "whole JSON",
+            "decodedLeafCount": 7544
+        },
+        {
+            "runColumn": 8,
+            "metric": "quick_summary",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T190211584Z-812d171f\\quick-summary.json",
+            "sha256": "efb0986fdebff41488ddcdd2f8f6333315a00be1befe56a76e11b20d46af3b6b",
+            "bytes": 300696,
+            "selector": "whole JSON",
+            "decodedLeafCount": 8372
+        },
+        {
+            "runColumn": 8,
+            "metric": "provenance",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T190211584Z-812d171f\\provenance.json",
+            "sha256": "4c2679bdfd2538dd445a49fbabfd0a7c7f0c6a85c57f48b1a3edc4138aacd410",
+            "bytes": 6909,
+            "selector": "whole JSON",
+            "decodedLeafCount": 100
+        },
+        {
+            "runColumn": 8,
+            "metric": "CSX.BuildManifest",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T190211584Z-812d171f\\CSX.BuildManifest.json",
+            "sha256": "2ca4f9d7742d3f516917895ec990731213acd08b8d9e419f03d3865625428b03",
+            "bytes": 4228,
+            "selector": "whole JSON",
+            "decodedLeafCount": 73
+        },
+        {
+            "runColumn": 8,
+            "metric": "aio_receipt",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T190211584Z-812d171f\\aio-receipt.json",
+            "sha256": "c876aac8ce865f2ca004602e420ce9d05150ad08b935695721520b347827f1f2",
+            "bytes": 7101,
+            "selector": "whole JSON",
+            "decodedLeafCount": 122
+        },
+        {
+            "runColumn": 8,
+            "metric": "gameft_sw",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T190211584Z-812d171f\\gameft-sw.json",
+            "sha256": "33f4f80aba1f8422b578c3a2ff11553fcdb6c877d7e1f86ae7bec365937b6b20",
+            "bytes": 2405,
+            "selector": "whole JSON",
+            "decodedLeafCount": 44
+        },
+        {
+            "runColumn": 8,
+            "metric": "verified_archives",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T190211584Z-812d171f\\verified-archives.json",
+            "sha256": "f0fe2598485a7853b8c9bf96cc8d86c5b330bc221ee2bf4aa89fec47be864663",
+            "bytes": 1270,
+            "selector": "whole JSON",
+            "decodedLeafCount": 14
+        },
+        {
+            "runColumn": 8,
+            "metric": "depth_culling_context",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T190211584Z-812d171f\\depth-culling-context.json",
+            "sha256": "d15f457eab31e5f30e36389d14794827d34df8719d7ef39bfdc517c3a0c4414d",
+            "bytes": 884,
+            "selector": "whole JSON",
+            "decodedLeafCount": 19
+        },
+        {
+            "runColumn": 8,
+            "metric": "settings_delta_vs_legacy2",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T190211584Z-812d171f\\settings-delta-vs-legacy2.json",
+            "sha256": "05ddffc66b46735676388ff39c7734b47a3d35b085c48952a5c90b6c6c6dd635",
+            "bytes": 250,
+            "selector": "whole JSON",
+            "decodedLeafCount": 4
+        },
+        {
+            "runColumn": 8,
+            "metric": "culling_before",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T190211584Z-812d171f\\culling-before.json",
+            "sha256": "8769df601941c830c8939629cc443bd66ec8c57929cae8a443c9400049612506",
+            "bytes": 19406,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 149
+        },
+        {
+            "runColumn": 8,
+            "metric": "culling_after",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T190211584Z-812d171f\\culling-after.json",
+            "sha256": "20a20bd435fecd2432f80923097a4b728c01bee561ad9628a2f3057f2e346bff",
+            "bytes": 19402,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 149
+        },
+        {
+            "runColumn": 8,
+            "metric": "stack_wait_before",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T190211584Z-812d171f\\stack-wait\\before.json",
+            "sha256": "89a17ed97ea6b1b151be73ea38c78c9cbbaa660bb3e401c1113986d55c947250",
+            "bytes": 85976,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 1201
+        },
+        {
+            "runColumn": 8,
+            "metric": "stack_wait_after",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T190211584Z-812d171f\\stack-wait\\after.json",
+            "sha256": "91c11b79464badbaf4175f9cdf9e97b0a6893f25e87b9ec81c3f3af548466d39",
+            "bytes": 85974,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 1201
+        },
+        {
+            "runColumn": 8,
+            "metric": "save_08_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T190211584Z-812d171f\\save-1-health-stop.json",
+            "sha256": "487d4b0c6caa142cefc21706c8ace4667881ea465db1ce2f9b5285cb7642e67b",
+            "bytes": 142609,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2123
+        },
+        {
+            "runColumn": 8,
+            "metric": "save_11_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T190211584Z-812d171f\\save-2-health-stop.json",
+            "sha256": "13dfa65b6b268df9047518e1c05888c3a4bbb3d1fe518b45ed7d4cf2e97c8a0d",
+            "bytes": 178195,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2718
+        },
+        {
+            "runColumn": 8,
+            "metric": "save_09_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T190211584Z-812d171f\\save-3-health-stop.json",
+            "sha256": "279664e23d029e41479d4b610403efcb4dd7c36c69f90480304e3b34a3f4c03c",
+            "bytes": 136635,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2008
+        },
+        {
+            "runColumn": 8,
+            "metric": "save_12_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T190211584Z-812d171f\\save-4-health-stop.json",
+            "sha256": "7fb6f025c69b11c5032845532b9eb0deb81295a5d6672c6ff8cb18d8ba119815",
+            "bytes": 171986,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2614
+        },
+        {
+            "runColumn": 8,
+            "metric": "save_10_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T190211584Z-812d171f\\save-5-health-stop.json",
+            "sha256": "d2e6150ce3277299c15f0ecd900cee7270ad81f99ef155039b1f7036b38654c1",
+            "bytes": 136693,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2008
+        },
+        {
+            "runColumn": 8,
+            "metric": "save_13_producer_final",
+            "source": "build\\bisect\\measurements\\gameft-sw-20260916T190211584Z-812d171f\\save-6-health-stop.json",
+            "sha256": "7f0d7213119945a38d6ba91c60ce523234c98f7daf8e441cd88f9d3082f3a021",
+            "bytes": 185427,
+            "selector": "data excluding duplicate rawResult envelope",
+            "decodedLeafCount": 2842
+        },
+        {
+            "runColumn": 8,
+            "metric": "wpr_analysis",
+            "source": "build\\bisect\\measurements\\depth-culling-wpr-20260916\\gameft-sw-20260916T190211584Z-812d171f-analysis.json",
+            "sha256": "97b7dd7fd4bd7d087fc7849211d085fef755b91a8c7b569d5dd72a5c65748cfc",
+            "bytes": 3001169,
+            "selector": "whole JSON",
+            "decodedLeafCount": 30617
+        },
+        {
+            "runColumn": 8,
+            "metric": "wpr_contexts",
+            "source": "build\\bisect\\measurements\\depth-culling-wpr-20260916\\gameft-sw-20260916T190211584Z-812d171f-contexts.json",
+            "sha256": "d6e83b9625e701c4bf99ae8032d90e1ee6c18717e29883c294e6c824dee32d0b",
+            "bytes": 318900,
+            "selector": "whole JSON",
+            "decodedLeafCount": 7473
+        }
+    ],
+    "analysisScriptHashes": {
+        "analyze-culling-wpr-20260916.py": "4c9cbc292f4e2bc85dce7631afc24115bd11748f763af12f0cb7aa2f9f66ff8f",
+        "analyze-depth-culling-20260916.py": "56d5e658d5b6b483166e8b2b22dbd1ece1c931707c0dd832764877068f19d607",
+        "culling-tail-cadence-20260916.py": "86299243f8dc47ffc7de36c6bc8fcb8b466fa19b4e473aef959080e86f0e8f6e",
+        "culling-wpr-20260916.py": "d0cd6b6ae738c718b6ae609a82b1ed06e055ab7386282ae5a49e9ef6b589b389",
+        "culling-wpr-contexts-20260916.py": "2c1179ba2292be08bfaca59eba3a82d1d89a576bd5e7d1b94a6cf05b1b43babf",
+        "publish-culling-record-20260916.py": "4c8a14fea30197bc3ea1cec97b01c5f808973f69773ce6ed444d0ba0f1766822",
+        "report-culling-wpr-20260916.py": "b0139c104a8fee1f6982fe8e1ab2adc6dc88faf7e07dd3f0f53d1d20b6cab26d",
+        "write-depth-culling-report-20260916.py": "8286d9ab412003b8d58c3ec4724ba297caec243ec6959bec23d9d22e0f4cb62e"
+    },
+    "excludedRawData": ["ETL", "raw fpsVR CSV", "raw WPA export rows", "binaries", "PDB"],
+    "limitations": [
+        "Balanced 2 Save 13 uncertain interaction retained",
+        "No new measurement or GPU pass attribution",
+        "No private native/vendor symbols or per-run live-byte equality proof",
+        "Sampled spike endpoint scopes do not fully attribute single frames",
+        "Settings snapshots do not prove transient settings or identical HMD pose",
+        "No formal physical-HMD visual qualification"
+    ],
+    "historicalLedgers": {
+        "vr-render-scale-ledger-0001-history.csv": "aaed3cfcf8332c26091f681545589398743f04f7c14d723c94ca10ea3cc40ff8",
+        "vr-render-scale-ledger-0002-history.csv": "d91538d67bd94ad5e4c0a7283a2b10fac124506b3f1137f2dd8203754451d89b",
+        "vr-render-scale-ledger-0003-pr73.csv": "952adfc9f40967923f562db4d23698517cb8426560d4b102dd934fca253f5bee"
+    },
+    "unreachedScalarRepresentation": "not reached (saved null); original null preserved in complete JSON details"
+}

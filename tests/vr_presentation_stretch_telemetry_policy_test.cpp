@@ -253,7 +253,7 @@ namespace
 		       saturated.metrics.completedQpcTicks == maximum;
 	}
 
-	constexpr bool CoversPresentationStretchFrameAcceptanceBound()
+	constexpr bool CoversPresentationStretchDiagnosticFrameThreshold()
 	{
 		using namespace VRPresentationStretchTelemetryPolicy;
 		State state{};
@@ -261,14 +261,14 @@ namespace
 		Observe(state, { ObservationKind::AllowedStretch, 1, 80, 800, 1010 });
 		Observe(state, { ObservationKind::AllowedStretch, 0, 81, 801, 1100 });
 		Observe(state, { ObservationKind::AllowedStretch, 1, 81, 801, 1110 });
-		const auto accepted = Inspect(state, 1150);
+		const auto withinThreshold = Inspect(state, 1150);
 		Observe(state, { ObservationKind::AllowedStretch, 0, 82, 802, 1200 });
 		Observe(state, { ObservationKind::AllowedStretch, 1, 82, 802, 1210 });
-		const auto rejected = Stop(state, 1250);
-		return kMaximumAcceptedPresentationStretchFrames == 2 &&
-		       accepted.activeFrames <= kMaximumAcceptedPresentationStretchFrames &&
-		       rejected.snapshot.maximumFrames >
-		           kMaximumAcceptedPresentationStretchFrames;
+		const auto beyondThreshold = Stop(state, 1250);
+		return kPresentationStretchDiagnosticFrameThreshold == 2 &&
+		       withinThreshold.activeFrames <= kPresentationStretchDiagnosticFrameThreshold &&
+		       beyondThreshold.snapshot.maximumFrames >
+		           kPresentationStretchDiagnosticFrameThreshold;
 	}
 
 	static_assert(CoversPresentationStretchEpisodeLifecycle());
@@ -276,7 +276,64 @@ namespace
 	static_assert(CoversPresentationStretchCycleIdentityEdges());
 	static_assert(CoversPresentationStretchActiveAtStopAccounting());
 	static_assert(CoversPresentationStretchUnavailableTimingAndSaturation());
-	static_assert(CoversPresentationStretchFrameAcceptanceBound());
+	static_assert(CoversPresentationStretchDiagnosticFrameThreshold());
+
+	bool CoversGuardAttributedEpisodeTrace()
+	{
+		using namespace VRPresentationStretchTelemetryPolicy;
+		State state{};
+		state.captureEpisodeTrace = true;
+		state.completedEpisodeTrace.reserve(kMaximumEpisodeTraceEntries);
+		for (std::uint32_t frame = 1; frame <= 6; ++frame) {
+			for (std::uint32_t eye = 0; eye < 2; ++eye)
+				Observe(state, { ObservationKind::AllowedStretch, eye, frame, frame,
+								   1000u + frame * 100u + eye, 7u, StretchReason::VendorCooldown });
+		}
+		const auto during = Inspect(state, 1650);
+		if (during.activeFrames != 6 || !state.completedEpisodeTrace.empty())
+			return false;
+		Observe(state, { ObservationKind::Other, 0, 7, 7, 1700 });
+		Observe(state, { ObservationKind::Other, 1, 7, 7, 1701 });
+		const auto stopped = Stop(state, 1800);
+		if (stopped.activeAtStop || stopped.snapshot.maximumFrames != 6 ||
+			state.completedEpisodeTrace.size() != 1 ||
+			state.completedEpisodeTrace[0].frames != 6 ||
+			state.completedEpisodeTrace[0].transitionEpoch != 7 ||
+			state.completedEpisodeTrace[0].unattributedFrames != 0 ||
+			!state.completedEpisodeTrace[0].epochCoherent)
+			return false;
+
+		Reset(state);
+		state.captureEpisodeTrace = true;
+		Observe(state, { ObservationKind::AllowedStretch, 0, 8, 8, 1900 });
+		Observe(state, { ObservationKind::AllowedStretch, 1, 8, 8, 1901 });
+		(void)Stop(state, 2000);
+		return state.completedEpisodeTrace.size() == 1 &&
+		       state.completedEpisodeTrace[0].unattributedFrames == 1;
+	}
+
+	bool CoversBoundedAndIncoherentEpisodeTrace()
+	{
+		using namespace VRPresentationStretchTelemetryPolicy;
+		State state{};
+		state.captureEpisodeTrace = true;
+		state.completedEpisodeTrace.reserve(kMaximumEpisodeTraceEntries);
+		for (std::uint32_t frame = 1; frame <= kMaximumEpisodeTraceEntries + 1; ++frame) {
+			const auto cycle = static_cast<std::uint64_t>(frame) * 2;
+			Observe(state, { ObservationKind::AllowedStretch, 0, frame, cycle, cycle * 100,
+							   7, StretchReason::DeferredRetry });
+			Observe(state, { ObservationKind::AllowedStretch, 1, frame, cycle, cycle * 100 + 1,
+							   8, StretchReason::DeferredRetry });
+			Observe(state, { ObservationKind::Other, 0, frame, cycle + 1, cycle * 100 + 2 });
+			Observe(state, { ObservationKind::Other, 1, frame, cycle + 1, cycle * 100 + 3 });
+		}
+		(void)Stop(state, 30000);
+		return state.metrics.completedEpisodes == kMaximumEpisodeTraceEntries + 1 &&
+		       state.completedEpisodeTrace.size() == kMaximumEpisodeTraceEntries &&
+		       state.episodeTraceOverflow == 1 &&
+		       !state.completedEpisodeTrace[0].epochCoherent &&
+		       state.completedEpisodeTrace[0].unattributedFrames == 1;
+	}
 }
 
-int main() {}
+int main() { return CoversGuardAttributedEpisodeTrace() && CoversBoundedAndIncoherentEpisodeTrace() ? 0 : 1; }

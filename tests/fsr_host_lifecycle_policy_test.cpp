@@ -4,6 +4,12 @@ namespace
 {
 	using namespace FSRHostLifecyclePolicy;
 
+	static_assert(!SupportsHostFsr3FeatureLevel(0xB000));
+	static_assert(SupportsHostFsr3FeatureLevel(0xB100));
+	static_assert(SupportsHostFsr3FeatureLevel(0xC000));
+	static_assert(CanAttemptHostFallback(true, false));
+	static_assert(!CanAttemptHostFallback(false, false));
+	static_assert(!CanAttemptHostFallback(true, true));
 	static_assert(!RequiresOwnershipQuarantine(CallDisposition::Succeeded));
 	static_assert(RequiresOwnershipQuarantine(CallDisposition::ReturnedError));
 	static_assert(RequiresOwnershipQuarantine(CallDisposition::Faulted));
@@ -14,6 +20,12 @@ namespace
 	static_assert(ClassifyCallDisposition(false, false) == CallDisposition::ReturnedError);
 	static_assert(ClassifyCallDisposition(true, true) == CallDisposition::Faulted);
 	static_assert(ClassifyCallDisposition(true, false) == CallDisposition::Faulted);
+	static_assert(!CanRetainQuarantinedHostOwnership(false, false));
+	static_assert(CanRetainQuarantinedHostOwnership(true, false));
+	static_assert(!CanRetainQuarantinedHostOwnership(true, true));
+	static_assert(CanQueueHostActivation(false, true));
+	static_assert(CanQueueHostActivation(true, false));
+	static_assert(!CanQueueHostActivation(true, true));
 
 	constexpr bool CoversReleaseAdmission()
 	{

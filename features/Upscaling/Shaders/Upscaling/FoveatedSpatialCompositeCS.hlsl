@@ -1,4 +1,4 @@
-#include "Common/FoveatedMask.hlsli"
+#include "Upscaling/FoveatedBlend.hlsli"
 
 cbuffer FoveatedSpatialCompositeCB : register(b0)
 {
@@ -32,7 +32,7 @@ RWTexture2D<float4> OutputColor : register(u0);
 	float2 centerMax = CenterRectOffset + CenterRectDim;
 	bool inCenterRect = all(float2(outputPos) >= CenterRectOffset) && all(float2(outputPos) < centerMax);
 	if (inCenterRect) {
-		blendWeight = FoveatedComputeCenterBlendWeight(outputUV, Tuning.x, Tuning.y, Tuning.z, CenterOffset);
+		blendWeight = FoveatedComputeCurvedBlendWeight(outputUV, Tuning.x, Tuning.y, Tuning.z, CenterOffset, Tuning.w);
 		if (blendWeight > 0.0) {
 			float2 centerUV = (float2(outputPos) - CenterRectOffset + 0.5) * InvCenterSourceDim;
 			centerColor = CenterColor.SampleLevel(LinearSampler, centerUV, 0.0);

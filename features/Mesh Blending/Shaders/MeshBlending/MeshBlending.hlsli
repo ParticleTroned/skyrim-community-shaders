@@ -8,9 +8,9 @@ namespace MeshBlending
 	static const float kInvalidDepthEpsilon = 1.0e-6f;
 	static const float kLandscapeActiveWeightThreshold = 0.01f;
 	static const uint kLandscapeLayerCount = 6u;
-	static const uint kLandscapeClassShift = 10u;
+	static const uint kLandscapeClassShift = 11u;
 	static const uint kLandscapeClassBits = 2u;
-	static const uint kLandscapeClassMask = 0x003FFC00u;
+	static const uint kLandscapeClassMask = 0x007FF800u;
 
 	namespace LandscapeClass
 	{
@@ -80,8 +80,8 @@ namespace MeshBlending
 		uint dominantHardLayer = 0u;
 		float dominantHardWeight = -1.0f;
 
-		[unroll]
-		for (uint i = 0u; i < kLandscapeLayerCount; ++i) {
+		[unroll] for (uint i = 0u; i < kLandscapeLayerCount; ++i)
+		{
 			active[i] = IsLandscapeLayerActive(original[i]);
 			classes[i] = GetLandscapeClass(descriptor, i);
 			remapped[i] = original[i];
@@ -137,8 +137,8 @@ namespace MeshBlending
 		}
 
 		float survivingTotal = 0.0f;
-		[unroll]
-		for (uint remapLayer = 0u; remapLayer < kLandscapeLayerCount; ++remapLayer) {
+		[unroll] for (uint remapLayer = 0u; remapLayer < kLandscapeLayerCount; ++remapLayer)
+		{
 			if (!active[remapLayer]) {
 				continue;
 			}
@@ -174,8 +174,8 @@ namespace MeshBlending
 		// harmless rounding overshoot must not make the entire material darker.
 		const float survivorScale = survivingTotal < activeTotal ? activeTotal / survivingTotal : 1.0f;
 		bool changed = false;
-		[unroll]
-		for (uint normalizeLayer = 0u; normalizeLayer < kLandscapeLayerCount; ++normalizeLayer) {
+		[unroll] for (uint normalizeLayer = 0u; normalizeLayer < kLandscapeLayerCount; ++normalizeLayer)
+		{
 			if (active[normalizeLayer] && remapped[normalizeLayer] > 0.0f) {
 				remapped[normalizeLayer] *= survivorScale;
 			}

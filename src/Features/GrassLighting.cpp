@@ -78,7 +78,7 @@ void GrassLighting::DrawComplexGrassDetectionThreshold()
 		ImGuiSliderFlags_AlwaysClamp);
 	SanitizeSettings();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Controls how strictly non-PBR complex grass textures are detected. Lower values are more strict.");
+		ImGui::TextUnformatted("Controls how strictly complex grass textures are detected. Lower values are more strict.");
 		ImGui::TextUnformatted("Classifying fewer textures as complex can reduce enhanced normal and specular work, but may change their appearance.");
 		ImGui::TextUnformatted("The performance effect depends on the grass textures currently visible.");
 	}

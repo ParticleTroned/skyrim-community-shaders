@@ -1,9 +1,12 @@
 #include "D3D.h"
 
+#include "Deferred.h"
 #include "Features/TerrainBlending.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/Format.h"
+#include "Utils/RendererContextAccess.h"
+#include "Utils/ShaderInclude.h"
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
 #include <algorithm>
@@ -73,6 +76,13 @@ namespace Util
 
 	ID3D11ShaderResourceView* GetCurrentSceneDepthSRV(bool prefer16bit)
 	{
+		auto renderer = globals::game::renderer;
+		if (!renderer)
+			return nullptr;
+		auto& depthCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+		if (globals::deferred && globals::deferred->IsSceneDepthFinal())
+			return depthCopy.depthSRV;
+
 		auto& tb = globals::features::terrainBlending;
 		if (tb.loaded && tb.settings.Enabled) {
 			auto* srv = prefer16bit ? (tb.blendedDepthTexture16 ? tb.blendedDepthTexture16->srv.get() : nullptr) : (tb.blendedDepthTexture ? tb.blendedDepthTexture->srv.get() : nullptr);
@@ -80,10 +90,7 @@ namespace Util
 				return srv;
 		}
 
-		auto renderer = globals::game::renderer;
-		if (renderer)
-			return renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
-		return nullptr;
+		return depthCopy.depthSRV;
 	}
 
 	void BindFrameBufferConstantBuffersForCS(ID3D11DeviceContext* a_context)
@@ -218,41 +225,6 @@ namespace Util
 		Resource->SetPrivateData(WKPDID_D3DDebugObjectNameT, len, buffer);
 	}
 
-	struct CustomInclude : public ID3DInclude
-	{
-		HRESULT Open([[maybe_unused]] D3D_INCLUDE_TYPE IncludeType, LPCSTR pFileName, [[maybe_unused]] LPCVOID pParentData, LPCVOID* ppData, UINT* pBytes) override
-		{
-			std::filesystem::path filePath = pFileName;
-			filePath = L"Data\\Shaders" / filePath;
-
-			std::ifstream file(filePath, std::ios::binary);
-			if (!file.is_open()) {
-				*ppData = NULL;
-				*pBytes = 0;
-				return E_FAIL;
-			}
-
-			// Get filesize
-			file.seekg(0, std::ios::end);
-			UINT size = static_cast<UINT>(file.tellg());
-			file.seekg(0, std::ios::beg);
-
-			// Create buffer and read file
-			char* data = new char[size];
-			file.read(data, size);
-			*ppData = data;
-			*pBytes = size;
-			return S_OK;
-		}
-
-		HRESULT Close(LPCVOID pData) override
-		{
-			if (pData)
-				delete[] pData;
-			return S_OK;
-		}
-	};
-
 	ID3D11DeviceChild* CompileShader(
 		const wchar_t* FilePath,
 		const std::vector<std::pair<const char*, const char*>>& Defines,
@@ -279,7 +251,7 @@ namespace Util
 		};
 		auto device = globals::d3d::device;
 
-		CustomInclude include;
+		CustomInclude include(L"Data\\Shaders", FilePath);
 
 		// Build defines (aka convert vector->D3DCONSTANT array)
 		std::vector<D3D_SHADER_MACRO> macros;
@@ -641,8 +613,13 @@ namespace Util
 		namespace fs = std::filesystem;
 
 		DirectX::ScratchImage cpuImage;
-		if (const auto hr = CaptureTexture(device, context, tex, cpuImage); FAILED(hr))
-			return hr;
+		{
+			const RendererOwnership ownership(GetRendererContextLock(globals::game::renderer, context), true);
+			if (!ownership)
+				return E_POINTER;
+			if (const auto hr = CaptureTexture(device, context, tex, cpuImage); FAILED(hr))
+				return hr;
+		}
 
 		const auto parent = path.parent_path();
 		std::error_code ec;

@@ -13,6 +13,11 @@
 #include <cstring>
 #include <type_traits>
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include <array>
+#	include <chrono>
+#endif
+
 namespace VRDepthCullingTemporal
 {
 	namespace
@@ -44,8 +49,19 @@ namespace VRDepthCullingTemporal
 		std::atomic_uint64_t g_producerPoseEpoch{ 0 };
 		std::atomic<Mode> g_mode{ Mode::Balanced };
 		std::atomic_uint64_t g_policyEpoch{ 2 };
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		VRDepthCullingTelemetryPolicy::WriterGate g_telemetryGate;
 		std::atomic_uint64_t g_envelopeMisses{ 0 };
+		std::atomic_uint64_t g_recoveryAttempts{ 0 };
+		std::atomic_uint64_t g_objectsInspected{ 0 };
+		std::atomic_uint64_t g_invalidTransforms{ 0 };
+		std::atomic_uint64_t g_invalidMotionEnvelopes{ 0 };
+		std::atomic_uint64_t g_frustumTests{ 0 };
+		std::atomic_uint64_t g_totalEligible{ 0 };
 		std::atomic_uint64_t g_totalPromoted{ 0 };
+		std::atomic_uint64_t g_totalDurationNanoseconds{ 0 };
+		std::atomic_uint64_t g_maximumDurationNanoseconds{ 0 };
+		std::array<std::atomic_uint64_t, Status::DurationBinCount> g_durationHistogram{};
 		std::atomic_uint32_t g_lastObjectCount{ 0 };
 		std::atomic_uint32_t g_lastEligibleCount{ 0 };
 		std::atomic_uint32_t g_lastPromotedCount{ 0 };
@@ -56,6 +72,60 @@ namespace VRDepthCullingTemporal
 			g_lastEligibleCount.store(0, std::memory_order_relaxed);
 			g_lastPromotedCount.store(0, std::memory_order_relaxed);
 		}
+
+		void UpdateMaximum(std::atomic_uint64_t& a_target, std::uint64_t a_value)
+		{
+			auto current = a_target.load(std::memory_order_relaxed);
+			while (current < a_value &&
+				   !a_target.compare_exchange_weak(
+					   current, a_value, std::memory_order_relaxed, std::memory_order_relaxed)) {}
+		}
+
+		struct RecoveryTelemetryScope
+		{
+			RecoveryTelemetryScope()
+			{
+				if (!g_telemetryGate.TryEnter())
+					return;
+				active = true;
+				started = std::chrono::steady_clock::now();
+			}
+			RecoveryTelemetryScope(const RecoveryTelemetryScope&) = delete;
+			RecoveryTelemetryScope& operator=(const RecoveryTelemetryScope&) = delete;
+
+			~RecoveryTelemetryScope()
+			{
+				if (!active)
+					return;
+				const auto elapsed = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+					std::chrono::steady_clock::now() - started)
+						.count());
+				g_envelopeMisses.fetch_add(coherenceMisses, std::memory_order_relaxed);
+				g_recoveryAttempts.fetch_add(recoveryAttempts, std::memory_order_relaxed);
+				g_objectsInspected.fetch_add(objectsInspected, std::memory_order_relaxed);
+				g_invalidTransforms.fetch_add(invalidTransforms, std::memory_order_relaxed);
+				g_invalidMotionEnvelopes.fetch_add(invalidMotionEnvelopes, std::memory_order_relaxed);
+				g_frustumTests.fetch_add(frustumTests, std::memory_order_relaxed);
+				g_totalEligible.fetch_add(eligible, std::memory_order_relaxed);
+				g_totalPromoted.fetch_add(promoted, std::memory_order_relaxed);
+				g_totalDurationNanoseconds.fetch_add(elapsed, std::memory_order_relaxed);
+				UpdateMaximum(g_maximumDurationNanoseconds, elapsed);
+				g_durationHistogram[VRDepthCullingTelemetryPolicy::DurationBin(elapsed)].fetch_add(1, std::memory_order_relaxed);
+				g_telemetryGate.Leave();
+			}
+
+			bool active = false;
+			std::chrono::steady_clock::time_point started{};
+			std::uint64_t coherenceMisses = 1;
+			std::uint64_t recoveryAttempts = 0;
+			std::uint64_t objectsInspected = 0;
+			std::uint64_t invalidTransforms = 0;
+			std::uint64_t invalidMotionEnvelopes = 0;
+			std::uint64_t frustumTests = 0;
+			std::uint64_t eligible = 0;
+			std::uint64_t promoted = 0;
+		};
+#endif
 
 		bool IsBalancedRecoveryActive(std::uint64_t a_cullingEpoch, std::uint64_t a_policyEpoch)
 		{
@@ -102,7 +172,6 @@ namespace VRDepthCullingTemporal
 			}
 			const auto cullingEpoch = g_cullingEpoch.load(std::memory_order_acquire);
 
-			// Keep the pose warm so switching from Performance to Balanced is valid immediately.
 			const auto* camera = RE::Main::WorldRootCamera();
 			if (!camera) {
 				g_producerPose.valid = false;
@@ -145,12 +214,23 @@ namespace VRDepthCullingTemporal
 				motion.translationSquared);
 			if (viewCoherent)
 				return;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			RecoveryTelemetryScope telemetry;
+			if (telemetry.active)
+				ClearLastRecoveryStatus();
+#endif
 			MotionEnvelope envelope{};
-			if (!TryBuildMotionEnvelope(motion.rotationCosine, motion.translationSquared, envelope))
+			if (!TryBuildMotionEnvelope(motion.rotationCosine, motion.translationSquared, envelope)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (telemetry.active)
+					++telemetry.invalidMotionEnvelopes;
+#endif
 				return;
-
-			g_envelopeMisses.fetch_add(1, std::memory_order_relaxed);
-			ClearLastRecoveryStatus();
+			}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (telemetry.active)
+				telemetry.recoveryAttempts = 1;
+#endif
 
 			auto* bytes = static_cast<std::byte*>(a_culler);
 			const auto objectCount = ReadCullerField<std::uint32_t>(bytes, kObjectCountOffset);
@@ -164,14 +244,25 @@ namespace VRDepthCullingTemporal
 				return;
 
 			CandidateSet<kBalancedPromotionBudget> candidates;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			std::uint32_t eligibleCount = 0;
+#endif
 			for (std::uint32_t index = 0; index < objectCount; ++index) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (telemetry.active)
+					++telemetry.objectsInspected;
+#endif
 				if (results[index] != 0)
 					continue;
 
 				BoundingSphere sphere{};
-				if (!TryBuildBoundingSphere(transforms[index], sphere))
+				if (!TryBuildBoundingSphere(transforms[index], sphere)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					if (telemetry.active)
+						++telemetry.invalidTransforms;
+#endif
 					continue;
+				}
 				const RE::NiPoint3 center{ sphere.center[0], sphere.center[1], sphere.center[2] };
 				const auto positionDelta = center - camera->world.translate;
 				const float distanceSquared = positionDelta.SqrLength();
@@ -180,20 +271,46 @@ namespace VRDepthCullingTemporal
 						distanceSquared,
 						envelope,
 						motionExpansion)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					if (telemetry.active)
+						++telemetry.invalidMotionEnvelopes;
+#endif
 					continue;
 				}
 				const float expandedRadius = sphere.radius + motionExpansion;
-				if (!std::isfinite(expandedRadius) || expandedRadius < sphere.radius)
+				if (!std::isfinite(expandedRadius) || expandedRadius < sphere.radius) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					if (telemetry.active)
+						++telemetry.invalidMotionEnvelopes;
+#endif
 					continue;
+				}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (telemetry.active)
+					++telemetry.frustumTests;
+#endif
 				const bool directlyVisible = camera->PointInFrustum(center, sphere.radius);
-				if (!directlyVisible && !camera->PointInFrustum(center, expandedRadius))
-					continue;
+				if (!directlyVisible) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					if (telemetry.active)
+						++telemetry.frustumTests;
+#endif
+					if (!camera->PointInFrustum(center, expandedRadius))
+						continue;
+				}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 				++eligibleCount;
+#endif
 				candidates.Add({ index, CalculateRiskScore(sphere.radius, distanceSquared), directlyVisible });
 			}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			// Candidate discovery is measured even if a policy change cancels promotion.
+			if (telemetry.active)
+				telemetry.eligible = eligibleCount;
+#endif
 			if (!IsBalancedRecoveryActive(cullingEpoch, policyEpoch)) {
 				return;
 			}
@@ -201,13 +318,17 @@ namespace VRDepthCullingTemporal
 			for (std::size_t index = 0; index < candidates.Size(); ++index)
 				results[candidates[index].index] = 1;
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			const auto promotedCount = static_cast<std::uint32_t>(candidates.Size());
-			g_lastObjectCount.store(objectCount, std::memory_order_relaxed);
-			g_lastEligibleCount.store(eligibleCount, std::memory_order_relaxed);
-			g_lastPromotedCount.store(promotedCount, std::memory_order_relaxed);
-			g_totalPromoted.fetch_add(promotedCount, std::memory_order_relaxed);
+			if (telemetry.active) {
+				telemetry.promoted = promotedCount;
+				g_lastObjectCount.store(objectCount, std::memory_order_relaxed);
+				g_lastEligibleCount.store(eligibleCount, std::memory_order_relaxed);
+				g_lastPromotedCount.store(promotedCount, std::memory_order_relaxed);
+			}
 			if (!IsBalancedRecoveryActive(cullingEpoch, policyEpoch))
 				ClearLastRecoveryStatus();
+#endif
 		}
 
 		struct DepthCullingReadback
@@ -268,17 +389,17 @@ namespace VRDepthCullingTemporal
 
 	void SetMode(Mode a_mode)
 	{
-		a_mode = SelectMode(
-			a_mode == Mode::Performance,
-			a_mode == Mode::Legacy);
+		a_mode = NormalizeMode(a_mode);
 		const auto current = g_mode.load(std::memory_order_acquire);
 		if (current == a_mode)
 			return;
 		// The main-thread writer leaves an odd epoch while publishing a new policy.
 		g_policyEpoch.fetch_add(1, std::memory_order_acq_rel);
 		const auto previous = g_mode.exchange(a_mode, std::memory_order_acq_rel);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		if (a_mode != Mode::Balanced)
 			ClearLastRecoveryStatus();
+#endif
 		if (previous == Mode::Legacy || a_mode == Mode::Legacy) {
 			// Legacy does not keep a producer pose warm. Require a new pose whenever
 			// crossing that boundary so Balanced cannot consume an arbitrarily old one.
@@ -296,8 +417,10 @@ namespace VRDepthCullingTemporal
 
 		g_cullingEpoch.fetch_add(1, std::memory_order_acq_rel);
 		g_cullingEnabled.store(a_enabled, std::memory_order_release);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		if (!a_enabled)
 			ClearLastRecoveryStatus();
+#endif
 	}
 
 	Mode GetMode()
@@ -305,6 +428,7 @@ namespace VRDepthCullingTemporal
 		return g_mode.load(std::memory_order_acquire);
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	Status GetStatus()
 	{
 		const auto mode = GetMode();
@@ -313,12 +437,54 @@ namespace VRDepthCullingTemporal
 		return {
 			.installed = g_installed.load(std::memory_order_acquire),
 			.cullingEnabled = cullingEnabled,
+			.telemetryEnabled = g_telemetryGate.IsEnabled(),
 			.mode = mode,
 			.envelopeMisses = g_envelopeMisses.load(std::memory_order_relaxed),
+			.recoveryAttempts = g_recoveryAttempts.load(std::memory_order_relaxed),
+			.objectsInspected = g_objectsInspected.load(std::memory_order_relaxed),
+			.invalidTransforms = g_invalidTransforms.load(std::memory_order_relaxed),
+			.invalidMotionEnvelopes = g_invalidMotionEnvelopes.load(std::memory_order_relaxed),
+			.frustumTests = g_frustumTests.load(std::memory_order_relaxed),
+			.totalEligible = g_totalEligible.load(std::memory_order_relaxed),
 			.totalPromoted = g_totalPromoted.load(std::memory_order_relaxed),
+			.totalDurationNanoseconds = g_totalDurationNanoseconds.load(std::memory_order_relaxed),
+			.maximumDurationNanoseconds = g_maximumDurationNanoseconds.load(std::memory_order_relaxed),
+			.durationHistogram = [&] {
+				std::array<std::uint64_t, Status::DurationBinCount> bins{};
+				for (std::size_t index = 0; index < bins.size(); ++index)
+					bins[index] = g_durationHistogram[index].load(std::memory_order_relaxed);
+				return bins;
+			}(),
 			.lastObjectCount = recoveryActive ? g_lastObjectCount.load(std::memory_order_relaxed) : 0,
 			.lastEligibleCount = recoveryActive ? g_lastEligibleCount.load(std::memory_order_relaxed) : 0,
 			.lastPromotedCount = recoveryActive ? g_lastPromotedCount.load(std::memory_order_relaxed) : 0,
 		};
 	}
+
+	void SetTelemetryEnabled(bool a_enabled)
+	{
+		g_telemetryGate.SetEnabled(a_enabled);
+	}
+
+	bool TryResetStatus()
+	{
+		if (!g_telemetryGate.TryLockForReset())
+			return false;
+		g_envelopeMisses.store(0, std::memory_order_relaxed);
+		g_recoveryAttempts.store(0, std::memory_order_relaxed);
+		g_objectsInspected.store(0, std::memory_order_relaxed);
+		g_invalidTransforms.store(0, std::memory_order_relaxed);
+		g_invalidMotionEnvelopes.store(0, std::memory_order_relaxed);
+		g_frustumTests.store(0, std::memory_order_relaxed);
+		g_totalEligible.store(0, std::memory_order_relaxed);
+		g_totalPromoted.store(0, std::memory_order_relaxed);
+		g_totalDurationNanoseconds.store(0, std::memory_order_relaxed);
+		g_maximumDurationNanoseconds.store(0, std::memory_order_relaxed);
+		for (auto& bin : g_durationHistogram)
+			bin.store(0, std::memory_order_relaxed);
+		ClearLastRecoveryStatus();
+		g_telemetryGate.UnlockAfterReset();
+		return true;
+	}
+#endif
 }

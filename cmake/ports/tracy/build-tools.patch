@@ -1,25 +1,17 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 72901a8c..365724a8 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -193,3 +193,15 @@ if(TRACY_CLIENT_PYTHON)
-
-     add_subdirectory(python)
+@@ -295,3 +295,9 @@
+ if(PROJECT_IS_TOP_LEVEL)
+     set(CMAKE_COLOR_DIAGNOSTICS ON)
  endif()
 +
-+option(VCPKG_CLI_TOOLS "Build Tracy command-line tools (csvexport, capture, import, update)" OFF)
-+option(VCPKG_GUI_TOOLS "Build Tracy GUI profiler application" OFF)
-+if(VCPKG_CLI_TOOLS)
-+    add_subdirectory(csvexport)
-+    add_subdirectory(capture)
-+    add_subdirectory(import)
-+    add_subdirectory(update)
-+endif()
-+if(VCPKG_GUI_TOOLS)
-+    add_subdirectory(profiler)
++option(VCPKG_CLI_TOOLS "Build Tracy command-line tools" OFF)
++option(VCPKG_GUI_TOOLS "Build the Tracy profiler application" OFF)
++if(VCPKG_CLI_TOOLS OR VCPKG_GUI_TOOLS)
++    add_subdirectory(vcpkg-tools)
 +endif()
 diff --git a/cmake/server.cmake b/cmake/server.cmake
-index c12a3408..0d55cf91 100644
 --- a/cmake/server.cmake
 +++ b/cmake/server.cmake
 @@ -1,3 +1,4 @@
@@ -28,7 +20,6 @@ index c12a3408..0d55cf91 100644
 
  set(TRACY_COMMON_SOURCES
 diff --git a/cmake/vendor.cmake b/cmake/vendor.cmake
-index 29f12cfa..40b3e078 100644
 --- a/cmake/vendor.cmake
 +++ b/cmake/vendor.cmake
 @@ -1,3 +1,4 @@
@@ -36,3 +27,44 @@ index 29f12cfa..40b3e078 100644
  # Vendor Specific CMake
  # The Tracy project keeps most vendor source locally
 
+diff --git a/cmake/GitRef.cmake b/cmake/GitRef.cmake
+--- a/cmake/GitRef.cmake
++++ b/cmake/GitRef.cmake
+@@ -1,4 +1,12 @@
+ function(add_git_ref target)
++    if(DEFINED TRACY_GIT_REF)
++        file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/GitRef.hpp"
++            CONTENT "#pragma once\nnamespace tracy { static inline const char* GitRef = \"@TRACY_GIT_REF@\"; }\n"
++            @ONLY)
++        target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
++        return()
++    endif()
++
+     if(NOT DEFINED GIT_REV)
+         set(GIT_REV "HEAD")
+     endif()
+diff --git a/vcpkg-tools/CMakeLists.txt b/vcpkg-tools/CMakeLists.txt
+new file mode 100644
+--- /dev/null
++++ b/vcpkg-tools/CMakeLists.txt
+@@ -0,0 +1,20 @@
++cmake_minimum_required(VERSION 3.25)
++project(TracyTools LANGUAGES C CXX)
++
++set(CMAKE_CXX_STANDARD 20)
++# Shared targets must provide statistics and GUI dependencies to every tool.
++set(NO_STATISTICS OFF)
++set(VENDOR_GUI ${VCPKG_GUI_TOOLS})
++include(../cmake/config.cmake)
++include(../cmake/vendor.cmake)
++include(../cmake/server.cmake)
++
++if(VCPKG_CLI_TOOLS)
++    add_subdirectory(../csvexport csvexport)
++    add_subdirectory(../capture capture)
++    add_subdirectory(../import import)
++    add_subdirectory(../update update)
++endif()
++if(VCPKG_GUI_TOOLS)
++    add_subdirectory(../profiler profiler)
++endif()

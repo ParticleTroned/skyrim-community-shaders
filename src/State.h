@@ -103,7 +103,7 @@ public:
 	spdlog::level::level_enum logLevel = spdlog::level::info;
 
 	float timer = 0;
-	float refractionScale = 0.25f;  // Default LLF heat warp strength
+	float refractionScale = REL::Module::IsVR() ? 0.25f : 0.5f;  // Default LLF heat warp strength
 	static constexpr float kDefaultPbrMetalReflectionScale = 1.0f;
 	static constexpr float kDefaultPbrMetalHighlightScale = 0.25f;
 	float pbrMetalReflectionScale = kDefaultPbrMetalReflectionScale;  // Global scale for PBR metal reflections
@@ -136,6 +136,11 @@ public:
 		TEST,
 		THEME
 	};
+	enum class SettingsApplyMode
+	{
+		Runtime,
+		StartupHydration,
+	};
 
 	void Draw();
 	void Debug();
@@ -163,7 +168,10 @@ public:
 	GetCurrentMainRenderTargetResourcePublicationDiagnostics() const noexcept;
 	bool HasCompleteRenderTargetResourcePublication(uint32_t a_width, uint32_t a_height) const;
 
-	void Load(ConfigMode a_configMode = ConfigMode::USER, bool a_allowReload = true);
+	void Load(
+		ConfigMode a_configMode = ConfigMode::USER,
+		bool a_allowReload = true,
+		SettingsApplyMode a_applyMode = SettingsApplyMode::Runtime);
 	// Returns true only when the main settings file and every required
 	// persistence layer have been saved successfully.
 	bool Save(ConfigMode a_configMode = ConfigMode::USER);
@@ -176,7 +184,11 @@ public:
 	// Current engine-owned save/load work only. Unlike IsSaveLoadSafeModeActive,
 	// this excludes the fixed post-event grace used for mutation/persistence safety.
 	bool IsEngineSaveLoadActivityActive() const;
+	/** Returns a distinct save token only after known ordinary-save work is idle. */
+	uint64_t GetOrdinarySaveRenderRecoveryToken() const;
 	bool IsPersistentMutationBlocked() const;
+	/** Preserves mutation grace while identifying a save without load/reset work. */
+	void NotifyOrdinarySave(uint32_t a_currentFrame);
 	void BeginSaveLoadSafeMode(uint32_t a_currentFrame);
 	void ExtendSaveLoadSafeMode(uint32_t a_currentFrame, uint32_t a_frameCount = kSaveLoadSafeModeGraceFrames);
 	void BeginPersistentMutationBlock(uint32_t a_currentFrame, uint32_t a_frameCount = kSaveMutationBlockGraceFrames);
@@ -189,7 +201,10 @@ public:
 	void SaveToJson(
 		nlohmann::json& o_json,
 		bool a_includeMissingUnloadedFeatures = true);
-	void LoadFromJson(nlohmann::json& i_json, bool a_loadFeatureSettings = true);
+	void LoadFromJson(
+		nlohmann::json& i_json,
+		bool a_loadFeatureSettings = true,
+		SettingsApplyMode a_applyMode = SettingsApplyMode::Runtime);
 
 	void LoadTheme();
 
@@ -325,7 +340,7 @@ public:
 		MeshBlending = 1 << 9
 	};
 
-	static constexpr std::uint32_t MeshBlendingLandscapeClassShift = 10u;
+	static constexpr std::uint32_t MeshBlendingLandscapeClassShift = 11u;
 	static constexpr std::uint32_t MeshBlendingLandscapeClassBits = 2u;
 	static constexpr std::uint32_t MeshBlendingLandscapeClassCount = 6u;
 
@@ -339,9 +354,10 @@ public:
 		THLand5HasDisplacement = 1 << 5,
 		ETMaterialModel = 0b111 << 6,
 		THLandHasDisplacement = 1 << 9,
+		TVMeshVariation = 1 << 10,
 		// Six 2-bit LAND material classes, ordered like the terrain texture layers.
 		// Values are interpreted by MeshBlending as Unknown, Hard, Soft, Reserved.
-		MeshBlendingLandscapeClasses = 0x003FFC00u
+		MeshBlendingLandscapeClasses = 0x007FF800u
 	};
 	static_assert(
 		static_cast<std::uint32_t>(ExtraFeatureDescriptors::MeshBlendingLandscapeClasses) ==
@@ -350,6 +366,7 @@ public:
 		(static_cast<std::uint32_t>(ExtraFeatureDescriptors::MeshBlendingLandscapeClasses) &
 			(static_cast<std::uint32_t>(ExtraFeatureDescriptors::ETMaterialModel) |
 				static_cast<std::uint32_t>(ExtraFeatureDescriptors::THLandHasDisplacement) |
+				static_cast<std::uint32_t>(ExtraFeatureDescriptors::TVMeshVariation) |
 				((1u << MeshBlendingLandscapeClassShift) - 1u))) == 0u);
 
 	bool inWorld = false;
@@ -429,8 +446,8 @@ public:
 		float RefractionScale;          // matches HLSL SharedData::RefractionScale
 		float PBRMetalReflectionScale;  // matches HLSL SharedData::PBRMetalReflectionScale
 		float PBRMetalHighlightScale;   // matches HLSL SharedData::PBRMetalHighlightScale
-		uint HasDirectionalShadows;     // Uses the existing scalar padding slot before the float2 below
-		float PBRMetalReflectionScalePad0;
+		uint HasDirectionalShadows;     // Exterior or interior sun directional shadow availability
+		float VolumetricLightingSaturation;
 		float PBRMetalReflectionScalePad1;
 		float SSSHumanMaleIntensity;
 		float SSSHumanMaleSaturation;
@@ -448,19 +465,22 @@ public:
 		float4 VRFoveationData0;          // x=center scale, y=feather, z=horizontal scale, w=lighting auxiliary mode: 0 off, 1 feathered, 2 hard cutoff
 		float4 VRFoveationModes;          // x=SSR raymarch mode, y=water parallax mode, z=Wetterness dynamic detail mode, w=unused: 0 off, 1 feathered, 2 hard cutoff
 		float4 VRFoveationCenterOffsets;  // xy=left eye offset, zw=right eye offset
+
+		float4 VolumetricLightingCustomColor;  // rgb=custom color, w=contribution
 	};
 #ifdef _MSC_VER
 #	pragma warning(pop)
 #endif
 	STATIC_ASSERT_ALIGNAS_16(SharedDataCB);
 	static_assert(offsetof(SharedDataCB, RefractionScale) % 16 == 0);
-	static_assert(offsetof(SharedDataCB, PBRMetalReflectionScalePad0) % 16 == 0);
+	static_assert(offsetof(SharedDataCB, VolumetricLightingSaturation) % 16 == 0);
 	static_assert(offsetof(SharedDataCB, VolumetricShadowsEnabled) == offsetof(SharedDataCB, SSSHumanFemaleBaseSaturation) + sizeof(float));
 	static_assert(offsetof(SharedDataCB, VolumetricLightingOpacity) == offsetof(SharedDataCB, VolumetricShadowsEnabled) + sizeof(uint));
 	static_assert(offsetof(SharedDataCB, AmbientSHR) % 16 == 0);
 	static_assert(offsetof(SharedDataCB, VRFoveationData0) % 16 == 0);
 	static_assert(offsetof(SharedDataCB, VRFoveationModes) % 16 == 0);
 	static_assert(offsetof(SharedDataCB, VRFoveationCenterOffsets) % 16 == 0);
+	static_assert(offsetof(SharedDataCB, VolumetricLightingCustomColor) == offsetof(SharedDataCB, VRFoveationCenterOffsets) + sizeof(float4));
 	ConstantBuffer* sharedDataCB = nullptr;
 	ConstantBuffer* featureDataCB = nullptr;
 
@@ -550,6 +570,21 @@ public:
 	}
 
 private:
+	// Keep event deadlines, render provenance and persistence publication indivisible.
+	mutable std::mutex saveLoadSafeModeMutex;
+	enum class SaveLoadRenderRecoverySource : uint64_t
+	{
+		None,
+		OrdinarySave,
+		Other
+	};
+	static constexpr uint64_t kSaveLoadRenderRecoverySourceMask = 3;
+	void RecordSaveLoadRenderRecoverySource(SaveLoadRenderRecoverySource a_source);
+	void ExtendSaveLoadSafeModeImpl(uint32_t a_currentFrame, uint32_t a_frameCount);
+	uint64_t saveLoadRenderRecoveryState = 0;
+	bool engineSaveLoadActivityKnown = false;
+	bool engineSavingWasActive = false;
+
 	uint64_t BeginRenderTargetResourcePublication() noexcept;
 	void CompleteRenderTargetResourcePublication(
 		uint64_t a_generation,

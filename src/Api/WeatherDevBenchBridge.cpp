@@ -2,19 +2,17 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
+#	include "Api/DevBenchMainThreadDispatch.h"
 #	include "Api/ServiceFoundation.h"
 #	include "Api/WeatherService.h"
-#	include "Api/RuntimeThreadAffinity.h"
 #	include "BuildProvenance.h"
 
 #	include <DevBenchAPI.h>
 #	include <nlohmann/json.hpp>
 
 #	include <atomic>
-#	include <chrono>
+#	include <exception>
 #	include <functional>
-#	include <future>
-#	include <memory>
 #	include <mutex>
 #	include <optional>
 #	include <stdexcept>
@@ -29,7 +27,6 @@ namespace
 	using CSX::WeatherAPI::Preflight001;
 	using CSX::WeatherAPI::Snapshot001;
 	using CSX::WeatherAPI::Status;
-	constexpr auto kMainThreadTimeout = std::chrono::milliseconds(5000);
 	std::atomic_bool g_registered{ false };
 
 	CSX::Api::ServiceFoundation& Foundation()
@@ -111,29 +108,7 @@ namespace
 
 	json RunOnMainThread(std::function<json()> a_run)
 	{
-		auto* tasks = SKSE::GetTaskInterface();
-		if (!tasks)
-			return { { "error", "SKSE task interface unavailable" } };
-		auto promise = std::make_shared<std::promise<json>>();
-		auto cancelled = std::make_shared<std::atomic_bool>(false);
-		auto future = promise->get_future();
-		tasks->AddTask([promise, cancelled, run = std::move(a_run)]() mutable {
-			CSX::Api::EnterRuntimeMainThreadTask();
-			if (cancelled->load(std::memory_order_acquire))
-				return;
-			try {
-				promise->set_value(run());
-			} catch (const std::exception& e) {
-				promise->set_value(json{ { "error", "main-thread task failed" }, { "detail", e.what() } });
-			} catch (...) {
-				promise->set_value(json{ { "error", "main-thread task failed" } });
-			}
-		});
-		if (future.wait_for(kMainThreadTimeout) != std::future_status::ready) {
-			cancelled->store(true, std::memory_order_release);
-			return { { "error", "main thread did not run within 5000ms" } };
-		}
-		return future.get();
+		return CSX::Api::RunDevBenchMainThreadTask(SKSE::GetTaskInterface(), std::move(a_run));
 	}
 
 	json SnapshotJson(const Snapshot001& a_snapshot)
@@ -389,14 +364,14 @@ namespace CSX::Api::WeatherDevBenchBridge
 			return;
 		}
 		const char* descriptor = R"({
-			"description":"Versioned CSX weather selection, lock, registered-variable, and per-weather feature override API. Mutations require preflight then execute with identical arguments and the returned token.",
+			"description":"Versioned CSX weather selection, lock, registered-variable, and per-weather feature override API. Forced weather refreshes cached cloud passes and sky models. Mutations require preflight then execute with identical arguments and the returned token.",
 			"inputSchema":{"type":"object","required":["contractMajor","clientId","commandId","action"],"properties":{
 				"contractMajor":{"type":"integer","const":1},"clientId":{"type":"string","minLength":1,"maxLength":128},
 				"commandId":{"type":"string","minLength":1,"maxLength":128},"expectedBuildId":{"type":"string"},
 				"action":{"type":"string","enum":["registry","snapshot","weathers","features","variables","override","preflight","execute"]},
 				"featureName":{"type":"string"},"weatherKey":{"type":"string"},
 				"mutation":{"type":"object","required":["action","expectedStateRevision"],"properties":{
-					"action":{"type":"string","enum":["set_weather","preview_weather","reset_weather","lock_weather","unlock_weather","set_feature_paused","reload_overrides","set_feature_override","remove_feature_override"]},
+					"action":{"type":"string","description":"preview_weather forces an immediate weather change and refreshes cloud passes and sky models; it is blocked while weather is locked.","enum":["set_weather","preview_weather","reset_weather","lock_weather","unlock_weather","set_feature_paused","reload_overrides","set_feature_override","remove_feature_override"]},
 					"expectedStateRevision":{"type":"integer","minimum":0},"weatherKey":{"type":"string"},"featureName":{"type":"string"},
 					"value":{},"accelerate":{"type":"boolean"},"persist":{"type":"boolean"},"applyLive":{"type":"boolean"},
 					"allowDisruptive":{"type":"boolean"},"allowDestructive":{"type":"boolean"},"preflightToken":{"type":"string"}

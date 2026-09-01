@@ -10,11 +10,8 @@ void HorizonFix::DrawSettings()
 
 void HorizonFix::PostPostLoad()
 {
-	// The shader-side far-water support is only wanted while the HorizonFix plugin is
-	// actually installed; without it water keeps the vanilla far-clip look. Checked here
-	// because every SKSE plugin has loaded by now and the shader disk cache has not been
-	// validated yet, so installing or removing the plugin invalidates the cache through
-	// regular feature validation.
+	// Probe after all SKSE plugins load and before cache admission so Water uses
+	// the compatibility record matching the installed companion plugin.
 	if (!loaded)
 		return;
 

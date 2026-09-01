@@ -1,6 +1,7 @@
 #pragma once
 #include "Buffer.h"
 #include "Features/VR/OpenVRDetection.h"
+#include "Features/VRDepthCullingEnablePolicy.h"
 #include "Menu.h"
 #include "OverlayFeature.h"
 #include "Utils/Input.h"
@@ -173,9 +174,7 @@ public:
 	void SetDepthCullingMode(VRDepthCullingTemporal::Mode a_mode);
 	/** Return the effective policy represented by the persisted toggles. */
 	[[nodiscard]] VRDepthCullingTemporal::Mode GetDepthCullingMode() const;
-	/** Select Performance Mode and clear Legacy Mode when enabled. */
-	void SetDepthCullingPerformanceMode(bool a_enabled);
-	/** Select the native-result Legacy path and clear Performance Mode when enabled. */
+	/** Select Legacy when enabled, or Advanced when disabled. */
 	void SetDepthCullingLegacyMode(bool a_enabled);
 	/** Normalize persisted toggles and publish one effective temporal policy. */
 	void ApplyDepthCullingMode();
@@ -189,6 +188,8 @@ public:
 	virtual void RestoreDefaultSettings() override;
 
 	virtual void DrawSettings() override;
+	/** Queue navigation to the FOV tab; return false when VR settings are unavailable. */
+	bool OpenFovSettings();
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
@@ -230,11 +231,11 @@ public:
 		static constexpr uint32_t kButtonJoystickTrigger = 32;
 
 		// Performance optimization settings
-		bool EnableDepthBufferCullingExterior = true;  ///< Master depth-culling option; enabled in exteriors
-		bool EnableDepthBufferCullingInterior = true;  ///< Also enable depth culling in interiors
-		bool DepthCullingPerformanceMode = false;      ///< Accept native stale results instead of bounded recovery
+		bool EnableDepthBufferCullingExterior = true;  ///< Enable native depth culling outdoors
+		bool EnableDepthBufferCullingInterior = true;  ///< Enable native depth culling indoors
 		bool DepthCullingLegacyMode = false;           ///< Use native results without temporal pose capture or recovery
-		float MinOccludeeBoxExtent = 10.0f;            ///< Minimum bounding box size for occlusion culling
+		float MinOccludeeBoxExtentExterior = VRDepthCullingEnablePolicy::kDefaultMinimumExtent;
+		float MinOccludeeBoxExtentInterior = VRDepthCullingEnablePolicy::kDefaultMinimumExtent;
 
 		// Post-composite VR stereo consistency pass. Default-off because it is a global final-color blend.
 		bool EnableStereoBlend = false;
@@ -370,6 +371,8 @@ public:
 		 */
 		void ClampToValidRanges()
 		{
+			MinOccludeeBoxExtentExterior = VRDepthCullingEnablePolicy::SanitizeMinimumExtent(MinOccludeeBoxExtentExterior);
+			MinOccludeeBoxExtentInterior = VRDepthCullingEnablePolicy::SanitizeMinimumExtent(MinOccludeeBoxExtentInterior);
 			VRMenuScale = std::isfinite(VRMenuScale) ?
 			                  std::clamp(VRMenuScale, Config::kMinMenuScale, Config::kMaxMenuScale) :
 			                  Config::kDefaultMenuScale;

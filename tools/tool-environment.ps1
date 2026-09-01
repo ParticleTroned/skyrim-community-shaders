@@ -46,10 +46,6 @@ function Get-CsxVisualStudioInstallationPaths {
     }
 
     $candidates = [System.Collections.Generic.List[string]]::new()
-    if ($env:VSINSTALLDIR) {
-        $candidates.Add($env:VSINSTALLDIR)
-    }
-
     $vswhereCandidates = [System.Collections.Generic.List[string]]::new()
     $vswhereCommand = Get-Command vswhere.exe -ErrorAction SilentlyContinue
     if ($vswhereCommand) {
@@ -126,6 +122,16 @@ function Resolve-CsxVsDevCmd {
             return [IO.Path]::GetFullPath($env:CSX_VSDEVCMD)
         }
         throw "CSX_VSDEVCMD does not point to VsDevCmd.bat: $env:CSX_VSDEVCMD"
+    }
+
+    # Reinitializing another installation would mix its tools with inherited SDK state.
+    if ($env:VSINSTALLDIR -and
+        (Test-Path -LiteralPath $env:VSINSTALLDIR -PathType Container)) {
+        $candidate = Join-Path $env:VSINSTALLDIR "Common7\Tools\VsDevCmd.bat"
+        if ((Test-Path -LiteralPath $candidate -PathType Leaf) -and
+            (Test-Path -LiteralPath (Join-Path $env:VSINSTALLDIR "VC\Tools\MSVC") -PathType Container)) {
+            return [IO.Path]::GetFullPath($candidate)
+        }
     }
 
     foreach ($installationPath in Get-CsxVisualStudioInstallationPaths -RequireMsvc) {

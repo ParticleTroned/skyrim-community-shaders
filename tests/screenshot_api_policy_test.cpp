@@ -1,10 +1,32 @@
 #include "Features/ScreenshotApiPolicy.h"
+#include "Features/ScreenshotStorageSecurity.cpp"
+#include "screenshot_storage_security_test.h"
 
+#include <iostream>
 #include <stdexcept>
 
+#pragma comment(lib, "bcrypt.lib")
+
 int main()
-{
+try {
+	RunScreenshotStorageSecurityTests();
 	using namespace CSX::ScreenshotPolicy;
+	if (SelectSettingsCaptureSource("hmd_submission", true) != "hmd_submission" ||
+		SelectSettingsCaptureSource("hmd_submission", false) != "desktop_mirror" ||
+		SelectSettingsCaptureSource("desktop_mirror", true) != "desktop_mirror")
+		throw std::runtime_error("settings capture source ignored the active runtime");
+	const auto hmd = ResolveCaptureSource("hmd_submission", "reject", true);
+	const auto desktopFallback = ResolveCaptureSource("hmd_submission", "desktop_mirror", false);
+	if (!hmd || hmd.resolved != "hmd_submission" || hmd.fallbackUsed ||
+		!desktopFallback || desktopFallback.resolved != "desktop_mirror" || !desktopFallback.fallbackUsed ||
+		ResolveCaptureSource("hmd_submission", "reject", false) ||
+		ResolveCaptureSource("unknown", "reject", true))
+		throw std::runtime_error("capture source availability or fallback policy is invalid");
+	const std::filesystem::path stillDirectory = "still-invalid";
+	const std::filesystem::path sequenceDirectory = "frame-valid";
+	if (SelectConfiguredCaptureDirectory(stillDirectory, sequenceDirectory, false) != stillDirectory ||
+		SelectConfiguredCaptureDirectory(stillDirectory, sequenceDirectory, true) != sequenceDirectory)
+		throw std::runtime_error("still and sequence destination domains are not independent");
 	for (const auto* unsafe : { "", ".", "..", "CON", "con.txt", "NUL.png", "COM1", "LPT9.log",
 			 "trailing.", "trailing ", "stream:name", "star*", "slash/", "back\\slash", "caf\xC3\xA9" }) {
 		if (IsSafeWindowsFilenameSegment(unsafe))
@@ -26,6 +48,52 @@ int main()
 	if (!CanStartWorker(true, false) || CanStartWorker(false, false) ||
 		CanStartWorker(true, true) || CanStartWorker(false, true))
 		throw std::runtime_error("worker admission is not terminal after close");
+	if (RequiredEyeMask("left_eye") != 0x1 ||
+		RequiredEyeMask("framed_left") != 0x1 ||
+		RequiredEyeMask("right_eye") != 0x2 ||
+		RequiredEyeMask("framed_right") != 0x2 ||
+		RequiredEyeMask("side_by_side") != 0x3 ||
+		(RequiredEyeMask("left_eye") | RequiredEyeMask("framed_left")) != 0x1 ||
+		(RequiredEyeMask("left_eye") | RequiredEyeMask("right_eye")) != 0x3)
+		throw std::runtime_error("requested output views produce an invalid eye mask");
+	if (SelectDispatchClass(true, true, true) != DispatchClass::Manual ||
+		SelectDispatchClass(true, true, false) != DispatchClass::Sequence ||
+		SelectDispatchClass(true, false, false) != DispatchClass::Manual ||
+		SelectDispatchClass(false, true, true) != DispatchClass::Sequence ||
+		SelectDispatchClass(false, false, true) != DispatchClass::None)
+		throw std::runtime_error("fair dispatcher selection is invalid");
+	DispatchArbitration arbitration;
+	// A busy source can free up on the same Present parity on every frame.
+	// Failed manual attempts must not hand each newly available slot away.
+	for (int busyPresent = 0; busyPresent != 6; ++busyPresent) {
+		const auto selected = arbitration.Select(true, true);
+		if (selected != DispatchClass::Manual)
+			throw std::runtime_error("a capacity retry lost the pending manual capture's turn");
+		arbitration.FinishAttempt(selected, true);
+	}
+	arbitration.FinishAttempt(DispatchClass::Manual, false);
+	if (arbitration.Select(true, true) != DispatchClass::Sequence)
+		throw std::runtime_error("a completed manual turn starved the sequence queue");
+	arbitration.FinishAttempt(DispatchClass::Sequence, false);
+	if (arbitration.Select(true, true) != DispatchClass::Manual)
+		throw std::runtime_error("a completed sequence turn starved the manual queue");
+	if (ResolveBusyDispatch(true, false, false) != BusyDispatchDisposition::Drop ||
+		ResolveBusyDispatch(true, false, true) != BusyDispatchDisposition::Drop)
+		throw std::runtime_error("sequence backpressure delayed a missed slot instead of dropping it");
+	if (ResolveBusyDispatch(false, false, false) != BusyDispatchDisposition::Retry ||
+		ResolveBusyDispatch(false, false, true) != BusyDispatchDisposition::Fail)
+		throw std::runtime_error("manual capture retries ignored their admission deadline");
+	for (const bool sequenceFrame : { false, true }) {
+		for (const bool deadlineReached : { false, true }) {
+			if (ResolveBusyDispatch(sequenceFrame, true, deadlineReached) != BusyDispatchDisposition::Cancel)
+				throw std::runtime_error("cancellation during dispatch abandoned a nonterminal request");
+		}
+	}
+	if (!IsSamePublication(7, 0x1000, 7, 0x1000) ||
+		IsSamePublication(7, 0x1000, 8, 0x1000) ||
+		IsSamePublication(7, 0x1000, 7, 0x2000) ||
+		IsSamePublication(0, 0x1000, 0, 0x1000))
+		throw std::runtime_error("stereo publication coherence is invalid");
 	if (ResolveActualOutputView("source_native", true, false, false) != "source_native" ||
 		!ResolveActualOutputView("left_eye", true, false, false).empty() ||
 		ResolveActualOutputView("framed_combined", false, true, false) != "framed_left" ||
@@ -38,6 +106,14 @@ int main()
 		IsContainedPath(captureRoot, captureRoot.parent_path() / "Other") ||
 		IsContainedPath(captureRoot, captureRoot / ".." / "Other"))
 		throw std::runtime_error("settings-default containment policy is invalid");
+	const auto relativeArtifact = RelativeContainedArtifactPath(
+		captureRoot, captureRoot / "CS_sequence_fixture" / "left" / "frame.bmp");
+	if (!relativeArtifact ||
+		*relativeArtifact != std::filesystem::path("CS_sequence_fixture/left/frame.bmp") ||
+		RelativeContainedArtifactPath(captureRoot, captureRoot) ||
+		RelativeContainedArtifactPath(captureRoot, captureRoot.parent_path() / "outside.bmp")) {
+		throw std::runtime_error("sequence artifact publication containment is invalid");
+	}
 	if (!IsWallClockScheduleWithinLimit(0, 1000, 3601) ||
 		IsWallClockScheduleWithinLimit(1, 1000, 3601))
 		throw std::runtime_error("wall-clock sequence limit is invalid");
@@ -45,4 +121,7 @@ int main()
 		IsGameFrameScheduleWithinLimit(1, 60, 3601))
 		throw std::runtime_error("game-frame sequence limit is invalid");
 	return 0;
+} catch (const std::exception& error) {
+	std::cerr << error.what() << '\n';
+	return 1;
 }

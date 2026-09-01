@@ -23,7 +23,7 @@ static void DiscardMislinkedTextureSet(RE::NiPointer<RE::BSTextureSet>& textureS
 
 BSLightingShaderMaterialPBR::~BSLightingShaderMaterialPBR()
 {
-	All.erase(this);
+	All.Unregister(this);
 }
 
 BSLightingShaderMaterialPBR* BSLightingShaderMaterialPBR::Make()
@@ -43,7 +43,7 @@ RE::BSShaderMaterial* BSLightingShaderMaterialPBR::Create()
 	// calls ScrapHeap::Free() after LinkMaterial — if Create() used scrap heap, it would pop
 	// the canonical off the stack, causing immediate use-after-free in property->material.
 	auto* material = new BSLightingShaderMaterialPBR();
-	All.try_emplace(material, MaterialExtensions{});
+	All.Register(material);
 	return material;
 }
 
@@ -71,11 +71,7 @@ void BSLightingShaderMaterialPBR::CopyMembers(RE::BSShaderMaterial* that)
 	featuresTexture0 = pbrThat->featuresTexture0;
 	featuresTexture1 = pbrThat->featuresTexture1;
 
-	if (auto it = All.find(pbrThat); it != All.end()) {
-		All[this] = it->second;
-	} else {
-		All[this] = MaterialExtensions{};
-	}
+	All.Copy(this, pbrThat);
 }
 
 std::uint32_t BSLightingShaderMaterialPBR::ComputeCRC32(uint32_t srcHash)
@@ -223,7 +219,9 @@ void BSLightingShaderMaterialPBR::OnLoadTextureSet(std::uint64_t arg1, RE::BSTex
 			if (bgsTextureSet) {
 				if (auto* textureSetData = globals::features::truePBR.GetPBRTextureSetData(bgsTextureSet)) {
 					ApplyTextureSetData(*textureSetData);
-					All[this].textureSetData = textureSetData;
+					All.Update(this, [textureSetData](auto& extensions) {
+						extensions.textureSetData = textureSetData;
+					});
 				}
 			}
 		}

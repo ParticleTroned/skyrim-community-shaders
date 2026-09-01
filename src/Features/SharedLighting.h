@@ -13,6 +13,17 @@ struct SharedLightingSettings
 	float linearSpotlightMult = 1.0f;
 	float omnidirectionalBulbMult = 1.0f;
 	float linearOmnidirectionalBulbMult = 1.0f;
+	float skySaturation = 1.0f;
+	float ambientMult = 1.0f;
+	float contrast = 1.0f;
+	float saturation = 1.0f;
+	float cloudBrightness = 1.0f;
+	float cloudSaturation = 1.0f;
+	float fogIntensity = 1.0f;
+	float sunGlareIntensity = 1.0f;
+	float effectBrightness = 1.0f;
+	float skyStaticBrightness = 1.0f;
+	float skyStaticTransparency = 0.0f;
 };
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -24,4 +35,15 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	spotlightMult,
 	linearSpotlightMult,
 	omnidirectionalBulbMult,
-	linearOmnidirectionalBulbMult)
+	linearOmnidirectionalBulbMult,
+	skySaturation,
+	ambientMult,
+	contrast,
+	saturation,
+	cloudBrightness,
+	cloudSaturation,
+	fogIntensity,
+	sunGlareIntensity,
+	effectBrightness,
+	skyStaticBrightness,
+	skyStaticTransparency)

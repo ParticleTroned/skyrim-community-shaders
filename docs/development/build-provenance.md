@@ -3,15 +3,19 @@
 CSX identifies tested behavior with immutable build evidence rather than a
 branch name or display version. Every DLL build has three related identities:
 
-- **Artifact SHA-256** is the authoritative identity of the linked DLL.
-- **Build ID** is SHA-256 over canonical JSON describing the source commit and
-  dirty-content digest, exact submodule checkouts, vcpkg baseline and overlay,
-  compiler/toolchain, runtime, configuration, and behavior-affecting options.
-- **Shader cache ABI ID** is an explicit identity over
-  `config/shader-cache-abi.json`. It invalidates globally incompatible cache
-  blobs without changing merely because cache-controller or unrelated C++ code
-  was edited. Feature-scoped non-HLSL incompatibilities use
-  `Feature::GetShaderCacheAbiVersion()` instead.
+-   **Artifact SHA-256** is the authoritative identity of the linked DLL.
+-   **Build ID** is SHA-256 over canonical JSON describing the source commit and
+    dirty-content digest, exact submodule checkouts, vcpkg baseline and overlay,
+    compiler/toolchain, runtime, configuration, and behavior-affecting options.
+-   **Shader cache ABI ID** is an explicit identity over
+    `config/shader-cache-abi.json`. It is runtime-neutral so one universal DLL
+    accepts the matching SE/AE and VR cache packs; runtime shader permutations
+    remain separated by each record's compile-state digest. The ABI invalidates
+    globally incompatible cache blobs without changing merely because
+    cache-controller or unrelated C++ code was edited. Shader-enabled features
+    default to feature ABI `1`; a feature can override
+    `Feature::GetShaderCacheAbiVersion()` and bumps it only when its non-HLSL
+    compiled-shader contract changes.
 
 `refresh_build_provenance` runs before every DLL compilation. It intentionally
 does not rely on CMake configure time, because an existing build tree can
@@ -32,6 +36,20 @@ Automation may pass `expectedBuildId` to those tools. The operation fails with
 requested producer. Captures and comparisons should preserve the returned
 `producer` object, not infer provenance from the checked-out branch.
 
+## GPU and driver identity
+
+At renderer initialization, `[GPU]` info entries record the active D3D11
+adapter's model, vendor/device IDs, dedicated VRAM in MiB, and Windows
+driver version. The version uses DXGI's four-part Windows driver format;
+it is not the NVIDIA release label or AMD Adrenalin package version.
+See Microsoft's [DXGI driver-version contract](https://learn.microsoft.com/en-us/windows/win32/api/dxgi/nf-dxgi-idxgiadapter-checkinterfacesupport).
+
+The query runs once per process from the shared SE/AE/VR initialization
+hook and is skipped when info logging is disabled. It adds no per-frame
+work, GPU commands, or GPU synchronization.
+Unavailable information is logged with the failing HRESULT; it does not
+abort initialization or trigger retries.
+
 ## Shader caches
 
 Runtime-generated `Info.ini` files record `BuildId`, `ArtifactSHA256`,
@@ -39,6 +57,17 @@ Runtime-generated `Info.ini` files record `BuildId`, `ArtifactSHA256`,
 an explicit `ShaderCacheABI`. Build ID, artifact hash, plugin version, and
 ordinary feature versions are evidence. Global/scoped shader ABI and a changed
 runtime compiler invalidate the corresponding cache scope.
+
+Managed-pack admission treats `PackManifest.json`'s shader ABI as build
+provenance. Per-record content identities carry the global and enabled-feature
+ABIs, so multiple ABI generations can coexist in the same four pack files and
+only the affected lookup recompiles. The offline builder derives the same
+sorted feature-ABI salt from `Info.ini` as the runtime derives from loaded
+features. These feature salts are conservative across shader families.
+Horizon Fix instead delegates its ABI to the Water-scoped compatibility
+provider, so its enabled/disabled states share unrelated records. Any non-HLSL
+change to that integration must update the provider's contract in both
+`src/XSEPlugin.cpp` and `config/shader-compatibility-variants.json`.
 
 The prebuilt-cache generator calculates `ShaderCacheABI` using the same Python
 module and canonical contract file list as the DLL build. Precompiled caches do

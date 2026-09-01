@@ -79,6 +79,7 @@ contradict this policy.
 ### Commit hygiene
 
 -   Commit only files required by the requested change. Leave unrelated tracked changes and untracked user files untouched.
+-   Keep implementation-related documentation, investigation notes, and validation records in the same commit as the change they explain. Fold later documentation updates into that commit instead of publishing separate documentation-only follow-ups. Preserve the exact measured source commits and Build IDs when folding evidence. Standalone documentation work may have its own `docs` commit; rewriting a shared branch still requires explicit user authorization.
 -   Every commit created or rewritten by an agent must use this structure, even when the change is small:
 
     ```text
@@ -108,6 +109,11 @@ contradict this policy.
 ## Code quality and architecture
 
 -   Prefer complete, focused changes with explicit error handling and graceful degradation.
+-   Compile developer-only tracing and capture machinery out of production:
+    use `TRACY_SUPPORT` for Tracy and `DEVBENCH_BRIDGE_ENABLED` for DevBench
+    diagnostics. Runtime inactivity is not a substitute for build isolation.
+    Preserve user-facing performance controls and timing readouts. Verify
+    compiler output and forced headers, not just project definitions.
 -   Use descriptive domain names rather than unexplained abbreviations. Keep each feature and helper responsible for one coherent technique or policy.
 -   Break functions approaching roughly 200 lines into focused helpers when doing so clarifies state ownership and control flow. Do not split merely to satisfy a number.
 -   Centralize durable constants and UI theme values instead of repeating magic numbers.
@@ -140,16 +146,111 @@ contradict this policy.
     evidence directory; missing or inconclusive unattended visual review, or an
     unmatched performance baseline, is not a pass. Human completion is not part
     of this protocol.
+-   Every `main-VR` commit that changes or evaluates VR render-scale behavior
+    must include any corresponding updates to the durable cross-machine record:
+    the numbered ledgers indexed by `docs/development/vr-render-scale-ledger.md`,
+    `docs/development/vr-render-scale-iteration.md`, and the relevant compact
+    tuning or failure summary. If runtime evidence follows an implementation
+    commit, fold its documentation into that implementation commit before
+    starting the next render-scale change, preserving the original measured
+    source identity and following the shared-branch rewrite authorization
+    rules. Do not version raw per-run evidence trees merely to preserve a
+    measurement.
+-   Create a new immutable numbered ledger for every finalized measurement
+    and whenever publishing measurements for a different PR. Use
+    `docs/development/vr-render-scale-ledger-NNNN-prNUMBER.csv`, increasing
+    the repository-wide sequence from its current maximum; never reuse a
+    number or overwrite an earlier snapshot. Each new ledger contains only
+    the explicitly selected baseline runs and measurements made for the PR
+    that commits it. Include that PR's earlier measurements when relevant;
+    unrelated run history remains in earlier ledgers. Commit the snapshot,
+    index and corresponding report with that PR. The initial `0001` and
+    `0002` history archives preserve the pre-numbering record unchanged.
+    Keep each CSV below 100 MiB; if one PR needs more space, split its run
+    columns into consecutive numbered files with the same PR identity.
+    Follow `docs/development/vr-render-scale-comparison-reporting.md`.
+    Every render-scale run update must preserve numeric per-transition
+    timings in that ledger for each pass or repeat, including the transition
+    ordinal, source-to-destination route, timing definition, units, and
+    unambiguous run/build commit identity. Aggregates and links to local
+    evidence are insufficient. Preserve interrupted repeat segments and
+    distinguish missing receipts, failed measurements, and transitions not
+    run with explicit reasons; never substitute zero or an inferred timing.
+    Before finalizing the update, verify every available measured timing is
+    represented and historical cells remain intact. Reports must reference
+    this ledger, and raw evidence trees remain local.
+-   The canonical ledger must contain the complete run results, with no
+    omitted available information. Preserve every field of the finalized
+    summary, including every transition and pass, terminal and Task 2
+    classifications, retries and reasons, recoveries, counters, health gates
+    with observed values/limits/applicability, memory, resource and profiler
+    details, provenance, and evidence gaps. Include the per-transition and
+    per-pass comparison deltas and assessment. Reports, aggregates, and links
+    to local evidence do not substitute for these ledger contents. Use
+    structured detail cells where needed and append missing metric rows
+    without changing historical cells. Verify field-for-field reconstruction
+    against the complete saved summary and comparison details, in addition
+    to the numeric timing audit. Preserve false, zero, null and empty values;
+    unavailable data require explicit reasons, never a generic placeholder
+    in place of available evidence. Missing ledger coverage means reporting
+    is incomplete. Follow the complete-ledger contract in
+    `docs/development/vr-render-scale-comparison-reporting.md`.
+-   Every upscaling/render-scale ledger update automatically includes a detailed
+    side-by-side analysis under
+    `docs/development/vr-render-scale-comparison-reporting.md`. Compare every
+    retained transition and pass with the pinned reference, preserving exact
+    compiled source, renderer base, main-VR base/equivalence, and Build IDs.
+    Report completion, terminal results, full-history health, and whether the
+    change meets the improvement-or-neutral standard separately. Recovered
+    failures and applicable cumulative gate failures must remain visible.
+    Report actual relatch/strict-completion frames and milliseconds, stretch
+    frames and duration; the fixed stretch cutoff is not a health gate when
+    settling imposes the stretch. Keep its raw result as a labeled diagnostic.
+    PR inclusion of this comparison is solely the user's decision. Do not make
+    it a PR requirement, publication default, or merge gate; this does not
+    change the separate existing release-qualification protocol.
+-   Keep routine render-scale reporting fast: use the maintained single-command
+    workflow in `docs/development/vr-render-scale-comparison-reporting.md`.
+    Generate the comparison once after preparing the ledger update. Reuse
+    outputs only after evidence, code, deployment inputs and output hashes
+    match; always audit ledger timings. Preserve full evidence and missing-data
+    limitations. Brief progress lines are welcome, but do not add polling,
+    repeated extraction, tests, packaging or prose rewrites to a normal run
+    without a change, failure or unresolved concern that requires them.
+    Retain stage timings in the result; surface material findings, blockers and
+    unexpected delays promptly.
 -   Scope pre-commit to staged files or the changed revision range. Do not use `--all-files` merely to validate a focused change; legacy third-party files preserve intentional formatting.
 -   Never interrupt shader compilation or cache generation because output is temporarily silent. Check process and cache activity and allow the documented build window.
 -   Preserve user-owned build outputs and shader caches unless the task explicitly requires their removal or regeneration.
 -   Report exact passed, failed, skipped, or blocked checks. Do not turn a warning into a pass or omit a known validation limitation.
+-   Finalize runtime DLL verification from the preserved producer Build ID and
+    source commit. Resolve the exact enabled AIO mod and compare its physical
+    `CommunityShaders.dll` SHA-256 and size with its adjacent
+    `CSX.BuildManifest.json` and AIO build receipt. Match the manifest Build ID
+    to the runtime producer and retain the compile identity. Reuse known AIO
+    paths; use one bounded MO2 inspection only when needed. Check enabled loose
+    providers, Overwrite, and unmanaged Data directly. Do not stop at MO2's
+    virtual module path or recursively search game and build trees.
+-   Keep worker lifecycle diagnostics separate from reporting completeness.
+    Once owned captures are verified inactive, the complete evidence journal
+    is flushed, required evidence is validated, and DLL identity is verified,
+    a delayed helper shutdown or stale worker status does not make reporting
+    incomplete. Preserve its diagnostic and ownership lock for later repair;
+    do not wait indefinitely or replay measurements.
 
 ## Repository tooling
+
+-   When the user invokes `gameft-sw`, follow
+    `docs/development/gameft-sw.md`: ask its exact save-number question and
+    use the maintained `skyrim-vr-automation/tools/gameft-sw` wrapper and
+    versioned `game-ft` runner. Local ignored legacy copies remain historical.
+    Stack/wait tracing is explicit and DevBench-only. Present timing and health
+    before provenance or stack analysis; never silently change the base protocol.
 
 -   Run `pwsh ./tools/setup-dev.ps1` after cloning or when the developer-tool environment changes.
 -   In Codex on Windows, invoke repository Git through `pwsh ./tools/git.ps1 <git arguments>` so linked-worktree ownership is scoped without changing global `safe.directory`.
 -   Invoke CMake through `pwsh ./tools/cmake.ps1 <cmake arguments>` and pre-commit through `pwsh ./tools/pre-commit.ps1 run <arguments>`.
+-   Use `pwsh ./tools/validate-local.ps1` for the complete local DLL, controller, shader, and preset validation record. It builds both test groups and saves inventory, results, provenance, and full failure output under `build/validation/`.
 -   Run `pwsh ./tools/dev-doctor.ps1 -Network` when Git, hooks, authentication, caches, or the Windows sandbox behave unexpectedly.
 -   Do not set user-level `TEMP` or `TMP`, and do not inject them with Codex `shell_environment_policy`; the launchers set writable paths only after the sandbox starts.
 -   Use explicit SSH URLs for authenticated GitHub remotes and HTTPS for public dependencies. Do not globally rewrite all `https://github.com/` URLs to SSH. Use `pwsh ./tools/setup-git-user.ps1` for push-only SSH routing.
@@ -157,6 +258,7 @@ contradict this policy.
 
 ## Git and release safety
 
+-   CSX public releases publish only the complete `CSX_AIO-*.7z` installer. Keep split core, feature and cache packages as internal workflow artifacts. Release notes must describe CSX's bundled features and built-in systems; never inherit upstream Nexus upload destinations. Follow [the CSX distribution contract](docs/development/csx-release-distribution.md).
 -   Never push directly to, force-push, or rebase shared branches such as `main`, `main-VR`, `dev`, or `hotfix/*` without explicit user direction. Use `--force-with-lease` only when rewriting an owned feature branch is necessary and authorized.
 -   Do not manually create `v*` release tags or hand-edit the CMake project version; release automation owns them.
 -   Synchronize upstream histories by merge rather than cherry-picking individual commits. Preserve VR-specific behavior during conflict resolution and verify upstream ancestry after the merge.

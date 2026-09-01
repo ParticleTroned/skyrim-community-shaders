@@ -573,7 +573,6 @@
         "UseAlternateSunPath": true
     },
     "Skylighting": {
-        "EnableFastProbeSampling": true,
         "EnableIncrementalProbeUpdates": true,
         "EnableReducedUpdateFrequency": true,
         "EnableSkylighting": false,

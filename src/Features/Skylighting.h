@@ -1,9 +1,14 @@
 #pragma once
 
+#include <atomic>
+#include <optional>
+
 struct Skylighting : Feature
 {
 private:
 	static constexpr std::string_view MOD_ID = "139352";
+	bool HasProbeUpdateResources() const;
+	bool probeUpdateBufferEnabled = false;
 
 public:
 	virtual bool SupportsVR() override { return true; };
@@ -77,7 +82,6 @@ public:
 		bool EnableReducedUpdateFrequency = true;
 		uint OcclusionUpdateInterval = 6;
 		uint ProbeUpdateInterval = 13;
-		bool EnableFastProbeSampling = true;
 		bool IncludeMarkedRoofOccluders = true;
 	} settings;
 
@@ -87,7 +91,7 @@ public:
 		float4 OcclusionSHBasis4Pi;
 
 		float3 PosOffset;  // cell origin in camera model space
-		uint FastSamplingMode;
+		uint PosOffsetPadding;
 		uint ArrayOrigin[3];  // xyz: array origin
 		uint Enabled;
 		int ValidMargin[4];
@@ -122,12 +126,15 @@ public:
 	uint probeArrayDims[3] = { 256, 256, 128 };
 
 	// cached variables
-	bool queuedResetSkylighting = true;
+	std::atomic_bool queuedResetSkylighting{ true };
+	bool needsOcclusionRefresh = true;
+	std::optional<bool> previousInteriorState;
 	bool inOcclusion = false;
 	REX::W32::XMFLOAT4X4 OcclusionTransform;
 	float4 OcclusionDir;
 	uint frameCount = 0;
 	float3 prevCellID = { 0, 0, 0 };
+	float3 probeUpdateCellID = { 0, 0, 0 };
 	float4 occlusionSHBasis4Pi = { 3.5449078f, 0, 0, 0 };
 	uint probeUpdateSliceStart = 0;
 	uint probeUpdateSliceCount = 128;
@@ -138,7 +145,12 @@ public:
 	uint probeUpdateFrameCounter = 0;
 	uint occlusionUpdateFrameCounter = 0;
 
+	/** @brief Queues a render-thread history rebuild without touching graphics resources. */
+	void QueueResetSkylighting();
+	/** @brief Clears probe history on the render thread and requires a fresh occlusion capture. */
 	void ResetSkylighting();
+	/** @brief Checks the render-thread location state and invalidates history on transitions. */
+	bool UpdateInteriorState();
 	void ApplyProbeGridQuality();
 
 	std::chrono::time_point<std::chrono::system_clock> lastUpdateTimer = std::chrono::system_clock::now();

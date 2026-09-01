@@ -3,6 +3,15 @@
     "name": "communityshaders",
     "license": "GPL-3.0",
     "features": {
+        "tracy-tools": {
+            "description": "Build capture and viewer tools from the pinned Tracy client source.",
+            "dependencies": [
+                {
+                    "name": "tracy",
+                    "features": ["cli-tools", "gui-tools"]
+                }
+            ]
+        },
         "commonlibsse-ng": {
             "description": "Dependencies of clib-ng",
             "dependencies": ["catch2", "fmt", "directxtk", "rapidcsv", "spdlog"]
@@ -63,7 +72,7 @@
         },
         {
             "name": "tracy",
-            "version-string": "0.14.1"
+            "version-string": "0.14.2-a8db9bd8"
         },
         {
             "name": "directx-headers",

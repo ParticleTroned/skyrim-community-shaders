@@ -1,12 +1,19 @@
 #pragma once
 
 #include "Api/ServiceFoundation.h"
+#include "Features/ScreenshotApiPolicy.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Features/ScreenshotBurstPolicy.h"
+#endif
+#include "Features/ScreenshotStorageSecurity.h"
+#include "ScreenshotManifestSnapshot.h"
 
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
@@ -33,10 +40,16 @@ public:
 	ScreenshotApi();
 	~ScreenshotApi();
 
+	/** Validate and dispatch a contract request while retaining its idempotent receipt. */
 	json HandleRequest(ScreenshotFeature& a_feature, const json& a_request);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** Admit a DevBench reference PNG and report its terminal receipt outside service locks. */
+	json HandleReferenceRequest(ScreenshotFeature& a_feature, const json& a_request, std::function<void(const json&)> a_completion);
+#endif
 	void Tick(ScreenshotFeature& a_feature, uint64_t a_engineFrame);
 
 	void OnSourceWaiting(std::string_view a_requestId, std::string_view a_actualSourceKind);
+	void OnSourceAcquired(std::string_view a_requestId, json a_acquisition);
 	void OnSourceFallback(
 		std::string_view a_requestId,
 		std::string_view a_reason,
@@ -48,7 +61,8 @@ public:
 		bool a_success,
 		const std::filesystem::path& a_path,
 		std::string_view a_error = {},
-		json a_actual = json::object());
+		json a_actual = json::object(),
+		std::optional<CSX::ScreenshotStorage::CommittedArtifact> a_committedArtifact = std::nullopt);
 	void OnSourceTerminal(std::string_view a_requestId, std::string_view a_state, std::string_view a_error = {});
 	void OnFeatureDisabled(std::string_view a_reason);
 	void BeginShutdown(std::string_view a_reason);
@@ -70,6 +84,8 @@ private:
 		uint32_t sequenceOrdinal = 0;
 		uint64_t scheduledEngineFrame = 0;
 		uint64_t scheduledTimestampUs = 0;
+		std::string scheduledUtc;
+		std::string scheduleBasis;
 		uint64_t eventIndex = 0;
 		std::string acceptedUtc;
 		std::string terminalUtc;
@@ -80,6 +96,9 @@ private:
 		json warnings = json::array();
 		json errors = json::array();
 		json error = nullptr;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		std::function<void(const json&)> referenceCompletion;
+#endif
 		bool acknowledged = false;
 		bool cancelRequested = false;
 		uint32_t expectedArtifacts = 1;
@@ -91,11 +110,14 @@ private:
 		std::chrono::steady_clock::time_point terminalAt{};
 	};
 
+	using ManifestChildNode = CSX::Screenshot::ManifestChildNode;
+
 	struct SequenceRecord
 	{
 		std::string requestId;
 		json requested = json::object();
 		json capture = json::object();
+		json effective = json::object();
 		uint32_t frameCount = 0;
 		uint32_t intervalFrames = 1;
 		uint32_t startDelayFrames = 0;
@@ -103,6 +125,11 @@ private:
 		uint32_t maximumConsecutiveSkips = 10;
 		uint32_t nextOrdinal = 1;
 		uint32_t scheduled = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		ScreenshotBurst::Plan burst;
+		ScreenshotBurst::Continuity continuity;
+		json burstSource = nullptr;
+#endif
 		uint32_t acquired = 0;
 		uint32_t written = 0;
 		uint32_t dropped = 0;
@@ -126,7 +153,9 @@ private:
 		std::filesystem::path directory;
 		std::filesystem::path partialManifestPath;
 		std::filesystem::path finalManifestPath;
-		json children = json::array();
+		std::shared_ptr<CSX::ScreenshotStorage::DirectoryLease> directoryLease;
+		std::shared_ptr<const ManifestChildNode> manifestChildren;
+		std::size_t childCount = 0;
 		json packaging = json::object();
 	};
 
@@ -137,7 +166,9 @@ private:
 		bool final = false;
 		std::filesystem::path destination;
 		std::filesystem::path partialPath;
-		json document = json::object();
+		std::shared_ptr<CSX::ScreenshotStorage::DirectoryLease> directoryLease;
+		json header = json::object();
+		std::shared_ptr<const ManifestChildNode> children;
 	};
 
 	struct ManifestResult
@@ -156,6 +187,7 @@ private:
 		std::mutex mutex;
 		std::condition_variable condition;
 		std::deque<ManifestJob> jobs;
+		std::deque<std::shared_ptr<const ManifestChildNode>> retiredChildren;
 		std::deque<ManifestResult> results;
 		std::size_t outstanding = 0;
 		bool stopRequested = false;
@@ -170,11 +202,43 @@ private:
 		json capture = json::object();
 	};
 
+	struct DispatchEntry
+	{
+		std::string requestId;
+		std::string parentRequestId;
+		uint32_t sequenceOrdinal = 0;
+		bool sequenceFrame = false;
+		json capture = json::object();
+		std::chrono::steady_clock::time_point expiresAt{};
+	};
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	struct ReferenceNotification
+	{
+		std::function<void(const json&)> completion;
+		json receipt;
+	};
+	std::vector<ReferenceNotification> referenceNotifications;
+#endif
+	json DispatchRequest(ScreenshotFeature& a_feature, const json& a_request
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		,
+		std::function<void(const json&)> a_completion = {}
+#endif
+	);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	void DrainReferenceNotifications();
+#endif
 	CSX::Api::ServiceFoundation service;
 	mutable std::mutex mutex;
 	std::unordered_map<std::string, RequestRecord> requests;
 	std::deque<std::string> requestOrder;
 	std::unordered_map<std::string, SequenceRecord> sequences;
+	std::deque<std::string> sequenceOrder;
+	std::size_t sequenceCursor = 0;
+	std::deque<DispatchEntry> manualDispatchQueue;
+	std::deque<DispatchEntry> sequenceDispatchQueue;
+	CSX::ScreenshotPolicy::DispatchArbitration dispatchArbitration;
 	json persistedSettings = nullptr;
 	uint64_t completedArtifacts = 0;
 	uint64_t failedArtifacts = 0;
@@ -191,13 +255,22 @@ private:
 	static constexpr auto kRetention = std::chrono::hours(1);
 	static constexpr uint32_t kMaximumSequenceFrames = 10000;
 
-	json HandleValidatedRequest(ScreenshotFeature& a_feature, const json& a_request);
+	json HandleValidatedRequest(ScreenshotFeature& a_feature, const json& a_request
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		,
+		std::function<void(const json&)> a_completion = {}
+#endif
+	);
+	/** Freeze and validate a still or sequence descriptor using its own settings. */
 	json NormalizeCaptureDescriptor(
 		const ScreenshotFeature& a_feature,
 		const json& a_request,
-		bool a_addSeparateEyeOutputs = false) const;
+		bool a_sequenceSettings = false) const;
+	/** Validate every supported patch field before any setting is changed. */
 	json ValidateSettingsPatch(const json& a_patch) const;
+	/** Apply a validated patch; canonical eye selection owns the legacy mirror. */
 	void ApplySettingsPatch(ScreenshotFeature& a_feature, const json& a_patch) const;
+	/** Report separate still/sequence defaults and the synchronized legacy eye. */
 	json BuildSettings(const ScreenshotFeature& a_feature) const;
 
 	json MakeEnvelope(const json& a_request, bool a_ok) const;
@@ -227,11 +300,15 @@ private:
 	void FinishSequenceChildLocked(RequestRecord& a_child);
 	void TryFinalizeSequenceLocked(SequenceRecord& a_sequence);
 	void FinalizeSequenceLocked(SequenceRecord& a_sequence, const ManifestResult* a_manifestResult);
-	json BuildSequenceManifestLocked(const SequenceRecord& a_sequence, bool a_final) const;
 	void QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool a_final);
 	void DrainManifestResultsLocked();
 	static void ManifestWorkerLoop(std::shared_ptr<ManifestWorkerState> a_state);
 	std::optional<DueFrame> PrepareDueFrameLocked(uint64_t a_engineFrame);
+	std::optional<DispatchEntry> PopDispatchLocked();
+	void RequeueDispatchLocked(DispatchEntry a_entry, bool a_manual);
+	bool RemoveQueuedDispatchLocked(std::string_view a_requestId);
+	void MarkSequenceCancellationLocked(SequenceRecord& a_sequence);
+	void CancelQueuedDispatchesLocked(std::string_view a_code, std::string_view a_reason);
 
 	static std::filesystem::path ResolveDestinationDirectory(
 		const ScreenshotFeature& a_feature,

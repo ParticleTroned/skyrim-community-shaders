@@ -21,7 +21,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 uint32_t DynamicCubemaps::SanitizeCubemapResolution(uint32_t a_resolution)
 {
-	return a_resolution == kQualityCubemapResolution ? kQualityCubemapResolution : kPerformanceCubemapResolution;
+	return a_resolution == kQualityCubemapResolution || a_resolution == kPerformanceCubemapResolution ? a_resolution : Settings{}.CubemapResolution;
 }
 
 void DynamicCubemaps::RefreshActiveCubemapResolution()
@@ -309,10 +309,10 @@ void DynamicCubemaps::LoadSettings(json& o_json)
 		logger::warn(
 			"Unsupported dynamic cubemap resolution {}; using {}",
 			settings.CubemapResolution,
-			kPerformanceCubemapResolution);
+			Settings{}.CubemapResolution);
 	}
 	RefreshActiveCubemapResolution();
-	if (REL::Module::IsVR()) {
+	if (REL::Module::IsVR() && gameSettingsInitialized) {
 		Util::LoadGameSettings(iniVRCubeMapSettings);
 	}
 	recompileFlag = true;
@@ -354,6 +354,9 @@ void DynamicCubemaps::DataLoaded()
 		// enable cubemap settings in VR
 		Util::EnableBooleanSettings(iniVRCubeMapSettings, GetName());
 		Util::EnableBooleanSettings(hiddenVRCubeMapSettings, GetName());
+		// Apply saved choices after defaults so disabled reflections survive a restart.
+		gameSettingsInitialized = true;
+		Util::LoadGameSettings(iniVRCubeMapSettings);
 	}
 	MenuOpenCloseEventHandler::Register();
 }
@@ -815,8 +818,7 @@ void DynamicCubemaps::UpdateCubemap()
 	CS_GPU_PASS("DynamicCubemaps::UpdateCubemap");
 
 	auto context = globals::d3d::context;
-	ID3D11Buffer* sharedBuffers[2]{ globals::state->sharedDataCB->CB(), globals::state->featureDataCB->CB() };
-	context->CSSetConstantBuffers(5, 2, sharedBuffers);
+	Util::BindSharedDataConstantBuffersForCS(context);
 
 	// Reset capture when game time jumps (wait menu, timescale changes, console commands)
 	if (auto calendar = globals::game::calendar) {

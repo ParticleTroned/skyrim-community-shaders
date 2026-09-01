@@ -53,11 +53,13 @@ struct AdaptiveBrightness : Feature
 			{ "Separate exterior day and night balance profiles",
 				"Separate interior, dungeon, and dwelling profiles",
 				"Hierarchical worldspace, region, city, location, and cell profiles with COC codes",
-				"Unified global and per-profile Lighting, Bloom, Water, and wind adjustment layers" }
+				"Unified global and per-profile Lighting, Color, Bloom, Water, and wind adjustment layers" }
 		};
 	}
 
 	virtual bool SupportsVR() override { return true; }
+	virtual void DrawSettingsHeaderControls() override;
+
 	enum class Profile : uint32_t
 	{
 		ExteriorDay,
@@ -81,11 +83,21 @@ struct AdaptiveBrightness : Feature
 	struct ProfileSettings
 	{
 		float brightness = 1.0f;
+		float contrast = 1.0f;
+		float saturation = 1.0f;
 		bool advanced = false;
 		bool bloomAdvanced = false;
 		bool waterAdvanced = false;
 
 		float skyBrightnessMult = 1.0f;
+		float skySaturation = 1.0f;
+		float cloudBrightnessMult = 1.0f;
+		float cloudSaturation = 1.0f;
+		float fogIntensity = 1.0f;
+		float sunGlareIntensity = 1.0f;
+		float effectBrightness = 1.0f;
+		float skyStaticBrightness = 1.0f;
+		float skyStaticTransparency = 0.0f;
 		float directionalLightMult = 1.0f;
 		float pointLightMult = 1.0f;
 		float linearPointLightMult = 1.0f;
@@ -99,6 +111,7 @@ struct AdaptiveBrightness : Feature
 		float effectLightingMult = 1.0f;
 
 		float skyGammaOffset = 0.0f;
+		float cloudGammaOffset = 0.0f;
 		float fogGammaOffset = 0.0f;
 		float fogAlphaGammaOffset = 0.0f;
 		float waterGammaOffset = 0.0f;
@@ -143,6 +156,7 @@ struct AdaptiveBrightness : Feature
 	struct Settings
 	{
 		bool enabled = true;
+		bool useAmbientEffectLighting = false;
 		float dayStartHour = 9.0f;
 		float nightStartHour = 21.0f;
 		float transitionHours = 1.0f;
@@ -161,9 +175,31 @@ struct AdaptiveBrightness : Feature
 		float linearSpotlightMult;
 		float omnidirectionalBulbMult;
 		float linearOmnidirectionalBulbMult;
+		float skySaturation;
+		float ambientMult;
+		float contrast;
+		float saturation;
+		float cloudBrightness;
+		float cloudSaturation;
+		float fogIntensity;
+		float sunGlareIntensity;
+		uint32_t useAmbientEffectLighting;
+		float skyStaticTransparency;
+		float effectBrightness;
+		float skyStaticBrightness;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
-	static_assert(sizeof(PerFrameData) == 32);
+	static_assert(sizeof(PerFrameData) == 80);
+	static_assert(offsetof(PerFrameData, skySaturation) == 32);
+	static_assert(offsetof(PerFrameData, ambientMult) == 36);
+	static_assert(offsetof(PerFrameData, contrast) == 40);
+	static_assert(offsetof(PerFrameData, saturation) == 44);
+	static_assert(offsetof(PerFrameData, cloudBrightness) == 48);
+	static_assert(offsetof(PerFrameData, fogIntensity) == 56);
+	static_assert(offsetof(PerFrameData, useAmbientEffectLighting) == 64);
+	static_assert(offsetof(PerFrameData, skyStaticTransparency) == 68);
+	static_assert(offsetof(PerFrameData, effectBrightness) == 72);
+	static_assert(offsetof(PerFrameData, skyStaticBrightness) == 76);
 
 	struct alignas(16) VanillaPointLightData
 	{
@@ -246,6 +282,7 @@ struct AdaptiveBrightness : Feature
 	mutable uint32_t smoothedWaterWindFrame = 0;
 	mutable bool waterWindSmoothingInitialized = false;
 	bool performanceCostMeasurementEnabled = true;
+	bool weatherColorHookInstalled = false;
 
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
@@ -254,7 +291,7 @@ struct AdaptiveBrightness : Feature
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual json CapturePerformanceSettingsState() const override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
-	virtual bool IsPerformanceCostMeasurementEnabled() const override { return performanceCostMeasurementEnabled && IsRuntimeAvailable(); }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override { return IsRuntimeEnabled(); }
 	virtual bool UsesTotalPerformanceCostMeasurement() const override { return true; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
 	virtual bool IsPerformanceCostMeasurementReady() const override { return IsRuntimeAvailable(); }
@@ -267,7 +304,8 @@ struct AdaptiveBrightness : Feature
 	virtual void PostPostLoad() override;
 
 	bool IsRuntimeAvailable() const;
-	bool IsAdjustmentRuntimeActive() const;
+	/// Enables only Adaptive Balance adjustments; independent renderer features retain their state.
+	void SetEnabled(bool a_enabled);
 	bool IsRuntimeEnabled() const;
 	PerFrameData GetCommonBufferData() const;
 	bool NeedsVanillaPointLightData() const;
@@ -340,6 +378,8 @@ struct AdaptiveBrightness : Feature
 		bool a_allowEdits);
 	void DrawGlobalSettings(bool a_showAdvancedControls);
 	void DrawLightingSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_globalLayer);
+	/// Draws whole-scene grading controls independent of detailed lighting adjustments.
+	void DrawColorSettings(ProfileSettings& a_profile);
 	void DrawBloomSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_globalLayer);
 	void DrawWaterSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_globalLayer);
 	void DrawWaterWindSettings(ProfileSettings& a_profile, bool a_globalLayer);

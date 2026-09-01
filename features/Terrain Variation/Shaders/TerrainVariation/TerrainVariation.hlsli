@@ -79,9 +79,9 @@ inline float TerrainStochasticMipLevel(Texture2D tex)
 // Near c1/c2 ties, fade w2 so the discarded corner cannot pop;
 // near c0/c1 ties, disable that fade so the primary swap stays symmetric.
 // Contrast exponent is 2, so weights are squared rather than pow()'d.
-inline StochasticOffsets ComputeStochasticOffsets(float2 landscapeUV)
+inline StochasticOffsets ComputeStochasticOffsetsScaled(float2 uv, float scale)
 {
-	float2 skewUV = mul(SKEW_MATRIX, landscapeUV * WORLD_SCALE);
+	float2 skewUV = mul(SKEW_MATRIX, uv * scale);
 	float2 vxID = floor(skewUV);
 	float2 f = frac(skewUV);
 	float bz = 1.0 - f.x - f.y;
@@ -132,6 +132,17 @@ inline StochasticOffsets ComputeStochasticOffsets(float2 landscapeUV)
 	o.offset2 = hash2D2D(c1.cell);
 	o.tap1Weight = w1 * rcp(max(w1 + w2, 1e-8));
 	return o;
+}
+
+inline StochasticOffsets ComputeStochasticOffsets(float2 landscapeUV)
+{
+	return ComputeStochasticOffsetsScaled(landscapeUV, WORLD_SCALE);
+}
+
+// Mesh UVs already tile, so one lattice cell spans one UV tile.
+inline StochasticOffsets ComputeStochasticOffsetsMesh(float2 meshUV)
+{
+	return ComputeStochasticOffsetsScaled(meshUV, 1.0);
 }
 
 // --------------------- STOCHASTIC SAMPLING FUNCTIONS --------------------- //
@@ -206,6 +217,14 @@ inline float4 StochasticEffectParallax(Texture2D tex, SamplerState samp, float2 
 	float4 s1 = tex.SampleLevel(samp, uv + offsets.offset1, mipLevel);
 	float4 s2 = tex.SampleLevel(samp, uv + offsets.offset2, mipLevel);
 	return StochasticBlendTwoSamples(s1, s2, offsets.tap1Weight, s1.a, s2.a);
+}
+
+// The ray march and shadow taps use the same lattice as the material maps.
+inline float StochasticHeightChannel(Texture2D<float4> tex, SamplerState samp, float2 uv, float mipLevel, uint channel, StochasticOffsets offsets)
+{
+	float4 s1 = tex.SampleLevel(samp, uv + offsets.offset1, mipLevel);
+	float4 s2 = tex.SampleLevel(samp, uv + offsets.offset2, mipLevel);
+	return StochasticBlendTwoSamples(s1, s2, offsets.tap1Weight, s1[channel], s2[channel])[channel];
 }
 
 #endif  // TERRAIN_VARIATION_HLSLI

@@ -1,9 +1,11 @@
 #include "Features/ScreenshotFeature.h"
 #include "Features/Upscaling.h"
 #include "Features/Upscaling/VRRenderScaleDevBenchBridge.h"
+#include "Features/Upscaling/VRSubmitInputFreshnessBoundary.h"
 #include "Features/VR.h"
 #include "Features/VR/InSceneOverlaySubmitPolicy.h"
 #include "Features/VR/OpenVRSubmitLeasePolicy.h"
+#include "Features/VR/VRRenderScaleFrameBoundaryPolicy.h"
 #include "Globals.h"
 #include "Hooks.h"
 #include "Menu.h"
@@ -43,8 +45,13 @@ namespace
 	std::atomic<uint64_t> g_openVRSubmitCycleState{ 0 };
 	std::mutex g_openVRSubmitCyclePublishMutex;
 	std::mutex g_vrPostLoadCompositorSubmitMutex;
-	std::mutex g_vrRenderScalePresentationWorkMutex;
+	std::recursive_mutex g_vrRenderScalePresentationWorkMutex;
 	std::mutex g_presentedMenuSurfaceMutex;
+	std::atomic<uint64_t> g_vrSubmitPairBoundarySequence{ 0 };
+	thread_local VRSubmitInputFreshnessPolicy::OuterPairBoundaryState
+		g_vrSubmitPairBoundaryState{};
+	thread_local VRRenderScaleFrameBoundaryPolicy::PairCompletion
+		g_vrRelatchPairCompletion{};
 
 	enum class VRNativeRestoreCyclePresentationPath : uint8_t
 	{
@@ -640,10 +647,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				pGamePoseArray,
 				unGamePoseArrayCount);
 			{
-				const std::scoped_lock cyclePublishLock(
-					g_openVRSubmitCyclePublishMutex);
 				const std::scoped_lock presentationWorkLock(
 					g_vrRenderScalePresentationWorkMutex);
+				const std::scoped_lock cyclePublishLock(
+					g_openVRSubmitCyclePublishMutex);
 				const uint64_t previousCycleState =
 					g_openVRSubmitCycleState.load(std::memory_order_acquire);
 				const uint64_t previousCompositorCycleToken =
@@ -671,6 +678,81 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct BSOpenVR_Submit
+	{
+		static void thunk(RE::BSOpenVR* _this, ID3D11Texture2D* a_texture)
+		{
+			// Keep the full native stereo call and its relatch boundary serialized
+			// with nested eye work and compositor-cycle publication.
+			const std::scoped_lock presentationWorkLock(
+				g_vrRenderScalePresentationWorkMutex);
+			// A suppressed nested call has no boundary, but still owns its scope.
+			static thread_local bool nativeSubmitActive = false;
+			const bool nestedSubmit = std::exchange(nativeSubmitActive, true);
+			const auto previousBoundary = g_vrSubmitPairBoundaryState;
+			const auto previousCompletion = g_vrRelatchPairCompletion;
+			const SKSE::stl::scope_exit restoreBoundary([&]() noexcept {
+				g_vrSubmitPairBoundaryState = previousBoundary;
+				g_vrRelatchPairCompletion = previousCompletion;
+				nativeSubmitActive = nestedSubmit;
+			});
+			g_vrSubmitPairBoundaryState = {};
+			g_vrRelatchPairCompletion = {};
+			// The engine wraps its raw texture in a DirectX/Gamma descriptor and
+			// submits both halves with default flags; bounds/flags are not arguments.
+			const vr::Texture_t expectedTexture{
+				a_texture, vr::TextureType_DirectX, vr::ColorSpace_Gamma
+			};
+			if (!nestedSubmit && a_texture) {
+				uint64_t token =
+					g_vrSubmitPairBoundarySequence.fetch_add(
+						1, std::memory_order_acq_rel) +
+					1;
+				if (token == 0) {
+					token = g_vrSubmitPairBoundarySequence.fetch_add(
+								1, std::memory_order_acq_rel) +
+					        1;
+				}
+				g_vrSubmitPairBoundaryState = {
+					.token = token,
+					.compositorCycle =
+						g_openVRSubmitCycleState.load(
+							std::memory_order_acquire) >>
+						1u,
+					.frame = globals::state ? globals::state->frameCount : 0u,
+					.thread = GetCurrentThreadId(),
+					.flags = vr::Submit_Default,
+					.source =
+						VRSubmitInputFreshnessPolicy::CaptureSubmitTextureIdentity(
+							&expectedTexture),
+					.active = true,
+				};
+				g_vrRelatchPairCompletion.identity = {
+					.token = token,
+					.compositorCycle = g_vrSubmitPairBoundaryState.compositorCycle,
+					.frame = g_vrSubmitPairBoundaryState.frame,
+					.thread = g_vrSubmitPairBoundaryState.thread,
+				};
+			}
+			func(_this, a_texture);
+			const VRRenderScaleFrameBoundaryPolicy::PairIdentity completedIdentity{
+				.token = g_vrSubmitPairBoundaryState.token,
+				.compositorCycle =
+					g_openVRSubmitCycleState.load(std::memory_order_acquire) >> 1u,
+				.frame = globals::state ? globals::state->frameCount : 0u,
+				.thread = GetCurrentThreadId(),
+			};
+			if (!nestedSubmit &&
+				VRRenderScaleFrameBoundaryPolicy::CanServiceCompletedPair(
+					g_vrRelatchPairCompletion, completedIdentity)) {
+				g_vrSubmitPairBoundaryState = {};
+				g_vrRelatchPairCompletion = {};
+				globals::features::upscaling.ServiceVRRenderScaleRelatchAtFrameBoundary();
+			}
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	struct IVRCompositor_Submit
 	{
 		static vr::EVRCompositorError thunk(vr::IVRCompositor* _this, vr::EVREye eEye, const vr::Texture_t* pTexture, const vr::VRTextureBounds_t* pBounds, vr::EVRSubmitFlags nSubmitFlags)
@@ -679,6 +761,13 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 			auto& upscaling = globals::features::upscaling;
 			const std::scoped_lock presentationWorkLock(
 				g_vrRenderScalePresentationWorkMutex);
+			const auto completedPairToken = g_vrSubmitPairBoundaryState.token;
+			const SKSE::stl::scope_exit recordEyeCompletion([=]() noexcept {
+				VRRenderScaleFrameBoundaryPolicy::RecordEyeCompletion(
+					g_vrRelatchPairCompletion,
+					completedPairToken,
+					static_cast<uint32_t>(eEye));
+			});
 			uint64_t compositorCycleState =
 				g_openVRSubmitCycleState.load(std::memory_order_acquire);
 			uint64_t compositorCycleToken = compositorCycleState >> 1u;
@@ -711,6 +800,24 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				submitStageVendorResumeCooldownAtCycleStart =
 					(compositorCycleState & kOpenVRCycleCooldownBit) != 0;
 			}
+			const auto& activePairBoundary =
+				g_vrSubmitPairBoundaryState;
+			const auto submitBoundaryObservation =
+				VRSubmitInputFreshnessPolicy::ObserveNestedSubmit(
+					activePairBoundary,
+					pTexture,
+					compositorCycleToken,
+					globals::state ? globals::state->frameCount : 0u,
+					GetCurrentThreadId(),
+					nSubmitFlags);
+			const auto submitBoundaryIdentity =
+				VRSubmitInputFreshnessPolicy::ResolveSubmitBoundaryIdentity(
+					submitBoundaryObservation);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			VRRenderScaleDevBenchBridge::RecordSubmitBoundaryRejection(
+				VRSubmitInputFreshnessPolicy::ResolveOuterBoundaryRejection(
+					submitBoundaryObservation));
+#endif
 			// Retain the complete stereo generation while vendor, overlay, and
 			// OpenVR work runs. Observation commit revalidates this exact packet.
 			const auto renderScalePresentationPacket =
@@ -730,8 +837,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						VRNativeRestoreCyclePresentationPath::
 							BlackKeepalive);
 			const auto rejectQuarantinedSubmit = [&](
-													 const vr::Texture_t* a_texture,
-													 const vr::VRTextureBounds_t* a_bounds) {
+													 [[maybe_unused]] const vr::Texture_t* a_texture,
+													 [[maybe_unused]] const vr::VRTextureBounds_t* a_bounds) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				VRRenderScaleDevBenchBridge::RecordPresentationAuditObservation({
 					.valid = true,
@@ -755,7 +862,6 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				upscaling.CompleteVRLoadPresentationProbeSubmit(
 					probeSequence,
 					vr::VRCompositorError_RequestFailed);
-#endif
 				Upscaling::TraceVRMenuPresentationOpenVRSubmit(
 					"post-load-cycle-quarantine",
 					eEye,
@@ -763,6 +869,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					a_bounds,
 					nSubmitFlags,
 					vr::VRCompositorError_RequestFailed);
+#endif
 				return vr::VRCompositorError_RequestFailed;
 			};
 			if (upscaling.ShouldQuarantineVRPostLoadCompositorCycle(
@@ -909,6 +1016,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						globals::features::screenshotFeature.HasPendingCapture()) {
 						globals::features::screenshotFeature.ObserveAcceptedVRSubmit(
 							compositorCycleToken,
+							screenshotLease.generation,
+							screenshotLease.deviceIdentity,
 							submitPacket.eye,
 							screenshotTextureLifetime.get(),
 							hasScreenshotBounds ? &retainedScreenshotBounds : nullptr,
@@ -957,7 +1066,6 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 							PresentationAuditSelection::BlackKeepalive,
 					});
 				}
-#endif
 				Upscaling::TraceVRMenuPresentationOpenVRSubmit(
 					a_path,
 					submitPacket.eye,
@@ -965,6 +1073,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					retainedBounds,
 					submitPacket.flags,
 					result);
+#endif
 				lastSubmitPacket = submitPacket;
 				return result;
 			};
@@ -1233,6 +1342,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					uint64_t a_expectedGuardEpoch,
 					uint32_t a_expectedContractGeneration,
 					ID3D11Texture2D* a_expectedTexture) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					const uint32_t diagnosticFrame =
+						globals::state ? globals::state->frameCount : 0u;
+#endif
 					if (a_expectedGuardEpoch == 0 ||
 						!a_expectedTexture ||
 						upscaling.GetVRNativeRestorePresentationGuardActiveEpoch() !=
@@ -1241,6 +1354,13 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						upscaling.IsVRPostLoadCompositorHoldActive() ||
 						upscaling.ShouldQuarantineVRPostLoadCompositorCycle(
 							compositorCycleToken)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+						upscaling.RecordVRNativeRestoreCommitDiagnostic(
+							Upscaling::VRNativeRestoreCommitDiagnosticOutcome::
+								PreSubmitProtectionRejected,
+							diagnosticFrame,
+							compositorCycleToken);
+#endif
 						return;
 					}
 
@@ -1248,6 +1368,13 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						!lastSubmitPacket.GetColorTexture() ||
 						lastSubmitPacket.GetColorTexture() !=
 							a_expectedTexture) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+						upscaling.RecordVRNativeRestoreCommitDiagnostic(
+							Upscaling::VRNativeRestoreCommitDiagnosticOutcome::
+								SubmitLeaseRejected,
+							diagnosticFrame,
+							compositorCycleToken);
+#endif
 						return;
 					}
 
@@ -1263,25 +1390,52 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						freshObservation.transitionEpoch !=
 							a_expectedGuardEpoch ||
 						freshObservation.contractGeneration !=
-							a_expectedContractGeneration ||
+							a_expectedContractGeneration) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+						upscaling.RecordVRNativeRestoreCommitDiagnostic(
+							Upscaling::VRNativeRestoreCommitDiagnosticOutcome::
+								PostSubmitPreparationRejected,
+							diagnosticFrame,
+							compositorCycleToken);
+#endif
+						return;
+					}
+					if (
 						upscaling.GetVRNativeRestorePresentationGuardActiveEpoch() !=
 							a_expectedGuardEpoch ||
 						upscaling.IsVRInitialLoadPresentationProtectionActive() ||
 						upscaling.IsVRPostLoadCompositorHoldActive() ||
 						upscaling.ShouldQuarantineVRPostLoadCompositorCycle(
 							compositorCycleToken)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+						upscaling.RecordVRNativeRestoreCommitDiagnostic(
+							Upscaling::VRNativeRestoreCommitDiagnosticOutcome::
+								PostSubmitProtectionRejected,
+							diagnosticFrame,
+							compositorCycleToken);
+#endif
 						return;
 					}
-					(void)upscaling
-						.RecordVRNativeRestorePresentationObservationIfUnprotected(
-							freshObservation,
-							renderScalePresentationPacketPtr);
+					[[maybe_unused]] const bool recorded = upscaling
+				                                               .RecordVRNativeRestorePresentationObservationIfUnprotected(
+																   freshObservation,
+																   renderScalePresentationPacketPtr);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					upscaling.RecordVRNativeRestoreCommitDiagnostic(
+						recorded ?
+							Upscaling::VRNativeRestoreCommitDiagnosticOutcome::Recorded :
+							Upscaling::VRNativeRestoreCommitDiagnosticOutcome::
+								ControllerCommitRejected,
+						diagnosticFrame,
+						compositorCycleToken);
+#endif
 				};
 			const auto submitLatchedNativeRestoreCycle = [&](
 															 const char* a_path,
 															 bool a_recordStrictObservation = false) {
 				if (nativeRestoreCycle.path ==
 					VRNativeRestoreCyclePresentationPath::Rejected) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 					Upscaling::TraceVRMenuPresentationOpenVRSubmit(
 						"native-restore-cycle-rejected",
 						eEye,
@@ -1289,6 +1443,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						pBounds,
 						nSubmitFlags,
 						nativeRestoreCycle.rejectionResult);
+#endif
 					return nativeRestoreCycle.rejectionResult;
 				}
 				if (!nativeRestoreCycle.lifetime ||
@@ -1378,6 +1533,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						pTexture,
 						pBounds,
 						keepalive)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 					Upscaling::TraceVRMenuPresentationOpenVRSubmit(
 						"native-restore-keepalive-unavailable",
 						eEye,
@@ -1385,6 +1541,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						pBounds,
 						nSubmitFlags,
 						vr::VRCompositorError_RequestFailed);
+#endif
 					return rejectNativeRestoreCycle(
 						vr::VRCompositorError_RequestFailed);
 				}
@@ -1605,7 +1762,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				vr::Texture_t upscaledTexture{};
 				vr::VRTextureBounds_t upscaledBounds{};
 				if (!presentationObservation.valid &&
-					upscaling.SubmitVRUpscaledFrame(eEye, compositorCycleToken, submitStageVendorResumeCooldownAtCycleStart, pTexture, pBounds, upscaledTexture, upscaledBounds, presentationObservation)) {
+					upscaling.SubmitVRUpscaledFrame(eEye, compositorCycleToken, submitBoundaryIdentity, submitStageVendorResumeCooldownAtCycleStart, pTexture, pBounds, upscaledTexture, upscaledBounds, presentationObservation)) {
 					refreshOriginalSubmitDecision();
 					if (!nativeRestoreGuardActive) {
 						probePresentationObservation = &presentationObservation;
@@ -3300,6 +3457,7 @@ bool VR::InstallSubmitHook(bool a_enableProcessing)
 				hookResult);
 			return false;
 		}
+		stl::write_vfunc<0x03, BSOpenVR_Submit>(RE::VTABLE_BSOpenVR[0]);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (a_enableProcessing)
 			g_openVRSubmitProcessingEnabled.store(true, std::memory_order_release);

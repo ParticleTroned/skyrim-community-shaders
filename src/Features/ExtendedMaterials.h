@@ -23,6 +23,8 @@ struct ExtendedMaterials : Feature
 	}
 
 	bool HasShaderDefine(RE::BSShader::Type shaderType) override;
+	static constexpr float kMinParallaxStrength = 0.0f;
+	static constexpr float kMaxParallaxStrength = 2.0f;
 
 	struct alignas(16) Settings
 	{
@@ -35,7 +37,8 @@ struct ExtendedMaterials : Feature
 		uint EnableShadows = 1;
 		uint EnableParallaxWarpingFix = 1;
 
-		uint pad[2]{};
+		float ParallaxStrength = 1.0f;
+		uint pad{};
 	};
 	STATIC_ASSERT_ALIGNAS_16(Settings);
 
@@ -46,6 +49,14 @@ struct ExtendedMaterials : Feature
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual void DrawPerformanceSettings(bool) override;
+	virtual json CapturePerformanceSettingsState() const override;
+	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override;
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
+	virtual json CapturePerformanceCostMeasurementState() const override;
+	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
@@ -54,4 +65,8 @@ struct ExtendedMaterials : Feature
 
 	virtual bool SupportsVR() override { return true; };
 	virtual bool IsCore() const override { return true; };
+
+private:
+	static void SanitizeSettings(Settings& a_settings);
+	void DrawParallaxStrength();
 };

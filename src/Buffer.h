@@ -1,6 +1,7 @@
 #pragma once
 
 #include <d3d11.h>
+#include <dxgi1_2.h>
 #include <string>
 
 #include <Windows.Foundation.h>
@@ -299,6 +300,19 @@ public:
 		}
 	}
 
+	/** Keeps the single NT sharing handle alive for repeated imports on the render thread. */
+	HANDLE GetOrCreateSharedHandle()
+	{
+		if (!sharedHandle_) {
+			DX::ThrowIfFailed((desc.MiscFlags & D3D11_RESOURCE_MISC_SHARED_NTHANDLE) ? S_OK : E_INVALIDARG);
+			winrt::com_ptr<IDXGIResource1> dxgiResource;
+			DX::ThrowIfFailed(resource->QueryInterface(IID_PPV_ARGS(dxgiResource.put())));
+			DX::ThrowIfFailed(dxgiResource->CreateSharedHandle(nullptr,
+				DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr, sharedHandle_.put()));
+		}
+		return sharedHandle_.get();
+	}
+
 	void CreateSRV(D3D11_SHADER_RESOURCE_VIEW_DESC const& a_desc)
 	{
 		auto device = globals::d3d::device;
@@ -335,6 +349,7 @@ public:
 	winrt::com_ptr<ID3D11DepthStencilView> dsv;
 
 private:
+	winrt::handle sharedHandle_;
 	std::string name_;
 };
 

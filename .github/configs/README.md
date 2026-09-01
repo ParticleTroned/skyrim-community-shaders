@@ -6,6 +6,8 @@ This directory contains configuration files used by the CI/CD pipeline for build
 
 -   `shader-validation.yaml`: Configuration for shader compilation validation using hlslkit (Skyrim SE)
 -   `shader-validation-vr.yaml`: VR Configuration for shader compilation validation using hlslkit (Skyrim VR)
+-   `runtime-upscaling-compute-shaders.yaml`: Manually maintained flat
+    upscaling encoder variants loaded directly by the runtime
 -   `runtime-foveated-compute-shaders-vr.yaml`: Manually maintained VR
     foveated-pipeline compute entry points that are not present in the engine
     shader compilation log
@@ -76,10 +78,12 @@ These files are automatically used by the GitHub Actions workflows during shader
 -   Shader file configurations
 -   Compilation parameters
 
-`runtime-foveated-compute-shaders-vr.yaml` is intentionally not generated from
-the engine compilation log. Add or remove entries there with the corresponding
-runtime-loaded VR foveated-pipeline compute shaders, and keep its defines
-aligned with `Util::CompileShader`.
+The two `runtime-*-compute-shaders*.yaml` configurations are intentionally
+not generated from the engine compilation log. Add or remove entries with
+the corresponding runtime-loaded compute shaders, and keep their defines
+aligned with `Util::CompileShader`. Both cover the default, DLSS, FSR, and
+FSR depth-output encoder variants; the VR configuration also covers the
+foveated pipeline.
 
 The files should be regenerated when:
 

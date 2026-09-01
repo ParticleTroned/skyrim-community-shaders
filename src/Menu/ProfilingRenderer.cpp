@@ -10,11 +10,12 @@
 #include <string_view>
 #include <unordered_map>
 
+#include "Features/Upscaling.h"
 #include "Globals.h"
-#include "RE/B/BSOpenVR.h"
 #include "RE/M/Misc.h"
 #include "State.h"
 #include "Util.h"
+#include "Utils/OpenVRFrameTiming.h"
 #include "Utils/UI.h"
 
 static constexpr float kGraphHeadroomScale = 1.2f;
@@ -26,8 +27,10 @@ static constexpr float kTimingTablePercentColumnWidth = 45.0f;
 static constexpr float kStatsRefreshSeconds = 1.0f;
 static constexpr uint32_t kDisplayedRollingFrameCount = 60;
 static constexpr float kMaxDisplayTimingSampleMs = 1000.0f;
+#ifdef ENABLE_SKYRIM_VR
 static constexpr uint32_t kOpenVRTimingRetryFrames = 120;
 static constexpr uint32_t kOpenVRTimingMaxCacheAgeFrames = 120;
+#endif
 
 static bool IsPositiveFinite(float value)
 {
@@ -83,6 +86,7 @@ struct RollingTimingAverage
 	uint32_t count = 0;
 };
 
+#ifdef ENABLE_SKYRIM_VR
 struct OpenVRGameTimingCache
 {
 	RollingTimingAverage gpuMs;
@@ -92,6 +96,7 @@ struct OpenVRGameTimingCache
 	uint32_t nextRetryFrame = 0;
 	bool disabled = false;
 };
+#endif
 
 static float GetAverageGameFrameMs(float& sampleMs, bool& hasSample)
 {
@@ -146,44 +151,7 @@ static float GetAverageGameFrameMs(float& sampleMs, bool& hasSample)
 	return frameMsAverage.Get();
 }
 
-static bool TryGetOpenVRFrameTiming(vr::IVRCompositor* compositor, vr::Compositor_FrameTiming* timing, bool* faulted)
-{
-	if (faulted)
-		*faulted = false;
-	if (!compositor || !timing)
-		return false;
-
-	bool result = false;
-	__try {
-		result = compositor->GetFrameTiming(timing, 0);
-	} __except (EXCEPTION_EXECUTE_HANDLER) {
-		if (faulted)
-			*faulted = true;
-		result = false;
-	}
-	return result;
-}
-
-static vr::IVRCompositor* TryResolveOpenVRCompositor(bool* faulted)
-{
-	if (faulted)
-		*faulted = false;
-
-	vr::IVRCompositor* compositor = nullptr;
-	__try {
-		auto* openvr = RE::BSOpenVR::GetSingleton();
-		compositor = openvr ? RE::BSOpenVR::GetIVRCompositor() : nullptr;
-		if (!compositor && openvr)
-			compositor = openvr->vrContext.vrCompositor;
-	} __except (EXCEPTION_EXECUTE_HANDLER) {
-		if (faulted)
-			*faulted = true;
-		compositor = nullptr;
-	}
-
-	return compositor;
-}
-
+#ifdef ENABLE_SKYRIM_VR
 static void ApplyOpenVRTimingCache(
 	const OpenVRGameTimingCache& cache,
 	uint32_t frameCount,
@@ -208,9 +176,11 @@ static void ApplyOpenVRTimingCache(
 		summary.hasGameCpu = true;
 	}
 }
+#endif
 
 static void CaptureOpenVRGameTiming(ProfilingRenderer::PerformanceTimingSummary& summary)
 {
+#ifdef ENABLE_SKYRIM_VR
 	static OpenVRGameTimingCache cache;
 
 	const uint32_t frameCount = summary.frameCount;
@@ -225,7 +195,7 @@ static void CaptureOpenVRGameTiming(ProfilingRenderer::PerformanceTimingSummary&
 		cache.lastSampleFrame = frameCount;
 
 		bool resolveFaulted = false;
-		auto* compositor = TryResolveOpenVRCompositor(&resolveFaulted);
+		auto* compositor = Util::OpenVRFrameTiming::TryResolveCompositor(&resolveFaulted);
 
 		if (resolveFaulted) {
 			cache.disabled = true;
@@ -236,7 +206,7 @@ static void CaptureOpenVRGameTiming(ProfilingRenderer::PerformanceTimingSummary&
 			timing.m_nSize = static_cast<uint32_t>(sizeof(timing));
 
 			bool faulted = false;
-			if (TryGetOpenVRFrameTiming(compositor, &timing, &faulted)) {
+			if (Util::OpenVRFrameTiming::TryGetFrameTiming(compositor, &timing, &faulted)) {
 				const float gpuMs = timing.m_flPreSubmitGpuMs;
 				if (IsPositiveFinite(gpuMs)) {
 					cache.gpuMs.Push(gpuMs);
@@ -261,6 +231,46 @@ static void CaptureOpenVRGameTiming(ProfilingRenderer::PerformanceTimingSummary&
 	}
 
 	ApplyOpenVRTimingCache(cache, frameCount, summary);
+#else
+	(void)summary;
+#endif
+}
+
+static void CaptureFlatGameTiming(Profiler& profiler, ProfilingRenderer::PerformanceTimingSummary& summary)
+{
+	summary.flatTiming = true;
+	const auto* history = profiler.GetFlatTiming();
+	if (!history)
+		return;
+	summary.flatPresentId = history->presentId;
+	summary.flatTimingEpoch = history->epoch;
+	// D3D11 timestamps cannot describe the frame-generation swap chain's D3D12 work.
+	if (globals::features::upscaling.IsFrameGenerationDx12PathActive())
+		return;
+	summary.flatSamples.assign(history->samples.begin(), history->samples.end());
+	TimingAverage gpuAverage, cpuAverage;
+	uint32_t count = 0;
+	for (auto it = history->samples.rbegin(); it != history->samples.rend() && count < kDisplayedRollingFrameCount; ++it) {
+		if (!it->resolved)
+			continue;
+		++count;
+		if (it->hasGpu)
+			gpuAverage.Push(it->gpuMs);
+		if (it->hasCpu)
+			cpuAverage.Push(it->cpuMs);
+		if (count == 1) {
+			summary.samplePresentId = it->presentId;
+			summary.sampleFrameCount = it->frame;
+			summary.gameGpuSampleMs = it->gpuMs;
+			summary.gameCpuSampleMs = it->cpuMs;
+			summary.hasGameGpuSample = it->hasGpu;
+			summary.hasGameCpuSample = it->hasCpu;
+		}
+	}
+	summary.gameGpuMs = gpuAverage.Get();
+	summary.gameCpuMs = cpuAverage.Get();
+	summary.hasGameGpu = gpuAverage.HasSamples() && summary.hasGameGpuSample;
+	summary.hasGameCpu = cpuAverage.HasSamples() && summary.hasGameCpuSample;
 }
 
 static void NormalizeGameFrameTiming(ProfilingRenderer::PerformanceTimingSummary& summary)
@@ -531,7 +541,7 @@ struct DisplayTimingStats
 
 enum class DisplayTimingContribution
 {
-	FullScope,
+	Self,
 	Outermost
 };
 
@@ -539,7 +549,7 @@ static uint32_t CollectDisplayTimingSamples(
 	const Profiler::TimerResult& result,
 	bool cpuMode,
 	std::array<float, kDisplayedRollingFrameCount>& samples,
-	DisplayTimingContribution contribution = DisplayTimingContribution::FullScope)
+	DisplayTimingContribution contribution = DisplayTimingContribution::Self)
 {
 	samples.fill(0.0f);
 
@@ -936,7 +946,7 @@ bool ProfilingRenderer::RenderFeatureTimingData(const std::string& featurePrefix
 		ImGui::TableNextColumn();
 		ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "Total");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextWrapped("Sum of outermost scopes in each matching timer namespace per frame. Nested rows are not counted again.");
+			ImGui::TextWrapped("Inclusive cost of each matching timer namespace. Individual rows show self time with profiled descendants excluded.");
 		}
 		ImGui::TableNextColumn();
 		ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "%.3f", data.totalAvg);
@@ -1053,6 +1063,7 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 	if (showModeToggle) {
 		RenderTimingModeToggle();
 		cpuMode = (timingMode == TimingMode::CPU);
+		ImGui::TextDisabled("Self time (profiled descendants excluded)");
 		ImGui::Separator();
 	}
 
@@ -1306,7 +1317,8 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 			const uint32_t sampleCount =
 				CollectDisplayTimingSamples(result, false, samples, DisplayTimingContribution::Outermost);
 			bucket.gpuSamples.Add(samples, sampleCount);
-			gpuTotalSamples.Add(samples, sampleCount);
+			const auto selfCount = CollectDisplayTimingSamples(result, false, samples);
+			gpuTotalSamples.Add(samples, selfCount);
 		}
 
 		if (HasLiveTimingMode(result, true)) {
@@ -1314,14 +1326,19 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 			const uint32_t sampleCount =
 				CollectDisplayTimingSamples(result, true, samples, DisplayTimingContribution::Outermost);
 			bucket.cpuSamples.Add(samples, sampleCount);
-			cpuTotalSamples.Add(samples, sampleCount);
+			const auto selfCount = CollectDisplayTimingSamples(result, true, samples);
+			cpuTotalSamples.Add(samples, selfCount);
 		}
 	}
 
 	summary.frameMs = GetAverageGameFrameMs(summary.frameSampleMs, summary.hasFrameSample);
 	summary.fps = summary.frameMs > 0.0f ? 1000.0f / summary.frameMs : 0.0f;
 	summary.fpsSample = summary.frameSampleMs > 0.0f ? 1000.0f / summary.frameSampleMs : 0.0f;
-	CaptureOpenVRGameTiming(summary);
+	if (globals::game::isVR) {
+		CaptureOpenVRGameTiming(summary);
+	} else {
+		CaptureFlatGameTiming(profiler, summary);
+	}
 	if (gpuTotalSamples.HasSamples())
 		summary.gpuTotalMs = gpuTotalSamples.GetStats(false).avgMs;
 	if (cpuTotalSamples.HasSamples())

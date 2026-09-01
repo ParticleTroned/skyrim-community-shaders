@@ -34,6 +34,7 @@ public:
 
 	virtual inline std::string GetName() override { return "Volumetric Lighting"; }
 	virtual inline std::string GetShortName() override { return "VolumetricLighting"; }
+	virtual std::string_view GetShaderCacheAbiVersion() override { return "godray-composite-color-1"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
@@ -65,8 +66,8 @@ public:
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
 	bool IsExteriorEnabled() const;
 	void SetExteriorEnabled(bool enabled);
-	/** @return The active context's finite-safe shader opacity, or neutral when tuning is unavailable. */
-	float GetRuntimeGodrayOpacity() const;
+	/** @return The active context's sanitized tuning, or a neutral profile when unavailable. */
+	GodrayProfile GetRuntimeGodrayProfile() const;
 	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;
 	virtual void EarlyPrepass() override;
@@ -99,9 +100,14 @@ public:
 	RE::BSImagespaceShader* GetOrCreateRaymarchCS(RE::BSComputeShader* computeShader);
 	RE::BSImagespaceShader* GetOrCreateBlurHCS(RE::BSComputeShader* computeShader);
 	RE::BSImagespaceShader* GetOrCreateBlurVCS(RE::BSComputeShader* computeShader);
+	/** @brief Whether the current render area is safe for replacement blur dispatch. */
+	bool HasValidBlurDimensions() const { return blurDimensionsValid; }
+	/** @brief Bind active blur bounds at b1 after selecting a replacement shader. */
 	void SetDimensionsCB() const;
-	void SetGroupCountsHCS(uint32_t& threadGroupCountX) const;
-	void SetGroupCountsVCS(uint32_t& threadGroupCountY) const;
+	/** @brief Set both active-area dispatch axes, keeping horizontal VR groups within each eye. */
+	void SetGroupCountsHCS(uint32_t& threadGroupCountX, uint32_t& threadGroupCountY) const;
+	/** @brief Set both active-area dispatch axes for the vertical blur. */
+	void SetGroupCountsVCS(uint32_t& threadGroupCountX, uint32_t& threadGroupCountY) const;
 
 	// hooks
 
@@ -138,6 +144,7 @@ private:
 	bool TryGetActiveGodrayProfile(GodrayProfile& profile) const;
 	void SanitizeSettings();
 	void SetupVL();
+	void UpdateBlurDimensions();
 	void ClearVolumetricLightingTargets();
 	static int32_t ClampQualityIndex(int32_t quality);
 	static TextureSize ClampTextureSize(const TextureSize& size);
@@ -173,9 +180,16 @@ private:
 		int32_t screenY;
 		int32_t screenXMin1;
 		int32_t screenYMin1;
+		int32_t eyeWidth;
+		uint32_t horizontalGroupsPerEye;
+		uint32_t pad[2];
 	};
+	STATIC_ASSERT_ALIGNAS_16(VLData);
 	VLData vlData = VLData();
 	ConstantBuffer* vlDataCB = nullptr;
+	bool blurDimensionsValid = false;
+	int32_t fullScreenX = 0;
+	int32_t fullScreenY = 0;
 
 	static constexpr int32_t BlurThreadGroupSizeX = 256;
 	static constexpr int32_t BlurThreadGroupSizeY = 256;

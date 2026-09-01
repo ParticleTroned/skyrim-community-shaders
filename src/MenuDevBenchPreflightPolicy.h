@@ -2,6 +2,12 @@
 
 namespace MenuDevBenchPreflightPolicy
 {
+	enum class Preparation
+	{
+		Coc,
+		Tuning,
+	};
+
 	constexpr double kFoveatedCenterArea = 0.3;
 	constexpr double kPeripheryTAACenterArea = 0.3;
 	constexpr double kPeripheryTAAOuterScale = 0.7;
@@ -35,14 +41,15 @@ namespace MenuDevBenchPreflightPolicy
 		       NearlyEqual(a_state.peripheryTAAOuterScale, kPeripheryTAAOuterScale);
 	}
 
-	[[nodiscard]] constexpr bool CanApplyRuntimeSettings(const State& a_state) noexcept
+	[[nodiscard]] constexpr bool CanApplyRuntimeSettings(const State& a_state, Preparation a_preparation = Preparation::Coc) noexcept
 	{
-		return a_state.vr && a_state.inGame && a_state.stabilizerActiveForSession;
+		return a_state.vr && a_state.inGame &&
+		       (a_preparation == Preparation::Tuning || a_state.stabilizerActiveForSession);
 	}
 
-	[[nodiscard]] constexpr bool IsReady(const State& a_state) noexcept
+	[[nodiscard]] constexpr bool IsReady(const State& a_state, Preparation a_preparation = Preparation::Coc) noexcept
 	{
-		return CanApplyRuntimeSettings(a_state) &&
+		return CanApplyRuntimeSettings(a_state, a_preparation) &&
 		       a_state.developerMode &&
 		       HasRequiredFoveation(a_state);
 	}

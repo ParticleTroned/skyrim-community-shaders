@@ -4,6 +4,8 @@
 #include "RE/B/BSShadowDirectionalLight.h"
 #include "Utils/LazyShader.h"
 
+#include <optional>
+
 #define ALBEDO RE::RENDER_TARGETS::kINDIRECT
 #define SPECULAR RE::RENDER_TARGETS::kINDIRECT_DOWNSCALED
 #define REFLECTANCE RE::RENDER_TARGETS::kRAWINDIRECT
@@ -31,6 +33,8 @@ public:
 	void ResetBlendStates();
 	void DeferredPasses();
 	void EndDeferred();
+	/// True once the current frame has published completed opaque depth.
+	bool IsSceneDepthFinal() const;
 
 	void PrepassPasses();
 
@@ -87,6 +91,10 @@ public:
 	ID3D11ShaderResourceView* shadowView = nullptr;
 
 private:
+	/// Copies completed opaque depth without changing the active render targets.
+	bool CopySceneDepth();
+	std::optional<uint32_t> finalSceneDepthFrame;
+
 	template <typename T>
 	void SetShadowCascadeParameters(const T& lightData, DirectionalShadowLightData& dd);
 

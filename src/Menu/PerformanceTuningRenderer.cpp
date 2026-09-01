@@ -37,9 +37,9 @@ namespace
 	constexpr double kFeatureCostMeasurementSeconds = 5.0;
 	constexpr double kFeatureCostMeasurementMilliseconds = kFeatureCostMeasurementSeconds * 1000.0;
 	constexpr double kFeatureCostIntervalMilliseconds = 1000.0;
-	constexpr double kFeatureCostInitialWaitSeconds = 5.0;
-	constexpr double kFeatureCostComparisonWaitSeconds = 9.0;
-	constexpr double kFeatureCostRestoreWaitSeconds = 0.5;
+	constexpr double kFeatureCostInitialWaitSeconds = 10.0;
+	constexpr double kFeatureCostComparisonWaitSeconds = 10.0;
+	constexpr double kFeatureCostRestoreWaitSeconds = 1.0;
 	constexpr double kFeatureCostRestartCooldownSeconds = 10.0;
 	constexpr double kFeatureCostMaximumRunSeconds = 45.0;
 	constexpr std::size_t kFeatureCostMaximumMissingMetricSamples = 2;
@@ -57,20 +57,26 @@ namespace
 		return globals::game::isVR && globals::features::upscaling.IsVRRenderScaleModeActive();
 	}
 
-	constexpr std::array<std::string_view, 15> kPerformanceFeatureOrder = {
+	constexpr std::array<std::string_view, 21> kPerformanceFeatureOrder = {
 		"Upscaling",
 		"VR",
 		"AdaptiveBrightness",
+		"LinearLighting",
 		"ScreenSpaceShadows",
 		"ScreenSpaceGI",
 		"LightLimitFix",
 		"Skylighting",
+		"CloudShadows",
 		"TerrainBlending",
 		"TerrainShadows",
 		"VolumetricLighting",
+		"VolumetricShadows",
 		"UnifiedWater",
 		"Wetterness",
 		"SubsurfaceScattering",
+		"TruePBR",
+		"ExtendedMaterials",
+		"FoliageLighting",
 		"GrassLighting",
 		"GrassCollision"
 	};
@@ -111,6 +117,7 @@ namespace
 		FeatureCostMetricSample gameGpu;
 		FeatureCostMetricSample gameCpu;
 		uint32_t lastFrameCount = 0;
+		std::deque<Util::FlatFrameTiming::PendingSample<kFeatureCostMeasurementBlockCount>> pendingFlatSamples;
 	};
 
 	struct FeatureCostMetricDelta
@@ -164,6 +171,8 @@ namespace
 		FeatureCostMeasurementPhase phase = FeatureCostMeasurementPhase::Idle;
 		json originalState;
 		bool testStateApplied = false;
+		bool devBenchOwned = false;
+		bool reopenMenuOnCompletion = false;
 		double phaseDeadlineTime = 0.0;
 		double phaseStartTime = 0.0;
 		double runStartTime = 0.0;
@@ -222,6 +231,9 @@ namespace
 		double runElapsedMs = 0.0;
 		double phaseElapsedMs = 0.0;
 		std::uint32_t frameCount = 0;
+		std::uint32_t sampleFrameCount = 0;
+		std::uint64_t samplePresentId = 0;
+		bool flatTiming = false;
 		float frameMs = 0.0f;
 		float gameGpuMs = 0.0f;
 		float gameCpuMs = 0.0f;
@@ -498,6 +510,9 @@ namespace
 		sample.runElapsedMs = std::max(0.0, currentTime - runStartTime) * 1000.0;
 		sample.phaseElapsedMs = std::max(0.0, currentTime - phaseStartTime) * 1000.0;
 		sample.frameCount = summary.frameCount;
+		sample.sampleFrameCount = summary.flatTiming ? summary.sampleFrameCount : summary.frameCount;
+		sample.samplePresentId = summary.samplePresentId;
+		sample.flatTiming = summary.flatTiming;
 		sample.hasFrame = summary.hasFrameSample && IsValidFeatureCostTiming(summary.frameSampleMs);
 		sample.hasGameGpu = summary.hasGameGpuSample && IsValidFeatureCostTiming(summary.gameGpuSampleMs);
 		sample.hasGameCpu = summary.hasGameCpuSample && IsValidFeatureCostTiming(summary.gameCpuSampleMs);
@@ -715,9 +730,9 @@ namespace
 		if (shortName == "VR") {
 			json mask = MakeJsonMask({ "EnableDepthBufferCullingExterior",
 				"EnableDepthBufferCullingInterior",
-				"DepthCullingPerformanceMode",
 				"DepthCullingLegacyMode",
-				"MinOccludeeBoxExtent",
+				"MinOccludeeBoxExtentExterior",
+				"MinOccludeeBoxExtentInterior",
 				"EnableStereoBlend",
 				"EnableLightingFoveation",
 				"EnableSSRFoveation",
@@ -879,7 +894,8 @@ namespace
 		       shortName == "LightLimitFix" ||
 		       shortName == "TerrainBlending" ||
 		       shortName == "SubsurfaceScattering" ||
-		       shortName == "ScreenSpaceGI";
+		       shortName == "ScreenSpaceGI" ||
+		       shortName == "ExtendedMaterials";
 	}
 
 	void ApplyRestoredPerformanceRuntimeState(Feature* feature, const json& restoredSettings)
@@ -893,9 +909,6 @@ namespace
 
 		if (feature->GetShortName() == "VR") {
 			feature->RestorePerformanceCostMeasurementState(restoredSettings);
-			if (globals::features::vr.gMinOccludeeBoxExtent) {
-				*globals::features::vr.gMinOccludeeBoxExtent = globals::features::vr.settings.MinOccludeeBoxExtent;
-			}
 		}
 	}
 
@@ -993,6 +1006,27 @@ namespace
 		return PerformanceUserDefaultsRestoreResult::Restored;
 	}
 
+	void ResolveFlatFeatureCostSamples(FeatureCostSample& sample, const ProfilingRenderer::PerformanceTimingSummary& summary, bool finalize = false)
+	{
+		Util::FlatFrameTiming::ResolvePending(sample.pendingFlatSamples, summary.flatSamples,
+			summary.flatPresentId, summary.flatTimingEpoch, finalize, [&](const auto& pending, const auto* match) {
+				const bool hasGpu = match && match->resolved && match->hasGpu;
+				const bool hasCpu = match && match->hasCpu;
+				if (!hasGpu)
+					RecordMissingFeatureCostSample(sample.gameGpu);
+				if (!hasCpu)
+					RecordMissingFeatureCostSample(sample.gameCpu);
+				for (std::size_t block = 0; block < pending.weights.size(); ++block) {
+					if (pending.weights[block] <= 0.0)
+						continue;
+					if (hasGpu)
+						AddFeatureCostMoment(sample.gameGpu, block, match->gpuMs, pending.weights[block]);
+					if (hasCpu)
+						AddFeatureCostMoment(sample.gameCpu, block, match->cpuMs, pending.weights[block]);
+				}
+			});
+	}
+
 	FeatureCostSampleResult AddFeatureCostSample(
 		FeatureCostSample& sample,
 		const ProfilingRenderer::PerformanceTimingSummary& summary)
@@ -1033,10 +1067,12 @@ namespace
 			summary.hasGameGpuSample && IsValidFeatureCostTiming(summary.gameGpuSampleMs);
 		const bool validGameCpuSample =
 			summary.hasGameCpuSample && IsValidFeatureCostTiming(summary.gameCpuSampleMs);
-		if (!validGameGpuSample)
+		if (!summary.flatTiming && !validGameGpuSample)
 			RecordMissingFeatureCostSample(sample.gameGpu);
-		if (!validGameCpuSample)
+		if (!summary.flatTiming && !validGameCpuSample)
 			RecordMissingFeatureCostSample(sample.gameCpu);
+		if (summary.flatTiming)
+			sample.pendingFlatSamples.push_back({ summary.flatPresentId + 1, summary.flatTimingEpoch, {} });
 
 		double remainingSampleWeight = std::min(1.0, remainingDurationMs / frameMs);
 		while (remainingSampleWeight > 1.0e-9) {
@@ -1054,9 +1090,11 @@ namespace
 				break;
 
 			AddFeatureCostMoment(sample.frame, blockIndex, summary.frameSampleMs, chunkWeight);
-			if (validGameGpuSample)
+			if (summary.flatTiming)
+				sample.pendingFlatSamples.back().weights[blockIndex] += chunkWeight;
+			if (!summary.flatTiming && validGameGpuSample)
 				AddFeatureCostMoment(sample.gameGpu, blockIndex, summary.gameGpuSampleMs, chunkWeight);
-			if (validGameCpuSample)
+			if (!summary.flatTiming && validGameCpuSample)
 				AddFeatureCostMoment(sample.gameCpu, blockIndex, summary.gameCpuSampleMs, chunkWeight);
 
 			sample.sampledDurationMs = completesBlock ?
@@ -1261,7 +1299,8 @@ namespace
 		double currentTime,
 		const json& originalState,
 		bool allowClosedMenu,
-		bool resetTrace)
+		bool resetTrace,
+		bool devBenchOwned)
 	{
 		if (!feature || !feature->SupportsPerformanceCostMeasurement() || !feature->IsPerformanceCostMeasurementEnabled())
 			return false;
@@ -1289,6 +1328,8 @@ namespace
 			ResetFeatureCostTrace();
 		state = {};
 		state.originalState = originalState;
+		state.devBenchOwned = devBenchOwned;
+		state.reopenMenuOnCompletion = menu->IsEnabled;
 		state.runStartTime = currentTime;
 		if (menu->IsEnabled) {
 			state.phase = FeatureCostMeasurementPhase::AwaitingMenuClose;
@@ -1317,7 +1358,8 @@ namespace
 			currentTime,
 			feature->CapturePerformanceCostMeasurementState(),
 			false,
-			true);
+			true,
+			false);
 	}
 
 	void ApplyFeatureCostMeasurementTestState(Feature* feature, FeatureCostMeasurementState& state)
@@ -1377,6 +1419,10 @@ namespace
 		if (!feature || !IsFeatureCostMeasurementActive(state) ||
 			state.phase == FeatureCostMeasurementPhase::AwaitingMenuClose)
 			return;
+		if (current.flatTiming) {
+			ResolveFlatFeatureCostSamples(state.currentSample, current);
+			ResolveFlatFeatureCostSamples(state.testSample, current);
+		}
 
 		if (state.phase == FeatureCostMeasurementPhase::PreparingCurrent) {
 			if (currentTime < state.phaseDeadlineTime || !feature->IsPerformanceCostMeasurementReady())
@@ -1408,6 +1454,10 @@ namespace
 			if (currentTime < state.phaseDeadlineTime || !feature->IsPerformanceCostMeasurementReady())
 				return;
 
+			if (current.flatTiming) {
+				ResolveFlatFeatureCostSamples(state.currentSample, current, true);
+				ResolveFlatFeatureCostSamples(state.testSample, current, true);
+			}
 			FinalizeFeatureCostMeasurement(state);
 			state.phase = FeatureCostMeasurementPhase::Complete;
 			StartFeatureCostRestartCooldown(currentTime);
@@ -1711,7 +1761,8 @@ namespace
 				currentTime,
 				currentCase.profile,
 				true,
-				false)) {
+				false,
+				true)) {
 			return false;
 		}
 
@@ -1961,6 +2012,8 @@ namespace
 			return "depth culling, screen-space stereo sync, screen-space FOV, stereo blend, shader FOV, and dynamic cubemap throttle are switched off.";
 		if (shortName == "AdaptiveBrightness")
 			return "all Adaptive Balance Lighting, Bloom, Water appearance, profile/location, and wind contributions are bypassed together.";
+		if (shortName == "LinearLighting")
+			return "Linear Lighting color-space conversions and per-geometry updates are switched off.";
 		if (shortName == "ScreenSpaceShadows")
 			return "Screen Space Shadows are switched off.";
 		if (shortName == "ScreenSpaceGI")
@@ -1969,18 +2022,28 @@ namespace
 			return "particle lights, point-light contact shadows, and particle contact shadows are switched off.";
 		if (shortName == "Skylighting")
 			return "Skylighting's in-game Enable toggle is switched off, so probe updates stop and ambient shading plus reflection occlusion fall back to the unoccluded path.";
+		if (shortName == "CloudShadows")
+			return "cloud-shadow cubemap updates and projection are switched off.";
 		if (shortName == "TerrainBlending")
 			return "Terrain Blending is switched off.";
 		if (shortName == "TerrainShadows")
 			return "Terrain Shadows are switched off.";
 		if (shortName == "VolumetricLighting")
 			return "Volumetric Lighting is switched off for the current interior/exterior context.";
+		if (shortName == "VolumetricShadows")
+			return "directional shadow-map copying, downsampling, and blurring are switched off.";
 		if (shortName == "UnifiedWater")
 			return "optimized water meshes are switched off.";
 		if (shortName == "Wetterness")
 			return "Wetterness is switched off.";
 		if (shortName == "SubsurfaceScattering")
 			return "Subsurface Scattering is switched off.";
+		if (shortName == "TruePBR")
+			return "True PBR material shading is switched off.";
+		if (shortName == "ExtendedMaterials")
+			return "complex materials, parallax, legacy terrain parallax, height blending, parallax shadows, and curvature correction are switched off.";
+		if (shortName == "FoliageLighting")
+			return "all Foliage Lighting contributions to tree foliage and grass are switched off.";
 		if (shortName == "GrassLighting")
 			return "the Grass Lighting runtime toggle is switched off, so grass uses the basic pixel-shading path; the installed shader permutation and vertex work remain the same in both windows.";
 		if (shortName == "GrassCollision")
@@ -2024,8 +2087,8 @@ namespace
 		}
 		ImGui::EndDisabled();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextWrapped("CS closes automatically for the complete run. Keep the headset and scene still for about 25 seconds; a small overlay shows progress and CS reopens with the results.");
-			ImGui::TextWrapped("After a five-second cooldown following menu closure, current settings are measured as five one-second intervals. The feature then changes to Off/None, waits nine seconds, and measures five more one-second intervals before restoring the exact prior state.");
+			ImGui::TextWrapped("CS closes automatically for the complete run. Keep the headset and scene still for about 31 seconds; a small overlay shows progress and CS reopens with the results.");
+			ImGui::TextWrapped("After a ten-second cooldown following menu closure, current settings are measured as five one-second intervals. The feature then changes to Off/None, waits ten seconds, and measures five more one-second intervals before restoring the exact prior state for one second.");
 			ImGui::TextWrapped("If game-frame timing is interrupted during capture, only that five-second measurement restarts.");
 			ImGui::TextWrapped("GPU and CPU rows tolerate up to two missing raw samples across both states. Three or more make only that row unavailable; missing data never blocks Game or FPS.");
 			ImGui::TextWrapped("The automatic idle/vanity camera remains suppressed for the complete run and its previous delay is restored afterward.");
@@ -2369,6 +2432,24 @@ namespace
 		return result;
 	}
 
+	json FeatureCostResultJson(
+		std::string_view shortName,
+		const FeatureCostMeasurementState& state)
+	{
+		auto* feature = FindFeatureByShortName(shortName);
+		return {
+			{ "feature", shortName },
+			{ "displayName", feature ? json(feature->GetDisplayName()) : json(nullptr) },
+			{ "owner", state.devBenchOwned ? "devbench_feature_cost" : "ui" },
+			{ "relativeTo", feature ? GetFeatureCostComparisonLabel(feature) : "Off" },
+			{ "failure", state.failureMessage.empty() ? json(nullptr) : json(state.failureMessage) },
+			{ "game", FeatureCostMetricDeltaJson(state.delta.frame, "ms") },
+			{ "fps", FeatureCostMetricDeltaJson(state.delta.fps, "fps") },
+			{ "gpu", FeatureCostMetricDeltaJson(state.delta.gameGpu, "ms") },
+			{ "cpu", FeatureCostMetricDeltaJson(state.delta.gameCpu, "ms") },
+		};
+	}
+
 	json UpscalingCostSweepProfileJson(const UpscalingCostSweepCase& sweepCase)
 	{
 		const std::uint32_t method = sweepCase.profile.value("upscaleMethod", 0u);
@@ -2408,6 +2489,14 @@ namespace
 		};
 	}
 
+	void AppendFlatTimingSource(json& timing, const FeatureCostTraceSample& sample)
+	{
+		if (!sample.flatTiming)
+			return;
+		timing["gpuCpuFrameCount"] = sample.samplePresentId != 0 ? json(sample.sampleFrameCount) : json(nullptr);
+		timing["gpuCpuPresentId"] = sample.samplePresentId != 0 ? json(sample.samplePresentId) : json(nullptr);
+	}
+
 	json FeatureCostTraceJson(std::uint64_t afterSequence, std::size_t maximumSamples)
 	{
 		maximumSamples = std::clamp<std::size_t>(maximumSamples, 1, kFeatureCostMaximumTracePageSize);
@@ -2439,6 +2528,7 @@ namespace
 				{ "gameGpuMs", sample.hasGameGpu ? json(sample.gameGpuMs) : json(nullptr) },
 				{ "gameCpuMs", sample.hasGameCpu ? json(sample.gameCpuMs) : json(nullptr) },
 			});
+			AppendFlatTimingSource(samples.back(), sample);
 			nextAfterSequence = sample.sequence;
 		}
 
@@ -2470,6 +2560,24 @@ namespace
 		json results = json::array();
 		for (const auto& result : g_upscalingCostSweep.results)
 			results.push_back(UpscalingCostSweepResultJson(result));
+
+		json featureResults = json::array();
+		for (const auto& [shortName, state] : g_costMeasurementStates) {
+			if (state.phase == FeatureCostMeasurementPhase::Complete)
+				featureResults.push_back(FeatureCostResultJson(shortName, state));
+		}
+
+		json availableFeatureCosts = json::array();
+		for (auto* feature : BuildPerformanceFeatureList()) {
+			if (!feature || !feature->SupportsPerformanceCostMeasurement())
+				continue;
+			availableFeatureCosts.push_back({
+				{ "feature", feature->GetShortName() },
+				{ "displayName", feature->GetDisplayName() },
+				{ "enabled", feature->IsPerformanceCostMeasurementEnabled() },
+				{ "ready", feature->IsPerformanceCostMeasurementReady() },
+			});
+		}
 
 		json currentCase = nullptr;
 		if (g_upscalingCostSweep.currentCaseIndex < g_upscalingCostSweep.cases.size()) {
@@ -2507,6 +2615,7 @@ namespace
 				{ "gameGpuMs", sample.hasGameGpu ? json(sample.gameGpuMs) : json(nullptr) },
 				{ "gameCpuMs", sample.hasGameCpu ? json(sample.gameCpuMs) : json(nullptr) },
 			};
+			AppendFlatTimingSource(latestTiming, sample);
 		}
 
 		const bool sweepKnown = g_upscalingCostSweep.phase != UpscalingCostSweepPhase::Idle;
@@ -2517,7 +2626,11 @@ namespace
 		const auto& fidelityFX = Upscaling::fidelityFX;
 		json response = json::object();
 		response["active"] = IsAnyFeatureCostMeasurementActive() || sweepRunning;
-		response["owner"] = sweepRunning ? "devbench_upscaling_sweep" : (activeMeasurement ? "ui" : "none");
+		response["owner"] = sweepRunning ?
+		                        "devbench_upscaling_sweep" :
+		                        (activeMeasurement ?
+										(activeMeasurement->devBenchOwned ? "devbench_feature_cost" : "ui") :
+										"none");
 		response["sweepPhase"] = GetUpscalingCostSweepPhaseName(g_upscalingCostSweep.phase);
 		response["measurement"] = std::move(measurement);
 		response["currentCase"] = std::move(currentCase);
@@ -2559,6 +2672,8 @@ namespace
 		response["latestTiming"] = std::move(latestTiming);
 		response["trace"] = FeatureCostTraceJson(traceAfterSequence, maximumTraceSamples);
 		response["results"] = std::move(results);
+		response["featureResults"] = std::move(featureResults);
+		response["availableFeatureCosts"] = std::move(availableFeatureCosts);
 		return response;
 	}
 }
@@ -2586,6 +2701,8 @@ void PerformanceTuningRenderer::Render()
 
 	const float selectorWidth = std::max(180.0f * Util::GetUIScale(), ImGui::GetContentRegionAvail().x * 0.18f);
 
+	ImGui::TextWrapped("Changes appear live in the game and performance data. Actual feature cost closes CS for more precise results, then reopens it.");
+	ImGui::Spacing();
 	RenderTopPerformanceCounters(timingBeforeSettings, highlightState);
 	ImGui::Spacing();
 
@@ -2660,15 +2777,19 @@ void PerformanceTuningRenderer::Render()
 void PerformanceTuningRenderer::UpdateClosedMenuMeasurement()
 {
 	const double currentTime = ImGui::GetTime();
-	bool hadActiveMeasurement = false;
+	bool shouldReopenMenu = false;
+	bool completedDevBenchMeasurement = false;
 	for (auto& [shortName, state] : g_costMeasurementStates) {
 		if (!IsFeatureCostMeasurementActive(state))
 			continue;
 
-		hadActiveMeasurement = true;
+		const bool reopenMenuOnCompletion = state.reopenMenuOnCompletion;
+		const bool devBenchOwned = state.devBenchOwned;
 		auto* feature = FindFeatureByShortName(shortName);
 		if (!feature) {
 			logger::error("Actual feature cost measurement stopped because feature '{}' is no longer available", shortName);
+			shouldReopenMenu = shouldReopenMenu || reopenMenuOnCompletion;
+			completedDevBenchMeasurement = completedDevBenchMeasurement || devBenchOwned;
 			state = {};
 			continue;
 		}
@@ -2679,6 +2800,8 @@ void PerformanceTuningRenderer::UpdateClosedMenuMeasurement()
 			state.failureMessage = "Measurement stopped: timing did not complete.";
 			state.phase = FeatureCostMeasurementPhase::Complete;
 			StartFeatureCostRestartCooldown(currentTime);
+			shouldReopenMenu = shouldReopenMenu || reopenMenuOnCompletion;
+			completedDevBenchMeasurement = completedDevBenchMeasurement || devBenchOwned;
 			logger::warn("Actual feature cost measurement for '{}' timed out after {} seconds", shortName, kFeatureCostMaximumRunSeconds);
 			continue;
 		}
@@ -2697,6 +2820,10 @@ void PerformanceTuningRenderer::UpdateClosedMenuMeasurement()
 			GetFeatureCostPhaseName(state.phase),
 			sweepMeasurement ? g_upscalingCostSweep.cases[g_upscalingCostSweep.currentCaseIndex].id : shortName);
 		UpdateFeatureCostMeasurement(feature, state, timing, currentTime);
+		if (!IsFeatureCostMeasurementActive(state)) {
+			shouldReopenMenu = shouldReopenMenu || reopenMenuOnCompletion;
+			completedDevBenchMeasurement = completedDevBenchMeasurement || devBenchOwned;
+		}
 	}
 
 	UpdateUpscalingCostSweep(currentTime);
@@ -2714,7 +2841,9 @@ void PerformanceTuningRenderer::UpdateClosedMenuMeasurement()
 	}
 
 	SyncFeatureCostVanityCameraSuppression();
-	if (hadActiveMeasurement && !IsAnyFeatureCostMeasurementActive() && !IsUpscalingCostSweepRunning() &&
+	if (completedDevBenchMeasurement && !IsAnyFeatureCostMeasurementActive() && !IsUpscalingCostSweepRunning())
+		RestoreProfilerStateAfterPerformanceTuning();
+	if (shouldReopenMenu && !IsAnyFeatureCostMeasurementActive() && !IsUpscalingCostSweepRunning() &&
 		globals::menu && !globals::menu->IsEnabled) {
 		globals::menu->OpenMenu();
 	}
@@ -2870,6 +2999,67 @@ bool PerformanceTuningRenderer::HasActiveMeasurements()
 	return IsAnyFeatureCostMeasurementActive() || IsUpscalingCostSweepRunning();
 }
 
+nlohmann::json PerformanceTuningRenderer::StartDevBenchFeatureCostMeasurement(
+	std::string_view a_featureShortName)
+{
+	const double currentTime = ImGui::GetTime();
+	json response = {
+		{ "action", "start_feature_cost" },
+		{ "accepted", false },
+		{ "feature", std::string(a_featureShortName) },
+	};
+	const auto reject = [&](const char* errorCode) {
+		response["errorCode"] = errorCode;
+		response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+		return response;
+	};
+	if (a_featureShortName.empty())
+		return reject("feature_required");
+
+	const auto features = BuildPerformanceFeatureList();
+	const auto featureIt = std::ranges::find_if(features, [&](Feature* feature) {
+		return feature && feature->GetShortName() == a_featureShortName;
+	});
+	if (featureIt == features.end())
+		return reject("feature_unavailable");
+
+	auto* feature = *featureIt;
+	if (!feature->SupportsPerformanceCostMeasurement())
+		return reject("measurement_unsupported");
+	if (!globals::state || globals::state->isMainMenuOpen || globals::state->isLoadingMenuOpen ||
+		!RE::PlayerCharacter::GetSingleton())
+		return reject("not_in_game");
+	if (!globals::menu)
+		return reject("menu_unavailable");
+	if (auto* editor = EditorWindow::GetSingleton(); editor && editor->open)
+		return reject("editor_open");
+	if (IsAnyFeatureCostMeasurementActive() || IsUpscalingCostSweepRunning())
+		return reject("measurement_busy");
+	if (GetFeatureCostRestartCooldownRemaining(currentTime) > 0.0)
+		return reject("restart_cooldown");
+	if (!feature->IsPerformanceCostMeasurementEnabled())
+		return reject("feature_inactive");
+	if (!feature->IsPerformanceCostMeasurementReady())
+		return reject("feature_not_ready");
+
+	auto& state = g_costMeasurementStates[feature->GetShortName()];
+	if (!BeginFeatureCostMeasurement(
+			feature,
+			state,
+			currentTime,
+			feature->CapturePerformanceCostMeasurementState(),
+			true,
+			true,
+			true)) {
+		return reject("measurement_start_failed");
+	}
+
+	SyncFeatureCostVanityCameraSuppression();
+	response["accepted"] = true;
+	response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+	return response;
+}
+
 nlohmann::json PerformanceTuningRenderer::StartDevBenchUpscalingCostSweep(
 	std::string_view a_matrix,
 	std::string_view a_dlssPreset)
@@ -3004,8 +3194,23 @@ nlohmann::json PerformanceTuningRenderer::GetDevBenchMeasurementStatus(
 nlohmann::json PerformanceTuningRenderer::CancelDevBenchMeasurements()
 {
 	const double currentTime = ImGui::GetTime();
-	const bool cancelled = CancelUpscalingCostSweep(currentTime);
+	bool cancelled = CancelUpscalingCostSweep(currentTime);
+	bool reopenMenu = false;
+	for (auto& [shortName, state] : g_costMeasurementStates) {
+		if (!state.devBenchOwned || !IsFeatureCostMeasurementActive(state))
+			continue;
+
+		reopenMenu = reopenMenu || state.reopenMenuOnCompletion;
+		CancelFeatureCostMeasurement(FindFeatureByShortName(shortName), state);
+		cancelled = true;
+	}
 	SyncFeatureCostVanityCameraSuppression();
+	if (!IsAnyFeatureCostMeasurementActive() && !IsUpscalingCostSweepRunning())
+		RestoreProfilerStateAfterPerformanceTuning();
+	if (reopenMenu && !IsAnyFeatureCostMeasurementActive() && !IsUpscalingCostSweepRunning() &&
+		globals::menu && !globals::menu->IsEnabled) {
+		globals::menu->OpenMenu();
+	}
 	return {
 		{ "action", "cancel" },
 		{ "accepted", cancelled },

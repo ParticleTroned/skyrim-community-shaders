@@ -59,13 +59,13 @@ preservation depend on real-time video encoding.
 
 ## Non-goals for contract version 1
 
-- Streaming pixels through MCP or the public SKSE messaging interface.
-- Guaranteed capture at an exact wall-clock instant.
-- Blocking a DevBench call until future render frames or disk writes complete.
-- Real-time H.264/H.265/AV1 encoding on the render path.
-- Deleting output files through the API.
-- Exposing D3D resources or STL objects across a plugin ABI.
-- Treating a null-HMD qualification as physical-headset driver timing proof.
+-   Streaming pixels through MCP or the public SKSE messaging interface.
+-   Guaranteed capture at an exact wall-clock instant.
+-   Blocking a DevBench call until future render frames or disk writes complete.
+-   Real-time H.264/H.265/AV1 encoding on the render path.
+-   Deleting output files through the API.
+-   Exposing D3D resources or STL objects across a plugin ABI.
+-   Treating a null-HMD qualification as physical-headset driver timing proof.
 
 ## Layered architecture
 
@@ -102,12 +102,16 @@ may use the ordinary HUD; no second recording overlay is drawn.
 
 ### Tool identity
 
-- DevBench tool: `communityshaders.screenshot`
-- Contract name: `csx.screenshot`
-- Initial contract: major `1`, minor `0`
-- Schema URN: `urn:csx:devbench:screenshot:1`
+-   DevBench tool: `communityshaders.screenshot`
+-   Contract name: `csx.screenshot`
+-   Initial contract: major `1`, minor `0`
+-   Schema URN: `urn:csx:devbench:screenshot:1`
 
 ### Native discovery
+
+Discover CSXR during or after `PostPostLoad` for ordinary screenshot use.
+CSX retains early `PostLoad` discovery and refreshes the listener to include
+plugins loaded later; see [API service registry](api-service-registry.md).
 
 Native SKSE consumers request the `CSXR` registry described by
 `include/VRAPI/CSserviceapi.h`, then query `csx.screenshot` major 1 with the
@@ -141,43 +145,43 @@ Every response, including errors, uses one envelope:
 
 ```json
 {
-  "ok": true,
-  "contract": {
-    "name": "csx.screenshot",
-    "major": 1,
-    "minor": 0,
-    "schemaRevision": 1
-  },
-  "server": {
-    "sessionId": "55be1d4e-7d90-4eb9-9199-cbb50fd31388",
-    "csxBuild": 11,
-    "csxVersion": "3.19-VR",
-    "featureVersion": "1.5.1",
-    "binary": {
-      "sha256": null,
-      "sourceRevision": null,
-      "identityState": "not_recorded"
+    "ok": true,
+    "contract": {
+        "name": "csx.screenshot",
+        "major": 1,
+        "minor": 0,
+        "schemaRevision": 1
     },
-    "runtime": {
-      "game": "SkyrimVR",
-      "presentation": "openvr",
-      "hmd": "unknown"
+    "server": {
+        "sessionId": "55be1d4e-7d90-4eb9-9199-cbb50fd31388",
+        "csxBuild": 11,
+        "csxVersion": "3.19-VR",
+        "featureVersion": "1.5.1",
+        "binary": {
+            "sha256": null,
+            "sourceRevision": null,
+            "identityState": "not_recorded"
+        },
+        "runtime": {
+            "game": "SkyrimVR",
+            "presentation": "openvr",
+            "hmd": "unknown"
+        },
+        "devBenchBuilt": true
     },
-    "devBenchBuilt": true
-  },
-  "command": {
-    "action": "capture",
-    "clientId": "automation-host-a",
-    "commandId": "0de51a0e-8ed6-49ee-a1ca-94b5aa54a919"
-  },
-  "timestampUtc": "2026-08-20T04:15:30.1234567Z",
-  "result": {}
+    "command": {
+        "action": "capture",
+        "clientId": "automation-host-a",
+        "commandId": "0de51a0e-8ed6-49ee-a1ca-94b5aa54a919"
+    },
+    "timestampUtc": "2026-08-20T04:15:30.1234567Z",
+    "result": {}
 }
 ```
 
 `sessionId` changes at each Skyrim/CSX process start. `commandId` is generated
 by the client and supplies idempotency. Within one server session, repeating
-the same `clientId + commandId` returns the original command result or current
+the same `(clientId, commandId)` tuple returns the original command result or current
 operation receipt and must not create a second capture. Reusing the pair with
 different arguments is `idempotency_conflict`.
 
@@ -195,44 +199,44 @@ artifact.
 
 ```json
 {
-  "ok": false,
-  "contract": {
-    "name": "csx.screenshot",
-    "major": 1,
-    "minor": 0,
-    "schemaRevision": 1
-  },
-  "server": {
-    "sessionId": "55be1d4e-7d90-4eb9-9199-cbb50fd31388",
-    "csxBuild": 11,
-    "csxVersion": "3.19-VR",
-    "featureVersion": "1.5.1",
-    "binary": {
-      "sha256": null,
-      "sourceRevision": null,
-      "identityState": "not_recorded"
+    "ok": false,
+    "contract": {
+        "name": "csx.screenshot",
+        "major": 1,
+        "minor": 0,
+        "schemaRevision": 1
     },
-    "runtime": {
-      "game": "SkyrimVR",
-      "presentation": "openvr",
-      "hmd": "unknown"
+    "server": {
+        "sessionId": "55be1d4e-7d90-4eb9-9199-cbb50fd31388",
+        "csxBuild": 11,
+        "csxVersion": "3.19-VR",
+        "featureVersion": "1.5.1",
+        "binary": {
+            "sha256": null,
+            "sourceRevision": null,
+            "identityState": "not_recorded"
+        },
+        "runtime": {
+            "game": "SkyrimVR",
+            "presentation": "openvr",
+            "hmd": "unknown"
+        }
+    },
+    "command": {
+        "action": "capture",
+        "clientId": "automation-host-a",
+        "commandId": "0de51a0e-8ed6-49ee-a1ca-94b5aa54a919"
+    },
+    "timestampUtc": "2026-08-20T04:15:30.1234567Z",
+    "error": {
+        "code": "feature_disabled",
+        "message": "CSX screenshot capture is disabled",
+        "phase": "validation",
+        "retryable": true,
+        "field": null,
+        "requestId": null,
+        "details": {}
     }
-  },
-  "command": {
-    "action": "capture",
-    "clientId": "automation-host-a",
-    "commandId": "0de51a0e-8ed6-49ee-a1ca-94b5aa54a919"
-  },
-  "timestampUtc": "2026-08-20T04:15:30.1234567Z",
-  "error": {
-    "code": "feature_disabled",
-    "message": "CSX screenshot capture is disabled",
-    "phase": "validation",
-    "retryable": true,
-    "field": null,
-    "requestId": null,
-    "details": {}
-  }
 }
 ```
 
@@ -243,21 +247,21 @@ message text.
 
 Version 1 defines these actions:
 
-| Action | Mutation | Purpose |
-| --- | --- | --- |
-| `capabilities` | No | Contract, runtime, sources, views, encoders, limits, and optional components |
-| `status` | No | Feature, worker, queue, active-operation, and journal summary |
-| `settings_get` | No | Current persisted and effective screenshot settings |
-| `settings_validate` | No | Validate a proposed settings patch without applying it |
-| `settings_apply` | Yes | Apply an explicit runtime or persisted settings patch |
-| `capture` | Yes | Submit one still operation |
-| `sequence_start` | Yes | Submit one scheduled frame sequence |
-| `sequence_stop` | Yes | Gracefully stop scheduling and finalize frames already accepted |
-| `request_get` | No | Return one current or terminal receipt |
-| `request_list` | No | Return bounded summaries, with filters and pagination |
-| `request_cancel` | Yes | Cancel work that has not crossed an irreversible commit boundary |
-| `events_poll` | No | Read journal events after a cursor |
-| `acknowledge` | Yes | Confirm receipt of events or a terminal operation receipt |
+| Action              | Mutation | Purpose                                                                      |
+| ------------------- | -------- | ---------------------------------------------------------------------------- |
+| `capabilities`      | No       | Contract, runtime, sources, views, encoders, limits, and optional components |
+| `status`            | No       | Feature, worker, queue, active-operation, and journal summary                |
+| `settings_get`      | No       | Current persisted and effective screenshot settings                          |
+| `settings_validate` | No       | Validate a proposed settings patch without applying it                       |
+| `settings_apply`    | Yes      | Apply an explicit runtime or persisted settings patch                        |
+| `capture`           | Yes      | Submit one still operation                                                   |
+| `sequence_start`    | Yes      | Submit one scheduled frame sequence                                          |
+| `sequence_stop`     | Yes      | Gracefully stop scheduling and finalize frames already accepted              |
+| `request_get`       | No       | Return one current or terminal receipt                                       |
+| `request_list`      | No       | Return bounded summaries, with filters and pagination                        |
+| `request_cancel`    | Yes      | Cancel work that has not crossed an irreversible commit boundary             |
+| `events_poll`       | No       | Read journal events after a cursor                                           |
+| `acknowledge`       | Yes      | Confirm receipt of events or a terminal operation receipt                    |
 
 `status` must never trigger capture. This differs deliberately from the legacy
 profiler status behavior.
@@ -271,45 +275,46 @@ The response includes at least:
 
 ```json
 {
-  "sources": ["desktop_mirror", "hmd_submission"],
-  "views": [
-    "source_native",
-    "left_eye",
-    "right_eye",
-    "side_by_side",
-    "framed_left",
-    "framed_right",
-    "framed_combined"
-  ],
-  "formats": ["png", "bmp"],
-  "colourContracts": ["sdr_srgb"],
-  "scheduleBases": ["game_frames", "wall_clock"],
-  "pathPolicies": ["settings_default", "game_relative", "absolute"],
-  "optional": {
-    "separateEyeArtifacts": true,
-    "clipboardFileReference": true,
-    "previewVideo": {
-      "available": false,
-      "encoders": [],
-      "runsAfterFrameFinalization": true
+    "sources": ["desktop_mirror", "hmd_submission"],
+    "views": [
+        "source_native",
+        "left_eye",
+        "right_eye",
+        "side_by_side",
+        "framed_left",
+        "framed_right",
+        "framed_combined"
+    ],
+    "formats": ["png", "bmp"],
+    "colourContracts": ["sdr_srgb"],
+    "scheduleBases": ["game_frames", "wall_clock"],
+    "pathPolicies": ["settings_default", "game_relative", "absolute"],
+    "optional": {
+        "separateEyeArtifacts": true,
+        "clipboardFileReference": true,
+        "previewVideo": {
+            "available": false,
+            "encoders": [],
+            "runsAfterFrameFinalization": true
+        }
+    },
+    "limits": {
+        "activeSourceCaptures": 1,
+        "outstandingCaptureJobs": 2,
+        "maximumOutputsPerCaptureJob": 4,
+        "pendingOperations": 64,
+        "maximumOutputsPerFrame": 4,
+        "maximumSequenceFrames": 10000,
+        "maximumSequenceDurationMs": 3600000,
+        "maximumRetainedTerminalRequests": 256,
+        "maximumRetainedEvents": 4096,
+        "retentionSeconds": 3600
     }
-  },
-  "limits": {
-    "activeSourceCaptures": 1,
-    "outstandingArtifacts": 2,
-    "pendingOperations": 64,
-    "maximumOutputsPerFrame": 4,
-    "maximumSequenceFrames": 10000,
-    "maximumSequenceDurationMs": 3600000,
-    "maximumRetainedTerminalRequests": 256,
-    "maximumRetainedEvents": 4096,
-    "retentionSeconds": 3600
-  }
 }
 ```
 
 These numbers are examples, not frozen limits. The implementation reports its
-actual values. The present worker's two-outstanding-artifact limit may remain
+actual values. The present worker's two-outstanding-capture-job limit may remain
 initially; a sequence scheduler must adapt rather than enlarge it blindly.
 
 ### Operational status
@@ -320,39 +325,41 @@ worker backlog, and journal retention without initiating work:
 
 ```json
 {
-  "feature": {
-    "loaded": true,
-    "enabled": true,
-    "settingsSchemaVersion": 2
-  },
-  "sourceReadiness": {
-    "desktopPresentObserved": true,
-    "openVrSubmitHookInstalled": true,
-    "lastAcceptedEyeFrame": 123456,
-    "loadingMenuOpen": false
-  },
-  "dispatcher": {
-    "activeAcquisitionRequestId": null,
-    "pendingOperations": 0,
-    "activeSequences": 0
-  },
-  "worker": {
-    "running": true,
-    "outstandingArtifacts": 0,
-    "capacity": 2,
-    "completedArtifacts": 18,
-    "failedArtifacts": 0
-  },
-  "journal": {
-    "oldestRetainedEventId": 310,
-    "latestEventId": 481,
-    "retainedTerminalRequests": 7
-  },
-  "lastTerminalRequest": {
-    "requestId": "a43cdf9a-22be-4899-bad4-7fb0966e084d",
-    "state": "completed",
-    "terminalUtc": "2026-08-20T04:15:30.402Z"
-  }
+    "feature": {
+        "loaded": true,
+        "enabled": true,
+        "settingsSchemaVersion": 2
+    },
+    "sourceReadiness": {
+        "desktopPresentObserved": true,
+        "openVrSubmitHookInstalled": true,
+        "lastAcceptedEyeFrame": 123456,
+        "loadingMenuOpen": false
+    },
+    "dispatcher": {
+        "activeAcquisitionRequestId": null,
+        "pendingOperations": 0,
+        "queuedManualCaptures": 0,
+        "queuedSequenceFrames": 0,
+        "activeSequences": 0
+    },
+    "worker": {
+        "running": true,
+        "outstandingCaptureJobs": 0,
+        "captureJobCapacity": 2,
+        "completedArtifacts": 18,
+        "failedArtifacts": 0
+    },
+    "journal": {
+        "oldestRetainedEventId": 310,
+        "latestEventId": 481,
+        "retainedTerminalRequests": 7
+    },
+    "lastTerminalRequest": {
+        "requestId": "a43cdf9a-22be-4899-bad4-7fb0966e084d",
+        "state": "completed",
+        "terminalUtc": "2026-08-20T04:15:30.402Z"
+    }
 }
 ```
 
@@ -367,51 +374,51 @@ settings are translated into this descriptor and then frozen.
 
 ```json
 {
-  "source": {
-    "kind": "hmd_submission",
-    "fallback": "reject"
-  },
-  "outputs": [
-    {
-      "view": "framed_combined",
-      "dominantEye": "left",
-      "width": 2560,
-      "height": 1440,
-      "crop": null,
-      "encoding": {
-        "format": "png",
-        "colourContract": "sdr_srgb"
-      },
-      "nameSuffix": "combined"
+    "source": {
+        "kind": "hmd_submission",
+        "fallback": "reject"
     },
-    {
-      "view": "left_eye",
-      "encoding": {
-        "format": "png",
-        "colourContract": "sdr_srgb"
-      },
-      "nameSuffix": "left"
+    "outputs": [
+        {
+            "view": "framed_combined",
+            "dominantEye": "left",
+            "width": 2560,
+            "height": 1440,
+            "crop": null,
+            "encoding": {
+                "format": "png",
+                "colourContract": "sdr_srgb"
+            },
+            "nameSuffix": "combined"
+        },
+        {
+            "view": "left_eye",
+            "encoding": {
+                "format": "png",
+                "colourContract": "sdr_srgb"
+            },
+            "nameSuffix": "left"
+        },
+        {
+            "view": "right_eye",
+            "encoding": {
+                "format": "png",
+                "colourContract": "sdr_srgb"
+            },
+            "nameSuffix": "right"
+        }
+    ],
+    "destination": {
+        "policy": "settings_default",
+        "directory": null,
+        "baseName": null,
+        "overwrite": "never"
     },
-    {
-      "view": "right_eye",
-      "encoding": {
-        "format": "png",
-        "colourContract": "sdr_srgb"
-      },
-      "nameSuffix": "right"
+    "clipboard": "none",
+    "tags": {
+        "scene": "Riften exterior",
+        "state": "enabled"
     }
-  ],
-  "destination": {
-    "policy": "settings_default",
-    "directory": null,
-    "baseName": null,
-    "overwrite": "never"
-  },
-  "clipboard": "none",
-  "tags": {
-    "scene": "Riften exterior",
-    "state": "enabled"
-  }
 }
 ```
 
@@ -424,13 +431,14 @@ paths, scheduling, or feature behavior.
 The existing `VRCaptureSource` enum conflates acquisition and composition.
 Version 1 separates them:
 
-- `source.kind = desktop_mirror` observes the desktop backbuffer.
-- `source.kind = hmd_submission` observes coherent accepted OpenVR eye
-  submissions before compositor distortion.
-- `source.kind = settings_default` resolves either source from the immutable
-  settings snapshot.
-- `outputs[].view` selects native, individual-eye, side-by-side, or framed
-  composition from the acquired planes.
+-   `source.kind = desktop_mirror` observes the desktop backbuffer.
+-   `source.kind = hmd_submission` observes coherent accepted OpenVR eye
+    submissions before compositor distortion.
+-   `source.kind = settings_default` resolves either source from the immutable
+    settings snapshot. On flat Skyrim it resolves to `desktop_mirror` even if
+    the persisted VR-only preference is `hmd_submission`.
+-   `outputs[].view` selects native, individual-eye, side-by-side, or framed
+    composition from the acquired planes.
 
 `source_native` means desktop dimensions for desktop capture and the current
 side-by-side accepted-eye representation for HMD capture. An unsupported
@@ -440,6 +448,16 @@ source/view combination is rejected during validation.
 fallback reason must appear in the receipt. Framed views default to `reject`;
 silently converting a requested framed HMD view into a desktop image would be
 misleading evidence.
+
+Source capabilities are runtime-specific. Flat Skyrim advertises only
+`desktop_mirror`; VR also advertises `hmd_submission`. An unavailable explicit
+HMD request fails with `source_unavailable` unless the request opts into
+`desktop_mirror`, in which case the effective descriptor, receipt, and event
+journal preserve the requested source, resolved source, and fallback reason.
+For `sequence_start`, the parent receipt contains the fully expanded sequence
+descriptor and nests the resolved capture descriptor under `effective.capture`.
+Fallback provenance is projected onto the parent receipt and journal as well as
+the individual child receipts.
 
 ### Outputs
 
@@ -458,20 +476,26 @@ capability explicitly permits both.
 
 ### Destination safety
 
-- `settings_default` uses the frozen screenshot or frame-sequence folder
-  setting. Relative still paths resolve below
-  `Pictures\Community Shaders`; relative sequence paths resolve below
-  `Videos\Community Shaders`.
-- `game_relative` resolves under the canonical game directory.
-- `absolute` is accepted only when advertised and must be an absolute canonical
-  path.
-- Relative traversal outside the selected root is rejected as `unsafe_path`.
-- Existing files are never overwritten in version 1. `overwrite` must be
-  `never`; name collisions receive a deterministic numeric suffix.
-- The worker writes a sibling temporary file, flushes and closes it, then
-  atomically renames it to the final name where the filesystem permits.
-- The receipt records both the requested destination policy and resolved path.
-- The API never deletes artifacts.
+-   `settings_default` uses the frozen screenshot or frame-sequence folder
+    setting. Relative still paths resolve below
+    `Pictures\Community Shaders`; relative sequence paths resolve below
+    `Videos\Community Shaders`.
+-   `game_relative` resolves under the canonical game directory.
+-   `absolute` is accepted only when advertised and must be an absolute canonical
+    path.
+-   Relative traversal outside the selected root is rejected as `unsafe_path`.
+-   Existing files are never overwritten in version 1. `overwrite` must be
+    `never`; name collisions receive a deterministic numeric suffix.
+-   The worker encodes into memory, creates a sibling temporary file
+    exclusively, and retains that handle while it writes, flushes, atomically
+    renames without replacement, and verifies the committed file's identity,
+    size, and SHA-256 custody.
+-   The Win32 rename buffer includes a terminating wide NUL beyond its counted
+    filename. Sequence directory handles request directory-list access so
+    their no-delete sharing mode actually prevents rename during publication.
+    Publication errors distinguish destination-open, identity and path failures.
+-   The receipt records both the requested destination policy and resolved path.
+-   The API never deletes artifacts.
 
 An empty `baseName` uses the CSX timestamp plus a short request ID. Explicit
 names are sanitized, length-limited, and cannot contain path separators.
@@ -479,8 +503,15 @@ names are sanitized, length-limited, and cannot contain path separators.
 ### Immutable effective descriptor
 
 `capture` may provide a complete descriptor or `useSettings: true` with a
-request-scoped patch. The acceptance receipt always contains the fully expanded
-effective descriptor. UI settings changed afterward affect only later requests.
+request-scoped patch. A still request expands the current CSX screenshot eye,
+format, source, destination, and clipboard settings. A sequence request
+expands the distinct frame-capture eye, format, source, destination, frame
+count, and cadence settings. The acceptance receipt always contains the fully
+expanded effective descriptor. UI settings changed afterward affect only later
+requests. Sequence destination validation uses the frame-capture folder even
+when the still-image folder is unavailable. A partial settings load that omits
+both `FrameCaptureEye` and legacy `SeparateEyes` preserves the selected eye.
+The legacy key migrates only when supplied; a canonical eye always wins.
 
 ## Still-capture lifecycle
 
@@ -530,50 +561,50 @@ cannot be terminal-success while any child frame remains in a mutable state.
 
 ```json
 {
-  "contractMajor": 1,
-  "clientId": "automation-host-a",
-  "commandId": "39421691-94cd-405f-b441-81bcdb8e891f",
-  "action": "sequence_start",
-  "sequence": {
-    "frameCount": 30,
-    "schedule": {
-      "basis": "game_frames",
-      "intervalFrames": 6,
-      "startDelayFrames": 0,
-      "pausePolicy": "hold"
-    },
-    "backpressure": {
-      "policy": "skip",
-      "maximumConsecutiveSkips": 10
-    },
-    "failurePolicy": "continue",
-    "capture": {},
-    "packaging": {
-      "frameManifest": true,
-      "previewVideo": {
-        "requested": true,
-        "framesPerSecond": 15,
-        "required": false
-      }
+    "contractMajor": 1,
+    "clientId": "automation-host-a",
+    "commandId": "39421691-94cd-405f-b441-81bcdb8e891f",
+    "action": "sequence_start",
+    "sequence": {
+        "frameCount": 30,
+        "schedule": {
+            "basis": "game_frames",
+            "intervalFrames": 6,
+            "startDelayFrames": 0,
+            "pausePolicy": "hold"
+        },
+        "backpressure": {
+            "policy": "skip",
+            "maximumConsecutiveSkips": 10
+        },
+        "failurePolicy": "continue",
+        "capture": {},
+        "packaging": {
+            "frameManifest": true,
+            "previewVideo": {
+                "requested": true,
+                "framesPerSecond": 15,
+                "required": false
+            }
+        }
     }
-  }
 }
 ```
 
 ### Scheduling
 
-- `game_frames` uses CSX's monotonic engine render-frame counter. It is the
-  deterministic default and maps the existing `SequenceFrameInterval` setting.
-- `wall_clock` uses monotonic elapsed time, not local calendar time. Capture
-  occurs at the next eligible render opportunity; no exact-time guarantee is
-  made.
-- A finite `frameCount` is required in version 1 unless capabilities advertise
-  `untilStopped`. Even then a maximum duration is mandatory.
-- `pausePolicy = hold` does not advance the schedule while no eligible rendered
-  frame is observed. A future `skip` policy may count missed wall-clock slots as
-  dropped frames.
-- The scheduler records requested slot, actual engine frame, compositor cycle,
-  monotonic timestamp, UTC timestamp, and lateness.
+-   `game_frames` uses CSX's monotonic engine render-frame counter. It is the
+    deterministic default and maps the existing `SequenceFrameInterval` setting.
+-   `wall_clock` uses monotonic elapsed time, not local calendar time. Capture
+    occurs at the next eligible render opportunity; no exact-time guarantee is
+    made.
+-   A finite `frameCount` is required in version 1 unless capabilities advertise
+    `untilStopped`. Even then a maximum duration is mandatory.
+-   `pausePolicy = hold` does not advance the schedule while no eligible rendered
+    frame is observed. A future `skip` policy may count missed wall-clock slots as
+    dropped frames.
+-   The scheduler records requested slot, actual engine frame, compositor cycle,
+    monotonic timestamp, UTC timestamp, and lateness.
 
 The scheduler never reserves all future encoder slots. At each eligible slot it
 attempts one child capture. This preserves bounded memory with the current
@@ -583,10 +614,10 @@ worker limit and permits manual still captures between sequence frames.
 
 Version 1 policies are:
 
-- `skip`: record a dropped child frame with `encoder_backpressure` or
-  `source_busy`, then continue.
-- `abort`: stop scheduling on the first capacity miss and finalize partial
-  output as failed.
+-   `skip`: record a dropped child frame with `encoder_backpressure` or
+    `source_busy`, then continue.
+-   `abort`: stop scheduling on the first capacity miss and finalize partial
+    output as failed.
 
 There is intentionally no unbounded `queue` policy. A later adaptive policy may
 delay wall-clock scheduling but must be explicitly named because it changes
@@ -596,27 +627,33 @@ Manual/UI still requests and sequences share a fair dispatcher. A sequence may
 have only one child in source acquisition at a time. The coordinator must
 prevent a high-frequency sequence from starving manual requests.
 
+Manual captures retain FIFO order and their arbitration turn while retrying
+source contention or encoder backpressure, up to a ten-second dispatch
+deadline. A completed attempt hands the next turn to the other class.
+Sequence capacity misses are immediately recorded as dropped children so
+the requested `skip` or `abort` policy applies at the missed slot.
+
 ### Failure and stop behavior
 
 `failurePolicy` is `continue` or `abort`.
 
-- `sequence_stop` is graceful: stop creating new child frames, finish committed
-  artifacts, write the final manifest, and report `stopped` or
-  `completed_with_warnings`.
-- `request_cancel` is immediate best-effort: cancel unscheduled and waiting
-  children, allow irreversible writes to finish, and finalize
-  `cancelled`/`cancelled_partial`.
-- Disabling the screenshot feature behaves as immediate cancellation for
-  source acquisition. It does not abandon committed worker writes.
-- Device loss, runtime source loss, or worker shutdown must finalize a partial
-  manifest rather than leave the sequence indistinguishable from success.
+-   `sequence_stop` is graceful: stop creating new child frames, finish committed
+    artifacts, write the final manifest, and report `stopped` or
+    `completed_with_warnings`.
+-   `request_cancel` is immediate best-effort: cancel unscheduled and waiting
+    children, allow irreversible writes to finish, and finalize
+    `cancelled`/`cancelled_partial`.
+-   Disabling the screenshot feature behaves as immediate cancellation for
+    source acquisition. It does not abandon committed worker writes.
+-   Device loss, runtime source loss, or worker shutdown must finalize a partial
+    manifest rather than leave the sequence indistinguishable from success.
 
 ### Frame-set output
 
 Each sequence owns a unique directory:
 
 ```text
-CS_sequence_2026-08-20_041530_2f8c91a0/
+CS_sequence_<complete-request-id>/
   sequence.json.partial
   frame_000001_combined.png
   frame_000001_left.png
@@ -631,18 +668,23 @@ every pixel write. On normal finalization it becomes `sequence.json`. Recovery
 can identify an interrupted sequence from the partial manifest and preserved
 frames.
 
+Manifest snapshots are immutable. Both document assembly and retirement of
+retained child snapshots run on the manifest worker. Retirement releases the
+chain iteratively, including when requests are acknowledged or expire, so
+long sequences cannot cause recursive destruction on the render path.
+
 The final manifest includes:
 
-- contract and CSX identities;
-- request/client IDs and the accepted command identity;
-- requested and effective sequence/capture descriptors;
-- start/end times and frame counters;
-- scheduled, acquired, written, dropped, failed, and cancelled counts;
-- one child record per scheduled ordinal;
-- source/fallback, dimensions, format, colour contract, path, byte size, and
-  optional SHA-256 for every artifact;
-- backpressure, failure, cancellation, and warning details;
-- preview packaging request and outcome.
+-   contract and CSX identities;
+-   request/client IDs and the accepted command identity;
+-   requested and effective sequence/capture descriptors;
+-   start/end times and frame counters;
+-   scheduled, acquired, written, dropped, failed, and cancelled counts;
+-   one child record per scheduled ordinal;
+-   source/fallback, dimensions, format, colour contract, sequence-relative
+    path, byte size, and SHA-256 custody for every artifact;
+-   backpressure, failure, cancellation, and warning details;
+-   preview packaging request and outcome.
 
 Large manifests remain on disk. DevBench receipts return counts, recent
 failures, and the manifest path; `request_get` supports paginated child summaries
@@ -654,6 +696,16 @@ in-memory warning only. The schema requires child warning/error arrays and the
 actual view, dimensions, format, and colour contract for every committed frame
 artifact. A missing required final manifest is `failed` or `failed_partial`; it
 is never reported as completion with a warning.
+
+The parent receipt and every partial or final manifest carry the same frozen,
+fully expanded sequence object in `effective`. Capture settings remain nested
+under `effective.capture`; they are not substituted for the sequence object in
+manifest output.
+
+Frame artifact paths are strict descendants of the sequence directory and are
+published relative to that directory. Consumers must reject rooted paths,
+traversal, reparse-point escapes, request-identity mismatches, and artifacts
+whose current size or SHA-256 differs from the final manifest.
 
 ### Optional video packaging
 
@@ -681,24 +733,24 @@ Every state transition writes a journal event with a process-wide monotonic
 
 Core event types are:
 
-- `request.accepted`
-- `request.cancel_requested`
-- `source.waiting`
-- `source.acquired`
-- `source.fallback`
-- `source.timeout`
-- `artifact.queued`
-- `artifact.encoding`
-- `artifact.written`
-- `artifact.failed`
-- `sequence.frame_scheduled`
-- `sequence.frame_dropped`
-- `sequence.stop_requested`
-- `sequence.finalizing`
-- `packaging.queued`
-- `packaging.completed`
-- `packaging.failed`
-- `request.terminal`
+-   `request.accepted`
+-   `request.cancel_requested`
+-   `source.waiting`
+-   `source.acquired`
+-   `source.fallback`
+-   `source.timeout`
+-   `artifact.queued`
+-   `artifact.encoding`
+-   `artifact.written`
+-   `artifact.failed`
+-   `sequence.frame_scheduled`
+-   `sequence.frame_dropped`
+-   `sequence.stop_requested`
+-   `sequence.finalizing`
+-   `packaging.queued`
+-   `packaging.completed`
+-   `packaging.failed`
+-   `request.terminal`
 
 `events_poll` takes `afterEventId`, optional `requestId`, and a bounded `limit`.
 It is non-blocking in version 1. The result returns events plus `nextEventId`,
@@ -726,71 +778,71 @@ removed by journal expiry.
 
 ```json
 {
-  "requestId": "a43cdf9a-22be-4899-bad4-7fb0966e084d",
-  "kind": "still",
-  "origin": "devbench",
-  "state": "completed",
-  "terminal": true,
-  "acceptedUtc": "2026-08-20T04:15:30.124Z",
-  "terminalUtc": "2026-08-20T04:15:30.402Z",
-  "effectiveCapture": {},
-  "source": {
-    "requested": "hmd_submission",
-    "resolved": "hmd_submission",
-    "fallbackUsed": false,
-    "engineFrame": 123456,
-    "compositorCycle": 9192,
-    "planes": [
-      {
-        "eye": "left",
-        "width": 2496,
-        "height": 2592,
-        "dxgiFormat": "R16G16B16A16_FLOAT",
-        "colourSpace": "linear",
-        "boundsApplied": true
-      },
-      {
-        "eye": "right",
-        "width": 2496,
-        "height": 2592,
-        "dxgiFormat": "R16G16B16A16_FLOAT",
-        "colourSpace": "linear",
-        "boundsApplied": true
-      }
-    ]
-  },
-  "progress": {
-    "artifactsRequested": 1,
-    "artifactsWritten": 1,
-    "artifactsFailed": 0
-  },
-  "artifacts": [
-    {
-      "artifactId": "a43cdf9a:combined",
-      "kind": "image",
-      "view": "framed_combined",
-      "path": "D:/Games/Skyrim/Screenshots/CS_..._combined.png",
-      "format": "png",
-      "colourContract": "sdr_srgb",
-      "width": 2560,
-      "height": 1440,
-      "bytes": 4829911,
-      "sha256": "...",
-      "state": "written"
-    }
-  ],
-  "warnings": [],
-  "error": null,
-  "timingsMs": {
-    "sourceWait": 14.2,
-    "staging": 0.4,
-    "queueWait": 0.1,
-    "readbackAndComposition": 122.8,
-    "encoding": 86.3,
-    "commit": 3.4,
-    "total": 227.2
-  },
-  "lastEventId": 481
+    "requestId": "a43cdf9a-22be-4899-bad4-7fb0966e084d",
+    "kind": "still",
+    "origin": "devbench",
+    "state": "completed",
+    "terminal": true,
+    "acceptedUtc": "2026-08-20T04:15:30.124Z",
+    "terminalUtc": "2026-08-20T04:15:30.402Z",
+    "effectiveCapture": {},
+    "source": {
+        "requested": "hmd_submission",
+        "resolved": "hmd_submission",
+        "fallbackUsed": false,
+        "engineFrame": 123456,
+        "compositorCycle": 9192,
+        "planes": [
+            {
+                "eye": "left",
+                "width": 2496,
+                "height": 2592,
+                "dxgiFormat": "R16G16B16A16_FLOAT",
+                "colourSpace": "linear",
+                "boundsApplied": true
+            },
+            {
+                "eye": "right",
+                "width": 2496,
+                "height": 2592,
+                "dxgiFormat": "R16G16B16A16_FLOAT",
+                "colourSpace": "linear",
+                "boundsApplied": true
+            }
+        ]
+    },
+    "progress": {
+        "artifactsRequested": 1,
+        "artifactsWritten": 1,
+        "artifactsFailed": 0
+    },
+    "artifacts": [
+        {
+            "artifactId": "a43cdf9a:combined",
+            "kind": "image",
+            "view": "framed_combined",
+            "path": "D:/Games/Skyrim/Screenshots/CS_..._combined.png",
+            "format": "png",
+            "colourContract": "sdr_srgb",
+            "width": 2560,
+            "height": 1440,
+            "bytes": 4829911,
+            "sha256": "...",
+            "state": "written"
+        }
+    ],
+    "warnings": [],
+    "error": null,
+    "timingsMs": {
+        "sourceWait": 14.2,
+        "staging": 0.4,
+        "queueWait": 0.1,
+        "readbackAndComposition": 122.8,
+        "encoding": 86.3,
+        "commit": 3.4,
+        "total": 227.2
+    },
+    "lastEventId": 481
 }
 ```
 
@@ -808,9 +860,9 @@ hashing material. If omitted, `hashState` explains `disabled`, `pending`, or
 Request-scoped capture descriptors never mutate settings. Settings actions use
 an explicit scope:
 
-- `runtime_session`: applies until restart or a later settings load.
-- `persistent_user`: updates the feature settings and invokes the normal CSX
-  persistence path. The receipt reports the file/save acknowledgement.
+-   `runtime_session`: applies until restart or a later settings load.
+-   `persistent_user`: updates the feature settings and invokes the normal CSX
+    persistence path. The receipt reports the file/save acknowledgement.
 
 `settings_apply` defaults to no scope and is rejected until the caller states
 one. This prevents an automation typo from silently becoming a permanent user
@@ -821,30 +873,35 @@ sequence object:
 
 ```json
 {
-  "ScreenshotSettingsSchemaVersion": 2,
-  "Enabled": true,
-  "ScreenshotPath": "Screenshots",
-  "SdrUsePng": true,
-  "CopyToClipboard": false,
-  "VRCaptureSource": "HMDSubmission",
-  "VRFramedView": "Left",
-  "VRFramedDominantEye": "Left",
-  "Sequence": {
-    "FrameCount": 30,
-    "Schedule": {
-      "Basis": "GameFrames",
-      "IntervalFrames": 6,
-      "PausePolicy": "Hold"
-    },
-    "BackpressurePolicy": "Skip",
-    "FailurePolicy": "Continue",
-    "SaveSeparateEyes": true,
-    "PreviewVideo": {
-      "Enabled": true,
-      "FramesPerSecond": 15,
-      "Required": false
+    "ScreenshotSettingsSchemaVersion": 2,
+    "Enabled": true,
+    "ScreenshotPath": "Screenshots",
+    "SdrUsePng": true,
+    "ScreenshotEye": "Left",
+    "CopyToClipboard": false,
+    "VRCaptureSource": "HMDSubmission",
+    "VRFramedView": "Left",
+    "VRFramedDominantEye": "Left",
+    "FrameCapturePath": "Frame Captures",
+    "FrameCaptureUsePng": false,
+    "FrameCaptureEye": "Both",
+    "Sequence": {
+        "FrameCount": 30,
+        "Schedule": {
+            "Basis": "GameFrames",
+            "IntervalFrames": 6,
+            "PausePolicy": "Hold"
+        },
+        "Outputs": {
+            "SeparateEyes": true
+        },
+        "Packaging": {
+            "PreviewVideo": {
+                "Requested": false,
+                "FramesPerSecond": 15
+            }
+        }
     }
-  }
 }
 ```
 
@@ -871,35 +928,35 @@ success merely because a request was accepted.
 
 Version 1 reserves these stable codes:
 
-| Code | Typical phase | Retryable |
-| --- | --- | --- |
-| `invalid_request` | validation | No |
-| `unsupported_contract_version` | validation | No |
-| `idempotency_conflict` | validation | No |
-| `feature_unavailable` | validation | Maybe after restart/build change |
-| `feature_disabled` | validation | Yes after enable |
-| `unsupported_capability` | validation | No for current process |
-| `invalid_option` | validation | No until corrected |
-| `unsafe_path` | validation | No until corrected |
-| `capacity_exhausted` | acceptance | Yes |
-| `source_busy` | acquisition | Yes |
-| `source_unavailable` | acquisition | Maybe |
-| `source_timeout` | acquisition | Yes |
-| `device_changed` | staging | Yes on a new request |
-| `gpu_stage_failed` | staging | Maybe |
-| `encoder_backpressure` | queue | Yes |
-| `readback_timeout` | encoding | Yes on a new request |
-| `composition_failed` | encoding | Depends on requested fallback |
-| `encode_failed` | encoding | Maybe |
-| `unsafe_output_collision` | commit | No until destination changes |
-| `write_failed` | commit | Maybe |
-| `manifest_failed` | finalization | Maybe |
-| `packager_unavailable` | packaging | No for current process |
-| `packaging_failed` | packaging | Maybe |
-| `cancelled` | any mutable phase | Caller-controlled |
-| `internal_error` | any | Maybe |
-| `cursor_expired` | event read | Yes via `request_get` |
-| `request_not_found` | lookup | No or expired |
+| Code                           | Typical phase     | Retryable                        |
+| ------------------------------ | ----------------- | -------------------------------- |
+| `invalid_request`              | validation        | No                               |
+| `unsupported_contract_version` | validation        | No                               |
+| `idempotency_conflict`         | validation        | No                               |
+| `feature_unavailable`          | validation        | Maybe after restart/build change |
+| `feature_disabled`             | validation        | Yes after enable                 |
+| `unsupported_capability`       | validation        | No for current process           |
+| `invalid_option`               | validation        | No until corrected               |
+| `unsafe_path`                  | validation        | No until corrected               |
+| `capacity_exhausted`           | acceptance        | Yes                              |
+| `source_busy`                  | acquisition       | Yes                              |
+| `source_unavailable`           | acquisition       | Maybe                            |
+| `source_timeout`               | acquisition       | Yes                              |
+| `device_changed`               | staging           | Yes on a new request             |
+| `gpu_stage_failed`             | staging           | Maybe                            |
+| `encoder_backpressure`         | queue             | Yes                              |
+| `readback_timeout`             | encoding          | Yes on a new request             |
+| `composition_failed`           | encoding          | Depends on requested fallback    |
+| `encode_failed`                | encoding          | Maybe                            |
+| `unsafe_output_collision`      | commit            | No until destination changes     |
+| `write_failed`                 | commit            | Maybe                            |
+| `manifest_failed`              | finalization      | Maybe                            |
+| `packager_unavailable`         | packaging         | No for current process           |
+| `packaging_failed`             | packaging         | Maybe                            |
+| `cancelled`                    | any mutable phase | Caller-controlled                |
+| `internal_error`               | any               | Maybe                            |
+| `cursor_expired`               | event read        | Yes via `request_get`            |
+| `request_not_found`            | lookup            | No or expired                    |
 
 An error records its phase, whether retry is safe, field when applicable,
 request/artifact/frame IDs, and structured details. Sequence frame errors do
@@ -939,17 +996,17 @@ compatibility response:
 
 ```json
 {
-  "action": "screenshot",
-  "delegatedRequest": { "ok": true, "request": { "requestId": "..." } },
-  "deprecation": {
-    "obsolete": true,
-    "message": "communityshaders.menu screenshot is obsolete; migrate to communityshaders.screenshot contractMajor 1",
-    "replacement": {
-      "tool": "communityshaders.screenshot",
-      "contractMajor": 1,
-      "action": "capture"
+    "action": "screenshot",
+    "delegatedRequest": { "ok": true, "request": { "requestId": "..." } },
+    "deprecation": {
+        "obsolete": true,
+        "message": "communityshaders.menu screenshot is obsolete; migrate to communityshaders.screenshot contractMajor 1",
+        "replacement": {
+            "tool": "communityshaders.screenshot",
+            "contractMajor": 1,
+            "action": "capture"
+        }
     }
-  }
 }
 ```
 
@@ -976,49 +1033,49 @@ independently behind its own service major.
 
 ### Pure/unit tests
 
-- Contract version acceptance and rejection.
-- Envelope and stable error-code serialization.
-- Idempotent retry and conflicting-command detection.
-- Capture descriptor normalization and capability validation.
-- Source/view compatibility and explicit fallback.
-- Path canonicalization, traversal rejection, sanitization, collision suffixes,
-  and never-overwrite behavior.
-- Still and sequence state-machine transitions.
-- Stop, cancellation, partial completion, and irreversible artifact boundaries.
-- Game-frame and wall-clock scheduling, pause, late slots, and frame counts.
-- Backpressure skip/abort policies and fair interleaving with manual requests.
-- Event ordering, cursor expiry, acknowledgement, and retention compaction.
-- Legacy settings migration and nested-settings precedence.
-- Sequence manifest recovery after interruption.
+-   Contract version acceptance and rejection.
+-   Envelope and stable error-code serialization.
+-   Idempotent retry and conflicting-command detection.
+-   Capture descriptor normalization and capability validation.
+-   Source/view compatibility and explicit fallback.
+-   Path canonicalization, traversal rejection, sanitization, collision suffixes,
+    and never-overwrite behavior.
+-   Still and sequence state-machine transitions.
+-   Stop, cancellation, partial completion, and irreversible artifact boundaries.
+-   Game-frame and wall-clock scheduling, pause, late slots, and frame counts.
+-   Backpressure skip/abort policies and fair interleaving with manual requests.
+-   Event ordering, cursor expiry, acknowledgement, and retention compaction.
+-   Legacy settings migration and nested-settings precedence.
+-   Sequence manifest recovery after interruption.
 
 ### Component tests
 
-- Fake source provider with left/right plane arrival order, missing eyes,
-  compositor-cycle changes, and timeout.
-- Worker success and injected map, composition, encode, write, hash, and rename
-  failures.
-- Multi-output acquisition writes separate eyes and composition from one stage.
-- Device-generation invalidation.
-- Shutdown with waiting, queued, encoding, and finalizing operations.
-- JSON golden files validated against the frozen request/response/manifest
-  schemas.
+-   Fake source provider with left/right plane arrival order, missing eyes,
+    compositor-cycle changes, and timeout.
+-   Worker success and injected map, composition, encode, write, hash, and rename
+    failures.
+-   Multi-output acquisition writes separate eyes and composition from one stage.
+-   Device-generation invalidation.
+-   Shutdown with waiting, queued, encoding, and finalizing operations.
+-   JSON golden files validated against the frozen request/response/manifest
+    schemas.
 
 ### Live qualification
 
-- Flat desktop mirror.
-- VR desktop mirror, accepted-eye side-by-side, framed left, framed right,
-  framed combined, and separate-eye outputs.
-- Main menu, gameplay, loading-screen rejection/fallback, paused game, and menu
-  open/closed.
-- Null HMD for repeatable automation and physical HMD for actual compositor,
-  pose, projection, and driver behavior.
-- Hotkey, menu, DevBench direct tool, DevBench scenario dispatch, reconnect and
-  idempotent retry.
-- Burst stills and sequences at/over worker capacity with stable frame pacing.
-- Feature disable, game exit, device reset, full disk, unwritable directory,
-  and unavailable optional packager.
-- Verify every claimed artifact by existence, size, decodability, dimensions,
-  and receipt/manifest identity.
+-   Flat desktop mirror.
+-   VR desktop mirror, accepted-eye side-by-side, framed left, framed right,
+    framed combined, and separate-eye outputs.
+-   Main menu, gameplay, loading-screen rejection/fallback, paused game, and menu
+    open/closed.
+-   Null HMD for repeatable automation and physical HMD for actual compositor,
+    pose, projection, and driver behavior.
+-   Hotkey, menu, DevBench direct tool, DevBench scenario dispatch, reconnect and
+    idempotent retry.
+-   Burst stills and sequences at/over worker capacity with stable frame pacing.
+-   Feature disable, game exit, device reset, full disk, unwritable directory,
+    and unavailable optional packager.
+-   Verify every claimed artifact by existence, size, decodability, dimensions,
+    and receipt/manifest identity.
 
 ## Implementation order
 
@@ -1044,17 +1101,232 @@ independently behind its own service major.
 
 The screenshot API and sequence feature are complete when:
 
-- no accepted operation can disappear without a terminal receipt;
-- command retries cannot create duplicate captures;
-- all current worker failures map to structured terminal outcomes;
-- still capture retains current flat/VR output correctness;
-- a sequence produces a recoverable frame set and final manifest without
-  unbounded queues or render-thread encoding;
-- separate-eye and composed outputs accurately report what was written;
-- stop, cancel, disable, device loss, and shutdown have tested partial-result
-  semantics;
-- capabilities and version negotiation are authoritative;
-- UI, hotkey, menu DevBench alias, and direct DevBench tool share one service;
-- legacy sequence settings migrate and are no longer inert;
-- contract schemas, tests, documentation, null-HMD qualification, and physical-
-  HMD qualification agree with the shipped implementation.
+-   no accepted operation can disappear without a terminal receipt;
+-   command retries cannot create duplicate captures;
+-   all current worker failures map to structured terminal outcomes;
+-   still capture retains current flat/VR output correctness;
+-   a sequence produces a recoverable frame set and final manifest without
+    unbounded queues or render-thread encoding;
+-   separate-eye and composed outputs accurately report what was written;
+-   stop, cancel, disable, device loss, and shutdown have tested partial-result
+    semantics;
+-   capabilities and version negotiation are authoritative;
+-   UI, hotkey, menu DevBench alias, and direct DevBench tool share one service;
+-   legacy sequence settings migrate and are no longer inert;
+-   contract schemas, tests, documentation, null-HMD qualification, and physical-
+    HMD qualification agree with the shipped implementation.
+
+## Production build boundary
+
+`DEVBENCH_BRIDGE=OFF` excludes native burst plans, atlas staging, deferred
+encoding, continuity bookkeeping, golden-reference callbacks and their
+per-frame notification/encoder locks. It also excludes the
+`Screenshot::SequenceCapture` diagnostic pass. These paths are absent from
+production translation units, rather than disabled by a runtime setting.
+`TRACY_SUPPORT=ON` alone does not enable them.
+
+Normal screenshot and scheduled-sequence behavior remains available through
+the menu, hotkey and native API. Its PNG/BMP encoder, collision-safe file
+publication, UTF-8 path conversion and shared retry handling are functional
+production code. The shared retry fix applies only when an API command is
+dispatched; it does not poll or add a render-loop hook.
+
+Validation on 2026-10-01:
+
+-   Built the universal SE/AE/VR Release DLL with `TRACY_SUPPORT=OFF` and
+    `DEVBENCH_BRIDGE=OFF` using
+    `pwsh ./tools/cmake.ps1 --build build/ALL --config Release --target CommunityShaders --parallel 2`.
+    The initial compile exposed an indirect `StringUtils.h` dependency;
+    adding the direct include resolved it. No packaging or deployment ran.
+-   Verified the production target has no Tracy definitions/client linkage or
+    DevBench definition. The DLL excludes 14 burst/reference markers and the
+    10 diagnostic markers from the preceding production-boundary check.
+    Its adjacent manifest matches its SHA-256 and 23,545,856-byte size.
+-   The preserved pre-commit build is based on `95e8d4c67` plus this source
+    patch, with Build ID
+    `def80f0b5d3a5315a9d67ccd6842bc63c3f61c634e04701b7fd8db295eb7bb57`
+    and DLL SHA-256
+    `4d77a34efa92280fa356f1f0917be3b8240480bcc02c5a5cfbce0900fd60e349`.
+-   MSVC `/Zs` passed for `ScreenshotApi.cpp`, `ScreenshotFeature.cpp` and
+    `ScreenshotDevBenchBridge.cpp` with `TRACY_SUPPORT`, `TRACY_ENABLE`,
+    `TRACY_ON_DEMAND` and `DEVBENCH_BRIDGE_ENABLED` defined. The bridge check
+    used the installed DevBench SDK include directory.
+-   All 10 tests selected by
+    `ctest --test-dir build/ALL -C Release -R 'Screenshot|ApiServiceFoundation' --output-on-failure --no-tests=error --parallel 2`
+    passed after building their nine executable targets. This includes both
+    production and DevBench capability/admission variants, flat and VR source
+    discovery, ordinary PNG/BMP capabilities, native pixel round trips, burst
+    policy, reference receipts and retry handling.
+-   No in-game capture or performance measurement was performed. Local build
+    and binary-check evidence is under
+    `build/validation/capture-boundary-20261001/`.
+
+## Consecutive native-region bursts
+
+For temporal quality, opt into `sequence.burst` in a CSX build configured with
+`DEVBENCH_BRIDGE=ON`. Require the `burst` capability before sending this
+descriptor. Production builds omit that capability and reject `sequence.burst`
+with a non-retryable `unsupported` error before allocating capture resources.
+Ordinary still PNG and streamed sequence behavior remain available in every
+build. The same burst descriptor is accepted by the comparison builds of CSX
+and Open Shaders:
+
+```json
+"burst": {
+    "maximumBytes": 536870912,
+    "regions": [
+        { "x": 564, "y": 712, "width": 384, "height": 256 },
+        { "x": 944, "y": 712, "width": 384, "height": 256 },
+        { "x": 1128, "y": 1040, "width": 384, "height": 256 }
+    ]
+}
+```
+
+Coordinates above only illustrate the descriptor for a sufficiently large
+eye image. Select center, mask-boundary and periphery rectangles from the
+full native reference for the actual projection; do not assume those
+example positions track the FOV mask on every machine. The coordinates are
+integer pixels relative to each oriented submission, applied identically
+to both eyes. All regions must have equal widths. Each eye's regions stack
+vertically in array order; VR places the left atlas before the right atlas.
+There is no scaling, filtering or padding. The example yields 768 x 768
+pixels containing six 384 x 256 tiles. Bounds, orientation, source
+dimensions and region definitions remain in the manifest.
+
+Use explicit `frameCount` (1–240), `useSettings: false`, `game_frames`,
+`intervalFrames: 1`, one `side_by_side` output in VR (`source_native` on
+SE/AE), SDR PNG or BMP, and `fallback: reject`. Keep the frame manifest
+enabled. Omit `failurePolicy` for a shared request: the burst always stops
+acquisition on failure regardless of the ordinary sequence default.
+Additional output cropping, resizing and clipboard export are unavailable
+in this mode. Bursts require exclusive ownership through finalization.
+
+Only cropped GPU copies are collected during acquisition. Readback and
+PNG/BMP encoding start after acquisition ends; saved images use the same
+existing encoders and verified publication paths as ordinary captures.
+Admission checks the entire raw payload before allocating any textures.
+Its ceiling is 512 MiB, with 128 MiB per frame and at most eight regions;
+native texture and region bounds are also checked at acquisition. These
+are resource bounds, not wall-clock deadlines. Driver allocation padding,
+metadata and bounded readback/encoder scratch space are additional memory.
+Acquisition does not wait for the disk or encoder to make room.
+
+The receipt and final manifest expose `continuity`: observed first/last
+engine frames, acquired/requested counts, `failure`, and `complete`.
+Every acquired frame must advance the engine counter and, in VR, the
+compositor cycle by exactly one. A missing or incompatible eye, source
+change, pause after capture begins, readback failure or failed publication
+prevents qualification. Early stop retains acquired images but cannot
+qualify an incomplete requested burst. Require final manifest publication,
+all requested images and `continuity.complete == true` together; image
+count or a successful start response alone is insufficient. Memory owned
+by each frame is released during drain; receipts retain metadata only.
+
+For a compact comparison, preserve one full stereo reference at each
+existing viewpoint, then initially capture two seconds: 0.5 seconds of
+stationary detail, a one-second repeatable pan, and 0.5 seconds of stationary
+recovery. At a measured 60 rendered FPS this is 30 + 60 + 30 = 120 frames.
+Three 384 x 256 regions per eye consume 283,115,520 raw bytes per viewpoint
+(270 MiB, about 1.70 GB over six viewpoints), before lossless compression.
+This is an initial evidence budget, not a claim that all temporal artifacts
+settle within two seconds. Extend only the affected phase if the saved
+samples show an unsettled trail, insufficient motion or an unresolved
+fluctuation; do not routinely repeat the entire viewpoint or capture at
+the 240-frame ceiling. Stabilize camera and history before acquisition.
+
+Both builds require an explicit burst frame count. Choose it from actual
+rendered cadence, not the nominal HMD refresh rate, and match motion speed
+and phase durations between builds. The selected frame count ends source
+acquisition; it is not an encoding, publication or command timeout. Keep
+requested raw bytes within the advertised bound; reduce region dimensions
+if the chosen cadence would exceed it. Retain acquisition timestamps and
+correlated DevBench camera actions for phase boundaries. Match the original
+settings, fixed HMD pose, viewpoint, game time and weather.
+
+Validate the first short burst's continuity, stereo orientation, crop
+locations and publication before proceeding to the other viewpoints. Reuse
+that valid burst. Do not repeatedly capture long full-frame sequences or
+include image collection in a performance benchmark. Consecutive counters
+do not prove negligible capture overhead or uniform wall-clock cadence;
+inspect timestamps before comparing shimmer, ghosting and stereo history.
+Runtime qualification on VR and one flat runtime remains necessary.
+
+DevBench already supports capture-provider registration through
+`RegisterToolExtension("capture", key, ...)`, with correlated `outputPath`,
+`requestId` and `capture.ready` completion. Its base `capture` accepts
+`golden`, `threshold` and normalized `regions`; replay accepts per-checkpoint
+`goldens`. Reuse those facilities and existing matching reference images
+instead of creating another golden-sample registry. Full-frame goldens
+and burst atlases have different layouts and must not be compared directly.
+
+CSX registers the native Screenshot provider as `kind: "communityshaders"`
+on DevBench build 10500 or newer. Discover it using
+`capture {"kind":"providers"}`. It captures a full same-cycle stereo PNG
+in VR or native desktop PNG on SE/AE through the existing screenshot queue.
+The host's exact absolute output path is retained; existing files are
+refused and publication never overwrites or silently chooses another name.
+Completion carries the host request ID, dimensions, size and SHA-256 from
+the committed-file receipt through `capture.ready`. Failure and cancellation
+cannot report a successful reference. The provider reports
+`uiExcluded: false`; hide the HUD/menu explicitly for matching references.
+Use the base capture tool's `golden`, `threshold` and `regions` arguments
+or replay checkpoint `goldens` for DevBench's existing scoring.
+
+### Burst and golden-provider validation (2026-09-30)
+
+The universal SE/AE/VR DLL built with Tracy and DevBench enabled from the
+implementation worktree based on `2467ba77cbfc1ed886a062cdea27b4f031b864ba`.
+The isolated build disabled automatic deployment and used cached dependencies.
+
+```powershell
+pwsh ./tools/cmake.ps1 --build build/c930b --config Release --target CommunityShaders screenshot_native_png_test screenshot_manifest_snapshot_test screenshot_settings_test screenshot_api_policy_test screenshot_capture_present_test --parallel 8
+ctest --test-dir build/c930b -C Release -R Screenshot --output-on-failure
+```
+
+All eight screenshot tests passed. Coverage includes native atlas pixel
+identity under all four orientations, bounds and memory budgets, frame/cycle
+gaps, terminal publication requirements, Unicode reference paths and
+failure/cancellation receipts. Existing atomic-storage and capture/dispatch
+checks passed. The settings extraction harness now includes the production
+capture-descriptor exception instead of depending on a missing declaration.
+The shared burst policy is byte-identical to the OS implementation.
+
+The adversarial/DRY pass checked source pairing, allocation limits, worker
+ownership, cancellation, exact host filenames, callback lock boundaries and
+normal PNG publication. The provider reuses the queue and committed-file
+receipt; neither the encoder nor the terminated Win32 rename buffer changed.
+Path conversion is shared through `Util::PathToUtf8`, including publication
+logging. An unchanged deferral state no longer wakes the encoder each frame.
+
+Scoped hooks, discovery JSON parsing and sequence-manifest schema validation
+passed. The request schema retains its existing layout to avoid unrelated
+whole-file formatting; its new burst definition was parsed and reviewed.
+No runtime images, golden scores, sustained-cadence measurements or capture
+overhead measurements were produced. VR and one flat runtime still need
+in-game qualification with these DLLs before temporal comparisons are valid.
+
+The follow-up adversarial pass made golden captures use the burst path's
+strict native-source checks: single-sample SDR8, valid submitted bounds,
+same-frame/cycle eyes, compatible dimensions and no desktop-source fallback
+or HDR tonemapping. Ordinary still captures retain their existing behavior.
+Comparison guidance starts with a two-second cropped burst after history
+stabilization, extending only an unresolved phase instead of recording at
+the maximum frame count. No publication deadline is derived from its length.
+
+Native bursts and golden outputs also retain display-encoded bytes when
+an sRGB texture tag reaches DirectXTex conversion. The production helper
+changes format metadata before the existing SDR writer; ordinary capture
+conversion is unchanged. `ScreenshotNativePng` verifies exact PNG and BMP
+pixel round trips across RGBA/BGRA and UNORM/sRGB sources (4,096 pixels),
+and rejects HDR input. The existing NUL-terminated atomic publisher remains
+unchanged. The focused CMake target addition keeps the surrounding legacy
+formatting intact; CMake regeneration and the new target build passed.
+
+### Retrying rejected commands
+
+A failed dispatch with `error.retryable: true`, including temporary capture
+`busy` responses, is not retained in the completed command cache. Retry
+with the same arguments, `clientId` and `commandId` after the temporary
+condition clears. Successful commands and non-retryable failures remain
+cached; retries of accepted captures return their receipt without starting
+another capture. Concurrent identical commands remain `command_in_progress`.

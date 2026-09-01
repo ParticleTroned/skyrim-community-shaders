@@ -19,6 +19,9 @@ public:
 	/** Starts the closed-menu phase after the settings window has closed. */
 	static void NotifyMenuClosed();
 	static bool HasActiveMeasurements();
+	/** Starts one surfaced feature's closed-menu cost comparison. */
+	static nlohmann::json StartDevBenchFeatureCostMeasurement(
+		std::string_view a_featureShortName);
 	/** Starts a hardware-specific Upscaling cost sweep relative to None. */
 	static nlohmann::json StartDevBenchUpscalingCostSweep(
 		std::string_view a_matrix = "auto",

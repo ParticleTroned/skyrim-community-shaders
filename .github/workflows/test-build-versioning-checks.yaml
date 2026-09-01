@@ -1,0 +1,45 @@
+name: "Test Build: Versioning Checks"
+
+on:
+    pull_request:
+        paths:
+            - "CMakeLists.txt"
+            - "cmake/TestBuildVersion.cmake"
+            - "cmake/Plugin.h.in"
+            - "cmake/Version.rc.in"
+            - ".github/workflows/_shared-build.yaml"
+            - "tools/csx_test_build.py"
+            - "tests/test_csx_test_build.py"
+            - "version/test-build.json"
+            - ".github/workflows/test-build-*.yaml"
+    push:
+        paths:
+            - "CMakeLists.txt"
+            - "cmake/TestBuildVersion.cmake"
+            - ".github/workflows/_shared-build.yaml"
+            - ".github/workflows/test-build-*.yaml"
+            - "tools/csx_test_build.py"
+            - "tests/test_csx_test_build.py"
+            - "version/test-build.json"
+
+permissions:
+    contents: read
+
+jobs:
+    test:
+        name: Validate allocator and stored state
+        if: >
+            github.event_name != 'push' ||
+            github.ref_name == github.event.repository.default_branch
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v6
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-python@v6
+              with:
+                  python-version: "3.11"
+            - name: Run unit tests
+              run: python -m unittest tests.test_csx_test_build
+            - name: Validate stored state
+              run: python -c 'from pathlib import Path; from tools.csx_test_build import load_state; load_state(Path("version/test-build.json"))'

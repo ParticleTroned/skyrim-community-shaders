@@ -387,7 +387,8 @@ namespace Util
 		bool WriteTextFileAtomic(
 			const std::filesystem::path& path,
 			std::string_view contents,
-			std::string& errorMessage)
+			std::string& errorMessage,
+			bool allowDirectFallback)
 		{
 			errorMessage.clear();
 
@@ -410,6 +411,11 @@ namespace Util
 				const auto windowsError = GetLastError();
 				std::error_code cleanupError;
 				std::filesystem::remove(stagingPath, cleanupError);
+
+				if (!allowDirectFallback) {
+					errorMessage = std::format("Could not atomically replace {} (Windows error {}). The original file was retained.", path.string(), windowsError);
+					return false;
+				}
 
 				// Virtualized filesystems can reject replacement while accepting writes to an existing file.
 				logger::warn(

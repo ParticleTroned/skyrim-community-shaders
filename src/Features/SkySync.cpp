@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "Utils/Finite.h"
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkySync::Settings,
 	Enabled,
@@ -15,7 +17,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SunriseEndOffset,
 	SunsetBeginOffset,
 	SunsetEndOffset,
-	MinShadowElevation)
+	MinShadowElevation,
+	DimSunlightUnderHorizon,
+	HorizonFadeHours)
 
 void SkySync::DrawSettings()
 {
@@ -59,10 +63,19 @@ void SkySync::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("The minimum angle sunlight will set to. Caps shadow length. Higher = shorter shadows at sunset/sunrise.");
 	}
+	bool dimSunlight = settings.DimSunlightUnderHorizon;
+	float fadeHours = settings.HorizonFadeHours;
+	bool dimmingChanged = ImGui::Checkbox("Dim Sunlight Under Horizon", &dimSunlight);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted("Fade direct lighting around sunset and sunrise while preserving the weather's light colour.");
+	if (dimSunlight)
+		dimmingChanged |= ImGui::SliderFloat("Horizon Fade Duration", &fadeHours, 0.0f, MaxHorizonFadeHours, "%.1f h", ImGuiSliderFlags_AlwaysClamp);
+	if (dimmingChanged)
+		SetSunlightDimming(dimSunlight, fadeHours);
 	ImGui::Spacing();
 	ImGui::Spacing();
 	if (ImGui::TreeNodeEx("Sun Position Offsets")) {
-		ImGui::TextWrapped("Moves sun height during sunrise/sunset. Reset weather to see changes.");
+		ImGui::TextWrapped("Moves the visual sun path during sunrise/sunset. Moon lighting follows the climate's night timings.");
 		ImGui::SliderFloat("Sunrise Begin (Hours)", &settings.SunriseBeginOffset, -5.0f, 5.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Offset for when the sun starts rising.");
@@ -91,14 +104,16 @@ void SkySync::DrawEssentialSettings()
 void SkySync::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	const Settings defaults{};
 	settings.MoonLightSource = std::clamp(settings.MoonLightSource, static_cast<int32_t>(MoonLightSource::Brightest), static_cast<int32_t>(MoonLightSource::Secunda));
 	settings.SunPath = std::clamp(settings.SunPath, static_cast<int32_t>(SunPath::Southern), static_cast<int32_t>(SunPath::Custom));
-	settings.CustomAngle = std::clamp(settings.CustomAngle, -90.0f, 90.0f);
-	settings.SunriseBeginOffset = std::clamp(settings.SunriseBeginOffset, -5.0f, 5.0f);
-	settings.SunriseEndOffset = std::clamp(settings.SunriseEndOffset, -5.0f, 5.0f);
-	settings.SunsetBeginOffset = std::clamp(settings.SunsetBeginOffset, -5.0f, 5.0f);
-	settings.SunsetEndOffset = std::clamp(settings.SunsetEndOffset, -5.0f, 5.0f);
-	settings.MinShadowElevation = std::clamp(settings.MinShadowElevation, 0.0f, 45.0f);
+	settings.CustomAngle = Util::ClampFinite(settings.CustomAngle, -90.0f, 90.0f, defaults.CustomAngle);
+	settings.SunriseBeginOffset = Util::ClampFinite(settings.SunriseBeginOffset, -5.0f, 5.0f, defaults.SunriseBeginOffset);
+	settings.SunriseEndOffset = Util::ClampFinite(settings.SunriseEndOffset, -5.0f, 5.0f, defaults.SunriseEndOffset);
+	settings.SunsetBeginOffset = Util::ClampFinite(settings.SunsetBeginOffset, -5.0f, 5.0f, defaults.SunsetBeginOffset);
+	settings.SunsetEndOffset = Util::ClampFinite(settings.SunsetEndOffset, -5.0f, 5.0f, defaults.SunsetEndOffset);
+	settings.MinShadowElevation = Util::ClampFinite(settings.MinShadowElevation, 0.0f, 45.0f, defaults.MinShadowElevation);
+	settings.HorizonFadeHours = Util::ClampFinite(settings.HorizonFadeHours, 0.0f, MaxHorizonFadeHours, DefaultHorizonFadeHours);
 	if (!settings.Enabled) {
 		ResetRuntimeState();
 	}
@@ -117,12 +132,35 @@ void SkySync::RestoreDefaultSettings()
 	SetSunAngle();
 }
 
+bool SkySync::SetSunlightDimming(bool enabled, float fadeHours)
+{
+	if (!std::isfinite(fadeHours) || fadeHours < 0.0f || fadeHours > MaxHorizonFadeHours)
+		return false;
+	settings.DimSunlightUnderHorizon = enabled;
+	settings.HorizonFadeHours = fadeHours;
+	return true;
+}
+
 float SkySync::GetVolumetricLightingIntensityFactor() const
 {
 	if (!loaded || !settings.Enabled)
 		return DefaultVolumetricLightingIntensityFactor;
 
 	return SkySync::NormalizeVolumetricLightingIntensity(volumetricLightingIntensityFactor);
+}
+
+std::optional<RE::NiPoint3> SkySync::GetCelestialLightDirection() const
+{
+	const auto sky = globals::game::sky;
+	if (!loaded || !settings.Enabled || !shadowFader.celestialDirection || !sky || !sky->root)
+		return std::nullopt;
+
+	auto direction = sky->root->world.rotate * *shadowFader.celestialDirection;
+	const float length = direction.Unitize();
+	if (!std::isfinite(length) || length <= FLT_EPSILON)
+		return std::nullopt;
+
+	return direction;
 }
 
 void SkySync::PostPostLoad()
@@ -138,7 +176,6 @@ void SkySync::PostPostLoad()
 
 	stl::detour_thunk<Moon_Update>(REL::RelocationID(25626, 26169));
 	stl::detour_thunk<Sky_Update>(REL::RelocationID(25682, 26229));
-	stl::detour_thunk<Sky_OnNewClimate>(REL::RelocationID(25695, 26242));
 
 	gSunPosition = reinterpret_cast<RE::NiPoint3*>(REL::RelocationID(527924, 414871).address());
 	gSunGlareSize = reinterpret_cast<float*>(REL::RelocationID(502611, 370235).address());
@@ -166,9 +203,46 @@ void SkySync::DisableOnConflict(std::string_view conflictName)
 
 void SkySync::ResetRuntimeState()
 {
+	RestoreSunlight();
 	RestoreWeatherLensFlares();
 	shadowFader.Reset();
 	volumetricLightingIntensityFactor = DefaultVolumetricLightingIntensityFactor;
+}
+
+void SkySync::RestoreSunlight()
+{
+	if (adjustedSunlight) {
+		sunlightAdjustment.Restore(adjustedSunlight.get(), adjustedSunlight->GetLightRuntimeData().diffuse);
+		adjustedSunlight.reset();
+	}
+	sunlightDimmingFactor = 1.0f;
+}
+
+bool SkySync::ClimateTimings::IsDayTime(float time) const
+{
+	return time >= weatherSunriseBegin && time < weatherSunsetEnd;
+}
+
+float SkySync::ClimateTimings::NightHorizonDistance(float time) const
+{
+	if (IsDayTime(time))
+		return 0.0f;
+	const float sinceSunset = time >= weatherSunsetEnd ? time - weatherSunsetEnd : time + HoursPerDay - weatherSunsetEnd;
+	const float untilSunrise = time < weatherSunriseBegin ? weatherSunriseBegin - time : weatherSunriseBegin + HoursPerDay - time;
+	return std::min(sinceSunset, untilSunrise);
+}
+
+float SkySync::ClimateTimings::SunlightDimming(float time, float fadeHours) const
+{
+	fadeHours = Util::ClampFinite(fadeHours, 0.0f, MaxHorizonFadeHours, DefaultHorizonFadeHours);
+
+	if (time >= weatherSunsetMiddle && time < weatherSunsetEnd)
+		return std::sqrt(std::clamp((weatherSunsetEnd - time) / (weatherSunsetEnd - weatherSunsetMiddle), 0.0f, 1.0f));
+	if (time >= weatherSunriseBegin && time < weatherSunriseMiddle)
+		return std::sqrt(std::clamp((time - weatherSunriseBegin) / (weatherSunriseMiddle - weatherSunriseBegin), 0.0f, 1.0f));
+	if (!IsDayTime(time) && fadeHours > 0.0f)
+		return std::clamp(NightHorizonDistance(time) / fadeHours, 0.0f, 1.0f);
+	return 1.0f;
 }
 
 void SkySync::ApplyWeatherLensFlareSetting(const RE::Sky* sky)
@@ -213,6 +287,8 @@ float SkySync::NormalizeVolumetricLightingIntensity(float intensity)
 void SkySync::Sky_Update::thunk(RE::Sky* sky)
 {
 	auto& skySync = globals::features::skySync;
+	// Remove our previous scale before the engine refreshes or reuses its light colour.
+	skySync.RestoreSunlight();
 	skySync.ApplyWeatherLensFlareSetting(sky);
 	func(sky);
 	skySync.Update(sky);
@@ -220,7 +296,7 @@ void SkySync::Sky_Update::thunk(RE::Sky* sky)
 
 void SkySync::Update(const RE::Sky* sky)
 {
-	if (!settings.Enabled) {
+	if (!loaded || !settings.Enabled) {
 		ResetRuntimeState();
 		return;
 	}
@@ -254,8 +330,13 @@ void SkySync::Update(const RE::Sky* sky)
 		return;
 	}
 
-	const float time = sky->currentGameHour;
-	const bool isDayTime = time > timings.sunriseFadeOutMoonEnd && time < timings.sunsetFadeInMoonStart;
+	const float hour = sky->currentGameHour;
+	if (!std::isfinite(hour) || hour < 0.0f || hour > HoursPerDay || !timings.Update(climate)) {
+		ResetRuntimeState();
+		return;
+	}
+	const float time = hour == HoursPerDay ? 0.0f : hour;
+	const bool isDayTime = timings.IsDayTime(time);
 
 	const auto worldSpace = player->GetWorldspace();
 	const float altitude = worldSpace ? player->GetPositionZ() - worldSpace->GetDefaultWaterHeight() : 0.0f;
@@ -264,6 +345,16 @@ void SkySync::Update(const RE::Sky* sky)
 	ProcessMoon(sky->masser, time, Caster::Masser, altitude, isDayTime);
 	ProcessMoon(sky->secunda, time, Caster::Secunda, altitude, isDayTime);
 
+	if (settings.DimSunlightUnderHorizon) {
+		auto& diffuse = sun->light->GetLightRuntimeData().diffuse;
+		if (std::isfinite(diffuse.red) && std::isfinite(diffuse.green) && std::isfinite(diffuse.blue)) {
+			sunlightDimmingFactor = timings.SunlightDimming(time, settings.HorizonFadeHours);
+			if (sunlightDimmingFactor != 1.0f) {
+				adjustedSunlight = sun->light;
+				sunlightAdjustment.Apply(adjustedSunlight.get(), diffuse, sunlightDimmingFactor);
+			}
+		}
+	}
 	volumetricLightingIntensityFactor = shadowFader.Update(sun, directions, intensities, isDayTime, time);
 }
 void SkySync::SetSunAngle()
@@ -363,10 +454,7 @@ void SkySync::ProcessMoon(const RE::Moon* moon, const float time, const Caster t
 	else if (type == Caster::Secunda)
 		intensity *= secundaPhaseIntensityFactor * SecundaIntensityFactor;
 
-	if (time >= timings.sunriseFadeOutMoonStart && time <= timings.sunriseFadeOutMoonEnd)
-		intensity *= SmoothStep(timings.sunriseFadeOutMoonEnd, timings.sunriseFadeOutMoonStart, time);
-	else if (time >= timings.sunsetFadeInMoonStart && time <= timings.sunsetFadeInMoonEnd)
-		intensity *= SmoothStep(timings.sunsetFadeInMoonStart, timings.sunsetFadeInMoonEnd, time);
+	intensity *= SmoothStep(0.0f, MoonFadeHours, timings.NightHorizonDistance(time));
 
 	intensities[static_cast<int>(type)] = intensity;
 }
@@ -457,6 +545,7 @@ void SkySync::ShadowFader::Reset()
 	sunriseReleased = false;
 	frozenHeading = 0.0f;
 	sunsetHeadingLocked = false;
+	celestialDirection.reset();
 }
 
 float SkySync::ShadowFader::Update(const RE::Sun* sun, RE::NiPoint3 dirs[3], float intensities[3], const bool isDayTime, const float time)
@@ -472,8 +561,6 @@ float SkySync::ShadowFader::Update(const RE::Sun* sun, RE::NiPoint3 dirs[3], flo
 	else if (secundaIntensity > 0.0f)
 		desired = Caster::Secunda;
 
-	LockSunElevation(dirs, time);
-
 	if (desired != target) {
 		target = desired;
 		fadeTimer = 0.0f;
@@ -486,6 +573,12 @@ float SkySync::ShadowFader::Update(const RE::Sun* sun, RE::NiPoint3 dirs[3], flo
 	}
 
 	float fadeAdvance = 0.0f;
+	// A fading-out moon must not retain the light once the weather starts its dawn colours.
+	if (isDayTime && current != Caster::Sun) {
+		current = Caster::Sun;
+		fadePhase = Phase::FadeIn;
+		fadeTimer = 0.0f;
+	}
 	if (const auto calendar = globals::game::calendar) {
 		const float currentHoursPassed = calendar->GetHoursPassed();
 		const float timeScale = calendar->GetTimescale();
@@ -503,6 +596,12 @@ float SkySync::ShadowFader::Update(const RE::Sun* sun, RE::NiPoint3 dirs[3], flo
 	} else if (globals::game::deltaTime) {
 		fadeAdvance = *globals::game::deltaTime * 20.0f;
 	}
+
+	// Capture this frame's caster before elevation limits or the end-of-frame handoff.
+	celestialDirection.reset();
+	if (current != Caster::None)
+		celestialDirection = dirs[static_cast<int>(current)];
+	LockSunElevation(dirs, time);
 
 	if (current == Caster::None) {
 		fadePhase = Phase::None;
@@ -626,8 +725,18 @@ inline void SkySync::ShadowFader::ClampDirection(RE::NiPoint3& dir)
 	SetElevation(dir, minElev);
 }
 
-void SkySync::ClimateTimings::Update(const RE::TESClimate* climate)
+bool SkySync::ClimateTimings::Update(const RE::TESClimate* climate)
 {
+	const auto& timing = climate->timing;
+	// Invalid weather intervals cannot safely define a colour or caster handoff.
+	if (timing.sunrise.begin > timing.sunrise.end || timing.sunrise.end > timing.sunset.begin ||
+		timing.sunset.begin > timing.sunset.end || timing.sunset.end > HoursPerDay * 6.0f)
+		return false;
+	weatherSunriseBegin = timing.sunrise.begin / 6.0f;
+	weatherSunriseMiddle = (timing.sunrise.begin + timing.sunrise.end) / 12.0f;
+	weatherSunsetMiddle = (timing.sunset.begin + timing.sunset.end) / 12.0f;
+	weatherSunsetEnd = timing.sunset.end / 6.0f;
+
 	const float SunriseBeginOffset = globals::features::skySync.settings.SunriseBeginOffset;
 	const float SunriseEndOffset = globals::features::skySync.settings.SunriseEndOffset;
 	const float SunsetBeginOffset = globals::features::skySync.settings.SunsetBeginOffset;
@@ -649,17 +758,7 @@ void SkySync::ClimateTimings::Update(const RE::TESClimate* climate)
 		sunsetEnd = sunsetBegin + kMinGapHours;
 	sunrise = (sunriseBegin + sunriseEnd) * 0.5f - 0.25f;
 	sunset = (sunsetBegin + sunsetEnd) * 0.5f + 0.25f;
-	sunriseFadeOutMoonStart = sunriseBegin - 0.5f;
-	sunriseFadeOutMoonEnd = sunriseBegin + 1.0f;
-	sunsetFadeInMoonStart = sunsetEnd - 1.0f;
-	sunsetFadeInMoonEnd = sunsetEnd + 0.5f;
-}
-
-void SkySync::Sky_OnNewClimate::thunk(RE::Sky* sky)
-{
-	if (auto& singleton = globals::features::skySync; singleton.settings.Enabled && sky && sky->currentClimate)
-		singleton.timings.Update(sky->currentClimate);
-	func(sky);
+	return true;
 }
 
 void SkySync::Moon_Update::thunk(RE::Moon* moon, RE::Sky* sky)

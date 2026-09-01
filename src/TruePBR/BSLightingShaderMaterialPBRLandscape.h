@@ -1,5 +1,6 @@
 #pragma once
 
+#include "MaterialRegistry.h"
 #include "TruePBR.h"
 
 class BSLightingShaderMaterialPBRLandscape : public RE::BSLightingShaderMaterialBase
@@ -37,7 +38,7 @@ public:
 
 	bool HasGlint() const;
 
-	inline static std::unordered_map<BSLightingShaderMaterialPBRLandscape*, std::array<TruePBR::PBRTextureSetData*, NumTiles>> All;
+	inline static PBRMaterialRegistry<BSLightingShaderMaterialPBRLandscape, std::array<TruePBR::PBRTextureSetData*, NumTiles>> All;
 
 	// members
 	std::uint32_t numLandscapeTextures = 0;

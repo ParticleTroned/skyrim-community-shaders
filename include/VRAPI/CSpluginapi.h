@@ -1,3 +1,6 @@
+// Internal to this project; third-party mods should not vendor this file.
+// See CSinterface001.h for the consumer-facing interface contract.
+
 #pragma once
 
 #include "Features/LightLimitFix.h"
@@ -12,9 +15,8 @@
 #include <atomic>
 #include <cstdint>
 
-// Build 11 distinguishes CS-owned transition coverage from build 10 callers
-// which may still have the former advisory fade timings compiled in.
-inline constexpr unsigned int CSBuildNumber = 11;
+// Build 12 admits configured current-cell profiles after live settings reloads.
+inline constexpr unsigned int CSBuildNumber = 12;
 
 namespace CSPluginAPI
 {
@@ -326,8 +328,9 @@ namespace CSPluginAPI
 		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(preset);
 		const auto upscaleMethod = detail::GetLegacyDLSSPreferredUpscaleMethod(upscaling);
 		const bool renderScaleModeEnabled =
-			upscaling.IsRenderScaleModeRequested() &&
-			Upscaling::GetQualityModeResolutionScale(qualityMode) < 0.99f;
+			globals::game::isVR ? upscaling.GetVRRenderScaleModePreference() :
+				upscaling.IsRenderScaleModeRequested() &&
+					Upscaling::GetQualityModeResolutionScale(qualityMode) < 0.99f;
 		upscaling.ApplyCSMenuUpscalingTransition(
 			upscaleMethod,
 			renderScaleModeEnabled,
@@ -370,7 +373,7 @@ namespace CSPluginAPI
 		if (stageVRDLSSProfileChange) {
 			upscaling.ApplyCSMenuUpscalingTransition(
 				upscaleMethod,
-				upscaling.GetPerfModeRequested(),
+				upscaling.GetVRRenderScaleModePreference(),
 				upscaling.GetEffectiveDLSSQualityMode(),
 				dlssPreset,
 				"CSX API legacy DLSS profile change",
@@ -468,7 +471,8 @@ namespace CSPluginAPI
 		auto& upscaling = globals::features::upscaling;
 		upscaling.ApplyCSMenuUpscalingTransition(
 			detail::ToInternalUpscaleMethod(method),
-			upscaling.IsRenderScaleModeRequested(),
+			globals::game::isVR ? upscaling.GetVRRenderScaleModePreference() :
+				upscaling.IsRenderScaleModeRequested(),
 			upscaling.GetEffectiveDLSSQualityMode(),
 			upscaling.GetEffectiveDLSSPreset(),
 			"CSX API upscaler method change",
@@ -555,6 +559,15 @@ namespace CSPluginAPI
 		const auto internalMethod = detail::ToInternalUpscaleMethod(method);
 		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(preset);
 		const uint32_t dlssPreset = static_cast<uint32_t>(profile);
+		if (upscaling.IsVRUpscalingTransitionProfileNoOp(
+				internalMethod,
+				renderScaleModeEnabled,
+				qualityMode,
+				dlssPreset)) {
+			upscaling.ClearVRFpsStabilizerAPITransitionProfileAdmission(admissionSerial);
+			return VRUpscalingTransitionProfileDecision::kNoChange;
+		}
+
 		if (!upscaling.IsVRFpsStabilizerAPITransitionProfileAllowed(
 				internalMethod,
 				renderScaleModeEnabled,
@@ -563,15 +576,6 @@ namespace CSPluginAPI
 				admissionSerial)) {
 			upscaling.ClearVRFpsStabilizerAPITransitionProfileAdmission(admissionSerial);
 			return VRUpscalingTransitionProfileDecision::kBlocked;
-		}
-
-		if (upscaling.IsVRUpscalingTransitionProfileNoOp(
-				internalMethod,
-				renderScaleModeEnabled,
-				qualityMode,
-				dlssPreset)) {
-			upscaling.ClearVRFpsStabilizerAPITransitionProfileAdmission(admissionSerial);
-			return VRUpscalingTransitionProfileDecision::kNoChange;
 		}
 
 		return VRUpscalingTransitionProfileDecision::kApply;

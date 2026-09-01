@@ -2878,6 +2878,7 @@ FidelityFX::RuntimeDispatchPlan FidelityFX::ResolveRuntimeDispatchPlan()
 			(runtimePathEligible && shaderCompilationActive && !runtimeContextsCompatible));
 	if (runtimeDeferredByGate)
 		runtimeHostFallbackForFrame = true;
+	plan.providerSetupDeferred = runtimeDeferredByGate;
 	plan.selected =
 		runtimePathEligible &&
 		(!shaderCompilationActive || runtimeContextsCompatible) &&
@@ -3350,6 +3351,32 @@ FidelityFX::LifecycleResult FidelityFX::ExecuteRuntimeUpscalerBatch(
 	}
 
 	return ResolveRuntimeUpscalerLifecycleFailure("runtime upscaler setup/dispatch");
+}
+
+bool FidelityFX::CanDispatchHostFallbackForRegions(
+	std::span<const UpscaleRegionParameters> a_regions) const
+{
+	if (a_regions.empty() ||
+		a_regions.size() > std::size(fsrContext) ||
+		!FSRHostLifecyclePolicy::CanAttemptHostFallback(
+			IsHostFSR3Supported(),
+			runtimeUpscalerUsedForFrame)) {
+		return false;
+	}
+
+	for (const auto& region : a_regions) {
+		if (region.contextIndex >= fsrContextCount ||
+			!fsrContextValid[region.contextIndex] ||
+			!AreFSRResourcesCompatible(
+				region.renderWidth,
+				region.renderHeight,
+				region.displayWidth,
+				region.displayHeight,
+				static_cast<uint32_t>(a_regions.size()))) {
+			return false;
+		}
+	}
+	return true;
 }
 
 FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(std::span<const UpscaleRegionParameters> a_regions)
@@ -3876,9 +3903,21 @@ FidelityFX::StereoUpscaleResult FidelityFX::UpscaleStereoRegions(
 		return StereoUpscaleResult::Failed;
 
 	const auto runtimePlan = ResolveRuntimeDispatchPlan();
+	if (runtimePlan.deferred)
+		return StereoUpscaleResult::Deferred;
 	if (!runtimePlan.valid)
 		return StereoUpscaleResult::Failed;
-	if (!runtimePlan.selected || runtimePlan.contextCount != a_regions.size()) {
+	const bool safeHostFallbackReady =
+		CanDispatchHostFallbackForRegions(a_regions);
+	if (runtimePlan.contextCount != a_regions.size())
+		return StereoUpscaleResult::Failed;
+	if (!runtimePlan.selected) {
+		if (runtimePlan.providerSetupDeferred &&
+			FSRRuntimeLifecyclePolicy::ResolvePendingDispatch(
+				safeHostFallbackReady) ==
+				FSRRuntimeLifecyclePolicy::PendingDispatchResolution::Defer) {
+			return StereoUpscaleResult::Deferred;
+		}
 		if (!FSRHostLifecyclePolicy::CanAttemptHostFallback(
 				IsHostFSR3Supported(),
 				runtimeUpscalerUsedForFrame)) {
@@ -3898,6 +3937,12 @@ FidelityFX::StereoUpscaleResult FidelityFX::UpscaleStereoRegions(
 	if (runtimeResult == LifecycleResult::Ready) {
 		runtimeUpscalerUsedForFrame = true;
 		return StereoUpscaleResult::Ready;
+	}
+	if (runtimeResult == LifecycleResult::Pending &&
+		FSRRuntimeLifecyclePolicy::ResolvePendingDispatch(
+			safeHostFallbackReady) ==
+			FSRRuntimeLifecyclePolicy::PendingDispatchResolution::Defer) {
+		return StereoUpscaleResult::Deferred;
 	}
 
 	runtimeHostFallbackForFrame = true;
@@ -3996,6 +4041,8 @@ FidelityFX::UpscaleResult FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture
 		const auto stereoResult = UpscaleStereoRegions(stereoRegions);
 		if (stereoResult == StereoUpscaleResult::Ready) {
 			usedRuntimeUpscaler = { true, true };
+		} else if (stereoResult == StereoUpscaleResult::Deferred) {
+			return UpscaleResult::Deferred;
 		} else if (stereoResult == StereoUpscaleResult::Failed) {
 			allEvaluated = false;
 		} else {

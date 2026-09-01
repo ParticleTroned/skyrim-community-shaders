@@ -22,6 +22,12 @@ namespace FSRRuntimeLifecyclePolicy
 		Fail
 	};
 
+	enum class PendingDispatchResolution
+	{
+		UseHostFallback,
+		Defer
+	};
+
 	enum class IdleProofAction
 	{
 		ReuseProof,
@@ -85,6 +91,16 @@ namespace FSRRuntimeLifecyclePolicy
 		default:
 			return DispatchAdmission::Fail;
 		}
+	}
+
+	[[nodiscard]] constexpr PendingDispatchResolution ResolvePendingDispatch(
+		bool a_safeHostFallbackReady) noexcept
+	{
+		// Provider setup can be pending without being a failure. Fall through only
+		// when a complete host provider can service the entire stereo pair.
+		return a_safeHostFallbackReady ?
+		           PendingDispatchResolution::UseHostFallback :
+		           PendingDispatchResolution::Defer;
 	}
 
 	[[nodiscard]] constexpr IdleProofAction ResolveIdleProofAction(

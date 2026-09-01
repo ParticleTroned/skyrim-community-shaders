@@ -60,6 +60,7 @@ public:
 	enum class StereoUpscaleResult : uint8_t
 	{
 		NotHandled,
+		Deferred,
 		Ready,
 		Failed
 	};
@@ -314,6 +315,7 @@ private:
 	{
 		bool valid = false;
 		bool deferred = false;
+		bool providerSetupDeferred = false;
 		bool runtimeFsr4Requested = false;
 		bool runtimeRequested = false;
 		bool vendorLifecycleMutationDeferred = false;
@@ -362,6 +364,7 @@ private:
 		const D3D11_TEXTURE2D_DESC& a_transparencyDesc,
 		const D3D11_TEXTURE2D_DESC& a_outputDesc);
 	LifecycleResult ExecuteRuntimeUpscalerBatch(const RuntimeDispatchPlan& a_plan, std::span<const UpscaleRegionParameters> a_regions);
+	[[nodiscard]] bool CanDispatchHostFallbackForRegions(std::span<const UpscaleRegionParameters> a_regions) const;
 	LifecycleResult DispatchRuntimeUpscalerBatch(std::span<const UpscaleRegionParameters> a_regions);
 	LifecycleResult DestroyRuntimeUpscalerContexts(bool a_waitForIdle = true);
 	LifecycleResult DestroyRuntimeUpscalerResources(bool a_waitForIdle = true);

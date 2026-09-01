@@ -28,6 +28,12 @@ namespace
 		ResolveDispatchAdmission(DispatchFencePollResult::Failed) ==
 		DispatchAdmission::Fail);
 	static_assert(
+		ResolvePendingDispatch(true) ==
+		PendingDispatchResolution::UseHostFallback);
+	static_assert(
+		ResolvePendingDispatch(false) ==
+		PendingDispatchResolution::Defer);
+	static_assert(
 		ResolveIdleProofAction(true, false) == IdleProofAction::ReuseProof);
 	static_assert(
 		ResolveIdleProofAction(false, false) == IdleProofAction::PollForIdle);

@@ -49645,6 +49645,15 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 							captureSubmitStageVendorDispatchEvidence(otherEyeState);
 #endif
 						}
+					} else if (stereoResult == FidelityFX::StereoUpscaleResult::Deferred) {
+						if (a_compositorCycleToken != 0 &&
+							submitStageVendorAdmissionCycle == a_compositorCycleToken) {
+							submitStageVendorAdmissionPresentationOnly = true;
+						}
+						return presentStretchOutput(
+							eyeWidthIn,
+							eyeHeightIn,
+							VRRenderScalePresentationPath::PresentationStretch);
 					} else if (stereoResult == FidelityFX::StereoUpscaleResult::Failed) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 						RecordVRRenderScaleGPUPerformanceCounter(

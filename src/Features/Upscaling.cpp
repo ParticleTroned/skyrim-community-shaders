@@ -16370,7 +16370,8 @@ void Upscaling::DrawSettings()
 			if (renderScaleEditDispatch.publishRequest) {
 				const bool enableRenderScaleMode = std::clamp(renderScaleMode, 0, 1) != 0;
 				const auto fallbackControl =
-					startupNativeFallbackActive && !enableRenderScaleMode ?
+					startupNativeFallbackActive && !enableRenderScaleMode &&
+							renderScaleEditDispatch.directMenuEdit ?
 						VRVendorRelatchPolicy::StartupNativeFallbackControl::DisableSavedProfile :
 						VRVendorRelatchPolicy::StartupNativeFallbackControl::None;
 				const auto applied = ApplyCSMenuUpscalingTransition(
@@ -17221,7 +17222,8 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 			if (renderScaleEditDispatch.publishRequest) {
 				const bool enableRenderScaleMode = std::clamp(renderScaleMode, 0, 1) != 0;
 				const auto fallbackControl =
-					startupNativeFallbackActive && !enableRenderScaleMode ?
+					startupNativeFallbackActive && !enableRenderScaleMode &&
+							renderScaleEditDispatch.directMenuEdit ?
 						VRVendorRelatchPolicy::StartupNativeFallbackControl::DisableSavedProfile :
 						VRVendorRelatchPolicy::StartupNativeFallbackControl::None;
 				const auto applied = ApplyCSMenuUpscalingTransition(
@@ -53044,13 +53046,15 @@ Upscaling::VRRenderScaleRequestQueueResult Upscaling::QueueVRRenderScaleRequest(
 	const bool startupNativeFallbackActive =
 		vrStartupRenderScaleNativeFallbackRestartRequired.load(
 			std::memory_order_acquire);
+	const bool directMenuEdit =
+		a_directMenuEdit &&
+		a_origin == VRUpscalingTransitionOrigin::CSMenu;
 	const bool explicitStartupFallbackRetryAdmitted =
 		renderScaleModeEnabled &&
 		startupNativeFallbackActive &&
 		a_startupFallbackControl ==
 			VRVendorRelatchPolicy::StartupNativeFallbackControl::RetrySavedProfile &&
-		a_directMenuEdit &&
-		a_origin == VRUpscalingTransitionOrigin::CSMenu &&
+		directMenuEdit &&
 		CanRetryVRStartupNativeFallbackFromCSMenu(true);
 	const auto startupFallbackControlAction =
 		VRVendorRelatchPolicy::SelectStartupNativeFallbackControlAction({
@@ -53058,6 +53062,7 @@ Upscaling::VRRenderScaleRequestQueueResult Upscaling::QueueVRRenderScaleRequest(
 			.targetActive = renderScaleModeEnabled,
 			.csMenuOrigin =
 				a_origin == VRUpscalingTransitionOrigin::CSMenu,
+			.directMenuEdit = directMenuEdit,
 			.retryAdmitted = explicitStartupFallbackRetryAdmitted,
 			.control = a_startupFallbackControl,
 		});
@@ -53089,9 +53094,7 @@ Upscaling::VRRenderScaleRequestQueueResult Upscaling::QueueVRRenderScaleRequest(
 	request.fsrSharpness = settings.sharpnessFSR;
 	request.queuedFrame = frame;
 	request.origin = a_origin;
-	request.directMenuEdit =
-		a_directMenuEdit &&
-		a_origin == VRUpscalingTransitionOrigin::CSMenu;
+	request.directMenuEdit = directMenuEdit;
 	request.stabilizerDoorHandoff = bufferedAPIDoorHandoff;
 	request.stabilizerDoorHandoffSerial =
 		bufferedAPIDoorHandoff ? a_bufferedStabilizerDoorHandoffSerial : 0;

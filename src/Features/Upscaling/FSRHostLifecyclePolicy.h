@@ -13,6 +13,13 @@ namespace FSRHostLifecyclePolicy
 		return a_featureLevel >= MinimumFeatureLevel;
 	}
 
+	[[nodiscard]] constexpr bool CanAttemptHostFallback(
+		bool a_hostSupported,
+		bool a_runtimeProviderUsedForFrame) noexcept
+	{
+		return a_hostSupported && !a_runtimeProviderUsedForFrame;
+	}
+
 	enum class CallDisposition
 	{
 		Succeeded,

@@ -3803,8 +3803,11 @@ FidelityFX::StereoUpscaleResult FidelityFX::UpscaleStereoRegions(
 	if (!runtimePlan.valid)
 		return StereoUpscaleResult::Failed;
 	if (!runtimePlan.selected || runtimePlan.contextCount != a_regions.size()) {
-		if (runtimeUpscalerUsedForFrame)
+		if (!FSRHostLifecyclePolicy::CanAttemptHostFallback(
+				IsHostFSR3Supported(),
+				runtimeUpscalerUsedForFrame)) {
 			return StereoUpscaleResult::Failed;
+		}
 		if (runtimePlan.runtimeRequested)
 			ArmRuntimeHostFallback(runtimePlan.contextCount);
 		else {
@@ -3951,10 +3954,30 @@ bool FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_d
 		if (allEvaluated) {
 			upscaling.FinalizePerEyeOutputs(a_upscalingTexture);
 		} else {
-			static bool loggedVREvaluateFailure = false;
-			if (!loggedVREvaluateFailure) {
-				logger::warn("[FidelityFX] VR FSR evaluate did not complete for both eyes; keeping the current scene texture instead of copying stale output.");
-				loggedVREvaluateFailure = true;
+			upscaling.RequestHistoryReset();
+			bool failOpenPresented = true;
+			for (uint32_t eye = 0; eye < stereoRegions.size(); ++eye) {
+				failOpenPresented =
+					upscaling.StretchSubmitStageEyeOutput(
+						eye,
+						eyeRenderWidth,
+						eyeRenderHeight,
+						eyeDisplayWidth,
+						eyeDisplayHeight) &&
+					failOpenPresented;
+			}
+			if (failOpenPresented)
+				upscaling.FinalizePerEyeOutputs(a_upscalingTexture);
+
+			static bool loggedVREvaluateFailure[2] = {};
+			const size_t outcomeIndex = failOpenPresented ? 1u : 0u;
+			if (!loggedVREvaluateFailure[outcomeIndex]) {
+				if (failOpenPresented) {
+					logger::warn("[FidelityFX] VR FSR evaluate did not complete for both eyes; presented the current per-eye inputs through the full-size stretch fallback.");
+				} else {
+					logger::warn("[FidelityFX] VR FSR evaluate and current-input stretch fallback both failed; retaining the current scene texture.");
+				}
+				loggedVREvaluateFailure[outcomeIndex] = true;
 			}
 		}
 		return allEvaluated;

@@ -12,7 +12,27 @@ set(
     _experiment_doc_path
     "${PROJECT_ROOT}/docs/development/dlss-neural-rendering-experiments.md"
 )
-foreach(_required_path IN ITEMS "${_bridge_path}" "${_experiment_doc_path}")
+set(_upscaling_path "${PROJECT_ROOT}/src/Features/Upscaling.cpp")
+set(
+    _renderer_header_path
+    "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/Renderer.h"
+)
+set(
+    _renderer_source_path
+    "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/Renderer.cpp"
+)
+set(
+    _pipeline_policy_path
+    "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/PipelinePolicy.h"
+)
+foreach(_required_path IN ITEMS
+    "${_bridge_path}"
+    "${_experiment_doc_path}"
+    "${_upscaling_path}"
+    "${_renderer_header_path}"
+    "${_renderer_source_path}"
+    "${_pipeline_policy_path}"
+)
     if(NOT EXISTS "${_required_path}")
         message(FATAL_ERROR "Required Neural Rendering contract input is missing: ${_required_path}")
     endif()
@@ -20,15 +40,25 @@ endforeach()
 
 file(READ "${_bridge_path}" _bridge)
 file(READ "${_experiment_doc_path}" _experiment_doc)
+file(READ "${_upscaling_path}" _upscaling)
+file(READ "${_renderer_header_path}" _renderer_header)
+file(READ "${_renderer_source_path}" _renderer_source)
+file(READ "${_pipeline_policy_path}" _pipeline_policy)
+set(
+    _source_contract_text
+    "${_upscaling}\n${_renderer_header}\n${_renderer_source}\n${_pipeline_policy}"
+)
 
 foreach(_status_contract IN ITEMS
     [[{ "apiVersion", 4 }]]
+    [[{ "frame", snapshot.frameId }]]
     [[{ "submitCycleSource", "submit_entry" }]]
     [[{ "eyeMaskSemantics", {]]
     [[{ "hdrClassification",]]
     [[{ "featureUpscaling", snapshot.featureUpscaling }]]
     [[{ "interopInitializations", snapshot.counters.interopInitializations }]]
     [[{ "callerHistoryResets", snapshot.counters.callerHistoryResets }]]
+    [[{ "discontinuousHistoryResets", snapshot.counters.discontinuousHistoryResets }]]
     [[{ "quarantinedBypasses", snapshot.counters.quarantinedBypasses }]]
     [[{ "mainStereoCommandSubmissions", snapshot.performance.mainStereoCommandSubmissions }]]
     [[{ "submitStereoCommandSubmissions", snapshot.performance.submitStereoCommandSubmissions }]]
@@ -41,6 +71,44 @@ foreach(_status_contract IN ITEMS
     if(_status_position EQUAL -1)
         message(FATAL_ERROR
             "Neural Rendering DevBench status contract is missing: ${_status_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_source_contract IN ITEMS
+    [[neuralPrepared = true;]]
+    [[submitStageNeuralStereoState.outputsReady = false;]]
+    [[bool IsNeuralRenderingMenuSuppressed()]]
+    [[ObserveNeuralRenderingMenuSuppression(neuralMenuSuppressed);]]
+    [[if (previous != a_suppressed)]]
+    [[phase == NeuralCenterPhase::Resolve ?]]
+    [[neuralPairApplied = neuralPairApplied &&]]
+    [[args.frameId =]]
+    [[ApplySequentialStereo(]]
+    [[evaluationAttemptedFeatureSlotMask]]
+    [[IsSequentialFrame(]]
+)
+    string(FIND "${_source_contract_text}" "${_source_contract}" _source_position)
+    if(_source_position EQUAL -1)
+        message(FATAL_ERROR
+            "Neural Rendering source contract is missing: ${_source_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_forbidden_source_contract IN ITEMS
+    [[neuralPrepared = neuralSubmitted && neuralBatchArgs;]]
+    [[WasFeatureEvaluated(]]
+    [[evaluatedFeatureSlotMask]]
+)
+    string(FIND
+        "${_source_contract_text}"
+        "${_forbidden_source_contract}"
+        _forbidden_source_position
+    )
+    if(NOT _forbidden_source_position EQUAL -1)
+        message(FATAL_ERROR
+            "Stale Neural Rendering source contract remains: ${_forbidden_source_contract}"
         )
     endif()
 endforeach()

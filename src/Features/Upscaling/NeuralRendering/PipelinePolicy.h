@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string_view>
 
@@ -36,6 +37,49 @@ namespace NeuralRendering
 		Submit,
 	};
 
+	enum class CachedStereoPairReuse : std::uint8_t
+	{
+		Reject,
+		Reuse,
+		CompleteLatchedPair,
+		BypassPresentedEye,
+	};
+
+	/** Temporal histories are reusable only across adjacent rendered frames. */
+	[[nodiscard]] constexpr bool IsSequentialFrame(
+		std::uint32_t a_previousFrame,
+		std::uint32_t a_currentFrame) noexcept
+	{
+		return a_currentFrame == a_previousFrame + 1u;
+	}
+
+	/**
+	 * Resolves whether a retained stereo pair may be presented for one eye.
+	 * A changed context may finish the unpresented peer of an already-started
+	 * same-frame pair. A repeated accepted eye is bypassed without poisoning the
+	 * missing peer. A retained pair cannot start a mixed-context or later pair.
+	 */
+	[[nodiscard]] constexpr CachedStereoPairReuse ResolveCachedStereoPairReuse(
+		bool a_contextMatches,
+		bool a_sameFrame,
+		std::uint32_t a_presentedEyeMask,
+		std::uint32_t a_eyeIndex) noexcept
+	{
+		if (a_eyeIndex > 1u || !a_sameFrame)
+			return CachedStereoPairReuse::Reject;
+
+		const std::uint32_t currentEyeBit = 1u << a_eyeIndex;
+		if ((a_presentedEyeMask & currentEyeBit) != 0)
+			return CachedStereoPairReuse::BypassPresentedEye;
+		if (a_contextMatches)
+			return CachedStereoPairReuse::Reuse;
+
+		const std::uint32_t peerEyeBit = 1u << (a_eyeIndex ^ 1u);
+		if (a_presentedEyeMask == peerEyeBit)
+			return CachedStereoPairReuse::CompleteLatchedPair;
+		return CachedStereoPairReuse::Reject;
+	}
+
 	/** Attributes a valid per-eye or stereo Feature 18 slot mask to its route. */
 	[[nodiscard]] constexpr FeatureSlotRoute ClassifyFeatureSlotMask(
 		std::uint32_t a_slotMask) noexcept
@@ -57,6 +101,11 @@ namespace NeuralRendering
 		return (a_leftSlot == 0u && a_rightSlot == 1u) ||
 		       (a_leftSlot == 2u && a_rightSlot == 3u);
 	}
+
+	static_assert(IsSequentialFrame(10u, 11u));
+	static_assert(IsSequentialFrame(std::numeric_limits<std::uint32_t>::max(), 0u));
+	static_assert(!IsSequentialFrame(10u, 10u));
+	static_assert(!IsSequentialFrame(10u, 12u));
 
 	// Each experiment keeps its ordering fixed so saved settings cannot silently
 	// turn one validation branch into another.

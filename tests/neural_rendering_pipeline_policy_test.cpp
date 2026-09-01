@@ -60,6 +60,41 @@ int main()
 	static_assert(NeuralRendering::IsOrderedStereoFeatureSlotPair(2u, 3u));
 	static_assert(!NeuralRendering::IsOrderedStereoFeatureSlotPair(1u, 0u));
 	static_assert(!NeuralRendering::IsOrderedStereoFeatureSlotPair(0u, 2u));
+	static_assert(NeuralRendering::IsSequentialFrame(42u, 43u));
+	static_assert(!NeuralRendering::IsSequentialFrame(42u, 42u));
+	static_assert(!NeuralRendering::IsSequentialFrame(42u, 44u));
+
+	using NeuralRendering::CachedStereoPairReuse;
+	static_assert(
+		NeuralRendering::ResolveCachedStereoPairReuse(true, true, 0u, 0u) ==
+		CachedStereoPairReuse::Reuse);
+	static_assert(
+		NeuralRendering::ResolveCachedStereoPairReuse(true, true, 0b01u, 0u) ==
+		CachedStereoPairReuse::BypassPresentedEye);
+	static_assert(
+		NeuralRendering::ResolveCachedStereoPairReuse(false, true, 0b01u, 1u) ==
+		CachedStereoPairReuse::CompleteLatchedPair);
+	static_assert(
+		NeuralRendering::ResolveCachedStereoPairReuse(false, true, 0b10u, 0u) ==
+		CachedStereoPairReuse::CompleteLatchedPair);
+	static_assert(
+		NeuralRendering::ResolveCachedStereoPairReuse(false, false, 0b01u, 1u) ==
+		CachedStereoPairReuse::Reject);
+	static_assert(
+		NeuralRendering::ResolveCachedStereoPairReuse(true, false, 0u, 0u) ==
+		CachedStereoPairReuse::Reject);
+	static_assert(
+		NeuralRendering::ResolveCachedStereoPairReuse(false, true, 0u, 0u) ==
+		CachedStereoPairReuse::Reject);
+	static_assert(
+		NeuralRendering::ResolveCachedStereoPairReuse(false, true, 0b01u, 0u) ==
+		CachedStereoPairReuse::BypassPresentedEye);
+	static_assert(
+		NeuralRendering::ResolveCachedStereoPairReuse(false, true, 0b10u, 1u) ==
+		CachedStereoPairReuse::BypassPresentedEye);
+	static_assert(
+		NeuralRendering::ResolveCachedStereoPairReuse(false, true, 0b11u, 0u) ==
+		CachedStereoPairReuse::BypassPresentedEye);
 
 	constexpr auto perEyeStaged =
 		NeuralRendering::ParseImplementationName("per_eye_staged_commit");

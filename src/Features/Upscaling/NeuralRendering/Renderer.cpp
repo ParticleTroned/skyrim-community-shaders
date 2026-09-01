@@ -98,6 +98,52 @@ namespace NeuralRendering
 			       leftIdentity.Get() == rightIdentity.Get();
 		}
 
+		std::string GetStereoPairContractViolation(
+			const std::array<RendererApplyArgs, 2>& a_args)
+		{
+			const auto& left = a_args[0];
+			const auto& right = a_args[1];
+			const std::array<ID3D11Resource*, 4> leftResources{
+				left.colorInput, left.depthGuide, left.motionVectors, left.colorOutput
+			};
+			const std::array<ID3D11Resource*, 4> rightResources{
+				right.colorInput, right.depthGuide, right.motionVectors, right.colorOutput
+			};
+			const bool resourcesOverlap = std::ranges::any_of(
+				leftResources,
+				[&](ID3D11Resource* a_leftResource) {
+					return std::ranges::any_of(
+						rightResources,
+						[&](ID3D11Resource* a_rightResource) {
+							return SameIdentity(a_leftResource, a_rightResource);
+						});
+				});
+			const bool tuningMatches =
+				left.tuning.intensity == right.tuning.intensity &&
+				left.tuning.localToneStrength == right.tuning.localToneStrength &&
+				left.tuning.localStructureStrength == right.tuning.localStructureStrength &&
+				left.tuning.skinStructureStrength == right.tuning.skinStructureStrength &&
+				left.tuning.style == right.tuning.style &&
+				left.tuning.useAutoMask == right.tuning.useAutoMask &&
+				left.tuning.uiCorrection == right.tuning.uiCorrection;
+			if (SameIdentity(left.device, right.device) &&
+				SameIdentity(left.context, right.context) &&
+				left.frameId == right.frameId &&
+				left.generation == right.generation &&
+				left.featureUpscaling == right.featureUpscaling &&
+				left.reset == right.reset &&
+				left.synchronizedHistoryReset == right.synchronizedHistoryReset &&
+				left.synchronizedHistoryDiscontinuity ==
+					right.synchronizedHistoryDiscontinuity &&
+				tuningMatches &&
+				IsOrderedStereoFeatureSlotPair(left.featureSlot, right.featureSlot) &&
+				!resourcesOverlap) {
+				return {};
+			}
+
+			return "stereo eyes require one device, context, frame, generation, feature mode, reset policy, tuning, ordered route pair, and disjoint resources";
+		}
+
 		bool IsFiniteTuning(const Tuning& a_tuning) noexcept
 		{
 			const auto validStrength = [](float a_value) {
@@ -421,6 +467,8 @@ namespace NeuralRendering
 			SharedTexture output;
 			ResourceKey resourceKey{};
 			HistoryKey historyKey{};
+			std::uint32_t lastSuccessfulFrame =
+				std::numeric_limits<std::uint32_t>::max();
 			bool resourcesValid = false;
 			bool historyValid = false;
 		};
@@ -448,6 +496,9 @@ namespace NeuralRendering
 			const RendererApplyArgs& a_args,
 			RendererApplyOutcome& a_outcome);
 		bool ApplyStereoLocked(
+			const std::array<RendererApplyArgs, 2>& a_args,
+			RendererApplyOutcome& a_outcome);
+		bool ApplySequentialStereoLocked(
 			const std::array<RendererApplyArgs, 2>& a_args,
 			RendererApplyOutcome& a_outcome);
 		bool ApplyBatchLocked(
@@ -797,6 +848,7 @@ namespace NeuralRendering
 		const RendererApplyArgs& a_args) noexcept
 	{
 		snapshot_.featureSlot = a_args.featureSlot;
+		snapshot_.frameId = a_args.frameId;
 		snapshot_.generation = a_args.generation;
 		snapshot_.colorWidth = a_args.colorWidth;
 		snapshot_.colorHeight = a_args.colorHeight;
@@ -1338,6 +1390,70 @@ namespace NeuralRendering
 		return ApplyBatchLocked(a_args, a_outcome);
 	}
 
+	bool Renderer::State::ApplySequentialStereoLocked(
+		const std::array<RendererApplyArgs, 2>& a_args,
+		RendererApplyOutcome& a_outcome)
+	{
+		a_outcome = {};
+		if (quarantined_ || failureLatched_ ||
+			!GetStereoPairContractViolation(a_args).empty()) {
+			return ApplyBatchLocked(a_args, a_outcome);
+		}
+
+		std::array<ValidatedResources, 2> resources{};
+		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			if (ValidateLocked(a_args[index], resources[index]))
+				return ApplyBatchLocked(a_args, a_outcome);
+		}
+
+		bool synchronizeForcedReset =
+			a_args[0].synchronizedHistoryReset ||
+			!runtimeReady_ || !interop_.IsInitialized();
+		bool synchronizeDiscontinuousReset =
+			a_args[0].synchronizedHistoryDiscontinuity;
+		if (device_ &&
+			(!SameIdentity(device_.Get(), a_args[0].device) ||
+				!SameIdentity(context_.Get(), a_args[0].context))) {
+			synchronizeForcedReset = true;
+		}
+		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			const auto& args = a_args[index];
+			const auto& slot = slots_[args.featureSlot];
+			const bool discontinuous = slot.historyValid &&
+			                           !IsSequentialFrame(slot.lastSuccessfulFrame, args.frameId);
+			const bool forced =
+				!slot.resourcesValid ||
+				slot.resourceKey != resources[index].resourceKey ||
+				!slot.historyValid ||
+				slot.historyKey != resources[index].historyKey ||
+				discontinuous;
+			synchronizeForcedReset = synchronizeForcedReset || forced;
+			synchronizeDiscontinuousReset =
+				synchronizeDiscontinuousReset || discontinuous;
+		}
+
+		auto synchronizedArgs = a_args;
+		for (auto& args : synchronizedArgs) {
+			args.synchronizedHistoryReset = synchronizeForcedReset;
+			args.synchronizedHistoryDiscontinuity =
+				synchronizeDiscontinuousReset;
+		}
+
+		RendererApplyOutcome leftOutcome{};
+		if (!ApplyBatchLocked(std::span(&synchronizedArgs[0], 1), leftOutcome)) {
+			a_outcome = leftOutcome;
+			return false;
+		}
+		a_outcome.evaluationAttemptedFeatureSlotMask =
+			leftOutcome.evaluationAttemptedFeatureSlotMask;
+		RendererApplyOutcome rightOutcome{};
+		const bool rightSucceeded = ApplyBatchLocked(
+			std::span(&synchronizedArgs[1], 1), rightOutcome);
+		a_outcome.evaluationAttemptedFeatureSlotMask |=
+			rightOutcome.evaluationAttemptedFeatureSlotMask;
+		return rightSucceeded;
+	}
+
 	bool Renderer::State::ApplyBatchLocked(
 		std::span<const RendererApplyArgs> a_args,
 		RendererApplyOutcome& a_outcome)
@@ -1380,51 +1496,14 @@ namespace NeuralRendering
 		snapshot_.outputFormat = 0;
 
 		if (a_args.size() == 2) {
-			const auto& left = a_args[0];
-			const auto& right = a_args[1];
-			const std::array<ID3D11Resource*, 4> leftResources{
-				left.colorInput,
-				left.depthGuide,
-				left.motionVectors,
-				left.colorOutput,
-			};
-			const std::array<ID3D11Resource*, 4> rightResources{
-				right.colorInput,
-				right.depthGuide,
-				right.motionVectors,
-				right.colorOutput,
-			};
-			const bool resourcesOverlap = std::ranges::any_of(
-				leftResources,
-				[&](ID3D11Resource* a_leftResource) {
-					return std::ranges::any_of(
-						rightResources,
-						[&](ID3D11Resource* a_rightResource) {
-							return SameIdentity(a_leftResource, a_rightResource);
-						});
-				});
-			const bool tuningMatches =
-				left.tuning.intensity == right.tuning.intensity &&
-				left.tuning.localToneStrength == right.tuning.localToneStrength &&
-				left.tuning.localStructureStrength == right.tuning.localStructureStrength &&
-				left.tuning.skinStructureStrength == right.tuning.skinStructureStrength &&
-				left.tuning.style == right.tuning.style &&
-				left.tuning.useAutoMask == right.tuning.useAutoMask &&
-				left.tuning.uiCorrection == right.tuning.uiCorrection;
-			if (!SameIdentity(left.device, right.device) ||
-				!SameIdentity(left.context, right.context) ||
-				left.generation != right.generation ||
-				left.featureUpscaling != right.featureUpscaling ||
-				left.reset != right.reset ||
-				!tuningMatches ||
-				!IsOrderedStereoFeatureSlotPair(
-					left.featureSlot, right.featureSlot) ||
-				resourcesOverlap) {
+			std::array<RendererApplyArgs, 2> stereoArgs{ a_args[0], a_args[1] };
+			if (auto violation = GetStereoPairContractViolation(stereoArgs);
+				!violation.empty()) {
 				return FailLocked(
 					RendererStage::Validation,
 					E_INVALIDARG,
-					"stereo eyes require one device, context, generation, feature mode, reset policy, tuning, trust policy, ordered route pair, and disjoint resources",
-					right.featureSlot,
+					std::move(violation),
+					a_args[1].featureSlot,
 					false);
 			}
 		}
@@ -1572,17 +1651,45 @@ namespace NeuralRendering
 				!aborted);
 		}
 
+		std::array<bool, 2> forcedHistoryReset{};
+		std::array<bool, 2> discontinuousHistoryReset{};
+		bool synchronizeForcedReset = false;
+		bool synchronizeDiscontinuousReset = false;
+		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			const auto& slot = *slots[index];
+			discontinuousHistoryReset[index] =
+				a_args[index].synchronizedHistoryDiscontinuity ||
+				(slot.historyValid &&
+					!IsSequentialFrame(slot.lastSuccessfulFrame, a_args[index].frameId));
+			forcedHistoryReset[index] =
+				a_args[index].synchronizedHistoryReset ||
+				!slot.historyValid ||
+				slot.historyKey != resources[index].historyKey ||
+				discontinuousHistoryReset[index];
+			synchronizeForcedReset =
+				synchronizeForcedReset || forcedHistoryReset[index];
+			synchronizeDiscontinuousReset =
+				synchronizeDiscontinuousReset || discontinuousHistoryReset[index];
+		}
+		const bool stereoBatch = a_args.size() == 2;
+
 		activeStage_ = RendererStage::FeatureEvaluate;
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			auto& slot = *slots[index];
 			const auto& args = a_args[index];
-			const bool forcedReset =
-				!slot.historyValid || slot.historyKey != resources[index].historyKey;
+			const bool forcedReset = stereoBatch ?
+			                             synchronizeForcedReset :
+			                             forcedHistoryReset[index];
+			const bool discontinuousReset = stereoBatch ?
+			                                    synchronizeDiscontinuousReset :
+			                                    discontinuousHistoryReset[index];
 			const bool effectiveReset = args.reset || forcedReset;
 			if (args.reset)
 				Increment(snapshot_.counters.callerHistoryResets);
 			if (forcedReset)
 				Increment(snapshot_.counters.forcedHistoryResets);
+			if (discontinuousReset)
+				Increment(snapshot_.counters.discontinuousHistoryResets);
 			bool evaluationAttempted = false;
 			const bool evaluated = Runtime::Instance().Execute(
 				commandList,
@@ -1605,7 +1712,7 @@ namespace NeuralRendering
 				&evaluationAttempted);
 			if (evaluationAttempted) {
 				Increment(snapshot_.counters.featureEvaluations);
-				a_outcome.evaluatedFeatureSlotMask |= 1u << args.featureSlot;
+				a_outcome.evaluationAttemptedFeatureSlotMask |= 1u << args.featureSlot;
 			}
 			if (!evaluated) {
 				const std::string runtimeDetail = Runtime::Instance().Detail();
@@ -1700,6 +1807,7 @@ namespace NeuralRendering
 			outputCommitStarted);
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			slots[index]->historyKey = resources[index].historyKey;
+			slots[index]->lastSuccessfulFrame = a_args[index].frameId;
 			slots[index]->historyValid = true;
 		}
 		activeStage_ = RendererStage::Complete;
@@ -1793,12 +1901,46 @@ namespace NeuralRendering
 				*a_outcome = outcome;
 			return succeeded;
 		} catch (...) {
+			const auto failureFeatureSlot =
+				state_->snapshot_.featureSlot < Runtime::kFeatureSlotCount ?
+					state_->snapshot_.featureSlot :
+					a_args[0].featureSlot;
 			state_->QuarantineAfterUnexpectedFailureLocked(
 				state_->activeStage_,
-				a_args[0].featureSlot,
+				failureFeatureSlot,
 				true,
 				failuresBefore);
 			Increment(state_->snapshot_.counters.stereoFailures);
+			if (a_outcome)
+				*a_outcome = outcome;
+			return false;
+		}
+	}
+
+	bool Renderer::ApplySequentialStereo(
+		const std::array<RendererApplyArgs, 2>& a_args,
+		RendererApplyOutcome* a_outcome)
+	{
+		std::scoped_lock lock(state_->mutex_);
+		RendererApplyOutcome outcome{};
+		const auto failuresBefore = state_->snapshot_.counters.failures;
+		try {
+			CS_PROFILE_SCOPE("Upscaling::DLSSNeuralRenderingSequentialStereo");
+			const bool succeeded =
+				state_->ApplySequentialStereoLocked(a_args, outcome);
+			if (a_outcome)
+				*a_outcome = outcome;
+			return succeeded;
+		} catch (...) {
+			const auto failureFeatureSlot =
+				state_->snapshot_.featureSlot < Runtime::kFeatureSlotCount ?
+					state_->snapshot_.featureSlot :
+					a_args[0].featureSlot;
+			state_->QuarantineAfterUnexpectedFailureLocked(
+				state_->activeStage_,
+				failureFeatureSlot,
+				true,
+				failuresBefore);
 			if (a_outcome)
 				*a_outcome = outcome;
 			return false;

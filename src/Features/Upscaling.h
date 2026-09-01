@@ -89,6 +89,7 @@ public:
 		NeuralDisabled,
 		MethodIneligible,
 		RouteIneligible,
+		MenuContext,
 		MaskVisualization,
 		FrameGeneration,
 		SubmitDeviceUnavailable,
@@ -844,6 +845,10 @@ public:
 		uint32_t outputHeight = 0;
 		bool loadingOrMenuContext = false;
 		bool transitionCooldown = false;
+		bool retainedNeuralPair = false;
+		uint64_t retainedNeuralCompositorCycleToken = 0;
+		uint64_t retainedNeuralSettingsKey = 0;
+		uint64_t retainedNeuralSubmitPairBoundaryToken = 0;
 	};
 
 	struct VRRenderScalePresentationEyeSnapshot
@@ -1149,6 +1154,19 @@ public:
 	std::array<NeuralStereoRouteSnapshot, 2> GetNeuralStereoRouteSnapshot() const;
 	/** @brief Returns the latest valid-eye submit entry used to judge route freshness. */
 	NeuralSubmitCycleSnapshot GetLatestNeuralSubmitCycleSnapshot() const;
+	/** @brief Captures an engine-owned outer submit scope for nested-eye correlation. */
+	uint64_t BeginNeuralSubmitPairBoundary(
+		uint64_t a_compositorCycle,
+		const vr::Texture_t* a_texture,
+		vr::EVRSubmitFlags a_flags) noexcept;
+	/** @brief Ends an outer submit scope without changing presentation. */
+	void EndNeuralSubmitPairBoundary(uint64_t a_token) noexcept;
+	/** @brief Proves that one nested eye belongs to the active outer submit. */
+	uint64_t ObserveNeuralSubmitPairBoundaryEye(
+		uint64_t a_compositorCycle,
+		vr::EVREye a_eye,
+		const vr::Texture_t* a_texture,
+		vr::EVRSubmitFlags a_flags) noexcept;
 	static const char* GetNeuralStereoRouteRoleName(NeuralStereoRouteRole a_role);
 	static const char* GetNeuralStereoPairDispositionName(NeuralStereoPairDisposition a_disposition);
 	static const char* GetNeuralStereoFallbackReasonName(NeuralStereoFallbackReason a_reason);
@@ -1735,7 +1753,7 @@ public:
 		uint64_t a_keepaliveToken,
 		uint64_t a_compositorCycleToken,
 		uint64_t a_initialLoadProtectionEpochAtSubmitEntry);
-	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCycleToken, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
+	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCycleToken, uint64_t a_submitPairBoundaryToken, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 		vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds, VRRenderScalePresentationObservation& a_presentationObservation);
 	void RecordVRRenderScalePresentationObservation(const VRRenderScalePresentationObservation& a_observation);
 	static bool ShouldTraceVRMenuBridgeDirectDrawCandidate(UINT a_indexCount, UINT a_instanceCount,
@@ -1809,6 +1827,7 @@ public:
 	bool depthUpscaleUseWideKernel = false;
 	bool historyResetRequested = true;
 	bool historyResetThisFrame = false;
+	std::atomic_bool neuralMenuSuppressionLatched{ false };
 	bool menuCameraMVsValid = false;
 	uint32_t historyResetLatchedFrame = std::numeric_limits<uint32_t>::max();
 	uint32_t menuCameraMVsPreparedFrame = std::numeric_limits<uint32_t>::max();
@@ -1967,6 +1986,8 @@ public:
 		uint32_t successfulEyeMask = 0;
 		uint32_t committedEyeMask = 0;
 		uint32_t dlssEyeMask = 0;
+		uint64_t submitPairBoundaryToken = 0;
+		uint32_t presentedEyeMask = 0;
 		NeuralStereoRouteSnapshot publishedRoute{};
 		std::array<VRRenderScalePresentationObservation, 2> publishedPresentationObservations{};
 		vr::EColorSpace publishedColorSpace = vr::ColorSpace_Auto;
@@ -2032,6 +2053,7 @@ public:
 	void UpscaleDepth();
 	void RefreshSubmitStageUnderwaterMask();
 	void RequestHistoryReset() noexcept;
+	void ObserveNeuralRenderingMenuSuppression(bool a_suppressed);
 	void RecordVRRenderScaleTransitionRequested(const VRRenderScaleDesiredProfile& a_request);
 	bool RecordVRRenderScaleTransitionPreparing(const VRRenderScaleDesiredProfile& a_request);
 	uint64_t AllocateVRRenderScaleTransitionEpoch();
@@ -2259,6 +2281,24 @@ private:
 		NeuralStereoRouteSnapshot{ .role = NeuralStereoRouteRole::Main },
 		NeuralStereoRouteSnapshot{ .role = NeuralStereoRouteRole::Submit }
 	};
+	struct NeuralSubmitPairBoundaryState
+	{
+		uint64_t token = 0;
+		uint64_t compositorCycle = 0;
+		uint32_t frame = 0;
+		uint32_t threadId = 0;
+		uint32_t observedEyeMask = 0;
+		uint32_t provenEyeMask = 0;
+		vr::Texture_t texture{};
+		vr::EVRSubmitFlags flags = vr::Submit_Default;
+		D3D11_TEXTURE2D_DESC sourceDesc{};
+		winrt::com_ptr<ID3D11Texture2D> sourceTexture;
+		bool active = false;
+		bool sourceValid = false;
+	};
+	mutable std::mutex neuralSubmitPairBoundaryMutex;
+	NeuralSubmitPairBoundaryState neuralSubmitPairBoundaryState{};
+	uint64_t neuralSubmitPairBoundarySequence = 0;
 
 	enum class VRPostLoadCompositorHoldState : uint32_t
 	{

@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string>
 
 struct ID3D11Device;
@@ -58,6 +59,7 @@ namespace NeuralRendering
 		std::uint64_t stereoFailures = 0;
 		std::uint64_t callerHistoryResets = 0;
 		std::uint64_t forcedHistoryResets = 0;
+		std::uint64_t discontinuousHistoryResets = 0;
 		std::uint64_t resetAttempts = 0;
 		std::uint64_t resetSuccesses = 0;
 		std::uint64_t resetFailures = 0;
@@ -123,6 +125,7 @@ namespace NeuralRendering
 		std::uint32_t ngxResult = 0;
 		std::uint32_t featureSlot = 0;
 		std::uint32_t failureFeatureSlot = Runtime::kFeatureSlotCount;
+		std::uint32_t frameId = std::numeric_limits<std::uint32_t>::max();
 		std::uint64_t generation = 0;
 		std::uint32_t colorWidth = 0;
 		std::uint32_t colorHeight = 0;
@@ -153,6 +156,7 @@ namespace NeuralRendering
 		ID3D11Device* device = nullptr;
 		ID3D11DeviceContext* context = nullptr;
 		std::uint32_t featureSlot = 0;
+		std::uint32_t frameId = std::numeric_limits<std::uint32_t>::max();
 		std::uint64_t generation = 0;
 		ID3D11Resource* colorInput = nullptr;
 		ID3D11Resource* depthGuide = nullptr;
@@ -176,18 +180,21 @@ namespace NeuralRendering
 		bool featureUpscaling = false;
 		Tuning tuning{};
 		bool reset = false;
+		// Pair orchestration keeps separate eye submissions on one reset decision.
+		bool synchronizedHistoryReset = false;
+		bool synchronizedHistoryDiscontinuity = false;
 	};
 
 	/** Per-call evidence captured at the exact NVIDIA evaluation boundary. */
 	struct RendererApplyOutcome
 	{
-		std::uint32_t evaluatedFeatureSlotMask = 0;
+		std::uint32_t evaluationAttemptedFeatureSlotMask = 0;
 
-		[[nodiscard]] bool WasFeatureEvaluated(
+		[[nodiscard]] bool WasEvaluationAttempted(
 			std::uint32_t a_featureSlot) const noexcept
 		{
 			return a_featureSlot < Runtime::kFeatureSlotCount &&
-			       (evaluatedFeatureSlotMask & (1u << a_featureSlot)) != 0;
+			       (evaluationAttemptedFeatureSlotMask & (1u << a_featureSlot)) != 0;
 		}
 	};
 
@@ -207,6 +214,10 @@ namespace NeuralRendering
 			RendererApplyOutcome* a_outcome = nullptr);
 		/** Runs both eye slots in one command list and commits neither output on failure. */
 		bool ApplyStereo(
+			const std::array<RendererApplyArgs, 2>& a_args,
+			RendererApplyOutcome* a_outcome = nullptr);
+		/** Runs two validated eye transactions separately with one reset policy. */
+		bool ApplySequentialStereo(
 			const std::array<RendererApplyArgs, 2>& a_args,
 			RendererApplyOutcome* a_outcome = nullptr);
 

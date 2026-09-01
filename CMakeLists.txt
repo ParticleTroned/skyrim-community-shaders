@@ -1596,6 +1596,16 @@ if(BUILD_CONTROLLER_TESTS)
         NeuralRenderingDevBenchContract
         PROPERTIES LABELS "ControllerTests"
     )
+    add_test(
+        NAME NeuralRenderingSubmitPairContract
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
+            "${PROJECT_SOURCE_DIR}/tests/neural_rendering_submit_pair_contract_test.cmake"
+    )
+    set_tests_properties(
+        NeuralRenderingSubmitPairContract
+        PROPERTIES LABELS "ControllerTests"
+    )
     if(CSX_STAGE_LOCAL_DLSS_RUNTIME)
         add_test(
             NAME StreamlineLocalRuntimePackagingContract

@@ -1,4 +1,5 @@
 #include "FileSystem.h"
+#include "BoundedTextRead.h"
 #include <Windows.h>
 #include <atomic>
 #include <cmath>
@@ -228,33 +229,43 @@ namespace Util
 	// File system utilities implementation
 	namespace FileHelpers
 	{
+		bool ReadTextFileBounded(
+			const std::filesystem::path& path,
+			std::size_t maximumBytes,
+			std::optional<std::string>& contents,
+			std::string& errorMessage)
+		{
+			errorMessage.clear();
+			std::ifstream input(path, std::ios::binary);
+			if (!input.is_open()) {
+				std::error_code existsError;
+				if (!std::filesystem::exists(path, existsError) && !existsError) {
+					contents.reset();
+					return true;
+				}
+				errorMessage = existsError ?
+				                   std::format("Could not inspect {}: {}", path.string(), existsError.message()) :
+				                   std::format("Could not open {} for reading", path.string());
+				return false;
+			}
+
+			std::string boundedContents;
+			switch (Util::BoundedTextRead::Read(input, maximumBytes, boundedContents)) {
+			case Util::BoundedTextRead::Result::Success:
+				contents = std::move(boundedContents);
+				return true;
+			case Util::BoundedTextRead::Result::LimitExceeded:
+				errorMessage = std::format("{} exceeds the {} byte safety limit", path.string(), maximumBytes);
+				return false;
+			case Util::BoundedTextRead::Result::ReadError:
+				errorMessage = std::format("Could not finish reading {}", path.string());
+				return false;
+			}
+			return false;
+		}
+
 		namespace
 		{
-			bool ReadTextFileExact(
-				const std::filesystem::path& path,
-				std::optional<std::string>& contents,
-				std::string& errorMessage)
-			{
-				std::ifstream input(path, std::ios::binary);
-				if (!input.is_open()) {
-					std::error_code existsError;
-					if (!std::filesystem::exists(path, existsError) && !existsError) {
-						contents.reset();
-						return true;
-					}
-					errorMessage = existsError ?
-					                   std::format("Could not inspect {}: {}", path.string(), existsError.message()) :
-					                   std::format("Could not open {} for reading", path.string());
-					return false;
-				}
-
-				contents.emplace(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
-				if (input.bad()) {
-					errorMessage = std::format("Could not finish reading {}", path.string());
-					return false;
-				}
-				return true;
-			}
 
 			std::filesystem::path MakeStagingPath(const std::filesystem::path& path)
 			{
@@ -434,9 +445,14 @@ namespace Util
 			const std::filesystem::path& path,
 			std::string_view contents,
 			const std::optional<std::string>& expectedContents,
+			std::size_t maximumBytes,
 			std::string& errorMessage)
 		{
 			errorMessage.clear();
+			if (contents.size() > maximumBytes) {
+				errorMessage = std::format("The replacement exceeds the {} byte safety limit", maximumBytes);
+				return false;
+			}
 			std::error_code directoryError;
 			if (!path.parent_path().empty())
 				std::filesystem::create_directories(path.parent_path(), directoryError);
@@ -450,7 +466,8 @@ namespace Util
 				return false;
 
 			std::optional<std::string> currentContents;
-			if (!ReadTextFileExact(path, currentContents, errorMessage) || currentContents != expectedContents) {
+			if (!ReadTextFileBounded(path, maximumBytes, currentContents, errorMessage) ||
+				currentContents != expectedContents) {
 				std::error_code cleanupError;
 				std::filesystem::remove(stagingPath, cleanupError);
 				if (errorMessage.empty())

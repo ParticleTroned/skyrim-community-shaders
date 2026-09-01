@@ -1,5 +1,7 @@
 #pragma once
 
+#include "MeshBlendingPolicy.h"
+
 #include "../Feature.h"
 
 #include <array>
@@ -111,12 +113,7 @@ struct MeshBlending final : Feature
 	void CaptureLandscapeMaterials(RE::TESObjectLAND* a_land);
 
 private:
-	enum class Classification : std::uint8_t
-	{
-		kRejected,
-		kAllowedByRule,
-		kAutomatic
-	};
+	using Classification = CSX::MeshBlendingPolicy::CachedClassification;
 
 	struct SourceState
 	{
@@ -426,6 +423,7 @@ private:
 		std::uint32_t a_frame,
 		Classification a_classification,
 		RE::BSGeometry* a_receiver = nullptr);
+	void InvalidateCachedClassification(const Signature& a_signature);
 	Classification GetSourceClassification(
 		SourceState& a_source,
 		std::uint32_t a_frame,

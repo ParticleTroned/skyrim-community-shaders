@@ -14,6 +14,11 @@ foreach(_required IN ITEMS
     "HasOpaqueSibling"
     "currentReceiver"
     "cachedReceiver"
+    "CanReuseCacheHit"
+    "InvalidateCachedClassification"
+    "has no Form, EditorID, or Diffuse selector"
+    "ReadTextFileBounded"
+    "kMaximumRuleFileBytes"
     "maximumQuadrantObjects = 32u"
     "kMultiTextureLandscape"
 )
@@ -32,6 +37,8 @@ foreach(_required IN ITEMS
     "currentContents != expectedContents"
     "The destination changed after it was read"
     "Could not conditionally replace the destination"
+    "BoundedTextRead::Read"
+    "maximumBytes"
 )
     string(FIND "${_file_system}" "${_required}" _position)
     if(_position EQUAL -1)

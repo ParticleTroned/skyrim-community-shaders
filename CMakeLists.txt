@@ -1642,6 +1642,11 @@ if(BUILD_CONTROLLER_TESTS)
         tests/streamline_frame_token_publication_test.cpp
     )
     add_controller_test(
+        mesh_blending_policy_test
+        MeshBlendingPolicy
+        tests/mesh_blending_policy_test.cpp
+    )
+    add_controller_test(
         main_thread_dispatch_policy_test
         MainThreadDispatchPolicy
         tests/main_thread_dispatch_policy_test.cpp

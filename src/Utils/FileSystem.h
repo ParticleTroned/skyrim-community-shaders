@@ -221,6 +221,13 @@ namespace Util
 	 */
 	namespace FileHelpers
 	{
+		/** Reads at most maximumBytes from one opened file snapshot. */
+		bool ReadTextFileBounded(
+			const std::filesystem::path& path,
+			std::size_t maximumBytes,
+			std::optional<std::string>& contents,
+			std::string& errorMessage);
+
 		enum class JsonFileReadResult
 		{
 			Success,
@@ -277,13 +284,15 @@ namespace Util
 			std::string& errorMessage);
 
 		/**
-		 * Atomically replaces a text file only when its current bytes still match.
-		 * A missing expected value requires the destination to remain absent.
+		 * Atomically replaces a text file after a bounded best-effort comparison.
+		 * A missing expected value requires the destination to be absent when
+		 * checked. An uncooperative writer can still change the path afterward.
 		 */
 		bool WriteTextFileAtomicIfUnchanged(
 			const std::filesystem::path& path,
 			std::string_view contents,
 			const std::optional<std::string>& expectedContents,
+			std::size_t maximumBytes,
 			std::string& errorMessage);
 
 		/**

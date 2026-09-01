@@ -1233,35 +1233,19 @@ bool MeshBlending::ReadRuleFileState(
 	a_state = {};
 	a_notFound = false;
 	const auto ruleFilePath = GetRuleFilePath();
-	std::ifstream input(ruleFilePath, std::ios::binary);
-	if (!input.is_open()) {
-		std::error_code existsError;
-		const bool exists = std::filesystem::exists(ruleFilePath, existsError);
-		if (existsError || exists) {
-			a_error = existsError ?
-			              std::format("Could not inspect the rule file: {}", existsError.message()) :
-			              "Could not open the rule file for reading.";
-			return false;
-		}
+	std::optional<std::string> sourceContents;
+	if (!Util::FileHelpers::ReadTextFileBounded(
+			ruleFilePath, kMaximumRuleFileBytes, sourceContents, a_error)) {
+		return false;
+	}
+	if (!sourceContents) {
 		a_notFound = true;
 		a_state.document = json::object({ { "SchemaVersion", kRuleFileSchemaVersion } });
 		a_state.sourceContents.reset();
 		a_error.clear();
 		return true;
 	}
-	std::error_code sizeError;
-	const auto fileSize = std::filesystem::file_size(ruleFilePath, sizeError);
-	if (sizeError || fileSize > kMaximumRuleFileBytes) {
-		a_error = sizeError ?
-		              std::format("Could not inspect the rule-file size: {}", sizeError.message()) :
-		              std::format("The rule file exceeds the {} byte safety limit.", kMaximumRuleFileBytes);
-		return false;
-	}
-	std::string rawContents{ std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>() };
-	if (input.bad()) {
-		a_error = "An I/O error occurred while reading the rule file.";
-		return false;
-	}
+	std::string rawContents = std::move(*sourceContents);
 	json ruleFile = json::parse(rawContents, nullptr, false);
 	if (ruleFile.is_discarded()) {
 		a_error = "The rule file is not valid JSON.";
@@ -1397,6 +1381,17 @@ bool MeshBlending::ReadRuleFileState(
 					return false;
 				}
 				assignment.Kind = CanonicalLandscapeMaterialKind(*kind);
+				auto trimSelector = [](std::string& a_selector) {
+					a_selector = CSX::MeshBlendingPolicy::TrimAsciiSpaces(a_selector);
+				};
+				trimSelector(assignment.Form);
+				trimSelector(assignment.EditorID);
+				trimSelector(assignment.Diffuse);
+				if (!CSX::MeshBlendingPolicy::HasLandscapeSelector(
+						assignment.Form, assignment.EditorID, assignment.Diffuse)) {
+					a_error = std::format("{} has no Form, EditorID, or Diffuse selector.", context);
+					return false;
+				}
 				if (!assignment.Form.empty()) {
 					if (!IsPortableLandscapeFormKey(assignment.Form)) {
 						a_error = std::format("{}.Form is not a portable 0xLOCALID~Plugin selector.", context);
@@ -1406,9 +1401,7 @@ bool MeshBlending::ReadRuleFileState(
 					}
 				}
 				assignment.Diffuse = NormalizeTexturePath(assignment.Diffuse);
-				if (!assignment.Form.empty() || !assignment.EditorID.empty() || !assignment.Diffuse.empty()) {
-					a_state.landscapeAssignments.push_back(std::move(assignment));
-				}
+				a_state.landscapeAssignments.push_back(std::move(assignment));
 			}
 			return true;
 		};
@@ -1626,6 +1619,7 @@ bool MeshBlending::WriteRuleFile(const RuleFileState& a_state, std::string& a_er
 			GetRuleFilePath(),
 			ruleFile.dump(1),
 			a_state.sourceContents,
+			kMaximumRuleFileBytes,
 			a_error);
 	} catch (const json::exception& exception) {
 		a_error = exception.what();
@@ -2006,6 +2000,19 @@ void MeshBlending::StoreClassification(
 	};
 }
 
+void MeshBlending::InvalidateCachedClassification(const Signature& a_signature)
+{
+	const auto mixedKey = (a_signature.geometry >> 4u) ^ (a_signature.geometry >> 17u) ^ (a_signature.geometry >> 29u);
+	const std::size_t setStart = (mixedKey & (kCacheSetCount - 1u)) * kCacheWays;
+	for (std::size_t way = 0u; way < kCacheWays; ++way) {
+		auto& entry = classificationCache[setStart + way];
+		if (entry.occupied && entry.signature == a_signature) {
+			entry.occupied = false;
+			return;
+		}
+	}
+}
+
 MeshBlending::Classification MeshBlending::GetSourceClassification(
 	SourceState& a_source,
 	std::uint32_t a_frame,
@@ -2039,11 +2046,9 @@ MeshBlending::Classification MeshBlending::GetSourceClassification(
 		if (ownerResolved) {
 			CompleteOwnershipSignature(a_source, signature);
 		}
-		cacheHit = ownerResolved && cachedSignature == signature && !a_source.root->HasAnimation();
-		if (cacheHit) {
-			bool hitTraversalLimit = false;
-			RE::BSGeometry* currentReceiver = nullptr;
-			cacheHit = HasOpaqueSibling(a_source, hitTraversalLimit, currentReceiver, cachedReceiver);
+		cacheHit = ownerResolved && cachedSignature == signature;
+		if (ownerResolved && !cacheHit) {
+			InvalidateCachedClassification(cachedSignature);
 		}
 	}
 	if (!cacheHit) {
@@ -2074,6 +2079,21 @@ MeshBlending::Classification MeshBlending::GetSourceClassification(
 			if (cacheHit && a_collectDiagnostics) {
 				++diagnostics.fullSignatureCacheHits;
 			}
+		}
+	}
+	if (cacheHit && classification != Classification::kRejected) {
+		bool automaticReceiverIsCurrentAndSafe = true;
+		if (classification == Classification::kAutomatic) {
+			bool hitTraversalLimit = false;
+			RE::BSGeometry* currentReceiver = nullptr;
+			automaticReceiverIsCurrentAndSafe = cachedReceiver &&
+			                                    HasOpaqueSibling(
+													a_source, hitTraversalLimit, currentReceiver, cachedReceiver);
+		}
+		if (!CSX::MeshBlendingPolicy::CanReuseCacheHit(
+				classification, a_source.root->HasAnimation(), automaticReceiverIsCurrentAndSafe)) {
+			InvalidateCachedClassification(cachedSignature);
+			cacheHit = false;
 		}
 	}
 	if (cacheHit) {

@@ -120,6 +120,7 @@ public:
 	bool IsFrameGenerationDisableConfirmed() const noexcept;
 	bool CreateFrameGenerationContext(ffx::Context& a_context, ffxCreateContextDescHeader* a_desc) noexcept;
 	bool SetupFrameGeneration();
+	bool ResetFrameGenerationRenderContext() noexcept;
 	bool ResetFrameGenerationContexts() noexcept;
 	bool Present(bool a_useFrameGeneration) noexcept;
 	ffxReturnCode_t DispatchFrameGenerationCallback(ffxDispatchDescFrameGeneration* a_parameters) noexcept;

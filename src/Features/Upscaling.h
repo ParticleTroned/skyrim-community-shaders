@@ -3374,6 +3374,7 @@ public:
 	// Proxy interface methods
 	void SetProxyD3D11Device(ID3D11Device* device);
 	void SetProxyD3D11DeviceContext(ID3D11DeviceContext* context);
+	bool TryBeginProxyCreation() noexcept;
 	void CreateProxySwapChain(
 		IDXGIAdapter* adapter,
 		DXGI_SWAP_CHAIN_DESC backendSwapChainDesc,

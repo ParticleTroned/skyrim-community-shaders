@@ -1,6 +1,9 @@
+#include "Features/Upscaling/NvidiaBoundedLog.h"
+#include "Features/Upscaling/NvidiaComIdentity.h"
 #include "Features/Upscaling/NvidiaPipelinePolicy.h"
 #include "Features/Upscaling/StreamlineFrameTokenPublication.h"
 
+#include <array>
 #include <atomic>
 #include <future>
 #include <optional>
@@ -15,6 +18,33 @@ namespace
 
 	using Coordinator =
 		StreamlineFrameTokenPublication::Coordinator<Token*>;
+
+	class MockUnknown final : public IUnknown
+	{
+	public:
+		explicit MockUnknown(MockUnknown* a_identity = nullptr) :
+			identity(a_identity ? a_identity : this)
+		{}
+
+		HRESULT STDMETHODCALLTYPE QueryInterface(REFIID a_riid, void** a_object) override
+		{
+			if (!a_object)
+				return E_POINTER;
+			*a_object = nullptr;
+			if (a_riid != IID_IUnknown)
+				return E_NOINTERFACE;
+			identity->AddRef();
+			*a_object = static_cast<IUnknown*>(identity);
+			return S_OK;
+		}
+
+		ULONG STDMETHODCALLTYPE AddRef() override { return ++references; }
+		ULONG STDMETHODCALLTYPE Release() override { return --references; }
+
+	private:
+		MockUnknown* identity;
+		std::atomic_ulong references{ 1 };
+	};
 
 	bool TestConcurrentPublication()
 	{
@@ -184,6 +214,105 @@ namespace
 		       reflexOnly.core && !reflexOnly.dlss && reflexOnly.reflex && !reflexOnly.pcl &&
 		       !noCore.core && !noCore.dlss && !noCore.reflex && !noCore.pcl;
 	}
+
+	bool TestProxyLifecycleAndPublicContracts()
+	{
+		using namespace CSX::NvidiaPipelinePolicy;
+
+		ProxyLifecycleGate quarantined;
+		if (!quarantined.TryBeginConstruction())
+			return false;
+		auto competingConstruction = std::async(std::launch::async, [&]() {
+			return quarantined.TryBeginConstruction();
+		});
+		if (competingConstruction.get() || !quarantined.Publish() ||
+			!quarantined.BeginRetirement())
+			return false;
+		auto duringRetirement = std::async(std::launch::async, [&]() {
+			return quarantined.TryBeginConstruction();
+		});
+		quarantined.CompleteRetirement(false);
+		if (duringRetirement.get() ||
+			quarantined.GetState() != ProxyLifecycleState::TeardownQuarantined ||
+			quarantined.TryBeginConstruction())
+			return false;
+
+		ProxyLifecycleGate reusable;
+		if (!reusable.TryBeginConstruction() || !reusable.Publish() ||
+			!reusable.BeginRetirement())
+			return false;
+		reusable.CompleteRetirement(true);
+		if (reusable.GetState() != ProxyLifecycleState::Available ||
+			!reusable.TryBeginConstruction())
+			return false;
+		reusable.CancelConstruction(true);
+		ProxyLifecycleGate failedCandidate;
+		if (!failedCandidate.TryBeginConstruction())
+			return false;
+		failedCandidate.CancelConstruction(false);
+		if (failedCandidate.GetState() != ProxyLifecycleState::TeardownQuarantined ||
+			failedCandidate.TryBeginConstruction())
+			return false;
+
+		const PublicSwapChainContract supported{
+			.bufferCount = 1,
+			.sampleCount = 1,
+			.sampleQuality = 0,
+			.format = 28,
+			.windowed = true,
+			.hasOutputWindow = true,
+			.renderTargetOutput = true,
+		};
+		auto unsupported = supported;
+		unsupported.sampleCount = 4;
+		if (!IsPublicSwapChainContractSupported(supported) ||
+			IsPublicSwapChainContractSupported(unsupported))
+			return false;
+
+		return ClassifyBoundedCopy(true, true) == BoundedCopyResult::Complete &&
+		       ClassifyBoundedCopy(true, false) == BoundedCopyResult::Truncated &&
+		       ClassifyBoundedCopy(false, false) == BoundedCopyResult::Unreadable;
+	}
+
+	bool TestComIdentityPolicy()
+	{
+		MockUnknown firstIdentity;
+		MockUnknown firstView(&firstIdentity);
+		MockUnknown secondIdentity;
+		return CSX::NvidiaComIdentity::IsSame(&firstIdentity, &firstView) &&
+		       !CSX::NvidiaComIdentity::IsSame(&firstIdentity, &secondIdentity) &&
+		       !CSX::NvidiaComIdentity::IsSame(&firstIdentity, nullptr);
+	}
+
+	bool TestBoundedLogCopy()
+	{
+		using CSX::NvidiaPipelinePolicy::BoundedCopyResult;
+		std::array<char, 5> destination{};
+		if (CSX::NvidiaBoundedLog::Copy(nullptr, destination.data(), destination.size()) !=
+				BoundedCopyResult::Unreadable ||
+			CSX::NvidiaBoundedLog::Copy("", destination.data(), destination.size()) !=
+				BoundedCopyResult::Complete ||
+			destination[0] != '\0' ||
+			CSX::NvidiaBoundedLog::Copy("1234", destination.data(), destination.size()) !=
+				BoundedCopyResult::Complete ||
+			std::string_view(destination.data()) != "1234" ||
+			CSX::NvidiaBoundedLog::Copy("12345", destination.data(), destination.size()) !=
+				BoundedCopyResult::Truncated)
+			return false;
+
+		const std::array<char, 5> nonterminated{ 'a', 'b', 'c', 'd', 'e' };
+		if (CSX::NvidiaBoundedLog::Copy(nonterminated.data(), destination.data(), destination.size()) !=
+			BoundedCopyResult::Truncated)
+			return false;
+#ifdef _MSC_VER
+		if (CSX::NvidiaBoundedLog::Copy(
+				reinterpret_cast<const char*>(static_cast<std::uintptr_t>(1)),
+				destination.data(),
+				destination.size()) != BoundedCopyResult::Unreadable)
+			return false;
+#endif
+		return true;
+	}
 }
 
 int main()
@@ -192,7 +321,10 @@ int main()
 	               TestFailureAndReset() &&
 	               TestStaleFrameCannotReplacePublication() &&
 	               TestFrameCounterWrapRemainsMonotonic() &&
-	               TestOptionalPipelinePolicies() ?
+	               TestOptionalPipelinePolicies() &&
+	               TestProxyLifecycleAndPublicContracts() &&
+	               TestComIdentityPolicy() &&
+	               TestBoundedLogCopy() ?
 	           0 :
 	           1;
 }

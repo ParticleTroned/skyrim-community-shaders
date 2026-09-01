@@ -2,16 +2,126 @@
 
 #include <cstdint>
 #include <limits>
+#include <mutex>
 #include <optional>
 
 namespace CSX::NvidiaPipelinePolicy
 {
+	enum class ProxyLifecycleState : std::uint8_t
+	{
+		Available,
+		Constructing,
+		Published,
+		Retiring,
+		TeardownQuarantined,
+	};
+
+	class ProxyLifecycleGate
+	{
+	public:
+		[[nodiscard]] bool TryBeginConstruction() noexcept
+		{
+			std::scoped_lock lock(mutex);
+			if (state != ProxyLifecycleState::Available)
+				return false;
+			state = ProxyLifecycleState::Constructing;
+			return true;
+		}
+
+		[[nodiscard]] bool Publish() noexcept
+		{
+			std::scoped_lock lock(mutex);
+			if (state != ProxyLifecycleState::Constructing)
+				return false;
+			state = ProxyLifecycleState::Published;
+			return true;
+		}
+
+		[[nodiscard]] bool BeginRetirement() noexcept
+		{
+			std::scoped_lock lock(mutex);
+			if (state != ProxyLifecycleState::Published)
+				return false;
+			state = ProxyLifecycleState::Retiring;
+			return true;
+		}
+
+		void CompleteRetirement(bool a_teardownComplete) noexcept
+		{
+			std::scoped_lock lock(mutex);
+			if (state == ProxyLifecycleState::Retiring)
+				state = a_teardownComplete ?
+				            ProxyLifecycleState::Available :
+				            ProxyLifecycleState::TeardownQuarantined;
+		}
+
+		void CancelConstruction(bool a_teardownComplete) noexcept
+		{
+			std::scoped_lock lock(mutex);
+			if (state == ProxyLifecycleState::Constructing)
+				state = a_teardownComplete ?
+				            ProxyLifecycleState::Available :
+				            ProxyLifecycleState::TeardownQuarantined;
+		}
+
+		[[nodiscard]] ProxyLifecycleState GetState() const noexcept
+		{
+			std::scoped_lock lock(mutex);
+			return state;
+		}
+
+	private:
+		mutable std::mutex mutex;
+		ProxyLifecycleState state = ProxyLifecycleState::Available;
+	};
+
+	struct PublicSwapChainContract
+	{
+		std::uint32_t bufferCount = 0;
+		std::uint32_t sampleCount = 0;
+		std::uint32_t sampleQuality = 0;
+		std::uint32_t format = 0;
+		bool windowed = false;
+		bool hasOutputWindow = false;
+		bool renderTargetOutput = false;
+	};
+
+	[[nodiscard]] constexpr bool IsPublicSwapChainContractSupported(
+		const PublicSwapChainContract& a_contract) noexcept
+	{
+		return a_contract.bufferCount == 1 &&
+		       a_contract.sampleCount == 1 &&
+		       a_contract.sampleQuality == 0 &&
+		       a_contract.format != 0 &&
+		       a_contract.windowed &&
+		       a_contract.hasOutputWindow &&
+		       a_contract.renderTargetOutput;
+	}
+
+	enum class BoundedCopyResult : std::uint8_t
+	{
+		Complete,
+		Truncated,
+		Unreadable,
+	};
+
+	[[nodiscard]] constexpr BoundedCopyResult ClassifyBoundedCopy(
+		bool a_readable,
+		bool a_terminatedWithinLimit) noexcept
+	{
+		if (!a_readable)
+			return BoundedCopyResult::Unreadable;
+		return a_terminatedWithinLimit ?
+		           BoundedCopyResult::Complete :
+		           BoundedCopyResult::Truncated;
+	}
+
 	class InteropFenceSequence
 	{
 	public:
 		[[nodiscard]] std::optional<std::uint64_t> Next() noexcept
 		{
-			if (value == std::numeric_limits<std::uint64_t>::max())
+			if (value == (std::numeric_limits<std::uint64_t>::max)())
 				return std::nullopt;
 			return ++value;
 		}

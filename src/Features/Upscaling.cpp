@@ -22,6 +22,7 @@
 #include "State.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
+#include "Upscaling/NvidiaComIdentity.h"
 #include "Upscaling/ReflexPolicy.h"
 #include "Upscaling/Streamline.h"
 #include "Upscaling/VRRenderScaleDevBenchBridge.h"
@@ -15297,12 +15298,26 @@ namespace
 		return adapter;
 	}
 
+	bool IsFrameGenerationProxyContractSupported(const DXGI_SWAP_CHAIN_DESC& a_desc) noexcept
+	{
+		return CSX::NvidiaPipelinePolicy::IsPublicSwapChainContractSupported({
+			.bufferCount = a_desc.BufferCount,
+			.sampleCount = a_desc.SampleDesc.Count,
+			.sampleQuality = a_desc.SampleDesc.Quality,
+			.format = static_cast<std::uint32_t>(a_desc.BufferDesc.Format),
+			.windowed = a_desc.Windowed != FALSE,
+			.hasOutputWindow = a_desc.OutputWindow != nullptr,
+			.renderTargetOutput = (a_desc.BufferUsage & DXGI_USAGE_RENDER_TARGET_OUTPUT) != 0,
+		});
+	}
+
 	bool ActivateStreamlineBackend(
 		Upscaling& a_upscaling,
 		IDXGIAdapter* a_adapter,
 		ID3D11Device** a_device,
 		IDXGISwapChain** a_swapChain,
-		bool a_upgradeSwapChain)
+		bool a_upgradeSwapChain,
+		bool a_requireSameDeviceIdentity)
 	{
 		if (!a_adapter || !a_device || !*a_device) {
 			a_upscaling.streamline.MarkAdapterUnavailable("created device adapter could not be resolved");
@@ -15338,6 +15353,14 @@ namespace
 			a_upscaling.streamline.MarkAdapterUnavailable("D3D device interface upgrade failed");
 			return false;
 		}
+		if (a_requireSameDeviceIdentity &&
+			!CSX::NvidiaComIdentity::IsSame(
+				static_cast<IUnknown*>(originalDevice), static_cast<IUnknown*>(upgradedDevice))) {
+			releaseReplacement(upgradedDevice, originalDevice);
+			a_upscaling.streamline.MarkAdapterUnavailable(
+				"D3D device interface upgrade changed caller-visible COM identity");
+			return false;
+		}
 		void* upgradedSwapChain = a_swapChain ? *a_swapChain : nullptr;
 		if (a_upgradeSwapChain &&
 			(!upgradedSwapChain || !a_upscaling.UpgradeBackendInterface(&upgradedSwapChain))) {
@@ -15358,6 +15381,10 @@ namespace
 		*a_device = static_cast<ID3D11Device*>(upgradedDevice);
 		if (a_upgradeSwapChain)
 			*a_swapChain = static_cast<IDXGISwapChain*>(upgradedSwapChain);
+		if (upgradedDevice != originalDevice)
+			static_cast<IUnknown*>(originalDevice)->Release();
+		if (a_upgradeSwapChain && upgradedSwapChain != originalSwapChain)
+			static_cast<IUnknown*>(originalSwapChain)->Release();
 		return true;
 	}
 }
@@ -15408,8 +15435,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	}
 
 	const bool isVR = REL::Module::IsVR();
-	bool shouldProxy = !isVR && pSwapChainDesc && ppSwapChain && ppDevice && ppImmediateContext &&
-	                   !upscaling.d3d12SwapChainActive;
+	bool shouldProxy = !isVR && pSwapChainDesc && ppSwapChain && ppDevice && ppImmediateContext;
 	if (shouldProxy)
 		if (!pSwapChainDesc->Windowed)
 			shouldProxy = false;
@@ -15437,12 +15463,15 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 		const bool hasFrameGenModule = upscaling.HasFrameGenModule();
 		if (hasFrameGenModule) {
-			if (pSwapChainDesc->BufferCount != 1) {
+			if (!IsFrameGenerationProxyContractSupported(*pSwapChainDesc)) {
 				logger::warn(
-					"[Frame Generation] Caller requested {} swap-chain buffers; using the original D3D path",
-					pSwapChainDesc->BufferCount);
+					"[Frame Generation] Caller-visible swap-chain contract cannot be represented coherently; using the original D3D path");
 				shouldProxy = false;
 			}
+		}
+		if (hasFrameGenModule && shouldProxy && !upscaling.TryBeginProxyCreation()) {
+			logger::warn("[Frame Generation] Proxy owner is not available; using the original D3D path");
+			shouldProxy = false;
 		}
 		if (hasFrameGenModule && shouldProxy) {
 			winrt::com_ptr<ID3D11Device> candidateDevice;
@@ -15486,7 +15515,8 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 							resolvedAdapter.get(),
 							&activatedDevice,
 							nullptr,
-							false);
+							false,
+							true);
 					} catch (...) {
 						if (activatedDevice)
 							activatedDevice->Release();
@@ -15514,6 +15544,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 				logger::warn(
 					"[Frame Generation] Proxy D3D11 device creation failed with 0x{:08X}; using the original D3D path",
 					static_cast<uint32_t>(proxyDeviceResult));
+				upscaling.ResetProxyCreationState();
 			}
 		} else if (!hasFrameGenModule) {
 			logger::warn("[Frame Generation] FidelityFX DLLs are not loaded, skipping proxy");
@@ -15543,7 +15574,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 	try {
 		auto resolvedAdapter = ResolveCreatedAdapter(*ppDevice, pAdapter);
-		ActivateStreamlineBackend(upscaling, resolvedAdapter.get(), ppDevice, ppSwapChain, true);
+		ActivateStreamlineBackend(upscaling, resolvedAdapter.get(), ppDevice, ppSwapChain, true, false);
 	} catch (const std::exception& error) {
 		logger::error("[Streamline] Device activation failed without affecting D3D creation: {}", error.what());
 		upscaling.streamline.MarkAdapterUnavailable("device activation threw an exception");
@@ -54717,6 +54748,11 @@ void Upscaling::SetProxyD3D11DeviceContext(ID3D11DeviceContext* context)
 	dx12SwapChain.SetD3D11DeviceContext(context);
 }
 
+bool Upscaling::TryBeginProxyCreation() noexcept
+{
+	return dx12SwapChain.TryBeginConstruction();
+}
+
 void Upscaling::CreateProxySwapChain(
 	IDXGIAdapter* adapter,
 	DXGI_SWAP_CHAIN_DESC backendSwapChainDesc,
@@ -54737,11 +54773,8 @@ IDXGISwapChain* Upscaling::GetProxySwapChain()
 
 bool Upscaling::ResetProxyCreationState() noexcept
 {
-	d3d12SwapChainActive = false;
-	if (!fidelityFX.ResetFrameGenerationContexts())
-		return false;
-	dx12SwapChain.ResetUnpublished();
-	return true;
+	d3d12SwapChainActive.store(false, std::memory_order_release);
+	return dx12SwapChain.ResetUnpublished();
 }
 
 bool Upscaling::IsOpenCompositeUpscalingBlocked(bool a_forceRefresh) const

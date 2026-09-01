@@ -12,6 +12,10 @@ foreach(_required IN ITEMS
     "if (FAILED(ret) || !ppDevice || !*ppDevice)"
     "ResolveCreatedAdapter(*ppDevice, pAdapter)"
     "ResetProxyCreationState()"
+    "NvidiaComIdentity::IsSame"
+    "a_requireSameDeviceIdentity"
+    "IsFrameGenerationProxyContractSupported"
+    "TryBeginProxyCreation()"
 )
     string(FIND "${_upscaling}" "${_required}" _position)
     if(_position EQUAL -1)
@@ -46,6 +50,7 @@ foreach(_required IN ITEMS
     "runtimeHasPCL"
     "ShutdownQuarantined"
     "LoggingCallback(sl::LogType type, const char* msg) noexcept"
+    "BoundedCopyResult::Truncated"
 )
     string(FIND "${_streamline}" "${_required}" _position)
     if(_position EQUAL -1)
@@ -77,9 +82,16 @@ foreach(_required IN ITEMS
     "const std::array beforeCopy"
     "producerFenceValue = fenceSequence.Next()"
     "ResolveBackendBufferCount"
+    "ProxyLifecycleGate lifecycle"
+    "lifecycle.BeginRetirement()"
+    "lifecycle.CompleteRetirement(false)"
+    "retaining every dependent D3D resource"
     "return owner.GetDesc(pDesc)"
     "return 0;"
     "ResetFrameGenerationContexts()"
+    "ResetFrameGenerationRenderContext()"
+    "SetupFrameGeneration()"
+    "publicFormat != publicSwapChainDesc.BufferDesc.Format"
 )
     string(FIND "${_swapchain_header}${_swapchain}" "${_required}" _position)
     if(_position EQUAL -1)
@@ -98,6 +110,7 @@ foreach(_required IN ITEMS
     "IsRuntimeUpscalerDispatchProofUsable"
     "ConfirmFrameGenerationDisabled"
     "frameGenerationDisableConfirmed"
+    "ResetFrameGenerationRenderContext"
 )
     string(FIND "${_fidelityfx}" "${_required}" _position)
     if(_position EQUAL -1)

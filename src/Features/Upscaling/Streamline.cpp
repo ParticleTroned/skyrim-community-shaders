@@ -21,6 +21,7 @@
 #include "../../Util.h"
 #include "../Upscaling.h"
 #include "DX12SwapChain.h"
+#include "NvidiaBoundedLog.h"
 #include "NvidiaPipelinePolicy.h"
 #include "ReflexPolicy.h"
 
@@ -1174,38 +1175,18 @@ uint64_t Streamline::SetDLSSDevBenchCompositorCycleContext(uint64_t a_compositor
 namespace
 {
 	constexpr std::size_t kMaximumStreamlineLogBytes = 16 * 1024;
-
-	bool CopyStreamlineLogMessage(
-		const char* a_message,
-		char* a_destination,
-		std::size_t a_capacity) noexcept
-	{
-		if (!a_message || !a_destination || a_capacity < 2)
-			return false;
-#ifdef _MSC_VER
-		__try {
-#endif
-			std::size_t length = 0;
-			while (length + 1 < a_capacity && a_message[length] != '\0') {
-				a_destination[length] = a_message[length];
-				++length;
-			}
-			a_destination[length] = '\0';
-			return true;
-#ifdef _MSC_VER
-		} __except (EXCEPTION_EXECUTE_HANDLER) {
-			a_destination[0] = '\0';
-			return false;
-		}
-#endif
-	}
 }
 
 void LoggingCallback(sl::LogType type, const char* msg) noexcept
 {
 	std::array<char, kMaximumStreamlineLogBytes + 1> messageBuffer{};
-	if (!CopyStreamlineLogMessage(msg, messageBuffer.data(), messageBuffer.size())) {
+	const auto copyResult = CSX::NvidiaBoundedLog::Copy(msg, messageBuffer.data(), messageBuffer.size());
+	if (copyResult == CSX::NvidiaPipelinePolicy::BoundedCopyResult::Unreadable) {
 		OutputDebugStringA("[StreamlineSDK] Invalid log message suppressed.\n");
+		return;
+	}
+	if (copyResult == CSX::NvidiaPipelinePolicy::BoundedCopyResult::Truncated) {
+		OutputDebugStringA("[StreamlineSDK] Log message exceeded 16384 bytes and was suppressed.\n");
 		return;
 	}
 

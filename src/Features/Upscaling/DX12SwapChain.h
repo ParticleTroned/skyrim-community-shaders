@@ -116,6 +116,7 @@ public:
 	winrt::com_ptr<ID3D12GraphicsCommandList4> commandLists[2];
 
 	IDXGISwapChain4* swapChain = nullptr;
+	winrt::com_ptr<IDXGISwapChain4> swapChainOwner;
 
 	DXGI_SWAP_CHAIN_DESC1 swapChainDesc{};
 	DXGI_SWAP_CHAIN_DESC publicSwapChainDesc{};
@@ -156,6 +157,7 @@ public:
 	void CreateInterop();
 	void RecreateWrappedResources(const DXGI_SWAP_CHAIN_DESC1& desc);
 
+	bool TryBeginConstruction() noexcept;
 	DXGISwapChainProxy* TakeSwapChainProxy();
 	void SetD3D11Device(ID3D11Device* a_d3d11Device);
 	void SetD3D11DeviceContext(ID3D11DeviceContext* a_d3d11Context);
@@ -169,18 +171,25 @@ public:
 	HRESULT GetDevice(_In_ REFIID riid, _COM_Outptr_ void** ppDevice);
 	HRESULT GetDesc(_Out_ DXGI_SWAP_CHAIN_DESC* desc) const noexcept;
 	HRESULT GetDesc1(_Out_ DXGI_SWAP_CHAIN_DESC1* desc) const noexcept;
+	HRESULT SetFullscreenState(BOOL fullscreen, IDXGIOutput* target) noexcept;
+	HRESULT GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC* desc) const noexcept;
+	HRESULT ResizeTarget(const DXGI_MODE_DESC* target) noexcept;
 	HANDLE GetFrameLatencyWaitableObject();
 
 	void SetUIBuffer();
 
 	// D3D12 interop resource management
 	void CreateSharedResources();
-	void ResetUnpublished() noexcept;
+	bool ResetUnpublished() noexcept;
 	void OnProxyDestroyed(IDXGISwapChain4* a_swapChain) noexcept;
+	[[nodiscard]] CSX::NvidiaPipelinePolicy::ProxyLifecycleState GetLifecycleState() const noexcept;
 
 private:
 	void ResetResources() noexcept;
 	HRESULT PresentInternal(UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* presentParameters) noexcept;
-	HRESULT RefreshAfterResize() noexcept;
+	HRESULT RefreshAfterResize(DXGI_FORMAT publicFormat) noexcept;
+	HRESULT RestoreFrameGenerationAfterFailedResize() noexcept;
+	static DXGI_FORMAT ResolveBackendFormat(DXGI_FORMAT publicFormat) noexcept;
+	CSX::NvidiaPipelinePolicy::ProxyLifecycleGate lifecycle;
 	bool runtimeQuarantined = false;
 };

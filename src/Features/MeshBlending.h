@@ -182,6 +182,7 @@ private:
 	struct CacheEntry
 	{
 		Signature signature{};
+		RE::BSGeometry* receiver = nullptr;
 		Classification classification = Classification::kRejected;
 		std::uint32_t classifiedFrame = 0u;
 		std::uint32_t lastUsedFrame = 0u;
@@ -336,6 +337,7 @@ private:
 		std::vector<LandscapeDiagnostic> discoveryDiagnostics;
 		bool blendPairsExplicit = false;
 		json document = json::object();
+		std::optional<std::string> sourceContents;
 	};
 
 	static constexpr std::size_t kCacheSetCount = 1024u;
@@ -416,15 +418,28 @@ private:
 		const Signature& a_signature,
 		std::uint32_t a_frame,
 		bool a_sourceStateOnly,
-		Classification& a_classification);
-	void StoreClassification(const Signature& a_signature, std::uint32_t a_frame, Classification a_classification);
+		Classification& a_classification,
+		Signature& a_cachedSignature,
+		RE::BSGeometry*& a_receiver);
+	void StoreClassification(
+		const Signature& a_signature,
+		std::uint32_t a_frame,
+		Classification a_classification,
+		RE::BSGeometry* a_receiver = nullptr);
 	Classification GetSourceClassification(
 		SourceState& a_source,
 		std::uint32_t a_frame,
 		bool a_captureDiscovery,
 		bool a_collectDiagnostics);
-	Classification ClassifyOnCacheMiss(const SourceState& a_source, bool a_captureDiscovery);
-	bool HasOpaqueSibling(const SourceState& a_source, bool& a_hitTraversalLimit);
+	Classification ClassifyOnCacheMiss(
+		const SourceState& a_source,
+		bool a_captureDiscovery,
+		RE::BSGeometry*& a_receiver);
+	bool HasOpaqueSibling(
+		const SourceState& a_source,
+		bool& a_hitTraversalLimit,
+		RE::BSGeometry*& a_receiver,
+		const RE::BSGeometry* a_requiredReceiver = nullptr);
 	bool IsSafeReceiver(const SourceState& a_source, RE::BSGeometry* a_receiver) const;
 	bool BoundsOverlap(const RE::NiBound& a_source, const RE::NiBound& a_receiver) const;
 	bool MatchesRules(

@@ -2,22 +2,22 @@
 
 ## Status
 
-- The implementation is on `pr/nif-blending`, rebased onto `main-VR` at `886733e8e`.
+- The implementation is carried by the current Mesh Blending successor PR on top of current `main-VR`; PR36 remains the historical source branch.
 - It contains two independent paths: a depth-gap fade for selected NIF transition shapes and a LAND/LTEX weight remap for material boundaries inside one landscape draw.
-- In accordance with the no-build instruction, the restored source and shader integration remain unbuilt and require later SE/AE/VR runtime validation.
+- The integrated source has passed the managed CSmain build and complete shader-test target. SE/AE/VR runtime qualification remains pending.
 - The design intentionally avoids NIF edits, extra render targets, extra draw passes, and new engine-address hooks.
 - Both paths target the normal world `BSLightingShader` path. Reflection, cubemap, shadow, water, effect, and other specialised passes remain outside the feature boundary.
 
 ## Current implementation decisions
 
-- Descriptor bit 8 is used because RC173 already mirrors `IsFemale` at bit 6 and uses bit 7 for external-emittance suppression.
+- Descriptor bit 9 is used because current upstream additive lighting owns bit 8.
 - The descriptor is prepared before the original shared Lighting `SetupGeometry` call, matching the per-draw timing used by Extended Translucency and avoiding a possible dirty-state upload inside the original call.
 - Static ownership is proven with `TESObjectREFR::Get3D()` plus a bounded ancestry walk. The nearest `BSFadeNode` is not treated as authoritative ownership.
 - Model and node rules use an active `ExtraModelSwap` path when present, falling back to the base static model. The selected model and path identities participate in cache validation.
 - The shipped default is **Automatic** classification. Allow-list-only remains available for curated deployments, and deny rules always override automatic candidates.
 - Allow rules bypass the sibling and bounds heuristic only. They do not bypass source render-state, material, static-owner, animation, pass, or distance safety gates; deny rules always win.
 - Renderer submission remains the primary visibility/frustum/portal culling mechanism. A configurable 8192-unit camera/eye-centered bubble rejects distant candidates before owner lookup, cache lookup, string construction, or sibling traversal; zero disables the bubble.
-- Classification uses a fixed 4096-entry, four-way set-associative cache with no owning references and a hard 256-object traversal cap. With no effective allow/deny rules, validated source/material/parent state can hit before owner resolution and is revalidated after a geometry-jittered 120–183 frames; configured policy retains the full model/owner signature lookup and 600–855-frame interval. Jitter avoids a cell-wide reclassification spike; distance rejects are deliberately not cached. Developer diagnostics separate pre-owner hits, full policy-signature hits, and owner-resolution attempts.
+- Classification uses a fixed 4096-entry, four-way set-associative cache with no owning references and a hard 256-object traversal cap. With no effective allow/deny rules, rejected source/material/parent state can hit before owner resolution. Positive automatic entries retain the receiver pointer only as an identity token and, on every reuse, re-resolve the current owner/root, reject animation, compare the full ownership signature, and find then validate that identity through the current bounded root traversal. No cached pointer is dereferenced directly. Configured policy retains the full model/owner signature lookup and 600–855-frame interval. Distance rejects are deliberately not cached. Developer diagnostics separate pre-owner hits, full policy-signature hits, and owner-resolution attempts.
 - Automatic receivers are initially required to be fully opaque and non-alpha-tested. This is stricter than the proposal because CPU flags cannot prove that an alpha-test cutoff exactly matches the prepass depth.
 - Receiver classification is structural rather than tied to transient application-cull state, keeping cached results coherent when scripted nodes are hidden or revealed. Invalid or absent receiver depth still fails open in the shader.
 - VR depth reads explicitly pass the current eye index. Raw depth near either 0 or 1 fails open, covering the far clear value and VR hidden-area/mask values.
@@ -28,7 +28,7 @@
 - The feature is intentionally non-core and its standalone package has `autoupload = false`; publication remains an explicit release decision.
 - User sliders and toggles remain in `SettingsUser.json`, while manual policy, detected mesh candidates, and LAND/LTEX material assignments are isolated in the atomically written `Data/SKSE/Plugins/CommunityShaders/MeshBlendingRules.json`.
 - The normal feature UI exposes **Record Visible Material Identities**. It records bounded, unique NIF and LTEX identities only as they stream or render; it does not scan installed files and performs no disk I/O until **Save Detected Materials** is pressed.
-- LAND material capture occurs after vanilla or True PBR installs the final quadrant properties. Each of the four quadrant draws records the default LTEX plus five overlays and publishes six 2-bit classes through a bounded registry.
+- LAND material capture occurs after vanilla or True PBR installs the final quadrant properties. A bounded 32-object search registers every eligible multi-texture geometry in each quadrant instead of assuming child zero. Each matching draw records the default LTEX plus five overlays and publishes six 2-bit classes through a bounded registry; unsupported or over-limit layouts remain unblended with rate-limited diagnostics.
 - LAND classes occupy `ExtraFeatureDescriptor` bits 10–21. They do not overlap Terrain Helper bits 0–5 and 9 or Extended Translucency bits 6–8.
 - The LAND shader remaps the six existing weights before texture sampling. It never activates an authored-inactive layer and therefore adds no texture samples.
 - Unknown or reserved material classes fail open. Soft-over-hard favours the soft layer, every already-active soft/soft overlap converges toward equal coverage, and hard/hard keeps the dominant hard layer.
@@ -295,7 +295,7 @@ The UI names mode 2 **Automatic**, and it remains the product default. NIF selec
 }
 ```
 
-Asset policy is intentionally isolated in `Data/SKSE/Plugins/CommunityShaders/MeshBlendingRules.json` so recording never rewrites unrelated CS settings. It is loaded once independently of whether a Mesh Blending section exists in `SettingsUser.json`, rather than reread during live settings or performance swaps. Save/Clear re-read and validate it immediately before mutation so in-session mod-author edits are merged rather than silently replaced. The file is replaced atomically and schema 4 separates author policy from generated observations:
+Asset policy is intentionally isolated in `Data/SKSE/Plugins/CommunityShaders/MeshBlendingRules.json` so recording never rewrites unrelated CS settings. It is loaded once independently of whether a Mesh Blending section exists in `SettingsUser.json`, rather than reread during live settings or performance swaps. Save/Clear re-read and validate the exact file bytes immediately before mutation. The staged atomic replacement proceeds only if those bytes are still current; otherwise it aborts, preserves captured observations for retry, and leaves the external edit untouched. Schema 4 separates author policy from generated observations:
 
 ```json
 {
@@ -367,7 +367,7 @@ Recording is not an installed-content inventory. It cannot see unvisited, unload
 
 Captured entries are candidates for visual review. The default Automatic mode previews NIF candidates while recording; Allow-list-only mode records without applying unsaved candidates. Saved exact candidates avoid repeating the automatic sibling traversal for that model/node pair, while source render-state, static-owner, pass, animation, distance, and deny gates still apply. Feature-cost A/B measurement cannot start while recording is active, so capture overhead cannot contaminate its baseline.
 
-Malformed, unreadable, or newer-schema rule files fail closed: runtime blending and discovery are disabled, Save/Clear are locked, and the existing file is never silently replaced. The UI reports that the file must be fixed or removed followed by a restart.
+Malformed, unreadable, oversized, or newer-schema rule files fail closed: runtime blending and discovery are disabled, Save/Clear are locked, and the existing file is never silently replaced. This includes every nonempty malformed manual LAND `Form`, which reports its exact `LandscapeAssignments[index].Form` location instead of being discarded. The UI reports that the file must be fixed or removed followed by a restart.
 
 ## Runtime asset and shape identity
 
@@ -530,7 +530,7 @@ MeshBlending = 1u << 8
 
 ```hlsl
 // package/Shaders/Common/Permutation.hlsli
-static const uint MeshBlending = (1u << 8);
+static const uint MeshBlending = (1u << 9);
 ```
 
 Clear and set only this bit. Do not rewrite the whole descriptor.
@@ -866,7 +866,7 @@ Exit condition: no state leaks, no shader-cache mismatch, and no unintended cand
 
 - No extra full-screen pass in the MVP.
 - No extra geometry pass in the MVP.
-- No scenegraph traversal on every draw after cache warm-up.
+- Rejected and policy-qualified NIF draws avoid traversal after cache warm-up. Positive automatic draws perform a bounded current-root search for the cached receiver identity before validating its live state; a changed receiver triggers normal reclassification.
 - One depth read plus minimal ALU only for accepted source pixels.
 - No string allocation on cache hits; path strings are built only on bounded cache misses when policy or diagnostics require them.
 - LAND capture is bounded to four quadrants, six identities, and at most eight material-parent checks per identity.
@@ -885,7 +885,7 @@ Because automatic rules and LAND blending are defaults, use the built-in feature
 
 ## Suggested focused tests
 
-Pure HLSL fade tests now cover endpoints, malformed-range sanitization, and fail-open gap handling. The CPU classifier cases and all renderer-state/runtime scenarios below remain pending; generic shader compilation is not evidence that they behave correctly in game.
+Pure HLSL tests cover fade endpoints, malformed ranges, fail-open gaps, descriptor decoding, LAND remapping, inactive/reserved classes, threshold renormalization, and projected-snow coverage. The complete shader-test target passes on the integrated branch. CPU classifier cases and renderer/runtime scenarios below remain pending; generic shader compilation is not evidence that they behave correctly in game.
 
 ### Classifier tests
 

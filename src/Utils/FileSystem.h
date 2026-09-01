@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <imgui.h>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -273,6 +274,16 @@ namespace Util
 		bool WriteTextFileAtomic(
 			const std::filesystem::path& path,
 			std::string_view contents,
+			std::string& errorMessage);
+
+		/**
+		 * Atomically replaces a text file only when its current bytes still match.
+		 * A missing expected value requires the destination to remain absent.
+		 */
+		bool WriteTextFileAtomicIfUnchanged(
+			const std::filesystem::path& path,
+			std::string_view contents,
+			const std::optional<std::string>& expectedContents,
 			std::string& errorMessage);
 
 		/**

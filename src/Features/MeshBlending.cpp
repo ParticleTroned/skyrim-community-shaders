@@ -12,6 +12,7 @@
 #include <charconv>
 #include <cmath>
 #include <format>
+#include <fstream>
 #include <iterator>
 #include <limits>
 #include <tuple>
@@ -43,6 +44,7 @@ namespace
 
 	constexpr std::uint32_t kRuleFileSchemaVersion = 4u;
 	constexpr std::uint32_t kOldestSupportedRuleFileSchemaVersion = 1u;
+	constexpr std::uintmax_t kMaximumRuleFileBytes = 4u * 1024u * 1024u;
 
 	std::filesystem::path GetRuleFilePath()
 	{
@@ -272,9 +274,9 @@ namespace
 	{
 		return a_value.size() <= a_maximumLength && IsValidUtf8(a_value) &&
 		       std::none_of(a_value.begin(), a_value.end(), [](char character) {
-			       const auto value = static_cast<unsigned char>(character);
-			       return value < static_cast<unsigned char>(' ') || value == 0x7Fu;
-		       });
+				   const auto value = static_cast<unsigned char>(character);
+				   return value < static_cast<unsigned char>(' ') || value == 0x7Fu;
+			   });
 	}
 
 	bool IsPortableLandscapeFormKey(std::string_view a_form)
@@ -457,8 +459,8 @@ std::optional<MeshBlending::LandscapeMaterialKind> MeshBlending::ParseLandscapeM
 		}
 	}
 	for (auto value = static_cast<std::uint8_t>(LandscapeMaterialKind::kUnknown);
-		 value <= static_cast<std::uint8_t>(LandscapeMaterialKind::kMetal);
-		 ++value) {
+		value <= static_cast<std::uint8_t>(LandscapeMaterialKind::kMetal);
+		++value) {
 		const auto kind = static_cast<LandscapeMaterialKind>(value);
 		if (NormalizeIdentity(CanonicalLandscapeMaterialKind(kind)) == normalized) {
 			return kind;
@@ -470,24 +472,42 @@ std::optional<MeshBlending::LandscapeMaterialKind> MeshBlending::ParseLandscapeM
 const char* MeshBlending::CanonicalLandscapeMaterialKind(LandscapeMaterialKind a_kind)
 {
 	switch (a_kind) {
-	case LandscapeMaterialKind::kUnknown: return "Unknown";
-	case LandscapeMaterialKind::kSoft: return "Soft";
-	case LandscapeMaterialKind::kSnow: return "Snow";
-	case LandscapeMaterialKind::kDirt: return "Dirt";
-	case LandscapeMaterialKind::kAsh: return "Ash";
-	case LandscapeMaterialKind::kGravel: return "Gravel";
-	case LandscapeMaterialKind::kMud: return "Mud";
-	case LandscapeMaterialKind::kSand: return "Sand";
-	case LandscapeMaterialKind::kGrass: return "Grass";
-	case LandscapeMaterialKind::kGroundCover: return "GroundCover";
-	case LandscapeMaterialKind::kHard: return "Hard";
-	case LandscapeMaterialKind::kIce: return "Ice";
-	case LandscapeMaterialKind::kStone: return "Stone";
-	case LandscapeMaterialKind::kBoulder: return "Boulder";
-	case LandscapeMaterialKind::kWood: return "Wood";
-	case LandscapeMaterialKind::kGlass: return "Glass";
-	case LandscapeMaterialKind::kMetal: return "Metal";
-	default: return "Unknown";
+	case LandscapeMaterialKind::kUnknown:
+		return "Unknown";
+	case LandscapeMaterialKind::kSoft:
+		return "Soft";
+	case LandscapeMaterialKind::kSnow:
+		return "Snow";
+	case LandscapeMaterialKind::kDirt:
+		return "Dirt";
+	case LandscapeMaterialKind::kAsh:
+		return "Ash";
+	case LandscapeMaterialKind::kGravel:
+		return "Gravel";
+	case LandscapeMaterialKind::kMud:
+		return "Mud";
+	case LandscapeMaterialKind::kSand:
+		return "Sand";
+	case LandscapeMaterialKind::kGrass:
+		return "Grass";
+	case LandscapeMaterialKind::kGroundCover:
+		return "GroundCover";
+	case LandscapeMaterialKind::kHard:
+		return "Hard";
+	case LandscapeMaterialKind::kIce:
+		return "Ice";
+	case LandscapeMaterialKind::kStone:
+		return "Stone";
+	case LandscapeMaterialKind::kBoulder:
+		return "Boulder";
+	case LandscapeMaterialKind::kWood:
+		return "Wood";
+	case LandscapeMaterialKind::kGlass:
+		return "Glass";
+	case LandscapeMaterialKind::kMetal:
+		return "Metal";
+	default:
+		return "Unknown";
 	}
 }
 
@@ -1057,17 +1077,57 @@ void MeshBlending::CaptureLandscapeMaterials(RE::TESObjectLAND* a_land)
 		if (!mesh) {
 			continue;
 		}
-		const auto& children = mesh->GetChildren();
-		auto* geometry = children.empty() || !children[0] ? nullptr : children[0]->AsGeometry();
-		if (!geometry) {
-			continue;
+
+		struct LandscapeDrawTarget
+		{
+			RE::BSGeometry* geometry;
+			RE::BSLightingShaderProperty* property;
+		};
+		constexpr std::size_t maximumQuadrantObjects = 32u;
+		std::array<RE::NiAVObject*, maximumQuadrantObjects> pending{};
+		std::array<LandscapeDrawTarget, maximumQuadrantObjects> targets{};
+		std::size_t pendingCount = 1u;
+		std::size_t targetCount = 0u;
+		std::size_t visited = 0u;
+		pending[0] = mesh;
+		bool layoutLimitHit = false;
+		while (pendingCount != 0u && visited++ < maximumQuadrantObjects) {
+			auto* object = pending[--pendingCount];
+			if (!object) {
+				continue;
+			}
+			if (auto* geometry = object->AsGeometry()) {
+				auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get();
+				if (property && property->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get()) {
+					auto* lightingProperty = static_cast<RE::BSLightingShaderProperty*>(property);
+					if (lightingProperty->material &&
+						lightingProperty->flags.any(ShaderFlag::kMultiTextureLandscape) &&
+						targetCount < targets.size()) {
+						targets[targetCount++] = { geometry, lightingProperty };
+					}
+				}
+			}
+			if (auto* node = object->AsNode()) {
+				for (const auto& child : node->GetChildren()) {
+					if (!child) {
+						continue;
+					}
+					if (pendingCount == pending.size()) {
+						layoutLimitHit = true;
+						break;
+					}
+					pending[pendingCount++] = child.get();
+				}
+			}
 		}
-		auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get();
-		if (!property || property->GetRTTI() != globals::rtti::BSLightingShaderPropertyRTTI.get()) {
-			continue;
-		}
-		auto* lightingProperty = static_cast<RE::BSLightingShaderProperty*>(property);
-		if (!lightingProperty->material) {
+		layoutLimitHit = layoutLimitHit || pendingCount != 0u;
+		if (targetCount == 0u || layoutLimitHit) {
+			static std::atomic_uint32_t layoutWarnings = 0u;
+			if (layoutWarnings.fetch_add(1u, std::memory_order_relaxed) < 4u) {
+				logger::warn(
+					"[Mesh Blending] LAND quadrant {} has no bounded multi-texture geometry; leaving it unblended",
+					quadrant);
+			}
 			continue;
 		}
 
@@ -1088,8 +1148,7 @@ void MeshBlending::CaptureLandscapeMaterials(RE::TESObjectLAND* a_land)
 			kinds[layer] = ClassifyLandscapeTexture(textures[layer]);
 			CaptureDiscoveredLandscape(textures[layer], kinds[layer]);
 			const auto materialClass = static_cast<std::uint32_t>(GetLandscapeMaterialClass(kinds[layer]));
-			packedClasses |= materialClass <<
-			                 (State::MeshBlendingLandscapeClassShift + State::MeshBlendingLandscapeClassBits * layer);
+			packedClasses |= materialClass << (State::MeshBlendingLandscapeClassShift + State::MeshBlendingLandscapeClassBits * layer);
 		}
 
 		bool allPairsAllowed = true;
@@ -1119,7 +1178,10 @@ void MeshBlending::CaptureLandscapeMaterials(RE::TESObjectLAND* a_land)
 		if (!allPairsAllowed) {
 			packedClasses = 0u;
 		}
-		StoreLandscapeClasses(geometry, lightingProperty, lightingProperty->material, packedClasses & classMask);
+		for (std::size_t index = 0u; index < targetCount; ++index) {
+			const auto& target = targets[index];
+			StoreLandscapeClasses(target.geometry, target.property, target.property->material, packedClasses & classMask);
+		}
 	}
 }
 
@@ -1170,18 +1232,42 @@ bool MeshBlending::ReadRuleFileState(
 {
 	a_state = {};
 	a_notFound = false;
-	json ruleFile;
-	const auto readResult = Util::FileHelpers::ReadJsonFile(GetRuleFilePath(), ruleFile, a_error);
-	if (readResult == Util::FileHelpers::JsonFileReadResult::NotFound) {
+	const auto ruleFilePath = GetRuleFilePath();
+	std::ifstream input(ruleFilePath, std::ios::binary);
+	if (!input.is_open()) {
+		std::error_code existsError;
+		const bool exists = std::filesystem::exists(ruleFilePath, existsError);
+		if (existsError || exists) {
+			a_error = existsError ?
+			              std::format("Could not inspect the rule file: {}", existsError.message()) :
+			              "Could not open the rule file for reading.";
+			return false;
+		}
 		a_notFound = true;
 		a_state.document = json::object({ { "SchemaVersion", kRuleFileSchemaVersion } });
+		a_state.sourceContents.reset();
 		a_error.clear();
 		return true;
 	}
-	if (readResult == Util::FileHelpers::JsonFileReadResult::Error) {
-		a_error = std::format("Could not read the rule file: {}", a_error);
+	std::error_code sizeError;
+	const auto fileSize = std::filesystem::file_size(ruleFilePath, sizeError);
+	if (sizeError || fileSize > kMaximumRuleFileBytes) {
+		a_error = sizeError ?
+		              std::format("Could not inspect the rule-file size: {}", sizeError.message()) :
+		              std::format("The rule file exceeds the {} byte safety limit.", kMaximumRuleFileBytes);
 		return false;
 	}
+	std::string rawContents{ std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>() };
+	if (input.bad()) {
+		a_error = "An I/O error occurred while reading the rule file.";
+		return false;
+	}
+	json ruleFile = json::parse(rawContents, nullptr, false);
+	if (ruleFile.is_discarded()) {
+		a_error = "The rule file is not valid JSON.";
+		return false;
+	}
+	a_state.sourceContents = std::move(rawContents);
 	if (!ruleFile.is_object()) {
 		a_error = "The rule file root must be a JSON object.";
 		return false;
@@ -1313,7 +1399,8 @@ bool MeshBlending::ReadRuleFileState(
 				assignment.Kind = CanonicalLandscapeMaterialKind(*kind);
 				if (!assignment.Form.empty()) {
 					if (!IsPortableLandscapeFormKey(assignment.Form)) {
-						assignment.Form.clear();
+						a_error = std::format("{}.Form is not a portable 0xLOCALID~Plugin selector.", context);
+						return false;
 					} else if (auto* form = ResolveLandscapeForm(assignment.Form)) {
 						assignment.Form = Util::GetFormFileKey(form);
 					}
@@ -1495,12 +1582,10 @@ bool MeshBlending::WriteRuleFile(const RuleFileState& a_state, std::string& a_er
 		auto emitLandscapeAssignments = [&]() {
 			json array = json::array();
 			for (const auto& entry : a_state.landscapeAssignments) {
-				array.push_back({
-					{ "Kind", entry.Kind },
+				array.push_back({ { "Kind", entry.Kind },
 					{ "Form", entry.Form },
 					{ "EditorID", entry.EditorID },
-					{ "Diffuse", entry.Diffuse }
-				});
+					{ "Diffuse", entry.Diffuse } });
 			}
 			return array;
 		};
@@ -1529,17 +1614,19 @@ bool MeshBlending::WriteRuleFile(const RuleFileState& a_state, std::string& a_er
 		} else {
 			json array = json::array();
 			for (const auto& entry : a_state.discoveryDiagnostics) {
-				array.push_back({
-					{ "Kind", entry.Kind },
+				array.push_back({ { "Kind", entry.Kind },
 					{ "Form", entry.Form },
 					{ "EditorID", entry.EditorID },
 					{ "Diffuse", entry.Diffuse },
-					{ "Material", entry.Material }
-				});
+					{ "Material", entry.Material } });
 			}
 			ruleFile["DiscoveryDiagnostics"] = std::move(array);
 		}
-		return Util::FileHelpers::WriteTextFileAtomic(GetRuleFilePath(), ruleFile.dump(1), a_error);
+		return Util::FileHelpers::WriteTextFileAtomicIfUnchanged(
+			GetRuleFilePath(),
+			ruleFile.dump(1),
+			a_state.sourceContents,
+			a_error);
 	} catch (const json::exception& exception) {
 		a_error = exception.what();
 		return false;
@@ -1572,6 +1659,7 @@ MeshBlending::DiscoverySaveResult MeshBlending::SaveDiscoveredRules()
 		return result;
 	}
 	(void)notFound;
+	auto sourceContents = diskState.sourceContents;
 	ApplyRuleFileState(std::move(diskState));
 
 	std::vector<OverrideRule> additions;
@@ -1637,6 +1725,7 @@ MeshBlending::DiscoverySaveResult MeshBlending::SaveDiscoveredRules()
 	proposed.blendPairRules = blendPairRules;
 	proposed.blendPairsExplicit = blendPairsExplicit;
 	proposed.document = ruleFileDocument;
+	proposed.sourceContents = std::move(sourceContents);
 	proposed.discoveryDiagnostics.reserve(mergedLandscape.size());
 	for (auto& [key, diagnostic] : mergedLandscape) {
 		(void)key;
@@ -1855,7 +1944,9 @@ bool MeshBlending::TryGetCachedClassification(
 	const Signature& a_signature,
 	std::uint32_t a_frame,
 	bool a_sourceStateOnly,
-	Classification& a_classification)
+	Classification& a_classification,
+	Signature& a_cachedSignature,
+	RE::BSGeometry*& a_receiver)
 {
 	const auto mixedKey = (a_signature.geometry >> 4u) ^ (a_signature.geometry >> 17u) ^ (a_signature.geometry >> 29u);
 	const std::size_t setStart = (mixedKey & (kCacheSetCount - 1u)) * kCacheWays;
@@ -1876,6 +1967,8 @@ bool MeshBlending::TryGetCachedClassification(
 		}
 		entry.lastUsedFrame = a_frame;
 		a_classification = entry.classification;
+		a_cachedSignature = entry.signature;
+		a_receiver = entry.receiver;
 		return true;
 	}
 	return false;
@@ -1884,7 +1977,8 @@ bool MeshBlending::TryGetCachedClassification(
 void MeshBlending::StoreClassification(
 	const Signature& a_signature,
 	std::uint32_t a_frame,
-	Classification a_classification)
+	Classification a_classification,
+	RE::BSGeometry* a_receiver)
 {
 	const auto mixedKey = (a_signature.geometry >> 4u) ^ (a_signature.geometry >> 17u) ^ (a_signature.geometry >> 29u);
 	const std::size_t setStart = (mixedKey & (kCacheSetCount - 1u)) * kCacheWays;
@@ -1904,6 +1998,7 @@ void MeshBlending::StoreClassification(
 	}
 	classificationCache[replacement] = {
 		a_signature,
+		a_receiver,
 		a_classification,
 		a_frame,
 		a_frame,
@@ -1922,16 +2017,40 @@ MeshBlending::Classification MeshBlending::GetSourceClassification(
 		compiledAllowList.empty() && compiledDenyList.empty() &&
 		compiledExactAllowRules.empty() && compiledExactDenyRules.empty();
 	Classification classification = Classification::kRejected;
+	Signature cachedSignature;
+	RE::BSGeometry* cachedReceiver = nullptr;
 	bool cacheHit = sourceStateCacheAllowed &&
-	                TryGetCachedClassification(signature, a_frame, true, classification);
+	                TryGetCachedClassification(
+						signature,
+						a_frame,
+						true,
+						classification,
+						cachedSignature,
+						cachedReceiver);
 	if (cacheHit && a_collectDiagnostics) {
 		++diagnostics.preOwnerCacheHits;
 	}
-	if (!cacheHit) {
+	bool ownerResolved = false;
+	if (cacheHit && classification == Classification::kAutomatic) {
 		if (a_collectDiagnostics) {
 			++diagnostics.ownerResolutionAttempts;
 		}
-		if (!ResolveStaticOwner(a_source)) {
+		ownerResolved = ResolveStaticOwner(a_source);
+		if (ownerResolved) {
+			CompleteOwnershipSignature(a_source, signature);
+		}
+		cacheHit = ownerResolved && cachedSignature == signature && !a_source.root->HasAnimation();
+		if (cacheHit) {
+			bool hitTraversalLimit = false;
+			RE::BSGeometry* currentReceiver = nullptr;
+			cacheHit = HasOpaqueSibling(a_source, hitTraversalLimit, currentReceiver, cachedReceiver);
+		}
+	}
+	if (!cacheHit) {
+		if (a_collectDiagnostics && !ownerResolved) {
+			++diagnostics.ownerResolutionAttempts;
+		}
+		if (!ownerResolved && !ResolveStaticOwner(a_source)) {
 			if (a_collectDiagnostics) {
 				++diagnostics.sourceRejects;
 				if (sourceStateCacheAllowed) {
@@ -1945,7 +2064,13 @@ MeshBlending::Classification MeshBlending::GetSourceClassification(
 		}
 		CompleteOwnershipSignature(a_source, signature);
 		if (!sourceStateCacheAllowed) {
-			cacheHit = TryGetCachedClassification(signature, a_frame, false, classification);
+			cacheHit = TryGetCachedClassification(
+				signature,
+				a_frame,
+				false,
+				classification,
+				cachedSignature,
+				cachedReceiver);
 			if (cacheHit && a_collectDiagnostics) {
 				++diagnostics.fullSignatureCacheHits;
 			}
@@ -1959,8 +2084,9 @@ MeshBlending::Classification MeshBlending::GetSourceClassification(
 		if (a_collectDiagnostics) {
 			++diagnostics.cacheMisses;
 		}
-		classification = ClassifyOnCacheMiss(a_source, a_captureDiscovery);
-		StoreClassification(signature, a_frame, classification);
+		RE::BSGeometry* receiver = nullptr;
+		classification = ClassifyOnCacheMiss(a_source, a_captureDiscovery, receiver);
+		StoreClassification(signature, a_frame, classification, receiver);
 	}
 	if (a_collectDiagnostics) {
 		if (classification == Classification::kAllowedByRule) {
@@ -2095,9 +2221,14 @@ bool MeshBlending::IsSafeReceiver(const SourceState& a_source, RE::BSGeometry* a
 	return true;
 }
 
-bool MeshBlending::HasOpaqueSibling(const SourceState& a_source, bool& a_hitTraversalLimit)
+bool MeshBlending::HasOpaqueSibling(
+	const SourceState& a_source,
+	bool& a_hitTraversalLimit,
+	RE::BSGeometry*& a_receiver,
+	const RE::BSGeometry* a_requiredReceiver)
 {
 	a_hitTraversalLimit = false;
+	a_receiver = nullptr;
 	std::array<RE::NiAVObject*, kMaximumTraversalObjects> stack{};
 	std::size_t stackSize = 1u;
 	std::size_t visited = 0u;
@@ -2123,7 +2254,9 @@ bool MeshBlending::HasOpaqueSibling(const SourceState& a_source, bool& a_hitTrav
 		if (collectDiagnostics) {
 			++diagnostics.nodesVisited;
 		}
-		if (auto* geometry = object->AsGeometry(); geometry && IsSafeReceiver(a_source, geometry)) {
+		if (auto* geometry = object->AsGeometry();
+			geometry && (!a_requiredReceiver || geometry == a_requiredReceiver) && IsSafeReceiver(a_source, geometry)) {
+			a_receiver = geometry;
 			return true;
 		}
 		if (auto* node = object->AsNode()) {
@@ -2144,8 +2277,10 @@ bool MeshBlending::HasOpaqueSibling(const SourceState& a_source, bool& a_hitTrav
 
 MeshBlending::Classification MeshBlending::ClassifyOnCacheMiss(
 	const SourceState& a_source,
-	bool a_captureDiscovery)
+	bool a_captureDiscovery,
+	RE::BSGeometry*& a_receiver)
 {
+	a_receiver = nullptr;
 	if (a_source.root->HasAnimation()) {
 		return Classification::kRejected;
 	}
@@ -2187,7 +2322,7 @@ MeshBlending::Classification MeshBlending::ClassifyOnCacheMiss(
 		return Classification::kRejected;
 	}
 	bool hitTraversalLimit = false;
-	if (!HasOpaqueSibling(a_source, hitTraversalLimit)) {
+	if (!HasOpaqueSibling(a_source, hitTraversalLimit, a_receiver)) {
 		if (hitTraversalLimit && globals::state->IsDeveloperMode()) {
 			++diagnostics.traversalLimitRejects;
 		}

@@ -16,6 +16,16 @@ namespace
 	constexpr bool CoversVariantSelection()
 	{
 		using namespace ScreenSpaceShadowsCachePolicy;
+		if (SelectShaderLookupAction(true, false) !=
+				ShaderLookupAction::ReturnCached ||
+			SelectShaderLookupAction(true, true) !=
+				ShaderLookupAction::ReturnCached ||
+			SelectShaderLookupAction(false, false) !=
+				ShaderLookupAction::Compile ||
+			SelectShaderLookupAction(false, true) !=
+				ShaderLookupAction::ReturnFailure) {
+			return false;
+		}
 		if (ActiveVariantCount(false, 8) != 2 ||
 			ActiveVariantCount(false, 2) != 2 ||
 			ActiveVariantCount(true, 8) != 8 ||

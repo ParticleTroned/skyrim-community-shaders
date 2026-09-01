@@ -1964,15 +1964,40 @@ namespace VRVendorRelatchPolicy
 		return StartupNativeFallbackControlAction::Reject;
 	}
 
-	[[nodiscard]] constexpr bool CanResolveStartupNativeFallback(
-		StartupNativeFallbackControlAction a_action,
-		bool a_immutableRequestPublished) noexcept
+	struct StartupNativeFallbackPublication
 	{
-		return a_immutableRequestPublished &&
-		       (a_action ==
-					   StartupNativeFallbackControlAction::ResolveDisabled ||
-				   a_action ==
-					   StartupNativeFallbackControlAction::ResolveRetry);
+		StartupNativeFallbackControlAction action =
+			StartupNativeFallbackControlAction::PassThrough;
+		std::uint64_t requestID = 0;
+		std::uint64_t transitionEpoch = 0;
+		std::uint64_t authoritativeRequestID = 0;
+		std::uint64_t authoritativeTransitionEpoch = 0;
+		std::uint64_t latestRequestID = 0;
+		bool retryRevalidated = false;
+	};
+
+	// Resolution authority belongs to one exact immutable request. A retry must
+	// also remain admissible after any physical-recovery deferral.
+	[[nodiscard]] constexpr bool CanResolveStartupNativeFallback(
+		const StartupNativeFallbackPublication& a_publication) noexcept
+	{
+		const bool resolvingAction =
+			a_publication.action ==
+				StartupNativeFallbackControlAction::ResolveDisabled ||
+			a_publication.action ==
+				StartupNativeFallbackControlAction::ResolveRetry;
+		const bool retryAuthorized =
+			a_publication.action !=
+				StartupNativeFallbackControlAction::ResolveRetry ||
+			a_publication.retryRevalidated;
+		return resolvingAction && retryAuthorized &&
+		       a_publication.requestID != 0 &&
+		       a_publication.transitionEpoch != 0 &&
+		       a_publication.authoritativeRequestID ==
+		           a_publication.requestID &&
+		       a_publication.authoritativeTransitionEpoch ==
+		           a_publication.transitionEpoch &&
+		       a_publication.latestRequestID == a_publication.requestID;
 	}
 
 	struct PostLoadRecoveryTransitionBinding

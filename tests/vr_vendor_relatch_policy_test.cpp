@@ -2026,24 +2026,45 @@ namespace
 			return false;
 		}
 
-		return !CanResolveStartupNativeFallback(
-				   StartupNativeFallbackControlAction::PassThrough,
-				   true) &&
-		       !CanResolveStartupNativeFallback(
-				   StartupNativeFallbackControlAction::Reject,
-				   true) &&
-		       !CanResolveStartupNativeFallback(
-				   StartupNativeFallbackControlAction::ResolveDisabled,
-				   false) &&
-		       CanResolveStartupNativeFallback(
-				   StartupNativeFallbackControlAction::ResolveDisabled,
-				   true) &&
-		       !CanResolveStartupNativeFallback(
-				   StartupNativeFallbackControlAction::ResolveRetry,
-				   false) &&
-		       CanResolveStartupNativeFallback(
-				   StartupNativeFallbackControlAction::ResolveRetry,
-				   true);
+		StartupNativeFallbackPublication publication{
+			.action = StartupNativeFallbackControlAction::ResolveDisabled,
+			.requestID = 17,
+			.transitionEpoch = 23,
+			.authoritativeRequestID = 17,
+			.authoritativeTransitionEpoch = 23,
+			.latestRequestID = 17,
+		};
+		if (!CanResolveStartupNativeFallback(publication))
+			return false;
+		publication.requestID = 0;
+		if (CanResolveStartupNativeFallback(publication))
+			return false;
+		publication.requestID = 17;
+		publication.transitionEpoch = 0;
+		if (CanResolveStartupNativeFallback(publication))
+			return false;
+		publication.transitionEpoch = 23;
+		publication.action = StartupNativeFallbackControlAction::PassThrough;
+		if (CanResolveStartupNativeFallback(publication))
+			return false;
+		publication.action = StartupNativeFallbackControlAction::ResolveDisabled;
+		publication.authoritativeRequestID = 18;
+		if (CanResolveStartupNativeFallback(publication))
+			return false;
+		publication.authoritativeRequestID = 17;
+		publication.authoritativeTransitionEpoch = 24;
+		if (CanResolveStartupNativeFallback(publication))
+			return false;
+		publication.authoritativeTransitionEpoch = 23;
+		publication.latestRequestID = 18;
+		if (CanResolveStartupNativeFallback(publication))
+			return false;
+		publication.latestRequestID = 17;
+		publication.action = StartupNativeFallbackControlAction::ResolveRetry;
+		if (CanResolveStartupNativeFallback(publication))
+			return false;
+		publication.retryRevalidated = true;
+		return CanResolveStartupNativeFallback(publication);
 	}
 
 	constexpr bool CoversBoundedPostMutationRecovery()

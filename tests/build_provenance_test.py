@@ -108,6 +108,28 @@ class BuildProvenanceTests(unittest.TestCase):
             self.assertIn("source status:", diagnostic)
             self.assertIn("?? runner-generated.txt", diagnostic)
 
+    def test_publishable_manifest_rejects_machine_paths_and_remotes(self) -> None:
+        private_values = (
+            {"environment": {"compilerPath": "compiler.exe"}},
+            {"sourceDisplay": {"remote": "origin"}},
+            {"value": "C:\\Users\\developer\\source.cpp"},
+            {"value": "ssh://credential@example.invalid/repository"},
+            {"value": "github_pat_example-secret-value"},
+        )
+        for value in private_values:
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    PROVENANCE.validate_publishable_manifest(value)
+
+    def test_publishable_manifest_accepts_reproducible_identity(self) -> None:
+        PROVENANCE.validate_publishable_manifest(
+            {
+                "sourceDisplay": {"describe": "adc58f7-dirty"},
+                "toolchain": {"compilerSha256": "a" * 64},
+                "artifact": {"fileName": "CommunityShaders.dll"},
+            }
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

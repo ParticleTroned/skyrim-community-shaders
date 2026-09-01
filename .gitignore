@@ -1,4 +1,6 @@
 build/
+**/local-artifacts/
+**/private-runtime/
 bin/
 dist/
 /vcpkg/

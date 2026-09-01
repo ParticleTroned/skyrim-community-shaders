@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 from typing import Any, Iterable
@@ -31,6 +32,13 @@ DEFAULT_SHADER_CONTRACT_FILES = [
     "src/Utils/ContentHash.h",
     "src/Utils/ShaderCacheManifest.h",
 ]
+PRIVATE_MANIFEST_KEYS = frozenset({"compilerPath", "toolchainFile", "remote"})
+PRIVATE_MANIFEST_VALUE_PATTERNS = (
+    re.compile(r"[A-Za-z]:[\\/]"),
+    re.compile(r"^\\\\"),
+    re.compile(r"(?:https?|ssh)://[^\s]+@", re.IGNORECASE),
+    re.compile(r"(?:github_pat_|ghp_|glpat-)[A-Za-z0-9_-]{8,}", re.IGNORECASE),
+)
 
 
 def canonical_bytes(value: Any) -> bytes:
@@ -271,6 +279,24 @@ def write_if_changed(path: Path, content: str) -> None:
     path.write_bytes(encoded)
 
 
+def validate_publishable_manifest(value: Any) -> None:
+    """Reject host paths, remotes, and credential-shaped values recursively."""
+    if isinstance(value, dict):
+        private_keys = PRIVATE_MANIFEST_KEYS.intersection(value)
+        if private_keys:
+            raise ValueError("build-provenance manifest contains a private key")
+        for child in value.values():
+            validate_publishable_manifest(child)
+        return
+    if isinstance(value, list):
+        for child in value:
+            validate_publishable_manifest(child)
+        return
+    if isinstance(value, str):
+        if any(pattern.search(value) for pattern in PRIVATE_MANIFEST_VALUE_PATTERNS):
+            raise ValueError("build-provenance manifest contains a private value")
+
+
 def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     source_dir = args.source_dir.resolve()
     source_dirty, source_dirty_digest = working_tree_state(source_dir)
@@ -285,7 +311,6 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
 
     source_commit = git(source_dir, "rev-parse", "HEAD")
     source_describe = git(source_dir, "describe", "--tags", "--always", "--dirty")
-    remote = git(source_dir, "remote", "get-url", "origin", check=False) or None
     build_options = parse_key_values(args.build_option)
     shader_contract_files = args.shader_contract_file or DEFAULT_SHADER_CONTRACT_FILES
     shader_contract = shader_contract_identity(source_dir, shader_contract_files, args.runtime)
@@ -329,7 +354,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         },
     }
     build_id = sha256_bytes(canonical_bytes(identity))
-    return {
+    manifest = {
         "schema": SCHEMA,
         "schemaVersion": SCHEMA_VERSION,
         "buildIdAlgorithm": BUILD_ID_ALGORITHM,
@@ -337,11 +362,6 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         "identity": identity,
         "sourceDisplay": {
             "describe": source_describe,
-            "remote": remote,
-        },
-        "environment": {
-            "compilerPath": args.compiler_path or None,
-            "toolchainFile": str(toolchain_file) if toolchain_file else None,
         },
         "artifact": {
             "fileName": args.artifact_name,
@@ -349,9 +369,12 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             "sizeBytes": None,
         },
     }
+    validate_publishable_manifest(manifest)
+    return manifest
 
 
 def render_header(manifest: dict[str, Any]) -> str:
+    validate_publishable_manifest(manifest)
     identity = manifest["identity"]
     source = identity["source"]
     shader_cache = identity["shaderCache"]
@@ -385,6 +408,7 @@ def generate(args: argparse.Namespace) -> int:
 
 
 def validate_manifest_identity(manifest: dict[str, Any]) -> None:
+    validate_publishable_manifest(manifest)
     if manifest.get("schema") != SCHEMA or manifest.get("schemaVersion") != SCHEMA_VERSION:
         raise ValueError("unsupported build-provenance manifest schema")
     expected = sha256_bytes(canonical_bytes(manifest["identity"]))

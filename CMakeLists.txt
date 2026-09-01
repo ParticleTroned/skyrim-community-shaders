@@ -13,6 +13,7 @@ endif()
 set(_CSX_PROJECT_VERSION "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.0")
 set(CSX_RUNTIME "SE")
 set(CSX_PLUGIN_VERSION "CSX ${CSX_VERSION}")
+set(CSX_PRIVATE_AIO_LABEL "Vincent-se")
 
 option(
     CSX_DEVBENCH_BRIDGE
@@ -80,6 +81,26 @@ option(
     ON
 )
 option(BUILD_HOST_TESTS "Build deterministic host-side C++ unit tests" ON)
+option(
+    CSX_ENABLE_PRIVATE_NVIDIA_RUNTIME
+    "Enable hash-pinned, local-only DLSS Neural Rendering runtime staging"
+    OFF
+)
+set(CSX_PRIVATE_STREAMLINE_213_DIR
+    ""
+    CACHE PATH
+    "Local directory containing the six pinned Streamline 2.13 DLSS files"
+)
+set(CSX_PRIVATE_DLSSNR_DLL
+    ""
+    CACHE FILEPATH
+    "Local path to the pinned nvngx_dlssnr.dll"
+)
+set(CSX_PRIVATE_SHADER_CACHE_ROOT
+    ""
+    CACHE PATH
+    "Optional shared SE ShaderCache root used to generate a private FOMOD AIO"
+)
 option(
     CSX_REQUIRE_CLEAN_PROVENANCE
     "Reject DLL builds from dirty sources or mismatched/dirty submodules"
@@ -183,7 +204,9 @@ add_custom_target(
         "ENABLE_SKYRIM_SE=${ENABLE_SKYRIM_SE}" --build-option
         "ENABLE_SKYRIM_VR=${ENABLE_SKYRIM_VR}" --build-option
         "CSX_DEVBENCH_BRIDGE=${CSX_DEVBENCH_BRIDGE}" --build-option
-        "MSVC_RUNTIME=${CMAKE_MSVC_RUNTIME_LIBRARY}"
+        "CSX_ENABLE_PRIVATE_NVIDIA_RUNTIME=${CSX_ENABLE_PRIVATE_NVIDIA_RUNTIME}"
+        --build-option "CSX_PRIVATE_AIO_LABEL=${CSX_PRIVATE_AIO_LABEL}"
+        --build-option "MSVC_RUNTIME=${CMAKE_MSVC_RUNTIME_LIBRARY}"
         ${_CSX_PROVENANCE_CLEAN_ARG}
     VERBATIM
     COMMENT "Refreshing canonical CSX build provenance"
@@ -228,6 +251,7 @@ find_library(DETOURS_LIBRARY detours REQUIRED)
 include(FidelityFX-SDK)
 include(FidelityFX-Runtime)
 include(Streamline-Runtime)
+include(PrivateNvidiaRuntime)
 
 set(UPSCALING_RUNTIME_FILES ${FFX_RUNTIME_FILES} ${STREAMLINE_RUNTIME_FILES})
 
@@ -284,7 +308,33 @@ target_link_libraries(
         ${DETOURS_LIBRARY}
         windowscodecs
         bcrypt
+        crypt32
+        wintrust
 )
+
+if(MSVC)
+    target_compile_options(
+        ${PROJECT_NAME}
+        PRIVATE
+            "/experimental:deterministic"
+            "/pathmap:${CMAKE_SOURCE_DIR}=."
+            "/pathmap:${CMAKE_BINARY_DIR}=.build"
+    )
+    target_link_options(${PROJECT_NAME} PRIVATE "/PDBALTPATH:%_PDB%")
+
+    if(CSX_ENABLE_PRIVATE_NVIDIA_RUNTIME AND TARGET CommonLibSSE)
+        get_target_property(_csx_commonlib_imported CommonLibSSE IMPORTED)
+        if(NOT _csx_commonlib_imported)
+            target_compile_options(
+                CommonLibSSE
+                PRIVATE
+                    "/experimental:deterministic"
+                    "/pathmap:${CMAKE_SOURCE_DIR}=."
+                    "/pathmap:${CMAKE_BINARY_DIR}=.build"
+            )
+        endif()
+    endif()
+endif()
 
 # https://gitlab.kitware.com/cmake/cmake/-/issues/24922#note_1371990
 if(MSVC_VERSION GREATER_EQUAL 1936 AND MSVC_IDE) # 17.6+
@@ -1564,6 +1614,9 @@ add_custom_command(
     COMMENT "Installing to AIO folder"
 )
 add_custom_target("AIO" DEPENDS ${AIO_INSTALL_STAMP})
+if(CSX_ENABLE_PRIVATE_NVIDIA_RUNTIME)
+    csx_add_private_aio_target()
+endif()
 
 # Manual AIO package target
 if(TARGET AIO_ZIP_PACKAGE)
@@ -1608,6 +1661,9 @@ if(BUILD_SHADER_TESTS)
     # Make all package targets depend on shader tests passing
     add_dependencies("Package-Core" run_shader_tests)
     add_dependencies("Package-AIO-Manual" run_shader_tests)
+    if(CSX_PRIVATE_AIO_TARGET AND TARGET "${CSX_PRIVATE_AIO_TARGET}")
+        add_dependencies("${CSX_PRIVATE_AIO_TARGET}" run_shader_tests)
+    endif()
     foreach(FEATURE_PATH ${FEATURE_PATHS})
         get_filename_component(FEATURE ${FEATURE_PATH} NAME)
         string(REPLACE " " "" FEATURE ${FEATURE})

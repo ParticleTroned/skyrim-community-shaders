@@ -9,6 +9,7 @@ add_executable(
     main.cpp
     frame_generation_eligibility_policy_tests.cpp
     light_limit_fix_shadow_policy_tests.cpp
+    neural_rendering_pipeline_policy_tests.cpp
     performance_tuning_measurement_tests.cpp
     performance_tuning_json_tests.cpp
     shader_compilation_scheduling_policy_tests.cpp

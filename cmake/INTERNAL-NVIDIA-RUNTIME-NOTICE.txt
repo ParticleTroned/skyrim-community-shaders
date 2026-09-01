@@ -1,0 +1,18 @@
+INTERNAL DLSS NEURAL RENDERING TEST BUILD
+DO NOT REDISTRIBUTE OR PUBLISH THIS BUILD.
+
+This archive contains user-supplied NVIDIA runtime binaries. They are not
+covered by the Community Shaders license, and this repository grants no right
+to redistribute them.
+
+The files are admitted only when their filename, x64 PE architecture, embedded
+file version, and SHA-256 all match cmake/PrivateNvidiaRuntime.json. The patched
+nvngx_dlssnr.dll has an invalidated embedded signature; its exact hash is the
+admission boundary. Hash pinning does not certify a binary as malware-free.
+
+NVIDIA frame generation remains isolated in Shaders/Upscaling/StreamlineDX12
+and comes from the verified official Streamline 2.12 archive. The private 2.13
+DLSS and Neural Rendering files are isolated in Shaders/Upscaling/Streamline.
+
+This is a local development artifact. Do not upload it to a public release,
+repository, cloud service, or shared build cache.

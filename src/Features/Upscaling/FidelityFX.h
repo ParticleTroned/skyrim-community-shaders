@@ -253,6 +253,7 @@ private:
 	uint64_t pendingRuntimeTeardownD3D11FenceValue = 0;
 	uint64_t pendingRuntimeTeardownD3D12FenceValue = 0;
 	uint64_t runtimeFenceValue = 1;
+	bool runtimeUpscalerIdleProofValid = false;
 
 	static constexpr uint32_t kRuntimeCommandContextCount = 8;
 	struct RuntimeCommandContext

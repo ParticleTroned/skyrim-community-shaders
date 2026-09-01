@@ -8,6 +8,12 @@ namespace FSRRuntimeLifecyclePolicy
 		PollPendingFence
 	};
 
+	enum class IdleProofAction
+	{
+		ReuseProof,
+		PollForIdle
+	};
+
 	struct RetirementState
 	{
 		bool providerContext = false;
@@ -52,6 +58,17 @@ namespace FSRRuntimeLifecyclePolicy
 		return a_teardownFencePending ?
 		           DispatchFenceAction::PollPendingFence :
 		           DispatchFenceAction::Proceed;
+	}
+
+	[[nodiscard]] constexpr IdleProofAction ResolveIdleProofAction(
+		bool a_idleProofValid,
+		bool a_teardownFencePending) noexcept
+	{
+		// A completed proof remains valid until runtime-provider GPU work is
+		// submitted. Never reuse it while either side of the interop fence is pending.
+		return a_idleProofValid && !a_teardownFencePending ?
+		           IdleProofAction::ReuseProof :
+		           IdleProofAction::PollForIdle;
 	}
 
 	[[nodiscard]] constexpr bool HasStructurallyCompatibleRuntimeResources(

@@ -18,6 +18,12 @@ namespace
 	static_assert(
 		ResolveDispatchFenceAction(true) ==
 		DispatchFenceAction::PollPendingFence);
+	static_assert(
+		ResolveIdleProofAction(true, false) == IdleProofAction::ReuseProof);
+	static_assert(
+		ResolveIdleProofAction(false, false) == IdleProofAction::PollForIdle);
+	static_assert(
+		ResolveIdleProofAction(true, true) == IdleProofAction::PollForIdle);
 
 	constexpr bool CoversRetirementAdmission()
 	{

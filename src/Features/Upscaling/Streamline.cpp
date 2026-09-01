@@ -1393,9 +1393,6 @@ bool Streamline::ConfigureDLSSG(
 
 	sl::DLSSGOptions options{};
 	options.mode = a_enabled ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
-	options.flags = sl::DLSSGFlags::eRetainResourcesWhenOff |
-	                sl::DLSSGFlags::eEnableFullscreenMenuDetection;
-	options.enableUserInterfaceRecomposition = sl::Boolean::eTrue;
 	options.numFramesToGenerate =
 		dlssgState.maximumFramesToGenerate == 0 ?
 			1u :
@@ -1403,23 +1400,6 @@ bool Streamline::ConfigureDLSSG(
 				globals::features::upscaling.settings.dlssgFramesToGenerate,
 				1u,
 				dlssgState.maximumFramesToGenerate);
-	options.mvecDepthWidth = a_renderWidth;
-	options.mvecDepthHeight = a_renderHeight;
-	options.colorWidth = a_width;
-	options.colorHeight = a_height;
-	options.colorBufferFormat = static_cast<uint32_t>(swapChain.swapChainDesc.Format);
-	options.hudLessBufferFormat = options.colorBufferFormat;
-	options.uiBufferFormat = static_cast<uint32_t>(DXGI_FORMAT_R8G8B8A8_UNORM);
-	options.onErrorCallback = OnDLSSGAPIError;
-	if (swapChain.motionVectorBufferShared12 &&
-		swapChain.motionVectorBufferShared12->resource) {
-		options.mvecBufferFormat = static_cast<uint32_t>(
-			swapChain.motionVectorBufferShared12->resource->GetDesc().Format);
-	}
-	if (swapChain.depthBufferShared12 && swapChain.depthBufferShared12->resource) {
-		options.depthBufferFormat = static_cast<uint32_t>(
-			swapChain.depthBufferShared12->resource->GetDesc().Format);
-	}
 
 	const sl::Result result = slDLSSGSetOptions(viewport, options);
 	if (result != sl::Result::eOk) {

@@ -122,9 +122,9 @@ namespace
 					discontinuityEpoch,
 					sampleDurationMs,
 					framesPerSample);
-			REQUIRE(
+			REQUIRE((
 				result == AddSampleResult::Added ||
-				result == AddSampleResult::Complete);
+				result == AddSampleResult::Complete));
 		}
 	}
 }

@@ -87,6 +87,13 @@ auto MakeMetricColumn(const auto& theme, auto valueGetter, auto colorGetter, aut
 }
 
 // --- Helper Functions ---
+static bool ShouldShowFrameGenerationTiming()
+{
+	const auto& upscaling = globals::features::upscaling;
+	return upscaling.IsFrameGenerationConfigured() &&
+	       upscaling.IsFrameGenerationDx12PathActive();
+}
+
 /**
   * @brief Calculates summary data (Other frame time, percentages, cost per call) from measured sum
   * @param smoothedFrameTime The total smoothed frame time
@@ -161,14 +168,15 @@ void PerformanceOverlay::DrawSettings()
 		ImGui::Checkbox(T(TKEY("show_vram"), "Show VRAM Usage"), &this->settings.ShowVRAM);
 		ImGui::Checkbox(T(TKEY("show_cs_passes"), "Show CS Render Passes"), &this->settings.ShowCSPasses);
 
-		bool isFrameGenerationActive = globals::features::upscaling.IsFrameGenerationActive();
-		if (this->settings.ShowFPS && isFrameGenerationActive) {
+		const bool showFrameGenerationTiming =
+			ShouldShowFrameGenerationTiming();
+		if (this->settings.ShowFPS && showFrameGenerationTiming) {
 			ImGui::Checkbox(T(TKEY("show_pre_fg_graph"), "Show Pre-FG Frametime Graph"), &this->settings.ShowPreFGFrameTimeGraph);
 
 			ImGui::Checkbox(T(TKEY("show_post_fg_graph"), "Show Post-FG Frametime Graph"), &this->settings.ShowPostFGFrameTimeGraph);
 			if (ImGui::IsItemHovered()) {
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("%s", T(TKEY("post_fg_graph_tooltip"), "Output FPS is measured from final DXGI presentation counts and QPC time. Graph points are averages over each observed presentation interval; no generated frames are inferred."));
+					ImGui::Text("%s", T(TKEY("post_fg_graph_tooltip"), "AMD FSR Frame Generation uses calculated timing data (2x Pre-FG).\nNVIDIA DLSS Frame Generation uses the driver's reported flip count."));
 				}
 			}
 		} else if (this->settings.ShowFPS) {
@@ -246,7 +254,8 @@ void PerformanceOverlay::RestoreDefaultSettings()
 	this->state.postFGFrameTimeHistory.Resize(this->settings.FrameHistorySize);
 	this->state.smoothFps = 0.0f;
 	this->state.smoothFrameTimeMs = 0.0f;
-	this->state.ResetOutputPresentationTiming();
+	this->state.postFGSmoothFps = 0.0f;
+	this->state.postFGSmoothFrameTimeMs = 0.0f;
 	this->state.minFrameTime = 1000.0f;
 	this->state.maxFrameTime = 0.0f;
 	this->state.smoothedMinFrameTime = 0.0f;
@@ -335,7 +344,7 @@ void PerformanceOverlay::DrawOverlay()
 
 	// Calculate the minimum width needed by the enabled content.
 	bool hasGraphs = this->settings.ShowPreFGFrameTimeGraph ||
-	                 (this->settings.ShowPostFGFrameTimeGraph && this->state.isFrameGenerationActive);
+	                 (this->settings.ShowPostFGFrameTimeGraph && this->state.showFrameGenerationTiming);
 	float minWidth = 0.0f;
 	const bool hasWideContent = hasGraphs || this->settings.ShowDrawCalls || this->settings.ShowCSPasses;
 	if (hasWideContent) {
@@ -344,7 +353,7 @@ void PerformanceOverlay::DrawOverlay()
 
 	if (this->settings.ShowFPS) {
 		std::string fpsText = std::format("{:.1f} ({:.2f} ms)", this->state.smoothFps, this->state.smoothFrameTimeMs);
-		if (this->state.isFrameGenerationActive) {
+		if (this->state.showFrameGenerationTiming) {
 			fpsText = std::format(
 				"{} {:.1f} ({:.2f} ms)",
 				T(TKEY("raw_fps"), "Pre-FG Game FPS:"),
@@ -447,7 +456,7 @@ void PerformanceOverlay::DrawFPS()
 		ImGui::TableSetupColumn("##value");
 
 		ImGui::TableNextColumn();
-		ImGui::Text(this->state.isFrameGenerationActive ? T(TKEY("raw_fps"), "Pre-FG Game FPS:") : T(TKEY("fps"), "FPS:"));
+		ImGui::Text(this->state.showFrameGenerationTiming ? T(TKEY("raw_fps"), "Pre-FG Game FPS:") : T(TKEY("fps"), "FPS:"));
 		ImGui::TableNextColumn();
 
 		// Check if buffer is full for the avg
@@ -463,15 +472,11 @@ void PerformanceOverlay::DrawFPS()
 			ImGui::Text("%.1f (%.2f ms)", this->state.smoothFps, this->state.smoothFrameTimeMs);
 		}
 
-		if (this->state.isFrameGenerationActive) {
+		if (this->state.showFrameGenerationTiming) {
 			ImGui::TableNextColumn();
 			ImGui::Text(T(TKEY("post_fg_fps"), "Output FPS:"));
 			ImGui::TableNextColumn();
-			if (this->state.hasOutputPresentationTiming) {
-				ImGui::Text("%.1f (%.2f ms)", this->state.postFGSmoothFps, this->state.postFGSmoothFrameTimeMs);
-			} else {
-				ImGui::TextDisabled("--");
-			}
+			ImGui::Text("%.1f (%.2f ms)", this->state.postFGSmoothFps, this->state.postFGSmoothFrameTimeMs);
 		}
 
 		ImGui::EndTable();
@@ -483,7 +488,7 @@ void PerformanceOverlay::DrawFPS()
 		char overlay_text[128];
 		snprintf(overlay_text, IM_ARRAYSIZE(overlay_text),
 			"%s%.2f ms (%.1f FPS)",
-			this->state.isFrameGenerationActive ? "Pre-FG: " : "",
+			this->state.showFrameGenerationTiming ? "Pre-FG: " : "",
 			this->state.smoothFrameTimeMs, this->state.smoothFps);
 
 		// Set graph colors
@@ -517,15 +522,17 @@ void PerformanceOverlay::DrawFPS()
 	}
 
 	// Show Post-FG frametime graph if enabled
-	if (this->settings.ShowPostFGFrameTimeGraph && this->state.isFrameGenerationActive) {
-		if (!this->state.hasOutputPresentationTiming) {
-			Util::Text::Warning("%s", T(TKEY("post_fg_unavailable"), "Output timing unavailable"));
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("%s", T(TKEY("post_fg_graph_tooltip"), "Output FPS is measured from final DXGI presentation counts and QPC time. Graph points are averages over each observed presentation interval; no generated frames are inferred."));
-			}
+	if (this->settings.ShowPostFGFrameTimeGraph && this->state.showFrameGenerationTiming) {
+		// Per-frame timing availability must not resize the overlay.
+		if (globals::features::upscaling.UsesDLSSGFrameGeneration()) {
+			Util::Text::Info("%s", T(TKEY("post_fg_derived"), "Post-FG: Derived from reported flip count"));
 		} else {
-			this->DrawPostFGFrameTimeGraph();
+			Util::Text::Warning("%s", T(TKEY("post_fg_calculated"), "Post-FG: Calculated timing (2x Pre-FG)"));
 		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("fsr_dlss_timing_tooltip"), "AMD FSR Frame Generation timing is calculated assuming 2x Pre-FG.\nNVIDIA DLSS Frame Generation timing is derived from the driver's reported flip count per real frame."));
+		}
+		this->DrawPostFGFrameTimeGraph();
 	}
 }
 
@@ -1963,10 +1970,9 @@ void PerformanceOverlay::UpdateSummaryTestData(float smoothedFrameTime, float ot
 
 void PerformanceOverlay::UpdateGraphValues()
 {
-	// Check if Frame Generation is active
-	state.isFrameGenerationActive = globals::features::upscaling.IsFrameGenerationActive();
-	const auto outputTiming =
-		globals::features::upscaling.GetOutputPresentationTiming();
+	// Keep the configured method visible while the provider transitions so the
+	// overlay layout remains stable.
+	state.showFrameGenerationTiming = ShouldShowFrameGenerationTiming();
 
 	// Sync frame history buffer size with user settings
 	settings.FrameHistorySize = std::clamp(
@@ -2041,39 +2047,22 @@ void PerformanceOverlay::UpdateGraphValues()
 	state.smoothedMinFrameTime = state.smoothedMinFrameTime + Settings::kSmoothingFactor * (graphMin - state.smoothedMinFrameTime);
 	state.smoothedMaxFrameTime = state.smoothedMaxFrameTime + Settings::kSmoothingFactor * (graphMax - state.smoothedMaxFrameTime);
 
-	if (outputTiming.discontinuityEpoch !=
-		state.outputPresentationDiscontinuityEpoch) {
-		state.ResetOutputPresentationTiming(
-			outputTiming.discontinuityEpoch);
-	}
-	const bool hadOutputPresentationTiming =
-		state.hasOutputPresentationTiming;
-	if (state.isFrameGenerationActive && outputTiming.valid) {
-		state.hasOutputPresentationTiming = true;
-		if (outputTiming.sampleId !=
-			state.outputPresentationSampleId) {
-			state.outputPresentationSampleId = outputTiming.sampleId;
-			state.postFGFrameTimeMs =
-				static_cast<float>(outputTiming.averageFrameTimeMs);
-			state.postFGFps = static_cast<float>(outputTiming.fps);
-			state.outputPresentationAccumulatedDurationMs +=
-				outputTiming.sampledDurationMs;
-			state.outputPresentationAccumulatedFrameCount +=
-				outputTiming.presentedFrameCount;
-			if (!hadOutputPresentationTiming) {
-				state.postFGSmoothFps = state.postFGFps;
-				state.postFGSmoothFrameTimeMs =
-					state.postFGFrameTimeMs;
-			}
-			state.postFGFrameTimeHistory.Push(
-				state.postFGFrameTimeMs);
+	if (state.showFrameGenerationTiming) {
+		auto& upscaling = globals::features::upscaling;
+		const float framesPresented = upscaling.UsesDLSSGFrameGeneration() ?
+		                                  static_cast<float>(std::max(
+											  1u,
+											  upscaling.streamlineDX12.dlssgState.framesActuallyPresented)) :
+		                                  2.0f;
+		state.postFGFrameTimeMs = state.frameTimeMs / framesPresented;
+		state.postFGFps = state.fps * framesPresented;
+
+		if (state.updateTimer <= 0.0f) {
+			state.postFGSmoothFps = state.postFGFps;
+			state.postFGSmoothFrameTimeMs = state.postFGFrameTimeMs;
 		}
-	} else {
-		if (state.hasOutputPresentationTiming ||
-			state.outputPresentationSampleId != 0) {
-			state.ResetOutputPresentationTiming(
-				outputTiming.discontinuityEpoch);
-		}
+
+		state.postFGFrameTimeHistory.Push(state.postFGFrameTimeMs);
 	}
 
 	// Update smooth values with user-specified interval
@@ -2081,18 +2070,6 @@ void PerformanceOverlay::UpdateGraphValues()
 	if (state.updateTimer >= settings.UpdateInterval) {
 		state.smoothFps = state.fps;  // Sampling white noise won't give you smoothed noise. This is useless.
 		state.smoothFrameTimeMs = state.frameTimeMs;
-		if (state.hasOutputPresentationTiming &&
-			state.outputPresentationAccumulatedDurationMs > 0.0 &&
-			state.outputPresentationAccumulatedFrameCount > 0) {
-			state.postFGSmoothFrameTimeMs = static_cast<float>(
-				state.outputPresentationAccumulatedDurationMs /
-				static_cast<double>(
-					state.outputPresentationAccumulatedFrameCount));
-			state.postFGSmoothFps =
-				1000.0f / state.postFGSmoothFrameTimeMs;
-			state.outputPresentationAccumulatedDurationMs = 0.0;
-			state.outputPresentationAccumulatedFrameCount = 0;
-		}
 		state.updateTimer = 0.0f;
 	}
 }

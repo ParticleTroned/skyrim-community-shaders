@@ -1,6 +1,7 @@
 #include "BuildProvenance.h"
 #include "CSEditor/EditorWindow.h"
 #include "Deferred.h"
+#include "Diagnostics/FrameGenerationDevBenchBridge.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
 #include "Features/Upscaling.h"
@@ -95,8 +96,14 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Query(const SKSE::QueryInterface*, 
 void MessageHandler(SKSE::MessagingInterface::Message* message)
 {
 	switch (message->type) {
+	case SKSE::MessagingInterface::kPostLoad:
+		{
+			CSX::Diagnostics::FrameGenerationDevBenchBridge::Install();
+			break;
+		}
 	case SKSE::MessagingInterface::kPostPostLoad:
 		{
+			CSX::Diagnostics::FrameGenerationDevBenchBridge::Install();
 			if (errors.empty()) {
 				Deferred::Hooks::Install();
 				Hooks::Install();
@@ -122,6 +129,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 		}
 	case SKSE::MessagingInterface::kDataLoaded:
 		{
+			CSX::Diagnostics::FrameGenerationDevBenchBridge::Install();
 			for (auto it = errors.begin(); it != errors.end(); ++it) {
 				auto& errorMessage = *it;
 				RE::DebugMessageBox(std::format("Community Shaders\n{}, will disable all hooks and features", errorMessage).c_str());

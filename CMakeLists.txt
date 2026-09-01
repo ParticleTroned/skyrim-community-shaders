@@ -14,6 +14,15 @@ set(_CSX_PROJECT_VERSION "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.0")
 set(CSX_RUNTIME "SE")
 set(CSX_PLUGIN_VERSION "CSX ${CSX_VERSION}")
 
+option(
+    CSX_DEVBENCH_BRIDGE
+    "Expose CSX frame-generation diagnostics through the DevBench host."
+    OFF
+)
+if(CSX_DEVBENCH_BRIDGE)
+    list(APPEND VCPKG_MANIFEST_FEATURES "devbench-bridge")
+endif()
+
 project(
     # gersemi: ignore
     CommunityShaders
@@ -92,6 +101,7 @@ message("\tAIO Zip to dist: ${AIO_ZIP_TO_DIST}")
 message("\tTracy profiler: ${TRACY_SUPPORT}")
 message("\tShader tests: ${BUILD_SHADER_TESTS}")
 message("\tHost C++ tests: ${BUILD_HOST_TESTS}")
+message("\tDevBench diagnostics: ${CSX_DEVBENCH_BRIDGE}")
 message(
     "\tExclude hidden AIO feature packages: ${AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES}"
 )
@@ -121,6 +131,15 @@ message("\tCommunity Shaders Expanded version: CSX ${CSX_VERSION}")
 # # Add CMake features
 # #######################################################################################################################
 include(XSEPlugin)
+
+if(CSX_DEVBENCH_BRIDGE)
+    find_package(devbench-api CONFIG REQUIRED)
+    target_link_libraries(${PROJECT_NAME} PRIVATE DevBench::API)
+    target_compile_definitions(
+        ${PROJECT_NAME}
+        PRIVATE DEVBENCH_BRIDGE_ENABLED=1
+    )
+endif()
 
 # Refresh provenance immediately before every DLL compilation. This is an
 # always-run target by design: configure-time git metadata becomes stale after
@@ -163,6 +182,7 @@ add_custom_target(
         --build-option "ENABLE_SKYRIM_AE=${ENABLE_SKYRIM_AE}" --build-option
         "ENABLE_SKYRIM_SE=${ENABLE_SKYRIM_SE}" --build-option
         "ENABLE_SKYRIM_VR=${ENABLE_SKYRIM_VR}" --build-option
+        "CSX_DEVBENCH_BRIDGE=${CSX_DEVBENCH_BRIDGE}" --build-option
         "MSVC_RUNTIME=${CMAKE_MSVC_RUNTIME_LIBRARY}"
         ${_CSX_PROVENANCE_CLEAN_ARG}
     VERBATIM

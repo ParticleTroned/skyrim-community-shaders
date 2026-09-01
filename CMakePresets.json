@@ -81,6 +81,14 @@
                 "AIO_ZIP_TO_DIST": "OFF",
                 "ZIP_TO_DIST": "OFF"
             }
+        },
+        {
+            "name": "DevBench-AIO-Release",
+            "description": "Release AIO with the CSX DevBench frame-generation diagnostic bridge.",
+            "inherits": "AIO-Release",
+            "cacheVariables": {
+                "CSX_DEVBENCH_BRIDGE": "ON"
+            }
         }
     ],
     "buildPresets": [
@@ -123,6 +131,13 @@
             "name": "AIO-Release",
             "description": "Release build for an AIO folder that excludes hidden packaged features",
             "configurePreset": "AIO-Release",
+            "configuration": "Release",
+            "targets": ["CommunityShaders", "AIO"]
+        },
+        {
+            "name": "DevBench-AIO-Release",
+            "description": "Release AIO with frame-generation diagnostics for DevBench",
+            "configurePreset": "DevBench-AIO-Release",
             "configuration": "Release",
             "targets": ["CommunityShaders", "AIO"]
         }

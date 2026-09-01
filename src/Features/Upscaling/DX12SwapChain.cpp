@@ -1353,6 +1353,8 @@ HRESULT DX12SwapChain::PresentInternal(
 			!usesDLSSG || providerBoundaryCompleted;
 		// The callback is asynchronous and cannot be attributed to this Present.
 		// Invalidate telemetry without rewriting this call's result or acceptance.
+		if (finalized.accepted)
+			RecordAcceptedGamePresent();
 		if (asynchronousOutputStatusObserved)
 			ResetOutputPresentationTiming();
 		else if (finalized.accepted)
@@ -1496,9 +1498,12 @@ HRESULT DX12SwapChain::PresentInternal(
 			endCopyBarriers);
 	}
 
+	// FSR owns a separate UI surface. DLSS-G follows Streamline's working
+	// integration contract: the HUD remains baked into the tagged color input.
+	const bool backendUIReady = usesDLSSG || frame.uiSeparated;
 	const bool useFrameGenerationInputs =
 		frame.valid && frame.requested && frame.inputsReady &&
-		frame.uiSeparated && !shutdownRequestedAtEntry &&
+		backendUIReady && !shutdownRequestedAtEntry &&
 		!upscaling.IsBackendShutdownRequested();
 	bool dlssgConfigured = false;
 	HRESULT preparationFailure = S_OK;
@@ -1745,6 +1750,25 @@ DX12SwapChain::OutputPresentationTiming DX12SwapChain::GetOutputPresentationTimi
 	return result;
 }
 
+DX12SwapChain::PresentationTelemetry DX12SwapChain::GetPresentationTelemetry() const
+{
+	std::lock_guard lock(outputPresentationTimingMutex);
+	return {
+		.acceptedGamePresentCount = acceptedGamePresentCount,
+		.outputPresentedFrameCount = outputPresentedFrameCount,
+		.outputSampledDurationMs = outputSampledDurationMs,
+		.sampleId = outputPresentationTiming.sampleId,
+		.discontinuityEpoch = outputPresentationTiming.discontinuityEpoch,
+		.outputValid = outputPresentationTiming.valid,
+	};
+}
+
+void DX12SwapChain::RecordAcceptedGamePresent()
+{
+	std::lock_guard lock(outputPresentationTimingMutex);
+	++acceptedGamePresentCount;
+}
+
 void DX12SwapChain::UpdateOutputPresentationTiming()
 {
 	if (!nativeSwapChain || qpf.QuadPart <= 0) {
@@ -1805,6 +1829,8 @@ void DX12SwapChain::UpdateOutputPresentationTiming()
 	outputPresentationTiming.fps = 1000.0 / frameTimeMs;
 	outputPresentationTiming.sampledDurationMs = sampledDurationMs;
 	outputPresentationTiming.presentedFrameCount = presentedFrameCount;
+	outputPresentedFrameCount += presentedFrameCount;
+	outputSampledDurationMs += sampledDurationMs;
 	++outputPresentationTiming.sampleId;
 	outputPresentationTiming.valid = true;
 }
@@ -1832,6 +1858,8 @@ void DX12SwapChain::InvalidateOutputPresentationTimingLocked()
 	outputPresentationTiming.sampleId = sampleId;
 	outputPresentationTiming.discontinuityEpoch =
 		discontinuityEpoch;
+	outputPresentedFrameCount = 0;
+	outputSampledDurationMs = 0.0;
 }
 
 WrappedResource::WrappedResource(

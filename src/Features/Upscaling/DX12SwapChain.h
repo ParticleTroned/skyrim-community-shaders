@@ -138,6 +138,17 @@ public:
 		bool valid = false;
 	};
 
+	/** @brief Monotonic counters for bounded frame-generation measurements. */
+	struct PresentationTelemetry
+	{
+		uint64_t acceptedGamePresentCount = 0;
+		uint64_t outputPresentedFrameCount = 0;
+		double outputSampledDurationMs = 0.0;
+		uint64_t sampleId = 0;
+		uint64_t discontinuityEpoch = 0;
+		bool outputValid = false;
+	};
+
 	winrt::com_ptr<ID3D12Device> d3d12Device;
 	winrt::com_ptr<ID3D12Device> d3d12ProxyDevice;
 	winrt::com_ptr<ID3D12CommandQueue> commandQueue;
@@ -198,6 +209,8 @@ public:
 	 * unavailable. Callers must not infer a frame-generation multiplier.
 	 */
 	[[nodiscard]] OutputPresentationTiming GetOutputPresentationTiming() const;
+	/** @brief Returns thread-safe cumulative presentation counters. */
+	[[nodiscard]] PresentationTelemetry GetPresentationTelemetry() const;
 
 	void CreateD3D12Device(IDXGIAdapter* a_adapter);
 	void CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC swapChainDesc);
@@ -282,6 +295,7 @@ private:
 		winrt::com_ptr<ID3D12Resource> (&a_buffers)[kMaximumBackBufferCount]);
 	void ReleaseSwapChainBuffers();
 	void UpdateOutputPresentationTiming();
+	void RecordAcceptedGamePresent();
 	void ResetOutputPresentationTiming(bool force = false);
 	void InvalidateOutputPresentationTimingLocked();
 	void RecordResizeGeneration(const DXGI_SWAP_CHAIN_DESC1* a_desc = nullptr);
@@ -301,5 +315,8 @@ private:
 	mutable std::mutex outputPresentationTimingMutex;
 	DXGI_FRAME_STATISTICS previousOutputFrameStatistics{};
 	OutputPresentationTiming outputPresentationTiming{};
+	uint64_t acceptedGamePresentCount = 0;
+	uint64_t outputPresentedFrameCount = 0;
+	double outputSampledDurationMs = 0.0;
 	bool hasOutputFrameStatisticsBaseline = false;
 };

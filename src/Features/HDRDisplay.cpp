@@ -853,6 +853,8 @@ HDRDisplay::D3D12UIBufferMode HDRDisplay::GetD3D12UIBufferMode()
 		swapChain.uiBufferWrapped && swapChain.uiBufferWrapped->rtv;
 	const bool frameGenerationInputsReady =
 		globals::features::upscaling.AreFrameGenerationInputsReadyForCompositing();
+	const bool providerSupportsSeparatedUI =
+		!globals::features::upscaling.UsesDLSSGFrameGeneration();
 	const bool frameGenerationConversionReady =
 		!IsHDROutputActive() ||
 		(uiBufferReady && hdrShaderAvailable && hdrDataCB &&
@@ -862,7 +864,8 @@ HDRDisplay::D3D12UIBufferMode HDRDisplay::GetD3D12UIBufferMode()
 			GetUIBrightnessCS());
 
 	mode.separateForFrameGeneration =
-		uiBufferReady && frameGenerationInputsReady &&
+		providerSupportsSeparatedUI && uiBufferReady &&
+		frameGenerationInputsReady &&
 		frameGenerationConversionReady;
 	mode.useUIBuffer =
 		uiBufferReady && (hdrShaderAvailable || mode.separateForFrameGeneration);

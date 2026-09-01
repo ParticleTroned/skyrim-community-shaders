@@ -229,8 +229,7 @@ struct PerformanceOverlay : OverlayFeature
 		CircularBuffer<float> postFGFrameTimeHistory;
 
 		// State flags
-		bool isFrameGenerationActive = false;
-		bool hasOutputPresentationTiming = false;
+		bool showFrameGenerationTiming = false;
 
 		// Performance counters
 		int64_t frequency;
@@ -242,10 +241,6 @@ struct PerformanceOverlay : OverlayFeature
 		float fps = 0.0f;
 		float postFGFrameTimeMs = 0.0f;
 		float postFGFps = 0.0f;
-		uint64_t outputPresentationSampleId = 0;
-		uint64_t outputPresentationDiscontinuityEpoch = 0;
-		double outputPresentationAccumulatedDurationMs = 0.0;
-		uint64_t outputPresentationAccumulatedFrameCount = 0;
 
 		// Smoothed metrics
 		float smoothFps = 0.0f;
@@ -263,22 +258,6 @@ struct PerformanceOverlay : OverlayFeature
 		float maxFrameTime = 0.0f;
 		float smoothedMinFrameTime = 0.0f;
 		float smoothedMaxFrameTime = 50.0f;
-
-		void ResetOutputPresentationTiming(
-			uint64_t discontinuityEpoch = 0)
-		{
-			hasOutputPresentationTiming = false;
-			postFGFrameTimeMs = 0.0f;
-			postFGFps = 0.0f;
-			postFGSmoothFps = 0.0f;
-			postFGSmoothFrameTimeMs = 0.0f;
-			outputPresentationSampleId = 0;
-			outputPresentationDiscontinuityEpoch =
-				discontinuityEpoch;
-			outputPresentationAccumulatedDurationMs = 0.0;
-			outputPresentationAccumulatedFrameCount = 0;
-			postFGFrameTimeHistory.Clear();
-		}
 	};
 	State state;
 

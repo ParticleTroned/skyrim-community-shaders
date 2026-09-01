@@ -1233,8 +1233,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					uint64_t a_expectedGuardEpoch,
 					uint32_t a_expectedContractGeneration,
 					ID3D11Texture2D* a_expectedTexture) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 					const uint32_t diagnosticFrame =
 						globals::state ? globals::state->frameCount : 0u;
+#endif
 					if (a_expectedGuardEpoch == 0 ||
 						!a_expectedTexture ||
 						upscaling.GetVRNativeRestorePresentationGuardActiveEpoch() !=
@@ -1305,10 +1307,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 #endif
 						return;
 					}
-					const bool recorded = upscaling
-				                              .RecordVRNativeRestorePresentationObservationIfUnprotected(
-												  freshObservation,
-												  renderScalePresentationPacketPtr);
+					[[maybe_unused]] const bool recorded = upscaling
+				                                               .RecordVRNativeRestorePresentationObservationIfUnprotected(
+																   freshObservation,
+																   renderScalePresentationPacketPtr);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 					upscaling.RecordVRNativeRestoreCommitDiagnostic(
 						recorded ?

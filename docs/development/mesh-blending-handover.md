@@ -295,7 +295,7 @@ The UI names mode 2 **Automatic**, and it remains the product default. NIF selec
 }
 ```
 
-Asset policy is intentionally isolated in `Data/SKSE/Plugins/CommunityShaders/MeshBlendingRules.json` so recording never rewrites unrelated CS settings. It is loaded once independently of whether a Mesh Blending section exists in `SettingsUser.json`, rather than reread during live settings or performance swaps. Save/Clear re-read and validate the exact file bytes immediately before mutation. The staged atomic replacement proceeds only if those bytes are still current; otherwise it aborts, preserves captured observations for retry, and leaves the external edit untouched. Schema 4 separates author policy from generated observations:
+Asset policy is intentionally isolated in `Data/SKSE/Plugins/CommunityShaders/MeshBlendingRules.json` so recording never rewrites unrelated CS settings. It is loaded once independently of whether a Mesh Blending section exists in `SettingsUser.json`, rather than reread during live settings or performance swaps. Save/Clear perform a bounded best-effort comparison with the exact bytes read for the merge immediately before atomic replacement. A mismatch aborts and preserves captured observations for retry. Windows has no conditional path replacement that can exclude an uncooperative editor after that comparison, so authors must not edit the file while confirming Save/Clear. Schema 4 separates author policy from generated observations:
 
 ```json
 {
@@ -345,7 +345,7 @@ Asset policy is intentionally isolated in `Data/SKSE/Plugins/CommunityShaders/Me
 }
 ```
 
-`AllowList` and `DenyList` are manual policy. `DetectedAllowList` and `DiscoveryDiagnostics` are generated only by the recording workflow. `LandscapeAssignments` override automatic LTEX classification by portable form key, editor ID, or the currently rendered seasonal diffuse path; `SurfaceMaterials` classify a `BGSMaterialType` identity. If `BlendPairs` is absent, built-in soft/hard compatibility is used; an explicitly empty array disables all automatic LAND pairs. Pair endpoints must be classified materials, and a hard source over a soft receiver is rejected because it contradicts the fixed soft-over-hard hierarchy. Schema 1–3 files are accepted as sparse predecessors and are written as schema 4 only on an explicit Save/Clear. Unknown top-level extension fields survive canonical writes; reserved-array entries are canonicalized to the documented fields.
+`AllowList` and `DenyList` are manual policy. `DetectedAllowList` and `DiscoveryDiagnostics` are generated only by the recording workflow. `LandscapeAssignments` override automatic LTEX classification by portable form key, editor ID, or the currently rendered seasonal diffuse path; every entry must provide at least one selector. Leading and trailing ASCII spaces are ignored in those selector fields. `SurfaceMaterials` classify a `BGSMaterialType` identity. If `BlendPairs` is absent, built-in soft/hard compatibility is used; an explicitly empty array disables all automatic LAND pairs. Pair endpoints must be classified materials, and a hard source over a soft receiver is rejected because it contradicts the fixed soft-over-hard hierarchy. Schema 1–3 files are accepted as sparse predecessors and are written as schema 4 only on an explicit Save/Clear. Unknown top-level extension fields survive canonical writes; reserved-array entries are canonicalized to the documented fields.
 
 Save/Clear changes only generated observations and therefore preserves the live LAND registry. If an author edits LAND classification or pair policy while the game is running and then invokes Save/Clear, the changed policy is applied safely, but already loaded LAND entries fail open until their cell/material setup streams again.
 
@@ -367,7 +367,7 @@ Recording is not an installed-content inventory. It cannot see unvisited, unload
 
 Captured entries are candidates for visual review. The default Automatic mode previews NIF candidates while recording; Allow-list-only mode records without applying unsaved candidates. Saved exact candidates avoid repeating the automatic sibling traversal for that model/node pair, while source render-state, static-owner, pass, animation, distance, and deny gates still apply. Feature-cost A/B measurement cannot start while recording is active, so capture overhead cannot contaminate its baseline.
 
-Malformed, unreadable, oversized, or newer-schema rule files fail closed: runtime blending and discovery are disabled, Save/Clear are locked, and the existing file is never silently replaced. This includes every nonempty malformed manual LAND `Form`, which reports its exact `LandscapeAssignments[index].Form` location instead of being discarded. The UI reports that the file must be fixed or removed followed by a restart.
+Malformed, unreadable, oversized, or newer-schema rule files fail closed: runtime blending and discovery are disabled, Save/Clear are locked, and the existing file is never silently replaced. This includes every nonempty malformed manual LAND `Form` and every `LandscapeAssignments[index]` without a semantically nonempty selector. The UI reports the exact entry that must be fixed or removed followed by a restart.
 
 ## Runtime asset and shape identity
 

@@ -2801,6 +2801,11 @@ if(BUILD_CONTROLLER_TESTS)
         vr_submit_stereo_batch_test
         VRSubmitStereoBatch
         tests/vr_submit_stereo_batch_test.cpp
+	)
+	add_controller_test(
+        mesh_blending_policy_test
+        MeshBlendingPolicy
+        tests/mesh_blending_policy_test.cpp
     )
     add_controller_test(
         main_thread_dispatch_policy_test

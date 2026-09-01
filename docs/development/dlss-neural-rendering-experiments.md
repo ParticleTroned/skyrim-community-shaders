@@ -92,6 +92,30 @@ files: the six normal-DLSS runtime modules and the patched 310.8
 its declared SHA-256. Local staging performs no download and never writes a
 runtime into the source checkout.
 
+For reproducible internal comparisons, the
+`Internal-DLSSNR-AIO` configure and build presets read those two paths from
+process environment variables with the same names. Set one shared
+`CSX_LOCAL_DLSS_RUNTIME_DIRECTORY` for every experiment worktree and select
+the NR binary separately with `CSX_LOCAL_DLSSNR_RUNTIME_FILE`:
+
+```powershell
+$env:CSX_LOCAL_DLSS_RUNTIME_DIRECTORY = '<normal-runtime-directory>'
+$env:CSX_LOCAL_DLSSNR_RUNTIME_FILE = '<path-to-nvngx_dlssnr.dll>'
+cmake --preset Internal-DLSSNR-AIO
+cmake --build --preset Internal-DLSSNR-AIO
+```
+
+The preset enables DevBench and local staging, disables official fetching and
+the package shader tests for this internal iteration build, and retains the
+normal fail-closed hash checks. Keep machine-specific paths in the process
+environment or an ignored `CMakeUserPresets.json`, never in the tracked preset.
+The resulting archive is still internal-only and must not be redistributed.
+Run the configure command before every build whose runtime source paths may
+have changed; invoking only the build preset does not reread environment
+variables. Expanded paths remain in the ignored build cache and staging
+manifest. Missing sources, mismatched hashes, or concurrent official
+acquisition fail closed.
+
 The verified official acquisition path from `main-VR` is retained behind the
 explicit `CSX_FETCH_OFFICIAL_STREAMLINE_RUNTIME=ON` network opt-in. It downloads
 the pinned NVIDIA Streamline 2.12 SDK release and stages only the six public

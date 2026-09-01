@@ -134,6 +134,25 @@
                 "AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES": "ON",
                 "CS_PL_FORK_VERSION": "PL3.15-SE"
             }
+        },
+        {
+            "name": "Internal-DLSSNR-AIO",
+            "description": "Configure an internal DevBench AIO using hash-pinned local DLSS runtimes.",
+            "inherits": "ALL",
+            "cacheVariables": {
+                "BUILD_SHADER_TESTS": "OFF",
+                "CSX_FETCH_OFFICIAL_STREAMLINE_RUNTIME": "OFF",
+                "CSX_LOCAL_DLSSNR_RUNTIME_FILE": {
+                    "type": "FILEPATH",
+                    "value": "$env{CSX_LOCAL_DLSSNR_RUNTIME_FILE}"
+                },
+                "CSX_LOCAL_DLSS_RUNTIME_DIRECTORY": {
+                    "type": "PATH",
+                    "value": "$env{CSX_LOCAL_DLSS_RUNTIME_DIRECTORY}"
+                },
+                "CSX_STAGE_LOCAL_DLSS_RUNTIME": "ON",
+                "DEVBENCH_BRIDGE": "ON"
+            }
         }
     ],
     "buildPresets": [
@@ -192,6 +211,13 @@
             "configurePreset": "AIO-Release",
             "configuration": "Release",
             "targets": ["CommunityShaders", "AIO"]
+        },
+        {
+            "name": "Internal-DLSSNR-AIO",
+            "description": "Build the internal DevBench DLSS NR AIO archive",
+            "configurePreset": "Internal-DLSSNR-AIO",
+            "configuration": "Release",
+            "targets": ["Package-AIO-Manual"]
         }
     ]
 }

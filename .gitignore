@@ -16,7 +16,6 @@ tests/shaders/build/
 tests/shaders/*.exe
 tests/shaders/*.pdb
 tests/shaders/Shaders/
-# Streamline runtime modules are copied during local builds
-features/Upscaling/Shaders/Upscaling/Streamline/sl.pcl.dll
-features/Upscaling/Shaders/Upscaling/Streamline/sl.reflex.dll
+# Developer-supplied Streamline and NGX runtimes never enter source control
+/features/Upscaling/Shaders/Upscaling/Streamline/**/*.[dD][lL][lL]
 tools/__pycache__/

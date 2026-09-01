@@ -288,6 +288,36 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct BSOpenVR_Submit
+	{
+		static vr::EVRCompositorError thunk(
+			RE::BSOpenVR* _this,
+			const vr::Texture_t* pTexture,
+			const vr::VRTextureBounds_t* pBounds,
+			vr::EVRSubmitFlags nSubmitFlags)
+		{
+			auto& upscaling = globals::features::upscaling;
+			const uint64_t compositorCycleToken =
+				g_openVRSubmitCycleToken.load(std::memory_order_acquire);
+			const uint64_t submitPairBoundaryToken =
+				upscaling.BeginNeuralSubmitPairBoundary(
+					compositorCycleToken,
+					pTexture,
+					nSubmitFlags);
+			const SKSE::stl::scope_exit endSubmitPairBoundary([&]() noexcept {
+				upscaling.EndNeuralSubmitPairBoundary(submitPairBoundaryToken);
+			});
+
+			const auto result = func(
+				_this,
+				pTexture,
+				pBounds,
+				nSubmitFlags);
+			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	struct IVRCompositor_Submit
 	{
 		static vr::EVRCompositorError thunk(vr::IVRCompositor* _this, vr::EVREye eEye, const vr::Texture_t* pTexture, const vr::VRTextureBounds_t* pBounds, vr::EVRSubmitFlags nSubmitFlags)
@@ -321,6 +351,12 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				compositorCycleToken =
 					g_openVRSubmitCycleToken.load(std::memory_order_acquire);
 			}
+			const uint64_t matchedSubmitPairBoundaryToken =
+				upscaling.ObserveNeuralSubmitPairBoundaryEye(
+					compositorCycleToken,
+					eEye,
+					pTexture,
+					nSubmitFlags);
 			const auto rejectQuarantinedSubmit = [&](
 													 const vr::Texture_t* a_texture,
 													 const vr::VRTextureBounds_t* a_bounds) {
@@ -492,7 +528,15 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 			if (pTexture && pTexture->handle && pTexture->eType == vr::TextureType_DirectX) {
 				vr::Texture_t upscaledTexture{};
 				vr::VRTextureBounds_t upscaledBounds{};
-				if (upscaling.SubmitVRUpscaledFrame(eEye, pTexture, pBounds, upscaledTexture, upscaledBounds, presentationObservation)) {
+				if (upscaling.SubmitVRUpscaledFrame(
+						eEye,
+						compositorCycleToken,
+						matchedSubmitPairBoundaryToken,
+						pTexture,
+						pBounds,
+						upscaledTexture,
+						upscaledBounds,
+						presentationObservation)) {
 					probePresentationObservation = &presentationObservation;
 					if (upscaling.ShouldSuppressVRPostLoadCompositorSubmit(
 							eEye,
@@ -1717,6 +1761,7 @@ bool VR::InstallSubmitHook(bool a_enableProcessing)
 				hookResult);
 			return false;
 		}
+		stl::write_vfunc<0x03, BSOpenVR_Submit>(RE::VTABLE_BSOpenVR[0]);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (a_enableProcessing)
 			g_openVRSubmitProcessingEnabled.store(true, std::memory_order_release);

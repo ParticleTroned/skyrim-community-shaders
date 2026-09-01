@@ -972,7 +972,8 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 		diagnostics &&
 		diagnostics->submitStageVRDLSS &&
 		(diagnostics->viewportRole == DLSSViewportRole::FullEye ||
-			diagnostics->viewportRole == DLSSViewportRole::SubmitStageFoveatedCenter);
+			diagnostics->viewportRole == DLSSViewportRole::SubmitStageFoveatedCenter ||
+			diagnostics->viewportRole == DLSSViewportRole::SubmitStageFoveatedOuterBase);
 	DLSSFrameConstantsCache frameConstantsSignature{};
 	if (canAcceptDuplicateConstants)
 		frameConstantsSignature = makeFrameConstantsSignature();

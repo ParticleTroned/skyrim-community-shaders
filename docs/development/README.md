@@ -6,6 +6,7 @@
 -   **[Shader Workflow](./shader-workflow.md)** - Fast shader iteration and deployment
 -   **[Prebuilt Shader Cache](./prebuilt-shader-cache.md)** - Release build, update, validation, and AI-agent runbook
 -   **[Shader Runtime A/B](./shader-runtime-ab.md)** - RenderDoc same-frame shader equivalence checks
+-   **[DLSS Neural Rendering Experiments](./dlss-neural-rendering-experiments.md)** - Internal Feature 18 ordering, runtime trust, fallback, and validation contracts
 
 ## Quick Links
 

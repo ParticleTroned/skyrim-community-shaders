@@ -56,6 +56,11 @@ option(
     ON
 )
 option(
+    BUILD_NEURAL_RENDERING_TESTS
+    "Build focused DLSS Neural Rendering controller tests"
+    OFF
+)
+option(
     AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES
     "Exclude feature packages hidden from user-facing feature lists from AIO and package outputs."
     OFF
@@ -71,6 +76,7 @@ message("\tZip to dist: ${ZIP_TO_DIST}")
 message("\tAIO Zip to dist: ${AIO_ZIP_TO_DIST}")
 message("\tTracy profiler: ${TRACY_SUPPORT}")
 message("\tShader tests: ${BUILD_SHADER_TESTS}")
+message("\tNeural Rendering tests: ${BUILD_NEURAL_RENDERING_TESTS}")
 message(
     "\tExclude hidden AIO feature packages: ${AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES}"
 )
@@ -154,11 +160,15 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/cmake/Streamline)
 find_path(DETOURS_INCLUDE_DIRS "detours/detours.h")
 find_library(DETOURS_LIBRARY detours REQUIRED)
 include(FidelityFX-SDK)
+include(Streamline-Runtime)
 
 target_compile_definitions(
     ${PROJECT_NAME}
     PRIVATE "$<$<BOOL:${TRACY_SUPPORT}>:TRACY_SUPPORT>"
 )
+if(WIN32)
+    target_link_libraries(${PROJECT_NAME} PRIVATE wintrust)
+endif()
 
 file(
     GLOB FEATURE_SHADER_DIRS
@@ -202,6 +212,7 @@ target_link_libraries(
         Tracy::TracyClient
         Streamline
         d3d12.lib
+        bcrypt.lib
         Microsoft::DirectX-Headers
         ${DETOURS_LIBRARY}
 )
@@ -555,6 +566,23 @@ endif()
 set(FEATURE_PATHS_SLASH ${FEATURE_PATHS})
 list(TRANSFORM FEATURE_PATHS_SLASH APPEND /)
 
+set(CSX_LOCAL_STREAMLINE_DLL_REGEX
+    [[/Shaders/Upscaling/Streamline/.*\.[dD][lL][lL]$]]
+)
+set(CSX_INTERNAL_RUNTIME_NOTICE_NAME "INTERNAL-NO-REDISTRIBUTION.txt")
+set(CSX_INTERNAL_RUNTIME_NOTICE_REGEX [[/INTERNAL-NO-REDISTRIBUTION\.txt$]])
+
+function(csx_install_content_without_local_streamline_dlls _component)
+    install(
+        DIRECTORY ${ARGN}
+        DESTINATION .
+        COMPONENT "${_component}"
+        PATTERN "Tests" EXCLUDE
+        PATTERN "${CSX_INTERNAL_RUNTIME_NOTICE_NAME}" EXCLUDE
+        REGEX "${CSX_LOCAL_STREAMLINE_DLL_REGEX}" EXCLUDE
+    )
+endfunction()
+
 # Install logic for AIO package
 # To copy AIO package at a folder do `${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR}`
 install(CODE "file(REMOVE_RECURSE \${CMAKE_INSTALL_PREFIX})")
@@ -564,13 +592,44 @@ install(
     DESTINATION SKSE/Plugins
     COMPONENT SKSE
 )
-install(
-    DIRECTORY ${CMAKE_SOURCE_DIR}/package/ ${FEATURE_PATHS_SLASH}
-    DESTINATION .
-    COMPONENT Shaders
-    PATTERN "Tests" EXCLUDE
+csx_install_content_without_local_streamline_dlls(
+    Shaders
+    "${CMAKE_SOURCE_DIR}/package/"
+    ${FEATURE_PATHS_SLASH}
 )
+if(STREAMLINE_RUNTIME_FILES)
+    install(
+        SCRIPT "${STREAMLINE_RUNTIME_INSTALL_SCRIPT}"
+        COMPONENT StreamlineRuntime
+    )
+endif()
 install(CODE "file(REMOVE \${CMAKE_INSTALL_PREFIX}/Core)" COMPONENT Shaders)
+
+# Raw feature copies never carry runtime DLLs. Pinned bytes are added only by
+# StagePinnedLocalRuntime.cmake after the destination has been scrubbed.
+set(_streamline_runtime_scrub_script
+    "${CMAKE_CURRENT_BINARY_DIR}/ScrubUnmanagedStreamlineRuntime.cmake"
+)
+set(_streamline_runtime_scrub_script_content
+    [=[
+if(NOT DEFINED STREAMLINE_DIRECTORY OR "${STREAMLINE_DIRECTORY}" STREQUAL "")
+    message(FATAL_ERROR "STREAMLINE_DIRECTORY is required")
+endif()
+
+file(
+    GLOB_RECURSE _runtime_dlls
+    LIST_DIRECTORIES FALSE
+    "${STREAMLINE_DIRECTORY}/*.[dD][lL][lL]"
+)
+foreach(_runtime_dll IN LISTS _runtime_dlls)
+    file(REMOVE "${_runtime_dll}")
+endforeach()
+]=]
+)
+file(
+    GENERATE OUTPUT "${_streamline_runtime_scrub_script}"
+    CONTENT "${_streamline_runtime_scrub_script_content}"
+)
 
 # #######################################################################################################################
 # # Automatic AIO preparation (incremental copy system)
@@ -616,6 +675,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     foreach(_fpath IN LISTS FEATURE_PATHS)
         file(GLOB_RECURSE _tmp LIST_DIRECTORIES FALSE "${_fpath}/*")
         list(FILTER _tmp EXCLUDE REGEX "/Shaders/")
+        list(FILTER _tmp EXCLUDE REGEX "${CSX_INTERNAL_RUNTIME_NOTICE_REGEX}")
         list(APPEND _AIO_PACKAGE_FILES ${_tmp})
     endforeach()
 
@@ -679,6 +739,11 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
             )
             list(FILTER _feature_files EXCLUDE REGEX "/Shaders/")
             list(FILTER _feature_files EXCLUDE REGEX "/CORE$")
+            list(
+                FILTER _feature_files
+                EXCLUDE
+                REGEX "${CSX_INTERNAL_RUNTIME_NOTICE_REGEX}"
+            )
             append_copy_if_different(_prepare_aio_cmds _feature_files "${_fpath}" "${AIO_DIR}")
         endif()
     endforeach()
@@ -757,6 +822,12 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     )
     # Exclude test files from production packages
     list(FILTER _package_shaders EXCLUDE REGEX "/Tests/")
+    list(
+        FILTER _package_shaders
+        EXCLUDE
+        REGEX "${CSX_LOCAL_STREAMLINE_DLL_REGEX}"
+    )
+    set(_all_shader_sources ${_package_shaders})
     set(_shader_copy_cmds)
 
     set(_feature_shader_paths)
@@ -765,6 +836,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
             list(APPEND _feature_shader_paths "${_fpath}/Shaders")
         endif()
     endforeach()
+    list(REMOVE_DUPLICATES _feature_shader_paths)
     # Use the same file transport for feature shader paths so generators do
     # not reinterpret space-containing entries as malformed command arguments.
     set(_feature_shader_paths_list_file
@@ -791,6 +863,11 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         -DFEATURE_SHADER_PATHS_FILE="${_feature_shader_paths_list_file}"
         -P
         "${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake"
+        COMMAND
+        ${CMAKE_COMMAND}
+        "-DSTREAMLINE_DIRECTORY=${AIO_DIR}/Shaders/Upscaling/Streamline"
+        -P
+        "${_streamline_runtime_scrub_script}"
     )
 
     append_copy_if_different(_shader_copy_cmds _package_shaders "${CMAKE_SOURCE_DIR}/package/Shaders" "${AIO_DIR}/Shaders")
@@ -805,6 +882,12 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
                 "${_fpath}/Shaders/*"
             )
             list(FILTER _feat_shaders EXCLUDE REGEX "/Tests/")
+            list(
+                FILTER _feat_shaders
+                EXCLUDE
+                REGEX "${CSX_LOCAL_STREAMLINE_DLL_REGEX}"
+            )
+            list(APPEND _all_shader_sources ${_feat_shaders})
             append_copy_if_different(_shader_copy_cmds _feat_shaders "${_fpath}/Shaders" "${AIO_DIR}/Shaders")
         endif()
     endforeach()
@@ -819,6 +902,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
             ${HLSL_FILES}
             ${_feature_shader_paths_list_file}
             ${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake
+            ${_streamline_runtime_scrub_script}
         COMMENT "Copying changed shaders into AIO/Shaders"
     )
 
@@ -829,6 +913,42 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         DEPENDS copy_shaders.stamp
         COMMENT "Preparing shaders for validation"
     )
+    if(TARGET VerifyLocalDLSSRuntime)
+        add_custom_target(
+            StageAioPinnedLocalDLSSRuntime
+            COMMAND
+                ${CMAKE_COMMAND}
+                "-DSTAGE_PINNED_RUNTIME_MANIFEST=${STREAMLINE_RUNTIME_MANIFEST}"
+                "-DSTAGE_PINNED_RUNTIME_MANIFEST_SHA256=${STREAMLINE_RUNTIME_MANIFEST_SHA256}"
+                "-DSTAGE_PINNED_RUNTIME_DESTINATION=${AIO_DIR}/Shaders/Upscaling/Streamline"
+                "-DSTAGE_PINNED_RUNTIME_NOTICE_SOURCE=${STREAMLINE_RUNTIME_NOTICE_SOURCE}"
+                "-DSTAGE_PINNED_RUNTIME_NOTICE_DESTINATION=${AIO_DIR}"
+                "-DSTAGE_PINNED_RUNTIME_NOTICE_SHA256=${STREAMLINE_RUNTIME_NOTICE_SHA256}"
+                -P "${CMAKE_SOURCE_DIR}/cmake/StagePinnedLocalRuntime.cmake"
+            DEPENDS
+                copy_shaders.stamp
+                ${STREAMLINE_RUNTIME_SOURCE_FILES}
+                "${STREAMLINE_RUNTIME_MANIFEST}"
+                "${STREAMLINE_RUNTIME_NOTICE_SOURCE}"
+                "${CMAKE_SOURCE_DIR}/cmake/StagePinnedLocalRuntime.cmake"
+            COMMENT "Verifying the final AIO DLSS runtime payload"
+            VERBATIM
+        )
+        add_dependencies(StageAioPinnedLocalDLSSRuntime VerifyLocalDLSSRuntime)
+        add_dependencies(prepare_shaders StageAioPinnedLocalDLSSRuntime)
+    else()
+        add_custom_target(
+            ScrubAioLocalDLSSRuntime
+            COMMAND
+                ${CMAKE_COMMAND}
+                "-DSTREAMLINE_DIRECTORY=${AIO_DIR}/Shaders/Upscaling/Streamline"
+                -P "${_streamline_runtime_scrub_script}"
+            DEPENDS copy_shaders.stamp "${_streamline_runtime_scrub_script}"
+            COMMENT "Scrubbing disabled local DLSS runtime from AIO"
+            VERBATIM
+        )
+        add_dependencies(prepare_shaders ScrubAioLocalDLSSRuntime)
+    endif()
 
     # Incremental local validation: compile only the shaders affected by the
     # current working-tree diff (vs HEAD). Mirrors the CI incremental path but
@@ -1109,7 +1229,14 @@ if(ZIP_TO_DIST)
         TARGET ${PROJECT_NAME}
         POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E remove "${ZIP_DIR}/CORE"
+        COMMAND
+            ${CMAKE_COMMAND} -E remove
+            "${ZIP_DIR}/${CSX_INTERNAL_RUNTIME_NOTICE_NAME}"
         COMMAND ${CMAKE_COMMAND} -E remove_directory "${ZIP_DIR}/Shaders/Tests"
+        COMMAND
+            ${CMAKE_COMMAND}
+            "-DSTREAMLINE_DIRECTORY=${ZIP_DIR}/Shaders/Upscaling/Streamline" -P
+            "${_streamline_runtime_scrub_script}"
     )
 
     set(TARGET_ZIP "${PROJECT_NAME}-${UTC_NOW}.7z")
@@ -1128,18 +1255,58 @@ if(ZIP_TO_DIST)
             continue()
         endif()
         get_filename_component(FEATURE ${FEATURE_PATH} NAME)
+        if(FEATURE STREQUAL "Upscaling")
+            set(_auto_feature_package_suffix
+                "${STREAMLINE_RUNTIME_PACKAGE_SUFFIX}"
+            )
+        else()
+            set(_auto_feature_package_suffix "")
+        endif()
         message(
-            "Zipping ${FEATURE_PATH} to ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${UTC_NOW}.7z"
+            "Zipping ${FEATURE_PATH} to ${CMAKE_SOURCE_DIR}/dist/${FEATURE}${_auto_feature_package_suffix}-${UTC_NOW}.7z"
         )
-        add_custom_command(
-            TARGET ${PROJECT_NAME}
-            POST_BUILD
-            COMMAND
-                ${CMAKE_COMMAND} -E tar cf
-                ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${UTC_NOW}.7z --format=7zip
-                -- .
-            WORKING_DIRECTORY ${FEATURE_PATH}
-        )
+        if(FEATURE STREQUAL "Upscaling")
+            set(FEATURE_ZIP_STAGE
+                "${CMAKE_CURRENT_BINARY_DIR}/feature_zip/${FEATURE}"
+            )
+            add_custom_command(
+                TARGET ${PROJECT_NAME}
+                POST_BUILD
+                COMMAND
+                    ${CMAKE_COMMAND} -E remove_directory "${FEATURE_ZIP_STAGE}"
+                COMMAND
+                    ${CMAKE_COMMAND} -E copy_directory "${FEATURE_PATH}"
+                    "${FEATURE_ZIP_STAGE}"
+                COMMAND
+                    ${CMAKE_COMMAND} -E remove
+                    "${FEATURE_ZIP_STAGE}/${CSX_INTERNAL_RUNTIME_NOTICE_NAME}"
+                COMMAND
+                    ${CMAKE_COMMAND}
+                    "-DSTREAMLINE_DIRECTORY=${FEATURE_ZIP_STAGE}/Shaders/Upscaling/Streamline"
+                    -P "${_streamline_runtime_scrub_script}"
+                COMMAND
+                    ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix
+                    "${FEATURE_ZIP_STAGE}" --component FidelityFXRuntime
+                COMMAND
+                    ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix
+                    "${FEATURE_ZIP_STAGE}" --component StreamlineRuntime
+                COMMAND
+                    ${CMAKE_COMMAND} -E chdir "${FEATURE_ZIP_STAGE}"
+                    ${CMAKE_COMMAND} -E tar cf
+                    ${CMAKE_SOURCE_DIR}/dist/${FEATURE}${_auto_feature_package_suffix}-${UTC_NOW}.7z
+                    --format=7zip -- .
+            )
+        else()
+            add_custom_command(
+                TARGET ${PROJECT_NAME}
+                POST_BUILD
+                COMMAND
+                    ${CMAKE_COMMAND} -E tar cf
+                    ${CMAKE_SOURCE_DIR}/dist/${FEATURE}${_auto_feature_package_suffix}-${UTC_NOW}.7z
+                    --format=7zip -- .
+                WORKING_DIRECTORY ${FEATURE_PATH}
+            )
+        endif()
     endforeach()
 endif()
 
@@ -1177,6 +1344,8 @@ file(
     CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/package/*"
 )
+list(FILTER CORE_SOURCES EXCLUDE REGEX "${CSX_LOCAL_STREAMLINE_DLL_REGEX}")
+list(FILTER CORE_SOURCES EXCLUDE REGEX "${CSX_INTERNAL_RUNTIME_NOTICE_REGEX}")
 # Add SKSE plugin dll as dependency (use target-file generator expression so CMake
 # knows the actual output path of the target at build time)
 list(APPEND CORE_SOURCES "$<TARGET_FILE:${PROJECT_NAME}>")
@@ -1187,6 +1356,16 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
     if(EXISTS "${FEATURE_PATH}/CORE")
         list(APPEND CORE_FEATURE_PATHS "${FEATURE_PATH}/")
         file(GLOB_RECURSE FEATURE_SOURCES CONFIGURE_DEPENDS "${FEATURE_PATH}/*")
+        list(
+            FILTER FEATURE_SOURCES
+            EXCLUDE
+            REGEX "${CSX_LOCAL_STREAMLINE_DLL_REGEX}"
+        )
+        list(
+            FILTER FEATURE_SOURCES
+            EXCLUDE
+            REGEX "${CSX_INTERNAL_RUNTIME_NOTICE_REGEX}"
+        )
         list(APPEND CORE_SOURCES ${FEATURE_SOURCES})
     endif()
 endforeach()
@@ -1203,7 +1382,14 @@ add_custom_command(
     COMMAND
         ${CMAKE_COMMAND} -E copy_directory ${CORE_FEATURE_PATHS} ${FEATURE_PATH}
     COMMAND ${CMAKE_COMMAND} -E rm -f -- ${FEATURE_PATH}/Core
+    COMMAND
+        ${CMAKE_COMMAND} -E remove
+        "${FEATURE_PATH}/${CSX_INTERNAL_RUNTIME_NOTICE_NAME}"
     COMMAND ${CMAKE_COMMAND} -E remove_directory "${FEATURE_PATH}/Shaders/Tests"
+    COMMAND
+        ${CMAKE_COMMAND}
+        "-DSTREAMLINE_DIRECTORY=${FEATURE_PATH}/Shaders/Upscaling/Streamline" -P
+        "${_streamline_runtime_scrub_script}"
     COMMAND ${CMAKE_COMMAND} -E tar cfv ${CORE_PACKAGE} --format=7zip -- .
     WORKING_DIRECTORY ${FEATURE_PATH}
     COMMENT "Creating Core zip package"
@@ -1218,23 +1404,81 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
 
     list(APPEND CORE_FEATURE_PATHS "${FEATURE_PATH}/")
     file(GLOB_RECURSE FEATURE_SOURCES CONFIGURE_DEPENDS "${FEATURE_PATH}/*")
+    list(
+        FILTER FEATURE_SOURCES
+        EXCLUDE
+        REGEX "${CSX_LOCAL_STREAMLINE_DLL_REGEX}"
+    )
+    list(
+        FILTER FEATURE_SOURCES
+        EXCLUDE
+        REGEX "${CSX_INTERNAL_RUNTIME_NOTICE_REGEX}"
+    )
     list(APPEND CORE_SOURCES ${FEATURE_SOURCES})
 
     get_filename_component(FEATURE ${FEATURE_PATH} NAME)
-    set(FEATURE_PACKAGE "${DIST_PATH}/${FEATURE}-${UTC_NOW}.7z")
-
-    add_custom_command(
-        OUTPUT ${FEATURE_PACKAGE}
-        COMMAND
-            ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE} --format=7zip -- .
-        WORKING_DIRECTORY "${FEATURE_PATH}"
-        DEPENDS ${FEATURE_SOURCES}
-        COMMENT "Creating ${FEATURE} zip package"
+    if(FEATURE STREQUAL "Upscaling")
+        set(FEATURE_PACKAGE_SUFFIX "${STREAMLINE_RUNTIME_PACKAGE_SUFFIX}")
+    else()
+        set(FEATURE_PACKAGE_SUFFIX "")
+    endif()
+    set(FEATURE_PACKAGE
+        "${DIST_PATH}/${FEATURE}${FEATURE_PACKAGE_SUFFIX}-${UTC_NOW}.7z"
     )
+
+    if(FEATURE STREQUAL "Upscaling")
+        set(FEATURE_PACKAGE_STAGE
+            "${CMAKE_CURRENT_BINARY_DIR}/feature_package/${FEATURE}"
+        )
+        add_custom_command(
+            OUTPUT ${FEATURE_PACKAGE}
+            COMMAND
+                ${CMAKE_COMMAND} -E remove_directory "${FEATURE_PACKAGE_STAGE}"
+            COMMAND
+                ${CMAKE_COMMAND} -E copy_directory "${FEATURE_PATH}"
+                "${FEATURE_PACKAGE_STAGE}"
+            COMMAND
+                ${CMAKE_COMMAND} -E remove
+                "${FEATURE_PACKAGE_STAGE}/${CSX_INTERNAL_RUNTIME_NOTICE_NAME}"
+            COMMAND
+                ${CMAKE_COMMAND}
+                "-DSTREAMLINE_DIRECTORY=${FEATURE_PACKAGE_STAGE}/Shaders/Upscaling/Streamline"
+                -P "${_streamline_runtime_scrub_script}"
+            COMMAND
+                ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix
+                "${FEATURE_PACKAGE_STAGE}" --component FidelityFXRuntime
+            COMMAND
+                ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix
+                "${FEATURE_PACKAGE_STAGE}" --component StreamlineRuntime
+            COMMAND
+                ${CMAKE_COMMAND} -E chdir "${FEATURE_PACKAGE_STAGE}"
+                ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE} --format=7zip --
+                .
+            DEPENDS
+                ${FEATURE_SOURCES}
+                ${FFX_RUNTIME_FILES}
+                ${STREAMLINE_RUNTIME_FILES}
+                "${STREAMLINE_RUNTIME_NOTICE_SOURCE}"
+            COMMENT "Creating ${FEATURE} zip package"
+        )
+    else()
+        add_custom_command(
+            OUTPUT ${FEATURE_PACKAGE}
+            COMMAND
+                ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE} --format=7zip --
+                .
+            WORKING_DIRECTORY "${FEATURE_PATH}"
+            DEPENDS ${FEATURE_SOURCES}
+            COMMENT "Creating ${FEATURE} zip package"
+        )
+    endif()
 
     string(REPLACE " " "" FEATURE ${FEATURE})
     string(REPLACE "-" "" FEATURE ${FEATURE})
     add_custom_target("Package-${FEATURE}" DEPENDS ${FEATURE_PACKAGE})
+    if(TARGET VerifyLocalDLSSRuntime)
+        add_dependencies("Package-${FEATURE}" VerifyLocalDLSSRuntime)
+    endif()
 endforeach()
 
 # AIO Folder target (always refresh)
@@ -1251,12 +1495,38 @@ add_custom_target(
     COMMENT "Installing fresh AIO folder"
     VERBATIM
 )
+if(TARGET VerifyLocalDLSSRuntime)
+    add_dependencies("AIO" VerifyLocalDLSSRuntime)
+endif()
 
 # Manual AIO package target
-set(AIO_PACKAGE "${DIST_PATH}/${PROJECT_NAME}_AIO-${UTC_NOW}.7z")
+string(TIMESTAMP _NR_AIO_UTC "%Y%m%dT%H%M%SZ" UTC)
+execute_process(
+    COMMAND git rev-parse --short HEAD
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    RESULT_VARIABLE _NR_HEAD_RESULT
+    OUTPUT_VARIABLE _NR_SHORT_HEAD
+    ERROR_QUIET
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+if(NOT _NR_HEAD_RESULT EQUAL 0 OR NOT _NR_SHORT_HEAD)
+    set(_NR_SHORT_HEAD "UNKNOWN")
+    message(WARNING "Unable to identify the AIO package source commit")
+endif()
+set(AIO_PACKAGE
+    "${DIST_PATH}/CSX_AIO-Vincent-${_NR_SHORT_HEAD}-${_NR_AIO_UTC}.7z"
+)
 add_custom_command(
     OUTPUT ${AIO_PACKAGE}
-    DEPENDS ${CORE_SOURCES}
+    # Package-AIO-Manual can be invoked directly and AIO_ZIP_PACKAGE builds in
+    # parallel. Keep the install/archive rule ordered after the core target so
+    # feature INIs and the compiled FeatureVersions registry always agree.
+    DEPENDS
+        ${PROJECT_NAME}
+        ${CORE_SOURCES}
+        ${FFX_RUNTIME_FILES}
+        ${STREAMLINE_RUNTIME_FILES}
+        "${STREAMLINE_RUNTIME_NOTICE_SOURCE}"
     COMMAND ${CMAKE_COMMAND} -E make_directory ${AIO_DIR}
     COMMAND
         ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR}
@@ -1267,6 +1537,9 @@ add_custom_command(
     COMMENT "Creating AIO zip package (manual)"
 )
 add_custom_target("Package-AIO-Manual" DEPENDS ${AIO_PACKAGE})
+if(TARGET VerifyLocalDLSSRuntime)
+    add_dependencies("Package-AIO-Manual" VerifyLocalDLSSRuntime)
+endif()
 
 if(AIO_ZIP_TO_DIST)
     add_custom_target(AIO_ZIP_PACKAGE ALL)
@@ -1319,6 +1592,59 @@ if(BUILD_SHADER_TESTS)
     )
 endif()
 
+if(BUILD_NEURAL_RENDERING_TESTS)
+    enable_testing()
+    if(CSX_STAGE_LOCAL_DLSS_RUNTIME)
+        add_test(
+            NAME StreamlineLocalRuntimePackagingContract
+            COMMAND
+                "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+                "-DLOCAL_RUNTIME_DIR=${CSX_LOCAL_DLSS_RUNTIME_DIRECTORY}"
+                "-DLOCAL_DLSSNR_FILE=${CSX_LOCAL_DLSSNR_RUNTIME_FILE}"
+                "-DSTAGED_RUNTIME_DIR=${STREAMLINE_RUNTIME_DIRECTORY}"
+                "-DPINNED_RUNTIME_MANIFEST=${STREAMLINE_RUNTIME_MANIFEST}"
+                "-DRUNTIME_STAGE_SCRIPT=${CMAKE_SOURCE_DIR}/cmake/StagePinnedLocalRuntime.cmake"
+                "-DRUNTIME_INSTALL_SCRIPT=${STREAMLINE_RUNTIME_INSTALL_SCRIPT}"
+                "-DRUNTIME_SCRUB_SCRIPT=${_streamline_runtime_scrub_script}"
+                "-DRUNTIME_NOTICE_SOURCE=${STREAMLINE_RUNTIME_NOTICE_SOURCE}"
+                "-DBUILD_ROOT=${CMAKE_BINARY_DIR}" "-DBUILD_CONFIG=$<CONFIG>" -P
+                "${PROJECT_SOURCE_DIR}/tests/streamline_local_runtime_packaging_contract_test.cmake"
+        )
+        set_tests_properties(
+            StreamlineLocalRuntimePackagingContract
+            PROPERTIES LABELS "NeuralRendering"
+        )
+    endif()
+    add_executable(
+        neural_rendering_pipeline_policy_test
+        EXCLUDE_FROM_ALL
+        tests/neural_rendering_pipeline_policy_test.cpp
+    )
+    target_compile_features(
+        neural_rendering_pipeline_policy_test
+        PRIVATE cxx_std_23
+    )
+    target_include_directories(
+        neural_rendering_pipeline_policy_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    add_test(
+        NAME NeuralRenderingPipelinePolicy
+        COMMAND neural_rendering_pipeline_policy_test
+    )
+    set_tests_properties(
+        NeuralRenderingPipelinePolicy
+        PROPERTIES LABELS "NeuralRendering"
+    )
+    add_custom_target(
+        neural_rendering_tests
+        COMMAND
+            "${CMAKE_CTEST_COMMAND}" --build-config $<CONFIG>
+            --output-on-failure -L NeuralRendering
+        DEPENDS neural_rendering_pipeline_policy_test
+        USES_TERMINAL
+    )
+endif()
 message("*************************************************************")
 message("Community Shaders configuration complete")
 message("To prepare a ZIP package of AIO, Core, or Features")

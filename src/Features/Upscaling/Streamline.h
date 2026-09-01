@@ -48,6 +48,9 @@ public:
 		FoveatedCenter,
 		// Submit-stage foveated DLSS needs isolated Streamline viewport state.
 		SubmitStageFoveatedCenter,
+		// Full-eye bases must not advance fallback or center viewport histories.
+		FoveatedOuterBase,
+		SubmitStageFoveatedOuterBase,
 		Count
 	};
 	static constexpr uint32_t kVRDLSSViewportRoleCount = static_cast<uint32_t>(DLSSViewportRole::Count);

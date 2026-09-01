@@ -14,6 +14,8 @@
 #include "State.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
+#include "Upscaling/NeuralRendering/PipelinePolicy.h"
+#include "Upscaling/NeuralRendering/Renderer.h"
 #include "Upscaling/Streamline.h"
 #include "Upscaling/VRRenderScaleDevBenchBridge.h"
 #include "Utils/FileSystem.h"
@@ -70,6 +72,24 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	fsr4RuntimeEnable,
 	fsr4RuntimeSelectionSchemaVersion,
 	foveatedVendorDispatch,
+	neuralRenderingEnabled,
+	foveatedOuterDLSS,
+	neuralRenderingBatchedStereo,
+	neuralRenderingDirectCommit,
+	neuralRenderingMainRoute,
+	neuralRenderingSubmitRoute,
+	neuralRenderingResetEveryFrame,
+	neuralRenderingForceFeatureUpscaling,
+	neuralRenderingMotionVectorScaleMode,
+	neuralRenderingSubmitPairBoundaryMode,
+	neuralRenderingPreset,
+	neuralRenderingIntensity,
+	neuralRenderingLocalTone,
+	neuralRenderingLocalStructure,
+	neuralRenderingSkinStructure,
+	neuralRenderingStyle,
+	neuralRenderingAutoMask,
+	neuralRenderingUICorrection,
 	foveatedCenterArea,
 	foveatedCenterHorizontalScale,
 	foveatedLeftEyeMaskOffsetX,
@@ -273,6 +293,7 @@ namespace
 	std::atomic_uint32_t g_vrMenuBridgeTraceTailEndFrame{ 0 };
 	std::atomic_uint32_t g_vrSubmitStageUnderwaterMaskTailEndFrame{ 0 };
 	std::atomic_uint64_t g_vrMenuBridgeTraceCachedState{ 0 };
+	std::atomic_uint64_t g_neuralMenuQueryEpoch{ 1 };
 	std::atomic_bool g_renderDocDllDetected{ false };
 	std::atomic_bool g_renderDocUpscalingD3DHookBypassLogged{ false };
 	constexpr uint32_t kVRMenuBridgeHigherCallsiteRva = 0x1349742u;
@@ -770,6 +791,8 @@ namespace
 		"Crafting Menu",
 		"Lockpicking Menu",
 		"Training Menu",
+		RE::FavoritesMenu::MENU_NAME,
+		RE::GiftMenu::MENU_NAME,
 		"LevelUp Menu",
 		"Dialogue Menu",
 		"MessageBoxMenu",
@@ -1071,6 +1094,24 @@ namespace
 		region.valid = region.width != 0 && region.height != 0 && region.depthWidth != 0 && region.depthHeight != 0;
 		region.matchesExpectedSize = region.width == expectedEyeWidth && region.height == expectedEyeHeight;
 		return region;
+	}
+
+	bool SameVRSubmitSourceRegionSignature(
+		const VRSubmitSourceRegion& a_left,
+		const VRSubmitSourceRegion& a_right)
+	{
+		return a_left.valid && a_right.valid &&
+		       a_left.subresource == a_right.subresource &&
+		       a_left.box.left == a_right.box.left &&
+		       a_left.box.top == a_right.box.top &&
+		       a_left.box.front == a_right.box.front &&
+		       a_left.box.right == a_right.box.right &&
+		       a_left.box.bottom == a_right.box.bottom &&
+		       a_left.box.back == a_right.box.back &&
+		       a_left.depthOffsetX == a_right.depthOffsetX &&
+		       a_left.depthOffsetY == a_right.depthOffsetY &&
+		       a_left.depthWidth == a_right.depthWidth &&
+		       a_left.depthHeight == a_right.depthHeight;
 	}
 
 	bool IsVendorUpscalingMethod(Upscaling::UpscaleMethod a_upscaleMethod)
@@ -3502,6 +3543,36 @@ namespace
 
 	void SanitizeFoveatedSettings(Upscaling::Settings& settings)
 	{
+		if (settings.neuralRenderingMotionVectorScaleMode >
+			Upscaling::kNeuralRenderingMotionVectorScaleModeMaxIndex) {
+			settings.neuralRenderingMotionVectorScaleMode =
+				static_cast<uint>(Upscaling::NeuralRenderingMotionVectorScaleMode::FullEye);
+		}
+		if (settings.neuralRenderingSubmitPairBoundaryMode >
+			Upscaling::kNeuralSubmitPairBoundaryModeMaxIndex) {
+			settings.neuralRenderingSubmitPairBoundaryMode =
+				static_cast<uint>(Upscaling::NeuralSubmitPairBoundaryMode::Current);
+		}
+		settings.neuralRenderingPreset = std::min(
+			settings.neuralRenderingPreset,
+			Upscaling::kNeuralRenderingPresetMaxIndex);
+		settings.neuralRenderingIntensity = std::clamp(
+			std::isfinite(settings.neuralRenderingIntensity) ? settings.neuralRenderingIntensity : 0.8f,
+			0.0f,
+			2.0f);
+		settings.neuralRenderingLocalTone = std::clamp(
+			std::isfinite(settings.neuralRenderingLocalTone) ? settings.neuralRenderingLocalTone : 0.75f,
+			0.0f,
+			2.0f);
+		settings.neuralRenderingLocalStructure = std::clamp(
+			std::isfinite(settings.neuralRenderingLocalStructure) ? settings.neuralRenderingLocalStructure : 0.9f,
+			0.0f,
+			2.0f);
+		settings.neuralRenderingSkinStructure = std::clamp(
+			std::isfinite(settings.neuralRenderingSkinStructure) ? settings.neuralRenderingSkinStructure : 0.9f,
+			0.0f,
+			2.0f);
+		settings.neuralRenderingStyle = std::min(settings.neuralRenderingStyle, 3u);
 		settings.foveatedCenterArea = ClampFoveatedCenterScale(settings.foveatedCenterArea);
 		settings.foveatedCenterHorizontalScale = ClampFoveatedCenterHorizontalScale(settings.foveatedCenterHorizontalScale);
 		settings.foveatedLeftEyeMaskOffsetX = ClampFoveatedMaskOffsetAdjustment(settings.foveatedLeftEyeMaskOffsetX);
@@ -3555,6 +3626,9 @@ namespace
 		settings.dlssSharpener = ClampDLSSSharpenerModeUInt(settings.dlssSharpener);
 		settings.periphery_taa_center_blend_feather = ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather);
 		SanitizeFoveatedSettings(settings);
+		// The first Feature 18 bridge does not bind ControlMask or UI resources.
+		settings.neuralRenderingAutoMask = true;
+		settings.neuralRenderingUICorrection = false;
 		settings.periphery_taa_outer_scale = ClampPeripheryTAAOuterScaleForCenter(
 			settings.periphery_taa_outer_scale,
 			settings.periphery_taa_center_area);
@@ -3588,6 +3662,24 @@ namespace
 		settings.renderScaleMode = 0;
 		settings.perfMode = 0;
 		settings.foveatedVendorDispatch = false;
+		settings.neuralRenderingEnabled = false;
+		settings.foveatedOuterDLSS = false;
+		settings.neuralRenderingBatchedStereo = true;
+		settings.neuralRenderingDirectCommit = true;
+		settings.neuralRenderingMainRoute = true;
+		settings.neuralRenderingSubmitRoute = true;
+		settings.neuralRenderingResetEveryFrame = false;
+		settings.neuralRenderingForceFeatureUpscaling = false;
+		settings.neuralRenderingMotionVectorScaleMode = 0;
+		settings.neuralRenderingSubmitPairBoundaryMode = 0;
+		settings.neuralRenderingPreset = 3;
+		settings.neuralRenderingIntensity = 0.8f;
+		settings.neuralRenderingLocalTone = 0.75f;
+		settings.neuralRenderingLocalStructure = 0.9f;
+		settings.neuralRenderingSkinStructure = 0.9f;
+		settings.neuralRenderingStyle = 3;
+		settings.neuralRenderingAutoMask = true;
+		settings.neuralRenderingUICorrection = false;
 		settings.foveatedCenterArea = 0.6f;
 		settings.foveatedCenterHorizontalScale = 1.0f;
 		settings.foveatedLeftEyeMaskOffsetX = 0.0f;
@@ -3607,6 +3699,25 @@ namespace
 		o_json.erase("perfMode");
 		o_json.erase("vrMenuBridgeDebugMode");
 		o_json.erase("foveatedVendorDispatch");
+		o_json.erase("neuralRenderingEnabled");
+		o_json.erase("foveatedOuterDLSS");
+		o_json.erase("neuralRenderingOptimizedStereoPath");
+		o_json.erase("neuralRenderingBatchedStereo");
+		o_json.erase("neuralRenderingDirectCommit");
+		o_json.erase("neuralRenderingMainRoute");
+		o_json.erase("neuralRenderingSubmitRoute");
+		o_json.erase("neuralRenderingResetEveryFrame");
+		o_json.erase("neuralRenderingForceFeatureUpscaling");
+		o_json.erase("neuralRenderingMotionVectorScaleMode");
+		o_json.erase("neuralRenderingSubmitPairBoundaryMode");
+		o_json.erase("neuralRenderingPreset");
+		o_json.erase("neuralRenderingIntensity");
+		o_json.erase("neuralRenderingLocalTone");
+		o_json.erase("neuralRenderingLocalStructure");
+		o_json.erase("neuralRenderingSkinStructure");
+		o_json.erase("neuralRenderingStyle");
+		o_json.erase("neuralRenderingAutoMask");
+		o_json.erase("neuralRenderingUICorrection");
 		o_json.erase("foveatedCenterArea");
 		o_json.erase("foveatedCenterHorizontalScale");
 		o_json.erase("foveatedLeftEyeMaskOffsetX");
@@ -3638,6 +3749,23 @@ namespace
 	bool IsFoveatedVendorDispatchRequested(const Upscaling::Settings& settings, Upscaling::UpscaleMethod a_upscaleMethod)
 	{
 		return SupportsFoveatedVendorDispatch(a_upscaleMethod) && settings.foveatedVendorDispatch;
+	}
+
+	bool IsNeuralRenderingRouteEnabled(
+		const Upscaling::Settings& a_settings,
+		Upscaling::NeuralStereoRouteRole a_role)
+	{
+		return a_role == Upscaling::NeuralStereoRouteRole::Submit ?
+		           a_settings.neuralRenderingSubmitRoute :
+		           a_settings.neuralRenderingMainRoute;
+	}
+
+	Upscaling::NeuralStereoRouteRole GetNeuralRenderingRouteRole(
+		Streamline::DLSSViewportRole a_role)
+	{
+		return a_role == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter ?
+		           Upscaling::NeuralStereoRouteRole::Submit :
+		           Upscaling::NeuralStereoRouteRole::Main;
 	}
 
 	bool ShouldUseReducedResolutionForUpscaling(Upscaling::UpscaleMethod a_upscaleMethod, const float2& a_resolutionScale)
@@ -4445,7 +4573,10 @@ namespace
 		add(ClampToggleUInt(a_settings.frameGenerationMode));
 		add(a_settings.fsr4RuntimeEnable);
 		add(a_settings.foveatedVendorDispatch);
+		add(a_settings.foveatedOuterDLSS);
 		add(a_settings.foveatedPeripheryMaskVisualization);
+		add(ClampDLSSSharpenerModeUInt(a_settings.dlssSharpener));
+		addFloat(ClampFiniteUnitRange(a_settings.sharpnessDLSS, 0.0f));
 		add(a_settings.periphery_taa_enable);
 		const float clampedPeripheryTAACenterArea = ClampFoveatedCenterScale(a_settings.periphery_taa_center_area);
 		addFloat(ClampFoveatedCenterScale(a_settings.foveatedCenterArea));
@@ -4457,6 +4588,61 @@ namespace
 		addFloat(clampedPeripheryTAACenterArea);
 		addFloat(ClampPeripheryTAAOuterScaleForCenter(a_settings.periphery_taa_outer_scale, clampedPeripheryTAACenterArea));
 		addFloat(ClampPeripheryTAACenterBlendFeather(a_settings.periphery_taa_center_blend_feather));
+		return hash;
+	}
+
+	uint64_t BuildNeuralRenderingSettingsKey(const Upscaling::Settings& a_settings) noexcept
+	{
+		uint64_t hash = 0xCBF29CE484222325ull;
+		auto add = [&](uint64_t a_value) {
+			hash = HashResourceCheckValue(hash, a_value);
+		};
+		auto addFloat = [&](float a_value) {
+			add(QuantizeResourceCheckFloat(a_value));
+		};
+
+		add(static_cast<uint64_t>(NeuralRendering::kPipelineArrangement));
+		add(a_settings.neuralRenderingEnabled);
+		add(a_settings.foveatedOuterDLSS);
+		add(a_settings.neuralRenderingBatchedStereo);
+		add(a_settings.neuralRenderingDirectCommit);
+		add(a_settings.neuralRenderingMainRoute);
+		add(a_settings.neuralRenderingSubmitRoute);
+		add(a_settings.neuralRenderingResetEveryFrame);
+		add(a_settings.neuralRenderingForceFeatureUpscaling);
+		add(a_settings.neuralRenderingMotionVectorScaleMode);
+		add(a_settings.neuralRenderingSubmitPairBoundaryMode);
+		add(a_settings.neuralRenderingPreset);
+		addFloat(a_settings.neuralRenderingIntensity);
+		addFloat(a_settings.neuralRenderingLocalTone);
+		addFloat(a_settings.neuralRenderingLocalStructure);
+		addFloat(a_settings.neuralRenderingSkinStructure);
+		add(a_settings.neuralRenderingStyle);
+		add(a_settings.neuralRenderingAutoMask);
+		add(a_settings.neuralRenderingUICorrection);
+		return hash;
+	}
+
+	uint64_t BuildNeuralPresentationOutputKey(const Upscaling& a_upscaling)
+	{
+		uint64_t hash = BuildUpscalingResourceMutationSettingsKey(
+			a_upscaling.settings);
+		hash = HashResourceCheckValue(
+			hash, BuildNeuralRenderingSettingsKey(a_upscaling.settings));
+		hash = HashResourceCheckValue(
+			hash, static_cast<uint64_t>(a_upscaling.GetRuntimeUpscaleMethod()));
+		hash = HashResourceCheckValue(hash, a_upscaling.GetRuntimeQualityMode());
+		hash = HashResourceCheckValue(hash, a_upscaling.GetRuntimeDLSSPreset());
+		hash = HashResourceCheckValue(
+			hash, a_upscaling.IsFrameGenerationDx12PathActive());
+		const auto desired = a_upscaling.GetPendingVRRenderScaleDesiredProfile();
+		hash = HashResourceCheckValue(
+			hash, static_cast<uint64_t>(desired.method));
+		hash = HashResourceCheckValue(hash, desired.qualityMode);
+		hash = HashResourceCheckValue(hash, desired.dlssPreset);
+		hash = HashResourceCheckValue(hash, desired.dlssSharpener);
+		hash = HashResourceCheckValue(
+			hash, QuantizeResourceCheckFloat(desired.dlssSharpness));
 		return hash;
 	}
 
@@ -5053,6 +5239,7 @@ namespace
 		g_vrRaceSexMenuOpenFromEvent.store(false, std::memory_order_release);
 		g_vrRaceSexMenuPresentationTailEndFrame.store(0, std::memory_order_release);
 		g_vrObservedProjectedMenuTailEndFrame.store(0, std::memory_order_release);
+		g_neuralMenuQueryEpoch.fetch_add(1, std::memory_order_acq_rel);
 		ResetVRMenuBridgeTraceState();
 	}
 
@@ -5068,7 +5255,6 @@ namespace
 	{
 		if (!a_ui)
 			return false;
-
 		for (const auto menuName : kSkyrimPresentationMenuNames) {
 			if (a_ui->IsMenuOpen(menuName))
 				return true;
@@ -5095,6 +5281,35 @@ namespace
 	{
 		auto* menu = globals::menu;
 		return menu && menu->initialized && menu->ShouldSwallowInput();
+	}
+
+	bool IsNeuralRenderingMenuSuppressed()
+	{
+		if (!globals::game::isVR)
+			return false;
+
+		struct QueryCache
+		{
+			uint32_t frame = std::numeric_limits<uint32_t>::max();
+			uint64_t epoch = 0;
+			bool knownGameMenuActive = false;
+		};
+		thread_local QueryCache cache{};
+		const uint32_t frame = globals::state ?
+		                           globals::state->frameCount :
+		                           std::numeric_limits<uint32_t>::max();
+		const uint64_t epoch =
+			g_neuralMenuQueryEpoch.load(std::memory_order_acquire);
+		if (cache.frame != frame || cache.epoch != epoch) {
+			cache = {
+				.frame = frame,
+				.epoch = epoch,
+				.knownGameMenuActive = IsKnownGameMenuContextActive(),
+			};
+		}
+		return cache.knownGameMenuActive ||
+		       IsVRMenuPresentationTailActive(globals::state) ||
+		       IsCommunityShadersMenuOpen();
 	}
 
 	bool IsExplicitVRMenuPresentationContextActive()
@@ -5150,6 +5365,43 @@ namespace
 
 		texture->GetDesc(&outDesc);
 		return true;
+	}
+
+	std::optional<bool> GetDLSSColorResourceHDR(ID3D11Resource* a_resource)
+	{
+		D3D11_TEXTURE2D_DESC desc{};
+		if (!TryGetTexture2DDesc(a_resource, desc))
+			return std::nullopt;
+
+		// Keep route telemetry aligned with Streamline's DLSS color-buffer contract.
+		switch (desc.Format) {
+		case DXGI_FORMAT_R8G8B8A8_UNORM:
+		case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+		case DXGI_FORMAT_B8G8R8A8_UNORM:
+		case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+		case DXGI_FORMAT_B8G8R8X8_UNORM:
+		case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+			return false;
+		default:
+			return true;
+		}
+	}
+
+	bool IsSupportedVRSubmitPresentationContract(
+		DXGI_FORMAT a_format,
+		vr::EColorSpace a_colorSpace) noexcept
+	{
+		if (a_format != DXGI_FORMAT_R8G8B8A8_UNORM)
+			return false;
+
+		switch (a_colorSpace) {
+		case vr::ColorSpace_Auto:
+		case vr::ColorSpace_Gamma:
+		case vr::ColorSpace_Linear:
+			return true;
+		default:
+			return false;
+		}
 	}
 
 	template <class T, std::size_t N>
@@ -11644,6 +11896,10 @@ void Upscaling::InvalidateVRMenuCommittedLayer(const char* a_reason)
 
 void Upscaling::NotifyVRMenuPresentationContextChange(const char* a_reason)
 {
+	g_neuralMenuQueryEpoch.fetch_add(1, std::memory_order_acq_rel);
+	neuralPresentationContractEpoch.fetch_add(1, std::memory_order_acq_rel);
+	RequestNeuralHistoryReset();
+	RequestHistoryReset();
 	InvalidateVRMenuCommittedLayer(a_reason);
 	if (!globals::game::isVR || !globals::state)
 		return;
@@ -13755,6 +14011,8 @@ void Upscaling::DrawSettings()
 		}
 	}
 
+	DrawNeuralRenderingSettings(upscaleMethod);
+
 	if (streamline.reflexSupportedOnCurrentAdapter && ImGui::TreeNodeEx("NVIDIA Reflex", ImGuiTreeNodeFlags_DefaultOpen)) {
 		const bool reflexAvailable = streamline.initialized && streamline.featureReflex;
 		const bool markerOptimizationAvailable = reflexAvailable && streamline.featurePCL;
@@ -14195,6 +14453,339 @@ void Upscaling::DrawEssentialSettings()
 	DrawFoveatedSettings(true);
 }
 
+bool Upscaling::ApplyNeuralRenderingPreset(
+	Settings& a_settings,
+	uint32_t a_preset) noexcept
+{
+	if (a_preset > kNeuralRenderingPresetMaxIndex)
+		return false;
+
+	a_settings.neuralRenderingPreset = a_preset;
+	switch (a_preset) {
+	case 1:
+		a_settings.neuralRenderingIntensity = 1.0f;
+		a_settings.neuralRenderingLocalTone = 1.0f;
+		a_settings.neuralRenderingLocalStructure = 1.0f;
+		a_settings.neuralRenderingSkinStructure = 1.0f;
+		break;
+	case 2:
+		a_settings.neuralRenderingIntensity = 1.35f;
+		a_settings.neuralRenderingLocalTone = 0.9f;
+		a_settings.neuralRenderingLocalStructure = 1.6f;
+		a_settings.neuralRenderingSkinStructure = 1.15f;
+		break;
+	case 3:
+		a_settings.neuralRenderingIntensity = 0.8f;
+		a_settings.neuralRenderingLocalTone = 0.75f;
+		a_settings.neuralRenderingLocalStructure = 0.9f;
+		a_settings.neuralRenderingSkinStructure = 0.9f;
+		break;
+	case 4:
+		a_settings.neuralRenderingIntensity = 1.75f;
+		a_settings.neuralRenderingLocalTone = 1.25f;
+		a_settings.neuralRenderingLocalStructure = 1.5f;
+		a_settings.neuralRenderingSkinStructure = 1.3f;
+		break;
+	case 5:
+		// Preserve a visible global effect through DLSS without overdriving the
+		// low-resolution structure classifiers that can produce coarse artifacts.
+		a_settings.neuralRenderingIntensity = 1.4f;
+		a_settings.neuralRenderingLocalTone = 1.05f;
+		a_settings.neuralRenderingLocalStructure = 0.65f;
+		a_settings.neuralRenderingSkinStructure = 0.2f;
+		a_settings.neuralRenderingStyle = 3;
+		break;
+	default:
+		break;
+	}
+	return true;
+}
+
+uint64_t Upscaling::GetNeuralRenderingSettingsKey(
+	const Settings& a_settings) noexcept
+{
+	return BuildNeuralRenderingSettingsKey(a_settings);
+}
+
+void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
+{
+	if (!globals::game::isVR)
+		return;
+
+	const Settings previousSettings = settings;
+	if (ImGui::TreeNodeEx("NVIDIA Neural Rendering")) {
+		const bool dlssSelected = a_upscaleMethod == UpscaleMethod::kDLSS;
+		const bool foveatedRouteEnabled =
+			IsFoveatedVendorDispatchRequested(settings, a_upscaleMethod);
+		const bool routeAvailable = dlssSelected && foveatedRouteEnabled;
+
+		ImGui::TextColored(Util::Colors::GetWarning(), "Experimental");
+		ImGui::TextWrapped(
+			"Enhances both low-resolution private center inputs before their normal "
+			"DLSS upscale. Pipeline controls expose four measured implementation lanes.");
+
+		static constexpr const char* toggleModes[]{ "Disabled", "Enabled" };
+		int enabled = settings.neuralRenderingEnabled ? 1 : 0;
+		{
+			auto enableGuard = Util::DisableGuard(
+				!routeAvailable && !settings.neuralRenderingEnabled);
+			if (ImGui::SliderInt(
+					"Neural Rendering",
+					&enabled,
+					0,
+					1,
+					toggleModes[std::clamp(enabled, 0, 1)])) {
+				settings.neuralRenderingEnabled = enabled != 0;
+			}
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted(
+				"Runs NVIDIA Feature 18 on the two private foveated center inputs.");
+			ImGui::TextUnformatted(
+				"Requires Skyrim VR, NVIDIA DLSS, and Foveated Upscaling (FOV).");
+		}
+
+		if (!dlssSelected) {
+			ImGui::TextDisabled(
+				"Select NVIDIA DLSS to make Neural Rendering available.");
+		} else if (!foveatedRouteEnabled) {
+			ImGui::TextDisabled(
+				"Enable Foveated Upscaling (FOV) in VR > FOV to activate this pipeline.");
+		}
+		ImGui::TextDisabled(
+			"Pipeline arrangement: %s",
+			NeuralRendering::GetPipelineArrangementName());
+
+		if (settings.neuralRenderingEnabled) {
+			ImGui::SeparatorText("Pipeline");
+			static constexpr const char* stereoSubmissionModes[]{
+				"Per-eye",
+				"Batched"
+			};
+			int stereoSubmission = settings.neuralRenderingBatchedStereo ? 1 : 0;
+			if (ImGui::Combo(
+					"Stereo Submission",
+					&stereoSubmission,
+					stereoSubmissionModes,
+					IM_ARRAYSIZE(stereoSubmissionModes))) {
+				settings.neuralRenderingBatchedStereo = stereoSubmission != 0;
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted(
+					"Per-eye submits one Feature 18 command transaction for each eye.");
+				ImGui::TextUnformatted(
+					"Batched evaluates both eyes in one command-list and fence transaction.");
+			}
+
+			static constexpr const char* outputCommitModes[]{
+				"Staged",
+				"Direct"
+			};
+			int outputCommit = settings.neuralRenderingDirectCommit ? 1 : 0;
+			if (ImGui::Combo(
+					"Output Commit",
+					&outputCommit,
+					outputCommitModes,
+					IM_ARRAYSIZE(outputCommitModes))) {
+				settings.neuralRenderingDirectCommit = outputCommit != 0;
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted(
+					"Staged keeps Feature 18 output separate for the following DLSS pass.");
+				ImGui::TextUnformatted(
+					"Direct commits into the private center input and restores both originals if the stereo transaction fails.");
+			}
+
+			const bool batchedStereo = settings.neuralRenderingBatchedStereo;
+			const bool directCommit = settings.neuralRenderingDirectCommit;
+			if (ImGui::BeginTable(
+					"##NeuralRenderingPipelineSummary",
+					2,
+					ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp)) {
+				ImGui::TableNextColumn();
+				ImGui::TextDisabled("Selected lane");
+				ImGui::TextColored(
+					routeAvailable ?
+						ImVec4(0.40f, 0.85f, 0.50f, 1.0f) :
+						ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
+					"%s",
+					NeuralRendering::GetImplementationDisplayName(
+						batchedStereo, directCommit));
+				ImGui::TableNextColumn();
+				ImGui::TextDisabled("Measurement purpose");
+				ImGui::TextWrapped(
+					"%s",
+					NeuralRendering::GetImplementationPurpose(
+						batchedStereo, directCommit));
+				ImGui::EndTable();
+			}
+
+			ImGui::SeparatorText("Diagnostic Routing");
+			if (ImGui::BeginTable(
+					"##NeuralRenderingRouteControls",
+					2,
+					ImGuiTableFlags_SizingStretchProp)) {
+				ImGui::TableNextColumn();
+				ImGui::Checkbox("Main render route", &settings.neuralRenderingMainRoute);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted(
+						"Selects the normal render-stage Neural Rendering transaction, including the optional Outer DLSS base.");
+				}
+				ImGui::TableNextColumn();
+				ImGui::Checkbox("Submit route", &settings.neuralRenderingSubmitRoute);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted(
+						"Selects the OpenVR presentation-stage Neural Rendering transaction, including the optional Outer DLSS base.");
+				}
+				ImGui::EndTable();
+			}
+			if (!settings.neuralRenderingMainRoute &&
+				!settings.neuralRenderingSubmitRoute) {
+				Util::Text::WrappedWarning(
+					"Both Feature 18 routes are disabled; normal foveated DLSS remains active.");
+			}
+
+			static constexpr const char* pairBoundaryModes[]{
+				"Current per-eye admission",
+				"Observe outer stereo pair",
+				"Require outer stereo pair"
+			};
+			int pairBoundaryMode = static_cast<int>(
+				settings.neuralRenderingSubmitPairBoundaryMode);
+			if (ImGui::Combo(
+					"Submit Pair Boundary",
+					&pairBoundaryMode,
+					pairBoundaryModes,
+					IM_ARRAYSIZE(pairBoundaryModes))) {
+				settings.neuralRenderingSubmitPairBoundaryMode =
+					static_cast<uint>(pairBoundaryMode);
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted(
+					"Observe correlates both nested eye submits with Skyrim's single outer BSOpenVR::Submit call.");
+				ImGui::TextUnformatted(
+					"Require permits submit-route NR only when that producer-pair proof matches; OpenVR calls are never delayed or replaced.");
+			}
+
+			ImGui::SeparatorText("Temporal Input Diagnostics");
+			ImGui::Checkbox(
+				"Reset Feature 18 every frame",
+				&settings.neuralRenderingResetEveryFrame);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted(
+					"Forces a synchronized reset for both eyes on every evaluation.");
+				ImGui::TextUnformatted(
+					"If crawling stops, the temporal input/history contract is implicated.");
+			}
+			ImGui::Checkbox(
+				"Force Feature 18 upscaling flag",
+				&settings.neuralRenderingForceFeatureUpscaling);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted(
+					"Tests DLSSNR.Upscaling=1 for paint's equal-size low-resolution pass.");
+				ImGui::TextUnformatted(
+					"Changing this option retires and recreates all Feature 18 handles.");
+			}
+			static constexpr const char* motionVectorScaleModes[]{
+				"Full-eye dimensions",
+				"Center-region dimensions"
+			};
+			int motionVectorScaleMode = static_cast<int>(
+				settings.neuralRenderingMotionVectorScaleMode);
+			if (ImGui::Combo(
+					"Feature 18 MV Scale",
+					&motionVectorScaleMode,
+					motionVectorScaleModes,
+					IM_ARRAYSIZE(motionVectorScaleModes))) {
+				settings.neuralRenderingMotionVectorScaleMode =
+					static_cast<uint>(motionVectorScaleMode);
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted(
+					"Changes only Feature 18 motion-vector scaling; normal DLSS keeps its established full-eye scale.");
+			}
+
+			ImGui::SeparatorText("Composition");
+			int outerDLSS = settings.foveatedOuterDLSS ? 1 : 0;
+			if (ImGui::SliderInt(
+					"Outer DLSS Base",
+					&outerDLSS,
+					0,
+					1,
+					toggleModes[std::clamp(outerDLSS, 0, 1)])) {
+				settings.foveatedOuterDLSS = outerDLSS != 0;
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted(
+					"Runs isolated full-eye DLSS for the stereo composition base.");
+				ImGui::TextUnformatted(
+					"The NR-to-DLSS center is feathered over that base before sharpening and UI.");
+			}
+
+			ImGui::SeparatorText("Image Tuning");
+			static constexpr const char* presets[]{
+				"Custom", "Balanced", "Fabric Detail", "Natural", "Strong", "Conservative Low-Res (NR only)"
+			};
+			int preset = static_cast<int>(settings.neuralRenderingPreset);
+			if (ImGui::Combo("Preset", &preset, presets, IM_ARRAYSIZE(presets)))
+				(void)ApplyNeuralRenderingPreset(settings, static_cast<uint32_t>(preset));
+
+			bool customTuningChanged = false;
+			customTuningChanged |= ImGui::SliderFloat(
+				"Intensity", &settings.neuralRenderingIntensity, 0.0f, 2.0f, "%.2f");
+			customTuningChanged |= ImGui::SliderFloat(
+				"Local Tone", &settings.neuralRenderingLocalTone, 0.0f, 2.0f, "%.2f");
+			customTuningChanged |= ImGui::SliderFloat(
+				"Local Structure", &settings.neuralRenderingLocalStructure, 0.0f, 2.0f, "%.2f");
+			customTuningChanged |= ImGui::SliderFloat(
+				"Skin Structure", &settings.neuralRenderingSkinStructure, 0.0f, 2.0f, "%.2f");
+			static constexpr const char* styles[]{
+				"Style 0", "Style 1", "Style 2", "Style 3"
+			};
+			int style = static_cast<int>(settings.neuralRenderingStyle);
+			if (ImGui::Combo("Style", &style, styles, IM_ARRAYSIZE(styles))) {
+				settings.neuralRenderingStyle = static_cast<uint>(style);
+				customTuningChanged = true;
+			}
+			if (customTuningChanged)
+				settings.neuralRenderingPreset = 0;
+			ImGui::TextDisabled(
+				"Conservative Low-Res changes NR tuning only; set sharpening Off or low Luma separately.");
+			if (settings.dlssSharpener == static_cast<uint>(DLSSSharpenerMode::RCAS) &&
+				settings.sharpnessDLSS > 0.5f) {
+				Util::Text::WrappedWarning(
+					"High RCAS sharpening can amplify low-resolution NR grids and shimmer. Start with K and sharpening Off or low Luma Unsharp.");
+			}
+			ImGui::TextDisabled(
+				"Automatic mask only; UI correction inputs are not yet bound.");
+
+			ImGui::SeparatorText("Runtime");
+			const auto neuralStatus =
+				NeuralRendering::Renderer::Instance().GetSnapshot();
+			ImGui::TextDisabled(
+				"Status: %s | Trust: %s",
+				neuralStatus.status.c_str(),
+				neuralStatus.trust.c_str());
+			ImGui::TextDisabled(
+				"Successful eyes: %llu | Fallbacks: %llu",
+				static_cast<unsigned long long>(neuralStatus.successes),
+				static_cast<unsigned long long>(neuralStatus.failures));
+			ImGui::TextDisabled(
+				"Modified nvngx_dlssnr.dll files must match a pinned SHA-256 allowlist entry.");
+			if (neuralStatus.failureLatched && !neuralStatus.quarantined &&
+				ImGui::Button("Reset Neural Rendering Runtime")) {
+				(void)NeuralRendering::Renderer::Instance().Reset();
+				RequestHistoryReset();
+			}
+		}
+
+		ImGui::TreePop();
+	}
+
+	(void)HandleNeuralRenderingSettingsTransition(
+		previousSettings, "upscaling Neural Rendering UI");
+}
+
 void Upscaling::DrawFoveatedSetupInstructions()
 {
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));
@@ -14534,8 +15125,26 @@ void Upscaling::LoadSettings(json& o_json)
 	const bool hasFsr4RuntimeSelectionSchemaVersion = o_json.contains("fsr4RuntimeSelectionSchemaVersion");
 	const bool hasRenderScaleModeSetting = o_json.contains("renderScaleMode");
 	const bool hasLegacyPerfModeSetting = o_json.contains("perfMode");
+	const bool hasNeuralBatchedStereoSetting =
+		o_json.contains("neuralRenderingBatchedStereo");
+	const bool hasNeuralDirectCommitSetting =
+		o_json.contains("neuralRenderingDirectCommit");
 	const bool hasLegacySettings = o_json.is_object() && !o_json.empty();
 	settings = o_json;
+	if (o_json.contains("neuralRenderingOptimizedStereoPath") &&
+		(!hasNeuralBatchedStereoSetting || !hasNeuralDirectCommitSetting)) {
+		try {
+			const bool optimizedStereoPath =
+				o_json.at("neuralRenderingOptimizedStereoPath").get<bool>();
+			if (!hasNeuralBatchedStereoSetting)
+				settings.neuralRenderingBatchedStereo = optimizedStereoPath;
+			if (!hasNeuralDirectCommitSetting)
+				settings.neuralRenderingDirectCommit = optimizedStereoPath;
+		} catch (...) {
+			logger::warn(
+				"[Upscaling] Legacy neuralRenderingOptimizedStereoPath could not be migrated; using defaults for missing pipeline selectors.");
+		}
+	}
 	if (!hasFsr4RuntimeSelectionSchemaVersion)
 		settings.fsr4RuntimeSelectionSchemaVersion = 0;
 	ApplyLegacyFsr4RuntimeSelectionMigration(settings, fidelityFX.GetFsr4AdapterSupport());
@@ -14602,6 +15211,8 @@ void Upscaling::LoadSettings(json& o_json)
 		previousUpscaleMethod != currentUpscaleMethod;
 	if (runtimeReady && perfModeRelevantSettingChanged)
 		RequestPerfModeRenderTargetRecreate("upscaling settings reload");
+	(void)HandleNeuralRenderingSettingsTransition(
+		previousSettings, "upscaling settings reload");
 	InvalidateFrameScopedUpscalingState();
 
 	auto iniSettingCollection = globals::game::iniPrefSettingCollection;
@@ -14613,6 +15224,7 @@ void Upscaling::LoadSettings(json& o_json)
 
 void Upscaling::RestoreDefaultSettings()
 {
+	const Settings previousSettings = settings;
 	settings = {};
 	settings.foveatedVendorDispatch = false;
 	settings.foveatedPeripheryMaskVisualization = false;
@@ -14622,7 +15234,57 @@ void Upscaling::RestoreDefaultSettings()
 	settings.reflexUseFPSLimit = false;
 	SanitizeUpscalingSettings(settings);
 	ApplyOpenCompositeUpscalingBlocker(true);
+	(void)HandleNeuralRenderingSettingsTransition(
+		previousSettings, "restore default upscaling settings");
 	InvalidateFrameScopedUpscalingState();
+}
+
+bool Upscaling::HandleNeuralRenderingSettingsTransition(
+	const Settings& a_previousSettings,
+	const char* a_reason)
+{
+	const bool outerDLSSChanged =
+		a_previousSettings.foveatedOuterDLSS != settings.foveatedOuterDLSS;
+	const bool featureConfigurationChanged =
+		(NeuralRendering::UsesFeatureUpscaling() ||
+			a_previousSettings.neuralRenderingForceFeatureUpscaling) !=
+		(NeuralRendering::UsesFeatureUpscaling() ||
+			settings.neuralRenderingForceFeatureUpscaling);
+	const bool submitPairBoundaryModeChanged =
+		a_previousSettings.neuralRenderingSubmitPairBoundaryMode !=
+		settings.neuralRenderingSubmitPairBoundaryMode;
+	if (BuildNeuralRenderingSettingsKey(a_previousSettings) ==
+		BuildNeuralRenderingSettingsKey(settings)) {
+		return true;
+	}
+
+	RequestHistoryReset();
+	InvalidateFrameScopedUpscalingState();
+	if (submitPairBoundaryModeChanged) {
+		std::scoped_lock lock(neuralSubmitPairBoundaryMutex);
+		ClearNeuralSubmitPairBoundaryScopeLocked(std::min(
+			settings.neuralRenderingSubmitPairBoundaryMode,
+			kNeuralSubmitPairBoundaryModeMaxIndex));
+	}
+	if (outerDLSSChanged) {
+		peripheryTAAHistoryReadIndex = 0;
+		peripheryTAAHistoryValid = false;
+		submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
+		submitStageFoveatedPeripheryTAAEyeReady = {};
+	}
+	if (a_previousSettings.neuralRenderingEnabled ==
+			settings.neuralRenderingEnabled &&
+		!featureConfigurationChanged) {
+		return true;
+	}
+
+	const bool resetSucceeded = NeuralRendering::Renderer::Instance().Reset();
+	if (!resetSucceeded) {
+		logger::error(
+			"[DLSSNR] Backend retirement failed during {}; NR remains fail-closed",
+			a_reason ? a_reason : "settings transition");
+	}
+	return resetSucceeded;
 }
 
 struct BSOpenVR_GetRenderTargetSize
@@ -15526,6 +16188,7 @@ void Upscaling::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 		settings.perfMode = ClampToggleUInt(defaults.perfMode);
 		settings.fsr4RuntimeEnable = defaults.fsr4RuntimeEnable;
 		settings.foveatedVendorDispatch = defaults.foveatedVendorDispatch;
+		settings.foveatedOuterDLSS = defaults.foveatedOuterDLSS;
 		settings.periphery_taa_enable = defaults.periphery_taa_enable;
 		SanitizeFoveatedSettings(settings);
 		InvalidateFrameScopedUpscalingState();
@@ -15539,6 +16202,7 @@ void Upscaling::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 		ClampDLSSPresetUInt(settings.dlssPreset),
 		"performance cost measurement off");
 	settings.foveatedVendorDispatch = false;
+	settings.foveatedOuterDLSS = false;
 	settings.periphery_taa_enable = false;
 	InvalidateFrameScopedUpscalingState();
 }
@@ -15589,6 +16253,7 @@ json Upscaling::CapturePerformanceCostMeasurementState() const
 		{ "perfMode", settings.perfMode },
 		{ "fsr4RuntimeEnable", settings.fsr4RuntimeEnable },
 		{ "foveatedVendorDispatch", settings.foveatedVendorDispatch },
+		{ "foveatedOuterDLSS", settings.foveatedOuterDLSS },
 		{ "periphery_taa_enable", settings.periphery_taa_enable }
 	};
 }
@@ -15626,6 +16291,7 @@ void Upscaling::RestorePerformanceCostMeasurementState(const json& a_state)
 	settings.perfMode = ClampToggleUInt(a_state.value("perfMode", settings.perfMode));
 	settings.fsr4RuntimeEnable = a_state.value("fsr4RuntimeEnable", settings.fsr4RuntimeEnable);
 	settings.foveatedVendorDispatch = a_state.value("foveatedVendorDispatch", settings.foveatedVendorDispatch);
+	settings.foveatedOuterDLSS = a_state.value("foveatedOuterDLSS", settings.foveatedOuterDLSS);
 	settings.periphery_taa_enable = a_state.value("periphery_taa_enable", settings.periphery_taa_enable);
 	SanitizeFoveatedSettings(settings);
 	InvalidateFrameScopedUpscalingState();
@@ -15701,6 +16367,7 @@ void Upscaling::EnsureRuntimeResolutionStateCurrent()
 
 void Upscaling::InvalidateFrameScopedUpscalingState()
 {
+	neuralPresentationContractEpoch.fetch_add(1, std::memory_order_acq_rel);
 	runtimeResolutionStateLastRefreshFrame = std::numeric_limits<uint32_t>::max();
 	resourceCheckLastCompletedFrame = std::numeric_limits<uint32_t>::max();
 	resourceCheckLastCompletedMethod = UpscaleMethod::kNONE;
@@ -17147,6 +17814,8 @@ void Upscaling::DestroyVRIntermediateTextures(bool a_clearRapidTransitionGuard)
 	submitStageVendorOutputSourceTexture = nullptr;
 	submitStageVendorEyeState = {};
 	submitStageFoveatedCenterState = {};
+	if (!submitStageNeuralStereoState.IsCycleLatched())
+		submitStageNeuralStereoState = {};
 	submitStageForceFullEyeVendorFallback = false;
 	ClearSubmitStageVendorResumeCooldown();
 	ClearSubmitStageBoundsFallbackWatchdog();
@@ -19174,6 +19843,21 @@ bool Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFra
 				qualityMode,
 				dlssPreset);
 		}
+		auto outerDLSSViewportPreparation = Streamline::DLSSViewportPreparationResult::Ready;
+		const bool outerDLSSViewportRequired =
+			settings.foveatedOuterDLSS && settings.neuralRenderingEnabled &&
+			settings.neuralRenderingSubmitRoute &&
+			IsFoveatedVendorDispatchEnabled(a_upscaleMethod) &&
+			!settings.foveatedPeripheryMaskVisualization &&
+			settings.frameGenerationMode == 0 && !IsFrameGenerationDx12PathActive();
+		if (fullEyeViewportPreparation != Streamline::DLSSViewportPreparationResult::Failed &&
+			foveatedCenterViewportPreparation != Streamline::DLSSViewportPreparationResult::Failed &&
+			outerDLSSViewportRequired) {
+			outerDLSSViewportPreparation = streamline.PrepareVRDLSSViewport(
+				Streamline::DLSSViewportRole::SubmitStageFoveatedOuterBase,
+				qualityMode,
+				dlssPreset);
+		}
 		const auto combineViewportPreparationResults = [](auto a_lhs, auto a_rhs) {
 			if (a_lhs == Streamline::DLSSViewportPreparationResult::Failed ||
 				a_rhs == Streamline::DLSSViewportPreparationResult::Failed) {
@@ -19185,8 +19869,11 @@ bool Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFra
 			}
 			return Streamline::DLSSViewportPreparationResult::Ready;
 		};
-		dlssViewportPreparation =
-			combineViewportPreparationResults(fullEyeViewportPreparation, foveatedCenterViewportPreparation);
+		dlssViewportPreparation = combineViewportPreparationResults(
+			combineViewportPreparationResults(
+				fullEyeViewportPreparation,
+				foveatedCenterViewportPreparation),
+			outerDLSSViewportPreparation);
 
 		if (dlssViewportPreparation == Streamline::DLSSViewportPreparationResult::Pending) {
 			submitStageDLSSViewportPreparationFailed.store(false, std::memory_order_release);
@@ -19434,7 +20121,7 @@ void Upscaling::ServiceSubmitStageBoundsFallbackWatchdog(bool a_forceRecovery)
 		BoolText(postLoadResetPending || vendorResetPending));
 }
 
-void Upscaling::ArmSubmitStageFoveatedVendorRetryBackoff(uint32_t a_currentFrame, UpscaleMethod a_upscaleMethod)
+void Upscaling::ArmSubmitStageFoveatedVendorRetryBackoff(uint32_t a_currentFrame, UpscaleMethod a_upscaleMethod) noexcept
 {
 	const uint32_t currentFrame = std::max(a_currentFrame, 1u);
 	submitStageFoveatedVendorRetryMethod.store(static_cast<uint32_t>(a_upscaleMethod), std::memory_order_release);
@@ -20595,6 +21282,8 @@ void Upscaling::ApplyVRRenderScaleMemoryReliefTransitionCleanup(const char* a_re
 		// Preserve every texture submitted directly to FSR. Geometry and temporal
 		// state are invalidated independently and rebuilt for the new active rect.
 		submitStageFoveatedCenterState = {};
+		if (!submitStageNeuralStereoState.IsCycleLatched())
+			submitStageNeuralStereoState = {};
 		foveatedRectCache = {};
 		DestroyPeripheryTAAResources();
 	} else {
@@ -20870,6 +21559,36 @@ void Upscaling::RecordVRRenderScalePresentationObservation(const VRRenderScalePr
 		a_observation.eyeIndex >= 2 ||
 		a_observation.path == VRRenderScalePresentationPath::Unknown) {
 		return;
+	}
+
+	if (a_observation.retainedNeuralPair) {
+		const uint32_t eyeIndex = a_observation.eyeIndex;
+		const auto* retainedOutput =
+			submitStageNeuralStereoState.publishedOutputs[eyeIndex].get();
+		if (submitStageNeuralStereoState.outputsReady &&
+			a_observation.retainedNeuralCompositorCycleToken != 0 &&
+			submitStageNeuralStereoState.compositorCycle ==
+				a_observation.retainedNeuralCompositorCycleToken &&
+			std::max(submitStageNeuralStereoState.frame, 1u) ==
+				a_observation.frame &&
+			submitStageNeuralStereoState.generation ==
+				a_observation.contractGeneration &&
+			submitStageNeuralStereoState.settingsKey ==
+				a_observation.retainedNeuralSettingsKey &&
+			submitStageNeuralStereoState.contractEpoch ==
+				a_observation.retainedNeuralContractEpoch &&
+			retainedOutput && retainedOutput->resource &&
+			retainedOutput->desc.Width == a_observation.outputWidth &&
+			retainedOutput->desc.Height == a_observation.outputHeight) {
+			// This callback is reached only after OpenVR accepted the exact output.
+			submitStageNeuralStereoState.presentedEyeMask |= 1u << eyeIndex;
+			auto route = submitStageNeuralStereoState.publishedRoute;
+			route.presentationAcceptedEyeMask =
+				submitStageNeuralStereoState.presentedEyeMask;
+			route.sequence = 0;
+			submitStageNeuralStereoState.publishedRoute = route;
+			PublishNeuralStereoRouteSnapshot(route);
+		}
 	}
 
 	bool pathChanged = false;
@@ -22071,11 +22790,13 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRSubmitStageState(bool a
 	if (a_destroySharedResources) {
 		if (a_preserveVRIntermediateTextures) {
 			submitStageFoveatedCenterState = {};
+			if (!submitStageNeuralStereoState.IsCycleLatched())
+				submitStageNeuralStereoState = {};
 			foveatedRectCache = {};
 			DestroyPeripheryTAAResources();
 		} else {
-			DestroyVRIntermediateTextures();
 			DestroyFoveatedResources();
+			DestroyVRIntermediateTextures();
 		}
 		ResetVRMenuFinalCompositeLayer();
 	}
@@ -22104,6 +22825,8 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRSubmitStageState(bool a
 	submitStageVendorOutputSourceTexture = nullptr;
 	submitStageVendorEyeState = {};
 	submitStageFoveatedCenterState = {};
+	if (!submitStageNeuralStereoState.IsCycleLatched())
+		submitStageNeuralStereoState = {};
 	submitStageForceFullEyeVendorFallback = false;
 	ClearSubmitStageVendorResumeCooldown();
 	ClearSubmitStageBoundsFallbackWatchdog();
@@ -22821,8 +23544,8 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			const auto destroyVRQualityResources = [&]() {
 				if (!globals::game::isVR)
 					return;
-				DestroyVRIntermediateTextures();
 				DestroyFoveatedResources();
+				DestroyVRIntermediateTextures();
 			};
 
 			RequestHistoryReset();
@@ -23574,6 +24297,18 @@ bool Upscaling::EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3
 	}
 
 	if (recreate) {
+		if (texture && texture->resource &&
+			!NeuralRendering::Renderer::Instance().Reset()) {
+			static bool loggedUnsafeNeuralTextureReplacement = false;
+			LogWarnOnceFmt(
+				loggedUnsafeNeuralTextureReplacement,
+				"[DLSSNR] Retaining the complete foveated resource set for process lifetime because replacing '{}' could not prove GPU idle; ordinary vendor fallback remains available",
+				name ? name : "<unnamed>");
+			AbandonFoveatedResourcesUnsafe();
+			// Restart the complete ensure sequence next frame; earlier resources in
+			// this pass were also abandoned and must not be dereferenced.
+			return false;
+		}
 		static bool loggedTextureCreateFailure = false;
 		const auto createFailureMessage = [&]() {
 			return std::format(
@@ -23645,7 +24380,78 @@ bool Upscaling::EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3
 	return true;
 }
 
-bool Upscaling::EnsureFoveatedDispatchShaders(bool usePeripheryTAA, bool visualizeMask, const char* context, const char* fallbackAction)
+bool Upscaling::EnsureFoveatedDepthGuideSRV(Texture2D& texture, const char* name)
+{
+	if (texture.srv)
+		return true;
+
+	DXGI_FORMAT viewFormat = DXGI_FORMAT_UNKNOWN;
+	switch (texture.desc.Format) {
+	case DXGI_FORMAT_R24G8_TYPELESS:
+	case DXGI_FORMAT_D24_UNORM_S8_UINT:
+		viewFormat = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+		break;
+	case DXGI_FORMAT_R32G8X24_TYPELESS:
+	case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
+		viewFormat = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
+		break;
+	case DXGI_FORMAT_R32_TYPELESS:
+	case DXGI_FORMAT_D32_FLOAT:
+		viewFormat = DXGI_FORMAT_R32_FLOAT;
+		break;
+	case DXGI_FORMAT_R16_TYPELESS:
+	case DXGI_FORMAT_D16_UNORM:
+		viewFormat = DXGI_FORMAT_R16_UNORM;
+		break;
+	case DXGI_FORMAT_R24_UNORM_X8_TYPELESS:
+	case DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS:
+	case DXGI_FORMAT_R32_FLOAT:
+	case DXGI_FORMAT_R16_UNORM:
+		viewFormat = texture.desc.Format;
+		break;
+	default:
+		break;
+	}
+
+	static bool loggedUnsupportedFormat = false;
+	if (viewFormat == DXGI_FORMAT_UNKNOWN) {
+		LogWarnOnceFmt(
+			loggedUnsupportedFormat,
+			"[DLSSNR] Depth guide '{}' has unsupported resource format {}; normal DLSS will be preserved",
+			name ? name : "<unnamed>",
+			static_cast<uint32_t>(texture.desc.Format));
+		return false;
+	}
+
+	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+	srvDesc.Format = viewFormat;
+	srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+	srvDesc.Texture2D.MostDetailedMip = 0;
+	srvDesc.Texture2D.MipLevels = 1;
+	static bool loggedViewFailure = false;
+	try {
+		texture.CreateSRV(srvDesc);
+	} catch (const std::exception& e) {
+		LogWarnOnceFmt(
+			loggedViewFailure,
+			"[DLSSNR] Depth guide SRV creation failed for '{}'; normal DLSS will be preserved: {}",
+			name ? name : "<unnamed>",
+			e.what());
+		MarkSubmitStageDeviceLostIfNeeded(e, name ? name : "DLSS Neural Rendering depth guide SRV");
+		return false;
+	} catch (...) {
+		LogWarnOnceFmt(
+			loggedViewFailure,
+			"[DLSSNR] Depth guide SRV creation failed for '{}'; normal DLSS will be preserved",
+			name ? name : "<unnamed>");
+		MarkSubmitStageDeviceLostIfDeviceRemoved(name ? name : "DLSS Neural Rendering depth guide SRV");
+		return false;
+	}
+
+	return texture.srv != nullptr;
+}
+
+bool Upscaling::EnsureFoveatedDispatchShaders(bool usePeripheryTAA, bool visualizeMask, const char* context, const char* fallbackAction, bool useOuterDLSSBase)
 {
 	const char* contextText = context ? context : "";
 	const char* fallbackText = fallbackAction ? fallbackAction : "skipping foveated vendor dispatch";
@@ -23655,7 +24461,7 @@ bool Upscaling::EnsureFoveatedDispatchShaders(bool usePeripheryTAA, bool visuali
 		auto* peripheryCS = GetFoveatedPeripheryCS();
 		auto* peripheryTAA = usePeripheryTAA ? GetPeripheryTAACS() : nullptr;
 		auto* blendCS = visualizeMask ? nullptr : GetFoveatedCenterBlendCS();
-		return peripheryCS && foveatedPeripheryCB &&
+		return (useOuterDLSSBase || (peripheryCS && foveatedPeripheryCB)) &&
 		       (!usePeripheryTAA || (peripheryTAA && peripheryTAACB)) &&
 		       (visualizeMask || (blendCS && foveatedCenterBlendCB));
 	} catch (const std::exception& e) {
@@ -23949,18 +24755,62 @@ bool Upscaling::BuildPeripheryTAATileList(uint32_t eyeIndex, uint32_t outputWidt
 	return true;
 }
 
+void Upscaling::AbandonFoveatedResourcesUnsafe()
+{
+	InvalidateFrameScopedUpscalingState();
+	// An unproven interop idle leaves every submitted foveated resource alive.
+	for (uint32_t eye = 0; eye < 2; ++eye) {
+		(void)foveatedCenterColorIn[eye].release();
+		(void)foveatedCenterColorOut[eye].release();
+		(void)foveatedCenterNeuralOut[eye].release();
+		(void)foveatedOuterDLSSBase[eye].release();
+		(void)foveatedCenterDepth[eye].release();
+		(void)foveatedCenterMotionVectors[eye].release();
+		(void)foveatedCenterReactiveMask[eye].release();
+		(void)foveatedCenterTransparencyMask[eye].release();
+		for (uint32_t history = 0; history < 2; ++history) {
+			(void)peripheryTAAHistoryColor[eye][history].release();
+			(void)peripheryTAAVelocityHistory[eye][history].release();
+			(void)peripheryTAALockHistory[eye][history].release();
+		}
+		(void)peripheryTAATileBuffer[eye].release();
+		peripheryTAATileCapacity[eye] = 0;
+		peripheryTAATileCache[eye] = {};
+	}
+	peripheryTAAHistoryReadIndex = 0;
+	peripheryTAAHistoryValid = false;
+	submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
+	submitStageFoveatedPeripheryTAAEyeReady = {};
+	submitStageFoveatedCenterState = {};
+	if (!submitStageNeuralStereoState.IsCycleLatched())
+		submitStageNeuralStereoState = {};
+	foveatedRectCache = {};
+	static bool loggedUnsafeFoveatedAbandon = false;
+	if (!loggedUnsafeFoveatedAbandon) {
+		loggedUnsafeFoveatedAbandon = true;
+		logger::critical(
+			"[DLSSNR] Foveated resources intentionally retained because bounded renderer teardown could not prove GPU idle");
+	}
+}
+
 void Upscaling::DestroyFoveatedResources()
 {
 	InvalidateFrameScopedUpscalingState();
+	if (!NeuralRendering::Renderer::Instance().Reset())
+		AbandonFoveatedResourcesUnsafe();
 	for (uint32_t i = 0; i < 2; ++i) {
 		foveatedCenterColorIn[i].reset();
 		foveatedCenterColorOut[i].reset();
+		foveatedCenterNeuralOut[i].reset();
+		foveatedOuterDLSSBase[i].reset();
 		foveatedCenterDepth[i].reset();
 		foveatedCenterMotionVectors[i].reset();
 		foveatedCenterReactiveMask[i].reset();
 		foveatedCenterTransparencyMask[i].reset();
 	}
 	submitStageFoveatedCenterState = {};
+	if (!submitStageNeuralStereoState.IsCycleLatched())
+		submitStageNeuralStereoState = {};
 	foveatedRectCache = {};
 	DestroyPeripheryTAAResources();
 }
@@ -23984,24 +24834,24 @@ void Upscaling::DestroyPeripheryTAAResources()
 	submitStageFoveatedPeripheryTAAEyeReady = {};
 }
 
-void Upscaling::DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t sourceWidth, uint32_t sourceHeight, uint32_t outputWidth, uint32_t outputHeight, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, bool keepBindingsBound, float sourceScaleX, float sourceScaleY, float sourceOffsetX, float sourceOffsetY, float centerOffsetX, float centerOffsetY)
+bool Upscaling::DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t sourceWidth, uint32_t sourceHeight, uint32_t outputWidth, uint32_t outputHeight, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, bool keepBindingsBound, float sourceScaleX, float sourceScaleY, float sourceOffsetX, float sourceOffsetY, float centerOffsetX, float centerOffsetY)
 {
 	auto* peripheryCS = GetFoveatedPeripheryCS();
 	if (!peripheryCS || !sourceSRV || !outputUAV || !foveatedPeripheryCB)
-		return;
+		return false;
 	if (!dispatchWidth || !dispatchHeight)
-		return;
+		return false;
 
 	auto context = globals::d3d::context;
 	auto deferred = globals::deferred;
 	if (!context || !deferred || !deferred->linearSampler)
-		return;
+		return false;
 	if (outputOffsetX >= outputWidth || outputOffsetY >= outputHeight)
-		return;
+		return false;
 	dispatchWidth = std::min(dispatchWidth, outputWidth - outputOffsetX);
 	dispatchHeight = std::min(dispatchHeight, outputHeight - outputOffsetY);
 	if (!dispatchWidth || !dispatchHeight)
-		return;
+		return false;
 
 	FoveatedPeripheryCB cbData{};
 	cbData.outputDim = { static_cast<float>(outputWidth), static_cast<float>(outputHeight) };
@@ -24074,6 +24924,7 @@ void Upscaling::DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSR
 		context->CSSetConstantBuffers(0, 1, nullCB);
 		context->CSSetShader(nullptr, nullptr, 0);
 	}
+	return true;
 }
 
 void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorSRV, ID3D11ShaderResourceView* currentDepthSRV, ID3D11ShaderResourceView* currentMotionVectorSRV,
@@ -24239,25 +25090,25 @@ void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorS
 	context->CSSetShader(nullptr, nullptr, 0);
 }
 
-void Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t outputWidthPerEye, uint32_t outputHeight, const FoveatedDispatchRect& rect, uint32_t dispatchOffsetX, uint32_t dispatchOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather)
+bool Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t outputWidthPerEye, uint32_t outputHeight, const FoveatedDispatchRect& rect, uint32_t dispatchOffsetX, uint32_t dispatchOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather)
 {
 	if (!centerSRV || !outputUAV || rect.outputWidth == 0 || rect.outputHeight == 0 || !foveatedCenterBlendCB)
-		return;
+		return false;
 	if (!dispatchWidth || !dispatchHeight)
-		return;
+		return false;
 
 	auto* blendCS = GetFoveatedCenterBlendCS();
 	auto context = globals::d3d::context;
 	auto deferred = globals::deferred;
 	if (!blendCS || !context || !deferred || !deferred->linearSampler)
-		return;
+		return false;
 	if (dispatchOffsetX >= outputWidthPerEye || dispatchOffsetY >= outputHeight)
-		return;
+		return false;
 
 	dispatchWidth = std::min(dispatchWidth, outputWidthPerEye - dispatchOffsetX);
 	dispatchHeight = std::min(dispatchHeight, outputHeight - dispatchOffsetY);
 	if (!dispatchWidth || !dispatchHeight)
-		return;
+		return false;
 
 	const uint32_t rectMinX = rect.outputOffsetX;
 	const uint32_t rectMinY = rect.outputOffsetY;
@@ -24269,7 +25120,7 @@ void Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, I
 	const uint32_t dispatchMaxX = std::min(dispatchOffsetX + dispatchWidth, rectMaxX);
 	const uint32_t dispatchMaxY = std::min(dispatchOffsetY + dispatchHeight, rectMaxY);
 	if (dispatchMaxX <= dispatchMinX || dispatchMaxY <= dispatchMinY)
-		return;
+		return false;
 
 	const uint32_t actualDispatchWidth = dispatchMaxX - dispatchMinX;
 	const uint32_t actualDispatchHeight = dispatchMaxY - dispatchMinY;
@@ -24321,6 +25172,7 @@ void Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, I
 	context->CSSetSamplers(0, 1, nullSampler);
 	context->CSSetConstantBuffers(0, 1, nullCB);
 	context->CSSetShader(nullptr, nullptr, 0);
+	return true;
 }
 
 bool Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Upscaling::VendorEyeDispatchParams& params)
@@ -24431,12 +25283,276 @@ bool Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Ups
 	return false;
 }
 
-bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX, uint32_t depthInputBaseOffsetX, uint32_t auxInputBaseOffsetX, ID3D11UnorderedAccessView* outputUAV, Streamline::DLSSViewportRole dlssViewportRole, UINT submitSourceSubresource, const D3D11_BOX* submitSourceBox)
+Upscaling::OuterDLSSStereoResult Upscaling::DispatchFoveatedOuterDLSSStereoBase(
+	NeuralStereoRouteRole a_role,
+	UpscaleMethod a_upscaleMethod,
+	uint32_t a_inputWidth,
+	uint32_t a_inputHeight,
+	uint32_t a_outputWidth,
+	uint32_t a_outputHeight,
+	const std::array<Texture2D*, 2>& a_outputTemplates) noexcept
 {
+	OuterDLSSStereoResult result{};
+	result.requested = settings.foveatedOuterDLSS &&
+	                   IsNeuralRenderingRouteEnabled(settings, a_role);
+	const auto finish = [&]() noexcept -> OuterDLSSStereoResult {
+		RecordFoveatedOuterDLSSResult(a_role, result);
+		return OuterDLSSStereoResult(std::move(result));
+	};
+
+	if (!result.requested) {
+		result.fallbackReason = OuterDLSSFallbackReason::Disabled;
+		return finish();
+	}
+	if (a_upscaleMethod != UpscaleMethod::kDLSS) {
+		result.fallbackReason = OuterDLSSFallbackReason::MethodIneligible;
+		return finish();
+	}
+	if (!globals::game::isVR || !settings.foveatedVendorDispatch) {
+		result.fallbackReason = OuterDLSSFallbackReason::FoveatedInactive;
+		return finish();
+	}
+	if (!settings.neuralRenderingEnabled) {
+		result.fallbackReason = OuterDLSSFallbackReason::NeuralInactive;
+		return finish();
+	}
+	if (IsNeuralRenderingMenuSuppressed()) {
+		result.fallbackReason = OuterDLSSFallbackReason::MenuContext;
+		return finish();
+	}
+	if (settings.foveatedPeripheryMaskVisualization) {
+		result.fallbackReason = OuterDLSSFallbackReason::MaskVisualization;
+		return finish();
+	}
+	if (settings.frameGenerationMode != 0 || IsFrameGenerationDx12PathActive()) {
+		result.fallbackReason = OuterDLSSFallbackReason::FrameGeneration;
+		return finish();
+	}
+	if (!a_inputWidth || !a_inputHeight || !a_outputWidth || !a_outputHeight) {
+		result.fallbackReason = OuterDLSSFallbackReason::FullInputUnavailable;
+		return finish();
+	}
+
+	result.eligible = true;
+	for (uint32_t eye = 0; eye < 2; ++eye) {
+		const bool inputReady =
+			vrIntermediateColorIn[eye] && vrIntermediateColorIn[eye]->resource &&
+			vrIntermediateColorIn[eye]->srv &&
+			vrIntermediateDepth[eye] && vrIntermediateDepth[eye]->resource &&
+			vrIntermediateMotionVectors[eye] && vrIntermediateMotionVectors[eye]->resource &&
+			vrIntermediateReactiveMask[eye] && vrIntermediateReactiveMask[eye]->resource &&
+			vrIntermediateTransparencyMask[eye] && vrIntermediateTransparencyMask[eye]->resource &&
+			a_outputTemplates[eye] && a_outputTemplates[eye]->resource;
+		if (!inputReady) {
+			result.fallbackReason = OuterDLSSFallbackReason::FullInputUnavailable;
+			return finish();
+		}
+	}
+
+	static bool loggedOuterDLSSUnbindFailure = false;
+	const auto unbind = ScopeExit([&]() noexcept {
+		try {
+			UnbindUpscalingResources();
+		} catch (const std::exception& e) {
+			LogWarnOnce(
+				loggedOuterDLSSUnbindFailure,
+				"[Upscaling] Foveated Outer DLSS cleanup threw; later dispatches will rebind their resources",
+				e);
+		} catch (...) {
+			LogWarnOnce(
+				loggedOuterDLSSUnbindFailure,
+				"[Upscaling] Foveated Outer DLSS cleanup threw; later dispatches will rebind their resources");
+		}
+	});
+	try {
+		for (uint32_t eye = 0; eye < 2; ++eye) {
+			const char* suffix = eye == 0 ? "Left" : "Right";
+			if (!EnsureFoveatedTexture(
+					foveatedOuterDLSSBase[eye],
+					a_outputTemplates[eye]->resource.get(),
+					a_outputWidth,
+					a_outputHeight,
+					false,
+					true,
+					true,
+					false,
+					(std::string("Upscale_FoveatedOuterDLSSBase_") + suffix).c_str()) ||
+				!foveatedOuterDLSSBase[eye] || !foveatedOuterDLSSBase[eye]->resource ||
+				!foveatedOuterDLSSBase[eye]->srv || !foveatedOuterDLSSBase[eye]->uav) {
+				result.fallbackReason = OuterDLSSFallbackReason::ResourcePreparationFailed;
+				return finish();
+			}
+
+			D3D11_TEXTURE2D_DESC inputDesc{};
+			D3D11_TEXTURE2D_DESC templateDesc{};
+			D3D11_TEXTURE2D_DESC baseDesc{};
+			if (!TryGetTexture2DDesc(vrIntermediateColorIn[eye]->resource.get(), inputDesc) ||
+				!TryGetTexture2DDesc(a_outputTemplates[eye]->resource.get(), templateDesc) ||
+				!TryGetTexture2DDesc(foveatedOuterDLSSBase[eye]->resource.get(), baseDesc) ||
+				templateDesc.Width != baseDesc.Width ||
+				templateDesc.Height != baseDesc.Height ||
+				templateDesc.MipLevels != baseDesc.MipLevels ||
+				templateDesc.ArraySize != baseDesc.ArraySize ||
+				templateDesc.Format != baseDesc.Format ||
+				templateDesc.SampleDesc.Count != baseDesc.SampleDesc.Count ||
+				templateDesc.SampleDesc.Quality != baseDesc.SampleDesc.Quality) {
+				result.fallbackReason = OuterDLSSFallbackReason::ResourcePreparationFailed;
+				return finish();
+			}
+
+			// Streamline success does not prove that a plugin wrote ColorOut.
+			const auto sourceRegion = FoveatedRegionPlan::BuildTopLeftValidTextureRegion(
+				a_inputWidth,
+				a_inputHeight,
+				inputDesc.Width,
+				inputDesc.Height);
+			if (!DispatchFoveatedPeripheryPass(
+					vrIntermediateColorIn[eye]->srv.get(),
+					foveatedOuterDLSSBase[eye]->uav.get(),
+					inputDesc.Width,
+					inputDesc.Height,
+					a_outputWidth,
+					a_outputHeight,
+					0u,
+					0u,
+					a_outputWidth,
+					a_outputHeight,
+					1.0f,
+					1.0f,
+					false,
+					sourceRegion.scale.x,
+					sourceRegion.scale.y,
+					sourceRegion.offset.x,
+					sourceRegion.offset.y)) {
+				result.fallbackReason = OuterDLSSFallbackReason::ResourcePreparationFailed;
+				return finish();
+			}
+			result.baseResources[eye].copy_from(
+				foveatedOuterDLSSBase[eye]->resource.get());
+			result.baseUAVs[eye].copy_from(
+				foveatedOuterDLSSBase[eye]->uav.get());
+			result.preparedEyeMask |= 1u << eye;
+		}
+
+		const auto viewportRole = a_role == NeuralStereoRouteRole::Submit ?
+		                              Streamline::DLSSViewportRole::SubmitStageFoveatedOuterBase :
+		                              Streamline::DLSSViewportRole::FoveatedOuterBase;
+		const char* label = a_role == NeuralStereoRouteRole::Submit ?
+		                        "submit-stage foveated outer DLSS base" :
+		                        "main foveated outer DLSS base";
+		for (uint32_t eye = 0; eye < 2; ++eye) {
+			VendorEyeDispatchParams params{};
+			params.eyeIndex = eye;
+			params.inputWidth = a_inputWidth;
+			params.inputHeight = a_inputHeight;
+			params.outputWidth = a_outputWidth;
+			params.outputHeight = a_outputHeight;
+			params.motionVectorScaleX = static_cast<float>(a_inputWidth);
+			params.motionVectorScaleY = static_cast<float>(a_inputHeight);
+			params.colorIn = vrIntermediateColorIn[eye]->resource.get();
+			params.depth = vrIntermediateDepth[eye]->resource.get();
+			params.motionVectors = vrIntermediateMotionVectors[eye]->resource.get();
+			params.reactiveMask = vrIntermediateReactiveMask[eye]->resource.get();
+			params.transparencyMask = vrIntermediateTransparencyMask[eye]->resource.get();
+			params.colorOut = foveatedOuterDLSSBase[eye]->resource.get();
+			params.label = label;
+			params.dlssViewportRole = viewportRole;
+			result.attemptedEyeMask |= 1u << eye;
+			if (DispatchVendorEyeRegion(UpscaleMethod::kDLSS, params))
+				result.evaluatedEyeMask |= 1u << eye;
+		}
+	} catch (const std::exception& e) {
+		static bool loggedOuterDLSSException = false;
+		LogWarnOnce(
+			loggedOuterDLSSException,
+			"[Upscaling] Foveated Outer DLSS stereo base threw; using the existing periphery path",
+			e);
+		MarkSubmitStageDeviceLostIfNeeded(e, "foveated Outer DLSS stereo base");
+	} catch (...) {
+		static bool loggedOuterDLSSException = false;
+		LogWarnOnce(
+			loggedOuterDLSSException,
+			"[Upscaling] Foveated Outer DLSS stereo base threw; using the existing periphery path");
+		MarkSubmitStageDeviceLostIfDeviceRemoved("foveated Outer DLSS stereo base");
+	}
+
+	if (result.evaluatedEyeMask != 0b11u) {
+		result.fallbackReason = OuterDLSSFallbackReason::StereoEvaluationFailed;
+		RequestHistoryReset();
+		return finish();
+	}
+	result.fallbackReason = OuterDLSSFallbackReason::None;
+	return finish();
+}
+
+void Upscaling::RecordFoveatedOuterDLSSResult(
+	NeuralStereoRouteRole a_role,
+	OuterDLSSStereoResult& a_result) noexcept
+{
+	const auto roleIndex = static_cast<std::size_t>(a_role);
+	if (roleIndex >= outerDLSSRouteCounters.size())
+		return;
+	const auto eyeCount = [](uint32_t a_mask) noexcept {
+		return static_cast<uint64_t>((a_mask & 1u) + ((a_mask >> 1u) & 1u));
+	};
+	auto& counters = outerDLSSRouteCounters[roleIndex];
+	if (!a_result.countersRecorded) {
+		a_result.countersRecorded = true;
+		if (a_result.requested)
+			counters.requestedTransactions.fetch_add(1, std::memory_order_relaxed);
+		if (a_result.eligible)
+			counters.eligibleTransactions.fetch_add(1, std::memory_order_relaxed);
+		counters.preparedEyes.fetch_add(eyeCount(a_result.preparedEyeMask), std::memory_order_relaxed);
+		counters.attemptedEyes.fetch_add(eyeCount(a_result.attemptedEyeMask), std::memory_order_relaxed);
+		counters.evaluatedEyes.fetch_add(eyeCount(a_result.evaluatedEyeMask), std::memory_order_relaxed);
+	}
+	if (a_result.requested && !a_result.fallbackCounted &&
+		a_result.fallbackReason != OuterDLSSFallbackReason::None) {
+		a_result.fallbackCounted = true;
+		counters.fallbackTransactions.fetch_add(1, std::memory_order_relaxed);
+	}
+}
+
+void Upscaling::CommitFoveatedOuterDLSSStereoBase(
+	NeuralStereoRouteRole a_role,
+	OuterDLSSStereoResult& a_result) noexcept
+{
+	if (!a_result.IsBaseReady() || a_result.committedEyeMask == 0b11u)
+		return;
+	a_result.committedEyeMask = 0b11u;
+	const auto roleIndex = static_cast<std::size_t>(a_role);
+	if (roleIndex < outerDLSSRouteCounters.size()) {
+		outerDLSSRouteCounters[roleIndex].committedTransactions.fetch_add(
+			1, std::memory_order_relaxed);
+	}
+	// The skipped temporal periphery did not write a new alternating history pair.
+	peripheryTAAHistoryReadIndex = 0;
+	peripheryTAAHistoryValid = false;
+	submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
+	submitStageFoveatedPeripheryTAAEyeReady = {};
+}
+
+bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX, uint32_t depthInputBaseOffsetX, uint32_t auxInputBaseOffsetX, ID3D11UnorderedAccessView* outputUAV, Streamline::DLSSViewportRole dlssViewportRole, UINT submitSourceSubresource, const D3D11_BOX* submitSourceBox, bool compositeCenter, NeuralCenterPhase neuralCenterPhase, bool neuralPairApplied, NeuralCenterDispatchResult* neuralResult, NeuralRendering::RendererApplyArgs* neuralBatchArgs)
+{
+	if (neuralResult)
+		*neuralResult = {};
+	if (neuralBatchArgs && neuralCenterPhase == NeuralCenterPhase::Stage)
+		*neuralBatchArgs = {};
 	if (!SupportsFoveatedVendorDispatch(a_upscaleMethod))
 		return false;
 
 	const bool useFSR = a_upscaleMethod == UpscaleMethod::kFSR;
+	const auto neuralRouteRole = GetNeuralRenderingRouteRole(dlssViewportRole);
+	const bool neuralRenderingRequested =
+		neuralCenterPhase != NeuralCenterPhase::Disabled &&
+		a_upscaleMethod == UpscaleMethod::kDLSS &&
+		settings.neuralRenderingEnabled &&
+		IsNeuralRenderingRouteEnabled(settings, neuralRouteRole) &&
+		!IsNeuralRenderingMenuSuppressed() &&
+		settings.frameGenerationMode == 0 &&
+		!IsFrameGenerationDx12PathActive();
+	if (neuralResult)
+		neuralResult->requested = neuralRenderingRequested;
 
 	if (eyeIndex > 1)
 		return false;
@@ -24449,19 +25565,84 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 	const bool createFsrViews = useFSR;
 	const uint32_t centerInputAllocationWidth = useFSR ? std::max(rect.inputWidth, outputWidthPerEye) : rect.inputWidth;
 	const uint32_t centerInputAllocationHeight = useFSR ? std::max(rect.inputHeight, outputHeight) : rect.inputHeight;
+	const uint32_t neuralOutputWidth = NeuralRendering::RunsBeforeDlss() ? rect.inputWidth : rect.outputWidth;
+	const uint32_t neuralOutputHeight = NeuralRendering::RunsBeforeDlss() ? rect.inputHeight : rect.outputHeight;
+	const bool directNeuralCommit =
+		neuralRenderingRequested && settings.neuralRenderingDirectCommit;
+	const bool validateStagedResources =
+		neuralCenterPhase == NeuralCenterPhase::Resolve;
+	const auto prepareFoveatedTexture = [&]<class TexturePointer>(
+											TexturePointer& a_texture,
+											ID3D11Resource* a_source,
+											uint32_t a_width,
+											uint32_t a_height,
+											bool a_copyBindFlags,
+											bool a_requireSRV,
+											bool a_requireUAV,
+											bool a_requireRTV,
+											const char* a_name) {
+		if (!validateStagedResources) {
+			return EnsureFoveatedTexture(
+				a_texture,
+				a_source,
+				a_width,
+				a_height,
+				a_copyBindFlags,
+				a_requireSRV,
+				a_requireUAV,
+				a_requireRTV,
+				a_name);
+		}
 
-	if (!EnsureFoveatedTexture(foveatedCenterColorIn[eyeIndex], colorIn, centerInputAllocationWidth, centerInputAllocationHeight, false, createFsrViews, false, false, ("Upscale_FoveatedCenter_ColorIn_" + suffix).c_str()))
+		D3D11_TEXTURE2D_DESC sourceDesc{};
+		return a_source && TryGetTexture2DDesc(a_source, sourceDesc) &&
+		       a_texture && a_texture->resource &&
+		       a_texture->desc.Width == a_width &&
+		       a_texture->desc.Height == a_height &&
+		       a_texture->desc.Format == sourceDesc.Format &&
+		       (!a_requireSRV || a_texture->srv) &&
+		       (!a_requireUAV || a_texture->uav) &&
+		       (!a_requireRTV || a_texture->rtv);
+	};
+
+	if (!prepareFoveatedTexture(foveatedCenterColorIn[eyeIndex], colorIn, centerInputAllocationWidth, centerInputAllocationHeight, false, createFsrViews, false, false, ("Upscale_FoveatedCenter_ColorIn_" + suffix).c_str()))
 		return false;
-	if (!EnsureFoveatedTexture(foveatedCenterColorOut[eyeIndex], colorIn, rect.outputWidth, rect.outputHeight, false, true, createFsrViews, false, ("Upscale_FoveatedCenter_ColorOut_" + suffix).c_str()))
+	if (!prepareFoveatedTexture(foveatedCenterColorOut[eyeIndex], colorIn, rect.outputWidth, rect.outputHeight, false, true, createFsrViews, false, ("Upscale_FoveatedCenter_ColorOut_" + suffix).c_str()))
 		return false;
-	if (!EnsureFoveatedTexture(foveatedCenterDepth[eyeIndex], depthIn, centerInputAllocationWidth, centerInputAllocationHeight, true, createFsrViews, false, false, ("Upscale_FoveatedCenter_Depth_" + suffix).c_str()))
+	if (!prepareFoveatedTexture(foveatedCenterDepth[eyeIndex], depthIn, centerInputAllocationWidth, centerInputAllocationHeight, true, createFsrViews, false, false, ("Upscale_FoveatedCenter_Depth_" + suffix).c_str()))
 		return false;
-	if (!EnsureFoveatedTexture(foveatedCenterMotionVectors[eyeIndex], motionVectorsIn, centerInputAllocationWidth, centerInputAllocationHeight, false, createFsrViews, false, false, ("Upscale_FoveatedCenter_MVec_" + suffix).c_str()))
+	if (!prepareFoveatedTexture(foveatedCenterMotionVectors[eyeIndex], motionVectorsIn, centerInputAllocationWidth, centerInputAllocationHeight, false, createFsrViews, false, false, ("Upscale_FoveatedCenter_MVec_" + suffix).c_str()))
 		return false;
-	if (!EnsureFoveatedTexture(foveatedCenterReactiveMask[eyeIndex], reactiveMaskIn, centerInputAllocationWidth, centerInputAllocationHeight, false, createFsrViews, false, false, ("Upscale_FoveatedCenter_Reactive_" + suffix).c_str()))
+	if (!prepareFoveatedTexture(foveatedCenterReactiveMask[eyeIndex], reactiveMaskIn, centerInputAllocationWidth, centerInputAllocationHeight, false, createFsrViews, false, false, ("Upscale_FoveatedCenter_Reactive_" + suffix).c_str()))
 		return false;
-	if (!EnsureFoveatedTexture(foveatedCenterTransparencyMask[eyeIndex], transparencyMaskIn, centerInputAllocationWidth, centerInputAllocationHeight, false, createFsrViews, false, false, ("Upscale_FoveatedCenter_Transparency_" + suffix).c_str()))
+	if (!prepareFoveatedTexture(foveatedCenterTransparencyMask[eyeIndex], transparencyMaskIn, centerInputAllocationWidth, centerInputAllocationHeight, false, createFsrViews, false, false, ("Upscale_FoveatedCenter_Transparency_" + suffix).c_str()))
 		return false;
+
+	bool neuralResourcesReady = neuralRenderingRequested;
+	if (neuralResourcesReady && !directNeuralCommit) {
+		neuralResourcesReady = prepareFoveatedTexture(
+			foveatedCenterNeuralOut[eyeIndex],
+			colorIn,
+			neuralOutputWidth,
+			neuralOutputHeight,
+			false,
+			true,
+			false,
+			false,
+			("Upscale_FoveatedCenter_NeuralOut_" + suffix).c_str());
+	}
+	// A direct Resolve consumes the color result already committed during Stage;
+	// guide views are no longer part of that surviving output contract.
+	const bool directNeuralResolve =
+		validateStagedResources && directNeuralCommit;
+	if (neuralResourcesReady && !directNeuralResolve) {
+		neuralResourcesReady = validateStagedResources ?
+		                           foveatedCenterDepth[eyeIndex] &&
+		                               foveatedCenterDepth[eyeIndex]->srv != nullptr :
+		                           EnsureFoveatedDepthGuideSRV(
+									   *foveatedCenterDepth[eyeIndex],
+									   ("Upscale_FoveatedCenter_Depth_" + suffix).c_str());
+	}
 
 	auto context = globals::d3d::context;
 	if (!context)
@@ -24495,7 +25676,7 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 	vendorParams.label = dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter ?
 	                         "submit-stage foveated center" :
 	                         "foveated center";
-	const auto* state = globals::state;
+	auto* state = globals::state;
 	const bool submitStageDLSSCenter =
 		a_upscaleMethod == UpscaleMethod::kDLSS &&
 		dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter;
@@ -24538,10 +25719,22 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 		centerKey.reactiveMaskIn = reactiveMaskIn;
 		centerKey.transparencyMaskIn = transparencyMaskIn;
 		centerKey.colorOut = vendorParams.colorOut;
+		centerKey.neuralOut = neuralRenderingRequested ?
+		                          (directNeuralCommit ?
+										  (NeuralRendering::RunsBeforeDlss() ?
+												  foveatedCenterColorIn[eyeIndex]->resource.get() :
+												  foveatedCenterColorOut[eyeIndex]->resource.get()) :
+										  (foveatedCenterNeuralOut[eyeIndex] ?
+												  foveatedCenterNeuralOut[eyeIndex]->resource.get() :
+												  nullptr)) :
+		                          nullptr;
+		centerKey.neuralSettingsKey = neuralRenderingRequested ?
+		                                  BuildNeuralRenderingSettingsKey(settings) :
+		                                  0;
+		centerKey.neuralRequested = neuralRenderingRequested;
 	}
 	auto matchesSubmitStageDLSSCenter = [](const SubmitStageFoveatedCenterState& a_cached, const SubmitStageFoveatedCenterState& a_key) {
-		return a_cached.ready &&
-		       a_cached.frame == a_key.frame &&
+		return a_cached.frame == a_key.frame &&
 		       a_cached.method == a_key.method &&
 		       a_cached.generation == a_key.generation &&
 		       a_cached.qualityMode == a_key.qualityMode &&
@@ -24571,53 +25764,273 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 		       a_cached.motionVectorsIn == a_key.motionVectorsIn &&
 		       a_cached.reactiveMaskIn == a_key.reactiveMaskIn &&
 		       a_cached.transparencyMaskIn == a_key.transparencyMaskIn &&
-		       a_cached.colorOut == a_key.colorOut;
+		       a_cached.colorOut == a_key.colorOut &&
+		       a_cached.neuralOut == a_key.neuralOut &&
+		       a_cached.neuralSettingsKey == a_key.neuralSettingsKey &&
+		       a_cached.neuralRequested == a_key.neuralRequested;
 	};
 	auto& centerState = submitStageFoveatedCenterState[eyeIndex];
 	const bool reuseSubmitStageDLSSCenter =
 		trackSubmitStageDLSSCenter &&
+		centerState.ready &&
 		matchesSubmitStageDLSSCenter(centerState, centerKey);
+	const bool hasStagedSubmitTelemetry =
+		trackSubmitStageDLSSCenter &&
+		centerState.stageTelemetryReady &&
+		matchesSubmitStageDLSSCenter(centerState, centerKey);
+	if (reuseSubmitStageDLSSCenter && neuralResult) {
+		neuralResult->requested = centerState.neuralRequested;
+		neuralResult->attempted = centerState.neuralAttempted;
+		neuralResult->applied = centerState.neuralApplied;
+		neuralResult->dlssEvaluated = centerState.dlssEvaluated;
+	}
 	if (!reuseSubmitStageDLSSCenter) {
-		D3D11_BOX colorSrcBox{
-			colorInputBaseOffsetX + rect.inputOffsetX,
-			rect.inputOffsetY,
-			0u,
-			colorInputBaseOffsetX + rect.inputOffsetX + rect.inputWidth,
-			rect.inputOffsetY + rect.inputHeight,
-			1u
-		};
-		D3D11_BOX depthSrcBox{
-			depthInputBaseOffsetX + rect.inputOffsetX,
-			rect.inputOffsetY,
-			0u,
-			depthInputBaseOffsetX + rect.inputOffsetX + rect.inputWidth,
-			rect.inputOffsetY + rect.inputHeight,
-			1u
-		};
-		D3D11_BOX auxSrcBox{
-			auxInputBaseOffsetX + rect.inputOffsetX,
-			rect.inputOffsetY,
-			0u,
-			auxInputBaseOffsetX + rect.inputOffsetX + rect.inputWidth,
-			rect.inputOffsetY + rect.inputHeight,
-			1u
+		if (neuralCenterPhase != NeuralCenterPhase::Resolve) {
+			D3D11_BOX colorSrcBox{
+				colorInputBaseOffsetX + rect.inputOffsetX,
+				rect.inputOffsetY,
+				0u,
+				colorInputBaseOffsetX + rect.inputOffsetX + rect.inputWidth,
+				rect.inputOffsetY + rect.inputHeight,
+				1u
+			};
+			D3D11_BOX depthSrcBox{
+				depthInputBaseOffsetX + rect.inputOffsetX,
+				rect.inputOffsetY,
+				0u,
+				depthInputBaseOffsetX + rect.inputOffsetX + rect.inputWidth,
+				rect.inputOffsetY + rect.inputHeight,
+				1u
+			};
+			D3D11_BOX auxSrcBox{
+				auxInputBaseOffsetX + rect.inputOffsetX,
+				rect.inputOffsetY,
+				0u,
+				auxInputBaseOffsetX + rect.inputOffsetX + rect.inputWidth,
+				rect.inputOffsetY + rect.inputHeight,
+				1u
+			};
+
+			context->CopySubresourceRegion(foveatedCenterColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, colorIn, 0, &colorSrcBox);
+			if (neuralResult && neuralCenterPhase == NeuralCenterPhase::Stage) {
+				neuralResult->originalColorSource = colorIn;
+				neuralResult->originalColorSubresource = 0;
+				neuralResult->originalColorBox = colorSrcBox;
+				neuralResult->originalColorSourceValid = true;
+			}
+			context->CopySubresourceRegion(foveatedCenterDepth[eyeIndex]->resource.get(), 0, 0, 0, 0, depthIn, 0, &depthSrcBox);
+			context->CopySubresourceRegion(foveatedCenterMotionVectors[eyeIndex]->resource.get(), 0, 0, 0, 0, motionVectorsIn, 0, &auxSrcBox);
+			context->CopySubresourceRegion(foveatedCenterReactiveMask[eyeIndex]->resource.get(), 0, 0, 0, 0, reactiveMaskIn, 0, &auxSrcBox);
+			context->CopySubresourceRegion(foveatedCenterTransparencyMask[eyeIndex]->resource.get(), 0, 0, 0, 0, transparencyMaskIn, 0, &auxSrcBox);
+		}
+
+		bool neuralAttempted = false;
+		bool neuralPrepared = false;
+		bool neuralApplied = false;
+		bool dlssEvaluated = false;
+		auto applyNeuralRendering = [&](
+										ID3D11Resource* a_colorInput,
+										uint32_t a_colorWidth,
+										uint32_t a_colorHeight,
+										uint32_t a_neuralOutputWidth,
+										uint32_t a_neuralOutputHeight) {
+			auto* neuralOutput = directNeuralCommit ?
+			                         (NeuralRendering::RunsBeforeDlss() ?
+											 foveatedCenterColorIn[eyeIndex]->resource.get() :
+											 foveatedCenterColorOut[eyeIndex]->resource.get()) :
+			                         (foveatedCenterNeuralOut[eyeIndex] ?
+											 foveatedCenterNeuralOut[eyeIndex]->resource.get() :
+											 nullptr);
+			if (!neuralResourcesReady || !neuralOutput ||
+				!foveatedCenterDepth[eyeIndex] ||
+				!foveatedCenterDepth[eyeIndex]->resource ||
+				!foveatedCenterDepth[eyeIndex]->srv ||
+				!foveatedCenterMotionVectors[eyeIndex] ||
+				!foveatedCenterMotionVectors[eyeIndex]->resource) {
+				return false;
+			}
+			neuralPrepared = true;
+			if (neuralResult)
+				neuralResult->prepared = true;
+			NeuralRendering::RendererApplyArgs args{};
+			args.device = globals::d3d::device;
+			args.context = context;
+			args.featureSlot = eyeIndex +
+			                   (dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter ? 2u : 0u);
+			args.frameId = currentFrame;
+			args.generation = submitStageDLSSCenter ?
+			                      std::max<uint64_t>(activeContractGeneration, 1u) :
+			                      std::max<uint64_t>(vrDLSSRuntimeResourceGeneration, 1u);
+			args.colorInput = a_colorInput;
+			args.depthGuide = foveatedCenterDepth[eyeIndex]->resource.get();
+			args.depthGuideSRV = foveatedCenterDepth[eyeIndex]->srv.get();
+			args.motionVectors = foveatedCenterMotionVectors[eyeIndex]->resource.get();
+			args.colorOutput = neuralOutput;
+			args.colorWidth = a_colorWidth;
+			args.colorHeight = a_colorHeight;
+			args.guideWidth = rect.inputWidth;
+			args.guideHeight = rect.inputHeight;
+			args.outputWidth = a_neuralOutputWidth;
+			args.outputHeight = a_neuralOutputHeight;
+			const bool useCenterMotionVectorScale =
+				settings.neuralRenderingMotionVectorScaleMode ==
+				static_cast<uint>(NeuralRenderingMotionVectorScaleMode::CenterRegion);
+			args.motionVectorScaleX = useCenterMotionVectorScale ?
+			                              static_cast<float>(std::max(rect.inputWidth, 1u)) :
+			                              vendorParams.motionVectorScaleX;
+			args.motionVectorScaleY = useCenterMotionVectorScale ?
+			                              static_cast<float>(std::max(rect.inputHeight, 1u)) :
+			                              vendorParams.motionVectorScaleY;
+			args.inputOffsetX = rect.inputOffsetX;
+			args.inputOffsetY = rect.inputOffsetY;
+			args.outputOffsetX = rect.outputOffsetX;
+			args.outputOffsetY = rect.outputOffsetY;
+			args.pinholeOffsetX = pinholeOffset.x;
+			args.pinholeOffsetY = pinholeOffset.y;
+			args.featureUpscaling =
+				NeuralRendering::UsesFeatureUpscaling() ||
+				settings.neuralRenderingForceFeatureUpscaling;
+			args.reset = ShouldResetHistoryThisFrame() ||
+			             settings.neuralRenderingResetEveryFrame;
+			args.tuning = {
+				.intensity = settings.neuralRenderingIntensity,
+				.localToneStrength = settings.neuralRenderingLocalTone,
+				.localStructureStrength = settings.neuralRenderingLocalStructure,
+				.skinStructureStrength = settings.neuralRenderingSkinStructure,
+				.style = settings.neuralRenderingStyle,
+				.useAutoMask = settings.neuralRenderingAutoMask,
+				.uiCorrection = settings.neuralRenderingUICorrection,
+			};
+			if (neuralResult) {
+				neuralResult->callerReset = args.reset;
+				neuralResult->featureUpscaling = args.featureUpscaling;
+				neuralResult->motionVectorScaleX = args.motionVectorScaleX;
+				neuralResult->motionVectorScaleY = args.motionVectorScaleY;
+				neuralResult->inputOffsetX = args.inputOffsetX;
+				neuralResult->inputOffsetY = args.inputOffsetY;
+				neuralResult->pinholeOffsetX = args.pinholeOffsetX;
+				neuralResult->pinholeOffsetY = args.pinholeOffsetY;
+			}
+
+			if (neuralBatchArgs) {
+				*neuralBatchArgs = args;
+				return true;
+			}
+			NeuralRendering::RendererApplyOutcome outcome{};
+			bool succeeded = false;
+			try {
+				succeeded = NeuralRendering::Renderer::Instance().Apply(
+					args, &outcome);
+			} catch (const std::exception& e) {
+				logger::error("[DLSSNR] Unexpected renderer exception; preserving normal DLSS: {}", e.what());
+			} catch (...) {
+				logger::error("[DLSSNR] Unexpected renderer exception; preserving normal DLSS");
+			}
+			neuralAttempted = outcome.WasEvaluationAttempted(args.featureSlot);
+			if (neuralResult) {
+				neuralResult->attempted = neuralAttempted;
+				neuralResult->evaluated = succeeded;
+			}
+			return succeeded;
 		};
 
-		context->CopySubresourceRegion(foveatedCenterColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, colorIn, 0, &colorSrcBox);
-		context->CopySubresourceRegion(foveatedCenterDepth[eyeIndex]->resource.get(), 0, 0, 0, 0, depthIn, 0, &depthSrcBox);
-		context->CopySubresourceRegion(foveatedCenterMotionVectors[eyeIndex]->resource.get(), 0, 0, 0, 0, motionVectorsIn, 0, &auxSrcBox);
-		context->CopySubresourceRegion(foveatedCenterReactiveMask[eyeIndex]->resource.get(), 0, 0, 0, 0, reactiveMaskIn, 0, &auxSrcBox);
-		context->CopySubresourceRegion(foveatedCenterTransparencyMask[eyeIndex]->resource.get(), 0, 0, 0, 0, transparencyMaskIn, 0, &auxSrcBox);
+		if (neuralCenterPhase == NeuralCenterPhase::Disabled) {
+			if (!DispatchVendorEyeRegion(a_upscaleMethod, vendorParams))
+				return false;
+			dlssEvaluated = a_upscaleMethod == UpscaleMethod::kDLSS;
+		} else if (neuralCenterPhase == NeuralCenterPhase::Stage) {
+			if constexpr (NeuralRendering::RunsBeforeDlss()) {
+				const bool neuralSubmitted = applyNeuralRendering(
+					foveatedCenterColorIn[eyeIndex]->resource.get(),
+					rect.inputWidth,
+					rect.inputHeight,
+					rect.inputWidth,
+					rect.inputHeight);
+				neuralPrepared = neuralSubmitted || neuralPrepared;
+			} else if constexpr (NeuralRendering::ReplacesDlss()) {
+				const bool neuralSubmitted = applyNeuralRendering(
+					foveatedCenterColorIn[eyeIndex]->resource.get(),
+					rect.inputWidth,
+					rect.inputHeight,
+					rect.outputWidth,
+					rect.outputHeight);
+				neuralPrepared = neuralSubmitted || neuralPrepared;
+			} else {
+				if (!DispatchVendorEyeRegion(a_upscaleMethod, vendorParams))
+					return false;
+				dlssEvaluated = true;
+				const bool neuralSubmitted = applyNeuralRendering(
+					foveatedCenterColorOut[eyeIndex]->resource.get(),
+					rect.outputWidth,
+					rect.outputHeight,
+					rect.outputWidth,
+					rect.outputHeight);
+				neuralPrepared = neuralSubmitted || neuralPrepared;
+			}
+		} else if constexpr (NeuralRendering::RunsBeforeDlss()) {
+			const bool resolvedNeuralInput = neuralPairApplied && neuralResourcesReady;
+			if (resolvedNeuralInput && !directNeuralCommit)
+				vendorParams.colorIn = foveatedCenterNeuralOut[eyeIndex]->resource.get();
+			if (!DispatchVendorEyeRegion(a_upscaleMethod, vendorParams))
+				return false;
+			dlssEvaluated = true;
+			neuralApplied = resolvedNeuralInput;
+		} else if constexpr (NeuralRendering::ReplacesDlss()) {
+			if (neuralPairApplied && neuralResourcesReady) {
+				if (!directNeuralCommit) {
+					context->CopyResource(
+						foveatedCenterColorOut[eyeIndex]->resource.get(),
+						foveatedCenterNeuralOut[eyeIndex]->resource.get());
+				}
+				neuralApplied = true;
+			} else {
+				if (!DispatchVendorEyeRegion(a_upscaleMethod, vendorParams))
+					return false;
+				dlssEvaluated = true;
+			}
+		} else {
+			if (neuralPairApplied && neuralResourcesReady) {
+				if (!directNeuralCommit) {
+					context->CopyResource(
+						foveatedCenterColorOut[eyeIndex]->resource.get(),
+						foveatedCenterNeuralOut[eyeIndex]->resource.get());
+				}
+				neuralApplied = true;
+			} else {
+				// Normal DLSS already populated ColorOut during the staging phase.
+				dlssEvaluated = true;
+			}
+		}
 
-		if (!DispatchVendorEyeRegion(a_upscaleMethod, vendorParams))
-			return false;
+		if (neuralResult) {
+			neuralResult->prepared = neuralPrepared;
+			neuralResult->applied = neuralApplied;
+			neuralResult->dlssEvaluated = dlssEvaluated;
+		}
 
-		if (trackSubmitStageDLSSCenter)
-			centerState = centerKey;
+		if (trackSubmitStageDLSSCenter) {
+			if (neuralCenterPhase == NeuralCenterPhase::Stage) {
+				centerKey.ready = false;
+				centerKey.stageTelemetryReady = true;
+				centerKey.neuralAttempted = neuralAttempted;
+				centerKey.neuralApplied = neuralApplied;
+				centerKey.dlssEvaluated = dlssEvaluated;
+				centerState = centerKey;
+			} else {
+				centerKey.neuralAttempted =
+					(hasStagedSubmitTelemetry && centerState.neuralAttempted) || neuralAttempted;
+				centerKey.neuralApplied = neuralApplied;
+				centerKey.dlssEvaluated =
+					(hasStagedSubmitTelemetry && centerState.dlssEvaluated) || dlssEvaluated;
+				centerState = centerKey;
+			}
+		}
 	}
 
 	if (!foveatedCenterColorOut[eyeIndex] || !foveatedCenterColorOut[eyeIndex]->resource || !foveatedCenterColorOut[eyeIndex]->srv)
 		return false;
+	if (!compositeCenter)
+		return true;
 	if (!vrIntermediateColorOut[eyeIndex] || !vrIntermediateColorOut[eyeIndex]->uav || !vrIntermediateColorOut[eyeIndex]->resource)
 		return false;
 
@@ -24633,7 +26046,7 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 	                                     ClampPeripheryTAACenterBlendFeather(centerFeather) :
 	                                     ClampPeripheryTAACenterBlendFeather(FoveatedCommon::kCenterFeather);
 
-	DispatchFoveatedBlendPass(
+	return DispatchFoveatedBlendPass(
 		centerSRV,
 		outputUAV,
 		outputWidthPerEye,
@@ -24647,7 +26060,301 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 		centerHorizontalScale,
 		centerOffset,
 		centerBlendFeather);
-	return true;
+}
+
+bool Upscaling::RestorePrivateFoveatedCenterInputsForNeuralFallback(
+	const std::array<NeuralCenterDispatchResult, 2>& a_stageResults) noexcept
+{
+	try {
+		auto* context = globals::d3d::context;
+		if (!context || !foveatedRectCache.plan.IsValid())
+			return false;
+
+		UnbindUpscalingResources();
+		for (uint32_t eye = 0; eye < 2; ++eye) {
+			const auto& source = a_stageResults[eye];
+			if (!source.originalColorSourceValid || !source.originalColorSource ||
+				!foveatedCenterColorIn[eye] ||
+				!foveatedCenterColorIn[eye]->resource) {
+				return false;
+			}
+			context->CopySubresourceRegion(
+				foveatedCenterColorIn[eye]->resource.get(),
+				0,
+				0,
+				0,
+				0,
+				source.originalColorSource,
+				source.originalColorSubresource,
+				&source.originalColorBox);
+		}
+		return !MarkSubmitStageDeviceLostIfDeviceRemoved(
+			"restore private NR center inputs");
+	} catch (const std::exception& e) {
+		MarkSubmitStageDeviceLostIfNeeded(
+			e, "restore private NR center inputs");
+	} catch (...) {
+		MarkSubmitStageDeviceLostIfDeviceRemoved(
+			"restore private NR center inputs");
+	}
+	return false;
+}
+
+uint32_t Upscaling::BuildNeuralCenterEyeMask(
+	const std::array<NeuralCenterDispatchResult, 2>& a_results,
+	bool NeuralCenterDispatchResult::* a_member) noexcept
+{
+	uint32_t mask = 0;
+	for (uint32_t eye = 0; eye < a_results.size(); ++eye) {
+		if (a_results[eye].*a_member)
+			mask |= 1u << eye;
+	}
+	return mask;
+}
+
+Upscaling::NeuralStereoEvaluationState Upscaling::EvaluatePreparedNeuralStereoPair(
+	bool a_transactionReady,
+	bool a_batchedStereo,
+	std::array<NeuralCenterDispatchResult, 2>& a_results,
+	const std::array<NeuralRendering::RendererApplyArgs, 2>& a_batchArgs)
+{
+	NeuralStereoEvaluationState state{
+		.preparedEyeMask = BuildNeuralCenterEyeMask(
+			a_results, &NeuralCenterDispatchResult::prepared),
+		.evaluatedEyeMask = BuildNeuralCenterEyeMask(
+			a_results, &NeuralCenterDispatchResult::evaluated),
+	};
+	if (a_transactionReady && state.preparedEyeMask == 0b11u) {
+		auto pairArgs = a_batchArgs;
+		const uint64_t neuralResetGeneration =
+			CaptureNeuralHistoryResetGeneration(pairArgs[0].featureSlot);
+		const bool resetNeuralHistory = ShouldResetNeuralHistory(
+			pairArgs[0].featureSlot, neuralResetGeneration);
+		for (auto& args : pairArgs)
+			args.reset = args.reset || resetNeuralHistory;
+		for (uint32_t eye = 0; eye < a_results.size(); ++eye) {
+			a_results[eye].callerReset = pairArgs[eye].reset;
+			a_results[eye].featureUpscaling = pairArgs[eye].featureUpscaling;
+			a_results[eye].motionVectorScaleX = pairArgs[eye].motionVectorScaleX;
+			a_results[eye].motionVectorScaleY = pairArgs[eye].motionVectorScaleY;
+			a_results[eye].inputOffsetX = pairArgs[eye].inputOffsetX;
+			a_results[eye].inputOffsetY = pairArgs[eye].inputOffsetY;
+			a_results[eye].pinholeOffsetX = pairArgs[eye].pinholeOffsetX;
+			a_results[eye].pinholeOffsetY = pairArgs[eye].pinholeOffsetY;
+		}
+
+		NeuralRendering::RendererApplyOutcome outcome{};
+		const bool applied = a_batchedStereo ?
+		                         NeuralRendering::Renderer::Instance().ApplyStereo(
+									 pairArgs, &outcome) :
+		                         NeuralRendering::Renderer::Instance().ApplySequentialStereo(
+									 pairArgs, &outcome);
+		for (uint32_t eye = 0; eye < a_results.size(); ++eye) {
+			a_results[eye].attempted =
+				a_results[eye].attempted ||
+				outcome.WasEvaluationAttempted(pairArgs[eye].featureSlot);
+		}
+		if (applied) {
+			for (auto& result : a_results)
+				result.evaluated = true;
+			state.evaluatedEyeMask = 0b11u;
+			CompleteNeuralHistoryReset(
+				pairArgs[0].featureSlot, neuralResetGeneration);
+		} else if (outcome.evaluationAttemptedFeatureSlotMask != 0) {
+			RequestHistoryReset();
+		}
+	} else if (state.preparedEyeMask != 0) {
+		RequestHistoryReset();
+	}
+	return state;
+}
+
+bool Upscaling::DispatchFoveatedVendorCenterStereo(UpscaleMethod a_upscaleMethod, const std::array<FoveatedEyeDispatchParams, 2>& params, bool& neuralPairApplied, std::array<NeuralCenterDispatchResult, 2>* neuralResults) noexcept
+{
+	neuralPairApplied = false;
+	std::array<NeuralCenterDispatchResult, 2> results{};
+	std::array<NeuralRendering::RendererApplyArgs, 2> neuralBatchArgs{};
+	const bool batchedStereo = settings.neuralRenderingBatchedStereo;
+	const bool directCommit = settings.neuralRenderingDirectCommit;
+	const auto publishResults = [&]() noexcept {
+		if (neuralResults)
+			*neuralResults = results;
+	};
+	const auto failStereoTransaction = [&]() noexcept {
+		try {
+			UnbindUpscalingResources();
+		} catch (...) {
+		}
+		RequestHistoryReset();
+		publishResults();
+		neuralPairApplied = false;
+	};
+	try {
+		if (!foveatedRectCache.plan.IsValid()) {
+			publishResults();
+			return false;
+		}
+
+		auto dispatchPhase = [&](uint32_t eyeIndex, NeuralCenterPhase phase, bool pairApplied) {
+			const auto& eyeParams = params[eyeIndex];
+			const auto& eyePlan = foveatedRectCache.plan.eyes[eyeIndex];
+			NeuralCenterDispatchResult phaseResult{};
+			const bool dispatched = DispatchSingleFoveatedVendorEye(
+				a_upscaleMethod,
+				eyeIndex,
+				eyeParams.centerColorInput,
+				eyeParams.centerDepthInput,
+				eyeParams.centerMotionVectorsInput,
+				eyeParams.centerReactiveMaskInput,
+				eyeParams.centerTransparencyMaskInput,
+				eyeParams.outputWidthPerEye,
+				eyeParams.outputHeight,
+				eyeParams.inputWidthPerEye,
+				eyeParams.inputHeight,
+				eyeParams.centerScale,
+				eyeParams.centerHorizontalScale,
+				eyePlan.centerOffset,
+				eyeParams.centerBlendFeather,
+				eyeParams.centerColorInputBaseOffsetX,
+				eyeParams.centerDepthInputBaseOffsetX,
+				eyeParams.centerAuxInputBaseOffsetX,
+				eyeParams.outputUAV,
+				eyeParams.dlssViewportRole,
+				eyeParams.submitSourceSubresource,
+				eyeParams.submitSourceBoxValid ? &eyeParams.submitSourceBox : nullptr,
+				false,
+				phase,
+				pairApplied,
+				&phaseResult,
+				phase == NeuralCenterPhase::Stage ?
+					&neuralBatchArgs[eyeIndex] :
+					nullptr);
+			auto& result = results[eyeIndex];
+			result.requested = result.requested || phaseResult.requested;
+			result.attempted = result.attempted || phaseResult.attempted;
+			result.prepared = result.prepared || phaseResult.prepared;
+			result.evaluated = result.evaluated || phaseResult.evaluated;
+			result.applied = result.applied || phaseResult.applied;
+			result.dlssEvaluated = result.dlssEvaluated || phaseResult.dlssEvaluated;
+			if (phaseResult.prepared) {
+				result.callerReset = phaseResult.callerReset;
+				result.featureUpscaling = phaseResult.featureUpscaling;
+				result.motionVectorScaleX = phaseResult.motionVectorScaleX;
+				result.motionVectorScaleY = phaseResult.motionVectorScaleY;
+				result.inputOffsetX = phaseResult.inputOffsetX;
+				result.inputOffsetY = phaseResult.inputOffsetY;
+				result.pinholeOffsetX = phaseResult.pinholeOffsetX;
+				result.pinholeOffsetY = phaseResult.pinholeOffsetY;
+			}
+			if (phaseResult.originalColorSourceValid) {
+				result.originalColorSource = phaseResult.originalColorSource;
+				result.originalColorSubresource = phaseResult.originalColorSubresource;
+				result.originalColorBox = phaseResult.originalColorBox;
+				result.originalColorSourceValid = true;
+			}
+			return dispatched;
+		};
+
+		const bool neuralRouteRequested =
+			a_upscaleMethod == UpscaleMethod::kDLSS &&
+			settings.neuralRenderingEnabled &&
+			IsNeuralRenderingRouteEnabled(
+				settings,
+				GetNeuralRenderingRouteRole(params[0].dlssViewportRole)) &&
+			!IsNeuralRenderingMenuSuppressed() &&
+			settings.frameGenerationMode == 0 &&
+			!IsFrameGenerationDx12PathActive();
+		if (!neuralRouteRequested) {
+			for (uint32_t eye = 0; eye < params.size(); ++eye) {
+				if (!dispatchPhase(eye, NeuralCenterPhase::Disabled, false)) {
+					publishResults();
+					return false;
+				}
+			}
+			publishResults();
+			return true;
+		}
+
+		for (uint32_t eye = 0; eye < params.size(); ++eye) {
+			if (!dispatchPhase(eye, NeuralCenterPhase::Stage, false)) {
+				RequestHistoryReset();
+				publishResults();
+				return false;
+			}
+		}
+
+		const auto evaluation = EvaluatePreparedNeuralStereoPair(
+			true, batchedStereo, results, neuralBatchArgs);
+		const uint32_t evaluatedEyeMask = evaluation.evaluatedEyeMask;
+		neuralPairApplied = evaluatedEyeMask == 0b11u;
+		if (evaluatedEyeMask != 0 && !neuralPairApplied)
+			RequestHistoryReset();
+		if (directCommit && NeuralRendering::RunsBeforeDlss() &&
+			!neuralPairApplied &&
+			!RestorePrivateFoveatedCenterInputsForNeuralFallback(results)) {
+			RequestHistoryReset();
+			publishResults();
+			return false;
+		}
+		for (uint32_t eye = 0; eye < params.size(); ++eye) {
+			if (!dispatchPhase(eye, NeuralCenterPhase::Resolve, neuralPairApplied)) {
+				RequestHistoryReset();
+				publishResults();
+				return false;
+			}
+		}
+		const uint32_t successfulEyeMask = BuildNeuralCenterEyeMask(
+			results, &NeuralCenterDispatchResult::applied);
+		neuralPairApplied = successfulEyeMask == 0b11u;
+		if (evaluatedEyeMask == 0b11u && !neuralPairApplied)
+			RequestHistoryReset();
+		if (successfulEyeMask != 0 && !neuralPairApplied) {
+			RequestHistoryReset();
+			publishResults();
+			return false;
+		}
+
+		publishResults();
+		return true;
+	} catch (const std::exception& e) {
+		failStereoTransaction();
+		static bool loggedStereoCenterException = false;
+		bool deviceRemoved = false;
+		try {
+			deviceRemoved = MarkSubmitStageDeviceLostIfNeeded(
+				e,
+				"foveated stereo center transaction");
+		} catch (...) {
+		}
+		if (!deviceRemoved) {
+			try {
+				LogWarnOnce(
+					loggedStereoCenterException,
+					"[Upscaling] Foveated stereo center transaction threw; failing the complete pair closed",
+					e);
+			} catch (...) {
+			}
+		}
+		return false;
+	} catch (...) {
+		failStereoTransaction();
+		static bool loggedStereoCenterException = false;
+		bool deviceRemoved = false;
+		try {
+			deviceRemoved = MarkSubmitStageDeviceLostIfDeviceRemoved(
+				"foveated stereo center transaction");
+		} catch (...) {
+		}
+		if (!deviceRemoved) {
+			try {
+				LogWarnOnce(
+					loggedStereoCenterException,
+					"[Upscaling] Foveated stereo center transaction threw; failing the complete pair closed");
+			} catch (...) {
+			}
+		}
+		return false;
+	}
 }
 
 void Upscaling::ConfigureFoveatedPeripherySourceRegion(FoveatedEyeDispatchParams& params, const eastl::unique_ptr<Texture2D>& sourceTexture, uint32_t validWidth, uint32_t validHeight) const
@@ -24737,7 +26444,49 @@ bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod
 	}
 
 	ID3D11UnorderedAccessView* outputColorUAV = params.outputUAV ? params.outputUAV : vrIntermediateColorOut[eyeIndex]->uav.get();
+	if (params.useOuterDLSSBase) {
+		const auto& centerRect = foveatedRectCache.rects[eyeIndex];
+		auto& centerOutput = foveatedCenterColorOut[eyeIndex];
+		if (!params.centerAlreadyPrepared || !params.outputResource || !outputColorUAV ||
+			!centerOutput || !centerOutput->srv || !params.outerDLSSBaseResource ||
+			!params.outerDLSSBaseUAV ||
+			!centerRect.outputWidth || !centerRect.outputHeight) {
+			return false;
+		}
+		D3D11_TEXTURE2D_DESC baseDesc{};
+		D3D11_TEXTURE2D_DESC outputDesc{};
+		if (!TryGetTexture2DDesc(params.outerDLSSBaseResource, baseDesc) ||
+			!TryGetTexture2DDesc(params.outputResource, outputDesc) ||
+			baseDesc.Width != outputDesc.Width || baseDesc.Height != outputDesc.Height ||
+			baseDesc.Format != outputDesc.Format || baseDesc.ArraySize != outputDesc.ArraySize ||
+			baseDesc.MipLevels != outputDesc.MipLevels ||
+			baseDesc.SampleDesc.Count != outputDesc.SampleDesc.Count ||
+			baseDesc.SampleDesc.Quality != outputDesc.SampleDesc.Quality) {
+			return false;
+		}
 
+		const float centerBlendFeather = std::isfinite(params.centerBlendFeather) ?
+		                                     ClampPeripheryTAACenterBlendFeather(params.centerBlendFeather) :
+		                                     ClampPeripheryTAACenterBlendFeather(FoveatedCommon::kCenterFeather);
+		if (!DispatchFoveatedBlendPass(
+				centerOutput->srv.get(),
+				params.outerDLSSBaseUAV,
+				params.outputWidthPerEye,
+				params.outputHeight,
+				centerRect,
+				centerRect.outputOffsetX,
+				centerRect.outputOffsetY,
+				centerRect.outputWidth,
+				centerRect.outputHeight,
+				params.centerScale,
+				params.centerHorizontalScale,
+				centerOffset,
+				centerBlendFeather)) {
+			return false;
+		}
+		context->CopyResource(params.outputResource, params.outerDLSSBaseResource);
+		return true;
+	}
 	bool peripheryBindingsBound = false;
 	auto bindPeripheryBindings = [&]() -> bool {
 		if (peripheryBindingsBound)
@@ -24782,7 +26531,7 @@ bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod
 		if (!bindPeripheryBindings())
 			return false;
 
-		DispatchFoveatedPeripheryPass(
+		return DispatchFoveatedPeripheryPass(
 			params.peripherySourceSRV,
 			outputColorUAV,
 			params.peripherySourceWidth,
@@ -24802,7 +26551,6 @@ bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod
 			params.peripherySourceOffsetY,
 			centerOffset.x,
 			centerOffset.y);
-		return true;
 	};
 
 	auto dispatchPeripheryTAA = [&](ID3D11ShaderResourceView* tileListSRV, uint32_t tileCount, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight) -> bool {
@@ -24944,6 +26692,30 @@ bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod
 
 	if (params.visualizeMask)
 		return true;
+	if (params.centerAlreadyPrepared) {
+		const auto& rect = foveatedRectCache.rects[eyeIndex];
+		auto& centerOutput = foveatedCenterColorOut[eyeIndex];
+		if (!centerOutput || !centerOutput->srv || !rect.outputWidth || !rect.outputHeight)
+			return false;
+
+		const float centerBlendFeather = std::isfinite(params.centerBlendFeather) ?
+		                                     ClampPeripheryTAACenterBlendFeather(params.centerBlendFeather) :
+		                                     ClampPeripheryTAACenterBlendFeather(FoveatedCommon::kCenterFeather);
+		return DispatchFoveatedBlendPass(
+			centerOutput->srv.get(),
+			outputColorUAV,
+			params.outputWidthPerEye,
+			params.outputHeight,
+			rect,
+			rect.outputOffsetX,
+			rect.outputOffsetY,
+			rect.outputWidth,
+			rect.outputHeight,
+			params.centerScale,
+			params.centerHorizontalScale,
+			centerOffset,
+			centerBlendFeather);
+	}
 
 	return DispatchSingleFoveatedVendorEye(
 		a_upscaleMethod,
@@ -24983,6 +26755,8 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 	auto state = globals::state;
 	if (!state)
 		return false;
+	const bool neuralMenuSuppressed = IsNeuralRenderingMenuSuppressed();
+	ObserveNeuralRenderingMenuSuppression(neuralMenuSuppressed);
 
 	uint32_t inputWidthPerEye = 0;
 	uint32_t inputHeight = 0;
@@ -24994,6 +26768,12 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 	const bool visualizeMask = settings.foveatedPeripheryMaskVisualization;
 	const bool usePeripheryTAA = IsPeripheryTAAPathActive(a_upscaleMethod);
 	const bool usePeripheryTAAProfile = IsPeripheryTAAEnabled(a_upscaleMethod);
+	const bool outerDLSSInputCoverageRequired =
+		settings.foveatedOuterDLSS && settings.neuralRenderingEnabled &&
+		settings.neuralRenderingMainRoute &&
+		a_upscaleMethod == UpscaleMethod::kDLSS && !neuralMenuSuppressed &&
+		!visualizeMask &&
+		settings.frameGenerationMode == 0 && !IsFrameGenerationDx12PathActive();
 	const auto foveatedProfile = GetFoveatedMaskProfileParams(settings, usePeripheryTAAProfile);
 	const float centerScale = foveatedProfile.centerScale;
 	const float centerHorizontalScale = foveatedProfile.centerHorizontalScale;
@@ -25001,7 +26781,12 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 	if (!BuildFoveatedDispatchRects(inputWidthPerEye, inputHeight, outputWidthPerEye, outputHeight, true, centerScale, effectiveCenterBlendFeather, centerHorizontalScale, usePeripheryTAAProfile))
 		return false;
 
-	if (!EnsureFoveatedDispatchShaders(usePeripheryTAA, visualizeMask, "", "skipping foveated vendor dispatch")) {
+	if (!EnsureFoveatedDispatchShaders(
+			usePeripheryTAA,
+			visualizeMask,
+			"",
+			"skipping foveated vendor dispatch",
+			outerDLSSInputCoverageRequired)) {
 		return false;
 	}
 
@@ -25014,11 +26799,17 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 	// Keep all foveated VR paths on per-eye inputs. The old DLAA/direct-source
 	// shortcut, and the Peripheral TAA center pass, sampled kMAIN directly and
 	// bypassed the HMD hidden-area cleanup from PreparePerEyeInputs.
-	// Keep copyAuxiliaryInputs=false here: Encode Upscaling Textures has already
-	// written the per-eye motion/reactive/transparency resources used by
-	// Periphery TAA, and this pass must not overwrite them.
+	// The encode pass already populated full-eye auxiliary inputs for Outer DLSS.
+	// Never overwrite those vendor-encoded motion vectors with the raw source.
 	const bool copyDepthInput = !visualizeMask && (a_upscaleMethod == UpscaleMethod::kDLSS || usePeripheryTAA);
-	if (!PreparePerEyeInputs(colorTexture, depthTexture, motionVectors, reactiveMask, transparencyMask, false, copyDepthInput))
+	if (!PreparePerEyeInputs(
+			colorTexture,
+			depthTexture,
+			motionVectors,
+			reactiveMask,
+			transparencyMask,
+			false,
+			copyDepthInput))
 		return false;
 	if (usePeripheryTAA && !EnsurePeripheryTAAResources(outputWidthPerEye, outputHeight, colorTexture))
 		return false;
@@ -25026,7 +26817,7 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 	const bool resetPeripheryTAA = usePeripheryTAA && (ShouldResetHistoryThisFrame() || !peripheryTAAHistoryValid);
 	const uint32_t peripheryTAAReadIndex = peripheryTAAHistoryReadIndex;
 	const uint32_t peripheryTAAWriteIndex = 1u - peripheryTAAReadIndex;
-	bool anyEyeDispatched = false;
+	std::array<FoveatedEyeDispatchParams, 2> eyeParams{};
 
 	for (uint32_t eye = 0; eye < 2; ++eye) {
 		if (!vrIntermediateColorIn[eye] || !vrIntermediateColorIn[eye]->srv || !vrIntermediateColorIn[eye]->resource ||
@@ -25043,7 +26834,7 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 				return false;
 		}
 
-		FoveatedEyeDispatchParams params{};
+		auto& params = eyeParams[eye];
 		params.inputWidthPerEye = inputWidthPerEye;
 		params.inputHeight = inputHeight;
 		params.outputWidthPerEye = outputWidthPerEye;
@@ -25063,19 +26854,186 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 		params.centerMotionVectorsInput = vrIntermediateMotionVectors[eye] ? vrIntermediateMotionVectors[eye]->resource.get() : nullptr;
 		params.centerReactiveMaskInput = vrIntermediateReactiveMask[eye] ? vrIntermediateReactiveMask[eye]->resource.get() : nullptr;
 		params.centerTransparencyMaskInput = vrIntermediateTransparencyMask[eye] ? vrIntermediateTransparencyMask[eye]->resource.get() : nullptr;
+		params.outputResource = vrIntermediateColorOut[eye]->resource.get();
+	}
+	const std::array<Texture2D*, 2> outerDLSSOutputTemplates{
+		vrIntermediateColorOut[0].get(),
+		vrIntermediateColorOut[1].get()
+	};
+	auto outerDLSS = DispatchFoveatedOuterDLSSStereoBase(
+		NeuralStereoRouteRole::Main,
+		a_upscaleMethod,
+		inputWidthPerEye,
+		inputHeight,
+		outputWidthPerEye,
+		outputHeight,
+		outerDLSSOutputTemplates);
+	const bool outerDLSSBaseReady = outerDLSS.IsBaseReady();
+	for (uint32_t eye = 0; eye < eyeParams.size(); ++eye) {
+		auto& params = eyeParams[eye];
+		params.useOuterDLSSBase = outerDLSSBaseReady;
+		params.outerDLSSBaseResource = outerDLSS.baseResources[eye].get();
+		params.outerDLSSBaseUAV = outerDLSS.baseUAVs[eye].get();
+		params.usePeripheryTAA = usePeripheryTAA && !outerDLSSBaseReady;
+	}
 
-		static bool loggedFoveatedDispatchFailure = false;
+	const bool neuralRequested = settings.neuralRenderingEnabled;
+	const bool frameGenerationActive =
+		settings.frameGenerationMode != 0 || IsFrameGenerationDx12PathActive();
+	const bool neuralEligible =
+		neuralRequested &&
+		settings.neuralRenderingMainRoute &&
+		a_upscaleMethod == UpscaleMethod::kDLSS &&
+		!neuralMenuSuppressed &&
+		!visualizeMask &&
+		!frameGenerationActive;
+	const auto neuralColorBuffersHDR = GetDLSSColorResourceHDR(colorTexture);
+	NeuralStereoRouteSnapshot neuralRoute{
+		.valid = true,
+		.role = NeuralStereoRouteRole::Main,
+		.frame = state->frameCount,
+		.generation = std::max<uint64_t>(vrDLSSRuntimeResourceGeneration, 1u),
+		.arrangement = static_cast<uint32_t>(NeuralRendering::kPipelineArrangement),
+		.requested = neuralRequested,
+		.eligible = neuralEligible,
+		.sourceBatchEligible = neuralEligible,
+		.sourceSignatureProven = true,
+		.colorBuffersHDRKnown = neuralColorBuffersHDR.has_value(),
+		.colorBuffersHDR = neuralColorBuffersHDR.value_or(false),
+		.hdrRequired = false,
+		.frameGenerationActive = frameGenerationActive,
+		.frameGenerationGatePassed = !frameGenerationActive,
+		.requestedBatchedStereo = settings.neuralRenderingBatchedStereo,
+		.requestedDirectCommit = settings.neuralRenderingDirectCommit,
+	};
+	if (!neuralRequested) {
+		neuralRoute.disposition = NeuralStereoPairDisposition::NotRequested;
+		neuralRoute.fallbackReason = NeuralStereoFallbackReason::NeuralDisabled;
+	} else if (a_upscaleMethod != UpscaleMethod::kDLSS) {
+		neuralRoute.disposition = NeuralStereoPairDisposition::NotRequested;
+		neuralRoute.fallbackReason = NeuralStereoFallbackReason::MethodIneligible;
+	} else if (!settings.neuralRenderingMainRoute) {
+		neuralRoute.disposition = NeuralStereoPairDisposition::NotRequested;
+		neuralRoute.fallbackReason = NeuralStereoFallbackReason::RouteIneligible;
+	} else if (neuralMenuSuppressed) {
+		neuralRoute.disposition = NeuralStereoPairDisposition::NotRequested;
+		neuralRoute.fallbackReason = NeuralStereoFallbackReason::MenuContext;
+	} else if (visualizeMask) {
+		neuralRoute.disposition = NeuralStereoPairDisposition::NormalDLSSPair;
+		neuralRoute.fallbackReason = NeuralStereoFallbackReason::MaskVisualization;
+	} else if (frameGenerationActive) {
+		neuralRoute.disposition = NeuralStereoPairDisposition::NormalDLSSPair;
+		neuralRoute.fallbackReason = NeuralStereoFallbackReason::FrameGeneration;
+	}
+
+	bool neuralPairApplied = false;
+	std::array<NeuralCenterDispatchResult, 2> neuralResults{};
+	const auto publishNeuralRoute = [&](bool a_committed, bool a_dispatchSucceeded) noexcept {
+		if (!a_dispatchSucceeded && outerDLSS.evaluatedEyeMask == 0b11u &&
+			outerDLSS.committedEyeMask != 0b11u &&
+			outerDLSS.fallbackReason == OuterDLSSFallbackReason::None) {
+			outerDLSS.fallbackReason = OuterDLSSFallbackReason::ResourcePreparationFailed;
+		}
+		RecordFoveatedOuterDLSSResult(NeuralStereoRouteRole::Main, outerDLSS);
+		neuralRoute.outerDLSSRequested = outerDLSS.requested;
+		neuralRoute.outerDLSSEligible = outerDLSS.eligible;
+		neuralRoute.outerDLSSFallbackReason = outerDLSS.fallbackReason;
+		neuralRoute.outerDLSSPreparedEyeMask = outerDLSS.preparedEyeMask;
+		neuralRoute.outerDLSSAttemptedEyeMask = outerDLSS.attemptedEyeMask;
+		neuralRoute.outerDLSSEvaluatedEyeMask = outerDLSS.evaluatedEyeMask;
+		neuralRoute.outerDLSSCommittedEyeMask = outerDLSS.committedEyeMask;
+		for (uint32_t eye = 0; eye < neuralResults.size(); ++eye) {
+			const uint32_t eyeBit = 1u << eye;
+			if (neuralResults[eye].prepared)
+				neuralRoute.preparedEyeMask |= eyeBit;
+			if (neuralResults[eye].attempted)
+				neuralRoute.attemptedEyeMask |= eyeBit;
+			if (neuralResults[eye].evaluated)
+				neuralRoute.evaluatedEyeMask |= eyeBit;
+			if (neuralResults[eye].applied)
+				neuralRoute.appliedEyeMask |= eyeBit;
+			if (neuralResults[eye].dlssEvaluated)
+				neuralRoute.dlssEyeMask |= eyeBit;
+			if (neuralResults[eye].callerReset)
+				neuralRoute.callerResetEyeMask |= eyeBit;
+			if (neuralResults[eye].featureUpscaling)
+				neuralRoute.featureUpscalingEyeMask |= eyeBit;
+			neuralRoute.motionVectorScaleX[eye] =
+				neuralResults[eye].motionVectorScaleX;
+			neuralRoute.motionVectorScaleY[eye] =
+				neuralResults[eye].motionVectorScaleY;
+			neuralRoute.inputOffsetX[eye] = neuralResults[eye].inputOffsetX;
+			neuralRoute.inputOffsetY[eye] = neuralResults[eye].inputOffsetY;
+			neuralRoute.pinholeOffsetX[eye] = neuralResults[eye].pinholeOffsetX;
+			neuralRoute.pinholeOffsetY[eye] = neuralResults[eye].pinholeOffsetY;
+		}
+		neuralRoute.committedEyeMask = a_committed && neuralPairApplied ? 0b11u : 0u;
+		neuralRoute.implementationModeExecuted = neuralRoute.attemptedEyeMask != 0;
+		neuralRoute.effectiveImplementationKnown =
+			neuralRoute.implementationModeExecuted;
+		if (neuralRoute.effectiveImplementationKnown) {
+			neuralRoute.effectiveBatchedStereo =
+				neuralRoute.requestedBatchedStereo;
+			neuralRoute.effectiveDirectCommit =
+				neuralRoute.requestedDirectCommit;
+		}
+		neuralRoute.pairComplete = a_committed;
+		if (!a_dispatchSucceeded) {
+			neuralRoute.disposition = NeuralStereoPairDisposition::FallbackRequired;
+			neuralRoute.fallbackReason = NeuralStereoFallbackReason::StereoDispatchFailed;
+		} else if (neuralEligible) {
+			neuralRoute.disposition = neuralPairApplied ?
+			                              NeuralStereoPairDisposition::NeuralPair :
+			                              NeuralStereoPairDisposition::NormalDLSSPair;
+			neuralRoute.fallbackReason = neuralPairApplied ?
+			                                 NeuralStereoFallbackReason::None :
+			                                 NeuralStereoFallbackReason::NeuralEvaluationFailed;
+		}
+		PublishNeuralStereoRouteSnapshot(neuralRoute);
+	};
+	if (!visualizeMask && !DispatchFoveatedVendorCenterStereo(
+							  a_upscaleMethod,
+							  eyeParams,
+							  neuralPairApplied,
+							  &neuralResults)) {
+		publishNeuralRoute(false, false);
+		UnbindUpscalingResources();
+		return false;
+	}
+	if (!visualizeMask && a_upscaleMethod == UpscaleMethod::kDLSS &&
+		settings.neuralRenderingEnabled && settings.neuralRenderingMainRoute) {
+		static bool loggedMainNeuralStereoResult = false;
+		if (!loggedMainNeuralStereoResult) {
+			loggedMainNeuralStereoResult = true;
+			const uint32_t attemptedMask =
+				(neuralResults[0].attempted ? 1u : 0u) |
+				(neuralResults[1].attempted ? 2u : 0u);
+			logger::info(
+				"[DLSSNR][Stereo] Main-stage two-eye transaction ready: arrangement={}, neuralApplied={}, attemptedMask=0x{:X}",
+				NeuralRendering::GetPipelineArrangementName(),
+				neuralPairApplied,
+				attemptedMask);
+		}
+	}
+	for (auto& params : eyeParams)
+		params.centerAlreadyPrepared = !visualizeMask;
+
+	bool anyEyeComposited = false;
+	static bool loggedFoveatedDispatchFailure = false;
+	for (uint32_t eye = 0; eye < eyeParams.size(); ++eye) {
 		try {
-			if (!DispatchFoveatedVendorEyeComposite(a_upscaleMethod, eye, params)) {
+			if (!DispatchFoveatedVendorEyeComposite(a_upscaleMethod, eye, eyeParams[eye])) {
+				publishNeuralRoute(false, false);
 				UnbindUpscalingResources();
-				if (anyEyeDispatched)
+				if (anyEyeComposited)
 					RequestHistoryReset();
 				return false;
 			}
-			anyEyeDispatched = true;
+			anyEyeComposited = true;
 		} catch (const std::exception& e) {
+			publishNeuralRoute(false, false);
 			UnbindUpscalingResources();
-			if (anyEyeDispatched)
+			if (anyEyeComposited)
 				RequestHistoryReset();
 			LogWarnOnce(
 				loggedFoveatedDispatchFailure,
@@ -25083,8 +27041,9 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 				e);
 			return false;
 		} catch (...) {
+			publishNeuralRoute(false, false);
 			UnbindUpscalingResources();
-			if (anyEyeDispatched)
+			if (anyEyeComposited)
 				RequestHistoryReset();
 			LogWarnOnce(
 				loggedFoveatedDispatchFailure,
@@ -25093,16 +27052,19 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 		}
 	}
 
-	if (usePeripheryTAA) {
+	if (eyeParams[0].usePeripheryTAA) {
 		peripheryTAAHistoryReadIndex = peripheryTAAWriteIndex;
 		peripheryTAAHistoryValid = true;
 	}
 
 	FinalizePerEyeOutputs(colorOutput ? colorOutput : colorTexture);
+	if (outerDLSSBaseReady)
+		CommitFoveatedOuterDLSSStereoBase(NeuralStereoRouteRole::Main, outerDLSS);
+	publishNeuralRoute(true, true);
 	return true;
 }
 
-bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, ID3D11Resource* outputResource, ID3D11UnorderedAccessView* outputUAV, UINT submitSourceSubresource, const D3D11_BOX* submitSourceBox)
+bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool protectPostProcessInput, ID3D11Resource* outputResource, ID3D11UnorderedAccessView* outputUAV, UINT submitSourceSubresource, const D3D11_BOX* submitSourceBox, NeuralCenterPhase neuralCenterPhase, bool neuralPairApplied, NeuralCenterDispatchResult* neuralResult, NeuralRendering::RendererApplyArgs* neuralBatchArgs, bool useOuterDLSSBase, ID3D11Resource* outerDLSSBaseResource, ID3D11UnorderedAccessView* outerDLSSBaseUAV)
 {
 	if (!globals::game::isVR || eyeIndex >= 2)
 		return false;
@@ -25132,7 +27094,7 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 		return false;
 
 	const bool visualizeMask = settings.foveatedPeripheryMaskVisualization;
-	const bool usePeripheryTAA = IsPeripheryTAAPathActive(a_upscaleMethod);
+	const bool usePeripheryTAA = !useOuterDLSSBase && IsPeripheryTAAPathActive(a_upscaleMethod);
 	const bool usePeripheryTAAProfile = IsPeripheryTAAEnabled(a_upscaleMethod);
 	const auto foveatedProfile = GetFoveatedMaskProfileParams(settings, usePeripheryTAAProfile);
 	const float centerScale = foveatedProfile.centerScale;
@@ -25141,7 +27103,12 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 	if (!BuildFoveatedDispatchRects(inputWidthPerEye, inputHeight, outputWidthPerEye, outputHeight, true, centerScale, effectiveCenterBlendFeather, centerHorizontalScale, usePeripheryTAAProfile))
 		return false;
 
-	if (!EnsureFoveatedDispatchShaders(usePeripheryTAA, visualizeMask, "Submit-stage ", "falling back to full-eye dispatch")) {
+	if (!EnsureFoveatedDispatchShaders(
+			usePeripheryTAA,
+			visualizeMask,
+			"Submit-stage ",
+			"falling back to full-eye dispatch",
+			useOuterDLSSBase)) {
 		return false;
 	}
 
@@ -25208,6 +27175,9 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 	params.usePeripheryTAA = usePeripheryTAA;
 	params.usePeripheryTAAProfile = usePeripheryTAAProfile;
 	params.visualizeMask = visualizeMask;
+	params.useOuterDLSSBase = useOuterDLSSBase;
+	params.outerDLSSBaseResource = outerDLSSBaseResource;
+	params.outerDLSSBaseUAV = outerDLSSBaseUAV;
 	params.resetPeripheryTAA = resetPeripheryTAA;
 	params.peripheryTAAHistoryReadIndex = peripheryTAAReadIndex;
 	params.peripheryTAAHistoryWriteIndex = peripheryTAAWriteIndex;
@@ -25218,11 +27188,48 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 	params.centerReactiveMaskInput = vrIntermediateReactiveMask[eyeIndex] ? vrIntermediateReactiveMask[eyeIndex]->resource.get() : nullptr;
 	params.centerTransparencyMaskInput = vrIntermediateTransparencyMask[eyeIndex] ? vrIntermediateTransparencyMask[eyeIndex]->resource.get() : nullptr;
 	params.outputUAV = outputUAV;
+	params.outputResource = outputResource;
 	params.dlssViewportRole = Streamline::DLSSViewportRole::SubmitStageFoveatedCenter;
 	params.submitSourceSubresource = submitSourceSubresource;
 	if (submitSourceBox) {
 		params.submitSourceBox = *submitSourceBox;
 		params.submitSourceBoxValid = true;
+	}
+	if (neuralCenterPhase != NeuralCenterPhase::Disabled) {
+		const auto& eyePlan = foveatedRectCache.plan.eyes[eyeIndex];
+		if (!DispatchSingleFoveatedVendorEye(
+				a_upscaleMethod,
+				eyeIndex,
+				params.centerColorInput,
+				params.centerDepthInput,
+				params.centerMotionVectorsInput,
+				params.centerReactiveMaskInput,
+				params.centerTransparencyMaskInput,
+				params.outputWidthPerEye,
+				params.outputHeight,
+				params.inputWidthPerEye,
+				params.inputHeight,
+				params.centerScale,
+				params.centerHorizontalScale,
+				eyePlan.centerOffset,
+				params.centerBlendFeather,
+				params.centerColorInputBaseOffsetX,
+				params.centerDepthInputBaseOffsetX,
+				params.centerAuxInputBaseOffsetX,
+				outputUAV,
+				params.dlssViewportRole,
+				params.submitSourceSubresource,
+				params.submitSourceBoxValid ? &params.submitSourceBox : nullptr,
+				false,
+				neuralCenterPhase,
+				neuralPairApplied,
+				neuralResult,
+				neuralBatchArgs)) {
+			return false;
+		}
+		if (neuralCenterPhase == NeuralCenterPhase::Stage)
+			return true;
+		params.centerAlreadyPrepared = true;
 	}
 
 	static bool loggedFoveatedDispatchFailure = false;
@@ -25249,7 +27256,7 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 	}
 
 	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-	if (depthTexture.depthSRV) {
+	if (protectPostProcessInput && depthTexture.depthSRV) {
 		ClearHMDMaskForEye(
 			HMDMaskClearPhase::SubmitStageFoveatedOutput,
 			eyeIndex,
@@ -27775,6 +29782,7 @@ void Upscaling::ClearShaderCache()
 	copyDepthToSharedBufferPS = nullptr;  // com_ptr automatically releases
 	rcas.ClearShaderCache();
 	lumaSharpen.ClearShaderCache();
+	NeuralRendering::Renderer::Instance().ResetShaderCache();
 }
 
 void Upscaling::CopySharedD3D12Resources()
@@ -29987,6 +31995,8 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	submitStageVendorOutputSourceTexture = nullptr;
 	submitStageVendorEyeState = {};
 	submitStageFoveatedCenterState = {};
+	if (!submitStageNeuralStereoState.IsCycleLatched())
+		submitStageNeuralStereoState = {};
 	submitStageForceFullEyeVendorFallback = false;
 	ClearSubmitStageVendorResumeCooldown();
 	ClearSubmitStageBoundsFallbackWatchdog();
@@ -30054,23 +32064,390 @@ bool Upscaling::MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context)
 	return true;
 }
 
-bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
+bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCycleToken, uint64_t a_submitPairBoundaryToken, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 	vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds, VRRenderScalePresentationObservation& a_presentationObservation)
 {
 	a_presentationObservation = {};
+	if (a_eye != vr::Eye_Left && a_eye != vr::Eye_Right)
+		return false;
+	const uint32_t eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
+	auto state = globals::state;
+	const uint32_t submitEyeMaskAtDecision = PublishNeuralSubmitCycleSnapshot(
+		a_compositorCycleToken,
+		state ? state->frameCount : 0u,
+		eyeIndex);
 	if (!a_inputTexture || !a_inputTexture->handle || a_inputTexture->eType != vr::TextureType_DirectX) {
 		return false;
 	}
-	if (a_eye != vr::Eye_Left && a_eye != vr::Eye_Right)
-		return false;
 	if (IsSubmitStageDeviceLost())
 		return false;
-
-	auto state = globals::state;
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
 	if (!state || !renderer || !context)
 		return false;
+	const uint32_t currentFrame = state->frameCount;
+	const bool neuralSubmitRouteEnabled = settings.neuralRenderingSubmitRoute;
+	const uint32_t neuralSubmitPairBoundaryMode = std::min(
+		settings.neuralRenderingSubmitPairBoundaryMode,
+		kNeuralSubmitPairBoundaryModeMaxIndex);
+	const bool neuralSubmitPairBoundaryRequired =
+		neuralSubmitPairBoundaryMode ==
+		static_cast<uint32_t>(NeuralSubmitPairBoundaryMode::Require);
+	const bool neuralSubmitPairBoundaryProven = a_submitPairBoundaryToken != 0;
+	const bool neuralSubmitPairBoundaryPassed =
+		!neuralSubmitPairBoundaryRequired || neuralSubmitPairBoundaryProven;
+	const bool neuralMenuSuppressed = IsNeuralRenderingMenuSuppressed();
+	ObserveNeuralRenderingMenuSuppression(neuralMenuSuppressed);
+	const auto neuralPresentationProfile =
+		GetPendingVRRenderScaleDesiredProfile();
+	const uint64_t entryNeuralPresentationSettingsKey =
+		BuildNeuralPresentationOutputKey(*this);
+	const uint64_t entryNeuralPresentationEpoch =
+		neuralPresentationContractEpoch.load(std::memory_order_acquire);
+
+	if (submitStageNeuralStereoState.IsCycleLatched() &&
+		submitStageNeuralStereoState.compositorCycle != a_compositorCycleToken) {
+		submitStageNeuralStereoState = {};
+	}
+	const bool replayLatchedNeuralCycle =
+		a_compositorCycleToken != 0 &&
+		submitStageNeuralStereoState.IsCycleLatched() &&
+		submitStageNeuralStereoState.compositorCycle == a_compositorCycleToken;
+	if (replayLatchedNeuralCycle) {
+		if (submitStageNeuralStereoState.outputsReady) {
+			auto* replaySourceTexture =
+				static_cast<ID3D11Texture2D*>(a_inputTexture->handle);
+			D3D11_TEXTURE2D_DESC replaySourceDesc{};
+			replaySourceTexture->GetDesc(&replaySourceDesc);
+			const auto& replayBootContract = perfMode.GetBootSnapshot();
+			const uint32_t replayGeneration = replayBootContract.valid ?
+			                                      replayBootContract.generation :
+			                                      0u;
+			const auto& latchedSourceDesc =
+				submitStageNeuralStereoState.publishedSourceDesc;
+			const bool sourceDescMatches =
+				replaySourceDesc.Width == latchedSourceDesc.Width &&
+				replaySourceDesc.Height == latchedSourceDesc.Height &&
+				replaySourceDesc.MipLevels == latchedSourceDesc.MipLevels &&
+				replaySourceDesc.ArraySize == latchedSourceDesc.ArraySize &&
+				replaySourceDesc.Format == latchedSourceDesc.Format &&
+				replaySourceDesc.SampleDesc.Count == latchedSourceDesc.SampleDesc.Count &&
+				replaySourceDesc.SampleDesc.Quality == latchedSourceDesc.SampleDesc.Quality &&
+				replaySourceDesc.Usage == latchedSourceDesc.Usage &&
+				replaySourceDesc.BindFlags == latchedSourceDesc.BindFlags &&
+				replaySourceDesc.CPUAccessFlags == latchedSourceDesc.CPUAccessFlags &&
+				replaySourceDesc.MiscFlags == latchedSourceDesc.MiscFlags;
+			bool sourceRegionMatches = false;
+			const auto replaySourceLayout = ResolveVRSideBySideStereoLayout(
+				submitStageNeuralStereoState.publishedSourceEyeWidth,
+				submitStageNeuralStereoState.publishedSourceEyeHeight);
+			if (replaySourceLayout.IsValid()) {
+				const bool replayBoundsUseCombinedStereoSpace =
+					submitStageNeuralStereoState.publishedSourceUsesCombinedStereoLayout &&
+					InputBoundsUseCombinedStereoSpace(a_inputBounds, eyeIndex);
+				const auto replaySourceRegion = ResolveVRSubmitSourceRegion(
+					replaySourceDesc,
+					eyeIndex,
+					submitStageNeuralStereoState.publishedSourceEyeWidth,
+					submitStageNeuralStereoState.publishedSourceEyeHeight,
+					replaySourceLayout,
+					submitStageNeuralStereoState.publishedSourceUsesCombinedStereoLayout,
+					replayBoundsUseCombinedStereoSpace,
+					a_inputBounds);
+				const auto& latchedBox =
+					submitStageNeuralStereoState.publishedSourceBoxes[eyeIndex];
+				sourceRegionMatches =
+					submitStageNeuralStereoState.publishedSourceRegionValid[eyeIndex] &&
+					replaySourceRegion.valid &&
+					replaySourceRegion.matchesExpectedSize &&
+					replaySourceRegion.subresource ==
+						submitStageNeuralStereoState.publishedSourceSubresources[eyeIndex] &&
+					replaySourceRegion.box.left == latchedBox.left &&
+					replaySourceRegion.box.top == latchedBox.top &&
+					replaySourceRegion.box.front == latchedBox.front &&
+					replaySourceRegion.box.right == latchedBox.right &&
+					replaySourceRegion.box.bottom == latchedBox.bottom &&
+					replaySourceRegion.box.back == latchedBox.back &&
+					replaySourceRegion.depthOffsetX ==
+						submitStageNeuralStereoState.publishedDepthOffsetX[eyeIndex] &&
+					replaySourceRegion.depthOffsetY ==
+						submitStageNeuralStereoState.publishedDepthOffsetY[eyeIndex] &&
+					replaySourceRegion.depthWidth ==
+						submitStageNeuralStereoState.publishedDepthWidth[eyeIndex] &&
+					replaySourceRegion.depthHeight ==
+						submitStageNeuralStereoState.publishedDepthHeight[eyeIndex];
+			}
+			const bool cachedPairSourceSignatureMismatch =
+				submitStageNeuralStereoState.sourceTexture != replaySourceTexture ||
+				!sourceDescMatches ||
+				!sourceRegionMatches ||
+				a_inputTexture->eColorSpace !=
+					submitStageNeuralStereoState.publishedColorSpace;
+			const bool cachedPairContextMismatch =
+				submitStageNeuralStereoState.frame != currentFrame ||
+				submitStageNeuralStereoState.generation != replayGeneration ||
+				submitStageNeuralStereoState.settingsKey !=
+					entryNeuralPresentationSettingsKey ||
+				submitStageNeuralStereoState.contractEpoch !=
+					entryNeuralPresentationEpoch ||
+				(neuralSubmitPairBoundaryRequired &&
+					submitStageNeuralStereoState.submitPairBoundaryToken !=
+						a_submitPairBoundaryToken);
+			if (cachedPairSourceSignatureMismatch) {
+				submitStageNeuralStereoState.sourceSignatureProven = false;
+				submitStageNeuralStereoState.publishedRoute.sourceSignatureProven = false;
+			}
+			const bool cachedPairContextMatches =
+				!cachedPairSourceSignatureMismatch &&
+				!cachedPairContextMismatch &&
+				!neuralMenuSuppressed &&
+				neuralSubmitPairBoundaryPassed;
+			const auto cachedPairReuse =
+				NeuralRendering::ResolveCachedStereoPairReuse(
+					cachedPairContextMatches,
+					submitStageNeuralStereoState.frame == currentFrame,
+					submitStageNeuralStereoState.presentedEyeMask,
+					eyeIndex);
+			if (cachedPairReuse != NeuralRendering::CachedStereoPairReuse::Reuse)
+				RequestHistoryReset();
+			if (cachedPairReuse ==
+				NeuralRendering::CachedStereoPairReuse::BypassPresentedEye) {
+				// Preserve the immutable pair so its missing peer can finish this cycle.
+				return false;
+			}
+			if (cachedPairReuse == NeuralRendering::CachedStereoPairReuse::Reject) {
+				const bool currentNeuralConfigured =
+					settings.neuralRenderingEnabled;
+				const bool currentNeuralRequested =
+					currentNeuralConfigured && neuralSubmitRouteEnabled &&
+					neuralSubmitPairBoundaryPassed;
+				const bool currentFoveatedRouteEligible =
+					neuralPresentationProfile.renderScaleModeEnabled &&
+					IsFoveatedVendorDispatchRequested(
+						settings, neuralPresentationProfile.method);
+				const bool currentFrameGenerationActive =
+					settings.frameGenerationMode != 0 ||
+					IsFrameGenerationDx12PathActive();
+				const auto fallbackReason = !currentNeuralConfigured ?
+				                                NeuralStereoFallbackReason::NeuralDisabled :
+				                            neuralPresentationProfile.method != UpscaleMethod::kDLSS ?
+				                                NeuralStereoFallbackReason::MethodIneligible :
+				                            !neuralSubmitRouteEnabled ?
+				                                NeuralStereoFallbackReason::RouteIneligible :
+				                            neuralMenuSuppressed ?
+				                                NeuralStereoFallbackReason::MenuContext :
+				                            settings.foveatedPeripheryMaskVisualization ?
+				                                NeuralStereoFallbackReason::MaskVisualization :
+				                            currentFrameGenerationActive ?
+				                                NeuralStereoFallbackReason::FrameGeneration :
+				                            !neuralSubmitPairBoundaryPassed ?
+				                                NeuralStereoFallbackReason::SubmitPairBoundaryUnproven :
+				                            !currentFoveatedRouteEligible ?
+				                                NeuralStereoFallbackReason::RouteIneligible :
+				                            cachedPairSourceSignatureMismatch ?
+				                                NeuralStereoFallbackReason::CachedPairSignatureMismatch :
+				                                NeuralStereoFallbackReason::CachedPairContractInvalidated;
+				// Keep the resources alive until the compositor cycle retires, but make
+				// them immediately ineligible for every subsequent presentation.
+				submitStageNeuralStereoState.outputsReady = false;
+				submitStageNeuralStereoState.preflightFailed = true;
+				submitStageNeuralStereoState.sourceBatchEligible = false;
+				submitStageNeuralStereoState.submitPairBoundaryMode =
+					neuralSubmitPairBoundaryMode;
+				submitStageNeuralStereoState.submitPairBoundaryProven =
+					neuralSubmitPairBoundaryProven;
+				submitStageNeuralStereoState.submitPairBoundaryToken =
+					a_submitPairBoundaryToken;
+				submitStageNeuralStereoState.neuralRequested =
+					currentNeuralRequested;
+				submitStageNeuralStereoState.requestedBatchedStereo =
+					settings.neuralRenderingBatchedStereo;
+				submitStageNeuralStereoState.requestedDirectCommit =
+					settings.neuralRenderingDirectCommit;
+				submitStageNeuralStereoState.neuralApplied = false;
+				submitStageNeuralStereoState.preparedEyeMask = 0;
+				submitStageNeuralStereoState.attemptedEyeMask = 0;
+				submitStageNeuralStereoState.evaluatedEyeMask = 0;
+				submitStageNeuralStereoState.successfulEyeMask = 0;
+				submitStageNeuralStereoState.committedEyeMask = 0;
+				submitStageNeuralStereoState.dlssEyeMask = 0;
+				submitStageNeuralStereoState.callerResetEyeMask = 0;
+				submitStageNeuralStereoState.featureUpscalingEyeMask = 0;
+				submitStageNeuralStereoState.motionVectorScaleX = {};
+				submitStageNeuralStereoState.motionVectorScaleY = {};
+				submitStageNeuralStereoState.inputOffsetX = {};
+				submitStageNeuralStereoState.inputOffsetY = {};
+				submitStageNeuralStereoState.pinholeOffsetX = {};
+				submitStageNeuralStereoState.pinholeOffsetY = {};
+				submitStageNeuralStereoState.fallbackReason =
+					fallbackReason;
+				auto& rejectedOuterDLSS =
+					submitStageNeuralStereoState.outerDLSS;
+				rejectedOuterDLSS = {};
+				rejectedOuterDLSS.requested = settings.foveatedOuterDLSS &&
+				                              neuralSubmitRouteEnabled;
+				rejectedOuterDLSS.fallbackReason =
+					!rejectedOuterDLSS.requested ?
+						OuterDLSSFallbackReason::Disabled :
+					neuralPresentationProfile.method != UpscaleMethod::kDLSS ?
+						OuterDLSSFallbackReason::MethodIneligible :
+					!currentNeuralConfigured ?
+						OuterDLSSFallbackReason::NeuralInactive :
+					neuralMenuSuppressed ?
+						OuterDLSSFallbackReason::MenuContext :
+					settings.foveatedPeripheryMaskVisualization ?
+						OuterDLSSFallbackReason::MaskVisualization :
+					currentFrameGenerationActive ?
+						OuterDLSSFallbackReason::FrameGeneration :
+					cachedPairSourceSignatureMismatch ?
+						OuterDLSSFallbackReason::FullInputUnavailable :
+						OuterDLSSFallbackReason::CachedPairContractInvalidated;
+				submitStageNeuralStereoState.publishedRoute.sourceSignatureProven =
+					submitStageNeuralStereoState.sourceSignatureProven;
+				submitStageNeuralStereoState.publishedRoute.requested =
+					currentNeuralConfigured;
+				submitStageNeuralStereoState.publishedRoute.eligible = false;
+				submitStageNeuralStereoState.publishedRoute.sourceBatchEligible = false;
+				submitStageNeuralStereoState.publishedRoute.submitPairBoundaryMode =
+					neuralSubmitPairBoundaryMode;
+				submitStageNeuralStereoState.publishedRoute.submitPairBoundaryProven =
+					neuralSubmitPairBoundaryProven;
+				submitStageNeuralStereoState.publishedRoute.submitPairBoundaryToken =
+					a_submitPairBoundaryToken;
+				submitStageNeuralStereoState.publishedRoute.frameGenerationActive =
+					currentFrameGenerationActive;
+				submitStageNeuralStereoState.publishedRoute.frameGenerationGatePassed =
+					!currentFrameGenerationActive;
+				submitStageNeuralStereoState.publishedRoute.requestedBatchedStereo =
+					settings.neuralRenderingBatchedStereo;
+				submitStageNeuralStereoState.publishedRoute.requestedDirectCommit =
+					settings.neuralRenderingDirectCommit;
+				submitStageNeuralStereoState.publishedRoute.pairComplete = false;
+				submitStageNeuralStereoState.publishedRoute.effectiveImplementationKnown = false;
+				submitStageNeuralStereoState.publishedRoute.effectiveBatchedStereo = false;
+				submitStageNeuralStereoState.publishedRoute.effectiveDirectCommit = false;
+				submitStageNeuralStereoState.publishedRoute.implementationModeExecuted = false;
+				submitStageNeuralStereoState.publishedRoute.disposition =
+					NeuralStereoPairDisposition::FallbackRequired;
+				submitStageNeuralStereoState.publishedRoute.fallbackReason =
+					fallbackReason;
+				submitStageNeuralStereoState.publishedRoute.preparedEyeMask = 0;
+				submitStageNeuralStereoState.publishedRoute.attemptedEyeMask = 0;
+				submitStageNeuralStereoState.publishedRoute.evaluatedEyeMask = 0;
+				submitStageNeuralStereoState.publishedRoute.appliedEyeMask = 0;
+				submitStageNeuralStereoState.publishedRoute.committedEyeMask = 0;
+				submitStageNeuralStereoState.publishedRoute.dlssEyeMask = 0;
+				submitStageNeuralStereoState.publishedRoute.callerResetEyeMask = 0;
+				submitStageNeuralStereoState.publishedRoute.featureUpscalingEyeMask = 0;
+				submitStageNeuralStereoState.publishedRoute.motionVectorScaleX = {};
+				submitStageNeuralStereoState.publishedRoute.motionVectorScaleY = {};
+				submitStageNeuralStereoState.publishedRoute.inputOffsetX = {};
+				submitStageNeuralStereoState.publishedRoute.inputOffsetY = {};
+				submitStageNeuralStereoState.publishedRoute.pinholeOffsetX = {};
+				submitStageNeuralStereoState.publishedRoute.pinholeOffsetY = {};
+				submitStageNeuralStereoState.publishedRoute.outerDLSSRequested =
+					rejectedOuterDLSS.requested;
+				submitStageNeuralStereoState.publishedRoute.outerDLSSEligible = false;
+				submitStageNeuralStereoState.publishedRoute.outerDLSSFallbackReason =
+					rejectedOuterDLSS.fallbackReason;
+				submitStageNeuralStereoState.publishedRoute.outerDLSSPreparedEyeMask = 0;
+				submitStageNeuralStereoState.publishedRoute.outerDLSSAttemptedEyeMask = 0;
+				submitStageNeuralStereoState.publishedRoute.outerDLSSEvaluatedEyeMask = 0;
+				submitStageNeuralStereoState.publishedRoute.outerDLSSCommittedEyeMask = 0;
+			}
+		}
+
+		auto route = submitStageNeuralStereoState.publishedRoute;
+		if (!route.valid) {
+			route.valid = true;
+			route.role = NeuralStereoRouteRole::Submit;
+			route.generation = submitStageNeuralStereoState.generation;
+			route.arrangement = static_cast<uint32_t>(NeuralRendering::kPipelineArrangement);
+			route.requested = submitStageNeuralStereoState.neuralRequested;
+			route.eligible = submitStageNeuralStereoState.sourceBatchEligible;
+			route.requestedBatchedStereo =
+				submitStageNeuralStereoState.requestedBatchedStereo;
+			route.requestedDirectCommit =
+				submitStageNeuralStereoState.requestedDirectCommit;
+			route.sourceBatchEligible = submitStageNeuralStereoState.sourceBatchEligible;
+			route.sourceSignatureProven = submitStageNeuralStereoState.sourceSignatureProven;
+			route.submitPairBoundaryMode =
+				submitStageNeuralStereoState.submitPairBoundaryMode;
+			route.submitPairBoundaryProven =
+				submitStageNeuralStereoState.submitPairBoundaryProven;
+			route.submitPairBoundaryToken =
+				submitStageNeuralStereoState.submitPairBoundaryToken;
+			route.submitEyeMaskAtDecision = submitEyeMaskAtDecision;
+			route.disposition = submitStageNeuralStereoState.outputsReady ?
+			                        (submitStageNeuralStereoState.neuralApplied ?
+											NeuralStereoPairDisposition::NeuralPair :
+											NeuralStereoPairDisposition::NormalDLSSPair) :
+			                        NeuralStereoPairDisposition::FallbackRequired;
+			route.fallbackReason = submitStageNeuralStereoState.fallbackReason;
+			route.preparedEyeMask = submitStageNeuralStereoState.preparedEyeMask;
+			route.attemptedEyeMask = submitStageNeuralStereoState.attemptedEyeMask;
+			route.evaluatedEyeMask = submitStageNeuralStereoState.evaluatedEyeMask;
+			route.appliedEyeMask = submitStageNeuralStereoState.successfulEyeMask;
+			route.implementationModeExecuted = route.attemptedEyeMask != 0;
+			route.effectiveImplementationKnown =
+				route.implementationModeExecuted;
+			if (route.effectiveImplementationKnown) {
+				route.effectiveBatchedStereo = route.requestedBatchedStereo;
+				route.effectiveDirectCommit = route.requestedDirectCommit;
+			}
+			route.committedEyeMask = submitStageNeuralStereoState.committedEyeMask;
+			route.dlssEyeMask = submitStageNeuralStereoState.dlssEyeMask;
+			route.callerResetEyeMask =
+				submitStageNeuralStereoState.callerResetEyeMask;
+			route.featureUpscalingEyeMask =
+				submitStageNeuralStereoState.featureUpscalingEyeMask;
+			route.motionVectorScaleX = submitStageNeuralStereoState.motionVectorScaleX;
+			route.motionVectorScaleY = submitStageNeuralStereoState.motionVectorScaleY;
+			route.inputOffsetX = submitStageNeuralStereoState.inputOffsetX;
+			route.inputOffsetY = submitStageNeuralStereoState.inputOffsetY;
+			route.pinholeOffsetX = submitStageNeuralStereoState.pinholeOffsetX;
+			route.pinholeOffsetY = submitStageNeuralStereoState.pinholeOffsetY;
+			route.outerDLSSRequested = submitStageNeuralStereoState.outerDLSS.requested;
+			route.outerDLSSEligible = submitStageNeuralStereoState.outerDLSS.eligible;
+			route.outerDLSSFallbackReason = submitStageNeuralStereoState.outerDLSS.fallbackReason;
+			route.outerDLSSPreparedEyeMask = submitStageNeuralStereoState.outerDLSS.preparedEyeMask;
+			route.outerDLSSAttemptedEyeMask = submitStageNeuralStereoState.outerDLSS.attemptedEyeMask;
+			route.outerDLSSEvaluatedEyeMask = submitStageNeuralStereoState.outerDLSS.evaluatedEyeMask;
+			route.outerDLSSCommittedEyeMask = submitStageNeuralStereoState.outerDLSS.committedEyeMask;
+		}
+		route.sequence = 0;
+		route.compositorCycle = a_compositorCycleToken;
+		route.frame = currentFrame;
+		route.pairComplete = submitStageNeuralStereoState.outputsReady;
+		route.presentationAcceptedEyeMask =
+			submitStageNeuralStereoState.presentedEyeMask;
+		submitStageNeuralStereoState.publishedRoute = route;
+		PublishNeuralStereoRouteSnapshot(route);
+
+		if (!submitStageNeuralStereoState.outputsReady)
+			return false;
+
+		auto* retainedOutput =
+			submitStageNeuralStereoState.publishedOutputs[eyeIndex].get();
+		if (!retainedOutput || !retainedOutput->resource)
+			return false;
+
+		// The cycle-owned resource identity and lifetime are immutable; its content
+		// can still receive the ordinary in-scene overlay after this call returns.
+		a_outputTexture = *a_inputTexture;
+		a_outputTexture.handle = retainedOutput->resource.get();
+		a_outputTexture.eType = vr::TextureType_DirectX;
+		a_outputTexture.eColorSpace =
+			submitStageNeuralStereoState.publishedColorSpace;
+		a_outputBounds = { 0.0f, 0.0f, 1.0f, 1.0f };
+		a_presentationObservation =
+			submitStageNeuralStereoState.publishedPresentationObservations[eyeIndex];
+		a_presentationObservation.frame = std::max(currentFrame, 1u);
+		a_presentationObservation.eyeIndex = eyeIndex;
+		a_presentationObservation.outputWidth = retainedOutput->desc.Width;
+		a_presentationObservation.outputHeight = retainedOutput->desc.Height;
+		return true;
+	}
 
 	EnsureRuntimeResolutionStateCurrent();
 	const auto& resolutionPlan = GetRuntimeResolutionPlan();
@@ -30078,7 +32455,139 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	if (!IsVendorUpscalingMethod(upscaleMethod))
 		return false;
 	const auto upscaleMethodName = magic_enum::enum_name(upscaleMethod);
-	const uint32_t currentFrame = state->frameCount;
+	const auto& activeContract = perfMode.GetBootSnapshot();
+	const uint32_t activeContractGeneration =
+		activeContract.valid ? activeContract.generation : 0u;
+	const bool neuralSubmitConfigured = settings.neuralRenderingEnabled;
+	const bool neuralSubmitFrameGenerationActive =
+		settings.frameGenerationMode != 0 || IsFrameGenerationDx12PathActive();
+	const bool neuralSubmitBaseEligible =
+		neuralSubmitConfigured &&
+		neuralSubmitRouteEnabled &&
+		upscaleMethod == UpscaleMethod::kDLSS &&
+		!neuralMenuSuppressed &&
+		!settings.foveatedPeripheryMaskVisualization &&
+		!neuralSubmitFrameGenerationActive &&
+		neuralSubmitPairBoundaryPassed;
+	NeuralStereoFallbackReason neuralSubmitAdmissionFallbackReason =
+		NeuralStereoFallbackReason::SubmitPresentationGate;
+	bool neuralSubmitRoutePublishedThisCall = false;
+	bool neuralSubmitRequested = false;
+	bool neuralSubmitSourceBatchEligible = false;
+	bool neuralSubmitSourceSignatureProven = false;
+	std::optional<bool> neuralSubmitColorBuffersHDR;
+	auto publishUnreportedNeuralSubmitRoute = ScopeExit([&]() noexcept {
+		if (neuralSubmitRoutePublishedThisCall)
+			return;
+
+		try {
+			OuterDLSSStereoResult outerDLSS{};
+			outerDLSS.requested = settings.foveatedOuterDLSS &&
+			                      neuralSubmitRouteEnabled;
+			outerDLSS.fallbackReason = !outerDLSS.requested ?
+			                               OuterDLSSFallbackReason::Disabled :
+			                           upscaleMethod != UpscaleMethod::kDLSS ?
+			                               OuterDLSSFallbackReason::MethodIneligible :
+			                           !neuralSubmitConfigured ?
+			                               OuterDLSSFallbackReason::NeuralInactive :
+			                           neuralMenuSuppressed ?
+			                               OuterDLSSFallbackReason::MenuContext :
+			                           settings.foveatedPeripheryMaskVisualization ?
+			                               OuterDLSSFallbackReason::MaskVisualization :
+			                           neuralSubmitFrameGenerationActive ?
+			                               OuterDLSSFallbackReason::FrameGeneration :
+			                               OuterDLSSFallbackReason::FoveatedInactive;
+			bool recordOuterDLSS = true;
+			{
+				std::scoped_lock accountingLock(
+					outerDLSSAdmissionAccountingMutex);
+				if (outerDLSSLastSubmitUnreportedCycle ==
+						a_compositorCycleToken &&
+					outerDLSSLastSubmitUnreportedFrame == currentFrame) {
+					recordOuterDLSS = false;
+				} else {
+					outerDLSSLastSubmitUnreportedCycle =
+						a_compositorCycleToken;
+					outerDLSSLastSubmitUnreportedFrame = currentFrame;
+				}
+			}
+			if (recordOuterDLSS) {
+				RecordFoveatedOuterDLSSResult(
+					NeuralStereoRouteRole::Submit, outerDLSS);
+			}
+			auto fallbackReason = neuralSubmitAdmissionFallbackReason;
+			if (!neuralSubmitConfigured)
+				fallbackReason = NeuralStereoFallbackReason::NeuralDisabled;
+			else if (upscaleMethod != UpscaleMethod::kDLSS)
+				fallbackReason = NeuralStereoFallbackReason::MethodIneligible;
+			else if (!neuralSubmitRouteEnabled)
+				fallbackReason = NeuralStereoFallbackReason::RouteIneligible;
+			else if (neuralMenuSuppressed)
+				fallbackReason = NeuralStereoFallbackReason::MenuContext;
+			else if (settings.foveatedPeripheryMaskVisualization)
+				fallbackReason = NeuralStereoFallbackReason::MaskVisualization;
+			else if (neuralSubmitFrameGenerationActive)
+				fallbackReason = NeuralStereoFallbackReason::FrameGeneration;
+			else if (!neuralSubmitPairBoundaryPassed)
+				fallbackReason =
+					NeuralStereoFallbackReason::SubmitPairBoundaryUnproven;
+			else if (IsSubmitStageDeviceLost())
+				fallbackReason = NeuralStereoFallbackReason::SubmitDeviceUnavailable;
+
+			const bool notRequested =
+				fallbackReason == NeuralStereoFallbackReason::NeuralDisabled ||
+				fallbackReason == NeuralStereoFallbackReason::MethodIneligible ||
+				fallbackReason == NeuralStereoFallbackReason::RouteIneligible ||
+				fallbackReason == NeuralStereoFallbackReason::MenuContext ||
+				fallbackReason == NeuralStereoFallbackReason::SubmitPresentationGate;
+			const bool normalDlssExpected =
+				fallbackReason == NeuralStereoFallbackReason::MaskVisualization ||
+				fallbackReason == NeuralStereoFallbackReason::FrameGeneration;
+			PublishNeuralStereoRouteSnapshot({
+				.valid = true,
+				.role = NeuralStereoRouteRole::Submit,
+				.compositorCycle = a_compositorCycleToken,
+				.frame = currentFrame,
+				.generation = activeContractGeneration,
+				.arrangement = static_cast<uint32_t>(NeuralRendering::kPipelineArrangement),
+				.requested = neuralSubmitConfigured,
+				.eligible = neuralSubmitBaseEligible,
+				.sourceBatchEligible = neuralSubmitSourceBatchEligible,
+				.sourceSignatureProven = neuralSubmitSourceSignatureProven,
+				.submitPairBoundaryMode = neuralSubmitPairBoundaryMode,
+				.submitPairBoundaryProven = neuralSubmitPairBoundaryProven,
+				.submitPairBoundaryToken = a_submitPairBoundaryToken,
+				.submitEyeMaskAtDecision = submitEyeMaskAtDecision,
+				.pairComplete = false,
+				.colorBuffersHDRKnown = neuralSubmitColorBuffersHDR.has_value(),
+				.colorBuffersHDR = neuralSubmitColorBuffersHDR.value_or(false),
+				.hdrRequired = false,
+				.frameGenerationActive = neuralSubmitFrameGenerationActive,
+				.frameGenerationGatePassed = !neuralSubmitFrameGenerationActive,
+				.requestedBatchedStereo = settings.neuralRenderingBatchedStereo,
+				.requestedDirectCommit = settings.neuralRenderingDirectCommit,
+				.effectiveImplementationKnown = false,
+				.disposition = notRequested ?
+			                       NeuralStereoPairDisposition::NotRequested :
+			                   normalDlssExpected ?
+			                       NeuralStereoPairDisposition::NormalDLSSPair :
+			                       NeuralStereoPairDisposition::FallbackRequired,
+				.fallbackReason = fallbackReason,
+				.outerDLSSRequested = outerDLSS.requested,
+				.outerDLSSEligible = outerDLSS.eligible,
+				.outerDLSSFallbackReason = outerDLSS.fallbackReason,
+			});
+		} catch (...) {
+			// Submit diagnostics must not affect the compositor fallback path.
+		}
+	});
+	if (IsSubmitStageDeviceLost()) {
+		neuralSubmitAdmissionFallbackReason =
+			NeuralStereoFallbackReason::SubmitDeviceUnavailable;
+		return false;
+	}
+	if (!IsVendorUpscalingMethod(upscaleMethod))
+		return false;
 	const bool presentationUpscalingActive = IsPresentationUpscalingActive();
 	const bool vrRenderScaleMode = resolutionPlan.owner == ResolutionOwner::VRRenderScaleMode;
 	const bool mainMenuPresentationContext = IsMainMenuContextActive();
@@ -30090,6 +32599,33 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	if (!presentationUpscalingActive && !directMenuPresentationFallbackActive)
 		return false;
 
+	auto* sourceTexture = static_cast<ID3D11Texture2D*>(a_inputTexture->handle);
+	D3D11_TEXTURE2D_DESC sourceDesc{};
+	sourceTexture->GetDesc(&sourceDesc);
+	neuralSubmitColorBuffersHDR = GetDLSSColorResourceHDR(sourceTexture);
+	if (!IsSupportedVRSubmitPresentationContract(sourceDesc.Format, a_inputTexture->eColorSpace)) {
+		neuralSubmitAdmissionFallbackReason =
+			NeuralStereoFallbackReason::SubmitSourceContractRejected;
+		static std::atomic_bool loggedUnsupportedPresentationContract{ false };
+		if (!loggedUnsupportedPresentationContract.exchange(true, std::memory_order_relaxed)) {
+			logger::warn(
+				"[VRRenderScale] Submit-stage upscaling skipped for unsupported presentation contract; using the original OpenVR submission. format={} colorSpace={}",
+				static_cast<uint32_t>(sourceDesc.Format),
+				static_cast<uint32_t>(a_inputTexture->eColorSpace));
+		}
+		return false;
+	}
+	if (sourceDesc.SampleDesc.Count != 1) {
+		neuralSubmitAdmissionFallbackReason =
+			NeuralStereoFallbackReason::SubmitSourceContractRejected;
+		static bool loggedMSAA = false;
+		if (!loggedMSAA) {
+			logger::warn("[Upscaling] Submit-stage {} skipped because the submitted texture is MSAA.", upscaleMethodName);
+			loggedMSAA = true;
+		}
+		return false;
+	}
+
 	BeginVRMenuFinalCompositeFrame(currentFrame);
 	if (vrRenderScaleMode &&
 		vrMenuFrameTransaction.frame == currentFrame &&
@@ -30097,8 +32633,11 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		// The first eye fixes the transaction generation. Producer scopes that
 		// begin afterward feed a later consumer frame and must not invalidate the
 		// second eye; only an explicit transaction fault remains authoritative.
-		if (vrMenuFrameTransaction.poisoned)
+		if (vrMenuFrameTransaction.poisoned) {
+			neuralSubmitAdmissionFallbackReason =
+				NeuralStereoFallbackReason::SubmitPresentationGate;
 			return false;
+		}
 	} else if (vrRenderScaleMode && vrMenuFrameTransaction.frame == currentFrame) {
 		const bool transactionScopesClosed =
 			vrMenuFrameTransaction.drawInterfaceDepth == 0 &&
@@ -30141,18 +32680,24 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 				PoisonVRMenuFrameTransaction("menu-transaction-incomplete-at-submit");
 
 			if (vrMenuFrameTransaction.poisoned) {
+				neuralSubmitAdmissionFallbackReason =
+					NeuralStereoFallbackReason::SubmitPresentationGate;
 				vrMenuFrameTransaction.presentationStarted = true;
 				return false;
 			}
 		}
 		if (vrMenuFrameTransaction.capturedOperations != 0 && !SealVRMenuFrameTransaction(currentFrame)) {
+			neuralSubmitAdmissionFallbackReason =
+				NeuralStereoFallbackReason::SubmitPresentationGate;
 			vrMenuFrameTransaction.presentationStarted = true;
 			return false;
 		}
 	}
-	auto* sourceTexture = static_cast<ID3D11Texture2D*>(a_inputTexture->handle);
-	if (IsVRNativeLayoutSubmitProtectedRenderTargetTexture(sourceTexture))
+	if (IsVRNativeLayoutSubmitProtectedRenderTargetTexture(sourceTexture)) {
+		neuralSubmitAdmissionFallbackReason =
+			NeuralStereoFallbackReason::SubmitPresentationGate;
 		return false;
+	}
 
 	const bool presentationRenderTarget = IsVRPresentationRenderTargetTexture(sourceTexture);
 	const bool currentMenuPresentationContext = IsVRMenuPresentationContextActive();
@@ -30186,22 +32731,12 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			PoisonVRMenuFrameTransaction("menu-eye-presentation-failed");
 	});
 
-	D3D11_TEXTURE2D_DESC sourceDesc{};
-	sourceTexture->GetDesc(&sourceDesc);
-	if (sourceDesc.SampleDesc.Count != 1) {
-		static bool loggedMSAA = false;
-		if (!loggedMSAA) {
-			logger::warn("[Upscaling] Submit-stage {} skipped because the submitted texture is MSAA.", upscaleMethodName);
-			loggedMSAA = true;
-		}
-		return false;
-	}
-
 	const auto screenSize = state->screenSize;
 	uint32_t eyeWidthOut = 0;
 	uint32_t eyeHeightOut = 0;
 	uint32_t eyeWidthIn = 0;
 	uint32_t eyeHeightIn = 0;
+	Texture2D* presentationEyeOutputs[2]{};
 	if (vrRenderScaleMode) {
 		eyeWidthOut = std::max<uint32_t>(1u, ClampPositiveDimension(resolutionPlan.finalOutputSize.x) / 2u);
 		eyeHeightOut = ClampPositiveDimension(resolutionPlan.finalOutputSize.y);
@@ -30214,11 +32749,17 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		eyeWidthIn = static_cast<uint32_t>(dynamicRenderSize.x / 2.0f);
 		eyeHeightIn = static_cast<uint32_t>(dynamicRenderSize.y);
 	}
-	if (!eyeWidthIn || !eyeHeightIn || !eyeWidthOut || !eyeHeightOut)
+	if (!eyeWidthIn || !eyeHeightIn || !eyeWidthOut || !eyeHeightOut) {
+		neuralSubmitAdmissionFallbackReason =
+			NeuralStereoFallbackReason::SubmitSourceContractRejected;
 		return false;
+	}
 	const auto outputStereoLayout = ResolveVRSideBySideStereoLayout(eyeWidthOut, eyeHeightOut);
-	if (!outputStereoLayout.IsValid())
+	if (!outputStereoLayout.IsValid()) {
+		neuralSubmitAdmissionFallbackReason =
+			NeuralStereoFallbackReason::SubmitSourceContractRejected;
 		return false;
+	}
 	const bool presentationSourceHasFullArrayEye =
 		presentationRenderTarget &&
 		sourceDesc.ArraySize > 1 &&
@@ -30240,12 +32781,17 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		presentationSourceHasFullSingleEye;
 	const uint32_t sourceEyeWidthIn = presentationSourceHasFullOutputSize ? eyeWidthOut : eyeWidthIn;
 	const uint32_t sourceEyeHeightIn = presentationSourceHasFullOutputSize ? eyeHeightOut : eyeHeightIn;
-	if (!sourceEyeWidthIn || !sourceEyeHeightIn)
+	if (!sourceEyeWidthIn || !sourceEyeHeightIn) {
+		neuralSubmitAdmissionFallbackReason =
+			NeuralStereoFallbackReason::SubmitSourceContractRejected;
 		return false;
+	}
 	const auto sourceStereoLayout = ResolveVRSideBySideStereoLayout(sourceEyeWidthIn, sourceEyeHeightIn);
-	if (!sourceStereoLayout.IsValid())
+	if (!sourceStereoLayout.IsValid()) {
+		neuralSubmitAdmissionFallbackReason =
+			NeuralStereoFallbackReason::SubmitSourceContractRejected;
 		return false;
-	const uint32_t eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
+	}
 	const bool sourceUsesCombinedStereoLayout =
 		sourceDesc.ArraySize == 1 &&
 		TextureContainsVREyeRegion(sourceDesc.Width, sourceDesc.Height, sourceStereoLayout.eyes[1]);
@@ -30261,28 +32807,66 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		sourceUsesCombinedStereoLayout,
 		inputBoundsUseCombinedStereoSpace,
 		a_inputBounds);
-	const auto& activeContract = perfMode.GetBootSnapshot();
-	const uint32_t activeContractGeneration = activeContract.valid ? activeContract.generation : 0u;
+	const auto canonicalSourceRegion = ResolveVRSubmitSourceRegion(
+		sourceDesc,
+		eyeIndex,
+		sourceEyeWidthIn,
+		sourceEyeHeightIn,
+		sourceStereoLayout,
+		sourceUsesCombinedStereoLayout,
+		false,
+		nullptr);
+	neuralSubmitSourceSignatureProven =
+		canonicalSourceRegion.matchesExpectedSize &&
+		SameVRSubmitSourceRegionSignature(sourceRegion, canonicalSourceRegion);
+	const auto makePresentationObservation = [&](uint32_t a_eyeIndex,
+												 VRRenderScalePresentationPath a_path,
+												 uint32_t a_inputWidth, uint32_t a_inputHeight,
+												 uint32_t a_expectedInputWidth, uint32_t a_expectedInputHeight,
+												 bool a_loadingOrMenuContext, bool a_transitionCooldown) {
+		VRRenderScalePresentationObservation observation{};
+		observation.valid = true;
+		observation.path = a_path;
+		observation.eyeIndex = a_eyeIndex;
+		observation.frame = std::max(currentFrame, 1u);
+		observation.contractGeneration = activeContractGeneration;
+		observation.method = upscaleMethod;
+		observation.inputWidth = a_inputWidth;
+		observation.inputHeight = a_inputHeight;
+		observation.expectedInputWidth = a_expectedInputWidth;
+		observation.expectedInputHeight = a_expectedInputHeight;
+		observation.outputWidth = eyeWidthOut;
+		observation.outputHeight = eyeHeightOut;
+		observation.loadingOrMenuContext = a_loadingOrMenuContext;
+		observation.transitionCooldown = a_transitionCooldown;
+		return observation;
+	};
 	const auto setPresentationObservation = [&](VRRenderScalePresentationPath a_path,
 												uint32_t a_inputWidth, uint32_t a_inputHeight,
 												uint32_t a_expectedInputWidth, uint32_t a_expectedInputHeight,
 												bool a_loadingOrMenuContext, bool a_transitionCooldown) {
-		a_presentationObservation.valid = true;
-		a_presentationObservation.path = a_path;
-		a_presentationObservation.eyeIndex = eyeIndex;
-		a_presentationObservation.frame = std::max(currentFrame, 1u);
-		a_presentationObservation.contractGeneration = activeContractGeneration;
-		a_presentationObservation.method = upscaleMethod;
-		a_presentationObservation.inputWidth = a_inputWidth;
-		a_presentationObservation.inputHeight = a_inputHeight;
-		a_presentationObservation.expectedInputWidth = a_expectedInputWidth;
-		a_presentationObservation.expectedInputHeight = a_expectedInputHeight;
-		a_presentationObservation.outputWidth = eyeWidthOut;
-		a_presentationObservation.outputHeight = eyeHeightOut;
-		a_presentationObservation.loadingOrMenuContext = a_loadingOrMenuContext;
-		a_presentationObservation.transitionCooldown = a_transitionCooldown;
+		a_presentationObservation = makePresentationObservation(
+			eyeIndex,
+			a_path,
+			a_inputWidth,
+			a_inputHeight,
+			a_expectedInputWidth,
+			a_expectedInputHeight,
+			a_loadingOrMenuContext,
+			a_transitionCooldown);
+	};
+	const auto stampRetainedNeuralObservation = [&]() {
+		a_presentationObservation.retainedNeuralPair = true;
+		a_presentationObservation.retainedNeuralCompositorCycleToken =
+			a_compositorCycleToken;
+		a_presentationObservation.retainedNeuralSettingsKey =
+			submitStageNeuralStereoState.settingsKey;
+		a_presentationObservation.retainedNeuralContractEpoch =
+			submitStageNeuralStereoState.contractEpoch;
 	};
 	if (!sourceRegion.valid) {
+		neuralSubmitAdmissionFallbackReason =
+			NeuralStereoFallbackReason::SubmitSourceContractRejected;
 		if (vrRenderScaleMode) {
 			setPresentationObservation(
 				VRRenderScalePresentationPath::BoundsMismatchOriginalFallback,
@@ -30314,6 +32898,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 	const bool submitBoundsMismatch = vrRenderScaleMode && !sourceRegion.matchesExpectedSize;
 	if (submitBoundsMismatch) {
+		neuralSubmitAdmissionFallbackReason =
+			NeuralStereoFallbackReason::SubmitSourceContractRejected;
 		setPresentationObservation(
 			VRRenderScalePresentationPath::BoundsMismatchOriginalFallback,
 			sourceRegion.width,
@@ -30407,20 +32993,48 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	// vendor contract is promotable. Do not replay a separately captured startup
 	// surface here: a valid D3D texture can still contain a transient HAM frame.
 	bool presentationOnly = computePresentationOnly();
+	neuralSubmitAdmissionFallbackReason =
+		NeuralStereoFallbackReason::SubmitResourcePreparationFailed;
 	if (IsSubmitStageDeviceLost())
 		return false;
 
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-	if (submitStageVendorOutputFrame != currentFrame ||
-		submitStageVendorOutputSourceTexture != sourceTexture ||
-		submitStageVendorOutputGeneration != activeContractGeneration) {
+	const bool frozenNeuralStereoPairForCycle =
+		a_compositorCycleToken != 0 &&
+		submitStageNeuralStereoState.outputsReady &&
+		submitStageNeuralStereoState.compositorCycle == a_compositorCycleToken &&
+		submitStageNeuralStereoState.publishedOutputs[0] &&
+		submitStageNeuralStereoState.publishedOutputs[0]->resource &&
+		submitStageNeuralStereoState.publishedOutputs[1] &&
+		submitStageNeuralStereoState.publishedOutputs[1]->resource;
+	const bool terminalNeuralStereoFailureForCycle =
+		a_compositorCycleToken != 0 &&
+		submitStageNeuralStereoState.decisionReady &&
+		submitStageNeuralStereoState.preflightFailed &&
+		submitStageNeuralStereoState.compositorCycle == a_compositorCycleToken;
+	const bool frozenNeuralStereoDecisionForCycle =
+		frozenNeuralStereoPairForCycle || terminalNeuralStereoFailureForCycle;
+	if (frozenNeuralStereoDecisionForCycle)
+		neuralSubmitRoutePublishedThisCall = true;
+	if (terminalNeuralStereoFailureForCycle) {
+		presentationOnly = true;
+	}
+	// Once either eye can observe a published pair, keep that pair immutable
+	// for the compositor cycle even if OpenVR changes source identity.
+	if ((submitStageVendorOutputFrame != currentFrame ||
+			submitStageVendorOutputSourceTexture != sourceTexture ||
+			submitStageVendorOutputGeneration != activeContractGeneration) &&
+		!frozenNeuralStereoPairForCycle) {
 		submitStageVendorOutputFrame = currentFrame;
 		submitStageVendorOutputGeneration = activeContractGeneration;
 		submitStageVendorOutputSourceTexture = sourceTexture;
 		submitStageVendorEyeState = {};
 		submitStageFoveatedCenterState = {};
-		submitStageForceFullEyeVendorFallback = false;
+		if (!terminalNeuralStereoFailureForCycle)
+			submitStageNeuralStereoState = {};
+		if (!terminalNeuralStereoFailureForCycle)
+			submitStageForceFullEyeVendorFallback = false;
 	}
 
 	const bool dlssRapidTransitionBypass =
@@ -30501,6 +33115,14 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		IsFoveatedVendorDispatchEnabled(upscaleMethod) &&
 		!foveatedTransitionBypass &&
 		!foveatedFailureBackoffActive;
+	const bool outerDLSSSubmitEligible =
+		foveatedRequested && settings.foveatedOuterDLSS &&
+		neuralSubmitConfigured && neuralSubmitRouteEnabled &&
+		neuralSubmitPairBoundaryPassed &&
+		upscaleMethod == UpscaleMethod::kDLSS &&
+		!neuralMenuSuppressed &&
+		!settings.foveatedPeripheryMaskVisualization &&
+		!neuralSubmitFrameGenerationActive;
 	const bool submitStageFoveatedPeripheryTAAPathActive =
 		foveatedRequested &&
 		IsPeripheryTAAPathActive(upscaleMethod);
@@ -30566,7 +33188,18 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		submitStagePreparedFrameFoveatedRegionEncode = false;
 	} else if (!submitStagePreparedThisFrame || submitStagePreparedFramePresentationOnly) {
 		bool encodedFoveatedRegions = false;
-		if (!EncodeSubmitStageVRInputs(sourceTexture, motionVector.texture, depth.texture, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut, submitStageNeedsRawDepthInput, foveatedRequested, &encodedFoveatedRegions, activeContractGeneration)) {
+		if (!EncodeSubmitStageVRInputs(
+				sourceTexture,
+				motionVector.texture,
+				depth.texture,
+				eyeWidthIn,
+				eyeHeightIn,
+				eyeWidthOut,
+				eyeHeightOut,
+				submitStageNeedsRawDepthInput,
+				foveatedRequested && !outerDLSSSubmitEligible,
+				&encodedFoveatedRegions,
+				activeContractGeneration)) {
 			if (IsSubmitStageDeviceLost())
 				return false;
 			return false;
@@ -30668,53 +33301,28 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			return false;
 	}
 
-	const bool expectedFoveatedVendorPath = shouldUseFoveatedVendorThisEye;
-	const auto& cachedEyeState = submitStageVendorEyeState[eyeIndex];
-	// OpenVR can submit the same eye twice in one frame; reuse the finalized
-	// vendor output when the submit signature is identical.
-	const bool canReuseSubmitStageEyeOutput =
-		!presentationOnly &&
-		cachedEyeState.ready &&
-		cachedEyeState.method == static_cast<uint32_t>(upscaleMethod) &&
-		cachedEyeState.generation == activeContractGeneration &&
-		cachedEyeState.usedFoveatedVendorPath == expectedFoveatedVendorPath &&
-		cachedEyeState.usedDLSSSharpening == submitDLSSSharpening &&
-		cachedEyeState.usedMenuFinalComposite == submitStageMenuFinalCompositeRequested &&
-		cachedEyeState.menuLayerGeneration == submitStageMenuLayerGeneration &&
-		cachedEyeState.inputWidth == eyeWidthIn &&
-		cachedEyeState.inputHeight == eyeHeightIn &&
-		cachedEyeState.outputWidth == eyeWidthOut &&
-		cachedEyeState.outputHeight == eyeHeightOut &&
-		cachedEyeState.sourceSubresource == sourceSubresource &&
-		cachedEyeState.sourceBoxLeft == colorBox.left &&
-		cachedEyeState.sourceBoxTop == colorBox.top &&
-		cachedEyeState.sourceBoxRight == colorBox.right &&
-		cachedEyeState.sourceBoxBottom == colorBox.bottom &&
-		cachedEyeState.depthWidth == sourceRegion.depthWidth &&
-		cachedEyeState.depthHeight == sourceRegion.depthHeight &&
-		cachedEyeState.depthOffsetX == sourceRegion.depthOffsetX &&
-		cachedEyeState.depthOffsetY == sourceRegion.depthOffsetY &&
-		vrIntermediateColorOut[eyeIndex] &&
-		vrIntermediateColorOut[eyeIndex]->resource;
-	if (canReuseSubmitStageEyeOutput) {
-		a_outputTexture = *a_inputTexture;
-		a_outputTexture.handle = vrIntermediateColorOut[eyeIndex]->resource.get();
-		a_outputTexture.eType = vr::TextureType_DirectX;
-		a_outputBounds = { 0.0f, 0.0f, 1.0f, 1.0f };
-		menuPresentationSucceeded = menuPresentationAttempt;
-		setPresentationObservation(
-			VRRenderScalePresentationPath::VendorEvaluated,
-			eyeWidthIn,
-			eyeHeightIn,
-			eyeWidthIn,
-			eyeHeightIn,
-			false,
-			false);
-		return true;
-	}
+	const auto prepareSubmitStageColorInput = [&](uint32_t targetEyeIndex, const VRSubmitSourceRegion& targetRegion) {
+		if (targetEyeIndex >= 2 || !targetRegion.valid || !targetRegion.matchesExpectedSize ||
+			!vrIntermediateColorIn[targetEyeIndex] || !vrIntermediateColorIn[targetEyeIndex]->resource) {
+			return false;
+		}
 
-	context->CopySubresourceRegion(vrIntermediateColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, sourceTexture, sourceSubresource, &colorBox);
-	if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage source copy"))
+		context->CopySubresourceRegion(
+			vrIntermediateColorIn[targetEyeIndex]->resource.get(),
+			0,
+			0,
+			0,
+			0,
+			sourceTexture,
+			targetRegion.subresource,
+			&targetRegion.box);
+		if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage source copy"))
+			return false;
+		if (presentationOnly)
+			return true;
+		return true;
+	};
+	if (!prepareSubmitStageColorInput(eyeIndex, sourceRegion))
 		return false;
 
 	const auto presentStretchOutput = [&](uint32_t inputWidth, uint32_t inputHeight, VRRenderScalePresentationPath a_path) {
@@ -30908,17 +33516,720 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	};
 
 	if (presentationOnly) {
+		neuralSubmitAdmissionFallbackReason =
+			NeuralStereoFallbackReason::SubmitPresentationGate;
 		return presentStretchOutput(
 			presentationInputWidth,
 			presentationInputHeight,
 			VRRenderScalePresentationPath::PresentationStretch);
 	}
 
+	neuralSubmitAdmissionFallbackReason =
+		NeuralStereoFallbackReason::SubmitVendorDispatchFailed;
 	if (upscaleMethod == UpscaleMethod::kDLSS)
 		streamline.ClearLastDLSSFailureState();
 
 	bool vendorSucceeded = false;
-	if (shouldUseFoveatedVendorThisEye) {
+	bool submitNeuralStereoBatchAttempted = false;
+	bool submitNeuralStereoBatchFinalized = false;
+	neuralSubmitRequested =
+		shouldUseFoveatedVendorThisEye &&
+		upscaleMethod == UpscaleMethod::kDLSS &&
+		neuralSubmitConfigured &&
+		neuralSubmitRouteEnabled &&
+		!neuralMenuSuppressed &&
+		!neuralSubmitFrameGenerationActive &&
+		!settings.foveatedPeripheryMaskVisualization;
+	const bool sourceContainsBothEyes =
+		sourceUsesCombinedStereoLayout || sourceDesc.ArraySize > 1;
+	neuralSubmitSourceBatchEligible =
+		neuralSubmitRequested &&
+		neuralSubmitPairBoundaryPassed &&
+		a_compositorCycleToken != 0 &&
+		sourceContainsBothEyes &&
+		neuralSubmitSourceSignatureProven;
+	const uint64_t neuralPresentationSettingsKey =
+		BuildNeuralPresentationOutputKey(*this);
+	const uint64_t neuralPresentationEpoch =
+		neuralPresentationContractEpoch.load(std::memory_order_acquire);
+	const bool neuralStereoDecisionChanged =
+		!frozenNeuralStereoDecisionForCycle &&
+		(!submitStageNeuralStereoState.decisionReady ||
+			submitStageNeuralStereoState.compositorCycle != a_compositorCycleToken ||
+			submitStageNeuralStereoState.frame != currentFrame ||
+			submitStageNeuralStereoState.generation != activeContractGeneration ||
+			submitStageNeuralStereoState.settingsKey !=
+				neuralPresentationSettingsKey ||
+			submitStageNeuralStereoState.contractEpoch !=
+				neuralPresentationEpoch ||
+			submitStageNeuralStereoState.sourceTexture != sourceTexture ||
+			(neuralSubmitPairBoundaryRequired &&
+				submitStageNeuralStereoState.submitPairBoundaryToken !=
+					a_submitPairBoundaryToken));
+	if (neuralStereoDecisionChanged) {
+		// Center inputs are content-keyed by this outer source/cycle decision.
+		submitStageFoveatedCenterState = {};
+		submitStageNeuralStereoState = {};
+		submitStageNeuralStereoState.decisionReady = true;
+		submitStageNeuralStereoState.sourceBatchEligible = neuralSubmitSourceBatchEligible;
+		submitStageNeuralStereoState.sourceSignatureProven = neuralSubmitSourceSignatureProven;
+		submitStageNeuralStereoState.submitPairBoundaryMode =
+			neuralSubmitPairBoundaryMode;
+		submitStageNeuralStereoState.submitPairBoundaryProven =
+			neuralSubmitPairBoundaryProven;
+		submitStageNeuralStereoState.submitPairBoundaryToken =
+			a_submitPairBoundaryToken;
+		submitStageNeuralStereoState.neuralRequested = neuralSubmitRequested;
+		submitStageNeuralStereoState.requestedBatchedStereo =
+			settings.neuralRenderingBatchedStereo;
+		submitStageNeuralStereoState.requestedDirectCommit =
+			settings.neuralRenderingDirectCommit;
+		submitStageNeuralStereoState.compositorCycle = a_compositorCycleToken;
+		submitStageNeuralStereoState.frame = currentFrame;
+		submitStageNeuralStereoState.generation = activeContractGeneration;
+		submitStageNeuralStereoState.settingsKey =
+			neuralPresentationSettingsKey;
+		submitStageNeuralStereoState.contractEpoch =
+			neuralPresentationEpoch;
+		submitStageNeuralStereoState.sourceTexture = sourceTexture;
+		auto& outerDLSS = submitStageNeuralStereoState.outerDLSS;
+		outerDLSS.requested = settings.foveatedOuterDLSS &&
+		                      neuralSubmitRouteEnabled;
+		outerDLSS.eligible = outerDLSSSubmitEligible && neuralSubmitSourceBatchEligible;
+		outerDLSS.fallbackReason = !outerDLSS.requested ?
+		                               OuterDLSSFallbackReason::Disabled :
+		                           upscaleMethod != UpscaleMethod::kDLSS ?
+		                               OuterDLSSFallbackReason::MethodIneligible :
+		                           !settings.neuralRenderingEnabled ?
+		                               OuterDLSSFallbackReason::NeuralInactive :
+		                           neuralMenuSuppressed ?
+		                               OuterDLSSFallbackReason::MenuContext :
+		                           settings.foveatedPeripheryMaskVisualization ?
+		                               OuterDLSSFallbackReason::MaskVisualization :
+		                           neuralSubmitFrameGenerationActive ?
+		                               OuterDLSSFallbackReason::FrameGeneration :
+		                           !outerDLSSSubmitEligible ?
+		                               OuterDLSSFallbackReason::FoveatedInactive :
+		                           !neuralSubmitSourceBatchEligible ?
+		                               OuterDLSSFallbackReason::FullInputUnavailable :
+		                               OuterDLSSFallbackReason::None;
+	}
+	NeuralStereoFallbackReason neuralSubmitFallbackReason = NeuralStereoFallbackReason::None;
+	if (!neuralSubmitConfigured)
+		neuralSubmitFallbackReason = NeuralStereoFallbackReason::NeuralDisabled;
+	else if (upscaleMethod != UpscaleMethod::kDLSS)
+		neuralSubmitFallbackReason = NeuralStereoFallbackReason::MethodIneligible;
+	else if (!neuralSubmitRouteEnabled)
+		neuralSubmitFallbackReason = NeuralStereoFallbackReason::RouteIneligible;
+	else if (neuralMenuSuppressed)
+		neuralSubmitFallbackReason = NeuralStereoFallbackReason::MenuContext;
+	else if (settings.foveatedPeripheryMaskVisualization)
+		neuralSubmitFallbackReason = NeuralStereoFallbackReason::MaskVisualization;
+	else if (neuralSubmitFrameGenerationActive)
+		neuralSubmitFallbackReason = NeuralStereoFallbackReason::FrameGeneration;
+	else if (!shouldUseFoveatedVendorThisEye)
+		neuralSubmitFallbackReason = NeuralStereoFallbackReason::RouteIneligible;
+	else if (!neuralSubmitPairBoundaryPassed)
+		neuralSubmitFallbackReason =
+			NeuralStereoFallbackReason::SubmitPairBoundaryUnproven;
+	else if (!neuralSubmitSourceSignatureProven)
+		neuralSubmitFallbackReason = NeuralStereoFallbackReason::SourceSignatureUnproven;
+	else if (!neuralSubmitSourceBatchEligible)
+		neuralSubmitFallbackReason = NeuralStereoFallbackReason::SourceBatchUnavailable;
+	if (neuralStereoDecisionChanged)
+		submitStageNeuralStereoState.fallbackReason = neuralSubmitFallbackReason;
+	const auto publishSubmitNeuralRoute = [&](
+											  NeuralStereoPairDisposition a_disposition,
+											  NeuralStereoFallbackReason a_fallbackReason,
+											  bool a_pairComplete) noexcept {
+		neuralSubmitRoutePublishedThisCall = true;
+		if (a_disposition == NeuralStereoPairDisposition::FallbackRequired &&
+			submitStageNeuralStereoState.outerDLSS.evaluatedEyeMask == 0b11u &&
+			submitStageNeuralStereoState.outerDLSS.committedEyeMask != 0b11u &&
+			submitStageNeuralStereoState.outerDLSS.fallbackReason ==
+				OuterDLSSFallbackReason::None) {
+			submitStageNeuralStereoState.outerDLSS.fallbackReason =
+				OuterDLSSFallbackReason::ResourcePreparationFailed;
+		}
+		RecordFoveatedOuterDLSSResult(
+			NeuralStereoRouteRole::Submit,
+			submitStageNeuralStereoState.outerDLSS);
+		NeuralStereoRouteSnapshot route{
+			.valid = true,
+			.role = NeuralStereoRouteRole::Submit,
+			.compositorCycle = a_compositorCycleToken,
+			.frame = currentFrame,
+			.generation = activeContractGeneration,
+			.arrangement = static_cast<uint32_t>(NeuralRendering::kPipelineArrangement),
+			.requested = neuralSubmitConfigured,
+			.eligible = submitStageNeuralStereoState.sourceBatchEligible,
+			.sourceBatchEligible = submitStageNeuralStereoState.sourceBatchEligible,
+			.sourceSignatureProven = submitStageNeuralStereoState.sourceSignatureProven,
+			.submitPairBoundaryMode =
+				submitStageNeuralStereoState.submitPairBoundaryMode,
+			.submitPairBoundaryProven =
+				submitStageNeuralStereoState.submitPairBoundaryProven,
+			.submitPairBoundaryToken =
+				submitStageNeuralStereoState.submitPairBoundaryToken,
+			.submitEyeMaskAtDecision = submitEyeMaskAtDecision,
+			.pairComplete = a_pairComplete,
+			.colorBuffersHDRKnown = neuralSubmitColorBuffersHDR.has_value(),
+			.colorBuffersHDR = neuralSubmitColorBuffersHDR.value_or(false),
+			.hdrRequired = false,
+			.frameGenerationActive = neuralSubmitFrameGenerationActive,
+			.frameGenerationGatePassed = !neuralSubmitFrameGenerationActive,
+			.requestedBatchedStereo =
+				submitStageNeuralStereoState.requestedBatchedStereo,
+			.requestedDirectCommit =
+				submitStageNeuralStereoState.requestedDirectCommit,
+			.effectiveImplementationKnown =
+				submitStageNeuralStereoState.attemptedEyeMask != 0,
+			.effectiveBatchedStereo =
+				submitStageNeuralStereoState.requestedBatchedStereo,
+			.effectiveDirectCommit =
+				submitStageNeuralStereoState.requestedDirectCommit,
+			.implementationModeExecuted =
+				submitStageNeuralStereoState.attemptedEyeMask != 0,
+			.disposition = a_disposition,
+			.fallbackReason = a_fallbackReason,
+			.preparedEyeMask = submitStageNeuralStereoState.preparedEyeMask,
+			.attemptedEyeMask = submitStageNeuralStereoState.attemptedEyeMask,
+			.evaluatedEyeMask = submitStageNeuralStereoState.evaluatedEyeMask,
+			.appliedEyeMask = submitStageNeuralStereoState.successfulEyeMask,
+			.committedEyeMask = submitStageNeuralStereoState.committedEyeMask,
+			.presentationAcceptedEyeMask =
+				submitStageNeuralStereoState.presentedEyeMask,
+			.dlssEyeMask = submitStageNeuralStereoState.dlssEyeMask,
+			.callerResetEyeMask = submitStageNeuralStereoState.callerResetEyeMask,
+			.featureUpscalingEyeMask =
+				submitStageNeuralStereoState.featureUpscalingEyeMask,
+			.motionVectorScaleX = submitStageNeuralStereoState.motionVectorScaleX,
+			.motionVectorScaleY = submitStageNeuralStereoState.motionVectorScaleY,
+			.inputOffsetX = submitStageNeuralStereoState.inputOffsetX,
+			.inputOffsetY = submitStageNeuralStereoState.inputOffsetY,
+			.pinholeOffsetX = submitStageNeuralStereoState.pinholeOffsetX,
+			.pinholeOffsetY = submitStageNeuralStereoState.pinholeOffsetY,
+			.outerDLSSRequested = submitStageNeuralStereoState.outerDLSS.requested,
+			.outerDLSSEligible = submitStageNeuralStereoState.outerDLSS.eligible,
+			.outerDLSSFallbackReason = submitStageNeuralStereoState.outerDLSS.fallbackReason,
+			.outerDLSSPreparedEyeMask = submitStageNeuralStereoState.outerDLSS.preparedEyeMask,
+			.outerDLSSAttemptedEyeMask = submitStageNeuralStereoState.outerDLSS.attemptedEyeMask,
+			.outerDLSSEvaluatedEyeMask = submitStageNeuralStereoState.outerDLSS.evaluatedEyeMask,
+			.outerDLSSCommittedEyeMask = submitStageNeuralStereoState.outerDLSS.committedEyeMask,
+		};
+		submitStageNeuralStereoState.publishedRoute = route;
+		PublishNeuralStereoRouteSnapshot(route);
+	};
+	if (neuralStereoDecisionChanged && !neuralSubmitSourceBatchEligible) {
+		const auto disposition =
+			neuralSubmitConfigured && upscaleMethod == UpscaleMethod::kDLSS ?
+				NeuralStereoPairDisposition::NormalDLSSPair :
+				NeuralStereoPairDisposition::NotRequested;
+		publishSubmitNeuralRoute(disposition, neuralSubmitFallbackReason, false);
+	}
+
+	if (neuralSubmitRequested && !neuralSubmitSourceBatchEligible) {
+		static bool loggedNeuralStereoSourceFallback = false;
+		LogWarnOnceFmt(
+			loggedNeuralStereoSourceFallback,
+			"[DLSSNR][Stereo] Submit-stage NR disabled because a coherent two-eye source/cycle signature is unavailable; normal DLSS remains active (cycle={}, combined={}, array={}, signatureProven={})",
+			a_compositorCycleToken,
+			sourceUsesCombinedStereoLayout,
+			sourceDesc.ArraySize,
+			neuralSubmitSourceSignatureProven);
+	}
+
+	if (neuralSubmitSourceBatchEligible &&
+		submitStageNeuralStereoState.sourceBatchEligible &&
+		!submitStageNeuralStereoState.preflightFailed &&
+		!submitStageNeuralStereoState.outputsReady) {
+		const auto unbindStereoTransaction = [&]() noexcept {
+			try {
+				UnbindUpscalingResources();
+			} catch (...) {
+			}
+		};
+		const auto resolveStereoTransactionException = [&]() noexcept {
+			RequestHistoryReset();
+			const bool pairCommitted =
+				submitStageNeuralStereoState.outputsReady &&
+				submitStageNeuralStereoState.publishedOutputs[0] &&
+				submitStageNeuralStereoState.publishedOutputs[0]->resource &&
+				submitStageNeuralStereoState.publishedOutputs[1] &&
+				submitStageNeuralStereoState.publishedOutputs[1]->resource;
+			if (pairCommitted) {
+				submitDLSSSharpening = false;
+				vendorColorOutput =
+					submitStageNeuralStereoState.publishedOutputs[eyeIndex].get();
+				vendorSucceeded = true;
+				submitNeuralStereoBatchFinalized = true;
+				publishSubmitNeuralRoute(
+					submitStageNeuralStereoState.neuralApplied ?
+						NeuralStereoPairDisposition::NeuralPair :
+						NeuralStereoPairDisposition::NormalDLSSPair,
+					submitStageNeuralStereoState.neuralApplied ?
+						NeuralStereoFallbackReason::None :
+						NeuralStereoFallbackReason::NeuralEvaluationFailed,
+					true);
+				return;
+			}
+
+			submitStageVendorEyeState = {};
+			submitStageFoveatedCenterState = {};
+			submitStageNeuralStereoState.neuralApplied = false;
+			submitStageNeuralStereoState.successfulEyeMask = 0;
+			submitStageNeuralStereoState.committedEyeMask = 0;
+			submitStageNeuralStereoState.preflightFailed = true;
+			submitStageNeuralStereoState.fallbackReason =
+				NeuralStereoFallbackReason::StereoDispatchFailed;
+			publishSubmitNeuralRoute(
+				NeuralStereoPairDisposition::FallbackRequired,
+				NeuralStereoFallbackReason::StereoDispatchFailed,
+				false);
+			submitStageForceFullEyeVendorFallback = true;
+			ArmSubmitStageFoveatedVendorRetryBackoff(currentFrame, upscaleMethod);
+		};
+		try {
+			const bool batchedStereo =
+				submitStageNeuralStereoState.requestedBatchedStereo;
+			const bool directCommit =
+				submitStageNeuralStereoState.requestedDirectCommit;
+			const uint32_t otherEyeIndex = eyeIndex ^ 1u;
+			const auto otherSourceRegion = ResolveVRSubmitSourceRegion(
+				sourceDesc,
+				otherEyeIndex,
+				sourceEyeWidthIn,
+				sourceEyeHeightIn,
+				sourceStereoLayout,
+				sourceUsesCombinedStereoLayout,
+				false,
+				nullptr);
+			std::array<VRSubmitSourceRegion, 2> stereoSourceRegions{};
+			stereoSourceRegions[eyeIndex] = sourceRegion;
+			stereoSourceRegions[otherEyeIndex] = otherSourceRegion;
+			bool stereoBatchSucceeded =
+				otherSourceRegion.valid &&
+				otherSourceRegion.matchesExpectedSize &&
+				prepareSubmitStageColorInput(otherEyeIndex, otherSourceRegion);
+
+			bool pairSharpening = submitDLSSSharpeningRequested;
+			std::array<Texture2D*, 2> stereoVendorOutputs{
+				vrIntermediateColorOut[0].get(),
+				vrIntermediateColorOut[1].get()
+			};
+			if (stereoBatchSucceeded && pairSharpening) {
+				for (uint32_t stereoEye = 0; stereoEye < stereoVendorOutputs.size(); ++stereoEye) {
+					if (!vrIntermediateColorOut[stereoEye] ||
+						!EnsureSubmitStageDLSSSharpenerTexture(stereoEye, *vrIntermediateColorOut[stereoEye])) {
+						pairSharpening = false;
+						break;
+					}
+				}
+			}
+			if (!pairSharpening) {
+				stereoVendorOutputs = {
+					vrIntermediateColorOut[0].get(),
+					vrIntermediateColorOut[1].get()
+				};
+			} else {
+				stereoVendorOutputs = {
+					submitStageDLSSSharpenerTexture[0].get(),
+					submitStageDLSSSharpenerTexture[1].get()
+				};
+			}
+			for (auto* output : stereoVendorOutputs) {
+				stereoBatchSucceeded = stereoBatchSucceeded &&
+				                       output && output->resource && output->uav;
+			}
+			bool outerDLSSBaseReady = false;
+			if (stereoBatchSucceeded && outerDLSSSubmitEligible) {
+				submitStageNeuralStereoState.outerDLSS =
+					DispatchFoveatedOuterDLSSStereoBase(
+						NeuralStereoRouteRole::Submit,
+						upscaleMethod,
+						eyeWidthIn,
+						eyeHeightIn,
+						eyeWidthOut,
+						eyeHeightOut,
+						stereoVendorOutputs);
+				outerDLSSBaseReady =
+					submitStageNeuralStereoState.outerDLSS.IsBaseReady();
+				if (IsSubmitStageDeviceLost())
+					stereoBatchSucceeded = false;
+			}
+			if (!stereoBatchSucceeded) {
+				if (submitStageNeuralStereoState.outerDLSS.requested &&
+					!submitStageNeuralStereoState.outerDLSS.countersRecorded) {
+					submitStageNeuralStereoState.outerDLSS.fallbackReason =
+						OuterDLSSFallbackReason::ResourcePreparationFailed;
+				}
+				submitStageVendorEyeState = {};
+				submitStageFoveatedCenterState = {};
+				submitStageNeuralStereoState.preflightFailed = true;
+				submitStageNeuralStereoState.fallbackReason =
+					NeuralStereoFallbackReason::StereoPreflightFailed;
+				publishSubmitNeuralRoute(
+					NeuralStereoPairDisposition::FallbackRequired,
+					NeuralStereoFallbackReason::StereoPreflightFailed,
+					false);
+			}
+
+			std::array<NeuralCenterDispatchResult, 2> neuralResults{};
+			std::array<NeuralRendering::RendererApplyArgs, 2> neuralBatchArgs{};
+			if (stereoBatchSucceeded) {
+				submitNeuralStereoBatchAttempted = true;
+				for (uint32_t stereoEye = 0; stereoEye < neuralResults.size(); ++stereoEye) {
+					const auto& region = stereoSourceRegions[stereoEye];
+					if (!DispatchSubmitStageFoveatedVendorEye(
+							upscaleMethod,
+							stereoEye,
+							eyeWidthIn,
+							eyeHeightIn,
+							eyeWidthOut,
+							eyeHeightOut,
+							pairSharpening,
+							stereoVendorOutputs[stereoEye]->resource.get(),
+							stereoVendorOutputs[stereoEye]->uav.get(),
+							region.subresource,
+							&region.box,
+							NeuralCenterPhase::Stage,
+							false,
+							&neuralResults[stereoEye],
+							&neuralBatchArgs[stereoEye],
+							outerDLSSBaseReady,
+							submitStageNeuralStereoState.outerDLSS.baseResources[stereoEye].get(),
+							submitStageNeuralStereoState.outerDLSS.baseUAVs[stereoEye].get())) {
+						stereoBatchSucceeded = false;
+						break;
+					}
+				}
+			}
+
+			const auto evaluation = EvaluatePreparedNeuralStereoPair(
+				stereoBatchSucceeded,
+				batchedStereo,
+				neuralResults,
+				neuralBatchArgs);
+			const uint32_t preparedEyeMask = evaluation.preparedEyeMask;
+			const uint32_t evaluatedEyeMask = evaluation.evaluatedEyeMask;
+			bool neuralPairApplied =
+				stereoBatchSucceeded && evaluatedEyeMask == 0b11u;
+			if (evaluatedEyeMask != 0 && !neuralPairApplied)
+				RequestHistoryReset();
+			if (directCommit && NeuralRendering::RunsBeforeDlss() &&
+				!neuralPairApplied &&
+				!RestorePrivateFoveatedCenterInputsForNeuralFallback(neuralResults)) {
+				stereoBatchSucceeded = false;
+				RequestHistoryReset();
+			}
+			std::array<NeuralCenterDispatchResult, 2> resolveResults{};
+			if (stereoBatchSucceeded) {
+				for (uint32_t stereoEye = 0; stereoEye < neuralResults.size(); ++stereoEye) {
+					const auto& region = stereoSourceRegions[stereoEye];
+					if (!DispatchSubmitStageFoveatedVendorEye(
+							upscaleMethod,
+							stereoEye,
+							eyeWidthIn,
+							eyeHeightIn,
+							eyeWidthOut,
+							eyeHeightOut,
+							pairSharpening,
+							stereoVendorOutputs[stereoEye]->resource.get(),
+							stereoVendorOutputs[stereoEye]->uav.get(),
+							region.subresource,
+							&region.box,
+							NeuralCenterPhase::Resolve,
+							neuralPairApplied,
+							&resolveResults[stereoEye],
+							nullptr,
+							outerDLSSBaseReady,
+							submitStageNeuralStereoState.outerDLSS.baseResources[stereoEye].get(),
+							submitStageNeuralStereoState.outerDLSS.baseUAVs[stereoEye].get())) {
+						stereoBatchSucceeded = false;
+						break;
+					}
+					neuralResults[stereoEye].requested =
+						neuralResults[stereoEye].requested || resolveResults[stereoEye].requested;
+					neuralResults[stereoEye].attempted =
+						neuralResults[stereoEye].attempted || resolveResults[stereoEye].attempted;
+					neuralResults[stereoEye].prepared =
+						neuralResults[stereoEye].prepared || resolveResults[stereoEye].prepared;
+					neuralResults[stereoEye].evaluated =
+						neuralResults[stereoEye].evaluated || resolveResults[stereoEye].evaluated;
+					neuralResults[stereoEye].applied =
+						neuralResults[stereoEye].applied || resolveResults[stereoEye].applied;
+					neuralResults[stereoEye].dlssEvaluated =
+						neuralResults[stereoEye].dlssEvaluated || resolveResults[stereoEye].dlssEvaluated;
+				}
+			}
+			const uint32_t successfulEyeMask = BuildNeuralCenterEyeMask(
+				neuralResults, &NeuralCenterDispatchResult::applied);
+			neuralPairApplied = stereoBatchSucceeded && successfulEyeMask == 0b11u;
+			if (evaluatedEyeMask == 0b11u && !neuralPairApplied)
+				RequestHistoryReset();
+			if (successfulEyeMask != 0 && !neuralPairApplied) {
+				RequestHistoryReset();
+				stereoBatchSucceeded = false;
+			}
+			if (stereoBatchSucceeded) {
+				for (uint32_t stereoEye = 0; stereoEye < neuralResults.size(); ++stereoEye) {
+					const auto& region = stereoSourceRegions[stereoEye];
+					if (!finalizeSubmitStageEyeOutput(
+							stereoEye,
+							*stereoVendorOutputs[stereoEye],
+							pairSharpening,
+							region.depthWidth,
+							region.depthHeight,
+							region.depthOffsetX,
+							region.depthOffsetY)) {
+						stereoBatchSucceeded = false;
+						break;
+					}
+				}
+			}
+
+			const uint32_t attemptedEyeMask = BuildNeuralCenterEyeMask(
+				neuralResults, &NeuralCenterDispatchResult::attempted);
+			const uint32_t dlssEyeMask = BuildNeuralCenterEyeMask(
+				neuralResults, &NeuralCenterDispatchResult::dlssEvaluated);
+			submitStageNeuralStereoState.preparedEyeMask = preparedEyeMask;
+			submitStageNeuralStereoState.attemptedEyeMask = attemptedEyeMask;
+			submitStageNeuralStereoState.evaluatedEyeMask = evaluatedEyeMask;
+			submitStageNeuralStereoState.successfulEyeMask = 0;
+			submitStageNeuralStereoState.dlssEyeMask = dlssEyeMask;
+			submitStageNeuralStereoState.neuralApplied = false;
+			submitStageNeuralStereoState.callerResetEyeMask = 0;
+			submitStageNeuralStereoState.featureUpscalingEyeMask = 0;
+			for (uint32_t stereoEye = 0; stereoEye < neuralResults.size(); ++stereoEye) {
+				const uint32_t eyeBit = 1u << stereoEye;
+				const auto& result = neuralResults[stereoEye];
+				if (result.callerReset)
+					submitStageNeuralStereoState.callerResetEyeMask |= eyeBit;
+				if (result.featureUpscaling)
+					submitStageNeuralStereoState.featureUpscalingEyeMask |= eyeBit;
+				submitStageNeuralStereoState.motionVectorScaleX[stereoEye] =
+					result.motionVectorScaleX;
+				submitStageNeuralStereoState.motionVectorScaleY[stereoEye] =
+					result.motionVectorScaleY;
+				submitStageNeuralStereoState.inputOffsetX[stereoEye] =
+					result.inputOffsetX;
+				submitStageNeuralStereoState.inputOffsetY[stereoEye] =
+					result.inputOffsetY;
+				submitStageNeuralStereoState.pinholeOffsetX[stereoEye] =
+					result.pinholeOffsetX;
+				submitStageNeuralStereoState.pinholeOffsetY[stereoEye] =
+					result.pinholeOffsetY;
+			}
+			eastl::unique_ptr<Texture2D> retainedOutputs[2];
+			if (stereoBatchSucceeded) {
+				const auto retainOutput = [](Texture2D* a_source) {
+					if (!a_source || !a_source->resource || !a_source->srv || !a_source->uav)
+						return eastl::unique_ptr<Texture2D>{};
+
+					auto* resource = a_source->resource.get();
+					resource->AddRef();
+					auto* retained = new (std::nothrow) Texture2D(resource);
+					if (!retained) {
+						resource->Release();
+						return eastl::unique_ptr<Texture2D>{};
+					}
+					retained->srv = a_source->srv;
+					retained->uav = a_source->uav;
+					retained->rtv = a_source->rtv;
+					retained->dsv = a_source->dsv;
+					return eastl::unique_ptr<Texture2D>{ retained };
+				};
+				for (uint32_t stereoEye = 0; stereoEye < 2; ++stereoEye) {
+					retainedOutputs[stereoEye] =
+						retainOutput(vrIntermediateColorOut[stereoEye].get());
+					if (!retainedOutputs[stereoEye]) {
+						stereoBatchSucceeded = false;
+						break;
+					}
+				}
+			}
+			if (stereoBatchSucceeded) {
+				submitStageNeuralStereoState.publishedColorSpace =
+					a_inputTexture->eColorSpace;
+				submitStageNeuralStereoState.publishedSourceDesc = sourceDesc;
+				submitStageNeuralStereoState.publishedSourceEyeWidth = sourceEyeWidthIn;
+				submitStageNeuralStereoState.publishedSourceEyeHeight = sourceEyeHeightIn;
+				submitStageNeuralStereoState.publishedSourceUsesCombinedStereoLayout =
+					sourceUsesCombinedStereoLayout;
+				for (uint32_t stereoEye = 0; stereoEye < 2; ++stereoEye) {
+					const auto& publishedRegion = stereoSourceRegions[stereoEye];
+					submitStageNeuralStereoState.publishedSourceRegionValid[stereoEye] =
+						publishedRegion.valid && publishedRegion.matchesExpectedSize;
+					submitStageNeuralStereoState.publishedSourceSubresources[stereoEye] =
+						publishedRegion.subresource;
+					submitStageNeuralStereoState.publishedSourceBoxes[stereoEye] =
+						publishedRegion.box;
+					submitStageNeuralStereoState.publishedDepthOffsetX[stereoEye] =
+						publishedRegion.depthOffsetX;
+					submitStageNeuralStereoState.publishedDepthOffsetY[stereoEye] =
+						publishedRegion.depthOffsetY;
+					submitStageNeuralStereoState.publishedDepthWidth[stereoEye] =
+						publishedRegion.depthWidth;
+					submitStageNeuralStereoState.publishedDepthHeight[stereoEye] =
+						publishedRegion.depthHeight;
+					submitStageNeuralStereoState.publishedOutputs[stereoEye] =
+						std::move(retainedOutputs[stereoEye]);
+					auto& publishedObservation =
+						submitStageNeuralStereoState.publishedPresentationObservations[stereoEye];
+					publishedObservation = makePresentationObservation(
+						stereoEye,
+						VRRenderScalePresentationPath::VendorEvaluated,
+						eyeWidthIn,
+						eyeHeightIn,
+						eyeWidthIn,
+						eyeHeightIn,
+						false,
+						false);
+					publishedObservation.retainedNeuralPair = true;
+					publishedObservation.retainedNeuralCompositorCycleToken =
+						a_compositorCycleToken;
+					publishedObservation.retainedNeuralSettingsKey =
+						submitStageNeuralStereoState.settingsKey;
+					publishedObservation.retainedNeuralContractEpoch =
+						submitStageNeuralStereoState.contractEpoch;
+				}
+				for (uint32_t stereoEye = 0; stereoEye < neuralResults.size(); ++stereoEye) {
+					const auto& region = stereoSourceRegions[stereoEye];
+					auto& eyeState = submitStageVendorEyeState[stereoEye];
+					eyeState.ready = true;
+					eyeState.usedFoveatedVendorPath = true;
+					eyeState.usedDLSSSharpening = pairSharpening;
+					eyeState.usedMenuFinalComposite = submitStageMenuFinalCompositeRequested;
+					eyeState.menuLayerGeneration = submitStageMenuLayerGeneration;
+					eyeState.compositorCycle = a_compositorCycleToken;
+					eyeState.method = static_cast<uint32_t>(upscaleMethod);
+					eyeState.generation = activeContractGeneration;
+					eyeState.inputWidth = eyeWidthIn;
+					eyeState.inputHeight = eyeHeightIn;
+					eyeState.outputWidth = eyeWidthOut;
+					eyeState.outputHeight = eyeHeightOut;
+					eyeState.sourceSubresource = region.subresource;
+					eyeState.sourceBoxLeft = region.box.left;
+					eyeState.sourceBoxTop = region.box.top;
+					eyeState.sourceBoxRight = region.box.right;
+					eyeState.sourceBoxBottom = region.box.bottom;
+					eyeState.depthWidth = region.depthWidth;
+					eyeState.depthHeight = region.depthHeight;
+					eyeState.depthOffsetX = region.depthOffsetX;
+					eyeState.depthOffsetY = region.depthOffsetY;
+					RecordVRRenderScaleFidelityObservation(
+						upscaleMethod,
+						stereoEye,
+						true,
+						activeContractGeneration,
+						eyeWidthIn,
+						eyeHeightIn,
+						eyeWidthOut,
+						eyeHeightOut,
+						true);
+				}
+				submitStageNeuralStereoState.successfulEyeMask =
+					neuralPairApplied ? successfulEyeMask : 0u;
+				submitStageNeuralStereoState.neuralApplied = neuralPairApplied;
+				submitStageNeuralStereoState.mirrorConsumed = false;
+				submitStageNeuralStereoState.committedEyeMask = neuralPairApplied ? 0b11u : 0u;
+				// This is the irreversible cycle commit. Later telemetry is best-effort
+				// and must never downgrade the retained pair to Original.
+				submitStageNeuralStereoState.outputsReady = true;
+				if (outerDLSSBaseReady) {
+					CommitFoveatedOuterDLSSStereoBase(
+						NeuralStereoRouteRole::Submit,
+						submitStageNeuralStereoState.outerDLSS);
+				}
+				submitDLSSSharpening = pairSharpening;
+				vendorColorOutput = stereoVendorOutputs[eyeIndex];
+				vendorSucceeded = true;
+				submitNeuralStereoBatchFinalized = true;
+				publishSubmitNeuralRoute(
+					neuralPairApplied ?
+						NeuralStereoPairDisposition::NeuralPair :
+						NeuralStereoPairDisposition::NormalDLSSPair,
+					neuralPairApplied ?
+						NeuralStereoFallbackReason::None :
+						NeuralStereoFallbackReason::NeuralEvaluationFailed,
+					true);
+				static bool loggedNeuralStereoSuccess = false;
+				if (!loggedNeuralStereoSuccess) {
+					loggedNeuralStereoSuccess = true;
+					logger::info(
+						"[DLSSNR][Stereo] Submit-stage two-eye transaction ready: arrangement={}, neuralApplied={}, preparedMask=0x{:X}, attemptedMask=0x{:X}, successMask=0x{:X}",
+						NeuralRendering::GetPipelineArrangementName(),
+						neuralPairApplied,
+						preparedEyeMask,
+						attemptedEyeMask,
+						successfulEyeMask);
+				}
+			} else if (submitNeuralStereoBatchAttempted) {
+				submitStageVendorEyeState = {};
+				submitStageFoveatedCenterState = {};
+				submitStageNeuralStereoState.neuralApplied = false;
+				submitStageNeuralStereoState.successfulEyeMask = 0;
+				submitStageNeuralStereoState.committedEyeMask = 0;
+				submitStageNeuralStereoState.preflightFailed = true;
+				submitStageNeuralStereoState.fallbackReason =
+					NeuralStereoFallbackReason::StereoDispatchFailed;
+				publishSubmitNeuralRoute(
+					NeuralStereoPairDisposition::FallbackRequired,
+					NeuralStereoFallbackReason::StereoDispatchFailed,
+					false);
+				submitStageForceFullEyeVendorFallback = true;
+				RequestHistoryReset();
+				ArmSubmitStageFoveatedVendorRetryBackoff(currentFrame, upscaleMethod);
+			}
+		} catch (const std::exception& e) {
+			unbindStereoTransaction();
+			bool deviceRemoved = false;
+			try {
+				deviceRemoved = MarkSubmitStageDeviceLostIfNeeded(
+					e,
+					"submit-stage neural stereo transaction");
+			} catch (...) {
+			}
+			resolveStereoTransactionException();
+			if (!deviceRemoved) {
+				static bool loggedNeuralStereoTransactionException = false;
+				try {
+					LogWarnOnceFmt(
+						loggedNeuralStereoTransactionException,
+						"[DLSSNR][Stereo] Submit-stage two-eye transaction threw; using the cycle-owned fallback: {}",
+						e.what());
+				} catch (...) {
+				}
+			}
+		} catch (...) {
+			unbindStereoTransaction();
+			bool deviceRemoved = false;
+			try {
+				deviceRemoved = MarkSubmitStageDeviceLostIfDeviceRemoved(
+					"submit-stage neural stereo transaction");
+			} catch (...) {
+			}
+			resolveStereoTransactionException();
+			if (!deviceRemoved) {
+				static bool loggedNeuralStereoTransactionException = false;
+				try {
+					LogWarnOnceFmt(
+						loggedNeuralStereoTransactionException,
+						"[DLSSNR][Stereo] Submit-stage two-eye transaction threw; using the cycle-owned fallback");
+				} catch (...) {
+				}
+			}
+		}
+	}
+	if (submitStageNeuralStereoState.preflightFailed && !vendorSucceeded) {
+		// No source-independent two-eye stretch pair exists here. Commit Original
+		// for the whole cycle instead of allowing first-eye stretch/peer-original.
+		return false;
+	}
+
+	if (shouldUseFoveatedVendorThisEye &&
+		!submitNeuralStereoBatchAttempted &&
+		!vendorSucceeded) {
 		static bool loggedFoveatedSubmitException[2] = {};
 		try {
 			{
@@ -30930,6 +34241,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 					eyeHeightIn,
 					eyeWidthOut,
 					eyeHeightOut,
+					submitDLSSSharpening,
 					vendorColorOutput->resource.get(),
 					vendorColorOutput->uav.get(),
 					sourceSubresource,
@@ -31117,6 +34429,17 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 
 	if (!vendorSucceeded) {
+		if (upscaleMethod == UpscaleMethod::kDLSS &&
+			submitStageNeuralStereoState.decisionReady &&
+			submitStageNeuralStereoState.compositorCycle == a_compositorCycleToken &&
+			submitStageNeuralStereoState.frame == currentFrame &&
+			submitStageNeuralStereoState.generation == activeContractGeneration &&
+			submitStageNeuralStereoState.sourceTexture == sourceTexture) {
+			publishSubmitNeuralRoute(
+				NeuralStereoPairDisposition::FallbackRequired,
+				NeuralStereoFallbackReason::StereoDispatchFailed,
+				false);
+		}
 		RecordVRRenderScaleFidelityObservation(
 			upscaleMethod,
 			eyeIndex,
@@ -31158,141 +34481,203 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		return false;
 	}
 
-	if (!finalizeSubmitStageEyeOutput(
-			eyeIndex,
-			*vendorColorOutput,
-			submitDLSSSharpening,
-			sourceRegion.depthWidth,
-			sourceRegion.depthHeight,
-			sourceRegion.depthOffsetX,
-			sourceRegion.depthOffsetY)) {
+	if (!submitNeuralStereoBatchFinalized && !finalizeSubmitStageEyeOutput(
+												 eyeIndex,
+												 *vendorColorOutput,
+												 submitDLSSSharpening,
+												 sourceRegion.depthWidth,
+												 sourceRegion.depthHeight,
+												 sourceRegion.depthOffsetX,
+												 sourceRegion.depthOffsetY)) {
 		return false;
 	}
 
-	submitStageVendorEyeState[eyeIndex].ready = true;
-	submitStageVendorEyeState[eyeIndex].usedFoveatedVendorPath = shouldUseFoveatedVendorThisEye && !submitStageForceFullEyeVendorFallback;
-	submitStageVendorEyeState[eyeIndex].usedDLSSSharpening = submitDLSSSharpening;
-	submitStageVendorEyeState[eyeIndex].usedMenuFinalComposite = submitStageMenuFinalCompositeRequested;
-	submitStageVendorEyeState[eyeIndex].menuLayerGeneration = submitStageMenuLayerGeneration;
-	submitStageVendorEyeState[eyeIndex].method = static_cast<uint32_t>(upscaleMethod);
-	submitStageVendorEyeState[eyeIndex].generation = activeContractGeneration;
-	submitStageVendorEyeState[eyeIndex].inputWidth = eyeWidthIn;
-	submitStageVendorEyeState[eyeIndex].inputHeight = eyeHeightIn;
-	submitStageVendorEyeState[eyeIndex].outputWidth = eyeWidthOut;
-	submitStageVendorEyeState[eyeIndex].outputHeight = eyeHeightOut;
-	submitStageVendorEyeState[eyeIndex].sourceSubresource = sourceSubresource;
-	submitStageVendorEyeState[eyeIndex].sourceBoxLeft = colorBox.left;
-	submitStageVendorEyeState[eyeIndex].sourceBoxTop = colorBox.top;
-	submitStageVendorEyeState[eyeIndex].sourceBoxRight = colorBox.right;
-	submitStageVendorEyeState[eyeIndex].sourceBoxBottom = colorBox.bottom;
-	submitStageVendorEyeState[eyeIndex].depthWidth = sourceRegion.depthWidth;
-	submitStageVendorEyeState[eyeIndex].depthHeight = sourceRegion.depthHeight;
-	submitStageVendorEyeState[eyeIndex].depthOffsetX = sourceRegion.depthOffsetX;
-	submitStageVendorEyeState[eyeIndex].depthOffsetY = sourceRegion.depthOffsetY;
-	const bool fidelitySuccess = RecordVRRenderScaleFidelityObservation(
-		upscaleMethod,
-		eyeIndex,
-		true,
-		activeContractGeneration,
-		eyeWidthIn,
-		eyeHeightIn,
-		eyeWidthOut,
-		eyeHeightOut,
-		true);
-	if (fidelitySuccess) {
-		const auto fidelityTransitionSnapshot = GetVRRenderScaleTransitionSnapshot();
-		constexpr uint32_t kBothVREyesMask = 0x3u;
-		const auto& fidelity = fidelityTransitionSnapshot.fidelity;
-		if (fidelityTransitionSnapshot.state == VRRenderScaleTransitionState::Stabilizing &&
-			fidelity.active &&
-			fidelity.transitionEpoch == fidelityTransitionSnapshot.applied.transitionEpoch &&
-			fidelity.contractGeneration == activeContractGeneration &&
-			fidelity.lastBothEyesFrame == currentFrame &&
-			(fidelity.evaluationEyeMask & kBothVREyesMask) == kBothVREyesMask &&
-			fidelity.bothEyesValid) {
-			PublishVRRenderScaleTransitionStable();
-			CompleteVRRenderScaleInfoTransition(
-				"submit-stage vendor evaluation",
-				true,
-				upscaleMethod,
-				perfMode.GetDisplayScreenSize(),
-				perfMode.GetRenderScreenSize());
+	if (!submitNeuralStereoBatchFinalized) {
+		auto& eyeState = submitStageVendorEyeState[eyeIndex];
+		eyeState.ready = true;
+		eyeState.usedFoveatedVendorPath = shouldUseFoveatedVendorThisEye && !submitStageForceFullEyeVendorFallback;
+		eyeState.usedDLSSSharpening = submitDLSSSharpening;
+		eyeState.usedMenuFinalComposite = submitStageMenuFinalCompositeRequested;
+		eyeState.menuLayerGeneration = submitStageMenuLayerGeneration;
+		eyeState.method = static_cast<uint32_t>(upscaleMethod);
+		eyeState.generation = activeContractGeneration;
+		eyeState.inputWidth = eyeWidthIn;
+		eyeState.inputHeight = eyeHeightIn;
+		eyeState.outputWidth = eyeWidthOut;
+		eyeState.outputHeight = eyeHeightOut;
+		eyeState.sourceSubresource = sourceSubresource;
+		eyeState.sourceBoxLeft = colorBox.left;
+		eyeState.sourceBoxTop = colorBox.top;
+		eyeState.sourceBoxRight = colorBox.right;
+		eyeState.sourceBoxBottom = colorBox.bottom;
+		eyeState.depthWidth = sourceRegion.depthWidth;
+		eyeState.depthHeight = sourceRegion.depthHeight;
+		eyeState.depthOffsetX = sourceRegion.depthOffsetX;
+		eyeState.depthOffsetY = sourceRegion.depthOffsetY;
+		const bool fidelitySuccess = RecordVRRenderScaleFidelityObservation(
+			upscaleMethod,
+			eyeIndex,
+			true,
+			activeContractGeneration,
+			eyeWidthIn,
+			eyeHeightIn,
+			eyeWidthOut,
+			eyeHeightOut,
+			true);
+		if (fidelitySuccess) {
+			const auto fidelityTransitionSnapshot = GetVRRenderScaleTransitionSnapshot();
+			constexpr uint32_t kBothVREyesMask = 0x3u;
+			const auto& fidelity = fidelityTransitionSnapshot.fidelity;
+			if (fidelityTransitionSnapshot.state == VRRenderScaleTransitionState::Stabilizing &&
+				fidelity.active &&
+				fidelity.transitionEpoch == fidelityTransitionSnapshot.applied.transitionEpoch &&
+				fidelity.contractGeneration == activeContractGeneration &&
+				fidelity.lastBothEyesFrame == currentFrame &&
+				(fidelity.evaluationEyeMask & kBothVREyesMask) == kBothVREyesMask &&
+				fidelity.bothEyesValid) {
+				PublishVRRenderScaleTransitionStable();
+				CompleteVRRenderScaleInfoTransition(
+					"submit-stage vendor evaluation",
+					true,
+					upscaleMethod,
+					perfMode.GetDisplayScreenSize(),
+					perfMode.GetRenderScreenSize());
+			}
 		}
+		if (upscaleMethod == UpscaleMethod::kDLSS &&
+			submitStageNeuralStereoState.decisionReady &&
+			submitStageNeuralStereoState.compositorCycle == a_compositorCycleToken &&
+			submitStageNeuralStereoState.frame == currentFrame &&
+			submitStageNeuralStereoState.generation == activeContractGeneration &&
+			submitStageNeuralStereoState.sourceTexture == sourceTexture) {
+			submitStageNeuralStereoState.dlssEyeMask |= 1u << eyeIndex;
+			const auto fallbackReason = submitStageNeuralStereoState.preflightFailed ?
+			                                NeuralStereoFallbackReason::StereoPreflightFailed :
+			                                submitStageNeuralStereoState.fallbackReason;
+			publishSubmitNeuralRoute(
+				NeuralStereoPairDisposition::NormalDLSSPair,
+				fallbackReason,
+				submitStageNeuralStereoState.dlssEyeMask == 0b11u);
+		}
+	}
+	const bool retainedNeuralPairForPresentation =
+		a_compositorCycleToken != 0 &&
+		submitStageNeuralStereoState.outputsReady &&
+		submitStageNeuralStereoState.compositorCycle == a_compositorCycleToken &&
+		submitStageNeuralStereoState.publishedOutputs[0] &&
+		submitStageNeuralStereoState.publishedOutputs[0]->resource &&
+		submitStageNeuralStereoState.publishedOutputs[1] &&
+		submitStageNeuralStereoState.publishedOutputs[1]->resource;
+	if (retainedNeuralPairForPresentation) {
+		presentationEyeOutputs[0] =
+			submitStageNeuralStereoState.publishedOutputs[0].get();
+		presentationEyeOutputs[1] =
+			submitStageNeuralStereoState.publishedOutputs[1].get();
+	} else {
+		presentationEyeOutputs[0] = vrIntermediateColorOut[0].get();
+		presentationEyeOutputs[1] = vrIntermediateColorOut[1].get();
+	}
+	if (!presentationEyeOutputs[eyeIndex] ||
+		!presentationEyeOutputs[eyeIndex]->resource) {
+		static bool loggedMissingPresentationOutput[2]{};
+		LogWarnOnceFmt(
+			loggedMissingPresentationOutput[eyeIndex],
+			"[Upscaling] Submit-stage output for eye {} became unavailable after vendor evaluation; using stretch fallback",
+			eyeIndex);
+		if (vrRenderScaleMode &&
+			presentStretchOutput(
+				eyeWidthIn,
+				eyeHeightIn,
+				VRRenderScalePresentationPath::VendorFailureStretch)) {
+			return true;
+		}
+		return false;
 	}
 	if (vrRenderScaleMode) {
 		const bool canMirrorToSource =
 			sourceDesc.ArraySize == 1 &&
 			sourceDesc.Width >= eyeWidthOut * 2 &&
 			sourceDesc.Height >= eyeHeightOut &&
-			vrIntermediateColorOut[0] && vrIntermediateColorOut[1] &&
-			vrIntermediateColorOut[0]->resource && vrIntermediateColorOut[1]->resource &&
-			vrIntermediateColorOut[0]->desc.Width >= eyeWidthOut &&
-			vrIntermediateColorOut[0]->desc.Height >= eyeHeightOut &&
-			vrIntermediateColorOut[1]->desc.Width >= eyeWidthOut &&
-			vrIntermediateColorOut[1]->desc.Height >= eyeHeightOut &&
-			vrIntermediateColorOut[0]->desc.Format == sourceDesc.Format &&
-			vrIntermediateColorOut[1]->desc.Format == sourceDesc.Format;
-
-		if (canMirrorToSource) {
-			vrDesktopMirrorBlitRTV = nullptr;
-			vrDesktopMirrorBlitTarget = nullptr;
-
+			presentationEyeOutputs[0] && presentationEyeOutputs[1] &&
+			presentationEyeOutputs[0]->resource && presentationEyeOutputs[1]->resource &&
+			presentationEyeOutputs[0]->desc.Width >= eyeWidthOut &&
+			presentationEyeOutputs[0]->desc.Height >= eyeHeightOut &&
+			presentationEyeOutputs[1]->desc.Width >= eyeWidthOut &&
+			presentationEyeOutputs[1]->desc.Height >= eyeHeightOut &&
+			presentationEyeOutputs[0]->desc.Format == sourceDesc.Format &&
+			presentationEyeOutputs[1]->desc.Format == sourceDesc.Format;
+		const auto consumeReadyMirrorPair = [&]() {
 			if (submitStageMirrorFrame != currentFrame || submitStageMirrorSourceTexture != sourceTexture) {
 				submitStageMirrorFrame = currentFrame;
 				submitStageMirrorSourceTexture = sourceTexture;
 				submitStageMirrorEyeReady = {};
 			}
 
+			if (retainedNeuralPairForPresentation) {
+				if (submitStageNeuralStereoState.mirrorConsumed)
+					return false;
+				submitStageNeuralStereoState.mirrorConsumed = true;
+				return true;
+			}
+
 			submitStageMirrorEyeReady[eyeIndex] = true;
-			if (submitStageMirrorEyeReady[0] && submitStageMirrorEyeReady[1]) {
+			if (!submitStageMirrorEyeReady[0] || !submitStageMirrorEyeReady[1])
+				return false;
+			submitStageMirrorEyeReady = {};
+			return true;
+		};
+
+		if (canMirrorToSource) {
+			vrDesktopMirrorBlitRTV = nullptr;
+			vrDesktopMirrorBlitTarget = nullptr;
+
+			if (consumeReadyMirrorPair()) {
 				D3D11_BOX mirrorBox{ 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
-				context->CopySubresourceRegion(sourceTexture, 0, 0, 0, 0, vrIntermediateColorOut[0]->resource.get(), 0, &mirrorBox);
-				context->CopySubresourceRegion(sourceTexture, 0, eyeWidthOut, 0, 0, vrIntermediateColorOut[1]->resource.get(), 0, &mirrorBox);
+				context->CopySubresourceRegion(sourceTexture, 0, 0, 0, 0, presentationEyeOutputs[0]->resource.get(), 0, &mirrorBox);
+				context->CopySubresourceRegion(sourceTexture, 0, eyeWidthOut, 0, 0, presentationEyeOutputs[1]->resource.get(), 0, &mirrorBox);
 				if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage mirror writeback"))
 					return false;
+			}
+		} else if (globals::features::vr.settings.StabilizeRenderScaleDesktopMirror) {
+			if (consumeReadyMirrorPair()) {
+				static bool loggedSubmitStageMirrorFallbackFailure = false;
+				const bool mirrorUpdated = BlitVRRenderScaleDesktopMirror(
+					sourceTexture,
+					sourceDesc,
+					eyeWidthOut,
+					eyeHeightOut,
+					presentationEyeOutputs);
+				if (!mirrorUpdated && IsSubmitStageDeviceLost())
+					return false;
+				if (!mirrorUpdated && !loggedSubmitStageMirrorFallbackFailure) {
+					logger::warn(
+						"[Upscaling] Desktop mirror fallback could not update incompatible render-scale submit texture. source={}x{} array={} format={} outputL={}x{} format={} outputR={}x{} format={}",
+						sourceDesc.Width,
+						sourceDesc.Height,
+						sourceDesc.ArraySize,
+						static_cast<uint32_t>(sourceDesc.Format),
+						presentationEyeOutputs[0] ? presentationEyeOutputs[0]->desc.Width : 0,
+						presentationEyeOutputs[0] ? presentationEyeOutputs[0]->desc.Height : 0,
+						presentationEyeOutputs[0] ? static_cast<uint32_t>(presentationEyeOutputs[0]->desc.Format) : 0,
+						presentationEyeOutputs[1] ? presentationEyeOutputs[1]->desc.Width : 0,
+						presentationEyeOutputs[1] ? presentationEyeOutputs[1]->desc.Height : 0,
+						presentationEyeOutputs[1] ? static_cast<uint32_t>(presentationEyeOutputs[1]->desc.Format) : 0);
+					loggedSubmitStageMirrorFallbackFailure = true;
+				}
 				submitStageMirrorEyeReady = {};
 			}
 		} else {
-			if (globals::features::vr.settings.StabilizeRenderScaleDesktopMirror) {
-				if (submitStageMirrorFrame != currentFrame || submitStageMirrorSourceTexture != sourceTexture) {
-					submitStageMirrorFrame = currentFrame;
-					submitStageMirrorSourceTexture = sourceTexture;
-					submitStageMirrorEyeReady = {};
-				}
-
-				submitStageMirrorEyeReady[eyeIndex] = true;
-				if (submitStageMirrorEyeReady[0] && submitStageMirrorEyeReady[1]) {
-					static bool loggedSubmitStageMirrorFallbackFailure = false;
-					const bool mirrorUpdated = BlitVRRenderScaleDesktopMirror(sourceTexture, sourceDesc, eyeWidthOut, eyeHeightOut);
-					if (!mirrorUpdated && IsSubmitStageDeviceLost())
-						return false;
-					if (!mirrorUpdated && !loggedSubmitStageMirrorFallbackFailure) {
-						logger::warn(
-							"[Upscaling] Desktop mirror fallback could not update incompatible render-scale submit texture. source={}x{} array={} format={} outputL={}x{} format={} outputR={}x{} format={}",
-							sourceDesc.Width,
-							sourceDesc.Height,
-							sourceDesc.ArraySize,
-							static_cast<uint32_t>(sourceDesc.Format),
-							vrIntermediateColorOut[0] ? vrIntermediateColorOut[0]->desc.Width : 0,
-							vrIntermediateColorOut[0] ? vrIntermediateColorOut[0]->desc.Height : 0,
-							vrIntermediateColorOut[0] ? static_cast<uint32_t>(vrIntermediateColorOut[0]->desc.Format) : 0,
-							vrIntermediateColorOut[1] ? vrIntermediateColorOut[1]->desc.Width : 0,
-							vrIntermediateColorOut[1] ? vrIntermediateColorOut[1]->desc.Height : 0,
-							vrIntermediateColorOut[1] ? static_cast<uint32_t>(vrIntermediateColorOut[1]->desc.Format) : 0);
-						loggedSubmitStageMirrorFallbackFailure = true;
-					}
-					submitStageMirrorEyeReady = {};
-				}
-			} else {
-				vrDesktopMirrorBlitRTV = nullptr;
-				vrDesktopMirrorBlitTarget = nullptr;
-				submitStageMirrorEyeReady = {};
-			}
+			vrDesktopMirrorBlitRTV = nullptr;
+			vrDesktopMirrorBlitTarget = nullptr;
+			submitStageMirrorEyeReady = {};
 		}
-
 		a_outputTexture = *a_inputTexture;
-		a_outputTexture.handle = vrIntermediateColorOut[eyeIndex]->resource.get();
+		a_outputTexture.handle = presentationEyeOutputs[eyeIndex]->resource.get();
 		a_outputTexture.eType = vr::TextureType_DirectX;
+		if (retainedNeuralPairForPresentation) {
+			a_outputTexture.eColorSpace =
+				submitStageNeuralStereoState.publishedColorSpace;
+		}
 		a_outputBounds = { 0.0f, 0.0f, 1.0f, 1.0f };
 		menuPresentationSucceeded = menuPresentationAttempt;
 		setPresentationObservation(
@@ -31303,9 +34688,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			eyeHeightIn,
 			false,
 			false);
+		if (retainedNeuralPairForPresentation)
+			stampRetainedNeuralObservation();
 		return true;
 	}
-
 	UINT outputSubresource = 0;
 	uint32_t outputOffsetX = 0;
 	if (sourceDesc.ArraySize > 1) {
@@ -31340,7 +34726,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 
 	D3D11_BOX outputBox{ 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
-	context->CopySubresourceRegion(sourceTexture, outputSubresource, outputOffsetX, 0, 0, vrIntermediateColorOut[eyeIndex]->resource.get(), 0, &outputBox);
+	context->CopySubresourceRegion(sourceTexture, outputSubresource, outputOffsetX, 0, 0, presentationEyeOutputs[eyeIndex]->resource.get(), 0, &outputBox);
 	if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage output copy"))
 		return false;
 
@@ -31355,6 +34741,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		eyeHeightIn,
 		false,
 		false);
+	if (retainedNeuralPairForPresentation)
+		stampRetainedNeuralObservation();
 	return true;
 }
 
@@ -31605,6 +34993,59 @@ void Upscaling::RequestHistoryReset()
 		historyResetThisFrame = true;
 }
 
+void Upscaling::ObserveNeuralRenderingMenuSuppression(bool a_suppressed)
+{
+	const bool previous = neuralMenuSuppressionLatched.exchange(
+		a_suppressed, std::memory_order_acq_rel);
+	if (previous == a_suppressed)
+		return;
+
+	neuralPresentationContractEpoch.fetch_add(1, std::memory_order_acq_rel);
+	if (a_suppressed) {
+		RequestNeuralHistoryReset();
+		RequestHistoryReset();
+	}
+}
+
+void Upscaling::RequestNeuralHistoryReset() noexcept
+{
+	for (auto& generation : neuralHistoryResetRequestGenerations)
+		generation.fetch_add(1, std::memory_order_acq_rel);
+}
+
+uint64_t Upscaling::CaptureNeuralHistoryResetGeneration(
+	uint32_t a_featureSlot) const noexcept
+{
+	const std::size_t routeIndex = a_featureSlot < 2u ? 0u : 1u;
+	return neuralHistoryResetRequestGenerations[routeIndex].load(
+		std::memory_order_acquire);
+}
+
+bool Upscaling::ShouldResetNeuralHistory(
+	uint32_t a_featureSlot,
+	uint64_t a_requestGeneration) const noexcept
+{
+	const std::size_t routeIndex = a_featureSlot < 2u ? 0u : 1u;
+	return neuralHistoryResetCompletedGenerations[routeIndex].load(
+			   std::memory_order_acquire) != a_requestGeneration;
+}
+
+void Upscaling::CompleteNeuralHistoryReset(
+	uint32_t a_featureSlot,
+	uint64_t a_requestGeneration) noexcept
+{
+	const std::size_t routeIndex = a_featureSlot < 2u ? 0u : 1u;
+	auto& completed = neuralHistoryResetCompletedGenerations[routeIndex];
+	uint64_t observed = completed.load(std::memory_order_acquire);
+	while (observed < a_requestGeneration &&
+		   !completed.compare_exchange_weak(
+			   observed,
+			   a_requestGeneration,
+			   std::memory_order_acq_rel,
+			   std::memory_order_acquire)) {
+	}
+}
+
 uint32_t Upscaling::GetEffectiveUpscalingQualityMode() const
 {
 	return GetPendingVRRenderScaleDesiredProfile().qualityMode;
@@ -31830,6 +35271,385 @@ Upscaling::VRRenderScaleStressSessionSnapshot Upscaling::GetVRRenderScaleStressS
 {
 	std::scoped_lock lock(vrRenderScaleStressSessionMutex);
 	return vrRenderScaleStressSession;
+}
+
+std::array<Upscaling::NeuralStereoRouteSnapshot, 2> Upscaling::GetNeuralStereoRouteSnapshot() const
+{
+	std::scoped_lock lock(neuralStereoRouteSnapshotMutex);
+	return neuralStereoRouteSnapshots;
+}
+
+std::array<Upscaling::OuterDLSSRouteCountersSnapshot, 2> Upscaling::GetOuterDLSSRouteCountersSnapshot() const noexcept
+{
+	std::array<OuterDLSSRouteCountersSnapshot, 2> snapshots{};
+	for (std::size_t index = 0; index < snapshots.size(); ++index) {
+		const auto& counters = outerDLSSRouteCounters[index];
+		snapshots[index] = {
+			.requestedTransactions = counters.requestedTransactions.load(std::memory_order_relaxed),
+			.eligibleTransactions = counters.eligibleTransactions.load(std::memory_order_relaxed),
+			.preparedEyes = counters.preparedEyes.load(std::memory_order_relaxed),
+			.attemptedEyes = counters.attemptedEyes.load(std::memory_order_relaxed),
+			.evaluatedEyes = counters.evaluatedEyes.load(std::memory_order_relaxed),
+			.fallbackTransactions = counters.fallbackTransactions.load(std::memory_order_relaxed),
+			.committedTransactions = counters.committedTransactions.load(std::memory_order_relaxed),
+		};
+	}
+	return snapshots;
+}
+
+Upscaling::NeuralSubmitCycleSnapshot Upscaling::GetLatestNeuralSubmitCycleSnapshot() const
+{
+	std::scoped_lock lock(neuralStereoRouteSnapshotMutex);
+	return latestNeuralSubmitCycleSnapshot;
+}
+
+Upscaling::NeuralSubmitPairBoundarySnapshot Upscaling::GetNeuralSubmitPairBoundarySnapshot() const
+{
+	std::scoped_lock lock(neuralSubmitPairBoundaryMutex);
+	auto snapshot = neuralSubmitPairBoundarySnapshot;
+	snapshot.exceptions =
+		neuralSubmitPairBoundaryExceptions.load(std::memory_order_relaxed);
+	return snapshot;
+}
+
+void Upscaling::ClearNeuralSubmitPairBoundaryScopeLocked(uint32_t a_mode) noexcept
+{
+	neuralSubmitPairBoundaryState = {};
+	neuralSubmitPairBoundarySnapshot.mode = a_mode;
+	neuralSubmitPairBoundarySnapshot.active = false;
+	neuralSubmitPairBoundarySnapshot.sourceValid = false;
+	neuralSubmitPairBoundarySnapshot.compositorCycle = 0;
+	neuralSubmitPairBoundarySnapshot.frame = 0;
+	neuralSubmitPairBoundarySnapshot.threadId = 0;
+	neuralSubmitPairBoundarySnapshot.observedEyeMask = 0;
+	neuralSubmitPairBoundarySnapshot.provenEyeMask = 0;
+}
+
+uint64_t Upscaling::BeginNeuralSubmitPairBoundary(
+	uint64_t a_compositorCycle,
+	const vr::Texture_t* a_texture,
+	vr::EVRSubmitFlags a_flags) noexcept
+{
+	try {
+		uint32_t mode = std::min(
+			settings.neuralRenderingSubmitPairBoundaryMode,
+			kNeuralSubmitPairBoundaryModeMaxIndex);
+		if (mode == static_cast<uint32_t>(NeuralSubmitPairBoundaryMode::Current))
+			return 0;
+
+		std::scoped_lock lock(neuralSubmitPairBoundaryMutex);
+		mode = std::min(
+			settings.neuralRenderingSubmitPairBoundaryMode,
+			kNeuralSubmitPairBoundaryModeMaxIndex);
+		auto& snapshot = neuralSubmitPairBoundarySnapshot;
+		snapshot.mode = mode;
+		if (mode == static_cast<uint32_t>(NeuralSubmitPairBoundaryMode::Current)) {
+			ClearNeuralSubmitPairBoundaryScopeLocked(mode);
+			return 0;
+		}
+
+		if (neuralSubmitPairBoundaryState.active &&
+			neuralSubmitPairBoundaryState.provenEyeMask != 0b11u) {
+			++snapshot.incompleteOuterCalls;
+		}
+		neuralSubmitPairBoundaryState = {};
+		if (++snapshot.sequence == 0)
+			++snapshot.sequence;
+		++snapshot.outerCalls;
+
+		auto& active = neuralSubmitPairBoundaryState;
+		active.token = snapshot.sequence;
+		active.compositorCycle = a_compositorCycle;
+		active.frame = globals::state ? globals::state->frameCount : 0u;
+		active.threadId = GetCurrentThreadId();
+		active.flags = a_flags;
+		active.active = true;
+		if (a_texture && a_texture->handle &&
+			a_texture->eType == vr::TextureType_DirectX) {
+			auto* source = static_cast<ID3D11Texture2D*>(a_texture->handle);
+			D3D11_TEXTURE2D_DESC sourceDesc{};
+			if (TryGetTexture2DDesc(source, sourceDesc)) {
+				active.texture = *a_texture;
+				active.sourceDesc = sourceDesc;
+				active.sourceTexture.copy_from(source);
+				active.sourceValid = active.sourceTexture != nullptr;
+			}
+		}
+
+		snapshot.active = true;
+		snapshot.sourceValid = active.sourceValid;
+		snapshot.compositorCycle = active.compositorCycle;
+		snapshot.frame = active.frame;
+		snapshot.threadId = active.threadId;
+		snapshot.observedEyeMask = 0;
+		snapshot.provenEyeMask = 0;
+		return active.token;
+	} catch (...) {
+		neuralSubmitPairBoundaryExceptions.fetch_add(
+			1, std::memory_order_relaxed);
+		return 0;
+	}
+}
+
+void Upscaling::EndNeuralSubmitPairBoundary(uint64_t a_token) noexcept
+{
+	if (a_token == 0)
+		return;
+	try {
+		std::scoped_lock lock(neuralSubmitPairBoundaryMutex);
+		auto& active = neuralSubmitPairBoundaryState;
+		if (!active.active || active.token != a_token)
+			return;
+		if (active.provenEyeMask != 0b11u)
+			++neuralSubmitPairBoundarySnapshot.incompleteOuterCalls;
+		neuralSubmitPairBoundarySnapshot.active = false;
+		neuralSubmitPairBoundarySnapshot.observedEyeMask = active.observedEyeMask;
+		neuralSubmitPairBoundarySnapshot.provenEyeMask = active.provenEyeMask;
+		active = {};
+	} catch (...) {
+		neuralSubmitPairBoundaryExceptions.fetch_add(
+			1, std::memory_order_relaxed);
+		// Pair-boundary diagnostics cannot alter the engine's Submit result.
+	}
+}
+
+uint64_t Upscaling::ObserveNeuralSubmitPairBoundaryEye(
+	uint64_t a_compositorCycle,
+	vr::EVREye a_eye,
+	const vr::Texture_t* a_texture,
+	vr::EVRSubmitFlags a_flags) noexcept
+{
+	try {
+		uint32_t mode = std::min(
+			settings.neuralRenderingSubmitPairBoundaryMode,
+			kNeuralSubmitPairBoundaryModeMaxIndex);
+		if (mode == static_cast<uint32_t>(NeuralSubmitPairBoundaryMode::Current))
+			return 0;
+
+		std::scoped_lock lock(neuralSubmitPairBoundaryMutex);
+		auto& active = neuralSubmitPairBoundaryState;
+		auto& snapshot = neuralSubmitPairBoundarySnapshot;
+		mode = std::min(
+			settings.neuralRenderingSubmitPairBoundaryMode,
+			kNeuralSubmitPairBoundaryModeMaxIndex);
+		snapshot.mode = mode;
+		if (mode ==
+			static_cast<uint32_t>(NeuralSubmitPairBoundaryMode::Current)) {
+			ClearNeuralSubmitPairBoundaryScopeLocked(mode);
+			return 0;
+		}
+
+		++snapshot.innerCalls;
+		if (a_eye != vr::Eye_Left && a_eye != vr::Eye_Right) {
+			++snapshot.mismatchedInnerCalls;
+			return 0;
+		}
+		const uint32_t eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
+		const uint32_t eyeBit = 1u << eyeIndex;
+		if (!active.active) {
+			++snapshot.orphanInnerCalls;
+			return 0;
+		}
+		active.observedEyeMask |= eyeBit;
+		snapshot.observedEyeMask = active.observedEyeMask;
+
+		const uint32_t frame = globals::state ? globals::state->frameCount : 0u;
+		D3D11_TEXTURE2D_DESC sourceDesc{};
+		const bool sourceDescValid =
+			a_texture && a_texture->handle &&
+			a_texture->eType == vr::TextureType_DirectX &&
+			TryGetTexture2DDesc(
+				static_cast<ID3D11Texture2D*>(a_texture->handle), sourceDesc);
+		const auto& expected = active.sourceDesc;
+		const bool sourceDescMatches =
+			sourceDescValid && active.sourceValid &&
+			sourceDesc.Width == expected.Width &&
+			sourceDesc.Height == expected.Height &&
+			sourceDesc.MipLevels == expected.MipLevels &&
+			sourceDesc.ArraySize == expected.ArraySize &&
+			sourceDesc.Format == expected.Format &&
+			sourceDesc.SampleDesc.Count == expected.SampleDesc.Count &&
+			sourceDesc.SampleDesc.Quality == expected.SampleDesc.Quality &&
+			sourceDesc.Usage == expected.Usage &&
+			sourceDesc.BindFlags == expected.BindFlags &&
+			sourceDesc.CPUAccessFlags == expected.CPUAccessFlags &&
+			sourceDesc.MiscFlags == expected.MiscFlags;
+		const bool proven =
+			active.threadId == GetCurrentThreadId() &&
+			active.compositorCycle == a_compositorCycle &&
+			active.frame == frame &&
+			active.flags == a_flags &&
+			a_texture && active.texture.handle == a_texture->handle &&
+			active.texture.eType == a_texture->eType &&
+			active.texture.eColorSpace == a_texture->eColorSpace &&
+			sourceDescMatches;
+		if (!proven) {
+			++snapshot.mismatchedInnerCalls;
+			return 0;
+		}
+
+		active.provenEyeMask |= eyeBit;
+		snapshot.provenEyeMask = active.provenEyeMask;
+		++snapshot.provenInnerCalls;
+		return active.token;
+	} catch (...) {
+		neuralSubmitPairBoundaryExceptions.fetch_add(
+			1, std::memory_order_relaxed);
+		return 0;
+	}
+}
+
+const char* Upscaling::GetNeuralStereoRouteRoleName(NeuralStereoRouteRole a_role)
+{
+	switch (a_role) {
+	case NeuralStereoRouteRole::Main:
+		return "main";
+	case NeuralStereoRouteRole::Submit:
+		return "submit";
+	default:
+		return "unknown";
+	}
+}
+
+const char* Upscaling::GetNeuralStereoPairDispositionName(NeuralStereoPairDisposition a_disposition)
+{
+	switch (a_disposition) {
+	case NeuralStereoPairDisposition::NotRequested:
+		return "not_requested";
+	case NeuralStereoPairDisposition::NormalDLSSPair:
+		return "normal_dlss_pair";
+	case NeuralStereoPairDisposition::NeuralPair:
+		return "neural_pair";
+	case NeuralStereoPairDisposition::FallbackRequired:
+		return "fallback_required";
+	default:
+		return "unknown";
+	}
+}
+
+const char* Upscaling::GetNeuralStereoFallbackReasonName(NeuralStereoFallbackReason a_reason)
+{
+	switch (a_reason) {
+	case NeuralStereoFallbackReason::None:
+		return "none";
+	case NeuralStereoFallbackReason::NeuralDisabled:
+		return "neural_disabled";
+	case NeuralStereoFallbackReason::MethodIneligible:
+		return "method_ineligible";
+	case NeuralStereoFallbackReason::RouteIneligible:
+		return "route_ineligible";
+	case NeuralStereoFallbackReason::MenuContext:
+		return "menu_context";
+	case NeuralStereoFallbackReason::MaskVisualization:
+		return "mask_visualization";
+	case NeuralStereoFallbackReason::FrameGeneration:
+		return "frame_generation";
+	case NeuralStereoFallbackReason::SubmitDeviceUnavailable:
+		return "submit_device_unavailable";
+	case NeuralStereoFallbackReason::SubmitPresentationGate:
+		return "submit_presentation_gate";
+	case NeuralStereoFallbackReason::SubmitSourceContractRejected:
+		return "submit_source_contract_rejected";
+	case NeuralStereoFallbackReason::SubmitResourcePreparationFailed:
+		return "submit_resource_preparation_failed";
+	case NeuralStereoFallbackReason::SubmitVendorDispatchFailed:
+		return "submit_vendor_dispatch_failed";
+	case NeuralStereoFallbackReason::SourceBatchUnavailable:
+		return "source_batch_unavailable";
+	case NeuralStereoFallbackReason::SourceSignatureUnproven:
+		return "source_signature_unproven";
+	case NeuralStereoFallbackReason::SubmitPairBoundaryUnproven:
+		return "submit_pair_boundary_unproven";
+	case NeuralStereoFallbackReason::StereoPreflightFailed:
+		return "stereo_preflight_failed";
+	case NeuralStereoFallbackReason::CachedPairSignatureMismatch:
+		return "cached_pair_signature_mismatch";
+	case NeuralStereoFallbackReason::CachedPairContractInvalidated:
+		return "cached_pair_contract_invalidated";
+	case NeuralStereoFallbackReason::NeuralEvaluationFailed:
+		return "neural_evaluation_failed";
+	case NeuralStereoFallbackReason::StereoDispatchFailed:
+		return "stereo_dispatch_failed";
+	default:
+		return "unknown";
+	}
+}
+
+const char* Upscaling::GetOuterDLSSFallbackReasonName(OuterDLSSFallbackReason a_reason)
+{
+	switch (a_reason) {
+	case OuterDLSSFallbackReason::None:
+		return "none";
+	case OuterDLSSFallbackReason::Disabled:
+		return "disabled";
+	case OuterDLSSFallbackReason::MethodIneligible:
+		return "method_ineligible";
+	case OuterDLSSFallbackReason::FoveatedInactive:
+		return "foveated_inactive";
+	case OuterDLSSFallbackReason::NeuralInactive:
+		return "neural_inactive";
+	case OuterDLSSFallbackReason::MenuContext:
+		return "menu_context";
+	case OuterDLSSFallbackReason::MaskVisualization:
+		return "mask_visualization";
+	case OuterDLSSFallbackReason::FrameGeneration:
+		return "frame_generation";
+	case OuterDLSSFallbackReason::FullInputUnavailable:
+		return "full_input_unavailable";
+	case OuterDLSSFallbackReason::CachedPairContractInvalidated:
+		return "cached_pair_contract_invalidated";
+	case OuterDLSSFallbackReason::ResourcePreparationFailed:
+		return "resource_preparation_failed";
+	case OuterDLSSFallbackReason::StereoEvaluationFailed:
+		return "stereo_evaluation_failed";
+	default:
+		return "unknown";
+	}
+}
+
+uint32_t Upscaling::PublishNeuralSubmitCycleSnapshot(
+	uint64_t a_compositorCycle,
+	uint32_t a_frame,
+	uint32_t a_eyeIndex) noexcept
+{
+	try {
+		std::scoped_lock lock(neuralStereoRouteSnapshotMutex);
+		const uint32_t eyeBit = a_eyeIndex < 2u ? 1u << a_eyeIndex : 0u;
+		if (!latestNeuralSubmitCycleSnapshot.entryObserved ||
+			latestNeuralSubmitCycleSnapshot.compositorCycle != a_compositorCycle ||
+			latestNeuralSubmitCycleSnapshot.frame != a_frame) {
+			latestNeuralSubmitCycleSnapshot = {
+				.entryObserved = true,
+				.compositorCycle = a_compositorCycle,
+				.frame = a_frame,
+				.observedEyeMask = eyeBit,
+			};
+		} else {
+			latestNeuralSubmitCycleSnapshot.observedEyeMask |= eyeBit;
+		}
+		return latestNeuralSubmitCycleSnapshot.observedEyeMask;
+	} catch (...) {
+		// Submit-entry telemetry is observational and cannot affect presentation.
+		return 0;
+	}
+}
+
+void Upscaling::PublishNeuralStereoRouteSnapshot(const NeuralStereoRouteSnapshot& a_snapshot) noexcept
+{
+	try {
+		const auto index = static_cast<std::size_t>(a_snapshot.role);
+		if (index >= neuralStereoRouteSnapshots.size())
+			return;
+
+		std::scoped_lock lock(neuralStereoRouteSnapshotMutex);
+		if (++neuralStereoRouteSnapshotSequence == 0)
+			++neuralStereoRouteSnapshotSequence;
+		auto snapshot = a_snapshot;
+		snapshot.sequence = neuralStereoRouteSnapshotSequence;
+		neuralStereoRouteSnapshots[index] = snapshot;
+	} catch (...) {
+		// Route telemetry is observational and cannot affect render submission.
+	}
 }
 
 void Upscaling::StartVRRenderScaleStressSession()
@@ -34744,6 +38564,12 @@ void Upscaling::Upscale()
 		memoryReliefFoveatedBypass;
 	const bool foveatedDispatchRequested =
 		IsFoveatedVendorDispatchEnabled(upscaleMethod) && !foveatedTransitionBypass;
+	const bool outerDLSSFullEncodeRequired =
+		foveatedDispatchRequested && settings.foveatedOuterDLSS &&
+		settings.neuralRenderingEnabled && settings.neuralRenderingMainRoute &&
+		upscaleMethod == UpscaleMethod::kDLSS &&
+		!settings.foveatedPeripheryMaskVisualization &&
+		settings.frameGenerationMode == 0 && !IsFrameGenerationDx12PathActive();
 	bool encodedVRFoveatedRegions = false;
 
 	auto encodeUpscalingTextures = [&](bool forceFullVREncode, const char* eventName) -> bool {
@@ -34910,7 +38736,8 @@ void Upscaling::Upscale()
 		return true;
 	};
 
-	if (!encodeUpscalingTextures(false, "Encode Upscaling Textures"))
+	if (!encodeUpscalingTextures(
+			outerDLSSFullEncodeRequired, "Encode Upscaling Textures"))
 		return;
 
 	{

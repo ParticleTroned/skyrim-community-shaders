@@ -321,7 +321,8 @@ strengths, style, and the fixed safe contract fields. Presets apply first;
 explicit tuning or style in the same call applies second and selects Custom.
 Contradictory implementation selectors and unsupported `useAutoMask=false` or
 `uiCorrection=true` requests reject the whole call without mutation. Numeric
-tuning retains the public clamped 0..2 contract. `nr_cycle_modes` advances
+tuning outside 0..2, presets outside 0..5, and styles outside 0..3 are rejected
+rather than silently clamped. `nr_cycle_modes` advances
 exactly one lane in the table order per call, or selects `matrixIndex` 0..3
 explicitly; it returns the selected lane but does not claim execution until
 fresh main/submit route telemetry observes it. `nr_reset` remains the bounded

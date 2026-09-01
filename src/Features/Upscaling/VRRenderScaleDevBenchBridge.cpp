@@ -19,7 +19,6 @@
 #	include <format>
 #	include <functional>
 #	include <future>
-#	include <limits>
 #	include <memory>
 #	include <optional>
 #	include <stdexcept>
@@ -1005,24 +1004,39 @@ namespace
 		}
 
 		if (const auto preset = a_args.find("preset"); preset != a_args.end()) {
-			uint64_t requested = 0;
-			if (preset->is_number_unsigned())
-				requested = preset->get<uint64_t>();
-			else if (preset->is_number_integer()) {
-				const auto signedValue = preset->get<int64_t>();
-				if (signedValue < 0)
-					requested = std::numeric_limits<uint64_t>::max();
-				else
-					requested = static_cast<uint64_t>(signedValue);
+			if (preset->is_number_unsigned()) {
+				const auto requested = preset->get<uint64_t>();
+				if (requested > Upscaling::kNeuralRenderingPresetMaxIndex) {
+					a_error = {
+						{ "error", "preset is outside 0..5" },
+						{ "errorCode", "nr_preset_out_of_range" },
+						{ "field", "preset" },
+						{ "requested", requested },
+					};
+					return false;
+				}
+				a_request.preset = static_cast<uint32_t>(requested);
+			} else if (preset->is_number_integer()) {
+				const auto requested = preset->get<int64_t>();
+				if (requested < 0 ||
+					requested > static_cast<int64_t>(Upscaling::kNeuralRenderingPresetMaxIndex)) {
+					a_error = {
+						{ "error", "preset is outside 0..5" },
+						{ "errorCode", "nr_preset_out_of_range" },
+						{ "field", "preset" },
+						{ "requested", requested },
+					};
+					return false;
+				}
+				a_request.preset = static_cast<uint32_t>(requested);
 			} else {
-				a_error = { { "error", "preset must be an integer" } };
+				a_error = {
+					{ "error", "preset must be an integer" },
+					{ "errorCode", "nr_preset_type_invalid" },
+					{ "field", "preset" },
+				};
 				return false;
 			}
-			if (requested > Upscaling::kNeuralRenderingPresetMaxIndex) {
-				a_error = { { "error", "preset must be in range 0..5" } };
-				return false;
-			}
-			a_request.preset = static_cast<uint32_t>(requested);
 		}
 
 		const auto parseStrength = [&](const char* a_name, std::optional<float>& a_output) {
@@ -1030,15 +1044,32 @@ namespace
 			if (value == a_args.end())
 				return true;
 			if (!value->is_number()) {
-				a_error = { { "error", std::format("{} must be a number", a_name) } };
+				a_error = {
+					{ "error", std::format("{} must be a number", a_name) },
+					{ "errorCode", "nr_tuning_type_invalid" },
+					{ "field", a_name },
+				};
 				return false;
 			}
 			const double requested = value->get<double>();
 			if (!std::isfinite(requested)) {
-				a_error = { { "error", std::format("{} must be finite", a_name) } };
+				a_error = {
+					{ "error", std::format("{} must be finite", a_name) },
+					{ "errorCode", "nr_tuning_non_finite" },
+					{ "field", a_name },
+				};
 				return false;
 			}
-			a_output = static_cast<float>(std::clamp(requested, 0.0, 2.0));
+			if (requested < 0.0 || requested > 2.0) {
+				a_error = {
+					{ "error", std::format("{} is outside 0..2", a_name) },
+					{ "errorCode", "nr_tuning_out_of_range" },
+					{ "field", a_name },
+					{ "requested", requested },
+				};
+				return false;
+			}
+			a_output = static_cast<float>(requested);
 			return true;
 		};
 		if (!parseStrength("intensity", a_request.intensity) ||
@@ -1049,17 +1080,38 @@ namespace
 		}
 
 		if (const auto style = a_args.find("style"); style != a_args.end()) {
-			int64_t requested = 0;
 			if (style->is_number_unsigned()) {
-				const auto unsignedValue = style->get<uint64_t>();
-				requested = static_cast<int64_t>(std::min<uint64_t>(unsignedValue, 3u));
+				const auto requested = style->get<uint64_t>();
+				if (requested > 3u) {
+					a_error = {
+						{ "error", "style is outside 0..3" },
+						{ "errorCode", "nr_style_out_of_range" },
+						{ "field", "style" },
+						{ "requested", requested },
+					};
+					return false;
+				}
+				a_request.style = static_cast<uint32_t>(requested);
 			} else if (style->is_number_integer()) {
-				requested = style->get<int64_t>();
+				const auto requested = style->get<int64_t>();
+				if (requested < 0 || requested > 3) {
+					a_error = {
+						{ "error", "style is outside 0..3" },
+						{ "errorCode", "nr_style_out_of_range" },
+						{ "field", "style" },
+						{ "requested", requested },
+					};
+					return false;
+				}
+				a_request.style = static_cast<uint32_t>(requested);
 			} else {
-				a_error = { { "error", "style must be an integer" } };
+				a_error = {
+					{ "error", "style must be an integer" },
+					{ "errorCode", "nr_style_type_invalid" },
+					{ "field", "style" },
+				};
 				return false;
 			}
-			a_request.style = static_cast<uint32_t>(std::clamp<int64_t>(requested, 0, 3));
 		}
 		if (a_request.useAutoMask && !*a_request.useAutoMask) {
 			a_error = {

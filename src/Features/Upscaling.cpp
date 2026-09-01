@@ -26070,7 +26070,6 @@ bool Upscaling::RestorePrivateFoveatedCenterInputsForNeuralFallback(
 		if (!context || !foveatedRectCache.plan.IsValid())
 			return false;
 
-		UnbindUpscalingResources();
 		for (uint32_t eye = 0; eye < 2; ++eye) {
 			const auto& source = a_stageResults[eye];
 			if (!source.originalColorSourceValid || !source.originalColorSource ||
@@ -26078,6 +26077,11 @@ bool Upscaling::RestorePrivateFoveatedCenterInputsForNeuralFallback(
 				!foveatedCenterColorIn[eye]->resource) {
 				return false;
 			}
+		}
+
+		UnbindUpscalingResources();
+		for (uint32_t eye = 0; eye < 2; ++eye) {
+			const auto& source = a_stageResults[eye];
 			context->CopySubresourceRegion(
 				foveatedCenterColorIn[eye]->resource.get(),
 				0,

@@ -1594,6 +1594,16 @@ endif()
 
 if(BUILD_NEURAL_RENDERING_TESTS)
     enable_testing()
+    add_test(
+        NAME NeuralRenderingDevBenchContract
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
+            "${PROJECT_SOURCE_DIR}/tests/neural_rendering_devbench_contract_test.cmake"
+    )
+    set_tests_properties(
+        NeuralRenderingDevBenchContract
+        PROPERTIES LABELS "NeuralRendering"
+    )
     if(CSX_STAGE_LOCAL_DLSS_RUNTIME)
         add_test(
             NAME StreamlineLocalRuntimePackagingContract

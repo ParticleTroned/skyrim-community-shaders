@@ -1,7 +1,9 @@
 #include "Renderer.h"
 
 #include "D3D12Interop.h"
+#include "Globals.h"
 #include "PipelinePolicy.h"
+#include "Profiler.h"
 #include "Utils/LazyShader.h"
 
 #include <algorithm>
@@ -1365,10 +1367,13 @@ namespace NeuralRendering
 			a_args.front().context->CSSetShaderResources(0, 1, &source);
 			a_args.front().context->CSSetUnorderedAccessViews(
 				0, 1, &destination, nullptr);
-			a_args.front().context->Dispatch(
-				(a_args[index].guideWidth + 7u) / 8u,
-				(a_args[index].guideHeight + 7u) / 8u,
-				1);
+			{
+				CS_PROFILE_SCOPE("Upscaling::DLSSNRDepthGuide");
+				a_args.front().context->Dispatch(
+					(a_args[index].guideWidth + 7u) / 8u,
+					(a_args[index].guideHeight + 7u) / 8u,
+					1);
+			}
 		}
 		return true;
 	}
@@ -1882,6 +1887,7 @@ namespace NeuralRendering
 		RendererApplyOutcome outcome{};
 		const auto failuresBefore = state_->snapshot_.counters.failures;
 		try {
+			CS_PROFILE_SCOPE("Upscaling::DLSSNeuralRendering");
 			const bool succeeded = state_->ApplyLocked(a_args, outcome);
 			if (a_outcome)
 				*a_outcome = outcome;
@@ -1907,6 +1913,7 @@ namespace NeuralRendering
 		Increment(state_->snapshot_.counters.stereoAttempts);
 		const auto failuresBefore = state_->snapshot_.counters.failures;
 		try {
+			CS_PROFILE_SCOPE("Upscaling::DLSSNeuralRenderingStereo");
 			const bool succeeded = state_->ApplyStereoLocked(a_args, outcome);
 			Increment(
 				succeeded ? state_->snapshot_.counters.stereoSuccesses :
@@ -1939,6 +1946,7 @@ namespace NeuralRendering
 		RendererApplyOutcome outcome{};
 		const auto failuresBefore = state_->snapshot_.counters.failures;
 		try {
+			CS_PROFILE_SCOPE("Upscaling::DLSSNeuralRenderingSequentialStereo");
 			const bool succeeded =
 				state_->ApplySequentialStereoLocked(a_args, outcome);
 			if (a_outcome)

@@ -152,12 +152,12 @@ foreach(_runtime_contract IN ITEMS
     "CSX_LOCAL_DLSS_RUNTIME_DIRECTORY"
     "CSX_LOCAL_DLSSNR_RUNTIME_FILE"
     "STREAMLINE_RUNTIME_PACKAGED_FILENAMES"
-    "csx_stage_pinned_local_runtime"
+    "csx_stage_pinned_streamline_runtime"
     "file(SHA256"
     "CMAKE_CONFIGURE_DEPENDS"
     "STREAMLINE_RUNTIME_MANIFEST_SHA256"
     "STREAMLINE_RUNTIME_VERIFY_STAMP"
-    "VerifyLocalDLSSRuntime"
+    "VerifyStreamlineRuntime"
     "INTERNAL-NO-REDISTRIBUTION"
 )
     string(FIND "${_runtime_policy}" "${_runtime_contract}" _contract_position)
@@ -255,8 +255,8 @@ foreach(_packaging_contract IN ITEMS
     "FILTER CORE_SOURCES"
     "FILTER FEATURE_SOURCES"
     "SCRIPT \"\${STREAMLINE_RUNTIME_INSTALL_SCRIPT}\""
-    "StageAioPinnedLocalDLSSRuntime"
-    "ScrubAioLocalDLSSRuntime"
+    "StageAioPinnedStreamlineRuntime"
+    "ScrubAioStreamlineRuntime"
     "CSX_INTERNAL_RUNTIME_NOTICE_NAME"
 )
     string(FIND "${_cmake_lists}" "${_packaging_contract}" _contract_position)
@@ -360,7 +360,7 @@ foreach(_documentation_contract IN ITEMS
     "WHCP signature"
     "signer's publisher"
     "not a redistributable or release-ready integration"
-    "Local runtime staging is disabled by default"
+    "Runtime staging is disabled by default"
     "CSX_STAGE_LOCAL_DLSS_RUNTIME=ON"
     "admission relies on its exact pinned SHA-256"
     "Do not publish or redistribute"
@@ -427,6 +427,142 @@ if(_stage_probe_tamper_result EQUAL 0)
 endif()
 file(REMOVE_RECURSE "${_stage_probe_root}")
 
+set(
+    _preflight_probe_root
+    "${CMAKE_CURRENT_BINARY_DIR}/pinned-runtime-preflight-probe"
+)
+set(_preflight_probe_source_dir "${_preflight_probe_root}/source")
+set(_preflight_probe_destination "${_preflight_probe_root}/destination")
+set(_preflight_probe_notice_destination "${_preflight_probe_root}/consumer")
+set(_preflight_probe_manifest "${_preflight_probe_root}/manifest.txt")
+set(
+    _preflight_probe_notice
+    "${_preflight_probe_source_dir}/INTERNAL-NO-REDISTRIBUTION.txt"
+)
+set(
+    _preflight_probe_existing_notice
+    "${_preflight_probe_notice_destination}/INTERNAL-NO-REDISTRIBUTION.txt"
+)
+file(REMOVE_RECURSE "${_preflight_probe_root}")
+file(MAKE_DIRECTORY
+    "${_preflight_probe_source_dir}"
+    "${_preflight_probe_destination}"
+    "${_preflight_probe_notice_destination}"
+)
+file(WRITE "${_preflight_probe_source_dir}/first.dll" "valid first input\n")
+file(WRITE "${_preflight_probe_source_dir}/second.dll" "invalid second input\n")
+file(SHA256 "${_preflight_probe_source_dir}/first.dll" _preflight_valid_hash)
+file(WRITE "${_preflight_probe_notice}" "verified replacement notice\n")
+file(SHA256 "${_preflight_probe_notice}" _preflight_notice_hash)
+file(WRITE "${_preflight_probe_destination}/sentinel.dll" "existing payload\n")
+file(SHA256
+    "${_preflight_probe_destination}/sentinel.dll"
+    _preflight_sentinel_hash
+)
+file(WRITE "${_preflight_probe_existing_notice}" "existing warning\n")
+file(SHA256 "${_preflight_probe_existing_notice}" _preflight_existing_notice_hash)
+file(WRITE
+    "${_preflight_probe_manifest}"
+    "first.dll|${_preflight_probe_source_dir}/first.dll|${_preflight_valid_hash}\n"
+    "second.dll|${_preflight_probe_source_dir}/second.dll|${_preflight_valid_hash}\n"
+)
+file(SHA256
+    "${_preflight_probe_manifest}"
+    _preflight_probe_manifest_hash
+)
+set(_preflight_probe_script "${_preflight_probe_root}/reject-bad-source.cmake")
+file(WRITE
+    "${_preflight_probe_script}"
+    "set(STAGE_PINNED_RUNTIME_MANIFEST [==[${_preflight_probe_manifest}]==])\n"
+    "set(STAGE_PINNED_RUNTIME_MANIFEST_SHA256 [==[${_preflight_probe_manifest_hash}]==])\n"
+    "set(STAGE_PINNED_RUNTIME_DESTINATION [==[${_preflight_probe_destination}]==])\n"
+    "set(STAGE_PINNED_RUNTIME_NOTICE_SOURCE [==[${_preflight_probe_notice}]==])\n"
+    "set(STAGE_PINNED_RUNTIME_NOTICE_DESTINATION [==[${_preflight_probe_notice_destination}]==])\n"
+    "set(STAGE_PINNED_RUNTIME_NOTICE_SHA256 [==[${_preflight_notice_hash}]==])\n"
+    "include([==[${_runtime_stage_script_path}]==])\n"
+)
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" -P "${_preflight_probe_script}"
+    RESULT_VARIABLE _preflight_bad_source_result
+    OUTPUT_QUIET
+    ERROR_QUIET
+)
+if(_preflight_bad_source_result EQUAL 0)
+    message(FATAL_ERROR "Runtime preflight accepted a bad later source")
+endif()
+if(EXISTS "${_preflight_probe_destination}/first.dll" OR
+   EXISTS "${_preflight_probe_destination}/second.dll")
+    message(FATAL_ERROR "Runtime preflight mutated the consumer before failure")
+endif()
+if(NOT EXISTS "${_preflight_probe_destination}/sentinel.dll" OR
+   NOT EXISTS "${_preflight_probe_existing_notice}")
+    message(FATAL_ERROR "Runtime preflight removed existing consumer state")
+endif()
+file(SHA256
+    "${_preflight_probe_destination}/sentinel.dll"
+    _preflight_sentinel_actual_hash
+)
+file(SHA256
+    "${_preflight_probe_existing_notice}"
+    _preflight_existing_notice_actual_hash
+)
+if(NOT _preflight_sentinel_actual_hash STREQUAL _preflight_sentinel_hash OR
+   NOT _preflight_existing_notice_actual_hash STREQUAL
+       _preflight_existing_notice_hash)
+    message(FATAL_ERROR "Runtime preflight changed existing consumer state")
+endif()
+
+file(WRITE
+    "${_preflight_probe_manifest}"
+    "first.dll|${_preflight_probe_source_dir}/first.dll|${_preflight_valid_hash}\n"
+)
+file(SHA256
+    "${_preflight_probe_manifest}"
+    _preflight_probe_manifest_hash
+)
+file(APPEND "${_preflight_probe_notice}" "tampered\n")
+set(_preflight_probe_script "${_preflight_probe_root}/reject-bad-notice.cmake")
+file(WRITE
+    "${_preflight_probe_script}"
+    "set(STAGE_PINNED_RUNTIME_MANIFEST [==[${_preflight_probe_manifest}]==])\n"
+    "set(STAGE_PINNED_RUNTIME_MANIFEST_SHA256 [==[${_preflight_probe_manifest_hash}]==])\n"
+    "set(STAGE_PINNED_RUNTIME_DESTINATION [==[${_preflight_probe_destination}]==])\n"
+    "set(STAGE_PINNED_RUNTIME_NOTICE_SOURCE [==[${_preflight_probe_notice}]==])\n"
+    "set(STAGE_PINNED_RUNTIME_NOTICE_DESTINATION [==[${_preflight_probe_notice_destination}]==])\n"
+    "set(STAGE_PINNED_RUNTIME_NOTICE_SHA256 [==[${_preflight_notice_hash}]==])\n"
+    "include([==[${_runtime_stage_script_path}]==])\n"
+)
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" -P "${_preflight_probe_script}"
+    RESULT_VARIABLE _preflight_bad_notice_result
+    OUTPUT_QUIET
+    ERROR_QUIET
+)
+if(_preflight_bad_notice_result EQUAL 0)
+    message(FATAL_ERROR "Runtime preflight accepted a bad replacement notice")
+endif()
+if(EXISTS "${_preflight_probe_destination}/first.dll")
+    message(FATAL_ERROR "Notice preflight mutated the consumer before failure")
+endif()
+if(NOT EXISTS "${_preflight_probe_destination}/sentinel.dll" OR
+   NOT EXISTS "${_preflight_probe_existing_notice}")
+    message(FATAL_ERROR "Notice preflight removed existing consumer state")
+endif()
+file(SHA256
+    "${_preflight_probe_destination}/sentinel.dll"
+    _preflight_sentinel_actual_hash
+)
+file(SHA256
+    "${_preflight_probe_existing_notice}"
+    _preflight_existing_notice_actual_hash
+)
+if(NOT _preflight_sentinel_actual_hash STREQUAL _preflight_sentinel_hash OR
+   NOT _preflight_existing_notice_actual_hash STREQUAL
+       _preflight_existing_notice_hash)
+    message(FATAL_ERROR "Notice preflight changed existing consumer state")
+endif()
+file(REMOVE_RECURSE "${_preflight_probe_root}")
+
 set(_consumer_probe_root "${CMAKE_CURRENT_BINARY_DIR}/pinned-runtime-consumer-probe")
 set(_consumer_runtime_dir
     "${_consumer_probe_root}/Shaders/Upscaling/Streamline"
@@ -484,11 +620,16 @@ if(NOT _notice_source_hash STREQUAL _notice_consumer_hash)
 endif()
 
 set(_scrub_probe_dir "${CMAKE_CURRENT_BINARY_DIR}/raw-runtime-scrub-probe")
+set(_scrub_probe_notice
+    "${CMAKE_CURRENT_BINARY_DIR}/INTERNAL-NO-REDISTRIBUTION.txt"
+)
 file(REMOVE_RECURSE "${_scrub_probe_dir}")
 file(MAKE_DIRECTORY "${_scrub_probe_dir}/nested")
 file(WRITE "${_scrub_probe_dir}/nvngx_dlss.dll" "recognized but unverified\n")
 file(WRITE "${_scrub_probe_dir}/nested/sl.common.dll" "nested unverified\n")
+file(WRITE "${_scrub_probe_notice}" "stale local-runtime notice\n")
 set(STREAMLINE_DIRECTORY "${_scrub_probe_dir}")
+set(STREAMLINE_NOTICE_PATH "${_scrub_probe_notice}")
 include("${RUNTIME_SCRUB_SCRIPT}")
 file(GLOB_RECURSE _scrubbed_dlls
     LIST_DIRECTORIES FALSE
@@ -496,6 +637,9 @@ file(GLOB_RECURSE _scrubbed_dlls
 )
 if(_scrubbed_dlls)
     message(FATAL_ERROR "Raw package scrub retained runtime DLLs: ${_scrubbed_dlls}")
+endif()
+if(EXISTS "${_scrub_probe_notice}")
+    message(FATAL_ERROR "Raw package scrub retained the local-runtime notice")
 endif()
 
 set(_install_probe_root "${CMAKE_CURRENT_BINARY_DIR}/pinned-runtime-install-probe")

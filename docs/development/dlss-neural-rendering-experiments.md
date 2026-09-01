@@ -77,13 +77,27 @@ caller-path substitution that can affect vendor caller validation, not a
 signature or authentication mechanism. It requires explicit legal and license
 review before any distribution or use beyond this internal experiment.
 
-Local runtime staging is disabled by default. When explicitly enabled, it
-stages exactly seven files into `Shaders/Upscaling/Streamline`: the six
-normal-DLSS runtime modules and the patched 310.8 `nvngx_dlssnr.dll`. Configure
-fails if a source is absent or does not match its declared SHA-256. No runtime
-is downloaded. Set `CSX_STAGE_LOCAL_DLSS_RUNTIME=ON` and supply
-`CSX_LOCAL_DLSS_RUNTIME_DIRECTORY` and `CSX_LOCAL_DLSSNR_RUNTIME_FILE` through
-the CMake cache to select the private source files.
+Runtime staging is disabled by default. The source and default package retain
+`Shaders/Upscaling/Streamline` with its README and license notices but contain
+no NVIDIA DLLs. DLLs copied into that source directory are ignored by Git and
+excluded from packages. A user who does not stage at build time can instead
+copy a compatible runtime pack into the same directory in the completed mod or
+AIO output.
+
+Private local staging is enabled with `CSX_STAGE_LOCAL_DLSS_RUNTIME=ON` plus
+the `CSX_LOCAL_DLSS_RUNTIME_DIRECTORY` and
+`CSX_LOCAL_DLSSNR_RUNTIME_FILE` CMake cache paths. It stages exactly seven
+files: the six normal-DLSS runtime modules and the patched 310.8
+`nvngx_dlssnr.dll`. Configuration fails if a source is absent or does not match
+its declared SHA-256. Local staging performs no download and never writes a
+runtime into the source checkout.
+
+The verified official acquisition path from `main-VR` is retained behind the
+explicit `CSX_FETCH_OFFICIAL_STREAMLINE_RUNTIME=ON` network opt-in. It downloads
+the pinned NVIDIA Streamline 2.12 SDK release and stages only the six public
+normal-DLSS runtime modules; it does not supply Feature 18. This path can be
+advanced when an official Neural Rendering SDK is released. Official fetching
+and private local staging are mutually exclusive.
 
 The staged NR identity is the malware-screened but modified `8270...206` file
 selected by `CSX_LOCAL_DLSSNR_RUNTIME_FILE`. Its embedded NVIDIA signature

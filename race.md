@@ -111,7 +111,7 @@ Do not commit this file. Keep it updated after each new log. Each log entry shou
 | Field               | Value                                                                          |
 | ------------------- | ------------------------------------------------------------------------------ |
 | RC / build          | Not specified; current logging build                                           |
-| Log file            | `C:\Users\Win10\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`        |
+| Log file            | `%USERPROFILE%\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`         |
 | Log last write      | 2026-07-04 07:28:54                                                            |
 | Stabilizer active   | No evidence of active Stabilizer INI/profile application in selected lines     |
 | User result         | Render scale on, no Stabilizer INI: startup worked, no CTD, no worldspace loss |
@@ -146,7 +146,7 @@ Conclusions:
 | Field               | Value                                                                                                                     |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | RC / build          | Not specified; current uncommitted logging build after release-frame fix                                                  |
-| Log file            | `C:\Users\Win10\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`                                                   |
+| Log file            | `%USERPROFILE%\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`                                                    |
 | Log last write      | 2026-07-04 07:44:03                                                                                                       |
 | Stabilizer active   | Yes. `VRFpsStabilizerPlugin` interface is provided, and a later transition is `origin=VRAPI`.                             |
 | User result         | With Stabilizer on, worldspace is visible briefly and then disappears/goes black during RaceMenu.                         |
@@ -188,7 +188,7 @@ Conclusions:
 | Field               | Value                                                                                                                                                                                     |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | RC / build          | RC36                                                                                                                                                                                      |
-| Log file            | `C:\Users\Win10\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`                                                                                                                   |
+| Log file            | `%USERPROFILE%\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`                                                                                                                    |
 | Log last write      | 2026-07-04 08:05:19                                                                                                                                                                       |
 | Stabilizer active   | No Stabilizer INI / no VRAPI transition observed in selected lines                                                                                                                        |
 | User result         | RaceMenu visible and usable, but startup regressed to one stale eye after RaceMenu; user identifies this as the old issue previously fixed in `3e18869d4a4f194cf0acd0b717abfde9b2b6dd95`. |
@@ -225,7 +225,7 @@ Conclusions:
 | Field               | Value                                                                                                                                                              |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | RC / build          | RC36                                                                                                                                                               |
-| Log file            | `C:\Users\Win10\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`                                                                                            |
+| Log file            | `%USERPROFILE%\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`                                                                                             |
 | Log last write      | 2026-07-04 08:09:34                                                                                                                                                |
 | Stabilizer active   | Yes. `VRFpsStabilizerPlugin` interface is provided at startup, and the deferred relatch is `origin=VRAPI`.                                                         |
 | User result         | User reports the stale-eye symptom already from the beginning, matching the normal RC36 path, and then worldspace goes black when Stabilizer is on.                |
@@ -265,8 +265,8 @@ Conclusions:
 | Field               | Value                                                                                                                                               |
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | RC / build          | RC37                                                                                                                                                |
-| Log file            | `C:\Users\Win10\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`                                                                             |
-| Crash log           | `C:\Users\Win10\Documents\My Games\Skyrim VR\SKSE\crash-2026-07-04-07-35-15.log`                                                                    |
+| Log file            | `%USERPROFILE%\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`                                                                              |
+| Crash log           | `%USERPROFILE%\Documents\My Games\Skyrim VR\SKSE\crash-2026-07-04-07-35-15.log`                                                                     |
 | Log last write      | 2026-07-04 08:35:14                                                                                                                                 |
 | Stabilizer active   | No active profile application. Sync toggle is enabled and an INI is present, but the log says no unconditional Interior/Exterior profile was found. |
 | User result         | CTD during startup/RaceMenu baseline test without Stabilizer profile use.                                                                           |
@@ -300,7 +300,7 @@ Conclusions:
 | Field               | Value                                                                                                           |
 | ------------------- | --------------------------------------------------------------------------------------------------------------- |
 | RC / build          | RC37 plus latched-contract RaceSex bypass fix                                                                   |
-| Log file            | `C:\Users\Win10\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`                                         |
+| Log file            | `%USERPROFILE%\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`                                          |
 | Log last write      | 2026-07-04 08:56:22                                                                                             |
 | Stabilizer active   | Yes. `VRFpsStabilizerPlugin` interface is provided and the Stabilizer INI applies an Interior profile.          |
 | User result         | Stabilizer INI present: worldspace comes back after a short while. This is the current Stabilizer-INI baseline. |
@@ -340,7 +340,7 @@ Conclusions:
 | Field               | Value                                                                                                  |
 | ------------------- | ------------------------------------------------------------------------------------------------------ |
 | RC / build          | Current uncommitted early-intent / late-apply test                                                     |
-| Log file            | `C:\Users\Win10\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`                                |
+| Log file            | `%USERPROFILE%\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`                                 |
 | Log last write      | 2026-07-04 09:15:09                                                                                    |
 | Stabilizer active   | Yes. `VRFpsStabilizerPlugin` interface is provided and the Stabilizer INI applies an Interior profile. |
 | User result         | Worldspace still disappears after a short time.                                                        |
@@ -378,7 +378,7 @@ Conclusions:
 | Field               | Value                                                                                                                                       |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | RC / build          | Previous implementation before latest hold-tightening changes                                                                               |
-| Log file            | `C:\Users\Win10\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`                                                                     |
+| Log file            | `%USERPROFILE%\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`                                                                      |
 | Log last write      | 2026-07-04 09:56:15                                                                                                                         |
 | Stabilizer active   | Sync path is checked, but INI profile application is inactive. The log says no unconditional Interior/Exterior upscaling profile was found. |
 | User result         | INI inactive: all works, even though render scale is active in CS settings.                                                                 |
@@ -414,7 +414,7 @@ Conclusions:
 | Field               | Value                                                                                       |
 | ------------------- | ------------------------------------------------------------------------------------------- |
 | RC / build          | Current uncommitted startup Stabilizer hold test after latest hold-tightening changes       |
-| Log file            | `C:\Users\Win10\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`                     |
+| Log file            | `%USERPROFILE%\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`                      |
 | Log last write      | 2026-07-04 10:03:11                                                                         |
 | Stabilizer active   | Yes. `VRFpsStabilizerPlugin` interface is provided and the INI applies an Interior profile. |
 | User result         | Did not work; RaceMenu/worldspace still fails with Stabilizer INI active.                   |
@@ -454,7 +454,7 @@ Conclusions:
 | Field               | Value                                                                                                                                            |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | RC / build          | Post sync-toggle revert build                                                                                                                    |
-| Log file            | `C:\Users\Win10\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`                                                                          |
+| Log file            | `%USERPROFILE%\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`                                                                           |
 | Log last write      | 2026-07-04 11:52:05                                                                                                                              |
 | Stabilizer active   | Yes. Community Shaders provides the plugin interface to `VRFpsStabilizerPlugin`.                                                                 |
 | User result         | Worldspace appears briefly, then disappears/goes black after a couple of seconds.                                                                |
@@ -491,7 +491,7 @@ Conclusions:
 | Field               | Value                                                                                                                |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | RC / build          | Current branch with CS-side VR FPS Stabilizer Sync active                                                            |
-| Log file            | `C:\Users\Win10\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`                                              |
+| Log file            | `%USERPROFILE%\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`                                               |
 | Log last write      | 2026-07-04 12:59:43                                                                                                  |
 | Stabilizer active   | Yes. Community Shaders provides the plugin interface to `VRFpsStabilizerPlugin`, and CS reads `VRFpsStabilizer.ini`. |
 | User result         | Modified Stabilizer build: worldspace immediately black.                                                             |

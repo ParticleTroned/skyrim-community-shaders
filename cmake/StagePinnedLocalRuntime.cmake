@@ -26,12 +26,12 @@ if(NOT _runtime_manifest_hash STREQUAL _runtime_manifest_expected_hash)
     )
 endif()
 
-file(MAKE_DIRECTORY "${STAGE_PINNED_RUNTIME_DESTINATION}")
 file(STRINGS "${STAGE_PINNED_RUNTIME_MANIFEST}" _runtime_manifest_entries)
 if(NOT _runtime_manifest_entries)
     message(FATAL_ERROR "The pinned runtime manifest is empty")
 endif()
 
+# Validate the complete transaction before changing a consumer directory.
 set(_runtime_expected_names "")
 foreach(_manifest_entry IN LISTS _runtime_manifest_entries)
     string(REPLACE "|" ";" _manifest_fields "${_manifest_entry}")
@@ -64,15 +64,108 @@ foreach(_manifest_entry IN LISTS _runtime_manifest_entries)
         )
     endif()
 
+endforeach()
+
+set(_runtime_notice_destination "")
+if(DEFINED STAGE_PINNED_RUNTIME_NOTICE_SOURCE AND
+   NOT "${STAGE_PINNED_RUNTIME_NOTICE_SOURCE}" STREQUAL "")
+    if(NOT EXISTS "${STAGE_PINNED_RUNTIME_NOTICE_SOURCE}")
+        message(FATAL_ERROR
+            "Pinned runtime notice is missing: ${STAGE_PINNED_RUNTIME_NOTICE_SOURCE}"
+        )
+    endif()
+    if(NOT DEFINED STAGE_PINNED_RUNTIME_NOTICE_DESTINATION OR
+       "${STAGE_PINNED_RUNTIME_NOTICE_DESTINATION}" STREQUAL "")
+        message(FATAL_ERROR
+            "STAGE_PINNED_RUNTIME_NOTICE_DESTINATION is required"
+        )
+    endif()
+    if(NOT DEFINED STAGE_PINNED_RUNTIME_NOTICE_SHA256 OR
+       "${STAGE_PINNED_RUNTIME_NOTICE_SHA256}" STREQUAL "")
+        message(FATAL_ERROR "STAGE_PINNED_RUNTIME_NOTICE_SHA256 is required")
+    endif()
+    file(SHA256 "${STAGE_PINNED_RUNTIME_NOTICE_SOURCE}" _runtime_notice_hash)
+    string(TOUPPER "${_runtime_notice_hash}" _runtime_notice_hash)
+    string(
+        TOUPPER
+        "${STAGE_PINNED_RUNTIME_NOTICE_SHA256}"
+        _runtime_notice_expected_hash
+    )
+    if(NOT _runtime_notice_hash STREQUAL _runtime_notice_expected_hash)
+        message(FATAL_ERROR
+            "Pinned runtime notice source hash mismatch: ${_runtime_notice_hash}"
+        )
+    endif()
+    get_filename_component(
+        _runtime_notice_name "${STAGE_PINNED_RUNTIME_NOTICE_SOURCE}" NAME
+    )
+    set(
+        _runtime_notice_destination
+        "${STAGE_PINNED_RUNTIME_NOTICE_DESTINATION}/${_runtime_notice_name}"
+    )
+endif()
+
+get_filename_component(
+    _runtime_work_directory "${STAGE_PINNED_RUNTIME_MANIFEST}" DIRECTORY
+)
+string(SHA256
+    _runtime_destination_key "${STAGE_PINNED_RUNTIME_DESTINATION}"
+)
+set(
+    _runtime_pending_directory
+    "${_runtime_work_directory}/pending-${_runtime_destination_key}"
+)
+file(REMOVE_RECURSE "${_runtime_pending_directory}")
+file(MAKE_DIRECTORY "${_runtime_pending_directory}")
+
+foreach(_manifest_entry IN LISTS _runtime_manifest_entries)
+    string(REPLACE "|" ";" _manifest_fields "${_manifest_entry}")
+    list(GET _manifest_fields 0 _runtime_name)
+    list(GET _manifest_fields 1 _runtime_source)
+    list(GET _manifest_fields 2 _expected_hash)
+    set(_runtime_pending "${_runtime_pending_directory}/${_runtime_name}")
+    file(COPY_FILE "${_runtime_source}" "${_runtime_pending}")
+    file(SHA256 "${_runtime_pending}" _pending_hash)
+    string(TOUPPER "${_pending_hash}" _pending_hash)
+    string(TOUPPER "${_expected_hash}" _expected_hash)
+    if(NOT _pending_hash STREQUAL _expected_hash)
+        message(FATAL_ERROR
+            "Pending runtime hash mismatch for ${_runtime_name}: ${_pending_hash}"
+        )
+    endif()
+endforeach()
+
+# Private payloads receive their verified warning before any consumer DLLs.
+if(NOT "${_runtime_notice_destination}" STREQUAL "")
+    file(MAKE_DIRECTORY "${STAGE_PINNED_RUNTIME_NOTICE_DESTINATION}")
+    file(
+        COPY_FILE
+        "${STAGE_PINNED_RUNTIME_NOTICE_SOURCE}"
+        "${_runtime_notice_destination}"
+        ONLY_IF_DIFFERENT
+    )
+    file(SHA256 "${_runtime_notice_destination}" _runtime_notice_hash)
+    string(TOUPPER "${_runtime_notice_hash}" _runtime_notice_hash)
+    if(NOT _runtime_notice_hash STREQUAL _runtime_notice_expected_hash)
+        message(FATAL_ERROR
+            "Pinned runtime notice hash mismatch: ${_runtime_notice_hash}"
+        )
+    endif()
+endif()
+
+file(MAKE_DIRECTORY "${STAGE_PINNED_RUNTIME_DESTINATION}")
+foreach(_manifest_entry IN LISTS _runtime_manifest_entries)
+    string(REPLACE "|" ";" _manifest_fields "${_manifest_entry}")
+    list(GET _manifest_fields 0 _runtime_name)
+    list(GET _manifest_fields 2 _expected_hash)
+    set(_runtime_pending "${_runtime_pending_directory}/${_runtime_name}")
     set(_runtime_destination
         "${STAGE_PINNED_RUNTIME_DESTINATION}/${_runtime_name}"
     )
-    file(
-        COPY_FILE "${_runtime_source}" "${_runtime_destination}"
-        ONLY_IF_DIFFERENT
-    )
+    file(COPY_FILE "${_runtime_pending}" "${_runtime_destination}")
     file(SHA256 "${_runtime_destination}" _destination_hash)
     string(TOUPPER "${_destination_hash}" _destination_hash)
+    string(TOUPPER "${_expected_hash}" _expected_hash)
     if(NOT _destination_hash STREQUAL _expected_hash)
         message(FATAL_ERROR
             "Staged runtime hash mismatch for ${_runtime_destination}: ${_destination_hash}"
@@ -103,49 +196,14 @@ foreach(_runtime_destination_dll IN LISTS _runtime_destination_dlls)
     endif()
 endforeach()
 
-if(DEFINED STAGE_PINNED_RUNTIME_NOTICE_SOURCE AND
-   NOT "${STAGE_PINNED_RUNTIME_NOTICE_SOURCE}" STREQUAL "")
-    if(NOT EXISTS "${STAGE_PINNED_RUNTIME_NOTICE_SOURCE}")
-        message(FATAL_ERROR
-            "Pinned runtime notice is missing: ${STAGE_PINNED_RUNTIME_NOTICE_SOURCE}"
-        )
-    endif()
-    if(NOT DEFINED STAGE_PINNED_RUNTIME_NOTICE_DESTINATION OR
-       "${STAGE_PINNED_RUNTIME_NOTICE_DESTINATION}" STREQUAL "")
-        message(FATAL_ERROR
-            "STAGE_PINNED_RUNTIME_NOTICE_DESTINATION is required"
-        )
-    endif()
-    file(MAKE_DIRECTORY "${STAGE_PINNED_RUNTIME_NOTICE_DESTINATION}")
-    get_filename_component(
-        _runtime_notice_name "${STAGE_PINNED_RUNTIME_NOTICE_SOURCE}" NAME
+if("${_runtime_notice_destination}" STREQUAL "" AND
+   DEFINED STAGE_PINNED_RUNTIME_NOTICE_DESTINATION AND
+   NOT "${STAGE_PINNED_RUNTIME_NOTICE_DESTINATION}" STREQUAL "")
+    file(REMOVE
+        "${STAGE_PINNED_RUNTIME_NOTICE_DESTINATION}/INTERNAL-NO-REDISTRIBUTION.txt"
     )
-    set(
-        _runtime_notice_destination
-        "${STAGE_PINNED_RUNTIME_NOTICE_DESTINATION}/${_runtime_notice_name}"
-    )
-    file(
-        COPY_FILE
-        "${STAGE_PINNED_RUNTIME_NOTICE_SOURCE}"
-        "${_runtime_notice_destination}"
-        ONLY_IF_DIFFERENT
-    )
-    if(DEFINED STAGE_PINNED_RUNTIME_NOTICE_SHA256 AND
-       NOT "${STAGE_PINNED_RUNTIME_NOTICE_SHA256}" STREQUAL "")
-        file(SHA256 "${_runtime_notice_destination}" _runtime_notice_hash)
-        string(TOUPPER "${_runtime_notice_hash}" _runtime_notice_hash)
-        string(
-            TOUPPER
-            "${STAGE_PINNED_RUNTIME_NOTICE_SHA256}"
-            _runtime_notice_expected_hash
-        )
-        if(NOT _runtime_notice_hash STREQUAL _runtime_notice_expected_hash)
-            message(FATAL_ERROR
-                "Pinned runtime notice hash mismatch: ${_runtime_notice_hash}"
-            )
-        endif()
-    endif()
 endif()
+file(REMOVE_RECURSE "${_runtime_pending_directory}")
 
 if(DEFINED STAGE_PINNED_RUNTIME_STAMP AND
    NOT "${STAGE_PINNED_RUNTIME_STAMP}" STREQUAL "")

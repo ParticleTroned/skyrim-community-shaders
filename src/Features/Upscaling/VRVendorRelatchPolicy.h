@@ -649,6 +649,30 @@ namespace VRVendorRelatchPolicy
 		       (!a_state.isVR || !a_state.relatchInProgress);
 	}
 
+	struct MainPassProviderQuiesceAdmission
+	{
+		bool isVR = false;
+		bool relatchPending = false;
+		bool relatchPlanValid = false;
+		bool relatchPlanOwnsTargetEpoch = false;
+		bool vendorEvaluationSelected = false;
+		bool previousProviderMatches = false;
+		bool destroysProviderResources = false;
+	};
+
+	// A replacement cannot prove its predecessor idle while the native main pass
+	// keeps submitting work to the provider that its admitted plan will destroy.
+	[[nodiscard]] constexpr bool ShouldQuiesceMainPassProvider(
+		const MainPassProviderQuiesceAdmission& a_state) noexcept
+	{
+		return a_state.isVR && a_state.relatchPending &&
+		       a_state.relatchPlanValid &&
+		       a_state.relatchPlanOwnsTargetEpoch &&
+		       a_state.vendorEvaluationSelected &&
+		       a_state.previousProviderMatches &&
+		       a_state.destroysProviderResources;
+	}
+
 	struct NativeRestorePresentationAdmission
 	{
 		bool targetUsesVendorEvaluation = false;

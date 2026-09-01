@@ -55568,11 +55568,43 @@ void Upscaling::Upscale()
 	// this frame. Dispatch only the method whose dimensions/resources it planned.
 	const auto upscaleMethod = runtimeResolutionPlan.upscaleMethod;
 	bool vendorLifecycleMutationDeferred = false;
+	bool quiesceMainPassProvider = false;
 	if (globals::game::isVR) {
 		vrMainPassVendorDispatchCompletedFrame.store(
 			0,
 			std::memory_order_release);
 		vendorLifecycleMutationDeferred = ShouldDeferVRVendorLifecycleMutation();
+		const bool relatchPending =
+			pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+			pendingPerfModeRenderTargetRecreateFrame.load(std::memory_order_acquire) != 0 ||
+			pendingPerfModeRenderTargetRecreatePostLoadSettle.load(std::memory_order_acquire) ||
+			perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire);
+		if (relatchPending) {
+			const auto transition = GetVRRenderScaleTransitionSnapshot();
+			const auto& relatchPlan = transition.relatchPlan;
+			const bool destroysCurrentProvider =
+				(upscaleMethod == UpscaleMethod::kDLSS && relatchPlan.destroyDLSSResources) ||
+				(upscaleMethod == UpscaleMethod::kFSR && relatchPlan.destroyFSRResources);
+			quiesceMainPassProvider =
+				VRVendorRelatchPolicy::ShouldQuiesceMainPassProvider({
+					.isVR = true,
+					.relatchPending = true,
+					.relatchPlanValid = relatchPlan.valid,
+					.relatchPlanOwnsTargetEpoch =
+						relatchPlan.transitionEpoch != 0 &&
+						relatchPlan.transitionEpoch == transition.targetEpoch,
+					.vendorEvaluationSelected = IsVendorUpscalingMethod(upscaleMethod),
+					.previousProviderMatches =
+						relatchPlan.previousVendorMethod == upscaleMethod,
+					.destroysProviderResources = destroysCurrentProvider,
+				});
+		}
+	}
+	if (quiesceMainPassProvider) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		recordMainPassStage(VRMainPassDispatchStage::LifecycleDeferred);
+#endif
+		return;
 	}
 	// A gate owns backend mutation, not a compatible authoritative provider.
 	// Continue evaluating RC173's existing physical contract while a replacement

@@ -684,6 +684,26 @@ namespace
 		return true;
 	}
 
+	constexpr bool CoversMainPassProviderQuiesceAdmission()
+	{
+		for (std::uint32_t bits = 0; bits < (1u << 7); ++bits) {
+			const MainPassProviderQuiesceAdmission state{
+				.isVR = (bits & (1u << 0)) != 0,
+				.relatchPending = (bits & (1u << 1)) != 0,
+				.relatchPlanValid = (bits & (1u << 2)) != 0,
+				.relatchPlanOwnsTargetEpoch = (bits & (1u << 3)) != 0,
+				.vendorEvaluationSelected = (bits & (1u << 4)) != 0,
+				.previousProviderMatches = (bits & (1u << 5)) != 0,
+				.destroysProviderResources = (bits & (1u << 6)) != 0,
+			};
+			const bool expected = bits == ((1u << 7) - 1u);
+			if (ShouldQuiesceMainPassProvider(state) != expected)
+				return false;
+		}
+
+		return true;
+	}
+
 	constexpr bool CoversNativeRestorePresentationAdmission()
 	{
 		for (std::uint32_t bits = 0; bits < (1u << 3); ++bits) {
@@ -3199,6 +3219,7 @@ namespace
 	static_assert(CoversPresentationStabilizationSelection());
 	static_assert(CoversLifecycleMutationAdmission());
 	static_assert(CoversDispatchAdmission());
+	static_assert(CoversMainPassProviderQuiesceAdmission());
 	static_assert(CoversNativeRestorePresentationAdmission());
 	static_assert(CoversInactiveContractNativeReleaseAdmission());
 	static_assert(kNativeRestoreMaximumRecoveryAttempts == 2u);

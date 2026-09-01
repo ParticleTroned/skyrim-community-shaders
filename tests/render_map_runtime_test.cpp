@@ -125,26 +125,34 @@ namespace
 		Check(runtime.StartCapture(config) == StartResult::kStarted, "identity capture did not start");
 		{
 			auto first = runtime.EnterTechnique({
-				.shader = 0x4444, .shaderType = 5, .fxpFilename = "ImageSpace",
+				.shader = 0x4444,
+				.shaderType = 5,
+				.fxpFilename = "ImageSpace",
 				.imageSpaceName = "ISCopy",
 			});
 		}
 		{
 			auto repeated = runtime.EnterTechnique({
-				.shader = 0x4444, .shaderType = 5, .fxpFilename = "ImageSpace",
+				.shader = 0x4444,
+				.shaderType = 5,
+				.fxpFilename = "ImageSpace",
 				.imageSpaceName = "ISCopy",
 			});
 		}
 		{
 			auto changed = runtime.EnterTechnique({
-				.shader = 0x4444, .shaderType = 5, .fxpFilename = "ImageSpace",
+				.shader = 0x4444,
+				.shaderType = 5,
+				.fxpFilename = "ImageSpace",
 				.imageSpaceName = "ISBlur3",
 			});
 		}
 		runtime.RetireShaderObservation(0x4444);
 		{
 			auto reused = runtime.EnterTechnique({
-				.shader = 0x4444, .shaderType = 5, .fxpFilename = "ImageSpace",
+				.shader = 0x4444,
+				.shaderType = 5,
+				.fxpFilename = "ImageSpace",
 				.imageSpaceName = "ISBlur3",
 			});
 		}
@@ -212,7 +220,10 @@ namespace
 		Check(runtime.StartCapture(config) == StartResult::kStarted, "stage identity capture did not start");
 		{
 			auto technique = runtime.EnterTechnique({
-				.shader = 0x1000, .shaderType = 6, .vertexDescriptor = 7, .pixelDescriptor = 8,
+				.shader = 0x1000,
+				.shaderType = 6,
+				.vertexDescriptor = 7,
+				.pixelDescriptor = 8,
 				.fxpFilename = "Lighting",
 			});
 			runtime.RecordTechniqueResolution({
@@ -224,8 +235,11 @@ namespace
 				.vertex = {
 					.route = ShaderSelectionRoute::kCSXCache,
 					.shader = {
-						.stage = ShaderStage::kVertex, .wrapper = 0x2000, .d3dObject = 0x3000,
-						.wrapperDescriptor = 17, .bytecodeSize = 128,
+						.stage = ShaderStage::kVertex,
+						.wrapper = 0x2000,
+						.d3dObject = 0x3000,
+						.wrapperDescriptor = 17,
+						.bytecodeSize = 128,
 						.bytecodeSha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 						.cachePath = "Data/ShaderCache/Lighting/11.vso",
 					},
@@ -233,8 +247,11 @@ namespace
 				.pixel = {
 					.route = ShaderSelectionRoute::kEngine,
 					.shader = {
-						.stage = ShaderStage::kPixel, .wrapper = 0x4000, .d3dObject = 0x5000,
-						.wrapperDescriptor = 18, .bytecodeSize = 256,
+						.stage = ShaderStage::kPixel,
+						.wrapper = 0x4000,
+						.d3dObject = 0x5000,
+						.wrapperDescriptor = 18,
+						.bytecodeSize = 256,
 						.bytecodeSha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 					},
 				},
@@ -255,7 +272,8 @@ namespace
 		Check(snapshot->events[4].payload.words[4] != 0 && snapshot->events[4].payload.words[5] != 0,
 			"resolution did not reference both selected stage shaders");
 		Check(std::string_view(snapshot->stageShaderObservations[0].cachePath.data()) ==
-			"Data/ShaderCache/Lighting/11.vso", "stage cache path was not retained");
+				  "Data/ShaderCache/Lighting/11.vso",
+			"stage cache path was not retained");
 	}
 
 	void TestStageShaderObservationBoundIsExplicit()
@@ -306,13 +324,11 @@ namespace
 			.shaderFound = true,
 			.vertex = {
 				.route = ShaderSelectionRoute::kCSXCache,
-				.shader = { .stage = ShaderStage::kVertex, .wrapper = 0x2000, .d3dObject = 0x3000,
-					.wrapperDescriptor = 17, .bytecodeSize = 128 },
+				.shader = { .stage = ShaderStage::kVertex, .wrapper = 0x2000, .d3dObject = 0x3000, .wrapperDescriptor = 17, .bytecodeSize = 128 },
 			},
 			.pixel = {
 				.route = ShaderSelectionRoute::kEngine,
-				.shader = { .stage = ShaderStage::kPixel, .wrapper = 0x4000, .d3dObject = 0x5000,
-					.wrapperDescriptor = 18, .bytecodeSize = 256 },
+				.shader = { .stage = ShaderStage::kPixel, .wrapper = 0x4000, .d3dObject = 0x5000, .wrapperDescriptor = 18, .bytecodeSize = 256 },
 			},
 		});
 		runtime.RecordDraw(0x9000, DrawOperation::kDrawIndexed, 24, 3, 2);
@@ -331,7 +347,7 @@ namespace
 		Check(context->payload.words[1] == 0x9000 && context->payload.words[2] == 1,
 			"immediate-context pointer evidence is wrong");
 		Check(std::count_if(snapshot->events.begin(), snapshot->events.end(),
-			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDeviceContextObserved; }) == 1,
+				  [](const EventRecord& a_event) { return a_event.kind == EventKind::kDeviceContextObserved; }) == 1,
 			"immediate context was declared more than once");
 		const auto draw = std::find_if(snapshot->events.begin(), snapshot->events.end(),
 			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; });
@@ -347,14 +363,15 @@ namespace
 		Check(draw->commandStreamSequence == 4,
 			"draw command-stream sequence did not include the three observed stage binds");
 		Check(std::count_if(snapshot->events.begin(), snapshot->events.end(),
-			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; }) == 1,
+				  [](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; }) == 1,
 			"non-immediate context draw was recorded");
 		const auto dispatch = std::find_if(snapshot->events.begin(), snapshot->events.end(),
 			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDispatch; });
 		Check(dispatch != snapshot->events.end() && dispatch->payload.words[2] != 0,
 			"dispatch did not reference its compute shader");
 		Check(dispatch->payload.words[3] == 8 && dispatch->payload.words[4] == 4 &&
-			dispatch->payload.words[5] == 2, "dispatch arguments are wrong");
+				  dispatch->payload.words[5] == 2,
+			"dispatch arguments are wrong");
 		Check(dispatch->deviceContextObservationId == context->deviceContextObservationId,
 			"dispatch did not join to the declared immediate context");
 		Check(dispatch->commandStreamSequence == 5,
@@ -392,28 +409,28 @@ namespace
 		Check(snapshot && snapshot->stageShaderObservations.size() == 2,
 			"first captured draw did not seed inherited stage identities");
 		Check(snapshot->stageShaderObservations[0].bytecodeSize == 128 &&
-			std::string_view(snapshot->stageShaderObservations[0].bytecodeSha256.data()) ==
-				"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				  std::string_view(snapshot->stageShaderObservations[0].bytecodeSha256.data()) ==
+					  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			"inherited vertex bytecode provenance is missing");
 		Check(snapshot->stageShaderObservations[1].bytecodeSize == 256 &&
-			std::string_view(snapshot->stageShaderObservations[1].bytecodeSha256.data()) ==
-				"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+				  std::string_view(snapshot->stageShaderObservations[1].bytecodeSha256.data()) ==
+					  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 			"inherited pixel bytecode provenance is missing");
 		Check(snapshot->stageShaderObservations[0].engineAliasCount == 2 &&
-			snapshot->stageShaderObservations[0].engineAliasTotalCount == 2 &&
-			std::string_view(snapshot->stageShaderObservations[0].engineAliases[0].loaderType.data()) == "Lighting" &&
-			std::string_view(snapshot->stageShaderObservations[0].engineAliases[0].compileSourceName.data()) == "Lighting" &&
-			snapshot->stageShaderObservations[0].engineAliases[0].descriptor == 17 &&
-			std::string_view(snapshot->stageShaderObservations[0].engineAliases[1].loaderType.data()) == "Utility" &&
-			std::string_view(snapshot->stageShaderObservations[0].engineAliases[1].compileSourceName.data()) == "Utility" &&
-			snapshot->stageShaderObservations[0].engineAliases[1].descriptor == 9 &&
-			!snapshot->stageShaderObservations[0].engineAliasesTruncated,
+				  snapshot->stageShaderObservations[0].engineAliasTotalCount == 2 &&
+				  std::string_view(snapshot->stageShaderObservations[0].engineAliases[0].loaderType.data()) == "Lighting" &&
+				  std::string_view(snapshot->stageShaderObservations[0].engineAliases[0].compileSourceName.data()) == "Lighting" &&
+				  snapshot->stageShaderObservations[0].engineAliases[0].descriptor == 17 &&
+				  std::string_view(snapshot->stageShaderObservations[0].engineAliases[1].loaderType.data()) == "Utility" &&
+				  std::string_view(snapshot->stageShaderObservations[0].engineAliases[1].compileSourceName.data()) == "Utility" &&
+				  snapshot->stageShaderObservations[0].engineAliases[1].descriptor == 9 &&
+				  !snapshot->stageShaderObservations[0].engineAliasesTruncated,
 			"inherited engine shader aliases were not retained or deduplicated");
 		Check(snapshot->stageShaderObservations[1].engineAliasCount == 1 &&
-			std::string_view(snapshot->stageShaderObservations[1].engineAliases[0].loaderType.data()) ==
-				"ISHDRDownSample4" &&
-			std::string_view(snapshot->stageShaderObservations[1].engineAliases[0].compileSourceName.data()) ==
-				"ISHDR",
+				  std::string_view(snapshot->stageShaderObservations[1].engineAliases[0].loaderType.data()) ==
+					  "ISHDRDownSample4" &&
+				  std::string_view(snapshot->stageShaderObservations[1].engineAliases[0].compileSourceName.data()) ==
+					  "ISHDR",
 			"ImageSpace loader alias did not retain its distinct shared compile source");
 		const auto draw = std::find_if(snapshot->events.begin(), snapshot->events.end(),
 			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; });
@@ -450,11 +467,11 @@ namespace
 		Check(snapshot && snapshot->stageShaderObservations.size() == 2,
 			"reused D3D pointer was merged across creation identities");
 		Check(snapshot->stageShaderObservations[0].pointerGeneration == 1 &&
-			snapshot->stageShaderObservations[1].pointerGeneration == 2,
+				  snapshot->stageShaderObservations[1].pointerGeneration == 2,
 			"reused D3D pointer did not advance its capture-local generation");
 		Check(snapshot->stageShaderObservations[1].bytecodeSize == 96 &&
-			std::string_view(snapshot->stageShaderObservations[1].bytecodeSha256.data()) ==
-				"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+				  std::string_view(snapshot->stageShaderObservations[1].bytecodeSha256.data()) ==
+					  "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
 			"reused D3D pointer retained stale creation provenance");
 		std::vector<std::uint64_t> vertexIds;
 		for (const auto& event : snapshot->events) {
@@ -462,7 +479,7 @@ namespace
 				vertexIds.push_back(event.payload.words[2]);
 		}
 		Check(vertexIds.size() == 2 && vertexIds[0] != 0 && vertexIds[1] != 0 &&
-			vertexIds[0] != vertexIds[1],
+				  vertexIds[0] != vertexIds[1],
 			"draws did not distinguish reused stage objects");
 	}
 
@@ -506,15 +523,15 @@ namespace
 			"compatible selected-stage evidence was mistaken for pointer reuse");
 		const auto& shader = snapshot->stageShaderObservations[0];
 		Check(shader.pointerGeneration == 1 && shader.wrapperEvidence == 0xC200 &&
-			shader.wrapperDescriptor == 66,
+				  shader.wrapperDescriptor == 66,
 			"selected-stage wrapper evidence did not enrich the original observation");
 		Check(shader.bytecodeSize == 128 && std::string_view(shader.bytecodeSha256.data()) == bytecodeSha &&
-			std::string_view(shader.cachePath.data()) == "Data/ShaderCache/Effect/42.vso",
+				  std::string_view(shader.cachePath.data()) == "Data/ShaderCache/Effect/42.vso",
 			"selected-stage bytecode or cache provenance was not retained");
 		Check(shader.engineAliasCount == 1 && shader.engineAliasTotalCount == 1 &&
-			std::string_view(shader.engineAliases[0].loaderType.data()) == "Effect" &&
-			std::string_view(shader.engineAliases[0].compileSourceName.data()) == "Effect" &&
-			shader.engineAliases[0].descriptor == 66,
+				  std::string_view(shader.engineAliases[0].loaderType.data()) == "Effect" &&
+				  std::string_view(shader.engineAliases[0].compileSourceName.data()) == "Effect" &&
+				  shader.engineAliases[0].descriptor == 66,
 			"selected-stage engine alias did not enrich the original observation");
 
 		const auto resolved = std::find_if(snapshot->events.begin(), snapshot->events.end(),
@@ -522,8 +539,8 @@ namespace
 		const auto draw = std::find_if(snapshot->events.begin(), snapshot->events.end(),
 			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; });
 		Check(resolved != snapshot->events.end() && draw != snapshot->events.end() &&
-			resolved->payload.words[4] == shader.observationId &&
-			draw->payload.words[2] == shader.observationId,
+				  resolved->payload.words[4] == shader.observationId &&
+				  draw->payload.words[2] == shader.observationId,
 			"technique resolution and draw did not join the enriched stage identity");
 	}
 
@@ -551,10 +568,10 @@ namespace
 		Check(snapshot->targetBindingObservations.size() == 2,
 			"bound and explicitly unbound target sets were not catalogued exactly once");
 		Check(std::count_if(snapshot->events.begin(), snapshot->events.end(),
-			[](const EventRecord& a_event) { return a_event.kind == EventKind::kTargetViewObserved; }) == 3,
+				  [](const EventRecord& a_event) { return a_event.kind == EventKind::kTargetViewObserved; }) == 3,
 			"target-view first-seen declarations are wrong");
 		Check(std::count_if(snapshot->events.begin(), snapshot->events.end(),
-			[](const EventRecord& a_event) { return a_event.kind == EventKind::kRenderTargetBind; }) == 3,
+				  [](const EventRecord& a_event) { return a_event.kind == EventKind::kRenderTargetBind; }) == 3,
 			"output-merger bind calls were not preserved");
 
 		std::vector<const EventRecord*> draws;
@@ -572,13 +589,13 @@ namespace
 		Check(draws[2]->targetBindingObservationId == unboundId,
 			"explicit target unbind was not joined to the next draw");
 		Check(draws[0]->commandStreamSequence == 3 && draws[1]->commandStreamSequence == 5 &&
-			draws[2]->commandStreamSequence == 7,
+				  draws[2]->commandStreamSequence == 7,
 			"output-merger calls were not included in monotonic command order");
 		Check(snapshot->targetBindingObservations[0].renderTargetCount == 3 &&
-			snapshot->targetBindingObservations[0].renderTargetObservationIds[0] != 0 &&
-			snapshot->targetBindingObservations[0].renderTargetObservationIds[1] != 0 &&
-			snapshot->targetBindingObservations[0].renderTargetObservationIds[2] == 0 &&
-			snapshot->targetBindingObservations[0].depthTargetObservationId != 0,
+				  snapshot->targetBindingObservations[0].renderTargetObservationIds[0] != 0 &&
+				  snapshot->targetBindingObservations[0].renderTargetObservationIds[1] != 0 &&
+				  snapshot->targetBindingObservations[0].renderTargetObservationIds[2] == 0 &&
+				  snapshot->targetBindingObservations[0].depthTargetObservationId != 0,
 			"output-merger binding did not preserve slots, nulls, and depth target");
 	}
 
@@ -610,7 +627,7 @@ namespace
 		const auto draw = std::find_if(snapshot->events.begin(), snapshot->events.end(),
 			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; });
 		Check(binding != snapshot->events.end() &&
-			binding->payload.words[2] == static_cast<std::uint64_t>(TargetBindingSource::kCaptureStateSnapshot),
+				  binding->payload.words[2] == static_cast<std::uint64_t>(TargetBindingSource::kCaptureStateSnapshot),
 			"effective output-merger snapshot provenance was not retained");
 		Check(draw != snapshot->events.end() && draw->targetBindingObservationId != 0,
 			"first draw did not consume the effective output-merger snapshot");
@@ -680,24 +697,34 @@ namespace
 		Check(runtime.StartCapture(config) == StartResult::kStarted, "resource-flow capture did not start");
 
 		const ResourceObservationInput source{
-			.d3dObject = 0xE100, .dimension = ResourceDimension::kTexture2D,
-			.widthOrBytes = 1024, .height = 512, .depthOrArraySize = 2, .mipLevels = 4,
-			.format = 28, .sampleCount = 1, .bindFlags = 0x28,
+			.d3dObject = 0xE100,
+			.dimension = ResourceDimension::kTexture2D,
+			.widthOrBytes = 1024,
+			.height = 512,
+			.depthOrArraySize = 2,
+			.mipLevels = 4,
+			.format = 28,
+			.sampleCount = 1,
+			.bindFlags = 0x28,
 		};
 		const ResourceObservationInput destination{
-			.d3dObject = 0xE200, .dimension = ResourceDimension::kTexture2D,
-			.widthOrBytes = 1024, .height = 512, .depthOrArraySize = 2, .mipLevels = 4,
-			.format = 28, .sampleCount = 1, .bindFlags = 0x28,
+			.d3dObject = 0xE200,
+			.dimension = ResourceDimension::kTexture2D,
+			.widthOrBytes = 1024,
+			.height = 512,
+			.depthOrArraySize = 2,
+			.mipLevels = 4,
+			.format = 28,
+			.sampleCount = 1,
+			.bindFlags = 0x28,
 		};
 		const ResourceViewInput srv{
 			.resource = source,
-			.view = { .kind = TargetViewKind::kShaderResource, .d3dObject = 0xE300,
-				.format = 28, .dimension = 5, .mipSlice = 1, .arraySize = 3 },
+			.view = { .kind = TargetViewKind::kShaderResource, .d3dObject = 0xE300, .format = 28, .dimension = 5, .mipSlice = 1, .arraySize = 3 },
 		};
 		const ResourceViewInput rtv{
 			.resource = destination,
-			.view = { .kind = TargetViewKind::kRenderTarget, .d3dObject = 0xE400,
-				.format = 28, .dimension = 5, .mipSlice = 0, .firstArraySlice = 1, .arraySize = 1 },
+			.view = { .kind = TargetViewKind::kRenderTarget, .d3dObject = 0xE400, .format = 28, .dimension = 5, .mipSlice = 0, .firstArraySlice = 1, .arraySize = 1 },
 		};
 		runtime.BindResourceViews(
 			0xE000, ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 7, 1, &srv);
@@ -714,26 +741,26 @@ namespace
 		Check(snapshot->targetViewObservations.size() == 2,
 			"typed SRV and RTV observations were not retained");
 		Check(std::count_if(snapshot->events.begin(), snapshot->events.end(),
-			[](const EventRecord& a_event) { return a_event.kind == EventKind::kResourceObserved; }) == 2,
+				  [](const EventRecord& a_event) { return a_event.kind == EventKind::kResourceObserved; }) == 2,
 			"resource first-seen declarations are wrong");
 		const auto bind = std::find_if(snapshot->events.begin(), snapshot->events.end(),
 			[](const EventRecord& a_event) { return a_event.kind == EventKind::kResourceViewBind; });
 		Check(bind != snapshot->events.end() && bind->payload.words[0] != 0 &&
-			bind->payload.words[2] == static_cast<std::uint64_t>(ResourceStage::kPixel) &&
-			bind->payload.words[3] == 7 && bind->commandStreamSequence == 1,
+				  bind->payload.words[2] == static_cast<std::uint64_t>(ResourceStage::kPixel) &&
+				  bind->payload.words[3] == 7 && bind->commandStreamSequence == 1,
 			"ordered pixel SRV binding was not recorded");
 		const auto flow = std::find_if(snapshot->events.begin(), snapshot->events.end(),
 			[](const EventRecord& a_event) { return a_event.kind == EventKind::kResourceFlow; });
 		Check(flow != snapshot->events.end() && flow->payload.words[1] != 0 && flow->payload.words[2] != 0 &&
-			flow->payload.words[3] == 2 && flow->payload.words[4] == 1 && flow->commandStreamSequence == 4,
+				  flow->payload.words[3] == 2 && flow->payload.words[4] == 1 && flow->commandStreamSequence == 4,
 			"copy-subresource flow did not retain ordered source and destination identities");
 		const auto clear = std::find_if(snapshot->events.begin(), snapshot->events.end(),
 			[](const EventRecord& a_event) {
 				return a_event.kind == EventKind::kResourceFlow &&
-					a_event.payload.words[0] == static_cast<std::uint64_t>(ResourceFlowOperation::kClearRenderTarget);
+			           a_event.payload.words[0] == static_cast<std::uint64_t>(ResourceFlowOperation::kClearRenderTarget);
 			});
 		Check(clear != snapshot->events.end() && clear->payload.words[1] == 0 && clear->payload.words[2] != 0 &&
-			clear->commandStreamSequence == 5,
+				  clear->commandStreamSequence == 5,
 			"destination-only resource mutation did not retain an ordered typed destination");
 	}
 
@@ -748,13 +775,21 @@ namespace
 			"effective resource-state capture did not start");
 		const ResourceViewInput srv{
 			.resource = {
-				.d3dObject = 0xF100, .dimension = ResourceDimension::kTexture2D,
-				.widthOrBytes = 64, .height = 64, .depthOrArraySize = 1, .mipLevels = 1,
-				.format = 28, .sampleCount = 1, .bindFlags = 0x28,
+				.d3dObject = 0xF100,
+				.dimension = ResourceDimension::kTexture2D,
+				.widthOrBytes = 64,
+				.height = 64,
+				.depthOrArraySize = 1,
+				.mipLevels = 1,
+				.format = 28,
+				.sampleCount = 1,
+				.bindFlags = 0x28,
 			},
 			.view = {
-				.kind = TargetViewKind::kShaderResource, .d3dObject = 0xF200,
-				.format = 28, .dimension = 4,
+				.kind = TargetViewKind::kShaderResource,
+				.d3dObject = 0xF200,
+				.format = 28,
+				.dimension = 4,
 			},
 		};
 		runtime.BindResourceViews(
@@ -782,27 +817,28 @@ namespace
 		Check(bindings.size() == 3 && summaries.size() == 3,
 			"effective resource state was not delta encoded with one summary per query");
 		Check(bindings[0]->payload.words[4] ==
-				static_cast<std::uint64_t>(ResourceBindingSource::kRequestedCall) &&
-			bindings[1]->payload.words[4] ==
-				static_cast<std::uint64_t>(ResourceBindingSource::kPostCallQuery) &&
-			bindings[2]->payload.words[0] == 0,
+					  static_cast<std::uint64_t>(ResourceBindingSource::kRequestedCall) &&
+				  bindings[1]->payload.words[4] ==
+					  static_cast<std::uint64_t>(ResourceBindingSource::kPostCallQuery) &&
+				  bindings[2]->payload.words[0] == 0,
 			"requested, effective, and auto-null evidence were not distinguished");
 		Check(summaries[0]->payload.words[5] == 1 &&
-			summaries[1]->payload.words[5] == 0 && summaries[2]->payload.words[5] == 1,
+				  summaries[1]->payload.words[5] == 0 && summaries[2]->payload.words[5] == 1,
 			"effective query summaries did not retain changed-slot counts");
 		const auto generation = runtime.StartCapture(config) == StartResult::kStarted ?
-			runtime.ActiveCaptureGeneration() : 0;
+		                            runtime.ActiveCaptureGeneration() :
+		                            0;
 		Check(generation != 0 && runtime.ClaimResourceViewStateSeed(0xF000) == generation &&
-			runtime.ClaimResourceViewStateSeed(0xF000) == 0,
+				  runtime.ClaimResourceViewStateSeed(0xF000) == 0,
 			"capture-generation resource-state snapshot claim was not one-shot");
 		runtime.BindResourceViews(
 			0xF000, ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, 1, &srv,
 			false, ResourceBindingSource::kCaptureStateSnapshot, generation);
 		auto second = runtime.StopCapture();
 		Check(second && std::count_if(second->events.begin(), second->events.end(),
-			[](const EventRecord& event) {
-				return event.kind == EventKind::kResourceViewBind && event.payload.words[0] != 0;
-			}) == 1,
+							[](const EventRecord& event) {
+								return event.kind == EventKind::kResourceViewBind && event.payload.words[0] != 0;
+							}) == 1,
 			"effective resource-state tracking leaked across capture generations");
 	}
 
@@ -817,9 +853,16 @@ namespace
 			"CPU resource-access capture did not start");
 		const auto generation = runtime.ActiveCaptureGeneration();
 		const ResourceObservationInput staging{
-			.d3dObject = 0xFA10, .dimension = ResourceDimension::kTexture2D,
-			.widthOrBytes = 64, .height = 64, .depthOrArraySize = 1, .mipLevels = 1,
-			.format = 28, .sampleCount = 1, .usage = 3, .cpuAccessFlags = 0x30000,
+			.d3dObject = 0xFA10,
+			.dimension = ResourceDimension::kTexture2D,
+			.widthOrBytes = 64,
+			.height = 64,
+			.depthOrArraySize = 1,
+			.mipLevels = 1,
+			.format = 28,
+			.sampleCount = 1,
+			.usage = 3,
+			.cpuAccessFlags = 0x30000,
 		};
 		runtime.RecordCpuMap(0xFA00, staging, 0, 1, 0, 0, 25, 200, 256, 16384, generation);
 		runtime.RecordCpuUnmap(0xFA00, staging, 0, 250, generation);
@@ -837,10 +880,10 @@ namespace
 		}
 		Check(access.size() == 6, "CPU resource-access events were not retained");
 		Check(access[0]->payload.words[0] == static_cast<std::uint64_t>(ResourceCpuAccessPhase::kMap) &&
-			access[0]->payload.words[5] == 25 && access[0]->payload.words[7] == (16384ull << 32u | 256u),
+				  access[0]->payload.words[5] == 25 && access[0]->payload.words[7] == (16384ull << 32u | 256u),
 			"successful read Map did not retain timing and pitch evidence");
 		Check(access[1]->payload.words[0] == static_cast<std::uint64_t>(ResourceCpuAccessPhase::kUnmap) &&
-			access[1]->payload.words[1] == access[0]->payload.words[1] && access[1]->payload.words[5] == 50,
+				  access[1]->payload.words[1] == access[0]->payload.words[1] && access[1]->payload.words[5] == 50,
 			"read Map/Unmap lifetime was not paired");
 		Check(access[3]->payload.words[1] == access[2]->payload.words[1] && access[3]->payload.words[5] == 45,
 			"write Map/Unmap lifetime was not paired");
@@ -849,7 +892,7 @@ namespace
 		Check(access[5]->payload.words[1] == 0 && access[5]->payload.words[4] == 0,
 			"Unmap after failed Map was falsely paired");
 		Check(access[0]->commandStreamSequence < access[1]->commandStreamSequence &&
-			access[1]->commandStreamSequence < access[2]->commandStreamSequence,
+				  access[1]->commandStreamSequence < access[2]->commandStreamSequence,
 			"CPU access calls were not ordered in the immediate-context stream");
 	}
 
@@ -867,12 +910,16 @@ namespace
 			Check(pass.IsActive(), "scope-join render pass did not enter");
 			{
 				auto technique = runtime.EnterTechnique({
-					.shader = 0xA400, .shaderType = 4, .fxpFilename = "Lighting",
+					.shader = 0xA400,
+					.shaderType = 4,
+					.fxpFilename = "Lighting",
 				});
 				Check(technique.IsActive(), "scope-join technique did not enter");
 				{
 					auto geometry = runtime.EnterGeometry({
-						.shader = 0xA400, .renderPass = 0xA200, .geometry = 0xA300,
+						.shader = 0xA400,
+						.renderPass = 0xA200,
+						.geometry = 0xA300,
 						.shaderType = 4,
 					});
 					Check(geometry.IsActive(), "scope-join geometry did not enter");
@@ -887,7 +934,7 @@ namespace
 			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; });
 		Check(draw != snapshot->events.end(), "scope-join draw is missing");
 		Check(draw->scopes.renderPass.observationId != 0 && draw->scopes.technique.observationId != 0 &&
-			draw->scopes.geometry.observationId != 0,
+				  draw->scopes.geometry.observationId != 0,
 			"draw did not retain all active typed scopes");
 
 		const auto declaredBeforeDraw = [&](EventKind a_kind, std::uint64_t a_observationId, ScopeKind a_scope) {
@@ -909,11 +956,14 @@ namespace
 			return declaration != draw;
 		};
 		Check(declaredBeforeDraw(EventKind::kRenderPassEnter, draw->scopes.renderPass.observationId,
-			ScopeKind::kRenderPass), "draw references an undeclared render-pass scope");
+				  ScopeKind::kRenderPass),
+			"draw references an undeclared render-pass scope");
 		Check(declaredBeforeDraw(EventKind::kTechniqueBegin, draw->scopes.technique.observationId,
-			ScopeKind::kTechnique), "draw references an undeclared technique scope");
+				  ScopeKind::kTechnique),
+			"draw references an undeclared technique scope");
 		Check(declaredBeforeDraw(EventKind::kGeometrySetupBegin, draw->scopes.geometry.observationId,
-			ScopeKind::kGeometry), "draw references an undeclared geometry scope");
+				  ScopeKind::kGeometry),
+			"draw references an undeclared geometry scope");
 	}
 
 	void TestVisibilitySubmissionJoinsActualDraw()
@@ -1010,12 +1060,12 @@ namespace
 		const auto version = std::find_if(snapshot->events.begin(), snapshot->events.end(),
 			[](const EventRecord& a_event) { return a_event.kind == EventKind::kResourceVersionObserved; });
 		Check(version != snapshot->events.end() && version->payload.words[0] == versionId &&
-			version->payload.words[4] == 9,
+				  version->payload.words[4] == 9,
 			"visibility resource version identity is incomplete");
 		const auto consumed = std::find_if(snapshot->events.begin(), snapshot->events.end(),
 			[](const EventRecord& a_event) { return a_event.kind == EventKind::kVisibilityConsumed; });
 		Check(consumed != snapshot->events.end() && consumed->submissionObservationId == submissionId &&
-			consumed->payload.words[4] == versionId && consumed->payload.words[5] == consumed->payload.words[6],
+				  consumed->payload.words[4] == versionId && consumed->payload.words[5] == consumed->payload.words[6],
 			"effective visibility binding was not joined to its submission");
 		std::vector<const EventRecord*> draws;
 		for (const auto& event : snapshot->events) {
@@ -1023,19 +1073,19 @@ namespace
 				draws.push_back(std::addressof(event));
 		}
 		Check(draws.size() == 3 && draws[0]->submissionObservationId == 0 &&
-			draws[1]->submissionObservationId == replacementSubmissionId &&
-			draws[2]->submissionObservationId == 0,
+				  draws[1]->submissionObservationId == replacementSubmissionId &&
+				  draws[2]->submissionObservationId == 0,
 			"submission identity was not consumed by exactly one actual draw");
 		const auto eye = std::find_if(snapshot->events.begin(), snapshot->events.end(),
 			[](const EventRecord& a_event) { return a_event.kind == EventKind::kEyeSubmitted; });
 		Check(eye != snapshot->events.end() && eye->frame.eye == Eye::kLeft &&
-			eye->payload.words[0] != 0,
+				  eye->payload.words[0] != 0,
 			"accepted eye submission did not attribute its resource");
 		const auto decision = std::find_if(snapshot->events.begin(), snapshot->events.end(),
 			[](const EventRecord& a_event) { return a_event.kind == EventKind::kCullDecision; });
 		Check(decision != snapshot->events.end() && decision->payload.words[0] == versionId &&
-			decision->payload.words[1] == 12 && decision->payload.words[2] == 0 &&
-			decision->payload.words[3] == 2,
+				  decision->payload.words[1] == 12 && decision->payload.words[2] == 0 &&
+				  decision->payload.words[3] == 2,
 			"completed visibility readback was not joined to its resource version");
 
 		Check(runtime.StartCapture(config) == StartResult::kStarted,
@@ -1043,8 +1093,8 @@ namespace
 		runtime.RecordCullDecision(versionId, versionGeneration, 12, false, 2, 2, 0, 0, 100);
 		auto replacement = runtime.StopCapture();
 		Check(replacement && std::none_of(
-			replacement->events.begin(), replacement->events.end(),
-			[](const EventRecord& a_event) { return a_event.kind == EventKind::kCullDecision; }),
+								 replacement->events.begin(), replacement->events.end(),
+								 [](const EventRecord& a_event) { return a_event.kind == EventKind::kCullDecision; }),
 			"stale readback version crossed a capture generation boundary");
 	}
 
@@ -1060,7 +1110,7 @@ namespace
 
 		const auto techniquePair = ResolveEventKindDependencies(EventKindBit(EventKind::kTechniqueBegin));
 		Check((techniquePair & EventKindBit(EventKind::kTechniqueEnd)) != 0 &&
-			(techniquePair & EventKindBit(EventKind::kShaderObserved)) != 0,
+				  (techniquePair & EventKindBit(EventKind::kShaderObserved)) != 0,
 			"scope selection did not resolve its paired boundary and identity");
 
 		Runtime runtime;
@@ -1073,22 +1123,21 @@ namespace
 		for (std::uint32_t index = 0; index < 100; ++index)
 			runtime.RecordVisibilityCandidate(0x1000 + index, index, 1);
 		runtime.RecordEyeSubmission(
-			{ .d3dObject = 0x9000, .dimension = ResourceDimension::kTexture2D,
-				.widthOrBytes = 2048, .height = 2048, .depthOrArraySize = 1, .mipLevels = 1 },
+			{ .d3dObject = 0x9000, .dimension = ResourceDimension::kTexture2D, .widthOrBytes = 2048, .height = 2048, .depthOrArraySize = 1, .mipLevels = 1 },
 			Eye::kRight, 2, 0.5f, 0.0f, 1.0f, 1.0f, 0, 9);
 
 		auto snapshot = runtime.StopCapture();
 		Check(snapshot && snapshot->events.size() == 2,
 			"filtered calls consumed selected-event capacity");
 		Check(snapshot->events[0].kind == EventKind::kResourceObserved &&
-			snapshot->events[1].kind == EventKind::kEyeSubmitted,
+				  snapshot->events[1].kind == EventKind::kEyeSubmitted,
 			"eye capture did not retain its resolved event sequence");
 		Check(snapshot->statistics.filtered == 100 &&
-			snapshot->statistics.droppedEventLimit == 0 &&
-			snapshot->statistics.droppedByteLimit == 0,
+				  snapshot->statistics.droppedEventLimit == 0 &&
+				  snapshot->statistics.droppedByteLimit == 0,
 			"filtered calls were reported as loss or truncation");
 		Check(snapshot->config.requestedEventKindMask == eyeOnly &&
-			snapshot->config.eventKindMask == resolved,
+				  snapshot->config.eventKindMask == resolved,
 			"capture did not retain requested and resolved event selections");
 	}
 
@@ -1170,34 +1219,34 @@ namespace
 		auto snapshot = collector.Stop();
 		Check(snapshot.has_value(), "semantic identity capture did not stop");
 		Check(objectFirst.firstSeen && objectRepeated.observationId == objectFirst.observationId &&
-			!objectRepeated.firstSeen && objectSecond.pointerGeneration == 2 &&
-			objectOverflow.observationId == 0,
+				  !objectRepeated.firstSeen && objectSecond.pointerGeneration == 2 &&
+				  objectOverflow.observationId == 0,
 			"scene-object identity was not deduplicated, versioned, and bounded");
 		Check(geometryFirst.firstSeen && geometryRepeated.observationId == geometryFirst.observationId &&
-			!geometryRepeated.firstSeen && geometrySecond.pointerGeneration == 2 &&
-			geometryOverflow.observationId == 0,
+				  !geometryRepeated.firstSeen && geometrySecond.pointerGeneration == 2 &&
+				  geometryOverflow.observationId == 0,
 			"geometry identity was not deduplicated, versioned, and bounded");
 		Check(materialFirst.firstSeen && materialRepeated.observationId == materialFirst.observationId &&
-			!materialRepeated.firstSeen && materialSecond.stateRevision == 2 &&
-			materialSecond.fingerprint != materialFirst.fingerprint && materialOverflow.observationId == 0,
+				  !materialRepeated.firstSeen && materialSecond.stateRevision == 2 &&
+				  materialSecond.fingerprint != materialFirst.fingerprint && materialOverflow.observationId == 0,
 			"material state was not deduplicated, revisioned, and bounded");
 		Check(snapshot->sceneObjectObservations.size() == 2 &&
-			snapshot->geometryObservations.size() == 2 &&
-			snapshot->materialStateObservations.size() == 2,
+				  snapshot->geometryObservations.size() == 2 &&
+				  snapshot->materialStateObservations.size() == 2,
 			"semantic catalogues did not preserve their exact admitted records");
 		Check(snapshot->statistics.droppedSceneObjectObservations == 1 &&
-			snapshot->statistics.droppedGeometryObservations == 1 &&
-			snapshot->statistics.droppedMaterialStateObservations == 1,
+				  snapshot->statistics.droppedGeometryObservations == 1 &&
+				  snapshot->statistics.droppedMaterialStateObservations == 1,
 			"semantic catalogue overflow was not reported independently");
 		Check(snapshot->geometryObservations[0].sceneObjectObservationId == objectFirst.observationId &&
-			std::string_view(snapshot->geometryObservations[0].name.data()) == "Chair01:0",
+				  std::string_view(snapshot->geometryObservations[0].name.data()) == "Chair01:0",
 			"geometry did not retain its scene-object link and bounded name");
 		Check(snapshot->materialStateObservations[0].textureBindingCount == 1 &&
-			snapshot->materialStateObservations[0].textureBindings[0].role == MaterialTextureRole::kRuntimeMaterialList &&
-			snapshot->materialStateObservations[0].textureBindings[0].resourceObservationId == 42 &&
-			std::string_view(snapshot->materialStateObservations[0].textureBindings[0].path.data()) ==
-				"textures\\architecture\\whiterun\\wrwood.dds" &&
-			snapshot->materialStateObservations[1].textureBindings[0].resourceObservationId == 43,
+				  snapshot->materialStateObservations[0].textureBindings[0].role == MaterialTextureRole::kRuntimeMaterialList &&
+				  snapshot->materialStateObservations[0].textureBindings[0].resourceObservationId == 42 &&
+				  std::string_view(snapshot->materialStateObservations[0].textureBindings[0].path.data()) ==
+					  "textures\\architecture\\whiterun\\wrwood.dds" &&
+				  snapshot->materialStateObservations[1].textureBindings[0].resourceObservationId == 43,
 			"material revisions did not preserve their bounded texture bindings");
 	}
 
@@ -1214,14 +1263,16 @@ namespace
 		runtime.RecordDraw(0x9000, DrawOperation::kDraw, 3);
 		{
 			auto rejected = runtime.EnterGeometry({
-				.geometry = 0x1000, .shaderType = 6,
+				.geometry = 0x1000,
+				.shaderType = 6,
 				.geometryObservation = { .name = "rejected" },
 			});
 			Check(!rejected.IsActive(), "unselected shader type entered a geometry scope");
 		}
 		{
 			auto selected = runtime.EnterGeometry({
-				.geometry = 0x2000, .shaderType = 7,
+				.geometry = 0x2000,
+				.shaderType = 7,
 				.geometryObservation = { .name = "selected" },
 			});
 			Check(selected.IsActive(), "selected shader type did not enter a geometry scope");
@@ -1232,15 +1283,15 @@ namespace
 		Check(snapshot && snapshot->statistics.filtered == 3,
 			"geometry and out-of-scope execution filtering was not reported exactly");
 		Check(snapshot->geometryObservations.size() == 1 &&
-			std::string_view(snapshot->geometryObservations[0].name.data()) == "selected",
+				  std::string_view(snapshot->geometryObservations[0].name.data()) == "selected",
 			"unselected geometry polluted the semantic catalogue");
 		const auto draw = std::find_if(snapshot->events.begin(), snapshot->events.end(),
 			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; });
 		const auto setup = std::find_if(snapshot->events.begin(), snapshot->events.end(),
 			[](const EventRecord& a_event) { return a_event.kind == EventKind::kGeometrySetupBegin; });
 		Check(draw != snapshot->events.end() && setup != snapshot->events.end() &&
-			draw->scopes.geometry.observationId == 0 &&
-			draw->preparedGeometrySetupObservationId == setup->scopes.geometry.observationId,
+				  draw->scopes.geometry.observationId == 0 &&
+				  draw->preparedGeometrySetupObservationId == setup->scopes.geometry.observationId,
 			"selected draw did not consume the prepared geometry identity after setup returned");
 		Check(draw->commandStreamSequence == 2,
 			"filtered execution did not advance the observed command-stream sequence");
@@ -1266,9 +1317,8 @@ namespace
 		}
 		runtime.RecordDraw(0xA000, DrawOperation::kDraw, 3);
 		auto first = runtime.StopCapture();
-		Check(first && std::none_of(first->events.begin(), first->events.end(),
-			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; }) &&
-			first->statistics.filtered == 3,
+		Check(first && std::none_of(first->events.begin(), first->events.end(), [](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; }) &&
+				  first->statistics.filtered == 3,
 			"unselected geometry did not invalidate the prior prepared draw candidate");
 
 		Check(runtime.StartCapture(config) == StartResult::kStarted,
@@ -1283,9 +1333,8 @@ namespace
 			"generation-isolation capture did not start");
 		runtime.RecordDraw(0xA000, DrawOperation::kDraw, 3);
 		auto isolated = runtime.StopCapture();
-		Check(isolated && std::none_of(isolated->events.begin(), isolated->events.end(),
-			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; }) &&
-			isolated->statistics.filtered == 1,
+		Check(isolated && std::none_of(isolated->events.begin(), isolated->events.end(), [](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; }) &&
+				  isolated->statistics.filtered == 1,
 			"a prepared geometry identity leaked into a later capture generation");
 	}
 
@@ -1335,22 +1384,82 @@ namespace
 		Check(snapshot && snapshot->events.size() == 5,
 			"semantic geometry boundary emitted the wrong event sequence");
 		Check(snapshot->events[0].kind == EventKind::kObjectObserved &&
-			snapshot->events[1].kind == EventKind::kGeometryObserved &&
-			snapshot->events[2].kind == EventKind::kMaterialObserved &&
-			snapshot->events[3].kind == EventKind::kGeometrySetupBegin &&
-			snapshot->events[4].kind == EventKind::kGeometrySetupEnd,
+				  snapshot->events[1].kind == EventKind::kGeometryObserved &&
+				  snapshot->events[2].kind == EventKind::kMaterialObserved &&
+				  snapshot->events[3].kind == EventKind::kGeometrySetupBegin &&
+				  snapshot->events[4].kind == EventKind::kGeometrySetupEnd,
 			"semantic declarations were not emitted before their setup consumer");
 		Check(snapshot->sceneObjectObservations.size() == 1 &&
-			snapshot->geometryObservations.size() == 1 &&
-			snapshot->materialStateObservations.size() == 1,
+				  snapshot->geometryObservations.size() == 1 &&
+				  snapshot->materialStateObservations.size() == 1,
 			"semantic geometry declarations were not retained");
 		const auto& setup = snapshot->events[3];
 		Check(setup.payload.words[6] == snapshot->geometryObservations[0].observationId &&
-			setup.payload.words[7] == snapshot->materialStateObservations[0].observationId,
+				  setup.payload.words[7] == snapshot->materialStateObservations[0].observationId,
 			"geometry boundary did not bind exact geometry and material identities");
 		Check(snapshot->geometryObservations[0].sceneObjectObservationId ==
-			snapshot->sceneObjectObservations[0].observationId,
+				  snapshot->sceneObjectObservations[0].observationId,
 			"geometry declaration did not bind its optional scene object");
+	}
+
+	void TestDeferredRecordingMaterializesAndExecutesCommandList()
+	{
+		Runtime runtime;
+		auto config = Config();
+		config.maxEvents = 64;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		Check(runtime.StartCapture(config) == StartResult::kStarted,
+			"deferred command-list capture did not start");
+		runtime.SetImmediateContext(0x1000);
+		runtime.RegisterDeferredContext(0x2000, 7);
+		runtime.BindStage(0x2000, ShaderStage::kVertex, 0x3000);
+		runtime.BindStage(0x2000, ShaderStage::kPixel, 0x4000);
+		runtime.RecordDraw(0x2000, DrawOperation::kDrawIndexed, 36, 0, 0);
+		runtime.RecordFinishCommandList(0x2000, 0x5000, false, 0);
+		runtime.BindStage(0x1000, ShaderStage::kVertex, 0x6000);
+		runtime.RecordExecuteCommandList(0x1000, 0x5000, false);
+		runtime.RecordExecuteCommandList(0x1000, 0x5000, true);
+		runtime.RecordDraw(0x1000, DrawOperation::kDraw, 3);
+
+		auto snapshot = runtime.StopCapture();
+		Check(snapshot.has_value(), "deferred command-list capture did not stop");
+		const auto findFirst = [&](EventKind a_kind) {
+			return std::find_if(snapshot->events.begin(), snapshot->events.end(),
+				[&](const EventRecord& a_event) { return a_event.kind == a_kind; });
+		};
+		const auto context = findFirst(EventKind::kDeviceContextObserved);
+		const auto recording = findFirst(EventKind::kCommandRecordingObserved);
+		const auto recordedDraw = findFirst(EventKind::kDraw);
+		const auto list = findFirst(EventKind::kCommandListObserved);
+		const auto finish = findFirst(EventKind::kFinishCommandList);
+		Check(context != snapshot->events.end() && context->payload.words[3] == static_cast<std::uint64_t>(DeviceContextKind::kDeferred) &&
+				  context->payload.words[4] == static_cast<std::uint64_t>(ContextCreationEvidence::kCreateDeferredContext) &&
+				  context->payload.words[5] == 7,
+			"deferred context identity did not retain kind, creation evidence, and flags");
+		Check(recording != snapshot->events.end() && recordedDraw != snapshot->events.end() &&
+				  recordedDraw->deviceContextObservationId == context->payload.words[0] &&
+				  recordedDraw->scopes.commandList.token == 0 &&
+				  recordedDraw->scopes.commandList.observationId == recording->payload.words[0],
+			"recorded draw did not retain its deferred context and recording epoch");
+		Check(list != snapshot->events.end() && finish != snapshot->events.end() &&
+				  list->payload.words[4] == recording->payload.words[0] &&
+				  finish->payload.words[0] == recording->payload.words[0] &&
+				  finish->payload.words[1] == list->payload.words[0],
+			"FinishCommandList did not materialize the exact source recording");
+		std::vector<const EventRecord*> executions;
+		for (const auto& event : snapshot->events) {
+			if (event.kind == EventKind::kExecuteCommandList)
+				executions.push_back(&event);
+		}
+		Check(executions.size() == 2 && executions[0]->payload.words[0] == list->payload.words[0] &&
+				  executions[1]->payload.words[0] == list->payload.words[0] &&
+				  executions[0]->payload.words[2] == recording->payload.words[0],
+			"repeated execution did not reuse the command-list and source-recording identities");
+		const auto immediateDraw = std::find_if(
+			std::next(recordedDraw), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; });
+		Check(immediateDraw != snapshot->events.end() && immediateDraw->payload.words[2] == 0,
+			"RestoreContextState=false did not invalidate the immediate pipeline tracker");
 	}
 }
 
@@ -1381,6 +1490,7 @@ int main()
 		TestGeometrySelectionFiltersBeforeSemanticWork();
 		TestPreparedGeometryHandoffRejectsStaleCandidates();
 		TestGeometryBoundaryBindsExactSemanticObservations();
+		TestDeferredRecordingMaterializesAndExecutesCommandList();
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

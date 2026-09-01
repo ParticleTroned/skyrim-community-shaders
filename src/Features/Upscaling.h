@@ -4,6 +4,7 @@
 #include "Feature.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
+#include "Upscaling/NeuralRendering/PipelinePolicy.h"
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
 #include "Utils/LazyShader.h"
@@ -101,7 +102,8 @@ public:
 		uint frameGenerationMode = 0;  // Disabled by default
 		uint frameGenerationForceEnable = 0;
 		bool frameGenerationAllowInMenus = false;
-		bool preferFSRFrameGeneration = false;
+		bool preferFSRFrameGeneration = true;
+		bool enableDLSSG = false;
 		uint dlssgFramesToGenerate = 1;
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
 		float sharpnessFSR = 0.0f;
@@ -113,6 +115,15 @@ public:
 		bool reflexUseMarkersToOptimize = true;
 		bool reflexUseFPSLimit = false;
 		float reflexFPSLimit = 60.0f;
+		bool neuralRenderingEnabled = false;
+		bool neuralRenderingHalfRate = false;
+		bool neuralRenderingResetEveryFrame = false;
+		uint neuralRenderingPreset = 3;
+		float neuralRenderingIntensity = 0.8f;
+		float neuralRenderingLocalTone = 0.75f;
+		float neuralRenderingLocalStructure = 0.9f;
+		float neuralRenderingSkinStructure = 0.9f;
+		uint neuralRenderingStyle = 3;
 	};
 
 	Settings settings;
@@ -222,6 +233,7 @@ public:
 			{ "frameGenerationForceEnable", true },
 			{ "frameGenerationAllowInMenus", true },
 			{ "preferFSRFrameGeneration", true },
+			{ "enableDLSSG", true },
 			{ "dlssgFramesToGenerate", true },
 			{ "sharpnessFSR", true },
 			{ "sharpnessDLSS", true },
@@ -231,7 +243,16 @@ public:
 			{ "reflexLowLatencyBoost", true },
 			{ "reflexUseMarkersToOptimize", true },
 			{ "reflexUseFPSLimit", true },
-			{ "reflexFPSLimit", true }
+			{ "reflexFPSLimit", true },
+			{ "neuralRenderingEnabled", true },
+			{ "neuralRenderingHalfRate", true },
+			{ "neuralRenderingResetEveryFrame", true },
+			{ "neuralRenderingPreset", true },
+			{ "neuralRenderingIntensity", true },
+			{ "neuralRenderingLocalTone", true },
+			{ "neuralRenderingLocalStructure", true },
+			{ "neuralRenderingSkinStructure", true },
+			{ "neuralRenderingStyle", true }
 		};
 	}
 	virtual bool NormalizePerformanceTuningUserSettings(json& a_settings) const override;
@@ -318,6 +339,7 @@ public:
 	std::unique_ptr<Texture2D> fsrDepthTexture;
 	std::unique_ptr<Texture2D> fsrOutputTexture;
 	std::unique_ptr<Texture2D> sharpenerTexture;
+	std::unique_ptr<Texture2D> neuralRenderingOutputTexture;
 
 	virtual void ClearShaderCache() override;
 
@@ -345,6 +367,12 @@ public:
 	bool upscalingResourcesReady = false;
 	bool depthUpscaleUseWideKernel = false;
 	bool dlssSharpenerOutputValid = false;
+	bool neuralRenderingOutputValid = false;
+	bool neuralRenderingHistoryResetRequested = true;
+	bool neuralRenderingWasRunnable = false;
+	bool neuralRenderingPausedByFrameGeneration = false;
+	bool neuralRenderingHalfRateSkipped = false;
+	uint64_t neuralRenderingGeneration = 1;
 	bool historyResetRequested = true;
 	bool historyResetThisFrame = false;
 	bool menuCameraMVsValid = false;
@@ -399,6 +427,24 @@ public:
 	 * copies the successfully evaluated output without altering it.
 	 */
 	bool ApplySharpening();
+
+	/** Applies the full-frame SE Feature 18 pass into a private output. */
+	bool ApplyNeuralRendering(
+		ID3D11Resource* a_colorInput,
+		ID3D11Resource* a_depthGuide,
+		ID3D11ShaderResourceView* a_depthGuideSRV,
+		ID3D11Resource* a_motionVectors,
+		uint32_t a_colorWidth,
+		uint32_t a_colorHeight,
+		uint32_t a_guideWidth,
+		uint32_t a_guideHeight,
+		uint32_t a_outputWidth,
+		uint32_t a_outputHeight);
+	[[nodiscard]] bool IsNeuralRenderingRunnable(UpscaleMethod a_method) const;
+	bool EnsureNeuralRenderingOutputTexture();
+	void DrawNeuralRenderingSettings(UpscaleMethod a_method);
+	void ResetNeuralRendering(bool a_releaseBackend);
+	static bool ApplyNeuralRenderingPreset(Settings& a_settings, uint32_t a_preset);
 
 	static void TimerSleepQPC(int64_t targetQPC);
 

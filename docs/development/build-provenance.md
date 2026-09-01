@@ -3,13 +3,19 @@
 CSX identifies tested behavior with immutable build evidence rather than a
 branch name or display version. Every DLL build has three related identities:
 
-- **Artifact SHA-256** is the authoritative identity of the linked DLL.
-- **Build ID** is SHA-256 over canonical JSON describing the source commit and
-  dirty-content digest, exact submodule checkouts, vcpkg baseline and overlay,
-  compiler/toolchain, runtime, configuration, and behavior-affecting options.
-- **Shader cache ABI ID** is a narrower identity over the shader compiler and
-  cache contract. It invalidates incompatible cache blobs without discarding a
-  cache merely because unrelated C++ code changed.
+-   **Artifact SHA-256** is the authoritative identity of the linked DLL.
+-   **Build ID** is SHA-256 over canonical JSON describing the source commit and
+    dirty-content digest, exact submodule checkouts, vcpkg baseline and overlay,
+    compiler/toolchain, runtime, configuration, and behavior-affecting options.
+-   **Shader cache ABI ID** is a narrower identity over the shader compiler and
+    cache contract. It invalidates incompatible cache blobs without discarding a
+    cache merely because unrelated C++ code changed.
+
+The manifest records tool identities by version and content hash. It never
+records the compiler path, toolchain path, Git remote, user profile, or source
+checkout path. The same path-free manifest is embedded in the DLL. MSVC source
+and build paths are remapped, and its DLL debug record contains only the PDB
+filename; private AIO archives omit the PDB entirely.
 
 `refresh_build_provenance` runs before every DLL compilation. It intentionally
 does not rely on CMake configure time, because an existing build tree can

@@ -8,6 +8,7 @@
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
 #include "Upscaling/FrameGenerationEligibilityPolicy.h"
+#include "Upscaling/NeuralRendering/Renderer.h"
 #include "Upscaling/ReflexPolicy.h"
 #include "Upscaling/Streamline.h"
 #include "Utils/D3D.h"
@@ -35,6 +36,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	frameGenerationForceEnable,
 	frameGenerationAllowInMenus,
 	preferFSRFrameGeneration,
+	enableDLSSG,
 	dlssgFramesToGenerate,
 	streamlineLogLevel,
 	sharpnessFSR,
@@ -45,7 +47,16 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	reflexLowLatencyBoost,
 	reflexUseMarkersToOptimize,
 	reflexUseFPSLimit,
-	reflexFPSLimit);
+	reflexFPSLimit,
+	neuralRenderingEnabled,
+	neuralRenderingHalfRate,
+	neuralRenderingResetEveryFrame,
+	neuralRenderingPreset,
+	neuralRenderingIntensity,
+	neuralRenderingLocalTone,
+	neuralRenderingLocalStructure,
+	neuralRenderingSkinStructure,
+	neuralRenderingStyle);
 
 decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscaling;
 
@@ -378,6 +389,13 @@ namespace
 		return std::clamp(value, 0.0f, 1.0f);
 	}
 
+	float ClampFiniteNeuralRange(float a_value, float a_fallback)
+	{
+		if (!std::isfinite(a_value))
+			return a_fallback;
+		return std::clamp(a_value, 0.0f, 2.0f);
+	}
+
 	const char* GetQualityModeName(uint value, bool isDLSS)
 	{
 		switch (ClampQualityModeUInt(value)) {
@@ -417,6 +435,18 @@ namespace
 		if (!std::isfinite(settings.reflexFPSLimit))
 			settings.reflexFPSLimit = 60.0f;
 		settings.reflexFPSLimit = std::clamp(settings.reflexFPSLimit, 20.0f, 240.0f);
+		settings.neuralRenderingPreset =
+			std::min<uint>(settings.neuralRenderingPreset, 5u);
+		settings.neuralRenderingIntensity = ClampFiniteNeuralRange(
+			settings.neuralRenderingIntensity, 0.8f);
+		settings.neuralRenderingLocalTone = ClampFiniteNeuralRange(
+			settings.neuralRenderingLocalTone, 0.75f);
+		settings.neuralRenderingLocalStructure = ClampFiniteNeuralRange(
+			settings.neuralRenderingLocalStructure, 0.9f);
+		settings.neuralRenderingSkinStructure = ClampFiniteNeuralRange(
+			settings.neuralRenderingSkinStructure, 0.9f);
+		settings.neuralRenderingStyle =
+			std::min<uint>(settings.neuralRenderingStyle, 3u);
 	}
 
 	void ApplyLegacyFsr4RuntimeSelectionMigration(
@@ -761,7 +791,8 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 		};
 
 		bool dlssgProxyMutationCommitted = false;
-		if (adapterDesc.VendorId == Streamline::kNvidiaVendorId &&
+		if (upscaling.settings.enableDLSSG &&
+			adapterDesc.VendorId == Streamline::kNvidiaVendorId &&
 			upscaling.streamlineDX12.initialized) {
 			try {
 				auto& swapChain = upscaling.dx12SwapChain;
@@ -930,6 +961,207 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 		return failDeviceGraphCreation(E_FAIL);
 	}
 	return result;
+}
+
+bool Upscaling::ApplyNeuralRenderingPreset(
+	Settings& a_settings,
+	uint32_t a_preset)
+{
+	if (a_preset > 5u)
+		return false;
+
+	a_settings.neuralRenderingPreset = a_preset;
+	switch (a_preset) {
+	case 0:
+		return true;
+	case 1:
+		a_settings.neuralRenderingIntensity = 1.0f;
+		a_settings.neuralRenderingLocalTone = 1.0f;
+		a_settings.neuralRenderingLocalStructure = 1.0f;
+		a_settings.neuralRenderingSkinStructure = 1.0f;
+		break;
+	case 2:
+		a_settings.neuralRenderingIntensity = 1.35f;
+		a_settings.neuralRenderingLocalTone = 0.9f;
+		a_settings.neuralRenderingLocalStructure = 1.6f;
+		a_settings.neuralRenderingSkinStructure = 1.15f;
+		break;
+	case 3:
+		a_settings.neuralRenderingIntensity = 0.8f;
+		a_settings.neuralRenderingLocalTone = 0.75f;
+		a_settings.neuralRenderingLocalStructure = 0.9f;
+		a_settings.neuralRenderingSkinStructure = 0.9f;
+		break;
+	case 4:
+		a_settings.neuralRenderingIntensity = 1.75f;
+		a_settings.neuralRenderingLocalTone = 1.25f;
+		a_settings.neuralRenderingLocalStructure = 1.5f;
+		a_settings.neuralRenderingSkinStructure = 1.3f;
+		break;
+	case 5:
+		a_settings.neuralRenderingIntensity = 1.4f;
+		a_settings.neuralRenderingLocalTone = 1.05f;
+		a_settings.neuralRenderingLocalStructure = 0.65f;
+		a_settings.neuralRenderingSkinStructure = 0.2f;
+		a_settings.neuralRenderingStyle = 3;
+		break;
+	default:
+		return false;
+	}
+	return true;
+}
+
+void Upscaling::ResetNeuralRendering(bool a_releaseBackend)
+{
+	if (neuralRenderingGeneration != std::numeric_limits<uint64_t>::max())
+		++neuralRenderingGeneration;
+	neuralRenderingOutputValid = false;
+	neuralRenderingHistoryResetRequested = true;
+	neuralRenderingWasRunnable = false;
+	neuralRenderingPausedByFrameGeneration = false;
+	neuralRenderingHalfRateSkipped = false;
+	if (a_releaseBackend)
+		(void)NeuralRendering::Renderer::Instance().Reset();
+}
+
+void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_method)
+{
+	const auto previous = settings;
+	if (!ImGui::TreeNodeEx(
+			"NVIDIA Neural Rendering (experimental)",
+			ImGuiTreeNodeFlags_DefaultOpen)) {
+		return;
+	}
+
+	ImGui::Checkbox("Enable Neural Rendering", &settings.neuralRenderingEnabled);
+	ImGui::TextDisabled(
+		"Fixed branch order: %s",
+		NeuralRendering::GetPipelineArrangementDisplayName());
+	ImGui::TextWrapped("SE applies NR to one full-frame region.");
+
+	if (a_method != UpscaleMethod::kDLSS || !streamline.featureDLSS)
+		ImGui::TextDisabled("Paused until NVIDIA DLSS is the active upscaler.");
+	if (neuralRenderingPausedByFrameGeneration)
+		ImGui::TextDisabled("Paused while a frame-generation D3D12 graph is active.");
+	if (neuralRenderingHalfRateSkipped)
+		ImGui::TextDisabled("This frame used normal DLSS because half-rate NR skipped it.");
+
+	if (!settings.neuralRenderingEnabled)
+		ImGui::BeginDisabled();
+
+	ImGui::Checkbox(
+		"Half-rate NR (performance experiment)",
+		&settings.neuralRenderingHalfRate);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(
+			"Evaluates NR on alternate render frames and resets its temporal history after each skipped frame.");
+		ImGui::TextUnformatted(
+			"Reduces NR cost but can alternate between enhanced and normal-DLSS images.");
+		if (NeuralRendering::RunsBeforeDlss())
+			ImGui::TextUnformatted(
+				"NR -> DLSS also resets DLSS history every frame; expect visible temporal instability.");
+	}
+
+	ImGui::TextDisabled(
+		"Feature 18 upscaling contract: %s (fixed for this branch)",
+		NeuralRendering::UsesFeatureUpscaling() ? "on" : "off");
+
+	ImGui::Checkbox(
+		"Reset NR history every frame",
+		&settings.neuralRenderingResetEveryFrame);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted("Diagnostic mode. It normally costs quality and performance.");
+
+	static constexpr const char* presetLabels[] = {
+		"Custom", "Neutral", "Detail", "Balanced", "Strong", "Skin"
+	};
+	int preset = static_cast<int>(settings.neuralRenderingPreset);
+	preset = std::clamp(preset, 0, 5);
+	if (ImGui::SliderInt("NR Preset", &preset, 0, 5, presetLabels[preset]))
+		(void)ApplyNeuralRenderingPreset(settings, static_cast<uint32_t>(preset));
+
+	bool customTuningChanged = false;
+	customTuningChanged |= ImGui::SliderFloat(
+		"NR Intensity", &settings.neuralRenderingIntensity, 0.0f, 2.0f, "%.2f");
+	customTuningChanged |= ImGui::SliderFloat(
+		"NR Local Tone", &settings.neuralRenderingLocalTone, 0.0f, 2.0f, "%.2f");
+	customTuningChanged |= ImGui::SliderFloat(
+		"NR Local Structure",
+		&settings.neuralRenderingLocalStructure,
+		0.0f,
+		2.0f,
+		"%.2f");
+	customTuningChanged |= ImGui::SliderFloat(
+		"NR Skin Structure",
+		&settings.neuralRenderingSkinStructure,
+		0.0f,
+		2.0f,
+		"%.2f");
+	int style = static_cast<int>(settings.neuralRenderingStyle);
+	if (ImGui::SliderInt("NR Style", &style, 0, 3)) {
+		settings.neuralRenderingStyle = static_cast<uint32_t>(style);
+		customTuningChanged = true;
+	}
+	if (customTuningChanged)
+		settings.neuralRenderingPreset = 0;
+
+	if (!settings.neuralRenderingEnabled)
+		ImGui::EndDisabled();
+
+	ImGui::TextDisabled("Auto mask: on (fixed); UI correction: off (pre-UI path)");
+	const auto snapshot = NeuralRendering::Renderer::Instance().GetSnapshot();
+	ImGui::Text("Runtime: %s / %s", snapshot.status.c_str(), snapshot.trust.c_str());
+	ImGui::Text(
+		"NR commits: %llu  failures: %llu",
+		static_cast<unsigned long long>(snapshot.successes),
+		static_cast<unsigned long long>(snapshot.failures));
+	if (snapshot.performance.featureGpuSamples != 0) {
+		ImGui::Text(
+			"NR GPU: last %.3f ms  max %.3f ms",
+			static_cast<double>(snapshot.performance.lastFeatureGpuMicroseconds) /
+				1000.0,
+			static_cast<double>(snapshot.performance.maximumFeatureGpuMicroseconds) /
+				1000.0);
+	}
+	if (snapshot.performance.d3d11PreparationCpuEnqueueSamples != 0) {
+		ImGui::Text(
+			"Interop CPU enqueue: prepare %.3f ms  commit %.3f ms",
+			static_cast<double>(
+				snapshot.performance.lastD3D11PreparationCpuEnqueueMicroseconds) /
+				1000.0,
+			static_cast<double>(
+				snapshot.performance.lastOutputCommitCpuEnqueueMicroseconds) /
+				1000.0);
+	}
+	if (!snapshot.detail.empty())
+		ImGui::TextWrapped("Detail: %s", snapshot.detail.c_str());
+	if (ImGui::Button("Reset Neural Rendering Runtime"))
+		ResetNeuralRendering(true);
+
+	ImGui::TreePop();
+
+	const bool hardChange =
+		previous.neuralRenderingEnabled != settings.neuralRenderingEnabled;
+	const bool anyChange =
+		hardChange ||
+		previous.neuralRenderingHalfRate != settings.neuralRenderingHalfRate ||
+		previous.neuralRenderingResetEveryFrame !=
+			settings.neuralRenderingResetEveryFrame ||
+		previous.neuralRenderingPreset != settings.neuralRenderingPreset ||
+		previous.neuralRenderingIntensity != settings.neuralRenderingIntensity ||
+		previous.neuralRenderingLocalTone != settings.neuralRenderingLocalTone ||
+		previous.neuralRenderingLocalStructure !=
+			settings.neuralRenderingLocalStructure ||
+		previous.neuralRenderingSkinStructure !=
+			settings.neuralRenderingSkinStructure ||
+		previous.neuralRenderingStyle != settings.neuralRenderingStyle;
+	if (anyChange && (previous.neuralRenderingEnabled ||
+						 settings.neuralRenderingEnabled)) {
+		RequestHistoryReset();
+		neuralRenderingHistoryResetRequested = true;
+		if (hardChange)
+			ResetNeuralRendering(true);
+	}
 }
 
 void Upscaling::DrawSettings()
@@ -1127,12 +1359,14 @@ void Upscaling::DrawSettingsPanel(bool a_showEmbeddedInfo, bool a_allowNone)
 		}
 	}
 
+	DrawNeuralRenderingSettings(upscaleMethod);
+
 	const bool frameGenerationDx12PathActive = IsFrameGenerationDx12PathActive();
 
 	if (ImGui::TreeNodeEx("Frame Generation", ImGuiTreeNodeFlags_DefaultOpen)) {
 		if (a_showEmbeddedInfo) {
 			ImGui::Text("Frame Generation interpolates real frames with generated ones for a smoother experience");
-			ImGui::Text("Uses NVIDIA DLSS-G when supported, with AMD FSR Frame Generation as fallback");
+			ImGui::Text("Uses AMD FSR Frame Generation by default; NVIDIA DLSS-G is opt-in");
 			if (UsesDLSSGFrameGeneration())
 				ImGui::TextColored(Util::Colors::GetSuccess(), "Using NVIDIA DLSS-G");
 			else if (frameGenerationDx12PathActive)
@@ -1173,7 +1407,13 @@ void Upscaling::DrawSettingsPanel(bool a_showEmbeddedInfo, bool a_allowNone)
 
 		DrawFrameGenerationEnabledToggle(settings);
 
-		if (dlssgSupportedAtBoot && HasFrameGenModule()) {
+		if (isNvidiaAdapter) {
+			ImGui::Checkbox("Enable NVIDIA DLSS-G", &settings.enableDLSSG);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted("Opt-in NVIDIA frame generation using the isolated Streamline 2.12 runtime. Restart required.");
+		}
+
+		if (settings.enableDLSSG && dlssgSupportedAtBoot && HasFrameGenModule()) {
 			ImGui::Checkbox("Prefer AMD FSR Frame Generation", &settings.preferFSRFrameGeneration);
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::TextUnformatted("Selects FSR instead of DLSS-G on a supported NVIDIA GPU. Restart required.");
@@ -1500,6 +1740,8 @@ void Upscaling::DrawEssentialSettings()
 		}
 	}
 
+	DrawNeuralRenderingSettings(method);
+
 	ImGui::SeparatorText("Frame Generation");
 	DrawFrameGenerationEnabledToggle(settings);
 	if ((settings.frameGenerationMode != 0) != IsFrameGenerationDx12PathActive())
@@ -1509,6 +1751,7 @@ void Upscaling::DrawEssentialSettings()
 
 void Upscaling::LoadSettings(json& o_json)
 {
+	const auto previousSettings = settings;
 	const bool hasQualityModeSchemaVersion = o_json.contains("qualityModeSchemaVersion");
 	const bool hasFsr4RuntimeSelectionSchemaVersion = o_json.contains("fsr4RuntimeSelectionSchemaVersion");
 	const bool hasDLSSPreset = o_json.contains("dlssPreset");
@@ -1553,6 +1796,27 @@ void Upscaling::LoadSettings(json& o_json)
 			clampedReflexFPSLimit);
 	}
 	settings.reflexFPSLimit = clampedReflexFPSLimit;
+	const bool neuralSettingsChanged =
+		previousSettings.neuralRenderingEnabled != settings.neuralRenderingEnabled ||
+		previousSettings.neuralRenderingHalfRate != settings.neuralRenderingHalfRate ||
+		previousSettings.neuralRenderingResetEveryFrame !=
+			settings.neuralRenderingResetEveryFrame ||
+		previousSettings.neuralRenderingPreset != settings.neuralRenderingPreset ||
+		previousSettings.neuralRenderingIntensity !=
+			settings.neuralRenderingIntensity ||
+		previousSettings.neuralRenderingLocalTone !=
+			settings.neuralRenderingLocalTone ||
+		previousSettings.neuralRenderingLocalStructure !=
+			settings.neuralRenderingLocalStructure ||
+		previousSettings.neuralRenderingSkinStructure !=
+			settings.neuralRenderingSkinStructure ||
+		previousSettings.neuralRenderingStyle != settings.neuralRenderingStyle;
+	if (neuralSettingsChanged &&
+		(previousSettings.neuralRenderingEnabled ||
+			settings.neuralRenderingEnabled)) {
+		RequestHistoryReset();
+		ResetNeuralRendering(true);
+	}
 	auto iniSettingCollection = globals::game::iniPrefSettingCollection;
 	if (iniSettingCollection) {
 		auto setting = iniSettingCollection->GetSetting("bUseTAA:Display");
@@ -1564,8 +1828,13 @@ void Upscaling::LoadSettings(json& o_json)
 
 void Upscaling::RestoreDefaultSettings()
 {
+	const bool wasNeuralRenderingEnabled = settings.neuralRenderingEnabled;
 	settings = {};
 	SanitizeUpscalingSettings(settings);
+	if (wasNeuralRenderingEnabled) {
+		RequestHistoryReset();
+		ResetNeuralRendering(true);
+	}
 }
 
 void Upscaling::DataLoaded()
@@ -1763,6 +2032,8 @@ void Upscaling::DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 
 	if (a_upscalemethod != UpscaleMethod::kDLSS) {
 		sharpenerTexture.reset();
+		neuralRenderingOutputTexture.reset();
+		ResetNeuralRendering(true);
 	}
 }
 
@@ -2260,6 +2531,7 @@ void Upscaling::ClearShaderCache()
 	upscaleVS.Reset();
 	copyDepthToSharedBufferPS.Reset();
 	compositeFrameGenerationUIFallbackCS.Reset();
+	NeuralRendering::Renderer::Instance().ResetShaderCache();
 }
 
 bool Upscaling::CopySharedD3D12Resources(
@@ -3028,7 +3300,7 @@ void Upscaling::LoadUpscalingSDKs(
 
 	if (a_isNvidiaAdapter) {
 		streamline.LoadInterposer();
-		if (a_allowD3D12Backend)
+		if (a_allowD3D12Backend && settings.enableDLSSG)
 			streamlineDX12.LoadInterposer();
 	}
 	backendShutdownRequiresPresent.store(
@@ -3115,6 +3387,8 @@ bool Upscaling::ProcessBackendShutdownRequest()
 			std::memory_order_acquire)) {
 		return expected == BackendLifecycle::kRetired;
 	}
+
+	ResetNeuralRendering(true);
 
 	if (!streamline.Shutdown()) {
 		backendLifecycle.store(
@@ -3228,6 +3502,140 @@ Upscaling::BlurResources Upscaling::GetBlurResources() const
 		return dx12SwapChain.GetBlurResources();
 	}
 	return {};
+}
+
+bool Upscaling::IsNeuralRenderingRunnable(UpscaleMethod a_method) const
+{
+	return settings.neuralRenderingEnabled &&
+	       a_method == UpscaleMethod::kDLSS &&
+	       streamline.featureDLSS &&
+	       !IsBackendShutdownRequested() &&
+	       !IsFrameGenerationDx12PathActive();
+}
+
+bool Upscaling::EnsureNeuralRenderingOutputTexture()
+{
+	auto* renderer = globals::game::renderer;
+	if (!renderer)
+		return false;
+
+	auto& main =
+		renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	if (!main.texture || !main.SRV || !main.UAV)
+		return false;
+
+	D3D11_TEXTURE2D_DESC textureDesc{};
+	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+	main.texture->GetDesc(&textureDesc);
+	main.SRV->GetDesc(&srvDesc);
+	main.UAV->GetDesc(&uavDesc);
+	textureDesc.BindFlags =
+		D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+	textureDesc.Usage = D3D11_USAGE_DEFAULT;
+	textureDesc.CPUAccessFlags = 0;
+	textureDesc.MiscFlags = 0;
+
+	if (TextureMatchesRequirements(
+			neuralRenderingOutputTexture, textureDesc, true, true)) {
+		return true;
+	}
+
+	neuralRenderingOutputTexture.reset();
+	neuralRenderingOutputValid = false;
+	try {
+		neuralRenderingOutputTexture = std::make_unique<Texture2D>(
+			textureDesc, "Upscaling::NeuralRenderingOutput");
+		neuralRenderingOutputTexture->CreateSRV(srvDesc);
+		neuralRenderingOutputTexture->CreateUAV(uavDesc);
+		return true;
+	} catch (const std::exception& error) {
+		static bool loggedCreationFailure = false;
+		if (!loggedCreationFailure) {
+			loggedCreationFailure = true;
+			logger::error(
+				"[DLSSNR] Could not create the full-frame SE output: {}",
+				error.what());
+		}
+		neuralRenderingOutputTexture.reset();
+		return false;
+	} catch (...) {
+		static bool loggedUnknownCreationFailure = false;
+		if (!loggedUnknownCreationFailure) {
+			loggedUnknownCreationFailure = true;
+			logger::error(
+				"[DLSSNR] Could not create the full-frame SE output");
+		}
+		neuralRenderingOutputTexture.reset();
+		return false;
+	}
+}
+
+bool Upscaling::ApplyNeuralRendering(
+	ID3D11Resource* a_colorInput,
+	ID3D11Resource* a_depthGuide,
+	ID3D11ShaderResourceView* a_depthGuideSRV,
+	ID3D11Resource* a_motionVectors,
+	uint32_t a_colorWidth,
+	uint32_t a_colorHeight,
+	uint32_t a_guideWidth,
+	uint32_t a_guideHeight,
+	uint32_t a_outputWidth,
+	uint32_t a_outputHeight)
+{
+	auto* state = globals::state;
+	if (!state || !globals::d3d::device || !globals::d3d::context ||
+		!a_colorInput || !a_depthGuide || !a_depthGuideSRV ||
+		!a_motionVectors || !EnsureNeuralRenderingOutputTexture() ||
+		!neuralRenderingOutputTexture ||
+		!neuralRenderingOutputTexture->resource) {
+		neuralRenderingHistoryResetRequested = true;
+		return false;
+	}
+
+	NeuralRendering::RendererApplyArgs args{};
+	args.device = globals::d3d::device;
+	args.context = globals::d3d::context;
+	args.featureSlot = 0;
+	args.frameId = state->frameCount;
+	args.generation = neuralRenderingGeneration;
+	args.colorInput = a_colorInput;
+	args.depthGuide = a_depthGuide;
+	args.depthGuideSRV = a_depthGuideSRV;
+	args.motionVectors = a_motionVectors;
+	args.colorOutput = neuralRenderingOutputTexture->resource.get();
+	args.colorWidth = a_colorWidth;
+	args.colorHeight = a_colorHeight;
+	args.guideWidth = a_guideWidth;
+	args.guideHeight = a_guideHeight;
+	args.outputWidth = a_outputWidth;
+	args.outputHeight = a_outputHeight;
+	args.motionVectorScaleX = static_cast<float>(a_guideWidth);
+	args.motionVectorScaleY = static_cast<float>(a_guideHeight);
+	args.inputOffsetX = 0;
+	args.inputOffsetY = 0;
+	args.outputOffsetX = 0;
+	args.outputOffsetY = 0;
+	args.featureUpscaling = NeuralRendering::UsesFeatureUpscaling();
+	args.tuning = {
+		.intensity = settings.neuralRenderingIntensity,
+		.localToneStrength = settings.neuralRenderingLocalTone,
+		.localStructureStrength = settings.neuralRenderingLocalStructure,
+		.skinStructureStrength = settings.neuralRenderingSkinStructure,
+		.style = settings.neuralRenderingStyle,
+		.useAutoMask = true,
+		.uiCorrection = false,
+	};
+	args.reset =
+		settings.neuralRenderingResetEveryFrame ||
+		neuralRenderingHistoryResetRequested ||
+		ShouldResetHistoryThisFrame() ||
+		!neuralRenderingWasRunnable;
+
+	const bool succeeded =
+		NeuralRendering::Renderer::Instance().Apply(args);
+	neuralRenderingHistoryResetRequested = !succeeded;
+	return succeeded;
 }
 
 bool Upscaling::Upscale()
@@ -3356,19 +3764,90 @@ bool Upscaling::Upscale()
 	}
 
 	bool upscaleSuccessful = false;
+	neuralRenderingOutputValid = false;
+	const bool neuralRunnable = IsNeuralRenderingRunnable(upscaleMethod);
+	neuralRenderingPausedByFrameGeneration =
+		settings.neuralRenderingEnabled && IsFrameGenerationDx12PathActive();
+	neuralRenderingHalfRateSkipped =
+		neuralRunnable && settings.neuralRenderingHalfRate &&
+		(state->frameCount & 1u) != 0u;
+	const bool runNeuralThisFrame =
+		neuralRunnable && !neuralRenderingHalfRateSkipped;
+	if (neuralRunnable && settings.neuralRenderingHalfRate &&
+		NeuralRendering::RunsBeforeDlss()) {
+		// NR-before-DLSS alternates the DLSS input, so stale DLSS history is unsafe.
+		historyResetThisFrame = true;
+	}
+	if (!runNeuralThisFrame) {
+		if (neuralRenderingWasRunnable || neuralRenderingHalfRateSkipped)
+			neuralRenderingHistoryResetRequested = true;
+		neuralRenderingWasRunnable = false;
+	}
+
 	{
 		profiler->BeginPass("Upscaling::Upscale");
 		state->BeginPerfEvent("Upscaling");
 		TracyD3D11Zone(state->tracyCtx, "Upscaling Dispatch");
-		ID3D11Resource* motionVectorResource = motionVectorCopyTexture->resource.get();
+		ID3D11Resource* motionVectorResource =
+			motionVectorCopyTexture->resource.get();
 
 		if (upscaleMethod == UpscaleMethod::kDLSS) {
-			upscaleSuccessful = streamline.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource);
+			ID3D11Resource* dlssInput = main.texture;
+			bool neuralSucceeded = false;
+			if (runNeuralThisFrame && NeuralRendering::RunsBeforeDlss()) {
+				neuralSucceeded = ApplyNeuralRendering(
+					main.texture,
+					depth.texture,
+					depth.depthSRV,
+					motionVectorResource,
+					renderWidth,
+					renderHeight,
+					renderWidth,
+					renderHeight,
+					renderWidth,
+					renderHeight);
+				if (neuralSucceeded)
+					dlssInput = neuralRenderingOutputTexture->resource.get();
+			}
+
+			upscaleSuccessful = streamline.Upscale(
+				dlssInput,
+				reactiveMaskTexture->resource.get(),
+				transparencyCompositionMaskTexture->resource.get(),
+				motionVectorResource);
+
+			if (upscaleSuccessful && runNeuralThisFrame &&
+				NeuralRendering::RunsAfterDlss() && sharpenerTexture &&
+				sharpenerTexture->resource) {
+				neuralSucceeded = ApplyNeuralRendering(
+					sharpenerTexture->resource.get(),
+					depth.texture,
+					depth.depthSRV,
+					motionVectorResource,
+					viewport->screenWidth,
+					viewport->screenHeight,
+					renderWidth,
+					renderHeight,
+					viewport->screenWidth,
+					viewport->screenHeight);
+				neuralRenderingOutputValid = neuralSucceeded;
+			}
+
+			neuralRenderingWasRunnable =
+				runNeuralThisFrame && neuralSucceeded;
 		} else if (upscaleMethod == UpscaleMethod::kFSR) {
 			ID3D11Resource* fsrDepth = fsrDepthTexture->resource.get();
-			upscaleSuccessful = fidelityFX.Upscale(main.texture, fsrOutputTexture->resource.get(), fsrDepth, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource, settings.sharpnessFSR);
+			upscaleSuccessful = fidelityFX.Upscale(
+				main.texture,
+				fsrOutputTexture->resource.get(),
+				fsrDepth,
+				reactiveMaskTexture->resource.get(),
+				transparencyCompositionMaskTexture->resource.get(),
+				motionVectorResource,
+				settings.sharpnessFSR);
 			if (upscaleSuccessful)
-				context->CopyResource(main.texture, fsrOutputTexture->resource.get());
+				context->CopyResource(
+					main.texture, fsrOutputTexture->resource.get());
 		}
 
 		state->EndPerfEvent();
@@ -3580,9 +4059,16 @@ bool Upscaling::ApplySharpening()
 {
 	if (!dlssSharpenerOutputValid || !sharpenerTexture)
 		return false;
+	const bool useNeuralOutput =
+		neuralRenderingOutputValid && neuralRenderingOutputTexture &&
+		neuralRenderingOutputTexture->resource &&
+		neuralRenderingOutputTexture->srv;
+	auto* sourceTexture =
+		useNeuralOutput ? neuralRenderingOutputTexture.get() : sharpenerTexture.get();
 	// Consume this frame's output immediately so an earlier intermediate can never
 	// be reused if a later DLSS dispatch fails before publishing a replacement.
 	dlssSharpenerOutputValid = false;
+	neuralRenderingOutputValid = false;
 
 	auto* state = globals::state;
 	auto* context = globals::d3d::context;
@@ -3595,7 +4081,8 @@ bool Upscaling::ApplySharpening()
 	TracyD3D11Zone(state->tracyCtx, "Upscaling - Sharpening");
 
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-	if (!main.texture || !sharpenerTexture->resource || main.texture == sharpenerTexture->resource.get())
+	if (!sourceTexture || !main.texture || !sourceTexture->resource ||
+		main.texture == sourceTexture->resource.get())
 		return false;
 
 	context->OMSetRenderTargets(0, nullptr, nullptr);
@@ -3603,11 +4090,12 @@ bool Upscaling::ApplySharpening()
 	static bool loggedSharpeningFallback = false;
 	const bool wantsSharpening = settings.sharpnessDLSS > 0.0f;
 	bool sharpened = false;
-	if (wantsSharpening && main.UAV && sharpenerTexture->srv) {
+	if (wantsSharpening && main.UAV && sourceTexture->srv) {
 		// Match FSR3's slider-to-RCAS conversion exactly.
 		float currentSharpness = (-2.0f * settings.sharpnessDLSS) + 2.0f;
 		currentSharpness = exp2(-currentSharpness);
-		sharpened = rcas.ApplySharpen(sharpenerTexture->srv.get(), main.UAV, currentSharpness);
+		sharpened = rcas.ApplySharpen(
+			sourceTexture->srv.get(), main.UAV, currentSharpness);
 	}
 
 	if (!sharpened) {
@@ -3615,7 +4103,7 @@ bool Upscaling::ApplySharpening()
 			logger::warn("[Upscaling] RCAS sharpening unavailable; resolving the current DLSS output without sharpening.");
 			loggedSharpeningFallback = true;
 		}
-		context->CopyResource(main.texture, sharpenerTexture->resource.get());
+		context->CopyResource(main.texture, sourceTexture->resource.get());
 	} else {
 		loggedSharpeningFallback = false;
 	}

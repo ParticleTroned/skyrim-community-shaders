@@ -1,6 +1,7 @@
 # Development Documentation
 
 -   [Build provenance](build-provenance.md) — exact DLL, dependency, and shader-cache identities for reproducible tests and releases.
+-   [Private Neural Rendering runtime](private-neural-runtime.md) — local hash-pinned staging and private AIO packaging.
 -   [Developer tooling](tooling.md) — reliable Git hooks, GitHub transport, Codex sandbox, and Windows build setup.
 
 ## Getting Started

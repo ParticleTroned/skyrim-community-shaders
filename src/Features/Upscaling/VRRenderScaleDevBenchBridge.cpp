@@ -1199,6 +1199,11 @@ namespace
 		const auto controller = a_upscaling.GetVRRenderScaleTransitionSnapshot();
 		const auto session = a_upscaling.GetVRRenderScaleStressSessionSnapshot();
 		const auto vendorWorkGate = a_upscaling.GetVRVendorWorkGateSnapshot();
+		const auto& resolutionPlan = a_upscaling.GetRuntimeResolutionPlan();
+		const auto mainPassDiagnostics =
+			a_upscaling.GetVRMainPassDispatchDiagnosticSnapshot();
+		const auto nativeRestorePreparation =
+			a_upscaling.GetVRNativeRestorePreparationDiagnosticSnapshot();
 		const uint32_t frame = globals::state ? globals::state->frameCount : 0u;
 
 		json eyes = json::array();
@@ -1242,6 +1247,47 @@ namespace
 			{ "frame", frame },
 			{ "adapter", BuildAdapterIdentity() },
 			{ "modeStatus", Upscaling::GetVRRenderScaleModeStatusName(a_upscaling.GetVRRenderScaleModeStatus()) },
+			{ "runtimeRouting", {
+									{ "configuredMethod", GetUpscaleMethodName(a_upscaling.GetConfiguredUpscaleMethodForTransition()) },
+									{ "runtimeMethod", GetUpscaleMethodName(a_upscaling.GetRuntimeUpscaleMethod()) },
+									{ "runtimeQualityMode", a_upscaling.GetRuntimeQualityMode() },
+									{ "renderScaleRequested", a_upscaling.IsRenderScaleModeRequested() },
+									{ "renderScaleLatched", a_upscaling.IsVRRenderScaleModeLatched() },
+									{ "perfModeActive", a_upscaling.IsPerfModeActive() },
+									{ "presentationUpscalingActive", a_upscaling.IsPresentationUpscalingActive() },
+								} },
+			{ "runtimeResolutionPlan", {
+										   { "method", GetUpscaleMethodName(resolutionPlan.upscaleMethod) },
+										   { "owner", std::string(magic_enum::enum_name(resolutionPlan.owner)) },
+										   { "outputTarget", std::string(magic_enum::enum_name(resolutionPlan.outputTarget)) },
+										   { "qualityMode", resolutionPlan.qualityMode },
+										   { "engineRenderWidth", resolutionPlan.engineRenderSize.x },
+										   { "engineRenderHeight", resolutionPlan.engineRenderSize.y },
+										   { "finalOutputWidth", resolutionPlan.finalOutputSize.x },
+										   { "finalOutputHeight", resolutionPlan.finalOutputSize.y },
+										   { "vendorMethod", resolutionPlan.vendorMethod },
+										   { "menuContextActive", resolutionPlan.menuContextActive },
+									   } },
+			{ "mainPassDispatch", {
+									  { "lastStage", std::string(magic_enum::enum_name(mainPassDiagnostics.lastStage)) },
+									  { "lastFrame", mainPassDiagnostics.lastFrame },
+									  { "callCount", mainPassDiagnostics.callCount },
+									  { "encodeAttemptCount", mainPassDiagnostics.encodeAttemptCount },
+									  { "encodeSuccessCount", mainPassDiagnostics.encodeSuccessCount },
+									  { "vendorResetBlockedCount", mainPassDiagnostics.vendorResetBlockedCount },
+									  { "fidelityAttemptCount", mainPassDiagnostics.fidelityAttemptCount },
+									  { "fidelitySuccessCount", mainPassDiagnostics.fidelitySuccessCount },
+								  } },
+			{ "nativeRestorePreparation", {
+											  { "rejectMask", nativeRestorePreparation.rejectMask },
+											  { "frame", nativeRestorePreparation.frame },
+											  { "compositorCycleToken", nativeRestorePreparation.compositorCycleToken },
+											  { "commitOutcome", nativeRestorePreparation.commitOutcome },
+											  { "commitFrame", nativeRestorePreparation.commitFrame },
+											  { "commitCompositorCycleToken", nativeRestorePreparation.commitCompositorCycleToken },
+											  { "commitAttemptCount", nativeRestorePreparation.commitAttemptCount },
+											  { "commitSuccessCount", nativeRestorePreparation.commitSuccessCount },
+										  } },
 			{ "cpuPerformance", CPUPerformanceJson(a_upscaling) },
 			{ "preparation", PreparationTelemetryJson(a_upscaling) },
 			{ "pipelineDiagnostics", {

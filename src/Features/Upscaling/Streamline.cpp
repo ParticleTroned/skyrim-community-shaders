@@ -21,6 +21,8 @@
 #include "../../Util.h"
 #include "../Upscaling.h"
 #include "DX12SwapChain.h"
+#include "NvidiaBoundedLog.h"
+#include "NvidiaPipelinePolicy.h"
 #include "ReflexPolicy.h"
 
 namespace
@@ -182,20 +184,20 @@ namespace
 		s_streamlineDllDirectoryCookie = nullptr;
 	}
 
-	bool ValidateStreamlineRuntime(const std::filesystem::path& a_pluginDir)
+	struct StreamlineRuntimeAvailability
+	{
+		bool core = false;
+		bool dlss = false;
+		bool reflex = false;
+		bool pcl = false;
+	};
+
+	StreamlineRuntimeAvailability ValidateStreamlineRuntime(const std::filesystem::path& a_pluginDir)
 	{
 		struct RequiredFile
 		{
 			const wchar_t* name;
 			bool requireStreamlineVersion;
-		};
-		constexpr std::array requiredFiles{
-			RequiredFile{ L"nvngx_dlss.dll", false },
-			RequiredFile{ L"sl.common.dll", true },
-			RequiredFile{ L"sl.dlss.dll", true },
-			RequiredFile{ L"sl.interposer.dll", true },
-			RequiredFile{ L"sl.pcl.dll", true },
-			RequiredFile{ L"sl.reflex.dll", true },
 		};
 		const REL::Version expectedVersion(
 			CSX_STREAMLINE_RUNTIME_VERSION_MAJOR,
@@ -203,32 +205,60 @@ namespace
 			CSX_STREAMLINE_RUNTIME_VERSION_PATCH,
 			0);
 
-		for (const auto& required : requiredFiles) {
+		const auto validateFile = [&](const RequiredFile& required, bool optional) {
 			const auto path = a_pluginDir / required.name;
 			std::error_code fileError;
 			if (!std::filesystem::is_regular_file(path, fileError)) {
-				logger::error(
-					"[Streamline] Required runtime file is unavailable: {}",
-					stl::utf16_to_utf8(path.wstring()).value_or("<unknown>"));
+				if (optional) {
+					logger::warn(
+						"[Streamline] Optional runtime file is unavailable: {}",
+						stl::utf16_to_utf8(path.wstring()).value_or("<unknown>"));
+				} else {
+					logger::error(
+						"[Streamline] Required runtime file is unavailable: {}",
+						stl::utf16_to_utf8(path.wstring()).value_or("<unknown>"));
+				}
 				return false;
 			}
 			const auto version = Util::GetDllVersion(path.wstring());
 			if (!version) {
-				logger::error(
-					"[Streamline] Required runtime file has no readable version: {}",
+				logger::warn(
+					"[Streamline] {} runtime file has no readable version: {}",
+					optional ? "Optional" : "Required",
 					stl::utf16_to_utf8(path.wstring()).value_or("<unknown>"));
 				return false;
 			}
 			if (required.requireStreamlineVersion && version->compare(expectedVersion) != std::strong_ordering::equal) {
-				logger::error(
-					"[Streamline] Runtime version mismatch for {}: expected {}, found {}",
+				logger::warn(
+					"[Streamline] {} runtime version mismatch for {}: expected {}, found {}",
+					optional ? "Optional" : "Required",
 					stl::utf16_to_utf8(required.name).value_or("<unknown>"),
 					Util::GetFormattedVersion(expectedVersion),
 					Util::GetFormattedVersion(*version));
 				return false;
 			}
-		}
-		return true;
+			return true;
+		};
+
+		const bool coreFilesValid =
+			validateFile({ L"sl.interposer.dll", true }, false) &&
+			validateFile({ L"sl.common.dll", true }, false);
+		if (!coreFilesValid)
+			return {};
+
+		const bool dlssFilesValid =
+			validateFile({ L"sl.dlss.dll", true }, true) &&
+			validateFile({ L"nvngx_dlss.dll", false }, true);
+		const bool reflexFilesValid = validateFile({ L"sl.reflex.dll", true }, true);
+		const bool pclFilesValid = validateFile({ L"sl.pcl.dll", true }, true);
+		const auto resolved = CSX::NvidiaPipelinePolicy::ResolveRuntimeAvailability(
+			coreFilesValid, dlssFilesValid, reflexFilesValid, pclFilesValid);
+		return {
+			.core = resolved.core,
+			.dlss = resolved.dlss,
+			.reflex = resolved.reflex,
+			.pcl = resolved.pcl,
+		};
 	}
 
 	StreamlineCoreBindings BindStreamlineCore(HMODULE a_module)
@@ -271,6 +301,24 @@ namespace
 			stl::utf16_to_utf8(a_path.wstring()).value_or("<unknown>"),
 			a_error);
 		return nullptr;
+	}
+
+	bool InvokeStreamlineShutdownProtected(
+		PFun_slShutdown* a_shutdown,
+		sl::Result& a_result)
+	{
+		if (!a_shutdown)
+			return false;
+#ifdef _MSC_VER
+		__try {
+#endif
+			a_result = a_shutdown();
+			return true;
+#ifdef _MSC_VER
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			return false;
+		}
+#endif
 	}
 
 	bool TryGetTexture2DDesc(ID3D11Resource* a_resource, D3D11_TEXTURE2D_DESC& a_desc)
@@ -1131,58 +1179,78 @@ uint64_t Streamline::SetDLSSDevBenchCompositorCycleContext(uint64_t a_compositor
 }
 #endif
 
-void LoggingCallback(sl::LogType type, const char* msg)
+namespace
 {
-	// Remove trailing newlines from the raw message
-	std::string rawMsg(msg);
-	while (!rawMsg.empty() && (rawMsg.back() == '\n' || rawMsg.back() == '\r'))
-		rawMsg.pop_back();
+	constexpr std::size_t kMaximumStreamlineLogBytes = 16 * 1024;
+}
 
-	// Remove leading bracketed metadata
-	const char* p = msg;
-	while (*p == '[') {
-		const char* close = strchr(p, ']');
-		if (!close)
-			break;
-		p = close + 1;
-		// Skip whitespace after each bracketed section
-		while (*p == ' ' || *p == '\t') ++p;
+void LoggingCallback(sl::LogType type, const char* msg) noexcept
+{
+	std::array<char, kMaximumStreamlineLogBytes + 1> messageBuffer{};
+	const auto copyResult = CSX::NvidiaBoundedLog::Copy(msg, messageBuffer.data(), messageBuffer.size());
+	if (copyResult == CSX::NvidiaPipelinePolicy::BoundedCopyResult::Unreadable) {
+		OutputDebugStringA("[StreamlineSDK] Invalid log message suppressed.\n");
+		return;
 	}
-	// Now p points to the first non-bracketed section (file/line info or message)
-	std::string cleanMsg(p);
-	// Trim leading/trailing whitespace and newlines
-	size_t start = cleanMsg.find_first_not_of(" \t\r\n");
-	size_t end = cleanMsg.find_last_not_of(" \t\r\n");
-	if (start != std::string::npos && end != std::string::npos)
-		cleanMsg = cleanMsg.substr(start, end - start + 1);
-	else
-		cleanMsg.clear();
-
-	// If the cleaned message is empty or only bracketed tokens, log the raw message
-	bool onlyBrackets = true;
-	for (char c : cleanMsg) {
-		if (c != '[' && c != ']' && c != ' ' && c != '\t') {
-			onlyBrackets = false;
-			break;
-		}
-	}
-	if (cleanMsg.empty() || onlyBrackets) {
-		logger::info("[StreamlineSDK:RAW] {}", rawMsg);
+	if (copyResult == CSX::NvidiaPipelinePolicy::BoundedCopyResult::Truncated) {
+		OutputDebugStringA("[StreamlineSDK] Log message exceeded 16384 bytes and was suppressed.\n");
 		return;
 	}
 
-	// Use a clear prefix
-	const char* prefix = "[StreamlineSDK]";
-	switch (type) {
-	case sl::LogType::eInfo:
-		logger::info("{} {}", prefix, cleanMsg);
-		break;
-	case sl::LogType::eWarn:
-		logger::warn("{} {}", prefix, cleanMsg);
-		break;
-	case sl::LogType::eError:
-		logger::error("{} {}", prefix, cleanMsg);
-		break;
+	try {
+		// Remove trailing newlines from the bounded raw message.
+		std::string rawMsg(messageBuffer.data());
+		while (!rawMsg.empty() && (rawMsg.back() == '\n' || rawMsg.back() == '\r'))
+			rawMsg.pop_back();
+
+		// Remove leading bracketed metadata
+		const char* p = messageBuffer.data();
+		while (*p == '[') {
+			const char* close = strchr(p, ']');
+			if (!close)
+				break;
+			p = close + 1;
+			// Skip whitespace after each bracketed section
+			while (*p == ' ' || *p == '\t') ++p;
+		}
+		// Now p points to the first non-bracketed section (file/line info or message)
+		std::string cleanMsg(p);
+		// Trim leading/trailing whitespace and newlines
+		size_t start = cleanMsg.find_first_not_of(" \t\r\n");
+		size_t end = cleanMsg.find_last_not_of(" \t\r\n");
+		if (start != std::string::npos && end != std::string::npos)
+			cleanMsg = cleanMsg.substr(start, end - start + 1);
+		else
+			cleanMsg.clear();
+
+		// If the cleaned message is empty or only bracketed tokens, log the raw message
+		bool onlyBrackets = true;
+		for (char c : cleanMsg) {
+			if (c != '[' && c != ']' && c != ' ' && c != '\t') {
+				onlyBrackets = false;
+				break;
+			}
+		}
+		if (cleanMsg.empty() || onlyBrackets) {
+			logger::info("[StreamlineSDK:RAW] {}", rawMsg);
+			return;
+		}
+
+		// Use a clear prefix
+		const char* prefix = "[StreamlineSDK]";
+		switch (type) {
+		case sl::LogType::eInfo:
+			logger::info("{} {}", prefix, cleanMsg);
+			break;
+		case sl::LogType::eWarn:
+			logger::warn("{} {}", prefix, cleanMsg);
+			break;
+		case sl::LogType::eError:
+			logger::error("{} {}", prefix, cleanMsg);
+			break;
+		}
+	} catch (...) {
+		OutputDebugStringA("[StreamlineSDK] Log callback failure suppressed.\n");
 	}
 }
 
@@ -1214,7 +1282,11 @@ bool Streamline::LoadInterposer()
 	auto pluginDirAbsolute = std::filesystem::absolute(pluginDir, pluginPathError);
 	if (pluginPathError)
 		pluginDirAbsolute = pluginDir;
-	if (!ValidateStreamlineRuntime(pluginDirAbsolute)) {
+	const auto runtimeAvailability = ValidateStreamlineRuntime(pluginDirAbsolute);
+	runtimeHasDLSS = runtimeAvailability.dlss;
+	runtimeHasReflex = runtimeAvailability.reflex;
+	runtimeHasPCL = runtimeAvailability.pcl;
+	if (!runtimeAvailability.core) {
 		featureCheckComplete = true;
 		lifecycleState.store(LifecycleState::Unavailable, std::memory_order_release);
 		return false;
@@ -1242,10 +1314,17 @@ bool Streamline::LoadInterposer()
 
 	sl::Preferences pref;
 
-	sl::Feature featuresToLoad[] = { sl::kFeatureDLSS, sl::kFeatureReflex, sl::kFeaturePCL };
+	std::array<sl::Feature, 3> featuresToLoad{};
+	uint32_t featureCount = 0;
+	if (runtimeHasDLSS)
+		featuresToLoad[featureCount++] = sl::kFeatureDLSS;
+	if (runtimeHasReflex)
+		featuresToLoad[featureCount++] = sl::kFeatureReflex;
+	if (runtimeHasPCL)
+		featuresToLoad[featureCount++] = sl::kFeaturePCL;
 
-	pref.featuresToLoad = featuresToLoad;
-	pref.numFeaturesToLoad = _countof(featuresToLoad);
+	pref.featuresToLoad = featuresToLoad.data();
+	pref.numFeaturesToLoad = featureCount;
 
 	// Set log level from settings
 	switch (globals::features::upscaling.settings.streamlineLogLevel) {
@@ -1333,16 +1412,26 @@ void Streamline::Shutdown()
 {
 	std::scoped_lock lifecycleLock(lifecycleMutex);
 	const auto state = lifecycleState.load(std::memory_order_acquire);
-	if (state == LifecycleState::Uninitialized || state == LifecycleState::ShuttingDown)
+	if (state == LifecycleState::Uninitialized || state == LifecycleState::ShuttingDown ||
+		state == LifecycleState::ShutdownQuarantined)
 		return;
 
 	lifecycleState.store(LifecycleState::ShuttingDown, std::memory_order_release);
 	ResetDLSSIdleFences();
-	if (initialized && slShutdown) {
-		const sl::Result shutdownResult = slShutdown();
-		if (shutdownResult != sl::Result::eOk) {
-			logger::warn("[Streamline] Shutdown returned {}", magic_enum::enum_name(shutdownResult));
+	const bool shutdownWasRequired = initialized;
+	bool shutdownConfirmed = !shutdownWasRequired;
+	if (shutdownWasRequired && slShutdown) {
+		sl::Result shutdownResult{};
+		bool shutdownReturned = false;
+		try {
+			shutdownReturned = InvokeStreamlineShutdownProtected(slShutdown, shutdownResult);
+		} catch (...) {
 		}
+		shutdownConfirmed = shutdownReturned && shutdownResult == sl::Result::eOk;
+		if (!shutdownReturned)
+			logger::warn("[Streamline] Shutdown faulted or raised an exception");
+		else if (!shutdownConfirmed)
+			logger::warn("[Streamline] Shutdown returned {}", magic_enum::enum_name(shutdownResult));
 	}
 
 	initialized = false;
@@ -1355,6 +1444,14 @@ void Streamline::Shutdown()
 	adapterSupportsPCL = false;
 	boundDeviceIdentity = nullptr;
 	frameGenerationQuarantinedByReflex = false;
+	if (CSX::NvidiaPipelinePolicy::MustRetainModuleAfterShutdown(
+			shutdownWasRequired, shutdownConfirmed)) {
+		logger::critical(
+			"[Streamline] Shutdown ownership is indeterminate; retaining the interposer module until process exit");
+		featureCheckComplete = true;
+		lifecycleState.store(LifecycleState::ShutdownQuarantined, std::memory_order_release);
+		return;
+	}
 	slDLSSGetOptimalSettings = nullptr;
 	slDLSSGetState = nullptr;
 	slDLSSSetOptions = nullptr;
@@ -1383,6 +1480,9 @@ void Streamline::Shutdown()
 		interposer = nullptr;
 	}
 	ReleaseStreamlineDllDirectory();
+	runtimeHasDLSS = false;
+	runtimeHasReflex = false;
+	runtimeHasPCL = false;
 	featureCheckComplete = true;
 	lifecycleState.store(LifecycleState::Uninitialized, std::memory_order_release);
 }
@@ -1494,10 +1594,13 @@ bool Streamline::CheckFeatures(IDXGIAdapter* a_adapter)
 		outAvailable = slIsFeatureSupported(feature, adapterInfo) == sl::Result::eOk;
 	};
 
-	checkFeatureAvailability(sl::kFeatureDLSS, "DLSS", adapterSupportsDLSS);
+	if (runtimeHasDLSS)
+		checkFeatureAvailability(sl::kFeatureDLSS, "DLSS", adapterSupportsDLSS);
 	if (reflexSupportedOnCurrentAdapter) {
-		checkFeatureAvailability(sl::kFeatureReflex, "Reflex", adapterSupportsReflex);
-		checkFeatureAvailability(sl::kFeaturePCL, "PCL", adapterSupportsPCL);
+		if (runtimeHasReflex)
+			checkFeatureAvailability(sl::kFeatureReflex, "Reflex", adapterSupportsReflex);
+		if (runtimeHasPCL)
+			checkFeatureAvailability(sl::kFeaturePCL, "PCL", adapterSupportsPCL);
 	}
 
 	if (adapterSupportsDLSS) {
@@ -1607,7 +1710,7 @@ bool Streamline::PostDevice()
 	reflexOptionsCache = {};
 	lastReflexSleepFrame = UINT32_MAX;
 	featureCheckComplete = true;
-	return !adapterSupportsDLSS || featureDLSS;
+	return true;
 }
 
 /**

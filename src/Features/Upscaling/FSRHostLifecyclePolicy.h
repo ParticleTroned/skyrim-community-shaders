@@ -1,7 +1,25 @@
 #pragma once
 
+#include <cstdint>
+
 namespace FSRHostLifecyclePolicy
 {
+	inline constexpr std::uint32_t MinimumFeatureLevel = 0xB100;
+
+	[[nodiscard]] constexpr bool SupportsHostFsr3FeatureLevel(
+		std::uint32_t a_featureLevel) noexcept
+	{
+		// Current host shaders bind more than eight compute UAV slots.
+		return a_featureLevel >= MinimumFeatureLevel;
+	}
+
+	[[nodiscard]] constexpr bool CanAttemptHostFallback(
+		bool a_hostSupported,
+		bool a_runtimeProviderUsedForFrame) noexcept
+	{
+		return a_hostSupported && !a_runtimeProviderUsedForFrame;
+	}
+
 	enum class CallDisposition
 	{
 		Succeeded,

@@ -12,6 +12,11 @@ foreach(_required IN ITEMS
     "if (FAILED(ret) || !ppDevice || !*ppDevice)"
     "ResolveCreatedAdapter(*ppDevice, pAdapter)"
     "ResetProxyCreationState()"
+    "NvidiaComIdentity::IsSame"
+    "a_requireSameDeviceIdentity"
+    "IsFrameGenerationProxyContractSupported"
+    "TryBeginProxyCreation()"
+    ".usage = a_desc.BufferUsage"
 )
     string(FIND "${_upscaling}" "${_required}" _position)
     if(_position EQUAL -1)
@@ -41,6 +46,12 @@ foreach(_required IN ITEMS
     "frameGenerationQuarantinedByReflex.store(true"
     "EnsureReflexDisabledForFrameGeneration"
     "IsDLSSRuntimeReady"
+    "runtimeHasDLSS"
+    "runtimeHasReflex"
+    "runtimeHasPCL"
+    "ShutdownQuarantined"
+    "LoggingCallback(sl::LogType type, const char* msg) noexcept"
+    "BoundedCopyResult::Truncated"
 )
     string(FIND "${_streamline}" "${_required}" _position)
     if(_position EQUAL -1)
@@ -270,6 +281,20 @@ foreach(_required IN ITEMS
     "runtimeQuarantined = true"
     "EnsureReflexDisabledForFrameGeneration"
     "const std::array beforeCopy"
+    "producerFenceValue = fenceSequence.Next()"
+    "ResolveBackendBufferCount"
+    "ProxyLifecycleGate lifecycle"
+    "lifecycle.BeginRetirement()"
+    "lifecycle.CompleteRetirement(false,"
+    "retaining every dependent D3D resource"
+    "DXGI_PRESENT_TEST"
+    "DXGI_ERROR_WAS_STILL_DRAWING"
+    "return owner.GetDesc(pDesc)"
+    "return 0;"
+    "ResetFrameGenerationContexts()"
+    "ResetFrameGenerationRenderContext()"
+    "SetupFrameGeneration()"
+    "publicFormat != publicSwapChainDesc.BufferDesc.Format"
 )
     string(FIND "${_swapchain_header}${_swapchain}" "${_required}" _position)
     if(_position EQUAL -1)
@@ -286,6 +311,9 @@ foreach(_required IN ITEMS
     "frameGenContextIndeterminate"
     "swapChainContextIndeterminate"
     "IsRuntimeUpscalerDispatchProofUsable"
+    "ConfirmFrameGenerationDisabled"
+    "frameGenerationDisableConfirmed"
+    "ResetFrameGenerationRenderContext"
 )
     string(FIND "${_fidelityfx}" "${_required}" _position)
     if(_position EQUAL -1)
@@ -304,6 +332,8 @@ foreach(_required IN ITEMS
     "pendingOperationReservations"
     "releaseOperationReservation"
     "--pendingOperationReservations"
+    "rollbackUnreadyCommand"
+    "DiscardUnreadyAdmission"
 )
     string(FIND "${_upscaling_service}" "${_required}" _position)
     if(_position EQUAL -1)

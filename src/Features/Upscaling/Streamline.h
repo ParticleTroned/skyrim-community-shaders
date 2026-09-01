@@ -574,6 +574,7 @@ public:
 		Initialized,
 		Unavailable,
 		ShuttingDown,
+		ShutdownQuarantined,
 	};
 	std::mutex lifecycleMutex;
 	std::atomic<LifecycleState> lifecycleState{ LifecycleState::Uninitialized };
@@ -581,5 +582,8 @@ public:
 	bool adapterSupportsDLSS = false;
 	bool adapterSupportsReflex = false;
 	bool adapterSupportsPCL = false;
+	bool runtimeHasDLSS = false;
+	bool runtimeHasReflex = false;
+	bool runtimeHasPCL = false;
 	std::atomic_bool frameGenerationQuarantinedByReflex{ false };
 };

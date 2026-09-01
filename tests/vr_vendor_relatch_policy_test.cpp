@@ -32,6 +32,31 @@ namespace
 		       !CanServiceQueuedPostMutationRecovery(true, true);
 	}
 
+	constexpr bool CoversPresentationStabilizationSelection()
+	{
+		const auto fixedVendor = SelectPresentationStabilization(
+			{ false, true, false, false });
+		const auto scaledVendor = SelectPresentationStabilization(
+			{ true, true, false, false });
+		const auto deferredNative = SelectPresentationStabilization(
+			{ false, false, true, false });
+		const auto guardedNative = SelectPresentationStabilization(
+			{ false, false, false, true });
+		const auto stableNative = SelectPresentationStabilization(
+			{ false, false, false, false });
+		return !fixedVendor.vendorSubmitStage &&
+		       fixedVendor.nativePresentation &&
+		       fixedVendor.RequiresProof() &&
+		       scaledVendor.vendorSubmitStage &&
+		       !scaledVendor.nativePresentation &&
+		       scaledVendor.RequiresProof() &&
+		       !deferredNative.vendorSubmitStage &&
+		       deferredNative.nativePresentation &&
+		       !guardedNative.vendorSubmitStage &&
+		       guardedNative.nativePresentation &&
+		       !stableNative.RequiresProof();
+	}
+
 	constexpr bool CoversWorkGateMasks()
 	{
 		if (ToMask(WorkGateSource::None) != 0u ||
@@ -659,6 +684,26 @@ namespace
 		return true;
 	}
 
+	constexpr bool CoversMainPassProviderQuiesceAdmission()
+	{
+		for (std::uint32_t bits = 0; bits < (1u << 7); ++bits) {
+			const MainPassProviderQuiesceAdmission state{
+				.isVR = (bits & (1u << 0)) != 0,
+				.relatchPending = (bits & (1u << 1)) != 0,
+				.relatchPlanValid = (bits & (1u << 2)) != 0,
+				.relatchPlanOwnsTargetEpoch = (bits & (1u << 3)) != 0,
+				.vendorEvaluationSelected = (bits & (1u << 4)) != 0,
+				.previousProviderMatches = (bits & (1u << 5)) != 0,
+				.destroysProviderResources = (bits & (1u << 6)) != 0,
+			};
+			const bool expected = bits == ((1u << 7) - 1u);
+			if (ShouldQuiesceMainPassProvider(state) != expected)
+				return false;
+		}
+
+		return true;
+	}
+
 	constexpr bool CoversNativeRestorePresentationAdmission()
 	{
 		for (std::uint32_t bits = 0; bits < (1u << 3); ++bits) {
@@ -763,26 +808,42 @@ namespace
 			}
 		}
 
-		for (std::uint32_t bits = 0; bits < (1u << 10); ++bits) {
+		for (std::uint32_t bits = 0; bits < (1u << 8); ++bits) {
 			const CompatibleFSRRelatchReuseAdmission state{
-				.directMenuRelatch = (bits & (1u << 0)) != 0,
-				.recoveryRelatch = (bits & (1u << 1)) != 0,
-				.targetIsFSR = (bits & (1u << 2)) != 0,
-				.previousWasFSR = (bits & (1u << 3)) != 0,
-				.resetPending = (bits & (1u << 4)) != 0,
-				.memoryPressureNormal = (bits & (1u << 5)) != 0,
-				.postLoadResetPending = (bits & (1u << 6)) != 0,
-				.preservingActiveContract = (bits & (1u << 7)) != 0,
-				.deviceLost = (bits & (1u << 8)) != 0,
-				.resourcesCompatible = (bits & (1u << 9)) != 0,
+				.targetIsFSR = (bits & (1u << 0)) != 0,
+				.previousWasFSR = (bits & (1u << 1)) != 0,
+				.resetPending = (bits & (1u << 2)) != 0,
+				.memoryPressureNormal = (bits & (1u << 3)) != 0,
+				.postLoadResetPending = (bits & (1u << 4)) != 0,
+				.preservingActiveContract = (bits & (1u << 5)) != 0,
+				.deviceLost = (bits & (1u << 6)) != 0,
+				.resourcesCompatible = (bits & (1u << 7)) != 0,
 			};
 			const bool expected =
-				(state.directMenuRelatch || state.recoveryRelatch) &&
 				state.targetIsFSR && state.previousWasFSR &&
 				!state.resetPending && state.memoryPressureNormal &&
 				!state.postLoadResetPending && !state.preservingActiveContract &&
 				!state.deviceLost && state.resourcesCompatible;
 			if (CanReuseCompatibleFSRResources(state) != expected)
+				return false;
+		}
+
+		for (std::uint32_t bits = 0; bits < (1u << 11); ++bits) {
+			const InactivePhysicalTargetReuseAdmission state{
+				.targetInactive = (bits & (1u << 0)) != 0,
+				.previousProfileValid = (bits & (1u << 1)) != 0,
+				.previousProfileInactive = (bits & (1u << 2)) != 0,
+				.previousProfileFullResolution = (bits & (1u << 3)) != 0,
+				.dimensionsUnchanged = (bits & (1u << 4)) != 0,
+				.publishableLayout = (bits & (1u << 5)) != 0,
+				.stateScreenDimensionsMatch = (bits & (1u << 6)) != 0,
+				.resourcePublicationMatches = (bits & (1u << 7)) != 0,
+				.retirementIdle = (bits & (1u << 8)) != 0,
+				.postLoadRecoveryInactive = (bits & (1u << 9)) != 0,
+				.deviceOperational = (bits & (1u << 10)) != 0,
+			};
+			const bool expected = bits == ((1u << 11) - 1u);
+			if (CanReusePublishableInactivePhysicalTargets(state) != expected)
 				return false;
 		}
 
@@ -1743,6 +1804,273 @@ namespace
 			return false;
 		state.requestedSlot = 0;
 		return CanUseDLSSSlotDuringRecycle(state);
+	}
+
+	constexpr bool CoversNativeRestoreSuccessorAdmission()
+	{
+		constexpr std::uint64_t restoreEpoch = 17;
+		NativeRestoreProgress progress{};
+		if (ShouldDeferNativeRestoreSuccessor({
+				.incomingEpoch = restoreEpoch,
+			})) {
+			return false;
+		}
+		if (!ShouldDeferNativeRestoreSuccessor({
+				.incomingEpoch = restoreEpoch + 1,
+				.presentationGuardEpoch = restoreEpoch,
+			})) {
+			return false;
+		}
+		if (ShouldDeferNativeRestoreSuccessor({
+				.incomingEpoch = restoreEpoch,
+				.presentationGuardEpoch = restoreEpoch,
+			})) {
+			return false;
+		}
+		if (!BeginNativeRestore(progress, restoreEpoch))
+			return false;
+		if (!ShouldDeferNativeRestoreSuccessor({
+				.incomingEpoch = restoreEpoch + 1,
+				.progress = progress,
+			}) ||
+			ShouldDeferNativeRestoreSuccessor({
+				.incomingEpoch = restoreEpoch,
+				.progress = progress,
+			}) ||
+			ShouldDeferNativeRestoreSuccessor({
+				.recoveryOrigin = true,
+				.incomingEpoch = restoreEpoch + 1,
+				.presentationGuardEpoch = restoreEpoch,
+				.progress = progress,
+			})) {
+			return false;
+		}
+		return ShouldDeferNativeRestoreSuccessor({
+			.incomingEpoch = 0,
+			.progress = progress,
+		});
+	}
+
+	constexpr bool CoversProviderRetirementSuccessorAdmission()
+	{
+		ProviderRetirementSuccessorAdmission state{
+			.incomingUsesProvider = true,
+			.stableProfileValid = true,
+			.resetPending = true,
+		};
+		if (!ShouldDeferProviderRetirementSuccessor(state))
+			return false;
+
+		state.resetPending = false;
+		state.lifecycleRetiring = true;
+		if (!ShouldDeferProviderRetirementSuccessor(state))
+			return false;
+
+		state.lifecycleRetiring = false;
+		if (ShouldDeferProviderRetirementSuccessor(state))
+			return false;
+
+		state.resetPending = true;
+		state.stableUsesProvider = true;
+		if (ShouldDeferProviderRetirementSuccessor(state))
+			return false;
+
+		state.stableUsesProvider = false;
+		state.incomingUsesProvider = false;
+		if (ShouldDeferProviderRetirementSuccessor(state))
+			return false;
+
+		state.incomingUsesProvider = true;
+		state.recoveryOrigin = true;
+		if (ShouldDeferProviderRetirementSuccessor(state))
+			return false;
+
+		state.recoveryOrigin = false;
+		state.stableProfileValid = false;
+		return !ShouldDeferProviderRetirementSuccessor(state);
+	}
+
+	constexpr bool CoversAppliedContractGenerationSelection()
+	{
+		AppliedContractGenerationSelection selection{
+			.bootContractActive = true,
+			.vendorEvaluationSelected = true,
+			.relatchPlanOwnsTransition = true,
+			.bootGeneration = 11,
+			.sourceGeneration = 17,
+			.relatchGeneration = 19,
+		};
+		if (SelectAppliedContractGeneration(selection) != 11)
+			return false;
+
+		selection.bootContractActive = false;
+		if (SelectAppliedContractGeneration(selection) != 19)
+			return false;
+
+		selection.relatchPlanOwnsTransition = false;
+		if (SelectAppliedContractGeneration(selection) != 17)
+			return false;
+
+		selection.sourceGeneration = 0;
+		if (SelectAppliedContractGeneration(selection) != 0)
+			return false;
+
+		selection.relatchPlanOwnsTransition = true;
+		selection.relatchGeneration = 0;
+		if (SelectAppliedContractGeneration(selection) != 0)
+			return false;
+
+		selection.vendorEvaluationSelected = false;
+		selection.relatchGeneration = 23;
+		selection.bootGeneration = 0;
+		return SelectAppliedContractGeneration(selection) == 0;
+	}
+
+	constexpr bool CoversVendorEvaluationRelatchSelection()
+	{
+		VendorEvaluationRelatchSelection selection{
+			.isVR = true,
+			.methodChanged = true,
+			.targetMethodUsesVendor = true,
+		};
+		if (!NeedsVendorEvaluationRelatch(selection))
+			return false;
+
+		selection.targetMethodUsesVendor = false;
+		selection.previousMethodUsesVendor = true;
+		if (!NeedsVendorEvaluationRelatch(selection))
+			return false;
+
+		selection.methodChanged = false;
+		selection.previousMethodUsesVendor = false;
+		selection.targetMethodIsFSR = true;
+		selection.fsrRuntimeSelectionChanged = true;
+		if (!NeedsVendorEvaluationRelatch(selection))
+			return false;
+
+		selection.isVR = false;
+		if (NeedsVendorEvaluationRelatch(selection))
+			return false;
+
+		selection.isVR = true;
+		selection.targetMethodIsFSR = false;
+		selection.fsrRuntimeSelectionChanged = false;
+		return !NeedsVendorEvaluationRelatch(selection);
+	}
+
+	constexpr bool CoversPhysicalRelatchAdmission()
+	{
+		PhysicalRelatchAdmission admission{};
+		if (AllowsPhysicalRelatch(admission))
+			return false;
+
+		admission.vendorEvaluationSelected = true;
+		if (!AllowsPhysicalRelatch(admission))
+			return false;
+
+		admission.vendorEvaluationSelected = false;
+		admission.renderScaleActive = true;
+		if (!AllowsPhysicalRelatch(admission))
+			return false;
+
+		admission.renderScaleActive = false;
+		admission.nativeRestoreRecovery = true;
+		return AllowsPhysicalRelatch(admission);
+	}
+
+	constexpr bool CoversVendorEvaluationGenerationSelection()
+	{
+		VendorEvaluationGenerationSelection selection{
+			.renderScaleActive = true,
+			.publishedProviderMatches = true,
+			.renderScaleGeneration = 11,
+			.publishedProviderGeneration = 17,
+		};
+		if (SelectVendorEvaluationGeneration(selection) != 11)
+			return false;
+
+		selection.renderScaleActive = false;
+		if (SelectVendorEvaluationGeneration(selection) != 17)
+			return false;
+
+		selection.publishedProviderMatches = false;
+		if (SelectVendorEvaluationGeneration(selection) != 0)
+			return false;
+
+		selection.publishedProviderMatches = true;
+		selection.publishedProviderGeneration = 0;
+		return SelectVendorEvaluationGeneration(selection) == 0;
+	}
+
+	constexpr bool CoversRelatchResourceTrackingSyncAdmission()
+	{
+		RelatchResourceTrackingSyncAdmission admission{
+			.syncPending = true,
+			.appliedProfileValid = true,
+			.appliedOwnsCurrentTarget = true,
+			.appliedStatePublishable = true,
+		};
+		if (!CanSyncRelatchResourceTracking(admission))
+			return false;
+
+		admission.physicalRelatchPending = true;
+		if (CanSyncRelatchResourceTracking(admission))
+			return false;
+		admission.physicalRelatchPending = false;
+		admission.physicalRelatchInProgress = true;
+		if (CanSyncRelatchResourceTracking(admission))
+			return false;
+		admission.physicalRelatchInProgress = false;
+		admission.appliedOwnsCurrentTarget = false;
+		if (CanSyncRelatchResourceTracking(admission))
+			return false;
+		admission.appliedOwnsCurrentTarget = true;
+		admission.frameGenerationChanged = true;
+		if (CanSyncRelatchResourceTracking(admission))
+			return false;
+		admission.frameGenerationChanged = false;
+		admission.foveatedChanged = true;
+		if (CanSyncRelatchResourceTracking(admission))
+			return false;
+		admission.foveatedChanged = false;
+		admission.peripheryTAAChanged = true;
+		return !CanSyncRelatchResourceTracking(admission);
+	}
+
+	constexpr bool CoversVendorPresentationContractAdmission()
+	{
+		VendorPresentationContractAdmission admission{
+			.appliedProfileValid = true,
+			.vendorMethodSelected = true,
+			.appliedProfileActive = true,
+			.bootContractActive = true,
+			.activeBootMatchesApplied = true,
+		};
+		if (!CanStabilizeVendorPresentationContract(admission))
+			return false;
+
+		admission.activeBootMatchesApplied = false;
+		if (CanStabilizeVendorPresentationContract(admission))
+			return false;
+
+		admission.appliedProfileActive = false;
+		admission.bootContractActive = false;
+		admission.nativeDimensionsMatch = true;
+		if (!CanStabilizeVendorPresentationContract(admission))
+			return false;
+
+		admission.nativeDimensionsMatch = false;
+		if (CanStabilizeVendorPresentationContract(admission))
+			return false;
+
+		admission.nativeDimensionsMatch = true;
+		admission.bootContractActive = true;
+		if (CanStabilizeVendorPresentationContract(admission))
+			return false;
+
+		admission.bootContractActive = false;
+		admission.vendorMethodSelected = false;
+		return !CanStabilizeVendorPresentationContract(admission);
 	}
 
 	constexpr bool CoversPostLoadRecoverySettleDeadline()
@@ -3190,8 +3518,10 @@ namespace
 	static_assert(CoversBufferedDoorRequestCoalescing());
 	static_assert(CoversPhysicalRelatchFrameAdmission());
 	static_assert(CoversConsumedEmergencyRecoveryAdmission());
+	static_assert(CoversPresentationStabilizationSelection());
 	static_assert(CoversLifecycleMutationAdmission());
 	static_assert(CoversDispatchAdmission());
+	static_assert(CoversMainPassProviderQuiesceAdmission());
 	static_assert(CoversNativeRestorePresentationAdmission());
 	static_assert(CoversInactiveContractNativeReleaseAdmission());
 	static_assert(kNativeRestoreMaximumRecoveryAttempts == 2u);
@@ -3217,6 +3547,14 @@ namespace
 	static_assert(CoversDLSSReadinessTiers());
 	static_assert(CoversDLSSSlotRecycleOwnership());
 	static_assert(CoversSynchronousVendorLifecycleRebind());
+	static_assert(CoversNativeRestoreSuccessorAdmission());
+	static_assert(CoversProviderRetirementSuccessorAdmission());
+	static_assert(CoversAppliedContractGenerationSelection());
+	static_assert(CoversVendorEvaluationRelatchSelection());
+	static_assert(CoversPhysicalRelatchAdmission());
+	static_assert(CoversVendorEvaluationGenerationSelection());
+	static_assert(CoversRelatchResourceTrackingSyncAdmission());
+	static_assert(CoversVendorPresentationContractAdmission());
 	static_assert(CoversPostLoadRecoverySettleDeadline());
 	static_assert(CoversPostLoadRecoveryDeadlineAdmission());
 	static_assert(CoversPostLoadVendorTeardownOnlyAdmission());

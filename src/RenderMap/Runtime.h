@@ -12,6 +12,9 @@
 
 namespace CSX::RenderMap
 {
+	inline constexpr std::size_t kMaximumTrackedDeferredContexts = 256;
+	inline constexpr std::size_t kMaximumTrackedCommandLists = 8192;
+
 	enum class PayloadSchema : std::uint16_t
 	{
 		kRenderPassBoundary = 1,
@@ -40,6 +43,25 @@ namespace CSX::RenderMap
 		kGeometryBoundaryV2 = 24,
 		kResourceViewStateObserved = 25,
 		kResourceCpuAccess = 26,
+		kCommandRecordingObservation = 27,
+		kCommandListObservation = 28,
+		kFinishCommandList = 29,
+		kExecuteCommandList = 30,
+	};
+
+	enum class DeviceContextKind : std::uint8_t
+	{
+		kUnknown = 0,
+		kImmediate = 1,
+		kDeferred = 2,
+	};
+
+	enum class ContextCreationEvidence : std::uint8_t
+	{
+		kUnknown = 0,
+		kInitialImmediate = 1,
+		kCreateDeferredContext = 2,
+		kFirstSeen = 3,
 	};
 
 	enum class ResourceCpuAccessPhase : std::uint8_t
@@ -214,6 +236,19 @@ namespace CSX::RenderMap
 		Collector::ScopeGuard EnterGeometry(const GeometryBoundary& a_boundary) noexcept;
 		void RecordTechniqueResolution(const TechniqueResolution& a_resolution) noexcept;
 		void SetImmediateContext(std::uintptr_t a_context) noexcept;
+		void RegisterDeferredContext(
+			std::uintptr_t a_context,
+			std::uint32_t a_contextFlags,
+			bool a_creationObserved = true) noexcept;
+		void RecordFinishCommandList(
+			std::uintptr_t a_context,
+			std::uintptr_t a_commandList,
+			bool a_restoreDeferredContextState,
+			std::int32_t a_result) noexcept;
+		void RecordExecuteCommandList(
+			std::uintptr_t a_context,
+			std::uintptr_t a_commandList,
+			bool a_restoreContextState) noexcept;
 		void BindStage(
 			std::uintptr_t a_context,
 			ShaderStage a_stage,
@@ -384,7 +419,48 @@ namespace CSX::RenderMap
 			std::uint32_t depthPitch{ 0 };
 		};
 
+		struct DeferredContextState
+		{
+			std::uint64_t pointerGeneration{ 1 };
+			std::uint64_t observationGeneration{ 0 };
+			std::uint64_t observationId{ 0 };
+			std::uint64_t commandSequence{ 0 };
+			std::uint64_t recordingEpoch{ 0 };
+			std::uint64_t recordingObservationId{ 0 };
+			std::uint32_t contextFlags{ 0 };
+			std::uint64_t creationCaptureGeneration{ 0 };
+			std::uintptr_t boundVertexShader{ 0 };
+			std::uintptr_t boundPixelShader{ 0 };
+			std::uintptr_t boundComputeShader{ 0 };
+			std::uint64_t boundVertexShaderObservationId{ 0 };
+			std::uint64_t boundPixelShaderObservationId{ 0 };
+			std::uint64_t boundComputeShaderObservationId{ 0 };
+		};
+
+		struct CommandListState
+		{
+			std::uint64_t pointerGeneration{ 1 };
+			std::uint64_t observationGeneration{ 0 };
+			std::uint64_t observationId{ 0 };
+			std::uint64_t sourceContextObservationId{ 0 };
+			std::uint64_t sourceRecordingObservationId{ 0 };
+			bool sourceRecordingComplete{ false };
+		};
+
+		struct ContextObservation
+		{
+			DeviceContextKind kind{ DeviceContextKind::kUnknown };
+			std::uint64_t observationId{ 0 };
+			std::uint64_t commandSequence{ 0 };
+			std::uint64_t recordingObservationId{ 0 };
+		};
+
 		std::uint64_t EnsureImmediateContextObservation() noexcept;
+		ContextObservation EnsureContextObservation(std::uintptr_t a_context) noexcept;
+		std::uint64_t StartDeferredRecording(
+			DeferredContextState& a_state,
+			std::uint64_t a_captureGeneration, bool a_partialAtCaptureStart) noexcept;
+		void ResetImmediatePipelineState() noexcept;
 		std::uint64_t NextCommandStreamSequence() noexcept;
 		std::uint64_t EnsureBoundStageObservation(ShaderStage a_stage) noexcept;
 		StageShaderObservationResult ObserveBoundStage(
@@ -426,13 +502,18 @@ namespace CSX::RenderMap
 		std::mutex immediateContextObservationMutex;
 		std::mutex resourceViewStateMutex;
 		std::mutex activeCpuMapMutex;
+		std::mutex deferredContextMutex;
+		std::mutex commandListMutex;
+		std::unordered_map<std::uintptr_t, DeferredContextState> deferredContexts;
+		std::unordered_map<std::uintptr_t, CommandListState> commandLists;
 		std::unordered_map<ActiveCpuMapKey, ActiveCpuMap, ActiveCpuMapKeyHash> activeCpuMaps;
 		std::uint64_t resourceViewStateGeneration{ 0 };
 		std::array<std::array<std::array<std::uintptr_t, kMaximumShaderResourceSlots>, 7>, 2>
 			effectiveResourceViews{};
 		mutable std::shared_mutex persistentStageShaderMutex;
 		std::unordered_map<PersistentStageShaderKey, PersistentStageShaderIdentity,
-			PersistentStageShaderKeyHash> persistentStageShaders;
+			PersistentStageShaderKeyHash>
+			persistentStageShaders;
 	};
 
 	Runtime& GetRuntime() noexcept;

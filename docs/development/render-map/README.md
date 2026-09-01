@@ -23,20 +23,22 @@ Depth-culling events are observations of the existing upstream behaviour.
 
 ## Included here
 
-- `Collector`: bounded event and string storage with explicit gap accounting.
-- `Runtime`: typed observation entry points used by engine and D3D11 hooks.
-- `Controller`: single-session start, status, stop, and completed-capture
-  ownership.
-- `Artifacts` and `Serialization`: deterministic JSONL event and capture
-  manifest output.
-- engine, shader, D3D11 context, and OpenVR eye-submit instrumentation.
-- focused collector, runtime, and controller tests.
-- the runtime capture-manifest and render-event JSON schemas.
+-   `Collector`: bounded event and string storage with explicit gap accounting.
+-   `Runtime`: typed observation entry points used by engine and D3D11 hooks.
+-   `Controller`: single-session start, status, stop, and completed-capture
+    ownership.
+-   `Artifacts` and `Serialization`: deterministic JSONL event and capture
+    manifest output.
+-   engine, shader, D3D11 context, and OpenVR eye-submit instrumentation.
+-   deferred-context recording and exact command-list execution replay, described
+    in [`device-context-command-list-slice.md`](./device-context-command-list-slice.md).
+-   focused collector, runtime, controller, and offline graph tests.
+-   runtime capture-manifest, render-event, and derived render-graph schemas.
 
 ## Deliberately separate
 
 The DevBench registration adapter is reviewed separately because it is the
-optional external control surface over this runtime. Offline graph building,
-shader dependency analysis, generated shader manifests, engine maps, Ghidra
-helpers, prior-art catalogues, and captured-analysis reports remain development
-tools; they do not enter the Community Shaders binary in either build mode.
+optional external control surface over this runtime. Shader dependency
+analysis, generated shader manifests, engine maps, Ghidra helpers, prior-art
+catalogues, and captured-analysis reports remain development tools; they do
+not enter the Community Shaders binary in either build mode.

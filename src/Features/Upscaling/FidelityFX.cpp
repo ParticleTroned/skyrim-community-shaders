@@ -1284,11 +1284,36 @@ FidelityFX::FrameGenerationPresentResult FidelityFX::Present(bool a_useFrameGene
 	}
 
 	frameID++;
-	const bool successful =
+	const bool setupSuccessful =
 		frameGenerationConfigured &&
 		uiCompositionConfigured &&
 		frameGenerationPrepared;
-	return { successful, a_useFrameGeneration && successful };
+	bool providerMayUseSeparatedUI =
+		a_useFrameGeneration ? setupSuccessful : !setupSuccessful;
+	if (a_useFrameGeneration && !setupSuccessful) {
+		configParameters.frameGenerationEnabled = false;
+		configParameters.frameGenerationCallback = nullptr;
+		configParameters.frameGenerationCallbackUserContext = nullptr;
+		const bool frameGenerationDisabled =
+			ffx::Configure(frameGenContext, configParameters) ==
+			ffx::ReturnCode::Ok;
+
+		uiConfig.uiResource = FfxApiResource({});
+		uiConfig.flags = 0;
+		const bool uiCompositionDisabled =
+			ffx::Configure(swapChainContext, uiConfig) ==
+			ffx::ReturnCode::Ok;
+		providerMayUseSeparatedUI =
+			!frameGenerationDisabled || !uiCompositionDisabled;
+		if (providerMayUseSeparatedUI) {
+			logger::critical(
+				"[FidelityFX] Failed to disable frame generation cleanly after a partial Present setup failure.");
+		}
+	}
+	return {
+		a_useFrameGeneration && setupSuccessful,
+		providerMayUseSeparatedUI
+	};
 }
 
 FidelityFX::LifecycleResult FidelityFX::CreateFSRResources()

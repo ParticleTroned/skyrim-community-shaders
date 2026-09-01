@@ -6,6 +6,40 @@
 
 namespace Util
 {
+	/** @brief Returns whether two COM interfaces expose the same IUnknown identity. */
+	[[nodiscard]] bool HaveSameCOMIdentity(
+		IUnknown* a_first,
+		IUnknown* a_second);
+	/** @brief Returns whether two valid COM interfaces expose distinct identities. */
+	[[nodiscard]] bool HaveDistinctCOMIdentity(
+		IUnknown* a_first,
+		IUnknown* a_second);
+
+	/** @brief Restores compute shader, the first one or two SRVs, UAV0, and CB0. */
+	class ScopedComputeBindings
+	{
+	public:
+		explicit ScopedComputeBindings(
+			ID3D11DeviceContext* a_context,
+			uint32_t a_shaderResourceCount = 1);
+		~ScopedComputeBindings();
+
+		ScopedComputeBindings(const ScopedComputeBindings&) = delete;
+		ScopedComputeBindings& operator=(const ScopedComputeBindings&) = delete;
+
+	private:
+		ID3D11DeviceContext* context = nullptr;
+		winrt::com_ptr<ID3D11ComputeShader> shader;
+		std::array<winrt::com_ptr<ID3D11ClassInstance>,
+			D3D11_SHADER_MAX_INTERFACES>
+			classInstances;
+		UINT classInstanceCount = 0;
+		std::array<winrt::com_ptr<ID3D11ShaderResourceView>, 2> shaderResources;
+		uint32_t shaderResourceCount = 0;
+		winrt::com_ptr<ID3D11UnorderedAccessView> uav;
+		winrt::com_ptr<ID3D11Buffer> constantBuffer;
+	};
+
 	bool TryGetDepthSrvDimensions(ID3D11ShaderResourceView* a_depthSrv, uint32_t& o_width, uint32_t& o_height);
 
 	ID3D11ShaderResourceView* GetSRVFromRTV(ID3D11RenderTargetView* a_rtv);

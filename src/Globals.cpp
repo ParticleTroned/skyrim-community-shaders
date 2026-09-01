@@ -256,8 +256,10 @@ namespace globals
 
 	void OnGameWindowClose()
 	{
-		if (!game::quitGame.exchange(true, std::memory_order_acq_rel) && shaderCache) {
-			shaderCache->StopCompilation();
+		if (!game::quitGame.exchange(true, std::memory_order_acq_rel)) {
+			if (shaderCache)
+				shaderCache->StopCompilation();
+			features::upscaling.RequestBackendShutdown();
 		}
 	}
 

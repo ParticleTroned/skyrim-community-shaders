@@ -13,6 +13,7 @@
 #include <directx/d3d12.h>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <winrt/base.h>
 
 /**
@@ -66,6 +67,7 @@ public:
 	static constexpr uint32_t kDLSSPresetF = 4;
 	static constexpr uint32_t kDLSSPresetE = 5;
 	static constexpr uint32_t kDLSSPresetMaxIndex = kDLSSPresetE;
+	static constexpr uint32_t kDLSSGMaximumGeneratedFrames = 5;
 	static constexpr uint32_t kFsr4RuntimeSelectionSchemaVersion = 1;
 	static constexpr float kDefaultDLSSSharpness = 0.5f;
 
@@ -99,6 +101,8 @@ public:
 		uint frameGenerationMode = 0;  // Disabled by default
 		uint frameGenerationForceEnable = 0;
 		bool frameGenerationAllowInMenus = false;
+		bool preferFSRFrameGeneration = false;
+		uint dlssgFramesToGenerate = 1;
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
 		float sharpnessFSR = 0.0f;
 		float sharpnessDLSS = kDefaultDLSSSharpness;
@@ -145,6 +149,7 @@ public:
 	bool lowRefreshRate = false;
 	bool fidelityFXMissing = false;
 	bool d3d12SwapChainActive = false;
+	bool dlssgSupportedAtBoot = false;
 
 	// Timing and scaling
 	double refreshRate = 0.0f;
@@ -152,10 +157,37 @@ public:
 	LARGE_INTEGER qpf;
 
 	// Final-output timing for the overlay and performance measurements
+	struct FrameGenerationFrameSnapshot
+	{
+		uint32_t frame = std::numeric_limits<uint32_t>::max();
+		uint32_t renderWidth = 0;
+		uint32_t renderHeight = 0;
+		uint64_t interopGeneration = 0;
+		bool requested = false;
+		bool inputsReady = false;
+		bool dlssgFrameReady = false;
+		bool uiSeparated = false;
+		bool uiPreparedForOutput = false;
+		bool valid = false;
+	};
+
 	bool IsFrameGenerationDx12PathActive() const;
 	bool IsFrameGenerationActive() const;
+	bool UsesDLSSGFrameGeneration() const;
+	/** @brief Returns whether persistent game-loop state permits generation. */
+	[[nodiscard]] bool IsRenderingGameFrames() const;
 	bool ShouldUseFrameGenerationThisFrame() const;
-	bool ConsumeFrameGenerationInputsForPresent();
+	bool AreFrameGenerationInputsReadyForCompositing() const;
+	/** @brief Returns whether this frame's UI is physically in the separate target. */
+	[[nodiscard]] bool IsFrameGenerationUIPhysicallySeparated() const;
+	/** @brief Returns whether provider-ready inputs include separated UI. */
+	[[nodiscard]] bool IsFrameGenerationUISeparated() const;
+	FrameGenerationFrameSnapshot ConsumeFrameGenerationInputsForPresent();
+	void MarkFrameGenerationUISeparated();
+	/** @brief Cancels generation while preserving separated UI for Present fallback. */
+	void CancelFrameGenerationForSeparatedUI();
+	/** @brief Records that separated UI matches the final output encoding. */
+	void MarkFrameGenerationUIPreparedForOutput();
 	/** @brief Returns the latest validated final-presentation timing sample. */
 	[[nodiscard]] DX12SwapChain::OutputPresentationTiming GetOutputPresentationTiming() const;
 	bool IsUpscalingActive() const;
@@ -189,6 +221,8 @@ public:
 			{ "frameGenerationMode", true },
 			{ "frameGenerationForceEnable", true },
 			{ "frameGenerationAllowInMenus", true },
+			{ "preferFSRFrameGeneration", true },
+			{ "dlssgFramesToGenerate", true },
 			{ "sharpnessFSR", true },
 			{ "sharpnessDLSS", true },
 			{ "fsr4RuntimeEnable", true },
@@ -289,11 +323,13 @@ public:
 
 	// Static instances instead of singletons
 	static inline Streamline streamline;
+	static inline Streamline streamlineDX12{ sl::RenderAPI::eD3D12, Streamline::DLSSGPluginDir };
 	static inline FidelityFX fidelityFX;  ///< Only for frame generation
 	static inline DX12SwapChain dx12SwapChain;
 	static inline RCAS rcas;  ///< Standalone RCAS sharpening for DLSS
 
 	Util::LazyShader<ID3D11PixelShader> copyDepthToSharedBufferPS;
+	Util::LazyShader<ID3D11ComputeShader> compositeFrameGenerationUIFallbackCS;
 
 	float projectionPosScaleX = 0.0f;
 	float projectionPosScaleY = 0.0f;
@@ -313,6 +349,7 @@ public:
 	bool historyResetThisFrame = false;
 	bool menuCameraMVsValid = false;
 	uint32_t historyResetLatchedFrame = std::numeric_limits<uint32_t>::max();
+	uint32_t historyResetStateUpdatedFrame = std::numeric_limits<uint32_t>::max();
 	uint32_t menuCameraMVsPreparedFrame = std::numeric_limits<uint32_t>::max();
 	bool historyResetTrackingInitialized = false;
 	float2 previousHistoryScreenSize = { 0.0f, 0.0f };
@@ -324,20 +361,34 @@ public:
 	bool previousHistoryFSRRuntimePathActive = false;
 	bool previousHistoryFSRRuntimeFsr4Active = false;
 
-	bool frameGenerationCopyValid = false;
-	bool frameGenerationCopyRequested = false;
-	bool frameGenerationCopySuccessful = false;
-	bool frameGenerationCopyConsumed = true;
+	FrameGenerationFrameSnapshot frameGenerationFrame{};
+	bool frameGenerationFrameConsumed = true;
+	mutable std::mutex frameGenerationFrameMutex;
+	enum class BackendLifecycle : uint8_t
+	{
+		kRunning,
+		kShutdownRequested,
+		kRetiring,
+		kRetired
+	};
+	std::atomic<BackendLifecycle> backendLifecycle = BackendLifecycle::kRunning;
+	std::atomic_bool backendShutdownRequiresPresent = false;
 
-	bool CopySharedD3D12Resources();
+	bool CopySharedD3D12Resources(uint32_t& a_renderWidth, uint32_t& a_renderHeight);
+	bool CompositeFrameGenerationUIFallback(bool& a_uiPreparedForOutput);
 	void PostDisplay();
 	bool PerformUpscaling();
 	bool UpscaleDepth();
-	void RecordFrameGenerationCopy(bool a_requested, bool a_successful);
+	void RecordFrameGenerationCopy(
+		bool a_requested,
+		bool a_successful,
+		uint32_t a_renderWidth,
+		uint32_t a_renderHeight);
 	void RequestHistoryReset();
 	bool ShouldResetHistoryThisFrame() const;
 	void UpdateHistoryResetState(UpscaleMethod a_upscaleMethod);
 	void LatchHistoryResetForCurrentFrame();
+	void PrepareHistoryResetForCurrentFrame();
 	bool IsFSRRuntimePathActive(UpscaleMethod a_upscaleMethod) const;
 	bool IsFSRRuntimeFsr4PathActive(UpscaleMethod a_upscaleMethod) const;
 
@@ -352,18 +403,33 @@ public:
 	static void TimerSleepQPC(int64_t targetQPC);
 
 	void FrameLimiter(bool a_frameGenerationActive);
+	void UpdateReflex();
+	/** @brief Defers backend shutdown to the owned Present thread. */
+	void RequestBackendShutdown();
+	/** @brief Returns whether new backend API work must be suppressed. */
+	[[nodiscard]] bool IsBackendShutdownRequested() const;
+	/** @brief Returns whether window close must wait for a backend Present boundary. */
+	[[nodiscard]] bool RequiresPresentThreadBackendShutdown() const;
+	/** @brief Returns whether proxy calls must stop before backend retirement. */
+	[[nodiscard]] bool AreBackendsRetiringOrShutdown() const;
+	/** @brief Returns whether Streamline has reached its terminal shutdown state. */
+	[[nodiscard]] bool AreBackendsShutdown() const;
+	/** @brief Processes a pending shutdown request at a Present boundary. */
+	[[nodiscard]] bool ProcessBackendShutdownRequest();
 
 	static double GetRefreshRate(HWND a_window);
 
 	// Unified interface methods - external code should use these instead of direct access
-	void LoadUpscalingSDKs();  // Loads all SDKs at once
+	void LoadUpscalingSDKs(
+		bool a_isNvidiaAdapter,
+		bool a_allowD3D12Backend);  // Loads only SDKs reachable by this graph.
 	HANDLE GetFrameLatencyWaitableObject() const;
 
 	// Backend interface methods
 	bool IsBackendInitialized() const;
 	void CheckBackendFeatures(IDXGIAdapter* adapter);
-	void UpgradeBackendInterface(void** ppInterface);
-	void SetBackendD3DDevice(ID3D11Device* device);
+	[[nodiscard]] bool UpgradeBackendInterface(void** ppInterface);
+	[[nodiscard]] bool SetBackendD3DDevice(ID3D11Device* device);
 	void PostBackendDevice();
 
 	// Module availability methods
@@ -373,6 +439,7 @@ public:
 	void SetProxyD3D11Device(ID3D11Device* device);
 	void SetProxyD3D11DeviceContext(ID3D11DeviceContext* context);
 	void CreateProxySwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC swapChainDesc);
+	HRESULT CreateDLSSGSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC swapChainDesc);
 	void CreateProxyInterop();
 	IDXGISwapChain* GetProxySwapChain();
 

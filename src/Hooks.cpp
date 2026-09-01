@@ -43,6 +43,88 @@ const std::pair<std::unique_ptr<uint8_t[]>, size_t>& GetShaderBytecode(void* Sha
 
 namespace
 {
+	std::atomic<HWND> g_deferredCloseWindow{ nullptr };
+	std::atomic_bool g_deferredClosePending = false;
+	std::atomic_bool g_deferredCloseCompletionPosted = false;
+	std::atomic<UINT_PTR> g_deferredCloseTimer = 0;
+	constexpr UINT kDeferredCloseTimeoutMs = 2000;
+	thread_local Hooks::SwapChainPresentResultCapture*
+		g_activePresentResultCapture = nullptr;
+
+	UINT GetDeferredCloseMessage()
+	{
+		static const UINT message = RegisterWindowMessageW(
+			L"CommunityShaders.FrameGeneration.CompleteDeferredClose");
+		return message;
+	}
+
+	void ClearDeferredCloseState(HWND a_window)
+	{
+		const UINT_PTR timer =
+			g_deferredCloseTimer.exchange(0, std::memory_order_acq_rel);
+		if (timer && a_window)
+			KillTimer(a_window, timer);
+		g_deferredCloseWindow.store(nullptr, std::memory_order_release);
+		g_deferredCloseCompletionPosted.store(false, std::memory_order_release);
+	}
+
+	bool DeferWindowClose(HWND a_window)
+	{
+		if (g_deferredClosePending.exchange(true, std::memory_order_acq_rel))
+			return g_deferredCloseWindow.load(std::memory_order_acquire) ==
+			       a_window;
+
+		g_deferredCloseWindow.store(a_window, std::memory_order_release);
+		const UINT_PTR timer = SetTimer(
+			a_window,
+			0,
+			kDeferredCloseTimeoutMs,
+			nullptr);
+		if (timer) {
+			g_deferredCloseTimer.store(timer, std::memory_order_release);
+			return true;
+		}
+
+		logger::critical(
+			"[Frame Generation] Could not arm the deferred-close safety timer: error {}.",
+			GetLastError());
+		g_deferredClosePending.store(false, std::memory_order_release);
+		ClearDeferredCloseState(a_window);
+		return false;
+	}
+
+	void CompleteDeferredWindowClose()
+	{
+		if (!g_deferredClosePending.load(std::memory_order_acquire) ||
+			g_deferredCloseCompletionPosted.exchange(
+				true,
+				std::memory_order_acq_rel)) {
+			return;
+		}
+
+		const HWND window = g_deferredCloseWindow.load(std::memory_order_acquire);
+		if (!window || !IsWindow(window)) {
+			g_deferredClosePending.store(false, std::memory_order_release);
+			ClearDeferredCloseState(window);
+			return;
+		}
+
+		const UINT closeMessage = GetDeferredCloseMessage();
+		if (closeMessage && PostMessageW(window, closeMessage, 0, 0))
+			return;
+
+		const DWORD postError = GetLastError();
+		g_deferredClosePending.store(false, std::memory_order_release);
+		ClearDeferredCloseState(window);
+		const DWORD windowThread = GetWindowThreadProcessId(window, nullptr);
+		if (!windowThread || !PostThreadMessageW(windowThread, WM_QUIT, 0, 0)) {
+			logger::critical(
+				"[Frame Generation] Could not release deferred window close: PostMessage error {}, fallback error {}.",
+				postError,
+				GetLastError());
+		}
+	}
+
 	enum class InputHookSafeguardReason : uint32_t
 	{
 		kSwallow = 1u << 0,
@@ -515,32 +597,88 @@ struct IDXGISwapChain_Present
 {
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
-		// TEST only probes presentation status. It must not advance any render,
-		// measurement, HDR, UI, screenshot, or frame-accounting state.
-		if ((Flags & DXGI_PRESENT_TEST) != 0)
-			return func(This, SyncInterval, Flags);
-
-		const bool armStartupMenuBlurSource =
-			!globals::state->startupMenuBlurSourceReady &&
-			globals::state->startupMenuInitializationComplete.load(std::memory_order_acquire);
-		globals::state->Reset();
-
-		HRESULT retval = globals::features::hdrDisplay.HandleSwapChainPresent(
+		return Hooks::RunSwapChainPresent(
 			This,
 			SyncInterval,
 			Flags,
 			[&](IDXGISwapChain* swapChain, UINT syncInterval, UINT presentFlags) {
 				return func(swapChain, syncInterval, presentFlags);
 			});
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
 
-		if (SUCCEEDED(retval) && armStartupMenuBlurSource)
-			globals::state->startupMenuBlurSourceReady = true;
+struct IDXGISwapChain_Present1
+{
+	static HRESULT WINAPI thunk(
+		IDXGISwapChain1* This,
+		UINT SyncInterval,
+		UINT PresentFlags,
+		const DXGI_PRESENT_PARAMETERS* pPresentParameters)
+	{
+		return Hooks::RunSwapChainPresent(
+			This,
+			SyncInterval,
+			PresentFlags,
+			[&](IDXGISwapChain* swapChain,
+				UINT syncInterval,
+				UINT presentFlags) {
+				return func(
+					static_cast<IDXGISwapChain1*>(swapChain),
+					syncInterval,
+					presentFlags,
+					pPresentParameters);
+			});
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
 
-		globals::features::screenshotFeature.ProcessCaptureRequest();
+struct IDXGISwapChain_ResizeBuffers1
+{
+	static HRESULT WINAPI thunk(
+		IDXGISwapChain3* This,
+		UINT BufferCount,
+		UINT Width,
+		UINT Height,
+		DXGI_FORMAT Format,
+		UINT SwapChainFlags,
+		const UINT* pCreationNodeMask,
+		IUnknown* const* ppPresentQueue)
+	{
+		auto& upscaling = globals::features::upscaling;
+		const auto& chain = upscaling.dx12SwapChain;
+		if (chain.frameGenerationBackend !=
+			DX12SwapChain::FrameGenerationBackend::kNone) {
+			return DXGI_ERROR_UNSUPPORTED;
+		}
+		if (BufferCount > DXGI_MAX_SWAP_CHAIN_BUFFERS)
+			return DXGI_ERROR_INVALID_CALL;
 
-		TracyD3D11Collect(globals::state->tracyCtx);
+		if (BufferCount > 0) {
+			if (!pCreationNodeMask || !ppPresentQueue)
+				return DXGI_ERROR_INVALID_CALL;
+			for (UINT i = 0; i < BufferCount; ++i) {
+				if (!ppPresentQueue[i])
+					return DXGI_ERROR_INVALID_CALL;
+			}
+		}
 
-		return retval;
+		// DXGI permits zero to retain the current count, but SL 2.12 asserts
+		// on a null queue-array pointer before observing that zero length.
+		IUnknown* emptyPresentQueue = nullptr;
+		auto* const presentQueues =
+			BufferCount == 0 && !ppPresentQueue ?
+				&emptyPresentQueue :
+				ppPresentQueue;
+		return func(
+			This,
+			BufferCount,
+			Width,
+			Height,
+			Format,
+			SwapChainFlags,
+			pCreationNodeMask,
+			presentQueues);
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
 };
@@ -697,7 +835,7 @@ struct BSInputDeviceManager_PollInputDevices
 	static void thunk(RE::BSTEventSource<RE::InputEvent*>* a_dispatcher, RE::InputEvent* const* a_events)
 	{
 		// Run Reflex frame pacing as early as possible in the frame loop.
-		globals::features::upscaling.streamline.UpdateReflex();
+		globals::features::upscaling.UpdateReflex();
 
 		auto menu = globals::menu;
 		const bool shouldSwallowInput = menu->ShouldSwallowInput();
@@ -749,6 +887,68 @@ struct BSInputDeviceManager_PollInputDevices
 
 namespace Hooks
 {
+	SwapChainPresentResultCapture::SwapChainPresentResultCapture() :
+		previous(g_activePresentResultCapture)
+	{
+		g_activePresentResultCapture = this;
+	}
+
+	SwapChainPresentResultCapture::~SwapChainPresentResultCapture()
+	{
+		if (g_activePresentResultCapture == this)
+			g_activePresentResultCapture = previous;
+	}
+
+	HRESULT SwapChainPresentResultCapture::Resolve(
+		HRESULT a_proxyResult) const
+	{
+		if (FAILED(a_proxyResult) || !basePresentInvoked)
+			return a_proxyResult;
+		return baseResult;
+	}
+
+	void RecordSwapChainBasePresentResult(HRESULT a_result)
+	{
+		if (!g_activePresentResultCapture)
+			return;
+		g_activePresentResultCapture->baseResult = a_result;
+		g_activePresentResultCapture->basePresentInvoked = true;
+	}
+
+	HRESULT RunSwapChainPresent(
+		IDXGISwapChain* a_swapChain,
+		UINT a_syncInterval,
+		UINT a_flags,
+		const std::function<HRESULT(IDXGISwapChain*, UINT, UINT)>& a_presentChain)
+	{
+		// TEST only probes presentation status. It must not advance render, UI,
+		// screenshot, measurement, or frame-accounting state.
+		if ((a_flags & DXGI_PRESENT_TEST) != 0)
+			return a_presentChain(a_swapChain, a_syncInterval, a_flags);
+
+		const bool armStartupMenuBlurSource =
+			!globals::state->startupMenuBlurSourceReady &&
+			globals::state->startupMenuInitializationComplete.load(
+				std::memory_order_acquire);
+		globals::state->Reset();
+
+		const HRESULT result =
+			globals::features::hdrDisplay.HandleSwapChainPresent(
+				a_swapChain,
+				a_syncInterval,
+				a_flags,
+				a_presentChain);
+
+		if (SUCCEEDED(result) && armStartupMenuBlurSource)
+			globals::state->startupMenuBlurSourceReady = true;
+
+		globals::features::screenshotFeature.ProcessCaptureRequest();
+		TracyD3D11Collect(globals::state->tracyCtx);
+		if (globals::features::upscaling.ProcessBackendShutdownRequest())
+			CompleteDeferredWindowClose();
+		return result;
+	}
+
 	bool RecreateRenderTargets()
 	{
 		if (!globals::game::renderer || !globals::state || !globals::d3d::device || !globals::d3d::context)
@@ -770,9 +970,22 @@ namespace Hooks
 
 			logger::info("Detouring virtual function tables");
 			// InstallSwapChainPresentHooks installs SwapChainPresentBottom (suppression) and OMSetBlendState first.
-			// IDXGISwapChain_Present is installed last so it sits at the top of the Detours chain and fires first.
+			// The outer Present hooks are installed last so they fire before the bottom hooks.
 			HDRDisplay::InstallSwapChainPresentHooks(globals::d3d::swapChain);
 			stl::detour_vfunc<8, IDXGISwapChain_Present>(globals::d3d::swapChain);
+			winrt::com_ptr<IDXGISwapChain1> swapChain1;
+			if (SUCCEEDED(globals::d3d::swapChain->QueryInterface(
+					IID_PPV_ARGS(swapChain1.put())))) {
+				stl::detour_vfunc<22, IDXGISwapChain_Present1>(swapChain1.get());
+			}
+			if (globals::features::upscaling.streamline.initialized) {
+				winrt::com_ptr<IDXGISwapChain3> swapChain3;
+				if (SUCCEEDED(globals::d3d::swapChain->QueryInterface(
+						IID_PPV_ARGS(swapChain3.put())))) {
+					stl::detour_vfunc<39, IDXGISwapChain_ResizeBuffers1>(
+						swapChain3.get());
+				}
+			}
 
 			auto shaderCache = globals::shaderCache;
 			if (shaderCache->IsDump()) {
@@ -793,12 +1006,35 @@ namespace Hooks
 	{
 		static LRESULT thunk(HWND a_hwnd, UINT a_msg, WPARAM a_wParam, LPARAM a_lParam)
 		{
+			const UINT deferredCloseMessage = GetDeferredCloseMessage();
+			if (deferredCloseMessage && a_msg == deferredCloseMessage &&
+				a_hwnd == g_deferredCloseWindow.load(std::memory_order_acquire)) {
+				if (!g_deferredClosePending.exchange(false, std::memory_order_acq_rel))
+					return 0;
+				ClearDeferredCloseState(a_hwnd);
+				return func(a_hwnd, WM_CLOSE, 0, 0);
+			}
+			if (a_msg == WM_TIMER &&
+				a_hwnd == g_deferredCloseWindow.load(std::memory_order_acquire) &&
+				a_wParam == g_deferredCloseTimer.load(std::memory_order_acquire)) {
+				logger::warn(
+					"[Frame Generation] No Present boundary arrived during shutdown; forwarding the window close without unloading Streamline.");
+				CompleteDeferredWindowClose();
+				return 0;
+			}
+
 			auto menu = globals::menu;
 			if ((a_msg == WM_KILLFOCUS || a_msg == WM_SETFOCUS) && menu->initialized) {
 				menu->focusChanged = true;
 			}
 			if (a_msg == WM_CLOSE) {
 				globals::OnGameWindowClose();
+				if (globals::features::upscaling.RequiresPresentThreadBackendShutdown()) {
+					if (DeferWindowClose(a_hwnd))
+						return 0;
+				} else {
+					(void)globals::features::upscaling.ProcessBackendShutdownRequest();
+				}
 			}
 			return func(a_hwnd, a_msg, a_wParam, a_lParam);
 		}

@@ -17,9 +17,6 @@ set(STREAMLINE_RUNTIME_ARCHIVE
 set(STREAMLINE_RUNTIME_EXTRACT_ROOT
     "${STREAMLINE_RUNTIME_ROOT}/sdk"
 )
-set(STREAMLINE_RUNTIME_EXTRACT_STAMP
-    "${STREAMLINE_RUNTIME_EXTRACT_ROOT}/.archive-sha256"
-)
 set(STREAMLINE_RUNTIME_FEATURE_ROOT
     "${STREAMLINE_RUNTIME_ROOT}/payload"
 )
@@ -32,6 +29,12 @@ set(STREAMLINE_RUNTIME_RELATIVE_DIRECTORY
 set(STREAMLINE_RUNTIME_DIRECTORY
     "${STREAMLINE_RUNTIME_FEATURE_ROOT}/${STREAMLINE_RUNTIME_RELATIVE_DIRECTORY}"
 )
+set(STREAMLINE_DLSSG_RUNTIME_RELATIVE_DIRECTORY
+    "Shaders/Upscaling/StreamlineDX12"
+)
+set(STREAMLINE_DLSSG_RUNTIME_DIRECTORY
+    "${STREAMLINE_RUNTIME_FEATURE_ROOT}/${STREAMLINE_DLSSG_RUNTIME_RELATIVE_DIRECTORY}"
+)
 
 file(MAKE_DIRECTORY "${STREAMLINE_RUNTIME_ROOT}")
 csx_download_verified_asset(
@@ -40,28 +43,15 @@ csx_download_verified_asset(
     "${STREAMLINE_RUNTIME_ARCHIVE_SHA256}"
 )
 
-set(_streamline_extract_required ON)
-if(EXISTS "${STREAMLINE_RUNTIME_EXTRACT_STAMP}")
-    file(READ "${STREAMLINE_RUNTIME_EXTRACT_STAMP}" _streamline_extracted_hash)
-    string(STRIP "${_streamline_extracted_hash}" _streamline_extracted_hash)
-    if(_streamline_extracted_hash STREQUAL STREAMLINE_RUNTIME_ARCHIVE_SHA256)
-        set(_streamline_extract_required OFF)
-    endif()
-endif()
-
-if(_streamline_extract_required)
-    file(REMOVE_RECURSE "${STREAMLINE_RUNTIME_EXTRACT_ROOT}")
-    file(MAKE_DIRECTORY "${STREAMLINE_RUNTIME_EXTRACT_ROOT}")
-    file(
-        ARCHIVE_EXTRACT
-        INPUT "${STREAMLINE_RUNTIME_ARCHIVE}"
-        DESTINATION "${STREAMLINE_RUNTIME_EXTRACT_ROOT}"
-    )
-    file(
-        WRITE "${STREAMLINE_RUNTIME_EXTRACT_STAMP}"
-        "${STREAMLINE_RUNTIME_ARCHIVE_SHA256}\n"
-    )
-endif()
+# Re-extract the verified archive so stale or modified SDK files can never be
+# staged merely because a previous extraction stamp still matches the ZIP.
+file(REMOVE_RECURSE "${STREAMLINE_RUNTIME_EXTRACT_ROOT}")
+file(MAKE_DIRECTORY "${STREAMLINE_RUNTIME_EXTRACT_ROOT}")
+file(
+    ARCHIVE_EXTRACT
+    INPUT "${STREAMLINE_RUNTIME_ARCHIVE}"
+    DESTINATION "${STREAMLINE_RUNTIME_EXTRACT_ROOT}"
+)
 
 file(
     GLOB_RECURSE _streamline_archive_files
@@ -70,6 +60,10 @@ file(
 )
 
 function(stage_streamline_runtime _filename)
+    set(_destination_directory "${STREAMLINE_RUNTIME_DIRECTORY}")
+    if(ARGC GREATER 1)
+        set(_destination_directory "${ARGV1}")
+    endif()
     set(_production_matches "")
     foreach(_candidate IN LISTS _streamline_archive_files)
         get_filename_component(_candidate_name "${_candidate}" NAME)
@@ -110,22 +104,115 @@ function(stage_streamline_runtime _filename)
     endif()
 
     list(GET _production_matches 0 _source)
-    set(_destination "${STREAMLINE_RUNTIME_DIRECTORY}/${_filename}")
+    set(_destination "${_destination_directory}/${_filename}")
     file(COPY_FILE "${_source}" "${_destination}" ONLY_IF_DIFFERENT)
     set(STREAMLINE_RUNTIME_FILES
         ${STREAMLINE_RUNTIME_FILES}
         "${_destination}"
         PARENT_SCOPE
     )
+    if(
+        "${_destination_directory}"
+        STREQUAL "${STREAMLINE_DLSSG_RUNTIME_DIRECTORY}"
+    )
+        set(STREAMLINE_DLSSG_RUNTIME_FILES
+            ${STREAMLINE_DLSSG_RUNTIME_FILES}
+            "${_destination}"
+            PARENT_SCOPE
+        )
+    else()
+        set(STREAMLINE_DX11_RUNTIME_FILES
+            ${STREAMLINE_DX11_RUNTIME_FILES}
+            "${_destination}"
+            PARENT_SCOPE
+        )
+    endif()
+endfunction()
+
+function(stage_streamline_notice _relative_path)
+    set(_source "${STREAMLINE_RUNTIME_EXTRACT_ROOT}/${_relative_path}")
+    if(NOT EXISTS "${_source}")
+        message(
+            FATAL_ERROR
+            "Streamline ${STREAMLINE_RUNTIME_VERSION} archive is missing ${_relative_path}"
+        )
+    endif()
+
+    get_filename_component(_name "${_source}" NAME)
+    foreach(
+        _destination_directory
+        IN ITEMS
+            "${STREAMLINE_RUNTIME_DIRECTORY}"
+            "${STREAMLINE_DLSSG_RUNTIME_DIRECTORY}"
+    )
+        set(_destination "${_destination_directory}/${_name}")
+        file(COPY_FILE "${_source}" "${_destination}" ONLY_IF_DIFFERENT)
+        list(APPEND STREAMLINE_RUNTIME_FILES "${_destination}")
+        if(
+            "${_destination_directory}"
+            STREQUAL "${STREAMLINE_DLSSG_RUNTIME_DIRECTORY}"
+        )
+            list(APPEND STREAMLINE_DLSSG_RUNTIME_FILES "${_destination}")
+        else()
+            list(APPEND STREAMLINE_DX11_RUNTIME_FILES "${_destination}")
+        endif()
+    endforeach()
+
+    set(STREAMLINE_RUNTIME_FILES ${STREAMLINE_RUNTIME_FILES} PARENT_SCOPE)
+    set(
+        STREAMLINE_DX11_RUNTIME_FILES
+        ${STREAMLINE_DX11_RUNTIME_FILES}
+        PARENT_SCOPE
+    )
+    set(
+        STREAMLINE_DLSSG_RUNTIME_FILES
+        ${STREAMLINE_DLSSG_RUNTIME_FILES}
+        PARENT_SCOPE
+    )
 endfunction()
 
 file(REMOVE_RECURSE "${STREAMLINE_RUNTIME_FEATURE_ROOT}")
 file(MAKE_DIRECTORY "${STREAMLINE_RUNTIME_DIRECTORY}")
+file(MAKE_DIRECTORY "${STREAMLINE_DLSSG_RUNTIME_DIRECTORY}")
 
 set(STREAMLINE_RUNTIME_FILES "")
-stage_streamline_runtime(nvngx_dlss.dll)
-stage_streamline_runtime(sl.common.dll)
-stage_streamline_runtime(sl.dlss.dll)
-stage_streamline_runtime(sl.interposer.dll)
-stage_streamline_runtime(sl.pcl.dll)
-stage_streamline_runtime(sl.reflex.dll)
+set(STREAMLINE_DX11_RUNTIME_FILES "")
+set(STREAMLINE_DLSSG_RUNTIME_FILES "")
+set(
+    _streamline_dx11_runtime_names
+    nvngx_dlss.dll
+    sl.common.dll
+    sl.dlss.dll
+    sl.interposer.dll
+    sl.pcl.dll
+    sl.reflex.dll
+)
+set(
+    _streamline_dlssg_runtime_names
+    nvngx_dlssg.dll
+    sl.common.dll
+    sl.dlss_g.dll
+    sl.interposer.dll
+    sl.pcl.dll
+    sl.reflex.dll
+)
+foreach(_runtime_name IN LISTS _streamline_dx11_runtime_names)
+    stage_streamline_runtime("${_runtime_name}")
+endforeach()
+foreach(_runtime_name IN LISTS _streamline_dlssg_runtime_names)
+    stage_streamline_runtime(
+        "${_runtime_name}"
+        "${STREAMLINE_DLSSG_RUNTIME_DIRECTORY}"
+    )
+endforeach()
+
+foreach(
+    _license_relative_path
+    IN ITEMS
+        license.txt
+        3rd-party-licenses.md
+        bin/x64/nvngx_dlss.license.txt
+        bin/x64/reflex.license.txt
+)
+    stage_streamline_notice("${_license_relative_path}")
+endforeach()

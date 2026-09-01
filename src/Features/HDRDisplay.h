@@ -66,7 +66,7 @@ public:
 
 	float4 GetSharedDataHDR() const;
 	void UpdateHDRData() const;
-	void UpdateSwapChainColorSpace() const;
+	void UpdateSwapChainColorSpace();
 
 	// UI rendering - redirects UI to separate target for proper compositing
 	void BeginUIRendering();
@@ -85,9 +85,13 @@ public:
 	// Align kFRAMEBUFFER.RTV with uiTexture for engine paths (ImGui already bound OM).
 	void SyncFramebufferUIRedirect();
 
-	// Scale UI brightness in uiBufferWrapped for Frame Gen.
-	void ScaleUIBrightnessForFG();
+	/** @brief Returns false when frame generation must cancel UI separation. */
+	[[nodiscard]] bool ScaleUIBrightnessForFG();
+	/** @brief Converts separated UI into the active output encoding. */
+	[[nodiscard]] bool PrepareFrameGenerationUIForOutput();
 	bool ShouldUseD3D12UIBuffer();
+	/** @brief Returns whether HDR encoding is currently applied to the output. */
+	[[nodiscard]] bool IsHDROutputActive() const;
 
 	void ApplyHDR();
 
@@ -122,7 +126,7 @@ public:
 		float enableHDR;                 ///< 1.0 = HDR output with PQ, 0.0 = SDR output with gamma
 		float paperWhite;                ///< Reference white brightness in nits for HDR
 		float peakNits;                  ///< Maximum display brightness in nits for HDR
-		float skipUIComposite;           ///< 1.0 = FG handles UI, skip our compositing
+		float skipUIComposite;           ///< 1.0 = separated UI is composited after this pass
 		float uiBrightness;              ///< UI brightness multiplier (Frame Gen compositing)
 		float isSceneLinear;             ///< 1.0 = Linear Lighting active, scene already linear
 		float pad0;                      ///< 1.0 = main menu/loading screen active
@@ -142,8 +146,8 @@ public:
 
 	Texture2D* hdrTexture = nullptr;
 	Texture2D* outputTexture = nullptr;
-	Texture2D* uiTexture = nullptr;          // Separate UI render target for proper compositing
-	Texture2D* cleanSceneCapture = nullptr;  // Pre-blur copy of hdrTexture for clean captures
+	Texture2D* uiTexture = nullptr;            // Separate UI render target for proper compositing
+	Texture2D* cleanSceneCapture = nullptr;    // Pre-blur copy of hdrTexture for clean captures
 	uint cleanSceneCaptureFrame = UINT32_MAX;  // frameCount when cleanSceneCapture was last refreshed
 
 	ID3D11ComputeShader* hdrOutputCS = nullptr;
@@ -157,6 +161,7 @@ public:
 	static bool isHDRCapableMonitor;     // Monitor supports HDR but Windows HDR may be off
 	static bool wasExclusiveFullscreen;  // EFS detected at swapchain creation; incompatible with HDR
 	bool pendingAutoDetect = false;
+	bool d3d11HDRColorSpaceActive = false;
 
 	float GetDisplayMaxLuminance() const;
 	mutable float cachedDisplayMaxLuminance = 1000.0f;
@@ -192,7 +197,6 @@ private:
 	bool presentSuppressed = false;
 	std::unordered_map<ID3D11BlendState*, winrt::com_ptr<ID3D11BlendState>> patchedBlendStateCache;
 
-	HRESULT PresentToSwapChain(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags);
 	void DrawImGuiForPresent(bool frameGenActive, bool hdrReady);
 	void RunHDRBeforePresentChain(bool hdrReady);
 	HRESULT RunPresentChainWithHDR(
@@ -207,13 +211,14 @@ private:
 	{
 		bool useUIBuffer = false;
 		bool useFallbackCopy = false;
+		bool separateForFrameGeneration = false;
 	};
 
 	D3D12UIBufferMode GetD3D12UIBufferMode();
 
-	// Bind scene (t0), UI (t1, may be null), UAV (u0), CB (b0); dispatch the output CS; unbind.
-	void DispatchHDROutput(ID3D11ShaderResourceView* sceneSRV, ID3D11ShaderResourceView* uiSRV, ID3D11UnorderedAccessView* uav);
+	// Bind scene (t0), UI (t1, may be null), UAV (u0), and CB (b0), then restore prior state.
+	[[nodiscard]] bool DispatchHDROutput(ID3D11ShaderResourceView* sceneSRV, ID3D11ShaderResourceView* uiSRV, ID3D11UnorderedAccessView* uav);
 
-	// True when FFX frame generation is actively compositing UI this frame.
+	// True when the active frame-generation provider owns separated UI this frame.
 	bool IsFGCompositingThisFrame() const;
 };

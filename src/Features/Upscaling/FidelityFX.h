@@ -76,8 +76,9 @@ public:
 	float prevPeakNits = 1000.0f;
 	struct FrameGenerationPresentResult
 	{
-		bool successful = false;
 		bool active = false;
+		/** @brief True when the provider may still composite the registered UI. */
+		bool providerMayUseSeparatedUI = false;
 	};
 
 	// Cached DLL version info for FidelityFX plugin directory

@@ -235,6 +235,7 @@ target_include_directories(
         ${BSHOSHANY_THREAD_POOL_INCLUDE_DIRS}
         ${CLIB_UTIL_INCLUDE_DIRS}
         "${CMAKE_SOURCE_DIR}/package/Shaders"
+        "${CMAKE_SOURCE_DIR}/extern/nvapi"
         "${CMAKE_SOURCE_DIR}/extern/sk_hdr_png/include"
         ${DETOURS_INCLUDE_DIRS}
 )
@@ -663,8 +664,13 @@ install(
     COMPONENT FidelityFXRuntime
 )
 install(
-    FILES ${STREAMLINE_RUNTIME_FILES}
+    FILES ${STREAMLINE_DX11_RUNTIME_FILES}
     DESTINATION ${STREAMLINE_RUNTIME_RELATIVE_DIRECTORY}
+    COMPONENT StreamlineRuntime
+)
+install(
+    FILES ${STREAMLINE_DLSSG_RUNTIME_FILES}
+    DESTINATION ${STREAMLINE_DLSSG_RUNTIME_RELATIVE_DIRECTORY}
     COMPONENT StreamlineRuntime
 )
 install(CODE "file(REMOVE \${CMAKE_INSTALL_PREFIX}/Core)" COMPONENT Shaders)

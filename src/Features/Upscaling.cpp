@@ -7,8 +7,10 @@
 #include "State.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
+#include "Upscaling/FrameGenerationEligibilityPolicy.h"
 #include "Upscaling/ReflexPolicy.h"
 #include "Upscaling/Streamline.h"
+#include "Utils/D3D.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
 #include <Windows.h>
@@ -19,6 +21,7 @@
 #include <cmath>
 #include <directx/d3dx12.h>
 #include <format>
+#include <mutex>
 #include <string_view>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -31,6 +34,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	frameGenerationMode,
 	frameGenerationForceEnable,
 	frameGenerationAllowInMenus,
+	preferFSRFrameGeneration,
+	dlssgFramesToGenerate,
 	streamlineLogLevel,
 	sharpnessFSR,
 	sharpnessDLSS,
@@ -267,6 +272,7 @@ namespace
 		winrt::com_ptr<ID3D11ShaderResourceView> pixelShaderResources[1];
 		winrt::com_ptr<ID3D11Buffer> pixelShaderConstantBuffer1;
 	};
+
 	uint MigrateLegacyQualityModeUInt(uint value)
 	{
 		switch (value) {
@@ -401,6 +407,10 @@ namespace
 		settings.frameLimitMode = ClampToggleUInt(settings.frameLimitMode);
 		settings.frameGenerationMode = ClampToggleUInt(settings.frameGenerationMode);
 		settings.frameGenerationForceEnable = ClampToggleUInt(settings.frameGenerationForceEnable);
+		settings.dlssgFramesToGenerate = std::clamp<uint>(
+			settings.dlssgFramesToGenerate,
+			1u,
+			Upscaling::kDLSSGMaximumGeneratedFrames);
 		settings.streamlineLogLevel = std::min<uint>(settings.streamlineLogLevel, 2u);
 		settings.sharpnessFSR = ClampFiniteUnitRange(settings.sharpnessFSR, 0.0f);
 		settings.sharpnessDLSS = ClampFiniteUnitRange(settings.sharpnessDLSS, Upscaling::kDefaultDLSSSharpness);
@@ -477,34 +487,91 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	ID3D11DeviceContext** ppImmediateContext)
 {
 	auto& upscaling = globals::features::upscaling;
-	DXGI_ADAPTER_DESC adapterDesc{};
-	if (pAdapter && SUCCEEDED(pAdapter->GetDesc(&adapterDesc))) {
-		globals::state->SetAdapterDescription(adapterDesc.Description);
-		ApplyLegacyFsr4RuntimeSelectionMigration(
-			upscaling.settings,
-			FidelityFX::GetFsr4AdapterSupport(adapterDesc));
-	}
-	if (IsRenderDocUpscalingBlocked(true)) {
-		if (!g_renderDocUpscalingD3DHookBypassLogged.exchange(true, std::memory_order_acq_rel)) {
-			logger::warn(
-				"[Upscaling] Bypassing D3D11 upscaling device hook because {}.",
-				GetRenderDocUpscalingBlockReason());
-		}
-		return ptrD3D11CreateDeviceAndSwapChainUpscaling(pAdapter,
+	const auto createOriginalDevice = [&](const D3D_FEATURE_LEVEL* a_featureLevels,
+										  UINT a_featureLevelCount) {
+		return ptrD3D11CreateDeviceAndSwapChainUpscaling(
+			pAdapter,
 			DriverType,
 			Software,
 			Flags,
-			pFeatureLevels,
-			FeatureLevels,
+			a_featureLevels,
+			a_featureLevelCount,
 			SDKVersion,
 			pSwapChainDesc,
 			ppSwapChain,
 			ppDevice,
 			pFeatureLevel,
 			ppImmediateContext);
+	};
+	if (IsRenderDocUpscalingBlocked(true)) {
+		if (!g_renderDocUpscalingD3DHookBypassLogged.exchange(true, std::memory_order_acq_rel)) {
+			logger::warn(
+				"[Upscaling] Bypassing D3D11 upscaling device hook because {}.",
+				GetRenderDocUpscalingBlockReason());
+		}
+		return createOriginalDevice(pFeatureLevels, FeatureLevels);
 	}
 
-	upscaling.LoadUpscalingSDKs();
+	static std::mutex frameGenerationGraphMutex;
+	const std::lock_guard graphLock(frameGenerationGraphMutex);
+	enum class PrimaryDeviceGraphState
+	{
+		kUninitialized,
+		kActive,
+		kPoisoned
+	};
+	static PrimaryDeviceGraphState primaryDeviceGraphState =
+		PrimaryDeviceGraphState::kUninitialized;
+	const bool requestsSwapChain = pSwapChainDesc && ppSwapChain;
+	const auto failDeviceGraphCreation = [&](HRESULT a_result) {
+		if (ppSwapChain)
+			*ppSwapChain = nullptr;
+		if (ppDevice)
+			*ppDevice = nullptr;
+		if (ppImmediateContext)
+			*ppImmediateContext = nullptr;
+		return a_result;
+	};
+	if (primaryDeviceGraphState == PrimaryDeviceGraphState::kPoisoned &&
+		requestsSwapChain) {
+		logger::critical(
+			"[Frame Generation] Refusing a swap-chain retry while a failed provider graph remains resident.");
+		return failDeviceGraphCreation(E_FAIL);
+	}
+	if (primaryDeviceGraphState == PrimaryDeviceGraphState::kActive ||
+		upscaling.d3d12SwapChainActive) {
+		static bool loggedAuxiliaryDeviceCreation = false;
+		if (!loggedAuxiliaryDeviceCreation) {
+			logger::info(
+				"[Frame Generation] Forwarding an auxiliary D3D11 device creation without mutating the active frame-generation graph.");
+			loggedAuxiliaryDeviceCreation = true;
+		}
+		return createOriginalDevice(pFeatureLevels, FeatureLevels);
+	}
+	if (!requestsSwapChain)
+		return createOriginalDevice(pFeatureLevels, FeatureLevels);
+	if (!pAdapter || !ppDevice || !ppImmediateContext) {
+		const HRESULT result =
+			createOriginalDevice(pFeatureLevels, FeatureLevels);
+		if (SUCCEEDED(result))
+			primaryDeviceGraphState = PrimaryDeviceGraphState::kActive;
+		return result;
+	}
+
+	DXGI_ADAPTER_DESC adapterDesc{};
+	if (FAILED(pAdapter->GetDesc(&adapterDesc))) {
+		logger::warn(
+			"[Upscaling] Could not identify the primary adapter; bypassing the frame-generation graph.");
+		const HRESULT result =
+			createOriginalDevice(pFeatureLevels, FeatureLevels);
+		if (SUCCEEDED(result))
+			primaryDeviceGraphState = PrimaryDeviceGraphState::kActive;
+		return result;
+	}
+	globals::state->SetAdapterDescription(adapterDesc.Description);
+	ApplyLegacyFsr4RuntimeSelectionMigration(
+		upscaling.settings,
+		FidelityFX::GetFsr4AdapterSupport(adapterDesc));
 
 	// FLIP_DISCARD requires BufferCount >= 2 and a flip-model-compatible (non-sRGB) format.
 	pSwapChainDesc->SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
@@ -542,14 +609,145 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 	upscaling.lowRefreshRate = refreshRate < 120;
 	upscaling.isWindowed = pSwapChainDesc->Windowed;
+	upscaling.LoadUpscalingSDKs(
+		adapterDesc.VendorId == Streamline::kNvidiaVendorId,
+		shouldProxy);
 
 	const D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_1;
+	const auto publishD3D11Graph = [&](winrt::com_ptr<ID3D11Device>& a_device,
+									   winrt::com_ptr<ID3D11DeviceContext>& a_context,
+									   winrt::com_ptr<IDXGISwapChain>& a_swapChain,
+									   D3D_FEATURE_LEVEL a_createdFeatureLevel,
+									   bool a_d3d12SwapChainActive,
+									   std::string_view a_graphName) {
+		if (!a_device || !a_context || !a_swapChain)
+			return false;
+		const auto diagnosticGraphName = a_graphName.empty() ?
+		                                     std::string_view{ "native D3D11" } :
+		                                     a_graphName;
+
+		winrt::com_ptr<IDXGISwapChain> publishedSwapChain;
+		if (upscaling.IsBackendInitialized()) {
+			void* upgradedDevice = a_device.get();
+			if (!upscaling.UpgradeBackendInterface(&upgradedDevice) ||
+				upgradedDevice != a_device.get()) {
+				logger::error(
+					"[Streamline DX11] D3D11 device upgrade did not preserve the native interface.");
+				if (upgradedDevice && upgradedDevice != a_device.get())
+					static_cast<IUnknown*>(upgradedDevice)->Release();
+				return false;
+			}
+			if (!upscaling.SetBackendD3DDevice(a_device.get()))
+				return false;
+			upscaling.CheckBackendFeatures(pAdapter);
+			upscaling.PostBackendDevice();
+
+			void* upgradedSwapChain = a_swapChain.get();
+			if (!upscaling.UpgradeBackendInterface(&upgradedSwapChain) ||
+				!upgradedSwapChain ||
+				!Util::HaveDistinctCOMIdentity(
+					a_swapChain.get(),
+					static_cast<IUnknown*>(upgradedSwapChain))) {
+				logger::error(
+					"[Streamline DX11] No distinct presentation proxy was created for {}.",
+					diagnosticGraphName);
+				if (upgradedSwapChain && upgradedSwapChain != a_swapChain.get())
+					static_cast<IUnknown*>(upgradedSwapChain)->Release();
+				return false;
+			}
+			publishedSwapChain.attach(
+				static_cast<IDXGISwapChain*>(upgradedSwapChain));
+
+			void* recoveredBase = nullptr;
+			const bool recoveredExpectedBase =
+				upscaling.streamline.GetNativeInterface(
+					publishedSwapChain.get(),
+					&recoveredBase,
+					"IDXGISwapChain") &&
+				recoveredBase &&
+				Util::HaveSameCOMIdentity(
+					a_swapChain.get(),
+					static_cast<IUnknown*>(recoveredBase));
+			if (recoveredBase)
+				static_cast<IUnknown*>(recoveredBase)->Release();
+
+			winrt::com_ptr<ID3D11Device> exposedD3D11Device;
+			winrt::com_ptr<ID3D12Device> exposedD3D12Device;
+			const bool exposesExpectedDevice =
+				SUCCEEDED(publishedSwapChain->GetDevice(
+					IID_PPV_ARGS(exposedD3D11Device.put()))) &&
+				Util::HaveSameCOMIdentity(
+					a_device.get(),
+					exposedD3D11Device.get()) &&
+				FAILED(publishedSwapChain->GetDevice(
+					IID_PPV_ARGS(exposedD3D12Device.put()))) &&
+				!exposedD3D12Device;
+			if (!recoveredExpectedBase || !exposesExpectedDevice) {
+				logger::error(
+					"[Streamline DX11] The presentation proxy for {} exposed an invalid base or device.",
+					diagnosticGraphName);
+				return false;
+			}
+
+			// The Streamline proxy owns its own base reference after construction.
+			a_swapChain = nullptr;
+		} else {
+			publishedSwapChain = std::move(a_swapChain);
+		}
+
+		*ppDevice = a_device.detach();
+		*ppImmediateContext = a_context.detach();
+		*ppSwapChain = publishedSwapChain.detach();
+		if (pFeatureLevel)
+			*pFeatureLevel = a_createdFeatureLevel;
+		upscaling.d3d12SwapChainActive = a_d3d12SwapChainActive;
+		primaryDeviceGraphState = PrimaryDeviceGraphState::kActive;
+		if (!a_graphName.empty())
+			logger::info("[Frame Generation] Using {}", a_graphName);
+		return true;
+	};
+	const auto publishD3D11GraphWithFallback =
+		[&](winrt::com_ptr<ID3D11Device>& a_device,
+			winrt::com_ptr<ID3D11DeviceContext>& a_context,
+			winrt::com_ptr<IDXGISwapChain>& a_swapChain,
+			D3D_FEATURE_LEVEL a_createdFeatureLevel,
+			bool a_d3d12SwapChainActive,
+			std::string_view a_graphName) {
+			if (publishD3D11Graph(
+					a_device,
+					a_context,
+					a_swapChain,
+					a_createdFeatureLevel,
+					a_d3d12SwapChainActive,
+					a_graphName)) {
+				return true;
+			}
+			if (!upscaling.IsBackendInitialized())
+				return false;
+
+			logger::error(
+				"[Streamline DX11] Disabling DLSS/Reflex because the final presentation interface could not be integrated.");
+			if (!upscaling.streamline.Shutdown())
+				return false;
+			upscaling.backendShutdownRequiresPresent.store(
+				upscaling.streamlineDX12.initialized,
+				std::memory_order_release);
+			return publishD3D11Graph(
+				a_device,
+				a_context,
+				a_swapChain,
+				a_createdFeatureLevel,
+				a_d3d12SwapChainActive,
+				a_graphName);
+		};
 
 	if (shouldProxy) {
 		logger::info("[Frame Generation] Frame Generation enabled, using D3D12 proxy");
 
-		if (upscaling.HasFrameGenModule()) {
-			DX::ThrowIfFailed(D3D11CreateDevice(
+		auto createProxyD3D11Device = [&](winrt::com_ptr<ID3D11Device>& a_device,
+										  winrt::com_ptr<ID3D11DeviceContext>& a_context,
+										  D3D_FEATURE_LEVEL& a_createdFeatureLevel) {
+			return D3D11CreateDevice(
 				pAdapter,
 				DriverType,
 				Software,
@@ -557,41 +755,157 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 				&featureLevel,
 				1,
 				SDKVersion,
-				ppDevice,
-				pFeatureLevel,
-				ppImmediateContext));
+				a_device.put(),
+				&a_createdFeatureLevel,
+				a_context.put());
+		};
 
-			upscaling.SetProxyD3D11Device(*ppDevice);
-			upscaling.SetProxyD3D11DeviceContext(*ppImmediateContext);
-			upscaling.CreateProxySwapChain(pAdapter, *pSwapChainDesc);
-			upscaling.CreateProxyInterop();
+		bool dlssgProxyMutationCommitted = false;
+		if (adapterDesc.VendorId == Streamline::kNvidiaVendorId &&
+			upscaling.streamlineDX12.initialized) {
+			try {
+				auto& swapChain = upscaling.dx12SwapChain;
+				auto& streamlineDX12 = upscaling.streamlineDX12;
+				swapChain.CreateD3D12Device(pAdapter);
+				if (streamlineDX12.SetD3DDevice(swapChain.d3d12Device.get())) {
+					streamlineDX12.CheckFeatures(pAdapter);
+					streamlineDX12.PostDevice();
+				}
 
-			*ppSwapChain = upscaling.GetProxySwapChain();
-
-			upscaling.d3d12SwapChainActive = true;
-
-			if (upscaling.IsBackendInitialized()) {
-				upscaling.UpgradeBackendInterface((void**)&(*ppDevice));
-				// Don't wrap the swap chain with Streamline when using the D3D12
-				// proxy.  The proxy's GetDevice() returns the D3D11 device for
-				// IID_ID3D11Device, which other SKSE plugins (e.g. SkyrimPlatform)
-				// rely on.  Streamline's wrapper would bypass this override and
-				// forward to the underlying D3D12 swap chain, causing
-				// E_NOINTERFACE.  The proxy must remain the outermost layer.
-				upscaling.SetBackendD3DDevice(*ppDevice);
-				// Feature availability (notably Reflex/PCL) is only reliable after device bind.
-				upscaling.CheckBackendFeatures(pAdapter);
-				upscaling.PostBackendDevice();
+				const bool dlssgReady =
+					streamlineDX12.featureDLSSG &&
+					streamlineDX12.featureReflex &&
+					streamlineDX12.featurePCL &&
+					streamlineDX12.dlssgState.maximumFramesToGenerate != 0;
+				upscaling.dlssgSupportedAtBoot =
+					upscaling.dlssgSupportedAtBoot || dlssgReady;
+				const bool preferReachableFSR =
+					upscaling.settings.preferFSRFrameGeneration &&
+					upscaling.HasFrameGenModule();
+				if (dlssgReady &&
+					!preferReachableFSR &&
+					swapChain.UpgradeD3D12DeviceForDLSSG()) {
+					dlssgProxyMutationCommitted = swapChain.streamlineProxyGraphActive;
+					winrt::com_ptr<ID3D11Device> d3d11Device;
+					winrt::com_ptr<ID3D11DeviceContext> d3d11Context;
+					D3D_FEATURE_LEVEL createdFeatureLevel{};
+					HRESULT result = createProxyD3D11Device(
+						d3d11Device,
+						d3d11Context,
+						createdFeatureLevel);
+					if (SUCCEEDED(result)) {
+						upscaling.SetProxyD3D11Device(d3d11Device.get());
+						upscaling.SetProxyD3D11DeviceContext(d3d11Context.get());
+						result = upscaling.CreateDLSSGSwapChain(
+							pAdapter,
+							*pSwapChainDesc);
+						if (SUCCEEDED(result)) {
+							upscaling.CreateProxyInterop();
+							winrt::com_ptr<IDXGISwapChain> csxSwapChain;
+							csxSwapChain.attach(upscaling.GetProxySwapChain());
+							if (publishD3D11GraphWithFallback(
+									d3d11Device,
+									d3d11Context,
+									csxSwapChain,
+									createdFeatureLevel,
+									true,
+									"NVIDIA DLSS-G")) {
+								return S_OK;
+							}
+							result = E_FAIL;
+						}
+					}
+					logger::error(
+						"[Frame Generation] DLSS-G object graph creation failed: 0x{:08X}",
+						static_cast<unsigned>(result));
+				}
+			} catch (const std::exception& error) {
+				logger::error("[Frame Generation] DLSS-G initialization failed: {}", error.what());
+			} catch (...) {
+				logger::error("[Frame Generation] DLSS-G initialization failed with an unknown exception");
 			}
+			dlssgProxyMutationCommitted =
+				dlssgProxyMutationCommitted ||
+				upscaling.dx12SwapChain.streamlineProxyGraphActive;
+		}
 
-			return S_OK;
+		if (dlssgProxyMutationCommitted) {
+			logger::warn(
+				"[Frame Generation] DLSS-G failed after proxy activation; skipping FSR fallback to avoid mixed proxy ownership.");
+			if (!upscaling.dx12SwapChain.DisableDLSSGCandidate()) {
+				primaryDeviceGraphState = PrimaryDeviceGraphState::kPoisoned;
+				return failDeviceGraphCreation(E_FAIL);
+			}
 		} else {
-			logger::warn("[Frame Generation] FidelityFX DLLs are not loaded, skipping proxy");
+			// Backend selection is restart-bound. Release the unused DX12 SL
+			// feature state before constructing an FSR or vanilla device graph.
+			if (!upscaling.streamlineDX12.Shutdown()) {
+				logger::critical(
+					"[Frame Generation] The unused DLSS-G backend could not be shut down; refusing to publish a graph without its Present boundary.");
+				primaryDeviceGraphState = PrimaryDeviceGraphState::kPoisoned;
+				return failDeviceGraphCreation(E_FAIL);
+			}
+		}
+		upscaling.backendShutdownRequiresPresent.store(
+			upscaling.streamline.initialized ||
+				upscaling.streamlineDX12.initialized,
+			std::memory_order_release);
+
+		if (!dlssgProxyMutationCommitted && upscaling.HasFrameGenModule()) {
+			const auto hasCommittedFSRGraph = [&]() {
+				return upscaling.dx12SwapChain.frameGenerationBackend ==
+				           DX12SwapChain::FrameGenerationBackend::kFidelityFX ||
+				       upscaling.dx12SwapChain.swapChain != nullptr ||
+				       upscaling.fidelityFX.swapChainContext != nullptr;
+			};
+			try {
+				winrt::com_ptr<ID3D11Device> d3d11Device;
+				winrt::com_ptr<ID3D11DeviceContext> d3d11Context;
+				D3D_FEATURE_LEVEL createdFeatureLevel{};
+				const HRESULT result = createProxyD3D11Device(
+					d3d11Device,
+					d3d11Context,
+					createdFeatureLevel);
+				if (SUCCEEDED(result)) {
+					upscaling.SetProxyD3D11Device(d3d11Device.get());
+					upscaling.SetProxyD3D11DeviceContext(d3d11Context.get());
+					upscaling.CreateProxySwapChain(pAdapter, *pSwapChainDesc);
+					upscaling.CreateProxyInterop();
+					winrt::com_ptr<IDXGISwapChain> csxSwapChain;
+					csxSwapChain.attach(upscaling.GetProxySwapChain());
+					if (publishD3D11GraphWithFallback(
+							d3d11Device,
+							d3d11Context,
+							csxSwapChain,
+							createdFeatureLevel,
+							true,
+							"AMD FSR Frame Generation")) {
+						return S_OK;
+					}
+				}
+			} catch (const std::exception& error) {
+				logger::error("[Frame Generation] FSR proxy initialization failed: {}", error.what());
+			} catch (...) {
+				logger::error("[Frame Generation] FSR proxy initialization failed with an unknown exception");
+			}
+			if (hasCommittedFSRGraph()) {
+				logger::critical(
+					"[Frame Generation] FSR failed after swap-chain creation; refusing to create a second conflicting device graph.");
+				primaryDeviceGraphState = PrimaryDeviceGraphState::kPoisoned;
+				return failDeviceGraphCreation(E_FAIL);
+			}
+		} else if (!dlssgProxyMutationCommitted) {
+			logger::warn("[Frame Generation] No frame-generation backend is available, skipping proxy");
 			upscaling.fidelityFXMissing = true;
 		}
 	}
 
-	auto ret = ptrD3D11CreateDeviceAndSwapChainUpscaling(pAdapter,
+	winrt::com_ptr<IDXGISwapChain> nativeSwapChain;
+	winrt::com_ptr<ID3D11Device> nativeDevice;
+	winrt::com_ptr<ID3D11DeviceContext> nativeContext;
+	D3D_FEATURE_LEVEL createdFeatureLevel{};
+	const HRESULT result = ptrD3D11CreateDeviceAndSwapChainUpscaling(
+		pAdapter,
 		DriverType,
 		Software,
 		Flags,
@@ -599,21 +913,23 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 		1,
 		SDKVersion,
 		pSwapChainDesc,
-		ppSwapChain,
-		ppDevice,
-		pFeatureLevel,
-		ppImmediateContext);
-
-	if (upscaling.IsBackendInitialized()) {
-		upscaling.UpgradeBackendInterface((void**)&(*ppDevice));
-		upscaling.UpgradeBackendInterface((void**)&(*ppSwapChain));
-		upscaling.SetBackendD3DDevice(*ppDevice);
-		// Feature availability (notably Reflex/PCL) is only reliable after device bind.
-		upscaling.CheckBackendFeatures(pAdapter);
-		upscaling.PostBackendDevice();
+		nativeSwapChain.put(),
+		nativeDevice.put(),
+		&createdFeatureLevel,
+		nativeContext.put());
+	if (FAILED(result))
+		return failDeviceGraphCreation(result);
+	if (!publishD3D11GraphWithFallback(
+			nativeDevice,
+			nativeContext,
+			nativeSwapChain,
+			createdFeatureLevel,
+			false,
+			std::string_view{})) {
+		primaryDeviceGraphState = PrimaryDeviceGraphState::kPoisoned;
+		return failDeviceGraphCreation(E_FAIL);
 	}
-
-	return ret;
+	return result;
 }
 
 void Upscaling::DrawSettings()
@@ -816,8 +1132,14 @@ void Upscaling::DrawSettingsPanel(bool a_showEmbeddedInfo, bool a_allowNone)
 	if (ImGui::TreeNodeEx("Frame Generation", ImGuiTreeNodeFlags_DefaultOpen)) {
 		if (a_showEmbeddedInfo) {
 			ImGui::Text("Frame Generation interpolates real frames with generated ones for a smoother experience");
-			ImGui::Text("Uses AMD FSR Frame Generation technology");
-			if (HasFrameGenModule())
+			ImGui::Text("Uses NVIDIA DLSS-G when supported, with AMD FSR Frame Generation as fallback");
+			if (UsesDLSSGFrameGeneration())
+				ImGui::TextColored(Util::Colors::GetSuccess(), "Using NVIDIA DLSS-G");
+			else if (frameGenerationDx12PathActive)
+				ImGui::TextColored(Util::Colors::GetInfo(), "Using AMD FSR Frame Generation");
+			else if (streamlineDX12.featureDLSSG)
+				ImGui::Text("NVIDIA DLSS-G is available after restart.");
+			else if (HasFrameGenModule())
 				ImGui::Text("AMD FSR Frame Generation is available.");
 			ImGui::Text("Requires a D3D11 to D3D12 proxy which can create compatibility issues");
 			ImGui::Text("Toggling this setting requires a restart to work correctly");
@@ -851,35 +1173,93 @@ void Upscaling::DrawSettingsPanel(bool a_showEmbeddedInfo, bool a_allowNone)
 
 		DrawFrameGenerationEnabledToggle(settings);
 
-		if (!frameGenerationDx12PathActive)
+		if (dlssgSupportedAtBoot && HasFrameGenModule()) {
+			ImGui::Checkbox("Prefer AMD FSR Frame Generation", &settings.preferFSRFrameGeneration);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted("Selects FSR instead of DLSS-G on a supported NVIDIA GPU. Restart required.");
+		}
+
+		if (UsesDLSSGFrameGeneration()) {
+			const auto maximumGeneratedFrames =
+				streamlineDX12.dlssgState.maximumFramesToGenerate;
+			if (maximumGeneratedFrames == 0) {
+				ImGui::TextDisabled("DLSS-G Frame Multiplier unavailable");
+			} else {
+				const int maximumMultiplier =
+					static_cast<int>(maximumGeneratedFrames + 1u);
+				int multiplier = static_cast<int>(
+					settings.dlssgFramesToGenerate + 1u);
+				multiplier = std::clamp(multiplier, 2, maximumMultiplier);
+				if (ImGui::SliderInt(
+						"DLSS-G Frame Multiplier",
+						&multiplier,
+						2,
+						maximumMultiplier,
+						"%dx")) {
+					settings.dlssgFramesToGenerate =
+						static_cast<uint>(multiplier - 1);
+				}
+			}
+			if (streamlineDX12.dlssgState.consecutiveMissingMarkerStartFrames >=
+				Streamline::kDLSSGDiagnosticFrameThreshold) {
+				Util::Text::Warning(
+					"DLSS-G is waiting for its frame token and SimulationStart marker. Check the Streamline log.");
+			} else if (streamlineDX12.dlssgState.status != sl::DLSSGStatus::eOk) {
+				Util::Text::Warning(
+					"DLSS-G is not generating frames (status 0x%X). Check the Streamline log and NVIDIA driver settings.",
+					static_cast<unsigned>(streamlineDX12.dlssgState.status));
+			} else if (streamlineDX12.dlssgState.consecutiveNoGeneratedPresents >=
+					   Streamline::kDLSSGDiagnosticFrameThreshold) {
+				Util::Text::Warning(
+					"DLSS-G is enabled but no interpolated presents are being reported. Check the Streamline log and NVIDIA driver settings.");
+			}
+		} else if (frameGenerationDx12PathActive) {
+			ImGui::TextDisabled("AMD FSR Frame Generation uses a fixed 2x multiplier.");
+		}
+
+		const bool hostFrameLimiterAvailable =
+			frameGenerationDx12PathActive && !UsesDLSSGFrameGeneration();
+		if (!hostFrameLimiterAvailable)
 			ImGui::BeginDisabled();
 
 		bool flEnabled = settings.frameLimitMode != 0;
 		if (ImGui::Checkbox("Frame Limit (Variable Refresh Rate)", &flEnabled))
 			settings.frameLimitMode = flEnabled ? 1 : 0;
 
-		if (!frameGenerationDx12PathActive)
+		if (!hostFrameLimiterAvailable)
 			ImGui::EndDisabled();
+		if (UsesDLSSGFrameGeneration())
+			ImGui::TextDisabled("DLSS-G owns output pacing; the CSX FSR frame limiter is not applied.");
 
 		DrawFrameGenerationForceEnableToggle(*this, a_showEmbeddedInfo);
 
+		if (UsesDLSSGFrameGeneration())
+			ImGui::BeginDisabled();
 		ImGui::Checkbox("Frame Generation in Menus", &settings.frameGenerationAllowInMenus);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Keeps frame generation active while game menus are open.");
-			ImGui::TextUnformatted("May feel smoother, but increases menu input latency.");
+			ImGui::TextUnformatted(
+				UsesDLSSGFrameGeneration() ?
+					"DLSS-G is disabled while the game is paused or showing loading/full-screen menus." :
+					"Keeps FSR frame generation active while game menus are open.");
 		}
+		if (UsesDLSSGFrameGeneration())
+			ImGui::EndDisabled();
 
 		ImGui::TreePop();
 	}
 
-	if (streamline.reflexSupportedOnCurrentAdapter && ImGui::TreeNodeEx("NVIDIA Reflex", ImGuiTreeNodeFlags_DefaultOpen)) {
-		const bool reflexBlockedByFrameGeneration = frameGenerationDx12PathActive;
-		const bool reflexAvailable = streamline.initialized && streamline.featureReflex;
+	auto& activeReflex = UsesDLSSGFrameGeneration() ? streamlineDX12 : streamline;
+	if (activeReflex.reflexSupportedOnCurrentAdapter && ImGui::TreeNodeEx("NVIDIA Reflex", ImGuiTreeNodeFlags_DefaultOpen)) {
+		const bool reflexBlockedByFrameGeneration =
+			frameGenerationDx12PathActive && !UsesDLSSGFrameGeneration();
+		const bool reflexAvailable = activeReflex.initialized && activeReflex.featureReflex;
 		const bool reflexControlsAvailable = reflexAvailable && !reflexBlockedByFrameGeneration;
 		const auto markerOptimization = ReflexPolicy::ResolveCSMarkerOptimization(
 			reflexControlsAvailable,
-			streamline.featurePCL,
+			activeReflex.featurePCL,
 			settings.reflexUseMarkersToOptimize);
+		if (a_showEmbeddedInfo && UsesDLSSGFrameGeneration())
+			ImGui::TextDisabled("Reflex runs through the DX12 Streamline instance while DLSS-G is active.");
 		if (a_showEmbeddedInfo && reflexBlockedByFrameGeneration) {
 			ImGui::TextDisabled("Reflex is unavailable while the DX12 frame-generation swapchain is active.");
 		}
@@ -922,7 +1302,7 @@ void Upscaling::DrawSettingsPanel(bool a_showEmbeddedInfo, bool a_allowNone)
 
 		if (a_showEmbeddedInfo && !markerOptimization.available) {
 			ImGui::TextDisabled(
-				reflexControlsAvailable && streamline.featurePCL ?
+				reflexControlsAvailable && activeReflex.featurePCL ?
 					"Marker optimization is disabled until authoritative full-frame marker coverage is available." :
 					"Marker optimization unavailable (Reflex/PCL not loaded).");
 		}
@@ -972,6 +1352,7 @@ void Upscaling::DrawSettingsPanel(bool a_showEmbeddedInfo, bool a_allowNone)
 		ImGui::Separator();
 		Util::DrawDllVersionTable("AMD FidelityFX DLLs (click to open folder)", FidelityFX::PluginDir, FidelityFX::dllVersions, "ffx_dll_versions");
 		Util::DrawDllVersionTable("NVIDIA Streamline DLLs (click to open folder)", Streamline::PluginDir, Streamline::dllVersions, "sl_dll_versions");
+		Util::DrawDllVersionTable("NVIDIA Streamline DLSS-G DLLs (click to open folder)", Streamline::DLSSGPluginDir, Streamline::dllVersionsDX12, "sl_dlssg_dll_versions");
 		ImGui::TreePop();
 	}
 }
@@ -1613,13 +1994,32 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 
 void Upscaling::RecordFrameGenerationCopy(
 	bool a_requested,
-	bool a_successful)
+	bool a_successful,
+	uint32_t a_renderWidth,
+	uint32_t a_renderHeight)
 {
 	auto* state = globals::state;
-	frameGenerationCopyValid = state != nullptr;
-	frameGenerationCopyRequested = a_requested;
-	frameGenerationCopySuccessful = a_successful;
-	frameGenerationCopyConsumed = !a_requested || !a_successful;
+	const uint32_t frame =
+		state ? state->frameCount : std::numeric_limits<uint32_t>::max();
+	const bool dlssgFrameReady =
+		state && UsesDLSSGFrameGeneration() &&
+		streamlineDX12.IsDLSSGFrameReady(frame);
+	const std::lock_guard lock(frameGenerationFrameMutex);
+	frameGenerationFrame = {
+		.frame = frame,
+		.renderWidth = a_renderWidth,
+		.renderHeight = a_renderHeight,
+		.interopGeneration = dx12SwapChain.interopGeneration,
+		.requested = a_requested,
+		.inputsReady = a_requested && a_successful,
+		.dlssgFrameReady = dlssgFrameReady,
+		.uiSeparated = false,
+		.uiPreparedForOutput = false,
+		.valid = state != nullptr,
+	};
+	// Present must consume every render-frame record once so invalid inputs can
+	// still emit the matching marker cycle, clear tags, and disable generation.
+	frameGenerationFrameConsumed = !frameGenerationFrame.valid;
 }
 
 ID3D11ComputeShader* Upscaling::GetEncodeTexturesCS()
@@ -1859,10 +2259,15 @@ void Upscaling::ClearShaderCache()
 	cameraMotionVectorsPS.Reset();
 	upscaleVS.Reset();
 	copyDepthToSharedBufferPS.Reset();
+	compositeFrameGenerationUIFallbackCS.Reset();
 }
 
-bool Upscaling::CopySharedD3D12Resources()
+bool Upscaling::CopySharedD3D12Resources(
+	uint32_t& a_renderWidth,
+	uint32_t& a_renderHeight)
 {
+	a_renderWidth = 0;
+	a_renderHeight = 0;
 	auto* state = globals::state;
 	if (!state)
 		return false;
@@ -1884,6 +2289,7 @@ bool Upscaling::CopySharedD3D12Resources()
 		renderer &&
 		context &&
 		globals::profiler &&
+		dx12SwapChain.IsInteropUsable() &&
 		viewportState &&
 		viewportState->screenWidth > 0 &&
 		viewportState->screenHeight > 0 &&
@@ -1905,6 +2311,24 @@ bool Upscaling::CopySharedD3D12Resources()
 	}
 	loggedMissingSharedResources = false;
 
+	const float2 displaySize{
+		static_cast<float>(viewportState->screenWidth),
+		static_cast<float>(viewportState->screenHeight)
+	};
+	// Upscaling deliberately locks Skyrim's dynamic-resolution controller after
+	// publishing its own fixed ratio. Ignore that lock when deriving the actual
+	// depth/motion-vector render subrect tagged for frame generation.
+	const auto renderSize = Util::ConvertToDynamic(displaySize, true);
+	if (!std::isfinite(renderSize.x) || !std::isfinite(renderSize.y) ||
+		renderSize.x <= 0.0f || renderSize.y <= 0.0f ||
+		static_cast<double>(renderSize.x) > std::numeric_limits<uint32_t>::max() ||
+		static_cast<double>(renderSize.y) > std::numeric_limits<uint32_t>::max()) {
+		state->EndPerfEvent();
+		return false;
+	}
+	a_renderWidth = static_cast<uint32_t>(std::lround(renderSize.x));
+	a_renderHeight = static_cast<uint32_t>(std::lround(renderSize.y));
+
 	ScopedFullscreenPipelineState restoreState(context);
 
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
@@ -1922,6 +2346,7 @@ bool Upscaling::CopySharedD3D12Resources()
 	motionVector.texture->GetDesc(&sourceMotionVectorDesc);
 	dx12SwapChain.motionVectorBufferShared12->resource11->GetDesc(
 		&sharedMotionVectorDesc);
+	static bool loggedIncompatibleMotionVectorResources = false;
 	if (sourceMotionVectorDesc.Width != sharedMotionVectorDesc.Width ||
 		sourceMotionVectorDesc.Height != sharedMotionVectorDesc.Height ||
 		sourceMotionVectorDesc.MipLevels != sharedMotionVectorDesc.MipLevels ||
@@ -1929,9 +2354,31 @@ bool Upscaling::CopySharedD3D12Resources()
 		sourceMotionVectorDesc.Format != sharedMotionVectorDesc.Format ||
 		sourceMotionVectorDesc.SampleDesc.Count != sharedMotionVectorDesc.SampleDesc.Count ||
 		sourceMotionVectorDesc.SampleDesc.Quality != sharedMotionVectorDesc.SampleDesc.Quality) {
+		if (!loggedIncompatibleMotionVectorResources) {
+			logger::error(
+				"[Upscaling] Source and shared frame-generation motion-vector resources are incompatible.");
+			loggedIncompatibleMotionVectorResources = true;
+		}
 		state->EndPerfEvent();
 		return false;
 	}
+	loggedIncompatibleMotionVectorResources = false;
+	static bool loggedInvalidRenderExtent = false;
+	if (a_renderWidth > sourceMotionVectorDesc.Width ||
+		a_renderHeight > sourceMotionVectorDesc.Height) {
+		if (!loggedInvalidRenderExtent) {
+			logger::error(
+				"[Upscaling] Frame-generation render extent {}x{} exceeds the motion-vector allocation {}x{}.",
+				a_renderWidth,
+				a_renderHeight,
+				sourceMotionVectorDesc.Width,
+				sourceMotionVectorDesc.Height);
+			loggedInvalidRenderExtent = true;
+		}
+		state->EndPerfEvent();
+		return false;
+	}
+	loggedInvalidRenderExtent = false;
 	loggedMissingCopySources = false;
 
 	context->CopyResource(dx12SwapChain.motionVectorBufferShared12->resource11.get(), motionVector.texture);
@@ -1986,6 +2433,69 @@ bool Upscaling::CopySharedD3D12Resources()
 	return true;
 }
 
+bool Upscaling::CompositeFrameGenerationUIFallback(
+	bool& a_uiPreparedForOutput)
+{
+	try {
+		auto* context = globals::d3d::context;
+		auto* profiler = globals::profiler;
+		auto& scene = dx12SwapChain.swapChainBufferWrapped;
+		auto& ui = dx12SwapChain.uiBufferWrapped;
+		if (!context || !profiler || !scene || !scene->resource11 || !scene->uav ||
+			!ui || !ui->resource11 || !ui->srv) {
+			return false;
+		}
+
+		D3D11_TEXTURE2D_DESC sceneDesc{};
+		D3D11_TEXTURE2D_DESC uiDesc{};
+		scene->resource11->GetDesc(&sceneDesc);
+		ui->resource11->GetDesc(&uiDesc);
+		if (sceneDesc.Width == 0 || sceneDesc.Height == 0 ||
+			sceneDesc.Width != uiDesc.Width || sceneDesc.Height != uiDesc.Height) {
+			return false;
+		}
+
+		auto* shader = compositeFrameGenerationUIFallbackCS.Get(
+			L"Data\\Shaders\\Upscaling\\CompositeFrameGenerationUIFallbackCS.hlsl",
+			{},
+			"cs_5_0");
+		if (!shader)
+			return false;
+
+		auto& hdr = globals::features::hdrDisplay;
+		if (hdr.loaded && hdr.IsHDROutputActive() &&
+			!a_uiPreparedForOutput) {
+			if (!hdr.PrepareFrameGenerationUIForOutput())
+				return false;
+			a_uiPreparedForOutput = true;
+		}
+
+		ScopedFullscreenPipelineState restoreGraphicsBindings(context);
+		Util::ScopedComputeBindings restoreComputeBindings(context);
+		context->CSSetShader(shader, nullptr, 0);
+		ID3D11ShaderResourceView* uiSRV = ui->srv.get();
+		context->CSSetShaderResources(0, 1, &uiSRV);
+		ID3D11UnorderedAccessView* sceneUAV = scene->uav.get();
+		context->CSSetUnorderedAccessViews(0, 1, &sceneUAV, nullptr);
+
+		profiler->BeginPass("Upscaling::CompositeFrameGenerationUIFallback");
+		context->Dispatch(
+			(sceneDesc.Width + 7u) / 8u,
+			(sceneDesc.Height + 7u) / 8u,
+			1);
+		profiler->EndPass();
+		return true;
+	} catch (const std::exception& error) {
+		logger::error(
+			"[Upscaling] Could not restore separated UI: {}",
+			error.what());
+	} catch (...) {
+		logger::error(
+			"[Upscaling] Could not restore separated UI: unknown exception");
+	}
+	return false;
+}
+
 void UpdateCameraData()
 {
 	using func_t = decltype(&UpdateCameraData);
@@ -2027,6 +2537,9 @@ void Upscaling::TimerSleepQPC(int64_t targetQPC)
 
 void Upscaling::FrameLimiter(bool a_frameGenerationActive)
 {
+	if (UsesDLSSGFrameGeneration())
+		return;
+
 	if (d3d12SwapChainActive) {
 		// Use frame latency waitable object if available for better frame pacing
 		HANDLE waitableObject = GetFrameLatencyWaitableObject();
@@ -2134,7 +2647,7 @@ bool Upscaling::IsFrameGenerationConfigured() const
 
 bool Upscaling::IsFrameRateLimitConfigured() const
 {
-	if (IsFrameGenerationDx12PathActive())
+	if (IsFrameGenerationDx12PathActive() && !UsesDLSSGFrameGeneration())
 		return settings.frameLimitMode != 0;
 
 	return streamline.initialized &&
@@ -2144,29 +2657,129 @@ bool Upscaling::IsFrameRateLimitConfigured() const
 
 bool Upscaling::IsFrameGenerationActive() const
 {
-	return IsFrameGenerationDx12PathActive() && settings.frameGenerationMode && fidelityFX.isFrameGenActive;
+	if (!IsFrameGenerationDx12PathActive() || !settings.frameGenerationMode)
+		return false;
+	if (UsesDLSSGFrameGeneration())
+		return streamlineDX12.dlssgState.active;
+	return fidelityFX.isFrameGenActive;
+}
+
+bool Upscaling::UsesDLSSGFrameGeneration() const
+{
+	return IsFrameGenerationDx12PathActive() &&
+	       dx12SwapChain.frameGenerationBackend ==
+	           DX12SwapChain::FrameGenerationBackend::kDLSSG;
+}
+
+bool Upscaling::IsRenderingGameFrames() const
+{
+	auto* state = globals::state;
+	auto* ui = globals::game::ui;
+	return FrameGenerationEligibilityPolicy::IsInteractiveGameplay({
+		.runtimeStateAvailable = state != nullptr,
+		.communityShadersMenuOpen = globals::menu && globals::menu->IsEnabled,
+		.gamePaused = ui && ui->GameIsPaused(),
+		.mainOrLoadingMenuOpen = state && state->IsMainOrLoadingMenuOpen(ui),
+	});
 }
 
 bool Upscaling::ShouldUseFrameGenerationThisFrame() const
 {
+	if (IsBackendShutdownRequested())
+		return false;
+
 	auto* ui = globals::game::ui;
 	auto* state = globals::state;
 	const bool menuOpen = (ui && ui->GameIsPaused()) || (state && state->IsMainOrLoadingMenuOpen(ui));
-	return IsFrameGenerationDx12PathActive() && settings.frameGenerationMode && (settings.frameGenerationAllowInMenus || !menuOpen);
+	if (!IsFrameGenerationDx12PathActive() || !settings.frameGenerationMode)
+		return false;
+	if (UsesDLSSGFrameGeneration())
+		return IsRenderingGameFrames();
+	return settings.frameGenerationAllowInMenus || !menuOpen;
 }
 
-bool Upscaling::ConsumeFrameGenerationInputsForPresent()
+Upscaling::FrameGenerationFrameSnapshot Upscaling::ConsumeFrameGenerationInputsForPresent()
 {
-	const bool inputsReady =
-		globals::state &&
-		frameGenerationCopyValid &&
-		frameGenerationCopyRequested &&
-		frameGenerationCopySuccessful &&
-		!frameGenerationCopyConsumed;
+	const std::lock_guard lock(frameGenerationFrameMutex);
+	auto snapshot = frameGenerationFrame;
+	const bool generationMatches =
+		snapshot.interopGeneration == dx12SwapChain.interopGeneration;
+	// State::Reset advances the host counter in the outer Present hook. Preserve
+	// the captured render-frame identity for Streamline's matching token.
+	snapshot.valid = snapshot.valid && !frameGenerationFrameConsumed;
+	snapshot.inputsReady = snapshot.valid && generationMatches &&
+	                       snapshot.inputsReady && dx12SwapChain.IsInteropUsable();
+	snapshot.dlssgFrameReady = snapshot.valid && generationMatches &&
+	                           snapshot.dlssgFrameReady;
+	snapshot.uiSeparated = snapshot.valid && generationMatches &&
+	                       snapshot.uiSeparated;
+	snapshot.uiPreparedForOutput = snapshot.valid && generationMatches &&
+	                               snapshot.uiPreparedForOutput;
 	// A real Present attempt owns this render's inputs even if a later interop or
 	// DXGI operation fails. Reusing them could feed stale motion/depth to FG.
-	frameGenerationCopyConsumed = true;
-	return inputsReady;
+	frameGenerationFrameConsumed = true;
+	return snapshot;
+}
+
+bool Upscaling::AreFrameGenerationInputsReadyForCompositing() const
+{
+	const std::lock_guard lock(frameGenerationFrameMutex);
+	return frameGenerationFrame.valid && frameGenerationFrame.requested &&
+	       frameGenerationFrame.inputsReady &&
+	       frameGenerationFrame.interopGeneration == dx12SwapChain.interopGeneration &&
+	       dx12SwapChain.IsInteropUsable() &&
+	       !frameGenerationFrameConsumed;
+}
+
+bool Upscaling::IsFrameGenerationUISeparated() const
+{
+	const std::lock_guard lock(frameGenerationFrameMutex);
+	return frameGenerationFrame.valid && frameGenerationFrame.requested &&
+	       frameGenerationFrame.inputsReady && frameGenerationFrame.uiSeparated &&
+	       frameGenerationFrame.interopGeneration == dx12SwapChain.interopGeneration &&
+	       dx12SwapChain.IsInteropUsable() && !frameGenerationFrameConsumed;
+}
+
+bool Upscaling::IsFrameGenerationUIPhysicallySeparated() const
+{
+	const std::lock_guard lock(frameGenerationFrameMutex);
+	return frameGenerationFrame.valid && frameGenerationFrame.requested &&
+	       frameGenerationFrame.uiSeparated &&
+	       frameGenerationFrame.interopGeneration == dx12SwapChain.interopGeneration &&
+	       !frameGenerationFrameConsumed;
+}
+
+void Upscaling::MarkFrameGenerationUISeparated()
+{
+	const std::lock_guard lock(frameGenerationFrameMutex);
+	if (frameGenerationFrame.valid && frameGenerationFrame.requested &&
+		frameGenerationFrame.inputsReady &&
+		frameGenerationFrame.interopGeneration == dx12SwapChain.interopGeneration &&
+		dx12SwapChain.IsInteropUsable() && !frameGenerationFrameConsumed) {
+		frameGenerationFrame.uiSeparated = true;
+	}
+}
+
+void Upscaling::CancelFrameGenerationForSeparatedUI()
+{
+	const std::lock_guard lock(frameGenerationFrameMutex);
+	if (frameGenerationFrame.valid && frameGenerationFrame.uiSeparated &&
+		frameGenerationFrame.interopGeneration == dx12SwapChain.interopGeneration &&
+		!frameGenerationFrameConsumed) {
+		frameGenerationFrame.inputsReady = false;
+	}
+}
+
+void Upscaling::MarkFrameGenerationUIPreparedForOutput()
+{
+	const std::lock_guard lock(frameGenerationFrameMutex);
+	if (frameGenerationFrame.valid && frameGenerationFrame.requested &&
+		frameGenerationFrame.uiSeparated &&
+		frameGenerationFrame.inputsReady &&
+		frameGenerationFrame.interopGeneration == dx12SwapChain.interopGeneration &&
+		!frameGenerationFrameConsumed) {
+		frameGenerationFrame.uiPreparedForOutput = true;
+	}
 }
 
 bool Upscaling::IsUpscalingActive() const
@@ -2306,6 +2919,9 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 	auto state = globals::state;
 	if (!state)
 		return;
+	if (historyResetStateUpdatedFrame == state->frameCount)
+		return;
+	historyResetStateUpdatedFrame = state->frameCount;
 
 	PrepareMenuCameraMotionVectors();
 
@@ -2384,13 +3000,21 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 	previousHistoryFSRRuntimeFsr4Active = fsrRuntimeFsr4Active;
 }
 
+void Upscaling::PrepareHistoryResetForCurrentFrame()
+{
+	UpdateHistoryResetState(GetUpscaleMethod());
+	LatchHistoryResetForCurrentFrame();
+}
+
 DX12SwapChain::OutputPresentationTiming Upscaling::GetOutputPresentationTiming() const
 {
 	return dx12SwapChain.GetOutputPresentationTiming();
 }
 
 // Unified interface methods
-void Upscaling::LoadUpscalingSDKs()
+void Upscaling::LoadUpscalingSDKs(
+	bool a_isNvidiaAdapter,
+	bool a_allowD3D12Backend)
 {
 	if (IsRenderDocUpscalingBlocked(true)) {
 		if (!renderDocUpscalingBackendSkipLogged) {
@@ -2402,10 +3026,112 @@ void Upscaling::LoadUpscalingSDKs()
 		return;
 	}
 
-	// Initialize upscaling SDK components during plugin startup
-	// This ensures all SDKs are available before any D3D device creation
-	streamline.LoadInterposer();
+	if (a_isNvidiaAdapter) {
+		streamline.LoadInterposer();
+		if (a_allowD3D12Backend)
+			streamlineDX12.LoadInterposer();
+	}
+	backendShutdownRequiresPresent.store(
+		streamline.initialized || streamlineDX12.initialized,
+		std::memory_order_release);
 	fidelityFX.LoadFFX();
+}
+
+void Upscaling::UpdateReflex()
+{
+	if (IsBackendShutdownRequested()) {
+		return;
+	}
+
+	if (UsesDLSSGFrameGeneration())
+		streamlineDX12.UpdateReflex();
+	else
+		streamline.UpdateReflex();
+}
+
+void Upscaling::RequestBackendShutdown()
+{
+	auto expected = BackendLifecycle::kRunning;
+	(void)backendLifecycle.compare_exchange_strong(
+		expected,
+		BackendLifecycle::kShutdownRequested,
+		std::memory_order_acq_rel,
+		std::memory_order_acquire);
+}
+
+bool Upscaling::IsBackendShutdownRequested() const
+{
+	return backendLifecycle.load(std::memory_order_acquire) !=
+	       BackendLifecycle::kRunning;
+}
+
+bool Upscaling::RequiresPresentThreadBackendShutdown() const
+{
+	return backendShutdownRequiresPresent.load(std::memory_order_acquire) &&
+	       !AreBackendsShutdown();
+}
+
+bool Upscaling::AreBackendsRetiringOrShutdown() const
+{
+	const auto lifecycle = backendLifecycle.load(std::memory_order_acquire);
+	return lifecycle == BackendLifecycle::kRetiring ||
+	       lifecycle == BackendLifecycle::kRetired;
+}
+
+bool Upscaling::AreBackendsShutdown() const
+{
+	return backendLifecycle.load(std::memory_order_acquire) ==
+	       BackendLifecycle::kRetired;
+}
+
+bool Upscaling::ProcessBackendShutdownRequest()
+{
+	const auto lifecycle = backendLifecycle.load(std::memory_order_acquire);
+	if (lifecycle == BackendLifecycle::kRunning)
+		return false;
+	if (lifecycle == BackendLifecycle::kRetired)
+		return true;
+	if (lifecycle == BackendLifecycle::kRetiring)
+		return false;
+
+	const bool requiresPresent =
+		backendShutdownRequiresPresent.load(std::memory_order_acquire);
+	if (requiresPresent) {
+		const bool providerStillEnabled =
+			streamlineDX12.RequiresDLSSGPresentBoundary();
+		if (providerStillEnabled) {
+			streamlineDX12.RequestDLSSGDisable();
+			return false;
+		}
+		if (d3d12SwapChainActive && !dx12SwapChain.PrepareForShutdown())
+			return false;
+	}
+
+	auto expected = BackendLifecycle::kShutdownRequested;
+	if (!backendLifecycle.compare_exchange_strong(
+			expected,
+			BackendLifecycle::kRetiring,
+			std::memory_order_acq_rel,
+			std::memory_order_acquire)) {
+		return expected == BackendLifecycle::kRetired;
+	}
+
+	if (!streamline.Shutdown()) {
+		backendLifecycle.store(
+			BackendLifecycle::kShutdownRequested,
+			std::memory_order_release);
+		return false;
+	}
+	if (!streamlineDX12.Shutdown()) {
+		backendLifecycle.store(
+			BackendLifecycle::kShutdownRequested,
+			std::memory_order_release);
+		return false;
+	}
+	dx12SwapChain.RetireStreamlineProxyGraph();
+	backendShutdownRequiresPresent.store(false, std::memory_order_release);
+	backendLifecycle.store(BackendLifecycle::kRetired, std::memory_order_release);
+	return true;
 }
 
 HANDLE Upscaling::GetFrameLatencyWaitableObject() const
@@ -2416,7 +3142,7 @@ HANDLE Upscaling::GetFrameLatencyWaitableObject() const
 // Backend interface methods
 bool Upscaling::IsBackendInitialized() const
 {
-	if (IsRenderDocUpscalingBlocked())
+	if (IsRenderDocUpscalingBlocked() || IsBackendShutdownRequested())
 		return false;
 
 	return streamline.initialized;
@@ -2430,20 +3156,20 @@ void Upscaling::CheckBackendFeatures(IDXGIAdapter* adapter)
 	streamline.CheckFeatures(adapter);
 }
 
-void Upscaling::UpgradeBackendInterface(void** ppInterface)
+bool Upscaling::UpgradeBackendInterface(void** ppInterface)
 {
 	if (IsRenderDocUpscalingBlocked())
-		return;
+		return false;
 
-	streamline.slUpgradeInterface(ppInterface);
+	return streamline.UpgradeInterface(ppInterface, "D3D11/DXGI interface");
 }
 
-void Upscaling::SetBackendD3DDevice(ID3D11Device* device)
+bool Upscaling::SetBackendD3DDevice(ID3D11Device* device)
 {
 	if (IsRenderDocUpscalingBlocked())
-		return;
+		return false;
 
-	streamline.slSetD3DDevice(device);
+	return streamline.SetD3DDevice(device);
 }
 
 void Upscaling::PostBackendDevice()
@@ -2479,6 +3205,13 @@ void Upscaling::CreateProxySwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC
 	dx12SwapChain.CreateSwapChain(adapter, swapChainDesc);
 }
 
+HRESULT Upscaling::CreateDLSSGSwapChain(
+	IDXGIAdapter* adapter,
+	DXGI_SWAP_CHAIN_DESC swapChainDesc)
+{
+	return dx12SwapChain.CreateDLSSGSwapChain(adapter, swapChainDesc);
+}
+
 void Upscaling::CreateProxyInterop()
 {
 	dx12SwapChain.CreateInterop();
@@ -2509,8 +3242,7 @@ bool Upscaling::Upscale()
 		return false;
 	}
 
-	UpdateHistoryResetState(upscaleMethod);
-	LatchHistoryResetForCurrentFrame();
+	PrepareHistoryResetForCurrentFrame();
 
 	auto* state = globals::state;
 	auto* context = globals::d3d::context;
@@ -2896,9 +3628,10 @@ bool Upscaling::ApplySharpening()
 
 void Upscaling::Main_UpdateJitter::thunk(RE::BSGraphics::State* a_state)
 {
-	globals::features::upscaling.ConfigureTAA();
+	auto& upscaling = globals::features::upscaling;
+	upscaling.ConfigureTAA();
 	func(a_state);
-	globals::features::upscaling.ConfigureUpscaling(a_state);
+	upscaling.ConfigureUpscaling(a_state);
 }
 
 void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
@@ -2920,12 +3653,45 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 {
 	auto& upscaling = globals::features::upscaling;
 	const auto upscaleMethod = upscaling.GetUpscaleMethod();
+	upscaling.PrepareHistoryResetForCurrentFrame();
 	const bool frameGenerationRequested = upscaling.ShouldUseFrameGenerationThisFrame();
-	const bool frameGenerationCopySuccessful =
-		!frameGenerationRequested || upscaling.CopySharedD3D12Resources();
+	uint32_t frameGenerationRenderWidth = 0;
+	uint32_t frameGenerationRenderHeight = 0;
+	bool frameGenerationCopySuccessful = !frameGenerationRequested;
+	if (frameGenerationRequested) {
+		frameGenerationCopySuccessful = upscaling.CopySharedD3D12Resources(
+			frameGenerationRenderWidth,
+			frameGenerationRenderHeight);
+	}
+	if (upscaling.UsesDLSSGFrameGeneration() &&
+		!upscaling.IsBackendShutdownRequested()) {
+		auto& frameGenerationBackend = upscaling.streamlineDX12;
+		const bool reflexReady =
+			frameGenerationBackend.IsDLSSGReflexReadyForCurrentFrame();
+		const bool constantsReady =
+			frameGenerationBackend.CheckFrameConstants(frameGenerationBackend.viewport);
+		if (frameGenerationRequested && !reflexReady &&
+			frameGenerationBackend.dlssgState.consecutiveMissingMarkerStartFrames < UINT32_MAX) {
+			const uint32_t missingFrames =
+				++frameGenerationBackend.dlssgState.consecutiveMissingMarkerStartFrames;
+			if (missingFrames == Streamline::kDLSSGDiagnosticFrameThreshold) {
+				logger::warn(
+					"[Streamline DX12] DLSS-G did not receive a frame token and SimulationStart marker for {} consecutive requested frames.",
+					missingFrames);
+			}
+		} else if (!frameGenerationRequested || reflexReady) {
+			frameGenerationBackend.dlssgState.consecutiveMissingMarkerStartFrames = 0;
+		}
+		if (frameGenerationRequested) {
+			frameGenerationCopySuccessful =
+				frameGenerationCopySuccessful && reflexReady && constantsReady;
+		}
+	}
 	upscaling.RecordFrameGenerationCopy(
 		frameGenerationRequested,
-		frameGenerationCopySuccessful);
+		frameGenerationCopySuccessful,
+		frameGenerationRenderWidth,
+		frameGenerationRenderHeight);
 
 	if (upscaleMethod == UpscaleMethod::kNONE) {
 		// Keep vanilla TAA/water stabilization state untouched when no upscaler is active.
@@ -2934,7 +3700,8 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	}
 
 	bool pathSuccessful = true;
-	if (upscaleMethod != UpscaleMethod::kTAA)
+	if (upscaleMethod != UpscaleMethod::kTAA &&
+		!upscaling.IsBackendShutdownRequested())
 		pathSuccessful = upscaling.PerformUpscaling();
 
 	if (upscaleMethod == UpscaleMethod::kDLSS && pathSuccessful)

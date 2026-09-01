@@ -6,11 +6,98 @@
 #include "Utils/Format.h"
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
+#include <algorithm>
 #include <d3dcompiler.h>
 #include <mutex>
 
 namespace Util
 {
+	namespace
+	{
+		[[nodiscard]] winrt::com_ptr<IUnknown> GetCOMIdentity(
+			IUnknown* a_object)
+		{
+			winrt::com_ptr<IUnknown> identity;
+			if (a_object)
+				(void)a_object->QueryInterface(IID_PPV_ARGS(identity.put()));
+			return identity;
+		}
+	}
+
+	bool HaveSameCOMIdentity(IUnknown* a_first, IUnknown* a_second)
+	{
+		const auto firstIdentity = GetCOMIdentity(a_first);
+		const auto secondIdentity = GetCOMIdentity(a_second);
+		return firstIdentity && secondIdentity &&
+		       firstIdentity.get() == secondIdentity.get();
+	}
+
+	bool HaveDistinctCOMIdentity(IUnknown* a_first, IUnknown* a_second)
+	{
+		const auto firstIdentity = GetCOMIdentity(a_first);
+		const auto secondIdentity = GetCOMIdentity(a_second);
+		return firstIdentity && secondIdentity &&
+		       firstIdentity.get() != secondIdentity.get();
+	}
+
+	ScopedComputeBindings::ScopedComputeBindings(
+		ID3D11DeviceContext* a_context,
+		uint32_t a_shaderResourceCount) :
+		context(a_context),
+		shaderResourceCount(std::min<uint32_t>(
+			a_shaderResourceCount,
+			static_cast<uint32_t>(shaderResources.size())))
+	{
+		if (!context)
+			return;
+
+		ID3D11ClassInstance* rawClassInstances[D3D11_SHADER_MAX_INTERFACES]{};
+		classInstanceCount = D3D11_SHADER_MAX_INTERFACES;
+		context->CSGetShader(
+			shader.put(),
+			rawClassInstances,
+			&classInstanceCount);
+		for (UINT i = 0; i < classInstanceCount; ++i)
+			classInstances[i].attach(rawClassInstances[i]);
+		ID3D11ShaderResourceView* rawSRVs[2]{};
+		context->CSGetShaderResources(0, shaderResourceCount, rawSRVs);
+		for (uint32_t i = 0; i < shaderResourceCount; ++i)
+			shaderResources[i].attach(rawSRVs[i]);
+		ID3D11UnorderedAccessView* rawUAV = nullptr;
+		context->CSGetUnorderedAccessViews(0, 1, &rawUAV);
+		uav.attach(rawUAV);
+		ID3D11Buffer* rawConstantBuffer = nullptr;
+		context->CSGetConstantBuffers(0, 1, &rawConstantBuffer);
+		constantBuffer.attach(rawConstantBuffer);
+	}
+
+	ScopedComputeBindings::~ScopedComputeBindings()
+	{
+		if (!context)
+			return;
+
+		ID3D11ShaderResourceView* nullSRVs[2]{};
+		ID3D11UnorderedAccessView* nullUAV = nullptr;
+		context->CSSetShaderResources(0, shaderResourceCount, nullSRVs);
+		context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
+
+		ID3D11ClassInstance* rawClassInstances[D3D11_SHADER_MAX_INTERFACES]{};
+		for (UINT i = 0; i < classInstanceCount; ++i)
+			rawClassInstances[i] = classInstances[i].get();
+		context->CSSetShader(
+			shader.get(),
+			classInstanceCount ? rawClassInstances : nullptr,
+			classInstanceCount);
+		ID3D11ShaderResourceView* rawSRVs[2]{};
+		for (uint32_t i = 0; i < shaderResourceCount; ++i)
+			rawSRVs[i] = shaderResources[i].get();
+		context->CSSetShaderResources(0, shaderResourceCount, rawSRVs);
+		ID3D11UnorderedAccessView* rawUAV = uav.get();
+		context->CSSetUnorderedAccessViews(0, 1, &rawUAV, nullptr);
+		ID3D11Buffer* rawConstantBuffer = constantBuffer.get();
+		context->CSSetConstantBuffers(0, 1, &rawConstantBuffer);
+	}
+
 	bool TryGetDepthSrvDimensions(ID3D11ShaderResourceView* a_depthSrv, uint32_t& o_width, uint32_t& o_height)
 	{
 		o_width = 0;

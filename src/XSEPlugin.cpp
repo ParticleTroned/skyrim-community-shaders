@@ -14,6 +14,7 @@
 #include "SceneSettingsManager.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "Utils/NvApiDrs.h"
 #include "WeatherManager.h"
 
 #include "ENB/ENBSeriesAPI.h"
@@ -193,6 +194,9 @@ bool Load()
 	if (privateProfileRedirectorVersion.has_value() && privateProfileRedirectorVersion.value().compare(REL::Version(0, 6, 2)) == std::strong_ordering::less) {
 		stl::report_and_fail("Old version of PrivateProfileRedirector detected, 0.6.2+ required if using it."sv);
 	}
+
+	// NVIDIA latches application-profile overrides when the first graphics device is created.
+	Util::NvApiDrs::EnsureSkyrimSEDLSSGAllowed();
 
 	auto messaging = SKSE::GetMessagingInterface();
 	messaging->RegisterListener("SKSE", MessageHandler);

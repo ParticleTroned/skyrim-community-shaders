@@ -11,6 +11,23 @@ namespace ScreenSpaceShadowsCachePolicy
 	inline constexpr std::size_t kNoVariant =
 		std::numeric_limits<std::size_t>::max();
 
+	enum class ShaderLookupAction
+	{
+		ReturnCached,
+		Compile,
+		ReturnFailure
+	};
+
+	[[nodiscard]] constexpr ShaderLookupAction SelectShaderLookupAction(
+		bool a_cached,
+		bool a_compileFailed) noexcept
+	{
+		if (a_cached)
+			return ShaderLookupAction::ReturnCached;
+		return a_compileFailed ? ShaderLookupAction::ReturnFailure :
+		                         ShaderLookupAction::Compile;
+	}
+
 	[[nodiscard]] constexpr std::size_t ActiveVariantCount(
 		bool a_vrRuntime,
 		std::size_t a_capacity) noexcept

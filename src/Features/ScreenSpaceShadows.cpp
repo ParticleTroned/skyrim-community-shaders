@@ -388,6 +388,17 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetOrCreateRaymarchShader(
 	}
 	selected->lastUse = ++raymarchShaderUseCounter;
 	compiledSampleCount = a_sampleCount;
+	auto& shader = a_rightEye ? selected->right : selected->left;
+	switch (ScreenSpaceShadowsCachePolicy::SelectShaderLookupAction(
+		shader.get() != nullptr,
+		shader.HasFailed())) {
+	case ScreenSpaceShadowsCachePolicy::ShaderLookupAction::ReturnCached:
+		return shader.get();
+	case ScreenSpaceShadowsCachePolicy::ShaderLookupAction::ReturnFailure:
+		return nullptr;
+	case ScreenSpaceShadowsCachePolicy::ShaderLookupAction::Compile:
+		break;
+	}
 
 	std::string sampleCount = std::format("{}", a_sampleCount);
 	std::vector<std::pair<const char*, const char*>> defines{ { "SAMPLE_COUNT", sampleCount.c_str() } };
@@ -396,7 +407,6 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetOrCreateRaymarchShader(
 	if (useTerrainBlendingDepth)
 		defines.push_back({ "TERRAIN_BLENDING", "" });
 
-	auto& shader = a_rightEye ? selected->right : selected->left;
 	return shader.Get(
 		L"Data\\Shaders\\ScreenSpaceShadows\\RaymarchCS.hlsl",
 		defines,

@@ -2719,6 +2719,7 @@ namespace
 		for (const bool targetActive : { false, true }) {
 			request.targetActive = targetActive;
 			request.csMenuOrigin = false;
+			request.directMenuEdit = true;
 			request.retryAdmitted = true;
 			for (const auto control : {
 					 StartupNativeFallbackControl::None,
@@ -2733,6 +2734,7 @@ namespace
 		}
 
 		request.csMenuOrigin = true;
+		request.directMenuEdit = false;
 		request.retryAdmitted = false;
 		request.control = StartupNativeFallbackControl::None;
 		request.targetActive = false;
@@ -2749,6 +2751,11 @@ namespace
 		request.control =
 			StartupNativeFallbackControl::DisableSavedProfile;
 		request.targetActive = false;
+		if (SelectStartupNativeFallbackControlAction(request) !=
+			StartupNativeFallbackControlAction::Reject) {
+			return false;
+		}
+		request.directMenuEdit = true;
 		if (SelectStartupNativeFallbackControlAction(request) !=
 			StartupNativeFallbackControlAction::ResolveDisabled) {
 			return false;

@@ -1511,6 +1511,21 @@ namespace
 	}
 }
 
+void AdaptiveBrightness::DrawSettingsHeaderControls()
+{
+	if (ImGui::Checkbox("Enable Adaptive Profiles", &settings.enabled))
+		ResetWaterWindSmoothing();
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Blend the active lighting, atmosphere, Bloom, and water appearance profile by location and exterior time.");
+		ImGui::Text("Every base and location layer uses the same Lighting, Bloom, Water, and wind controls.");
+	}
+
+	if (settings.enabled) {
+		const auto contextLabel = GetContextLabel();
+		ImGui::TextWrapped("%s", contextLabel.c_str());
+	}
+}
+
 void AdaptiveBrightness::DrawSettings()
 {
 	const auto contextSectionToSelect = SyncContextSection();
@@ -1528,17 +1543,6 @@ void AdaptiveBrightness::DrawSettings()
 		}
 
 		if (ImGui::BeginTabItem("Profiles", nullptr, profileSectionFlags)) {
-			if (ImGui::Checkbox("Enable Adaptive Profiles", &settings.enabled))
-				ResetWaterWindSmoothing();
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Blend the active lighting, atmosphere, Bloom, and water appearance profile by location and exterior time.");
-				ImGui::Text("Every base and location layer uses the same Lighting, Bloom, Water, and wind controls.");
-			}
-			if (settings.enabled) {
-				const auto contextLabel = GetContextLabel();
-				ImGui::TextWrapped("%s", contextLabel.c_str());
-			}
-
 			ImGui::TextWrapped("Tune the lighting, atmosphere, Bloom, and water appearance used for each time and location type. Context profiles are ordered from broad Worldspace and Location scopes to specific Cities; exact locations and cells remain under Locations.");
 			if (!settings.enabled)
 				ImGui::TextDisabled("Adaptive profile switching is off. Saved profile values can still be reviewed.");
@@ -1640,18 +1644,15 @@ void AdaptiveBrightness::DrawEssentialSettings()
 	DrawGlobalSettings(false);
 }
 
-void AdaptiveBrightness::DrawPerformanceSettings(bool)
+void AdaptiveBrightness::DrawPerformanceSettings(bool a_advanced)
 {
-	if (ImGui::Checkbox("Enable Adaptive Profiles", &settings.enabled))
-		ResetWaterWindSmoothing();
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Blend the time, location, Bloom, Water, and wind profile layers. The global adjustment layer remains active.");
+	DrawGlobalSettings(a_advanced);
 }
 
 json AdaptiveBrightness::CapturePerformanceSettingsState() const
 {
 	return {
-		{ "enabled", settings.enabled }
+		{ "globalProfile", settings.globalProfile }
 	};
 }
 

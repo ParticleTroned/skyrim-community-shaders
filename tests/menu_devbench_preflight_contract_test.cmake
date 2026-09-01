@@ -24,6 +24,7 @@ string(JSON _action_count LENGTH
 )
 set(_prepare_coc_found FALSE)
 set(_set_layout_unlocked_found FALSE)
+set(_foliage_lighting_enabled_found FALSE)
 set(_truepbr_verbose_found FALSE)
 set(_dynamic_cubemap_resolution_found FALSE)
 math(EXPR _action_last "${_action_count} - 1")
@@ -33,6 +34,8 @@ foreach(_index RANGE 0 ${_action_last})
     )
     if(_action STREQUAL "prepare_coc")
         set(_prepare_coc_found TRUE)
+    elseif(_action STREQUAL "set_foliage_lighting_enabled")
+        set(_foliage_lighting_enabled_found TRUE)
     elseif(_action STREQUAL "set_truepbr_verbose_json_logging")
         set(_truepbr_verbose_found TRUE)
     elseif(_action STREQUAL "set_dynamic_cubemap_resolution")
@@ -47,6 +50,11 @@ if(NOT _prepare_coc_found)
 endif()
 if(NOT _set_layout_unlocked_found)
     message(FATAL_ERROR "Menu DevBench schema is missing set_layout_unlocked")
+endif()
+if(NOT _foliage_lighting_enabled_found)
+    message(FATAL_ERROR
+        "Menu DevBench schema is missing set_foliage_lighting_enabled"
+    )
 endif()
 if(NOT _truepbr_verbose_found)
     message(FATAL_ERROR
@@ -87,6 +95,9 @@ foreach(_required_behavior IN ITEMS
     "kFoveatedCenterArea"
     "kPeripheryTAACenterArea"
     "kPeripheryTAAOuterScale"
+    "{ \"foliageLightingEnabled\", globals::features::foliageLighting.IsEnabled() }"
+    "{ \"foliageLightingActive\", globals::features::foliageLighting.IsRuntimeEnabled() }"
+    "globals::features::foliageLighting.SetEnabled(enabled)"
     "{ \"truePbrVerboseJsonLogging\", globals::features::truePBR.enableVerboseJsonLogging }"
     "globals::features::truePBR.enableVerboseJsonLogging = enabled"
     "{ \"configuredResolution\", dynamicCubemaps.settings.CubemapResolution }"

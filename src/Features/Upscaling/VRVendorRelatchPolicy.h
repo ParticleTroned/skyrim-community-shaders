@@ -2455,6 +2455,40 @@ namespace VRVendorRelatchPolicy
 		       a_state.resourcesCompatible;
 	}
 
+	struct InactivePhysicalTargetReuseAdmission
+	{
+		bool targetInactive = false;
+		bool previousProfileValid = false;
+		bool previousProfileInactive = false;
+		bool previousProfileFullResolution = false;
+		bool dimensionsUnchanged = false;
+		bool publishableLayout = false;
+		bool stateScreenDimensionsMatch = false;
+		bool resourcePublicationMatches = false;
+		bool retirementIdle = false;
+		bool postLoadRecoveryInactive = false;
+		bool deviceOperational = false;
+	};
+
+	// A fixed-resolution provider change owns vendor resources, not Skyrim's
+	// physical targets. Deferred optional targets may converge after publication;
+	// the required full-resolution scene layout must remain exact.
+	[[nodiscard]] constexpr bool CanReusePublishableInactivePhysicalTargets(
+		const InactivePhysicalTargetReuseAdmission& a_state) noexcept
+	{
+		return a_state.targetInactive &&
+		       a_state.previousProfileValid &&
+		       a_state.previousProfileInactive &&
+		       a_state.previousProfileFullResolution &&
+		       a_state.dimensionsUnchanged &&
+		       a_state.publishableLayout &&
+		       a_state.stateScreenDimensionsMatch &&
+		       a_state.resourcePublicationMatches &&
+		       a_state.retirementIdle &&
+		       a_state.postLoadRecoveryInactive &&
+		       a_state.deviceOperational;
+	}
+
 	struct PreparedDLSSActivationReuseAdmission
 	{
 		bool directMenuRelatch = false;

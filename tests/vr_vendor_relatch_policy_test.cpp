@@ -808,6 +808,25 @@ namespace
 				return false;
 		}
 
+		for (std::uint32_t bits = 0; bits < (1u << 11); ++bits) {
+			const InactivePhysicalTargetReuseAdmission state{
+				.targetInactive = (bits & (1u << 0)) != 0,
+				.previousProfileValid = (bits & (1u << 1)) != 0,
+				.previousProfileInactive = (bits & (1u << 2)) != 0,
+				.previousProfileFullResolution = (bits & (1u << 3)) != 0,
+				.dimensionsUnchanged = (bits & (1u << 4)) != 0,
+				.publishableLayout = (bits & (1u << 5)) != 0,
+				.stateScreenDimensionsMatch = (bits & (1u << 6)) != 0,
+				.resourcePublicationMatches = (bits & (1u << 7)) != 0,
+				.retirementIdle = (bits & (1u << 8)) != 0,
+				.postLoadRecoveryInactive = (bits & (1u << 9)) != 0,
+				.deviceOperational = (bits & (1u << 10)) != 0,
+			};
+			const bool expected = bits == ((1u << 11) - 1u);
+			if (CanReusePublishableInactivePhysicalTargets(state) != expected)
+				return false;
+		}
+
 		for (std::uint32_t bits = 0; bits < (1u << 10); ++bits) {
 			const PreparedDLSSActivationReuseAdmission state{
 				.directMenuRelatch = (bits & (1u << 0)) != 0,

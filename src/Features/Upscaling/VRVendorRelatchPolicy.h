@@ -159,15 +159,15 @@ namespace VRVendorRelatchPolicy
 	[[nodiscard]] constexpr bool CanReleaseGameEntryVendorGate(
 		const GameEntryConvergence& a_state) noexcept
 	{
+		// Queued relatch/profile work consumes this release; treating it as a
+		// prerequisite would leave both the work and its owning gate blocked.
 		return a_state.hasGateOwner &&
 		       !a_state.mainMenuActive &&
 		       !a_state.loadingPresentationActive &&
 		       !a_state.raceSexPresentationActive &&
 		       !a_state.saveLoadProtectionActive &&
 		       a_state.completedWorldFrame &&
-		       !a_state.recoveryPending &&
-		       !a_state.relatchPending &&
-		       !a_state.profileTransitionPending;
+		       !a_state.recoveryPending;
 	}
 
 	enum class MissedLoadingMenuCloseAction : std::uint8_t

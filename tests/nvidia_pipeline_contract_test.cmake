@@ -41,6 +41,11 @@ foreach(_required IN ITEMS
     "frameGenerationQuarantinedByReflex.store(true"
     "EnsureReflexDisabledForFrameGeneration"
     "IsDLSSRuntimeReady"
+    "runtimeHasDLSS"
+    "runtimeHasReflex"
+    "runtimeHasPCL"
+    "ShutdownQuarantined"
+    "LoggingCallback(sl::LogType type, const char* msg) noexcept"
 )
     string(FIND "${_streamline}" "${_required}" _position)
     if(_position EQUAL -1)
@@ -70,6 +75,11 @@ foreach(_required IN ITEMS
     "runtimeQuarantined = true"
     "EnsureReflexDisabledForFrameGeneration"
     "const std::array beforeCopy"
+    "producerFenceValue = fenceSequence.Next()"
+    "ResolveBackendBufferCount"
+    "return owner.GetDesc(pDesc)"
+    "return 0;"
+    "ResetFrameGenerationContexts()"
 )
     string(FIND "${_swapchain_header}${_swapchain}" "${_required}" _position)
     if(_position EQUAL -1)
@@ -86,6 +96,8 @@ foreach(_required IN ITEMS
     "frameGenContextIndeterminate"
     "swapChainContextIndeterminate"
     "IsRuntimeUpscalerDispatchProofUsable"
+    "ConfirmFrameGenerationDisabled"
+    "frameGenerationDisableConfirmed"
 )
     string(FIND "${_fidelityfx}" "${_required}" _position)
     if(_position EQUAL -1)
@@ -104,6 +116,8 @@ foreach(_required IN ITEMS
     "pendingOperationReservations"
     "releaseOperationReservation"
     "--pendingOperationReservations"
+    "rollbackUnreadyCommand"
+    "DiscardUnreadyAdmission"
 )
     string(FIND "${_upscaling_service}" "${_required}" _position)
     if(_position EQUAL -1)

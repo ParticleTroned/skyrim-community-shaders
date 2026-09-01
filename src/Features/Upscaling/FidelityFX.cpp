@@ -1317,14 +1317,48 @@ bool FidelityFX::IsFrameGenerationQuarantined() const noexcept
 	return frameGenerationSessionQuarantined.load(std::memory_order_acquire);
 }
 
-void FidelityFX::QuarantineFrameGenerationForSession(const char* a_reason) noexcept
+bool FidelityFX::IsFrameGenerationDisableConfirmed() const noexcept
+{
+	return frameGenerationDisableConfirmed.load(std::memory_order_acquire);
+}
+
+bool FidelityFX::ConfirmFrameGenerationDisabled(uint64_t a_frameID) noexcept
+{
+	if (!ffxModule.Configure || !frameGenContextValid || frameGenContextIndeterminate)
+		return false;
+
+	ffx::ConfigureDescFrameGeneration disable{};
+	disable.frameGenerationEnabled = false;
+	disable.frameGenerationCallback = nullptr;
+	disable.frameGenerationCallbackUserContext = nullptr;
+	disable.HUDLessColor = FfxApiResource({});
+	disable.presentCallback = nullptr;
+	disable.presentCallbackUserContext = nullptr;
+	disable.frameID = a_frameID;
+	disable.swapChain = globals::features::upscaling.dx12SwapChain.swapChain;
+	disable.onlyPresentGenerated = false;
+	disable.flags = 0;
+	disable.allowAsyncWorkloads = true;
+	disable.header.pNext = nullptr;
+
+	bool crashed = false;
+	const bool confirmed =
+		ConfigureFrameGenerationProtected(&frameGenContext, &disable.header, crashed) == FFX_API_RETURN_OK &&
+		!crashed;
+	frameGenerationDisableConfirmed.store(confirmed, std::memory_order_release);
+	return confirmed;
+}
+
+void FidelityFX::QuarantineFrameGenerationForSession(const char* a_reason, bool a_disableConfirmed) noexcept
 {
 	isFrameGenActive = false;
+	frameGenerationDisableConfirmed.store(a_disableConfirmed, std::memory_order_release);
 	if (frameGenerationSessionQuarantined.exchange(true, std::memory_order_acq_rel))
 		return;
 	logger::error(
-		"[FidelityFX] Frame generation failed during {}; quarantined until restart.",
-		a_reason ? a_reason : "a provider operation");
+		"[FidelityFX] Frame generation failed during {}; quarantined until restart (vendor disable {}).",
+		a_reason ? a_reason : "a provider operation",
+		a_disableConfirmed ? "confirmed" : "unconfirmed");
 }
 
 bool FidelityFX::CreateFrameGenerationContext(
@@ -1405,6 +1439,8 @@ bool FidelityFX::ResetFrameGenerationContexts() noexcept
 	isFrameGenActive = false;
 	if (!resetComplete)
 		QuarantineFrameGenerationForSession("context destruction");
+	else
+		frameGenerationDisableConfirmed.store(true, std::memory_order_release);
 	return resetComplete;
 }
 
@@ -1426,6 +1462,7 @@ bool FidelityFX::Present(bool a_useFrameGeneration) noexcept
 	if (!IsFrameGenerationRuntimeReady() || !frameGenContextValid || !swapChainContextValid)
 		return false;
 
+	static uint64_t frameID = 0;
 	try {
 		auto& upscaling = globals::features::upscaling;
 		auto& swapChain = globals::features::upscaling.dx12SwapChain;
@@ -1454,7 +1491,6 @@ bool FidelityFX::Present(bool a_useFrameGeneration) noexcept
 		configParameters.presentCallback = nullptr;
 		configParameters.presentCallbackUserContext = nullptr;
 
-		static uint64_t frameID = 0;
 		configParameters.frameID = frameID;
 		configParameters.swapChain = swapChain.swapChain;
 		configParameters.onlyPresentGenerated = false;
@@ -1472,9 +1508,11 @@ bool FidelityFX::Present(bool a_useFrameGeneration) noexcept
 		configParameters.header.pNext = nullptr;
 		bool crashed = false;
 		if (ConfigureFrameGenerationProtected(&frameGenContext, &configParameters.header, crashed) != FFX_API_RETURN_OK || crashed) {
-			QuarantineFrameGenerationForSession("frame-generation configuration");
+			const bool disableConfirmed = !crashed && ConfirmFrameGenerationDisabled(frameID);
+			QuarantineFrameGenerationForSession("frame-generation configuration", disableConfirmed);
 			return false;
 		}
+		frameGenerationDisableConfirmed.store(!a_useFrameGeneration, std::memory_order_release);
 
 		ffx::ConfigureDescFrameGenerationSwapChainRegisterUiResourceDX12 uiConfig{};
 		uiConfig.uiResource = ffxApiGetResourceDX12(swapChain.uiBufferWrapped->resource.get());
@@ -1483,7 +1521,8 @@ bool FidelityFX::Present(bool a_useFrameGeneration) noexcept
 		uiConfig.header.pNext = nullptr;
 		crashed = false;
 		if (ConfigureFrameGenerationProtected(&swapChainContext, &uiConfig.header, crashed) != FFX_API_RETURN_OK || crashed) {
-			QuarantineFrameGenerationForSession("UI composition configuration");
+			const bool disableConfirmed = ConfirmFrameGenerationDisabled(frameID);
+			QuarantineFrameGenerationForSession("UI composition configuration", disableConfirmed);
 			return false;
 		}
 
@@ -1530,7 +1569,8 @@ bool FidelityFX::Present(bool a_useFrameGeneration) noexcept
 			cameraConfig.header.pNext = nullptr;
 			crashed = false;
 			if (DispatchFrameGenerationProtected(&frameGenContext, &dispatchParameters.header, crashed) != FFX_API_RETURN_OK || crashed) {
-				QuarantineFrameGenerationForSession("frame preparation dispatch");
+				const bool disableConfirmed = !crashed && ConfirmFrameGenerationDisabled(frameID);
+				QuarantineFrameGenerationForSession("frame preparation dispatch", disableConfirmed);
 				return false;
 			}
 		}
@@ -1543,7 +1583,8 @@ bool FidelityFX::Present(bool a_useFrameGeneration) noexcept
 	} catch (...) {
 		logger::error("[FidelityFX] Frame-generation preparation raised an unknown exception");
 	}
-	QuarantineFrameGenerationForSession("frame preparation");
+	const bool disableConfirmed = ConfirmFrameGenerationDisabled(frameID);
+	QuarantineFrameGenerationForSession("frame preparation", disableConfirmed);
 	return false;
 }
 

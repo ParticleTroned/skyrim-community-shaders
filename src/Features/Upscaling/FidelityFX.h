@@ -117,6 +117,7 @@ public:
 	void LoadFFX();
 	bool IsFrameGenerationRuntimeReady() const noexcept;
 	bool IsFrameGenerationQuarantined() const noexcept;
+	bool IsFrameGenerationDisableConfirmed() const noexcept;
 	bool CreateFrameGenerationContext(ffx::Context& a_context, ffxCreateContextDescHeader* a_desc) noexcept;
 	bool SetupFrameGeneration();
 	bool ResetFrameGenerationContexts() noexcept;
@@ -180,8 +181,10 @@ public:
 	StereoUpscaleResult UpscaleStereoRegions(const std::array<UpscaleRegionParameters, 2>& a_regions);
 
 private:
-	void QuarantineFrameGenerationForSession(const char* a_reason) noexcept;
+	bool ConfirmFrameGenerationDisabled(uint64_t a_frameID) noexcept;
+	void QuarantineFrameGenerationForSession(const char* a_reason, bool a_disableConfirmed = false) noexcept;
 	std::atomic_bool frameGenerationSessionQuarantined{ false };
+	std::atomic_bool frameGenerationDisableConfirmed{ true };
 	bool frameGenContextIndeterminate = false;
 	bool swapChainContextIndeterminate = false;
 

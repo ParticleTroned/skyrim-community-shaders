@@ -2021,7 +2021,7 @@ public:
 	// Runtime state
 	bool isWindowed = false;
 	bool lowRefreshRate = false;
-	bool d3d12SwapChainActive = false;
+	std::atomic_bool d3d12SwapChainActive{ false };
 
 	// Timing and scaling
 	double refreshRate = 0.0f;
@@ -3374,7 +3374,10 @@ public:
 	// Proxy interface methods
 	void SetProxyD3D11Device(ID3D11Device* device);
 	void SetProxyD3D11DeviceContext(ID3D11DeviceContext* context);
-	void CreateProxySwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC swapChainDesc);
+	void CreateProxySwapChain(
+		IDXGIAdapter* adapter,
+		DXGI_SWAP_CHAIN_DESC backendSwapChainDesc,
+		DXGI_SWAP_CHAIN_DESC publicSwapChainDesc);
 	void CreateProxyInterop();
 	IDXGISwapChain* GetProxySwapChain();
 	bool ResetProxyCreationState() noexcept;

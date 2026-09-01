@@ -1,3 +1,4 @@
+#include "Features/Upscaling/NvidiaPipelinePolicy.h"
 #include "Features/Upscaling/StreamlineFrameTokenPublication.h"
 
 #include <atomic>
@@ -146,6 +147,43 @@ namespace
 
 		return first && wrapped && wrapped->token == &afterWrap && acquisitions == 2;
 	}
+
+	bool TestOptionalPipelinePolicies()
+	{
+		using namespace CSX::NvidiaPipelinePolicy;
+
+		InteropFenceSequence fences;
+		const auto firstProducer = fences.Next();
+		const auto firstConsumer = fences.Next();
+		if (!firstProducer || *firstProducer != 1u ||
+			!firstConsumer || *firstConsumer != 2u)
+			return false;
+		fences.Reset();
+		if (fences.Next() != 1u)
+			return false;
+
+		if (ResolveBackendBufferCount(0u, 1u) != 2u ||
+			ResolveBackendBufferCount(1u, 1u) != 2u ||
+			ResolveBackendBufferCount(2u, 1u))
+			return false;
+
+		if (!CanContinueBasePresentation(true, false) ||
+			!CanContinueBasePresentation(false, true) ||
+			CanContinueBasePresentation(false, false))
+			return false;
+
+		if (MustRetainModuleAfterShutdown(false, false) ||
+			MustRetainModuleAfterShutdown(true, true) ||
+			!MustRetainModuleAfterShutdown(true, false))
+			return false;
+
+		const auto dlssOnly = ResolveRuntimeAvailability(true, true, false, false);
+		const auto reflexOnly = ResolveRuntimeAvailability(true, false, true, false);
+		const auto noCore = ResolveRuntimeAvailability(false, true, true, true);
+		return dlssOnly.core && dlssOnly.dlss && !dlssOnly.reflex && !dlssOnly.pcl &&
+		       reflexOnly.core && !reflexOnly.dlss && reflexOnly.reflex && !reflexOnly.pcl &&
+		       !noCore.core && !noCore.dlss && !noCore.reflex && !noCore.pcl;
+	}
 }
 
 int main()
@@ -153,7 +191,8 @@ int main()
 	return TestConcurrentPublication() &&
 	               TestFailureAndReset() &&
 	               TestStaleFrameCannotReplacePublication() &&
-	               TestFrameCounterWrapRemainsMonotonic() ?
+	               TestFrameCounterWrapRemainsMonotonic() &&
+	               TestOptionalPipelinePolicies() ?
 	           0 :
 	           1;
 }

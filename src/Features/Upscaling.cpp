@@ -15437,6 +15437,14 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 		const bool hasFrameGenModule = upscaling.HasFrameGenModule();
 		if (hasFrameGenModule) {
+			if (pSwapChainDesc->BufferCount != 1) {
+				logger::warn(
+					"[Frame Generation] Caller requested {} swap-chain buffers; using the original D3D path",
+					pSwapChainDesc->BufferCount);
+				shouldProxy = false;
+			}
+		}
+		if (hasFrameGenModule && shouldProxy) {
 			winrt::com_ptr<ID3D11Device> candidateDevice;
 			winrt::com_ptr<ID3D11DeviceContext> candidateContext;
 			D3D_FEATURE_LEVEL candidateFeatureLevel{};
@@ -15467,7 +15475,8 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 						throw std::runtime_error("proxy device adapter resolution failed");
 					upscaling.SetProxyD3D11Device(candidateDevice.get());
 					upscaling.SetProxyD3D11DeviceContext(candidateContext.get());
-					upscaling.CreateProxySwapChain(resolvedAdapter.get(), proxyDesc);
+					upscaling.CreateProxySwapChain(
+						resolvedAdapter.get(), proxyDesc, *pSwapChainDesc);
 					upscaling.CreateProxyInterop();
 
 					auto* activatedDevice = candidateDevice.detach();
@@ -15506,7 +15515,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 					"[Frame Generation] Proxy D3D11 device creation failed with 0x{:08X}; using the original D3D path",
 					static_cast<uint32_t>(proxyDeviceResult));
 			}
-		} else {
+		} else if (!hasFrameGenModule) {
 			logger::warn("[Frame Generation] FidelityFX DLLs are not loaded, skipping proxy");
 		}
 	}
@@ -37030,7 +37039,7 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	} else if (resourceChangeDetected) {
 		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({}), Quality: {} -> {}, DLSSPreset: {} -> {}, SubmitStage: {} -> {}, VRRenderScaleLatch: {} -> {}, FrameGen: {} -> {} (d3d12Active={}), FSRRuntimePath: {} -> {}",
 			static_cast<int>(previousUpscaleMode), magic_enum::enum_name(previousUpscaleMode), static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod),
-			previousQualityMode, qualityModeCurrent, previousDLSSPreset, dlssPresetCurrent, previousRenderScaleMode, renderScaleModeCurrent, previousPerfMode, perfModeCurrent, previousFrameGenMode, frameGenModeCurrent, d3d12SwapChainActive, previousFSRRuntimePathActive, fsrRuntimePathCurrent);
+			previousQualityMode, qualityModeCurrent, previousDLSSPreset, dlssPresetCurrent, previousRenderScaleMode, renderScaleModeCurrent, previousPerfMode, perfModeCurrent, previousFrameGenMode, frameGenModeCurrent, d3d12SwapChainActive.load(std::memory_order_acquire), previousFSRRuntimePathActive, fsrRuntimePathCurrent);
 
 		const bool requiresFullPipelineUnbind =
 			upscaleModeChanged ||
@@ -54708,9 +54717,12 @@ void Upscaling::SetProxyD3D11DeviceContext(ID3D11DeviceContext* context)
 	dx12SwapChain.SetD3D11DeviceContext(context);
 }
 
-void Upscaling::CreateProxySwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC swapChainDesc)
+void Upscaling::CreateProxySwapChain(
+	IDXGIAdapter* adapter,
+	DXGI_SWAP_CHAIN_DESC backendSwapChainDesc,
+	DXGI_SWAP_CHAIN_DESC publicSwapChainDesc)
 {
-	dx12SwapChain.CreateSwapChain(adapter, swapChainDesc);
+	dx12SwapChain.CreateSwapChain(adapter, backendSwapChainDesc, publicSwapChainDesc);
 }
 
 void Upscaling::CreateProxyInterop()

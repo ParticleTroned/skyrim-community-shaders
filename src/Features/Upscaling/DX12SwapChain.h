@@ -1,5 +1,7 @@
 #pragma once
 
+#include "NvidiaPipelinePolicy.h"
+
 #include <Windows.Foundation.h>
 #include <stdio.h>
 #include <winrt/base.h>
@@ -116,6 +118,7 @@ public:
 	IDXGISwapChain4* swapChain = nullptr;
 
 	DXGI_SWAP_CHAIN_DESC1 swapChainDesc{};
+	DXGI_SWAP_CHAIN_DESC publicSwapChainDesc{};
 
 	std::unique_ptr<WrappedResource> swapChainBufferWrapped;
 	std::unique_ptr<WrappedResource> uiBufferWrapped;
@@ -133,7 +136,7 @@ public:
 	winrt::com_ptr<ID3D12Resource> swapChainBuffers[2];
 
 	UINT frameIndex = 0;
-	UINT64 fenceValue = 0;
+	CSX::NvidiaPipelinePolicy::InteropFenceSequence fenceSequence;
 
 	LARGE_INTEGER qpf;
 
@@ -145,7 +148,10 @@ public:
 	float GetFrameTime() const;
 
 	void CreateD3D12Device(IDXGIAdapter* a_adapter);
-	void CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC swapChainDesc);
+	void CreateSwapChain(
+		IDXGIAdapter* adapter,
+		DXGI_SWAP_CHAIN_DESC backendSwapChainDesc,
+		DXGI_SWAP_CHAIN_DESC publicSwapChainDesc);
 
 	void CreateInterop();
 	void RecreateWrappedResources(const DXGI_SWAP_CHAIN_DESC1& desc);
@@ -161,6 +167,8 @@ public:
 	HRESULT Present(UINT SyncInterval, UINT Flags);
 	HRESULT Present1(UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* presentParameters);
 	HRESULT GetDevice(_In_ REFIID riid, _COM_Outptr_ void** ppDevice);
+	HRESULT GetDesc(_Out_ DXGI_SWAP_CHAIN_DESC* desc) const noexcept;
+	HRESULT GetDesc1(_Out_ DXGI_SWAP_CHAIN_DESC1* desc) const noexcept;
 	HANDLE GetFrameLatencyWaitableObject();
 
 	void SetUIBuffer();
@@ -171,6 +179,7 @@ public:
 	void OnProxyDestroyed(IDXGISwapChain4* a_swapChain) noexcept;
 
 private:
+	void ResetResources() noexcept;
 	HRESULT PresentInternal(UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* presentParameters) noexcept;
 	HRESULT RefreshAfterResize() noexcept;
 	bool runtimeQuarantined = false;

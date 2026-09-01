@@ -656,11 +656,61 @@ def derive(
                         "FinishCommandList materialized this exact observed recording epoch.",
                         {"sourceRecordingComplete": payload.get("sourceRecordingComplete")},
                     )
-                elif payload.get("sourceRecordingComplete") is True:
+                    if payload.get("sourceRecordingComplete") is not True:
+                        graph.gap(
+                            f"Command list {list_id} was materialized from an incomplete source recording: "
+                            f"{payload.get('sourceRecordingIncompleteReasons', [])}.",
+                            [recording["node"], list_node], False, "incomplete-capture",
+                        )
+                else:
                     graph.gap(
-                        f"Command list {list_id} claims a complete but undeclared source recording {recording_id}.",
-                        [list_node], True,
+                        f"Command list {list_id} has no declared source recording {recording_id}; "
+                        f"completeness={payload.get('sourceRecordingComplete')} reasons="
+                        f"{payload.get('sourceRecordingIncompleteReasons', [])}.",
+                        [list_node], payload.get("sourceRecordingComplete") is True,
+                        "incomplete-capture",
                     )
+        elif event_type == "finish-command-list":
+            recording_id = payload.get("commandRecordingObservationId")
+            list_id = payload.get("commandListObservationId")
+            finish_node = graph.node(
+                f"event-{sequence}", "command-list-finish",
+                f"FinishCommandList at event {sequence}", sequence,
+                {**payload, "commandStreamSequence": event.get("execution", {}).get("commandStreamSequence")},
+                event_source_refs(event),
+            )
+            recording = command_recordings.get(recording_id or "")
+            if recording:
+                graph.edge(
+                    "finishes", recording["node"], finish_node,
+                    [recording["event"]["sequence"], sequence],
+                    "This FinishCommandList call terminated the exact deferred recording epoch.",
+                    {"restoreDeferredContextState": payload.get("restoreDeferredContextState")},
+                )
+            else:
+                graph.gap(
+                    f"FinishCommandList event {sequence} has no declared source recording {recording_id}.",
+                    [finish_node], payload.get("sourceRecordingComplete") is True,
+                    "incomplete-capture",
+                )
+            if payload.get("sourceRecordingComplete") is not True:
+                graph.gap(
+                    f"FinishCommandList event {sequence} ended an incomplete source recording: "
+                    f"{payload.get('sourceRecordingIncompleteReasons', [])}.",
+                    [finish_node], False, "incomplete-capture",
+                )
+            command_list = command_lists.get(list_id or "")
+            if payload.get("succeeded") is True:
+                if not command_list:
+                    graph.gap(
+                        f"Successful FinishCommandList event {sequence} has no observed command list {list_id}.",
+                        [finish_node], True, "incomplete-capture",
+                    )
+            elif list_id:
+                graph.gap(
+                    f"Failed FinishCommandList event {sequence} unexpectedly names command list {list_id}.",
+                    [finish_node], True,
+                )
         elif event_type == "execute-command-list":
             list_id = payload.get("commandListObservationId")
             execution_node = graph.node(
@@ -1230,6 +1280,36 @@ def derive(
                         f"Recorded execution event {sequence} refers to undeclared recording {recording_id}.",
                         [execution], True,
                     )
+            if event_type in {"draw", "dispatch"}:
+                context_id = event.get("deviceContextObservationId")
+                context = device_contexts.get(context_id or "")
+                is_deferred = bool(context and context["payload"].get("kind") == "deferred")
+                if recording_id or is_deferred:
+                    for stage, stage_shader_id in (
+                        ("vertex", payload.get("vertexShaderObservationId")),
+                        ("pixel", payload.get("pixelShaderObservationId")),
+                        ("compute", payload.get("computeShaderObservationId")),
+                    ):
+                        if not stage_shader_id:
+                            continue
+                        stage_node = observed_identity_node(
+                            event, stage_shader_id, "pipeline-state",
+                            f"{stage} shader {stage_shader_id}",
+                            {"pipelineRole": "stage-shader", "stage": stage,
+                             "identityDeclaredByReference": True},
+                        )
+                        graph.edge(
+                            "binds", stage_node, execution, [sequence],
+                            "The recorded command payload names this exact stage-shader observation.",
+                            {"stage": stage},
+                        )
+                    graph.gap(
+                        f"Deferred {event_type} event {sequence} has no command-list-local SRV, UAV, "
+                        "target-binding, resource-version, or hazard-state provenance; immediate-context "
+                        "state was deliberately not applied.",
+                        [execution], False, "incomplete-capture",
+                    )
+                    continue
             if event_type == "resource-cpu-access":
                 graph.cpu_access_count += 1
                 map_id = payload.get("mapObservationId")
@@ -1959,10 +2039,10 @@ def main() -> int:
             data = json.loads(path.read_text(encoding="utf-8-sig"))
             inputs.append({"kind": kind, "path": str(path), "sha256": sha256(path), "schemaMajor": input_schema_major(kind, data)})
     output = {
-        "schema": {"name": "csx.derived-render-graph", "major": 1, "minor": 11, "producerVersion": "static-semantic-resource-graph-8"},
+        "schema": {"name": "csx.derived-render-graph", "major": 1, "minor": 12, "producerVersion": "static-semantic-resource-graph-9"},
         "reportId": f"render-graph-{manifest['captureId'].removeprefix('capture-')}",
         "generatedAtUtc": manifest.get("createdAtUtc", "1970-01-01T00:00:00Z"),
-        "generatedBy": {"name": "csx-render-map-join", "version": "0.11.0", "gitCommit": git_commit(repo)},
+        "generatedBy": {"name": "csx-render-map-join", "version": "0.12.0", "gitCommit": git_commit(repo)},
         "inputs": inputs,
         "nodes": graph.nodes,
         "edges": graph.edges,

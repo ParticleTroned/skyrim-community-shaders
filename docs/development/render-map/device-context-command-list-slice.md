@@ -57,6 +57,14 @@ first-seen fallback when capture starts in the middle of recording. It owns:
 
 Deferred draws and dispatches use `observationDomain: command-recording` and a
 `commandRecordingObservationId`. They are not emitted as immediate execution.
+Selecting either event kind automatically selects its recording and context
+declarations. If a recording declaration cannot be retained, the command is
+omitted rather than being mislabelled as an immediate CPU call.
+
+`sourceRecordingComplete` is conservative. It remains false while deferred
+hook coverage is unqualified, when capture begins part-way through an epoch, or
+when any observed command event cannot be retained. The accompanying
+`sourceRecordingIncompleteReasons` array makes those cases distinguishable.
 
 ### Command list
 
@@ -92,6 +100,12 @@ immediate ExecuteCommandList --------------------> execution event
 `RestoreContextState`, and a command-stream sequence. The command-list contents
 remain recording-domain events linked through the command-list observation;
 they are not duplicated as a guessed series of immediate calls.
+
+The derived graph retains recorded draw/dispatch nodes, exact recording edges,
+and observed stage-shader references. It does not apply global
+immediate-context SRV, UAV, target-binding, resource-version, or hazard state to
+those nodes. Until command-list-local state capture exists, it emits an explicit
+deferred-resource-provenance gap instead.
 
 When `RestoreContextState` is true, the immediate-context pipeline tracker is
 restored to its pre-call state. When false, D3D11 returns the immediate context

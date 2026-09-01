@@ -64,6 +64,14 @@ namespace CSX::RenderMap
 		kFirstSeen = 3,
 	};
 
+	enum class CommandRecordingIncompleteReason : std::uint64_t
+	{
+		kPartialAtCaptureStart = 1ull << 0,
+		kDeclarationUnavailable = 1ull << 1,
+		kEventNotRecorded = 1ull << 2,
+		kHookCoverageUnqualified = 1ull << 3,
+	};
+
 	enum class ResourceCpuAccessPhase : std::uint8_t
 	{
 		kMap = 1,
@@ -427,6 +435,7 @@ namespace CSX::RenderMap
 			std::uint64_t commandSequence{ 0 };
 			std::uint64_t recordingEpoch{ 0 };
 			std::uint64_t recordingObservationId{ 0 };
+			std::uint64_t recordingIncompleteReasons{ 0 };
 			std::uint32_t contextFlags{ 0 };
 			std::uint64_t creationCaptureGeneration{ 0 };
 			std::uintptr_t boundVertexShader{ 0 };
@@ -445,6 +454,7 @@ namespace CSX::RenderMap
 			std::uint64_t sourceContextObservationId{ 0 };
 			std::uint64_t sourceRecordingObservationId{ 0 };
 			bool sourceRecordingComplete{ false };
+			std::uint64_t sourceRecordingIncompleteReasons{ 0 };
 		};
 
 		struct ContextObservation
@@ -460,6 +470,10 @@ namespace CSX::RenderMap
 		std::uint64_t StartDeferredRecording(
 			DeferredContextState& a_state,
 			std::uint64_t a_captureGeneration, bool a_partialAtCaptureStart) noexcept;
+		void MarkDeferredRecordingIncomplete(
+			std::uintptr_t a_context, std::uint64_t a_contextObservationId,
+			std::uint64_t a_recordingObservationId,
+			CommandRecordingIncompleteReason a_reason) noexcept;
 		void ResetImmediatePipelineState() noexcept;
 		std::uint64_t NextCommandStreamSequence() noexcept;
 		std::uint64_t EnsureBoundStageObservation(ShaderStage a_stage) noexcept;

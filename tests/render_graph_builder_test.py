@@ -90,7 +90,7 @@ def main() -> int:
         envelope(11, "resource-flow", {"schema": "resource-flow-v1", "operation": "update-subresource", "sourceResourceObservationId": None, "destinationResourceObservationId": "obs-resource-1-g1", "sourceSubresource": 0, "destinationSubresource": 0}),
     ]
     graph = build_graph(tool, manifest, hazard_events)
-    assert graph["schema"]["producerVersion"] == "static-semantic-resource-graph-8"
+    assert graph["schema"]["producerVersion"] == "static-semantic-resource-graph-9"
     assert len(graph["nodes"]) == 12, graph["nodes"]
     assert [edge["type"] for edge in graph["edges"]].count("reads") == 2
     assert [edge["type"] for edge in graph["edges"]].count("writes") == 4
@@ -809,8 +809,8 @@ def main() -> int:
             "epoch": 1, "partialAtCaptureStart": False,
         }),
         {**envelope(2, "draw", {
-            "schema": "draw-call-v3", "operation": "draw",
-            "immediateContextPointer": "0x100", "vertexShaderObservationId": None,
+            "schema": "draw-call-v4", "operation": "draw",
+            "deviceContextPointer": "0x100", "vertexShaderObservationId": None,
             "pixelShaderObservationId": None, "targetBindingObservationId": None,
             "submissionObservationId": None, "preparedGeometrySetupObservationId": None,
             "arguments": {"vertexCount": 3, "startVertexLocation": 0},
@@ -818,19 +818,22 @@ def main() -> int:
             "execution": {"observationDomain": "command-recording", "commandStreamSequence": 1,
                           "gpuTimestampTicks": None, "gpuTimestampFrequencyHz": None}},
         envelope(3, "command-list-observed", {
-            "schema": "command-list-observation-v1",
+            "schema": "command-list-observation-v2",
             "commandListObservationId": "obs-command-list-3-g1",
             "commandListPointer": "0x200", "pointerGeneration": 1,
             "sourceDeviceContextObservationId": "obs-device-context-1-g1",
             "sourceCommandRecordingObservationId": "obs-command-recording-2-g1",
             "sourceRecordingComplete": True,
+            "sourceRecordingIncompleteReasons": [],
         }),
         envelope(4, "finish-command-list", {
-            "schema": "finish-command-list-v1",
+            "schema": "finish-command-list-v2",
             "commandRecordingObservationId": "obs-command-recording-2-g1",
             "commandListObservationId": "obs-command-list-3-g1",
             "commandListPointer": "0x200", "restoreDeferredContextState": False,
             "hresult": 0, "succeeded": True,
+            "sourceRecordingComplete": True,
+            "sourceRecordingIncompleteReasons": [],
         }),
         envelope(5, "execute-command-list", {
             "schema": "execute-command-list-v1",
@@ -846,10 +849,69 @@ def main() -> int:
     assert command_kinds.count("device-context") == 1
     assert command_kinds.count("command-recording") == 1
     assert command_kinds.count("command-list") == 1
+    assert command_kinds.count("command-list-finish") == 1
     assert command_kinds.count("command-execution") == 1
     assert command_edges.count("records") == 2
+    assert command_edges.count("finishes") == 1
     assert command_edges.count("materializes") == 1
     assert command_edges.count("executes") == 1
+    assert any(
+        "immediate-context state was deliberately not applied" in gap["description"]
+        for gap in command_graph["gaps"]
+    )
+
+    incomplete_events = [
+        envelope(0, "device-context-observed", {
+            "schema": "device-context-observation-v2",
+            "deviceContextObservationId": "obs-device-context-10-g1",
+            "contextPointer": "0x300", "pointerGeneration": 1,
+            "kind": "deferred", "creationEvidence": "first-seen",
+            "contextFlags": 0,
+        }),
+        envelope(1, "command-list-observed", {
+            "schema": "command-list-observation-v2",
+            "commandListObservationId": "obs-command-list-11-g1",
+            "commandListPointer": "0x400", "pointerGeneration": 1,
+            "sourceDeviceContextObservationId": None,
+            "sourceCommandRecordingObservationId": None,
+            "sourceRecordingComplete": False,
+            "sourceRecordingIncompleteReasons": ["declaration-unavailable"],
+        }),
+        envelope(2, "execute-command-list", {
+            "schema": "execute-command-list-v1",
+            "commandListObservationId": "obs-command-list-11-g1",
+            "commandListPointer": "0x400",
+            "sourceCommandRecordingObservationId": None,
+            "restoreContextState": False,
+        }),
+        envelope(3, "execute-command-list", {
+            "schema": "execute-command-list-v1",
+            "commandListObservationId": "obs-command-list-11-g1",
+            "commandListPointer": "0x400",
+            "sourceCommandRecordingObservationId": None,
+            "restoreContextState": True,
+        }),
+        envelope(4, "finish-command-list", {
+            "schema": "finish-command-list-v2",
+            "commandRecordingObservationId": None,
+            "commandListObservationId": None,
+            "commandListPointer": None,
+            "restoreDeferredContextState": True,
+            "hresult": -2147467259,
+            "succeeded": False,
+            "sourceRecordingComplete": False,
+            "sourceRecordingIncompleteReasons": ["declaration-unavailable"],
+        }),
+    ]
+    incomplete_graph = build_graph(tool, manifest, incomplete_events)
+    incomplete_kinds = [node["kind"] for node in incomplete_graph["nodes"]]
+    incomplete_edges = [edge["type"] for edge in incomplete_graph["edges"]]
+    incomplete_gaps = [gap["description"] for gap in incomplete_graph["gaps"]]
+    assert incomplete_kinds.count("command-list-finish") == 1
+    assert incomplete_kinds.count("command-execution") == 2
+    assert incomplete_edges.count("executes") == 2
+    assert any("has no declared source recording" in gap for gap in incomplete_gaps)
+    assert any("ended an incomplete source recording" in gap for gap in incomplete_gaps)
     print("Render graph builder test passed")
     return 0
 

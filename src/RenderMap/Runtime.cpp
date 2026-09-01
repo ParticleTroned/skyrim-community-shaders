@@ -285,26 +285,31 @@ namespace CSX::RenderMap
 		EventPayload CommandListObservationPayload(
 			std::uint64_t a_observationId, std::uintptr_t a_commandList,
 			std::uint64_t a_pointerGeneration, std::uint64_t a_sourceContextObservationId,
-			std::uint64_t a_sourceRecordingObservationId, bool a_sourceRecordingComplete) noexcept
+			std::uint64_t a_sourceRecordingObservationId, bool a_sourceRecordingComplete,
+			std::uint64_t a_sourceRecordingIncompleteReasons) noexcept
 		{
 			return {
 				.schema = static_cast<std::uint16_t>(PayloadSchema::kCommandListObservation),
 				.words = { a_observationId, a_commandList, a_pointerGeneration,
 					a_sourceContextObservationId, a_sourceRecordingObservationId,
-					a_sourceRecordingComplete ? 1u : 0u },
+					a_sourceRecordingComplete ? 1u : 0u,
+					a_sourceRecordingIncompleteReasons },
 			};
 		}
 
 		EventPayload FinishCommandListPayload(
 			std::uint64_t a_recordingObservationId, std::uint64_t a_commandListObservationId,
 			std::uintptr_t a_commandList, bool a_restoreDeferredContextState,
-			std::int32_t a_result) noexcept
+			std::int32_t a_result, bool a_sourceRecordingComplete,
+			std::uint64_t a_sourceRecordingIncompleteReasons) noexcept
 		{
 			return {
 				.schema = static_cast<std::uint16_t>(PayloadSchema::kFinishCommandList),
 				.words = { a_recordingObservationId, a_commandListObservationId, a_commandList,
 					a_restoreDeferredContextState ? 1u : 0u,
-					static_cast<std::uint32_t>(a_result) },
+					static_cast<std::uint32_t>(a_result),
+					a_sourceRecordingComplete ? 1u : 0u,
+					a_sourceRecordingIncompleteReasons },
 			};
 		}
 
@@ -893,11 +898,24 @@ namespace CSX::RenderMap
 		DeferredContextState& a_state,
 		std::uint64_t a_captureGeneration, bool a_partialAtCaptureStart) noexcept
 	{
-		if (a_state.observationId == 0 || a_captureGeneration == 0)
+		a_state.recordingObservationId = 0;
+		a_state.recordingIncompleteReasons =
+			static_cast<std::uint64_t>(CommandRecordingIncompleteReason::kHookCoverageUnqualified);
+		if (a_partialAtCaptureStart) {
+			a_state.recordingIncompleteReasons |=
+				static_cast<std::uint64_t>(CommandRecordingIncompleteReason::kPartialAtCaptureStart);
+		}
+		if (a_state.observationId == 0 || a_captureGeneration == 0) {
+			a_state.recordingIncompleteReasons |=
+				static_cast<std::uint64_t>(CommandRecordingIncompleteReason::kDeclarationUnavailable);
 			return 0;
+		}
 		const auto recordingObservationId = collector.AllocateObservationId(a_captureGeneration);
-		if (recordingObservationId == 0)
+		if (recordingObservationId == 0) {
+			a_state.recordingIncompleteReasons |=
+				static_cast<std::uint64_t>(CommandRecordingIncompleteReason::kDeclarationUnavailable);
 			return 0;
+		}
 		++a_state.recordingEpoch;
 		if (collector.RecordForGeneration(
 				EventKind::kCommandRecordingObserved,
@@ -905,11 +923,28 @@ namespace CSX::RenderMap
 					recordingObservationId, a_state.observationId,
 					a_state.recordingEpoch, a_partialAtCaptureStart),
 				a_state.observationId, a_captureGeneration, a_state.commandSequence,
-				0, 0, 0, recordingObservationId) != RecordResult::kRecorded) {
+				0, 0, 0, recordingObservationId, true) != RecordResult::kRecorded) {
+			a_state.recordingIncompleteReasons |=
+				static_cast<std::uint64_t>(CommandRecordingIncompleteReason::kDeclarationUnavailable);
 			return 0;
 		}
 		a_state.recordingObservationId = recordingObservationId;
 		return recordingObservationId;
+	}
+
+	void Runtime::MarkDeferredRecordingIncomplete(
+		std::uintptr_t a_context, std::uint64_t a_contextObservationId,
+		std::uint64_t a_recordingObservationId,
+		CommandRecordingIncompleteReason a_reason) noexcept
+	{
+		std::scoped_lock lock(deferredContextMutex);
+		const auto found = deferredContexts.find(a_context);
+		if (found == deferredContexts.end() ||
+			found->second.observationId != a_contextObservationId ||
+			found->second.recordingObservationId != a_recordingObservationId) {
+			return;
+		}
+		found->second.recordingIncompleteReasons |= static_cast<std::uint64_t>(a_reason);
 	}
 
 	Runtime::ContextObservation Runtime::EnsureContextObservation(
@@ -953,6 +988,7 @@ namespace CSX::RenderMap
 			state.observationId = observationId;
 			state.commandSequence = 0;
 			state.recordingObservationId = 0;
+			state.recordingIncompleteReasons = 0;
 			StartDeferredRecording(state, captureGeneration, !creationObserved);
 		}
 		return {
@@ -1037,6 +1073,7 @@ namespace CSX::RenderMap
 			return;
 		const auto captureGeneration = collector.ActiveGeneration();
 		std::uint64_t recordingObservationId = 0;
+		std::uint64_t recordingIncompleteReasons = 0;
 		std::uint64_t commandSequence = 0;
 		{
 			std::scoped_lock lock(deferredContextMutex);
@@ -1045,8 +1082,11 @@ namespace CSX::RenderMap
 				return;
 			auto& state = found->second;
 			recordingObservationId = state.recordingObservationId;
+			recordingIncompleteReasons = state.recordingIncompleteReasons;
 			commandSequence = ++state.commandSequence;
 		}
+		const auto sourceRecordingComplete =
+			recordingObservationId != 0 && recordingIncompleteReasons == 0;
 
 		std::uint64_t commandListObservationId = 0;
 		if (a_result >= 0 && a_commandList != 0) {
@@ -1061,18 +1101,24 @@ namespace CSX::RenderMap
 				}
 				commandListObservationId = collector.AllocateObservationId(captureGeneration);
 				if (commandListObservationId != 0) {
-					state.observationGeneration = captureGeneration;
-					state.observationId = commandListObservationId;
-					state.sourceContextObservationId = context.observationId;
-					state.sourceRecordingObservationId = recordingObservationId;
-					state.sourceRecordingComplete = true;
-					collector.RecordForGeneration(
+					const auto recordResult = collector.RecordForGeneration(
 						EventKind::kCommandListObserved,
 						CommandListObservationPayload(
 							commandListObservationId, a_commandList, state.pointerGeneration,
-							context.observationId, recordingObservationId, true),
+							context.observationId, recordingObservationId,
+							sourceRecordingComplete, recordingIncompleteReasons),
 						context.observationId, captureGeneration, commandSequence,
-						0, 0, 0, recordingObservationId);
+						0, 0, 0, recordingObservationId, true);
+					if (recordResult == RecordResult::kRecorded) {
+						state.observationGeneration = captureGeneration;
+						state.observationId = commandListObservationId;
+						state.sourceContextObservationId = context.observationId;
+						state.sourceRecordingObservationId = recordingObservationId;
+						state.sourceRecordingComplete = sourceRecordingComplete;
+						state.sourceRecordingIncompleteReasons = recordingIncompleteReasons;
+					} else {
+						commandListObservationId = 0;
+					}
 				}
 			}
 		}
@@ -1081,9 +1127,10 @@ namespace CSX::RenderMap
 			EventKind::kFinishCommandList,
 			FinishCommandListPayload(
 				recordingObservationId, commandListObservationId, a_commandList,
-				a_restoreDeferredContextState, a_result),
+				a_restoreDeferredContextState, a_result,
+				sourceRecordingComplete, recordingIncompleteReasons),
 			context.observationId, captureGeneration, commandSequence,
-			0, 0, 0, recordingObservationId);
+			0, 0, 0, recordingObservationId, true);
 
 		{
 			std::scoped_lock lock(deferredContextMutex);
@@ -1092,6 +1139,7 @@ namespace CSX::RenderMap
 				return;
 			auto& state = found->second;
 			state.recordingObservationId = 0;
+			state.recordingIncompleteReasons = 0;
 			if (!a_restoreDeferredContextState) {
 				state.boundVertexShader = 0;
 				state.boundPixelShader = 0;
@@ -1132,17 +1180,23 @@ namespace CSX::RenderMap
 				commandListObservationId = collector.AllocateObservationId(captureGeneration);
 				if (commandListObservationId == 0)
 					return;
+				const auto incompleteReasons = static_cast<std::uint64_t>(
+					CommandRecordingIncompleteReason::kDeclarationUnavailable);
+				if (collector.RecordForGeneration(
+						EventKind::kCommandListObserved,
+						CommandListObservationPayload(
+							commandListObservationId, a_commandList, state.pointerGeneration,
+							0, 0, false, incompleteReasons),
+						contextObservationId, captureGeneration, commandSequence) !=
+					RecordResult::kRecorded) {
+					return;
+				}
 				state.observationGeneration = captureGeneration;
 				state.observationId = commandListObservationId;
 				state.sourceContextObservationId = 0;
 				state.sourceRecordingObservationId = 0;
 				state.sourceRecordingComplete = false;
-				collector.RecordForGeneration(
-					EventKind::kCommandListObserved,
-					CommandListObservationPayload(
-						commandListObservationId, a_commandList, state.pointerGeneration,
-						0, 0, false),
-					contextObservationId, captureGeneration, commandSequence);
+				state.sourceRecordingIncompleteReasons = incompleteReasons;
 			} else {
 				commandListObservationId = state.observationId;
 			}
@@ -1154,7 +1208,7 @@ namespace CSX::RenderMap
 				commandListObservationId, a_commandList,
 				sourceRecordingObservationId, a_restoreContextState),
 			contextObservationId, captureGeneration, commandSequence,
-			0, 0, 0, sourceRecordingObservationId);
+			0, 0, 0, 0, false);
 		if (!a_restoreContextState)
 			ResetImmediatePipelineState();
 	}
@@ -1853,13 +1907,22 @@ namespace CSX::RenderMap
 				vertexObservationId = state.boundVertexShaderObservationId;
 				pixelObservationId = state.boundPixelShaderObservationId;
 			}
-			collector.RecordForGeneration(
+			if (recordingObservationId == 0) {
+				collector.CountFiltered();
+				return;
+			}
+			const auto recordResult = collector.RecordForGeneration(
 				EventKind::kDraw,
 				DrawCallPayload(
 					a_context, a_operation, vertexObservationId, pixelObservationId,
 					a_argument0, a_argument1, a_argument2, a_argument3),
 				context.observationId, collector.ActiveGeneration(), commandSequence,
-				0, 0, 0, recordingObservationId);
+				0, 0, 0, recordingObservationId, true);
+			if (recordResult != RecordResult::kRecorded) {
+				MarkDeferredRecordingIncomplete(
+					a_context, context.observationId, recordingObservationId,
+					CommandRecordingIncompleteReason::kEventNotRecorded);
+			}
 			return;
 		}
 		const auto commandStreamSequence = NextCommandStreamSequence();
@@ -1935,13 +1998,22 @@ namespace CSX::RenderMap
 				recordingObservationId = state.recordingObservationId;
 				computeObservationId = state.boundComputeShaderObservationId;
 			}
-			collector.RecordForGeneration(
+			if (recordingObservationId == 0) {
+				collector.CountFiltered();
+				return;
+			}
+			const auto recordResult = collector.RecordForGeneration(
 				EventKind::kDispatch,
 				DispatchCallPayload(
 					a_context, a_operation, computeObservationId,
 					a_argument0, a_argument1, a_argument2, a_argument3),
 				context.observationId, collector.ActiveGeneration(), commandSequence,
-				0, 0, 0, recordingObservationId);
+				0, 0, 0, recordingObservationId, true);
+			if (recordResult != RecordResult::kRecorded) {
+				MarkDeferredRecordingIncomplete(
+					a_context, context.observationId, recordingObservationId,
+					CommandRecordingIncompleteReason::kEventNotRecorded);
+			}
 			return;
 		}
 		const auto contextObservationId = EnsureImmediateContextObservation();

@@ -1461,6 +1461,7 @@ namespace
 		SubmitStagePromotionAdmission state{
 			.coherentStereoCycle = true,
 			.providerPreparationReady = true,
+			.settleRequirementSatisfied = true,
 			.consecutiveStableCycles = 3,
 			.requiredStableCycles = 3,
 		};
@@ -1475,12 +1476,57 @@ namespace
 		if (CanPublishSubmitStagePromotionCandidate(state))
 			return false;
 		state.providerPreparationReady = true;
+		state.settleRequirementSatisfied = false;
+		if (CanPublishSubmitStagePromotionCandidate(state))
+			return false;
+		state.settleRequirementSatisfied = true;
 		state.consecutiveStableCycles = 2;
 		if (CanPublishSubmitStagePromotionCandidate(state))
 			return false;
 		state.consecutiveStableCycles = 3;
 		state.requiredStableCycles = 0;
 		return !CanPublishSubmitStagePromotionCandidate(state);
+	}
+
+	constexpr bool CoversProofDrivenPromotionAdmission()
+	{
+		ProofDrivenPromotionAdmission state{
+			.immutableSettingsTransition = true,
+			.exactAttemptMetrics = true,
+		};
+		if (!CanUseProofDrivenPromotion(state))
+			return false;
+
+		state.immutableSettingsTransition = false;
+		if (CanUseProofDrivenPromotion(state))
+			return false;
+		state.immutableSettingsTransition = true;
+		state.exactAttemptMetrics = false;
+		if (CanUseProofDrivenPromotion(state))
+			return false;
+		state.exactAttemptMetrics = true;
+		state.retries = 1;
+		if (CanUseProofDrivenPromotion(state))
+			return false;
+		state.retries = 0;
+		state.failures = 1;
+		if (CanUseProofDrivenPromotion(state))
+			return false;
+		state.failures = 0;
+		state.recoveryOwned = true;
+		if (CanUseProofDrivenPromotion(state))
+			return false;
+		state.recoveryOwned = false;
+		state.providerNeutralRecovery = true;
+		if (CanUseProofDrivenPromotion(state))
+			return false;
+		state.providerNeutralRecovery = false;
+		state.emergencyRecovery = true;
+		if (CanUseProofDrivenPromotion(state))
+			return false;
+		state.emergencyRecovery = false;
+		state.presentationDeadlineFallback = true;
+		return !CanUseProofDrivenPromotion(state);
 	}
 
 	constexpr bool CoversInitialRelatchPacing()
@@ -3102,6 +3148,7 @@ namespace
 	static_assert(CoversNativeRestoreMemoryReliefOwnership());
 	static_assert(CoversDeferredDispatchSelection());
 	static_assert(CoversSubmitStagePromotionAdmission());
+	static_assert(CoversProofDrivenPromotionAdmission());
 	static_assert(CoversInitialRelatchPacing());
 	static_assert(CoversStereoDispatchContractIdentity());
 	static_assert(CoversPendingVendorResetOwnership());

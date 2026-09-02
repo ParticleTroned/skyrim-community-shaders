@@ -28417,7 +28417,31 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		(void)TryRetireVRRenderScalePostMutationSerialization(relatchEpoch);
 	ClearOwnedVRLowPeakNativeRestoreProgress(relatchEpoch);
 	if (requiresVendorSubmitStageStabilization) {
-		ArmSubmitStageVendorResumeCooldown(std::max(state->frameCount, 1u));
+		VRRenderScaleTransitionMetrics attemptMetrics{};
+		{
+			const std::scoped_lock controllerLock(
+				vrRenderScaleTransitionControllerMutex);
+			attemptMetrics =
+				vrRenderScaleTransitionController.metrics.current;
+		}
+		const bool proofDrivenSettingsRelease =
+			VRVendorRelatchPolicy::CanUseProofDrivenPromotion({
+				.immutableSettingsTransition = immutableSettingsRelatch,
+				.exactAttemptMetrics =
+					attemptMetrics.valid &&
+					attemptMetrics.transitionEpoch == relatchEpoch,
+				.retries = attemptMetrics.retries,
+				.failures = attemptMetrics.failures,
+				.recoveryOwned = postLoadRecoveryEpoch != 0,
+				.providerNeutralRecovery =
+					providerNeutralNativeRecoveryRequested,
+				.emergencyRecovery = postMutationEmergencyRecoveryAttempt,
+				.presentationDeadlineFallback =
+					presentationDeadlineFallbackRequested,
+			});
+		ArmSubmitStageVendorResumeCooldown(
+			std::max(state->frameCount, 1u),
+			proofDrivenSettingsRelease);
 		uint64_t expectedGuardEpoch = relatchEpoch;
 		if (vrNativeRestorePresentationGuardEpoch.compare_exchange_strong(
 				expectedGuardEpoch,
@@ -28467,7 +28491,9 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	return true;
 }
 
-void Upscaling::ArmSubmitStageVendorResumeCooldown(uint32_t a_currentFrame)
+void Upscaling::ArmSubmitStageVendorResumeCooldown(
+	uint32_t a_currentFrame,
+	bool a_proofDrivenRelease)
 {
 	const std::scoped_lock resumeStateLock(
 		submitStageVendorResumeStableEyeMaskMutex);
@@ -28478,14 +28504,18 @@ void Upscaling::ArmSubmitStageVendorResumeCooldown(uint32_t a_currentFrame)
 	submitStageDLSSViewportPreparationGeneration.store(0, std::memory_order_release);
 	submitStageDLSSViewportPreparationPending.store(false, std::memory_order_release);
 	submitStageDLSSViewportPreparationFailed.store(false, std::memory_order_release);
-	// This is an active-guard token. Exact stereo observations, rather than an
-	// arbitrary future frame number, decide when presentation can be promoted.
+	// Clean settings attempts release from exact stereo proof. Recovery and
+	// retried attempts additionally retain the established settling cadence.
 	submitStageVendorResumeFrame.store(currentFrame, std::memory_order_release);
+	submitStageVendorResumeProofDrivenRelease.store(
+		a_proofDrivenRelease,
+		std::memory_order_release);
 	if (emitDiagLogs) {
 		logger::debug(
-			"[VRRenderScale][Diag] Armed submit-stage vendor resume proof method={} guardFrame={} pendingDLSS={} pendingFSR={} fsrResources={}",
+			"[VRRenderScale][Diag] Armed submit-stage vendor resume proof method={} guardFrame={} proofDriven={} pendingDLSS={} pendingFSR={} fsrResources={}",
 			magic_enum::enum_name(GetRuntimeUpscaleMethod()),
 			currentFrame,
+			BoolText(a_proofDrivenRelease),
 			BoolText(pendingDLSSReset.load(std::memory_order_acquire)),
 			BoolText(pendingFSRReset.load(std::memory_order_acquire)),
 			BoolText(fidelityFX.HasFSRResources()));
@@ -28497,6 +28527,7 @@ void Upscaling::ClearSubmitStageVendorResumeCooldown()
 	const std::scoped_lock resumeStateLock(
 		submitStageVendorResumeStableEyeMaskMutex);
 	submitStageVendorResumeFrame.store(0, std::memory_order_release);
+	submitStageVendorResumeProofDrivenRelease.store(false, std::memory_order_release);
 	ClearSubmitStageVendorResumeStability();
 	submitStageDLSSViewportPreparationGeneration.store(0, std::memory_order_release);
 	submitStageDLSSViewportPreparationPending.store(false, std::memory_order_release);
@@ -28542,6 +28573,15 @@ void Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFra
 			submitStageVendorResumeStableEyeMaskMutex);
 		stabilitySerial = submitStageVendorResumeStabilitySerial;
 	}
+	const auto revokeProofDrivenRelease = [&]() {
+		const std::scoped_lock lock(
+			submitStageVendorResumeStableEyeMaskMutex);
+		if (stabilitySerial == submitStageVendorResumeStabilitySerial) {
+			submitStageVendorResumeProofDrivenRelease.store(
+				false,
+				std::memory_order_release);
+		}
+	};
 
 	auto dlssViewportPreparation = Streamline::DLSSViewportPreparationResult::Ready;
 	if (a_upscaleMethod == UpscaleMethod::kDLSS) {
@@ -28582,6 +28622,10 @@ void Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFra
 		};
 		dlssViewportPreparation =
 			combineViewportPreparationResults(fullEyeViewportPreparation, foveatedCenterViewportPreparation);
+		if (dlssViewportPreparation !=
+			Streamline::DLSSViewportPreparationResult::Ready) {
+			revokeProofDrivenRelease();
+		}
 
 		if (dlssViewportPreparation == Streamline::DLSSViewportPreparationResult::Pending) {
 			submitStageDLSSViewportPreparationFailed.store(false, std::memory_order_release);
@@ -28629,6 +28673,7 @@ void Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFra
 			a_outputWidth,
 			a_outputHeight,
 			false)) {
+		revokeProofDrivenRelease();
 		ClearSubmitStageVendorResumeStability();
 		return;
 	}
@@ -28668,11 +28713,20 @@ void Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFra
 
 	const uint32_t requiredStableFrames =
 		a_stabilizerDoorHandoff ? kVRSubmitStageVendorDoorHandoffStableFrames : kVRSubmitStageVendorRelatchStableFrames;
+	const uint32_t guardStartFrame =
+		submitStageVendorResumeFrame.load(std::memory_order_acquire);
+	const bool settleRequirementSatisfied =
+		a_stabilizerDoorHandoff ||
+		submitStageVendorResumeProofDrivenRelease.load(
+			std::memory_order_acquire) ||
+		ElapsedFrames(guardStartFrame, currentFrame) >=
+			kVRUpscalingTransitionApplyDelayFrames;
 	if (!VRVendorRelatchPolicy::CanPublishSubmitStagePromotionCandidate({
 			.coherentStereoCycle = true,
 			.providerPreparationReady =
 				dlssViewportPreparation ==
 				Streamline::DLSSViewportPreparationResult::Ready,
+			.settleRequirementSatisfied = settleRequirementSatisfied,
 			.consecutiveStableCycles = stableFrames,
 			.requiredStableCycles = requiredStableFrames,
 		})) {
@@ -47282,9 +47336,9 @@ void Upscaling::ServiceVRRenderScalePostMutationWatchdog(
 		return;
 	}
 	if (presentationGraceActive()) {
-		// The Apply scope-exit runs in the creator's frame. Preserve that frame
-		// and one complete following presentation turn, bounded by 500 ms, so a
-		// successful stereo handoff can retire ownership before terminal action.
+		// The end-of-frame Reset boundary services the creator's frame. Preserve
+		// it and one complete following presentation turn, bounded by 500 ms, so
+		// a successful stereo handoff can retire ownership before terminal action.
 		return;
 	}
 	// Time alone is not typed evidence of device loss, discarded reachable

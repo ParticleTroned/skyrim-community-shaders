@@ -1291,6 +1291,7 @@ namespace VRVendorRelatchPolicy
 	{
 		bool coherentStereoCycle = false;
 		bool providerPreparationReady = false;
+		bool settleRequirementSatisfied = false;
 		std::uint32_t consecutiveStableCycles = 0;
 		std::uint32_t requiredStableCycles = 0;
 	};
@@ -1300,9 +1301,33 @@ namespace VRVendorRelatchPolicy
 	{
 		return a_state.coherentStereoCycle &&
 		       a_state.providerPreparationReady &&
+		       a_state.settleRequirementSatisfied &&
 		       a_state.requiredStableCycles != 0 &&
 		       a_state.consecutiveStableCycles >=
 		           a_state.requiredStableCycles;
+	}
+
+	struct ProofDrivenPromotionAdmission
+	{
+		bool immutableSettingsTransition = false;
+		bool exactAttemptMetrics = false;
+		std::uint32_t retries = 0;
+		std::uint32_t failures = 0;
+		bool recoveryOwned = false;
+		bool providerNeutralRecovery = false;
+		bool emergencyRecovery = false;
+		bool presentationDeadlineFallback = false;
+	};
+
+	[[nodiscard]] constexpr bool CanUseProofDrivenPromotion(
+		const ProofDrivenPromotionAdmission& a_state) noexcept
+	{
+		return a_state.immutableSettingsTransition &&
+		       a_state.exactAttemptMetrics && a_state.retries == 0 &&
+		       a_state.failures == 0 && !a_state.recoveryOwned &&
+		       !a_state.providerNeutralRecovery &&
+		       !a_state.emergencyRecovery &&
+		       !a_state.presentationDeadlineFallback;
 	}
 
 	[[nodiscard]] constexpr bool IsSameStereoDispatchContract(

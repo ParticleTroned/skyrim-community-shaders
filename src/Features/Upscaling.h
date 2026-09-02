@@ -3092,6 +3092,7 @@ public:
 	SubmitStageRuntimeFSRStereoState submitStageRuntimeFSRStereoState{};
 	bool submitStageForceFullEyeVendorFallback = false;
 	std::atomic<uint32_t> submitStageVendorResumeFrame{ 0 };
+	std::atomic_bool submitStageVendorResumeProofDrivenRelease{ false };
 	std::atomic<uint32_t> submitStageVendorResumeStableFrames{ 0 };
 	std::atomic<uint32_t> submitStageVendorResumeLastStableFrame{ 0 };
 	mutable std::recursive_mutex submitStageVendorResumeStableEyeMaskMutex;
@@ -3533,7 +3534,7 @@ private:
 	mutable std::mutex vrPostLoadCompositorHoldMutex;
 	std::mutex vrPostLoadCompositorRepairMutex;
 
-	void ArmSubmitStageVendorResumeCooldown(uint32_t a_currentFrame);
+	void ArmSubmitStageVendorResumeCooldown(uint32_t a_currentFrame, bool a_proofDrivenRelease = false);
 	void ClearSubmitStageVendorResumeCooldown();
 	void ClearSubmitStageVendorResumeStability();
 	[[nodiscard]] VRPostLoadCompositorHoldRoute ResolveVRPostLoadCompositorHoldRoute(

@@ -5,6 +5,7 @@
 #include "Feature.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
+#include "Upscaling/FoveatedCenterAlignment.h"
 #include "Upscaling/FoveatedRegionPlan.h"
 #include "Upscaling/LumaSharpen/LumaSharpen.h"
 #include "Upscaling/NeuralRendering/PipelinePolicy.h"
@@ -303,6 +304,10 @@ public:
 		uint neuralRenderingStyle = 3;
 		bool neuralRenderingAutoMask = true;
 		bool neuralRenderingUICorrection = false;
+		uint foveatedCenterOrigin = static_cast<uint>(
+			FoveatedCenterAlignment::kCompatibilityCenterOrigin);
+		uint foveatedHorizontalAnchor = static_cast<uint>(
+			FoveatedCenterAlignment::kCompatibilityHorizontalAnchor);
 		float foveatedCenterArea = 0.6f;
 		float foveatedCenterHorizontalScale = 1.0f;
 		float foveatedLeftEyeMaskOffsetX = 0.0f;
@@ -1891,6 +1896,10 @@ public:
 	bool previousHistoryInMapMenu = false;
 	UpscaleMethod previousHistoryUpscaleMethod = UpscaleMethod::kNONE;
 	bool previousHistoryFoveatedDispatch = false;
+	uint32_t previousHistoryFoveatedCenterOrigin = static_cast<uint32_t>(
+		FoveatedCenterAlignment::kCompatibilityCenterOrigin);
+	uint32_t previousHistoryFoveatedHorizontalAnchor = static_cast<uint32_t>(
+		FoveatedCenterAlignment::kCompatibilityHorizontalAnchor);
 	float previousHistoryFoveatedCenterScale = 1.0f;
 	float previousHistoryFoveatedCenterHorizontalScale = 1.0f;
 	std::array<float2, 2> previousHistoryFoveatedCenterOffsets = {};
@@ -2206,7 +2215,7 @@ public:
 	bool IsFoveatedVendorDispatchEnabled(UpscaleMethod a_upscaleMethod) const;
 	bool IsPeripheryTAAEnabled(UpscaleMethod a_upscaleMethod) const;
 	bool IsPeripheryTAAPathActive(UpscaleMethod a_upscaleMethod) const;
-	float2 GetDefaultFoveatedMaskCenterOffset(uint32_t eyeIndex) const;
+	FoveatedCenterAlignment::StereoDiagnostics GetResolvedFoveatedCenterAlignment(bool usePeripheryTAAProfile = false) const;
 	float2 GetResolvedFoveatedMaskCenterOffset(uint32_t eyeIndex, bool usePeripheryTAAProfile = false) const;
 	std::array<float2, 2> GetResolvedFoveatedMaskCenterOffsets(bool usePeripheryTAAProfile = false) const;
 	bool GetRuntimeFoveatedRegionDimensions(uint32_t& a_inputWidthPerEye, uint32_t& a_inputHeight, uint32_t& a_outputWidthPerEye, uint32_t& a_outputHeight) const;

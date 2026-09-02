@@ -1200,15 +1200,16 @@ public:
 	std::array<NeuralStereoRouteSnapshot, 2> GetNeuralStereoRouteSnapshot() const;
 	/** @brief Returns the latest valid-eye submit entry used to judge route freshness. */
 	NeuralSubmitCycleSnapshot GetLatestNeuralSubmitCycleSnapshot() const;
-	/** @brief Captures an engine-owned outer submit scope for nested-eye correlation. */
+	/** @brief Captures an engine-owned outer submit scope using an opaque source identity. */
 	uint64_t BeginNeuralSubmitPairBoundary(
 		uint64_t a_compositorCycle,
-		const vr::Texture_t* a_texture,
+		uintptr_t a_sourceIdentity,
 		vr::EVRSubmitFlags a_flags) noexcept;
 	/** @brief Ends an outer submit scope without changing presentation. */
 	void EndNeuralSubmitPairBoundary(uint64_t a_token) noexcept;
 	/** @brief Proves that one nested eye belongs to the active outer submit. */
 	uint64_t ObserveNeuralSubmitPairBoundaryEye(
+		uint64_t a_expectedToken,
 		uint64_t a_compositorCycle,
 		vr::EVREye a_eye,
 		const vr::Texture_t* a_texture,
@@ -2435,12 +2436,9 @@ private:
 		uint64_t compositorCycle = 0;
 		uint32_t frame = 0;
 		uint32_t threadId = 0;
-		vr::Texture_t texture{};
+		uintptr_t sourceIdentity = 0;
 		vr::EVRSubmitFlags flags = vr::Submit_Default;
-		D3D11_TEXTURE2D_DESC sourceDesc{};
-		winrt::com_ptr<ID3D11Texture2D> sourceTexture;
 		bool active = false;
-		bool sourceValid = false;
 	};
 	mutable std::mutex neuralSubmitPairBoundaryMutex;
 	NeuralSubmitPairBoundaryState neuralSubmitPairBoundaryState{};

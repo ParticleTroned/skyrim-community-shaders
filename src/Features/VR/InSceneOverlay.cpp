@@ -31,6 +31,7 @@ namespace
 {
 	std::atomic<uint64_t> g_openVRSubmitCycleToken{ 0 };
 	std::mutex g_vrPostLoadCompositorSubmitMutex;
+	thread_local uint64_t g_neuralSubmitPairBoundaryToken = 0;
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	std::atomic_bool g_openVRSubmitProcessingEnabled{ false };
@@ -292,20 +293,26 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 	{
 		static vr::EVRCompositorError thunk(
 			RE::BSOpenVR* _this,
-			const vr::Texture_t* pTexture,
+			ID3D11Texture2D* pTexture,
 			const vr::VRTextureBounds_t* pBounds,
 			vr::EVRSubmitFlags nSubmitFlags)
 		{
+			// This engine boundary carries the raw D3D11 texture. OpenVR wraps it
+			// in Texture_t only at the nested IVRCompositor::Submit boundary.
 			auto& upscaling = globals::features::upscaling;
 			const uint64_t compositorCycleToken =
 				g_openVRSubmitCycleToken.load(std::memory_order_acquire);
 			const uint64_t submitPairBoundaryToken =
 				upscaling.BeginNeuralSubmitPairBoundary(
 					compositorCycleToken,
-					pTexture,
+					reinterpret_cast<uintptr_t>(pTexture),
 					nSubmitFlags);
+			const uint64_t previousSubmitPairBoundaryToken =
+				g_neuralSubmitPairBoundaryToken;
+			g_neuralSubmitPairBoundaryToken = submitPairBoundaryToken;
 			const SKSE::stl::scope_exit endSubmitPairBoundary([&]() noexcept {
 				upscaling.EndNeuralSubmitPairBoundary(submitPairBoundaryToken);
+				g_neuralSubmitPairBoundaryToken = previousSubmitPairBoundaryToken;
 			});
 
 			return func(_this, pTexture, pBounds, nSubmitFlags);
@@ -348,6 +355,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 			}
 			const uint64_t matchedSubmitPairBoundaryToken =
 				upscaling.ObserveNeuralSubmitPairBoundaryEye(
+					g_neuralSubmitPairBoundaryToken,
 					compositorCycleToken,
 					eEye,
 					pTexture,

@@ -35564,33 +35564,25 @@ Upscaling::NeuralSubmitCycleSnapshot Upscaling::GetLatestNeuralSubmitCycleSnapsh
 
 uint64_t Upscaling::BeginNeuralSubmitPairBoundary(
 	uint64_t a_compositorCycle,
-	const vr::Texture_t* a_texture,
+	uintptr_t a_sourceIdentity,
 	vr::EVRSubmitFlags a_flags) noexcept
 {
 	try {
 		std::scoped_lock lock(neuralSubmitPairBoundaryMutex);
-		neuralSubmitPairBoundaryState = {};
+		auto& active = neuralSubmitPairBoundaryState;
+		if (active.active || a_sourceIdentity == 0)
+			return 0;
+		active = {};
 		if (++neuralSubmitPairBoundarySequence == 0)
 			++neuralSubmitPairBoundarySequence;
 
-		auto& active = neuralSubmitPairBoundaryState;
 		active.token = neuralSubmitPairBoundarySequence;
 		active.compositorCycle = a_compositorCycle;
 		active.frame = globals::state ? globals::state->frameCount : 0u;
 		active.threadId = GetCurrentThreadId();
+		active.sourceIdentity = a_sourceIdentity;
 		active.flags = a_flags;
 		active.active = true;
-		if (a_texture && a_texture->handle &&
-			a_texture->eType == vr::TextureType_DirectX) {
-			auto* source = static_cast<ID3D11Texture2D*>(a_texture->handle);
-			D3D11_TEXTURE2D_DESC sourceDesc{};
-			if (TryGetTexture2DDesc(source, sourceDesc)) {
-				active.texture = *a_texture;
-				active.sourceDesc = sourceDesc;
-				active.sourceTexture.copy_from(source);
-				active.sourceValid = active.sourceTexture != nullptr;
-			}
-		}
 		return active.token;
 	} catch (...) {
 		return 0;
@@ -35612,50 +35604,35 @@ void Upscaling::EndNeuralSubmitPairBoundary(uint64_t a_token) noexcept
 }
 
 uint64_t Upscaling::ObserveNeuralSubmitPairBoundaryEye(
+	uint64_t a_expectedToken,
 	uint64_t a_compositorCycle,
 	vr::EVREye a_eye,
 	const vr::Texture_t* a_texture,
 	vr::EVRSubmitFlags a_flags) noexcept
 {
 	try {
-		if (a_eye != vr::Eye_Left && a_eye != vr::Eye_Right)
+		if (a_expectedToken == 0 ||
+			(a_eye != vr::Eye_Left && a_eye != vr::Eye_Right))
 			return 0;
 
 		std::scoped_lock lock(neuralSubmitPairBoundaryMutex);
 		auto& active = neuralSubmitPairBoundaryState;
-		if (!active.active)
+		if (!active.active || active.token != a_expectedToken)
 			return 0;
 
-		D3D11_TEXTURE2D_DESC sourceDesc{};
-		const bool sourceDescValid =
+		const uintptr_t sourceIdentity =
 			a_texture && a_texture->handle &&
-			a_texture->eType == vr::TextureType_DirectX &&
-			TryGetTexture2DDesc(
-				static_cast<ID3D11Texture2D*>(a_texture->handle), sourceDesc);
-		const auto& expected = active.sourceDesc;
-		const bool sourceDescMatches =
-			sourceDescValid && active.sourceValid &&
-			sourceDesc.Width == expected.Width &&
-			sourceDesc.Height == expected.Height &&
-			sourceDesc.MipLevels == expected.MipLevels &&
-			sourceDesc.ArraySize == expected.ArraySize &&
-			sourceDesc.Format == expected.Format &&
-			sourceDesc.SampleDesc.Count == expected.SampleDesc.Count &&
-			sourceDesc.SampleDesc.Quality == expected.SampleDesc.Quality &&
-			sourceDesc.Usage == expected.Usage &&
-			sourceDesc.BindFlags == expected.BindFlags &&
-			sourceDesc.CPUAccessFlags == expected.CPUAccessFlags &&
-			sourceDesc.MiscFlags == expected.MiscFlags;
+					a_texture->eType == vr::TextureType_DirectX ?
+				reinterpret_cast<uintptr_t>(a_texture->handle) :
+				0;
 		const uint32_t frame = globals::state ? globals::state->frameCount : 0u;
 		const bool proven =
 			active.threadId == GetCurrentThreadId() &&
 			active.compositorCycle == a_compositorCycle &&
 			active.frame == frame &&
 			active.flags == a_flags &&
-			a_texture && active.texture.handle == a_texture->handle &&
-			active.texture.eType == a_texture->eType &&
-			active.texture.eColorSpace == a_texture->eColorSpace &&
-			sourceDescMatches;
+			active.sourceIdentity != 0 &&
+			active.sourceIdentity == sourceIdentity;
 		if (!proven)
 			return 0;
 

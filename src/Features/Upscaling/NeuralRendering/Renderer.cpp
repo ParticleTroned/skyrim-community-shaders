@@ -130,6 +130,7 @@ namespace NeuralRendering
 				SameIdentity(left.context, right.context) &&
 				left.frameId == right.frameId &&
 				left.generation == right.generation &&
+				left.insertionPoint == right.insertionPoint &&
 				left.featureUpscaling == right.featureUpscaling &&
 				left.reset == right.reset &&
 				left.synchronizedHistoryReset == right.synchronizedHistoryReset &&
@@ -141,7 +142,7 @@ namespace NeuralRendering
 				return {};
 			}
 
-			return "stereo eyes require one device, context, frame, generation, feature mode, reset policy, tuning, ordered route pair, and disjoint resources";
+			return "stereo eyes require one device, context, frame, generation, insertion point, feature mode, reset policy, tuning, ordered route pair, and disjoint resources";
 		}
 
 		bool IsFiniteTuning(const Tuning& a_tuning) noexcept
@@ -437,6 +438,7 @@ namespace NeuralRendering
 		{
 			ResourceKey resources{};
 			std::uint64_t generation = 0;
+			InsertionPoint insertionPoint = kDefaultInsertionPoint;
 			std::uint32_t motionVectorScaleX = 0;
 			std::uint32_t motionVectorScaleY = 0;
 			std::uint32_t inputOffsetX = 0;
@@ -597,6 +599,8 @@ namespace NeuralRendering
 				Runtime::kFeatureSlotCount));
 		if (!a_args.generation)
 			return fail("feature-slot generation must be nonzero");
+		if (!IsValidInsertionPoint(a_args.insertionPoint))
+			return fail("Feature 18 insertion point is invalid");
 		if (!a_args.colorInput || !a_args.depthGuide || !a_args.depthGuideSRV ||
 			!a_args.motionVectors || !a_args.colorOutput) {
 			return fail("color, depth, motion-vector, and output resources are required");
@@ -737,6 +741,7 @@ namespace NeuralRendering
 		a_resources.historyKey = {
 			.resources = a_resources.resourceKey,
 			.generation = a_args.generation,
+			.insertionPoint = a_args.insertionPoint,
 			.motionVectorScaleX = std::bit_cast<std::uint32_t>(a_args.motionVectorScaleX),
 			.motionVectorScaleY = std::bit_cast<std::uint32_t>(a_args.motionVectorScaleY),
 			.inputOffsetX = a_args.inputOffsetX,
@@ -839,13 +844,20 @@ namespace NeuralRendering
 		performance.mainFeatureGpuMicroseconds = telemetry.mainFeatureGpuMicroseconds;
 		performance.submitFeatureGpuSamples = telemetry.submitFeatureGpuSamples;
 		performance.submitFeatureGpuMicroseconds = telemetry.submitFeatureGpuMicroseconds;
+		performance.featureGpuSamplesByInsertionPoint =
+			telemetry.featureGpuSamplesByInsertionPoint;
+		performance.featureGpuMicrosecondsByInsertionPoint =
+			telemetry.featureGpuMicrosecondsByInsertionPoint;
 		performance.unexpectedFeatureSlotMaskSamples =
 			telemetry.unexpectedFeatureSlotMaskSamples;
+		performance.invalidInsertionPointSamples =
+			telemetry.invalidInsertionPointSamples;
 		performance.lastFeatureGpuMicroseconds = telemetry.lastFeatureGpuMicroseconds;
 		performance.maximumFeatureGpuMicroseconds = telemetry.maximumFeatureGpuMicroseconds;
 		performance.lastFeaturePixelCount = telemetry.lastFeaturePixelCount;
 		performance.lastFeatureEvaluationCount = telemetry.lastFeatureEvaluationCount;
 		performance.lastFeatureSlotMask = telemetry.lastFeatureSlotMask;
+		performance.lastInsertionPoint = telemetry.lastInsertionPoint;
 	}
 
 	void Renderer::State::SetRequestTelemetryLocked(
@@ -854,6 +866,7 @@ namespace NeuralRendering
 		snapshot_.featureSlot = a_args.featureSlot;
 		snapshot_.frameId = a_args.frameId;
 		snapshot_.generation = a_args.generation;
+		snapshot_.insertionPoint = a_args.insertionPoint;
 		snapshot_.colorWidth = a_args.colorWidth;
 		snapshot_.colorHeight = a_args.colorHeight;
 		snapshot_.guideWidth = a_args.guideWidth;
@@ -1679,6 +1692,7 @@ namespace NeuralRendering
 					.pixelCount = pixelCount,
 					.evaluationCount = static_cast<std::uint32_t>(a_args.size()),
 					.featureSlotMask = featureSlotMask,
+					.insertionPoint = a_args.front().insertionPoint,
 				})) {
 			const bool aborted = interop_.AbortD3D12();
 			recordingGuard.active = interop_.IsRecording();

@@ -1,10 +1,12 @@
 #include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
 
+#include <limits>
 #include <string_view>
 
 int main()
 {
 	using NeuralRendering::FeatureSlotRoute;
+	using NeuralRendering::InsertionPoint;
 	using NeuralRendering::PipelineArrangement;
 	static_assert(
 		NeuralRendering::kPipelineArrangement == PipelineArrangement::DlssThenNeural,
@@ -34,6 +36,38 @@ int main()
 					  PipelineArrangement::NeuralThenDlss)) == "neural_then_dlss");
 	static_assert(std::string_view(NeuralRendering::GetPipelineArrangementName(
 					  PipelineArrangement::NeuralReplacesDlss)) == "neural_replaces_dlss");
+
+	static_assert(
+		NeuralRendering::kDefaultInsertionPoint == InsertionPoint::UpscaledCenter);
+	static_assert(NeuralRendering::kInsertionPointCount == 2u);
+	static_assert(static_cast<std::uint32_t>(InsertionPoint::UpscaledCenter) == 0u);
+	static_assert(static_cast<std::uint32_t>(InsertionPoint::FinalLdrPreUi) == 1u);
+	static_assert(NeuralRendering::IsValidInsertionPoint(InsertionPoint::UpscaledCenter));
+	static_assert(NeuralRendering::IsValidInsertionPoint(InsertionPoint::FinalLdrPreUi));
+	static_assert(!NeuralRendering::IsValidInsertionPoint(InsertionPoint::Count));
+	static_assert(NeuralRendering::ClampInsertionPoint(0u) == InsertionPoint::UpscaledCenter);
+	static_assert(NeuralRendering::ClampInsertionPoint(1u) == InsertionPoint::FinalLdrPreUi);
+	static_assert(NeuralRendering::ClampInsertionPoint(2u) == InsertionPoint::UpscaledCenter);
+	static_assert(
+		NeuralRendering::ClampInsertionPoint(std::numeric_limits<std::uint32_t>::max()) ==
+		InsertionPoint::UpscaledCenter);
+	static_assert(std::string_view(NeuralRendering::GetInsertionPointName(
+					  InsertionPoint::UpscaledCenter)) == "upscaled_center");
+	static_assert(std::string_view(NeuralRendering::GetInsertionPointName(
+					  InsertionPoint::FinalLdrPreUi)) == "final_ldr_pre_ui");
+	static_assert(std::string_view(NeuralRendering::GetInsertionPointName(
+					  InsertionPoint::Count)) == "unknown");
+	static_assert(std::string_view(NeuralRendering::GetInsertionPointDisplayName(
+					  InsertionPoint::UpscaledCenter)) == "Upscaled Centre");
+	static_assert(std::string_view(NeuralRendering::GetInsertionPointDisplayName(
+					  InsertionPoint::FinalLdrPreUi)) == "Final LDR (Pre-UI)");
+	static_assert(
+		NeuralRendering::ParseInsertionPointName("upscaled_center") ==
+		InsertionPoint::UpscaledCenter);
+	static_assert(
+		NeuralRendering::ParseInsertionPointName("final_ldr_pre_ui") ==
+		InsertionPoint::FinalLdrPreUi);
+	static_assert(!NeuralRendering::ParseInsertionPointName("unknown"));
 
 	static_assert(std::string_view(NeuralRendering::GetImplementationName(
 					  false, false)) == "per_eye_staged_commit");

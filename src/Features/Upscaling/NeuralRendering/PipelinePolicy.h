@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -29,6 +30,75 @@ namespace NeuralRendering
 		NeuralThenDlss = 1,
 		NeuralReplacesDlss = 2,
 	};
+
+	/** Image-space boundary at which Feature 18 consumes the DLSS result. */
+	enum class InsertionPoint : std::uint32_t
+	{
+		UpscaledCenter = 0,
+		FinalLdrPreUi = 1,
+		Count,
+	};
+
+	inline constexpr InsertionPoint kDefaultInsertionPoint =
+		InsertionPoint::UpscaledCenter;
+	inline constexpr std::size_t kInsertionPointCount =
+		static_cast<std::size_t>(InsertionPoint::Count);
+
+	[[nodiscard]] constexpr bool IsValidInsertionPoint(
+		InsertionPoint a_insertionPoint) noexcept
+	{
+		return a_insertionPoint >= InsertionPoint::UpscaledCenter &&
+		       a_insertionPoint < InsertionPoint::Count;
+	}
+
+	/** Maps persisted numeric settings to a supported insertion point. */
+	[[nodiscard]] constexpr InsertionPoint ClampInsertionPoint(
+		std::uint32_t a_value) noexcept
+	{
+		const auto insertionPoint = static_cast<InsertionPoint>(a_value);
+		return IsValidInsertionPoint(insertionPoint) ?
+		           insertionPoint :
+		           kDefaultInsertionPoint;
+	}
+
+	/** Stable settings and diagnostics identifier for an insertion point. */
+	[[nodiscard]] constexpr const char* GetInsertionPointName(
+		InsertionPoint a_insertionPoint = kDefaultInsertionPoint) noexcept
+	{
+		switch (a_insertionPoint) {
+		case InsertionPoint::UpscaledCenter:
+			return "upscaled_center";
+		case InsertionPoint::FinalLdrPreUi:
+			return "final_ldr_pre_ui";
+		default:
+			return "unknown";
+		}
+	}
+
+	/** Concise user-facing label for an insertion point. */
+	[[nodiscard]] constexpr const char* GetInsertionPointDisplayName(
+		InsertionPoint a_insertionPoint = kDefaultInsertionPoint) noexcept
+	{
+		switch (a_insertionPoint) {
+		case InsertionPoint::UpscaledCenter:
+			return "Upscaled Centre";
+		case InsertionPoint::FinalLdrPreUi:
+			return "Final LDR (Pre-UI)";
+		default:
+			return "Unknown";
+		}
+	}
+
+	/** Resolves a stable settings identifier without accepting aliases. */
+	[[nodiscard]] constexpr std::optional<InsertionPoint>
+	ParseInsertionPointName(std::string_view a_name) noexcept
+	{
+		if (a_name == GetInsertionPointName(InsertionPoint::UpscaledCenter))
+			return InsertionPoint::UpscaledCenter;
+		if (a_name == GetInsertionPointName(InsertionPoint::FinalLdrPreUi))
+			return InsertionPoint::FinalLdrPreUi;
+		return std::nullopt;
+	}
 
 	enum class FeatureSlotRoute : std::uint8_t
 	{

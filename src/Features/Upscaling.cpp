@@ -73,6 +73,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	fsr4RuntimeSelectionSchemaVersion,
 	foveatedVendorDispatch,
 	neuralRenderingEnabled,
+	neuralRenderingInsertionPoint,
 	neuralRenderingBatchedStereo,
 	neuralRenderingDirectCommit,
 	neuralRenderingPreset,
@@ -3534,6 +3535,8 @@ namespace
 
 	void SanitizeFoveatedSettings(Upscaling::Settings& settings)
 	{
+		settings.neuralRenderingInsertionPoint = static_cast<uint>(
+			NeuralRendering::ClampInsertionPoint(settings.neuralRenderingInsertionPoint));
 		settings.neuralRenderingPreset = std::min(settings.neuralRenderingPreset, 4u);
 		settings.neuralRenderingIntensity = std::clamp(
 			std::isfinite(settings.neuralRenderingIntensity) ? settings.neuralRenderingIntensity : 0.8f,
@@ -3642,6 +3645,8 @@ namespace
 		settings.perfMode = 0;
 		settings.foveatedVendorDispatch = false;
 		settings.neuralRenderingEnabled = false;
+		settings.neuralRenderingInsertionPoint =
+			static_cast<uint>(NeuralRendering::kDefaultInsertionPoint);
 		settings.neuralRenderingBatchedStereo = true;
 		settings.neuralRenderingDirectCommit = true;
 		settings.neuralRenderingPreset = 3;
@@ -3672,6 +3677,7 @@ namespace
 		o_json.erase("vrMenuBridgeDebugMode");
 		o_json.erase("foveatedVendorDispatch");
 		o_json.erase("neuralRenderingEnabled");
+		o_json.erase("neuralRenderingInsertionPoint");
 		o_json.erase("neuralRenderingOptimizedStereoPath");
 		o_json.erase("neuralRenderingBatchedStereo");
 		o_json.erase("neuralRenderingDirectCommit");
@@ -4548,6 +4554,9 @@ namespace
 
 		add(static_cast<uint64_t>(NeuralRendering::kPipelineArrangement));
 		add(a_settings.neuralRenderingEnabled);
+		add(static_cast<uint64_t>(
+			NeuralRendering::ClampInsertionPoint(
+				a_settings.neuralRenderingInsertionPoint)));
 		add(a_settings.neuralRenderingBatchedStereo);
 		add(a_settings.neuralRenderingDirectCommit);
 		add(a_settings.neuralRenderingPreset);
@@ -14429,7 +14438,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 
 		ImGui::TextColored(Util::Colors::GetWarning(), "Experimental");
 		ImGui::TextWrapped(
-			"Enhances the private DLSS center regions before VR composition. "
+			"Enhances the DLSS center regions at the selected image-space boundary. "
 			"Use the pipeline controls below to compare each performance lane.");
 
 		const char* toggleModes[]{ "Disabled", "Enabled" };
@@ -14448,7 +14457,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted(
-				"Runs NVIDIA Feature 18 on both private foveated DLSS center outputs.");
+				"Runs NVIDIA Feature 18 on both foveated DLSS center regions.");
 			ImGui::TextUnformatted(
 				"Requires Skyrim VR, NVIDIA DLSS, and Foveated Upscaling (FOV).");
 		}
@@ -14465,6 +14474,31 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 
 		if (settings.neuralRenderingEnabled) {
 			ImGui::SeparatorText("Pipeline");
+			static constexpr const char* insertionPointModes[]{
+				NeuralRendering::GetInsertionPointDisplayName(
+					NeuralRendering::InsertionPoint::UpscaledCenter),
+				NeuralRendering::GetInsertionPointDisplayName(
+					NeuralRendering::InsertionPoint::FinalLdrPreUi)
+			};
+			int insertionPoint = static_cast<int>(
+				NeuralRendering::ClampInsertionPoint(
+					settings.neuralRenderingInsertionPoint));
+			if (ImGui::Combo(
+					"Insertion Point",
+					&insertionPoint,
+					insertionPointModes,
+					IM_ARRAYSIZE(insertionPointModes))) {
+				settings.neuralRenderingInsertionPoint = static_cast<uint>(
+					NeuralRendering::ClampInsertionPoint(
+						static_cast<uint32_t>(insertionPoint)));
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted(
+					"Upscaled Centre runs immediately after DLSS and before feathering.");
+				ImGui::TextUnformatted(
+					"Final LDR runs after scene post-processing and sharpening, immediately before UI.");
+			}
+
 			static constexpr const char* stereoSubmissionModes[]{
 				"Per-eye",
 				"Batched"
@@ -15042,9 +15076,24 @@ bool Upscaling::HandleNeuralRenderingSettingsTransition(
 		return true;
 	}
 
+	const auto previousInsertionPoint = NeuralRendering::ClampInsertionPoint(
+		a_previousSettings.neuralRenderingInsertionPoint);
+	const auto currentInsertionPoint = NeuralRendering::ClampInsertionPoint(
+		settings.neuralRenderingInsertionPoint);
+	const bool insertionPointChanged =
+		previousInsertionPoint != currentInsertionPoint;
+
 	RequestHistoryReset();
+	mainFinalLdrNeuralState = {};
+	mainFinalLdrPresentationState = {};
+	if (insertionPointChanged) {
+		neuralInsertionPointTransitionFrame = globals::state ?
+		                                          globals::state->frameCount :
+		                                          std::numeric_limits<uint32_t>::max();
+	}
 	if (a_previousSettings.neuralRenderingEnabled ==
-		settings.neuralRenderingEnabled) {
+			settings.neuralRenderingEnabled &&
+		!insertionPointChanged) {
 		return true;
 	}
 
@@ -15055,6 +15104,48 @@ bool Upscaling::HandleNeuralRenderingSettingsTransition(
 			a_reason ? a_reason : "settings transition");
 	}
 	return resetSucceeded;
+}
+
+NeuralRendering::InsertionPoint
+Upscaling::GetLatchedNeuralRenderingInsertionPoint() noexcept
+{
+	const uint32_t frame = globals::state ?
+	                           globals::state->frameCount :
+	                           std::numeric_limits<uint32_t>::max();
+	if (neuralInsertionPointLatchedFrame != frame) {
+		neuralInsertionPointLatchedFrame = frame;
+		neuralInsertionPointLatched = NeuralRendering::ClampInsertionPoint(
+			settings.neuralRenderingInsertionPoint);
+	}
+	return neuralInsertionPointLatched;
+}
+
+bool Upscaling::IsNeuralRenderingInsertionTransitionBlocked() const noexcept
+{
+	return globals::state &&
+	       neuralInsertionPointTransitionFrame == globals::state->frameCount;
+}
+
+bool Upscaling::TryClaimNeuralRenderingRoute(
+	NeuralStereoRouteRole a_role) noexcept
+{
+	if (!globals::state || a_role == NeuralStereoRouteRole::Count ||
+		IsNeuralRenderingInsertionTransitionBlocked()) {
+		return false;
+	}
+
+	const uint32_t frame = globals::state->frameCount;
+	if (neuralInsertionPointClaimFrame != frame) {
+		neuralInsertionPointClaimFrame = frame;
+		neuralInsertionPointClaimRole = NeuralStereoRouteRole::Count;
+	}
+	if (neuralInsertionPointClaimRole != NeuralStereoRouteRole::Count &&
+		neuralInsertionPointClaimRole != a_role) {
+		return false;
+	}
+
+	neuralInsertionPointClaimRole = a_role;
+	return true;
 }
 
 struct BSOpenVR_GetRenderTargetSize
@@ -23666,32 +23757,31 @@ ID3D11PixelShader* Upscaling::GetVRMenuLayerCompositePS()
 }
 
 eastl::unique_ptr<Texture2D> Upscaling::CreateTextureFromSource(ID3D11Resource* src, uint32_t width, uint32_t height,
-	bool copyBindFlags, bool createSRV, bool createUAV, const char* name, bool createRTV)
+	bool copyBindFlags, bool createSRV, bool createUAV, const char* name, bool createRTV, DXGI_FORMAT formatOverride)
 {
 	D3D11_TEXTURE2D_DESC srcDesc;
 	static_cast<ID3D11Texture2D*>(src)->GetDesc(&srcDesc);
+	const DXGI_FORMAT textureFormat = formatOverride != DXGI_FORMAT_UNKNOWN ?
+	                                      formatOverride :
+	                                      srcDesc.Format;
 
 	D3D11_TEXTURE2D_DESC desc = {};
 	desc.Width = width;
 	desc.Height = height;
 	desc.MipLevels = 1;
 	desc.ArraySize = 1;
-	desc.Format = srcDesc.Format;
+	desc.Format = textureFormat;
 	desc.SampleDesc.Count = 1;
 	desc.Usage = D3D11_USAGE_DEFAULT;
 	desc.BindFlags = copyBindFlags ? srcDesc.BindFlags : (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS);
 	if (createRTV)
 		desc.BindFlags |= D3D11_BIND_RENDER_TARGET;
 
-	auto tex = eastl::make_unique<Texture2D>(desc);
-
-	if (name) {
-		Util::SetResourceName(tex->resource.get(), name);
-	}
+	auto tex = eastl::make_unique<Texture2D>(desc, name);
 
 	if (createSRV) {
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-		srvDesc.Format = srcDesc.Format;
+		srvDesc.Format = textureFormat;
 		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
 		srvDesc.Texture2D.MostDetailedMip = 0;
 		srvDesc.Texture2D.MipLevels = 1;
@@ -23699,14 +23789,14 @@ eastl::unique_ptr<Texture2D> Upscaling::CreateTextureFromSource(ID3D11Resource* 
 	}
 	if (createUAV) {
 		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-		uavDesc.Format = srcDesc.Format;
+		uavDesc.Format = textureFormat;
 		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
 		uavDesc.Texture2D.MipSlice = 0;
 		tex->CreateUAV(uavDesc);
 	}
 	if (createRTV) {
 		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {};
-		rtvDesc.Format = srcDesc.Format;
+		rtvDesc.Format = textureFormat;
 		rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
 		rtvDesc.Texture2D.MipSlice = 0;
 		tex->CreateRTV(rtvDesc);
@@ -24015,7 +24105,7 @@ bool Upscaling::GetFoveatedEncodeRegions(uint32_t inputWidthPerEye, uint32_t inp
 	return true;
 }
 
-bool Upscaling::EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3D11Resource* source, uint32_t width, uint32_t height, bool copyBindFlags, bool createSRV, bool createUAV, bool createRTV, const char* name)
+bool Upscaling::EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3D11Resource* source, uint32_t width, uint32_t height, bool copyBindFlags, bool createSRV, bool createUAV, bool createRTV, const char* name, DXGI_FORMAT formatOverride)
 {
 	if (!source || !width || !height)
 		return false;
@@ -24023,12 +24113,15 @@ bool Upscaling::EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3
 	D3D11_TEXTURE2D_DESC sourceDesc{};
 	if (!TryGetTexture2DDesc(source, sourceDesc))
 		return false;
+	const DXGI_FORMAT textureFormat = formatOverride != DXGI_FORMAT_UNKNOWN ?
+	                                      formatOverride :
+	                                      sourceDesc.Format;
 
 	bool recreate = !texture;
 	if (!recreate) {
 		recreate = texture->desc.Width != width ||
 		           texture->desc.Height != height ||
-		           texture->desc.Format != sourceDesc.Format;
+		           texture->desc.Format != textureFormat;
 		if (createSRV && !texture->srv)
 			recreate = true;
 		if (createUAV && !texture->uav)
@@ -24058,7 +24151,9 @@ bool Upscaling::EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3
 				height);
 		};
 		try {
-			texture = CreateTextureFromSource(source, width, height, copyBindFlags, createSRV, createUAV, name, createRTV);
+			texture = CreateTextureFromSource(
+				source, width, height, copyBindFlags, createSRV, createUAV,
+				name, createRTV, textureFormat);
 		} catch (const std::exception& e) {
 			LogWarnOnce(loggedTextureCreateFailure, createFailureMessage(), e);
 			MarkSubmitStageDeviceLostIfNeeded(e, name ? name : "foveated texture creation");
@@ -24503,6 +24598,9 @@ void Upscaling::AbandonFoveatedResourcesUnsafe()
 		(void)foveatedCenterColorIn[eye].release();
 		(void)foveatedCenterColorOut[eye].release();
 		(void)foveatedCenterNeuralOut[eye].release();
+		(void)neuralFinalLdrColorIn[eye].release();
+		(void)neuralFinalLdrColorOut[eye].release();
+		(void)neuralFinalLdrStagedOut[eye].release();
 		(void)foveatedCenterDepth[eye].release();
 		(void)foveatedCenterMotionVectors[eye].release();
 		(void)foveatedCenterReactiveMask[eye].release();
@@ -24521,6 +24619,8 @@ void Upscaling::AbandonFoveatedResourcesUnsafe()
 	submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
 	submitStageFoveatedPeripheryTAAEyeReady = {};
 	submitStageFoveatedCenterState = {};
+	mainFinalLdrNeuralState = {};
+	mainFinalLdrPresentationState = {};
 	if (!submitStageNeuralStereoState.IsCycleLatched())
 		submitStageNeuralStereoState = {};
 	foveatedRectCache = {};
@@ -24542,12 +24642,17 @@ void Upscaling::DestroyFoveatedResources()
 		foveatedCenterColorIn[i].reset();
 		foveatedCenterColorOut[i].reset();
 		foveatedCenterNeuralOut[i].reset();
+		neuralFinalLdrColorIn[i].reset();
+		neuralFinalLdrColorOut[i].reset();
+		neuralFinalLdrStagedOut[i].reset();
 		foveatedCenterDepth[i].reset();
 		foveatedCenterMotionVectors[i].reset();
 		foveatedCenterReactiveMask[i].reset();
 		foveatedCenterTransparencyMask[i].reset();
 	}
 	submitStageFoveatedCenterState = {};
+	mainFinalLdrNeuralState = {};
+	mainFinalLdrPresentationState = {};
 	if (!submitStageNeuralStereoState.IsCycleLatched())
 		submitStageNeuralStereoState = {};
 	foveatedRectCache = {};
@@ -24828,25 +24933,25 @@ void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorS
 	context->CSSetShader(nullptr, nullptr, 0);
 }
 
-void Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t outputWidthPerEye, uint32_t outputHeight, const FoveatedDispatchRect& rect, uint32_t dispatchOffsetX, uint32_t dispatchOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather)
+bool Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t outputWidthPerEye, uint32_t outputHeight, const FoveatedDispatchRect& rect, uint32_t dispatchOffsetX, uint32_t dispatchOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t targetOffsetX)
 {
 	if (!centerSRV || !outputUAV || rect.outputWidth == 0 || rect.outputHeight == 0 || !foveatedCenterBlendCB)
-		return;
+		return false;
 	if (!dispatchWidth || !dispatchHeight)
-		return;
+		return false;
 
 	auto* blendCS = GetFoveatedCenterBlendCS();
 	auto context = globals::d3d::context;
 	auto deferred = globals::deferred;
 	if (!blendCS || !context || !deferred || !deferred->linearSampler)
-		return;
+		return false;
 	if (dispatchOffsetX >= outputWidthPerEye || dispatchOffsetY >= outputHeight)
-		return;
+		return false;
 
 	dispatchWidth = std::min(dispatchWidth, outputWidthPerEye - dispatchOffsetX);
 	dispatchHeight = std::min(dispatchHeight, outputHeight - dispatchOffsetY);
 	if (!dispatchWidth || !dispatchHeight)
-		return;
+		return false;
 
 	const uint32_t rectMinX = rect.outputOffsetX;
 	const uint32_t rectMinY = rect.outputOffsetY;
@@ -24858,7 +24963,7 @@ void Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, I
 	const uint32_t dispatchMaxX = std::min(dispatchOffsetX + dispatchWidth, rectMaxX);
 	const uint32_t dispatchMaxY = std::min(dispatchOffsetY + dispatchHeight, rectMaxY);
 	if (dispatchMaxX <= dispatchMinX || dispatchMaxY <= dispatchMinY)
-		return;
+		return false;
 
 	const uint32_t actualDispatchWidth = dispatchMaxX - dispatchMinX;
 	const uint32_t actualDispatchHeight = dispatchMaxY - dispatchMinY;
@@ -24881,35 +24986,43 @@ void Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, I
 		rect.outputHeight > 0 ? 1.0f / static_cast<float>(rect.outputHeight) : 0.0f
 	};
 	cbData.centerHorizontalScale = ClampFoveatedCenterHorizontalScale(centerHorizontalScale);
-	cbData.centerHorizontalScalePadding = 0.0f;
+	cbData.targetOffsetX = targetOffsetX;
 	foveatedCenterBlendCB->Update(cbData);
 
 	ID3D11Buffer* cb = foveatedCenterBlendCB->CB();
 	ID3D11SamplerState* samplers[1] = { deferred->linearSampler };
 	ID3D11ShaderResourceView* srvs[1] = { centerSRV };
 	ID3D11UnorderedAccessView* uavs[1] = { outputUAV };
+	auto clearBindings = ScopeExit([&]() {
+		ID3D11ShaderResourceView* nullSRV = nullptr;
+		ID3D11UnorderedAccessView* nullUAV = nullptr;
+		ID3D11SamplerState* nullSampler = nullptr;
+		ID3D11Buffer* nullCB = nullptr;
+		context->CSSetShaderResources(0, 1, &nullSRV);
+		context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
+		context->CSSetSamplers(0, 1, &nullSampler);
+		context->CSSetConstantBuffers(0, 1, &nullCB);
+		context->CSSetShader(nullptr, nullptr, 0);
+	});
 
 	context->CSSetShader(blendCS, nullptr, 0);
 	context->CSSetConstantBuffers(0, 1, &cb);
 	context->CSSetSamplers(0, 1, samplers);
 	context->CSSetShaderResources(0, 1, srvs);
 	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+	winrt::com_ptr<ID3D11ShaderResourceView> boundSRV;
+	winrt::com_ptr<ID3D11UnorderedAccessView> boundUAV;
+	context->CSGetShaderResources(0, 1, boundSRV.put());
+	context->CSGetUnorderedAccessViews(0, 1, boundUAV.put());
+	if (boundSRV.get() != centerSRV || boundUAV.get() != outputUAV)
+		return false;
 	auto state = globals::state;
 	if (state && state->frameAnnotations)
 		state->BeginPerfEvent("Foveated Center Blend");
 	context->Dispatch((actualDispatchWidth + 7u) >> 3, (actualDispatchHeight + 7u) >> 3, 1);
 	if (state && state->frameAnnotations)
 		state->EndPerfEvent();
-
-	ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
-	ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
-	ID3D11SamplerState* nullSampler[1] = { nullptr };
-	ID3D11Buffer* nullCB[1] = { nullptr };
-	context->CSSetShaderResources(0, 1, nullSRV);
-	context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
-	context->CSSetSamplers(0, 1, nullSampler);
-	context->CSSetConstantBuffers(0, 1, nullCB);
-	context->CSSetShader(nullptr, nullptr, 0);
+	return !MarkSubmitStageDeviceLostIfDeviceRemoved("foveated center blend");
 }
 
 bool Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Upscaling::VendorEyeDispatchParams& params)
@@ -25035,6 +25148,9 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 		neuralCenterPhase != NeuralCenterPhase::Disabled &&
 		a_upscaleMethod == UpscaleMethod::kDLSS &&
 		settings.neuralRenderingEnabled &&
+		GetLatchedNeuralRenderingInsertionPoint() ==
+			NeuralRendering::InsertionPoint::UpscaledCenter &&
+		!IsNeuralRenderingInsertionTransitionBlocked() &&
 		!IsNeuralRenderingMenuSuppressed() &&
 		settings.frameGenerationMode == 0 &&
 		!IsFrameGenerationDx12PathActive();
@@ -25335,6 +25451,7 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 			args.generation = submitStageDLSSCenter ?
 			                      std::max<uint64_t>(activeContractGeneration, 1u) :
 			                      std::max<uint64_t>(vrDLSSRuntimeResourceGeneration, 1u);
+			args.insertionPoint = NeuralRendering::InsertionPoint::UpscaledCenter;
 			args.colorInput = a_colorInput;
 			args.depthGuide = foveatedCenterDepth[eyeIndex]->resource.get();
 			args.depthGuideSRV = foveatedCenterDepth[eyeIndex]->srv.get();
@@ -25500,7 +25617,7 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 	                                     ClampPeripheryTAACenterBlendFeather(centerFeather) :
 	                                     ClampPeripheryTAACenterBlendFeather(FoveatedCommon::kCenterFeather);
 
-	DispatchFoveatedBlendPass(
+	return DispatchFoveatedBlendPass(
 		centerSRV,
 		outputUAV,
 		outputWidthPerEye,
@@ -25514,7 +25631,6 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 		centerHorizontalScale,
 		centerOffset,
 		centerBlendFeather);
-	return true;
 }
 
 namespace
@@ -25581,7 +25697,620 @@ namespace
 	}
 }
 
-bool Upscaling::DispatchFoveatedVendorCenterStereo(UpscaleMethod a_upscaleMethod, const std::array<FoveatedEyeDispatchParams, 2>& params, bool& neuralPairApplied, std::array<NeuralCenterDispatchResult, 2>* neuralResults) noexcept
+bool Upscaling::ApplyFinalLdrNeuralStereo(
+	NeuralStereoRouteRole a_role,
+	const std::array<FinalLdrNeuralEyeTarget, 2>& a_targets,
+	uint32_t a_inputWidthPerEye,
+	uint32_t a_inputHeight,
+	uint32_t a_outputWidthPerEye,
+	uint32_t a_outputHeight,
+	uint64_t a_generation,
+	FinalLdrNeuralResult& a_result) noexcept
+{
+	a_result = {};
+	if (!globals::game::isVR || !globals::state || !globals::d3d::device ||
+		!globals::d3d::context || !globals::deferred ||
+		GetLatchedNeuralRenderingInsertionPoint() !=
+			NeuralRendering::InsertionPoint::FinalLdrPreUi ||
+		IsNeuralRenderingInsertionTransitionBlocked() ||
+		!settings.neuralRenderingEnabled ||
+		IsNeuralRenderingMenuSuppressed() ||
+		settings.frameGenerationMode != 0 || IsFrameGenerationDx12PathActive() ||
+		!TryClaimNeuralRenderingRoute(a_role) || !a_generation ||
+		!a_inputWidthPerEye || !a_inputHeight || !a_outputWidthPerEye ||
+		!a_outputHeight || !foveatedRectCache.plan.IsValid() ||
+		foveatedRectCache.inputWidthPerEye != a_inputWidthPerEye ||
+		foveatedRectCache.inputHeight != a_inputHeight ||
+		foveatedRectCache.outputWidthPerEye != a_outputWidthPerEye ||
+		foveatedRectCache.outputHeight != a_outputHeight ||
+		!foveatedCenterBlendCB ||
+		!globals::deferred->linearSampler) {
+		return false;
+	}
+	try {
+		if (!GetFoveatedCenterBlendCS())
+			return false;
+	} catch (const std::exception& e) {
+		static bool loggedLateBlendShaderFailure = false;
+		LogWarnOnceFmt(
+			loggedLateBlendShaderFailure,
+			"[DLSSNR] Final-LDR blend shader is unavailable; preserving normal DLSS: {}",
+			e.what());
+		return false;
+	} catch (...) {
+		static bool loggedLateBlendShaderFailure = false;
+		LogWarnOnceFmt(
+			loggedLateBlendShaderFailure,
+			"[DLSSNR] Final-LDR blend shader is unavailable; preserving normal DLSS");
+		return false;
+	}
+
+	auto* context = globals::d3d::context;
+	std::array<D3D11_TEXTURE2D_DESC, 2> targetDescs{};
+	std::array<D3D11_UNORDERED_ACCESS_VIEW_DESC, 2> targetUavDescs{};
+	for (uint32_t eye = 0; eye < a_targets.size(); ++eye) {
+		const auto& target = a_targets[eye];
+		const auto& rect = foveatedRectCache.rects[eye];
+		winrt::com_ptr<ID3D11Resource> targetUavResource;
+		if (target.uav) {
+			target.uav->GetResource(targetUavResource.put());
+			target.uav->GetDesc(&targetUavDescs[eye]);
+		}
+		if (!target.resource || !target.uav ||
+			!targetUavResource ||
+			GetCOMIdentityAddress(targetUavResource.get()) !=
+				GetCOMIdentityAddress(target.resource) ||
+			targetUavDescs[eye].Format == DXGI_FORMAT_UNKNOWN ||
+			targetUavDescs[eye].ViewDimension != D3D11_UAV_DIMENSION_TEXTURE2D ||
+			targetUavDescs[eye].Texture2D.MipSlice != target.subresource ||
+			!TryGetTexture2DDesc(target.resource, targetDescs[eye]) ||
+			targetDescs[eye].SampleDesc.Count != 1 ||
+			target.subresource >=
+				targetDescs[eye].MipLevels * targetDescs[eye].ArraySize ||
+			!rect.inputWidth || !rect.inputHeight || !rect.outputWidth ||
+			!rect.outputHeight ||
+			rect.inputOffsetX + rect.inputWidth > a_inputWidthPerEye ||
+			rect.inputOffsetY + rect.inputHeight > a_inputHeight ||
+			rect.outputOffsetX + rect.outputWidth > a_outputWidthPerEye ||
+			rect.outputOffsetY + rect.outputHeight > a_outputHeight ||
+			target.baseOffsetX > targetDescs[eye].Width ||
+			a_outputWidthPerEye >
+				targetDescs[eye].Width - target.baseOffsetX ||
+			a_outputHeight > targetDescs[eye].Height ||
+			!foveatedCenterDepth[eye] ||
+			!foveatedCenterDepth[eye]->resource ||
+			foveatedCenterDepth[eye]->desc.Width != rect.inputWidth ||
+			foveatedCenterDepth[eye]->desc.Height != rect.inputHeight ||
+			!foveatedCenterMotionVectors[eye] ||
+			!foveatedCenterMotionVectors[eye]->resource ||
+			foveatedCenterMotionVectors[eye]->desc.Width != rect.inputWidth ||
+			foveatedCenterMotionVectors[eye]->desc.Height != rect.inputHeight) {
+			return false;
+		}
+	}
+	if (targetDescs[0].Format != targetDescs[1].Format ||
+		targetUavDescs[0].Format != targetUavDescs[1].Format) {
+		return false;
+	}
+	D3D11_FEATURE_DATA_FORMAT_SUPPORT2 formatSupport{};
+	formatSupport.InFormat = targetUavDescs[0].Format;
+	constexpr UINT requiredUavFormatSupport =
+		D3D11_FORMAT_SUPPORT2_UAV_TYPED_LOAD |
+		D3D11_FORMAT_SUPPORT2_UAV_TYPED_STORE;
+	if (FAILED(globals::d3d::device->CheckFeatureSupport(
+			D3D11_FEATURE_FORMAT_SUPPORT2, &formatSupport,
+			sizeof(formatSupport))) ||
+		(formatSupport.OutFormatSupport2 & requiredUavFormatSupport) !=
+			requiredUavFormatSupport) {
+		return false;
+	}
+
+	std::array<ID3D11RenderTargetView*, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT>
+		previousRTVs{};
+	ID3D11DepthStencilView* previousDSV = nullptr;
+	ID3D11ComputeShader* previousCS = nullptr;
+	std::array<ID3D11ClassInstance*, D3D11_SHADER_MAX_INTERFACES>
+		previousCSClassInstances{};
+	UINT previousCSClassInstanceCount = static_cast<UINT>(
+		previousCSClassInstances.size());
+	ID3D11Buffer* previousCSCB = nullptr;
+	ID3D11ShaderResourceView* previousCSSRV = nullptr;
+	ID3D11UnorderedAccessView* previousCSUAV = nullptr;
+	ID3D11SamplerState* previousCSSampler = nullptr;
+	context->OMGetRenderTargets(
+		static_cast<UINT>(previousRTVs.size()), previousRTVs.data(), &previousDSV);
+	context->CSGetShader(
+		&previousCS, previousCSClassInstances.data(),
+		&previousCSClassInstanceCount);
+	context->CSGetConstantBuffers(0, 1, &previousCSCB);
+	context->CSGetShaderResources(0, 1, &previousCSSRV);
+	context->CSGetUnorderedAccessViews(0, 1, &previousCSUAV);
+	context->CSGetSamplers(0, 1, &previousCSSampler);
+	auto restoreState = ScopeExit([&]() {
+		ID3D11ShaderResourceView* nullSRV = nullptr;
+		ID3D11UnorderedAccessView* nullUAV = nullptr;
+		context->CSSetShaderResources(0, 1, &nullSRV);
+		context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
+		context->CSSetShader(
+			previousCS, previousCSClassInstances.data(),
+			previousCSClassInstanceCount);
+		context->CSSetConstantBuffers(0, 1, &previousCSCB);
+		context->CSSetShaderResources(0, 1, &previousCSSRV);
+		context->CSSetUnorderedAccessViews(0, 1, &previousCSUAV, nullptr);
+		context->CSSetSamplers(0, 1, &previousCSSampler);
+		context->OMSetRenderTargets(
+			static_cast<UINT>(previousRTVs.size()), previousRTVs.data(), previousDSV);
+		for (auto* view : previousRTVs) {
+			if (view)
+				view->Release();
+		}
+		if (previousDSV)
+			previousDSV->Release();
+		if (previousCS)
+			previousCS->Release();
+		for (UINT index = 0; index < previousCSClassInstanceCount; ++index) {
+			if (previousCSClassInstances[index])
+				previousCSClassInstances[index]->Release();
+		}
+		if (previousCSCB)
+			previousCSCB->Release();
+		if (previousCSSRV)
+			previousCSSRV->Release();
+		if (previousCSUAV)
+			previousCSUAV->Release();
+		if (previousCSSampler)
+			previousCSSampler->Release();
+	});
+	ID3D11ShaderResourceView* nullSRV = nullptr;
+	ID3D11UnorderedAccessView* nullUAV = nullptr;
+	context->CSSetShaderResources(0, 1, &nullSRV);
+	context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
+	context->OMSetRenderTargets(0, nullptr, nullptr);
+	const auto restoreCommittedCenters = [&]() noexcept {
+		for (uint32_t eye = 0; eye < a_targets.size(); ++eye) {
+			if ((a_result.committedEyeMask & (1u << eye)) == 0 ||
+				!neuralFinalLdrColorIn[eye] ||
+				!neuralFinalLdrColorIn[eye]->resource) {
+				continue;
+			}
+			const auto& rect = foveatedRectCache.rects[eye];
+			const D3D11_BOX originalCenterBox{
+				0u, 0u, 0u, rect.outputWidth, rect.outputHeight, 1u
+			};
+			context->CopySubresourceRegion(
+				a_targets[eye].resource, a_targets[eye].subresource,
+				a_targets[eye].baseOffsetX + rect.outputOffsetX,
+				rect.outputOffsetY, 0u,
+				neuralFinalLdrColorIn[eye]->resource.get(), 0u,
+				&originalCenterBox);
+		}
+		a_result.committedEyeMask = 0;
+	};
+
+	try {
+		CS_PROFILE_SCOPE("Upscaling::NeuralFinalLdrPreUi");
+		std::array<NeuralCenterDispatchResult, 2> neuralResults{};
+		std::array<NeuralRendering::RendererApplyArgs, 2> neuralArgs{};
+		const bool directCommit = settings.neuralRenderingDirectCommit;
+		for (uint32_t eye = 0; eye < a_targets.size(); ++eye) {
+			const auto& target = a_targets[eye];
+			const auto& rect = foveatedRectCache.rects[eye];
+			const auto& eyePlan = foveatedRectCache.plan.eyes[eye];
+			const std::string suffix = eye == 0 ? "Left" : "Right";
+			if (!eyePlan.IsValid() ||
+				!EnsureFoveatedTexture(
+					neuralFinalLdrColorIn[eye], target.resource,
+					rect.outputWidth, rect.outputHeight, false, false, false, false,
+					("Upscale_NeuralFinalLdr_ColorIn_" + suffix).c_str(),
+					targetUavDescs[eye].Format) ||
+				!EnsureFoveatedTexture(
+					neuralFinalLdrColorOut[eye], target.resource,
+					rect.outputWidth, rect.outputHeight, false, true, false, false,
+					("Upscale_NeuralFinalLdr_ColorOut_" + suffix).c_str(),
+					targetUavDescs[eye].Format) ||
+				(!directCommit && !EnsureFoveatedTexture(
+									  neuralFinalLdrStagedOut[eye], target.resource,
+									  rect.outputWidth, rect.outputHeight, false, false, false, false,
+									  ("Upscale_NeuralFinalLdr_StagedOut_" + suffix).c_str(),
+									  targetUavDescs[eye].Format)) ||
+				!EnsureFoveatedDepthGuideSRV(
+					*foveatedCenterDepth[eye],
+					("Upscale_FoveatedCenter_Depth_" + suffix).c_str())) {
+				return false;
+			}
+
+			const D3D11_BOX sourceBox{
+				target.baseOffsetX + rect.outputOffsetX,
+				rect.outputOffsetY,
+				0u,
+				target.baseOffsetX + rect.outputOffsetX + rect.outputWidth,
+				rect.outputOffsetY + rect.outputHeight,
+				1u
+			};
+			context->CopySubresourceRegion(
+				neuralFinalLdrColorIn[eye]->resource.get(), 0, 0, 0, 0,
+				target.resource, target.subresource, &sourceBox);
+
+			auto& args = neuralArgs[eye];
+			args.device = globals::d3d::device;
+			args.context = context;
+			args.featureSlot = eye +
+			                   (a_role == NeuralStereoRouteRole::Submit ? 2u : 0u);
+			args.frameId = globals::state->frameCount;
+			args.generation = a_generation;
+			args.insertionPoint =
+				NeuralRendering::InsertionPoint::FinalLdrPreUi;
+			args.colorInput = neuralFinalLdrColorIn[eye]->resource.get();
+			args.depthGuide = foveatedCenterDepth[eye]->resource.get();
+			args.depthGuideSRV = foveatedCenterDepth[eye]->srv.get();
+			args.motionVectors = foveatedCenterMotionVectors[eye]->resource.get();
+			args.colorOutput = directCommit ?
+			                       neuralFinalLdrColorOut[eye]->resource.get() :
+			                       neuralFinalLdrStagedOut[eye]->resource.get();
+			args.colorWidth = rect.outputWidth;
+			args.colorHeight = rect.outputHeight;
+			args.guideWidth = rect.inputWidth;
+			args.guideHeight = rect.inputHeight;
+			args.outputWidth = rect.outputWidth;
+			args.outputHeight = rect.outputHeight;
+			args.motionVectorScaleX = static_cast<float>(a_inputWidthPerEye);
+			args.motionVectorScaleY = static_cast<float>(a_inputHeight);
+			args.inputOffsetX = rect.inputOffsetX;
+			args.inputOffsetY = rect.inputOffsetY;
+			args.outputOffsetX = rect.outputOffsetX;
+			args.outputOffsetY = rect.outputOffsetY;
+			args.pinholeOffsetX = eyePlan.pinholeOffset.x;
+			args.pinholeOffsetY = eyePlan.pinholeOffset.y;
+			args.featureUpscaling = true;
+			args.reset = ShouldResetHistoryThisFrame();
+			args.tuning = {
+				.intensity = settings.neuralRenderingIntensity,
+				.localToneStrength = settings.neuralRenderingLocalTone,
+				.localStructureStrength = settings.neuralRenderingLocalStructure,
+				.skinStructureStrength = settings.neuralRenderingSkinStructure,
+				.style = settings.neuralRenderingStyle,
+				.useAutoMask = settings.neuralRenderingAutoMask,
+				.uiCorrection = settings.neuralRenderingUICorrection,
+			};
+			neuralResults[eye].requested = true;
+			neuralResults[eye].prepared = true;
+		}
+
+		const auto evaluation = EvaluatePreparedNeuralStereo(
+			*this, neuralResults, neuralArgs,
+			settings.neuralRenderingBatchedStereo);
+		a_result.preparedEyeMask = evaluation.preparedEyeMask;
+		a_result.attemptedEyeMask = BuildNeuralCenterEyeMask(
+			neuralResults, &NeuralCenterDispatchResult::attempted);
+		a_result.appliedEyeMask = BuildNeuralCenterEyeMask(
+			neuralResults, &NeuralCenterDispatchResult::applied);
+		if (!evaluation.pairApplied || a_result.appliedEyeMask != 0b11u)
+			return false;
+
+		if (!directCommit) {
+			for (uint32_t eye = 0; eye < a_targets.size(); ++eye) {
+				context->CopyResource(
+					neuralFinalLdrColorOut[eye]->resource.get(),
+					neuralFinalLdrStagedOut[eye]->resource.get());
+			}
+		}
+		for (uint32_t eye = 0; eye < a_targets.size(); ++eye) {
+			const auto& rect = foveatedRectCache.rects[eye];
+			a_result.committedEyeMask |= 1u << eye;
+			if (!DispatchFoveatedBlendPass(
+					neuralFinalLdrColorOut[eye]->srv.get(), a_targets[eye].uav,
+					a_outputWidthPerEye, a_outputHeight, rect,
+					rect.outputOffsetX, rect.outputOffsetY,
+					rect.outputWidth, rect.outputHeight,
+					foveatedRectCache.centerScale,
+					foveatedRectCache.centerHorizontalScale,
+					foveatedRectCache.plan.eyes[eye].centerOffset,
+					foveatedRectCache.centerFeather,
+					a_targets[eye].baseOffsetX)) {
+				restoreCommittedCenters();
+				RequestHistoryReset();
+				return false;
+			}
+		}
+		return a_result.committedEyeMask == 0b11u;
+	} catch (const std::exception& e) {
+		restoreCommittedCenters();
+		static bool loggedLateNeuralException = false;
+		LogWarnOnceFmt(
+			loggedLateNeuralException,
+			"[DLSSNR] Final-LDR stereo transaction threw; preserving normal DLSS: {}",
+			e.what());
+		RequestHistoryReset();
+		return false;
+	} catch (...) {
+		restoreCommittedCenters();
+		static bool loggedLateNeuralException = false;
+		LogWarnOnceFmt(
+			loggedLateNeuralException,
+			"[DLSSNR] Final-LDR stereo transaction threw; preserving normal DLSS");
+		RequestHistoryReset();
+		return false;
+	}
+}
+
+void Upscaling::ApplyMainFinalLdrNeuralStereo() noexcept
+{
+	if (!mainFinalLdrNeuralState.ready || !globals::state)
+		return;
+
+	const MainFinalLdrNeuralState pending = mainFinalLdrNeuralState;
+	mainFinalLdrNeuralState = {};
+	mainFinalLdrPresentationState = {};
+	if (pending.frame != globals::state->frameCount ||
+		pending.settingsKey != BuildNeuralRenderingSettingsKey(settings)) {
+		return;
+	}
+
+	auto route = pending.route;
+	const bool menuSuppressed = IsNeuralRenderingMenuSuppressed();
+	ObserveNeuralRenderingMenuSuppression(menuSuppressed);
+	const bool routeStillEligible =
+		settings.neuralRenderingEnabled &&
+		GetRuntimeUpscaleMethod() == UpscaleMethod::kDLSS &&
+		IsFoveatedVendorDispatchEnabled(UpscaleMethod::kDLSS) &&
+		!settings.foveatedPeripheryMaskVisualization &&
+		!IsPresentationUpscalingActive() && !menuSuppressed &&
+		settings.frameGenerationMode == 0 &&
+		!IsFrameGenerationDx12PathActive() &&
+		GetLatchedNeuralRenderingInsertionPoint() ==
+			NeuralRendering::InsertionPoint::FinalLdrPreUi &&
+		!IsNeuralRenderingInsertionTransitionBlocked();
+	if (!routeStillEligible) {
+		route.disposition = NeuralStereoPairDisposition::NormalDLSSPair;
+		route.fallbackReason = menuSuppressed ?
+		                           NeuralStereoFallbackReason::MenuContext :
+		                           NeuralStereoFallbackReason::RouteIneligible;
+		PublishNeuralStereoRouteSnapshot(route);
+		return;
+	}
+
+	auto* renderer = globals::game::renderer;
+	if (!renderer) {
+		route.disposition = NeuralStereoPairDisposition::NormalDLSSPair;
+		route.fallbackReason = NeuralStereoFallbackReason::StereoPreflightFailed;
+		PublishNeuralStereoRouteSnapshot(route);
+		return;
+	}
+	auto& finalTarget = renderer->GetRuntimeData().renderTargets
+	                        [RE::RENDER_TARGETS::kVR_FRAMEBUFFER];
+	D3D11_TEXTURE2D_DESC targetDesc{};
+	const auto outputLayout = ResolveVRSideBySideStereoLayout(
+		pending.outputWidthPerEye, pending.outputHeight);
+	const bool targetReady =
+		outputLayout.IsValid() && finalTarget.texture && finalTarget.UAV &&
+		TryGetTexture2DDesc(finalTarget.texture, targetDesc) &&
+		targetDesc.Width == outputLayout.width &&
+		targetDesc.Height == outputLayout.height &&
+		targetDesc.ArraySize == 1u && targetDesc.MipLevels == 1u &&
+		targetDesc.SampleDesc.Count == 1u;
+	if (!targetReady) {
+		route.disposition = NeuralStereoPairDisposition::NormalDLSSPair;
+		route.fallbackReason = NeuralStereoFallbackReason::StereoPreflightFailed;
+		PublishNeuralStereoRouteSnapshot(route);
+		return;
+	}
+	const auto finalColorBuffersHDR = GetDLSSColorResourceHDR(finalTarget.texture);
+	route.colorBuffersHDRKnown = finalColorBuffersHDR.has_value();
+	route.colorBuffersHDR = finalColorBuffersHDR.value_or(false);
+
+	std::array<FinalLdrNeuralEyeTarget, 2> targets{
+		FinalLdrNeuralEyeTarget{
+			.resource = finalTarget.texture,
+			.uav = finalTarget.UAV,
+			.subresource = 0,
+			.baseOffsetX = 0,
+		},
+		FinalLdrNeuralEyeTarget{
+			.resource = finalTarget.texture,
+			.uav = finalTarget.UAV,
+			.subresource = 0,
+			.baseOffsetX = pending.outputWidthPerEye,
+		},
+	};
+	FinalLdrNeuralResult result{};
+	const bool applied = ApplyFinalLdrNeuralStereo(
+		NeuralStereoRouteRole::Main, targets,
+		pending.inputWidthPerEye, pending.inputHeight,
+		pending.outputWidthPerEye, pending.outputHeight,
+		pending.generation, result);
+	route.preparedEyeMask = result.preparedEyeMask;
+	route.attemptedEyeMask = result.attemptedEyeMask;
+	route.appliedEyeMask = result.appliedEyeMask;
+	route.committedEyeMask = result.committedEyeMask;
+	route.pairComplete = true;
+	route.disposition = applied ?
+	                        NeuralStereoPairDisposition::NeuralPair :
+	                        NeuralStereoPairDisposition::NormalDLSSPair;
+	route.fallbackReason = applied ?
+	                           NeuralStereoFallbackReason::None :
+	                           (result.preparedEyeMask == 0 ?
+									   NeuralStereoFallbackReason::StereoPreflightFailed :
+									   NeuralStereoFallbackReason::NeuralEvaluationFailed);
+
+	if (applied) {
+		mainFinalLdrPresentationState = {
+			.hmdMaskRepairReady = true,
+			.frame = pending.frame,
+			.targetIdentity = GetCOMIdentityAddress(finalTarget.texture),
+			.inputWidthPerEye = pending.inputWidthPerEye,
+			.inputHeight = pending.inputHeight,
+			.outputWidthPerEye = pending.outputWidthPerEye,
+			.outputHeight = pending.outputHeight,
+		};
+	}
+
+	PublishNeuralStereoRouteSnapshot(route);
+	static bool loggedFinalLdrMainSuccess = false;
+	if (applied && !loggedFinalLdrMainSuccess) {
+		try {
+			logger::info(
+				"[DLSSNR][Stereo] Main final-LDR pre-UI transaction committed for both eyes");
+		} catch (...) {
+			// Logging must not unwind through the render hook.
+		}
+		loggedFinalLdrMainSuccess = true;
+	}
+}
+
+void Upscaling::FinalizeMainFinalLdrNeuralPresentation() noexcept
+{
+	if (!mainFinalLdrPresentationState.hmdMaskRepairReady ||
+		vrMenuDrawInterfaceDepth != 0 || !globals::state) {
+		return;
+	}
+
+	const MainFinalLdrPresentationState pending =
+		mainFinalLdrPresentationState;
+	mainFinalLdrPresentationState = {};
+	if (pending.frame != globals::state->frameCount)
+		return;
+
+	try {
+		auto* renderer = globals::game::renderer;
+		if (!renderer)
+			return;
+
+		auto& finalTarget = renderer->GetRuntimeData().renderTargets
+		                        [RE::RENDER_TARGETS::kVR_FRAMEBUFFER];
+		D3D11_TEXTURE2D_DESC targetDesc{};
+		D3D11_UNORDERED_ACCESS_VIEW_DESC targetUavDesc{};
+		winrt::com_ptr<ID3D11Resource> targetUavResource;
+		if (finalTarget.UAV) {
+			finalTarget.UAV->GetResource(targetUavResource.put());
+			finalTarget.UAV->GetDesc(&targetUavDesc);
+		}
+		const auto outputLayout = ResolveVRSideBySideStereoLayout(
+			pending.outputWidthPerEye, pending.outputHeight);
+		if (!finalTarget.texture || !finalTarget.UAV || !targetUavResource ||
+			!outputLayout.IsValid() ||
+			GetCOMIdentityAddress(finalTarget.texture) != pending.targetIdentity ||
+			GetCOMIdentityAddress(targetUavResource.get()) != pending.targetIdentity ||
+			targetUavDesc.ViewDimension != D3D11_UAV_DIMENSION_TEXTURE2D ||
+			targetUavDesc.Texture2D.MipSlice != 0 ||
+			!TryGetTexture2DDesc(finalTarget.texture, targetDesc) ||
+			targetDesc.Width != outputLayout.width ||
+			targetDesc.Height != outputLayout.height ||
+			targetDesc.ArraySize != 1 || targetDesc.MipLevels != 1 ||
+			targetDesc.SampleDesc.Count != 1) {
+			return;
+		}
+
+		auto& depth = renderer->GetDepthStencilData().depthStencils
+		                  [RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+		const auto inputLayout = ResolveVRSideBySideStereoLayout(
+			pending.inputWidthPerEye, pending.inputHeight);
+		D3D11_TEXTURE2D_DESC depthDesc{};
+		winrt::com_ptr<ID3D11Resource> depthSrvResource;
+		if (depth.depthSRV)
+			depth.depthSRV->GetResource(depthSrvResource.put());
+		if (!depth.texture || !depth.depthSRV || !depthSrvResource ||
+			!inputLayout.IsValid() ||
+			GetCOMIdentityAddress(depthSrvResource.get()) !=
+				GetCOMIdentityAddress(depth.texture) ||
+			!TryGetTexture2DDesc(depth.texture, depthDesc) ||
+			depthDesc.Width < inputLayout.width ||
+			depthDesc.Height < inputLayout.height ||
+			depthDesc.SampleDesc.Count != 1) {
+			return;
+		}
+
+		auto* context = globals::d3d::context;
+		if (!context)
+			return;
+		std::array<ID3D11RenderTargetView*, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT>
+			previousRTVs{};
+		ID3D11DepthStencilView* previousDSV = nullptr;
+		ID3D11ComputeShader* previousCS = nullptr;
+		std::array<ID3D11ClassInstance*, D3D11_SHADER_MAX_INTERFACES>
+			previousClassInstances{};
+		UINT previousClassInstanceCount = static_cast<UINT>(
+			previousClassInstances.size());
+		ID3D11ShaderResourceView* previousSRV = nullptr;
+		ID3D11UnorderedAccessView* previousUAV = nullptr;
+		ID3D11Buffer* previousCB = nullptr;
+		context->OMGetRenderTargets(
+			static_cast<UINT>(previousRTVs.size()), previousRTVs.data(),
+			&previousDSV);
+		context->CSGetShader(
+			&previousCS, previousClassInstances.data(),
+			&previousClassInstanceCount);
+		context->CSGetShaderResources(0, 1, &previousSRV);
+		context->CSGetUnorderedAccessViews(0, 1, &previousUAV);
+		context->CSGetConstantBuffers(0, 1, &previousCB);
+		auto restoreComputeState = ScopeExit([&]() {
+			ID3D11ShaderResourceView* nullSRV = nullptr;
+			ID3D11UnorderedAccessView* nullUAV = nullptr;
+			ID3D11Buffer* nullCB = nullptr;
+			context->CSSetShaderResources(0, 1, &nullSRV);
+			context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
+			context->CSSetConstantBuffers(0, 1, &nullCB);
+			context->CSSetShader(
+				previousCS, previousClassInstances.data(),
+				previousClassInstanceCount);
+			context->CSSetShaderResources(0, 1, &previousSRV);
+			context->CSSetUnorderedAccessViews(0, 1, &previousUAV, nullptr);
+			context->CSSetConstantBuffers(0, 1, &previousCB);
+			context->OMSetRenderTargets(
+				static_cast<UINT>(previousRTVs.size()), previousRTVs.data(),
+				previousDSV);
+			for (auto* view : previousRTVs) {
+				if (view)
+					view->Release();
+			}
+			if (previousDSV)
+				previousDSV->Release();
+			if (previousCS)
+				previousCS->Release();
+			for (UINT index = 0; index < previousClassInstanceCount; ++index) {
+				if (previousClassInstances[index])
+					previousClassInstances[index]->Release();
+			}
+			if (previousSRV)
+				previousSRV->Release();
+			if (previousUAV)
+				previousUAV->Release();
+			if (previousCB)
+				previousCB->Release();
+		});
+		context->OMSetRenderTargets(0, nullptr, nullptr);
+
+		bool hmdMaskPairCleared = true;
+		for (uint32_t eye = 0; eye < 2; ++eye) {
+			const bool eyeCleared = ClearHMDMaskForEye(
+				HMDMaskClearPhase::PerEyeOutput, eye, finalTarget.UAV,
+				depth.depthSRV, pending.inputWidthPerEye,
+				pending.inputHeight, pending.outputWidthPerEye,
+				pending.outputHeight, inputLayout.eyes[eye].minX,
+				outputLayout.eyes[eye].minX, 0u, 0u, true);
+			hmdMaskPairCleared = hmdMaskPairCleared && eyeCleared;
+		}
+		if (!hmdMaskPairCleared) {
+			static bool loggedFinalLdrMaskFailure = false;
+			LogWarnOnceFmt(
+				loggedFinalLdrMaskFailure,
+				"[DLSSNR] Final-LDR post-UI HMD mask repair did not complete for both eyes");
+			RequestHistoryReset();
+		}
+	} catch (const std::exception& e) {
+		static bool loggedFinalLdrPresentationFailure = false;
+		LogWarnOnceFmt(
+			loggedFinalLdrPresentationFailure,
+			"[DLSSNR] Final-LDR post-UI HMD mask repair threw; skipping the repair: {}",
+			e.what());
+	} catch (...) {
+		static bool loggedFinalLdrPresentationFailure = false;
+		LogWarnOnceFmt(
+			loggedFinalLdrPresentationFailure,
+			"[DLSSNR] Final-LDR post-UI HMD mask repair threw; skipping the repair");
+	}
+}
+
+bool Upscaling::DispatchFoveatedVendorCenterStereo(UpscaleMethod a_upscaleMethod, const std::array<FoveatedEyeDispatchParams, 2>& params, bool a_neuralRouteAllowed, bool& neuralPairApplied, std::array<NeuralCenterDispatchResult, 2>* neuralResults) noexcept
 {
 	neuralPairApplied = false;
 	std::array<NeuralCenterDispatchResult, 2> results{};
@@ -25654,8 +26383,12 @@ bool Upscaling::DispatchFoveatedVendorCenterStereo(UpscaleMethod a_upscaleMethod
 		};
 
 		const bool neuralRouteRequested =
+			a_neuralRouteAllowed &&
 			a_upscaleMethod == UpscaleMethod::kDLSS &&
 			settings.neuralRenderingEnabled &&
+			GetLatchedNeuralRenderingInsertionPoint() ==
+				NeuralRendering::InsertionPoint::UpscaledCenter &&
+			!IsNeuralRenderingInsertionTransitionBlocked() &&
 			!IsNeuralRenderingMenuSuppressed() &&
 			settings.frameGenerationMode == 0 &&
 			!IsFrameGenerationDx12PathActive();
@@ -26038,7 +26771,7 @@ bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod
 		const float centerBlendFeather = std::isfinite(params.centerBlendFeather) ?
 		                                     ClampPeripheryTAACenterBlendFeather(params.centerBlendFeather) :
 		                                     ClampPeripheryTAACenterBlendFeather(FoveatedCommon::kCenterFeather);
-		DispatchFoveatedBlendPass(
+		return DispatchFoveatedBlendPass(
 			centerOutput->srv.get(),
 			outputColorUAV,
 			params.outputWidthPerEye,
@@ -26052,7 +26785,6 @@ bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod
 			params.centerHorizontalScale,
 			centerOffset,
 			centerBlendFeather);
-		return true;
 	}
 
 	return DispatchSingleFoveatedVendorEye(
@@ -26093,6 +26825,10 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 	auto state = globals::state;
 	if (!state)
 		return false;
+	const auto neuralInsertionPoint =
+		GetLatchedNeuralRenderingInsertionPoint();
+	if (mainFinalLdrNeuralState.frame != state->frameCount)
+		mainFinalLdrNeuralState = {};
 	const bool neuralMenuSuppressed = IsNeuralRenderingMenuSuppressed();
 	ObserveNeuralRenderingMenuSuppression(neuralMenuSuppressed);
 
@@ -26180,12 +26916,20 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 	const bool neuralRequested = settings.neuralRenderingEnabled;
 	const bool frameGenerationActive =
 		settings.frameGenerationMode != 0 || IsFrameGenerationDx12PathActive();
-	const bool neuralEligible =
+	const bool neuralBaseEligible =
 		neuralRequested &&
 		a_upscaleMethod == UpscaleMethod::kDLSS &&
 		!neuralMenuSuppressed &&
 		!visualizeMask &&
-		!frameGenerationActive;
+		!frameGenerationActive &&
+		!IsNeuralRenderingInsertionTransitionBlocked();
+	const bool neuralRouteClaimed =
+		neuralBaseEligible &&
+		TryClaimNeuralRenderingRoute(NeuralStereoRouteRole::Main);
+	const bool neuralEligible = neuralBaseEligible && neuralRouteClaimed;
+	const bool currentCenterInsertion =
+		neuralInsertionPoint ==
+		NeuralRendering::InsertionPoint::UpscaledCenter;
 	const auto neuralColorBuffersHDR = GetDLSSColorResourceHDR(colorTexture);
 	NeuralStereoRouteSnapshot neuralRoute{
 		.valid = true,
@@ -26193,6 +26937,7 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 		.frame = state->frameCount,
 		.generation = std::max<uint64_t>(vrDLSSRuntimeResourceGeneration, 1u),
 		.arrangement = static_cast<uint32_t>(NeuralRendering::kPipelineArrangement),
+		.insertionPoint = static_cast<uint32_t>(neuralInsertionPoint),
 		.requested = neuralRequested,
 		.eligible = neuralEligible,
 		.sourceBatchEligible = neuralEligible,
@@ -26218,6 +26963,9 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 	} else if (frameGenerationActive) {
 		neuralRoute.disposition = NeuralStereoPairDisposition::NormalDLSSPair;
 		neuralRoute.fallbackReason = NeuralStereoFallbackReason::FrameGeneration;
+	} else if (!neuralRouteClaimed) {
+		neuralRoute.disposition = NeuralStereoPairDisposition::NormalDLSSPair;
+		neuralRoute.fallbackReason = NeuralStereoFallbackReason::RouteIneligible;
 	}
 
 	bool neuralPairApplied = false;
@@ -26239,7 +26987,7 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 		if (!a_dispatchSucceeded) {
 			neuralRoute.disposition = NeuralStereoPairDisposition::FallbackRequired;
 			neuralRoute.fallbackReason = NeuralStereoFallbackReason::StereoDispatchFailed;
-		} else if (neuralEligible) {
+		} else if (neuralEligible && currentCenterInsertion) {
 			neuralRoute.disposition = neuralPairApplied ?
 			                              NeuralStereoPairDisposition::NeuralPair :
 			                              NeuralStereoPairDisposition::NormalDLSSPair;
@@ -26252,13 +27000,15 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 	if (!visualizeMask && !DispatchFoveatedVendorCenterStereo(
 							  a_upscaleMethod,
 							  eyeParams,
+							  neuralEligible,
 							  neuralPairApplied,
 							  &neuralResults)) {
 		publishNeuralRoute(false, false);
 		UnbindUpscalingResources();
 		return false;
 	}
-	if (!visualizeMask && a_upscaleMethod == UpscaleMethod::kDLSS && settings.neuralRenderingEnabled) {
+	if (!visualizeMask && a_upscaleMethod == UpscaleMethod::kDLSS &&
+		settings.neuralRenderingEnabled && currentCenterInsertion) {
 		static bool loggedMainNeuralStereoResult = false;
 		if (!loggedMainNeuralStereoResult) {
 			loggedMainNeuralStereoResult = true;
@@ -26266,8 +27016,9 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 				(neuralResults[0].attempted ? 1u : 0u) |
 				(neuralResults[1].attempted ? 2u : 0u);
 			logger::info(
-				"[DLSSNR][Stereo] Main-stage two-eye transaction ready: arrangement={}, neuralApplied={}, attemptedMask=0x{:X}",
+				"[DLSSNR][Stereo] Main-stage two-eye transaction ready: arrangement={}, insertionPoint={}, neuralApplied={}, attemptedMask=0x{:X}",
 				NeuralRendering::GetPipelineArrangementName(),
+				NeuralRendering::GetInsertionPointName(neuralInsertionPoint),
 				neuralPairApplied,
 				attemptedMask);
 		}
@@ -26314,8 +27065,36 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 		peripheryTAAHistoryValid = true;
 	}
 
-	publishNeuralRoute(true, true);
 	FinalizePerEyeOutputs(colorOutput ? colorOutput : colorTexture);
+	if (neuralEligible &&
+		neuralInsertionPoint ==
+			NeuralRendering::InsertionPoint::FinalLdrPreUi) {
+		for (uint32_t eye = 0; eye < neuralResults.size(); ++eye) {
+			if (neuralResults[eye].dlssEvaluated)
+				neuralRoute.dlssEyeMask |= 1u << eye;
+		}
+		neuralRoute.pairComplete = neuralRoute.dlssEyeMask == 0b11u;
+		mainFinalLdrNeuralState = {
+			.ready = neuralRoute.pairComplete,
+			.frame = state->frameCount,
+			.generation = neuralRoute.generation,
+			.settingsKey = BuildNeuralRenderingSettingsKey(settings),
+			.inputWidthPerEye = inputWidthPerEye,
+			.inputHeight = inputHeight,
+			.outputWidthPerEye = outputWidthPerEye,
+			.outputHeight = outputHeight,
+			.route = neuralRoute,
+		};
+		if (!mainFinalLdrNeuralState.ready) {
+			neuralRoute.disposition =
+				NeuralStereoPairDisposition::NormalDLSSPair;
+			neuralRoute.fallbackReason =
+				NeuralStereoFallbackReason::StereoPreflightFailed;
+			publishNeuralRoute(false, true);
+		}
+	} else {
+		publishNeuralRoute(true, true);
+	}
 	return true;
 }
 
@@ -28394,11 +29173,11 @@ void Upscaling::RecordVRPostLoadHMDMaskRepair(
 		a_eyeIndex);
 }
 
-void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, uint32_t a_eyeIndex, ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
-	uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight, uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY, uint32_t colorOffsetY)
+bool Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, uint32_t a_eyeIndex, ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
+	uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight, uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY, uint32_t colorOffsetY, bool a_verifyBindings)
 {
 	if (a_eyeIndex >= 2)
-		return;
+		return false;
 
 	const auto postLoadHoldState =
 		static_cast<VRPostLoadCompositorHoldState>(
@@ -28460,7 +29239,7 @@ void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, uint32_
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		recordObservation(false);
 #endif
-		return;
+		return false;
 	}
 
 	const bool executed = DispatchHMDMaskClear(
@@ -28474,7 +29253,7 @@ void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, uint32_
 		colorOffsetX,
 		depthOffsetY,
 		colorOffsetY,
-		validatedFixedVendorRepair);
+		a_verifyBindings || validatedFixedVendorRepair);
 
 	RecordVRPostLoadHMDMaskRepair(
 		a_phase,
@@ -28494,6 +29273,7 @@ void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, uint32_
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	recordObservation(executed);
 #endif
+	return executed;
 }
 
 int32_t GetJitterPhaseCount(int32_t renderWidth, int32_t displayWidth)
@@ -31328,6 +32108,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		return false;
 	const uint32_t eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
 	const uint32_t currentFrame = state->frameCount;
+	const auto neuralInsertionPoint =
+		GetLatchedNeuralRenderingInsertionPoint();
 	const bool neuralMenuSuppressed = IsNeuralRenderingMenuSuppressed();
 	ObserveNeuralRenderingMenuSuppression(neuralMenuSuppressed);
 	PublishNeuralSubmitCycleSnapshot(a_compositorCycleToken, currentFrame);
@@ -31482,6 +32264,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			route.role = NeuralStereoRouteRole::Submit;
 			route.generation = submitStageNeuralStereoState.generation;
 			route.arrangement = static_cast<uint32_t>(NeuralRendering::kPipelineArrangement);
+			route.insertionPoint = static_cast<uint32_t>(neuralInsertionPoint);
 			route.requested = submitStageNeuralStereoState.neuralRequested;
 			route.eligible = submitStageNeuralStereoState.neuralRequested;
 			route.sourceBatchEligible = submitStageNeuralStereoState.sourceBatchEligible;
@@ -31553,7 +32336,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		upscaleMethod == UpscaleMethod::kDLSS &&
 		!neuralMenuSuppressed &&
 		!settings.foveatedPeripheryMaskVisualization &&
-		!neuralSubmitFrameGenerationActive;
+		!neuralSubmitFrameGenerationActive &&
+		!IsNeuralRenderingInsertionTransitionBlocked();
 	NeuralStereoFallbackReason neuralSubmitAdmissionFallbackReason =
 		NeuralStereoFallbackReason::SubmitPresentationGate;
 	bool neuralSubmitRoutePublishedThisCall = false;
@@ -31595,6 +32379,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 				.frame = currentFrame,
 				.generation = activeContractGeneration,
 				.arrangement = static_cast<uint32_t>(NeuralRendering::kPipelineArrangement),
+				.insertionPoint = static_cast<uint32_t>(neuralInsertionPoint),
 				.requested = neuralSubmitConfigured,
 				.eligible = neuralSubmitBaseEligible,
 				.sourceBatchEligible = neuralSubmitSourceBatchEligible,
@@ -32413,8 +33198,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		return true;
 	};
 
-	auto finalizeSubmitStageEyeOutput = [&](uint32_t targetEyeIndex, Texture2D& targetVendorColorOutput, bool targetSubmitDLSSSharpening,
-											uint32_t clearDepthWidth, uint32_t clearDepthHeight, uint32_t clearDepthOffsetX, uint32_t clearDepthOffsetY) -> bool {
+	auto prepareSubmitStageSceneEyeOutput = [&](uint32_t targetEyeIndex, Texture2D& targetVendorColorOutput, bool targetSubmitDLSSSharpening) -> bool {
 		if (targetSubmitDLSSSharpening) {
 			if (!ApplySubmitStageDLSSSharpening(targetEyeIndex, targetVendorColorOutput)) {
 				if (IsSubmitStageDeviceLost())
@@ -32426,7 +33210,11 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			if (IsSubmitStageDeviceLost())
 				return false;
 		}
+		return true;
+	};
 
+	auto finalizeSubmitStagePresentationEyeOutput = [&](uint32_t targetEyeIndex,
+														uint32_t clearDepthWidth, uint32_t clearDepthHeight, uint32_t clearDepthOffsetX, uint32_t clearDepthOffsetY) -> bool {
 		if (submitStageMenuFinalCompositeRequested) {
 			if (!ApplyKnownGameMenuFinalComposite(
 					targetEyeIndex,
@@ -32462,6 +33250,16 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		}
 
 		return true;
+	};
+
+	auto finalizeSubmitStageEyeOutput = [&](uint32_t targetEyeIndex, Texture2D& targetVendorColorOutput, bool targetSubmitDLSSSharpening,
+											uint32_t clearDepthWidth, uint32_t clearDepthHeight, uint32_t clearDepthOffsetX, uint32_t clearDepthOffsetY) -> bool {
+		return prepareSubmitStageSceneEyeOutput(
+				   targetEyeIndex, targetVendorColorOutput,
+				   targetSubmitDLSSSharpening) &&
+		       finalizeSubmitStagePresentationEyeOutput(
+				   targetEyeIndex, clearDepthWidth, clearDepthHeight,
+				   clearDepthOffsetX, clearDepthOffsetY);
 	};
 
 	auto replayStoredFullEyeVendorOutput = [&](uint32_t targetEyeIndex, bool preferDLSSSharpening) -> bool {
@@ -32582,13 +33380,14 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	bool vendorSucceeded = false;
 	bool submitNeuralStereoBatchAttempted = false;
 	bool submitNeuralStereoBatchFinalized = false;
-	neuralSubmitRequested =
+	const bool neuralSubmitRouteCandidate =
 		shouldUseFoveatedVendorThisEye &&
-		upscaleMethod == UpscaleMethod::kDLSS &&
-		neuralSubmitConfigured &&
-		!neuralMenuSuppressed &&
-		!neuralSubmitFrameGenerationActive &&
-		!settings.foveatedPeripheryMaskVisualization;
+		neuralSubmitBaseEligible;
+	const bool neuralSubmitRouteClaimed =
+		neuralSubmitRouteCandidate &&
+		TryClaimNeuralRenderingRoute(NeuralStereoRouteRole::Submit);
+	neuralSubmitRequested =
+		neuralSubmitRouteCandidate && neuralSubmitRouteClaimed;
 	const bool sourceContainsBothEyes =
 		sourceUsesCombinedStereoLayout || sourceDesc.ArraySize > 1;
 	neuralSubmitSourceBatchEligible =
@@ -32636,6 +33435,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		neuralSubmitFallbackReason = NeuralStereoFallbackReason::FrameGeneration;
 	else if (!shouldUseFoveatedVendorThisEye)
 		neuralSubmitFallbackReason = NeuralStereoFallbackReason::RouteIneligible;
+	else if (!neuralSubmitRouteClaimed)
+		neuralSubmitFallbackReason = NeuralStereoFallbackReason::RouteIneligible;
 	else if (a_submitPairBoundaryToken == 0)
 		neuralSubmitFallbackReason = NeuralStereoFallbackReason::SourceSignatureUnproven;
 	else if (!neuralSubmitSourceSignatureProven)
@@ -32656,6 +33457,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			.frame = currentFrame,
 			.generation = activeContractGeneration,
 			.arrangement = static_cast<uint32_t>(NeuralRendering::kPipelineArrangement),
+			.insertionPoint = static_cast<uint32_t>(neuralInsertionPoint),
 			.requested = neuralSubmitConfigured,
 			.eligible = submitStageNeuralStereoState.neuralRequested,
 			.sourceBatchEligible = submitStageNeuralStereoState.sourceBatchEligible,
@@ -32726,7 +33528,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 						NeuralStereoPairDisposition::NormalDLSSPair,
 					submitStageNeuralStereoState.neuralApplied ?
 						NeuralStereoFallbackReason::None :
-						NeuralStereoFallbackReason::NeuralEvaluationFailed,
+						submitStageNeuralStereoState.fallbackReason,
 					true);
 				return;
 			}
@@ -32807,6 +33609,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			std::array<NeuralRendering::RendererApplyArgs, 2> neuralBatchArgs{};
 			const bool batchedStereo = settings.neuralRenderingBatchedStereo;
 			const bool directCommit = settings.neuralRenderingDirectCommit;
+			const bool finalLdrInsertion =
+				neuralInsertionPoint ==
+				NeuralRendering::InsertionPoint::FinalLdrPreUi;
 			if (stereoBatchSucceeded) {
 				submitNeuralStereoBatchAttempted = true;
 				for (uint32_t stereoEye = 0; stereoEye < neuralResults.size(); ++stereoEye) {
@@ -32823,7 +33628,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 							stereoVendorOutputs[stereoEye]->uav.get(),
 							region.subresource,
 							&region.box,
-							NeuralCenterPhase::Stage,
+							finalLdrInsertion ?
+								NeuralCenterPhase::Disabled :
+								NeuralCenterPhase::Stage,
 							false,
 							&neuralResults[stereoEye],
 							directCommit,
@@ -32831,19 +33638,21 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 						stereoBatchSucceeded = false;
 						break;
 					}
+					if (finalLdrInsertion)
+						neuralResults[stereoEye].dlssEvaluated = true;
 				}
 			}
 
-			const auto neuralEvaluation = EvaluatePreparedNeuralStereo(
-				*this,
-				neuralResults,
-				neuralBatchArgs,
-				batchedStereo);
-			const uint32_t preparedEyeMask = neuralEvaluation.preparedEyeMask;
-			bool neuralPairApplied =
-				stereoBatchSucceeded && neuralEvaluation.pairApplied;
+			uint32_t preparedEyeMask = 0;
+			bool neuralPairApplied = false;
+			NeuralStereoFallbackReason neuralPairFallbackReason =
+				NeuralStereoFallbackReason::NeuralEvaluationFailed;
 			std::array<NeuralCenterDispatchResult, 2> resolveResults{};
-			if (stereoBatchSucceeded) {
+			if (stereoBatchSucceeded && !finalLdrInsertion) {
+				const auto neuralEvaluation = EvaluatePreparedNeuralStereo(
+					*this, neuralResults, neuralBatchArgs, batchedStereo);
+				preparedEyeMask = neuralEvaluation.preparedEyeMask;
+				neuralPairApplied = neuralEvaluation.pairApplied;
 				for (uint32_t stereoEye = 0; stereoEye < neuralResults.size(); ++stereoEye) {
 					const auto& region = stereoSourceRegions[stereoEye];
 					if (!DispatchSubmitStageFoveatedVendorEye(
@@ -32880,26 +33689,71 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 						neuralResults[stereoEye].dlssEvaluated || resolveResults[stereoEye].dlssEvaluated;
 				}
 			}
-			const uint32_t successfulEyeMask = BuildNeuralCenterEyeMask(
-				neuralResults, &NeuralCenterDispatchResult::applied);
-			neuralPairApplied = neuralPairApplied && successfulEyeMask == 0b11u;
+			if (!finalLdrInsertion) {
+				const uint32_t centerSuccessfulEyeMask = BuildNeuralCenterEyeMask(
+					neuralResults, &NeuralCenterDispatchResult::applied);
+				neuralPairApplied =
+					neuralPairApplied && centerSuccessfulEyeMask == 0b11u;
+			}
+			if (stereoBatchSucceeded) {
+				for (uint32_t stereoEye = 0; stereoEye < neuralResults.size(); ++stereoEye) {
+					if (!prepareSubmitStageSceneEyeOutput(
+							stereoEye,
+							*stereoVendorOutputs[stereoEye],
+							pairSharpening)) {
+						stereoBatchSucceeded = false;
+						break;
+					}
+				}
+			}
+			if (stereoBatchSucceeded && finalLdrInsertion) {
+				std::array<FinalLdrNeuralEyeTarget, 2> lateTargets{};
+				for (uint32_t stereoEye = 0; stereoEye < lateTargets.size(); ++stereoEye) {
+					lateTargets[stereoEye] = {
+						.resource = vrIntermediateColorOut[stereoEye]->resource.get(),
+						.uav = vrIntermediateColorOut[stereoEye]->uav.get(),
+						.subresource = 0,
+						.baseOffsetX = 0,
+					};
+					neuralResults[stereoEye].requested = true;
+				}
+				FinalLdrNeuralResult lateResult{};
+				neuralPairApplied = ApplyFinalLdrNeuralStereo(
+					NeuralStereoRouteRole::Submit, lateTargets,
+					eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut,
+					std::max<uint64_t>(activeContractGeneration, 1u),
+					lateResult);
+				preparedEyeMask = lateResult.preparedEyeMask;
+				if (!neuralPairApplied && lateResult.preparedEyeMask == 0) {
+					neuralPairFallbackReason =
+						NeuralStereoFallbackReason::StereoPreflightFailed;
+				}
+				for (uint32_t stereoEye = 0; stereoEye < neuralResults.size(); ++stereoEye) {
+					const uint32_t eyeBit = 1u << stereoEye;
+					neuralResults[stereoEye].prepared =
+						(lateResult.preparedEyeMask & eyeBit) != 0;
+					neuralResults[stereoEye].attempted =
+						(lateResult.attemptedEyeMask & eyeBit) != 0;
+					neuralResults[stereoEye].applied =
+						(lateResult.appliedEyeMask & eyeBit) != 0 &&
+						(lateResult.committedEyeMask & eyeBit) != 0;
+				}
+			}
 			if (stereoBatchSucceeded) {
 				for (uint32_t stereoEye = 0; stereoEye < neuralResults.size(); ++stereoEye) {
 					const auto& region = stereoSourceRegions[stereoEye];
-					if (!finalizeSubmitStageEyeOutput(
-							stereoEye,
-							*stereoVendorOutputs[stereoEye],
-							pairSharpening,
-							region.depthWidth,
-							region.depthHeight,
-							region.depthOffsetX,
-							region.depthOffsetY)) {
+					if (!finalizeSubmitStagePresentationEyeOutput(
+							stereoEye, region.depthWidth, region.depthHeight,
+							region.depthOffsetX, region.depthOffsetY)) {
 						stereoBatchSucceeded = false;
 						break;
 					}
 				}
 			}
 
+			const uint32_t successfulEyeMask = BuildNeuralCenterEyeMask(
+				neuralResults, &NeuralCenterDispatchResult::applied);
+			neuralPairApplied = neuralPairApplied && successfulEyeMask == 0b11u;
 			const uint32_t attemptedEyeMask = BuildNeuralCenterEyeMask(
 				neuralResults, &NeuralCenterDispatchResult::attempted);
 			const uint32_t dlssEyeMask = BuildNeuralCenterEyeMask(
@@ -33011,6 +33865,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 				}
 				submitStageNeuralStereoState.mirrorConsumed = false;
 				submitStageNeuralStereoState.committedEyeMask = neuralPairApplied ? 0b11u : 0u;
+				submitStageNeuralStereoState.fallbackReason = neuralPairApplied ?
+				                                                  NeuralStereoFallbackReason::None :
+				                                                  neuralPairFallbackReason;
 				// This is the irreversible cycle commit. Later telemetry is best-effort
 				// and must never downgrade the retained pair to Original.
 				submitStageNeuralStereoState.outputsReady = true;
@@ -33024,14 +33881,15 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 						NeuralStereoPairDisposition::NormalDLSSPair,
 					neuralPairApplied ?
 						NeuralStereoFallbackReason::None :
-						NeuralStereoFallbackReason::NeuralEvaluationFailed,
+						neuralPairFallbackReason,
 					true);
 				static bool loggedNeuralStereoSuccess = false;
 				if (!loggedNeuralStereoSuccess) {
 					loggedNeuralStereoSuccess = true;
 					logger::info(
-						"[DLSSNR][Stereo] Submit-stage two-eye transaction ready: arrangement={}, neuralApplied={}, preparedMask=0x{:X}, attemptedMask=0x{:X}, successMask=0x{:X}",
+						"[DLSSNR][Stereo] Submit-stage two-eye transaction ready: arrangement={}, insertionPoint={}, neuralApplied={}, preparedMask=0x{:X}, attemptedMask=0x{:X}, successMask=0x{:X}",
 						NeuralRendering::GetPipelineArrangementName(),
+						NeuralRendering::GetInsertionPointName(neuralInsertionPoint),
 						neuralPairApplied,
 						preparedEyeMask,
 						attemptedEyeMask,
@@ -37882,6 +38740,7 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 {
 	auto& upscaling = globals::features::upscaling;
 	upscaling.PostDisplay();
+	upscaling.ApplyMainFinalLdrNeuralStereo();
 	upscaling.BeginVRMenuDrawInterface();
 	const bool presentationTrace = IsVRMenuPresentationTraceActive();
 	const uint32_t presentationTraceSession = presentationTrace ?
@@ -37937,6 +38796,7 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 		});
 		func(a1);
 	}
+	upscaling.FinalizeMainFinalLdrNeuralPresentation();
 
 	if (globals::game::isVR && upscaling.IsVRRenderScaleModeLatched() && IsExplicitVRMenuPresentationContextActive()) {
 		const bool observedProjectedMenu = IsCurrentRenderTargetVRObservedMenuPresentationSeedTexture();

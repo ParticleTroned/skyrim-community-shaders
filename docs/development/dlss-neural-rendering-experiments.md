@@ -20,9 +20,12 @@ release.
 | `paint`     | Feature 18 at low resolution, then normal DLSS | send the original low-resolution center to DLSS |
 | `ball`      | Feature 18 replaces normal DLSS                | run normal DLSS for that center                 |
 
-All three routes remain ahead of the existing feathered center/periphery
-composite, sharpening, menu/UI composite, HMD mask, and OpenVR submission.
-The arrangement is compiled into each branch; it is not a saved setting.
+The arrangement relative to normal DLSS is compiled into each branch; it is not
+a saved setting. Gogh's DLSS-then-Neural route additionally exposes a saved
+insertion-point setting. `Upscaled Centre` retains the original placement ahead
+of feathering and sharpening. Experimental `Final LDR before UI` keeps the same
+center-region restriction but evaluates Feature 18 after scene post-processing
+and sharpening, immediately before UI composition.
 
 ## Runtime trust boundary
 
@@ -149,19 +152,26 @@ Its later fixes establish that before-UI ordering and stereo batching are
 separate concerns: the latter is a performance change, not the prerequisite
 that made the placement correct.
 
-CSX does not copy that final-composite hook because its foveated pipeline has a
-different ownership contract. NR remains inside the center transaction, ahead
-of feathering, sharpening, UI, HMD masking, and submission. Batched evaluation
-records both Feature 18 slots into one D3D12 command list and fence transaction;
-per-eye evaluation uses one transaction per slot. Staged output preserves the
-original intermediate `NeuralOut` pair before resolving it into the center
-outputs. Direct output targets the private center outputs and avoids that extra
-center-sized copy. A failed per-eye direct pair re-evaluates normal DLSS for the
-complete pair before composition, so a partial NR result cannot remain visible.
+The default `Upscaled Centre` insertion remains inside CSX's center transaction,
+ahead of feathering, sharpening, UI, HMD masking, and submission. Gogh's
+experimental `Final LDR before UI` insertion moves Feature 18 to the closest
+safe CSX equivalent of the reference boundary while preserving the foveated
+center area. It never falls back to the other insertion point: an unavailable
+or failed late transaction retains the normal DLSS result for both eyes so an
+automated A/B test keeps its requested identity.
+
+Batched evaluation records both Feature 18 slots into one D3D12 command list
+and fence transaction; per-eye evaluation uses one transaction per slot. Staged
+output preserves the original intermediate `NeuralOut` pair before resolving it
+into the selected insertion point's outputs. Direct output targets those private
+outputs and avoids the extra center-sized copy. A failed direct pair restores or
+retains the complete normal-DLSS pair, so a partial NR result cannot remain
+visible.
 
 The Neural Rendering controls live in the `NVIDIA DLSS Neural Rendering`
-dropdown in Upscaling, between Frame Generation and NVIDIA Reflex. Stereo
-submission and output commit are independent controls:
+dropdown in Upscaling, between Frame Generation and NVIDIA Reflex. `Insertion
+Point` selects `Upscaled Centre` (the default) or experimental `Final LDR
+(Pre-UI)`. Stereo submission and output commit remain independent controls:
 
 | Stereo submission | Output commit | Comparison role                  |
 | ----------------- | ------------- | -------------------------------- |
@@ -170,8 +180,10 @@ submission and output commit are independent controls:
 | Per-eye           | Direct        | Isolates direct-commit benefit   |
 | Batched           | Direct        | Fully optimized path             |
 
-Changing either axis invalidates the NR settings key and requests a temporal
-history reset without changing Feature 18 tuning values.
+Changing the insertion point or either implementation axis invalidates the NR
+settings key and requests a synchronized temporal-history reset without
+changing Feature 18 tuning values. An insertion-point transition retires the
+backend and suppresses NR for the transition frame so both eyes switch together.
 
 ## First runtime validation
 
@@ -187,17 +199,22 @@ attempt reached a validation, trust, initialization, or latched-failure gate,
 which can be diagnosed from the renderer and runtime failure stages.
 Performance telemetry labels D3D11 preparation and output commit as CPU enqueue
 time, while Feature 18 duration uses D3D12 GPU timestamps and separately reports
-readback failures, command submissions, and bounded backpressure waits.
+readback failures, command submissions, and bounded backpressure waits. API v5
+also stamps the actual insertion point at the evaluation boundary and keeps
+cumulative GPU samples and time for each insertion point, independent of the
+existing Main/Submit route attribution.
 
 `nr_status.settings.implementation` reports one of
 `per_eye_staged_commit`, `stereo_batched_staged_commit`,
 `per_eye_direct_commit`, or `stereo_batched_direct_commit`. The same status
 includes the independent booleans, display modes, and comparison purpose.
 
-`nr_configure` can select a lane atomically with `implementation`, or control
-the axes independently with `batchedStereo` and `directCommit`. It also exposes
-the menu's `enabled`, `preset`, `intensity`, `localToneStrength`,
-`localStructureStrength`, `skinStructureStrength`, and `style` controls.
+`nr_configure` can select `insertionPoint` as `upscaled_center` or
+`final_ldr_pre_ui`, select a lane atomically with `implementation`, or control
+the implementation axes independently with `batchedStereo` and `directCommit`.
+It also exposes the menu's `enabled`, `preset`, `intensity`,
+`localToneStrength`, `localStructureStrength`, `skinStructureStrength`, and
+`style` controls.
 Preset selection applies the same values as the in-game UI; subsequent tuning
 overrides select Custom. `nr_cycle_modes` advances through the four lanes, or
 selects an exact lane with `matrixIndex` 0 through 3. `nr_reset` operates the
@@ -213,8 +230,9 @@ Validate in this order:
 2. Enable Neural Rendering and prove both eye/role slots reach runtime probe.
 3. Prove D3D11-to-D3D12 shared copies and Feature 18 evaluation without a
    fallback or device-removal signal.
-4. Confirm both centers complete in the same compositor cycle and remain ahead
-   of feathering, sharpening, UI, HMD masking, and submission.
+4. Confirm both centers complete in the same compositor cycle and at the
+   selected insertion point: before feathering for `upscaled_center`, or after
+   scene processing and sharpening but before UI for `final_ldr_pre_ui`.
 5. Exercise camera cuts, loads, menus, render-scale transitions, quality/preset
    changes, enable/disable, and backend reset.
 

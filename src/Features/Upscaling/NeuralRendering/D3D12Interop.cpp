@@ -171,6 +171,7 @@ namespace NeuralRendering
 			!timestampFrequency_) {
 			return;
 		}
+		const std::uint64_t timingFenceValue = commandContext.fenceValue;
 
 		const SIZE_T offset = sizeof(std::uint64_t) * a_index * 2u;
 		const D3D12_RANGE readRange{ offset, offset + sizeof(std::uint64_t) * 2u };
@@ -203,9 +204,30 @@ namespace NeuralRendering
 				default:
 					break;
 				}
-				telemetry_.lastFeatureGpuMicroseconds = elapsedMicroseconds;
+				if (IsValidInsertionPoint(commandContext.timing.insertionPoint)) {
+					const auto insertionPointIndex = static_cast<std::size_t>(
+						commandContext.timing.insertionPoint);
+					IncrementSaturating(
+						telemetry_.featureGpuSamplesByInsertionPoint[insertionPointIndex]);
+					AddSaturating(
+						telemetry_.featureGpuMicrosecondsByInsertionPoint[insertionPointIndex],
+						elapsedMicroseconds);
+				} else {
+					IncrementSaturating(telemetry_.invalidInsertionPointSamples);
+				}
 				telemetry_.maximumFeatureGpuMicroseconds = std::max(
 					telemetry_.maximumFeatureGpuMicroseconds, elapsedMicroseconds);
+				if (timingFenceValue > lastCompletedTimingFenceValue_) {
+					lastCompletedTimingFenceValue_ = timingFenceValue;
+					telemetry_.lastFeatureGpuMicroseconds = elapsedMicroseconds;
+					telemetry_.lastFeaturePixelCount = commandContext.timing.pixelCount;
+					telemetry_.lastFeatureEvaluationCount =
+						commandContext.timing.evaluationCount;
+					telemetry_.lastFeatureSlotMask =
+						commandContext.timing.featureSlotMask;
+					telemetry_.lastInsertionPoint =
+						commandContext.timing.insertionPoint;
+				}
 			} else {
 				IncrementSaturating(telemetry_.featureGpuReadbackFailures);
 			}
@@ -543,13 +565,17 @@ namespace NeuralRendering
 		if (featureTimingOpen_ || featureTimingCompleted_)
 			return RecordFailureLocked(E_UNEXPECTED, "BeginFeatureTiming scope already used");
 		const auto route = ClassifyFeatureSlotMask(a_timing.featureSlotMask);
+		const bool insertionPointValid = IsValidInsertionPoint(a_timing.insertionPoint);
 		if (!a_timing.pixelCount || !a_timing.evaluationCount ||
 			a_timing.evaluationCount > 2u ||
 			static_cast<std::uint32_t>(std::popcount(a_timing.featureSlotMask)) !=
 				a_timing.evaluationCount ||
-			route == FeatureSlotRoute::Unexpected) {
+			route == FeatureSlotRoute::Unexpected ||
+			!insertionPointValid) {
 			if (route == FeatureSlotRoute::Unexpected)
 				IncrementSaturating(telemetry_.unexpectedFeatureSlotMaskSamples);
+			if (!insertionPointValid)
+				IncrementSaturating(telemetry_.invalidInsertionPointSamples);
 			return RecordFailureLocked(E_INVALIDARG, "BeginFeatureTiming metadata");
 		}
 
@@ -643,9 +669,6 @@ namespace NeuralRendering
 			return RecordFailureLocked(signalResult, "ID3D12CommandQueue::Signal(submission)");
 		}
 		commandContext.fenceValue = completeValue;
-		telemetry_.lastFeaturePixelCount = commandContext.timing.pixelCount;
-		telemetry_.lastFeatureEvaluationCount = commandContext.timing.evaluationCount;
-		telemetry_.lastFeatureSlotMask = commandContext.timing.featureSlotMask;
 		IncrementSaturating(telemetry_.commandSubmissions);
 		const auto route = ClassifyFeatureSlotMask(commandContext.timing.featureSlotMask);
 		if (route == FeatureSlotRoute::Main)
@@ -776,6 +799,7 @@ namespace NeuralRendering
 		context11_.Reset();
 		device11_.Reset();
 		fenceValue_ = 0;
+		lastCompletedTimingFenceValue_ = 0;
 		commandContextCursor_ = 0;
 		recordingContext_ = kCommandContextCount;
 		recordingThread_ = {};

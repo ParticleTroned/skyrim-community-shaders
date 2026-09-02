@@ -152,6 +152,45 @@ namespace
 		return matrix;
 	}
 
+	json NeuralInsertionPointJson(NeuralRendering::InsertionPoint a_insertionPoint)
+	{
+		return {
+			{ "id", NeuralRendering::GetInsertionPointName(a_insertionPoint) },
+			{ "displayName", NeuralRendering::GetInsertionPointDisplayName(a_insertionPoint) },
+			{ "value", static_cast<uint32_t>(a_insertionPoint) },
+			{ "experimental", a_insertionPoint == NeuralRendering::InsertionPoint::FinalLdrPreUi },
+		};
+	}
+
+	json NeuralInsertionPointMatrixJson()
+	{
+		json matrix = json::array();
+		for (std::size_t index = 0;
+			index < NeuralRendering::kInsertionPointCount; ++index) {
+			matrix.push_back(NeuralInsertionPointJson(
+				static_cast<NeuralRendering::InsertionPoint>(index)));
+		}
+		return matrix;
+	}
+
+	json NeuralInsertionPointPerformanceJson(
+		const NeuralRendering::RendererPerformanceTelemetry& a_performance)
+	{
+		json telemetry = json::array();
+		for (std::size_t index = 0;
+			index < NeuralRendering::kInsertionPointCount; ++index) {
+			const auto insertionPoint =
+				static_cast<NeuralRendering::InsertionPoint>(index);
+			telemetry.push_back({
+				{ "id", NeuralRendering::GetInsertionPointName(insertionPoint) },
+				{ "value", index },
+				{ "featureGpuSamples", a_performance.featureGpuSamplesByInsertionPoint[index] },
+				{ "featureGpuMicroseconds", a_performance.featureGpuMicrosecondsByInsertionPoint[index] },
+			});
+		}
+		return telemetry;
+	}
+
 	json NeuralRenderingStatusJson(const Upscaling& a_upscaling)
 	{
 		const auto snapshot = NeuralRendering::Renderer::Instance().GetSnapshot();
@@ -207,6 +246,8 @@ namespace
 					{ "dlssEvaluated", (route.dlssEyeMask & eyeBit) != 0 },
 				});
 			}
+			const auto routeInsertionPoint =
+				static_cast<NeuralRendering::InsertionPoint>(route.insertionPoint);
 			routes.push_back({
 				{ "valid", route.valid },
 				{ "role", Upscaling::GetNeuralStereoRouteRoleName(route.role) },
@@ -221,6 +262,8 @@ namespace
 				{ "arrangement", NeuralRendering::GetPipelineArrangementName(
 									 static_cast<NeuralRendering::PipelineArrangement>(route.arrangement)) },
 				{ "arrangementValue", route.arrangement },
+				{ "insertionPoint", NeuralRendering::GetInsertionPointName(routeInsertionPoint) },
+				{ "insertionPointValue", route.insertionPoint },
 				{ "requested", route.requested },
 				{ "eligible", route.eligible },
 				{ "sourceBatchEligible", route.sourceBatchEligible },
@@ -249,12 +292,18 @@ namespace
 
 		const bool batchedStereo = a_upscaling.settings.neuralRenderingBatchedStereo;
 		const bool directCommit = a_upscaling.settings.neuralRenderingDirectCommit;
+		const auto insertionPoint = NeuralRendering::ClampInsertionPoint(
+			a_upscaling.settings.neuralRenderingInsertionPoint);
 		return {
-			{ "apiVersion", 4 },
+			{ "apiVersion", 5 },
 			{ "arrangement", NeuralRendering::GetPipelineArrangementName() },
 			{ "implementationMatrix", NeuralImplementationMatrixJson() },
+			{ "insertionPointMatrix", NeuralInsertionPointMatrixJson() },
 			{ "settings", {
 							  { "enabled", a_upscaling.settings.neuralRenderingEnabled },
+							  { "insertionPoint", NeuralRendering::GetInsertionPointName(insertionPoint) },
+							  { "insertionPointValue", static_cast<uint32_t>(insertionPoint) },
+							  { "selectedInsertionPoint", NeuralInsertionPointJson(insertionPoint) },
 							  { "batchedStereo", batchedStereo },
 							  { "directCommit", directCommit },
 							  { "stereoSubmission", NeuralRendering::GetStereoSubmissionName(batchedStereo) },
@@ -322,6 +371,8 @@ namespace
 							  { "failureFeatureSlot", snapshot.failureFeatureSlot },
 							  { "frame", snapshot.frameId },
 							  { "generation", snapshot.generation },
+							  { "insertionPoint", NeuralRendering::GetInsertionPointName(snapshot.insertionPoint) },
+							  { "insertionPointValue", static_cast<uint32_t>(snapshot.insertionPoint) },
 							  { "successes", snapshot.successes },
 							  { "failures", snapshot.failures },
 							  { "featureUpscaling", snapshot.featureUpscaling },
@@ -392,12 +443,16 @@ namespace
 								 { "mainFeatureGpuMicroseconds", snapshot.performance.mainFeatureGpuMicroseconds },
 								 { "submitFeatureGpuSamples", snapshot.performance.submitFeatureGpuSamples },
 								 { "submitFeatureGpuMicroseconds", snapshot.performance.submitFeatureGpuMicroseconds },
+								 { "byInsertionPoint", NeuralInsertionPointPerformanceJson(snapshot.performance) },
 								 { "unexpectedFeatureSlotMaskSamples", snapshot.performance.unexpectedFeatureSlotMaskSamples },
+								 { "invalidInsertionPointSamples", snapshot.performance.invalidInsertionPointSamples },
 								 { "lastFeatureGpuMicroseconds", snapshot.performance.lastFeatureGpuMicroseconds },
 								 { "maximumFeatureGpuMicroseconds", snapshot.performance.maximumFeatureGpuMicroseconds },
 								 { "lastFeaturePixelCount", snapshot.performance.lastFeaturePixelCount },
 								 { "lastFeatureEvaluationCount", snapshot.performance.lastFeatureEvaluationCount },
 								 { "lastFeatureSlotMask", snapshot.performance.lastFeatureSlotMask },
+								 { "lastInsertionPoint", NeuralRendering::GetInsertionPointName(snapshot.performance.lastInsertionPoint) },
+								 { "lastInsertionPointValue", static_cast<uint32_t>(snapshot.performance.lastInsertionPoint) },
 							 } },
 			{ "slots", std::move(slots) },
 		};
@@ -672,6 +727,7 @@ namespace
 	struct NeuralRenderingConfigurationRequest
 	{
 		std::optional<bool> enabled;
+		std::optional<NeuralRendering::InsertionPoint> insertionPoint;
 		std::optional<uint32_t> preset;
 		std::optional<float> intensity;
 		std::optional<float> localToneStrength;
@@ -693,7 +749,7 @@ namespace
 
 		[[nodiscard]] bool HasAnyControl() const noexcept
 		{
-			return enabled || preset || HasImageTuningOverrides() ||
+			return enabled || insertionPoint || preset || HasImageTuningOverrides() ||
 			       batchedStereo || directCommit || implementation ||
 			       legacyOptimizedStereoPath || useAutoMask || uiCorrection;
 		}
@@ -710,6 +766,30 @@ namespace
 				return false;
 			}
 			a_request.enabled = enabled->get<bool>();
+		}
+
+		if (const auto insertionPoint = a_args.find("insertionPoint");
+			insertionPoint != a_args.end()) {
+			if (!insertionPoint->is_string()) {
+				a_error = {
+					{ "error", "insertionPoint must be a string" },
+					{ "errorCode", "nr_insertion_point_type_invalid" },
+					{ "field", "insertionPoint" },
+				};
+				return false;
+			}
+			const auto requested = insertionPoint->get<std::string>();
+			const auto parsed = NeuralRendering::ParseInsertionPointName(requested);
+			if (!parsed) {
+				a_error = {
+					{ "error", "insertionPoint is not a supported Neural Rendering insertion point" },
+					{ "errorCode", "nr_insertion_point_unknown" },
+					{ "field", "insertionPoint" },
+					{ "requested", requested },
+				};
+				return false;
+			}
+			a_request.insertionPoint = *parsed;
 		}
 
 		if (const auto preset = a_args.find("preset"); preset != a_args.end()) {
@@ -942,6 +1022,10 @@ namespace
 				auto requestedSettings = previousSettings;
 				if (request.enabled)
 					requestedSettings.neuralRenderingEnabled = *request.enabled;
+				if (request.insertionPoint) {
+					requestedSettings.neuralRenderingInsertionPoint =
+						static_cast<uint32_t>(*request.insertionPoint);
+				}
 				if (request.preset)
 					(void)Upscaling::ApplyNeuralRenderingPreset(requestedSettings, *request.preset);
 				if (request.legacyOptimizedStereoPath) {
@@ -987,6 +1071,11 @@ namespace
 				const bool enableStateChanged =
 					previousSettings.neuralRenderingEnabled !=
 					requestedSettings.neuralRenderingEnabled;
+				const bool insertionPointChanged =
+					NeuralRendering::ClampInsertionPoint(
+						previousSettings.neuralRenderingInsertionPoint) !=
+					NeuralRendering::ClampInsertionPoint(
+						requestedSettings.neuralRenderingInsertionPoint);
 				const bool stereoSubmissionChanged =
 					previousSettings.neuralRenderingBatchedStereo !=
 					requestedSettings.neuralRenderingBatchedStereo;
@@ -995,10 +1084,14 @@ namespace
 					requestedSettings.neuralRenderingDirectCommit;
 				const bool implementationChanged =
 					stereoSubmissionChanged || outputCommitChanged;
-				const char* transition = enableStateChanged ?
-				                             (previousSettings.neuralRenderingEnabled ? "disable" : "enable") :
-				                         implementationChanged ? "implementation" :
-				                                                 "tuning";
+				const char* transition =
+					enableStateChanged ?
+						(previousSettings.neuralRenderingEnabled ? "disable" : "enable") :
+					insertionPointChanged ? "insertion_point" :
+					implementationChanged ? "implementation" :
+											"tuning";
+				const bool resetAttempted =
+					enableStateChanged || insertionPointChanged;
 
 				settings = requestedSettings;
 				const bool transitionSucceeded =
@@ -1008,14 +1101,15 @@ namespace
 				json response{
 					{ "action", "nr_configure" },
 					{ "settingsChanged", true },
+					{ "insertionPointChanged", insertionPointChanged },
 					{ "implementationChanged", implementationChanged },
 					{ "stereoSubmissionChanged", stereoSubmissionChanged },
 					{ "outputCommitChanged", outputCommitChanged },
 					{ "transition", transition },
 					{ "transitionSucceeded", transitionSucceeded },
 					{ "historyResetRequested", true },
-					{ "resetAttempted", enableStateChanged },
-					{ "resetSucceeded", enableStateChanged ? json(transitionSucceeded) : json(nullptr) },
+					{ "resetAttempted", resetAttempted },
+					{ "resetSucceeded", resetAttempted ? json(transitionSucceeded) : json(nullptr) },
 					{ "neuralRendering", NeuralRenderingStatusJson(upscaling) },
 				};
 				if (!transitionSucceeded) {
@@ -1358,7 +1452,7 @@ namespace VRRenderScaleDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Control and inspect Community Shaders VR render-scale stress iterations and DLSS Neural Rendering. nr_status returns the API-v4 NR runtime, trust, route, stereo-mask, failure, and per-route GPU telemetry. nr_configure applies one or more NR settings through the same reset/history contract as the in-game UI; an empty or unchanged request is rejected. nr_cycle_modes selects or advances through the four stereo implementation lanes. nr_reset resets the NR backend and requests a history reset. Existing render-scale mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","nr_status","nr_configure","nr_cycle_modes","nr_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"implementation":{"type":"string","enum":["per_eye_staged_commit","stereo_batched_staged_commit","per_eye_direct_commit","stereo_batched_direct_commit"]},"matrixIndex":{"type":"integer","minimum":0,"maximum":3},"preset":{"type":"integer","minimum":0,"maximum":4},"intensity":{"type":"number","minimum":0,"maximum":2},"localToneStrength":{"type":"number","minimum":0,"maximum":2},"localStructureStrength":{"type":"number","minimum":0,"maximum":2},"skinStructureStrength":{"type":"number","minimum":0,"maximum":2},"style":{"type":"integer","minimum":0,"maximum":3},"batchedStereo":{"type":"boolean"},"directCommit":{"type":"boolean"},"optimizedStereoPath":{"type":"boolean"},"useAutoMask":{"type":"boolean"},"uiCorrection":{"type":"boolean"}},"required":["action"]}})";
+			R"({"description":"Control and inspect Community Shaders VR render-scale stress iterations and DLSS Neural Rendering. nr_status returns the API-v5 NR runtime, trust, route, stereo-mask, failure, and per-route and per-insertion-point GPU telemetry. nr_configure applies one or more NR settings, including the insertion point, through the same reset/history contract as the in-game UI; an empty or unchanged request is rejected. nr_cycle_modes selects or advances through the four stereo implementation lanes. nr_reset resets the NR backend and requests a history reset. Existing render-scale mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","nr_status","nr_configure","nr_cycle_modes","nr_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"insertionPoint":{"type":"string","enum":["upscaled_center","final_ldr_pre_ui"]},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"implementation":{"type":"string","enum":["per_eye_staged_commit","stereo_batched_staged_commit","per_eye_direct_commit","stereo_batched_direct_commit"]},"matrixIndex":{"type":"integer","minimum":0,"maximum":3},"preset":{"type":"integer","minimum":0,"maximum":4},"intensity":{"type":"number","minimum":0,"maximum":2},"localToneStrength":{"type":"number","minimum":0,"maximum":2},"localStructureStrength":{"type":"number","minimum":0,"maximum":2},"skinStructureStrength":{"type":"number","minimum":0,"maximum":2},"style":{"type":"integer","minimum":0,"maximum":3},"batchedStereo":{"type":"boolean"},"directCommit":{"type":"boolean"},"optimizedStereoPath":{"type":"boolean"},"useAutoMask":{"type":"boolean"},"uiCorrection":{"type":"boolean"}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.renderscale",
 			descriptor,

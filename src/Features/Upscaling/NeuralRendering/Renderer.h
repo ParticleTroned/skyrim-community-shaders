@@ -1,5 +1,6 @@
 #pragma once
 
+#include "PipelinePolicy.h"
 #include "Runtime.h"
 
 #include <array>
@@ -98,12 +99,18 @@ namespace NeuralRendering
 		std::uint64_t mainFeatureGpuMicroseconds = 0;
 		std::uint64_t submitFeatureGpuSamples = 0;
 		std::uint64_t submitFeatureGpuMicroseconds = 0;
+		std::array<std::uint64_t, kInsertionPointCount>
+			featureGpuSamplesByInsertionPoint{};
+		std::array<std::uint64_t, kInsertionPointCount>
+			featureGpuMicrosecondsByInsertionPoint{};
 		std::uint64_t unexpectedFeatureSlotMaskSamples = 0;
+		std::uint64_t invalidInsertionPointSamples = 0;
 		std::uint64_t lastFeatureGpuMicroseconds = 0;
 		std::uint64_t maximumFeatureGpuMicroseconds = 0;
 		std::uint64_t lastFeaturePixelCount = 0;
 		std::uint32_t lastFeatureEvaluationCount = 0;
 		std::uint32_t lastFeatureSlotMask = 0;
+		InsertionPoint lastInsertionPoint = InsertionPoint::Count;
 	};
 
 	struct RendererSnapshot
@@ -127,6 +134,7 @@ namespace NeuralRendering
 		std::uint32_t failureFeatureSlot = Runtime::kFeatureSlotCount;
 		std::uint32_t frameId = std::numeric_limits<std::uint32_t>::max();
 		std::uint64_t generation = 0;
+		InsertionPoint insertionPoint = kDefaultInsertionPoint;
 		std::uint32_t colorWidth = 0;
 		std::uint32_t colorHeight = 0;
 		std::uint32_t guideWidth = 0;
@@ -158,6 +166,7 @@ namespace NeuralRendering
 		std::uint32_t featureSlot = 0;
 		std::uint32_t frameId = std::numeric_limits<std::uint32_t>::max();
 		std::uint64_t generation = 0;
+		InsertionPoint insertionPoint = kDefaultInsertionPoint;
 		ID3D11Resource* colorInput = nullptr;
 		ID3D11Resource* depthGuide = nullptr;
 		ID3D11ShaderResourceView* depthGuideSRV = nullptr;

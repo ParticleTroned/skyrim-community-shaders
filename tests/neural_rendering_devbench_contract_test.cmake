@@ -23,6 +23,10 @@ set(
     "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/Renderer.cpp"
 )
 set(
+    _d3d12_interop_source_path
+    "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/D3D12Interop.cpp"
+)
+set(
     _pipeline_policy_path
     "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/PipelinePolicy.h"
 )
@@ -33,6 +37,7 @@ foreach(_required_path IN ITEMS
     "${_upscaling_header_path}"
     "${_renderer_header_path}"
     "${_renderer_source_path}"
+    "${_d3d12_interop_source_path}"
     "${_pipeline_policy_path}"
 )
     if(NOT EXISTS "${_required_path}")
@@ -46,15 +51,22 @@ file(READ "${_upscaling_path}" _upscaling)
 file(READ "${_upscaling_header_path}" _upscaling_header)
 file(READ "${_renderer_header_path}" _renderer_header)
 file(READ "${_renderer_source_path}" _renderer_source)
+file(READ "${_d3d12_interop_source_path}" _d3d12_interop_source)
 file(READ "${_pipeline_policy_path}" _pipeline_policy)
 set(
     _source_contract_text
-    "${_upscaling}\n${_upscaling_header}\n${_renderer_header}\n${_renderer_source}\n${_pipeline_policy}"
+    "${_upscaling}\n${_upscaling_header}\n${_renderer_header}\n${_renderer_source}\n${_d3d12_interop_source}\n${_pipeline_policy}"
 )
 
 foreach(_status_contract IN ITEMS
-    [[{ "apiVersion", 4 }]]
+    [[{ "apiVersion", 5 }]]
     [[{ "implementationMatrix", NeuralImplementationMatrixJson() }]]
+    [[{ "insertionPointMatrix", NeuralInsertionPointMatrixJson() }]]
+    [[{ "selectedInsertionPoint", NeuralInsertionPointJson(insertionPoint) }]]
+    [[{ "insertionPoint", NeuralRendering::GetInsertionPointName(snapshot.insertionPoint) }]]
+    [[{ "byInsertionPoint", NeuralInsertionPointPerformanceJson(snapshot.performance) }]]
+    [[{ "invalidInsertionPointSamples", snapshot.performance.invalidInsertionPointSamples }]]
+    [[{ "lastInsertionPoint", NeuralRendering::GetInsertionPointName(snapshot.performance.lastInsertionPoint) }]]
     [[{ "frame", snapshot.frameId }]]
     [[{ "submitCycleSource", "submit_entry" }]]
     [[{ "eyeMaskSemantics", {]]
@@ -95,6 +107,23 @@ foreach(_source_contract IN ITEMS
     [[IsSequentialFrame(]]
     [[activeFeatureSlot_]]
     [[ActiveFeatureSlotOrLocked(]]
+    [[neuralRenderingInsertionPoint,]]
+    [[uint neuralRenderingInsertionPoint =]]
+    [[settings.neuralRenderingInsertionPoint = static_cast<uint>(]]
+    [[o_json.erase("neuralRenderingInsertionPoint");]]
+    [[a_settings.neuralRenderingInsertionPoint]]
+    [[const bool insertionPointChanged =]]
+    [[neuralInsertionPointTransitionFrame = globals::state ?]]
+    [[mainFinalLdrNeuralState = {};]]
+    [[mainFinalLdrPresentationState = {};]]
+    [[IsNeuralRenderingInsertionTransitionBlocked()]]
+    [[args.insertionPoint = NeuralRendering::InsertionPoint::UpscaledCenter;]]
+    [[NeuralRendering::InsertionPoint::FinalLdrPreUi;]]
+    [[.insertionPoint = a_args.front().insertionPoint,]]
+    [[left.insertionPoint == right.insertionPoint]]
+    [[generation, insertion point, feature mode]]
+    [[a_neuralRouteAllowed]]
+    [[timingFenceValue > lastCompletedTimingFenceValue_]]
 )
     string(FIND "${_source_contract_text}" "${_source_contract}" _source_position)
     if(_source_position EQUAL -1)
@@ -103,6 +132,51 @@ foreach(_source_contract IN ITEMS
         )
     endif()
 endforeach()
+
+string(FIND
+    "${_upscaling}"
+    "void Upscaling::MenuManagerDrawInterfaceStartHook::thunk"
+    _main_hook_start
+)
+if(_main_hook_start EQUAL -1)
+    message(FATAL_ERROR "Main final-LDR presentation hook is missing")
+endif()
+string(SUBSTRING "${_upscaling}" ${_main_hook_start} 9000 _main_hook)
+string(FIND "${_main_hook}" "upscaling.ApplyMainFinalLdrNeuralStereo();" _main_apply)
+string(FIND "${_main_hook}" "upscaling.BeginVRMenuDrawInterface();" _menu_begin)
+string(FIND "${_main_hook}" "func(a1);" _menu_draw)
+string(FIND "${_main_hook}" "upscaling.FinalizeMainFinalLdrNeuralPresentation();" _mask_finalize)
+if(_main_apply EQUAL -1 OR _menu_begin EQUAL -1 OR _menu_draw EQUAL -1 OR
+    _mask_finalize EQUAL -1 OR NOT _main_apply LESS _menu_begin OR
+    NOT _menu_begin LESS _menu_draw OR NOT _menu_draw LESS _mask_finalize)
+    message(FATAL_ERROR
+        "Main final-LDR ordering must remain NR, UI draw, then HMD mask repair"
+    )
+endif()
+
+string(FIND
+    "${_upscaling}"
+    "if (!prepareSubmitStageSceneEyeOutput("
+    _submit_scene_prepare
+)
+string(FIND
+    "${_upscaling}"
+    "neuralPairApplied = ApplyFinalLdrNeuralStereo("
+    _submit_neural_apply
+)
+string(FIND
+    "${_upscaling}"
+    "if (!finalizeSubmitStagePresentationEyeOutput("
+    _submit_presentation_finalize
+)
+if(_submit_scene_prepare EQUAL -1 OR _submit_neural_apply EQUAL -1 OR
+    _submit_presentation_finalize EQUAL -1 OR
+    NOT _submit_scene_prepare LESS _submit_neural_apply OR
+    NOT _submit_neural_apply LESS _submit_presentation_finalize)
+    message(FATAL_ERROR
+        "Submit final-LDR ordering must remain scene output, NR, then UI/HMD presentation"
+    )
+endif()
 
 string(REGEX MATCHALL
     "SetActiveFeatureSlotLocked\\(a_args\\[1\\]\\.featureSlot\\);"
@@ -153,6 +227,24 @@ foreach(_cycle_contract IN ITEMS
     endif()
 endforeach()
 
+foreach(_insertion_point_contract IN ITEMS
+    [[std::optional<NeuralRendering::InsertionPoint> insertionPoint;]]
+    [[NeuralRendering::ParseInsertionPointName(requested)]]
+    [[requestedSettings.neuralRenderingInsertionPoint =]]
+    [[{ "insertionPointChanged", insertionPointChanged }]]
+    [[insertionPointChanged ? "insertion_point"]]
+    [[const bool resetAttempted =]]
+    [[enableStateChanged || insertionPointChanged;]]
+    [["insertionPoint":{"type":"string","enum":["upscaled_center","final_ldr_pre_ui"]}]]
+)
+    string(FIND "${_bridge}" "${_insertion_point_contract}" _insertion_point_position)
+    if(_insertion_point_position EQUAL -1)
+        message(FATAL_ERROR
+            "Neural Rendering insertion-point contract is missing: ${_insertion_point_contract}"
+        )
+    endif()
+endforeach()
+
 foreach(_validation_contract IN ITEMS
     [["nr_preset_type_invalid"]]
     [["nr_preset_out_of_range"]]
@@ -161,6 +253,8 @@ foreach(_validation_contract IN ITEMS
     [["nr_tuning_out_of_range"]]
     [["nr_style_type_invalid"]]
     [["nr_style_out_of_range"]]
+    [["nr_insertion_point_type_invalid"]]
+    [["nr_insertion_point_unknown"]]
 )
     string(FIND "${_bridge}" "${_validation_contract}" _validation_position)
     if(_validation_position EQUAL -1)

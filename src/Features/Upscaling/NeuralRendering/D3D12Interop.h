@@ -1,5 +1,7 @@
 #pragma once
 
+#include "PipelinePolicy.h"
+
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -21,6 +23,7 @@ namespace NeuralRendering
 		std::uint64_t pixelCount = 0;
 		std::uint32_t evaluationCount = 0;
 		std::uint32_t featureSlotMask = 0;
+		InsertionPoint insertionPoint = kDefaultInsertionPoint;
 	};
 
 	struct D3D12InteropTelemetry
@@ -41,12 +44,18 @@ namespace NeuralRendering
 		std::uint64_t mainFeatureGpuMicroseconds = 0;
 		std::uint64_t submitFeatureGpuSamples = 0;
 		std::uint64_t submitFeatureGpuMicroseconds = 0;
+		std::array<std::uint64_t, kInsertionPointCount>
+			featureGpuSamplesByInsertionPoint{};
+		std::array<std::uint64_t, kInsertionPointCount>
+			featureGpuMicrosecondsByInsertionPoint{};
 		std::uint64_t unexpectedFeatureSlotMaskSamples = 0;
+		std::uint64_t invalidInsertionPointSamples = 0;
 		std::uint64_t lastFeatureGpuMicroseconds = 0;
 		std::uint64_t maximumFeatureGpuMicroseconds = 0;
 		std::uint64_t lastFeaturePixelCount = 0;
 		std::uint32_t lastFeatureEvaluationCount = 0;
 		std::uint32_t lastFeatureSlotMask = 0;
+		InsertionPoint lastInsertionPoint = InsertionPoint::Count;
 	};
 
 	struct SharedTexture
@@ -149,6 +158,7 @@ namespace NeuralRendering
 		std::vector<ResourceLease> resourceLeases_;
 		std::vector<PendingFenceEvent> pendingFenceEvents_;
 		std::uint64_t fenceValue_ = 0;
+		std::uint64_t lastCompletedTimingFenceValue_ = 0;
 		std::size_t commandContextCursor_ = 0;
 		std::size_t recordingContext_ = kCommandContextCount;
 		std::thread::id recordingThread_{};

@@ -173,9 +173,9 @@ int main()
 		menuAdmission.blockReason ==
 		TemporalAdmissionBlockReason::MenuContext);
 	static_assert(std::string_view(
-		NeuralRendering::GetTemporalAdmissionBlockReasonName(
-			TemporalAdmissionBlockReason::TemporalSourceStale)) ==
-		"temporal_source_stale");
+					  NeuralRendering::GetTemporalAdmissionBlockReasonName(
+						  TemporalAdmissionBlockReason::TemporalSourceStale)) ==
+				  "temporal_source_stale");
 
 	using NeuralRendering::CachedStereoPairReuse;
 	static_assert(

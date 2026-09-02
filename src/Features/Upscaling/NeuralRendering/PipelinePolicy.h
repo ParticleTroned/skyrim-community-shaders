@@ -178,7 +178,7 @@ namespace NeuralRendering
 				a_inputs.lastCompletedWorldRenderFrame,
 		};
 		result.temporalSourceFresh = result.worldFrameStarted &&
-			(a_route == TemporalRoute::Main || result.worldFrameCompleted);
+		                             (a_route == TemporalRoute::Main || result.worldFrameCompleted);
 
 		if (result.menuContextActive) {
 			result.blockReason = TemporalAdmissionBlockReason::MenuContext;

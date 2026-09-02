@@ -1625,28 +1625,28 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	auto state = globals::state;
 	const UpscalingDLSS::ViewportCrop emptyCrop{};
 	const UpscalingDLSS::ViewportCrop currentCrop = viewportCrop == emptyCrop ?
-		UpscalingDLSS::ViewportCrop::Identity(
-			extentIn.width,
-			extentIn.height,
-			extentOut.width,
-			extentOut.height) :
-		viewportCrop;
+	                                                    UpscalingDLSS::ViewportCrop::Identity(
+															extentIn.width,
+															extentIn.height,
+															extentOut.width,
+															extentOut.height) :
+	                                                    viewportCrop;
 	const bool cropDescriptorValid = outputWidth == extentOut.width &&
-		currentCrop.MatchesEvaluationExtents(
-			extentIn.width,
-			extentIn.height,
-			extentOut.width,
-			extentOut.height);
+	                                 currentCrop.MatchesEvaluationExtents(
+										 extentIn.width,
+										 extentIn.height,
+										 extentOut.width,
+										 extentOut.height);
 	const auto motionVectorScale =
 		UpscalingDLSS::BuildMotionVectorScale(currentCrop);
 	const float viewportScaleX = cropDescriptorValid ?
-		static_cast<float>(currentCrop.output.Width()) /
-			static_cast<float>(currentCrop.fullOutput.width) :
-		1.0f;
+	                                 static_cast<float>(currentCrop.output.Width()) /
+	                                     static_cast<float>(currentCrop.fullOutput.width) :
+	                                 1.0f;
 	const float viewportScaleY = cropDescriptorValid ?
-		static_cast<float>(currentCrop.output.Height()) /
-			static_cast<float>(currentCrop.fullOutput.height) :
-		1.0f;
+	                                 static_cast<float>(currentCrop.output.Height()) /
+	                                     static_cast<float>(currentCrop.fullOutput.height) :
+	                                 1.0f;
 
 	const bool colorBuffersHDR = GetDLSSColorBuffersHDR(colorIn);
 	const uint32_t qualityMode = std::min(upscaling.GetRuntimeQualityMode(), Upscaling::kQualityModeMaxIndex);
@@ -1657,7 +1657,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		upscaling.IsPresentationUpscalingActive();
 	const auto passRoute =
 		(submitStageVRDLSS ||
-		 viewportRole == DLSSViewportRole::SubmitStageFoveatedCenter) ?
+			viewportRole == DLSSViewportRole::SubmitStageFoveatedCenter) ?
 			DLSSPassRoute::Submit :
 			DLSSPassRoute::Main;
 
@@ -1682,8 +1682,8 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	diagnostics.currentCrop = currentCrop;
 	diagnostics.previousCrop = currentCrop;
 	diagnostics.cropResetReason = cropDescriptorValid ?
-		UpscalingDLSS::CropHistoryResetReason::NoSuccessfulHistory :
-		UpscalingDLSS::CropHistoryResetReason::InvalidDescriptor;
+	                                  UpscalingDLSS::CropHistoryResetReason::NoSuccessfulHistory :
+	                                  UpscalingDLSS::CropHistoryResetReason::InvalidDescriptor;
 	diagnostics.motionVectorScaleX = motionVectorScale.valid ? motionVectorScale.x : 1.0f;
 	diagnostics.motionVectorScaleY = motionVectorScale.valid ? motionVectorScale.y : 1.0f;
 	diagnostics.submitStageVRDLSS = submitStageVRDLSS;
@@ -1854,7 +1854,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		std::scoped_lock lock(dlssPassTelemetryMutex);
 		auto& telemetry = dlssPassTelemetryFrames.GetOrCreate(diagnostics.frame);
 		auto& attempts = telemetry.attempts
-			[static_cast<std::size_t>(passRoute)][eyeIndex];
+		                     [static_cast<std::size_t>(passRoute)][eyeIndex];
 		UpscalingTelemetry::SaturatingIncrement(attempts);
 	}
 	sl::Result evalResult = slEvaluateFeature(sl::kFeatureDLSS, *frameToken, inputs, _countof(inputs), context);
@@ -1868,7 +1868,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		std::scoped_lock lock(dlssPassTelemetryMutex);
 		if (auto* telemetry = dlssPassTelemetryFrames.Find(diagnostics.frame)) {
 			auto& successes = telemetry->successes
-				[static_cast<std::size_t>(passRoute)][eyeIndex];
+			                      [static_cast<std::size_t>(passRoute)][eyeIndex];
 			UpscalingTelemetry::SaturatingIncrement(successes);
 		}
 	}

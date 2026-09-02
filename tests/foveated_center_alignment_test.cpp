@@ -34,9 +34,9 @@ int main()
 	static_assert(
 		kCompatibilityHorizontalAnchor == HorizontalAnchor::Outward);
 	static_assert(std::string_view(GetCenterOriginName(
-		CenterOrigin::OpticalCenter)) == "optical_center");
+					  CenterOrigin::OpticalCenter)) == "optical_center");
 	static_assert(std::string_view(GetHorizontalAnchorName(
-		HorizontalAnchor::Symmetric)) == "symmetric");
+					  HorizontalAnchor::Symmetric)) == "symmetric");
 
 	std::array<EyeOpticalInputs, 2> opticalInputs{};
 	const auto compatibility = ResolveStereo(Settings{}, opticalInputs);

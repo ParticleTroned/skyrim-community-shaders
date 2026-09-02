@@ -109,8 +109,8 @@ struct FoveatedRegionPlan
 		plan.reconstructionGuardBandPixels = a_reconstructionGuardBandPixels;
 		plan.centerHorizontalScale = FoveatedCommon::ClampCenterHorizontalScale(a_centerHorizontalScale);
 		plan.peripheryTAAOuterScale = std::isfinite(a_peripheryTAAOuterScale) && a_peripheryTAAOuterScale > 0.0f ?
-			std::max(plan.centerScale, FoveatedCommon::ClampCenterScale(a_peripheryTAAOuterScale)) :
-			0.0f;
+		                                  std::max(plan.centerScale, FoveatedCommon::ClampCenterScale(a_peripheryTAAOuterScale)) :
+		                                  0.0f;
 
 		if (!a_inputWidthPerEye || !a_inputHeight || !a_outputWidthPerEye || !a_outputHeight)
 			return plan;

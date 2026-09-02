@@ -2168,8 +2168,8 @@ namespace
 		const auto origin =
 			static_cast<FoveatedCenterAlignment::CenterOrigin>(value);
 		return static_cast<uint>(FoveatedCenterAlignment::IsValid(origin) ?
-		                             origin :
-		                             FoveatedCenterAlignment::kCompatibilityCenterOrigin);
+									 origin :
+									 FoveatedCenterAlignment::kCompatibilityCenterOrigin);
 	}
 
 	uint ClampFoveatedHorizontalAnchorUInt(uint value)
@@ -2177,8 +2177,8 @@ namespace
 		const auto anchor =
 			static_cast<FoveatedCenterAlignment::HorizontalAnchor>(value);
 		return static_cast<uint>(FoveatedCenterAlignment::IsValid(anchor) ?
-		                             anchor :
-		                             FoveatedCenterAlignment::kCompatibilityHorizontalAnchor);
+									 anchor :
+									 FoveatedCenterAlignment::kCompatibilityHorizontalAnchor);
 	}
 
 	uint ClampToggleUInt(uint value)
@@ -3477,7 +3477,7 @@ namespace
 		       !settings.foveatedPeripheryMaskVisualization &&
 		       NeuralRendering::ClampInsertionPoint(
 				   settings.neuralRenderingInsertionPoint) ==
-				   NeuralRendering::InsertionPoint::FinalLdrPreUi;
+		           NeuralRendering::InsertionPoint::FinalLdrPreUi;
 	}
 
 	float GetFoveatedReconstructionSupportFeather(
@@ -25109,10 +25109,10 @@ void Upscaling::DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSR
 	const bool visualizeMask = settings.foveatedPeripheryMaskVisualization;
 	const bool showThreeZoneMask = visualizeMask && settings.periphery_taa_enable;
 	const float centerFeather = showThreeZoneMask ?
-	                              ClampPeripheryTAACenterBlendFeather(
-									  settings.periphery_taa_center_blend_feather) :
-	                              ClampFoveatedBlendFeather(
-									  settings.foveatedCenterBlendFeather);
+	                                ClampPeripheryTAACenterBlendFeather(
+										settings.periphery_taa_center_blend_feather) :
+	                                ClampFoveatedBlendFeather(
+										settings.foveatedCenterBlendFeather);
 	const float taaOuterScale = ClampPeripheryTAAOuterScaleForCenter(settings.periphery_taa_outer_scale, centerScale);
 	cbData.centerAndMask = {
 		centerOffsetX,
@@ -26012,7 +26012,7 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 	const float centerBlendFeather = std::isfinite(centerFeather) ?
 	                                     ClampFoveatedBlendFeather(centerFeather) :
 	                                     ClampFoveatedBlendFeather(
-										 settings.foveatedCenterBlendFeather);
+											 settings.foveatedCenterBlendFeather);
 
 	const auto routeRole =
 		dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter ?
@@ -26446,15 +26446,15 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 				false,
 				globals::state->frameCount);
 			const bool blended = DispatchFoveatedBlendPass(
-					neuralFinalLdrColorOut[eye]->srv.get(), a_targets[eye].uav,
-					a_outputWidthPerEye, a_outputHeight, rect,
-					foveatedRectCache.plan.eyes[eye].visibleOutput,
-					foveatedRectCache.centerScale,
-					foveatedRectCache.centerHorizontalScale,
-					foveatedRectCache.plan.eyes[eye].centerOffset,
-					ClampFoveatedBlendFeather(
-						settings.neuralRenderingBlendFeather),
-					a_targets[eye].baseOffsetX);
+				neuralFinalLdrColorOut[eye]->srv.get(), a_targets[eye].uav,
+				a_outputWidthPerEye, a_outputHeight, rect,
+				foveatedRectCache.plan.eyes[eye].visibleOutput,
+				foveatedRectCache.centerScale,
+				foveatedRectCache.centerHorizontalScale,
+				foveatedRectCache.plan.eyes[eye].centerOffset,
+				ClampFoveatedBlendFeather(
+					settings.neuralRenderingBlendFeather),
+				a_targets[eye].baseOffsetX);
 			if (!blended) {
 				restoreCommittedCenters();
 				RequestHistoryReset();
@@ -27234,14 +27234,14 @@ bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod
 		const float centerBlendFeather = std::isfinite(params.centerBlendFeather) ?
 		                                     ClampFoveatedBlendFeather(params.centerBlendFeather) :
 		                                     ClampFoveatedBlendFeather(
-										 settings.foveatedCenterBlendFeather);
+												 settings.foveatedCenterBlendFeather);
 		const auto routeRole =
 			params.dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter ?
 				NeuralStereoRouteRole::Submit :
 				NeuralStereoRouteRole::Main;
 		const uint32_t frame = globals::state ?
-		                       globals::state->frameCount :
-		                       std::numeric_limits<uint32_t>::max();
+		                           globals::state->frameCount :
+		                           std::numeric_limits<uint32_t>::max();
 		RecordNeuralPassTelemetry(
 			routeRole,
 			eyeIndex,
@@ -27451,7 +27451,7 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 	} else if (!neuralTemporalAdmission.admitted) {
 		neuralRoute.disposition =
 			neuralTemporalAdmission.blockReason ==
-				NeuralRendering::TemporalAdmissionBlockReason::MenuContext ?
+					NeuralRendering::TemporalAdmissionBlockReason::MenuContext ?
 				NeuralStereoPairDisposition::NotRequested :
 				NeuralStereoPairDisposition::NormalDLSSPair;
 		neuralRoute.fallbackReason =
@@ -32731,7 +32731,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			if (cachedPairReuse == NeuralRendering::CachedStereoPairReuse::Reject) {
 				const auto fallbackReason = !neuralTemporalAdmission.admitted ?
 				                                GetNeuralTemporalFallbackReason(
-										neuralTemporalAdmission) :
+													neuralTemporalAdmission) :
 				                            a_submitPairBoundaryToken == 0 ?
 				                                NeuralStereoFallbackReason::SourceSignatureUnproven :
 				                                NeuralStereoFallbackReason::CachedPairSignatureMismatch;
@@ -38522,12 +38522,12 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 		const bool foveatedBlendFeatherChanged =
 			(fovOnlyBlendActive || previousFovOnlyBlendActive) &&
 			std::abs(foveatedCenterBlendFeather -
-				previousHistoryFoveatedCenterBlendFeather) > 1e-4f;
+					 previousHistoryFoveatedCenterBlendFeather) > 1e-4f;
 		const bool finalLdrNeuralLayoutChanged =
 			finalLdrNeuralLayout != previousHistoryFinalLdrNeuralLayout ||
 			((finalLdrNeuralLayout || previousHistoryFinalLdrNeuralLayout) &&
 				std::abs(neuralBlendFeather -
-					previousHistoryNeuralBlendFeather) > 1e-4f);
+						 previousHistoryNeuralBlendFeather) > 1e-4f);
 		const bool foveatedOffsetsChanged =
 			compareFoveatedScale &&
 			(std::abs(foveatedCenterOffsets[0].x - previousHistoryFoveatedCenterOffsets[0].x) > 1e-4f ||
@@ -38537,7 +38537,7 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 		const bool foveatedChanged =
 			foveatedDispatchEnabled != previousHistoryFoveatedDispatch ||
 			(compareFoveatedScale && foveatedMaskVisualization !=
-				previousHistoryFoveatedMaskVisualization) ||
+										 previousHistoryFoveatedMaskVisualization) ||
 			(compareFoveatedScale && foveatedCenterOrigin != previousHistoryFoveatedCenterOrigin) ||
 			(compareFoveatedScale && foveatedHorizontalAnchor != previousHistoryFoveatedHorizontalAnchor) ||
 			(compareFoveatedScale && std::abs(foveatedCenterScale - previousHistoryFoveatedCenterScale) > 1e-4f) ||

@@ -122,6 +122,84 @@ namespace NeuralRendering
 		DirectXHandle,
 	};
 
+	enum class SubmitStereoSourceProofKind : std::uint8_t
+	{
+		None,
+		OuterBoundary,
+		CombinedTextureCycle,
+	};
+
+	struct SubmitStereoSourceProof
+	{
+		SubmitStereoSourceProofKind kind = SubmitStereoSourceProofKind::None;
+		std::uint64_t value = 0;
+
+		[[nodiscard]] constexpr bool IsValid() const noexcept
+		{
+			return kind != SubmitStereoSourceProofKind::None && value != 0;
+		}
+	};
+
+	/**
+	 * Selects an exact stereo-source correlation proof for one submit cycle.
+	 * A canonical side-by-side resource contains both eye inputs and therefore
+	 * does not depend on the engine wrapper reaching its outer virtual hook.
+	 */
+	[[nodiscard]] constexpr SubmitStereoSourceProof ResolveSubmitStereoSourceProof(
+		std::uint64_t a_compositorCycle,
+		std::uint64_t a_expectedOuterBoundary,
+		std::uint64_t a_matchedOuterBoundary,
+		bool a_usesCombinedStereoLayout,
+		std::uint32_t a_arraySize,
+		bool a_sourceSignatureProven) noexcept
+	{
+		if (a_compositorCycle == 0 || !a_sourceSignatureProven)
+			return {};
+
+		if (a_usesCombinedStereoLayout && a_arraySize == 1u) {
+			return {
+				.kind = SubmitStereoSourceProofKind::CombinedTextureCycle,
+				.value = a_compositorCycle,
+			};
+		}
+
+		const bool sourceContainsBothEyes =
+			a_usesCombinedStereoLayout || a_arraySize > 1u;
+		if (sourceContainsBothEyes &&
+			a_expectedOuterBoundary != 0 &&
+			a_expectedOuterBoundary == a_matchedOuterBoundary) {
+			return {
+				.kind = SubmitStereoSourceProofKind::OuterBoundary,
+				.value = a_matchedOuterBoundary,
+			};
+		}
+
+		return {};
+	}
+
+	/** Prevents equal numeric values from matching across proof domains. */
+	[[nodiscard]] constexpr bool MatchesSubmitStereoSourceProof(
+		const SubmitStereoSourceProof& a_latched,
+		const SubmitStereoSourceProof& a_current) noexcept
+	{
+		return a_latched.IsValid() &&
+		       a_latched.kind == a_current.kind &&
+		       a_latched.value == a_current.value;
+	}
+
+	[[nodiscard]] constexpr const char* GetSubmitStereoSourceProofName(
+		SubmitStereoSourceProofKind a_kind) noexcept
+	{
+		switch (a_kind) {
+		case SubmitStereoSourceProofKind::OuterBoundary:
+			return "outer_boundary";
+		case SubmitStereoSourceProofKind::CombinedTextureCycle:
+			return "combined_texture_cycle";
+		default:
+			return "none";
+		}
+	}
+
 	/** Matches an opaque outer submit source to validated nested representations. */
 	[[nodiscard]] constexpr SubmitSourceIdentityMatch ResolveSubmitSourceIdentityMatch(
 		std::uintptr_t a_outerIdentity,

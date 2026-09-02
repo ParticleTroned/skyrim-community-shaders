@@ -38,12 +38,20 @@ foreach(_required_contract IN ITEMS
     [[BeginNeuralSubmitPairBoundary(]]
     [[EndNeuralSubmitPairBoundary(]]
     [[ObserveNeuralSubmitPairBoundaryEye(]]
+    [[expectedSubmitPairBoundaryToken]]
     [[matchedSubmitPairBoundaryToken]]
-    [[a_submitPairBoundaryToken]]
+    [[a_expectedSubmitPairBoundaryToken]]
+    [[a_matchedSubmitPairBoundaryToken]]
+    [[ResolveSubmitStereoSourceProof(]]
+    [[SubmitStereoSourceProofKind::CombinedTextureCycle]]
+    [[MatchesSubmitStereoSourceProof(]]
     [[ResolveCachedStereoPairReuse(]]
     [[CachedStereoPairReuse::BypassPresentedEye]]
     [[presentedEyeMask]]
-    [[retainedNeuralSubmitPairBoundaryToken]]
+    [[retainedNeuralSubmitSourceProof]]
+    [[sourceTextureOwner]]
+    [[submitThreadId]]
+    [[submitFlags]]
 )
     string(FIND "${_contract_text}" "${_required_contract}" _contract_position)
     if(_contract_position EQUAL -1)
@@ -144,6 +152,9 @@ foreach(_inner_contract IN ITEMS
     [[const vr::Texture_t* pTexture]]
     [[ObserveNeuralSubmitPairBoundaryEye(]]
     [[g_neuralSubmitPairBoundaryToken]]
+    [[expectedSubmitPairBoundaryToken]]
+    [[matchedSubmitPairBoundaryToken]]
+    [[nSubmitFlags]]
 )
     string(FIND "${_inner_submit}" "${_inner_contract}" _inner_contract_position)
     if(_inner_contract_position EQUAL -1)
@@ -153,12 +164,26 @@ endforeach()
 string(REGEX REPLACE "[\r\n\t ]+" " " _inner_submit_normalized "${_inner_submit}")
 string(FIND
     "${_inner_submit_normalized}"
-    [[ObserveNeuralSubmitPairBoundaryEye( g_neuralSubmitPairBoundaryToken, compositorCycleToken, eEye, pTexture, nSubmitFlags);]]
+    [[ObserveNeuralSubmitPairBoundaryEye( expectedSubmitPairBoundaryToken, compositorCycleToken, eEye, pTexture, nSubmitFlags);]]
     _inner_token_handoff_position
 )
 if(_inner_token_handoff_position EQUAL -1)
     message(FATAL_ERROR "Nested submit observer does not consume the active thread token")
 endif()
+foreach(_submit_handoff_contract IN ITEMS
+    [[expectedSubmitPairBoundaryToken, matchedSubmitPairBoundaryToken, nSubmitFlags, pTexture]]
+)
+    string(FIND
+        "${_inner_submit_normalized}"
+        "${_submit_handoff_contract}"
+        _submit_handoff_position
+    )
+    if(_submit_handoff_position EQUAL -1)
+        message(FATAL_ERROR
+            "Submit source proof input is not handed to upscaling: ${_submit_handoff_contract}"
+        )
+    endif()
+endforeach()
 
 string(FIND
     "${_upscaling_source}"
@@ -322,13 +347,100 @@ foreach(_observer_contract IN ITEMS
     endif()
 endforeach()
 
-string(FIND
-    "${_overlay}"
-    [[SubmitVRUpscaledFrame(eEye, compositorCycleToken, pTexture]]
-    _stale_call_position
+string(REGEX MATCHALL
+    [[ResolveSubmitStereoSourceProof\(]]
+    _source_proof_resolvers
+    "${_upscaling_source}"
 )
-if(NOT _stale_call_position EQUAL -1)
-    message(FATAL_ERROR "Submit path bypasses the engine-owned pair-boundary token")
+list(LENGTH _source_proof_resolvers _source_proof_resolver_count)
+if(_source_proof_resolver_count LESS 2)
+    message(FATAL_ERROR
+        "Submit source proof must be resolved for initial admission and cached replay"
+    )
+endif()
+
+string(REGEX REPLACE
+    "[\r\n\t ]+"
+    " "
+    _upscaling_source_normalized
+    "${_upscaling_source}"
+)
+foreach(_source_proof_use IN ITEMS
+    [[ResolveSubmitStereoSourceProof( a_compositorCycleToken, a_expectedSubmitPairBoundaryToken, a_matchedSubmitPairBoundaryToken, sourceUsesCombinedStereoLayout, sourceDesc.ArraySize, neuralSubmitSourceSignatureProven);]]
+    [[neuralSubmitSourceBatchEligible = neuralSubmitRequested && neuralSubmitSourceProof.IsValid();]]
+    [[ResolveSubmitStereoSourceProof( a_compositorCycleToken, a_expectedSubmitPairBoundaryToken, a_matchedSubmitPairBoundaryToken, submitStageNeuralStereoState.publishedSourceUsesCombinedStereoLayout, replaySourceDesc.ArraySize, submitStageNeuralStereoState.sourceSignatureProven && !cachedPairSourceSignatureMismatch);]]
+    [[MatchesSubmitStereoSourceProof( submitStageNeuralStereoState.submitSourceProof, replaySubmitSourceProof);]]
+    [[MatchesSubmitStereoSourceProof( submitStageNeuralStereoState.submitSourceProof, neuralSubmitSourceProof)]]
+)
+    string(FIND
+        "${_upscaling_source_normalized}"
+        "${_source_proof_use}"
+        _source_proof_use_position
+    )
+    if(_source_proof_use_position EQUAL -1)
+        message(FATAL_ERROR
+            "Submit path does not consume its tagged source proof: ${_source_proof_use}"
+        )
+    endif()
+endforeach()
+
+string(REGEX MATCHALL
+    [[MatchesSubmitStereoSourceProof\(]]
+    _source_proof_matches
+    "${_upscaling_source}"
+)
+list(LENGTH _source_proof_matches _source_proof_match_count)
+if(_source_proof_match_count LESS 3)
+    message(FATAL_ERROR
+        "Tagged source proof must guard replay, presentation, and acceptance accounting"
+    )
+endif()
+
+foreach(_source_proof_contract IN ITEMS
+    [[a_usesCombinedStereoLayout && a_arraySize == 1u]]
+    [[.kind = SubmitStereoSourceProofKind::CombinedTextureCycle]]
+    [[.value = a_compositorCycle]]
+    [[a_expectedOuterBoundary == a_matchedOuterBoundary]]
+    [[.kind = SubmitStereoSourceProofKind::OuterBoundary]]
+    [[a_latched.kind == a_current.kind]]
+    [[a_latched.value == a_current.value]]
+)
+    string(FIND
+        "${_pipeline_policy}"
+        "${_source_proof_contract}"
+        _source_proof_contract_position
+    )
+    if(_source_proof_contract_position EQUAL -1)
+        message(FATAL_ERROR
+            "Tagged submit source proof contract is missing: ${_source_proof_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_retained_pair_contract IN ITEMS
+    [[submitStageNeuralStereoState.submitThreadId != currentSubmitThreadId]]
+    [[submitStageNeuralStereoState.submitFlags != a_submitFlags]]
+    [[submitStageNeuralStereoState.sourceTextureOwner.copy_from(sourceTexture)]]
+    [[otherSourceRegion.valid &&]]
+    [[otherSourceRegion.matchesExpectedSize &&]]
+    [[submitStageNeuralStereoState.sourceTexture != replaySourceTexture]]
+    [[a_inputTexture->eColorSpace !=]]
+)
+    string(FIND
+        "${_upscaling_source}"
+        "${_retained_pair_contract}"
+        _retained_pair_contract_position
+    )
+    if(_retained_pair_contract_position EQUAL -1)
+        message(FATAL_ERROR
+            "Retained stereo pair validation is missing: ${_retained_pair_contract}"
+        )
+    endif()
+endforeach()
+
+string(FIND "${_contract_text}" [[a_submitPairBoundaryToken]] _stale_token_position)
+if(NOT _stale_token_position EQUAL -1)
+    message(FATAL_ERROR "Submit path still depends on the obsolete untagged pair token")
 endif()
 
 message(STATUS "Neural Rendering submit-pair contract passed")

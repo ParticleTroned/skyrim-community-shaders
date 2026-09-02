@@ -894,7 +894,7 @@ public:
 		bool retainedNeuralPair = false;
 		uint64_t retainedNeuralCompositorCycleToken = 0;
 		uint64_t retainedNeuralSettingsKey = 0;
-		uint64_t retainedNeuralSubmitPairBoundaryToken = 0;
+		NeuralRendering::SubmitStereoSourceProof retainedNeuralSubmitSourceProof{};
 	};
 
 	struct VRRenderScalePresentationEyeSnapshot
@@ -1806,7 +1806,11 @@ public:
 		uint64_t a_keepaliveToken,
 		uint64_t a_compositorCycleToken,
 		uint64_t a_initialLoadProtectionEpochAtSubmitEntry);
-	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCycleToken, uint64_t a_submitPairBoundaryToken, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
+	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCycleToken,
+		uint64_t a_expectedSubmitPairBoundaryToken,
+		uint64_t a_matchedSubmitPairBoundaryToken,
+		vr::EVRSubmitFlags a_submitFlags, const vr::Texture_t* a_inputTexture,
+		const vr::VRTextureBounds_t* a_inputBounds,
 		vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds, VRRenderScalePresentationObservation& a_presentationObservation);
 	void RecordVRRenderScalePresentationObservation(const VRRenderScalePresentationObservation& a_observation);
 	static bool ShouldTraceVRMenuBridgeDirectDrawCandidate(UINT a_indexCount, UINT a_instanceCount,
@@ -2052,12 +2056,15 @@ public:
 		uint32_t generation = 0;
 		uint64_t settingsKey = 0;
 		ID3D11Texture2D* sourceTexture = nullptr;
+		winrt::com_ptr<ID3D11Texture2D> sourceTextureOwner;
 		uint32_t preparedEyeMask = 0;
 		uint32_t attemptedEyeMask = 0;
 		uint32_t successfulEyeMask = 0;
 		uint32_t committedEyeMask = 0;
 		uint32_t dlssEyeMask = 0;
-		uint64_t submitPairBoundaryToken = 0;
+		NeuralRendering::SubmitStereoSourceProof submitSourceProof{};
+		uint32_t submitThreadId = 0;
+		vr::EVRSubmitFlags submitFlags = vr::Submit_Default;
 		uint32_t presentedEyeMask = 0;
 		NeuralStereoRouteSnapshot publishedRoute{};
 		std::array<VRRenderScalePresentationObservation, 2> publishedPresentationObservations{};

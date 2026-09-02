@@ -353,9 +353,11 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				compositorCycleToken =
 					g_openVRSubmitCycleToken.load(std::memory_order_acquire);
 			}
+			const uint64_t expectedSubmitPairBoundaryToken =
+				g_neuralSubmitPairBoundaryToken;
 			const uint64_t matchedSubmitPairBoundaryToken =
 				upscaling.ObserveNeuralSubmitPairBoundaryEye(
-					g_neuralSubmitPairBoundaryToken,
+					expectedSubmitPairBoundaryToken,
 					compositorCycleToken,
 					eEye,
 					pTexture,
@@ -531,7 +533,17 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 			if (pTexture && pTexture->handle && pTexture->eType == vr::TextureType_DirectX) {
 				vr::Texture_t upscaledTexture{};
 				vr::VRTextureBounds_t upscaledBounds{};
-				if (upscaling.SubmitVRUpscaledFrame(eEye, compositorCycleToken, matchedSubmitPairBoundaryToken, pTexture, pBounds, upscaledTexture, upscaledBounds, presentationObservation)) {
+				if (upscaling.SubmitVRUpscaledFrame(
+						eEye,
+						compositorCycleToken,
+						expectedSubmitPairBoundaryToken,
+						matchedSubmitPairBoundaryToken,
+						nSubmitFlags,
+						pTexture,
+						pBounds,
+						upscaledTexture,
+						upscaledBounds,
+						presentationObservation)) {
 					probePresentationObservation = &presentationObservation;
 					if (upscaling.ShouldSuppressVRPostLoadCompositorSubmit(
 							eEye,

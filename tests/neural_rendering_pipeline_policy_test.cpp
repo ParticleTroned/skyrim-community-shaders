@@ -9,6 +9,8 @@ int main()
 	using NeuralRendering::InsertionPoint;
 	using NeuralRendering::PipelineArrangement;
 	using NeuralRendering::SubmitSourceIdentityMatch;
+	using NeuralRendering::SubmitStereoSourceProof;
+	using NeuralRendering::SubmitStereoSourceProofKind;
 	using NeuralRendering::TemporalAdmissionBlockReason;
 	using NeuralRendering::TemporalAdmissionInputs;
 	using NeuralRendering::TemporalRoute;
@@ -114,6 +116,78 @@ int main()
 	static_assert(
 		NeuralRendering::ResolveSubmitSourceIdentityMatch(0x3000u, 0x1000u, 0x2000u) ==
 		SubmitSourceIdentityMatch::None);
+
+	constexpr auto loggedCombinedSourceProof =
+		NeuralRendering::ResolveSubmitStereoSourceProof(
+			1923u, 0u, 0u, true, 1u, true);
+	static_assert(loggedCombinedSourceProof.IsValid());
+	static_assert(
+		loggedCombinedSourceProof.kind ==
+		SubmitStereoSourceProofKind::CombinedTextureCycle);
+	static_assert(loggedCombinedSourceProof.value == 1923u);
+	constexpr auto combinedSourceWithOuterProof =
+		NeuralRendering::ResolveSubmitStereoSourceProof(
+			1923u, 7u, 7u, true, 1u, true);
+	static_assert(
+		combinedSourceWithOuterProof.kind ==
+		SubmitStereoSourceProofKind::CombinedTextureCycle);
+	static_assert(combinedSourceWithOuterProof.value == 1923u);
+	constexpr auto combinedSourceWithRejectedOuterProof =
+		NeuralRendering::ResolveSubmitStereoSourceProof(
+			1923u, 7u, 0u, true, 1u, true);
+	static_assert(
+		combinedSourceWithRejectedOuterProof.kind ==
+		SubmitStereoSourceProofKind::CombinedTextureCycle);
+	constexpr auto arraySourceOuterProof =
+		NeuralRendering::ResolveSubmitStereoSourceProof(
+			1923u, 7u, 7u, false, 2u, true);
+	static_assert(
+		arraySourceOuterProof.kind ==
+		SubmitStereoSourceProofKind::OuterBoundary);
+	static_assert(arraySourceOuterProof.value == 7u);
+	static_assert(!NeuralRendering::ResolveSubmitStereoSourceProof(
+		0u, 0u, 0u, true, 1u, true)
+			.IsValid());
+	static_assert(!NeuralRendering::ResolveSubmitStereoSourceProof(
+		1923u, 0u, 0u, true, 1u, false)
+			.IsValid());
+	static_assert(!NeuralRendering::ResolveSubmitStereoSourceProof(
+		1923u, 0u, 0u, false, 1u, true)
+			.IsValid());
+	static_assert(!NeuralRendering::ResolveSubmitStereoSourceProof(
+		1923u, 7u, 7u, false, 1u, true)
+			.IsValid());
+	static_assert(!NeuralRendering::ResolveSubmitStereoSourceProof(
+		1923u, 0u, 0u, false, 2u, true)
+			.IsValid());
+	static_assert(!NeuralRendering::ResolveSubmitStereoSourceProof(
+		1923u, 7u, 0u, false, 2u, true)
+			.IsValid());
+	static_assert(!NeuralRendering::ResolveSubmitStereoSourceProof(
+		1923u, 7u, 8u, false, 2u, true)
+			.IsValid());
+	constexpr SubmitStereoSourceProof outerDomain{
+		.kind = SubmitStereoSourceProofKind::OuterBoundary,
+		.value = 41u,
+	};
+	constexpr SubmitStereoSourceProof combinedDomain{
+		.kind = SubmitStereoSourceProofKind::CombinedTextureCycle,
+		.value = 41u,
+	};
+	static_assert(!NeuralRendering::MatchesSubmitStereoSourceProof(
+		outerDomain, combinedDomain));
+	static_assert(NeuralRendering::MatchesSubmitStereoSourceProof(
+		combinedDomain, combinedDomain));
+	static_assert(!NeuralRendering::MatchesSubmitStereoSourceProof(
+		SubmitStereoSourceProof{}, SubmitStereoSourceProof{}));
+	static_assert(!NeuralRendering::MatchesSubmitStereoSourceProof(
+		combinedDomain,
+		NeuralRendering::ResolveSubmitStereoSourceProof(
+			42u, 0u, 0u, true, 1u, true)));
+	static_assert(std::string_view(
+					  NeuralRendering::GetSubmitStereoSourceProofName(
+						  SubmitStereoSourceProofKind::CombinedTextureCycle)) ==
+				  "combined_texture_cycle");
 
 	constexpr TemporalAdmissionInputs currentWorldFrame{
 		.worldFrameStateAvailable = true,

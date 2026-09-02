@@ -21730,8 +21730,9 @@ void Upscaling::RecordVRRenderScalePresentationObservation(const VRRenderScalePr
 				a_observation.contractGeneration &&
 			submitStageNeuralStereoState.settingsKey ==
 				a_observation.retainedNeuralSettingsKey &&
-			submitStageNeuralStereoState.submitPairBoundaryToken ==
-				a_observation.retainedNeuralSubmitPairBoundaryToken &&
+			NeuralRendering::MatchesSubmitStereoSourceProof(
+				submitStageNeuralStereoState.submitSourceProof,
+				a_observation.retainedNeuralSubmitSourceProof) &&
 			retainedOutput && retainedOutput->resource &&
 			retainedOutput->desc.Width == a_observation.outputWidth &&
 			retainedOutput->desc.Height == a_observation.outputHeight) {
@@ -32594,7 +32595,11 @@ bool Upscaling::MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context)
 	return true;
 }
 
-bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCycleToken, uint64_t a_submitPairBoundaryToken, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
+bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCycleToken,
+	uint64_t a_expectedSubmitPairBoundaryToken,
+	uint64_t a_matchedSubmitPairBoundaryToken,
+	vr::EVRSubmitFlags a_submitFlags, const vr::Texture_t* a_inputTexture,
+	const vr::VRTextureBounds_t* a_inputBounds,
 	vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds, VRRenderScalePresentationObservation& a_presentationObservation)
 {
 	a_presentationObservation = {};
@@ -32610,6 +32615,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		return false;
 	const uint32_t eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
 	const uint32_t currentFrame = state->frameCount;
+	const uint32_t currentSubmitThreadId = GetCurrentThreadId();
 	const auto neuralInsertionPoint =
 		GetLatchedNeuralRenderingInsertionPoint();
 	const bool neuralMenuSuppressed = IsNeuralRenderingMenuSuppressed();
@@ -32697,6 +32703,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			}
 			const bool cachedPairSourceSignatureMismatch =
 				submitStageNeuralStereoState.sourceTexture != replaySourceTexture ||
+				submitStageNeuralStereoState.sourceTextureOwner.get() !=
+					replaySourceTexture ||
 				!sourceDescMatches ||
 				!sourceRegionMatches ||
 				a_inputTexture->eColorSpace !=
@@ -32705,16 +32713,28 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 				submitStageNeuralStereoState.frame != currentFrame ||
 				submitStageNeuralStereoState.generation != replayGeneration ||
 				submitStageNeuralStereoState.settingsKey !=
-					BuildNeuralRenderingSettingsKey(settings);
+					BuildNeuralRenderingSettingsKey(settings) ||
+				submitStageNeuralStereoState.submitThreadId !=
+					currentSubmitThreadId ||
+				submitStageNeuralStereoState.submitFlags != a_submitFlags;
 			if (cachedPairSourceSignatureMismatch)
 				submitStageNeuralStereoState.sourceSignatureProven = false;
+			const auto replaySubmitSourceProof =
+				NeuralRendering::ResolveSubmitStereoSourceProof(
+					a_compositorCycleToken,
+					a_expectedSubmitPairBoundaryToken,
+					a_matchedSubmitPairBoundaryToken,
+					submitStageNeuralStereoState.publishedSourceUsesCombinedStereoLayout,
+					replaySourceDesc.ArraySize,
+					submitStageNeuralStereoState.sourceSignatureProven &&
+						!cachedPairSourceSignatureMismatch);
 			const bool cachedPairContextMatches =
 				!cachedPairSourceSignatureMismatch &&
 				!cachedPairContextMismatch &&
 				neuralTemporalAdmission.admitted &&
-				a_submitPairBoundaryToken != 0 &&
-				submitStageNeuralStereoState.submitPairBoundaryToken ==
-					a_submitPairBoundaryToken;
+				NeuralRendering::MatchesSubmitStereoSourceProof(
+					submitStageNeuralStereoState.submitSourceProof,
+					replaySubmitSourceProof);
 			const auto cachedPairReuse =
 				NeuralRendering::ResolveCachedStereoPairReuse(
 					cachedPairContextMatches,
@@ -32732,8 +32752,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 				const auto fallbackReason = !neuralTemporalAdmission.admitted ?
 				                                GetNeuralTemporalFallbackReason(
 													neuralTemporalAdmission) :
-				                            a_submitPairBoundaryToken == 0 ?
-				                                NeuralStereoFallbackReason::SourceSignatureUnproven :
+				                            !replaySubmitSourceProof.IsValid() ?
+				                                NeuralStereoFallbackReason::SourceBatchUnavailable :
 				                                NeuralStereoFallbackReason::CachedPairSignatureMismatch;
 				// Retain resource ownership until cycle retirement, but never present a
 				// pair after its source, settings, frame, or menu contract changed.
@@ -32826,8 +32846,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			a_compositorCycleToken;
 		a_presentationObservation.retainedNeuralSettingsKey =
 			submitStageNeuralStereoState.settingsKey;
-		a_presentationObservation.retainedNeuralSubmitPairBoundaryToken =
-			submitStageNeuralStereoState.submitPairBoundaryToken;
+		a_presentationObservation.retainedNeuralSubmitSourceProof =
+			submitStageNeuralStereoState.submitSourceProof;
 		return true;
 	}
 
@@ -33194,8 +33214,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			a_compositorCycleToken;
 		a_presentationObservation.retainedNeuralSettingsKey =
 			submitStageNeuralStereoState.settingsKey;
-		a_presentationObservation.retainedNeuralSubmitPairBoundaryToken =
-			submitStageNeuralStereoState.submitPairBoundaryToken;
+		a_presentationObservation.retainedNeuralSubmitSourceProof =
+			submitStageNeuralStereoState.submitSourceProof;
 	};
 	if (!sourceRegion.valid) {
 		if (vrRenderScaleMode) {
@@ -33904,14 +33924,17 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		TryClaimNeuralRenderingRoute(NeuralStereoRouteRole::Submit);
 	neuralSubmitRequested =
 		neuralSubmitRouteCandidate && neuralSubmitRouteClaimed;
-	const bool sourceContainsBothEyes =
-		sourceUsesCombinedStereoLayout || sourceDesc.ArraySize > 1;
+	const auto neuralSubmitSourceProof =
+		NeuralRendering::ResolveSubmitStereoSourceProof(
+			a_compositorCycleToken,
+			a_expectedSubmitPairBoundaryToken,
+			a_matchedSubmitPairBoundaryToken,
+			sourceUsesCombinedStereoLayout,
+			sourceDesc.ArraySize,
+			neuralSubmitSourceSignatureProven);
 	neuralSubmitSourceBatchEligible =
 		neuralSubmitRequested &&
-		a_compositorCycleToken != 0 &&
-		a_submitPairBoundaryToken != 0 &&
-		sourceContainsBothEyes &&
-		neuralSubmitSourceSignatureProven;
+		neuralSubmitSourceProof.IsValid();
 	const bool neuralStereoDecisionChanged =
 		!frozenNeuralStereoDecisionForCycle &&
 		(!submitStageNeuralStereoState.decisionReady ||
@@ -33919,11 +33942,15 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			submitStageNeuralStereoState.frame != currentFrame ||
 			submitStageNeuralStereoState.generation != activeContractGeneration ||
 			submitStageNeuralStereoState.settingsKey != neuralSettingsKey ||
-			submitStageNeuralStereoState.submitPairBoundaryToken !=
-				a_submitPairBoundaryToken ||
+			submitStageNeuralStereoState.submitSourceProof.kind !=
+				neuralSubmitSourceProof.kind ||
+			submitStageNeuralStereoState.submitSourceProof.value !=
+				neuralSubmitSourceProof.value ||
+			submitStageNeuralStereoState.submitThreadId != currentSubmitThreadId ||
+			submitStageNeuralStereoState.submitFlags != a_submitFlags ||
 			submitStageNeuralStereoState.sourceTexture != sourceTexture);
 	if (neuralStereoDecisionChanged) {
-		// Center inputs are content-keyed by this outer source/cycle decision.
+		// Center inputs are content-keyed by this source/cycle proof.
 		submitStageFoveatedCenterState = {};
 		submitStageNeuralStereoState = {};
 		submitStageNeuralStereoState.decisionReady = true;
@@ -33936,9 +33963,11 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		submitStageNeuralStereoState.frame = currentFrame;
 		submitStageNeuralStereoState.generation = activeContractGeneration;
 		submitStageNeuralStereoState.settingsKey = neuralSettingsKey;
-		submitStageNeuralStereoState.submitPairBoundaryToken =
-			a_submitPairBoundaryToken;
+		submitStageNeuralStereoState.submitSourceProof = neuralSubmitSourceProof;
+		submitStageNeuralStereoState.submitThreadId = currentSubmitThreadId;
+		submitStageNeuralStereoState.submitFlags = a_submitFlags;
 		submitStageNeuralStereoState.sourceTexture = sourceTexture;
+		submitStageNeuralStereoState.sourceTextureOwner.copy_from(sourceTexture);
 	}
 	NeuralStereoFallbackReason neuralSubmitFallbackReason = NeuralStereoFallbackReason::None;
 	if (!neuralSubmitConfigured)
@@ -33956,11 +33985,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		neuralSubmitFallbackReason = NeuralStereoFallbackReason::RouteIneligible;
 	else if (!neuralSubmitRouteClaimed)
 		neuralSubmitFallbackReason = NeuralStereoFallbackReason::RouteIneligible;
-	else if (a_submitPairBoundaryToken == 0)
-		neuralSubmitFallbackReason = NeuralStereoFallbackReason::SourceSignatureUnproven;
 	else if (!neuralSubmitSourceSignatureProven)
 		neuralSubmitFallbackReason = NeuralStereoFallbackReason::SourceSignatureUnproven;
-	else if (!neuralSubmitSourceBatchEligible)
+	else if (!neuralSubmitSourceProof.IsValid() ||
+			 !neuralSubmitSourceBatchEligible)
 		neuralSubmitFallbackReason = NeuralStereoFallbackReason::SourceBatchUnavailable;
 	if (neuralStereoDecisionChanged)
 		submitStageNeuralStereoState.fallbackReason = neuralSubmitFallbackReason;
@@ -34011,12 +34039,30 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		static bool loggedNeuralStereoSourceFallback = false;
 		LogWarnOnceFmt(
 			loggedNeuralStereoSourceFallback,
-			"[DLSSNR][Stereo] Submit-stage NR disabled because a coherent two-eye source/cycle signature is unavailable; normal DLSS remains active (cycle={}, pairBoundary={}, combined={}, array={}, signatureProven={})",
+			"[DLSSNR][Stereo] Submit-stage NR disabled because a coherent two-eye source/cycle proof is unavailable; normal DLSS remains active (cycle={}, expectedBoundary={}, matchedBoundary={}, sourceProof={}, combined={}, array={}, signatureProven={})",
 			a_compositorCycleToken,
-			a_submitPairBoundaryToken,
+			a_expectedSubmitPairBoundaryToken,
+			a_matchedSubmitPairBoundaryToken,
+			NeuralRendering::GetSubmitStereoSourceProofName(
+				neuralSubmitSourceProof.kind),
 			sourceUsesCombinedStereoLayout,
 			sourceDesc.ArraySize,
 			neuralSubmitSourceSignatureProven);
+	}
+	if (neuralSubmitRequested &&
+		neuralSubmitSourceProof.kind ==
+			NeuralRendering::SubmitStereoSourceProofKind::CombinedTextureCycle) {
+		static bool loggedCombinedTextureCycleProof = false;
+		if (!loggedCombinedTextureCycleProof) {
+			loggedCombinedTextureCycleProof = true;
+			logger::info(
+				"[DLSSNR][Stereo] Submit-stage stereo source admitted with sourceProof={} (cycle={}, expectedBoundary={}, matchedBoundary={})",
+				NeuralRendering::GetSubmitStereoSourceProofName(
+					neuralSubmitSourceProof.kind),
+				a_compositorCycleToken,
+				a_expectedSubmitPairBoundaryToken,
+				a_matchedSubmitPairBoundaryToken);
+		}
 	}
 
 	if (neuralSubmitSourceBatchEligible &&
@@ -34812,12 +34858,15 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		}
 	}
 	const bool retainedNeuralPairForPresentation =
-		a_compositorCycleToken != 0 &&
-		a_submitPairBoundaryToken != 0 &&
 		submitStageNeuralStereoState.outputsReady &&
 		submitStageNeuralStereoState.compositorCycle == a_compositorCycleToken &&
-		submitStageNeuralStereoState.submitPairBoundaryToken ==
-			a_submitPairBoundaryToken &&
+		NeuralRendering::MatchesSubmitStereoSourceProof(
+			submitStageNeuralStereoState.submitSourceProof,
+			neuralSubmitSourceProof) &&
+		submitStageNeuralStereoState.submitThreadId == currentSubmitThreadId &&
+		submitStageNeuralStereoState.submitFlags == a_submitFlags &&
+		submitStageNeuralStereoState.sourceTexture == sourceTexture &&
+		submitStageNeuralStereoState.sourceTextureOwner.get() == sourceTexture &&
 		submitStageNeuralStereoState.publishedOutputs[0] &&
 		submitStageNeuralStereoState.publishedOutputs[0]->resource &&
 		submitStageNeuralStereoState.publishedOutputs[1] &&

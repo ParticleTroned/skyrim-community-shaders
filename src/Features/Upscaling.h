@@ -2073,6 +2073,7 @@ public:
 	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;
 	virtual void SetupRenderTargetResources() override;
+	virtual void Reset() override;
 
 	UpscaleMethod GetUpscaleMethod() const;
 	UpscaleMethod GetConfiguredUpscaleMethodForTransition() const;

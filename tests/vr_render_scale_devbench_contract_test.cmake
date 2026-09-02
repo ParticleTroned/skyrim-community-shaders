@@ -35,6 +35,32 @@ file(READ
     _fidelityfx_source
 )
 
+foreach(_watchdog_frame_contract IN ITEMS
+    "ServiceVRRenderScalePreMutationNativeFallbackWatchdog(\"end of frame\")"
+    "ServiceVRRenderScalePostMutationWatchdog(\"end of frame\")"
+)
+    string(FIND "${_upscaling_source}" "${_watchdog_frame_contract}"
+        _watchdog_frame_contract_position)
+    if(_watchdog_frame_contract_position EQUAL -1)
+        message(FATAL_ERROR
+            "Render-scale watchdog is not serviced at the frame boundary: ${_watchdog_frame_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_forbidden_watchdog_hot_path IN ITEMS
+    "ScopeExit postMutationWatchdog"
+    "ServiceVRRenderScalePostMutationWatchdog(\"ConfigureUpscaling\")"
+)
+    string(FIND "${_upscaling_source}" "${_forbidden_watchdog_hot_path}"
+        _forbidden_watchdog_hot_path_position)
+    if(NOT _forbidden_watchdog_hot_path_position EQUAL -1)
+        message(FATAL_ERROR
+            "Render-scale watchdog returned to a per-draw path: ${_forbidden_watchdog_hot_path}"
+        )
+    endif()
+endforeach()
+
 foreach(_action IN ITEMS
     qualification_status
     qualification_begin

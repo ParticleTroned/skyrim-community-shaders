@@ -23845,15 +23845,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 {
 	if (!globals::game::isVR)
 		return true;
-	// Run the bounded mutation service after this call has had one final chance
-	// to poll fences/providers or publish a coherent contract. This avoids a
-	// debugger/sleep resume expiring before ready work can make progress.
-	ScopeExit postMutationWatchdog([&]() {
-		ServiceVRRenderScalePreMutationNativeFallbackWatchdog(
-			a_caller && *a_caller ? a_caller : "render-target relatch service");
-		ServiceVRRenderScalePostMutationWatchdog(
-			a_caller && *a_caller ? a_caller : "render-target relatch service");
-	});
 	if (!pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire))
 		return true;
 	VRRenderScalePhysicalMutationSnapshot physicalMutationAtEntry{};
@@ -42408,10 +42399,6 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	QueueVRFpsStabilizerSyncForCurrentLoadIfNeeded(*this);
 	ApplyPendingVRFpsStabilizerLoadSync();
 	ServiceDeferredVRRenderScaleRequestAfterPhysicalRecovery();
-	if (!pendingPerfModeRenderTargetRecreate.load(
-			std::memory_order_acquire)) {
-		ServiceVRRenderScalePostMutationWatchdog("ConfigureUpscaling");
-	}
 	ApplyPendingVRUpscalingTransition();
 	QueueDeferredVRRenderScaleActivationIfReady(*this);
 	ServiceSubmitStageBoundsFallbackWatchdog();
@@ -42847,6 +42834,17 @@ void Upscaling::SetupResources()
 void Upscaling::SetupRenderTargetResources()
 {
 	SetupResources();
+}
+
+void Upscaling::Reset()
+{
+	if (!globals::game::isVR)
+		return;
+
+	// Watchdog deadlines are measured in seconds; the end-of-frame boundary
+	// observes all mutation progress without polling on every dirty-state draw.
+	ServiceVRRenderScalePreMutationNativeFallbackWatchdog("end of frame");
+	ServiceVRRenderScalePostMutationWatchdog("end of frame");
 }
 
 void Upscaling::ClearShaderCache()

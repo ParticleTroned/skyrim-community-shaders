@@ -1509,6 +1509,37 @@ namespace
 		return true;
 	}
 
+	constexpr bool CoversDLSSSlotRecycleOwnership()
+	{
+		DLSSSlotRecycleAdmission state{
+			.globalTeardownPending = false,
+			.roleRecyclePending = true,
+			.victimSlot = 1,
+			.requestedSlot = 0,
+			.slotCount = 2,
+		};
+		if (!CanUseDLSSSlotDuringRecycle(state))
+			return false;
+
+		state.requestedSlot = 1;
+		if (CanUseDLSSSlotDuringRecycle(state))
+			return false;
+		state.requestedSlot = 0;
+		state.globalTeardownPending = true;
+		if (CanUseDLSSSlotDuringRecycle(state))
+			return false;
+		state.globalTeardownPending = false;
+		state.victimSlot = 2;
+		if (CanUseDLSSSlotDuringRecycle(state))
+			return false;
+		state.roleRecyclePending = false;
+		state.requestedSlot = 2;
+		if (CanUseDLSSSlotDuringRecycle(state))
+			return false;
+		state.requestedSlot = 0;
+		return CanUseDLSSSlotDuringRecycle(state);
+	}
+
 	constexpr bool CoversPostLoadRecoverySettleDeadline()
 	{
 		PostLoadRecoverySettleAdmission state{
@@ -2976,6 +3007,7 @@ namespace
 	static_assert(CoversStereoDispatchContractIdentity());
 	static_assert(CoversPendingVendorResetOwnership());
 	static_assert(CoversDLSSReadinessTiers());
+	static_assert(CoversDLSSSlotRecycleOwnership());
 	static_assert(CoversSynchronousVendorLifecycleRebind());
 	static_assert(CoversPostLoadRecoverySettleDeadline());
 	static_assert(CoversPostLoadRecoveryDeadlineAdmission());

@@ -1302,6 +1302,30 @@ namespace VRVendorRelatchPolicy
 		       a_state.completeViewportResources;
 	}
 
+	struct DLSSSlotRecycleAdmission
+	{
+		bool globalTeardownPending = false;
+		bool roleRecyclePending = false;
+		std::uint32_t victimSlot = 0;
+		std::uint32_t requestedSlot = 0;
+		std::uint32_t slotCount = 0;
+	};
+
+	[[nodiscard]] constexpr bool CanUseDLSSSlotDuringRecycle(
+		const DLSSSlotRecycleAdmission& a_state) noexcept
+	{
+		if (a_state.globalTeardownPending || a_state.slotCount == 0 ||
+			a_state.requestedSlot >= a_state.slotCount) {
+			return false;
+		}
+		if (!a_state.roleRecyclePending)
+			return true;
+
+		// An invalid victim on a live fence is incomplete ownership evidence.
+		return a_state.victimSlot < a_state.slotCount &&
+		       a_state.victimSlot != a_state.requestedSlot;
+	}
+
 	struct SynchronousVendorLifecycleRebindAdmission
 	{
 		bool completedSynchronously = false;

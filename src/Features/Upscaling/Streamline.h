@@ -162,7 +162,12 @@ public:
 	uint64_t vrDLSSViewportUseCounter = 0;
 	std::array<bool, 2> activeDLSSViewportResourcesAllocated = {};
 	ID3D11Query* pendingDLSSResourceFreeIdleFence = nullptr;
-	std::array<ID3D11Query*, kVRDLSSViewportRoleCount> pendingVRDLSSSlotRecycleIdleFences{};
+	struct VRDLSSSlotRecycleFence
+	{
+		ID3D11Query* query = nullptr;
+		uint32_t victimSlot = kVRDLSSViewportSlotCount;
+	};
+	std::array<VRDLSSSlotRecycleFence, kVRDLSSViewportRoleCount> pendingVRDLSSSlotRecycleIdleFences{};
 
 	struct ReflexOptionsCache
 	{
@@ -485,6 +490,11 @@ public:
 		ID3D11Resource* a_colorInput,
 		sl::ViewportHandle& a_viewport) const;
 	int ChooseVRDLSSViewportSlotForAllocation(DLSSViewportRole viewportRole) const;
+	/** @brief Reports whether a profile can use an existing or unused slot without evicting another profile. */
+	[[nodiscard]] bool CanPrepareVRDLSSViewportWithoutRecycle(
+		DLSSViewportRole a_viewportRole,
+		uint32_t a_qualityMode,
+		uint32_t a_dlssPreset) const noexcept;
 	bool FreeDLSSViewportResources(sl::ViewportHandle a_viewport, uint32_t a_eyeIndex, bool a_logFailures);
 	bool FreeVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t slotIndex, bool logFailures);
 	DLSSOptionsCache& GetDLSSOptionsCache(DLSSViewportRole viewportRole, uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset);

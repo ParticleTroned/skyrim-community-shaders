@@ -504,6 +504,9 @@ public:
 		uint32_t queuedFrame = 0;
 		VRUpscalingTransitionOrigin origin = VRUpscalingTransitionOrigin::CSMenu;
 		bool directMenuEdit = false;
+		VRVendorRelatchPolicy::StartupNativeFallbackControlAction
+			startupNativeFallbackControlAction =
+				VRVendorRelatchPolicy::StartupNativeFallbackControlAction::PassThrough;
 		bool stabilizerDoorHandoff = false;
 		uint64_t stabilizerDoorHandoffSerial = 0;
 
@@ -3138,6 +3141,9 @@ public:
 	void RefreshSubmitStageUnderwaterMask();
 	void RequestHistoryReset();
 	[[nodiscard]] bool RecordVRRenderScaleTransitionRequested(const VRRenderScaleDesiredProfile& a_request);
+	bool ResolveVRStartupNativeFallbackAfterPublication(
+		const VRRenderScaleDesiredProfile& a_request,
+		bool a_retryRevalidated);
 	bool StoreDeferredVRRenderScaleRequestLatestWinsLocked(
 		const VRRenderScaleDesiredProfile& a_request);
 	void SuspendVRRenderScaleControllerForDeferredRequest(

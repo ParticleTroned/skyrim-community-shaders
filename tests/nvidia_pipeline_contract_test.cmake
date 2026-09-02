@@ -120,6 +120,31 @@ foreach(_inactive_dlss_retention_contract IN ITEMS
     endif()
 endforeach()
 
+string(FIND "${_streamline}"
+    "bool Streamline::CanPrepareVRDLSSViewportWithoutRecycle"
+    _slot_preparation_start)
+string(FIND "${_streamline}"
+    "bool Streamline::FreeDLSSViewportResources"
+    _slot_preparation_end)
+if(_slot_preparation_start EQUAL -1 OR
+   _slot_preparation_end LESS_EQUAL _slot_preparation_start)
+    message(FATAL_ERROR "DLSS slot preparation admission could not be isolated")
+endif()
+math(EXPR _slot_preparation_length
+    "${_slot_preparation_end} - ${_slot_preparation_start}")
+string(SUBSTRING "${_streamline}" ${_slot_preparation_start}
+    ${_slot_preparation_length} _slot_preparation_body)
+foreach(_required IN ITEMS
+    "FindVRDLSSViewportSlot"
+    "VRVendorRelatchPolicy::CanUseDLSSSlotDuringRecycle"
+)
+    string(FIND "${_slot_preparation_body}" "${_required}" _position)
+    if(_position EQUAL -1)
+        message(FATAL_ERROR
+            "DLSS preparation lost victim-specific slot admission: ${_required}")
+    endif()
+endforeach()
+
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/DX12SwapChain.h" _swapchain_header)
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/DX12SwapChain.cpp" _swapchain)
 foreach(_required IN ITEMS

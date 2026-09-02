@@ -2200,10 +2200,22 @@ bool Streamline::CanPrepareVRDLSSViewportWithoutRecycle(
 	}
 
 	const uint32_t roleIndex = GetDLSSViewportRoleIndex(a_viewportRole);
-	if (pendingVRDLSSSlotRecycleIdleFences[roleIndex].query)
+	const auto& recycleFence = pendingVRDLSSSlotRecycleIdleFences[roleIndex];
+	const int slotIndex = FindVRDLSSViewportSlot(
+		a_viewportRole,
+		a_qualityMode,
+		a_dlssPreset);
+	if (slotIndex >= 0) {
+		return VRVendorRelatchPolicy::CanUseDLSSSlotDuringRecycle({
+			.globalTeardownPending = false,
+			.roleRecyclePending = recycleFence.query != nullptr,
+			.victimSlot = recycleFence.victimSlot,
+			.requestedSlot = static_cast<uint32_t>(slotIndex),
+			.slotCount = kVRDLSSViewportSlotCount,
+		});
+	}
+	if (recycleFence.query)
 		return false;
-	if (FindVRDLSSViewportSlot(a_viewportRole, a_qualityMode, a_dlssPreset) >= 0)
-		return true;
 
 	return std::ranges::any_of(
 		vrDLSSViewportSlots[roleIndex],

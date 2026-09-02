@@ -93,6 +93,8 @@ public:
 		MethodIneligible,
 		RouteIneligible,
 		MenuContext,
+		GamePaused,
+		TemporalSourceStale,
 		MaskVisualization,
 		FrameGeneration,
 		SubmitDeviceUnavailable,
@@ -129,6 +131,7 @@ public:
 		bool hdrRequired = false;
 		bool frameGenerationActive = false;
 		bool frameGenerationGatePassed = false;
+		NeuralRendering::TemporalAdmissionResult temporalAdmission{};
 		NeuralStereoPairDisposition disposition = NeuralStereoPairDisposition::Unknown;
 		NeuralStereoFallbackReason fallbackReason = NeuralStereoFallbackReason::None;
 		uint32_t preparedEyeMask = 0;
@@ -1861,7 +1864,7 @@ public:
 	bool depthUpscaleUseWideKernel = false;
 	bool historyResetRequested = true;
 	bool historyResetThisFrame = false;
-	std::atomic_bool neuralMenuSuppressionLatched{ false };
+	std::atomic<uint32_t> neuralTemporalAdmissionLatch{ 0 };
 	uint32_t neuralInsertionPointLatchedFrame = std::numeric_limits<uint32_t>::max();
 	NeuralRendering::InsertionPoint neuralInsertionPointLatched =
 		NeuralRendering::kDefaultInsertionPoint;
@@ -2015,6 +2018,7 @@ public:
 		bool preflightFailed = false;
 		bool neuralRequested = false;
 		bool neuralApplied = false;
+		NeuralRendering::TemporalAdmissionResult temporalAdmission{};
 		NeuralStereoFallbackReason fallbackReason = NeuralStereoFallbackReason::None;
 		uint64_t compositorCycle = 0;
 		uint32_t frame = std::numeric_limits<uint32_t>::max();
@@ -2115,7 +2119,14 @@ public:
 	void UpscaleDepth();
 	void RefreshSubmitStageUnderwaterMask();
 	void RequestHistoryReset() noexcept;
-	void ObserveNeuralRenderingMenuSuppression(bool a_suppressed);
+	[[nodiscard]] NeuralRendering::TemporalAdmissionResult BuildNeuralTemporalAdmission(
+		NeuralStereoRouteRole a_role,
+		bool a_menuContextActive) const noexcept;
+	void ObserveNeuralTemporalAdmission(
+		NeuralStereoRouteRole a_role,
+		const NeuralRendering::TemporalAdmissionResult& a_admission) noexcept;
+	[[nodiscard]] static NeuralStereoFallbackReason GetNeuralTemporalFallbackReason(
+		const NeuralRendering::TemporalAdmissionResult& a_admission) noexcept;
 	void RecordVRRenderScaleTransitionRequested(const VRRenderScaleDesiredProfile& a_request);
 	bool RecordVRRenderScaleTransitionPreparing(const VRRenderScaleDesiredProfile& a_request);
 	uint64_t AllocateVRRenderScaleTransitionEpoch();

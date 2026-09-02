@@ -25150,7 +25150,6 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 		GetLatchedNeuralRenderingInsertionPoint() ==
 			NeuralRendering::InsertionPoint::UpscaledCenter &&
 		!IsNeuralRenderingInsertionTransitionBlocked() &&
-		!IsNeuralRenderingMenuSuppressed() &&
 		settings.frameGenerationMode == 0 &&
 		!IsFrameGenerationDx12PathActive();
 	if (neuralResult)
@@ -25759,7 +25758,6 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 			NeuralRendering::InsertionPoint::FinalLdrPreUi ||
 		IsNeuralRenderingInsertionTransitionBlocked() ||
 		!settings.neuralRenderingEnabled ||
-		IsNeuralRenderingMenuSuppressed() ||
 		settings.frameGenerationMode != 0 || IsFrameGenerationDx12PathActive() ||
 		!TryClaimNeuralRenderingRoute(a_role) || !a_generation ||
 		!a_inputWidthPerEye || !a_inputHeight || !a_outputWidthPerEye ||
@@ -26109,13 +26107,17 @@ void Upscaling::ApplyMainFinalLdrNeuralStereo() noexcept
 
 	auto route = pending.route;
 	const bool menuSuppressed = IsNeuralRenderingMenuSuppressed();
-	ObserveNeuralRenderingMenuSuppression(menuSuppressed);
+	const auto temporalAdmission = BuildNeuralTemporalAdmission(
+		NeuralStereoRouteRole::Main, menuSuppressed);
+	ObserveNeuralTemporalAdmission(
+		NeuralStereoRouteRole::Main, temporalAdmission);
+	route.temporalAdmission = temporalAdmission;
 	const bool routeStillEligible =
 		settings.neuralRenderingEnabled &&
 		GetRuntimeUpscaleMethod() == UpscaleMethod::kDLSS &&
 		IsFoveatedVendorDispatchEnabled(UpscaleMethod::kDLSS) &&
 		!settings.foveatedPeripheryMaskVisualization &&
-		!IsPresentationUpscalingActive() && !menuSuppressed &&
+		!IsPresentationUpscalingActive() && temporalAdmission.admitted &&
 		settings.frameGenerationMode == 0 &&
 		!IsFrameGenerationDx12PathActive() &&
 		GetLatchedNeuralRenderingInsertionPoint() ==
@@ -26123,8 +26125,8 @@ void Upscaling::ApplyMainFinalLdrNeuralStereo() noexcept
 		!IsNeuralRenderingInsertionTransitionBlocked();
 	if (!routeStillEligible) {
 		route.disposition = NeuralStereoPairDisposition::NormalDLSSPair;
-		route.fallbackReason = menuSuppressed ?
-		                           NeuralStereoFallbackReason::MenuContext :
+		route.fallbackReason = !temporalAdmission.admitted ?
+		                           GetNeuralTemporalFallbackReason(temporalAdmission) :
 		                           NeuralStereoFallbackReason::RouteIneligible;
 		PublishNeuralStereoRouteSnapshot(route);
 		return;
@@ -26450,7 +26452,6 @@ bool Upscaling::DispatchFoveatedVendorCenterStereo(UpscaleMethod a_upscaleMethod
 			GetLatchedNeuralRenderingInsertionPoint() ==
 				NeuralRendering::InsertionPoint::UpscaledCenter &&
 			!IsNeuralRenderingInsertionTransitionBlocked() &&
-			!IsNeuralRenderingMenuSuppressed() &&
 			settings.frameGenerationMode == 0 &&
 			!IsFrameGenerationDx12PathActive();
 		if (!neuralRouteRequested) {
@@ -26923,7 +26924,10 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 	if (mainFinalLdrNeuralState.frame != state->frameCount)
 		mainFinalLdrNeuralState = {};
 	const bool neuralMenuSuppressed = IsNeuralRenderingMenuSuppressed();
-	ObserveNeuralRenderingMenuSuppression(neuralMenuSuppressed);
+	const auto neuralTemporalAdmission = BuildNeuralTemporalAdmission(
+		NeuralStereoRouteRole::Main, neuralMenuSuppressed);
+	ObserveNeuralTemporalAdmission(
+		NeuralStereoRouteRole::Main, neuralTemporalAdmission);
 
 	uint32_t inputWidthPerEye = 0;
 	uint32_t inputHeight = 0;
@@ -27012,7 +27016,7 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 	const bool neuralBaseEligible =
 		neuralRequested &&
 		a_upscaleMethod == UpscaleMethod::kDLSS &&
-		!neuralMenuSuppressed &&
+		neuralTemporalAdmission.admitted &&
 		!visualizeMask &&
 		!frameGenerationActive &&
 		!IsNeuralRenderingInsertionTransitionBlocked();
@@ -27040,6 +27044,7 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 		.hdrRequired = false,
 		.frameGenerationActive = frameGenerationActive,
 		.frameGenerationGatePassed = !frameGenerationActive,
+		.temporalAdmission = neuralTemporalAdmission,
 	};
 	if (!neuralRequested) {
 		neuralRoute.disposition = NeuralStereoPairDisposition::NotRequested;
@@ -27047,9 +27052,14 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 	} else if (a_upscaleMethod != UpscaleMethod::kDLSS) {
 		neuralRoute.disposition = NeuralStereoPairDisposition::NotRequested;
 		neuralRoute.fallbackReason = NeuralStereoFallbackReason::MethodIneligible;
-	} else if (neuralMenuSuppressed) {
-		neuralRoute.disposition = NeuralStereoPairDisposition::NotRequested;
-		neuralRoute.fallbackReason = NeuralStereoFallbackReason::MenuContext;
+	} else if (!neuralTemporalAdmission.admitted) {
+		neuralRoute.disposition =
+			neuralTemporalAdmission.blockReason ==
+				NeuralRendering::TemporalAdmissionBlockReason::MenuContext ?
+				NeuralStereoPairDisposition::NotRequested :
+				NeuralStereoPairDisposition::NormalDLSSPair;
+		neuralRoute.fallbackReason =
+			GetNeuralTemporalFallbackReason(neuralTemporalAdmission);
 	} else if (visualizeMask) {
 		neuralRoute.disposition = NeuralStereoPairDisposition::NormalDLSSPair;
 		neuralRoute.fallbackReason = NeuralStereoFallbackReason::MaskVisualization;
@@ -32206,7 +32216,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	const auto neuralInsertionPoint =
 		GetLatchedNeuralRenderingInsertionPoint();
 	const bool neuralMenuSuppressed = IsNeuralRenderingMenuSuppressed();
-	ObserveNeuralRenderingMenuSuppression(neuralMenuSuppressed);
+	const auto neuralTemporalAdmission = BuildNeuralTemporalAdmission(
+		NeuralStereoRouteRole::Submit, neuralMenuSuppressed);
+	ObserveNeuralTemporalAdmission(
+		NeuralStereoRouteRole::Submit, neuralTemporalAdmission);
 	PublishNeuralSubmitCycleSnapshot(a_compositorCycleToken, currentFrame);
 	if (!a_inputTexture || !a_inputTexture->handle ||
 		a_inputTexture->eType != vr::TextureType_DirectX) {
@@ -32301,7 +32314,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			const bool cachedPairContextMatches =
 				!cachedPairSourceSignatureMismatch &&
 				!cachedPairContextMismatch &&
-				!neuralMenuSuppressed &&
+				neuralTemporalAdmission.admitted &&
 				a_submitPairBoundaryToken != 0 &&
 				submitStageNeuralStereoState.submitPairBoundaryToken ==
 					a_submitPairBoundaryToken;
@@ -32319,8 +32332,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 				return false;
 			}
 			if (cachedPairReuse == NeuralRendering::CachedStereoPairReuse::Reject) {
-				const auto fallbackReason = neuralMenuSuppressed ?
-				                                NeuralStereoFallbackReason::MenuContext :
+				const auto fallbackReason = !neuralTemporalAdmission.admitted ?
+				                                GetNeuralTemporalFallbackReason(
+										neuralTemporalAdmission) :
 				                            a_submitPairBoundaryToken == 0 ?
 				                                NeuralStereoFallbackReason::SourceSignatureUnproven :
 				                                NeuralStereoFallbackReason::CachedPairSignatureMismatch;
@@ -32338,6 +32352,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 				submitStageNeuralStereoState.fallbackReason = fallbackReason;
 				submitStageNeuralStereoState.publishedRoute.sourceSignatureProven =
 					submitStageNeuralStereoState.sourceSignatureProven;
+				submitStageNeuralStereoState.publishedRoute.temporalAdmission =
+					neuralTemporalAdmission;
 				submitStageNeuralStereoState.publishedRoute.eligible = false;
 				submitStageNeuralStereoState.publishedRoute.sourceBatchEligible = false;
 				submitStageNeuralStereoState.publishedRoute.pairComplete = false;
@@ -32361,9 +32377,13 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			route.arrangement = static_cast<uint32_t>(NeuralRendering::kPipelineArrangement);
 			route.insertionPoint = static_cast<uint32_t>(neuralInsertionPoint);
 			route.requested = submitStageNeuralStereoState.neuralRequested;
-			route.eligible = submitStageNeuralStereoState.neuralRequested;
+			route.eligible =
+				submitStageNeuralStereoState.neuralRequested &&
+				submitStageNeuralStereoState.temporalAdmission.admitted;
 			route.sourceBatchEligible = submitStageNeuralStereoState.sourceBatchEligible;
 			route.sourceSignatureProven = submitStageNeuralStereoState.sourceSignatureProven;
+			route.temporalAdmission =
+				submitStageNeuralStereoState.temporalAdmission;
 			route.disposition = submitStageNeuralStereoState.outputsReady ?
 			                        (submitStageNeuralStereoState.neuralApplied ?
 											NeuralStereoPairDisposition::NeuralPair :
@@ -32429,7 +32449,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	const bool neuralSubmitBaseEligible =
 		neuralSubmitConfigured &&
 		upscaleMethod == UpscaleMethod::kDLSS &&
-		!neuralMenuSuppressed &&
+		neuralTemporalAdmission.admitted &&
 		!settings.foveatedPeripheryMaskVisualization &&
 		!neuralSubmitFrameGenerationActive &&
 		!IsNeuralRenderingInsertionTransitionBlocked();
@@ -32450,8 +32470,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 				fallbackReason = NeuralStereoFallbackReason::NeuralDisabled;
 			else if (upscaleMethod != UpscaleMethod::kDLSS)
 				fallbackReason = NeuralStereoFallbackReason::MethodIneligible;
-			else if (neuralMenuSuppressed)
-				fallbackReason = NeuralStereoFallbackReason::MenuContext;
+			else if (!neuralTemporalAdmission.admitted)
+				fallbackReason =
+					GetNeuralTemporalFallbackReason(neuralTemporalAdmission);
 			else if (settings.foveatedPeripheryMaskVisualization)
 				fallbackReason = NeuralStereoFallbackReason::MaskVisualization;
 			else if (neuralSubmitFrameGenerationActive)
@@ -32466,7 +32487,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 				fallbackReason == NeuralStereoFallbackReason::SubmitPresentationGate;
 			const bool normalDlssExpected =
 				fallbackReason == NeuralStereoFallbackReason::MaskVisualization ||
-				fallbackReason == NeuralStereoFallbackReason::FrameGeneration;
+				fallbackReason == NeuralStereoFallbackReason::FrameGeneration ||
+				fallbackReason == NeuralStereoFallbackReason::GamePaused ||
+				fallbackReason == NeuralStereoFallbackReason::TemporalSourceStale;
 			PublishNeuralStereoRouteSnapshot({
 				.valid = true,
 				.role = NeuralStereoRouteRole::Submit,
@@ -32485,6 +32508,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 				.hdrRequired = false,
 				.frameGenerationActive = neuralSubmitFrameGenerationActive,
 				.frameGenerationGatePassed = !neuralSubmitFrameGenerationActive,
+				.temporalAdmission = neuralTemporalAdmission,
 				.disposition = notRequested ?
 			                       NeuralStereoPairDisposition::NotRequested :
 			                   normalDlssExpected ?
@@ -33509,6 +33533,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		submitStageNeuralStereoState.sourceBatchEligible = neuralSubmitSourceBatchEligible;
 		submitStageNeuralStereoState.sourceSignatureProven = neuralSubmitSourceSignatureProven;
 		submitStageNeuralStereoState.neuralRequested = neuralSubmitRequested;
+		submitStageNeuralStereoState.temporalAdmission =
+			neuralTemporalAdmission;
 		submitStageNeuralStereoState.compositorCycle = a_compositorCycleToken;
 		submitStageNeuralStereoState.frame = currentFrame;
 		submitStageNeuralStereoState.generation = activeContractGeneration;
@@ -33522,8 +33548,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		neuralSubmitFallbackReason = NeuralStereoFallbackReason::NeuralDisabled;
 	else if (upscaleMethod != UpscaleMethod::kDLSS)
 		neuralSubmitFallbackReason = NeuralStereoFallbackReason::MethodIneligible;
-	else if (neuralMenuSuppressed)
-		neuralSubmitFallbackReason = NeuralStereoFallbackReason::MenuContext;
+	else if (!neuralTemporalAdmission.admitted)
+		neuralSubmitFallbackReason =
+			GetNeuralTemporalFallbackReason(neuralTemporalAdmission);
 	else if (settings.foveatedPeripheryMaskVisualization)
 		neuralSubmitFallbackReason = NeuralStereoFallbackReason::MaskVisualization;
 	else if (neuralSubmitFrameGenerationActive)
@@ -33563,6 +33590,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			.hdrRequired = false,
 			.frameGenerationActive = neuralSubmitFrameGenerationActive,
 			.frameGenerationGatePassed = !neuralSubmitFrameGenerationActive,
+			.temporalAdmission = submitStageNeuralStereoState.temporalAdmission,
 			.disposition = a_disposition,
 			.fallbackReason = a_fallbackReason,
 			.preparedEyeMask = submitStageNeuralStereoState.preparedEyeMask,
@@ -34822,12 +34850,74 @@ void Upscaling::RequestHistoryReset() noexcept
 		historyResetThisFrame = true;
 }
 
-void Upscaling::ObserveNeuralRenderingMenuSuppression(bool a_suppressed)
+NeuralRendering::TemporalAdmissionResult Upscaling::BuildNeuralTemporalAdmission(
+	NeuralStereoRouteRole a_role,
+	bool a_menuContextActive) const noexcept
 {
-	const bool previous = neuralMenuSuppressionLatched.exchange(
-		a_suppressed, std::memory_order_acq_rel);
-	if (settings.neuralRenderingEnabled && previous != a_suppressed)
-		RequestHistoryReset();
+	const auto* state = globals::state;
+	auto* const ui = globals::game::ui;
+	const uint32_t invalidFrame = std::numeric_limits<uint32_t>::max();
+	const NeuralRendering::TemporalAdmissionInputs inputs{
+		.menuContextActive = a_menuContextActive,
+		.gamePaused = ui && ui->GameIsPaused(),
+		.worldFrameStateAvailable = state != nullptr,
+		.currentFrame = state ? state->frameCount : invalidFrame,
+		.lastWorldRenderFrame = state ? state->lastWorldRenderFrame : invalidFrame,
+		.lastCompletedWorldRenderFrame =
+			state ? state->lastCompletedWorldRenderFrame : invalidFrame,
+	};
+	const auto route = a_role == NeuralStereoRouteRole::Submit ?
+	                       NeuralRendering::TemporalRoute::Submit :
+	                       NeuralRendering::TemporalRoute::Main;
+	return NeuralRendering::EvaluateTemporalAdmission(route, inputs);
+}
+
+void Upscaling::ObserveNeuralTemporalAdmission(
+	NeuralStereoRouteRole a_role,
+	const NeuralRendering::TemporalAdmissionResult& a_admission) noexcept
+{
+	const auto routeIndex = static_cast<uint32_t>(a_role);
+	if (routeIndex >= static_cast<uint32_t>(NeuralStereoRouteRole::Count))
+		return;
+
+	const uint32_t shift = routeIndex * 2u;
+	const uint32_t fieldMask = 0b11u << shift;
+	const uint32_t nextValue = (a_admission.admitted ? 0b10u : 0b01u) << shift;
+	uint32_t previousState = neuralTemporalAdmissionLatch.load(std::memory_order_acquire);
+	for (;;) {
+		const uint32_t updatedState =
+			(previousState & ~fieldMask) | nextValue;
+		if (neuralTemporalAdmissionLatch.compare_exchange_weak(
+				previousState,
+				updatedState,
+				std::memory_order_acq_rel,
+				std::memory_order_acquire)) {
+			const uint32_t previousValue = (previousState & fieldMask) >> shift;
+			const uint32_t currentValue = nextValue >> shift;
+			if (settings.neuralRenderingEnabled && previousValue != 0u &&
+				previousValue != currentValue) {
+				RequestHistoryReset();
+			}
+			return;
+		}
+	}
+}
+
+Upscaling::NeuralStereoFallbackReason Upscaling::GetNeuralTemporalFallbackReason(
+	const NeuralRendering::TemporalAdmissionResult& a_admission) noexcept
+{
+	switch (a_admission.blockReason) {
+	case NeuralRendering::TemporalAdmissionBlockReason::None:
+		return NeuralStereoFallbackReason::None;
+	case NeuralRendering::TemporalAdmissionBlockReason::MenuContext:
+		return NeuralStereoFallbackReason::MenuContext;
+	case NeuralRendering::TemporalAdmissionBlockReason::GamePaused:
+		return NeuralStereoFallbackReason::GamePaused;
+	case NeuralRendering::TemporalAdmissionBlockReason::TemporalSourceStale:
+		return NeuralStereoFallbackReason::TemporalSourceStale;
+	default:
+		return NeuralStereoFallbackReason::RouteIneligible;
+	}
 }
 
 uint32_t Upscaling::GetEffectiveUpscalingQualityMode() const
@@ -35219,6 +35309,10 @@ const char* Upscaling::GetNeuralStereoFallbackReasonName(NeuralStereoFallbackRea
 		return "route_ineligible";
 	case NeuralStereoFallbackReason::MenuContext:
 		return "menu_context";
+	case NeuralStereoFallbackReason::GamePaused:
+		return "game_paused";
+	case NeuralStereoFallbackReason::TemporalSourceStale:
+		return "temporal_source_stale";
 	case NeuralStereoFallbackReason::MaskVisualization:
 		return "mask_visualization";
 	case NeuralStereoFallbackReason::FrameGeneration:

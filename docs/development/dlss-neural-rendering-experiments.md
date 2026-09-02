@@ -211,6 +211,15 @@ pairs do not erase work already submitted. The
 more than once, making fallback reevaluation distinct from ordinary steady
 state.
 
+Feature 18 is admitted from one immutable stereo-route snapshot. Main-route
+evaluation requires the current world render to have started; submit-route
+evaluation additionally requires that world render to have completed. A known
+menu context, a paused game, or stale world-frame temporal inputs bypasses NR
+and reports `menu_context`, `game_paused`, or `temporal_source_stale`. Crossing
+between admitted and blocked states requests one history reset. If the first
+eye of a retained submit pair has already been presented, the unchanged peer
+may still complete that pair even when the live admission context changes.
+
 `nr_status.settings.implementation` reports one of
 `per_eye_staged_commit`, `stereo_batched_staged_commit`,
 `per_eye_direct_commit`, or `stereo_batched_direct_commit`. The same status

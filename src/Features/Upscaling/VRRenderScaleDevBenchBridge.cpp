@@ -257,6 +257,7 @@ namespace
 			}
 			const auto routeInsertionPoint =
 				static_cast<NeuralRendering::InsertionPoint>(route.insertionPoint);
+			const auto& temporalAdmission = route.temporalAdmission;
 			routes.push_back({
 				{ "valid", route.valid },
 				{ "role", Upscaling::GetNeuralStereoRouteRoleName(route.role) },
@@ -285,7 +286,20 @@ namespace
 							   { "hdrClassification", route.colorBuffersHDRKnown ? (route.colorBuffersHDR ? "hdr" : "ldr") : "unknown" },
 							   { "frameGenerationActive", route.frameGenerationActive },
 							   { "frameGenerationPassed", route.frameGenerationGatePassed },
+							   { "knownMenuContext", temporalAdmission.menuContextActive },
+							   { "gamePaused", temporalAdmission.gamePaused },
+							   { "worldFrameStateAvailable", temporalAdmission.worldFrameStateAvailable },
+							   { "worldFrameStarted", temporalAdmission.worldFrameStarted },
+							   { "worldFrameCompleted", temporalAdmission.worldFrameCompleted },
+							   { "temporalSourceFresh", temporalAdmission.temporalSourceFresh },
 						   } },
+				{ "temporalAdmission", {
+								 { "admitted", temporalAdmission.admitted },
+								 { "blockReason", NeuralRendering::GetTemporalAdmissionBlockReasonName(temporalAdmission.blockReason) },
+								 { "currentFrame", temporalAdmission.currentFrame },
+								 { "lastWorldRenderFrame", temporalAdmission.lastWorldRenderFrame },
+								 { "lastCompletedWorldRenderFrame", temporalAdmission.lastCompletedWorldRenderFrame },
+							 } },
 				{ "pairDisposition", Upscaling::GetNeuralStereoPairDispositionName(route.disposition) },
 				{ "fallbackReason", Upscaling::GetNeuralStereoFallbackReasonName(route.fallbackReason) },
 				{ "unexpectedPassEyeMask", route.unexpectedPassEyeMask },
@@ -1463,7 +1477,7 @@ namespace VRRenderScaleDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Control and inspect Community Shaders VR render-scale stress iterations and DLSS Neural Rendering. nr_status returns the API-v5 NR runtime, trust, route, stereo-mask, failure, and per-route and per-insertion-point GPU telemetry. nr_configure applies one or more NR settings, including the insertion point, through the same reset/history contract as the in-game UI; an empty or unchanged request is rejected. nr_cycle_modes selects or advances through the four stereo implementation lanes. nr_reset resets the NR backend and requests a history reset. Existing render-scale mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","nr_status","nr_configure","nr_cycle_modes","nr_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"insertionPoint":{"type":"string","enum":["upscaled_center","final_ldr_pre_ui"]},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"implementation":{"type":"string","enum":["per_eye_staged_commit","stereo_batched_staged_commit","per_eye_direct_commit","stereo_batched_direct_commit"]},"matrixIndex":{"type":"integer","minimum":0,"maximum":3},"preset":{"type":"integer","minimum":0,"maximum":4},"intensity":{"type":"number","minimum":0,"maximum":2},"localToneStrength":{"type":"number","minimum":0,"maximum":2},"localStructureStrength":{"type":"number","minimum":0,"maximum":2},"skinStructureStrength":{"type":"number","minimum":0,"maximum":2},"style":{"type":"integer","minimum":0,"maximum":3},"batchedStereo":{"type":"boolean"},"directCommit":{"type":"boolean"},"optimizedStereoPath":{"type":"boolean"},"useAutoMask":{"type":"boolean"},"uiCorrection":{"type":"boolean"}},"required":["action"]}})";
+			R"({"description":"Control and inspect Community Shaders VR render-scale stress iterations and DLSS Neural Rendering. nr_status returns the API-v6 NR runtime, trust, route, temporal-admission, stereo-mask, failure, and per-route and per-insertion-point GPU telemetry. nr_configure applies one or more NR settings, including the insertion point, through the same reset/history contract as the in-game UI; an empty or unchanged request is rejected. nr_cycle_modes selects or advances through the four stereo implementation lanes. nr_reset resets the NR backend and requests a history reset. Existing render-scale mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","nr_status","nr_configure","nr_cycle_modes","nr_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"insertionPoint":{"type":"string","enum":["upscaled_center","final_ldr_pre_ui"]},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"implementation":{"type":"string","enum":["per_eye_staged_commit","stereo_batched_staged_commit","per_eye_direct_commit","stereo_batched_direct_commit"]},"matrixIndex":{"type":"integer","minimum":0,"maximum":3},"preset":{"type":"integer","minimum":0,"maximum":4},"intensity":{"type":"number","minimum":0,"maximum":2},"localToneStrength":{"type":"number","minimum":0,"maximum":2},"localStructureStrength":{"type":"number","minimum":0,"maximum":2},"skinStructureStrength":{"type":"number","minimum":0,"maximum":2},"style":{"type":"integer","minimum":0,"maximum":3},"batchedStereo":{"type":"boolean"},"directCommit":{"type":"boolean"},"optimizedStereoPath":{"type":"boolean"},"useAutoMask":{"type":"boolean"},"uiCorrection":{"type":"boolean"}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.renderscale",
 			descriptor,

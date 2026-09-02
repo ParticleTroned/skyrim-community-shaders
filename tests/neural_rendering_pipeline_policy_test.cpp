@@ -8,6 +8,9 @@ int main()
 	using NeuralRendering::FeatureSlotRoute;
 	using NeuralRendering::InsertionPoint;
 	using NeuralRendering::PipelineArrangement;
+	using NeuralRendering::TemporalAdmissionBlockReason;
+	using NeuralRendering::TemporalAdmissionInputs;
+	using NeuralRendering::TemporalRoute;
 	static_assert(
 		NeuralRendering::kPipelineArrangement == PipelineArrangement::DlssThenNeural,
 		"paintball must remain the DLSS-then-Neural experiment");
@@ -97,6 +100,82 @@ int main()
 	static_assert(NeuralRendering::IsSequentialFrame(42u, 43u));
 	static_assert(!NeuralRendering::IsSequentialFrame(42u, 42u));
 	static_assert(!NeuralRendering::IsSequentialFrame(42u, 44u));
+
+	constexpr TemporalAdmissionInputs currentWorldFrame{
+		.worldFrameStateAvailable = true,
+		.currentFrame = 42u,
+		.lastWorldRenderFrame = 42u,
+		.lastCompletedWorldRenderFrame = 41u,
+	};
+	constexpr auto mainAdmission = NeuralRendering::EvaluateTemporalAdmission(
+		TemporalRoute::Main, currentWorldFrame);
+	static_assert(mainAdmission.admitted);
+	static_assert(mainAdmission.worldFrameStarted);
+	static_assert(!mainAdmission.worldFrameCompleted);
+	static_assert(mainAdmission.temporalSourceFresh);
+
+	constexpr auto incompleteSubmitAdmission =
+		NeuralRendering::EvaluateTemporalAdmission(
+			TemporalRoute::Submit, currentWorldFrame);
+	static_assert(!incompleteSubmitAdmission.admitted);
+	static_assert(
+		incompleteSubmitAdmission.blockReason ==
+		TemporalAdmissionBlockReason::TemporalSourceStale);
+	constexpr auto completeSubmitAdmission =
+		NeuralRendering::EvaluateTemporalAdmission(
+			TemporalRoute::Submit,
+			TemporalAdmissionInputs{
+				.worldFrameStateAvailable = true,
+				.currentFrame = 42u,
+				.lastWorldRenderFrame = 42u,
+				.lastCompletedWorldRenderFrame = 42u,
+			});
+	static_assert(completeSubmitAdmission.admitted);
+	static_assert(completeSubmitAdmission.worldFrameStarted);
+	static_assert(completeSubmitAdmission.worldFrameCompleted);
+	static_assert(completeSubmitAdmission.temporalSourceFresh);
+	constexpr auto unavailableFrameState =
+		NeuralRendering::EvaluateTemporalAdmission(
+			TemporalRoute::Main,
+			TemporalAdmissionInputs{
+				.currentFrame = std::numeric_limits<std::uint32_t>::max(),
+				.lastWorldRenderFrame = std::numeric_limits<std::uint32_t>::max(),
+				.lastCompletedWorldRenderFrame = std::numeric_limits<std::uint32_t>::max(),
+			});
+	static_assert(!unavailableFrameState.admitted);
+	static_assert(!unavailableFrameState.worldFrameStarted);
+
+	constexpr auto pausedAdmission = NeuralRendering::EvaluateTemporalAdmission(
+		TemporalRoute::Main,
+		TemporalAdmissionInputs{
+			.gamePaused = true,
+			.worldFrameStateAvailable = true,
+			.currentFrame = 42u,
+			.lastWorldRenderFrame = 42u,
+			.lastCompletedWorldRenderFrame = 42u,
+		});
+	static_assert(!pausedAdmission.admitted);
+	static_assert(
+		pausedAdmission.blockReason == TemporalAdmissionBlockReason::GamePaused);
+
+	constexpr auto menuAdmission = NeuralRendering::EvaluateTemporalAdmission(
+		TemporalRoute::Submit,
+		TemporalAdmissionInputs{
+			.menuContextActive = true,
+			.gamePaused = true,
+			.worldFrameStateAvailable = true,
+			.currentFrame = 42u,
+			.lastWorldRenderFrame = 42u,
+			.lastCompletedWorldRenderFrame = 42u,
+		});
+	static_assert(!menuAdmission.admitted);
+	static_assert(
+		menuAdmission.blockReason ==
+		TemporalAdmissionBlockReason::MenuContext);
+	static_assert(std::string_view(
+		NeuralRendering::GetTemporalAdmissionBlockReasonName(
+			TemporalAdmissionBlockReason::TemporalSourceStale)) ==
+		"temporal_source_stale");
 
 	using NeuralRendering::CachedStereoPairReuse;
 	static_assert(

@@ -115,6 +115,102 @@ namespace NeuralRendering
 		BypassPresentedEye,
 	};
 
+	enum class TemporalRoute : std::uint8_t
+	{
+		Main,
+		Submit,
+	};
+
+	enum class TemporalAdmissionBlockReason : std::uint8_t
+	{
+		None,
+		MenuContext,
+		GamePaused,
+		TemporalSourceStale,
+	};
+
+	struct TemporalAdmissionInputs
+	{
+		bool menuContextActive = false;
+		bool gamePaused = false;
+		bool worldFrameStateAvailable = false;
+		std::uint32_t currentFrame = 0;
+		std::uint32_t lastWorldRenderFrame = 0;
+		std::uint32_t lastCompletedWorldRenderFrame = 0;
+	};
+
+	struct TemporalAdmissionResult
+	{
+		TemporalRoute route = TemporalRoute::Main;
+		TemporalAdmissionBlockReason blockReason =
+			TemporalAdmissionBlockReason::TemporalSourceStale;
+		bool admitted = false;
+		bool menuContextActive = false;
+		bool gamePaused = false;
+		bool worldFrameStateAvailable = false;
+		bool worldFrameStarted = false;
+		bool worldFrameCompleted = false;
+		bool temporalSourceFresh = false;
+		std::uint32_t currentFrame = 0;
+		std::uint32_t lastWorldRenderFrame = 0;
+		std::uint32_t lastCompletedWorldRenderFrame = 0;
+	};
+
+	/** Resolves one immutable temporal admission decision for a stereo route. */
+	[[nodiscard]] constexpr TemporalAdmissionResult EvaluateTemporalAdmission(
+		TemporalRoute a_route,
+		const TemporalAdmissionInputs& a_inputs) noexcept
+	{
+		TemporalAdmissionResult result{
+			.route = a_route,
+			.menuContextActive = a_inputs.menuContextActive,
+			.gamePaused = a_inputs.gamePaused,
+			.worldFrameStateAvailable = a_inputs.worldFrameStateAvailable,
+			.worldFrameStarted =
+				a_inputs.worldFrameStateAvailable &&
+				a_inputs.lastWorldRenderFrame == a_inputs.currentFrame,
+			.worldFrameCompleted =
+				a_inputs.worldFrameStateAvailable &&
+				a_inputs.lastCompletedWorldRenderFrame == a_inputs.currentFrame,
+			.currentFrame = a_inputs.currentFrame,
+			.lastWorldRenderFrame = a_inputs.lastWorldRenderFrame,
+			.lastCompletedWorldRenderFrame =
+				a_inputs.lastCompletedWorldRenderFrame,
+		};
+		result.temporalSourceFresh = result.worldFrameStarted &&
+			(a_route == TemporalRoute::Main || result.worldFrameCompleted);
+
+		if (result.menuContextActive) {
+			result.blockReason = TemporalAdmissionBlockReason::MenuContext;
+		} else if (result.gamePaused) {
+			result.blockReason = TemporalAdmissionBlockReason::GamePaused;
+		} else if (!result.temporalSourceFresh) {
+			result.blockReason =
+				TemporalAdmissionBlockReason::TemporalSourceStale;
+		} else {
+			result.blockReason = TemporalAdmissionBlockReason::None;
+			result.admitted = true;
+		}
+		return result;
+	}
+
+	[[nodiscard]] constexpr const char* GetTemporalAdmissionBlockReasonName(
+		TemporalAdmissionBlockReason a_reason) noexcept
+	{
+		switch (a_reason) {
+		case TemporalAdmissionBlockReason::None:
+			return "none";
+		case TemporalAdmissionBlockReason::MenuContext:
+			return "menu_context";
+		case TemporalAdmissionBlockReason::GamePaused:
+			return "game_paused";
+		case TemporalAdmissionBlockReason::TemporalSourceStale:
+			return "temporal_source_stale";
+		default:
+			return "unknown";
+		}
+	}
+
 	/** Temporal histories are reusable only across adjacent rendered frames. */
 	[[nodiscard]] constexpr bool IsSequentialFrame(
 		std::uint32_t a_previousFrame,

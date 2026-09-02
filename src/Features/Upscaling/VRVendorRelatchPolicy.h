@@ -2388,6 +2388,39 @@ namespace VRVendorRelatchPolicy
 		       a_state.exactFullEyeProviderReady;
 	}
 
+	struct InactiveDLSSActivationRetentionAdmission
+	{
+		bool immutableSettingsRequest = false;
+		bool targetActive = false;
+		bool targetIsDLSS = false;
+		bool currentInactiveDLSS = false;
+		bool resetPending = false;
+		bool memoryPressureNormal = false;
+		bool memoryReliefActive = false;
+		bool postLoadResetPending = false;
+		bool recoveryOwned = false;
+		bool preservingActiveContract = false;
+		bool deviceLost = false;
+		bool deviceMatches = false;
+		bool exactCurrentProviderReady = false;
+		bool targetSlotsAvailableWithoutRecycle = false;
+	};
+
+	// A native DLSS provider may remain allocated while an explicit reduced-size
+	// target is created in unused bounded slots. It never proves the new target.
+	[[nodiscard]] constexpr bool CanRetainInactiveDLSSForActivation(
+		const InactiveDLSSActivationRetentionAdmission& a_state) noexcept
+	{
+		return a_state.immutableSettingsRequest && a_state.targetActive &&
+		       a_state.targetIsDLSS && a_state.currentInactiveDLSS &&
+		       !a_state.resetPending && a_state.memoryPressureNormal &&
+		       !a_state.memoryReliefActive && !a_state.postLoadResetPending &&
+		       !a_state.recoveryOwned && !a_state.preservingActiveContract &&
+		       !a_state.deviceLost && a_state.deviceMatches &&
+		       a_state.exactCurrentProviderReady &&
+		       a_state.targetSlotsAvailableWithoutRecycle;
+	}
+
 	struct RuntimeFSRFallbackReuseAdmission
 	{
 		bool isVR = false;

@@ -24234,6 +24234,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	uint64_t admittedMutationSourceEpoch = 0;
 	bool directMenuRelatch = false;
 	bool preparedDirectMenuRelatch = false;
+	bool immutableSettingsRelatch = false;
 	{
 		const std::scoped_lock queueLock(
 			perfModeRenderTargetRecreateQueueMutex);
@@ -24501,6 +24502,10 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			VRVendorRelatchPolicy::HasDirectMenuRequestAuthority(
 				relatchProfile->directMenuEdit,
 				relatchProfile->requestID);
+		immutableSettingsRelatch =
+			relatchProfile && relatchProfile->requestID != 0 &&
+			relatchProfile->origin == relatchOrigin &&
+			IsExplicitSettingsVRRenderScaleTransitionOrigin(relatchOrigin);
 		preparedDirectMenuRelatch =
 			VRVendorRelatchPolicy::CanBypassPreparedMenuRequestDelay(
 				directMenuRelatch,
@@ -25754,6 +25759,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		// an explicit non-vendor result. Only an inactive physical contract may fall
 		// back to the applied, then stable, inactive contract; requested/applying are
 		// prospective state and must never own vendor teardown.
+		const auto* previousInactivePhysicalProfile =
+			getAuthoritativeInactivePhysicalProfile();
 		const auto resolvePreviousVendorMethod = [&]() {
 			if (previousBootSnapshot.valid && previousBootSnapshot.active) {
 				if (IsVendorUpscalingMethod(previousBootSnapshot.method))
@@ -25761,9 +25768,9 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				return UpscaleMethod::kNONE;
 			}
 
-			const auto* inactiveProfile = getAuthoritativeInactivePhysicalProfile();
-			return inactiveProfile && IsVendorUpscalingMethod(inactiveProfile->method) ?
-			           inactiveProfile->method :
+			return previousInactivePhysicalProfile &&
+			               IsVendorUpscalingMethod(previousInactivePhysicalProfile->method) ?
+			           previousInactivePhysicalProfile->method :
 			           UpscaleMethod::kNONE;
 		};
 		const UpscaleMethod previousVendorMethod = resolvePreviousVendorMethod();
@@ -26256,6 +26263,65 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				perfMode.trueHMDEyeWidth,
 				perfMode.trueHMDEyeHeight,
 				relatchColorInput);
+		const bool currentInactiveDLSSProviderReady =
+			relatchUpscaleMethod == UpscaleMethod::kDLSS &&
+			!previousBootWasActiveDLSS &&
+			previousInactivePhysicalProfile &&
+			previousInactivePhysicalProfile->valid &&
+			!previousInactivePhysicalProfile->active &&
+			previousInactivePhysicalProfile->method == UpscaleMethod::kDLSS &&
+			ClampQualityModeUInt(previousInactivePhysicalProfile->qualityMode) == 0u &&
+			previousInactivePhysicalProfile->renderEyeWidth == perfMode.trueHMDEyeWidth &&
+			previousInactivePhysicalProfile->renderEyeHeight == perfMode.trueHMDEyeHeight &&
+			previousInactivePhysicalProfile->displayEyeWidth == perfMode.trueHMDEyeWidth &&
+			previousInactivePhysicalProfile->displayEyeHeight == perfMode.trueHMDEyeHeight &&
+			streamline.IsDLSSRuntimeReady() &&
+			streamline.IsBoundToD3DDevice(globals::d3d::device) &&
+			streamline.HasCompleteVRDLSSViewportResources(
+				Streamline::DLSSViewportRole::FullEye,
+				previousInactivePhysicalProfile->qualityMode,
+				previousInactivePhysicalProfile->dlssPreset,
+				perfMode.trueHMDEyeWidth,
+				perfMode.trueHMDEyeHeight,
+				relatchColorInput);
+		const bool targetFoveatedDLSSSlotRequired =
+			relatchUpscaleMethod == UpscaleMethod::kDLSS &&
+			IsFoveatedVendorDispatchEnabled(relatchUpscaleMethod);
+		const bool targetDLSSSlotsAvailableWithoutRecycle =
+			relatchUpscaleMethod == UpscaleMethod::kDLSS &&
+			streamline.CanPrepareVRDLSSViewportWithoutRecycle(
+				Streamline::DLSSViewportRole::FullEye,
+				relatchQualityMode,
+				relatchSettings.dlssPreset) &&
+			(!targetFoveatedDLSSSlotRequired ||
+				streamline.CanPrepareVRDLSSViewportWithoutRecycle(
+					Streamline::DLSSViewportRole::SubmitStageFoveatedCenter,
+					relatchQualityMode,
+					relatchSettings.dlssPreset));
+		const bool retainInactiveDLSSResourcesForActivation =
+			VRVendorRelatchPolicy::CanRetainInactiveDLSSForActivation({
+				.immutableSettingsRequest = immutableSettingsRelatch,
+				.targetActive = relatchTargetRenderScaleActive,
+				.targetIsDLSS = relatchUpscaleMethod == UpscaleMethod::kDLSS,
+				.currentInactiveDLSS = previousVendorWasDLSS,
+				.resetPending = pendingDLSSResetForRelatch,
+				.memoryPressureNormal =
+					memoryAtAdmission.valid &&
+					memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::Normal,
+				.memoryReliefActive = memoryReliefActiveForRelatch,
+				.postLoadResetPending =
+					postLoadRuntimeResetPending.load(std::memory_order_acquire),
+				.recoveryOwned =
+					postLoadRecoveryEpoch != 0 ||
+					providerNeutralNativeRecoveryRequested,
+				.preservingActiveContract = preserveActiveContractForRecovery,
+				.deviceLost = IsSubmitStageDeviceLost(),
+				.deviceMatches =
+					streamline.IsBoundToD3DDevice(globals::d3d::device),
+				.exactCurrentProviderReady = currentInactiveDLSSProviderReady,
+				.targetSlotsAvailableWithoutRecycle =
+					targetDLSSSlotsAvailableWithoutRecycle,
+			});
 		const bool reusePreparedDLSSResourcesForActivation =
 			VRVendorRelatchPolicy::CanReusePreparedDLSSForActivation({
 				.directMenuRelatch = directMenuRelatch,
@@ -26288,7 +26354,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			!lowPeakNativeRestoreRelatch;
 		const bool preserveDLSSResourcesForRelatch =
 			preserveActiveDLSSResourcesForRelatch ||
-			retainWarmDLSSResourcesForRelatch;
+			retainWarmDLSSResourcesForRelatch ||
+			retainInactiveDLSSResourcesForActivation;
 		const bool destroyDLSSResourcesForRelatch =
 			pendingDLSSResetForRelatch ||
 			(!preserveDLSSResourcesForRelatch &&

@@ -810,6 +810,36 @@ namespace
 				return false;
 		}
 
+		for (std::uint32_t bits = 0; bits < (1u << 14); ++bits) {
+			const InactiveDLSSActivationRetentionAdmission state{
+				.immutableSettingsRequest = (bits & (1u << 0)) != 0,
+				.targetActive = (bits & (1u << 1)) != 0,
+				.targetIsDLSS = (bits & (1u << 2)) != 0,
+				.currentInactiveDLSS = (bits & (1u << 3)) != 0,
+				.resetPending = (bits & (1u << 4)) != 0,
+				.memoryPressureNormal = (bits & (1u << 5)) != 0,
+				.memoryReliefActive = (bits & (1u << 6)) != 0,
+				.postLoadResetPending = (bits & (1u << 7)) != 0,
+				.recoveryOwned = (bits & (1u << 8)) != 0,
+				.preservingActiveContract = (bits & (1u << 9)) != 0,
+				.deviceLost = (bits & (1u << 10)) != 0,
+				.deviceMatches = (bits & (1u << 11)) != 0,
+				.exactCurrentProviderReady = (bits & (1u << 12)) != 0,
+				.targetSlotsAvailableWithoutRecycle = (bits & (1u << 13)) != 0,
+			};
+			const bool expected =
+				state.immutableSettingsRequest && state.targetActive &&
+				state.targetIsDLSS && state.currentInactiveDLSS &&
+				!state.resetPending && state.memoryPressureNormal &&
+				!state.memoryReliefActive && !state.postLoadResetPending &&
+				!state.recoveryOwned && !state.preservingActiveContract &&
+				!state.deviceLost && state.deviceMatches &&
+				state.exactCurrentProviderReady &&
+				state.targetSlotsAvailableWithoutRecycle;
+			if (CanRetainInactiveDLSSForActivation(state) != expected)
+				return false;
+		}
+
 		for (std::uint32_t bits = 0; bits < (1u << 8); ++bits) {
 			const RuntimeFSRFallbackReuseAdmission state{
 				.isVR = (bits & (1u << 0)) != 0,

@@ -534,6 +534,11 @@ public:
 	}
 	/** @brief Reports whether the complete Streamline DLSS activation contract is live. */
 	[[nodiscard]] bool IsDLSSRuntimeReady() const noexcept;
+	/** @brief Reports whether Streamline still owns the exact current D3D device. */
+	[[nodiscard]] bool IsBoundToD3DDevice(ID3D11Device* a_device) const noexcept
+	{
+		return a_device && boundDeviceIdentity == a_device;
+	}
 	/** @brief Proves exact option identity and ownership for both eyes of one slot. */
 	[[nodiscard]] bool HasCompleteVRDLSSViewportResources(
 		DLSSViewportRole a_viewportRole,

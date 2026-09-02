@@ -106,6 +106,20 @@ foreach(_required IN ITEMS
     endif()
 endforeach()
 
+foreach(_inactive_dlss_retention_contract IN ITEMS
+    "VRVendorRelatchPolicy::CanRetainInactiveDLSSForActivation"
+    "streamline.CanPrepareVRDLSSViewportWithoutRecycle"
+    "retainInactiveDLSSResourcesForActivation"
+)
+    string(FIND "${_upscaling}" "${_inactive_dlss_retention_contract}"
+        _inactive_dlss_retention_position)
+    if(_inactive_dlss_retention_position EQUAL -1)
+        message(FATAL_ERROR
+            "Inactive DLSS activation retention is incomplete: ${_inactive_dlss_retention_contract}"
+        )
+    endif()
+endforeach()
+
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/DX12SwapChain.h" _swapchain_header)
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/DX12SwapChain.cpp" _swapchain)
 foreach(_required IN ITEMS

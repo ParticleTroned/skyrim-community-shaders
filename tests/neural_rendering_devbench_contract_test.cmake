@@ -437,9 +437,9 @@ foreach(_foveation_action_contract IN ITEMS
     [["foveation_request_field_unknown"]]
     [["foveation_outer_scale_below_center"]]
     [["foveation_cycle_index_out_of_range"]]
-    [["required":["control"]]]
-    [["propertyNames":{"enum":["action","control","valueIndex"]}]]
-    [["anyOf":[{"required":["foveatedEnabled"]}]]
+    [=["required":["control"]]=]
+    [=["propertyNames":{"enum":["action","control","valueIndex"]}]=]
+    [=["anyOf":[{"required":["foveatedEnabled"]}]=]
     [["then":{"properties":{"valueIndex":{"maximum":1}}}]]
 )
     string(FIND "${_bridge}" "${_foveation_action_contract}" _foveation_action_position)

@@ -1443,6 +1443,49 @@ namespace
 		       DoesPendingVendorResetInvalidateProvider(true, 8, 0);
 	}
 
+	constexpr bool CoversDLSSReadinessTiers()
+	{
+		DLSSProviderReadiness state{
+			.resetInvalidatesProvider = false,
+			.generationValid = true,
+			.generationMatches = true,
+			.runtimeReady = true,
+			.completeViewportResources = false,
+		};
+		if (!IsDLSSLifecycleReady(state) ||
+			IsExactExistingDLSSDispatchReady(state)) {
+			return false;
+		}
+
+		state.completeViewportResources = true;
+		if (!IsDLSSLifecycleReady(state) ||
+			!IsExactExistingDLSSDispatchReady(state)) {
+			return false;
+		}
+
+		state.resetInvalidatesProvider = true;
+		if (IsDLSSLifecycleReady(state) ||
+			IsExactExistingDLSSDispatchReady(state)) {
+			return false;
+		}
+		state.resetInvalidatesProvider = false;
+		state.generationValid = false;
+		if (IsDLSSLifecycleReady(state) ||
+			IsExactExistingDLSSDispatchReady(state)) {
+			return false;
+		}
+		state.generationValid = true;
+		state.generationMatches = false;
+		if (IsDLSSLifecycleReady(state) ||
+			IsExactExistingDLSSDispatchReady(state)) {
+			return false;
+		}
+		state.generationMatches = true;
+		state.runtimeReady = false;
+		return !IsDLSSLifecycleReady(state) &&
+		       !IsExactExistingDLSSDispatchReady(state);
+	}
+
 	constexpr bool CoversPostLoadRecoverySettleDeadline()
 	{
 		PostLoadRecoverySettleAdmission state{
@@ -2909,6 +2952,7 @@ namespace
 	static_assert(CoversDeferredDispatchSelection());
 	static_assert(CoversStereoDispatchContractIdentity());
 	static_assert(CoversPendingVendorResetOwnership());
+	static_assert(CoversDLSSReadinessTiers());
 	static_assert(CoversPostLoadRecoverySettleDeadline());
 	static_assert(CoversPostLoadRecoveryDeadlineAdmission());
 	static_assert(CoversPostLoadVendorTeardownOnlyAdmission());

@@ -1276,6 +1276,32 @@ namespace VRVendorRelatchPolicy
 		       a_resetGeneration == a_providerGeneration;
 	}
 
+	struct DLSSProviderReadiness
+	{
+		bool resetInvalidatesProvider = false;
+		bool generationValid = false;
+		bool generationMatches = false;
+		bool runtimeReady = false;
+		bool completeViewportResources = false;
+	};
+
+	[[nodiscard]] constexpr bool IsDLSSLifecycleReady(
+		const DLSSProviderReadiness& a_state) noexcept
+	{
+		// Viewport resources are created by the first evaluation. Requiring them
+		// here would make activation depend on an evaluation it still blocks.
+		return !a_state.resetInvalidatesProvider &&
+		       a_state.generationValid && a_state.generationMatches &&
+		       a_state.runtimeReady;
+	}
+
+	[[nodiscard]] constexpr bool IsExactExistingDLSSDispatchReady(
+		const DLSSProviderReadiness& a_state) noexcept
+	{
+		return IsDLSSLifecycleReady(a_state) &&
+		       a_state.completeViewportResources;
+	}
+
 	enum class PostLoadRecoverySettleAction : std::uint8_t
 	{
 		WaitForCleanup,

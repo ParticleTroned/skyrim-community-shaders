@@ -58,6 +58,54 @@ foreach(_required IN ITEMS
     endif()
 endforeach()
 
+string(FIND "${_upscaling}"
+    "bool Upscaling::IsVendorRuntimeReadyForActiveContract"
+    _dlss_lifecycle_start)
+string(FIND "${_upscaling}"
+    "void Upscaling::MarkVendorRuntimeResourcesDirty"
+    _dlss_lifecycle_end)
+if(_dlss_lifecycle_start EQUAL -1 OR
+   _dlss_lifecycle_end LESS_EQUAL _dlss_lifecycle_start)
+    message(FATAL_ERROR "DLSS lifecycle readiness function could not be isolated")
+endif()
+math(EXPR _dlss_lifecycle_length
+    "${_dlss_lifecycle_end} - ${_dlss_lifecycle_start}")
+string(SUBSTRING "${_upscaling}" ${_dlss_lifecycle_start}
+    ${_dlss_lifecycle_length} _dlss_lifecycle_body)
+string(FIND "${_dlss_lifecycle_body}"
+    "VRVendorRelatchPolicy::IsDLSSLifecycleReady" _lifecycle_policy)
+string(FIND "${_dlss_lifecycle_body}"
+    "HasCompleteVRDLSSViewportResources" _lifecycle_viewport_gate)
+if(_lifecycle_policy EQUAL -1 OR NOT _lifecycle_viewport_gate EQUAL -1)
+    message(FATAL_ERROR
+        "DLSS lifecycle readiness must not depend on first-evaluation viewport resources")
+endif()
+
+string(FIND "${_upscaling}"
+    "bool Upscaling::CanDispatchExistingVRVendorEvaluation(\n\tUpscaleMethod"
+    _existing_dispatch_start)
+string(FIND "${_upscaling}"
+    "bool Upscaling::HasTruthfulStableVRVendorResources"
+    _existing_dispatch_end)
+if(_existing_dispatch_start EQUAL -1 OR
+   _existing_dispatch_end LESS_EQUAL _existing_dispatch_start)
+    message(FATAL_ERROR "Existing DLSS dispatch function could not be isolated")
+endif()
+math(EXPR _existing_dispatch_length
+    "${_existing_dispatch_end} - ${_existing_dispatch_start}")
+string(SUBSTRING "${_upscaling}" ${_existing_dispatch_start}
+    ${_existing_dispatch_length} _existing_dispatch_body)
+foreach(_required IN ITEMS
+    "VRVendorRelatchPolicy::IsExactExistingDLSSDispatchReady"
+    "streamline.TryResolveExistingVRDLSSViewport"
+)
+    string(FIND "${_existing_dispatch_body}" "${_required}" _position)
+    if(_position EQUAL -1)
+        message(FATAL_ERROR
+            "Existing DLSS dispatch lost exact viewport proof: ${_required}")
+    endif()
+endforeach()
+
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/DX12SwapChain.h" _swapchain_header)
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/DX12SwapChain.cpp" _swapchain)
 foreach(_required IN ITEMS

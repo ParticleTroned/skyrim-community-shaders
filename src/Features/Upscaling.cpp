@@ -18580,9 +18580,16 @@ bool Upscaling::CanDispatchExistingVRVendorEvaluation(
 				pendingDLSSResetGeneration.load(std::memory_order_acquire),
 				provider.contractGeneration);
 		resourcesReady = resourcesReady &&
-		                 !resetInvalidatesProvider &&
-		                 streamline.IsDLSSRuntimeReady() &&
-		                 streamline.HasCompleteVRDLSSViewportResources();
+		                 VRVendorRelatchPolicy::IsExactExistingDLSSDispatchReady({
+							 .resetInvalidatesProvider = resetInvalidatesProvider,
+							 .generationValid = provider.contractGeneration != 0,
+							 .generationMatches =
+								 !provider.renderScaleActive ||
+								 vrDLSSRuntimeResourceGeneration == provider.contractGeneration,
+							 .runtimeReady = streamline.IsDLSSRuntimeReady(),
+							 .completeViewportResources =
+								 streamline.HasCompleteVRDLSSViewportResources(),
+						 });
 	} else if (a_upscaleMethod == UpscaleMethod::kFSR) {
 		const auto providerBackend = provider.backend;
 		const bool hostProvider =
@@ -18615,14 +18622,10 @@ bool Upscaling::CanDispatchExistingVRVendorEvaluation(
 							 runtimeFSR4Provider) &&
 		                 runtimeResourcesMatch;
 	}
-	if (resourcesReady && provider.renderScaleActive) {
-		if (a_upscaleMethod == UpscaleMethod::kDLSS) {
-			resourcesReady = provider.contractGeneration != 0 &&
-			                 vrDLSSRuntimeResourceGeneration == provider.contractGeneration;
-		} else {
-			resourcesReady = provider.contractGeneration != 0 &&
-			                 vrFSRRuntimeResourceGeneration == provider.contractGeneration;
-		}
+	if (resourcesReady && provider.renderScaleActive &&
+		a_upscaleMethod == UpscaleMethod::kFSR) {
+		resourcesReady = provider.contractGeneration != 0 &&
+		                 vrFSRRuntimeResourceGeneration == provider.contractGeneration;
 	}
 	if (resourcesReady && globals::game::isVR) {
 		if (!provider.renderEyeWidth || !provider.renderEyeHeight ||
@@ -19966,7 +19969,8 @@ bool Upscaling::IsPerformanceCostMeasurementReady() const
 
 	if (status == VRRenderScaleStatus::Active) {
 		const bool activeStateRequested = GetVRRenderScaleModeRequested() && CanUseVRRenderScaleMode();
-		return activeStateRequested && IsVendorRuntimeReadyForActiveContract(GetRuntimeUpscaleMethod());
+		return activeStateRequested &&
+		       CanDispatchExistingVRVendorEvaluation(GetRuntimeUpscaleMethod());
 	}
 	if (IsVRRenderScaleModeLatched())
 		return false;
@@ -26489,7 +26493,9 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				IsVendorUpscalingMethod(relatchUpscaleMethod));
 		const bool targetVendorRuntimeReady =
 			!targetUsesVendorEvaluation ||
-			IsVendorRuntimeReadyForActiveContract(relatchUpscaleMethod);
+			(IsVendorRuntimeReadyForActiveContract(relatchUpscaleMethod) &&
+				(relatchUpscaleMethod != UpscaleMethod::kDLSS ||
+					exactFullEyeDLSSProviderReady));
 		const bool targetVendorRuntimeReset =
 			(relatchUpscaleMethod == UpscaleMethod::kDLSS &&
 				relatchPlan.destroyDLSSResources) ||
@@ -52853,10 +52859,14 @@ bool Upscaling::IsVendorRuntimeReadyForActiveContract(UpscaleMethod a_upscaleMet
 
 	switch (a_upscaleMethod) {
 	case UpscaleMethod::kDLSS:
-		return !pendingDLSSReset.load(std::memory_order_acquire) &&
-		       vrDLSSRuntimeResourceGeneration == generation &&
-		       streamline.IsDLSSRuntimeReady() &&
-		       streamline.HasCompleteVRDLSSViewportResources();
+		return VRVendorRelatchPolicy::IsDLSSLifecycleReady({
+			.resetInvalidatesProvider =
+				pendingDLSSReset.load(std::memory_order_acquire),
+			.generationValid = generation != 0,
+			.generationMatches =
+				vrDLSSRuntimeResourceGeneration == generation,
+			.runtimeReady = streamline.IsDLSSRuntimeReady(),
+		});
 	case UpscaleMethod::kFSR:
 		return !pendingFSRReset.load(std::memory_order_acquire) &&
 		       vrFSRRuntimeResourceGeneration == generation &&

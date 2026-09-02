@@ -1486,6 +1486,29 @@ namespace
 		       !IsExactExistingDLSSDispatchReady(state);
 	}
 
+	constexpr bool CoversSynchronousVendorLifecycleRebind()
+	{
+		for (std::uint32_t bits = 0; bits < (1u << 11); ++bits) {
+			const SynchronousVendorLifecycleRebindAdmission state{
+				.completedSynchronously = (bits & (1u << 0)) != 0,
+				.targetVendorActive = (bits & (1u << 1)) != 0,
+				.sourceOwned = (bits & (1u << 2)) != 0,
+				.targetEpochOwned = (bits & (1u << 3)) != 0,
+				.previousLifecycleOwned = (bits & (1u << 4)) != 0,
+				.lifecycleReady = (bits & (1u << 5)) != 0,
+				.runtimeReady = (bits & (1u << 6)) != 0,
+				.methodMatches = (bits & (1u << 7)) != 0,
+				.backendMatches = (bits & (1u << 8)) != 0,
+				.resourceContractMatches = (bits & (1u << 9)) != 0,
+				.generationMatches = (bits & (1u << 10)) != 0,
+			};
+			const bool expected = bits == ((1u << 11) - 1u);
+			if (CanRebindSynchronousVendorLifecycle(state) != expected)
+				return false;
+		}
+		return true;
+	}
+
 	constexpr bool CoversPostLoadRecoverySettleDeadline()
 	{
 		PostLoadRecoverySettleAdmission state{
@@ -2953,6 +2976,7 @@ namespace
 	static_assert(CoversStereoDispatchContractIdentity());
 	static_assert(CoversPendingVendorResetOwnership());
 	static_assert(CoversDLSSReadinessTiers());
+	static_assert(CoversSynchronousVendorLifecycleRebind());
 	static_assert(CoversPostLoadRecoverySettleDeadline());
 	static_assert(CoversPostLoadRecoveryDeadlineAdmission());
 	static_assert(CoversPostLoadVendorTeardownOnlyAdmission());

@@ -52613,9 +52613,15 @@ bool Upscaling::PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigi
 	source.transitionEpoch = a_epoch != 0 ? a_epoch : source.transitionEpoch;
 	const auto appliedProfile = BuildVRRenderScaleAppliedProfile(*this, source, a_origin);
 	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
+	const bool vendorRuntimeReadyForReuse =
+		!a_requiresStabilization && appliedProfile.active &&
+		IsVendorUpscalingMethod(appliedProfile.method) &&
+		IsVendorRuntimeReadyForActiveContract(appliedProfile.method);
 	VRRenderScaleTransitionState previousState;
 	VRRenderScaleTransitionState nextState;
 	bool completedSynchronously = false;
+	bool lifecycleRebound = false;
+	uint64_t lifecyclePreviousEpoch = 0;
 	uint64_t revision;
 	{
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
@@ -52651,6 +52657,55 @@ bool Upscaling::PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigi
 			appliedProfile.transitionEpoch != 0 &&
 			vrRenderScaleTransitionController.targetEpoch != appliedProfile.transitionEpoch;
 		completedSynchronously = !a_requiresStabilization && !newerRequestPending;
+		if (completedSynchronously && appliedProfile.active &&
+			IsVendorUpscalingMethod(appliedProfile.method)) {
+			auto& lifecycle = appliedProfile.method == UpscaleMethod::kDLSS ?
+			                      vrRenderScaleTransitionController.dlssLifecycle :
+			                      vrRenderScaleTransitionController.fsrLifecycle;
+			const auto& previousStable = vrRenderScaleTransitionController.stable;
+			const bool previousLifecycleOwned =
+				previousStable.valid && previousStable.active &&
+				previousStable.transitionEpoch != 0 &&
+				previousStable.transitionEpoch == lifecycle.transitionEpoch;
+			const bool methodMatches =
+				previousStable.method == appliedProfile.method &&
+				lifecycle.method == appliedProfile.method;
+			const bool backendMatches =
+				previousStable.resources.backend == appliedProfile.resources.backend &&
+				lifecycle.backend == appliedProfile.resources.backend;
+			const bool resourceContractMatches =
+				CompareVRRenderScaleResourceKeys(
+					previousStable.resources,
+					appliedProfile.resources)
+					.exact;
+			const bool generationMatches =
+				appliedProfile.contractGeneration != 0 &&
+				previousStable.contractGeneration == appliedProfile.contractGeneration &&
+				lifecycle.requestedGeneration == appliedProfile.contractGeneration &&
+				lifecycle.runtimeGeneration == appliedProfile.contractGeneration;
+			if (VRVendorRelatchPolicy::CanRebindSynchronousVendorLifecycle({
+					.completedSynchronously = completedSynchronously,
+					.targetVendorActive = true,
+					.sourceOwned = sourceStillOwned,
+					.targetEpochOwned = appliedProfile.transitionEpoch != 0 &&
+			                            vrRenderScaleTransitionController.targetEpoch ==
+			                                appliedProfile.transitionEpoch,
+					.previousLifecycleOwned = previousLifecycleOwned,
+					.lifecycleReady =
+						lifecycle.phase == VRVendorRuntimeLifecyclePhase::Ready &&
+						lifecycle.resourcesPresent && lifecycle.readyForContract,
+					.runtimeReady = vendorRuntimeReadyForReuse,
+					.methodMatches = methodMatches,
+					.backendMatches = backendMatches,
+					.resourceContractMatches = resourceContractMatches,
+					.generationMatches = generationMatches,
+				})) {
+				lifecyclePreviousEpoch = lifecycle.transitionEpoch;
+				lifecycle.transitionEpoch = appliedProfile.transitionEpoch;
+				lifecycle.stateFrame = frame;
+				lifecycleRebound = true;
+			}
+		}
 		if (newerRequestPending) {
 			if (!a_requiresStabilization)
 				vrRenderScaleTransitionController.stable = appliedProfile;
@@ -52697,6 +52752,16 @@ bool Upscaling::PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigi
 			appliedProfile.renderEyeHeight,
 			appliedProfile.displayEyeWidth,
 			appliedProfile.displayEyeHeight);
+	}
+	if (lifecycleRebound && ShouldEmitUpscalingDiagLogs()) {
+		logger::debug(
+			"[VRRenderScale][VendorLifecycle] revision={} rebound epoch={} -> {} method={} backend={} generation={} reason=synchronous contract reuse",
+			revision,
+			lifecyclePreviousEpoch,
+			appliedProfile.transitionEpoch,
+			magic_enum::enum_name(appliedProfile.method),
+			magic_enum::enum_name(appliedProfile.resources.backend),
+			appliedProfile.contractGeneration);
 	}
 	if (a_origin != VRUpscalingTransitionOrigin::PostLoadSync)
 		SampleVRRenderScaleMemory(true, "contract applied");

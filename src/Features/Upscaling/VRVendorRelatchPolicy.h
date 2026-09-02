@@ -1302,6 +1302,39 @@ namespace VRVendorRelatchPolicy
 		       a_state.completeViewportResources;
 	}
 
+	struct SynchronousVendorLifecycleRebindAdmission
+	{
+		bool completedSynchronously = false;
+		bool targetVendorActive = false;
+		bool sourceOwned = false;
+		bool targetEpochOwned = false;
+		bool previousLifecycleOwned = false;
+		bool lifecycleReady = false;
+		bool runtimeReady = false;
+		bool methodMatches = false;
+		bool backendMatches = false;
+		bool resourceContractMatches = false;
+		bool generationMatches = false;
+	};
+
+	// Reusing physical resources may advance the logical contract epoch only
+	// when the previous stable contract still owns that exact ready provider.
+	[[nodiscard]] constexpr bool CanRebindSynchronousVendorLifecycle(
+		const SynchronousVendorLifecycleRebindAdmission& a_state) noexcept
+	{
+		return a_state.completedSynchronously &&
+		       a_state.targetVendorActive &&
+		       a_state.sourceOwned &&
+		       a_state.targetEpochOwned &&
+		       a_state.previousLifecycleOwned &&
+		       a_state.lifecycleReady &&
+		       a_state.runtimeReady &&
+		       a_state.methodMatches &&
+		       a_state.backendMatches &&
+		       a_state.resourceContractMatches &&
+		       a_state.generationMatches;
+	}
+
 	enum class PostLoadRecoverySettleAction : std::uint8_t
 	{
 		WaitForCleanup,

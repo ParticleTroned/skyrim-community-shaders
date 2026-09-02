@@ -550,6 +550,28 @@ endif()
 
 string(FIND
 	"${_upscaling_source}"
+	"VRVendorRelatchPolicy::CanRebindSynchronousVendorLifecycle"
+	_synchronous_lifecycle_rebind_position
+)
+if(_synchronous_lifecycle_rebind_position EQUAL -1)
+	message(FATAL_ERROR
+		"Synchronous vendor reuse does not guard its lifecycle epoch rebind"
+	)
+endif()
+
+string(FIND
+	"${_upscaling_source}"
+	"lifecycle.transitionEpoch = appliedProfile.transitionEpoch"
+	_synchronous_lifecycle_epoch_position
+)
+if(_synchronous_lifecycle_epoch_position EQUAL -1)
+	message(FATAL_ERROR
+		"Synchronous vendor reuse does not publish the rebound lifecycle epoch"
+	)
+endif()
+
+string(FIND
+	"${_upscaling_source}"
 	"void Upscaling::RecordVRVendorRuntimeLifecycle"
 	_lifecycle_function_start
 )

@@ -199,7 +199,7 @@ attempt reached a validation, trust, initialization, or latched-failure gate,
 which can be diagnosed from the renderer and runtime failure stages.
 Performance telemetry labels D3D11 preparation and output commit as CPU enqueue
 time, while Feature 18 duration uses D3D12 GPU timestamps and separately reports
-readback failures, command submissions, and bounded backpressure waits. API v6
+readback failures, command submissions, and bounded backpressure waits. API v7
 also stamps the actual insertion point at the evaluation boundary and keeps
 cumulative GPU samples and time for each insertion point, independent of the
 existing Main/Submit route attribution.
@@ -239,6 +239,29 @@ deprecated `optimizedStereoPath` alias remains accepted only by itself and sets
 both axes for compatibility. Invalid preset, style, and tuning ranges are
 rejected rather than silently clamped so automated comparisons retain their
 requested identity.
+
+`foveation_configure` applies one or more FOV controls atomically on the main
+thread. It covers the master and FOV + TAA switches, center origin and anchor,
+both center scales, the visible outer scale, horizontal expansion, four
+per-eye offsets, all three blend feathers, the reconstruction guard, and mask
+visualization. `foveation_cycle` advances one named axis or selects its exact
+`valueIndex`; `nr_status.foveation.cycleMatrix` is the authoritative value
+matrix. The outer-scale values are derived from the current center-scale floor.
+Selecting a larger center through the cycle action raises the outer scale in
+the same transaction, while an invalid direct configuration is rejected.
+
+Foveation actions reject fields that do not belong to the selected action.
+Every successful mutation invalidates the cached resolution plan and requests
+a temporal-history reset. `effectiveNotBeforeFrame` records the mutation frame,
+while `measurementSafeFromFrame` identifies the following frame as the first
+unambiguous comparison boundary. Inspect
+`nr_status.foveation.plan` before attributing visual or timing results: it
+reports the actual latched input, visible output, guarded work output, source
+offsets, effective feathers, and `matchesRequestedSettings`. A pending or
+mismatched plan is not evidence for the requested configuration.
+If a main-thread task outlives the bounded response window,
+`mainThreadTaskClaimed=true` and `mutationOutcome=indeterminate` mean callers
+must query status before retrying the mutation.
 
 Validate in this order:
 

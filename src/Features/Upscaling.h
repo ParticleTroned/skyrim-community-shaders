@@ -242,6 +242,8 @@ public:
 	static constexpr uint32_t kDLSSSharpenerModeMaxIndex = 2;
 	static constexpr float kFoveatedBlendFeatherMin = 0.0f;
 	static constexpr float kFoveatedBlendFeatherMax = 0.10f;
+	static constexpr float kPeripheryTAAOuterScaleMin = 0.30f;
+	static constexpr float kPeripheryTAAOuterScaleMax = 1.0f;
 	static constexpr uint32_t kFoveatedReconstructionGuardBandMax = 64u;
 	// Explicit profile changes remain blocked while RaceSex owns presentation or its handoff tail.
 	static constexpr uint32_t kVRUpscalingApplyBlockRaceSexMenu = 1u << 0;
@@ -1503,6 +1505,10 @@ public:
 	DLSSSharpenerMode GetDLSSSharpenerMode() const;
 	bool ShouldApplyDLSSSharpening() const;
 	const RuntimeResolutionPlan& GetRuntimeResolutionPlan() const;
+	/** @return Frame that produced the cached resolution plan, or UINT32_MAX when invalidated. */
+	uint32_t GetRuntimeResolutionPlanFrame() const { return runtimeResolutionStateLastRefreshFrame; }
+	/** @return Current frame identity used by resolution-plan latching. */
+	uint32_t GetRuntimeResolutionWorkFrame() const;
 	/** @brief Resolve material mip bias from the active resolution owner or OpenComposite Unleashed. */
 	float ResolveRuntimeMipBias(bool a_temporal);
 	// Refresh both the cached plan and restart-required state from the current VR render-scale settings.

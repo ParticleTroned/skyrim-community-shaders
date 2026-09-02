@@ -141,8 +141,8 @@ namespace
 	template <class Fn>
 	ScopeExit(Fn) -> ScopeExit<Fn>;
 
-	constexpr float kPeripheryTAAOuterScaleMin = 0.30f;
-	constexpr float kPeripheryTAAOuterScaleMax = 1.0f;
+	constexpr float kPeripheryTAAOuterScaleMin = Upscaling::kPeripheryTAAOuterScaleMin;
+	constexpr float kPeripheryTAAOuterScaleMax = Upscaling::kPeripheryTAAOuterScaleMax;
 	constexpr float kPeripheryTAACenterBlendFeatherMin =
 		Upscaling::kFoveatedBlendFeatherMin;
 	constexpr float kPeripheryTAACenterBlendFeatherMax =
@@ -16473,6 +16473,11 @@ bool Upscaling::ShouldApplyDLSSSharpening() const
 const Upscaling::RuntimeResolutionPlan& Upscaling::GetRuntimeResolutionPlan() const
 {
 	return runtimeResolutionPlan;
+}
+
+uint32_t Upscaling::GetRuntimeResolutionWorkFrame() const
+{
+	return GetFrameScopedUpscalingWorkFrame();
 }
 
 float Upscaling::ResolveRuntimeMipBias(bool a_temporal)

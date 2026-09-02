@@ -64,8 +64,106 @@ set(
     "${_upscaling}\n${_upscaling_header}\n${_streamline}\n${_streamline_header}\n${_renderer_header}\n${_renderer_source}\n${_d3d12_interop_source}\n${_pipeline_policy}"
 )
 
+string(FIND
+    "${_bridge}"
+    "static constexpr const char* descriptor ="
+    _descriptor_declaration
+)
+if(_descriptor_declaration EQUAL -1)
+    message(FATAL_ERROR "DevBench descriptor declaration is missing")
+endif()
+string(SUBSTRING "${_bridge}" ${_descriptor_declaration} -1 _descriptor_tail)
+string(FIND "${_descriptor_tail}" [[R"(]] _descriptor_raw_start)
+if(_descriptor_raw_start EQUAL -1)
+    message(FATAL_ERROR "DevBench descriptor raw string is missing")
+endif()
+math(EXPR _descriptor_json_start "${_descriptor_raw_start} + 3")
+string(SUBSTRING
+    "${_descriptor_tail}"
+    ${_descriptor_json_start}
+    -1
+    _descriptor_json_tail
+)
+string(FIND "${_descriptor_json_tail}" [[)";]] _descriptor_json_length)
+if(_descriptor_json_length EQUAL -1)
+    message(FATAL_ERROR "DevBench descriptor terminator is missing")
+endif()
+string(SUBSTRING
+    "${_descriptor_json_tail}"
+    0
+    ${_descriptor_json_length}
+    _descriptor_json
+)
+string(JSON
+    _descriptor_schema_type
+    ERROR_VARIABLE _descriptor_json_error
+    TYPE
+    "${_descriptor_json}"
+    inputSchema
+)
+if(_descriptor_json_error)
+    message(FATAL_ERROR
+        "DevBench descriptor is not valid JSON: ${_descriptor_json_error}"
+    )
+endif()
+if(NOT _descriptor_schema_type STREQUAL "OBJECT")
+    message(FATAL_ERROR "DevBench inputSchema must be an object")
+endif()
+string(JSON
+    _descriptor_all_of_length
+    LENGTH
+    "${_descriptor_json}"
+    inputSchema
+    allOf
+)
+if(NOT _descriptor_all_of_length EQUAL 3)
+    message(FATAL_ERROR "DevBench foveation schema must retain three conditional contracts")
+endif()
+string(JSON
+    _descriptor_cycle_required
+    GET
+    "${_descriptor_json}"
+    inputSchema
+    allOf
+    1
+    then
+    required
+    0
+)
+if(NOT _descriptor_cycle_required STREQUAL "control")
+    message(FATAL_ERROR "foveation_cycle schema must require control")
+endif()
+string(JSON
+    _descriptor_configure_field_count
+    LENGTH
+    "${_descriptor_json}"
+    inputSchema
+    allOf
+    0
+    then
+    anyOf
+)
+if(NOT _descriptor_configure_field_count EQUAL 17)
+    message(FATAL_ERROR "foveation_configure schema must require at least one of 17 controls")
+endif()
+string(JSON
+    _descriptor_two_value_maximum
+    GET
+    "${_descriptor_json}"
+    inputSchema
+    allOf
+    2
+    then
+    properties
+    valueIndex
+    maximum
+)
+if(NOT _descriptor_two_value_maximum EQUAL 1)
+    message(FATAL_ERROR "Two-value foveation controls must reject valueIndex 2")
+endif()
+
 foreach(_status_contract IN ITEMS
-    [[{ "apiVersion", 6 }]]
+    [[{ "apiVersion", 7 }]]
     [[{ "implementationMatrix", NeuralImplementationMatrixJson() }]]
     [[{ "insertionPointMatrix", NeuralInsertionPointMatrixJson() }]]
     [[{ "selectedInsertionPoint", NeuralInsertionPointJson(insertionPoint) }]]
@@ -109,8 +207,20 @@ foreach(_status_contract IN ITEMS
     [[{ "currentFrame", temporalAdmission.currentFrame }]]
     [[{ "lastWorldRenderFrame", temporalAdmission.lastWorldRenderFrame }]]
     [[{ "lastCompletedWorldRenderFrame", temporalAdmission.lastCompletedWorldRenderFrame }]]
-    [[nr_status returns the API-v6 NR runtime]]
+    [[nr_status returns the API-v7 NR runtime]]
     [[{ "neuralRendering", NeuralRenderingStatusJson(a_upscaling) }]]
+    [[{ "foveation", FoveationStatusJson(a_upscaling) }]]
+    [[{ "plan", FoveatedPlanJson(a_upscaling, activeProfile) }]]
+    [[{ "observedFrame", observedFrame }]]
+    [[{ "currentWorkFrame", std::move(currentWorkFrameJson) }]]
+    [[{ "measurementSafeFromFrame", std::move(measurementSafeFromFrame) }]]
+    [[{ "matchesRequestedSettings", FoveatedPlanMatchesSettings(]]
+    [[{ "finalLdrNeuralSupportRequested", finalLdrNeuralSupportRequested }]]
+    [[{ "finalLdrNeuralSupportLatched", finalLdrNeuralSupportLatched }]]
+    [[{ "visibleOutput", FoveatedRectJson(a_eye.visibleOutput) }]]
+    [[{ "output", FoveatedRectJson(a_eye.output) }]]
+    [[{ "input", FoveatedRectJson(a_eye.input) }]]
+    [[{ "sourceOffset", { { "x", sourceOffsetX }, { "y", sourceOffsetY } } }]]
 )
     string(FIND "${_bridge}" "${_status_contract}" _status_position)
     if(_status_position EQUAL -1)
@@ -164,6 +274,28 @@ foreach(_source_contract IN ITEMS
     if(_source_position EQUAL -1)
         message(FATAL_ERROR
             "Neural Rendering source contract is missing: ${_source_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_foveation_semantic_contract IN ITEMS
+    [[double a_minimum,]]
+    [[double a_maximum,]]
+    [[constexpr double kManualOffsetRequestMin = -0.3;]]
+    [[constexpr double kManualOffsetRequestMax = 0.3;]]
+    [[constexpr double kBlendFeatherRequestMax = 0.1;]]
+    [[constexpr double kPeripheryTAAOuterScaleRequestMin = 0.3;]]
+    [[requestedSettings.periphery_taa_outer_scale <]]
+    [[requestedSettings.periphery_taa_center_area)]]
+    [[AppendDistinctFoveationCycleValue(]]
+    [[const std::size_t valueCount = a_values.size();]]
+    [[a_upscaling.GetRuntimeResolutionWorkFrame();]]
+    [[latchedFrame != currentWorkFrame]]
+)
+    string(FIND "${_bridge}" "${_foveation_semantic_contract}" _semantic_position)
+    if(_semantic_position EQUAL -1)
+        message(FATAL_ERROR
+            "Foveation DevBench semantic contract is missing: ${_foveation_semantic_contract}"
         )
     endif()
 endforeach()
@@ -290,6 +422,138 @@ foreach(_cycle_contract IN ITEMS
         )
     endif()
 endforeach()
+
+foreach(_foveation_action_contract IN ITEMS
+    [[if (action == "foveation_configure")]]
+    [[if (action == "foveation_cycle")]]
+    [[TryParseFoveationConfiguration(]]
+    [[TryParseFoveationCycleRequest(]]
+    [[ApplyFoveationConfiguration(]]
+    [[ApplyFoveationCycle(]]
+    [[a_upscaling.InvalidateFrameScopedUpscalingState();]]
+    [[a_upscaling.RequestHistoryReset();]]
+    [["foveation_configure","foveation_cycle"]]
+    [["foveation_configure_empty"]]
+    [["foveation_request_field_unknown"]]
+    [["foveation_outer_scale_below_center"]]
+    [["foveation_cycle_index_out_of_range"]]
+    [["required":["control"]]]
+    [["propertyNames":{"enum":["action","control","valueIndex"]}]]
+    [["anyOf":[{"required":["foveatedEnabled"]}]]
+    [["then":{"properties":{"valueIndex":{"maximum":1}}}]]
+)
+    string(FIND "${_bridge}" "${_foveation_action_contract}" _foveation_action_position)
+    if(_foveation_action_position EQUAL -1)
+        message(FATAL_ERROR
+            "Foveation DevBench action contract is missing: ${_foveation_action_contract}"
+        )
+    endif()
+endforeach()
+
+set(_foveation_configuration_fields
+    foveatedEnabled
+    peripheryTaaEnabled
+    centerOrigin
+    horizontalAnchor
+    fovOnlyCenterScale
+    peripheryTaaCenterScale
+    peripheryTaaOuterScale
+    centerHorizontalScale
+    leftEyeOffsetX
+    leftEyeOffsetY
+    rightEyeOffsetX
+    rightEyeOffsetY
+    fovOnlyBlendFeather
+    peripheryTaaBlendFeather
+    neuralFinalLdrBlendFeather
+    reconstructionGuardBandPixels
+    maskVisualization
+)
+foreach(_foveation_field IN LISTS _foveation_configuration_fields)
+    string(FIND "${_bridge}" "\"${_foveation_field}\"" _foveation_field_position)
+    if(_foveation_field_position EQUAL -1)
+        message(FATAL_ERROR
+            "Foveation DevBench configuration field is missing: ${_foveation_field}"
+        )
+    endif()
+endforeach()
+
+set(_foveation_cycle_controls
+    master
+    periphery_taa
+    center_origin
+    horizontal_anchor
+    fov_only_center_scale
+    periphery_taa_center_scale
+    periphery_taa_outer_scale
+    center_horizontal_scale
+    left_eye_offset_x
+    left_eye_offset_y
+    right_eye_offset_x
+    right_eye_offset_y
+    fov_only_blend_feather
+    periphery_taa_blend_feather
+    neural_final_ldr_blend_feather
+    reconstruction_guard_band_pixels
+    mask_visualization
+)
+foreach(_foveation_control IN LISTS _foveation_cycle_controls)
+    string(FIND "${_bridge}" "\"${_foveation_control}\"" _foveation_control_position)
+    if(_foveation_control_position EQUAL -1)
+        message(FATAL_ERROR
+            "Foveation DevBench cycle control is missing: ${_foveation_control}"
+        )
+    endif()
+endforeach()
+
+foreach(_outer_scale_contract IN ITEMS
+    [[std::optional<float> peripheryTaaOuterScale;]]
+    [[TryParseFoveationFloat(a_args, "peripheryTaaOuterScale",]]
+    [[a_settings.periphery_taa_outer_scale = *a_request.peripheryTaaOuterScale;]]
+    [[a_left.periphery_taa_outer_scale == a_right.periphery_taa_outer_scale]]
+    [[case FoveationCycleControl::PeripheryTAAOuterScale:]]
+    [[FoveationCycleControl::PeripheryTAAOuterScale, "periphery_taa_outer_scale"]]
+    [[request.peripheryTaaOuterScale = selected;]]
+    [[{ "peripheryTaaOuterScale", settings.periphery_taa_outer_scale }]]
+    [["peripheryTaaOuterScale":{"type":"number","minimum":0.3,"maximum":1.0}]]
+)
+    string(FIND "${_bridge}" "${_outer_scale_contract}" _outer_scale_position)
+    if(_outer_scale_position EQUAL -1)
+        message(FATAL_ERROR
+            "Foveation outer-scale contract is missing: ${_outer_scale_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_main_thread_claim_contract IN ITEMS
+    [[enum class TaskClaim : uint8_t]]
+    [[TaskClaim::Pending]]
+    [[TaskClaim::Running]]
+    [[TaskClaim::Cancelled]]
+    [[claim->compare_exchange_strong(]]
+    [[future.wait_for(kMainThreadCompletionGrace)]]
+    [[{ "mainThreadTaskClaimed", true }]]
+    [[{ "mutationOutcome", "indeterminate" }]]
+)
+    string(FIND "${_bridge}" "${_main_thread_claim_contract}" _claim_position)
+    if(_claim_position EQUAL -1)
+        message(FATAL_ERROR
+            "Main-thread mutation claim contract is missing: ${_main_thread_claim_contract}"
+        )
+    endif()
+endforeach()
+
+string(REGEX MATCHALL
+    "EnsureFoveationMutationEnvelope\\("
+    _foveation_envelope_sites
+    "${_bridge}"
+)
+list(LENGTH _foveation_envelope_sites _foveation_envelope_site_count)
+if(_foveation_envelope_site_count LESS 3)
+    message(FATAL_ERROR
+        "Both foveation actions must preserve their mutation response envelope"
+    )
+endif()
 
 foreach(_insertion_point_contract IN ITEMS
     [[std::optional<NeuralRendering::InsertionPoint> insertionPoint;]]

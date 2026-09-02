@@ -439,14 +439,7 @@ namespace NeuralRendering
 			ResourceKey resources{};
 			std::uint64_t generation = 0;
 			InsertionPoint insertionPoint = kDefaultInsertionPoint;
-			std::uint32_t motionVectorScaleX = 0;
-			std::uint32_t motionVectorScaleY = 0;
-			std::uint32_t inputOffsetX = 0;
-			std::uint32_t inputOffsetY = 0;
-			std::uint32_t outputOffsetX = 0;
-			std::uint32_t outputOffsetY = 0;
-			std::uint32_t pinholeOffsetX = 0;
-			std::uint32_t pinholeOffsetY = 0;
+			UpscalingDLSS::ViewportCrop viewportCrop{};
 			DXGI_FORMAT depthSourceFormat = DXGI_FORMAT_UNKNOWN;
 			DXGI_FORMAT depthViewFormat = DXGI_FORMAT_UNKNOWN;
 			std::uint32_t intensity = 0;
@@ -617,16 +610,21 @@ namespace NeuralRendering
 			!validDimension(a_args.outputHeight)) {
 			return fail("one or more dimensions are zero or exceed the D3D11 Texture2D limit");
 		}
-		if (!std::isfinite(a_args.motionVectorScaleX) ||
-			!std::isfinite(a_args.motionVectorScaleY) ||
-			a_args.motionVectorScaleX <= 0.0f ||
-			a_args.motionVectorScaleY <= 0.0f) {
-			return fail("motion-vector scales must be finite and positive");
+		if (!a_args.viewportCrop.MatchesEvaluationExtents(
+				a_args.guideWidth,
+				a_args.guideHeight,
+				a_args.outputWidth,
+				a_args.outputHeight)) {
+			return fail("Feature 18 crop does not match the physical guide and output extents");
 		}
-		if (!std::isfinite(a_args.pinholeOffsetX) ||
-			!std::isfinite(a_args.pinholeOffsetY)) {
-			return fail("pinhole offsets must be finite");
+		if (a_args.colorWidth != a_args.viewportCrop.output.Width() ||
+			a_args.colorHeight != a_args.viewportCrop.output.Height()) {
+			return fail("Feature 18 color input does not match the exact output crop extent");
 		}
+		const auto motionVectorScale =
+			UpscalingDLSS::BuildMotionVectorPixelScale(a_args.viewportCrop);
+		if (!motionVectorScale.valid)
+			return fail("Feature 18 motion-vector crop metadata is invalid");
 		if (!IsFiniteTuning(a_args.tuning))
 			return fail("Feature 18 tuning values are outside their validated ranges");
 		if (!a_args.tuning.useAutoMask || a_args.tuning.uiCorrection) {
@@ -742,14 +740,7 @@ namespace NeuralRendering
 			.resources = a_resources.resourceKey,
 			.generation = a_args.generation,
 			.insertionPoint = a_args.insertionPoint,
-			.motionVectorScaleX = std::bit_cast<std::uint32_t>(a_args.motionVectorScaleX),
-			.motionVectorScaleY = std::bit_cast<std::uint32_t>(a_args.motionVectorScaleY),
-			.inputOffsetX = a_args.inputOffsetX,
-			.inputOffsetY = a_args.inputOffsetY,
-			.outputOffsetX = a_args.outputOffsetX,
-			.outputOffsetY = a_args.outputOffsetY,
-			.pinholeOffsetX = std::bit_cast<std::uint32_t>(a_args.pinholeOffsetX),
-			.pinholeOffsetY = std::bit_cast<std::uint32_t>(a_args.pinholeOffsetY),
+			.viewportCrop = a_args.viewportCrop,
 			.depthSourceFormat = a_resources.depth.desc.Format,
 			.depthViewFormat = a_resources.depthViewFormat,
 			.intensity = std::bit_cast<std::uint32_t>(a_args.tuning.intensity),
@@ -1736,6 +1727,8 @@ namespace NeuralRendering
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			auto& slot = *slots[index];
 			const auto& args = a_args[index];
+			const auto motionVectorScale =
+				UpscalingDLSS::BuildMotionVectorPixelScale(args.viewportCrop);
 			SetActiveFeatureSlotLocked(args.featureSlot);
 			const bool forcedReset = stereoBatch ?
 			                             synchronizeForcedReset :
@@ -1764,8 +1757,8 @@ namespace NeuralRendering
 				args.guideHeight,
 				args.outputWidth,
 				args.outputHeight,
-				args.motionVectorScaleX,
-				args.motionVectorScaleY,
+				motionVectorScale.x,
+				motionVectorScale.y,
 				args.featureUpscaling,
 				args.tuning,
 				effectiveReset,

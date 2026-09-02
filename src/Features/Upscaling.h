@@ -1994,8 +1994,7 @@ public:
 		uint32_t submitSourceBoxTop = 0;
 		uint32_t submitSourceBoxRight = 0;
 		uint32_t submitSourceBoxBottom = 0;
-		float pinholeOffsetX = 0.0f;
-		float pinholeOffsetY = 0.0f;
+		UpscalingDLSS::ViewportCrop dlssViewportCrop{};
 		ID3D11Resource* colorIn = nullptr;
 		ID3D11Resource* depthIn = nullptr;
 		ID3D11Resource* motionVectorsIn = nullptr;
@@ -2582,8 +2581,7 @@ private:
 		uint32_t outputHeight = 0;
 		float motionVectorScaleX = 1.0f;
 		float motionVectorScaleY = 1.0f;
-		float pinholeOffsetX = 0.0f;
-		float pinholeOffsetY = 0.0f;
+		UpscalingDLSS::ViewportCrop dlssViewportCrop{};
 		ID3D11Resource* colorIn = nullptr;
 		ID3D11Resource* depth = nullptr;
 		ID3D11Resource* motionVectors = nullptr;

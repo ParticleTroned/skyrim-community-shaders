@@ -25094,10 +25094,9 @@ bool Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Ups
 			extentIn,
 			extentOut,
 			params.outputWidth,
-			params.pinholeOffsetX,
-			params.pinholeOffsetY,
 			params.label,
-			params.dlssViewportRole);
+			params.dlssViewportRole,
+			params.dlssViewportCrop);
 		if (params.dlssViewportRole == Streamline::DLSSViewportRole::FullEye)
 			RecordVRRenderScaleFullEyeEvaluation(a_upscaleMethod, params.eyeIndex, evaluated);
 		return evaluated;
@@ -25253,7 +25252,6 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 	const auto& eyePlan = plan.eyes[eyeIndex];
 	if (!eyePlan.IsValid())
 		return false;
-	const float2 pinholeOffset = eyePlan.pinholeOffset;
 
 	VendorEyeDispatchParams vendorParams{};
 	vendorParams.eyeIndex = eyeIndex;
@@ -25263,8 +25261,22 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 	vendorParams.outputHeight = rect.outputHeight;
 	vendorParams.motionVectorScaleX = static_cast<float>(std::max(inputWidthPerEye, 1u));
 	vendorParams.motionVectorScaleY = static_cast<float>(std::max(inputHeight, 1u));
-	vendorParams.pinholeOffsetX = pinholeOffset.x;
-	vendorParams.pinholeOffsetY = pinholeOffset.y;
+	vendorParams.dlssViewportCrop = {
+		.fullInput = { inputWidthPerEye, inputHeight },
+		.input = {
+			rect.inputOffsetX,
+			rect.inputOffsetY,
+			rect.inputOffsetX + rect.inputWidth,
+			rect.inputOffsetY + rect.inputHeight,
+		},
+		.fullOutput = { outputWidthPerEye, outputHeight },
+		.output = {
+			rect.outputOffsetX,
+			rect.outputOffsetY,
+			rect.outputOffsetX + rect.outputWidth,
+			rect.outputOffsetY + rect.outputHeight,
+		},
+	};
 	vendorParams.colorIn = foveatedCenterColorIn[eyeIndex]->resource.get();
 	vendorParams.depth = foveatedCenterDepth[eyeIndex]->resource.get();
 	vendorParams.motionVectors = foveatedCenterMotionVectors[eyeIndex]->resource.get();
@@ -25310,8 +25322,7 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 		centerKey.submitSourceBoxTop = submitSourceBox->top;
 		centerKey.submitSourceBoxRight = submitSourceBox->right;
 		centerKey.submitSourceBoxBottom = submitSourceBox->bottom;
-		centerKey.pinholeOffsetX = pinholeOffset.x;
-		centerKey.pinholeOffsetY = pinholeOffset.y;
+		centerKey.dlssViewportCrop = vendorParams.dlssViewportCrop;
 		centerKey.colorIn = colorIn;
 		centerKey.depthIn = depthIn;
 		centerKey.motionVectorsIn = motionVectorsIn;
@@ -25354,8 +25365,7 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 		       a_cached.submitSourceBoxTop == a_key.submitSourceBoxTop &&
 		       a_cached.submitSourceBoxRight == a_key.submitSourceBoxRight &&
 		       a_cached.submitSourceBoxBottom == a_key.submitSourceBoxBottom &&
-		       a_cached.pinholeOffsetX == a_key.pinholeOffsetX &&
-		       a_cached.pinholeOffsetY == a_key.pinholeOffsetY &&
+		       a_cached.dlssViewportCrop == a_key.dlssViewportCrop &&
 		       a_cached.colorIn == a_key.colorIn &&
 		       a_cached.depthIn == a_key.depthIn &&
 		       a_cached.motionVectorsIn == a_key.motionVectorsIn &&
@@ -25461,14 +25471,7 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 			args.guideHeight = rect.inputHeight;
 			args.outputWidth = a_neuralOutputWidth;
 			args.outputHeight = a_neuralOutputHeight;
-			args.motionVectorScaleX = vendorParams.motionVectorScaleX;
-			args.motionVectorScaleY = vendorParams.motionVectorScaleY;
-			args.inputOffsetX = rect.inputOffsetX;
-			args.inputOffsetY = rect.inputOffsetY;
-			args.outputOffsetX = rect.outputOffsetX;
-			args.outputOffsetY = rect.outputOffsetY;
-			args.pinholeOffsetX = pinholeOffset.x;
-			args.pinholeOffsetY = pinholeOffset.y;
+			args.viewportCrop = vendorParams.dlssViewportCrop;
 			args.featureUpscaling = NeuralRendering::UsesFeatureUpscaling();
 			args.reset = ShouldResetHistoryThisFrame();
 			args.tuning = {
@@ -25996,14 +25999,22 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 			args.guideHeight = rect.inputHeight;
 			args.outputWidth = rect.outputWidth;
 			args.outputHeight = rect.outputHeight;
-			args.motionVectorScaleX = static_cast<float>(a_inputWidthPerEye);
-			args.motionVectorScaleY = static_cast<float>(a_inputHeight);
-			args.inputOffsetX = rect.inputOffsetX;
-			args.inputOffsetY = rect.inputOffsetY;
-			args.outputOffsetX = rect.outputOffsetX;
-			args.outputOffsetY = rect.outputOffsetY;
-			args.pinholeOffsetX = eyePlan.pinholeOffset.x;
-			args.pinholeOffsetY = eyePlan.pinholeOffset.y;
+			args.viewportCrop = {
+				.fullInput = { a_inputWidthPerEye, a_inputHeight },
+				.input = {
+					rect.inputOffsetX,
+					rect.inputOffsetY,
+					rect.inputOffsetX + rect.inputWidth,
+					rect.inputOffsetY + rect.inputHeight,
+				},
+				.fullOutput = { a_outputWidthPerEye, a_outputHeight },
+				.output = {
+					rect.outputOffsetX,
+					rect.outputOffsetY,
+					rect.outputOffsetX + rect.outputWidth,
+					rect.outputOffsetY + rect.outputHeight,
+				},
+			};
 			args.featureUpscaling = true;
 			args.reset = ShouldResetHistoryThisFrame();
 			args.tuning = {

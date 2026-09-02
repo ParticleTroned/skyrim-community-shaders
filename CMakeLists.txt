@@ -1686,11 +1686,33 @@ if(BUILD_CONTROLLER_TESTS)
         FrameTelemetryRing
         PROPERTIES LABELS "ControllerTests"
     )
+    add_executable(
+        dlss_viewport_crop_test
+        EXCLUDE_FROM_ALL
+        tests/dlss_viewport_crop_test.cpp
+    )
+    target_compile_features(
+        dlss_viewport_crop_test
+        PRIVATE cxx_std_23
+    )
+    target_include_directories(
+        dlss_viewport_crop_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    add_test(
+        NAME DLSSViewportCrop
+        COMMAND dlss_viewport_crop_test
+    )
+    set_tests_properties(
+        DLSSViewportCrop
+        PROPERTIES LABELS "ControllerTests"
+    )
     add_custom_target(
         controller_tests
         DEPENDS
             neural_rendering_pipeline_policy_test
             frame_telemetry_ring_test
+            dlss_viewport_crop_test
     )
 endif()
 message("*************************************************************")

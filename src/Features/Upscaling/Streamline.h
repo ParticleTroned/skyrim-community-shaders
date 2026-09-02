@@ -2,6 +2,7 @@
 
 #include "../../Buffer.h"
 #include "../../State.h"
+#include "DLSSViewportCrop.h"
 #include "FrameTelemetryRing.h"
 
 #include <array>
@@ -72,6 +73,30 @@ public:
 	};
 	[[nodiscard]] DLSSPassTelemetrySnapshot GetDLSSPassTelemetrySnapshot(
 		uint32_t a_frame) const noexcept;
+	struct DLSSViewportCropTelemetrySnapshot
+	{
+		bool valid = false;
+		bool evaluationSucceeded = false;
+		uint32_t frame = 0;
+		uint32_t eyeIndex = 0;
+		DLSSViewportRole viewportRole = DLSSViewportRole::FullEye;
+		uint32_t viewport = UINT32_MAX;
+		uint64_t generation = 0;
+		UpscalingDLSS::ViewportCrop current{};
+		UpscalingDLSS::ViewportCrop previous{};
+		bool continuous = false;
+		bool sameFrameReplay = false;
+		bool cropReset = true;
+		bool effectiveReset = true;
+		UpscalingDLSS::CropHistoryResetReason resetReason =
+			UpscalingDLSS::CropHistoryResetReason::InvalidDescriptor;
+		float motionVectorScaleX = 1.0f;
+		float motionVectorScaleY = 1.0f;
+	};
+	[[nodiscard]] DLSSViewportCropTelemetrySnapshot
+	GetDLSSViewportCropTelemetrySnapshot(
+		DLSSViewportRole a_role,
+		uint32_t a_eyeIndex) const noexcept;
 	static constexpr uint32_t kVRDLSSViewportRoleCount = static_cast<uint32_t>(DLSSViewportRole::Count);
 	static constexpr uint32_t kVRDLSSViewportSlotCount = 2;
 	static constexpr uint32_t kVRDLSSSlotViewportBase = 0x1000;
@@ -88,6 +113,11 @@ public:
 		DLSSPassTelemetrySnapshot,
 		kDLSSPassTelemetryFrameCount>
 		dlssPassTelemetryFrames;
+	mutable std::mutex dlssViewportCropTelemetryMutex;
+	std::array<
+		std::array<DLSSViewportCropTelemetrySnapshot, kDLSSPassEyeCount>,
+		kVRDLSSViewportRoleCount>
+		dlssViewportCropTelemetry{};
 	HMODULE interposer = NULL;
 
 	// SL Interposer Functions
@@ -150,10 +180,13 @@ public:
 		uint32_t extentInHeight = 0;
 		uint32_t extentOutWidth = 0;
 		uint32_t extentOutHeight = 0;
-		int32_t viewportScaleXQ = 0;
-		int32_t viewportScaleYQ = 0;
-		int32_t pinholeOffsetXQ = 0;
-		int32_t pinholeOffsetYQ = 0;
+		UpscalingDLSS::ViewportCrop currentCrop{};
+		UpscalingDLSS::ViewportCrop previousCrop{};
+		uint64_t cropGeneration = 0;
+		uint32_t cropResetReason = 0;
+		int32_t motionVectorScaleXQ = 0;
+		int32_t motionVectorScaleYQ = 0;
+		bool cropContinuous = false;
 		int32_t jitterXQ = 0;
 		int32_t jitterYQ = 0;
 		bool historyResetRequested = false;
@@ -165,16 +198,20 @@ public:
 		uint32_t qualityMode = 0;
 		uint32_t dlssPreset = 0;
 		uint64_t lastUse = 0;
+		uint64_t generation = 0;
 		sl::ViewportHandle viewport[2] = { sl::ViewportHandle(0), sl::ViewportHandle(1) };
 		bool resourcesAllocated[2] = { false, false };
 		DLSSOptionsCache optionsCache[2]{};
+		UpscalingDLSS::SuccessfulCropHistory cropHistory[2]{};
 	};
 
 	DLSSOptionsCache nonVRDLSSOptionsCache{};
+	UpscalingDLSS::SuccessfulCropHistory nonVRDLSSCropHistory{};
 	VRDLSSViewportSlot vrDLSSViewportSlots[kVRDLSSViewportRoleCount][kVRDLSSViewportSlotCount]{};
 	static constexpr uint32_t kDLSSFrameConstantsCacheSize = 16;
 	std::array<DLSSFrameConstantsCache, kDLSSFrameConstantsCacheSize> dlssFrameConstantsCache{};
 	uint64_t vrDLSSViewportUseCounter = 0;
+	uint64_t vrDLSSViewportGenerationCounter = 0;
 	std::array<bool, 2> activeDLSSViewportResourcesAllocated = {};
 	ID3D11Query* pendingDLSSResourceFreeIdleFence = nullptr;
 	std::array<ID3D11Query*, kVRDLSSViewportRoleCount> pendingVRDLSSSlotRecycleIdleFences{};
@@ -207,8 +244,16 @@ public:
 		float viewportScaleX = 1.0f;
 		float viewportScaleY = 1.0f;
 		bool croppedViewport = false;
-		float pinholeOffsetX = 0.0f;
-		float pinholeOffsetY = 0.0f;
+		UpscalingDLSS::ViewportCrop currentCrop{};
+		UpscalingDLSS::ViewportCrop previousCrop{};
+		uint64_t cropGeneration = 0;
+		UpscalingDLSS::CropHistoryResetReason cropResetReason =
+			UpscalingDLSS::CropHistoryResetReason::InvalidDescriptor;
+		bool cropContinuous = false;
+		bool cropSameFrameReplay = false;
+		bool cropReset = true;
+		float motionVectorScaleX = 1.0f;
+		float motionVectorScaleY = 1.0f;
 		float jitterX = 0.0f;
 		float jitterY = 0.0f;
 		bool colorBuffersHDR = false;
@@ -253,8 +298,9 @@ public:
 		ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,
 		ID3D11Resource* mvec, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask,
 		const sl::Extent& extentIn, const sl::Extent& extentOut, uint32_t outputWidth,
-		float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f, const char* label = "DLSS Evaluate",
-		DLSSViewportRole viewportRole = DLSSViewportRole::FullEye);
+		const char* label = "DLSS Evaluate",
+		DLSSViewportRole viewportRole = DLSSViewportRole::FullEye,
+		const UpscalingDLSS::ViewportCrop& viewportCrop = {});
 
 	// Cached DLL version info for Streamline plugin directory
 	static std::vector<std::pair<std::string, std::string>> dllVersions;
@@ -265,7 +311,12 @@ public:
 
 	void PostDevice();
 
-	bool CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex = 0, float viewportScaleX = 1.0f, float viewportScaleY = 1.0f, float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f, const DLSSDispatchDiagnostics* diagnostics = nullptr);
+	bool CheckFrameConstants(
+		sl::ViewportHandle p_viewport,
+		uint32_t eyeIndex,
+		const UpscalingDLSS::ViewportCrop& currentCrop,
+		const UpscalingDLSS::CropContinuityDecision& cropContinuity,
+		const DLSSDispatchDiagnostics* diagnostics = nullptr);
 	bool EnsureFrameToken();
 
 	bool IsRTXAndBelow40Series(IDXGIAdapter* a_adapter);
@@ -278,8 +329,18 @@ public:
 	bool FreeDLSSViewportResources(sl::ViewportHandle a_viewport, uint32_t a_eyeIndex, bool a_logFailures);
 	bool FreeVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t slotIndex, bool logFailures);
 	DLSSOptionsCache& GetDLSSOptionsCache(DLSSViewportRole viewportRole, uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset);
+	UpscalingDLSS::SuccessfulCropHistory* GetDLSSCropHistory(
+		DLSSViewportRole viewportRole,
+		uint32_t eyeIndex,
+		uint32_t qualityMode,
+		uint32_t dlssPreset);
+	uint64_t GetDLSSViewportGeneration(
+		DLSSViewportRole viewportRole,
+		uint32_t qualityMode,
+		uint32_t dlssPreset) const;
 	bool SetDLSSOptions(DLSSViewportRole viewportRole, sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height, bool colorBuffersHDR, uint32_t qualityMode, uint32_t dlssPreset, const DLSSDispatchDiagnostics* diagnostics = nullptr);
 	void InvalidateDLSSOptionsCache();
+	void InvalidateDLSSCropHistory();
 	void ResetDLSSIdleFences();
 	void ResetFrameTracking();
 	void ClearLastDLSSFailureState() { lastDLSSFailureDuplicatedConstants = false; }
@@ -290,7 +351,7 @@ public:
 	bool UpscaleRegion(uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,
 		ID3D11Resource* mvec, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask,
 		uint32_t renderWidth, uint32_t renderHeight, uint32_t outputWidth, uint32_t outputHeight,
-		float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f);
+		const UpscalingDLSS::ViewportCrop& viewportCrop = {});
 	void UpdateReflex();
 
 	DLSSResourceTeardownResult DestroyDLSSResources();

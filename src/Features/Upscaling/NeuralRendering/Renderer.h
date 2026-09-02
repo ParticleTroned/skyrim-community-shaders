@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../DLSSViewportCrop.h"
 #include "PipelinePolicy.h"
 #include "Runtime.h"
 
@@ -178,14 +179,7 @@ namespace NeuralRendering
 		std::uint32_t guideHeight = 0;
 		std::uint32_t outputWidth = 0;
 		std::uint32_t outputHeight = 0;
-		float motionVectorScaleX = 1.0f;
-		float motionVectorScaleY = 1.0f;
-		std::uint32_t inputOffsetX = 0;
-		std::uint32_t inputOffsetY = 0;
-		std::uint32_t outputOffsetX = 0;
-		std::uint32_t outputOffsetY = 0;
-		float pinholeOffsetX = 0.0f;
-		float pinholeOffsetY = 0.0f;
+		UpscalingDLSS::ViewportCrop viewportCrop{};
 		bool featureUpscaling = false;
 		Tuning tuning{};
 		bool reset = false;

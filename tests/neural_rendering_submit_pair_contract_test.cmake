@@ -65,7 +65,7 @@ string(SUBSTRING
     _outer_submit
 )
 foreach(_outer_contract IN ITEMS
-    [[ID3D11Texture2D* pTexture]]
+    [[const void* pTexture]]
     [[reinterpret_cast<uintptr_t>(pTexture)]]
     [[BeginNeuralSubmitPairBoundary(]]
     [[g_neuralSubmitPairBoundaryToken = submitPairBoundaryToken]]
@@ -90,7 +90,7 @@ foreach(_unsafe_outer_contract IN ITEMS
     )
     if(NOT _unsafe_outer_contract_position EQUAL -1)
         message(FATAL_ERROR
-            "Outer submit hook dereferences the raw engine texture as OpenVR metadata: ${_unsafe_outer_contract}"
+            "Outer submit hook dereferences the opaque engine source as OpenVR metadata: ${_unsafe_outer_contract}"
         )
     endif()
 endforeach()
@@ -304,9 +304,10 @@ foreach(_observer_contract IN ITEMS
     [[active.token != a_expectedToken]]
     [[a_texture && a_texture->handle]]
     [[a_texture->eType == vr::TextureType_DirectX]]
+    [[reinterpret_cast<uintptr_t>(a_texture)]]
     [[reinterpret_cast<uintptr_t>(a_texture->handle)]]
-    [[active.sourceIdentity != 0]]
-    [[active.sourceIdentity == sourceIdentity]]
+    [[ResolveSubmitSourceIdentityMatch(]]
+    [[SubmitSourceIdentityMatch::None]]
     [[if (!proven)]]
 )
     string(FIND

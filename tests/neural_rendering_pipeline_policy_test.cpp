@@ -8,6 +8,7 @@ int main()
 	using NeuralRendering::FeatureSlotRoute;
 	using NeuralRendering::InsertionPoint;
 	using NeuralRendering::PipelineArrangement;
+	using NeuralRendering::SubmitSourceIdentityMatch;
 	using NeuralRendering::TemporalAdmissionBlockReason;
 	using NeuralRendering::TemporalAdmissionInputs;
 	using NeuralRendering::TemporalRoute;
@@ -100,6 +101,19 @@ int main()
 	static_assert(NeuralRendering::IsSequentialFrame(42u, 43u));
 	static_assert(!NeuralRendering::IsSequentialFrame(42u, 42u));
 	static_assert(!NeuralRendering::IsSequentialFrame(42u, 44u));
+
+	static_assert(
+		NeuralRendering::ResolveSubmitSourceIdentityMatch(0x1000u, 0x1000u, 0x2000u) ==
+		SubmitSourceIdentityMatch::OpenVRTexture);
+	static_assert(
+		NeuralRendering::ResolveSubmitSourceIdentityMatch(0x2000u, 0x1000u, 0x2000u) ==
+		SubmitSourceIdentityMatch::DirectXHandle);
+	static_assert(
+		NeuralRendering::ResolveSubmitSourceIdentityMatch(0u, 0x1000u, 0x2000u) ==
+		SubmitSourceIdentityMatch::None);
+	static_assert(
+		NeuralRendering::ResolveSubmitSourceIdentityMatch(0x3000u, 0x1000u, 0x2000u) ==
+		SubmitSourceIdentityMatch::None);
 
 	constexpr TemporalAdmissionInputs currentWorldFrame{
 		.worldFrameStateAvailable = true,

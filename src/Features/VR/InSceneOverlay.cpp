@@ -293,12 +293,12 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 	{
 		static vr::EVRCompositorError thunk(
 			RE::BSOpenVR* _this,
-			ID3D11Texture2D* pTexture,
+			const void* pTexture,
 			const vr::VRTextureBounds_t* pBounds,
 			vr::EVRSubmitFlags nSubmitFlags)
 		{
-			// This engine boundary carries the raw D3D11 texture. OpenVR wraps it
-			// in Texture_t only at the nested IVRCompositor::Submit boundary.
+			// Treat the engine source as opaque because known declarations disagree
+			// whether this boundary carries wrapper or D3D11 identity.
 			auto& upscaling = globals::features::upscaling;
 			const uint64_t compositorCycleToken =
 				g_openVRSubmitCycleToken.load(std::memory_order_acquire);

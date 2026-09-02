@@ -115,6 +115,28 @@ namespace NeuralRendering
 		BypassPresentedEye,
 	};
 
+	enum class SubmitSourceIdentityMatch : std::uint8_t
+	{
+		None,
+		OpenVRTexture,
+		DirectXHandle,
+	};
+
+	/** Matches an opaque outer submit source to validated nested representations. */
+	[[nodiscard]] constexpr SubmitSourceIdentityMatch ResolveSubmitSourceIdentityMatch(
+		std::uintptr_t a_outerIdentity,
+		std::uintptr_t a_openVRTextureIdentity,
+		std::uintptr_t a_directXHandleIdentity) noexcept
+	{
+		if (a_outerIdentity == 0)
+			return SubmitSourceIdentityMatch::None;
+		if (a_outerIdentity == a_openVRTextureIdentity && a_openVRTextureIdentity != 0)
+			return SubmitSourceIdentityMatch::OpenVRTexture;
+		if (a_outerIdentity == a_directXHandleIdentity && a_directXHandleIdentity != 0)
+			return SubmitSourceIdentityMatch::DirectXHandle;
+		return SubmitSourceIdentityMatch::None;
+	}
+
 	enum class TemporalRoute : std::uint8_t
 	{
 		Main,

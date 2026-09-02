@@ -34011,8 +34011,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		static bool loggedNeuralStereoSourceFallback = false;
 		LogWarnOnceFmt(
 			loggedNeuralStereoSourceFallback,
-			"[DLSSNR][Stereo] Submit-stage NR disabled because a coherent two-eye source/cycle signature is unavailable; normal DLSS remains active (cycle={}, combined={}, array={}, signatureProven={})",
+			"[DLSSNR][Stereo] Submit-stage NR disabled because a coherent two-eye source/cycle signature is unavailable; normal DLSS remains active (cycle={}, pairBoundary={}, combined={}, array={}, signatureProven={})",
 			a_compositorCycleToken,
+			a_submitPairBoundaryToken,
 			sourceUsesCombinedStereoLayout,
 			sourceDesc.ArraySize,
 			neuralSubmitSourceSignatureProven);
@@ -35620,19 +35621,25 @@ uint64_t Upscaling::ObserveNeuralSubmitPairBoundaryEye(
 		if (!active.active || active.token != a_expectedToken)
 			return 0;
 
-		const uintptr_t sourceIdentity =
+		const uintptr_t openVRTextureIdentity =
+			reinterpret_cast<uintptr_t>(a_texture);
+		const uintptr_t directXHandleIdentity =
 			a_texture && a_texture->handle &&
 					a_texture->eType == vr::TextureType_DirectX ?
 				reinterpret_cast<uintptr_t>(a_texture->handle) :
 				0;
+		const auto sourceIdentityMatch =
+			NeuralRendering::ResolveSubmitSourceIdentityMatch(
+				active.sourceIdentity,
+				openVRTextureIdentity,
+				directXHandleIdentity);
 		const uint32_t frame = globals::state ? globals::state->frameCount : 0u;
 		const bool proven =
 			active.threadId == GetCurrentThreadId() &&
 			active.compositorCycle == a_compositorCycle &&
 			active.frame == frame &&
 			active.flags == a_flags &&
-			active.sourceIdentity != 0 &&
-			active.sourceIdentity == sourceIdentity;
+			sourceIdentityMatch != NeuralRendering::SubmitSourceIdentityMatch::None;
 		if (!proven)
 			return 0;
 

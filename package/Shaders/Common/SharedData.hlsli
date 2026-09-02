@@ -207,7 +207,7 @@ namespace SharedData
 		float GrassWetnessPhase;
 		float GrassWetRoughness;
 		float GrassWetDarkeningStrength;
-		float GrassWetnessPad;
+		uint PuddleMaskMode;
 	};
 
 	struct SkylightingSettings

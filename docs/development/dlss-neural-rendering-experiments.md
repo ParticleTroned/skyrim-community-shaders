@@ -110,14 +110,15 @@ cmake --build --preset Internal-DLSSNR-AIO
 
 The preset enables DevBench and local staging, disables official fetching and
 the package shader tests for this internal iteration build, and retains the
-normal fail-closed hash checks. Keep machine-specific paths in the process
-environment or an ignored `CMakeUserPresets.json`, never in the tracked preset.
-The resulting archive is still internal-only and must not be redistributed.
-Run the configure command before every build whose runtime source paths may
-have changed; invoking only the build preset does not reread environment
-variables. Expanded paths remain in the ignored build cache and staging
-manifest. Missing sources, mismatched hashes, or concurrent official
-acquisition fail closed.
+normal fail-closed hash checks. Its short `build/gnr` binary directory keeps
+FidelityFX shader-permutation outputs below legacy Windows path limits. Keep
+machine-specific paths in the process environment or an ignored
+`CMakeUserPresets.json`, never in the tracked preset. The resulting archive is
+still internal-only and must not be redistributed. Run the configure command
+before every build whose runtime source paths may have changed; invoking only
+the build preset does not reread environment variables. Expanded paths remain
+in the ignored build cache and staging manifest. Missing sources, mismatched
+hashes, or concurrent official acquisition fail closed.
 
 The verified official acquisition path from `main-VR` is retained behind the
 explicit `CSX_FETCH_OFFICIAL_STREAMLINE_RUNTIME=ON` network opt-in. It downloads

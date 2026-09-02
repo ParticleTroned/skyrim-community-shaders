@@ -83,6 +83,20 @@ foreach(_task2_contract IN ITEMS
 	endif()
 endforeach()
 
+foreach(_fsr_failure_contract IN ITEMS
+	"fsrHostLifecycle"
+	"quarantined"
+	"lastContextCreateResult"
+)
+	string(FIND "${_bridge}" "${_fsr_failure_contract}"
+		_fsr_failure_contract_position)
+	if(_fsr_failure_contract_position EQUAL -1)
+		message(FATAL_ERROR
+			"FSR failure evidence is missing: ${_fsr_failure_contract}"
+		)
+	endif()
+endforeach()
+
 string(FIND "${_upscaling_source}" "admittedExistingDLSSProvider"
 	_dlss_only_admission_position)
 if(NOT _dlss_only_admission_position EQUAL -1)

@@ -1250,6 +1250,10 @@ namespace
 										 { "capture", VRPipelineDiagnostics::GetStatusSnapshot() },
 									 } },
 			{ "fsrDispatch", FsrDispatchJson(controller, globals::shaderCache && globals::shaderCache->IsCompiling()) },
+			{ "fsrHostLifecycle", {
+									  { "quarantined", a_upscaling.fidelityFX.IsHostFSRStateQuarantined() },
+									  { "lastContextCreateResult", static_cast<int32_t>(a_upscaling.fidelityFX.GetLastFSRContextCreateResult()) },
+								  } },
 			{ "vendorWorkGate", VendorWorkGateJson(vendorWorkGate) },
 			{ "loadPresentationProbe", a_upscaling.BuildVRLoadPresentationProbeStatus() },
 			{ "hmdMaskDiagnostics", a_upscaling.BuildVRHMDMaskDiagnosticsStatus() },

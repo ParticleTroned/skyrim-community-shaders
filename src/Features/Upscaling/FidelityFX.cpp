@@ -1703,6 +1703,7 @@ FidelityFX::LifecycleResult FidelityFX::CreateFSRResources()
 		bool createCrashed = false;
 		const FfxErrorCode createResult =
 			CreateHostFsr3ContextProtected(&fsrContext[i], &contextDescription, createCrashed);
+		fsrLastContextCreateResult = createResult;
 		const auto createDisposition = FSRHostLifecyclePolicy::ClassifyCallDisposition(
 			createCrashed,
 			createResult == FFX_OK);
@@ -1713,8 +1714,10 @@ FidelityFX::LifecycleResult FidelityFX::CreateFSRResources()
 		}
 		if (FSRHostLifecyclePolicy::RequiresOwnershipQuarantine(createDisposition)) {
 			logger::critical(
-				"[FidelityFX] FSR3 context creation for eye {} returned an error; quarantining potentially partial SDK ownership.",
-				i);
+				"[FidelityFX] FSR3 context creation for eye {} returned error {} (0x{:08X}); quarantining potentially partial SDK ownership.",
+				i,
+				static_cast<int32_t>(createResult),
+				static_cast<uint32_t>(createResult));
 			const auto failureResult = ResolveFSRLifecycleFailure("FSR3 context creation");
 			QuarantineHostFSRContext(i, "an FSR3 context creation error");
 			return failureResult;

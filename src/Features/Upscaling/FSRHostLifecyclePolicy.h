@@ -16,8 +16,8 @@ namespace FSRHostLifecyclePolicy
 		if (a_faulted)
 			return CallDisposition::Faulted;
 		return a_succeeded ?
-			CallDisposition::Succeeded :
-			CallDisposition::ReturnedError;
+		           CallDisposition::Succeeded :
+		           CallDisposition::ReturnedError;
 	}
 
 	[[nodiscard]] constexpr bool RequiresOwnershipQuarantine(
@@ -46,5 +46,21 @@ namespace FSRHostLifecyclePolicy
 		return !a_quarantined &&
 		       !a_hasValidContext &&
 		       !a_hasIndeterminateContext;
+	}
+
+	[[nodiscard]] constexpr bool CanRetainQuarantinedHostOwnership(
+		bool a_quarantined,
+		bool a_targetUsesHostFSR) noexcept
+	{
+		// Indeterminate SDK ownership cannot be released safely, but it does not
+		// own another provider's textures or prevent that provider from recovering.
+		return a_quarantined && !a_targetUsesHostFSR;
+	}
+
+	[[nodiscard]] constexpr bool CanQueueHostActivation(
+		bool a_quarantined,
+		bool a_targetUsesHostFSR) noexcept
+	{
+		return !a_quarantined || !a_targetUsesHostFSR;
 	}
 }

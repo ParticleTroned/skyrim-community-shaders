@@ -21,6 +21,7 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "Upscaling/DX12SwapChain.h"
+#include "Upscaling/FSRHostLifecyclePolicy.h"
 #include "Upscaling/FidelityFX.h"
 #include "Upscaling/ReflexPolicy.h"
 #include "Upscaling/Streamline.h"
@@ -5680,6 +5681,13 @@ namespace
 		if (a_upscaling.IsOpenCompositeUpscalingBlocked())
 			return false;
 
+		if (!FSRHostLifecyclePolicy::CanQueueHostActivation(
+				a_upscaling.fidelityFX.IsHostFSRStateQuarantined(),
+				a_upscaling.GetConfiguredUpscaleMethodForTransition() ==
+					Upscaling::UpscaleMethod::kFSR)) {
+			return false;
+		}
+
 		if (a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
 			a_upscaling.perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
 			a_upscaling.HasPendingVRUpscalingTransition()) {
@@ -5811,14 +5819,16 @@ namespace
 	bool IsSameTerminalFSRResourceRequest(
 		const Upscaling::VRRenderScaleTransitionSnapshot& a_controller);
 	bool IsSameTerminalFSRResourceRequest(const Upscaling& a_upscaling);
+	bool ShouldRetainInactiveFSROwnership(
+		const Upscaling& a_upscaling,
+		Upscaling::UpscaleMethod a_targetMethod);
 
 	bool HasPendingVRVendorRuntimeReset(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_upscaleMethod)
 	{
 		const bool includeInactiveVendorReset = ShouldIncludeInactiveVRVendorReset(a_upscaling, a_upscaleMethod);
 		const bool activeRuntimeGenerationMismatch = !a_upscaling.IsVendorRuntimeReadyForActiveContract(a_upscaleMethod);
 		const bool terminalInactiveFSRReset =
-			a_upscaleMethod != Upscaling::UpscaleMethod::kFSR &&
-			IsSameTerminalFSRResourceRequest(a_upscaling);
+			ShouldRetainInactiveFSROwnership(a_upscaling, a_upscaleMethod);
 		switch (a_upscaleMethod) {
 		case Upscaling::UpscaleMethod::kDLSS:
 			return activeRuntimeGenerationMismatch ||
@@ -6079,6 +6089,17 @@ namespace
 		return (a_upscaling.fsrResourceFailureRequestKey &&
 				   *a_upscaling.fsrResourceFailureRequestKey == requestKey) ||
 		       IsSameTerminalFSRResourceRequest(a_upscaling.GetVRRenderScaleTransitionSnapshot());
+	}
+
+	bool ShouldRetainInactiveFSROwnership(
+		const Upscaling& a_upscaling,
+		Upscaling::UpscaleMethod a_targetMethod)
+	{
+		return FSRHostLifecyclePolicy::CanRetainQuarantinedHostOwnership(
+				   a_upscaling.fidelityFX.IsHostFSRStateQuarantined(),
+				   a_targetMethod == Upscaling::UpscaleMethod::kFSR) ||
+		       (a_targetMethod != Upscaling::UpscaleMethod::kFSR &&
+				   IsSameTerminalFSRResourceRequest(a_upscaling));
 	}
 
 	const char* BoolText(bool a_value)
@@ -20922,7 +20943,8 @@ uint32_t Upscaling::GetVRUpscalingApplyBlockReasonsForAPI() const
 		postLoadRuntimeResetPending.load(std::memory_order_acquire);
 	const bool terminalFSRReset =
 		pendingFSRReset.load(std::memory_order_acquire) &&
-		IsSameTerminalFSRResourceRequest(*this);
+		(fidelityFX.IsHostFSRStateQuarantined() ||
+			IsSameTerminalFSRResourceRequest(*this));
 	const bool relatchPending =
 		pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
 		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
@@ -26341,8 +26363,11 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		const bool recreateFSRResourcesDuringRelatch =
 			missingCompatibleFSRResourcesForTargetRelatch;
 		const bool fsrResourcesNeedTeardownForRelatch = fidelityFX.HasFSRResourcesPendingTeardown();
+		const bool retainInactiveFSRResourcesForRelatch =
+			ShouldRetainInactiveFSROwnership(*this, relatchUpscaleMethod);
 		const bool destroyFSRResourcesForRelatch =
 			!preserveFSRResourcesForRelatch &&
+			!retainInactiveFSRResourcesForRelatch &&
 			(pendingFSRResetForRelatch ||
 				fidelityFX.HasFSRResources() ||
 				fsrResourcesNeedTeardownForRelatch ||
@@ -36115,10 +36140,15 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRVendorRuntimeResources(
 	if (!globals::game::isVR)
 		return VRVendorResourceResetResult::Ready;
 
+	// The SDK may own a partial context after a failed create. Keep that opaque
+	// ownership untouched while an independent provider restores presentation.
+	const bool retainQuarantinedFSRResources =
+		fidelityFX.IsHostFSRStateQuarantined();
 	const bool destroyFSRResources =
-		a_destroyFSRResources ||
-		(a_includePendingFSRReset &&
-			pendingFSRReset.load(std::memory_order_acquire));
+		!retainQuarantinedFSRResources &&
+		(a_destroyFSRResources ||
+			(a_includePendingFSRReset &&
+				pendingFSRReset.load(std::memory_order_acquire)));
 	if (a_destroyDLSSResources)
 		RecordVRVendorRuntimeLifecycle(UpscaleMethod::kDLSS, VRVendorRuntimeLifecyclePhase::Destroying, 0, "vendor reset");
 	if (destroyFSRResources)
@@ -36294,7 +36324,7 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 	if (currentMethodFSR && sameTerminalFSRRequest)
 		return false;
 	const bool retainTerminalInactiveFSRResources =
-		!currentMethodFSR && sameTerminalFSRRequest;
+		ShouldRetainInactiveFSROwnership(*this, a_upscaleMethod);
 	const auto latchTerminalFSRFailure = [&](FidelityFX::LifecycleResult a_result) {
 		if (HandleFSRLifecycleDeviceLoss(
 				a_result,
@@ -36804,7 +36834,7 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	if (a_upscalemethod == UpscaleMethod::kFSR && sameTerminalFSRRequest)
 		return false;
 	const bool retainTerminalInactiveFSRResources =
-		a_upscalemethod != UpscaleMethod::kFSR && sameTerminalFSRRequest;
+		ShouldRetainInactiveFSROwnership(*this, a_upscalemethod);
 	const auto acceptFSRResourceLifecycleResult =
 		[&](FidelityFX::LifecycleResult a_result, const char* a_reason) {
 			if (a_result == FidelityFX::LifecycleResult::Ready)
@@ -37449,15 +37479,15 @@ bool Upscaling::EnsureResourcesCurrent(UpscaleMethod a_upscalemethod)
 		return true;
 	}
 
-	const bool sameTerminalFSRRequest =
-		IsSameTerminalFSRResourceRequest(*this);
+	const bool retainTerminalInactiveFSRResources =
+		ShouldRetainInactiveFSROwnership(*this, a_upscalemethod);
 	const bool pendingFSRResetBlocksStableCheck =
 		pendingFSRReset.load(std::memory_order_acquire) &&
-		!(a_upscalemethod != UpscaleMethod::kFSR && sameTerminalFSRRequest);
+		!retainTerminalInactiveFSRResources;
 	const bool fsrResourcesNeedRetirement =
 		a_upscalemethod != UpscaleMethod::kFSR &&
 		fidelityFX.HasFSRResourcesPendingTeardown() &&
-		!sameTerminalFSRRequest;
+		!retainTerminalInactiveFSRResources;
 	if (resourceCheckStable &&
 		resourceCheckStableMethod == a_upscalemethod &&
 		!pendingDLSSReset.load(std::memory_order_acquire) &&

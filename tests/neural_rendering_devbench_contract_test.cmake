@@ -14,6 +14,8 @@ set(
 )
 set(_upscaling_path "${PROJECT_ROOT}/src/Features/Upscaling.cpp")
 set(_upscaling_header_path "${PROJECT_ROOT}/src/Features/Upscaling.h")
+set(_streamline_path "${PROJECT_ROOT}/src/Features/Upscaling/Streamline.cpp")
+set(_streamline_header_path "${PROJECT_ROOT}/src/Features/Upscaling/Streamline.h")
 set(
     _renderer_header_path
     "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/Renderer.h"
@@ -35,6 +37,8 @@ foreach(_required_path IN ITEMS
     "${_experiment_doc_path}"
     "${_upscaling_path}"
     "${_upscaling_header_path}"
+    "${_streamline_path}"
+    "${_streamline_header_path}"
     "${_renderer_header_path}"
     "${_renderer_source_path}"
     "${_d3d12_interop_source_path}"
@@ -49,17 +53,19 @@ file(READ "${_bridge_path}" _bridge)
 file(READ "${_experiment_doc_path}" _experiment_doc)
 file(READ "${_upscaling_path}" _upscaling)
 file(READ "${_upscaling_header_path}" _upscaling_header)
+file(READ "${_streamline_path}" _streamline)
+file(READ "${_streamline_header_path}" _streamline_header)
 file(READ "${_renderer_header_path}" _renderer_header)
 file(READ "${_renderer_source_path}" _renderer_source)
 file(READ "${_d3d12_interop_source_path}" _d3d12_interop_source)
 file(READ "${_pipeline_policy_path}" _pipeline_policy)
 set(
     _source_contract_text
-    "${_upscaling}\n${_upscaling_header}\n${_renderer_header}\n${_renderer_source}\n${_d3d12_interop_source}\n${_pipeline_policy}"
+    "${_upscaling}\n${_upscaling_header}\n${_streamline}\n${_streamline_header}\n${_renderer_header}\n${_renderer_source}\n${_d3d12_interop_source}\n${_pipeline_policy}"
 )
 
 foreach(_status_contract IN ITEMS
-    [[{ "apiVersion", 5 }]]
+    [[{ "apiVersion", 6 }]]
     [[{ "implementationMatrix", NeuralImplementationMatrixJson() }]]
     [[{ "insertionPointMatrix", NeuralInsertionPointMatrixJson() }]]
     [[{ "selectedInsertionPoint", NeuralInsertionPointJson(insertionPoint) }]]
@@ -81,6 +87,16 @@ foreach(_status_contract IN ITEMS
     [[{ "lastFeatureGpuMicroseconds", snapshot.performance.lastFeatureGpuMicroseconds }]]
     [[{ "lastFeaturePixelCount", snapshot.performance.lastFeaturePixelCount }]]
     [[{ "lastFeatureEvaluationCount", snapshot.performance.lastFeatureEvaluationCount }]]
+    [[{ "unexpectedPassEyeMask", route.unexpectedPassEyeMask }]]
+    [[{ "dlssEvaluationAttempts", route.dlssEvaluationAttemptCount[eye] }]]
+    [[{ "dlssEvaluationSuccesses", route.dlssEvaluationSuccessCount[eye] }]]
+    [[{ "feature18EvaluationAttempts", route.featureEvaluationAttemptCount[eye] }]]
+    [[{ "feature18EvaluationSuccesses", route.featureEvaluationSuccessCount[eye] }]]
+    [[{ "centerBlendAttempts", route.centerBlendAttemptCount[eye] }]]
+    [[{ "centerBlendSuccesses", route.centerBlendSuccessCount[eye] }]]
+    [[{ "lateNeuralBlendAttempts", route.lateNeuralBlendAttemptCount[eye] }]]
+    [[{ "lateNeuralBlendSuccesses", route.lateNeuralBlendSuccessCount[eye] }]]
+    [[{ "unexpectedPassCountDetected", (route.unexpectedPassEyeMask & eyeBit) != 0 }]]
     [[{ "neuralRendering", NeuralRenderingStatusJson(a_upscaling) }]]
 )
     string(FIND "${_bridge}" "${_status_contract}" _status_position)
@@ -123,6 +139,11 @@ foreach(_source_contract IN ITEMS
     [[left.insertionPoint == right.insertionPoint]]
     [[generation, insertion point, feature mode]]
     [[a_neuralRouteAllowed]]
+    [[if (!compositeCenter)]]
+    [[slEvaluateFeature(sl::kFeatureDLSS,]]
+    [[dlssPassTelemetryFrames.GetOrCreate(]]
+    [[evaluationSucceededFeatureSlotMask]]
+    [[RecordNeuralPassTelemetry(]]
     [[timingFenceValue > lastCompletedTimingFenceValue_]]
 )
     string(FIND "${_source_contract_text}" "${_source_contract}" _source_position)
@@ -132,6 +153,30 @@ foreach(_source_contract IN ITEMS
         )
     endif()
 endforeach()
+
+string(REGEX MATCHALL
+    "NeuralPhysicalPass::CenterBlend,"
+    _center_blend_telemetry_sites
+    "${_upscaling}"
+)
+list(LENGTH _center_blend_telemetry_sites _center_blend_telemetry_site_count)
+if(NOT _center_blend_telemetry_site_count EQUAL 4)
+    message(FATAL_ERROR
+        "Both normal-centre blend boundaries must record one attempt and one success"
+    )
+endif()
+
+string(REGEX MATCHALL
+    "NeuralPhysicalPass::LateNeuralBlend,"
+    _late_blend_telemetry_sites
+    "${_upscaling}"
+)
+list(LENGTH _late_blend_telemetry_sites _late_blend_telemetry_site_count)
+if(NOT _late_blend_telemetry_site_count EQUAL 2)
+    message(FATAL_ERROR
+        "The final-LDR blend boundary must record one attempt and one success"
+    )
+endif()
 
 string(FIND
     "${_upscaling}"
@@ -191,6 +236,10 @@ if(_stereo_preflight_slot_count LESS 2)
 endif()
 
 foreach(_forbidden_source_contract IN ITEMS
+    [[(void)compositeCenter;]]
+    [[feature18Evaluations]]
+    [[centerBlends]]
+    [[lateNeuralBlends]]
     [[neuralPrepared = neuralSubmitted && neuralBatchArgs;]]
     [[WasFeatureEvaluated(]]
     [[evaluatedFeatureSlotMask]]

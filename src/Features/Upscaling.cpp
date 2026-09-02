@@ -25135,7 +25135,6 @@ bool Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Ups
 
 bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX, uint32_t depthInputBaseOffsetX, uint32_t auxInputBaseOffsetX, ID3D11UnorderedAccessView* outputUAV, Streamline::DLSSViewportRole dlssViewportRole, UINT submitSourceSubresource, const D3D11_BOX* submitSourceBox, bool compositeCenter, NeuralCenterPhase neuralCenterPhase, bool neuralPairApplied, NeuralCenterDispatchResult* neuralResult, bool neuralDirectCommit, NeuralRendering::RendererApplyArgs* neuralBatchArgs)
 {
-	(void)compositeCenter;
 	if (neuralResult)
 		*neuralResult = {};
 	if (neuralBatchArgs && neuralCenterPhase == NeuralCenterPhase::Stage)
@@ -25498,6 +25497,19 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 				logger::error("[DLSSNR] Unexpected renderer exception; preserving normal DLSS");
 			}
 			neuralAttempted = outcome.WasEvaluationAttempted(args.featureSlot);
+			const bool neuralEvaluationSucceeded =
+				outcome.WasEvaluationSuccessful(args.featureSlot);
+			const auto routeRole =
+				dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter ?
+					NeuralStereoRouteRole::Submit :
+					NeuralStereoRouteRole::Main;
+			RecordNeuralPassTelemetry(
+				routeRole,
+				eyeIndex,
+				NeuralPhysicalPass::Feature18,
+				neuralAttempted,
+				neuralEvaluationSucceeded,
+				args.frameId);
 			if (neuralResult)
 				neuralResult->attempted = neuralAttempted;
 			return applied;
@@ -25599,9 +25611,10 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 			}
 		}
 	}
-
 	if (!foveatedCenterColorOut[eyeIndex] || !foveatedCenterColorOut[eyeIndex]->resource || !foveatedCenterColorOut[eyeIndex]->srv)
 		return false;
+	if (!compositeCenter)
+		return true;
 	if (!vrIntermediateColorOut[eyeIndex] || !vrIntermediateColorOut[eyeIndex]->uav || !vrIntermediateColorOut[eyeIndex]->resource)
 		return false;
 
@@ -25617,7 +25630,18 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 	                                     ClampPeripheryTAACenterBlendFeather(centerFeather) :
 	                                     ClampPeripheryTAACenterBlendFeather(FoveatedCommon::kCenterFeather);
 
-	return DispatchFoveatedBlendPass(
+	const auto routeRole =
+		dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter ?
+			NeuralStereoRouteRole::Submit :
+			NeuralStereoRouteRole::Main;
+	RecordNeuralPassTelemetry(
+		routeRole,
+		eyeIndex,
+		NeuralPhysicalPass::CenterBlend,
+		true,
+		false,
+		currentFrame);
+	const bool blended = DispatchFoveatedBlendPass(
 		centerSRV,
 		outputUAV,
 		outputWidthPerEye,
@@ -25631,6 +25655,16 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 		centerHorizontalScale,
 		centerOffset,
 		centerBlendFeather);
+	if (blended) {
+		RecordNeuralPassTelemetry(
+			routeRole,
+			eyeIndex,
+			NeuralPhysicalPass::CenterBlend,
+			false,
+			true,
+			currentFrame);
+	}
+	return blended;
 }
 
 namespace
@@ -25658,7 +25692,8 @@ namespace
 		Upscaling& a_upscaling,
 		std::array<Upscaling::NeuralCenterDispatchResult, 2>& a_results,
 		const std::array<NeuralRendering::RendererApplyArgs, 2>& a_batchArgs,
-		bool a_batchedStereo)
+		bool a_batchedStereo,
+		Upscaling::NeuralStereoRouteRole a_routeRole)
 	{
 		NeuralStereoEvaluationSummary summary{
 			.preparedEyeMask = BuildNeuralCenterEyeMask(
@@ -25675,9 +25710,19 @@ namespace
 			                         NeuralRendering::Renderer::Instance().ApplySequentialStereo(
 										 a_batchArgs, &outcome);
 			for (uint32_t eye = 0; eye < a_results.size(); ++eye) {
-				a_results[eye].attempted =
-					a_results[eye].attempted ||
+				const bool attempted =
 					outcome.WasEvaluationAttempted(a_batchArgs[eye].featureSlot);
+				const bool succeeded =
+					outcome.WasEvaluationSuccessful(a_batchArgs[eye].featureSlot);
+				a_results[eye].attempted =
+					a_results[eye].attempted || attempted;
+				a_upscaling.RecordNeuralPassTelemetry(
+					a_routeRole,
+					eye,
+					Upscaling::NeuralPhysicalPass::Feature18,
+					attempted,
+					succeeded,
+					a_batchArgs[eye].frameId);
 			}
 			if (applied) {
 				for (auto& result : a_results)
@@ -25978,7 +26023,8 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 
 		const auto evaluation = EvaluatePreparedNeuralStereo(
 			*this, neuralResults, neuralArgs,
-			settings.neuralRenderingBatchedStereo);
+			settings.neuralRenderingBatchedStereo,
+			a_role);
 		a_result.preparedEyeMask = evaluation.preparedEyeMask;
 		a_result.attemptedEyeMask = BuildNeuralCenterEyeMask(
 			neuralResults, &NeuralCenterDispatchResult::attempted);
@@ -25997,7 +26043,14 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 		for (uint32_t eye = 0; eye < a_targets.size(); ++eye) {
 			const auto& rect = foveatedRectCache.rects[eye];
 			a_result.committedEyeMask |= 1u << eye;
-			if (!DispatchFoveatedBlendPass(
+			RecordNeuralPassTelemetry(
+				a_role,
+				eye,
+				NeuralPhysicalPass::LateNeuralBlend,
+				true,
+				false,
+				globals::state->frameCount);
+			const bool blended = DispatchFoveatedBlendPass(
 					neuralFinalLdrColorOut[eye]->srv.get(), a_targets[eye].uav,
 					a_outputWidthPerEye, a_outputHeight, rect,
 					rect.outputOffsetX, rect.outputOffsetY,
@@ -26006,11 +26059,19 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 					foveatedRectCache.centerHorizontalScale,
 					foveatedRectCache.plan.eyes[eye].centerOffset,
 					foveatedRectCache.centerFeather,
-					a_targets[eye].baseOffsetX)) {
+					a_targets[eye].baseOffsetX);
+			if (!blended) {
 				restoreCommittedCenters();
 				RequestHistoryReset();
 				return false;
 			}
+			RecordNeuralPassTelemetry(
+				a_role,
+				eye,
+				NeuralPhysicalPass::LateNeuralBlend,
+				false,
+				true,
+				globals::state->frameCount);
 		}
 		return a_result.committedEyeMask == 0b11u;
 	} catch (const std::exception& e) {
@@ -26412,7 +26473,11 @@ bool Upscaling::DispatchFoveatedVendorCenterStereo(UpscaleMethod a_upscaleMethod
 		}
 
 		const auto neuralEvaluation = EvaluatePreparedNeuralStereo(
-			*this, results, neuralBatchArgs, batchedStereo);
+			*this,
+			results,
+			neuralBatchArgs,
+			batchedStereo,
+			NeuralStereoRouteRole::Main);
 		neuralPairApplied = neuralEvaluation.pairApplied;
 		for (uint32_t eye = 0; eye < params.size(); ++eye) {
 			if (!dispatchPhase(eye, NeuralCenterPhase::Resolve, neuralPairApplied)) {
@@ -26484,7 +26549,7 @@ void Upscaling::ConfigureFoveatedPeripherySourceRegion(FoveatedEyeDispatchParams
 	params.peripherySourceOffsetY = sourceRegion.offset.y;
 }
 
-bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, const FoveatedEyeDispatchParams& params)
+bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, const FoveatedEyeDispatchParams& params, NeuralCenterDispatchResult* neuralResult)
 {
 	if (!globals::game::isVR || eyeIndex >= 2)
 		return false;
@@ -26771,7 +26836,21 @@ bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod
 		const float centerBlendFeather = std::isfinite(params.centerBlendFeather) ?
 		                                     ClampPeripheryTAACenterBlendFeather(params.centerBlendFeather) :
 		                                     ClampPeripheryTAACenterBlendFeather(FoveatedCommon::kCenterFeather);
-		return DispatchFoveatedBlendPass(
+		const auto routeRole =
+			params.dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter ?
+				NeuralStereoRouteRole::Submit :
+				NeuralStereoRouteRole::Main;
+		const uint32_t frame = globals::state ?
+		                       globals::state->frameCount :
+		                       std::numeric_limits<uint32_t>::max();
+		RecordNeuralPassTelemetry(
+			routeRole,
+			eyeIndex,
+			NeuralPhysicalPass::CenterBlend,
+			true,
+			false,
+			frame);
+		const bool blended = DispatchFoveatedBlendPass(
 			centerOutput->srv.get(),
 			outputColorUAV,
 			params.outputWidthPerEye,
@@ -26785,6 +26864,16 @@ bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod
 			params.centerHorizontalScale,
 			centerOffset,
 			centerBlendFeather);
+		if (blended) {
+			RecordNeuralPassTelemetry(
+				routeRole,
+				eyeIndex,
+				NeuralPhysicalPass::CenterBlend,
+				false,
+				true,
+				frame);
+		}
+		return blended;
 	}
 
 	return DispatchSingleFoveatedVendorEye(
@@ -26809,7 +26898,11 @@ bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod
 		outputColorUAV,
 		params.dlssViewportRole,
 		params.submitSourceSubresource,
-		params.submitSourceBoxValid ? &params.submitSourceBox : nullptr);
+		params.submitSourceBoxValid ? &params.submitSourceBox : nullptr,
+		true,
+		NeuralCenterPhase::Disabled,
+		false,
+		neuralResult);
 }
 
 bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, ID3D11Resource* colorTexture, ID3D11Resource* depthTexture, ID3D11Resource* motionVectors, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask, ID3D11Resource* colorOutput)
@@ -27030,7 +27123,8 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 	static bool loggedFoveatedDispatchFailure = false;
 	for (uint32_t eye = 0; eye < eyeParams.size(); ++eye) {
 		try {
-			if (!DispatchFoveatedVendorEyeComposite(a_upscaleMethod, eye, eyeParams[eye])) {
+			if (!DispatchFoveatedVendorEyeComposite(
+					a_upscaleMethod, eye, eyeParams[eye], &neuralResults[eye])) {
 				publishNeuralRoute(false, false);
 				UnbindUpscalingResources();
 				if (anyEyeComposited)
@@ -27261,7 +27355,8 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 
 	static bool loggedFoveatedDispatchFailure = false;
 	try {
-		if (!DispatchFoveatedVendorEyeComposite(a_upscaleMethod, eyeIndex, params)) {
+		if (!DispatchFoveatedVendorEyeComposite(
+				a_upscaleMethod, eyeIndex, params, neuralResult)) {
 			UnbindUpscalingResources();
 			return false;
 		}
@@ -33638,8 +33733,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 						stereoBatchSucceeded = false;
 						break;
 					}
-					if (finalLdrInsertion)
-						neuralResults[stereoEye].dlssEvaluated = true;
 				}
 			}
 
@@ -33650,7 +33743,11 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			std::array<NeuralCenterDispatchResult, 2> resolveResults{};
 			if (stereoBatchSucceeded && !finalLdrInsertion) {
 				const auto neuralEvaluation = EvaluatePreparedNeuralStereo(
-					*this, neuralResults, neuralBatchArgs, batchedStereo);
+					*this,
+					neuralResults,
+					neuralBatchArgs,
+					batchedStereo,
+					NeuralStereoRouteRole::Submit);
 				preparedEyeMask = neuralEvaluation.preparedEyeMask;
 				neuralPairApplied = neuralEvaluation.pairApplied;
 				for (uint32_t stereoEye = 0; stereoEye < neuralResults.size(); ++stereoEye) {
@@ -34962,8 +35059,14 @@ Upscaling::VRRenderScaleStressSessionSnapshot Upscaling::GetVRRenderScaleStressS
 
 std::array<Upscaling::NeuralStereoRouteSnapshot, 2> Upscaling::GetNeuralStereoRouteSnapshot() const
 {
-	std::scoped_lock lock(neuralStereoRouteSnapshotMutex);
-	return neuralStereoRouteSnapshots;
+	std::array<NeuralStereoRouteSnapshot, 2> snapshots{};
+	{
+		std::scoped_lock lock(neuralStereoRouteSnapshotMutex);
+		snapshots = neuralStereoRouteSnapshots;
+	}
+	for (auto& snapshot : snapshots)
+		PopulateNeuralRoutePassTelemetry(snapshot);
+	return snapshots;
 }
 
 Upscaling::NeuralSubmitCycleSnapshot Upscaling::GetLatestNeuralSubmitCycleSnapshot() const
@@ -35161,6 +35264,121 @@ void Upscaling::PublishNeuralSubmitCycleSnapshot(uint64_t a_compositorCycle, uin
 	}
 }
 
+void Upscaling::RecordNeuralPassTelemetry(
+	NeuralStereoRouteRole a_role,
+	uint32_t a_eyeIndex,
+	NeuralPhysicalPass a_pass,
+	bool a_attempt,
+	bool a_success,
+	uint32_t a_frame) noexcept
+{
+	try {
+		const auto routeIndex = static_cast<std::size_t>(a_role);
+		const auto passIndex = static_cast<std::size_t>(a_pass);
+		if (routeIndex >= kNeuralRouteCount || a_eyeIndex >= kNeuralEyeCount ||
+			passIndex >= kNeuralPhysicalPassCount || (!a_attempt && !a_success)) {
+			return;
+		}
+
+		std::scoped_lock lock(neuralPassTelemetryMutex);
+		auto* telemetry = neuralPassTelemetryFrames.Find(a_frame);
+		if (!telemetry && !a_attempt)
+			return;
+		if (!telemetry)
+			telemetry = &neuralPassTelemetryFrames.GetOrCreate(a_frame);
+		if (a_attempt)
+			UpscalingTelemetry::SaturatingIncrement(
+				telemetry->attempts[routeIndex][a_eyeIndex][passIndex]);
+		if (a_success)
+			UpscalingTelemetry::SaturatingIncrement(
+				telemetry->successes[routeIndex][a_eyeIndex][passIndex]);
+	} catch (...) {
+		// Physical-pass telemetry is observational and cannot affect rendering.
+	}
+}
+
+Upscaling::NeuralPassTelemetryFrame Upscaling::GetNeuralPassTelemetry(
+	uint32_t a_frame) const noexcept
+{
+	try {
+		std::scoped_lock lock(neuralPassTelemetryMutex);
+		if (const auto* telemetry = neuralPassTelemetryFrames.Find(a_frame))
+			return *telemetry;
+	} catch (...) {
+	}
+
+	NeuralPassTelemetryFrame telemetry{};
+	telemetry.frame = a_frame;
+	return telemetry;
+}
+
+void Upscaling::PopulateNeuralRoutePassTelemetry(
+	NeuralStereoRouteSnapshot& a_snapshot) const noexcept
+{
+	const auto routeIndex = static_cast<std::size_t>(a_snapshot.role);
+	if (routeIndex >= kNeuralRouteCount)
+		return;
+
+	a_snapshot.dlssEvaluationAttemptCount = {};
+	a_snapshot.dlssEvaluationSuccessCount = {};
+	a_snapshot.featureEvaluationAttemptCount = {};
+	a_snapshot.featureEvaluationSuccessCount = {};
+	a_snapshot.centerBlendAttemptCount = {};
+	a_snapshot.centerBlendSuccessCount = {};
+	a_snapshot.lateNeuralBlendAttemptCount = {};
+	a_snapshot.lateNeuralBlendSuccessCount = {};
+	a_snapshot.unexpectedPassEyeMask = 0;
+
+	const auto dlssTelemetry =
+		streamline.GetDLSSPassTelemetrySnapshot(a_snapshot.frame);
+	if (dlssTelemetry.valid) {
+		const auto dlssRoute =
+			a_snapshot.role == NeuralStereoRouteRole::Submit ?
+				Streamline::DLSSPassRoute::Submit :
+				Streamline::DLSSPassRoute::Main;
+		const auto dlssRouteIndex = static_cast<std::size_t>(dlssRoute);
+		a_snapshot.dlssEvaluationAttemptCount =
+			dlssTelemetry.attempts[dlssRouteIndex];
+		a_snapshot.dlssEvaluationSuccessCount =
+			dlssTelemetry.successes[dlssRouteIndex];
+	}
+
+	const auto neuralTelemetry = GetNeuralPassTelemetry(a_snapshot.frame);
+	if (neuralTelemetry.valid) {
+		const auto& attempts = neuralTelemetry.attempts[routeIndex];
+		const auto& successes = neuralTelemetry.successes[routeIndex];
+		const auto featureIndex =
+			static_cast<std::size_t>(NeuralPhysicalPass::Feature18);
+		const auto centerBlendIndex =
+			static_cast<std::size_t>(NeuralPhysicalPass::CenterBlend);
+		const auto lateBlendIndex =
+			static_cast<std::size_t>(NeuralPhysicalPass::LateNeuralBlend);
+		for (uint32_t eye = 0; eye < kNeuralEyeCount; ++eye) {
+			a_snapshot.featureEvaluationAttemptCount[eye] =
+				attempts[eye][featureIndex];
+			a_snapshot.featureEvaluationSuccessCount[eye] =
+				successes[eye][featureIndex];
+			a_snapshot.centerBlendAttemptCount[eye] =
+				attempts[eye][centerBlendIndex];
+			a_snapshot.centerBlendSuccessCount[eye] =
+				successes[eye][centerBlendIndex];
+			a_snapshot.lateNeuralBlendAttemptCount[eye] =
+				attempts[eye][lateBlendIndex];
+			a_snapshot.lateNeuralBlendSuccessCount[eye] =
+				successes[eye][lateBlendIndex];
+		}
+	}
+
+	for (uint32_t eye = 0; eye < kNeuralEyeCount; ++eye) {
+		if (a_snapshot.dlssEvaluationAttemptCount[eye] > 1u ||
+			a_snapshot.featureEvaluationAttemptCount[eye] > 1u ||
+			a_snapshot.centerBlendAttemptCount[eye] > 1u ||
+			a_snapshot.lateNeuralBlendAttemptCount[eye] > 1u) {
+			a_snapshot.unexpectedPassEyeMask |= 1u << eye;
+		}
+	}
+}
+
 void Upscaling::PublishNeuralStereoRouteSnapshot(const NeuralStereoRouteSnapshot& a_snapshot) noexcept
 {
 	try {
@@ -35168,10 +35386,11 @@ void Upscaling::PublishNeuralStereoRouteSnapshot(const NeuralStereoRouteSnapshot
 		if (index >= neuralStereoRouteSnapshots.size())
 			return;
 
+		auto snapshot = a_snapshot;
+		PopulateNeuralRoutePassTelemetry(snapshot);
 		std::scoped_lock lock(neuralStereoRouteSnapshotMutex);
 		if (++neuralStereoRouteSnapshotSequence == 0)
 			++neuralStereoRouteSnapshotSequence;
-		auto snapshot = a_snapshot;
 		snapshot.sequence = neuralStereoRouteSnapshotSequence;
 		neuralStereoRouteSnapshots[index] = snapshot;
 	} catch (...) {

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Upscaling/FrameTelemetryRing.h"
+
 #include "Feature.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
@@ -134,7 +136,31 @@ public:
 		uint32_t appliedEyeMask = 0;
 		uint32_t committedEyeMask = 0;
 		uint32_t dlssEyeMask = 0;
+		std::array<uint32_t, 2> dlssEvaluationAttemptCount{};
+		std::array<uint32_t, 2> dlssEvaluationSuccessCount{};
+		std::array<uint32_t, 2> featureEvaluationAttemptCount{};
+		std::array<uint32_t, 2> featureEvaluationSuccessCount{};
+		std::array<uint32_t, 2> centerBlendAttemptCount{};
+		std::array<uint32_t, 2> centerBlendSuccessCount{};
+		std::array<uint32_t, 2> lateNeuralBlendAttemptCount{};
+		std::array<uint32_t, 2> lateNeuralBlendSuccessCount{};
+		uint32_t unexpectedPassEyeMask = 0;
 	};
+	enum class NeuralPhysicalPass : uint8_t
+	{
+		Feature18,
+		CenterBlend,
+		LateNeuralBlend,
+		Count
+	};
+	/** @brief Records one physical render-pass attempt or success for DevBench. */
+	void RecordNeuralPassTelemetry(
+		NeuralStereoRouteRole a_role,
+		uint32_t a_eyeIndex,
+		NeuralPhysicalPass a_pass,
+		bool a_attempt,
+		bool a_success,
+		uint32_t a_frame) noexcept;
 
 	/** @brief Latest valid-eye submit entry, independent of later route admission. */
 	struct NeuralSubmitCycleSnapshot
@@ -2244,7 +2270,7 @@ public:
 		Streamline::DLSSViewportRole dlssViewportRole = Streamline::DLSSViewportRole::FoveatedCenter;
 	};
 	void ConfigureFoveatedPeripherySourceRegion(FoveatedEyeDispatchParams& params, const eastl::unique_ptr<Texture2D>& sourceTexture, uint32_t validWidth, uint32_t validHeight) const;
-	bool DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, const FoveatedEyeDispatchParams& params);
+	bool DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, const FoveatedEyeDispatchParams& params, NeuralCenterDispatchResult* neuralResult = nullptr);
 	bool DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX = 0, uint32_t depthInputBaseOffsetX = 0, uint32_t auxInputBaseOffsetX = 0, ID3D11UnorderedAccessView* outputUAV = nullptr, Streamline::DLSSViewportRole dlssViewportRole = Streamline::DLSSViewportRole::FoveatedCenter, UINT submitSourceSubresource = 0, const D3D11_BOX* submitSourceBox = nullptr, bool compositeCenter = true, NeuralCenterPhase neuralCenterPhase = NeuralCenterPhase::Disabled, bool neuralPairApplied = false, NeuralCenterDispatchResult* neuralResult = nullptr, bool neuralDirectCommit = false, NeuralRendering::RendererApplyArgs* neuralBatchArgs = nullptr);
 	bool DispatchFoveatedVendorCenterStereo(UpscaleMethod a_upscaleMethod, const std::array<FoveatedEyeDispatchParams, 2>& params, bool a_neuralRouteAllowed, bool& neuralPairApplied, std::array<NeuralCenterDispatchResult, 2>* neuralResults = nullptr) noexcept;
 	struct FinalLdrNeuralEyeTarget
@@ -2336,8 +2362,29 @@ public:
 		uint32_t depthWidthPerEye, uint32_t depthHeight, uint32_t colorWidthPerEye, uint32_t colorHeight, uint32_t colorOffsetX = 0);
 
 private:
+	static constexpr std::size_t kNeuralPassTelemetryFrameCount = 4;
+	static constexpr std::size_t kNeuralRouteCount =
+		static_cast<std::size_t>(NeuralStereoRouteRole::Count);
+	static constexpr std::size_t kNeuralEyeCount = 2;
+	static constexpr std::size_t kNeuralPhysicalPassCount =
+		static_cast<std::size_t>(NeuralPhysicalPass::Count);
+	struct NeuralPassTelemetryFrame
+	{
+		bool valid = false;
+		uint32_t frame = 0;
+		std::array<std::array<std::array<uint32_t, kNeuralPhysicalPassCount>, kNeuralEyeCount>, kNeuralRouteCount> attempts{};
+		std::array<std::array<std::array<uint32_t, kNeuralPhysicalPassCount>, kNeuralEyeCount>, kNeuralRouteCount> successes{};
+	};
+	[[nodiscard]] NeuralPassTelemetryFrame GetNeuralPassTelemetry(
+		uint32_t a_frame) const noexcept;
 	void PublishNeuralSubmitCycleSnapshot(uint64_t a_compositorCycle, uint32_t a_frame) noexcept;
+	void PopulateNeuralRoutePassTelemetry(NeuralStereoRouteSnapshot& a_snapshot) const noexcept;
 	void PublishNeuralStereoRouteSnapshot(const NeuralStereoRouteSnapshot& a_snapshot) noexcept;
+	mutable std::mutex neuralPassTelemetryMutex;
+	UpscalingTelemetry::FrameTelemetryRing<
+		NeuralPassTelemetryFrame,
+		kNeuralPassTelemetryFrameCount>
+		neuralPassTelemetryFrames;
 	mutable std::mutex neuralStereoRouteSnapshotMutex;
 	NeuralSubmitCycleSnapshot latestNeuralSubmitCycleSnapshot{};
 	uint64_t neuralStereoRouteSnapshotSequence = 0;

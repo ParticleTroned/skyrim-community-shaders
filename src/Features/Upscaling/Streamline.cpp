@@ -1487,7 +1487,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	if (!initialized || !featureDLSS || !slEvaluateFeature || !context ||
 		!colorIn || !colorOut || !depth || !mvec || !reactiveMask || !transparencyMask)
 		return false;
-	if (globals::game::isVR && eyeIndex > 1)
+	if (eyeIndex >= kDLSSPassEyeCount)
 		return false;
 
 	sl::Resource colorInRes = { sl::ResourceType::eTex2d, colorIn, 0 };
@@ -1522,6 +1522,11 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	const bool submitStageVRDLSS =
 		globals::game::isVR &&
 		upscaling.IsPresentationUpscalingActive();
+	const auto passRoute =
+		(submitStageVRDLSS ||
+		 viewportRole == DLSSViewportRole::SubmitStageFoveatedCenter) ?
+			DLSSPassRoute::Submit :
+			DLSSPassRoute::Main;
 
 	const bool collectDLSSDiagnostics = ShouldLogDLSSDiagnostics();
 	DLSSDispatchDiagnostics diagnostics{};
@@ -1644,7 +1649,22 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	}
 
 	emitPCLMarker(sl::PCLMarker::eRenderSubmitStart, "DLSS-EvaluateStart", 0);
+	{
+		std::scoped_lock lock(dlssPassTelemetryMutex);
+		auto& telemetry = dlssPassTelemetryFrames.GetOrCreate(diagnostics.frame);
+		auto& attempts = telemetry.attempts
+			[static_cast<std::size_t>(passRoute)][eyeIndex];
+		UpscalingTelemetry::SaturatingIncrement(attempts);
+	}
 	sl::Result evalResult = slEvaluateFeature(sl::kFeatureDLSS, *frameToken, inputs, _countof(inputs), context);
+	if (evalResult == sl::Result::eOk) {
+		std::scoped_lock lock(dlssPassTelemetryMutex);
+		if (auto* telemetry = dlssPassTelemetryFrames.Find(diagnostics.frame)) {
+			auto& successes = telemetry->successes
+				[static_cast<std::size_t>(passRoute)][eyeIndex];
+			UpscalingTelemetry::SaturatingIncrement(successes);
+		}
+	}
 	emitPCLMarker(sl::PCLMarker::eRenderSubmitEnd, "DLSS-EvaluateEnd", 1);
 
 	if (state && state->frameAnnotations)
@@ -1681,6 +1701,21 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	}
 
 	return evalResult == sl::Result::eOk;
+}
+
+Streamline::DLSSPassTelemetrySnapshot Streamline::GetDLSSPassTelemetrySnapshot(
+	uint32_t a_frame) const noexcept
+{
+	try {
+		std::scoped_lock lock(dlssPassTelemetryMutex);
+		if (const auto* telemetry = dlssPassTelemetryFrames.Find(a_frame))
+			return *telemetry;
+	} catch (...) {
+	}
+
+	DLSSPassTelemetrySnapshot snapshot{};
+	snapshot.frame = a_frame;
+	return snapshot;
 }
 
 bool Streamline::UpscaleRegion(uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,

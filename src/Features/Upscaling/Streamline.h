@@ -2,11 +2,14 @@
 
 #include "../../Buffer.h"
 #include "../../State.h"
+#include "FrameTelemetryRing.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <d3d11_4.h>
 #include <directx/d3d12.h>
+#include <mutex>
 
 #define NV_WINDOWS
 
@@ -50,6 +53,25 @@ public:
 		SubmitStageFoveatedCenter,
 		Count
 	};
+	enum class DLSSPassRoute : uint8_t
+	{
+		Main,
+		Submit,
+		Count
+	};
+	static constexpr std::size_t kDLSSPassRouteCount =
+		static_cast<std::size_t>(DLSSPassRoute::Count);
+	static constexpr std::size_t kDLSSPassEyeCount = 2;
+	static constexpr std::size_t kDLSSPassTelemetryFrameCount = 4;
+	struct DLSSPassTelemetrySnapshot
+	{
+		bool valid = false;
+		uint32_t frame = 0;
+		std::array<std::array<uint32_t, kDLSSPassEyeCount>, kDLSSPassRouteCount> attempts{};
+		std::array<std::array<uint32_t, kDLSSPassEyeCount>, kDLSSPassRouteCount> successes{};
+	};
+	[[nodiscard]] DLSSPassTelemetrySnapshot GetDLSSPassTelemetrySnapshot(
+		uint32_t a_frame) const noexcept;
 	static constexpr uint32_t kVRDLSSViewportRoleCount = static_cast<uint32_t>(DLSSViewportRole::Count);
 	static constexpr uint32_t kVRDLSSViewportSlotCount = 2;
 	static constexpr uint32_t kVRDLSSSlotViewportBase = 0x1000;
@@ -61,6 +83,11 @@ public:
 		return roleIndex < kVRDLSSViewportRoleCount ? roleIndex : static_cast<uint32_t>(DLSSViewportRole::FullEye);
 	}
 	static constexpr uint32_t MAX_RESOLUTION = 8192;
+	mutable std::mutex dlssPassTelemetryMutex;
+	UpscalingTelemetry::FrameTelemetryRing<
+		DLSSPassTelemetrySnapshot,
+		kDLSSPassTelemetryFrameCount>
+		dlssPassTelemetryFrames;
 	HMODULE interposer = NULL;
 
 	// SL Interposer Functions

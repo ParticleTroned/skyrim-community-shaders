@@ -244,6 +244,15 @@ namespace
 					{ "applied", (route.appliedEyeMask & eyeBit) != 0 },
 					{ "neuralCommitted", (route.committedEyeMask & eyeBit) != 0 },
 					{ "dlssEvaluated", (route.dlssEyeMask & eyeBit) != 0 },
+					{ "dlssEvaluationAttempts", route.dlssEvaluationAttemptCount[eye] },
+					{ "dlssEvaluationSuccesses", route.dlssEvaluationSuccessCount[eye] },
+					{ "feature18EvaluationAttempts", route.featureEvaluationAttemptCount[eye] },
+					{ "feature18EvaluationSuccesses", route.featureEvaluationSuccessCount[eye] },
+					{ "centerBlendAttempts", route.centerBlendAttemptCount[eye] },
+					{ "centerBlendSuccesses", route.centerBlendSuccessCount[eye] },
+					{ "lateNeuralBlendAttempts", route.lateNeuralBlendAttemptCount[eye] },
+					{ "lateNeuralBlendSuccesses", route.lateNeuralBlendSuccessCount[eye] },
+					{ "unexpectedPassCountDetected", (route.unexpectedPassEyeMask & eyeBit) != 0 },
 				});
 			}
 			const auto routeInsertionPoint =
@@ -279,6 +288,7 @@ namespace
 						   } },
 				{ "pairDisposition", Upscaling::GetNeuralStereoPairDispositionName(route.disposition) },
 				{ "fallbackReason", Upscaling::GetNeuralStereoFallbackReasonName(route.fallbackReason) },
+				{ "unexpectedPassEyeMask", route.unexpectedPassEyeMask },
 				{ "eyeMasks", {
 								  { "prepared", route.preparedEyeMask },
 								  { "attempted", route.attemptedEyeMask },
@@ -295,7 +305,7 @@ namespace
 		const auto insertionPoint = NeuralRendering::ClampInsertionPoint(
 			a_upscaling.settings.neuralRenderingInsertionPoint);
 		return {
-			{ "apiVersion", 5 },
+			{ "apiVersion", 6 },
 			{ "arrangement", NeuralRendering::GetPipelineArrangementName() },
 			{ "implementationMatrix", NeuralImplementationMatrixJson() },
 			{ "insertionPointMatrix", NeuralInsertionPointMatrixJson() },
@@ -340,6 +350,7 @@ namespace
 									  { "attempted", "NVIDIA Feature 18 evaluation was entered for the eye" },
 									  { "applied", "the renderer committed a successful eye output before pair-level fallback" },
 									  { "neuralCommitted", "the final coherent stereo pair retained the neural output" },
+									  { "unexpectedPassCountDetected", "one or more pass kinds executed more than once for the eye" },
 								  } },
 			{ "stereoRoutes", std::move(routes) },
 			{ "runtime", {

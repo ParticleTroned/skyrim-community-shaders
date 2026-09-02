@@ -199,10 +199,17 @@ attempt reached a validation, trust, initialization, or latched-failure gate,
 which can be diagnosed from the renderer and runtime failure stages.
 Performance telemetry labels D3D11 preparation and output commit as CPU enqueue
 time, while Feature 18 duration uses D3D12 GPU timestamps and separately reports
-readback failures, command submissions, and bounded backpressure waits. API v5
+readback failures, command submissions, and bounded backpressure waits. API v6
 also stamps the actual insertion point at the evaluation boundary and keeps
 cumulative GPU samples and time for each insertion point, independent of the
 existing Main/Submit route attribution.
+Each route also reports per-eye attempts and successes for normal DLSS,
+Feature 18, the normal centre blend, and the late-NR blend. These are physical
+per-frame counters rather than route-transaction flags, so rejected cached
+pairs do not erase work already submitted. The
+`unexpectedPassEyeMask` identifies an eye whenever any one pass kind executes
+more than once, making fallback reevaluation distinct from ordinary steady
+state.
 
 `nr_status.settings.implementation` reports one of
 `per_eye_staged_commit`, `stereo_batched_staged_commit`,

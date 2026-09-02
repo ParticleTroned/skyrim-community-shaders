@@ -198,12 +198,20 @@ namespace NeuralRendering
 	struct RendererApplyOutcome
 	{
 		std::uint32_t evaluationAttemptedFeatureSlotMask = 0;
+		std::uint32_t evaluationSucceededFeatureSlotMask = 0;
 
 		[[nodiscard]] bool WasEvaluationAttempted(
 			std::uint32_t a_featureSlot) const noexcept
 		{
 			return a_featureSlot < Runtime::kFeatureSlotCount &&
 			       (evaluationAttemptedFeatureSlotMask & (1u << a_featureSlot)) != 0;
+		}
+
+		[[nodiscard]] bool WasEvaluationSuccessful(
+			std::uint32_t a_featureSlot) const noexcept
+		{
+			return a_featureSlot < Runtime::kFeatureSlotCount &&
+			       (evaluationSucceededFeatureSlotMask & (1u << a_featureSlot)) != 0;
 		}
 	};
 

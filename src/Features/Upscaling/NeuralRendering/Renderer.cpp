@@ -1489,11 +1489,15 @@ namespace NeuralRendering
 		}
 		a_outcome.evaluationAttemptedFeatureSlotMask =
 			leftOutcome.evaluationAttemptedFeatureSlotMask;
+		a_outcome.evaluationSucceededFeatureSlotMask =
+			leftOutcome.evaluationSucceededFeatureSlotMask;
 		RendererApplyOutcome rightOutcome{};
 		const bool rightSucceeded = ApplyBatchLocked(
 			std::span(&synchronizedArgs[1], 1), rightOutcome);
 		a_outcome.evaluationAttemptedFeatureSlotMask |=
 			rightOutcome.evaluationAttemptedFeatureSlotMask;
+		a_outcome.evaluationSucceededFeatureSlotMask |=
+			rightOutcome.evaluationSucceededFeatureSlotMask;
 		return rightSucceeded;
 	}
 
@@ -1787,6 +1791,8 @@ namespace NeuralRendering
 					true,
 					!aborted);
 			}
+			a_outcome.evaluationSucceededFeatureSlotMask |=
+				1u << args.featureSlot;
 			LogOnce(slotEvaluateSuccessLogged_[args.featureSlot], [&]() {
 				logger::info(
 					"[DLSSNR] First Feature 18 evaluate succeeded: slot={}, color={}x{}, guides={}x{}, output={}x{}, upscaling={}, reset={}, stereoBatch={}",

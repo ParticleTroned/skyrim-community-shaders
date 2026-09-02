@@ -1665,9 +1665,32 @@ if(BUILD_CONTROLLER_TESTS)
         NeuralRenderingPipelinePolicy
         PROPERTIES LABELS "ControllerTests"
     )
+    add_executable(
+        frame_telemetry_ring_test
+        EXCLUDE_FROM_ALL
+        tests/frame_telemetry_ring_test.cpp
+    )
+    target_compile_features(
+        frame_telemetry_ring_test
+        PRIVATE cxx_std_23
+    )
+    target_include_directories(
+        frame_telemetry_ring_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    add_test(
+        NAME FrameTelemetryRing
+        COMMAND frame_telemetry_ring_test
+    )
+    set_tests_properties(
+        FrameTelemetryRing
+        PROPERTIES LABELS "ControllerTests"
+    )
     add_custom_target(
         controller_tests
-        DEPENDS neural_rendering_pipeline_policy_test
+        DEPENDS
+            neural_rendering_pipeline_policy_test
+            frame_telemetry_ring_test
     )
 endif()
 message("*************************************************************")

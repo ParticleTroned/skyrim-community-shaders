@@ -1932,10 +1932,27 @@ namespace
 			.isVR = true,
 			.methodChanged = true,
 			.targetMethodUsesVendor = true,
+			.targetMethodIsDLSS = true,
 		};
+		if (NeedsVendorEvaluationRelatch(selection))
+			return false;
+
+		selection.targetRenderScaleActive = true;
 		if (!NeedsVendorEvaluationRelatch(selection))
 			return false;
 
+		selection.targetRenderScaleActive = false;
+		selection.previousMethodUsesVendor = true;
+		if (!NeedsVendorEvaluationRelatch(selection))
+			return false;
+
+		selection.previousMethodUsesVendor = false;
+		selection.targetMethodIsDLSS = false;
+		selection.targetMethodIsFSR = true;
+		if (!NeedsVendorEvaluationRelatch(selection))
+			return false;
+
+		selection.targetMethodIsFSR = false;
 		selection.targetMethodUsesVendor = false;
 		selection.previousMethodUsesVendor = true;
 		if (!NeedsVendorEvaluationRelatch(selection))

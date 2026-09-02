@@ -549,6 +549,11 @@ namespace
 					.frame = a_boundary.frame,
 					.qpcTick = a_boundary.tick,
 				});
+		const auto workGate = a_upscaling.GetVRVendorWorkGateSnapshot();
+		const bool externalWorkGateDeferred =
+			workGate.lifecycleGateRelevant &&
+			(workGate.effectiveLifecycleMask != 0 ||
+				workGate.postLoadResetPending);
 		ReplacementTelemetry::MutationAdmissionFacts mutationFacts{
 			.hasReplacement = replacement != nullptr,
 			.superseded = a_controller.metrics.current.valid &&
@@ -575,7 +580,7 @@ namespace
 				(a_controller.fsrLifecycle.transitionEpoch == replacementTransitionEpoch &&
 					a_controller.fsrLifecycle.phase ==
 						Upscaling::VRVendorRuntimeLifecyclePhase::WaitingForDrain),
-			.workGateDeferred = a_upscaling.GetVRVendorWorkGateSnapshot().lifecycleMutationDeferred,
+			.workGateDeferred = externalWorkGateDeferred,
 			.cleanupDebt = a_controller.memoryTrim.pending ||
 			               a_controller.retirement.pendingSets != 0 ||
 			               a_controller.engineTargetRetirement.pending,
@@ -738,7 +743,7 @@ namespace
 		};
 
 		return {
-			{ "schemaRevision", 14 },
+			{ "schemaRevision", 15 },
 			{ "observationFrame", a_frame },
 			{ "presentationProof", presentationProof },
 			{ "currentPresentationProven", currentPresentationProven },
@@ -2176,6 +2181,8 @@ namespace
 			{ "afterMutation", a_cycle.afterMutation },
 			{ "boundarySpanning", a_cycle.boundarySpanning },
 			{ "exactCurrent", a_cycle.exactCurrent },
+			{ "exactCurrentPresentationAvailable",
+				a_cycle.exactCurrentPresentationAvailable },
 			{ "exactReplacement", a_cycle.exactReplacement },
 			{ "blockedPreMutation", a_cycle.blockedPreMutation },
 			{ "loadingOrMenuContext", a_cycle.loadingOrMenuContext },
@@ -4904,7 +4911,7 @@ namespace
 			a_transition.firstNewGenerationProvenEvidence);
 
 		json receipt{
-			{ "schemaRevision", 14 },
+			{ "schemaRevision", 15 },
 			{ "action", "qualification_wait" },
 			{ "transitionId", a_transition.transitionID },
 			{ "ownerId", a_transition.ownerID },
@@ -6811,24 +6818,20 @@ namespace VRRenderScaleDevBenchBridge
 						return controller.fsrLifecycle.runtimeGeneration;
 					return uint32_t{ 0 };
 				};
-			const auto providerBackendForProfile =
-				[&](const auto& a_profile) {
-					if (a_profile.method == Upscaling::UpscaleMethod::kDLSS)
-						return controller.dlssLifecycle.backend;
-					if (a_profile.method == Upscaling::UpscaleMethod::kFSR)
-						return controller.fsrLifecycle.backend;
-					return Upscaling::VRRenderScaleBackendKind::None;
-				};
 			const auto exactResourceContractMatches =
 				[&](const auto& a_profile) {
 					const auto& resources = a_profile.resources;
 					const bool vendorProfile =
 						a_profile.method == Upscaling::UpscaleMethod::kDLSS ||
 						a_profile.method == Upscaling::UpscaleMethod::kFSR;
-					const auto expectedBackend =
-						vendorProfile && !a_profile.active ?
-							providerBackendForProfile(a_profile) :
-							resources.backend;
+					const bool observedBackendMatchesMethod =
+						a_profile.method == Upscaling::UpscaleMethod::kDLSS ?
+							observationBackend ==
+								Upscaling::VRRenderScaleBackendKind::DLSS :
+						a_profile.method == Upscaling::UpscaleMethod::kFSR ?
+							IsFSRBackend(observationBackend) :
+							observationBackend ==
+								Upscaling::VRRenderScaleBackendKind::None;
 					return resources.valid &&
 				           resources.active == a_profile.active &&
 				           resources.method == a_profile.method &&
@@ -6840,20 +6843,23 @@ namespace VRRenderScaleDevBenchBridge
 				           resources.displayEyeWidth == a_profile.displayEyeWidth &&
 				           resources.displayEyeHeight == a_profile.displayEyeHeight &&
 				           resources.contextCount == 2u &&
-				           a_observation.backend ==
-				               static_cast<uint32_t>(expectedBackend) &&
+				           observedBackendMatchesMethod &&
 				           (vendorProfile ?
 								   (a_profile.active ?
-										   resources.backend != Upscaling::VRRenderScaleBackendKind::None :
-										   resources.backend == Upscaling::VRRenderScaleBackendKind::None &&
-											   expectedBackend != Upscaling::VRRenderScaleBackendKind::None) :
+										   resources.backend == observationBackend :
+										   resources.backend == Upscaling::VRRenderScaleBackendKind::None) :
 								   resources.backend == Upscaling::VRRenderScaleBackendKind::None);
 				};
 			const auto exactProfileMatches = [&](const auto& a_profile) {
+				const bool requiresPublishedGeneration =
+					a_profile.method == Upscaling::UpscaleMethod::kDLSS ||
+					a_profile.method == Upscaling::UpscaleMethod::kFSR;
 				return a_profile.valid &&
-				       a_profile.contractGeneration != 0 &&
+				       ReplacementTelemetry::MatchesTargetContractGeneration(
+						   requiresPublishedGeneration,
+						   a_observation.contractGeneration,
+						   a_profile.contractGeneration) &&
 				       a_observation.transitionEpoch == a_profile.transitionEpoch &&
-				       a_observation.contractGeneration == a_profile.contractGeneration &&
 				       a_observation.method == static_cast<uint32_t>(a_profile.method) &&
 				       a_observation.renderWidth == a_profile.renderEyeWidth &&
 				       a_observation.renderHeight == a_profile.renderEyeHeight &&
@@ -6893,13 +6899,29 @@ namespace VRRenderScaleDevBenchBridge
 					.resourceContractMatches =
 						exactResourceContractMatches(*publishedReplacement),
 					.providerGenerationMatches =
-						(!publishedReplacement->active ||
-							(publishedReplacement->method != Upscaling::UpscaleMethod::kDLSS &&
-								publishedReplacement->method != Upscaling::UpscaleMethod::kFSR) ||
-							providerGenerationForProfile(*publishedReplacement) ==
-								publishedReplacement->contractGeneration),
+						(publishedReplacement->method != Upscaling::UpscaleMethod::kDLSS &&
+							publishedReplacement->method != Upscaling::UpscaleMethod::kFSR) ||
+						providerGenerationForProfile(*publishedReplacement) ==
+							publishedReplacement->contractGeneration,
 					.publicationCurrent = publication.current,
 				});
+			const bool dispatchUsesVendor =
+				dispatchMethod == static_cast<uint32_t>(
+									  Upscaling::UpscaleMethod::kDLSS) ||
+				dispatchMethod == static_cast<uint32_t>(
+									  Upscaling::UpscaleMethod::kFSR);
+			const bool exactCurrentPresentationAvailable =
+				!physicalMutationStarted && dispatchProven &&
+				a_observation.transitionEpoch == dispatchTransitionEpoch &&
+				a_observation.contractGeneration == dispatchContractGeneration &&
+				a_observation.method == dispatchMethod &&
+				static_cast<uint64_t>(a_observation.deviceIdentity) ==
+					dispatchDeviceIdentity &&
+				a_observation.resourceRevision == dispatchResourceRevision &&
+				observedDispatchDimensions && publication.current &&
+				publication.publishedGeneration ==
+					dispatchPublicationGeneration &&
+				(!dispatchUsesVendor || gate.existingVendorDispatchReady);
 			const uint32_t identityMethod = suppressesPreviousBeforeMutation ?
 			                                    dispatchMethod :
 			                                    a_observation.method;
@@ -7015,6 +7037,8 @@ namespace VRRenderScaleDevBenchBridge
 				.transitionCooldown = identityTransitionCooldown,
 				.submitted = a_observation.submitted,
 				.exactCurrent = exactCurrent,
+				.exactCurrentPresentationAvailable =
+					exactCurrentPresentationAvailable,
 				.exactReplacement = exactReplacement,
 				.blockedPreMutation = blockedPreMutation,
 				.physicalMutationStarted = physicalMutationStarted,

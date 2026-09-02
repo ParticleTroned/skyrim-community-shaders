@@ -20883,7 +20883,9 @@ Upscaling::UpscalingTransitionApplyResult Upscaling::ApplyCSMenuUpscalingTransit
 				IsVendorUpscalingMethod(previousMethod),
 			.targetMethodUsesVendor =
 				IsVendorUpscalingMethod(targetMethod),
+			.targetMethodIsDLSS = targetMethod == UpscaleMethod::kDLSS,
 			.targetMethodIsFSR = targetMethod == UpscaleMethod::kFSR,
+			.targetRenderScaleActive = targetRenderScaleMode,
 			.fsrRuntimeSelectionChanged =
 				targetMethod == UpscaleMethod::kFSR &&
 				currentDesiredProfile.fsr4RuntimeEnabled !=
@@ -55155,7 +55157,9 @@ void Upscaling::ApplyPendingVRUpscalingTransition()
 				IsVendorUpscalingMethod(previousPublishedProfile->method),
 			.targetMethodUsesVendor =
 				IsVendorUpscalingMethod(targetMethod),
+			.targetMethodIsDLSS = targetMethod == UpscaleMethod::kDLSS,
 			.targetMethodIsFSR = targetMethod == UpscaleMethod::kFSR,
+			.targetRenderScaleActive = targetPerfMode,
 			.fsrRuntimeSelectionChanged =
 				fsr4RuntimeSelectionChanged,
 		});

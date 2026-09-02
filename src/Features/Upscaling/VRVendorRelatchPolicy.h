@@ -1538,22 +1538,30 @@ namespace VRVendorRelatchPolicy
 		bool methodChanged = false;
 		bool previousMethodUsesVendor = false;
 		bool targetMethodUsesVendor = false;
+		bool targetMethodIsDLSS = false;
 		bool targetMethodIsFSR = false;
+		bool targetRenderScaleActive = false;
 		bool fsrRuntimeSelectionChanged = false;
 	};
 
-	// A fixed-resolution vendor selection still owns provider resources. Method
-	// and FSR runtime-path changes must therefore cross the relatch boundary.
+	// First-time fixed-resolution DLSS can retain native engine targets while its
+	// provider is created. Existing vendors and every FSR path require relatch.
 	[[nodiscard]] constexpr bool NeedsVendorEvaluationRelatch(
 		const VendorEvaluationRelatchSelection& a_state) noexcept
 	{
 		if (!a_state.isVR)
 			return false;
 
+		const bool firstFixedDLSSActivationKeepsNativeTargets =
+			a_state.methodChanged &&
+			!a_state.previousMethodUsesVendor &&
+			a_state.targetMethodUsesVendor &&
+			a_state.targetMethodIsDLSS &&
+			!a_state.targetRenderScaleActive;
 		const bool vendorMethodBoundary =
 			a_state.methodChanged &&
-			(a_state.previousMethodUsesVendor ||
-				a_state.targetMethodUsesVendor);
+			(a_state.previousMethodUsesVendor || a_state.targetMethodUsesVendor) &&
+			!firstFixedDLSSActivationKeepsNativeTargets;
 		const bool fsrRuntimeBoundary =
 			a_state.targetMethodIsFSR &&
 			a_state.fsrRuntimeSelectionChanged;

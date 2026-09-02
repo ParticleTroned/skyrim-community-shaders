@@ -2433,9 +2433,28 @@ bool Streamline::HasCompleteVRDLSSViewportResources(
 	uint32_t a_outputHeight,
 	ID3D11Resource* a_colorInput) const noexcept
 {
+	return HasCompleteVRDLSSViewportResources(
+		a_viewportRole,
+		a_qualityMode,
+		a_dlssPreset,
+		{ a_outputWidth, a_outputWidth },
+		{ a_outputHeight, a_outputHeight },
+		{ a_colorInput, a_colorInput });
+}
+
+bool Streamline::HasCompleteVRDLSSViewportResources(
+	DLSSViewportRole a_viewportRole,
+	uint32_t a_qualityMode,
+	uint32_t a_dlssPreset,
+	const std::array<uint32_t, 2>& a_outputWidths,
+	const std::array<uint32_t, 2>& a_outputHeights,
+	const std::array<ID3D11Resource*, 2>& a_colorInputs) const noexcept
+{
 	if (!globals::game::isVR || !initialized || !featureDLSS ||
 		static_cast<uint32_t>(a_viewportRole) >= kVRDLSSViewportRoleCount ||
-		!a_outputWidth || !a_outputHeight || !a_colorInput) {
+		!a_outputWidths[0] || !a_outputWidths[1] ||
+		!a_outputHeights[0] || !a_outputHeights[1] ||
+		!a_colorInputs[0] || !a_colorInputs[1]) {
 		return false;
 	}
 
@@ -2468,9 +2487,9 @@ bool Streamline::HasCompleteVRDLSSViewportResources(
 				eye,
 				qualityMode,
 				dlssPreset,
-				a_outputWidth,
-				a_outputHeight,
-				a_colorInput)) {
+				a_outputWidths[eye],
+				a_outputHeights[eye],
+				a_colorInputs[eye])) {
 			return false;
 		}
 	}

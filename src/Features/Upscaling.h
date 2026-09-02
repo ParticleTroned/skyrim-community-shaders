@@ -700,6 +700,7 @@ public:
 		bool preserveFSRResources = false;
 		bool reuseCompatibleFSRResources = false;
 		bool preserveCompatibleFSRIntermediates = false;
+		bool retainInactiveDLSSResources = false;
 		bool retainWarmDLSSResources = false;
 		bool retainWarmFSRResources = false;
 		bool reuseWarmTargetRuntime = false;

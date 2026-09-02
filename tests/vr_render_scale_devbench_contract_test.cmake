@@ -35,6 +35,14 @@ file(READ
     _fidelityfx_source
 )
 
+string(FIND "${_bridge}"
+    "\"retainInactiveDLSSResources\", controller.relatchPlan.retainInactiveDLSSResources"
+    _inactive_dlss_retention_status)
+if(_inactive_dlss_retention_status EQUAL -1)
+    message(FATAL_ERROR
+        "DevBench status must expose inactive DLSS retention admission")
+endif()
+
 foreach(_watchdog_frame_contract IN ITEMS
     "ServiceVRRenderScalePreMutationNativeFallbackWatchdog(\"end of frame\")"
     "ServiceVRRenderScalePostMutationWatchdog(\"end of frame\")"

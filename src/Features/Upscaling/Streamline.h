@@ -547,6 +547,14 @@ public:
 		uint32_t a_outputWidth,
 		uint32_t a_outputHeight,
 		ID3D11Resource* a_colorInput) const noexcept;
+	/** @brief Proves one exact stereo allocation against each eye's input format. */
+	[[nodiscard]] bool HasCompleteVRDLSSViewportResources(
+		DLSSViewportRole a_viewportRole,
+		uint32_t a_qualityMode,
+		uint32_t a_dlssPreset,
+		const std::array<uint32_t, 2>& a_outputWidths,
+		const std::array<uint32_t, 2>& a_outputHeights,
+		const std::array<ID3D11Resource*, 2>& a_colorInputs) const noexcept;
 
 	bool Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors);
 	bool UpscaleRegion(uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,

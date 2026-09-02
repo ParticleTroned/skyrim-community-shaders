@@ -26186,6 +26186,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		relatchSignature.renderEyeHeight = relatchTargetRenderEyeHeight;
 		relatchSignature.displayEyeWidth = perfMode.trueHMDEyeWidth;
 		relatchSignature.displayEyeHeight = perfMode.trueHMDEyeHeight;
+		const bool memoryReliefAlreadyActive = IsVRRenderScaleMemoryReliefActive();
 		MaybeArmVRRenderScaleMemoryRelief(relatchSignature, relatchOrigin, state->frameCount);
 		auto controllerAtAdmission = GetVRRenderScaleTransitionSnapshot();
 		auto memoryAtAdmission = controllerAtAdmission.memory;
@@ -26208,6 +26209,13 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			controllerAtAdmission = GetVRRenderScaleTransitionSnapshot();
 			memoryAtAdmission = controllerAtAdmission.memory;
 		}
+		const bool retainedInactiveDLSSForRelatch =
+			controllerAtAdmission.relatchPlan.valid &&
+			controllerAtAdmission.relatchPlan.transitionEpoch == relatchEpoch &&
+			controllerAtAdmission.relatchPlan.contractGeneration ==
+				relatchContractGeneration &&
+			controllerAtAdmission.relatchPlan.origin == relatchOrigin &&
+			controllerAtAdmission.relatchPlan.retainInactiveDLSSResources;
 		const bool pressureMemoryRelief =
 			memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::Elevated ||
 			memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::High ||
@@ -26263,7 +26271,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				perfMode.trueHMDEyeWidth,
 				perfMode.trueHMDEyeHeight,
 				relatchColorInput);
-		const bool currentInactiveDLSSProviderReady =
+		const bool inactiveDLSSAllocationContractReady =
 			relatchUpscaleMethod == UpscaleMethod::kDLSS &&
 			!previousBootWasActiveDLSS &&
 			previousInactivePhysicalProfile &&
@@ -26276,7 +26284,9 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			previousInactivePhysicalProfile->displayEyeWidth == perfMode.trueHMDEyeWidth &&
 			previousInactivePhysicalProfile->displayEyeHeight == perfMode.trueHMDEyeHeight &&
 			streamline.IsDLSSRuntimeReady() &&
-			streamline.IsBoundToD3DDevice(globals::d3d::device) &&
+			streamline.IsBoundToD3DDevice(globals::d3d::device);
+		const bool exactInactiveFullEyeDLSSAllocationReady =
+			inactiveDLSSAllocationContractReady && relatchColorInput &&
 			streamline.HasCompleteVRDLSSViewportResources(
 				Streamline::DLSSViewportRole::FullEye,
 				previousInactivePhysicalProfile->qualityMode,
@@ -26284,6 +26294,56 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				perfMode.trueHMDEyeWidth,
 				perfMode.trueHMDEyeHeight,
 				relatchColorInput);
+		const bool exactInactiveFoveatedCenterDLSSAllocationReady = [&]() {
+			const auto& cache = foveatedRectCache;
+			if (!inactiveDLSSAllocationContractReady ||
+				!cache.isVR || !cache.plan.IsValid() ||
+				cache.inputWidthPerEye != perfMode.trueHMDEyeWidth ||
+				cache.inputHeight != perfMode.trueHMDEyeHeight ||
+				cache.outputWidthPerEye != perfMode.trueHMDEyeWidth ||
+				cache.outputHeight != perfMode.trueHMDEyeHeight) {
+				return false;
+			}
+
+			for (uint32_t eye = 0; eye < 2; ++eye) {
+				if (!foveatedCenterColorIn[eye] ||
+					!foveatedCenterColorIn[eye]->resource ||
+					!foveatedCenterColorOut[eye] ||
+					!foveatedCenterColorOut[eye]->resource) {
+					return false;
+				}
+
+				const auto& rect = cache.rects[eye];
+				const auto& planEye = cache.plan.eyes[eye];
+				const auto& input = foveatedCenterColorIn[eye]->desc;
+				const auto& output = foveatedCenterColorOut[eye]->desc;
+				if (!planEye.IsValid() ||
+					rect.inputWidth != planEye.input.Width() ||
+					rect.inputHeight != planEye.input.Height() ||
+					rect.outputWidth != planEye.output.Width() ||
+					rect.outputHeight != planEye.output.Height() ||
+					input.Width != rect.inputWidth ||
+					input.Height != rect.inputHeight ||
+					output.Width != rect.outputWidth ||
+					output.Height != rect.outputHeight) {
+					return false;
+				}
+			}
+
+			return streamline.HasCompleteVRDLSSViewportResources(
+				Streamline::DLSSViewportRole::FoveatedCenter,
+				previousInactivePhysicalProfile->qualityMode,
+				previousInactivePhysicalProfile->dlssPreset,
+				std::array<uint32_t, 2>{
+					cache.rects[0].outputWidth,
+					cache.rects[1].outputWidth },
+				std::array<uint32_t, 2>{
+					cache.rects[0].outputHeight,
+					cache.rects[1].outputHeight },
+				std::array<ID3D11Resource*, 2>{
+					foveatedCenterColorIn[0]->resource.get(),
+					foveatedCenterColorIn[1]->resource.get() });
+		}();
 		const bool targetFoveatedDLSSSlotRequired =
 			relatchUpscaleMethod == UpscaleMethod::kDLSS &&
 			IsFoveatedVendorDispatchEnabled(relatchUpscaleMethod);
@@ -26308,7 +26368,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				.memoryPressureNormal =
 					memoryAtAdmission.valid &&
 					memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::Normal,
-				.memoryReliefActive = memoryReliefActiveForRelatch,
+				.memoryReliefActive = memoryReliefAlreadyActive,
 				.postLoadResetPending =
 					postLoadRuntimeResetPending.load(std::memory_order_acquire),
 				.recoveryOwned =
@@ -26318,7 +26378,13 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				.deviceLost = IsSubmitStageDeviceLost(),
 				.deviceMatches =
 					streamline.IsBoundToD3DDevice(globals::d3d::device),
-				.exactCurrentProviderReady = currentInactiveDLSSProviderReady,
+				.retainedAllocationPreviouslyAdmitted =
+					retainedInactiveDLSSForRelatch &&
+					inactiveDLSSAllocationContractReady,
+				.exactFullEyeAllocationReady =
+					exactInactiveFullEyeDLSSAllocationReady,
+				.exactFoveatedCenterAllocationReady =
+					exactInactiveFoveatedCenterDLSSAllocationReady,
 				.targetSlotsAvailableWithoutRecycle =
 					targetDLSSSlotsAvailableWithoutRecycle,
 			});
@@ -26521,6 +26587,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		relatchPlan.preserveFSRResources = preserveFSRResourcesForRelatch;
 		relatchPlan.reuseCompatibleFSRResources = reuseCompatibleFSRResourcesForRelatch;
 		relatchPlan.preserveCompatibleFSRIntermediates = preserveCompatibleFSRIntermediatesForRelatch;
+		relatchPlan.retainInactiveDLSSResources = retainInactiveDLSSResourcesForActivation;
 		relatchPlan.retainWarmDLSSResources = retainWarmDLSSResourcesForRelatch;
 		relatchPlan.retainWarmFSRResources = retainWarmFSRResourcesForRelatch;
 		relatchPlan.reuseWarmTargetRuntime =
@@ -51361,6 +51428,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 							  { "reuseCompatibleFSRResources", relatchPlan.reuseCompatibleFSRResources },
 							  { "preserveCompatibleFSRIntermediates", relatchPlan.preserveCompatibleFSRIntermediates },
 							  { "reuseCompatibleHostFSRResources", relatchPlan.reuseCompatibleFSRResources && relatchPlan.target.backend == VRRenderScaleBackendKind::FSRHost },
+							  { "retainInactiveDLSSResources", relatchPlan.retainInactiveDLSSResources },
 							  { "retainWarmDLSSResources", relatchPlan.retainWarmDLSSResources },
 							  { "retainWarmFSRResources", relatchPlan.retainWarmFSRResources },
 							  { "reuseWarmTargetRuntime", relatchPlan.reuseWarmTargetRuntime },
@@ -52578,7 +52646,7 @@ bool Upscaling::RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a
 	}
 	if (ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
-			"[VRRenderScale][Plan] revision={} epoch={} generation={} actions=0x{:X} changes=0x{:X} previousVendor={} backend={} -> {} reuseTargets={} reuseStableTargets={} dimensionsMatch={} stableEvidence={} vendorDimensionsUnchanged={} reuseShared={} preserveDLSS={} preserveFSR={} compatibleFSRReuse={} preserveFSRIntermediates={} retainWarmDLSS={} retainWarmFSR={} reuseWarmTarget={} recreateFSR={} waitFSRDrain={} lowPeakRestore={} pressure={} current={} MiB target={} MiB additional={} MiB projectedAdditional={} MiB projectedUsage={} MiB admissionLimit={} MiB postTrimAdmissionLimit={} MiB projectedSystemAdditional={} MiB projectedSystemCommit={} MiB systemAdmissionLimit={} MiB cleanup={} projectedGuard={} postTrimRelaxed={} projectedDeferred={} systemGuard={} doorHardReserveOnly={} systemDeferred={} deferred={} emergencyCommitGuard={} emergencyMultiplier={} emergencyMinimumProjection={} MiB emergencyProjectionValid={} emergencyProjectedAdditional={} MiB emergencyProjectedCommit={} MiB emergencyAdmissionLimit={} MiB emergencyReserve={} MiB emergencySafe={}",
+			"[VRRenderScale][Plan] revision={} epoch={} generation={} actions=0x{:X} changes=0x{:X} previousVendor={} backend={} -> {} reuseTargets={} reuseStableTargets={} dimensionsMatch={} stableEvidence={} vendorDimensionsUnchanged={} reuseShared={} preserveDLSS={} preserveFSR={} compatibleFSRReuse={} preserveFSRIntermediates={} retainInactiveDLSS={} retainWarmDLSS={} retainWarmFSR={} reuseWarmTarget={} recreateFSR={} waitFSRDrain={} lowPeakRestore={} pressure={} current={} MiB target={} MiB additional={} MiB projectedAdditional={} MiB projectedUsage={} MiB admissionLimit={} MiB postTrimAdmissionLimit={} MiB projectedSystemAdditional={} MiB projectedSystemCommit={} MiB systemAdmissionLimit={} MiB cleanup={} projectedGuard={} postTrimRelaxed={} projectedDeferred={} systemGuard={} doorHardReserveOnly={} systemDeferred={} deferred={} emergencyCommitGuard={} emergencyMultiplier={} emergencyMinimumProjection={} MiB emergencyProjectionValid={} emergencyProjectedAdditional={} MiB emergencyProjectedCommit={} MiB emergencyAdmissionLimit={} MiB emergencyReserve={} MiB emergencySafe={}",
 			revision,
 			a_plan.transitionEpoch,
 			a_plan.contractGeneration,
@@ -52597,6 +52665,7 @@ bool Upscaling::RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a
 			BoolText(a_plan.preserveFSRResources),
 			BoolText(a_plan.reuseCompatibleFSRResources),
 			BoolText(a_plan.preserveCompatibleFSRIntermediates),
+			BoolText(a_plan.retainInactiveDLSSResources),
 			BoolText(a_plan.retainWarmDLSSResources),
 			BoolText(a_plan.retainWarmFSRResources),
 			BoolText(a_plan.reuseWarmTargetRuntime),

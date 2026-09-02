@@ -110,6 +110,11 @@ foreach(_inactive_dlss_retention_contract IN ITEMS
     "VRVendorRelatchPolicy::CanRetainInactiveDLSSForActivation"
     "streamline.CanPrepareVRDLSSViewportWithoutRecycle"
     "retainInactiveDLSSResourcesForActivation"
+    "exactInactiveFullEyeDLSSAllocationReady"
+    "exactInactiveFoveatedCenterDLSSAllocationReady"
+    "Streamline::DLSSViewportRole::FoveatedCenter"
+    "foveatedCenterColorIn[0]->resource.get()"
+    "foveatedCenterColorIn[1]->resource.get()"
 )
     string(FIND "${_upscaling}" "${_inactive_dlss_retention_contract}"
         _inactive_dlss_retention_position)
@@ -117,6 +122,114 @@ foreach(_inactive_dlss_retention_contract IN ITEMS
         message(FATAL_ERROR
             "Inactive DLSS activation retention is incomplete: ${_inactive_dlss_retention_contract}"
         )
+    endif()
+endforeach()
+
+string(FIND "${_upscaling}"
+    "const bool retainedInactiveDLSSForRelatch ="
+    _retention_owner_start)
+string(FIND "${_upscaling}"
+    "const bool pressureMemoryRelief ="
+    _retention_owner_end)
+if(_retention_owner_start EQUAL -1 OR
+   _retention_owner_end LESS_EQUAL _retention_owner_start)
+    message(FATAL_ERROR "Inactive DLSS retention owner proof could not be isolated")
+endif()
+math(EXPR _retention_owner_length
+    "${_retention_owner_end} - ${_retention_owner_start}")
+string(SUBSTRING "${_upscaling}" ${_retention_owner_start}
+    ${_retention_owner_length} _retention_owner_body)
+foreach(_required IN ITEMS
+    "relatchPlan.valid"
+    "relatchPlan.transitionEpoch == relatchEpoch"
+    "relatchPlan.contractGeneration =="
+    "relatchContractGeneration"
+    "relatchPlan.origin == relatchOrigin"
+    "relatchPlan.retainInactiveDLSSResources"
+)
+    string(FIND "${_retention_owner_body}" "${_required}" _position)
+    if(_position EQUAL -1)
+        message(FATAL_ERROR
+            "Inactive DLSS retry lost exact owner proof: ${_required}")
+    endif()
+endforeach()
+
+foreach(_per_eye_allocation_proof IN ITEMS
+    "const std::array<uint32_t, 2>& a_outputWidths"
+    "const std::array<uint32_t, 2>& a_outputHeights"
+    "a_outputWidths[eye]"
+    "a_outputHeights[eye]"
+    "a_colorInputs[eye]"
+)
+    string(FIND "${_streamline}" "${_per_eye_allocation_proof}"
+        _per_eye_allocation_position)
+    if(_per_eye_allocation_position EQUAL -1)
+        message(FATAL_ERROR
+            "Stereo DLSS allocation proof lost per-eye evidence: ${_per_eye_allocation_proof}"
+        )
+    endif()
+endforeach()
+
+string(FIND "${_upscaling}"
+    "const bool inactiveDLSSAllocationContractReady ="
+    _inactive_dlss_proof_start)
+string(FIND "${_upscaling}"
+    "const bool targetFoveatedDLSSSlotRequired ="
+    _inactive_dlss_proof_end)
+if(_inactive_dlss_proof_start EQUAL -1 OR
+   _inactive_dlss_proof_end LESS_EQUAL _inactive_dlss_proof_start)
+    message(FATAL_ERROR "Inactive DLSS allocation proof could not be isolated")
+endif()
+math(EXPR _inactive_dlss_proof_length
+    "${_inactive_dlss_proof_end} - ${_inactive_dlss_proof_start}")
+string(SUBSTRING "${_upscaling}" ${_inactive_dlss_proof_start}
+    ${_inactive_dlss_proof_length} _inactive_dlss_proof_body)
+foreach(_required IN ITEMS
+    "Streamline::DLSSViewportRole::FullEye"
+    "Streamline::DLSSViewportRole::FoveatedCenter"
+    "cache.plan.IsValid()"
+    "std::array<uint32_t, 2>"
+    "foveatedCenterColorIn[0]->resource.get()"
+    "foveatedCenterColorIn[1]->resource.get()"
+)
+    string(FIND "${_inactive_dlss_proof_body}" "${_required}" _position)
+    if(_position EQUAL -1)
+        message(FATAL_ERROR
+            "Inactive DLSS allocation proof lost exact topology: ${_required}")
+    endif()
+endforeach()
+string(FIND "${_inactive_dlss_proof_body}"
+    "HasCompleteVRDLSSViewportResources()" _generic_viewport_proof)
+if(NOT _generic_viewport_proof EQUAL -1)
+    message(FATAL_ERROR
+        "Inactive DLSS retention must not use the generic viewport proof")
+endif()
+
+string(FIND "${_upscaling}"
+    "const bool memoryReliefAlreadyActive = IsVRRenderScaleMemoryReliefActive();"
+    _preexisting_relief_sample)
+string(FIND "${_upscaling}"
+    "MaybeArmVRRenderScaleMemoryRelief(relatchSignature, relatchOrigin, state->frameCount);"
+    _relief_arm)
+string(FIND "${_upscaling}"
+    ".memoryReliefActive = memoryReliefAlreadyActive"
+    _retention_relief_gate)
+if(_preexisting_relief_sample EQUAL -1 OR _relief_arm EQUAL -1 OR
+   _retention_relief_gate EQUAL -1 OR
+   _preexisting_relief_sample GREATER _relief_arm OR
+   _retention_relief_gate LESS _relief_arm)
+    message(FATAL_ERROR
+        "Inactive DLSS retention lost its pre-existing memory-relief gate")
+endif()
+foreach(_required IN ITEMS
+    "retainedInactiveDLSSForRelatch"
+    ".retainedAllocationPreviouslyAdmitted ="
+    "relatchPlan.retainInactiveDLSSResources ="
+)
+    string(FIND "${_upscaling}" "${_required}" _position)
+    if(_position EQUAL -1)
+        message(FATAL_ERROR
+            "Inactive DLSS retention lost retry ownership: ${_required}")
     endif()
 endforeach()
 

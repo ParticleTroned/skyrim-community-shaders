@@ -1320,6 +1320,7 @@ namespace
 													  { "valid", controller.relatchPlan.valid },
 													  { "transitionEpoch", controller.relatchPlan.transitionEpoch },
 													  { "previousVendorMethod", GetUpscaleMethodName(controller.relatchPlan.previousVendorMethod) },
+													  { "retainInactiveDLSSResources", controller.relatchPlan.retainInactiveDLSSResources },
 													  { "memoryPressure", Upscaling::GetVRRenderScaleMemoryPressureName(controller.relatchPlan.memoryPressure) },
 													  { "estimatedAdditionalBytes", controller.relatchPlan.estimatedAdditionalBytes },
 													  { "projectedAdditionalBytes", controller.relatchPlan.projectedAdditionalBytes },

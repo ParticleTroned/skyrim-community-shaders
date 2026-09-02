@@ -1426,6 +1426,73 @@ namespace
 		return true;
 	}
 
+	constexpr bool CoversSubmitStagePromotionAdmission()
+	{
+		SubmitStagePromotionAdmission state{
+			.coherentStereoCycle = true,
+			.providerPreparationReady = true,
+			.consecutiveStableCycles = 3,
+			.requiredStableCycles = 3,
+		};
+		if (!CanPublishSubmitStagePromotionCandidate(state))
+			return false;
+
+		state.coherentStereoCycle = false;
+		if (CanPublishSubmitStagePromotionCandidate(state))
+			return false;
+		state.coherentStereoCycle = true;
+		state.providerPreparationReady = false;
+		if (CanPublishSubmitStagePromotionCandidate(state))
+			return false;
+		state.providerPreparationReady = true;
+		state.consecutiveStableCycles = 2;
+		if (CanPublishSubmitStagePromotionCandidate(state))
+			return false;
+		state.consecutiveStableCycles = 3;
+		state.requiredStableCycles = 0;
+		return !CanPublishSubmitStagePromotionCandidate(state);
+	}
+
+	constexpr bool CoversInitialRelatchPacing()
+	{
+		InitialRelatchPacingAdmission state{
+			.newPhysicalTuple = true,
+			.directMenuRequest = false,
+			.immutableSettingsRequest = true,
+			.protectedRecovery = false,
+			.requestID = 7,
+			.requestQueuedFrame = 10,
+			.currentFrame = 16,
+			.coalescingFrames = 6,
+			.ordinaryDelayFrames = 6,
+			.minimumDelayFrames = 0,
+		};
+		if (SelectInitialRelatchDelayFrames(state) != 1)
+			return false;
+
+		state.currentFrame = 15;
+		if (SelectInitialRelatchDelayFrames(state) != 6)
+			return false;
+		state.currentFrame = 5;
+		if (SelectInitialRelatchDelayFrames(state) != 6)
+			return false;
+		state.currentFrame = 16;
+		state.protectedRecovery = true;
+		if (SelectInitialRelatchDelayFrames(state) != 6)
+			return false;
+		state.protectedRecovery = false;
+		state.newPhysicalTuple = false;
+		if (SelectInitialRelatchDelayFrames(state) != 6)
+			return false;
+		state.newPhysicalTuple = true;
+		state.immutableSettingsRequest = false;
+		state.directMenuRequest = true;
+		if (SelectInitialRelatchDelayFrames(state) != 1)
+			return false;
+		state.minimumDelayFrames = 9;
+		return SelectInitialRelatchDelayFrames(state) == 9;
+	}
+
 	constexpr bool CoversStereoDispatchContractIdentity()
 	{
 		return IsSameStereoDispatchContract(7, 7, 2, 2) &&
@@ -3004,6 +3071,8 @@ namespace
 	static_assert(CoversStableDoorContractRetention());
 	static_assert(CoversNativeRestoreMemoryReliefOwnership());
 	static_assert(CoversDeferredDispatchSelection());
+	static_assert(CoversSubmitStagePromotionAdmission());
+	static_assert(CoversInitialRelatchPacing());
 	static_assert(CoversStereoDispatchContractIdentity());
 	static_assert(CoversPendingVendorResetOwnership());
 	static_assert(CoversDLSSReadinessTiers());

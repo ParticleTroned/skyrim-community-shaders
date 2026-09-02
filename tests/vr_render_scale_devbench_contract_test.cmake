@@ -736,7 +736,6 @@ foreach(_required_direct_menu_mapping IN ITEMS
 	"target->directMenuEdit,"
 	"relatchProfile->directMenuEdit,"
 	".directMenuRelatch = directMenuRelatch"
-	"transitionSnapshot.applied.directMenuEdit,"
 	"VRRenderScalePreparationReason::NonDirectEdit"
 	"a_request.origin == VRUpscalingTransitionOrigin::CSMenu &&\n\t\tdirectMenuRequest &&"
 )

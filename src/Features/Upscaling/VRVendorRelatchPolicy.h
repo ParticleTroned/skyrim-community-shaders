@@ -1006,6 +1006,39 @@ namespace VRVendorRelatchPolicy
 		           a_state.delayFrames;
 	}
 
+	struct InitialRelatchPacingAdmission
+	{
+		bool newPhysicalTuple = false;
+		bool directMenuRequest = false;
+		bool immutableSettingsRequest = false;
+		bool protectedRecovery = false;
+		std::uint64_t requestID = 0;
+		std::uint32_t requestQueuedFrame = 0;
+		std::uint32_t currentFrame = 0;
+		std::uint32_t coalescingFrames = 0;
+		std::uint32_t ordinaryDelayFrames = 0;
+		std::uint32_t minimumDelayFrames = 0;
+	};
+
+	[[nodiscard]] constexpr std::uint32_t SelectInitialRelatchDelayFrames(
+		const InitialRelatchPacingAdmission& a_state) noexcept
+	{
+		const bool coalescingCompleted =
+			a_state.immutableSettingsRequest && a_state.requestID != 0 &&
+			a_state.requestQueuedFrame != 0 &&
+			a_state.currentFrame > a_state.requestQueuedFrame &&
+			a_state.currentFrame - a_state.requestQueuedFrame >=
+				a_state.coalescingFrames;
+		const bool useSingleFrameBoundary =
+			a_state.newPhysicalTuple && !a_state.protectedRecovery &&
+			(a_state.directMenuRequest || coalescingCompleted);
+		const std::uint32_t selectedDelay =
+			useSingleFrameBoundary ? 1u : a_state.ordinaryDelayFrames;
+		return selectedDelay < a_state.minimumDelayFrames ?
+		           a_state.minimumDelayFrames :
+		           selectedDelay;
+	}
+
 	struct NativeRestoreFenceReadyResumeAdmission
 	{
 		bool relatchPending = false;
@@ -1252,6 +1285,24 @@ namespace VRVendorRelatchPolicy
 			return DeferredDispatchAction::EvaluateExisting;
 
 		return DeferredDispatchAction::PresentationStretch;
+	}
+
+	struct SubmitStagePromotionAdmission
+	{
+		bool coherentStereoCycle = false;
+		bool providerPreparationReady = false;
+		std::uint32_t consecutiveStableCycles = 0;
+		std::uint32_t requiredStableCycles = 0;
+	};
+
+	[[nodiscard]] constexpr bool CanPublishSubmitStagePromotionCandidate(
+		const SubmitStagePromotionAdmission& a_state) noexcept
+	{
+		return a_state.coherentStereoCycle &&
+		       a_state.providerPreparationReady &&
+		       a_state.requiredStableCycles != 0 &&
+		       a_state.consecutiveStableCycles >=
+		           a_state.requiredStableCycles;
 	}
 
 	[[nodiscard]] constexpr bool IsSameStereoDispatchContract(

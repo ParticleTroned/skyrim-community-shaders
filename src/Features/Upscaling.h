@@ -240,6 +240,9 @@ public:
 	static constexpr uint32_t kFsr4RuntimeSelectionSchemaVersion = 1;
 	static constexpr float kVRFpsStabilizerDefaultFadeDuration = 6.0f;
 	static constexpr uint32_t kDLSSSharpenerModeMaxIndex = 2;
+	static constexpr float kFoveatedBlendFeatherMin = 0.0f;
+	static constexpr float kFoveatedBlendFeatherMax = 0.10f;
+	static constexpr uint32_t kFoveatedReconstructionGuardBandMax = 64u;
 	// Explicit profile changes remain blocked while RaceSex owns presentation or its handoff tail.
 	static constexpr uint32_t kVRUpscalingApplyBlockRaceSexMenu = 1u << 0;
 	static constexpr uint32_t kVRUpscalingApplyBlockRaceSexStartupTail = 1u << 1;
@@ -304,11 +307,14 @@ public:
 		uint neuralRenderingStyle = 3;
 		bool neuralRenderingAutoMask = true;
 		bool neuralRenderingUICorrection = false;
+		float neuralRenderingBlendFeather = 0.05f;
 		uint foveatedCenterOrigin = static_cast<uint>(
 			FoveatedCenterAlignment::kCompatibilityCenterOrigin);
 		uint foveatedHorizontalAnchor = static_cast<uint>(
 			FoveatedCenterAlignment::kCompatibilityHorizontalAnchor);
 		float foveatedCenterArea = 0.6f;
+		float foveatedCenterBlendFeather = 0.05f;
+		uint foveatedReconstructionGuardBandPixels = 0;
 		float foveatedCenterHorizontalScale = 1.0f;
 		float foveatedLeftEyeMaskOffsetX = 0.0f;
 		float foveatedLeftEyeMaskOffsetY = 0.0f;
@@ -1397,6 +1403,7 @@ public:
 		bool isVR = false;
 		float centerScale = -1.0f;
 		float centerFeather = -1.0f;
+		uint32_t reconstructionGuardBandPixels = 0;
 		float centerHorizontalScale = 1.0f;
 		float peripheryTAAOuterScale = 0.0f;
 		std::array<float2, 2> centerOffsets{};
@@ -1901,6 +1908,11 @@ public:
 	uint32_t previousHistoryFoveatedHorizontalAnchor = static_cast<uint32_t>(
 		FoveatedCenterAlignment::kCompatibilityHorizontalAnchor);
 	float previousHistoryFoveatedCenterScale = 1.0f;
+	float previousHistoryFoveatedCenterBlendFeather = 0.05f;
+	float previousHistoryNeuralBlendFeather = 0.05f;
+	bool previousHistoryFinalLdrNeuralLayout = false;
+	uint32_t previousHistoryFoveatedReconstructionGuardBandPixels = 0;
+	bool previousHistoryFoveatedMaskVisualization = false;
 	float previousHistoryFoveatedCenterHorizontalScale = 1.0f;
 	std::array<float2, 2> previousHistoryFoveatedCenterOffsets = {};
 	bool previousHistoryPeripheryTAA = false;
@@ -2219,8 +2231,8 @@ public:
 	float2 GetResolvedFoveatedMaskCenterOffset(uint32_t eyeIndex, bool usePeripheryTAAProfile = false) const;
 	std::array<float2, 2> GetResolvedFoveatedMaskCenterOffsets(bool usePeripheryTAAProfile = false) const;
 	bool GetRuntimeFoveatedRegionDimensions(uint32_t& a_inputWidthPerEye, uint32_t& a_inputHeight, uint32_t& a_outputWidthPerEye, uint32_t& a_outputHeight) const;
-	bool BuildFoveatedDispatchRects(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool isVR, float centerScale, float centerFeather, float centerHorizontalScale, bool usePeripheryTAAProfile = false);
-	bool GetFoveatedEncodeRegions(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool usePeripheryTAAProfile, bool usePeripheryTAAPath, std::array<FoveatedEncodeRegion, 2>& outRegions);
+	bool BuildFoveatedDispatchRects(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool isVR, float centerScale, float centerFeather, float centerHorizontalScale, UpscaleMethod a_upscaleMethod, bool usePeripheryTAAProfile = false);
+	bool GetFoveatedEncodeRegions(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, UpscaleMethod a_upscaleMethod, bool usePeripheryTAAProfile, bool usePeripheryTAAPath, std::array<FoveatedEncodeRegion, 2>& outRegions);
 	bool EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool copyDepthInput = true, bool allowFoveatedRegionEncode = false, bool* encodedFoveatedRegions = nullptr, uint32_t contractGeneration = 0);
 	bool StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight);
 	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3D11Resource* source, uint32_t width, uint32_t height, bool copyBindFlags, bool createSRV, bool createUAV, bool createRTV, const char* name, DXGI_FORMAT formatOverride = DXGI_FORMAT_UNKNOWN);
@@ -2330,7 +2342,7 @@ public:
 		const float4x4& currentViewProjInverse, const float4x4& previousViewProj, const float4& currentCameraPosAdjust, const float4& previousCameraPosAdjust,
 		bool resetHistory, float centerScale, float centerHorizontalScale, float centerOffsetX, float centerOffsetY,
 		float inputTextureScaleX = 1.0f, float inputTextureScaleY = 1.0f, float inputTextureOffsetX = 0.0f, float inputTextureOffsetY = 0.0f);
-	bool DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t outputWidthPerEye, uint32_t outputHeight, const FoveatedDispatchRect& rect, uint32_t dispatchOffsetX, uint32_t dispatchOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t targetOffsetX = 0);
+	bool DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t outputWidthPerEye, uint32_t outputHeight, const FoveatedDispatchRect& rect, const FoveatedRegionPlan::Rect& visibleOutput, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t targetOffsetX = 0);
 
 	/**
 	 * @brief Applies the selected DLSS sharpening pass to the main render target after upscaling.

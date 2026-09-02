@@ -277,26 +277,34 @@ namespace
 	constexpr double kBlendFeatherRequestMax = 0.1;
 	constexpr double kPeripheryTAAOuterScaleRequestMin = 0.3;
 	constexpr double kPeripheryTAAOuterScaleRequestMax = 1.0;
-	static_assert(static_cast<float>(kCenterScaleRequestMin) ==
-		FoveatedCenterAlignment::kCenterScaleMin);
-	static_assert(static_cast<float>(kCenterScaleRequestMax) ==
-		FoveatedCenterAlignment::kCenterScaleMax);
-	static_assert(static_cast<float>(kCenterHorizontalScaleRequestMin) ==
-		FoveatedCenterAlignment::kCenterHorizontalScaleMin);
-	static_assert(static_cast<float>(kCenterHorizontalScaleRequestMax) ==
-		FoveatedCenterAlignment::kCenterHorizontalScaleMax);
-	static_assert(static_cast<float>(kManualOffsetRequestMin) ==
-		FoveatedCenterAlignment::kManualOffsetMin);
-	static_assert(static_cast<float>(kManualOffsetRequestMax) ==
-		FoveatedCenterAlignment::kManualOffsetMax);
-	static_assert(static_cast<float>(kBlendFeatherRequestMin) ==
-		Upscaling::kFoveatedBlendFeatherMin);
-	static_assert(static_cast<float>(kBlendFeatherRequestMax) ==
-		Upscaling::kFoveatedBlendFeatherMax);
-	static_assert(static_cast<float>(kPeripheryTAAOuterScaleRequestMin) ==
-		Upscaling::kPeripheryTAAOuterScaleMin);
-	static_assert(static_cast<float>(kPeripheryTAAOuterScaleRequestMax) ==
-		Upscaling::kPeripheryTAAOuterScaleMax);
+	constexpr bool RequestBoundMatchesRuntime(double a_request, float a_runtime)
+	{
+		const auto difference = a_request - static_cast<double>(a_runtime);
+		constexpr auto tolerance =
+			static_cast<double>(std::numeric_limits<float>::epsilon());
+		return difference >= -tolerance && difference <= tolerance;
+	}
+
+	static_assert(RequestBoundMatchesRuntime(kCenterScaleRequestMin,
+		FoveatedCenterAlignment::kCenterScaleMin));
+	static_assert(RequestBoundMatchesRuntime(kCenterScaleRequestMax,
+		FoveatedCenterAlignment::kCenterScaleMax));
+	static_assert(RequestBoundMatchesRuntime(kCenterHorizontalScaleRequestMin,
+		FoveatedCenterAlignment::kCenterHorizontalScaleMin));
+	static_assert(RequestBoundMatchesRuntime(kCenterHorizontalScaleRequestMax,
+		FoveatedCenterAlignment::kCenterHorizontalScaleMax));
+	static_assert(RequestBoundMatchesRuntime(kManualOffsetRequestMin,
+		FoveatedCenterAlignment::kManualOffsetMin));
+	static_assert(RequestBoundMatchesRuntime(kManualOffsetRequestMax,
+		FoveatedCenterAlignment::kManualOffsetMax));
+	static_assert(RequestBoundMatchesRuntime(kBlendFeatherRequestMin,
+		Upscaling::kFoveatedBlendFeatherMin));
+	static_assert(RequestBoundMatchesRuntime(kBlendFeatherRequestMax,
+		Upscaling::kFoveatedBlendFeatherMax));
+	static_assert(RequestBoundMatchesRuntime(kPeripheryTAAOuterScaleRequestMin,
+		Upscaling::kPeripheryTAAOuterScaleMin));
+	static_assert(RequestBoundMatchesRuntime(kPeripheryTAAOuterScaleRequestMax,
+		Upscaling::kPeripheryTAAOuterScaleMax));
 
 	const char* GetFoveationCycleControlName(FoveationCycleControl a_control)
 	{

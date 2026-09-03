@@ -3141,9 +3141,11 @@ public:
 	void RefreshSubmitStageUnderwaterMask();
 	void RequestHistoryReset();
 	[[nodiscard]] bool RecordVRRenderScaleTransitionRequested(const VRRenderScaleDesiredProfile& a_request);
-	bool ResolveVRStartupNativeFallbackAfterPublication(
-		const VRRenderScaleDesiredProfile& a_request,
-		bool a_retryRevalidated);
+	[[nodiscard]] bool CanRetryVRStartupNativeFallbackFromSnapshot(
+		const VRRenderScaleTransitionSnapshot& a_controller,
+		bool a_exactPublishedRequest) const;
+	[[nodiscard]] bool TryResolveVRStartupNativeFallbackLocked(
+		const VRRenderScaleDesiredProfile& a_request);
 	bool StoreDeferredVRRenderScaleRequestLatestWinsLocked(
 		const VRRenderScaleDesiredProfile& a_request);
 	void SuspendVRRenderScaleControllerForDeferredRequest(

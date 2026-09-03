@@ -1970,6 +1970,8 @@ namespace VRVendorRelatchPolicy
 			StartupNativeFallbackControlAction::PassThrough;
 		std::uint64_t requestID = 0;
 		std::uint64_t transitionEpoch = 0;
+		bool authoritativeRequestValid = false;
+		bool authoritativeStateRequested = false;
 		std::uint64_t authoritativeRequestID = 0;
 		std::uint64_t authoritativeTransitionEpoch = 0;
 		std::uint64_t latestRequestID = 0;
@@ -1993,11 +1995,33 @@ namespace VRVendorRelatchPolicy
 		return resolvingAction && retryAuthorized &&
 		       a_publication.requestID != 0 &&
 		       a_publication.transitionEpoch != 0 &&
+		       a_publication.authoritativeRequestValid &&
+		       a_publication.authoritativeStateRequested &&
 		       a_publication.authoritativeRequestID ==
 		           a_publication.requestID &&
 		       a_publication.authoritativeTransitionEpoch ==
 		           a_publication.transitionEpoch &&
 		       a_publication.latestRequestID == a_publication.requestID;
+	}
+
+	struct StartupNativeFallbackAuthorityState
+	{
+		StartupNativeFallbackPublication publication{};
+		bool fallbackActive = false;
+	};
+
+	// The owner must hold its publication locks while applying this state change.
+	// Keeping proof and mutation together makes stale authority fail closed.
+	[[nodiscard]] constexpr bool TryResolveStartupNativeFallback(
+		StartupNativeFallbackAuthorityState& a_state) noexcept
+	{
+		if (!a_state.fallbackActive ||
+			!CanResolveStartupNativeFallback(a_state.publication)) {
+			return false;
+		}
+
+		a_state.fallbackActive = false;
+		return true;
 	}
 
 	struct PostLoadRecoveryTransitionBinding

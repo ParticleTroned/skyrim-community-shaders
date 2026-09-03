@@ -34,6 +34,110 @@ file(READ
     "${PROJECT_ROOT}/src/Features/Upscaling/FidelityFX.cpp"
     _fidelityfx_source
 )
+file(READ
+    "${PROJECT_ROOT}/src/ShaderCache.cpp"
+    _shader_cache_source
+)
+
+string(FIND
+    "${_upscaling_source}"
+    "bool Upscaling::RecordVRRenderScaleTransitionRequested"
+    _fallback_transaction_start
+)
+string(FIND
+    "${_upscaling_source}"
+    "uint64_t Upscaling::AllocateVRRenderScaleTransitionEpoch"
+    _fallback_transaction_end
+)
+if(_fallback_transaction_start EQUAL -1 OR
+   _fallback_transaction_end EQUAL -1 OR
+   _fallback_transaction_end LESS_EQUAL _fallback_transaction_start)
+    message(FATAL_ERROR "Fallback publication transaction was not found")
+endif()
+math(EXPR _fallback_transaction_length
+    "${_fallback_transaction_end} - ${_fallback_transaction_start}"
+)
+string(SUBSTRING
+    "${_upscaling_source}"
+    ${_fallback_transaction_start}
+    ${_fallback_transaction_length}
+    _fallback_transaction
+)
+foreach(_required_fallback_transaction_contract IN ITEMS
+    "std::unique_lock queueLock("
+    "std::unique_lock requestLock("
+    "std::scoped_lock lock(vrRenderScaleTransitionControllerMutex)"
+    "TryResolveVRStartupNativeFallbackLocked(a_request)"
+    "requestLock.unlock()"
+    "queueLock.unlock()"
+)
+    string(FIND
+        "${_fallback_transaction}"
+        "${_required_fallback_transaction_contract}"
+        _fallback_transaction_contract_position
+    )
+    if(_fallback_transaction_contract_position EQUAL -1)
+        message(FATAL_ERROR
+            "Fallback publication is not one owned transaction: ${_required_fallback_transaction_contract}"
+        )
+    endif()
+endforeach()
+string(FIND
+    "${_fallback_transaction}"
+    "TryResolveVRStartupNativeFallbackLocked(a_request)"
+    _fallback_resolve_position
+)
+string(FIND
+    "${_fallback_transaction}"
+    "requestLock.unlock()"
+    _fallback_request_unlock_position
+)
+if(_fallback_resolve_position GREATER _fallback_request_unlock_position)
+    message(FATAL_ERROR
+        "Fallback resolution occurs after request ownership is released"
+    )
+endif()
+string(FIND
+    "${_upscaling_source}"
+    "ResolveVRStartupNativeFallbackAfterPublication"
+    _split_fallback_resolution_position
+)
+if(NOT _split_fallback_resolution_position EQUAL -1)
+    message(FATAL_ERROR
+        "Fallback proof and clear remain split from controller publication"
+    )
+endif()
+
+string(FIND "${_shader_cache_source}" "void ShaderCache::SetEnabled" _shader_toggle_start)
+string(FIND "${_shader_cache_source}" "void ShaderCache::ServicePendingDisable" _shader_toggle_end)
+if(_shader_toggle_start EQUAL -1 OR _shader_toggle_end EQUAL -1 OR
+   _shader_toggle_end LESS_EQUAL _shader_toggle_start)
+    message(FATAL_ERROR "Shader enable transition boundary was not found")
+endif()
+math(EXPR _shader_toggle_length "${_shader_toggle_end} - ${_shader_toggle_start}")
+string(SUBSTRING
+    "${_shader_cache_source}"
+    ${_shader_toggle_start}
+    ${_shader_toggle_length}
+    _shader_toggle
+)
+string(FIND
+    "${_shader_toggle}"
+    "renderScaleAuthorityLock.lock()"
+    _shader_toggle_lock_position
+)
+string(FIND
+    "${_shader_toggle}"
+    "enableRequested.store(false"
+    _shader_disable_store_position
+)
+if(_shader_toggle_lock_position EQUAL -1 OR
+   _shader_disable_store_position EQUAL -1 OR
+   _shader_toggle_lock_position GREATER _shader_disable_store_position)
+    message(FATAL_ERROR
+        "Shader disable can invalidate Retry admission outside render-scale ownership"
+    )
+endif()
 
 foreach(_action IN ITEMS
     qualification_status

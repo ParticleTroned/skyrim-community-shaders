@@ -20403,20 +20403,36 @@ bool Upscaling::CanRetryVRStartupNativeFallbackFromCSMenu(
 	}
 
 	EnsureRuntimeResolutionStateCurrent();
-	const auto& plan = GetRuntimeResolutionPlan();
 	const auto controller = GetVRRenderScaleTransitionSnapshot();
+	return CanRetryVRStartupNativeFallbackFromSnapshot(controller, false);
+}
+
+bool Upscaling::CanRetryVRStartupNativeFallbackFromSnapshot(
+	const VRRenderScaleTransitionSnapshot& a_controller,
+	bool a_exactPublishedRequest) const
+{
+	if (!REL::Module::IsVR() ||
+		!IsVRStartupNativeFallbackRestartRequired()) {
+		return false;
+	}
+
+	auto* state = globals::state;
+	if (!state)
+		return false;
+
+	const auto& plan = GetRuntimeResolutionPlan();
 	const auto& boot = perfMode.GetBootSnapshot();
 	const uint32_t currentFrame = std::max(state->frameCount, 1u);
 	const bool memorySampleFresh =
-		controller.memory.valid &&
-		controller.memory.systemCommitValid &&
-		controller.memory.sampleFrame != 0 &&
-		currentFrame >= controller.memory.sampleFrame &&
-		currentFrame - controller.memory.sampleFrame <=
+		a_controller.memory.valid &&
+		a_controller.memory.systemCommitValid &&
+		a_controller.memory.sampleFrame != 0 &&
+		currentFrame >= a_controller.memory.sampleFrame &&
+		currentFrame - a_controller.memory.sampleFrame <=
 			kVRStartupNativeFallbackRetryMemorySampleMaxAgeFrames;
 	const bool memoryPressureRecovered =
-		controller.memory.pressure == VRRenderScaleMemoryPressure::Normal ||
-		controller.memory.pressure == VRRenderScaleMemoryPressure::Elevated;
+		a_controller.memory.pressure == VRRenderScaleMemoryPressure::Normal ||
+		a_controller.memory.pressure == VRRenderScaleMemoryPressure::Elevated;
 	const uint32_t lastOutOfMemoryFrame =
 		vrRenderScaleLastOutOfMemoryFailureFrame.load(
 			std::memory_order_acquire);
@@ -20437,15 +20453,16 @@ bool Upscaling::CanRetryVRStartupNativeFallbackFromCSMenu(
 		ClampPositiveDimension(plan.engineRenderSize.y) == expectedHeight &&
 		ClampPositiveDimension(plan.finalOutputSize.x) == expectedWidth &&
 		ClampPositiveDimension(plan.finalOutputSize.y) == expectedHeight;
-	const bool transitionIdle =
-		controller.state == VRRenderScaleTransitionState::Idle &&
-		!controller.postLoadRecovery.active &&
+	const bool transitionReady =
+		(a_exactPublishedRequest ||
+			(a_controller.state == VRRenderScaleTransitionState::Idle &&
+				!HasPendingVRUpscalingTransition())) &&
+		!a_controller.postLoadRecovery.active &&
 		!pendingPerfModeRenderTargetRecreate.load(
 			std::memory_order_acquire) &&
 		!perfModeRenderTargetRecreateInProgress.load(
 			std::memory_order_acquire) &&
-		!postLoadRuntimeResetPending.load(std::memory_order_acquire) &&
-		!HasPendingVRUpscalingTransition();
+		!postLoadRuntimeResetPending.load(std::memory_order_acquire);
 	const bool physicalRecoveryResolved =
 		vrRenderScaleUnresolvedPhysicalMutationEpoch.load(
 			std::memory_order_acquire) == 0 &&
@@ -20469,7 +20486,7 @@ bool Upscaling::CanRetryVRStartupNativeFallbackFromCSMenu(
 			HasCompletedVRWorldFrameAfterLatestLoad(state),
 		.exactNativeRuntimePlan = exactNativeRuntimePlan,
 		.bootLatchAbsent = !boot.valid,
-		.transitionIdle = transitionIdle,
+		.transitionIdle = transitionReady,
 		.physicalRecoveryResolved = physicalRecoveryResolved,
 		.memorySampleFresh = memorySampleFresh,
 		.memoryPressureRecovered = memoryPressureRecovered,
@@ -47265,9 +47282,6 @@ void Upscaling::ServiceDeferredVRRenderScaleRequestAfterPhysicalRecovery()
 			replay->transitionEpoch);
 		return;
 	}
-	ResolveVRStartupNativeFallbackAfterPublication(
-		*replay,
-		retryRevalidated);
 	InvalidateFrameScopedUpscalingState();
 	logger::info(
 		"[VRRenderScale] Replayed deferred request id={} epoch={} origin={} after coherent physical recovery.",
@@ -47469,8 +47483,8 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	if (!deviceReportedLoss && !IsD3DDeviceRemovedResult(a_result))
 		return;
 
-	RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind::DeviceLost);
 	const bool alreadyMarked = submitStageDeviceLost.exchange(true, std::memory_order_acq_rel);
+	RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind::DeviceLost);
 	// Claim the current serialization owner under its mutex. Sampling the owner
 	// first would let a creator publish 0 -> nonzero between the check and claim.
 	SignalVRRenderScaleTerminalFailure(
@@ -50018,9 +50032,6 @@ Upscaling::VRRenderScaleRequestQueueResult Upscaling::QueueVRRenderScaleRequest(
 			magic_enum::enum_name(request.origin));
 		return result;
 	}
-	ResolveVRStartupNativeFallbackAfterPublication(
-		request,
-		explicitStartupFallbackRetryAdmitted);
 	InvalidateFrameScopedUpscalingState();
 	if (ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
@@ -50037,39 +50048,6 @@ Upscaling::VRRenderScaleRequestQueueResult Upscaling::QueueVRRenderScaleRequest(
 			BoolText(request.fsr4RuntimeEnabled));
 	}
 	return result;
-}
-
-bool Upscaling::ResolveVRStartupNativeFallbackAfterPublication(
-	const VRRenderScaleDesiredProfile& a_request,
-	bool a_retryRevalidated)
-{
-	const auto controller = GetVRRenderScaleTransitionSnapshot();
-	if (!VRVendorRelatchPolicy::CanResolveStartupNativeFallback({
-			.action = a_request.startupNativeFallbackControlAction,
-			.requestID = a_request.requestID,
-			.transitionEpoch = a_request.transitionEpoch,
-			.authoritativeRequestID = controller.requested.requestID,
-			.authoritativeTransitionEpoch =
-				controller.requested.transitionEpoch,
-			.latestRequestID = latestVRRenderScaleRequestID.load(
-				std::memory_order_acquire),
-			.retryRevalidated = a_retryRevalidated,
-		}) ||
-		!vrStartupRenderScaleNativeFallbackRestartRequired.exchange(
-			false,
-			std::memory_order_acq_rel)) {
-		return false;
-	}
-
-	logger::info(
-		"[VRRenderScale] Accepted explicit CS-menu {} from the coherent startup native fallback. request={} epoch={}.",
-		a_request.startupNativeFallbackControlAction ==
-				VRVendorRelatchPolicy::StartupNativeFallbackControlAction::ResolveRetry ?
-			"retry after memory recovery" :
-			"Render Scale disable",
-		a_request.requestID,
-		a_request.transitionEpoch);
-	return true;
 }
 
 std::optional<Upscaling::VRRenderScaleDesiredProfile> Upscaling::TakePendingVRRenderScaleRequest()
@@ -52248,6 +52226,10 @@ uint64_t Upscaling::EstimateVRRenderScaleResourceBytes(const VRRenderScaleResour
 bool Upscaling::RecordVRRenderScaleTransitionRequested(
 	const VRRenderScaleDesiredProfile& a_request)
 {
+	if (a_request.startupNativeFallbackControlAction ==
+		VRVendorRelatchPolicy::StartupNativeFallbackControlAction::ResolveRetry) {
+		EnsureRuntimeResolutionStateCurrent();
+	}
 	const auto profile = BuildVRRenderScaleRequestProfile(*this, a_request);
 	std::unique_lock queueLock(
 		perfModeRenderTargetRecreateQueueMutex);
@@ -52303,6 +52285,7 @@ bool Upscaling::RecordVRRenderScaleTransitionRequested(
 	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : a_request.queuedFrame;
 	VRRenderScaleTransitionState previousState;
 	uint64_t revision;
+	bool startupFallbackResolved = false;
 	{
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
 		previousState = vrRenderScaleTransitionController.state;
@@ -52338,6 +52321,8 @@ bool Upscaling::RecordVRRenderScaleTransitionRequested(
 		metrics.peakSystemCommitBytes = vrRenderScaleTransitionController.memory.systemCommitBytes;
 		metrics.peakProcessPrivateUsageBytes = vrRenderScaleTransitionController.memory.processPrivateUsageBytes;
 		metrics.peakRetiredSets = vrRenderScaleTransitionController.retirement.pendingSets;
+		startupFallbackResolved =
+			TryResolveVRStartupNativeFallbackLocked(a_request);
 		revision = ++vrRenderScaleTransitionController.revision;
 	}
 	// The exact-owner transaction ends with coherent controller publication.
@@ -52361,7 +52346,65 @@ bool Upscaling::RecordVRRenderScaleTransitionRequested(
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	RecordVRRenderScalePreparationRequestQueued(a_request);
 #endif
+	if (startupFallbackResolved) {
+		logger::info(
+			"[VRRenderScale] Accepted explicit CS-menu {} from the coherent startup native fallback. request={} epoch={}.",
+			a_request.startupNativeFallbackControlAction ==
+					VRVendorRelatchPolicy::StartupNativeFallbackControlAction::ResolveRetry ?
+				"retry after memory recovery" :
+				"Render Scale disable",
+			a_request.requestID,
+			a_request.transitionEpoch);
+	}
 	return true;
+}
+
+bool Upscaling::TryResolveVRStartupNativeFallbackLocked(
+	const VRRenderScaleDesiredProfile& a_request)
+{
+	const auto& controller = vrRenderScaleTransitionController;
+	const bool exactPublishedRequest =
+		controller.state == VRRenderScaleTransitionState::Requested &&
+		controller.requested.valid &&
+		controller.requested.requestID == a_request.requestID &&
+		controller.requested.transitionEpoch == a_request.transitionEpoch &&
+		latestVRRenderScaleRequestID.load(std::memory_order_acquire) ==
+			a_request.requestID;
+	const bool retryRevalidated =
+		a_request.startupNativeFallbackControlAction !=
+			VRVendorRelatchPolicy::StartupNativeFallbackControlAction::ResolveRetry ||
+		CanRetryVRStartupNativeFallbackFromSnapshot(
+			controller,
+			exactPublishedRequest);
+	VRVendorRelatchPolicy::StartupNativeFallbackAuthorityState authority{
+		.publication = {
+			.action = a_request.startupNativeFallbackControlAction,
+			.requestID = a_request.requestID,
+			.transitionEpoch = a_request.transitionEpoch,
+			.authoritativeRequestValid = controller.requested.valid,
+			.authoritativeStateRequested =
+				controller.state == VRRenderScaleTransitionState::Requested,
+			.authoritativeRequestID = controller.requested.requestID,
+			.authoritativeTransitionEpoch =
+				controller.requested.transitionEpoch,
+			.latestRequestID = latestVRRenderScaleRequestID.load(
+				std::memory_order_acquire),
+			.retryRevalidated = retryRevalidated,
+		},
+		.fallbackActive = vrStartupRenderScaleNativeFallbackRestartRequired.load(std::memory_order_acquire),
+	};
+	if (!VRVendorRelatchPolicy::TryResolveStartupNativeFallback(authority)) {
+		return false;
+	}
+
+	// Queue, request, and controller ownership remain held across the proof and
+	// one-use clear, so no invalidating publication can split this transaction.
+	bool fallbackActive = true;
+	return vrStartupRenderScaleNativeFallbackRestartRequired.compare_exchange_strong(
+		fallbackActive,
+		false,
+		std::memory_order_acq_rel,
+		std::memory_order_acquire);
 }
 
 uint64_t Upscaling::AllocateVRRenderScaleTransitionEpoch()
@@ -53087,13 +53130,18 @@ void Upscaling::RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind a_
 {
 	if (a_kind == VRRenderScaleFailureKind::None)
 		return;
-	if (a_kind == VRRenderScaleFailureKind::OutOfMemory) {
-		const uint32_t failureFrame = globals::state ? std::max(globals::state->frameCount, 1u) : 1u;
-		vrRenderScaleLastOutOfMemoryFailureFrame.store(failureFrame, std::memory_order_release);
-	}
 
 	{
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		if (a_kind == VRRenderScaleFailureKind::OutOfMemory) {
+			const uint32_t failureFrame =
+				globals::state ?
+					std::max(globals::state->frameCount, 1u) :
+					1u;
+			vrRenderScaleLastOutOfMemoryFailureFrame.store(
+				failureFrame,
+				std::memory_order_release);
+		}
 		auto& metrics = vrRenderScaleTransitionController.metrics.current;
 		if (metrics.valid) {
 			const auto increment = [](uint32_t& a_value) {

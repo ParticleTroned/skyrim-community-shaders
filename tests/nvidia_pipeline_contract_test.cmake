@@ -84,9 +84,9 @@ foreach(_required IN ITEMS
     "producerFenceValue = fenceSequence.Next()"
     "ResolveBackendBufferCount"
     "ProxyLifecycleGate lifecycle"
-    "lifecycle.BeginRetirement()"
+    "lifecycle.BeginRetirement(upscaling.d3d12SwapChainActive)"
     "lifecycle.CompleteRetirement(false,"
-    "retaining every dependent D3D resource"
+    "retained the published generation through process exit"
     "DXGI_PRESENT_TEST"
     "DXGI_ERROR_WAS_STILL_DRAWING"
     "return owner.GetDesc(pDesc)"
@@ -95,10 +95,75 @@ foreach(_required IN ITEMS
     "ResetFrameGenerationRenderContext()"
     "SetupFrameGeneration()"
     "publicFormat != publicSwapChainDesc.BufferDesc.Format"
+    "WaitForAllocatorSlot"
+    "allocatorRetirements.ClassifyReuse"
+    "allocatorRetirements.MarkSubmitted"
+    "ClassifyResizeBuffers1Admission"
+    "NvidiaComIdentity::IsSame(presentQueue[0], commandQueue.get())"
+    "return owner.GetFullscreenState(pFullscreen, ppTarget)"
+    "desc->RefreshRate = publicSwapChainDesc.BufferDesc.RefreshRate"
 )
     string(FIND "${_swapchain_header}${_swapchain}" "${_required}" _position)
     if(_position EQUAL -1)
         message(FATAL_ERROR "DXGI frame-generation proxy is missing contract behavior: ${_required}")
+    endif()
+endforeach()
+
+string(FIND "${_swapchain}" "HRESULT DX12SwapChain::PresentInternal" _present_start)
+string(FIND "${_swapchain}" "HRESULT DX12SwapChain::GetDevice" _present_end)
+math(EXPR _present_length "${_present_end} - ${_present_start}")
+string(SUBSTRING "${_swapchain}" ${_present_start} ${_present_length} _present_body)
+string(FIND "${_present_body}" "WaitForAllocatorSlot(" _allocator_wait)
+string(FIND "${_present_body}" "commandAllocators[frameIndex]->Reset()" _allocator_reset)
+string(FIND "${_present_body}" "commandQueue->Signal(d3d12Fence.get(), *consumerFenceValue)" _retirement_signal)
+string(FIND "${_present_body}" "allocatorRetirements.MarkSubmitted" _retirement_mark)
+if(_allocator_wait EQUAL -1 OR _allocator_reset EQUAL -1 OR
+   _retirement_signal EQUAL -1 OR _retirement_mark EQUAL -1 OR
+   _allocator_wait GREATER _allocator_reset OR
+   _retirement_mark LESS _retirement_signal)
+    message(FATAL_ERROR
+        "Present must prove allocator retirement before reset and track each submission"
+    )
+endif()
+
+string(FIND "${_swapchain}" "void DX12SwapChain::OnProxyDestroyed" _retirement_start)
+string(FIND "${_swapchain}" "DX12SwapChain::GetLifecycleState" _retirement_end)
+math(EXPR _retirement_length "${_retirement_end} - ${_retirement_start}")
+string(SUBSTRING "${_swapchain}" ${_retirement_start} ${_retirement_length} _retirement_body)
+foreach(_forbidden_retirement_action IN ITEMS
+    "ResetResources()"
+    "ResetFrameGenerationContexts()"
+)
+    string(FIND
+        "${_retirement_body}"
+        "${_forbidden_retirement_action}"
+        _forbidden_retirement_position
+    )
+    if(NOT _forbidden_retirement_position EQUAL -1)
+        message(FATAL_ERROR
+            "Published final release must retain reader-owned state: ${_forbidden_retirement_action}"
+        )
+    endif()
+endforeach()
+
+string(FIND "${_swapchain}" "HRESULT DX12SwapChain::ResizeBuffers1(" _resize1_start)
+string(FIND "${_swapchain}" "HRESULT DX12SwapChain::RefreshAfterResize" _resize1_end)
+math(EXPR _resize1_length "${_resize1_end} - ${_resize1_start}")
+string(SUBSTRING "${_swapchain}" ${_resize1_start} ${_resize1_length} _resize1_body)
+string(FIND "${_resize1_body}" "ClassifyResizeBuffers1Admission(" _resize1_admission)
+string(FIND "${_resize1_body}" "ResetFrameGenerationRenderContext()" _resize1_teardown)
+if(_resize1_admission EQUAL -1 OR _resize1_teardown EQUAL -1 OR
+   _resize1_admission GREATER _resize1_teardown)
+    message(FATAL_ERROR "ResizeBuffers1 must reject unsupported arrays before mutation")
+endif()
+
+foreach(_forbidden_mode_reset IN ITEMS
+    "publicSwapChainDesc.BufferDesc.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED"
+    "publicSwapChainDesc.BufferDesc.Scaling = DXGI_MODE_SCALING_UNSPECIFIED"
+)
+    string(FIND "${_swapchain}" "${_forbidden_mode_reset}" _mode_reset_position)
+    if(NOT _mode_reset_position EQUAL -1)
+        message(FATAL_ERROR "Buffer resize must preserve public target-mode state")
     endif()
 endforeach()
 

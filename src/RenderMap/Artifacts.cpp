@@ -157,7 +157,7 @@ namespace CSX::RenderMap
 				{ "schema", {
 								{ "name", "csx.render-event" },
 								{ "major", 1 },
-								{ "minor", 16 },
+								{ "minor", 17 },
 								{ "producerVersion", "collector-v1" },
 							} },
 				{ "captureId", a_capture.descriptor.captureId },

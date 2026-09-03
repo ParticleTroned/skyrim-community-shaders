@@ -1498,12 +1498,13 @@ namespace
 		config.maxBytes = Collector::RequiredStorageBytes(config);
 		Check(runtime.StartCapture(config) == StartResult::kStarted,
 			"failed FinishCommandList capture did not start");
-		runtime.RecordFinishCommandList(0x2100, 0, false, static_cast<std::int32_t>(0x80004005u));
+		runtime.RecordFinishCommandList(0x2100, 0xDEAD, false, static_cast<std::int32_t>(0x80004005u));
 		auto failed = runtime.StopCapture();
 		Check(failed.has_value(), "failed FinishCommandList capture did not stop");
 		const auto finish = std::find_if(failed->events.begin(), failed->events.end(),
 			[](const EventRecord& a_event) { return a_event.kind == EventKind::kFinishCommandList; });
 		Check(finish != failed->events.end() && finish->payload.words[1] == 0 &&
+				  finish->payload.words[2] == 0 &&
 				  static_cast<std::int32_t>(finish->payload.words[4]) < 0 &&
 				  finish->payload.words[5] == 0,
 			"failed FinishCommandList did not preserve its no-list failure outcome");

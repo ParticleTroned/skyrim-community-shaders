@@ -1,0 +1,184 @@
+{
+    "valid": [
+        {
+            "name": "deferred-dispatch",
+            "type": "dispatch",
+            "observationDomain": "command-recording",
+            "deviceContextObservationId": "obs-device-context-1-g1",
+            "commandRecordingObservationId": "obs-command-recording-2-g1",
+            "payload": {
+                "schema": "dispatch-call-v2",
+                "operation": "dispatch",
+                "deviceContextPointer": "0x100",
+                "computeShaderObservationId": null,
+                "arguments": {
+                    "threadGroupCountX": 1,
+                    "threadGroupCountY": 1,
+                    "threadGroupCountZ": 1
+                }
+            }
+        },
+        {
+            "name": "failed-finish-known-recording",
+            "type": "finish-command-list",
+            "observationDomain": "command-recording",
+            "deviceContextObservationId": "obs-device-context-1-g1",
+            "commandRecordingObservationId": "obs-command-recording-2-g1",
+            "payload": {
+                "schema": "finish-command-list-v2",
+                "commandRecordingObservationId": "obs-command-recording-2-g1",
+                "commandListObservationId": null,
+                "commandListPointer": null,
+                "restoreDeferredContextState": true,
+                "hresult": -2147467259,
+                "succeeded": false,
+                "sourceRecordingComplete": true,
+                "sourceRecordingIncompleteReasons": []
+            }
+        },
+        {
+            "name": "failed-finish-missing-recording",
+            "type": "finish-command-list",
+            "observationDomain": "unknown",
+            "deviceContextObservationId": "obs-device-context-1-g1",
+            "commandRecordingObservationId": null,
+            "payload": {
+                "schema": "finish-command-list-v2",
+                "commandRecordingObservationId": null,
+                "commandListObservationId": null,
+                "commandListPointer": null,
+                "restoreDeferredContextState": false,
+                "hresult": -2147467259,
+                "succeeded": false,
+                "sourceRecordingComplete": false,
+                "sourceRecordingIncompleteReasons": ["declaration-unavailable"]
+            }
+        },
+        {
+            "name": "successful-finish-dropped-list-declaration",
+            "type": "finish-command-list",
+            "observationDomain": "command-recording",
+            "deviceContextObservationId": "obs-device-context-1-g1",
+            "commandRecordingObservationId": "obs-command-recording-2-g1",
+            "payload": {
+                "schema": "finish-command-list-v2",
+                "commandRecordingObservationId": "obs-command-recording-2-g1",
+                "commandListObservationId": null,
+                "commandListPointer": "0x201",
+                "restoreDeferredContextState": true,
+                "hresult": 0,
+                "succeeded": true,
+                "sourceRecordingComplete": false,
+                "sourceRecordingIncompleteReasons": ["event-not-recorded"]
+            }
+        },
+        {
+            "name": "first-seen-command-list",
+            "type": "command-list-observed",
+            "observationDomain": "cpu-call",
+            "deviceContextObservationId": "obs-device-context-1-g1",
+            "commandRecordingObservationId": null,
+            "payload": {
+                "schema": "command-list-observation-v2",
+                "commandListObservationId": "obs-command-list-20-g1",
+                "commandListPointer": "0x202",
+                "pointerGeneration": 1,
+                "sourceDeviceContextObservationId": null,
+                "sourceCommandRecordingObservationId": null,
+                "sourceRecordingComplete": false,
+                "sourceRecordingIncompleteReasons": ["declaration-unavailable"]
+            }
+        }
+    ],
+    "invalid": [
+        {
+            "name": "recording-domain-draw-missing-identities",
+            "type": "draw",
+            "observationDomain": "command-recording",
+            "deviceContextObservationId": null,
+            "commandRecordingObservationId": null,
+            "payload": {
+                "schema": "draw-call-v4",
+                "operation": "draw",
+                "deviceContextPointer": "0x100",
+                "vertexShaderObservationId": null,
+                "pixelShaderObservationId": null,
+                "targetBindingObservationId": null,
+                "submissionObservationId": null,
+                "preparedGeometrySetupObservationId": null,
+                "arguments": { "vertexCount": 3, "startVertexLocation": 0 }
+            }
+        },
+        {
+            "name": "recording-domain-dispatch-missing-identities",
+            "type": "dispatch",
+            "observationDomain": "command-recording",
+            "deviceContextObservationId": null,
+            "commandRecordingObservationId": null,
+            "payload": {
+                "schema": "dispatch-call-v2",
+                "operation": "dispatch",
+                "deviceContextPointer": "0x100",
+                "computeShaderObservationId": null,
+                "arguments": {
+                    "threadGroupCountX": 1,
+                    "threadGroupCountY": 1,
+                    "threadGroupCountZ": 1
+                }
+            }
+        },
+        {
+            "name": "missing-recording-claimed-complete",
+            "type": "finish-command-list",
+            "observationDomain": "unknown",
+            "deviceContextObservationId": "obs-device-context-1-g1",
+            "commandRecordingObservationId": null,
+            "payload": {
+                "schema": "finish-command-list-v2",
+                "commandRecordingObservationId": null,
+                "commandListObservationId": null,
+                "commandListPointer": null,
+                "restoreDeferredContextState": true,
+                "hresult": -2147467259,
+                "succeeded": false,
+                "sourceRecordingComplete": true,
+                "sourceRecordingIncompleteReasons": []
+            }
+        },
+        {
+            "name": "failed-finish-names-list",
+            "type": "finish-command-list",
+            "observationDomain": "command-recording",
+            "deviceContextObservationId": "obs-device-context-1-g1",
+            "commandRecordingObservationId": "obs-command-recording-2-g1",
+            "payload": {
+                "schema": "finish-command-list-v2",
+                "commandRecordingObservationId": "obs-command-recording-2-g1",
+                "commandListObservationId": "obs-command-list-21-g1",
+                "commandListPointer": "0x203",
+                "restoreDeferredContextState": false,
+                "hresult": -2147467259,
+                "succeeded": false,
+                "sourceRecordingComplete": true,
+                "sourceRecordingIncompleteReasons": []
+            }
+        },
+        {
+            "name": "incomplete-recording-without-reason",
+            "type": "command-list-observed",
+            "observationDomain": "cpu-call",
+            "deviceContextObservationId": "obs-device-context-1-g1",
+            "commandRecordingObservationId": null,
+            "payload": {
+                "schema": "command-list-observation-v2",
+                "commandListObservationId": "obs-command-list-22-g1",
+                "commandListPointer": "0x204",
+                "pointerGeneration": 1,
+                "sourceDeviceContextObservationId": null,
+                "sourceCommandRecordingObservationId": null,
+                "sourceRecordingComplete": false,
+                "sourceRecordingIncompleteReasons": []
+            }
+        }
+    ]
+}

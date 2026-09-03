@@ -35,6 +35,13 @@ Depth-culling events are observations of the existing upstream behaviour.
 -   focused collector, runtime, controller, and offline graph tests.
 -   runtime capture-manifest, render-event, and derived render-graph schemas.
 
+Render-event schema revision 1.17 defines fail-closed deferred-command
+semantics: command-recording draw/dispatch events require typed recording and
+context identities, while missing or contradictory evidence yields explicit
+gaps rather than borrowing immediate-context bindings. It also standardizes the
+nullable missing-recording `FinishCommandList` form and forbids failed finishes
+from naming a materialized command list.
+
 ## Deliberately separate
 
 The DevBench registration adapter is reviewed separately because it is the

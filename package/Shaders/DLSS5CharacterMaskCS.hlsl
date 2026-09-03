@@ -1,7 +1,7 @@
 #include "Common/CharacterCategoryMask.hlsli"
 
-// Resolves the frozen combined-stereo provenance tuple into one exact eye-local
-// Feature 18 control mask. Eligibility rectangles are visual-mask policy only;
+// Resolves the frozen active-stereo provenance tuple into one exact eye-local
+// CSX output-selection mask. Eligibility rectangles are visual-mask policy only;
 // they do not claim or request reduced provider inference dimensions.
 
 cbuffer CharacterMaskCB : register(b0)
@@ -20,7 +20,7 @@ cbuffer CharacterMaskCB : register(b0)
 Texture2D<unorm float2> AuthoredTuple : register(t0);
 Texture2D<float> AuthoredDepth : register(t1);
 Texture2D<float> CurrentDepth : register(t2);
-RWTexture2D<unorm float> ControlMask : register(u0);
+RWTexture2D<unorm float> CharacterSelectionMask : register(u0);
 RWByteAddressBuffer DiagnosticCounters : register(u1);
 groupshared uint GroupCounters[8];
 
@@ -92,13 +92,24 @@ float LinearizeDepth(float rawDepth)
 
 bool IsAuthoredSurfaceVisible(int2 localSourcePixel, out float currentDepth)
 {
-	const float authoredDepth = LinearizeDepth(ReadAuthoredDepth(localSourcePixel));
+	const bool visibilityRejectionEnabled = VisibilityOptions.y >= 0.5;
+	const bool depthFeatherEnabled = Options.w != 0 && Options.z != 0;
+	if (!visibilityRejectionEnabled && !depthFeatherEnabled) {
+		currentDepth = 0.0;
+		return true;
+	}
+
 	currentDepth = LinearizeDepth(ReadCurrentDepth(localSourcePixel));
+	if (!visibilityRejectionEnabled)
+		return true;
+
+	const float authoredDepth = LinearizeDepth(ReadAuthoredDepth(localSourcePixel));
 	const float tolerance = max(
 		1.0,
 		max(abs(authoredDepth), abs(currentDepth)) * VisibilityOptions.x);
-	return VisibilityOptions.y < 0.5 ||
-	       abs(authoredDepth - currentDepth) <= tolerance;
+	// Later depth may legitimately be farther (cleared or transparent). Reject
+	// only a materially closer surface that now occludes the authored category.
+	return currentDepth + tolerance >= authoredDepth;
 }
 
 void CountCategory(uint category, uint firstCounter)
@@ -118,6 +129,12 @@ void CountCategory(uint category, uint firstCounter)
 			GroupCounters[groupIndex] = 0u;
 		GroupMemoryBarrierWithGroupSync();
 	}
+	const uint2 inputSize = uint2(SourceCrop.w, Options.x);
+	if (measureCoverage && all(dispatchThreadId.xy < inputSize)) {
+		CountCategory(
+			ReadAuthoredCategory(int2(dispatchThreadId.xy)),
+			AuthoredFacePixels);
+	}
 
 	const uint2 outputSize = OutputAndSourceSize.xy;
 	if (all(dispatchThreadId.xy < outputSize)) {
@@ -127,9 +144,6 @@ void CountCategory(uint category, uint firstCounter)
 			outputUv * float2(SourceCrop.w, Options.x) - 0.5 - Jitter.xy;
 		const int2 sourcePixel = int2(floor(sourcePosition + 0.5));
 		const uint centerCategory = ReadAuthoredCategory(sourcePixel);
-		if (measureCoverage)
-			CountCategory(centerCategory, AuthoredFacePixels);
-
 		float mask = 0.0;
 		if (IsInsideEligibilityRegion(outputPixel)) {
 			float centerDepth = 0.0;
@@ -189,7 +203,7 @@ void CountCategory(uint category, uint firstCounter)
 		else if (testMode == 4)
 			mask = 1.0 - mask;
 		mask = saturate(mask);
-		ControlMask[dispatchThreadId.xy] = mask;
+		CharacterSelectionMask[dispatchThreadId.xy] = mask;
 		if (measureCoverage && mask > (0.5 / 255.0)) {
 			uint ignored;
 			InterlockedAdd(GroupCounters[MaskPixels], 1u, ignored);

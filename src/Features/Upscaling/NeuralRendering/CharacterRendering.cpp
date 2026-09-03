@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -17,6 +18,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -64,6 +66,16 @@ namespace NeuralRendering
 		{
 			if (a_value != std::numeric_limits<std::uint32_t>::max())
 				++a_value;
+		}
+
+		template <class T>
+		void AtomicIncrement(std::atomic<T>& a_value) noexcept
+		{
+			auto current = a_value.load(std::memory_order_relaxed);
+			while (current != std::numeric_limits<T>::max() &&
+				   !a_value.compare_exchange_weak(
+					   current, current + 1, std::memory_order_relaxed)) {
+			}
 		}
 
 		bool SameIdentity(IUnknown* a_left, IUnknown* a_right) noexcept
@@ -314,6 +326,8 @@ namespace NeuralRendering
 			std::array<CharacterRect, 2> selectedRects{};
 			float nearestFaceDistanceUnits =
 				std::numeric_limits<float>::max();
+			float nearestSelectedDistanceUnits =
+				std::numeric_limits<float>::max();
 		};
 
 		struct ProjectionKey
@@ -337,6 +351,7 @@ namespace NeuralRendering
 			std::uint32_t height = 0;
 			std::uint64_t pixelCount = 0;
 			std::uint64_t diagnosticKey = 0;
+			std::uint64_t serial = 0;
 			bool pending = false;
 		};
 
@@ -378,9 +393,19 @@ namespace NeuralRendering
 			std::array<std::uint64_t, 3> visibleCategoryPixels{};
 			std::uint64_t visibilityRejectedPixels = 0;
 			std::uint64_t maskDiagnosticKey = 0;
+			std::uint64_t maskCoverageSerial = 0;
+			std::uint64_t lastCoverageRequestPolicyKey = 0;
+			std::uint32_t lastCoverageRequestFrame =
+				std::numeric_limits<std::uint32_t>::max();
 			float maskCoveragePercent = 0.0f;
 			bool maskCoverageReady = false;
+			bool coverageRequestIssued = false;
+			bool zeroCoverageBypassResolved = false;
 			bool zeroCoverageBypassed = false;
+			CharacterFeature18Disposition feature18Disposition =
+				CharacterFeature18Disposition::Unresolved;
+			bool zeroCoverageCpuProven = false;
+			bool zeroCoverageSampleReused = false;
 			bool requiresEvaluation = true;
 			bool prepared = false;
 		};
@@ -402,9 +427,12 @@ namespace NeuralRendering
 		struct ProjectedPlan
 		{
 			std::vector<CharacterRect> regions;
+			std::uint64_t eligibilitySignature = 0;
 			std::uint32_t visibleFaces = 0;
 			std::uint32_t visibleCharacters = 0;
 			std::uint32_t droppedCharacters = 0;
+			bool projectionUncertain = false;
+			bool fullEyeEligibilityFallback = false;
 		};
 
 		State()
@@ -424,7 +452,73 @@ namespace NeuralRendering
 			snapshot_.observationFrame = a_frame;
 			snapshot_.currentObservations = 0;
 			snapshot_.currentCategoryObservations = {};
-			snapshot_.currentClassificationRejections = {};
+		}
+
+		void RecordClassificationRejection(
+			std::uint32_t a_frame,
+			std::size_t a_index)
+		{
+			if (a_index >= currentClassificationRejections_.size())
+				return;
+			std::scoped_lock lock(rejectionFrameMutex_);
+			const auto currentFrame = rejectionFrame_.load(
+				std::memory_order_relaxed);
+			if (currentFrame != a_frame) {
+				// A delayed render-worker report must never erase a newer frame.
+				if (currentFrame != std::numeric_limits<std::uint32_t>::max() &&
+					static_cast<std::int32_t>(a_frame - currentFrame) <= 0) {
+					return;
+				}
+				for (auto& count : currentClassificationRejections_)
+					count.store(0, std::memory_order_relaxed);
+				rejectionFrame_.store(a_frame, std::memory_order_relaxed);
+			}
+			AtomicIncrement(currentClassificationRejections_[a_index]);
+			AtomicIncrement(classificationRejections_[a_index]);
+		}
+
+		void ResetClassificationRejections()
+		{
+			std::scoped_lock lock(rejectionFrameMutex_);
+			rejectionFrame_.store(
+				std::numeric_limits<std::uint32_t>::max(),
+				std::memory_order_release);
+			for (auto& count : currentClassificationRejections_)
+				count.store(0, std::memory_order_relaxed);
+			for (auto& count : classificationRejections_)
+				count.store(0, std::memory_order_relaxed);
+		}
+
+		void PublishClassificationRejections(CharacterSnapshot& a_snapshot) const
+		{
+			std::scoped_lock lock(rejectionFrameMutex_);
+			const auto rejectionFrame = rejectionFrame_.load(std::memory_order_acquire);
+			for (std::size_t index = 0;
+				index < currentClassificationRejections_.size(); ++index) {
+				a_snapshot.currentClassificationRejections[index] =
+					rejectionFrame == a_snapshot.observationFrame ?
+						currentClassificationRejections_[index].load(
+							std::memory_order_relaxed) :
+						0;
+				a_snapshot.classificationRejections[index] =
+					classificationRejections_[index].load(std::memory_order_relaxed);
+			}
+		}
+
+		void InvalidateCaptureMetadata() noexcept
+		{
+			capturedFrame_ = std::numeric_limits<std::uint32_t>::max();
+			capturedCategoriesEmpty_ = false;
+			capturedEyeWidth_ = 0;
+			capturedHeight_ = 0;
+			capturedEnabledCategoryMask_ = 0;
+			capturedJitterX_ = 0.0f;
+			capturedJitterY_ = 0.0f;
+			lastReadbackPollFrame_ =
+				std::numeric_limits<std::uint32_t>::max();
+			snapshot_.categoryCaptureFrame = capturedFrame_;
+			snapshot_.categoryCaptureReady = false;
+			snapshot_.categoryCaptureEmpty = false;
 		}
 
 		void InvalidateProjectionCache() noexcept
@@ -441,6 +535,10 @@ namespace NeuralRendering
 			for (auto& slot : slots_) {
 				slot.prepared = false;
 				slot.prepareKey = {};
+				slot.zeroCoverageBypassResolved = false;
+				slot.zeroCoverageBypassed = false;
+				slot.feature18Disposition =
+					CharacterFeature18Disposition::Unresolved;
 			}
 		}
 
@@ -469,11 +567,19 @@ namespace NeuralRendering
 			if (a_featureSlot >= entry->widths.size())
 				return;
 			const auto slotBit = 1u << a_featureSlot;
+			entry->resolutionRecordedSlotMask &= ~slotBit;
+			entry->evaluatedSlotMask &= ~slotBit;
+			entry->successfulSlotMask &= ~slotBit;
+			entry->bypassedSlotMask &= ~slotBit;
+			entry->abortedSlotMask &= ~slotBit;
 			entry->preparedSlotMask |= slotBit;
-			if (a_requiresEvaluation)
+			if (a_requiresEvaluation) {
 				entry->evaluationRequiredSlotMask |= slotBit;
-			else
+				entry->bypassRequestedSlotMask &= ~slotBit;
+			} else {
 				entry->evaluationRequiredSlotMask &= ~slotBit;
+				entry->bypassRequestedSlotMask |= slotBit;
+			}
 			entry->widths[a_featureSlot] = a_width;
 			entry->heights[a_featureSlot] = a_height;
 		}
@@ -503,6 +609,12 @@ namespace NeuralRendering
 				const auto slotBit = 1u << a_featureSlot;
 				preparedFrame.preparedSlotMask &= ~slotBit;
 				preparedFrame.evaluationRequiredSlotMask &= ~slotBit;
+				preparedFrame.bypassRequestedSlotMask &= ~slotBit;
+				preparedFrame.resolutionRecordedSlotMask &= ~slotBit;
+				preparedFrame.evaluatedSlotMask &= ~slotBit;
+				preparedFrame.successfulSlotMask &= ~slotBit;
+				preparedFrame.bypassedSlotMask &= ~slotBit;
+				preparedFrame.abortedSlotMask &= ~slotBit;
 				preparedFrame.widths[a_featureSlot] = 0;
 				preparedFrame.heights[a_featureSlot] = 0;
 				if (preparedFrame.preparedSlotMask == 0u)
@@ -532,9 +644,29 @@ namespace NeuralRendering
 			a_slot.visibleCategoryPixels = {};
 			a_slot.visibilityRejectedPixels = 0;
 			a_slot.maskDiagnosticKey = 0;
+			a_slot.maskCoverageSerial = AllocateCoverageSerial();
+			a_slot.lastCoverageRequestPolicyKey = 0;
+			a_slot.lastCoverageRequestFrame =
+				std::numeric_limits<std::uint32_t>::max();
 			a_slot.maskCoveragePercent = a_slot.maskPixels ? 100.0f : 0.0f;
 			a_slot.maskCoverageReady = true;
+			a_slot.coverageRequestIssued = false;
+			a_slot.zeroCoverageBypassResolved = false;
 			a_slot.zeroCoverageBypassed = false;
+			a_slot.feature18Disposition =
+				CharacterFeature18Disposition::Unresolved;
+			a_slot.zeroCoverageCpuProven = false;
+			a_slot.zeroCoverageSampleReused = false;
+		}
+
+		std::uint64_t AllocateCoverageSerial() noexcept
+		{
+			const auto serial = nextCoverageRequestSerial_;
+			if (nextCoverageRequestSerial_ !=
+				std::numeric_limits<std::uint64_t>::max()) {
+				++nextCoverageRequestSerial_;
+			}
+			return serial;
 		}
 
 		void AdoptDevice(ID3D11Device* a_device)
@@ -547,13 +679,7 @@ namespace NeuralRendering
 				capturedCategoriesSrv_.Reset();
 				capturedDepth_.Reset();
 				capturedDepthSrv_.Reset();
-				capturedFrame_ = std::numeric_limits<std::uint32_t>::max();
-				capturedCategoriesEmpty_ = false;
-				capturedJitterX_ = 0.0f;
-				capturedJitterY_ = 0.0f;
-				snapshot_.categoryCaptureFrame = capturedFrame_;
-				snapshot_.categoryCaptureReady = false;
-				snapshot_.categoryCaptureEmpty = false;
+				InvalidateCaptureMetadata();
 				shaderCompileFailed_ = false;
 				heldRegions_ = {};
 				heldCropValid_ = {};
@@ -581,11 +707,7 @@ namespace NeuralRendering
 
 			capturedCategories_.Reset();
 			capturedCategoriesSrv_.Reset();
-			capturedFrame_ = std::numeric_limits<std::uint32_t>::max();
-			capturedCategoriesEmpty_ = false;
-			snapshot_.categoryCaptureFrame = capturedFrame_;
-			snapshot_.categoryCaptureReady = false;
-			snapshot_.categoryCaptureEmpty = false;
+			InvalidateCaptureMetadata();
 			InvalidatePreparedMasks();
 			D3D11_TEXTURE2D_DESC captureDesc = a_sourceDesc;
 			captureDesc.Usage = D3D11_USAGE_DEFAULT;
@@ -630,11 +752,7 @@ namespace NeuralRendering
 
 			capturedDepth_.Reset();
 			capturedDepthSrv_.Reset();
-			capturedFrame_ = std::numeric_limits<std::uint32_t>::max();
-			capturedCategoriesEmpty_ = false;
-			snapshot_.categoryCaptureFrame = capturedFrame_;
-			snapshot_.categoryCaptureReady = false;
-			snapshot_.categoryCaptureEmpty = false;
+			InvalidateCaptureMetadata();
 			InvalidatePreparedMasks();
 			D3D11_TEXTURE2D_DESC captureDesc = a_sourceDesc;
 			captureDesc.Usage = D3D11_USAGE_DEFAULT;
@@ -816,7 +934,7 @@ namespace NeuralRendering
 				return false;
 			}
 			const auto baseName = std::format(
-				"DLSS5CharacterRendering::ControlMaskSlot{}", a_slotIndex);
+				"DLSS5CharacterRendering::SelectionMaskSlot{}", a_slotIndex);
 			Util::SetResourceName(a_slot.mask.Get(), "%s", baseName.c_str());
 			Util::SetResourceName(a_slot.maskSrv.Get(), "%s SRV", baseName.c_str());
 			Util::SetResourceName(a_slot.maskUav.Get(), "%s UAV", baseName.c_str());
@@ -873,19 +991,16 @@ namespace NeuralRendering
 
 		bool ProjectSphere(
 			const Observation& a_observation,
-			std::uint32_t a_eyeIndex,
+			const RE::NiPoint3& a_eye,
+			const float4x4& a_matrix,
 			std::uint32_t a_width,
 			std::uint32_t a_height,
 			CharacterRect& a_rect) const
 		{
-			const auto eye = Util::GetEyePosition(static_cast<int>(a_eyeIndex));
-			const auto matrix = globals::game::frameBufferCached
-			                        .GetCameraViewProjUnjittered(a_eyeIndex)
-			                        .Transpose();
 			const float3 relative{
-				a_observation.center.x - eye.x,
-				a_observation.center.y - eye.y,
-				a_observation.center.z - eye.z,
+				a_observation.center.x - a_eye.x,
+				a_observation.center.y - a_eye.y,
+				a_observation.center.z - a_eye.z,
 			};
 			float minX = std::numeric_limits<float>::max();
 			float minY = std::numeric_limits<float>::max();
@@ -902,7 +1017,8 @@ namespace NeuralRendering
 							relative.z + z * a_observation.radius,
 							1.0f,
 						};
-						const auto clip = DirectX::SimpleMath::Vector4::Transform(point, matrix);
+						const auto clip = DirectX::SimpleMath::Vector4::Transform(
+							point, a_matrix);
 						if (!std::isfinite(clip.w))
 							continue;
 						if (clip.w <= 1.0e-4f) {
@@ -925,10 +1041,13 @@ namespace NeuralRendering
 			}
 			if (!projected)
 				return false;
-			// A clipped sphere cannot define a bounded eligibility region without
-			// admitting unrelated actors; near-plane candidates fail closed.
-			if (crossesNearPlane)
-				return false;
+			// Eligibility only bounds CSX's exact semantic mask. Conservatively
+			// cover the eye when a visible bound crosses the near plane so a close
+			// face cannot disappear merely because its projected box is unbounded.
+			if (crossesNearPlane) {
+				a_rect = { .minX = 0, .minY = 0, .maxX = a_width, .maxY = a_height };
+				return true;
+			}
 			if (maxX <= 0.0f || maxY <= 0.0f ||
 				minX >= a_width || minY >= a_height) {
 				return false;
@@ -963,30 +1082,52 @@ namespace NeuralRendering
 			if (observationFrame_ != a_args.frameId)
 				return;
 
-			std::map<std::uint32_t, ProjectedActor> actors;
+			std::unordered_map<std::uint32_t, ProjectedActor> actors;
+			actors.reserve(std::min<std::size_t>(
+				observations_.size(),
+				CharacterPolicy::kMaximumTrackedActorsPerEye));
 			const auto averageEye = Util::GetAverageEyePosition();
+			const std::array<RE::NiPoint3, 2> eyePositions{
+				Util::GetEyePosition(0),
+				Util::GetEyePosition(1),
+			};
+			const std::array<float4x4, 2> eyeMatrices{
+				globals::game::frameBufferCached
+					.GetCameraViewProjUnjittered(0)
+					.Transpose(),
+				globals::game::frameBufferCached
+					.GetCameraViewProjUnjittered(1)
+					.Transpose(),
+			};
 			for (const auto& observation : observations_) {
 				auto& actor = actors[observation.actorFormId];
 				actor.actorFormId = observation.actorFormId;
 				const bool isFace = observation.category == CharacterCategory::Face;
 				const bool isSelected =
 					IsCategoryEnabled(observation.category, a_args.settings);
-				if (isFace) {
+				if (isFace || isSelected) {
 					const float dx = observation.center.x - averageEye.x;
 					const float dy = observation.center.y - averageEye.y;
 					const float dz = observation.center.z - averageEye.z;
 					const float surfaceDistance = std::max(
 						0.0f,
 						std::sqrt(dx * dx + dy * dy + dz * dz) - observation.radius);
-					actor.nearestFaceDistanceUnits = std::min(
-						actor.nearestFaceDistanceUnits, surfaceDistance);
+					if (isFace) {
+						actor.nearestFaceDistanceUnits = std::min(
+							actor.nearestFaceDistanceUnits, surfaceDistance);
+					}
+					if (isSelected) {
+						actor.nearestSelectedDistanceUnits = std::min(
+							actor.nearestSelectedDistanceUnits, surfaceDistance);
+					}
 				}
 				if (!isFace && !isSelected)
 					continue;
 				for (std::uint32_t eye = 0; eye < 2; ++eye) {
 					CharacterRect projected{};
 					if (!ProjectSphere(
-							observation, eye, key.width, key.height, projected)) {
+							observation, eyePositions[eye], eyeMatrices[eye],
+							key.width, key.height, projected)) {
 						continue;
 					}
 					if (isFace) {
@@ -1004,6 +1145,8 @@ namespace NeuralRendering
 				(void)actorFormId;
 				projectedActors_.push_back(std::move(actor));
 			}
+			std::ranges::sort(
+				projectedActors_, {}, &ProjectedActor::actorFormId);
 		}
 
 		ProjectedPlan BuildPlan(const CharacterMaskPrepareArgs& a_args)
@@ -1025,7 +1168,10 @@ namespace NeuralRendering
 			for (const auto& actor : projectedActors_) {
 				const auto& faceRect = actor.faceRects[a_args.eyeIndex];
 				const auto& actorRect = actor.selectedRects[a_args.eyeIndex];
-				if (!faceRect.IsValid() || !actorRect.IsValid()) {
+				if (!actorRect.IsValid()) {
+					result.projectionUncertain =
+						result.projectionUncertain ||
+						actor.selectedRects[a_args.eyeIndex ^ 1u].IsValid();
 					held.erase(actor.actorFormId);
 					continue;
 				}
@@ -1075,26 +1221,37 @@ namespace NeuralRendering
 				currentlyProjected.insert(actor.actorFormId);
 
 				std::uint32_t stereoMaximumSize = 0;
-				for (const auto& stereoFaceRect : actor.faceRects) {
-					if (!stereoFaceRect.IsValid())
+				const bool hasFaceAnchor = faceRect.IsValid();
+				const auto& stereoAnchors = hasFaceAnchor ?
+				                                actor.faceRects :
+				                                actor.selectedRects;
+				for (const auto& stereoAnchor : stereoAnchors) {
+					if (!stereoAnchor.IsValid())
 						continue;
 					stereoMaximumSize = std::max(
 						stereoMaximumSize,
 						std::max(
-							stereoFaceRect.maxX - stereoFaceRect.minX,
-							stereoFaceRect.maxY - stereoFaceRect.minY));
+							stereoAnchor.maxX - stereoAnchor.minX,
+							stereoAnchor.maxY - stereoAnchor.minY));
 				}
+				const float nearestDistanceUnits = hasFaceAnchor ?
+				                                       actor.nearestFaceDistanceUnits :
+				                                       actor.nearestSelectedDistanceUnits;
 				const bool eligible =
-					Util::Units::GameUnitsToMeters(actor.nearestFaceDistanceUnits) <=
+					std::isfinite(nearestDistanceUnits) &&
+					Util::Units::GameUnitsToMeters(nearestDistanceUnits) <=
 						a_args.settings.maximumDistanceMeters &&
 					stereoMaximumSize >= a_args.settings.minimumFacePixelSize;
 				if (eligible) {
-					++result.visibleFaces;
+					if (hasFaceAnchor)
+						++result.visibleFaces;
 					++result.visibleCharacters;
 					held[actor.actorFormId] = {
 						.rect = local,
 						.lastSeenFrame = a_args.frameId,
-						.facePriority = faceRect.Area(),
+						.facePriority = hasFaceAnchor ?
+						                    faceRect.Area() :
+						                    actorRect.Area(),
 					};
 					continue;
 				}
@@ -1108,7 +1265,9 @@ namespace NeuralRendering
 					held.erase(retained);
 				} else {
 					retained->second.rect = local;
-					retained->second.facePriority = faceRect.Area();
+					retained->second.facePriority = hasFaceAnchor ?
+					                                    faceRect.Area() :
+					                                    actorRect.Area();
 				}
 			}
 
@@ -1138,6 +1297,16 @@ namespace NeuralRendering
 					regions.size() - CharacterPolicy::kMaximumTrackedActorsPerEye);
 				regions.resize(CharacterPolicy::kMaximumTrackedActorsPerEye);
 			}
+			std::uint64_t eligibilityXor = 0;
+			std::uint64_t eligibilitySum = 0;
+			for (const auto& region : regions) {
+				const auto actorHash = HashCombine(
+					1469598103934665603ull, region.stableId);
+				eligibilityXor ^= actorHash;
+				eligibilitySum += actorHash;
+			}
+			result.eligibilitySignature = HashCombine(
+				HashCombine(eligibilityXor, eligibilitySum), regions.size());
 			result.droppedCharacters += CharacterRegionPolicy::MergeAndLimit(
 				regions, a_args.settings.maximumRoiRegions);
 			result.regions.reserve(regions.size());
@@ -1146,9 +1315,8 @@ namespace NeuralRendering
 			return result;
 		}
 
-		std::uint64_t BuildDiagnosticKey(
+		std::uint64_t BuildCoverageSamplingPolicyKey(
 			const CharacterMaskPrepareArgs& a_args,
-			const ProjectedPlan& a_plan,
 			std::uint32_t a_sourceEyeWidth,
 			std::uint32_t a_sourceHeight) const noexcept
 		{
@@ -1174,52 +1342,109 @@ namespace NeuralRendering
 			add(a_args.viewportCrop.output.top);
 			add(a_args.viewportCrop.output.right);
 			add(a_args.viewportCrop.output.bottom);
-			add(a_plan.regions.size());
 			return hash;
 		}
 
-		void PollReadbacks(ID3D11DeviceContext* a_context)
+		std::uint64_t BuildDiagnosticKey(
+			const CharacterMaskPrepareArgs& a_args,
+			const ProjectedPlan& a_plan,
+			std::uint32_t a_sourceEyeWidth,
+			std::uint32_t a_sourceHeight) const noexcept
 		{
+			std::uint64_t hash = BuildCoverageSamplingPolicyKey(
+				a_args, a_sourceEyeWidth, a_sourceHeight);
+			auto add = [&](std::uint64_t a_value) {
+				hash = HashCombine(hash, a_value);
+			};
+			add(a_plan.eligibilitySignature);
+			return hash;
+		}
+
+		bool HasFreshZeroAuthoredCoverageSample(
+			const Slot& a_slot,
+			std::uint64_t a_diagnosticKey,
+			std::uint32_t a_frame,
+			const CharacterSettings& a_settings) const noexcept
+		{
+			if (!a_slot.maskCoverageReady ||
+				a_slot.maskDiagnosticKey != a_diagnosticKey) {
+				return false;
+			}
+			for (std::uint32_t category = 1; category <= 3; ++category) {
+				const auto characterCategory =
+					static_cast<CharacterCategory>(category);
+				if (IsCategoryEnabled(characterCategory, a_settings) &&
+					a_slot.authoredCategoryPixels[category - 1u] != 0) {
+					return false;
+				}
+			}
+			const auto age = static_cast<std::int32_t>(
+				a_frame - a_slot.maskCoverageFrame);
+			return age >= 0 &&
+			       static_cast<std::uint32_t>(age) <=
+			           CharacterPolicy::kZeroCoverageReuseFrames;
+		}
+
+		void PollReadbacks(
+			ID3D11DeviceContext* a_context,
+			std::uint32_t a_frame)
+		{
+			if (lastReadbackPollFrame_ == a_frame)
+				return;
+			lastReadbackPollFrame_ = a_frame;
 			for (std::uint32_t slotIndex = 0; slotIndex < slots_.size(); ++slotIndex) {
 				auto& slot = slots_[slotIndex];
 				for (auto& readback : slot.readbacks) {
-					if (!readback.pending ||
-						a_context->GetData(
-							readback.ready.Get(), nullptr, 0,
-							D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK) {
+					if (!readback.pending)
+						continue;
+					const auto queryResult = a_context->GetData(
+						readback.ready.Get(), nullptr, 0,
+						D3D11_ASYNC_GETDATA_DONOTFLUSH);
+					if (queryResult == S_FALSE)
+						continue;
+					if (FAILED(queryResult)) {
+						readback.pending = false;
+						Increment(snapshot_.readbackDrops);
 						continue;
 					}
 					D3D11_MAPPED_SUBRESOURCE mapped{};
-					if (SUCCEEDED(a_context->Map(
-							readback.staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
-						std::array<std::uint32_t, kDiagnosticCounterCount> counters{};
-						std::memcpy(counters.data(), mapped.pData, sizeof(counters));
-						a_context->Unmap(readback.staging.Get(), 0);
-						const bool sampleIsCurrent =
-							!slot.maskCoverageReady ||
-							static_cast<std::int32_t>(
-								readback.frame - slot.maskCoverageFrame) >= 0;
-						if (readback.featureSlot == slotIndex && sampleIsCurrent) {
-							slot.maskCoverageFrame = readback.frame;
-							slot.maskCoverageFeatureSlot = readback.featureSlot;
-							slot.maskCoverageWidth = readback.width;
-							slot.maskCoverageHeight = readback.height;
-							slot.maskPixels = counters[MaskPixels];
-							for (std::size_t category = 0; category < 3; ++category) {
-								slot.authoredCategoryPixels[category] =
-									counters[AuthoredFacePixels + category];
-								slot.visibleCategoryPixels[category] =
-									counters[VisibleFacePixels + category];
-							}
-							slot.visibilityRejectedPixels =
-								counters[VisibilityRejectedPixels];
-							slot.maskDiagnosticKey = readback.diagnosticKey;
-							slot.maskCoveragePercent = readback.pixelCount ?
-							                               100.0f * static_cast<float>(counters[MaskPixels]) /
-							                                   static_cast<float>(readback.pixelCount) :
-							                               0.0f;
-							slot.maskCoverageReady = true;
+					const auto mapResult = a_context->Map(
+						readback.staging.Get(), 0, D3D11_MAP_READ,
+						D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped);
+					if (mapResult == DXGI_ERROR_WAS_STILL_DRAWING)
+						continue;
+					if (FAILED(mapResult)) {
+						readback.pending = false;
+						Increment(snapshot_.readbackDrops);
+						continue;
+					}
+					std::array<std::uint32_t, kDiagnosticCounterCount> counters{};
+					std::memcpy(counters.data(), mapped.pData, sizeof(counters));
+					a_context->Unmap(readback.staging.Get(), 0);
+					const bool sampleIsCurrent =
+						!slot.maskCoverageReady ||
+						readback.serial >= slot.maskCoverageSerial;
+					if (readback.featureSlot == slotIndex && sampleIsCurrent) {
+						slot.maskCoverageFrame = readback.frame;
+						slot.maskCoverageFeatureSlot = readback.featureSlot;
+						slot.maskCoverageWidth = readback.width;
+						slot.maskCoverageHeight = readback.height;
+						slot.maskPixels = counters[MaskPixels];
+						for (std::size_t category = 0; category < 3; ++category) {
+							slot.authoredCategoryPixels[category] =
+								counters[AuthoredFacePixels + category];
+							slot.visibleCategoryPixels[category] =
+								counters[VisibleFacePixels + category];
 						}
+						slot.visibilityRejectedPixels =
+							counters[VisibilityRejectedPixels];
+						slot.maskDiagnosticKey = readback.diagnosticKey;
+						slot.maskCoverageSerial = readback.serial;
+						slot.maskCoveragePercent = readback.pixelCount ?
+						                               100.0f * static_cast<float>(counters[MaskPixels]) /
+						                                   static_cast<float>(readback.pixelCount) :
+						                               0.0f;
+						slot.maskCoverageReady = true;
 					}
 					readback.pending = false;
 				}
@@ -1237,6 +1462,42 @@ namespace NeuralRendering
 		{
 			const auto diagnosticKey = BuildDiagnosticKey(
 				a_args, a_plan, a_sourceEyeWidth, a_sourceHeight);
+			const auto samplingPolicyKey = BuildCoverageSamplingPolicyKey(
+				a_args, a_sourceEyeWidth, a_sourceHeight);
+			const bool samplePending = std::ranges::any_of(
+				a_slot.readbacks,
+				[](const Readback& a_readback) {
+					return a_readback.pending;
+				});
+			const auto requestAge = static_cast<std::int32_t>(
+				a_args.frameId - a_slot.lastCoverageRequestFrame);
+			const bool periodicSampleDue =
+				a_slot.coverageRequestIssued && requestAge >= 0 &&
+				static_cast<std::uint32_t>(requestAge) >=
+					CharacterPolicy::kCoverageSampleIntervalFrames;
+			const bool measurementDue =
+				!samplePending &&
+				(!a_slot.coverageRequestIssued ||
+					a_slot.lastCoverageRequestPolicyKey != samplingPolicyKey ||
+					periodicSampleDue);
+			Readback* coverageReadback = nullptr;
+			if (measurementDue) {
+				for (std::uint32_t offset = 0;
+					offset < a_slot.readbacks.size(); ++offset) {
+					const auto index =
+						(a_slot.nextReadbackIndex + offset) %
+						static_cast<std::uint32_t>(a_slot.readbacks.size());
+					if (!a_slot.readbacks[index].pending) {
+						coverageReadback = &a_slot.readbacks[index];
+						a_slot.nextReadbackIndex =
+							(index + 1u) % static_cast<std::uint32_t>(
+											   a_slot.readbacks.size());
+						break;
+					}
+				}
+				if (!coverageReadback)
+					Increment(snapshot_.readbackDrops);
+			}
 			MaskConstants constants{};
 			constants.outputAndSourceSize[0] = a_args.outputWidth;
 			constants.outputAndSourceSize[1] = a_args.outputHeight;
@@ -1255,14 +1516,7 @@ namespace NeuralRendering
 			constants.featherOptions[0] = a_args.settings.featherDepthThreshold;
 			constants.featherOptions[1] = static_cast<float>(
 				a_args.settings.maskTestMode);
-			const bool measureCoverage =
-				UsesAuthoredMask(a_args.settings.maskTestMode) ||
-				!a_slot.maskCoverageReady ||
-				a_slot.maskDiagnosticKey != diagnosticKey ||
-				a_slot.maskPixels == 0 ||
-				(a_args.frameId + a_args.featureSlot) %
-						CharacterPolicy::kCoverageSampleIntervalFrames ==
-					0;
+			const bool measureCoverage = coverageReadback != nullptr;
 			constants.featherOptions[2] = measureCoverage ? 1.0f : 0.0f;
 			constants.visibilityOptions[0] = kVisibilityDepthThreshold;
 			constants.visibilityOptions[1] =
@@ -1318,6 +1572,7 @@ namespace NeuralRendering
 				0, static_cast<UINT>(srvs.size()), srvs.data());
 			a_args.context->CSSetUnorderedAccessViews(
 				0, static_cast<UINT>(uavs.size()), uavs.data(), nullptr);
+#ifndef NDEBUG
 			std::array<ID3D11ShaderResourceView*, 3> boundSrvs{};
 			std::array<ID3D11UnorderedAccessView*, 2> boundUavs{};
 			a_args.context->CSGetShaderResources(
@@ -1338,11 +1593,16 @@ namespace NeuralRendering
 			}
 			if (!bindingsValid)
 				return false;
+#endif
 			{
 				CS_PROFILE_SCOPE("Upscaling::DLSS5CharacterMask");
+				const auto dispatchWidth = std::max(
+					a_args.outputWidth, a_args.viewportCrop.input.Width());
+				const auto dispatchHeight = std::max(
+					a_args.outputHeight, a_args.viewportCrop.input.Height());
 				a_args.context->Dispatch(
-					(a_args.outputWidth + 7u) / 8u,
-					(a_args.outputHeight + 7u) / 8u,
+					(dispatchWidth + 7u) / 8u,
+					(dispatchHeight + 7u) / 8u,
 					1);
 			}
 
@@ -1350,42 +1610,40 @@ namespace NeuralRendering
 			a_args.context->CSSetUnorderedAccessViews(
 				0, static_cast<UINT>(nullUavs.size()), nullUavs.data(), nullptr);
 			if (measureCoverage) {
-				Readback* readback = nullptr;
-				for (std::uint32_t offset = 0;
-					offset < a_slot.readbacks.size(); ++offset) {
-					const auto index =
-						(a_slot.nextReadbackIndex + offset) %
-						static_cast<std::uint32_t>(a_slot.readbacks.size());
-					if (!a_slot.readbacks[index].pending) {
-						readback = &a_slot.readbacks[index];
-						a_slot.nextReadbackIndex =
-							(index + 1u) %
-							static_cast<std::uint32_t>(a_slot.readbacks.size());
-						break;
-					}
-				}
-				if (readback) {
-					a_args.context->CopyResource(
-						readback->staging.Get(), a_slot.coverageCounter.Get());
-					a_args.context->End(readback->ready.Get());
-					readback->frame = a_args.frameId;
-					readback->eyeIndex = a_args.eyeIndex;
-					readback->featureSlot = a_args.featureSlot;
-					readback->width = a_args.outputWidth;
-					readback->height = a_args.outputHeight;
-					readback->pixelCount =
-						static_cast<std::uint64_t>(a_args.outputWidth) *
-						a_args.outputHeight;
-					readback->diagnosticKey = diagnosticKey;
-					readback->pending = true;
-				} else {
-					Increment(snapshot_.readbackDrops);
-				}
+				a_args.context->CopyResource(
+					coverageReadback->staging.Get(), a_slot.coverageCounter.Get());
+				a_args.context->End(coverageReadback->ready.Get());
+				coverageReadback->frame = a_args.frameId;
+				coverageReadback->eyeIndex = a_args.eyeIndex;
+				coverageReadback->featureSlot = a_args.featureSlot;
+				coverageReadback->width = a_args.outputWidth;
+				coverageReadback->height = a_args.outputHeight;
+				coverageReadback->pixelCount =
+					static_cast<std::uint64_t>(a_args.outputWidth) *
+					a_args.outputHeight;
+				coverageReadback->diagnosticKey = diagnosticKey;
+				coverageReadback->serial = AllocateCoverageSerial();
+				coverageReadback->pending = true;
+				a_slot.lastCoverageRequestPolicyKey = samplingPolicyKey;
+				a_slot.lastCoverageRequestFrame = a_args.frameId;
+				a_slot.coverageRequestIssued = true;
 			}
 			return true;
 		}
 
 		mutable std::mutex mutex_;
+		mutable std::mutex rejectionFrameMutex_;
+		std::atomic<std::uint32_t> rejectionFrame_{
+			std::numeric_limits<std::uint32_t>::max()
+		};
+		std::array<
+			std::atomic<std::uint32_t>,
+			static_cast<std::size_t>(CharacterClassificationRejection::Count)>
+			currentClassificationRejections_{};
+		std::array<
+			std::atomic<std::uint64_t>,
+			static_cast<std::size_t>(CharacterClassificationRejection::Count)>
+			classificationRejections_{};
 		std::vector<Observation> observations_;
 		std::unordered_set<std::uintptr_t> observationKeys_;
 		std::uint32_t observationFrame_ = std::numeric_limits<std::uint32_t>::max();
@@ -1406,8 +1664,14 @@ namespace NeuralRendering
 		ComPtr<ID3D11ShaderResourceView> capturedDepthSrv_;
 		std::uint32_t capturedFrame_ = std::numeric_limits<std::uint32_t>::max();
 		bool capturedCategoriesEmpty_ = false;
+		std::uint32_t capturedEyeWidth_ = 0;
+		std::uint32_t capturedHeight_ = 0;
+		std::uint32_t capturedEnabledCategoryMask_ = 0;
 		float capturedJitterX_ = 0.0f;
 		float capturedJitterY_ = 0.0f;
+		std::uint32_t lastReadbackPollFrame_ =
+			std::numeric_limits<std::uint32_t>::max();
+		std::uint64_t nextCoverageRequestSerial_ = 1;
 		ComPtr<ID3D11Device> device_;
 		bool shaderCompileFailed_ = false;
 		CharacterSnapshot snapshot_{};
@@ -1423,7 +1687,7 @@ namespace NeuralRendering
 
 	CharacterRendering::~CharacterRendering() = default;
 
-	void CharacterRendering::ObserveGeometry(
+	bool CharacterRendering::ObserveGeometry(
 		std::uint32_t a_frame,
 		std::uint32_t a_actorFormId,
 		std::uintptr_t a_geometryIdentity,
@@ -1437,17 +1701,17 @@ namespace NeuralRendering
 			a_category == CharacterCategory::None ||
 			!std::isfinite(a_centerX) || !std::isfinite(a_centerY) ||
 			!std::isfinite(a_centerZ) || !std::isfinite(a_radius) || a_radius <= 0.0f) {
-			return;
+			return false;
 		}
 		try {
 			std::scoped_lock lock(state_->mutex_);
 			state_->BeginObservationFrame(a_frame);
 			if (state_->observationKeys_.contains(a_geometryIdentity))
-				return;
+				return true;
 			if (state_->observations_.size() >=
 				CharacterPolicy::kMaximumObservationsPerFrame) {
 				Increment(state_->snapshot_.observationCapacityDrops);
-				return;
+				return false;
 			}
 			state_->observationKeys_.insert(a_geometryIdentity);
 			state_->observations_.push_back({
@@ -1464,8 +1728,10 @@ namespace NeuralRendering
 				state_->snapshot_.currentCategoryObservations.size()) {
 				Increment(state_->snapshot_.currentCategoryObservations[categoryIndex]);
 			}
+			return true;
 		} catch (...) {
 			// Render-hook observation must not affect the engine draw.
+			return false;
 		}
 	}
 
@@ -1476,11 +1742,8 @@ namespace NeuralRendering
 		if (!state_ || a_reason >= CharacterClassificationRejection::Count)
 			return;
 		try {
-			std::scoped_lock lock(state_->mutex_);
-			state_->BeginObservationFrame(a_frame);
 			const auto index = static_cast<std::size_t>(a_reason);
-			Increment(state_->snapshot_.currentClassificationRejections[index]);
-			Increment(state_->snapshot_.classificationRejections[index]);
+			state_->RecordClassificationRejection(a_frame, index);
 		} catch (...) {
 			// Classification diagnostics must not affect the engine draw.
 		}
@@ -1491,6 +1754,8 @@ namespace NeuralRendering
 		ID3D11DeviceContext* a_context,
 		ID3D11Texture2D* a_categorySource,
 		ID3D11ShaderResourceView* a_depthSource,
+		std::uint32_t a_sourceEyeWidth,
+		std::uint32_t a_sourceHeight,
 		std::uint32_t a_frame,
 		std::uint32_t a_enabledCategoryMask,
 		float a_jitterX,
@@ -1503,24 +1768,30 @@ namespace NeuralRendering
 			Increment(state_->snapshot_.categoryCaptureAttempts);
 			const auto fail = [&](std::string a_detail) {
 				Increment(state_->snapshot_.categoryCaptureFailures);
-				state_->capturedFrame_ = std::numeric_limits<std::uint32_t>::max();
-				state_->capturedCategoriesEmpty_ = false;
-				state_->capturedJitterX_ = 0.0f;
-				state_->capturedJitterY_ = 0.0f;
-				state_->snapshot_.categoryCaptureFrame = state_->capturedFrame_;
-				state_->snapshot_.categoryCaptureReady = false;
-				state_->snapshot_.categoryCaptureEmpty = false;
+				state_->InvalidateCaptureMetadata();
 				state_->InvalidatePreparedMasks();
 				state_->snapshot_.status = "failed";
 				state_->snapshot_.detail = std::move(a_detail);
 				return false;
 			};
 			if (!a_device || !a_context || !a_categorySource || !a_depthSource ||
+				!a_sourceEyeWidth || !a_sourceHeight ||
 				a_frame == std::numeric_limits<std::uint32_t>::max() ||
 				(a_enabledCategoryMask & ~0xEu) != 0 ||
 				!std::isfinite(a_jitterX) || !std::isfinite(a_jitterY) ||
 				a_context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) {
 				return fail("character category capture arguments are invalid");
+			}
+			if (state_->device_ && SameIdentity(a_device, state_->device_.Get()) &&
+				state_->snapshot_.categoryCaptureReady &&
+				state_->capturedFrame_ == a_frame &&
+				state_->capturedEyeWidth_ == a_sourceEyeWidth &&
+				state_->capturedHeight_ == a_sourceHeight &&
+				state_->capturedEnabledCategoryMask_ == a_enabledCategoryMask &&
+				state_->capturedJitterX_ == a_jitterX &&
+				state_->capturedJitterY_ == a_jitterY) {
+				Increment(state_->snapshot_.categoryCaptureReuses);
+				return true;
 			}
 			ComPtr<ID3D11Device> contextDevice;
 			a_context->GetDevice(&contextDevice);
@@ -1543,8 +1814,8 @@ namespace NeuralRendering
 
 			state_->AdoptDevice(a_device);
 			state_->InvalidatePreparedMasks();
+			state_->BeginObservationFrame(a_frame);
 			const bool hasSelectedObservation =
-				state_->observationFrame_ == a_frame &&
 				std::ranges::any_of(
 					state_->observations_,
 					[&](const State::Observation& a_observation) {
@@ -1553,9 +1824,12 @@ namespace NeuralRendering
 					});
 			if (!hasSelectedObservation) {
 				// A logical empty capture lets the stereo path bypass Feature 18
-				// without copying the combined-resolution G-buffer every empty frame.
+				// without copying active-stereo G-buffer data every empty frame.
 				state_->capturedFrame_ = a_frame;
 				state_->capturedCategoriesEmpty_ = true;
+				state_->capturedEyeWidth_ = a_sourceEyeWidth;
+				state_->capturedHeight_ = a_sourceHeight;
+				state_->capturedEnabledCategoryMask_ = a_enabledCategoryMask;
 				state_->capturedJitterX_ = a_jitterX;
 				state_->capturedJitterY_ = a_jitterY;
 				state_->snapshot_.categoryCaptureFrame = a_frame;
@@ -1575,6 +1849,8 @@ namespace NeuralRendering
 			depthTexture->GetDesc(&depthDesc);
 			D3D11_SHADER_RESOURCE_VIEW_DESC depthViewDesc{};
 			a_depthSource->GetDesc(&depthViewDesc);
+			const auto activeStereoWidth =
+				static_cast<std::uint64_t>(a_sourceEyeWidth) * 2u;
 			if (categoryDesc.Format != DXGI_FORMAT_R8G8_UNORM ||
 				categoryDesc.MipLevels != 1 || categoryDesc.ArraySize != 1 ||
 				categoryDesc.SampleDesc.Count != 1 ||
@@ -1593,11 +1869,24 @@ namespace NeuralRendering
 				!IsSupportedDepthViewFormat(depthViewDesc.Format)) {
 				return fail("character depth capture source has an invalid layout");
 			}
-			if (!state_->EnsureCategoryCapture(a_device, categoryDesc)) {
+			if (activeStereoWidth > categoryDesc.Width ||
+				a_sourceHeight > categoryDesc.Height) {
+				return fail(std::format(
+					"character capture extent {}x{} exceeds source {}x{}",
+					activeStereoWidth, a_sourceHeight,
+					categoryDesc.Width, categoryDesc.Height));
+			}
+			D3D11_TEXTURE2D_DESC categoryCaptureDesc = categoryDesc;
+			categoryCaptureDesc.Width = static_cast<UINT>(activeStereoWidth);
+			categoryCaptureDesc.Height = a_sourceHeight;
+			D3D11_TEXTURE2D_DESC depthCaptureDesc = depthDesc;
+			depthCaptureDesc.Width = static_cast<UINT>(activeStereoWidth);
+			depthCaptureDesc.Height = a_sourceHeight;
+			if (!state_->EnsureCategoryCapture(a_device, categoryCaptureDesc)) {
 				return fail("character category capture texture could not be created");
 			}
 			if (!state_->EnsureDepthCapture(
-					a_device, depthDesc, depthViewDesc)) {
+					a_device, depthCaptureDesc, depthViewDesc)) {
 				return fail("character depth capture texture could not be created");
 			}
 			OutputMergerStateGuard outputMerger(a_context);
@@ -1605,13 +1894,22 @@ namespace NeuralRendering
 				return fail("character category capture could not preserve output state");
 			{
 				CS_PROFILE_SCOPE("Upscaling::DLSS5CharacterCategoryCapture");
-				a_context->CopyResource(
-					state_->capturedCategories_.Get(), a_categorySource);
-				a_context->CopyResource(
-					state_->capturedDepth_.Get(), depthTexture.Get());
+				const D3D11_BOX activeStereoBox{
+					0u, 0u, 0u,
+					static_cast<UINT>(activeStereoWidth), a_sourceHeight, 1u
+				};
+				a_context->CopySubresourceRegion(
+					state_->capturedCategories_.Get(), 0, 0, 0, 0,
+					a_categorySource, 0, &activeStereoBox);
+				a_context->CopySubresourceRegion(
+					state_->capturedDepth_.Get(), 0, 0, 0, 0,
+					depthTexture.Get(), 0, &activeStereoBox);
 			}
 			state_->capturedFrame_ = a_frame;
 			state_->capturedCategoriesEmpty_ = false;
+			state_->capturedEyeWidth_ = a_sourceEyeWidth;
+			state_->capturedHeight_ = a_sourceHeight;
+			state_->capturedEnabledCategoryMask_ = a_enabledCategoryMask;
 			state_->capturedJitterX_ = a_jitterX;
 			state_->capturedJitterY_ = a_jitterY;
 			state_->snapshot_.categoryCaptureFrame = a_frame;
@@ -1620,18 +1918,12 @@ namespace NeuralRendering
 			Increment(state_->snapshot_.categoryCaptureSuccesses);
 			state_->snapshot_.status = "captured";
 			state_->snapshot_.detail =
-				"same-frame character categories, frozen depth, and render jitter captured";
+				"same-frame post-terrain active-stereo categories, synchronized pre-decal depth, and render jitter captured";
 			return true;
 		} catch (const std::exception& exception) {
 			std::scoped_lock lock(state_->mutex_);
 			Increment(state_->snapshot_.categoryCaptureFailures);
-			state_->capturedFrame_ = std::numeric_limits<std::uint32_t>::max();
-			state_->capturedCategoriesEmpty_ = false;
-			state_->capturedJitterX_ = 0.0f;
-			state_->capturedJitterY_ = 0.0f;
-			state_->snapshot_.categoryCaptureFrame = state_->capturedFrame_;
-			state_->snapshot_.categoryCaptureReady = false;
-			state_->snapshot_.categoryCaptureEmpty = false;
+			state_->InvalidateCaptureMetadata();
 			state_->InvalidatePreparedMasks();
 			state_->snapshot_.status = "failed";
 			state_->snapshot_.detail = exception.what();
@@ -1639,13 +1931,7 @@ namespace NeuralRendering
 		} catch (...) {
 			std::scoped_lock lock(state_->mutex_);
 			Increment(state_->snapshot_.categoryCaptureFailures);
-			state_->capturedFrame_ = std::numeric_limits<std::uint32_t>::max();
-			state_->capturedCategoriesEmpty_ = false;
-			state_->capturedJitterX_ = 0.0f;
-			state_->capturedJitterY_ = 0.0f;
-			state_->snapshot_.categoryCaptureFrame = state_->capturedFrame_;
-			state_->snapshot_.categoryCaptureReady = false;
-			state_->snapshot_.categoryCaptureEmpty = false;
+			state_->InvalidateCaptureMetadata();
 			state_->InvalidatePreparedMasks();
 			state_->snapshot_.status = "failed";
 			state_->snapshot_.detail = "unknown character category capture exception";
@@ -1696,13 +1982,15 @@ namespace NeuralRendering
 				return fail("character mask context belongs to another D3D11 device");
 
 			state_->AdoptDevice(a_args.device);
-			state_->PollReadbacks(a_args.context);
+			state_->PollReadbacks(a_args.context, a_args.frameId);
 			const bool logicalEmptyCapture = state_->capturedCategoriesEmpty_;
 			if (state_->capturedFrame_ != a_args.frameId ||
+				state_->capturedEyeWidth_ != a_args.viewportCrop.fullInput.width ||
+				state_->capturedHeight_ != a_args.viewportCrop.fullInput.height ||
 				(!logicalEmptyCapture &&
 					(!state_->capturedCategoriesSrv_ ||
 						!state_->capturedDepthSrv_))) {
-				return fail("no same-frame pre-decal character category capture is available");
+				return fail("no same-frame character capture with matching logical stereo dimensions is available");
 			}
 
 			ComPtr<ID3D11Texture2D> sourceTexture;
@@ -1723,13 +2011,14 @@ namespace NeuralRendering
 						sourceError)) {
 					return fail(std::move(sourceError));
 				}
-				if ((sourceDesc.Width & 1u) != 0)
-					return fail("combined character-mask source width is not stereo-even");
-				sourceEyeWidth = sourceDesc.Width / 2u;
-				if (a_args.viewportCrop.fullInput.width > sourceEyeWidth ||
-					a_args.viewportCrop.fullInput.height > sourceDesc.Height) {
+				// The capture owns an exact active-stereo allocation, so its stored
+				// logical stride remains authoritative for both eyes.
+				sourceEyeWidth = state_->capturedEyeWidth_;
+				if (!sourceEyeWidth ||
+					static_cast<std::uint64_t>(sourceEyeWidth) * 2u != sourceDesc.Width ||
+					state_->capturedHeight_ != sourceDesc.Height) {
 					return fail(std::format(
-						"character-mask source {}x{} cannot contain logical stereo input {}x{} per eye",
+						"character-mask capture {}x{} does not equal packed logical stereo input {}x{} per eye",
 						sourceDesc.Width,
 						sourceDesc.Height,
 						a_args.viewportCrop.fullInput.width,
@@ -1787,16 +2076,39 @@ namespace NeuralRendering
 				.captureJitterY = state_->capturedJitterY_,
 			};
 			if (!slot.prepared || slot.prepareKey != key) {
-				const auto plan = state_->BuildPlan(a_args);
+				auto plan = state_->BuildPlan(a_args);
+				const bool authoredMode =
+					UsesAuthoredMask(a_args.settings.maskTestMode);
+				if (authoredMode && !logicalEmptyCapture &&
+					plan.regions.empty() && plan.projectionUncertain) {
+					// Projection is an optimization boundary, not semantic proof. Fall
+					// back to an exact full-eye semantic resolve when actor bounds are
+					// unavailable so authored face/skin pixels cannot silently vanish.
+					plan.regions.push_back({
+						.minX = 0,
+						.minY = 0,
+						.maxX = a_args.outputWidth,
+						.maxY = a_args.outputHeight,
+					});
+					plan.fullEyeEligibilityFallback = true;
+					plan.eligibilitySignature = HashCombine(
+						plan.eligibilitySignature, 0x46554C4C455945ull);
+				}
 				const auto diagnosticKey = logicalEmptyCapture ?
 				                               0u :
 				                               state_->BuildDiagnosticKey(
 												   a_args, plan, sourceEyeWidth,
 												   sourceDesc.Height);
-				slot.requiresEvaluation =
-					!UsesAuthoredMask(a_args.settings.maskTestMode) ||
-					(!logicalEmptyCapture && !plan.regions.empty());
+				const bool cpuProvenEmpty =
+					authoredMode &&
+					(logicalEmptyCapture || plan.regions.empty());
+				slot.requiresEvaluation = !cpuProvenEmpty;
+				slot.zeroCoverageBypassResolved = false;
 				slot.zeroCoverageBypassed = false;
+				slot.feature18Disposition =
+					CharacterFeature18Disposition::Unresolved;
+				slot.zeroCoverageCpuProven = false;
+				slot.zeroCoverageSampleReused = false;
 				if (logicalEmptyCapture) {
 					float clearValue = 0.0f;
 					switch (a_args.settings.maskTestMode) {
@@ -1814,7 +2126,7 @@ namespace NeuralRendering
 						slot, a_args.context, a_args.frameId,
 						a_args.featureSlot, a_args.outputWidth,
 						a_args.outputHeight, clearValue);
-				} else if (slot.requiresEvaluation) {
+				} else {
 					if (!state_->EnsureShader(a_args.device)) {
 						return fail(
 							"DLSS5 character-mask compute shader could not be created");
@@ -1827,20 +2139,21 @@ namespace NeuralRendering
 							sourceEyeWidth, sourceDesc.Height)) {
 						return fail("DLSS5 character-mask dispatch failed");
 					}
-					if (UsesAuthoredMask(a_args.settings.maskTestMode) &&
-						slot.maskCoverageReady &&
-						slot.maskDiagnosticKey == diagnosticKey &&
-						slot.maskPixels == 0) {
-						slot.requiresEvaluation = false;
-						slot.zeroCoverageBypassed = true;
-						Increment(state_->snapshot_.measuredZeroCoverageBypasses);
-					}
-				} else {
-					state_->ClearMask(
-						slot, a_args.context, a_args.frameId,
-						a_args.featureSlot, a_args.outputWidth,
-						a_args.outputHeight, 0.0f);
 				}
+				const bool measuredZero =
+					authoredMode && !cpuProvenEmpty &&
+					state_->HasFreshZeroAuthoredCoverageSample(
+						slot, diagnosticKey, a_args.frameId,
+						a_args.settings);
+				slot.requiresEvaluation =
+					!authoredMode || (!cpuProvenEmpty && !measuredZero);
+				slot.zeroCoverageBypassed = false;
+				slot.zeroCoverageCpuProven = cpuProvenEmpty;
+				slot.zeroCoverageSampleReused = measuredZero;
+				if (cpuProvenEmpty)
+					Increment(state_->snapshot_.provenEmptyFeatureBypassRequests);
+				else if (measuredZero)
+					Increment(state_->snapshot_.measuredZeroCoverageBypassRequests);
 				slot.prepareKey = key;
 				slot.prepared = true;
 
@@ -1876,7 +2189,17 @@ namespace NeuralRendering
 				eye.maskCoverageMatchesCurrentPolicy =
 					slot.maskCoverageReady &&
 					slot.maskDiagnosticKey == diagnosticKey;
+				eye.zeroCoverageBypassRequested =
+					!slot.requiresEvaluation;
+				eye.zeroCoverageBypassResolved = false;
 				eye.zeroCoverageBypassed = slot.zeroCoverageBypassed;
+				eye.feature18Disposition =
+					CharacterFeature18Disposition::Unresolved;
+				eye.feature18EvaluationSucceeded = false;
+				eye.zeroCoverageCpuProven = slot.zeroCoverageCpuProven;
+				eye.zeroCoverageSampleReused = slot.zeroCoverageSampleReused;
+				eye.fullEyeEligibilityFallback =
+					plan.fullEyeEligibilityFallback;
 				eye.depthCoordinatesValid = !logicalEmptyCapture;
 				eye.authoredStereoWidth = sourceDesc.Width;
 				eye.authoredDepthHeight = sourceDesc.Height;
@@ -1902,13 +2225,12 @@ namespace NeuralRendering
 					slot.requiresEvaluation);
 			}
 
-			a_result.controlMask = slot.mask;
 			a_result.prepared = true;
 			a_result.requiresEvaluation = slot.requiresEvaluation;
 			Increment(state_->snapshot_.preparationSuccesses);
 			state_->snapshot_.status = "ready";
 			state_->snapshot_.detail = std::format(
-				"Feature 18 ControlMask prepared for eye {} slot {} at {}x{}; evaluation={}; private single-subrect ROI remains disabled",
+				"CSX character selection mask prepared for eye {} slot {} at {}x{}; evaluation={}; private single-subrect ROI remains disabled",
 				a_args.eyeIndex,
 				a_args.featureSlot,
 				a_args.outputWidth,
@@ -1934,6 +2256,105 @@ namespace NeuralRendering
 		}
 	}
 
+	void CharacterRendering::ResolveFeature18Disposition(
+		std::uint32_t a_frameId,
+		std::uint32_t a_preparedFeatureSlotMask,
+		std::uint32_t a_evaluatedFeatureSlotMask,
+		std::uint32_t a_successfulFeatureSlotMask,
+		std::uint32_t a_bypassedFeatureSlotMask) noexcept
+	{
+		if (!state_)
+			return;
+		try {
+			std::scoped_lock lock(state_->mutex_);
+			const std::uint32_t validSlotMask =
+				(1u << static_cast<std::uint32_t>(state_->slots_.size())) - 1u;
+			CharacterPreparedFrameSnapshot* preparedFrame = nullptr;
+			for (auto& candidate : state_->snapshot_.preparedFrames) {
+				if (candidate.frame == a_frameId) {
+					preparedFrame = &candidate;
+					break;
+				}
+			}
+			if (!preparedFrame)
+				return;
+			const auto preparedMask =
+				a_preparedFeatureSlotMask & validSlotMask &
+				preparedFrame->preparedSlotMask;
+			const auto unresolvedMask =
+				preparedMask & ~preparedFrame->resolutionRecordedSlotMask;
+			const auto evaluatedMask =
+				a_evaluatedFeatureSlotMask & unresolvedMask;
+			const auto successfulMask =
+				a_successfulFeatureSlotMask & evaluatedMask;
+			const auto bypassedMask =
+				a_bypassedFeatureSlotMask & unresolvedMask & ~evaluatedMask;
+			for (std::uint32_t slotIndex = 0;
+				slotIndex < state_->slots_.size(); ++slotIndex) {
+				const auto slotBit = 1u << slotIndex;
+				if ((unresolvedMask & slotBit) == 0)
+					continue;
+				auto& slot = state_->slots_[slotIndex];
+				if (!slot.prepared || slot.prepareKey.frame != a_frameId) {
+					continue;
+				}
+				const bool bypassRequested =
+					!slot.requiresEvaluation &&
+					(slot.zeroCoverageCpuProven ||
+						slot.zeroCoverageSampleReused);
+				const bool evaluated = (evaluatedMask & slotBit) != 0;
+				const bool successful = (successfulMask & slotBit) != 0;
+				const bool bypassed =
+					bypassRequested && (bypassedMask & slotBit) != 0;
+				const auto disposition = successful ?
+				                             CharacterFeature18Disposition::Evaluated :
+				                         evaluated ?
+				                             CharacterFeature18Disposition::EvaluationFailed :
+				                         bypassed ?
+				                             CharacterFeature18Disposition::EmptyBypass :
+				                             CharacterFeature18Disposition::Aborted;
+				slot.zeroCoverageBypassResolved = true;
+				slot.zeroCoverageBypassed = bypassed;
+				slot.feature18Disposition = disposition;
+				preparedFrame->resolutionRecordedSlotMask |= slotBit;
+				switch (disposition) {
+				case CharacterFeature18Disposition::Evaluated:
+					preparedFrame->evaluatedSlotMask |= slotBit;
+					preparedFrame->successfulSlotMask |= slotBit;
+					break;
+				case CharacterFeature18Disposition::EvaluationFailed:
+					preparedFrame->evaluatedSlotMask |= slotBit;
+					break;
+				case CharacterFeature18Disposition::EmptyBypass:
+					preparedFrame->bypassedSlotMask |= slotBit;
+					break;
+				case CharacterFeature18Disposition::Aborted:
+					preparedFrame->abortedSlotMask |= slotBit;
+					break;
+				case CharacterFeature18Disposition::Unresolved:
+					break;
+				}
+				if (bypassed) {
+					if (slot.zeroCoverageCpuProven)
+						Increment(state_->snapshot_.provenEmptyFeatureBypasses);
+					else
+						Increment(state_->snapshot_.measuredZeroCoverageBypasses);
+				}
+
+				const auto eyeIndex = slotIndex & 1u;
+				auto& eye = state_->snapshot_.eyes[eyeIndex];
+				if (eye.frame == a_frameId && eye.featureSlot == slotIndex) {
+					eye.zeroCoverageBypassResolved = true;
+					eye.zeroCoverageBypassed = bypassed;
+					eye.feature18Disposition = disposition;
+					eye.feature18EvaluationSucceeded = successful;
+				}
+			}
+		} catch (...) {
+			// Diagnostics must never affect the render transaction.
+		}
+	}
+
 	void CharacterRendering::Reset() noexcept
 	{
 		if (!state_)
@@ -1954,14 +2375,12 @@ namespace NeuralRendering
 			state_->capturedCategoriesSrv_.Reset();
 			state_->capturedDepth_.Reset();
 			state_->capturedDepthSrv_.Reset();
-			state_->capturedFrame_ = std::numeric_limits<std::uint32_t>::max();
-			state_->capturedCategoriesEmpty_ = false;
-			state_->capturedJitterX_ = 0.0f;
-			state_->capturedJitterY_ = 0.0f;
+			state_->InvalidateCaptureMetadata();
 			state_->device_.Reset();
 			state_->lastSlotForEye_ = { 4, 4 };
 			state_->preparedFrameHistoryNext_ = 0;
 			state_->snapshot_ = {};
+			state_->ResetClassificationRejections();
 		} catch (...) {
 		}
 	}
@@ -1975,13 +2394,7 @@ namespace NeuralRendering
 			state_->heldRegions_ = {};
 			state_->heldCropValid_ = {};
 			state_->InvalidateProjectionCache();
-			state_->capturedFrame_ = std::numeric_limits<std::uint32_t>::max();
-			state_->capturedCategoriesEmpty_ = false;
-			state_->capturedJitterX_ = 0.0f;
-			state_->capturedJitterY_ = 0.0f;
-			state_->snapshot_.categoryCaptureFrame = state_->capturedFrame_;
-			state_->snapshot_.categoryCaptureReady = false;
-			state_->snapshot_.categoryCaptureEmpty = false;
+			state_->InvalidateCaptureMetadata();
 			state_->InvalidatePreparedMasks();
 			state_->snapshot_.status = "invalidated";
 			state_->snapshot_.detail.clear();
@@ -2010,7 +2423,9 @@ namespace NeuralRendering
 		if (!state_)
 			return {};
 		std::scoped_lock lock(state_->mutex_);
-		return state_->snapshot_;
+		auto snapshot = state_->snapshot_;
+		state_->PublishClassificationRejections(snapshot);
+		return snapshot;
 	}
 
 	ComPtr<ID3D11ShaderResourceView> CharacterRendering::GetDebugMaskSrv(

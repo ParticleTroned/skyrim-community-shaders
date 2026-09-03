@@ -37,10 +37,10 @@ RWTexture2D<float4> OutputColor : register(u0);
 	float2 centerUV = (float2(localPos) + SourceOffset + 0.5) * InvSourceDim;
 	float4 centerColor = CenterColor.SampleLevel(LinearSampler, centerUV, 0);
 	if (CharacterSelectionMode != 0) {
-		// Feature 18 consumes the authored strength. This pass only gates any
-		// provider leakage outside the nonzero character support.
+		// Feature 18 uses its normal automatic mask. CSX's authored strength is
+		// authoritative when selecting its output over the normal-DLSS baseline.
 		float characterWeight = saturate(
-			CharacterMask.SampleLevel(LinearSampler, centerUV, 0) * 255.0);
+			CharacterMask.SampleLevel(LinearSampler, centerUV, 0));
 		float4 baselineColor = BaselineCenterColor.SampleLevel(LinearSampler, centerUV, 0);
 		centerColor = lerp(baselineColor, centerColor, characterWeight);
 	}

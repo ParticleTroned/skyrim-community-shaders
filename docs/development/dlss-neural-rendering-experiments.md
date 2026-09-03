@@ -73,14 +73,21 @@ initialization call. The selected core path, SHA-256, trust result, and selectio
 source are exposed by `nr_status`; ambiguity or any failed check is a closed-gate
 failure.
 
-During NGX initialization, feature creation, evaluation, release, and shutdown,
-the implementation temporarily replaces `nvngx_dlssnr.dll`'s imported
-`GetModuleFileNameW` function. A query that passes the CSX module handle is
-reported as the sibling `nvngx.dll` path; other queries call the original
-function. The import is restored after each scoped NGX call. This is a
-caller-path substitution that can affect vendor caller validation, not a
-signature or authentication mechanism. It requires explicit legal and license
-review before any distribution or use beyond this internal experiment.
+During NGX initialization, the implementation replaces
+`nvngx_dlssnr.dll`'s imported `GetModuleFileNameW` function for the admitted
+runtime lifetime. A query that passes the CSX module handle is reported as the
+sibling `nvngx.dll` path; other queries call the original function. Each NGX
+operation first verifies that the import still points at that narrow proxy.
+The CSX module is pinned for the process lifetime before the import is changed.
+The original target is restored before the admitted runtime is unloaded, while
+the permanent pin also covers a concurrent caller that fetched the proxy target
+immediately before restoration. Import exchange is accepted only when both the
+pointer exchange and page-protection restoration succeed; a displaced or
+un-restorable import fails closed while retaining the runtime and proxy target
+instead of leaving a dangling function pointer. This caller-path substitution
+can affect vendor caller validation; it is not a signature or
+authentication mechanism. It requires explicit legal and license review before
+any distribution or use beyond this internal experiment.
 
 Runtime staging is disabled by default. The source and default package retain
 `Shaders/Upscaling/Streamline` with its README and license notices but contain
@@ -144,8 +151,9 @@ as malware-free. Consult the license accompanying each NVIDIA binary.
 Do not publish or redistribute the generated AIO.
 
 The base bridge binds color, depth, motion vectors, and output only. The
-`face-of-gogh` experiment adds a version-specific `ControlMask` path documented
-in [DLSS 5 character Neural Rendering](dlss5-character-neural-rendering.md).
+`face-of-gogh` experiment keeps that working automatic-mask invocation and adds
+an engine-authored CSX output-selection composite documented in
+[DLSS 5 character Neural Rendering](dlss5-character-neural-rendering.md).
 UI correction remains fixed off. A Neural Rendering center is committed only
 when both eyes succeed in the same stereo transaction. Otherwise both eyes
 retain the arrangement's normal-DLSS fallback.

@@ -45,6 +45,16 @@ namespace NeuralRendering
 		Count,
 	};
 
+	/** Authoritative outcome after the Feature 18 execution boundary. */
+	enum class CharacterFeature18Disposition : std::uint32_t
+	{
+		Unresolved = 0,
+		Evaluated = 1,
+		EvaluationFailed = 2,
+		EmptyBypass = 3,
+		Aborted = 4,
+	};
+
 	/** Fail-closed reasons observed while classifying actor-owned geometry. */
 	enum class CharacterClassificationRejection : std::uint32_t
 	{
@@ -91,6 +101,7 @@ namespace NeuralRendering
 		inline constexpr std::uint32_t kMaximumObservationsPerFrame = 4096;
 		inline constexpr std::uint32_t kMaximumTrackedActorsPerEye = 128;
 		inline constexpr std::uint32_t kCoverageSampleIntervalFrames = 30;
+		inline constexpr std::uint32_t kZeroCoverageReuseFrames = 4;
 		inline constexpr std::size_t kPreparedFrameHistorySize = 8;
 
 		[[nodiscard]] constexpr std::uint32_t CategoryBit(
@@ -152,7 +163,15 @@ namespace NeuralRendering
 		std::uint32_t maskCoverageHeight = 0;
 		bool maskCoverageReady = false;
 		bool maskCoverageMatchesCurrentPolicy = false;
+		bool zeroCoverageBypassRequested = false;
+		bool zeroCoverageBypassResolved = false;
 		bool zeroCoverageBypassed = false;
+		CharacterFeature18Disposition feature18Disposition =
+			CharacterFeature18Disposition::Unresolved;
+		bool feature18EvaluationSucceeded = false;
+		bool zeroCoverageCpuProven = false;
+		bool zeroCoverageSampleReused = false;
+		bool fullEyeEligibilityFallback = false;
 		bool depthCoordinatesValid = false;
 		std::uint32_t authoredStereoWidth = 0;
 		std::uint32_t authoredDepthHeight = 0;
@@ -180,6 +199,12 @@ namespace NeuralRendering
 		std::uint32_t frame = std::numeric_limits<std::uint32_t>::max();
 		std::uint32_t preparedSlotMask = 0;
 		std::uint32_t evaluationRequiredSlotMask = 0;
+		std::uint32_t bypassRequestedSlotMask = 0;
+		std::uint32_t resolutionRecordedSlotMask = 0;
+		std::uint32_t evaluatedSlotMask = 0;
+		std::uint32_t successfulSlotMask = 0;
+		std::uint32_t bypassedSlotMask = 0;
+		std::uint32_t abortedSlotMask = 0;
 		std::array<std::uint32_t, 4> widths{};
 		std::array<std::uint32_t, 4> heights{};
 	};
@@ -188,7 +213,7 @@ namespace NeuralRendering
 	{
 		std::string status = "idle";
 		std::string detail;
-		std::string visualMaskMechanism = "ngx_control_mask";
+		std::string visualMaskMechanism = "csx_output_composite_r8";
 		std::string computeRoiReason =
 			"Multi/sparse ROI is unavailable; private single-subrect timing is not enabled";
 		bool enabled = false;
@@ -213,6 +238,7 @@ namespace NeuralRendering
 		std::uint64_t categoryCaptureSuccesses = 0;
 		std::uint64_t categoryCaptureFailures = 0;
 		std::uint64_t categoryCaptureEmptyBypasses = 0;
+		std::uint64_t categoryCaptureReuses = 0;
 		std::uint32_t categoryCaptureFrame =
 			std::numeric_limits<std::uint32_t>::max();
 		bool categoryCaptureReady = false;
@@ -221,6 +247,9 @@ namespace NeuralRendering
 		std::uint64_t preparationSuccesses = 0;
 		std::uint64_t preparationFailures = 0;
 		std::uint64_t readbackDrops = 0;
+		std::uint64_t provenEmptyFeatureBypassRequests = 0;
+		std::uint64_t measuredZeroCoverageBypassRequests = 0;
+		std::uint64_t provenEmptyFeatureBypasses = 0;
 		std::uint64_t measuredZeroCoverageBypasses = 0;
 		std::array<CharacterEyeSnapshot, 2> eyes{};
 		std::array<
@@ -245,12 +274,11 @@ namespace NeuralRendering
 
 	struct CharacterMaskPrepareResult
 	{
-		Microsoft::WRL::ComPtr<ID3D11Resource> controlMask;
 		bool prepared = false;
 		bool requiresEvaluation = true;
 	};
 
-	/** Owns character observations, stable per-eye regions, and R8 control masks. */
+	/** Owns character observations, stable per-eye regions, and R8 selection masks. */
 	class CharacterRendering
 	{
 	public:
@@ -259,8 +287,8 @@ namespace NeuralRendering
 		CharacterRendering(const CharacterRendering&) = delete;
 		CharacterRendering& operator=(const CharacterRendering&) = delete;
 
-		/** Records one actor-owned material bound from the active deferred draw. */
-		void ObserveGeometry(
+		/** Records one actor-owned material bound; true permits semantic-ID output. */
+		[[nodiscard]] bool ObserveGeometry(
 			std::uint32_t a_frame,
 			std::uint32_t a_actorFormId,
 			std::uintptr_t a_geometryIdentity,
@@ -273,12 +301,14 @@ namespace NeuralRendering
 		void ObserveClassificationRejection(
 			std::uint32_t a_frame,
 			CharacterClassificationRejection a_reason) noexcept;
-		/** Freezes opaque/alpha-tested IDs before normalized terrain/decal blending. */
+		/** Freezes post-terrain IDs with synchronized pre-decal scene depth. */
 		bool CaptureAuthoredCategories(
 			ID3D11Device* a_device,
 			ID3D11DeviceContext* a_context,
 			ID3D11Texture2D* a_categorySource,
 			ID3D11ShaderResourceView* a_depthSource,
+			std::uint32_t a_sourceEyeWidth,
+			std::uint32_t a_sourceHeight,
 			std::uint32_t a_frame,
 			std::uint32_t a_enabledCategoryMask,
 			float a_jitterX,
@@ -288,6 +318,13 @@ namespace NeuralRendering
 		bool PrepareMask(
 			const CharacterMaskPrepareArgs& a_args,
 			CharacterMaskPrepareResult& a_result) noexcept;
+		/** Records the authoritative outcome for prepared Feature 18 slots. */
+		void ResolveFeature18Disposition(
+			std::uint32_t a_frameId,
+			std::uint32_t a_preparedFeatureSlotMask,
+			std::uint32_t a_evaluatedFeatureSlotMask,
+			std::uint32_t a_successfulFeatureSlotMask,
+			std::uint32_t a_bypassedFeatureSlotMask) noexcept;
 
 		/** Invalidates observations, resources, compile state, and cached masks. */
 		void Reset() noexcept;
@@ -322,6 +359,24 @@ namespace NeuralRendering
 	{
 		const auto value = static_cast<CharacterDebugView>(a_value);
 		return value < CharacterDebugView::Count ? value : CharacterDebugView::Off;
+	}
+
+	[[nodiscard]] constexpr const char* GetCharacterFeature18DispositionName(
+		CharacterFeature18Disposition a_disposition) noexcept
+	{
+		switch (a_disposition) {
+		case CharacterFeature18Disposition::Unresolved:
+			return "unresolved";
+		case CharacterFeature18Disposition::Evaluated:
+			return "evaluated";
+		case CharacterFeature18Disposition::EvaluationFailed:
+			return "evaluation_failed";
+		case CharacterFeature18Disposition::EmptyBypass:
+			return "empty_bypass";
+		case CharacterFeature18Disposition::Aborted:
+			return "aborted";
+		}
+		return "unknown";
 	}
 
 	[[nodiscard]] constexpr CharacterMaskTestMode ClampCharacterMaskTestMode(

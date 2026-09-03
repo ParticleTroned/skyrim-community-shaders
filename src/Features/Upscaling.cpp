@@ -3721,9 +3721,9 @@ namespace
 		settings.neuralCharacterMaskTestMode = static_cast<uint>(
 			NeuralRendering::ClampCharacterMaskTestMode(
 				settings.neuralCharacterMaskTestMode));
-		// Character rendering owns the private experimental ControlMask path.
-		settings.neuralRenderingAutoMask =
-			!settings.neuralCharacterRenderingEnabled;
+		// Character selection is enforced by CSX's deterministic composite. Keep
+		// Feature 18 on its known-working automatic-mask invocation.
+		settings.neuralRenderingAutoMask = true;
 		settings.neuralRenderingUICorrection = false;
 		settings.foveatedCenterOrigin =
 			ClampFoveatedCenterOriginUInt(settings.foveatedCenterOrigin);
@@ -3797,7 +3797,7 @@ namespace
 		           Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>{};
 	}
 
-	bool PrepareCharacterControlMask(
+	bool PrepareCharacterSelectionMask(
 		const Upscaling::Settings& a_settings,
 		std::uint32_t a_eyeIndex,
 		bool& a_requiresEvaluation,
@@ -3808,12 +3808,15 @@ namespace
 		a_args.controlMaskWidth = 0;
 		a_args.controlMaskHeight = 0;
 		const auto characterSettings = BuildCharacterSettings(a_settings);
-		if (!characterSettings.enabled) {
+		if (!characterSettings.enabled || !UsesCharacterVisualIsolation(a_settings)) {
 			a_args.tuning.useAutoMask = true;
 			return true;
 		}
 
-		a_args.tuning.useAutoMask = false;
+		// The private ControlMask ABI is not provider-declared. Feature 18 runs
+		// with its normal automatic mask and CSX applies this authored mask when
+		// compositing the successful provider output over normal DLSS.
+		a_args.tuning.useAutoMask = true;
 		if (!globals::game::renderer || !a_args.depthGuideSRV)
 			return false;
 		NeuralRendering::CharacterMaskPrepareResult result{};
@@ -3831,13 +3834,10 @@ namespace
 		};
 		if (!NeuralRendering::CharacterRendering::Instance().PrepareMask(
 				prepareArgs, result) ||
-			!result.prepared || !result.controlMask) {
+			!result.prepared) {
 			return false;
 		}
 
-		a_args.controlMask = result.controlMask;
-		a_args.controlMaskWidth = a_args.outputWidth;
-		a_args.controlMaskHeight = a_args.outputHeight;
 		a_requiresEvaluation = result.requiresEvaluation;
 		return true;
 	}
@@ -14984,18 +14984,32 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 				"Direct"
 			};
 			int outputCommit = settings.neuralRenderingDirectCommit ? 1 : 0;
-			if (ImGui::Combo(
-					"Output Commit",
-					&outputCommit,
-					outputCommitModes,
-					IM_ARRAYSIZE(outputCommitModes))) {
-				settings.neuralRenderingDirectCommit = outputCommit != 0;
+			{
+				auto guard = Util::DisableGuard(
+					UsesCharacterVisualIsolation(settings) &&
+					NeuralRendering::ClampInsertionPoint(
+						settings.neuralRenderingInsertionPoint) ==
+						NeuralRendering::InsertionPoint::UpscaledCenter);
+				if (ImGui::Combo(
+						"Output Commit",
+						&outputCommit,
+						outputCommitModes,
+						IM_ARRAYSIZE(outputCommitModes))) {
+					settings.neuralRenderingDirectCommit = outputCommit != 0;
+				}
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted(
 					"Staged writes NeuralOut first, then copies a complete eye pair into the center outputs.");
 				ImGui::TextUnformatted(
 					"Direct commits successful evaluation output to the private center resources.");
+			}
+			if (UsesCharacterVisualIsolation(settings) &&
+				NeuralRendering::ClampInsertionPoint(
+					settings.neuralRenderingInsertionPoint) ==
+					NeuralRendering::InsertionPoint::UpscaledCenter) {
+				ImGui::TextDisabled(
+					"Character selection uses Staged output so normal DLSS remains the zero-mask baseline.");
 			}
 
 			const bool batchedStereo = settings.neuralRenderingBatchedStereo;
@@ -15051,7 +15065,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 				&settings.neuralCharacterRenderingEnabled);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted(
-					"Uses an authored per-pixel Feature 18 ControlMask for NPC materials.");
+					"Runs Feature 18 normally, then selects its output with an authored NPC material mask.");
 				ImGui::TextUnformatted(
 					"Inference still covers the normal center evaluation; the mask is not a compute ROI.");
 			}
@@ -15061,21 +15075,13 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 					&settings.neuralCharacterVisualIsolationEnabled);
 				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::TextUnformatted(
-						"Uses nonzero mask support to prevent provider output outside CSX's character mask.");
+						"Blends Feature 18 output over normal DLSS using the authored 0..1 category strength.");
 					ImGui::TextUnformatted(
 						"Frozen/current depth rejects later depth-writing occluders; translucent overlays remain approximate.");
 					ImGui::TextUnformatted(
-						"Category strength is encoded once in ControlMask and is not reapplied by the CSX composite.");
+						"The private NVIDIA ControlMask ABI is not used for character selection.");
 					ImGui::TextUnformatted(
-						"Disable only to calibrate NVIDIA's private ControlMask behavior directly.");
-				}
-				if (settings.neuralCharacterVisualIsolationEnabled &&
-					settings.neuralRenderingDirectCommit &&
-					NeuralRendering::ClampInsertionPoint(
-						settings.neuralRenderingInsertionPoint) ==
-						NeuralRendering::InsertionPoint::UpscaledCenter) {
-					ImGui::TextDisabled(
-						"Main/non-float Direct output retains one normal-DLSS center copy; submit float output is already separate.");
+						"Disable only to compare normal full-center Feature 18 output.");
 				}
 				ImGui::Checkbox("Faces", &settings.neuralCharacterFacesEnabled);
 				ImGui::SameLine();
@@ -15287,9 +15293,8 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 			if (settings.neuralCharacterRenderingEnabled) {
 				const auto characterStatus =
 					NeuralRendering::CharacterRendering::Instance().GetSnapshot();
-				ImGui::TextColored(
-					Util::Colors::GetWarning(),
-					"ControlMask ABI: experimental; exact binding and R8 semantics are not provider-validated.");
+				ImGui::TextDisabled(
+					"Selection: CSX post-composite R8 mask; Feature 18 automatic mask remains enabled.");
 				const auto categoryCaptureFrame =
 					characterStatus.categoryCaptureReady ?
 						std::to_string(characterStatus.categoryCaptureFrame) :
@@ -15315,8 +15320,11 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 						characterStatus.categoryCaptureEmptyBypasses));
 				for (uint32_t eye = 0; eye < characterStatus.eyes.size(); ++eye) {
 					const auto& eyeStatus = characterStatus.eyes[eye];
+					const auto* disposition =
+						NeuralRendering::GetCharacterFeature18DispositionName(
+							eyeStatus.feature18Disposition);
 					ImGui::TextDisabled(
-						"%s: %ux%u, eligible face actors %u, eligible regions %u, mask %s%.2f%%, eligibility %.2f%%, evaluation %s",
+						"%s: %ux%u, eligible face actors %u, eligible regions %u, mask %s%.2f%%, eligibility %.2f%%, request %s, outcome %s",
 						eye == 0 ? "Left" : "Right",
 						eyeStatus.evaluationWidth,
 						eyeStatus.evaluationHeight,
@@ -15325,7 +15333,8 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 						eyeStatus.maskCoverageReady ? "" : "pending ",
 						eyeStatus.maskCoveragePercent,
 						eyeStatus.roiCoveragePercent,
-						eyeStatus.evaluationRequired ? "required" : "bypassed");
+						eyeStatus.evaluationRequired ? "evaluate" : "empty bypass",
+						disposition);
 					if (eyeStatus.maskCoverageReady) {
 						ImGui::TextDisabled(
 							"  coverage sample: frame %u, slot %u, %ux%u",
@@ -15344,7 +15353,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 							static_cast<unsigned long long>(eyeStatus.visibilityRejectedPixels));
 						if (eyeStatus.zeroCoverageBypassed) {
 							ImGui::TextDisabled(
-								"  Feature 18 bypassed: matching authored GPU sample measured zero coverage.");
+								"  Feature 18 bypassed: proven empty or a fresh matching GPU zero sample.");
 						}
 					}
 					if (eyeStatus.depthCoordinatesValid) {
@@ -15381,8 +15390,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 							                      NeuralRendering::InsertionPoint::FinalLdrPreUi;
 							const bool stagedIsolatedCenter =
 								!finalLdr &&
-								UsesCharacterVisualIsolation(settings) &&
-								!settings.neuralRenderingDirectCommit;
+								UsesCharacterVisualIsolation(settings);
 							const auto& output = finalLdr ?
 							                         neuralFinalLdrColorOut[eye] :
 							                         (stagedIsolatedCenter ?
@@ -16859,14 +16867,22 @@ Upscaling::UpscaleMethod Upscaling::GetRuntimeUpscaleMethod() const
 
 bool Upscaling::IsCharacterNeuralRenderingRouteRequested() const
 {
-	return globals::game::isVR && loaded && settings.neuralRenderingEnabled &&
-	       settings.neuralCharacterRenderingEnabled &&
-	       GetRuntimeUpscaleMethod() == UpscaleMethod::kDLSS &&
-	       IsFoveatedVendorDispatchEnabled(UpscaleMethod::kDLSS) &&
-	       !settings.foveatedPeripheryMaskVisualization &&
-	       settings.frameGenerationMode == 0 &&
-	       !IsFrameGenerationDx12PathActive() &&
-	       !IsNeuralRenderingInsertionTransitionBlocked();
+	const bool routeConfigured =
+		globals::game::isVR && loaded && settings.neuralRenderingEnabled &&
+		settings.neuralCharacterRenderingEnabled &&
+		settings.neuralCharacterVisualIsolationEnabled &&
+		GetRuntimeUpscaleMethod() == UpscaleMethod::kDLSS &&
+		IsFoveatedVendorDispatchEnabled(UpscaleMethod::kDLSS) &&
+		!settings.foveatedPeripheryMaskVisualization &&
+		settings.frameGenerationMode == 0 &&
+		!IsFrameGenerationDx12PathActive() &&
+		!IsNeuralRenderingInsertionTransitionBlocked();
+	if (!routeConfigured)
+		return false;
+	return BuildNeuralTemporalAdmission(
+		NeuralStereoRouteRole::Main,
+		IsNeuralRenderingMenuSuppressed())
+	    .admitted;
 }
 
 std::uint32_t Upscaling::GetCharacterNeuralRenderingCategoryMask() const noexcept
@@ -26725,7 +26741,7 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 				.uiCorrection = settings.neuralRenderingUICorrection,
 			};
 			bool characterEvaluationRequired = true;
-			if (!PrepareCharacterControlMask(
+			if (!PrepareCharacterSelectionMask(
 					settings, eyeIndex,
 					characterEvaluationRequired, args)) {
 				return false;
@@ -26738,8 +26754,16 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 				*neuralBatchArgs = args;
 				return true;
 			}
-			if (!characterEvaluationRequired)
+			if (!characterEvaluationRequired) {
+				NeuralRendering::CharacterRendering::Instance()
+					.ResolveFeature18Disposition(
+						args.frameId,
+						1u << args.featureSlot,
+						0u,
+						0u,
+						1u << args.featureSlot);
 				return false;
+			}
 			NeuralRendering::RendererApplyOutcome outcome{};
 			bool applied = false;
 			try {
@@ -26765,6 +26789,17 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 				args.frameId);
 			if (neuralResult)
 				neuralResult->attempted = neuralAttempted;
+			NeuralRendering::CharacterRendering::Instance()
+				.ResolveFeature18Disposition(
+					args.frameId,
+					1u << args.featureSlot,
+					neuralAttempted || applied ?
+						1u << args.featureSlot :
+						0u,
+					applied ?
+						1u << args.featureSlot :
+						0u,
+					0u);
 			return applied;
 		};
 		const auto commitNeuralOutput = [&]() {
@@ -26903,8 +26938,7 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 			compositeInputsReady = ResolveCharacterCompositeInputs(
 				eyeIndex, dlssViewportRole, currentFrame,
 				rect.outputWidth, rect.outputHeight,
-				directNeuralCommit, centerSRV,
-				characterComposite);
+				centerSRV, characterComposite);
 		}
 		if (!compositeInputsReady) {
 			static bool loggedCharacterCompositeFallback = false;
@@ -26969,42 +27003,12 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 	return blended;
 }
 
-bool Upscaling::PreserveCharacterDirectCommitBaselines(
-	bool a_directCommit) noexcept
-{
-	if (!a_directCommit ||
-		!UsesCharacterVisualIsolation(settings) ||
-		!NeuralRendering::RunsAfterDlss()) {
-		return true;
-	}
-	auto* context = globals::d3d::context;
-	if (!context)
-		return false;
-	for (uint32_t eye = 0; eye < 2; ++eye) {
-		if (!foveatedCenterColorOut[eye] ||
-			!foveatedCenterColorOut[eye]->resource ||
-			!foveatedCenterNeuralOut[eye] ||
-			!foveatedCenterNeuralOut[eye]->resource ||
-			!foveatedCenterNeuralOut[eye]->srv) {
-			return false;
-		}
-		{
-			CS_PROFILE_SCOPE("Upscaling::DLSS5CharacterBaselineCopy");
-			context->CopyResource(
-				foveatedCenterNeuralOut[eye]->resource.get(),
-				foveatedCenterColorOut[eye]->resource.get());
-		}
-	}
-	return true;
-}
-
 bool Upscaling::ResolveCharacterCompositeInputs(
 	uint32_t a_eyeIndex,
 	Streamline::DLSSViewportRole a_viewportRole,
 	uint32_t a_frame,
 	uint32_t a_width,
 	uint32_t a_height,
-	bool a_directCommit,
 	ID3D11ShaderResourceView* a_centerOutput,
 	CharacterCompositeInputs& a_result) noexcept
 {
@@ -27027,13 +27031,8 @@ bool Upscaling::ResolveCharacterCompositeInputs(
 	if (!a_result.mask)
 		return false;
 
-	if (a_directCommit) {
-		a_result.center = a_centerOutput;
-		a_result.baseline = foveatedCenterNeuralOut[a_eyeIndex]->srv.get();
-	} else {
-		a_result.center = foveatedCenterNeuralOut[a_eyeIndex]->srv.get();
-		a_result.baseline = a_centerOutput;
-	}
+	a_result.center = foveatedCenterNeuralOut[a_eyeIndex]->srv.get();
+	a_result.baseline = a_centerOutput;
 	return true;
 }
 
@@ -27092,6 +27091,23 @@ namespace
 				   a_results, &Upscaling::NeuralCenterDispatchResult::bypassed) != 0b11u;
 	}
 
+	void ResolveAbortedCharacterFeature18Preparations(
+		const std::array<Upscaling::NeuralCenterDispatchResult, 2>& a_results,
+		const std::array<NeuralRendering::RendererApplyArgs, 2>& a_args) noexcept
+	{
+		for (uint32_t eye = 0; eye < a_results.size(); ++eye) {
+			if (!a_results[eye].prepared || a_args[eye].featureSlot >= 32u)
+				continue;
+			NeuralRendering::CharacterRendering::Instance()
+				.ResolveFeature18Disposition(
+					a_args[eye].frameId,
+					1u << a_args[eye].featureSlot,
+					0u,
+					0u,
+					0u);
+		}
+	}
+
 	NeuralStereoEvaluationSummary EvaluatePreparedNeuralStereo(
 		Upscaling& a_upscaling,
 		std::array<Upscaling::NeuralCenterDispatchResult, 2>& a_results,
@@ -27107,6 +27123,8 @@ namespace
 		};
 		const uint32_t bypassedEyeMask = BuildNeuralCenterEyeMask(
 			a_results, &Upscaling::NeuralCenterDispatchResult::bypassed);
+		std::array<bool, 2> evaluatedEyes{};
+		std::array<bool, 2> successfulEyes{};
 
 		if (summary.preparedEyeMask == 0b11u && bypassedEyeMask == 0b11u) {
 			summary.pairBypassed = true;
@@ -27124,6 +27142,7 @@ namespace
 					outcome.WasEvaluationSuccessful(a_batchArgs[eye].featureSlot);
 				a_results[eye].attempted =
 					a_results[eye].attempted || attempted;
+				evaluatedEyes[eye] = attempted;
 				a_upscaling.RecordNeuralPassTelemetry(
 					a_routeRole,
 					eye,
@@ -27137,12 +27156,31 @@ namespace
 					result.applied = true;
 					result.bypassed = false;
 				}
+				evaluatedEyes.fill(true);
+				successfulEyes.fill(true);
 				summary.successfulEyeMask = 0b11u;
 			} else if (outcome.evaluationAttemptedFeatureSlotMask != 0) {
 				a_upscaling.RequestHistoryReset();
 			}
 		} else if (summary.preparedEyeMask != 0) {
 			a_upscaling.RequestHistoryReset();
+		}
+		for (uint32_t eye = 0; eye < a_results.size(); ++eye) {
+			if (!a_results[eye].prepared || a_batchArgs[eye].featureSlot >= 32u)
+				continue;
+			NeuralRendering::CharacterRendering::Instance()
+				.ResolveFeature18Disposition(
+					a_batchArgs[eye].frameId,
+					1u << a_batchArgs[eye].featureSlot,
+					evaluatedEyes[eye] ?
+						1u << a_batchArgs[eye].featureSlot :
+						0u,
+					successfulEyes[eye] ?
+						1u << a_batchArgs[eye].featureSlot :
+						0u,
+					summary.pairBypassed ?
+						1u << a_batchArgs[eye].featureSlot :
+						0u);
 		}
 
 		summary.pairApplied = summary.successfulEyeMask == 0b11u;
@@ -27352,6 +27390,10 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 		CS_PROFILE_SCOPE("Upscaling::NeuralFinalLdrPreUi");
 		std::array<NeuralCenterDispatchResult, 2> neuralResults{};
 		std::array<NeuralRendering::RendererApplyArgs, 2> neuralArgs{};
+		auto resolveAbortedCharacterPreparations = ScopeExit([&]() noexcept {
+			ResolveAbortedCharacterFeature18Preparations(
+				neuralResults, neuralArgs);
+		});
 		const bool directCommit = settings.neuralRenderingDirectCommit;
 		const bool isolateCharacterOutput =
 			UsesCharacterVisualIsolation(settings);
@@ -27444,7 +27486,7 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 				.uiCorrection = settings.neuralRenderingUICorrection,
 			};
 			bool characterEvaluationRequired = true;
-			if (!PrepareCharacterControlMask(
+			if (!PrepareCharacterSelectionMask(
 					settings, eye,
 					characterEvaluationRequired, args)) {
 				return false;
@@ -27454,9 +27496,12 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 			neuralResults[eye].bypassed = !characterEvaluationRequired;
 		}
 		if (!WillEvaluatePreparedNeuralStereo(neuralResults)) {
-			a_result.preparedEyeMask = BuildNeuralCenterEyeMask(
-				neuralResults, &NeuralCenterDispatchResult::prepared);
-			a_result.bypassedNoCharacters = true;
+			const auto evaluation = EvaluatePreparedNeuralStereo(
+				*this, neuralResults, neuralArgs,
+				settings.neuralRenderingBatchedStereo,
+				a_role);
+			a_result.preparedEyeMask = evaluation.preparedEyeMask;
+			a_result.bypassedNoCharacters = evaluation.pairBypassed;
 			return false;
 		}
 		for (uint32_t eye = 0; eye < a_targets.size(); ++eye) {
@@ -27884,6 +27929,9 @@ bool Upscaling::DispatchFoveatedVendorCenterStereo(UpscaleMethod a_upscaleMethod
 	neuralPairApplied = false;
 	std::array<NeuralCenterDispatchResult, 2> results{};
 	std::array<NeuralRendering::RendererApplyArgs, 2> neuralBatchArgs{};
+	auto resolveAbortedCharacterPreparations = ScopeExit([&]() noexcept {
+		ResolveAbortedCharacterFeature18Preparations(results, neuralBatchArgs);
+	});
 	const bool batchedStereo = settings.neuralRenderingBatchedStereo;
 	const bool directCommit = params.front().neuralDirectCommit;
 	const auto publishResults = [&]() noexcept {
@@ -27993,13 +28041,6 @@ bool Upscaling::DispatchFoveatedVendorCenterStereo(UpscaleMethod a_upscaleMethod
 				return false;
 			}
 		}
-		if (WillEvaluatePreparedNeuralStereo(results) &&
-			!PreserveCharacterDirectCommitBaselines(directCommit)) {
-			RequestHistoryReset();
-			publishResults();
-			return false;
-		}
-
 		const auto neuralEvaluation = EvaluatePreparedNeuralStereo(
 			*this,
 			results,
@@ -28390,8 +28431,7 @@ bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod
 				compositeInputsReady = ResolveCharacterCompositeInputs(
 					eyeIndex, params.dlssViewportRole, frame,
 					rect.outputWidth, rect.outputHeight,
-					params.neuralDirectCommit, centerSRV,
-					characterComposite);
+					centerSRV, characterComposite);
 			}
 			if (!compositeInputsReady) {
 				static bool loggedCharacterCompositeFallback = false;
@@ -28554,6 +28594,7 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 	const uint32_t peripheryTAAWriteIndex = 1u - peripheryTAAReadIndex;
 	const bool neuralDirectCommit =
 		settings.neuralRenderingDirectCommit &&
+		!UsesCharacterVisualIsolation(settings) &&
 		!NeuralRendering::RunsBeforeDlss();
 	std::array<FoveatedEyeDispatchParams, 2> eyeParams{};
 
@@ -35522,6 +35563,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 
 			std::array<NeuralCenterDispatchResult, 2> neuralResults{};
 			std::array<NeuralRendering::RendererApplyArgs, 2> neuralBatchArgs{};
+			auto resolveAbortedCharacterPreparations = ScopeExit([&]() noexcept {
+				ResolveAbortedCharacterFeature18Preparations(
+					neuralResults, neuralBatchArgs);
+			});
 			const bool batchedStereo = settings.neuralRenderingBatchedStereo;
 			const bool directCommit = settings.neuralRenderingDirectCommit;
 			const bool finalLdrInsertion =

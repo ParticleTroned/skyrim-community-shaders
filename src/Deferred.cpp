@@ -905,28 +905,40 @@ void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumula
 
 	if (globals::shaderCache->IsEnabled() && globals::state->inWorld) {
 		auto& terrainBlending = globals::features::terrainBlending;
-		const auto& upscaling = globals::features::upscaling;
-		if (deferred && deferred->deferredPass &&
-			upscaling.IsCharacterNeuralRenderingRouteRequested() && renderer &&
-			globals::d3d::device && globals::d3d::context && globals::state) {
-			auto& categorySource = renderer->GetRuntimeData().renderTargets[MASKS2];
-			auto& depthSource = renderer->GetDepthStencilData()
-			                        .depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-			(void)NeuralRendering::CharacterRendering::Instance()
-				.CaptureAuthoredCategories(
-					globals::d3d::device,
-					globals::d3d::context,
-					categorySource.texture,
-					depthSource.depthSRV,
-					globals::state->frameCount,
-					upscaling.GetCharacterNeuralRenderingCategoryMask(),
-					upscaling.jitter.x,
-					upscaling.jitter.y);
-		}
 
 		// Defer terrain rendering until after everything else
 		if (terrainBlending.loaded && terrainBlending.settings.Enabled) {
 			terrainBlending.RenderTerrainBlendingPasses();
+		}
+
+		const auto& upscaling = globals::features::upscaling;
+		if (deferred && deferred->deferredPass &&
+			upscaling.IsCharacterNeuralRenderingRouteRequested() && renderer &&
+			globals::d3d::device && globals::d3d::context) {
+			std::uint32_t inputWidthPerEye = 0;
+			std::uint32_t inputHeight = 0;
+			std::uint32_t outputWidthPerEye = 0;
+			std::uint32_t outputHeight = 0;
+			if (upscaling.GetRuntimeFoveatedRegionDimensions(
+					inputWidthPerEye, inputHeight,
+					outputWidthPerEye, outputHeight)) {
+				auto& categorySource =
+					renderer->GetRuntimeData().renderTargets[MASKS2];
+				auto& depthSource = renderer->GetDepthStencilData()
+				                        .depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+				(void)NeuralRendering::CharacterRendering::Instance()
+					.CaptureAuthoredCategories(
+						globals::d3d::device,
+						globals::d3d::context,
+						categorySource.texture,
+						depthSource.depthSRV,
+						inputWidthPerEye,
+						inputHeight,
+						globals::state->frameCount,
+						upscaling.GetCharacterNeuralRenderingCategoryMask(),
+						upscaling.jitter.x,
+						upscaling.jitter.y);
+			}
 		}
 	}
 

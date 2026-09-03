@@ -19,17 +19,17 @@ testable:
 | ----------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | Capability and initialization | `NeuralRendering::Runtime` and `Renderer`               | Admit 310.8 Feature 18 runtimes independently of logging/developer mode, report identity, and fail closed on invalid resources.  |
 | Character classification      | the existing subsurface/lighting setup hook             | Classify actor-owned face, RGB-tint skin, and hair materials without treating generic skinned geometry as skin.                  |
-| Semantic mask                 | `CharacterRendering` and `DLSS5CharacterMaskCS.hlsl`    | Resolve synchronized category and depth provenance into a dedicated per-eye `R8_UNORM` control texture.                          |
+| Semantic mask                 | `CharacterRendering` and `DLSS5CharacterMaskCS.hlsl`    | Resolve synchronized category and depth provenance into a dedicated per-eye `R8_UNORM` CSX selection texture.                    |
 | Per-eye resources             | `CharacterRendering` and `Renderer` feature slots       | Keep mask, provider resources, history, and statistics separate for each eye and insertion route.                                |
-| Feature 18 evaluation         | `Renderer` and `Runtime`                                | Bind color, depth, motion vectors, output, and the optional private control-mask contract as one stereo transaction.             |
+| Feature 18 evaluation         | `Renderer` and `Runtime`                                | Bind color, depth, motion vectors, and output through the known-working automatic-mask invocation in one stereo transaction.     |
 | Compute ROI policy            | `CharacterRendering`                                    | Build measured, stabilized per-eye character rectangles, but do not claim or dispatch sparse inference without an evidenced API. |
 | Composite and output          | Gogh route integration and `FoveatedCenterBlendCS.hlsl` | Select untouched DLSS outside the mask and Neural Rendering inside it before the existing feathered center composite.            |
 | UI and settings               | Upscaling settings UI                                   | Centralize category, strength, eligibility, mask-calibration, and debug controls.                                                |
-| Diagnostics and profiling     | DevBench bridge and CSX GPU profiler                    | Report per-eye coverage/regions/evaluation dimensions and separate mask, evaluation, baseline-copy, and composite costs.         |
+| Diagnostics and profiling     | DevBench bridge and CSX GPU profiler                    | Report per-eye coverage/regions/evaluation dimensions and separate capture, mask, evaluation, and composite costs.               |
 
-The architectural boundary is intentional: a successful private provider mask
-does not imply compute ROI support, and deterministic CSX compositing does not
-change the dimensions evaluated by Feature 18.
+The architectural boundary is intentional: the unpublished provider
+`ControlMask` contract is not used. Deterministic CSX output compositing does
+not imply compute ROI support or change the dimensions evaluated by Feature 18.
 
 ## Evidence and confidence
 
@@ -105,21 +105,17 @@ The implementation keeps two concepts deliberately separate.
 
 ### A. Visual masking
 
-The engine renders a per-pixel character-control image. Feature 18 receives
-that image through `DLSSNR.ControlMask`, with `DLSSNR.UseAutoMask` disabled.
-The Feature 18 color, depth, motion-vector, and output extents remain unchanged.
-The expected provider behavior is that the model's visual uplift is selected
-per pixel, but the private binary does not declare the mask's format or numeric
-meaning.
+The engine renders a per-pixel character-selection image. Feature 18 receives
+the normal color, depth, motion-vector, and output resources with
+`DLSSNR.UseAutoMask` enabled and no `DLSSNR.ControlMask` resource. CSX then
+uses its own per-eye mask to blend the successful Feature 18 output over the
+untouched normal-DLSS baseline before Gogh's existing foveated feather.
+The mask's actual `0..1` value is the composite weight, so face, skin, and hair
+strengths are applied exactly once.
 
-The default deterministic mask-composite path therefore also uses the nonzero
-support of the same per-eye mask in CSX's center blend. It selects untouched
-normal DLSS wherever that support is zero and Feature 18 output wherever it is
-nonzero, before applying Gogh's existing foveated feather. Category strength is
-resolved once while creating the provider mask; CSX does not multiply it a
-second time.
-Disabling the composite is an explicit provider-ControlMask-only calibration
-lane, not the normal mode.
+Disabling visual isolation is the working full-center Feature 18 control. It
+also skips character classification, category/depth capture, mask generation,
+and mask compositing.
 
 This guarantees isolation to the mask texture that CSX actually produced.
 Synchronized authored and current depth reject later depth-writing occluders;
@@ -193,7 +189,12 @@ It sets these resources and resource rectangles for evaluation:
 -   `DLSSNR.Depth` and the corresponding `DepthSubrect*` keys
 -   `DLSSNR.MVec` and the corresponding `MVecSubrect*` keys
 -   `DLSSNR.Output` and the corresponding `OutputSubrect*` keys
--   `DLSSNR.ControlMask` and the corresponding `ControlMaskSubrect*` keys
+
+The runtime wrapper can bind `DLSSNR.ControlMask` and the corresponding
+`ControlMaskSubrect*` keys for isolated ABI research, but the
+character-rendering integration intentionally leaves them absent and sets
+`DLSSNR.UseAutoMask=1`. Binary parser evidence alone did not validate the
+mask's format or semantics well enough for the reliable path.
 
 It also sets `DLSSNR.MVecScaleX`, `DLSSNR.MVecScaleY`,
 `DLSSNR.DepthInverted`, `DLSSNR.Enabled`, `DLSSNR.Reset`,
@@ -282,15 +283,17 @@ The pixel shader continues to output opacity in its fourth component, so the
 inherited MRT source-alpha blend factor remains available without introducing
 stored destination alpha that the former single-channel target did not have.
 
-At the pre-terrain/decal capture hook, CSX freezes both the combined-stereo
-`MASKS2` surface and the main depth resource. The mask resolve later samples
-that synchronized authored-depth copy and the current per-eye depth guide. A
-category pixel is admitted only when their linearized depths agree within the
-bounded visibility tolerance. This rejects a character category when a later
-depth-writing surface has taken ownership of the pixel. Category enablement and
-strength are then resolved into the dedicated per-eye `R8_UNORM` texture. The
-path avoids a second full character draw traversal, but its storage and
-bandwidth costs are not free; they are itemized under known limitations.
+After deferred terrain replay and before blended decals, CSX freezes the active
+packed stereo extent of `MASKS2` together with main depth from the same render
+point. Capturing before blended decals prevents ordinary alpha blending from
+diluting exact semantic IDs. The mask resolve later samples that synchronized
+depth and the current per-eye depth guide. A category pixel is rejected only
+when a materially closer later surface has taken ownership; a farther or
+cleared later sample does not erase valid authored geometry. Category
+enablement and strength are then resolved into the dedicated per-eye
+`R8_UNORM` texture. The path avoids a second character draw traversal and
+avoids copying unused native-allocation padding, but its storage and bandwidth
+costs are not free.
 The frozen depth texture preserves the source texture format and SRV
 interpretation. The implemented depth-view allowlist is
 `DXGI_FORMAT_R24_UNORM_X8_TYPELESS`,
@@ -359,8 +362,11 @@ the frame has been rendered.
 Generic `kSkinned` geometry is deliberately not classified as skin. Doing so
 would include armour, clothes, weapons, and animated accessories. A geometry
 observation is accepted only when its render user data resolves to an actor,
-and the player actor is excluded from the initial experiment. Thus player
-hands, arms, weapons, and body are not intentionally admitted as NPC skin.
+and the player actor is excluded from the initial experiment. The semantic
+descriptor is emitted only after that observation is accepted, so an empty
+observation set also proves that no selected category ID was authored. Thus
+player hands, arms, weapons, and body are not intentionally admitted as NPC
+skin.
 
 TruePBR and other material replacements may preserve property flags while not
 reporting a useful vanilla material feature. Property flags therefore remain
@@ -467,56 +473,63 @@ The in-game diagnostics and DevBench status should expose, per eye:
 -   whether mask preparation succeeded and whether evaluation was required
 -   visual-mask mechanism and the exact compute-ROI unsupported reason
 -   synchronized category/depth-capture readiness, frame, attempts, successes,
-    empty bypasses, and failures
+    same-frame reuses, empty bypasses, and failures
 -   preparation attempts, successes, failures, and dropped readbacks
 
 The debug views are `Off`, `Character Mask`, `ROI Rectangles`, and
 `DLSS 5 Output`. “ROI Rectangles” means eligibility/measurement rectangles, not
 provider compute dispatches.
 
-Diagnostics also expose six mask-contract modes: `Authored`, `Force Zero`,
+Diagnostics also expose six CSX-selection-mask modes: `Authored`, `Force Zero`,
 `Force One`, `Force Half`, `Invert Authored`, and
-`Authored (Ignore Visibility Depth)`. The forced modes isolate provider response
-to known control values; the last mode isolates category authoring from core
-depth rejection. They are not image-quality presets. These tests are necessary
-because neither the `R8_UNORM` format nor its numeric meaning is declared by a
-public provider API. Normal use remains `Authored`.
+`Authored (Ignore Visibility Depth)`. The forced modes isolate CSX composite
+behavior at known weights; the last mode isolates category authoring from core
+depth rejection. They do not modify Feature 18's automatic-mask invocation and
+are not image-quality presets. Normal use remains `Authored`.
 
 Profiling distinguishes synchronized category/depth capture, mask generation,
-CPU rectangle setup, Feature 18 GPU evaluation,
-`Upscaling::DLSS5CharacterBaselineCopy`, and
+CPU rectangle setup, Feature 18 GPU evaluation, and
 `Upscaling::DLSS5CharacterComposite`. Mask coverage and Feature 18 time must be
 compared experimentally: lower coverage is not proof of lower inference cost.
 The character snapshot attributes its latest coverage sample to a frame, eye,
 slot, and dimensions, while Renderer telemetry attributes Feature 18 time to
 the main/submit route and feature-slot mask. The auxiliary mask, copy, and
 composite profiler labels remain aggregate; their independent asynchronous
-timers are not summed into a misleading per-frame total. The main/non-float
-Upscaled-Center Direct route keeps its direct Feature 18 target but incurs one
-center-sized copy to preserve the normal-DLSS baseline used by the deterministic
-composite. The submit float route already keeps its neural output separate and
-does not allocate or copy that non-float baseline lane. Frames with no
+timers are not summed into a misleading per-frame total. Character isolation
+forces the main Upscaled-Center route to its existing staged neural output, so
+the normal-DLSS center remains the baseline without an extra copy. The submit
+float route already keeps its neural output separate. Frames with no
 eligible material observation are logical empty captures: they clear the
-per-eye masks and bypass both combined-stereo provenance copies and Feature 18.
-Authored-mask coverage is sampled every frame per feature slot so transitions
-to and from zero are observed after the bounded asynchronous readback latency.
-A zero sample matching the current settings, crop, dimensions, and eligibility
-region count bypasses Feature 18. Region coordinates are intentionally excluded
-from that compatibility key so normal head motion does not defeat the bypass;
-continuous sampling bounds recovery when mask contents change. Forced-mask
-calibration modes retain the 30-frame periodic cadence. Frame-keyed preparation
-history correlates delayed coverage and Feature 18 timing with the frame that
-produced them instead of the current CPU frame, including stereo-pair expansion
-when only one eye measured nonzero.
+per-eye masks and bypass both active-stereo provenance copies and Feature 18.
+Repeated capture callbacks with the same frame, active extent, category policy,
+and jitter reuse the first snapshot instead of copying it again.
+Authored and forced-mask coverage is sampled on stable policy/layout changes
+and at a 30-frame cadence per feature slot. Head motion and changing projected
+rectangles do not trigger extra counter/readback work. Readbacks are polled once
+per frame and ordered by a monotonic request serial. Authored-category counters
+scan every low-resolution input pixel in the active eye crop directly,
+independent of output resampling, render jitter, depth rejection, and ROI
+motion. A sample with zero pixels in all enabled categories may request a
+Feature 18 bypass for a deliberately bounded, stale-tolerant four frames while
+policy, layout, and the eligible actor set remain unchanged. Mask generation
+continues on those frames; the next scheduled readback revalidates coverage
+without a synchronous CPU/GPU wait. Same-frame empty observations or a
+deterministically empty eligibility plan request a bypass immediately. A
+one-eye projection disagreement is not treated as proof: that eye falls back
+to a full-eye eligibility rectangle while the authored category texture still
+selects the actual pixels. The
+stereo execution boundary records each slot separately as successfully
+evaluated, evaluation-failed, empty-bypassed, or aborted, so a zero request
+from only one eye is not reported as a skip when the paired Feature 18 call
+still evaluates both eyes.
 
 ## Known selection limitations
 
-The semantic channel is written by the deferred opaque/alpha-tested lighting
-pass and frozen, together with main depth, before Terrain Blending and ordinary
-blended decals. The mask resolve compares that authored depth against the
-current per-eye depth guide. Later terrain replay and opaque/alpha-tested draws
-that update this guide therefore reject an occluded category rather than
-enhancing the hidden character pixel.
+The semantic channel is written by deferred opaque/alpha-tested lighting and is
+frozen after Terrain Blending but before ordinary blended decals, together with
+main depth from that exact render point. The mask resolve compares that authored
+depth against the current per-eye guide directionally. A closer later depth
+sample rejects an occluded category; a farther or cleared sample preserves it.
 
 That reconciliation is limited to surfaces represented in the selected current
 depth guide. Translucent, blended-decal, particle, and other post-deferred
@@ -540,20 +553,21 @@ increase, at the cost of reducing inverse vertex AO from 16-bit to 8-bit UNORM
 precision. Flat SE/AE permutations retain their original `R16_UNORM`
 representation.
 
-When character mode observes an enabled material, it additionally allocates a
-full combined-stereo RG8 category snapshot and a matching native-format
-depth snapshot, and copies both each nonempty observed frame. Logical empty
-frames skip both copies, although previously allocated snapshot resources
-remain resident until reset or resource recreation. The two copies share the
+When character mode observes an enabled material, it additionally allocates an
+active packed-stereo RG8 category snapshot and a matching native-format depth
+snapshot, then copies only `2 * logical eye width` by logical render height each
+nonempty frame. Native allocation padding is excluded. Logical empty frames
+skip both copies, although previously allocated snapshot resources remain
+resident until reset or resource recreation. The two copies share the
 `Upscaling::DLSS5CharacterCategoryCapture` profiling scope. Dedicated per-eye
-`R8_UNORM` provider masks and their small diagnostic counter buffers are
-separate slot resources. None of these costs is reduced by the current ROI
-rectangles.
+`R8_UNORM` CSX selection masks and their small diagnostic counter buffers are
+separate slot resources. The current ROI rectangles do not reduce provider
+inference dimensions.
 
 ## Failure behavior and validation boundary
 
-Character mode fails closed. It does not silently fall back to automatic
-masking, reuse a stale peer-eye mask, or publish a one-eye result. If material
+Character mode fails closed. It does not bind the unvalidated private provider
+mask, reuse a stale peer-eye mask, or publish a one-eye result. If material
 classification, mask extraction, dimension/format checks, D3D11/D3D12 sharing,
 or Feature 18 evaluation fails, the pair retains Gogh's completed normal-DLSS
 result. Disabling character mode restores the ordinary automatic-mask route.
@@ -570,5 +584,5 @@ called visually correct:
 2. alpha-tested hair boundaries and optional depth-aware feathering;
 3. independent left/right alignment through motion, menus, and camera cuts;
 4. no history or mask leakage between eyes or Gogh insertion points;
-5. Feature 18 response to the experimental `R8_UNORM` `0..1` mask;
+5. CSX composite response to the `R8_UNORM` `0..1` selection mask;
 6. GPU cost versus evaluation dimensions, mask coverage, and actor count.

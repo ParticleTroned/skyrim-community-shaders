@@ -101,7 +101,9 @@ namespace NeuralRendering
 
 		struct PathProxyInvocation
 		{
+			HMODULE runtimeModule = nullptr;
 			HMODULE callerModule = nullptr;
+			HMODULE retainedCallerModule = nullptr;
 			std::wstring spoofedPath;
 			std::atomic<std::uint32_t> hits = 0;
 		};
@@ -111,7 +113,6 @@ namespace NeuralRendering
 		std::atomic<GetModuleFileNameWFunction> g_originalGetModuleFileNameW = nullptr;
 		HMODULE g_pathProxyRuntime = nullptr;
 		void** g_pathProxySlot = nullptr;
-		std::size_t g_pathProxyDepth = 0;
 		bool g_pathProxyHookInstalled = false;
 
 		DWORD WINAPI RuntimeCallerGetModuleFileNameW(HMODULE a_module, LPWSTR a_filename, DWORD a_size)
@@ -132,19 +133,48 @@ namespace NeuralRendering
 			return original ? original(a_module, a_filename, a_size) : 0;
 		}
 
-		bool ProtectAndWriteImportSlot(void** a_slot, void* a_value)
+		struct ImportSlotExchangeResult
 		{
-			if (!a_slot)
-				return false;
+			bool exchanged = false;
+			bool protectionRestored = false;
+			bool rolledBack = false;
+		};
+
+		ImportSlotExchangeResult ProtectAndExchangeImportSlot(
+			void** a_slot, void* a_expected, void* a_value)
+		{
+			if (!a_slot || !a_expected || !a_value)
+				return {};
 			DWORD oldProtection = 0;
 			if (!VirtualProtect(a_slot, sizeof(*a_slot), PAGE_READWRITE, &oldProtection))
-				return false;
-			*a_slot = a_value;
+				return {};
+			const auto previous = InterlockedCompareExchangePointer(
+				reinterpret_cast<void* volatile*>(a_slot), a_value, a_expected);
 			DWORD ignoredProtection = 0;
-			(void)VirtualProtect(
-				a_slot, sizeof(*a_slot), oldProtection, &ignoredProtection);
-			FlushInstructionCache(GetCurrentProcess(), a_slot, sizeof(*a_slot));
-			return true;
+			ImportSlotExchangeResult result{
+				.exchanged = previous == a_expected,
+				.protectionRestored = VirtualProtect(
+										  a_slot, sizeof(*a_slot), oldProtection, &ignoredProtection) != FALSE,
+			};
+			if (result.exchanged && !result.protectionRestored) {
+				const auto rollbackPrevious = InterlockedCompareExchangePointer(
+					reinterpret_cast<void* volatile*>(a_slot), a_expected, a_value);
+				result.rolledBack = rollbackPrevious == a_value;
+				DWORD ignoredRollbackProtection = 0;
+				result.protectionRestored = VirtualProtect(
+												a_slot, sizeof(*a_slot), oldProtection,
+												&ignoredRollbackProtection) != FALSE;
+			}
+			if (result.exchanged && result.protectionRestored && !result.rolledBack)
+				FlushInstructionCache(GetCurrentProcess(), a_slot, sizeof(*a_slot));
+			return result;
+		}
+
+		void* ReadImportSlot(void** a_slot) noexcept
+		{
+			// Pointer-sized aligned loads are atomic on the supported x64 runtime;
+			// unlike CMPXCHG this does not write to a read-only IAT page.
+			return a_slot ? *reinterpret_cast<void* volatile*>(a_slot) : nullptr;
 		}
 
 		void** FindGetModuleFileNameWImportSlot(HMODULE a_runtime)
@@ -198,94 +228,143 @@ namespace NeuralRendering
 			return nullptr;
 		}
 
-		class RuntimeCallerPathScope
+		bool InstallRuntimeCallerPathHook(
+			HMODULE a_runtime, const std::filesystem::path& a_spoofedPath)
 		{
-		public:
-			RuntimeCallerPathScope(HMODULE a_runtime, const std::filesystem::path& a_spoofedPath) :
-				lock_(g_pathProxyMutex)
-			{
-				if (!a_runtime)
-					return;
+			if (!a_runtime)
+				return false;
 
-				invocation_ = std::make_shared<PathProxyInvocation>();
-				if (!GetModuleHandleExW(
-						GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-							GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-						reinterpret_cast<LPCWSTR>(&RuntimeCallerGetModuleFileNameW),
-						&invocation_->callerModule)) {
-					return;
-				}
-				invocation_->spoofedPath = a_spoofedPath.wstring();
+			std::scoped_lock lock(g_pathProxyMutex);
+			const auto active = std::atomic_load_explicit(
+				&g_activePathProxy, std::memory_order_acquire);
+			if (g_pathProxyHookInstalled) {
+				return g_pathProxyRuntime == a_runtime && active &&
+				       active->runtimeModule == a_runtime &&
+				       active->retainedCallerModule && g_pathProxySlot &&
+				       ReadImportSlot(g_pathProxySlot) ==
+				           reinterpret_cast<void*>(&RuntimeCallerGetModuleFileNameW) &&
+				       active->spoofedPath == a_spoofedPath.wstring();
+			}
 
-				if (g_pathProxyHookInstalled) {
-					if (g_pathProxyRuntime != a_runtime)
-						return;
-				} else {
-					void** slot = FindGetModuleFileNameWImportSlot(a_runtime);
-					if (!slot)
-						return;
-					const auto original = reinterpret_cast<GetModuleFileNameWFunction>(*slot);
-					if (!original)
-						return;
-					g_originalGetModuleFileNameW.store(original, std::memory_order_release);
-					if (!ProtectAndWriteImportSlot(
-							slot, reinterpret_cast<void*>(&RuntimeCallerGetModuleFileNameW))) {
-						g_originalGetModuleFileNameW.store(nullptr, std::memory_order_release);
-						return;
-					}
+			void** slot = FindGetModuleFileNameWImportSlot(a_runtime);
+			if (!slot)
+				return false;
+			const auto original = reinterpret_cast<GetModuleFileNameWFunction>(
+				ReadImportSlot(slot));
+			if (!original || original == &RuntimeCallerGetModuleFileNameW)
+				return false;
+
+			auto invocation = std::make_shared<PathProxyInvocation>();
+			invocation->runtimeModule = a_runtime;
+			invocation->spoofedPath = a_spoofedPath.wstring();
+			if (!GetModuleHandleExW(
+					GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+						GET_MODULE_HANDLE_EX_FLAG_PIN,
+					reinterpret_cast<LPCWSTR>(&RuntimeCallerGetModuleFileNameW),
+					&invocation->retainedCallerModule)) {
+				return false;
+			}
+			invocation->callerModule = invocation->retainedCallerModule;
+
+			g_originalGetModuleFileNameW.store(original, std::memory_order_release);
+			std::atomic_store_explicit(
+				&g_activePathProxy, invocation, std::memory_order_release);
+			const auto exchange = ProtectAndExchangeImportSlot(
+				slot, reinterpret_cast<void*>(original),
+				reinterpret_cast<void*>(&RuntimeCallerGetModuleFileNameW));
+			if (!exchange.exchanged || !exchange.protectionRestored ||
+				exchange.rolledBack) {
+				if (ReadImportSlot(slot) ==
+					reinterpret_cast<void*>(&RuntimeCallerGetModuleFileNameW)) {
 					g_pathProxyRuntime = a_runtime;
 					g_pathProxySlot = slot;
 					g_pathProxyHookInstalled = true;
+					return false;
 				}
-
-				previousInvocation_ = std::atomic_load_explicit(
-					&g_activePathProxy, std::memory_order_acquire);
 				std::atomic_store_explicit(
-					&g_activePathProxy, invocation_, std::memory_order_release);
-				++g_pathProxyDepth;
-				installed_ = true;
+					&g_activePathProxy, std::shared_ptr<PathProxyInvocation>{},
+					std::memory_order_release);
+				return false;
 			}
 
-			~RuntimeCallerPathScope()
+			g_pathProxyRuntime = a_runtime;
+			g_pathProxySlot = slot;
+			g_pathProxyHookInstalled = true;
+			return true;
+		}
+
+		bool UninstallRuntimeCallerPathHook(HMODULE a_runtime)
+		{
+			std::scoped_lock lock(g_pathProxyMutex);
+			if (!g_pathProxyHookInstalled)
+				return true;
+			if (!a_runtime || g_pathProxyRuntime != a_runtime)
+				return false;
+
+			const auto original =
+				g_originalGetModuleFileNameW.load(std::memory_order_acquire);
+			const auto active = std::atomic_load_explicit(
+				&g_activePathProxy, std::memory_order_acquire);
+			if (!original || !g_pathProxySlot || !active ||
+				!active->retainedCallerModule) {
+				return false;
+			}
+			const auto exchange = ProtectAndExchangeImportSlot(
+				g_pathProxySlot,
+				reinterpret_cast<void*>(&RuntimeCallerGetModuleFileNameW),
+				reinterpret_cast<void*>(original));
+			if (!exchange.exchanged ||
+				!exchange.protectionRestored || exchange.rolledBack) {
+				return false;
+			}
+
+			active->retainedCallerModule = nullptr;
+			g_pathProxySlot = nullptr;
+			g_pathProxyRuntime = nullptr;
+			g_pathProxyHookInstalled = false;
+			std::atomic_store_explicit(
+				&g_activePathProxy, std::shared_ptr<PathProxyInvocation>{},
+				std::memory_order_release);
+			// The proxy module was pinned before exchange and remains resident until
+			// process exit, covering callers that already fetched the proxy address.
+			return true;
+		}
+
+		class RuntimeCallerPathCall
+		{
+		public:
+			explicit RuntimeCallerPathCall(HMODULE a_runtime)
 			{
-				if (!installed_)
-					return;
-				std::atomic_store_explicit(
-					&g_activePathProxy, previousInvocation_, std::memory_order_release);
-				if (g_pathProxyDepth)
-					--g_pathProxyDepth;
-				if (!g_pathProxyDepth && g_pathProxyHookInstalled) {
-					const auto original = g_originalGetModuleFileNameW.load(std::memory_order_acquire);
-					if (ProtectAndWriteImportSlot(g_pathProxySlot, reinterpret_cast<void*>(original))) {
-						g_pathProxySlot = nullptr;
-						g_pathProxyRuntime = nullptr;
-						g_pathProxyHookInstalled = false;
-						g_originalGetModuleFileNameW.store(nullptr, std::memory_order_release);
-					}
+				std::scoped_lock lock(g_pathProxyMutex);
+				invocation_ = std::atomic_load_explicit(
+					&g_activePathProxy, std::memory_order_acquire);
+				if (g_pathProxyHookInstalled &&
+					g_pathProxyRuntime == a_runtime && g_pathProxySlot &&
+					ReadImportSlot(g_pathProxySlot) ==
+						reinterpret_cast<void*>(&RuntimeCallerGetModuleFileNameW) &&
+					invocation_ && invocation_->runtimeModule == a_runtime &&
+					invocation_->retainedCallerModule) {
+					initialHits_ = invocation_->hits.load(std::memory_order_relaxed);
+					installed_ = true;
 				}
 			}
 
-			RuntimeCallerPathScope(const RuntimeCallerPathScope&) = delete;
-			RuntimeCallerPathScope& operator=(const RuntimeCallerPathScope&) = delete;
+			RuntimeCallerPathCall(const RuntimeCallerPathCall&) = delete;
+			RuntimeCallerPathCall& operator=(const RuntimeCallerPathCall&) = delete;
 
 			[[nodiscard]] bool IsInstalled() const { return installed_; }
 			[[nodiscard]] std::uint32_t Hits() const
 			{
-				return invocation_ ? invocation_->hits.load(std::memory_order_relaxed) : 0;
+				return installed_ ?
+				           invocation_->hits.load(std::memory_order_relaxed) - initialHits_ :
+				           0;
 			}
 
 		private:
-			std::unique_lock<std::recursive_mutex> lock_;
 			std::shared_ptr<PathProxyInvocation> invocation_;
-			std::shared_ptr<PathProxyInvocation> previousInvocation_;
+			std::uint32_t initialHits_ = 0;
 			bool installed_ = false;
 		};
-
-		bool IsRuntimeCallerPathHookActive(HMODULE a_runtime)
-		{
-			std::scoped_lock lock(g_pathProxyMutex);
-			return g_pathProxyHookInstalled && g_pathProxyRuntime == a_runtime;
-		}
 
 		std::filesystem::path ResolveRuntimePath(const std::filesystem::path& a_explicitPath)
 		{
@@ -1098,16 +1177,26 @@ namespace NeuralRendering
 			module_ = nullptr;
 			return false;
 		}
-		for (const char* exportName : kRequiredExports) {
-			if (!GetProcAddress(runtime, exportName)) {
+		std::array<void*, kRequiredExports.size()> requiredExports{};
+		for (std::size_t index = 0; index < kRequiredExports.size(); ++index) {
+			requiredExports[index] = reinterpret_cast<void*>(
+				GetProcAddress(runtime, kRequiredExports[index]));
+			if (!requiredExports[index]) {
 				SetFailureLocked(
 					RuntimeStatus::MissingExport, RuntimeFailureStage::Load,
-					std::format("missing required export {}", exportName));
+					std::format("missing required export {}", kRequiredExports[index]));
 				FreeLibrary(runtime);
 				module_ = nullptr;
 				return false;
 			}
 		}
+		runtimeExports_ = {
+			.initialize = requiredExports[0],
+			.createFeature = requiredExports[1],
+			.evaluateFeature = requiredExports[2],
+			.releaseFeature = requiredExports[3],
+			.shutdown = requiredExports[4],
+		};
 
 		const auto getApplicationId = reinterpret_cast<GetUnsignedValue>(
 			GetProcAddress(runtime, "NVSDK_NGX_GetApplicationId"));
@@ -1119,6 +1208,7 @@ namespace NeuralRendering
 				"runtime identity exports are missing");
 			FreeLibrary(runtime);
 			module_ = nullptr;
+			runtimeExports_ = {};
 			return false;
 		}
 
@@ -1151,8 +1241,17 @@ namespace NeuralRendering
 				"D3D12 device is null", static_cast<std::uint32_t>(E_INVALIDARG));
 			return false;
 		}
-		if (status_ == RuntimeStatus::Initialized && device_ == a_device)
-			return true;
+		if (status_ == RuntimeStatus::Initialized && device_ == a_device) {
+			RuntimeCallerPathCall pathProxy(static_cast<HMODULE>(module_));
+			lastPathProxyInstalled_ = pathProxy.IsInstalled();
+			if (lastPathProxyInstalled_)
+				return true;
+			SetFailureLocked(
+				RuntimeStatus::InitializationFailed,
+				RuntimeFailureStage::Initialization,
+				"NGX caller-path proxy changed after initialization");
+			return false;
+		}
 		if (device_) {
 			const auto runtimePath = path_;
 			if (!ShutdownLocked() || !ProbeLocked(runtimePath))
@@ -1162,8 +1261,8 @@ namespace NeuralRendering
 			return false;
 
 		const auto runtime = static_cast<HMODULE>(module_);
-		const auto initialize = reinterpret_cast<InitD3D12>(
-			GetProcAddress(runtime, "NVSDK_NGX_D3D12_Init_Ext"));
+		const auto initialize =
+			reinterpret_cast<InitD3D12>(runtimeExports_.initialize);
 		if (!initialize) {
 			SetFailureLocked(
 				RuntimeStatus::MissingExport, RuntimeFailureStage::Load,
@@ -1219,21 +1318,37 @@ namespace NeuralRendering
 			return false;
 		}
 
-		NVSDK_NGX_Result initializeResult = NVSDK_NGX_Result_Fail;
-		{
-			RuntimeCallerPathScope pathProxy(runtime, path_.parent_path() / L"nvngx.dll");
-			lastPathProxyInstalled_ = pathProxy.IsInstalled();
-			if (!lastPathProxyInstalled_) {
-				SetFailureLocked(
-					RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
-					"failed to install the NGX caller-path proxy");
-				return false;
-			}
-			initializeResult = initialize(
-				applicationId_, writablePath.c_str(), a_device,
-				static_cast<NVSDK_NGX_Version>(apiVersion_), nullptr);
-			lastPathProxyHits_ = pathProxy.Hits();
+		lastPathProxyInstalled_ = InstallRuntimeCallerPathHook(
+			runtime, path_.parent_path() / L"nvngx.dll");
+		if (!lastPathProxyInstalled_) {
+			const bool pathProxyRestored =
+				UninstallRuntimeCallerPathHook(runtime);
+			lastPathProxyInstalled_ = !pathProxyRestored;
+			SetFailureLocked(
+				RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
+				pathProxyRestored ?
+					"failed to install the NGX caller-path proxy" :
+					"failed to install and restore the NGX caller-path proxy; runtime retained for safety");
+			return false;
 		}
+		RuntimeCallerPathCall pathProxy(runtime);
+		lastPathProxyInstalled_ = pathProxy.IsInstalled();
+		if (!lastPathProxyInstalled_) {
+			const bool pathProxyRestored =
+				UninstallRuntimeCallerPathHook(runtime);
+			lastPathProxyInstalled_ = !pathProxyRestored;
+			SetFailureLocked(
+				RuntimeStatus::InitializationFailed,
+				RuntimeFailureStage::Initialization,
+				pathProxyRestored ?
+					"NGX caller-path proxy changed before initialization" :
+					"NGX caller-path proxy changed before initialization and could not be restored; runtime retained for safety");
+			return false;
+		}
+		const auto initializeResult = initialize(
+			applicationId_, writablePath.c_str(), a_device,
+			static_cast<NVSDK_NGX_Version>(apiVersion_), nullptr);
+		lastPathProxyHits_ = pathProxy.Hits();
 		ngxResult_ = static_cast<std::uint32_t>(initializeResult);
 		if (NVSDK_NGX_FAILED(initializeResult)) {
 			SetFailureLocked(
@@ -1242,6 +1357,13 @@ namespace NeuralRendering
 					"NGX initialization failed 0x{:08X} proxyInstalled={} proxyHits={}",
 					ngxResult_, lastPathProxyInstalled_, lastPathProxyHits_),
 				ngxResult_);
+			if (UninstallRuntimeCallerPathHook(runtime)) {
+				lastPathProxyInstalled_ = false;
+			} else {
+				detail_ +=
+					"; caller-path proxy restoration failed and its target was retained";
+				logger::critical("[DLSSNR] {}", detail_);
+			}
 			return false;
 		}
 
@@ -1261,7 +1383,6 @@ namespace NeuralRendering
 			const ParameterCoreTrust coreTrust = coreTrust_;
 			const ParameterCoreSource coreSource = coreSource_;
 			const std::uint32_t proxyHits = lastPathProxyHits_;
-			const bool proxyInstalled = lastPathProxyInstalled_;
 
 			if (ShutdownLocked()) {
 				path_ = runtimePath;
@@ -1273,7 +1394,7 @@ namespace NeuralRendering
 				coreTrust_ = coreTrust;
 				coreSource_ = coreSource;
 				lastPathProxyHits_ = proxyHits;
-				lastPathProxyInstalled_ = proxyInstalled;
+				lastPathProxyInstalled_ = false;
 				status_ = primaryStatus;
 				failureStage_ = primaryStage;
 				detail_ = primaryDetail;
@@ -1299,12 +1420,26 @@ namespace NeuralRendering
 		coreFile_ = coreSelection.ReleaseFile();
 		const auto core = static_cast<HMODULE>(coreModule_);
 
+		parameterCoreExports_ = {
+			.allocateParameters = reinterpret_cast<void*>(
+				GetProcAddress(core, "NVSDK_NGX_D3D12_AllocateParameters")),
+			.destroyParameters = reinterpret_cast<void*>(
+				GetProcAddress(core, "NVSDK_NGX_D3D12_DestroyParameters")),
+		};
 		const auto allocateParameters = reinterpret_cast<AllocateParameters>(
-			GetProcAddress(core, "NVSDK_NGX_D3D12_AllocateParameters"));
+			parameterCoreExports_.allocateParameters);
+		const auto destroyParameters = reinterpret_cast<DestroyParameters>(
+			parameterCoreExports_.destroyParameters);
+		if (!allocateParameters || !destroyParameters) {
+			SetFailureLocked(
+				RuntimeStatus::ParameterAllocationFailed,
+				RuntimeFailureStage::ParameterAllocation,
+				"NGX parameter-core allocation or destruction export is unavailable");
+			rollbackInitializationFailure();
+			return false;
+		}
 		NVSDK_NGX_Parameter* parameters = nullptr;
-		const auto allocationResult = allocateParameters ?
-		                                  allocateParameters(&parameters) :
-		                                  NVSDK_NGX_Result_Fail;
+		const auto allocationResult = allocateParameters(&parameters);
 		ngxResult_ = static_cast<std::uint32_t>(allocationResult);
 		parameters_ = parameters;
 		if (NVSDK_NGX_FAILED(allocationResult) || !parameters) {
@@ -1382,10 +1517,10 @@ namespace NeuralRendering
 		}
 
 		const auto runtime = static_cast<HMODULE>(module_);
-		const auto createFeature = reinterpret_cast<CreateFeature>(
-			GetProcAddress(runtime, "NVSDK_NGX_D3D12_CreateFeature"));
-		const auto evaluateFeature = reinterpret_cast<EvaluateFeature>(
-			GetProcAddress(runtime, "NVSDK_NGX_D3D12_EvaluateFeature"));
+		const auto createFeature =
+			reinterpret_cast<CreateFeature>(runtimeExports_.createFeature);
+		const auto evaluateFeature =
+			reinterpret_cast<EvaluateFeature>(runtimeExports_.evaluateFeature);
 		if (!createFeature || !evaluateFeature) {
 			SetFailureLocked(
 				RuntimeStatus::MissingExport, RuntimeFailureStage::Load,
@@ -1394,7 +1529,7 @@ namespace NeuralRendering
 		}
 
 		auto* parameters = static_cast<NVSDK_NGX_Parameter*>(parameters_);
-		RuntimeCallerPathScope pathProxy(runtime, path_.parent_path() / L"nvngx.dll");
+		RuntimeCallerPathCall pathProxy(runtime);
 		lastPathProxyInstalled_ = pathProxy.IsInstalled();
 		if (!lastPathProxyInstalled_) {
 			SetFailureLocked(
@@ -1577,9 +1712,9 @@ namespace NeuralRendering
 		}
 
 		const auto runtime = static_cast<HMODULE>(module_);
-		const auto releaseFeature = reinterpret_cast<ReleaseFeature>(
-			GetProcAddress(runtime, "NVSDK_NGX_D3D12_ReleaseFeature"));
-		RuntimeCallerPathScope pathProxy(runtime, path_.parent_path() / L"nvngx.dll");
+		const auto releaseFeature =
+			reinterpret_cast<ReleaseFeature>(runtimeExports_.releaseFeature);
+		RuntimeCallerPathCall pathProxy(runtime);
 		lastPathProxyInstalled_ = pathProxy.IsInstalled();
 		if (!releaseFeature || !lastPathProxyInstalled_) {
 			SetFailureLocked(
@@ -1652,12 +1787,8 @@ namespace NeuralRendering
 				return false;
 
 			if (parameters_) {
-				const auto core = static_cast<HMODULE>(coreModule_);
-				DestroyParameters destroyParameters = nullptr;
-				if (core) {
-					destroyParameters = reinterpret_cast<DestroyParameters>(
-						GetProcAddress(core, "NVSDK_NGX_D3D12_DestroyParameters"));
-				}
+				const auto destroyParameters = reinterpret_cast<DestroyParameters>(
+					parameterCoreExports_.destroyParameters);
 				if (!destroyParameters) {
 					SetFailureLocked(
 						RuntimeStatus::ShutdownFailed, RuntimeFailureStage::Shutdown,
@@ -1679,9 +1810,9 @@ namespace NeuralRendering
 			}
 
 			const auto runtime = static_cast<HMODULE>(module_);
-			const auto shutdown = reinterpret_cast<ShutdownD3D12>(
-				GetProcAddress(runtime, "NVSDK_NGX_D3D12_Shutdown1"));
-			RuntimeCallerPathScope pathProxy(runtime, path_.parent_path() / L"nvngx.dll");
+			const auto shutdown =
+				reinterpret_cast<ShutdownD3D12>(runtimeExports_.shutdown);
+			RuntimeCallerPathCall pathProxy(runtime);
 			lastPathProxyInstalled_ = pathProxy.IsInstalled();
 			if (!shutdown || !lastPathProxyInstalled_) {
 				SetFailureLocked(
@@ -1729,7 +1860,7 @@ namespace NeuralRendering
 
 		if (module_) {
 			const auto runtime = static_cast<HMODULE>(module_);
-			if (IsRuntimeCallerPathHookActive(runtime)) {
+			if (!UninstallRuntimeCallerPathHook(runtime)) {
 				SetFailureLocked(
 					RuntimeStatus::ShutdownFailed, RuntimeFailureStage::Shutdown,
 					"caller-path proxy restoration failed; runtime retained for safety");
@@ -1743,6 +1874,8 @@ namespace NeuralRendering
 			}
 		}
 		module_ = nullptr;
+		runtimeExports_ = {};
+		parameterCoreExports_ = {};
 		path_.clear();
 		hash_.clear();
 		version_.clear();
@@ -1774,19 +1907,33 @@ namespace NeuralRendering
 	{
 		if (abandoned_)
 			return;
+		bool pathProxyRestored = true;
+		try {
+			if (module_) {
+				pathProxyRestored = UninstallRuntimeCallerPathHook(
+					static_cast<HMODULE>(module_));
+			}
+		} catch (...) {
+			pathProxyRestored = false;
+		}
 		// Failed teardown retains NGX ownership intentionally rather than releasing objects that may still be in use.
 		module_ = nullptr;
 		coreModule_ = nullptr;
 		coreFile_ = nullptr;
 		device_ = nullptr;
 		parameters_ = nullptr;
+		runtimeExports_ = {};
+		parameterCoreExports_ = {};
 		featureHandles_ = {};
 		featureConfigurations_ = {};
+		lastPathProxyInstalled_ = !pathProxyRestored;
 		failureStage_ = RuntimeFailureStage::UnsafeAbandon;
 		status_ = RuntimeStatus::UnsafeAbandoned;
 		abandoned_ = true;
 		try {
-			detail_ = "NGX objects intentionally retained after unsafe teardown";
+			detail_ = pathProxyRestored ?
+			              "NGX objects intentionally retained after unsafe teardown" :
+			              "NGX objects and caller-path proxy intentionally retained after unsafe teardown";
 			logger::critical("[DLSSNR] unsafe ownership abandoned: {}", detail_);
 		} catch (...) {
 		}

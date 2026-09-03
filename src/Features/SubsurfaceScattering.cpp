@@ -9,8 +9,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <stdexcept>
+#include <unordered_map>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(SubsurfaceScattering::DiffusionProfile,
 	BlurRadius, Thickness, Strength, Falloff)
@@ -70,6 +72,25 @@ namespace
 		NeuralRendering::CharacterClassificationRejection rejection =
 			NeuralRendering::CharacterClassificationRejection::UnsupportedMaterial;
 	};
+
+	bool IsCharacterMaterialCandidate(
+		RE::BSShaderProperty* a_property) noexcept
+	{
+		if (!a_property)
+			return false;
+		using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
+		if (a_property->flags.any(
+				Flag::kFace, Flag::kFaceGenRGBTint, Flag::kHairTint)) {
+			return true;
+		}
+		const auto* material = a_property->GetBaseMaterial();
+		if (!material)
+			return false;
+		const auto feature = material->GetFeature();
+		return feature == RE::BSShaderMaterial::Feature::kFaceGen ||
+		       feature == RE::BSShaderMaterial::Feature::kFaceGenRGBTint ||
+		       feature == RE::BSShaderMaterial::Feature::kHairTint;
+	}
 
 	CharacterMaterialClassification ClassifyCharacterMaterial(
 		RE::BSShaderProperty* a_property,
@@ -890,39 +911,72 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 		}
 
 		const auto& upscaling = globals::features::upscaling;
-		if (upscaling.IsCharacterNeuralRenderingRouteRequested() &&
-			a_pass && a_pass->shaderProperty && a_pass->geometry) {
-			if (!actor) {
-				if (auto userData = a_pass->geometry->GetUserData())
-					actor = userData->As<RE::Actor>();
+		static thread_local std::uint32_t routeFrame =
+			std::numeric_limits<std::uint32_t>::max();
+		static thread_local bool routeRequested = false;
+		if (routeFrame != state->frameCount) {
+			routeFrame = state->frameCount;
+			routeRequested =
+				upscaling.IsCharacterNeuralRenderingRouteRequested();
+		}
+		if (routeRequested && a_pass && a_pass->geometry &&
+			IsCharacterMaterialCandidate(a_pass->shaderProperty)) {
+			struct CachedGeometryClassification
+			{
+				NeuralRendering::CharacterCategory category =
+					NeuralRendering::CharacterCategory::None;
+				bool accepted = false;
+			};
+			static thread_local std::uint32_t classificationFrame =
+				std::numeric_limits<std::uint32_t>::max();
+			static thread_local std::unordered_map<
+				std::uintptr_t, CachedGeometryClassification>
+				classificationCache;
+			if (classificationFrame != state->frameCount) {
+				classificationFrame = state->frameCount;
+				classificationCache.clear();
+				if (classificationCache.bucket_count() == 0)
+					classificationCache.reserve(512);
 			}
-			auto& characterRendering =
-				NeuralRendering::CharacterRendering::Instance();
-			if (actor && actor->IsPlayerRef()) {
-				characterRendering.ObserveClassificationRejection(
-					state->frameCount,
-					NeuralRendering::CharacterClassificationRejection::Player);
-			} else if (actor) {
-				const auto classification = ClassifyCharacterMaterial(
-					a_pass->shaderProperty, a_pass->geometry, actor);
-				const auto category = classification.category;
-				if (category == NeuralRendering::CharacterCategory::None) {
-					characterRendering.ObserveClassificationRejection(
-						state->frameCount, classification.rejection);
-				} else {
-					state->permutationData.ExtraShaderDescriptor |=
-						static_cast<uint>(category) << 8;
-					const auto& bound = a_pass->geometry->worldBound;
-					characterRendering.ObserveGeometry(
-						state->frameCount,
-						actor->GetFormID(),
-						reinterpret_cast<std::uintptr_t>(a_pass->geometry),
-						category,
-						bound.center.x,
-						bound.center.y,
-						bound.center.z,
-						bound.radius);
+
+			const auto geometryIdentity =
+				reinterpret_cast<std::uintptr_t>(a_pass->geometry);
+			auto [entry, inserted] = classificationCache.try_emplace(
+				geometryIdentity);
+			if (inserted) {
+				if (!actor) {
+					if (auto userData = a_pass->geometry->GetUserData())
+						actor = userData->As<RE::Actor>();
 				}
+				auto& characterRendering =
+					NeuralRendering::CharacterRendering::Instance();
+				if (actor && actor->IsPlayerRef()) {
+					characterRendering.ObserveClassificationRejection(
+						state->frameCount,
+						NeuralRendering::CharacterClassificationRejection::Player);
+				} else if (actor) {
+					const auto classification = ClassifyCharacterMaterial(
+						a_pass->shaderProperty, a_pass->geometry, actor);
+					entry->second.category = classification.category;
+					if (classification.category ==
+						NeuralRendering::CharacterCategory::None) {
+						characterRendering.ObserveClassificationRejection(
+							state->frameCount, classification.rejection);
+					} else {
+						const auto& bound = a_pass->geometry->worldBound;
+						entry->second.accepted =
+							characterRendering.ObserveGeometry(
+								state->frameCount,
+								actor->GetFormID(), geometryIdentity,
+								classification.category,
+								bound.center.x, bound.center.y,
+								bound.center.z, bound.radius);
+					}
+				}
+			}
+			if (entry->second.accepted) {
+				state->permutationData.ExtraShaderDescriptor |=
+					static_cast<uint>(entry->second.category) << 8;
 			}
 		}
 

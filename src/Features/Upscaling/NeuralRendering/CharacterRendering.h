@@ -41,6 +41,7 @@ namespace NeuralRendering
 		ForceOne = 2,
 		ForceHalf = 3,
 		InvertAuthored = 4,
+		AuthoredWithoutVisibilityDepth = 5,
 		Count,
 	};
 
@@ -71,6 +72,7 @@ namespace NeuralRendering
 		inline constexpr std::uint32_t kDefaultMaximumRoiRegions = 4;
 		inline constexpr std::uint32_t kDefaultRoiHoldFrames = 3;
 		inline constexpr bool kDefaultDepthAwareFeather = false;
+		inline constexpr bool kDefaultVisibilityDepthTest = true;
 		inline constexpr std::uint32_t kDefaultFeatherRadius = 1;
 		inline constexpr float kDefaultFeatherDepthThreshold = 0.002f;
 
@@ -89,6 +91,7 @@ namespace NeuralRendering
 		inline constexpr std::uint32_t kMaximumObservationsPerFrame = 4096;
 		inline constexpr std::uint32_t kMaximumTrackedActorsPerEye = 128;
 		inline constexpr std::uint32_t kCoverageSampleIntervalFrames = 30;
+		inline constexpr std::size_t kPreparedFrameHistorySize = 8;
 
 		[[nodiscard]] constexpr std::uint32_t CategoryBit(
 			CharacterCategory a_category) noexcept
@@ -117,6 +120,7 @@ namespace NeuralRendering
 			CharacterPolicy::kDefaultMaximumRoiRegions;
 		std::uint32_t roiHoldFrames = CharacterPolicy::kDefaultRoiHoldFrames;
 		bool depthAwareFeather = CharacterPolicy::kDefaultDepthAwareFeather;
+		bool visibilityDepthTest = CharacterPolicy::kDefaultVisibilityDepthTest;
 		std::uint32_t featherRadius = CharacterPolicy::kDefaultFeatherRadius;
 		float featherDepthThreshold =
 			CharacterPolicy::kDefaultFeatherDepthThreshold;
@@ -136,6 +140,9 @@ namespace NeuralRendering
 		std::uint32_t mergedRegions = 0;
 		std::uint64_t roiPixels = 0;
 		std::uint64_t maskPixels = 0;
+		std::array<std::uint64_t, 3> authoredCategoryPixels{};
+		std::array<std::uint64_t, 3> visibleCategoryPixels{};
+		std::uint64_t visibilityRejectedPixels = 0;
 		float roiCoveragePercent = 0.0f;
 		float maskCoveragePercent = 0.0f;
 		std::uint32_t maskCoverageFrame =
@@ -144,9 +151,37 @@ namespace NeuralRendering
 		std::uint32_t maskCoverageWidth = 0;
 		std::uint32_t maskCoverageHeight = 0;
 		bool maskCoverageReady = false;
+		bool maskCoverageMatchesCurrentPolicy = false;
+		bool zeroCoverageBypassed = false;
+		bool depthCoordinatesValid = false;
+		std::uint32_t authoredStereoWidth = 0;
+		std::uint32_t authoredDepthHeight = 0;
+		std::uint32_t authoredEyeBaseX = 0;
+		std::uint32_t currentDepthWidth = 0;
+		std::uint32_t currentDepthHeight = 0;
+		std::uint32_t inputCropLeft = 0;
+		std::uint32_t inputCropTop = 0;
+		std::uint32_t inputCropWidth = 0;
+		std::uint32_t inputCropHeight = 0;
+		std::uint32_t outputCropLeft = 0;
+		std::uint32_t outputCropTop = 0;
+		std::uint32_t outputCropWidth = 0;
+		std::uint32_t outputCropHeight = 0;
+		float capturedJitterX = 0.0f;
+		float capturedJitterY = 0.0f;
 		bool maskPrepared = false;
 		bool evaluationRequired = false;
 		std::vector<CharacterRect> regions;
+	};
+
+	/** Frame-keyed mask preparation retained for asynchronous GPU attribution. */
+	struct CharacterPreparedFrameSnapshot
+	{
+		std::uint32_t frame = std::numeric_limits<std::uint32_t>::max();
+		std::uint32_t preparedSlotMask = 0;
+		std::uint32_t evaluationRequiredSlotMask = 0;
+		std::array<std::uint32_t, 4> widths{};
+		std::array<std::uint32_t, 4> heights{};
 	};
 
 	struct CharacterSnapshot
@@ -186,7 +221,12 @@ namespace NeuralRendering
 		std::uint64_t preparationSuccesses = 0;
 		std::uint64_t preparationFailures = 0;
 		std::uint64_t readbackDrops = 0;
+		std::uint64_t measuredZeroCoverageBypasses = 0;
 		std::array<CharacterEyeSnapshot, 2> eyes{};
+		std::array<
+			CharacterPreparedFrameSnapshot,
+			CharacterPolicy::kPreparedFrameHistorySize>
+			preparedFrames{};
 	};
 
 	struct CharacterMaskPrepareArgs

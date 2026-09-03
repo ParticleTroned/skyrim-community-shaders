@@ -55,72 +55,73 @@
 
 #pragma comment(lib, "Psapi.lib")
 
-#define UPSCALING_SETTINGS_JSON_FIELDS(OP)      \
-	OP(upscaleMethod)                           \
-	OP(upscaleMethodNoDLSS)                     \
-	OP(qualityMode)                             \
-	OP(dlssPreset)                              \
-	OP(renderScaleMode)                         \
-	OP(perfMode)                                \
-	OP(frameLimitMode)                          \
-	OP(frameGenerationMode)                     \
-	OP(frameGenerationForceEnable)              \
-	OP(frameGenerationAllowInMenus)             \
-	OP(streamlineLogLevel)                      \
-	OP(sharpnessFSR)                            \
-	OP(sharpnessDLSS)                           \
-	OP(dlssSharpener)                           \
-	OP(fsr4RuntimeEnable)                       \
-	OP(fsr4RuntimeSelectionSchemaVersion)       \
-	OP(foveatedVendorDispatch)                  \
-	OP(neuralRenderingEnabled)                  \
-	OP(neuralRenderingInsertionPoint)           \
-	OP(neuralRenderingBatchedStereo)            \
-	OP(neuralRenderingDirectCommit)             \
-	OP(neuralRenderingPreset)                   \
-	OP(neuralRenderingIntensity)                \
-	OP(neuralRenderingLocalTone)                \
-	OP(neuralRenderingLocalStructure)           \
-	OP(neuralRenderingSkinStructure)            \
-	OP(neuralRenderingStyle)                    \
-	OP(neuralRenderingAutoMask)                 \
-	OP(neuralRenderingUICorrection)             \
-	OP(neuralRenderingBlendFeather)             \
-	OP(neuralCharacterRenderingEnabled)         \
-	OP(neuralCharacterVisualIsolationEnabled)   \
-	OP(neuralCharacterFacesEnabled)             \
-	OP(neuralCharacterSkinEnabled)              \
-	OP(neuralCharacterHairEnabled)              \
-	OP(neuralCharacterFaceStrength)             \
-	OP(neuralCharacterSkinStrength)             \
-	OP(neuralCharacterHairStrength)             \
-	OP(neuralCharacterMaximumDistanceMeters)    \
-	OP(neuralCharacterMinimumFacePixelSize)     \
-	OP(neuralCharacterRoiMargin)                \
-	OP(neuralCharacterMaxRoiRegions)            \
-	OP(neuralCharacterRoiHoldFrames)            \
-	OP(neuralCharacterDepthAwareFeatherEnabled) \
-	OP(neuralCharacterFeatherRadius)            \
-	OP(neuralCharacterDepthThreshold)           \
-	OP(foveatedCenterOrigin)                    \
-	OP(foveatedHorizontalAnchor)                \
-	OP(foveatedCenterArea)                      \
-	OP(foveatedCenterBlendFeather)              \
-	OP(foveatedReconstructionGuardBandPixels)   \
-	OP(foveatedCenterHorizontalScale)           \
-	OP(foveatedLeftEyeMaskOffsetX)              \
-	OP(foveatedLeftEyeMaskOffsetY)              \
-	OP(foveatedRightEyeMaskOffsetX)             \
-	OP(foveatedRightEyeMaskOffsetY)             \
-	OP(periphery_taa_center_area)               \
-	OP(foveatedPeripheryMaskVisualization)      \
-	OP(periphery_taa_enable)                    \
-	OP(periphery_taa_outer_scale)               \
-	OP(periphery_taa_center_blend_feather)      \
-	OP(reflexLowLatencyMode)                    \
-	OP(reflexLowLatencyBoost)                   \
-	OP(reflexUseMarkersToOptimize)              \
-	OP(reflexUseFPSLimit)                       \
+#define UPSCALING_SETTINGS_JSON_FIELDS(OP)        \
+	OP(upscaleMethod)                             \
+	OP(upscaleMethodNoDLSS)                       \
+	OP(qualityMode)                               \
+	OP(dlssPreset)                                \
+	OP(renderScaleMode)                           \
+	OP(perfMode)                                  \
+	OP(frameLimitMode)                            \
+	OP(frameGenerationMode)                       \
+	OP(frameGenerationForceEnable)                \
+	OP(frameGenerationAllowInMenus)               \
+	OP(streamlineLogLevel)                        \
+	OP(sharpnessFSR)                              \
+	OP(sharpnessDLSS)                             \
+	OP(dlssSharpener)                             \
+	OP(fsr4RuntimeEnable)                         \
+	OP(fsr4RuntimeSelectionSchemaVersion)         \
+	OP(foveatedVendorDispatch)                    \
+	OP(neuralRenderingEnabled)                    \
+	OP(neuralRenderingInsertionPoint)             \
+	OP(neuralRenderingBatchedStereo)              \
+	OP(neuralRenderingDirectCommit)               \
+	OP(neuralRenderingPreset)                     \
+	OP(neuralRenderingIntensity)                  \
+	OP(neuralRenderingLocalTone)                  \
+	OP(neuralRenderingLocalStructure)             \
+	OP(neuralRenderingSkinStructure)              \
+	OP(neuralRenderingStyle)                      \
+	OP(neuralRenderingAutoMask)                   \
+	OP(neuralRenderingUICorrection)               \
+	OP(neuralRenderingBlendFeather)               \
+	OP(neuralCharacterRenderingEnabled)           \
+	OP(neuralCharacterVisualIsolationEnabled)     \
+	OP(neuralCharacterFacesEnabled)               \
+	OP(neuralCharacterSkinEnabled)                \
+	OP(neuralCharacterHairEnabled)                \
+	OP(neuralCharacterFaceStrength)               \
+	OP(neuralCharacterSkinStrength)               \
+	OP(neuralCharacterHairStrength)               \
+	OP(neuralCharacterMaximumDistanceMeters)      \
+	OP(neuralCharacterMinimumFacePixelSize)       \
+	OP(neuralCharacterRoiMargin)                  \
+	OP(neuralCharacterMaxRoiRegions)              \
+	OP(neuralCharacterRoiHoldFrames)              \
+	OP(neuralCharacterDepthAwareFeatherEnabled)   \
+	OP(neuralCharacterVisibilityDepthTestEnabled) \
+	OP(neuralCharacterFeatherRadius)              \
+	OP(neuralCharacterDepthThreshold)             \
+	OP(foveatedCenterOrigin)                      \
+	OP(foveatedHorizontalAnchor)                  \
+	OP(foveatedCenterArea)                        \
+	OP(foveatedCenterBlendFeather)                \
+	OP(foveatedReconstructionGuardBandPixels)     \
+	OP(foveatedCenterHorizontalScale)             \
+	OP(foveatedLeftEyeMaskOffsetX)                \
+	OP(foveatedLeftEyeMaskOffsetY)                \
+	OP(foveatedRightEyeMaskOffsetX)               \
+	OP(foveatedRightEyeMaskOffsetY)               \
+	OP(periphery_taa_center_area)                 \
+	OP(foveatedPeripheryMaskVisualization)        \
+	OP(periphery_taa_enable)                      \
+	OP(periphery_taa_outer_scale)                 \
+	OP(periphery_taa_center_blend_feather)        \
+	OP(reflexLowLatencyMode)                      \
+	OP(reflexLowLatencyBoost)                     \
+	OP(reflexUseMarkersToOptimize)                \
+	OP(reflexUseFPSLimit)                         \
 	OP(reflexFPSLimit)
 
 void to_json(json& a_json, const Upscaling::Settings& a_settings)
@@ -3763,6 +3764,8 @@ namespace
 			.roiHoldFrames = a_settings.neuralCharacterRoiHoldFrames,
 			.depthAwareFeather =
 				a_settings.neuralCharacterDepthAwareFeatherEnabled,
+			.visibilityDepthTest =
+				a_settings.neuralCharacterVisibilityDepthTestEnabled,
 			.featherRadius = a_settings.neuralCharacterFeatherRadius,
 			.featherDepthThreshold = a_settings.neuralCharacterDepthThreshold,
 			.debugView = NeuralRendering::ClampCharacterDebugView(
@@ -3961,6 +3964,8 @@ namespace
 			NeuralRendering::CharacterPolicy::kDefaultRoiHoldFrames;
 		settings.neuralCharacterDepthAwareFeatherEnabled =
 			NeuralRendering::CharacterPolicy::kDefaultDepthAwareFeather;
+		settings.neuralCharacterVisibilityDepthTestEnabled =
+			NeuralRendering::CharacterPolicy::kDefaultVisibilityDepthTest;
 		settings.neuralCharacterFeatherRadius =
 			NeuralRendering::CharacterPolicy::kDefaultFeatherRadius;
 		settings.neuralCharacterDepthThreshold =
@@ -4022,6 +4027,7 @@ namespace
 		o_json.erase("neuralCharacterMaxRoiRegions");
 		o_json.erase("neuralCharacterRoiHoldFrames");
 		o_json.erase("neuralCharacterDepthAwareFeatherEnabled");
+		o_json.erase("neuralCharacterVisibilityDepthTestEnabled");
 		o_json.erase("neuralCharacterFeatherRadius");
 		o_json.erase("neuralCharacterDepthThreshold");
 		o_json.erase("neuralCharacterDebugView");
@@ -4959,6 +4965,7 @@ namespace
 			add(a_settings.neuralCharacterMaxRoiRegions);
 			add(a_settings.neuralCharacterRoiHoldFrames);
 			add(a_settings.neuralCharacterDepthAwareFeatherEnabled);
+			add(a_settings.neuralCharacterVisibilityDepthTestEnabled);
 			add(a_settings.neuralCharacterFeatherRadius);
 			addFloat(a_settings.neuralCharacterDepthThreshold);
 			add(a_settings.neuralCharacterMaskTestMode);
@@ -15159,6 +15166,16 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 						"ROI inference unavailable: masked full-center inference is active.");
 
 					ImGui::Checkbox(
+						"Visibility Depth Test",
+						&settings.neuralCharacterVisibilityDepthTestEnabled);
+					if (auto _tt = Util::HoverTooltipWrapper()) {
+						ImGui::TextUnformatted(
+							"Rejects frozen character pixels hidden by later depth-writing geometry.");
+						ImGui::TextUnformatted(
+							"This is independent of edge feathering and can be disabled for diagnosis.");
+					}
+
+					ImGui::Checkbox(
 						"Depth-aware Edge Feather",
 						&settings.neuralCharacterDepthAwareFeatherEnabled);
 					{
@@ -15200,7 +15217,8 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 					}
 
 					static constexpr const char* maskTestModes[]{
-						"Authored", "Force Zero", "Force One", "Force Half", "Invert Authored"
+						"Authored", "Force Zero", "Force One", "Force Half", "Invert Authored",
+						"Authored (Ignore Visibility Depth)"
 					};
 					int maskTestMode = static_cast<int>(
 						NeuralRendering::ClampCharacterMaskTestMode(
@@ -15253,7 +15271,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 			const auto neuralStatus =
 				NeuralRendering::Renderer::Instance().GetSnapshot();
 			ImGui::TextDisabled(
-				"Status: %s | Trust: %s",
+				"Status: %s | Identity: %s",
 				neuralStatus.status.c_str(),
 				neuralStatus.trust.c_str());
 			ImGui::TextDisabled(
@@ -15261,7 +15279,10 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 				static_cast<unsigned long long>(neuralStatus.successes),
 				static_cast<unsigned long long>(neuralStatus.failures));
 			ImGui::TextDisabled(
-				"Modified nvngx_dlssnr.dll files must match a pinned SHA-256 allowlist entry.");
+				"Any 310.8 nvngx_dlssnr.dll with the required exports is accepted; SHA-256 is diagnostic only.");
+			ImGui::TextColored(
+				Util::Colors::GetWarning(),
+				"Untrusted NR DLLs execute in-process. Developer Mode and Streamline logging do not restrict admission.");
 
 			if (settings.neuralCharacterRenderingEnabled) {
 				const auto characterStatus =
@@ -15312,6 +15333,31 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 							eyeStatus.maskCoverageFeatureSlot,
 							eyeStatus.maskCoverageWidth,
 							eyeStatus.maskCoverageHeight);
+						ImGui::TextDisabled(
+							"  authored pixels F/S/H: %llu/%llu/%llu | visible: %llu/%llu/%llu | depth-rejected: %llu",
+							static_cast<unsigned long long>(eyeStatus.authoredCategoryPixels[0]),
+							static_cast<unsigned long long>(eyeStatus.authoredCategoryPixels[1]),
+							static_cast<unsigned long long>(eyeStatus.authoredCategoryPixels[2]),
+							static_cast<unsigned long long>(eyeStatus.visibleCategoryPixels[0]),
+							static_cast<unsigned long long>(eyeStatus.visibleCategoryPixels[1]),
+							static_cast<unsigned long long>(eyeStatus.visibleCategoryPixels[2]),
+							static_cast<unsigned long long>(eyeStatus.visibilityRejectedPixels));
+						if (eyeStatus.zeroCoverageBypassed) {
+							ImGui::TextDisabled(
+								"  Feature 18 bypassed: matching authored GPU sample measured zero coverage.");
+						}
+					}
+					if (eyeStatus.depthCoordinatesValid) {
+						ImGui::TextDisabled(
+							"  depth map: frozen base (%u,%u), crop %ux%u; current local 0,0 %ux%u; jitter %.3f,%.3f",
+							eyeStatus.authoredEyeBaseX + eyeStatus.inputCropLeft,
+							eyeStatus.inputCropTop,
+							eyeStatus.inputCropWidth,
+							eyeStatus.inputCropHeight,
+							eyeStatus.currentDepthWidth,
+							eyeStatus.currentDepthHeight,
+							eyeStatus.capturedJitterX,
+							eyeStatus.capturedJitterY);
 					}
 				}
 				ImGui::TextColored(
@@ -26692,6 +26738,8 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 				*neuralBatchArgs = args;
 				return true;
 			}
+			if (!characterEvaluationRequired)
+				return false;
 			NeuralRendering::RendererApplyOutcome outcome{};
 			bool applied = false;
 			try {

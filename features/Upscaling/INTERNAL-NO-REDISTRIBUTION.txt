@@ -5,12 +5,10 @@ This experiment contains user-supplied NVIDIA runtime binaries. They are not
 covered by the Community Shaders GPL license, and this repository grants no
 right to redistribute them.
 
-Automatically staged identities:
+Hash-pinned normal-DLSS/Streamline identities:
 
 - nvngx_dlss.dll 310.8
   C85F971CE023C9F3492FC7455F0B01A24BA18EA39636407A846902C4360B0B7E
-- nvngx_dlssnr.dll 310.8, patched; Authenticode status HashMismatch
-  8270B350CD82DE5CE89806872CDD6B6A9249B80836B91BBEB3573470744CC206
 - sl.common.dll 2.13
   A4B2B5ACBE49FBC6D44DD432CAC19CD53218F698B2539DC7ED0FB268C72CFC8D
 - sl.dlss.dll 2.13
@@ -22,6 +20,14 @@ Automatically staged identities:
 - sl.reflex.dll 2.13
   ECF12973CDCEC2FFCED2EA77B1C7E45F4D387E7C864DDB5531B66A6F947EFFB3
 
-The patched Neural Rendering DLL is admitted only when its exact pinned SHA-256
-and 310.8 version match. CSX log level does not affect this allowlist. Hash
-pinning and prior malware screening do not certify a binary as malware-free.
+Tested NR reference identity (the selected build identity is fixed by the
+generated transaction manifest and reported by runtime diagnostics):
+
+- nvngx_dlssnr.dll 310.8, patched; Authenticode status HashMismatch
+  8270B350CD82DE5CE89806872CDD6B6A9249B80836B91BBEB3573470744CC206
+
+The internal runtime loader accepts any 310.8 Neural Rendering DLL with the
+required exports; Developer Mode and CSX/Streamline log levels do not affect
+admission. SHA-256 is diagnostic at runtime. Untrusted DLLs execute in-process.
+Build-time fingerprinting and prior malware screening do not certify a binary
+as malware-free.

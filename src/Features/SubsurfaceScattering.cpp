@@ -91,7 +91,9 @@ namespace
 			// MRT7 inherits the scene blend state, so a blended category value
 			// is not an exact semantic ID. Alpha-tested geometry remains exact.
 			return {
-				.rejection = NeuralRendering::CharacterClassificationRejection::BlendedMaterial,
+				.rejection = alphaProperty && alphaProperty->GetAlphaTesting() ?
+				                 NeuralRendering::CharacterClassificationRejection::AlphaTestAndBlend :
+				                 NeuralRendering::CharacterClassificationRejection::BlendedMaterial,
 			};
 		}
 

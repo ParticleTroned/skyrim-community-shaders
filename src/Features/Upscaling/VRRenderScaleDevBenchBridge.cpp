@@ -743,18 +743,6 @@ namespace
 		};
 	}
 
-	const char* GetCharacterRoiModeName(NeuralRendering::CharacterRoiMode a_mode)
-	{
-		switch (a_mode) {
-		case NeuralRendering::CharacterRoiMode::Auto:
-			return "auto";
-		case NeuralRendering::CharacterRoiMode::Disabled:
-			return "disabled";
-		default:
-			return "unknown";
-		}
-	}
-
 	const char* GetCharacterDebugViewName(NeuralRendering::CharacterDebugView a_view)
 	{
 		switch (a_view) {
@@ -832,8 +820,6 @@ namespace
 			NeuralRendering::CharacterRendering::Instance().GetSnapshot();
 		const auto rendererSnapshot =
 			NeuralRendering::Renderer::Instance().GetSnapshot();
-		const auto roiMode = NeuralRendering::ClampCharacterRoiMode(
-			settings.neuralCharacterRoiMode);
 		const auto debugView = NeuralRendering::ClampCharacterDebugView(
 			settings.neuralCharacterDebugView);
 		const auto maskTestMode = NeuralRendering::ClampCharacterMaskTestMode(
@@ -865,7 +851,7 @@ namespace
 				{ "evaluationWidth", eye.evaluationWidth },
 				{ "evaluationHeight", eye.evaluationHeight },
 				{ "evaluationPixels", static_cast<std::uint64_t>(eye.evaluationWidth) * eye.evaluationHeight },
-				{ "projectedFaceActors", eye.visibleFaces },
+				{ "eligibleFaceActors", eye.visibleFaces },
 				{ "eligibleCharacterActors", eye.visibleCharacterRegions },
 				{ "droppedCharacterActors", eye.droppedCharacterRegions },
 				{ "mergedEligibilityRegions", eye.mergedRegions },
@@ -913,6 +899,14 @@ namespace
 							   (1u << a_eye.featureSlot)) == 0u ||
 			               rendererSnapshot.performance.lastFeatureFrameId == a_eye.frame;
 				});
+		const bool visualIsolationConfigured =
+			settings.neuralRenderingEnabled &&
+			settings.neuralCharacterRenderingEnabled &&
+			settings.neuralCharacterVisualIsolationEnabled;
+		const bool visualIsolationEffective =
+			visualIsolationConfigured && featureTimingIsStereoPair &&
+			featureTimingMatchesPreparedMask &&
+			lastFeatureSlotMask == preparedCharacterSlotMask;
 
 		return {
 			{ "settings", {
@@ -932,8 +926,6 @@ namespace
 							  { "depthAwareFeather", settings.neuralCharacterDepthAwareFeatherEnabled },
 							  { "featherRadius", settings.neuralCharacterFeatherRadius },
 							  { "featherDepthThreshold", settings.neuralCharacterDepthThreshold },
-							  { "roiMode", GetCharacterRoiModeName(roiMode) },
-							  { "roiModeValue", static_cast<std::uint32_t>(roiMode) },
 							  { "debugView", GetCharacterDebugViewName(debugView) },
 							  { "debugViewValue", static_cast<std::uint32_t>(debugView) },
 							  { "maskTestMode", GetCharacterMaskTestModeName(maskTestMode) },
@@ -961,11 +953,13 @@ namespace
 												   } },
 								{ "visualIsolation", {
 														 { "requested", settings.neuralCharacterVisualIsolationEnabled },
-														 { "active", settings.neuralRenderingEnabled && settings.neuralCharacterRenderingEnabled && settings.neuralCharacterVisualIsolationEnabled },
+														 { "configured", visualIsolationConfigured },
+														 { "active", visualIsolationEffective },
 														 { "guarantee", "provider_output_isolated_to_nonzero_mask_support" },
 														 { "finalVisibilityClassificationGuaranteed", false },
 														 { "upscaledCenterCommitPolicy", "configured_commit_lane_preserved" },
-														 { "directCommitCompositeBaseline", "one_normal_dlss_center_copy" },
+														 { "mainNonFloatDirectCommitBaseline", "one_normal_dlss_center_copy" },
+														 { "submitFloatBaseline", "existing_normal_dlss_center" },
 														 { "disabledPurpose", "provider_control_mask_only_calibration" },
 														 { "emptyStereoPairPolicy", "bypass_feature18" },
 													 } },
@@ -976,16 +970,16 @@ namespace
 													{ "privateSingleSubrectEnabled", false },
 													{ "privateSingleSubrectValidation", "pending_contract_and_timing_validation" },
 													{ "reason", snapshot.computeRoiReason },
-													{ "requestedMode", GetCharacterRoiModeName(roiMode) },
 													{ "resolvedMode", "masked_full_frame_inference" },
 													{ "inferenceRestrictedToRois", false },
 												} },
 								{ "categoryProvenance", {
-															{ "vrAttachmentFormat", "R16G16B16A16_UNORM" },
+															{ "vrAttachmentFormat", "R8G8_UNORM" },
 															{ "legacyAttachmentFormat", "R16_UNORM" },
-															{ "vrBytesPerPixel", 8 },
+															{ "vrBytesPerPixel", 2 },
 															{ "legacyBytesPerPixel", 2 },
-															{ "additionalVrBytesPerPixel", 6 },
+															{ "additionalVrBytesPerPixel", 0 },
+															{ "inverseVertexAoBits", 8 },
 															{ "attachmentAllocatedWhenFeatureDisabled", true },
 															{ "frozenDepthSnapshotConditional", true },
 														} },
@@ -1005,14 +999,16 @@ namespace
 							 { "currentClassificationRejections", {
 																	  { "player", snapshot.currentClassificationRejections[0] },
 																	  { "blendedMaterial", snapshot.currentClassificationRejections[1] },
-																	  { "ambiguousFaceGen", snapshot.currentClassificationRejections[2] },
-																	  { "unsupportedMaterial", snapshot.currentClassificationRejections[3] },
+																	  { "alphaTestAndBlend", snapshot.currentClassificationRejections[2] },
+																	  { "ambiguousFaceGen", snapshot.currentClassificationRejections[3] },
+																	  { "unsupportedMaterial", snapshot.currentClassificationRejections[4] },
 																  } },
 							 { "classificationRejections", {
 															   { "player", snapshot.classificationRejections[0] },
 															   { "blendedMaterial", snapshot.classificationRejections[1] },
-															   { "ambiguousFaceGen", snapshot.classificationRejections[2] },
-															   { "unsupportedMaterial", snapshot.classificationRejections[3] },
+															   { "alphaTestAndBlend", snapshot.classificationRejections[2] },
+															   { "ambiguousFaceGen", snapshot.classificationRejections[3] },
+															   { "unsupportedMaterial", snapshot.classificationRejections[4] },
 														   } },
 							 { "categoryCaptureAttempts", snapshot.categoryCaptureAttempts },
 							 { "categoryCaptureSuccesses", snapshot.categoryCaptureSuccesses },
@@ -1021,7 +1017,7 @@ namespace
 							 { "categoryCaptureFrame", snapshot.categoryCaptureReady ? json(snapshot.categoryCaptureFrame) : json(nullptr) },
 							 { "categoryCaptureReady", snapshot.categoryCaptureReady },
 							 { "categoryCaptureEmpty", snapshot.categoryCaptureEmpty },
-							 { "maskCoverageSampleIntervalFrames", 30 },
+							 { "maskCoverageSampleIntervalFrames", NeuralRendering::CharacterPolicy::kCoverageSampleIntervalFrames },
 							 { "preparationAttempts", snapshot.preparationAttempts },
 							 { "preparationSuccesses", snapshot.preparationSuccesses },
 							 { "preparationFailures", snapshot.preparationFailures },
@@ -1158,7 +1154,12 @@ namespace
 							   { "frameGenerationActive", route.frameGenerationActive },
 							   { "frameGenerationPassed", route.frameGenerationGatePassed },
 							   { "knownMenuContext", temporalAdmission.menuContextActive },
+							   { "hardMenuBlocked", route.hardMenuBlocked },
+							   { "lateMenuCompositeReady", route.lateMenuCompositeReady },
+							   { "csOverlayOpen", route.csOverlayOpen },
+							   { "menuContinuityAllowed", route.menuContinuityAllowed },
 							   { "gamePaused", temporalAdmission.gamePaused },
+							   { "pausedSubmitContinuityAllowed", temporalAdmission.pausedSubmitContinuityAllowed },
 							   { "worldFrameStateAvailable", temporalAdmission.worldFrameStateAvailable },
 							   { "worldFrameStarted", temporalAdmission.worldFrameStarted },
 							   { "worldFrameCompleted", temporalAdmission.worldFrameCompleted },
@@ -1779,7 +1780,6 @@ namespace
 		std::string_view{ "characterDepthAwareFeather" },
 		std::string_view{ "characterFeatherRadius" },
 		std::string_view{ "characterFeatherDepthThreshold" },
-		std::string_view{ "characterRoiMode" },
 		std::string_view{ "characterDebugView" },
 		std::string_view{ "characterMaskTestMode" },
 	};
@@ -1816,7 +1816,6 @@ namespace
 		std::optional<bool> characterDepthAwareFeather;
 		std::optional<std::uint32_t> characterFeatherRadius;
 		std::optional<float> characterFeatherDepthThreshold;
-		std::optional<NeuralRendering::CharacterRoiMode> characterRoiMode;
 		std::optional<NeuralRendering::CharacterDebugView> characterDebugView;
 		std::optional<NeuralRendering::CharacterMaskTestMode> characterMaskTestMode;
 
@@ -1836,7 +1835,7 @@ namespace
 			       characterMinimumFacePixelSize || characterRoiMargin ||
 			       characterMaximumRoiRegions || characterRoiHoldFrames ||
 			       characterDepthAwareFeather || characterFeatherRadius ||
-			       characterFeatherDepthThreshold || characterRoiMode ||
+			       characterFeatherDepthThreshold ||
 			       characterDebugView || characterMaskTestMode;
 		}
 
@@ -2126,62 +2125,52 @@ namespace
 			};
 
 		if (!parseCharacterFloat(
-				"characterFaceStrength", 0.0, 1.0,
+				"characterFaceStrength",
+				NeuralRendering::CharacterPolicy::kMinimumStrength,
+				NeuralRendering::CharacterPolicy::kMaximumStrength,
 				a_request.characterFaceStrength) ||
 			!parseCharacterFloat(
-				"characterSkinStrength", 0.0, 1.0,
+				"characterSkinStrength",
+				NeuralRendering::CharacterPolicy::kMinimumStrength,
+				NeuralRendering::CharacterPolicy::kMaximumStrength,
 				a_request.characterSkinStrength) ||
 			!parseCharacterFloat(
-				"characterHairStrength", 0.0, 1.0,
+				"characterHairStrength",
+				NeuralRendering::CharacterPolicy::kMinimumStrength,
+				NeuralRendering::CharacterPolicy::kMaximumStrength,
 				a_request.characterHairStrength) ||
 			!parseCharacterFloat(
-				"characterMaximumDistanceMeters", 0.5, 100.0,
+				"characterMaximumDistanceMeters",
+				NeuralRendering::CharacterPolicy::kMinimumDistanceMeters,
+				NeuralRendering::CharacterPolicy::kMaximumDistanceMeters,
 				a_request.characterMaximumDistanceMeters) ||
 			!parseCharacterFloat(
-				"characterRoiMargin", 0.0, 1.0,
+				"characterRoiMargin",
+				NeuralRendering::CharacterPolicy::kMinimumRoiMargin,
+				NeuralRendering::CharacterPolicy::kMaximumRoiMargin,
 				a_request.characterRoiMargin) ||
 			!parseCharacterFloat(
-				"characterFeatherDepthThreshold", 0.0, 0.05,
+				"characterFeatherDepthThreshold", 0.0,
+				NeuralRendering::CharacterPolicy::kMaximumFeatherDepthThreshold,
 				a_request.characterFeatherDepthThreshold) ||
 			!parseCharacterUint(
-				"characterMinimumFacePixelSize", 1u, 4096u,
+				"characterMinimumFacePixelSize",
+				NeuralRendering::CharacterPolicy::kMinimumFacePixelSize,
+				NeuralRendering::CharacterPolicy::kMaximumFacePixelSize,
 				a_request.characterMinimumFacePixelSize) ||
 			!parseCharacterUint(
-				"characterMaximumRoiRegions", 1u, 4u,
+				"characterMaximumRoiRegions", 1u,
+				NeuralRendering::CharacterPolicy::kMaximumRoiRegions,
 				a_request.characterMaximumRoiRegions) ||
 			!parseCharacterUint(
-				"characterRoiHoldFrames", 0u, 30u,
+				"characterRoiHoldFrames", 0u,
+				NeuralRendering::CharacterPolicy::kMaximumRoiHoldFrames,
 				a_request.characterRoiHoldFrames) ||
 			!parseCharacterUint(
-				"characterFeatherRadius", 0u, 4u,
+				"characterFeatherRadius", 0u,
+				NeuralRendering::CharacterPolicy::kMaximumFeatherRadius,
 				a_request.characterFeatherRadius)) {
 			return false;
-		}
-
-		if (const auto roiMode = a_args.find("characterRoiMode");
-			roiMode != a_args.end()) {
-			if (!roiMode->is_string()) {
-				a_error = {
-					{ "error", "characterRoiMode must be a string" },
-					{ "errorCode", "nr_character_roi_mode_type_invalid" },
-					{ "field", "characterRoiMode" },
-				};
-				return false;
-			}
-			const auto requested = roiMode->get<std::string>();
-			if (requested == "auto") {
-				a_request.characterRoiMode = NeuralRendering::CharacterRoiMode::Auto;
-			} else if (requested == "disabled") {
-				a_request.characterRoiMode = NeuralRendering::CharacterRoiMode::Disabled;
-			} else {
-				a_error = {
-					{ "error", "characterRoiMode is not supported" },
-					{ "errorCode", "nr_character_roi_mode_unknown" },
-					{ "field", "characterRoiMode" },
-					{ "requested", requested },
-				};
-				return false;
-			}
 		}
 
 		if (const auto debugView = a_args.find("characterDebugView");
@@ -3436,10 +3425,6 @@ namespace
 					requestedSettings.neuralCharacterDepthThreshold =
 						*request.characterFeatherDepthThreshold;
 				}
-				if (request.characterRoiMode) {
-					requestedSettings.neuralCharacterRoiMode =
-						static_cast<std::uint32_t>(*request.characterRoiMode);
-				}
 				if (request.characterDebugView) {
 					requestedSettings.neuralCharacterDebugView =
 						static_cast<std::uint32_t>(*request.characterDebugView);
@@ -3512,7 +3497,6 @@ namespace
 					previousSettings.neuralCharacterDepthAwareFeatherEnabled != requestedSettings.neuralCharacterDepthAwareFeatherEnabled ||
 					previousSettings.neuralCharacterFeatherRadius != requestedSettings.neuralCharacterFeatherRadius ||
 					previousSettings.neuralCharacterDepthThreshold != requestedSettings.neuralCharacterDepthThreshold ||
-					previousSettings.neuralCharacterRoiMode != requestedSettings.neuralCharacterRoiMode ||
 					characterDebugViewChanged || characterMaskTestModeChanged;
 				const bool settingsChanged =
 					previousSettings.neuralRenderingEnabled != requestedSettings.neuralRenderingEnabled ||
@@ -3924,7 +3908,7 @@ namespace VRRenderScaleDevBenchBridge
 
 		static constexpr const char* descriptor =
 			R"({
-  "description":"Control and inspect Community Shaders VR render-scale stress iterations, DLSS Neural Rendering, character masking, and foveated-center tuning. nr_status returns the API-v8 NR runtime, trust, routes, temporal admission, GPU telemetry, and character-mask capability, settings, profiling, and attributed per-eye coverage samples. Character profiling reports baseline-copy, mask-generation, Feature 18 evaluation, and composite costs separately so Direct plus isolation overhead remains attributable. The R8_UNORM 0..1 mask representation is an experimental implementation contract, not a provider-declared format or value semantic. Multi/sparse compute ROI is unsupported. One private single-subrect candidate exists but remains disabled pending contract validation and timing; nonempty character masks use the normal center evaluation extent, while an empty Authored stereo pair bypasses Feature 18 and its category copy. ROI rectangles constrain visual masking, not inference dimensions. characterVisualIsolationEnabled=true isolates provider output to the mask's nonzero support without applying category strength twice. Frozen/current depth rejects later depth-writing occluders, while translucent overlays remain approximate. Upscaled Center preserves the configured commit lane, and Direct retains one normal-DLSS center copy as its composite baseline. false is the provider-ControlMask-only calibration path. nr_configure strictly accepts one or more NR or character controls through the in-game reset/history contract; an empty, unknown, invalid, conflicting, or unchanged request is rejected. Debug-view-only changes are applied without a history reset. nr_cycle_modes preserves the four-lane stereo implementation cycle. foveation_configure atomically applies one or more validated foveation controls on the main thread. foveation_cycle selects or advances one documented foveation axis. Foveation actions reject unrelated fields. Foveation mutations invalidate frame-scoped state and request temporal-history reset. executionClaimed remains false because these actions do not claim game execution; mainThreadTaskClaimed and mutationOutcome expose timeout uncertainty. nr_reset resets the NR backend and character-mask state and requests a history reset. Existing render-scale mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.",
+  "description":"Control and inspect Community Shaders VR render-scale stress iterations, DLSS Neural Rendering, character masking, and foveated-center tuning. nr_status returns the API-v8 NR runtime, trust, routes, temporal admission, GPU telemetry, and character-mask capability, settings, profiling, and attributed per-eye coverage samples. Character profiling reports baseline-copy, mask-generation, Feature 18 evaluation, and composite costs separately so isolation overhead remains attributable. The R8_UNORM 0..1 mask representation is an experimental implementation contract, not a provider-declared format or value semantic. Multi/sparse compute ROI is unsupported. One private single-subrect candidate exists but remains disabled pending contract validation and timing; nonempty character masks use the normal center evaluation extent, while an empty Authored stereo pair bypasses Feature 18 and its category copy. ROI rectangles constrain visual masking, not inference dimensions. characterVisualIsolationEnabled=true isolates provider output to the mask's nonzero support without applying category strength twice. Frozen/current depth rejects later depth-writing occluders, while translucent overlays remain approximate. Upscaled Center preserves the configured commit lane. The main/non-float Direct route retains one normal-DLSS center copy as its composite baseline; the submit float route already keeps normal DLSS separate. characterVisualIsolationEnabled=false is the provider-ControlMask-only calibration path. nr_configure strictly accepts one or more NR or character controls through the in-game reset/history contract; an empty, unknown, invalid, conflicting, or unchanged request is rejected. Debug-view-only changes are applied without a history reset. nr_cycle_modes preserves the four-lane stereo implementation cycle. foveation_configure atomically applies one or more validated foveation controls on the main thread. foveation_cycle selects or advances one documented foveation axis. Foveation actions reject unrelated fields. Foveation mutations invalidate frame-scoped state and request temporal-history reset. executionClaimed remains false because these actions do not claim game execution; mainThreadTaskClaimed and mutationOutcome expose timeout uncertainty. nr_reset resets the NR backend and character-mask state and requests a history reset. Existing render-scale mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.",
   "inputSchema":{
     "type":"object",
     "properties":{
@@ -3963,7 +3947,6 @@ namespace VRRenderScaleDevBenchBridge
       "characterDepthAwareFeather":{"type":"boolean"},
       "characterFeatherRadius":{"type":"integer","minimum":0,"maximum":4},
       "characterFeatherDepthThreshold":{"type":"number","minimum":0.0,"maximum":0.05},
-      "characterRoiMode":{"type":"string","enum":["auto","disabled"]},
       "characterDebugView":{"type":"string","enum":["off","character_mask","roi_rectangles","dlss5_output"]},
       "characterMaskTestMode":{"type":"string","enum":["authored","force_zero","force_one","force_half","invert_authored"]},
       "foveatedEnabled":{"type":"boolean"},
@@ -3988,7 +3971,7 @@ namespace VRRenderScaleDevBenchBridge
     },
     "required":["action"],
     "allOf":[
-      {"if":{"properties":{"action":{"const":"nr_configure"}},"required":["action"]},"then":{"minProperties":2,"propertyNames":{"enum":["action","enabled","insertionPoint","preset","intensity","localToneStrength","localStructureStrength","skinStructureStrength","style","batchedStereo","directCommit","implementation","optimizedStereoPath","useAutoMask","uiCorrection","characterEnabled","characterVisualIsolationEnabled","characterFaces","characterSkin","characterHair","characterFaceStrength","characterSkinStrength","characterHairStrength","characterMaximumDistanceMeters","characterMinimumFacePixelSize","characterRoiMargin","characterMaximumRoiRegions","characterRoiHoldFrames","characterDepthAwareFeather","characterFeatherRadius","characterFeatherDepthThreshold","characterRoiMode","characterDebugView","characterMaskTestMode"]}}},
+      {"if":{"properties":{"action":{"const":"nr_configure"}},"required":["action"]},"then":{"minProperties":2,"propertyNames":{"enum":["action","enabled","insertionPoint","preset","intensity","localToneStrength","localStructureStrength","skinStructureStrength","style","batchedStereo","directCommit","implementation","optimizedStereoPath","useAutoMask","uiCorrection","characterEnabled","characterVisualIsolationEnabled","characterFaces","characterSkin","characterHair","characterFaceStrength","characterSkinStrength","characterHairStrength","characterMaximumDistanceMeters","characterMinimumFacePixelSize","characterRoiMargin","characterMaximumRoiRegions","characterRoiHoldFrames","characterDepthAwareFeather","characterFeatherRadius","characterFeatherDepthThreshold","characterDebugView","characterMaskTestMode"]}}},
       {"if":{"properties":{"action":{"const":"foveation_configure"}},"required":["action"]},"then":{"propertyNames":{"enum":["action","foveatedEnabled","peripheryTaaEnabled","centerOrigin","horizontalAnchor","fovOnlyCenterScale","peripheryTaaCenterScale","peripheryTaaOuterScale","centerHorizontalScale","leftEyeOffsetX","leftEyeOffsetY","rightEyeOffsetX","rightEyeOffsetY","fovOnlyBlendFeather","peripheryTaaBlendFeather","neuralFinalLdrBlendFeather","reconstructionGuardBandPixels","maskVisualization"]},"anyOf":[{"required":["foveatedEnabled"]},{"required":["peripheryTaaEnabled"]},{"required":["centerOrigin"]},{"required":["horizontalAnchor"]},{"required":["fovOnlyCenterScale"]},{"required":["peripheryTaaCenterScale"]},{"required":["peripheryTaaOuterScale"]},{"required":["centerHorizontalScale"]},{"required":["leftEyeOffsetX"]},{"required":["leftEyeOffsetY"]},{"required":["rightEyeOffsetX"]},{"required":["rightEyeOffsetY"]},{"required":["fovOnlyBlendFeather"]},{"required":["peripheryTaaBlendFeather"]},{"required":["neuralFinalLdrBlendFeather"]},{"required":["reconstructionGuardBandPixels"]},{"required":["maskVisualization"]}]}},
       {"if":{"properties":{"action":{"const":"foveation_cycle"}},"required":["action"]},"then":{"required":["control"],"propertyNames":{"enum":["action","control","valueIndex"]}}},
       {"if":{"properties":{"action":{"const":"foveation_cycle"},"control":{"enum":["master","periphery_taa","center_origin","horizontal_anchor","center_horizontal_scale","mask_visualization"]}},"required":["action","control"]},"then":{"properties":{"valueIndex":{"maximum":1}}}}

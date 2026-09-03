@@ -4712,8 +4712,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	// Stored as 1 - vertexAO so the cleared default (0) means no occlusion.
 #		ifdef VR
-	// Exact endpoint codes reject blended IDs. Preserve target opacity because
-	// the inherited MRT blend state uses this output's alpha as its source factor.
+	// Exact R8 codes reject interpolated IDs. The output alpha still supplies
+	// the inherited MRT source blend factor without becoming stored target data.
 	const uint characterCategory =
 		(Permutation::ExtraShaderDescriptor &
 			Permutation::ExtraFlags::CharacterCategoryMask) >>

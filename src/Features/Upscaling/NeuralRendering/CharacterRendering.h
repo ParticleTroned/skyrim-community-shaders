@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../DLSSViewportCrop.h"
+#include "CharacterRegionPolicy.h"
 
 #include <array>
 #include <cstdint>
@@ -20,13 +21,6 @@ namespace NeuralRendering
 		Face = 1,
 		Skin = 2,
 		Hair = 3,
-	};
-
-	/** Requested compute-ROI policy; the private single-subrect candidate is disabled. */
-	enum class CharacterRoiMode : std::uint32_t
-	{
-		Auto = 0,
-		Disabled = 1,
 	};
 
 	/** Non-destructive developer visualization shown in the CS diagnostics UI. */
@@ -55,8 +49,9 @@ namespace NeuralRendering
 	{
 		Player = 0,
 		BlendedMaterial = 1,
-		AmbiguousFaceGen = 2,
-		UnsupportedMaterial = 3,
+		AlphaTestAndBlend = 2,
+		AmbiguousFaceGen = 3,
+		UnsupportedMaterial = 4,
 		Count,
 	};
 
@@ -93,6 +88,7 @@ namespace NeuralRendering
 		inline constexpr float kMaximumFeatherDepthThreshold = 0.05f;
 		inline constexpr std::uint32_t kMaximumObservationsPerFrame = 4096;
 		inline constexpr std::uint32_t kMaximumTrackedActorsPerEye = 128;
+		inline constexpr std::uint32_t kCoverageSampleIntervalFrames = 30;
 
 		[[nodiscard]] constexpr std::uint32_t CategoryBit(
 			CharacterCategory a_category) noexcept
@@ -120,33 +116,12 @@ namespace NeuralRendering
 		std::uint32_t maximumRoiRegions =
 			CharacterPolicy::kDefaultMaximumRoiRegions;
 		std::uint32_t roiHoldFrames = CharacterPolicy::kDefaultRoiHoldFrames;
-		CharacterRoiMode roiMode = CharacterRoiMode::Auto;
 		bool depthAwareFeather = CharacterPolicy::kDefaultDepthAwareFeather;
 		std::uint32_t featherRadius = CharacterPolicy::kDefaultFeatherRadius;
 		float featherDepthThreshold =
 			CharacterPolicy::kDefaultFeatherDepthThreshold;
 		CharacterDebugView debugView = CharacterDebugView::Off;
 		CharacterMaskTestMode maskTestMode = CharacterMaskTestMode::Authored;
-	};
-
-	struct CharacterRect
-	{
-		std::uint32_t minX = 0;
-		std::uint32_t minY = 0;
-		std::uint32_t maxX = 0;
-		std::uint32_t maxY = 0;
-
-		[[nodiscard]] bool IsValid() const noexcept
-		{
-			return maxX > minX && maxY > minY;
-		}
-
-		[[nodiscard]] std::uint64_t Area() const noexcept
-		{
-			return IsValid() ?
-			           static_cast<std::uint64_t>(maxX - minX) * (maxY - minY) :
-			           0;
-		}
 	};
 
 	struct CharacterEyeSnapshot
@@ -307,14 +282,6 @@ namespace NeuralRendering
 	{
 		const auto value = static_cast<CharacterDebugView>(a_value);
 		return value < CharacterDebugView::Count ? value : CharacterDebugView::Off;
-	}
-
-	[[nodiscard]] constexpr CharacterRoiMode ClampCharacterRoiMode(
-		std::uint32_t a_value) noexcept
-	{
-		return a_value == static_cast<std::uint32_t>(CharacterRoiMode::Disabled) ?
-		           CharacterRoiMode::Disabled :
-		           CharacterRoiMode::Auto;
 	}
 
 	[[nodiscard]] constexpr CharacterMaskTestMode ClampCharacterMaskTestMode(

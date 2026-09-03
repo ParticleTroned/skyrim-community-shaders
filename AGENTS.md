@@ -140,6 +140,14 @@ contradict this policy.
     evidence directory; missing or inconclusive unattended visual review, or an
     unmatched performance baseline, is not a pass. Human completion is not part
     of this protocol.
+-   Every `main-VR` commit that changes or evaluates VR render-scale behavior
+    must include any corresponding updates to the durable cross-machine record:
+    `docs/development/vr-render-scale-comparison-ledger.csv`,
+    `docs/development/vr-render-scale-iteration.md`, and the relevant compact
+    tuning or failure summary. If runtime evidence follows an implementation
+    commit, make an immediate documentation commit before starting the next
+    render-scale change. Do not version raw per-run evidence trees merely to
+    preserve a measurement.
 -   Scope pre-commit to staged files or the changed revision range. Do not use `--all-files` merely to validate a focused change; legacy third-party files preserve intentional formatting.
 -   Never interrupt shader compilation or cache generation because output is temporarily silent. Check process and cache activity and allow the documented build window.
 -   Preserve user-owned build outputs and shader caches unless the task explicitly requires their removal or regeneration.

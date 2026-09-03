@@ -132,6 +132,10 @@ public:
 		bool hdrRequired = false;
 		bool frameGenerationActive = false;
 		bool frameGenerationGatePassed = false;
+		bool hardMenuBlocked = false;
+		bool lateMenuCompositeReady = false;
+		bool csOverlayOpen = false;
+		bool menuContinuityAllowed = false;
 		NeuralRendering::TemporalAdmissionResult temporalAdmission{};
 		NeuralStereoPairDisposition disposition = NeuralStereoPairDisposition::Unknown;
 		NeuralStereoFallbackReason fallbackReason = NeuralStereoFallbackReason::None;
@@ -1284,7 +1288,7 @@ public:
 		float2 inputSize;
 		float2 outputSize;
 		float2 sourceTextureSize;
-		float2 padding;
+		float2 sourceOffset;
 	};
 
 	struct VRMenuLayerCompositeCB
@@ -1853,6 +1857,9 @@ public:
 	eastl::unique_ptr<Texture2D> neuralFinalLdrColorIn[2];
 	eastl::unique_ptr<Texture2D> neuralFinalLdrColorOut[2];
 	eastl::unique_ptr<Texture2D> neuralFinalLdrStagedOut[2];
+	eastl::unique_ptr<Texture2D> submitNeuralFloatColorIn[2];
+	eastl::unique_ptr<Texture2D> submitNeuralFloatColorOut[2];
+	eastl::unique_ptr<Texture2D> submitNeuralFloatStagedOut[2];
 	eastl::unique_ptr<Texture2D> foveatedCenterDepth[2];
 	eastl::unique_ptr<Texture2D> foveatedCenterMotionVectors[2];
 	eastl::unique_ptr<Texture2D> foveatedCenterReactiveMask[2];
@@ -2034,6 +2041,8 @@ public:
 		ID3D11Resource* transparencyMaskIn = nullptr;
 		ID3D11Resource* colorOut = nullptr;
 		ID3D11Resource* neuralOut = nullptr;
+		ID3D11Resource* neuralFloatIn = nullptr;
+		ID3D11Resource* neuralFloatOut = nullptr;
 		uint64_t neuralSettingsKey = 0;
 		bool neuralRequested = false;
 		bool neuralAttempted = false;
@@ -2065,6 +2074,10 @@ public:
 		NeuralRendering::SubmitStereoSourceProof submitSourceProof{};
 		uint32_t submitThreadId = 0;
 		vr::EVRSubmitFlags submitFlags = vr::Submit_Default;
+		uint64_t menuQueryEpoch = 0;
+		bool csOverlayOpen = false;
+		bool usedMenuFinalComposite = false;
+		uint64_t menuLayerGeneration = 0;
 		uint32_t presentedEyeMask = 0;
 		NeuralStereoRouteSnapshot publishedRoute{};
 		std::array<VRRenderScalePresentationObservation, 2> publishedPresentationObservations{};
@@ -2155,7 +2168,8 @@ public:
 	void RequestHistoryReset() noexcept;
 	[[nodiscard]] NeuralRendering::TemporalAdmissionResult BuildNeuralTemporalAdmission(
 		NeuralStereoRouteRole a_role,
-		bool a_menuContextActive) const noexcept;
+		bool a_menuContextActive,
+		bool a_pausedSubmitContinuityAllowed = false) const noexcept;
 	void ObserveNeuralTemporalAdmission(
 		NeuralStereoRouteRole a_role,
 		const NeuralRendering::TemporalAdmissionResult& a_admission) noexcept;
@@ -2249,7 +2263,11 @@ public:
 	bool GetFoveatedEncodeRegions(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, UpscaleMethod a_upscaleMethod, bool usePeripheryTAAProfile, bool usePeripheryTAAPath, std::array<FoveatedEncodeRegion, 2>& outRegions);
 	bool EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool copyDepthInput = true, bool allowFoveatedRegionEncode = false, bool* encodedFoveatedRegions = nullptr, uint32_t contractGeneration = 0);
 	bool StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight);
+	bool DispatchSubmitStageColorRegion(ID3D11ShaderResourceView* sourceSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t sourceTextureWidth, uint32_t sourceTextureHeight, uint32_t sourceOffsetX, uint32_t sourceOffsetY, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight, const char* perfLabel);
 	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3D11Resource* source, uint32_t width, uint32_t height, bool copyBindFlags, bool createSRV, bool createUAV, bool createRTV, const char* name, DXGI_FORMAT formatOverride = DXGI_FORMAT_UNKNOWN);
+	bool PrepareSubmitNeuralFloatResources(uint32_t eyeIndex, ID3D11Resource* source, uint32_t width, uint32_t height, bool directCommit, bool validateOnly);
+	ID3D11Resource* GetSubmitNeuralFloatEvaluationOutput(uint32_t eyeIndex, bool directCommit) const noexcept;
+	bool CommitSubmitNeuralFloatOutput(uint32_t eyeIndex, bool directCommit) noexcept;
 	bool EnsureFoveatedDepthGuideSRV(Texture2D& texture, const char* name);
 	void DestroySubmitStageDLSSSharpenerTextures();
 	void DestroyCommonUpscalingTextures();

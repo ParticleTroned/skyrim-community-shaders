@@ -64,6 +64,230 @@ set(
     "${_upscaling}\n${_upscaling_header}\n${_streamline}\n${_streamline_header}\n${_renderer_header}\n${_renderer_source}\n${_d3d12_interop_source}\n${_pipeline_policy}"
 )
 
+function(_extract_upscaling_section _begin_marker _end_marker _output_variable)
+    string(FIND "${_upscaling}" "${_begin_marker}" _section_begin)
+    string(FIND "${_upscaling}" "${_end_marker}" _section_end)
+    if(_section_begin EQUAL -1 OR _section_end EQUAL -1 OR
+        _section_end LESS_EQUAL _section_begin)
+        message(FATAL_ERROR
+            "Unable to isolate Neural Rendering source section: ${_begin_marker}"
+        )
+    endif()
+    math(EXPR _section_length "${_section_end} - ${_section_begin}")
+    string(SUBSTRING
+        "${_upscaling}"
+        ${_section_begin}
+        ${_section_length}
+        _section
+    )
+    string(REGEX REPLACE "[\r\n\t ]+" " " _section_normalized "${_section}")
+    set(${_output_variable} "${_section_normalized}" PARENT_SCOPE)
+endfunction()
+
+_extract_upscaling_section(
+    [[bool Upscaling::PrepareSubmitNeuralFloatResources(]]
+    [[ID3D11Resource* Upscaling::GetSubmitNeuralFloatEvaluationOutput(]]
+    _submit_float_resource_section
+)
+_extract_upscaling_section(
+    [[ID3D11Resource* Upscaling::GetSubmitNeuralFloatEvaluationOutput(]]
+    [[bool Upscaling::CommitSubmitNeuralFloatOutput(]]
+    _submit_float_output_section
+)
+_extract_upscaling_section(
+    [[bool Upscaling::CommitSubmitNeuralFloatOutput(]]
+    [[bool Upscaling::EnsureFoveatedDepthGuideSRV(]]
+    _submit_float_commit_section
+)
+_extract_upscaling_section(
+    [[bool Upscaling::DispatchSingleFoveatedVendorEye(]]
+    [[bool Upscaling::ApplyFinalLdrNeuralStereo(]]
+    _upscaled_center_section
+)
+_extract_upscaling_section(
+    [[bool Upscaling::ApplyFinalLdrNeuralStereo(]]
+    [[void Upscaling::ApplyMainFinalLdrNeuralStereo()]]
+    _final_ldr_section
+)
+_extract_upscaling_section(
+    [[bool Upscaling::DispatchFoveatedVendorEyeComposite(]]
+    [[bool Upscaling::DispatchFoveatedVendorUpscaling(]]
+    _upscaled_center_composite_section
+)
+
+foreach(_submit_float_header_contract IN ITEMS
+    "eastl::unique_ptr<Texture2D> submitNeuralFloatColorIn[2]"
+    "eastl::unique_ptr<Texture2D> submitNeuralFloatColorOut[2]"
+    "eastl::unique_ptr<Texture2D> submitNeuralFloatStagedOut[2]"
+)
+    string(FIND
+        "${_upscaling_header}"
+        "${_submit_float_header_contract}"
+        _submit_float_header_position
+    )
+    if(_submit_float_header_position EQUAL -1)
+        message(FATAL_ERROR
+            "Submit float resource declaration is missing: ${_submit_float_header_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_submit_float_resource_contract IN ITEMS
+    [[constexpr DXGI_FORMAT neuralFormat = DXGI_FORMAT_R11G11B10_FLOAT]]
+    "submitNeuralFloatColorIn[eyeIndex]"
+    "submitNeuralFloatColorOut[eyeIndex]"
+    "submitNeuralFloatStagedOut[eyeIndex]"
+    [[texture->desc.Format == neuralFormat]]
+)
+    string(FIND
+        "${_submit_float_resource_section}"
+        "${_submit_float_resource_contract}"
+        _submit_float_resource_position
+    )
+    if(_submit_float_resource_position EQUAL -1)
+        message(FATAL_ERROR
+            "Fixed submit float resource contract is missing: ${_submit_float_resource_contract}"
+        )
+    endif()
+endforeach()
+string(REGEX MATCHALL
+    [[neuralFormat\)]]
+    _submit_float_format_bindings
+    "${_submit_float_resource_section}"
+)
+list(LENGTH _submit_float_format_bindings _submit_float_format_binding_count)
+if(_submit_float_format_binding_count LESS 3)
+    message(FATAL_ERROR
+        "Every submit Neural input/output resource must use the fixed float format"
+    )
+endif()
+
+string(FIND
+    "${_submit_float_output_section}"
+    "directCommit ? submitNeuralFloatColorOut[eyeIndex] : submitNeuralFloatStagedOut[eyeIndex]"
+    _submit_float_output_selection
+)
+if(_submit_float_output_selection EQUAL -1)
+    message(FATAL_ERROR
+        "Direct and staged submit NR evaluations no longer select their float outputs"
+    )
+endif()
+
+foreach(_submit_float_commit_contract IN ITEMS
+    [[if (directCommit) return true]]
+    [[globals::d3d::context->CopyResource( submitNeuralFloatColorOut[eyeIndex]->resource.get(), submitNeuralFloatStagedOut[eyeIndex]->resource.get())]]
+)
+    string(FIND
+        "${_submit_float_commit_section}"
+        "${_submit_float_commit_contract}"
+        _submit_float_commit_position
+    )
+    if(_submit_float_commit_position EQUAL -1)
+        message(FATAL_ERROR
+            "Submit float commit contract is missing: ${_submit_float_commit_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_upscaled_center_float_contract IN ITEMS
+    [[const bool submitStageDLSSCenter = a_upscaleMethod == UpscaleMethod::kDLSS && dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter]]
+    [[const bool useSubmitNeuralFloatBridge = submitStageDLSSCenter && neuralRenderingRequested && !NeuralRendering::RunsBeforeDlss()]]
+    [[args.insertionPoint = NeuralRendering::InsertionPoint::UpscaledCenter]]
+    [[DispatchSubmitStageColorRegion( foveatedCenterColorOut[eyeIndex]->srv.get(), submitNeuralFloatColorIn[eyeIndex]->uav.get()]]
+    [[neuralColorInput = submitNeuralFloatColorIn[eyeIndex]->resource.get()]]
+    [[return CommitSubmitNeuralFloatOutput( eyeIndex, directNeuralCommit)]]
+    "useSubmitNeuralFloatBridge && neuralPairApplied && submitNeuralFloatColorOut[eyeIndex]"
+)
+    string(FIND
+        "${_upscaled_center_section}"
+        "${_upscaled_center_float_contract}"
+        _upscaled_center_float_position
+    )
+    if(_upscaled_center_float_position EQUAL -1)
+        message(FATAL_ERROR
+            "Upscaled-centre submit float contract is missing: ${_upscaled_center_float_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_upscaled_center_composite_contract IN ITEMS
+    [[if (params.centerAlreadyPrepared)]]
+    [[const bool useSubmitNeuralFloatOutput = params.dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter && neuralResult && neuralResult->applied]]
+    [[centerSRV = submitNeuralFloatColorOut[eyeIndex]->srv.get()]]
+    [[DispatchFoveatedBlendPass( centerSRV, outputColorUAV]]
+)
+    string(FIND
+        "${_upscaled_center_composite_section}"
+        "${_upscaled_center_composite_contract}"
+        _upscaled_center_composite_position
+    )
+    if(_upscaled_center_composite_position EQUAL -1)
+        message(FATAL_ERROR
+            "Prepared-centre submit float composite is missing: ${_upscaled_center_composite_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_final_ldr_float_contract IN ITEMS
+    [[const bool useSubmitNeuralFloatBridge = a_role == NeuralStereoRouteRole::Submit]]
+    [[args.insertionPoint = NeuralRendering::InsertionPoint::FinalLdrPreUi]]
+    [[("Upscale_NeuralFinalLdr_ColorIn_" + suffix).c_str(), targetUavDescs[eye].Format]]
+    [[DispatchSubmitStageColorRegion( neuralFinalLdrColorIn[eye]->srv.get(), submitNeuralFloatColorIn[eye]->uav.get()]]
+    [[args.colorInput = useSubmitNeuralFloatBridge ? submitNeuralFloatColorIn[eye]->resource.get() : neuralFinalLdrColorIn[eye]->resource.get()]]
+    [[CommitSubmitNeuralFloatOutput(eye, directCommit)]]
+    [[useSubmitNeuralFloatBridge ? submitNeuralFloatColorOut[eye]->srv.get() : neuralFinalLdrColorOut[eye]->srv.get()]]
+)
+    string(FIND
+        "${_final_ldr_section}"
+        "${_final_ldr_float_contract}"
+        _final_ldr_float_position
+    )
+    if(_final_ldr_float_position EQUAL -1)
+        message(FATAL_ERROR
+            "Final-LDR submit float contract is missing: ${_final_ldr_float_contract}"
+        )
+    endif()
+endforeach()
+
+string(FIND
+    "${_final_ldr_section}"
+    [[context->CopySubresourceRegion( a_targets[eye].resource, a_targets[eye].subresource]]
+    _final_ldr_rollback_begin
+)
+if(_final_ldr_rollback_begin EQUAL -1)
+    message(FATAL_ERROR "Final-LDR rollback no longer targets the original output")
+endif()
+string(SUBSTRING
+    "${_final_ldr_section}"
+    ${_final_ldr_rollback_begin}
+    -1
+    _final_ldr_rollback_tail
+)
+string(FIND "${_final_ldr_rollback_tail}" [[);]] _final_ldr_rollback_end)
+string(FIND
+    "${_final_ldr_rollback_tail}"
+    [[neuralFinalLdrColorIn[eye]->resource.get(), 0u, &originalCenterBox]]
+    _final_ldr_rollback_source
+)
+if(_final_ldr_rollback_end EQUAL -1 OR _final_ldr_rollback_source EQUAL -1 OR
+    NOT _final_ldr_rollback_source LESS _final_ldr_rollback_end)
+    message(FATAL_ERROR
+        "Final-LDR failure must restore the target from its same-format input snapshot"
+    )
+endif()
+
+string(REGEX MATCHALL
+    [[PrepareSubmitNeuralFloatResources\(]]
+    _submit_float_prepare_sites
+    "${_upscaling}"
+)
+list(LENGTH _submit_float_prepare_sites _submit_float_prepare_site_count)
+if(NOT _submit_float_prepare_site_count EQUAL 3)
+    message(FATAL_ERROR
+        "Submit float resources must be prepared only by the helper and two insertion points"
+    )
+endif()
+
 string(FIND
     "${_bridge}"
     "static constexpr const char* descriptor ="
@@ -196,7 +420,12 @@ foreach(_status_contract IN ITEMS
     [[{ "lateNeuralBlendSuccesses", route.lateNeuralBlendSuccessCount[eye] }]]
     [[{ "unexpectedPassCountDetected", (route.unexpectedPassEyeMask & eyeBit) != 0 }]]
     [[{ "knownMenuContext", temporalAdmission.menuContextActive }]]
+    [[{ "hardMenuBlocked", route.hardMenuBlocked }]]
+    [[{ "lateMenuCompositeReady", route.lateMenuCompositeReady }]]
+    [[{ "csOverlayOpen", route.csOverlayOpen }]]
+    [[{ "menuContinuityAllowed", route.menuContinuityAllowed }]]
     [[{ "gamePaused", temporalAdmission.gamePaused }]]
+    [[{ "pausedSubmitContinuityAllowed", temporalAdmission.pausedSubmitContinuityAllowed }]]
     [[{ "worldFrameStateAvailable", temporalAdmission.worldFrameStateAvailable }]]
     [[{ "worldFrameStarted", temporalAdmission.worldFrameStarted }]]
     [[{ "worldFrameCompleted", temporalAdmission.worldFrameCompleted }]]
@@ -229,6 +458,252 @@ foreach(_status_contract IN ITEMS
         )
     endif()
 endforeach()
+
+string(FIND
+    "${_upscaling}"
+    [[bool Upscaling::SubmitVRUpscaledFrame(]]
+    _submit_stage_begin
+)
+string(FIND
+    "${_upscaling}"
+    [[bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(]]
+    _submit_stage_end
+)
+if(_submit_stage_begin EQUAL -1 OR _submit_stage_end EQUAL -1 OR
+    _submit_stage_end LESS_EQUAL _submit_stage_begin)
+    message(FATAL_ERROR "Unable to isolate the submit-stage menu admission contract")
+endif()
+math(EXPR _submit_stage_length "${_submit_stage_end} - ${_submit_stage_begin}")
+string(SUBSTRING
+    "${_upscaling}"
+    ${_submit_stage_begin}
+    ${_submit_stage_length}
+    _submit_stage
+)
+string(REGEX REPLACE "[\r\n\t ]+" " " _submit_stage_normalized "${_submit_stage}")
+
+string(FIND
+    "${_submit_stage}"
+    [[IsNeuralRenderingMenuSuppressed()]]
+    _broad_submit_menu_suppression
+)
+if(NOT _broad_submit_menu_suppression EQUAL -1)
+    message(FATAL_ERROR
+        "Submit NR must not inherit the broad main-route menu suppression policy"
+    )
+endif()
+
+foreach(_submit_menu_contract IN ITEMS
+    [[const bool hardMenuBlocked =]]
+    [[IsMainMenuContextActive()]]
+    [[IsVRLoadingPresentationContextActive(state)]]
+    [[IsSaveLoadTransitionContextActive()]]
+    [[IsVRLoadingSubmitProtectionContextActive(*this, state)]]
+    [[const bool lateMenuCompositeReady =]]
+    [[const bool csOverlayOpen =]]
+    [[const bool menuContinuityAllowed =]]
+    [[.menuContextActive = hardMenuBlocked]]
+    [[.pausedSubmitContinuityAllowed = menuContinuityAllowed]]
+)
+    string(FIND
+        "${_submit_stage_normalized}"
+        "${_submit_menu_contract}"
+        _submit_menu_contract_position
+    )
+    if(_submit_menu_contract_position EQUAL -1)
+        message(FATAL_ERROR
+            "Submit-stage menu continuity contract is missing: ${_submit_menu_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_named_menu_decision IN ITEMS
+    hardMenuBlocked
+    lateMenuCompositeReady
+    menuContinuityAllowed
+    neuralMenuContinuityDispatch
+    foveatedRequested
+)
+    string(FIND
+        "${_submit_stage_normalized}"
+        "const bool ${_named_menu_decision} ="
+        _named_menu_decision_position
+    )
+    if(_named_menu_decision_position EQUAL -1)
+        message(FATAL_ERROR
+            "Submit-stage menu decision is missing: ${_named_menu_decision}"
+        )
+    endif()
+    string(SUBSTRING
+        "${_submit_stage_normalized}"
+        ${_named_menu_decision_position}
+        -1
+        _named_menu_decision_tail
+    )
+    string(FIND "${_named_menu_decision_tail}" ";" _named_menu_decision_length)
+    if(_named_menu_decision_length EQUAL -1)
+        message(FATAL_ERROR
+            "Submit-stage menu decision has no terminator: ${_named_menu_decision}"
+        )
+    endif()
+    string(SUBSTRING
+        "${_named_menu_decision_tail}"
+        0
+        ${_named_menu_decision_length}
+        _${_named_menu_decision}_expression
+    )
+endforeach()
+
+string(FIND
+    "${_hardMenuBlocked_expression}"
+    [[IsMainMenuContextActive() || IsVRLoadingPresentationContextActive(state) || IsSaveLoadTransitionContextActive() || IsVRLoadingSubmitProtectionContextActive(*this, state)]]
+    _hard_menu_or_chain_position
+)
+if(_hard_menu_or_chain_position EQUAL -1)
+    message(FATAL_ERROR
+        "Submit hard-menu predicate must retain the four fail-closed contexts"
+    )
+endif()
+
+foreach(_hard_menu_term IN ITEMS
+    [[IsMainMenuContextActive()]]
+    [[IsVRLoadingPresentationContextActive(state)]]
+    [[IsSaveLoadTransitionContextActive()]]
+    [[IsVRLoadingSubmitProtectionContextActive(*this, state)]]
+)
+    string(FIND
+        "${_hardMenuBlocked_expression}"
+        "${_hard_menu_term}"
+        _hard_menu_term_position
+    )
+    if(_hard_menu_term_position EQUAL -1)
+        message(FATAL_ERROR
+            "Submit hard-menu predicate is missing: ${_hard_menu_term}"
+        )
+    endif()
+endforeach()
+
+string(FIND
+    "${_lateMenuCompositeReady_expression}"
+    [[submitStageMenuFinalCompositeRequested]]
+    _late_composite_source_position
+)
+if(_late_composite_source_position EQUAL -1)
+    message(FATAL_ERROR
+        "Late menu readiness must come from the sealed final-composite decision"
+    )
+endif()
+
+foreach(_continuity_term IN ITEMS
+    [[!hardMenuBlocked]]
+    [[!currentMenuPresentationContext]]
+    [[lateMenuCompositeReady && !csOverlayOpen]]
+)
+    string(FIND
+        "${_menuContinuityAllowed_expression}"
+        "${_continuity_term}"
+        _continuity_term_position
+    )
+    if(_continuity_term_position EQUAL -1)
+        message(FATAL_ERROR
+            "Submit menu-continuity predicate is missing: ${_continuity_term}"
+        )
+    endif()
+endforeach()
+
+foreach(_neural_menu_dispatch_term IN ITEMS
+    [[sceneFeatureMenuPauseContext]]
+    [[neuralSubmitBaseEligible]]
+    [[menuContinuityAllowed]]
+)
+    string(FIND
+        "${_neuralMenuContinuityDispatch_expression}"
+        "${_neural_menu_dispatch_term}"
+        _neural_menu_dispatch_term_position
+    )
+    if(_neural_menu_dispatch_term_position EQUAL -1)
+        message(FATAL_ERROR
+            "Safe Neural menu dispatch is missing: ${_neural_menu_dispatch_term}"
+        )
+    endif()
+endforeach()
+
+foreach(_foveated_menu_term IN ITEMS
+    [[!sceneFeatureMenuPauseContext]]
+    [[foveatedMaskVisualizationPreview]]
+    [[neuralMenuContinuityDispatch]]
+)
+    string(FIND
+        "${_foveatedRequested_expression}"
+        "${_foveated_menu_term}"
+        _foveated_menu_term_position
+    )
+    if(_foveated_menu_term_position EQUAL -1)
+        message(FATAL_ERROR
+            "Foveated menu dispatch contract is missing: ${_foveated_menu_term}"
+        )
+    endif()
+endforeach()
+
+string(FIND
+    "${_submit_stage}"
+    [[const bool lateMenuCompositeReady =]]
+    _late_menu_ready_position
+)
+string(FIND
+    "${_submit_stage}"
+    [[const bool foveatedRequested =]]
+    _foveated_requested_position
+)
+if(_late_menu_ready_position EQUAL -1 OR _foveated_requested_position EQUAL -1 OR
+    NOT _late_menu_ready_position LESS _foveated_requested_position)
+    message(FATAL_ERROR
+        "Late menu-composite readiness must participate in the foveated submit decision"
+    )
+endif()
+
+string(FIND
+    "${_upscaling}"
+    [[void Upscaling::NotifyVRMenuPresentationContextChange(]]
+    _menu_notification_begin
+)
+string(FIND
+    "${_upscaling}"
+    [[bool Upscaling::SealVRMenuFrameTransaction(]]
+    _menu_notification_end
+)
+if(_menu_notification_begin EQUAL -1 OR _menu_notification_end EQUAL -1 OR
+    _menu_notification_end LESS_EQUAL _menu_notification_begin)
+    message(FATAL_ERROR "Unable to isolate the VR menu-change notification")
+endif()
+math(EXPR
+    _menu_notification_length
+    "${_menu_notification_end} - ${_menu_notification_begin}"
+)
+string(SUBSTRING
+    "${_upscaling}"
+    ${_menu_notification_begin}
+    ${_menu_notification_length}
+    _menu_notification
+)
+string(FIND
+    "${_menu_notification}"
+    [[g_neuralMenuQueryEpoch.fetch_add(]]
+    _menu_epoch_advance_position
+)
+if(_menu_epoch_advance_position EQUAL -1)
+    message(FATAL_ERROR "Menu changes must invalidate retained submit-pair identity")
+endif()
+string(FIND
+    "${_menu_notification}"
+    [[RequestHistoryReset(]]
+    _unconditional_menu_history_reset_position
+)
+if(NOT _unconditional_menu_history_reset_position EQUAL -1)
+    message(FATAL_ERROR
+        "Ordinary menu notifications must not reset NR history outside temporal admission"
+    )
+endif()
 
 foreach(_source_contract IN ITEMS
     [[neuralPrepared = true;]]

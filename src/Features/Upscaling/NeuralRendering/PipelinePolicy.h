@@ -233,6 +233,7 @@ namespace NeuralRendering
 	{
 		bool menuContextActive = false;
 		bool gamePaused = false;
+		bool pausedSubmitContinuityAllowed = false;
 		bool worldFrameStateAvailable = false;
 		std::uint32_t currentFrame = 0;
 		std::uint32_t lastWorldRenderFrame = 0;
@@ -247,6 +248,7 @@ namespace NeuralRendering
 		bool admitted = false;
 		bool menuContextActive = false;
 		bool gamePaused = false;
+		bool pausedSubmitContinuityAllowed = false;
 		bool worldFrameStateAvailable = false;
 		bool worldFrameStarted = false;
 		bool worldFrameCompleted = false;
@@ -265,6 +267,8 @@ namespace NeuralRendering
 			.route = a_route,
 			.menuContextActive = a_inputs.menuContextActive,
 			.gamePaused = a_inputs.gamePaused,
+			.pausedSubmitContinuityAllowed =
+				a_inputs.pausedSubmitContinuityAllowed,
 			.worldFrameStateAvailable = a_inputs.worldFrameStateAvailable,
 			.worldFrameStarted =
 				a_inputs.worldFrameStateAvailable &&
@@ -279,10 +283,13 @@ namespace NeuralRendering
 		};
 		result.temporalSourceFresh = result.worldFrameStarted &&
 		                             (a_route == TemporalRoute::Main || result.worldFrameCompleted);
+		const bool pausedSubmitContinuity =
+			a_route == TemporalRoute::Submit &&
+			result.pausedSubmitContinuityAllowed;
 
 		if (result.menuContextActive) {
 			result.blockReason = TemporalAdmissionBlockReason::MenuContext;
-		} else if (result.gamePaused) {
+		} else if (result.gamePaused && !pausedSubmitContinuity) {
 			result.blockReason = TemporalAdmissionBlockReason::GamePaused;
 		} else if (!result.temporalSourceFresh) {
 			result.blockReason =
@@ -335,10 +342,10 @@ namespace NeuralRendering
 			return CachedStereoPairReuse::Reject;
 
 		const std::uint32_t currentEyeBit = 1u << a_eyeIndex;
-		if ((a_presentedEyeMask & currentEyeBit) != 0)
-			return CachedStereoPairReuse::BypassPresentedEye;
 		if (a_contextMatches)
 			return CachedStereoPairReuse::Reuse;
+		if ((a_presentedEyeMask & currentEyeBit) != 0)
+			return CachedStereoPairReuse::BypassPresentedEye;
 
 		const std::uint32_t peerEyeBit = 1u << (a_eyeIndex ^ 1u);
 		if (a_presentedEyeMask == peerEyeBit)

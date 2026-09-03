@@ -27,6 +27,7 @@ namespace NeuralRendering
 	{
 		constexpr std::uint32_t kMaximumTextureDimension =
 			D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION;
+		constexpr std::size_t kMaximumTransitionResourceCount = 10;
 
 		void Increment(std::uint64_t& a_counter) noexcept
 		{
@@ -98,16 +99,29 @@ namespace NeuralRendering
 			       leftIdentity.Get() == rightIdentity.Get();
 		}
 
+		std::uintptr_t GetIdentityToken(IUnknown* a_object) noexcept
+		{
+			if (!a_object)
+				return 0;
+
+			ComPtr<IUnknown> identity;
+			return SUCCEEDED(a_object->QueryInterface(IID_PPV_ARGS(&identity))) ?
+			           reinterpret_cast<std::uintptr_t>(identity.Get()) :
+			           0;
+		}
+
 		std::string GetStereoPairContractViolation(
 			const std::array<RendererApplyArgs, 2>& a_args)
 		{
 			const auto& left = a_args[0];
 			const auto& right = a_args[1];
-			const std::array<ID3D11Resource*, 4> leftResources{
-				left.colorInput, left.depthGuide, left.motionVectors, left.colorOutput
+			const std::array<ID3D11Resource*, 5> leftResources{
+				left.colorInput, left.depthGuide, left.motionVectors, left.colorOutput,
+				left.controlMask.Get()
 			};
-			const std::array<ID3D11Resource*, 4> rightResources{
-				right.colorInput, right.depthGuide, right.motionVectors, right.colorOutput
+			const std::array<ID3D11Resource*, 5> rightResources{
+				right.colorInput, right.depthGuide, right.motionVectors, right.colorOutput,
+				right.controlMask.Get()
 			};
 			const bool resourcesOverlap = std::ranges::any_of(
 				leftResources,
@@ -336,25 +350,30 @@ namespace NeuralRendering
 			bool active = true;
 		};
 
+		struct FeatureResourceTransition
+		{
+			ID3D12Resource* resource = nullptr;
+			D3D12_RESOURCE_STATES featureState =
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+		};
+
 		void TransitionResources(
 			ID3D12GraphicsCommandList* a_commandList,
-			std::span<ID3D12Resource* const> a_resources,
+			std::span<const FeatureResourceTransition> a_resources,
 			bool a_toFeature)
 		{
-			std::array<D3D12_RESOURCE_BARRIER, 8> barriers{};
+			std::array<D3D12_RESOURCE_BARRIER, kMaximumTransitionResourceCount> barriers{};
 			for (std::size_t index = 0; index < a_resources.size(); ++index) {
+				const auto& resource = a_resources[index];
 				auto& barrier = barriers[index];
 				barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-				barrier.Transition.pResource = a_resources[index];
+				barrier.Transition.pResource = resource.resource;
 				barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-				const auto featureState = index % 4u == 3u ?
-				                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS :
-				                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 				barrier.Transition.StateBefore = a_toFeature ?
 				                                     D3D12_RESOURCE_STATE_COMMON :
-				                                     featureState;
+				                                     resource.featureState;
 				barrier.Transition.StateAfter = a_toFeature ?
-				                                    featureState :
+				                                    resource.featureState :
 				                                    D3D12_RESOURCE_STATE_COMMON;
 			}
 			a_commandList->ResourceBarrier(
@@ -389,6 +408,8 @@ namespace NeuralRendering
 			return "depth_guide_copy";
 		case RendererStage::MotionVectorCopy:
 			return "motion_vector_copy";
+		case RendererStage::ControlMaskCopy:
+			return "control_mask_copy";
 		case RendererStage::CommandBegin:
 			return "command_begin";
 		case RendererStage::FeatureEvaluate:
@@ -427,9 +448,13 @@ namespace NeuralRendering
 			std::uint32_t guideHeight = 0;
 			std::uint32_t outputWidth = 0;
 			std::uint32_t outputHeight = 0;
+			std::uint32_t controlMaskWidth = 0;
+			std::uint32_t controlMaskHeight = 0;
 			DXGI_FORMAT colorFormat = DXGI_FORMAT_UNKNOWN;
 			DXGI_FORMAT motionFormat = DXGI_FORMAT_UNKNOWN;
 			DXGI_FORMAT outputFormat = DXGI_FORMAT_UNKNOWN;
+			DXGI_FORMAT controlMaskFormat = DXGI_FORMAT_UNKNOWN;
+			bool controlMaskPresent = false;
 
 			bool operator==(const ResourceKey&) const = default;
 		};
@@ -447,6 +472,7 @@ namespace NeuralRendering
 			std::uint32_t localStructureStrength = 0;
 			std::uint32_t skinStructureStrength = 0;
 			std::uint32_t style = 0;
+			std::uintptr_t controlMaskIdentity = 0;
 			bool featureUpscaling = false;
 			bool useAutoMask = false;
 			bool uiCorrection = false;
@@ -459,6 +485,7 @@ namespace NeuralRendering
 			SharedTexture color;
 			SharedTexture depth;
 			SharedTexture motionVectors;
+			SharedTexture controlMask;
 			SharedTexture output;
 			ResourceKey resourceKey{};
 			HistoryKey historyKey{};
@@ -473,7 +500,9 @@ namespace NeuralRendering
 			TextureInfo color;
 			TextureInfo depth;
 			TextureInfo motionVectors;
+			TextureInfo controlMask;
 			TextureInfo output;
+			std::uintptr_t controlMaskIdentity = 0;
 			DXGI_FORMAT depthViewFormat = DXGI_FORMAT_UNKNOWN;
 			ResourceKey resourceKey{};
 			HistoryKey historyKey{};
@@ -610,6 +639,20 @@ namespace NeuralRendering
 			!validDimension(a_args.outputHeight)) {
 			return fail("one or more dimensions are zero or exceed the D3D11 Texture2D limit");
 		}
+		const bool hasControlMask = a_args.controlMask != nullptr;
+		if (hasControlMask &&
+			(!validDimension(a_args.controlMaskWidth) ||
+				!validDimension(a_args.controlMaskHeight))) {
+			return fail("control-mask dimensions are zero or exceed the D3D11 Texture2D limit");
+		}
+		if (!hasControlMask && (a_args.controlMaskWidth || a_args.controlMaskHeight)) {
+			return fail("control-mask dimensions must be zero when no mask is supplied");
+		}
+		if (hasControlMask &&
+			(a_args.controlMaskWidth != a_args.outputWidth ||
+				a_args.controlMaskHeight != a_args.outputHeight)) {
+			return fail("the control mask must exactly match the Feature 18 output extent");
+		}
 		if (!a_args.viewportCrop.MatchesEvaluationExtents(
 				a_args.guideWidth,
 				a_args.guideHeight,
@@ -627,9 +670,12 @@ namespace NeuralRendering
 			return fail("Feature 18 motion-vector crop metadata is invalid");
 		if (!IsFiniteTuning(a_args.tuning))
 			return fail("Feature 18 tuning values are outside their validated ranges");
-		if (!a_args.tuning.useAutoMask || a_args.tuning.uiCorrection) {
-			return fail(
-				"manual masks and UI correction are outside the safe Feature 18 contract");
+		if (a_args.tuning.uiCorrection)
+			return fail("UI correction is outside the safe Feature 18 contract");
+		if (hasControlMask == a_args.tuning.useAutoMask) {
+			return fail(hasControlMask ?
+							"a control mask requires automatic masking to be disabled" :
+							"automatic masking is required when no control mask is supplied");
 		}
 
 		ComPtr<ID3D11Device> contextDevice;
@@ -665,6 +711,31 @@ namespace NeuralRendering
 			contract.info->texture->GetDevice(&resourceDevice);
 			if (!SameIdentity(a_args.device, resourceDevice.Get()))
 				return fail(std::format("{} belongs to a different D3D11 device", contract.name));
+		}
+		if (hasControlMask) {
+			if (!GetTextureInfo(a_args.controlMask.Get(), a_resources.controlMask))
+				return fail("control mask is not a Texture2D");
+			if (!HasExactTextureContract(
+					a_resources.controlMask.desc,
+					a_args.controlMaskWidth,
+					a_args.controlMaskHeight)) {
+				return fail(std::format(
+					"control mask does not match the exact {}x{} single-sample, single-subresource DEFAULT contract",
+					a_args.controlMaskWidth,
+					a_args.controlMaskHeight));
+			}
+			if (a_resources.controlMask.desc.Format != DXGI_FORMAT_R8_UNORM)
+				return fail("control mask format must be R8_UNORM");
+			if ((a_resources.controlMask.desc.BindFlags & D3D11_BIND_SHADER_RESOURCE) == 0)
+				return fail("control mask must be shader-resource capable");
+
+			ComPtr<ID3D11Device> maskDevice;
+			a_resources.controlMask.texture->GetDevice(&maskDevice);
+			if (!SameIdentity(a_args.device, maskDevice.Get()))
+				return fail("control mask belongs to a different D3D11 device");
+			a_resources.controlMaskIdentity = GetIdentityToken(a_args.controlMask.Get());
+			if (!a_resources.controlMaskIdentity)
+				return fail("control mask COM identity could not be resolved");
 		}
 
 		if (a_resources.color.desc.Format != a_resources.output.desc.Format)
@@ -724,6 +795,14 @@ namespace NeuralRendering
 			return fail("the output format cannot back a shared UAV texture");
 		if (!SupportsD3D11SharedFormat(a_args.device, a_resources.output.desc.Format))
 			return fail("the output format is not shareable across D3D11 and D3D12");
+		if (hasControlMask &&
+			!SupportsD3D11Format(a_args.device, DXGI_FORMAT_R8_UNORM, inputSupport)) {
+			return fail("R8_UNORM control masks cannot back a shared SRV/UAV texture");
+		}
+		if (hasControlMask &&
+			!SupportsD3D11SharedFormat(a_args.device, DXGI_FORMAT_R8_UNORM)) {
+			return fail("R8_UNORM control masks are not shareable across D3D11 and D3D12");
+		}
 
 		a_resources.resourceKey = {
 			.colorWidth = a_args.colorWidth,
@@ -732,9 +811,15 @@ namespace NeuralRendering
 			.guideHeight = a_args.guideHeight,
 			.outputWidth = a_args.outputWidth,
 			.outputHeight = a_args.outputHeight,
+			.controlMaskWidth = hasControlMask ? a_args.controlMaskWidth : 0,
+			.controlMaskHeight = hasControlMask ? a_args.controlMaskHeight : 0,
 			.colorFormat = a_resources.color.desc.Format,
 			.motionFormat = a_resources.motionVectors.desc.Format,
 			.outputFormat = a_resources.output.desc.Format,
+			.controlMaskFormat = hasControlMask ?
+			                         a_resources.controlMask.desc.Format :
+			                         DXGI_FORMAT_UNKNOWN,
+			.controlMaskPresent = hasControlMask,
 		};
 		a_resources.historyKey = {
 			.resources = a_resources.resourceKey,
@@ -748,6 +833,7 @@ namespace NeuralRendering
 			.localStructureStrength = std::bit_cast<std::uint32_t>(a_args.tuning.localStructureStrength),
 			.skinStructureStrength = std::bit_cast<std::uint32_t>(a_args.tuning.skinStructureStrength),
 			.style = a_args.tuning.style,
+			.controlMaskIdentity = a_resources.controlMaskIdentity,
 			.featureUpscaling = a_args.featureUpscaling,
 			.useAutoMask = a_args.tuning.useAutoMask,
 			.uiCorrection = a_args.tuning.uiCorrection,
@@ -781,6 +867,13 @@ namespace NeuralRendering
 				device, a_resources.resourceKey.motionFormat, sampled,
 				D3D12_FORMAT_SUPPORT2_NONE)) {
 			a_detail = "the D3D12 device cannot sample the motion-vector format";
+			return false;
+		}
+		if (a_resources.resourceKey.controlMaskPresent &&
+			!SupportsD3D12Format(
+				device, a_resources.resourceKey.controlMaskFormat, sampled,
+				D3D12_FORMAT_SUPPORT2_NONE)) {
+			a_detail = "the D3D12 device cannot sample the R8_UNORM control-mask format";
 			return false;
 		}
 		if (!SupportsD3D12Format(
@@ -846,6 +939,7 @@ namespace NeuralRendering
 		performance.lastFeatureGpuMicroseconds = telemetry.lastFeatureGpuMicroseconds;
 		performance.maximumFeatureGpuMicroseconds = telemetry.maximumFeatureGpuMicroseconds;
 		performance.lastFeaturePixelCount = telemetry.lastFeaturePixelCount;
+		performance.lastFeatureFrameId = telemetry.lastFeatureFrameId;
 		performance.lastFeatureEvaluationCount = telemetry.lastFeatureEvaluationCount;
 		performance.lastFeatureSlotMask = telemetry.lastFeatureSlotMask;
 		performance.lastInsertionPoint = telemetry.lastInsertionPoint;
@@ -864,7 +958,10 @@ namespace NeuralRendering
 		snapshot_.guideHeight = a_args.guideHeight;
 		snapshot_.outputWidth = a_args.outputWidth;
 		snapshot_.outputHeight = a_args.outputHeight;
+		snapshot_.controlMaskWidth = a_args.controlMaskWidth;
+		snapshot_.controlMaskHeight = a_args.controlMaskHeight;
 		snapshot_.featureUpscaling = a_args.featureUpscaling;
+		snapshot_.controlMaskPresent = a_args.controlMask != nullptr;
 		snapshot_.outputCommitted = false;
 	}
 
@@ -1108,6 +1205,7 @@ namespace NeuralRendering
 			Abandon(slot.color);
 			Abandon(slot.depth);
 			Abandon(slot.motionVectors);
+			Abandon(slot.controlMask);
 			Abandon(slot.output);
 			slot.resourcesValid = false;
 			slot.historyValid = false;
@@ -1340,10 +1438,23 @@ namespace NeuralRendering
 			a_resources.resourceKey.outputHeight,
 			a_resources.resourceKey.outputFormat,
 			false);
+		D3D11_TEXTURE2D_DESC controlMaskDesc{};
+		if (a_resources.resourceKey.controlMaskPresent) {
+			controlMaskDesc = MakeSharedDescription(
+				a_resources.resourceKey.controlMaskWidth,
+				a_resources.resourceKey.controlMaskHeight,
+				a_resources.resourceKey.controlMaskFormat,
+				true);
+		}
 
 		if (!interop_.CreateSharedTexture(colorDesc, replacement.color, (prefix + "Color").c_str()) ||
 			!interop_.CreateSharedTexture(depthDesc, replacement.depth, (prefix + "Depth").c_str()) ||
 			!interop_.CreateSharedTexture(motionDesc, replacement.motionVectors, (prefix + "MotionVectors").c_str()) ||
+			(a_resources.resourceKey.controlMaskPresent &&
+				!interop_.CreateSharedTexture(
+					controlMaskDesc,
+					replacement.controlMask,
+					(prefix + "ControlMask").c_str())) ||
 			!interop_.CreateSharedTexture(outputDesc, replacement.output, (prefix + "Output").c_str())) {
 			return FailLocked(
 				RendererStage::ResourceCreation,
@@ -1535,6 +1646,7 @@ namespace NeuralRendering
 		snapshot_.depthViewFormat = 0;
 		snapshot_.motionVectorFormat = 0;
 		snapshot_.outputFormat = 0;
+		snapshot_.controlMaskFormat = 0;
 
 		if (a_args.size() == 2) {
 			SetActiveFeatureSlotLocked(a_args[1].featureSlot);
@@ -1565,6 +1677,8 @@ namespace NeuralRendering
 				static_cast<std::uint32_t>(resources[index].motionVectors.desc.Format);
 			snapshot_.outputFormat =
 				static_cast<std::uint32_t>(resources[index].output.desc.Format);
+			snapshot_.controlMaskFormat =
+				static_cast<std::uint32_t>(resources[index].controlMask.desc.Format);
 			if (validation) {
 				return FailLocked(
 					RendererStage::Validation,
@@ -1643,6 +1757,29 @@ namespace NeuralRendering
 				true);
 		}
 		snapshot_.lastCompletedStage = RendererStage::MotionVectorCopy;
+
+		if (std::ranges::any_of(
+				a_args, [](const auto& args) { return args.controlMask != nullptr; })) {
+			activeStage_ = RendererStage::ControlMaskCopy;
+			for (std::size_t index = 0; index < a_args.size(); ++index) {
+				if (!a_args[index].controlMask)
+					continue;
+				SetActiveFeatureSlotLocked(a_args[index].featureSlot);
+				a_args.front().context->CopyResource(
+					slots[index]->controlMask.resource11.Get(),
+					resources[index].controlMask.texture.Get());
+				Increment(snapshot_.counters.controlMaskCopies);
+			}
+			if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
+				return FailLocked(
+					RendererStage::ControlMaskCopy,
+					reason,
+					"device removal followed the D3D11 control-mask copy",
+					a_args.front().featureSlot,
+					true);
+			}
+			snapshot_.lastCompletedStage = RendererStage::ControlMaskCopy;
+		}
 		RecordCpuDuration(
 			snapshot_.performance.d3d11PreparationCpuEnqueueSamples,
 			snapshot_.performance.d3d11PreparationCpuEnqueueMicroseconds,
@@ -1663,27 +1800,41 @@ namespace NeuralRendering
 		RecordingGuard recordingGuard(interop_);
 		snapshot_.lastCompletedStage = RendererStage::CommandBegin;
 
-		std::array<ID3D12Resource*, 8> sharedResources{};
+		std::array<FeatureResourceTransition, kMaximumTransitionResourceCount>
+			sharedResources{};
+		std::size_t sharedResourceCount = 0;
 		std::uint64_t pixelCount = 0;
 		std::uint32_t featureSlotMask = 0;
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
-			const std::size_t base = index * 4u;
-			sharedResources[base] = slots[index]->color.resource12.Get();
-			sharedResources[base + 1u] = slots[index]->depth.resource12.Get();
-			sharedResources[base + 2u] = slots[index]->motionVectors.resource12.Get();
-			sharedResources[base + 3u] = slots[index]->output.resource12.Get();
+			const auto addInput = [&](ID3D12Resource* a_resource) {
+				sharedResources[sharedResourceCount++] = {
+					.resource = a_resource,
+					.featureState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+				};
+			};
+			addInput(slots[index]->color.resource12.Get());
+			addInput(slots[index]->depth.resource12.Get());
+			addInput(slots[index]->motionVectors.resource12.Get());
+			if (a_args[index].controlMask)
+				addInput(slots[index]->controlMask.resource12.Get());
+			sharedResources[sharedResourceCount++] = {
+				.resource = slots[index]->output.resource12.Get(),
+				.featureState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+			};
 			Add(
 				pixelCount,
 				static_cast<std::uint64_t>(a_args[index].outputWidth) *
 					a_args[index].outputHeight);
 			featureSlotMask |= 1u << a_args[index].featureSlot;
 		}
-		const auto resourceSpan = std::span(sharedResources.data(), a_args.size() * 4u);
+		const auto resourceSpan =
+			std::span(sharedResources.data(), sharedResourceCount);
 		TransitionResources(commandList, resourceSpan, true);
 		if (!interop_.BeginFeatureTiming(
 				commandList,
 				D3D12InteropSubmissionTiming{
+					.frameId = a_args.front().frameId,
 					.pixelCount = pixelCount,
 					.evaluationCount = static_cast<std::uint32_t>(a_args.size()),
 					.featureSlotMask = featureSlotMask,
@@ -1751,12 +1902,15 @@ namespace NeuralRendering
 				slot.depth.resource12.Get(),
 				slot.motionVectors.resource12.Get(),
 				slot.output.resource12.Get(),
+				args.controlMask ? slot.controlMask.resource12.Get() : nullptr,
 				args.colorWidth,
 				args.colorHeight,
 				args.guideWidth,
 				args.guideHeight,
 				args.outputWidth,
 				args.outputHeight,
+				args.controlMaskWidth,
+				args.controlMaskHeight,
 				motionVectorScale.x,
 				motionVectorScale.y,
 				args.featureUpscaling,
@@ -1788,7 +1942,7 @@ namespace NeuralRendering
 				1u << args.featureSlot;
 			LogOnce(slotEvaluateSuccessLogged_[args.featureSlot], [&]() {
 				logger::info(
-					"[DLSSNR] First Feature 18 evaluate succeeded: slot={}, color={}x{}, guides={}x{}, output={}x{}, upscaling={}, reset={}, stereoBatch={}",
+					"[DLSSNR] First Feature 18 evaluate succeeded: slot={}, color={}x{}, guides={}x{}, output={}x{}, controlMask={}x{}, upscaling={}, reset={}, stereoBatch={}",
 					args.featureSlot,
 					args.colorWidth,
 					args.colorHeight,
@@ -1796,6 +1950,8 @@ namespace NeuralRendering
 					args.guideHeight,
 					args.outputWidth,
 					args.outputHeight,
+					args.controlMaskWidth,
+					args.controlMaskHeight,
 					args.featureUpscaling,
 					effectiveReset,
 					a_args.size() == 2);

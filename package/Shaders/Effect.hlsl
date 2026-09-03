@@ -1,6 +1,9 @@
 #define LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS
 
 #include "Common/Color.hlsli"
+#ifdef VR
+#	include "Common/CharacterCategoryMask.hlsli"
+#endif
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
 #include "Common/Math.hlsli"
@@ -437,6 +440,9 @@ struct PS_OUTPUT
 	float4 Specular: SV_Target4;
 	float4 Reflectance: SV_Target5;
 	float4 Masks: SV_Target6;
+#	ifdef VR
+	float4 Masks2: SV_Target7;
+#	endif
 };
 #else
 struct PS_OUTPUT
@@ -887,6 +893,11 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Specular = float4(0, 0, 0, finalColor.w);
 	psout.Reflectance = float4(0, 0, 0, finalColor.w);
 	psout.Masks = float4(0, 0, 0, finalColor.w);
+#		endif
+
+#		ifdef VR
+	psout.Masks2 = CharacterCategoryMask::Encode(
+		0.0, 0u, psout.Diffuse.w);
 #		endif
 
 #	elif defined(MOTIONVECTORS_NORMALS)

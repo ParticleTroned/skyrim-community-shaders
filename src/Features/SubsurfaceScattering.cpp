@@ -4,6 +4,7 @@
 #include "Features/Upscaling.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "Upscaling/NeuralRendering/CharacterRendering.h"
 #include "Utils/D3D.h"
 
 #include <algorithm>
@@ -39,6 +40,100 @@ namespace
 	constexpr float kHumanSkinControlMin = 0.0f;
 	constexpr float kHumanSkinControlMax = 2.0f;
 	constexpr uint32_t kBlurHorizontalTempAllocationRetryFrames = 120;
+
+	enum class AncestryResult
+	{
+		Descendant,
+		NotDescendant,
+		Indeterminate,
+	};
+
+	AncestryResult ResolveAncestry(
+		const RE::NiAVObject* a_object,
+		const RE::NiAVObject* a_ancestor) noexcept
+	{
+		constexpr std::uint32_t kMaximumParentDepth = 64;
+		for (std::uint32_t depth = 0;
+			a_object && depth < kMaximumParentDepth;
+			++depth, a_object = a_object->parent) {
+			if (a_object == a_ancestor)
+				return AncestryResult::Descendant;
+		}
+		return a_object ? AncestryResult::Indeterminate :
+		                  AncestryResult::NotDescendant;
+	}
+
+	struct CharacterMaterialClassification
+	{
+		NeuralRendering::CharacterCategory category =
+			NeuralRendering::CharacterCategory::None;
+		NeuralRendering::CharacterClassificationRejection rejection =
+			NeuralRendering::CharacterClassificationRejection::UnsupportedMaterial;
+	};
+
+	CharacterMaterialClassification ClassifyCharacterMaterial(
+		RE::BSShaderProperty* a_property,
+		RE::BSGeometry* a_geometry,
+		RE::Actor* a_actor) noexcept
+	{
+		if (!a_property || !a_geometry || !a_actor)
+			return {};
+		const auto* alphaProperty = static_cast<RE::NiAlphaProperty*>(
+			a_geometry->GetGeometryRuntimeData().alphaProperty.get());
+		const auto* lightingProperty =
+			a_property->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get() ?
+				static_cast<RE::BSLightingShaderProperty*>(a_property) :
+				nullptr;
+		const bool hasImplicitAlphaBlend =
+			lightingProperty && lightingProperty->alpha < 0.999f;
+		if (hasImplicitAlphaBlend ||
+			(alphaProperty && alphaProperty->GetAlphaBlending())) {
+			// MRT7 inherits the scene blend state, so a blended category value
+			// is not an exact semantic ID. Alpha-tested geometry remains exact.
+			return {
+				.rejection = NeuralRendering::CharacterClassificationRejection::BlendedMaterial,
+			};
+		}
+
+		using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
+		const auto* material = a_property->GetBaseMaterial();
+		const auto feature = material ? material->GetFeature() :
+		                                RE::BSShaderMaterial::Feature::kNone;
+		if (a_property->flags.any(Flag::kFace) ||
+			feature == RE::BSShaderMaterial::Feature::kFaceGen) {
+			return { .category = NeuralRendering::CharacterCategory::Face };
+		}
+
+		const bool isFaceGenRgbTint =
+			a_property->flags.any(Flag::kFaceGenRGBTint) ||
+			feature == RE::BSShaderMaterial::Feature::kFaceGenRGBTint;
+		if (isFaceGenRgbTint) {
+			// FaceGen RGB tint is also used by exposed body skin. The actor's
+			// face-node ancestry is the reliable distinction; kSkinned is not.
+			const auto* faceNode = a_actor->GetFaceNodeSkinned();
+			if (!faceNode)
+				return {
+					.rejection = NeuralRendering::CharacterClassificationRejection::AmbiguousFaceGen,
+				};
+			switch (ResolveAncestry(a_geometry, faceNode)) {
+			case AncestryResult::Descendant:
+				return { .category = NeuralRendering::CharacterCategory::Face };
+			case AncestryResult::NotDescendant:
+				return { .category = NeuralRendering::CharacterCategory::Skin };
+			default:
+				// Corrupt or unexpectedly deep scene graphs must not broaden the mask.
+				return {
+					.rejection = NeuralRendering::CharacterClassificationRejection::AmbiguousFaceGen,
+				};
+			}
+		}
+
+		if (a_property->flags.any(Flag::kHairTint) ||
+			feature == RE::BSShaderMaterial::Feature::kHairTint) {
+			return { .category = NeuralRendering::CharacterCategory::Hair };
+		}
+		return {};
+	}
 
 	template <class TNPC>
 	auto IsFemaleImpl(TNPC* npc, int) -> decltype(npc->IsFemale(), bool{})
@@ -761,10 +856,17 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 {
 	auto deferred = globals::deferred;
 	auto state = globals::state;
+	if (!state)
+		return;
 
-	if (deferred->deferredPass) {
+	const auto characterCategoryMask = static_cast<uint>(
+		State::ExtraShaderDescriptors::CharacterCategoryMask);
+	state->permutationData.ExtraShaderDescriptor &= ~characterCategoryMask;
+
+	if (deferred && deferred->deferredPass) {
 		bool isBeastRace = true;
 		bool isFemale = false;
+		RE::Actor* actor = nullptr;
 
 		if (a_pass && a_pass->shaderProperty &&
 			a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kFace, RE::BSShaderProperty::EShaderPropertyFlag::kFaceGenRGBTint,
@@ -772,8 +874,9 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 			auto geometry = a_pass->geometry;
 			if (geometry) {
 				if (auto userData = geometry->GetUserData()) {
-					if (auto actor = userData->As<RE::Actor>()) {
-						if (auto race = actor->GetRace())
+					actor = userData->As<RE::Actor>();
+					if (actor) {
+						if (auto race = actor->GetRace(); race && isBeastRaceKeyword)
 							isBeastRace = race->HasKeyword(isBeastRaceKeyword);
 						if (auto base = actor->GetActorBase())
 							isFemale = GetNPCIsFemale(base);
@@ -782,6 +885,43 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 			}
 
 			validMaterials = true;
+		}
+
+		const auto& upscaling = globals::features::upscaling;
+		if (upscaling.IsCharacterNeuralRenderingRouteRequested() &&
+			a_pass && a_pass->shaderProperty && a_pass->geometry) {
+			if (!actor) {
+				if (auto userData = a_pass->geometry->GetUserData())
+					actor = userData->As<RE::Actor>();
+			}
+			auto& characterRendering =
+				NeuralRendering::CharacterRendering::Instance();
+			if (actor && actor->IsPlayerRef()) {
+				characterRendering.ObserveClassificationRejection(
+					state->frameCount,
+					NeuralRendering::CharacterClassificationRejection::Player);
+			} else if (actor) {
+				const auto classification = ClassifyCharacterMaterial(
+					a_pass->shaderProperty, a_pass->geometry, actor);
+				const auto category = classification.category;
+				if (category == NeuralRendering::CharacterCategory::None) {
+					characterRendering.ObserveClassificationRejection(
+						state->frameCount, classification.rejection);
+				} else {
+					state->permutationData.ExtraShaderDescriptor |=
+						static_cast<uint>(category) << 8;
+					const auto& bound = a_pass->geometry->worldBound;
+					characterRendering.ObserveGeometry(
+						state->frameCount,
+						actor->GetFormID(),
+						reinterpret_cast<std::uintptr_t>(a_pass->geometry),
+						category,
+						bound.center.x,
+						bound.center.y,
+						bound.center.z,
+						bound.radius);
+				}
+			}
 		}
 
 		state->permutationData.ExtraShaderDescriptor &= ~((uint)State::ExtraShaderDescriptors::IsBeastRace | (uint)State::ExtraShaderDescriptors::IsFemale);

@@ -2,6 +2,8 @@
 
 #include "Buffer.h"
 
+#include <mutex>
+
 #define SSSS_N_SAMPLES 21
 
 struct SubsurfaceScattering : Feature
@@ -147,8 +149,12 @@ public:
 
 		static void Install()
 		{
-			stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
-			logger::info("[SSS] Installed hooks");
+			static std::once_flag installed;
+			std::call_once(installed, []() {
+				stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(
+					RE::VTABLE_BSLightingShader[0]);
+				logger::info("[SSS] Installed hooks");
+			});
 		}
 	};
 

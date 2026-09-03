@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -20,6 +21,7 @@ namespace NeuralRendering
 {
 	struct D3D12InteropSubmissionTiming
 	{
+		std::uint32_t frameId = std::numeric_limits<std::uint32_t>::max();
 		std::uint64_t pixelCount = 0;
 		std::uint32_t evaluationCount = 0;
 		std::uint32_t featureSlotMask = 0;
@@ -53,6 +55,8 @@ namespace NeuralRendering
 		std::uint64_t lastFeatureGpuMicroseconds = 0;
 		std::uint64_t maximumFeatureGpuMicroseconds = 0;
 		std::uint64_t lastFeaturePixelCount = 0;
+		std::uint32_t lastFeatureFrameId =
+			std::numeric_limits<std::uint32_t>::max();
 		std::uint32_t lastFeatureEvaluationCount = 0;
 		std::uint32_t lastFeatureSlotMask = 0;
 		InsertionPoint lastInsertionPoint = InsertionPoint::Count;

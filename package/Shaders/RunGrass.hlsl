@@ -4,6 +4,9 @@
 #include "Common/Math.hlsli"
 #include "Common/MotionBlur.hlsli"
 #include "Common/Permutation.hlsli"
+#ifdef VR
+#	include "Common/CharacterCategoryMask.hlsli"
+#endif
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 
@@ -528,17 +531,17 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input)
 				float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
 				float lightDist = length(lightDirection);
 
-#				if defined(ISL)
+#			if defined(ISL)
 				float intensityMultiplier = InverseSquareLighting::GetAttenuation(lightDist, light);
 				if (intensityMultiplier < 1e-5)
 					continue;
-#				else
+#			else
 				float intensityFactor = saturate(lightDist / light.radius);
 				if (intensityFactor == 1)
 					continue;
 
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
-#				endif
+#			endif
 
 				const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
 				float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * intensityMultiplier * light.fade;
@@ -614,7 +617,12 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input)
 #		endif
 	psout.Albedo = float4(albedo, 1);
 	psout.Masks = float4(0, 0, Color::RGBToYCoCg(directionalAmbientColor).x, 0);
+#		ifdef VR
+	psout.Masks2 = CharacterCategoryMask::Encode(
+		1.0 - vertexAO, 0, psout.Diffuse.w);
+#		else
 	psout.Masks2 = float4(1.0 - vertexAO, 0, 0, 0);
+#		endif
 #	endif
 
 	return psout;
@@ -655,8 +663,7 @@ float GetWrappedDiffuseMultiplier(float angle, float wrapAmount, bool useWrapped
 
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
-	[branch] if (!SharedData::grassLightingSettings.Enabled)
-		return RenderBasicGrass(input);
+	[branch] if (!SharedData::grassLightingSettings.Enabled) return RenderBasicGrass(input);
 
 	PS_OUTPUT psout = (PS_OUTPUT)0;
 
@@ -980,7 +987,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	psout.Specular = float4(specularColor, 1);
 	psout.Masks = float4(0, 0, Color::RGBToYCoCg(directionalAmbientColor).x, 0);
+#			ifdef VR
+	psout.Masks2 = CharacterCategoryMask::Encode(
+		1.0 - vertexAO, 0, psout.Diffuse.w);
+#			else
 	psout.Masks2 = float4(1.0 - vertexAO, 0, 0, 0);
+#			endif
 #		endif
 	return psout;
 }

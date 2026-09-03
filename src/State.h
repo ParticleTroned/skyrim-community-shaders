@@ -259,7 +259,11 @@ public:
 		IsTree = 1 << 4,
 		GrassSphereNormal = 1 << 5,
 		IsFemale = 1 << 6,
-		SuppressExternalEmittance = 1 << 7
+		SuppressExternalEmittance = 1 << 7,
+		CharacterCategoryMask = 0b11 << 8,
+		CharacterFace = 0b01 << 8,
+		CharacterSkin = 0b10 << 8,
+		CharacterHair = 0b11 << 8
 	};
 
 	enum class ExtraFeatureDescriptors : uint32_t

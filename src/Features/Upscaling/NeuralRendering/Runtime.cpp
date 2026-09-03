@@ -1341,9 +1341,11 @@ namespace NeuralRendering
 		ID3D12GraphicsCommandList* a_commandList, std::uint32_t a_slot,
 		ID3D12Resource* a_color, ID3D12Resource* a_depth,
 		ID3D12Resource* a_motionVectors, ID3D12Resource* a_output,
+		ID3D12Resource* a_controlMask,
 		std::uint32_t a_colorWidth, std::uint32_t a_colorHeight,
 		std::uint32_t a_guideWidth, std::uint32_t a_guideHeight,
 		std::uint32_t a_outputWidth, std::uint32_t a_outputHeight,
+		std::uint32_t a_controlMaskWidth, std::uint32_t a_controlMaskHeight,
 		float a_motionVectorScaleX, float a_motionVectorScaleY,
 		bool a_featureUpscaling, const Tuning& a_tuning, bool a_reset,
 		bool* a_evaluationAttempted)
@@ -1351,6 +1353,17 @@ namespace NeuralRendering
 		if (a_evaluationAttempted)
 			*a_evaluationAttempted = false;
 		std::scoped_lock lock(mutex_);
+		const bool hasControlMask = a_controlMask != nullptr;
+		const bool controlMaskContractValid =
+			hasControlMask ?
+				(!a_tuning.useAutoMask &&
+					a_controlMaskWidth != 0 &&
+					a_controlMaskHeight != 0 &&
+					a_controlMaskWidth == a_outputWidth &&
+					a_controlMaskHeight == a_outputHeight) :
+				(a_tuning.useAutoMask &&
+					a_controlMaskWidth == 0 &&
+					a_controlMaskHeight == 0);
 		if (abandonRequested_.load(std::memory_order_acquire) || abandoned_)
 			return false;
 		if (status_ != RuntimeStatus::Initialized || !a_commandList ||
@@ -1363,11 +1376,13 @@ namespace NeuralRendering
 			!std::isfinite(a_tuning.localToneStrength) ||
 			!std::isfinite(a_tuning.localStructureStrength) ||
 			!std::isfinite(a_tuning.skinStructureStrength) ||
-			!a_tuning.useAutoMask || a_tuning.uiCorrection) {
+			a_tuning.uiCorrection || !controlMaskContractValid) {
 			SetFailureLocked(
 				RuntimeStatus::FeatureEvaluateFailed,
 				RuntimeFailureStage::FeatureEvaluate,
-				"Feature 18 evaluation arguments are invalid",
+				controlMaskContractValid ?
+					"Feature 18 evaluation arguments are invalid" :
+					"Feature 18 control-mask presence, dimensions, and automatic-mask mode are inconsistent",
 				static_cast<std::uint32_t>(E_INVALIDARG));
 			return false;
 		}
@@ -1475,6 +1490,13 @@ namespace NeuralRendering
 		parameters->Set("DLSSNR.Depth", a_depth);
 		parameters->Set("DLSSNR.MVec", a_motionVectors);
 		parameters->Set("DLSSNR.Output", a_output);
+		if (hasControlMask) {
+			parameters->Set("DLSSNR.ControlMask", a_controlMask);
+			parameters->Set("DLSSNR.ControlMaskSubrectBaseX", 0u);
+			parameters->Set("DLSSNR.ControlMaskSubrectBaseY", 0u);
+			parameters->Set("DLSSNR.ControlMaskSubrectWidth", a_controlMaskWidth);
+			parameters->Set("DLSSNR.ControlMaskSubrectHeight", a_controlMaskHeight);
+		}
 		parameters->Set("DLSSNR.ColorSubrectBaseX", 0u);
 		parameters->Set("DLSSNR.ColorSubrectBaseY", 0u);
 		parameters->Set("DLSSNR.ColorSubrectWidth", a_colorWidth);
@@ -1528,9 +1550,10 @@ namespace NeuralRendering
 		status_ = RuntimeStatus::Initialized;
 		failureStage_ = RuntimeFailureStage::None;
 		detail_ = std::format(
-			"Feature 18 evaluated slot={} upscaling={} color={}x{} guides={}x{} output={}x{} proxyHits={}",
+			"Feature 18 evaluated slot={} upscaling={} color={}x{} guides={}x{} output={}x{} controlMask={}x{} proxyHits={}",
 			a_slot, a_featureUpscaling, a_colorWidth, a_colorHeight, a_guideWidth,
-			a_guideHeight, a_outputWidth, a_outputHeight, lastPathProxyHits_);
+			a_guideHeight, a_outputWidth, a_outputHeight, a_controlMaskWidth,
+			a_controlMaskHeight, lastPathProxyHits_);
 		LogOnceLocked(featureEvaluateLogEmitted_, "evaluate", true);
 		return true;
 	}

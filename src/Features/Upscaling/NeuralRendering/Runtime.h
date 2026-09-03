@@ -106,7 +106,8 @@ namespace NeuralRendering
 
 		bool Probe(const std::filesystem::path& a_explicitPath = {});
 		bool Initialize(ID3D12Device* a_device, const std::filesystem::path& a_dataPath = {});
-		/** Records one Feature 18 evaluation; the optional output distinguishes pre-evaluation failures. */
+		/** Records one Feature 18 evaluation with an optional output-resolution control mask.
+		 *  The optional attempt flag distinguishes pre-evaluation failures. */
 		bool Execute(
 			ID3D12GraphicsCommandList* a_commandList,
 			std::uint32_t a_slot,
@@ -114,12 +115,15 @@ namespace NeuralRendering
 			ID3D12Resource* a_depth,
 			ID3D12Resource* a_motionVectors,
 			ID3D12Resource* a_output,
+			ID3D12Resource* a_controlMask,
 			std::uint32_t a_colorWidth,
 			std::uint32_t a_colorHeight,
 			std::uint32_t a_guideWidth,
 			std::uint32_t a_guideHeight,
 			std::uint32_t a_outputWidth,
 			std::uint32_t a_outputHeight,
+			std::uint32_t a_controlMaskWidth,
+			std::uint32_t a_controlMaskHeight,
 			float a_motionVectorScaleX,
 			float a_motionVectorScaleY,
 			bool a_featureUpscaling,

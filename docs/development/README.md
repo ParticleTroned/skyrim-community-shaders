@@ -9,6 +9,11 @@
 
 ## Quick Links
 
+### Experimental rendering
+
+-   **[DLSS Neural Rendering experiments](./dlss-neural-rendering-experiments.md)** - Feature 18 capability and integration findings
+-   **[DLSS 5 character Neural Rendering](./dlss5-character-neural-rendering.md)** - character-mask architecture, private API boundary, and validation plan
+
 ### Common Tasks
 
 -   **Fast shader deployment:** `cmake --build build/ALL-WITH-AUTO-DEPLOYMENT --target COPY_SHADERS`

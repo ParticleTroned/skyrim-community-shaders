@@ -193,43 +193,7 @@ namespace
 
 	std::string NormalizePath(std::string_view a_path, bool a_isModelPath)
 	{
-		std::string normalized;
-		normalized.reserve(a_path.size() + (a_isModelPath ? 7u : 0u));
-		bool previousSlash = false;
-		for (char value : a_path) {
-			char character = value == '\\' ? '/' : value;
-			if (character >= 'A' && character <= 'Z') {
-				character = static_cast<char>(character - 'A' + 'a');
-			}
-			if (character == '/') {
-				if (previousSlash) {
-					continue;
-				}
-				previousSlash = true;
-			} else {
-				previousSlash = false;
-			}
-			normalized.push_back(character);
-		}
-
-		while (normalized.starts_with("./")) {
-			normalized.erase(0u, 2u);
-		}
-		while (!normalized.empty() && normalized.front() == '/') {
-			normalized.erase(normalized.begin());
-		}
-		if (a_isModelPath) {
-			if (normalized.starts_with("data/")) {
-				normalized.erase(0u, 5u);
-			}
-			if (!normalized.empty() && !normalized.starts_with("meshes/")) {
-				normalized.insert(0u, "meshes/");
-			}
-		}
-		while (!normalized.empty() && normalized.back() == '/') {
-			normalized.pop_back();
-		}
-		return normalized;
+		return CSX::MeshBlendingPolicy::NormalizePath(a_path, a_isModelPath);
 	}
 
 	std::string NormalizeIdentity(std::string_view a_value)
@@ -247,14 +211,7 @@ namespace
 
 	std::string NormalizeTexturePath(std::string_view a_path)
 	{
-		auto normalized = NormalizePath(a_path, false);
-		if (normalized.starts_with("data/")) {
-			normalized.erase(0u, 5u);
-		}
-		if (!normalized.empty() && !normalized.starts_with("textures/")) {
-			normalized.insert(0u, "textures/");
-		}
-		return normalized;
+		return CSX::MeshBlendingPolicy::NormalizeTexturePath(a_path);
 	}
 
 	std::string GetLandscapeDiffusePath(const RE::TESLandTexture* a_texture)
@@ -1314,20 +1271,37 @@ bool MeshBlending::ReadRuleFileState(
 				}
 				OverrideRule rule;
 				if (!readString(item, context, "Model", rule.Model, false) ||
-					!readString(item, context, "NodePath", rule.NodePath, false) ||
-					(rule.Model.empty() && rule.NodePath.empty())) {
-					if (a_error.empty()) {
-						a_error = std::format("{} must identify a model or node.", context);
-					}
+					!readString(item, context, "NodePath", rule.NodePath, false)) {
 					return false;
 				}
-				if (a_exact && (rule.Model.empty() || rule.NodePath.empty() || HasWildcard(rule.Model) || HasWildcard(rule.NodePath))) {
-					a_error = std::format("{} must be an exact model/node pair.", context);
+				auto canonical = CSX::MeshBlendingPolicy::CanonicalizeOverrideSelectors(rule.Model, rule.NodePath);
+				if (canonical.ModelCollapsed()) {
+					a_error = std::format("{}.Model has no effective path after canonicalization.", context);
+					return false;
+				}
+				if (canonical.NodePathCollapsed()) {
+					a_error = std::format("{}.NodePath has no effective path after canonicalization.", context);
+					return false;
+				}
+				if (!canonical.HasSelector()) {
+					a_error = std::format("{} must identify an effective model or node after canonicalization.", context);
 					return false;
 				}
 				if (a_exact) {
-					rule.Model = NormalizePath(rule.Model, true);
-					rule.NodePath = NormalizePath(rule.NodePath, false);
+					if (canonical.model.empty()) {
+						a_error = std::format("{}.Model has no effective path after canonicalization.", context);
+						return false;
+					}
+					if (canonical.nodePath.empty()) {
+						a_error = std::format("{}.NodePath has no effective path after canonicalization.", context);
+						return false;
+					}
+					if (!canonical.IsExactPair()) {
+						a_error = std::format("{} must be an exact model/node pair.", context);
+						return false;
+					}
+					rule.Model = std::move(canonical.model);
+					rule.NodePath = std::move(canonical.nodePath);
 				}
 				a_destination.push_back(std::move(rule));
 			}
@@ -1381,15 +1355,18 @@ bool MeshBlending::ReadRuleFileState(
 					return false;
 				}
 				assignment.Kind = CanonicalLandscapeMaterialKind(*kind);
-				auto trimSelector = [](std::string& a_selector) {
-					a_selector = CSX::MeshBlendingPolicy::TrimAsciiSpaces(a_selector);
-				};
-				trimSelector(assignment.Form);
-				trimSelector(assignment.EditorID);
-				trimSelector(assignment.Diffuse);
-				if (!CSX::MeshBlendingPolicy::HasLandscapeSelector(
-						assignment.Form, assignment.EditorID, assignment.Diffuse)) {
-					a_error = std::format("{} has no Form, EditorID, or Diffuse selector.", context);
+				auto selectors = CSX::MeshBlendingPolicy::CanonicalizeLandscapeSelectors(
+					assignment.Form, assignment.EditorID, assignment.Diffuse);
+				if (selectors.DiffuseCollapsed()) {
+					a_error = std::format("{}.Diffuse has no effective texture path after canonicalization.", context);
+					return false;
+				}
+				const bool hasSelector = selectors.HasSelector();
+				assignment.Form = std::move(selectors.form);
+				assignment.EditorID = std::move(selectors.editorID);
+				assignment.Diffuse = std::move(selectors.diffuse);
+				if (!hasSelector) {
+					a_error = std::format("{} has no effective Form, EditorID, or Diffuse selector.", context);
 					return false;
 				}
 				if (!assignment.Form.empty()) {
@@ -1400,7 +1377,6 @@ bool MeshBlending::ReadRuleFileState(
 						assignment.Form = Util::GetFormFileKey(form);
 					}
 				}
-				assignment.Diffuse = NormalizeTexturePath(assignment.Diffuse);
 				a_state.landscapeAssignments.push_back(std::move(assignment));
 			}
 			return true;

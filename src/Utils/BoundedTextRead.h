@@ -15,6 +15,10 @@ namespace Util::BoundedTextRead
 		ReadError,
 	};
 
+	/**
+	 * Retains at most maximumBytes and may consume one additional byte to
+	 * distinguish an exact-boundary stream from an oversized stream.
+	 */
 	[[nodiscard]] inline Result Read(
 		std::istream& a_input,
 		std::size_t a_maximumBytes,

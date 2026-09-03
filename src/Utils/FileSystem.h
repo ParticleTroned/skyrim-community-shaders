@@ -221,7 +221,7 @@ namespace Util
 	 */
 	namespace FileHelpers
 	{
-		/** Reads at most maximumBytes from one opened file snapshot. */
+		/** Retains at most maximumBytes; may consume one probe byte beyond it. */
 		bool ReadTextFileBounded(
 			const std::filesystem::path& path,
 			std::size_t maximumBytes,

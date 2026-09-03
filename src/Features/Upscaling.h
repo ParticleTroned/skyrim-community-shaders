@@ -1198,6 +1198,12 @@ public:
 	struct VRRenderScalePresentationSnapshot
 	{
 		std::array<VRRenderScalePresentationEyeSnapshot, 2> eyes{};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		// Preserve the last coherent vendor pair when an asynchronous status read
+		// lands between the two eye publications of the next compositor cycle.
+		std::array<VRRenderScalePresentationEyeSnapshot, 2>
+			lastCoherentVendorEyes{};
+#endif
 		uint32_t lastBothEyesVendorFrame = 0;
 		uint64_t lastBothEyesVendorCycle = 0;
 		uint32_t consecutiveBothEyesVendorFrames = 0;

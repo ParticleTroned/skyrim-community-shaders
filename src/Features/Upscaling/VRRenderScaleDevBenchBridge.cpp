@@ -416,25 +416,34 @@ namespace
 		                                      ClassifyPreparationAdmission(admission.outcome, admission.reasonMask) :
 		                                      ReplacementTelemetry::PreparationAdmission::NotApplicable;
 
-		const auto& left = a_controller.presentation.eyes[0];
-		const auto& right = a_controller.presentation.eyes[1];
+		const auto stereoIdentityMatches = [](const auto& a_eyes) {
+			const auto& left = a_eyes[0];
+			const auto& right = a_eyes[1];
+			return left.valid && right.valid && left.path == right.path &&
+			       left.frame == right.frame &&
+			       left.compositorCycleToken != 0 &&
+			       left.compositorCycleToken == right.compositorCycleToken &&
+			       left.transitionEpoch == right.transitionEpoch &&
+			       left.contractGeneration == right.contractGeneration &&
+			       left.method == right.method && left.deviceIdentity != 0 &&
+			       left.deviceIdentity == right.deviceIdentity &&
+			       left.resourceRevision != 0 &&
+			       left.resourceRevision == right.resourceRevision &&
+			       !left.loadingOrMenuContext && !right.loadingOrMenuContext &&
+			       !left.transitionCooldown && !right.transitionCooldown;
+		};
+		const auto& liveEyes = a_controller.presentation.eyes;
+		const auto& presentationEyes =
+			stereoIdentityMatches(liveEyes) ?
+				liveEyes :
+				a_controller.presentation.lastCoherentVendorEyes;
+		const auto& left = presentationEyes[0];
+		const auto& right = presentationEyes[1];
 		const auto& currentProfile = a_controller.stable.valid ?
 		                                 a_controller.stable :
 		                                 a_controller.applied;
 		const bool commonStereoIdentity =
-			left.valid && right.valid && left.path == right.path &&
-			left.frame == right.frame &&
-			left.compositorCycleToken != 0 &&
-			left.compositorCycleToken == right.compositorCycleToken &&
-			left.transitionEpoch == right.transitionEpoch &&
-			left.contractGeneration == right.contractGeneration &&
-			left.method == right.method &&
-			left.deviceIdentity != 0 &&
-			left.deviceIdentity == right.deviceIdentity &&
-			left.resourceRevision != 0 &&
-			left.resourceRevision == right.resourceRevision &&
-			!left.loadingOrMenuContext && !right.loadingOrMenuContext &&
-			!left.transitionCooldown && !right.transitionCooldown;
+			stereoIdentityMatches(presentationEyes);
 		State::RenderTargetResourcePublicationDiagnostics resourcePublication{};
 		if (globals::state) {
 			resourcePublication =
@@ -6539,6 +6548,10 @@ namespace VRRenderScaleDevBenchBridge
 							"exact_vendor_evaluation" ||
 						OptionalNonNegativeIntegerOrZero(
 							dispatchProof, "methodValue") != a_providerMethod)) ||
+				(a_source == PhysicalMutationBoundarySource::ProviderActivation &&
+					(a_providerMethod == 0 ||
+						static_cast<uint32_t>(replacement->method) !=
+							a_providerMethod)) ||
 				!ReplacementTelemetry::OwnsMutationBoundary({
 					.ownerActive = true,
 					.auditActive = store.active->presentationAudit.active,
@@ -6568,10 +6581,14 @@ namespace VRRenderScaleDevBenchBridge
 			const std::string_view source =
 				a_source == PhysicalMutationBoundarySource::ProviderInvalidation ?
 					"provider_invalidation" :
+				a_source == PhysicalMutationBoundarySource::ProviderActivation ?
+					"provider_activation" :
 					"engine_target_creator";
 			const std::string_view reason =
 				a_source == PhysicalMutationBoundarySource::ProviderInvalidation ?
 					"provider_resource_invalidation" :
+				a_source == PhysicalMutationBoundarySource::ProviderActivation ?
+					"provider_resource_activation" :
 					"engine_target_creator";
 			store.active->firstPhysicalMutationEvidence = {
 				{ "tick", tick },
@@ -6870,10 +6887,14 @@ namespace VRRenderScaleDevBenchBridge
 				       a_observation.resourceRevision != 0;
 			};
 			const auto boundaryMatchesProfile = [&](const auto& a_profile) {
+				const bool requiresPublishedGeneration =
+					a_profile.method == Upscaling::UpscaleMethod::kDLSS ||
+					a_profile.method == Upscaling::UpscaleMethod::kFSR;
 				return boundaryRecorded && a_profile.valid &&
 				       a_profile.requestID == boundaryRequestID &&
 				       a_profile.transitionEpoch == boundaryTransitionEpoch &&
 				       ReplacementTelemetry::MatchesMutationBoundaryGeneration(
+						   requiresPublishedGeneration,
 						   boundaryContractGeneration,
 						   a_profile.contractGeneration) &&
 				       a_observation.deviceIdentity == boundaryDeviceIdentity;
@@ -7057,6 +7078,10 @@ namespace VRRenderScaleDevBenchBridge
 				boundaryRequestID == completed.requestID &&
 				boundaryTransitionEpoch == completed.transitionEpoch &&
 				ReplacementTelemetry::MatchesMutationBoundaryGeneration(
+					completed.method == static_cast<uint32_t>(
+											Upscaling::UpscaleMethod::kDLSS) ||
+						completed.method == static_cast<uint32_t>(
+												Upscaling::UpscaleMethod::kFSR),
 					boundaryContractGeneration,
 					completed.contractGeneration) &&
 				boundaryDeviceIdentity == completed.deviceIdentity) {

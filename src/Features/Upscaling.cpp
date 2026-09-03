@@ -28623,8 +28623,16 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		} else if (relatchUpscaleMethod == UpscaleMethod::kFSR) {
 			if (fsrRelatchNeedsDeferredReset)
 				MarkVendorRuntimeResourcesDirty(UpscaleMethod::kFSR, relatchContractGeneration);
-			else
+			else {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				VRRenderScaleDevBenchBridge::RecordPhysicalMutationBoundary(
+					relatchEpoch,
+					VRRenderScaleDevBenchBridge::PhysicalMutationBoundarySource::
+						ProviderActivation,
+					static_cast<uint32_t>(UpscaleMethod::kFSR));
+#endif
 				MarkVendorRuntimeResourcesReady(UpscaleMethod::kFSR, relatchContractGeneration);
+			}
 			ClearVendorRuntimeResourcesDirty(UpscaleMethod::kDLSS);
 			pendingDLSSHistoryReset.store(false, std::memory_order_release);
 			vrDLSSSettingsRelatched.store(false, std::memory_order_release);
@@ -32589,6 +32597,25 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 			presentation.lastBothEyesVendorFrame = left.frame;
 			presentation.lastBothEyesVendorCycle = left.compositorCycleToken;
 		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		const bool coherentVendorPair =
+			left.valid && right.valid && left.path == right.path &&
+			(left.path == VRRenderScalePresentationPath::VendorEvaluated ||
+				left.path == VRRenderScalePresentationPath::NativeOriginal) &&
+			left.frame == right.frame && left.compositorCycleToken != 0 &&
+			left.compositorCycleToken == right.compositorCycleToken &&
+			left.transitionEpoch == right.transitionEpoch &&
+			left.contractGeneration == right.contractGeneration &&
+			left.method == right.method &&
+			left.vendorBackend != VRRenderScaleBackendKind::None &&
+			left.vendorBackend == right.vendorBackend &&
+			left.deviceIdentity != 0 &&
+			left.deviceIdentity == right.deviceIdentity &&
+			left.resourceRevision != 0 &&
+			left.resourceRevision == right.resourceRevision;
+		if (coherentVendorPair)
+			presentation.lastCoherentVendorEyes = presentation.eyes;
+#endif
 
 		published = eye;
 		++controller.revision;

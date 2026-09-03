@@ -409,10 +409,14 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 	}
 
 	[[nodiscard]] constexpr bool MatchesMutationBoundaryGeneration(
+		bool a_requiresPublishedGeneration,
 		std::uint32_t a_boundary,
 		std::uint32_t a_published) noexcept
 	{
-		return a_boundary == 0 || a_boundary == a_published;
+		if (!a_requiresPublishedGeneration)
+			return a_published == 0;
+		return a_published != 0 &&
+		       (a_boundary == 0 || a_boundary == a_published);
 	}
 
 	inline constexpr std::uint64_t kPreparationNotApplicableReasonMask =

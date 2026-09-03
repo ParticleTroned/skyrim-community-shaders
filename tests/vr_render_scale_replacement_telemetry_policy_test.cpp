@@ -205,9 +205,12 @@ namespace
 		       !MatchesTargetContractGeneration(true, 0, 0) &&
 		       MatchesTargetContractGeneration(true, 8, 8) &&
 		       !MatchesTargetContractGeneration(true, 8, 9) &&
-		       MatchesMutationBoundaryGeneration(0, 8) &&
-		       MatchesMutationBoundaryGeneration(8, 8) &&
-		       !MatchesMutationBoundaryGeneration(8, 9);
+		       MatchesMutationBoundaryGeneration(false, 8, 0) &&
+		       !MatchesMutationBoundaryGeneration(false, 8, 8) &&
+		       MatchesMutationBoundaryGeneration(true, 0, 8) &&
+		       MatchesMutationBoundaryGeneration(true, 8, 8) &&
+		       !MatchesMutationBoundaryGeneration(true, 8, 0) &&
+		       !MatchesMutationBoundaryGeneration(true, 8, 9);
 	}
 
 	constexpr bool CoversProofKinds()

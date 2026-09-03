@@ -599,29 +599,6 @@ namespace VRVendorRelatchPolicy
 		       a_requestID == a_preparedRequestID;
 	}
 
-	struct LifecyclePollPacingAdmission
-	{
-		bool exactPreparedMenuRequest = false;
-		bool immutableExternalSettingsRequest = false;
-		bool protectedRecovery = false;
-		std::uint32_t directRetryFrames = 0;
-		std::uint32_t protectedRetryFrames = 0;
-	};
-
-	[[nodiscard]] constexpr std::uint32_t SelectLifecyclePollRetryFrames(
-		const LifecyclePollPacingAdmission& a_state) noexcept
-	{
-		// Polling only observes provider readiness; recovery-owned work retains its
-		// established pacing while direct settings work rechecks next frame.
-		const bool directSettingsPoll =
-			!a_state.protectedRecovery &&
-			(a_state.exactPreparedMenuRequest ||
-				a_state.immutableExternalSettingsRequest);
-		return directSettingsPoll ?
-		           a_state.directRetryFrames :
-		           a_state.protectedRetryFrames;
-	}
-
 	[[nodiscard]] constexpr bool HasDirectMenuRequestAuthority(
 		bool a_directMenuEdit,
 		std::uint64_t a_requestID) noexcept

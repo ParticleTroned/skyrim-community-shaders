@@ -390,6 +390,11 @@ endif()
 
 foreach(_status_contract IN ITEMS
     [[{ "apiVersion", 7 }]]
+    [[{ "admissionPolicy", NeuralRendering::Runtime::kAdmissionPolicy }]]
+    [[{ "developerModeRequired", NeuralRendering::Runtime::kDeveloperModeRequired }]]
+    [[{ "hashAllowlistRequired", NeuralRendering::Runtime::kHashAllowlistRequired }]]
+    [[{ "versionAllowlistRequired", NeuralRendering::Runtime::kVersionAllowlistRequired }]]
+    [[{ "userSuppliedRuntimeAllowed", true }]]
     [[{ "implementationMatrix", NeuralImplementationMatrixJson() }]]
     [[{ "insertionPointMatrix", NeuralInsertionPointMatrixJson() }]]
     [[{ "selectedInsertionPoint", NeuralInsertionPointJson(insertionPoint) }]]

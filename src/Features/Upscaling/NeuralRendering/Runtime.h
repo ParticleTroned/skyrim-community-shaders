@@ -20,8 +20,6 @@ namespace NeuralRendering
 		NotProbed,
 		NotFound,
 		HashFailed,
-		TrustRejected,
-		VersionRejected,
 		LoadFailed,
 		MissingExport,
 		IdentityFailed,
@@ -41,8 +39,7 @@ namespace NeuralRendering
 	enum class RuntimeTrust
 	{
 		Unknown,
-		SignedAllowlisted,
-		PatchedAllowlisted
+		UserSupplied
 	};
 
 	enum class RuntimeFailureStage
@@ -50,8 +47,6 @@ namespace NeuralRendering
 		None,
 		Discovery,
 		Hash,
-		Trust,
-		Version,
 		Load,
 		Identity,
 		Initialization,
@@ -68,7 +63,7 @@ namespace NeuralRendering
 	enum class ParameterCoreTrust
 	{
 		Unknown,
-		RuntimeHashAllowlisted,
+		RuntimeFileVerified,
 		AuthenticodeVerified
 	};
 
@@ -94,9 +89,10 @@ namespace NeuralRendering
 	{
 	public:
 		static constexpr std::size_t kFeatureSlotCount = 4;
-		static constexpr std::string_view kPatchedRuntimeSha256 = "8270B350CD82DE5CE89806872CDD6B6A9249B80836B91BBEB3573470744CC206";
-		static constexpr std::string_view kAlternatePatchedRuntimeSha256 = "CEB6432F6FBDF44D886014BCD47241932BF8B67439FEEF9BBDD0961436662650";
-		static constexpr std::string_view kSignedRuntimeSha256 = "E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E";
+		static constexpr std::string_view kAdmissionPolicy = "user-supplied-required-exports";
+		static constexpr bool kDeveloperModeRequired = false;
+		static constexpr bool kHashAllowlistRequired = false;
+		static constexpr bool kVersionAllowlistRequired = false;
 
 		static Runtime& Instance();
 

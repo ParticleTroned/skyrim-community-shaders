@@ -13,10 +13,11 @@ Neural Rendering.
 
 The Neural Rendering experiment loads `nvngx_dlssnr.dll` directly through the
 NGX Feature 18 exports. It does not use or require `sl.dlss_nr.dll` or a
-Streamline Neural Rendering plugin. CMake automatically selects the patched
-310.8 `8270...206` identity and rejects it if its SHA-256 differs from the
-pinned value. Its embedded signature reports `HashMismatch`; its exact pinned
-hash is accepted independently of the Community Shaders log level.
+Streamline Neural Rendering plugin. The runtime loader accepts the
+user-supplied file at every Community Shaders log level without a hash, version,
+or signature allowlist. It fingerprints the file for diagnostics, verifies the
+loaded module is that same file, and checks the required exports. Any DLL placed
+at this exact runtime path executes as native code.
 
 If that runtime does not export the NGX parameter allocator, the experiment
 selects one already loaded driver core before NGX initialization. Its locked
@@ -41,8 +42,9 @@ For the current internal runtime, configure with
 `CSX_LOCAL_DLSS_RUNTIME_DIRECTORY` at the directory containing the six matched
 normal-DLSS/Streamline DLLs, and point `CSX_LOCAL_DLSSNR_RUNTIME_FILE` at the
 separate `nvngx_dlssnr.dll`. Both paths are CMake cache values and may identify
-any developer-controlled location. The seven files are hash-checked before
-they enter build or package outputs.
+any developer-controlled location. The current internal staging recipe still
+hash-checks its seven known files before they enter build or package outputs;
+that reproducibility pin does not restrict a user-replaced installed NR DLL.
 
 An explicit future-facing official SDK path is also retained. Setting
 `CSX_FETCH_OFFICIAL_STREAMLINE_RUNTIME=ON` downloads NVIDIA's hash-pinned

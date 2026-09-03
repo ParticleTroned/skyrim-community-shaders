@@ -22,6 +22,9 @@ Automatically staged identities:
 - sl.reflex.dll 2.13
   ECF12973CDCEC2FFCED2EA77B1C7E45F4D387E7C864DDB5531B66A6F947EFFB3
 
-The patched Neural Rendering DLL is admitted only when its exact pinned SHA-256
-and 310.8 version match. CSX log level does not affect this allowlist. Hash
-pinning and prior malware screening do not certify a binary as malware-free.
+The hash above pins the automatically staged package payload for reproducible
+internal testing. It is not a runtime admission allowlist. CSX accepts a
+user-replaced nvngx_dlssnr.dll at every log level and reports its hash and
+version as diagnostics. Any DLL placed at that exact runtime path executes as
+native code. Hash pinning and prior malware screening do not certify a binary
+as malware-free.

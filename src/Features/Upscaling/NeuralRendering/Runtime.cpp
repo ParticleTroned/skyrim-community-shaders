@@ -844,14 +844,13 @@ namespace NeuralRendering
 
 		bool SelectParameterCore(
 			HMODULE a_runtime,
-			RuntimeTrust a_runtimeTrust,
 			std::string_view a_runtimeHash,
 			ParameterCoreSelection& a_selection,
 			std::string& a_error)
 		{
 			if (HasParameterApi(a_runtime)) {
-				if (a_runtimeTrust == RuntimeTrust::Unknown || a_runtimeHash.empty()) {
-					a_error = "runtime parameter exports lack an allowlisted runtime identity";
+				if (a_runtimeHash.empty()) {
+					a_error = "runtime parameter exports lack a stable file identity";
 					return false;
 				}
 
@@ -866,7 +865,7 @@ namespace NeuralRendering
 					return false;
 				}
 				if (coreHash != a_runtimeHash) {
-					a_error = "runtime parameter-core hash differs from the probed allowlisted hash";
+					a_error = "runtime parameter-core hash differs from the probed file hash";
 					return false;
 				}
 
@@ -874,7 +873,7 @@ namespace NeuralRendering
 				a_selection.file = lockedFile.Release();
 				a_selection.path = std::move(corePath);
 				a_selection.hash = std::move(coreHash);
-				a_selection.trust = ParameterCoreTrust::RuntimeHashAllowlisted;
+				a_selection.trust = ParameterCoreTrust::RuntimeFileVerified;
 				a_selection.source = ParameterCoreSource::Runtime;
 				return true;
 			}
@@ -983,8 +982,6 @@ namespace NeuralRendering
 		switch (a_stage) {
 		case RuntimeFailureStage::Discovery:
 		case RuntimeFailureStage::Hash:
-		case RuntimeFailureStage::Trust:
-		case RuntimeFailureStage::Version:
 		case RuntimeFailureStage::Load:
 		case RuntimeFailureStage::Identity:
 			LogOnceLocked(probeLogEmitted_, "probe", false);
@@ -1056,33 +1053,10 @@ namespace NeuralRendering
 			return false;
 		}
 
-		if (hash_ == kSignedRuntimeSha256) {
-			trust_ = RuntimeTrust::SignedAllowlisted;
-		} else if (hash_ == kPatchedRuntimeSha256 ||
-				   hash_ == kAlternatePatchedRuntimeSha256) {
-			trust_ = RuntimeTrust::PatchedAllowlisted;
-		} else {
-			trust_ = RuntimeTrust::Unknown;
-			SetFailureLocked(
-				RuntimeStatus::TrustRejected, RuntimeFailureStage::Trust,
-				std::format("runtime SHA-256 {} is not allowlisted", hash_));
-			return false;
-		}
+		trust_ = RuntimeTrust::UserSupplied;
 
 		const auto version = Util::GetDllVersion(path_.wstring());
-		if (!version) {
-			SetFailureLocked(
-				RuntimeStatus::VersionRejected, RuntimeFailureStage::Version,
-				"allowlisted runtime has no readable version resource");
-			return false;
-		}
-		version_ = Util::GetFormattedVersion(*version);
-		if (version->major() != 310 || version->minor() != 8) {
-			SetFailureLocked(
-				RuntimeStatus::VersionRejected, RuntimeFailureStage::Version,
-				std::format("expected DLSSNR 310.8.x, found {}", version_));
-			return false;
-		}
+		version_ = version ? Util::GetFormattedVersion(*version) : "unavailable";
 
 		module_ = LoadLibraryExW(
 			path_.c_str(), nullptr,
@@ -1134,8 +1108,8 @@ namespace NeuralRendering
 		failureStage_ = RuntimeFailureStage::None;
 		ngxResult_ = 0;
 		detail_ = std::format(
-			"trusted runtime ready trust={} hash={} version={} appId=0x{:08X} api=0x{:X}",
-			ToString(trust_), hash_, version_, applicationId_, apiVersion_);
+			"user-supplied runtime ready policy={} hash={} version={} appId=0x{:08X} api=0x{:X}",
+			kAdmissionPolicy, hash_, version_, applicationId_, apiVersion_);
 		LogOnceLocked(probeLogEmitted_, "probe", true);
 		return true;
 	}
@@ -1191,7 +1165,6 @@ namespace NeuralRendering
 		ParameterCoreSelection coreSelection;
 		if (!SelectParameterCore(
 				runtime,
-				trust_,
 				hash_,
 				coreSelection,
 				coreSelectionError)) {
@@ -1890,10 +1863,6 @@ namespace NeuralRendering
 			return "not-found";
 		case RuntimeStatus::HashFailed:
 			return "hash-failed";
-		case RuntimeStatus::TrustRejected:
-			return "trust-rejected";
-		case RuntimeStatus::VersionRejected:
-			return "version-rejected";
 		case RuntimeStatus::LoadFailed:
 			return "load-failed";
 		case RuntimeStatus::MissingExport:
@@ -1931,10 +1900,8 @@ namespace NeuralRendering
 		switch (a_trust) {
 		case RuntimeTrust::Unknown:
 			return "unknown";
-		case RuntimeTrust::SignedAllowlisted:
-			return "signed-allowlisted";
-		case RuntimeTrust::PatchedAllowlisted:
-			return "patched-allowlisted";
+		case RuntimeTrust::UserSupplied:
+			return "user-supplied";
 		}
 		return "unknown";
 	}
@@ -1948,10 +1915,6 @@ namespace NeuralRendering
 			return "discovery";
 		case RuntimeFailureStage::Hash:
 			return "hash";
-		case RuntimeFailureStage::Trust:
-			return "trust";
-		case RuntimeFailureStage::Version:
-			return "version";
 		case RuntimeFailureStage::Load:
 			return "load";
 		case RuntimeFailureStage::Identity:
@@ -1983,8 +1946,8 @@ namespace NeuralRendering
 		switch (a_trust) {
 		case ParameterCoreTrust::Unknown:
 			return "unknown";
-		case ParameterCoreTrust::RuntimeHashAllowlisted:
-			return "runtime-hash-allowlisted";
+		case ParameterCoreTrust::RuntimeFileVerified:
+			return "runtime-file-verified";
 		case ParameterCoreTrust::AuthenticodeVerified:
 			return "authenticode-verified";
 		}

@@ -271,7 +271,8 @@ foreach(_notice_contract IN ITEMS
     "DO NOT REDISTRIBUTE OR PUBLISH THIS BUILD"
     "8270B350CD82DE5CE89806872CDD6B6A9249B80836B91BBEB3573470744CC206"
     "Authenticode status HashMismatch"
-    "CSX log level does not affect this allowlist"
+    "It is not a runtime admission allowlist"
+    "at every log level"
     "malware-free"
 )
     string(FIND "${_internal_notice}" "${_notice_contract}" _notice_position)
@@ -318,25 +319,14 @@ if(NOT _absolute_windows_path STREQUAL "")
     message(FATAL_ERROR "Publication text contains an absolute Windows path")
 endif()
 
-set(_accepted_nr_hashes
-    E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E
-    8270B350CD82DE5CE89806872CDD6B6A9249B80836B91BBEB3573470744CC206
-    CEB6432F6FBDF44D886014BCD47241932BF8B67439FEEF9BBDD0961436662650
-)
-foreach(_accepted_hash IN LISTS _accepted_nr_hashes)
-    foreach(_contract_text IN ITEMS "${_experiment_doc}" "${_neural_runtime_header}")
-        string(FIND "${_contract_text}" "${_accepted_hash}" _hash_position)
-        if(_hash_position EQUAL -1)
-            message(FATAL_ERROR
-                "Neural Rendering contract is missing hash ${_accepted_hash}"
-            )
-        endif()
-    endforeach()
-endforeach()
-
 foreach(_obsolete_gate IN ITEMS
     "allowPatchedRuntime"
     "developer-mode opt-in"
+    "kPatchedRuntimeSha256"
+    "kSignedRuntimeSha256"
+    "TrustRejected"
+    "VersionRejected"
+    "expected DLSSNR 310.8"
 )
     string(FIND
         "${_neural_runtime_header}\n${_neural_runtime_source}"
@@ -350,9 +340,41 @@ foreach(_obsolete_gate IN ITEMS
     endif()
 endforeach()
 
+foreach(_runtime_admission_contract IN ITEMS
+    [[kAdmissionPolicy = "user-supplied-required-exports"]]
+    "kDeveloperModeRequired = false"
+    "kHashAllowlistRequired = false"
+    "kVersionAllowlistRequired = false"
+    "trust_ = RuntimeTrust::UserSupplied"
+    [[version_ = version ? Util::GetFormattedVersion(*version) : "unavailable"]]
+    "for (const char* exportName : kRequiredExports)"
+    "VerifyLoadedModuleIdentity(runtime, verifiedFile.Get()"
+)
+    string(FIND
+        "${_neural_runtime_header}\n${_neural_runtime_source}"
+        "${_runtime_admission_contract}"
+        _runtime_admission_position
+    )
+    if(_runtime_admission_position EQUAL -1)
+        message(FATAL_ERROR
+            "User-supplied Neural Rendering admission contract is missing: ${_runtime_admission_contract}"
+        )
+    endif()
+endforeach()
+
+string(FIND "${_neural_runtime_source}" "IsDeveloperMode" _developer_gate_position)
+if(NOT _developer_gate_position EQUAL -1)
+    message(FATAL_ERROR
+        "Neural Rendering runtime admission must not inspect Developer Mode"
+    )
+endif()
+
 foreach(_documentation_contract IN ITEMS
-    "All three identities are accepted"
-    "at every CSX log level"
+    "accepts the user-supplied `nvngx_dlssnr.dll` at every CSX log"
+    "a SHA-256 allowlist"
+    "are not admission gates"
+    "diagnostic provenance only"
+    "authorizes its native code to execute"
     "does not use or require `sl.dlss_nr.dll`"
     "DriverStore alias `_nvngx.dll`"
     "Streamline 2.13"
@@ -362,7 +384,7 @@ foreach(_documentation_contract IN ITEMS
     "not a redistributable or release-ready integration"
     "Runtime staging is disabled by default"
     "CSX_STAGE_LOCAL_DLSS_RUNTIME=ON"
-    "admission relies on its exact pinned SHA-256"
+    "it is not a runtime admission rule"
     "Do not publish or redistribute"
 )
     string(FIND

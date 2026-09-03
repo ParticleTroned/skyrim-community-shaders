@@ -14801,7 +14801,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 				static_cast<unsigned long long>(neuralStatus.successes),
 				static_cast<unsigned long long>(neuralStatus.failures));
 			ImGui::TextDisabled(
-				"Modified nvngx_dlssnr.dll files must match a pinned SHA-256 allowlist entry.");
+				"The user-supplied nvngx_dlssnr.dll is admitted at every log level; its SHA-256 and version are diagnostic only.");
 			if (neuralStatus.failureLatched && !neuralStatus.quarantined &&
 				ImGui::Button("Reset Neural Rendering Runtime")) {
 				(void)NeuralRendering::Renderer::Instance().Reset();

@@ -1,4 +1,5 @@
 #include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
+#include "Features/Upscaling/NeuralRendering/Runtime.h"
 
 #include <limits>
 #include <string_view>
@@ -14,6 +15,12 @@ int main()
 	using NeuralRendering::TemporalAdmissionBlockReason;
 	using NeuralRendering::TemporalAdmissionInputs;
 	using NeuralRendering::TemporalRoute;
+	static_assert(!NeuralRendering::Runtime::kDeveloperModeRequired);
+	static_assert(!NeuralRendering::Runtime::kHashAllowlistRequired);
+	static_assert(!NeuralRendering::Runtime::kVersionAllowlistRequired);
+	static_assert(
+		NeuralRendering::Runtime::kAdmissionPolicy ==
+		"user-supplied-required-exports");
 	static_assert(
 		NeuralRendering::kPipelineArrangement == PipelineArrangement::DlssThenNeural,
 		"paintball must remain the DLSS-then-Neural experiment");

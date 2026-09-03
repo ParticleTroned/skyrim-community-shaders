@@ -770,7 +770,6 @@ namespace
 		const auto routeSnapshots = a_upscaling.GetNeuralStereoRouteSnapshot();
 		const auto submitCycle = a_upscaling.GetLatestNeuralSubmitCycleSnapshot();
 		const uint32_t observedFrame = globals::state ? globals::state->frameCount : 0u;
-		const bool developerMode = globals::state && globals::state->IsDeveloperMode();
 		const bool submitCycleCurrentFrame =
 			submitCycle.entryObserved && submitCycle.frame == observedFrame;
 		uint64_t latestRouteSequence = 0;
@@ -928,8 +927,11 @@ namespace
 			{ "runtime", {
 							 { "status", snapshot.status },
 							 { "trust", snapshot.trust },
-							 { "developerMode", developerMode },
-							 { "patchedRuntimeAllowed", true },
+							 { "admissionPolicy", NeuralRendering::Runtime::kAdmissionPolicy },
+							 { "developerModeRequired", NeuralRendering::Runtime::kDeveloperModeRequired },
+							 { "hashAllowlistRequired", NeuralRendering::Runtime::kHashAllowlistRequired },
+							 { "versionAllowlistRequired", NeuralRendering::Runtime::kVersionAllowlistRequired },
+							 { "userSuppliedRuntimeAllowed", true },
 							 { "failureStage", snapshot.runtimeFailureStage },
 							 { "detail", snapshot.detail },
 							 { "path", snapshot.runtimePath },
@@ -3148,7 +3150,7 @@ namespace VRRenderScaleDevBenchBridge
 
 		static constexpr const char* descriptor =
 			R"({
-  "description":"Control and inspect Community Shaders VR render-scale stress iterations, DLSS Neural Rendering, and foveated-center tuning. nr_status returns the API-v7 NR runtime, trust, route, temporal-admission, stereo-mask, failure, GPU telemetry, and nested foveation status with requested settings, resolved per-eye alignment, and the latched region plan. nr_configure applies one or more NR settings through the in-game reset/history contract; an empty or unchanged request is rejected. nr_cycle_modes preserves the four-lane stereo implementation cycle. foveation_configure atomically applies one or more validated foveation controls on the main thread. foveation_cycle selects or advances one documented foveation axis. Foveation actions reject unrelated fields. Foveation mutations invalidate frame-scoped state and request temporal-history reset. executionClaimed remains false because these actions do not claim game execution; mainThreadTaskClaimed and mutationOutcome expose timeout uncertainty. nr_reset resets the NR backend and requests a history reset. Existing render-scale mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.",
+  "description":"Control and inspect Community Shaders VR render-scale stress iterations, DLSS Neural Rendering, and foveated-center tuning. nr_status returns the API-v7 NR runtime admission policy and provenance, route, temporal-admission, stereo-mask, failure, GPU telemetry, and nested foveation status with requested settings, resolved per-eye alignment, and the latched region plan. NR runtime admission is independent of Developer Mode, log level, hash, version, and signature allowlists. nr_configure applies one or more NR settings through the in-game reset/history contract; an empty or unchanged request is rejected. nr_cycle_modes preserves the four-lane stereo implementation cycle. foveation_configure atomically applies one or more validated foveation controls on the main thread. foveation_cycle selects or advances one documented foveation axis. Foveation actions reject unrelated fields. Foveation mutations invalidate frame-scoped state and request temporal-history reset. executionClaimed remains false because these actions do not claim game execution; mainThreadTaskClaimed and mutationOutcome expose timeout uncertainty. nr_reset resets the NR backend and requests a history reset. Existing render-scale mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.",
   "inputSchema":{
     "type":"object",
     "properties":{

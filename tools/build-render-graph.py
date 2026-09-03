@@ -318,6 +318,35 @@ def derive(
     device_contexts: dict[str, dict[str, Any]] = {}
     command_recordings: dict[str, dict[str, Any]] = {}
     command_lists: dict[str, dict[str, Any]] = {}
+    typed_identity_specs = {
+        "device-context-observed": ("device-context", "deviceContextObservationId"),
+        "command-recording-observed": ("command-recording", "commandRecordingObservationId"),
+        "command-list-observed": ("command-list", "commandListObservationId"),
+    }
+    typed_identity_declarations: dict[tuple[str, str], str] = {}
+    typed_identity_kinds: dict[str, set[str]] = defaultdict(set)
+    conflicted_typed_identities: set[tuple[str, str]] = set()
+    for declaration_event in events:
+        spec = typed_identity_specs.get(str(declaration_event.get("type")))
+        if not spec:
+            continue
+        identity_kind, identity_field = spec
+        declaration_payload = declaration_event.get("payload", {})
+        identity_id = declaration_payload.get(identity_field)
+        if not isinstance(identity_id, str):
+            continue
+        identity_key = (identity_kind, identity_id)
+        signature = json.dumps(declaration_payload, sort_keys=True, separators=(",", ":"))
+        previous = typed_identity_declarations.get(identity_key)
+        if previous is not None and previous != signature:
+            conflicted_typed_identities.add(identity_key)
+        else:
+            typed_identity_declarations.setdefault(identity_key, signature)
+        typed_identity_kinds[identity_id].add(identity_kind)
+    for identity_id, identity_kinds in typed_identity_kinds.items():
+        if len(identity_kinds) > 1:
+            conflicted_typed_identities.update((kind, identity_id) for kind in identity_kinds)
+    reported_typed_identity_conflicts: set[tuple[str, str]] = set()
     compile_units_by_family, techniques_by_pair = static_identity_indexes(shader_manifest, engine_map)
     qpc_frequency = int(manifest.get("clock", {}).get("frequencyHz") or 0)
     shader_compilation = manifest.get("extensions", {}).get("csx.shaderCompilation", {})
@@ -363,6 +392,49 @@ def derive(
             attributes if attributes is not None else event.get("payload", {}),
             event_source_refs(event, observation_id),
         )
+
+    def typed_identity_is_valid(kind: str, identity_id: str | None, node: str | None = None) -> bool:
+        if not identity_id:
+            return False
+        identity_key = (kind, identity_id)
+        if identity_key not in conflicted_typed_identities:
+            return True
+        if identity_key not in reported_typed_identity_conflicts:
+            graph.gap(
+                f"Typed {kind} identity {identity_id} has incompatible declarations; "
+                "authoritative provenance using this identity was suppressed.",
+                [node] if node else [], True, "other",
+            )
+            reported_typed_identity_conflicts.add(identity_key)
+        return False
+
+    def valid_context(context_id: str | None) -> dict[str, Any] | None:
+        context = device_contexts.get(context_id or "")
+        return context if context and context.get("valid") is True else None
+
+    def valid_recording(recording_id: str | None) -> dict[str, Any] | None:
+        recording = command_recordings.get(recording_id or "")
+        return recording if recording and recording.get("valid") is True else None
+
+    def valid_command_list(list_id: str | None) -> dict[str, Any] | None:
+        command_list = command_lists.get(list_id or "")
+        return command_list if command_list and command_list.get("valid") is True else None
+
+    def recording_context_matches(
+        recording: dict[str, Any] | None, context_id: str | None,
+        related: list[str], description: str,
+    ) -> bool:
+        if not recording:
+            return False
+        owner_context_id = recording.get("ownerContextId")
+        if context_id == owner_context_id:
+            return True
+        graph.gap(
+            f"{description} names context {context_id}, but recording owner is {owner_context_id}; "
+            "authoritative provenance was suppressed.",
+            related, True, "other",
+        )
+        return False
 
     def resource_node(resource_id: str) -> str | None:
         resource = resources.get(resource_id)
@@ -617,8 +689,18 @@ def derive(
                 event, context_id, "device-context",
                 f"{payload.get('kind', 'unknown')} device context {context_id}",
             )
-            if context_id and context_node:
-                device_contexts[context_id] = {"event": event, "payload": payload, "node": context_node}
+            if context_id and context_node and context_id not in device_contexts:
+                valid = typed_identity_is_valid("device-context", context_id, context_node)
+                if event.get("deviceContextObservationId") != context_id:
+                    graph.gap(
+                        f"Device-context declaration {context_id} disagrees with envelope context "
+                        f"{event.get('deviceContextObservationId')}; authoritative provenance was suppressed.",
+                        [context_node], True, "other",
+                    )
+                    valid = False
+                device_contexts[context_id] = {
+                    "event": event, "payload": payload, "node": context_node, "valid": valid,
+                }
         elif event_type == "command-recording-observed":
             recording_id = payload.get("commandRecordingObservationId")
             context_id = payload.get("deviceContextObservationId")
@@ -626,30 +708,97 @@ def derive(
                 event, recording_id, "command-recording",
                 f"deferred recording epoch {payload.get('epoch', 'unknown')}",
             )
-            if recording_id and recording_node:
-                command_recordings[recording_id] = {"event": event, "payload": payload, "node": recording_node}
-                context = device_contexts.get(context_id or "")
-                if context:
+            if recording_id and recording_node and recording_id not in command_recordings:
+                valid = typed_identity_is_valid("command-recording", recording_id, recording_node)
+                if event.get("commandRecordingObservationId") != recording_id:
+                    graph.gap(
+                        f"Command-recording declaration {recording_id} disagrees with envelope recording "
+                        f"{event.get('commandRecordingObservationId')}; authoritative provenance was suppressed.",
+                        [recording_node], True, "other",
+                    )
+                    valid = False
+                if event.get("deviceContextObservationId") != context_id:
+                    graph.gap(
+                        f"Command-recording declaration {recording_id} names context {context_id}, but its "
+                        f"envelope names {event.get('deviceContextObservationId')}; authoritative provenance was suppressed.",
+                        [recording_node], True, "other",
+                    )
+                    valid = False
+                context = valid_context(context_id)
+                if not context:
+                    graph.gap(
+                        f"Command recording {recording_id} refers to undeclared or invalid context {context_id}.",
+                        [recording_node], True,
+                    )
+                    valid = False
+                elif context["payload"].get("kind") != "deferred":
+                    graph.gap(
+                        f"Command recording {recording_id} is owned by non-deferred context {context_id}; "
+                        "authoritative provenance was suppressed.",
+                        [context["node"], recording_node], True, "other",
+                    )
+                    valid = False
+                command_recordings[recording_id] = {
+                    "event": event, "payload": payload, "node": recording_node,
+                    "ownerContextId": context_id, "valid": valid,
+                }
+                if valid and context:
                     graph.edge(
                         "records", context["node"], recording_node,
                         [context["event"]["sequence"], sequence],
                         "This deferred device context owns the explicitly declared recording epoch.",
                     )
-                else:
-                    graph.gap(
-                        f"Command recording {recording_id} refers to undeclared context {context_id}.",
-                        [recording_node], True,
-                    )
         elif event_type == "command-list-observed":
             list_id = payload.get("commandListObservationId")
             recording_id = payload.get("sourceCommandRecordingObservationId")
+            source_context_id = payload.get("sourceDeviceContextObservationId")
             list_node = observed_identity_node(
                 event, list_id, "command-list", f"command list {list_id}",
             )
-            if list_id and list_node:
-                command_lists[list_id] = {"event": event, "payload": payload, "node": list_node}
-                recording = command_recordings.get(recording_id or "")
-                if recording:
+            if list_id and list_node and list_id not in command_lists:
+                valid = typed_identity_is_valid("command-list", list_id, list_node)
+                recording = valid_recording(recording_id)
+                if event.get("commandRecordingObservationId") != recording_id:
+                    graph.gap(
+                        f"Command-list declaration {list_id} names recording {recording_id}, but its envelope "
+                        f"names {event.get('commandRecordingObservationId')}; authoritative provenance was suppressed.",
+                        [list_node], True, "other",
+                    )
+                    valid = False
+                if recording_id:
+                    if not recording:
+                        graph.gap(
+                            f"Command list {list_id} has no valid declared source recording {recording_id}.",
+                            [list_node], True, "incomplete-capture",
+                        )
+                        valid = False
+                    elif source_context_id != recording.get("ownerContextId"):
+                        graph.gap(
+                            f"Command list {list_id} names source context {source_context_id}, but recording "
+                            f"{recording_id} is owned by {recording.get('ownerContextId')}; authoritative provenance was suppressed.",
+                            [recording["node"], list_node], True, "other",
+                        )
+                        valid = False
+                    if event.get("deviceContextObservationId") != source_context_id:
+                        graph.gap(
+                            f"Command-list declaration {list_id} names source context {source_context_id}, but its "
+                            f"envelope names {event.get('deviceContextObservationId')}; authoritative provenance was suppressed.",
+                            [list_node], True, "other",
+                        )
+                        valid = False
+                elif source_context_id:
+                    graph.gap(
+                        f"Command list {list_id} names source context {source_context_id} without a source recording; "
+                        "authoritative provenance was suppressed.",
+                        [list_node], True, "other",
+                    )
+                    valid = False
+                command_lists[list_id] = {
+                    "event": event, "payload": payload, "node": list_node,
+                    "sourceContextId": source_context_id, "sourceRecordingId": recording_id,
+                    "valid": valid,
+                }
+                if valid and recording:
                     graph.edge(
                         "materializes", recording["node"], list_node,
                         [recording["event"]["sequence"], sequence],
@@ -662,7 +811,7 @@ def derive(
                             f"{payload.get('sourceRecordingIncompleteReasons', [])}.",
                             [recording["node"], list_node], False, "incomplete-capture",
                         )
-                else:
+                elif not recording_id:
                     graph.gap(
                         f"Command list {list_id} has no declared source recording {recording_id}; "
                         f"completeness={payload.get('sourceRecordingComplete')} reasons="
@@ -679,37 +828,68 @@ def derive(
                 {**payload, "commandStreamSequence": event.get("execution", {}).get("commandStreamSequence")},
                 event_source_refs(event),
             )
-            recording = command_recordings.get(recording_id or "")
-            if recording:
+            coherent = True
+            recording = valid_recording(recording_id)
+            if event.get("commandRecordingObservationId") != recording_id:
+                graph.gap(
+                    f"FinishCommandList event {sequence} envelope recording "
+                    f"{event.get('commandRecordingObservationId')} disagrees with payload recording {recording_id}; "
+                    "authoritative provenance was suppressed.",
+                    [finish_node], True, "other",
+                )
+                coherent = False
+            if recording and not recording_context_matches(
+                recording, event.get("deviceContextObservationId"),
+                [recording["node"], finish_node], f"FinishCommandList event {sequence}",
+            ):
+                coherent = False
+            if not recording:
+                graph.gap(
+                    f"FinishCommandList event {sequence} has no valid declared source recording {recording_id}.",
+                    [finish_node], payload.get("sourceRecordingComplete") is True,
+                    "incomplete-capture",
+                )
+                coherent = False
+            command_list = valid_command_list(list_id)
+            if payload.get("succeeded") is True:
+                if not command_list:
+                    graph.gap(
+                        f"Successful FinishCommandList event {sequence} has no valid observed command list {list_id}.",
+                        [finish_node], True, "incomplete-capture",
+                    )
+                    coherent = False
+                elif (
+                    command_list.get("sourceRecordingId") != recording_id or
+                    (recording and command_list.get("sourceContextId") != recording.get("ownerContextId")) or
+                    command_list["payload"].get("commandListPointer") != payload.get("commandListPointer") or
+                    command_list["payload"].get("sourceRecordingComplete") != payload.get("sourceRecordingComplete") or
+                    command_list["payload"].get("sourceRecordingIncompleteReasons") !=
+                        payload.get("sourceRecordingIncompleteReasons")
+                ):
+                    graph.gap(
+                        f"Successful FinishCommandList event {sequence} does not match command list {list_id}'s "
+                        "declared source recording, owner context, or pointer; authoritative provenance was suppressed.",
+                        [command_list["node"], finish_node], True, "other",
+                    )
+                    coherent = False
+            elif list_id:
+                graph.gap(
+                    f"Failed FinishCommandList event {sequence} unexpectedly names command list {list_id}.",
+                    [finish_node], True,
+                )
+                coherent = False
+            if coherent and recording:
                 graph.edge(
                     "finishes", recording["node"], finish_node,
                     [recording["event"]["sequence"], sequence],
                     "This FinishCommandList call terminated the exact deferred recording epoch.",
                     {"restoreDeferredContextState": payload.get("restoreDeferredContextState")},
                 )
-            else:
-                graph.gap(
-                    f"FinishCommandList event {sequence} has no declared source recording {recording_id}.",
-                    [finish_node], payload.get("sourceRecordingComplete") is True,
-                    "incomplete-capture",
-                )
             if payload.get("sourceRecordingComplete") is not True:
                 graph.gap(
                     f"FinishCommandList event {sequence} ended an incomplete source recording: "
                     f"{payload.get('sourceRecordingIncompleteReasons', [])}.",
                     [finish_node], False, "incomplete-capture",
-                )
-            command_list = command_lists.get(list_id or "")
-            if payload.get("succeeded") is True:
-                if not command_list:
-                    graph.gap(
-                        f"Successful FinishCommandList event {sequence} has no observed command list {list_id}.",
-                        [finish_node], True, "incomplete-capture",
-                    )
-            elif list_id:
-                graph.gap(
-                    f"Failed FinishCommandList event {sequence} unexpectedly names command list {list_id}.",
-                    [finish_node], True,
                 )
         elif event_type == "execute-command-list":
             list_id = payload.get("commandListObservationId")
@@ -719,17 +899,41 @@ def derive(
                 {**payload, "commandStreamSequence": event.get("execution", {}).get("commandStreamSequence")},
                 event_source_refs(event),
             )
-            command_list = command_lists.get(list_id or "")
-            if command_list:
+            command_list = valid_command_list(list_id)
+            coherent = bool(command_list)
+            if not command_list:
+                graph.gap(
+                    f"ExecuteCommandList event {sequence} refers to undeclared or invalid command list {list_id}.",
+                    [execution_node], True,
+                )
+            elif (
+                payload.get("sourceCommandRecordingObservationId") != command_list.get("sourceRecordingId") or
+                payload.get("commandListPointer") != command_list["payload"].get("commandListPointer")
+            ):
+                graph.gap(
+                    f"ExecuteCommandList event {sequence} does not match command list {list_id}'s declared "
+                    "source recording or pointer; authoritative provenance was suppressed.",
+                    [command_list["node"], execution_node], True, "other",
+                )
+                coherent = False
+            if coherent and command_list:
                 graph.edge(
                     "executes", command_list["node"], execution_node,
                     [command_list["event"]["sequence"], sequence],
                     "The immediate-context execution names this exact command-list observation.",
                 )
-            else:
+            if payload.get("restoreContextState") is False:
+                srv_state.clear()
+                uav_state.clear()
+                active_target_binding = None
+                predicted_srv_state.clear()
+                predicted_uav_state.clear()
+                predicted_target_binding = None
                 graph.gap(
-                    f"ExecuteCommandList event {sequence} refers to undeclared command list {list_id}.",
-                    [execution_node], True,
+                    f"ExecuteCommandList event {sequence} used restoreContextState=false; immediate-context "
+                    "SRV, UAV, and target bindings were reset to D3D11 defaults, and command-list-local state "
+                    "is not projected into later immediate events.",
+                    [execution_node], False, "incomplete-capture",
                 )
         elif event_type == "shader-observed":
             shader_id = payload.get("shaderObservationId")
@@ -1272,16 +1476,20 @@ def derive(
             recording_id = event.get("commandRecordingObservationId")
             observation_domain = event.get("execution", {}).get("observationDomain")
             if recording_id:
-                recording = command_recordings.get(recording_id)
-                if recording:
+                recording = valid_recording(recording_id)
+                context_id = event.get("deviceContextObservationId")
+                if recording and recording_context_matches(
+                    recording, context_id, [recording["node"], execution],
+                    f"Recorded execution event {sequence}",
+                ):
                     graph.edge(
                         "records", recording["node"], execution,
                         [recording["event"]["sequence"], sequence],
                         "This draw or dispatch was observed in the exact deferred recording epoch; it is not immediate execution.",
                     )
-                else:
+                elif not recording:
                     graph.gap(
-                        f"Recorded execution event {sequence} refers to undeclared recording {recording_id}.",
+                        f"Recorded execution event {sequence} refers to undeclared recording or invalid recording {recording_id}.",
                         [execution], True,
                     )
             if event_type in {"draw", "dispatch"}:
@@ -2069,7 +2277,7 @@ def main() -> int:
             data = json.loads(path.read_text(encoding="utf-8-sig"))
             inputs.append({"kind": kind, "path": str(path), "sha256": sha256(path), "schemaMajor": input_schema_major(kind, data)})
     output = {
-        "schema": {"name": "csx.derived-render-graph", "major": 1, "minor": 12, "producerVersion": "static-semantic-resource-graph-9"},
+        "schema": {"name": "csx.derived-render-graph", "major": 1, "minor": 12, "producerVersion": "static-semantic-resource-graph-10"},
         "reportId": f"render-graph-{manifest['captureId'].removeprefix('capture-')}",
         "generatedAtUtc": manifest.get("createdAtUtc", "1970-01-01T00:00:00Z"),
         "generatedBy": {"name": "csx-render-map-join", "version": "0.12.0", "gitCommit": git_commit(repo)},

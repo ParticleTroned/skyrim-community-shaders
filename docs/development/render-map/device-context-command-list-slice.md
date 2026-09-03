@@ -128,6 +128,19 @@ to default state; the tracker must invalidate/reset its bindings rather than
 retain stale stage objects. The corresponding
 `RestoreDeferredContextState` rule is applied to the next recording epoch.
 
+The offline graph applies the same restore-false boundary to both its observed
+and predicted SRV, UAV, and target-binding state. Later immediate work cannot
+inherit any pre-execution binding; only explicit post-execution observations
+reseed the state. Restore-true execution preserves it.
+
+Typed command identities are immutable within a capture. Before deriving
+provenance, the graph builder detects incompatible repeated device-context,
+recording, or command-list declarations. It also checks that every recording
+has one deferred-context owner and that command-event envelopes, list source
+identities, successful finish identities, and execute claims agree with that
+owner chain. Any contradiction is a blocking gap and suppresses the unsupported
+authoritative edge while unrelated coherent chains remain usable.
+
 ## Capture boundaries
 
 -   Starting during an existing recording creates a partial recording epoch.

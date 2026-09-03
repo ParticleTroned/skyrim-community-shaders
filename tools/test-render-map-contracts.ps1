@@ -58,8 +58,44 @@ $eventSchema = Get-Content -Raw -LiteralPath $eventSchemaPath | ConvertFrom-Json
 $null = Get-Content -Raw -LiteralPath $graphSchemaPath | ConvertFrom-Json -Depth 100
 $fixtureRoot = Join-Path $repoRoot 'tests/fixtures/render-map'
 $fixtureEventsPath = Join-Path $fixtureRoot 'deferred-command-events.json'
+$fixtureEdgeCasesPath = Join-Path $fixtureRoot 'deferred-command-edge-cases.json'
 $fixtureManifestPath = Join-Path $fixtureRoot 'deferred-command-capture-manifest.json'
 $fixtureEvents = Get-Content -Raw -LiteralPath $fixtureEventsPath | ConvertFrom-Json -Depth 100
+$fixtureEdgeCases = Get-Content -Raw -LiteralPath $fixtureEdgeCasesPath | ConvertFrom-Json -Depth 100
+
+function New-EdgeCaseEvent {
+    param(
+        [Parameter(Mandatory)] $Case,
+        [Parameter(Mandatory)][int] $Sequence
+    )
+
+    return [ordered]@{
+        schema = [ordered]@{ name = 'csx.render-event'; major = 1; minor = 17; producerVersion = 'contract-test' }
+        captureId = 'capture-deferred-command-contract'
+        sequence = $Sequence
+        timestampQpc = 2000 + $Sequence
+        processId = 1
+        threadId = 2
+        frame = [ordered]@{ cpuFrame = 1; sceneEpoch = 1; submissionEpoch = $null; eye = 'unknown'; eyeMask = $null }
+        execution = [ordered]@{
+            observationDomain = $Case.observationDomain
+            commandStreamSequence = $Sequence
+            gpuTimestampTicks = $null
+            gpuTimestampFrequencyHz = $null
+        }
+        deviceContextObservationId = $Case.deviceContextObservationId
+        commandRecordingObservationId = $Case.commandRecordingObservationId
+        submissionObservationId = $null
+        type = $Case.type
+        scopes = [ordered]@{ renderPass = $null; technique = $null; geometry = $null; commandList = $null }
+        causes = @()
+        manifestRefs = @()
+        engineRefs = @()
+        observationRefs = @()
+        payload = $Case.payload
+        extensions = [ordered]@{ 'csx.contractCase' = $Case.name }
+    }
+}
 
 $eventKinds = @($eventSchema.allOf | ForEach-Object {
     $_.if.properties.type.const
@@ -77,6 +113,24 @@ foreach ($event in $fixtureEvents) {
     $eventJson = $event | ConvertTo-Json -Depth 100 -Compress
     $eventValid = Test-Json -Json $eventJson -SchemaFile $eventSchemaPath -ErrorAction Stop
     Assert-True $eventValid "Deferred-command fixture event $($event.sequence) does not conform to the render-event schema"
+}
+
+$validEdgeCaseEvents = @()
+$edgeCaseSequence = 100
+foreach ($case in $fixtureEdgeCases.valid) {
+    $event = New-EdgeCaseEvent -Case $case -Sequence $edgeCaseSequence
+    $eventJson = $event | ConvertTo-Json -Depth 100 -Compress
+    $eventValid = Test-Json -Json $eventJson -SchemaFile $eventSchemaPath -ErrorAction Stop
+    Assert-True $eventValid "Valid deferred-command edge case '$($case.name)' does not conform to the render-event schema"
+    $validEdgeCaseEvents += $event
+    $edgeCaseSequence++
+}
+foreach ($case in $fixtureEdgeCases.invalid) {
+    $event = New-EdgeCaseEvent -Case $case -Sequence $edgeCaseSequence
+    $eventJson = $event | ConvertTo-Json -Depth 100 -Compress
+    $eventValid = Test-Json -Json $eventJson -SchemaFile $eventSchemaPath -ErrorAction SilentlyContinue
+    Assert-True (-not $eventValid) "Invalid deferred-command edge case '$($case.name)' unexpectedly conforms to the render-event schema"
+    $edgeCaseSequence++
 }
 
 $hooksSource = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'src/Hooks.cpp')
@@ -100,7 +154,7 @@ try {
     $null = New-Item -ItemType Directory -Path $temporaryRoot -Force
     $eventsJsonlPath = Join-Path $temporaryRoot 'events.jsonl'
     $graphOutputPath = Join-Path $temporaryRoot 'render-graph.json'
-    $fixtureEvents |
+    @($fixtureEvents) + @($validEdgeCaseEvents) |
         ForEach-Object { $_ | ConvertTo-Json -Depth 100 -Compress } |
         Set-Content -LiteralPath $eventsJsonlPath -Encoding utf8
     $graphArguments = @(
@@ -121,4 +175,4 @@ try {
     }
 }
 
-Write-Output 'Render-map contracts passed: 2 schemas, 6 deferred-command fixtures, 4 command-list events, 3 hook slots, and the offline graph suite.'
+Write-Output "Render-map contracts passed: 2 schemas, $($fixtureEvents.Count) baseline deferred-command fixtures, $($validEdgeCaseEvents.Count) valid edge cases, $($fixtureEdgeCases.invalid.Count) rejected edge cases, 3 hook slots, and the offline graph suite."

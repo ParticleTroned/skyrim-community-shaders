@@ -452,7 +452,7 @@ namespace
 		const auto& observedGeometry = page["events"][1];
 		const auto& material = page["events"][2];
 		const auto& setup = page["events"][3];
-		Check(object["schema"]["minor"] == 16 && object["payload"]["schema"] == "scene-object-observation-v1",
+		Check(object["schema"]["minor"] == 17 && object["payload"]["schema"] == "scene-object-observation-v1",
 			"scene-object declaration schema is wrong");
 		Check(observedGeometry["payload"]["schema"] == "geometry-observation-v1" &&
 				  observedGeometry["payload"]["sceneObjectObservationId"] == object["payload"]["sceneObjectObservationId"],
@@ -524,6 +524,24 @@ namespace
 				  (*execute)["commandRecordingObservationId"].is_null() &&
 				  (*execute)["payload"]["sourceCommandRecordingObservationId"].is_string(),
 			"ExecuteCommandList was mislabelled as a recorded deferred command");
+
+		Check(controller.Start(config, descriptor) == ControlStatus::kSuccess,
+			"failed-finish serialization capture did not start");
+		runtime.RecordFinishCommandList(
+			0xA100, 0xDEAD, true, static_cast<std::int32_t>(0x80004005u));
+		Check(controller.Stop(descriptor.captureId, capture) == ControlStatus::kSuccess && capture,
+			"failed-finish serialization capture did not stop");
+		const auto failedPage = SerializeEventPage(*capture, 0, 64, 42);
+		const auto failedFinish = std::find_if(
+			failedPage["events"].begin(), failedPage["events"].end(),
+			[](const nlohmann::json& a_event) {
+				return a_event["type"].get<std::string>() == "finish-command-list";
+			});
+		Check(failedFinish != failedPage["events"].end() &&
+				  (*failedFinish)["payload"]["succeeded"] == false &&
+				  (*failedFinish)["payload"]["commandListObservationId"].is_null() &&
+				  (*failedFinish)["payload"]["commandListPointer"].is_null(),
+			"failed FinishCommandList serialized a materialized list identity or pointer");
 	}
 
 	void TestDurableArtifacts()

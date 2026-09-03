@@ -1238,6 +1238,9 @@ def derive(
             execution_attributes = {
                 "eventSequence": sequence,
                 "commandStreamSequence": event.get("execution", {}).get("commandStreamSequence"),
+                "observationDomain": event.get("execution", {}).get("observationDomain"),
+                "deviceContextObservationId": event.get("deviceContextObservationId"),
+                "commandRecordingObservationId": event.get("commandRecordingObservationId"),
                 "cpuFrame": event.get("frame", {}).get("cpuFrame"),
                 "eye": event.get("frame", {}).get("eye", "unknown"),
                 "operation": operation,
@@ -1267,6 +1270,7 @@ def derive(
                 execution_attributes, event_source_refs(event),
             )
             recording_id = event.get("commandRecordingObservationId")
+            observation_domain = event.get("execution", {}).get("observationDomain")
             if recording_id:
                 recording = command_recordings.get(recording_id)
                 if recording:
@@ -1284,7 +1288,33 @@ def derive(
                 context_id = event.get("deviceContextObservationId")
                 context = device_contexts.get(context_id or "")
                 is_deferred = bool(context and context["payload"].get("kind") == "deferred")
-                if recording_id or is_deferred:
+                is_recording_domain = observation_domain == "command-recording"
+                if is_recording_domain or recording_id or is_deferred:
+                    if is_recording_domain and not recording_id:
+                        graph.gap(
+                            f"Command-recording {event_type} event {sequence} has no recording identity; "
+                            "immediate-context state was forbidden.",
+                            [execution], True,
+                        )
+                    if is_recording_domain and not context_id:
+                        graph.gap(
+                            f"Command-recording {event_type} event {sequence} has no device-context identity; "
+                            "immediate-context state was forbidden.",
+                            [execution], True,
+                        )
+                    if is_recording_domain and context_id and context is None:
+                        graph.gap(
+                            f"Command-recording {event_type} event {sequence} refers to undeclared "
+                            f"device context {context_id}; immediate-context state was forbidden.",
+                            [execution], True,
+                        )
+                    if is_recording_domain and context and context["payload"].get("kind") != "deferred":
+                        graph.gap(
+                            f"Command-recording {event_type} event {sequence} conflicts with "
+                            f"{context['payload'].get('kind', 'unknown')} device context {context_id}; "
+                            "immediate-context state was forbidden.",
+                            [execution], True,
+                        )
                     for stage, stage_shader_id in (
                         ("vertex", payload.get("vertexShaderObservationId")),
                         ("pixel", payload.get("pixelShaderObservationId")),

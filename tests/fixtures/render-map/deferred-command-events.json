@@ -3,7 +3,7 @@
         "schema": {
             "name": "csx.render-event",
             "major": 1,
-            "minor": 16,
+            "minor": 17,
             "producerVersion": "collector-v1"
         },
         "captureId": "capture-deferred-command-contract",
@@ -55,7 +55,7 @@
         "schema": {
             "name": "csx.render-event",
             "major": 1,
-            "minor": 16,
+            "minor": 17,
             "producerVersion": "collector-v1"
         },
         "captureId": "capture-deferred-command-contract",
@@ -111,7 +111,7 @@
         "schema": {
             "name": "csx.render-event",
             "major": 1,
-            "minor": 16,
+            "minor": 17,
             "producerVersion": "collector-v1"
         },
         "captureId": "capture-deferred-command-contract",
@@ -171,7 +171,7 @@
         "schema": {
             "name": "csx.render-event",
             "major": 1,
-            "minor": 16,
+            "minor": 17,
             "producerVersion": "collector-v1"
         },
         "captureId": "capture-deferred-command-contract",
@@ -217,7 +217,7 @@
         "schema": {
             "name": "csx.render-event",
             "major": 1,
-            "minor": 16,
+            "minor": 17,
             "producerVersion": "collector-v1"
         },
         "captureId": "capture-deferred-command-contract",
@@ -264,7 +264,7 @@
         "schema": {
             "name": "csx.render-event",
             "major": 1,
-            "minor": 16,
+            "minor": 17,
             "producerVersion": "collector-v1"
         },
         "captureId": "capture-deferred-command-contract",

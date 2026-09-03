@@ -61,6 +61,13 @@ Selecting either event kind automatically selects its recording and context
 declarations. If a recording declaration cannot be retained, the command is
 omitted rather than being mislabelled as an immediate CPU call.
 
+Schema revision 1.17 makes that distinction fail closed. A serialized draw or
+dispatch in the `command-recording` domain must carry non-null recording and
+device-context identities. The offline graph builder independently treats the
+domain as authoritative: absent, unresolved, or contradictory typed identities
+produce explicit gaps and can never fall through to immediate-context resource,
+submission, version, or hazard derivation.
+
 `sourceRecordingComplete` is conservative. It remains false while deferred
 hook coverage is unqualified, when capture begins part-way through an epoch, or
 when any observed command event cannot be retained. The accompanying
@@ -79,6 +86,14 @@ A successful `FinishCommandList` creates a `command-list` observation with:
 Failure does not create a command-list observation. It closes the attempted
 epoch with the HRESULT and starts the next epoch according to observed D3D11
 state semantics.
+
+The missing-recording form is explicit rather than fabricated. A
+`finish-command-list-v2` event may serialize a null recording identity only
+with `sourceRecordingComplete: false` and at least one incomplete reason.
+Failed finishes always serialize null command-list identity and pointer. A
+successful finish whose list declaration could not be retained keeps the raw
+pointer evidence, marks the source incomplete with `event-not-recorded`, and
+does not invent a command-list observation ID.
 
 ## State transitions
 

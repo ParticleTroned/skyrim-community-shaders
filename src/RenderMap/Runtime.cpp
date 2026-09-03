@@ -1085,8 +1085,13 @@ namespace CSX::RenderMap
 			recordingIncompleteReasons = state.recordingIncompleteReasons;
 			commandSequence = ++state.commandSequence;
 		}
-		const auto sourceRecordingComplete =
+		auto sourceRecordingComplete =
 			recordingObservationId != 0 && recordingIncompleteReasons == 0;
+		if (recordingObservationId == 0) {
+			recordingIncompleteReasons |= static_cast<std::uint64_t>(
+				CommandRecordingIncompleteReason::kDeclarationUnavailable);
+			sourceRecordingComplete = false;
+		}
 
 		std::uint64_t commandListObservationId = 0;
 		if (a_result >= 0 && a_commandList != 0) {
@@ -1118,15 +1123,31 @@ namespace CSX::RenderMap
 						state.sourceRecordingIncompleteReasons = recordingIncompleteReasons;
 					} else {
 						commandListObservationId = 0;
+						recordingIncompleteReasons |= static_cast<std::uint64_t>(
+							CommandRecordingIncompleteReason::kEventNotRecorded);
+						sourceRecordingComplete = false;
 					}
+				} else {
+					recordingIncompleteReasons |= static_cast<std::uint64_t>(
+						CommandRecordingIncompleteReason::kEventNotRecorded);
+					sourceRecordingComplete = false;
 				}
+			} else {
+				recordingIncompleteReasons |= static_cast<std::uint64_t>(
+					CommandRecordingIncompleteReason::kEventNotRecorded);
+				sourceRecordingComplete = false;
 			}
+		} else if (a_result >= 0) {
+			recordingIncompleteReasons |= static_cast<std::uint64_t>(
+				CommandRecordingIncompleteReason::kDeclarationUnavailable);
+			sourceRecordingComplete = false;
 		}
 
 		collector.RecordForGeneration(
 			EventKind::kFinishCommandList,
 			FinishCommandListPayload(
-				recordingObservationId, commandListObservationId, a_commandList,
+				recordingObservationId, commandListObservationId,
+				a_result >= 0 ? a_commandList : 0,
 				a_restoreDeferredContextState, a_result,
 				sourceRecordingComplete, recordingIncompleteReasons),
 			context.observationId, captureGeneration, commandSequence,

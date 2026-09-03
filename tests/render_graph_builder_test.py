@@ -11,7 +11,7 @@ from pathlib import Path
 
 def envelope(sequence: int, event_type: str, payload: dict) -> dict:
     return {
-        "schema": {"name": "csx.render-event", "major": 1, "minor": 8, "producerVersion": "test"},
+        "schema": {"name": "csx.render-event", "major": 1, "minor": 17, "producerVersion": "test"},
         "captureId": "capture-resource-flow-test",
         "sequence": sequence,
         "timestampQpc": 1000 + sequence,
@@ -20,6 +20,7 @@ def envelope(sequence: int, event_type: str, payload: dict) -> dict:
         "frame": {"cpuFrame": 1, "sceneEpoch": 1, "submissionEpoch": None, "eye": "unknown", "eyeMask": None},
         "execution": {"observationDomain": "cpu-call", "commandStreamSequence": sequence, "gpuTimestampTicks": None, "gpuTimestampFrequencyHz": None},
         "deviceContextObservationId": "obs-device-context-1-g1",
+        "commandRecordingObservationId": None,
         "submissionObservationId": None,
         "type": event_type,
         "scopes": {"renderPass": None, "technique": None, "geometry": None, "commandList": None},
@@ -858,6 +859,74 @@ def main() -> int:
     assert any(
         "immediate-context state was deliberately not applied" in gap["description"]
         for gap in command_graph["gaps"]
+    )
+
+    def assert_recording_event_failed_closed(candidate: dict, expected_gap: str) -> None:
+        active_immediate_state = json.loads(json.dumps(hazard_events[:7]))
+        candidate["sequence"] = 7
+        candidate["timestampQpc"] = 1007
+        graph_under_test = build_graph(tool, manifest, active_immediate_state + [candidate])
+        event_node = next(
+            node for node in graph_under_test["nodes"]
+            if node["attributes"].get("eventSequence") == 7
+            and node["kind"] in {"draw", "dispatch"}
+        )
+        forbidden = {"reads", "writes", "submits", "precedes"}
+        assert not [
+            edge for edge in graph_under_test["edges"]
+            if edge["type"] in forbidden
+            and event_node["id"] in {edge["from"], edge["to"]}
+        ], graph_under_test["edges"]
+        assert any(
+            expected_gap in gap["description"] and event_node["id"] in gap["relatedNodeIds"]
+            for gap in graph_under_test["gaps"]
+        ), graph_under_test["gaps"]
+
+    ambiguous_draw = envelope(7, "draw", {
+        "schema": "draw-call-v4", "operation": "draw",
+        "deviceContextPointer": "0x100", "vertexShaderObservationId": None,
+        "pixelShaderObservationId": None, "targetBindingObservationId": None,
+        "submissionObservationId": None, "preparedGeometrySetupObservationId": None,
+        "arguments": {"vertexCount": 3, "startVertexLocation": 0},
+    })
+    ambiguous_draw["execution"]["observationDomain"] = "command-recording"
+    ambiguous_draw["deviceContextObservationId"] = None
+    assert_recording_event_failed_closed(ambiguous_draw, "has no recording identity")
+
+    undeclared_dispatch = envelope(7, "dispatch", {
+        "schema": "dispatch-call-v2", "operation": "dispatch",
+        "deviceContextPointer": "0x101", "computeShaderObservationId": None,
+        "arguments": {"threadGroupCountX": 1, "threadGroupCountY": 1, "threadGroupCountZ": 1},
+    })
+    undeclared_dispatch["execution"]["observationDomain"] = "command-recording"
+    undeclared_dispatch["deviceContextObservationId"] = "obs-device-context-404-g1"
+    undeclared_dispatch["commandRecordingObservationId"] = "obs-command-recording-404-g1"
+    assert_recording_event_failed_closed(undeclared_dispatch, "undeclared recording")
+
+    conflicting_draw = json.loads(json.dumps(ambiguous_draw))
+    conflicting_draw["deviceContextObservationId"] = "obs-device-context-1-g1"
+    conflicting_draw["commandRecordingObservationId"] = "obs-command-recording-405-g1"
+    immediate_context = envelope(6, "device-context-observed", {
+        "schema": "device-context-observation-v2",
+        "deviceContextObservationId": "obs-device-context-1-g1",
+        "contextPointer": "0x9", "pointerGeneration": 1,
+        "kind": "immediate", "creationEvidence": "initial-immediate-context",
+        "contextFlags": 0,
+    })
+    conflicting_prefix = json.loads(json.dumps(hazard_events[:6])) + [immediate_context]
+    conflicting_graph = build_graph(tool, manifest, conflicting_prefix + [conflicting_draw])
+    conflicting_node = next(
+        node for node in conflicting_graph["nodes"]
+        if node["attributes"].get("eventSequence") == 7 and node["kind"] == "draw"
+    )
+    assert not [
+        edge for edge in conflicting_graph["edges"]
+        if edge["type"] in {"reads", "writes", "submits", "precedes"}
+        and conflicting_node["id"] in {edge["from"], edge["to"]}
+    ]
+    assert any(
+        "conflicts with immediate device context" in gap["description"]
+        for gap in conflicting_graph["gaps"]
     )
 
     incomplete_events = [

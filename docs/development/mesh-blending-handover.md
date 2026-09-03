@@ -185,13 +185,17 @@ CS already carries per-draw information through `State::PermutationCB` and `Extr
 - `src/State.h`
 - `package/Shaders/Common/Permutation.hlsli`
 
-Reserve a new matching bit in both C++ and HLSL, for example bit 8:
+Reserve a new matching bit in both C++ and HLSL. Additive lighting already
+owns bit 8, so Mesh Blending uses bit 9:
 
 ```cpp
-MeshBlending = 1u << 8
+MeshBlending = 1u << 9
 ```
 
-Do not reuse bit 6. RC173 mirrors `IsFemale` at bit 6 in both C++ and HLSL, and bit 7 is also occupied. Do not overlap Extended Translucency's bits 6–8 in `ExtraFeatureDescriptor`; use bit 8 of `ExtraShaderDescriptor` instead.
+Do not reuse bit 6. RC173 mirrors `IsFemale` at bit 6 in both C++ and HLSL,
+and bit 7 is also occupied. Do not overlap Extended Translucency's bits 6–8
+in `ExtraFeatureDescriptor`; bit 8 of `ExtraShaderDescriptor` belongs to
+Additive lighting, so use bit 9 for Mesh Blending.
 
 ## Implemented feature structure
 
@@ -525,7 +529,7 @@ Add matching definitions:
 
 ```cpp
 // src/State.h
-MeshBlending = 1u << 8
+MeshBlending = 1u << 9
 ```
 
 ```hlsl

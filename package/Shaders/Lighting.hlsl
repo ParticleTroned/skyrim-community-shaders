@@ -8,6 +8,9 @@
 #include "Common/Math.hlsli"
 #include "Common/MotionBlur.hlsli"
 #include "Common/Permutation.hlsli"
+#ifdef VR
+#	include "Common/CharacterCategoryMask.hlsli"
+#endif
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/Skinned.hlsli"
@@ -4707,9 +4710,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.Masks = float4(0, 0, masksZ, psout.Diffuse.w);
 #		endif
 
-	// Stored as 1 - vertexAO so the cleared default (0) means no occlusion
-	// for pixels that do not write to this RT (sky, water, grass, effects).
+	// Stored as 1 - vertexAO so the cleared default (0) means no occlusion.
+#		ifdef VR
+	// Exact endpoint codes reject blended IDs. Preserve target opacity because
+	// the inherited MRT blend state uses this output's alpha as its source factor.
+	const uint characterCategory =
+		(Permutation::ExtraShaderDescriptor &
+			Permutation::ExtraFlags::CharacterCategoryMask) >>
+		8;
+	psout.Masks2 = CharacterCategoryMask::Encode(
+		1.0 - vertexAO, characterCategory, psout.Diffuse.w);
+#		else
 	psout.Masks2 = float4(1.0 - vertexAO, 0, 0, psout.Diffuse.w);
+#		endif
 
 	float stochasticBlend = (screenNoise * screenNoise) < psout.Diffuse.w ? 1.0 : 0.0;
 	psout.NormalGlossiness.w = stochasticBlend;

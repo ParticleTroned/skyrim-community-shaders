@@ -1,4 +1,7 @@
 #include "Common/Color.hlsli"
+#ifdef VR
+#	include "Common/CharacterCategoryMask.hlsli"
+#endif
 #include "Common/FrameBuffer.hlsli"
 #include "Common/VR.hlsli"
 
@@ -155,6 +158,9 @@ struct PS_OUTPUT
 	float4 Color: SV_Target0;
 	float4 MotionVectors: SV_Target1;
 	float4 Normal: SV_Target2;
+#if defined(DEFERRED) && defined(VR)
+	float4 Masks2: SV_Target7;
+#endif
 #if defined(CLOUD_SHADOWS) && defined(CLOUDS) && !defined(DEFERRED)
 	float4 CloudShadows: SV_Target3;
 #endif
@@ -269,6 +275,11 @@ PS_OUTPUT main(PS_INPUT input)
 
 	psout.MotionVectors = float4(screenMotionVector, 0, psout.Color.w);
 	psout.Normal = float4(0.5, 0.5, 0, psout.Color.w);
+
+#	if defined(DEFERRED) && defined(VR)
+	psout.Masks2 = CharacterCategoryMask::Encode(
+		0.0, 0u, psout.Color.w);
+#	endif
 
 #	if defined(CLOUD_SHADOWS) && defined(CLOUDS) && !defined(DEFERRED)
 	psout.CloudShadows = float4(1, 1, 1, psout.Color.w);

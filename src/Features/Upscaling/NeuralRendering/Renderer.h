@@ -7,13 +7,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <d3d11.h>
 #include <limits>
 #include <string>
-
-struct ID3D11Device;
-struct ID3D11DeviceContext;
-struct ID3D11Resource;
-struct ID3D11ShaderResourceView;
+#include <wrl/client.h>
 
 namespace NeuralRendering
 {
@@ -31,6 +28,7 @@ namespace NeuralRendering
 		ColorInputCopy,
 		DepthGuideCopy,
 		MotionVectorCopy,
+		ControlMaskCopy,
 		CommandBegin,
 		FeatureEvaluate,
 		CommandEnd,
@@ -54,6 +52,7 @@ namespace NeuralRendering
 		std::uint64_t runtimeInitializations = 0;
 		std::uint64_t resourceRebuilds = 0;
 		std::uint64_t depthGuideCopies = 0;
+		std::uint64_t controlMaskCopies = 0;
 		std::uint64_t featureEvaluations = 0;
 		std::uint64_t outputCommits = 0;
 		std::uint64_t stereoAttempts = 0;
@@ -109,6 +108,8 @@ namespace NeuralRendering
 		std::uint64_t lastFeatureGpuMicroseconds = 0;
 		std::uint64_t maximumFeatureGpuMicroseconds = 0;
 		std::uint64_t lastFeaturePixelCount = 0;
+		std::uint32_t lastFeatureFrameId =
+			std::numeric_limits<std::uint32_t>::max();
 		std::uint32_t lastFeatureEvaluationCount = 0;
 		std::uint32_t lastFeatureSlotMask = 0;
 		InsertionPoint lastInsertionPoint = InsertionPoint::Count;
@@ -142,11 +143,14 @@ namespace NeuralRendering
 		std::uint32_t guideHeight = 0;
 		std::uint32_t outputWidth = 0;
 		std::uint32_t outputHeight = 0;
+		std::uint32_t controlMaskWidth = 0;
+		std::uint32_t controlMaskHeight = 0;
 		std::uint32_t colorFormat = 0;
 		std::uint32_t depthSourceFormat = 0;
 		std::uint32_t depthViewFormat = 0;
 		std::uint32_t motionVectorFormat = 0;
 		std::uint32_t outputFormat = 0;
+		std::uint32_t controlMaskFormat = 0;
 		std::uint64_t successes = 0;
 		std::uint64_t failures = 0;
 		std::uint64_t runtimeSuccessfulFrames = 0;
@@ -156,6 +160,7 @@ namespace NeuralRendering
 		bool failureLatched = false;
 		bool quarantined = false;
 		bool outputCommitted = false;
+		bool controlMaskPresent = false;
 		RendererCounters counters{};
 		RendererPerformanceTelemetry performance{};
 	};
@@ -173,12 +178,16 @@ namespace NeuralRendering
 		ID3D11ShaderResourceView* depthGuideSRV = nullptr;
 		ID3D11Resource* motionVectors = nullptr;
 		ID3D11Resource* colorOutput = nullptr;
+		// Optional output-resolution R8_UNORM mask; its presence selects manual masking.
+		Microsoft::WRL::ComPtr<ID3D11Resource> controlMask;
 		std::uint32_t colorWidth = 0;
 		std::uint32_t colorHeight = 0;
 		std::uint32_t guideWidth = 0;
 		std::uint32_t guideHeight = 0;
 		std::uint32_t outputWidth = 0;
 		std::uint32_t outputHeight = 0;
+		std::uint32_t controlMaskWidth = 0;
+		std::uint32_t controlMaskHeight = 0;
 		UpscalingDLSS::ViewportCrop viewportCrop{};
 		bool featureUpscaling = false;
 		Tuning tuning{};

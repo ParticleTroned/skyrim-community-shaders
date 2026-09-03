@@ -136,12 +136,12 @@ are not staged by this build. Hash pinning and prior screening do not certify a
 binary as malware-free. Consult the license accompanying each NVIDIA binary.
 Do not publish or redistribute the generated AIO.
 
-The first bridge binds color, depth, motion vectors, and output only. Automatic
-masking is therefore fixed on and UI correction is fixed off; manual masks and
-UI correction fail closed until their ControlMask/UI resources and subrects are
-implemented. A Neural Rendering center is committed only when both eyes succeed
-in the same stereo transaction. Otherwise both eyes retain the arrangement's
-normal-DLSS fallback.
+The base bridge binds color, depth, motion vectors, and output only. The
+`face-of-gogh` experiment adds a version-specific `ControlMask` path documented
+in [DLSS 5 character Neural Rendering](dlss5-character-neural-rendering.md).
+UI correction remains fixed off. A Neural Rendering center is committed only
+when both eyes succeed in the same stereo transaction. Otherwise both eyes
+retain the arrangement's normal-DLSS fallback.
 
 ## Working reference and deliberate divergence
 

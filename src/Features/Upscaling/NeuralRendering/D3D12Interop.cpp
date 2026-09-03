@@ -221,6 +221,7 @@ namespace NeuralRendering
 					lastCompletedTimingFenceValue_ = timingFenceValue;
 					telemetry_.lastFeatureGpuMicroseconds = elapsedMicroseconds;
 					telemetry_.lastFeaturePixelCount = commandContext.timing.pixelCount;
+					telemetry_.lastFeatureFrameId = commandContext.timing.frameId;
 					telemetry_.lastFeatureEvaluationCount =
 						commandContext.timing.evaluationCount;
 					telemetry_.lastFeatureSlotMask =
@@ -566,7 +567,8 @@ namespace NeuralRendering
 			return RecordFailureLocked(E_UNEXPECTED, "BeginFeatureTiming scope already used");
 		const auto route = ClassifyFeatureSlotMask(a_timing.featureSlotMask);
 		const bool insertionPointValid = IsValidInsertionPoint(a_timing.insertionPoint);
-		if (!a_timing.pixelCount || !a_timing.evaluationCount ||
+		if (a_timing.frameId == std::numeric_limits<std::uint32_t>::max() ||
+			!a_timing.pixelCount || !a_timing.evaluationCount ||
 			a_timing.evaluationCount > 2u ||
 			static_cast<std::uint32_t>(std::popcount(a_timing.featureSlotMask)) !=
 				a_timing.evaluationCount ||

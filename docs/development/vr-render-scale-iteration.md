@@ -179,6 +179,21 @@ bounds-mismatch fallbacks. The renderer frame counts are the primary
 performance signal. Scenario elapsed time is secondary because the fixed waits
 consume 200,000 ms and harness calls account for the remaining time.
 
+#### Lifecycle pacing safety
+
+Latency optimization must distinguish non-destructive readiness observation
+from provider teardown, GPU drain, renderer-target recreation, and
+post-mutation provider creation. A shared `Pending` result or retry interval
+does not prove that these operations have the same lifetime requirements.
+
+Shorter polling is admissible only for a path proven to observe immutable
+state without dirtying, destroying, replacing, or publishing resources.
+Destructive work must retain a proven GPU and renderer lifetime boundary, such
+as the existing safe tail or an equivalent fence and ownership proof. Never
+apply a generic fast-poll cadence across both classes. Validate any change with
+repeated cross-provider DLSS-to-FSR and FSR-to-DLSS transitions before using its
+latency result.
+
 The two references used the following final render-scale state:
 
 | Health metric              | main-VR reference                            | RC166 reference                      | Future-run requirement        |

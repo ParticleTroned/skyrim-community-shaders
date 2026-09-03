@@ -343,6 +343,8 @@ public:
 			NeuralRendering::CharacterPolicy::kDefaultRoiHoldFrames;
 		bool neuralCharacterDepthAwareFeatherEnabled =
 			NeuralRendering::CharacterPolicy::kDefaultDepthAwareFeather;
+		bool neuralCharacterVisibilityDepthTestEnabled =
+			NeuralRendering::CharacterPolicy::kDefaultVisibilityDepthTest;
 		uint neuralCharacterFeatherRadius =
 			NeuralRendering::CharacterPolicy::kDefaultFeatherRadius;
 		float neuralCharacterDepthThreshold =

@@ -27,7 +27,7 @@ of feathering and sharpening. Experimental `Final LDR before UI` keeps the same
 center-region restriction but evaluates Feature 18 after scene post-processing
 and sharpening, immediately before UI composition.
 
-## Runtime trust boundary
+## Runtime admission boundary
 
 Normal DLSS stays separate from Neural Rendering. For this internal test, CMake
 copies a matched Streamline 2.13 core/plugin set and NVIDIA-signed 310.8
@@ -37,24 +37,26 @@ is the first runtime compatibility gate. Feature 18 is loaded directly from
 `nvngx_dlssnr.dll`; it does not use or require `sl.dlss_nr.dll` or a Streamline
 Neural Rendering plugin.
 
-The direct loader accepts exactly three `nvngx_dlssnr.dll` SHA-256 identities:
+The direct loader recognizes three tested `nvngx_dlssnr.dll` SHA-256 identities:
 
--   allowlisted signed 310.8 identity:
+-   tested signed 310.8 identity:
     `E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E`
--   allowlisted patched 310.8 identity:
+-   tested patched 310.8 identity:
     `8270B350CD82DE5CE89806872CDD6B6A9249B80836B91BBEB3573470744CC206`
--   alternate allowlisted patched 310.8 identity:
+-   alternate tested patched 310.8 identity:
     `CEB6432F6FBDF44D886014BCD47241932BF8B67439FEEF9BBDD0961436662650`
 
-The hash is computed before `LoadLibraryExW`. All three identities are accepted
-at every CSX log level. The patched identities remain restricted to their exact
-pinned hashes; changing the log level does not widen the allowlist, enable
-Streamline developer mode, sign a DLL, or authenticate a plugin. “Signed”
-describes the inspected allowlisted file; this loader pins its hash and does not
-perform a new Authenticode trust decision or certify a binary as malware-free.
+The hash is computed before `LoadLibraryExW` and reported diagnostically, but it
+is not an admission allowlist. This internal branch accepts any runtime whose
+version resource reports 310.8.x and which exports the required NGX entrypoints.
+Developer Mode and the Streamline log level do not affect that decision. The
+loader keeps its pre-load file handle locked and verifies that the loaded module
+is the same file that was inspected, but it does not establish publisher trust
+or certify an unlisted binary as malware-free. An accepted untrusted DLL executes
+inside the game process; only use binaries obtained and inspected by the tester.
 
 The runtime DLL does not necessarily export the NGX parameter allocator. When
-it does, its already allowlisted runtime identity is also the parameter-core
+it does, its already verified runtime identity is also the parameter-core
 identity. Otherwise, before calling NGX initialization, CSX requires exactly
 one loaded exporter whose locked file identity resolves below
 `System32\\DriverStore\\FileRepository`, whose basename is `nvngx.dll` or the
@@ -90,10 +92,12 @@ AIO output.
 Private local staging is enabled with `CSX_STAGE_LOCAL_DLSS_RUNTIME=ON` plus
 the `CSX_LOCAL_DLSS_RUNTIME_DIRECTORY` and
 `CSX_LOCAL_DLSSNR_RUNTIME_FILE` CMake cache paths. It stages exactly seven
-files: the six normal-DLSS runtime modules and the patched 310.8
-`nvngx_dlssnr.dll`. Configuration fails if a source is absent or does not match
-its declared SHA-256. Local staging performs no download and never writes a
-runtime into the source checkout.
+files: the six hash-pinned normal-DLSS runtime modules and the selected 310.8
+`nvngx_dlssnr.dll`. Configuration fails if a source is absent or a normal-DLSS
+file does not match its declared SHA-256. The selected NR file is fingerprinted
+into the generated transaction manifest, so later replacement is rejected until
+CMake is configured again. Local staging performs no download and never writes
+a runtime into the source checkout.
 
 For reproducible internal comparisons, the
 `Internal-DLSSNR-AIO` configure and build presets read those two paths from
@@ -110,15 +114,16 @@ cmake --build --preset Internal-DLSSNR-AIO
 
 The preset enables DevBench and local staging, disables official fetching and
 the package shader tests for this internal iteration build, and retains the
-normal fail-closed hash checks. Its short `build/gnr` binary directory keeps
+normal-DLSS fail-closed hash checks. Its short `build/gnr` binary directory keeps
 FidelityFX shader-permutation outputs below legacy Windows path limits. Keep
 machine-specific paths in the process environment or an ignored
 `CMakeUserPresets.json`, never in the tracked preset. The resulting archive is
 still internal-only and must not be redistributed. Run the configure command
 before every build whose runtime source paths may have changed; invoking only
 the build preset does not reread environment variables. Expanded paths remain
-in the ignored build cache and staging manifest. Missing sources, mismatched
-hashes, or concurrent official acquisition fail closed.
+in the ignored build cache and staging manifest. Missing sources, changed
+post-configure identities, normal-runtime hash mismatches, or concurrent
+official acquisition fail closed.
 
 The verified official acquisition path from `main-VR` is retained behind the
 explicit `CSX_FETCH_OFFICIAL_STREAMLINE_RUNTIME=ON` network opt-in. It downloads
@@ -127,13 +132,15 @@ normal-DLSS runtime modules; it does not supply Feature 18. This path can be
 advanced when an official Neural Rendering SDK is released. Official fetching
 and private local staging are mutually exclusive.
 
-The staged NR identity is the malware-screened but modified `8270...206` file
-selected by `CSX_LOCAL_DLSSNR_RUNTIME_FILE`. Its embedded NVIDIA signature
-reports `HashMismatch`, so admission relies on its exact pinned SHA-256 and
-310.8 version at every CSX log level. The signed `E16B...FC8E` identity and
-alternate patched identity remain allowlisted for separately selected tests but
-are not staged by this build. Hash pinning and prior screening do not certify a
-binary as malware-free. Consult the license accompanying each NVIDIA binary.
+The reference NR identity is the malware-screened but modified `8270...206`
+file previously selected by `CSX_LOCAL_DLSSNR_RUNTIME_FILE`. Its embedded
+NVIDIA signature
+reports `HashMismatch`. Local staging still pins its exact SHA-256 for a
+reproducible archive, while runtime admission accepts other 310.8 builds and
+reports their hash as unlisted. The signed `E16B...FC8E` identity and alternate
+patched identity remain recognized for separately selected tests but are not
+staged by this build. Hash pinning and prior screening do not certify a binary
+as malware-free. Consult the license accompanying each NVIDIA binary.
 Do not publish or redistribute the generated AIO.
 
 The base bridge binds color, depth, motion vectors, and output only. The

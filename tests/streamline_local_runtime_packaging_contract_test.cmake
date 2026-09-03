@@ -152,7 +152,7 @@ foreach(_runtime_contract IN ITEMS
     "CSX_LOCAL_DLSS_RUNTIME_DIRECTORY"
     "CSX_LOCAL_DLSSNR_RUNTIME_FILE"
     "STREAMLINE_RUNTIME_PACKAGED_FILENAMES"
-    "csx_stage_pinned_streamline_runtime"
+    "csx_stage_streamline_runtime"
     "file(SHA256"
     "CMAKE_CONFIGURE_DEPENDS"
     "STREAMLINE_RUNTIME_MANIFEST_SHA256"
@@ -187,9 +187,11 @@ foreach(_stage_contract IN ITEMS
     endif()
 endforeach()
 
+file(SHA256 "${LOCAL_DLSSNR_FILE}" _selected_nr_hash)
+string(TOUPPER "${_selected_nr_hash}" _selected_nr_hash)
 set(_runtime_manifest
     "nvngx_dlss.dll=C85F971CE023C9F3492FC7455F0B01A24BA18EA39636407A846902C4360B0B7E"
-    "nvngx_dlssnr.dll=8270B350CD82DE5CE89806872CDD6B6A9249B80836B91BBEB3573470744CC206"
+    "nvngx_dlssnr.dll=${_selected_nr_hash}"
     "sl.common.dll=A4B2B5ACBE49FBC6D44DD432CAC19CD53218F698B2539DC7ED0FB268C72CFC8D"
     "sl.dlss.dll=1EB5FB3D6F01D340FE086D981CC2DE4F18AA6D05EE276E5CF28ECD54818DCC8B"
     "sl.interposer.dll=27B2190057994C0B287C2C5716953BF1586F6499AC12FBBB2092B9AAF8396570"
@@ -202,7 +204,11 @@ foreach(_manifest_entry IN LISTS _runtime_manifest)
     list(GET _manifest_fields 0 _runtime_name)
     list(GET _manifest_fields 1 _expected_hash)
 
-    foreach(_contract_value IN ITEMS "${_runtime_name}" "${_expected_hash}")
+    set(_runtime_policy_values "${_runtime_name}")
+    if(NOT _runtime_name STREQUAL "nvngx_dlssnr.dll")
+        list(APPEND _runtime_policy_values "${_expected_hash}")
+    endif()
+    foreach(_contract_value IN LISTS _runtime_policy_values)
         string(FIND "${_runtime_policy}" "${_contract_value}" _value_position)
         if(_value_position EQUAL -1)
             message(FATAL_ERROR
@@ -230,6 +236,23 @@ foreach(_manifest_entry IN LISTS _runtime_manifest)
             )
         endif()
     endforeach()
+endforeach()
+
+foreach(_selected_nr_staging_contract IN ITEMS
+    [[if(_filename STREQUAL "nvngx_dlssnr.dll")]]
+    [[set(_expected_hash "${_actual_hash}")]]
+    [["${_filename}|${_source}|${_expected_hash}"]]
+)
+    string(FIND
+        "${_runtime_policy}"
+        "${_selected_nr_staging_contract}"
+        _selected_nr_staging_contract_position
+    )
+    if(_selected_nr_staging_contract_position EQUAL -1)
+        message(FATAL_ERROR
+            "Selected NR runtime is not fingerprinted transactionally: ${_selected_nr_staging_contract}"
+        )
+    endif()
 endforeach()
 
 foreach(_unstaged_nr_hash IN ITEMS
@@ -271,7 +294,7 @@ foreach(_notice_contract IN ITEMS
     "DO NOT REDISTRIBUTE OR PUBLISH THIS BUILD"
     "8270B350CD82DE5CE89806872CDD6B6A9249B80836B91BBEB3573470744CC206"
     "Authenticode status HashMismatch"
-    "CSX log level does not affect this allowlist"
+    "Developer Mode and CSX/Streamline log levels do not affect"
     "malware-free"
 )
     string(FIND "${_internal_notice}" "${_notice_contract}" _notice_position)
@@ -337,6 +360,10 @@ endforeach()
 foreach(_obsolete_gate IN ITEMS
     "allowPatchedRuntime"
     "developer-mode opt-in"
+    "IsDeveloperMode"
+    "RuntimeStatus::TrustRejected"
+    "RuntimeFailureStage::Trust"
+    [[std::format("runtime SHA-256 {} is not allowlisted", hash_)]]
 )
     string(FIND
         "${_neural_runtime_header}\n${_neural_runtime_source}"
@@ -351,8 +378,8 @@ foreach(_obsolete_gate IN ITEMS
 endforeach()
 
 foreach(_documentation_contract IN ITEMS
-    "All three identities are accepted"
-    "at every CSX log level"
+    "is not an admission allowlist"
+    "Developer Mode and the Streamline log level"
     "does not use or require `sl.dlss_nr.dll`"
     "DriverStore alias `_nvngx.dll`"
     "Streamline 2.13"
@@ -362,7 +389,7 @@ foreach(_documentation_contract IN ITEMS
     "not a redistributable or release-ready integration"
     "Runtime staging is disabled by default"
     "CSX_STAGE_LOCAL_DLSS_RUNTIME=ON"
-    "admission relies on its exact pinned SHA-256"
+    "runtime admission accepts other 310.8 builds"
     "Do not publish or redistribute"
 )
     string(FIND
@@ -376,6 +403,41 @@ foreach(_documentation_contract IN ITEMS
         )
     endif()
 endforeach()
+
+foreach(_unrestricted_runtime_contract IN ITEMS
+    "RuntimeTrust::UnrestrictedVersionAccepted"
+    "unrestricted-version-accepted"
+    "loaded module identity differs from the file that was hashed"
+)
+    string(FIND
+        "${_neural_runtime_header}\n${_neural_runtime_source}"
+        "${_unrestricted_runtime_contract}"
+        _unrestricted_runtime_contract_position
+    )
+    if(_unrestricted_runtime_contract_position EQUAL -1)
+        message(FATAL_ERROR
+            "Unrestricted 310.8 runtime contract is missing: ${_unrestricted_runtime_contract}"
+        )
+    endif()
+endforeach()
+
+string(FIND
+    "${_neural_runtime_source}"
+    [[if (version->major() != 310 || version->minor() != 8)]]
+    _runtime_version_gate_position
+)
+string(FIND
+    "${_neural_runtime_source}"
+    [[if (hash_ == kSignedRuntimeSha256)]]
+    _runtime_identity_classification_position
+)
+if(_runtime_version_gate_position EQUAL -1 OR
+   _runtime_identity_classification_position EQUAL -1 OR
+   NOT _runtime_version_gate_position LESS _runtime_identity_classification_position)
+    message(FATAL_ERROR
+        "Known NR hashes must be classified only after the 310.8 version gate"
+    )
+endif()
 
 set(_stage_probe_root "${CMAKE_CURRENT_BINARY_DIR}/pinned-runtime-stage-probe")
 set(_stage_probe_source "${_stage_probe_root}/source/probe.dll")

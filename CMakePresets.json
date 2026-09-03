@@ -137,7 +137,7 @@
         },
         {
             "name": "Internal-DLSSNR-AIO",
-            "description": "Configure an internal DevBench AIO using hash-pinned local DLSS runtimes.",
+            "description": "Configure an internal DevBench AIO with pinned normal DLSS and a fingerprinted local NR runtime.",
             "inherits": "ALL",
             "binaryDir": "${sourceDir}/build/gnr",
             "cacheVariables": {

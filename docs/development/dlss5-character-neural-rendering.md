@@ -17,7 +17,7 @@ testable:
 
 | Concern                       | Owner                                                   | Contract                                                                                                                         |
 | ----------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| Capability and initialization | `NeuralRendering::Runtime` and `Renderer`               | Admit only the pinned private Feature 18 path and fail closed when resources or provider state are invalid.                      |
+| Capability and initialization | `NeuralRendering::Runtime` and `Renderer`               | Admit 310.8 Feature 18 runtimes independently of logging/developer mode, report identity, and fail closed on invalid resources.  |
 | Character classification      | the existing subsurface/lighting setup hook             | Classify actor-owned face, RGB-tint skin, and hair materials without treating generic skinned geometry as skin.                  |
 | Semantic mask                 | `CharacterRendering` and `DLSS5CharacterMaskCS.hlsl`    | Resolve synchronized category and depth provenance into a dedicated per-eye `R8_UNORM` control texture.                          |
 | Per-eye resources             | `CharacterRendering` and `Renderer` feature slots       | Keep mask, provider resources, history, and statistics separate for each eye and insertion route.                                |
@@ -297,6 +297,13 @@ interpretation. The implemented depth-view allowlist is
 `DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS`, `DXGI_FORMAT_R32_FLOAT`, and
 `DXGI_FORMAT_R16_UNORM`; any other view format fails closed.
 
+Core frozen/current visibility rejection is controlled independently from edge
+feathering. The default keeps rejection enabled. The diagnostic
+`Authored (Ignore Visibility Depth)` mode bypasses only that core comparison;
+it preserves authored categories, strengths, eligibility regions, and any
+separately enabled edge-feather policy. Per-eye telemetry reports the frozen
+stereo base/crop and current local depth dimensions used by the shader.
+
 Keeping category identity independent of its current strength prevents
 optional feathering from growing enabled skin into a disabled face or hair
 material. Optional edge feathering compares both authored visibility and
@@ -427,6 +434,7 @@ Neural Rendering controls. Its central defaults are:
 | Maximum regions per eye      | `4`          |
 | Rectangle hold               | `3 frames`   |
 | Compute ROI                  | Unavailable  |
+| Visibility depth test        | On           |
 | Depth-aware feather          | Off          |
 | Feather radius               | `1 input px` |
 | Relative depth threshold     | `0.002`      |
@@ -453,6 +461,9 @@ The in-game diagnostics and DevBench status should expose, per eye:
 -   merged rectangle count and rectangle coordinates
 -   rectangle pixel coverage and asynchronous nonzero-mask coverage, including
     the sampled frame, feature slot, and dimensions
+-   authored face, skin, and hair pixel counts before visibility rejection,
+    visible category counts, and the total rejected by frozen/current depth
+-   frozen stereo base/crop and current eye-local depth coordinates
 -   whether mask preparation succeeded and whether evaluation was required
 -   visual-mask mechanism and the exact compute-ROI unsupported reason
 -   synchronized category/depth-capture readiness, frame, attempts, successes,
@@ -463,12 +474,13 @@ The debug views are `Off`, `Character Mask`, `ROI Rectangles`, and
 `DLSS 5 Output`. “ROI Rectangles” means eligibility/measurement rectangles, not
 provider compute dispatches.
 
-Diagnostics also expose five mask-contract calibration modes: `Authored`,
-`Force Zero`, `Force One`, `Force Half`, and `Invert Authored`. They isolate how
-the pinned runtime responds to known control values; they are not image-quality
-presets. These tests are necessary because neither the `R8_UNORM` format nor
-its numeric meaning is declared by a public provider API. Normal use remains
-`Authored`.
+Diagnostics also expose six mask-contract modes: `Authored`, `Force Zero`,
+`Force One`, `Force Half`, `Invert Authored`, and
+`Authored (Ignore Visibility Depth)`. The forced modes isolate provider response
+to known control values; the last mode isolates category authoring from core
+depth rejection. They are not image-quality presets. These tests are necessary
+because neither the `R8_UNORM` format nor its numeric meaning is declared by a
+public provider API. Normal use remains `Authored`.
 
 Profiling distinguishes synchronized category/depth capture, mask generation,
 CPU rectangle setup, Feature 18 GPU evaluation,
@@ -486,9 +498,16 @@ composite. The submit float route already keeps its neural output separate and
 does not allocate or copy that non-float baseline lane. Frames with no
 eligible material observation are logical empty captures: they clear the
 per-eye masks and bypass both combined-stereo provenance copies and Feature 18.
-Nonzero-mask coverage is sampled once every 30 frames per feature slot;
-unsampled frames reuse the last explicitly attributed result and do not pay the
-counter atomics/readback cost.
+Authored-mask coverage is sampled every frame per feature slot so transitions
+to and from zero are observed after the bounded asynchronous readback latency.
+A zero sample matching the current settings, crop, dimensions, and eligibility
+region count bypasses Feature 18. Region coordinates are intentionally excluded
+from that compatibility key so normal head motion does not defeat the bypass;
+continuous sampling bounds recovery when mask contents change. Forced-mask
+calibration modes retain the 30-frame periodic cadence. Frame-keyed preparation
+history correlates delayed coverage and Feature 18 timing with the frame that
+produced them instead of the current CPU frame, including stereo-pair expansion
+when only one eye measured nonzero.
 
 ## Known selection limitations
 
@@ -527,8 +546,9 @@ depth snapshot, and copies both each nonempty observed frame. Logical empty
 frames skip both copies, although previously allocated snapshot resources
 remain resident until reset or resource recreation. The two copies share the
 `Upscaling::DLSS5CharacterCategoryCapture` profiling scope. Dedicated per-eye
-`R8_UNORM` provider masks and their small coverage buffers are separate slot
-resources. None of these costs is reduced by the current ROI rectangles.
+`R8_UNORM` provider masks and their small diagnostic counter buffers are
+separate slot resources. None of these costs is reduced by the current ROI
+rectangles.
 
 ## Failure behavior and validation boundary
 

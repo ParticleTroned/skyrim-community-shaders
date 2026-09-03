@@ -1,6 +1,6 @@
 option(
     CSX_STAGE_LOCAL_DLSS_RUNTIME
-    "Stage the hash-pinned internal DLSS 310.8 and Streamline 2.13 runtime"
+    "Stage pinned normal-DLSS files and one user-selected internal NR runtime"
     OFF
 )
 option(
@@ -19,7 +19,7 @@ set(
     CSX_LOCAL_DLSSNR_RUNTIME_FILE
     ""
     CACHE FILEPATH
-    "User-supplied patched Neural Rendering runtime; required when local staging is enabled"
+    "User-supplied 310.8 Neural Rendering runtime; required when local staging is enabled"
 )
 
 if(CSX_STAGE_LOCAL_DLSS_RUNTIME AND CSX_FETCH_OFFICIAL_STREAMLINE_RUNTIME)
@@ -92,16 +92,12 @@ else()
         "${CSX_LOCAL_DLSS_RUNTIME_DIRECTORY}"
     )
     set(STREAMLINE_RUNTIME_MODE_DESCRIPTION
-        "hash-pinned internal DLSS 310.8 and Streamline 2.13 runtime"
+        "pinned normal DLSS plus fingerprinted user-selected 310.8 NR runtime"
     )
 
     set(
         STREAMLINE_RUNTIME_SHA256_nvngx_dlss_dll
         "C85F971CE023C9F3492FC7455F0B01A24BA18EA39636407A846902C4360B0B7E"
-    )
-    set(
-        STREAMLINE_RUNTIME_SHA256_nvngx_dlssnr_dll
-        "8270B350CD82DE5CE89806872CDD6B6A9249B80836B91BBEB3573470744CC206"
     )
     set(
         STREAMLINE_RUNTIME_SHA256_sl_common_dll
@@ -147,13 +143,7 @@ set(
 )
 file(MAKE_DIRECTORY "${STREAMLINE_RUNTIME_DIRECTORY}")
 
-function(csx_stage_pinned_streamline_runtime _filename)
-    string(MAKE_C_IDENTIFIER "${_filename}" _hash_key)
-    set(_expected_hash "${STREAMLINE_RUNTIME_SHA256_${_hash_key}}")
-    if(_expected_hash STREQUAL "")
-        message(FATAL_ERROR "No SHA-256 pin is declared for ${_filename}")
-    endif()
-
+function(csx_stage_streamline_runtime _filename)
     if(_filename STREQUAL "nvngx_dlssnr.dll")
         set(_source "${CSX_LOCAL_DLSSNR_RUNTIME_FILE}")
     else()
@@ -166,7 +156,17 @@ function(csx_stage_pinned_streamline_runtime _filename)
 
     file(SHA256 "${_source}" _actual_hash)
     string(TOUPPER "${_actual_hash}" _actual_hash)
-    if(NOT _actual_hash STREQUAL _expected_hash)
+    if(_filename STREQUAL "nvngx_dlssnr.dll")
+        # The internal loader accepts experimental 310.8 NR builds. Fingerprint
+        # the selected file so the rest of this build remains transactional.
+        set(_expected_hash "${_actual_hash}")
+    else()
+        string(MAKE_C_IDENTIFIER "${_filename}" _hash_key)
+        set(_expected_hash "${STREAMLINE_RUNTIME_SHA256_${_hash_key}}")
+    endif()
+    if(_expected_hash STREQUAL "")
+        message(FATAL_ERROR "No SHA-256 pin is declared for ${_filename}")
+    elseif(NOT _actual_hash STREQUAL _expected_hash)
         message(
             FATAL_ERROR
             "Rejected ${_source}: expected SHA-256 ${_expected_hash}, got ${_actual_hash}"
@@ -199,7 +199,7 @@ set(STREAMLINE_RUNTIME_FILES "")
 set(STREAMLINE_RUNTIME_SOURCE_FILES "")
 set(STREAMLINE_RUNTIME_MANIFEST_ENTRIES "")
 foreach(_filename IN LISTS STREAMLINE_RUNTIME_PACKAGED_FILENAMES)
-    csx_stage_pinned_streamline_runtime("${_filename}")
+    csx_stage_streamline_runtime("${_filename}")
 endforeach()
 
 set(

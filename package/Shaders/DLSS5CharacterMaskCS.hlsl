@@ -9,7 +9,8 @@ cbuffer CharacterMaskCB : register(b0)
 	uint4 OutputAndSourceSize;  // output width/height, source eye width/height
 	uint4 SourceCrop;           // source eye base X, input min X/Y, input width
 	uint4 Options;              // input height, ROI count, feather radius, depth-aware feather
-	float4 FeatherOptions;      // feather depth, test mode, coverage sample, visibility depth
+	float4 FeatherOptions;      // feather depth, test mode, diagnostics sample, reserved
+	float4 VisibilityOptions;   // rejection threshold, visibility rejection enabled, reserved
 	float4 DepthLinearization;  // far, near, far-near, far*near
 	float4 Jitter;              // current low-resolution pixel jitter in xy
 	float4 CategoryStrengths;   // face, skin, hair, reserved
@@ -20,8 +21,17 @@ Texture2D<unorm float2> AuthoredTuple : register(t0);
 Texture2D<float> AuthoredDepth : register(t1);
 Texture2D<float> CurrentDepth : register(t2);
 RWTexture2D<unorm float> ControlMask : register(u0);
-RWByteAddressBuffer CoverageCounter : register(u1);
-groupshared uint GroupCoverage;
+RWByteAddressBuffer DiagnosticCounters : register(u1);
+groupshared uint GroupCounters[8];
+
+static const uint MaskPixels = 0u;
+static const uint AuthoredFacePixels = 1u;
+static const uint AuthoredSkinPixels = 2u;
+static const uint AuthoredHairPixels = 3u;
+static const uint VisibleFacePixels = 4u;
+static const uint VisibleSkinPixels = 5u;
+static const uint VisibleHairPixels = 6u;
+static const uint VisibilityRejectedPixels = 7u;
 
 bool IsInsideEligibilityRegion(float2 pixelCenter)
 {
@@ -86,8 +96,17 @@ bool IsAuthoredSurfaceVisible(int2 localSourcePixel, out float currentDepth)
 	currentDepth = LinearizeDepth(ReadCurrentDepth(localSourcePixel));
 	const float tolerance = max(
 		1.0,
-		max(abs(authoredDepth), abs(currentDepth)) * FeatherOptions.w);
-	return abs(authoredDepth - currentDepth) <= tolerance;
+		max(abs(authoredDepth), abs(currentDepth)) * VisibilityOptions.x);
+	return VisibilityOptions.y < 0.5 ||
+	       abs(authoredDepth - currentDepth) <= tolerance;
+}
+
+void CountCategory(uint category, uint firstCounter)
+{
+	if (category >= 1u && category <= 3u) {
+		uint ignored;
+		InterlockedAdd(GroupCounters[firstCounter + category - 1u], 1u, ignored);
+	}
 }
 
 [numthreads(8, 8, 1)] void main(
@@ -95,24 +114,36 @@ bool IsAuthoredSurfaceVisible(int2 localSourcePixel, out float currentDepth)
 	uint groupIndex : SV_GroupIndex) {
 	const bool measureCoverage = FeatherOptions.z > 0.5;
 	if (measureCoverage) {
-		if (groupIndex == 0)
-			GroupCoverage = 0;
+		if (groupIndex < 8u)
+			GroupCounters[groupIndex] = 0u;
 		GroupMemoryBarrierWithGroupSync();
 	}
 
 	const uint2 outputSize = OutputAndSourceSize.xy;
 	if (all(dispatchThreadId.xy < outputSize)) {
 		const float2 outputPixel = float2(dispatchThreadId.xy) + 0.5;
+		const float2 outputUv = outputPixel / float2(outputSize);
+		const float2 sourcePosition =
+			outputUv * float2(SourceCrop.w, Options.x) - 0.5 - Jitter.xy;
+		const int2 sourcePixel = int2(floor(sourcePosition + 0.5));
+		const uint centerCategory = ReadAuthoredCategory(sourcePixel);
+		if (measureCoverage)
+			CountCategory(centerCategory, AuthoredFacePixels);
+
 		float mask = 0.0;
 		if (IsInsideEligibilityRegion(outputPixel)) {
-			const float2 outputUv = outputPixel / float2(outputSize);
-			const float2 sourcePosition =
-				outputUv * float2(SourceCrop.w, Options.x) - 0.5 - Jitter.xy;
-			const int2 sourcePixel = int2(floor(sourcePosition + 0.5));
-			const uint centerCategory = ReadAuthoredCategory(sourcePixel);
 			float centerDepth = 0.0;
 			const bool centerVisible =
 				IsAuthoredSurfaceVisible(sourcePixel, centerDepth);
+			if (measureCoverage) {
+				if (centerVisible)
+					CountCategory(centerCategory, VisibleFacePixels);
+				else if (centerCategory != 0u) {
+					uint ignored;
+					InterlockedAdd(
+						GroupCounters[VisibilityRejectedPixels], 1u, ignored);
+				}
+			}
 			mask = centerVisible ? GetCategoryStrength(centerCategory) : 0.0;
 
 			if (centerVisible && Options.w != 0 && Options.z != 0 && mask < 1.0) {
@@ -161,15 +192,16 @@ bool IsAuthoredSurfaceVisible(int2 localSourcePixel, out float currentDepth)
 		ControlMask[dispatchThreadId.xy] = mask;
 		if (measureCoverage && mask > (0.5 / 255.0)) {
 			uint ignored;
-			InterlockedAdd(GroupCoverage, 1, ignored);
+			InterlockedAdd(GroupCounters[MaskPixels], 1u, ignored);
 		}
 	}
 
 	if (measureCoverage) {
 		GroupMemoryBarrierWithGroupSync();
-		if (groupIndex == 0 && GroupCoverage != 0) {
+		if (groupIndex < 8u && GroupCounters[groupIndex] != 0u) {
 			uint ignored;
-			CoverageCounter.InterlockedAdd(0, GroupCoverage, ignored);
+			DiagnosticCounters.InterlockedAdd(
+				groupIndex * 4u, GroupCounters[groupIndex], ignored);
 		}
 	}
 }

@@ -20,7 +20,6 @@ namespace NeuralRendering
 		NotProbed,
 		NotFound,
 		HashFailed,
-		TrustRejected,
 		VersionRejected,
 		LoadFailed,
 		MissingExport,
@@ -41,8 +40,9 @@ namespace NeuralRendering
 	enum class RuntimeTrust
 	{
 		Unknown,
-		SignedAllowlisted,
-		PatchedAllowlisted
+		SignedRecognized,
+		PatchedRecognized,
+		UnrestrictedVersionAccepted
 	};
 
 	enum class RuntimeFailureStage
@@ -50,7 +50,6 @@ namespace NeuralRendering
 		None,
 		Discovery,
 		Hash,
-		Trust,
 		Version,
 		Load,
 		Identity,
@@ -68,7 +67,7 @@ namespace NeuralRendering
 	enum class ParameterCoreTrust
 	{
 		Unknown,
-		RuntimeHashAllowlisted,
+		RuntimeIdentityMatched,
 		AuthenticodeVerified
 	};
 

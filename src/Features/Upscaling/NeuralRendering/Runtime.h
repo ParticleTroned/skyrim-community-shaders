@@ -174,6 +174,21 @@ namespace NeuralRendering
 				bool a_featureUpscaling) const;
 		};
 
+		struct RuntimeExports
+		{
+			void* initialize = nullptr;
+			void* createFeature = nullptr;
+			void* evaluateFeature = nullptr;
+			void* releaseFeature = nullptr;
+			void* shutdown = nullptr;
+		};
+
+		struct ParameterCoreExports
+		{
+			void* allocateParameters = nullptr;
+			void* destroyParameters = nullptr;
+		};
+
 		Runtime() = default;
 
 		bool ProbeLocked(const std::filesystem::path& a_explicitPath);
@@ -198,6 +213,8 @@ namespace NeuralRendering
 		void* coreFile_ = nullptr;
 		void* device_ = nullptr;
 		void* parameters_ = nullptr;
+		RuntimeExports runtimeExports_{};
+		ParameterCoreExports parameterCoreExports_{};
 		std::array<void*, kFeatureSlotCount> featureHandles_{};
 		std::array<FeatureConfiguration, kFeatureSlotCount> featureConfigurations_{};
 		RuntimeStatus status_ = RuntimeStatus::NotProbed;

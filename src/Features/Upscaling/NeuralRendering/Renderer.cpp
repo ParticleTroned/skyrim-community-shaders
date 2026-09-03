@@ -962,6 +962,7 @@ namespace NeuralRendering
 		snapshot_.controlMaskHeight = a_args.controlMaskHeight;
 		snapshot_.featureUpscaling = a_args.featureUpscaling;
 		snapshot_.controlMaskPresent = a_args.controlMask != nullptr;
+		snapshot_.useAutoMask = a_args.tuning.useAutoMask;
 		snapshot_.outputCommitted = false;
 	}
 

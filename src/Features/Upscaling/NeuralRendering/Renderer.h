@@ -161,6 +161,7 @@ namespace NeuralRendering
 		bool quarantined = false;
 		bool outputCommitted = false;
 		bool controlMaskPresent = false;
+		bool useAutoMask = true;
 		RendererCounters counters{};
 		RendererPerformanceTelemetry performance{};
 	};

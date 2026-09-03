@@ -822,6 +822,7 @@ namespace
 			NeuralRendering::CharacterRendering::Instance().GetSnapshot();
 		const auto rendererSnapshot =
 			NeuralRendering::Renderer::Instance().GetSnapshot();
+		const auto routeSnapshots = a_upscaling.GetNeuralStereoRouteSnapshot();
 		const auto debugView = NeuralRendering::ClampCharacterDebugView(
 			settings.neuralCharacterDebugView);
 		const auto maskTestMode = NeuralRendering::ClampCharacterMaskTestMode(
@@ -829,6 +830,9 @@ namespace
 
 		json eyes = json::array();
 		std::uint32_t currentPreparedCharacterSlotMask = 0;
+		std::uint32_t currentEvaluationRequiredCharacterSlotMask = 0;
+		std::uint32_t currentSuccessfulCharacterSlotMask = 0;
+		std::uint32_t currentAbortedCharacterSlotMask = 0;
 		const std::uint32_t observedFrame =
 			globals::state ? globals::state->frameCount : 0u;
 		for (std::size_t eyeIndex = 0; eyeIndex < snapshot.eyes.size(); ++eyeIndex) {
@@ -874,6 +878,7 @@ namespace
 				{ "eligibleCharacterActors", eye.visibleCharacterRegions },
 				{ "droppedCharacterActors", eye.droppedCharacterRegions },
 				{ "mergedEligibilityRegions", eye.mergedRegions },
+				{ "fullEyeEligibilityFallback", eye.fullEyeEligibilityFallback },
 				{ "eligibilityPixels", eye.roiPixels },
 				{ "eligibilityCoveragePercent", eye.roiCoveragePercent },
 				{ "maskPixels", eye.maskCoverageReady ? json(eye.maskPixels) : json(nullptr) },
@@ -886,7 +891,8 @@ namespace
 				{ "maskCoverageMatchesEvaluation", coverageMatchesPreparation },
 				{ "maskCoverageReady", eye.maskCoverageReady },
 				{ "maskCoverageMatchesCurrentPolicy", eye.maskCoverageMatchesCurrentPolicy },
-				{ "categoryPixelCountSpace", "feature18_evaluation_pixels_before_visibility" },
+				{ "authoredCategoryPixelCountSpace", "active_eye_input_pixels_before_visibility" },
+				{ "visibleCategoryPixelCountSpace", "feature18_evaluation_pixels_after_visibility_inside_eligibility" },
 				{ "authoredCategoryPixels", {
 												{ "face", eye.maskCoverageReady ? json(eye.authoredCategoryPixels[0]) : json(nullptr) },
 												{ "skin", eye.maskCoverageReady ? json(eye.authoredCategoryPixels[1]) : json(nullptr) },
@@ -898,7 +904,13 @@ namespace
 											   { "hair", eye.maskCoverageReady ? json(eye.visibleCategoryPixels[2]) : json(nullptr) },
 										   } },
 				{ "visibilityRejectedPixels", eye.maskCoverageReady ? json(eye.visibilityRejectedPixels) : json(nullptr) },
+				{ "zeroCoverageBypassRequested", eye.zeroCoverageBypassRequested },
+				{ "zeroCoverageBypassResolved", eye.zeroCoverageBypassResolved },
 				{ "zeroCoverageBypassedFeature18", eye.zeroCoverageBypassed },
+				{ "feature18EvaluationSucceeded", eye.feature18EvaluationSucceeded },
+				{ "zeroCoverageCpuProven", eye.zeroCoverageCpuProven },
+				{ "zeroCoverageSampleReused", eye.zeroCoverageSampleReused },
+				{ "feature18Disposition", NeuralRendering::GetCharacterFeature18DispositionName(eye.feature18Disposition) },
 				{ "depthCoordinates", {
 										  { "valid", eye.depthCoordinatesValid },
 										  { "authoredStereoWidth", eye.authoredStereoWidth },
@@ -930,6 +942,21 @@ namespace
 				{ "eligibilityRegions", std::move(regions) },
 			});
 		}
+		const auto currentPreparation = std::ranges::find_if(
+			snapshot.preparedFrames, [&](const auto& a_prepared) {
+				return a_prepared.frame == observedFrame;
+			});
+		const bool currentPreparationFound =
+			currentPreparation != snapshot.preparedFrames.end();
+		if (currentPreparationFound) {
+			currentPreparedCharacterSlotMask = currentPreparation->preparedSlotMask;
+			currentEvaluationRequiredCharacterSlotMask =
+				currentPreparation->evaluationRequiredSlotMask;
+			currentSuccessfulCharacterSlotMask =
+				currentPreparation->successfulSlotMask;
+			currentAbortedCharacterSlotMask =
+				currentPreparation->abortedSlotMask;
+		}
 		const std::uint32_t lastFeatureSlotMask =
 			rendererSnapshot.performance.lastFeatureSlotMask;
 		const auto attributedPreparation = std::ranges::find_if(
@@ -946,6 +973,30 @@ namespace
 		const std::uint32_t evaluationRequiredCharacterSlotMask =
 			attributedPreparationFound ?
 				attributedPreparation->evaluationRequiredSlotMask :
+				0u;
+		const std::uint32_t bypassRequestedCharacterSlotMask =
+			attributedPreparationFound ?
+				attributedPreparation->bypassRequestedSlotMask :
+				0u;
+		const std::uint32_t resolutionRecordedCharacterSlotMask =
+			attributedPreparationFound ?
+				attributedPreparation->resolutionRecordedSlotMask :
+				0u;
+		const std::uint32_t evaluatedCharacterSlotMask =
+			attributedPreparationFound ?
+				attributedPreparation->evaluatedSlotMask :
+				0u;
+		const std::uint32_t successfulCharacterSlotMask =
+			attributedPreparationFound ?
+				attributedPreparation->successfulSlotMask :
+				0u;
+		const std::uint32_t bypassedCharacterSlotMask =
+			attributedPreparationFound ?
+				attributedPreparation->bypassedSlotMask :
+				0u;
+		const std::uint32_t abortedCharacterSlotMask =
+			attributedPreparationFound ?
+				attributedPreparation->abortedSlotMask :
 				0u;
 		auto expandStereoEvaluationMask = [](
 											  std::uint32_t a_preparedMask,
@@ -964,6 +1015,10 @@ namespace
 			expandStereoEvaluationMask(
 				preparedCharacterSlotMask,
 				evaluationRequiredCharacterSlotMask);
+		const std::uint32_t currentExpectedFeatureSlotMask =
+			expandStereoEvaluationMask(
+				currentPreparedCharacterSlotMask,
+				currentEvaluationRequiredCharacterSlotMask);
 		const std::uint32_t missingPreparedFeatureSlots =
 			preparedCharacterSlotMask & ~lastFeatureSlotMask;
 		const std::uint32_t missingExpectedFeatureSlots =
@@ -985,10 +1040,39 @@ namespace
 			settings.neuralRenderingEnabled &&
 			settings.neuralCharacterRenderingEnabled &&
 			settings.neuralCharacterVisualIsolationEnabled;
+		const bool mainCenterCommitForcedStaged =
+			visualIsolationConfigured &&
+			NeuralRendering::ClampInsertionPoint(
+				settings.neuralRenderingInsertionPoint) ==
+				NeuralRendering::InsertionPoint::UpscaledCenter;
+		auto routeCommittedForCurrentFrame = [observedFrame](const auto& a_route) {
+			return a_route.valid && a_route.frame == observedFrame &&
+			       a_route.pairComplete && a_route.appliedEyeMask == 0b11u &&
+			       a_route.committedEyeMask == 0b11u &&
+			       a_route.disposition ==
+			           Upscaling::NeuralStereoPairDisposition::NeuralPair;
+		};
+		const bool currentMainRouteExpected =
+			(currentExpectedFeatureSlotMask & 0b0011u) == 0b0011u;
+		const bool currentSubmitRouteExpected =
+			(currentExpectedFeatureSlotMask & 0b1100u) == 0b1100u;
+		const bool currentMainRouteCommitted =
+			routeCommittedForCurrentFrame(routeSnapshots[0]);
+		const bool currentSubmitRouteCommitted =
+			routeCommittedForCurrentFrame(routeSnapshots[1]);
+		const bool visualIsolationRouteCommitted =
+			(currentMainRouteExpected || currentSubmitRouteExpected) &&
+			(!currentMainRouteExpected || currentMainRouteCommitted) &&
+			(!currentSubmitRouteExpected || currentSubmitRouteCommitted);
 		const bool visualIsolationEffective =
-			visualIsolationConfigured && featureTimingIsStereoPair &&
-			featureTimingMatchesPreparedMask &&
-			lastFeatureSlotMask == expectedFeatureSlotMask;
+			visualIsolationConfigured && currentPreparationFound &&
+			currentExpectedFeatureSlotMask != 0u &&
+			(currentSuccessfulCharacterSlotMask &
+				currentExpectedFeatureSlotMask) ==
+				currentExpectedFeatureSlotMask &&
+			(currentAbortedCharacterSlotMask &
+				currentExpectedFeatureSlotMask) == 0u &&
+			visualIsolationRouteCommitted;
 
 		return {
 			{ "settings", {
@@ -1018,7 +1102,7 @@ namespace
 								{ "visualMasking", {
 													   { "implemented", snapshot.visualMaskImplemented },
 													   { "providerValidated", snapshot.visualMaskProviderValidated },
-													   { "status", "experimental_private_contract" },
+													   { "status", "csx_output_composite" },
 													   { "publicProductSemanticsDescribed", true },
 													   { "exactBindingContractPublished", false },
 													   { "mechanism", snapshot.visualMaskMechanism },
@@ -1032,18 +1116,32 @@ namespace
 																		   { "experimental", true },
 																		   { "providerDeclared", false },
 																	   } },
-													   { "scope", "per_eye_evaluation_image" },
+													   { "scope", "per_eye_output_composite" },
+													   { "feature18UseAutoMask", rendererSnapshot.useAutoMask },
+													   { "feature18ControlMaskPresent", rendererSnapshot.controlMaskPresent },
+													   { "feature18RequestFrame", rendererSnapshot.frameId },
+													   { "feature18InvocationMatchesEvidenceFrame", rendererSnapshot.frameId == observedFrame },
 												   } },
 								{ "visualIsolation", {
 														 { "requested", settings.neuralCharacterVisualIsolationEnabled },
 														 { "configured", visualIsolationConfigured },
 														 { "active", visualIsolationEffective },
-														 { "guarantee", "provider_output_isolated_to_nonzero_mask_support" },
+														 { "evidenceFrame", observedFrame },
+														 { "expectedFeatureSlotMask", currentExpectedFeatureSlotMask },
+														 { "successfulFeatureSlotMask", currentSuccessfulCharacterSlotMask },
+														 { "routeCommitted", visualIsolationRouteCommitted },
+														 { "mainRouteExpected", currentMainRouteExpected },
+														 { "mainRouteCommitted", currentMainRouteCommitted },
+														 { "submitRouteExpected", currentSubmitRouteExpected },
+														 { "submitRouteCommitted", currentSubmitRouteCommitted },
+														 { "guarantee", "feature18_output_composited_only_on_csx_mask_support" },
 														 { "finalVisibilityClassificationGuaranteed", false },
-														 { "upscaledCenterCommitPolicy", "configured_commit_lane_preserved" },
-														 { "mainNonFloatDirectCommitBaseline", "one_normal_dlss_center_copy" },
+														 { "requestedOutputCommit", settings.neuralRenderingDirectCommit ? "direct" : "staged" },
+														 { "effectiveUpscaledCenterOutputCommit", mainCenterCommitForcedStaged ? "staged" : (settings.neuralRenderingDirectCommit ? "direct" : "staged") },
+														 { "mainCenterCommitForcedStaged", mainCenterCommitForcedStaged },
+														 { "mainCenterBaseline", "existing_normal_dlss_center" },
 														 { "submitFloatBaseline", "existing_normal_dlss_center" },
-														 { "disabledPurpose", "provider_control_mask_only_calibration" },
+														 { "disabledPurpose", "normal_full_center_feature18_control" },
 														 { "emptyStereoPairPolicy", "bypass_feature18" },
 													 } },
 								{ "computeRoi", {
@@ -1097,24 +1195,35 @@ namespace
 							 { "categoryCaptureSuccesses", snapshot.categoryCaptureSuccesses },
 							 { "categoryCaptureFailures", snapshot.categoryCaptureFailures },
 							 { "categoryCaptureEmptyBypasses", snapshot.categoryCaptureEmptyBypasses },
+							 { "categoryCaptureReuses", snapshot.categoryCaptureReuses },
 							 { "categoryCaptureFrame", snapshot.categoryCaptureReady ? json(snapshot.categoryCaptureFrame) : json(nullptr) },
 							 { "categoryCaptureReady", snapshot.categoryCaptureReady },
 							 { "categoryCaptureEmpty", snapshot.categoryCaptureEmpty },
-							 { "authoredMaskCoverageSampleIntervalFrames", 1 },
+							 { "authoredMaskCoverageSampleIntervalFrames", NeuralRendering::CharacterPolicy::kCoverageSampleIntervalFrames },
 							 { "forcedMaskCoverageSampleIntervalFrames", NeuralRendering::CharacterPolicy::kCoverageSampleIntervalFrames },
+							 { "zeroCoverageReuseFrames", NeuralRendering::CharacterPolicy::kZeroCoverageReuseFrames },
 							 { "preparationAttempts", snapshot.preparationAttempts },
 							 { "preparationSuccesses", snapshot.preparationSuccesses },
 							 { "preparationFailures", snapshot.preparationFailures },
 							 { "readbackDrops", snapshot.readbackDrops },
+							 { "provenEmptyFeatureBypassRequests", snapshot.provenEmptyFeatureBypassRequests },
+							 { "measuredZeroCoverageBypassRequests", snapshot.measuredZeroCoverageBypassRequests },
+							 { "provenEmptyFeatureBypasses", snapshot.provenEmptyFeatureBypasses },
 							 { "measuredZeroCoverageBypasses", snapshot.measuredZeroCoverageBypasses },
 							 { "currentPreparedCharacterSlotMask", currentPreparedCharacterSlotMask },
+							 { "currentPreparationFound", currentPreparationFound },
+							 { "currentBypassRequestedSlotMask", currentPreparationFound ? currentPreparation->bypassRequestedSlotMask : 0u },
+							 { "currentResolutionRecordedSlotMask", currentPreparationFound ? currentPreparation->resolutionRecordedSlotMask : 0u },
+							 { "currentEvaluatedSlotMask", currentPreparationFound ? currentPreparation->evaluatedSlotMask : 0u },
+							 { "currentSuccessfulSlotMask", currentPreparationFound ? currentPreparation->successfulSlotMask : 0u },
+							 { "currentBypassedSlotMask", currentPreparationFound ? currentPreparation->bypassedSlotMask : 0u },
+							 { "currentAbortedSlotMask", currentPreparationFound ? currentPreparation->abortedSlotMask : 0u },
 							 { "eyes", std::move(eyes) },
 						 } },
 			{ "profiling", {
 							   { "categoryCapture", ProfileTimerJson("Upscaling::DLSS5CharacterCategoryCapture") },
 							   { "maskGeneration", ProfileTimerJson("Upscaling::DLSS5CharacterMask") },
 							   { "roiSetup", ProfileTimerJson("Upscaling::DLSS5CharacterRoiSetup") },
-							   { "baselineCopy", ProfileTimerJson("Upscaling::DLSS5CharacterBaselineCopy") },
 							   { "dlss5Evaluation", {
 														{ "perEye", ProfileTimerJson("Upscaling::DLSSNeuralRendering") },
 														{ "batchedStereo", ProfileTimerJson("Upscaling::DLSSNeuralRenderingStereo") },
@@ -1130,6 +1239,12 @@ namespace
 															   { "insertionPoint", NeuralRendering::GetInsertionPointName(rendererSnapshot.performance.lastInsertionPoint) },
 															   { "preparedCharacterSlotMask", preparedCharacterSlotMask },
 															   { "evaluationRequiredCharacterSlotMask", evaluationRequiredCharacterSlotMask },
+															   { "bypassRequestedCharacterSlotMask", bypassRequestedCharacterSlotMask },
+															   { "resolutionRecordedCharacterSlotMask", resolutionRecordedCharacterSlotMask },
+															   { "evaluatedCharacterSlotMask", evaluatedCharacterSlotMask },
+															   { "successfulCharacterSlotMask", successfulCharacterSlotMask },
+															   { "bypassedCharacterSlotMask", bypassedCharacterSlotMask },
+															   { "abortedCharacterSlotMask", abortedCharacterSlotMask },
 															   { "expectedFeatureSlotMask", expectedFeatureSlotMask },
 															   { "preparedFrameFound", attributedPreparationFound },
 															   { "missingPreparedFeatureSlotMask", missingPreparedFeatureSlots },
@@ -1377,6 +1492,7 @@ namespace
 							  { "quarantined", snapshot.quarantined },
 							  { "outputCommitted", snapshot.outputCommitted },
 							  { "controlMaskPresent", snapshot.controlMaskPresent },
+							  { "useAutoMask", snapshot.useAutoMask },
 						  } },
 			{ "dimensions", {
 								{ "color", { { "width", snapshot.colorWidth }, { "height", snapshot.colorHeight } } },
@@ -3543,13 +3659,12 @@ namespace
 				if (request.HasImageTuningOverrides())
 					requestedSettings.neuralRenderingPreset = 0;
 
-				const bool requiredAutoMask =
-					!requestedSettings.neuralCharacterRenderingEnabled;
+				const bool requiredAutoMask = true;
 				if (request.useAutoMask &&
 					*request.useAutoMask != requiredAutoMask) {
 					return json{
-						{ "error", "useAutoMask conflicts with the requested character-mask mode" },
-						{ "errorCode", "nr_control_mask_mode_conflict" },
+						{ "error", "Feature 18 automatic masking is required; character isolation is applied by the CSX output composite" },
+						{ "errorCode", "nr_automatic_mask_required" },
 						{ "action", "nr_configure" },
 						{ "field", "useAutoMask" },
 						{ "requiredValue", requiredAutoMask },
@@ -4016,7 +4131,7 @@ namespace VRRenderScaleDevBenchBridge
 
 		static constexpr const char* descriptor =
 			R"({
-  "description":"Control and inspect Community Shaders VR render-scale stress iterations, DLSS Neural Rendering, character masking, and foveated-center tuning. nr_status returns the API-v9 NR runtime, routes, temporal admission, GPU telemetry, and frame-attributed per-eye character diagnostics. NR runtime admission is independent of Developer Mode and Streamline logging: any 310.8 runtime with the required exports and stable loaded-image identity is accepted, while SHA-256 is informational. Character diagnostics count authored face, skin, and hair pixels before visibility rejection, report visible/rejected pixels and exact frozen/current depth coordinates, and retain frame-keyed preparation history for asynchronous Feature 18 attribution. Expected timing masks expand a one-eye nonempty result to both slots when the stereo evaluator must process the complete pair. Authored masks with measured zero coverage bypass Feature 18 while GPU sampling continues. The authored_without_visibility_depth mode bypasses only core frozen/current visibility rejection; characterVisibilityDepthTest controls that rejection independently of depth-aware edge feathering. The R8_UNORM 0..1 mask representation is an experimental implementation contract, not a provider-declared format or value semantic. Multi/sparse compute ROI is unsupported. ROI rectangles constrain visual masking, not inference dimensions. characterVisualIsolationEnabled=true isolates provider output to the mask's nonzero support without applying category strength twice. Upscaled Center preserves the configured commit lane. The main/non-float Direct route retains one normal-DLSS center copy as its composite baseline; the submit float route already keeps normal DLSS separate. nr_configure strictly accepts one or more NR or character controls through the in-game reset/history contract; an empty, unknown, invalid, conflicting, or unchanged request is rejected. Debug-view-only changes are applied without a history reset. nr_cycle_modes preserves the four-lane stereo implementation cycle. foveation_configure atomically applies one or more validated foveation controls on the main thread. foveation_cycle selects or advances one documented foveation axis. Existing render-scale mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.",
+  "description":"Control and inspect Community Shaders VR render-scale stress iterations, DLSS Neural Rendering, character masking, and foveated-center tuning. nr_status returns the API-v9 NR runtime, routes, temporal admission, GPU telemetry, and frame-attributed per-eye character diagnostics. NR runtime admission is independent of Developer Mode and Streamline logging: any 310.8 runtime with the required exports and stable loaded-image identity is accepted, while SHA-256 is informational. Character diagnostics count authored face, skin, and hair pixels across the active low-resolution eye input, report visible/rejected evaluation pixels and exact frozen/current depth coordinates, and retain frame-keyed preparation history for asynchronous Feature 18 attribution. Same-frame category/depth capture is idempotent. Feature 18 bypasses same-frame CPU-proven empty masks and bounded fresh raw-authored GPU-zero samples whose policy, layout, and eligible actor set still match. Coverage measurement runs only on policy changes or a fixed cadence. Feature 18 always uses its working automatic-mask invocation; characterVisualIsolationEnabled=true composites that output over normal DLSS with CSX's per-eye R8_UNORM 0..1 selection mask. The private provider ControlMask ABI is not used. Multi/sparse compute ROI is unsupported, and eligibility rectangles restrict only the CSX composite rather than inference dimensions. Character isolation forces the Upscaled Center route to staged output so normal DLSS remains available without an extra baseline copy; final-LDR and submit routes already preserve a separate baseline. nr_configure strictly accepts one or more NR or character controls through the in-game reset/history contract; useAutoMask=false is rejected. Debug-view-only changes are applied without a history reset. nr_cycle_modes preserves the four-lane stereo implementation cycle. foveation_configure atomically applies validated foveation controls on the main thread. Existing render-scale mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.",
   "inputSchema":{
     "type":"object",
     "properties":{

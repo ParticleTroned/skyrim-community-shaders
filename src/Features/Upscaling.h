@@ -2388,14 +2388,13 @@ public:
 		ID3D11ShaderResourceView* baseline = nullptr;
 		Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> mask;
 	};
-	/** Resolves the immutable Direct/Staged character-isolation inputs for one eye. */
+	/** Resolves immutable staged character-isolation inputs for one eye. */
 	bool ResolveCharacterCompositeInputs(
 		uint32_t a_eyeIndex,
 		Streamline::DLSSViewportRole a_viewportRole,
 		uint32_t a_frame,
 		uint32_t a_width,
 		uint32_t a_height,
-		bool a_directCommit,
 		ID3D11ShaderResourceView* a_centerOutput,
 		CharacterCompositeInputs& a_result) noexcept;
 	/** Resolves submit-float character isolation without requiring non-float staging. */
@@ -2406,7 +2405,6 @@ public:
 		uint32_t a_height,
 		ID3D11ShaderResourceView* a_baseline,
 		CharacterCompositeInputs& a_result) noexcept;
-	bool PreserveCharacterDirectCommitBaselines(bool a_directCommit) noexcept;
 	bool DispatchFoveatedVendorCenterStereo(UpscaleMethod a_upscaleMethod, const std::array<FoveatedEyeDispatchParams, 2>& params, bool a_neuralRouteAllowed, bool& neuralPairApplied, std::array<NeuralCenterDispatchResult, 2>* neuralResults = nullptr) noexcept;
 	struct FinalLdrNeuralEyeTarget
 	{

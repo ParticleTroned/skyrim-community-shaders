@@ -145,7 +145,7 @@ namespace UpscalingDLSS
 		Matrix4x4 cropClipToFull = Matrix4x4::Identity();
 	};
 
-	/** Builds the exact full-clip/cropped-clip basis change from the output rect. */
+	/** Builds the exact full-clip/cropped-clip basis change from the input rect. */
 	[[nodiscard]] constexpr ClipCropAffine BuildClipCropAffine(
 		const ViewportCrop& a_crop) noexcept
 	{
@@ -153,17 +153,17 @@ namespace UpscalingDLSS
 		if (!a_crop.IsValid())
 			return result;
 
-		const float fullWidth = static_cast<float>(a_crop.fullOutput.width);
-		const float fullHeight = static_cast<float>(a_crop.fullOutput.height);
-		result.scaleX = static_cast<float>(a_crop.output.Width()) / fullWidth;
-		result.scaleY = static_cast<float>(a_crop.output.Height()) / fullHeight;
+		const float fullWidth = static_cast<float>(a_crop.fullInput.width);
+		const float fullHeight = static_cast<float>(a_crop.fullInput.height);
+		result.scaleX = static_cast<float>(a_crop.input.Width()) / fullWidth;
+		result.scaleY = static_cast<float>(a_crop.input.Height()) / fullHeight;
 		result.centerX =
-			(static_cast<float>(a_crop.output.left) + static_cast<float>(a_crop.output.right)) /
+			(static_cast<float>(a_crop.input.left) + static_cast<float>(a_crop.input.right)) /
 				fullWidth -
 			1.0f;
 		result.centerY =
 			1.0f -
-			(static_cast<float>(a_crop.output.top) + static_cast<float>(a_crop.output.bottom)) /
+			(static_cast<float>(a_crop.input.top) + static_cast<float>(a_crop.input.bottom)) /
 				fullHeight;
 
 		result.fullClipToCrop = Matrix4x4::Identity();

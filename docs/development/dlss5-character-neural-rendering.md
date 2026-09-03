@@ -24,7 +24,7 @@ testable:
 | Feature 18 evaluation         | `Renderer` and `Runtime`                                | Bind color, depth, motion vectors, output, and the optional private control-mask contract as one stereo transaction.             |
 | Compute ROI policy            | `CharacterRendering`                                    | Build measured, stabilized per-eye character rectangles, but do not claim or dispatch sparse inference without an evidenced API. |
 | Composite and output          | Gogh route integration and `FoveatedCenterBlendCS.hlsl` | Select untouched DLSS outside the mask and Neural Rendering inside it before the existing feathered center composite.            |
-| UI and settings               | Upscaling settings UI                                   | Centralize category, strength, mask-calibration, debug, and experimental ROI controls.                                           |
+| UI and settings               | Upscaling settings UI                                   | Centralize category, strength, eligibility, mask-calibration, and debug controls.                                                |
 | Diagnostics and profiling     | DevBench bridge and CSX GPU profiler                    | Report per-eye coverage/regions/evaluation dimensions and separate mask, evaluation, baseline-copy, and composite costs.         |
 
 The architectural boundary is intentional: a successful private provider mask
@@ -140,9 +140,9 @@ found. Multiple character regions would have to be collapsed into one bounding
 rectangle or evaluated in multiple calls; neither choice is proven cheaper.
 
 The branch therefore reports multi/sparse character compute ROI as unsupported
-and does not enable the private single-subrect experiment. `Auto` and `Disabled`
-are policy/diagnostic states only; `Auto` resolves to the same normal-evaluation
-masked path. The UI must not offer a functional `Enabled` state until a bounded
+and does not enable the private single-subrect experiment. There is no mutable
+ROI mode: the UI reports masked full-center evaluation as the only implemented
+path. A functional `Enabled` state must not be added until a bounded
 implementation is timed and validated against the pinned ABI.
 
 The per-eye actor rectangles in this experiment bound and stabilize visual-mask
@@ -234,19 +234,19 @@ Repository searches covered `src`, `package/Shaders`, and the feature shader
 trees. CSX has several things called masks, but none is already a persistent,
 per-eye NPC face/skin/hair identity surface:
 
-| Concern inspected     | Existing mechanism and evidence                                                                                                                                                                                                                                                                                                                                    | Reuse decision                                                                                                                             |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Deferred masks        | `src/Deferred.cpp` binds `MASKS` and `MASKS2` as lighting MRTs. `package/Shaders/Lighting.hlsl` writes SSS amount/human class/ambient data to `MASKS` and inverse vertex AO plus opacity to `MASKS2`.                                                                                                                                                              | Reuse the existing draw-time MRT path. Add category provenance to otherwise-unused VR `MASKS2.yz`; do not add a second geometry traversal. |
-| Wetness               | `package/Shaders/Lighting.hlsl` includes either `features/Wetterness/Shaders/Wetterness/WetternessLighting.hlsli` or `features/Wetness Effects/Shaders/WetnessEffects/WetnessEffects.hlsli` and derives rain, shore, puddle, and character-wetness weights in the material lighting pass. Its precipitation-occlusion input describes shelter, not actor identity. | No reusable character mask exists. Keep wetness data independent.                                                                          |
-| Contact shadows       | `features/Light Limit Fix/Shaders/LightLimitFix/ClusterCullingCS.hlsl` builds light-index lists and `features/Light Limit Fix/Shaders/LightLimitFix/LightLimitFix.hlsli::ContactShadows` traces the scene depth texture.                                                                                                                                           | Light eligibility and screen-depth rays cannot identify face, skin, or hair pixels.                                                        |
-| Subsurface scattering | `package/Shaders/Lighting.hlsl` writes SSS strength and human class to `MASKS.xy`; `src/Features/SubsurfaceScattering.cpp::DrawSSS` consumes that G-buffer. `SubsurfaceScattering::Hooks::BSLightingShader_SetupGeometry` already sees the lighting property, material, geometry, and actor.                                                                       | Reuse the setup hook for classification. Do not reinterpret the coarser SSS mask as face/skin/hair identity.                               |
-| Complex grass         | `package/Shaders/RunGrass.hlsl` identifies complex grass from authored texture data and shades it in the grass pass. It writes category zero to the extended `MASKS2` tuple.                                                                                                                                                                                       | This is a material heuristic, not an actor mask; it is explicitly kept out of character selection.                                         |
-| Skylighting           | `src/Features/Skylighting.cpp` and `src/Features/Skylighting.h` own a precipitation-style depth occlusion texture plus 3D probe and accumulation textures (`texOcclusion`, `texProbeArray`, `texAccumFramesArray`).                                                                                                                                                | The light-probe occlusion domain is not a stereo screen-space material-ID domain.                                                          |
-| Particle lights       | `features/Light Limit Fix/Shaders/LightLimitFix/Common.hlsli` defines `LightFlags::Particle`, and `features/Light Limit Fix/Shaders/LightLimitFix/ClusterCullingCS.hlsl` consumes it while building light/contact-shadow lists.                                                                                                                                    | These are light records, not geometry ownership or screen-space character coverage.                                                        |
-| Foveation             | `package/Shaders/Common/FoveatedMask.hlsli` computes an analytic per-eye center distance and feather weight; `features/Upscaling/Shaders/Upscaling/FoveatedCenterBlendCS.hlsl` consumes that weight.                                                                                                                                                               | Reuse its final center-composite behavior, but not as semantic selection. It contains no scene material information.                       |
-| Motion vectors        | `kMOTION_VECTOR` is a dedicated deferred target (`package/Shaders/Lighting.hlsl` target 1 and `package/Shaders/DeferredCompositeCS.hlsl` UAV 2).                                                                                                                                                                                                                   | Preserve it as Feature 18 temporal input. It does not encode material or actor identity.                                                   |
-| Material IDs          | CommonLib exposes `BSShaderProperty::flags`, `GetBaseMaterial()`, and `BSShaderMaterial::GetFeature()` at draw setup. No general screen-space material-ID render target was found; `MASKS.y` is only SSS human class.                                                                                                                                              | Classify at draw setup and pass only the three bounded categories through the existing permutation/MRT path.                               |
-| Stencil               | `src/Features/TerrainBlending.cpp` and `src/Features/Upscaling.cpp` inspect, replace, and restore engine depth-stencil state; Upscaling also creates states with full `0xFF` stencil read/write masks. No reserved character bit or lifetime contract was found.                                                                                                   | Do not claim an engine-owned stencil bit. A color attachment with explicit lifetime is safer and inspectable.                              |
+| Concern inspected     | Existing mechanism and evidence                                                                                                                                                                                                                                                                                                                                    | Reuse decision                                                                                                             |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| Deferred masks        | `src/Deferred.cpp` binds `MASKS` and `MASKS2` as lighting MRTs. `package/Shaders/Lighting.hlsl` writes SSS amount/human class/ambient data to `MASKS` and inverse vertex AO plus category provenance to `MASKS2`.                                                                                                                                                  | Reuse the existing draw-time MRT path. Store category provenance in VR `MASKS2.y`; do not add a second geometry traversal. |
+| Wetness               | `package/Shaders/Lighting.hlsl` includes either `features/Wetterness/Shaders/Wetterness/WetternessLighting.hlsli` or `features/Wetness Effects/Shaders/WetnessEffects/WetnessEffects.hlsli` and derives rain, shore, puddle, and character-wetness weights in the material lighting pass. Its precipitation-occlusion input describes shelter, not actor identity. | No reusable character mask exists. Keep wetness data independent.                                                          |
+| Contact shadows       | `features/Light Limit Fix/Shaders/LightLimitFix/ClusterCullingCS.hlsl` builds light-index lists and `features/Light Limit Fix/Shaders/LightLimitFix/LightLimitFix.hlsli::ContactShadows` traces the scene depth texture.                                                                                                                                           | Light eligibility and screen-depth rays cannot identify face, skin, or hair pixels.                                        |
+| Subsurface scattering | `package/Shaders/Lighting.hlsl` writes SSS strength and human class to `MASKS.xy`; `src/Features/SubsurfaceScattering.cpp::DrawSSS` consumes that G-buffer. `SubsurfaceScattering::Hooks::BSLightingShader_SetupGeometry` already sees the lighting property, material, geometry, and actor.                                                                       | Reuse the setup hook for classification. Do not reinterpret the coarser SSS mask as face/skin/hair identity.               |
+| Complex grass         | `package/Shaders/RunGrass.hlsl` identifies complex grass from authored texture data and shades it in the grass pass. It writes category zero to the extended `MASKS2` tuple.                                                                                                                                                                                       | This is a material heuristic, not an actor mask; it is explicitly kept out of character selection.                         |
+| Skylighting           | `src/Features/Skylighting.cpp` and `src/Features/Skylighting.h` own a precipitation-style depth occlusion texture plus 3D probe and accumulation textures (`texOcclusion`, `texProbeArray`, `texAccumFramesArray`).                                                                                                                                                | The light-probe occlusion domain is not a stereo screen-space material-ID domain.                                          |
+| Particle lights       | `features/Light Limit Fix/Shaders/LightLimitFix/Common.hlsli` defines `LightFlags::Particle`, and `features/Light Limit Fix/Shaders/LightLimitFix/ClusterCullingCS.hlsl` consumes it while building light/contact-shadow lists.                                                                                                                                    | These are light records, not geometry ownership or screen-space character coverage.                                        |
+| Foveation             | `package/Shaders/Common/FoveatedMask.hlsli` computes an analytic per-eye center distance and feather weight; `features/Upscaling/Shaders/Upscaling/FoveatedCenterBlendCS.hlsl` consumes that weight.                                                                                                                                                               | Reuse its final center-composite behavior, but not as semantic selection. It contains no scene material information.       |
+| Motion vectors        | `kMOTION_VECTOR` is a dedicated deferred target (`package/Shaders/Lighting.hlsl` target 1 and `package/Shaders/DeferredCompositeCS.hlsl` UAV 2).                                                                                                                                                                                                                   | Preserve it as Feature 18 temporal input. It does not encode material or actor identity.                                   |
+| Material IDs          | CommonLib exposes `BSShaderProperty::flags`, `GetBaseMaterial()`, and `BSShaderMaterial::GetFeature()` at draw setup. No general screen-space material-ID render target was found; `MASKS.y` is only SSS human class.                                                                                                                                              | Classify at draw setup and pass only the three bounded categories through the existing permutation/MRT path.               |
+| Stencil               | `src/Features/TerrainBlending.cpp` and `src/Features/Upscaling.cpp` inspect, replace, and restore engine depth-stencil state; Upscaling also creates states with full `0xFF` stencil read/write masks. No reserved character bit or lifetime contract was found.                                                                                                   | Do not claim an engine-owned stencil bit. A color attachment with explicit lifetime is safer and inspectable.              |
 
 This survey is why the implementation extends the established deferred
 lighting setup and G-buffer route. The dedicated provider-facing `R8_UNORM`
@@ -268,20 +268,19 @@ header. Both are hypotheses to validate against the pinned runtime. They must
 not be presented as an official NVIDIA contract.
 
 Character category IDs are authored while the existing deferred geometry is
-drawn. In VR, `MASKS2` is unconditionally `R16G16B16A16_UNORM` and carries this
-tuple:
+drawn. In VR, `MASKS2` remains a two-byte attachment by changing from
+`R16_UNORM` to `R8G8_UNORM`:
 
-| Channel | Meaning                                                                 |
-| ------- | ----------------------------------------------------------------------- |
-| `x`     | legacy inverse vertex AO, retaining the original 16-bit UNORM precision |
-| `y,z`   | two-channel category code: none=`00`, face=`10`, skin=`01`, hair=`11`   |
-| `w`     | legacy target opacity used by the inherited MRT blend state             |
+| Channel | Meaning                                                          |
+| ------- | ---------------------------------------------------------------- |
+| `x`     | inverse vertex AO at 8-bit UNORM precision                       |
+| `y`     | exact category code: none=`0`, face=`85`, skin=`170`, hair=`255` |
 
-The category lanes are intentionally endpoint codes: each component must
-decode to exactly 0 or 65535 after UNORM conversion. A normalized blend creates
-an intermediate component and therefore decodes as category zero instead of
-silently becoming a different valid category. `MASKS2.w` remains opacity; it is
-not reused as depth.
+The category lane accepts only those four R8 codes. An ordinary normalized
+blend therefore decodes as category zero unless it lands on an exact code.
+The pixel shader continues to output opacity in its fourth component, so the
+inherited MRT source-alpha blend factor remains available without introducing
+stored destination alpha that the former single-channel target did not have.
 
 At the pre-terrain/decal capture hook, CSX freezes both the combined-stereo
 `MASKS2` surface and the main depth resource. The mask resolve later samples
@@ -368,13 +367,15 @@ source follows that surface, but CSX extracts one output-resolution mask per
 eye using the exact eye viewport and crop used by the selected Gogh Neural
 Rendering route.
 
-Actor bounds are projected independently with each eye's unjittered matrix.
-The left-eye projection is never reused for the right eye. Bounds are expanded,
-clamped to that eye's viewport, quantized for stability, and retained briefly
-at thresholds. Behind-camera, culled, too-distant, outside-viewport, and
-too-small candidates are omitted. Both distance and size admission use the
-observed face bounds; a large body or hair bound cannot admit a distant face or
-satisfy `Minimum Face Size`. Admission uses the
+Actor bounds are projected independently with each eye's unjittered matrix and
+cached as one stereo plan for the frame. The left-eye projection is never
+reused for the right eye. Bounds are expanded, clamped to that eye's viewport,
+quantized for stability, and retained briefly only while the actor still has a
+current valid projection. Behind-camera, culled, too-distant,
+outside-viewport, and too-small candidates are omitted without reusing a stale
+screen rectangle. Both distance and size admission use the observed face
+bounds; a large body or hair bound cannot admit a distant face or satisfy
+`Minimum Face Size`. Admission uses the
 maximum face projection from the stereo pair, preventing one eye from
 independently crossing the threshold while the other remains below it;
 clipping still uses each eye's actual rectangle.
@@ -425,7 +426,7 @@ Neural Rendering controls. Its central defaults are:
 | Rectangle margin             | `25%`        |
 | Maximum regions per eye      | `4`          |
 | Rectangle hold               | `3 frames`   |
-| Compute ROI policy           | `Auto`       |
+| Compute ROI                  | Unavailable  |
 | Depth-aware feather          | Off          |
 | Feather radius               | `1 input px` |
 | Relative depth threshold     | `0.002`      |
@@ -437,17 +438,18 @@ allocation/dispatch-affecting controls are validated at the settings boundary.
 Invalid automation input is rejected rather than silently changing the
 requested experiment.
 
-Overlapping or nearby actor bounds are merged deterministically, then capped at
-four regions per eye by repeatedly selecting the least-area-inflating merge.
-These regions stabilize the visual mask and support measurement; they do not
-imply compute ROI.
+Overlapping or nearby actor bounds are merged deterministically using the
+least-area-inflating eligible pair. If separated regions still exceed the cap,
+the lowest-priority regions are dropped instead of creating a large union that
+could admit unrelated actors between them. These regions stabilize the visual
+mask and support measurement; they do not imply compute ROI.
 
 ## Diagnostics and profiling
 
 The in-game diagnostics and DevBench status should expose, per eye:
 
 -   evaluation dimensions and Feature 18 slot
--   projected face-actor and eligible character-region counts
+-   eligible face-actor and character-region counts
 -   merged rectangle count and rectangle coordinates
 -   rectangle pixel coverage and asynchronous nonzero-mask coverage, including
     the sampled frame, feature slot, and dimensions
@@ -477,9 +479,11 @@ The character snapshot attributes its latest coverage sample to a frame, eye,
 slot, and dimensions, while Renderer telemetry attributes Feature 18 time to
 the main/submit route and feature-slot mask. The auxiliary mask, copy, and
 composite profiler labels remain aggregate; their independent asynchronous
-timers are not summed into a misleading per-frame total. Upscaled-Center Direct
-keeps its direct Feature 18 target but incurs one center-sized copy to preserve
-the normal-DLSS baseline used by the deterministic composite. Frames with no
+timers are not summed into a misleading per-frame total. The main/non-float
+Upscaled-Center Direct route keeps its direct Feature 18 target but incurs one
+center-sized copy to preserve the normal-DLSS baseline used by the deterministic
+composite. The submit float route already keeps its neural output separate and
+does not allocate or copy that non-float baseline lane. Frames with no
 eligible material observation are logical empty captures: they clear the
 per-eye masks and bypass both combined-stereo provenance copies and Feature 18.
 Nonzero-mask coverage is sampled once every 30 frames per feature slot;
@@ -504,22 +508,21 @@ requires a later visibility/composition signal with defined ownership, not a
 looser depth tolerance.
 
 The category channel has no actor identity. Eligibility rectangles prevent the
-normal case of distant or tiny actors entering the mask, but a different
-character already inside another admitted or merged rectangle cannot be
+normal case of distant or tiny actors entering the mask, and separated regions
+are dropped rather than force-unioned at the cap. A different character already
+inside an admitted or legitimately nearby merged rectangle still cannot be
 distinguished per pixel. A strict per-actor distance/size guarantee would need
 an actor-ID buffer or a selected-geometry pass.
 
-The VR `MASKS2` attachment is always `R16G16B16A16_UNORM`, including when
-character NR is disabled. Relative to the previous `R16_UNORM` attachment, its
-storage grows from 2 to 8 bytes per combined-stereo pixel: four times the
-attachment size, or 6 additional bytes per pixel. Deferred lighting also writes
-the wider target on every covered VR pixel, so this is an always-on VR memory
-and MRT-bandwidth cost, not a character-mode-only cost. The benefit is that
-inverse vertex AO keeps its full 16-bit lane and legacy opacity remains intact.
-Flat SE/AE permutations retain their original `R16_UNORM` representation.
+The VR `MASKS2` attachment remains two bytes per combined-stereo pixel even
+when character NR is disabled: `R8G8_UNORM` replaces the previous
+`R16_UNORM`. This avoids an always-on attachment-size and MRT-bandwidth
+increase, at the cost of reducing inverse vertex AO from 16-bit to 8-bit UNORM
+precision. Flat SE/AE permutations retain their original `R16_UNORM`
+representation.
 
 When character mode observes an enabled material, it additionally allocates a
-full combined-stereo RGBA16 category snapshot and a matching native-format
+full combined-stereo RG8 category snapshot and a matching native-format
 depth snapshot, and copies both each nonempty observed frame. Logical empty
 frames skip both copies, although previously allocated snapshot resources
 remain resident until reset or resource recreation. The two copies share the

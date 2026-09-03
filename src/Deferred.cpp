@@ -212,9 +212,9 @@ void Deferred::SetupResources()
 		SetupRenderTarget(NORMALROUGHNESS, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R10G10B10A2_UNORM, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
 		// Masks
 		SetupRenderTarget(MASKS, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R11G11B10_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
-		// VR stores character category and opacity beside inverse vertex AO.
+		// VR preserves the two-byte attachment while adding one exact category lane.
 		const auto masks2Format = globals::game::isVR ?
-		                              DXGI_FORMAT_R16G16B16A16_UNORM :
+		                              DXGI_FORMAT_R8G8_UNORM :
 		                              DXGI_FORMAT_R16_UNORM;
 		SetupRenderTarget(MASKS2, texDesc, srvDesc, rtvDesc, uavDesc, masks2Format, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
 

@@ -214,12 +214,47 @@ state.
 
 Feature 18 is admitted from one immutable stereo-route snapshot. Main-route
 evaluation requires the current world render to have started; submit-route
-evaluation additionally requires that world render to have completed. A known
-menu context, a paused game, or stale world-frame temporal inputs bypasses NR
-and reports `menu_context`, `game_paused`, or `temporal_source_stale`. Crossing
-between admitted and blocked states requests one history reset. If the first
-eye of a retained submit pair has already been presented, the unchanged peer
-may still complete that pair even when the live admission context changes.
+evaluation additionally requires that world render to have completed. The main
+route keeps its strict pause and menu suppression. The submit route may admit a
+paused frame only when the complete world-frame inputs are still current and
+the presentation path can preserve the active UI without sending a mixed
+stereo pair.
+
+| Submit context                              | NR behavior | Presentation requirement                                  |
+| ------------------------------------------- | ----------- | --------------------------------------------------------- |
+| Gameplay                                    | Allow       | Current world frame is complete                           |
+| CS menu only                                | Allow       | CS overlay remains after NR                               |
+| Game or dialogue menu                       | Allow       | Sealed late menu layer is ready and the CS menu is closed |
+| Game menu without a sealed layer            | Block       | Fail closed instead of omitting UI                        |
+| Game menu and CS menu together              | Block       | Combined ordering is not proven safe                      |
+| Main menu, loading, or save/load transition | Block       | Hard presentation-safety boundary                         |
+
+A hard presentation context reports `menu_context`, a disallowed ordinary
+pause reports `game_paused`, and an incomplete or old world frame reports
+`temporal_source_stale`. The stale-frame gate still applies when paused-submit
+continuity is otherwise allowed. Crossing a true admission boundary requests
+one history reset; opening a menu whose safe submit continuity remains admitted
+does not discard Feature 18 history merely because the game is paused.
+
+Known game-menu layers are composited after NR. The CS overlay is drawn still
+later, after `SubmitVRUpscaledFrame` returns and before the final OpenVR submit,
+so a CS-only frame does not require the known-menu layer bridge. The combined
+CS-menu plus game-menu case remains blocked because opening the CS menu
+invalidates the committed game-menu layer.
+The menu-continuity exception keeps foveated submit dispatch active only when
+NR is otherwise eligible; Render Scale without NR retains its existing menu
+fallback behavior.
+
+`nr_status` reports `hardMenuBlocked`, `lateMenuCompositeReady`,
+`csOverlayOpen`, and `menuContinuityAllowed` for each route snapshot.
+Its temporal admission record also reports `pausedSubmitContinuityAllowed`.
+`knownMenuContext` remains available as an observation and must not be treated
+as the submit hard-block decision. A retained submit pair also binds the menu
+query epoch, CS-overlay state, late-composite use, and menu-layer generation.
+Any change to that signature between eye submissions rejects the cached pair
+instead of presenting eyes produced under different UI contexts. If the first
+eye of an otherwise unchanged retained pair has already been presented, the
+peer may still complete that exact pair.
 
 `nr_status.settings.implementation` reports one of
 `per_eye_staged_commit`, `stereo_batched_staged_commit`,

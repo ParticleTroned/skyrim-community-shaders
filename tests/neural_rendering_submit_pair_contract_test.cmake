@@ -186,6 +186,71 @@ foreach(_submit_handoff_contract IN ITEMS
 endforeach()
 
 string(FIND
+    "${_inner_submit}"
+    [[upscaling.SubmitVRUpscaledFrame(]]
+    _submit_nr_position
+)
+if(_submit_nr_position EQUAL -1)
+    message(FATAL_ERROR "Nested OpenVR submit no longer invokes the NR submit route")
+endif()
+string(SUBSTRING "${_inner_submit}" ${_submit_nr_position} -1 _processed_submit)
+string(FIND
+    "${_processed_submit}"
+    [[vr.RenderInSceneOverlay(]]
+    _cs_overlay_position
+)
+string(FIND
+    "${_processed_submit}"
+    [[const auto result = submit(]]
+    _processed_openvr_submit_position
+)
+if(_cs_overlay_position EQUAL -1 OR _processed_openvr_submit_position EQUAL -1 OR
+   NOT _cs_overlay_position LESS _processed_openvr_submit_position)
+    message(FATAL_ERROR
+        "CS overlay ordering must remain NR output, CS overlay, then OpenVR submit"
+    )
+endif()
+
+string(FIND
+    "${_upscaling_header}"
+    [[struct SubmitStageNeuralStereoState]]
+    _neural_state_begin
+)
+string(FIND
+    "${_upscaling_header}"
+    [[SubmitStageNeuralStereoState submitStageNeuralStereoState{}]]
+    _neural_state_end
+)
+if(_neural_state_begin EQUAL -1 OR _neural_state_end EQUAL -1 OR
+   _neural_state_end LESS_EQUAL _neural_state_begin)
+    message(FATAL_ERROR "Unable to isolate the retained NR submit-pair state")
+endif()
+math(EXPR _neural_state_length "${_neural_state_end} - ${_neural_state_begin}")
+string(SUBSTRING
+    "${_upscaling_header}"
+    ${_neural_state_begin}
+    ${_neural_state_length}
+    _neural_state
+)
+foreach(_menu_signature_field IN ITEMS
+    [[uint64_t menuQueryEpoch = 0]]
+    [[bool csOverlayOpen = false]]
+    [[bool usedMenuFinalComposite = false]]
+    [[uint64_t menuLayerGeneration = 0]]
+)
+    string(FIND
+        "${_neural_state}"
+        "${_menu_signature_field}"
+        _menu_signature_field_position
+    )
+    if(_menu_signature_field_position EQUAL -1)
+        message(FATAL_ERROR
+            "Retained NR submit-pair menu signature is missing: ${_menu_signature_field}"
+        )
+    endif()
+endforeach()
+
+string(FIND
     "${_upscaling_source}"
     [[uint64_t Upscaling::BeginNeuralSubmitPairBoundary(]]
     _boundary_begin
@@ -425,6 +490,14 @@ foreach(_retained_pair_contract IN ITEMS
     [[otherSourceRegion.matchesExpectedSize &&]]
     [[submitStageNeuralStereoState.sourceTexture != replaySourceTexture]]
     [[a_inputTexture->eColorSpace !=]]
+    [[submitStageNeuralStereoState.menuQueryEpoch != neuralMenuQueryEpoch]]
+    [[submitStageNeuralStereoState.csOverlayOpen != csOverlayOpen]]
+    [[submitStageNeuralStereoState.usedMenuFinalComposite != lateMenuCompositeReady]]
+    [[submitStageNeuralStereoState.menuLayerGeneration != submitStageMenuLayerGeneration]]
+    [[submitStageNeuralStereoState.menuQueryEpoch = neuralMenuQueryEpoch]]
+    [[submitStageNeuralStereoState.csOverlayOpen = csOverlayOpen]]
+    [[submitStageNeuralStereoState.usedMenuFinalComposite = lateMenuCompositeReady]]
+    [[submitStageNeuralStereoState.menuLayerGeneration = submitStageMenuLayerGeneration]]
 )
     string(FIND
         "${_upscaling_source}"

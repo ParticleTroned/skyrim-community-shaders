@@ -17,7 +17,7 @@ Texture2D<unorm float3> AlbedoTexture : register(t1);
 Texture2D<unorm float3> NormalRoughnessTexture : register(t2);
 Texture2D<float3> MasksTexture : register(t3);
 #ifdef VR
-Texture2D<unorm float4> Masks2Texture : register(t9);
+Texture2D<unorm float2> Masks2Texture : register(t9);
 #else
 Texture2D<unorm float> Masks2Texture : register(t9);
 #endif

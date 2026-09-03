@@ -122,6 +122,28 @@ int main()
 		.output = { 152, 96, 1216, 1344 },
 	};
 	static_assert(roundedInputCrop.IsValid());
+	constexpr auto roundedInputAffine = BuildClipCropAffine(roundedInputCrop);
+	static_assert(roundedInputAffine.valid);
+	static_assert(Near(roundedInputAffine.scaleX, 801.0f / 1511.0f));
+	static_assert(Near(roundedInputAffine.scaleY, 749.0f / 1347.0f));
+	static_assert(Near(roundedInputAffine.centerX, 1027.0f / 1511.0f - 1.0f));
+	static_assert(Near(roundedInputAffine.centerY, 1.0f - 863.0f / 1347.0f));
+	constexpr auto mappedRoundedInputCenter = TransformRowVector(
+		{
+			1027.0f / 1511.0f - 1.0f,
+			1.0f - 863.0f / 1347.0f,
+			0.0f,
+			1.0f,
+		},
+		roundedInputAffine.fullClipToCrop);
+	static_assert(Near(mappedRoundedInputCenter[0], 0.0f));
+	static_assert(Near(mappedRoundedInputCenter[1], 0.0f));
+	static_assert(IsIdentity(Multiply(
+		roundedInputAffine.fullClipToCrop,
+		roundedInputAffine.cropClipToFull)));
+	static_assert(IsIdentity(Multiply(
+		roundedInputAffine.cropClipToFull,
+		roundedInputAffine.fullClipToCrop)));
 	constexpr auto exactMotionScale = BuildMotionVectorScale(roundedInputCrop);
 	static_assert(exactMotionScale.valid);
 	static_assert(Near(exactMotionScale.x, 1511.0f / 801.0f));

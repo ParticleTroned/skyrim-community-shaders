@@ -879,9 +879,6 @@ bool Streamline::CheckFrameConstants(
 	}
 
 	sl::Constants slConstants = {};
-	slConstants.cameraAspectRatio =
-		static_cast<float>(currentCrop.output.Width()) /
-		static_cast<float>(currentCrop.output.Height());
 	slConstants.cameraFOV = Util::GetVerticalFOVRad();
 	slConstants.cameraNear = *globals::game::cameraNear;
 	slConstants.cameraFar = *globals::game::cameraFar;
@@ -894,6 +891,9 @@ bool Streamline::CheckFrameConstants(
 		slConstants.cameraViewToClip,
 		fullCameraViewToClipSL,
 		currentCropMatrix);
+	slConstants.cameraAspectRatio = std::abs(
+		slConstants.cameraViewToClip[1].y /
+		slConstants.cameraViewToClip[0].x);
 
 	slConstants.cameraMotionIncluded = sl::Boolean::eTrue;
 	slConstants.cameraPinholeOffset = { 0.f, 0.f };

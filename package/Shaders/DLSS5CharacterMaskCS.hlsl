@@ -16,7 +16,7 @@ cbuffer CharacterMaskCB : register(b0)
 	float4 RoiRectangles[4];    // eye-local output pixels, min.xy/max.xy
 };
 
-Texture2D<unorm float4> AuthoredTuple : register(t0);
+Texture2D<unorm float2> AuthoredTuple : register(t0);
 Texture2D<float> AuthoredDepth : register(t1);
 Texture2D<float> CurrentDepth : register(t2);
 RWTexture2D<unorm float> ControlMask : register(u0);

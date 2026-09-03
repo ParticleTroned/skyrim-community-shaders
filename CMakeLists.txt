@@ -1500,21 +1500,32 @@ if(TARGET VerifyStreamlineRuntime)
 endif()
 
 # Manual AIO package target
-string(TIMESTAMP _GOGH_AIO_UTC "%Y%m%dT%H%M%SZ" UTC)
+set(CSX_AIO_PACKAGE_LABEL
+    "CommunityShaders"
+    CACHE STRING
+    "Filename label for manually assembled AIO archives"
+)
+if(NOT CSX_AIO_PACKAGE_LABEL MATCHES "^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    message(
+        FATAL_ERROR
+        "CSX_AIO_PACKAGE_LABEL must contain only letters, digits, '.', '_', or '-'"
+    )
+endif()
+string(TIMESTAMP _CSX_AIO_UTC "%Y%m%dT%H%M%SZ" UTC)
 execute_process(
     COMMAND git rev-parse --short HEAD
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-    RESULT_VARIABLE _GOGH_HEAD_RESULT
-    OUTPUT_VARIABLE _GOGH_SHORT_HEAD
+    RESULT_VARIABLE _CSX_HEAD_RESULT
+    OUTPUT_VARIABLE _CSX_SHORT_HEAD
     ERROR_QUIET
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
-if(NOT _GOGH_HEAD_RESULT EQUAL 0 OR NOT _GOGH_SHORT_HEAD)
-    set(_GOGH_SHORT_HEAD "UNKNOWN")
-    message(WARNING "Unable to identify Gogh package source commit")
+if(NOT _CSX_HEAD_RESULT EQUAL 0 OR NOT _CSX_SHORT_HEAD)
+    set(_CSX_SHORT_HEAD "UNKNOWN")
+    message(WARNING "Unable to identify AIO package source commit")
 endif()
 set(AIO_PACKAGE
-    "${DIST_PATH}/CSX_AIO-Gogh-${_GOGH_SHORT_HEAD}-${_GOGH_AIO_UTC}.7z"
+    "${DIST_PATH}/CSX_AIO-${CSX_AIO_PACKAGE_LABEL}-${_CSX_SHORT_HEAD}-${_CSX_AIO_UTC}.7z"
 )
 add_custom_command(
     OUTPUT ${AIO_PACKAGE}
@@ -1666,6 +1677,21 @@ if(BUILD_CONTROLLER_TESTS)
         PROPERTIES LABELS "ControllerTests"
     )
     add_executable(
+        character_region_policy_test
+        EXCLUDE_FROM_ALL
+        tests/character_region_policy_test.cpp
+    )
+    target_compile_features(character_region_policy_test PRIVATE cxx_std_23)
+    target_include_directories(
+        character_region_policy_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    add_test(NAME CharacterRegionPolicy COMMAND character_region_policy_test)
+    set_tests_properties(
+        CharacterRegionPolicy
+        PROPERTIES LABELS "ControllerTests"
+    )
+    add_executable(
         frame_telemetry_ring_test
         EXCLUDE_FROM_ALL
         tests/frame_telemetry_ring_test.cpp
@@ -1723,6 +1749,7 @@ if(BUILD_CONTROLLER_TESTS)
         controller_tests
         DEPENDS
             neural_rendering_pipeline_policy_test
+            character_region_policy_test
             frame_telemetry_ring_test
             dlss_viewport_crop_test
             foveated_center_alignment_test

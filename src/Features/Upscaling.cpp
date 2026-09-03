@@ -599,7 +599,7 @@ namespace
 	constexpr const char* kOpenCompositeRenderScaleBlockWarning =
 		"Open Composite upscaling is active. CSX VR Render Scale Mode and VR FPS Stabilizer Sync are disabled to avoid double upscaling.";
 	constexpr uint32_t kVRRenderScalePostLoadSettleRetryFrames = kVRUpscalingTransitionApplyDelayFrames;
-	constexpr uint32_t kVRRenderScaleMenuLifecyclePollRetryFrames = 1u;
+	constexpr uint32_t kVRRenderScaleDirectLifecyclePollRetryFrames = 1u;
 	constexpr uint32_t kVRSubmitStageVendorRelatchStableFrames = 3u;
 	constexpr uint32_t kVRSubmitStageVendorDoorHandoffStableFrames = 2u;
 	// The route-owned wall clock begins when the source LoadingMenu closes. The
@@ -24815,9 +24815,23 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	const bool rc94PostLoadDoorRelatch =
 		IsExactCurrentVRFpsStabilizerDoorHandoff(*this, relatchEpoch);
 	const uint32_t lifecyclePollRetryFrames =
-		preparedDirectMenuRelatch ?
-			kVRRenderScaleMenuLifecyclePollRetryFrames :
-			kVRUpscalingTransitionApplyDelayFrames;
+		VRVendorRelatchPolicy::SelectLifecyclePollRetryFrames({
+			.exactPreparedMenuRequest = preparedDirectMenuRelatch,
+			.immutableExternalSettingsRequest =
+				immutableSettingsRelatch &&
+				relatchOrigin == VRUpscalingTransitionOrigin::VRAPI,
+			.protectedRecovery =
+				rc94PostLoadDoorRelatch || postLoadRecoveryEpoch != 0 ||
+				providerNeutralNativeRecoveryRequested ||
+				presentationDeadlineFallbackRequested ||
+				postMutationEmergencyRecoveryRequested ||
+				preserveActiveContractForRecoveryPreview ||
+				admittedMutationSourceEpoch != 0 ||
+				postLoadRuntimeResetPending.load(std::memory_order_acquire),
+			.directRetryFrames =
+				kVRRenderScaleDirectLifecyclePollRetryFrames,
+			.protectedRetryFrames = kVRUpscalingTransitionApplyDelayFrames,
+		});
 	auto mutationAtAdmission =
 		GetVRRenderScalePhysicalMutationSnapshot();
 	if (mutationAtAdmission.epoch != 0) {

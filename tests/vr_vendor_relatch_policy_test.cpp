@@ -540,6 +540,22 @@ namespace
 			CanBypassPreparedMenuRequestDelay(true, 7, 8)) {
 			return false;
 		}
+		for (std::uint32_t bits = 0; bits < (1u << 3); ++bits) {
+			const bool preparedMenu = (bits & (1u << 0)) != 0;
+			const bool externalSettings = (bits & (1u << 1)) != 0;
+			const bool protectedRecovery = (bits & (1u << 2)) != 0;
+			const auto retryFrames = SelectLifecyclePollRetryFrames({
+				.exactPreparedMenuRequest = preparedMenu,
+				.immutableExternalSettingsRequest = externalSettings,
+				.protectedRecovery = protectedRecovery,
+				.directRetryFrames = 1,
+				.protectedRetryFrames = 6,
+			});
+			const bool directSettingsPoll =
+				!protectedRecovery && (preparedMenu || externalSettings);
+			if (retryFrames != (directSettingsPoll ? 1u : 6u))
+				return false;
+		}
 		if (!CanUseDirectMenuRequestPacing(true, 7) ||
 			CanUseDirectMenuRequestPacing(false, 7) ||
 			CanUseDirectMenuRequestPacing(true, 0)) {

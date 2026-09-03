@@ -1077,6 +1077,144 @@ namespace
 		};
 	}
 
+	json AuthorityJson(Upscaling& a_upscaling)
+	{
+		const auto snapshot =
+			a_upscaling.GetVRRenderScaleAuthorityDiagnosticSnapshot();
+		const auto& facts = snapshot.facts;
+		const auto& resolution = snapshot.resolution;
+		json owners = json::array();
+		for (std::uint8_t index = 0;
+			index < static_cast<std::uint8_t>(
+						VRRenderScaleAuthorityPolicy::Owner::Count);
+			++index) {
+			const auto owner =
+				static_cast<VRRenderScaleAuthorityPolicy::Owner>(index);
+			if ((resolution.owners &
+					VRRenderScaleAuthorityPolicy::ToMask(owner)) != 0) {
+				owners.push_back(
+					VRRenderScaleAuthorityPolicy::GetOwnerName(owner));
+			}
+		}
+
+		json services = json::array();
+		for (std::uint8_t index = 0;
+			index < static_cast<std::uint8_t>(
+						VRRenderScaleAuthorityPolicy::ServiceClass::Count);
+			++index) {
+			const auto service =
+				static_cast<VRRenderScaleAuthorityPolicy::ServiceClass>(index);
+			if ((resolution.services &
+					VRRenderScaleAuthorityPolicy::ToMask(service)) != 0) {
+				services.push_back(
+					VRRenderScaleAuthorityPolicy::GetServiceClassName(service));
+			}
+		}
+
+		json inconsistencies = json::array();
+		for (std::uint8_t index = 0;
+			index < static_cast<std::uint8_t>(
+						VRRenderScaleAuthorityPolicy::Inconsistency::Count);
+			++index) {
+			const auto inconsistency =
+				static_cast<VRRenderScaleAuthorityPolicy::Inconsistency>(index);
+			if ((resolution.inconsistencies &
+					VRRenderScaleAuthorityPolicy::ToMask(inconsistency)) != 0) {
+				inconsistencies.push_back(
+					VRRenderScaleAuthorityPolicy::GetInconsistencyName(
+						inconsistency));
+			}
+		}
+
+		return {
+			{ "schemaVersion", 1 },
+			{ "diagnosticOnly", true },
+			{ "productionSchedulingEffect", "none" },
+			{ "controllerRevision", snapshot.controllerRevision },
+			{ "controllerRevisionStable", snapshot.controllerRevisionStable },
+			{ "ownerMask", resolution.owners },
+			{ "owners", std::move(owners) },
+			{ "serviceMask", resolution.services },
+			{ "serviceClasses", std::move(services) },
+			{ "unmappedOwnerMask", resolution.unmappedOwners },
+			{ "inconsistencyMask", resolution.inconsistencies },
+			{ "inconsistencies", std::move(inconsistencies) },
+			{ "ownerSummary", {
+								  { "controller", {
+													  { "transitionEpoch", facts.controllerTransitionEpoch },
+													  { "presentationEpoch", facts.controllerPresentationEpoch },
+													  { "stateMirrorBusy", facts.controllerStateMirrorBusy },
+													  { "stableRuntimeProfileHint", facts.stableRuntimeProfileHint },
+												  } },
+								  { "pendingRequest", {
+														  { "present", facts.pendingRequestPresent },
+														  { "requestId", facts.pendingRequestID },
+														  { "transitionEpoch", facts.pendingRequestEpoch },
+													  } },
+								  { "deferredRequest", {
+														   { "present", facts.deferredRequestPresent },
+														   { "requestId", facts.deferredRequestID },
+														   { "transitionEpoch", facts.deferredRequestEpoch },
+														   { "hint", facts.deferredRequestHint },
+													   } },
+								  { "physicalRelatch", {
+														   { "queued", facts.physicalRelatchQueued },
+														   { "inProgress", facts.physicalRelatchInProgress },
+														   { "transitionEpoch", facts.physicalRelatchEpoch },
+													   } },
+								  { "postLoad", {
+													{ "resetPending", facts.postLoadResetPending },
+													{ "resetEpoch", facts.pendingPostLoadResetEpoch },
+													{ "deferredRecoveryEpoch", facts.deferredPostLoadRecoveryEpoch },
+													{ "recoveryActive", facts.postLoadRecoveryActive },
+													{ "recoveryEpoch", facts.postLoadRecoveryEpoch },
+												} },
+								  { "preMutationFallback", {
+															   { "admissionActive", facts.preMutationFallbackAdmissionActive },
+															   { "transitionEpoch", facts.preMutationFallbackEpoch },
+															   { "providerNeutralRecoveryEpoch", facts.providerNeutralRecoveryEpoch },
+														   } },
+								  { "postMutation", {
+														{ "unresolvedPhysicalEpoch", facts.unresolvedPhysicalMutationEpoch },
+														{ "serializationEpoch", facts.postMutationSerializationEpoch },
+														{ "chainSerial", facts.postMutationChainSerial },
+													} },
+								  { "vendorWorkGate", {
+														  { "ownerMask", facts.vendorWorkGateOwnerMask },
+														  { "ownerEpoch", facts.vendorWorkGateOwnerEpoch },
+													  } },
+								  { "compositorHold", {
+														  { "active", facts.compositorHoldActive },
+														  { "epoch", facts.compositorHoldEpoch },
+														  { "cycleDrainPending", facts.compositorCycleDrainPending },
+														  { "awaitingSyncEpoch", facts.compositorAwaitingSyncEpoch },
+													  } },
+								  { "nativeRestore", {
+														 { "active", facts.nativeRestoreActive },
+														 { "ownerEpoch", facts.nativeRestoreOwnerEpoch },
+														 { "presentationGuardEpoch", facts.nativeRestorePresentationGuardEpoch },
+													 } },
+								  { "cleanup", {
+												   { "intermediateRetirementPending", facts.intermediateRetirementPending },
+												   { "engineTargetRetirementPending", facts.engineTargetRetirementPending },
+												   { "memoryTrimPending", facts.memoryTrimPending },
+												   { "memoryTrimOwnerEpoch", facts.memoryTrimOwnerEpoch },
+											   } },
+								  { "providerLifecycle", {
+															 { "dlssResetPending", facts.dlssResetPending },
+															 { "dlssResetGeneration", facts.dlssResetGeneration },
+															 { "fsrResetPending", facts.fsrResetPending },
+															 { "fsrResetGeneration", facts.fsrResetGeneration },
+															 { "dlssActive", facts.dlssLifecycleActive },
+															 { "fsrActive", facts.fsrLifecycleActive },
+															 { "resourceTrackingSyncPending", facts.resourceTrackingSyncPending },
+															 { "dlssViewportPreparationPending", facts.dlssViewportPreparationPending },
+														 } },
+								  { "fpsStabilizerSyncFrame", facts.fpsStabilizerSyncFrame },
+							  } },
+		};
+	}
+
 	json CPUPerformanceJson(Upscaling& a_upscaling)
 	{
 		using Counter = Upscaling::VRRenderScaleCPUPerformanceCounter;
@@ -1302,6 +1440,7 @@ namespace
 											  { "commitAttemptCount", nativeRestorePreparation.commitAttemptCount },
 											  { "commitSuccessCount", nativeRestorePreparation.commitSuccessCount },
 										  } },
+			{ "authorityLiveness", AuthorityJson(a_upscaling) },
 			{ "cpuPerformance", CPUPerformanceJson(a_upscaling) },
 			{ "preparation", PreparationTelemetryJson(a_upscaling) },
 			{ "pipelineDiagnostics", {

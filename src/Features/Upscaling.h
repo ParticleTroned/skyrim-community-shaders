@@ -8,6 +8,7 @@
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
 #include "Upscaling/VRPresentationStretchTelemetryPolicy.h"
+#include "Upscaling/VRRenderScaleAuthorityPolicy.h"
 #include "Upscaling/VRRenderScalePreparationPolicy.h"
 #include "Upscaling/VRVendorRelatchPolicy.h"
 #include "Utils/LazyShader.h"
@@ -1693,6 +1694,14 @@ public:
 	};
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	struct VRRenderScaleAuthorityDiagnosticSnapshot
+	{
+		VRRenderScaleAuthorityPolicy::Facts facts{};
+		VRRenderScaleAuthorityPolicy::Resolution resolution{};
+		uint64_t controllerRevision = 0;
+		bool controllerRevisionStable = false;
+	};
+
 	enum class VRRenderScaleCPUPerformanceCounter : std::size_t
 	{
 		WindowStartFrame,
@@ -1845,6 +1854,9 @@ public:
 	json BuildVRRenderScaleIterationRecord() const;
 	bool WriteVRRenderScaleIterationRecord() const;
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	/** @brief Resolves live render-scale owners for diagnostics without scheduling work. */
+	VRRenderScaleAuthorityDiagnosticSnapshot
+	GetVRRenderScaleAuthorityDiagnosticSnapshot() const;
 	VRRenderScalePreparationTelemetrySnapshot
 	GetVRRenderScalePreparationTelemetrySnapshot() const;
 	/** @brief Returns the latest admission decision for one exact preparation request. */

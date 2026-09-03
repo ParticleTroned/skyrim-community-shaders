@@ -11,6 +11,10 @@ file(READ
     _replacement_policy
 )
 file(READ
+    "${PROJECT_ROOT}/src/Features/Upscaling/VRRenderScaleAuthorityPolicy.h"
+    _authority_policy
+)
+file(READ
     "${PROJECT_ROOT}/src/Features/Upscaling.h"
     _upscaling_header
 )
@@ -34,6 +38,47 @@ file(READ
     "${PROJECT_ROOT}/src/Features/Upscaling/FidelityFX.cpp"
     _fidelityfx_source
 )
+
+foreach(_authority_contract IN ITEMS
+    "authorityLiveness"
+    "diagnosticOnly"
+	"productionSchedulingEffect"
+	"controllerRevisionStable"
+    "unmappedOwnerMask"
+    "inconsistencyMask"
+    "GetVRRenderScaleAuthorityDiagnosticSnapshot"
+    "kOwnerServiceMappings"
+    "AllOwnersHaveServiceMappings"
+)
+    string(FIND
+        "${_bridge}\n${_upscaling_header}\n${_upscaling_source}\n${_authority_policy}"
+        "${_authority_contract}"
+        _authority_contract_position
+    )
+    if(_authority_contract_position EQUAL -1)
+        message(FATAL_ERROR
+            "Render-scale authority diagnostic contract is missing: ${_authority_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_forbidden_maintenance_hint IN ITEMS
+    "vrRenderScaleMaintenanceWork"
+    "PublishVRRenderScaleMaintenanceWork"
+    "ReconcileVRRenderScaleMaintenanceWork"
+    "ServiceVRRenderScaleMaintenanceWork"
+)
+    string(FIND
+        "${_upscaling_header}\n${_upscaling_source}\n${_authority_policy}"
+        "${_forbidden_maintenance_hint}"
+        _forbidden_maintenance_hint_position
+    )
+    if(NOT _forbidden_maintenance_hint_position EQUAL -1)
+        message(FATAL_ERROR
+            "Authority diagnostics recreated a production maintenance hint: ${_forbidden_maintenance_hint}"
+        )
+    endif()
+endforeach()
 
 string(FIND "${_bridge}"
     "\"retainInactiveDLSSResources\", controller.relatchPlan.retainInactiveDLSSResources"

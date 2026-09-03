@@ -51234,6 +51234,163 @@ Upscaling::VRRenderScaleTransitionSnapshot Upscaling::GetVRRenderScaleTransition
 }
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+Upscaling::VRRenderScaleAuthorityDiagnosticSnapshot
+Upscaling::GetVRRenderScaleAuthorityDiagnosticSnapshot() const
+{
+	VRRenderScaleAuthorityPolicy::Facts facts{};
+	const auto controller = GetVRRenderScaleTransitionSnapshot();
+	const bool controllerNeedsRelatchService =
+		controller.targetEpoch != 0 &&
+		controller.state != VRRenderScaleTransitionState::Idle &&
+		controller.state != VRRenderScaleTransitionState::Active &&
+		controller.state != VRRenderScaleTransitionState::Stabilizing;
+	facts.controllerTransitionEpoch =
+		controllerNeedsRelatchService ? controller.targetEpoch : 0;
+	facts.controllerPresentationEpoch =
+		controller.state == VRRenderScaleTransitionState::Stabilizing ?
+			controller.targetEpoch :
+			0;
+	facts.controllerStateMirrorBusy =
+		vrRenderScaleTransitionState.load(std::memory_order_acquire) !=
+		VRRenderScaleTransitionState::Idle;
+
+	{
+		const std::scoped_lock ownerLock(
+			pendingVRRenderScaleRequestMutex,
+			perfModeRenderTargetRecreateQueueMutex);
+		if (pendingVRRenderScaleRequest) {
+			facts.pendingRequestPresent = true;
+			facts.pendingRequestID = pendingVRRenderScaleRequest->requestID;
+			facts.pendingRequestEpoch =
+				pendingVRRenderScaleRequest->transitionEpoch;
+		}
+		if (deferredVRRenderScaleRequestAfterPhysicalRecovery) {
+			facts.deferredRequestPresent = true;
+			facts.deferredRequestID =
+				deferredVRRenderScaleRequestAfterPhysicalRecovery->requestID;
+			facts.deferredRequestEpoch =
+				deferredVRRenderScaleRequestAfterPhysicalRecovery
+					->transitionEpoch;
+		}
+		facts.physicalRelatchQueued =
+			pendingPerfModeRenderTargetRecreate.load(
+				std::memory_order_relaxed);
+		facts.physicalRelatchInProgress =
+			perfModeRenderTargetRecreateInProgress.load(
+				std::memory_order_relaxed);
+		facts.physicalRelatchEpoch =
+			pendingPerfModeRenderTargetRecreateEpoch.load(
+				std::memory_order_relaxed);
+	}
+	facts.deferredRequestHint =
+		deferredVRRenderScaleRequestPending.load(std::memory_order_acquire);
+	facts.postLoadResetPending =
+		postLoadRuntimeResetPending.load(std::memory_order_acquire);
+	facts.pendingPostLoadResetEpoch =
+		pendingPostLoadRuntimeResetEpoch.load(std::memory_order_acquire);
+	facts.deferredPostLoadRecoveryEpoch =
+		deferredVRRenderScalePostLoadRecoveryEpoch.load(
+			std::memory_order_acquire);
+	facts.postLoadRecoveryActive = controller.postLoadRecovery.active;
+	facts.postLoadRecoveryEpoch =
+		controller.postLoadRecovery.recoveryEpoch;
+	facts.preMutationFallbackEpoch =
+		vrRenderScalePreMutationNativeFallbackTransitionEpoch.load(
+			std::memory_order_acquire);
+	facts.preMutationFallbackAdmissionActive =
+		vrRenderScalePreMutationNativeFallbackAdmissionActive.load(
+			std::memory_order_acquire);
+	facts.providerNeutralRecoveryEpoch =
+		vrRenderScaleProviderNeutralNativeRecoveryEpoch.load(
+			std::memory_order_acquire);
+
+	const auto physicalMutation = GetVRRenderScalePhysicalMutationSnapshot();
+	facts.unresolvedPhysicalMutationEpoch = physicalMutation.epoch;
+	facts.postMutationSerializationEpoch =
+		physicalMutation.serializationEpoch;
+	facts.postMutationChainSerial = physicalMutation.chainSerial;
+	const auto vendorWorkGateState =
+		vrVendorWorkGateState.load(std::memory_order_acquire);
+	facts.vendorWorkGateOwnerMask =
+		VRVendorRelatchPolicy::GetStateMask(vendorWorkGateState);
+	facts.vendorWorkGateOwnerEpoch =
+		VRVendorRelatchPolicy::GetStateEpoch(vendorWorkGateState);
+	{
+		const std::scoped_lock holdLock(vrPostLoadCompositorHoldMutex);
+		facts.compositorHoldActive =
+			static_cast<VRPostLoadCompositorHoldState>(
+				vrPostLoadCompositorHoldState.load(
+					std::memory_order_relaxed)) !=
+			VRPostLoadCompositorHoldState::Idle;
+		facts.compositorHoldEpoch =
+			vrPostLoadCompositorHoldEpoch.load(std::memory_order_relaxed);
+		facts.compositorCycleDrainPending =
+			vrPostLoadCompositorCycleDrainPending.load(
+				std::memory_order_relaxed);
+		facts.compositorAwaitingSyncEpoch =
+			vrPostLoadCompositorHoldAwaitingSyncEpoch.load(
+				std::memory_order_relaxed);
+	}
+
+	const auto nativeRestore = GetVRLowPeakNativeRestoreProgress();
+	facts.nativeRestoreOwnerEpoch = nativeRestore.ownerEpoch;
+	facts.nativeRestoreActive =
+		nativeRestore.ownerEpoch != 0 &&
+		nativeRestore.phase != VRVendorRelatchPolicy::NativeRestorePhase::Idle;
+	facts.nativeRestorePresentationGuardEpoch =
+		vrNativeRestorePresentationGuardEpoch.load(std::memory_order_acquire);
+	facts.intermediateRetirementPending =
+		controller.retirement.pendingSets != 0 ||
+		controller.retirement.nextCleanupFrame != 0 ||
+		controller.retirement.fencePending ||
+		controller.retirement.capacityBlocked;
+	facts.engineTargetRetirementPending =
+		controller.engineTargetRetirement.pending ||
+		controller.engineTargetRetirement.pendingGenerations != 0 ||
+		controller.engineTargetRetirement.fencePending ||
+		controller.engineTargetRetirement.capacityBlocked;
+	facts.memoryTrimPending =
+		vrRenderScaleMemoryTrimPending.load(std::memory_order_acquire);
+	facts.memoryTrimOwnerEpoch = controller.memoryTrim.ownerEpoch;
+	facts.dlssResetPending =
+		pendingDLSSReset.load(std::memory_order_acquire);
+	facts.dlssResetGeneration =
+		pendingDLSSResetGeneration.load(std::memory_order_acquire);
+	facts.fsrResetPending =
+		pendingFSRReset.load(std::memory_order_acquire);
+	facts.fsrResetGeneration =
+		pendingFSRResetGeneration.load(std::memory_order_acquire);
+
+	const auto lifecycleActive = [](VRVendorRuntimeLifecyclePhase a_phase) {
+		return a_phase == VRVendorRuntimeLifecyclePhase::Dirty ||
+		       a_phase == VRVendorRuntimeLifecyclePhase::WaitingForDrain ||
+		       a_phase == VRVendorRuntimeLifecyclePhase::Destroying ||
+		       a_phase == VRVendorRuntimeLifecyclePhase::Creating;
+	};
+	facts.dlssLifecycleActive = lifecycleActive(controller.dlssLifecycle.phase);
+	facts.fsrLifecycleActive = lifecycleActive(controller.fsrLifecycle.phase);
+	facts.resourceTrackingSyncPending =
+		vrRenderScaleResourceTrackingSyncPending.load(
+			std::memory_order_acquire);
+	facts.fpsStabilizerSyncFrame =
+		pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire);
+	facts.stableRuntimeProfileHint =
+		vrRenderScaleStableRuntimeProfileAuthoritative.load(
+			std::memory_order_acquire);
+	facts.dlssViewportPreparationPending =
+		submitStageDLSSViewportPreparationPending.load(
+			std::memory_order_acquire);
+	const auto finalController = GetVRRenderScaleTransitionSnapshot();
+
+	return {
+		.facts = facts,
+		.resolution = VRRenderScaleAuthorityPolicy::Resolve(facts),
+		.controllerRevision = controller.revision,
+		.controllerRevisionStable =
+			controller.revision == finalController.revision,
+	};
+}
+
 Upscaling::VRRenderScalePreparationTelemetrySnapshot
 Upscaling::GetVRRenderScalePreparationTelemetrySnapshot() const
 {

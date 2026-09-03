@@ -32,6 +32,9 @@ Depth-culling events are observations of the existing upstream behaviour.
 -   engine, shader, D3D11 context, and OpenVR eye-submit instrumentation.
 -   deferred-context recording and exact command-list execution replay, described
     in [`device-context-command-list-slice.md`](./device-context-command-list-slice.md).
+-   the controlled deferred-output timing case study and its adjacent structural
+    capture requirements, described in
+    [`deferred-gbuffer-performance-evidence.md`](./deferred-gbuffer-performance-evidence.md).
 -   focused collector, runtime, controller, and offline graph tests.
 -   runtime capture-manifest, render-event, and derived render-graph schemas.
 

@@ -842,10 +842,12 @@ namespace
 							   { "csOverlayOpen", route.csOverlayOpen },
 							   { "menuContinuityAllowed", route.menuContinuityAllowed },
 							   { "gamePaused", temporalAdmission.gamePaused },
-							   { "pausedSubmitContinuityAllowed", temporalAdmission.pausedSubmitContinuityAllowed },
+							   { "pausedContinuityAllowed", temporalAdmission.pausedContinuityAllowed },
+							   { "pausedSubmitContinuityAllowed", temporalAdmission.pausedContinuityAllowed },
 							   { "worldFrameStateAvailable", temporalAdmission.worldFrameStateAvailable },
 							   { "worldFrameStarted", temporalAdmission.worldFrameStarted },
 							   { "worldFrameCompleted", temporalAdmission.worldFrameCompleted },
+							   { "retainedWorldFrame", temporalAdmission.retainedWorldFrame },
 							   { "temporalSourceFresh", temporalAdmission.temporalSourceFresh },
 						   } },
 				{ "temporalAdmission", {

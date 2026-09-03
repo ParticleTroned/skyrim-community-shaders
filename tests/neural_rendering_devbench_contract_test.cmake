@@ -174,8 +174,9 @@ if(_submit_float_output_selection EQUAL -1)
 endif()
 
 foreach(_submit_float_commit_contract IN ITEMS
-    [[if (directCommit) return true]]
+    [[!presentationOutput.resource || !presentationOutput.uav]]
     [[globals::d3d::context->CopyResource( submitNeuralFloatColorOut[eyeIndex]->resource.get(), submitNeuralFloatStagedOut[eyeIndex]->resource.get())]]
+    [[DispatchSubmitStageColorRegion( submitNeuralFloatColorOut[eyeIndex]->srv.get(), presentationOutput.uav.get()]]
 )
     string(FIND
         "${_submit_float_commit_section}"
@@ -195,8 +196,9 @@ foreach(_upscaled_center_float_contract IN ITEMS
     [[args.insertionPoint = NeuralRendering::InsertionPoint::UpscaledCenter]]
     [[DispatchSubmitStageColorRegion( foveatedCenterColorOut[eyeIndex]->srv.get(), submitNeuralFloatColorIn[eyeIndex]->uav.get()]]
     [[neuralColorInput = submitNeuralFloatColorIn[eyeIndex]->resource.get()]]
-    [[return CommitSubmitNeuralFloatOutput( eyeIndex, directNeuralCommit)]]
-    "useSubmitNeuralFloatBridge && neuralPairApplied && submitNeuralFloatColorOut[eyeIndex]"
+    [[createFsrViews || useSubmitNeuralFloatBridge]]
+    "CommitSubmitNeuralFloatOutput( eyeIndex, directNeuralCommit, *foveatedCenterColorOut[eyeIndex]"
+    [[ID3D11ShaderResourceView* centerSRV = foveatedCenterColorOut[eyeIndex]->srv.get()]]
 )
     string(FIND
         "${_upscaled_center_section}"
@@ -212,8 +214,7 @@ endforeach()
 
 foreach(_upscaled_center_composite_contract IN ITEMS
     [[if (params.centerAlreadyPrepared)]]
-    [[const bool useSubmitNeuralFloatOutput = params.dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter && neuralResult && neuralResult->applied]]
-    [[centerSRV = submitNeuralFloatColorOut[eyeIndex]->srv.get()]]
+    [[ID3D11ShaderResourceView* centerSRV = centerOutput->srv.get()]]
     [[DispatchFoveatedBlendPass( centerSRV, outputColorUAV]]
 )
     string(FIND
@@ -232,10 +233,11 @@ foreach(_final_ldr_float_contract IN ITEMS
     [[const bool useSubmitNeuralFloatBridge = a_role == NeuralStereoRouteRole::Submit]]
     [[args.insertionPoint = NeuralRendering::InsertionPoint::FinalLdrPreUi]]
     [[("Upscale_NeuralFinalLdr_ColorIn_" + suffix).c_str(), targetUavDescs[eye].Format]]
+    [[neuralFinalLdrColorOut[eye], target.resource]]
     [[DispatchSubmitStageColorRegion( neuralFinalLdrColorIn[eye]->srv.get(), submitNeuralFloatColorIn[eye]->uav.get()]]
     [[args.colorInput = useSubmitNeuralFloatBridge ? submitNeuralFloatColorIn[eye]->resource.get() : neuralFinalLdrColorIn[eye]->resource.get()]]
-    [[CommitSubmitNeuralFloatOutput(eye, directCommit)]]
-    [[useSubmitNeuralFloatBridge ? submitNeuralFloatColorOut[eye]->srv.get() : neuralFinalLdrColorOut[eye]->srv.get()]]
+    "CommitSubmitNeuralFloatOutput( eye, directCommit, *neuralFinalLdrColorOut[eye]"
+    [[DispatchFoveatedBlendPass( neuralFinalLdrColorOut[eye]->srv.get()]]
 )
     string(FIND
         "${_final_ldr_section}"
@@ -425,7 +427,9 @@ foreach(_status_contract IN ITEMS
     [[{ "csOverlayOpen", route.csOverlayOpen }]]
     [[{ "menuContinuityAllowed", route.menuContinuityAllowed }]]
     [[{ "gamePaused", temporalAdmission.gamePaused }]]
-    [[{ "pausedSubmitContinuityAllowed", temporalAdmission.pausedSubmitContinuityAllowed }]]
+    [[{ "pausedContinuityAllowed", temporalAdmission.pausedContinuityAllowed }]]
+    [[{ "pausedSubmitContinuityAllowed", temporalAdmission.pausedContinuityAllowed }]]
+    [[{ "retainedWorldFrame", temporalAdmission.retainedWorldFrame }]]
     [[{ "worldFrameStateAvailable", temporalAdmission.worldFrameStateAvailable }]]
     [[{ "worldFrameStarted", temporalAdmission.worldFrameStarted }]]
     [[{ "worldFrameCompleted", temporalAdmission.worldFrameCompleted }]]
@@ -503,7 +507,7 @@ foreach(_submit_menu_contract IN ITEMS
     [[const bool csOverlayOpen =]]
     [[const bool menuContinuityAllowed =]]
     [[.menuContextActive = hardMenuBlocked]]
-    [[.pausedSubmitContinuityAllowed = menuContinuityAllowed]]
+    [[.pausedContinuityAllowed = menuContinuityAllowed]]
 )
     string(FIND
         "${_submit_stage_normalized}"
@@ -597,7 +601,7 @@ endif()
 foreach(_continuity_term IN ITEMS
     [[!hardMenuBlocked]]
     [[!currentMenuPresentationContext]]
-    [[lateMenuCompositeReady && !csOverlayOpen]]
+    [[lateMenuCompositeReady]]
 )
     string(FIND
         "${_menuContinuityAllowed_expression}"
@@ -708,7 +712,7 @@ endif()
 foreach(_source_contract IN ITEMS
     [[neuralPrepared = true;]]
     [[submitStageNeuralStereoState.outputsReady = false;]]
-    [[bool IsNeuralRenderingMenuSuppressed()]]
+    [[bool IsNeuralRenderingHardMenuBlocked(]]
     [[neuralTemporalAdmissionLatch.compare_exchange_weak(]]
     [[phase == NeuralCenterPhase::Resolve ?]]
     [[neuralPairApplied = neuralPairApplied &&]]

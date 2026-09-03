@@ -5402,33 +5402,17 @@ namespace
 		return menu && menu->initialized && menu->ShouldSwallowInput();
 	}
 
-	bool IsNeuralRenderingMenuSuppressed()
+	bool IsNeuralRenderingHardMenuBlocked(
+		const Upscaling& a_upscaling,
+		const State* a_state)
 	{
 		if (!globals::game::isVR)
 			return false;
 
-		struct QueryCache
-		{
-			uint32_t frame = std::numeric_limits<uint32_t>::max();
-			uint64_t epoch = 0;
-			bool knownGameMenuActive = false;
-		};
-		thread_local QueryCache cache{};
-		const uint32_t frame = globals::state ?
-		                           globals::state->frameCount :
-		                           std::numeric_limits<uint32_t>::max();
-		const uint64_t epoch =
-			g_neuralMenuQueryEpoch.load(std::memory_order_acquire);
-		if (cache.frame != frame || cache.epoch != epoch) {
-			cache = {
-				.frame = frame,
-				.epoch = epoch,
-				.knownGameMenuActive = IsKnownGameMenuContextActive(),
-			};
-		}
-		return cache.knownGameMenuActive ||
-		       IsVRMenuPresentationTailActive(globals::state) ||
-		       IsCommunityShadersMenuOpen();
+		return IsMainMenuContextActive() ||
+		       IsVRLoadingPresentationContextActive(a_state) ||
+		       IsSaveLoadTransitionContextActive(a_state) ||
+		       IsVRLoadingSubmitProtectionContextActive(a_upscaling, a_state);
 	}
 
 	bool IsExplicitVRMenuPresentationContextActive()
@@ -24668,22 +24652,41 @@ ID3D11Resource* Upscaling::GetSubmitNeuralFloatEvaluationOutput(
 
 bool Upscaling::CommitSubmitNeuralFloatOutput(
 	uint32_t eyeIndex,
-	bool directCommit) noexcept
+	bool directCommit,
+	Texture2D& presentationOutput,
+	const char* perfLabel) noexcept
 {
 	if (eyeIndex >= 2 || !submitNeuralFloatColorOut[eyeIndex] ||
-		!submitNeuralFloatColorOut[eyeIndex]->resource) {
+		!submitNeuralFloatColorOut[eyeIndex]->resource ||
+		!submitNeuralFloatColorOut[eyeIndex]->srv ||
+		!presentationOutput.resource || !presentationOutput.uav ||
+		submitNeuralFloatColorOut[eyeIndex]->desc.Width !=
+			presentationOutput.desc.Width ||
+		submitNeuralFloatColorOut[eyeIndex]->desc.Height !=
+			presentationOutput.desc.Height) {
 		return false;
 	}
-	if (directCommit)
-		return true;
-	if (!globals::d3d::context || !submitNeuralFloatStagedOut[eyeIndex] ||
-		!submitNeuralFloatStagedOut[eyeIndex]->resource) {
-		return false;
+	if (!directCommit) {
+		if (!globals::d3d::context || !submitNeuralFloatStagedOut[eyeIndex] ||
+			!submitNeuralFloatStagedOut[eyeIndex]->resource) {
+			return false;
+		}
+		globals::d3d::context->CopyResource(
+			submitNeuralFloatColorOut[eyeIndex]->resource.get(),
+			submitNeuralFloatStagedOut[eyeIndex]->resource.get());
 	}
-	globals::d3d::context->CopyResource(
-		submitNeuralFloatColorOut[eyeIndex]->resource.get(),
-		submitNeuralFloatStagedOut[eyeIndex]->resource.get());
-	return true;
+
+	return DispatchSubmitStageColorRegion(
+		submitNeuralFloatColorOut[eyeIndex]->srv.get(),
+		presentationOutput.uav.get(),
+		submitNeuralFloatColorOut[eyeIndex]->desc.Width,
+		submitNeuralFloatColorOut[eyeIndex]->desc.Height,
+		0u, 0u,
+		submitNeuralFloatColorOut[eyeIndex]->desc.Width,
+		submitNeuralFloatColorOut[eyeIndex]->desc.Height,
+		presentationOutput.desc.Width,
+		presentationOutput.desc.Height,
+		perfLabel);
 }
 
 bool Upscaling::EnsureFoveatedDepthGuideSRV(Texture2D& texture, const char* name)
@@ -25687,7 +25690,7 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 
 	if (!prepareFoveatedTexture(foveatedCenterColorIn[eyeIndex], colorIn, centerInputAllocationWidth, centerInputAllocationHeight, false, createFsrViews, false, false, ("Upscale_FoveatedCenter_ColorIn_" + suffix).c_str()))
 		return false;
-	if (!prepareFoveatedTexture(foveatedCenterColorOut[eyeIndex], colorIn, rect.outputWidth, rect.outputHeight, false, true, createFsrViews, false, ("Upscale_FoveatedCenter_ColorOut_" + suffix).c_str()))
+	if (!prepareFoveatedTexture(foveatedCenterColorOut[eyeIndex], colorIn, rect.outputWidth, rect.outputHeight, false, true, createFsrViews || useSubmitNeuralFloatBridge, false, ("Upscale_FoveatedCenter_ColorOut_" + suffix).c_str()))
 		return false;
 	if (!prepareFoveatedTexture(foveatedCenterDepth[eyeIndex], depthIn, centerInputAllocationWidth, centerInputAllocationHeight, true, createFsrViews, false, false, ("Upscale_FoveatedCenter_Depth_" + suffix).c_str()))
 		return false;
@@ -26035,9 +26038,15 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 			return applied;
 		};
 		const auto commitNeuralOutput = [&]() {
-			if (useSubmitNeuralFloatBridge)
+			if (useSubmitNeuralFloatBridge) {
+				if (!foveatedCenterColorOut[eyeIndex])
+					return false;
 				return CommitSubmitNeuralFloatOutput(
-					eyeIndex, directNeuralCommit);
+					eyeIndex,
+					directNeuralCommit,
+					*foveatedCenterColorOut[eyeIndex],
+					"DLSS NR Submit Presentation Commit");
+			}
 			if (!directNeuralCommit) {
 				if (!foveatedCenterColorOut[eyeIndex] ||
 					!foveatedCenterColorOut[eyeIndex]->resource ||
@@ -26152,11 +26161,7 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 	if (!outputUAV)
 		outputUAV = vrIntermediateColorOut[eyeIndex]->uav.get();
 	ID3D11ShaderResourceView* centerSRV =
-		useSubmitNeuralFloatBridge && neuralPairApplied &&
-				submitNeuralFloatColorOut[eyeIndex] &&
-				submitNeuralFloatColorOut[eyeIndex]->srv ?
-			submitNeuralFloatColorOut[eyeIndex]->srv.get() :
-			foveatedCenterColorOut[eyeIndex]->srv.get();
+		foveatedCenterColorOut[eyeIndex]->srv.get();
 	const float centerBlendFeather = std::isfinite(centerFeather) ?
 	                                     ClampFoveatedBlendFeather(centerFeather) :
 	                                     ClampFoveatedBlendFeather(
@@ -26486,11 +26491,12 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 					useSubmitNeuralFloatBridge, false, false,
 					("Upscale_NeuralFinalLdr_ColorIn_" + suffix).c_str(),
 					targetUavDescs[eye].Format) ||
-				(!useSubmitNeuralFloatBridge && !EnsureFoveatedTexture(
-													neuralFinalLdrColorOut[eye], target.resource,
-													rect.outputWidth, rect.outputHeight, false, true, false, false,
-													("Upscale_NeuralFinalLdr_ColorOut_" + suffix).c_str(),
-													targetUavDescs[eye].Format)) ||
+				!EnsureFoveatedTexture(
+					neuralFinalLdrColorOut[eye], target.resource,
+					rect.outputWidth, rect.outputHeight, false, true,
+					useSubmitNeuralFloatBridge, false,
+					("Upscale_NeuralFinalLdr_ColorOut_" + suffix).c_str(),
+					targetUavDescs[eye].Format) ||
 				(!useSubmitNeuralFloatBridge && !directCommit &&
 					!EnsureFoveatedTexture(
 						neuralFinalLdrStagedOut[eye], target.resource,
@@ -26603,8 +26609,14 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 
 		if (useSubmitNeuralFloatBridge) {
 			for (uint32_t eye = 0; eye < a_targets.size(); ++eye) {
-				if (!CommitSubmitNeuralFloatOutput(eye, directCommit))
+				if (!neuralFinalLdrColorOut[eye] ||
+					!CommitSubmitNeuralFloatOutput(
+						eye,
+						directCommit,
+						*neuralFinalLdrColorOut[eye],
+						"DLSS NR Final LDR Presentation Commit")) {
 					return false;
+				}
 			}
 		} else if (!directCommit) {
 			for (uint32_t eye = 0; eye < a_targets.size(); ++eye) {
@@ -26624,9 +26636,7 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 				false,
 				globals::state->frameCount);
 			const bool blended = DispatchFoveatedBlendPass(
-				useSubmitNeuralFloatBridge ?
-					submitNeuralFloatColorOut[eye]->srv.get() :
-					neuralFinalLdrColorOut[eye]->srv.get(),
+				neuralFinalLdrColorOut[eye]->srv.get(),
 				a_targets[eye].uav,
 				a_outputWidthPerEye, a_outputHeight, rect,
 				foveatedRectCache.plan.eyes[eye].visibleOutput,
@@ -26684,9 +26694,12 @@ void Upscaling::ApplyMainFinalLdrNeuralStereo() noexcept
 	}
 
 	auto route = pending.route;
-	const bool menuSuppressed = IsNeuralRenderingMenuSuppressed();
+	const bool hardMenuBlocked =
+		IsNeuralRenderingHardMenuBlocked(*this, globals::state);
 	const auto temporalAdmission = BuildNeuralTemporalAdmission(
-		NeuralStereoRouteRole::Main, menuSuppressed);
+		NeuralStereoRouteRole::Main,
+		hardMenuBlocked,
+		!hardMenuBlocked);
 	ObserveNeuralTemporalAdmission(
 		NeuralStereoRouteRole::Main, temporalAdmission);
 	route.temporalAdmission = temporalAdmission;
@@ -27130,6 +27143,7 @@ void Upscaling::ConfigureFoveatedPeripherySourceRegion(FoveatedEyeDispatchParams
 
 bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, const FoveatedEyeDispatchParams& params, NeuralCenterDispatchResult* neuralResult)
 {
+	(void)neuralResult;
 	if (!globals::game::isVR || eyeIndex >= 2)
 		return false;
 	if (!SupportsFoveatedVendorDispatch(a_upscaleMethod))
@@ -27412,18 +27426,6 @@ bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod
 		if (!centerOutput || !centerOutput->srv || !rect.outputWidth || !rect.outputHeight)
 			return false;
 		ID3D11ShaderResourceView* centerSRV = centerOutput->srv.get();
-		const bool useSubmitNeuralFloatOutput =
-			params.dlssViewportRole ==
-				Streamline::DLSSViewportRole::SubmitStageFoveatedCenter &&
-			neuralResult && neuralResult->applied;
-		if (useSubmitNeuralFloatOutput) {
-			if (!submitNeuralFloatColorOut[eyeIndex] ||
-				!submitNeuralFloatColorOut[eyeIndex]->resource ||
-				!submitNeuralFloatColorOut[eyeIndex]->srv) {
-				return false;
-			}
-			centerSRV = submitNeuralFloatColorOut[eyeIndex]->srv.get();
-		}
 
 		const float centerBlendFeather = std::isfinite(params.centerBlendFeather) ?
 		                                     ClampFoveatedBlendFeather(params.centerBlendFeather) :
@@ -27512,9 +27514,12 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 		GetLatchedNeuralRenderingInsertionPoint();
 	if (mainFinalLdrNeuralState.frame != state->frameCount)
 		mainFinalLdrNeuralState = {};
-	const bool neuralMenuSuppressed = IsNeuralRenderingMenuSuppressed();
+	const bool neuralHardMenuBlocked =
+		IsNeuralRenderingHardMenuBlocked(*this, state);
 	const auto neuralTemporalAdmission = BuildNeuralTemporalAdmission(
-		NeuralStereoRouteRole::Main, neuralMenuSuppressed);
+		NeuralStereoRouteRole::Main,
+		neuralHardMenuBlocked,
+		!neuralHardMenuBlocked);
 	ObserveNeuralTemporalAdmission(
 		NeuralStereoRouteRole::Main, neuralTemporalAdmission);
 
@@ -32899,7 +32904,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	const bool replayMenuContinuityAllowed =
 		!hardMenuBlocked &&
 		(!currentMenuPresentationContext ||
-			(replayLateMenuCompositeReady && !csOverlayOpen));
+			replayLateMenuCompositeReady);
 	auto neuralTemporalAdmission = BuildNeuralTemporalAdmission(
 		NeuralStereoRouteRole::Submit,
 		hardMenuBlocked,
@@ -33341,7 +33346,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		vrRenderScaleMode &&
 		!presentationRenderTarget &&
 		currentMenuPresentationContext &&
-		!csOverlayOpen &&
 		menuTextProtectionContext &&
 		vrMenuCommittedLayerValid &&
 		vrMenuCommittedLayerOperationCount != 0 &&
@@ -33354,15 +33358,15 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	const bool menuContinuityAllowed =
 		!hardMenuBlocked &&
 		(!currentMenuPresentationContext ||
-			(lateMenuCompositeReady && !csOverlayOpen));
+			lateMenuCompositeReady);
 	const NeuralRendering::TemporalAdmissionInputs submitTemporalMenuPolicy{
 		.menuContextActive = hardMenuBlocked,
-		.pausedSubmitContinuityAllowed = menuContinuityAllowed,
+		.pausedContinuityAllowed = menuContinuityAllowed,
 	};
 	neuralTemporalAdmission = BuildNeuralTemporalAdmission(
 		NeuralStereoRouteRole::Submit,
 		submitTemporalMenuPolicy.menuContextActive,
-		submitTemporalMenuPolicy.pausedSubmitContinuityAllowed);
+		submitTemporalMenuPolicy.pausedContinuityAllowed);
 	ObserveNeuralTemporalAdmission(
 		NeuralStereoRouteRole::Submit, neuralTemporalAdmission);
 	routeLateMenuCompositeReady = lateMenuCompositeReady;
@@ -33381,8 +33385,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		menuPresentationAttempt =
 			vrMenuFrameTransaction.sealed ||
 			vrMenuFrameTransaction.OwnsPresentationWork() ||
-			(vrMenuCommittedLayerValid && menuTextProtectionContext &&
-				(!csOverlayOpen || currentMenuPresentationContext));
+			(vrMenuCommittedLayerValid && menuTextProtectionContext);
 		if (menuPresentationAttempt)
 			vrMenuFrameTransaction.presentationStarted = true;
 	}
@@ -35643,7 +35646,7 @@ void Upscaling::RequestHistoryReset() noexcept
 NeuralRendering::TemporalAdmissionResult Upscaling::BuildNeuralTemporalAdmission(
 	NeuralStereoRouteRole a_role,
 	bool a_menuContextActive,
-	bool a_pausedSubmitContinuityAllowed) const noexcept
+	bool a_pausedContinuityAllowed) const noexcept
 {
 	const auto* state = globals::state;
 	auto* const ui = globals::game::ui;
@@ -35651,8 +35654,8 @@ NeuralRendering::TemporalAdmissionResult Upscaling::BuildNeuralTemporalAdmission
 	const NeuralRendering::TemporalAdmissionInputs inputs{
 		.menuContextActive = a_menuContextActive,
 		.gamePaused = ui && ui->GameIsPaused(),
-		.pausedSubmitContinuityAllowed =
-			a_pausedSubmitContinuityAllowed,
+		.pausedContinuityAllowed =
+			a_pausedContinuityAllowed,
 		.worldFrameStateAvailable = state != nullptr,
 		.currentFrame = state ? state->frameCount : invalidFrame,
 		.lastWorldRenderFrame = state ? state->lastWorldRenderFrame : invalidFrame,

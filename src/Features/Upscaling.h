@@ -2169,7 +2169,7 @@ public:
 	[[nodiscard]] NeuralRendering::TemporalAdmissionResult BuildNeuralTemporalAdmission(
 		NeuralStereoRouteRole a_role,
 		bool a_menuContextActive,
-		bool a_pausedSubmitContinuityAllowed = false) const noexcept;
+		bool a_pausedContinuityAllowed = false) const noexcept;
 	void ObserveNeuralTemporalAdmission(
 		NeuralStereoRouteRole a_role,
 		const NeuralRendering::TemporalAdmissionResult& a_admission) noexcept;
@@ -2267,7 +2267,7 @@ public:
 	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3D11Resource* source, uint32_t width, uint32_t height, bool copyBindFlags, bool createSRV, bool createUAV, bool createRTV, const char* name, DXGI_FORMAT formatOverride = DXGI_FORMAT_UNKNOWN);
 	bool PrepareSubmitNeuralFloatResources(uint32_t eyeIndex, ID3D11Resource* source, uint32_t width, uint32_t height, bool directCommit, bool validateOnly);
 	ID3D11Resource* GetSubmitNeuralFloatEvaluationOutput(uint32_t eyeIndex, bool directCommit) const noexcept;
-	bool CommitSubmitNeuralFloatOutput(uint32_t eyeIndex, bool directCommit) noexcept;
+	bool CommitSubmitNeuralFloatOutput(uint32_t eyeIndex, bool directCommit, Texture2D& presentationOutput, const char* perfLabel) noexcept;
 	bool EnsureFoveatedDepthGuideSRV(Texture2D& texture, const char* name);
 	void DestroySubmitStageDLSSSharpenerTextures();
 	void DestroyCommonUpscalingTextures();

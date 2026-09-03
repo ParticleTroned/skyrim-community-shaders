@@ -233,7 +233,7 @@ namespace NeuralRendering
 	{
 		bool menuContextActive = false;
 		bool gamePaused = false;
-		bool pausedSubmitContinuityAllowed = false;
+		bool pausedContinuityAllowed = false;
 		bool worldFrameStateAvailable = false;
 		std::uint32_t currentFrame = 0;
 		std::uint32_t lastWorldRenderFrame = 0;
@@ -248,10 +248,11 @@ namespace NeuralRendering
 		bool admitted = false;
 		bool menuContextActive = false;
 		bool gamePaused = false;
-		bool pausedSubmitContinuityAllowed = false;
+		bool pausedContinuityAllowed = false;
 		bool worldFrameStateAvailable = false;
 		bool worldFrameStarted = false;
 		bool worldFrameCompleted = false;
+		bool retainedWorldFrame = false;
 		bool temporalSourceFresh = false;
 		std::uint32_t currentFrame = 0;
 		std::uint32_t lastWorldRenderFrame = 0;
@@ -267,8 +268,8 @@ namespace NeuralRendering
 			.route = a_route,
 			.menuContextActive = a_inputs.menuContextActive,
 			.gamePaused = a_inputs.gamePaused,
-			.pausedSubmitContinuityAllowed =
-				a_inputs.pausedSubmitContinuityAllowed,
+			.pausedContinuityAllowed =
+				a_inputs.pausedContinuityAllowed,
 			.worldFrameStateAvailable = a_inputs.worldFrameStateAvailable,
 			.worldFrameStarted =
 				a_inputs.worldFrameStateAvailable &&
@@ -281,15 +282,24 @@ namespace NeuralRendering
 			.lastCompletedWorldRenderFrame =
 				a_inputs.lastCompletedWorldRenderFrame,
 		};
-		result.temporalSourceFresh = result.worldFrameStarted &&
-		                             (a_route == TemporalRoute::Main || result.worldFrameCompleted);
-		const bool pausedSubmitContinuity =
-			a_route == TemporalRoute::Submit &&
-			result.pausedSubmitContinuityAllowed;
+		const bool currentRouteSourceFresh = result.worldFrameStarted &&
+		                                     (a_route == TemporalRoute::Main || result.worldFrameCompleted);
+		const bool completedWorldFrameAvailable =
+			result.worldFrameStateAvailable &&
+			result.lastCompletedWorldRenderFrame != 0 &&
+			result.lastCompletedWorldRenderFrame !=
+				std::numeric_limits<std::uint32_t>::max() &&
+			result.lastWorldRenderFrame == result.lastCompletedWorldRenderFrame &&
+			result.lastCompletedWorldRenderFrame <= result.currentFrame;
+		result.retainedWorldFrame =
+			result.gamePaused && result.pausedContinuityAllowed &&
+			!currentRouteSourceFresh && completedWorldFrameAvailable;
+		result.temporalSourceFresh =
+			currentRouteSourceFresh || result.retainedWorldFrame;
 
 		if (result.menuContextActive) {
 			result.blockReason = TemporalAdmissionBlockReason::MenuContext;
-		} else if (result.gamePaused && !pausedSubmitContinuity) {
+		} else if (result.gamePaused && !result.pausedContinuityAllowed) {
 			result.blockReason = TemporalAdmissionBlockReason::GamePaused;
 		} else if (!result.temporalSourceFresh) {
 			result.blockReason =

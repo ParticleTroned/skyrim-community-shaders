@@ -169,6 +169,13 @@ outputs and avoids the extra center-sized copy. A failed direct pair restores or
 retains the complete normal-DLSS pair, so a partial NR result cannot remain
 visible.
 
+The Render Scale submit route keeps Feature 18 input and evaluation output in
+private `R11G11B10_FLOAT` textures. After both eyes succeed, each float result is
+explicitly converted into the established presentation-format centre texture.
+Feathering, sharpening, menu composition, HMD-mask repair, and OpenVR submission
+therefore all consume the same committed resource as normal DLSS. Final-LDR
+submission uses the same conversion boundary before its late centre blend.
+
 The Neural Rendering controls live in the `NVIDIA DLSS Neural Rendering`
 dropdown in Upscaling, between Frame Generation and NVIDIA Reflex. `Insertion
 Point` selects `Upscaled Centre` (the default) or experimental `Final LDR
@@ -214,40 +221,42 @@ state.
 
 Feature 18 is admitted from one immutable stereo-route snapshot. Main-route
 evaluation requires the current world render to have started; submit-route
-evaluation additionally requires that world render to have completed. The main
-route keeps its strict pause and menu suppression. The submit route may admit a
-paused frame only when the complete world-frame inputs are still current and
-the presentation path can preserve the active UI without sending a mixed
-stereo pair.
+evaluation additionally requires that world render to have completed. During a
+safe ordinary pause, either route may continue from the most recently completed
+world frame when the render and completion markers identify the same retained
+frame. Main-menu, loading, and save/load boundaries remain fail-closed.
 
-| Submit context                              | NR behavior | Presentation requirement                                  |
-| ------------------------------------------- | ----------- | --------------------------------------------------------- |
-| Gameplay                                    | Allow       | Current world frame is complete                           |
-| CS menu only                                | Allow       | CS overlay remains after NR                               |
-| Game or dialogue menu                       | Allow       | Sealed late menu layer is ready and the CS menu is closed |
-| Game menu without a sealed layer            | Block       | Fail closed instead of omitting UI                        |
-| Game menu and CS menu together              | Block       | Combined ordering is not proven safe                      |
-| Main menu, loading, or save/load transition | Block       | Hard presentation-safety boundary                         |
+| Submit context                              | NR behavior | Presentation requirement                                |
+| ------------------------------------------- | ----------- | ------------------------------------------------------- |
+| Gameplay                                    | Allow       | Current world frame is complete                         |
+| CS menu only                                | Allow       | Retain the completed scene; CS overlay remains after NR |
+| Game or dialogue menu                       | Allow       | Retain the scene and use the sealed late menu layer     |
+| Game menu without a sealed layer            | Block       | Fail closed instead of omitting UI                      |
+| Game menu and CS menu together              | Allow       | Compose game UI, then the later CS overlay              |
+| Main menu, loading, or save/load transition | Block       | Hard presentation-safety boundary                       |
 
-A hard presentation context reports `menu_context`, a disallowed ordinary
-pause reports `game_paused`, and an incomplete or old world frame reports
-`temporal_source_stale`. The stale-frame gate still applies when paused-submit
-continuity is otherwise allowed. Crossing a true admission boundary requests
-one history reset; opening a menu whose safe submit continuity remains admitted
-does not discard Feature 18 history merely because the game is paused.
+A hard presentation context reports `menu_context`, a disallowed pause reports
+`game_paused`, and an incomplete world frame reports `temporal_source_stale`.
+An old frame is admitted only while paused continuity is allowed and its render
+and completion markers agree. Crossing a true admission boundary requests one
+history reset; opening a menu whose continuity remains admitted does not discard
+Feature 18 history merely because the game is paused.
 
 Known game-menu layers are composited after NR. The CS overlay is drawn still
 later, after `SubmitVRUpscaledFrame` returns and before the final OpenVR submit,
-so a CS-only frame does not require the known-menu layer bridge. The combined
-CS-menu plus game-menu case remains blocked because opening the CS menu
-invalidates the committed game-menu layer.
+so a CS-only frame does not require the known-menu layer bridge. When both are
+open, the known-menu layer is sealed and composited first, then the CS overlay
+is drawn at its normal later boundary. A menu change invalidates any cached pair
+and layer before the next correlated pair is admitted.
 The menu-continuity exception keeps foveated submit dispatch active only when
 NR is otherwise eligible; Render Scale without NR retains its existing menu
 fallback behavior.
 
 `nr_status` reports `hardMenuBlocked`, `lateMenuCompositeReady`,
 `csOverlayOpen`, and `menuContinuityAllowed` for each route snapshot.
-Its temporal admission record also reports `pausedSubmitContinuityAllowed`.
+Its temporal admission record also reports `pausedContinuityAllowed` and
+`retainedWorldFrame`. The legacy `pausedSubmitContinuityAllowed` JSON field is
+retained as an alias for API-v7 consumers.
 `knownMenuContext` remains available as an observation and must not be treated
 as the submit hard-block decision. A retained submit pair also binds the menu
 query epoch, CS-overlay state, late-composite use, and menu-layer generation.

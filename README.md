@@ -2,6 +2,8 @@
 > This is an unofficial fork of [Skyrim Community Shaders](https://github.com/doodlum/skyrim-community-shaders)
 > by Doodlum & contributors. It is not affiliated with or endorsed by the Community Shaders team.
 
+NOTE: This repository does not contain any effects 11-related code from upstream !!!
+
 # Community Shaders Expanded (CSX) – Unofficial Fork
 
 SKSE core plugin for community-driven advanced graphics modifications.

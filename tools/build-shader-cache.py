@@ -2112,7 +2112,7 @@ def build_runtime(
 ) -> tuple[Path, dict[str, int], int]:
     runtime_root = workspace / runtime
     shader_contract = shader_contract_identity(
-        source_root, DEFAULT_SHADER_CONTRACT_FILES, runtime
+        source_root, DEFAULT_SHADER_CONTRACT_FILES
     )
     shader_cache_abi = sha256_bytes(canonical_bytes(shader_contract))
     variants = compile_variants_for(profile)

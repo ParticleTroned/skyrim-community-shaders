@@ -12,7 +12,9 @@ No game version, DLL, marker, settings file, or mod-manager state is inspected.
 from __future__ import annotations
 
 import argparse
+import configparser
 import json
+import re
 import shutil
 import sys
 import xml.etree.ElementTree as ET
@@ -34,6 +36,8 @@ PACK_FILES = (
     "Developer.B.csxpack",
 )
 CACHE_INFO_FILE = "Info.ini"
+CORE_BUILD_MANIFEST = Path("SKSE/Plugins/CSX.BuildManifest.json")
+SHADER_CACHE_ABI_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 RUNTIME_FLAG = "CSXRuntime"
 RUNTIME_VR = "VR"
@@ -216,17 +220,46 @@ def build_info(version: str) -> ET.ElementTree:
     return ET.ElementTree(root)
 
 
-def validate_cache_source(cache_directory: Path) -> None:
+def core_shader_cache_abi(core: Path) -> str:
+    manifest_path = core / CORE_BUILD_MANIFEST
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        shader_cache_abi = manifest["identity"]["shaderCache"]["abiId"]
+    except (KeyError, OSError, TypeError, UnicodeError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"invalid core build manifest: {manifest_path}") from exc
+    if not isinstance(shader_cache_abi, str) or not SHADER_CACHE_ABI_PATTERN.fullmatch(
+        shader_cache_abi
+    ):
+        raise SystemExit(f"invalid core shader-cache ABI: {manifest_path}")
+    return shader_cache_abi
+
+
+def validate_cache_source(
+    cache_directory: Path, expected_shader_cache_abi: str
+) -> None:
     manifest_path = cache_directory / MANIFEST_FILE
     pack_manifest_path = cache_directory / PACK_MANIFEST_FILE
     if not cache_directory.is_dir():
         raise SystemExit(f"missing shader cache directory: {cache_directory}")
-    if not (cache_directory / CACHE_INFO_FILE).is_file():
-        raise SystemExit(f"missing shader cache metadata: {cache_directory / CACHE_INFO_FILE}")
+    info_path = cache_directory / CACHE_INFO_FILE
+    if not info_path.is_file():
+        raise SystemExit(f"missing shader cache metadata: {info_path}")
     if not manifest_path.is_file():
         raise SystemExit(f"missing shader cache manifest: {manifest_path}")
     if not pack_manifest_path.is_file():
         raise SystemExit(f"missing managed pack manifest: {pack_manifest_path}")
+    info = configparser.ConfigParser(interpolation=None)
+    try:
+        with info_path.open("r", encoding="utf-8-sig") as stream:
+            info.read_file(stream)
+    except (configparser.Error, OSError, UnicodeError) as exc:
+        raise SystemExit(f"invalid shader cache metadata {info_path}: {exc}") from exc
+    shader_cache_abi = info.get("Cache", "ShaderCacheABI", fallback=None)
+    if shader_cache_abi != expected_shader_cache_abi:
+        raise SystemExit(
+            f"shader cache ABI does not match the core AIO: {cache_directory} "
+            f"(core {expected_shader_cache_abi}, cache {shader_cache_abi!r})"
+        )
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
@@ -248,6 +281,7 @@ def validate_cache_source(cache_directory: Path) -> None:
         or pack_manifest.get("schema") != "csx.shader-cache.pack-manifest"
         or pack_manifest.get("schemaVersion") != 1
         or pack_manifest.get("formatVersion") != 1
+        or pack_manifest.get("shaderCacheABI") != expected_shader_cache_abi
         or not isinstance(pack_manifest.get("compatibilityVariants"), list)
         or "default" not in pack_manifest["compatibilityVariants"]
     ):
@@ -401,11 +435,13 @@ def validate_module_config(config_path: Path) -> None:
 
 
 def validate_staged_package(output: Path, version: str) -> None:
-    if not (output / CORE_DIRECTORY).is_dir():
+    core = output / CORE_DIRECTORY
+    if not core.is_dir():
         raise SystemExit("staged FOMOD is missing its AIO Core directory")
+    shader_cache_abi = core_shader_cache_abi(core)
     for variant in CACHE_VARIANTS:
         cache_directory = output / variant.staging_directory / CACHE_DIRECTORY
-        validate_cache_source(cache_directory)
+        validate_cache_source(cache_directory, shader_cache_abi)
 
     fomod_directory = output / FOMOD_DIRECTORY
     validate_module_config(fomod_directory / MODULE_CONFIG_FILE)
@@ -443,10 +479,11 @@ def stage_package(
             )
 
     runtime_roots = {RUNTIME_SE_AE: se_cache, RUNTIME_VR: vr_cache}
+    shader_cache_abi = core_shader_cache_abi(core)
     sources: dict[CacheVariant, Path] = {}
     for variant in CACHE_VARIANTS:
         source = runtime_roots[variant.runtime] / CACHE_DIRECTORY
-        validate_cache_source(source)
+        validate_cache_source(source, shader_cache_abi)
         sources[variant] = source
 
     try:

@@ -481,5 +481,32 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 "CSX 12.345-VR",
             )
 
+    def test_runtime_remains_in_each_record_compile_state(self) -> None:
+        states: list[str] = []
+
+        def record_manifest(*args, **kwargs) -> int:
+            states.append(args[2])
+            return 0
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for runtime in ("SE", "VR"):
+                BUILDER.write_shader_cache_manifest(
+                    root / runtime,
+                    root / "Shaders",
+                    runtime,
+                    {},
+                    record_manifest,
+                    "a" * 64,
+                )
+
+        self.assertEqual(
+            states,
+            [
+                f"ShaderCacheABI={'a' * 64};",
+                f"VR;ShaderCacheABI={'a' * 64};",
+            ],
+        )
+
 if __name__ == "__main__":
     unittest.main()

@@ -221,7 +221,7 @@ This compiles HLSL but does not build the C++ plugin. The builder:
 9. packages each runtime's managed cache into a raw archive with no installer
    metadata or automatic runtime detection;
 10. publishes output only after every requested runtime has passed the earlier
-   stages.
+    stages.
 
 An existing runtime output is replaced only when it has the expected,
 non-link cache layout and a readable `[Cache] PluginVersion` ownership field.
@@ -469,6 +469,10 @@ exactly one staged source to `Data/ShaderCache`:
 ShaderCache-VR/ShaderCache
 ShaderCache-SE-AE/ShaderCache
 ```
+
+Assembly requires both cache packs to declare the same shader-cache ABI as the
+core AIO's `SKSE/Plugins/CSX.BuildManifest.json`. A disagreement fails the
+release before the FOMOD archive can replace the plain AIO.
 
 The plugin independently validates cache identity, shader ABI, source content,
 and registered compatibility requirements. A missing or mismatched record is

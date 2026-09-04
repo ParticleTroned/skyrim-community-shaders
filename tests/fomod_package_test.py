@@ -23,13 +23,15 @@ SPEC.loader.exec_module(BUILDER)
 
 
 class FomodPackageTests(unittest.TestCase):
+    SHADER_CACHE_ABI = "a" * 64
+
     @staticmethod
-    def _write_cache(cache_directory: Path) -> None:
+    def _write_cache(cache_directory: Path, shader_cache_abi: str) -> None:
         cache_directory.mkdir(parents=True, exist_ok=True)
         (cache_directory / BUILDER.CACHE_INFO_FILE).write_text(
             "[Cache]\n"
             "PluginVersion = CSX 3.18-VR\n"
-            "ShaderCacheABI = test\n",
+            f"ShaderCacheABI = {shader_cache_abi}\n",
             encoding="utf-8",
         )
         (cache_directory / BUILDER.MANIFEST_FILE).write_text(
@@ -42,6 +44,7 @@ class FomodPackageTests(unittest.TestCase):
                     "schema": "csx.shader-cache.pack-manifest",
                     "schemaVersion": 1,
                     "formatVersion": 1,
+                    "shaderCacheABI": shader_cache_abi,
                     "compatibilityVariants": ["default", "legacy-horizon-fix"],
                 }
             ),
@@ -54,11 +57,26 @@ class FomodPackageTests(unittest.TestCase):
         core = root / "core"
         core.mkdir()
         (core / "core-file.txt").write_text("core", encoding="utf-8")
+        build_manifest = core / BUILDER.CORE_BUILD_MANIFEST
+        build_manifest.parent.mkdir(parents=True)
+        build_manifest.write_text(
+            json.dumps(
+                {
+                    "identity": {
+                        "shaderCache": {"abiId": self.SHADER_CACHE_ABI}
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
 
         se_cache = root / "se"
         vr_cache = root / "vr"
         for runtime_root in (se_cache, vr_cache):
-            self._write_cache(runtime_root / BUILDER.CACHE_DIRECTORY)
+            self._write_cache(
+                runtime_root / BUILDER.CACHE_DIRECTORY,
+                self.SHADER_CACHE_ABI,
+            )
         return core, se_cache, vr_cache
 
     def test_stages_one_page_two_managed_cache_fomod(self) -> None:
@@ -141,6 +159,23 @@ class FomodPackageTests(unittest.TestCase):
             root = Path(temporary)
             core, se_cache, vr_cache = self._inputs(root)
             (vr_cache / BUILDER.CACHE_DIRECTORY / BUILDER.PACK_FILES[0]).unlink()
+            with self.assertRaises(SystemExit):
+                BUILDER.stage_package(
+                    core,
+                    se_cache,
+                    vr_cache,
+                    root / "staged",
+                    "v3.18.0",
+                )
+
+    def test_rejects_cache_abi_that_does_not_match_core(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            core, se_cache, vr_cache = self._inputs(root)
+            self._write_cache(
+                vr_cache / BUILDER.CACHE_DIRECTORY,
+                "b" * 64,
+            )
             with self.assertRaises(SystemExit):
                 BUILDER.stage_package(
                     core,

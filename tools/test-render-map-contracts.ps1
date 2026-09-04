@@ -68,7 +68,7 @@ $fixtureIdentityCases = Get-Content -Raw -LiteralPath $fixtureIdentityCasesPath 
 Assert-True (@($fixtureIdentityCases.contexts.PSObject.Properties).Count -ge 2) 'Identity fixture requires at least two contexts'
 Assert-True (@($fixtureIdentityCases.recordings.PSObject.Properties).Count -ge 2) 'Identity fixture requires at least two recordings'
 Assert-True (@($fixtureIdentityCases.commandLists.PSObject.Properties).Count -ge 2) 'Identity fixture requires at least two command lists'
-Assert-True (@($fixtureIdentityCases.contradictions).Count -eq 8) 'Identity fixture must enumerate all ownership contradiction cases'
+Assert-True (@($fixtureIdentityCases.contradictions).Count -eq 13) 'Identity fixture must enumerate all ownership contradiction cases'
 
 function New-EdgeCaseEvent {
     param(
@@ -182,4 +182,4 @@ try {
     }
 }
 
-Write-Output "Render-map contracts passed: 2 schemas, $($fixtureEvents.Count) baseline deferred-command fixtures, $($validEdgeCaseEvents.Count) valid edge cases, $($fixtureEdgeCases.invalid.Count) rejected edge cases, 8 cross-identity cases, 3 hook slots, and the offline graph suite."
+Write-Output "Render-map contracts passed: 2 schemas, $($fixtureEvents.Count) baseline deferred-command fixtures, $($validEdgeCaseEvents.Count) valid edge cases, $($fixtureEdgeCases.invalid.Count) rejected edge cases, 13 cross-identity cases, 3 hook slots, and the offline graph suite."

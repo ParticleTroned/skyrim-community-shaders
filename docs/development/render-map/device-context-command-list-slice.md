@@ -116,6 +116,12 @@ immediate ExecuteCommandList --------------------> execution event
 remain recording-domain events linked through the command-list observation;
 they are not duplicated as a guessed series of immediate calls.
 
+An authoritative execution requires a declared, non-conflicted immediate
+context, the `cpu-call` observation domain, a non-null command-stream sequence,
+and a null recording identity in the execution envelope. Missing, deferred, or
+contradictory execution-context evidence produces a blocking gap and no
+`executes` edge.
+
 The derived graph retains recorded draw/dispatch nodes, exact recording edges,
 and observed stage-shader references. It does not apply global
 immediate-context SRV, UAV, target-binding, resource-version, or hazard state to
@@ -125,7 +131,10 @@ deferred-resource-provenance gap instead.
 When `RestoreContextState` is true, the immediate-context pipeline tracker is
 restored to its pre-call state. When false, D3D11 returns the immediate context
 to default state; the tracker must invalidate/reset its bindings rather than
-retain stale stage objects. The corresponding
+retain stale stage objects. Because this is a physical post-call state
+transition, invalidation is independent of capture state, catalogue admission,
+observation allocation, filtering, and event retention. Those failures may omit
+evidence but cannot preserve pre-call tracker state. The corresponding
 `RestoreDeferredContextState` rule is applied to the next recording epoch.
 
 The offline graph applies the same restore-false boundary to both its observed
@@ -135,11 +144,14 @@ reseed the state. Restore-true execution preserves it.
 
 Typed command identities are immutable within a capture. Before deriving
 provenance, the graph builder detects incompatible repeated device-context,
-recording, or command-list declarations. It also checks that every recording
-has one deferred-context owner and that command-event envelopes, list source
-identities, successful finish identities, and execute claims agree with that
-owner chain. Any contradiction is a blocking gap and suppresses the unsupported
-authoritative edge while unrelated coherent chains remain usable.
+recording, or command-list declarations. Compatibility covers the immutable
+payload and its semantic envelope: context identity, recording identity, and
+observation domain. It also checks that every recording has one deferred-context
+owner and that command-event envelopes, list source identities, successful
+finish identities, and execute claims agree with that owner chain. Any
+contradiction is detected before edges are derived, is independent of event
+order, and becomes a blocking gap that suppresses the unsupported authoritative
+edge while unrelated coherent chains remain usable.
 
 ## Capture boundaries
 

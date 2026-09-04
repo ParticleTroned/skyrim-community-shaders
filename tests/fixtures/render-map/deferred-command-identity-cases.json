@@ -19,6 +19,11 @@
         "execute-source-recording-versus-list",
         "duplicate-device-context-identity",
         "duplicate-command-recording-identity",
-        "duplicate-command-list-identity"
+        "duplicate-command-list-identity",
+        "duplicate-device-context-envelope-identity",
+        "duplicate-command-recording-envelope-identity",
+        "duplicate-command-recording-envelope-owner",
+        "duplicate-command-list-envelope-owner",
+        "duplicate-command-list-envelope-recording"
     ]
 }

@@ -336,7 +336,15 @@ def derive(
         if not isinstance(identity_id, str):
             continue
         identity_key = (identity_kind, identity_id)
-        signature = json.dumps(declaration_payload, sort_keys=True, separators=(",", ":"))
+        semantic_declaration = {
+            "payload": declaration_payload,
+            "envelope": {
+                "deviceContextObservationId": declaration_event.get("deviceContextObservationId"),
+                "commandRecordingObservationId": declaration_event.get("commandRecordingObservationId"),
+                "observationDomain": declaration_event.get("execution", {}).get("observationDomain"),
+            },
+        }
+        signature = json.dumps(semantic_declaration, sort_keys=True, separators=(",", ":"))
         previous = typed_identity_declarations.get(identity_key)
         if previous is not None and previous != signature:
             conflicted_typed_identities.add(identity_key)
@@ -901,6 +909,42 @@ def derive(
             )
             command_list = valid_command_list(list_id)
             coherent = bool(command_list)
+            execution_context_id = event.get("deviceContextObservationId")
+            execution_context = valid_context(execution_context_id)
+            execution = event.get("execution", {})
+            command_stream_sequence = execution.get("commandStreamSequence")
+            if not execution_context:
+                graph.gap(
+                    f"ExecuteCommandList event {sequence} has no valid declared execution context "
+                    f"{execution_context_id}; authoritative provenance was suppressed.",
+                    [execution_node], True, "other",
+                )
+                coherent = False
+            elif execution_context["payload"].get("kind") != "immediate":
+                graph.gap(
+                    f"ExecuteCommandList event {sequence} names non-immediate context "
+                    f"{execution_context_id}; authoritative provenance was suppressed.",
+                    [execution_context["node"], execution_node], True, "other",
+                )
+                coherent = False
+            if (
+                execution.get("observationDomain") != "cpu-call" or
+                not isinstance(command_stream_sequence, int) or
+                isinstance(command_stream_sequence, bool)
+            ):
+                graph.gap(
+                    f"ExecuteCommandList event {sequence} is not a sequenced CPU-call observation; "
+                    "authoritative provenance was suppressed.",
+                    [execution_node], True, "other",
+                )
+                coherent = False
+            if event.get("commandRecordingObservationId") is not None:
+                graph.gap(
+                    f"ExecuteCommandList event {sequence} unexpectedly carries recording envelope "
+                    f"{event.get('commandRecordingObservationId')}; authoritative provenance was suppressed.",
+                    [execution_node], True, "other",
+                )
+                coherent = False
             if not command_list:
                 graph.gap(
                     f"ExecuteCommandList event {sequence} refers to undeclared or invalid command list {list_id}.",

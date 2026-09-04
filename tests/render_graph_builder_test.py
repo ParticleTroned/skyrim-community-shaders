@@ -836,18 +836,25 @@ def main() -> int:
             "sourceRecordingComplete": True,
             "sourceRecordingIncompleteReasons": [],
         }), "commandRecordingObservationId": "obs-command-recording-2-g1"},
-        envelope(5, "execute-command-list", {
+        {**envelope(5, "device-context-observed", {
+            "schema": "device-context-observation-v2",
+            "deviceContextObservationId": "obs-device-context-4-g1",
+            "contextPointer": "0x101", "pointerGeneration": 1,
+            "kind": "immediate", "creationEvidence": "initial-immediate-context",
+            "contextFlags": 0,
+        }), "deviceContextObservationId": "obs-device-context-4-g1"},
+        {**envelope(6, "execute-command-list", {
             "schema": "execute-command-list-v1",
             "commandListObservationId": "obs-command-list-3-g1",
             "commandListPointer": "0x200",
             "sourceCommandRecordingObservationId": "obs-command-recording-2-g1",
             "restoreContextState": False,
-        }),
+        }), "deviceContextObservationId": "obs-device-context-4-g1"},
     ]
     command_graph = build_graph(tool, manifest, command_events)
     command_kinds = [node["kind"] for node in command_graph["nodes"]]
     command_edges = [edge["type"] for edge in command_graph["edges"]]
-    assert command_kinds.count("device-context") == 1
+    assert command_kinds.count("device-context") == 2
     assert command_kinds.count("command-recording") == 1
     assert command_kinds.count("command-list") == 1
     assert command_kinds.count("command-list-finish") == 1
@@ -863,6 +870,7 @@ def main() -> int:
 
     def deferred_execute_events(start: int, restore_context_state: bool) -> list[dict]:
         context_id = "obs-device-context-70-g1"
+        immediate_context_id = "obs-device-context-73-g1"
         recording_id = "obs-command-recording-71-g1"
         list_id = "obs-command-list-72-g1"
         context = envelope(start, "device-context-observed", {
@@ -903,14 +911,23 @@ def main() -> int:
         })
         finish["deviceContextObservationId"] = context_id
         finish["commandRecordingObservationId"] = recording_id
-        execute = envelope(start + 4, "execute-command-list", {
+        immediate_context = envelope(start + 4, "device-context-observed", {
+            "schema": "device-context-observation-v2",
+            "deviceContextObservationId": immediate_context_id,
+            "contextPointer": "0x701", "pointerGeneration": 1,
+            "kind": "immediate", "creationEvidence": "initial-immediate-context",
+            "contextFlags": 0,
+        })
+        immediate_context["deviceContextObservationId"] = immediate_context_id
+        execute = envelope(start + 5, "execute-command-list", {
             "schema": "execute-command-list-v1",
             "commandListObservationId": list_id,
             "commandListPointer": "0x720",
             "sourceCommandRecordingObservationId": recording_id,
             "restoreContextState": restore_context_state,
         })
-        return [context, recording, command_list, finish, execute]
+        execute["deviceContextObservationId"] = immediate_context_id
+        return [context, recording, command_list, finish, immediate_context, execute]
 
     def event_resource_edges(graph_under_test: dict, sequence: int) -> list[dict]:
         event_node = next(
@@ -924,14 +941,14 @@ def main() -> int:
             and event_node["id"] in {edge["from"], edge["to"]}
         ]
 
-    stale_draw = envelope(12, "draw", {
+    stale_draw = envelope(13, "draw", {
         "schema": "draw-call-v2", "operation": "draw", "immediateContextPointer": "0x9",
         "vertexShaderObservationId": None, "pixelShaderObservationId": None,
         "targetBindingObservationId": None, "arguments": {},
     })
     restore_false_prefix = json.loads(json.dumps(hazard_events[:7])) + deferred_execute_events(7, False)
     restore_false_draw_graph = build_graph(tool, manifest, restore_false_prefix + [stale_draw])
-    assert event_resource_edges(restore_false_draw_graph, 12) == []
+    assert event_resource_edges(restore_false_draw_graph, 13) == []
     assert any(
         "reset to D3D11 defaults" in gap["description"]
         for gap in restore_false_draw_graph["gaps"]
@@ -943,7 +960,7 @@ def main() -> int:
         "viewObservationId": "obs-shader-resource-view-3-g1",
         "bindingKind": "shader-resource", "stage": "compute", "slot": 0,
     }))
-    stale_dispatch = envelope(12, "dispatch", {
+    stale_dispatch = envelope(13, "dispatch", {
         "schema": "dispatch-call-v2", "operation": "dispatch",
         "deviceContextPointer": "0x9", "computeShaderObservationId": None,
         "arguments": {"threadGroupCountX": 1, "threadGroupCountY": 1, "threadGroupCountZ": 1},
@@ -951,47 +968,49 @@ def main() -> int:
     restore_false_dispatch_graph = build_graph(
         tool, manifest, stale_dispatch_prefix + deferred_execute_events(7, False) + [stale_dispatch]
     )
-    assert event_resource_edges(restore_false_dispatch_graph, 12) == []
+    assert event_resource_edges(restore_false_dispatch_graph, 13) == []
 
-    partial_rebind = envelope(12, "resource-view-bind", {
+    partial_rebind = envelope(13, "resource-view-bind", {
         "schema": "resource-view-binding-v1",
         "viewObservationId": "obs-shader-resource-view-3-g1",
         "bindingKind": "shader-resource", "stage": "pixel", "slot": 0,
     })
     partial_draw = json.loads(json.dumps(stale_draw))
-    partial_draw["sequence"] = 13
-    partial_draw["timestampQpc"] = 1013
+    partial_draw["sequence"] = 14
+    partial_draw["timestampQpc"] = 1014
     partial_graph = build_graph(
         tool, manifest, restore_false_prefix + [partial_rebind, partial_draw]
     )
-    partial_edges = event_resource_edges(partial_graph, 13)
+    partial_edges = event_resource_edges(partial_graph, 14)
     assert sum(edge["type"] == "reads" for edge in partial_edges) == 1
     assert sum(edge["type"] == "writes" for edge in partial_edges) == 0
 
-    reseed_target = envelope(13, "render-target-bind", {
+    reseed_target = envelope(14, "render-target-bind", {
         "schema": "render-target-binding-v1",
         "targetBindingObservationId": "obs-target-binding-5-g1",
         "renderTargetObservationIds": ["obs-render-target-4-g1"],
         "depthTargetObservationId": None, "identityDetailsAvailable": True,
     })
     reseeded_draw = json.loads(json.dumps(stale_draw))
-    reseeded_draw["sequence"] = 14
-    reseeded_draw["timestampQpc"] = 1014
+    reseeded_draw["sequence"] = 15
+    reseeded_draw["timestampQpc"] = 1015
     reseeded_draw["payload"]["targetBindingObservationId"] = "obs-target-binding-5-g1"
     reseeded_graph = build_graph(
         tool, manifest, restore_false_prefix + [partial_rebind, reseed_target, reseeded_draw]
     )
-    reseeded_edges = event_resource_edges(reseeded_graph, 14)
+    reseeded_edges = event_resource_edges(reseeded_graph, 15)
     assert sum(edge["type"] == "reads" for edge in reseeded_edges) == 1
     assert sum(edge["type"] == "writes" for edge in reseeded_edges) == 1
 
     restore_true_draw = json.loads(json.dumps(stale_draw))
     restore_true_draw["payload"]["targetBindingObservationId"] = "obs-target-binding-5-g1"
+    restore_true_draw["sequence"] = 13
+    restore_true_draw["timestampQpc"] = 1013
     restore_true_graph = build_graph(
         tool, manifest,
         json.loads(json.dumps(hazard_events[:7])) + deferred_execute_events(7, True) + [restore_true_draw],
     )
-    restore_true_edges = event_resource_edges(restore_true_graph, 12)
+    restore_true_edges = event_resource_edges(restore_true_graph, 13)
     assert sum(edge["type"] == "reads" for edge in restore_true_edges) == 1
     assert sum(edge["type"] == "writes" for edge in restore_true_edges) == 1
 
@@ -1022,12 +1041,12 @@ def main() -> int:
             "count": 1, "changedSlotCount": 1,
         }),
         *deferred_execute_events(5, False),
-        envelope(10, "resource-view-bind", {
+        envelope(11, "resource-view-bind", {
             "schema": "resource-view-binding-v2", "source": "post-call-query",
             "viewObservationId": None,
             "bindingKind": "shader-resource", "stage": "pixel", "slot": 0,
         }),
-        envelope(11, "resource-view-state-observed", {
+        envelope(12, "resource-view-state-observed", {
             "schema": "resource-view-state-observed-v1", "source": "post-call-query",
             "bindingKind": "shader-resource", "stage": "pixel", "startSlot": 0,
             "count": 1, "changedSlotCount": 1,
@@ -1122,19 +1141,38 @@ def main() -> int:
         event["execution"]["observationDomain"] = "command-recording"
         return event
 
-    def execute_event(sequence: int, command_list: dict, source_recording_id: str) -> dict:
-        return envelope(sequence, "execute-command-list", {
+    def immediate_context_event(
+        sequence: int, context_id: str = "obs-device-context-90-g1",
+    ) -> dict:
+        event = envelope(sequence, "device-context-observed", {
+            "schema": "device-context-observation-v2",
+            "deviceContextObservationId": context_id,
+            "contextPointer": "0x900", "pointerGeneration": 1,
+            "kind": "immediate", "creationEvidence": "initial-immediate-context",
+            "contextFlags": 0,
+        })
+        event["deviceContextObservationId"] = context_id
+        return event
+
+    def execute_event(
+        sequence: int, command_list: dict, source_recording_id: str,
+        context_id: str | None = "obs-device-context-90-g1",
+    ) -> dict:
+        event = envelope(sequence, "execute-command-list", {
             "schema": "execute-command-list-v1",
             "commandListObservationId": command_list["id"],
             "commandListPointer": command_list["pointer"],
             "sourceCommandRecordingObservationId": source_recording_id,
             "restoreContextState": True,
         })
+        event["deviceContextObservationId"] = context_id
+        return event
 
     valid_identity_events = identity_declarations() + [
-        recorded_draw(6, context_a["id"], recording_a["id"]),
-        finish_event(7, recording_a["id"], recording_a["id"], context_a["id"], list_a),
-        execute_event(8, list_a, recording_a["id"]),
+        immediate_context_event(6),
+        recorded_draw(7, context_a["id"], recording_a["id"]),
+        finish_event(8, recording_a["id"], recording_a["id"], context_a["id"], list_a),
+        execute_event(9, list_a, recording_a["id"]),
     ]
     valid_identity_graph = build_graph(tool, manifest, valid_identity_events)
     valid_edge_types = [edge["type"] for edge in valid_identity_graph["edges"]]
@@ -1193,11 +1231,62 @@ def main() -> int:
     contradiction_results.add("finish-list-versus-recording")
 
     execute_source_graph = build_graph(
-        tool, manifest, identity_declarations() + [execute_event(6, list_a, recording_b["id"])],
+        tool, manifest, identity_declarations() + [
+            immediate_context_event(6), execute_event(7, list_a, recording_b["id"]),
+        ],
     )
     assert sum(edge["type"] == "executes" for edge in execute_source_graph["edges"]) == 0
     assert any(gap["blocking"] and "does not match command list" in gap["description"] for gap in execute_source_graph["gaps"])
     contradiction_results.add("execute-source-recording-versus-list")
+
+    def assert_execute_rejected(candidate: dict, expected_gap: str, declarations: list[dict]) -> None:
+        graph_under_test = build_graph(tool, manifest, declarations + [candidate])
+        assert sum(edge["type"] == "executes" for edge in graph_under_test["edges"]) == 0
+        assert any(
+            gap["blocking"] and expected_gap in gap["description"]
+            for gap in graph_under_test["gaps"]
+        ), graph_under_test["gaps"]
+
+    assert_execute_rejected(
+        execute_event(6, list_a, recording_a["id"], None),
+        "no valid declared execution context", identity_declarations(),
+    )
+    assert_execute_rejected(
+        execute_event(6, list_a, recording_a["id"], "obs-device-context-404-g1"),
+        "no valid declared execution context", identity_declarations(),
+    )
+    assert_execute_rejected(
+        execute_event(6, list_a, recording_a["id"], context_a["id"]),
+        "names non-immediate context", identity_declarations(),
+    )
+    wrong_domain = execute_event(7, list_a, recording_a["id"])
+    wrong_domain["execution"]["observationDomain"] = "command-recording"
+    assert_execute_rejected(
+        wrong_domain, "is not a sequenced CPU-call observation",
+        identity_declarations() + [immediate_context_event(6)],
+    )
+    recording_envelope = execute_event(7, list_a, recording_a["id"])
+    recording_envelope["commandRecordingObservationId"] = recording_a["id"]
+    assert_execute_rejected(
+        recording_envelope, "unexpectedly carries recording envelope",
+        identity_declarations() + [immediate_context_event(6)],
+    )
+    conflicted_immediate = immediate_context_event(7)
+    conflicted_immediate["payload"]["contextPointer"] = "0x901"
+    assert_execute_rejected(
+        execute_event(8, list_a, recording_a["id"]),
+        "no valid declared execution context",
+        identity_declarations() + [immediate_context_event(6), conflicted_immediate],
+    )
+    mixed_execute_graph = build_graph(
+        tool, manifest,
+        identity_declarations() + [
+            immediate_context_event(6),
+            execute_event(7, list_a, recording_a["id"], context_a["id"]),
+            execute_event(8, list_b, recording_b["id"]),
+        ],
+    )
+    assert sum(edge["type"] == "executes" for edge in mixed_execute_graph["edges"]) == 1
 
     duplicate_specs = [
         ("device-context", "duplicate-device-context-identity", 1, "contextPointer", "0x811"),
@@ -1248,6 +1337,81 @@ def main() -> int:
             for gap in graph_under_test["gaps"]
         )
         contradiction_results.add(case_name)
+
+    envelope_duplicate_specs = [
+        ("device-context", "duplicate-device-context-envelope-identity", 1,
+         "deviceContextObservationId", context_a["id"]),
+        ("command-recording", "duplicate-command-recording-envelope-identity", 3,
+         "commandRecordingObservationId", recording_a["id"]),
+        ("command-recording", "duplicate-command-recording-envelope-owner", 3,
+         "deviceContextObservationId", context_a["id"]),
+        ("command-list", "duplicate-command-list-envelope-owner", 5,
+         "deviceContextObservationId", context_a["id"]),
+        ("command-list", "duplicate-command-list-envelope-recording", 5,
+         "commandRecordingObservationId", recording_a["id"]),
+    ]
+    identity_field_by_kind = {
+        "device-context": "deviceContextObservationId",
+        "command-recording": "commandRecordingObservationId",
+        "command-list": "commandListObservationId",
+    }
+    for identity_kind, case_name, declaration_index, envelope_field, replacement in envelope_duplicate_specs:
+        for contradictory_first in (False, True):
+            declarations = identity_declarations()
+            duplicate = json.loads(json.dumps(declarations[declaration_index]))
+            duplicate[envelope_field] = replacement
+            if contradictory_first:
+                declarations.insert(declaration_index, duplicate)
+            else:
+                declarations.append(duplicate)
+            for sequence, declaration in enumerate(declarations):
+                declaration["sequence"] = sequence
+                declaration["timestampQpc"] = 1000 + sequence
+            invalid_draw = recorded_draw(len(declarations), context_b["id"], recording_b["id"])
+            valid_draw = recorded_draw(len(declarations) + 1, context_a["id"], recording_a["id"])
+            graph_under_test = build_graph(
+                tool, manifest, declarations + [invalid_draw, valid_draw],
+            )
+            valid_draw_node = next(
+                node for node in graph_under_test["nodes"]
+                if node["attributes"].get("eventSequence") == len(declarations) + 1
+            )
+            assert any(
+                edge["type"] == "records" and edge["to"] == valid_draw_node["id"]
+                for edge in graph_under_test["edges"]
+            )
+            target_id = duplicate["payload"][identity_field_by_kind[identity_kind]]
+            target_node = next(
+                node for node in graph_under_test["nodes"]
+                if any(
+                    ref.get("kind") == "observation" and ref.get("value") == target_id
+                    for ref in node["sourceRefs"]
+                )
+            )
+            assert not [
+                edge for edge in graph_under_test["edges"]
+                if edge["type"] in {"records", "materializes", "finishes", "executes"}
+                and target_node["id"] in {edge["from"], edge["to"]}
+            ]
+            assert any(
+                gap["blocking"] and f"Typed {identity_kind} identity" in gap["description"]
+                for gap in graph_under_test["gaps"]
+            )
+        contradiction_results.add(case_name)
+
+    for identity_kind, _, declaration_index, _, _ in envelope_duplicate_specs:
+        declarations = identity_declarations()
+        declarations.append(json.loads(json.dumps(declarations[declaration_index])))
+        for sequence, declaration in enumerate(declarations):
+            declaration["sequence"] = sequence
+            declaration["timestampQpc"] = 1000 + sequence
+        exact_duplicate_graph = build_graph(tool, manifest, declarations)
+        assert not any(
+            f"Typed {identity_kind} identity" in gap["description"]
+            for gap in exact_duplicate_graph["gaps"]
+        )
+        assert sum(edge["type"] == "records" for edge in exact_duplicate_graph["edges"]) == 2
+        assert sum(edge["type"] == "materializes" for edge in exact_duplicate_graph["edges"]) == 2
 
     assert contradiction_results == set(identity_fixture["contradictions"])
 
@@ -1322,9 +1486,9 @@ def main() -> int:
     incomplete_events = [
         envelope(0, "device-context-observed", {
             "schema": "device-context-observation-v2",
-            "deviceContextObservationId": "obs-device-context-10-g1",
-            "contextPointer": "0x300", "pointerGeneration": 1,
-            "kind": "deferred", "creationEvidence": "first-seen",
+            "deviceContextObservationId": "obs-device-context-1-g1",
+            "contextPointer": "0x100", "pointerGeneration": 1,
+            "kind": "immediate", "creationEvidence": "initial-immediate-context",
             "contextFlags": 0,
         }),
         envelope(1, "command-list-observed", {

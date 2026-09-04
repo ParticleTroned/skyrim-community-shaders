@@ -1178,8 +1178,11 @@ namespace CSX::RenderMap
 		std::uintptr_t a_commandList,
 		bool a_restoreContextState) noexcept
 	{
-		if (!collector.IsCapturing() || a_context == 0 || a_commandList == 0 ||
-			a_context != immediateContext.load(std::memory_order_acquire)) {
+		const auto isImmediateContext =
+			a_context != 0 && a_context == immediateContext.load(std::memory_order_acquire);
+		if (isImmediateContext && !a_restoreContextState)
+			ResetImmediatePipelineState();
+		if (!collector.IsCapturing() || !isImmediateContext || a_commandList == 0) {
 			return;
 		}
 		const auto captureGeneration = collector.ActiveGeneration();
@@ -1230,8 +1233,6 @@ namespace CSX::RenderMap
 				sourceRecordingObservationId, a_restoreContextState),
 			contextObservationId, captureGeneration, commandSequence,
 			0, 0, 0, 0, false);
-		if (!a_restoreContextState)
-			ResetImmediatePipelineState();
 	}
 
 	void Runtime::BindRenderTargets(

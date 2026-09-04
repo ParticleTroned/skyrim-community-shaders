@@ -523,6 +523,14 @@
             "if": { "properties": { "type": { "const": "execute-command-list" } } },
             "then": {
                 "properties": {
+                    "deviceContextObservationId": { "$ref": "#/$defs/observationId" },
+                    "commandRecordingObservationId": { "type": "null" },
+                    "execution": {
+                        "properties": {
+                            "observationDomain": { "const": "cpu-call" },
+                            "commandStreamSequence": { "type": "integer", "minimum": 0 }
+                        }
+                    },
                     "payload": {
                         "type": "object",
                         "required": [

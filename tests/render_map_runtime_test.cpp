@@ -1471,6 +1471,45 @@ namespace
 			"RestoreContextState=false did not invalidate the immediate pipeline tracker");
 	}
 
+	void TestExecuteRestoreStateIsIndependentOfCaptureAdmission()
+	{
+		Runtime resetRuntime;
+		resetRuntime.SetImmediateContext(0x1000);
+		resetRuntime.BindStage(0x1000, ShaderStage::kVertex, 0x6000);
+		resetRuntime.BindStage(0x1000, ShaderStage::kPixel, 0x7000);
+		resetRuntime.BindStage(0x1000, ShaderStage::kCompute, 0x8000);
+		resetRuntime.RecordExecuteCommandList(0x1000, 0x5000, false);
+		Check(resetRuntime.StartCapture(Config()) == StartResult::kStarted,
+			"post-execute reset capture did not start");
+		resetRuntime.RecordDraw(0x1000, DrawOperation::kDraw, 3);
+		resetRuntime.RecordDispatch(0x1000, DispatchOperation::kDispatch, 1, 1, 1);
+		auto resetSnapshot = resetRuntime.StopCapture();
+		Check(resetSnapshot.has_value(), "post-execute reset capture did not stop");
+		const auto resetDraw = std::find_if(resetSnapshot->events.begin(), resetSnapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; });
+		const auto resetDispatch = std::find_if(resetSnapshot->events.begin(), resetSnapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDispatch; });
+		Check(resetDraw != resetSnapshot->events.end() && resetDraw->payload.words[2] == 0 &&
+				  resetDraw->payload.words[3] == 0 && resetDispatch != resetSnapshot->events.end() &&
+				  resetDispatch->payload.words[2] == 0,
+			"restore-false execution outside capture retained stale stage identities");
+
+		Runtime preserveRuntime;
+		preserveRuntime.SetImmediateContext(0x1000);
+		preserveRuntime.BindStage(0x1000, ShaderStage::kVertex, 0x6000);
+		preserveRuntime.RecordExecuteCommandList(0x1000, 0x5000, true);
+		Check(preserveRuntime.StartCapture(Config()) == StartResult::kStarted,
+			"post-execute preservation capture did not start");
+		preserveRuntime.RecordDraw(0x1000, DrawOperation::kDraw, 3);
+		auto preserveSnapshot = preserveRuntime.StopCapture();
+		Check(preserveSnapshot.has_value(), "post-execute preservation capture did not stop");
+		const auto preserveDraw = std::find_if(
+			preserveSnapshot->events.begin(), preserveSnapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; });
+		Check(preserveDraw != preserveSnapshot->events.end() && preserveDraw->payload.words[2] != 0,
+			"restore-true execution outside capture did not preserve the tracked stage identity");
+	}
+
 	void TestDeferredRecordingReportsPartialFilteredAndFailedFinishes()
 	{
 		Runtime runtime;
@@ -1539,6 +1578,7 @@ int main()
 		TestPreparedGeometryHandoffRejectsStaleCandidates();
 		TestGeometryBoundaryBindsExactSemanticObservations();
 		TestDeferredRecordingMaterializesAndExecutesCommandList();
+		TestExecuteRestoreStateIsIndependentOfCaptureAdmission();
 		TestDeferredRecordingReportsPartialFilteredAndFailedFinishes();
 		return 0;
 	} catch (const std::exception& error) {

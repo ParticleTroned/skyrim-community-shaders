@@ -10,6 +10,7 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from unittest import mock
 
 
 REPO = Path(__file__).resolve().parent.parent
@@ -26,8 +27,13 @@ class FomodPackageTests(unittest.TestCase):
     SHADER_CACHE_ABI = "a" * 64
 
     @staticmethod
-    def _write_cache(cache_directory: Path, shader_cache_abi: str) -> None:
+    def _write_cache(
+        cache_directory: Path,
+        runtime: str,
+        shader_cache_abi: str,
+    ) -> None:
         cache_directory.mkdir(parents=True, exist_ok=True)
+        contract_runtime = "SE" if runtime == BUILDER.RUNTIME_SE_AE else "VR"
         (cache_directory / BUILDER.CACHE_INFO_FILE).write_text(
             "[Cache]\n"
             "PluginVersion = CSX 3.18-VR\n"
@@ -44,6 +50,7 @@ class FomodPackageTests(unittest.TestCase):
                     "schema": "csx.shader-cache.pack-manifest",
                     "schemaVersion": 1,
                     "formatVersion": 1,
+                    "runtime": contract_runtime,
                     "shaderCacheABI": shader_cache_abi,
                     "compatibilityVariants": ["default", "legacy-horizon-fix"],
                 }
@@ -72,12 +79,25 @@ class FomodPackageTests(unittest.TestCase):
 
         se_cache = root / "se"
         vr_cache = root / "vr"
-        for runtime_root in (se_cache, vr_cache):
-            self._write_cache(
-                runtime_root / BUILDER.CACHE_DIRECTORY,
-                self.SHADER_CACHE_ABI,
-            )
+        self._write_cache(
+            se_cache / BUILDER.CACHE_DIRECTORY,
+            BUILDER.RUNTIME_SE_AE,
+            self.SHADER_CACHE_ABI,
+        )
+        self._write_cache(
+            vr_cache / BUILDER.CACHE_DIRECTORY,
+            BUILDER.RUNTIME_VR,
+            self.SHADER_CACHE_ABI,
+        )
         return core, se_cache, vr_cache
+
+    @staticmethod
+    def _read_json(path: Path) -> dict:
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _write_json(path: Path, value: dict) -> None:
+        path.write_text(json.dumps(value), encoding="utf-8")
 
     def test_stages_one_page_two_managed_cache_fomod(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -168,22 +188,145 @@ class FomodPackageTests(unittest.TestCase):
                     "v3.18.0",
                 )
 
-    def test_rejects_cache_abi_that_does_not_match_core(self) -> None:
+    def test_rejects_info_abi_that_does_not_match_core(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             core, se_cache, vr_cache = self._inputs(root)
-            self._write_cache(
-                vr_cache / BUILDER.CACHE_DIRECTORY,
-                "b" * 64,
+            cache = vr_cache / BUILDER.CACHE_DIRECTORY
+            info_path = cache / BUILDER.CACHE_INFO_FILE
+            info_path.write_text(
+                "[Cache]\n"
+                "PluginVersion = CSX 3.18-VR\n"
+                f"ShaderCacheABI = {'b' * 64}\n",
+                encoding="utf-8",
             )
-            with self.assertRaises(SystemExit):
+            output = root / "staged"
+            with self.assertRaises(SystemExit) as caught:
                 BUILDER.stage_package(
                     core,
                     se_cache,
                     vr_cache,
-                    root / "staged",
+                    output,
                     "v3.18.0",
                 )
+            message = str(caught.exception)
+            self.assertIn(str(cache), message)
+            self.assertIn(self.SHADER_CACHE_ABI, message)
+            self.assertIn("b" * 64, message)
+            self.assertFalse(output.exists())
+
+    def test_rejects_pack_manifest_abi_that_does_not_match_core(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            core, se_cache, vr_cache = self._inputs(root)
+            cache = vr_cache / BUILDER.CACHE_DIRECTORY
+            manifest_path = cache / BUILDER.PACK_MANIFEST_FILE
+            manifest = self._read_json(manifest_path)
+            manifest["shaderCacheABI"] = "b" * 64
+            self._write_json(manifest_path, manifest)
+            output = root / "staged"
+            with self.assertRaises(SystemExit) as caught:
+                BUILDER.stage_package(
+                    core, se_cache, vr_cache, output, "v3.18.0"
+                )
+            message = str(caught.exception)
+            self.assertIn(str(manifest_path), message)
+            self.assertIn(self.SHADER_CACHE_ABI, message)
+            self.assertIn("b" * 64, message)
+            self.assertFalse(output.exists())
+
+    def test_rejects_runtime_cache_roots_in_the_wrong_slots(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            core, se_cache, vr_cache = self._inputs(root)
+            cases = (
+                ("swapped", vr_cache, se_cache),
+                ("both-se", se_cache, se_cache),
+                ("both-vr", vr_cache, vr_cache),
+            )
+            for name, se_input, vr_input in cases:
+                with self.subTest(name=name):
+                    output = root / f"staged-{name}"
+                    with self.assertRaises(SystemExit) as caught:
+                        BUILDER.stage_package(
+                            core, se_input, vr_input, output, "v3.18.0"
+                        )
+                    message = str(caught.exception)
+                    self.assertIn("expected", message)
+                    self.assertIn("observed", message)
+                    self.assertFalse(output.exists())
+
+    def test_staged_validation_rejects_wrong_runtime_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            core, se_cache, vr_cache = self._inputs(root)
+            output = root / "staged"
+            BUILDER.stage_package(core, se_cache, vr_cache, output, "v3.18.0")
+            manifest_path = (
+                output
+                / BUILDER.CACHE_VARIANTS[0].staging_directory
+                / BUILDER.CACHE_DIRECTORY
+                / BUILDER.PACK_MANIFEST_FILE
+            )
+            manifest = self._read_json(manifest_path)
+            manifest["runtime"] = "SE"
+            self._write_json(manifest_path, manifest)
+            with self.assertRaises(SystemExit) as caught:
+                BUILDER.validate_staged_package(output, "v3.18.0")
+            message = str(caught.exception)
+            self.assertIn(str(manifest_path), message)
+            self.assertIn("expected 'VR'", message)
+            self.assertIn("observed 'SE'", message)
+
+    def test_rejects_invalid_core_manifest_before_staging(self) -> None:
+        mutations = (
+            ("missing", None),
+            ("malformed", "{"),
+            ("missing-abi", json.dumps({"identity": {}})),
+            (
+                "uppercase",
+                json.dumps({"identity": {"shaderCache": {"abiId": "A" * 64}}}),
+            ),
+            (
+                "short",
+                json.dumps({"identity": {"shaderCache": {"abiId": "a" * 63}}}),
+            ),
+            (
+                "non-string",
+                json.dumps({"identity": {"shaderCache": {"abiId": 1}}}),
+            ),
+        )
+        for name, contents in mutations:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                core, se_cache, vr_cache = self._inputs(root)
+                manifest_path = core / BUILDER.CORE_BUILD_MANIFEST
+                if contents is None:
+                    manifest_path.unlink()
+                else:
+                    manifest_path.write_text(contents, encoding="utf-8")
+                output = root / "staged"
+                with self.assertRaises(SystemExit):
+                    BUILDER.stage_package(
+                        core, se_cache, vr_cache, output, "v3.18.0"
+                    )
+                self.assertFalse(output.exists())
+
+    def test_removes_staging_tree_after_post_copy_validation_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            core, se_cache, vr_cache = self._inputs(root)
+            output = root / "staged"
+            with mock.patch.object(
+                BUILDER,
+                "validate_staged_package",
+                side_effect=SystemExit("post-copy rejection"),
+            ):
+                with self.assertRaisesRegex(SystemExit, "post-copy rejection"):
+                    BUILDER.stage_package(
+                        core, se_cache, vr_cache, output, "v3.18.0"
+                    )
+            self.assertFalse(output.exists())
 
     def test_refuses_to_replace_existing_staging_tree(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -470,9 +470,10 @@ ShaderCache-VR/ShaderCache
 ShaderCache-SE-AE/ShaderCache
 ```
 
-Assembly requires both cache packs to declare the same shader-cache ABI as the
-core AIO's `SKSE/Plugins/CSX.BuildManifest.json`. A disagreement fails the
-release before the FOMOD archive can replace the plain AIO.
+Assembly requires each cache pack to identify the runtime slot it is assigned
+to and to declare the same shader-cache ABI as the core AIO's
+`SKSE/Plugins/CSX.BuildManifest.json`. A disagreement fails the release before
+the FOMOD archive can replace the plain AIO.
 
 The plugin independently validates cache identity, shader ABI, source content,
 and registered compatibility requirements. A missing or mismatched record is

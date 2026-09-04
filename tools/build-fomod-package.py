@@ -235,7 +235,9 @@ def core_shader_cache_abi(core: Path) -> str:
 
 
 def validate_cache_source(
-    cache_directory: Path, expected_shader_cache_abi: str
+    cache_directory: Path,
+    expected_runtime: str,
+    expected_shader_cache_abi: str,
 ) -> None:
     manifest_path = cache_directory / MANIFEST_FILE
     pack_manifest_path = cache_directory / PACK_MANIFEST_FILE
@@ -276,12 +278,29 @@ def validate_cache_source(
         pack_manifest = json.loads(pack_manifest_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise SystemExit(f"invalid managed pack manifest {pack_manifest_path}: {exc}") from exc
+    if not isinstance(pack_manifest, dict):
+        raise SystemExit(f"unsupported managed pack manifest: {pack_manifest_path}")
+    # PluginVersion identifies the universal core; the pack manifest owns the
+    # runtime-specific cache identity used by the FOMOD slot.
+    contract_runtime = "SE" if expected_runtime == RUNTIME_SE_AE else "VR"
+    pack_runtime = pack_manifest.get("runtime")
+    if pack_runtime != contract_runtime:
+        raise SystemExit(
+            f"managed shader cache runtime does not match its FOMOD slot: "
+            f"{pack_manifest_path} (expected {contract_runtime!r}, "
+            f"observed {pack_runtime!r})"
+        )
+    pack_shader_cache_abi = pack_manifest.get("shaderCacheABI")
+    if pack_shader_cache_abi != expected_shader_cache_abi:
+        raise SystemExit(
+            f"managed shader cache ABI does not match the core AIO: "
+            f"{pack_manifest_path} (core {expected_shader_cache_abi}, "
+            f"cache {pack_shader_cache_abi!r})"
+        )
     if (
-        not isinstance(pack_manifest, dict)
-        or pack_manifest.get("schema") != "csx.shader-cache.pack-manifest"
+        pack_manifest.get("schema") != "csx.shader-cache.pack-manifest"
         or pack_manifest.get("schemaVersion") != 1
         or pack_manifest.get("formatVersion") != 1
-        or pack_manifest.get("shaderCacheABI") != expected_shader_cache_abi
         or not isinstance(pack_manifest.get("compatibilityVariants"), list)
         or "default" not in pack_manifest["compatibilityVariants"]
     ):
@@ -441,7 +460,7 @@ def validate_staged_package(output: Path, version: str) -> None:
     shader_cache_abi = core_shader_cache_abi(core)
     for variant in CACHE_VARIANTS:
         cache_directory = output / variant.staging_directory / CACHE_DIRECTORY
-        validate_cache_source(cache_directory, shader_cache_abi)
+        validate_cache_source(cache_directory, variant.runtime, shader_cache_abi)
 
     fomod_directory = output / FOMOD_DIRECTORY
     validate_module_config(fomod_directory / MODULE_CONFIG_FILE)
@@ -483,7 +502,7 @@ def stage_package(
     sources: dict[CacheVariant, Path] = {}
     for variant in CACHE_VARIANTS:
         source = runtime_roots[variant.runtime] / CACHE_DIRECTORY
-        validate_cache_source(source, shader_cache_abi)
+        validate_cache_source(source, variant.runtime, shader_cache_abi)
         sources[variant] = source
 
     try:

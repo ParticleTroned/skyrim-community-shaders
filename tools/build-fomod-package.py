@@ -230,7 +230,11 @@ def core_shader_cache_abi(core: Path) -> str:
     if not isinstance(shader_cache_abi, str) or not SHADER_CACHE_ABI_PATTERN.fullmatch(
         shader_cache_abi
     ):
-        raise SystemExit(f"invalid core shader-cache ABI: {manifest_path}")
+        raise SystemExit(
+            f"invalid core shader-cache ABI in {manifest_path}: observed "
+            f"{type(shader_cache_abi).__name__} {shader_cache_abi!r}; expected "
+            "lowercase 64-character hexadecimal"
+        )
     return shader_cache_abi
 
 
@@ -259,7 +263,7 @@ def validate_cache_source(
     shader_cache_abi = info.get("Cache", "ShaderCacheABI", fallback=None)
     if shader_cache_abi != expected_shader_cache_abi:
         raise SystemExit(
-            f"shader cache ABI does not match the core AIO: {cache_directory} "
+            f"shader cache ABI does not match the core AIO: {info_path} "
             f"(core {expected_shader_cache_abi}, cache {shader_cache_abi!r})"
         )
     try:

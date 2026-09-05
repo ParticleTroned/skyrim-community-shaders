@@ -210,7 +210,7 @@ class FomodPackageTests(unittest.TestCase):
                     "v3.18.0",
                 )
             message = str(caught.exception)
-            self.assertIn(str(cache), message)
+            self.assertIn(str(info_path), message)
             self.assertIn(self.SHADER_CACHE_ABI, message)
             self.assertIn("b" * 64, message)
             self.assertFalse(output.exists())
@@ -278,23 +278,11 @@ class FomodPackageTests(unittest.TestCase):
             self.assertIn("expected 'VR'", message)
             self.assertIn("observed 'SE'", message)
 
-    def test_rejects_invalid_core_manifest_before_staging(self) -> None:
+    def test_rejects_missing_or_malformed_core_manifest_before_staging(self) -> None:
         mutations = (
             ("missing", None),
             ("malformed", "{"),
             ("missing-abi", json.dumps({"identity": {}})),
-            (
-                "uppercase",
-                json.dumps({"identity": {"shaderCache": {"abiId": "A" * 64}}}),
-            ),
-            (
-                "short",
-                json.dumps({"identity": {"shaderCache": {"abiId": "a" * 63}}}),
-            ),
-            (
-                "non-string",
-                json.dumps({"identity": {"shaderCache": {"abiId": 1}}}),
-            ),
         )
         for name, contents in mutations:
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
@@ -310,6 +298,34 @@ class FomodPackageTests(unittest.TestCase):
                     BUILDER.stage_package(
                         core, se_cache, vr_cache, output, "v3.18.0"
                     )
+                self.assertFalse(output.exists())
+
+    def test_rejects_invalid_core_abi_with_precise_diagnostic(self) -> None:
+        invalid_values = (
+            ("uppercase", "A" * 64),
+            ("short", "a" * 63),
+            ("non-hex", "g" * 64),
+            ("non-string", 1),
+        )
+        for name, value in invalid_values:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                core, se_cache, vr_cache = self._inputs(root)
+                manifest_path = core / BUILDER.CORE_BUILD_MANIFEST
+                manifest_path.write_text(
+                    json.dumps({"identity": {"shaderCache": {"abiId": value}}}),
+                    encoding="utf-8",
+                )
+                output = root / "staged"
+                with self.assertRaises(SystemExit) as caught:
+                    BUILDER.stage_package(
+                        core, se_cache, vr_cache, output, "v3.18.0"
+                    )
+                message = str(caught.exception)
+                self.assertIn(str(manifest_path), message)
+                self.assertIn(type(value).__name__, message)
+                self.assertIn(repr(value), message)
+                self.assertIn("lowercase 64-character hexadecimal", message)
                 self.assertFalse(output.exists())
 
     def test_removes_staging_tree_after_post_copy_validation_failure(self) -> None:

@@ -21,7 +21,7 @@ from typing import Any, Iterable
 SCHEMA = "community-shaders.build-provenance"
 SCHEMA_VERSION = 1
 BUILD_ID_ALGORITHM = "sha256-canonical-json-v1"
-SHADER_ABI_SCHEMA_VERSION = 1
+SHADER_ABI_SCHEMA_VERSION = 2
 DEFAULT_SHADER_CONTRACT_FILES = [
     "config/shader-cache-abi.json",
     "config/shader-compatibility-variants.json",
@@ -230,7 +230,7 @@ def vcpkg_identity(source_dir: Path, overlay_dir: Path | None) -> dict[str, Any]
     return identity
 
 
-def shader_contract_identity(source_dir: Path, relative_paths: list[str], runtime: str) -> dict[str, Any]:
+def shader_contract_identity(source_dir: Path, relative_paths: list[str]) -> dict[str, Any]:
     files = [source_dir / path for path in relative_paths]
     missing = [str(path) for path in files if not path.is_file()]
     if missing:
@@ -244,7 +244,6 @@ def shader_contract_identity(source_dir: Path, relative_paths: list[str], runtim
     ]
     return {
         "schemaVersion": SHADER_ABI_SCHEMA_VERSION,
-        "runtime": runtime,
         "managedCompiler": "D3DCompileFromFile",
         "shaderModels": ["vs_5_0", "ps_5_0", "cs_5_0"],
         "contentDigest": "xxh3-128-crlf-normalized",
@@ -283,7 +282,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     remote = git(source_dir, "remote", "get-url", "origin", check=False) or None
     build_options = parse_key_values(args.build_option)
     shader_contract_files = args.shader_contract_file or DEFAULT_SHADER_CONTRACT_FILES
-    shader_contract = shader_contract_identity(source_dir, shader_contract_files, args.runtime)
+    shader_contract = shader_contract_identity(source_dir, shader_contract_files)
     shader_abi_id = sha256_bytes(canonical_bytes(shader_contract))
 
     toolchain_file = Path(args.toolchain_file).resolve() if args.toolchain_file else None

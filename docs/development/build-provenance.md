@@ -3,15 +3,18 @@
 CSX identifies tested behavior with immutable build evidence rather than a
 branch name or display version. Every DLL build has three related identities:
 
-- **Artifact SHA-256** is the authoritative identity of the linked DLL.
-- **Build ID** is SHA-256 over canonical JSON describing the source commit and
-  dirty-content digest, exact submodule checkouts, vcpkg baseline and overlay,
-  compiler/toolchain, runtime, configuration, and behavior-affecting options.
-- **Shader cache ABI ID** is an explicit identity over
-  `config/shader-cache-abi.json`. It invalidates globally incompatible cache
-  blobs without changing merely because cache-controller or unrelated C++ code
-  was edited. Feature-scoped non-HLSL incompatibilities use
-  `Feature::GetShaderCacheAbiVersion()` instead.
+-   **Artifact SHA-256** is the authoritative identity of the linked DLL.
+-   **Build ID** is SHA-256 over canonical JSON describing the source commit and
+    dirty-content digest, exact submodule checkouts, vcpkg baseline and overlay,
+    compiler/toolchain, runtime, configuration, and behavior-affecting options.
+-   **Shader cache ABI ID** is an explicit identity over
+    `config/shader-cache-abi.json`. It is runtime-neutral so one universal DLL
+    accepts the matching SE/AE and VR cache packs; runtime shader permutations
+    remain separated by each record's compile-state digest. The ABI invalidates
+    globally incompatible cache blobs without changing merely because
+    cache-controller or unrelated C++ code was edited. Feature-scoped non-HLSL
+    incompatibilities use
+    `Feature::GetShaderCacheAbiVersion()` instead.
 
 `refresh_build_provenance` runs before every DLL compilation. It intentionally
 does not rely on CMake configure time, because an existing build tree can

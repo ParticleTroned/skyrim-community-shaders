@@ -72,9 +72,10 @@ foreach(_action IN ITEMS
 endforeach()
 
 foreach(_event IN ITEMS
-    request.accepted source.waiting source.fallback artifact.queued
+    request.accepted source.waiting source.acquired source.timeout source.fallback artifact.queued
     artifact.encoding artifact.written artifact.failed sequence.frame_scheduled
-    sequence.stop_requested sequence.finalizing request.terminal
+    sequence.frame_dropped sequence.stop_requested sequence.finalizing
+    packaging.queued packaging.completed packaging.failed request.terminal
 )
     string(FIND "${_implementation}" "\"${_event}\"" _event_position)
     if(_event_position EQUAL -1)
@@ -86,7 +87,7 @@ foreach(_required_contract_text IN ITEMS
     runtime_session persistent_user settings_default file_reference
     maximumOutputsPerFrame retentionSeconds manifest_failed
 	DescribeCommittedArtifact BuildProvenance::GetProducer artifact_hash_failed
-	terminalOutcome completedUtc fallbacksPresent cancelled
+	terminalOutcome completedUtc fallbacksPresent cancelled manifestChildren
 )
     string(FIND "${_implementation}" "${_required_contract_text}" _contract_position)
     if(_contract_position EQUAL -1)
@@ -128,6 +129,15 @@ string(FIND "${_feature_controls}" "DispatchScreenshotServiceRequest" _control_d
 if(_ui_adapter_position EQUAL -1 OR _ui_v1_position EQUAL -1 OR _control_dispatch_position EQUAL -1)
     message(FATAL_ERROR "Native screenshot UI must submit through the public contract-v1 screenshot service")
 endif()
+foreach(_acquisition_contract_text IN ITEMS
+    BuildAcquisitionRecord publicationGeneration deviceIdentity
+    submittedBounds requiredEyeMask IsSamePublication
+)
+    string(FIND "${_feature_controls}" "${_acquisition_contract_text}" _acquisition_position)
+    if(_acquisition_position EQUAL -1)
+        message(FATAL_ERROR "Screenshot acquisition provenance is missing: ${_acquisition_contract_text}")
+    endif()
+endforeach()
 
 file(READ "${PROJECT_ROOT}/src/Menu.cpp" _menu)
 string(FIND "${_menu}" "screenshotFeature.RequestUiCapture()" _hotkey_v1_position)

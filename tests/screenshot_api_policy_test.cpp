@@ -26,6 +26,25 @@ int main()
 	if (!CanStartWorker(true, false) || CanStartWorker(false, false) ||
 		CanStartWorker(true, true) || CanStartWorker(false, true))
 		throw std::runtime_error("worker admission is not terminal after close");
+	if (RequiredEyeMask("left_eye") != 0x1 ||
+		RequiredEyeMask("framed_left") != 0x1 ||
+		RequiredEyeMask("right_eye") != 0x2 ||
+		RequiredEyeMask("framed_right") != 0x2 ||
+		RequiredEyeMask("side_by_side") != 0x3 ||
+		(RequiredEyeMask("left_eye") | RequiredEyeMask("framed_left")) != 0x1 ||
+		(RequiredEyeMask("left_eye") | RequiredEyeMask("right_eye")) != 0x3)
+		throw std::runtime_error("requested output views produce an invalid eye mask");
+	if (SelectDispatchClass(true, true, true) != DispatchClass::Manual ||
+		SelectDispatchClass(true, true, false) != DispatchClass::Sequence ||
+		SelectDispatchClass(true, false, false) != DispatchClass::Manual ||
+		SelectDispatchClass(false, true, true) != DispatchClass::Sequence ||
+		SelectDispatchClass(false, false, true) != DispatchClass::None)
+		throw std::runtime_error("fair dispatcher selection is invalid");
+	if (!IsSamePublication(7, 0x1000, 7, 0x1000) ||
+		IsSamePublication(7, 0x1000, 8, 0x1000) ||
+		IsSamePublication(7, 0x1000, 7, 0x2000) ||
+		IsSamePublication(0, 0x1000, 0, 0x1000))
+		throw std::runtime_error("stereo publication coherence is invalid");
 	if (ResolveActualOutputView("source_native", true, false, false) != "source_native" ||
 		!ResolveActualOutputView("left_eye", true, false, false).empty() ||
 		ResolveActualOutputView("framed_combined", false, true, false) != "framed_left" ||

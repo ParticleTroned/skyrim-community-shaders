@@ -489,7 +489,17 @@ namespace
 		runtime.RegisterDeferredContext(0xA100, 0);
 		runtime.RecordDraw(0xA100, DrawOperation::kDraw, 3);
 		runtime.RecordFinishCommandList(0xA100, 0xA200, false, 0);
-		runtime.RecordExecuteCommandList(0xA000, 0xA200, true);
+		const ResourceViewInput srv{
+			.resource = { .d3dObject = 0xA300, .dimension = ResourceDimension::kTexture2D },
+			.view = { .kind = TargetViewKind::kShaderResource, .d3dObject = 0xA400 },
+		};
+		runtime.BindResourceViews(
+			0xA000, ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, 1, &srv,
+			false, ResourceBindingSource::kPostCallQuery);
+		runtime.RecordExecuteCommandList(0xA000, 0xA200, false);
+		runtime.BindResourceViews(
+			0xA000, ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, 1, &srv,
+			false, ResourceBindingSource::kPostCallQuery);
 		std::shared_ptr<const CompletedCapture> capture;
 		Check(controller.Stop(descriptor.captureId, capture) == ControlStatus::kSuccess && capture,
 			"deferred serialization capture did not stop");
@@ -524,6 +534,19 @@ namespace
 				  (*execute)["commandRecordingObservationId"].is_null() &&
 				  (*execute)["payload"]["sourceCommandRecordingObservationId"].is_string(),
 			"ExecuteCommandList was mislabelled as a recorded deferred command");
+		std::vector<nlohmann::json> effectiveBindings;
+		for (const auto& event : page["events"]) {
+			if (event["type"] == "resource-view-bind" &&
+				event["payload"]["source"] == "post-call-query") {
+				effectiveBindings.push_back(event);
+			}
+		}
+		Check(effectiveBindings.size() == 2 &&
+				  effectiveBindings[0]["payload"]["targetViewObservationId"] ==
+					  effectiveBindings[1]["payload"]["targetViewObservationId"] &&
+				  effectiveBindings[0]["payload"]["slot"] == 2 &&
+				  effectiveBindings[1]["payload"]["slot"] == 2,
+			"serialized restore-false execution lost the same-view effective SRV rebind");
 
 		Check(controller.Start(config, descriptor) == ControlStatus::kSuccess,
 			"failed-finish serialization capture did not start");

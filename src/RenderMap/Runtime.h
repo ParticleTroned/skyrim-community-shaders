@@ -2,6 +2,7 @@
 
 #include "RenderMap/Collector.h"
 
+#include <bitset>
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -372,6 +373,11 @@ namespace CSX::RenderMap
 			std::string_view a_compileSourceName = {}) noexcept;
 		void RetireShaderObservation(std::uintptr_t a_shader) noexcept;
 
+#if defined(CSX_RENDER_MAP_TESTING)
+		void FailNextDeferredContextCatalogueAdmissionForTesting() noexcept;
+		void FailNextCommandListCatalogueAdmissionForTesting() noexcept;
+#endif
+
 	private:
 		struct PersistentStageShaderKey
 		{
@@ -475,6 +481,7 @@ namespace CSX::RenderMap
 			std::uint64_t a_recordingObservationId,
 			CommandRecordingIncompleteReason a_reason) noexcept;
 		void ResetImmediatePipelineState() noexcept;
+		void ApplyEffectiveResourceViewResetLocked() noexcept;
 		std::uint64_t NextCommandStreamSequence() noexcept;
 		std::uint64_t EnsureBoundStageObservation(ShaderStage a_stage) noexcept;
 		StageShaderObservationResult ObserveBoundStage(
@@ -509,6 +516,7 @@ namespace CSX::RenderMap
 		std::atomic_uint64_t boundTargetBindingObservationId{ 0 };
 		std::atomic_uint64_t targetStateObservationGeneration{ 0 };
 		std::atomic_uint64_t resourceViewStateObservationGeneration{ 0 };
+		std::atomic_bool resourceViewStateResetPending{ false };
 		std::atomic_uint64_t immediateContextPointerGeneration{ 0 };
 		std::atomic_uint64_t immediateContextObservationId{ 0 };
 		std::atomic_uint64_t immediateContextObservationGeneration{ 0 };
@@ -524,6 +532,12 @@ namespace CSX::RenderMap
 		std::uint64_t resourceViewStateGeneration{ 0 };
 		std::array<std::array<std::array<std::uintptr_t, kMaximumShaderResourceSlots>, 7>, 2>
 			effectiveResourceViews{};
+		std::array<std::array<std::bitset<kMaximumShaderResourceSlots>, 7>, 2>
+			resourceViewSlotsNeedingObservation{};
+#if defined(CSX_RENDER_MAP_TESTING)
+		std::atomic_bool failNextDeferredContextCatalogueAdmission{ false };
+		std::atomic_bool failNextCommandListCatalogueAdmission{ false };
+#endif
 		mutable std::shared_mutex persistentStageShaderMutex;
 		std::unordered_map<PersistentStageShaderKey, PersistentStageShaderIdentity,
 			PersistentStageShaderKeyHash>

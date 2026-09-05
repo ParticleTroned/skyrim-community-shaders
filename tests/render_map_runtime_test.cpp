@@ -842,6 +842,71 @@ namespace
 			"effective resource-state tracking leaked across capture generations");
 	}
 
+	void TestRestoreFalseReobservesEffectiveResourceViews()
+	{
+		Runtime runtime;
+		auto config = Config();
+		config.maxEvents = 128;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		runtime.SetImmediateContext(0xF500);
+		Check(runtime.StartCapture(config) == StartResult::kStarted,
+			"post-execute resource-state capture did not start");
+		const ResourceViewInput srvA{
+			.resource = { .d3dObject = 0xF510, .dimension = ResourceDimension::kTexture2D },
+			.view = { .kind = TargetViewKind::kShaderResource, .d3dObject = 0xF520 },
+		};
+		const ResourceViewInput srvB{
+			.resource = { .d3dObject = 0xF530, .dimension = ResourceDimension::kTexture2D },
+			.view = { .kind = TargetViewKind::kShaderResource, .d3dObject = 0xF540 },
+		};
+		const ResourceViewInput uav{
+			.resource = { .d3dObject = 0xF550, .dimension = ResourceDimension::kTexture2D },
+			.view = { .kind = TargetViewKind::kUnorderedAccess, .d3dObject = 0xF560 },
+		};
+		const auto query = [&](ResourceBindingKind a_kind, ResourceStage a_stage,
+							   std::uint32_t a_slot, const ResourceViewInput* a_view) {
+			runtime.BindResourceViews(
+				0xF500, a_kind, a_stage, a_slot, 1, a_view, false,
+				ResourceBindingSource::kPostCallQuery);
+		};
+
+		query(ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, &srvA);
+		query(ResourceBindingKind::kUnorderedAccess, ResourceStage::kCompute, 1, &uav);
+		runtime.RecordExecuteCommandList(0xF500, 0xF570, false);
+		query(ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, &srvA);
+		query(ResourceBindingKind::kUnorderedAccess, ResourceStage::kCompute, 1, nullptr);
+		query(ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, &srvB);
+		runtime.RecordExecuteCommandList(0xF500, 0xF570, true);
+		query(ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, &srvB);
+
+		auto snapshot = runtime.StopCapture();
+		Check(snapshot.has_value(), "post-execute resource-state capture did not stop");
+		std::vector<const EventRecord*> bindings;
+		std::vector<const EventRecord*> summaries;
+		for (const auto& event : snapshot->events) {
+			if (event.kind == EventKind::kResourceViewBind &&
+				event.payload.words[4] == static_cast<std::uint64_t>(ResourceBindingSource::kPostCallQuery)) {
+				bindings.push_back(&event);
+			}
+			if (event.kind == EventKind::kResourceViewStateObserved)
+				summaries.push_back(&event);
+		}
+		Check(bindings.size() == 5 && summaries.size() == 6,
+			"restore-state resource queries emitted the wrong delta sequence");
+		Check(bindings[0]->payload.words[0] != 0 &&
+				  bindings[2]->payload.words[0] == bindings[0]->payload.words[0],
+			"restore-false execution did not republish a same-view SRV rebind");
+		Check(bindings[3]->payload.words[0] == 0 &&
+				  bindings[3]->payload.words[1] == static_cast<std::uint64_t>(ResourceBindingKind::kUnorderedAccess),
+			"restore-false execution did not publish an explicit UAV unbind");
+		Check(bindings[4]->payload.words[0] != 0 &&
+				  bindings[4]->payload.words[0] != bindings[0]->payload.words[0],
+			"changed-view control did not publish the replacement SRV");
+		Check(summaries[2]->payload.words[5] == 1 && summaries[3]->payload.words[5] == 1 &&
+				  summaries[4]->payload.words[5] == 1 && summaries[5]->payload.words[5] == 0,
+			"restore-false reseeding or restore-true preservation was not delta coherent");
+	}
+
 	void TestCpuMapUnmapBoundariesArePairedAndTimed()
 	{
 		Runtime runtime;
@@ -1548,6 +1613,101 @@ namespace
 				  finish->payload.words[5] == 0,
 			"failed FinishCommandList did not preserve its no-list failure outcome");
 	}
+
+	void TestDiagnosticCatalogueAdmissionFailuresFailOpen()
+	{
+		auto config = Config();
+		config.maxEvents = 128;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+
+		Runtime inactiveContextRuntime;
+		inactiveContextRuntime.FailNextDeferredContextCatalogueAdmissionForTesting();
+		inactiveContextRuntime.RegisterDeferredContext(0xB000, 0);
+		Check(inactiveContextRuntime.StartCapture(config) == StartResult::kStarted,
+			"inactive context admission-failure capture did not start");
+		inactiveContextRuntime.RecordDraw(0xB000, DrawOperation::kDraw, 3);
+		auto inactiveContextSnapshot = inactiveContextRuntime.StopCapture();
+		Check(inactiveContextSnapshot.has_value() && inactiveContextSnapshot->events.empty(),
+			"inactive context admission failure fabricated a later deferred identity");
+
+		Runtime contextRuntime;
+		Check(contextRuntime.StartCapture(config) == StartResult::kStarted,
+			"context admission-failure capture did not start");
+		contextRuntime.FailNextDeferredContextCatalogueAdmissionForTesting();
+		contextRuntime.RegisterDeferredContext(0xB100, 0);
+		contextRuntime.RegisterDeferredContext(0xB100, 0);
+		contextRuntime.FailNextDeferredContextCatalogueAdmissionForTesting();
+		contextRuntime.RegisterDeferredContext(0xB100, 0, false);
+		contextRuntime.RegisterDeferredContext(0xB200, 0);
+		auto contextSnapshot = contextRuntime.StopCapture();
+		Check(contextSnapshot.has_value(), "context admission-failure capture did not stop");
+		Check(std::count_if(contextSnapshot->events.begin(), contextSnapshot->events.end(),
+				  [](const EventRecord& event) {
+					  return event.kind == EventKind::kDeviceContextObserved && event.payload.words[1] == 0xB100;
+				  }) == 1 &&
+				  std::none_of(contextSnapshot->events.begin(), contextSnapshot->events.end(),
+					  [](const EventRecord& event) {
+						  return event.kind == EventKind::kDeviceContextObserved && event.payload.words[1] == 0xB200;
+					  }),
+			"deferred-context admission failure fabricated or lost catalogue identity");
+
+		Runtime finishRuntime;
+		Check(finishRuntime.StartCapture(config) == StartResult::kStarted,
+			"finish admission-failure capture did not start");
+		finishRuntime.RegisterDeferredContext(0xB300, 0);
+		finishRuntime.RecordDraw(0xB300, DrawOperation::kDraw, 3);
+		finishRuntime.FailNextCommandListCatalogueAdmissionForTesting();
+		finishRuntime.RecordFinishCommandList(0xB300, 0xB400, false, 0);
+		auto finishSnapshot = finishRuntime.StopCapture();
+		Check(finishSnapshot.has_value(), "finish admission-failure capture did not stop");
+		const auto finish = std::find_if(finishSnapshot->events.begin(), finishSnapshot->events.end(),
+			[](const EventRecord& event) { return event.kind == EventKind::kFinishCommandList; });
+		Check(finish != finishSnapshot->events.end() && finish->payload.words[1] == 0 &&
+				  finish->payload.words[2] == 0xB400 && finish->payload.words[5] == 0 &&
+				  (finish->payload.words[6] & static_cast<std::uint64_t>(
+												  CommandRecordingIncompleteReason::kEventNotRecorded)) != 0,
+			"finish admission failure did not preserve a truthful successful D3D outcome");
+		Check(std::count_if(finishSnapshot->events.begin(), finishSnapshot->events.end(),
+				  [](const EventRecord& event) { return event.kind == EventKind::kCommandRecordingObserved; }) == 2,
+			"finish admission failure did not advance to the next recording epoch");
+
+		Runtime executeRuntime;
+		executeRuntime.SetImmediateContext(0xB500);
+		Check(executeRuntime.StartCapture(config) == StartResult::kStarted,
+			"execute admission-failure capture did not start");
+		const ResourceViewInput srv{
+			.resource = { .d3dObject = 0xB510, .dimension = ResourceDimension::kTexture2D },
+			.view = { .kind = TargetViewKind::kShaderResource, .d3dObject = 0xB520 },
+		};
+		executeRuntime.BindStage(0xB500, ShaderStage::kVertex, 0xB530);
+		executeRuntime.BindResourceViews(
+			0xB500, ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, 1, &srv,
+			false, ResourceBindingSource::kPostCallQuery);
+		executeRuntime.FailNextCommandListCatalogueAdmissionForTesting();
+		executeRuntime.RecordExecuteCommandList(0xB500, 0xB540, false);
+		executeRuntime.BindResourceViews(
+			0xB500, ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, 1, nullptr,
+			false, ResourceBindingSource::kPostCallQuery);
+		executeRuntime.RecordDraw(0xB500, DrawOperation::kDraw, 3);
+		auto executeSnapshot = executeRuntime.StopCapture();
+		Check(executeSnapshot.has_value(), "execute admission-failure capture did not stop");
+		Check(std::none_of(executeSnapshot->events.begin(), executeSnapshot->events.end(),
+				  [](const EventRecord& event) {
+					  return event.kind == EventKind::kCommandListObserved ||
+			                 event.kind == EventKind::kExecuteCommandList;
+				  }),
+			"first-seen execute admission failure fabricated command-list evidence");
+		const auto nullBinding = std::find_if(executeSnapshot->events.begin(), executeSnapshot->events.end(),
+			[](const EventRecord& event) {
+				return event.kind == EventKind::kResourceViewBind && event.payload.words[0] == 0 &&
+			           event.payload.words[3] == 2;
+			});
+		const auto draw = std::find_if(executeSnapshot->events.begin(), executeSnapshot->events.end(),
+			[](const EventRecord& event) { return event.kind == EventKind::kDraw; });
+		Check(nullBinding != executeSnapshot->events.end() &&
+				  draw != executeSnapshot->events.end() && draw->payload.words[2] == 0,
+			"execute admission failure did not preserve reset and explicit unbind evidence");
+	}
 }
 
 int main()
@@ -1570,6 +1730,7 @@ int main()
 		TestResourceFlowStateIsTypedAndOrdered();
 		TestCpuMapUnmapBoundariesArePairedAndTimed();
 		TestEffectiveResourceViewQueriesAreRevisionedAndDeltaEncoded();
+		TestRestoreFalseReobservesEffectiveResourceViews();
 		TestExecutionJoinsDeclaredScopes();
 		TestVisibilitySubmissionJoinsActualDraw();
 		TestEventKindSelectionPreservesDependenciesAndCapacity();
@@ -1580,6 +1741,7 @@ int main()
 		TestDeferredRecordingMaterializesAndExecutesCommandList();
 		TestExecuteRestoreStateIsIndependentOfCaptureAdmission();
 		TestDeferredRecordingReportsPartialFilteredAndFailedFinishes();
+		TestDiagnosticCatalogueAdmissionFailuresFailOpen();
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

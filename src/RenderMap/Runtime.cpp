@@ -4,6 +4,7 @@
 #include <bit>
 #include <cstring>
 #include <functional>
+#include <new>
 
 namespace CSX::RenderMap
 {
@@ -857,12 +858,18 @@ namespace CSX::RenderMap
 		if (a_context == 0)
 			return;
 		const auto captureGeneration = collector.ActiveGeneration();
-		{
+		try {
 			std::scoped_lock lock(deferredContextMutex);
 			if (!deferredContexts.contains(a_context) &&
 				deferredContexts.size() >= kMaximumTrackedDeferredContexts) {
 				return;
 			}
+#if defined(CSX_RENDER_MAP_TESTING)
+			if (!deferredContexts.contains(a_context) &&
+				failNextDeferredContextCatalogueAdmission.exchange(false, std::memory_order_acq_rel)) {
+				throw std::bad_alloc();
+			}
+#endif
 			auto [it, inserted] = deferredContexts.try_emplace(a_context);
 			auto& state = it->second;
 			if (!inserted && a_creationObserved) {
@@ -876,6 +883,10 @@ namespace CSX::RenderMap
 			}
 			if (a_creationObserved)
 				state.creationCaptureGeneration = captureGeneration;
+		} catch (...) {
+			// Context provenance is diagnostic. Failure to grow its bounded
+			// catalogue must not escape the graphics API callback.
+			return;
 		}
 		if (captureGeneration != 0)
 			EnsureContextObservation(a_context);
@@ -892,7 +903,44 @@ namespace CSX::RenderMap
 		boundTargetBindingObservationId.store(0, std::memory_order_release);
 		targetStateObservationGeneration.store(0, std::memory_order_release);
 		resourceViewStateObservationGeneration.store(0, std::memory_order_release);
+		resourceViewStateResetPending.store(true, std::memory_order_release);
+		try {
+			std::scoped_lock lock(resourceViewStateMutex);
+			ApplyEffectiveResourceViewResetLocked();
+			resourceViewStateResetPending.store(false, std::memory_order_release);
+		} catch (...) {
+			// The pending marker lets the next successful state observation
+			// complete the diagnostic reset without affecting D3D execution.
+		}
 	}
+
+	void Runtime::ApplyEffectiveResourceViewResetLocked() noexcept
+	{
+		for (std::size_t kindIndex = 0; kindIndex < effectiveResourceViews.size(); ++kindIndex) {
+			for (std::size_t stageIndex = 0;
+				stageIndex < effectiveResourceViews[kindIndex].size(); ++stageIndex) {
+				auto& state = effectiveResourceViews[kindIndex][stageIndex];
+				auto& needsObservation = resourceViewSlotsNeedingObservation[kindIndex][stageIndex];
+				for (std::size_t slot = 0; slot < state.size(); ++slot) {
+					if (state[slot] != 0)
+						needsObservation.set(slot);
+				}
+				state.fill(0);
+			}
+		}
+	}
+
+#if defined(CSX_RENDER_MAP_TESTING)
+	void Runtime::FailNextDeferredContextCatalogueAdmissionForTesting() noexcept
+	{
+		failNextDeferredContextCatalogueAdmission.store(true, std::memory_order_release);
+	}
+
+	void Runtime::FailNextCommandListCatalogueAdmissionForTesting() noexcept
+	{
+		failNextCommandListCatalogueAdmission.store(true, std::memory_order_release);
+	}
+#endif
 
 	std::uint64_t Runtime::StartDeferredRecording(
 		DeferredContextState& a_state,
@@ -1095,34 +1143,46 @@ namespace CSX::RenderMap
 
 		std::uint64_t commandListObservationId = 0;
 		if (a_result >= 0 && a_commandList != 0) {
-			std::scoped_lock lock(commandListMutex);
-			if (commandLists.contains(a_commandList) ||
-				commandLists.size() < kMaximumTrackedCommandLists) {
-				auto [it, inserted] = commandLists.try_emplace(a_commandList);
-				auto& state = it->second;
-				if (!inserted) {
-					const auto nextPointerGeneration = state.pointerGeneration + 1;
-					state = CommandListState{ .pointerGeneration = nextPointerGeneration };
-				}
-				commandListObservationId = collector.AllocateObservationId(captureGeneration);
-				if (commandListObservationId != 0) {
-					const auto recordResult = collector.RecordForGeneration(
-						EventKind::kCommandListObserved,
-						CommandListObservationPayload(
-							commandListObservationId, a_commandList, state.pointerGeneration,
-							context.observationId, recordingObservationId,
-							sourceRecordingComplete, recordingIncompleteReasons),
-						context.observationId, captureGeneration, commandSequence,
-						0, 0, 0, recordingObservationId, true);
-					if (recordResult == RecordResult::kRecorded) {
-						state.observationGeneration = captureGeneration;
-						state.observationId = commandListObservationId;
-						state.sourceContextObservationId = context.observationId;
-						state.sourceRecordingObservationId = recordingObservationId;
-						state.sourceRecordingComplete = sourceRecordingComplete;
-						state.sourceRecordingIncompleteReasons = recordingIncompleteReasons;
+			try {
+				std::scoped_lock lock(commandListMutex);
+				if (commandLists.contains(a_commandList) ||
+					commandLists.size() < kMaximumTrackedCommandLists) {
+#if defined(CSX_RENDER_MAP_TESTING)
+					if (!commandLists.contains(a_commandList) &&
+						failNextCommandListCatalogueAdmission.exchange(false, std::memory_order_acq_rel)) {
+						throw std::bad_alloc();
+					}
+#endif
+					auto [it, inserted] = commandLists.try_emplace(a_commandList);
+					auto& state = it->second;
+					if (!inserted) {
+						const auto nextPointerGeneration = state.pointerGeneration + 1;
+						state = CommandListState{ .pointerGeneration = nextPointerGeneration };
+					}
+					commandListObservationId = collector.AllocateObservationId(captureGeneration);
+					if (commandListObservationId != 0) {
+						const auto recordResult = collector.RecordForGeneration(
+							EventKind::kCommandListObserved,
+							CommandListObservationPayload(
+								commandListObservationId, a_commandList, state.pointerGeneration,
+								context.observationId, recordingObservationId,
+								sourceRecordingComplete, recordingIncompleteReasons),
+							context.observationId, captureGeneration, commandSequence,
+							0, 0, 0, recordingObservationId, true);
+						if (recordResult == RecordResult::kRecorded) {
+							state.observationGeneration = captureGeneration;
+							state.observationId = commandListObservationId;
+							state.sourceContextObservationId = context.observationId;
+							state.sourceRecordingObservationId = recordingObservationId;
+							state.sourceRecordingComplete = sourceRecordingComplete;
+							state.sourceRecordingIncompleteReasons = recordingIncompleteReasons;
+						} else {
+							commandListObservationId = 0;
+							recordingIncompleteReasons |= static_cast<std::uint64_t>(
+								CommandRecordingIncompleteReason::kEventNotRecorded);
+							sourceRecordingComplete = false;
+						}
 					} else {
-						commandListObservationId = 0;
 						recordingIncompleteReasons |= static_cast<std::uint64_t>(
 							CommandRecordingIncompleteReason::kEventNotRecorded);
 						sourceRecordingComplete = false;
@@ -1132,7 +1192,10 @@ namespace CSX::RenderMap
 						CommandRecordingIncompleteReason::kEventNotRecorded);
 					sourceRecordingComplete = false;
 				}
-			} else {
+			} catch (...) {
+				// The real FinishCommandList call already succeeded. Preserve its
+				// result and advance the recording epoch with incomplete evidence.
+				commandListObservationId = 0;
 				recordingIncompleteReasons |= static_cast<std::uint64_t>(
 					CommandRecordingIncompleteReason::kEventNotRecorded);
 				sourceRecordingComplete = false;
@@ -1192,12 +1255,18 @@ namespace CSX::RenderMap
 		const auto commandSequence = NextCommandStreamSequence();
 		std::uint64_t commandListObservationId = 0;
 		std::uint64_t sourceRecordingObservationId = 0;
-		{
+		try {
 			std::scoped_lock lock(commandListMutex);
 			if (!commandLists.contains(a_commandList) &&
 				commandLists.size() >= kMaximumTrackedCommandLists) {
 				return;
 			}
+#if defined(CSX_RENDER_MAP_TESTING)
+			if (!commandLists.contains(a_commandList) &&
+				failNextCommandListCatalogueAdmission.exchange(false, std::memory_order_acq_rel)) {
+				throw std::bad_alloc();
+			}
+#endif
 			auto [it, inserted] = commandLists.try_emplace(a_commandList);
 			auto& state = it->second;
 			if (state.observationGeneration != captureGeneration || state.observationId == 0) {
@@ -1225,6 +1294,10 @@ namespace CSX::RenderMap
 				commandListObservationId = state.observationId;
 			}
 			sourceRecordingObservationId = state.sourceRecordingObservationId;
+		} catch (...) {
+			// ExecuteCommandList has already run. Missing diagnostic catalogue
+			// storage must not escape this post-call hook boundary.
+			return;
 		}
 		collector.RecordForGeneration(
 			EventKind::kExecuteCommandList,
@@ -1421,16 +1494,26 @@ namespace CSX::RenderMap
 				return;
 			std::scoped_lock lock(resourceViewStateMutex);
 			if (resourceViewStateGeneration != captureGeneration) {
-				for (auto& kind : effectiveResourceViews)
-					for (auto& stage : kind)
-						stage.fill(0);
+				for (std::size_t resetKind = 0; resetKind < effectiveResourceViews.size(); ++resetKind) {
+					for (std::size_t resetStage = 0;
+						resetStage < effectiveResourceViews[resetKind].size(); ++resetStage) {
+						effectiveResourceViews[resetKind][resetStage].fill(0);
+						resourceViewSlotsNeedingObservation[resetKind][resetStage].reset();
+					}
+				}
 				resourceViewStateGeneration = captureGeneration;
+				resourceViewStateResetPending.store(false, std::memory_order_release);
+			} else if (resourceViewStateResetPending.exchange(false, std::memory_order_acq_rel)) {
+				ApplyEffectiveResourceViewResetLocked();
 			}
 			auto& state = effectiveResourceViews[kindIndex][stageValue - 1];
+			auto& needsObservation = resourceViewSlotsNeedingObservation[kindIndex][stageValue - 1];
 			for (std::uint32_t index = 0; index < count; ++index) {
+				const auto slot = a_startSlot + index;
 				const auto pointer = a_views ? a_views[index].view.d3dObject : 0;
-				if (state[a_startSlot + index] != pointer) {
-					state[a_startSlot + index] = pointer;
+				if (needsObservation.test(slot) || state[slot] != pointer) {
+					state[slot] = pointer;
+					needsObservation.reset(slot);
 					recordSlot[index] = true;
 					++changedSlotCount;
 				}

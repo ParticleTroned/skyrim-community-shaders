@@ -1841,6 +1841,7 @@ if(BUILD_CONTROLLER_TESTS)
         render_map_runtime_test
         PRIVATE "${PROJECT_SOURCE_DIR}/src"
     )
+    target_compile_definitions(render_map_runtime_test PRIVATE CSX_RENDER_MAP_TESTING=1)
     add_test(NAME RenderMapRuntime COMMAND render_map_runtime_test)
     set_tests_properties(RenderMapRuntime PROPERTIES LABELS "ControllerTests")
 

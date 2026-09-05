@@ -140,7 +140,11 @@ evidence but cannot preserve pre-call tracker state. The corresponding
 The offline graph applies the same restore-false boundary to both its observed
 and predicted SRV, UAV, and target-binding state. Later immediate work cannot
 inherit any pre-execution binding; only explicit post-execution observations
-reseed the state. Restore-true execution preserves it.
+reseed the state. The producer invalidates its matching effective-view baseline
+and remembers only previously non-null slots that require an explicit
+observation. A later query therefore republishes a same-pointer rebind or an
+explicit null without flooding the capture with every already-null slot.
+Restore-true execution preserves the baseline.
 
 Typed command identities are immutable within a capture. Before deriving
 provenance, the graph builder detects incompatible repeated device-context,
@@ -202,6 +206,10 @@ The service capability remains false until live qualification, so exhaustion of
 these provisional hard bounds is currently represented by missing typed
 evidence rather than a dedicated per-catalogue drop counter. Configurable bounds
 and explicit overflow counters are required before the capability is promoted.
+Storage admission is contained within the diagnostic boundary: allocation or
+locking failure declines the new identity, preserves the original D3D result,
+and leaves finish/reset epoch obligations intact rather than escaping a
+`noexcept` hook callback.
 
 ## Implementation order
 

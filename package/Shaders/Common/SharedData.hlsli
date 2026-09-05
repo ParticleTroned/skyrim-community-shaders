@@ -416,6 +416,22 @@ namespace SharedData
 		float pad;
 	};
 
+	// Only Mesh Blending pixel shaders read this tail. Other permutations keep
+	// the established b6 declaration, avoiding unrelated compiler deltas.
+#	if defined(MESH_BLENDING) && defined(PSHADER)
+	struct MeshBlendingSettings
+	{
+		float BlendStrength;
+		float BlendWidth;
+		float DepthBias;
+		float MaximumGap;
+
+		uint EnableLandscapeBlending;
+		float ProjectedSnowEdgeWidth;
+		float2 pad0;
+	};
+#	endif
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -440,6 +456,9 @@ namespace SharedData
 		UnifiedWaterSettings unifiedWaterSettings;
 		WaterAppearanceSettings waterAppearanceSettings;
 		BloomSettings bloomSettings;
+#	if defined(MESH_BLENDING) && defined(PSHADER)
+		MeshBlendingSettings meshBlendingSettings;
+#	endif
 	};
 
 	static const uint LOD_BLENDING_FLAG_DISABLE_TERRAIN_VERTEX_COLORS = 1u;

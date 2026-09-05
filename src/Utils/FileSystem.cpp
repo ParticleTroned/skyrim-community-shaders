@@ -1,4 +1,5 @@
 #include "FileSystem.h"
+#include "BoundedTextRead.h"
 #include <Windows.h>
 #include <atomic>
 #include <cmath>
@@ -228,8 +229,77 @@ namespace Util
 	// File system utilities implementation
 	namespace FileHelpers
 	{
+		bool ReadTextFileBounded(
+			const std::filesystem::path& path,
+			std::size_t maximumBytes,
+			std::optional<std::string>& contents,
+			std::string& errorMessage)
+		{
+			errorMessage.clear();
+			std::ifstream input(path, std::ios::binary);
+			if (!input.is_open()) {
+				std::error_code existsError;
+				if (!std::filesystem::exists(path, existsError) && !existsError) {
+					contents.reset();
+					return true;
+				}
+				errorMessage = existsError ?
+				                   std::format("Could not inspect {}: {}", path.string(), existsError.message()) :
+				                   std::format("Could not open {} for reading", path.string());
+				return false;
+			}
+
+			std::string boundedContents;
+			switch (Util::BoundedTextRead::Read(input, maximumBytes, boundedContents)) {
+			case Util::BoundedTextRead::Result::Success:
+				contents = std::move(boundedContents);
+				return true;
+			case Util::BoundedTextRead::Result::LimitExceeded:
+				errorMessage = std::format("{} exceeds the {} byte safety limit", path.string(), maximumBytes);
+				return false;
+			case Util::BoundedTextRead::Result::ReadError:
+				errorMessage = std::format("Could not finish reading {}", path.string());
+				return false;
+			}
+			return false;
+		}
+
 		namespace
 		{
+
+			std::filesystem::path MakeStagingPath(const std::filesystem::path& path)
+			{
+				static std::atomic_uint64_t nextStagingFileID{ 0 };
+				auto stagingPath = path;
+				stagingPath += std::format(
+					L".community-shaders.{}.{}.tmp",
+					GetCurrentProcessId(),
+					nextStagingFileID.fetch_add(1, std::memory_order_relaxed));
+				return stagingPath;
+			}
+
+			bool WriteStagingFile(
+				const std::filesystem::path& stagingPath,
+				std::string_view contents,
+				std::string& errorMessage)
+			{
+				std::ofstream output(stagingPath, std::ios::binary | std::ios::trunc);
+				if (!output.is_open()) {
+					errorMessage = std::format("Could not open the staging file {}", stagingPath.string());
+					return false;
+				}
+				output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+				output.flush();
+				output.close();
+				if (!output) {
+					std::error_code cleanupError;
+					std::filesystem::remove(stagingPath, cleanupError);
+					errorMessage = std::format("Could not finish writing the staging file {}", stagingPath.string());
+					return false;
+				}
+				return true;
+			}
+
 			bool WriteTextFileDirect(
 				const std::filesystem::path& path,
 				std::string_view contents,
@@ -340,30 +410,9 @@ namespace Util
 				return false;
 			}
 
-			static std::atomic_uint64_t nextStagingFileID{ 0 };
-			auto stagingPath = path;
-			stagingPath += std::format(
-				L".community-shaders.{}.{}.tmp",
-				GetCurrentProcessId(),
-				nextStagingFileID.fetch_add(1, std::memory_order_relaxed));
-
-			{
-				std::ofstream output(stagingPath, std::ios::binary | std::ios::trunc);
-				if (!output.is_open()) {
-					errorMessage = std::format("Could not open the staging file {}", stagingPath.string());
-					return false;
-				}
-
-				output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
-				output.flush();
-				output.close();
-				if (!output) {
-					std::error_code cleanupError;
-					std::filesystem::remove(stagingPath, cleanupError);
-					errorMessage = std::format("Could not finish writing the staging file {}", stagingPath.string());
-					return false;
-				}
-			}
+			auto stagingPath = MakeStagingPath(path);
+			if (!WriteStagingFile(stagingPath, contents, errorMessage))
+				return false;
 
 			if (!MoveFileExW(
 					stagingPath.c_str(),
@@ -389,6 +438,58 @@ namespace Util
 				logger::info("Saved {} directly after atomic replacement failed", path.string());
 			}
 
+			return true;
+		}
+
+		bool WriteTextFileAtomicIfUnchanged(
+			const std::filesystem::path& path,
+			std::string_view contents,
+			const std::optional<std::string>& expectedContents,
+			std::size_t maximumBytes,
+			std::string& errorMessage)
+		{
+			errorMessage.clear();
+			if (contents.size() > maximumBytes) {
+				errorMessage = std::format("The replacement exceeds the {} byte safety limit", maximumBytes);
+				return false;
+			}
+			std::error_code directoryError;
+			if (!path.parent_path().empty())
+				std::filesystem::create_directories(path.parent_path(), directoryError);
+			if (directoryError) {
+				errorMessage = std::format("Could not create the settings directory: {}", directoryError.message());
+				return false;
+			}
+
+			auto stagingPath = MakeStagingPath(path);
+			if (!WriteStagingFile(stagingPath, contents, errorMessage))
+				return false;
+
+			std::optional<std::string> currentContents;
+			if (!ReadTextFileBounded(path, maximumBytes, currentContents, errorMessage) ||
+				currentContents != expectedContents) {
+				std::error_code cleanupError;
+				std::filesystem::remove(stagingPath, cleanupError);
+				if (errorMessage.empty())
+					errorMessage = "The destination changed after it was read; the existing file was not changed.";
+				return false;
+			}
+
+			const DWORD moveFlags = expectedContents ?
+			                            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH :
+			                            MOVEFILE_WRITE_THROUGH;
+			if (!MoveFileExW(
+					stagingPath.c_str(),
+					path.c_str(),
+					moveFlags)) {
+				const auto windowsError = GetLastError();
+				std::error_code cleanupError;
+				std::filesystem::remove(stagingPath, cleanupError);
+				errorMessage = std::format(
+					"Could not conditionally replace the destination (Windows error {})",
+					windowsError);
+				return false;
+			}
 			return true;
 		}
 

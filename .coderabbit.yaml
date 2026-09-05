@@ -1,6 +1,14 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
 # CodeRabbit AI Configuration
 
 reviews:
+    auto_review:
+        enabled: true
+        drafts: false
+        auto_incremental_review: true
+        base_branches:
+            - "main-VR"
     path_instructions:
         - path: "**/*"
           instructions: |

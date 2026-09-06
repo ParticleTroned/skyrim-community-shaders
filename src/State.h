@@ -263,6 +263,8 @@ public:
 	};
 
 	bool inWorld = false;
+	uint32_t lastWorldRenderFrame = std::numeric_limits<uint32_t>::max();
+	uint32_t lastCompletedWorldRenderFrame = std::numeric_limits<uint32_t>::max();
 	bool activeReflections = false;
 
 	// Cached menu open states, updated once per frame in Reset().

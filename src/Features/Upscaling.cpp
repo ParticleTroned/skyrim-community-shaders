@@ -81,6 +81,31 @@ namespace
 		       (ui && ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
 	}
 
+	bool IsNeuralRenderingMenuBlocked()
+	{
+		const auto* state = globals::state;
+		auto* const ui = globals::game::ui;
+		const bool hardMenuContext = NeuralRendering::IsHardMenuContext({
+			.mainMenu = IsMainMenuContextActive(),
+			.loading = IsLoadingMenuContextActive(),
+			.communityShadersMenu =
+				globals::menu && globals::menu->IsEnabled,
+		});
+		return !NeuralRendering::EvaluateMenuContinuity({
+															.hardMenuContext = hardMenuContext,
+															.gamePaused = ui && ui->GameIsPaused(),
+															.worldFrameStateAvailable = state != nullptr,
+															.currentFrame = state ? state->frameCount : 0u,
+															.lastWorldRenderFrame = state ?
+		                                                                                state->lastWorldRenderFrame :
+		                                                                                std::numeric_limits<uint32_t>::max(),
+															.lastCompletedWorldRenderFrame = state ?
+		                                                                                         state->lastCompletedWorldRenderFrame :
+		                                                                                         std::numeric_limits<uint32_t>::max(),
+														})
+		            .admitted;
+	}
+
 	bool IsRenderDocDllLoaded(bool a_probeProcess)
 	{
 		if (g_renderDocDllDetected.load(std::memory_order_acquire))
@@ -3509,6 +3534,7 @@ bool Upscaling::IsNeuralRenderingRunnable(UpscaleMethod a_method) const
 	return settings.neuralRenderingEnabled &&
 	       a_method == UpscaleMethod::kDLSS &&
 	       streamline.featureDLSS &&
+	       !IsNeuralRenderingMenuBlocked() &&
 	       !IsBackendShutdownRequested() &&
 	       !IsFrameGenerationDx12PathActive();
 }

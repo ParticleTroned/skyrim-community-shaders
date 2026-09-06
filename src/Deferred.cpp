@@ -629,8 +629,10 @@ void Deferred::Hooks::Main_RenderWorld::thunk(bool a1)
 	auto* const state = globals::state;
 	state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::InWorld);
 	state->inWorld = true;
+	state->lastWorldRenderFrame = state->frameCount;
 	func(a1);
 
+	state->lastCompletedWorldRenderFrame = state->frameCount;
 	state->inWorld = false;
 	state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::InWorld);
 };

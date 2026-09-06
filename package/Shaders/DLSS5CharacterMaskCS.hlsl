@@ -1,5 +1,7 @@
 #include "Common/CharacterCategoryMask.hlsli"
 
+static const uint EligibilityRegionCapacity = 16u;
+
 // Resolves the frozen active-stereo provenance tuple into one exact eye-local
 // CSX output-selection mask. The CPU unions these same eligibility rectangles
 // into the one Feature 18 compute subrect; this shader remains authoritative for
@@ -9,13 +11,14 @@ cbuffer CharacterMaskCB : register(b0)
 {
 	uint4 OutputAndSourceSize;  // output width/height, source eye width/height
 	uint4 SourceCrop;           // source eye base X, input min X/Y, input width
-	uint4 Options;              // input height, reserved, feather radius, depth-aware feather
+	uint4 Options;              // input height, eligibility count, feather radius, depth-aware feather
 	float4 FeatherOptions;      // feather depth, test mode, diagnostics sample, reserved
-	float4 VisibilityOptions;   // rejection threshold, visibility rejection enabled, reserved
+	float4 VisibilityOptions;   // rejection threshold, visibility enabled, max distance in game units, reserved
 	float4 DepthLinearization;  // far, near, far-near, far*near
+	row_major float4x4 CameraProjInverse; // current per-eye projection inverse
 	float4 Jitter;              // current low-resolution pixel jitter in xy
 	float4 CategoryStrengths;   // face, skin, hair, reserved
-	float4 EligibilityRectangle; // eye-local output pixels, min.xy/max.xy
+	float4 EligibilityRectangles[EligibilityRegionCapacity]; // eye-local output pixels, min.xy/max.xy
 	uint4 DispatchRegion;        // output-local offset.xy and dispatch extent.zw
 };
 
@@ -24,7 +27,7 @@ Texture2D<float> AuthoredDepth : register(t1);
 Texture2D<float> CurrentDepth : register(t2);
 RWTexture2D<unorm float> CharacterSelectionMask : register(u0);
 RWByteAddressBuffer DiagnosticCounters : register(u1);
-groupshared uint GroupCounters[8];
+groupshared uint GroupCounters[9];
 
 static const uint MaskPixels = 0u;
 static const uint AuthoredFacePixels = 1u;
@@ -34,11 +37,18 @@ static const uint VisibleFacePixels = 4u;
 static const uint VisibleSkinPixels = 5u;
 static const uint VisibleHairPixels = 6u;
 static const uint VisibilityRejectedPixels = 7u;
+static const uint DistanceRejectedPixels = 8u;
 
 bool IsInsideEligibilityRegion(float2 pixelCenter)
 {
-	return all(pixelCenter >= EligibilityRectangle.xy) &&
-	       all(pixelCenter < EligibilityRectangle.zw);
+	[loop] for (uint index = 0;
+		index < min(Options.y, EligibilityRegionCapacity); ++index)
+	{
+		const float4 region = EligibilityRectangles[index];
+		if (all(pixelCenter >= region.xy) && all(pixelCenter < region.zw))
+			return true;
+	}
+	return false;
 }
 
 int2 GetGlobalSourcePixel(int2 localSourcePixel)
@@ -85,26 +95,60 @@ float LinearizeDepth(float rawDepth)
 	       max(-rawDepth * DepthLinearization.z + DepthLinearization.x, 1.0e-6);
 }
 
-bool IsAuthoredSurfaceVisible(int2 localSourcePixel, out float currentDepth)
+bool IsAuthoredSurfaceVisible(
+	int2 localSourcePixel,
+	out float currentDepth,
+	out float authoredRawDepth)
 {
 	const bool visibilityRejectionEnabled = VisibilityOptions.y >= 0.5;
 	const bool depthFeatherEnabled = Options.w != 0 && Options.z != 0;
-	if (!visibilityRejectionEnabled && !depthFeatherEnabled) {
+	const bool distanceCullEnabled = VisibilityOptions.z > 0.0;
+	if (!visibilityRejectionEnabled && !depthFeatherEnabled && !distanceCullEnabled) {
 		currentDepth = 0.0;
+		authoredRawDepth = 0.0;
 		return true;
 	}
 
-	currentDepth = LinearizeDepth(ReadCurrentDepth(localSourcePixel));
+	currentDepth = 0.0;
+	authoredRawDepth = 0.0;
+	if (visibilityRejectionEnabled || depthFeatherEnabled)
+		currentDepth = LinearizeDepth(ReadCurrentDepth(localSourcePixel));
+	if (visibilityRejectionEnabled || distanceCullEnabled)
+		authoredRawDepth = ReadAuthoredDepth(localSourcePixel);
 	if (!visibilityRejectionEnabled)
 		return true;
 
-	const float authoredDepth = LinearizeDepth(ReadAuthoredDepth(localSourcePixel));
+	const float authoredDepth = LinearizeDepth(authoredRawDepth);
 	const float tolerance = max(
 		1.0,
 		max(abs(authoredDepth), abs(currentDepth)) * VisibilityOptions.x);
 	// Later depth may legitimately be farther (cleared or transparent). Reject
 	// only a materially closer surface that now occludes the authored category.
 	return currentDepth + tolerance >= authoredDepth;
+}
+
+float ReconstructEyeDistance(int2 localSourcePixel, float rawDepth)
+{
+	const int2 inputSize = int2(SourceCrop.w, Options.x);
+	localSourcePixel = clamp(localSourcePixel, int2(0, 0), inputSize - 1);
+	const float2 fullEyePixel =
+		float2(int2(SourceCrop.y, SourceCrop.z) + localSourcePixel) + 0.5;
+	const float2 uv = fullEyePixel / float2(OutputAndSourceSize.zw);
+	const float4 clipPosition = float4(
+		uv.x * 2.0 - 1.0,
+		1.0 - uv.y * 2.0,
+		rawDepth,
+		1.0);
+	const float4 viewPosition = mul(CameraProjInverse, clipPosition);
+	return abs(viewPosition.w) > 1.0e-6 ?
+		length(viewPosition.xyz / viewPosition.w) :
+		3.402823466e+38;
+}
+
+bool IsWithinDistance(int2 localSourcePixel, float rawDepth)
+{
+	return VisibilityOptions.z <= 0.0 ||
+		ReconstructEyeDistance(localSourcePixel, rawDepth) <= VisibilityOptions.z;
 }
 
 void CountCategory(uint category, uint firstCounter)
@@ -122,7 +166,7 @@ void CountCategory(uint category, uint firstCounter)
 	const bool insideDispatch = all(dispatchThreadId.xy < DispatchRegion.zw);
 	const uint2 outputPixelId = dispatchThreadId.xy + DispatchRegion.xy;
 	if (measureCoverage) {
-		if (groupIndex < 8u)
+		if (groupIndex < 9u)
 			GroupCounters[groupIndex] = 0u;
 		GroupMemoryBarrierWithGroupSync();
 	}
@@ -144,20 +188,30 @@ void CountCategory(uint category, uint firstCounter)
 		float mask = 0.0;
 		if (IsInsideEligibilityRegion(outputPixel)) {
 			float centerDepth = 0.0;
+			float centerAuthoredRawDepth = 0.0;
 			const bool centerVisible =
-				IsAuthoredSurfaceVisible(sourcePixel, centerDepth);
+				IsAuthoredSurfaceVisible(
+					sourcePixel, centerDepth, centerAuthoredRawDepth);
+			const bool centerWithinDistance =
+				IsWithinDistance(sourcePixel, centerAuthoredRawDepth);
+			const bool centerEligible = centerVisible && centerWithinDistance;
 			if (measureCoverage) {
-				if (centerVisible)
+				if (centerEligible)
 					CountCategory(centerCategory, VisibleFacePixels);
 				else if (centerCategory != 0u) {
 					uint ignored;
-					InterlockedAdd(
-						GroupCounters[VisibilityRejectedPixels], 1u, ignored);
+					if (!centerVisible) {
+						InterlockedAdd(
+							GroupCounters[VisibilityRejectedPixels], 1u, ignored);
+					} else if (!centerWithinDistance) {
+						InterlockedAdd(
+							GroupCounters[DistanceRejectedPixels], 1u, ignored);
+					}
 				}
 			}
-			mask = centerVisible ? GetCategoryStrength(centerCategory) : 0.0;
+			mask = centerEligible ? GetCategoryStrength(centerCategory) : 0.0;
 
-			if (centerVisible && Options.w != 0 && Options.z != 0 && mask < 1.0) {
+			if (centerEligible && Options.w != 0 && Options.z != 0 && mask < 1.0) {
 				const int radius = min(int(Options.z), 4);
 				[loop] for (int y = -radius; y <= radius; ++y)
 				{
@@ -172,8 +226,14 @@ void CountCategory(uint category, uint firstCounter)
 							(centerCategory != 0u && neighborCategory != centerCategory))
 							continue;
 						float neighborDepth = 0.0;
+						float neighborAuthoredRawDepth = 0.0;
 						if (!IsAuthoredSurfaceVisible(
-								sourcePixel + offset, neighborDepth))
+								sourcePixel + offset, neighborDepth,
+								neighborAuthoredRawDepth))
+							continue;
+						if (!IsWithinDistance(
+								sourcePixel + offset,
+								neighborAuthoredRawDepth))
 							continue;
 						const float depthTolerance = max(
 							1.0,
@@ -209,7 +269,7 @@ void CountCategory(uint category, uint firstCounter)
 
 	if (measureCoverage) {
 		GroupMemoryBarrierWithGroupSync();
-		if (groupIndex < 8u && GroupCounters[groupIndex] != 0u) {
+		if (groupIndex < 9u && GroupCounters[groupIndex] != 0u) {
 			uint ignored;
 			DiagnosticCounters.InterlockedAdd(
 				groupIndex * 4u, GroupCounters[groupIndex], ignored);

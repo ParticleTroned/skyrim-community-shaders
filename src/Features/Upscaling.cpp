@@ -96,6 +96,7 @@
 	OP(neuralCharacterSkinStrength)               \
 	OP(neuralCharacterHairStrength)               \
 	OP(neuralCharacterMaximumDistanceMeters)      \
+	OP(neuralCharacterAdaptiveRoiSelectionEnabled) \
 	OP(neuralCharacterMinimumFacePixelSize)       \
 	OP(neuralCharacterRoiMargin)                  \
 	OP(neuralCharacterRoiHoldFrames)              \
@@ -3760,6 +3761,8 @@ namespace
 			.hairStrength = a_settings.neuralCharacterHairStrength,
 			.maximumDistanceMeters =
 				a_settings.neuralCharacterMaximumDistanceMeters,
+			.adaptiveRoiSelection =
+				a_settings.neuralCharacterAdaptiveRoiSelectionEnabled,
 			.minimumFacePixelSize =
 				a_settings.neuralCharacterMinimumFacePixelSize,
 			.roiMargin = a_settings.neuralCharacterRoiMargin,
@@ -3990,6 +3993,8 @@ namespace
 			NeuralRendering::CharacterPolicy::kDefaultHairStrength;
 		settings.neuralCharacterMaximumDistanceMeters =
 			NeuralRendering::CharacterPolicy::kDefaultMaximumDistanceMeters;
+		settings.neuralCharacterAdaptiveRoiSelectionEnabled =
+			NeuralRendering::CharacterPolicy::kDefaultAdaptiveRoiSelection;
 		settings.neuralCharacterMinimumFacePixelSize =
 			NeuralRendering::CharacterPolicy::kDefaultMinimumFacePixelSize;
 		settings.neuralCharacterRoiMargin =
@@ -4057,6 +4062,7 @@ namespace
 		o_json.erase("neuralCharacterSkinStrength");
 		o_json.erase("neuralCharacterHairStrength");
 		o_json.erase("neuralCharacterMaximumDistanceMeters");
+		o_json.erase("neuralCharacterAdaptiveRoiSelectionEnabled");
 		o_json.erase("neuralCharacterMinimumFacePixelSize");
 		o_json.erase("neuralCharacterRoiMargin");
 		o_json.erase("neuralCharacterRoiHoldFrames");
@@ -4995,6 +5001,7 @@ namespace
 			addFloat(a_settings.neuralCharacterSkinStrength);
 			addFloat(a_settings.neuralCharacterHairStrength);
 			addFloat(a_settings.neuralCharacterMaximumDistanceMeters);
+			add(a_settings.neuralCharacterAdaptiveRoiSelectionEnabled);
 			add(a_settings.neuralCharacterMinimumFacePixelSize);
 			addFloat(a_settings.neuralCharacterRoiMargin);
 			add(a_settings.neuralCharacterRoiHoldFrames);
@@ -15148,10 +15155,19 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 						NeuralRendering::CharacterPolicy::kMaximumStrength, "%.2f");
 				}
 				ImGui::SliderFloat(
-					"Maximum Distance", &settings.neuralCharacterMaximumDistanceMeters,
+					"NR Distance Cull", &settings.neuralCharacterMaximumDistanceMeters,
 					NeuralRendering::CharacterPolicy::kMinimumDistanceMeters,
 					NeuralRendering::CharacterPolicy::kMaximumDistanceMeters,
-					"%.1f m");
+					"%.1f m", ImGuiSliderFlags_AlwaysClamp);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted(
+						"Excludes actor bounds and exact mask pixels beyond this distance.");
+					ImGui::TextUnformatted(
+						"0 m disables this hard cutoff; Adaptive ROI Performance remains independent.");
+					ImGui::Text(
+						"The range ends at %.0f m, beyond the useful face-detail range.",
+						NeuralRendering::CharacterPolicy::kMaximumDistanceMeters);
+				}
 				int minimumFacePixels = static_cast<int>(
 					settings.neuralCharacterMinimumFacePixelSize);
 				if (ImGui::SliderInt(
@@ -15172,6 +15188,19 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 				if (ImGui::TreeNodeEx(
 						"Character Rendering Advanced",
 						ImGuiTreeNodeFlags_SpanAvailWidth)) {
+					ImGui::Checkbox(
+						"Adaptive ROI Performance",
+						&settings.neuralCharacterAdaptiveRoiSelectionEnabled);
+					if (auto _tt = Util::HoverTooltipWrapper()) {
+						ImGui::TextUnformatted(
+							"Prioritizes actors by player distance and projected face detail.");
+						ImGui::Text(
+							"Subject to Minimum Face Size, keeps actors within %.0f m or with a face at least %u px across.",
+							NeuralRendering::CharacterRegionPolicy::kAdaptiveDetailDistanceMeters,
+							NeuralRendering::CharacterRegionPolicy::kAdaptiveDetailFacePixelSize);
+						ImGui::TextUnformatted(
+							"This can omit low-detail distant actors from Neural Rendering.");
+					}
 					ImGui::SliderFloat(
 						"Eligibility Margin", &settings.neuralCharacterRoiMargin,
 						NeuralRendering::CharacterPolicy::kMinimumRoiMargin,
@@ -15196,7 +15225,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 
 					ImGui::TextColored(
 						Util::Colors::GetSuccess(),
-						"Dynamic single-rectangle inference is active; sparse multi-ROI is unavailable.");
+						"Dynamic single-rectangle inference is active; the pinned provider ABI exposes no ROI list.");
 
 					ImGui::Checkbox(
 						"Visibility Depth Test",
@@ -15351,12 +15380,13 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 						NeuralRendering::GetCharacterFeature18DispositionName(
 							eyeStatus.feature18Disposition);
 					ImGui::TextDisabled(
-						"%s: %ux%u, eligible face actors %u, eligible regions %u, mask %s%.2f%%, eligibility %.2f%%, request %s, outcome %s",
+						"%s: %ux%u, face actors %u, selected actors %u, culled %u, mask %s%.2f%%, eligibility %.2f%%, request %s, outcome %s",
 						eye == 0 ? "Left" : "Right",
 						eyeStatus.evaluationWidth,
 						eyeStatus.evaluationHeight,
 						eyeStatus.visibleFaces,
-						eyeStatus.mergedRegions,
+						eyeStatus.selectedCharacterRegions,
+						eyeStatus.adaptivelyCulledCharacterRegions,
 						eyeStatus.maskCoverageReady ? "" : "pending ",
 						eyeStatus.maskCoveragePercent,
 						eyeStatus.roiCoveragePercent,
@@ -15370,14 +15400,15 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 							eyeStatus.maskCoverageWidth,
 							eyeStatus.maskCoverageHeight);
 						ImGui::TextDisabled(
-							"  authored pixels F/S/H: %llu/%llu/%llu | visible: %llu/%llu/%llu | depth-rejected: %llu",
+							"  authored pixels F/S/H: %llu/%llu/%llu | selected: %llu/%llu/%llu | depth-rejected: %llu | distance-rejected: %llu",
 							static_cast<unsigned long long>(eyeStatus.authoredCategoryPixels[0]),
 							static_cast<unsigned long long>(eyeStatus.authoredCategoryPixels[1]),
 							static_cast<unsigned long long>(eyeStatus.authoredCategoryPixels[2]),
 							static_cast<unsigned long long>(eyeStatus.visibleCategoryPixels[0]),
 							static_cast<unsigned long long>(eyeStatus.visibleCategoryPixels[1]),
 							static_cast<unsigned long long>(eyeStatus.visibleCategoryPixels[2]),
-							static_cast<unsigned long long>(eyeStatus.visibilityRejectedPixels));
+							static_cast<unsigned long long>(eyeStatus.visibilityRejectedPixels),
+							static_cast<unsigned long long>(eyeStatus.distanceRejectedPixels));
 						if (eyeStatus.zeroCoverageBypassed) {
 							ImGui::TextDisabled(
 								"  Feature 18 bypassed: current-frame CPU provenance proves the selection is empty.");

@@ -199,7 +199,12 @@ foreach(_selection_composite_contract IN ITEMS
 endforeach()
 
 foreach(_mask_roi_dispatch_contract IN ITEMS
-    [[float4 EligibilityRectangle;]]
+    [[static const uint EligibilityRegionCapacity = 16u;]]
+    [[float4 EligibilityRectangles[EligibilityRegionCapacity];]]
+    [[const float4 region = EligibilityRectangles[index];]]
+    [[row_major float4x4 CameraProjInverse;]]
+    [[const float4 viewPosition = mul(CameraProjInverse, clipPosition);]]
+    [[length(viewPosition.xyz / viewPosition.w)]]
     [[uint4 DispatchRegion;]]
     [[const uint2 outputPixelId = dispatchThreadId.xy + DispatchRegion.xy;]]
     [[CharacterSelectionMask[outputPixelId] = mask;]]
@@ -735,6 +740,8 @@ foreach(_status_contract IN ITEMS
     [[{ "authoredCategoryPixels", {]]
     [[{ "visibleCategoryPixels", {]]
     [[{ "visibilityRejectedPixels", eye.maskCoverageReady ? json(eye.visibilityRejectedPixels) : json(nullptr) }]]
+    [[{ "distanceRejectedPixels", eye.maskCoverageReady ? json(eye.distanceRejectedPixels) : json(nullptr) }]]
+    [[{ "providerRoiListEvidenceScope", "observed_feature18_parameter_abi" }]]
     [[{ "depthCoordinates", {]]
     [[{ "zeroCoverageBypassRequested", eye.zeroCoverageBypassRequested }]]
     [[{ "zeroCoverageBypassResolved", eye.zeroCoverageBypassResolved }]]
@@ -745,7 +752,7 @@ foreach(_status_contract IN ITEMS
     [[{ "maskCoverageSampleAgeFrames",]]
     [[{ "maskCoverageMatchesCurrentPolicy", eye.maskCoverageMatchesCurrentPolicy }]]
     [[{ "authoredCategoryPixelCountSpace", "active_eye_input_pixels_before_visibility" }]]
-    [[{ "visibleCategoryPixelCountSpace", "feature18_evaluation_pixels_after_visibility_inside_eligibility" }]]
+    [[{ "visibleCategoryPixelCountSpace", "feature18_evaluation_pixels_after_visibility_and_distance_inside_eligibility" }]]
     [[{ "observationCapacityDrops", snapshot.observationCapacityDrops }]]
     [[{ "currentCategoryObservations", {]]
     [[{ "currentClassificationRejections", {]]
@@ -767,6 +774,8 @@ foreach(_status_contract IN ITEMS
     [[{ "currentAbortedSlotMask", currentPreparationFound ? currentPreparation->abortedSlotMask : 0u }]]
     [[{ "eligibleFaceActors", eye.visibleFaces }]]
     [[{ "eligibleCharacterActors", eye.visibleCharacterRegions }]]
+    [[{ "selectedCharacterActors", eye.selectedCharacterRegions }]]
+    [[{ "adaptivelyCulledCharacterActors", eye.adaptivelyCulledCharacterRegions }]]
     [[{ "mergedEligibilityRegions", eye.mergedRegions }]]
     [[{ "fullEyeEligibilityFallback", eye.fullEyeEligibilityFallback }]]
     [[{ "authoredMaskCoverageSampleIntervalFrames", NeuralRendering::CharacterPolicy::kCoverageSampleIntervalFrames }]]
@@ -1634,7 +1643,7 @@ foreach(_mask_shader_contract IN ITEMS
     [[Texture2D<float> CurrentDepth : register(t2);]]
     [[RWTexture2D<unorm float> CharacterSelectionMask : register(u0);]]
     [[RWByteAddressBuffer DiagnosticCounters : register(u1);]]
-    [[groupshared uint GroupCounters[8];]]
+    [[groupshared uint GroupCounters[9];]]
     [[const uint2 inputSize = uint2(SourceCrop.w, Options.x);]]
     [[measureCoverage && insideDispatch && all(outputPixelId < inputSize)]]
     [[ReadAuthoredCategory(int2(outputPixelId))]]
@@ -1643,8 +1652,11 @@ foreach(_mask_shader_contract IN ITEMS
     [[const bool visibilityRejectionEnabled = VisibilityOptions.y >= 0.5;]]
     [[return currentDepth + tolerance >= authoredDepth;]]
     [[CharacterCategoryMask::DecodeCategory(]]
-    [[IsAuthoredSurfaceVisible(sourcePixel, centerDepth)]]
-    [[if (centerVisible && Options.w != 0 && Options.z != 0 && mask < 1.0)]]
+    [[IsAuthoredSurfaceVisible(]]
+    [[sourcePixel, centerDepth, centerAuthoredRawDepth)]]
+    [[const bool centerWithinDistance =]]
+    [[IsWithinDistance(sourcePixel, centerAuthoredRawDepth);]]
+    [[if (centerEligible && Options.w != 0 && Options.z != 0 && mask < 1.0)]]
 )
     string(FIND
         "${_character_mask_shader}"
@@ -1687,9 +1699,12 @@ string(SUBSTRING "${_character_mask_shader}" ${_visibility_function_begin}
     ${_visibility_function_length} _visibility_function)
 set(_visibility_previous_position -1)
 foreach(_visibility_contract IN ITEMS
-    [[if (!visibilityRejectionEnabled && !depthFeatherEnabled)]]
+    [[if (!visibilityRejectionEnabled && !depthFeatherEnabled && !distanceCullEnabled)]]
+    [[if (visibilityRejectionEnabled || depthFeatherEnabled)]]
     [[currentDepth = LinearizeDepth(ReadCurrentDepth(localSourcePixel));]]
-    [[const float authoredDepth = LinearizeDepth(ReadAuthoredDepth(localSourcePixel));]]
+    [[if (visibilityRejectionEnabled || distanceCullEnabled)]]
+    [[authoredRawDepth = ReadAuthoredDepth(localSourcePixel);]]
+    [[const float authoredDepth = LinearizeDepth(authoredRawDepth);]]
     [[const float tolerance = max(]]
     [[return currentDepth + tolerance >= authoredDepth;]]
 )
@@ -1707,7 +1722,7 @@ string(FIND "${_visibility_function}"
     "currentDepth = LinearizeDepth(ReadCurrentDepth(localSourcePixel));"
     _visibility_current_depth)
 string(FIND "${_visibility_function}"
-    "const float authoredDepth = LinearizeDepth(ReadAuthoredDepth(localSourcePixel));"
+    "const float authoredDepth = LinearizeDepth(authoredRawDepth);"
     _visibility_authored_depth)
 math(EXPR _visibility_bypass_length
     "${_visibility_authored_depth} - ${_visibility_current_depth}"
@@ -2080,10 +2095,15 @@ foreach(_admission_contract IN ITEMS
     [[actor.selectedRects[a_args.eyeIndex ^ 1u].IsValid()]]
     [[for (const auto& stereoAnchor : stereoAnchors)]]
     [[stereoMaximumSize >= a_args.settings.minimumFacePixelSize]]
+    [[CharacterRegionPolicy::IsWithinMaximumDistance(]]
+    [[CharacterRegionPolicy::IsDetailRelevant(]]
     [[std::array<std::map<std::uint32_t, HeldRegion>, 4> heldRegions_]]
     [[CharacterRegionPolicy::IsWithinHoldWindow(]]
     [[if (!currentlyProjected.contains(it->first))]]
-    [[enclosingRect = CharacterRegionPolicy::Union(]]
+    [[CharacterRegionPolicy::SelectAdaptive(]]
+    [[CharacterRegionPolicy::CompactToCapacity(]]
+    [[CharacterRegionPolicy::CoveredArea(plan.regions)]]
+    [[globals::game::frameBufferCached.GetCameraProjInverse(]]
 )
     string(FIND
         "${_character_source}"
@@ -2488,6 +2508,7 @@ set(_character_configuration_fields
     characterSkinStrength
     characterHairStrength
     characterMaximumDistanceMeters
+    characterAdaptiveRoiSelection
     characterMinimumFacePixelSize
     characterRoiMargin
     characterRoiHoldFrames
@@ -2512,6 +2533,22 @@ foreach(_character_field IN LISTS _character_configuration_fields)
     endif()
 endforeach()
 
+foreach(_adaptive_setting_contract IN ITEMS
+    [[OP(neuralCharacterAdaptiveRoiSelectionEnabled)]]
+    [[.adaptiveRoiSelection =]]
+    [[settings.neuralCharacterAdaptiveRoiSelectionEnabled =]]
+    [[o_json.erase("neuralCharacterAdaptiveRoiSelectionEnabled");]]
+    [[add(a_settings.neuralCharacterAdaptiveRoiSelectionEnabled);]]
+)
+    string(FIND "${_upscaling}" "${_adaptive_setting_contract}"
+        _adaptive_setting_position)
+    if(_adaptive_setting_position EQUAL -1)
+        message(FATAL_ERROR
+            "Adaptive character ROI setting is not fully persisted or hashed: ${_adaptive_setting_contract}"
+        )
+    endif()
+endforeach()
+
 foreach(_character_contract IN ITEMS
     [[TryValidateActionFields(]]
     [["nr_request_field_unknown"]]
@@ -2527,6 +2564,8 @@ foreach(_character_contract IN ITEMS
     [["nr_automatic_mask_required"]]
     [[NeuralRendering::CharacterRendering::Instance().Reset();]]
     [[{ "characterStateReset", true }]]
+    [=["characterMaximumDistanceMeters":{"type":"number","minimum":0.0,"maximum":30.0}]=]
+    [=["characterAdaptiveRoiSelection":{"type":"boolean"}]=]
     [=["characterDebugView":{"type":"string","enum":["off","character_mask","roi_rectangles","dlss5_output"]}]=]
     [=["characterMaskTestMode":{"type":"string","enum":["authored","force_zero","force_one","force_half","invert_authored","authored_without_visibility_depth"]}]=]
     [[{ "maskTestMode", GetCharacterMaskTestModeName(maskTestMode) }]]

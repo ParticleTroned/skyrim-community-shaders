@@ -876,6 +876,8 @@ namespace
 				{ "evaluationPixels", static_cast<std::uint64_t>(eye.evaluationWidth) * eye.evaluationHeight },
 				{ "eligibleFaceActors", eye.visibleFaces },
 				{ "eligibleCharacterActors", eye.visibleCharacterRegions },
+				{ "selectedCharacterActors", eye.selectedCharacterRegions },
+				{ "adaptivelyCulledCharacterActors", eye.adaptivelyCulledCharacterRegions },
 				{ "mergedEligibilityRegions", eye.mergedRegions },
 				{ "fullEyeEligibilityFallback", eye.fullEyeEligibilityFallback },
 				{ "eligibilityPixels", eye.roiPixels },
@@ -900,7 +902,7 @@ namespace
 				{ "maskCoverageReady", eye.maskCoverageReady },
 				{ "maskCoverageMatchesCurrentPolicy", eye.maskCoverageMatchesCurrentPolicy },
 				{ "authoredCategoryPixelCountSpace", "active_eye_input_pixels_before_visibility" },
-				{ "visibleCategoryPixelCountSpace", "feature18_evaluation_pixels_after_visibility_inside_eligibility" },
+				{ "visibleCategoryPixelCountSpace", "feature18_evaluation_pixels_after_visibility_and_distance_inside_eligibility" },
 				{ "authoredCategoryPixels", {
 												{ "face", eye.maskCoverageReady ? json(eye.authoredCategoryPixels[0]) : json(nullptr) },
 												{ "skin", eye.maskCoverageReady ? json(eye.authoredCategoryPixels[1]) : json(nullptr) },
@@ -912,6 +914,7 @@ namespace
 											   { "hair", eye.maskCoverageReady ? json(eye.visibleCategoryPixels[2]) : json(nullptr) },
 										   } },
 				{ "visibilityRejectedPixels", eye.maskCoverageReady ? json(eye.visibilityRejectedPixels) : json(nullptr) },
+				{ "distanceRejectedPixels", eye.maskCoverageReady ? json(eye.distanceRejectedPixels) : json(nullptr) },
 				{ "zeroCoverageBypassRequested", eye.zeroCoverageBypassRequested },
 				{ "zeroCoverageBypassResolved", eye.zeroCoverageBypassResolved },
 				{ "zeroCoverageBypassedFeature18", eye.zeroCoverageBypassed },
@@ -1094,6 +1097,7 @@ namespace
 							  { "skinStrength", settings.neuralCharacterSkinStrength },
 							  { "hairStrength", settings.neuralCharacterHairStrength },
 							  { "maximumDistanceMeters", settings.neuralCharacterMaximumDistanceMeters },
+							  { "adaptiveRoiSelection", settings.neuralCharacterAdaptiveRoiSelectionEnabled },
 							  { "minimumFacePixelSize", settings.neuralCharacterMinimumFacePixelSize },
 							  { "roiMargin", settings.neuralCharacterRoiMargin },
 							  { "roiHoldFrames", settings.neuralCharacterRoiHoldFrames },
@@ -1155,6 +1159,10 @@ namespace
 								{ "computeRoi", {
 												{ "supported", snapshot.computeRoiSupported },
 												{ "multiSparseSupported", false },
+												{ "providerRoiListSupported", false },
+												{ "providerRoiListEvidenceScope", "observed_feature18_parameter_abi" },
+												{ "multiEvaluationProductionSupported", false },
+												{ "multiEvaluationExperimentalCandidate", true },
 												{ "privateSingleSubrectCandidate", true },
 												{ "dynamicCharacterSingleRectEnabled", dynamicCharacterSingleRectEnabled },
 												{ "privateSingleSubrectEnabled", dynamicCharacterSingleRectEnabled || privateSingleSubrectEnabled },
@@ -2003,6 +2011,7 @@ namespace
 		std::string_view{ "characterSkinStrength" },
 		std::string_view{ "characterHairStrength" },
 		std::string_view{ "characterMaximumDistanceMeters" },
+		std::string_view{ "characterAdaptiveRoiSelection" },
 		std::string_view{ "characterMinimumFacePixelSize" },
 		std::string_view{ "characterRoiMargin" },
 		std::string_view{ "characterRoiHoldFrames" },
@@ -2040,6 +2049,7 @@ namespace
 		std::optional<float> characterSkinStrength;
 		std::optional<float> characterHairStrength;
 		std::optional<float> characterMaximumDistanceMeters;
+		std::optional<bool> characterAdaptiveRoiSelection;
 		std::optional<std::uint32_t> characterMinimumFacePixelSize;
 		std::optional<float> characterRoiMargin;
 		std::optional<std::uint32_t> characterRoiHoldFrames;
@@ -2063,6 +2073,7 @@ namespace
 			       characterHair || characterFaceStrength ||
 			       characterSkinStrength || characterHairStrength ||
 			       characterMaximumDistanceMeters ||
+			       characterAdaptiveRoiSelection ||
 			       characterMinimumFacePixelSize || characterRoiMargin ||
 			       characterRoiHoldFrames ||
 			       characterDepthAwareFeather || characterVisibilityDepthTest ||
@@ -2285,6 +2296,9 @@ namespace
 			!parseBoolean("characterFaces", a_request.characterFaces) ||
 			!parseBoolean("characterSkin", a_request.characterSkin) ||
 			!parseBoolean("characterHair", a_request.characterHair) ||
+			!parseBoolean(
+				"characterAdaptiveRoiSelection",
+				a_request.characterAdaptiveRoiSelection) ||
 			!parseBoolean(
 				"characterDepthAwareFeather",
 				a_request.characterDepthAwareFeather) ||
@@ -3661,6 +3675,10 @@ namespace
 					requestedSettings.neuralCharacterMaximumDistanceMeters =
 						*request.characterMaximumDistanceMeters;
 				}
+				if (request.characterAdaptiveRoiSelection) {
+					requestedSettings.neuralCharacterAdaptiveRoiSelectionEnabled =
+						*request.characterAdaptiveRoiSelection;
+				}
 				if (request.characterMinimumFacePixelSize) {
 					requestedSettings.neuralCharacterMinimumFacePixelSize =
 						*request.characterMinimumFacePixelSize;
@@ -3751,6 +3769,7 @@ namespace
 					previousSettings.neuralCharacterSkinStrength != requestedSettings.neuralCharacterSkinStrength ||
 					previousSettings.neuralCharacterHairStrength != requestedSettings.neuralCharacterHairStrength ||
 					previousSettings.neuralCharacterMaximumDistanceMeters != requestedSettings.neuralCharacterMaximumDistanceMeters ||
+					previousSettings.neuralCharacterAdaptiveRoiSelectionEnabled != requestedSettings.neuralCharacterAdaptiveRoiSelectionEnabled ||
 					previousSettings.neuralCharacterMinimumFacePixelSize != requestedSettings.neuralCharacterMinimumFacePixelSize ||
 					previousSettings.neuralCharacterRoiMargin != requestedSettings.neuralCharacterRoiMargin ||
 					previousSettings.neuralCharacterRoiHoldFrames != requestedSettings.neuralCharacterRoiHoldFrames ||
@@ -4201,7 +4220,8 @@ namespace VRRenderScaleDevBenchBridge
       "characterFaceStrength":{"type":"number","minimum":0.0,"maximum":1.0},
       "characterSkinStrength":{"type":"number","minimum":0.0,"maximum":1.0},
       "characterHairStrength":{"type":"number","minimum":0.0,"maximum":1.0},
-      "characterMaximumDistanceMeters":{"type":"number","minimum":0.5,"maximum":100.0},
+      "characterMaximumDistanceMeters":{"type":"number","minimum":0.0,"maximum":30.0},
+      "characterAdaptiveRoiSelection":{"type":"boolean"},
       "characterMinimumFacePixelSize":{"type":"integer","minimum":1,"maximum":4096},
       "characterRoiMargin":{"type":"number","minimum":0.0,"maximum":1.0},
       "singleSubrectScale":{"type":"number","minimum":0.25,"maximum":1.0},
@@ -4234,7 +4254,7 @@ namespace VRRenderScaleDevBenchBridge
     },
     "required":["action"],
     "allOf":[
-      {"if":{"properties":{"action":{"const":"nr_configure"}},"required":["action"]},"then":{"minProperties":2,"propertyNames":{"enum":["action","enabled","insertionPoint","preset","intensity","localToneStrength","localStructureStrength","skinStructureStrength","style","batchedStereo","directCommit","implementation","optimizedStereoPath","useAutoMask","uiCorrection","singleSubrectScale","characterEnabled","characterVisualIsolationEnabled","characterFaces","characterSkin","characterHair","characterFaceStrength","characterSkinStrength","characterHairStrength","characterMaximumDistanceMeters","characterMinimumFacePixelSize","characterRoiMargin","characterRoiHoldFrames","characterDepthAwareFeather","characterVisibilityDepthTest","characterFeatherRadius","characterFeatherDepthThreshold","characterDebugView","characterMaskTestMode"]}}},
+      {"if":{"properties":{"action":{"const":"nr_configure"}},"required":["action"]},"then":{"minProperties":2,"propertyNames":{"enum":["action","enabled","insertionPoint","preset","intensity","localToneStrength","localStructureStrength","skinStructureStrength","style","batchedStereo","directCommit","implementation","optimizedStereoPath","useAutoMask","uiCorrection","singleSubrectScale","characterEnabled","characterVisualIsolationEnabled","characterFaces","characterSkin","characterHair","characterFaceStrength","characterSkinStrength","characterHairStrength","characterMaximumDistanceMeters","characterAdaptiveRoiSelection","characterMinimumFacePixelSize","characterRoiMargin","characterRoiHoldFrames","characterDepthAwareFeather","characterVisibilityDepthTest","characterFeatherRadius","characterFeatherDepthThreshold","characterDebugView","characterMaskTestMode"]}}},
       {"if":{"properties":{"action":{"const":"foveation_configure"}},"required":["action"]},"then":{"propertyNames":{"enum":["action","foveatedEnabled","peripheryTaaEnabled","centerOrigin","horizontalAnchor","fovOnlyCenterScale","peripheryTaaCenterScale","peripheryTaaOuterScale","centerHorizontalScale","leftEyeOffsetX","leftEyeOffsetY","rightEyeOffsetX","rightEyeOffsetY","fovOnlyBlendFeather","peripheryTaaBlendFeather","neuralFinalLdrBlendFeather","reconstructionGuardBandPixels","maskVisualization"]},"anyOf":[{"required":["foveatedEnabled"]},{"required":["peripheryTaaEnabled"]},{"required":["centerOrigin"]},{"required":["horizontalAnchor"]},{"required":["fovOnlyCenterScale"]},{"required":["peripheryTaaCenterScale"]},{"required":["peripheryTaaOuterScale"]},{"required":["centerHorizontalScale"]},{"required":["leftEyeOffsetX"]},{"required":["leftEyeOffsetY"]},{"required":["rightEyeOffsetX"]},{"required":["rightEyeOffsetY"]},{"required":["fovOnlyBlendFeather"]},{"required":["peripheryTaaBlendFeather"]},{"required":["neuralFinalLdrBlendFeather"]},{"required":["reconstructionGuardBandPixels"]},{"required":["maskVisualization"]}]}},
       {"if":{"properties":{"action":{"const":"foveation_cycle"}},"required":["action"]},"then":{"required":["control"],"propertyNames":{"enum":["action","control","valueIndex"]}}},
       {"if":{"properties":{"action":{"const":"foveation_cycle"},"control":{"enum":["master","periphery_taa","center_origin","horizontal_anchor","center_horizontal_scale","mask_visualization"]}},"required":["action","control"]},"then":{"properties":{"valueIndex":{"maximum":1}}}}

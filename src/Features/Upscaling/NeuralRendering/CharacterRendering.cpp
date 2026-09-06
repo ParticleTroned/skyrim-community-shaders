@@ -13,6 +13,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <format>
 #include <map>
@@ -36,7 +37,7 @@ namespace NeuralRendering
 		constexpr std::uint32_t kReadbackLatency = 3;
 		constexpr std::uint32_t kRegionQuantization = 4;
 		constexpr float kVisibilityDepthThreshold = 0.001f;
-		constexpr std::uint32_t kDiagnosticCounterCount = 8;
+		constexpr std::uint32_t kDiagnosticCounterCount = 9;
 
 		enum DiagnosticCounter : std::uint32_t
 		{
@@ -48,6 +49,7 @@ namespace NeuralRendering
 			VisibleSkinPixels,
 			VisibleHairPixels,
 			VisibilityRejectedPixels,
+			DistanceRejectedPixels,
 		};
 
 		bool IsSupportedDepthViewFormat(DXGI_FORMAT a_format) noexcept
@@ -123,6 +125,7 @@ namespace NeuralRendering
 			addFloat(a_settings.skinStrength);
 			addFloat(a_settings.hairStrength);
 			addFloat(a_settings.maximumDistanceMeters);
+			add(a_settings.adaptiveRoiSelection);
 			add(a_settings.minimumFacePixelSize);
 			addFloat(a_settings.roiMargin);
 			add(a_settings.roiHoldFrames);
@@ -326,6 +329,8 @@ namespace NeuralRendering
 		{
 			CharacterRect rect{};
 			std::uint32_t lastSeenFrame = 0;
+			float distanceMeters = std::numeric_limits<float>::max();
+			std::uint32_t facePixelSize = 0;
 		};
 
 		struct ProjectedActor
@@ -401,6 +406,7 @@ namespace NeuralRendering
 			std::array<std::uint64_t, 3> authoredCategoryPixels{};
 			std::array<std::uint64_t, 3> visibleCategoryPixels{};
 			std::uint64_t visibilityRejectedPixels = 0;
+			std::uint64_t distanceRejectedPixels = 0;
 			std::uint64_t maskDiagnosticKey = 0;
 			std::uint64_t maskCoverageSerial = 0;
 			std::uint64_t lastCoverageRequestPolicyKey = 0;
@@ -427,12 +433,15 @@ namespace NeuralRendering
 			float featherOptions[4]{};
 			float visibilityOptions[4]{};
 			float depthLinearization[4]{};
+			Matrix cameraProjInverse{};
 			float jitter[4]{};
 			float categoryStrengths[4]{};
-			float eligibilityRectangle[4]{};
+			float eligibilityRectangles
+				[CharacterPolicy::kMaximumEligibilityRegions][4]{};
 			std::uint32_t dispatchRegion[4]{};
 		};
 		static_assert(sizeof(MaskConstants) % 16 == 0);
+		static_assert(offsetof(MaskConstants, cameraProjInverse) % 16 == 0);
 
 		struct ProjectedPlan
 		{
@@ -440,6 +449,8 @@ namespace NeuralRendering
 			std::uint64_t eligibilitySignature = 0;
 			std::uint32_t visibleFaces = 0;
 			std::uint32_t visibleCharacters = 0;
+			std::uint32_t selectedCharacters = 0;
+			std::uint32_t adaptivelyCulledCharacters = 0;
 			bool projectionUncertain = false;
 			bool fullEyeEligibilityFallback = false;
 		};
@@ -659,6 +670,7 @@ namespace NeuralRendering
 			a_slot.authoredCategoryPixels = {};
 			a_slot.visibleCategoryPixels = {};
 			a_slot.visibilityRejectedPixels = 0;
+			a_slot.distanceRejectedPixels = 0;
 			a_slot.maskDiagnosticKey = 0;
 			a_slot.maskCoverageSerial = AllocateCoverageSerial();
 			a_slot.lastCoverageRequestPolicyKey = 0;
@@ -1189,12 +1201,47 @@ namespace NeuralRendering
 			std::unordered_set<std::uint32_t> currentlyProjected;
 			currentlyProjected.reserve(projectedActors_.size());
 			for (const auto& actor : projectedActors_) {
-				const auto& faceRect = actor.faceRects[a_args.eyeIndex];
 				const auto& actorRect = actor.selectedRects[a_args.eyeIndex];
+				const bool hasFaceAnchor =
+					actor.faceRects[0].IsValid() || actor.faceRects[1].IsValid();
+				const auto& stereoAnchors = hasFaceAnchor ?
+					                                actor.faceRects :
+					                                actor.selectedRects;
+				std::uint32_t stereoMaximumSize = 0;
+				for (const auto& stereoAnchor : stereoAnchors) {
+					if (!stereoAnchor.IsValid())
+						continue;
+					stereoMaximumSize = std::max(
+						stereoMaximumSize,
+						std::max(
+							stereoAnchor.maxX - stereoAnchor.minX,
+							stereoAnchor.maxY - stereoAnchor.minY));
+				}
+				const float nearestDistanceUnits = hasFaceAnchor ?
+					                                       actor.nearestFaceDistanceUnits :
+					                                       actor.nearestSelectedDistanceUnits;
+				const float distanceMeters =
+					Util::Units::GameUnitsToMeters(nearestDistanceUnits);
+				const bool withinMaximumDistance =
+					CharacterRegionPolicy::IsWithinMaximumDistance(
+						distanceMeters, a_args.settings.maximumDistanceMeters);
+				const bool largeEnough =
+					stereoMaximumSize >= a_args.settings.minimumFacePixelSize;
+				const bool adaptiveCandidate =
+					!a_args.settings.adaptiveRoiSelection ||
+					CharacterRegionPolicy::IsDetailRelevant(
+						distanceMeters, stereoMaximumSize);
 				if (!actorRect.IsValid()) {
 					result.projectionUncertain =
 						result.projectionUncertain ||
-						actor.selectedRects[a_args.eyeIndex ^ 1u].IsValid();
+						(withinMaximumDistance && largeEnough && adaptiveCandidate &&
+						 actor.selectedRects[a_args.eyeIndex ^ 1u].IsValid());
+					held.erase(actor.actorFormId);
+					continue;
+				}
+				if (!withinMaximumDistance) {
+					// The explicit distance cutoff is not temporally held: it is a
+					// hard performance boundary and must shrink provider work now.
 					held.erase(actor.actorFormId);
 					continue;
 				}
@@ -1243,28 +1290,7 @@ namespace NeuralRendering
 				}
 				currentlyProjected.insert(actor.actorFormId);
 
-				std::uint32_t stereoMaximumSize = 0;
-				const bool hasFaceAnchor = faceRect.IsValid();
-				const auto& stereoAnchors = hasFaceAnchor ?
-				                                actor.faceRects :
-				                                actor.selectedRects;
-				for (const auto& stereoAnchor : stereoAnchors) {
-					if (!stereoAnchor.IsValid())
-						continue;
-					stereoMaximumSize = std::max(
-						stereoMaximumSize,
-						std::max(
-							stereoAnchor.maxX - stereoAnchor.minX,
-							stereoAnchor.maxY - stereoAnchor.minY));
-				}
-				const float nearestDistanceUnits = hasFaceAnchor ?
-				                                       actor.nearestFaceDistanceUnits :
-				                                       actor.nearestSelectedDistanceUnits;
-				const bool eligible =
-					std::isfinite(nearestDistanceUnits) &&
-					Util::Units::GameUnitsToMeters(nearestDistanceUnits) <=
-						a_args.settings.maximumDistanceMeters &&
-					stereoMaximumSize >= a_args.settings.minimumFacePixelSize;
+				const bool eligible = largeEnough;
 				if (eligible) {
 					if (hasFaceAnchor)
 						++result.visibleFaces;
@@ -1272,6 +1298,8 @@ namespace NeuralRendering
 					held[actor.actorFormId] = {
 						.rect = local,
 						.lastSeenFrame = a_args.frameId,
+						.distanceMeters = distanceMeters,
+						.facePixelSize = stereoMaximumSize,
 					};
 					continue;
 				}
@@ -1285,6 +1313,8 @@ namespace NeuralRendering
 					held.erase(retained);
 				} else {
 					retained->second.rect = local;
+					retained->second.distanceMeters = distanceMeters;
+					retained->second.facePixelSize = stereoMaximumSize;
 				}
 			}
 
@@ -1295,25 +1325,40 @@ namespace NeuralRendering
 					++it;
 			}
 
+			std::vector<CharacterRegionCandidate> candidates;
+			candidates.reserve(held.size());
+			for (const auto& [actorFormId, region] : held) {
+				candidates.push_back({
+					.rect = region.rect,
+					.distanceMeters = region.distanceMeters,
+					.facePixelSize = region.facePixelSize,
+					.stableId = actorFormId,
+				});
+			}
+			result.adaptivelyCulledCharacters =
+				CharacterRegionPolicy::SelectAdaptive(
+					candidates, a_args.settings.adaptiveRoiSelection);
+			result.selectedCharacters =
+				static_cast<std::uint32_t>(candidates.size());
+
 			std::uint64_t eligibilityXor = 0;
 			std::uint64_t eligibilitySum = 0;
-			CharacterRect enclosingRect{};
-			for (const auto& [actorFormId, region] : held) {
+			result.regions.reserve(candidates.size());
+			for (const auto& candidate : candidates) {
 				auto regionHash = HashCombine(
-					1469598103934665603ull, actorFormId);
-				regionHash = HashCombine(regionHash, region.rect.minX);
-				regionHash = HashCombine(regionHash, region.rect.minY);
-				regionHash = HashCombine(regionHash, region.rect.maxX);
-				regionHash = HashCombine(regionHash, region.rect.maxY);
+					1469598103934665603ull, candidate.stableId);
+				regionHash = HashCombine(regionHash, candidate.rect.minX);
+				regionHash = HashCombine(regionHash, candidate.rect.minY);
+				regionHash = HashCombine(regionHash, candidate.rect.maxX);
+				regionHash = HashCombine(regionHash, candidate.rect.maxY);
 				eligibilityXor ^= regionHash;
 				eligibilitySum += regionHash;
-				enclosingRect = CharacterRegionPolicy::Union(
-					enclosingRect, region.rect);
+				result.regions.push_back(candidate.rect);
 			}
 			result.eligibilitySignature = HashCombine(
-				HashCombine(eligibilityXor, eligibilitySum), held.size());
-			if (enclosingRect.IsValid())
-				result.regions.push_back(enclosingRect);
+				HashCombine(eligibilityXor, eligibilitySum), candidates.size());
+			CharacterRegionPolicy::CompactToCapacity(
+				result.regions, CharacterPolicy::kMaximumEligibilityRegions);
 			return result;
 		}
 
@@ -1415,6 +1460,8 @@ namespace NeuralRendering
 						}
 						slot.visibilityRejectedPixels =
 							counters[VisibilityRejectedPixels];
+						slot.distanceRejectedPixels =
+							counters[DistanceRejectedPixels];
 						slot.maskDiagnosticKey = readback.diagnosticKey;
 						slot.maskCoverageSerial = readback.serial;
 						slot.maskCoveragePercent = readback.pixelCount ?
@@ -1485,6 +1532,8 @@ namespace NeuralRendering
 			constants.sourceCrop[2] = a_args.viewportCrop.input.top;
 			constants.sourceCrop[3] = a_args.viewportCrop.input.Width();
 			constants.options[0] = a_args.viewportCrop.input.Height();
+			constants.options[1] = static_cast<std::uint32_t>(
+				a_plan.regions.size());
 			constants.options[2] = a_args.settings.depthAwareFeather ?
 			                           a_args.settings.featherRadius :
 			                           0;
@@ -1504,11 +1553,19 @@ namespace NeuralRendering
 							CharacterMaskTestMode::AuthoredWithoutVisibilityDepth ?
 					1.0f :
 					0.0f;
+			constants.visibilityOptions[2] =
+				a_args.settings.maximumDistanceMeters > 0.0f ?
+					a_args.settings.maximumDistanceMeters /
+						Util::Units::GAME_UNIT_TO_M :
+					0.0f;
 			const auto cameraData = Util::GetCameraData();
 			constants.depthLinearization[0] = cameraData.x;
 			constants.depthLinearization[1] = cameraData.y;
 			constants.depthLinearization[2] = cameraData.z;
 			constants.depthLinearization[3] = cameraData.w;
+			constants.cameraProjInverse =
+				globals::game::frameBufferCached.GetCameraProjInverse(
+					a_args.eyeIndex);
 			constants.jitter[0] = capturedJitterX_;
 			constants.jitter[1] = capturedJitterY_;
 			constants.categoryStrengths[0] =
@@ -1517,13 +1574,21 @@ namespace NeuralRendering
 				a_args.settings.skin ? a_args.settings.skinStrength : 0.0f;
 			constants.categoryStrengths[2] =
 				a_args.settings.hair ? a_args.settings.hairStrength : 0.0f;
-			if (a_plan.regions.size() != 1)
+			if (a_plan.regions.empty() ||
+				a_plan.regions.size() > CharacterPolicy::kMaximumEligibilityRegions) {
 				return false;
-			const auto& rect = a_plan.regions.front();
-			constants.eligibilityRectangle[0] = static_cast<float>(rect.minX);
-			constants.eligibilityRectangle[1] = static_cast<float>(rect.minY);
-			constants.eligibilityRectangle[2] = static_cast<float>(rect.maxX);
-			constants.eligibilityRectangle[3] = static_cast<float>(rect.maxY);
+			}
+			for (std::size_t index = 0; index < a_plan.regions.size(); ++index) {
+				const auto& rect = a_plan.regions[index];
+				constants.eligibilityRectangles[index][0] =
+					static_cast<float>(rect.minX);
+				constants.eligibilityRectangles[index][1] =
+					static_cast<float>(rect.minY);
+				constants.eligibilityRectangles[index][2] =
+					static_cast<float>(rect.maxX);
+				constants.eligibilityRectangles[index][3] =
+					static_cast<float>(rect.maxY);
+			}
 			const auto dispatchOffsetX =
 				fullSurfaceDispatch ? 0u : a_slot.computeSubrect.baseX;
 			const auto dispatchOffsetY =
@@ -2094,12 +2159,12 @@ namespace NeuralRendering
 					// Projection is an optimization boundary, not semantic proof. Fall
 					// back to an exact full-eye semantic resolve when actor bounds are
 					// unavailable so authored face/skin pixels cannot silently vanish.
-					plan.regions.push_back({
+					plan.regions = { {
 						.minX = 0,
 						.minY = 0,
 						.maxX = a_args.outputWidth,
 						.maxY = a_args.outputHeight,
-					});
+					} };
 					plan.fullEyeEligibilityFallback = true;
 					plan.eligibilitySignature = HashCombine(
 						plan.eligibilitySignature, 0x46554C4C455945ull);
@@ -2190,11 +2255,13 @@ namespace NeuralRendering
 				eye.evaluationHeight = a_args.outputHeight;
 				eye.visibleFaces = plan.visibleFaces;
 				eye.visibleCharacterRegions = plan.visibleCharacters;
+				eye.selectedCharacterRegions = plan.selectedCharacters;
+				eye.adaptivelyCulledCharacterRegions =
+					plan.adaptivelyCulledCharacters;
 				eye.mergedRegions = static_cast<std::uint32_t>(plan.regions.size());
 				eye.regions = plan.regions;
-				eye.roiPixels = 0;
-				for (const auto& rect : plan.regions)
-					eye.roiPixels += rect.Area();
+				eye.roiPixels =
+					CharacterRegionPolicy::CoveredArea(plan.regions);
 				const auto evaluationPixels =
 					static_cast<std::uint64_t>(a_args.outputWidth) * a_args.outputHeight;
 				eye.computeSubrect = slot.computeSubrect;
@@ -2211,6 +2278,7 @@ namespace NeuralRendering
 				eye.authoredCategoryPixels = slot.authoredCategoryPixels;
 				eye.visibleCategoryPixels = slot.visibleCategoryPixels;
 				eye.visibilityRejectedPixels = slot.visibilityRejectedPixels;
+				eye.distanceRejectedPixels = slot.distanceRejectedPixels;
 				eye.maskCoveragePercent = slot.maskCoveragePercent;
 				eye.maskCoverageFrame = slot.maskCoverageFrame;
 				eye.maskCoverageFeatureSlot = slot.maskCoverageFeatureSlot;

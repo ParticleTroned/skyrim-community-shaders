@@ -78,6 +78,7 @@ namespace NeuralRendering
 		inline constexpr float kDefaultSkinStrength = 1.0f;
 		inline constexpr float kDefaultHairStrength = 0.65f;
 		inline constexpr float kDefaultMaximumDistanceMeters = 10.0f;
+		inline constexpr bool kDefaultAdaptiveRoiSelection = false;
 		inline constexpr std::uint32_t kDefaultMinimumFacePixelSize = 64;
 		inline constexpr float kDefaultRoiMargin = 0.25f;
 		inline constexpr std::uint32_t kDefaultRoiHoldFrames = 3;
@@ -88,8 +89,8 @@ namespace NeuralRendering
 
 		inline constexpr float kMinimumStrength = 0.0f;
 		inline constexpr float kMaximumStrength = 1.0f;
-		inline constexpr float kMinimumDistanceMeters = 0.5f;
-		inline constexpr float kMaximumDistanceMeters = 100.0f;
+		inline constexpr float kMinimumDistanceMeters = 0.0f;
+		inline constexpr float kMaximumDistanceMeters = 30.0f;
 		inline constexpr std::uint32_t kMinimumFacePixelSize = 1;
 		inline constexpr std::uint32_t kMaximumFacePixelSize = 4096;
 		inline constexpr float kMinimumRoiMargin = 0.0f;
@@ -98,6 +99,7 @@ namespace NeuralRendering
 		inline constexpr std::uint32_t kMaximumFeatherRadius = 4;
 		inline constexpr float kMaximumFeatherDepthThreshold = 0.05f;
 		inline constexpr std::uint32_t kMaximumObservationsPerFrame = 4096;
+		inline constexpr std::size_t kMaximumEligibilityRegions = 16;
 		inline constexpr std::uint32_t kCoverageSampleIntervalFrames = 30;
 		inline constexpr std::size_t kPreparedFrameHistorySize = 8;
 
@@ -121,6 +123,8 @@ namespace NeuralRendering
 		float hairStrength = CharacterPolicy::kDefaultHairStrength;
 		float maximumDistanceMeters =
 			CharacterPolicy::kDefaultMaximumDistanceMeters;
+		bool adaptiveRoiSelection =
+			CharacterPolicy::kDefaultAdaptiveRoiSelection;
 		std::uint32_t minimumFacePixelSize =
 			CharacterPolicy::kDefaultMinimumFacePixelSize;
 		float roiMargin = CharacterPolicy::kDefaultRoiMargin;
@@ -142,6 +146,8 @@ namespace NeuralRendering
 		std::uint32_t evaluationHeight = 0;
 		std::uint32_t visibleFaces = 0;
 		std::uint32_t visibleCharacterRegions = 0;
+		std::uint32_t selectedCharacterRegions = 0;
+		std::uint32_t adaptivelyCulledCharacterRegions = 0;
 		std::uint32_t mergedRegions = 0;
 		std::uint64_t roiPixels = 0;
 		ComputeSubrect computeSubrect{};
@@ -151,6 +157,7 @@ namespace NeuralRendering
 		std::array<std::uint64_t, 3> authoredCategoryPixels{};
 		std::array<std::uint64_t, 3> visibleCategoryPixels{};
 		std::uint64_t visibilityRejectedPixels = 0;
+		std::uint64_t distanceRejectedPixels = 0;
 		float roiCoveragePercent = 0.0f;
 		float maskCoveragePercent = 0.0f;
 		std::uint32_t maskCoverageFrame =

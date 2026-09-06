@@ -336,6 +336,8 @@ public:
 			NeuralRendering::CharacterPolicy::kDefaultHairStrength;
 		float neuralCharacterMaximumDistanceMeters =
 			NeuralRendering::CharacterPolicy::kDefaultMaximumDistanceMeters;
+		bool neuralCharacterAdaptiveRoiSelectionEnabled =
+			NeuralRendering::CharacterPolicy::kDefaultAdaptiveRoiSelection;
 		uint neuralCharacterMinimumFacePixelSize =
 			NeuralRendering::CharacterPolicy::kDefaultMinimumFacePixelSize;
 		float neuralCharacterRoiMargin =

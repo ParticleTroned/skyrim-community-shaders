@@ -10,6 +10,7 @@
 #include "Upscaling/VRPresentationStretchTelemetryPolicy.h"
 #include "Upscaling/VRRenderScaleAuthorityPolicy.h"
 #include "Upscaling/VRRenderScalePreparationPolicy.h"
+#include "Upscaling/VRSubmitInputFreshnessPolicy.h"
 #include "Upscaling/VRVendorRelatchPolicy.h"
 #include "Utils/LazyShader.h"
 #include "VR/InSceneOverlaySubmitPolicy.h"
@@ -2666,7 +2667,7 @@ public:
 		uint64_t a_keepaliveToken,
 		uint64_t a_compositorCycleToken,
 		uint64_t a_initialLoadProtectionEpochAtSubmitEntry);
-	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCycleToken, bool a_vendorResumeCooldownAtCycleStart, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
+	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCycleToken, uint64_t a_submitPairBoundaryToken, bool a_vendorResumeCooldownAtCycleStart, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 		vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds, VRRenderScalePresentationObservation& a_presentationObservation);
 	bool PrepareVRNativeRestorePresentationObservation(
 		vr::EVREye a_eye,
@@ -3047,6 +3048,11 @@ public:
 	uint32_t submitStagePreparedGeneration = 0;
 	bool submitStagePreparedFramePresentationOnly = false;
 	bool submitStagePreparedFrameFoveatedRegionEncode = false;
+	uint32_t submitStagePreparedEyeMask = 0;
+	VRSubmitInputFreshnessPolicy::ProducerProof submitStagePreparedInputProof{};
+	winrt::com_ptr<ID3D11Texture2D> submitStagePreparedColorSourceOwner;
+	winrt::com_ptr<ID3D11Texture2D> submitStagePreparedDepthSourceOwner;
+	winrt::com_ptr<ID3D11Texture2D> submitStagePreparedMotionVectorSourceOwner;
 	uint64_t submitStageVendorAdmissionCycle = 0;
 	uint32_t submitStageVendorAdmissionGeneration = 0;
 	uint32_t submitStageVendorAdmissionMethod = static_cast<uint32_t>(UpscaleMethod::kNONE);
@@ -3062,6 +3068,7 @@ public:
 	struct SubmitStageVendorEyeState
 	{
 		bool ready = false;
+		VRSubmitInputFreshnessPolicy::ProducerProof inputProof{};
 		bool usedFoveatedVendorPath = false;
 		bool usedDLSSSharpening = false;
 		bool usedMenuFinalComposite = false;
@@ -3126,6 +3133,7 @@ public:
 	struct SubmitStageRuntimeFSRStereoState
 	{
 		bool ready = false;
+		VRSubmitInputFreshnessPolicy::ProducerProof inputProof{};
 		uint32_t frame = std::numeric_limits<uint32_t>::max();
 		uint32_t generation = 0;
 		uint32_t inputWidth = 0;
@@ -3133,6 +3141,9 @@ public:
 		uint32_t outputWidth = 0;
 		uint32_t outputHeight = 0;
 		ID3D11Texture2D* sourceTexture = nullptr;
+		winrt::com_ptr<ID3D11Texture2D> sourceTextureOwner;
+		winrt::com_ptr<ID3D11Texture2D> sourceDepthOwner;
+		winrt::com_ptr<ID3D11Texture2D> sourceMotionVectorOwner;
 		std::array<ID3D11Resource*, 2> colorIn{};
 		std::array<ID3D11Resource*, 2> depthIn{};
 		std::array<ID3D11Resource*, 2> motionVectorsIn{};
@@ -3141,6 +3152,7 @@ public:
 		std::array<ID3D11Resource*, 2> colorOut{};
 
 		[[nodiscard]] bool Matches(
+			const VRSubmitInputFreshnessPolicy::ProducerProof& a_inputProof,
 			uint32_t a_frame,
 			uint32_t a_generation,
 			uint32_t a_inputWidth,
@@ -3150,10 +3162,19 @@ public:
 			ID3D11Texture2D* a_sourceTexture,
 			const std::array<FidelityFX::UpscaleRegionParameters, 2>& a_regions) const
 		{
-			if (!ready || frame != a_frame || generation != a_generation ||
+			if (!ready ||
+				!VRSubmitInputFreshnessPolicy::MatchesProducerProof(
+					inputProof, a_inputProof) ||
+				frame != a_frame || generation != a_generation ||
 				inputWidth != a_inputWidth || inputHeight != a_inputHeight ||
 				outputWidth != a_outputWidth || outputHeight != a_outputHeight ||
-				sourceTexture != a_sourceTexture) {
+				sourceTexture != a_sourceTexture ||
+				sourceTextureOwner.get() != a_sourceTexture ||
+				sourceDepthOwner.get() !=
+					reinterpret_cast<ID3D11Texture2D*>(a_inputProof.depthSource) ||
+				sourceMotionVectorOwner.get() !=
+					reinterpret_cast<ID3D11Texture2D*>(
+						a_inputProof.motionVectorSource)) {
 				return false;
 			}
 
@@ -3169,6 +3190,7 @@ public:
 		}
 
 		void Record(
+			const VRSubmitInputFreshnessPolicy::ProducerProof& a_inputProof,
 			uint32_t a_frame,
 			uint32_t a_generation,
 			uint32_t a_inputWidth,
@@ -3179,6 +3201,7 @@ public:
 			const std::array<FidelityFX::UpscaleRegionParameters, 2>& a_regions)
 		{
 			ready = true;
+			inputProof = a_inputProof;
 			frame = a_frame;
 			generation = a_generation;
 			inputWidth = a_inputWidth;
@@ -3186,6 +3209,12 @@ public:
 			outputWidth = a_outputWidth;
 			outputHeight = a_outputHeight;
 			sourceTexture = a_sourceTexture;
+			sourceTextureOwner.copy_from(a_sourceTexture);
+			sourceDepthOwner.copy_from(
+				reinterpret_cast<ID3D11Texture2D*>(a_inputProof.depthSource));
+			sourceMotionVectorOwner.copy_from(
+				reinterpret_cast<ID3D11Texture2D*>(
+					a_inputProof.motionVectorSource));
 			for (uint32_t eye = 0; eye < a_regions.size(); ++eye) {
 				const auto& region = a_regions[eye];
 				colorIn[eye] = region.color;
@@ -3199,7 +3228,12 @@ public:
 	};
 	uint32_t submitStageVendorOutputFrame = std::numeric_limits<uint32_t>::max();
 	uint32_t submitStageVendorOutputGeneration = 0;
+	uint64_t submitStageVendorOutputCompositorCycle = 0;
+	uint64_t submitStageVendorOutputPairProducerToken = 0;
+	uint32_t submitStageVendorOutputSourceWorldFrame =
+		std::numeric_limits<uint32_t>::max();
 	ID3D11Texture2D* submitStageVendorOutputSourceTexture = nullptr;
+	winrt::com_ptr<ID3D11Texture2D> submitStageVendorOutputSourceOwner;
 	std::array<SubmitStageVendorEyeState, 2> submitStageVendorEyeState = {};
 	std::array<SubmitStageFoveatedCenterState, 2> submitStageFoveatedCenterState = {};
 	SubmitStageRuntimeFSRStereoState submitStageRuntimeFSRStereoState{};
@@ -3387,7 +3421,7 @@ public:
 	bool GetRuntimeFoveatedRegionDimensions(uint32_t& a_inputWidthPerEye, uint32_t& a_inputHeight, uint32_t& a_outputWidthPerEye, uint32_t& a_outputHeight) const;
 	bool BuildFoveatedDispatchRects(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool isVR, float centerScale, float centerFeather, float centerHorizontalScale, bool usePeripheryTAAProfile = false);
 	bool GetFoveatedEncodeRegions(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool usePeripheryTAAProfile, bool usePeripheryTAAPath, std::array<FoveatedEncodeRegion, 2>& outRegions);
-	bool EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool copyDepthInput = true, bool allowFoveatedRegionEncode = false, bool* encodedFoveatedRegions = nullptr, uint32_t contractGeneration = 0);
+	bool EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool copyDepthInput = true, bool allowFoveatedRegionEncode = false, bool* encodedFoveatedRegions = nullptr, uint32_t contractGeneration = 0, uint32_t eyeMask = 0x3u);
 	bool StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight);
 	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3D11Resource* source, uint32_t width, uint32_t height, bool copyBindFlags, bool createSRV, bool createUAV, bool createRTV, const char* name);
 	void DestroySubmitStageDLSSSharpenerTextures();

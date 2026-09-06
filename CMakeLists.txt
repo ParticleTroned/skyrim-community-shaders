@@ -52,6 +52,24 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     )
 endif()
 
+# Register the destructive reset before dependency subdirectories can emit install actions.
+set(AIO_DIR "${CMAKE_CURRENT_BINARY_DIR}/aio")
+install(
+    CODE
+        "
+    if(NOT \"\${CMAKE_INSTALL_PREFIX}\" STREQUAL \"${AIO_DIR}\")
+        message(FATAL_ERROR
+            \"Refusing to install: --prefix must be \\\"${AIO_DIR}\\\" \"
+            \"(got \\\"\${CMAKE_INSTALL_PREFIX}\\\"). This target recursively \"
+            \"deletes its entire --prefix directory before staging the AIO \"
+            \"package, so it must never be pointed at a live game install. \"
+            \"Use BuildRelease.bat <PRESET>-WITH-AUTO-DEPLOYMENT or the \"
+            \"DEPLOY_ALL/COPY_SHADERS targets to deploy to a game folder.\")
+    endif()
+    file(REMOVE_RECURSE \"\${CMAKE_INSTALL_PREFIX}\")
+"
+)
+
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 
 # ########################################################################################################################
@@ -633,9 +651,6 @@ if(_AIO_FEATURE_DIR_NAMES_TO_EXCLUDE)
 endif()
 string(TIMESTAMP UTC_NOW "%Y-%m-%dT%H-%MZ" UTC)
 
-# Set AIO directory path used by multiple targets below
-set(AIO_DIR "${CMAKE_CURRENT_BINARY_DIR}/aio")
-
 # Robocopy wrapper for Windows incremental file copy (used by deployment targets).
 # Invoke through cmd /c with the absolute path: CMake may strip binary-dir
 # command paths in generated MSBuild rules, and Windows will not run a script
@@ -657,23 +672,7 @@ endif()
 set(FEATURE_PATHS_SLASH ${FEATURE_PATHS})
 list(TRANSFORM FEATURE_PATHS_SLASH APPEND /)
 
-# Install logic for AIO package
-# To copy AIO package at a folder do `${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR}`
-install(
-    CODE
-        "
-    if(NOT \"\${CMAKE_INSTALL_PREFIX}\" STREQUAL \"${AIO_DIR}\")
-        message(FATAL_ERROR
-            \"Refusing to install: --prefix must be \\\"${AIO_DIR}\\\" \"
-            \"(got \\\"\${CMAKE_INSTALL_PREFIX}\\\"). This target recursively \"
-            \"deletes its entire --prefix directory before staging the AIO \"
-            \"package, so it must never be pointed at a live game install. \"
-            \"Use BuildRelease.bat <PRESET>-WITH-AUTO-DEPLOYMENT or the \"
-            \"DEPLOY_ALL/COPY_SHADERS targets to deploy to a game folder.\")
-    endif()
-    file(REMOVE_RECURSE \"\${CMAKE_INSTALL_PREFIX}\")
-"
-)
+# Install payload for the isolated AIO staging package.
 install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION SKSE/Plugins COMPONENT SKSE)
 install(
     FILES "${CSX_PROVENANCE_FINAL_MANIFEST}"
@@ -2063,8 +2062,9 @@ message("  Build cmake targets:")
 message("    - Package-Core: Core package")
 message("    - Package-AIO-Manual: AIO package (manual)")
 message("    - Package-<Feature>: Individual feature packages")
-message("  Or use cmake --install for custom deployment:")
-message("    cmake --install ./build/ALL --prefix <TARGET_DIR>")
+message("  To refresh the isolated AIO staging directory:")
+message("    cmake --install ./build/<preset> --config <Debug|Release>")
+message("  Deploy with an auto-deployment preset or copy build/<preset>/aio.")
 if(BUILD_SHADER_TESTS)
     message("To run shader tests manually:")
     message(

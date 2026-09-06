@@ -5,10 +5,14 @@ This document defines the capability and safety boundary for the experimental
 [general Feature 18 experiment notes](dlss-neural-rendering-experiments.md);
 the same internal-only runtime and distribution restrictions apply.
 
-The feature attempts to apply Neural Rendering to NPC faces, exposed skin, and
-optionally hair. It does not establish that Neural Rendering inference itself
-becomes cheaper. The current provider call still evaluates the normal Feature
-18 image extent.
+The feature applies Neural Rendering to NPC faces, exposed skin, and optionally
+hair. The pinned provider evaluates one dynamic per-eye rectangle enclosing the
+selected semantic geometry; an exact CSX mask decides which pixels from that
+partial result reach the image.
+
+The current route integration is Skyrim VR only. SE/AE builds compile the shared
+runtime and rectangle code, but their flat presentation path does not yet author
+the character category attachment or invoke this selective-NR route.
 
 ## Architecture
 
@@ -22,7 +26,7 @@ testable:
 | Semantic mask                 | `CharacterRendering` and `DLSS5CharacterMaskCS.hlsl`    | Resolve synchronized category and depth provenance into a dedicated per-eye `R8_UNORM` CSX selection texture.                    |
 | Per-eye resources             | `CharacterRendering` and `Renderer` feature slots       | Keep mask, provider resources, history, and statistics separate for each eye and insertion route.                                |
 | Feature 18 evaluation         | `Renderer` and `Runtime`                                | Bind color, depth, motion vectors, and output through the known-working automatic-mask invocation in one stereo transaction.     |
-| Compute ROI policy            | `CharacterRendering`                                    | Build measured, stabilized per-eye character rectangles, but do not claim or dispatch sparse inference without an evidenced API. |
+| Compute ROI policy            | `CharacterRendering`, `Renderer`, and `Runtime`         | Union current per-eye face/skin/hair bounds into one guarded rectangle and map it across color, depth, motion, and output resources. |
 | Composite and output          | Gogh route integration and `FoveatedCenterBlendCS.hlsl` | Select untouched DLSS outside the mask and Neural Rendering inside it before the existing feathered center composite.            |
 | UI and settings               | Upscaling settings UI                                   | Centralize category, strength, eligibility, mask-calibration, and debug controls.                                                |
 | Diagnostics and profiling     | DevBench bridge and CSX GPU profiler                    | Report per-eye coverage/regions/evaluation dimensions and separate capture, mask, evaluation, and composite costs.               |
@@ -99,7 +103,7 @@ The normal-DLSS parameter macros behind the typed subrect members are
 `NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Height`. They are declared
 for DLSS and reused by DLSS-D helpers; none is declared for Reserved18.
 
-## Visual masking is not compute ROI
+## Visual masking and compute ROI
 
 The implementation keeps two concepts deliberately separate.
 
@@ -123,28 +127,32 @@ the remaining final-visibility limits are documented below.
 
 ### B. Compute ROI
 
-Compute ROI would mean that the neural model evaluates only selected character
-rectangles or tiles. No such public contract was found. The private binary does
-consume one active subrect for each resource, derives active network dimensions
-from the output subrect and scaling ratio, and distinguishes active dimensions
-from allocated capacity. That makes one compact rectangular evaluation a
-credible future private-ABI experiment, but it does not establish a performance
-gain.
+No public Feature 18 ROI contract was found. The pinned private binary consumes
+one active subrect for each resource, derives active network dimensions from the
+output subrect and scaling ratio, and distinguishes active dimensions from
+allocated capacity. Ghidra dataflow plus the bounded timing assay validated that
+single-rectangle path for this pinned experiment.
 
 No ROI collection, rectangle array, tile list, or sparse character dispatch was
-found. Multiple character regions would have to be collapsed into one bounding
-rectangle or evaluated in multiple calls; neither choice is proven cheaper.
+found. All eligible per-eye face, skin, and hair bounds are therefore collapsed
+into one guarded, outward-aligned rectangle. Feature 18 evaluates every pixel in
+that rectangle, including gaps between separated semantic pixels.
 
-The branch therefore reports multi/sparse character compute ROI as unsupported
-and does not enable the private single-subrect experiment. There is no mutable
-ROI mode: the UI reports masked full-center evaluation as the only implemented
-path. A functional `Enabled` state must not be added until a bounded
-implementation is timed and validated against the pinned ABI.
+The output-local rectangle is mapped outwards into the color, depth-guide,
+motion-vector, optional control-mask, and output extents. D3D11 input
+preparation, submit-float conversion, depth conversion, Feature 18 pixel
+accounting, output commit, and late overlays are restricted to those mapped
+extents. The Upscaled-Center route still composites the full existing center so
+normal DLSS fills every pixel, but a zeroed exact mask prevents sampling the
+partial NR output outside the selection. Mask clears and D3D12 resource-state
+transitions remain whole-resource operations.
 
-The per-eye actor rectangles in this experiment bound and stabilize visual-mask
-eligibility. They may reduce mask coverage and provide measurements for a
-future ROI implementation, but they do not reduce Feature 18 evaluation
-dimensions. The implementation does not dispatch Feature 18 once per NPC.
+The exact current-frame mask is generated on the GPU, while Feature 18 subrect
+coordinates are CPU scalar parameters. Reading the exact mask bounds back in the
+same frame would introduce a GPU/CPU synchronization stall. The implementation
+therefore uses the current projected semantic bounds as a conservative enclosure
+and keeps the R8 mask authoritative for final pixels. It does not dispatch
+Feature 18 once per NPC.
 
 ## Reverse-engineered Feature 18 surface
 
@@ -437,9 +445,8 @@ Neural Rendering controls. Its central defaults are:
 | Maximum character distance   | `10.0 m`     |
 | Minimum projected size       | `64 px`      |
 | Rectangle margin             | `25%`        |
-| Maximum regions per eye      | `4`          |
 | Rectangle hold               | `3 frames`   |
-| Compute ROI                  | Unavailable  |
+| Compute ROI                  | Dynamic one-rectangle per eye |
 | Visibility depth test        | On           |
 | Depth-aware feather          | Off          |
 | Feather radius               | `1 input px` |
@@ -452,11 +459,9 @@ allocation/dispatch-affecting controls are validated at the settings boundary.
 Invalid automation input is rejected rather than silently changing the
 requested experiment.
 
-Overlapping or nearby actor bounds are merged deterministically using the
-least-area-inflating eligible pair. If separated regions still exceed the cap,
-the lowest-priority regions are dropped instead of creating a large union that
-could admit unrelated actors between them. These regions stabilize the visual
-mask and support measurement; they do not imply compute ROI.
+Actor bounds are stabilized and then unioned into the one rectangle supported by
+the pinned runtime. The exact mask rejects unrelated pixels between separated
+actors, but Feature 18 still pays for every pixel in their enclosing rectangle.
 
 ## Diagnostics and profiling
 
@@ -471,14 +476,14 @@ The in-game diagnostics and DevBench status should expose, per eye:
     visible category counts, and the total rejected by frozen/current depth
 -   frozen stereo base/crop and current eye-local depth coordinates
 -   whether mask preparation succeeded and whether evaluation was required
--   visual-mask mechanism and the exact compute-ROI unsupported reason
+-   visual-mask mechanism, compute rectangle, pixel count, coverage, and source
 -   synchronized category/depth-capture readiness, frame, attempts, successes,
     same-frame reuses, empty bypasses, and failures
 -   preparation attempts, successes, failures, and dropped readbacks
 
 The debug views are `Off`, `Character Mask`, `ROI Rectangles`, and
-`DLSS 5 Output`. “ROI Rectangles” means eligibility/measurement rectangles, not
-provider compute dispatches.
+`DLSS 5 Output`. “ROI Rectangles” shows the projected semantic enclosure from
+which the guarded provider compute rectangle is derived.
 
 Diagnostics also expose six CSX-selection-mask modes: `Authored`, `Force Zero`,
 `Force One`, `Force Half`, `Invert Authored`, and
@@ -509,19 +514,20 @@ rectangles do not trigger extra counter/readback work. Readbacks are polled once
 per frame and ordered by a monotonic request serial. Authored-category counters
 scan every low-resolution input pixel in the active eye crop directly,
 independent of output resampling, render jitter, depth rejection, and ROI
-motion. A sample with zero pixels in all enabled categories may request a
-Feature 18 bypass for a deliberately bounded, stale-tolerant four frames while
-policy, layout, and the eligible actor set remain unchanged. Mask generation
-continues on those frames; the next scheduled readback revalidates coverage
-without a synchronous CPU/GPU wait. Same-frame empty observations or a
-deterministically empty eligibility plan request a bypass immediately. A
-one-eye projection disagreement is not treated as proof: that eye falls back
-to a full-eye eligibility rectangle while the authored category texture still
-selects the actual pixels. The
-stereo execution boundary records each slot separately as successfully
-evaluated, evaluation-failed, empty-bypassed, or aborted, so a zero request
-from only one eye is not reported as a skip when the paired Feature 18 call
-still evaluates both eyes.
+motion. These delayed samples are diagnostics only: a stale zero sample never
+suppresses current-frame Feature 18. Same-frame empty material observations or
+a deterministically empty eligibility plan request a bypass immediately. On
+ordinary non-sampling frames the semantic-mask shader also dispatches only the
+compute rectangle; coverage sampling and debug views intentionally resolve the
+full surface. A one-eye projection disagreement is not treated as proof: that
+eye falls back to a full-eye eligibility rectangle while the authored category
+texture still selects the actual pixels. If the bounded CPU observation table
+fills, additional selected geometry continues to author category IDs and marks
+the projection unbounded; that exceptional frame likewise uses a full-eye
+rectangle instead of silently omitting the geometry. The stereo execution
+boundary records each slot separately as successfully evaluated, evaluation-failed,
+empty-bypassed, or aborted. If only one eye is empty, Feature 18 evaluates the
+other eye alone and the bypassed eye retains normal DLSS.
 
 ## Known selection limitations
 
@@ -539,12 +545,12 @@ strict final-image visibility remains unproven for those cases. Solving it
 requires a later visibility/composition signal with defined ownership, not a
 looser depth tolerance.
 
-The category channel has no actor identity. Eligibility rectangles prevent the
-normal case of distant or tiny actors entering the mask, and separated regions
-are dropped rather than force-unioned at the cap. A different character already
-inside an admitted or legitimately nearby merged rectangle still cannot be
-distinguished per pixel. A strict per-actor distance/size guarantee would need
-an actor-ID buffer or a selected-geometry pass.
+The category channel has no actor identity. Eligibility bounds prevent the
+normal case of distant or tiny actors entering the mask, and all tracked
+eligible actors are unioned into the provider's one rectangle. A different
+character already inside that rectangle still cannot be distinguished per
+pixel. A strict per-actor distance/size guarantee would need an actor-ID buffer
+or a selected-geometry pass.
 
 The VR `MASKS2` attachment remains two bytes per combined-stereo pixel even
 when character NR is disabled: `R8G8_UNORM` replaces the previous
@@ -561,20 +567,20 @@ skip both copies, although previously allocated snapshot resources remain
 resident until reset or resource recreation. The two copies share the
 `Upscaling::DLSS5CharacterCategoryCapture` profiling scope. Dedicated per-eye
 `R8_UNORM` CSX selection masks and their small diagnostic counter buffers are
-separate slot resources. The current ROI rectangles do not reduce provider
-inference dimensions.
+separate slot resources. The dynamic compute rectangle reduces the provider's
+active dimensions without changing its full-capacity resource allocations.
 
 ## Failure behavior and validation boundary
 
 Character mode fails closed. It does not bind the unvalidated private provider
-mask, reuse a stale peer-eye mask, or publish a one-eye result. If material
+mask or reuse a stale peer-eye mask. If one eye is empty, only the nonempty eye
+is evaluated and the empty eye retains normal DLSS. If material
 classification, mask extraction, dimension/format checks, D3D11/D3D12 sharing,
 or Feature 18 evaluation fails, the pair retains Gogh's completed normal-DLSS
 result. Disabling character mode restores the ordinary automatic-mask route.
 
-The branch must report rather than conceal an unavailable compute-ROI path.
-Only a future, documented NVIDIA contract plus runtime evidence may change that
-capability to supported.
+The branch reports the single-rectangle path as pinned/private and continues to
+report multi/sparse ROI as unsupported.
 
 A successful build validates type and shader integration only. A controlled VR
 run must still establish all of the following before the experiment can be

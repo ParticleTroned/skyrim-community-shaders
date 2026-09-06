@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ComputeSubrect.h"
+
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -87,6 +89,9 @@ namespace NeuralRendering
 		std::uint32_t style = 3;
 		bool useAutoMask = true;
 		bool uiCorrection = false;
+		// Private Feature 18 single-rectangle compute ROI.  One means the
+		// full resource and remains the production default.
+		float singleSubrectScale = 1.0f;
 	};
 
 	class Runtime
@@ -123,6 +128,7 @@ namespace NeuralRendering
 			std::uint32_t a_outputHeight,
 			std::uint32_t a_controlMaskWidth,
 			std::uint32_t a_controlMaskHeight,
+			const ComputeSubrect& a_outputSubrect,
 			float a_motionVectorScaleX,
 			float a_motionVectorScaleY,
 			bool a_featureUpscaling,

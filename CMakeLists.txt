@@ -1692,6 +1692,18 @@ if(BUILD_CONTROLLER_TESTS)
         PROPERTIES LABELS "ControllerTests"
     )
     add_executable(
+        compute_subrect_test
+        EXCLUDE_FROM_ALL
+        tests/compute_subrect_test.cpp
+    )
+    target_compile_features(compute_subrect_test PRIVATE cxx_std_23)
+    target_include_directories(
+        compute_subrect_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    add_test(NAME ComputeSubrect COMMAND compute_subrect_test)
+    set_tests_properties(ComputeSubrect PROPERTIES LABELS "ControllerTests")
+    add_executable(
         frame_telemetry_ring_test
         EXCLUDE_FROM_ALL
         tests/frame_telemetry_ring_test.cpp
@@ -1750,6 +1762,7 @@ if(BUILD_CONTROLLER_TESTS)
         DEPENDS
             neural_rendering_pipeline_policy_test
             character_region_policy_test
+            compute_subrect_test
             frame_telemetry_ring_test
             dlss_viewport_crop_test
             foveated_center_alignment_test

@@ -375,6 +375,23 @@ namespace NeuralRendering
 		       (a_leftSlot == 2u && a_rightSlot == 3u);
 	}
 
+	/**
+	 * A stereo NR transaction is complete when every eye either presented a
+	 * successful Feature 18 result or was independently proven empty. At least
+	 * one eye must have presented NR, and no eye may be both states.
+	 */
+	[[nodiscard]] constexpr bool IsCompleteNeuralStereoResult(
+		std::uint32_t a_successfulEyeMask,
+		std::uint32_t a_bypassedEyeMask) noexcept
+	{
+		constexpr std::uint32_t stereoEyeMask = 0b11u;
+		if ((a_successfulEyeMask | a_bypassedEyeMask) & ~stereoEyeMask)
+			return false;
+		return a_successfulEyeMask != 0u &&
+		       (a_successfulEyeMask & a_bypassedEyeMask) == 0u &&
+		       (a_successfulEyeMask | a_bypassedEyeMask) == stereoEyeMask;
+	}
+
 	static_assert(IsSequentialFrame(10u, 11u));
 	static_assert(IsSequentialFrame(std::numeric_limits<std::uint32_t>::max(), 0u));
 	static_assert(!IsSequentialFrame(10u, 10u));

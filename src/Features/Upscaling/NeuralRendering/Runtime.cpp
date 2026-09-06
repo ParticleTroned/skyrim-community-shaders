@@ -1475,6 +1475,7 @@ namespace NeuralRendering
 		std::uint32_t a_guideWidth, std::uint32_t a_guideHeight,
 		std::uint32_t a_outputWidth, std::uint32_t a_outputHeight,
 		std::uint32_t a_controlMaskWidth, std::uint32_t a_controlMaskHeight,
+		const ComputeSubrect& a_outputSubrect,
 		float a_motionVectorScaleX, float a_motionVectorScaleY,
 		bool a_featureUpscaling, const Tuning& a_tuning, bool a_reset,
 		bool* a_evaluationAttempted)
@@ -1495,6 +1496,12 @@ namespace NeuralRendering
 					a_controlMaskHeight == 0);
 		if (abandonRequested_.load(std::memory_order_acquire) || abandoned_)
 			return false;
+		const auto resolvedOutputSubrect = a_outputSubrect.IsValid() ?
+		                                      a_outputSubrect :
+		                                      BuildCenteredComputeSubrect(
+											  a_outputWidth,
+											  a_outputHeight,
+											  a_tuning.singleSubrectScale);
 		if (status_ != RuntimeStatus::Initialized || !a_commandList ||
 			a_slot >= kFeatureSlotCount || !a_color || !a_depth ||
 			!a_motionVectors || !a_output || !a_colorWidth || !a_colorHeight ||
@@ -1505,6 +1512,10 @@ namespace NeuralRendering
 			!std::isfinite(a_tuning.localToneStrength) ||
 			!std::isfinite(a_tuning.localStructureStrength) ||
 			!std::isfinite(a_tuning.skinStructureStrength) ||
+			!std::isfinite(a_tuning.singleSubrectScale) ||
+			a_tuning.singleSubrectScale < 0.25f ||
+			a_tuning.singleSubrectScale > 1.0f ||
+			!resolvedOutputSubrect.Fits(a_outputWidth, a_outputHeight) ||
 			a_tuning.uiCorrection || !controlMaskContractValid) {
 			SetFailureLocked(
 				RuntimeStatus::FeatureEvaluateFailed,
@@ -1619,29 +1630,44 @@ namespace NeuralRendering
 		parameters->Set("DLSSNR.Depth", a_depth);
 		parameters->Set("DLSSNR.MVec", a_motionVectors);
 		parameters->Set("DLSSNR.Output", a_output);
+		const auto colorSubrect = MapComputeSubrect(
+			resolvedOutputSubrect, a_outputWidth, a_outputHeight,
+			a_colorWidth, a_colorHeight);
+		const auto guideSubrect = MapComputeSubrect(
+			resolvedOutputSubrect, a_outputWidth, a_outputHeight,
+			a_guideWidth, a_guideHeight);
+		const auto outputSubrect = resolvedOutputSubrect;
+		const auto controlMaskSubrect = hasControlMask ?
+			                                   MapComputeSubrect(
+											   resolvedOutputSubrect,
+											   a_outputWidth,
+											   a_outputHeight,
+											   a_controlMaskWidth,
+											   a_controlMaskHeight) :
+			                                   ComputeSubrect{};
 		if (hasControlMask) {
 			parameters->Set("DLSSNR.ControlMask", a_controlMask);
-			parameters->Set("DLSSNR.ControlMaskSubrectBaseX", 0u);
-			parameters->Set("DLSSNR.ControlMaskSubrectBaseY", 0u);
-			parameters->Set("DLSSNR.ControlMaskSubrectWidth", a_controlMaskWidth);
-			parameters->Set("DLSSNR.ControlMaskSubrectHeight", a_controlMaskHeight);
+			parameters->Set("DLSSNR.ControlMaskSubrectBaseX", controlMaskSubrect.baseX);
+			parameters->Set("DLSSNR.ControlMaskSubrectBaseY", controlMaskSubrect.baseY);
+			parameters->Set("DLSSNR.ControlMaskSubrectWidth", controlMaskSubrect.width);
+			parameters->Set("DLSSNR.ControlMaskSubrectHeight", controlMaskSubrect.height);
 		}
-		parameters->Set("DLSSNR.ColorSubrectBaseX", 0u);
-		parameters->Set("DLSSNR.ColorSubrectBaseY", 0u);
-		parameters->Set("DLSSNR.ColorSubrectWidth", a_colorWidth);
-		parameters->Set("DLSSNR.ColorSubrectHeight", a_colorHeight);
-		parameters->Set("DLSSNR.DepthSubrectBaseX", 0u);
-		parameters->Set("DLSSNR.DepthSubrectBaseY", 0u);
-		parameters->Set("DLSSNR.DepthSubrectWidth", a_guideWidth);
-		parameters->Set("DLSSNR.DepthSubrectHeight", a_guideHeight);
-		parameters->Set("DLSSNR.MVecSubrectBaseX", 0u);
-		parameters->Set("DLSSNR.MVecSubrectBaseY", 0u);
-		parameters->Set("DLSSNR.MVecSubrectWidth", a_guideWidth);
-		parameters->Set("DLSSNR.MVecSubrectHeight", a_guideHeight);
-		parameters->Set("DLSSNR.OutputSubrectBaseX", 0u);
-		parameters->Set("DLSSNR.OutputSubrectBaseY", 0u);
-		parameters->Set("DLSSNR.OutputSubrectWidth", a_outputWidth);
-		parameters->Set("DLSSNR.OutputSubrectHeight", a_outputHeight);
+		parameters->Set("DLSSNR.ColorSubrectBaseX", colorSubrect.baseX);
+		parameters->Set("DLSSNR.ColorSubrectBaseY", colorSubrect.baseY);
+		parameters->Set("DLSSNR.ColorSubrectWidth", colorSubrect.width);
+		parameters->Set("DLSSNR.ColorSubrectHeight", colorSubrect.height);
+		parameters->Set("DLSSNR.DepthSubrectBaseX", guideSubrect.baseX);
+		parameters->Set("DLSSNR.DepthSubrectBaseY", guideSubrect.baseY);
+		parameters->Set("DLSSNR.DepthSubrectWidth", guideSubrect.width);
+		parameters->Set("DLSSNR.DepthSubrectHeight", guideSubrect.height);
+		parameters->Set("DLSSNR.MVecSubrectBaseX", guideSubrect.baseX);
+		parameters->Set("DLSSNR.MVecSubrectBaseY", guideSubrect.baseY);
+		parameters->Set("DLSSNR.MVecSubrectWidth", guideSubrect.width);
+		parameters->Set("DLSSNR.MVecSubrectHeight", guideSubrect.height);
+		parameters->Set("DLSSNR.OutputSubrectBaseX", outputSubrect.baseX);
+		parameters->Set("DLSSNR.OutputSubrectBaseY", outputSubrect.baseY);
+		parameters->Set("DLSSNR.OutputSubrectWidth", outputSubrect.width);
+		parameters->Set("DLSSNR.OutputSubrectHeight", outputSubrect.height);
 		parameters->Set("DLSSNR.MVecScaleX", a_motionVectorScaleX);
 		parameters->Set("DLSSNR.MVecScaleY", a_motionVectorScaleY);
 		parameters->Set("DLSSNR.DepthInverted", 0u);
@@ -1679,10 +1705,11 @@ namespace NeuralRendering
 		status_ = RuntimeStatus::Initialized;
 		failureStage_ = RuntimeFailureStage::None;
 		detail_ = std::format(
-			"Feature 18 evaluated slot={} upscaling={} color={}x{} guides={}x{} output={}x{} controlMask={}x{} proxyHits={}",
+			"Feature 18 evaluated slot={} upscaling={} color={}x{} guides={}x{} output={}x{} controlMask={}x{} subrect=({},{} {}x{}) proxyHits={}",
 			a_slot, a_featureUpscaling, a_colorWidth, a_colorHeight, a_guideWidth,
 			a_guideHeight, a_outputWidth, a_outputHeight, a_controlMaskWidth,
-			a_controlMaskHeight, lastPathProxyHits_);
+			a_controlMaskHeight, outputSubrect.baseX, outputSubrect.baseY,
+			outputSubrect.width, outputSubrect.height, lastPathProxyHits_);
 		LogOnceLocked(featureEvaluateLogEmitted_, "evaluate", true);
 		return true;
 	}

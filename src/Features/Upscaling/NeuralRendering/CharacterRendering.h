@@ -2,6 +2,7 @@
 
 #include "../DLSSViewportCrop.h"
 #include "CharacterRegionPolicy.h"
+#include "ComputeSubrect.h"
 
 #include <array>
 #include <cstdint>
@@ -79,7 +80,6 @@ namespace NeuralRendering
 		inline constexpr float kDefaultMaximumDistanceMeters = 10.0f;
 		inline constexpr std::uint32_t kDefaultMinimumFacePixelSize = 64;
 		inline constexpr float kDefaultRoiMargin = 0.25f;
-		inline constexpr std::uint32_t kDefaultMaximumRoiRegions = 4;
 		inline constexpr std::uint32_t kDefaultRoiHoldFrames = 3;
 		inline constexpr bool kDefaultDepthAwareFeather = false;
 		inline constexpr bool kDefaultVisibilityDepthTest = true;
@@ -94,14 +94,11 @@ namespace NeuralRendering
 		inline constexpr std::uint32_t kMaximumFacePixelSize = 4096;
 		inline constexpr float kMinimumRoiMargin = 0.0f;
 		inline constexpr float kMaximumRoiMargin = 1.0f;
-		inline constexpr std::uint32_t kMaximumRoiRegions = 4;
 		inline constexpr std::uint32_t kMaximumRoiHoldFrames = 30;
 		inline constexpr std::uint32_t kMaximumFeatherRadius = 4;
 		inline constexpr float kMaximumFeatherDepthThreshold = 0.05f;
 		inline constexpr std::uint32_t kMaximumObservationsPerFrame = 4096;
-		inline constexpr std::uint32_t kMaximumTrackedActorsPerEye = 128;
 		inline constexpr std::uint32_t kCoverageSampleIntervalFrames = 30;
-		inline constexpr std::uint32_t kZeroCoverageReuseFrames = 4;
 		inline constexpr std::size_t kPreparedFrameHistorySize = 8;
 
 		[[nodiscard]] constexpr std::uint32_t CategoryBit(
@@ -127,8 +124,6 @@ namespace NeuralRendering
 		std::uint32_t minimumFacePixelSize =
 			CharacterPolicy::kDefaultMinimumFacePixelSize;
 		float roiMargin = CharacterPolicy::kDefaultRoiMargin;
-		std::uint32_t maximumRoiRegions =
-			CharacterPolicy::kDefaultMaximumRoiRegions;
 		std::uint32_t roiHoldFrames = CharacterPolicy::kDefaultRoiHoldFrames;
 		bool depthAwareFeather = CharacterPolicy::kDefaultDepthAwareFeather;
 		bool visibilityDepthTest = CharacterPolicy::kDefaultVisibilityDepthTest;
@@ -147,9 +142,11 @@ namespace NeuralRendering
 		std::uint32_t evaluationHeight = 0;
 		std::uint32_t visibleFaces = 0;
 		std::uint32_t visibleCharacterRegions = 0;
-		std::uint32_t droppedCharacterRegions = 0;
 		std::uint32_t mergedRegions = 0;
 		std::uint64_t roiPixels = 0;
+		ComputeSubrect computeSubrect{};
+		std::uint64_t computeSubrectPixels = 0;
+		float computeSubrectCoveragePercent = 0.0f;
 		std::uint64_t maskPixels = 0;
 		std::array<std::uint64_t, 3> authoredCategoryPixels{};
 		std::array<std::uint64_t, 3> visibleCategoryPixels{};
@@ -170,7 +167,6 @@ namespace NeuralRendering
 			CharacterFeature18Disposition::Unresolved;
 		bool feature18EvaluationSucceeded = false;
 		bool zeroCoverageCpuProven = false;
-		bool zeroCoverageSampleReused = false;
 		bool fullEyeEligibilityFallback = false;
 		bool depthCoordinatesValid = false;
 		std::uint32_t authoredStereoWidth = 0;
@@ -215,11 +211,11 @@ namespace NeuralRendering
 		std::string detail;
 		std::string visualMaskMechanism = "csx_output_composite_r8";
 		std::string computeRoiReason =
-			"Multi/sparse ROI is unavailable; private single-subrect timing is not enabled";
+			"One dynamic per-eye compute rectangle encloses the selected semantic regions";
 		bool enabled = false;
 		bool visualMaskImplemented = true;
 		bool visualMaskProviderValidated = false;
-		bool computeRoiSupported = false;
+		bool computeRoiSupported = true;
 		std::uint64_t observations = 0;
 		std::uint64_t observationCapacityDrops = 0;
 		std::uint32_t observationFrame =
@@ -248,9 +244,7 @@ namespace NeuralRendering
 		std::uint64_t preparationFailures = 0;
 		std::uint64_t readbackDrops = 0;
 		std::uint64_t provenEmptyFeatureBypassRequests = 0;
-		std::uint64_t measuredZeroCoverageBypassRequests = 0;
 		std::uint64_t provenEmptyFeatureBypasses = 0;
-		std::uint64_t measuredZeroCoverageBypasses = 0;
 		std::array<CharacterEyeSnapshot, 2> eyes{};
 		std::array<
 			CharacterPreparedFrameSnapshot,
@@ -276,6 +270,8 @@ namespace NeuralRendering
 	{
 		bool prepared = false;
 		bool requiresEvaluation = true;
+		/** Output-local rectangle supplied to the private Feature 18 subrect ABI. */
+		ComputeSubrect computeSubrect{};
 	};
 
 	/** Owns character observations, stable per-eye regions, and R8 selection masks. */
@@ -340,6 +336,12 @@ namespace NeuralRendering
 		/** Returns a mask only when the requested slot matches this exact frame and size. */
 		[[nodiscard]] Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>
 		GetPreparedMaskSrv(
+			std::uint32_t a_featureSlot,
+			std::uint32_t a_frameId,
+			std::uint32_t a_width,
+			std::uint32_t a_height) const noexcept;
+		/** Returns the matching output-local compute rectangle for a prepared mask. */
+		[[nodiscard]] ComputeSubrect GetPreparedComputeSubrect(
 			std::uint32_t a_featureSlot,
 			std::uint32_t a_frameId,
 			std::uint32_t a_width,

@@ -54,6 +54,10 @@ set(
     "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterRegionPolicy.h"
 )
 set(
+    _character_compute_subrect_path
+    "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterComputeSubrect.h"
+)
+set(
     _character_category_shader_path
     "${PROJECT_ROOT}/package/Shaders/Common/CharacterCategoryMask.hlsli"
 )
@@ -76,6 +80,18 @@ set(
 set(
     _foveated_center_blend_shader_path
     "${PROJECT_ROOT}/features/Upscaling/Shaders/Upscaling/FoveatedCenterBlendCS.hlsl"
+)
+set(
+    _copy_depth_guide_shader_path
+    "${PROJECT_ROOT}/features/Upscaling/Shaders/Upscaling/NeuralRendering/CopyDepthGuideCS.hlsl"
+)
+set(
+    _submit_stage_stretch_shader_path
+    "${PROJECT_ROOT}/features/Upscaling/Shaders/Upscaling/SubmitStageStretchCS.hlsl"
+)
+set(
+    _compute_subrect_path
+    "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/ComputeSubrect.h"
 )
 set(
     _character_doc_path
@@ -115,6 +131,9 @@ foreach(_required_path IN ITEMS
     "${_sky_shader_path}"
     "${_deferred_composite_shader_path}"
     "${_foveated_center_blend_shader_path}"
+    "${_copy_depth_guide_shader_path}"
+    "${_submit_stage_stretch_shader_path}"
+    "${_compute_subrect_path}"
     "${_character_doc_path}"
     "${_d3d12_interop_source_path}"
     "${_pipeline_policy_path}"
@@ -140,6 +159,7 @@ file(READ "${_runtime_source_path}" _runtime_source)
 file(READ "${_character_header_path}" _character_header)
 file(READ "${_character_source_path}" _character_source)
 file(READ "${_character_region_policy_path}" _character_region_policy)
+file(READ "${_character_compute_subrect_path}" _character_compute_subrect)
 file(READ "${_character_category_shader_path}" _character_category_shader)
 file(READ "${_character_mask_shader_path}" _character_mask_shader)
 file(READ "${_lighting_shader_path}" _lighting_shader)
@@ -149,17 +169,22 @@ file(READ "${_distant_tree_shader_path}" _distant_tree_shader)
 file(READ "${_sky_shader_path}" _sky_shader)
 file(READ "${_deferred_composite_shader_path}" _deferred_composite_shader)
 file(READ "${_foveated_center_blend_shader_path}" _foveated_center_blend_shader)
+file(READ "${_copy_depth_guide_shader_path}" _copy_depth_guide_shader)
+file(READ "${_submit_stage_stretch_shader_path}" _submit_stage_stretch_shader)
+file(READ "${_compute_subrect_path}" _compute_subrect)
 file(READ "${_character_doc_path}" _character_doc)
 file(READ "${_d3d12_interop_source_path}" _d3d12_interop_source)
 file(READ "${_pipeline_policy_path}" _pipeline_policy)
 set(
     _source_contract_text
-    "${_upscaling}\n${_upscaling_header}\n${_deferred}\n${_subsurface_header}\n${_subsurface_source}\n${_streamline}\n${_streamline_header}\n${_renderer_header}\n${_renderer_source}\n${_runtime_header}\n${_runtime_source}\n${_character_header}\n${_character_source}\n${_character_region_policy}\n${_character_category_shader}\n${_character_mask_shader}\n${_lighting_shader}\n${_grass_shader}\n${_effect_shader}\n${_distant_tree_shader}\n${_sky_shader}\n${_deferred_composite_shader}\n${_foveated_center_blend_shader}\n${_character_doc}\n${_d3d12_interop_source}\n${_pipeline_policy}"
+    "${_upscaling}\n${_upscaling_header}\n${_deferred}\n${_subsurface_header}\n${_subsurface_source}\n${_streamline}\n${_streamline_header}\n${_renderer_header}\n${_renderer_source}\n${_runtime_header}\n${_runtime_source}\n${_compute_subrect}\n${_character_header}\n${_character_source}\n${_character_region_policy}\n${_character_compute_subrect}\n${_character_category_shader}\n${_character_mask_shader}\n${_lighting_shader}\n${_grass_shader}\n${_effect_shader}\n${_distant_tree_shader}\n${_sky_shader}\n${_deferred_composite_shader}\n${_foveated_center_blend_shader}\n${_copy_depth_guide_shader}\n${_submit_stage_stretch_shader}\n${_character_doc}\n${_d3d12_interop_source}\n${_pipeline_policy}"
 )
 
 foreach(_selection_composite_contract IN ITEMS
     [[CharacterMask.SampleLevel(LinearSampler, centerUV, 0)]]
-    [[centerColor = lerp(baselineColor, centerColor, characterWeight);]]
+    [[centerColor = baselineColor;]]
+    [[if (characterWeight > 0.0)]]
+    [[centerColor = lerp(baselineColor, neuralColor, characterWeight);]]
 )
     string(FIND
         "${_foveated_center_blend_shader}"
@@ -169,6 +194,83 @@ foreach(_selection_composite_contract IN ITEMS
     if(_selection_composite_position EQUAL -1)
         message(FATAL_ERROR
             "Character selection composite contract is missing: ${_selection_composite_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_mask_roi_dispatch_contract IN ITEMS
+    [[float4 EligibilityRectangle;]]
+    [[uint4 DispatchRegion;]]
+    [[const uint2 outputPixelId = dispatchThreadId.xy + DispatchRegion.xy;]]
+    [[CharacterSelectionMask[outputPixelId] = mask;]]
+    [[ClearUnorderedAccessViewFloat(]]
+    [[a_slot.maskUav.Get(), clearMask.data())]]
+    [[fullSurfaceDispatch ? 0u : a_slot.computeSubrect.baseX]]
+    [[fullSurfaceDispatch ?]]
+    [[a_slot.computeSubrect.width]]
+)
+    string(FIND "${_source_contract_text}" "${_mask_roi_dispatch_contract}"
+        _mask_roi_dispatch_position)
+    if(_mask_roi_dispatch_position EQUAL -1)
+        message(FATAL_ERROR
+            "Character-mask ROI dispatch contract is missing: ${_mask_roi_dispatch_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_roi_staging_contract IN ITEMS
+    [[float2 OutputOffset;]]
+    [[OutputTexture[outputPixelId] =]]
+    [[computeSubrect.baseX, computeSubrect.baseY, 0,]]
+    [[CommitSubmitNeuralFloatOutput(]]
+)
+    string(FIND "${_source_contract_text}" "${_roi_staging_contract}"
+        _roi_staging_position)
+    if(_roi_staging_position EQUAL -1)
+        message(FATAL_ERROR
+            "ROI-limited staging contract is missing: ${_roi_staging_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_dynamic_compute_roi_contract IN ITEMS
+    [[BuildCharacterComputeSubrect(]]
+    [[bounds = CharacterRegionPolicy::Union(bounds, region);]]
+    [[a_args.computeSubrect = result.computeSubrect;]]
+    [[MapComputeSubrect(]]
+    [[parameters->Set("DLSSNR.ColorSubrectBaseX", colorSubrect.baseX);]]
+    [[parameters->Set("DLSSNR.OutputSubrectWidth", outputSubrect.width);]]
+    [[CopyTextureSubrect(]]
+    [[Add(pixelCount, resources[index].outputSubrect.Area());]]
+    [[RestrictVisibleOutputToComputeSubrect(]]
+    [[const uint32_t evaluationEyeMask =]]
+)
+    string(FIND
+        "${_source_contract_text}"
+        "${_dynamic_compute_roi_contract}"
+        _dynamic_compute_roi_position
+    )
+    if(_dynamic_compute_roi_position EQUAL -1)
+        message(FATAL_ERROR
+            "Dynamic character compute ROI contract is missing: ${_dynamic_compute_roi_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_depth_compute_roi_contract IN ITEMS
+    [[uint2 RoiOffset;]]
+    [[uint2 RoiExtent;]]
+    [[uint2 pixel = dispatchThreadId.xy + RoiOffset;]]
+    [[OutputDepth[pixel] = SourceDepth.Load(uint3(pixel, 0));]]
+)
+    string(FIND
+        "${_copy_depth_guide_shader}"
+        "${_depth_compute_roi_contract}"
+        _depth_compute_roi_position
+    )
+    if(_depth_compute_roi_position EQUAL -1)
+        message(FATAL_ERROR
+            "Depth-guide compute ROI contract is missing: ${_depth_compute_roi_contract}"
         )
     endif()
 endforeach()
@@ -350,7 +452,7 @@ endif()
 
 foreach(_submit_float_commit_contract IN ITEMS
     [[if (directCommit) return true]]
-    [[globals::d3d::context->CopyResource( submitNeuralFloatColorOut[eyeIndex]->resource.get(), submitNeuralFloatStagedOut[eyeIndex]->resource.get())]]
+    [[globals::d3d::context->CopySubresourceRegion( submitNeuralFloatColorOut[eyeIndex]->resource.get(), 0, computeSubrect.baseX, computeSubrect.baseY, 0, submitNeuralFloatStagedOut[eyeIndex]->resource.get(), 0, &sourceBox)]]
 )
     string(FIND
         "${_submit_float_commit_section}"
@@ -369,8 +471,8 @@ foreach(_upscaled_center_float_contract IN ITEMS
     [[const bool useSubmitNeuralFloatBridge = submitStageDLSSCenter && neuralRenderingRequested && !NeuralRendering::RunsBeforeDlss()]]
     [[args.insertionPoint = NeuralRendering::InsertionPoint::UpscaledCenter]]
     [[DispatchSubmitStageColorRegion( foveatedCenterColorOut[eyeIndex]->srv.get(), submitNeuralFloatColorIn[eyeIndex]->uav.get()]]
-    [[neuralColorInput = submitNeuralFloatColorIn[eyeIndex]->resource.get()]]
-    [[return CommitSubmitNeuralFloatOutput( eyeIndex, directNeuralCommit)]]
+    [[args.colorInput = submitNeuralFloatColorIn[eyeIndex]->resource.get()]]
+    [[return CommitSubmitNeuralFloatOutput( eyeIndex, directNeuralCommit, preparedSubrect)]]
     [[useSubmitNeuralFloatBridge && neuralAppliedForComposite]]
 )
     string(FIND
@@ -410,7 +512,7 @@ foreach(_final_ldr_float_contract IN ITEMS
     [[("Upscale_NeuralFinalLdr_ColorIn_" + suffix).c_str(), targetUavDescs[eye].Format]]
     [[DispatchSubmitStageColorRegion( neuralFinalLdrColorIn[eye]->srv.get(), submitNeuralFloatColorIn[eye]->uav.get()]]
     [[args.colorInput = useSubmitNeuralFloatBridge ? submitNeuralFloatColorIn[eye]->resource.get() : neuralFinalLdrColorIn[eye]->resource.get()]]
-    [[CommitSubmitNeuralFloatOutput(eye, directCommit)]]
+    [[CommitSubmitNeuralFloatOutput( eye, directCommit, neuralArgs[eye].computeSubrect)]]
     [[useSubmitNeuralFloatBridge ? submitNeuralFloatColorOut[eye]->srv.get() : neuralFinalLdrColorOut[eye]->srv.get()]]
 )
     string(FIND
@@ -624,7 +726,11 @@ foreach(_status_contract IN ITEMS
     [[{ "publicProductSemanticsDescribed", true }]]
     [[{ "exactBindingContractPublished", false }]]
     [[{ "computeRoi", {]]
-    [[{ "inferenceRestrictedToRois", false }]]
+    [[{ "dynamicCharacterSingleRectEnabled", dynamicCharacterSingleRectEnabled }]]
+    [[{ "inferenceRestrictedToRois", dynamicCharacterSingleRectEnabled || privateSingleSubrectEnabled }]]
+    [[{ "computeSubrect", {]]
+    [[{ "computeSubrectPixels", eye.computeSubrectPixels }]]
+    [[{ "computeSubrectCoveragePercent", eye.computeSubrectCoveragePercent }]]
     [[{ "maskCoveragePercent", eye.maskCoverageReady ? json(eye.maskCoveragePercent) : json(nullptr) }]]
     [[{ "authoredCategoryPixels", {]]
     [[{ "visibleCategoryPixels", {]]
@@ -635,13 +741,11 @@ foreach(_status_contract IN ITEMS
     [[{ "zeroCoverageBypassedFeature18", eye.zeroCoverageBypassed }]]
     [[{ "feature18EvaluationSucceeded", eye.feature18EvaluationSucceeded }]]
     [[{ "zeroCoverageCpuProven", eye.zeroCoverageCpuProven }]]
-    [[{ "zeroCoverageSampleReused", eye.zeroCoverageSampleReused }]]
     [[{ "feature18Disposition", NeuralRendering::GetCharacterFeature18DispositionName(eye.feature18Disposition) }]]
     [[{ "maskCoverageSampleAgeFrames",]]
     [[{ "maskCoverageMatchesCurrentPolicy", eye.maskCoverageMatchesCurrentPolicy }]]
     [[{ "authoredCategoryPixelCountSpace", "active_eye_input_pixels_before_visibility" }]]
     [[{ "visibleCategoryPixelCountSpace", "feature18_evaluation_pixels_after_visibility_inside_eligibility" }]]
-    [[{ "droppedCharacterActors", eye.droppedCharacterRegions }]]
     [[{ "observationCapacityDrops", snapshot.observationCapacityDrops }]]
     [[{ "currentCategoryObservations", {]]
     [[{ "currentClassificationRejections", {]]
@@ -654,9 +758,7 @@ foreach(_status_contract IN ITEMS
     [[{ "categoryCaptureReady", snapshot.categoryCaptureReady }]]
     [[{ "categoryCaptureEmpty", snapshot.categoryCaptureEmpty }]]
     [[{ "provenEmptyFeatureBypassRequests", snapshot.provenEmptyFeatureBypassRequests }]]
-    [[{ "measuredZeroCoverageBypassRequests", snapshot.measuredZeroCoverageBypassRequests }]]
     [[{ "provenEmptyFeatureBypasses", snapshot.provenEmptyFeatureBypasses }]]
-    [[{ "measuredZeroCoverageBypasses", snapshot.measuredZeroCoverageBypasses }]]
     [[{ "currentBypassRequestedSlotMask", currentPreparationFound ? currentPreparation->bypassRequestedSlotMask : 0u }]]
     [[{ "currentResolutionRecordedSlotMask", currentPreparationFound ? currentPreparation->resolutionRecordedSlotMask : 0u }]]
     [[{ "currentEvaluatedSlotMask", currentPreparationFound ? currentPreparation->evaluatedSlotMask : 0u }]]
@@ -669,7 +771,6 @@ foreach(_status_contract IN ITEMS
     [[{ "fullEyeEligibilityFallback", eye.fullEyeEligibilityFallback }]]
     [[{ "authoredMaskCoverageSampleIntervalFrames", NeuralRendering::CharacterPolicy::kCoverageSampleIntervalFrames }]]
     [[{ "forcedMaskCoverageSampleIntervalFrames", NeuralRendering::CharacterPolicy::kCoverageSampleIntervalFrames }]]
-    [[{ "zeroCoverageReuseFrames", NeuralRendering::CharacterPolicy::kZeroCoverageReuseFrames }]]
     [[{ "configured", visualIsolationConfigured }]]
     [[{ "active", visualIsolationEffective }]]
     [[{ "vrAttachmentFormat", "R8G8_UNORM" }]]
@@ -988,7 +1089,8 @@ foreach(_source_contract IN ITEMS
     [[bool IsNeuralRenderingMenuSuppressed()]]
     [[neuralTemporalAdmissionLatch.compare_exchange_weak(]]
     [[phase == NeuralCenterPhase::Resolve ?]]
-    [[neuralPairApplied = neuralPairApplied &&]]
+    [[(neuralEvaluation.successfulEyeMask & eyeBit) != 0]]
+    [[(neuralEvaluation.bypassedEyeMask & eyeBit) != 0]]
     [[args.frameId =]]
     [[ApplySequentialStereo(]]
     [[evaluationAttemptedFeatureSlotMask]]
@@ -999,14 +1101,14 @@ foreach(_source_contract IN ITEMS
     [[std::call_once(installed,]]
     [[CaptureAuthoredCategories(]]
     [[CS_PROFILE_SCOPE("Upscaling::DLSS5CharacterCategoryCapture")]]
+    [[static_cast<std::int32_t>(a_frame - observationFrame_) <= 0]]
+    [[character category capture arrived after a newer observation frame]]
     [[capturedFrame_ != a_args.frameId]]
     [[const bool logicalEmptyCapture = state_->capturedCategoriesEmpty_;]]
-    [[if (logicalEmptyCapture) {]]
+    [[if (cpuProvenEmpty || logicalEmptyCapture) {]]
     [[state_->ClearMask(]]
     [[slot.requiresEvaluation =]]
     [[const bool cpuProvenEmpty =]]
-    [[const bool measuredZero =]]
-    [[state_->HasFreshZeroAuthoredCoverageSample(]]
     [[UsesAuthoredMask(a_args.settings.maskTestMode)]]
     [[const bool samplePending = std::ranges::any_of(]]
     [[sourceEyeWidth = state_->capturedEyeWidth_;]]
@@ -1018,7 +1120,6 @@ foreach(_source_contract IN ITEMS
     [[DXGI_FORMAT_R8G8_UNORM]]
     [[DXGI_FORMAT_R8_UNORM]]
     [[inline constexpr std::uint32_t kCoverageSampleIntervalFrames = 30;]]
-    [[inline constexpr std::uint32_t kZeroCoverageReuseFrames = 4;]]
     [[CharacterCategoryMask::Encode]]
     [[CharacterCategoryMask::DecodeCategory]]
     [[CharacterCategoryMask::DecodeInverseVertexAo]]
@@ -1053,9 +1154,13 @@ foreach(_source_contract IN ITEMS
     [[!UsesCharacterVisualIsolation(settings) &&]]
     [[state_->capturedEnabledCategoryMask_ == a_enabledCategoryMask]]
     [[Increment(state_->snapshot_.categoryCaptureReuses);]]
+    [[state_->unboundedCategoryMask_ |=]]
+    [[(state_->unboundedCategoryMask_ & a_enabledCategoryMask) != 0 ||]]
+    [[(unboundedCategoryMask_ &]]
     [[plan.fullEyeEligibilityFallback = true;]]
-    [[(logicalEmptyCapture || plan.regions.empty());]]
-    [[plan.regions.empty() && plan.projectionUncertain]]
+    [[const bool forcedEmpty =]]
+    [[(logicalEmptyCapture || plan.regions.empty()));]]
+    [[plan.projectionUncertain) {]]
     [[IsCharacterMaterialCandidate(]]
     [[classificationCache.try_emplace(]]
     [[ResolveCharacterCompositeInputs(]]
@@ -1067,7 +1172,6 @@ foreach(_source_contract IN ITEMS
     [[ObserveNeuralTemporalAdmission(]]
     [[neuralTemporalAdmission.admitted &&]]
     [[timingFenceValue > lastCompletedTimingFenceValue_]]
-    [[CharacterRegionPolicy::MergeAndLimit(]]
     [[RefreshProjectedActors(a_args);]]
     [[if (!currentlyProjected.contains(it->first))]]
     [[.currentDepthIdentity = currentDepthIdentity,]]
@@ -1079,7 +1183,7 @@ foreach(_source_contract IN ITEMS
     [[a_args.depthGuide,]]
     [[(a_args.featureSlot & 1u) != a_args.eyeIndex]]
     [[slot.requiresEvaluation = true;]]
-    [[neuralEvaluation.pairBypassed,]]
+    [[summary.bypassedEyeMask = BuildNeuralCenterEyeMask(]]
     [[for (uint32_t stereoEye = 0; stereoEye < neuralResults.size(); ++stereoEye)]]
 )
     string(FIND "${_source_contract_text}" "${_source_contract}" _source_position)
@@ -1324,24 +1428,31 @@ foreach(_readback_contract IN ITEMS
         )
     endif()
 endforeach()
-foreach(_bounded_zero_contract IN ITEMS
-    [[a_slot.maskDiagnosticKey != a_diagnosticKey]]
-    [[a_frame - a_slot.maskCoverageFrame]]
-    [[CharacterPolicy::kZeroCoverageReuseFrames]]
-    [[IsCategoryEnabled(characterCategory, a_settings)]]
-    [[a_slot.authoredCategoryPixels[category - 1u] != 0]]
-    [[add(a_plan.eligibilitySignature);]]
+foreach(_strict_zero_contract IN ITEMS
     [[const bool cpuProvenEmpty =]]
-    [[const bool measuredZero =]]
+    [[slot.requiresEvaluation = !cpuProvenEmpty;]]
+    [[!slot.requiresEvaluation && slot.zeroCoverageCpuProven]]
     [[slot.zeroCoverageBypassed = false;]]
     [[Increment(state_->snapshot_.provenEmptyFeatureBypassRequests);]]
-    [[Increment(state_->snapshot_.measuredZeroCoverageBypassRequests);]]
 )
-    string(FIND "${_character_source}" "${_bounded_zero_contract}"
-        _bounded_zero_position)
-    if(_bounded_zero_position EQUAL -1)
+    string(FIND "${_character_source}" "${_strict_zero_contract}"
+        _strict_zero_position)
+    if(_strict_zero_position EQUAL -1)
         message(FATAL_ERROR
-            "Bounded zero-mask bypass contract is missing: ${_bounded_zero_contract}"
+            "Strict current-frame zero-mask bypass contract is missing: ${_strict_zero_contract}"
+        )
+    endif()
+endforeach()
+foreach(_stale_zero_token IN ITEMS
+    [[HasFreshZeroAuthoredCoverageSample]]
+    [[kZeroCoverageReuseFrames]]
+    [[measuredZeroCoverageBypass]]
+)
+    string(FIND "${_source_contract_text}" "${_stale_zero_token}"
+        _stale_zero_position)
+    if(NOT _stale_zero_position EQUAL -1)
+        message(FATAL_ERROR
+            "Stale GPU coverage must not suppress current-frame Feature 18: ${_stale_zero_token}"
         )
     endif()
 endforeach()
@@ -1378,10 +1489,10 @@ endforeach()
 string(FIND "${_character_source}"
     "std::uint64_t BuildDiagnosticKey(" _diagnostic_key_begin)
 string(FIND "${_character_source}"
-    "bool HasFreshZeroAuthoredCoverageSample(" _diagnostic_key_end)
+    "void PollReadbacks(" _diagnostic_key_end)
 if(_diagnostic_key_begin EQUAL -1 OR _diagnostic_key_end EQUAL -1 OR
     NOT _diagnostic_key_begin LESS _diagnostic_key_end)
-    message(FATAL_ERROR "Character zero-proof compatibility key could not be isolated")
+    message(FATAL_ERROR "Character diagnostic compatibility key could not be isolated")
 endif()
 math(EXPR _diagnostic_key_length
     "${_diagnostic_key_end} - ${_diagnostic_key_begin}"
@@ -1396,7 +1507,7 @@ foreach(_diagnostic_key_contract IN ITEMS
         _diagnostic_key_position)
     if(_diagnostic_key_position EQUAL -1)
         message(FATAL_ERROR
-            "Character zero-proof compatibility key is missing: ${_diagnostic_key_contract}"
+            "Character diagnostic compatibility key is missing: ${_diagnostic_key_contract}"
         )
     endif()
 endforeach()
@@ -1409,7 +1520,7 @@ foreach(_dynamic_diagnostic_token IN ITEMS
         _dynamic_diagnostic_position)
     if(NOT _dynamic_diagnostic_position EQUAL -1)
         message(FATAL_ERROR
-            "Zero-proof compatibility key contains unstable geometry: ${_dynamic_diagnostic_token}"
+            "Character diagnostic compatibility key contains unstable geometry: ${_dynamic_diagnostic_token}"
         )
     endif()
 endforeach()
@@ -1447,7 +1558,6 @@ foreach(_disposition_contract IN ITEMS
     [[preparedFrame->bypassedSlotMask |= slotBit;]]
     [[preparedFrame->abortedSlotMask |= slotBit;]]
     [[Increment(state_->snapshot_.provenEmptyFeatureBypasses);]]
-    [[Increment(state_->snapshot_.measuredZeroCoverageBypasses);]]
 )
     string(FIND "${_resolve_disposition}" "${_disposition_contract}"
         _disposition_contract_position)
@@ -1460,7 +1570,8 @@ endforeach()
 foreach(_disposition_call_contract IN ITEMS
     [[std::array<bool, 2> evaluatedEyes{};]]
     [[std::array<bool, 2> successfulEyes{};]]
-    [[successfulEyes.fill(true);]]
+    [[const uint32_t evaluationEyeMask =]]
+    [[summary.successfulEyeMask = evaluationEyeMask;]]
     [[ResolveAbortedCharacterFeature18Preparations(]]
 )
     string(FIND "${_upscaling}" "${_disposition_call_contract}"
@@ -1478,22 +1589,18 @@ string(SUBSTRING "${_character_source}" ${_prepare_mask_begin}
 string(FIND "${_prepare_mask}"
     [[Increment(state_->snapshot_.provenEmptyFeatureBypasses);]]
     _premature_proven_bypass)
-string(FIND "${_prepare_mask}"
-    [[Increment(state_->snapshot_.measuredZeroCoverageBypasses);]]
-    _premature_measured_bypass)
-if(NOT _premature_proven_bypass EQUAL -1 OR
-    NOT _premature_measured_bypass EQUAL -1)
+if(NOT _premature_proven_bypass EQUAL -1)
     message(FATAL_ERROR
         "Mask preparation must report zero requests, not completed Feature 18 skips"
     )
 endif()
 string(FIND "${_prepare_mask}" "state_->Dispatch(" _prepare_mask_dispatch)
-string(FIND "${_prepare_mask}" "const bool measuredZero ="
-    _prepare_mask_measured_zero)
-if(_prepare_mask_dispatch EQUAL -1 OR _prepare_mask_measured_zero EQUAL -1 OR
-    NOT _prepare_mask_dispatch LESS _prepare_mask_measured_zero)
+string(FIND "${_prepare_mask}" "slot.requiresEvaluation = !cpuProvenEmpty;"
+    _prepare_mask_requires_evaluation)
+if(_prepare_mask_dispatch EQUAL -1 OR
+    _prepare_mask_requires_evaluation EQUAL -1)
     message(FATAL_ERROR
-        "A reused zero sample must never suppress current-frame mask generation"
+        "Current-frame mask generation and CPU-proven empty policy are required"
     )
 endif()
 
@@ -1529,8 +1636,8 @@ foreach(_mask_shader_contract IN ITEMS
     [[RWByteAddressBuffer DiagnosticCounters : register(u1);]]
     [[groupshared uint GroupCounters[8];]]
     [[const uint2 inputSize = uint2(SourceCrop.w, Options.x);]]
-    [[measureCoverage && all(dispatchThreadId.xy < inputSize)]]
-    [[ReadAuthoredCategory(int2(dispatchThreadId.xy))]]
+    [[measureCoverage && insideDispatch && all(outputPixelId < inputSize)]]
+    [[ReadAuthoredCategory(int2(outputPixelId))]]
     [[AuthoredFacePixels);]]
     [[CountCategory(centerCategory, VisibleFacePixels);]]
     [[const bool visibilityRejectionEnabled = VisibilityOptions.y >= 0.5;]]
@@ -1551,10 +1658,10 @@ foreach(_mask_shader_contract IN ITEMS
     endif()
 endforeach()
 foreach(_coverage_dispatch_contract IN ITEMS
-    [[const auto dispatchWidth = std::max(]]
-    [[a_args.outputWidth, a_args.viewportCrop.input.Width());]]
-    [[const auto dispatchHeight = std::max(]]
-    [[a_args.outputHeight, a_args.viewportCrop.input.Height());]]
+    [[const auto dispatchWidth = fullSurfaceDispatch ?]]
+    [[std::max(a_args.outputWidth, a_args.viewportCrop.input.Width()) :]]
+    [[const auto dispatchHeight = fullSurfaceDispatch ?]]
+    [[std::max(a_args.outputHeight, a_args.viewportCrop.input.Height()) :]]
 )
     string(FIND "${_character_source}" "${_coverage_dispatch_contract}"
         _coverage_dispatch_position)
@@ -1976,7 +2083,7 @@ foreach(_admission_contract IN ITEMS
     [[std::array<std::map<std::uint32_t, HeldRegion>, 4> heldRegions_]]
     [[CharacterRegionPolicy::IsWithinHoldWindow(]]
     [[if (!currentlyProjected.contains(it->first))]]
-    [[CharacterRegionPolicy::MergeAndLimit(]]
+    [[enclosingRect = CharacterRegionPolicy::Union(]]
 )
     string(FIND
         "${_character_source}"
@@ -2383,7 +2490,6 @@ set(_character_configuration_fields
     characterMaximumDistanceMeters
     characterMinimumFacePixelSize
     characterRoiMargin
-    characterMaximumRoiRegions
     characterRoiHoldFrames
     characterDepthAwareFeather
     characterVisibilityDepthTest
@@ -2450,9 +2556,11 @@ foreach(_character_contract IN ITEMS
 	[[final-LDR and submit routes already preserve a separate baseline.]]
     [[{ "multiSparseSupported", false }]]
     [[{ "privateSingleSubrectCandidate", true }]]
-    [[{ "privateSingleSubrectEnabled", false }]]
-    [[{ "privateSingleSubrectValidation", "pending_contract_and_timing_validation" }]]
-    [[Feature 18 bypasses same-frame CPU-proven empty masks and bounded fresh raw-authored GPU-zero samples]]
+    [[{ "privateSingleSubrectEnabled", dynamicCharacterSingleRectEnabled || privateSingleSubrectEnabled }]]
+    [[{ "privateSingleSubrectValidation", "ghidra_dataflow_and_gpu_timing_validated" }]]
+    [[Feature 18 bypasses only same-frame CPU-proven empty eyes; delayed GPU coverage samples are diagnostic and never suppress current-frame evaluation.]]
+    [[unions the current per-eye projected face, skin, and hair eligibility bounds into one private Feature 18 compute subrect]]
+    [[Feature 18 color, depth-guide, motion-vector, provider-output, and late-overlay work are restricted to that rectangle.]]
     [[const bool characterVisualIsolationChanged =]]
     [[{ "characterVisualIsolationChanged", characterVisualIsolationChanged }]]
 )

@@ -143,6 +143,8 @@ public:
 		uint32_t preparedEyeMask = 0;
 		uint32_t attemptedEyeMask = 0;
 		uint32_t appliedEyeMask = 0;
+		uint32_t bypassedEyeMask = 0;
+		/** Eyes whose successful Feature 18 output reached presentation. */
 		uint32_t committedEyeMask = 0;
 		uint32_t dlssEyeMask = 0;
 		std::array<uint32_t, 2> dlssEvaluationAttemptCount{};
@@ -314,6 +316,7 @@ public:
 		uint neuralRenderingStyle = 3;
 		bool neuralRenderingAutoMask = true;
 		bool neuralRenderingUICorrection = false;
+		float neuralRenderingSingleSubrectScale = 1.0f;
 		float neuralRenderingBlendFeather = 0.05f;
 		bool neuralCharacterRenderingEnabled =
 			NeuralRendering::CharacterPolicy::kDefaultEnabled;
@@ -337,8 +340,6 @@ public:
 			NeuralRendering::CharacterPolicy::kDefaultMinimumFacePixelSize;
 		float neuralCharacterRoiMargin =
 			NeuralRendering::CharacterPolicy::kDefaultRoiMargin;
-		uint neuralCharacterMaxRoiRegions =
-			NeuralRendering::CharacterPolicy::kDefaultMaximumRoiRegions;
 		uint neuralCharacterRoiHoldFrames =
 			NeuralRendering::CharacterPolicy::kDefaultRoiHoldFrames;
 		bool neuralCharacterDepthAwareFeatherEnabled =
@@ -1328,6 +1329,8 @@ public:
 		float2 outputSize;
 		float2 sourceTextureSize;
 		float2 sourceOffset;
+		float2 outputOffset;
+		float2 pad;
 	};
 
 	struct VRMenuLayerCompositeCB
@@ -1396,7 +1399,7 @@ public:
 
 	static_assert(sizeof(JitterCB) == 16, "JitterCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(UpscalingDataCB) == 64, "UpscalingDataCB layout changed; update HLSL cbuffer.");
-	static_assert(sizeof(DynamicResolutionStretchCB) == 32, "DynamicResolutionStretchCB layout changed; update HLSL cbuffer.");
+	static_assert(sizeof(DynamicResolutionStretchCB) == 48, "DynamicResolutionStretchCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(VRMenuLayerCompositeCB) == 16, "VRMenuLayerCompositeCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedPeripheryCB) == 96, "FoveatedPeripheryCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedCenterBlendCB) == 80, "FoveatedCenterBlendCB layout changed; update HLSL cbuffer.");
@@ -2114,6 +2117,7 @@ public:
 		uint32_t preparedEyeMask = 0;
 		uint32_t attemptedEyeMask = 0;
 		uint32_t successfulEyeMask = 0;
+		uint32_t bypassedEyeMask = 0;
 		uint32_t committedEyeMask = 0;
 		uint32_t dlssEyeMask = 0;
 		NeuralRendering::SubmitStereoSourceProof submitSourceProof{};
@@ -2308,11 +2312,11 @@ public:
 	bool GetFoveatedEncodeRegions(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, UpscaleMethod a_upscaleMethod, bool usePeripheryTAAProfile, bool usePeripheryTAAPath, std::array<FoveatedEncodeRegion, 2>& outRegions);
 	bool EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool copyDepthInput = true, bool allowFoveatedRegionEncode = false, bool* encodedFoveatedRegions = nullptr, uint32_t contractGeneration = 0);
 	bool StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight);
-	bool DispatchSubmitStageColorRegion(ID3D11ShaderResourceView* sourceSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t sourceTextureWidth, uint32_t sourceTextureHeight, uint32_t sourceOffsetX, uint32_t sourceOffsetY, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight, const char* perfLabel);
+	bool DispatchSubmitStageColorRegion(ID3D11ShaderResourceView* sourceSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t sourceTextureWidth, uint32_t sourceTextureHeight, uint32_t sourceOffsetX, uint32_t sourceOffsetY, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight, uint32_t outputOffsetX, uint32_t outputOffsetY, const char* perfLabel);
 	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3D11Resource* source, uint32_t width, uint32_t height, bool copyBindFlags, bool createSRV, bool createUAV, bool createRTV, const char* name, DXGI_FORMAT formatOverride = DXGI_FORMAT_UNKNOWN);
 	bool PrepareSubmitNeuralFloatResources(uint32_t eyeIndex, ID3D11Resource* source, uint32_t width, uint32_t height, bool directCommit, bool validateOnly);
 	ID3D11Resource* GetSubmitNeuralFloatEvaluationOutput(uint32_t eyeIndex, bool directCommit) const noexcept;
-	bool CommitSubmitNeuralFloatOutput(uint32_t eyeIndex, bool directCommit) noexcept;
+	bool CommitSubmitNeuralFloatOutput(uint32_t eyeIndex, bool directCommit, const NeuralRendering::ComputeSubrect& computeSubrect) noexcept;
 	bool EnsureFoveatedDepthGuideSRV(Texture2D& texture, const char* name);
 	void DestroySubmitStageDLSSSharpenerTextures();
 	void DestroyCommonUpscalingTextures();
@@ -2340,7 +2344,7 @@ public:
 		bool bypassed = false;
 		bool dlssEvaluated = false;
 	};
-	bool DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool protectPostProcessInput, ID3D11Resource* outputResource = nullptr, ID3D11UnorderedAccessView* outputUAV = nullptr, UINT submitSourceSubresource = 0, const D3D11_BOX* submitSourceBox = nullptr, NeuralCenterPhase neuralCenterPhase = NeuralCenterPhase::Disabled, bool neuralPairApplied = false, NeuralCenterDispatchResult* neuralResult = nullptr, bool neuralDirectCommit = false, bool neuralDirectOutputMayNeedRestore = false, NeuralRendering::RendererApplyArgs* neuralBatchArgs = nullptr);
+	bool DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool protectPostProcessInput, ID3D11Resource* outputResource = nullptr, ID3D11UnorderedAccessView* outputUAV = nullptr, UINT submitSourceSubresource = 0, const D3D11_BOX* submitSourceBox = nullptr, NeuralCenterPhase neuralCenterPhase = NeuralCenterPhase::Disabled, bool neuralEyeApplied = false, NeuralCenterDispatchResult* neuralResult = nullptr, bool neuralDirectCommit = false, bool neuralDirectOutputMayNeedRestore = false, NeuralRendering::RendererApplyArgs* neuralBatchArgs = nullptr);
 	struct FoveatedEyeDispatchParams
 	{
 		uint32_t inputWidthPerEye = 0;
@@ -2381,7 +2385,7 @@ public:
 	};
 	void ConfigureFoveatedPeripherySourceRegion(FoveatedEyeDispatchParams& params, const eastl::unique_ptr<Texture2D>& sourceTexture, uint32_t validWidth, uint32_t validHeight) const;
 	bool DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, const FoveatedEyeDispatchParams& params, NeuralCenterDispatchResult* neuralResult = nullptr);
-	bool DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX = 0, uint32_t depthInputBaseOffsetX = 0, uint32_t auxInputBaseOffsetX = 0, ID3D11UnorderedAccessView* outputUAV = nullptr, Streamline::DLSSViewportRole dlssViewportRole = Streamline::DLSSViewportRole::FoveatedCenter, UINT submitSourceSubresource = 0, const D3D11_BOX* submitSourceBox = nullptr, bool compositeCenter = true, NeuralCenterPhase neuralCenterPhase = NeuralCenterPhase::Disabled, bool neuralPairApplied = false, NeuralCenterDispatchResult* neuralResult = nullptr, bool neuralDirectCommit = false, bool neuralDirectOutputMayNeedRestore = false, NeuralRendering::RendererApplyArgs* neuralBatchArgs = nullptr);
+	bool DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX = 0, uint32_t depthInputBaseOffsetX = 0, uint32_t auxInputBaseOffsetX = 0, ID3D11UnorderedAccessView* outputUAV = nullptr, Streamline::DLSSViewportRole dlssViewportRole = Streamline::DLSSViewportRole::FoveatedCenter, UINT submitSourceSubresource = 0, const D3D11_BOX* submitSourceBox = nullptr, bool compositeCenter = true, NeuralCenterPhase neuralCenterPhase = NeuralCenterPhase::Disabled, bool neuralEyeApplied = false, NeuralCenterDispatchResult* neuralResult = nullptr, bool neuralDirectCommit = false, bool neuralDirectOutputMayNeedRestore = false, NeuralRendering::RendererApplyArgs* neuralBatchArgs = nullptr);
 	struct CharacterCompositeInputs
 	{
 		ID3D11ShaderResourceView* center = nullptr;
@@ -2419,6 +2423,7 @@ public:
 		uint32_t attemptedEyeMask = 0;
 		uint32_t appliedEyeMask = 0;
 		uint32_t committedEyeMask = 0;
+		uint32_t bypassedEyeMask = 0;
 		bool bypassedNoCharacters = false;
 	};
 	NeuralRendering::InsertionPoint GetLatchedNeuralRenderingInsertionPoint() noexcept;

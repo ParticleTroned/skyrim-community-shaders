@@ -1,20 +1,22 @@
 #include "Common/CharacterCategoryMask.hlsli"
 
 // Resolves the frozen active-stereo provenance tuple into one exact eye-local
-// CSX output-selection mask. Eligibility rectangles are visual-mask policy only;
-// they do not claim or request reduced provider inference dimensions.
+// CSX output-selection mask. The CPU unions these same eligibility rectangles
+// into the one Feature 18 compute subrect; this shader remains authoritative for
+// exact per-pixel face/skin/hair compositing inside that conservative rectangle.
 
 cbuffer CharacterMaskCB : register(b0)
 {
 	uint4 OutputAndSourceSize;  // output width/height, source eye width/height
 	uint4 SourceCrop;           // source eye base X, input min X/Y, input width
-	uint4 Options;              // input height, ROI count, feather radius, depth-aware feather
+	uint4 Options;              // input height, reserved, feather radius, depth-aware feather
 	float4 FeatherOptions;      // feather depth, test mode, diagnostics sample, reserved
 	float4 VisibilityOptions;   // rejection threshold, visibility rejection enabled, reserved
 	float4 DepthLinearization;  // far, near, far-near, far*near
 	float4 Jitter;              // current low-resolution pixel jitter in xy
 	float4 CategoryStrengths;   // face, skin, hair, reserved
-	float4 RoiRectangles[4];    // eye-local output pixels, min.xy/max.xy
+	float4 EligibilityRectangle; // eye-local output pixels, min.xy/max.xy
+	uint4 DispatchRegion;        // output-local offset.xy and dispatch extent.zw
 };
 
 Texture2D<unorm float2> AuthoredTuple : register(t0);
@@ -35,15 +37,8 @@ static const uint VisibilityRejectedPixels = 7u;
 
 bool IsInsideEligibilityRegion(float2 pixelCenter)
 {
-	[unroll] for (uint index = 0; index < 4; ++index)
-	{
-		if (index >= Options.y)
-			break;
-		const float4 region = RoiRectangles[index];
-		if (all(pixelCenter >= region.xy) && all(pixelCenter < region.zw))
-			return true;
-	}
-	return false;
+	return all(pixelCenter >= EligibilityRectangle.xy) &&
+	       all(pixelCenter < EligibilityRectangle.zw);
 }
 
 int2 GetGlobalSourcePixel(int2 localSourcePixel)
@@ -124,21 +119,23 @@ void CountCategory(uint category, uint firstCounter)
 	uint3 dispatchThreadId : SV_DispatchThreadID,
 	uint groupIndex : SV_GroupIndex) {
 	const bool measureCoverage = FeatherOptions.z > 0.5;
+	const bool insideDispatch = all(dispatchThreadId.xy < DispatchRegion.zw);
+	const uint2 outputPixelId = dispatchThreadId.xy + DispatchRegion.xy;
 	if (measureCoverage) {
 		if (groupIndex < 8u)
 			GroupCounters[groupIndex] = 0u;
 		GroupMemoryBarrierWithGroupSync();
 	}
 	const uint2 inputSize = uint2(SourceCrop.w, Options.x);
-	if (measureCoverage && all(dispatchThreadId.xy < inputSize)) {
+	if (measureCoverage && insideDispatch && all(outputPixelId < inputSize)) {
 		CountCategory(
-			ReadAuthoredCategory(int2(dispatchThreadId.xy)),
+			ReadAuthoredCategory(int2(outputPixelId)),
 			AuthoredFacePixels);
 	}
 
 	const uint2 outputSize = OutputAndSourceSize.xy;
-	if (all(dispatchThreadId.xy < outputSize)) {
-		const float2 outputPixel = float2(dispatchThreadId.xy) + 0.5;
+	if (insideDispatch && all(outputPixelId < outputSize)) {
+		const float2 outputPixel = float2(outputPixelId) + 0.5;
 		const float2 outputUv = outputPixel / float2(outputSize);
 		const float2 sourcePosition =
 			outputUv * float2(SourceCrop.w, Options.x) - 0.5 - Jitter.xy;
@@ -203,7 +200,7 @@ void CountCategory(uint category, uint firstCounter)
 		else if (testMode == 4)
 			mask = 1.0 - mask;
 		mask = saturate(mask);
-		CharacterSelectionMask[dispatchThreadId.xy] = mask;
+		CharacterSelectionMask[outputPixelId] = mask;
 		if (measureCoverage && mask > (0.5 / 255.0)) {
 			uint ignored;
 			InterlockedAdd(GroupCounters[MaskPixels], 1u, ignored);

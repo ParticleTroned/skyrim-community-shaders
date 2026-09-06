@@ -143,6 +143,7 @@ namespace NeuralRendering
 		std::uint32_t guideHeight = 0;
 		std::uint32_t outputWidth = 0;
 		std::uint32_t outputHeight = 0;
+		ComputeSubrect computeSubrect{};
 		std::uint32_t controlMaskWidth = 0;
 		std::uint32_t controlMaskHeight = 0;
 		std::uint32_t colorFormat = 0;
@@ -189,6 +190,9 @@ namespace NeuralRendering
 		std::uint32_t outputHeight = 0;
 		std::uint32_t controlMaskWidth = 0;
 		std::uint32_t controlMaskHeight = 0;
+		// Optional output-local Feature 18 compute rectangle. An invalid rectangle
+		// retains the configured centered/full-resource behavior.
+		ComputeSubrect computeSubrect{};
 		UpscalingDLSS::ViewportCrop viewportCrop{};
 		bool featureUpscaling = false;
 		Tuning tuning{};

@@ -35,14 +35,21 @@ RWTexture2D<float4> OutputColor : register(u0);
 		return;
 
 	float2 centerUV = (float2(localPos) + SourceOffset + 0.5) * InvSourceDim;
-	float4 centerColor = CenterColor.SampleLevel(LinearSampler, centerUV, 0);
+	float4 centerColor = 0.0;
 	if (CharacterSelectionMode != 0) {
 		// Feature 18 uses its normal automatic mask. CSX's authored strength is
 		// authoritative when selecting its output over the normal-DLSS baseline.
+		// Do not even sample the partial Feature 18 output outside that mask.
 		float characterWeight = saturate(
 			CharacterMask.SampleLevel(LinearSampler, centerUV, 0));
 		float4 baselineColor = BaselineCenterColor.SampleLevel(LinearSampler, centerUV, 0);
-		centerColor = lerp(baselineColor, centerColor, characterWeight);
+		centerColor = baselineColor;
+		if (characterWeight > 0.0) {
+			float4 neuralColor = CenterColor.SampleLevel(LinearSampler, centerUV, 0);
+			centerColor = lerp(baselineColor, neuralColor, characterWeight);
+		}
+	} else {
+		centerColor = CenterColor.SampleLevel(LinearSampler, centerUV, 0);
 	}
 
 	if (blendWeight >= 1.0) {

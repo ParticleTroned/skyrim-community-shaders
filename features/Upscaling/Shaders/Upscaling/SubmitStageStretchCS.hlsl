@@ -8,6 +8,8 @@ cbuffer DynamicResolutionStretchCB : register(b0)
 	float2 OutputSize;
 	float2 SourceTextureSize;
 	float2 SourceOffset;
+	float2 OutputOffset;
+	float2 Pad;
 };
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchThreadID : SV_DispatchThreadID) {
@@ -18,6 +20,7 @@ cbuffer DynamicResolutionStretchCB : register(b0)
 	uint2 outputSize = uint2(OutputSize);
 	if (dispatchThreadID.x >= outputSize.x || dispatchThreadID.y >= outputSize.y)
 		return;
+	uint2 outputPixelId = uint2(OutputOffset) + dispatchThreadID.xy;
 
 	float2 safeInputSize = max(InputSize, float2(1.0, 1.0));
 	float2 safeOutputSize = max(OutputSize, float2(1.0, 1.0));
@@ -33,7 +36,7 @@ cbuffer DynamicResolutionStretchCB : register(b0)
 	if (all(abs(InputSize - OutputSize) < float2(0.5, 0.5))) {
 		uint2 sourcePixel = uint2(safeSourceOffset) + dispatchThreadID.xy;
 		uint2 sourceMax = uint2(safeSourceOffset + validInputSize - float2(1.0, 1.0));
-		OutputTexture[dispatchThreadID.xy] = InputTexture.Load(int3(min(sourcePixel, sourceMax), 0));
+		OutputTexture[outputPixelId] = InputTexture.Load(int3(min(sourcePixel, sourceMax), 0));
 		return;
 	}
 
@@ -46,5 +49,5 @@ cbuffer DynamicResolutionStretchCB : register(b0)
 		sourceMin);
 	sourcePixel = clamp(sourcePixel, sourceMin, sourceMax);
 
-	OutputTexture[dispatchThreadID.xy] = InputTexture.SampleLevel(LinearSampler, sourcePixel / safeSourceTextureSize, 0.0);
+	OutputTexture[outputPixelId] = InputTexture.SampleLevel(LinearSampler, sourcePixel / safeSourceTextureSize, 0.0);
 }

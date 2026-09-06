@@ -29,6 +29,58 @@ namespace NeuralRendering
 			D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION;
 		constexpr std::size_t kMaximumTransitionResourceCount = 10;
 
+		struct CopyDepthGuideConstants
+		{
+			std::uint32_t offsetX = 0;
+			std::uint32_t offsetY = 0;
+			std::uint32_t width = 0;
+			std::uint32_t height = 0;
+		};
+
+		static_assert(sizeof(CopyDepthGuideConstants) == 16);
+
+		[[nodiscard]] ComputeSubrect ResolveComputeSubrect(
+			const RendererApplyArgs& a_args) noexcept
+		{
+			return a_args.computeSubrect.IsValid() ?
+			           a_args.computeSubrect :
+			           BuildCenteredComputeSubrect(
+					   a_args.outputWidth,
+					   a_args.outputHeight,
+					   a_args.tuning.singleSubrectScale);
+		}
+
+		[[nodiscard]] D3D11_BOX MakeCopyBox(
+			const ComputeSubrect& a_subrect) noexcept
+		{
+			return {
+				a_subrect.baseX,
+				a_subrect.baseY,
+				0u,
+				a_subrect.baseX + a_subrect.width,
+				a_subrect.baseY + a_subrect.height,
+				1u,
+			};
+		}
+
+		void CopyTextureSubrect(
+			ID3D11DeviceContext* a_context,
+			ID3D11Resource* a_destination,
+			ID3D11Resource* a_source,
+			const ComputeSubrect& a_subrect) noexcept
+		{
+			const auto box = MakeCopyBox(a_subrect);
+			a_context->CopySubresourceRegion(
+				a_destination,
+				0,
+				a_subrect.baseX,
+				a_subrect.baseY,
+				0,
+				a_source,
+				0,
+				&box);
+		}
+
 		void Increment(std::uint64_t& a_counter) noexcept
 		{
 			if (a_counter != std::numeric_limits<std::uint64_t>::max())
@@ -139,7 +191,8 @@ namespace NeuralRendering
 				left.tuning.skinStructureStrength == right.tuning.skinStructureStrength &&
 				left.tuning.style == right.tuning.style &&
 				left.tuning.useAutoMask == right.tuning.useAutoMask &&
-				left.tuning.uiCorrection == right.tuning.uiCorrection;
+				left.tuning.uiCorrection == right.tuning.uiCorrection &&
+				left.tuning.singleSubrectScale == right.tuning.singleSubrectScale;
 			if (SameIdentity(left.device, right.device) &&
 				SameIdentity(left.context, right.context) &&
 				left.frameId == right.frameId &&
@@ -168,7 +221,10 @@ namespace NeuralRendering
 			       validStrength(a_tuning.localToneStrength) &&
 			       validStrength(a_tuning.localStructureStrength) &&
 			       validStrength(a_tuning.skinStructureStrength) &&
-			       a_tuning.style <= 3;
+			       a_tuning.style <= 3 &&
+			       std::isfinite(a_tuning.singleSubrectScale) &&
+			       a_tuning.singleSubrectScale >= 0.25f &&
+			       a_tuning.singleSubrectScale <= 1.0f;
 		}
 
 		bool IsMotionVectorFormat(DXGI_FORMAT a_format) noexcept
@@ -287,6 +343,7 @@ namespace NeuralRendering
 				classInstanceCount_ = static_cast<UINT>(classInstances_.size());
 				context_->CSGetShader(
 					&shader_, classInstances_.data(), &classInstanceCount_);
+				context_->CSGetConstantBuffers(0, 1, &constantBuffer_);
 				context_->CSGetShaderResources(0, 1, &shaderResource_);
 				context_->CSGetUnorderedAccessViews(0, 1, &unorderedAccess_);
 				captured_ = true;
@@ -304,6 +361,7 @@ namespace NeuralRendering
 					context_->CSSetUnorderedAccessViews(0, 1, &nullUnorderedAccess, nullptr);
 					context_->CSSetShader(
 						shader_, classInstances_.data(), classInstanceCount_);
+					context_->CSSetConstantBuffers(0, 1, &constantBuffer_);
 					context_->CSSetShaderResources(0, 1, &shaderResource_);
 					context_->CSSetUnorderedAccessViews(0, 1, &unorderedAccess_, nullptr);
 				}
@@ -318,6 +376,8 @@ namespace NeuralRendering
 					shaderResource_->Release();
 				if (unorderedAccess_)
 					unorderedAccess_->Release();
+				if (constantBuffer_)
+					constantBuffer_->Release();
 			}
 
 			[[nodiscard]] bool Captured() const noexcept { return captured_; }
@@ -329,6 +389,7 @@ namespace NeuralRendering
 			UINT classInstanceCount_ = 0;
 			ID3D11ShaderResourceView* shaderResource_ = nullptr;
 			ID3D11UnorderedAccessView* unorderedAccess_ = nullptr;
+			ID3D11Buffer* constantBuffer_ = nullptr;
 			bool captured_ = false;
 		};
 
@@ -473,6 +534,7 @@ namespace NeuralRendering
 			std::uint32_t skinStructureStrength = 0;
 			std::uint32_t style = 0;
 			std::uintptr_t controlMaskIdentity = 0;
+			ComputeSubrect computeSubrect{};
 			bool featureUpscaling = false;
 			bool useAutoMask = false;
 			bool uiCorrection = false;
@@ -504,6 +566,10 @@ namespace NeuralRendering
 			TextureInfo output;
 			std::uintptr_t controlMaskIdentity = 0;
 			DXGI_FORMAT depthViewFormat = DXGI_FORMAT_UNKNOWN;
+			ComputeSubrect outputSubrect{};
+			ComputeSubrect colorSubrect{};
+			ComputeSubrect guideSubrect{};
+			ComputeSubrect controlMaskSubrect{};
 			ResourceKey resourceKey{};
 			HistoryKey historyKey{};
 		};
@@ -554,7 +620,8 @@ namespace NeuralRendering
 			const ValidatedResources& a_resources);
 		bool CopyDepthBatchLocked(
 			std::span<const RendererApplyArgs> a_args,
-			std::span<Slot* const> a_slots);
+			std::span<Slot* const> a_slots,
+			std::span<const ValidatedResources> a_resources);
 		bool TeardownBackendLocked(
 			bool a_resetShader,
 			bool a_destruction,
@@ -588,6 +655,7 @@ namespace NeuralRendering
 		ComPtr<ID3D11Device> device_;
 		ComPtr<ID3D11DeviceContext> context_;
 		ComPtr<ID3D11ComputeShader> copyDepthGuideCS_;
+		ComPtr<ID3D11Buffer> copyDepthGuideCB_;
 		bool copyDepthGuideCompileFailed_ = false;
 		RendererSnapshot snapshot_{};
 		bool runtimeReady_ = false;
@@ -639,6 +707,34 @@ namespace NeuralRendering
 			!validDimension(a_args.outputHeight)) {
 			return fail("one or more dimensions are zero or exceed the D3D11 Texture2D limit");
 		}
+		const bool hasExplicitSubrectValue =
+			a_args.computeSubrect.baseX || a_args.computeSubrect.baseY ||
+			a_args.computeSubrect.width || a_args.computeSubrect.height;
+		if (hasExplicitSubrectValue && !a_args.computeSubrect.IsValid())
+			return fail("the explicit Feature 18 compute rectangle is incomplete");
+		a_resources.outputSubrect = ResolveComputeSubrect(a_args);
+		if (!a_resources.outputSubrect.Fits(
+				a_args.outputWidth, a_args.outputHeight)) {
+			return fail("the Feature 18 compute rectangle exceeds the output extent");
+		}
+		a_resources.colorSubrect = MapComputeSubrect(
+			a_resources.outputSubrect,
+			a_args.outputWidth,
+			a_args.outputHeight,
+			a_args.colorWidth,
+			a_args.colorHeight);
+		a_resources.guideSubrect = MapComputeSubrect(
+			a_resources.outputSubrect,
+			a_args.outputWidth,
+			a_args.outputHeight,
+			a_args.guideWidth,
+			a_args.guideHeight);
+		if (!a_resources.colorSubrect.Fits(
+				a_args.colorWidth, a_args.colorHeight) ||
+			!a_resources.guideSubrect.Fits(
+				a_args.guideWidth, a_args.guideHeight)) {
+			return fail("the Feature 18 compute rectangle could not be mapped to its inputs");
+		}
 		const bool hasControlMask = a_args.controlMask != nullptr;
 		if (hasControlMask &&
 			(!validDimension(a_args.controlMaskWidth) ||
@@ -652,6 +748,18 @@ namespace NeuralRendering
 			(a_args.controlMaskWidth != a_args.outputWidth ||
 				a_args.controlMaskHeight != a_args.outputHeight)) {
 			return fail("the control mask must exactly match the Feature 18 output extent");
+		}
+		if (hasControlMask) {
+			a_resources.controlMaskSubrect = MapComputeSubrect(
+				a_resources.outputSubrect,
+				a_args.outputWidth,
+				a_args.outputHeight,
+				a_args.controlMaskWidth,
+				a_args.controlMaskHeight);
+			if (!a_resources.controlMaskSubrect.Fits(
+					a_args.controlMaskWidth, a_args.controlMaskHeight)) {
+				return fail("the Feature 18 compute rectangle could not be mapped to the control mask");
+			}
 		}
 		if (!a_args.viewportCrop.MatchesEvaluationExtents(
 				a_args.guideWidth,
@@ -834,6 +942,7 @@ namespace NeuralRendering
 			.skinStructureStrength = std::bit_cast<std::uint32_t>(a_args.tuning.skinStructureStrength),
 			.style = a_args.tuning.style,
 			.controlMaskIdentity = a_resources.controlMaskIdentity,
+			.computeSubrect = a_resources.outputSubrect,
 			.featureUpscaling = a_args.featureUpscaling,
 			.useAutoMask = a_args.tuning.useAutoMask,
 			.uiCorrection = a_args.tuning.uiCorrection,
@@ -958,6 +1067,10 @@ namespace NeuralRendering
 		snapshot_.guideHeight = a_args.guideHeight;
 		snapshot_.outputWidth = a_args.outputWidth;
 		snapshot_.outputHeight = a_args.outputHeight;
+		snapshot_.computeSubrect =
+			a_args.outputWidth && a_args.outputHeight ?
+				ResolveComputeSubrect(a_args) :
+				ComputeSubrect{};
 		snapshot_.controlMaskWidth = a_args.controlMaskWidth;
 		snapshot_.controlMaskHeight = a_args.controlMaskHeight;
 		snapshot_.featureUpscaling = a_args.featureUpscaling;
@@ -1181,6 +1294,7 @@ namespace NeuralRendering
 		context_.Reset();
 		if (a_resetShader) {
 			copyDepthGuideCS_.Reset();
+			copyDepthGuideCB_.Reset();
 			copyDepthGuideCompileFailed_ = false;
 		}
 		runtimeReady_ = false;
@@ -1475,10 +1589,13 @@ namespace NeuralRendering
 
 	bool Renderer::State::CopyDepthBatchLocked(
 		std::span<const RendererApplyArgs> a_args,
-		std::span<Slot* const> a_slots)
+		std::span<Slot* const> a_slots,
+		std::span<const ValidatedResources> a_resources)
 	{
-		if (a_args.empty() || a_args.size() != a_slots.size())
+		if (a_args.empty() || a_args.size() != a_slots.size() ||
+			a_args.size() != a_resources.size()) {
 			return false;
+		}
 		if (!copyDepthGuideCS_ && !copyDepthGuideCompileFailed_) {
 			copyDepthGuideCS_.Attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
 				L"Data/Shaders/Upscaling/NeuralRendering/CopyDepthGuideCS.hlsl",
@@ -1492,6 +1609,19 @@ namespace NeuralRendering
 		auto* shader = copyDepthGuideCS_.Get();
 		if (!shader)
 			return false;
+		if (!copyDepthGuideCB_) {
+			const D3D11_BUFFER_DESC desc{
+				.ByteWidth = sizeof(CopyDepthGuideConstants),
+				.Usage = D3D11_USAGE_DEFAULT,
+				.BindFlags = D3D11_BIND_CONSTANT_BUFFER,
+			};
+			if (FAILED(a_args.front().device->CreateBuffer(
+					&desc, nullptr, &copyDepthGuideCB_))) {
+				return false;
+			}
+			Util::SetResourceName(
+				copyDepthGuideCB_.Get(), "NeuralRendering::CopyDepthGuideCB");
+		}
 
 		ComputeStateGuard stateGuard(a_args.front().context);
 		if (!stateGuard.Captured())
@@ -1500,16 +1630,28 @@ namespace NeuralRendering
 		a_args.front().context->CSSetShader(shader, nullptr, 0);
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
+			const auto& roi = a_resources[index].guideSubrect;
+			const CopyDepthGuideConstants constants{
+				.offsetX = roi.baseX,
+				.offsetY = roi.baseY,
+				.width = roi.width,
+				.height = roi.height,
+			};
+			a_args.front().context->UpdateSubresource(
+				copyDepthGuideCB_.Get(), 0, nullptr, &constants, 0, 0);
+			auto* constantBuffer = copyDepthGuideCB_.Get();
 			auto* source = a_args[index].depthGuideSRV;
 			auto* destination = a_slots[index]->depth.uav11.Get();
+			a_args.front().context->CSSetConstantBuffers(
+				0, 1, &constantBuffer);
 			a_args.front().context->CSSetShaderResources(0, 1, &source);
 			a_args.front().context->CSSetUnorderedAccessViews(
 				0, 1, &destination, nullptr);
 			{
 				CS_PROFILE_SCOPE("Upscaling::DLSSNRDepthGuide");
 				a_args.front().context->Dispatch(
-					(a_args[index].guideWidth + 7u) / 8u,
-					(a_args[index].guideHeight + 7u) / 8u,
+					(roi.width + 7u) / 8u,
+					(roi.height + 7u) / 8u,
 					1);
 			}
 		}
@@ -1708,8 +1850,11 @@ namespace NeuralRendering
 		activeStage_ = RendererStage::ColorInputCopy;
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
-			a_args.front().context->CopyResource(
-				slots[index]->color.resource11.Get(), resources[index].color.texture.Get());
+			CopyTextureSubrect(
+				a_args.front().context,
+				slots[index]->color.resource11.Get(),
+				resources[index].color.texture.Get(),
+				resources[index].colorSubrect);
 		}
 		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
 			return FailLocked(
@@ -1722,7 +1867,10 @@ namespace NeuralRendering
 		snapshot_.lastCompletedStage = RendererStage::ColorInputCopy;
 
 		activeStage_ = RendererStage::DepthGuideCopy;
-		if (!CopyDepthBatchLocked(a_args, std::span(slots.data(), a_args.size()))) {
+		if (!CopyDepthBatchLocked(
+				a_args,
+				std::span(slots.data(), a_args.size()),
+				std::span(resources.data(), a_args.size()))) {
 			return FailLocked(
 				RendererStage::DepthGuideCopy,
 				E_FAIL,
@@ -1745,9 +1893,11 @@ namespace NeuralRendering
 		activeStage_ = RendererStage::MotionVectorCopy;
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
-			a_args.front().context->CopyResource(
+			CopyTextureSubrect(
+				a_args.front().context,
 				slots[index]->motionVectors.resource11.Get(),
-				resources[index].motionVectors.texture.Get());
+				resources[index].motionVectors.texture.Get(),
+				resources[index].guideSubrect);
 		}
 		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
 			return FailLocked(
@@ -1766,9 +1916,11 @@ namespace NeuralRendering
 				if (!a_args[index].controlMask)
 					continue;
 				SetActiveFeatureSlotLocked(a_args[index].featureSlot);
-				a_args.front().context->CopyResource(
+				CopyTextureSubrect(
+					a_args.front().context,
 					slots[index]->controlMask.resource11.Get(),
-					resources[index].controlMask.texture.Get());
+					resources[index].controlMask.texture.Get(),
+					resources[index].controlMaskSubrect);
 				Increment(snapshot_.counters.controlMaskCopies);
 			}
 			if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
@@ -1823,10 +1975,7 @@ namespace NeuralRendering
 				.resource = slots[index]->output.resource12.Get(),
 				.featureState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
 			};
-			Add(
-				pixelCount,
-				static_cast<std::uint64_t>(a_args[index].outputWidth) *
-					a_args[index].outputHeight);
+			Add(pixelCount, resources[index].outputSubrect.Area());
 			featureSlotMask |= 1u << a_args[index].featureSlot;
 		}
 		const auto resourceSpan =
@@ -1912,6 +2061,7 @@ namespace NeuralRendering
 				args.outputHeight,
 				args.controlMaskWidth,
 				args.controlMaskHeight,
+				resources[index].outputSubrect,
 				motionVectorScale.x,
 				motionVectorScale.y,
 				args.featureUpscaling,
@@ -2001,8 +2151,11 @@ namespace NeuralRendering
 		const auto outputCommitStarted = std::chrono::steady_clock::now();
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
-			a_args.front().context->CopyResource(
-				resources[index].output.texture.Get(), slots[index]->output.resource11.Get());
+			CopyTextureSubrect(
+				a_args.front().context,
+				resources[index].output.texture.Get(),
+				slots[index]->output.resource11.Get(),
+				resources[index].outputSubrect);
 		}
 		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
 			return FailLocked(

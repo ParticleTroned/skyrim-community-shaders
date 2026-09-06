@@ -100,6 +100,13 @@ int main()
 	static_assert(NeuralRendering::IsOrderedStereoFeatureSlotPair(2u, 3u));
 	static_assert(!NeuralRendering::IsOrderedStereoFeatureSlotPair(1u, 0u));
 	static_assert(!NeuralRendering::IsOrderedStereoFeatureSlotPair(0u, 2u));
+	static_assert(NeuralRendering::IsCompleteNeuralStereoResult(0b11u, 0u));
+	static_assert(NeuralRendering::IsCompleteNeuralStereoResult(0b01u, 0b10u));
+	static_assert(NeuralRendering::IsCompleteNeuralStereoResult(0b10u, 0b01u));
+	static_assert(!NeuralRendering::IsCompleteNeuralStereoResult(0u, 0b11u));
+	static_assert(!NeuralRendering::IsCompleteNeuralStereoResult(0b01u, 0u));
+	static_assert(!NeuralRendering::IsCompleteNeuralStereoResult(0b01u, 0b01u));
+	static_assert(!NeuralRendering::IsCompleteNeuralStereoResult(0b100u, 0b11u));
 	static_assert(NeuralRendering::IsSequentialFrame(42u, 43u));
 	static_assert(!NeuralRendering::IsSequentialFrame(42u, 42u));
 	static_assert(!NeuralRendering::IsSequentialFrame(42u, 44u));

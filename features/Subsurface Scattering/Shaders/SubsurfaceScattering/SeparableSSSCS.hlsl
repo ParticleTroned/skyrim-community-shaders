@@ -72,9 +72,10 @@ cbuffer PerFrameSSS : register(b1)
 		float humanClass = MaskTexture[DTid.xy].y;
 		bool humanProfile = humanClass > 0.5;
 
+		float4 originalColor = SSSRW[DTid.xy];
 		float4 color = SSSSBlurCS(DTid.xy, texCoord, float2(0.0, 1.0), sssAmount, humanProfile);
 		color.rgb = Color::IrradianceToGamma(color.rgb);
-		SSSRW[DTid.xy] = float4(color.rgb, 1.0);
+		SSSRW[DTid.xy] = float4(color.rgb, originalColor.a);
 	}
 
 #endif

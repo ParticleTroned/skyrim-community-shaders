@@ -741,8 +741,9 @@ ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderBurley()
 
 void SubsurfaceScattering::DataLoaded()
 {
-	if (auto* form = RE::TESForm::LookupByEditorID("IsBeastRace"))
-		isBeastRaceKeyword = form->As<RE::BGSKeyword>();
+	isBeastRaceKeyword = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("IsBeastRace");
+	if (!isBeastRaceKeyword)
+		logger::warn("[Subsurface Scattering] IsBeastRace keyword was not found; using conservative race classification");
 }
 
 void SubsurfaceScattering::PostPostLoad()
@@ -766,7 +767,7 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 			if (geometry) {
 				if (auto userData = geometry->GetUserData()) {
 					if (auto actor = userData->As<RE::Actor>()) {
-						if (auto race = actor->GetRace())
+						if (auto race = actor->GetRace(); race && isBeastRaceKeyword)
 							isBeastRace = race->HasKeyword(isBeastRaceKeyword);
 						if (auto base = actor->GetActorBase())
 							isFemale = GetNPCIsFemale(base);

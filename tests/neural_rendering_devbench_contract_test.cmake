@@ -704,19 +704,24 @@ foreach(_status_contract IN ITEMS
     [[{ "lateNeuralBlendAttempts", route.lateNeuralBlendAttemptCount[eye] }]]
     [[{ "lateNeuralBlendSuccesses", route.lateNeuralBlendSuccessCount[eye] }]]
     [[{ "unexpectedPassCountDetected", (route.unexpectedPassEyeMask & eyeBit) != 0 }]]
+    [[{ "sourceWorldFrame", eye.sourceWorldFrame }]]
+    [[{ "sourceWorldFrame", snapshot.sourceWorldFrame }]]
     [[{ "knownMenuContext", temporalAdmission.menuContextActive }]]
     [[{ "hardMenuBlocked", route.hardMenuBlocked }]]
     [[{ "lateMenuCompositeReady", route.lateMenuCompositeReady }]]
     [[{ "csOverlayOpen", route.csOverlayOpen }]]
     [[{ "menuContinuityAllowed", route.menuContinuityAllowed }]]
     [[{ "gamePaused", temporalAdmission.gamePaused }]]
-    [[{ "pausedSubmitContinuityAllowed", temporalAdmission.pausedSubmitContinuityAllowed }]]
+    [[{ "pausedContinuityAllowed", temporalAdmission.pausedContinuityAllowed }]]
+    [[{ "pausedSubmitContinuityAllowed", temporalAdmission.pausedContinuityAllowed }]]
     [[{ "worldFrameStateAvailable", temporalAdmission.worldFrameStateAvailable }]]
     [[{ "worldFrameStarted", temporalAdmission.worldFrameStarted }]]
     [[{ "worldFrameCompleted", temporalAdmission.worldFrameCompleted }]]
+    [[{ "retainedWorldFrame", temporalAdmission.retainedWorldFrame }]]
     [[{ "temporalSourceFresh", temporalAdmission.temporalSourceFresh }]]
     [[{ "temporalAdmission", {]]
     [[{ "admitted", temporalAdmission.admitted }]]
+    [[{ "sourceWorldFrame", temporalAdmission.sourceWorldFrame }]]
     [[{ "blockReason", NeuralRendering::GetTemporalAdmissionBlockReasonName(temporalAdmission.blockReason) }]]
     [[{ "currentFrame", temporalAdmission.currentFrame }]]
     [[{ "lastWorldRenderFrame", temporalAdmission.lastWorldRenderFrame }]]
@@ -860,7 +865,7 @@ string(REGEX REPLACE "[\r\n\t ]+" " " _submit_stage_normalized "${_submit_stage}
 
 string(FIND
     "${_submit_stage}"
-    [[IsNeuralRenderingMenuSuppressed()]]
+    [[IsNeuralRenderingMenuSuppressed(]]
     _broad_submit_menu_suppression
 )
 if(NOT _broad_submit_menu_suppression EQUAL -1)
@@ -868,6 +873,22 @@ if(NOT _broad_submit_menu_suppression EQUAL -1)
         "Submit NR must not inherit the broad main-route menu suppression policy"
     )
 endif()
+
+foreach(_obsolete_temporal_source_contract IN ITEMS
+    [[IsNeuralRenderingMenuSuppressed(]]
+    [[.pausedSubmitContinuityAllowed]]
+)
+    string(FIND
+        "${_source_contract_text}"
+        "${_obsolete_temporal_source_contract}"
+        _obsolete_temporal_source_contract_position
+    )
+    if(NOT _obsolete_temporal_source_contract_position EQUAL -1)
+        message(FATAL_ERROR
+            "Obsolete temporal-admission source contract remains: ${_obsolete_temporal_source_contract}"
+        )
+    endif()
+endforeach()
 
 string(FIND
     "${_submit_stage}"
@@ -890,7 +911,7 @@ foreach(_submit_menu_contract IN ITEMS
     [[const bool csOverlayOpen =]]
     [[const bool menuContinuityAllowed =]]
     [[.menuContextActive = hardMenuBlocked]]
-    [[.pausedSubmitContinuityAllowed = menuContinuityAllowed]]
+    [[.pausedContinuityAllowed = menuContinuityAllowed]]
 )
     string(FIND
         "${_submit_stage_normalized}"
@@ -984,7 +1005,7 @@ endif()
 foreach(_continuity_term IN ITEMS
     [[!hardMenuBlocked]]
     [[!currentMenuPresentationContext]]
-    [[lateMenuCompositeReady && !csOverlayOpen]]
+    [[lateMenuCompositeReady]]
 )
     string(FIND
         "${_menuContinuityAllowed_expression}"
@@ -994,6 +1015,51 @@ foreach(_continuity_term IN ITEMS
     if(_continuity_term_position EQUAL -1)
         message(FATAL_ERROR
             "Submit menu-continuity predicate is missing: ${_continuity_term}"
+        )
+    endif()
+endforeach()
+
+string(FIND
+    "${_upscaling}"
+    [[void Upscaling::BeginVRMenuFinalCompositeFrame(]]
+    _menu_frame_begin
+)
+string(FIND
+    "${_upscaling}"
+    [[void Upscaling::PoisonVRMenuFrameTransaction(]]
+    _menu_frame_end
+)
+if(_menu_frame_begin EQUAL -1 OR _menu_frame_end EQUAL -1 OR
+    _menu_frame_end LESS_EQUAL _menu_frame_begin)
+    message(FATAL_ERROR "Unable to isolate the combined menu guard")
+endif()
+math(EXPR _menu_frame_length "${_menu_frame_end} - ${_menu_frame_begin}")
+string(SUBSTRING
+    "${_upscaling}"
+    ${_menu_frame_begin}
+    ${_menu_frame_length}
+    _menu_frame_section
+)
+string(REGEX REPLACE
+    "[\r\n\t ]+"
+    " "
+    _menu_frame_section_normalized
+    "${_menu_frame_section}"
+)
+foreach(_combined_menu_guard_contract IN ITEMS
+    [[vrMenuCommittedLayerValid && (!menuPresentationContextActive || communityShadersMenuOpen)]]
+    [[communityShadersMenuOpen ? "community-shaders-menu-open" :]]
+    [[if (communityShadersMenuOpen && vrMenuFrameTransaction.frame == a_frame)]]
+    [[PoisonVRMenuFrameTransaction("community-shaders-menu-open-during-transaction")]]
+)
+    string(FIND
+        "${_menu_frame_section_normalized}"
+        "${_combined_menu_guard_contract}"
+        _combined_menu_guard_contract_position
+    )
+    if(_combined_menu_guard_contract_position EQUAL -1)
+        message(FATAL_ERROR
+            "Combined game-menu and CS-overlay guard is missing: ${_combined_menu_guard_contract}"
         )
     endif()
 endforeach()
@@ -1095,7 +1161,7 @@ endif()
 foreach(_source_contract IN ITEMS
     [[neuralPrepared = true;]]
     [[submitStageNeuralStereoState.outputsReady = false;]]
-    [[bool IsNeuralRenderingMenuSuppressed()]]
+    [[bool IsNeuralRenderingHardMenuBlocked(]]
     [[neuralTemporalAdmissionLatch.compare_exchange_weak(]]
     [[phase == NeuralCenterPhase::Resolve ?]]
     [[(neuralEvaluation.successfulEyeMask & eyeBit) != 0]]
@@ -1112,7 +1178,7 @@ foreach(_source_contract IN ITEMS
     [[CS_PROFILE_SCOPE("Upscaling::DLSS5CharacterCategoryCapture")]]
     [[static_cast<std::int32_t>(a_frame - observationFrame_) <= 0]]
     [[character category capture arrived after a newer observation frame]]
-    [[capturedFrame_ != a_args.frameId]]
+    [[capturedFrame_ != sourceWorldFrame]]
     [[const bool logicalEmptyCapture = state_->capturedCategoriesEmpty_;]]
     [[if (cpuProvenEmpty || logicalEmptyCapture) {]]
     [[state_->ClearMask(]]
@@ -1199,6 +1265,66 @@ foreach(_source_contract IN ITEMS
     if(_source_position EQUAL -1)
         message(FATAL_ERROR
             "Neural Rendering source contract is missing: ${_source_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_source_world_frame_threading_contract IN ITEMS
+    [[result.sourceWorldFrame = result.retainedWorldFrame ?]]
+    [[GetTemporalSourceFrame(]]
+    [[admission.sourceWorldFrame == admission.currentFrame]]
+    [[params.neuralSourceFrame = neuralSourceFrame;]]
+    [[args.sourceWorldFrame = neuralSourceFrame;]]
+    [[args.sourceWorldFrame = a_neuralSourceFrame;]]
+    [[.sourceWorldFrame = a_sourceWorldFrame,]]
+    [[const bool retainedSource =]]
+    [[sourceArgs.frameId = sourceWorldFrame;]]
+    [[slot.prepareKey.sourceWorldFrame != a_sourceWorldFrame]]
+    [[submitStageNeuralStereoState.temporalAdmission.sourceWorldFrame]]
+	[[a_eyeState.compositorCycle == a_compositorCycleToken]]
+	[[a_eyeState.sourceWorldFrame ==]]
+	[[neuralTemporalAdmission.sourceWorldFrame]]
+	[[a_eyeState.temporalAdmissionAdmitted ==]]
+	[[a_eyeState.retainedWorldFrame ==]]
+	[[a_eyeState.neuralSettingsKey == neuralSettingsKey]]
+	[[eyeState.sourceWorldFrame =]]
+	[[submitStageVendorEyeState[eyeIndex].sourceWorldFrame =]]
+	[[vendorEyeStateMatchesCurrentContract(targetEyeState)]]
+	[[params.neuralGeneration = std::max<uint64_t>(neuralGeneration, 1u);]]
+)
+    string(FIND
+        "${_source_contract_text}"
+        "${_source_world_frame_threading_contract}"
+        _source_world_frame_threading_contract_position
+    )
+    if(_source_world_frame_threading_contract_position EQUAL -1)
+        message(FATAL_ERROR
+            "Retained source-world-frame threading contract is missing: ${_source_world_frame_threading_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_character_content_correlation_contract IN ITEMS
+    [[std::array<std::uint64_t, 4> contentSerials{};]]
+    [[std::uint64_t contentSerial = 0;]]
+    [[std::uint64_t maskCoverageContentSerial = 0;]]
+    [[AllocatePreparedContentSerial()]]
+    [[slot.contentSerial = state_->AllocatePreparedContentSerial();]]
+    [[preparedFrame->contentSerials[slotIndex] != slot.contentSerial]]
+    [[preparedFrame->contentSerials[a_featureSlot] ==]]
+    [[a_prepared.frame == eye.frame]]
+    [[coveragePreparation->sourceWorldFrames[eye.maskCoverageFeatureSlot] ==]]
+    [[coveragePreparation->contentSerials[eye.maskCoverageFeatureSlot] ==]]
+    [[readback.contentSerial == slot.contentSerial]]
+)
+    string(FIND
+        "${_source_contract_text}\n${_bridge}"
+        "${_character_content_correlation_contract}"
+        _character_content_correlation_contract_position
+    )
+    if(_character_content_correlation_contract_position EQUAL -1)
+        message(FATAL_ERROR
+            "Character mask content-correlation contract is missing: ${_character_content_correlation_contract}"
         )
     endif()
 endforeach()
@@ -2285,6 +2411,52 @@ list(LENGTH _stereo_preflight_slot_attributions _stereo_preflight_slot_count)
 if(_stereo_preflight_slot_count LESS 2)
     message(FATAL_ERROR
         "Stereo preflight exceptions do not preserve the active right-eye slot"
+    )
+endif()
+
+foreach(_renderer_source_frame_contract IN ITEMS
+    [[std::uint32_t sourceWorldFrame =]]
+    [[left.sourceWorldFrame == right.sourceWorldFrame]]
+    [[a_args.sourceWorldFrame == invalidFrame]]
+    [[a_args.sourceWorldFrame > a_args.frameId]]
+    [[IsSourceWorldFrameContinuous(]]
+    [[static_assert(!IsSourceWorldFrameContinuous(41u, 41u));]]
+    [[static_assert(IsSourceWorldFrameContinuous(41u, 42u));]]
+    [[slot.lastSuccessfulSourceWorldFrame]]
+    [[slots[index]->lastSuccessfulSourceWorldFrame =]]
+    [[a_args[index].sourceWorldFrame]]
+    [[snapshot_.sourceWorldFrame = a_args.sourceWorldFrame;]]
+)
+    string(FIND
+        "${_renderer_header}\n${_renderer_source}"
+        "${_renderer_source_frame_contract}"
+        _renderer_source_frame_contract_position
+    )
+    if(_renderer_source_frame_contract_position EQUAL -1)
+        message(FATAL_ERROR
+            "Renderer source-world-frame contract is missing: ${_renderer_source_frame_contract}"
+        )
+    endif()
+endforeach()
+
+string(FIND
+    "${_renderer_source}"
+    [[.frameId = a_args.front().frameId,]]
+    _renderer_timing_evaluation_frame_position
+)
+if(_renderer_timing_evaluation_frame_position EQUAL -1)
+    message(FATAL_ERROR
+        "Feature 18 timing must remain keyed to the current evaluation frame"
+    )
+endif()
+string(FIND
+    "${_renderer_source}"
+    [[.frameId = a_args.front().sourceWorldFrame,]]
+    _renderer_timing_source_frame_position
+)
+if(NOT _renderer_timing_source_frame_position EQUAL -1)
+    message(FATAL_ERROR
+        "Feature 18 timing must not be rewritten to the retained source frame"
     )
 endif()
 

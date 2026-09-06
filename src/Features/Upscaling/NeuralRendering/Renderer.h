@@ -135,6 +135,8 @@ namespace NeuralRendering
 		std::uint32_t featureSlot = 0;
 		std::uint32_t failureFeatureSlot = Runtime::kFeatureSlotCount;
 		std::uint32_t frameId = std::numeric_limits<std::uint32_t>::max();
+		std::uint32_t sourceWorldFrame =
+			std::numeric_limits<std::uint32_t>::max();
 		std::uint64_t generation = 0;
 		InsertionPoint insertionPoint = kDefaultInsertionPoint;
 		std::uint32_t colorWidth = 0;
@@ -172,7 +174,11 @@ namespace NeuralRendering
 		ID3D11Device* device = nullptr;
 		ID3D11DeviceContext* context = nullptr;
 		std::uint32_t featureSlot = 0;
+		/** Current presentation/evaluation frame used by Feature 18 timing. */
 		std::uint32_t frameId = std::numeric_limits<std::uint32_t>::max();
+		/** Immutable world frame represented by the supplied temporal resources. */
+		std::uint32_t sourceWorldFrame =
+			std::numeric_limits<std::uint32_t>::max();
 		std::uint64_t generation = 0;
 		InsertionPoint insertionPoint = kDefaultInsertionPoint;
 		ID3D11Resource* colorInput = nullptr;

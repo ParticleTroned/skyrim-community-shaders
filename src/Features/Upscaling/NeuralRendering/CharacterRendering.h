@@ -141,6 +141,8 @@ namespace NeuralRendering
 	struct CharacterEyeSnapshot
 	{
 		std::uint32_t frame = std::numeric_limits<std::uint32_t>::max();
+		std::uint32_t sourceWorldFrame = std::numeric_limits<std::uint32_t>::max();
+		std::uint64_t contentSerial = 0;
 		std::uint32_t featureSlot = 0;
 		std::uint32_t evaluationWidth = 0;
 		std::uint32_t evaluationHeight = 0;
@@ -165,6 +167,7 @@ namespace NeuralRendering
 		std::uint32_t maskCoverageFeatureSlot = 4;
 		std::uint32_t maskCoverageWidth = 0;
 		std::uint32_t maskCoverageHeight = 0;
+		std::uint64_t maskCoverageContentSerial = 0;
 		bool maskCoverageReady = false;
 		bool maskCoverageMatchesCurrentPolicy = false;
 		bool zeroCoverageBypassRequested = false;
@@ -208,6 +211,14 @@ namespace NeuralRendering
 		std::uint32_t successfulSlotMask = 0;
 		std::uint32_t bypassedSlotMask = 0;
 		std::uint32_t abortedSlotMask = 0;
+		std::array<std::uint32_t, 4> sourceWorldFrames{
+			std::numeric_limits<std::uint32_t>::max(),
+			std::numeric_limits<std::uint32_t>::max(),
+			std::numeric_limits<std::uint32_t>::max(),
+			std::numeric_limits<std::uint32_t>::max(),
+		};
+		std::array<std::uint64_t, 4> generations{};
+		std::array<std::uint64_t, 4> contentSerials{};
 		std::array<std::uint32_t, 4> widths{};
 		std::array<std::uint32_t, 4> heights{};
 	};
@@ -266,7 +277,12 @@ namespace NeuralRendering
 		ID3D11ShaderResourceView* depthGuide = nullptr;
 		std::uint32_t eyeIndex = 0;
 		std::uint32_t featureSlot = 0;
+		/** Feature 18 evaluation frame; remains monotonic during retained-menu reuse. */
 		std::uint32_t frameId = std::numeric_limits<std::uint32_t>::max();
+		/** Correlated world/capture frame used to build or reuse the authored mask. */
+		std::uint32_t sourceWorldFrame = std::numeric_limits<std::uint32_t>::max();
+		/** Resource-contract generation that owns the prepared mask. */
+		std::uint64_t generation = 0;
 		std::uint32_t outputWidth = 0;
 		std::uint32_t outputHeight = 0;
 		UpscalingDLSS::ViewportCrop viewportCrop{};
@@ -324,6 +340,8 @@ namespace NeuralRendering
 		/** Records the authoritative outcome for prepared Feature 18 slots. */
 		void ResolveFeature18Disposition(
 			std::uint32_t a_frameId,
+			std::uint32_t a_sourceWorldFrame,
+			std::uint64_t a_generation,
 			std::uint32_t a_preparedFeatureSlotMask,
 			std::uint32_t a_evaluatedFeatureSlotMask,
 			std::uint32_t a_successfulFeatureSlotMask,
@@ -340,17 +358,21 @@ namespace NeuralRendering
 		[[nodiscard]] Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>
 		GetDebugMaskSrv(
 			std::uint32_t a_eyeIndex) const noexcept;
-		/** Returns a mask only when the requested slot matches this exact frame and size. */
+		/** Returns a mask only for the exact evaluation/source/generation and size. */
 		[[nodiscard]] Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>
 		GetPreparedMaskSrv(
 			std::uint32_t a_featureSlot,
 			std::uint32_t a_frameId,
+			std::uint32_t a_sourceWorldFrame,
+			std::uint64_t a_generation,
 			std::uint32_t a_width,
 			std::uint32_t a_height) const noexcept;
 		/** Returns the matching output-local compute rectangle for a prepared mask. */
 		[[nodiscard]] ComputeSubrect GetPreparedComputeSubrect(
 			std::uint32_t a_featureSlot,
 			std::uint32_t a_frameId,
+			std::uint32_t a_sourceWorldFrame,
+			std::uint64_t a_generation,
 			std::uint32_t a_width,
 			std::uint32_t a_height) const noexcept;
 

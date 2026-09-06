@@ -29,6 +29,19 @@ namespace NeuralRendering
 			D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION;
 		constexpr std::size_t kMaximumTransitionResourceCount = 10;
 
+		[[nodiscard]] constexpr bool IsSourceWorldFrameContinuous(
+			std::uint32_t a_previous,
+			std::uint32_t a_current) noexcept
+		{
+			return IsSequentialFrame(a_previous, a_current);
+		}
+
+		// Re-evaluating one frozen frame also reuses that frame's motion vectors,
+		// so it must begin from reset history instead of accumulating them again.
+		static_assert(!IsSourceWorldFrameContinuous(41u, 41u));
+		static_assert(IsSourceWorldFrameContinuous(41u, 42u));
+		static_assert(!IsSourceWorldFrameContinuous(41u, 43u));
+
 		struct CopyDepthGuideConstants
 		{
 			std::uint32_t offsetX = 0;
@@ -45,9 +58,9 @@ namespace NeuralRendering
 			return a_args.computeSubrect.IsValid() ?
 			           a_args.computeSubrect :
 			           BuildCenteredComputeSubrect(
-					   a_args.outputWidth,
-					   a_args.outputHeight,
-					   a_args.tuning.singleSubrectScale);
+						   a_args.outputWidth,
+						   a_args.outputHeight,
+						   a_args.tuning.singleSubrectScale);
 		}
 
 		[[nodiscard]] D3D11_BOX MakeCopyBox(
@@ -196,6 +209,7 @@ namespace NeuralRendering
 			if (SameIdentity(left.device, right.device) &&
 				SameIdentity(left.context, right.context) &&
 				left.frameId == right.frameId &&
+				left.sourceWorldFrame == right.sourceWorldFrame &&
 				left.generation == right.generation &&
 				left.insertionPoint == right.insertionPoint &&
 				left.featureUpscaling == right.featureUpscaling &&
@@ -209,7 +223,7 @@ namespace NeuralRendering
 				return {};
 			}
 
-			return "stereo eyes require one device, context, frame, generation, insertion point, feature mode, reset policy, tuning, ordered route pair, and disjoint resources";
+			return "stereo eyes require one device, context, frame, generation, insertion point, feature mode, reset policy, tuning, ordered route pair, source world frame, and disjoint resources";
 		}
 
 		bool IsFiniteTuning(const Tuning& a_tuning) noexcept
@@ -553,6 +567,8 @@ namespace NeuralRendering
 			HistoryKey historyKey{};
 			std::uint32_t lastSuccessfulFrame =
 				std::numeric_limits<std::uint32_t>::max();
+			std::uint32_t lastSuccessfulSourceWorldFrame =
+				std::numeric_limits<std::uint32_t>::max();
 			bool resourcesValid = false;
 			bool historyValid = false;
 		};
@@ -687,6 +703,14 @@ namespace NeuralRendering
 				"feature slot {} is outside [0,{})",
 				a_args.featureSlot,
 				Runtime::kFeatureSlotCount));
+		const auto invalidFrame = std::numeric_limits<std::uint32_t>::max();
+		if (a_args.frameId == invalidFrame)
+			return fail("Feature 18 evaluation frame is invalid");
+		if (a_args.sourceWorldFrame == invalidFrame ||
+			a_args.sourceWorldFrame > a_args.frameId) {
+			return fail(
+				"Feature 18 source world frame is invalid or newer than its evaluation frame");
+		}
 		if (!a_args.generation)
 			return fail("feature-slot generation must be nonzero");
 		if (!IsValidInsertionPoint(a_args.insertionPoint))
@@ -1059,6 +1083,7 @@ namespace NeuralRendering
 	{
 		snapshot_.featureSlot = a_args.featureSlot;
 		snapshot_.frameId = a_args.frameId;
+		snapshot_.sourceWorldFrame = a_args.sourceWorldFrame;
 		snapshot_.generation = a_args.generation;
 		snapshot_.insertionPoint = a_args.insertionPoint;
 		snapshot_.colorWidth = a_args.colorWidth;
@@ -1707,8 +1732,14 @@ namespace NeuralRendering
 			const auto& args = a_args[index];
 			SetActiveFeatureSlotLocked(args.featureSlot);
 			const auto& slot = slots_[args.featureSlot];
-			const bool discontinuous = slot.historyValid &&
-			                           !IsSequentialFrame(slot.lastSuccessfulFrame, args.frameId);
+			const bool evaluationDiscontinuous = slot.historyValid &&
+			                                     !IsSequentialFrame(slot.lastSuccessfulFrame, args.frameId);
+			const bool sourceDiscontinuous = slot.historyValid &&
+			                                 !IsSourceWorldFrameContinuous(
+												 slot.lastSuccessfulSourceWorldFrame,
+												 args.sourceWorldFrame);
+			const bool discontinuous =
+				evaluationDiscontinuous || sourceDiscontinuous;
 			const bool forced =
 				!slot.resourcesValid ||
 				slot.resourceKey != resources[index].resourceKey ||
@@ -2008,10 +2039,16 @@ namespace NeuralRendering
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			const auto& slot = *slots[index];
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
+			const bool evaluationDiscontinuous = slot.historyValid &&
+			                                     !IsSequentialFrame(
+													 slot.lastSuccessfulFrame, a_args[index].frameId);
+			const bool sourceDiscontinuous = slot.historyValid &&
+			                                 !IsSourceWorldFrameContinuous(
+												 slot.lastSuccessfulSourceWorldFrame,
+												 a_args[index].sourceWorldFrame);
 			discontinuousHistoryReset[index] =
 				a_args[index].synchronizedHistoryDiscontinuity ||
-				(slot.historyValid &&
-					!IsSequentialFrame(slot.lastSuccessfulFrame, a_args[index].frameId));
+				evaluationDiscontinuous || sourceDiscontinuous;
 			forcedHistoryReset[index] =
 				a_args[index].synchronizedHistoryReset ||
 				!slot.historyValid ||
@@ -2175,6 +2212,8 @@ namespace NeuralRendering
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
 			slots[index]->historyKey = resources[index].historyKey;
 			slots[index]->lastSuccessfulFrame = a_args[index].frameId;
+			slots[index]->lastSuccessfulSourceWorldFrame =
+				a_args[index].sourceWorldFrame;
 			slots[index]->historyValid = true;
 		}
 		activeStage_ = RendererStage::Complete;

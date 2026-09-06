@@ -844,13 +844,18 @@ namespace
 			const auto coveragePreparation = std::ranges::find_if(
 				snapshot.preparedFrames, [&](const auto& a_prepared) {
 					return eye.maskCoverageReady &&
-				           a_prepared.frame == eye.maskCoverageFrame;
+				           a_prepared.frame == eye.frame;
 				});
 			const bool coverageMatchesPreparation =
 				coveragePreparation != snapshot.preparedFrames.end() &&
 				eye.maskCoverageFeatureSlot < coveragePreparation->widths.size() &&
 				(coveragePreparation->preparedSlotMask &
 					(1u << eye.maskCoverageFeatureSlot)) != 0u &&
+				coveragePreparation->sourceWorldFrames[eye.maskCoverageFeatureSlot] ==
+					eye.maskCoverageFrame &&
+				coveragePreparation->contentSerials[eye.maskCoverageFeatureSlot] != 0 &&
+				coveragePreparation->contentSerials[eye.maskCoverageFeatureSlot] ==
+					eye.maskCoverageContentSerial &&
 				coveragePreparation->widths[eye.maskCoverageFeatureSlot] ==
 					eye.maskCoverageWidth &&
 				coveragePreparation->heights[eye.maskCoverageFeatureSlot] ==
@@ -870,6 +875,8 @@ namespace
 			eyes.push_back({
 				{ "eye", eyeIndex },
 				{ "frame", eye.frame },
+				{ "sourceWorldFrame", eye.sourceWorldFrame },
+				{ "contentSerial", eye.contentSerial },
 				{ "featureSlot", eye.featureSlot },
 				{ "evaluationWidth", eye.evaluationWidth },
 				{ "evaluationHeight", eye.evaluationHeight },
@@ -883,12 +890,12 @@ namespace
 				{ "eligibilityPixels", eye.roiPixels },
 				{ "eligibilityCoveragePercent", eye.roiCoveragePercent },
 				{ "computeSubrect", {
-									 { "baseX", eye.computeSubrect.baseX },
-									 { "baseY", eye.computeSubrect.baseY },
-									 { "width", eye.computeSubrect.width },
-									 { "height", eye.computeSubrect.height },
-									 { "valid", eye.computeSubrect.IsValid() },
-								 } },
+										{ "baseX", eye.computeSubrect.baseX },
+										{ "baseY", eye.computeSubrect.baseY },
+										{ "width", eye.computeSubrect.width },
+										{ "height", eye.computeSubrect.height },
+										{ "valid", eye.computeSubrect.IsValid() },
+									} },
 				{ "computeSubrectPixels", eye.computeSubrectPixels },
 				{ "computeSubrectCoveragePercent", eye.computeSubrectCoveragePercent },
 				{ "maskPixels", eye.maskCoverageReady ? json(eye.maskPixels) : json(nullptr) },
@@ -897,6 +904,7 @@ namespace
 				{ "maskCoverageSampleFeatureSlot", eye.maskCoverageReady ? json(eye.maskCoverageFeatureSlot) : json(nullptr) },
 				{ "maskCoverageSampleWidth", eye.maskCoverageReady ? json(eye.maskCoverageWidth) : json(nullptr) },
 				{ "maskCoverageSampleHeight", eye.maskCoverageReady ? json(eye.maskCoverageHeight) : json(nullptr) },
+				{ "maskCoverageSampleContentSerial", eye.maskCoverageReady ? json(eye.maskCoverageContentSerial) : json(nullptr) },
 				{ "maskCoverageSampleAgeFrames", eye.maskCoverageReady ? json(observedFrame - eye.maskCoverageFrame) : json(nullptr) },
 				{ "maskCoverageMatchesEvaluation", coverageMatchesPreparation },
 				{ "maskCoverageReady", eye.maskCoverageReady },
@@ -1009,8 +1017,8 @@ namespace
 				attributedPreparation->abortedSlotMask :
 				0u;
 		auto expectedEvaluationMask = [](
-										 std::uint32_t a_preparedMask,
-										 std::uint32_t a_requiredMask) noexcept {
+										  std::uint32_t a_preparedMask,
+										  std::uint32_t a_requiredMask) noexcept {
 			return a_preparedMask & a_requiredMask;
 		};
 		const std::uint32_t expectedFeatureSlotMask =
@@ -1051,8 +1059,8 @@ namespace
 			settings.neuralRenderingSingleSubrectScale < 1.0f;
 		const bool dynamicCharacterSingleRectEnabled = visualIsolationConfigured;
 		auto routeCommittedForCurrentFrame = [observedFrame](
-										 const auto& a_route,
-										 std::uint32_t a_expectedEyeMask) {
+												 const auto& a_route,
+												 std::uint32_t a_expectedEyeMask) {
 			return a_route.valid && a_route.frame == observedFrame &&
 			       a_route.pairComplete &&
 			       a_route.appliedEyeMask == a_expectedEyeMask &&
@@ -1154,26 +1162,26 @@ namespace
 														 { "mainCenterBaseline", "existing_normal_dlss_center" },
 														 { "submitFloatBaseline", "existing_normal_dlss_center" },
 														 { "disabledPurpose", "normal_full_center_feature18_control" },
-												 { "emptyStereoPairPolicy", "bypass_empty_eye_evaluate_nonempty_eye" },
-											 } },
+														 { "emptyStereoPairPolicy", "bypass_empty_eye_evaluate_nonempty_eye" },
+													 } },
 								{ "computeRoi", {
-												{ "supported", snapshot.computeRoiSupported },
-												{ "multiSparseSupported", false },
-												{ "providerRoiListSupported", false },
-												{ "providerRoiListEvidenceScope", "observed_feature18_parameter_abi" },
-												{ "multiEvaluationProductionSupported", false },
-												{ "multiEvaluationExperimentalCandidate", true },
-												{ "privateSingleSubrectCandidate", true },
-												{ "dynamicCharacterSingleRectEnabled", dynamicCharacterSingleRectEnabled },
-												{ "privateSingleSubrectEnabled", dynamicCharacterSingleRectEnabled || privateSingleSubrectEnabled },
-												{ "privateSingleSubrectScale", settings.neuralRenderingSingleSubrectScale },
-												{ "privateSingleSubrectValidation", "ghidra_dataflow_and_gpu_timing_validated" },
-												{ "source", "current_frame_projected_face_skin_hair_bounds" },
-												{ "reason", snapshot.computeRoiReason },
-												{ "resolvedMode", dynamicCharacterSingleRectEnabled ? "dynamic_character_single_rect_inference" : (privateSingleSubrectEnabled ? "static_centered_single_rect_inference" : "full_frame_inference") },
-												{ "inferenceRestrictedToRois", dynamicCharacterSingleRectEnabled || privateSingleSubrectEnabled },
-												{ "preciseMaskAuthority", "csx_r8_face_skin_hair_output_composite" },
-											} },
+													{ "supported", snapshot.computeRoiSupported },
+													{ "multiSparseSupported", false },
+													{ "providerRoiListSupported", false },
+													{ "providerRoiListEvidenceScope", "observed_feature18_parameter_abi" },
+													{ "multiEvaluationProductionSupported", false },
+													{ "multiEvaluationExperimentalCandidate", true },
+													{ "privateSingleSubrectCandidate", true },
+													{ "dynamicCharacterSingleRectEnabled", dynamicCharacterSingleRectEnabled },
+													{ "privateSingleSubrectEnabled", dynamicCharacterSingleRectEnabled || privateSingleSubrectEnabled },
+													{ "privateSingleSubrectScale", settings.neuralRenderingSingleSubrectScale },
+													{ "privateSingleSubrectValidation", "ghidra_dataflow_and_gpu_timing_validated" },
+													{ "source", "current_frame_projected_face_skin_hair_bounds" },
+													{ "reason", snapshot.computeRoiReason },
+													{ "resolvedMode", dynamicCharacterSingleRectEnabled ? "dynamic_character_single_rect_inference" : (privateSingleSubrectEnabled ? "static_centered_single_rect_inference" : "full_frame_inference") },
+													{ "inferenceRestrictedToRois", dynamicCharacterSingleRectEnabled || privateSingleSubrectEnabled },
+													{ "preciseMaskAuthority", "csx_r8_face_skin_hair_output_composite" },
+												} },
 								{ "categoryProvenance", {
 															{ "vrAttachmentFormat", "R8G8_UNORM" },
 															{ "legacyAttachmentFormat", "R16_UNORM" },
@@ -1381,16 +1389,19 @@ namespace
 							   { "csOverlayOpen", route.csOverlayOpen },
 							   { "menuContinuityAllowed", route.menuContinuityAllowed },
 							   { "gamePaused", temporalAdmission.gamePaused },
-							   { "pausedSubmitContinuityAllowed", temporalAdmission.pausedSubmitContinuityAllowed },
+							   { "pausedContinuityAllowed", temporalAdmission.pausedContinuityAllowed },
+							   { "pausedSubmitContinuityAllowed", temporalAdmission.pausedContinuityAllowed },
 							   { "worldFrameStateAvailable", temporalAdmission.worldFrameStateAvailable },
 							   { "worldFrameStarted", temporalAdmission.worldFrameStarted },
 							   { "worldFrameCompleted", temporalAdmission.worldFrameCompleted },
+							   { "retainedWorldFrame", temporalAdmission.retainedWorldFrame },
 							   { "temporalSourceFresh", temporalAdmission.temporalSourceFresh },
 						   } },
 				{ "temporalAdmission", {
 										   { "admitted", temporalAdmission.admitted },
 										   { "blockReason", NeuralRendering::GetTemporalAdmissionBlockReasonName(temporalAdmission.blockReason) },
 										   { "currentFrame", temporalAdmission.currentFrame },
+										   { "sourceWorldFrame", temporalAdmission.sourceWorldFrame },
 										   { "lastWorldRenderFrame", temporalAdmission.lastWorldRenderFrame },
 										   { "lastCompletedWorldRenderFrame", temporalAdmission.lastCompletedWorldRenderFrame },
 									   } },
@@ -1502,6 +1513,7 @@ namespace
 							  { "featureSlot", snapshot.featureSlot },
 							  { "failureFeatureSlot", snapshot.failureFeatureSlot },
 							  { "frame", snapshot.frameId },
+							  { "sourceWorldFrame", snapshot.sourceWorldFrame },
 							  { "generation", snapshot.generation },
 							  { "insertionPoint", NeuralRendering::GetInsertionPointName(snapshot.insertionPoint) },
 							  { "insertionPointValue", static_cast<uint32_t>(snapshot.insertionPoint) },
@@ -1519,12 +1531,12 @@ namespace
 								{ "guide", { { "width", snapshot.guideWidth }, { "height", snapshot.guideHeight } } },
 								{ "output", { { "width", snapshot.outputWidth }, { "height", snapshot.outputHeight } } },
 								{ "computeSubrect", {
-													 { "baseX", snapshot.computeSubrect.baseX },
-													 { "baseY", snapshot.computeSubrect.baseY },
-													 { "width", snapshot.computeSubrect.width },
-													 { "height", snapshot.computeSubrect.height },
-													 { "pixels", snapshot.computeSubrect.Area() },
-												 } },
+														{ "baseX", snapshot.computeSubrect.baseX },
+														{ "baseY", snapshot.computeSubrect.baseY },
+														{ "width", snapshot.computeSubrect.width },
+														{ "height", snapshot.computeSubrect.height },
+														{ "pixels", snapshot.computeSubrect.Area() },
+													} },
 								{ "controlMask", { { "width", snapshot.controlMaskWidth }, { "height", snapshot.controlMaskHeight } } },
 							} },
 			{ "resources", { { "formats", {

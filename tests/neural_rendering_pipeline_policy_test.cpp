@@ -229,6 +229,8 @@ int main()
 	static_assert(completeSubmitAdmission.worldFrameStarted);
 	static_assert(completeSubmitAdmission.worldFrameCompleted);
 	static_assert(completeSubmitAdmission.temporalSourceFresh);
+	static_assert(
+		NeuralRendering::GetTemporalSourceFrame(completeSubmitAdmission) == 42u);
 	constexpr auto unavailableFrameState =
 		NeuralRendering::EvaluateTemporalAdmission(
 			TemporalRoute::Main,
@@ -239,13 +241,16 @@ int main()
 			});
 	static_assert(!unavailableFrameState.admitted);
 	static_assert(!unavailableFrameState.worldFrameStarted);
+	static_assert(
+		NeuralRendering::GetTemporalSourceFrame(unavailableFrameState) ==
+		std::numeric_limits<std::uint32_t>::max());
 
 	constexpr auto freshPausedSubmitAdmission =
 		NeuralRendering::EvaluateTemporalAdmission(
 			TemporalRoute::Submit,
 			TemporalAdmissionInputs{
 				.gamePaused = true,
-				.pausedSubmitContinuityAllowed = true,
+				.pausedContinuityAllowed = true,
 				.worldFrameStateAvailable = true,
 				.currentFrame = 42u,
 				.lastWorldRenderFrame = 42u,
@@ -277,7 +282,7 @@ int main()
 			TemporalRoute::Submit,
 			TemporalAdmissionInputs{
 				.gamePaused = true,
-				.pausedSubmitContinuityAllowed = true,
+				.pausedContinuityAllowed = true,
 				.worldFrameStateAvailable = true,
 				.currentFrame = 42u,
 				.lastWorldRenderFrame = 42u,
@@ -288,28 +293,79 @@ int main()
 	static_assert(
 		stalePausedSubmitAdmission.blockReason ==
 		TemporalAdmissionBlockReason::TemporalSourceStale);
+	static_assert(
+		NeuralRendering::GetTemporalSourceFrame(stalePausedSubmitAdmission) ==
+		std::numeric_limits<std::uint32_t>::max());
+
+	constexpr auto staleUnpausedSubmitAdmission =
+		NeuralRendering::EvaluateTemporalAdmission(
+			TemporalRoute::Submit,
+			TemporalAdmissionInputs{
+				.worldFrameStateAvailable = true,
+				.currentFrame = 42u,
+				.lastWorldRenderFrame = 41u,
+				.lastCompletedWorldRenderFrame = 41u,
+			});
+	static_assert(!staleUnpausedSubmitAdmission.admitted);
+	static_assert(!staleUnpausedSubmitAdmission.retainedWorldFrame);
+
+	constexpr auto retainedPausedSubmitAdmission =
+		NeuralRendering::EvaluateTemporalAdmission(
+			TemporalRoute::Submit,
+			TemporalAdmissionInputs{
+				.gamePaused = true,
+				.pausedContinuityAllowed = true,
+				.worldFrameStateAvailable = true,
+				.currentFrame = 42u,
+				.lastWorldRenderFrame = 41u,
+				.lastCompletedWorldRenderFrame = 41u,
+			});
+	static_assert(retainedPausedSubmitAdmission.admitted);
+	static_assert(retainedPausedSubmitAdmission.retainedWorldFrame);
+	static_assert(retainedPausedSubmitAdmission.temporalSourceFresh);
+	static_assert(
+		NeuralRendering::GetTemporalSourceFrame(
+			retainedPausedSubmitAdmission) == 41u);
 
 	constexpr auto pausedMainAdmission = NeuralRendering::EvaluateTemporalAdmission(
 		TemporalRoute::Main,
 		TemporalAdmissionInputs{
 			.gamePaused = true,
-			.pausedSubmitContinuityAllowed = true,
+			.pausedContinuityAllowed = true,
 			.worldFrameStateAvailable = true,
 			.currentFrame = 42u,
 			.lastWorldRenderFrame = 42u,
 			.lastCompletedWorldRenderFrame = 42u,
 		});
-	static_assert(!pausedMainAdmission.admitted);
+	static_assert(pausedMainAdmission.admitted);
+	static_assert(
+		NeuralRendering::GetTemporalSourceFrame(pausedMainAdmission) == 42u);
 	static_assert(
 		pausedMainAdmission.blockReason ==
-		TemporalAdmissionBlockReason::GamePaused);
+		TemporalAdmissionBlockReason::None);
+
+	constexpr auto retainedPausedMainAdmission =
+		NeuralRendering::EvaluateTemporalAdmission(
+			TemporalRoute::Main,
+			TemporalAdmissionInputs{
+				.gamePaused = true,
+				.pausedContinuityAllowed = true,
+				.worldFrameStateAvailable = true,
+				.currentFrame = 42u,
+				.lastWorldRenderFrame = 41u,
+				.lastCompletedWorldRenderFrame = 41u,
+			});
+	static_assert(retainedPausedMainAdmission.admitted);
+	static_assert(retainedPausedMainAdmission.retainedWorldFrame);
+	static_assert(
+		NeuralRendering::GetTemporalSourceFrame(retainedPausedMainAdmission) == 41u);
 
 	constexpr auto hardMenuAdmission = NeuralRendering::EvaluateTemporalAdmission(
 		TemporalRoute::Submit,
 		TemporalAdmissionInputs{
 			.menuContextActive = true,
 			.gamePaused = true,
-			.pausedSubmitContinuityAllowed = true,
+			.pausedContinuityAllowed = true,
 			.worldFrameStateAvailable = true,
 			.currentFrame = 42u,
 			.lastWorldRenderFrame = 42u,
@@ -319,6 +375,9 @@ int main()
 	static_assert(
 		hardMenuAdmission.blockReason ==
 		TemporalAdmissionBlockReason::MenuContext);
+	static_assert(
+		NeuralRendering::GetTemporalSourceFrame(hardMenuAdmission) ==
+		std::numeric_limits<std::uint32_t>::max());
 	static_assert(std::string_view(
 					  NeuralRendering::GetTemporalAdmissionBlockReasonName(
 						  TemporalAdmissionBlockReason::TemporalSourceStale)) ==

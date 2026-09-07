@@ -69,6 +69,206 @@ foreach(_required IN ITEMS
     endif()
 endforeach()
 
+string(FIND "${_upscaling}"
+    "bool Upscaling::IsVendorRuntimeReadyForActiveContract"
+    _dlss_lifecycle_start)
+string(FIND "${_upscaling}"
+    "void Upscaling::MarkVendorRuntimeResourcesDirty"
+    _dlss_lifecycle_end)
+if(_dlss_lifecycle_start EQUAL -1 OR
+   _dlss_lifecycle_end LESS_EQUAL _dlss_lifecycle_start)
+    message(FATAL_ERROR "DLSS lifecycle readiness function could not be isolated")
+endif()
+math(EXPR _dlss_lifecycle_length
+    "${_dlss_lifecycle_end} - ${_dlss_lifecycle_start}")
+string(SUBSTRING "${_upscaling}" ${_dlss_lifecycle_start}
+    ${_dlss_lifecycle_length} _dlss_lifecycle_body)
+string(FIND "${_dlss_lifecycle_body}"
+    "VRVendorRelatchPolicy::IsDLSSLifecycleReady" _lifecycle_policy)
+string(FIND "${_dlss_lifecycle_body}"
+    "HasCompleteVRDLSSViewportResources" _lifecycle_viewport_gate)
+if(_lifecycle_policy EQUAL -1 OR NOT _lifecycle_viewport_gate EQUAL -1)
+    message(FATAL_ERROR
+        "DLSS lifecycle readiness must not depend on first-evaluation viewport resources")
+endif()
+
+string(FIND "${_upscaling}"
+    "bool Upscaling::CanDispatchExistingVRVendorEvaluation(\n\tUpscaleMethod"
+    _existing_dispatch_start)
+string(FIND "${_upscaling}"
+    "bool Upscaling::HasTruthfulStableVRVendorResources"
+    _existing_dispatch_end)
+if(_existing_dispatch_start EQUAL -1 OR
+   _existing_dispatch_end LESS_EQUAL _existing_dispatch_start)
+    message(FATAL_ERROR "Existing DLSS dispatch function could not be isolated")
+endif()
+math(EXPR _existing_dispatch_length
+    "${_existing_dispatch_end} - ${_existing_dispatch_start}")
+string(SUBSTRING "${_upscaling}" ${_existing_dispatch_start}
+    ${_existing_dispatch_length} _existing_dispatch_body)
+foreach(_required IN ITEMS
+    "VRVendorRelatchPolicy::IsExactExistingDLSSDispatchReady"
+    "streamline.TryResolveExistingVRDLSSViewport"
+)
+    string(FIND "${_existing_dispatch_body}" "${_required}" _position)
+    if(_position EQUAL -1)
+        message(FATAL_ERROR
+            "Existing DLSS dispatch lost exact viewport proof: ${_required}")
+    endif()
+endforeach()
+
+foreach(_inactive_dlss_retention_contract IN ITEMS
+    "VRVendorRelatchPolicy::CanRetainInactiveDLSSForActivation"
+    "streamline.CanPrepareVRDLSSViewportWithoutRecycle"
+    "retainInactiveDLSSResourcesForActivation"
+    "exactInactiveFullEyeDLSSAllocationReady"
+    "exactInactiveFoveatedCenterDLSSAllocationReady"
+    "Streamline::DLSSViewportRole::FoveatedCenter"
+    "foveatedCenterColorIn[0]->resource.get()"
+    "foveatedCenterColorIn[1]->resource.get()"
+)
+    string(FIND "${_upscaling}" "${_inactive_dlss_retention_contract}"
+        _inactive_dlss_retention_position)
+    if(_inactive_dlss_retention_position EQUAL -1)
+        message(FATAL_ERROR
+            "Inactive DLSS activation retention is incomplete: ${_inactive_dlss_retention_contract}"
+        )
+    endif()
+endforeach()
+
+string(FIND "${_upscaling}"
+    "const bool retainedInactiveDLSSForRelatch ="
+    _retention_owner_start)
+string(FIND "${_upscaling}"
+    "const bool pressureMemoryRelief ="
+    _retention_owner_end)
+if(_retention_owner_start EQUAL -1 OR
+   _retention_owner_end LESS_EQUAL _retention_owner_start)
+    message(FATAL_ERROR "Inactive DLSS retention owner proof could not be isolated")
+endif()
+math(EXPR _retention_owner_length
+    "${_retention_owner_end} - ${_retention_owner_start}")
+string(SUBSTRING "${_upscaling}" ${_retention_owner_start}
+    ${_retention_owner_length} _retention_owner_body)
+foreach(_required IN ITEMS
+    "relatchPlan.valid"
+    "relatchPlan.transitionEpoch == relatchEpoch"
+    "relatchPlan.contractGeneration =="
+    "relatchContractGeneration"
+    "relatchPlan.origin == relatchOrigin"
+    "relatchPlan.retainInactiveDLSSResources"
+)
+    string(FIND "${_retention_owner_body}" "${_required}" _position)
+    if(_position EQUAL -1)
+        message(FATAL_ERROR
+            "Inactive DLSS retry lost exact owner proof: ${_required}")
+    endif()
+endforeach()
+
+foreach(_per_eye_allocation_proof IN ITEMS
+    "const std::array<uint32_t, 2>& a_outputWidths"
+    "const std::array<uint32_t, 2>& a_outputHeights"
+    "a_outputWidths[eye]"
+    "a_outputHeights[eye]"
+    "a_colorInputs[eye]"
+)
+    string(FIND "${_streamline}" "${_per_eye_allocation_proof}"
+        _per_eye_allocation_position)
+    if(_per_eye_allocation_position EQUAL -1)
+        message(FATAL_ERROR
+            "Stereo DLSS allocation proof lost per-eye evidence: ${_per_eye_allocation_proof}"
+        )
+    endif()
+endforeach()
+
+string(FIND "${_upscaling}"
+    "const bool inactiveDLSSAllocationContractReady ="
+    _inactive_dlss_proof_start)
+string(FIND "${_upscaling}"
+    "const bool targetFoveatedDLSSSlotRequired ="
+    _inactive_dlss_proof_end)
+if(_inactive_dlss_proof_start EQUAL -1 OR
+   _inactive_dlss_proof_end LESS_EQUAL _inactive_dlss_proof_start)
+    message(FATAL_ERROR "Inactive DLSS allocation proof could not be isolated")
+endif()
+math(EXPR _inactive_dlss_proof_length
+    "${_inactive_dlss_proof_end} - ${_inactive_dlss_proof_start}")
+string(SUBSTRING "${_upscaling}" ${_inactive_dlss_proof_start}
+    ${_inactive_dlss_proof_length} _inactive_dlss_proof_body)
+foreach(_required IN ITEMS
+    "Streamline::DLSSViewportRole::FullEye"
+    "Streamline::DLSSViewportRole::FoveatedCenter"
+    "cache.plan.IsValid()"
+    "std::array<uint32_t, 2>"
+    "foveatedCenterColorIn[0]->resource.get()"
+    "foveatedCenterColorIn[1]->resource.get()"
+)
+    string(FIND "${_inactive_dlss_proof_body}" "${_required}" _position)
+    if(_position EQUAL -1)
+        message(FATAL_ERROR
+            "Inactive DLSS allocation proof lost exact topology: ${_required}")
+    endif()
+endforeach()
+string(FIND "${_inactive_dlss_proof_body}"
+    "HasCompleteVRDLSSViewportResources()" _generic_viewport_proof)
+if(NOT _generic_viewport_proof EQUAL -1)
+    message(FATAL_ERROR
+        "Inactive DLSS retention must not use the generic viewport proof")
+endif()
+
+string(FIND "${_upscaling}"
+    "const bool memoryReliefAlreadyActive = IsVRRenderScaleMemoryReliefActive();"
+    _preexisting_relief_sample)
+string(FIND "${_upscaling}"
+    "MaybeArmVRRenderScaleMemoryRelief(relatchSignature, relatchOrigin, state->frameCount);"
+    _relief_arm)
+string(FIND "${_upscaling}"
+    ".memoryReliefActive = memoryReliefAlreadyActive"
+    _retention_relief_gate)
+if(_preexisting_relief_sample EQUAL -1 OR _relief_arm EQUAL -1 OR
+   _retention_relief_gate EQUAL -1 OR
+   _preexisting_relief_sample GREATER _relief_arm OR
+   _retention_relief_gate LESS _relief_arm)
+    message(FATAL_ERROR
+        "Inactive DLSS retention lost its pre-existing memory-relief gate")
+endif()
+foreach(_required IN ITEMS
+    "retainedInactiveDLSSForRelatch"
+    ".retainedAllocationPreviouslyAdmitted ="
+    "relatchPlan.retainInactiveDLSSResources ="
+)
+    string(FIND "${_upscaling}" "${_required}" _position)
+    if(_position EQUAL -1)
+        message(FATAL_ERROR
+            "Inactive DLSS retention lost retry ownership: ${_required}")
+    endif()
+endforeach()
+
+string(FIND "${_streamline}"
+    "bool Streamline::CanPrepareVRDLSSViewportWithoutRecycle"
+    _slot_preparation_start)
+string(FIND "${_streamline}"
+    "bool Streamline::FreeDLSSViewportResources"
+    _slot_preparation_end)
+if(_slot_preparation_start EQUAL -1 OR
+   _slot_preparation_end LESS_EQUAL _slot_preparation_start)
+    message(FATAL_ERROR "DLSS slot preparation admission could not be isolated")
+endif()
+math(EXPR _slot_preparation_length
+    "${_slot_preparation_end} - ${_slot_preparation_start}")
+string(SUBSTRING "${_streamline}" ${_slot_preparation_start}
+    ${_slot_preparation_length} _slot_preparation_body)
+foreach(_required IN ITEMS
+    "FindVRDLSSViewportSlot"
+    "VRVendorRelatchPolicy::CanUseDLSSSlotDuringRecycle"
+)
+    string(FIND "${_slot_preparation_body}" "${_required}" _position)
+    if(_position EQUAL -1)
+        message(FATAL_ERROR
+            "DLSS preparation lost victim-specific slot admission: ${_required}")
+    endif()
+endforeach()
+
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/DX12SwapChain.h" _swapchain_header)
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/DX12SwapChain.cpp" _swapchain)
 foreach(_required IN ITEMS
@@ -84,9 +284,9 @@ foreach(_required IN ITEMS
     "producerFenceValue = fenceSequence.Next()"
     "ResolveBackendBufferCount"
     "ProxyLifecycleGate lifecycle"
-    "lifecycle.BeginRetirement(upscaling.d3d12SwapChainActive)"
+    "lifecycle.BeginRetirement()"
     "lifecycle.CompleteRetirement(false,"
-    "retained the published generation through process exit"
+    "retaining every dependent D3D resource"
     "DXGI_PRESENT_TEST"
     "DXGI_ERROR_WAS_STILL_DRAWING"
     "return owner.GetDesc(pDesc)"
@@ -95,75 +295,10 @@ foreach(_required IN ITEMS
     "ResetFrameGenerationRenderContext()"
     "SetupFrameGeneration()"
     "publicFormat != publicSwapChainDesc.BufferDesc.Format"
-    "WaitForAllocatorSlot"
-    "allocatorRetirements.ClassifyReuse"
-    "allocatorRetirements.MarkSubmitted"
-    "ClassifyResizeBuffers1Admission"
-    "NvidiaComIdentity::IsSame(presentQueue[0], commandQueue.get())"
-    "return owner.GetFullscreenState(pFullscreen, ppTarget)"
-    "desc->RefreshRate = publicSwapChainDesc.BufferDesc.RefreshRate"
 )
     string(FIND "${_swapchain_header}${_swapchain}" "${_required}" _position)
     if(_position EQUAL -1)
         message(FATAL_ERROR "DXGI frame-generation proxy is missing contract behavior: ${_required}")
-    endif()
-endforeach()
-
-string(FIND "${_swapchain}" "HRESULT DX12SwapChain::PresentInternal" _present_start)
-string(FIND "${_swapchain}" "HRESULT DX12SwapChain::GetDevice" _present_end)
-math(EXPR _present_length "${_present_end} - ${_present_start}")
-string(SUBSTRING "${_swapchain}" ${_present_start} ${_present_length} _present_body)
-string(FIND "${_present_body}" "WaitForAllocatorSlot(" _allocator_wait)
-string(FIND "${_present_body}" "commandAllocators[frameIndex]->Reset()" _allocator_reset)
-string(FIND "${_present_body}" "commandQueue->Signal(d3d12Fence.get(), *consumerFenceValue)" _retirement_signal)
-string(FIND "${_present_body}" "allocatorRetirements.MarkSubmitted" _retirement_mark)
-if(_allocator_wait EQUAL -1 OR _allocator_reset EQUAL -1 OR
-   _retirement_signal EQUAL -1 OR _retirement_mark EQUAL -1 OR
-   _allocator_wait GREATER _allocator_reset OR
-   _retirement_mark LESS _retirement_signal)
-    message(FATAL_ERROR
-        "Present must prove allocator retirement before reset and track each submission"
-    )
-endif()
-
-string(FIND "${_swapchain}" "void DX12SwapChain::OnProxyDestroyed" _retirement_start)
-string(FIND "${_swapchain}" "DX12SwapChain::GetLifecycleState" _retirement_end)
-math(EXPR _retirement_length "${_retirement_end} - ${_retirement_start}")
-string(SUBSTRING "${_swapchain}" ${_retirement_start} ${_retirement_length} _retirement_body)
-foreach(_forbidden_retirement_action IN ITEMS
-    "ResetResources()"
-    "ResetFrameGenerationContexts()"
-)
-    string(FIND
-        "${_retirement_body}"
-        "${_forbidden_retirement_action}"
-        _forbidden_retirement_position
-    )
-    if(NOT _forbidden_retirement_position EQUAL -1)
-        message(FATAL_ERROR
-            "Published final release must retain reader-owned state: ${_forbidden_retirement_action}"
-        )
-    endif()
-endforeach()
-
-string(FIND "${_swapchain}" "HRESULT DX12SwapChain::ResizeBuffers1(" _resize1_start)
-string(FIND "${_swapchain}" "HRESULT DX12SwapChain::RefreshAfterResize" _resize1_end)
-math(EXPR _resize1_length "${_resize1_end} - ${_resize1_start}")
-string(SUBSTRING "${_swapchain}" ${_resize1_start} ${_resize1_length} _resize1_body)
-string(FIND "${_resize1_body}" "ClassifyResizeBuffers1Admission(" _resize1_admission)
-string(FIND "${_resize1_body}" "ResetFrameGenerationRenderContext()" _resize1_teardown)
-if(_resize1_admission EQUAL -1 OR _resize1_teardown EQUAL -1 OR
-   _resize1_admission GREATER _resize1_teardown)
-    message(FATAL_ERROR "ResizeBuffers1 must reject unsupported arrays before mutation")
-endif()
-
-foreach(_forbidden_mode_reset IN ITEMS
-    "publicSwapChainDesc.BufferDesc.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED"
-    "publicSwapChainDesc.BufferDesc.Scaling = DXGI_MODE_SCALING_UNSPECIFIED"
-)
-    string(FIND "${_swapchain}" "${_forbidden_mode_reset}" _mode_reset_position)
-    if(NOT _mode_reset_position EQUAL -1)
-        message(FATAL_ERROR "Buffer resize must preserve public target-mode state")
     endif()
 endforeach()
 

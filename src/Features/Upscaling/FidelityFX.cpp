@@ -1744,12 +1744,13 @@ FidelityFX::LifecycleResult FidelityFX::CreateFSRResources()
 	if (emitDiagLogs) {
 		const bool amdAdapter = IsAmdAdapterDetected();
 		const bool runtimeUpscalerPresent = IsRuntimeUpscalerPresent();
+		const bool runtimeFsr3Selected = ShouldUseRuntimeUpscalerForFSR();
 		const bool runtimeFsr4AutoEligible = IsRuntimeFsr4AutoEligible();
 		logger::debug(
 			"[FidelityFX][Diag] CreateFSRResources plan amd={} fsr4Eligible={} runtimeUpscaler={} runtimeFsr4={} contexts={} display={}x{} requestedRender={}x{} maxRender={}x{} splitPerEye={}",
 			amdAdapter ? "yes" : "no",
 			runtimeFsr4AutoEligible ? "yes" : "no",
-			(runtimeUpscalerPresent && amdAdapter) ? "yes" : "no",
+			runtimeFsr3Selected ? "yes" : "no",
 			(runtimeUpscalerPresent && runtimeFsr4AutoEligible) ? "yes" : "no",
 			numContexts,
 			displayWidth,
@@ -1778,6 +1779,7 @@ FidelityFX::LifecycleResult FidelityFX::CreateFSRResources()
 		bool createCrashed = false;
 		const FfxErrorCode createResult =
 			CreateHostFsr3ContextProtected(&fsrContext[i], &contextDescription, createCrashed);
+		fsrLastContextCreateResult = createResult;
 		const auto createDisposition = FSRHostLifecyclePolicy::ClassifyCallDisposition(
 			createCrashed,
 			createResult == FFX_OK);
@@ -1788,8 +1790,9 @@ FidelityFX::LifecycleResult FidelityFX::CreateFSRResources()
 		}
 		if (FSRHostLifecyclePolicy::RequiresOwnershipQuarantine(createDisposition)) {
 			logger::critical(
-				"[FidelityFX] FSR3 context creation for eye {} returned error 0x{:08X}; quarantining potentially partial SDK ownership.",
+				"[FidelityFX] FSR3 context creation for eye {} returned error {} (0x{:08X}); quarantining potentially partial SDK ownership.",
 				i,
+				static_cast<int32_t>(createResult),
 				static_cast<uint32_t>(createResult));
 			const auto failureResult = ResolveFSRLifecycleFailure("FSR3 context creation");
 			QuarantineHostFSRContext(i, "an FSR3 context creation error");
@@ -2732,7 +2735,11 @@ bool FidelityFX::IsRuntimeFsr4Available() const
 
 bool FidelityFX::ShouldUseRuntimeUpscalerForFSR() const
 {
-	return IsRuntimeUpscalerPresent() && IsAmdAdapterDetected();
+	return FSRRuntimeLifecyclePolicy::SelectProviderRoute({
+			   .hostSupported = IsHostFSR3Supported(),
+			   .runtimePresent = IsRuntimeUpscalerPresent(),
+			   .amdAdapter = IsAmdAdapterDetected(),
+		   }) == FSRRuntimeLifecyclePolicy::ProviderRoute::Runtime;
 }
 
 FfxResource ffxGetResource(ID3D11Resource* dx11Resource,

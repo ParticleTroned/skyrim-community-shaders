@@ -422,6 +422,22 @@ void TruePBR::DrawEssentialSettings()
 	ImGui::EndDisabled();
 }
 
+void TruePBR::DrawPerformanceSettings(bool)
+{
+	DrawEnabledCheckbox(settings);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(
+			"Disabling bypasses True PBR material shading. The cost difference depends on visible PBR content.");
+	}
+}
+
+json TruePBR::CapturePerformanceSettingsState() const
+{
+	return {
+		{ "Enabled", settings.Enabled != 0 }
+	};
+}
+
 void TruePBR::SaveSettings(json& o_json)
 {
 	o_json = settings;

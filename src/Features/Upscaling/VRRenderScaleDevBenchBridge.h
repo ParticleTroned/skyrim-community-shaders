@@ -16,7 +16,8 @@ namespace VRRenderScaleDevBenchBridge
 	enum class PhysicalMutationBoundarySource : std::uint8_t
 	{
 		EngineTargetCreator,
-		ProviderInvalidation
+		ProviderInvalidation,
+		ProviderActivation
 	};
 
 	struct PresentationAuditObservation

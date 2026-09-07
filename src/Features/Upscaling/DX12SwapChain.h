@@ -15,7 +15,6 @@
 
 #include <atomic>
 #include <memory>
-#include <mutex>
 
 class DX12SwapChain;
 
@@ -139,10 +138,6 @@ public:
 
 	UINT frameIndex = 0;
 	CSX::NvidiaPipelinePolicy::InteropFenceSequence fenceSequence;
-	CSX::NvidiaPipelinePolicy::CommandAllocatorRetirementTracker<2> allocatorRetirements;
-	winrt::handle allocatorRetirementEvents[2];
-	bool allocatorRetirementEventArmed[2]{};
-	mutable std::mutex commandSubmissionMutex;
 
 	LARGE_INTEGER qpf;
 
@@ -177,7 +172,6 @@ public:
 	HRESULT GetDesc(_Out_ DXGI_SWAP_CHAIN_DESC* desc) const noexcept;
 	HRESULT GetDesc1(_Out_ DXGI_SWAP_CHAIN_DESC1* desc) const noexcept;
 	HRESULT SetFullscreenState(BOOL fullscreen, IDXGIOutput* target) noexcept;
-	HRESULT GetFullscreenState(BOOL* fullscreen, IDXGIOutput** target) const noexcept;
 	HRESULT GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC* desc) const noexcept;
 	HRESULT ResizeTarget(const DXGI_MODE_DESC* target) noexcept;
 	HANDLE GetFrameLatencyWaitableObject();
@@ -193,11 +187,9 @@ public:
 private:
 	void ResetResources() noexcept;
 	HRESULT PresentInternal(UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* presentParameters) noexcept;
-	HRESULT WaitForAllocatorSlot(UINT slot, bool nonBlocking) noexcept;
-	HRESULT WaitForAllAllocatorSlots() noexcept;
 	HRESULT RefreshAfterResize(DXGI_FORMAT publicFormat) noexcept;
 	HRESULT RestoreFrameGenerationAfterFailedResize() noexcept;
 	static DXGI_FORMAT ResolveBackendFormat(DXGI_FORMAT publicFormat) noexcept;
 	CSX::NvidiaPipelinePolicy::ProxyLifecycleGate lifecycle;
-	std::atomic_bool runtimeQuarantined{ false };
+	bool runtimeQuarantined = false;
 };

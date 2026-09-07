@@ -33,8 +33,10 @@ if(_descriptor_error OR NOT _descriptor_type STREQUAL "OBJECT")
 endif()
 
 foreach(_schema_contract IN ITEMS
+    "start_feature_cost"
     "start_upscaling_sweep"
     "cancel"
+    "featureShortName"
     "matrix"
     "nvidia"
     "amd"
@@ -76,6 +78,7 @@ foreach(_bridge_contract IN ITEMS
     "BuildProvenance::ValidateExpectedBuild(args)"
     "BuildProvenance::AttachProducer(output)"
     "RunOnMainThread"
+    "PerformanceTuningRenderer::StartDevBenchFeatureCostMeasurement(featureShortName)"
     "PerformanceTuningRenderer::StartDevBenchUpscalingCostSweep(matrix, dlssPreset)"
     "PerformanceTuningRenderer::GetDevBenchMeasurementStatus("
     "PerformanceTuningRenderer::CancelDevBenchMeasurements()"
@@ -130,6 +133,10 @@ foreach(_renderer_contract IN ITEMS
     "g_upscalingCostSweep.mainMenuWasOpen"
     "g_upscalingCostSweep.editorWasOpen"
     "RecordFeatureCostTrace("
+    "StartDevBenchFeatureCostMeasurement("
+    "\"availableFeatureCosts\""
+    "\"featureResults\""
+    "\"devbench_feature_cost\""
     "\"relativeTo\", \"none\""
     "\"frameMs\""
     "\"gameGpuMs\""
@@ -186,5 +193,94 @@ string(FIND
 if(_install_position EQUAL -1)
     message(FATAL_ERROR "Performance-tuning DevBench bridge is not installed")
 endif()
+
+function(assert_performance_feature_contract _relative_path _contract)
+    file(READ "${PROJECT_ROOT}/${_relative_path}" _source)
+    string(FIND "${_source}" "${_contract}" _contract_position)
+    if(_contract_position EQUAL -1)
+        message(FATAL_ERROR
+            "${_relative_path} is missing performance contract: ${_contract}"
+        )
+    endif()
+endfunction()
+
+foreach(_feature_short_name IN ITEMS
+    LinearLighting
+    CloudShadows
+    VolumetricShadows
+    TruePBR
+    ExtendedMaterials
+    FoliageLighting
+)
+    string(FIND "${_renderer}" "\"${_feature_short_name}\"" _feature_position)
+    if(_feature_position EQUAL -1)
+        message(FATAL_ERROR
+            "Performance Tuning does not surface ${_feature_short_name}"
+        )
+    endif()
+endforeach()
+
+foreach(_feature_file IN ITEMS
+    "src/Features/LinearLighting"
+    "src/Features/CloudShadows"
+    "src/Features/VolumetricShadows"
+    "src/Features/ExtendedMaterials"
+    "src/Features/FoliageLighting"
+    "src/TruePBR"
+)
+    assert_performance_feature_contract(
+        "${_feature_file}.h"
+        "HasPerformanceSettings() const override { return true; }"
+    )
+    assert_performance_feature_contract(
+        "${_feature_file}.h"
+        "SupportsPerformanceCostMeasurement() const override { return true; }"
+    )
+    get_filename_component(_feature_type "${_feature_file}" NAME)
+    assert_performance_feature_contract(
+        "${_feature_file}.cpp"
+        "void ${_feature_type}::DrawPerformanceSettings(bool"
+    )
+    assert_performance_feature_contract(
+        "${_feature_file}.cpp"
+        "json ${_feature_type}::CapturePerformanceSettingsState() const"
+    )
+endforeach()
+
+assert_performance_feature_contract(
+    "src/Features/ExtendedMaterials.cpp"
+    "SanitizeSettings(settings);"
+)
+assert_performance_feature_contract(
+    "src/Features/ExtendedMaterials.cpp"
+    "settings.EnableParallaxWarpingFix"
+)
+assert_performance_feature_contract(
+    "src/Features/CloudShadows.cpp"
+    "IsCloudShadowSceneReady()"
+)
+assert_performance_feature_contract(
+    "src/Features/VolumetricShadows.cpp"
+    "HasActiveDirectionalShadows()"
+)
+foreach(_foliage_performance_setting IN ITEMS
+    "DrawFoliageScatteringSetting();"
+    "DrawFoliageAmbientBoostSetting(truePBRActive);"
+    "DrawFoliageAmbientFlipSetting();"
+    "DrawGrassScatteringSetting();"
+)
+    assert_performance_feature_contract(
+        "src/Features/FoliageLighting.cpp"
+        "${_foliage_performance_setting}"
+    )
+endforeach()
+assert_performance_feature_contract(
+    "src/Features/FoliageLighting.cpp"
+    "settings.EnableFoliageAmbientBoost != 0 && IsTruePBRActive()"
+)
+assert_performance_feature_contract(
+    "src/Utils/UI.cpp"
+    "bool UIntCheckbox(const char* a_label, unsigned int& a_value)"
+)
 
 message(STATUS "Performance-tuning DevBench contract is coherent")

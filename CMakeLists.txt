@@ -1615,6 +1615,11 @@ if(BUILD_CONTROLLER_TESTS)
         tests/vr_vendor_relatch_policy_test.cpp
     )
     add_controller_test(
+        vr_render_scale_authority_policy_test
+        VRRenderScaleAuthorityPolicy
+        tests/vr_render_scale_authority_policy_test.cpp
+    )
+    add_controller_test(
         upscaling_provider_selection_policy_test
         UpscalingProviderSelectionPolicy
         tests/upscaling_provider_selection_policy_test.cpp
@@ -1693,6 +1698,11 @@ if(BUILD_CONTROLLER_TESTS)
         shader_cache_disable_policy_test
         ShaderCacheDisablePolicy
         tests/shader_cache_disable_policy_test.cpp
+    )
+    add_controller_test(
+        shader_cache_enable_policy_test
+        ShaderCacheEnablePolicy
+        tests/shader_cache_enable_policy_test.cpp
     )
     add_controller_test(
         shader_cache_provenance_test
@@ -2133,6 +2143,7 @@ if(BUILD_CONTROLLER_TESTS)
         DEPENDS
             perf_mode_restart_state_test
             vr_vendor_relatch_policy_test
+            vr_render_scale_authority_policy_test
             upscaling_provider_selection_policy_test
             vr_render_scale_qualification_policy_test
             vr_render_scale_replacement_telemetry_policy_test
@@ -2147,6 +2158,7 @@ if(BUILD_CONTROLLER_TESTS)
             overlay_policy_test
             performance_tuning_statistics_test
             shader_cache_disable_policy_test
+            shader_cache_enable_policy_test
             shader_cache_provenance_test
             cache_invalidation_test
             shader_compilation_scheduling_policy_test

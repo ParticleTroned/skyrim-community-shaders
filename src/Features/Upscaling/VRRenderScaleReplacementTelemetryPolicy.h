@@ -453,10 +453,14 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 	}
 
 	[[nodiscard]] constexpr bool MatchesMutationBoundaryGeneration(
+		bool a_requiresPublishedGeneration,
 		std::uint32_t a_boundary,
 		std::uint32_t a_published) noexcept
 	{
-		return a_boundary == 0 || a_boundary == a_published;
+		if (!a_requiresPublishedGeneration)
+			return a_published == 0;
+		return a_published != 0 &&
+		       (a_boundary == 0 || a_boundary == a_published);
 	}
 
 	inline constexpr std::uint64_t kPreparationNotApplicableReasonMask =
@@ -547,6 +551,7 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 		bool transitionCooldown = false;
 		bool submitted = false;
 		bool exactCurrent = false;
+		bool exactCurrentPresentationAvailable = false;
 		bool exactReplacement = false;
 		bool blockedPreMutation = false;
 		bool physicalMutationStarted = false;
@@ -561,6 +566,7 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 		bool afterMutation = false;
 		bool boundarySpanning = false;
 		bool exactCurrent = false;
+		bool exactCurrentPresentationAvailable = false;
 		bool exactReplacement = false;
 		bool blockedPreMutation = false;
 		std::uint32_t frame = 0;
@@ -740,6 +746,9 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 		cycle.afterMutation = a_left.physicalMutationStarted &&
 		                      a_right.physicalMutationStarted;
 		cycle.exactCurrent = a_left.exactCurrent && a_right.exactCurrent;
+		cycle.exactCurrentPresentationAvailable =
+			a_left.exactCurrentPresentationAvailable &&
+			a_right.exactCurrentPresentationAvailable;
 		cycle.exactReplacement = a_left.exactReplacement &&
 		                         a_right.exactReplacement;
 		cycle.blockedPreMutation = a_left.blockedPreMutation ||
@@ -812,7 +821,7 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 				SaturatingIncrement(counters.dispositionsBeforeMutation[dispositionIndex]);
 			if (a_cycle.exactCurrent && a_cycle.coherent && a_cycle.submitted)
 				SaturatingIncrement(counters.exactPreviousGenerationCycles);
-			if (a_cycle.exactCurrent &&
+			if (a_cycle.exactCurrentPresentationAvailable &&
 				(!a_cycle.submitted || a_cycle.disposition == PresentationDisposition::BlackKeepalive ||
 					a_cycle.disposition == PresentationDisposition::Quarantine)) {
 				SaturatingIncrement(counters.suppressedExactPreviousGenerationCycles);
@@ -822,9 +831,11 @@ namespace VRRenderScaleReplacementTelemetryPolicy
 			}
 			if (a_cycle.disposition == PresentationDisposition::PresentationStretch) {
 				SaturatingIncrement(counters.presentationStretchCyclesBeforeMutation);
-				SaturatingIncrement(counters.preMutationStretchWithoutMutation);
-				RecordFirstOffender(
-					counters.firstPreMutationStretchWithoutMutation, a_cycle);
+				if (a_cycle.exactCurrentPresentationAvailable) {
+					SaturatingIncrement(counters.preMutationStretchWithoutMutation);
+					RecordFirstOffender(
+						counters.firstPreMutationStretchWithoutMutation, a_cycle);
+				}
 			}
 			if (a_cycle.disposition == PresentationDisposition::BlackKeepalive)
 				SaturatingIncrement(counters.blackKeepaliveCyclesBeforeMutation);

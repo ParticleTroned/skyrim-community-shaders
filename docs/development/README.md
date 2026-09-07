@@ -19,6 +19,11 @@
 -   **[Shader Runtime A/B](./shader-runtime-ab.md)** - RenderDoc same-frame shader equivalence checks
 -   **[GPU-Unified Presets](./unified-presets.md)** - One preset path with capability-selected DLSS or FSR
 -   **[Render-scale PR qualification](./render-scale-pr-qualification.md)** - Bounded 20-COC, 25-menu-transition, and three-sequence release gate
+-   **[VR render-scale iteration](./vr-render-scale-iteration.md)** - Durable optimization references, safety invariants, and current investigation state
+-   **[VR render-scale authority map](./vr-render-scale-authority-map.md)** - Authoritative owners, service paths, and diagnostic liveness invariants
+-   **[VR render-scale comparison ledger](./vr-render-scale-comparison-ledger.csv)** - Cross-machine aggregate results without raw per-run evidence
+-   **[NVIDIA render-scale tuning](./nvidia-renderscale-tuning-20260829.md)** - Compact result from the first public-API transition matrix
+-   **[NVIDIA render-scale tuning failure](./nvidia-renderscale-tuning-failure.md)** - Public-API operation and qualification divergence captured by the interrupted 33-transition assay
 -   **[Screenshot API and Sequences](./screenshot-api-and-sequences.md)** - Versioned asynchronous still/sequence contract, acknowledgements, manifests, and implementation gates
 
 ## Quick Links

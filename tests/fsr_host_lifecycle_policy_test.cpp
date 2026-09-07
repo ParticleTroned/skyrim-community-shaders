@@ -20,6 +20,12 @@ namespace
 	static_assert(ClassifyCallDisposition(false, false) == CallDisposition::ReturnedError);
 	static_assert(ClassifyCallDisposition(true, true) == CallDisposition::Faulted);
 	static_assert(ClassifyCallDisposition(true, false) == CallDisposition::Faulted);
+	static_assert(!CanRetainQuarantinedHostOwnership(false, false));
+	static_assert(CanRetainQuarantinedHostOwnership(true, false));
+	static_assert(!CanRetainQuarantinedHostOwnership(true, true));
+	static_assert(CanQueueHostActivation(false, true));
+	static_assert(CanQueueHostActivation(true, false));
+	static_assert(!CanQueueHostActivation(true, true));
 
 	constexpr bool CoversReleaseAdmission()
 	{

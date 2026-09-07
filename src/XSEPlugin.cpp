@@ -386,7 +386,10 @@ bool Load()
 	globals::ReInit();
 
 	auto state = globals::state;
-	state->Load();
+	state->Load(
+		State::ConfigMode::USER,
+		true,
+		State::SettingsApplyMode::StartupHydration);
 	state->LoadTheme();  // Load theme settings from SettingsTheme.json
 
 	// Initialize theme system - create default themes and discover existing ones

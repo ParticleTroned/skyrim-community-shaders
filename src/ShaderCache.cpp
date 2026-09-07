@@ -26,6 +26,7 @@
 
 #include "Deferred.h"
 #include "Feature.h"
+#include "ShaderCacheEnablePolicy.h"
 #include "State.h"
 #include "Utils/ContentHash.h"
 #include "Utils/GenerationClaim.h"
@@ -3625,8 +3626,33 @@ namespace SIE
 		return enableRequested.load(std::memory_order_acquire);
 	}
 
+	void ShaderCache::RestoreEnabledSetting(bool value)
+	{
+		const auto action = ShaderCacheEnablePolicy::Resolve({
+			.enabled = IsEnabled(),
+			.enableRequested = IsEnableRequested(),
+			.targetEnabled = value,
+			.mode = ShaderCacheEnablePolicy::ApplyMode::StartupHydration,
+		});
+		if (action == ShaderCacheEnablePolicy::Action::None)
+			return;
+
+		enableRequested.store(value, std::memory_order_release);
+		pendingDisableAfterVRNativeRestore.store(false, std::memory_order_release);
+		isEnabled.store(value, std::memory_order_release);
+	}
+
 	void ShaderCache::SetEnabled(bool value)
 	{
+		const auto action = ShaderCacheEnablePolicy::Resolve({
+			.enabled = IsEnabled(),
+			.enableRequested = IsEnableRequested(),
+			.targetEnabled = value,
+			.mode = ShaderCacheEnablePolicy::ApplyMode::RuntimeTransition,
+		});
+		if (action == ShaderCacheEnablePolicy::Action::None)
+			return;
+
 		if (value) {
 			const bool enableAlreadyRequested =
 				enableRequested.exchange(true, std::memory_order_acq_rel);

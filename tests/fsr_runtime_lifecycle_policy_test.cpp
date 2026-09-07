@@ -4,6 +4,37 @@ namespace
 {
 	using namespace FSRRuntimeLifecyclePolicy;
 
+	static_assert(
+		SelectProviderRoute({
+			.hostSupported = true,
+			.runtimePresent = true,
+			.amdAdapter = false,
+		}) == ProviderRoute::Host);
+	static_assert(
+		SelectProviderRoute({
+			.hostSupported = false,
+			.runtimePresent = true,
+			.amdAdapter = false,
+		}) == ProviderRoute::Runtime);
+	static_assert(
+		SelectProviderRoute({
+			.hostSupported = true,
+			.runtimePresent = true,
+			.amdAdapter = true,
+		}) == ProviderRoute::Runtime);
+	static_assert(
+		SelectProviderRoute({
+			.hostSupported = true,
+			.runtimePresent = false,
+			.amdAdapter = true,
+		}) == ProviderRoute::Host);
+	static_assert(
+		SelectProviderRoute({
+			.hostSupported = false,
+			.runtimePresent = false,
+			.amdAdapter = false,
+		}) == ProviderRoute::Unavailable);
+
 	static_assert(!HasRetirementRelevantState({}));
 	static_assert(!HasRetirementRelevantState({
 		.interopFencePresent = true,

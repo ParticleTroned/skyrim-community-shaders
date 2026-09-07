@@ -462,6 +462,8 @@ namespace SIE
 		void TryCompleteStartupCompilationPhase();
 		bool IsEnabled() const;
 		bool IsEnableRequested() const;
+		/** Restores the persisted startup state without scheduling runtime transitions. */
+		void RestoreEnabledSetting(bool value);
 		void SetEnabled(bool value);
 		void ServicePendingDisable();
 		bool IsAsync() const;

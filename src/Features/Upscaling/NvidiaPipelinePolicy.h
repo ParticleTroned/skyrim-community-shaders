@@ -1,6 +1,5 @@
 #pragma once
 
-#include <array>
 #include <atomic>
 #include <cstdint>
 #include <limits>
@@ -42,13 +41,12 @@ namespace CSX::NvidiaPipelinePolicy
 			return true;
 		}
 
-		[[nodiscard]] bool BeginRetirement(std::atomic_bool& a_active) noexcept
+		[[nodiscard]] bool BeginRetirement() noexcept
 		{
 			std::scoped_lock lock(mutex);
 			if (state != ProxyLifecycleState::Published)
 				return false;
 			state = ProxyLifecycleState::Retiring;
-			a_active.store(false, std::memory_order_release);
 			return true;
 		}
 
@@ -158,58 +156,6 @@ namespace CSX::NvidiaPipelinePolicy
 		std::uint64_t value = 0;
 	};
 
-	enum class CommandAllocatorReuseDisposition : std::uint8_t
-	{
-		Ready,
-		Retryable,
-		WaitForCompletion,
-	};
-
-	template <std::size_t SlotCount>
-	class CommandAllocatorRetirementTracker
-	{
-	public:
-		[[nodiscard]] constexpr bool IsReady(
-			std::size_t a_slot,
-			std::uint64_t a_completedFenceValue) const noexcept
-		{
-			return a_slot < SlotCount &&
-			       (retirementValues[a_slot] == 0 ||
-					   a_completedFenceValue >= retirementValues[a_slot]);
-		}
-
-		[[nodiscard]] constexpr std::uint64_t GetRetirementValue(
-			std::size_t a_slot) const noexcept
-		{
-			return a_slot < SlotCount ? retirementValues[a_slot] : 0;
-		}
-
-		[[nodiscard]] constexpr CommandAllocatorReuseDisposition ClassifyReuse(
-			std::size_t a_slot,
-			std::uint64_t a_completedFenceValue,
-			bool a_nonBlocking) const noexcept
-		{
-			if (IsReady(a_slot, a_completedFenceValue))
-				return CommandAllocatorReuseDisposition::Ready;
-			return a_nonBlocking ?
-			           CommandAllocatorReuseDisposition::Retryable :
-			           CommandAllocatorReuseDisposition::WaitForCompletion;
-		}
-
-		constexpr void MarkSubmitted(
-			std::size_t a_slot,
-			std::uint64_t a_retirementFenceValue) noexcept
-		{
-			if (a_slot < SlotCount)
-				retirementValues[a_slot] = a_retirementFenceValue;
-		}
-
-		constexpr void Reset() noexcept { retirementValues = {}; }
-
-	private:
-		std::array<std::uint64_t, SlotCount> retirementValues{};
-	};
-
 	[[nodiscard]] constexpr std::optional<std::uint32_t> ResolveBackendBufferCount(
 		std::uint32_t a_requestedPublicCount,
 		std::uint32_t a_currentPublicCount) noexcept
@@ -218,37 +164,6 @@ namespace CSX::NvidiaPipelinePolicy
 		                             a_requestedPublicCount :
 		                             a_currentPublicCount;
 		return publicCount == 1 ? std::optional<std::uint32_t>{ 2 } : std::nullopt;
-	}
-
-	enum class ResizeBuffers1Admission : std::uint8_t
-	{
-		Supported,
-		UnsupportedBufferCount,
-		ZeroCountArrays,
-		IncompatiblePresentQueue,
-	};
-
-	[[nodiscard]] constexpr ResizeBuffers1Admission ClassifyResizeBuffers1Admission(
-		std::uint32_t a_requestedPublicCount,
-		std::uint32_t a_currentPublicCount,
-		bool a_hasCreationNodeMask,
-		bool a_hasPresentQueue,
-		bool a_presentQueueCompatible) noexcept
-	{
-		if (!ResolveBackendBufferCount(
-				a_requestedPublicCount,
-				a_currentPublicCount)) {
-			return ResizeBuffers1Admission::UnsupportedBufferCount;
-		}
-		if (a_requestedPublicCount == 0 &&
-			(a_hasCreationNodeMask || a_hasPresentQueue)) {
-			return ResizeBuffers1Admission::ZeroCountArrays;
-		}
-		if (a_requestedPublicCount != 0 && a_hasPresentQueue &&
-			!a_presentQueueCompatible) {
-			return ResizeBuffers1Admission::IncompatiblePresentQueue;
-		}
-		return ResizeBuffers1Admission::Supported;
 	}
 
 	[[nodiscard]] constexpr bool CanContinueBasePresentation(

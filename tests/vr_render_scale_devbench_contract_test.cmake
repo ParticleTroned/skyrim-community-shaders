@@ -11,6 +11,10 @@ file(READ
     _replacement_policy
 )
 file(READ
+    "${PROJECT_ROOT}/src/Features/Upscaling/VRRenderScaleAuthorityPolicy.h"
+    _authority_policy
+)
+file(READ
     "${PROJECT_ROOT}/src/Features/Upscaling.h"
     _upscaling_header
 )
@@ -39,7 +43,7 @@ file(READ
     _replacement_telemetry_documentation
 )
 
-set(_schema_revision_receipt_text "{ \"schemaRevision\", 14 }")
+set(_schema_revision_receipt_text "{ \"schemaRevision\", 15 }")
 string(LENGTH "${_bridge}" _bridge_length_with_schema_receipts)
 string(REPLACE
     "${_schema_revision_receipt_text}"
@@ -54,31 +58,110 @@ math(EXPR _schema_revision_receipt_count
 )
 if(NOT _schema_revision_receipt_count EQUAL 2)
     message(FATAL_ERROR
-        "Expected two render-scale schema-revision-14 receipt producers"
+        "Expected two render-scale schema-revision-15 receipt producers"
     )
 endif()
 string(FIND
     "${_bridge}"
-    "schema-revision-14"
+    "schema-revision-15"
     _schema_revision_help_position
 )
 if(_schema_revision_help_position EQUAL -1)
-    message(FATAL_ERROR "Render-scale help does not advertise schema revision 14")
+    message(FATAL_ERROR "Render-scale help does not advertise schema revision 15")
 endif()
 string(FIND
     "${_replacement_telemetry_documentation}"
-    "schema revision 14"
+    "schema revision 15"
     _schema_revision_documentation_position
 )
 if(_schema_revision_documentation_position EQUAL -1)
     message(FATAL_ERROR
-        "Replacement-telemetry documentation does not name schema revision 14"
+        "Replacement-telemetry documentation does not name schema revision 15"
     )
 endif()
 string(FIND "${_bridge}" "schema-revision-12" _stale_schema_revision_position)
 if(NOT _stale_schema_revision_position EQUAL -1)
     message(FATAL_ERROR "Stale render-scale schema revision 12 help remains")
 endif()
+string(FIND "${_bridge}" "schema-revision-14" _stale_schema_revision_14_position)
+if(NOT _stale_schema_revision_14_position EQUAL -1)
+    message(FATAL_ERROR "Stale render-scale schema revision 14 help remains")
+endif()
+
+foreach(_authority_contract IN ITEMS
+    "authorityLiveness"
+    "diagnosticOnly"
+	"productionSchedulingEffect"
+	"controllerRevisionStable"
+    "unmappedOwnerMask"
+    "inconsistencyMask"
+    "GetVRRenderScaleAuthorityDiagnosticSnapshot"
+    "kOwnerServiceMappings"
+    "AllOwnersHaveServiceMappings"
+)
+    string(FIND
+        "${_bridge}\n${_upscaling_header}\n${_upscaling_source}\n${_authority_policy}"
+        "${_authority_contract}"
+        _authority_contract_position
+    )
+    if(_authority_contract_position EQUAL -1)
+        message(FATAL_ERROR
+            "Render-scale authority diagnostic contract is missing: ${_authority_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_forbidden_maintenance_hint IN ITEMS
+    "vrRenderScaleMaintenanceWork"
+    "PublishVRRenderScaleMaintenanceWork"
+    "ReconcileVRRenderScaleMaintenanceWork"
+    "ServiceVRRenderScaleMaintenanceWork"
+)
+    string(FIND
+        "${_upscaling_header}\n${_upscaling_source}\n${_authority_policy}"
+        "${_forbidden_maintenance_hint}"
+        _forbidden_maintenance_hint_position
+    )
+    if(NOT _forbidden_maintenance_hint_position EQUAL -1)
+        message(FATAL_ERROR
+            "Authority diagnostics recreated a production maintenance hint: ${_forbidden_maintenance_hint}"
+        )
+    endif()
+endforeach()
+
+string(FIND "${_bridge}"
+    "\"retainInactiveDLSSResources\", controller.relatchPlan.retainInactiveDLSSResources"
+    _inactive_dlss_retention_status)
+if(_inactive_dlss_retention_status EQUAL -1)
+    message(FATAL_ERROR
+        "DevBench status must expose inactive DLSS retention admission")
+endif()
+
+foreach(_watchdog_frame_contract IN ITEMS
+    "ServiceVRRenderScalePreMutationNativeFallbackWatchdog(\"end of frame\")"
+    "ServiceVRRenderScalePostMutationWatchdog(\"end of frame\")"
+)
+    string(FIND "${_upscaling_source}" "${_watchdog_frame_contract}"
+        _watchdog_frame_contract_position)
+    if(_watchdog_frame_contract_position EQUAL -1)
+        message(FATAL_ERROR
+            "Render-scale watchdog is not serviced at the frame boundary: ${_watchdog_frame_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_forbidden_watchdog_hot_path IN ITEMS
+    "ScopeExit postMutationWatchdog"
+    "ServiceVRRenderScalePostMutationWatchdog(\"ConfigureUpscaling\")"
+)
+    string(FIND "${_upscaling_source}" "${_forbidden_watchdog_hot_path}"
+        _forbidden_watchdog_hot_path_position)
+    if(NOT _forbidden_watchdog_hot_path_position EQUAL -1)
+        message(FATAL_ERROR
+            "Render-scale watchdog returned to a per-draw path: ${_forbidden_watchdog_hot_path}"
+        )
+    endif()
+endforeach()
 
 foreach(_action IN ITEMS
     qualification_status
@@ -124,6 +207,20 @@ foreach(_task2_contract IN ITEMS
 	if(_task2_contract_position EQUAL -1)
 		message(FATAL_ERROR
 			"Task 2 presentation contract is missing: ${_task2_contract}"
+		)
+	endif()
+endforeach()
+
+foreach(_fsr_failure_contract IN ITEMS
+	"fsrHostLifecycle"
+	"quarantined"
+	"lastContextCreateResult"
+)
+	string(FIND "${_bridge}" "${_fsr_failure_contract}"
+		_fsr_failure_contract_position)
+	if(_fsr_failure_contract_position EQUAL -1)
+		message(FATAL_ERROR
+			"FSR failure evidence is missing: ${_fsr_failure_contract}"
 		)
 	endif()
 endforeach()
@@ -403,7 +500,7 @@ foreach(_required_behavior IN ITEMS
 	"sameObservation"
 	"replacementTimeline"
 	"schemaRevision"
-	"{ \"schemaRevision\", 14 }"
+	"{ \"schemaRevision\", 15 }"
 	"presentationProof"
 	"exact_vendor_evaluation"
 	"exact_native_presentation"
@@ -420,6 +517,9 @@ foreach(_required_behavior IN ITEMS
 	"scaled_contract_retirement"
 	"RecordPhysicalMutationBoundary"
 	"provider_resource_invalidation"
+	"ProviderActivation"
+	"provider_resource_activation"
+	"lastCoherentVendorEyes"
 	"stressSessionId"
 	"qualificationTransitionId"
 	"ownershipToken"
@@ -440,6 +540,7 @@ foreach(_required_behavior IN ITEMS
 	"incompleteStereoCycles"
 	"preMutationExactPresentationSuppressed"
 	"preMutationStretchWithoutMutation"
+	"exactCurrentPresentationAvailable"
 	"postMutationOldGenerationPresented"
 	"postMutationUnprovenStereoSubmitted"
 	"phaseDurations"
@@ -576,6 +677,28 @@ string(FIND
 if(_provider_invalidation_boundary_position EQUAL -1)
 	message(FATAL_ERROR
 		"Provider resource invalidation does not emit the explicit DevBench boundary"
+	)
+endif()
+
+string(FIND
+	"${_upscaling_source}"
+	"VRVendorRelatchPolicy::CanRebindSynchronousVendorLifecycle"
+	_synchronous_lifecycle_rebind_position
+)
+if(_synchronous_lifecycle_rebind_position EQUAL -1)
+	message(FATAL_ERROR
+		"Synchronous vendor reuse does not guard its lifecycle epoch rebind"
+	)
+endif()
+
+string(FIND
+	"${_upscaling_source}"
+	"lifecycle.transitionEpoch = appliedProfile.transitionEpoch"
+	_synchronous_lifecycle_epoch_position
+)
+if(_synchronous_lifecycle_epoch_position EQUAL -1)
+	message(FATAL_ERROR
+		"Synchronous vendor reuse does not publish the rebound lifecycle epoch"
 	)
 endif()
 
@@ -721,7 +844,6 @@ foreach(_required_direct_menu_mapping IN ITEMS
 	"target->directMenuEdit,"
 	"relatchProfile->directMenuEdit,"
 	".directMenuRelatch = directMenuRelatch"
-	"transitionSnapshot.applied.directMenuEdit,"
 	"VRRenderScalePreparationReason::NonDirectEdit"
 	"a_request.origin == VRUpscalingTransitionOrigin::CSMenu &&\n\t\tdirectMenuRequest &&"
 )
@@ -883,5 +1005,44 @@ foreach(_required_streamline_behavior IN ITEMS
         )
     endif()
 endforeach()
+
+foreach(_required_vendor_reset_ownership IN ITEMS
+    "PendingVendorRuntimeResetInvalidatesProvider("
+    "VRVendorRelatchPolicy::SelectVendorResetService({"
+    ".resetGeneration = pendingDLSSResetContractGeneration"
+    ".providerGeneration = vrDLSSRuntimeResourceGeneration"
+    ".resetGeneration = pendingFSRResetContractGeneration"
+    ".providerGeneration = vrFSRRuntimeResourceGeneration"
+    "TryClaimPendingVendorRuntimeReset("
+    "const std::scoped_lock lock(vendorRuntimeResetMutex);"
+)
+    string(FIND
+        "${_upscaling_source}"
+        "${_required_vendor_reset_ownership}"
+        _vendor_reset_ownership_position
+    )
+    if(_vendor_reset_ownership_position EQUAL -1)
+        message(FATAL_ERROR
+            "Generation-qualified vendor reset ownership is missing: ${_required_vendor_reset_ownership}"
+        )
+    endif()
+endforeach()
+
+string(FIND
+    "${_upscaling_source}"
+    "pendingDLSSReset.exchange(false"
+    _unqualified_dlss_reset_claim_position
+)
+string(FIND
+    "${_upscaling_source}"
+    "pendingFSRReset.exchange(false"
+    _unqualified_fsr_reset_claim_position
+)
+if(NOT _unqualified_dlss_reset_claim_position EQUAL -1 OR
+   NOT _unqualified_fsr_reset_claim_position EQUAL -1)
+    message(FATAL_ERROR
+        "Vendor reset claims must not consume an unqualified pending Boolean"
+    )
+endif()
 
 message(STATUS "Render-scale DevBench qualification contract is coherent")

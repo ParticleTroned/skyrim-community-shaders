@@ -1,6 +1,6 @@
 # VR render-scale replacement telemetry
 
-DevBench render-scale qualification receipts at schema revision 14 separate
+DevBench render-scale qualification receipts at schema revision 15 separate
 render success from evidence completeness. This diagnostic contract does not
 change render-scale preparation, admission, presentation, cleanup, or failure
 policy.
@@ -40,6 +40,9 @@ eye's presentation frame. DLSS uses backend and same-frame identity because
 Streamline does not publish a dispatch serial. FSR requires a nonzero serial
 for each eye. Render-scale FSR may use separate per-eye dispatches, while the
 fixed native FSR path requires both eyes to identify the shared stereo batch.
+When a status read lands between FSR eye publications, the diagnostic snapshot
+uses the last coherent vendor pair only while its stable profile, device,
+resource revision, and current publication still match.
 
 ## Admission and physical mutation
 
@@ -54,20 +57,23 @@ and cleanup-only states. `mutationExpectation` states whether the transition
 requires a physical mutation, does not require one, or could not be determined.
 When both the source and target use the native physical contract, the
 expectation is explicitly `not_required`; native vendor evaluation remains
-proven independently. Fixed native targets, including DLAA and FSR Native AA,
-use generation zero. Only scaled render-scale targets require a nonzero
-contract generation. Moving from a scaled contract to a native target remains
-`required` because the scaled resources must be retired.
+proven independently. None and TAA use generation zero. Vendor-backed targets,
+including DLAA and FSR Native AA, require a nonzero provider generation. Moving
+from a scaled contract to a native target remains `required` because the scaled
+resources must be retired.
 
-`RecordPhysicalMutationBoundary` is the sole destructive-mutation authority.
-It retains the first exact qualification session, transition, owner token,
+`RecordPhysicalMutationBoundary` is the sole mutation-boundary authority. It
+retains the first exact qualification session, transition, owner token,
 replacement request and epoch, contract generation, device, source, frame, and
-QPC tick. The boundary may precede contract publication, so generation zero is
-retained there and later correlated through the same request, epoch, owner, and
-device; a nonzero published generation must still match exactly. Provider
-lifecycle phases remain diagnostic and cannot move an observation across this
-boundary. Fixed native no-mutation proofs permit their valid zero contract
-generation, while scaled render-scale targets still require a nonzero one.
+QPC tick. The boundary covers engine-target creation, provider invalidation,
+and activation of an exact new FSR provider. It may precede contract
+publication, so generation zero is retained there and later correlated through
+the same request, epoch, owner, and device. Vendor-backed targets require the
+later nonzero published generation to match exactly. None and TAA instead
+require generation zero and remain correlated by request, transition epoch,
+device, dimensions, resource revision, publication, and coherent stereo proof.
+Provider lifecycle phases remain diagnostic and cannot move an observation
+across this boundary.
 
 ## Authoritative presentation-cycle audit
 

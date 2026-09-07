@@ -53,6 +53,14 @@ namespace Util
 	static int g_lastWindowWidth = 0;
 	static int g_lastWindowHeight = 0;
 
+	bool UIntCheckbox(const char* a_label, unsigned int& a_value)
+	{
+		bool enabled = a_value != 0;
+		const bool changed = ImGui::Checkbox(a_label, &enabled);
+		a_value = enabled ? 1u : 0u;
+		return changed;
+	}
+
 	namespace
 	{
 		std::unordered_map<std::string, std::chrono::steady_clock::time_point> g_buttonFlashTimers;

@@ -40,6 +40,7 @@ namespace
 			.transitionCooldown = a_transitionCooldown,
 			.submitted = true,
 			.exactCurrent = a_exactCurrent,
+			.exactCurrentPresentationAvailable = a_exactCurrent,
 			.exactReplacement = a_exactReplacement,
 			.physicalMutationStarted = !a_beforeMutation,
 		};
@@ -204,9 +205,12 @@ namespace
 			MatchesTargetContractGeneration(true, 0, 0) ||
 			!MatchesTargetContractGeneration(true, 8, 8) ||
 			MatchesTargetContractGeneration(true, 8, 9) ||
-			!MatchesMutationBoundaryGeneration(0, 8) ||
-			!MatchesMutationBoundaryGeneration(8, 8) ||
-			MatchesMutationBoundaryGeneration(8, 9)) {
+			!MatchesMutationBoundaryGeneration(false, 8, 0) ||
+			MatchesMutationBoundaryGeneration(false, 8, 8) ||
+			!MatchesMutationBoundaryGeneration(true, 0, 8) ||
+			!MatchesMutationBoundaryGeneration(true, 8, 8) ||
+			MatchesMutationBoundaryGeneration(true, 8, 0) ||
+			MatchesMutationBoundaryGeneration(true, 8, 9)) {
 			return false;
 		}
 
@@ -543,6 +547,21 @@ namespace
 		       state.counters.firstPreMutationStretchWithoutMutation.valid;
 	}
 
+	constexpr bool CoversUnprovenPreMutationStretch()
+	{
+		auto state = StartedAudit();
+		CompleteCycle completed{};
+		auto left = Eye(0, 19, PresentationDisposition::PresentationStretch);
+		auto right = Eye(1, 19, PresentationDisposition::PresentationStretch);
+		left.exactCurrentPresentationAvailable = false;
+		right.exactCurrentPresentationAvailable = false;
+		(void)ObserveEye(state, 3, 5, left, completed);
+		(void)ObserveEye(state, 3, 5, right, completed);
+		return state.counters.presentationStretchCyclesBeforeMutation == 1 &&
+		       state.counters.preMutationStretchWithoutMutation == 0 &&
+		       !state.counters.firstPreMutationStretchWithoutMutation.valid;
+	}
+
 	constexpr bool CoversNewGenerationProof()
 	{
 		auto state = StartedAudit();
@@ -602,6 +621,7 @@ namespace
 	static_assert(CoversProtectedStretchAfterMutation());
 	static_assert(CoversUnprotectedStretchAfterMutation());
 	static_assert(CoversPreMutationViolations());
+	static_assert(CoversUnprovenPreMutationStretch());
 	static_assert(CoversNewGenerationProof());
 	static_assert(CoversStaleOwnership());
 	static_assert(CoversBoundedOverflow());

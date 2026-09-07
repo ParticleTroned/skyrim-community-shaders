@@ -3,7 +3,6 @@
 #include <FidelityFX/api/include/dx12/ffx_api_dx12.hpp>
 #include <dxgi1_6.h>
 
-#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -11,13 +10,7 @@
 
 #include "../Upscaling.h"
 #include "FidelityFX.h"
-#include "NvidiaComIdentity.h"
 #include "Streamline.h"
-
-namespace
-{
-	constexpr DWORD kAllocatorRetirementWaitMilliseconds = 1000;
-}
 
 void DX12SwapChain::CreateD3D12Device(IDXGIAdapter* a_adapter)
 {
@@ -100,11 +93,6 @@ void DX12SwapChain::CreateInterop()
 	DX::ThrowIfFailed(d3d12Device->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(&d3d12Fence)));
 	DX::ThrowIfFailed(d3d12Device->CreateSharedHandle(d3d12Fence.get(), nullptr, GENERIC_ALL, nullptr, sharedFenceHandle.put()));
 	DX::ThrowIfFailed(d3d11Device->OpenSharedFence(sharedFenceHandle.get(), IID_PPV_ARGS(&d3d11Fence)));
-	for (auto& event : allocatorRetirementEvents) {
-		event.attach(CreateEventW(nullptr, FALSE, FALSE, nullptr));
-		if (!event)
-			DX::ThrowIfFailed(HRESULT_FROM_WIN32(GetLastError()));
-	}
 
 	swapChainProxy = new DXGISwapChainProxy(*this, swapChain);
 
@@ -155,11 +143,6 @@ void DX12SwapChain::ResetResources() noexcept
 	publicSwapChainDesc = {};
 	frameIndex = 0;
 	fenceSequence.Reset();
-	allocatorRetirements.Reset();
-	for (auto& event : allocatorRetirementEvents)
-		event.close();
-	for (auto& armed : allocatorRetirementEventArmed)
-		armed = false;
 	runtimeQuarantined = false;
 }
 
@@ -202,17 +185,18 @@ void DX12SwapChain::OnProxyDestroyed(IDXGISwapChain4* a_swapChain) noexcept
 {
 	if (swapChain != a_swapChain)
 		return;
-	auto& upscaling = globals::features::upscaling;
-	if (!lifecycle.BeginRetirement(upscaling.d3d12SwapChainActive))
+	if (!lifecycle.BeginRetirement())
 		return;
 
-	// Active readers are not leased individually. Retaining the complete
-	// published generation avoids racing any reader admitted before active was
-	// cleared and prevents a replacement from reusing this owner.
-	runtimeQuarantined = true;
-	logger::info(
-		"[DX12SwapChain] Final proxy release retained the published generation through process exit");
-	lifecycle.CompleteRetirement(false, upscaling.d3d12SwapChainActive);
+	auto& upscaling = globals::features::upscaling;
+	if (!upscaling.fidelityFX.ResetFrameGenerationContexts()) {
+		logger::critical(
+			"[DX12SwapChain] Published proxy destruction left FidelityFX ownership indeterminate; retaining every dependent D3D resource");
+		lifecycle.CompleteRetirement(false, upscaling.d3d12SwapChainActive);
+		return;
+	}
+	ResetResources();
+	lifecycle.CompleteRetirement(true, upscaling.d3d12SwapChainActive);
 }
 
 CSX::NvidiaPipelinePolicy::ProxyLifecycleState DX12SwapChain::GetLifecycleState() const noexcept
@@ -232,7 +216,6 @@ void DX12SwapChain::SetD3D11DeviceContext(ID3D11DeviceContext* a_d3d11Context)
 
 HRESULT DX12SwapChain::GetBuffer(UINT buffer, REFIID riid, void** ppSurface)
 {
-	std::scoped_lock submissionLock(commandSubmissionMutex);
 	if (!ppSurface)
 		return E_POINTER;
 
@@ -248,7 +231,6 @@ HRESULT DX12SwapChain::GetBuffer(UINT buffer, REFIID riid, void** ppSurface)
 
 HRESULT DX12SwapChain::ResizeBuffers(UINT bufferCount, UINT width, UINT height, DXGI_FORMAT format, UINT flags)
 {
-	std::scoped_lock submissionLock(commandSubmissionMutex);
 	if (!swapChain || runtimeQuarantined)
 		return DXGI_ERROR_INVALID_CALL;
 
@@ -269,9 +251,6 @@ HRESULT DX12SwapChain::ResizeBuffers(UINT bufferCount, UINT width, UINT height, 
 	const DXGI_FORMAT backendFormat = format == DXGI_FORMAT_UNKNOWN ?
 	                                      DXGI_FORMAT_UNKNOWN :
 	                                      ResolveBackendFormat(publicFormat);
-	const HRESULT allocatorReady = WaitForAllAllocatorSlots();
-	if (FAILED(allocatorReady))
-		return allocatorReady;
 	auto& fidelityFX = globals::features::upscaling.fidelityFX;
 	if (!fidelityFX.ResetFrameGenerationRenderContext()) {
 		runtimeQuarantined = true;
@@ -311,39 +290,20 @@ HRESULT DX12SwapChain::ResizeBuffers1(
 	const UINT* creationNodeMask,
 	IUnknown* const* presentQueue)
 {
-	std::scoped_lock submissionLock(commandSubmissionMutex);
 	if (!swapChain || runtimeQuarantined)
 		return DXGI_ERROR_INVALID_CALL;
+	(void)presentQueue;
+
 	const auto backendBufferCount = CSX::NvidiaPipelinePolicy::ResolveBackendBufferCount(
 		bufferCount, publicSwapChainDesc.BufferCount);
-	const bool presentQueueCompatible =
-		bufferCount == 1 && presentQueue && presentQueue[0] &&
-		CSX::NvidiaComIdentity::IsSame(presentQueue[0], commandQueue.get());
-	const auto admission = CSX::NvidiaPipelinePolicy::ClassifyResizeBuffers1Admission(
-		bufferCount,
-		publicSwapChainDesc.BufferCount,
-		creationNodeMask != nullptr,
-		presentQueue != nullptr,
-		presentQueueCompatible);
-	if (!backendBufferCount ||
-		admission != CSX::NvidiaPipelinePolicy::ResizeBuffers1Admission::Supported) {
-		logger::warn(
-			"[DX12SwapChain] Rejected unrepresentable ResizeBuffers1 contract count={} nodeMasks={} presentQueues={} admission={}",
-			bufferCount,
-			creationNodeMask != nullptr,
-			presentQueue != nullptr,
-			magic_enum::enum_name(admission));
+	if (!backendBufferCount)
 		return DXGI_ERROR_UNSUPPORTED;
-	}
 	const DXGI_FORMAT publicFormat = format == DXGI_FORMAT_UNKNOWN ?
 	                                     publicSwapChainDesc.BufferDesc.Format :
 	                                     format;
 	const DXGI_FORMAT backendFormat = format == DXGI_FORMAT_UNKNOWN ?
 	                                      DXGI_FORMAT_UNKNOWN :
 	                                      ResolveBackendFormat(publicFormat);
-	const HRESULT allocatorReady = WaitForAllAllocatorSlots();
-	if (FAILED(allocatorReady))
-		return allocatorReady;
 	auto& fidelityFX = globals::features::upscaling.fidelityFX;
 	if (!fidelityFX.ResetFrameGenerationRenderContext()) {
 		runtimeQuarantined = true;
@@ -428,6 +388,8 @@ HRESULT DX12SwapChain::RefreshAfterResize(DXGI_FORMAT publicFormat) noexcept
 		publicSwapChainDesc.BufferDesc.Width = resizedDesc.Width;
 		publicSwapChainDesc.BufferDesc.Height = resizedDesc.Height;
 		publicSwapChainDesc.BufferDesc.Format = publicFormat;
+		publicSwapChainDesc.BufferDesc.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED;
+		publicSwapChainDesc.BufferDesc.Scaling = DXGI_MODE_SCALING_UNSPECIFIED;
 		publicSwapChainDesc.Flags = resizedDesc.Flags;
 		frameIndex = swapChain->GetCurrentBackBufferIndex();
 		return S_OK;
@@ -474,81 +436,11 @@ HRESULT DX12SwapChain::Present1(UINT syncInterval, UINT flags, const DXGI_PRESEN
 	return PresentInternal(syncInterval, flags, presentParameters);
 }
 
-HRESULT DX12SwapChain::WaitForAllocatorSlot(UINT slot, bool nonBlocking) noexcept
-{
-	if (slot >= std::size(commandAllocators) || !d3d12Fence)
-		return DXGI_ERROR_INVALID_CALL;
-
-	const auto retirementValue = allocatorRetirements.GetRetirementValue(slot);
-	if (retirementValue == 0)
-		return S_OK;
-	const auto completedValue = d3d12Fence->GetCompletedValue();
-	if (completedValue == (std::numeric_limits<UINT64>::max)())
-		return DXGI_ERROR_DEVICE_REMOVED;
-	const auto reuseDisposition = allocatorRetirements.ClassifyReuse(
-		slot,
-		completedValue,
-		nonBlocking);
-	if (reuseDisposition ==
-		CSX::NvidiaPipelinePolicy::CommandAllocatorReuseDisposition::Ready) {
-		if (allocatorRetirementEventArmed[slot]) {
-			allocatorRetirementEvents[slot].close();
-			allocatorRetirementEvents[slot].attach(
-				CreateEventW(nullptr, FALSE, FALSE, nullptr));
-			allocatorRetirementEventArmed[slot] = false;
-			if (!allocatorRetirementEvents[slot])
-				return HRESULT_FROM_WIN32(GetLastError());
-		}
-		return S_OK;
-	}
-	if (reuseDisposition ==
-		CSX::NvidiaPipelinePolicy::CommandAllocatorReuseDisposition::Retryable)
-		return DXGI_ERROR_WAS_STILL_DRAWING;
-
-	if (!allocatorRetirementEvents[slot])
-		return DXGI_ERROR_INVALID_CALL;
-	if (!allocatorRetirementEventArmed[slot]) {
-		const HRESULT eventResult = d3d12Fence->SetEventOnCompletion(
-			retirementValue,
-			allocatorRetirementEvents[slot].get());
-		if (FAILED(eventResult))
-			return eventResult;
-		allocatorRetirementEventArmed[slot] = true;
-	}
-	const DWORD waitResult = WaitForSingleObject(
-		allocatorRetirementEvents[slot].get(),
-		kAllocatorRetirementWaitMilliseconds);
-	if (waitResult == WAIT_OBJECT_0) {
-		allocatorRetirementEventArmed[slot] = false;
-		return S_OK;
-	}
-	if (waitResult == WAIT_TIMEOUT)
-		return DXGI_ERROR_WAS_STILL_DRAWING;
-	return HRESULT_FROM_WIN32(GetLastError());
-}
-
-HRESULT DX12SwapChain::WaitForAllAllocatorSlots() noexcept
-{
-	for (UINT slot = 0; slot < std::size(commandAllocators); ++slot) {
-		const HRESULT result = WaitForAllocatorSlot(slot, false);
-		if (FAILED(result))
-			return result;
-	}
-	return S_OK;
-}
-
 HRESULT DX12SwapChain::PresentInternal(
 	UINT syncInterval,
 	UINT flags,
 	const DXGI_PRESENT_PARAMETERS* presentParameters) noexcept
 {
-	std::unique_lock submissionLock(commandSubmissionMutex, std::defer_lock);
-	if ((flags & DXGI_PRESENT_DO_NOT_WAIT) != 0) {
-		if (!submissionLock.try_lock())
-			return DXGI_ERROR_WAS_STILL_DRAWING;
-	} else {
-		submissionLock.lock();
-	}
 	if (!swapChain)
 		return DXGI_ERROR_INVALID_CALL;
 	if ((flags & DXGI_PRESENT_TEST) != 0) {
@@ -578,13 +470,6 @@ HRESULT DX12SwapChain::PresentInternal(
 
 	try {
 		auto& upscaling = globals::features::upscaling;
-		const HRESULT allocatorReady = WaitForAllocatorSlot(
-			frameIndex,
-			(flags & DXGI_PRESENT_DO_NOT_WAIT) != 0);
-		if (allocatorReady == DXGI_ERROR_WAS_STILL_DRAWING)
-			return allocatorReady;
-		if (FAILED(allocatorReady))
-			return fail(allocatorReady, "command allocator retirement wait");
 
 		// Advance before signaling so the first wait cannot observe the fence's
 		// already-complete creation value.
@@ -648,7 +533,6 @@ HRESULT DX12SwapChain::PresentInternal(
 			return fail(E_FAIL, "D3D interop fence exhaustion");
 		if (auto result = check(commandQueue->Signal(d3d12Fence.get(), *consumerFenceValue), "D3D12 fence signal"))
 			return *result;
-		allocatorRetirements.MarkSubmitted(frameIndex, *consumerFenceValue);
 		if (auto result = check(d3d11Context->Wait(d3d11Fence.get(), *consumerFenceValue), "D3D11 fence wait"))
 			return *result;
 		if (presentDisposition == CSX::NvidiaPipelinePolicy::PresentResultDisposition::Retryable)
@@ -686,7 +570,6 @@ HRESULT DX12SwapChain::GetDevice(REFIID uuid, void** ppDevice)
 
 HRESULT DX12SwapChain::GetDesc(DXGI_SWAP_CHAIN_DESC* desc) const noexcept
 {
-	std::scoped_lock submissionLock(commandSubmissionMutex);
 	if (!desc)
 		return E_POINTER;
 	*desc = publicSwapChainDesc;
@@ -695,7 +578,6 @@ HRESULT DX12SwapChain::GetDesc(DXGI_SWAP_CHAIN_DESC* desc) const noexcept
 
 HRESULT DX12SwapChain::GetDesc1(DXGI_SWAP_CHAIN_DESC1* desc) const noexcept
 {
-	std::scoped_lock submissionLock(commandSubmissionMutex);
 	if (!desc)
 		return E_POINTER;
 	if (!swapChain)
@@ -718,7 +600,6 @@ HRESULT DX12SwapChain::GetDesc1(DXGI_SWAP_CHAIN_DESC1* desc) const noexcept
 
 HRESULT DX12SwapChain::SetFullscreenState(BOOL fullscreen, IDXGIOutput* target) noexcept
 {
-	std::scoped_lock submissionLock(commandSubmissionMutex);
 	if (!swapChain || runtimeQuarantined)
 		return DXGI_ERROR_INVALID_CALL;
 	if (fullscreen) {
@@ -731,36 +612,20 @@ HRESULT DX12SwapChain::SetFullscreenState(BOOL fullscreen, IDXGIOutput* target) 
 	return result;
 }
 
-HRESULT DX12SwapChain::GetFullscreenState(BOOL* fullscreen, IDXGIOutput** target) const noexcept
-{
-	std::scoped_lock submissionLock(commandSubmissionMutex);
-	if (!fullscreen && !target)
-		return DXGI_ERROR_INVALID_CALL;
-	if (!swapChain)
-		return DXGI_ERROR_INVALID_CALL;
-
-	BOOL backendFullscreen = FALSE;
-	const HRESULT result = swapChain->GetFullscreenState(&backendFullscreen, target);
-	if (SUCCEEDED(result) && fullscreen)
-		*fullscreen = publicSwapChainDesc.Windowed ? FALSE : TRUE;
-	return result;
-}
-
 HRESULT DX12SwapChain::GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC* desc) const noexcept
 {
-	std::scoped_lock submissionLock(commandSubmissionMutex);
 	if (!desc)
 		return E_POINTER;
-	desc->RefreshRate = publicSwapChainDesc.BufferDesc.RefreshRate;
-	desc->ScanlineOrdering = publicSwapChainDesc.BufferDesc.ScanlineOrdering;
-	desc->Scaling = publicSwapChainDesc.BufferDesc.Scaling;
-	desc->Windowed = publicSwapChainDesc.Windowed;
-	return S_OK;
+	if (!swapChain)
+		return DXGI_ERROR_INVALID_CALL;
+	const HRESULT result = swapChain->GetFullscreenDesc(desc);
+	if (SUCCEEDED(result))
+		desc->Windowed = publicSwapChainDesc.Windowed;
+	return result;
 }
 
 HRESULT DX12SwapChain::ResizeTarget(const DXGI_MODE_DESC* target) noexcept
 {
-	std::scoped_lock submissionLock(commandSubmissionMutex);
 	if (!target)
 		return E_POINTER;
 	if (!swapChain || runtimeQuarantined)
@@ -969,7 +834,7 @@ HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::SetFullscreenState(BOOL Fullscreen
 
 HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::GetFullscreenState(_Out_opt_ BOOL* pFullscreen, _COM_Outptr_opt_result_maybenull_ IDXGIOutput** ppTarget)
 {
-	return owner.GetFullscreenState(pFullscreen, ppTarget);
+	return swapChain->GetFullscreenState(pFullscreen, ppTarget);
 }
 
 HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::GetDesc(_Out_ DXGI_SWAP_CHAIN_DESC* pDesc)
@@ -1131,7 +996,6 @@ HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::SetHDRMetaData(DXGI_HDR_METADATA_T
 
 void DX12SwapChain::SetUIBuffer()
 {
-	std::scoped_lock submissionLock(commandSubmissionMutex);
 	if (!globals::game::ui->GameIsPaused()) {
 		auto& data = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kFRAMEBUFFER];
 		data.RTV = uiBufferWrapped->rtv.get();
@@ -1141,7 +1005,6 @@ void DX12SwapChain::SetUIBuffer()
 
 void DX12SwapChain::CreateSharedResources()
 {
-	std::scoped_lock submissionLock(commandSubmissionMutex);
 	auto renderer = globals::game::renderer;
 
 	// Create depth buffer

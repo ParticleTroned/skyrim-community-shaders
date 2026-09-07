@@ -168,6 +168,10 @@ public:
 		uint32_t a_contextCount,
 		uint32_t a_requestedVersion) const;
 	bool HasFSRResourcesPendingTeardown() const;
+	/** @brief Reports retained host ownership that must not be reused or destroyed this session. */
+	[[nodiscard]] bool IsHostFSRStateQuarantined() const noexcept { return fsrHostStateQuarantined; }
+	/** @brief Returns the SDK result from the most recent host FSR context-create call. */
+	[[nodiscard]] FfxErrorCode GetLastFSRContextCreateResult() const noexcept { return fsrLastContextCreateResult; }
 	[[nodiscard]] HRESULT GetLastFSRDeviceRemovedReason() const noexcept { return fsrLastDeviceRemovedReason; }
 	LifecycleResult ProbeFSRDeviceStatus() noexcept { return RecordFSRDeviceStatus(); }
 	LifecycleResult PollFSRResourceTeardownReady(const char* a_reason = nullptr);
@@ -236,6 +240,7 @@ private:
 	bool fsrContextValid[2]{};
 	bool fsrContextIndeterminate[2]{};
 	bool fsrHostStateQuarantined = false;
+	FfxErrorCode fsrLastContextCreateResult = FFX_OK;
 	HRESULT fsrLastDeviceRemovedReason = S_OK;
 	HRESULT runtimeUpscalerLastDeviceRemovedReason = S_OK;
 	uint32_t fsrContextMaxRenderWidth = 0;

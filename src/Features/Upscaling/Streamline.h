@@ -162,7 +162,12 @@ public:
 	uint64_t vrDLSSViewportUseCounter = 0;
 	std::array<bool, 2> activeDLSSViewportResourcesAllocated = {};
 	ID3D11Query* pendingDLSSResourceFreeIdleFence = nullptr;
-	std::array<ID3D11Query*, kVRDLSSViewportRoleCount> pendingVRDLSSSlotRecycleIdleFences{};
+	struct VRDLSSSlotRecycleFence
+	{
+		ID3D11Query* query = nullptr;
+		uint32_t victimSlot = kVRDLSSViewportSlotCount;
+	};
+	std::array<VRDLSSSlotRecycleFence, kVRDLSSViewportRoleCount> pendingVRDLSSSlotRecycleIdleFences{};
 
 	struct ReflexOptionsCache
 	{
@@ -485,6 +490,11 @@ public:
 		ID3D11Resource* a_colorInput,
 		sl::ViewportHandle& a_viewport) const;
 	int ChooseVRDLSSViewportSlotForAllocation(DLSSViewportRole viewportRole) const;
+	/** @brief Reports whether a profile can use an existing or unused slot without evicting another profile. */
+	[[nodiscard]] bool CanPrepareVRDLSSViewportWithoutRecycle(
+		DLSSViewportRole a_viewportRole,
+		uint32_t a_qualityMode,
+		uint32_t a_dlssPreset) const noexcept;
 	bool FreeDLSSViewportResources(sl::ViewportHandle a_viewport, uint32_t a_eyeIndex, bool a_logFailures);
 	bool FreeVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t slotIndex, bool logFailures);
 	DLSSOptionsCache& GetDLSSOptionsCache(DLSSViewportRole viewportRole, uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset);
@@ -524,6 +534,11 @@ public:
 	}
 	/** @brief Reports whether the complete Streamline DLSS activation contract is live. */
 	[[nodiscard]] bool IsDLSSRuntimeReady() const noexcept;
+	/** @brief Reports whether Streamline still owns the exact current D3D device. */
+	[[nodiscard]] bool IsBoundToD3DDevice(ID3D11Device* a_device) const noexcept
+	{
+		return a_device && boundDeviceIdentity == a_device;
+	}
 	/** @brief Proves exact option identity and ownership for both eyes of one slot. */
 	[[nodiscard]] bool HasCompleteVRDLSSViewportResources(
 		DLSSViewportRole a_viewportRole,
@@ -532,6 +547,14 @@ public:
 		uint32_t a_outputWidth,
 		uint32_t a_outputHeight,
 		ID3D11Resource* a_colorInput) const noexcept;
+	/** @brief Proves one exact stereo allocation against each eye's input format. */
+	[[nodiscard]] bool HasCompleteVRDLSSViewportResources(
+		DLSSViewportRole a_viewportRole,
+		uint32_t a_qualityMode,
+		uint32_t a_dlssPreset,
+		const std::array<uint32_t, 2>& a_outputWidths,
+		const std::array<uint32_t, 2>& a_outputHeights,
+		const std::array<ID3D11Resource*, 2>& a_colorInputs) const noexcept;
 
 	bool Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors);
 	bool UpscaleRegion(uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,

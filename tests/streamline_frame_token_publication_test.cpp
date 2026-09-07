@@ -227,8 +227,7 @@ namespace
 			return quarantined.TryBeginConstruction();
 		});
 		if (competingConstruction.get() || !quarantined.Publish(quarantinedActive) ||
-			!quarantined.BeginRetirement(quarantinedActive) ||
-			quarantinedActive.load(std::memory_order_acquire))
+			!quarantined.BeginRetirement())
 			return false;
 		auto duringRetirement = std::async(std::launch::async, [&]() {
 			return quarantined.TryBeginConstruction();
@@ -243,8 +242,7 @@ namespace
 		std::atomic_bool reusableActive{ false };
 		ProxyLifecycleGate reusable;
 		if (!reusable.TryBeginConstruction() || !reusable.Publish(reusableActive) ||
-			!reusable.BeginRetirement(reusableActive) ||
-			reusableActive.load(std::memory_order_acquire))
+			!reusable.BeginRetirement())
 			return false;
 		reusable.CompleteRetirement(true, reusableActive);
 		if (reusable.GetState() != ProxyLifecycleState::Available ||
@@ -282,45 +280,6 @@ namespace
 		if (ClassifyPresentResult(false, false) != PresentResultDisposition::Presented ||
 			ClassifyPresentResult(true, true) != PresentResultDisposition::Retryable ||
 			ClassifyPresentResult(true, false) != PresentResultDisposition::Fatal)
-			return false;
-
-		CommandAllocatorRetirementTracker<2> allocatorRetirements;
-		if (!allocatorRetirements.IsReady(0, 0))
-			return false;
-		allocatorRetirements.MarkSubmitted(0, 4);
-		allocatorRetirements.MarkSubmitted(1, 7);
-		if (allocatorRetirements.IsReady(0, 3) ||
-			allocatorRetirements.ClassifyReuse(0, 3, true) !=
-				CommandAllocatorReuseDisposition::Retryable ||
-			allocatorRetirements.ClassifyReuse(0, 3, true) !=
-				CommandAllocatorReuseDisposition::Retryable ||
-			allocatorRetirements.ClassifyReuse(0, 3, false) !=
-				CommandAllocatorReuseDisposition::WaitForCompletion ||
-			!allocatorRetirements.IsReady(0, 4) ||
-			allocatorRetirements.ClassifyReuse(0, 4, true) !=
-				CommandAllocatorReuseDisposition::Ready ||
-			allocatorRetirements.IsReady(1, 6) ||
-			!allocatorRetirements.IsReady(1, 7))
-			return false;
-		allocatorRetirements.Reset();
-		if (!allocatorRetirements.IsReady(0, 0) ||
-			!allocatorRetirements.IsReady(1, 0))
-			return false;
-
-		if (ClassifyResizeBuffers1Admission(0, 1, false, false, false) !=
-				ResizeBuffers1Admission::Supported ||
-			ClassifyResizeBuffers1Admission(0, 1, true, false, false) !=
-				ResizeBuffers1Admission::ZeroCountArrays ||
-			ClassifyResizeBuffers1Admission(0, 1, false, true, false) !=
-				ResizeBuffers1Admission::ZeroCountArrays ||
-			ClassifyResizeBuffers1Admission(1, 1, false, false, false) !=
-				ResizeBuffers1Admission::Supported ||
-			ClassifyResizeBuffers1Admission(1, 1, true, true, true) !=
-				ResizeBuffers1Admission::Supported ||
-			ClassifyResizeBuffers1Admission(1, 1, false, true, false) !=
-				ResizeBuffers1Admission::IncompatiblePresentQueue ||
-			ClassifyResizeBuffers1Admission(2, 1, false, false, false) !=
-				ResizeBuffers1Admission::UnsupportedBufferCount)
 			return false;
 
 		return ClassifyBoundedCopy(true, true) == BoundedCopyResult::Complete &&

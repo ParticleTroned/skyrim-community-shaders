@@ -42,6 +42,12 @@ public:
 
 	virtual void DrawSettingsHeaderControls() override;
 	virtual void DrawSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual void DrawPerformanceSettings(bool) override;
+	virtual json CapturePerformanceSettingsState() const override;
+	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override;
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { SetEnabled(a_enabled); }
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
@@ -60,5 +66,10 @@ private:
 	std::atomic_bool enabled = true;
 
 	static Settings GetDisabledSettings();
+	bool HasEnabledContribution() const;
+	void DrawFoliageScatteringSetting();
+	void DrawFoliageAmbientBoostSetting(bool a_truePBRActive);
+	void DrawFoliageAmbientFlipSetting();
+	void DrawGrassScatteringSetting();
 	static void SanitizeSettings(Settings& a_settings);
 };

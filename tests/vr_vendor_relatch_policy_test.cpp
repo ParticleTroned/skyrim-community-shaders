@@ -1,7 +1,11 @@
 #include "Features/Upscaling/VRVendorRelatchPolicy.h"
 
+#include <atomic>
 #include <cstdint>
 #include <limits>
+#include <mutex>
+#include <semaphore>
+#include <thread>
 
 namespace
 {
@@ -871,6 +875,98 @@ namespace
 				return false;
 		}
 
+		for (std::uint32_t bits = 0; bits < (1u << 12); ++bits) {
+			const InactiveDLSSActivationRetentionAdmission state{
+				.immutableSettingsRequest = (bits & (1u << 0)) != 0,
+				.targetActive = (bits & (1u << 1)) != 0,
+				.targetIsDLSS = (bits & (1u << 2)) != 0,
+				.currentInactiveDLSS = (bits & (1u << 3)) != 0,
+				.resetPending = (bits & (1u << 4)) != 0,
+				.memoryPressureNormal = (bits & (1u << 5)) != 0,
+				.memoryReliefActive = false,
+				.postLoadResetPending = (bits & (1u << 6)) != 0,
+				.recoveryOwned = (bits & (1u << 7)) != 0,
+				.preservingActiveContract = (bits & (1u << 8)) != 0,
+				.deviceLost = (bits & (1u << 9)) != 0,
+				.deviceMatches = (bits & (1u << 10)) != 0,
+				.retainedAllocationPreviouslyAdmitted = false,
+				.exactFullEyeAllocationReady = true,
+				.exactFoveatedCenterAllocationReady = false,
+				.targetSlotsAvailableWithoutRecycle = (bits & (1u << 11)) != 0,
+			};
+			const bool expected =
+				state.immutableSettingsRequest && state.targetActive &&
+				state.targetIsDLSS && state.currentInactiveDLSS &&
+				!state.resetPending && state.memoryPressureNormal &&
+				!state.postLoadResetPending &&
+				!state.recoveryOwned && !state.preservingActiveContract &&
+				!state.deviceLost && state.deviceMatches &&
+				state.targetSlotsAvailableWithoutRecycle;
+			if (CanRetainInactiveDLSSForActivation(state) != expected)
+				return false;
+		}
+
+		for (std::uint32_t bits = 0; bits < (1u << 4); ++bits) {
+			const InactiveDLSSActivationRetentionAdmission state{
+				.immutableSettingsRequest = true,
+				.targetActive = true,
+				.targetIsDLSS = true,
+				.currentInactiveDLSS = true,
+				.resetPending = false,
+				.memoryPressureNormal = true,
+				.memoryReliefActive = (bits & (1u << 0)) != 0,
+				.postLoadResetPending = false,
+				.recoveryOwned = false,
+				.preservingActiveContract = false,
+				.deviceLost = false,
+				.deviceMatches = true,
+				.retainedAllocationPreviouslyAdmitted = (bits & (1u << 1)) != 0,
+				.exactFullEyeAllocationReady = (bits & (1u << 2)) != 0,
+				.exactFoveatedCenterAllocationReady = (bits & (1u << 3)) != 0,
+				.targetSlotsAvailableWithoutRecycle = true,
+			};
+			const bool expected =
+				(!state.memoryReliefActive ||
+					state.retainedAllocationPreviouslyAdmitted) &&
+				(state.exactFullEyeAllocationReady ||
+					state.exactFoveatedCenterAllocationReady);
+			if (CanRetainInactiveDLSSForActivation(state) != expected)
+				return false;
+		}
+
+		InactiveDLSSActivationRetentionAdmission nativeFoveatedDLSS{
+			.immutableSettingsRequest = true,
+			.targetActive = true,
+			.targetIsDLSS = true,
+			.currentInactiveDLSS = true,
+			.resetPending = false,
+			.memoryPressureNormal = true,
+			.memoryReliefActive = false,
+			.postLoadResetPending = false,
+			.recoveryOwned = false,
+			.preservingActiveContract = false,
+			.deviceLost = false,
+			.deviceMatches = true,
+			.exactFullEyeAllocationReady = false,
+			.exactFoveatedCenterAllocationReady = true,
+			.targetSlotsAvailableWithoutRecycle = true,
+		};
+		if (!CanRetainInactiveDLSSForActivation(nativeFoveatedDLSS))
+			return false;
+		nativeFoveatedDLSS.memoryReliefActive = true;
+		if (CanRetainInactiveDLSSForActivation(nativeFoveatedDLSS))
+			return false;
+		nativeFoveatedDLSS.retainedAllocationPreviouslyAdmitted = true;
+		if (!CanRetainInactiveDLSSForActivation(nativeFoveatedDLSS))
+			return false;
+		nativeFoveatedDLSS.exactFoveatedCenterAllocationReady = false;
+		if (CanRetainInactiveDLSSForActivation(nativeFoveatedDLSS))
+			return false;
+		nativeFoveatedDLSS.exactFoveatedCenterAllocationReady = true;
+		nativeFoveatedDLSS.resetPending = true;
+		if (CanRetainInactiveDLSSForActivation(nativeFoveatedDLSS))
+			return false;
+
 		for (std::uint32_t bits = 0; bits < (1u << 8); ++bits) {
 			const RuntimeFSRFallbackReuseAdmission state{
 				.isVR = (bits & (1u << 0)) != 0,
@@ -1487,6 +1583,119 @@ namespace
 		return true;
 	}
 
+	constexpr bool CoversSubmitStagePromotionAdmission()
+	{
+		SubmitStagePromotionAdmission state{
+			.coherentStereoCycle = true,
+			.providerPreparationReady = true,
+			.settleRequirementSatisfied = true,
+			.consecutiveStableCycles = 3,
+			.requiredStableCycles = 3,
+		};
+		if (!CanPublishSubmitStagePromotionCandidate(state))
+			return false;
+
+		state.coherentStereoCycle = false;
+		if (CanPublishSubmitStagePromotionCandidate(state))
+			return false;
+		state.coherentStereoCycle = true;
+		state.providerPreparationReady = false;
+		if (CanPublishSubmitStagePromotionCandidate(state))
+			return false;
+		state.providerPreparationReady = true;
+		state.settleRequirementSatisfied = false;
+		if (CanPublishSubmitStagePromotionCandidate(state))
+			return false;
+		state.settleRequirementSatisfied = true;
+		state.consecutiveStableCycles = 2;
+		if (CanPublishSubmitStagePromotionCandidate(state))
+			return false;
+		state.consecutiveStableCycles = 3;
+		state.requiredStableCycles = 0;
+		return !CanPublishSubmitStagePromotionCandidate(state);
+	}
+
+	constexpr bool CoversProofDrivenPromotionAdmission()
+	{
+		ProofDrivenPromotionAdmission state{
+			.immutableSettingsTransition = true,
+			.exactAttemptMetrics = true,
+		};
+		if (!CanUseProofDrivenPromotion(state))
+			return false;
+
+		state.immutableSettingsTransition = false;
+		if (CanUseProofDrivenPromotion(state))
+			return false;
+		state.immutableSettingsTransition = true;
+		state.exactAttemptMetrics = false;
+		if (CanUseProofDrivenPromotion(state))
+			return false;
+		state.exactAttemptMetrics = true;
+		state.retries = 1;
+		if (CanUseProofDrivenPromotion(state))
+			return false;
+		state.retries = 0;
+		state.failures = 1;
+		if (CanUseProofDrivenPromotion(state))
+			return false;
+		state.failures = 0;
+		state.recoveryOwned = true;
+		if (CanUseProofDrivenPromotion(state))
+			return false;
+		state.recoveryOwned = false;
+		state.providerNeutralRecovery = true;
+		if (CanUseProofDrivenPromotion(state))
+			return false;
+		state.providerNeutralRecovery = false;
+		state.emergencyRecovery = true;
+		if (CanUseProofDrivenPromotion(state))
+			return false;
+		state.emergencyRecovery = false;
+		state.presentationDeadlineFallback = true;
+		return !CanUseProofDrivenPromotion(state);
+	}
+
+	constexpr bool CoversInitialRelatchPacing()
+	{
+		InitialRelatchPacingAdmission state{
+			.newPhysicalTuple = true,
+			.directMenuRequest = false,
+			.immutableSettingsRequest = true,
+			.protectedRecovery = false,
+			.requestID = 7,
+			.requestQueuedFrame = 10,
+			.currentFrame = 16,
+			.coalescingFrames = 6,
+			.ordinaryDelayFrames = 6,
+			.minimumDelayFrames = 0,
+		};
+		if (SelectInitialRelatchDelayFrames(state) != 1)
+			return false;
+
+		state.currentFrame = 15;
+		if (SelectInitialRelatchDelayFrames(state) != 6)
+			return false;
+		state.currentFrame = 5;
+		if (SelectInitialRelatchDelayFrames(state) != 6)
+			return false;
+		state.currentFrame = 16;
+		state.protectedRecovery = true;
+		if (SelectInitialRelatchDelayFrames(state) != 6)
+			return false;
+		state.protectedRecovery = false;
+		state.newPhysicalTuple = false;
+		if (SelectInitialRelatchDelayFrames(state) != 6)
+			return false;
+		state.newPhysicalTuple = true;
+		state.immutableSettingsRequest = false;
+		state.directMenuRequest = true;
+		if (SelectInitialRelatchDelayFrames(state) != 1)
+			return false;
+		state.minimumDelayFrames = 9;
+		return SelectInitialRelatchDelayFrames(state) == 9;
+	}
+
 	constexpr bool CoversStereoDispatchContractIdentity()
 	{
 		return IsSameStereoDispatchContract(7, 7, 2, 2) &&
@@ -1507,6 +1716,405 @@ namespace
 		       DoesPendingVendorResetInvalidateProvider(true, 0, 7) &&
 		       !DoesPendingVendorResetInvalidateProvider(true, 8, 0) &&
 		       DoesPendingVendorResetInvalidateProvider(true, 0, 0);
+	}
+
+	constexpr bool CoversVendorResetFailureRepublication()
+	{
+		struct ResetSlot
+		{
+			bool pending = false;
+			std::uint32_t generation = 0;
+		};
+		const auto republishAfterFailure = [](ResetSlot& a_slot, std::uint32_t a_failedGeneration) {
+			if (!CanRepublishVendorResetAfterFailure(
+					a_slot.pending,
+					a_slot.generation,
+					a_failedGeneration)) {
+				return false;
+			}
+			if (!a_slot.pending) {
+				a_slot.generation = a_failedGeneration;
+				a_slot.pending = true;
+			}
+			return true;
+		};
+
+		constexpr std::uint32_t claimedGeneration = 7;
+		constexpr std::uint32_t successorGeneration = 8;
+		// Claim G, publish H, then fail G: H must remain authoritative.
+		ResetSlot successor{ true, successorGeneration };
+		if (republishAfterFailure(successor, claimedGeneration) ||
+			!successor.pending ||
+			successor.generation != successorGeneration) {
+			return false;
+		}
+
+		ResetSlot idle{};
+		ResetSlot same{ true, claimedGeneration };
+		ResetSlot conservative{ true, 0 };
+		return republishAfterFailure(idle, claimedGeneration) &&
+		       idle.pending && idle.generation == claimedGeneration &&
+		       republishAfterFailure(same, claimedGeneration) &&
+		       same.pending && same.generation == claimedGeneration &&
+		       !republishAfterFailure(conservative, claimedGeneration) &&
+		       conservative.pending && conservative.generation == 0 &&
+		       !CanRepublishVendorResetAfterFailure(true, claimedGeneration, 0) &&
+		       CanRepublishVendorResetAfterFailure(true, 0, 0);
+	}
+
+	bool CoversVendorResetFailureCommitTransaction()
+	{
+		constexpr std::uint32_t claimedGeneration = 7;
+		constexpr std::uint32_t successorGeneration = 8;
+		std::mutex resetMutex;
+		std::atomic<bool> resetPending{ false };
+		std::atomic<std::uint32_t> resetGeneration{ 0 };
+		std::atomic<std::uint32_t> lifecycleGeneration{ 0 };
+		std::atomic<std::uint32_t> terminalGeneration{ 0 };
+		std::atomic<bool> failureAccepted{ false };
+		std::atomic<bool> successorPublished{ false };
+		std::binary_semaphore failureCommitEntered{ 0 };
+		std::binary_semaphore releaseFailureCommit{ 0 };
+		std::binary_semaphore successorStarted{ 0 };
+
+		std::thread failedOperation([&]() {
+			failureAccepted.store(
+				TryCommitVendorResetFailure(
+					resetMutex,
+					resetPending,
+					resetGeneration,
+					claimedGeneration,
+					[&]() {
+						lifecycleGeneration.store(
+							claimedGeneration,
+							std::memory_order_release);
+						terminalGeneration.store(
+							claimedGeneration,
+							std::memory_order_release);
+						failureCommitEntered.release();
+						releaseFailureCommit.acquire();
+					}),
+				std::memory_order_release);
+		});
+		failureCommitEntered.acquire();
+
+		std::thread successorPublisher([&]() {
+			successorStarted.release();
+			const std::scoped_lock lock(resetMutex);
+			resetGeneration.store(successorGeneration, std::memory_order_release);
+			resetPending.store(true, std::memory_order_release);
+			lifecycleGeneration.store(
+				successorGeneration,
+				std::memory_order_release);
+			successorPublished.store(true, std::memory_order_release);
+		});
+		successorStarted.acquire();
+		const bool successorBlockedDuringFailureCommit =
+			!successorPublished.load(std::memory_order_acquire);
+		releaseFailureCommit.release();
+		failedOperation.join();
+		successorPublisher.join();
+
+		const bool serializedCommit =
+			failureAccepted.load(std::memory_order_acquire) &&
+			successorBlockedDuringFailureCommit &&
+			successorPublished.load(std::memory_order_acquire) &&
+			resetPending.load(std::memory_order_acquire) &&
+			resetGeneration.load(std::memory_order_acquire) ==
+				successorGeneration &&
+			lifecycleGeneration.load(std::memory_order_acquire) ==
+				successorGeneration &&
+			terminalGeneration.load(std::memory_order_acquire) !=
+				resetGeneration.load(std::memory_order_acquire);
+
+		bool staleEvidenceCommitted = false;
+		const bool staleAccepted = TryCommitVendorResetFailure(
+			resetMutex,
+			resetPending,
+			resetGeneration,
+			claimedGeneration,
+			[&]() { staleEvidenceCommitted = true; });
+		return serializedCommit && !staleAccepted &&
+		       !staleEvidenceCommitted &&
+		       resetGeneration.load(std::memory_order_acquire) ==
+		           successorGeneration;
+	}
+
+	bool CoversPostFailureVendorResetIdentity()
+	{
+		const auto acceptedFailureRemainsTerminal = [](
+														std::uint32_t a_failedGeneration) {
+			std::mutex resetMutex;
+			std::atomic<bool> resetPending{ false };
+			std::atomic<std::uint32_t> resetGeneration{ 0 };
+			VendorResetRequestIdentity terminalIdentity{};
+
+			const auto beforeFailure = LoadVendorResetRequestIdentity(
+				resetPending,
+				resetGeneration);
+			const bool accepted = TryCommitVendorResetFailure(
+				resetMutex,
+				resetPending,
+				resetGeneration,
+				a_failedGeneration,
+				[&]() {
+					terminalIdentity = LoadVendorResetRequestIdentity(
+						resetPending,
+						resetGeneration);
+				});
+			const auto afterFailure = LoadVendorResetRequestIdentity(
+				resetPending,
+				resetGeneration);
+			unsigned repeatedOperations = 0;
+			if (terminalIdentity != afterFailure)
+				++repeatedOperations;
+
+			return accepted && !beforeFailure.pending &&
+			       terminalIdentity.pending &&
+			       terminalIdentity.generation == a_failedGeneration &&
+			       terminalIdentity == afterFailure && repeatedOperations == 0;
+		};
+
+		constexpr std::uint32_t failedGeneration = 7;
+		constexpr std::uint32_t successorGeneration = 8;
+		std::mutex resetMutex;
+		std::atomic<bool> resetPending{ true };
+		std::atomic<std::uint32_t> resetGeneration{ failedGeneration };
+		const auto terminalIdentity = LoadVendorResetRequestIdentity(
+			resetPending,
+			resetGeneration);
+		{
+			const std::scoped_lock lock(resetMutex);
+			resetGeneration.store(successorGeneration, std::memory_order_release);
+		}
+		const auto afterSuccessor = LoadVendorResetRequestIdentity(
+			resetPending,
+			resetGeneration);
+
+		return acceptedFailureRemainsTerminal(0) &&
+		       acceptedFailureRemainsTerminal(failedGeneration) &&
+		       terminalIdentity != afterSuccessor &&
+		       afterSuccessor.generation == successorGeneration;
+	}
+
+	bool CoversPreBoundVendorResetFailureIdentity()
+	{
+		const auto successorWinsBeforeFailureAdmission = [](
+															 std::uint32_t a_failedGeneration,
+															 bool a_latchCommonFailure) {
+			constexpr std::uint32_t successorGeneration = 8;
+			std::mutex resetMutex;
+			std::atomic<std::uint32_t> evaluationGeneration{
+				a_failedGeneration
+			};
+			std::atomic<bool> resetPending{ false };
+			std::atomic<std::uint32_t> resetGeneration{ 0 };
+			bool staleLifecycleCommitted = false;
+			bool staleFSRKeyLatched = false;
+			bool staleCommonKeyLatched = false;
+			bool successorServiced = false;
+
+			// The result retains the generation selected when its operation began.
+			const std::uint32_t operationGeneration =
+				evaluationGeneration.load(std::memory_order_acquire);
+			{
+				const std::scoped_lock lock(resetMutex);
+				evaluationGeneration.store(
+					successorGeneration,
+					std::memory_order_release);
+				resetGeneration.store(
+					successorGeneration,
+					std::memory_order_release);
+				resetPending.store(true, std::memory_order_release);
+			}
+
+			const bool staleAccepted = TryCommitVendorResetFailure(
+				resetMutex,
+				resetPending,
+				resetGeneration,
+				operationGeneration,
+				[&]() {
+					staleLifecycleCommitted = true;
+					staleFSRKeyLatched = true;
+					staleCommonKeyLatched = a_latchCommonFailure;
+				});
+			const bool successorPreserved =
+				!staleAccepted && !staleLifecycleCommitted &&
+				!staleFSRKeyLatched && !staleCommonKeyLatched &&
+				resetPending.load(std::memory_order_acquire) &&
+				resetGeneration.load(std::memory_order_acquire) ==
+					successorGeneration &&
+				evaluationGeneration.load(std::memory_order_acquire) ==
+					successorGeneration;
+			const bool successorAccepted = TryCommitVendorResetFailure(
+				resetMutex,
+				resetPending,
+				resetGeneration,
+				successorGeneration,
+				[&]() { successorServiced = true; });
+
+			return successorPreserved && successorAccepted &&
+			       successorServiced;
+		};
+
+		return successorWinsBeforeFailureAdmission(0, false) &&
+		       successorWinsBeforeFailureAdmission(7, true);
+	}
+
+	constexpr bool CoversVendorResetServiceOwnership()
+	{
+		VendorResetServiceAdmission state{
+			.currentMethod = true,
+			.resetPending = true,
+			.resetGeneration = 7,
+			.providerGeneration = 7,
+		};
+		auto decision = SelectVendorResetService(state);
+		if (!decision.resetOwnsProvider || !decision.workPending ||
+			!decision.claimReset || !decision.mutateProvider) {
+			return false;
+		}
+
+		state.resetGeneration = 8;
+		decision = SelectVendorResetService(state);
+		if (decision.resetOwnsProvider || decision.workPending ||
+			decision.claimReset || decision.mutateProvider) {
+			return false;
+		}
+
+		state.providerGeneration = 0;
+		decision = SelectVendorResetService(state);
+		if (decision.resetOwnsProvider || decision.workPending)
+			return false;
+
+		state.resetGeneration = 0;
+		decision = SelectVendorResetService(state);
+		if (!decision.resetOwnsProvider || !decision.claimReset)
+			return false;
+
+		state = {
+			.includeInactiveProvider = true,
+			.resetPending = true,
+			.resetGeneration = 11,
+			.providerGeneration = 11,
+		};
+		decision = SelectVendorResetService(state);
+		if (!decision.workPending || !decision.claimReset ||
+			!decision.mutateProvider) {
+			return false;
+		}
+
+		state.retainInactiveProvider = true;
+		decision = SelectVendorResetService(state);
+		if (!decision.resetOwnsProvider || decision.workPending ||
+			decision.claimReset || decision.mutateProvider) {
+			return false;
+		}
+
+		state = {
+			.currentMethod = true,
+			.runtimeGenerationMismatch = true,
+		};
+		decision = SelectVendorResetService(state);
+		return !decision.resetOwnsProvider && decision.workPending &&
+		       !decision.claimReset && decision.mutateProvider;
+	}
+
+	constexpr bool CoversDLSSReadinessTiers()
+	{
+		DLSSProviderReadiness state{
+			.resetInvalidatesProvider = false,
+			.generationValid = true,
+			.generationMatches = true,
+			.runtimeReady = true,
+			.completeViewportResources = false,
+		};
+		if (!IsDLSSLifecycleReady(state) ||
+			IsExactExistingDLSSDispatchReady(state)) {
+			return false;
+		}
+
+		state.completeViewportResources = true;
+		if (!IsDLSSLifecycleReady(state) ||
+			!IsExactExistingDLSSDispatchReady(state)) {
+			return false;
+		}
+
+		state.resetInvalidatesProvider = true;
+		if (IsDLSSLifecycleReady(state) ||
+			IsExactExistingDLSSDispatchReady(state)) {
+			return false;
+		}
+		state.resetInvalidatesProvider = false;
+		state.generationValid = false;
+		if (IsDLSSLifecycleReady(state) ||
+			IsExactExistingDLSSDispatchReady(state)) {
+			return false;
+		}
+		state.generationValid = true;
+		state.generationMatches = false;
+		if (IsDLSSLifecycleReady(state) ||
+			IsExactExistingDLSSDispatchReady(state)) {
+			return false;
+		}
+		state.generationMatches = true;
+		state.runtimeReady = false;
+		return !IsDLSSLifecycleReady(state) &&
+		       !IsExactExistingDLSSDispatchReady(state);
+	}
+
+	constexpr bool CoversSynchronousVendorLifecycleRebind()
+	{
+		for (std::uint32_t bits = 0; bits < (1u << 11); ++bits) {
+			const SynchronousVendorLifecycleRebindAdmission state{
+				.completedSynchronously = (bits & (1u << 0)) != 0,
+				.targetVendorActive = (bits & (1u << 1)) != 0,
+				.sourceOwned = (bits & (1u << 2)) != 0,
+				.targetEpochOwned = (bits & (1u << 3)) != 0,
+				.previousLifecycleOwned = (bits & (1u << 4)) != 0,
+				.lifecycleReady = (bits & (1u << 5)) != 0,
+				.runtimeReady = (bits & (1u << 6)) != 0,
+				.methodMatches = (bits & (1u << 7)) != 0,
+				.backendMatches = (bits & (1u << 8)) != 0,
+				.resourceContractMatches = (bits & (1u << 9)) != 0,
+				.generationMatches = (bits & (1u << 10)) != 0,
+			};
+			const bool expected = bits == ((1u << 11) - 1u);
+			if (CanRebindSynchronousVendorLifecycle(state) != expected)
+				return false;
+		}
+		return true;
+	}
+
+	constexpr bool CoversDLSSSlotRecycleOwnership()
+	{
+		DLSSSlotRecycleAdmission state{
+			.globalTeardownPending = false,
+			.roleRecyclePending = true,
+			.victimSlot = 1,
+			.requestedSlot = 0,
+			.slotCount = 2,
+		};
+		if (!CanUseDLSSSlotDuringRecycle(state))
+			return false;
+
+		state.requestedSlot = 1;
+		if (CanUseDLSSSlotDuringRecycle(state))
+			return false;
+		state.requestedSlot = 0;
+		state.globalTeardownPending = true;
+		if (CanUseDLSSSlotDuringRecycle(state))
+			return false;
+		state.globalTeardownPending = false;
+		state.victimSlot = 2;
+		if (CanUseDLSSSlotDuringRecycle(state))
+			return false;
+		state.roleRecyclePending = false;
+		state.requestedSlot = 2;
+		if (CanUseDLSSSlotDuringRecycle(state))
+			return false;
+		state.requestedSlot = 0;
+		return CanUseDLSSSlotDuringRecycle(state);
 	}
 
 	constexpr bool CoversNativeRestoreSuccessorAdmission()
@@ -1635,10 +2243,27 @@ namespace
 			.isVR = true,
 			.methodChanged = true,
 			.targetMethodUsesVendor = true,
+			.targetMethodIsDLSS = true,
 		};
+		if (NeedsVendorEvaluationRelatch(selection))
+			return false;
+
+		selection.targetRenderScaleActive = true;
 		if (!NeedsVendorEvaluationRelatch(selection))
 			return false;
 
+		selection.targetRenderScaleActive = false;
+		selection.previousMethodUsesVendor = true;
+		if (!NeedsVendorEvaluationRelatch(selection))
+			return false;
+
+		selection.previousMethodUsesVendor = false;
+		selection.targetMethodIsDLSS = false;
+		selection.targetMethodIsFSR = true;
+		if (!NeedsVendorEvaluationRelatch(selection))
+			return false;
+
+		selection.targetMethodIsFSR = false;
 		selection.targetMethodUsesVendor = false;
 		selection.previousMethodUsesVendor = true;
 		if (!NeedsVendorEvaluationRelatch(selection))
@@ -3242,8 +3867,16 @@ namespace
 	static_assert(CoversStableDoorContractRetention());
 	static_assert(CoversNativeRestoreMemoryReliefOwnership());
 	static_assert(CoversDeferredDispatchSelection());
+	static_assert(CoversSubmitStagePromotionAdmission());
+	static_assert(CoversProofDrivenPromotionAdmission());
+	static_assert(CoversInitialRelatchPacing());
 	static_assert(CoversStereoDispatchContractIdentity());
 	static_assert(CoversPendingVendorResetOwnership());
+	static_assert(CoversVendorResetFailureRepublication());
+	static_assert(CoversVendorResetServiceOwnership());
+	static_assert(CoversDLSSReadinessTiers());
+	static_assert(CoversDLSSSlotRecycleOwnership());
+	static_assert(CoversSynchronousVendorLifecycleRebind());
 	static_assert(CoversNativeRestoreSuccessorAdmission());
 	static_assert(CoversProviderRetirementSuccessorAdmission());
 	static_assert(CoversAppliedContractGenerationSelection());
@@ -3280,4 +3913,11 @@ namespace
 	static_assert(CoversMenuPresentationDecisionLatching());
 }
 
-int main() {}
+int main()
+{
+	return CoversVendorResetFailureCommitTransaction() &&
+	               CoversPostFailureVendorResetIdentity() &&
+	               CoversPreBoundVendorResetFailureIdentity() ?
+	           0 :
+	           1;
+}

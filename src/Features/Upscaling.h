@@ -8,6 +8,7 @@
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
 #include "Upscaling/VRPresentationStretchTelemetryPolicy.h"
+#include "Upscaling/VRRenderScaleAuthorityPolicy.h"
 #include "Upscaling/VRRenderScalePreparationPolicy.h"
 #include "Upscaling/VRVendorRelatchPolicy.h"
 #include "Utils/LazyShader.h"
@@ -779,6 +780,7 @@ public:
 		bool preserveFSRResources = false;
 		bool reuseCompatibleFSRResources = false;
 		bool preserveCompatibleFSRIntermediates = false;
+		bool retainInactiveDLSSResources = false;
 		bool retainWarmDLSSResources = false;
 		bool retainWarmFSRResources = false;
 		bool reuseWarmTargetRuntime = false;
@@ -1197,6 +1199,12 @@ public:
 	struct VRRenderScalePresentationSnapshot
 	{
 		std::array<VRRenderScalePresentationEyeSnapshot, 2> eyes{};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		// Preserve the last coherent vendor pair when an asynchronous status read
+		// lands between the two eye publications of the next compositor cycle.
+		std::array<VRRenderScalePresentationEyeSnapshot, 2>
+			lastCoherentVendorEyes{};
+#endif
 		uint32_t lastBothEyesVendorFrame = 0;
 		uint64_t lastBothEyesVendorCycle = 0;
 		uint32_t consecutiveBothEyesVendorFrames = 0;
@@ -1686,6 +1694,14 @@ public:
 	};
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	struct VRRenderScaleAuthorityDiagnosticSnapshot
+	{
+		VRRenderScaleAuthorityPolicy::Facts facts{};
+		VRRenderScaleAuthorityPolicy::Resolution resolution{};
+		uint64_t controllerRevision = 0;
+		bool controllerRevisionStable = false;
+	};
+
 	enum class VRRenderScaleCPUPerformanceCounter : std::size_t
 	{
 		WindowStartFrame,
@@ -1838,6 +1854,9 @@ public:
 	json BuildVRRenderScaleIterationRecord() const;
 	bool WriteVRRenderScaleIterationRecord() const;
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	/** @brief Resolves live render-scale owners for diagnostics without scheduling work. */
+	VRRenderScaleAuthorityDiagnosticSnapshot
+	GetVRRenderScaleAuthorityDiagnosticSnapshot() const;
 	VRRenderScalePreparationTelemetrySnapshot
 	GetVRRenderScalePreparationTelemetrySnapshot() const;
 	/** @brief Returns the latest admission decision for one exact preparation request. */
@@ -1905,10 +1924,22 @@ public:
 	uint32_t GetActiveVRRenderScaleContractGeneration() const;
 	uint32_t GetVRVendorEvaluationContractGeneration(
 		UpscaleMethod a_upscaleMethod) const;
+	bool PendingVendorRuntimeResetInvalidatesProvider(
+		UpscaleMethod a_upscaleMethod,
+		uint32_t a_providerGeneration) const;
 	bool IsVendorRuntimeReadyForActiveContract(UpscaleMethod a_upscaleMethod) const;
 	void MarkVendorRuntimeResourcesDirty(UpscaleMethod a_upscaleMethod, uint32_t a_generation = 0);
 	void MarkVendorRuntimeResourcesReady(UpscaleMethod a_upscaleMethod, uint32_t a_generation = 0);
 	void ClearVendorRuntimeResourcesDirty(UpscaleMethod a_upscaleMethod, bool a_clearRuntimeGeneration = false);
+	bool TryCommitFSRRuntimeResetFailure(
+		uint32_t a_failedGeneration,
+		VRVendorRuntimeLifecyclePhase a_phase,
+		const char* a_reason,
+		bool a_latchTerminalFailure,
+		bool a_latchCommonResourceFailure = false);
+	bool TryClaimPendingVendorRuntimeReset(
+		UpscaleMethod a_upscaleMethod,
+		uint32_t a_expectedGeneration);
 
 	struct JitterCB
 	{
@@ -2156,6 +2187,7 @@ public:
 	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;
 	virtual void SetupRenderTargetResources() override;
+	virtual void Reset() override;
 
 	UpscaleMethod GetUpscaleMethod() const;
 	UpscaleMethod GetConfiguredUpscaleMethodForTransition() const;
@@ -2950,6 +2982,7 @@ public:
 	std::atomic<bool> pendingFSRReset{ false };
 	std::atomic<uint32_t> pendingDLSSResetGeneration{ 0 };
 	std::atomic<uint32_t> pendingFSRResetGeneration{ 0 };
+	mutable std::mutex vendorRuntimeResetMutex;
 	uint32_t vrDLSSRuntimeResourceGeneration = 0;
 	uint32_t vrFSRRuntimeResourceGeneration = 0;
 	std::atomic<uint32_t> vrMainPassVendorDispatchCompletedFrame{ 0 };
@@ -3185,6 +3218,7 @@ public:
 	SubmitStageRuntimeFSRStereoState submitStageRuntimeFSRStereoState{};
 	bool submitStageForceFullEyeVendorFallback = false;
 	std::atomic<uint32_t> submitStageVendorResumeFrame{ 0 };
+	std::atomic_bool submitStageVendorResumeProofDrivenRelease{ false };
 	std::atomic<uint32_t> submitStageVendorResumeStableFrames{ 0 };
 	std::atomic<uint32_t> submitStageVendorResumeLastStableFrame{ 0 };
 	mutable std::recursive_mutex submitStageVendorResumeStableEyeMaskMutex;
@@ -3657,7 +3691,7 @@ private:
 	mutable std::mutex vrPostLoadCompositorHoldMutex;
 	std::mutex vrPostLoadCompositorRepairMutex;
 
-	void ArmSubmitStageVendorResumeCooldown(uint32_t a_currentFrame);
+	void ArmSubmitStageVendorResumeCooldown(uint32_t a_currentFrame, bool a_proofDrivenRelease = false);
 	void ClearSubmitStageVendorResumeCooldown();
 	void ClearSubmitStageVendorResumeStability();
 	[[nodiscard]] VRPostLoadCompositorHoldRoute ResolveVRPostLoadCompositorHoldRoute(
@@ -3723,7 +3757,7 @@ private:
 		uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight,
 		uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY = 0, uint32_t colorOffsetY = 0,
 		bool a_verifyBindings = false, bool a_finalDispatch = false);
-	void TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFrame, uint64_t a_compositorCycleToken, uint32_t a_eyeIndex, bool a_stableCandidate, UpscaleMethod a_upscaleMethod, uint32_t a_generation, uint32_t a_inputWidth, uint32_t a_inputHeight, uint32_t a_outputWidth, uint32_t a_outputHeight, bool a_stabilizerDoorHandoff, bool a_directMenuRelatch);
+	void TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFrame, uint64_t a_compositorCycleToken, uint32_t a_eyeIndex, bool a_stableCandidate, UpscaleMethod a_upscaleMethod, uint32_t a_generation, uint32_t a_inputWidth, uint32_t a_inputHeight, uint32_t a_outputWidth, uint32_t a_outputHeight, bool a_stabilizerDoorHandoff);
 	void ServiceSubmitStageVendorResumePromotion(uint64_t a_compositorCycleToken);
 	void RecordSubmitStageBoundsFallback(UpscaleMethod a_upscaleMethod, uint32_t a_currentFrame, uint32_t a_generation, uint32_t a_actualWidth, uint32_t a_actualHeight, uint32_t a_expectedWidth, uint32_t a_expectedHeight);
 	void ClearSubmitStageBoundsFallbackWatchdog();

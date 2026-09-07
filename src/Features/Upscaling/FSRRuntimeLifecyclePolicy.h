@@ -2,6 +2,35 @@
 
 namespace FSRRuntimeLifecyclePolicy
 {
+	enum class ProviderRoute
+	{
+		Host,
+		Runtime,
+		Unavailable
+	};
+
+	struct ProviderRouteInputs
+	{
+		bool hostSupported = false;
+		bool runtimePresent = false;
+		bool amdAdapter = false;
+	};
+
+	/** Selects FSR3 by capability while keeping the AMD runtime preference. */
+	[[nodiscard]] constexpr ProviderRoute SelectProviderRoute(
+		const ProviderRouteInputs& a_inputs) noexcept
+	{
+		if (a_inputs.runtimePresent &&
+			(a_inputs.amdAdapter || !a_inputs.hostSupported)) {
+			return ProviderRoute::Runtime;
+		}
+
+		if (a_inputs.hostSupported)
+			return ProviderRoute::Host;
+
+		return ProviderRoute::Unavailable;
+	}
+
 	enum class DispatchFenceAction
 	{
 		Proceed,

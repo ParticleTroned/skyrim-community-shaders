@@ -2,6 +2,7 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
+#	include "Api/MainThreadDispatchState.h"
 #	include "Api/ServiceFoundation.h"
 #	include "Api/ShaderService.h"
 #	include "Api/RuntimeThreadAffinity.h"
@@ -17,9 +18,9 @@
 #	include <atomic>
 #	include <chrono>
 #	include <cstdint>
+#	include <exception>
 #	include <filesystem>
 #	include <functional>
-#	include <future>
 #	include <memory>
 #	include <mutex>
 #	include <optional>
@@ -159,22 +160,25 @@ namespace
 		auto* tasks = SKSE::GetTaskInterface();
 		if (!tasks)
 			return { { "error", "SKSE task interface unavailable" } };
-		auto promise = std::make_shared<std::promise<json>>();
-		auto cancelled = std::make_shared<std::atomic_bool>(false);
-		auto future = promise->get_future();
-		tasks->AddTask([promise, cancelled, run = std::move(a_run)]() mutable {
-			CSX::Api::EnterRuntimeMainThreadTask();
-			if (cancelled->load(std::memory_order_acquire))
-				return;
-			try { promise->set_value(run()); }
-			catch (const std::exception& e) { promise->set_value(json{ { "error", "main-thread task failed" }, { "detail", e.what() } }); }
-			catch (...) { promise->set_value(json{ { "error", "main-thread task failed" } }); }
-		});
-		if (future.wait_for(kMainThreadTimeout) != std::future_status::ready) {
-			cancelled->store(true, std::memory_order_release);
+		using DispatchState = CSX::Api::MainThreadDispatchState<json>;
+		auto state = std::make_shared<DispatchState>();
+		try {
+			tasks->AddTask([state, run = std::move(a_run)]() mutable {
+				CSX::Api::EnterRuntimeMainThreadTask();
+				if (!state->TryBegin()) return;
+				try { state->Complete(run()); } catch (...) { state->Fail(std::current_exception()); }
+			});
+		} catch (...) {
+			return { { "error", "SKSE task queue rejected the main-thread task" } };
+		}
+		const auto deadline = std::chrono::steady_clock::now() + kMainThreadTimeout;
+		if (state->WaitUntil(deadline) == DispatchState::Phase::queued && state->CancelIfQueued()) {
 			return { { "error", "main thread did not run within 5000ms" } };
 		}
-		return future.get();
+		// Once admitted, wait for the exact result so failure can never precede mutation.
+		try { return state->WaitForCompletion(); }
+		catch (const std::exception& e) { return { { "error", "main-thread task failed" }, { "detail", e.what() } }; }
+		catch (...) { return { { "error", "main-thread task failed" } }; }
 	}
 
 	json ReadSnapshot(const CSX::ShaderAPI::Interface001& a_api)

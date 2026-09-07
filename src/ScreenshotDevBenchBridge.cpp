@@ -1,5 +1,6 @@
 #include "ScreenshotDevBenchBridge.h"
 
+#include "Api/MainThreadDispatchState.h"
 #include "Features/ScreenshotFeature.h"
 #include "Globals.h"
 
@@ -9,8 +10,9 @@
 
 #	include <atomic>
 #	include <chrono>
-#	include <future>
+#	include <exception>
 #	include <functional>
+#	include <memory>
 
 namespace
 {
@@ -25,25 +27,24 @@ namespace
 		if (!tasks)
 			return { { "ok", false }, { "error", { { "code", "dispatcher_unavailable" }, { "message", "SKSE task interface unavailable" } } } };
 
-		auto promise = std::make_shared<std::promise<json>>();
-		auto cancelled = std::make_shared<std::atomic_bool>(false);
-		auto future = promise->get_future();
-		tasks->AddTask([promise, cancelled, run = std::move(a_run)]() mutable {
-			if (cancelled->load(std::memory_order_acquire))
-				return;
-			try {
-				promise->set_value(run());
-			} catch (const std::exception& e) {
-				promise->set_value(json{ { "ok", false }, { "error", { { "code", "dispatcher_failed" }, { "message", e.what() } } } });
-			} catch (...) {
-				promise->set_value(json{ { "ok", false }, { "error", { { "code", "dispatcher_failed" }, { "message", "unknown main-thread failure" } } } });
-			}
-		});
-		if (future.wait_for(kMainThreadTimeout) != std::future_status::ready) {
-			cancelled->store(true, std::memory_order_release);
+		using DispatchState = CSX::Api::MainThreadDispatchState<json>;
+		auto state = std::make_shared<DispatchState>();
+		try {
+			tasks->AddTask([state, run = std::move(a_run)]() mutable {
+				if (!state->TryBegin()) return;
+				try { state->Complete(run()); } catch (...) { state->Fail(std::current_exception()); }
+			});
+		} catch (...) {
+			return { { "ok", false }, { "error", { { "code", "dispatcher_failed" }, { "message", "SKSE task queue rejected the main-thread task" } } } };
+		}
+		const auto deadline = std::chrono::steady_clock::now() + kMainThreadTimeout;
+		if (state->WaitUntil(deadline) == DispatchState::Phase::queued && state->CancelIfQueued()) {
 			return { { "ok", false }, { "error", { { "code", "dispatcher_timeout" }, { "message", "main thread did not run within 5000ms" }, { "retryable", true } } } };
 		}
-		return future.get();
+		// Once admitted, wait for the exact result so failure can never precede mutation.
+		try { return state->WaitForCompletion(); }
+		catch (const std::exception& e) { return { { "ok", false }, { "error", { { "code", "dispatcher_failed" }, { "message", e.what() } } } }; }
+		catch (...) { return { { "ok", false }, { "error", { { "code", "dispatcher_failed" }, { "message", "unknown main-thread failure" } } } }; }
 	}
 
 	void ToolHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write) noexcept

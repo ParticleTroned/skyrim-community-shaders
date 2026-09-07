@@ -32,6 +32,7 @@ namespace NeuralRendering
 		CommandBegin,
 		FeatureEvaluate,
 		CommandEnd,
+		OutputResolve,
 		OutputCommit,
 		ResetWait,
 		RuntimeReset,

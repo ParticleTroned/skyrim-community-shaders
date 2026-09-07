@@ -333,6 +333,23 @@ foreach(_dynamic_compute_roi_contract IN ITEMS
     endif()
 endforeach()
 
+foreach(_roi_history_identity_contract IN ITEMS
+    [[ComputeSubrect computeSubrect{};]]
+    [[.computeSubrect = a_resources.outputSubrect,]]
+    [[slot.historyKey != resources[index].historyKey]]
+)
+    string(FIND
+        "${_renderer_source}"
+        "${_roi_history_identity_contract}"
+        _roi_history_identity_position
+    )
+    if(_roi_history_identity_position EQUAL -1)
+        message(FATAL_ERROR
+            "Full Feature 18 ROI history identity is missing: ${_roi_history_identity_contract}"
+        )
+    endif()
+endforeach()
+
 foreach(_depth_compute_roi_contract IN ITEMS
     [[uint2 RoiOffset;]]
     [[uint2 RoiExtent;]]

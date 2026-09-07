@@ -12,8 +12,10 @@ namespace NeuralRendering
 	inline constexpr std::uint32_t kCharacterComputeRoiAlignment = 8;
 	inline constexpr std::uint32_t kCharacterComputeRoiGuardPixels = 2;
 	inline constexpr std::uint32_t kCharacterProviderRoiAlignment = 64;
-	inline constexpr std::uint32_t kCharacterProviderRoiHeadroomPixels = 32;
-	inline constexpr std::uint32_t kCharacterProviderRoiShrinkDelayFrames = 30;
+	inline constexpr std::uint32_t kCharacterProviderRoiMinimumHeadroomPixels = 32;
+	inline constexpr std::uint32_t kCharacterProviderRoiMaximumHeadroomPixels = 128;
+	inline constexpr std::uint32_t kCharacterProviderRoiHeadroomDivisor = 12;
+	inline constexpr std::uint32_t kCharacterProviderRoiShrinkDelayFrames = 180;
 
 	struct StableCharacterComputeSubrect
 	{
@@ -21,6 +23,15 @@ namespace NeuralRendering
 		ComputeSubrect pendingShrink{};
 		std::uint32_t shrinkCandidateFrames = 0;
 	};
+
+	[[nodiscard]] inline constexpr std::uint32_t ResolveCharacterProviderRoiHeadroom(
+		std::uint32_t a_extent) noexcept
+	{
+		return std::clamp(
+			a_extent / kCharacterProviderRoiHeadroomDivisor,
+			kCharacterProviderRoiMinimumHeadroomPixels,
+			kCharacterProviderRoiMaximumHeadroomPixels);
+	}
 
 	[[nodiscard]] inline constexpr bool ContainsComputeSubrect(
 		const ComputeSubrect& a_outer,
@@ -48,6 +59,8 @@ namespace NeuralRendering
 	{
 		if (!a_required.Fits(a_width, a_height))
 			return {};
+		const auto headroomX = ResolveCharacterProviderRoiHeadroom(a_width);
+		const auto headroomY = ResolveCharacterProviderRoiHeadroom(a_height);
 
 		const auto alignDown = [](std::uint32_t a_value) {
 			return (a_value / kCharacterProviderRoiAlignment) *
@@ -56,10 +69,11 @@ namespace NeuralRendering
 		const auto guardedEnd = [](
 			std::uint32_t a_base,
 			std::uint32_t a_extent,
-			std::uint32_t a_limit) {
+			std::uint32_t a_limit,
+			std::uint32_t a_headroom) {
 			const auto guarded =
 				static_cast<std::uint64_t>(a_base) + a_extent +
-				kCharacterProviderRoiHeadroomPixels;
+				a_headroom;
 			const auto aligned =
 				(guarded + kCharacterProviderRoiAlignment - 1u) /
 				kCharacterProviderRoiAlignment * kCharacterProviderRoiAlignment;
@@ -68,17 +82,17 @@ namespace NeuralRendering
 		};
 
 		const auto left = alignDown(
-			a_required.baseX > kCharacterProviderRoiHeadroomPixels ?
-				a_required.baseX - kCharacterProviderRoiHeadroomPixels :
+			a_required.baseX > headroomX ?
+				a_required.baseX - headroomX :
 				0u);
 		const auto top = alignDown(
-			a_required.baseY > kCharacterProviderRoiHeadroomPixels ?
-				a_required.baseY - kCharacterProviderRoiHeadroomPixels :
+			a_required.baseY > headroomY ?
+				a_required.baseY - headroomY :
 				0u);
 		const auto right = guardedEnd(
-			a_required.baseX, a_required.width, a_width);
+			a_required.baseX, a_required.width, a_width, headroomX);
 		const auto bottom = guardedEnd(
-			a_required.baseY, a_required.height, a_height);
+			a_required.baseY, a_required.height, a_height, headroomY);
 		return {
 			.baseX = left,
 			.baseY = top,
@@ -88,9 +102,11 @@ namespace NeuralRendering
 	}
 
 	/**
-	 * Keeps the provider ROI stable while the exact character mask moves inside it.
-	 * Growth/recentering happens immediately when required pixels escape. Contraction
-	 * is delayed and must save at least 25% of provider pixels.
+	 * Keeps the provider ROI spatially anchored while the exact character mask
+	 * moves inside its headroom. Escaped bounds expand the existing envelope rather
+	 * than sliding it, so back-and-forth motion cannot churn Feature 18 history. A
+	 * large, stable contraction is delayed because every rectangle change remains
+	 * explicit history identity; proven-empty input starts a fresh epoch immediately.
 	 */
 	[[nodiscard]] inline ComputeSubrect ResolveStableCharacterComputeSubrect(
 		const ComputeSubrect& a_required,
@@ -106,46 +122,61 @@ namespace NeuralRendering
 		const auto candidate = BuildCharacterProviderComputeSubrect(
 			a_required, a_width, a_height);
 		if (!candidate.IsValid()) {
-			a_state.pendingShrink = {};
-			a_state.shrinkCandidateFrames = 0;
+			a_state = {};
 			return {};
 		}
-		if (!a_state.provider.Fits(a_width, a_height) ||
-			!ContainsComputeSubrect(a_state.provider, a_required)) {
+		if (!a_state.provider.Fits(a_width, a_height)) {
 			a_state.provider = candidate;
 			a_state.pendingShrink = {};
 			a_state.shrinkCandidateFrames = 0;
 			return a_state.provider;
 		}
-
-		const auto candidateArea = candidate.Area();
-		const auto providerArea = a_state.provider.Area();
-		const auto maximumContractedArea =
-			(providerArea / 4u) * 3u + (providerArea % 4u) * 3u / 4u;
-		const bool meaningfulContraction =
-			candidate != a_state.provider &&
-			ContainsComputeSubrect(a_state.provider, candidate) &&
-			candidateArea <= maximumContractedArea;
-		if (!meaningfulContraction) {
-			a_state.pendingShrink = {};
-			a_state.shrinkCandidateFrames = 0;
+		if (ContainsComputeSubrect(a_state.provider, a_required)) {
+			const auto candidateArea = candidate.Area();
+			const auto providerArea = a_state.provider.Area();
+			const bool meaningfulStableContraction =
+				candidate != a_state.provider &&
+				ContainsComputeSubrect(a_state.provider, candidate) &&
+				candidateArea <= providerArea / 2u;
+			if (!meaningfulStableContraction) {
+				a_state.pendingShrink = {};
+				a_state.shrinkCandidateFrames = 0;
+				return a_state.provider;
+			}
+			if (a_state.pendingShrink != candidate) {
+				a_state.pendingShrink = candidate;
+				a_state.shrinkCandidateFrames = 1;
+			} else if (a_state.shrinkCandidateFrames <
+				kCharacterProviderRoiShrinkDelayFrames) {
+				++a_state.shrinkCandidateFrames;
+			}
+			if (a_state.shrinkCandidateFrames >=
+				kCharacterProviderRoiShrinkDelayFrames) {
+				a_state.provider = candidate;
+				a_state.pendingShrink = {};
+				a_state.shrinkCandidateFrames = 0;
+			}
 			return a_state.provider;
 		}
 
-		if (a_state.pendingShrink != candidate) {
-			a_state.pendingShrink = candidate;
-			a_state.shrinkCandidateFrames = 1;
-		} else {
-			a_state.shrinkCandidateFrames = std::min(
-				a_state.shrinkCandidateFrames + 1u,
-				kCharacterProviderRoiShrinkDelayFrames);
-		}
-		if (a_state.shrinkCandidateFrames >=
-			kCharacterProviderRoiShrinkDelayFrames) {
-			a_state.provider = candidate;
-			a_state.pendingShrink = {};
-			a_state.shrinkCandidateFrames = 0;
-		}
+		a_state.pendingShrink = {};
+		a_state.shrinkCandidateFrames = 0;
+		const auto baseX = std::min(a_state.provider.baseX, candidate.baseX);
+		const auto baseY = std::min(a_state.provider.baseY, candidate.baseY);
+		const auto right = std::max(
+			static_cast<std::uint64_t>(a_state.provider.baseX) +
+				a_state.provider.width,
+			static_cast<std::uint64_t>(candidate.baseX) + candidate.width);
+		const auto bottom = std::max(
+			static_cast<std::uint64_t>(a_state.provider.baseY) +
+				a_state.provider.height,
+			static_cast<std::uint64_t>(candidate.baseY) + candidate.height);
+		a_state.provider = {
+			.baseX = baseX,
+			.baseY = baseY,
+			.width = static_cast<std::uint32_t>(right - baseX),
+			.height = static_cast<std::uint32_t>(bottom - baseY),
+		};
 		return a_state.provider;
 	}
 

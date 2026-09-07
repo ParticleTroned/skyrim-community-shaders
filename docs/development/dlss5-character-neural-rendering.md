@@ -158,10 +158,26 @@ coordinates are CPU scalar parameters. Reading the exact mask bounds back in the
 same frame would introduce a GPU/CPU synchronization stall. The implementation
 therefore uses the current projected semantic bounds as a conservative enclosure
 and keeps the R8 mask authoritative for final pixels. The provider rectangle is
-coarsely aligned and padded, remains fixed while the exact mask moves inside it,
-and contracts only after a materially smaller candidate stays unchanged for a
-bounded interval. A generation/crop change or proven-empty frame clears that
-state. It does not dispatch Feature 18 once per NPC.
+coarsely aligned with per-axis motion headroom equal to roughly one-twelfth of
+the output extent (clamped to 32–128 pixels), and remains spatially fixed while
+the exact mask moves inside it. The full output rectangle, including its base,
+remains part of Feature 18's history identity: if required bounds
+escape, the provider expands the existing anchored envelope instead of sliding
+it, and CSX conservatively resets Feature 18 history for both eyes in the stereo
+batch. Returning across already covered screen space therefore does not cause
+another rectangle change. A contraction must save at least half of the current
+provider area and remain the identical candidate for 180 frames before it is
+accepted, preventing ordinary projected-size oscillation from causing periodic
+resets. A
+generation/crop change or proven-empty frame clears the provider state and
+permits a fresh, smaller rectangle on re-entry. It does not dispatch Feature 18
+once per NPC.
+
+This stability policy deliberately trades temporary compute area for temporal
+continuity. A character traversing previously uncovered parts of an eye can
+grow the anchored envelope as far as the full eye; ROI savings return after the
+smaller candidate remains stable for the contraction interval, or immediately
+after a proven-empty epoch boundary.
 
 Several `NVSDK_NGX_D3D12_EvaluateFeature` calls are a separate possibility, not
 an ROI-list capability. Reusing one Feature 18 handle for several actors in the
@@ -222,6 +238,13 @@ The runtime wrapper can bind `DLSSNR.ControlMask` and the corresponding
 character-rendering integration intentionally leaves them absent and sets
 `DLSSNR.UseAutoMask=1`. Binary parser evidence alone did not validate the
 mask's format or semantics well enough for the reliable path.
+
+The same pinned trace compares current subrect origins and dimensions with
+cached descriptor fields and enters a reset-like internal state-update path when
+either changes. That evidence does not support temporal rebasing of a sliding
+ROI, so CSX conservatively keeps the complete output subrect in its history key
+and never suppresses a reset merely because a translation retained the same
+width and height.
 
 It also sets `DLSSNR.MVecScaleX`, `DLSSNR.MVecScaleY`,
 `DLSSNR.DepthInverted`, `DLSSNR.Enabled`, `DLSSNR.Reset`,

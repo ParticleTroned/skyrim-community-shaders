@@ -78,25 +78,25 @@ int main()
 		.nestedHandleIdentity = 0x1000,
 	};
 	static_assert(ResolveOuterBoundaryToken(boundary) == 19);
-	constexpr auto wrongCycleBoundary = [] {
+	constexpr auto wrongCycleBoundary = [boundary] {
 		auto value = boundary;
 		value.currentCompositorCycle = 8;
 		return value;
 	}();
 	static_assert(ResolveOuterBoundaryToken(wrongCycleBoundary) == 0);
-	constexpr auto wrongIdentityBoundary = [] {
+	constexpr auto wrongIdentityBoundary = [boundary] {
 		auto value = boundary;
 		value.nestedHandleIdentity = 0x5000;
 		return value;
 	}();
 	static_assert(ResolveOuterBoundaryToken(wrongIdentityBoundary) == 0);
-	constexpr auto wrongThreadBoundary = [] {
+	constexpr auto wrongThreadBoundary = [boundary] {
 		auto value = boundary;
 		value.currentThread = 12;
 		return value;
 	}();
 	static_assert(ResolveOuterBoundaryToken(wrongThreadBoundary) == 0);
-	constexpr auto wrongFlagsBoundary = [] {
+	constexpr auto wrongFlagsBoundary = [boundary] {
 		auto value = boundary;
 		value.currentFlags = 4;
 		return value;
@@ -110,25 +110,25 @@ int main()
 	static_assert(CanConsumePeerInputs(proof, 1));
 	static_assert(MatchesProducerProof(proof, proof));
 
-	constexpr auto layoutOnly = [] {
+	constexpr auto layoutOnly = [admission] {
 		auto value = admission;
 		value.matchedOuterBoundaryToken = 0;
 		return value;
 	}();
 	static_assert(!ResolveProducerProof(layoutOnly).IsValid());
-	constexpr auto currentEyeOnly = [] {
+	constexpr auto currentEyeOnly = [admission] {
 		auto value = admission;
 		value.producedEyeMask = 0x1;
 		return value;
 	}();
 	static_assert(!ResolveProducerProof(currentEyeOnly).IsValid());
-	constexpr auto incompleteGuideFrame = [] {
+	constexpr auto incompleteGuideFrame = [admission] {
 		auto value = admission;
 		value.lastCompletedWorldRenderFrame = 41;
 		return value;
 	}();
 	static_assert(!ResolveProducerProof(incompleteGuideFrame).IsValid());
-	constexpr auto retainedGuideFrameWithoutExplicitContinuity = [] {
+	constexpr auto retainedGuideFrameWithoutExplicitContinuity = [admission] {
 		auto value = admission;
 		value.lastWorldRenderFrame = 41;
 		value.lastCompletedWorldRenderFrame = 41;
@@ -137,56 +137,56 @@ int main()
 	static_assert(
 		!ResolveProducerProof(retainedGuideFrameWithoutExplicitContinuity)
 			.IsValid());
-	constexpr auto missingDepth = [] {
+	constexpr auto missingDepth = [admission] {
 		auto value = admission;
 		value.depthSource = 0;
 		return value;
 	}();
 	static_assert(!ResolveProducerProof(missingDepth).IsValid());
-	constexpr auto invalidPeerRegion = [] {
+	constexpr auto invalidPeerRegion = [admission] {
 		auto value = admission;
 		value.eyes[1].right = value.eyes[1].left;
 		return value;
 	}();
 	static_assert(!ResolveProducerProof(invalidPeerRegion).IsValid());
 
-	constexpr auto staleCycleProof = [] {
+	constexpr auto staleCycleProof = [proof] {
 		auto value = proof;
 		value.compositorCycle = 8;
 		return value;
 	}();
 	static_assert(!MatchesProducerProof(proof, staleCycleProof));
-	constexpr auto staleProducerProof = [] {
+	constexpr auto staleProducerProof = [proof] {
 		auto value = proof;
 		value.pairProducerToken = 20;
 		return value;
 	}();
 	static_assert(!MatchesProducerProof(proof, staleProducerProof));
-	constexpr auto staleWorldProof = [] {
+	constexpr auto staleWorldProof = [proof] {
 		auto value = proof;
 		value.sourceWorldFrame = 40;
 		return value;
 	}();
 	static_assert(!MatchesProducerProof(proof, staleWorldProof));
-	constexpr auto changedMotionVectors = [] {
+	constexpr auto changedMotionVectors = [proof] {
 		auto value = proof;
 		value.motionVectorSource = 0x3001;
 		return value;
 	}();
 	static_assert(!MatchesProducerProof(proof, changedMotionVectors));
-	constexpr auto changedGeneration = [] {
+	constexpr auto changedGeneration = [proof] {
 		auto value = proof;
 		value.generation = 6;
 		return value;
 	}();
 	static_assert(!MatchesProducerProof(proof, changedGeneration));
-	constexpr auto changedMethod = [] {
+	constexpr auto changedMethod = [proof] {
 		auto value = proof;
 		value.method = 3;
 		return value;
 	}();
 	static_assert(!MatchesProducerProof(proof, changedMethod));
-	constexpr auto changedRegion = [] {
+	constexpr auto changedRegion = [proof] {
 		auto value = proof;
 		++value.eyes[1].left;
 		return value;

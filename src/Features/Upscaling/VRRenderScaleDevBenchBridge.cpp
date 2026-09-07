@@ -1016,6 +1016,10 @@ namespace
 			attributedPreparationFound ?
 				attributedPreparation->abortedSlotMask :
 				0u;
+		const std::uint32_t coldStartConcealedCharacterSlotMask =
+			attributedPreparationFound ?
+				attributedPreparation->coldStartConcealedSlotMask :
+				0u;
 		auto expectedEvaluationMask = [](
 										  std::uint32_t a_preparedMask,
 										  std::uint32_t a_requiredMask) noexcept {
@@ -1243,6 +1247,7 @@ namespace
 							 { "currentSuccessfulSlotMask", currentPreparationFound ? currentPreparation->successfulSlotMask : 0u },
 							 { "currentBypassedSlotMask", currentPreparationFound ? currentPreparation->bypassedSlotMask : 0u },
 							 { "currentAbortedSlotMask", currentPreparationFound ? currentPreparation->abortedSlotMask : 0u },
+							 { "currentColdStartConcealedSlotMask", currentPreparationFound ? currentPreparation->coldStartConcealedSlotMask : 0u },
 							 { "eyes", std::move(eyes) },
 						 } },
 			{ "profiling", {
@@ -1270,6 +1275,7 @@ namespace
 															   { "successfulCharacterSlotMask", successfulCharacterSlotMask },
 															   { "bypassedCharacterSlotMask", bypassedCharacterSlotMask },
 															   { "abortedCharacterSlotMask", abortedCharacterSlotMask },
+															   { "coldStartConcealedCharacterSlotMask", coldStartConcealedCharacterSlotMask },
 															   { "expectedFeatureSlotMask", expectedFeatureSlotMask },
 															   { "preparedFrameFound", attributedPreparationFound },
 															   { "missingPreparedFeatureSlotMask", missingPreparedFeatureSlots },

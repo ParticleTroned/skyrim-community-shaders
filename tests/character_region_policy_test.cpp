@@ -12,6 +12,10 @@ int main()
 	using NeuralRendering::CharacterRegionPolicy::CoveredArea;
 	using NeuralRendering::CharacterRegionPolicy::IsWithinHoldWindow;
 	using NeuralRendering::CharacterRegionPolicy::IsWithinMaximumDistance;
+	using NeuralRendering::CharacterRegionPolicy::IsDetailRelevantWithHysteresis;
+	using NeuralRendering::CharacterRegionPolicy::ResolveDistanceFadeWidth;
+	using NeuralRendering::CharacterRegionPolicy::ResolveDistanceWeight;
+	using NeuralRendering::CharacterRegionPolicy::ResolveFaceSizeExitThreshold;
 	using NeuralRendering::CharacterRegionPolicy::SelectAdaptive;
 	using NeuralRendering::CharacterRegionPolicy::Union;
 
@@ -34,11 +38,47 @@ int main()
 			1.0f, std::numeric_limits<float>::quiet_NaN())) {
 		return 1;
 	}
+	if (ResolveDistanceFadeWidth(0.0f) != 0.0f ||
+		ResolveDistanceFadeWidth(0.5f) != 0.5f ||
+		ResolveDistanceFadeWidth(10.0f) != 1.0f ||
+		ResolveDistanceFadeWidth(30.0f) != 1.0f ||
+		ResolveDistanceWeight(30.0f, 0.0f) != 1.0f ||
+		ResolveDistanceWeight(
+			std::numeric_limits<float>::quiet_NaN(), 0.0f) != 1.0f ||
+		ResolveDistanceWeight(9.0f, 10.0f) != 1.0f ||
+		ResolveDistanceWeight(9.5f, 10.0f) != 0.5f ||
+		ResolveDistanceWeight(10.0f, 10.0f) != 0.0f ||
+		ResolveDistanceWeight(10.1f, 10.0f) != 0.0f ||
+		ResolveDistanceWeight(-1.0f, 10.0f) != 0.0f ||
+		ResolveDistanceWeight(
+			1.0f, std::numeric_limits<float>::quiet_NaN()) != 0.0f) {
+		return 10;
+	}
 	if (!NeuralRendering::CharacterRegionPolicy::IsDetailRelevant(8.0f, 1) ||
 		!NeuralRendering::CharacterRegionPolicy::IsDetailRelevant(9.0f, 96) ||
 		NeuralRendering::CharacterRegionPolicy::IsDetailRelevant(9.0f, 95) ||
 		NeuralRendering::CharacterRegionPolicy::IsDetailRelevant(-1.0f, 1000)) {
 		return 2;
+	}
+	static_assert(ResolveFaceSizeExitThreshold(0) == 0);
+	static_assert(ResolveFaceSizeExitThreshold(1) == 1);
+	static_assert(ResolveFaceSizeExitThreshold(64) == 48);
+	static_assert(ResolveFaceSizeExitThreshold(4096) == 3072);
+	if (IsDetailRelevantWithHysteresis(8.5f, 95, false) ||
+		!IsDetailRelevantWithHysteresis(8.5f, 95, true) ||
+		IsDetailRelevantWithHysteresis(10.0f, 80, false) ||
+		!IsDetailRelevantWithHysteresis(10.0f, 80, true) ||
+		IsDetailRelevantWithHysteresis(10.0f, 71, true)) {
+		return 11;
+	}
+	std::vector<CharacterRegionCandidate> adaptiveHysteresis{
+		{ { 0, 0, 20, 20 }, 8.5f, 95, 1, true },
+		{ { 30, 0, 50, 20 }, 8.5f, 95, 2, false },
+	};
+	if (SelectAdaptive(adaptiveHysteresis, true) != 1 ||
+		adaptiveHysteresis.size() != 1 ||
+		adaptiveHysteresis.front().stableId != 1) {
+		return 12;
 	}
 
 	std::vector<CharacterRegionCandidate> candidates{

@@ -157,8 +157,17 @@ The exact current-frame mask is generated on the GPU, while Feature 18 subrect
 coordinates are CPU scalar parameters. Reading the exact mask bounds back in the
 same frame would introduce a GPU/CPU synchronization stall. The implementation
 therefore uses the current projected semantic bounds as a conservative enclosure
-and keeps the R8 mask authoritative for final pixels. It does not dispatch
-Feature 18 once per NPC.
+and keeps the R8 mask authoritative for final pixels. The provider rectangle is
+coarsely aligned and padded, remains fixed while the exact mask moves inside it,
+and contracts only after a materially smaller candidate stays unchanged for a
+bounded interval. A generation/crop change or proven-empty frame clears that
+state. It does not dispatch Feature 18 once per NPC.
+
+Any Feature 18 history reset is evaluated normally so the network can warm, but
+character isolation substitutes an immutable zero composite mask for the reset
+frame and ramps the exact mask over the next two newly prepared masks. This
+keeps cold provider output from appearing as a bright or unstable character
+while retaining normal DLSS as the baseline.
 
 Several `NVSDK_NGX_D3D12_EvaluateFeature` calls are a separate possibility, not
 an ROI-list capability. Reusing one Feature 18 handle for several actors in the
@@ -411,10 +420,14 @@ reused for the right eye. Bounds are expanded, clamped to that eye's viewport,
 quantized for stability, and retained briefly only while the actor still has a
 current valid projection. Behind-camera, culled, too-distant,
 outside-viewport, and too-small candidates are omitted without reusing a stale
-screen rectangle. A nonzero distance cutoff is a hard boundary and is not held
-for additional frames. Both distance and size admission use the observed face
-bounds; a large body or hair bound cannot admit a distant face or satisfy
-`Minimum Face Size`. Admission uses the
+screen rectangle. A nonzero distance cutoff fades the exact mask during the
+final up-to-one metre inside the selected limit and drops provider work at the
+exact zero-weight boundary; it is not held for additional frames. Distance
+admission uses the nearest selected face, skin, or hair bound; perceptual
+priority and size admission use the observed face bounds, so a large body or
+hair bound cannot satisfy `Minimum Face Size`. A retained actor
+uses a 75% exit threshold so minor projection changes cannot chatter at the
+entry gate. Admission uses the
 maximum face projection from the stereo pair, preventing one eye from
 independently crossing the threshold while the other remains below it;
 clipping still uses each eye's actual rectangle.
@@ -510,6 +523,7 @@ The in-game diagnostics and DevBench status should expose, per eye:
     by the distance cutoff
 -   frozen stereo base/crop and current eye-local depth coordinates
 -   whether mask preparation succeeded and whether evaluation was required
+-   which feature slots concealed a cold-start composite after a history reset
 -   visual-mask mechanism, compute rectangle, pixel count, coverage, and source
 -   synchronized category/depth-capture readiness, frame, attempts, successes,
     same-frame reuses, empty bypasses, and failures

@@ -39,12 +39,17 @@ namespace NeuralRendering
 		float distanceMeters = std::numeric_limits<float>::max();
 		std::uint32_t facePixelSize = 0;
 		std::uint32_t stableId = 0;
+		bool previouslyAdaptiveSelected = false;
 	};
 
 	namespace CharacterRegionPolicy
 	{
 		inline constexpr float kAdaptiveDetailDistanceMeters = 8.0f;
 		inline constexpr std::uint32_t kAdaptiveDetailFacePixelSize = 96;
+		inline constexpr float kMaximumDistanceFadeWidthMeters = 1.0f;
+		inline constexpr std::uint32_t kFaceSizeExitNumerator = 3;
+		inline constexpr std::uint32_t kFaceSizeExitDenominator = 4;
+		inline constexpr float kAdaptiveDistanceExitMarginMeters = 1.0f;
 
 		[[nodiscard]] constexpr CharacterRect Union(
 			const CharacterRect& a_left,
@@ -83,6 +88,42 @@ namespace NeuralRendering
 					a_distanceMeters <= a_maximumDistanceMeters);
 		}
 
+		/** Returns the hidden fade band immediately inside a nonzero hard cutoff. */
+		[[nodiscard]] inline float ResolveDistanceFadeWidth(
+			float a_maximumDistanceMeters) noexcept
+		{
+			return std::isfinite(a_maximumDistanceMeters) &&
+			       a_maximumDistanceMeters > 0.0f ?
+			           std::min(
+					   a_maximumDistanceMeters,
+					   kMaximumDistanceFadeWidthMeters) :
+			           0.0f;
+		}
+
+		/**
+		 * Smoothly conceals provider warm-up at the distance boundary while keeping
+		 * the user-selected distance as the exact zero/cull point.
+		 */
+		[[nodiscard]] inline float ResolveDistanceWeight(
+			float a_distanceMeters,
+			float a_maximumDistanceMeters) noexcept
+		{
+			if (!std::isfinite(a_maximumDistanceMeters) ||
+				a_maximumDistanceMeters < 0.0f) {
+				return 0.0f;
+			}
+			if (a_maximumDistanceMeters == 0.0f)
+				return 1.0f;
+			if (!std::isfinite(a_distanceMeters) || a_distanceMeters < 0.0f)
+				return 0.0f;
+			const auto fadeWidth = ResolveDistanceFadeWidth(
+				a_maximumDistanceMeters);
+			return std::clamp(
+				(a_maximumDistanceMeters - a_distanceMeters) / fadeWidth,
+				0.0f,
+				1.0f);
+		}
+
 		[[nodiscard]] inline bool IsDetailRelevant(
 			float a_distanceMeters,
 			std::uint32_t a_facePixelSize,
@@ -95,6 +136,42 @@ namespace NeuralRendering
 			       a_detailDistanceMeters >= 0.0f &&
 			       (a_distanceMeters <= a_detailDistanceMeters ||
 					a_facePixelSize >= a_detailFacePixelSize);
+		}
+
+		/** Uses a lower exit gate so projected faces cannot chatter at admission size. */
+		[[nodiscard]] constexpr std::uint32_t ResolveFaceSizeExitThreshold(
+			std::uint32_t a_entryThreshold) noexcept
+		{
+			if (a_entryThreshold == 0)
+				return 0;
+			return std::max(
+				1u,
+				static_cast<std::uint32_t>(
+					(static_cast<std::uint64_t>(a_entryThreshold) *
+						 kFaceSizeExitNumerator) /
+					kFaceSizeExitDenominator));
+		}
+
+		[[nodiscard]] inline bool IsDetailRelevantWithHysteresis(
+			float a_distanceMeters,
+			std::uint32_t a_facePixelSize,
+			bool a_previouslySelected,
+			float a_detailDistanceMeters = kAdaptiveDetailDistanceMeters,
+			std::uint32_t a_detailFacePixelSize =
+				kAdaptiveDetailFacePixelSize) noexcept
+		{
+			if (!a_previouslySelected) {
+				return IsDetailRelevant(
+					a_distanceMeters,
+					a_facePixelSize,
+					a_detailDistanceMeters,
+					a_detailFacePixelSize);
+			}
+			return IsDetailRelevant(
+				a_distanceMeters,
+				a_facePixelSize,
+				a_detailDistanceMeters + kAdaptiveDistanceExitMarginMeters,
+				ResolveFaceSizeExitThreshold(a_detailFacePixelSize));
 		}
 
 		/**
@@ -133,9 +210,10 @@ namespace NeuralRendering
 				std::remove_if(
 					a_candidates.begin(), a_candidates.end(),
 					[&](const auto& a_candidate) {
-						return !IsDetailRelevant(
+						return !IsDetailRelevantWithHysteresis(
 							a_candidate.distanceMeters,
 							a_candidate.facePixelSize,
+							a_candidate.previouslyAdaptiveSelected,
 							a_detailDistanceMeters,
 							a_detailFacePixelSize);
 					}),

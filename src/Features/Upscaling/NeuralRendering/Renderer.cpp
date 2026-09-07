@@ -1767,6 +1767,8 @@ namespace NeuralRendering
 			leftOutcome.evaluationAttemptedFeatureSlotMask;
 		a_outcome.evaluationSucceededFeatureSlotMask =
 			leftOutcome.evaluationSucceededFeatureSlotMask;
+		a_outcome.historyResetFeatureSlotMask =
+			leftOutcome.historyResetFeatureSlotMask;
 		RendererApplyOutcome rightOutcome{};
 		const bool rightSucceeded = ApplyBatchLocked(
 			std::span(&synchronizedArgs[1], 1), rightOutcome);
@@ -1774,6 +1776,8 @@ namespace NeuralRendering
 			rightOutcome.evaluationAttemptedFeatureSlotMask;
 		a_outcome.evaluationSucceededFeatureSlotMask |=
 			rightOutcome.evaluationSucceededFeatureSlotMask;
+		a_outcome.historyResetFeatureSlotMask |=
+			rightOutcome.historyResetFeatureSlotMask;
 		return rightSucceeded;
 	}
 
@@ -2108,6 +2112,8 @@ namespace NeuralRendering
 			if (evaluationAttempted) {
 				Increment(snapshot_.counters.featureEvaluations);
 				a_outcome.evaluationAttemptedFeatureSlotMask |= 1u << args.featureSlot;
+				if (effectiveReset)
+					a_outcome.historyResetFeatureSlotMask |= 1u << args.featureSlot;
 			}
 			if (!evaluated) {
 				const std::string runtimeDetail = Runtime::Instance().Detail();

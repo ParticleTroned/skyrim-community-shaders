@@ -101,6 +101,7 @@ namespace NeuralRendering
 		inline constexpr std::uint32_t kMaximumObservationsPerFrame = 4096;
 		inline constexpr std::size_t kMaximumEligibilityRegions = 16;
 		inline constexpr std::uint32_t kCoverageSampleIntervalFrames = 30;
+		inline constexpr std::uint32_t kCompositeWarmupFrames = 2;
 		inline constexpr std::size_t kPreparedFrameHistorySize = 8;
 
 		[[nodiscard]] constexpr std::uint32_t CategoryBit(
@@ -211,6 +212,7 @@ namespace NeuralRendering
 		std::uint32_t successfulSlotMask = 0;
 		std::uint32_t bypassedSlotMask = 0;
 		std::uint32_t abortedSlotMask = 0;
+		std::uint32_t coldStartConcealedSlotMask = 0;
 		std::array<std::uint32_t, 4> sourceWorldFrames{
 			std::numeric_limits<std::uint32_t>::max(),
 			std::numeric_limits<std::uint32_t>::max(),
@@ -346,6 +348,12 @@ namespace NeuralRendering
 			std::uint32_t a_evaluatedFeatureSlotMask,
 			std::uint32_t a_successfulFeatureSlotMask,
 			std::uint32_t a_bypassedFeatureSlotMask) noexcept;
+		/** Hides a reset-frame result and starts a short exact-mask blend ramp. */
+		bool ConcealColdStartComposite(
+			std::uint32_t a_featureSlot,
+			std::uint32_t a_frameId,
+			std::uint32_t a_sourceWorldFrame,
+			std::uint64_t a_generation) noexcept;
 
 		/** Invalidates observations, resources, compile state, and cached masks. */
 		void Reset() noexcept;

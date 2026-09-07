@@ -240,6 +240,10 @@ endforeach()
 
 foreach(_dynamic_compute_roi_contract IN ITEMS
     [[BuildCharacterComputeSubrect(]]
+    [[ResolveStableCharacterComputeSubrect(]]
+    [[slot.computeSubrectGeneration != a_args.generation]]
+    [[slot.computeSubrectCrop != a_args.viewportCrop]]
+    [[slot.stableComputeSubrect = {};]]
     [[bounds = CharacterRegionPolicy::Union(bounds, region);]]
     [[a_args.computeSubrect = result.computeSubrect;]]
     [[MapComputeSubrect(]]
@@ -777,6 +781,8 @@ foreach(_status_contract IN ITEMS
     [[{ "currentSuccessfulSlotMask", currentPreparationFound ? currentPreparation->successfulSlotMask : 0u }]]
     [[{ "currentBypassedSlotMask", currentPreparationFound ? currentPreparation->bypassedSlotMask : 0u }]]
     [[{ "currentAbortedSlotMask", currentPreparationFound ? currentPreparation->abortedSlotMask : 0u }]]
+    [[{ "currentColdStartConcealedSlotMask", currentPreparationFound ? currentPreparation->coldStartConcealedSlotMask : 0u }]]
+    [[{ "coldStartConcealedCharacterSlotMask", coldStartConcealedCharacterSlotMask }]]
     [[{ "eligibleFaceActors", eye.visibleFaces }]]
     [[{ "eligibleCharacterActors", eye.visibleCharacterRegions }]]
     [[{ "selectedCharacterActors", eye.selectedCharacterRegions }]]
@@ -1223,6 +1229,8 @@ foreach(_source_contract IN ITEMS
     [[slEvaluateFeature(sl::kFeatureDLSS,]]
     [[dlssPassTelemetryFrames.GetOrCreate(]]
     [[evaluationSucceededFeatureSlotMask]]
+    [[historyResetFeatureSlotMask]]
+    [[WasHistoryReset(]]
     [[RecordNeuralPassTelemetry(]]
     [[PrepareCharacterSelectionMask(]]
     [[a_args.tuning.useAutoMask = true;]]
@@ -1239,6 +1247,7 @@ foreach(_source_contract IN ITEMS
     [[IsCharacterMaterialCandidate(]]
     [[classificationCache.try_emplace(]]
     [[ResolveCharacterCompositeInputs(]]
+    [[ConcealColdStartComposite(]]
     [[const bool directCommit = params.front().neuralDirectCommit;]]
     [[params.back().neuralDirectCommit != directCommit]]
     [[params.neuralDirectCommit = neuralDirectCommit;]]
@@ -1708,12 +1717,37 @@ foreach(_disposition_call_contract IN ITEMS
     [[const uint32_t evaluationEyeMask =]]
     [[summary.successfulEyeMask = evaluationEyeMask;]]
     [[ResolveAbortedCharacterFeature18Preparations(]]
+    [[outcome.WasHistoryReset(]]
+    [[.ConcealColdStartComposite(]]
 )
     string(FIND "${_upscaling}" "${_disposition_call_contract}"
         _disposition_call_position)
     if(_disposition_call_position EQUAL -1)
         message(FATAL_ERROR
             "Character Feature 18 outcome call-site contract is missing: ${_disposition_call_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_cold_start_composite_contract IN ITEMS
+    [[inline constexpr std::uint32_t kCompositeWarmupFrames = 2;]]
+    [[slot.compositeWarmupFramesRemaining =]]
+    [[CharacterPolicy::kCompositeWarmupFrames;]]
+    [[EnsureZeroMask(]]
+    [[zeroMaskSrv_]]
+    [[a_sourceWorldFrame != a_frameId]]
+    [[preparedFrame->coldStartConcealedSlotMask & slotBit]]
+    [[state_->zeroMaskSrv_ :]]
+    [[preparedFrame->coldStartConcealedSlotMask |= slotBit;]]
+    [[const auto completedFrames =]]
+    [[--a_slot.compositeWarmupFramesRemaining;]]
+    [[compositeWarmupWeight;]]
+)
+    string(FIND "${_source_contract_text}" "${_cold_start_composite_contract}"
+        _cold_start_composite_position)
+    if(_cold_start_composite_position EQUAL -1)
+        message(FATAL_ERROR
+            "Character cold-start composite contract is missing: ${_cold_start_composite_contract}"
         )
     endif()
 endforeach()
@@ -1780,8 +1814,12 @@ foreach(_mask_shader_contract IN ITEMS
     [[CharacterCategoryMask::DecodeCategory(]]
     [[IsAuthoredSurfaceVisible(]]
     [[sourcePixel, centerDepth, centerAuthoredRawDepth)]]
-    [[const bool centerWithinDistance =]]
-    [[IsWithinDistance(sourcePixel, centerAuthoredRawDepth);]]
+    [[const float centerDistanceWeight =]]
+    [[GetDistanceWeight(sourcePixel, centerAuthoredRawDepth);]]
+    [[const bool centerWithinDistance = centerDistanceWeight > 0.0;]]
+    [[GetCategoryStrength(centerCategory) * centerDistanceWeight]]
+    [[neighborDistanceWeight <= 0.0]]
+    [[neighborDistanceWeight);]]
     [[if (centerEligible && Options.w != 0 && Options.z != 0 && mask < 1.0)]]
 )
     string(FIND
@@ -1792,6 +1830,19 @@ foreach(_mask_shader_contract IN ITEMS
     if(_mask_shader_contract_position EQUAL -1)
         message(FATAL_ERROR
             "Character mask depth/provenance contract is missing: ${_mask_shader_contract}"
+        )
+    endif()
+endforeach()
+foreach(_distance_fade_upload_contract IN ITEMS
+    [[constants.visibilityOptions[3] =]]
+    [[CharacterRegionPolicy::ResolveDistanceFadeWidth(]]
+    [[a_args.settings.maximumDistanceMeters) /]]
+)
+    string(FIND "${_character_source}" "${_distance_fade_upload_contract}"
+        _distance_fade_upload_position)
+    if(_distance_fade_upload_position EQUAL -1)
+        message(FATAL_ERROR
+            "Character distance-fade upload contract is missing: ${_distance_fade_upload_contract}"
         )
     endif()
 endforeach()
@@ -2222,7 +2273,8 @@ foreach(_admission_contract IN ITEMS
     [[for (const auto& stereoAnchor : stereoAnchors)]]
     [[stereoMaximumSize >= a_args.settings.minimumFacePixelSize]]
     [[CharacterRegionPolicy::IsWithinMaximumDistance(]]
-    [[CharacterRegionPolicy::IsDetailRelevant(]]
+    [[CharacterRegionPolicy::ResolveFaceSizeExitThreshold(]]
+    [[CharacterRegionPolicy::IsDetailRelevantWithHysteresis(]]
     [[std::array<std::map<std::uint32_t, HeldRegion>, 4> heldRegions_]]
     [[CharacterRegionPolicy::IsWithinHoldWindow(]]
     [[if (!currentlyProjected.contains(it->first))]]

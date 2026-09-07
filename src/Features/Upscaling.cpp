@@ -15151,9 +15151,9 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 					"%.1f m", ImGuiSliderFlags_AlwaysClamp);
 				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::TextUnformatted(
-						"Excludes actor bounds and exact mask pixels beyond this distance.");
+						"Softly fades NR during the final up-to-one metre, then excludes actor bounds and mask pixels.");
 					ImGui::TextUnformatted(
-						"0 m disables this hard cutoff; Adaptive ROI Performance remains independent.");
+						"The selected distance is the exact zero/cull point; 0 m disables culling.");
 					ImGui::Text(
 						"The range ends at %.0f m, beyond the useful face-detail range.",
 						NeuralRendering::CharacterPolicy::kMaximumDistanceMeters);
@@ -15169,6 +15169,10 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 						"%d px")) {
 					settings.neuralCharacterMinimumFacePixelSize =
 						static_cast<uint>(minimumFacePixels);
+				}
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted(
+						"Admits a face at this size and retains it down to 75% to prevent boundary flicker.");
 				}
 				ImGui::TextDisabled(
 					"FaceGen RGB tint is split by face-node ancestry; generic skinned armor is excluded.");
@@ -15190,6 +15194,8 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 							NeuralRendering::CharacterRegionPolicy::kAdaptiveDetailFacePixelSize);
 						ImGui::TextUnformatted(
 							"This can omit low-detail distant actors from Neural Rendering.");
+						ImGui::TextUnformatted(
+							"Selected actors use a 1 m / 75% exit margin to prevent boundary flicker.");
 					}
 					ImGui::SliderFloat(
 						"Eligibility Margin", &settings.neuralCharacterRoiMargin,
@@ -26868,6 +26874,15 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 			neuralAttempted = outcome.WasEvaluationAttempted(args.featureSlot);
 			const bool neuralEvaluationSucceeded =
 				outcome.WasEvaluationSuccessful(args.featureSlot);
+			if (applied && neuralEvaluationSucceeded &&
+				outcome.WasHistoryReset(args.featureSlot)) {
+				(void)NeuralRendering::CharacterRendering::Instance()
+					.ConcealColdStartComposite(
+						args.featureSlot,
+						args.frameId,
+						args.sourceWorldFrame,
+						args.generation);
+			}
 			const auto routeRole =
 				dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter ?
 					NeuralStereoRouteRole::Submit :
@@ -27305,6 +27320,15 @@ namespace
 				a_results[eye].attempted =
 					a_results[eye].attempted || attempted;
 				evaluatedEyes[eye] = attempted;
+				if (applied && succeeded &&
+					outcome.WasHistoryReset(a_batchArgs[eye].featureSlot)) {
+					(void)NeuralRendering::CharacterRendering::Instance()
+						.ConcealColdStartComposite(
+							a_batchArgs[eye].featureSlot,
+							a_batchArgs[eye].frameId,
+							a_batchArgs[eye].sourceWorldFrame,
+							a_batchArgs[eye].generation);
+				}
 				a_upscaling.RecordNeuralPassTelemetry(
 					a_routeRole,
 					eye,

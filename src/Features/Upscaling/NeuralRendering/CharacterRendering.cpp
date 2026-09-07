@@ -331,6 +331,7 @@ namespace NeuralRendering
 			std::uint32_t lastSeenFrame = 0;
 			float distanceMeters = std::numeric_limits<float>::max();
 			std::uint32_t facePixelSize = 0;
+			bool adaptiveSelected = false;
 		};
 
 		struct ProjectedActor
@@ -426,6 +427,12 @@ namespace NeuralRendering
 			bool zeroCoverageCpuProven = false;
 			bool requiresEvaluation = true;
 			ComputeSubrect computeSubrect{};
+			StableCharacterComputeSubrect stableComputeSubrect{};
+			std::uint64_t computeSubrectGeneration = 0;
+			UpscalingDLSS::ViewportCrop computeSubrectCrop{};
+			bool computeSubrectContractValid = false;
+			std::uint32_t compositeWarmupFramesRemaining = 0;
+			bool temporalCompositeProtection = false;
 			bool prepared = false;
 		};
 
@@ -607,6 +614,7 @@ namespace NeuralRendering
 			entry->successfulSlotMask &= ~slotBit;
 			entry->bypassedSlotMask &= ~slotBit;
 			entry->abortedSlotMask &= ~slotBit;
+			entry->coldStartConcealedSlotMask &= ~slotBit;
 			entry->preparedSlotMask |= slotBit;
 			if (a_requiresEvaluation) {
 				entry->evaluationRequiredSlotMask |= slotBit;
@@ -656,6 +664,7 @@ namespace NeuralRendering
 				preparedFrame.successfulSlotMask &= ~slotBit;
 				preparedFrame.bypassedSlotMask &= ~slotBit;
 				preparedFrame.abortedSlotMask &= ~slotBit;
+				preparedFrame.coldStartConcealedSlotMask &= ~slotBit;
 				preparedFrame.sourceWorldFrames[a_featureSlot] =
 					std::numeric_limits<std::uint32_t>::max();
 				preparedFrame.generations[a_featureSlot] = 0;
@@ -734,6 +743,8 @@ namespace NeuralRendering
 				capturedCategoriesSrv_.Reset();
 				capturedDepth_.Reset();
 				capturedDepthSrv_.Reset();
+				zeroMask_.Reset();
+				zeroMaskSrv_.Reset();
 				InvalidateCaptureMetadata();
 				shaderCompileFailed_ = false;
 				heldRegions_ = {};
@@ -744,6 +755,43 @@ namespace NeuralRendering
 				preparedFrameHistoryNext_ = 0;
 			}
 			device_ = a_device;
+		}
+
+		bool EnsureZeroMask(ID3D11Device* a_device)
+		{
+			if (zeroMask_ && zeroMaskSrv_)
+				return true;
+			zeroMask_.Reset();
+			zeroMaskSrv_.Reset();
+			D3D11_TEXTURE2D_DESC desc{};
+			desc.Width = 1;
+			desc.Height = 1;
+			desc.MipLevels = 1;
+			desc.ArraySize = 1;
+			desc.Format = DXGI_FORMAT_R8_UNORM;
+			desc.SampleDesc.Count = 1;
+			desc.Usage = D3D11_USAGE_IMMUTABLE;
+			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+			constexpr std::uint8_t zero = 0;
+			const D3D11_SUBRESOURCE_DATA initialData{
+				.pSysMem = &zero,
+				.SysMemPitch = 1,
+				.SysMemSlicePitch = 1,
+			};
+			if (FAILED(a_device->CreateTexture2D(
+					&desc, &initialData, &zeroMask_)) ||
+				FAILED(a_device->CreateShaderResourceView(
+					zeroMask_.Get(), nullptr, &zeroMaskSrv_))) {
+				zeroMask_.Reset();
+				zeroMaskSrv_.Reset();
+				return false;
+			}
+			Util::SetResourceName(
+				zeroMask_.Get(), "DLSS5CharacterRendering::ZeroCompositeMask");
+			Util::SetResourceName(
+				zeroMaskSrv_.Get(),
+				"DLSS5CharacterRendering::ZeroCompositeMask SRV");
+			return true;
 		}
 
 		bool EnsureCategoryCapture(
@@ -1245,20 +1293,33 @@ namespace NeuralRendering
 							stereoAnchor.maxX - stereoAnchor.minX,
 							stereoAnchor.maxY - stereoAnchor.minY));
 				}
-				const float nearestDistanceUnits = hasFaceAnchor ?
+				const float nearestDetailDistanceUnits = hasFaceAnchor ?
 				                                       actor.nearestFaceDistanceUnits :
 				                                       actor.nearestSelectedDistanceUnits;
 				const float distanceMeters =
-					Util::Units::GameUnitsToMeters(nearestDistanceUnits);
+					Util::Units::GameUnitsToMeters(nearestDetailDistanceUnits);
+				const float selectedDistanceMeters =
+					Util::Units::GameUnitsToMeters(
+						actor.nearestSelectedDistanceUnits);
 				const bool withinMaximumDistance =
 					CharacterRegionPolicy::IsWithinMaximumDistance(
-						distanceMeters, a_args.settings.maximumDistanceMeters);
+						selectedDistanceMeters,
+						a_args.settings.maximumDistanceMeters);
 				const bool largeEnough =
 					stereoMaximumSize >= a_args.settings.minimumFacePixelSize;
+				const auto retained = held.find(actor.actorFormId);
+				const bool retainedLargeEnough =
+					retained != held.end() &&
+					stereoMaximumSize >=
+						CharacterRegionPolicy::ResolveFaceSizeExitThreshold(
+							a_args.settings.minimumFacePixelSize);
 				const bool adaptiveCandidate =
 					!a_args.settings.adaptiveRoiSelection ||
-					CharacterRegionPolicy::IsDetailRelevant(
-						distanceMeters, stereoMaximumSize);
+					CharacterRegionPolicy::IsDetailRelevantWithHysteresis(
+						distanceMeters,
+						stereoMaximumSize,
+						retained != held.end() &&
+							retained->second.adaptiveSelected);
 				if (!actorRect.IsValid()) {
 					result.projectionUncertain =
 						result.projectionUncertain ||
@@ -1268,8 +1329,8 @@ namespace NeuralRendering
 					continue;
 				}
 				if (!withinMaximumDistance) {
-					// The explicit distance cutoff is not temporally held: it is a
-					// hard performance boundary and must shrink provider work now.
+					// The exact mask has already faded to zero at this hard provider
+					// boundary, so dropping its work cannot create a visible pop.
 					held.erase(actor.actorFormId);
 					continue;
 				}
@@ -1318,8 +1379,11 @@ namespace NeuralRendering
 				}
 				currentlyProjected.insert(actor.actorFormId);
 
-				const bool eligible = largeEnough;
+				const bool eligible = largeEnough || retainedLargeEnough;
 				if (eligible) {
+					const bool wasAdaptiveSelected =
+						retained != held.end() &&
+						retained->second.adaptiveSelected;
 					if (hasFaceAnchor)
 						++result.visibleFaces;
 					++result.visibleCharacters;
@@ -1328,11 +1392,11 @@ namespace NeuralRendering
 						.lastSeenFrame = a_args.frameId,
 						.distanceMeters = distanceMeters,
 						.facePixelSize = stereoMaximumSize,
+						.adaptiveSelected = wasAdaptiveSelected,
 					};
 					continue;
 				}
 
-				const auto retained = held.find(actor.actorFormId);
 				if (retained == held.end())
 					continue;
 				if (!CharacterRegionPolicy::IsWithinHoldWindow(
@@ -1361,6 +1425,7 @@ namespace NeuralRendering
 					.distanceMeters = region.distanceMeters,
 					.facePixelSize = region.facePixelSize,
 					.stableId = actorFormId,
+					.previouslyAdaptiveSelected = region.adaptiveSelected,
 				});
 			}
 			result.adaptivelyCulledCharacters =
@@ -1368,6 +1433,18 @@ namespace NeuralRendering
 					candidates, a_args.settings.adaptiveRoiSelection);
 			result.selectedCharacters =
 				static_cast<std::uint32_t>(candidates.size());
+			for (auto& [actorFormId, region] : held) {
+				(void)actorFormId;
+				region.adaptiveSelected = false;
+			}
+			if (a_args.settings.adaptiveRoiSelection) {
+				for (const auto& candidate : candidates) {
+					if (const auto selected = held.find(candidate.stableId);
+						selected != held.end()) {
+						selected->second.adaptiveSelected = true;
+					}
+				}
+			}
 
 			std::uint64_t eligibilityXor = 0;
 			std::uint64_t eligibilitySum = 0;
@@ -1593,6 +1670,10 @@ namespace NeuralRendering
 					a_args.settings.maximumDistanceMeters /
 						Util::Units::GAME_UNIT_TO_M :
 					0.0f;
+			constants.visibilityOptions[3] =
+				CharacterRegionPolicy::ResolveDistanceFadeWidth(
+					a_args.settings.maximumDistanceMeters) /
+				Util::Units::GAME_UNIT_TO_M;
 			const auto cameraData = Util::GetCameraData();
 			constants.depthLinearization[0] = cameraData.x;
 			constants.depthLinearization[1] = cameraData.y;
@@ -1603,12 +1684,27 @@ namespace NeuralRendering
 					a_args.eyeIndex);
 			constants.jitter[0] = capturedJitterX_;
 			constants.jitter[1] = capturedJitterY_;
+			const bool consumeCompositeWarmup =
+				a_slot.temporalCompositeProtection &&
+				a_slot.compositeWarmupFramesRemaining != 0;
+			float compositeWarmupWeight = 1.0f;
+			if (consumeCompositeWarmup) {
+				const auto completedFrames =
+					CharacterPolicy::kCompositeWarmupFrames -
+					a_slot.compositeWarmupFramesRemaining + 1u;
+				compositeWarmupWeight =
+					static_cast<float>(completedFrames) /
+					static_cast<float>(CharacterPolicy::kCompositeWarmupFrames + 1u);
+			}
 			constants.categoryStrengths[0] =
-				a_args.settings.faces ? a_args.settings.faceStrength : 0.0f;
+				(a_args.settings.faces ? a_args.settings.faceStrength : 0.0f) *
+				compositeWarmupWeight;
 			constants.categoryStrengths[1] =
-				a_args.settings.skin ? a_args.settings.skinStrength : 0.0f;
+				(a_args.settings.skin ? a_args.settings.skinStrength : 0.0f) *
+				compositeWarmupWeight;
 			constants.categoryStrengths[2] =
-				a_args.settings.hair ? a_args.settings.hairStrength : 0.0f;
+				(a_args.settings.hair ? a_args.settings.hairStrength : 0.0f) *
+				compositeWarmupWeight;
 			if (a_plan.regions.empty() ||
 				a_plan.regions.size() > CharacterPolicy::kMaximumEligibilityRegions) {
 				return false;
@@ -1721,6 +1817,8 @@ namespace NeuralRendering
 				a_slot.lastCoverageRequestFrame = a_args.frameId;
 				a_slot.coverageRequestIssued = true;
 			}
+			if (consumeCompositeWarmup)
+				--a_slot.compositeWarmupFramesRemaining;
 			return true;
 		}
 
@@ -1756,6 +1854,8 @@ namespace NeuralRendering
 		ComPtr<ID3D11ShaderResourceView> capturedCategoriesSrv_;
 		ComPtr<ID3D11Texture2D> capturedDepth_;
 		ComPtr<ID3D11ShaderResourceView> capturedDepthSrv_;
+		ComPtr<ID3D11Texture2D> zeroMask_;
+		ComPtr<ID3D11ShaderResourceView> zeroMaskSrv_;
 		std::uint32_t capturedFrame_ = std::numeric_limits<std::uint32_t>::max();
 		bool capturedCategoriesEmpty_ = false;
 		std::uint32_t capturedEyeWidth_ = 0;
@@ -2099,6 +2199,8 @@ namespace NeuralRendering
 				return fail("character mask context belongs to another D3D11 device");
 
 			state_->AdoptDevice(a_args.device);
+			if (!state_->EnsureZeroMask(a_args.device))
+				return fail("character zero-composite mask could not be created");
 			state_->PollReadbacks(a_args.context, a_args.frameId);
 			const bool logicalEmptyCapture = state_->capturedCategoriesEmpty_;
 			if (state_->capturedFrame_ != sourceWorldFrame ||
@@ -2308,16 +2410,42 @@ namespace NeuralRendering
 				const bool cpuProvenEmpty = forcedEmpty ||
 				                            (authoredMode &&
 												(logicalEmptyCapture || plan.regions.empty()));
-				slot.computeSubrect = cpuProvenEmpty ?
-				                          ComputeSubrect{} :
-				                      fullOutputMask ?
-				                          BuildFullComputeSubrect(
-											  a_args.outputWidth,
-											  a_args.outputHeight) :
-				                          BuildCharacterComputeSubrect(
-											  plan.regions,
-											  a_args.outputWidth,
-											  a_args.outputHeight);
+				const bool computeSubrectContractChanged =
+					!slot.computeSubrectContractValid ||
+					slot.computeSubrectGeneration != a_args.generation ||
+					slot.computeSubrectCrop != a_args.viewportCrop;
+				if (computeSubrectContractChanged) {
+					slot.stableComputeSubrect = {};
+					slot.compositeWarmupFramesRemaining = 0;
+					slot.computeSubrectGeneration = a_args.generation;
+					slot.computeSubrectCrop = a_args.viewportCrop;
+					slot.computeSubrectContractValid = true;
+				}
+				const auto requiredComputeSubrect = cpuProvenEmpty ?
+				                                      ComputeSubrect{} :
+				                                  fullOutputMask ?
+				                                      BuildFullComputeSubrect(
+													  a_args.outputWidth,
+													  a_args.outputHeight) :
+				                                      BuildCharacterComputeSubrect(
+													  plan.regions,
+													  a_args.outputWidth,
+													  a_args.outputHeight);
+				if (cpuProvenEmpty || fullOutputMask) {
+					// Empty authored masks already break provider history. Do not
+					// retain a potentially large stale ROI for the next character.
+					// Diagnostic full-eye modes must not contaminate authored ROI state.
+					slot.stableComputeSubrect = {};
+					slot.compositeWarmupFramesRemaining = 0;
+					slot.computeSubrect = requiredComputeSubrect;
+				} else {
+					slot.computeSubrect = ResolveStableCharacterComputeSubrect(
+						requiredComputeSubrect,
+						a_args.outputWidth,
+						a_args.outputHeight,
+						slot.stableComputeSubrect);
+				}
+				slot.temporalCompositeProtection = authoredMode;
 				if (!cpuProvenEmpty &&
 					!slot.computeSubrect.Fits(
 						a_args.outputWidth, a_args.outputHeight)) {
@@ -2600,6 +2728,45 @@ namespace NeuralRendering
 		}
 	}
 
+	bool CharacterRendering::ConcealColdStartComposite(
+		std::uint32_t a_featureSlot,
+		std::uint32_t a_frameId,
+		std::uint32_t a_sourceWorldFrame,
+		std::uint64_t a_generation) noexcept
+	{
+		if (!state_ || a_featureSlot >= state_->slots_.size() ||
+			a_sourceWorldFrame != a_frameId)
+			return false;
+		try {
+			std::scoped_lock lock(state_->mutex_);
+			auto& slot = state_->slots_[a_featureSlot];
+			const auto preparedFrame = std::ranges::find_if(
+				state_->snapshot_.preparedFrames,
+				[a_frameId](const auto& a_prepared) {
+					return a_prepared.frame == a_frameId;
+				});
+			const auto slotBit = 1u << a_featureSlot;
+			if (!slot.prepared || !slot.temporalCompositeProtection ||
+				!state_->zeroMaskSrv_ ||
+				preparedFrame == state_->snapshot_.preparedFrames.end() ||
+				(preparedFrame->preparedSlotMask & slotBit) == 0 ||
+				preparedFrame->sourceWorldFrames[a_featureSlot] != a_sourceWorldFrame ||
+				preparedFrame->generations[a_featureSlot] != a_generation ||
+				preparedFrame->contentSerials[a_featureSlot] == 0 ||
+				preparedFrame->contentSerials[a_featureSlot] != slot.contentSerial ||
+				slot.prepareKey.sourceWorldFrame != a_sourceWorldFrame ||
+				slot.prepareKey.generation != a_generation) {
+				return false;
+			}
+			slot.compositeWarmupFramesRemaining =
+				CharacterPolicy::kCompositeWarmupFrames;
+			preparedFrame->coldStartConcealedSlotMask |= slotBit;
+			return true;
+		} catch (...) {
+			return false;
+		}
+	}
+
 	void CharacterRendering::Reset() noexcept
 	{
 		if (!state_)
@@ -2621,6 +2788,8 @@ namespace NeuralRendering
 			state_->capturedCategoriesSrv_.Reset();
 			state_->capturedDepth_.Reset();
 			state_->capturedDepthSrv_.Reset();
+			state_->zeroMask_.Reset();
+			state_->zeroMaskSrv_.Reset();
 			state_->InvalidateCaptureMetadata();
 			state_->device_.Reset();
 			state_->lastSlotForEye_ = { 4, 4 };
@@ -2722,7 +2891,9 @@ namespace NeuralRendering
 			               slot.prepareKey.generation == a_generation &&
 			               slot.width == a_width &&
 			               slot.height == a_height ?
-			           slot.maskSrv :
+			           ((preparedFrame->coldStartConcealedSlotMask & slotBit) != 0 ?
+						state_->zeroMaskSrv_ :
+						slot.maskSrv) :
 			           ComPtr<ID3D11ShaderResourceView>{};
 		} catch (...) {
 			return {};

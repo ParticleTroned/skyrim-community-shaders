@@ -13,7 +13,7 @@ cbuffer CharacterMaskCB : register(b0)
 	uint4 SourceCrop;           // source eye base X, input min X/Y, input width
 	uint4 Options;              // input height, eligibility count, feather radius, depth-aware feather
 	float4 FeatherOptions;      // feather depth, test mode, diagnostics sample, reserved
-	float4 VisibilityOptions;   // rejection threshold, visibility enabled, max distance in game units, reserved
+	float4 VisibilityOptions;   // rejection threshold, visibility enabled, max distance, distance fade (game units)
 	float4 DepthLinearization;  // far, near, far-near, far*near
 	row_major float4x4 CameraProjInverse; // current per-eye projection inverse
 	float4 Jitter;              // current low-resolution pixel jitter in xy
@@ -145,10 +145,15 @@ float ReconstructEyeDistance(int2 localSourcePixel, float rawDepth)
 		3.402823466e+38;
 }
 
-bool IsWithinDistance(int2 localSourcePixel, float rawDepth)
+float GetDistanceWeight(int2 localSourcePixel, float rawDepth)
 {
-	return VisibilityOptions.z <= 0.0 ||
-		ReconstructEyeDistance(localSourcePixel, rawDepth) <= VisibilityOptions.z;
+	if (VisibilityOptions.z <= 0.0)
+		return 1.0;
+	const float eyeDistance = ReconstructEyeDistance(localSourcePixel, rawDepth);
+	const float fadeWidth = min(
+		VisibilityOptions.z,
+		max(VisibilityOptions.w, 1.0e-6));
+	return saturate((VisibilityOptions.z - eyeDistance) / fadeWidth);
 }
 
 void CountCategory(uint category, uint firstCounter)
@@ -192,8 +197,9 @@ void CountCategory(uint category, uint firstCounter)
 			const bool centerVisible =
 				IsAuthoredSurfaceVisible(
 					sourcePixel, centerDepth, centerAuthoredRawDepth);
-			const bool centerWithinDistance =
-				IsWithinDistance(sourcePixel, centerAuthoredRawDepth);
+			const float centerDistanceWeight =
+				GetDistanceWeight(sourcePixel, centerAuthoredRawDepth);
+			const bool centerWithinDistance = centerDistanceWeight > 0.0;
 			const bool centerEligible = centerVisible && centerWithinDistance;
 			if (measureCoverage) {
 				if (centerEligible)
@@ -209,7 +215,9 @@ void CountCategory(uint category, uint firstCounter)
 					}
 				}
 			}
-			mask = centerEligible ? GetCategoryStrength(centerCategory) : 0.0;
+			mask = centerEligible ?
+				GetCategoryStrength(centerCategory) * centerDistanceWeight :
+				0.0;
 
 			if (centerEligible && Options.w != 0 && Options.z != 0 && mask < 1.0) {
 				const int radius = min(int(Options.z), 4);
@@ -231,20 +239,22 @@ void CountCategory(uint category, uint firstCounter)
 								sourcePixel + offset, neighborDepth,
 								neighborAuthoredRawDepth))
 							continue;
-						if (!IsWithinDistance(
-								sourcePixel + offset,
-								neighborAuthoredRawDepth))
+						const float neighborDistanceWeight = GetDistanceWeight(
+							sourcePixel + offset,
+							neighborAuthoredRawDepth);
+						if (neighborDistanceWeight <= 0.0)
 							continue;
 						const float depthTolerance = max(
 							1.0,
 							max(centerDepth, neighborDepth) * FeatherOptions.x);
 						if (abs(neighborDepth - centerDepth) > depthTolerance)
 							continue;
-						const float distanceWeight =
+						const float spatialWeight =
 							saturate(1.0 - length(float2(offset)) / float(radius + 1));
 						mask = max(
 							mask,
-							GetCategoryStrength(neighborCategory) * distanceWeight);
+							GetCategoryStrength(neighborCategory) * spatialWeight *
+								neighborDistanceWeight);
 					}
 				}
 			}

@@ -163,12 +163,6 @@ and contracts only after a materially smaller candidate stays unchanged for a
 bounded interval. A generation/crop change or proven-empty frame clears that
 state. It does not dispatch Feature 18 once per NPC.
 
-Any Feature 18 history reset is evaluated normally so the network can warm, but
-character isolation substitutes an immutable zero composite mask for the reset
-frame and ramps the exact mask over the next two newly prepared masks. This
-keeps cold provider output from appearing as a bright or unstable character
-while retaining normal DLSS as the baseline.
-
 Several `NVSDK_NGX_D3D12_EvaluateFeature` calls are a separate possibility, not
 an ROI-list capability. Reusing one Feature 18 handle for several actors in the
 same frame gives the runtime no separate temporal identity and therefore risks
@@ -523,7 +517,6 @@ The in-game diagnostics and DevBench status should expose, per eye:
     by the distance cutoff
 -   frozen stereo base/crop and current eye-local depth coordinates
 -   whether mask preparation succeeded and whether evaluation was required
--   which feature slots concealed a cold-start composite after a history reset
 -   visual-mask mechanism, compute rectangle, pixel count, coverage, and source
 -   synchronized category/depth-capture readiness, frame, attempts, successes,
     same-frame reuses, empty bypasses, and failures

@@ -32,7 +32,6 @@ namespace NeuralRendering
 		CommandBegin,
 		FeatureEvaluate,
 		CommandEnd,
-		OutputResolve,
 		OutputCommit,
 		ResetWait,
 		RuntimeReset,
@@ -214,7 +213,6 @@ namespace NeuralRendering
 	{
 		std::uint32_t evaluationAttemptedFeatureSlotMask = 0;
 		std::uint32_t evaluationSucceededFeatureSlotMask = 0;
-		std::uint32_t historyResetFeatureSlotMask = 0;
 
 		[[nodiscard]] bool WasEvaluationAttempted(
 			std::uint32_t a_featureSlot) const noexcept
@@ -228,13 +226,6 @@ namespace NeuralRendering
 		{
 			return a_featureSlot < Runtime::kFeatureSlotCount &&
 			       (evaluationSucceededFeatureSlotMask & (1u << a_featureSlot)) != 0;
-		}
-
-		[[nodiscard]] bool WasHistoryReset(
-			std::uint32_t a_featureSlot) const noexcept
-		{
-			return a_featureSlot < Runtime::kFeatureSlotCount &&
-			       (historyResetFeatureSlotMask & (1u << a_featureSlot)) != 0;
 		}
 	};
 

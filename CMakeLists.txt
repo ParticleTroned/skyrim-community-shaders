@@ -1625,16 +1625,6 @@ if(BUILD_CONTROLLER_TESTS)
         PROPERTIES LABELS "ControllerTests"
     )
     add_test(
-        NAME NeuralRenderingOutputResolveContract
-        COMMAND
-            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
-            "${PROJECT_SOURCE_DIR}/tests/neural_rendering_output_resolve_contract_test.cmake"
-    )
-    set_tests_properties(
-        NeuralRenderingOutputResolveContract
-        PROPERTIES LABELS "ControllerTests"
-    )
-    add_test(
         NAME NeuralRenderingSubmitPairContract
         COMMAND
             "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P

@@ -26944,15 +26944,6 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 			neuralAttempted = outcome.WasEvaluationAttempted(args.featureSlot);
 			const bool neuralEvaluationSucceeded =
 				outcome.WasEvaluationSuccessful(args.featureSlot);
-			if (applied && neuralEvaluationSucceeded &&
-				outcome.WasHistoryReset(args.featureSlot)) {
-				(void)NeuralRendering::CharacterRendering::Instance()
-					.ConcealColdStartComposite(
-						args.featureSlot,
-						args.frameId,
-						args.sourceWorldFrame,
-						args.generation);
-			}
 			const auto routeRole =
 				dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter ?
 					NeuralStereoRouteRole::Submit :
@@ -27390,15 +27381,6 @@ namespace
 				a_results[eye].attempted =
 					a_results[eye].attempted || attempted;
 				evaluatedEyes[eye] = attempted;
-				if (applied && succeeded &&
-					outcome.WasHistoryReset(a_batchArgs[eye].featureSlot)) {
-					(void)NeuralRendering::CharacterRendering::Instance()
-						.ConcealColdStartComposite(
-							a_batchArgs[eye].featureSlot,
-							a_batchArgs[eye].frameId,
-							a_batchArgs[eye].sourceWorldFrame,
-							a_batchArgs[eye].generation);
-				}
 				a_upscaling.RecordNeuralPassTelemetry(
 					a_routeRole,
 					eye,

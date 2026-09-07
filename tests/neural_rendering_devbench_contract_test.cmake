@@ -848,8 +848,6 @@ foreach(_status_contract IN ITEMS
     [[{ "currentSuccessfulSlotMask", currentPreparationFound ? currentPreparation->successfulSlotMask : 0u }]]
     [[{ "currentBypassedSlotMask", currentPreparationFound ? currentPreparation->bypassedSlotMask : 0u }]]
     [[{ "currentAbortedSlotMask", currentPreparationFound ? currentPreparation->abortedSlotMask : 0u }]]
-    [[{ "currentColdStartConcealedSlotMask", currentPreparationFound ? currentPreparation->coldStartConcealedSlotMask : 0u }]]
-    [[{ "coldStartConcealedCharacterSlotMask", coldStartConcealedCharacterSlotMask }]]
     [[{ "eligibleFaceActors", eye.visibleFaces }]]
     [[{ "eligibleCharacterActors", eye.visibleCharacterRegions }]]
     [[{ "selectedCharacterActors", eye.selectedCharacterRegions }]]
@@ -1296,8 +1294,6 @@ foreach(_source_contract IN ITEMS
     [[slEvaluateFeature(sl::kFeatureDLSS,]]
     [[dlssPassTelemetryFrames.GetOrCreate(]]
     [[evaluationSucceededFeatureSlotMask]]
-    [[historyResetFeatureSlotMask]]
-    [[WasHistoryReset(]]
     [[RecordNeuralPassTelemetry(]]
     [[PrepareCharacterSelectionMask(]]
     [[a_args.tuning.useAutoMask = true;]]
@@ -1314,7 +1310,6 @@ foreach(_source_contract IN ITEMS
     [[IsCharacterMaterialCandidate(]]
     [[classificationCache.try_emplace(]]
     [[ResolveCharacterCompositeInputs(]]
-    [[ConcealColdStartComposite(]]
     [[const bool directCommit = params.front().neuralDirectCommit;]]
     [[params.back().neuralDirectCommit != directCommit]]
     [[params.neuralDirectCommit = neuralDirectCommit;]]
@@ -1784,8 +1779,6 @@ foreach(_disposition_call_contract IN ITEMS
     [[const uint32_t evaluationEyeMask =]]
     [[summary.successfulEyeMask = evaluationEyeMask;]]
     [[ResolveAbortedCharacterFeature18Preparations(]]
-    [[outcome.WasHistoryReset(]]
-    [[.ConcealColdStartComposite(]]
 )
     string(FIND "${_upscaling}" "${_disposition_call_contract}"
         _disposition_call_position)
@@ -1796,25 +1789,21 @@ foreach(_disposition_call_contract IN ITEMS
     endif()
 endforeach()
 
-foreach(_cold_start_composite_contract IN ITEMS
-    [[inline constexpr std::uint32_t kCompositeWarmupFrames = 2;]]
-    [[slot.compositeWarmupFramesRemaining =]]
-    [[CharacterPolicy::kCompositeWarmupFrames;]]
-    [[EnsureZeroMask(]]
-    [[zeroMaskSrv_]]
-    [[a_sourceWorldFrame != a_frameId]]
-    [[preparedFrame->coldStartConcealedSlotMask & slotBit]]
-    [[state_->zeroMaskSrv_ :]]
-    [[preparedFrame->coldStartConcealedSlotMask |= slotBit;]]
-    [[const auto completedFrames =]]
-    [[--a_slot.compositeWarmupFramesRemaining;]]
-    [[compositeWarmupWeight;]]
+foreach(_forbidden_menu_resume_suppression_token IN ITEMS
+    [[ConcealColdStartComposite]]
+    [[kCompositeWarmupFrames]]
+    [[compositeWarmupFramesRemaining]]
+    [[coldStartConcealedSlotMask]]
+    [[historyResetFeatureSlotMask]]
 )
-    string(FIND "${_source_contract_text}" "${_cold_start_composite_contract}"
-        _cold_start_composite_position)
-    if(_cold_start_composite_position EQUAL -1)
+    string(FIND
+        "${_source_contract_text}"
+        "${_forbidden_menu_resume_suppression_token}"
+        _forbidden_menu_resume_suppression_position
+    )
+    if(NOT _forbidden_menu_resume_suppression_position EQUAL -1)
         message(FATAL_ERROR
-            "Character cold-start composite contract is missing: ${_cold_start_composite_contract}"
+            "Feature 18 history resets must not suppress or ramp the exact character mask: ${_forbidden_menu_resume_suppression_token}"
         )
     endif()
 endforeach()

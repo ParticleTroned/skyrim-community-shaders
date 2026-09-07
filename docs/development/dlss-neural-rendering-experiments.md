@@ -184,20 +184,6 @@ outputs and avoids the extra center-sized copy. A failed direct pair restores or
 retains the complete normal-DLSS pair, so a partial NR result cannot remain
 visible.
 
-Raw Feature 18 output is not copied directly into those route outputs. The
-renderer first resolves it against the untouched private color input. Non-finite
-or empty model pixels fall back to that input; other pixels retain the model's
-hue while a single scalar keeps their floor-adjusted luminance within one half
-to twice the original luminance. Both eyes complete this private compute resolve
-before either caller-owned output is committed. For a character-cropped
-evaluation, the resolve and commit cover only the same output subrect, including
-subrects with nonzero offsets. This protects dark surfaces and animated
-emissive effects from unbounded bright or dark model results without changing
-the character control mask. The resolve compares samples only within the color
-domain already supplied by the selected route; it does not linearize, tone-map,
-or introduce an HDR proxy. Any future route that needs a cross-domain comparison
-requires a separate reversible color conversion rather than widening this guard.
-
 The Neural Rendering controls live in the `NVIDIA DLSS Neural Rendering`
 dropdown in Upscaling, between Frame Generation and NVIDIA Reflex. `Insertion
 Point` selects `Upscaled Centre` (the default) or experimental `Final LDR

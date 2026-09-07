@@ -52,16 +52,6 @@ namespace NeuralRendering
 
 		static_assert(sizeof(CopyDepthGuideConstants) == 16);
 
-		struct OutputResolveConstants
-		{
-			std::uint32_t offsetX = 0;
-			std::uint32_t offsetY = 0;
-			std::uint32_t width = 0;
-			std::uint32_t height = 0;
-		};
-
-		static_assert(sizeof(OutputResolveConstants) == 16);
-
 		[[nodiscard]] ComputeSubrect ResolveComputeSubrect(
 			const RendererApplyArgs& a_args) noexcept
 		{
@@ -268,10 +258,9 @@ namespace NeuralRendering
 			       (support & a_requiredSupport) == a_requiredSupport;
 		}
 
-		bool SupportsD3D11Format2(
+		bool SupportsD3D11SharedFormat(
 			ID3D11Device* a_device,
-			DXGI_FORMAT a_format,
-			UINT a_requiredSupport) noexcept
+			DXGI_FORMAT a_format) noexcept
 		{
 			if (!a_device || a_format == DXGI_FORMAT_UNKNOWN)
 				return false;
@@ -279,15 +268,7 @@ namespace NeuralRendering
 			D3D11_FEATURE_DATA_FORMAT_SUPPORT2 support{ .InFormat = a_format };
 			return SUCCEEDED(a_device->CheckFeatureSupport(
 					   D3D11_FEATURE_FORMAT_SUPPORT2, &support, sizeof(support))) &&
-			       (support.OutFormatSupport2 & a_requiredSupport) == a_requiredSupport;
-		}
-
-		bool SupportsD3D11SharedFormat(
-			ID3D11Device* a_device,
-			DXGI_FORMAT a_format) noexcept
-		{
-			return SupportsD3D11Format2(
-				a_device, a_format, D3D11_FORMAT_SUPPORT2_SHAREABLE);
+			       (support.OutFormatSupport2 & D3D11_FORMAT_SUPPORT2_SHAREABLE) != 0;
 		}
 
 		bool SupportsD3D12Format(
@@ -377,10 +358,7 @@ namespace NeuralRendering
 				context_->CSGetShader(
 					&shader_, classInstances_.data(), &classInstanceCount_);
 				context_->CSGetConstantBuffers(0, 1, &constantBuffer_);
-				context_->CSGetShaderResources(
-					0,
-					static_cast<UINT>(shaderResources_.size()),
-					shaderResources_.data());
+				context_->CSGetShaderResources(0, 1, &shaderResource_);
 				context_->CSGetUnorderedAccessViews(0, 1, &unorderedAccess_);
 				captured_ = true;
 			}
@@ -391,20 +369,14 @@ namespace NeuralRendering
 			~ComputeStateGuard() noexcept
 			{
 				if (captured_) {
-					std::array<ID3D11ShaderResourceView*, 2> nullShaderResources{};
+					ID3D11ShaderResourceView* nullShaderResource = nullptr;
 					ID3D11UnorderedAccessView* nullUnorderedAccess = nullptr;
-					context_->CSSetShaderResources(
-						0,
-						static_cast<UINT>(nullShaderResources.size()),
-						nullShaderResources.data());
+					context_->CSSetShaderResources(0, 1, &nullShaderResource);
 					context_->CSSetUnorderedAccessViews(0, 1, &nullUnorderedAccess, nullptr);
 					context_->CSSetShader(
 						shader_, classInstances_.data(), classInstanceCount_);
 					context_->CSSetConstantBuffers(0, 1, &constantBuffer_);
-					context_->CSSetShaderResources(
-						0,
-						static_cast<UINT>(shaderResources_.size()),
-						shaderResources_.data());
+					context_->CSSetShaderResources(0, 1, &shaderResource_);
 					context_->CSSetUnorderedAccessViews(0, 1, &unorderedAccess_, nullptr);
 				}
 
@@ -414,10 +386,8 @@ namespace NeuralRendering
 					if (classInstances_[index])
 						classInstances_[index]->Release();
 				}
-				for (auto* shaderResource : shaderResources_) {
-					if (shaderResource)
-						shaderResource->Release();
-				}
+				if (shaderResource_)
+					shaderResource_->Release();
 				if (unorderedAccess_)
 					unorderedAccess_->Release();
 				if (constantBuffer_)
@@ -431,7 +401,7 @@ namespace NeuralRendering
 			ID3D11ComputeShader* shader_ = nullptr;
 			std::array<ID3D11ClassInstance*, D3D11_SHADER_MAX_INTERFACES> classInstances_{};
 			UINT classInstanceCount_ = 0;
-			std::array<ID3D11ShaderResourceView*, 2> shaderResources_{};
+			ID3D11ShaderResourceView* shaderResource_ = nullptr;
 			ID3D11UnorderedAccessView* unorderedAccess_ = nullptr;
 			ID3D11Buffer* constantBuffer_ = nullptr;
 			bool captured_ = false;
@@ -521,8 +491,6 @@ namespace NeuralRendering
 			return "feature_evaluate";
 		case RendererStage::CommandEnd:
 			return "command_end";
-		case RendererStage::OutputResolve:
-			return "output_resolve";
 		case RendererStage::OutputCommit:
 			return "output_commit";
 		case RendererStage::ResetWait:
@@ -595,8 +563,6 @@ namespace NeuralRendering
 			SharedTexture motionVectors;
 			SharedTexture controlMask;
 			SharedTexture output;
-			ComPtr<ID3D11Texture2D> resolvedOutput;
-			ComPtr<ID3D11UnorderedAccessView> resolvedOutputUAV;
 			ResourceKey resourceKey{};
 			HistoryKey historyKey{};
 			std::uint32_t lastSuccessfulFrame =
@@ -643,8 +609,7 @@ namespace NeuralRendering
 			RendererApplyOutcome& a_outcome);
 		bool ApplyBatchLocked(
 			std::span<const RendererApplyArgs> a_args,
-			RendererApplyOutcome& a_outcome,
-			bool a_deferOutputCommit = false);
+			RendererApplyOutcome& a_outcome);
 		bool ResetLocked(bool a_resetShader, bool a_destruction);
 		void ShutdownForDestruction() noexcept;
 
@@ -670,11 +635,6 @@ namespace NeuralRendering
 			std::uint32_t a_slot,
 			const ValidatedResources& a_resources);
 		bool CopyDepthBatchLocked(
-			std::span<const RendererApplyArgs> a_args,
-			std::span<Slot* const> a_slots,
-			std::span<const ValidatedResources> a_resources);
-		bool EnsureOutputResolveShaderLocked();
-		bool ResolveOutputBatchLocked(
 			std::span<const RendererApplyArgs> a_args,
 			std::span<Slot* const> a_slots,
 			std::span<const ValidatedResources> a_resources);
@@ -712,10 +672,7 @@ namespace NeuralRendering
 		ComPtr<ID3D11DeviceContext> context_;
 		ComPtr<ID3D11ComputeShader> copyDepthGuideCS_;
 		ComPtr<ID3D11Buffer> copyDepthGuideCB_;
-		ComPtr<ID3D11ComputeShader> resolveOutputCS_;
-		ComPtr<ID3D11Buffer> resolveOutputCB_;
 		bool copyDepthGuideCompileFailed_ = false;
-		bool resolveOutputCompileFailed_ = false;
 		RendererSnapshot snapshot_{};
 		bool runtimeReady_ = false;
 		bool runtimeTouched_ = false;
@@ -960,10 +917,8 @@ namespace NeuralRendering
 
 		constexpr UINT inputSupport = D3D11_FORMAT_SUPPORT_TEXTURE2D |
 		                              D3D11_FORMAT_SUPPORT_SHADER_SAMPLE |
-		                              D3D11_FORMAT_SUPPORT_SHADER_LOAD |
 		                              D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW;
 		constexpr UINT outputSupport = D3D11_FORMAT_SUPPORT_TEXTURE2D |
-		                               D3D11_FORMAT_SUPPORT_SHADER_LOAD |
 		                               D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW;
 		if (!SupportsD3D11Format(a_args.device, a_resources.color.desc.Format, inputSupport))
 			return fail("the color format cannot back a shared SRV/UAV texture");
@@ -978,15 +933,9 @@ namespace NeuralRendering
 		if (!SupportsD3D11SharedFormat(a_args.device, DXGI_FORMAT_R32_FLOAT))
 			return fail("R32_FLOAT depth guides are not shareable across D3D11 and D3D12");
 		if (!SupportsD3D11Format(a_args.device, a_resources.output.desc.Format, outputSupport))
-			return fail("the output format cannot back a shader-readable shared UAV texture");
-		if (!SupportsD3D11Format2(
-				a_args.device,
-				a_resources.output.desc.Format,
-				D3D11_FORMAT_SUPPORT2_SHAREABLE |
-					D3D11_FORMAT_SUPPORT2_UAV_TYPED_STORE)) {
-			return fail(
-				"the output format is not shareable or lacks typed UAV stores");
-		}
+			return fail("the output format cannot back a shared UAV texture");
+		if (!SupportsD3D11SharedFormat(a_args.device, a_resources.output.desc.Format))
+			return fail("the output format is not shareable across D3D11 and D3D12");
 		if (hasControlMask &&
 			!SupportsD3D11Format(a_args.device, DXGI_FORMAT_R8_UNORM, inputSupport)) {
 			return fail("R8_UNORM control masks cannot back a shared SRV/UAV texture");
@@ -1375,18 +1324,12 @@ namespace NeuralRendering
 		}
 
 		slots_ = {};
-		// Shaders and constant buffers are owned by the current D3D11 device.
-		// Every successful backend teardown clears that identity, so retaining
-		// these objects would make an ordinary Reset unsafe on a later device.
-		copyDepthGuideCS_.Reset();
-		copyDepthGuideCB_.Reset();
-		resolveOutputCS_.Reset();
-		resolveOutputCB_.Reset();
 		device_.Reset();
 		context_.Reset();
 		if (a_resetShader) {
+			copyDepthGuideCS_.Reset();
+			copyDepthGuideCB_.Reset();
 			copyDepthGuideCompileFailed_ = false;
-			resolveOutputCompileFailed_ = false;
 		}
 		runtimeReady_ = false;
 		runtimeTouched_ = false;
@@ -1413,8 +1356,6 @@ namespace NeuralRendering
 			Abandon(slot.motionVectors);
 			Abandon(slot.controlMask);
 			Abandon(slot.output);
-			(void)slot.resolvedOutput.Detach();
-			(void)slot.resolvedOutputUAV.Detach();
 			slot.resourcesValid = false;
 			slot.historyValid = false;
 		}
@@ -1492,7 +1433,7 @@ namespace NeuralRendering
 		                                    (!SameIdentity(device_.Get(), a_args.device) ||
 												!SameIdentity(context_.Get(), a_args.context));
 		if (backendIdentityChanged) {
-			if (!TeardownBackendLocked(true, false, true))
+			if (!TeardownBackendLocked(false, false, true))
 				return false;
 		}
 
@@ -1585,10 +1526,8 @@ namespace NeuralRendering
 		const ValidatedResources& a_resources)
 	{
 		auto& slot = slots_[a_slot];
-		if (slot.resourcesValid && slot.resourceKey == a_resources.resourceKey &&
-			slot.output.srv11 && slot.resolvedOutput && slot.resolvedOutputUAV) {
+		if (slot.resourcesValid && slot.resourceKey == a_resources.resourceKey)
 			return true;
-		}
 
 		if (slot.resourcesValid) {
 			activeStage_ = RendererStage::ResourceRetirement;
@@ -1647,7 +1586,7 @@ namespace NeuralRendering
 			a_resources.resourceKey.outputWidth,
 			a_resources.resourceKey.outputHeight,
 			a_resources.resourceKey.outputFormat,
-			true);
+			false);
 		D3D11_TEXTURE2D_DESC controlMaskDesc{};
 		if (a_resources.resourceKey.controlMaskPresent) {
 			controlMaskDesc = MakeSharedDescription(
@@ -1673,34 +1612,6 @@ namespace NeuralRendering
 				a_slot,
 				true);
 		}
-
-		D3D11_TEXTURE2D_DESC resolvedOutputDesc = outputDesc;
-		resolvedOutputDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
-		resolvedOutputDesc.MiscFlags = 0;
-		HRESULT result = device_->CreateTexture2D(
-			&resolvedOutputDesc, nullptr, &replacement.resolvedOutput);
-		if (SUCCEEDED(result)) {
-			result = device_->CreateUnorderedAccessView(
-				replacement.resolvedOutput.Get(),
-				nullptr,
-				&replacement.resolvedOutputUAV);
-		}
-		if (FAILED(result)) {
-			return FailLocked(
-				RendererStage::ResourceCreation,
-				result,
-				std::format("slot {} private output-resolve resource creation failed", a_slot),
-				a_slot,
-				true);
-		}
-		Util::SetResourceName(
-			replacement.resolvedOutput.Get(),
-			"NeuralRendering::Slot%u::ResolvedOutput",
-			a_slot);
-		Util::SetResourceName(
-			replacement.resolvedOutputUAV.Get(),
-			"NeuralRendering::Slot%u::ResolvedOutput UAV",
-			a_slot);
 
 		replacement.resourceKey = a_resources.resourceKey;
 		replacement.resourcesValid = true;
@@ -1772,91 +1683,6 @@ namespace NeuralRendering
 				0, 1, &destination, nullptr);
 			{
 				CS_PROFILE_SCOPE("Upscaling::DLSSNRDepthGuide");
-				a_args.front().context->Dispatch(
-					(roi.width + 7u) / 8u,
-					(roi.height + 7u) / 8u,
-					1);
-			}
-		}
-		return true;
-	}
-
-	bool Renderer::State::EnsureOutputResolveShaderLocked()
-	{
-		if (!resolveOutputCS_ && !resolveOutputCompileFailed_) {
-			resolveOutputCS_.Attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
-				L"Data/Shaders/Upscaling/NeuralRendering/ResolveOutputCS.hlsl",
-				{},
-				"cs_5_0",
-				"main")));
-			resolveOutputCompileFailed_ = !resolveOutputCS_;
-			if (resolveOutputCS_) {
-				Util::SetResourceName(
-					resolveOutputCS_.Get(),
-					"NeuralRendering::ResolveOutputCS");
-			}
-		}
-		if (!resolveOutputCS_)
-			return false;
-
-		if (!resolveOutputCB_) {
-			const D3D11_BUFFER_DESC desc{
-				.ByteWidth = sizeof(OutputResolveConstants),
-				.Usage = D3D11_USAGE_DEFAULT,
-				.BindFlags = D3D11_BIND_CONSTANT_BUFFER,
-			};
-			if (FAILED(device_->CreateBuffer(&desc, nullptr, &resolveOutputCB_)))
-				return false;
-			Util::SetResourceName(
-				resolveOutputCB_.Get(), "NeuralRendering::ResolveOutputCB");
-		}
-		return true;
-	}
-
-	bool Renderer::State::ResolveOutputBatchLocked(
-		std::span<const RendererApplyArgs> a_args,
-		std::span<Slot* const> a_slots,
-		std::span<const ValidatedResources> a_resources)
-	{
-		if (a_args.empty() || a_args.size() != a_slots.size() ||
-			a_args.size() != a_resources.size() || !resolveOutputCS_ ||
-			!resolveOutputCB_) {
-			return false;
-		}
-
-		ComputeStateGuard stateGuard(a_args.front().context);
-		if (!stateGuard.Captured())
-			return false;
-
-		a_args.front().context->CSSetShader(resolveOutputCS_.Get(), nullptr, 0);
-		for (std::size_t index = 0; index < a_args.size(); ++index) {
-			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
-			const auto& roi = a_resources[index].outputSubrect;
-			const OutputResolveConstants constants{
-				.offsetX = roi.baseX,
-				.offsetY = roi.baseY,
-				.width = roi.width,
-				.height = roi.height,
-			};
-			std::array<ID3D11ShaderResourceView*, 2> sources{
-				a_slots[index]->color.srv11.Get(),
-				a_slots[index]->output.srv11.Get()
-			};
-			auto* destination = a_slots[index]->resolvedOutputUAV.Get();
-			if (!sources[0] || !sources[1] || !destination)
-				return false;
-
-			a_args.front().context->UpdateSubresource(
-				resolveOutputCB_.Get(), 0, nullptr, &constants, 0, 0);
-			auto* constantBuffer = resolveOutputCB_.Get();
-			a_args.front().context->CSSetConstantBuffers(
-				0, 1, &constantBuffer);
-			a_args.front().context->CSSetShaderResources(
-				0, static_cast<UINT>(sources.size()), sources.data());
-			a_args.front().context->CSSetUnorderedAccessViews(
-				0, 1, &destination, nullptr);
-			{
-				CS_PROFILE_SCOPE("Upscaling::DLSSNROutputResolve");
 				a_args.front().context->Dispatch(
 					(roi.width + 7u) / 8u,
 					(roi.height + 7u) / 8u,
@@ -1942,8 +1768,7 @@ namespace NeuralRendering
 		}
 
 		RendererApplyOutcome leftOutcome{};
-		if (!ApplyBatchLocked(
-				std::span(&synchronizedArgs[0], 1), leftOutcome, true)) {
+		if (!ApplyBatchLocked(std::span(&synchronizedArgs[0], 1), leftOutcome)) {
 			a_outcome = leftOutcome;
 			return false;
 		}
@@ -1951,66 +1776,19 @@ namespace NeuralRendering
 			leftOutcome.evaluationAttemptedFeatureSlotMask;
 		a_outcome.evaluationSucceededFeatureSlotMask =
 			leftOutcome.evaluationSucceededFeatureSlotMask;
-		a_outcome.historyResetFeatureSlotMask =
-			leftOutcome.historyResetFeatureSlotMask;
 		RendererApplyOutcome rightOutcome{};
 		const bool rightSucceeded = ApplyBatchLocked(
-			std::span(&synchronizedArgs[1], 1), rightOutcome, true);
+			std::span(&synchronizedArgs[1], 1), rightOutcome);
 		a_outcome.evaluationAttemptedFeatureSlotMask |=
 			rightOutcome.evaluationAttemptedFeatureSlotMask;
 		a_outcome.evaluationSucceededFeatureSlotMask |=
 			rightOutcome.evaluationSucceededFeatureSlotMask;
-		a_outcome.historyResetFeatureSlotMask |=
-			rightOutcome.historyResetFeatureSlotMask;
-		if (!rightSucceeded)
-			return false;
-
-		activeStage_ = RendererStage::OutputCommit;
-		const auto outputCommitStarted = std::chrono::steady_clock::now();
-		for (std::size_t index = 0; index < synchronizedArgs.size(); ++index) {
-			SetActiveFeatureSlotLocked(synchronizedArgs[index].featureSlot);
-			CopyTextureSubrect(
-				synchronizedArgs.front().context,
-				resources[index].output.texture.Get(),
-				slots_[synchronizedArgs[index].featureSlot].resolvedOutput.Get(),
-				resources[index].outputSubrect);
-		}
-		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
-			return FailLocked(
-				RendererStage::OutputCommit,
-				reason,
-				"device removal followed the sequential stereo output commit",
-				synchronizedArgs.front().featureSlot,
-				true);
-		}
-		RecordCpuDuration(
-			snapshot_.performance.outputCommitCpuEnqueueSamples,
-			snapshot_.performance.outputCommitCpuEnqueueMicroseconds,
-			snapshot_.performance.lastOutputCommitCpuEnqueueMicroseconds,
-			snapshot_.performance.maximumOutputCommitCpuEnqueueMicroseconds,
-			outputCommitStarted);
-		for (std::size_t index = 0; index < synchronizedArgs.size(); ++index) {
-			const auto& args = synchronizedArgs[index];
-			auto& slot = slots_[args.featureSlot];
-			SetActiveFeatureSlotLocked(args.featureSlot);
-			slot.historyKey = resources[index].historyKey;
-			slot.lastSuccessfulFrame = args.frameId;
-			slot.lastSuccessfulSourceWorldFrame = args.sourceWorldFrame;
-			slot.historyValid = true;
-		}
-		activeStage_ = RendererStage::Complete;
-		for (const auto& args : synchronizedArgs) {
-			SetActiveFeatureSlotLocked(args.featureSlot);
-			SucceedLocked(args.featureSlot);
-		}
-		RefreshInteropTelemetryLocked();
-		return true;
+		return rightSucceeded;
 	}
 
 	bool Renderer::State::ApplyBatchLocked(
 		std::span<const RendererApplyArgs> a_args,
-		RendererApplyOutcome& a_outcome,
-		bool a_deferOutputCommit)
+		RendererApplyOutcome& a_outcome)
 	{
 		a_outcome = {};
 		if (a_args.empty() || a_args.size() > 2)
@@ -2106,15 +1884,6 @@ namespace NeuralRendering
 			if (!EnsureSlotLocked(a_args[index].featureSlot, resources[index]))
 				return false;
 			slots[index] = &slots_[a_args[index].featureSlot];
-		}
-		activeStage_ = RendererStage::OutputResolve;
-		if (!EnsureOutputResolveShaderLocked()) {
-			return FailLocked(
-				RendererStage::OutputResolve,
-				E_FAIL,
-				"ResolveOutputCS compilation or constant-buffer creation failed",
-				a_args.front().featureSlot,
-				true);
 		}
 
 		const auto preparationStarted = std::chrono::steady_clock::now();
@@ -2348,8 +2117,6 @@ namespace NeuralRendering
 			if (evaluationAttempted) {
 				Increment(snapshot_.counters.featureEvaluations);
 				a_outcome.evaluationAttemptedFeatureSlotMask |= 1u << args.featureSlot;
-				if (effectiveReset)
-					a_outcome.historyResetFeatureSlotMask |= 1u << args.featureSlot;
 			}
 			if (!evaluated) {
 				const std::string runtimeDetail = Runtime::Instance().Detail();
@@ -2414,50 +2181,26 @@ namespace NeuralRendering
 		recordingGuard.active = false;
 		snapshot_.lastCompletedStage = RendererStage::CommandEnd;
 
-		activeStage_ = RendererStage::OutputResolve;
+		activeStage_ = RendererStage::OutputCommit;
 		RefreshRuntimeTelemetryLocked();
 		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
 			return FailLocked(
-				RendererStage::OutputResolve,
+				RendererStage::OutputCommit,
 				reason,
-				"device removal was detected before the private output resolve",
+				"device removal was detected before the external output commit",
 				a_args.front().featureSlot,
 				true);
 		}
 
-		if (!ResolveOutputBatchLocked(
-				a_args,
-				std::span(slots.data(), a_args.size()),
-				std::span(resources.data(), a_args.size()))) {
-			return FailLocked(
-				RendererStage::OutputResolve,
-				E_FAIL,
-				"ResolveOutputCS dispatch setup failed",
-				a_args.front().featureSlot,
-				true);
-		}
-		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
-			return FailLocked(
-				RendererStage::OutputResolve,
-				reason,
-				"device removal followed the private output-resolve dispatch",
-				a_args.front().featureSlot,
-				true);
-		}
-		snapshot_.lastCompletedStage = RendererStage::OutputResolve;
-		if (a_deferOutputCommit)
-			return true;
-
-		activeStage_ = RendererStage::OutputCommit;
-		// Both original-anchored resolves complete privately before either
-		// caller-owned output subrect is written.
+		// Both private inputs are prepared before submission and neither caller-owned
+		// output is written until every eye has recorded successfully.
 		const auto outputCommitStarted = std::chrono::steady_clock::now();
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
 			CopyTextureSubrect(
 				a_args.front().context,
 				resources[index].output.texture.Get(),
-				slots[index]->resolvedOutput.Get(),
+				slots[index]->output.resource11.Get(),
 				resources[index].outputSubrect);
 		}
 		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {

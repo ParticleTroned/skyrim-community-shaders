@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 
 namespace VRDepthCullingTemporal
@@ -35,11 +37,23 @@ namespace VRDepthCullingTemporal
 
 	struct Status
 	{
+		static constexpr std::size_t DurationBinCount = 8;
+
 		bool installed = false;
 		bool cullingEnabled = false;
+		bool telemetryEnabled = true;
 		Mode mode = Mode::Balanced;
 		std::uint64_t envelopeMisses = 0;
+		std::uint64_t recoveryAttempts = 0;
+		std::uint64_t objectsInspected = 0;
+		std::uint64_t invalidTransforms = 0;
+		std::uint64_t invalidMotionEnvelopes = 0;
+		std::uint64_t frustumTests = 0;
+		std::uint64_t totalEligible = 0;
 		std::uint64_t totalPromoted = 0;
+		std::uint64_t totalDurationNanoseconds = 0;
+		std::uint64_t maximumDurationNanoseconds = 0;
+		std::array<std::uint64_t, DurationBinCount> durationHistogram{};
 		std::uint32_t lastObjectCount = 0;
 		std::uint32_t lastEligibleCount = 0;
 		std::uint32_t lastPromotedCount = 0;
@@ -55,4 +69,8 @@ namespace VRDepthCullingTemporal
 	[[nodiscard]] Mode GetMode();
 	/** Return thread-safe diagnostics for DevBench inspection. */
 	[[nodiscard]] Status GetStatus();
+	/** Enable or disable recovery-path telemetry without changing culling behavior. */
+	void SetTelemetryEnabled(bool a_enabled);
+	/** Reset recovery telemetry when no render-depth writer is active. */
+	[[nodiscard]] bool TryResetStatus();
 }

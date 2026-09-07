@@ -25,6 +25,8 @@ string(JSON _action_count LENGTH
 set(_prepare_coc_found FALSE)
 set(_prepare_tuning_found FALSE)
 set(_set_layout_unlocked_found FALSE)
+set(_depth_culling_telemetry_enabled_found FALSE)
+set(_depth_culling_telemetry_reset_found FALSE)
 set(_foliage_lighting_enabled_found FALSE)
 set(_truepbr_verbose_found FALSE)
 set(_dynamic_cubemap_resolution_found FALSE)
@@ -37,6 +39,10 @@ foreach(_index RANGE 0 ${_action_last})
         set(_prepare_coc_found TRUE)
     elseif(_action STREQUAL "prepare_tuning")
         set(_prepare_tuning_found TRUE)
+    elseif(_action STREQUAL "set_depth_culling_telemetry_enabled")
+        set(_depth_culling_telemetry_enabled_found TRUE)
+    elseif(_action STREQUAL "reset_depth_culling_telemetry")
+        set(_depth_culling_telemetry_reset_found TRUE)
     elseif(_action STREQUAL "set_foliage_lighting_enabled")
         set(_foliage_lighting_enabled_found TRUE)
     elseif(_action STREQUAL "set_truepbr_verbose_json_logging")
@@ -56,6 +62,16 @@ if(NOT _prepare_tuning_found)
 endif()
 if(NOT _set_layout_unlocked_found)
     message(FATAL_ERROR "Menu DevBench schema is missing set_layout_unlocked")
+endif()
+if(NOT _depth_culling_telemetry_enabled_found)
+    message(FATAL_ERROR
+        "Menu DevBench schema is missing set_depth_culling_telemetry_enabled"
+    )
+endif()
+if(NOT _depth_culling_telemetry_reset_found)
+    message(FATAL_ERROR
+        "Menu DevBench schema is missing reset_depth_culling_telemetry"
+    )
 endif()
 if(NOT _foliage_lighting_enabled_found)
     message(FATAL_ERROR
@@ -121,6 +137,10 @@ foreach(_required_behavior IN ITEMS
     "{ \"menuScale\", vr.GetEffectiveMenuScale() }"
     "{ \"savedMenuScale\", vr.settings.VRMenuScale }"
     "globals::features::vr.SetMenuLayoutUnlocked(enabled)"
+    "VRDepthCullingTemporal::SetTelemetryEnabled(enabled)"
+    "VRDepthCullingTemporal::TryResetStatus()"
+    "depth_culling_telemetry_busy"
+    "\"durationHistogramNanoseconds\""
 )
     string(FIND "${_bridge}" "${_required_behavior}" _behavior_position)
     if(_behavior_position EQUAL -1)

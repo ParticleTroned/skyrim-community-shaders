@@ -1677,6 +1677,27 @@ if(BUILD_CONTROLLER_TESTS)
         PROPERTIES LABELS "ControllerTests"
     )
     add_executable(
+        vr_render_scale_mode_policy_test
+        EXCLUDE_FROM_ALL
+        tests/vr_render_scale_mode_policy_test.cpp
+    )
+    target_compile_features(
+        vr_render_scale_mode_policy_test
+        PRIVATE cxx_std_23
+    )
+    target_include_directories(
+        vr_render_scale_mode_policy_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    add_test(
+        NAME VRRenderScaleModePolicy
+        COMMAND vr_render_scale_mode_policy_test
+    )
+    set_tests_properties(
+        VRRenderScaleModePolicy
+        PROPERTIES LABELS "ControllerTests"
+    )
+    add_executable(
         character_region_policy_test
         EXCLUDE_FROM_ALL
         tests/character_region_policy_test.cpp
@@ -1761,6 +1782,7 @@ if(BUILD_CONTROLLER_TESTS)
         controller_tests
         DEPENDS
             neural_rendering_pipeline_policy_test
+            vr_render_scale_mode_policy_test
             character_region_policy_test
             compute_subrect_test
             frame_telemetry_ring_test

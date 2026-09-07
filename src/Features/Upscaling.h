@@ -502,6 +502,9 @@ public:
 		uint64_t transitionEpoch = 0;
 		UpscaleMethod method = UpscaleMethod::kNONE;
 		uint32_t qualityMode = 0;
+		// Persisted user intent, retained while native-quality modes force the
+		// physical render-scale path inactive.
+		bool renderScaleModePreference = false;
 		bool renderScaleModeEnabled = false;
 		uint32_t dlssPreset = kDLSSPresetK;
 		bool perfModeEnabled = false;
@@ -1574,6 +1577,8 @@ public:
 	// Rebuild only the cached plan from already-latched state; backend dispatch code must only read the cached plan.
 	void RefreshRuntimeResolutionPlan();
 	bool IsRenderScaleModeRequested() const;
+	/** Returns persisted user intent even while DLAA makes Render Scale inactive. */
+	bool GetVRRenderScaleModePreference() const;
 	bool GetVRRenderScaleModeRequested() const;
 	bool CanUseVRRenderScaleMode() const;
 	bool IsVRRenderScaleModeLatched() const;

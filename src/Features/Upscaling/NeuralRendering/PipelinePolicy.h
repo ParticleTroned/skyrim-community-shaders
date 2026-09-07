@@ -464,6 +464,35 @@ namespace NeuralRendering
 		return a_arrangement != PipelineArrangement::NeuralThenDlss;
 	}
 
+	/**
+	 * Resolves Feature 18's immutable upscaling mode from the resources that the
+	 * provider will actually consume.  Native/DLAA geometry must not be
+	 * advertised as upscaling merely because the selected pipeline can upscale;
+	 * the private runtime treats this bit as part of feature creation state.
+	 *
+	 * A missing result denotes unsupported zero-sized or downscaling geometry.
+	 */
+	[[nodiscard]] constexpr std::optional<bool> ResolveFeatureUpscaling(
+		std::uint32_t a_guideWidth,
+		std::uint32_t a_guideHeight,
+		std::uint32_t a_outputWidth,
+		std::uint32_t a_outputHeight,
+		PipelineArrangement a_arrangement = kPipelineArrangement) noexcept
+	{
+		if (!a_guideWidth || !a_guideHeight || !a_outputWidth ||
+			!a_outputHeight || a_guideWidth > a_outputWidth ||
+			a_guideHeight > a_outputHeight) {
+			return std::nullopt;
+		}
+
+		const bool geometryUpscales =
+			a_guideWidth != a_outputWidth ||
+			a_guideHeight != a_outputHeight;
+		if (geometryUpscales && !UsesFeatureUpscaling(a_arrangement))
+			return std::nullopt;
+		return geometryUpscales;
+	}
+
 	/** A replacement failure must execute normal DLSS; other failures bypass NR. */
 	[[nodiscard]] constexpr bool RunsDlssAfterNeuralFailure(
 		PipelineArrangement a_arrangement = kPipelineArrangement) noexcept

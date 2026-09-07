@@ -105,6 +105,10 @@ set(
     _pipeline_policy_path
     "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/PipelinePolicy.h"
 )
+set(
+    _vr_render_scale_mode_policy_path
+    "${PROJECT_ROOT}/src/Features/Upscaling/VRRenderScaleModePolicy.h"
+)
 foreach(_required_path IN ITEMS
     "${_bridge_path}"
     "${_experiment_doc_path}"
@@ -137,6 +141,7 @@ foreach(_required_path IN ITEMS
     "${_character_doc_path}"
     "${_d3d12_interop_source_path}"
     "${_pipeline_policy_path}"
+    "${_vr_render_scale_mode_policy_path}"
 )
     if(NOT EXISTS "${_required_path}")
         message(FATAL_ERROR "Required Neural Rendering contract input is missing: ${_required_path}")
@@ -175,10 +180,72 @@ file(READ "${_compute_subrect_path}" _compute_subrect)
 file(READ "${_character_doc_path}" _character_doc)
 file(READ "${_d3d12_interop_source_path}" _d3d12_interop_source)
 file(READ "${_pipeline_policy_path}" _pipeline_policy)
+file(READ "${_vr_render_scale_mode_policy_path}" _vr_render_scale_mode_policy)
 set(
     _source_contract_text
-    "${_upscaling}\n${_upscaling_header}\n${_deferred}\n${_subsurface_header}\n${_subsurface_source}\n${_streamline}\n${_streamline_header}\n${_renderer_header}\n${_renderer_source}\n${_runtime_header}\n${_runtime_source}\n${_compute_subrect}\n${_character_header}\n${_character_source}\n${_character_region_policy}\n${_character_compute_subrect}\n${_character_category_shader}\n${_character_mask_shader}\n${_lighting_shader}\n${_grass_shader}\n${_effect_shader}\n${_distant_tree_shader}\n${_sky_shader}\n${_deferred_composite_shader}\n${_foveated_center_blend_shader}\n${_copy_depth_guide_shader}\n${_submit_stage_stretch_shader}\n${_character_doc}\n${_d3d12_interop_source}\n${_pipeline_policy}"
+    "${_upscaling}\n${_upscaling_header}\n${_deferred}\n${_subsurface_header}\n${_subsurface_source}\n${_streamline}\n${_streamline_header}\n${_renderer_header}\n${_renderer_source}\n${_runtime_header}\n${_runtime_source}\n${_compute_subrect}\n${_character_header}\n${_character_source}\n${_character_region_policy}\n${_character_compute_subrect}\n${_character_category_shader}\n${_character_mask_shader}\n${_lighting_shader}\n${_grass_shader}\n${_effect_shader}\n${_distant_tree_shader}\n${_sky_shader}\n${_deferred_composite_shader}\n${_foveated_center_blend_shader}\n${_copy_depth_guide_shader}\n${_submit_stage_stretch_shader}\n${_character_doc}\n${_d3d12_interop_source}\n${_pipeline_policy}\n${_vr_render_scale_mode_policy}"
 )
+
+foreach(_feature_mode_contract IN ITEMS
+    [[ResolveFeatureUpscaling(]]
+    [[args.featureUpscaling = *featureUpscaling;]]
+    [[.featureUpscaling = a_args.featureUpscaling,]]
+    [[Feature 18 upscaling mode does not match its guide-to-output geometry]]
+    [[neuralFeatureUpscalingModeChanged]]
+    [[NeuralRendering::CharacterRendering::Instance().Invalidate();]]
+)
+    string(FIND
+        "${_source_contract_text}"
+        "${_feature_mode_contract}"
+        _feature_mode_contract_position
+    )
+    if(_feature_mode_contract_position EQUAL -1)
+        message(FATAL_ERROR
+            "DLSS/DLAA Neural Rendering mode contract is missing: ${_feature_mode_contract}"
+        )
+    endif()
+endforeach()
+
+string(REGEX MATCHALL
+    "args\\.featureUpscaling = \\*featureUpscaling;"
+    _feature_mode_builder_sites
+    "${_upscaling}"
+)
+list(LENGTH _feature_mode_builder_sites _feature_mode_builder_site_count)
+if(_feature_mode_builder_site_count LESS 2)
+    message(FATAL_ERROR
+        "Both Neural Rendering insertion paths must derive Feature 18 upscaling mode from geometry"
+    )
+endif()
+
+string(FIND
+    "${_upscaling}"
+    [[args.featureUpscaling = true;]]
+    _hard_coded_feature_upscaling_position
+)
+if(NOT _hard_coded_feature_upscaling_position EQUAL -1)
+    message(FATAL_ERROR
+        "Neural Rendering must not hard-code Feature 18 upscaling mode"
+    )
+endif()
+
+foreach(_render_scale_preference_contract IN ITEMS
+    [[renderScaleModePreference]]
+    [[GetVRRenderScaleModePreference()]]
+    [[VRRenderScaleModePolicy::Resolve(]]
+    [[settings.renderScaleMode != requestedRenderScalePreference]]
+)
+    string(FIND
+        "${_source_contract_text}"
+        "${_render_scale_preference_contract}"
+        _render_scale_preference_contract_position
+    )
+    if(_render_scale_preference_contract_position EQUAL -1)
+        message(FATAL_ERROR
+            "VR Render Scale preference contract is missing: ${_render_scale_preference_contract}"
+        )
+    endif()
+endforeach()
 
 foreach(_selection_composite_contract IN ITEMS
     [[CharacterMask.SampleLevel(LinearSampler, centerUV, 0)]]

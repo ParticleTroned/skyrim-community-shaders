@@ -530,6 +530,7 @@ namespace NeuralRendering
 			DXGI_FORMAT outputFormat = DXGI_FORMAT_UNKNOWN;
 			DXGI_FORMAT controlMaskFormat = DXGI_FORMAT_UNKNOWN;
 			bool controlMaskPresent = false;
+			bool featureUpscaling = false;
 
 			bool operator==(const ResourceKey&) const = default;
 		};
@@ -549,7 +550,6 @@ namespace NeuralRendering
 			std::uint32_t style = 0;
 			std::uintptr_t controlMaskIdentity = 0;
 			ComputeSubrect computeSubrect{};
-			bool featureUpscaling = false;
 			bool useAutoMask = false;
 			bool uiCorrection = false;
 
@@ -730,6 +730,15 @@ namespace NeuralRendering
 			!validDimension(a_args.outputWidth) ||
 			!validDimension(a_args.outputHeight)) {
 			return fail("one or more dimensions are zero or exceed the D3D11 Texture2D limit");
+		}
+		const auto expectedFeatureUpscaling = ResolveFeatureUpscaling(
+			a_args.guideWidth, a_args.guideHeight,
+			a_args.outputWidth, a_args.outputHeight);
+		if (!expectedFeatureUpscaling)
+			return fail("Feature 18 guide-to-output geometry is unsupported");
+		if (a_args.featureUpscaling != *expectedFeatureUpscaling) {
+			return fail(
+				"Feature 18 upscaling mode does not match its guide-to-output geometry");
 		}
 		const bool hasExplicitSubrectValue =
 			a_args.computeSubrect.baseX || a_args.computeSubrect.baseY ||
@@ -952,6 +961,7 @@ namespace NeuralRendering
 			                         a_resources.controlMask.desc.Format :
 			                         DXGI_FORMAT_UNKNOWN,
 			.controlMaskPresent = hasControlMask,
+			.featureUpscaling = a_args.featureUpscaling,
 		};
 		a_resources.historyKey = {
 			.resources = a_resources.resourceKey,
@@ -967,7 +977,6 @@ namespace NeuralRendering
 			.style = a_args.tuning.style,
 			.controlMaskIdentity = a_resources.controlMaskIdentity,
 			.computeSubrect = a_resources.outputSubrect,
-			.featureUpscaling = a_args.featureUpscaling,
 			.useAutoMask = a_args.tuning.useAutoMask,
 			.uiCorrection = a_args.tuning.uiCorrection,
 		};

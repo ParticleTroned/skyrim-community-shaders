@@ -36,6 +36,28 @@ int main()
 	static_assert(NeuralRendering::UsesFeatureUpscaling(PipelineArrangement::NeuralReplacesDlss));
 	static_assert(NeuralRendering::RunsDlssAfterNeuralFailure(PipelineArrangement::NeuralReplacesDlss));
 
+	constexpr auto scaledFeature =
+		NeuralRendering::ResolveFeatureUpscaling(756u, 840u, 1512u, 1680u);
+	static_assert(scaledFeature && *scaledFeature);
+	constexpr auto nativeFeature =
+		NeuralRendering::ResolveFeatureUpscaling(1512u, 1680u, 1512u, 1680u);
+	static_assert(nativeFeature && !*nativeFeature);
+	constexpr auto preDlssFeature = NeuralRendering::ResolveFeatureUpscaling(
+		756u, 840u, 1512u, 1680u, PipelineArrangement::NeuralThenDlss);
+	static_assert(!preDlssFeature);
+	constexpr auto nativePreDlssFeature = NeuralRendering::ResolveFeatureUpscaling(
+		1512u, 1680u, 1512u, 1680u, PipelineArrangement::NeuralThenDlss);
+	static_assert(nativePreDlssFeature && !*nativePreDlssFeature);
+	constexpr auto horizontalScaleFeature =
+		NeuralRendering::ResolveFeatureUpscaling(756u, 1680u, 1512u, 1680u);
+	static_assert(horizontalScaleFeature && *horizontalScaleFeature);
+	static_assert(!NeuralRendering::ResolveFeatureUpscaling(
+		1512u, 1680u, 756u, 840u));
+	static_assert(!NeuralRendering::ResolveFeatureUpscaling(
+		1512u, 840u, 756u, 1680u));
+	static_assert(!NeuralRendering::ResolveFeatureUpscaling(
+		0u, 840u, 1512u, 1680u));
+
 	static_assert(std::string_view(NeuralRendering::GetPipelineArrangementName(
 					  PipelineArrangement::DlssThenNeural)) == "dlss_then_neural");
 	static_assert(std::string_view(NeuralRendering::GetPipelineArrangementName(

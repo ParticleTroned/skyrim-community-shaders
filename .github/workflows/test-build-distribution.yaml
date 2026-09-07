@@ -1,0 +1,55 @@
+name: "Test Build: Small Distribution"
+
+on:
+    push:
+        branches: [main-VR]
+        paths:
+            - "version/test-build.json"
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: csx-test-distribution-${{ github.ref }}-${{ github.sha }}
+    cancel-in-progress: false
+
+jobs:
+    metadata:
+        name: Read allocated identity
+        runs-on: ubuntu-latest
+        outputs:
+            build-id: ${{ steps.identity.outputs.build_id }}
+            artifact-name: ${{ steps.identity.outputs.artifact_name }}
+            display-version: ${{ steps.identity.outputs.display_version }}
+            source-sha: ${{ steps.identity.outputs.source_sha }}
+        steps:
+            - name: Checkout allocated build
+              uses: actions/checkout@v6
+              with:
+                  fetch-depth: 0
+                  submodules: false
+                  persist-credentials: false
+
+            - name: Validate and read test-build state
+              id: identity
+              run: |
+                  set -euo pipefail
+                  python tools/csx_test_build.py read \
+                    --state version/test-build.json \
+                    --github-output "$GITHUB_OUTPUT"
+                  SOURCE_SHA=$(python -c 'import json; print(json.load(open("version/test-build.json", encoding="utf-8"))["sourceSha"])')
+                  git merge-base --is-ancestor "$SOURCE_SHA" HEAD
+
+    build:
+        name: Build ${{ needs.metadata.outputs.display-version }}
+        needs: metadata
+        uses: ./.github/workflows/_shared-build.yaml
+        with:
+            ref: ${{ github.sha }}
+            repository: ${{ github.repository }}
+            run-cpp: true
+            run-shader-validation: false
+            run-shader-tests: false
+            test-build-id: ${{ needs.metadata.outputs.build-id }}
+            artifact-name: ${{ needs.metadata.outputs.artifact-name }}

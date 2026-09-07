@@ -34,6 +34,35 @@ set(_CSX_PROJECT_VERSION "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.0")
 set(CSX_RUNTIME "${CMAKE_MATCH_3}")
 set(CSX_PLUGIN_VERSION "CSX ${CSX_VERSION}")
 
+# Test distributions carry an independently allocated build identity. Keep the
+# plugin version and compatibility identity on CSX_VERSION: both are consumed
+# by the existing settings and shader-cache compatibility paths.
+set(CSX_TEST_BUILD
+    ""
+    CACHE STRING
+    "Optional test distribution identity, for example RC218-2026-09-07."
+)
+if(CSX_TEST_BUILD)
+    if(
+        NOT CSX_TEST_BUILD
+            MATCHES
+            [[^(RC[1-9][0-9]*)-([0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9])$]]
+    )
+        message(
+            FATAL_ERROR
+            "CSX_TEST_BUILD must use the RC<number>-<YYYY-MM-DD> format."
+        )
+    endif()
+    set(CSX_TEST_BUILD_NUMBER "${CMAKE_MATCH_1}")
+    set(CSX_TEST_BUILD_DATE "${CMAKE_MATCH_2}")
+    set(CSX_BUILD_VERSION
+        "${CSX_VERSION} ${CSX_TEST_BUILD_NUMBER} (${CSX_TEST_BUILD_DATE})"
+    )
+else()
+    set(CSX_BUILD_VERSION "${CSX_VERSION}")
+endif()
+set(CSX_BUILD_LABEL "CSX ${CSX_BUILD_VERSION}")
+
 project(
     # gersemi: ignore
     CommunityShaders
@@ -155,7 +184,7 @@ else()
     set(GIT_DESCRIBE "unknown")
 endif()
 message("\tConfigure-time build version: ${GIT_DESCRIBE}")
-message("\tCommunity Shaders Expanded version: CSX ${CSX_VERSION}")
+message("\tCommunity Shaders Expanded version: ${CSX_BUILD_LABEL}")
 
 # #######################################################################################################################
 # # Add CMake features
@@ -650,6 +679,11 @@ if(_AIO_FEATURE_DIR_NAMES_TO_EXCLUDE)
     endforeach()
 endif()
 string(TIMESTAMP UTC_NOW "%Y-%m-%dT%H-%MZ" UTC)
+if(CSX_TEST_BUILD)
+    set(CSX_PACKAGE_STAMP "${CSX_VERSION}-${CSX_TEST_BUILD}")
+else()
+    set(CSX_PACKAGE_STAMP "${UTC_NOW}")
+endif()
 
 # Robocopy wrapper for Windows incremental file copy (used by deployment targets).
 # Invoke through cmd /c with the absolute path: CMake may strip binary-dir
@@ -1267,7 +1301,7 @@ if(ZIP_TO_DIST)
         COMMAND ${CMAKE_COMMAND} -E remove_directory "${ZIP_DIR}/Shaders/Tests"
     )
 
-    set(TARGET_ZIP "${CSX_PACKAGE_NAME}-${UTC_NOW}.7z")
+    set(TARGET_ZIP "${CSX_PACKAGE_NAME}-${CSX_PACKAGE_STAMP}.7z")
     message("Zipping ${ZIP_DIR} to ${CMAKE_SOURCE_DIR}/dist/${TARGET_ZIP}")
     add_custom_command(
         TARGET ${PROJECT_NAME}
@@ -1284,7 +1318,7 @@ if(ZIP_TO_DIST)
         endif()
         get_filename_component(FEATURE ${FEATURE_PATH} NAME)
         message(
-            "Zipping ${FEATURE_PATH} to ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${UTC_NOW}.7z"
+            "Zipping ${FEATURE_PATH} to ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${CSX_PACKAGE_STAMP}.7z"
         )
         if(FEATURE STREQUAL "Upscaling")
             set(
@@ -1308,7 +1342,7 @@ if(ZIP_TO_DIST)
                 COMMAND
                     ${CMAKE_COMMAND} -E chdir "${FEATURE_ZIP_STAGE}"
                     ${CMAKE_COMMAND} -E tar cf
-                    ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${UTC_NOW}.7z
+                    ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${CSX_PACKAGE_STAMP}.7z
                     --format=7zip -- .
             )
         else()
@@ -1317,7 +1351,7 @@ if(ZIP_TO_DIST)
                 POST_BUILD
                 COMMAND
                     ${CMAKE_COMMAND} -E tar cf
-                    ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${UTC_NOW}.7z
+                    ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${CSX_PACKAGE_STAMP}.7z
                     --format=7zip -- .
                 WORKING_DIRECTORY ${FEATURE_PATH}
             )
@@ -1351,7 +1385,7 @@ endif()
 set(DIST_PATH "${CMAKE_SOURCE_DIR}/dist")
 file(MAKE_DIRECTORY "${CMAKE_SOURCE_DIR}/dist")
 
-set(CORE_PACKAGE "${DIST_PATH}/${CSX_PACKAGE_NAME}-${UTC_NOW}.7z")
+set(CORE_PACKAGE "${DIST_PATH}/${CSX_PACKAGE_NAME}-${CSX_PACKAGE_STAMP}.7z")
 
 # CORE_SOURCES = all content copied to the AIO directory + the SKSE plugin dll
 file(
@@ -1406,7 +1440,7 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
     list(APPEND CORE_SOURCES ${FEATURE_SOURCES})
 
     get_filename_component(FEATURE ${FEATURE_PATH} NAME)
-    set(FEATURE_PACKAGE "${DIST_PATH}/${FEATURE}-${UTC_NOW}.7z")
+    set(FEATURE_PACKAGE "${DIST_PATH}/${FEATURE}-${CSX_PACKAGE_STAMP}.7z")
 
     if(FEATURE STREQUAL "Upscaling")
         set(
@@ -1469,7 +1503,7 @@ add_custom_target(
 )
 
 # Manual AIO package target
-set(AIO_PACKAGE "${DIST_PATH}/${CSX_PACKAGE_NAME}_AIO-${UTC_NOW}.7z")
+set(AIO_PACKAGE "${DIST_PATH}/${CSX_PACKAGE_NAME}_AIO-${CSX_PACKAGE_STAMP}.7z")
 add_custom_command(
     OUTPUT ${AIO_PACKAGE}
     # Package-AIO-Manual can be invoked directly and AIO_ZIP_PACKAGE builds in

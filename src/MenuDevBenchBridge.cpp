@@ -319,7 +319,11 @@ namespace
 			{ "totalDurationNanoseconds", depthCullingTemporal.totalDurationNanoseconds },
 			{ "maximumDurationNanoseconds", depthCullingTemporal.maximumDurationNanoseconds },
 			{ "durationHistogramNanoseconds", {
-												  { "upperBounds", json::array({ 1000, 2000, 4000, 8000, 16000, 32000, 64000, nullptr }) },
+												  { "upperBounds", [] {
+													   json bounds = VRDepthCullingTelemetryPolicy::DurationUpperBoundsNanoseconds;
+													   bounds.push_back(nullptr);
+													   return bounds;
+												   }() },
 												  { "counts", depthCullingTemporal.durationHistogram },
 											  } },
 			{ "lastObjectCount", depthCullingTemporal.lastObjectCount },

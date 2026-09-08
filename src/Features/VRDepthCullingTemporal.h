@@ -1,5 +1,7 @@
 #pragma once
 
+#include "VRDepthCullingTelemetryPolicy.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -37,7 +39,7 @@ namespace VRDepthCullingTemporal
 
 	struct Status
 	{
-		static constexpr std::size_t DurationBinCount = 8;
+		static constexpr std::size_t DurationBinCount = VRDepthCullingTelemetryPolicy::DurationBinCount;
 
 		bool installed = false;
 		bool cullingEnabled = false;

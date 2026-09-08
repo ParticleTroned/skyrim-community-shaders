@@ -78,11 +78,6 @@ namespace VRDepthCullingTemporal
 					   current, a_value, std::memory_order_relaxed, std::memory_order_relaxed)) {}
 		}
 
-		std::size_t DurationBin(std::uint64_t a_nanoseconds)
-		{
-			return VRDepthCullingTelemetryPolicy::DurationBin(a_nanoseconds);
-		}
-
 		struct RecoveryTelemetryScope
 		{
 			RecoveryTelemetryScope()
@@ -92,6 +87,8 @@ namespace VRDepthCullingTemporal
 				active = true;
 				started = std::chrono::steady_clock::now();
 			}
+			RecoveryTelemetryScope(const RecoveryTelemetryScope&) = delete;
+			RecoveryTelemetryScope& operator=(const RecoveryTelemetryScope&) = delete;
 
 			~RecoveryTelemetryScope()
 			{
@@ -110,7 +107,7 @@ namespace VRDepthCullingTemporal
 				g_totalPromoted.fetch_add(promoted, std::memory_order_relaxed);
 				g_totalDurationNanoseconds.fetch_add(elapsed, std::memory_order_relaxed);
 				UpdateMaximum(g_maximumDurationNanoseconds, elapsed);
-				g_durationHistogram[DurationBin(elapsed)].fetch_add(1, std::memory_order_relaxed);
+				g_durationHistogram[VRDepthCullingTelemetryPolicy::DurationBin(elapsed)].fetch_add(1, std::memory_order_relaxed);
 				g_telemetryGate.Leave();
 			}
 
@@ -215,12 +212,16 @@ namespace VRDepthCullingTemporal
 			if (viewCoherent)
 				return;
 			RecoveryTelemetryScope telemetry;
+			if (telemetry.active)
+				ClearLastRecoveryStatus();
 			MotionEnvelope envelope{};
-			if (!TryBuildMotionEnvelope(motion.rotationCosine, motion.translationSquared, envelope))
+			if (!TryBuildMotionEnvelope(motion.rotationCosine, motion.translationSquared, envelope)) {
+				if (telemetry.active)
+					++telemetry.invalidMotionEnvelopes;
 				return;
+			}
 			if (telemetry.active)
 				telemetry.recoveryAttempts = 1;
-			ClearLastRecoveryStatus();
 
 			auto* bytes = static_cast<std::byte*>(a_culler);
 			const auto objectCount = ReadCullerField<std::uint32_t>(bytes, kObjectCountOffset);
@@ -280,6 +281,9 @@ namespace VRDepthCullingTemporal
 				candidates.Add({ index, CalculateRiskScore(sphere.radius, distanceSquared), directlyVisible });
 			}
 
+			// Candidate discovery is measured even if a policy change cancels promotion.
+			if (telemetry.active)
+				telemetry.eligible = eligibleCount;
 			if (!IsBalancedRecoveryActive(cullingEpoch, policyEpoch)) {
 				return;
 			}
@@ -289,7 +293,6 @@ namespace VRDepthCullingTemporal
 
 			const auto promotedCount = static_cast<std::uint32_t>(candidates.Size());
 			if (telemetry.active) {
-				telemetry.eligible = eligibleCount;
 				telemetry.promoted = promotedCount;
 				g_lastObjectCount.store(objectCount, std::memory_order_relaxed);
 				g_lastEligibleCount.store(eligibleCount, std::memory_order_relaxed);

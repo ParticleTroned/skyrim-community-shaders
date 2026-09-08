@@ -224,119 +224,123 @@ class PullRequestDiscoveryTests(unittest.TestCase):
 
 
 class AllocationCommitTests(unittest.TestCase):
-    def test_seed_can_only_be_introduced_once(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            repository = Path(temporary)
-            git(repository, "init")
-            git(repository, "config", "user.name", "Test")
-            git(repository, "config", "user.email", "test@example.invalid")
-            (repository / "source.txt").write_text("baseline\n", encoding="utf-8")
-            git(repository, "add", "source.txt")
-            git(repository, "commit", "-m", "build: baseline")
-            write_state(repository / STATE_PATH, copy.deepcopy(SEED))
-            git(repository, "add", STATE_PATH.as_posix())
-            git(repository, "commit", "-m", "build: seed RC217")
-            seed_sha = git(repository, "rev-parse", "HEAD")
-            self.assertEqual(
-                verify_seed_commit(repository, seed_sha, STATE_PATH), SEED
-            )
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.repository = Path(temporary.name)
+        git(self.repository, "init")
+        git(self.repository, "config", "user.name", "Test")
+        git(self.repository, "config", "user.email", "test@example.invalid")
+        (self.repository / "source.txt").write_text("baseline\n", encoding="utf-8")
+        git(self.repository, "add", "source.txt")
+        git(self.repository, "commit", "-m", "build: baseline")
+        self.baseline_sha = git(self.repository, "rev-parse", "HEAD")
+        self.seed_sha = self.commit_state(copy.deepcopy(SEED), "build: seed RC217")
 
-            state, _ = allocate(
-                copy.deepcopy(SEED),
-                base_version="3.19-VR",
-                source_sha=seed_sha,
-                previous_state_sha=seed_sha,
-                date_utc="2026-09-07",
-            )
-            write_state(repository / STATE_PATH, state)
-            git(repository, "add", STATE_PATH.as_posix())
-            git(
-                repository,
-                "commit",
-                "-m",
-                "chore(build): allocate "
-                f"{output_values(state, True)['display_version']} [skip ci]",
-            )
-            write_state(repository / STATE_PATH, copy.deepcopy(SEED))
-            git(repository, "add", STATE_PATH.as_posix())
-            git(repository, "commit", "-m", "chore(build): restore root")
-            restored_seed = git(repository, "rev-parse", "HEAD")
-            with self.assertRaisesRegex(StateError, "cannot be restored"):
-                verify_seed_commit(repository, restored_seed, STATE_PATH)
-
-    def test_exact_state_only_successor_is_verified(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            repository = Path(temporary)
-            git(repository, "init")
-            git(repository, "config", "user.name", "Test")
-            git(repository, "config", "user.email", "test@example.invalid")
-            write_state(repository / STATE_PATH, copy.deepcopy(SEED))
-            git(repository, "add", STATE_PATH.as_posix())
-            git(repository, "commit", "-m", "build: seed RC217")
-            predecessor_sha = git(repository, "rev-parse", "HEAD")
-
-            state, _ = allocate(
-                copy.deepcopy(SEED),
-                base_version="3.19-VR",
-                source_sha=predecessor_sha,
-                previous_state_sha=predecessor_sha,
-                date_utc="2026-09-07",
-                pull_requests=[67],
-            )
-            write_state(repository / STATE_PATH, state)
-            git(repository, "add", STATE_PATH.as_posix())
-            subject = (
+    def commit_state(self, state: dict, subject: str | None = None) -> str:
+        write_state(self.repository / STATE_PATH, state)
+        git(self.repository, "add", STATE_PATH.as_posix())
+        git(
+            self.repository,
+            "commit",
+            "-m",
+            subject or (
                 "chore(build): allocate "
                 f"{output_values(state, True)['display_version']} [skip ci]"
-            )
-            git(repository, "commit", "-m", subject)
-            allocation_sha = git(repository, "rev-parse", "HEAD")
+            ),
+        )
+        return git(self.repository, "rev-parse", "HEAD")
 
-            verified = verify_allocation_commit(
-                repository, allocation_sha, STATE_PATH
-            )
-            self.assertEqual(verified, state)
+    def next_state(self, previous: dict, predecessor_sha: str) -> dict:
+        state, _ = allocate(
+            previous,
+            base_version="3.19-VR",
+            source_sha=git(self.repository, "rev-parse", "HEAD"),
+            previous_state_sha=predecessor_sha,
+            date_utc="2026-09-07",
+            pull_requests=[67],
+        )
+        return state
 
-            (repository / "unrelated.txt").write_text("changed\n", encoding="utf-8")
-            git(repository, "add", "unrelated.txt")
-            git(repository, "commit", "-m", "test: descendant")
-            descendant = git(repository, "rev-parse", "HEAD")
-            with self.assertRaises(StateError):
-                verify_allocation_commit(repository, descendant, STATE_PATH)
+    def test_seed_can_only_be_introduced_once(self) -> None:
+        self.assertEqual(
+            verify_seed_commit(self.repository, self.seed_sha, STATE_PATH), SEED
+        )
+        self.commit_state(self.next_state(SEED, self.seed_sha))
+        restored_seed = self.commit_state(SEED, "chore(build): restore root")
+        with self.assertRaisesRegex(StateError, "cannot be restored"):
+            verify_seed_commit(self.repository, restored_seed, STATE_PATH)
+
+    def test_deleted_seed_cannot_be_reintroduced(self) -> None:
+        git(self.repository, "rm", STATE_PATH.as_posix())
+        git(self.repository, "commit", "-m", "build: remove state")
+        restored_seed = self.commit_state(SEED, "chore(build): restore root")
+        with self.assertRaisesRegex(StateError, "cannot be restored"):
+            verify_seed_commit(self.repository, restored_seed, STATE_PATH)
+
+    def test_merge_commit_introduces_seed_on_first_parent(self) -> None:
+        revised_seed = dict(SEED, schemaVersion=1)
+        self.commit_state(revised_seed, "build: earlier seed schema")
+        topic_sha = self.commit_state(SEED, "build: finalize seed schema")
+        git(self.repository, "checkout", "-b", "default", self.baseline_sha)
+        git(self.repository, "merge", "--no-ff", "-m", "Merge seed PR", topic_sha)
+        merge_sha = git(self.repository, "rev-parse", "HEAD")
+        latest = git(
+            self.repository, "log", "--first-parent", "-1", "--format=%H",
+            "--", STATE_PATH.as_posix(),
+        )
+        self.assertEqual(latest, merge_sha)
+        self.assertEqual(
+            verify_seed_commit(self.repository, latest, STATE_PATH), SEED
+        )
+        state = self.next_state(SEED, latest)
+        allocation_sha = self.commit_state(state)
+        self.assertEqual(
+            verify_allocation_commit(self.repository, allocation_sha, STATE_PATH),
+            state,
+        )
+
+    def test_exact_state_only_successor_is_verified(self) -> None:
+        state = self.next_state(SEED, self.seed_sha)
+        allocation_sha = self.commit_state(state)
+        self.assertEqual(
+            verify_allocation_commit(self.repository, allocation_sha, STATE_PATH),
+            state,
+        )
+        (self.repository / "source.txt").write_text("changed\n", encoding="utf-8")
+        git(self.repository, "add", "source.txt")
+        git(self.repository, "commit", "-m", "test: descendant")
+        descendant = git(self.repository, "rev-parse", "HEAD")
+        with self.assertRaises(StateError):
+            verify_allocation_commit(self.repository, descendant, STATE_PATH)
 
     def test_valid_looking_state_revert_is_rejected(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            repository = Path(temporary)
-            git(repository, "init")
-            git(repository, "config", "user.name", "Test")
-            git(repository, "config", "user.email", "test@example.invalid")
-            write_state(repository / STATE_PATH, copy.deepcopy(SEED))
-            git(repository, "add", STATE_PATH.as_posix())
-            git(repository, "commit", "-m", "build: seed RC217")
-            predecessor_sha = git(repository, "rev-parse", "HEAD")
-            state, _ = allocate(
-                copy.deepcopy(SEED),
-                base_version="3.19-VR",
-                source_sha=predecessor_sha,
-                previous_state_sha=predecessor_sha,
-                date_utc="2026-09-07",
-            )
-            write_state(repository / STATE_PATH, state)
-            git(repository, "add", STATE_PATH.as_posix())
-            git(
-                repository,
-                "commit",
-                "-m",
-                "chore(build): allocate "
-                f"{output_values(state, True)['display_version']} [skip ci]",
-            )
+        self.commit_state(self.next_state(SEED, self.seed_sha))
+        revert_sha = self.commit_state(SEED, "chore(build): restore old state")
+        with self.assertRaises(StateError):
+            verify_allocation_commit(self.repository, revert_sha, STATE_PATH)
 
-            write_state(repository / STATE_PATH, copy.deepcopy(SEED))
-            git(repository, "add", STATE_PATH.as_posix())
-            git(repository, "commit", "-m", "chore(build): restore old state")
-            revert_sha = git(repository, "rev-parse", "HEAD")
-            with self.assertRaises(StateError):
-                verify_allocation_commit(repository, revert_sha, STATE_PATH)
+    def test_corrupted_earlier_allocation_is_rejected(self) -> None:
+        first = self.next_state(SEED, self.seed_sha)
+        first_sha = self.commit_state(first)
+        corrupted = self.next_state(first, first_sha)
+        corrupted["sequence"] += 10
+        corrupted_sha = self.commit_state(corrupted)
+        successor = self.next_state(corrupted, corrupted_sha)
+        successor_sha = self.commit_state(successor)
+        with self.assertRaisesRegex(StateError, "exactly one"):
+            verify_allocation_commit(self.repository, successor_sha, STATE_PATH)
+
+    def test_complete_allocation_lineage_is_accepted(self) -> None:
+        first = self.next_state(SEED, self.seed_sha)
+        first_sha = self.commit_state(first)
+        second = self.next_state(first, first_sha)
+        second_sha = self.commit_state(second)
+        third = self.next_state(second, second_sha)
+        third_sha = self.commit_state(third)
+        self.assertEqual(
+            verify_allocation_commit(self.repository, third_sha, STATE_PATH), third
+        )
 
 
 class DispatchTests(unittest.TestCase):
@@ -355,6 +359,68 @@ class DispatchTests(unittest.TestCase):
         ]
         with self.assertRaisesRegex(StateError, "manual diagnosis"):
             dispatch_decision(runs)
+
+    def test_malformed_run_status_is_rejected(self) -> None:
+        with self.assertRaisesRegex(StateError, "invalid workflow-run status"):
+            dispatch_decision([{}])
+
+    def test_earlier_failures_reduce_uncertain_dispatch_budget(self) -> None:
+        dispatches = 0
+        inventories = 0
+        runs = [
+            {"status": "completed", "conclusion": "failure", "headSha": "a" * 40}
+        ] * 2
+
+        def runner(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            nonlocal dispatches, inventories
+            if args[:3] == ["gh", "run", "list"]:
+                inventories += 1
+                return completed(args, stdout=json.dumps(runs))
+            if args[:3] == ["gh", "workflow", "run"]:
+                dispatches += 1
+                return completed(args, returncode=1, stderr="transport uncertain")
+            raise AssertionError(args)
+
+        with self.assertRaisesRegex(StateError, "manual diagnosis"):
+            ensure_distribution_dispatch(
+                repository_slug="owner/repository",
+                workflow="test-build-distribution.yaml",
+                allocation_sha="a" * 40,
+                tag_name="csx-test-build-RC218-2026-09-07",
+                runner=runner,
+                sleeper=lambda _: None,
+            )
+        self.assertEqual(dispatches, 1)
+        self.assertEqual(inventories, 2)
+
+    def test_final_uncertain_attempt_is_reconciled(self) -> None:
+        dispatches = 0
+
+        def runner(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            nonlocal dispatches
+            if args[:3] == ["gh", "run", "list"]:
+                runs = (
+                    [{"status": "queued", "headSha": "a" * 40}]
+                    if dispatches == 3 else []
+                )
+                return completed(args, stdout=json.dumps(runs))
+            if args[:3] == ["gh", "workflow", "run"]:
+                dispatches += 1
+                return completed(args, returncode=1, stderr="transport uncertain")
+            raise AssertionError(args)
+
+        self.assertEqual(
+            ensure_distribution_dispatch(
+                repository_slug="owner/repository",
+                workflow="test-build-distribution.yaml",
+                allocation_sha="a" * 40,
+                tag_name="csx-test-build-RC218-2026-09-07",
+                runner=runner,
+                sleeper=lambda _: None,
+            ),
+            "existing",
+        )
+        self.assertEqual(dispatches, 3)
 
     def test_uncertain_dispatch_is_reconciled_before_retry(self) -> None:
         calls = 0
@@ -422,6 +488,26 @@ class CMakeIdentityTests(unittest.TestCase):
 
 
 class WorkflowContractTests(unittest.TestCase):
+    def test_provenance_discovery_receives_actions_authentication(self) -> None:
+        workflow = (
+            ROOT / ".github" / "workflows" / "test-build-allocate.yaml"
+        ).read_text(encoding="utf-8")
+        allocation_step = workflow.split(
+            "- name: Allocate the next test-build identity", maxsplit=1
+        )[1].split("- name:", maxsplit=1)[0]
+        self.assertIn("GH_TOKEN: ${{ github.token }}", allocation_step)
+        self.assertIn("git log --first-parent -1", workflow)
+
+    def test_test_tags_do_not_use_the_stable_release_version_gate(self) -> None:
+        workflow = (
+            ROOT / ".github" / "workflows" / "_shared-build.yaml"
+        ).read_text(encoding="utf-8")
+        tag_step = workflow.split(
+            "- name: Fail if CMake version does not match tag", maxsplit=1
+        )[1].split("- name:", maxsplit=1)[0]
+        self.assertIn("github.ref_type == 'tag'", tag_step)
+        self.assertIn("inputs.test-build-id == ''", tag_step)
+
     def test_distribution_is_bound_to_exact_allocation(self) -> None:
         workflow = (
             ROOT / ".github" / "workflows" / "test-build-distribution.yaml"
@@ -430,6 +516,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("ref: ${{ inputs.allocation-sha }}", workflow)
         self.assertIn("verify-allocation", workflow)
         self.assertIn("expected-package-name:", workflow)
+        self.assertIn('"$DISPATCH_REF" != "refs/tags/$TAG_NAME"', workflow)
+        self.assertIn('"$DISPATCH_SHA" != "$ALLOCATION_SHA"', workflow)
 
     def test_quiet_cancellation_cannot_interrupt_publication(self) -> None:
         workflow = (

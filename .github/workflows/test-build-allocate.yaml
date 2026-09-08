@@ -64,7 +64,7 @@ jobs:
                     exit 1
                   fi
 
-                  LAST_STATE_SHA=$(git log -1 --format=%H -- version/test-build.json)
+                  LAST_STATE_SHA=$(git log --first-parent -1 --format=%H -- version/test-build.json)
                   python tools/csx_test_build.py read \
                     --state version/test-build.json \
                     --github-output "$GITHUB_OUTPUT"
@@ -113,6 +113,7 @@ jobs:
             - name: Allocate the next test-build identity
               id: allocation
               env:
+                  GH_TOKEN: ${{ github.token }}
                   MERGED_PR: ${{ github.event.pull_request.number || inputs.merged-pr }}
                   HEAD_SHA: ${{ steps.current.outputs.head_sha }}
                   LAST_STATE_SHA: ${{ steps.current.outputs.last_state_sha }}
@@ -173,14 +174,14 @@ jobs:
                     -m "Implementation:
                   Advance the validated state and bind it to its exact source."
                   ALLOCATION_SHA=$(git rev-parse HEAD)
-                  git tag "$TAG_NAME" "$ALLOCATION_SHA"
-                  git push --atomic origin \
-                    "HEAD:$DEFAULT_BRANCH" \
-                    "refs/tags/$TAG_NAME"
                   python tools/csx_test_build.py verify-allocation \
                     --repository . \
                     --allocation-sha "$ALLOCATION_SHA" \
                     --state version/test-build.json
+                  git tag "$TAG_NAME" "$ALLOCATION_SHA"
+                  git push --atomic origin \
+                    "HEAD:$DEFAULT_BRANCH" \
+                    "refs/tags/$TAG_NAME"
                   echo "allocation_sha=$ALLOCATION_SHA" >> "$GITHUB_OUTPUT"
                   echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
 

@@ -449,12 +449,22 @@ def verify_seed_commit(
     if len(ancestry) < 2 or ancestry[0] != seed_commit:
         raise StateError("seed state must be introduced after existing history")
     first_parent = ancestry[1]
-    prior_state = _run(
-        ["git", "cat-file", "-e", f"{first_parent}:{relative_state_path}"],
+    prior_state = _checked_output(
+        [
+            "git",
+            "log",
+            "--first-parent",
+            "-1",
+            "--format=%H",
+            first_parent,
+            "--",
+            relative_state_path,
+        ],
         cwd=repository,
         runner=runner,
+        description="cannot inspect earlier state history",
     )
-    if prior_state.returncode == 0:
+    if prior_state:
         raise StateError("root state cannot be restored over an earlier state")
     state = _state_at_commit(
         repository, seed_commit, relative_state_path, runner=runner
@@ -465,6 +475,37 @@ def verify_seed_commit(
 
 
 def verify_allocation_commit(
+    repository: Path,
+    allocation_sha: str,
+    state_path: Path,
+    *,
+    runner: CommandRunner = subprocess.run,
+) -> dict[str, Any]:
+    repository = repository.resolve()
+    relative_state_path = _relative_state_path(repository, state_path)
+    state = _verify_allocation_step(
+        repository, allocation_sha, state_path, runner=runner
+    )
+    predecessor_sha = state["previousStateSha"]
+    while True:
+        predecessor = _state_at_commit(
+            repository,
+            predecessor_sha,
+            relative_state_path,
+            runner=runner,
+        )
+        if predecessor["previousStateSha"] is None:
+            verify_seed_commit(
+                repository, predecessor_sha, state_path, runner=runner
+            )
+            return state
+        predecessor = _verify_allocation_step(
+            repository, predecessor_sha, state_path, runner=runner
+        )
+        predecessor_sha = predecessor["previousStateSha"]
+
+
+def _verify_allocation_step(
     repository: Path,
     allocation_sha: str,
     state_path: Path,
@@ -520,6 +561,7 @@ def verify_allocation_commit(
         [
             "git",
             "log",
+            "--first-parent",
             "-1",
             "--format=%H",
             source_sha,
@@ -583,6 +625,10 @@ def dispatch_decision(
             raise StateError("GitHub returned a run for a different allocation")
         status = run.get("status")
         conclusion = run.get("conclusion")
+        if status not in {
+            "queued", "in_progress", "requested", "waiting", "pending", "completed"
+        }:
+            raise StateError("GitHub returned an invalid workflow-run status")
         if status != "completed":
             return "existing"
         if conclusion == "success":
@@ -616,7 +662,8 @@ def ensure_distribution_dispatch(
         raise StateError("test-build tag name is invalid")
 
     dispatch_commands = 0
-    while dispatch_commands < max_attempts:
+    initial_failures: int | None = None
+    while True:
         inventory = _checked_output(
             [
                 "gh",
@@ -654,8 +701,18 @@ def ensure_distribution_dispatch(
             run.get("status") == "completed" and run.get("conclusion") != "success"
             for run in runs
         )
-        if max(observed_failures, dispatch_commands) >= max_attempts:
-            raise StateError("distribution retry budget is exhausted")
+        if initial_failures is None:
+            initial_failures = observed_failures
+        # A transport error may still have created a run that is not visible
+        # yet. Charge those commands in addition to failures from earlier
+        # invocations, without charging a newly visible run twice.
+        if (
+            max(observed_failures, initial_failures + dispatch_commands)
+            >= max_attempts
+        ):
+            raise StateError(
+                "distribution retry budget is exhausted; manual diagnosis is required"
+            )
         dispatch_commands += 1
         dispatch = _run(
             [
@@ -675,42 +732,6 @@ def ensure_distribution_dispatch(
         if dispatch.returncode == 0:
             return "dispatched"
         sleeper(min(10 * (2 ** (dispatch_commands - 1)), 60))
-
-    inventory = _checked_output(
-        [
-            "gh",
-            "run",
-            "list",
-            "--repo",
-            repository_slug,
-            "--workflow",
-            workflow,
-            "--commit",
-            allocation_sha,
-            "--event",
-            "workflow_dispatch",
-            "--limit",
-            "20",
-            "--json",
-            "databaseId,status,conclusion,headSha",
-        ],
-        runner=runner,
-        description="cannot reconcile the final distribution attempt",
-    )
-    try:
-        runs = json.loads(inventory or "[]")
-    except json.JSONDecodeError as error:
-        raise StateError("GitHub returned malformed workflow-run JSON") from error
-    if (
-        dispatch_decision(
-            runs,
-            max_attempts=max_attempts,
-            allocation_sha=allocation_sha,
-        )
-        == "existing"
-    ):
-        return "existing"
-    raise StateError("distribution dispatch failed without an attributable run")
 
 
 def write_state(path: Path, state: dict[str, Any]) -> None:

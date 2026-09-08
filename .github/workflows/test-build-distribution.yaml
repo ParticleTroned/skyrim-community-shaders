@@ -40,6 +40,8 @@ jobs:
               env:
                   ALLOCATION_SHA: ${{ inputs.allocation-sha }}
                   DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+                  DISPATCH_REF: ${{ github.ref }}
+                  DISPATCH_SHA: ${{ github.sha }}
               run: |
                   set -euo pipefail
                   if ! [[ "$ALLOCATION_SHA" =~ ^[0-9a-f]{40}$ ]]; then
@@ -62,6 +64,10 @@ jobs:
 
                   TAG_NAME=$(python tools/csx_test_build.py read \
                     --state version/test-build.json | sed -n 's/^tag_name=//p')
+                  if [ "$DISPATCH_REF" != "refs/tags/$TAG_NAME" ] || [ "$DISPATCH_SHA" != "$ALLOCATION_SHA" ]; then
+                    echo "Dispatch must use the allocation's exact immutable tag and commit." >&2
+                    exit 1
+                  fi
                   if [ "$(git rev-parse "refs/tags/$TAG_NAME")" != "$ALLOCATION_SHA" ]; then
                     echo "Immutable allocation tag does not match the requested commit." >&2
                     exit 1

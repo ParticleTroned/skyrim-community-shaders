@@ -135,7 +135,7 @@ jobs:
                   "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
             - name: Fail if CMake version does not match tag
-              if: success() && github.ref_type == 'tag'
+              if: success() && github.ref_type == 'tag' && inputs.test-build-id == ''
               shell: pwsh
               run: |
                   $tag = '${{ github.ref_name }}'

@@ -26,6 +26,16 @@ source, and changes no file other than the state. Missing Git history or
 unavailable pull-request association evidence fails allocation rather than
 silently publishing a partial list.
 
+State commits follow the default branch's first-parent history, so an ordinary
+PR merge introduces the seed once even when its topic branch revised the seed
+several times. Verification walks every allocation back to that introduction;
+deleting and later restoring the seed does not reset the sequence.
+
+Merge the initial versioning PR with a merge commit or squash. Rebase merging
+that PR would replay its earlier seed-schema revisions onto the default
+branch, which the one-time seed check rejects. Subsequent source PRs may use
+merge, squash, or rebase merging.
+
 ## Merge batching and builds
 
 When a pull request is merged into the repository's default branch, a
@@ -46,6 +56,10 @@ dispatches are reconciled before retry, with no more than three attributable
 attempts; exhaustion requires manual diagnosis and does not allocate another
 RC. Re-running the publisher at an unchanged allocation therefore resumes the
 same identity instead of treating its state commit as new product source.
+Earlier failed runs reduce the remaining dispatch budget. Within one publisher
+invocation, uncertain dispatch commands also consume that budget while GitHub's
+run inventory catches up. An uncertain final attempt is reconciled before the
+publisher reports exhaustion.
 The allocation workflow also supports explicit manual dispatch for initial
 activation and recovery. It applies the same lineage, tag, retry, and remote
 head checks and never bypasses the allocator.

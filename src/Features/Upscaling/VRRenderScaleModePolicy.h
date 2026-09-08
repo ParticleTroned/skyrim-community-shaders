@@ -11,6 +11,20 @@ namespace VRRenderScaleModePolicy
 		bool operator==(const State&) const = default;
 	};
 
+	/**
+	 * Applies the optional link only to method/quality selections (or a
+	 * VR FPS Stabilizer profile that omits an explicit Render Scale field).
+	 * Explicit full-profile requests must pass their preference directly to
+	 * Resolve so that a requested false remains authoritative.
+	 */
+	[[nodiscard]] constexpr bool ResolveSelectionPreference(
+		bool a_methodEligible,
+		bool a_linkedToUpscaling,
+		bool a_rememberedPreference) noexcept
+	{
+		return a_methodEligible && (a_linkedToUpscaling || a_rememberedPreference);
+	}
+
 	[[nodiscard]] constexpr State Resolve(
 		bool a_methodEligible,
 		bool a_qualityEligible,

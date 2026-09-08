@@ -291,6 +291,7 @@ public:
 		uint qualityMode = 3;            // Shared upscaler preset; defaults to Quality
 		uint dlssPreset = kDLSSPresetK;  // Settings ids: J, K, L, M, F, E (default K)
 		uint renderScaleMode = 1;
+		bool renderScaleLinkedToUpscaling = true;
 		uint perfMode = 1;
 		uint frameLimitMode = 1;
 		uint frameGenerationMode = 0;  // Disabled by default
@@ -1523,6 +1524,7 @@ public:
 	virtual json CapturePerformanceCostMeasurementState() const override;
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
 	void DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod);
+	void DrawVRRenderScaleLinkSetting(UpscaleMethod a_upscaleMethod);
 	void DrawFoveatedSetupInstructions();
 	void DrawFoveatedSettings(bool a_essentialsLayout = false);
 	virtual void SaveSettings(json& o_json) override;
@@ -1585,6 +1587,7 @@ public:
 	bool IsRenderScaleModeRequested() const;
 	/** Returns persisted user intent even while DLAA makes Render Scale inactive. */
 	bool GetVRRenderScaleModePreference() const;
+	bool GetVRRenderScalePreferenceForSelection(UpscaleMethod a_targetMethod) const;
 	bool GetVRRenderScaleModeRequested() const;
 	bool CanUseVRRenderScaleMode() const;
 	bool IsVRRenderScaleModeLatched() const;
@@ -1597,7 +1600,7 @@ public:
 	bool IsPresentationUpscalingActive() const;
 	bool GetPerfModeRequested() const;
 	void SetPerfModeRequested(bool a_enabled, const char* a_reason = nullptr, bool a_allowDefer = false, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
-	void ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
+	bool ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
 	void SetVRUpscalingTransitionProfile(bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
 	uint32_t GetVRUpscalingApplyBlockReasonsForAPI() const;
 	/** @return True when an atomic VRAPI profile is a valid stabilizer destination transition. */

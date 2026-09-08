@@ -1793,6 +1793,12 @@ namespace
 		return {
 			{ "frame", frame },
 			{ "modeStatus", Upscaling::GetVRRenderScaleModeStatusName(a_upscaling.GetVRRenderScaleModeStatus()) },
+			{ "renderScaleSelectionPolicy", {
+				{ "linkedToUpscaling", a_upscaling.settings.renderScaleLinkedToUpscaling },
+				{ "rememberedPreference", a_upscaling.GetVRRenderScaleModePreference() },
+				{ "requestedActive", a_upscaling.GetVRRenderScaleModeRequested() },
+				{ "physicallyActive", a_upscaling.IsVRRenderScaleModeLatched() },
+			} },
 			{ "loadPresentationProbe", a_upscaling.BuildVRLoadPresentationProbeStatus() },
 			{ "neuralRendering", NeuralRenderingStatusJson(a_upscaling) },
 			{ "session", {

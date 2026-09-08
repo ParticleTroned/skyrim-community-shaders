@@ -1709,6 +1709,12 @@ if(BUILD_CONTROLLER_TESTS)
         VRRenderScaleModePolicy
         PROPERTIES LABELS "ControllerTests"
     )
+    add_test(
+        NAME VRRenderScaleLinkContract
+        COMMAND ${CMAKE_COMMAND} -DPROJECT_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/render_scale_link_contract_test.cmake
+    )
+    set_tests_properties(VRRenderScaleLinkContract PROPERTIES LABELS "ControllerTests")
     add_executable(
         character_region_policy_test
         EXCLUDE_FROM_ALL

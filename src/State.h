@@ -114,9 +114,11 @@ public:
 	static constexpr uint32_t kSaveMutationBlockGraceFrames = 60;
 
 	bool IsSaveLoadSafeModeActive() const;
+	bool IsWorldLoadTransitionActive() const;
 	bool IsPersistentMutationBlocked() const;
 	void BeginSaveLoadSafeMode(uint32_t a_currentFrame);
 	void ExtendSaveLoadSafeMode(uint32_t a_currentFrame, uint32_t a_frameCount = kSaveLoadSafeModeGraceFrames);
+	void ExtendSaveGamePersistenceSafeMode(uint32_t a_currentFrame, uint32_t a_frameCount = kSaveLoadSafeModeGraceFrames);
 	void BeginPersistentMutationBlock(uint32_t a_currentFrame, uint32_t a_frameCount = kSaveMutationBlockGraceFrames);
 	void ExtendPersistentMutationBlock(uint32_t a_currentFrame, uint32_t a_frameCount = kSaveMutationBlockGraceFrames);
 	void UpdateSaveLoadSafeMode();
@@ -285,6 +287,12 @@ public:
 	std::atomic_bool saveLoadSafeModeActive{ false };
 	std::atomic_uint32_t saveLoadSafeModeStartFrame{ 0 };
 	std::atomic_uint32_t saveLoadSafeModeEndFrame{ 0 };
+	// Saving guards persistence without replacing the rendered world. Keep
+	// genuine load provenance and its grace independent of save-only events.
+	std::mutex worldLoadTransitionMutex;
+	std::atomic_bool worldLoadTransitionActive{ false };
+	std::atomic_uint32_t worldLoadTransitionStartFrame{ 0 };
+	std::atomic_uint32_t worldLoadTransitionEndFrame{ 0 };
 	std::atomic_bool persistentMutationBlocked{ false };
 	std::atomic_uint32_t persistentMutationBlockEndFrame{ 0 };
 	bool activeReflections = false;

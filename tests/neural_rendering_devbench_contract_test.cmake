@@ -1016,6 +1016,7 @@ endforeach()
 foreach(_named_menu_decision IN ITEMS
     hardMenuBlocked
     lateMenuCompositeReady
+    replayMenuContinuityAllowed
     menuContinuityAllowed
     neuralMenuContinuityDispatch
     foveatedRequested
@@ -1090,22 +1091,86 @@ if(_late_composite_source_position EQUAL -1)
     )
 endif()
 
-foreach(_continuity_term IN ITEMS
-    [[!hardMenuBlocked]]
-    [[!currentMenuPresentationContext]]
-    [[lateMenuCompositeReady]]
-)
-    string(FIND
-        "${_menuContinuityAllowed_expression}"
-        "${_continuity_term}"
-        _continuity_term_position
+foreach(_continuity_decision IN ITEMS menuContinuityAllowed replayMenuContinuityAllowed)
+    foreach(_continuity_term IN ITEMS
+        [[NeuralRendering::ResolveMenuContinuityAllowed(]]
+        [[hardMenuBlocked]]
+        [[requiresNeuralMenuLayer()]]
     )
-    if(_continuity_term_position EQUAL -1)
+        string(FIND
+            "${_${_continuity_decision}_expression}"
+            "${_continuity_term}"
+            _continuity_term_position
+        )
+        if(_continuity_term_position EQUAL -1)
+            message(FATAL_ERROR
+                "${_continuity_decision} must use the live UI requirement: ${_continuity_term}"
+            )
+        endif()
+    endforeach()
+    string(FIND
+        "${_${_continuity_decision}_expression}"
+        [[currentMenuPresentationContext]]
+        _continuity_tail_position
+    )
+    if(NOT _continuity_tail_position EQUAL -1)
         message(FATAL_ERROR
-            "Submit menu-continuity predicate is missing: ${_continuity_term}"
+            "An empty menu-close tracking tail must not suppress NR"
         )
     endif()
 endforeach()
+
+foreach(_live_menu_layer_contract IN ITEMS
+    [[return IsKnownGameMenuContextActive() || (vrMenuFrameTransaction.frame == currentFrame &&]]
+    [[vrMenuFrameTransaction.menuLayerRequired ||]]
+    [[vrMenuFrameTransaction.mapLayerRequired ||]]
+    [[vrMenuFrameTransaction.recognizedOperations != 0 ||]]
+    [[vrMenuFrameTransaction.OwnsPresentationWork()]]
+    [[!cachedPairMenuContextMismatch && replayMenuContinuityAllowed &&]]
+)
+    string(FIND "${_submit_stage_normalized}" "${_live_menu_layer_contract}"
+        _live_menu_layer_position)
+    if(_live_menu_layer_position EQUAL -1)
+        message(FATAL_ERROR
+            "Live or pending UI must remain protected on fresh and cached NR pairs: ${_live_menu_layer_contract}"
+        )
+    endif()
+endforeach()
+
+file(READ "${PROJECT_ROOT}/src/State.cpp" _state_source)
+file(READ "${PROJECT_ROOT}/src/XSEPlugin.cpp" _plugin_source)
+string(REGEX REPLACE "[\r\n\t ]+" " " _state_source_normalized "${_state_source}")
+string(FIND "${_upscaling}"
+    [[a_state->pendingPostLoadRuntimeReset || a_state->IsWorldLoadTransitionActive()]]
+    _world_load_render_gate_position)
+if(_world_load_render_gate_position EQUAL -1)
+    message(FATAL_ERROR "NR/FOV render gating must distinguish world loading from save-only persistence")
+endif()
+string(REGEX REPLACE "[\r\n\t ]+" " " _upscaling_normalized "${_upscaling}")
+string(FIND "${_upscaling_normalized}"
+    [[return IsSaveLoadTransitionContextActive(a_state) || (a_state && a_state->IsSaveLoadSafeModeActive());]]
+    _save_load_mutation_guard_position)
+if(_save_load_mutation_guard_position EQUAL -1)
+    message(FATAL_ERROR "Mutations must stay guarded during both actual world loading and save-only persistence")
+endif()
+string(FIND "${_state_source_normalized}"
+    [[const bool engineSaveLoadActive = engineSignals.RequiresPersistenceGuard();]]
+    _save_persistence_guard_position)
+if(_save_persistence_guard_position EQUAL -1)
+    message(FATAL_ERROR "Ordinary saving must retain disk persistence protection")
+endif()
+string(FIND "${_plugin_source}" [[case SKSE::MessagingInterface::kSaveGame:]] _save_event_begin)
+string(FIND "${_plugin_source}" [[case SKSE::MessagingInterface::kPostLoadGame:]] _save_event_end)
+if(_save_event_begin EQUAL -1 OR _save_event_end LESS_EQUAL _save_event_begin)
+    message(FATAL_ERROR "Unable to isolate the ordinary save notification")
+endif()
+math(EXPR _save_event_length "${_save_event_end} - ${_save_event_begin}")
+string(SUBSTRING "${_plugin_source}" ${_save_event_begin} ${_save_event_length} _save_event)
+string(FIND "${_save_event}" [[ExtendSaveGamePersistenceSafeMode(]] _save_only_guard_position)
+string(FIND "${_save_event}" [[ExtendSaveLoadSafeMode(]] _save_world_guard_position)
+if(_save_only_guard_position EQUAL -1 OR NOT _save_world_guard_position EQUAL -1)
+    message(FATAL_ERROR "The save notification must protect persistence without arming a world-load transition")
+endif()
 
 string(FIND
     "${_upscaling}"

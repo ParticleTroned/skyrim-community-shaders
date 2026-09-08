@@ -221,6 +221,21 @@ namespace NeuralRendering
 		Submit,
 	};
 
+	/**
+	 * Permits NR behind menus only when required UI is isolated for a later
+	 * composite. The caller includes open menus and current presentation work
+	 * in a_menuLayerRequired, but not the tracking tail after a menu has closed.
+	 * A tail with no remaining UI must not suppress a fresh world frame.
+	 */
+	[[nodiscard]] constexpr bool ResolveMenuContinuityAllowed(
+		bool a_hardMenuBlocked,
+		bool a_menuLayerRequired,
+		bool a_lateMenuCompositeReady) noexcept
+	{
+		return !a_hardMenuBlocked &&
+		       (!a_menuLayerRequired || a_lateMenuCompositeReady);
+	}
+
 	enum class TemporalAdmissionBlockReason : std::uint8_t
 	{
 		None,

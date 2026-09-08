@@ -4323,7 +4323,17 @@ namespace
 		if (!a_state)
 			return false;
 
-		return a_state->pendingPostLoadRuntimeReset || a_state->IsSaveLoadSafeModeActive();
+		// A save keeps the rendered world intact. Only actual world loading and
+		// its settle period may suppress the active NR/foveated render path.
+		return a_state->pendingPostLoadRuntimeReset || a_state->IsWorldLoadTransitionActive();
+	}
+
+	bool IsSaveLoadMutationContextActive(const State* a_state)
+	{
+		// Resource replacement and settings mutations retain the broader guard,
+		// including ordinary saves and their disk-persistence grace period.
+		return IsSaveLoadTransitionContextActive(a_state) ||
+		       (a_state && a_state->IsSaveLoadSafeModeActive());
 	}
 
 	bool IsSaveLoadTransitionContextActive()
@@ -4345,7 +4355,7 @@ namespace
 	bool IsUpscalingLoadTransitionContextActive(const Upscaling& a_upscaling, const State* a_state)
 	{
 		return IsVRRenderScalePostLoadResetRelevant(a_upscaling) ||
-		       IsSaveLoadTransitionContextActive(a_state);
+		       IsSaveLoadMutationContextActive(a_state);
 	}
 
 	bool IsUpscalingLoadTransitionContextActive(const Upscaling& a_upscaling)
@@ -4542,7 +4552,7 @@ namespace
 		       IsRaceSexMenuContextActive(ui) ||
 		       IsVRRaceSexMenuEventContextActive(a_state) ||
 		       IsVRLoadingPresentationContextActive(a_state) ||
-		       IsSaveLoadTransitionContextActive(a_state) ||
+		       IsSaveLoadMutationContextActive(a_state) ||
 		       !HasCompletedVRWorldFrameAfterLatestLoad(a_state);
 	}
 
@@ -6037,7 +6047,7 @@ namespace
 
 		const uint32_t currentFrame = std::max(a_state->frameCount, 1u);
 		const uint32_t saveLoadStartFrame =
-			a_state->saveLoadSafeModeStartFrame.load(std::memory_order_acquire);
+			a_state->worldLoadTransitionStartFrame.load(std::memory_order_acquire);
 		if (!HasCompletedVRWorldFrameAfterLatestLoad(a_state) ||
 			(saveLoadStartFrame != 0 &&
 				a_state->lastCompletedWorldRenderFrame <= saveLoadStartFrame) ||
@@ -17841,7 +17851,7 @@ uint32_t Upscaling::GetVRUpscalingApplyBlockReasonsForAPI() const
 	const bool loadTransitionActive =
 		IsLoadingMenuContextActive() ||
 		IsVRLoadingPresentationContextActive(state) ||
-		IsSaveLoadTransitionContextActive(state) ||
+		IsSaveLoadMutationContextActive(state) ||
 		!worldFrameReady ||
 		postLoadRuntimeResetPending.load(std::memory_order_acquire);
 	const bool relatchPending =
@@ -22268,7 +22278,7 @@ void Upscaling::MaybeArmVRRenderScaleMemoryRelief(const VRRenderScaleRelatchSign
 		a_origin == VRUpscalingTransitionOrigin::CSMenu ||
 		a_origin == VRUpscalingTransitionOrigin::VRAPI ||
 		a_origin == VRUpscalingTransitionOrigin::PostLoadSync ||
-		IsSaveLoadTransitionContextActive(globals::state);
+		IsSaveLoadMutationContextActive(globals::state);
 	if (!trackedTransitionScope) {
 		vrRenderScaleRapidRelatchFrame.store(0, std::memory_order_release);
 		vrRenderScaleRapidRelatchCount.store(0, std::memory_order_release);
@@ -23604,7 +23614,7 @@ void Upscaling::RecordVRDLSSRenderScaleRelatch(bool a_previousActive, bool a_cur
 	const bool stabilizerTransitionScope =
 		a_origin == VRUpscalingTransitionOrigin::VRAPI ||
 		a_origin == VRUpscalingTransitionOrigin::PostLoadSync ||
-		IsSaveLoadTransitionContextActive(globals::state);
+		IsSaveLoadMutationContextActive(globals::state);
 	if (!stabilizerTransitionScope) {
 		vrDLSSRapidRenderScaleFlipFrame.store(0, std::memory_order_release);
 		vrDLSSRapidRenderScaleFlipCount.store(0, std::memory_order_release);
@@ -24183,7 +24193,7 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 	const uint64_t recoveryEpoch = pendingPostLoadRuntimeResetEpoch.load(std::memory_order_acquire);
 
 	auto* state = globals::state;
-	if (IsSaveLoadTransitionContextActive(state)) {
+	if (IsSaveLoadMutationContextActive(state)) {
 		return true;
 	}
 
@@ -34329,6 +34339,18 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		GetLatchedNeuralRenderingInsertionPoint();
 	const bool currentMenuPresentationContext =
 		IsVRMenuPresentationContextActive();
+	const auto requiresNeuralMenuLayer = [&]() {
+		// Presentation cleanup deliberately outlives menu close. That tail alone
+		// has no UI to isolate, and close has already invalidated the old layer.
+		// Keep real open/nested menus and pending bridge work protected while
+		// allowing the world to resume NR immediately through an empty tail.
+		return IsKnownGameMenuContextActive() ||
+		       (vrMenuFrameTransaction.frame == currentFrame &&
+				   (vrMenuFrameTransaction.menuLayerRequired ||
+					   vrMenuFrameTransaction.mapLayerRequired ||
+					   vrMenuFrameTransaction.recognizedOperations != 0 ||
+					   vrMenuFrameTransaction.OwnsPresentationWork()));
+	};
 	const bool csOverlayOpen = IsCommunityShadersMenuOpen();
 	const bool hardMenuBlocked =
 		IsMainMenuContextActive() ||
@@ -34348,8 +34370,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	const uint64_t replayMenuLayerGeneration =
 		replayLateMenuCompositeReady ? vrMenuCommittedLayerGeneration : 0;
 	const bool replayMenuContinuityAllowed =
-		!hardMenuBlocked &&
-		(!currentMenuPresentationContext ||
+		NeuralRendering::ResolveMenuContinuityAllowed(
+			hardMenuBlocked,
+			requiresNeuralMenuLayer(),
 			replayLateMenuCompositeReady);
 	auto neuralTemporalAdmission = BuildNeuralTemporalAdmission(
 		NeuralStereoRouteRole::Submit,
@@ -34482,6 +34505,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 				!cachedPairSourceSignatureMismatch &&
 				!cachedPairContextMismatch &&
 				!cachedPairMenuContextMismatch &&
+				replayMenuContinuityAllowed &&
 				neuralTemporalAdmission.admitted &&
 				NeuralRendering::MatchesSubmitStereoSourceProof(
 					submitStageNeuralStereoState.submitSourceProof,
@@ -34811,8 +34835,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	const uint64_t submitStageMenuLayerGeneration =
 		lateMenuCompositeReady ? vrMenuCommittedLayerGeneration : 0;
 	const bool menuContinuityAllowed =
-		!hardMenuBlocked &&
-		(!currentMenuPresentationContext ||
+		NeuralRendering::ResolveMenuContinuityAllowed(
+			hardMenuBlocked,
+			requiresNeuralMenuLayer(),
 			lateMenuCompositeReady);
 	const NeuralRendering::TemporalAdmissionInputs submitTemporalMenuPolicy{
 		.menuContextActive = hardMenuBlocked,

@@ -232,7 +232,7 @@ evaluation requires the current world render to have started; submit-route
 evaluation additionally requires that world render to have completed. During a
 safe ordinary pause, either route may continue from the most recently completed
 world frame when the render and completion markers identify the same retained
-frame. Main-menu, loading, and save/load boundaries remain fail-closed.
+frame. Main-menu and actual world-loading boundaries remain fail-closed.
 
 The current `frame` remains the Feature 18 evaluation and presentation identity,
 while `sourceWorldFrame` identifies the immutable world color, depth, motion,
@@ -248,8 +248,10 @@ are not accumulated repeatedly.
 | CS menu only                                | Allow       | Retain the scene; CS overlay remains after NR       |
 | Tween, game, or dialogue menu               | Allow       | Retain the scene and use the sealed late menu layer |
 | Game menu without a sealed layer            | Block       | Fail closed instead of omitting UI                  |
+| Closed menu, tracking tail only             | Allow       | No live menu or pending UI work requires a layer    |
+| Ordinary save or its persistence grace      | Allow       | Same scene and valid world inputs remain available |
 | Game menu and CS menu together              | Block       | Combined ordering is not proven safe                |
-| Main menu, loading, or save/load transition | Block       | Hard presentation-safety boundary                   |
+| Main menu, loading, or new-game transition  | Block       | Hard presentation-safety boundary                   |
 
 A hard presentation context reports `menu_context`, a disallowed pause reports
 `game_paused`, and an incomplete world frame reports `temporal_source_stale`.
@@ -257,6 +259,28 @@ An old frame is admitted only while paused continuity is allowed and its render
 and completion markers agree. Crossing a true admission boundary requests one
 route-history reset; opening a menu whose continuity remains admitted does not
 trigger that reset merely because the game is paused.
+
+The menu-close dropout reported in `7c81d9090` came from treating the 30-frame
+presentation cleanup tail as a live menu. Closing a menu invalidates its old
+layer, so requiring that layer throughout the tail suppressed NR even after a
+new world frame completed. Fresh and cached submit decisions now use live
+menus and actual pending UI work to decide whether a late layer is required.
+An empty tracking tail does not delay NR. Remaining nested menus, captured
+closing UI, and unfinished menu transactions still require the isolated layer.
+This covers the existing dialogue, console, Journal/save, Sleep/Wait, inventory,
+magic, container/activation, barter, crafting, book, training, message-box,
+tutorial, and other registered game-menu routes through the same policy.
+Custom menus using a different rendering path need their own live validation.
+
+Ordinary saves also used to trigger a separate 120-frame dropout: both the
+engine's saving flag and SKSE's save notification extended the shared save/load
+safe mode, which rendering incorrectly treated as world replacement. State now
+tracks actual loading, form initialization, deferred initialization, and player
+positioning independently. Pre-load, post-load, and new-game notifications keep
+that world-transition guard; a save does not start or prolong it. Disk-cache
+persistence and settings/resource mutations retain the broader save/load guard
+and its grace period. Fresh-world validation and immutable paused-source reuse
+still apply while a save is in progress.
 
 Known game-menu layers are composited after NR. The CS overlay is drawn still
 later, after `SubmitVRUpscaledFrame` returns and before the final OpenVR submit,

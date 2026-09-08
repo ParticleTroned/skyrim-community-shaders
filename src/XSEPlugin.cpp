@@ -205,7 +205,9 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 		{
 			if (errors.empty() && globals::state) {
 				const uint32_t frame = globals::state->frameCount;
-				globals::state->ExtendSaveLoadSafeMode(frame, State::kSaveLoadSafeModeGraceFrames);
+				// Saving preserves the current world and its temporal NR history;
+				// only disk persistence and editor mutations need a grace period.
+				globals::state->ExtendSaveGamePersistenceSafeMode(frame, State::kSaveLoadSafeModeGraceFrames);
 				globals::state->ExtendPersistentMutationBlock(frame, State::kSaveMutationBlockGraceFrames);
 			}
 

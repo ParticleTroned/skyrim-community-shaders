@@ -48,6 +48,7 @@
 #include "TruePBR.h"
 #include "Utils/FileSystem.h"
 #include "Utils/SphericalHarmonics.h"
+#include "Utils/WorldLoadTransitionPolicy.h"
 #include "WeatherManager.h"
 #include "WeatherVariableRegistry.h"
 
@@ -554,6 +555,11 @@ bool State::IsSaveLoadSafeModeActive() const
 	return saveLoadSafeModeActive.load(std::memory_order_acquire);
 }
 
+bool State::IsWorldLoadTransitionActive() const
+{
+	return worldLoadTransitionActive.load(std::memory_order_acquire);
+}
+
 bool State::IsPersistentMutationBlocked() const
 {
 	return persistentMutationBlocked.load(std::memory_order_acquire);
@@ -562,6 +568,12 @@ bool State::IsPersistentMutationBlocked() const
 void State::BeginSaveLoadSafeMode(uint32_t a_currentFrame)
 {
 	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
+	{
+		std::lock_guard lock(worldLoadTransitionMutex);
+		worldLoadTransitionStartFrame.store(currentFrame, std::memory_order_release);
+		worldLoadTransitionEndFrame.store(0, std::memory_order_release);
+		worldLoadTransitionActive.store(true, std::memory_order_release);
+	}
 	saveLoadSafeModeStartFrame.store(currentFrame, std::memory_order_release);
 	saveLoadSafeModeEndFrame.store(0, std::memory_order_release);
 	if (globals::shaderCache)
@@ -571,6 +583,22 @@ void State::BeginSaveLoadSafeMode(uint32_t a_currentFrame)
 }
 
 void State::ExtendSaveLoadSafeMode(uint32_t a_currentFrame, uint32_t a_frameCount)
+{
+	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
+	{
+		std::lock_guard lock(worldLoadTransitionMutex);
+		if (worldLoadTransitionStartFrame.load(std::memory_order_acquire) == 0)
+			worldLoadTransitionStartFrame.store(currentFrame, std::memory_order_release);
+		worldLoadTransitionEndFrame.store(
+			Util::WorldLoadTransition::ExtendDeadline(
+				worldLoadTransitionEndFrame.load(std::memory_order_acquire), currentFrame, a_frameCount),
+			std::memory_order_release);
+		worldLoadTransitionActive.store(true, std::memory_order_release);
+	}
+	ExtendSaveGamePersistenceSafeMode(currentFrame, a_frameCount);
+}
+
+void State::ExtendSaveGamePersistenceSafeMode(uint32_t a_currentFrame, uint32_t a_frameCount)
 {
 	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
 	const uint32_t endFrame = currentFrame + std::max(a_frameCount, 1u);
@@ -606,16 +634,37 @@ void State::UpdateSaveLoadSafeMode()
 	bool safeModeActive = saveLoadSafeModeActive.load(std::memory_order_acquire);
 	const bool wasSafeModeActive = safeModeActive;
 
-	bool engineSaveLoadActive = false;
+	Util::WorldLoadTransition::EngineSignals engineSignals;
 	if (auto* saveLoad = RE::BGSSaveLoadGame::GetSingleton()) {
-		engineSaveLoadActive =
-			saveLoad->GetSaveGameLoading() ||
-			saveLoad->GetSaveGameSaving() ||
-			saveLoad->GetInitingForms() ||
-			saveLoad->GetDeferInitForms() ||
-			saveLoad->GetPositioningPlayerCharacter();
+		engineSignals = {
+			.loading = saveLoad->GetSaveGameLoading(),
+			.saving = saveLoad->GetSaveGameSaving(),
+			.initializingForms = saveLoad->GetInitingForms(),
+			.deferredFormInitialization = saveLoad->GetDeferInitForms(),
+			.positioningPlayer = saveLoad->GetPositioningPlayerCharacter(),
+		};
 	}
 
+	{
+		// SKSE load notifications may arrive between render frames. Serialize the
+		// snapshot/update with them so an old snapshot cannot clear a new load.
+		std::lock_guard lock(worldLoadTransitionMutex);
+		const auto worldTransition = Util::WorldLoadTransition::Advance(
+			{
+				.active = worldLoadTransitionActive.load(std::memory_order_acquire),
+				.startFrame = worldLoadTransitionStartFrame.load(std::memory_order_acquire),
+				.endFrame = worldLoadTransitionEndFrame.load(std::memory_order_acquire),
+			},
+			engineSignals,
+			currentFrame,
+			kSaveLoadSafeModeGraceFrames,
+			kSaveLoadSafeModeFallbackFrames);
+		worldLoadTransitionStartFrame.store(worldTransition.startFrame, std::memory_order_release);
+		worldLoadTransitionEndFrame.store(worldTransition.endFrame, std::memory_order_release);
+		worldLoadTransitionActive.store(worldTransition.active, std::memory_order_release);
+	}
+
+	const bool engineSaveLoadActive = engineSignals.RequiresPersistenceGuard();
 	if (engineSaveLoadActive) {
 		if (!safeModeActive) {
 			if (globals::shaderCache)

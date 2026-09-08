@@ -405,6 +405,87 @@ int main()
 						  TemporalAdmissionBlockReason::TemporalSourceStale)) ==
 				  "temporal_source_stale");
 
+	// A tracking tail is deliberately not a UI requirement. Exercise the whole
+	// admission sequence, including nested menus and retained paused-world input,
+	// so closing the final menu admits the very next completed world frame.
+	constexpr auto gameplayMenuLifecycle = []() {
+		struct MenuFrame
+		{
+			bool menuLayerRequired;
+			bool isolatedLayerReady;
+			bool paused;
+			std::uint32_t frame;
+			std::uint32_t worldFrame;
+		};
+		constexpr MenuFrame frames[] = {
+			{ false, false, false, 40u, 40u },  // Gameplay.
+			{ true, true, false, 41u, 41u },    // Dialogue over a live world.
+			{ true, true, true, 42u, 41u },     // Console nested over dialogue.
+			{ true, true, false, 43u, 43u },    // Console closes; dialogue remains.
+			{ false, false, false, 44u, 44u },  // Final menu closes; tail only.
+			{ true, true, false, 45u, 45u },    // A captured closing UI animation.
+			{ false, false, false, 46u, 46u },  // Tail remains without UI work.
+			{ true, true, true, 47u, 46u },     // Wait/save/activation modal.
+			{ false, false, true, 48u, 46u },   // Menu closes before pause clears.
+			{ false, false, false, 49u, 49u },  // World rendering resumes.
+		};
+		for (const auto& frame : frames) {
+			const bool continuityAllowed =
+				NeuralRendering::ResolveMenuContinuityAllowed(
+					false, frame.menuLayerRequired, frame.isolatedLayerReady);
+			const auto admission = NeuralRendering::EvaluateTemporalAdmission(
+				TemporalRoute::Submit,
+				TemporalAdmissionInputs{
+					.gamePaused = frame.paused,
+					.pausedContinuityAllowed = continuityAllowed,
+					.worldFrameStateAvailable = true,
+					.currentFrame = frame.frame,
+					.lastWorldRenderFrame = frame.worldFrame,
+					.lastCompletedWorldRenderFrame = frame.worldFrame,
+				});
+			if (!continuityAllowed || !admission.admitted ||
+				admission.sourceWorldFrame != frame.worldFrame ||
+				admission.retainedWorldFrame != (frame.frame != frame.worldFrame)) {
+				return false;
+			}
+		}
+		return true;
+	};
+	static_assert(gameplayMenuLifecycle());
+
+	// Open or nested menus and observed closing UI work still require a complete
+	// isolated layer, even if the world itself is fresh and the game is unpaused.
+	static_assert(!NeuralRendering::ResolveMenuContinuityAllowed(false, true, false));
+	static_assert(!NeuralRendering::ResolveMenuContinuityAllowed(true, true, true));
+	static_assert(!NeuralRendering::ResolveMenuContinuityAllowed(true, false, false));
+	constexpr bool closedMenuContinuity =
+		NeuralRendering::ResolveMenuContinuityAllowed(false, false, false);
+	constexpr auto closedMenuIncompleteWorld =
+		NeuralRendering::EvaluateTemporalAdmission(
+			TemporalRoute::Submit,
+			TemporalAdmissionInputs{
+				.gamePaused = true,
+				.pausedContinuityAllowed = closedMenuContinuity,
+				.worldFrameStateAvailable = true,
+				.currentFrame = 50u,
+				.lastWorldRenderFrame = 50u,
+				.lastCompletedWorldRenderFrame = 49u,
+			});
+	static_assert(!closedMenuIncompleteWorld.admitted);
+	static_assert(!closedMenuIncompleteWorld.retainedWorldFrame);
+	constexpr auto closedMenuStaleWorld =
+		NeuralRendering::EvaluateTemporalAdmission(
+			TemporalRoute::Submit,
+			TemporalAdmissionInputs{
+				.pausedContinuityAllowed = closedMenuContinuity,
+				.worldFrameStateAvailable = true,
+				.currentFrame = 50u,
+				.lastWorldRenderFrame = 49u,
+				.lastCompletedWorldRenderFrame = 49u,
+			});
+	static_assert(!closedMenuStaleWorld.admitted);
+	static_assert(!closedMenuStaleWorld.retainedWorldFrame);
+
 	using NeuralRendering::CachedStereoPairReuse;
 	static_assert(
 		NeuralRendering::ResolveCachedStereoPairReuse(true, true, 0u, 0u) ==

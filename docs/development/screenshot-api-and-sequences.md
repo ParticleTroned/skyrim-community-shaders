@@ -599,6 +599,12 @@ Manual/UI still requests and sequences share a fair dispatcher. A sequence may
 have only one child in source acquisition at a time. The coordinator must
 prevent a high-frequency sequence from starving manual requests.
 
+Manual captures retain FIFO order and their arbitration turn while retrying
+source contention or encoder backpressure, up to a ten-second dispatch
+deadline. A completed attempt hands the next turn to the other class.
+Sequence capacity misses are immediately recorded as dropped children so
+the requested `skip` or `abort` policy applies at the missed slot.
+
 ### Failure and stop behavior
 
 `failurePolicy` is `continue` or `abort`.
@@ -633,6 +639,11 @@ CS_sequence_2026-08-20_041530_2f8c91a0/
 every pixel write. On normal finalization it becomes `sequence.json`. Recovery
 can identify an interrupted sequence from the partial manifest and preserved
 frames.
+
+Manifest snapshots are immutable. Both document assembly and retirement of
+retained child snapshots run on the manifest worker. Retirement releases the
+chain iteratively, including when requests are acknowledged or expire, so
+long sequences cannot cause recursive destruction on the render path.
 
 The final manifest includes:
 

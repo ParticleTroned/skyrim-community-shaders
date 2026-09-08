@@ -2533,11 +2533,7 @@ ScreenshotFeature::CaptureStartResult ScreenshotFeature::TryStartApiCapture(
 			                      VRCaptureSource::HMDEye;
 		}
 	}
-	if (requiresStereoGeometry && !SnapshotStereoGeometry(options)) {
-		logger::warn("Combined-eye projection data is unavailable; framed-combined output will use its dominant eye.");
-		EnsureScreenshotApi();
-		screenshotApi->OnSourceFallback(options.requestId, "combined-eye projection data unavailable; dominant eye used");
-	}
+	const bool geometryFallback = requiresStereoGeometry && !SnapshotStereoGeometry(options);
 
 	std::lock_guard lock(captureStateMutex);
 	if (!IsRuntimeEnabled())
@@ -2572,6 +2568,10 @@ ScreenshotFeature::CaptureStartResult ScreenshotFeature::TryStartApiCapture(
 	capturePending.store(true, std::memory_order_release);
 	sourceDeadlineCondition.notify_all();
 	EnsureScreenshotApi();
+	if (geometryFallback) {
+		logger::warn("Combined-eye projection data is unavailable; framed-combined output will use its dominant eye.");
+		screenshotApi->OnSourceFallback(activeCapture.options.requestId, "combined-eye projection data unavailable; dominant eye used");
+	}
 	screenshotApi->OnSourceWaiting(
 		activeCapture.options.requestId,
 		ActualSourceKind(activeCapture.source));
@@ -2610,14 +2610,14 @@ void ScreenshotFeature::SetEnabled(bool a_enabled)
 	if (wasEnabled != a_enabled) {
 		logger::debug("Community Shaders screenshot capture {}", a_enabled ? "enabled" : "disabled");
 	}
+	if (!a_enabled) {
+		EnsureScreenshotApi();
+		screenshotApi->OnFeatureDisabled("feature_disabled");
+	}
 	if (cancelledPendingCapture) {
 		logger::debug("Cancelled the pending screenshot capture after the feature was disabled");
 		EnsureScreenshotApi();
 		screenshotApi->OnSourceTerminal(cancelledRequestId, "cancelled", "feature_disabled");
-	}
-	if (!a_enabled) {
-		EnsureScreenshotApi();
-		screenshotApi->OnFeatureDisabled("feature_disabled");
 	}
 }
 
@@ -3876,15 +3876,15 @@ void ScreenshotFeature::OnBeforePresent(IDXGISwapChain* a_swapChain)
 		}
 		return;
 	}
-	if (IsFramedCapture(activeCapture.source)) {
+	if (IsSubmittedEyeCapture(activeCapture.source)) {
 		if (activeCapture.presentsWaited >= kCaptureTimeoutPresents) {
-			logger::warn("Framed-view screenshot capture timed out before the required eye submission arrived.");
+			logger::warn("HMD screenshot capture timed out before the required eye submission arrived.");
 			const auto failedRequestId = activeCapture.options.requestId;
 			ClearActiveCapture(activeCapture);
 			capturePending.store(false, std::memory_order_release);
 			if (!failedRequestId.empty())
 				screenshotApi->OnSourceTerminal(failedRequestId, "failed", "source_timeout");
-			ShowInGameNotification("Framed-view screenshot failed - missing eye submission");
+			ShowInGameNotification("HMD screenshot failed - missing eye submission");
 		}
 		return;
 	}

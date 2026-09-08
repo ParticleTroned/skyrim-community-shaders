@@ -65,6 +65,48 @@ namespace CSX::ScreenshotPolicy
 		return DispatchClass::None;
 	}
 
+	/** Alternates completed capture turns while preserving a blocked manual turn. */
+	class DispatchArbitration
+	{
+	public:
+		/** Selects the next available capture class without consuming its turn. */
+		DispatchClass Select(bool a_hasManual, bool a_hasSequence) const
+		{
+			return SelectDispatchClass(a_hasManual, a_hasSequence, preferManual);
+		}
+
+		/** Advances fairness after admission or a terminal dispatch outcome. */
+		void FinishAttempt(DispatchClass a_selected, bool a_retrying)
+		{
+			// A capacity retry must retain its turn until a capture can start.
+			if (!a_retrying && a_selected != DispatchClass::None)
+				preferManual = a_selected == DispatchClass::Sequence;
+		}
+
+	private:
+		bool preferManual = true;
+	};
+
+	enum class BusyDispatchDisposition : std::uint8_t
+	{
+		Retry,
+		Drop,
+		Fail,
+		Cancel
+	};
+
+	inline BusyDispatchDisposition ResolveBusyDispatch(
+		bool a_sequenceFrame,
+		bool a_cancelRequested,
+		bool a_deadlineReached)
+	{
+		if (a_cancelRequested)
+			return BusyDispatchDisposition::Cancel;
+		if (a_sequenceFrame)
+			return BusyDispatchDisposition::Drop;
+		return a_deadlineReached ? BusyDispatchDisposition::Fail : BusyDispatchDisposition::Retry;
+	}
+
 	inline bool IsSamePublication(
 		std::uint64_t a_leftGeneration,
 		std::uintptr_t a_leftDevice,

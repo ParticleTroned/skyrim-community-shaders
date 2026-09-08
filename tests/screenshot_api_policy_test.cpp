@@ -40,6 +40,33 @@ int main()
 		SelectDispatchClass(false, true, true) != DispatchClass::Sequence ||
 		SelectDispatchClass(false, false, true) != DispatchClass::None)
 		throw std::runtime_error("fair dispatcher selection is invalid");
+	DispatchArbitration arbitration;
+	// A busy source can free up on the same Present parity on every frame.
+	// Failed manual attempts must not hand each newly available slot away.
+	for (int busyPresent = 0; busyPresent != 6; ++busyPresent) {
+		const auto selected = arbitration.Select(true, true);
+		if (selected != DispatchClass::Manual)
+			throw std::runtime_error("a capacity retry lost the pending manual capture's turn");
+		arbitration.FinishAttempt(selected, true);
+	}
+	arbitration.FinishAttempt(DispatchClass::Manual, false);
+	if (arbitration.Select(true, true) != DispatchClass::Sequence)
+		throw std::runtime_error("a completed manual turn starved the sequence queue");
+	arbitration.FinishAttempt(DispatchClass::Sequence, false);
+	if (arbitration.Select(true, true) != DispatchClass::Manual)
+		throw std::runtime_error("a completed sequence turn starved the manual queue");
+	if (ResolveBusyDispatch(true, false, false) != BusyDispatchDisposition::Drop ||
+		ResolveBusyDispatch(true, false, true) != BusyDispatchDisposition::Drop)
+		throw std::runtime_error("sequence backpressure delayed a missed slot instead of dropping it");
+	if (ResolveBusyDispatch(false, false, false) != BusyDispatchDisposition::Retry ||
+		ResolveBusyDispatch(false, false, true) != BusyDispatchDisposition::Fail)
+		throw std::runtime_error("manual capture retries ignored their admission deadline");
+	for (const bool sequenceFrame : { false, true }) {
+		for (const bool deadlineReached : { false, true }) {
+			if (ResolveBusyDispatch(sequenceFrame, true, deadlineReached) != BusyDispatchDisposition::Cancel)
+				throw std::runtime_error("cancellation during dispatch abandoned a nonterminal request");
+		}
+	}
 	if (!IsSamePublication(7, 0x1000, 7, 0x1000) ||
 		IsSamePublication(7, 0x1000, 8, 0x1000) ||
 		IsSamePublication(7, 0x1000, 7, 0x2000) ||

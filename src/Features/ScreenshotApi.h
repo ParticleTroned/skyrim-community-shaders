@@ -1,6 +1,8 @@
 #pragma once
 
 #include "Api/ServiceFoundation.h"
+#include "Features/ScreenshotApiPolicy.h"
+#include "ScreenshotManifestSnapshot.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -94,12 +96,7 @@ private:
 		std::chrono::steady_clock::time_point terminalAt{};
 	};
 
-	struct ManifestChildNode
-	{
-		std::shared_ptr<const ManifestChildNode> previous;
-		json child = json::object();
-		bool fallbacksPresent = false;
-	};
+	using ManifestChildNode = CSX::Screenshot::ManifestChildNode;
 
 	struct SequenceRecord
 	{
@@ -168,6 +165,7 @@ private:
 		std::mutex mutex;
 		std::condition_variable condition;
 		std::deque<ManifestJob> jobs;
+		std::deque<std::shared_ptr<const ManifestChildNode>> retiredChildren;
 		std::deque<ManifestResult> results;
 		std::size_t outstanding = 0;
 		bool stopRequested = false;
@@ -201,7 +199,7 @@ private:
 	std::size_t sequenceCursor = 0;
 	std::deque<DispatchEntry> manualDispatchQueue;
 	std::deque<DispatchEntry> sequenceDispatchQueue;
-	bool preferManualDispatch = true;
+	CSX::ScreenshotPolicy::DispatchArbitration dispatchArbitration;
 	json persistedSettings = nullptr;
 	uint64_t completedArtifacts = 0;
 	uint64_t failedArtifacts = 0;
@@ -261,6 +259,7 @@ private:
 	std::optional<DispatchEntry> PopDispatchLocked();
 	void RequeueDispatchLocked(DispatchEntry a_entry, bool a_manual);
 	bool RemoveQueuedDispatchLocked(std::string_view a_requestId);
+	void MarkSequenceCancellationLocked(SequenceRecord& a_sequence);
 	void CancelQueuedDispatchesLocked(std::string_view a_code, std::string_view a_reason);
 
 	static std::filesystem::path ResolveDestinationDirectory(

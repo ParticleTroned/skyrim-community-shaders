@@ -15783,7 +15783,17 @@ bool Upscaling::SetRenderScaleLinkedToUpscaling(bool a_enabled)
 		// The checkbox can be changed while a method selection is still queued.
 		// Preserve that complete selection instead of mixing the old method with
 		// the new quality/preset and replacing the user's pending request.
-		const auto desiredProfile = GetPendingVRRenderScaleDesiredProfile();
+		const auto queuedSelection = [&] {
+			std::scoped_lock lock(pendingVRRenderScaleRequestMutex);
+			auto selected = pendingVRRenderScaleRequest;
+			if (deferredVRRenderScaleRequestAfterPhysicalRecovery &&
+				(!selected || IsVRRenderScaleRecoveryOrigin(selected->origin) ||
+					deferredVRRenderScaleRequestAfterPhysicalRecovery->requestID > selected->requestID)) {
+				selected = deferredVRRenderScaleRequestAfterPhysicalRecovery;
+			}
+			return selected;
+		}();
+		const auto desiredProfile = queuedSelection ? *queuedSelection : GetPendingVRRenderScaleDesiredProfile();
 		if (IsRenderScaleMethodEligible(desiredProfile.method)) {
 			const auto result = ApplyCSMenuUpscalingTransition(
 				desiredProfile.method, true, desiredProfile.qualityMode, desiredProfile.dlssPreset,

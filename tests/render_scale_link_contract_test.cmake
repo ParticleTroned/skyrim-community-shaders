@@ -128,8 +128,15 @@ require_contract("${_checkbox}" [[SetRenderScaleLinkedToUpscaling(linked)]]
 forbid_contract("${_checkbox}" [[kDefaultRenderScaleQualityMode]] "native-AA quality on link enable")
 section("${_source}" [[bool Upscaling::SetRenderScaleLinkedToUpscaling(]]
     [[void Upscaling::DrawVRRenderScaleLinkSetting(]] _link_setter)
-require_contract("${_link_setter}" [[const auto desiredProfile = GetPendingVRRenderScaleDesiredProfile();]]
+require_contract("${_link_setter}"
+    [[const auto desiredProfile = queuedSelection ? *queuedSelection : GetPendingVRRenderScaleDesiredProfile();]]
     "link enabling reads one complete pending selection")
+require_contract("${_link_setter}"
+    [[std::scoped_lock lock(pendingVRRenderScaleRequestMutex); auto selected = pendingVRRenderScaleRequest;]]
+    "link selection snapshots both request slots under their existing mutex")
+require_contract("${_link_setter}"
+    [[if (deferredVRRenderScaleRequestAfterPhysicalRecovery && (!selected || IsVRRenderScaleRecoveryOrigin(selected->origin) || deferredVRRenderScaleRequestAfterPhysicalRecovery->requestID > selected->requestID)) { selected = deferredVRRenderScaleRequestAfterPhysicalRecovery; }]]
+    "link selection retains deferred user intent over an internal recovery request")
 require_contract("${_link_setter}" [[if (IsRenderScaleMethodEligible(desiredProfile.method))]]
     "link enabling does not replace a pending None/TAA selection")
 require_contract("${_link_setter}"

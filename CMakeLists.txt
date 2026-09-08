@@ -1662,6 +1662,21 @@ if(BUILD_CONTROLLER_TESTS)
         tests/vr_render_scale_authority_policy_test.cpp
     )
     add_controller_test(
+        vr_render_scale_mode_policy_test
+        VRRenderScaleModePolicy
+        tests/vr_render_scale_mode_policy_test.cpp
+    )
+    add_test(
+        NAME VRRenderScaleLinkContract
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${CMAKE_CURRENT_SOURCE_DIR}" -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/render_scale_link_contract_test.cmake"
+    )
+    set_tests_properties(
+        VRRenderScaleLinkContract
+        PROPERTIES LABELS "ControllerTests"
+    )
+    add_controller_test(
         upscaling_provider_selection_policy_test
         UpscalingProviderSelectionPolicy
         tests/upscaling_provider_selection_policy_test.cpp
@@ -2212,6 +2227,7 @@ if(BUILD_CONTROLLER_TESTS)
             perf_mode_restart_state_test
             vr_vendor_relatch_policy_test
             vr_render_scale_authority_policy_test
+            vr_render_scale_mode_policy_test
             upscaling_provider_selection_policy_test
             vr_render_scale_qualification_policy_test
             vr_render_scale_replacement_telemetry_policy_test

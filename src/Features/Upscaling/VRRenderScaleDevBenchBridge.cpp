@@ -1534,6 +1534,12 @@ namespace
 									  { "lastContextCreateResult", static_cast<int32_t>(a_upscaling.fidelityFX.GetLastFSRContextCreateResult()) },
 								  } },
 			{ "vendorWorkGate", VendorWorkGateJson(vendorWorkGate) },
+			{ "renderScaleSelectionPolicy", {
+												{ "linkedToUpscaling", a_upscaling.settings.renderScaleLinkedToUpscaling },
+												{ "rememberedPreference", a_upscaling.GetVRRenderScaleModePreference() },
+												{ "requestedActive", a_upscaling.GetVRRenderScaleModeRequested() },
+												{ "physicallyActive", a_upscaling.IsVRRenderScaleModeLatched() },
+											} },
 			{ "loadPresentationProbe", a_upscaling.BuildVRLoadPresentationProbeStatus() },
 			{ "hmdMaskDiagnostics", a_upscaling.BuildVRHMDMaskDiagnosticsStatus() },
 			{ "session", {
@@ -4878,6 +4884,7 @@ namespace
 	json RenderScaleActions()
 	{
 		return json::array({ "status",
+			"set_render_scale_link",
 			"qualification_status",
 			"qualification_begin",
 			"qualification_dispatch",
@@ -5296,6 +5303,27 @@ namespace
 				if (!globals::game::isVR)
 					return json{ { "error", "render-scale iteration control requires Skyrim VR" } };
 				return json{ { "action", "status" }, { "status", BuildStatus(globals::features::upscaling) } };
+			});
+		}
+
+		if (action == "set_render_scale_link") {
+			if (!a_args.contains("enabled") || !a_args["enabled"].is_boolean())
+				return { { "error", "set_render_scale_link requires boolean parameter 'enabled'" } };
+			return RunOnMainThread([enabled = a_args["enabled"].get<bool>()]() {
+				if (!globals::game::isVR)
+					return json{ { "error", "render-scale linking requires Skyrim VR" } };
+				if (!globals::state || !globals::state->IsDeveloperMode())
+					return json{ { "error", "developer mode is required to change render-scale linking" } };
+				auto& upscaling = globals::features::upscaling;
+				if (!upscaling.GetVRRenderScaleStressSessionSnapshot().active)
+					return json{ { "error", "start a stress capture before changing render-scale linking" } };
+				const bool accepted = upscaling.SetRenderScaleLinkedToUpscaling(enabled);
+				return json{
+					{ "action", "set_render_scale_link" },
+					{ "enabled", enabled },
+					{ "accepted", accepted },
+					{ "status", BuildStatus(upscaling) },
+				};
 			});
 		}
 
@@ -7440,7 +7468,14 @@ namespace VRRenderScaleDevBenchBridge
 					previousNativeDescription.size(),
 					nativeDescription);
 			}
-			descriptor["description"] = description;
+			descriptor["description"] = description +
+			                            " set_render_scale_link requires boolean enabled, developer mode, "
+			                            "and an active stress capture. It uses the in-game checkbox policy: "
+			                            "enable requests Render Scale without changing quality; disable "
+			                            "preserves the remembered preference and current physical mode. "
+			                            "accepted reports admission, not physical completion. The setting "
+			                            "is saved through the normal CS settings save operation.";
+			descriptor["inputSchema"]["properties"]["action"]["enum"].push_back("set_render_scale_link");
 			descriptor["inputSchema"]["properties"]["foveation"]["description"] =
 				"Optional exact settings fixture. Float comparisons use the "
 				"tolerance returned in each receipt; live execution flags must "

@@ -6,6 +6,7 @@
 #include "Api/UpscalingContract.h"
 #include "Api/UpscalingServicePolicy.h"
 #include "Features/Upscaling.h"
+#include "Features/Upscaling/VRRenderScaleModePolicy.h"
 #include "Globals.h"
 #include "State.h"
 #include "VRAPI/CSserviceapi.h"
@@ -759,10 +760,17 @@ namespace
 			auto& upscaling = globals::features::upscaling;
 			Snapshot001 output;
 			output.profilePresence = kProfileConfigured | kProfileEffective;
+			const auto configuredMethod = upscaling.GetConfiguredUpscaleMethodForTransition();
+			// Public profiles describe executable modes, not a preference retained during native AA.
+			const auto configuredRenderScale = VRRenderScaleModePolicy::Resolve(
+				configuredMethod == Upscaling::UpscaleMethod::kDLSS ||
+					configuredMethod == Upscaling::UpscaleMethod::kFSR,
+				upscaling.settings.qualityMode != 0,
+				upscaling.settings.renderScaleMode != 0);
 			output.configured = MakeProfile(
-				upscaling.GetConfiguredUpscaleMethodForTransition(),
+				configuredMethod,
 				upscaling.settings.qualityMode,
-				upscaling.settings.renderScaleMode != 0,
+				configuredRenderScale.enabled,
 				upscaling.settings.dlssPreset,
 				upscaling.settings.fsr4RuntimeEnable);
 			output.effective = MakeProfile(

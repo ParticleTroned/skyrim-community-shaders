@@ -56,6 +56,17 @@ builds, tests, and runtime qualification are deferred by the operator while
 another workload is running. No candidate timing or qualification result
 has been inferred from the source change.
 
+### Render Scale selection link
+
+The optional [Render Scale selection link](vr-render-scale-link.md) separates
+remembered user intent from quality-gated physical activation. The
+`set_render_scale_link` action takes Boolean `enabled` and requires developer
+mode plus an active stress capture. Status exposes `renderScaleSelectionPolicy`;
+ordinary explicit `apply` profiles remain authoritative. The isolated forward
+port from `72b04290b` has no new live qualification or performance measurement.
+Consequently, no candidate measurement is added to the comparison ledger, and
+its historical results must not be treated as evidence for this change.
+
 ### Controller actions
 
 Step 17 exposes the capture contract through the external devbench host used by

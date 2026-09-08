@@ -2,9 +2,8 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
-#	include "Api/MainThreadDispatchState.h"
+#	include "Api/DevBenchMainThreadDispatch.h"
 #	include "Api/ProfilerService.h"
-#	include "Api/RuntimeThreadAffinity.h"
 #	include "Api/ServiceFoundation.h"
 #	include "BuildProvenance.h"
 
@@ -12,11 +11,9 @@
 #	include <nlohmann/json.hpp>
 
 #	include <atomic>
-#	include <chrono>
 #	include <exception>
 #	include <functional>
 #	include <limits>
-#	include <memory>
 #	include <mutex>
 #	include <set>
 #	include <stdexcept>
@@ -32,7 +29,6 @@ namespace
 	using CSX::ProfilerAPI::Status;
 	using CSX::ProfilerAPI::TimerDescriptor001;
 	using CSX::ProfilerAPI::TimingDomain;
-	constexpr auto kMainThreadTimeout = std::chrono::milliseconds(5000);
 	std::atomic_bool g_registered{ false };
 	std::mutex g_terminalEventMutex;
 	std::set<std::uint64_t> g_reportedTerminalCaptures;
@@ -79,28 +75,7 @@ namespace
 
 	json RunOnMainThread(std::function<json()> a_run)
 	{
-		auto* tasks = SKSE::GetTaskInterface();
-		if (!tasks)
-			return { { "_dispatchError", "SKSE task interface unavailable" } };
-		using DispatchState = CSX::Api::MainThreadDispatchState<json>;
-		auto state = std::make_shared<DispatchState>();
-		try {
-			tasks->AddTask([state, run = std::move(a_run)]() mutable {
-				CSX::Api::EnterRuntimeMainThreadTask();
-				if (!state->TryBegin()) return;
-				try { state->Complete(run()); } catch (...) { state->Fail(std::current_exception()); }
-			});
-		} catch (...) {
-			return { { "_dispatchError", "SKSE task queue rejected the main-thread task" } };
-		}
-		const auto deadline = std::chrono::steady_clock::now() + kMainThreadTimeout;
-		if (state->WaitUntil(deadline) == DispatchState::Phase::queued && state->CancelIfQueued()) {
-			return { { "_dispatchError", "main thread did not run within 5000ms" } };
-		}
-		// Once admitted, wait for the exact result so failure can never precede mutation.
-		try { return state->WaitForCompletion(); }
-		catch (const std::exception& e) { return { { "_dispatchError", e.what() } }; }
-		catch (...) { return { { "_dispatchError", "unknown main-thread failure" } }; }
+		return CSX::Api::RunDevBenchMainThreadTask(SKSE::GetTaskInterface(), std::move(a_run), CSX::Api::DevBenchDispatchErrorFormat::profiler);
 	}
 
 	json ProgressJson(const CaptureProgress001& a_progress)

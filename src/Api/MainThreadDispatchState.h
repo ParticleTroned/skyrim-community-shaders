@@ -3,16 +3,19 @@
 #include <chrono>
 #include <condition_variable>
 #include <exception>
+#include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 
 namespace CSX::Api
 {
 	/** Admission state shared by the caller and its queued runtime-main task. */
 	template <class Result>
-	class MainThreadDispatchState
+	class MainThreadDispatchResultState
 	{
 	public:
 		enum class Phase
@@ -89,4 +92,44 @@ namespace CSX::Api
 		std::optional<Result> result;
 		std::exception_ptr error;
 	};
+
+	class MainThreadDispatchTimeout : public std::runtime_error
+	{
+	public:
+		MainThreadDispatchTimeout() : std::runtime_error("runtime-main task was not admitted before its deadline") {}
+	};
+
+	class MainThreadDispatchRejected : public std::runtime_error
+	{
+	public:
+		MainThreadDispatchRejected() : std::runtime_error("runtime-main task submission failed") {}
+	};
+
+	// A submission error is terminal only if cancellation wins before admission,
+	// just like a deadline. A queue may retain or begin its callback before throwing.
+	template <class Submit, class Run, class Rep, class Period>
+	auto DispatchMainThreadTask(Submit&& a_submit, Run&& a_run, std::chrono::duration<Rep, Period> a_timeout)
+	{
+		using State = MainThreadDispatchResultState<std::invoke_result_t<Run&>>;
+		auto state = std::make_shared<State>();
+		const auto deadline = std::chrono::steady_clock::now() + a_timeout;
+		try {
+			std::invoke(std::forward<Submit>(a_submit), [state, run = std::forward<Run>(a_run)]() mutable {
+				if (!state->TryBegin())
+					return;
+				try {
+					state->Complete(std::invoke(run));
+				} catch (...) {
+					state->Fail(std::current_exception());
+				}
+			});
+		} catch (...) {
+			if (state->CancelIfQueued())
+				throw MainThreadDispatchRejected();
+		}
+		if (state->WaitUntil(deadline) == State::Phase::queued && state->CancelIfQueued())
+			throw MainThreadDispatchTimeout();
+		// Admitted work must publish its exact result before the caller returns.
+		return state->WaitForCompletion();
+	}
 }

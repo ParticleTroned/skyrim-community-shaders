@@ -1,50 +1,26 @@
 #include "ScreenshotDevBenchBridge.h"
 
-#include "Api/MainThreadDispatchState.h"
 #include "Features/ScreenshotFeature.h"
 #include "Globals.h"
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Api/DevBenchMainThreadDispatch.h"
 #	include <DevBenchAPI.h>
 #	include <nlohmann/json.hpp>
 
 #	include <atomic>
-#	include <chrono>
 #	include <exception>
 #	include <functional>
-#	include <memory>
 
 namespace
 {
 	using json = nlohmann::json;
-	constexpr auto kMainThreadTimeout = std::chrono::milliseconds(5000);
 	std::atomic_bool g_installAttempted{ false };
 	std::atomic_bool g_registered{ false };
 
 	json RunOnMainThread(std::function<json()> a_run)
 	{
-		auto* tasks = SKSE::GetTaskInterface();
-		if (!tasks)
-			return { { "ok", false }, { "error", { { "code", "dispatcher_unavailable" }, { "message", "SKSE task interface unavailable" } } } };
-
-		using DispatchState = CSX::Api::MainThreadDispatchState<json>;
-		auto state = std::make_shared<DispatchState>();
-		try {
-			tasks->AddTask([state, run = std::move(a_run)]() mutable {
-				if (!state->TryBegin()) return;
-				try { state->Complete(run()); } catch (...) { state->Fail(std::current_exception()); }
-			});
-		} catch (...) {
-			return { { "ok", false }, { "error", { { "code", "dispatcher_failed" }, { "message", "SKSE task queue rejected the main-thread task" } } } };
-		}
-		const auto deadline = std::chrono::steady_clock::now() + kMainThreadTimeout;
-		if (state->WaitUntil(deadline) == DispatchState::Phase::queued && state->CancelIfQueued()) {
-			return { { "ok", false }, { "error", { { "code", "dispatcher_timeout" }, { "message", "main thread did not run within 5000ms" }, { "retryable", true } } } };
-		}
-		// Once admitted, wait for the exact result so failure can never precede mutation.
-		try { return state->WaitForCompletion(); }
-		catch (const std::exception& e) { return { { "ok", false }, { "error", { { "code", "dispatcher_failed" }, { "message", e.what() } } } }; }
-		catch (...) { return { { "ok", false }, { "error", { { "code", "dispatcher_failed" }, { "message", "unknown main-thread failure" } } } }; }
+		return CSX::Api::RunDevBenchMainThreadTask(SKSE::GetTaskInterface(), std::move(a_run), CSX::Api::DevBenchDispatchErrorFormat::screenshot);
 	}
 
 	void ToolHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write) noexcept

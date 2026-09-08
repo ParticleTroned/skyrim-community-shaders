@@ -2,19 +2,16 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
+#	include "Api/DevBenchMainThreadDispatch.h"
 #	include "Api/FeatureService.h"
-#	include "Api/MainThreadDispatchState.h"
-#	include "Api/RuntimeThreadAffinity.h"
 #	include "Api/ServiceFoundation.h"
 #	include "BuildProvenance.h"
 #	include "FeatureIssues.h"
 #	include <DevBenchAPI.h>
 #	include <nlohmann/json.hpp>
 #	include <atomic>
-#	include <chrono>
 #	include <exception>
 #	include <functional>
-#	include <memory>
 #	include <mutex>
 #	include <stdexcept>
 #	include <string>
@@ -23,7 +20,6 @@ namespace
 {
 	using json = nlohmann::json;
 	using namespace CSX::FeatureAPI;
-	constexpr auto kTimeout = std::chrono::milliseconds(5000);
 	std::atomic_bool g_registered{ false };
 
 	CSX::Api::ServiceFoundation& Foundation()
@@ -49,25 +45,7 @@ namespace
 
 	json OnMain(std::function<json()> run)
 	{
-		auto* tasks = SKSE::GetTaskInterface();
-		if (!tasks) return { { "error", "SKSE task interface unavailable" } };
-		using DispatchState = CSX::Api::MainThreadDispatchState<json>;
-		auto state = std::make_shared<DispatchState>();
-		try {
-			tasks->AddTask([state, run = std::move(run)]() mutable {
-				CSX::Api::EnterRuntimeMainThreadTask();
-				if (!state->TryBegin()) return;
-				try { state->Complete(run()); } catch (...) { state->Fail(std::current_exception()); }
-			});
-		} catch (...) {
-			return { { "error", "SKSE task queue rejected the main-thread task" } };
-		}
-		const auto deadline = std::chrono::steady_clock::now() + kTimeout;
-		if (state->WaitUntil(deadline) == DispatchState::Phase::queued && state->CancelIfQueued()) return { { "error", "main thread did not run within 5000ms" } };
-		// Once admitted, wait for the exact result so failure can never precede mutation.
-		try { return state->WaitForCompletion(); }
-		catch (const std::exception& e) { return { { "error", "main-thread task failed" }, { "detail", e.what() } }; }
-		catch (...) { return { { "error", "main-thread task failed" } }; }
+		return CSX::Api::RunDevBenchMainThreadTask(SKSE::GetTaskInterface(), std::move(run));
 	}
 
 	json SnapshotJson(const Snapshot001& v)

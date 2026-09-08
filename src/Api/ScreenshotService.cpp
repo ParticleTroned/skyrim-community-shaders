@@ -13,7 +13,6 @@
 
 #include <limits>
 #include <chrono>
-#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -36,29 +35,14 @@ namespace
 		auto* tasks = SKSE::GetTaskInterface();
 		if (!tasks)
 			return std::nullopt;
-		using DispatchState = CSX::Api::MainThreadDispatchState<nlohmann::json>;
-		auto state = std::make_shared<DispatchState>();
 		try {
-			tasks->AddTask([state, handle = std::move(handle)]() mutable {
-				CSX::Api::EnterRuntimeMainThreadTask();
-				if (!state->TryBegin())
-					return;
-				try {
-					state->Complete(handle());
-				} catch (...) {
-					state->Fail(std::current_exception());
-				}
-			});
-		} catch (...) {
-			return std::nullopt;
-		}
-		const auto deadline = std::chrono::steady_clock::now() + kMainThreadTimeout;
-		const auto phase = state->WaitUntil(deadline);
-		if (phase == DispatchState::Phase::queued && state->CancelIfQueued())
-			return std::nullopt;
-		// Once admission wins, a failure response cannot safely precede mutation.
-		try {
-			return state->WaitForCompletion();
+			return CSX::Api::DispatchMainThreadTask(
+				[tasks](auto a_task) { tasks->AddTask(std::move(a_task)); },
+				[handle = std::move(handle)]() mutable {
+					CSX::Api::EnterRuntimeMainThreadTask();
+					return handle();
+				},
+				kMainThreadTimeout);
 		} catch (...) {
 			return std::nullopt;
 		}

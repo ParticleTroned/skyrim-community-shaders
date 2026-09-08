@@ -2,7 +2,7 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
-#	include "Api/MainThreadDispatchState.h"
+#	include "Api/DevBenchMainThreadDispatch.h"
 #	include "BuildProvenance.h"
 #	include "Menu/PerformanceTuningRenderer.h"
 
@@ -10,19 +10,16 @@
 #	include <nlohmann/json.hpp>
 
 #	include <atomic>
-#	include <chrono>
 #	include <cstddef>
 #	include <cstdint>
 #	include <exception>
 #	include <functional>
-#	include <memory>
 #	include <stdexcept>
 #	include <string>
 
 namespace
 {
 	using json = nlohmann::json;
-	constexpr auto kMainThreadTimeout = std::chrono::milliseconds(5000);
 	constexpr std::size_t kDefaultTracePageSize = 128;
 	constexpr std::size_t kMaximumTracePageSize = 512;
 	std::atomic_bool g_installAttempted{ false };
@@ -30,29 +27,7 @@ namespace
 
 	json RunOnMainThread(std::function<json()> a_run)
 	{
-		auto* tasks = SKSE::GetTaskInterface();
-		if (!tasks)
-			return { { "error", "SKSE task interface unavailable" } };
-
-		using DispatchState = CSX::Api::MainThreadDispatchState<json>;
-		auto state = std::make_shared<DispatchState>();
-		try {
-			tasks->AddTask([state, run = std::move(a_run)]() mutable {
-				if (!state->TryBegin()) return;
-				try { state->Complete(run()); } catch (...) { state->Fail(std::current_exception()); }
-			});
-		} catch (...) {
-			return { { "error", "SKSE task queue rejected the main-thread task" } };
-		}
-
-		const auto deadline = std::chrono::steady_clock::now() + kMainThreadTimeout;
-		if (state->WaitUntil(deadline) == DispatchState::Phase::queued && state->CancelIfQueued()) {
-			return { { "error", "main thread did not run within 5000ms" } };
-		}
-		// Once admitted, wait for the exact result so failure can never precede mutation.
-		try { return state->WaitForCompletion(); }
-		catch (const std::exception& e) { return { { "error", "main-thread task failed" }, { "detail", e.what() } }; }
-		catch (...) { return { { "error", "main-thread task failed" } }; }
+		return CSX::Api::RunDevBenchMainThreadTask(SKSE::GetTaskInterface(), std::move(a_run));
 	}
 
 	json BuildResult(const json& a_args)

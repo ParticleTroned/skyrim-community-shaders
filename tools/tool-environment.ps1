@@ -124,6 +124,15 @@ function Resolve-CsxVsDevCmd {
         throw "CSX_VSDEVCMD does not point to VsDevCmd.bat: $env:CSX_VSDEVCMD"
     }
 
+    # Reinitializing another installation would mix its tools with inherited SDK state.
+    if ($env:VSINSTALLDIR) {
+        $candidate = Join-Path $env:VSINSTALLDIR "Common7\Tools\VsDevCmd.bat"
+        if ((Test-Path -LiteralPath $candidate -PathType Leaf) -and
+            (Test-Path -LiteralPath (Join-Path $env:VSINSTALLDIR "VC\Tools\MSVC") -PathType Container)) {
+            return [IO.Path]::GetFullPath($candidate)
+        }
+    }
+
     foreach ($installationPath in Get-CsxVisualStudioInstallationPaths -RequireMsvc) {
         $candidate = Join-Path $installationPath "Common7\Tools\VsDevCmd.bat"
         if (Test-Path -LiteralPath $candidate -PathType Leaf) {

@@ -85,9 +85,11 @@ SSH identity as the superproject.
 the launcher process. On Windows, the launcher also imports the x64 MSVC
 environment from the installed Visual Studio instance when it is not already
 active. This keeps Ninja builds independent of the shell used to launch them.
-Set `CSX_VSDEVCMD` to select a specific `VsDevCmd.bat`. `tools/dev-doctor.ps1`
-validates both `vcpkg.exe` and the toolchain file instead of treating CMake
-alone as a complete build toolchain.
+Set `CSX_VSDEVCMD` to select a specific `VsDevCmd.bat`. Without that override,
+a valid `VSINSTALLDIR` takes precedence over installation discovery so that
+repairing an incomplete MSVC environment retains the active toolchain and
+SDK state. `tools/dev-doctor.ps1` validates both `vcpkg.exe` and the toolchain
+file instead of treating CMake alone as a complete build toolchain.
 
 The launchers keep vcpkg downloads, registries, and binary archives in the
 shared `csx-tools/vcpkg` directory under Git's common directory. This avoids

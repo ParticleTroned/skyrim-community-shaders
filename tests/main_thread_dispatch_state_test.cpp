@@ -8,7 +8,7 @@
 #include <string_view>
 #include <thread>
 
-using State = CSX::Api::MainThreadDispatchResultState<int>;
+using State = CSX::Api::MainThreadDispatchState<int>;
 using namespace std::chrono_literals;
 
 int main()

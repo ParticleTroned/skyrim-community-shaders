@@ -15,7 +15,7 @@ namespace CSX::Api
 {
 	/** Admission state shared by the caller and its queued runtime-main task. */
 	template <class Result>
-	class MainThreadDispatchResultState
+	class MainThreadDispatchState
 	{
 	public:
 		enum class Phase
@@ -110,7 +110,7 @@ namespace CSX::Api
 	template <class Submit, class Run, class Rep, class Period>
 	auto DispatchMainThreadTask(Submit&& a_submit, Run&& a_run, std::chrono::duration<Rep, Period> a_timeout)
 	{
-		using State = MainThreadDispatchResultState<std::invoke_result_t<Run&>>;
+		using State = MainThreadDispatchState<std::invoke_result_t<Run&>>;
 		auto state = std::make_shared<State>();
 		const auto deadline = std::chrono::steady_clock::now() + a_timeout;
 		try {

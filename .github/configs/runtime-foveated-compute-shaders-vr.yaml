@@ -36,6 +36,9 @@ shaders:
                   - entry: Upscaling:Compute:EncodeTexturesDLSS
                     defines:
                         - DLSS
+                  - entry: Upscaling:Compute:EncodeTexturesFSR
+                    defines:
+                        - FSR
                   - entry: Upscaling:Compute:EncodeTexturesFSRDepthOutput
                     defines:
                         - FSR

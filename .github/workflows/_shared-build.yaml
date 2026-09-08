@@ -157,7 +157,7 @@ jobs:
                 config:
                     - name: "Flatrim"
                       file: ".github/configs/shader-validation.yaml"
-                      runtime_file: ""
+                      runtime_file: ".github/configs/runtime-upscaling-compute-shaders.yaml"
                     - name: "VR"
                       file: ".github/configs/shader-validation-vr.yaml"
                       runtime_file: ".github/configs/runtime-foveated-compute-shaders-vr.yaml"

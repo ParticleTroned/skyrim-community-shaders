@@ -715,15 +715,19 @@ foreach(_upscaled_center_composite_contract IN ITEMS
 endforeach()
 
 foreach(_final_ldr_float_contract IN ITEMS
-    [[const bool useSubmitNeuralFloatBridge = a_role == NeuralStereoRouteRole::Submit]]
     [[args.insertionPoint = NeuralRendering::InsertionPoint::FinalLdrPreUi]]
     [[("Upscale_NeuralFinalLdr_ColorIn_" + suffix).c_str(), targetUavDescs[eye].Format]]
+    [[PrepareSubmitNeuralFloatResources( eye, target.resource, rect.outputWidth, rect.outputHeight, directCommit, false)]]
     [[DispatchSubmitStageColorRegion( neuralFinalLdrColorIn[eye]->srv.get(), submitNeuralFloatColorIn[eye]->uav.get()]]
-    [[args.colorInput = useSubmitNeuralFloatBridge ? submitNeuralFloatColorIn[eye]->resource.get() : neuralFinalLdrColorIn[eye]->resource.get()]]
+    [[args.colorInput = submitNeuralFloatColorIn[eye]->resource.get()]]
+    [[args.colorOutput = GetSubmitNeuralFloatEvaluationOutput(eye, directCommit)]]
     [[CommitSubmitNeuralFloatOutput( eye, directCommit, neuralArgs[eye].computeSubrect, neuralArgs[eye].computeRegions)]]
-    [[if (!CopyNeuralOutputRegions(]]
-    [[rect.outputWidth, rect.outputHeight, computeSubrect, neuralArgs[eye].computeRegions)]]
-    [[useSubmitNeuralFloatBridge ? submitNeuralFloatColorOut[eye]->srv.get() : neuralFinalLdrColorOut[eye]->srv.get()]]
+    [[DispatchFoveatedBlendPass( submitNeuralFloatColorOut[eye]->srv.get()]]
+    [[uint32_t finalLdrColorMode = 1u]]
+    [[switch (targetUavDescs[0].Format)]]
+    [[case DXGI_FORMAT_R8G8B8A8_UNORM:]]
+    [[finalLdrColorMode = 2u]]
+    [[characterMaskOwners[eye].Get(), finalLdrColorMode)]]
 )
     string(FIND
         "${_final_ldr_section}"
@@ -732,8 +736,30 @@ foreach(_final_ldr_float_contract IN ITEMS
     )
     if(_final_ldr_float_position EQUAL -1)
         message(FATAL_ERROR
-            "Final-LDR submit float contract is missing: ${_final_ldr_float_contract}"
+            "Shared Main/Submit Final-LDR float contract is missing: ${_final_ldr_float_contract}"
         )
+    endif()
+endforeach()
+foreach(_obsolete_final_ldr_contract IN ITEMS
+    [[useSubmitNeuralFloatBridge]]
+    [[neuralFinalLdrColorOut[]]
+    [[neuralFinalLdrStagedOut[]]
+)
+    string(FIND "${_final_ldr_section}" "${_obsolete_final_ldr_contract}" _obsolete_final_ldr_position)
+    if(NOT _obsolete_final_ldr_position EQUAL -1)
+        message(FATAL_ERROR
+            "Final-LDR must not retain a role-dependent presentation-format NR path: ${_obsolete_final_ldr_contract}"
+        )
+    endif()
+endforeach()
+foreach(_final_ldr_color_contract IN ITEMS
+    [[uint32_t finalLdrColorMode = 0]]
+    [[cbData.finalLdrColorMode = finalLdrColorMode]]
+    [[offsetof(FoveatedCenterBlendCB, finalLdrColorMode) == 68]]
+)
+    string(FIND "${_source_contract_text}" "${_final_ldr_color_contract}" _final_ldr_color_position)
+    if(_final_ldr_color_position EQUAL -1)
+        message(FATAL_ERROR "Final-LDR blend-mode ABI/default is missing: ${_final_ldr_color_contract}")
     endif()
 endforeach()
 

@@ -176,6 +176,22 @@ center area. It never falls back to the other insertion point: an unavailable
 or failed late transaction retains the normal DLSS result for both eyes so an
 automated A/B test keeps its requested identity.
 
+Both Main and Submit Final LDR routes copy the requested region into a
+target-format baseline, convert its color to `R11G11B10_FLOAT`, and evaluate
+Feature 18 using the same floating-point color input/output contract. The
+target-format baseline remains available for character compositing and exact
+rollback. This also keeps finite model highlights available until the late
+composite performs the conversion appropriate to the presentation target.
+
+The Final LDR composite preserves the destination alpha and substitutes the
+original destination RGB when the sampled model RGB contains a non-finite
+component. For a normalized unsigned presentation target, it also clamps model
+RGB to `0..1` before character selection or foveated feathering. Clamping only
+the final texture store would let an out-of-range model highlight increase the
+feathered result first. Floating-point presentation targets retain finite model
+RGB outside `0..1`. This conversion is local to Final LDR; the ordinary center
+blend and Feature 18's raw output retain their existing behavior.
+
 Batched evaluation records both Feature 18 slots into one D3D12 command list
 and fence transaction; per-eye evaluation uses one transaction per slot. Staged
 output preserves the original intermediate `NeuralOut` pair before resolving it
@@ -213,6 +229,14 @@ means the complete renderer arguments exist for that eye; attempted means the
 renderer actually entered NVIDIA Feature 18 evaluation. A prepared eye with no
 attempt reached a validation, trust, initialization, or latched-failure gate,
 which can be diagnosed from the renderer and runtime failure stages.
+Final LDR failures also write a `[DLSSNR] Final-LDR failed` log entry once per
+route and stage for the process lifetime. It identifies the eye, evaluation and
+source frames, target/UAV formats and dimensions, and typed-UAV query result.
+Stages distinguish late preflight, shader/target validation, resource setup,
+input conversion, evaluation, output commit, and blending. The Main route also
+reports an unavailable or mismatched framebuffer target. These logs explain
+failures before the renderer is called, when its last failure stage may still
+be `none`; ordinary route ineligibility and no-character bypasses remain quiet.
 Performance telemetry labels D3D11 preparation and output commit as CPU enqueue
 time, while Feature 18 duration uses D3D12 GPU timestamps and separately reports
 readback failures, command submissions, and bounded backpressure waits. API v7
@@ -361,6 +385,16 @@ Validate in this order:
    scene processing and sharpening but before UI for `final_ldr_pre_ui`.
 5. Exercise camera cuts, loads, menus, render-scale transitions, quality/preset
    changes, enable/disable, and backend reset.
+
+For Final LDR comparisons, first disable character NR and hold the scene,
+camera, FOV mode, center scale, and Feature 18 tuning fixed. Check the Main route
+with presentation Render Scale disabled, then the Submit route with it enabled;
+use each route's fresh snapshot and slot evidence rather than combining their
+cumulative counters. FOV foveation remains an independent admission condition.
+Exercise direct and staged output with both per-eye and batched submission.
+Inspect fractional feather pixels around bright model output, target alpha,
+and both eyes' late-blend counts. A successful model evaluation alone does not
+prove that its result reached the final target.
 
 Feature 18 and its `DLSSNR.*` parameter names are private, version-specific
 contracts. A successful build proves only API compatibility; a controlled VR

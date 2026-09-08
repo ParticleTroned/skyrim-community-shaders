@@ -149,9 +149,9 @@ endforeach()
 string(REGEX MATCHALL [[CopyNeuralOutputRegions\(]]
     _copy_helper_occurrences "${_upscaling_source}")
 list(LENGTH _copy_helper_occurrences _copy_helper_occurrence_count)
-if(NOT _copy_helper_occurrence_count EQUAL 4)
+if(NOT _copy_helper_occurrence_count EQUAL 3)
     message(FATAL_ERROR
-        "Expected one exact-region copy helper plus its three staged-output callers; found ${_copy_helper_occurrence_count} occurrences"
+        "Expected one exact-region copy helper plus the ordinary-center and shared-float staged-output callers; found ${_copy_helper_occurrence_count} occurrences"
     )
 endif()
 

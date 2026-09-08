@@ -76,7 +76,8 @@ namespace
 		float centerHorizontalScale = 2.0f;
 		std::uint32_t targetOffsetX = 0;
 		std::uint32_t characterSelectionMode = 1;
-		std::uint32_t padding[3]{};
+		std::uint32_t finalLdrColorMode = 0;
+		std::uint32_t padding[2]{};
 		float characterMaskBounds[4]{};
 	};
 	static_assert(sizeof(BlendConstants) == 96);
@@ -187,6 +188,11 @@ namespace
 			D3D11_SHADER_BUFFER_DESC blendDesc{};
 			Check(blendBuffer->GetDesc(&blendDesc), "Reflect blend constants");
 			Require(blendDesc.Size == sizeof(BlendConstants), "BlendConstants shader ABI size changed");
+			D3D11_SHADER_VARIABLE_DESC colorModeDesc{};
+			Check(blendBuffer->GetVariableByName("FinalLdrColorMode")->GetDesc(&colorModeDesc),
+				"Reflect Final LDR color mode");
+			Require(colorModeDesc.StartOffset == offsetof(BlendConstants, finalLdrColorMode),
+				"BlendConstants Final LDR color-mode offset differs");
 			D3D11_SHADER_VARIABLE_DESC boundsDesc{};
 			Check(blendBuffer->GetVariableByName("CharacterMaskBounds")->GetDesc(&boundsDesc),
 				"Reflect character mask bounds");
@@ -306,6 +312,59 @@ namespace
 			}
 		}
 
+		std::vector<Color> Blend(const BlendConstants& constants,
+			std::uint32_t width, std::uint32_t height,
+			const std::vector<Color>& neuralPixels, const std::vector<Color>& baselinePixels,
+			const std::vector<std::uint8_t>& maskPixels, const std::vector<Color>& initialPixels,
+			bool unormOutput = false)
+		{
+			auto nr = MakeTexture(width, height, DXGI_FORMAT_R32G32B32A32_FLOAT,
+				D3D11_BIND_SHADER_RESOURCE, neuralPixels);
+			auto base = MakeTexture(width, height, DXGI_FORMAT_R32G32B32A32_FLOAT,
+				D3D11_BIND_SHADER_RESOURCE, baselinePixels);
+			auto mask = MakeTexture(width, height, DXGI_FORMAT_R8_UNORM,
+				D3D11_BIND_SHADER_RESOURCE, maskPixels);
+			Texture output;
+			if (unormOutput) {
+				std::vector<std::array<std::uint8_t, 4>> packed(initialPixels.size());
+				for (std::size_t pixel = 0; pixel < packed.size(); ++pixel) {
+					for (std::size_t channel = 0; channel < 4; ++channel)
+						packed[pixel][channel] = static_cast<std::uint8_t>(
+							std::lround(std::clamp(initialPixels[pixel][channel], 0.0f, 1.0f) * 255.0f));
+				}
+				output = MakeTexture(width * 2, height, DXGI_FORMAT_R8G8B8A8_UNORM,
+					D3D11_BIND_UNORDERED_ACCESS, packed);
+			} else {
+				output = MakeTexture(width * 2, height, DXGI_FORMAT_R32G32B32A32_FLOAT,
+					D3D11_BIND_UNORDERED_ACCESS, initialPixels);
+			}
+			auto cb = Constants(constants);
+			D3D11_SAMPLER_DESC samplerDesc{};
+			samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+			samplerDesc.AddressU = samplerDesc.AddressV = samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+			samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
+			ComPtr<ID3D11SamplerState> sampler;
+			Check(device_->CreateSamplerState(&samplerDesc, &sampler), "Create blend sampler");
+			std::array<ID3D11ShaderResourceView*, 3> srvs{ nr.srv.Get(), base.srv.Get(), mask.srv.Get() };
+			context_->CSSetShader(blendShader_.Get(), nullptr, 0);
+			context_->CSSetConstantBuffers(0, 1, cb.GetAddressOf());
+			context_->CSSetSamplers(0, 1, sampler.GetAddressOf());
+			context_->CSSetShaderResources(0, 3, srvs.data());
+			context_->CSSetUnorderedAccessViews(0, 1, output.uav.GetAddressOf(), nullptr);
+			context_->Dispatch((static_cast<UINT>(constants.dispatchDim[0]) + 7u) / 8u,
+				(static_cast<UINT>(constants.dispatchDim[1]) + 7u) / 8u, 1);
+			context_->ClearState();
+			if (!unormOutput)
+				return Read<Color>(output.resource.Get());
+			const auto packed = Read<std::array<std::uint8_t, 4>>(output.resource.Get());
+			std::vector<Color> result(packed.size());
+			for (std::size_t pixel = 0; pixel < packed.size(); ++pixel) {
+				for (std::size_t channel = 0; channel < 4; ++channel)
+					result[pixel][channel] = packed[pixel][channel] / 255.0f;
+			}
+			return result;
+		}
+
 		void CompositeRespectsCurrentMaskBounds()
 		{
 			constexpr std::uint32_t width = 8, height = 4;
@@ -314,30 +373,9 @@ namespace
 			const Color untouched{ -2.0f, -2.0f, -2.0f, -2.0f };
 			const auto run = [&](const BlendConstants& constants,
 				const std::vector<Color>& neuralPixels, const std::vector<std::uint8_t>& maskPixels) {
-				auto nr = MakeTexture(width, height, DXGI_FORMAT_R32G32B32A32_FLOAT,
-					D3D11_BIND_SHADER_RESOURCE, neuralPixels);
-				auto base = MakeTexture(width, height, DXGI_FORMAT_R32G32B32A32_FLOAT,
-					D3D11_BIND_SHADER_RESOURCE, std::vector<Color>(width * height, baseline));
-				auto mask = MakeTexture(width, height, DXGI_FORMAT_R8_UNORM,
-					D3D11_BIND_SHADER_RESOURCE, maskPixels);
-				auto output = MakeTexture(width * 2, height, DXGI_FORMAT_R32G32B32A32_FLOAT,
-					D3D11_BIND_UNORDERED_ACCESS, std::vector<Color>(width * 2 * height, untouched));
-				auto cb = Constants(constants);
-				D3D11_SAMPLER_DESC samplerDesc{};
-				samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-				samplerDesc.AddressU = samplerDesc.AddressV = samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-				samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
-				ComPtr<ID3D11SamplerState> sampler;
-				Check(device_->CreateSamplerState(&samplerDesc, &sampler), "Create blend sampler");
-				std::array<ID3D11ShaderResourceView*, 3> srvs{ nr.srv.Get(), base.srv.Get(), mask.srv.Get() };
-				context_->CSSetShader(blendShader_.Get(), nullptr, 0);
-				context_->CSSetConstantBuffers(0, 1, cb.GetAddressOf());
-				context_->CSSetSamplers(0, 1, sampler.GetAddressOf());
-				context_->CSSetShaderResources(0, 3, srvs.data());
-				context_->CSSetUnorderedAccessViews(0, 1, output.uav.GetAddressOf(), nullptr);
-				context_->Dispatch(1, 1, 1);
-				context_->ClearState();
-				return Read<Color>(output.resource.Get());
+				return Blend(constants, width, height, neuralPixels,
+					std::vector<Color>(width * height, baseline), maskPixels,
+					std::vector<Color>(width * 2 * height, untouched));
 			};
 			BlendConstants constants{};
 			constants.invOutputDim[0] = constants.invSourceDim[0] = 1.0f / width;
@@ -526,6 +564,113 @@ namespace
 		ComPtr<ID3D11ComputeShader> maskShader_, captureShader_, blendShader_;
 	};
 
+	void FinalLdrColorModes(Harness& gpu)
+	{
+		constexpr std::uint32_t width = 8, height = 8;
+		const auto nan = std::numeric_limits<float>::quiet_NaN();
+		const auto infinity = std::numeric_limits<float>::infinity();
+		std::vector<Color> original(width * 2 * height), baseline(width * height);
+		std::vector<std::uint8_t> mask(width * height);
+		for (std::uint32_t y = 0; y < height; ++y) {
+			for (std::uint32_t x = 0; x < width * 2; ++x)
+				original[y * width * 2 + x] = Color{
+					(40.0f + x) / 255.0f, (70.0f + y) / 255.0f, 100.0f / 255.0f, (50.0f + x + y) / 255.0f };
+			for (std::uint32_t x = 0; x < width; ++x) {
+				baseline[y * width + x] = Color{ 0.1f + x * 0.01f, 0.2f + y * 0.01f, 0.3f, 0.8f };
+				mask[y * width + x] = std::array<std::uint8_t, 4>{ 0, 64, 128, 255 }[x % 4];
+			}
+		}
+		std::size_t checkedCases = 0, featherPixels = 0, zeroWeightPixels = 0;
+		// Mode 2 also runs against FLOAT: hardware UNORM saturation cannot hide
+		// a shader regression that clamps after, rather than before, the lerps.
+		for (const auto [mode, unorm] : std::array{
+				 std::pair{ 0u, false }, std::pair{ 1u, false },
+				 std::pair{ 2u, false }, std::pair{ 2u, true } }) {
+			for (std::uint32_t eye = 0; eye < 2; ++eye) {
+				for (std::uint32_t character = 0; character < 2; ++character) {
+					for (std::uint32_t cropped = 0; cropped < 2; ++cropped) {
+						// Non-finite RGB falls back to the original target, not the
+						// character baseline. Non-finite model alpha is always ignored
+						// by the late modes when its RGB is otherwise finite.
+						for (std::uint32_t poison = 0; poison < (mode ? 4u : 1u); ++poison) {
+							std::vector<Color> neural(width * height);
+							for (std::uint32_t y = 0; y < height; ++y) {
+								for (std::uint32_t x = 0; x < width; ++x) {
+									auto& color = neural[y * width + x];
+									color = Color{ 4.0f + x * 0.1f, -2.0f - y * 0.1f,
+										0.1f + x * 0.05f + y * 0.01f, mode ? nan : 0.9f };
+									if (poison)
+										color[poison - 1] = std::array{ nan, infinity, -infinity }[poison - 1];
+								}
+							}
+							BlendConstants constants{};
+							constants.invOutputDim[0] = constants.invSourceDim[0] = 1.0f / width;
+							constants.invOutputDim[1] = constants.invSourceDim[1] = 1.0f / height;
+							constants.centerScale = 0.5f;
+							constants.centerHorizontalScale = 1.0f;
+							constants.centerFeather = 0.125f;
+							constants.targetOffsetX = eye * width;
+							constants.characterSelectionMode = character;
+							constants.finalLdrColorMode = mode;
+							constants.characterMaskBounds[2] = constants.characterMaskBounds[3] = 1.0f;
+							constants.outputOffset[0] = cropped ? 2.0f : 0.0f;
+							constants.outputOffset[1] = cropped ? 1.0f : 0.0f;
+							constants.sourceOffset[0] = cropped ? 1.0f : 0.0f;
+							constants.sourceOffset[1] = cropped ? 2.0f : 0.0f;
+							constants.dispatchDim[0] = constants.dispatchDim[1] = cropped ? 4.0f : 8.0f;
+							const auto actual = gpu.Blend(constants, width, height, neural,
+								baseline, mask, original, unorm);
+							for (std::uint32_t y = 0; y < height; ++y) {
+								for (std::uint32_t x = 0; x < width * 2; ++x) {
+									const auto index = y * width * 2 + x;
+									Color expected = original[index];
+									const int localX = static_cast<int>(x) - static_cast<int>(constants.targetOffsetX + constants.outputOffset[0]);
+									const int localY = static_cast<int>(y) - static_cast<int>(constants.outputOffset[1]);
+									if (localX >= 0 && localY >= 0 && localX < constants.dispatchDim[0] && localY < constants.dispatchDim[1]) {
+										const float dx = std::abs(((x - constants.targetOffsetX + 0.5f) / width - 0.5f) / 0.25f);
+										const float dy = std::abs(((y + 0.5f) / height - 0.5f) / 0.25f);
+										const float distance = std::sqrt(std::sqrt(dx * dx * dx * dx + dy * dy * dy * dy));
+										const float t = std::clamp((distance - 1.0f) / 0.5f, 0.0f, 1.0f);
+										const float fovWeight = 1.0f - t * t * (3.0f - 2.0f * t);
+										zeroWeightPixels += fovWeight == 0.0f;
+										featherPixels += fovWeight > 0.0f && fovWeight < 1.0f;
+										if (fovWeight > 0.0f) {
+											const auto sourceIndex = (localY + static_cast<std::uint32_t>(constants.sourceOffset[1])) * width +
+												localX + static_cast<std::uint32_t>(constants.sourceOffset[0]);
+											Color selected = poison ? original[index] : neural[sourceIndex];
+											if (mode == 2) {
+												for (std::size_t channel = 0; channel < 3; ++channel)
+													selected[channel] = std::clamp(selected[channel], 0.0f, 1.0f);
+											}
+											const float strength = character ? mask[sourceIndex] / 255.0f : 1.0f;
+											for (std::size_t channel = 0; channel < (mode ? 3u : 4u); ++channel) {
+												const float center = character ? baseline[sourceIndex][channel] +
+													strength * (selected[channel] - baseline[sourceIndex][channel]) : selected[channel];
+												expected[channel] += fovWeight * (center - expected[channel]);
+											}
+										}
+									}
+									for (std::size_t channel = 0; channel < 4; ++channel) {
+										Require(std::isfinite(actual[index][channel]) &&
+											std::abs(actual[index][channel] - expected[channel]) < (unorm ? 1.1f / 255.0f : 0.0002f),
+											"Final LDR mismatch: mode=" + std::to_string(mode) + " unorm=" + std::to_string(unorm) +
+											" eye=" + std::to_string(eye) + " character=" + std::to_string(character) +
+											" cropped=" + std::to_string(cropped) + " poison=" + std::to_string(poison) +
+											" x=" + std::to_string(x) + " y=" + std::to_string(y) + " channel=" + std::to_string(channel));
+									}
+								}
+							}
+							++checkedCases;
+						}
+					}
+				}
+			}
+		}
+		Require(checkedCases == 104 && featherPixels != 0 && zeroWeightPixels != 0,
+			"Final LDR case matrix omitted required coverage");
+		std::cout << "Production Final LDR blend HLSL passed " << checkedCases << " WARP cases\n";
+	}
+
 	void ExpectByte(std::uint8_t actual, int expected, const char* message)
 	{
 		Require(std::abs(static_cast<int>(actual) - expected) <= 1,
@@ -676,8 +821,13 @@ namespace
 int wmain(int argc, wchar_t** argv)
 {
 	try {
-		Require(argc == 2, "Expected production shader-directory argument");
+		Require(argc == 2 || (argc == 3 && std::wstring(argv[2]) == L"--final-ldr-only"),
+			"Expected production shader directory and optional --final-ldr-only");
 		Harness gpu(argv[1]);
+		if (argc == 3) {
+			FinalLdrColorModes(gpu);
+			return 0;
+		}
 		gpu.CapturePreservesOutsideAndBothChannels();
 		gpu.CompositeRespectsCurrentMaskBounds();
 		SelectionAndCoverage(gpu);

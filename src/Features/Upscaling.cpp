@@ -15590,7 +15590,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 								!finalLdr &&
 								UsesCharacterVisualIsolation(settings);
 							const auto& output = finalLdr ?
-							                         neuralFinalLdrColorOut[eye] :
+							                         submitNeuralFloatColorOut[eye] :
 							                         (stagedIsolatedCenter ?
 															 foveatedCenterNeuralOut[eye] :
 															 foveatedCenterColorOut[eye]);
@@ -26072,8 +26072,6 @@ void Upscaling::AbandonFoveatedResourcesUnsafe()
 		(void)foveatedCenterColorOut[eye].release();
 		(void)foveatedCenterNeuralOut[eye].release();
 		(void)neuralFinalLdrColorIn[eye].release();
-		(void)neuralFinalLdrColorOut[eye].release();
-		(void)neuralFinalLdrStagedOut[eye].release();
 		(void)submitNeuralFloatColorIn[eye].release();
 		(void)submitNeuralFloatColorOut[eye].release();
 		(void)submitNeuralFloatStagedOut[eye].release();
@@ -26120,8 +26118,6 @@ void Upscaling::DestroyFoveatedResources()
 		foveatedCenterColorOut[i].reset();
 		foveatedCenterNeuralOut[i].reset();
 		neuralFinalLdrColorIn[i].reset();
-		neuralFinalLdrColorOut[i].reset();
-		neuralFinalLdrStagedOut[i].reset();
 		submitNeuralFloatColorIn[i].reset();
 		submitNeuralFloatColorOut[i].reset();
 		submitNeuralFloatStagedOut[i].reset();
@@ -26417,7 +26413,7 @@ void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorS
 	context->CSSetShader(nullptr, nullptr, 0);
 }
 
-bool Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t outputWidthPerEye, uint32_t outputHeight, const FoveatedDispatchRect& rect, const FoveatedRegionPlan::Rect& visibleOutput, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t targetOffsetX, ID3D11ShaderResourceView* baselineCenterSRV, ID3D11ShaderResourceView* characterMaskSRV)
+bool Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t outputWidthPerEye, uint32_t outputHeight, const FoveatedDispatchRect& rect, const FoveatedRegionPlan::Rect& visibleOutput, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t targetOffsetX, ID3D11ShaderResourceView* baselineCenterSRV, ID3D11ShaderResourceView* characterMaskSRV, uint32_t finalLdrColorMode)
 {
 	if (!centerSRV || !outputUAV || rect.outputWidth == 0 || rect.outputHeight == 0 || !foveatedCenterBlendCB)
 		return false;
@@ -26465,6 +26461,7 @@ bool Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, I
 	cbData.centerHorizontalScale = ClampFoveatedCenterHorizontalScale(centerHorizontalScale);
 	cbData.targetOffsetX = targetOffsetX;
 	cbData.characterSelectionMode = characterMaskSRV ? 1u : 0u;
+	cbData.finalLdrColorMode = finalLdrColorMode;
 	if (characterMaskSRV) {
 		const auto support = NeuralRendering::CharacterRendering::Instance()
 			.GetMaskSupportRect(characterMaskSRV, rect.outputWidth, rect.outputHeight);
@@ -27619,7 +27616,39 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 		IsNeuralRenderingInsertionTransitionBlocked() ||
 		!settings.neuralRenderingEnabled ||
 		settings.frameGenerationMode != 0 || IsFrameGenerationDx12PathActive() ||
-		!TryClaimNeuralRenderingRoute(a_role) || !a_generation ||
+		!TryClaimNeuralRenderingRoute(a_role)) {
+		return false;
+	}
+	auto* context = globals::d3d::context;
+	std::array<D3D11_TEXTURE2D_DESC, 2> targetDescs{};
+	std::array<D3D11_UNORDERED_ACCESS_VIEW_DESC, 2> targetUavDescs{};
+	D3D11_FEATURE_DATA_FORMAT_SUPPORT2 formatSupport{};
+	HRESULT formatSupportResult = S_OK;
+	enum class LateStage : uint32_t { Preflight, Shader, Target, Formats, TypedUav, Resources, InputConversion, Evaluation, OutputCommit, Blend };
+	constexpr std::array stageNames{ "preflight", "shader", "target_contract", "eye_formats", "typed_uav", "resources", "input_conversion", "evaluation", "output_commit", "blend" };
+	LateStage lateStage = LateStage::Preflight;
+	uint32_t lateEye = 2u;
+	bool lateSucceeded = false;
+	auto reportFailure = ScopeExit([&]() noexcept {
+		if (lateSucceeded || a_result.bypassedNoCharacters)
+			return;
+		static std::array<std::atomic_uint32_t, 2> reported{};
+		const uint32_t role = a_role == NeuralStereoRouteRole::Main ? 0u : 1u;
+		const uint32_t stage = static_cast<uint32_t>(lateStage);
+		if ((reported[role].fetch_or(1u << stage, std::memory_order_relaxed) & (1u << stage)) != 0)
+			return;
+		try {
+			logger::warn(
+				"[DLSSNR] Final-LDR failed role={} stage={} eye={} frame={} sourceFrame={} expected={}x{} targetFormats={}/{} uavFormats={}/{} targetDimensions={}x{}/{}x{} typedHRESULT=0x{:08X} typedSupport=0x{:X}; preserving normal DLSS",
+				role == 0u ? "main" : "submit", stageNames[stage], lateEye < 2u ? (lateEye == 0u ? "left" : "right") : "pair",
+				globals::state->frameCount, a_neuralSourceFrame, a_outputWidthPerEye, a_outputHeight,
+				static_cast<uint32_t>(targetDescs[0].Format), static_cast<uint32_t>(targetDescs[1].Format),
+				static_cast<uint32_t>(targetUavDescs[0].Format), static_cast<uint32_t>(targetUavDescs[1].Format),
+				targetDescs[0].Width, targetDescs[0].Height, targetDescs[1].Width, targetDescs[1].Height,
+				static_cast<uint32_t>(formatSupportResult), formatSupport.OutFormatSupport2);
+		} catch (...) {}
+	});
+	if (!a_generation ||
 		!a_inputWidthPerEye || !a_inputHeight || !a_outputWidthPerEye ||
 		!a_outputHeight || !foveatedRectCache.plan.IsValid() ||
 		foveatedRectCache.inputWidthPerEye != a_inputWidthPerEye ||
@@ -27630,6 +27659,7 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 		!globals::deferred->linearSampler) {
 		return false;
 	}
+	lateStage = LateStage::Shader;
 	try {
 		if (!GetFoveatedCenterBlendCS())
 			return false;
@@ -27648,10 +27678,9 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 		return false;
 	}
 
-	auto* context = globals::d3d::context;
-	std::array<D3D11_TEXTURE2D_DESC, 2> targetDescs{};
-	std::array<D3D11_UNORDERED_ACCESS_VIEW_DESC, 2> targetUavDescs{};
+	lateStage = LateStage::Target;
 	for (uint32_t eye = 0; eye < a_targets.size(); ++eye) {
+		lateEye = eye;
 		const auto& target = a_targets[eye];
 		const auto& rect = foveatedRectCache.rects[eye];
 		winrt::com_ptr<ID3D11Resource> targetUavResource;
@@ -27691,18 +27720,34 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 			return false;
 		}
 	}
+	lateStage = LateStage::Formats;
+	lateEye = 2u;
 	if (targetDescs[0].Format != targetDescs[1].Format ||
 		targetUavDescs[0].Format != targetUavDescs[1].Format) {
 		return false;
 	}
-	D3D11_FEATURE_DATA_FORMAT_SUPPORT2 formatSupport{};
+	// Bound the model to the destination's representable range before feathering,
+	// not only at the UAV store. Float targets retain their original range.
+	uint32_t finalLdrColorMode = 1u;
+	switch (targetUavDescs[0].Format) {
+	case DXGI_FORMAT_R8G8B8A8_UNORM:
+	case DXGI_FORMAT_B8G8R8A8_UNORM:
+	case DXGI_FORMAT_B8G8R8X8_UNORM:
+	case DXGI_FORMAT_R10G10B10A2_UNORM:
+	case DXGI_FORMAT_R16G16B16A16_UNORM:
+		finalLdrColorMode = 2u;
+		break;
+	default:
+		break;
+	}
+	lateStage = LateStage::TypedUav;
 	formatSupport.InFormat = targetUavDescs[0].Format;
 	constexpr UINT requiredUavFormatSupport =
 		D3D11_FORMAT_SUPPORT2_UAV_TYPED_LOAD |
 		D3D11_FORMAT_SUPPORT2_UAV_TYPED_STORE;
-	if (FAILED(globals::d3d::device->CheckFeatureSupport(
-			D3D11_FEATURE_FORMAT_SUPPORT2, &formatSupport,
-			sizeof(formatSupport))) ||
+	formatSupportResult = globals::d3d::device->CheckFeatureSupport(
+		D3D11_FEATURE_FORMAT_SUPPORT2, &formatSupport, sizeof(formatSupport));
+	if (FAILED(formatSupportResult) ||
 		(formatSupport.OutFormatSupport2 & requiredUavFormatSupport) !=
 			requiredUavFormatSupport) {
 		return false;
@@ -27799,6 +27844,7 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 		a_result.committedEyeMask = 0;
 	};
 
+	lateStage = LateStage::Resources;
 	try {
 		CS_PROFILE_SCOPE("Upscaling::NeuralFinalLdrPreUi");
 		std::array<NeuralCenterDispatchResult, 2> neuralResults{};
@@ -27810,9 +27856,10 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 		const bool directCommit = settings.neuralRenderingDirectCommit;
 		const bool isolateCharacterOutput =
 			UsesCharacterVisualIsolation(settings);
-		const bool useSubmitNeuralFloatBridge =
-			a_role == NeuralStereoRouteRole::Submit;
+		// Both late routes use the same Feature 18 float contract. Keep a
+		// target-format copy only as the exact composite/rollback baseline.
 		for (uint32_t eye = 0; eye < a_targets.size(); ++eye) {
+			lateEye = eye;
 			const auto& target = a_targets[eye];
 			const auto& rect = foveatedRectCache.rects[eye];
 			const auto& eyePlan = foveatedRectCache.plan.eyes[eye];
@@ -27820,25 +27867,12 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 			if (!eyePlan.IsValid() ||
 				!EnsureFoveatedTexture(
 					neuralFinalLdrColorIn[eye], target.resource,
-					rect.outputWidth, rect.outputHeight, false,
-					isolateCharacterOutput || useSubmitNeuralFloatBridge,
-					false, false,
+					rect.outputWidth, rect.outputHeight, false, true, false, false,
 					("Upscale_NeuralFinalLdr_ColorIn_" + suffix).c_str(),
 					targetUavDescs[eye].Format) ||
-				(!useSubmitNeuralFloatBridge && !EnsureFoveatedTexture(
-													neuralFinalLdrColorOut[eye], target.resource,
-													rect.outputWidth, rect.outputHeight, false, true, false, false,
-													("Upscale_NeuralFinalLdr_ColorOut_" + suffix).c_str(),
-													targetUavDescs[eye].Format)) ||
-				(!useSubmitNeuralFloatBridge && !directCommit &&
-					!EnsureFoveatedTexture(
-						neuralFinalLdrStagedOut[eye], target.resource,
-						rect.outputWidth, rect.outputHeight, false, false, false, false,
-						("Upscale_NeuralFinalLdr_StagedOut_" + suffix).c_str(),
-						targetUavDescs[eye].Format)) ||
-				(useSubmitNeuralFloatBridge && !PrepareSubmitNeuralFloatResources(
-												   eye, target.resource, rect.outputWidth, rect.outputHeight,
-												   directCommit, false)) ||
+				!PrepareSubmitNeuralFloatResources(
+					eye, target.resource, rect.outputWidth, rect.outputHeight,
+					directCommit, false) ||
 				!EnsureFoveatedDepthGuideSRV(
 					*foveatedCenterDepth[eye],
 					("Upscale_FoveatedCenter_Depth_" + suffix).c_str())) {
@@ -27854,18 +27888,11 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 			args.generation = a_generation;
 			args.insertionPoint =
 				NeuralRendering::InsertionPoint::FinalLdrPreUi;
-			args.colorInput = useSubmitNeuralFloatBridge ?
-			                      submitNeuralFloatColorIn[eye]->resource.get() :
-			                      neuralFinalLdrColorIn[eye]->resource.get();
+			args.colorInput = submitNeuralFloatColorIn[eye]->resource.get();
 			args.depthGuide = foveatedCenterDepth[eye]->resource.get();
 			args.depthGuideSRV = foveatedCenterDepth[eye]->srv.get();
 			args.motionVectors = foveatedCenterMotionVectors[eye]->resource.get();
-			args.colorOutput = useSubmitNeuralFloatBridge ?
-			                       GetSubmitNeuralFloatEvaluationOutput(
-									   eye, directCommit) :
-			                       (directCommit ?
-										   neuralFinalLdrColorOut[eye]->resource.get() :
-										   neuralFinalLdrStagedOut[eye]->resource.get());
+			args.colorOutput = GetSubmitNeuralFloatEvaluationOutput(eye, directCommit);
 			args.colorWidth = rect.outputWidth;
 			args.colorHeight = rect.outputHeight;
 			args.guideWidth = rect.inputWidth;
@@ -27922,6 +27949,8 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 			neuralResults[eye].prepared = true;
 			neuralResults[eye].bypassed = !characterEvaluationRequired;
 		}
+		lateStage = LateStage::Evaluation;
+		lateEye = 2u;
 		if (!WillEvaluatePreparedNeuralStereo(neuralResults)) {
 			const auto evaluation = EvaluatePreparedNeuralStereo(
 				*this, neuralResults, neuralArgs,
@@ -27932,7 +27961,9 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 			a_result.bypassedNoCharacters = evaluation.pairBypassed;
 			return false;
 		}
+		lateStage = LateStage::InputConversion;
 		for (uint32_t eye = 0; eye < a_targets.size(); ++eye) {
+			lateEye = eye;
 			if (neuralResults[eye].bypassed)
 				continue;
 			const auto& target = a_targets[eye];
@@ -27953,8 +27984,7 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 				neuralFinalLdrColorIn[eye]->resource.get(), 0,
 				computeSubrect.baseX, computeSubrect.baseY, 0,
 				target.resource, target.subresource, &sourceBox);
-			if (useSubmitNeuralFloatBridge &&
-				(!neuralFinalLdrColorIn[eye]->srv ||
+			if (!neuralFinalLdrColorIn[eye]->srv ||
 					!submitNeuralFloatColorIn[eye] ||
 					!submitNeuralFloatColorIn[eye]->uav ||
 					!DispatchSubmitStageColorRegion(
@@ -27965,11 +27995,13 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 						computeSubrect.width, computeSubrect.height,
 						computeSubrect.width, computeSubrect.height,
 						computeSubrect.baseX, computeSubrect.baseY,
-						"DLSS NR Final LDR Float Input"))) {
+						"DLSS NR Final LDR Float Input")) {
 				return false;
 			}
 		}
 
+		lateStage = LateStage::Evaluation;
+		lateEye = 2u;
 		const auto evaluation = EvaluatePreparedNeuralStereo(
 			*this, neuralResults, neuralArgs,
 			settings.neuralRenderingBatchedStereo,
@@ -27986,35 +28018,23 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 		if (!evaluation.pairApplied)
 			return false;
 
-		if (useSubmitNeuralFloatBridge) {
-			for (uint32_t eye = 0; eye < a_targets.size(); ++eye) {
-				if (neuralResults[eye].bypassed)
-					continue;
-				if (!CommitSubmitNeuralFloatOutput(
-						eye, directCommit, neuralArgs[eye].computeSubrect, neuralArgs[eye].computeRegions)) {
-					return false;
-				}
-			}
-		} else if (!directCommit) {
-			for (uint32_t eye = 0; eye < a_targets.size(); ++eye) {
-				if (neuralResults[eye].bypassed)
-					continue;
-				const auto& rect = foveatedRectCache.rects[eye];
-				const auto& computeSubrect = neuralArgs[eye].computeSubrect;
-				if (!computeSubrect.Fits(rect.outputWidth, rect.outputHeight))
-					return false;
-				if (!CopyNeuralOutputRegions(
-						context, neuralFinalLdrColorOut[eye]->resource.get(),
-						neuralFinalLdrStagedOut[eye]->resource.get(),
-						rect.outputWidth, rect.outputHeight, computeSubrect, neuralArgs[eye].computeRegions))
-					return false;
+		lateStage = LateStage::OutputCommit;
+		for (uint32_t eye = 0; eye < a_targets.size(); ++eye) {
+			lateEye = eye;
+			if (neuralResults[eye].bypassed)
+				continue;
+			if (!CommitSubmitNeuralFloatOutput(
+					eye, directCommit, neuralArgs[eye].computeSubrect, neuralArgs[eye].computeRegions)) {
+				return false;
 			}
 		}
+		lateStage = LateStage::Blend;
 		std::array<ID3D11ShaderResourceView*, 2> baselineCenterSRVs{};
 		std::array<Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>, 2>
 			characterMaskOwners{};
 		if (isolateCharacterOutput) {
 			for (uint32_t eye = 0; eye < a_targets.size(); ++eye) {
+				lateEye = eye;
 				if (neuralResults[eye].bypassed)
 					continue;
 				const auto& rect = foveatedRectCache.rects[eye];
@@ -28036,6 +28056,7 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 			}
 		}
 		for (uint32_t eye = 0; eye < a_targets.size(); ++eye) {
+			lateEye = eye;
 			if (neuralResults[eye].bypassed) {
 				a_result.committedEyeMask |= 1u << eye;
 				continue;
@@ -28059,9 +28080,7 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 				false,
 				globals::state->frameCount);
 			const bool blended = DispatchFoveatedBlendPass(
-				useSubmitNeuralFloatBridge ?
-					submitNeuralFloatColorOut[eye]->srv.get() :
-					neuralFinalLdrColorOut[eye]->srv.get(),
+				submitNeuralFloatColorOut[eye]->srv.get(),
 				a_targets[eye].uav,
 				a_outputWidthPerEye, a_outputHeight, rect,
 				blendVisibleOutput,
@@ -28072,7 +28091,8 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 					settings.neuralRenderingBlendFeather),
 				a_targets[eye].baseOffsetX,
 				baselineCenterSRVs[eye],
-				characterMaskOwners[eye].Get());
+				characterMaskOwners[eye].Get(),
+				finalLdrColorMode);
 			if (!blended) {
 				restoreCommittedCenters();
 				RequestHistoryReset();
@@ -28086,8 +28106,9 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 				true,
 				globals::state->frameCount);
 		}
-		return NeuralRendering::IsCompleteNeuralStereoResult(
+		lateSucceeded = NeuralRendering::IsCompleteNeuralStereoResult(
 			a_result.committedEyeMask, a_result.bypassedEyeMask);
+		return lateSucceeded;
 	} catch (const std::exception& e) {
 		restoreCommittedCenters();
 		static bool loggedLateNeuralException = false;
@@ -28187,6 +28208,15 @@ void Upscaling::ApplyMainFinalLdrNeuralStereo() noexcept
 		targetDesc.ArraySize == 1u && targetDesc.MipLevels == 1u &&
 		targetDesc.SampleDesc.Count == 1u;
 	if (!targetReady) {
+		static std::atomic_bool reported{ false };
+		if (!reported.exchange(true, std::memory_order_relaxed)) {
+			try {
+				logger::warn("[DLSSNR] Final-LDR failed role=main stage=framebuffer_target frame={} expected={}x{} actual={}x{} format={} texture={} uav={} arrays={} mips={} samples={}; preserving normal DLSS",
+					pending.frame, outputLayout.width, outputLayout.height, targetDesc.Width, targetDesc.Height,
+					static_cast<uint32_t>(targetDesc.Format), finalTarget.texture != nullptr, finalTarget.UAV != nullptr,
+					targetDesc.ArraySize, targetDesc.MipLevels, targetDesc.SampleDesc.Count);
+			} catch (...) {}
+		}
 		route.disposition = NeuralStereoPairDisposition::NormalDLSSPair;
 		route.fallbackReason = NeuralStereoFallbackReason::StereoPreflightFailed;
 		PublishNeuralStereoRouteSnapshot(route);

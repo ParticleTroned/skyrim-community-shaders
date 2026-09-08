@@ -1374,7 +1374,8 @@ public:
 		float centerHorizontalScale;
 		uint32_t targetOffsetX;
 		uint32_t characterSelectionMode;
-		uint32_t padding[3];
+		uint32_t finalLdrColorMode;  // 0=ordinary, 1=finite/alpha, 2=finite/alpha + UNORM range
+		uint32_t padding[2];
 		float4 characterMaskBounds;  // normalized min/max, includes the linear footprint
 	};
 
@@ -1412,6 +1413,7 @@ public:
 	static_assert(sizeof(VRMenuLayerCompositeCB) == 16, "VRMenuLayerCompositeCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedPeripheryCB) == 96, "FoveatedPeripheryCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedCenterBlendCB) == 96, "FoveatedCenterBlendCB layout changed; update HLSL cbuffer.");
+	static_assert(offsetof(FoveatedCenterBlendCB, finalLdrColorMode) == 68, "Final-LDR mode must match HLSL.");
 	static_assert(sizeof(PeripheryTAACB) == 304, "PeripheryTAACB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(CameraMotionVectorsCB) == 256, "CameraMotionVectorsCB layout changed; update HLSL cbuffer.");
 
@@ -1919,8 +1921,6 @@ public:
 	eastl::unique_ptr<Texture2D> foveatedCenterColorOut[2];
 	eastl::unique_ptr<Texture2D> foveatedCenterNeuralOut[2];
 	eastl::unique_ptr<Texture2D> neuralFinalLdrColorIn[2];
-	eastl::unique_ptr<Texture2D> neuralFinalLdrColorOut[2];
-	eastl::unique_ptr<Texture2D> neuralFinalLdrStagedOut[2];
 	eastl::unique_ptr<Texture2D> submitNeuralFloatColorIn[2];
 	eastl::unique_ptr<Texture2D> submitNeuralFloatColorOut[2];
 	eastl::unique_ptr<Texture2D> submitNeuralFloatStagedOut[2];
@@ -2482,7 +2482,7 @@ public:
 		const float4x4& currentViewProjInverse, const float4x4& previousViewProj, const float4& currentCameraPosAdjust, const float4& previousCameraPosAdjust,
 		bool resetHistory, float centerScale, float centerHorizontalScale, float centerOffsetX, float centerOffsetY,
 		float inputTextureScaleX = 1.0f, float inputTextureScaleY = 1.0f, float inputTextureOffsetX = 0.0f, float inputTextureOffsetY = 0.0f);
-	bool DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t outputWidthPerEye, uint32_t outputHeight, const FoveatedDispatchRect& rect, const FoveatedRegionPlan::Rect& visibleOutput, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t targetOffsetX = 0, ID3D11ShaderResourceView* baselineCenterSRV = nullptr, ID3D11ShaderResourceView* characterMaskSRV = nullptr);
+	bool DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t outputWidthPerEye, uint32_t outputHeight, const FoveatedDispatchRect& rect, const FoveatedRegionPlan::Rect& visibleOutput, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t targetOffsetX = 0, ID3D11ShaderResourceView* baselineCenterSRV = nullptr, ID3D11ShaderResourceView* characterMaskSRV = nullptr, uint32_t finalLdrColorMode = 0);
 
 	/**
 	 * @brief Applies the selected DLSS sharpening pass to the main render target after upscaling.

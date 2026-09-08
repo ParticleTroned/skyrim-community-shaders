@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../DLSSViewportCrop.h"
+#include "CharacterMultiRoi.h"
 #include "PipelinePolicy.h"
 #include "Runtime.h"
 
@@ -111,6 +112,7 @@ namespace NeuralRendering
 		std::uint32_t lastFeatureFrameId =
 			std::numeric_limits<std::uint32_t>::max();
 		std::uint32_t lastFeatureEvaluationCount = 0;
+		std::uint32_t lastFeatureLogicalEyeCount = 0;
 		std::uint32_t lastFeatureSlotMask = 0;
 		InsertionPoint lastInsertionPoint = InsertionPoint::Count;
 	};
@@ -200,6 +202,11 @@ namespace NeuralRendering
 		// retains the configured centered/full-resource behavior.
 		ComputeSubrect computeSubrect{};
 		UpscalingDLSS::ViewportCrop viewportCrop{};
+		// Default-off character experiment: independent persistent feature per region.
+		// count == 0 retains computeSubrect and the legacy single-evaluation path.
+		CharacterComputeRegionPlan computeRegions{};
+		// Caller guarantees exact outer CSX mask compositing; not the private NGX mask ABI.
+		bool characterVisualIsolation = false;
 		bool featureUpscaling = false;
 		Tuning tuning{};
 		bool reset = false;
@@ -247,7 +254,8 @@ namespace NeuralRendering
 		bool ApplyStereo(
 			const std::array<RendererApplyArgs, 2>& a_args,
 			RendererApplyOutcome* a_outcome = nullptr);
-		/** Runs two validated eye transactions separately with one reset policy. */
+		/** Runs two validated eye transactions separately with one reset policy.
+		 *  Explicit character region plans use one atomic batch for both eyes. */
 		bool ApplySequentialStereo(
 			const std::array<RendererApplyArgs, 2>& a_args,
 			RendererApplyOutcome* a_outcome = nullptr);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../DLSSViewportCrop.h"
+#include "CharacterMultiRoi.h"
 #include "CharacterRegionPolicy.h"
 #include "ComputeSubrect.h"
 
@@ -125,6 +126,8 @@ namespace NeuralRendering
 			CharacterPolicy::kDefaultMaximumDistanceMeters;
 		bool adaptiveRoiSelection =
 			CharacterPolicy::kDefaultAdaptiveRoiSelection;
+		/** Experimental independent Feature 18 region handles; deliberately opt-in. */
+		bool multiRoi = false;
 		std::uint32_t minimumFacePixelSize =
 			CharacterPolicy::kDefaultMinimumFacePixelSize;
 		float roiMargin = CharacterPolicy::kDefaultRoiMargin;
@@ -172,6 +175,9 @@ namespace NeuralRendering
 		std::uint32_t mergedRegions = 0;
 		std::uint64_t roiPixels = 0;
 		ComputeSubrect computeSubrect{};
+		CharacterComputeRegionPlan computeRegions{};
+		std::uint64_t multiRoiPixels = 0;
+		CharacterMultiRoiReason multiRoiReason = CharacterMultiRoiReason::Disabled;
 		std::uint64_t computeSubrectPixels = 0;
 		float computeSubrectCoveragePercent = 0.0f;
 		std::uint64_t maskPixels = 0;
@@ -240,6 +246,8 @@ namespace NeuralRendering
 		std::array<std::uint64_t, 4> contentSerials{};
 		std::array<std::uint32_t, 4> widths{};
 		std::array<std::uint32_t, 4> heights{};
+		/** Expected physical evaluations: zero for bypass, one legacy, two split. */
+		std::array<std::uint32_t, 4> computeRegionCounts{};
 	};
 
 	struct CharacterSnapshot
@@ -248,7 +256,7 @@ namespace NeuralRendering
 		std::string detail;
 		std::string visualMaskMechanism = "csx_output_composite_r8";
 		std::string computeRoiReason =
-			"One dynamic per-eye compute rectangle encloses the selected semantic regions";
+			"One per-eye enclosing compute rectangle by default; opt-in experimental multi-ROI evaluates up to two disjoint character clusters independently";
 		bool enabled = false;
 		bool visualMaskImplemented = true;
 		bool visualMaskProviderValidated = false;
@@ -314,6 +322,7 @@ namespace NeuralRendering
 		bool requiresEvaluation = true;
 		/** Output-local rectangle supplied to the private Feature 18 subrect ABI. */
 		ComputeSubrect computeSubrect{};
+		CharacterComputeRegionPlan computeRegions{};
 	};
 
 	/** Owns character observations, stable per-eye regions, and R8 selection masks. */
@@ -393,6 +402,14 @@ namespace NeuralRendering
 			std::uint32_t a_height) const noexcept;
 		/** Returns the matching output-local compute rectangle for a prepared mask. */
 		[[nodiscard]] ComputeSubrect GetPreparedComputeSubrect(
+			std::uint32_t a_featureSlot,
+			std::uint32_t a_frameId,
+			std::uint32_t a_sourceWorldFrame,
+			std::uint64_t a_generation,
+			std::uint32_t a_width,
+			std::uint32_t a_height) const noexcept;
+		/** Returns the exact split plan belonging to the validated prepared mask. */
+		[[nodiscard]] CharacterComputeRegionPlan GetPreparedComputeRegions(
 			std::uint32_t a_featureSlot,
 			std::uint32_t a_frameId,
 			std::uint32_t a_sourceWorldFrame,

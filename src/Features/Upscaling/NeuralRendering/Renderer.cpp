@@ -27,7 +27,8 @@ namespace NeuralRendering
 	{
 		constexpr std::uint32_t kMaximumTextureDimension =
 			D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION;
-		constexpr std::size_t kMaximumTransitionResourceCount = 10;
+		constexpr std::size_t kMaximumRegionEvaluations = 4;
+		constexpr std::size_t kMaximumTransitionResourceCount = kMaximumRegionEvaluations * 5;
 
 		[[nodiscard]] constexpr bool IsSourceWorldFrameContinuous(
 			std::uint32_t a_previous,
@@ -550,6 +551,7 @@ namespace NeuralRendering
 			std::uint32_t style = 0;
 			std::uintptr_t controlMaskIdentity = 0;
 			ComputeSubrect computeSubrect{};
+			std::uint64_t regionIdentity = 0;
 			bool useAutoMask = false;
 			bool uiCorrection = false;
 
@@ -1083,6 +1085,7 @@ namespace NeuralRendering
 		performance.lastFeaturePixelCount = telemetry.lastFeaturePixelCount;
 		performance.lastFeatureFrameId = telemetry.lastFeatureFrameId;
 		performance.lastFeatureEvaluationCount = telemetry.lastFeatureEvaluationCount;
+		performance.lastFeatureLogicalEyeCount = telemetry.lastFeatureLogicalEyeCount;
 		performance.lastFeatureSlotMask = telemetry.lastFeatureSlotMask;
 		performance.lastInsertionPoint = telemetry.lastInsertionPoint;
 	}
@@ -1711,6 +1714,9 @@ namespace NeuralRendering
 		RendererApplyOutcome& a_outcome)
 	{
 		a_outcome = {};
+		// All regions of both eyes must use immutable inputs and one commit boundary.
+		if (a_args[0].computeRegions.count != 0u || a_args[1].computeRegions.count != 0u)
+			return ApplyBatchLocked(a_args, a_outcome);
 		SetActiveFeatureSlotLocked(a_args[0].featureSlot);
 		if (quarantined_ || failureLatched_) {
 			return ApplyBatchLocked(a_args, a_outcome);
@@ -1787,10 +1793,26 @@ namespace NeuralRendering
 	}
 
 	bool Renderer::State::ApplyBatchLocked(
-		std::span<const RendererApplyArgs> a_args,
-		RendererApplyOutcome& a_outcome)
+		std::span<const RendererApplyArgs> a_logicalArgs,
+		RendererApplyOutcome& a_logicalOutcome)
 	{
-		a_outcome = {};
+		a_logicalOutcome = {};
+		RendererApplyOutcome a_outcome{};
+		std::array<std::uint32_t, 4> requiredRegionMasks{};
+		struct OutcomeGuard
+		{
+			RendererApplyOutcome& logical;
+			const RendererApplyOutcome& physical;
+			const std::array<std::uint32_t, 4>& required;
+			~OutcomeGuard() noexcept
+			{
+				logical.evaluationAttemptedFeatureSlotMask = AggregateRegionEvaluationMask(
+					physical.evaluationAttemptedFeatureSlotMask, required, false);
+				logical.evaluationSucceededFeatureSlotMask = AggregateRegionEvaluationMask(
+					physical.evaluationSucceededFeatureSlotMask, required, true);
+			}
+		} outcomeGuard{ a_logicalOutcome, a_outcome, requiredRegionMasks };
+		auto a_args = a_logicalArgs;
 		if (a_args.empty() || a_args.size() > 2)
 			return false;
 		SetActiveFeatureSlotLocked(a_args.front().featureSlot);
@@ -1845,10 +1867,46 @@ namespace NeuralRendering
 			}
 		}
 
-		std::array<ValidatedResources, 2> resources{};
+		// Validate the original logical stereo pair before allowing same-eye regions
+		// to share immutable caller inputs and their final caller-owned destination.
+		const auto logicalEyeCount = static_cast<std::uint32_t>(a_args.size());
+		std::array<RendererApplyArgs, kMaximumRegionEvaluations> expandedArgs{};
+		std::array<std::uint64_t, kMaximumRegionEvaluations> regionIdentities{};
+		std::array<std::uint64_t, kMaximumRegionEvaluations> clusterIdentities{};
+		std::size_t expandedCount = 0;
+		for (const auto& logical : a_logicalArgs) {
+			const auto& plan = logical.computeRegions;
+			if (auto violation = GetCharacterRegionSubmissionViolation(
+					logical.featureSlot, plan, logical.computeSubrect,
+					logical.outputWidth, logical.outputHeight, logical.characterVisualIsolation);
+				!violation.empty()) {
+				return FailLocked(RendererStage::Validation, E_INVALIDARG,
+					std::string(violation), logical.featureSlot, false);
+			}
+			const auto count = std::max(1u, plan.count);
+			for (std::uint32_t region = 0; region < count; ++region) {
+				auto& physical = expandedArgs[expandedCount];
+				physical = logical;
+				physical.featureSlot = PhysicalRegionFeatureSlot(logical.featureSlot, region);
+				physical.computeRegions = {};
+				if (region != 0u)
+					Increment(snapshot_.counters.attempts);
+				if (plan.count != 0u) {
+					physical.computeSubrect = plan.regions[region];
+					regionIdentities[expandedCount] = plan.historyKeys[region];
+					clusterIdentities[expandedCount] = plan.clusterIdentities[region];
+				}
+				requiredRegionMasks[logical.featureSlot] |= 1u << physical.featureSlot;
+				++expandedCount;
+			}
+		}
+		a_args = std::span<const RendererApplyArgs>(expandedArgs.data(), expandedCount);
+
+		std::array<ValidatedResources, kMaximumRegionEvaluations> resources{};
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			const auto& args = a_args[index];
 			SetActiveFeatureSlotLocked(args.featureSlot);
+			SetRequestTelemetryLocked(args);
 			auto validation = ValidateLocked(args, resources[index]);
 			snapshot_.colorFormat =
 				static_cast<std::uint32_t>(resources[index].color.desc.Format);
@@ -1870,6 +1928,7 @@ namespace NeuralRendering
 					args.featureSlot,
 					false);
 			}
+			resources[index].historyKey.regionIdentity = regionIdentities[index];
 		}
 		snapshot_.lastCompletedStage = RendererStage::Validation;
 
@@ -1878,7 +1937,7 @@ namespace NeuralRendering
 		if (!EnsureBackendLocked(a_args.front()))
 			return false;
 		activeStage_ = RendererStage::ResourceCreation;
-		std::array<Slot*, 2> slots{};
+		std::array<Slot*, kMaximumRegionEvaluations> slots{};
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
 			if (!EnsureSlotLocked(a_args[index].featureSlot, resources[index]))
@@ -2029,6 +2088,7 @@ namespace NeuralRendering
 					.evaluationCount = static_cast<std::uint32_t>(a_args.size()),
 					.featureSlotMask = featureSlotMask,
 					.insertionPoint = a_args.front().insertionPoint,
+					.logicalEyeCount = logicalEyeCount,
 				})) {
 			const bool aborted = interop_.AbortD3D12();
 			recordingGuard.active = interop_.IsRecording();
@@ -2041,10 +2101,8 @@ namespace NeuralRendering
 				!aborted);
 		}
 
-		std::array<bool, 2> forcedHistoryReset{};
-		std::array<bool, 2> discontinuousHistoryReset{};
-		bool synchronizeForcedReset = false;
-		bool synchronizeDiscontinuousReset = false;
+		std::array<bool, kMaximumRegionEvaluations> forcedHistoryReset{};
+		std::array<bool, kMaximumRegionEvaluations> discontinuousHistoryReset{};
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			const auto& slot = *slots[index];
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
@@ -2063,12 +2121,21 @@ namespace NeuralRendering
 				!slot.historyValid ||
 				slot.historyKey != resources[index].historyKey ||
 				discontinuousHistoryReset[index];
-			synchronizeForcedReset =
-				synchronizeForcedReset || forcedHistoryReset[index];
-			synchronizeDiscontinuousReset =
-				synchronizeDiscontinuousReset || discontinuousHistoryReset[index];
 		}
-		const bool stereoBatch = a_args.size() == 2;
+		// Synchronize only the same actor cluster across eyes. Two same-eye regions
+		// (or different clusters visible in opposite eyes) never share temporal state.
+		for (std::size_t left = 0; left < a_args.size(); ++left) {
+			for (std::size_t right = 0; right < a_args.size(); ++right) {
+				if (!IsMatchingRegionStereoPair(a_args[left].featureSlot, clusterIdentities[left],
+						a_args[right].featureSlot, clusterIdentities[right]))
+					continue;
+				const bool forced = forcedHistoryReset[left] || forcedHistoryReset[right];
+				const bool discontinuous =
+					discontinuousHistoryReset[left] || discontinuousHistoryReset[right];
+				forcedHistoryReset[left] = forcedHistoryReset[right] = forced;
+				discontinuousHistoryReset[left] = discontinuousHistoryReset[right] = discontinuous;
+			}
+		}
 
 		activeStage_ = RendererStage::FeatureEvaluate;
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
@@ -2077,12 +2144,8 @@ namespace NeuralRendering
 			const auto motionVectorScale =
 				UpscalingDLSS::BuildMotionVectorPixelScale(args.viewportCrop);
 			SetActiveFeatureSlotLocked(args.featureSlot);
-			const bool forcedReset = stereoBatch ?
-			                             synchronizeForcedReset :
-			                             forcedHistoryReset[index];
-			const bool discontinuousReset = stereoBatch ?
-			                                    synchronizeDiscontinuousReset :
-			                                    discontinuousHistoryReset[index];
+			const bool forcedReset = forcedHistoryReset[index];
+			const bool discontinuousReset = discontinuousHistoryReset[index];
 			const bool effectiveReset = args.reset || forcedReset;
 			if (args.reset)
 				Increment(snapshot_.counters.callerHistoryResets);
@@ -2151,7 +2214,7 @@ namespace NeuralRendering
 					args.controlMaskHeight,
 					args.featureUpscaling,
 					effectiveReset,
-					a_args.size() == 2);
+					logicalEyeCount == 2u);
 			});
 		}
 		snapshot_.lastCompletedStage = RendererStage::FeatureEvaluate;

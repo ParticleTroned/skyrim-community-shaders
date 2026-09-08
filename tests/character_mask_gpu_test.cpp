@@ -385,6 +385,40 @@ namespace
 			// Unknown/full bounds still respect exact zero mask before NR sampling.
 			constants.characterMaskBounds[2] = constants.characterMaskBounds[3] = 1.0f;
 			verify(run(constants, nrPixels, std::vector<std::uint8_t>(width * height, 0)), false, false);
+			// Two independently produced regions leave the central gap undefined.
+			// Guard pixels belong to each region; no positive mask may sample the gap.
+			const Color otherRegion{ 0.2f, 0.8f, 0.4f, 1.0f };
+			nrPixels.assign(width * height, Color{ nan, nan, nan, nan });
+			maskPixels.assign(width * height, 0);
+			for (std::uint32_t y = 0; y < height; ++y) {
+				for (std::uint32_t x = 0; x < width; ++x) {
+					if (x < 3)
+						nrPixels[y * width + x] = neural;
+					else if (x >= 5)
+						nrPixels[y * width + x] = otherRegion;
+					if (y >= 1 && y < 3 && (x == 1 || x == 6))
+						maskPixels[y * width + x] = x == 1 ? 64 : 192;
+				}
+			}
+			const auto separated = run(constants, nrPixels, maskPixels);
+			for (std::uint32_t y = 0; y < height; ++y) {
+				for (std::uint32_t x = 0; x < width * 2; ++x) {
+					Color expected = untouched;
+					if (x >= width) {
+						const auto eyeX = x - width;
+						expected = baseline;
+						const float weight = maskPixels[y * width + eyeX] / 255.0f;
+						const auto& selected = eyeX < 3 ? neural : otherRegion;
+						for (std::size_t channel = 0; channel < 4; ++channel)
+							expected[channel] += weight * (selected[channel] - baseline[channel]);
+					}
+					for (std::size_t channel = 0; channel < 4; ++channel) {
+						Require(std::isfinite(separated[y * width * 2 + x][channel]) &&
+							std::abs(separated[y * width * 2 + x][channel] - expected[channel]) < 0.0001f,
+							"Independent ROI composite leaked poisoned gap, mixed regions, or modified peer eye");
+					}
+				}
+			}
 			// Disabling character-only mode retains the normal full-NR route.
 			constants.characterSelectionMode = 0;
 			verify(run(constants, std::vector<Color>(width * height, neural), maskPixels), false, true);

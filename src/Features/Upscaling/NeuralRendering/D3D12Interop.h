@@ -26,6 +26,8 @@ namespace NeuralRendering
 		std::uint32_t evaluationCount = 0;
 		std::uint32_t featureSlotMask = 0;
 		InsertionPoint insertionPoint = kDefaultInsertionPoint;
+		// Two regions in one eye are not a stereo submission.
+		std::uint32_t logicalEyeCount = 1;
 	};
 
 	struct D3D12InteropTelemetry
@@ -58,6 +60,7 @@ namespace NeuralRendering
 		std::uint32_t lastFeatureFrameId =
 			std::numeric_limits<std::uint32_t>::max();
 		std::uint32_t lastFeatureEvaluationCount = 0;
+		std::uint32_t lastFeatureLogicalEyeCount = 0;
 		std::uint32_t lastFeatureSlotMask = 0;
 		InsertionPoint lastInsertionPoint = InsertionPoint::Count;
 	};

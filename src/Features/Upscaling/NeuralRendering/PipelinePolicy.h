@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CharacterMultiRoi.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -394,8 +396,8 @@ namespace NeuralRendering
 	[[nodiscard]] constexpr FeatureSlotRoute ClassifyFeatureSlotMask(
 		std::uint32_t a_slotMask) noexcept
 	{
-		constexpr std::uint32_t mainMask = 0b0011u;
-		constexpr std::uint32_t submitMask = 0b1100u;
+		constexpr std::uint32_t mainMask = 0b00110011u;
+		constexpr std::uint32_t submitMask = 0b11001100u;
 		if (a_slotMask != 0 && (a_slotMask & ~mainMask) == 0)
 			return FeatureSlotRoute::Main;
 		if (a_slotMask != 0 && (a_slotMask & ~submitMask) == 0)
@@ -410,6 +412,71 @@ namespace NeuralRendering
 	{
 		return (a_leftSlot == 0u && a_rightSlot == 1u) ||
 		       (a_leftSlot == 2u && a_rightSlot == 3u);
+	}
+
+	/** Physical region slots retain their logical route/eye in the lower two bits. */
+	[[nodiscard]] constexpr std::uint32_t LogicalFeatureSlot(std::uint32_t a_slot) noexcept
+	{
+		return a_slot % 4u;
+	}
+
+	[[nodiscard]] constexpr std::uint32_t PhysicalRegionFeatureSlot(
+		std::uint32_t a_logicalSlot, std::uint32_t a_region) noexcept
+	{
+		return a_logicalSlot < 4u && a_region < 2u ? a_logicalSlot + a_region * 4u : 8u;
+	}
+
+	/** Pure admission contract used before any resource allocation or GPU recording. */
+	[[nodiscard]] constexpr std::string_view GetCharacterRegionSubmissionViolation(
+		std::uint32_t a_logicalSlot, const CharacterComputeRegionPlan& a_plan,
+		const ComputeSubrect& a_support, std::uint32_t a_width, std::uint32_t a_height,
+		bool a_characterVisualIsolation) noexcept
+	{
+		if (a_logicalSlot >= 4u || a_plan.count > 2u)
+			return "character regions require a logical feature slot and at most two regions";
+		if (a_plan.count == 0u)
+			return {};
+		if (!a_characterVisualIsolation || !a_support.Fits(a_width, a_height))
+			return "explicit character regions require exact outer CSX mask compositing and valid support bounds";
+		for (std::uint32_t region = 0; region < a_plan.count; ++region) {
+			if (!a_plan.regions[region].Fits(a_width, a_height) ||
+				!ContainsComputeSubrect(a_support, a_plan.regions[region]) ||
+				a_plan.historyKeys[region] == 0u || a_plan.clusterIdentities[region] == 0u)
+				return "character region dimensions or persistent history identity are invalid";
+		}
+		if (a_plan.count == 2u &&
+			(CharacterComputeRegionsOverlap(a_plan.regions[0], a_plan.regions[1]) ||
+				a_plan.historyKeys[0] == a_plan.historyKeys[1] ||
+				a_plan.clusterIdentities[0] == a_plan.clusterIdentities[1]))
+			return "independent character regions must be disjoint with distinct histories";
+		return {};
+	}
+
+	/** Region histories synchronize only for the same cluster in opposite eyes. */
+	[[nodiscard]] constexpr bool IsMatchingRegionStereoPair(
+		std::uint32_t a_leftSlot, std::uint64_t a_leftIdentity,
+		std::uint32_t a_rightSlot, std::uint64_t a_rightIdentity) noexcept
+	{
+		return a_leftSlot < 8u && a_rightSlot < 8u &&
+		       a_leftIdentity == a_rightIdentity &&
+		       IsOrderedStereoFeatureSlotPair(
+			       LogicalFeatureSlot(a_leftSlot), LogicalFeatureSlot(a_rightSlot));
+	}
+
+	/** Preserve logical-eye outcomes while exposing physical region counts in telemetry. */
+	[[nodiscard]] constexpr std::uint32_t AggregateRegionEvaluationMask(
+		std::uint32_t a_physicalMask,
+		const std::array<std::uint32_t, 4>& a_requiredMasks,
+		bool a_requireAll) noexcept
+	{
+		std::uint32_t result = 0;
+		for (std::uint32_t logical = 0; logical < a_requiredMasks.size(); ++logical) {
+			const auto required = a_requiredMasks[logical];
+			const auto present = a_physicalMask & required;
+			if (required != 0u && (a_requireAll ? present == required : present != 0u))
+				result |= 1u << logical;
+		}
+		return result;
 	}
 
 	/**

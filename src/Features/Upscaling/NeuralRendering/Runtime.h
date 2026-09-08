@@ -97,7 +97,8 @@ namespace NeuralRendering
 	class Runtime
 	{
 	public:
-		static constexpr std::size_t kFeatureSlotCount = 4;
+		// Two persistent region banks, each containing main L/R and submit L/R.
+		static constexpr std::size_t kFeatureSlotCount = 8;
 		static constexpr std::string_view kPatchedRuntimeSha256 = "8270B350CD82DE5CE89806872CDD6B6A9249B80836B91BBEB3573470744CC206";
 		static constexpr std::string_view kAlternatePatchedRuntimeSha256 = "CEB6432F6FBDF44D886014BCD47241932BF8B67439FEEF9BBDD0961436662650";
 		static constexpr std::string_view kSignedRuntimeSha256 = "E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E";

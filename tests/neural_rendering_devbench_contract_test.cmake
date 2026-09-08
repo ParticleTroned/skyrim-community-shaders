@@ -337,7 +337,8 @@ endforeach()
 foreach(_roi_staging_contract IN ITEMS
     [[float2 OutputOffset;]]
     [[OutputTexture[outputPixelId] =]]
-    [[computeSubrect.baseX, computeSubrect.baseY, 0,]]
+    [[region.baseX, region.baseY, 0,]]
+    [[CopyNeuralOutputRegions(]]
     [[CommitSubmitNeuralFloatOutput(]]
 )
     string(FIND "${_source_contract_text}" "${_roi_staging_contract}"
@@ -537,6 +538,36 @@ function(_extract_upscaling_section _begin_marker _end_marker _output_variable)
 endfunction()
 
 _extract_upscaling_section(
+    [[bool CopyNeuralOutputRegions(]]
+    [[bool IsDefaultFoveatedMaskGeometry(]]
+    _region_output_copy_section
+)
+foreach(_region_output_contract IN ITEMS
+    [[a_regions.count > 2u]]
+    [[!a_enclosure.Fits(a_width, a_height)]]
+    [[std::span<const NeuralRendering::ComputeSubrect>(a_regions.regions.data(), a_regions.count)]]
+    [[std::span<const NeuralRendering::ComputeSubrect>(&a_enclosure, 1)]]
+    [[!region.Fits(a_width, a_height)]]
+    [[!NeuralRendering::ContainsComputeSubrect(a_enclosure, region)]]
+    [[a_context->CopySubresourceRegion( a_destination, 0, region.baseX, region.baseY, 0, a_source, 0, &sourceBox)]]
+)
+    string(FIND "${_region_output_copy_section}" "${_region_output_contract}" _region_output_position)
+    if(_region_output_position EQUAL -1)
+        message(FATAL_ERROR "Produced-region staging contract is missing: ${_region_output_contract}")
+    endif()
+endforeach()
+string(FIND "${_region_output_copy_section}" [[!NeuralRendering::ContainsComputeSubrect(]] _region_validation_position)
+string(FIND "${_region_output_copy_section}" [[a_context->CopySubresourceRegion(]] _region_copy_position)
+if(_region_copy_position LESS_EQUAL _region_validation_position)
+    message(FATAL_ERROR "All staged regions must be validated before any copy is issued")
+endif()
+string(REGEX MATCHALL [[for \(const auto& region : regions\)]] _region_copy_loops "${_region_output_copy_section}")
+list(LENGTH _region_copy_loops _region_copy_loop_count)
+if(NOT _region_copy_loop_count EQUAL 2)
+    message(FATAL_ERROR "Staging must validate every produced region separately before the copy loop")
+endif()
+
+_extract_upscaling_section(
     [[bool Upscaling::PrepareSubmitNeuralFloatResources(]]
     [[ID3D11Resource* Upscaling::GetSubmitNeuralFloatEvaluationOutput(]]
     _submit_float_resource_section
@@ -627,7 +658,7 @@ endif()
 
 foreach(_submit_float_commit_contract IN ITEMS
     [[if (directCommit) return true]]
-    [[globals::d3d::context->CopySubresourceRegion( submitNeuralFloatColorOut[eyeIndex]->resource.get(), 0, computeSubrect.baseX, computeSubrect.baseY, 0, submitNeuralFloatStagedOut[eyeIndex]->resource.get(), 0, &sourceBox)]]
+    [[return CopyNeuralOutputRegions( globals::d3d::context, submitNeuralFloatColorOut[eyeIndex]->resource.get(), submitNeuralFloatStagedOut[eyeIndex]->resource.get(), submitNeuralFloatColorOut[eyeIndex]->desc.Width, submitNeuralFloatColorOut[eyeIndex]->desc.Height, computeSubrect, computeRegions)]]
 )
     string(FIND
         "${_submit_float_commit_section}"
@@ -647,7 +678,9 @@ foreach(_upscaled_center_float_contract IN ITEMS
     [[args.insertionPoint = NeuralRendering::InsertionPoint::UpscaledCenter]]
     [[DispatchSubmitStageColorRegion( foveatedCenterColorOut[eyeIndex]->srv.get(), submitNeuralFloatColorIn[eyeIndex]->uav.get()]]
     [[args.colorInput = submitNeuralFloatColorIn[eyeIndex]->resource.get()]]
-    [[return CommitSubmitNeuralFloatOutput( eyeIndex, directNeuralCommit, preparedSubrect)]]
+    [[return CommitSubmitNeuralFloatOutput( eyeIndex, directNeuralCommit, preparedSubrect, preparedRegions)]]
+    [[return CopyNeuralOutputRegions(]]
+    [[rect.outputWidth, rect.outputHeight, preparedSubrect, preparedRegions)]]
     [[useSubmitNeuralFloatBridge && neuralAppliedForComposite]]
 )
     string(FIND
@@ -687,7 +720,9 @@ foreach(_final_ldr_float_contract IN ITEMS
     [[("Upscale_NeuralFinalLdr_ColorIn_" + suffix).c_str(), targetUavDescs[eye].Format]]
     [[DispatchSubmitStageColorRegion( neuralFinalLdrColorIn[eye]->srv.get(), submitNeuralFloatColorIn[eye]->uav.get()]]
     [[args.colorInput = useSubmitNeuralFloatBridge ? submitNeuralFloatColorIn[eye]->resource.get() : neuralFinalLdrColorIn[eye]->resource.get()]]
-    [[CommitSubmitNeuralFloatOutput( eye, directCommit, neuralArgs[eye].computeSubrect)]]
+    [[CommitSubmitNeuralFloatOutput( eye, directCommit, neuralArgs[eye].computeSubrect, neuralArgs[eye].computeRegions)]]
+    [[if (!CopyNeuralOutputRegions(]]
+    [[rect.outputWidth, rect.outputHeight, computeSubrect, neuralArgs[eye].computeRegions)]]
     [[useSubmitNeuralFloatBridge ? submitNeuralFloatColorOut[eye]->srv.get() : neuralFinalLdrColorOut[eye]->srv.get()]]
 )
     string(FIND
@@ -907,7 +942,9 @@ foreach(_status_contract IN ITEMS
     [[{ "exactBindingContractPublished", false }]]
     [[{ "computeRoi", {]]
     [[{ "dynamicCharacterSingleRectEnabled", dynamicCharacterSingleRectEnabled }]]
-    [[{ "inferenceRestrictedToRois", dynamicCharacterSingleRectEnabled || privateSingleSubrectEnabled }]]
+    [[{ "dynamicCharacterRoiEnabled", dynamicCharacterRoiEnabled }]]
+    [[{ "dynamicCharacterMultiRegionEnabled", dynamicCharacterMultiRegionEnabled }]]
+    [[{ "inferenceRestrictedToRois", dynamicCharacterRoiEnabled || privateSingleSubrectEnabled }]]
     [[{ "computeSubrect", {]]
     [[{ "computeSubrectPixels", eye.computeSubrectPixels }]]
     [[{ "computeSubrectCoveragePercent", eye.computeSubrectCoveragePercent }]]
@@ -983,7 +1020,10 @@ foreach(_status_contract IN ITEMS
     [[{ "missingExpectedFeatureSlotMask", missingExpectedFeatureSlots }]]
     [[{ "unexpectedFeatureSlotMask", unexpectedFeatureSlots }]]
     [[{ "correlationScope", featureTimingIsStereoPair ? "stereo_pair" : (featureTimingIsEyeSample ? "eye_sample" : "invalid") }]]
-    [[{ "coversPreparedStereoPair", featureTimingIsStereoPair && lastFeatureSlotMask == expectedFeatureSlotMask }]]
+    [[{ "logicalEyeCount", lastFeatureLogicalEyeCount }]]
+    [[lastFeatureLogicalEyeCount == 2u]]
+    [[lastFeatureSlotMask == sampledScopeExpectedPhysicalSlotMask]]
+    [[{ "coversPreparedStereoPair", featureTimingIsStereoPair && featureTimingMatchesPreparedMask && lastLogicalFeatureSlotMask == expectedFeatureSlotMask }]]
     [[{ "matchesPreparedCharacterMask", featureTimingMatchesPreparedMask }]]
     [[{ "developerModeRequired", false }]]
     [[{ "streamlineLogLevelAffectsAdmission", false }]]
@@ -3099,7 +3139,14 @@ foreach(_character_contract IN ITEMS
 	[[final-LDR and submit routes already preserve a separate baseline.]]
     [[{ "multiSparseSupported", false }]]
     [[{ "privateSingleSubrectCandidate", true }]]
-    [[{ "privateSingleSubrectEnabled", dynamicCharacterSingleRectEnabled || privateSingleSubrectEnabled }]]
+    [[{ "privateSingleSubrectEnabled", dynamicCharacterRoiEnabled || privateSingleSubrectEnabled }]]
+    [[{ "providerRoiListSupported", false }]]
+    [[{ "providerRoiListEvidenceScope", "observed_feature18_parameter_abi" }]]
+    [[{ "multiEvaluationExecutionImplemented", true }]]
+    [[{ "multiEvaluationProductionQualified", false }]]
+    [[{ "multiEvaluationExperimentalEnabled", settings.neuralCharacterMultiRoiEnabled }]]
+    [[{ "multiEvaluationMaximumRegionsPerEye", 2 }]]
+    [[{ "multiEvaluationMechanism", "separate_persistent_feature18_instances" }]]
     [[{ "privateSingleSubrectValidation", "ghidra_dataflow_and_gpu_timing_validated" }]]
     [[Feature 18 bypasses only same-frame CPU-proven empty eyes; delayed GPU coverage samples are diagnostic and never suppress current-frame evaluation.]]
     [[unions the current per-eye projected face, skin, and hair eligibility bounds into one private Feature 18 compute subrect]]
@@ -3138,5 +3185,94 @@ string(FIND
 if(_documentation_position EQUAL -1)
     message(FATAL_ERROR "Neural Rendering validation behavior is undocumented")
 endif()
+
+string(FIND "${_character_source}" [[const Slot* FindPreparedSlot(]] _prepared_lookup_begin)
+string(FIND "${_character_source}" [[void ClearMask(]] _prepared_lookup_end)
+if(_prepared_lookup_begin EQUAL -1 OR _prepared_lookup_end LESS_EQUAL _prepared_lookup_begin)
+    message(FATAL_ERROR "Unable to isolate shared prepared-resource validation")
+endif()
+math(EXPR _prepared_lookup_length "${_prepared_lookup_end} - ${_prepared_lookup_begin}")
+string(SUBSTRING "${_character_source}" ${_prepared_lookup_begin} ${_prepared_lookup_length} _prepared_lookup)
+foreach(_prepared_lookup_contract IN ITEMS
+    [[a_featureSlot >= slots_.size()]]
+    [[slot.prepared && preparedFrame != snapshot_.preparedFrames.end()]]
+    [[prepared.frame == a_frameId]]
+    [[(preparedFrame->preparedSlotMask & slotBit) != 0]]
+    [[preparedFrame->sourceWorldFrames[a_featureSlot] == a_sourceWorldFrame]]
+    [[preparedFrame->generations[a_featureSlot] == a_generation]]
+    [[preparedFrame->contentSerials[a_featureSlot] != 0]]
+    [[preparedFrame->contentSerials[a_featureSlot] == slot.contentSerial]]
+    [[preparedFrame->widths[a_featureSlot] == a_width]]
+    [[preparedFrame->heights[a_featureSlot] == a_height]]
+    [[slot.prepareKey.sourceWorldFrame == a_sourceWorldFrame]]
+    [[slot.prepareKey.generation == a_generation]]
+    [[slot.width == a_width && slot.height == a_height]]
+)
+    string(FIND "${_prepared_lookup}" "${_prepared_lookup_contract}" _prepared_lookup_position)
+    if(_prepared_lookup_position EQUAL -1)
+        message(FATAL_ERROR "Shared prepared-resource freshness contract is missing: ${_prepared_lookup_contract}")
+    endif()
+endforeach()
+string(REGEX MATCHALL [[state_->FindPreparedSlot\(]] _prepared_lookup_calls "${_character_source}")
+list(LENGTH _prepared_lookup_calls _prepared_lookup_count)
+if(NOT _prepared_lookup_count EQUAL 3)
+    message(FATAL_ERROR "Mask, single rectangle and region-plan accessors must all use shared prepared-resource validation")
+endif()
+
+string(FIND "${_renderer_source}" [[bool Renderer::State::ApplyBatchLocked(]] _region_batch_begin)
+string(FIND "${_renderer_source}" [[bool Renderer::State::ResetLocked(]] _region_batch_end)
+if(_region_batch_begin EQUAL -1 OR _region_batch_end LESS_EQUAL _region_batch_begin)
+    message(FATAL_ERROR "Unable to isolate independent-region batch")
+endif()
+math(EXPR _region_batch_length "${_region_batch_end} - ${_region_batch_begin}")
+string(SUBSTRING "${_renderer_source}" ${_region_batch_begin} ${_region_batch_length} _region_batch)
+foreach(_region_contract IN ITEMS
+    [[GetStereoPairContractViolation(stereoArgs)]]
+    [[GetCharacterRegionSubmissionViolation(]]
+    [[logical.outputWidth, logical.outputHeight, logical.characterVisualIsolation)]]
+    [[physical.featureSlot = PhysicalRegionFeatureSlot(logical.featureSlot, region);]]
+    [[physical.computeRegions = {};]]
+    [[resources[index].historyKey.regionIdentity = regionIdentities[index];]]
+    [[clusterIdentities[expandedCount] = plan.clusterIdentities[region];]]
+    [[IsMatchingRegionStereoPair(a_args[left].featureSlot, clusterIdentities[left],]]
+    [[std::array<Slot*, kMaximumRegionEvaluations> slots{};]]
+    [[IsMatchingRegionStereoPair(]]
+    [[.logicalEyeCount = logicalEyeCount,]]
+    [[physical.evaluationAttemptedFeatureSlotMask, required, false]]
+    [[physical.evaluationSucceededFeatureSlotMask, required, true]]
+)
+    string(FIND "${_region_batch}" "${_region_contract}" _region_contract_position)
+    if(_region_contract_position EQUAL -1)
+        message(FATAL_ERROR "Independent region safety contract is missing: ${_region_contract}")
+    endif()
+endforeach()
+set(_previous_region_stage -1)
+foreach(_region_stage IN ITEMS
+    [[GetStereoPairContractViolation(stereoArgs)]]
+    [[physical.featureSlot = PhysicalRegionFeatureSlot(logical.featureSlot, region);]]
+    [[EnsureBackendLocked(a_args.front())]]
+    [[activeStage_ = RendererStage::ColorInputCopy;]]
+    [[activeStage_ = RendererStage::ControlMaskCopy;]]
+    [[Runtime::Instance().Execute(]]
+    [[if (!interop_.EndD3D12())]]
+    [[activeStage_ = RendererStage::OutputCommit;]]
+)
+    string(FIND "${_region_batch}" "${_region_stage}" _region_stage_position)
+    if(_region_stage_position LESS_EQUAL _previous_region_stage)
+        message(FATAL_ERROR "Region inputs must precede evaluations and all output commits: ${_region_stage}")
+    endif()
+    set(_previous_region_stage ${_region_stage_position})
+endforeach()
+foreach(_timing_contract IN ITEMS
+    [[a_timing.evaluationCount > 4u]]
+    [[a_timing.logicalEyeCount == 0u || a_timing.logicalEyeCount > 2u]]
+    [[commandContext.timing.logicalEyeCount == 2u]]
+    [[telemetry_.lastFeatureLogicalEyeCount =]]
+)
+    string(FIND "${_d3d12_interop_source}" "${_timing_contract}" _timing_contract_position)
+    if(_timing_contract_position EQUAL -1)
+        message(FATAL_ERROR "Region timing must distinguish actual evaluations from stereo eyes: ${_timing_contract}")
+    endif()
+endforeach()
 
 message(STATUS "Neural Rendering DevBench contract passed")

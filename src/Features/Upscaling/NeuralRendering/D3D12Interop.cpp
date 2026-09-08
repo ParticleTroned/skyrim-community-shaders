@@ -224,6 +224,8 @@ namespace NeuralRendering
 					telemetry_.lastFeatureFrameId = commandContext.timing.frameId;
 					telemetry_.lastFeatureEvaluationCount =
 						commandContext.timing.evaluationCount;
+					telemetry_.lastFeatureLogicalEyeCount =
+						commandContext.timing.logicalEyeCount;
 					telemetry_.lastFeatureSlotMask =
 						commandContext.timing.featureSlotMask;
 					telemetry_.lastInsertionPoint =
@@ -569,7 +571,11 @@ namespace NeuralRendering
 		const bool insertionPointValid = IsValidInsertionPoint(a_timing.insertionPoint);
 		if (a_timing.frameId == std::numeric_limits<std::uint32_t>::max() ||
 			!a_timing.pixelCount || !a_timing.evaluationCount ||
-			a_timing.evaluationCount > 2u ||
+			a_timing.evaluationCount > 4u ||
+			a_timing.logicalEyeCount == 0u || a_timing.logicalEyeCount > 2u ||
+			static_cast<std::uint32_t>(std::popcount(
+				(a_timing.featureSlotMask | (a_timing.featureSlotMask >> 4u)) & 0xFu)) !=
+				a_timing.logicalEyeCount ||
 			static_cast<std::uint32_t>(std::popcount(a_timing.featureSlotMask)) !=
 				a_timing.evaluationCount ||
 			route == FeatureSlotRoute::Unexpected ||
@@ -677,7 +683,7 @@ namespace NeuralRendering
 			IncrementSaturating(telemetry_.mainCommandSubmissions);
 		else if (route == FeatureSlotRoute::Submit)
 			IncrementSaturating(telemetry_.submitCommandSubmissions);
-		if (commandContext.timing.evaluationCount > 1u) {
+		if (commandContext.timing.logicalEyeCount == 2u) {
 			IncrementSaturating(telemetry_.stereoCommandSubmissions);
 			if (route == FeatureSlotRoute::Main)
 				IncrementSaturating(telemetry_.mainStereoCommandSubmissions);

@@ -49,6 +49,7 @@
 #include <mutex>
 #include <new>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -98,6 +99,7 @@
 	OP(neuralCharacterHairStrength)                \
 	OP(neuralCharacterMaximumDistanceMeters)       \
 	OP(neuralCharacterAdaptiveRoiSelectionEnabled) \
+	OP(neuralCharacterMultiRoiEnabled)             \
 	OP(neuralCharacterMinimumFacePixelSize)        \
 	OP(neuralCharacterRoiMargin)                   \
 	OP(neuralCharacterRoiHoldFrames)               \
@@ -3771,6 +3773,7 @@ namespace
 				a_settings.neuralCharacterMaximumDistanceMeters,
 			.adaptiveRoiSelection =
 				a_settings.neuralCharacterAdaptiveRoiSelectionEnabled,
+			.multiRoi = a_settings.neuralCharacterMultiRoiEnabled,
 			.minimumFacePixelSize =
 				a_settings.neuralCharacterMinimumFacePixelSize,
 			.roiMargin = a_settings.neuralCharacterRoiMargin,
@@ -3852,6 +3855,8 @@ namespace
 		a_args.controlMaskWidth = 0;
 		a_args.controlMaskHeight = 0;
 		a_args.computeSubrect = {};
+		a_args.computeRegions = {};
+		a_args.characterVisualIsolation = false;
 		const auto characterSettings = BuildCharacterSettings(a_settings);
 		if (!characterSettings.enabled || !UsesCharacterVisualIsolation(a_settings)) {
 			a_args.tuning.useAutoMask = true;
@@ -3887,9 +3892,44 @@ namespace
 
 		a_requiresEvaluation = result.requiresEvaluation;
 		a_args.computeSubrect = result.computeSubrect;
+		a_args.computeRegions = result.computeRegions;
+		a_args.characterVisualIsolation = true;
 		if (a_requiresEvaluation && !a_args.computeSubrect.Fits(
 										a_args.outputWidth, a_args.outputHeight)) {
 			return false;
+		}
+		return true;
+	}
+
+	// Only copy texels that the provider actually produced. A split plan's
+	// enclosing rectangle includes an undefined gap even though the exact mask
+	// normally prevents sampling it during the final blend.
+	bool CopyNeuralOutputRegions(
+		ID3D11DeviceContext* a_context, ID3D11Resource* a_destination,
+		ID3D11Resource* a_source, std::uint32_t a_width, std::uint32_t a_height,
+		const NeuralRendering::ComputeSubrect& a_enclosure,
+		const NeuralRendering::CharacterComputeRegionPlan& a_regions) noexcept
+	{
+		if (!a_context || !a_destination || !a_source || a_regions.count > 2u ||
+			!a_enclosure.Fits(a_width, a_height))
+			return false;
+		const auto regions = a_regions.count ?
+			std::span<const NeuralRendering::ComputeSubrect>(a_regions.regions.data(), a_regions.count) :
+			std::span<const NeuralRendering::ComputeSubrect>(&a_enclosure, 1);
+		// Validate every region before copying any part of the staged output.
+		for (const auto& region : regions) {
+			if (!region.Fits(a_width, a_height) ||
+				!NeuralRendering::ContainsComputeSubrect(a_enclosure, region))
+				return false;
+		}
+		for (const auto& region : regions) {
+			const D3D11_BOX sourceBox{
+				region.baseX, region.baseY, 0u,
+				region.baseX + region.width, region.baseY + region.height, 1u,
+			};
+			a_context->CopySubresourceRegion(
+				a_destination, 0, region.baseX, region.baseY, 0,
+				a_source, 0, &sourceBox);
 		}
 		return true;
 	}
@@ -4008,6 +4048,7 @@ namespace
 			NeuralRendering::CharacterPolicy::kDefaultMaximumDistanceMeters;
 		settings.neuralCharacterAdaptiveRoiSelectionEnabled =
 			NeuralRendering::CharacterPolicy::kDefaultAdaptiveRoiSelection;
+		settings.neuralCharacterMultiRoiEnabled = false;
 		settings.neuralCharacterMinimumFacePixelSize =
 			NeuralRendering::CharacterPolicy::kDefaultMinimumFacePixelSize;
 		settings.neuralCharacterRoiMargin =
@@ -4076,6 +4117,7 @@ namespace
 		o_json.erase("neuralCharacterHairStrength");
 		o_json.erase("neuralCharacterMaximumDistanceMeters");
 		o_json.erase("neuralCharacterAdaptiveRoiSelectionEnabled");
+		o_json.erase("neuralCharacterMultiRoiEnabled");
 		o_json.erase("neuralCharacterMinimumFacePixelSize");
 		o_json.erase("neuralCharacterRoiMargin");
 		o_json.erase("neuralCharacterRoiHoldFrames");
@@ -5025,6 +5067,7 @@ namespace
 			addFloat(a_settings.neuralCharacterHairStrength);
 			addFloat(a_settings.neuralCharacterMaximumDistanceMeters);
 			add(a_settings.neuralCharacterAdaptiveRoiSelectionEnabled);
+			add(a_settings.neuralCharacterMultiRoiEnabled);
 			add(a_settings.neuralCharacterMinimumFacePixelSize);
 			addFloat(a_settings.neuralCharacterRoiMargin);
 			add(a_settings.neuralCharacterRoiHoldFrames);
@@ -15114,7 +15157,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 				&settings.neuralCharacterRenderingEnabled);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted(
-					"Runs Feature 18 in one per-eye rectangle enclosing selected NPC materials.");
+					"Runs Feature 18 in bounded per-eye rectangles enclosing selected NPC materials.");
 				ImGui::TextUnformatted(
 					"An exact authored mask selects face, skin, and hair pixels from that partial output.");
 			}
@@ -15200,6 +15243,26 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 				if (ImGui::TreeNodeEx(
 						"Character Rendering Advanced",
 						ImGuiTreeNodeFlags_SpanAvailWidth)) {
+					{
+						auto guard = Util::DisableGuard(
+							!settings.neuralCharacterVisualIsolationEnabled &&
+							!settings.neuralCharacterMultiRoiEnabled);
+						ImGui::Checkbox(
+							"Experimental Multi-ROI",
+							&settings.neuralCharacterMultiRoiEnabled);
+						if (auto _tt = Util::HoverTooltipWrapper()) {
+							ImGui::TextUnformatted(
+								"Uses at most two persistent Feature 18 regions per eye to skip large gaps between characters.");
+							ImGui::TextUnformatted(
+								"Nearby or overlapping regions use the existing enclosing rectangle. Exact face/skin/hair masking is unchanged.");
+							ImGui::TextUnformatted(
+								"Experimental, off by default: extra instances increase VRAM; GPU savings and image stability need in-game validation.");
+							ImGui::TextUnformatted(
+								"Split regions use one atomic batch even with Sequential Stereo selected. Turning this off retires the extra runtime instances.");
+							ImGui::TextUnformatted(
+								"Debug views and forced-mask tests use the single-region fallback. Diagnostics report the active region count and fallback reason.");
+						}
+					}
 					ImGui::Checkbox(
 						"Adaptive ROI Performance",
 						&settings.neuralCharacterAdaptiveRoiSelectionEnabled);
@@ -15222,7 +15285,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 						"%.2f", ImGuiSliderFlags_AlwaysClamp);
 					if (auto _tt = Util::HoverTooltipWrapper()) {
 						ImGui::TextUnformatted(
-							"Expands projected actor bounds before building the one provider compute rectangle.");
+							"Expands projected actor bounds before building the provider compute rectangles.");
 						ImGui::TextUnformatted(
 							"Smaller values reduce inference area; the exact mask still controls final pixels.");
 					}
@@ -15237,9 +15300,8 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 							static_cast<uint>(holdFrames);
 					}
 
-					ImGui::TextColored(
-						Util::Colors::GetSuccess(),
-						"Dynamic single-rectangle inference is active; the pinned provider ABI exposes no ROI list.");
+					ImGui::TextDisabled(
+						"The provider takes one rectangle per evaluation; Multi-ROI uses separate feature instances.");
 
 					ImGui::Checkbox(
 						"Visibility Depth Test",
@@ -15429,12 +15491,25 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 						}
 					}
 					ImGui::TextDisabled(
-						"  compute ROI: (%u,%u) %ux%u, %.2f%% of eye",
+						"  compute enclosure: (%u,%u) %ux%u, %.2f%% of eye",
 						eyeStatus.computeSubrect.baseX,
 						eyeStatus.computeSubrect.baseY,
 						eyeStatus.computeSubrect.width,
 						eyeStatus.computeSubrect.height,
 						eyeStatus.computeSubrectCoveragePercent);
+					if (settings.neuralCharacterMultiRoiEnabled) {
+						ImGui::TextDisabled(
+							"  Multi-ROI: %s | %u evaluations | %llu planned pixels",
+							NeuralRendering::GetCharacterMultiRoiReasonName(eyeStatus.multiRoiReason),
+							eyeStatus.evaluationRequired ? std::max(1u, eyeStatus.computeRegions.count) : 0u,
+							static_cast<unsigned long long>(eyeStatus.multiRoiPixels));
+						for (uint32_t region = 0; region < eyeStatus.computeRegions.count; ++region) {
+							const auto& rect = eyeStatus.computeRegions.regions[region];
+							ImGui::TextDisabled(
+								"    region %u: (%u,%u) %ux%u",
+								region + 1u, rect.baseX, rect.baseY, rect.width, rect.height);
+						}
+					}
 					if (eyeStatus.depthCoordinatesValid) {
 						ImGui::TextDisabled(
 							"  depth map: frozen base (%u,%u), crop %ux%u; current local 0,0 %ux%u; jitter %.3f,%.3f",
@@ -15449,7 +15524,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 					}
 				}
 				ImGui::TextDisabled(
-					"Feature 18 evaluates every pixel inside the displayed rectangle; the exact mask controls compositing.");
+					"Feature 18 evaluates inside each active region; the exact mask controls compositing.");
 
 				const auto debugView =
 					NeuralRendering::ClampCharacterDebugView(
@@ -16108,7 +16183,12 @@ bool Upscaling::HandleNeuralRenderingSettingsTransition(
 	const Settings& a_previousSettings,
 	const char* a_reason)
 {
-	if (HasSameNeuralRenderingSettingsKey(a_previousSettings, settings)) {
+	// A disabled character/master switch can hide this setting from the render
+	// cache key, but switching the experiment off must still reclaim its slots.
+	const bool multiRoiChanged =
+		a_previousSettings.neuralCharacterMultiRoiEnabled !=
+		settings.neuralCharacterMultiRoiEnabled;
+	if (!multiRoiChanged && HasSameNeuralRenderingSettingsKey(a_previousSettings, settings)) {
 		return true;
 	}
 
@@ -16129,7 +16209,7 @@ bool Upscaling::HandleNeuralRenderingSettingsTransition(
 	}
 	if (a_previousSettings.neuralRenderingEnabled ==
 			settings.neuralRenderingEnabled &&
-		!insertionPointChanged) {
+		!insertionPointChanged && !multiRoiChanged) {
 		return true;
 	}
 
@@ -25516,7 +25596,8 @@ ID3D11Resource* Upscaling::GetSubmitNeuralFloatEvaluationOutput(
 bool Upscaling::CommitSubmitNeuralFloatOutput(
 	uint32_t eyeIndex,
 	bool directCommit,
-	const NeuralRendering::ComputeSubrect& computeSubrect) noexcept
+	const NeuralRendering::ComputeSubrect& computeSubrect,
+	const NeuralRendering::CharacterComputeRegionPlan& computeRegions) noexcept
 {
 	if (eyeIndex >= 2 || !submitNeuralFloatColorOut[eyeIndex] ||
 		!submitNeuralFloatColorOut[eyeIndex]->resource ||
@@ -25534,20 +25615,12 @@ bool Upscaling::CommitSubmitNeuralFloatOutput(
 			submitNeuralFloatStagedOut[eyeIndex]->desc.Height)) {
 		return false;
 	}
-	const D3D11_BOX sourceBox{
-		computeSubrect.baseX,
-		computeSubrect.baseY,
-		0u,
-		computeSubrect.baseX + computeSubrect.width,
-		computeSubrect.baseY + computeSubrect.height,
-		1u,
-	};
-	globals::d3d::context->CopySubresourceRegion(
-		submitNeuralFloatColorOut[eyeIndex]->resource.get(), 0,
-		computeSubrect.baseX, computeSubrect.baseY, 0,
-		submitNeuralFloatStagedOut[eyeIndex]->resource.get(), 0,
-		&sourceBox);
-	return true;
+	return CopyNeuralOutputRegions(
+		globals::d3d::context, submitNeuralFloatColorOut[eyeIndex]->resource.get(),
+		submitNeuralFloatStagedOut[eyeIndex]->resource.get(),
+		submitNeuralFloatColorOut[eyeIndex]->desc.Width,
+		submitNeuralFloatColorOut[eyeIndex]->desc.Height,
+		computeSubrect, computeRegions);
 }
 
 bool Upscaling::EnsureFoveatedDepthGuideSRV(Texture2D& texture, const char* name)
@@ -27021,9 +27094,14 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 												 settings.neuralRenderingSingleSubrectScale);
 			if (!preparedSubrect.Fits(rect.outputWidth, rect.outputHeight))
 				return false;
+			const auto preparedRegions = characterVisualIsolation ?
+				NeuralRendering::CharacterRendering::Instance().GetPreparedComputeRegions(
+					featureSlot, currentFrame, neuralSourceFrame, neuralGeneration,
+					rect.outputWidth, rect.outputHeight) :
+				NeuralRendering::CharacterComputeRegionPlan{};
 			if (useSubmitNeuralFloatBridge)
 				return CommitSubmitNeuralFloatOutput(
-					eyeIndex, directNeuralCommit, preparedSubrect);
+					eyeIndex, directNeuralCommit, preparedSubrect, preparedRegions);
 			if (!directNeuralCommit) {
 				if (!foveatedCenterColorOut[eyeIndex] ||
 					!foveatedCenterColorOut[eyeIndex]->resource ||
@@ -27031,19 +27109,10 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 					!foveatedCenterNeuralOut[eyeIndex]->resource) {
 					return false;
 				}
-				const D3D11_BOX sourceBox{
-					preparedSubrect.baseX,
-					preparedSubrect.baseY,
-					0u,
-					preparedSubrect.baseX + preparedSubrect.width,
-					preparedSubrect.baseY + preparedSubrect.height,
-					1u,
-				};
-				context->CopySubresourceRegion(
-					foveatedCenterColorOut[eyeIndex]->resource.get(), 0,
-					preparedSubrect.baseX, preparedSubrect.baseY, 0,
-					foveatedCenterNeuralOut[eyeIndex]->resource.get(), 0,
-					&sourceBox);
+				return CopyNeuralOutputRegions(
+					context, foveatedCenterColorOut[eyeIndex]->resource.get(),
+					foveatedCenterNeuralOut[eyeIndex]->resource.get(),
+					rect.outputWidth, rect.outputHeight, preparedSubrect, preparedRegions);
 			}
 			return true;
 		};
@@ -27857,7 +27926,7 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 				if (neuralResults[eye].bypassed)
 					continue;
 				if (!CommitSubmitNeuralFloatOutput(
-						eye, directCommit, neuralArgs[eye].computeSubrect)) {
+						eye, directCommit, neuralArgs[eye].computeSubrect, neuralArgs[eye].computeRegions)) {
 					return false;
 				}
 			}
@@ -27869,19 +27938,11 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 				const auto& computeSubrect = neuralArgs[eye].computeSubrect;
 				if (!computeSubrect.Fits(rect.outputWidth, rect.outputHeight))
 					return false;
-				const D3D11_BOX sourceBox{
-					computeSubrect.baseX,
-					computeSubrect.baseY,
-					0u,
-					computeSubrect.baseX + computeSubrect.width,
-					computeSubrect.baseY + computeSubrect.height,
-					1u,
-				};
-				context->CopySubresourceRegion(
-					neuralFinalLdrColorOut[eye]->resource.get(), 0,
-					computeSubrect.baseX, computeSubrect.baseY, 0,
-					neuralFinalLdrStagedOut[eye]->resource.get(), 0,
-					&sourceBox);
+				if (!CopyNeuralOutputRegions(
+						context, neuralFinalLdrColorOut[eye]->resource.get(),
+						neuralFinalLdrStagedOut[eye]->resource.get(),
+						rect.outputWidth, rect.outputHeight, computeSubrect, neuralArgs[eye].computeRegions))
+					return false;
 			}
 		}
 		std::array<ID3D11ShaderResourceView*, 2> baselineCenterSRVs{};

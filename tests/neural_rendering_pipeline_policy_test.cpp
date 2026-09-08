@@ -118,6 +118,93 @@ int main()
 	static_assert(NeuralRendering::ClassifyFeatureSlotMask(0b1100u) == FeatureSlotRoute::Submit);
 	static_assert(NeuralRendering::ClassifyFeatureSlotMask(0u) == FeatureSlotRoute::Unexpected);
 	static_assert(NeuralRendering::ClassifyFeatureSlotMask(0b0101u) == FeatureSlotRoute::Unexpected);
+	static_assert(NeuralRendering::ClassifyFeatureSlotMask(0b00110011u) == FeatureSlotRoute::Main);
+	static_assert(NeuralRendering::ClassifyFeatureSlotMask(0b00010001u) == FeatureSlotRoute::Main);
+	static_assert(NeuralRendering::ClassifyFeatureSlotMask(0b11001100u) == FeatureSlotRoute::Submit);
+	static_assert(NeuralRendering::ClassifyFeatureSlotMask(0b01010001u) == FeatureSlotRoute::Unexpected);
+	static_assert(NeuralRendering::ClassifyFeatureSlotMask(0x100u) == FeatureSlotRoute::Unexpected);
+	static_assert(NeuralRendering::LogicalFeatureSlot(4u) == 0u);
+	static_assert(NeuralRendering::LogicalFeatureSlot(7u) == 3u);
+	static_assert(NeuralRendering::IsMatchingRegionStereoPair(0u, 42u, 1u, 42u));
+	static_assert(NeuralRendering::IsMatchingRegionStereoPair(4u, 42u, 5u, 42u));
+	static_assert(NeuralRendering::IsMatchingRegionStereoPair(0u, 42u, 5u, 42u));
+	static_assert(!NeuralRendering::IsMatchingRegionStereoPair(0u, 42u, 1u, 43u));
+	static_assert(!NeuralRendering::IsMatchingRegionStereoPair(0u, 42u, 4u, 42u));
+	static_assert(!NeuralRendering::IsMatchingRegionStereoPair(0u, 42u, 3u, 42u));
+	static_assert(!NeuralRendering::IsMatchingRegionStereoPair(8u, 42u, 1u, 42u));
+	constexpr std::array<std::uint32_t, 4> splitRequirements{ 0x11u, 0x22u, 0u, 0u };
+	static_assert(NeuralRendering::AggregateRegionEvaluationMask(0x1u, splitRequirements, false) == 0x1u);
+	static_assert(NeuralRendering::AggregateRegionEvaluationMask(0x1u, splitRequirements, true) == 0u);
+	static_assert(NeuralRendering::AggregateRegionEvaluationMask(0x13u, splitRequirements, false) == 0x3u);
+	static_assert(NeuralRendering::AggregateRegionEvaluationMask(0x13u, splitRequirements, true) == 0x1u);
+	static_assert(NeuralRendering::AggregateRegionEvaluationMask(0x33u, splitRequirements, true) == 0x3u);
+	static_assert([] {
+		std::uint32_t seen = 0;
+		for (std::uint32_t logical = 0; logical < 4u; ++logical) {
+			for (std::uint32_t region = 0; region < 2u; ++region) {
+				const auto physical = NeuralRendering::PhysicalRegionFeatureSlot(logical, region);
+				if (physical >= 8u || (seen & (1u << physical)) != 0u ||
+					NeuralRendering::LogicalFeatureSlot(physical) != logical)
+					return false;
+				seen |= 1u << physical;
+			}
+		}
+		return seen == 0xFFu &&
+		       NeuralRendering::PhysicalRegionFeatureSlot(4u, 0u) == 8u &&
+		       NeuralRendering::PhysicalRegionFeatureSlot(0u, 2u) == 8u;
+	}());
+	static_assert([] {
+		using NeuralRendering::CharacterComputeRegionPlan;
+		using NeuralRendering::ComputeSubrect;
+		using NeuralRendering::GetCharacterRegionSubmissionViolation;
+		constexpr ComputeSubrect support{ 16u, 16u, 128u, 64u };
+		CharacterComputeRegionPlan plan;
+		plan.regions = { ComputeSubrect{ 16u, 16u, 32u, 64u }, ComputeSubrect{ 112u, 16u, 32u, 64u } };
+		plan.historyKeys = { 101u, 202u };
+		plan.clusterIdentities = { 11u, 22u };
+		plan.count = 2u;
+		const auto valid = [&](const auto& candidate) {
+			return GetCharacterRegionSubmissionViolation(0u, candidate, support, 256u, 128u, true).empty();
+		};
+		if (!valid(plan) || GetCharacterRegionSubmissionViolation(0u, plan, support, 256u, 128u, false).empty() ||
+			GetCharacterRegionSubmissionViolation(4u, plan, support, 256u, 128u, true).empty() ||
+			GetCharacterRegionSubmissionViolation(0u, plan, {}, 256u, 128u, true).empty())
+			return false;
+		auto invalid = plan;
+		invalid.count = 3u;
+		if (valid(invalid)) return false;
+		invalid = plan;
+		invalid.regions[1].baseX = 47u;  // One-pixel overlap.
+		if (valid(invalid)) return false;
+		invalid.regions[1].baseX = 48u;  // Touching exclusive bounds is valid.
+		if (!valid(invalid)) return false;
+		invalid = plan;
+		invalid.regions[0].baseX = 15u;  // In texture, outside declared composite support.
+		if (valid(invalid)) return false;
+		invalid = plan;
+		invalid.regions[1].width = 33u;
+		if (valid(invalid)) return false;
+		invalid = plan;
+		invalid.regions[1].baseX = std::numeric_limits<std::uint32_t>::max();
+		if (valid(invalid)) return false;
+		invalid = plan;
+		invalid.regions[1].width = 0u;
+		if (valid(invalid)) return false;
+		invalid = plan;
+		invalid.historyKeys[1] = invalid.historyKeys[0];
+		if (valid(invalid)) return false;
+		invalid.historyKeys[1] = 0u;
+		if (valid(invalid)) return false;
+		invalid = plan;
+		invalid.clusterIdentities[1] = 0u;
+		if (valid(invalid)) return false;
+		invalid.clusterIdentities[1] = invalid.clusterIdentities[0];
+		if (valid(invalid)) return false;
+		plan.count = 1u;
+		if (!valid(plan)) return false;
+		// An absent plan keeps the legacy validator/path in charge, without new restrictions.
+		return GetCharacterRegionSubmissionViolation(0u, {}, {}, 0u, 0u, false).empty();
+	}());
 	static_assert(NeuralRendering::IsOrderedStereoFeatureSlotPair(0u, 1u));
 	static_assert(NeuralRendering::IsOrderedStereoFeatureSlotPair(2u, 3u));
 	static_assert(!NeuralRendering::IsOrderedStereoFeatureSlotPair(1u, 0u));

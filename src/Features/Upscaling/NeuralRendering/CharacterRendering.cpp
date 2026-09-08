@@ -128,6 +128,7 @@ namespace NeuralRendering
 			addFloat(a_settings.hairStrength);
 			addFloat(a_settings.maximumDistanceMeters);
 			add(a_settings.adaptiveRoiSelection);
+			add(a_settings.multiRoi);
 			add(a_settings.minimumFacePixelSize);
 			addFloat(a_settings.roiMargin);
 			add(a_settings.roiHoldFrames);
@@ -136,6 +137,7 @@ namespace NeuralRendering
 			add(a_settings.featherRadius);
 			addFloat(a_settings.featherDepthThreshold);
 			add(static_cast<std::uint32_t>(a_settings.maskTestMode));
+			add(static_cast<std::uint32_t>(a_settings.debugView));
 			return hash;
 		}
 
@@ -433,6 +435,10 @@ namespace NeuralRendering
 			bool zeroCoverageCpuProven = false;
 			bool requiresEvaluation = true;
 			ComputeSubrect computeSubrect{};
+			CharacterComputeRegionPlan computeRegions{};
+			StableCharacterMultiRoi stableMultiRoi{};
+			CharacterMultiRoiReason multiRoiReason = CharacterMultiRoiReason::Disabled;
+			std::uint64_t multiRoiPolicyKey = 0;
 			ComputeSubrect maskWorkSubrect{};
 			ComputeSubrect previousMaskWorkSubrect{};
 			bool maskInitialized = false;
@@ -467,6 +473,7 @@ namespace NeuralRendering
 		struct ProjectedPlan
 		{
 			std::vector<CharacterRect> regions;
+			std::vector<CharacterMultiRoiActor> actorRegions;
 			std::uint64_t eligibilitySignature = 0;
 			std::uint32_t visibleFaces = 0;
 			std::uint32_t visibleCharacters = 0;
@@ -587,6 +594,8 @@ namespace NeuralRendering
 			snapshot_.eyes = {};
 			for (auto& slot : slots_) {
 				slot.prepared = false;
+				slot.computeRegions = {};
+				slot.stableMultiRoi = {};
 				slot.prepareKey = {};
 				slot.contentSerial = 0;
 				slot.maskCoverageContentSerial = 0;
@@ -605,7 +614,8 @@ namespace NeuralRendering
 			std::uint64_t a_contentSerial,
 			std::uint32_t a_width,
 			std::uint32_t a_height,
-			bool a_requiresEvaluation) noexcept
+			bool a_requiresEvaluation,
+			std::uint32_t a_computeRegionCount) noexcept
 		{
 			CharacterPreparedFrameSnapshot* entry = nullptr;
 			for (auto& candidate : snapshot_.preparedFrames) {
@@ -643,6 +653,8 @@ namespace NeuralRendering
 			entry->contentSerials[a_featureSlot] = a_contentSerial;
 			entry->widths[a_featureSlot] = a_width;
 			entry->heights[a_featureSlot] = a_height;
+			entry->computeRegionCounts[a_featureSlot] = a_requiresEvaluation ?
+			                                                std::max(1u, a_computeRegionCount) : 0u;
 		}
 
 		void InvalidatePreparedSlot(
@@ -655,6 +667,8 @@ namespace NeuralRendering
 				slot.prepared = false;
 				slot.requiresEvaluation = true;
 				slot.computeSubrect = {};
+				slot.computeRegions = {};
+				slot.stableMultiRoi = {};
 				slot.prepareKey = {};
 				slot.contentSerial = 0;
 				slot.maskCoverageContentSerial = 0;
@@ -685,10 +699,36 @@ namespace NeuralRendering
 				preparedFrame.contentSerials[a_featureSlot] = 0;
 				preparedFrame.widths[a_featureSlot] = 0;
 				preparedFrame.heights[a_featureSlot] = 0;
+				preparedFrame.computeRegionCounts[a_featureSlot] = 0;
 				if (preparedFrame.preparedSlotMask == 0u)
 					preparedFrame = {};
 				break;
 			}
+		}
+
+		/** The caller holds mutex_; every prepared-resource accessor uses this contract. */
+		[[nodiscard]] const Slot* FindPreparedSlot(
+			std::uint32_t a_featureSlot, std::uint32_t a_frameId,
+			std::uint32_t a_sourceWorldFrame, std::uint64_t a_generation,
+			std::uint32_t a_width, std::uint32_t a_height) const noexcept
+		{
+			if (a_featureSlot >= slots_.size())
+				return nullptr;
+			const auto& slot = slots_[a_featureSlot];
+			const auto preparedFrame = std::ranges::find_if(snapshot_.preparedFrames,
+				[a_frameId](const auto& prepared) { return prepared.frame == a_frameId; });
+			const auto slotBit = 1u << a_featureSlot;
+			return slot.prepared && preparedFrame != snapshot_.preparedFrames.end() &&
+			               (preparedFrame->preparedSlotMask & slotBit) != 0 &&
+			               preparedFrame->sourceWorldFrames[a_featureSlot] == a_sourceWorldFrame &&
+			               preparedFrame->generations[a_featureSlot] == a_generation &&
+			               preparedFrame->contentSerials[a_featureSlot] != 0 &&
+			               preparedFrame->contentSerials[a_featureSlot] == slot.contentSerial &&
+			               preparedFrame->widths[a_featureSlot] == a_width &&
+			               preparedFrame->heights[a_featureSlot] == a_height &&
+			               slot.prepareKey.sourceWorldFrame == a_sourceWorldFrame &&
+			               slot.prepareKey.generation == a_generation &&
+			               slot.width == a_width && slot.height == a_height ? &slot : nullptr;
 		}
 
 		void ClearMask(
@@ -1290,6 +1330,12 @@ namespace NeuralRendering
 					.facePixelSize = admission->second.facePixelSize,
 					.stableId = actor.actorFormId,
 				});
+				// Preserve lifetime ownership before eligibility compaction can join
+				// otherwise distant actors. Neither distance order nor geometry IDs
+				// identify a temporal inference history.
+				auto identity = HashCombine(
+					HashCombine(1469598103934665603ull, actor.actorFormId), admission->second.identity);
+				result.actorRegions.push_back({ identity ? identity : 1u, local });
 			}
 			// Only order here: actor admission was already applied to authored
 			// categories. Re-testing thresholds now would leak rejected actors
@@ -2313,6 +2359,11 @@ namespace NeuralRendering
 				eye.evaluationWidth = a_args.outputWidth;
 				eye.evaluationHeight = a_args.outputHeight;
 				eye.computeSubrect = slot.computeSubrect;
+				eye.computeRegions = slot.computeRegions;
+				eye.multiRoiReason = slot.multiRoiReason;
+				eye.multiRoiPixels = slot.computeRegions.count == 2 ?
+				                         slot.computeRegions.regions[0].Area() + slot.computeRegions.regions[1].Area() :
+				                         slot.computeSubrect.Area();
 				const auto evaluationPixels =
 					static_cast<std::uint64_t>(a_args.outputWidth) *
 					a_args.outputHeight;
@@ -2351,7 +2402,7 @@ namespace NeuralRendering
 					a_args.frameId, sourceWorldFrame, a_args.generation,
 					a_args.featureSlot, slot.contentSerial,
 					a_args.outputWidth, a_args.outputHeight,
-					slot.requiresEvaluation);
+					slot.requiresEvaluation, slot.computeRegions.count);
 			} else if (!state_->EnsureSlot(
 						   slot, a_args.device, a_args.featureSlot,
 						   a_args.outputWidth, a_args.outputHeight)) {
@@ -2414,9 +2465,14 @@ namespace NeuralRendering
 					slot.computeSubrectCrop != a_args.viewportCrop;
 				if (computeSubrectContractChanged) {
 					slot.stableComputeSubrect = {};
+					slot.stableMultiRoi = {};
 					slot.computeSubrectGeneration = a_args.generation;
 					slot.computeSubrectCrop = a_args.viewportCrop;
 					slot.computeSubrectContractValid = true;
+				}
+				if (slot.multiRoiPolicyKey != key.settings) {
+					slot.stableMultiRoi = {};
+					slot.multiRoiPolicyKey = key.settings;
 				}
 				const auto requiredComputeSubrect = cpuProvenEmpty ?
 				                                        ComputeSubrect{} :
@@ -2442,6 +2498,29 @@ namespace NeuralRendering
 						a_args.outputHeight,
 						slot.stableComputeSubrect);
 				}
+				slot.computeRegions = {};
+				slot.multiRoiReason = CharacterMultiRoiReason::Disabled;
+				if (a_args.settings.multiRoi) {
+					if (!authoredMode || a_args.settings.debugView != CharacterDebugView::Off) {
+						slot.multiRoiReason = CharacterMultiRoiReason::DiagnosticMode;
+					} else if (cpuProvenEmpty) {
+						slot.multiRoiReason = CharacterMultiRoiReason::TooFewActors;
+					} else if (plan.fullEyeEligibilityFallback) {
+						slot.multiRoiReason = CharacterMultiRoiReason::UncertainCoverage;
+					} else {
+						slot.computeRegions = ResolveCharacterMultiRoi(
+							plan.actorRegions, plan.regions, a_args.outputWidth, a_args.outputHeight,
+							sourceWorldFrame, slot.stableMultiRoi, slot.multiRoiReason);
+						if (slot.computeRegions.count == 2) {
+							// Composition still receives the enclosure, but inference uses
+							// the separate rectangles. Never expose stale pixels in gaps.
+							slot.computeSubrect = UnionCharacterComputeSubrect(
+								slot.computeRegions.regions[0], slot.computeRegions.regions[1]);
+						}
+					}
+				}
+				if (slot.computeRegions.count == 0)
+					slot.stableMultiRoi = {};
 				if (!cpuProvenEmpty &&
 					!slot.computeSubrect.Fits(
 						a_args.outputWidth, a_args.outputHeight)) {
@@ -2512,6 +2591,11 @@ namespace NeuralRendering
 				const auto evaluationPixels =
 					static_cast<std::uint64_t>(a_args.outputWidth) * a_args.outputHeight;
 				eye.computeSubrect = slot.computeSubrect;
+				eye.computeRegions = slot.computeRegions;
+				eye.multiRoiReason = slot.multiRoiReason;
+				eye.multiRoiPixels = slot.computeRegions.count == 2 ?
+				                         slot.computeRegions.regions[0].Area() + slot.computeRegions.regions[1].Area() :
+				                         slot.computeSubrect.Area();
 				eye.computeSubrectPixels = slot.computeSubrect.Area();
 				eye.computeSubrectCoveragePercent = evaluationPixels ?
 				                                        100.0f * static_cast<float>(eye.computeSubrectPixels) /
@@ -2572,16 +2656,17 @@ namespace NeuralRendering
 					a_args.frameId, sourceWorldFrame, a_args.generation,
 					a_args.featureSlot, slot.contentSerial,
 					a_args.outputWidth, a_args.outputHeight,
-					slot.requiresEvaluation);
+					slot.requiresEvaluation, slot.computeRegions.count);
 			}
 
 			a_result.prepared = true;
 			a_result.requiresEvaluation = slot.requiresEvaluation;
 			a_result.computeSubrect = slot.computeSubrect;
+			a_result.computeRegions = slot.computeRegions;
 			Increment(state_->snapshot_.preparationSuccesses);
 			state_->snapshot_.status = "ready";
 			state_->snapshot_.detail = std::format(
-				"CSX character selection mask prepared for eye {} slot {} at {}x{}; evaluation={}; sourceFrame={}; compute ROI=({},{} {}x{})",
+				"CSX character selection mask prepared for eye {} slot {} at {}x{}; evaluation={}; sourceFrame={}; compute ROI=({},{} {}x{}); independent regions={}; inference pixels={}; region decision={}",
 				a_args.eyeIndex,
 				a_args.featureSlot,
 				a_args.outputWidth,
@@ -2591,7 +2676,12 @@ namespace NeuralRendering
 				slot.computeSubrect.baseX,
 				slot.computeSubrect.baseY,
 				slot.computeSubrect.width,
-				slot.computeSubrect.height);
+				slot.computeSubrect.height,
+				slot.requiresEvaluation ? std::max(1u, slot.computeRegions.count) : 0u,
+				slot.computeRegions.count == 2 ?
+					slot.computeRegions.regions[0].Area() + slot.computeRegions.regions[1].Area() :
+					slot.computeSubrect.Area(),
+				GetCharacterMultiRoiReasonName(slot.multiRoiReason));
 			return true;
 		} catch (const std::exception& exception) {
 			std::scoped_lock lock(state_->mutex_);
@@ -2833,28 +2923,9 @@ namespace NeuralRendering
 			return {};
 		try {
 			std::scoped_lock lock(state_->mutex_);
-			const auto& slot = state_->slots_[a_featureSlot];
-			const auto preparedFrame = std::ranges::find_if(
-				state_->snapshot_.preparedFrames,
-				[a_frameId](const auto& a_prepared) {
-					return a_prepared.frame == a_frameId;
-				});
-			const auto slotBit = 1u << a_featureSlot;
-			return slot.prepared &&
-			               preparedFrame != state_->snapshot_.preparedFrames.end() &&
-			               (preparedFrame->preparedSlotMask & slotBit) != 0 &&
-			               preparedFrame->sourceWorldFrames[a_featureSlot] ==
-			                   a_sourceWorldFrame &&
-			               preparedFrame->generations[a_featureSlot] == a_generation &&
-			               preparedFrame->contentSerials[a_featureSlot] != 0 &&
-			               preparedFrame->contentSerials[a_featureSlot] ==
-			                   slot.contentSerial &&
-			               slot.prepareKey.sourceWorldFrame == a_sourceWorldFrame &&
-			               slot.prepareKey.generation == a_generation &&
-			               slot.width == a_width &&
-			               slot.height == a_height ?
-			           slot.maskSrv :
-			           ComPtr<ID3D11ShaderResourceView>{};
+			const auto* slot = state_->FindPreparedSlot(a_featureSlot, a_frameId,
+				a_sourceWorldFrame, a_generation, a_width, a_height);
+			return slot ? slot->maskSrv : ComPtr<ID3D11ShaderResourceView>{};
 		} catch (...) {
 			return {};
 		}
@@ -2897,28 +2968,29 @@ namespace NeuralRendering
 			return {};
 		try {
 			std::scoped_lock lock(state_->mutex_);
-			const auto& slot = state_->slots_[a_featureSlot];
-			const auto preparedFrame = std::ranges::find_if(
-				state_->snapshot_.preparedFrames,
-				[a_frameId](const auto& a_prepared) {
-					return a_prepared.frame == a_frameId;
-				});
-			const auto slotBit = 1u << a_featureSlot;
-			return slot.prepared &&
-			               preparedFrame != state_->snapshot_.preparedFrames.end() &&
-			               (preparedFrame->preparedSlotMask & slotBit) != 0 &&
-			               preparedFrame->sourceWorldFrames[a_featureSlot] ==
-			                   a_sourceWorldFrame &&
-			               preparedFrame->generations[a_featureSlot] == a_generation &&
-			               preparedFrame->contentSerials[a_featureSlot] != 0 &&
-			               preparedFrame->contentSerials[a_featureSlot] ==
-			                   slot.contentSerial &&
-			               slot.prepareKey.sourceWorldFrame == a_sourceWorldFrame &&
-			               slot.prepareKey.generation == a_generation &&
-			               slot.width == a_width &&
-			               slot.height == a_height ?
-			           slot.computeSubrect :
-			           ComputeSubrect{};
+			const auto* slot = state_->FindPreparedSlot(a_featureSlot, a_frameId,
+				a_sourceWorldFrame, a_generation, a_width, a_height);
+			return slot ? slot->computeSubrect : ComputeSubrect{};
+		} catch (...) {
+			return {};
+		}
+	}
+
+	CharacterComputeRegionPlan CharacterRendering::GetPreparedComputeRegions(
+		std::uint32_t a_featureSlot,
+		std::uint32_t a_frameId,
+		std::uint32_t a_sourceWorldFrame,
+		std::uint64_t a_generation,
+		std::uint32_t a_width,
+		std::uint32_t a_height) const noexcept
+	{
+		if (!state_)
+			return {};
+		try {
+			std::scoped_lock lock(state_->mutex_);
+			const auto* slot = state_->FindPreparedSlot(a_featureSlot, a_frameId,
+				a_sourceWorldFrame, a_generation, a_width, a_height);
+			return slot ? slot->computeRegions : CharacterComputeRegionPlan{};
 		} catch (...) {
 			return {};
 		}

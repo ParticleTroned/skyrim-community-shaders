@@ -17,6 +17,7 @@
 #	include <algorithm>
 #	include <atomic>
 #	include <array>
+#	include <bit>
 #	include <chrono>
 #	include <cmath>
 #	include <cstdint>
@@ -872,6 +873,38 @@ namespace
 					{ "pixels", region.Area() },
 				});
 			}
+			json computeRegions = json::array();
+			const auto reportedComputeRegionCount = eye.computeRegions.count;
+			const auto exposedComputeRegionCount = std::min<std::size_t>(
+				reportedComputeRegionCount, eye.computeRegions.regions.size());
+			for (std::size_t regionIndex = 0;
+				 regionIndex < exposedComputeRegionCount;
+				 ++regionIndex) {
+				const auto& region = eye.computeRegions.regions[regionIndex];
+				computeRegions.push_back({
+					{ "region", regionIndex },
+					{ "baseX", region.baseX },
+					{ "baseY", region.baseY },
+					{ "width", region.width },
+					{ "height", region.height },
+					{ "pixels", region.Area() },
+					{ "historyKey", eye.computeRegions.historyKeys[regionIndex] },
+					{ "valid", region.Fits(eye.evaluationWidth, eye.evaluationHeight) },
+				});
+			}
+			const auto evaluationPixels =
+				static_cast<std::uint64_t>(eye.evaluationWidth) *
+				eye.evaluationHeight;
+			const auto multiRoiCoveragePercent = evaluationPixels != 0 ?
+				static_cast<double>(eye.multiRoiPixels) * 100.0 /
+					static_cast<double>(evaluationPixels) :
+				0.0;
+			const bool multiRoiSplit =
+				eye.computeRegions.count == 2u &&
+				eye.multiRoiReason == NeuralRendering::CharacterMultiRoiReason::Split;
+			const bool multiRoiFallback =
+				settings.neuralCharacterMultiRoiEnabled &&
+				eye.maskPrepared && eye.evaluationRequired && !multiRoiSplit;
 			eyes.push_back({
 				{ "eye", eyeIndex },
 				{ "frame", eye.frame },
@@ -880,7 +913,7 @@ namespace
 				{ "featureSlot", eye.featureSlot },
 				{ "evaluationWidth", eye.evaluationWidth },
 				{ "evaluationHeight", eye.evaluationHeight },
-				{ "evaluationPixels", static_cast<std::uint64_t>(eye.evaluationWidth) * eye.evaluationHeight },
+				{ "evaluationPixels", evaluationPixels },
 				{ "eligibleFaceActors", eye.visibleFaces },
 				{ "eligibleCharacterActors", eye.visibleCharacterRegions },
 				{ "selectedCharacterActors", eye.selectedCharacterRegions },
@@ -898,6 +931,14 @@ namespace
 									} },
 				{ "computeSubrectPixels", eye.computeSubrectPixels },
 				{ "computeSubrectCoveragePercent", eye.computeSubrectCoveragePercent },
+				{ "computeRegionCount", eye.computeRegions.count },
+				{ "computeRegionCountValid", eye.computeRegions.count <= eye.computeRegions.regions.size() },
+				{ "computeRegions", std::move(computeRegions) },
+				{ "multiRoiPixels", eye.multiRoiPixels },
+				{ "multiRoiCoveragePercent", multiRoiCoveragePercent },
+				{ "multiRoiSplit", multiRoiSplit },
+				{ "multiRoiFallback", multiRoiFallback },
+				{ "multiRoiReason", NeuralRendering::GetCharacterMultiRoiReasonName(eye.multiRoiReason) },
 				{ "maskPixels", eye.maskCoverageReady ? json(eye.maskPixels) : json(nullptr) },
 				{ "maskCoveragePercent", eye.maskCoverageReady ? json(eye.maskCoveragePercent) : json(nullptr) },
 				{ "maskCoverageSampleFrame", eye.maskCoverageReady ? json(eye.maskCoverageFrame) : json(nullptr) },
@@ -977,6 +1018,13 @@ namespace
 		}
 		const std::uint32_t lastFeatureSlotMask =
 			rendererSnapshot.performance.lastFeatureSlotMask;
+		constexpr std::uint32_t kLogicalFeatureSlotMask = 0x0Fu;
+		constexpr std::uint32_t kPhysicalFeatureSlotMask = 0xFFu;
+		const std::uint32_t lastLogicalFeatureSlotMask =
+			(lastFeatureSlotMask & kLogicalFeatureSlotMask) |
+			((lastFeatureSlotMask >> 4u) & kLogicalFeatureSlotMask);
+		const std::uint32_t lastFeatureLogicalEyeCount =
+			rendererSnapshot.performance.lastFeatureLogicalEyeCount;
 		const auto attributedPreparation = std::ranges::find_if(
 			snapshot.preparedFrames, [&](const auto& a_prepared) {
 				return a_prepared.frame ==
@@ -1029,23 +1077,79 @@ namespace
 			expectedEvaluationMask(
 				currentPreparedCharacterSlotMask,
 				currentEvaluationRequiredCharacterSlotMask);
+		auto resolveExpectedPhysicalSlots = [&](
+			std::uint32_t a_logicalMask,
+			std::uint32_t& a_physicalMask,
+			std::uint32_t& a_evaluationCount) noexcept {
+			a_physicalMask = 0u;
+			a_evaluationCount = 0u;
+			if (!attributedPreparationFound ||
+				(a_logicalMask & ~kLogicalFeatureSlotMask) != 0u)
+				return false;
+			for (std::uint32_t featureSlot = 0u; featureSlot < 4u; ++featureSlot) {
+				const auto slotBit = 1u << featureSlot;
+				if ((a_logicalMask & slotBit) == 0u)
+					continue;
+				const auto regionCount =
+					attributedPreparation->computeRegionCounts[featureSlot];
+				if (regionCount == 0u || regionCount > 2u)
+					return false;
+				a_physicalMask |= slotBit;
+				if (regionCount == 2u)
+					a_physicalMask |= 1u << (featureSlot + 4u);
+				a_evaluationCount += regionCount;
+			}
+			return true;
+		};
+		std::uint32_t expectedPhysicalFeatureSlotMask = 0u;
+		std::uint32_t expectedFeatureEvaluationCount = 0u;
+		const bool expectedFeatureRegionCountsValid =
+			resolveExpectedPhysicalSlots(
+				expectedFeatureSlotMask,
+				expectedPhysicalFeatureSlotMask,
+				expectedFeatureEvaluationCount);
+		std::uint32_t sampledScopeExpectedPhysicalSlotMask = 0u;
+		std::uint32_t sampledScopeExpectedEvaluationCount = 0u;
+		const bool sampledScopeRegionCountsValid =
+			resolveExpectedPhysicalSlots(
+				lastLogicalFeatureSlotMask,
+				sampledScopeExpectedPhysicalSlotMask,
+				sampledScopeExpectedEvaluationCount);
 		const std::uint32_t missingPreparedFeatureSlots =
-			preparedCharacterSlotMask & ~lastFeatureSlotMask;
+			preparedCharacterSlotMask & ~lastLogicalFeatureSlotMask;
 		const std::uint32_t missingExpectedFeatureSlots =
-			expectedFeatureSlotMask & ~lastFeatureSlotMask;
+			expectedFeatureSlotMask & ~lastLogicalFeatureSlotMask;
 		const std::uint32_t unexpectedFeatureSlots =
-			lastFeatureSlotMask & ~expectedFeatureSlotMask;
+			lastLogicalFeatureSlotMask & ~expectedFeatureSlotMask;
+		const std::uint32_t missingExpectedPhysicalFeatureSlots =
+			expectedPhysicalFeatureSlotMask & ~lastFeatureSlotMask;
+		const std::uint32_t unexpectedPhysicalFeatureSlots =
+			lastFeatureSlotMask & ~expectedPhysicalFeatureSlotMask;
 		const bool featureTimingIsStereoPair =
-			rendererSnapshot.performance.lastFeatureEvaluationCount == 2u;
+			lastFeatureLogicalEyeCount == 2u;
 		const bool featureTimingIsEyeSample =
-			rendererSnapshot.performance.lastFeatureEvaluationCount == 1u;
-		const bool featureTimingSlotsMatch = featureTimingIsStereoPair ?
-		                                         lastFeatureSlotMask == expectedFeatureSlotMask :
-		                                         featureTimingIsEyeSample && lastFeatureSlotMask != 0u &&
-		                                             unexpectedFeatureSlots == 0u;
+			lastFeatureLogicalEyeCount == 1u;
+		const bool featureTimingLogicalEyeCountMatches =
+			lastFeatureLogicalEyeCount ==
+				static_cast<std::uint32_t>(
+					std::popcount(lastLogicalFeatureSlotMask));
+		const bool featureTimingPhysicalScopeMatches =
+			sampledScopeRegionCountsValid &&
+			lastFeatureSlotMask == sampledScopeExpectedPhysicalSlotMask &&
+			rendererSnapshot.performance.lastFeatureEvaluationCount ==
+				sampledScopeExpectedEvaluationCount &&
+			(lastFeatureSlotMask & ~kPhysicalFeatureSlotMask) == 0u;
+		const bool featureTimingSlotsMatch =
+			lastLogicalFeatureSlotMask != 0u &&
+			unexpectedFeatureSlots == 0u &&
+			featureTimingLogicalEyeCountMatches &&
+			featureTimingPhysicalScopeMatches &&
+			(featureTimingIsStereoPair ?
+				 lastLogicalFeatureSlotMask == expectedFeatureSlotMask :
+				 featureTimingIsEyeSample);
 		const bool featureTimingMatchesPreparedMask =
 			attributedPreparationFound && expectedFeatureSlotMask != 0 &&
-			featureTimingSlotsMatch;
+			expectedFeatureRegionCountsValid && featureTimingSlotsMatch;
 		const bool visualIsolationConfigured =
 			settings.neuralRenderingEnabled &&
 			settings.neuralCharacterRenderingEnabled &&
@@ -1057,7 +1161,11 @@ namespace
 				NeuralRendering::InsertionPoint::UpscaledCenter;
 		const bool privateSingleSubrectEnabled =
 			settings.neuralRenderingSingleSubrectScale < 1.0f;
-		const bool dynamicCharacterSingleRectEnabled = visualIsolationConfigured;
+		const bool dynamicCharacterRoiEnabled = visualIsolationConfigured;
+		const bool dynamicCharacterMultiRegionEnabled =
+			visualIsolationConfigured && settings.neuralCharacterMultiRoiEnabled;
+		const bool dynamicCharacterSingleRectEnabled =
+			visualIsolationConfigured && !settings.neuralCharacterMultiRoiEnabled;
 		auto routeCommittedForCurrentFrame = [observedFrame](
 												 const auto& a_route,
 												 std::uint32_t a_expectedEyeMask) {
@@ -1106,6 +1214,7 @@ namespace
 							  { "hairStrength", settings.neuralCharacterHairStrength },
 							  { "maximumDistanceMeters", settings.neuralCharacterMaximumDistanceMeters },
 							  { "adaptiveRoiSelection", settings.neuralCharacterAdaptiveRoiSelectionEnabled },
+							  { "experimentalMultiRoi", settings.neuralCharacterMultiRoiEnabled },
 							  { "minimumFacePixelSize", settings.neuralCharacterMinimumFacePixelSize },
 							  { "roiMargin", settings.neuralCharacterRoiMargin },
 							  { "roiHoldFrames", settings.neuralCharacterRoiHoldFrames },
@@ -1170,16 +1279,23 @@ namespace
 													{ "providerRoiListSupported", false },
 													{ "providerRoiListEvidenceScope", "observed_feature18_parameter_abi" },
 													{ "multiEvaluationProductionSupported", false },
-													{ "multiEvaluationExperimentalCandidate", true },
+													{ "multiEvaluationExecutionImplemented", true },
+													{ "multiEvaluationProductionQualified", false },
+													{ "multiEvaluationExperimentalCandidate", false },
+													{ "multiEvaluationExperimentalEnabled", settings.neuralCharacterMultiRoiEnabled },
+													{ "multiEvaluationMaximumRegionsPerEye", 2 },
+													{ "multiEvaluationMechanism", "separate_persistent_feature18_instances" },
 													{ "privateSingleSubrectCandidate", true },
+													{ "dynamicCharacterRoiEnabled", dynamicCharacterRoiEnabled },
 													{ "dynamicCharacterSingleRectEnabled", dynamicCharacterSingleRectEnabled },
-													{ "privateSingleSubrectEnabled", dynamicCharacterSingleRectEnabled || privateSingleSubrectEnabled },
+													{ "dynamicCharacterMultiRegionEnabled", dynamicCharacterMultiRegionEnabled },
+													{ "privateSingleSubrectEnabled", dynamicCharacterRoiEnabled || privateSingleSubrectEnabled },
 													{ "privateSingleSubrectScale", settings.neuralRenderingSingleSubrectScale },
 													{ "privateSingleSubrectValidation", "ghidra_dataflow_and_gpu_timing_validated" },
 													{ "source", "current_frame_projected_face_skin_hair_bounds" },
 													{ "reason", snapshot.computeRoiReason },
-													{ "resolvedMode", dynamicCharacterSingleRectEnabled ? "dynamic_character_single_rect_inference" : (privateSingleSubrectEnabled ? "static_centered_single_rect_inference" : "full_frame_inference") },
-													{ "inferenceRestrictedToRois", dynamicCharacterSingleRectEnabled || privateSingleSubrectEnabled },
+													{ "resolvedMode", dynamicCharacterMultiRegionEnabled ? "experimental_dynamic_character_up_to_two_regions_per_eye" : (dynamicCharacterSingleRectEnabled ? "dynamic_character_single_rect_inference" : (privateSingleSubrectEnabled ? "static_centered_single_rect_inference" : "full_frame_inference")) },
+													{ "inferenceRestrictedToRois", dynamicCharacterRoiEnabled || privateSingleSubrectEnabled },
 													{ "preciseMaskAuthority", "csx_r8_face_skin_hair_output_composite" },
 												} },
 								{ "categoryProvenance", {
@@ -1257,12 +1373,15 @@ namespace
 														{ "sequentialStereo", ProfileTimerJson("Upscaling::DLSSNeuralRenderingSequentialStereo") },
 													} },
 							   { "lastFeature18GpuSample", {
-															   { "available", rendererSnapshot.performance.lastFeatureFrameId != std::numeric_limits<std::uint32_t>::max() },
-															   { "frame", rendererSnapshot.performance.lastFeatureFrameId != std::numeric_limits<std::uint32_t>::max() ? json(rendererSnapshot.performance.lastFeatureFrameId) : json(nullptr) },
-															   { "gpuMicroseconds", rendererSnapshot.performance.lastFeatureGpuMicroseconds },
-															   { "pixelCount", rendererSnapshot.performance.lastFeaturePixelCount },
-															   { "evaluationCount", rendererSnapshot.performance.lastFeatureEvaluationCount },
-															   { "slotMask", lastFeatureSlotMask },
+																	   { "available", rendererSnapshot.performance.lastFeatureFrameId != std::numeric_limits<std::uint32_t>::max() },
+																	   { "frame", rendererSnapshot.performance.lastFeatureFrameId != std::numeric_limits<std::uint32_t>::max() ? json(rendererSnapshot.performance.lastFeatureFrameId) : json(nullptr) },
+																	   { "gpuMicroseconds", rendererSnapshot.performance.lastFeatureGpuMicroseconds },
+																	   { "pixelCount", rendererSnapshot.performance.lastFeaturePixelCount },
+																	   { "evaluationCount", rendererSnapshot.performance.lastFeatureEvaluationCount },
+																	   { "slotMask", lastFeatureSlotMask },
+																	   { "physicalSlotMask", lastFeatureSlotMask },
+																	   { "logicalSlotMask", lastLogicalFeatureSlotMask },
+																	   { "logicalEyeCount", lastFeatureLogicalEyeCount },
 															   { "insertionPoint", NeuralRendering::GetInsertionPointName(rendererSnapshot.performance.lastInsertionPoint) },
 															   { "preparedCharacterSlotMask", preparedCharacterSlotMask },
 															   { "evaluationRequiredCharacterSlotMask", evaluationRequiredCharacterSlotMask },
@@ -1272,13 +1391,23 @@ namespace
 															   { "successfulCharacterSlotMask", successfulCharacterSlotMask },
 															   { "bypassedCharacterSlotMask", bypassedCharacterSlotMask },
 															   { "abortedCharacterSlotMask", abortedCharacterSlotMask },
-															   { "expectedFeatureSlotMask", expectedFeatureSlotMask },
-															   { "preparedFrameFound", attributedPreparationFound },
-															   { "missingPreparedFeatureSlotMask", missingPreparedFeatureSlots },
-															   { "missingExpectedFeatureSlotMask", missingExpectedFeatureSlots },
-															   { "unexpectedFeatureSlotMask", unexpectedFeatureSlots },
-															   { "correlationScope", featureTimingIsStereoPair ? "stereo_pair" : (featureTimingIsEyeSample ? "eye_sample" : "invalid") },
-															   { "coversPreparedStereoPair", featureTimingIsStereoPair && lastFeatureSlotMask == expectedFeatureSlotMask },
+																	   { "expectedFeatureSlotMask", expectedFeatureSlotMask },
+																	   { "expectedPhysicalFeatureSlotMask", expectedPhysicalFeatureSlotMask },
+																	   { "expectedFeatureEvaluationCount", expectedFeatureEvaluationCount },
+																	   { "expectedFeatureRegionCountsValid", expectedFeatureRegionCountsValid },
+																	   { "preparedFrameFound", attributedPreparationFound },
+																	   { "missingPreparedFeatureSlotMask", missingPreparedFeatureSlots },
+																	   { "missingExpectedFeatureSlotMask", missingExpectedFeatureSlots },
+																	   { "unexpectedFeatureSlotMask", unexpectedFeatureSlots },
+																	   { "missingExpectedPhysicalFeatureSlotMask", missingExpectedPhysicalFeatureSlots },
+																	   { "unexpectedPhysicalFeatureSlotMask", unexpectedPhysicalFeatureSlots },
+																	   { "sampledScopeExpectedPhysicalSlotMask", sampledScopeExpectedPhysicalSlotMask },
+																	   { "sampledScopeExpectedEvaluationCount", sampledScopeExpectedEvaluationCount },
+																	   { "sampledScopeRegionCountsValid", sampledScopeRegionCountsValid },
+																	   { "logicalEyeCountMatchesSlotMask", featureTimingLogicalEyeCountMatches },
+																	   { "physicalScopeMatchesPreparation", featureTimingPhysicalScopeMatches },
+																	   { "correlationScope", featureTimingIsStereoPair ? "stereo_pair" : (featureTimingIsEyeSample ? "eye_sample" : "invalid") },
+																	   { "coversPreparedStereoPair", featureTimingIsStereoPair && featureTimingMatchesPreparedMask && lastLogicalFeatureSlotMask == expectedFeatureSlotMask },
 															   { "matchesPreparedCharacterMask", featureTimingMatchesPreparedMask },
 														   } },
 							   { "composite", ProfileTimerJson("Upscaling::DLSS5CharacterComposite") },
@@ -1609,6 +1738,7 @@ namespace
 								 { "lastFeaturePixelCount", snapshot.performance.lastFeaturePixelCount },
 								 { "lastFeatureFrameId", snapshot.performance.lastFeatureFrameId },
 								 { "lastFeatureEvaluationCount", snapshot.performance.lastFeatureEvaluationCount },
+								 { "lastFeatureLogicalEyeCount", snapshot.performance.lastFeatureLogicalEyeCount },
 								 { "lastFeatureSlotMask", snapshot.performance.lastFeatureSlotMask },
 								 { "lastInsertionPoint", NeuralRendering::GetInsertionPointName(snapshot.performance.lastInsertionPoint) },
 								 { "lastInsertionPointValue", static_cast<uint32_t>(snapshot.performance.lastInsertionPoint) },

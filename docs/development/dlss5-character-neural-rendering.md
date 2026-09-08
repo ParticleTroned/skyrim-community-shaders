@@ -6,9 +6,11 @@ This document defines the capability and safety boundary for the experimental
 the same internal-only runtime and distribution restrictions apply.
 
 The feature applies Neural Rendering to NPC faces, exposed skin, and optionally
-hair. The pinned provider evaluates one dynamic per-eye rectangle enclosing the
-selected semantic geometry; an exact CSX mask decides which pixels from that
-partial result reach the image.
+hair. By default the pinned provider evaluates one dynamic per-eye rectangle
+enclosing the selected semantic geometry; an exact CSX mask decides which pixels
+from that partial result reach the image. The default-off **Experimental Multi-ROI**
+toggle can instead evaluate two separated regions through persistent feature
+instances. This is not a provider ROI-list API and still requires live qualification.
 
 The current route integration is Skyrim VR only. SE/AE builds compile the shared
 runtime and rectangle code, but their flat presentation path does not yet author
@@ -139,8 +141,8 @@ The saved live image
 contains a Feature 18 parser that reads exactly one scalar base-X, base-Y,
 width, and height tuple per resource into a fixed record. It has no
 rectangle-count or rectangle-pointer field. Consequently an ROI list cannot be
-passed through this pinned parameter ABI. Eligible per-eye face, skin, and hair
-bounds are therefore collapsed into one guarded, outward-aligned provider
+passed through this pinned parameter ABI. By default eligible per-eye face, skin, and hair
+bounds are collapsed into one guarded, outward-aligned provider
 rectangle. Feature 18 evaluates every pixel in that rectangle, including gaps
 between separated semantic pixels.
 
@@ -184,15 +186,66 @@ recent envelope even while the subject keeps moving. Contraction still requires
 the area-saving threshold, and genuine rectangle changes still reset provider
 history. A proven-empty epoch boundary clears the retained state immediately.
 
-Several `NVSDK_NGX_D3D12_EvaluateFeature` calls are a separate possibility, not
+Several `NVSDK_NGX_D3D12_EvaluateFeature` calls are a separate mechanism, not
 an ROI-list capability. Reusing one Feature 18 handle for several actors in the
 same frame gives the runtime no separate temporal identity and therefore risks
 mixing state between unrelated rectangles. Giving each actor a stable
 per-eye/per-route handle avoids that risk, but multiplies persistent network
 resources, requires stable actor-to-handle ownership, and pays fixed evaluation
-overhead for every rectangle. This remains
-a bounded live timing and temporal-history experiment; it is not production
-supported by this branch.
+overhead for every rectangle. The implementation below remains
+a bounded live timing and temporal-history experiment; it is not a validated
+production capability.
+
+### Experimental Multi-ROI toggle
+
+Location: **Upscaling > NVIDIA DLSS Neural Rendering > Character Selection >
+Character Rendering Advanced > Experimental Multi-ROI**. It is off by default
+and persisted as `neuralCharacterMultiRoiEnabled`. It requires Character NR and
+Deterministic Mask Composite; it never binds the private NVIDIA `ControlMask` ABI.
+
+The saved September 5 live-module image was re-examined in Ghidra on September 8.
+Creation allocates a distinct feature ID/record/manager; evaluation selects that
+handle's network and previous-output history. The captured D3D12 registry had
+two features on one device. `EnsureBufferPool` and `BuildActiveNetwork` also
+request per-manager inference pools and GPU weight heaps. These findings support
+an independent-instance experiment, not a claim of tested four-instance output
+or a guaranteed performance saving. Detailed local evidence is preserved under
+`build/ghidra-reports/multi-roi-20260908/`.
+
+The experiment caps selection at two spatial clusters per eye and bounds CPU
+planning to 128 actor candidates (larger sets use the legacy enclosure). It does not omit
+otherwise selected actors: overlapping padded regions or an insufficient area
+benefit fall back to the enclosing-rectangle policy. Each region has stable
+membership/history identity and its own bounded motion envelope. The existing
+precise semantic mask still determines the final pixels. Empty-mask bypass and
+non-authored debug mask behavior remain unchanged.
+
+Logical slots `0/1` (main eyes) and `2/3` (submit eyes) retain their meaning.
+Second-region physical slots are `4/5` and `6/7`, respectively. Up to four
+physical evaluations fit one VR transaction. All regions read immutable input
+copies, write private outputs, and copy their disjoint rectangles to the logical
+eye output only after every evaluation succeeds. Existing callers receive
+aggregated logical-eye outcomes; timing counts the actual physical evaluations.
+Matching cluster identities synchronize stereo history resets; unrelated
+clusters do not share a handle or reset history solely because another cluster
+changes. Explicit region plans use one atomic batch even if Sequential Stereo
+was selected. The ordinary single-rectangle path preserves its submission mode.
+
+Extra instances and full-capacity backing resources are retained for reuse until
+backend reset, with eight physical slots maximum across both routes. Turning
+the experiment off performs the bounded backend retirement/reset even when the
+master or Character NR switch is already off. This can briefly interrupt NR
+when changing the option; it is not tied to ordinary menu open/close events.
+
+The planner enters a split only when its padded regions save at least 25% and
+65,536 pixels versus a fresh single-region enclosure; it retains the split down
+to 20% savings to reduce threshold oscillation. This is a conservative heuristic,
+**not measured GPU break-even**. Additional weight heaps, scratch, padding, input preparation and
+evaluation overhead may outweigh the skipped gap. Qualification must compare
+complete-frame and aggregate Feature 18 GPU time, VRAM, and temporal image quality
+against the enclosing rectangle with the same camera/settings/process. Test
+moving actors, crossings, split/merge, entry/exit, worldview menus, both insertion
+routes, and upscaler transitions before enabling this by default.
 
 ## Reverse-engineered Feature 18 surface
 
@@ -522,6 +575,7 @@ Neural Rendering controls. Its central defaults are:
 | Hair strength                | `0.65`       |
 | NR distance cull             | `10.0 m` (`0` disables, range `0..30 m`) |
 | Adaptive ROI performance     | Off          |
+| Experimental Multi-ROI       | Off; at most two persistent regions per eye |
 | Minimum projected size       | `64 px`      |
 | Rectangle margin             | `25%`        |
 | Rectangle hold               | `3 frames`   |
@@ -542,10 +596,11 @@ allocation/dispatch-affecting controls are validated at the settings boundary.
 Invalid automation input is rejected rather than silently changing the
 requested experiment.
 
-Selected actor bounds are stabilized, retained as visual eligibility regions,
-and unioned into the one rectangle supported by the pinned runtime. The exact
-mask rejects unrelated pixels between separated actors, but Feature 18 still
-pays for every pixel in their enclosing rectangle.
+Selected actor bounds are stabilized and retained as visual eligibility regions.
+With Multi-ROI off, they are unioned into one rectangle. The exact mask rejects
+unrelated pixels between separated actors, but Feature 18 still pays for every
+pixel in their enclosing rectangle. Multi-ROI can skip a large separating gap by
+using two independent evaluations, each still rectangular and dense inside its bounds.
 
 ## Diagnostics and profiling
 
@@ -680,8 +735,9 @@ or Feature 18 evaluation fails, the pair retains Gogh's completed normal-DLSS
 result. Disabling character mode restores the ordinary automatic-mask route.
 
 The branch reports the single-rectangle path as pinned/private, reports an ROI
-list as unsupported by the observed ABI, and reports multi-evaluation as an
-unvalidated experimental candidate rather than a production capability.
+list as unsupported by the observed ABI, and reports multi-evaluation as a
+default-off implementation awaiting live qualification rather than a validated
+production capability.
 
 The controller suite includes bounded ROI/motion invariants, actor admission,
 frame-wrap policy, and D3D11 WARP execution of the production capture, mask, and

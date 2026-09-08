@@ -4236,7 +4236,7 @@ namespace
 	{
 		return a_method == a_target.method &&
 		       a_qualityMode == a_target.qualityMode &&
-		       a_renderScaleMode == a_target.renderScaleModePreference &&
+		       a_renderScaleMode == a_target.renderScaleMode &&
 		       (a_target.method != Upscaling::UpscaleMethod::kDLSS || a_dlssPreset == a_target.dlssPreset);
 	}
 
@@ -15780,12 +15780,15 @@ bool Upscaling::SetRenderScaleLinkedToUpscaling(bool a_enabled)
 		if (IsOpenCompositeUpscalingBlocked() || IsRenderDocUpscalingBlocked() ||
 			IsSubmitStageDeviceLost() || IsVRStartupNativeFallbackRestartRequired())
 			return false;
-		const auto method = GetConfiguredUpscaleMethodForTransition();
-		if (IsRenderScaleMethodEligible(method)) {
+		// The checkbox can be changed while a method selection is still queued.
+		// Preserve that complete selection instead of mixing the old method with
+		// the new quality/preset and replacing the user's pending request.
+		const auto desiredProfile = GetPendingVRRenderScaleDesiredProfile();
+		if (IsRenderScaleMethodEligible(desiredProfile.method)) {
 			const auto result = ApplyCSMenuUpscalingTransition(
-				method, true, GetEffectiveUpscalingQualityMode(), GetEffectiveDLSSPreset(),
+				desiredProfile.method, true, desiredProfile.qualityMode, desiredProfile.dlssPreset,
 				"render-scale link enabled", VRUpscalingTransitionOrigin::CSMenu,
-				0, std::nullopt, VRVendorRelatchPolicy::StartupNativeFallbackControl::None, true);
+				0, desiredProfile.fsr4RuntimeEnabled, VRVendorRelatchPolicy::StartupNativeFallbackControl::None, true);
 			if (result.disposition == UpscalingTransitionApplyDisposition::Rejected)
 				return false;
 		}
@@ -21668,12 +21671,16 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 	const auto currentMethod = GetConfiguredUpscaleMethodForTransition();
 	const auto target = ResolveVRFpsStabilizerTransitionTarget(*this, profile);
 
-	const bool settingsProfileMatches = MatchesVRFpsStabilizerTransitionTarget(
-		currentMethod,
-		GetVRRenderScaleModePreference(),
-		GetEffectiveUpscalingQualityMode(),
-		GetEffectiveDLSSPreset(),
-		target);
+	// API profile admission compares executable modes. The local load sync
+	// additionally reconciles the preference retained while native AA is active.
+	const bool settingsProfileMatches =
+		GetVRRenderScaleModePreference() == target.renderScaleModePreference &&
+		MatchesVRFpsStabilizerTransitionTarget(
+			currentMethod,
+			IsRenderScaleModeRequested(),
+			GetEffectiveUpscalingQualityMode(),
+			GetEffectiveDLSSPreset(),
+			target);
 	const auto controller = GetVRRenderScaleTransitionSnapshot();
 	const bool controllerProfileMatches = HasCurrentVRRenderScaleControllerTarget(
 		controller,

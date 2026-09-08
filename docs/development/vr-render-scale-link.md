@@ -23,6 +23,13 @@ the existing transition controller and its normal safety/admission checks.
 Rejected transitions do not disable the link or claim that a requested physical
 change succeeded.
 
+If a method change is already queued, enabling the link retains that request's
+method, quality, DLSS profile, and FSR runtime selection together. A pending
+None/TAA selection remains selected. Public VR FPS Stabilizer API admission
+compares physical Render Scale mode, so a native-AA profile with Render Scale
+off remains valid when the saved preference is on. Local load synchronization
+reconciles the saved preference separately.
+
 Saving settings while an accepted menu change is pending stores that selected
 Render Scale preference, quality, and DLSS profile. It does not save the old
 physical configuration or force the pending render-target rebuild to run early.

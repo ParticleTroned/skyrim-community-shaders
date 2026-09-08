@@ -128,10 +128,17 @@ require_contract("${_checkbox}" [[SetRenderScaleLinkedToUpscaling(linked)]]
 forbid_contract("${_checkbox}" [[kDefaultRenderScaleQualityMode]] "native-AA quality on link enable")
 section("${_source}" [[bool Upscaling::SetRenderScaleLinkedToUpscaling(]]
     [[void Upscaling::DrawVRRenderScaleLinkSetting(]] _link_setter)
-require_contract("${_link_setter}" [[GetEffectiveUpscalingQualityMode()]]
-    "link enabling retains selected quality")
-require_contract("${_link_setter}" [[GetEffectiveDLSSPreset()]]
-    "link enabling retains selected DLSS profile")
+require_contract("${_link_setter}" [[const auto desiredProfile = GetPendingVRRenderScaleDesiredProfile();]]
+    "link enabling reads one complete pending selection")
+require_contract("${_link_setter}" [[if (IsRenderScaleMethodEligible(desiredProfile.method))]]
+    "link enabling does not replace a pending None/TAA selection")
+require_contract("${_link_setter}"
+    [[desiredProfile.method, true, desiredProfile.qualityMode, desiredProfile.dlssPreset,]]
+    "link enabling retains the pending method, quality, and DLSS profile together")
+require_contract("${_link_setter}" [[0, desiredProfile.fsr4RuntimeEnabled,]]
+    "link enabling retains the pending FSR runtime selection")
+forbid_contract("${_link_setter}" [[GetConfiguredUpscaleMethodForTransition()]]
+    "pending method selection on link enable")
 require_contract("${_link_setter}" [[if (!globals::game::isVR) return false;]]
     "link setter is VR-only")
 require_contract("${_link_setter}"
@@ -220,6 +227,17 @@ require_contract("${_stabilizer}"
 require_contract("${_stabilizer}"
     [[selectionChanged ? a_upscaling.GetVRRenderScalePreferenceForSelection(target.method) : a_upscaling.GetVRRenderScaleModePreference();]]
     "stabilizer preserves non-selection updates")
+section("${_source}" [[bool MatchesVRFpsStabilizerTransitionTarget(]]
+    [[bool HasCurrentVRRenderScaleControllerTarget(]] _stabilizer_match)
+require_contract("${_stabilizer_match}" [[a_renderScaleMode == a_target.renderScaleMode]]
+    "public native-AA profiles compare executable mode")
+forbid_contract("${_stabilizer_match}" [[a_target.renderScaleModePreference]]
+    "public API admission of native-AA profiles with suspended preference")
+section("${_source}" [[void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()]]
+    [[bool Upscaling::IsPerfModePresentationActive()]] _stabilizer_sync)
+require_contract("${_stabilizer_sync}"
+    [[GetVRRenderScaleModePreference() == target.renderScaleModePreference && MatchesVRFpsStabilizerTransitionTarget( currentMethod, IsRenderScaleModeRequested(),]]
+    "local load sync reconciles preference separately from public active mode")
 
 forbid_contract("${_bridge}" [[GetVRRenderScalePreferenceForSelection]] "explicit DevBench profiles")
 forbid_contract("${_bridge}" [[ResolveSelectionPreference]] "explicit DevBench profiles")

@@ -7,6 +7,25 @@
 
 namespace NeuralRendering
 {
+	enum class CharacterDepthExtentPolicy
+	{
+		ExactCapture,
+		ContainsActiveInput,
+	};
+
+	/** Frozen depth is exact; engine depth can retain its display-size allocation. */
+	[[nodiscard]] constexpr bool IsCharacterDepthExtentValid(
+		std::uint32_t a_allocationWidth, std::uint32_t a_allocationHeight,
+		std::uint32_t a_activeWidth, std::uint32_t a_activeHeight,
+		CharacterDepthExtentPolicy a_policy) noexcept
+	{
+		if (a_activeWidth == 0 || a_activeHeight == 0)
+			return false;
+		return a_policy == CharacterDepthExtentPolicy::ContainsActiveInput ?
+		           a_allocationWidth >= a_activeWidth && a_allocationHeight >= a_activeHeight :
+		           a_allocationWidth == a_activeWidth && a_allocationHeight == a_activeHeight;
+	}
+
 	// These helpers describe texture work, not provider history. A stale mask
 	// region must be cleared even when the new mask/compute ROI has moved away.
 	[[nodiscard]] constexpr ComputeSubrect UnionCharacterWorkRects(

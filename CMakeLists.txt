@@ -1740,12 +1740,50 @@ if(BUILD_CONTROLLER_TESTS)
     endforeach()
     add_executable(character_mask_gpu_test EXCLUDE_FROM_ALL tests/character_mask_gpu_test.cpp)
     target_compile_features(character_mask_gpu_test PRIVATE cxx_std_23)
+    target_include_directories(
+        character_mask_gpu_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
     target_link_libraries(character_mask_gpu_test PRIVATE d3d11 d3dcompiler)
-    add_test(NAME CharacterMaskGpu COMMAND character_mask_gpu_test "${PROJECT_SOURCE_DIR}/package/Shaders")
-    set_tests_properties(CharacterMaskGpu PROPERTIES LABELS "ControllerTests" TIMEOUT 60)
-    add_test(NAME FinalLdrColorGpu COMMAND character_mask_gpu_test "${PROJECT_SOURCE_DIR}/package/Shaders" --final-ldr-only)
-    set_tests_properties(FinalLdrColorGpu PROPERTIES LABELS "ControllerTests" TIMEOUT 60)
-    add_executable(character_multi_roi_test EXCLUDE_FROM_ALL tests/character_multi_roi_test.cpp)
+    add_test(
+        NAME CharacterMaskGpu
+        COMMAND character_mask_gpu_test "${PROJECT_SOURCE_DIR}/package/Shaders"
+    )
+    set_tests_properties(
+        CharacterMaskGpu
+        PROPERTIES LABELS "ControllerTests" TIMEOUT 60
+    )
+    add_test(
+        NAME FinalLdrColorGpu
+        COMMAND
+            character_mask_gpu_test "${PROJECT_SOURCE_DIR}/package/Shaders"
+            --final-ldr-only
+    )
+    set_tests_properties(
+        FinalLdrColorGpu
+        PROPERTIES LABELS "ControllerTests" TIMEOUT 60
+    )
+    add_executable(
+        character_settings_test
+        EXCLUDE_FROM_ALL
+        tests/character_settings_test.cpp
+    )
+    target_compile_features(character_settings_test PRIVATE cxx_std_23)
+    target_include_directories(
+        character_settings_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(
+        character_settings_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    add_test(NAME CharacterSettings COMMAND character_settings_test)
+    set_tests_properties(CharacterSettings PROPERTIES LABELS "ControllerTests")
+    add_executable(
+        character_multi_roi_test
+        EXCLUDE_FROM_ALL
+        tests/character_multi_roi_test.cpp
+    )
     target_compile_features(character_multi_roi_test PRIVATE cxx_std_23)
     target_include_directories(character_multi_roi_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
     add_test(NAME CharacterMultiRoi COMMAND character_multi_roi_test)
@@ -1833,6 +1871,7 @@ if(BUILD_CONTROLLER_TESTS)
             character_mask_work_policy_test
             character_mask_gpu_test
             character_multi_roi_test
+            character_settings_test
             compute_subrect_test
             frame_telemetry_ring_test
             dlss_viewport_crop_test

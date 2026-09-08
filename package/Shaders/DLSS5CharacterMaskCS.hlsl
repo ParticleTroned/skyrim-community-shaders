@@ -250,7 +250,10 @@ void CountCategory(uint category, uint firstCounter)
 			const float centerDistanceWeight =
 				GetDistanceWeight(sourcePixel, centerAuthoredRawDepth);
 			const bool centerWithinDistance = centerDistanceWeight > 0.0;
-			const bool centerEligible = centerVisible && centerWithinDistance;
+			// Background depth must not erase a nearby character's subpixel coverage.
+			// Each contributing category sample checks visibility and distance itself.
+			const bool centerEligible = centerCategory == 0u ||
+			                            (centerVisible && centerWithinDistance);
 			if (measureCoverage) {
 				if (centerEligible)
 					CountCategory(centerCategory, VisibleFacePixels);

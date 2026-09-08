@@ -16,6 +16,7 @@
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
 #include "Features/Upscaling.h"
+#include "Features/Upscaling/NeuralRendering/CharacterCategoryFormat.h"
 #include "Features/Upscaling/NeuralRendering/CharacterRendering.h"
 #include "Features/VR.h"
 
@@ -212,9 +213,9 @@ void Deferred::SetupResources()
 		SetupRenderTarget(NORMALROUGHNESS, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R10G10B10A2_UNORM, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
 		// Masks
 		SetupRenderTarget(MASKS, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R11G11B10_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
-		// VR preserves the two-byte attachment while adding one exact category lane.
+		// VR adds exact categories without reducing the original vertex AO precision.
 		const auto masks2Format = globals::game::isVR ?
-		                              DXGI_FORMAT_R8G8_UNORM :
+		                              NeuralRendering::kCharacterCategoryFormat :
 		                              DXGI_FORMAT_R16_UNORM;
 		SetupRenderTarget(MASKS2, texDesc, srvDesc, rtvDesc, uavDesc, masks2Format, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
 

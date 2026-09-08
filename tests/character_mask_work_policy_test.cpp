@@ -5,6 +5,15 @@
 int main()
 {
 	using namespace NeuralRendering;
+	using enum CharacterDepthExtentPolicy;
+	static_assert(IsCharacterDepthExtentValid(1920, 1080, 1280, 720, ContainsActiveInput));
+	static_assert(IsCharacterDepthExtentValid(1280, 720, 1280, 720, ContainsActiveInput));
+	static_assert(!IsCharacterDepthExtentValid(1920, 1080, 1280, 720, ExactCapture));
+	static_assert(IsCharacterDepthExtentValid(1280, 720, 1280, 720, ExactCapture));
+	static_assert(!IsCharacterDepthExtentValid(1279, 1080, 1280, 720, ContainsActiveInput));
+	static_assert(!IsCharacterDepthExtentValid(1920, 719, 1280, 720, ContainsActiveInput));
+	static_assert(!IsCharacterDepthExtentValid(1920, 1080, 0, 720, ContainsActiveInput));
+	static_assert(!IsCharacterDepthExtentValid(1920, 1080, 1280, 0, ExactCapture));
 	static_assert(UnionCharacterWorkRects({}, {}) == ComputeSubrect{});
 	static_assert(UnionCharacterWorkRects({}, { 3, 5, 7, 9 }) ==
 				  ComputeSubrect{ 3, 5, 7, 9 });

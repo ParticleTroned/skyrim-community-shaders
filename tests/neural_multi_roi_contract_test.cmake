@@ -6,6 +6,7 @@ endif()
 
 set(_upscaling_header_path "${PROJECT_ROOT}/src/Features/Upscaling.h")
 set(_upscaling_source_path "${PROJECT_ROOT}/src/Features/Upscaling.cpp")
+set(_character_settings_json_path "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterSettingsJson.h")
 set(
     _renderer_header_path
     "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/Renderer.h"
@@ -33,6 +34,7 @@ set(
 foreach(_required_path IN ITEMS
     "${_upscaling_header_path}"
     "${_upscaling_source_path}"
+    "${_character_settings_json_path}"
     "${_renderer_header_path}"
     "${_character_header_path}"
     "${_character_source_path}"
@@ -47,6 +49,7 @@ endforeach()
 
 file(READ "${_upscaling_header_path}" _upscaling_header)
 file(READ "${_upscaling_source_path}" _upscaling_source)
+file(READ "${_character_settings_json_path}" _character_settings_json)
 file(READ "${_renderer_header_path}" _renderer_header)
 file(READ "${_character_header_path}" _character_header)
 file(READ "${_character_source_path}" _character_source)
@@ -58,12 +61,16 @@ set(
     "${_upscaling_header}\n${_upscaling_source}\n${_renderer_header}\n${_character_header}\n${_character_source}\n${_renderer_source}\n${_runtime_header}"
 )
 
+string(APPEND _contract_text "\n${_character_settings_json}")
+
 foreach(_settings_contract IN ITEMS
     [[bool neuralCharacterMultiRoiEnabled = false;]]
-    [[OP(neuralCharacterMultiRoiEnabled)]]
+    [[visit("neuralCharacterMultiRoiEnabled", settings.neuralCharacterMultiRoiEnabled, policy.multiRoi);]]
+    [[NeuralRendering::ReadUpscalingCharacterSettingsJson(a_json, parsed);]]
+    [[NeuralRendering::WriteUpscalingCharacterSettingsJson(a_json, a_settings);]]
     [[settings.neuralCharacterMultiRoiEnabled = false;]]
     [[o_json.erase("neuralCharacterMultiRoiEnabled");]]
-    [[.multiRoi = a_settings.neuralCharacterMultiRoiEnabled,]]
+    [[NeuralRendering::GetUpscalingCharacterSettings(a_settings)]]
     [[add(a_settings.neuralCharacterMultiRoiEnabled);]]
 )
     string(FIND "${_contract_text}" "${_settings_contract}"
@@ -124,6 +131,23 @@ foreach(_execution_contract IN ITEMS
     if(_execution_contract_position EQUAL -1)
         message(FATAL_ERROR
             "Multi-ROI physical-evaluation contract is missing: ${_execution_contract}"
+        )
+    endif()
+endforeach()
+
+string(REGEX REPLACE "[\r\n\t ]+" " "
+    _character_source_normalized "${_character_source}")
+foreach(_history_contract IN ITEMS
+    [[void InvalidatePreparedMasks(bool a_preserveMultiRoiHistory = false)]]
+    [[if (!a_preserveMultiRoiHistory) slot.stableMultiRoi = {};]]
+    [[state_->InvalidatePreparedMasks(true);]]
+    [[if (slot.multiRoiPolicyKey != key.settings) { slot.stableMultiRoi = {};]]
+)
+    string(FIND "${_character_source_normalized}" "${_history_contract}"
+        _history_contract_position)
+    if(_history_contract_position EQUAL -1)
+        message(FATAL_ERROR
+            "Multi-ROI history must survive ordinary capture and reset for policy changes: ${_history_contract}"
         )
     endif()
 endforeach()

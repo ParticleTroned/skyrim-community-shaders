@@ -15,6 +15,11 @@ set(
 set(_upscaling_path "${PROJECT_ROOT}/src/Features/Upscaling.cpp")
 set(_upscaling_header_path "${PROJECT_ROOT}/src/Features/Upscaling.h")
 set(_deferred_path "${PROJECT_ROOT}/src/Deferred.cpp")
+set(_hooks_path "${PROJECT_ROOT}/src/Hooks.cpp")
+set(_character_authoring_path "${PROJECT_ROOT}/src/Utils/CharacterCategoryAuthoring.cpp")
+set(_character_format_path "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterCategoryFormat.h")
+set(_character_settings_path "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterSettings.h")
+set(_character_settings_json_path "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterSettingsJson.h")
 set(
     _subsurface_header_path
     "${PROJECT_ROOT}/src/Features/SubsurfaceScattering.h"
@@ -127,6 +132,11 @@ foreach(_required_path IN ITEMS
     "${_upscaling_path}"
     "${_upscaling_header_path}"
     "${_deferred_path}"
+    "${_hooks_path}"
+    "${_character_authoring_path}"
+    "${_character_format_path}"
+    "${_character_settings_path}"
+    "${_character_settings_json_path}"
     "${_subsurface_header_path}"
     "${_subsurface_source_path}"
     "${_streamline_path}"
@@ -169,6 +179,11 @@ file(READ "${_experiment_doc_path}" _experiment_doc)
 file(READ "${_upscaling_path}" _upscaling)
 file(READ "${_upscaling_header_path}" _upscaling_header)
 file(READ "${_deferred_path}" _deferred)
+file(READ "${_hooks_path}" _hooks)
+file(READ "${_character_authoring_path}" _character_authoring)
+file(READ "${_character_format_path}" _character_format)
+file(READ "${_character_settings_path}" _character_settings)
+file(READ "${_character_settings_json_path}" _character_settings_json)
 file(READ "${_subsurface_header_path}" _subsurface_header)
 file(READ "${_subsurface_source_path}" _subsurface_source)
 file(READ "${_streamline_path}" _streamline)
@@ -204,6 +219,9 @@ set(
     _source_contract_text
     "${_upscaling}\n${_upscaling_header}\n${_deferred}\n${_subsurface_header}\n${_subsurface_source}\n${_streamline}\n${_streamline_header}\n${_renderer_header}\n${_renderer_source}\n${_runtime_header}\n${_runtime_source}\n${_compute_subrect}\n${_character_header}\n${_character_source}\n${_character_region_policy}\n${_character_compute_subrect}\n${_character_actor_policy}\n${_character_mask_work_policy}\n${_character_category_shader}\n${_character_mask_shader}\n${_character_capture_shader}\n${_lighting_shader}\n${_grass_shader}\n${_effect_shader}\n${_distant_tree_shader}\n${_sky_shader}\n${_deferred_composite_shader}\n${_foveated_center_blend_shader}\n${_copy_depth_guide_shader}\n${_submit_stage_stretch_shader}\n${_character_doc}\n${_d3d12_interop_source}\n${_pipeline_policy}\n${_vr_render_scale_mode_policy}"
 )
+
+string(APPEND _source_contract_text
+    "\n${_hooks}\n${_character_authoring}\n${_character_format}\n${_character_settings}\n${_character_settings_json}")
 
 foreach(_feature_mode_contract IN ITEMS
     [[ResolveFeatureUpscaling(]]
@@ -1020,8 +1038,11 @@ foreach(_status_contract IN ITEMS
     [[{ "forcedMaskCoverageSampleIntervalFrames", NeuralRendering::CharacterPolicy::kCoverageSampleIntervalFrames }]]
     [[{ "configured", visualIsolationConfigured }]]
     [[{ "active", visualIsolationEffective }]]
-    [[{ "vrAttachmentFormat", "R8G8_UNORM" }]]
-    [[{ "additionalVrBytesPerPixel", 0 }]]
+    [[{ "vrAttachmentFormat", "R16G16_UNORM" }]]
+    [[{ "vrBytesPerPixel", 4 }]]
+    [[{ "legacyBytesPerPixel", 2 }]]
+    [[{ "additionalVrBytesPerPixel", 2 }]]
+    [[{ "inverseVertexAoBits", 16 }]]
     [[{ "alphaTestAndBlend", snapshot.currentClassificationRejections[2] }]]
     [[ProfileTimerJson("Upscaling::DLSS5CharacterCategoryCapture")]]
     [[ProfileTimerJson("Upscaling::DLSS5CharacterMask")]]
@@ -1493,7 +1514,7 @@ foreach(_source_contract IN ITEMS
     [[state_->RecordPreparedFrame(]]
     [[a_args.viewportCrop.input.right > sourceEyeWidth]]
     [[if (!characterEvaluationRequired)]]
-    [[DXGI_FORMAT_R8G8_UNORM]]
+    [[DXGI_FORMAT_R16G16_UNORM]]
     [[DXGI_FORMAT_R8_UNORM]]
     [[inline constexpr std::uint32_t kCoverageSampleIntervalFrames = 30;]]
     [[CharacterCategoryMask::Encode]]
@@ -1528,8 +1549,8 @@ foreach(_source_contract IN ITEMS
     [[PrepareCharacterSelectionMask(]]
     [[a_args.tuning.useAutoMask = true;]]
     [[!UsesCharacterVisualIsolation(settings) &&]]
-    [[state_->capturedEnabledCategoryMask_ == a_enabledCategoryMask]]
-    [[Increment(state_->snapshot_.categoryCaptureReuses);]]
+    [[state_->capturedEnabledCategoryMask_ = a_enabledCategoryMask;]]
+    [[(GetEnabledCharacterCategoryMask(a_args.settings) & ~state_->capturedEnabledCategoryMask_) != 0]]
     [[state_->unboundedCategoryMask_ |=]]
     [[(state_->unboundedCategoryMask_ & a_enabledCategoryMask) != 0 ||]]
     [[(unboundedCategoryMask_ &]]
@@ -1537,8 +1558,8 @@ foreach(_source_contract IN ITEMS
     [[const bool forcedEmpty =]]
     [[(logicalEmptyCapture || plan.regions.empty()));]]
     [[plan.projectionUncertain) {]]
-    [[IsCharacterMaterialCandidate(]]
-    [[classificationCache.try_emplace(]]
+    [[CharacterCategoryAuthoring::Update(pass);]]
+    [[ClassifyCharacterMaterial(]]
     [[ResolveCharacterCompositeInputs(]]
     [[const bool directCommit = params.front().neuralDirectCommit;]]
     [[params.back().neuralDirectCommit != directCommit]]
@@ -1615,7 +1636,9 @@ foreach(_character_content_correlation_contract IN ITEMS
     [[a_prepared.frame == eye.frame]]
     [[coveragePreparation->sourceWorldFrames[eye.maskCoverageFeatureSlot] ==]]
     [[coveragePreparation->contentSerials[eye.maskCoverageFeatureSlot] ==]]
-    [[readback.contentSerial == slot.contentSerial]]
+    [[readback.featureSlot == slotIndex && readback.contentSerial != 0]]
+    [[slot.maskCoverageContentSerial = readback.contentSerial;]]
+    [[slot.maskCoverageContentSerial == slot.contentSerial]]
 )
     string(FIND
         "${_source_contract_text}\n${_bridge}"
@@ -1626,6 +1649,31 @@ foreach(_character_content_correlation_contract IN ITEMS
         message(FATAL_ERROR
             "Character mask content-correlation contract is missing: ${_character_content_correlation_contract}"
         )
+    endif()
+endforeach()
+
+# A repeated frame can contain additional draws and updated depth. Replacing
+# those contents must expire mask preparation without discarding ROI history.
+foreach(_fresh_capture_contract IN ITEMS
+    [[state_->InvalidatePreparedMasks(true);]]
+    [[CharacterDepthExtentPolicy::ExactCapture]]
+    [[CharacterDepthExtentPolicy::ContainsActiveInput]]
+    [[state_->InvalidateProjectionCache();]]
+)
+    string(FIND "${_character_source}" "${_fresh_capture_contract}"
+        _fresh_capture_position)
+    if(_fresh_capture_position EQUAL -1)
+        message(FATAL_ERROR "Character capture/projection freshness contract is missing: ${_fresh_capture_contract}")
+    endif()
+endforeach()
+foreach(_stale_capture_contract IN ITEMS
+    [[Increment(state_->snapshot_.categoryCaptureReuses);]]
+    [[classificationCache.try_emplace(]]
+)
+    string(FIND "${_character_source}\n${_character_authoring}" "${_stale_capture_contract}"
+        _stale_capture_position)
+    if(NOT _stale_capture_position EQUAL -1)
+        message(FATAL_ERROR "Repeated-frame character draws must not reuse cached material/capture contents: ${_stale_capture_contract}")
     endif()
 endforeach()
 
@@ -2336,17 +2384,22 @@ endforeach()
 
 string(FIND
     "${_deferred}"
-    [[DXGI_FORMAT_R8G8_UNORM]]
+    [[NeuralRendering::kCharacterCategoryFormat]]
     _vr_tuple_format_position
 )
+string(FIND "${_character_format}" [[DXGI_FORMAT_R16G16_UNORM]]
+    _vr_tuple_precision_position)
+string(FIND "${_character_source}" [[kCharacterCategoryFormat]]
+    _vr_capture_tuple_format_position)
 string(FIND
     "${_character_source}"
     [[textureDesc.Format = DXGI_FORMAT_R8_UNORM;]]
     _selection_mask_format_position
 )
-if(_vr_tuple_format_position EQUAL -1 OR _selection_mask_format_position EQUAL -1)
+if(_vr_tuple_format_position EQUAL -1 OR _vr_tuple_precision_position EQUAL -1 OR
+   _vr_capture_tuple_format_position EQUAL -1 OR _selection_mask_format_position EQUAL -1)
     message(FATAL_ERROR
-        "VR category provenance must use RG8 UNORM and the CSX selection mask R8 UNORM"
+        "VR category provenance must preserve R16 AO using shared RG16 UNORM and the selection mask R8 UNORM"
     )
 endif()
 
@@ -2515,13 +2568,16 @@ foreach(_classification_contract IN ITEMS
     [[case AncestryResult::NotDescendant:]]
     [[a_property->flags.any(Flag::kHairTint)]]
     [[RE::BSShaderMaterial::Feature::kHairTint]]
-    [[if (actor && actor->IsPlayerRef())]]
-    [[} else if (actor) {]]
+    [[if (actor->IsPlayerRef())]]
+    [[if (!actor)]]
+    [[!std::isfinite(lightingProperty->alpha)]]
+    [[lightingProperty->alpha < 1.0f]]
+    [[state->permutationData.ExtraShaderDescriptor &= ~categoryFlags;]]
     [[CharacterCategory::Skin]]
     [[CharacterCategory::Hair]]
 )
     string(FIND
-        "${_subsurface_source}"
+        "${_character_authoring}"
         "${_classification_contract}"
         _classification_position
     )
@@ -2534,25 +2590,20 @@ endforeach()
 
 string(FIND "${_character_header}"
     "[[nodiscard]] bool ObserveGeometry(" _observation_acceptance_api)
-string(FIND "${_subsurface_source}"
-    "void SubsurfaceScattering::BSLightingShader_SetupSkin("
-    _setup_skin_begin)
-string(FIND "${_subsurface_source}"
-    "void SubsurfaceScattering::Hooks::BSLightingShader_SetupGeometry::thunk("
-    _setup_skin_end)
-if(_observation_acceptance_api EQUAL -1 OR _setup_skin_begin EQUAL -1 OR
-    _setup_skin_end EQUAL -1 OR NOT _setup_skin_begin LESS _setup_skin_end)
+string(FIND "${_character_authoring}"
+    "void CharacterCategoryAuthoring::Update(" _authoring_begin)
+if(_observation_acceptance_api EQUAL -1 OR _authoring_begin EQUAL -1)
     message(FATAL_ERROR
         "Character semantic-ID observation acceptance contract is missing"
     )
 endif()
-math(EXPR _setup_skin_length "${_setup_skin_end} - ${_setup_skin_begin}")
-string(SUBSTRING "${_subsurface_source}" ${_setup_skin_begin}
-    ${_setup_skin_length} _setup_skin)
-string(FIND "${_setup_skin}"
-    "entry->second.accepted =" _accepted_observation)
-string(FIND "${_setup_skin}"
-    "static_cast<uint>(entry->second.category) << 8;" _semantic_descriptor_write)
+string(SUBSTRING "${_character_authoring}" ${_authoring_begin} -1 _authoring_update)
+string(REGEX REPLACE "[\r\n\t ]+" " " _authoring_normalized "${_authoring_update}")
+string(FIND "${_authoring_normalized}"
+    "if (characterRendering.ShouldAuthorActor(state->frameCount, actor->GetFormID(), admission) && characterRendering.ObserveGeometry("
+    _accepted_observation)
+string(FIND "${_authoring_normalized}"
+    "static_cast<uint32_t>(classification.category)" _semantic_descriptor_write)
 if(_accepted_observation EQUAL -1 OR _semantic_descriptor_write EQUAL -1 OR
     NOT _accepted_observation LESS _semantic_descriptor_write)
     message(FATAL_ERROR
@@ -2560,9 +2611,24 @@ if(_accepted_observation EQUAL -1 OR _semantic_descriptor_write EQUAL -1 OR
     )
 endif()
 
-string(FIND "${_subsurface_source}" "Flag::kSkinned" _generic_skinned_position)
+string(FIND "${_character_authoring}" "Flag::kSkinned" _generic_skinned_position)
 if(NOT _generic_skinned_position EQUAL -1)
     message(FATAL_ERROR "Generic skinned geometry must not be classified as character skin")
+endif()
+
+string(FIND "${_authoring_normalized}"
+    "static_cast<uint32_t>(State::ExtraShaderDescriptors::CharacterExcluded);"
+    _excluded_descriptor_write)
+string(FIND "${_authoring_normalized}" "if (actor->IsPlayerRef())" _player_rejection)
+if(_excluded_descriptor_write EQUAL -1 OR _player_rejection EQUAL -1 OR
+   NOT _excluded_descriptor_write LESS _player_rejection OR
+   NOT _player_rejection LESS _accepted_observation)
+    message(FATAL_ERROR "Opaque player and unsupported actor materials must default to exact exclusion before admission")
+endif()
+string(FIND "${_hooks}" "CharacterCategoryAuthoring::Update(pass);" _core_authoring_call)
+string(FIND "${_subsurface_source}" "CharacterCategory" _sss_category_dependency)
+if(_core_authoring_call EQUAL -1 OR NOT _sss_category_dependency EQUAL -1)
+    message(FATAL_ERROR "Character category authoring must run from the core lighting hook independently of SSS")
 endif()
 
 string(FIND "${_character_source}"
@@ -2626,11 +2692,11 @@ foreach(_admission_contract IN ITEMS
     [[CharacterRegionPolicy::CoveredArea(plan.regions)]]
     [[globals::game::frameBufferCached.GetCameraProjInverse(]]
     [[characterRendering.ShouldAuthorActor(]]
-    [[entry->second.excluded = !entry->second.accepted;]]
+    [[.outputWidthPerEye = projectionWidth,]]
     [[ExtraShaderDescriptors::CharacterExcluded]]
 )
     string(FIND
-        "${_character_source}\n${_character_actor_policy}\n${_subsurface_source}"
+        "${_character_source}\n${_character_actor_policy}\n${_character_authoring}"
         "${_admission_contract}"
         _admission_position
     )
@@ -3104,13 +3170,14 @@ foreach(_character_field IN LISTS _character_configuration_fields)
 endforeach()
 
 foreach(_adaptive_setting_contract IN ITEMS
-    [[OP(neuralCharacterAdaptiveRoiSelectionEnabled)]]
-    [[.adaptiveRoiSelection =]]
+    [[visit("neuralCharacterAdaptiveRoiSelectionEnabled", settings.neuralCharacterAdaptiveRoiSelectionEnabled, policy.adaptiveRoiSelection);]]
+    [[NeuralRendering::ReadUpscalingCharacterSettingsJson(a_json, parsed);]]
+    [[NeuralRendering::WriteUpscalingCharacterSettingsJson(a_json, a_settings);]]
     [[settings.neuralCharacterAdaptiveRoiSelectionEnabled =]]
     [[o_json.erase("neuralCharacterAdaptiveRoiSelectionEnabled");]]
     [[add(a_settings.neuralCharacterAdaptiveRoiSelectionEnabled);]]
 )
-    string(FIND "${_upscaling}" "${_adaptive_setting_contract}"
+    string(FIND "${_upscaling}\n${_character_settings_json}" "${_adaptive_setting_contract}"
         _adaptive_setting_position)
     if(_adaptive_setting_position EQUAL -1)
         message(FATAL_ERROR

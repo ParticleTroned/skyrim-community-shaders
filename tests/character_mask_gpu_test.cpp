@@ -5,6 +5,8 @@
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 
+#include "Features/Upscaling/NeuralRendering/CharacterCategoryFormat.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -39,11 +41,16 @@ namespace
 
 	struct Tuple
 	{
-		std::uint8_t inverseAo = 0;
-		std::uint8_t category = 0;
+		std::uint16_t inverseAo = 0;
+		std::uint16_t category = 0;
+		Tuple() = default;
+		Tuple(std::uint8_t inverseAoByte, std::uint8_t categoryByte) :
+			inverseAo(static_cast<std::uint16_t>(inverseAoByte * 257u)),
+			category(static_cast<std::uint16_t>(categoryByte * 257u))
+		{}
 		bool operator==(const Tuple&) const = default;
 	};
-	static_assert(sizeof(Tuple) == 2);
+	static_assert(sizeof(Tuple) == 4);
 
 	// Asserted against reflection of the production HLSL, not a test shader.
 	struct alignas(16) MaskConstants
@@ -205,24 +212,27 @@ namespace
 		MaskResult Mask(const MaskConstants& constants, std::uint32_t packedWidth,
 			const std::vector<Tuple>& tuples,
 			std::vector<float> authoredDepth = {}, std::vector<float> currentDepth = {},
-			std::uint8_t initialOutput = 0)
+			std::uint8_t initialOutput = 0,
+			std::uint32_t currentWidth = 0, std::uint32_t currentHeight = 0)
 		{
 			const auto sourceHeight = constants.outputAndSourceSize[3];
 			const auto outputWidth = constants.outputAndSourceSize[0];
 			const auto outputHeight = constants.outputAndSourceSize[1];
+			currentWidth = currentWidth ? currentWidth : constants.sourceCrop[3];
+			currentHeight = currentHeight ? currentHeight : constants.options[0];
 			Require(tuples.size() == packedWidth * sourceHeight, "Tuple input dimensions");
 			if (authoredDepth.empty())
 				authoredDepth.assign(tuples.size(), 0.5f);
 			if (currentDepth.empty())
-				currentDepth.assign(constants.sourceCrop[3] * constants.options[0], 0.5f);
+				currentDepth.assign(currentWidth * currentHeight, 0.5f);
 			Require(authoredDepth.size() == tuples.size(), "Authored depth dimensions");
-			Require(currentDepth.size() == constants.sourceCrop[3] * constants.options[0],
+			Require(currentDepth.size() == currentWidth * currentHeight,
 				"Current depth dimensions");
-			auto category = MakeTexture(packedWidth, sourceHeight, DXGI_FORMAT_R8G8_UNORM,
+			auto category = MakeTexture(packedWidth, sourceHeight, NeuralRendering::kCharacterCategoryFormat,
 				D3D11_BIND_SHADER_RESOURCE, tuples);
 			auto authored = MakeTexture(packedWidth, sourceHeight, DXGI_FORMAT_R32_FLOAT,
 				D3D11_BIND_SHADER_RESOURCE, authoredDepth);
-			auto current = MakeTexture(constants.sourceCrop[3], constants.options[0],
+			auto current = MakeTexture(currentWidth, currentHeight,
 				DXGI_FORMAT_R32_FLOAT, D3D11_BIND_SHADER_RESOURCE, currentDepth);
 			auto output = MakeTexture(outputWidth, outputHeight, DXGI_FORMAT_R8_UNORM,
 				D3D11_BIND_UNORDERED_ACCESS,
@@ -274,16 +284,17 @@ namespace
 			std::vector<Tuple> tuples(width * height);
 			std::vector<float> depth(width * height);
 			for (std::size_t index = 0; index < tuples.size(); ++index) {
-				tuples[index] = { static_cast<std::uint8_t>(index * 3),
+				tuples[index] = { 0,
 					static_cast<std::uint8_t>((index % 4) * 85) };
+				tuples[index].inverseAo = static_cast<std::uint16_t>(index * 997u);
 				depth[index] = static_cast<float>(index) / 128.0f;
 			}
-			auto sourceTuple = MakeTexture(width, height, DXGI_FORMAT_R8G8_UNORM,
+			auto sourceTuple = MakeTexture(width, height, NeuralRendering::kCharacterCategoryFormat,
 				D3D11_BIND_SHADER_RESOURCE, tuples);
 			auto sourceDepth = MakeTexture(width, height, DXGI_FORMAT_R32_FLOAT,
 				D3D11_BIND_SHADER_RESOURCE, depth);
 			const Tuple sentinel{ 17, 19 };
-			auto frozenTuple = MakeTexture(width, height, DXGI_FORMAT_R8G8_UNORM,
+			auto frozenTuple = MakeTexture(width, height, NeuralRendering::kCharacterCategoryFormat,
 				D3D11_BIND_UNORDERED_ACCESS, std::vector<Tuple>(width * height, sentinel));
 			auto frozenDepth = MakeTexture(width, height, DXGI_FORMAT_R32_FLOAT,
 				D3D11_BIND_UNORDERED_ACCESS, std::vector<float>(width * height, -1.0f));
@@ -309,6 +320,34 @@ namespace
 					Require(actualDepth[index] == (inside ? depth[index] : -1.0f),
 						"Capture raw depth differs or writes outside region");
 				}
+			}
+		}
+
+		void VertexAoPreservesOriginalPrecision()
+		{
+			auto original = MakeTexture(1, 1, DXGI_FORMAT_R16_UNORM,
+				D3D11_BIND_RENDER_TARGET, std::vector<std::uint16_t>(1));
+			auto categories = MakeTexture(1, 1, NeuralRendering::kCharacterCategoryFormat,
+				D3D11_BIND_RENDER_TARGET, std::vector<Tuple>(1));
+			ComPtr<ID3D11RenderTargetView> originalRtv, categoriesRtv;
+			Check(device_->CreateRenderTargetView(original.resource.Get(), nullptr, &originalRtv),
+				"Create original vertex AO RTV");
+			Check(device_->CreateRenderTargetView(categories.resource.Get(), nullptr, &categoriesRtv),
+				"Create character category RTV");
+			// Linear Lighting stores gamma-corrected vertex AO, including values
+			// much smaller than an 8-bit linear attachment can preserve.
+			for (unsigned vertexByte = 0; vertexByte <= 255; ++vertexByte) {
+				const float vertexAo = std::pow(vertexByte / 255.0f, 2.2f);
+				const float encoded[]{ 1.0f - vertexAo, 1.0f / 3.0f, 0.0f, 1.0f };
+				context_->ClearRenderTargetView(originalRtv.Get(), encoded);
+				context_->ClearRenderTargetView(categoriesRtv.Get(), encoded);
+				const auto expected = Read<std::uint16_t>(original.resource.Get()).front();
+				const auto actual = Read<Tuple>(categories.resource.Get()).front();
+				Require(actual.inverseAo == expected,
+					"Character attachment changes original vertex AO precision at vertex byte " +
+						std::to_string(vertexByte));
+				Require(actual.category == 21845u,
+					"Character category lane changes with vertex AO");
 			}
 		}
 
@@ -752,6 +791,31 @@ namespace
 		ExpectByte(foregroundEdge.pixels[1], 191,
 			"Visible face coverage survives beside foreground occluder");
 
+		edge.visibilityOptions[1] = 0.0f;
+		edge.cameraProjInverse[0] = edge.cameraProjInverse[5] = 0.0f;
+		edge.cameraProjInverse[10] = 20.0f;
+		edge.visibilityOptions[2] = 10.0f;
+		edge.visibilityOptions[3] = 1.0f;
+		const auto distantBackground = gpu.Mask(edge, 2, { { 0, 85 }, { 0, 0 } },
+			{ 0.25f, 0.75f });
+		constexpr std::array expectedCoverage{ 255, 191, 64, 0 };
+		for (std::size_t index = 0; index < expectedCoverage.size(); ++index)
+			ExpectByte(distantBackground.pixels[index], expectedCoverage[index],
+				"Background distance must not clip reconstructed coverage of a nearby character");
+
+		edge.visibilityOptions[1] = 1.0f;
+		edge.visibilityOptions[2] = 0.0f;
+		const auto rawDepth = [](float distance) { return (100.0f - 100.0f / distance) / 99.0f; };
+		const std::vector<float> authoredEdgeDepth{ rawDepth(5.0f), rawDepth(15.0f) };
+		const auto behindCharacter = gpu.Mask(edge, 2, { { 0, 85 }, { 0, 0 } },
+			authoredEdgeDepth, { rawDepth(5.0f), rawDepth(10.0f) });
+		ExpectByte(behindCharacter.pixels[2], 64,
+			"Changed background behind the character must preserve reconstructed coverage");
+		const auto inFrontOfCharacter = gpu.Mask(edge, 2, { { 0, 85 }, { 0, 0 } },
+			authoredEdgeDepth, { rawDepth(5.0f), rawDepth(2.0f) });
+		Require(inFrontOfCharacter.pixels[2] == 0,
+			"Changed background in front of the character must occlude reconstructed coverage");
+
 		constants.visibilityOptions[1] = 0.0f;
 		constants.cameraProjInverse[0] = constants.cameraProjInverse[5] = 0.0f;
 		constants.cameraProjInverse[10] = 20.0f;
@@ -762,6 +826,29 @@ namespace
 		ExpectByte(gpu.Mask(constants, 1, face, { 0.5f }).pixels[0], 128, "Distance fade");
 		constants.visibilityOptions[2] = 0.0f;
 		ExpectByte(gpu.Mask(constants, 1, face, { 0.5f }).pixels[0], 255, "Zero disables distance culling");
+	}
+
+	void CurrentDepthAllowsLargerAllocation(Harness& gpu)
+	{
+		constexpr std::uint32_t activeWidth = 5, activeHeight = 3;
+		constexpr std::uint32_t allocationWidth = 9, allocationHeight = 7;
+		auto constants = Defaults(activeWidth, activeHeight);
+		constants.visibilityOptions[1] = 1.0f;
+		std::vector<Tuple> categories(activeWidth * activeHeight, { 0, 85 });
+		std::vector<float> authored(categories.size(), 0.9f);
+		std::vector<float> activeDepth(categories.size(), 0.99f);
+		activeDepth[activeWidth + 2] = 0.5f;
+		std::vector<float> allocation(allocationWidth * allocationHeight, 0.0f);
+		for (std::uint32_t y = 0; y < activeHeight; ++y)
+			std::copy_n(activeDepth.begin() + y * activeWidth, activeWidth,
+				allocation.begin() + y * allocationWidth);
+		const auto exact = gpu.Mask(constants, activeWidth, categories, authored, activeDepth);
+		const auto larger = gpu.Mask(constants, activeWidth, categories, authored, allocation,
+			0, allocationWidth, allocationHeight);
+		Require(exact.pixels == larger.pixels && exact.counters == larger.counters,
+			"Display-size current depth allocation changed active-input visibility");
+		Require(exact.pixels[0] > 0 && exact.pixels[activeWidth + 2] == 0,
+			"Depth allocation test must include visible and occluded characters");
 	}
 
 	void CropsDirtyRegionsAndStereo(Harness& gpu)
@@ -829,9 +916,11 @@ int wmain(int argc, wchar_t** argv)
 			return 0;
 		}
 		gpu.CapturePreservesOutsideAndBothChannels();
+		gpu.VertexAoPreservesOriginalPrecision();
 		gpu.CompositeRespectsCurrentMaskBounds();
 		SelectionAndCoverage(gpu);
 		VisibilityAndDistance(gpu);
+		CurrentDepthAllowsLargerAllocation(gpu);
 		CropsDirtyRegionsAndStereo(gpu);
 		std::cout << "Production character capture/mask HLSL passed WARP synthetic tests\n";
 		return 0;

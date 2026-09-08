@@ -16,6 +16,7 @@
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
 #include "Upscaling/NeuralRendering/CharacterRendering.h"
+#include "Upscaling/NeuralRendering/CharacterSettingsJson.h"
 #include "Upscaling/NeuralRendering/PipelinePolicy.h"
 #include "Upscaling/NeuralRendering/Renderer.h"
 #include "Upscaling/Streamline.h"
@@ -90,24 +91,6 @@
 	OP(neuralRenderingUICorrection)                \
 	OP(neuralRenderingSingleSubrectScale)          \
 	OP(neuralRenderingBlendFeather)                \
-	OP(neuralCharacterRenderingEnabled)            \
-	OP(neuralCharacterVisualIsolationEnabled)      \
-	OP(neuralCharacterFacesEnabled)                \
-	OP(neuralCharacterSkinEnabled)                 \
-	OP(neuralCharacterHairEnabled)                 \
-	OP(neuralCharacterFaceStrength)                \
-	OP(neuralCharacterSkinStrength)                \
-	OP(neuralCharacterHairStrength)                \
-	OP(neuralCharacterMaximumDistanceMeters)       \
-	OP(neuralCharacterAdaptiveRoiSelectionEnabled) \
-	OP(neuralCharacterMultiRoiEnabled)             \
-	OP(neuralCharacterMinimumFacePixelSize)        \
-	OP(neuralCharacterRoiMargin)                   \
-	OP(neuralCharacterRoiHoldFrames)               \
-	OP(neuralCharacterDepthAwareFeatherEnabled)    \
-	OP(neuralCharacterVisibilityDepthTestEnabled)  \
-	OP(neuralCharacterFeatherRadius)               \
-	OP(neuralCharacterDepthThreshold)              \
 	OP(foveatedCenterOrigin)                       \
 	OP(foveatedHorizontalAnchor)                   \
 	OP(foveatedCenterArea)                         \
@@ -135,15 +118,19 @@ void to_json(json& a_json, const Upscaling::Settings& a_settings)
 #define UPSCALING_WRITE_JSON_FIELD(name) a_json[#name] = a_settings.name;
 	UPSCALING_SETTINGS_JSON_FIELDS(UPSCALING_WRITE_JSON_FIELD)
 #undef UPSCALING_WRITE_JSON_FIELD
+	NeuralRendering::WriteUpscalingCharacterSettingsJson(a_json, a_settings);
 }
 
 void from_json(const json& a_json, Upscaling::Settings& a_settings)
 {
 	const Upscaling::Settings defaults{};
+	auto parsed = defaults;
 #define UPSCALING_READ_JSON_FIELD(name) \
-	a_settings.name = a_json.value(#name, defaults.name);
+	parsed.name = a_json.value(#name, defaults.name);
 	UPSCALING_SETTINGS_JSON_FIELDS(UPSCALING_READ_JSON_FIELD)
 #undef UPSCALING_READ_JSON_FIELD
+	NeuralRendering::ReadUpscalingCharacterSettingsJson(a_json, parsed);
+	a_settings = parsed;
 }
 
 #undef UPSCALING_SETTINGS_JSON_FIELDS
@@ -3688,58 +3675,9 @@ namespace
 			1.0f);
 		settings.neuralRenderingBlendFeather =
 			ClampFoveatedBlendFeather(settings.neuralRenderingBlendFeather);
-		settings.neuralCharacterFaceStrength = std::clamp(
-			std::isfinite(settings.neuralCharacterFaceStrength) ?
-				settings.neuralCharacterFaceStrength :
-				NeuralRendering::CharacterPolicy::kDefaultFaceStrength,
-			NeuralRendering::CharacterPolicy::kMinimumStrength,
-			NeuralRendering::CharacterPolicy::kMaximumStrength);
-		settings.neuralCharacterSkinStrength = std::clamp(
-			std::isfinite(settings.neuralCharacterSkinStrength) ?
-				settings.neuralCharacterSkinStrength :
-				NeuralRendering::CharacterPolicy::kDefaultSkinStrength,
-			NeuralRendering::CharacterPolicy::kMinimumStrength,
-			NeuralRendering::CharacterPolicy::kMaximumStrength);
-		settings.neuralCharacterHairStrength = std::clamp(
-			std::isfinite(settings.neuralCharacterHairStrength) ?
-				settings.neuralCharacterHairStrength :
-				NeuralRendering::CharacterPolicy::kDefaultHairStrength,
-			NeuralRendering::CharacterPolicy::kMinimumStrength,
-			NeuralRendering::CharacterPolicy::kMaximumStrength);
-		settings.neuralCharacterMaximumDistanceMeters = std::clamp(
-			std::isfinite(settings.neuralCharacterMaximumDistanceMeters) ?
-				settings.neuralCharacterMaximumDistanceMeters :
-				NeuralRendering::CharacterPolicy::kDefaultMaximumDistanceMeters,
-			NeuralRendering::CharacterPolicy::kMinimumDistanceMeters,
-			NeuralRendering::CharacterPolicy::kMaximumDistanceMeters);
-		settings.neuralCharacterMinimumFacePixelSize = std::clamp(
-			settings.neuralCharacterMinimumFacePixelSize,
-			NeuralRendering::CharacterPolicy::kMinimumFacePixelSize,
-			NeuralRendering::CharacterPolicy::kMaximumFacePixelSize);
-		settings.neuralCharacterRoiMargin = std::clamp(
-			std::isfinite(settings.neuralCharacterRoiMargin) ?
-				settings.neuralCharacterRoiMargin :
-				NeuralRendering::CharacterPolicy::kDefaultRoiMargin,
-			NeuralRendering::CharacterPolicy::kMinimumRoiMargin,
-			NeuralRendering::CharacterPolicy::kMaximumRoiMargin);
-		settings.neuralCharacterRoiHoldFrames = std::min(
-			settings.neuralCharacterRoiHoldFrames,
-			NeuralRendering::CharacterPolicy::kMaximumRoiHoldFrames);
-		settings.neuralCharacterFeatherRadius = std::min(
-			settings.neuralCharacterFeatherRadius,
-			NeuralRendering::CharacterPolicy::kMaximumFeatherRadius);
-		settings.neuralCharacterDepthThreshold = std::clamp(
-			std::isfinite(settings.neuralCharacterDepthThreshold) ?
-				settings.neuralCharacterDepthThreshold :
-				NeuralRendering::CharacterPolicy::kDefaultFeatherDepthThreshold,
-			0.0f,
-			NeuralRendering::CharacterPolicy::kMaximumFeatherDepthThreshold);
-		settings.neuralCharacterDebugView = static_cast<uint>(
-			NeuralRendering::ClampCharacterDebugView(
-				settings.neuralCharacterDebugView));
-		settings.neuralCharacterMaskTestMode = static_cast<uint>(
-			NeuralRendering::ClampCharacterMaskTestMode(
-				settings.neuralCharacterMaskTestMode));
+		auto characterSettings = NeuralRendering::GetUpscalingCharacterSettings(settings);
+		NeuralRendering::SanitizeCharacterSettings(characterSettings);
+		NeuralRendering::ApplyUpscalingCharacterSettings(settings, characterSettings);
 		// Character selection is enforced by CSX's deterministic composite. Keep
 		// Feature 18 on its known-working automatic-mask invocation.
 		settings.neuralRenderingAutoMask = true;
@@ -3765,35 +3703,10 @@ namespace
 	NeuralRendering::CharacterSettings BuildCharacterSettings(
 		const Upscaling::Settings& a_settings) noexcept
 	{
-		return {
-			.enabled = a_settings.neuralRenderingEnabled &&
-			           a_settings.neuralCharacterRenderingEnabled,
-			.faces = a_settings.neuralCharacterFacesEnabled,
-			.skin = a_settings.neuralCharacterSkinEnabled,
-			.hair = a_settings.neuralCharacterHairEnabled,
-			.faceStrength = a_settings.neuralCharacterFaceStrength,
-			.skinStrength = a_settings.neuralCharacterSkinStrength,
-			.hairStrength = a_settings.neuralCharacterHairStrength,
-			.maximumDistanceMeters =
-				a_settings.neuralCharacterMaximumDistanceMeters,
-			.adaptiveRoiSelection =
-				a_settings.neuralCharacterAdaptiveRoiSelectionEnabled,
-			.multiRoi = a_settings.neuralCharacterMultiRoiEnabled,
-			.minimumFacePixelSize =
-				a_settings.neuralCharacterMinimumFacePixelSize,
-			.roiMargin = a_settings.neuralCharacterRoiMargin,
-			.roiHoldFrames = a_settings.neuralCharacterRoiHoldFrames,
-			.depthAwareFeather =
-				a_settings.neuralCharacterDepthAwareFeatherEnabled,
-			.visibilityDepthTest =
-				a_settings.neuralCharacterVisibilityDepthTestEnabled,
-			.featherRadius = a_settings.neuralCharacterFeatherRadius,
-			.featherDepthThreshold = a_settings.neuralCharacterDepthThreshold,
-			.debugView = NeuralRendering::ClampCharacterDebugView(
-				a_settings.neuralCharacterDebugView),
-			.maskTestMode = NeuralRendering::ClampCharacterMaskTestMode(
-				a_settings.neuralCharacterMaskTestMode),
-		};
+		auto policy = NeuralRendering::GetUpscalingCharacterSettings(a_settings);
+		NeuralRendering::SanitizeCharacterSettings(policy);
+		policy.enabled = policy.enabled && a_settings.neuralRenderingEnabled;
+		return policy;
 	}
 
 	bool UsesCharacterVisualIsolation(
@@ -17114,23 +17027,7 @@ bool Upscaling::GetCharacterNeuralRenderingProjectionExtent(uint32_t& a_widthPer
 
 std::uint32_t Upscaling::GetCharacterNeuralRenderingCategoryMask() const noexcept
 {
-	std::uint32_t mask = 0;
-	if (settings.neuralCharacterFacesEnabled &&
-		settings.neuralCharacterFaceStrength > 0.0f) {
-		mask |= NeuralRendering::CharacterPolicy::CategoryBit(
-			NeuralRendering::CharacterCategory::Face);
-	}
-	if (settings.neuralCharacterSkinEnabled &&
-		settings.neuralCharacterSkinStrength > 0.0f) {
-		mask |= NeuralRendering::CharacterPolicy::CategoryBit(
-			NeuralRendering::CharacterCategory::Skin);
-	}
-	if (settings.neuralCharacterHairEnabled &&
-		settings.neuralCharacterHairStrength > 0.0f) {
-		mask |= NeuralRendering::CharacterPolicy::CategoryBit(
-			NeuralRendering::CharacterCategory::Hair);
-	}
-	return mask;
+	return NeuralRendering::GetEnabledCharacterCategoryMask(BuildCharacterSettings(settings));
 }
 
 uint32_t Upscaling::GetRuntimeQualityMode() const

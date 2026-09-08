@@ -4,7 +4,6 @@
 #include "Features/Upscaling.h"
 #include "ShaderCache.h"
 #include "State.h"
-#include "Upscaling/NeuralRendering/CharacterRendering.h"
 #include "Utils/D3D.h"
 
 #include <algorithm>
@@ -12,7 +11,6 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
-#include <unordered_map>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(SubsurfaceScattering::DiffusionProfile,
 	BlurRadius, Thickness, Strength, Falloff)
@@ -42,121 +40,6 @@ namespace
 	constexpr float kHumanSkinControlMin = 0.0f;
 	constexpr float kHumanSkinControlMax = 2.0f;
 	constexpr uint32_t kBlurHorizontalTempAllocationRetryFrames = 120;
-
-	enum class AncestryResult
-	{
-		Descendant,
-		NotDescendant,
-		Indeterminate,
-	};
-
-	AncestryResult ResolveAncestry(
-		const RE::NiAVObject* a_object,
-		const RE::NiAVObject* a_ancestor) noexcept
-	{
-		constexpr std::uint32_t kMaximumParentDepth = 64;
-		for (std::uint32_t depth = 0;
-			a_object && depth < kMaximumParentDepth;
-			++depth, a_object = a_object->parent) {
-			if (a_object == a_ancestor)
-				return AncestryResult::Descendant;
-		}
-		return a_object ? AncestryResult::Indeterminate :
-		                  AncestryResult::NotDescendant;
-	}
-
-	struct CharacterMaterialClassification
-	{
-		NeuralRendering::CharacterCategory category =
-			NeuralRendering::CharacterCategory::None;
-		NeuralRendering::CharacterClassificationRejection rejection =
-			NeuralRendering::CharacterClassificationRejection::UnsupportedMaterial;
-	};
-
-	bool IsCharacterMaterialCandidate(
-		RE::BSShaderProperty* a_property) noexcept
-	{
-		if (!a_property)
-			return false;
-		using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
-		if (a_property->flags.any(
-				Flag::kFace, Flag::kFaceGenRGBTint, Flag::kHairTint)) {
-			return true;
-		}
-		const auto* material = a_property->GetBaseMaterial();
-		if (!material)
-			return false;
-		const auto feature = material->GetFeature();
-		return feature == RE::BSShaderMaterial::Feature::kFaceGen ||
-		       feature == RE::BSShaderMaterial::Feature::kFaceGenRGBTint ||
-		       feature == RE::BSShaderMaterial::Feature::kHairTint;
-	}
-
-	CharacterMaterialClassification ClassifyCharacterMaterial(
-		RE::BSShaderProperty* a_property,
-		RE::BSGeometry* a_geometry,
-		RE::Actor* a_actor) noexcept
-	{
-		if (!a_property || !a_geometry || !a_actor)
-			return {};
-		const auto* alphaProperty = static_cast<RE::NiAlphaProperty*>(
-			a_geometry->GetGeometryRuntimeData().alphaProperty.get());
-		const auto* lightingProperty =
-			a_property->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get() ?
-				static_cast<RE::BSLightingShaderProperty*>(a_property) :
-				nullptr;
-		const bool hasImplicitAlphaBlend =
-			lightingProperty && lightingProperty->alpha < 0.999f;
-		if (hasImplicitAlphaBlend ||
-			(alphaProperty && alphaProperty->GetAlphaBlending())) {
-			// MRT7 inherits the scene blend state, so a blended category value
-			// is not an exact semantic ID. Alpha-tested geometry remains exact.
-			return {
-				.rejection = alphaProperty && alphaProperty->GetAlphaTesting() ?
-				                 NeuralRendering::CharacterClassificationRejection::AlphaTestAndBlend :
-				                 NeuralRendering::CharacterClassificationRejection::BlendedMaterial,
-			};
-		}
-
-		using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
-		const auto* material = a_property->GetBaseMaterial();
-		const auto feature = material ? material->GetFeature() :
-		                                RE::BSShaderMaterial::Feature::kNone;
-		if (a_property->flags.any(Flag::kFace) ||
-			feature == RE::BSShaderMaterial::Feature::kFaceGen) {
-			return { .category = NeuralRendering::CharacterCategory::Face };
-		}
-
-		const bool isFaceGenRgbTint =
-			a_property->flags.any(Flag::kFaceGenRGBTint) ||
-			feature == RE::BSShaderMaterial::Feature::kFaceGenRGBTint;
-		if (isFaceGenRgbTint) {
-			// FaceGen RGB tint is also used by exposed body skin. The actor's
-			// face-node ancestry is the reliable distinction; kSkinned is not.
-			const auto* faceNode = a_actor->GetFaceNodeSkinned();
-			if (!faceNode)
-				return {
-					.rejection = NeuralRendering::CharacterClassificationRejection::AmbiguousFaceGen,
-				};
-			switch (ResolveAncestry(a_geometry, faceNode)) {
-			case AncestryResult::Descendant:
-				return { .category = NeuralRendering::CharacterCategory::Face };
-			case AncestryResult::NotDescendant:
-				return { .category = NeuralRendering::CharacterCategory::Skin };
-			default:
-				// Corrupt or unexpectedly deep scene graphs must not broaden the mask.
-				return {
-					.rejection = NeuralRendering::CharacterClassificationRejection::AmbiguousFaceGen,
-				};
-			}
-		}
-
-		if (a_property->flags.any(Flag::kHairTint) ||
-			feature == RE::BSShaderMaterial::Feature::kHairTint) {
-			return { .category = NeuralRendering::CharacterCategory::Hair };
-		}
-		return {};
-	}
 
 	template <class TNPC>
 	auto IsFemaleImpl(TNPC* npc, int) -> decltype(npc->IsFemale(), bool{})
@@ -882,11 +765,6 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 	if (!state)
 		return;
 
-	const auto characterCategoryMask =
-		static_cast<uint>(State::ExtraShaderDescriptors::CharacterCategoryMask) |
-		static_cast<uint>(State::ExtraShaderDescriptors::CharacterExcluded);
-	state->permutationData.ExtraShaderDescriptor &= ~characterCategoryMask;
-
 	if (deferred && deferred->deferredPass) {
 		bool isBeastRace = true;
 		bool isFemale = false;
@@ -909,113 +787,6 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 			}
 
 			validMaterials = true;
-		}
-
-		const auto& upscaling = globals::features::upscaling;
-		static thread_local std::uint32_t routeFrame =
-			std::numeric_limits<std::uint32_t>::max();
-		static thread_local bool routeRequested = false;
-		static thread_local NeuralRendering::CharacterSettings actorPolicy{};
-		static thread_local std::uint32_t actorProjectionWidth = 0;
-		static thread_local std::uint32_t actorProjectionHeight = 0;
-		if (routeFrame != state->frameCount) {
-			routeFrame = state->frameCount;
-			routeRequested =
-				upscaling.IsCharacterNeuralRenderingRouteRequested();
-			if (routeRequested) {
-				actorPolicy = upscaling.GetCharacterNeuralRenderingSettings();
-				(void)upscaling.GetCharacterNeuralRenderingProjectionExtent(
-					actorProjectionWidth, actorProjectionHeight);
-			}
-		}
-		if (routeRequested && a_pass && a_pass->geometry &&
-			IsCharacterMaterialCandidate(a_pass->shaderProperty)) {
-			struct CachedGeometryClassification
-			{
-				NeuralRendering::CharacterCategory category =
-					NeuralRendering::CharacterCategory::None;
-				bool accepted = false;
-				bool excluded = false;
-			};
-			static thread_local std::uint32_t classificationFrame =
-				std::numeric_limits<std::uint32_t>::max();
-			static thread_local std::unordered_map<
-				std::uintptr_t, CachedGeometryClassification>
-				classificationCache;
-			if (classificationFrame != state->frameCount) {
-				classificationFrame = state->frameCount;
-				classificationCache.clear();
-				if (classificationCache.bucket_count() == 0)
-					classificationCache.reserve(512);
-			}
-
-			const auto geometryIdentity =
-				reinterpret_cast<std::uintptr_t>(a_pass->geometry);
-			auto [entry, inserted] = classificationCache.try_emplace(
-				geometryIdentity);
-			if (inserted) {
-				if (!actor) {
-					if (auto userData = a_pass->geometry->GetUserData())
-						actor = userData->As<RE::Actor>();
-				}
-				auto& characterRendering =
-					NeuralRendering::CharacterRendering::Instance();
-				if (actor && actor->IsPlayerRef()) {
-					characterRendering.ObserveClassificationRejection(
-						state->frameCount,
-						NeuralRendering::CharacterClassificationRejection::Player);
-				} else if (actor) {
-					const auto classification = ClassifyCharacterMaterial(
-						a_pass->shaderProperty, a_pass->geometry, actor);
-					entry->second.category = classification.category;
-					if (classification.category ==
-						NeuralRendering::CharacterCategory::None) {
-						characterRendering.ObserveClassificationRejection(
-							state->frameCount, classification.rejection);
-						// An opaque NPC material rejected for ambiguous semantics is
-						// excluded geometry, not background for neighboring NR coverage.
-						// Blended draws cannot safely author any exact categorical code.
-						entry->second.excluded =
-							classification.rejection != NeuralRendering::CharacterClassificationRejection::BlendedMaterial &&
-							classification.rejection != NeuralRendering::CharacterClassificationRejection::AlphaTestAndBlend;
-					} else {
-						const auto readBound = [](const RE::NiAVObject* a_object) {
-							if (!a_object)
-								return NeuralRendering::CharacterActorBound{};
-							const auto& sphere = a_object->worldBound;
-							return NeuralRendering::CharacterActorBound{
-								sphere.center.x, sphere.center.y, sphere.center.z, sphere.radius
-							};
-						};
-						const NeuralRendering::CharacterActorAdmissionArgs admission{
-							.actorIdentity = reinterpret_cast<std::uintptr_t>(actor),
-							.faceBound = readBound(actor->GetFaceNodeSkinned()),
-							.actorBound = readBound(actor->Get3D()),
-							.outputWidthPerEye = actorProjectionWidth,
-							.outputHeight = actorProjectionHeight,
-							.settings = actorPolicy,
-						};
-						const auto& bound = a_pass->geometry->worldBound;
-						entry->second.accepted =
-							characterRendering.ShouldAuthorActor(
-								state->frameCount, actor->GetFormID(), admission) &&
-							characterRendering.ObserveGeometry(
-								state->frameCount,
-								actor->GetFormID(), geometryIdentity,
-								classification.category,
-								bound.center.x, bound.center.y,
-								bound.center.z, bound.radius);
-						entry->second.excluded = !entry->second.accepted;
-					}
-				}
-			}
-			if (entry->second.accepted) {
-				state->permutationData.ExtraShaderDescriptor |=
-					static_cast<uint>(entry->second.category) << 8;
-			} else if (entry->second.excluded) {
-				state->permutationData.ExtraShaderDescriptor |=
-					static_cast<uint>(State::ExtraShaderDescriptors::CharacterExcluded);
-			}
 		}
 
 		state->permutationData.ExtraShaderDescriptor &= ~((uint)State::ExtraShaderDescriptors::IsBeastRace | (uint)State::ExtraShaderDescriptors::IsFemale);

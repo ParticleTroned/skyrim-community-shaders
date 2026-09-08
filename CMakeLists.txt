@@ -42,19 +42,13 @@ set(CSX_TEST_BUILD
     CACHE STRING
     "Optional test distribution identity, for example RC218-2026-09-07."
 )
-if(CSX_TEST_BUILD)
-    if(
-        NOT CSX_TEST_BUILD
-            MATCHES
-            [[^(RC[1-9][0-9]*)-([0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9])$]]
-    )
-        message(
-            FATAL_ERROR
-            "CSX_TEST_BUILD must use the RC<number>-<YYYY-MM-DD> format."
-        )
-    endif()
-    set(CSX_TEST_BUILD_NUMBER "${CMAKE_MATCH_1}")
-    set(CSX_TEST_BUILD_DATE "${CMAKE_MATCH_2}")
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/TestBuildVersion.cmake")
+csx_parse_test_build(
+    "${CSX_TEST_BUILD}"
+    CSX_TEST_BUILD_NUMBER
+    CSX_TEST_BUILD_DATE
+)
+if(NOT "${CSX_TEST_BUILD}" STREQUAL "")
     set(CSX_BUILD_VERSION
         "${CSX_VERSION} ${CSX_TEST_BUILD_NUMBER} (${CSX_TEST_BUILD_DATE})"
     )
@@ -679,7 +673,7 @@ if(_AIO_FEATURE_DIR_NAMES_TO_EXCLUDE)
     endforeach()
 endif()
 string(TIMESTAMP UTC_NOW "%Y-%m-%dT%H-%MZ" UTC)
-if(CSX_TEST_BUILD)
+if(NOT "${CSX_TEST_BUILD}" STREQUAL "")
     set(CSX_PACKAGE_STAMP "${CSX_VERSION}-${CSX_TEST_BUILD}")
 else()
     set(CSX_PACKAGE_STAMP "${UTC_NOW}")

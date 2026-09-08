@@ -47,6 +47,10 @@ on:
                 description: "Name of the uploaded distribution artifact"
                 type: string
                 default: "dist-artifacts"
+            expected-package-name:
+                description: "Exact sole dist file required for a test build"
+                type: string
+                default: ""
         outputs:
             version:
                 description: "CMake project version extracted from the build"
@@ -144,6 +148,20 @@ jobs:
                     Write-Error "CMakeLists.txt version '$version' does not match tag version '$expected'. Please update CMakeLists.txt before tagging." -ErrorAction Stop
                   } else {
                     Write-Host "CMakeLists.txt version matches tag."
+                  }
+
+            - name: Verify test-distribution contents
+              if: success() && inputs.test-build-id != ''
+              shell: pwsh
+              run: |
+                  $expectedName = '${{ inputs.expected-package-name }}'
+                  if (-not $expectedName -or $expectedName -notmatch '^CSX_AIO-[A-Za-z0-9.-]+\.7z$') {
+                    Write-Error "A test build requires one canonical expected package name." -ErrorAction Stop
+                  }
+                  $files = @(Get-ChildItem -LiteralPath dist -File)
+                  if ($files.Count -ne 1 -or $files[0].Name -cne $expectedName) {
+                    $actual = ($files | ForEach-Object Name) -join ', '
+                    Write-Error "Expected only '$expectedName' in dist; found: $actual" -ErrorAction Stop
                   }
 
             - name: Upload dist artifacts

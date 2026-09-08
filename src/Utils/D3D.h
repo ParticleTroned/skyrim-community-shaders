@@ -15,7 +15,7 @@ namespace Util
 		IUnknown* a_first,
 		IUnknown* a_second);
 
-	/** @brief Restores compute shader, the first one or two SRVs, UAV0, and CB0. */
+	/** @brief Restores compute shader, the first requested SRVs (up to three), UAV0, and CB0. */
 	class ScopedComputeBindings
 	{
 	public:
@@ -34,7 +34,7 @@ namespace Util
 			D3D11_SHADER_MAX_INTERFACES>
 			classInstances;
 		UINT classInstanceCount = 0;
-		std::array<winrt::com_ptr<ID3D11ShaderResourceView>, 2> shaderResources;
+		std::array<winrt::com_ptr<ID3D11ShaderResourceView>, 3> shaderResources;
 		uint32_t shaderResourceCount = 0;
 		winrt::com_ptr<ID3D11UnorderedAccessView> uav;
 		winrt::com_ptr<ID3D11Buffer> constantBuffer;

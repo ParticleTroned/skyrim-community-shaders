@@ -1,6 +1,7 @@
 #include "Hooks.h"
 
 #include "ShaderTools/BSShaderHooks.h"
+#include "Utils/CharacterCategoryAuthoring.h"
 #include "Utils/ExternalEmittance.h"
 
 #include "Feature.h"
@@ -519,6 +520,7 @@ namespace LightingExtensions
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
 			globals::state->UpdateLightingShaderPermutation(pass);
+			CharacterCategoryAuthoring::Update(pass);
 
 			func(shader, pass, renderFlags);
 		}

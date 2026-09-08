@@ -4,6 +4,7 @@
 #include "Feature.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
+#include "Upscaling/NeuralRendering/CharacterRendering.h"
 #include "Upscaling/NeuralRendering/PipelinePolicy.h"
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
@@ -116,6 +117,7 @@ public:
 		bool reflexUseFPSLimit = false;
 		float reflexFPSLimit = 60.0f;
 		bool neuralRenderingEnabled = false;
+		NeuralRendering::CharacterSettings neuralCharacter{};
 		bool neuralRenderingHalfRate = false;
 		bool neuralRenderingResetEveryFrame = false;
 		uint neuralRenderingPreset = 3;
@@ -245,6 +247,7 @@ public:
 			{ "reflexUseFPSLimit", true },
 			{ "reflexFPSLimit", true },
 			{ "neuralRenderingEnabled", true },
+			{ "neuralCharacter", true },
 			{ "neuralRenderingHalfRate", true },
 			{ "neuralRenderingResetEveryFrame", true },
 			{ "neuralRenderingPreset", true },
@@ -340,6 +343,11 @@ public:
 	std::unique_ptr<Texture2D> fsrOutputTexture;
 	std::unique_ptr<Texture2D> sharpenerTexture;
 	std::unique_ptr<Texture2D> neuralRenderingOutputTexture;
+	std::unique_ptr<Texture2D> neuralCharacterCompositeTexture;
+	std::unique_ptr<ConstantBuffer> neuralCharacterCompositeCB;
+	Util::LazyShader<ID3D11ComputeShader> neuralCharacterCompositeCS;
+	Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> neuralCharacterMask;
+	NeuralRendering::ComputeSubrect neuralCharacterSupport{};
 
 	virtual void ClearShaderCache() override;
 
@@ -428,7 +436,15 @@ public:
 	 */
 	bool ApplySharpening();
 
-	/** Applies the full-frame SE Feature 18 pass into a private output. */
+	/** Returns whether actor classification and capture are needed this frame. */
+	[[nodiscard]] bool IsCharacterNeuralRenderingRouteRequested() const;
+	/** Returns enabled semantic material categories with nonzero strengths. */
+	[[nodiscard]] uint32_t GetCharacterNeuralRenderingCategoryMask() const noexcept;
+	/** Returns the sanitized policy gated by the active NR route. */
+	[[nodiscard]] NeuralRendering::CharacterSettings GetCharacterNeuralRenderingSettings() const;
+	/** Returns the mono SE/AE display extent used for actor admission. */
+	[[nodiscard]] bool GetCharacterNeuralRenderingProjectionExtent(uint32_t& a_width, uint32_t& a_height) const;
+	/** Applies SE/AE Feature 18 into a private output, with optional character regions. */
 	bool ApplyNeuralRendering(
 		ID3D11Resource* a_colorInput,
 		ID3D11Resource* a_depthGuide,
@@ -442,6 +458,10 @@ public:
 		uint32_t a_outputHeight);
 	[[nodiscard]] bool IsNeuralRenderingRunnable(UpscaleMethod a_method) const;
 	bool EnsureNeuralRenderingOutputTexture();
+	bool EnsureNeuralTexture(std::unique_ptr<Texture2D>& a_texture, const char* a_name);
+	bool EnsureNeuralCharacterCompositeResources();
+	bool CompositeNeuralCharacters(bool a_sharpened, float a_sharpness);
+	void DrawNeuralCharacterSettings();
 	void DrawNeuralRenderingSettings(UpscaleMethod a_method);
 	void ResetNeuralRendering(bool a_releaseBackend);
 	static bool ApplyNeuralRenderingPreset(Settings& a_settings, uint32_t a_preset);

@@ -59,7 +59,7 @@ namespace Util
 			&classInstanceCount);
 		for (UINT i = 0; i < classInstanceCount; ++i)
 			classInstances[i].attach(rawClassInstances[i]);
-		ID3D11ShaderResourceView* rawSRVs[2]{};
+		ID3D11ShaderResourceView* rawSRVs[3]{};
 		context->CSGetShaderResources(0, shaderResourceCount, rawSRVs);
 		for (uint32_t i = 0; i < shaderResourceCount; ++i)
 			shaderResources[i].attach(rawSRVs[i]);
@@ -76,7 +76,7 @@ namespace Util
 		if (!context)
 			return;
 
-		ID3D11ShaderResourceView* nullSRVs[2]{};
+		ID3D11ShaderResourceView* nullSRVs[3]{};
 		ID3D11UnorderedAccessView* nullUAV = nullptr;
 		context->CSSetShaderResources(0, shaderResourceCount, nullSRVs);
 		context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
@@ -88,7 +88,7 @@ namespace Util
 			shader.get(),
 			classInstanceCount ? rawClassInstances : nullptr,
 			classInstanceCount);
-		ID3D11ShaderResourceView* rawSRVs[2]{};
+		ID3D11ShaderResourceView* rawSRVs[3]{};
 		for (uint32_t i = 0; i < shaderResourceCount; ++i)
 			rawSRVs[i] = shaderResources[i].get();
 		context->CSSetShaderResources(0, shaderResourceCount, rawSRVs);

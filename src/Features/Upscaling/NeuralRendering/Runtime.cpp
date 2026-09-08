@@ -1344,6 +1344,7 @@ namespace NeuralRendering
 		std::uint32_t a_colorWidth, std::uint32_t a_colorHeight,
 		std::uint32_t a_guideWidth, std::uint32_t a_guideHeight,
 		std::uint32_t a_outputWidth, std::uint32_t a_outputHeight,
+		const ComputeSubrect& a_outputSubrect,
 		float a_motionVectorScaleX, float a_motionVectorScaleY,
 		bool a_featureUpscaling, const Tuning& a_tuning, bool a_reset,
 		bool* a_evaluationAttempted)
@@ -1368,6 +1369,23 @@ namespace NeuralRendering
 				RuntimeStatus::FeatureEvaluateFailed,
 				RuntimeFailureStage::FeatureEvaluate,
 				"Feature 18 evaluation arguments are invalid",
+				static_cast<std::uint32_t>(E_INVALIDARG));
+			return false;
+		}
+
+		const auto colorSubrect = MapComputeSubrect(
+			a_outputSubrect, a_outputWidth, a_outputHeight,
+			a_colorWidth, a_colorHeight);
+		const auto guideSubrect = MapComputeSubrect(
+			a_outputSubrect, a_outputWidth, a_outputHeight,
+			a_guideWidth, a_guideHeight);
+		if (!a_outputSubrect.Fits(a_outputWidth, a_outputHeight) ||
+			!colorSubrect.Fits(a_colorWidth, a_colorHeight) ||
+			!guideSubrect.Fits(a_guideWidth, a_guideHeight)) {
+			SetFailureLocked(
+				RuntimeStatus::FeatureEvaluateFailed,
+				RuntimeFailureStage::FeatureEvaluate,
+				"Feature 18 compute region cannot map into the input resources",
 				static_cast<std::uint32_t>(E_INVALIDARG));
 			return false;
 		}
@@ -1475,22 +1493,22 @@ namespace NeuralRendering
 		parameters->Set("DLSSNR.Depth", a_depth);
 		parameters->Set("DLSSNR.MVec", a_motionVectors);
 		parameters->Set("DLSSNR.Output", a_output);
-		parameters->Set("DLSSNR.ColorSubrectBaseX", 0u);
-		parameters->Set("DLSSNR.ColorSubrectBaseY", 0u);
-		parameters->Set("DLSSNR.ColorSubrectWidth", a_colorWidth);
-		parameters->Set("DLSSNR.ColorSubrectHeight", a_colorHeight);
-		parameters->Set("DLSSNR.DepthSubrectBaseX", 0u);
-		parameters->Set("DLSSNR.DepthSubrectBaseY", 0u);
-		parameters->Set("DLSSNR.DepthSubrectWidth", a_guideWidth);
-		parameters->Set("DLSSNR.DepthSubrectHeight", a_guideHeight);
-		parameters->Set("DLSSNR.MVecSubrectBaseX", 0u);
-		parameters->Set("DLSSNR.MVecSubrectBaseY", 0u);
-		parameters->Set("DLSSNR.MVecSubrectWidth", a_guideWidth);
-		parameters->Set("DLSSNR.MVecSubrectHeight", a_guideHeight);
-		parameters->Set("DLSSNR.OutputSubrectBaseX", 0u);
-		parameters->Set("DLSSNR.OutputSubrectBaseY", 0u);
-		parameters->Set("DLSSNR.OutputSubrectWidth", a_outputWidth);
-		parameters->Set("DLSSNR.OutputSubrectHeight", a_outputHeight);
+		parameters->Set("DLSSNR.ColorSubrectBaseX", colorSubrect.baseX);
+		parameters->Set("DLSSNR.ColorSubrectBaseY", colorSubrect.baseY);
+		parameters->Set("DLSSNR.ColorSubrectWidth", colorSubrect.width);
+		parameters->Set("DLSSNR.ColorSubrectHeight", colorSubrect.height);
+		parameters->Set("DLSSNR.DepthSubrectBaseX", guideSubrect.baseX);
+		parameters->Set("DLSSNR.DepthSubrectBaseY", guideSubrect.baseY);
+		parameters->Set("DLSSNR.DepthSubrectWidth", guideSubrect.width);
+		parameters->Set("DLSSNR.DepthSubrectHeight", guideSubrect.height);
+		parameters->Set("DLSSNR.MVecSubrectBaseX", guideSubrect.baseX);
+		parameters->Set("DLSSNR.MVecSubrectBaseY", guideSubrect.baseY);
+		parameters->Set("DLSSNR.MVecSubrectWidth", guideSubrect.width);
+		parameters->Set("DLSSNR.MVecSubrectHeight", guideSubrect.height);
+		parameters->Set("DLSSNR.OutputSubrectBaseX", a_outputSubrect.baseX);
+		parameters->Set("DLSSNR.OutputSubrectBaseY", a_outputSubrect.baseY);
+		parameters->Set("DLSSNR.OutputSubrectWidth", a_outputSubrect.width);
+		parameters->Set("DLSSNR.OutputSubrectHeight", a_outputSubrect.height);
 		parameters->Set("DLSSNR.MVecScaleX", a_motionVectorScaleX);
 		parameters->Set("DLSSNR.MVecScaleY", a_motionVectorScaleY);
 		parameters->Set("DLSSNR.DepthInverted", 0u);

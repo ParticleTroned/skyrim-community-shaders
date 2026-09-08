@@ -247,7 +247,12 @@ public:
 		IsSun = 1 << 4,
 		SuppressExternalEmittance = 1 << 5,
 		IsEye = 1 << 7,
-		AdditiveLighting = 1 << 8
+		AdditiveLighting = 1 << 8,
+		CharacterCategoryMask = 0b11 << 9,
+		CharacterExcluded = 1 << 11,
+		CharacterFace = 0b01 << 9,
+		CharacterSkin = 0b10 << 9,
+		CharacterHair = 0b11 << 9
 	};
 
 	enum class ExtraFeatureDescriptors : uint32_t

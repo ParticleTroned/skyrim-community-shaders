@@ -4,6 +4,7 @@
 
 #include "ShaderCache.h"
 #include "State.h"
+#include "Utils/CharacterCategoryAuthoring.h"
 #include "Utils/D3D.h"
 
 #include "Features/CSEditor.h"
@@ -134,8 +135,8 @@ void Deferred::SetupResources()
 		SetupRenderTarget(NORMALROUGHNESS, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R10G10B10A2_UNORM, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
 		// Masks
 		SetupRenderTarget(MASKS, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R11G11B10_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
-		// Masks2 (vertexAO; fp16 to allow blending)
-		SetupRenderTarget(MASKS2, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R16_UNORM, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+		// Preserve vertex AO precision independently of the character category lane.
+		SetupRenderTarget(MASKS2, texDesc, srvDesc, rtvDesc, uavDesc, CharacterCategoryAuthoring::kTargetFormat, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
 
 		// TAA water history buffers need RGBA16: alpha stores premultiplied coverage for ISWaterBlend
 		SetupRenderTarget(RE::RENDER_TARGETS::kWATER_1, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
@@ -480,7 +481,13 @@ void Deferred::OverrideBlendStates()
 								blendDesc.RenderTarget[i].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
 							}
 
+							// Blending category codes can alias a different exact category.
+							// Preserve the opaque category while retaining vertex AO blending.
+							if (blendDesc.RenderTarget[7].BlendEnable)
+								blendDesc.RenderTarget[7].RenderTargetWriteMask &= ~D3D11_COLOR_WRITE_ENABLE_GREEN;
+
 							DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[a][b][c][d]));
+							Util::SetResourceName(deferredBlendStates[a][b][c][d], "Deferred::BlendState");
 						} else {
 							deferredBlendStates[a][b][c][d] = nullptr;
 						}
@@ -657,6 +664,7 @@ void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumula
 		if (terrainBlending.loaded && terrainBlending.settings.Enabled) {
 			terrainBlending.RenderTerrainBlendingPasses();
 		}
+		CharacterCategoryAuthoring::Capture();
 	}
 
 	// Deferred blended decals

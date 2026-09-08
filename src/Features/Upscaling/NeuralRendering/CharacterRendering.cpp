@@ -1,0 +1,2916 @@
+#include "CharacterRendering.h"
+
+#include "CharacterActorPolicy.h"
+#include "CharacterComputeSubrect.h"
+#include "CharacterMaskWorkPolicy.h"
+
+#include "Globals.h"
+#include "Profiler.h"
+#include "Utils/CharacterCategoryAuthoring.h"
+#include "Utils/D3D.h"
+#include "Utils/Game.h"
+
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cmath>
+#include <cstddef>
+#include <cstring>
+#include <format>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+
+#include <SimpleMath.h>
+#include <wrl/client.h>
+
+namespace NeuralRendering
+{
+	using Microsoft::WRL::ComPtr;
+
+	namespace
+	{
+		constexpr std::uint32_t kReadbackLatency = 3;
+		constexpr std::uint32_t kRegionQuantization = 4;
+		constexpr float kVisibilityDepthThreshold = 0.001f;
+		constexpr std::uint32_t kDiagnosticCounterCount = 9;
+
+		enum DiagnosticCounter : std::uint32_t
+		{
+			MaskPixels = 0,
+			AuthoredFacePixels,
+			AuthoredSkinPixels,
+			AuthoredHairPixels,
+			VisibleFacePixels,
+			VisibleSkinPixels,
+			VisibleHairPixels,
+			VisibilityRejectedPixels,
+			DistanceRejectedPixels,
+		};
+
+		bool IsSupportedDepthViewFormat(DXGI_FORMAT a_format) noexcept
+		{
+			return a_format == DXGI_FORMAT_R24_UNORM_X8_TYPELESS ||
+			       a_format == DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS ||
+			       a_format == DXGI_FORMAT_R32_FLOAT ||
+			       a_format == DXGI_FORMAT_R16_UNORM;
+		}
+
+		void Increment(std::uint64_t& a_value) noexcept
+		{
+			if (a_value != std::numeric_limits<std::uint64_t>::max())
+				++a_value;
+		}
+
+		void Increment(std::uint32_t& a_value) noexcept
+		{
+			if (a_value != std::numeric_limits<std::uint32_t>::max())
+				++a_value;
+		}
+
+		template <class T>
+		void AtomicIncrement(std::atomic<T>& a_value) noexcept
+		{
+			auto current = a_value.load(std::memory_order_relaxed);
+			while (current != std::numeric_limits<T>::max() &&
+				   !a_value.compare_exchange_weak(
+					   current, current + 1, std::memory_order_relaxed)) {
+			}
+		}
+
+		std::uintptr_t GetIdentityToken(IUnknown* a_object) noexcept
+		{
+			if (!a_object)
+				return 0;
+			ComPtr<IUnknown> identity;
+			return SUCCEEDED(a_object->QueryInterface(IID_PPV_ARGS(&identity))) ?
+			           reinterpret_cast<std::uintptr_t>(identity.Get()) :
+			           0;
+		}
+
+		std::uint64_t HashCombine(std::uint64_t a_hash, std::uint64_t a_value) noexcept
+		{
+			return (a_hash ^ a_value) * 1099511628211ull;
+		}
+
+		std::uint64_t BuildSettingsKey(const CharacterSettings& a_settings) noexcept
+		{
+			std::uint64_t hash = 1469598103934665603ull;
+			auto add = [&](std::uint64_t a_value) { hash = HashCombine(hash, a_value); };
+			auto addFloat = [&](float a_value) {
+				std::uint32_t bits = 0;
+				std::memcpy(&bits, &a_value, sizeof(bits));
+				add(bits);
+			};
+			add(a_settings.enabled);
+			add(a_settings.faces);
+			add(a_settings.skin);
+			add(a_settings.hair);
+			addFloat(a_settings.faceStrength);
+			addFloat(a_settings.skinStrength);
+			addFloat(a_settings.hairStrength);
+			addFloat(a_settings.maximumDistanceMeters);
+			add(a_settings.adaptiveRoiSelection);
+			add(a_settings.multiRoi);
+			add(a_settings.minimumFacePixelSize);
+			addFloat(a_settings.roiMargin);
+			add(a_settings.roiHoldFrames);
+			add(a_settings.depthAwareFeather);
+			add(a_settings.visibilityDepthTest);
+			add(a_settings.featherRadius);
+			addFloat(a_settings.featherDepthThreshold);
+			add(static_cast<std::uint32_t>(a_settings.maskTestMode));
+			add(static_cast<std::uint32_t>(a_settings.debugView));
+			return hash;
+		}
+
+		bool UsesAuthoredMask(CharacterMaskTestMode a_mode) noexcept
+		{
+			return a_mode == CharacterMaskTestMode::Authored ||
+			       a_mode ==
+			           CharacterMaskTestMode::AuthoredWithoutVisibilityDepth;
+		}
+
+		ComputeSubrect BuildFullComputeSubrect(
+			std::uint32_t a_width,
+			std::uint32_t a_height) noexcept
+		{
+			return {
+				.baseX = 0,
+				.baseY = 0,
+				.width = a_width,
+				.height = a_height,
+			};
+		}
+
+		class ComputeStateGuard
+		{
+		public:
+			explicit ComputeStateGuard(ID3D11DeviceContext* a_context) noexcept :
+				context_(a_context)
+			{
+				if (!context_)
+					return;
+				classInstanceCount_ = static_cast<UINT>(classInstances_.size());
+				context_->CSGetShader(&shader_, classInstances_.data(), &classInstanceCount_);
+				context_->CSGetConstantBuffers(0, 1, &constantBuffer_);
+				context_->CSGetShaderResources(0, static_cast<UINT>(shaderResources_.size()), shaderResources_.data());
+				context_->CSGetUnorderedAccessViews(0, static_cast<UINT>(unorderedAccess_.size()), unorderedAccess_.data());
+				captured_ = true;
+			}
+
+			ComputeStateGuard(const ComputeStateGuard&) = delete;
+			ComputeStateGuard& operator=(const ComputeStateGuard&) = delete;
+
+			~ComputeStateGuard() noexcept
+			{
+				if (captured_) {
+					std::array<ID3D11ShaderResourceView*, 3> nullSrvs{};
+					std::array<ID3D11UnorderedAccessView*, 2> nullUavs{};
+					context_->CSSetShaderResources(0, static_cast<UINT>(nullSrvs.size()), nullSrvs.data());
+					context_->CSSetUnorderedAccessViews(0, static_cast<UINT>(nullUavs.size()), nullUavs.data(), nullptr);
+					context_->CSSetShader(shader_, classInstances_.data(), classInstanceCount_);
+					context_->CSSetConstantBuffers(0, 1, &constantBuffer_);
+					context_->CSSetShaderResources(0, static_cast<UINT>(shaderResources_.size()), shaderResources_.data());
+					context_->CSSetUnorderedAccessViews(0, static_cast<UINT>(unorderedAccess_.size()), unorderedAccess_.data(), nullptr);
+				}
+				if (shader_)
+					shader_->Release();
+				for (UINT index = 0; index < classInstanceCount_; ++index) {
+					if (classInstances_[index])
+						classInstances_[index]->Release();
+				}
+				if (constantBuffer_)
+					constantBuffer_->Release();
+				for (auto* resource : shaderResources_) {
+					if (resource)
+						resource->Release();
+				}
+				for (auto* resource : unorderedAccess_) {
+					if (resource)
+						resource->Release();
+				}
+			}
+
+			[[nodiscard]] bool Captured() const noexcept { return captured_; }
+
+		private:
+			ID3D11DeviceContext* context_ = nullptr;
+			ID3D11ComputeShader* shader_ = nullptr;
+			std::array<ID3D11ClassInstance*, D3D11_SHADER_MAX_INTERFACES> classInstances_{};
+			UINT classInstanceCount_ = 0;
+			ID3D11Buffer* constantBuffer_ = nullptr;
+			std::array<ID3D11ShaderResourceView*, 3> shaderResources_{};
+			std::array<ID3D11UnorderedAccessView*, 2> unorderedAccess_{};
+			bool captured_ = false;
+		};
+
+		class OutputMergerStateGuard
+		{
+		public:
+			explicit OutputMergerStateGuard(ID3D11DeviceContext* a_context) noexcept :
+				context_(a_context)
+			{
+				if (!context_)
+					return;
+				context_->OMGetRenderTargets(
+					static_cast<UINT>(renderTargets_.size()),
+					renderTargets_.data(), &depthStencil_);
+				context_->OMSetRenderTargets(0, nullptr, nullptr);
+				captured_ = true;
+			}
+
+			OutputMergerStateGuard(const OutputMergerStateGuard&) = delete;
+			OutputMergerStateGuard& operator=(const OutputMergerStateGuard&) = delete;
+
+			~OutputMergerStateGuard() noexcept
+			{
+				if (captured_) {
+					context_->OMSetRenderTargets(
+						static_cast<UINT>(renderTargets_.size()),
+						renderTargets_.data(), depthStencil_);
+				}
+				for (auto* renderTarget : renderTargets_) {
+					if (renderTarget)
+						renderTarget->Release();
+				}
+				if (depthStencil_)
+					depthStencil_->Release();
+			}
+
+			[[nodiscard]] bool Captured() const noexcept { return captured_; }
+
+		private:
+			ID3D11DeviceContext* context_ = nullptr;
+			std::array<
+				ID3D11RenderTargetView*,
+				D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT>
+				renderTargets_{};
+			ID3D11DepthStencilView* depthStencil_ = nullptr;
+			bool captured_ = false;
+		};
+	}
+
+	class CharacterRendering::State
+	{
+	public:
+		struct Observation
+		{
+			std::uint32_t actorFormId = 0;
+			std::uintptr_t geometryIdentity = 0;
+			CharacterCategory category = CharacterCategory::None;
+			float3 center{};
+			float radius = 0.0f;
+		};
+
+		struct ActorAdmission
+		{
+			std::uintptr_t identity = 0;
+			std::uint64_t policyKey = 0;
+			std::uint32_t frame = 0;
+			std::uint32_t width = 0;
+			std::uint32_t height = 0;
+			float distanceMeters = std::numeric_limits<float>::max();
+			std::uint32_t facePixelSize = 0;
+			CharacterActorAdmissionState history{};
+			bool hasFaceAnchor = false;
+			bool admitted = false;
+			bool valid = false;
+		};
+
+		struct ProjectedActor
+		{
+			std::uint32_t actorFormId = 0;
+			CharacterRect selectedRect{};
+			bool projectionUncertain = false;
+			float nearestSelectedDistanceUnits =
+				std::numeric_limits<float>::max();
+		};
+
+		struct ProjectionKey
+		{
+			std::uint32_t frame = std::numeric_limits<std::uint32_t>::max();
+			std::uint32_t width = 0;
+			std::uint32_t height = 0;
+			std::uint64_t settings = 0;
+
+			bool operator==(const ProjectionKey&) const = default;
+		};
+
+		struct Readback
+		{
+			ComPtr<ID3D11Buffer> staging;
+			ComPtr<ID3D11Query> ready;
+			std::uint32_t frame = 0;
+			std::uint32_t featureSlot = 0;
+			std::uint32_t width = 0;
+			std::uint32_t height = 0;
+			std::uint64_t pixelCount = 0;
+			std::uint64_t diagnosticKey = 0;
+			std::uint64_t contentSerial = 0;
+			std::uint64_t serial = 0;
+			bool pending = false;
+		};
+
+		struct PrepareKey
+		{
+			std::uint32_t sourceWorldFrame = std::numeric_limits<std::uint32_t>::max();
+			std::uint64_t generation = 0;
+			std::uint32_t width = 0;
+			std::uint32_t height = 0;
+			std::uint64_t settings = 0;
+			UpscalingDLSS::ViewportCrop crop{};
+			void* authoredMaskIdentity = nullptr;
+			std::uintptr_t authoredDepthIdentity = 0;
+			std::uintptr_t currentDepthIdentity = 0;
+			float captureJitterX = 0.0f;
+			float captureJitterY = 0.0f;
+
+			bool operator==(const PrepareKey&) const = default;
+		};
+
+		struct Slot
+		{
+			ComPtr<ID3D11Texture2D> mask;
+			ComPtr<ID3D11ShaderResourceView> maskSrv;
+			ComPtr<ID3D11UnorderedAccessView> maskUav;
+			ComPtr<ID3D11Buffer> coverageCounter;
+			ComPtr<ID3D11UnorderedAccessView> coverageCounterUav;
+			std::array<Readback, kReadbackLatency> readbacks{};
+			std::uint32_t nextReadbackIndex = 0;
+			PrepareKey prepareKey{};
+			std::uint64_t contentSerial = 0;
+			std::uint32_t width = 0;
+			std::uint32_t height = 0;
+			std::uint32_t maskCoverageFrame =
+				std::numeric_limits<std::uint32_t>::max();
+			std::uint32_t maskCoverageFeatureSlot = 1;
+			std::uint32_t maskCoverageWidth = 0;
+			std::uint32_t maskCoverageHeight = 0;
+			std::uint64_t maskPixels = 0;
+			std::array<std::uint64_t, 3> authoredCategoryPixels{};
+			std::array<std::uint64_t, 3> visibleCategoryPixels{};
+			std::uint64_t visibilityRejectedPixels = 0;
+			std::uint64_t distanceRejectedPixels = 0;
+			std::uint64_t maskDiagnosticKey = 0;
+			std::uint64_t maskCoverageContentSerial = 0;
+			std::uint64_t maskCoverageSerial = 0;
+			std::uint64_t lastCoverageRequestPolicyKey = 0;
+			std::uint32_t lastCoverageRequestFrame =
+				std::numeric_limits<std::uint32_t>::max();
+			float maskCoveragePercent = 0.0f;
+			bool maskCoverageReady = false;
+			bool coverageRequestIssued = false;
+			bool zeroCoverageBypassResolved = false;
+			bool zeroCoverageBypassed = false;
+			CharacterFeature18Disposition feature18Disposition =
+				CharacterFeature18Disposition::Unresolved;
+			bool zeroCoverageCpuProven = false;
+			bool requiresEvaluation = true;
+			ComputeSubrect computeSubrect{};
+			CharacterComputeRegionPlan computeRegions{};
+			StableCharacterMultiRoi stableMultiRoi{};
+			CharacterMultiRoiReason multiRoiReason = CharacterMultiRoiReason::Disabled;
+			std::uint64_t multiRoiPolicyKey = 0;
+			ComputeSubrect maskWorkSubrect{};
+			ComputeSubrect previousMaskWorkSubrect{};
+			bool maskInitialized = false;
+			bool maskUniform = false;
+			float uniformMaskValue = 0.0f;
+			StableCharacterComputeSubrect stableComputeSubrect{};
+			std::uint64_t computeSubrectGeneration = 0;
+			UpscalingDLSS::ViewportCrop computeSubrectCrop{};
+			bool computeSubrectContractValid = false;
+			bool prepared = false;
+		};
+
+		struct alignas(16) MaskConstants
+		{
+			std::uint32_t outputAndSourceSize[4]{};
+			std::uint32_t sourceCrop[4]{};
+			std::uint32_t options[4]{};
+			float featherOptions[4]{};
+			float visibilityOptions[4]{};
+			float depthLinearization[4]{};
+			Matrix cameraProjInverse{};
+			float jitter[4]{};
+			float categoryStrengths[4]{};
+			float eligibilityRectangles
+				[CharacterPolicy::kMaximumEligibilityRegions][4]{};
+			std::uint32_t dispatchRegion[4]{};
+			std::uint32_t authoredRegion[4]{};
+		};
+		static_assert(sizeof(MaskConstants) % 16 == 0);
+		static_assert(offsetof(MaskConstants, cameraProjInverse) % 16 == 0);
+
+		struct ProjectedPlan
+		{
+			std::vector<CharacterRect> regions;
+			std::vector<CharacterMultiRoiActor> actorRegions;
+			std::uint64_t eligibilitySignature = 0;
+			std::uint32_t visibleFaces = 0;
+			std::uint32_t visibleCharacters = 0;
+			std::uint32_t selectedCharacters = 0;
+			std::uint32_t adaptivelyCulledCharacters = 0;
+			bool projectionUncertain = false;
+			bool fullViewEligibilityFallback = false;
+		};
+
+		State()
+		{
+			observationKeys_.reserve(
+				CharacterPolicy::kMaximumObservationsPerFrame);
+			actorAdmissions_.reserve(256);
+		}
+
+		[[nodiscard]] bool BeginObservationFrame(std::uint32_t a_frame)
+		{
+			if (observationFrame_ == a_frame)
+				return true;
+			if (observationFrame_ != std::numeric_limits<std::uint32_t>::max() &&
+				static_cast<std::int32_t>(a_frame - observationFrame_) <= 0) {
+				return false;
+			}
+			observationFrame_ = a_frame;
+			observations_.clear();
+			observationKeys_.clear();
+			std::erase_if(actorAdmissions_, [a_frame](const auto& a_entry) {
+				return static_cast<std::uint32_t>(a_frame - a_entry.second.frame) >
+				       CharacterPolicy::kMaximumRoiHoldFrames + 1u;
+			});
+			unboundedCategoryMask_ = 0;
+			InvalidateProjectionCache();
+			snapshot_.observationFrame = a_frame;
+			snapshot_.currentObservations = 0;
+			snapshot_.currentCategoryObservations = {};
+			return true;
+		}
+
+		void RecordClassificationRejection(
+			std::uint32_t a_frame,
+			std::size_t a_index)
+		{
+			if (a_index >= currentClassificationRejections_.size())
+				return;
+			std::scoped_lock lock(rejectionFrameMutex_);
+			const auto currentFrame = rejectionFrame_.load(
+				std::memory_order_relaxed);
+			if (currentFrame != a_frame) {
+				// A delayed render-worker report must never erase a newer frame.
+				if (currentFrame != std::numeric_limits<std::uint32_t>::max() &&
+					static_cast<std::int32_t>(a_frame - currentFrame) <= 0) {
+					return;
+				}
+				for (auto& count : currentClassificationRejections_)
+					count.store(0, std::memory_order_relaxed);
+				rejectionFrame_.store(a_frame, std::memory_order_relaxed);
+			}
+			AtomicIncrement(currentClassificationRejections_[a_index]);
+			AtomicIncrement(classificationRejections_[a_index]);
+		}
+
+		void ResetClassificationRejections()
+		{
+			std::scoped_lock lock(rejectionFrameMutex_);
+			rejectionFrame_.store(
+				std::numeric_limits<std::uint32_t>::max(),
+				std::memory_order_release);
+			for (auto& count : currentClassificationRejections_)
+				count.store(0, std::memory_order_relaxed);
+			for (auto& count : classificationRejections_)
+				count.store(0, std::memory_order_relaxed);
+		}
+
+		void PublishClassificationRejections(CharacterSnapshot& a_snapshot) const
+		{
+			std::scoped_lock lock(rejectionFrameMutex_);
+			const auto rejectionFrame = rejectionFrame_.load(std::memory_order_acquire);
+			for (std::size_t index = 0;
+				index < currentClassificationRejections_.size(); ++index) {
+				a_snapshot.currentClassificationRejections[index] =
+					rejectionFrame == a_snapshot.observationFrame ?
+						currentClassificationRejections_[index].load(
+							std::memory_order_relaxed) :
+						0;
+				a_snapshot.classificationRejections[index] =
+					classificationRejections_[index].load(std::memory_order_relaxed);
+			}
+		}
+
+		void InvalidateCaptureMetadata() noexcept
+		{
+			capturedFrame_ = std::numeric_limits<std::uint32_t>::max();
+			capturedCategoriesEmpty_ = false;
+			capturedWidth_ = 0;
+			capturedHeight_ = 0;
+			capturedEnabledCategoryMask_ = 0;
+			capturedJitterX_ = 0.0f;
+			capturedJitterY_ = 0.0f;
+			capturedSourceRect_ = {};
+			lastReadbackPollFrame_ =
+				std::numeric_limits<std::uint32_t>::max();
+			snapshot_.categoryCaptureFrame = capturedFrame_;
+			snapshot_.categoryCaptureReady = false;
+			snapshot_.categoryCaptureEmpty = false;
+		}
+
+		void InvalidateProjectionCache() noexcept
+		{
+			projectionKey_ = {};
+			projectedActors_.clear();
+			projectionCacheValid_ = false;
+		}
+
+		void InvalidatePreparedMasks(bool a_preserveMultiRoiHistory = false) noexcept
+		{
+			lastSlot_ = 1;
+			snapshot_.view = {};
+			for (auto& slot : slots_) {
+				slot.prepared = false;
+				slot.computeRegions = {};
+				if (!a_preserveMultiRoiHistory)
+					slot.stableMultiRoi = {};
+				slot.prepareKey = {};
+				slot.contentSerial = 0;
+				slot.zeroCoverageBypassResolved = false;
+				slot.zeroCoverageBypassed = false;
+				slot.feature18Disposition =
+					CharacterFeature18Disposition::Unresolved;
+			}
+		}
+
+		void RecordPreparedFrame(
+			std::uint32_t a_frame,
+			std::uint32_t a_sourceWorldFrame,
+			std::uint64_t a_generation,
+			std::uint32_t a_featureSlot,
+			std::uint64_t a_contentSerial,
+			std::uint32_t a_width,
+			std::uint32_t a_height,
+			bool a_requiresEvaluation,
+			std::uint32_t a_computeRegionCount) noexcept
+		{
+			CharacterPreparedFrameSnapshot* entry = nullptr;
+			for (auto& candidate : snapshot_.preparedFrames) {
+				if (candidate.frame == a_frame) {
+					entry = &candidate;
+					break;
+				}
+			}
+			if (!entry) {
+				entry = &snapshot_.preparedFrames[preparedFrameHistoryNext_];
+				*entry = {};
+				entry->frame = a_frame;
+				preparedFrameHistoryNext_ =
+					(preparedFrameHistoryNext_ + 1u) %
+					static_cast<std::uint32_t>(snapshot_.preparedFrames.size());
+			}
+			if (a_featureSlot >= entry->widths.size() || a_contentSerial == 0)
+				return;
+			const auto slotBit = 1u << a_featureSlot;
+			entry->resolutionRecordedSlotMask &= ~slotBit;
+			entry->evaluatedSlotMask &= ~slotBit;
+			entry->successfulSlotMask &= ~slotBit;
+			entry->bypassedSlotMask &= ~slotBit;
+			entry->abortedSlotMask &= ~slotBit;
+			entry->preparedSlotMask |= slotBit;
+			if (a_requiresEvaluation) {
+				entry->evaluationRequiredSlotMask |= slotBit;
+				entry->bypassRequestedSlotMask &= ~slotBit;
+			} else {
+				entry->evaluationRequiredSlotMask &= ~slotBit;
+				entry->bypassRequestedSlotMask |= slotBit;
+			}
+			entry->sourceWorldFrames[a_featureSlot] = a_sourceWorldFrame;
+			entry->generations[a_featureSlot] = a_generation;
+			entry->contentSerials[a_featureSlot] = a_contentSerial;
+			entry->widths[a_featureSlot] = a_width;
+			entry->heights[a_featureSlot] = a_height;
+			entry->computeRegionCounts[a_featureSlot] = a_requiresEvaluation ?
+			                                                std::max(1u, a_computeRegionCount) :
+			                                                0u;
+		}
+
+		void InvalidatePreparedSlot(
+			std::uint32_t a_featureSlot,
+			std::uint32_t a_frame) noexcept
+		{
+			if (a_featureSlot < slots_.size()) {
+				auto& slot = slots_[a_featureSlot];
+				slot.prepared = false;
+				slot.requiresEvaluation = true;
+				slot.computeSubrect = {};
+				slot.computeRegions = {};
+				slot.stableMultiRoi = {};
+				slot.prepareKey = {};
+				slot.contentSerial = 0;
+			}
+			if (a_featureSlot < slots_.size()) {
+				if (lastSlot_ == a_featureSlot)
+					lastSlot_ = 1;
+				snapshot_.view = {};
+				snapshot_.view.featureSlot = a_featureSlot;
+			}
+			if (a_featureSlot >= slots_.size())
+				return;
+			for (auto& preparedFrame : snapshot_.preparedFrames) {
+				if (preparedFrame.frame != a_frame)
+					continue;
+				const auto slotBit = 1u << a_featureSlot;
+				preparedFrame.preparedSlotMask &= ~slotBit;
+				preparedFrame.evaluationRequiredSlotMask &= ~slotBit;
+				preparedFrame.bypassRequestedSlotMask &= ~slotBit;
+				preparedFrame.resolutionRecordedSlotMask &= ~slotBit;
+				preparedFrame.evaluatedSlotMask &= ~slotBit;
+				preparedFrame.successfulSlotMask &= ~slotBit;
+				preparedFrame.bypassedSlotMask &= ~slotBit;
+				preparedFrame.abortedSlotMask &= ~slotBit;
+				preparedFrame.sourceWorldFrames[a_featureSlot] =
+					std::numeric_limits<std::uint32_t>::max();
+				preparedFrame.generations[a_featureSlot] = 0;
+				preparedFrame.contentSerials[a_featureSlot] = 0;
+				preparedFrame.widths[a_featureSlot] = 0;
+				preparedFrame.heights[a_featureSlot] = 0;
+				preparedFrame.computeRegionCounts[a_featureSlot] = 0;
+				if (preparedFrame.preparedSlotMask == 0u)
+					preparedFrame = {};
+				break;
+			}
+		}
+
+		/** The caller holds mutex_; every prepared-resource accessor uses this contract. */
+		[[nodiscard]] const Slot* FindPreparedSlot(
+			std::uint32_t a_featureSlot, std::uint32_t a_frameId,
+			std::uint32_t a_sourceWorldFrame, std::uint64_t a_generation,
+			std::uint32_t a_width, std::uint32_t a_height) const noexcept
+		{
+			if (a_featureSlot >= slots_.size())
+				return nullptr;
+			const auto& slot = slots_[a_featureSlot];
+			const auto preparedFrame = std::ranges::find_if(snapshot_.preparedFrames,
+				[a_frameId](const auto& prepared) { return prepared.frame == a_frameId; });
+			const auto slotBit = 1u << a_featureSlot;
+			return slot.prepared && preparedFrame != snapshot_.preparedFrames.end() &&
+			               (preparedFrame->preparedSlotMask & slotBit) != 0 &&
+			               preparedFrame->sourceWorldFrames[a_featureSlot] == a_sourceWorldFrame &&
+			               preparedFrame->generations[a_featureSlot] == a_generation &&
+			               preparedFrame->contentSerials[a_featureSlot] != 0 &&
+			               preparedFrame->contentSerials[a_featureSlot] == slot.contentSerial &&
+			               preparedFrame->widths[a_featureSlot] == a_width &&
+			               preparedFrame->heights[a_featureSlot] == a_height &&
+			               slot.prepareKey.sourceWorldFrame == a_sourceWorldFrame &&
+			               slot.prepareKey.generation == a_generation &&
+			               slot.width == a_width && slot.height == a_height ?
+			           &slot :
+			           nullptr;
+		}
+
+		void ClearMask(
+			Slot& a_slot,
+			ID3D11DeviceContext* a_context,
+			std::uint32_t a_frame,
+			std::uint32_t a_featureSlot,
+			std::uint32_t a_width,
+			std::uint32_t a_height,
+			float a_value) noexcept
+		{
+			const std::array<float, 4> clear{ a_value, a_value, a_value, a_value };
+			if (!a_slot.maskUniform || a_slot.uniformMaskValue != a_value) {
+				a_context->ClearUnorderedAccessViewFloat(a_slot.maskUav.Get(), clear.data());
+			}
+			a_slot.maskInitialized = true;
+			a_slot.maskUniform = true;
+			a_slot.uniformMaskValue = a_value;
+			a_slot.previousMaskWorkSubrect = a_value == 0.0f ? ComputeSubrect{} :
+			                                                   BuildFullComputeSubrect(a_width, a_height);
+			a_slot.maskCoverageFrame = a_frame;
+			a_slot.maskCoverageFeatureSlot = a_featureSlot;
+			a_slot.maskCoverageWidth = a_width;
+			a_slot.maskCoverageHeight = a_height;
+			const auto pixelCount = static_cast<std::uint64_t>(a_width) * a_height;
+			a_slot.maskPixels = a_value > (0.5f / 255.0f) ? pixelCount : 0;
+			a_slot.authoredCategoryPixels = {};
+			a_slot.visibleCategoryPixels = {};
+			a_slot.visibilityRejectedPixels = 0;
+			a_slot.distanceRejectedPixels = 0;
+			a_slot.maskDiagnosticKey = 0;
+			a_slot.maskCoverageContentSerial = a_slot.contentSerial;
+			a_slot.maskCoverageSerial = AllocateCoverageSerial();
+			a_slot.lastCoverageRequestPolicyKey = 0;
+			a_slot.lastCoverageRequestFrame =
+				std::numeric_limits<std::uint32_t>::max();
+			a_slot.maskCoveragePercent = a_slot.maskPixels ? 100.0f : 0.0f;
+			a_slot.maskCoverageReady = true;
+			a_slot.coverageRequestIssued = false;
+			a_slot.zeroCoverageBypassResolved = false;
+			a_slot.zeroCoverageBypassed = false;
+			a_slot.feature18Disposition =
+				CharacterFeature18Disposition::Unresolved;
+			a_slot.zeroCoverageCpuProven = false;
+		}
+
+		std::uint64_t AllocateCoverageSerial() noexcept
+		{
+			const auto serial = nextCoverageRequestSerial_;
+			if (nextCoverageRequestSerial_ !=
+				std::numeric_limits<std::uint64_t>::max()) {
+				++nextCoverageRequestSerial_;
+			}
+			return serial;
+		}
+
+		std::uint64_t AllocatePreparedContentSerial() noexcept
+		{
+			const auto serial = nextPreparedContentSerial_;
+			++nextPreparedContentSerial_;
+			if (nextPreparedContentSerial_ == 0)
+				nextPreparedContentSerial_ = 1;
+			return serial;
+		}
+
+		void AdoptDevice(ID3D11Device* a_device)
+		{
+			if (device_ && !Util::HaveSameCOMIdentity(device_.Get(), a_device)) {
+				slots_ = {};
+				shader_.Reset();
+				constants_.Reset();
+				capturedCategories_.Reset();
+				capturedCategoriesSrv_.Reset();
+				capturedCategoriesUav_.Reset();
+				capturedDepth_.Reset();
+				capturedDepthSrv_.Reset();
+				capturedDepthUav_.Reset();
+				captureShader_.Reset();
+				captureConstants_.Reset();
+				captureSourceCategoriesSrv_.Reset();
+				captureShaderCompileFailed_ = false;
+				InvalidateCaptureMetadata();
+				shaderCompileFailed_ = false;
+				actorAdmissions_.clear();
+				InvalidateProjectionCache();
+				InvalidatePreparedMasks();
+				snapshot_.preparedFrames = {};
+				preparedFrameHistoryNext_ = 0;
+			}
+			device_ = a_device;
+		}
+
+		bool EnsureCategoryCapture(
+			ID3D11Device* a_device,
+			const D3D11_TEXTURE2D_DESC& a_sourceDesc)
+		{
+			if (capturedCategories_) {
+				D3D11_TEXTURE2D_DESC current{};
+				capturedCategories_->GetDesc(&current);
+				if (current.Width == a_sourceDesc.Width &&
+					current.Height == a_sourceDesc.Height &&
+					current.Format == a_sourceDesc.Format) {
+					return true;
+				}
+			}
+
+			capturedCategories_.Reset();
+			capturedCategoriesSrv_.Reset();
+			capturedCategoriesUav_.Reset();
+			InvalidateCaptureMetadata();
+			InvalidatePreparedMasks();
+			D3D11_TEXTURE2D_DESC captureDesc = a_sourceDesc;
+			captureDesc.Usage = D3D11_USAGE_DEFAULT;
+			captureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+			captureDesc.CPUAccessFlags = 0;
+			captureDesc.MiscFlags = 0;
+			if (FAILED(a_device->CreateTexture2D(
+					&captureDesc, nullptr, &capturedCategories_)) ||
+				FAILED(a_device->CreateShaderResourceView(
+					capturedCategories_.Get(), nullptr,
+					&capturedCategoriesSrv_)) ||
+				FAILED(a_device->CreateUnorderedAccessView(
+					capturedCategories_.Get(), nullptr, &capturedCategoriesUav_))) {
+				capturedCategories_.Reset();
+				capturedCategoriesSrv_.Reset();
+				capturedCategoriesUav_.Reset();
+				return false;
+			}
+			Util::SetResourceName(
+				capturedCategories_.Get(),
+				"DLSS5CharacterRendering::FrozenCategories");
+			Util::SetResourceName(
+				capturedCategoriesSrv_.Get(),
+				"DLSS5CharacterRendering::FrozenCategories SRV");
+			Util::SetResourceName(capturedCategoriesUav_.Get(), "DLSS5CharacterRendering::FrozenCategories UAV");
+			return true;
+		}
+
+		bool EnsureDepthCapture(
+			ID3D11Device* a_device,
+			const D3D11_TEXTURE2D_DESC& a_sourceDesc)
+		{
+			if (capturedDepth_) {
+				D3D11_TEXTURE2D_DESC current{};
+				capturedDepth_->GetDesc(&current);
+				if (current.Width == a_sourceDesc.Width &&
+					current.Height == a_sourceDesc.Height &&
+					current.Format == DXGI_FORMAT_R32_FLOAT) {
+					return true;
+				}
+			}
+
+			capturedDepth_.Reset();
+			capturedDepthSrv_.Reset();
+			capturedDepthUav_.Reset();
+			InvalidateCaptureMetadata();
+			InvalidatePreparedMasks();
+			D3D11_TEXTURE2D_DESC captureDesc = a_sourceDesc;
+			captureDesc.Format = DXGI_FORMAT_R32_FLOAT;
+			captureDesc.Usage = D3D11_USAGE_DEFAULT;
+			captureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+			captureDesc.CPUAccessFlags = 0;
+			captureDesc.MiscFlags = 0;
+			if (FAILED(a_device->CreateTexture2D(
+					&captureDesc, nullptr, &capturedDepth_)) ||
+				FAILED(a_device->CreateShaderResourceView(
+					capturedDepth_.Get(), nullptr, &capturedDepthSrv_)) ||
+				FAILED(a_device->CreateUnorderedAccessView(
+					capturedDepth_.Get(), nullptr, &capturedDepthUav_))) {
+				capturedDepth_.Reset();
+				capturedDepthSrv_.Reset();
+				capturedDepthUav_.Reset();
+				return false;
+			}
+			Util::SetResourceName(
+				capturedDepth_.Get(),
+				"DLSS5CharacterRendering::FrozenDepth");
+			Util::SetResourceName(
+				capturedDepthSrv_.Get(),
+				"DLSS5CharacterRendering::FrozenDepth SRV");
+			Util::SetResourceName(capturedDepthUav_.Get(), "DLSS5CharacterRendering::FrozenDepth UAV");
+			return true;
+		}
+
+		bool EnsureCaptureShader(ID3D11Device* a_device, ID3D11Texture2D* a_source)
+		{
+			if (!captureShader_) {
+				if (captureShaderCompileFailed_)
+					return false;
+				captureShader_.Attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
+					L"Data\\Shaders\\DLSS5CharacterCaptureCS.hlsl", {}, "cs_5_0")));
+				if (!captureShader_) {
+					captureShaderCompileFailed_ = true;
+					return false;
+				}
+				Util::SetResourceName(captureShader_.Get(), "DLSS5CharacterRendering::CaptureCS");
+			}
+			if (!captureConstants_) {
+				D3D11_BUFFER_DESC desc{};
+				desc.ByteWidth = 16;
+				desc.Usage = D3D11_USAGE_DEFAULT;
+				desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+				if (FAILED(a_device->CreateBuffer(&desc, nullptr, &captureConstants_)))
+					return false;
+				Util::SetResourceName(captureConstants_.Get(), "DLSS5CharacterRendering::CaptureConstants");
+			}
+			ComPtr<ID3D11Resource> previousSource;
+			if (captureSourceCategoriesSrv_)
+				captureSourceCategoriesSrv_->GetResource(&previousSource);
+			if (!Util::HaveSameCOMIdentity(previousSource.Get(), a_source)) {
+				captureSourceCategoriesSrv_.Reset();
+				if (FAILED(a_device->CreateShaderResourceView(a_source, nullptr, &captureSourceCategoriesSrv_)))
+					return false;
+				Util::SetResourceName(captureSourceCategoriesSrv_.Get(), "DLSS5CharacterRendering::SourceCategories SRV");
+			}
+			return true;
+		}
+
+		bool ValidateTexture(
+			ID3D11ShaderResourceView* a_view,
+			ID3D11Device* a_device,
+			DXGI_FORMAT a_format,
+			ComPtr<ID3D11Texture2D>& a_texture,
+			D3D11_TEXTURE2D_DESC& a_desc,
+			void*& a_identity,
+			std::string& a_error) const
+		{
+			if (!a_view) {
+				a_error = "required character-mask source view is null";
+				return false;
+			}
+			ComPtr<ID3D11Resource> resource;
+			a_view->GetResource(&resource);
+			if (!resource || FAILED(resource.As(&a_texture)) || !a_texture) {
+				a_error = "character-mask source is not a Texture2D";
+				return false;
+			}
+			a_texture->GetDesc(&a_desc);
+			if (a_desc.Format != a_format || a_desc.MipLevels != 1 ||
+				a_desc.ArraySize != 1 || a_desc.SampleDesc.Count != 1) {
+				a_error = std::format(
+					"character-mask source has invalid format/layout (format={})",
+					static_cast<std::uint32_t>(a_desc.Format));
+				return false;
+			}
+			D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};
+			a_view->GetDesc(&viewDesc);
+			if (viewDesc.Format != a_format ||
+				viewDesc.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D ||
+				viewDesc.Texture2D.MostDetailedMip != 0 ||
+				viewDesc.Texture2D.MipLevels != 1) {
+				a_error = "character-mask source view has invalid format or mip layout";
+				return false;
+			}
+			ComPtr<ID3D11Device> resourceDevice;
+			a_texture->GetDevice(&resourceDevice);
+			if (!Util::HaveSameCOMIdentity(a_device, resourceDevice.Get())) {
+				a_error = "character-mask source belongs to a different D3D11 device";
+				return false;
+			}
+			ComPtr<IUnknown> identity;
+			if (FAILED(resource->QueryInterface(IID_PPV_ARGS(&identity)))) {
+				a_error = "character-mask source identity query failed";
+				return false;
+			}
+			a_identity = identity.Get();
+			return true;
+		}
+
+		bool ValidateDepthTexture(
+			ID3D11ShaderResourceView* a_view,
+			ID3D11Device* a_device,
+			std::uint32_t a_expectedWidth,
+			std::uint32_t a_expectedHeight,
+			CharacterDepthExtentPolicy a_extentPolicy,
+			ComPtr<ID3D11Texture2D>& a_texture,
+			std::uintptr_t& a_identity,
+			std::string& a_error) const
+		{
+			if (!a_view) {
+				a_error = "character mask depth view is null";
+				return false;
+			}
+			ComPtr<ID3D11Resource> resource;
+			a_view->GetResource(&resource);
+			if (!resource || FAILED(resource.As(&a_texture)) || !a_texture) {
+				a_error = "character mask depth view is not a Texture2D";
+				return false;
+			}
+			D3D11_TEXTURE2D_DESC textureDesc{};
+			a_texture->GetDesc(&textureDesc);
+			D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};
+			a_view->GetDesc(&viewDesc);
+			if (!IsCharacterDepthExtentValid(textureDesc.Width, textureDesc.Height,
+					a_expectedWidth, a_expectedHeight, a_extentPolicy) ||
+				textureDesc.MipLevels != 1 || textureDesc.ArraySize != 1 ||
+				textureDesc.SampleDesc.Count != 1 ||
+				viewDesc.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D ||
+				viewDesc.Texture2D.MostDetailedMip != 0 ||
+				viewDesc.Texture2D.MipLevels != 1 ||
+				!IsSupportedDepthViewFormat(viewDesc.Format)) {
+				a_error = std::format(
+					"character mask depth view has invalid layout (format={})",
+					static_cast<std::uint32_t>(viewDesc.Format));
+				return false;
+			}
+			ComPtr<ID3D11Device> resourceDevice;
+			a_texture->GetDevice(&resourceDevice);
+			if (!Util::HaveSameCOMIdentity(a_device, resourceDevice.Get())) {
+				a_error = "character mask depth view belongs to another D3D11 device";
+				return false;
+			}
+			a_identity = GetIdentityToken(resource.Get());
+			if (!a_identity) {
+				a_error = "character mask depth-view identity could not be resolved";
+				return false;
+			}
+			return true;
+		}
+
+		bool EnsureShader(ID3D11Device* a_device)
+		{
+			if (shader_)
+				return true;
+			if (shaderCompileFailed_)
+				return false;
+
+			auto* compiled = static_cast<ID3D11ComputeShader*>(Util::CompileShader(
+				L"Data\\Shaders\\DLSS5CharacterMaskCS.hlsl", {}, "cs_5_0"));
+			if (!compiled) {
+				shaderCompileFailed_ = true;
+				return false;
+			}
+			shader_.Attach(compiled);
+			Util::SetResourceName(shader_.Get(), "DLSS5CharacterRendering::MaskResolveCS");
+
+			D3D11_BUFFER_DESC constantsDesc{};
+			constantsDesc.ByteWidth = static_cast<UINT>(sizeof(MaskConstants));
+			constantsDesc.Usage = D3D11_USAGE_DEFAULT;
+			constantsDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+			if (FAILED(a_device->CreateBuffer(&constantsDesc, nullptr, &constants_))) {
+				shader_.Reset();
+				shaderCompileFailed_ = true;
+				return false;
+			}
+			Util::SetResourceName(constants_.Get(), "DLSS5CharacterRendering::MaskConstants");
+			return true;
+		}
+
+		bool EnsureSlot(
+			Slot& a_slot,
+			ID3D11Device* a_device,
+			std::uint32_t a_slotIndex,
+			std::uint32_t a_width,
+			std::uint32_t a_height)
+		{
+			if (a_slot.mask && a_slot.width == a_width && a_slot.height == a_height)
+				return true;
+
+			a_slot = {};
+			D3D11_TEXTURE2D_DESC textureDesc{};
+			textureDesc.Width = a_width;
+			textureDesc.Height = a_height;
+			textureDesc.MipLevels = 1;
+			textureDesc.ArraySize = 1;
+			textureDesc.Format = DXGI_FORMAT_R8_UNORM;
+			textureDesc.SampleDesc.Count = 1;
+			textureDesc.Usage = D3D11_USAGE_DEFAULT;
+			textureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+			if (FAILED(a_device->CreateTexture2D(&textureDesc, nullptr, &a_slot.mask)) ||
+				FAILED(a_device->CreateShaderResourceView(a_slot.mask.Get(), nullptr, &a_slot.maskSrv)) ||
+				FAILED(a_device->CreateUnorderedAccessView(a_slot.mask.Get(), nullptr, &a_slot.maskUav))) {
+				a_slot = {};
+				return false;
+			}
+			const auto baseName = std::format(
+				"DLSS5CharacterRendering::SelectionMaskSlot{}", a_slotIndex);
+			Util::SetResourceName(a_slot.mask.Get(), "%s", baseName.c_str());
+			Util::SetResourceName(a_slot.maskSrv.Get(), "%s SRV", baseName.c_str());
+			Util::SetResourceName(a_slot.maskUav.Get(), "%s UAV", baseName.c_str());
+
+			D3D11_BUFFER_DESC counterDesc{};
+			counterDesc.ByteWidth =
+				kDiagnosticCounterCount * sizeof(std::uint32_t);
+			counterDesc.Usage = D3D11_USAGE_DEFAULT;
+			counterDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+			counterDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+			if (FAILED(a_device->CreateBuffer(&counterDesc, nullptr, &a_slot.coverageCounter))) {
+				a_slot = {};
+				return false;
+			}
+			D3D11_UNORDERED_ACCESS_VIEW_DESC counterUavDesc{};
+			counterUavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+			counterUavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+			counterUavDesc.Buffer.NumElements = kDiagnosticCounterCount;
+			counterUavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+			if (FAILED(a_device->CreateUnorderedAccessView(
+					a_slot.coverageCounter.Get(), &counterUavDesc,
+					&a_slot.coverageCounterUav))) {
+				a_slot = {};
+				return false;
+			}
+			Util::SetResourceName(a_slot.coverageCounter.Get(), "%s Diagnostics", baseName.c_str());
+			Util::SetResourceName(a_slot.coverageCounterUav.Get(), "%s Diagnostics UAV", baseName.c_str());
+
+			D3D11_BUFFER_DESC stagingDesc = counterDesc;
+			stagingDesc.Usage = D3D11_USAGE_STAGING;
+			stagingDesc.BindFlags = 0;
+			stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+			stagingDesc.MiscFlags = 0;
+			D3D11_QUERY_DESC queryDesc{ D3D11_QUERY_EVENT, 0 };
+			for (std::uint32_t index = 0; index < kReadbackLatency; ++index) {
+				if (FAILED(a_device->CreateBuffer(
+						&stagingDesc, nullptr, &a_slot.readbacks[index].staging)) ||
+					FAILED(a_device->CreateQuery(
+						&queryDesc, &a_slot.readbacks[index].ready))) {
+					a_slot = {};
+					return false;
+				}
+				Util::SetResourceName(
+					a_slot.readbacks[index].staging.Get(),
+					"%s Diagnostics Readback %u", baseName.c_str(), index);
+				Util::SetResourceName(
+					a_slot.readbacks[index].ready.Get(),
+					"%s Diagnostics Ready %u", baseName.c_str(), index);
+			}
+			a_slot.width = a_width;
+			a_slot.height = a_height;
+			return true;
+		}
+
+		CharacterProjectionResult ProjectSphere(
+			const Observation& a_observation,
+			const RE::NiPoint3& a_cameraPosition,
+			const float4x4& a_matrix,
+			std::uint32_t a_width,
+			std::uint32_t a_height,
+			CharacterRect& a_rect) const
+		{
+			const float3 relative{
+				a_observation.center.x - a_cameraPosition.x,
+				a_observation.center.y - a_cameraPosition.y,
+				a_observation.center.z - a_cameraPosition.z,
+			};
+			std::array<CharacterClipPoint, 8> corners{};
+			std::size_t cornerIndex = 0;
+			for (int z = -1; z <= 1; z += 2) {
+				for (int y = -1; y <= 1; y += 2) {
+					for (int x = -1; x <= 1; x += 2) {
+						const float4 point{
+							relative.x + x * a_observation.radius,
+							relative.y + y * a_observation.radius,
+							relative.z + z * a_observation.radius,
+							1.0f,
+						};
+						const auto clip = DirectX::SimpleMath::Vector4::Transform(
+							point, a_matrix);
+						corners[cornerIndex++] = { clip.x, clip.y, clip.w };
+					}
+				}
+			}
+			return ResolveCharacterProjection(corners, a_width, a_height, a_rect);
+		}
+
+		void RefreshProjectedActors(const CharacterMaskPrepareArgs& a_args)
+		{
+			const ProjectionKey key{
+				.frame = a_args.frameId,
+				.width = a_args.viewportCrop.fullOutput.width,
+				.height = a_args.viewportCrop.fullOutput.height,
+				.settings = BuildSettingsKey(a_args.settings),
+			};
+			if (projectionCacheValid_ && projectionKey_ == key)
+				return;
+
+			projectionKey_ = key;
+			projectionCacheValid_ = true;
+			projectedActors_.clear();
+			if (observationFrame_ != a_args.frameId)
+				return;
+
+			std::unordered_map<std::uint32_t, ProjectedActor> actors;
+			actors.reserve(observations_.size());
+			const auto cameraPosition = Util::GetEyePosition();
+			const auto cameraMatrix = globals::game::frameBufferCached.GetCameraViewProjUnjittered().Transpose();
+			for (const auto& observation : observations_) {
+				if (!IsCharacterCategoryEnabled(observation.category, a_args.settings))
+					continue;
+				auto& actor = actors[observation.actorFormId];
+				actor.actorFormId = observation.actorFormId;
+				const float dx = observation.center.x - cameraPosition.x;
+				const float dy = observation.center.y - cameraPosition.y;
+				const float dz = observation.center.z - cameraPosition.z;
+				const float surfaceDistance = std::max(
+					0.0f, std::sqrt(dx * dx + dy * dy + dz * dz) - observation.radius);
+				actor.nearestSelectedDistanceUnits = std::min(
+					actor.nearestSelectedDistanceUnits, surfaceDistance);
+				{
+					CharacterRect projected{};
+					const auto projection = ProjectSphere(
+						observation, cameraPosition, cameraMatrix,
+						key.width, key.height, projected);
+					if (projection == CharacterProjectionResult::Offscreen) {
+						continue;
+					}
+					if (projection == CharacterProjectionResult::Uncertain)
+						actor.projectionUncertain = true;
+					actor.selectedRect = CharacterRegionPolicy::Union(
+						actor.selectedRect, projected);
+				}
+			}
+			projectedActors_.reserve(actors.size());
+			for (auto& [actorFormId, actor] : actors) {
+				(void)actorFormId;
+				projectedActors_.push_back(std::move(actor));
+			}
+			std::ranges::sort(
+				projectedActors_, {}, &ProjectedActor::actorFormId);
+		}
+
+		ProjectedPlan BuildPlan(const CharacterMaskPrepareArgs& a_args)
+		{
+			CS_PROFILE_CPU_SCOPE("Upscaling::DLSS5CharacterRoiSetup");
+			ProjectedPlan result;
+			for (const auto category : {
+					 CharacterCategory::Face,
+					 CharacterCategory::Skin,
+					 CharacterCategory::Hair }) {
+				if (IsCharacterCategoryEnabled(category, a_args.settings)) {
+					result.projectionUncertain = result.projectionUncertain ||
+					                             (unboundedCategoryMask_ & CharacterPolicy::CategoryBit(category)) != 0;
+				}
+			}
+			RefreshProjectedActors(a_args);
+			const auto& crop = a_args.viewportCrop.output;
+			std::vector<CharacterRegionCandidate> candidates;
+			candidates.reserve(projectedActors_.size());
+			for (const auto& [actorId, admission] : actorAdmissions_) {
+				(void)actorId;
+				if (admission.frame == a_args.frameId && admission.history.sizeEligible &&
+					!admission.admitted && a_args.settings.adaptiveRoiSelection)
+					++result.adaptivelyCulledCharacters;
+			}
+			for (const auto& actor : projectedActors_) {
+				const auto admission = actorAdmissions_.find(actor.actorFormId);
+				if (admission == actorAdmissions_.end() ||
+					admission->second.frame != a_args.frameId || !admission->second.admitted)
+					continue;
+				const auto& actorRect = actor.selectedRect;
+				// Offscreen is a view proof, not a reason to expand the view.
+				if (!actorRect.IsValid())
+					continue;
+				const auto selectedDistanceMeters = Util::Units::GameUnitsToMeters(
+					actor.nearestSelectedDistanceUnits);
+				if (!CharacterRegionPolicy::IsWithinMaximumDistance(
+						selectedDistanceMeters, a_args.settings.maximumDistanceMeters))
+					continue;
+				result.projectionUncertain = result.projectionUncertain ||
+				                             actor.projectionUncertain;
+				const float marginX = (actorRect.maxX - actorRect.minX) * a_args.settings.roiMargin;
+				const float marginY = (actorRect.maxY - actorRect.minY) * a_args.settings.roiMargin;
+				const auto minX = static_cast<std::uint32_t>(
+					std::max(0.0f, std::floor(actorRect.minX - marginX)));
+				const auto minY = static_cast<std::uint32_t>(
+					std::max(0.0f, std::floor(actorRect.minY - marginY)));
+				const auto maxX = static_cast<std::uint32_t>(std::min(
+					static_cast<float>(a_args.viewportCrop.fullOutput.width),
+					std::ceil(actorRect.maxX + marginX)));
+				const auto maxY = static_cast<std::uint32_t>(std::min(
+					static_cast<float>(a_args.viewportCrop.fullOutput.height),
+					std::ceil(actorRect.maxY + marginY)));
+				if (maxX <= crop.left || maxY <= crop.top || minX >= crop.right || minY >= crop.bottom)
+					continue;
+				CharacterRect local{
+					.minX = std::max(minX, crop.left) - crop.left,
+					.minY = std::max(minY, crop.top) - crop.top,
+					.maxX = std::min(maxX, crop.right) - crop.left,
+					.maxY = std::min(maxY, crop.bottom) - crop.top,
+				};
+				local.minX = local.minX / kRegionQuantization * kRegionQuantization;
+				local.minY = local.minY / kRegionQuantization * kRegionQuantization;
+				local.maxX = std::min(a_args.outputWidth,
+					(local.maxX + kRegionQuantization - 1u) / kRegionQuantization * kRegionQuantization);
+				local.maxY = std::min(a_args.outputHeight,
+					(local.maxY + kRegionQuantization - 1u) / kRegionQuantization * kRegionQuantization);
+				if (!local.IsValid())
+					continue;
+				++result.visibleCharacters;
+				if (admission->second.hasFaceAnchor)
+					++result.visibleFaces;
+				candidates.push_back({
+					.rect = local,
+					.distanceMeters = admission->second.distanceMeters,
+					.facePixelSize = admission->second.facePixelSize,
+					.stableId = actor.actorFormId,
+				});
+				// Preserve lifetime ownership before eligibility compaction can join
+				// otherwise distant actors. Neither distance order nor geometry IDs
+				// identify a temporal inference history.
+				auto identity = HashCombine(
+					HashCombine(1469598103934665603ull, actor.actorFormId), admission->second.identity);
+				result.actorRegions.push_back({ identity ? identity : 1u, local });
+			}
+			// Only order here: actor admission was already applied to authored
+			// categories. Re-testing thresholds now would leak rejected actors
+			// through another actor's (or a compacted) eligibility rectangle.
+			(void)CharacterRegionPolicy::SelectAdaptive(candidates, false);
+			result.selectedCharacters = static_cast<std::uint32_t>(candidates.size());
+			std::uint64_t eligibilityXor = 0;
+			std::uint64_t eligibilitySum = 0;
+			result.regions.reserve(candidates.size());
+			for (const auto& candidate : candidates) {
+				auto regionHash = HashCombine(1469598103934665603ull, candidate.stableId);
+				regionHash = HashCombine(regionHash, candidate.rect.minX);
+				regionHash = HashCombine(regionHash, candidate.rect.minY);
+				regionHash = HashCombine(regionHash, candidate.rect.maxX);
+				regionHash = HashCombine(regionHash, candidate.rect.maxY);
+				eligibilityXor ^= regionHash;
+				eligibilitySum += regionHash;
+				result.regions.push_back(candidate.rect);
+			}
+			result.eligibilitySignature = HashCombine(
+				HashCombine(eligibilityXor, eligibilitySum), candidates.size());
+			CharacterRegionPolicy::CompactToCapacity(result.regions, CharacterPolicy::kMaximumEligibilityRegions);
+			return result;
+		}
+
+		std::uint64_t BuildCoverageSamplingPolicyKey(
+			const CharacterMaskPrepareArgs& a_args,
+			std::uint32_t a_sourceWidth,
+			std::uint32_t a_sourceHeight) const noexcept
+		{
+			std::uint64_t hash = BuildSettingsKey(a_args.settings);
+			auto add = [&](std::uint64_t a_value) {
+				hash = HashCombine(hash, a_value);
+			};
+			add(a_args.featureSlot);
+			add(a_args.outputWidth);
+			add(a_args.outputHeight);
+			add(a_sourceWidth);
+			add(a_sourceHeight);
+			add(a_args.viewportCrop.fullInput.width);
+			add(a_args.viewportCrop.fullInput.height);
+			add(a_args.viewportCrop.input.left);
+			add(a_args.viewportCrop.input.top);
+			add(a_args.viewportCrop.input.right);
+			add(a_args.viewportCrop.input.bottom);
+			add(a_args.viewportCrop.fullOutput.width);
+			add(a_args.viewportCrop.fullOutput.height);
+			add(a_args.viewportCrop.output.left);
+			add(a_args.viewportCrop.output.top);
+			add(a_args.viewportCrop.output.right);
+			add(a_args.viewportCrop.output.bottom);
+			return hash;
+		}
+
+		std::uint64_t BuildDiagnosticKey(
+			const CharacterMaskPrepareArgs& a_args,
+			const ProjectedPlan& a_plan,
+			std::uint32_t a_sourceWidth,
+			std::uint32_t a_sourceHeight) const noexcept
+		{
+			std::uint64_t hash = BuildCoverageSamplingPolicyKey(
+				a_args, a_sourceWidth, a_sourceHeight);
+			auto add = [&](std::uint64_t a_value) {
+				hash = HashCombine(hash, a_value);
+			};
+			add(a_plan.eligibilitySignature);
+			return hash;
+		}
+
+		void PollReadbacks(
+			ID3D11DeviceContext* a_context,
+			std::uint32_t a_frame)
+		{
+			if (lastReadbackPollFrame_ == a_frame)
+				return;
+			lastReadbackPollFrame_ = a_frame;
+			for (std::uint32_t slotIndex = 0; slotIndex < slots_.size(); ++slotIndex) {
+				auto& slot = slots_[slotIndex];
+				for (auto& readback : slot.readbacks) {
+					if (!readback.pending)
+						continue;
+					const auto queryResult = a_context->GetData(
+						readback.ready.Get(), nullptr, 0,
+						D3D11_ASYNC_GETDATA_DONOTFLUSH);
+					if (queryResult == S_FALSE)
+						continue;
+					if (FAILED(queryResult)) {
+						readback.pending = false;
+						Increment(snapshot_.readbackDrops);
+						continue;
+					}
+					D3D11_MAPPED_SUBRESOURCE mapped{};
+					const auto mapResult = a_context->Map(
+						readback.staging.Get(), 0, D3D11_MAP_READ,
+						D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped);
+					if (mapResult == DXGI_ERROR_WAS_STILL_DRAWING)
+						continue;
+					if (FAILED(mapResult)) {
+						readback.pending = false;
+						Increment(snapshot_.readbackDrops);
+						continue;
+					}
+					std::array<std::uint32_t, kDiagnosticCounterCount> counters{};
+					std::memcpy(counters.data(), mapped.pData, sizeof(counters));
+					a_context->Unmap(readback.staging.Get(), 0);
+					const bool sampleIsNewest =
+						!slot.maskCoverageReady ||
+						readback.serial >= slot.maskCoverageSerial;
+					// World captures replace mask contents before delayed samples finish.
+					// Keep their original attribution; only exact contents prove current coverage.
+					if (readback.featureSlot == slotIndex && readback.contentSerial != 0 &&
+						readback.width == slot.width && readback.height == slot.height &&
+						sampleIsNewest) {
+						slot.maskCoverageFrame = readback.frame;
+						slot.maskCoverageFeatureSlot = readback.featureSlot;
+						slot.maskCoverageWidth = readback.width;
+						slot.maskCoverageHeight = readback.height;
+						slot.maskPixels = counters[MaskPixels];
+						for (std::size_t category = 0; category < 3; ++category) {
+							slot.authoredCategoryPixels[category] =
+								counters[AuthoredFacePixels + category];
+							slot.visibleCategoryPixels[category] =
+								counters[VisibleFacePixels + category];
+						}
+						slot.visibilityRejectedPixels =
+							counters[VisibilityRejectedPixels];
+						slot.distanceRejectedPixels =
+							counters[DistanceRejectedPixels];
+						slot.maskDiagnosticKey = readback.diagnosticKey;
+						slot.maskCoverageContentSerial = readback.contentSerial;
+						slot.maskCoverageSerial = readback.serial;
+						slot.maskCoveragePercent = readback.pixelCount ?
+						                               100.0f * static_cast<float>(counters[MaskPixels]) /
+						                                   static_cast<float>(readback.pixelCount) :
+						                               0.0f;
+						slot.maskCoverageReady = true;
+					}
+					readback.pending = false;
+				}
+			}
+		}
+
+		bool Dispatch(
+			const CharacterMaskPrepareArgs& a_args,
+			ID3D11ShaderResourceView* a_authoredMaskSource,
+			ID3D11ShaderResourceView* a_authoredDepthSource,
+			Slot& a_slot,
+			const ProjectedPlan& a_plan,
+			std::uint32_t a_sourceWidth,
+			std::uint32_t a_sourceHeight)
+		{
+			if (a_slot.contentSerial == 0)
+				return false;
+			const auto diagnosticKey = BuildDiagnosticKey(
+				a_args, a_plan, a_sourceWidth, a_sourceHeight);
+			const auto samplingPolicyKey = BuildCoverageSamplingPolicyKey(
+				a_args, a_sourceWidth, a_sourceHeight);
+			const bool samplePending = std::ranges::any_of(
+				a_slot.readbacks,
+				[](const Readback& a_readback) {
+					return a_readback.pending;
+				});
+			const auto requestAge = static_cast<std::int32_t>(
+				a_args.frameId - a_slot.lastCoverageRequestFrame);
+			const bool periodicSampleDue =
+				a_slot.coverageRequestIssued && requestAge >= 0 &&
+				static_cast<std::uint32_t>(requestAge) >=
+					CharacterPolicy::kCoverageSampleIntervalFrames;
+			const bool measurementDue =
+				a_args.settings.debugView != CharacterDebugView::Off && !samplePending &&
+				(!a_slot.coverageRequestIssued ||
+					a_slot.lastCoverageRequestPolicyKey != samplingPolicyKey ||
+					periodicSampleDue);
+			Readback* coverageReadback = nullptr;
+			if (measurementDue) {
+				for (std::uint32_t offset = 0;
+					offset < a_slot.readbacks.size(); ++offset) {
+					const auto index =
+						(a_slot.nextReadbackIndex + offset) %
+						static_cast<std::uint32_t>(a_slot.readbacks.size());
+					if (!a_slot.readbacks[index].pending) {
+						coverageReadback = &a_slot.readbacks[index];
+						a_slot.nextReadbackIndex =
+							(index + 1u) % static_cast<std::uint32_t>(
+											   a_slot.readbacks.size());
+						break;
+					}
+				}
+				if (!coverageReadback)
+					Increment(snapshot_.readbackDrops);
+			}
+			MaskConstants constants{};
+			constants.outputAndSourceSize[0] = a_args.outputWidth;
+			constants.outputAndSourceSize[1] = a_args.outputHeight;
+			constants.outputAndSourceSize[2] = a_sourceWidth;
+			constants.outputAndSourceSize[3] = a_sourceHeight;
+			constants.sourceCrop[0] = 0;
+			constants.sourceCrop[1] = a_args.viewportCrop.input.left;
+			constants.sourceCrop[2] = a_args.viewportCrop.input.top;
+			constants.sourceCrop[3] = a_args.viewportCrop.input.Width();
+			constants.options[0] = a_args.viewportCrop.input.Height();
+			constants.options[1] = static_cast<std::uint32_t>(
+				a_plan.regions.size());
+			constants.options[2] = a_args.settings.depthAwareFeather ?
+			                           a_args.settings.featherRadius :
+			                           0;
+			constants.options[3] = a_args.settings.depthAwareFeather ? 1u : 0u;
+			constants.featherOptions[0] = a_args.settings.featherDepthThreshold;
+			constants.featherOptions[1] = static_cast<float>(
+				a_args.settings.maskTestMode);
+			const bool measureCoverage = coverageReadback != nullptr;
+			const bool fullSurfaceDispatch =
+				measureCoverage ||
+				a_args.settings.debugView != CharacterDebugView::Off;
+			constants.featherOptions[2] = measureCoverage ? 1.0f : 0.0f;
+			constants.visibilityOptions[0] = kVisibilityDepthThreshold;
+			constants.visibilityOptions[1] =
+				a_args.settings.visibilityDepthTest &&
+						a_args.settings.maskTestMode !=
+							CharacterMaskTestMode::AuthoredWithoutVisibilityDepth ?
+					1.0f :
+					0.0f;
+			constants.visibilityOptions[2] =
+				a_args.settings.maximumDistanceMeters > 0.0f ?
+					a_args.settings.maximumDistanceMeters /
+						Util::Units::GAME_UNIT_TO_M :
+					0.0f;
+			constants.visibilityOptions[3] =
+				CharacterRegionPolicy::ResolveDistanceFadeWidth(
+					a_args.settings.maximumDistanceMeters) /
+				Util::Units::GAME_UNIT_TO_M;
+			const auto cameraData = Util::GetCameraData();
+			constants.depthLinearization[0] = cameraData.x;
+			constants.depthLinearization[1] = cameraData.y;
+			constants.depthLinearization[2] = cameraData.z;
+			constants.depthLinearization[3] = cameraData.w;
+			constants.cameraProjInverse =
+				globals::game::frameBufferCached.GetCameraProjInverse();
+			constants.jitter[0] = capturedJitterX_;
+			constants.jitter[1] = capturedJitterY_;
+			const auto& capturedRegion = capturedSourceRect_;
+			constants.authoredRegion[0] = capturedRegion.baseX;
+			constants.authoredRegion[1] = capturedRegion.baseY;
+			constants.authoredRegion[2] = capturedRegion.width;
+			constants.authoredRegion[3] = capturedRegion.height;
+			constants.categoryStrengths[0] =
+				a_args.settings.faces ? a_args.settings.faceStrength : 0.0f;
+			constants.categoryStrengths[1] =
+				a_args.settings.skin ? a_args.settings.skinStrength : 0.0f;
+			constants.categoryStrengths[2] =
+				a_args.settings.hair ? a_args.settings.hairStrength : 0.0f;
+			if (a_plan.regions.empty() ||
+				a_plan.regions.size() > CharacterPolicy::kMaximumEligibilityRegions) {
+				return false;
+			}
+			for (std::size_t index = 0; index < a_plan.regions.size(); ++index) {
+				const auto& rect = a_plan.regions[index];
+				constants.eligibilityRectangles[index][0] =
+					static_cast<float>(rect.minX);
+				constants.eligibilityRectangles[index][1] =
+					static_cast<float>(rect.minY);
+				constants.eligibilityRectangles[index][2] =
+					static_cast<float>(rect.maxX);
+				constants.eligibilityRectangles[index][3] =
+					static_cast<float>(rect.maxY);
+			}
+			const auto dirtyRegion = UnionCharacterWorkRects(
+				a_slot.previousMaskWorkSubrect, a_slot.maskWorkSubrect);
+			if (!dirtyRegion.Fits(a_args.outputWidth, a_args.outputHeight))
+				return false;
+			const auto dispatchOffsetX =
+				fullSurfaceDispatch ? 0u : dirtyRegion.baseX;
+			const auto dispatchOffsetY =
+				fullSurfaceDispatch ? 0u : dirtyRegion.baseY;
+			const auto dispatchWidth = fullSurfaceDispatch ?
+			                               std::max(a_args.outputWidth, a_args.viewportCrop.input.Width()) :
+			                               dirtyRegion.width;
+			const auto dispatchHeight = fullSurfaceDispatch ?
+			                                std::max(a_args.outputHeight, a_args.viewportCrop.input.Height()) :
+			                                dirtyRegion.height;
+			constants.dispatchRegion[0] = dispatchOffsetX;
+			constants.dispatchRegion[1] = dispatchOffsetY;
+			constants.dispatchRegion[2] = dispatchWidth;
+			constants.dispatchRegion[3] = dispatchHeight;
+			a_args.context->UpdateSubresource(
+				constants_.Get(), 0, nullptr, &constants, 0, 0);
+
+			ComputeStateGuard stateGuard(a_args.context);
+			if (!stateGuard.Captured())
+				return false;
+			if (!a_slot.maskInitialized) {
+				const std::array<float, 4> clearMask{};
+				a_args.context->ClearUnorderedAccessViewFloat(
+					a_slot.maskUav.Get(), clearMask.data());
+				a_slot.maskInitialized = true;
+			}
+			if (measureCoverage) {
+				const std::array<UINT, 4> clear{};
+				a_args.context->ClearUnorderedAccessViewUint(
+					a_slot.coverageCounterUav.Get(), clear.data());
+			}
+			ID3D11Buffer* constantBuffer = constants_.Get();
+			std::array<ID3D11ShaderResourceView*, 3> srvs{
+				a_authoredMaskSource,
+				a_authoredDepthSource,
+				a_args.depthGuide,
+			};
+			std::array<ID3D11UnorderedAccessView*, 2> uavs{
+				a_slot.maskUav.Get(),
+				a_slot.coverageCounterUav.Get(),
+			};
+			a_args.context->CSSetShader(shader_.Get(), nullptr, 0);
+			a_args.context->CSSetConstantBuffers(0, 1, &constantBuffer);
+			a_args.context->CSSetShaderResources(
+				0, static_cast<UINT>(srvs.size()), srvs.data());
+			a_args.context->CSSetUnorderedAccessViews(
+				0, static_cast<UINT>(uavs.size()), uavs.data(), nullptr);
+#ifndef NDEBUG
+			std::array<ID3D11ShaderResourceView*, 3> boundSrvs{};
+			std::array<ID3D11UnorderedAccessView*, 2> boundUavs{};
+			a_args.context->CSGetShaderResources(
+				0, static_cast<UINT>(boundSrvs.size()), boundSrvs.data());
+			a_args.context->CSGetUnorderedAccessViews(
+				0, static_cast<UINT>(boundUavs.size()), boundUavs.data());
+			const bool bindingsValid =
+				boundSrvs[0] == srvs[0] && boundSrvs[1] == srvs[1] &&
+				boundSrvs[2] == srvs[2] &&
+				boundUavs[0] == uavs[0] && boundUavs[1] == uavs[1];
+			for (auto* view : boundSrvs) {
+				if (view)
+					view->Release();
+			}
+			for (auto* view : boundUavs) {
+				if (view)
+					view->Release();
+			}
+			if (!bindingsValid)
+				return false;
+#endif
+			{
+				CS_PROFILE_SCOPE("Upscaling::DLSS5CharacterMask");
+				a_args.context->Dispatch(
+					(dispatchWidth + 7u) / 8u,
+					(dispatchHeight + 7u) / 8u,
+					1);
+			}
+			a_slot.maskUniform = false;
+			a_slot.previousMaskWorkSubrect = a_slot.maskWorkSubrect;
+
+			std::array<ID3D11UnorderedAccessView*, 2> nullUavs{};
+			a_args.context->CSSetUnorderedAccessViews(
+				0, static_cast<UINT>(nullUavs.size()), nullUavs.data(), nullptr);
+			if (measureCoverage) {
+				a_args.context->CopyResource(
+					coverageReadback->staging.Get(), a_slot.coverageCounter.Get());
+				a_args.context->End(coverageReadback->ready.Get());
+				coverageReadback->frame = a_args.frameId;
+				coverageReadback->featureSlot = a_args.featureSlot;
+				coverageReadback->width = a_args.outputWidth;
+				coverageReadback->height = a_args.outputHeight;
+				coverageReadback->pixelCount =
+					static_cast<std::uint64_t>(a_args.outputWidth) *
+					a_args.outputHeight;
+				coverageReadback->diagnosticKey = diagnosticKey;
+				coverageReadback->contentSerial = a_slot.contentSerial;
+				coverageReadback->serial = AllocateCoverageSerial();
+				coverageReadback->pending = true;
+				a_slot.lastCoverageRequestPolicyKey = samplingPolicyKey;
+				a_slot.lastCoverageRequestFrame = a_args.frameId;
+				a_slot.coverageRequestIssued = true;
+			}
+			return true;
+		}
+
+		mutable std::mutex mutex_;
+		mutable std::mutex rejectionFrameMutex_;
+		std::atomic<std::uint32_t> rejectionFrame_{
+			std::numeric_limits<std::uint32_t>::max()
+		};
+		std::array<
+			std::atomic<std::uint32_t>,
+			static_cast<std::size_t>(CharacterClassificationRejection::Count)>
+			currentClassificationRejections_{};
+		std::array<
+			std::atomic<std::uint64_t>,
+			static_cast<std::size_t>(CharacterClassificationRejection::Count)>
+			classificationRejections_{};
+		std::vector<Observation> observations_;
+		std::unordered_set<std::uintptr_t> observationKeys_;
+		std::uint32_t unboundedCategoryMask_ = 0;
+		std::uint32_t observationFrame_ = std::numeric_limits<std::uint32_t>::max();
+		ProjectionKey projectionKey_{};
+		std::vector<ProjectedActor> projectedActors_;
+		bool projectionCacheValid_ = false;
+		std::unordered_map<std::uint32_t, ActorAdmission> actorAdmissions_;
+		std::array<Slot, 1> slots_{};
+		std::uint32_t lastSlot_ = 1;
+		std::uint32_t preparedFrameHistoryNext_ = 0;
+		ComPtr<ID3D11ComputeShader> shader_;
+		ComPtr<ID3D11Buffer> constants_;
+		ComPtr<ID3D11Texture2D> capturedCategories_;
+		ComPtr<ID3D11ShaderResourceView> capturedCategoriesSrv_;
+		ComPtr<ID3D11UnorderedAccessView> capturedCategoriesUav_;
+		ComPtr<ID3D11Texture2D> capturedDepth_;
+		ComPtr<ID3D11ShaderResourceView> capturedDepthSrv_;
+		ComPtr<ID3D11UnorderedAccessView> capturedDepthUav_;
+		ComPtr<ID3D11ComputeShader> captureShader_;
+		ComPtr<ID3D11Buffer> captureConstants_;
+		ComPtr<ID3D11ShaderResourceView> captureSourceCategoriesSrv_;
+		bool captureShaderCompileFailed_ = false;
+		ComputeSubrect capturedSourceRect_{};
+		std::uint32_t capturedFrame_ = std::numeric_limits<std::uint32_t>::max();
+		bool capturedCategoriesEmpty_ = false;
+		std::uint32_t capturedWidth_ = 0;
+		std::uint32_t capturedHeight_ = 0;
+		std::uint32_t capturedEnabledCategoryMask_ = 0;
+		float capturedJitterX_ = 0.0f;
+		float capturedJitterY_ = 0.0f;
+		std::uint32_t lastReadbackPollFrame_ =
+			std::numeric_limits<std::uint32_t>::max();
+		std::uint64_t nextCoverageRequestSerial_ = 1;
+		std::uint64_t nextPreparedContentSerial_ = 1;
+		ComPtr<ID3D11Device> device_;
+		bool shaderCompileFailed_ = false;
+		CharacterSnapshot snapshot_{};
+	};
+
+	CharacterRendering& CharacterRendering::Instance()
+	{
+		static CharacterRendering instance;
+		return instance;
+	}
+
+	CharacterRendering::CharacterRendering() : state_(std::make_unique<State>()) {}
+
+	CharacterRendering::~CharacterRendering() = default;
+
+	bool CharacterRendering::ShouldAuthorActor(
+		std::uint32_t a_frame,
+		std::uint32_t a_actorFormId,
+		const CharacterActorAdmissionArgs& a_args) noexcept
+	{
+		if (!state_ || !a_actorFormId || !a_args.actorIdentity || !IsValidCharacterSettings(a_args.settings))
+			return false;
+		try {
+			std::scoped_lock lock(state_->mutex_);
+			if (!state_->BeginObservationFrame(a_frame))
+				return false;
+			if (!state_->actorAdmissions_.contains(a_actorFormId) &&
+				state_->actorAdmissions_.size() >= CharacterPolicy::kMaximumObservationsPerFrame) {
+				// Fail closed without growing an unbounded draw-time identity cache.
+				Increment(state_->snapshot_.observationCapacityDrops);
+				return false;
+			}
+			auto& admission = state_->actorAdmissions_[a_actorFormId];
+			if (admission.valid && admission.frame == a_frame && admission.identity == a_args.actorIdentity)
+				return admission.admitted;
+			const auto policyKey = BuildSettingsKey(a_args.settings);
+			if (!admission.valid || admission.identity != a_args.actorIdentity ||
+				admission.policyKey != policyKey || admission.width != a_args.outputWidth ||
+				admission.height != a_args.outputHeight ||
+				static_cast<std::uint32_t>(a_frame - admission.frame) > a_args.settings.roiHoldFrames + 1u) {
+				admission = {};
+			}
+			admission.valid = true;
+			admission.identity = a_args.actorIdentity;
+			admission.frame = a_frame;
+			admission.policyKey = policyKey;
+			admission.width = a_args.outputWidth;
+			admission.height = a_args.outputHeight;
+			const auto validBound = [](const CharacterActorBound& a_bound) {
+				return std::isfinite(a_bound.centerX) && std::isfinite(a_bound.centerY) &&
+				       std::isfinite(a_bound.centerZ) && std::isfinite(a_bound.radius) && a_bound.radius > 0.0f;
+			};
+			const auto projectBound = [&](const CharacterActorBound& a_bound, bool& a_uncertain) {
+				if (!validBound(a_bound) || !a_args.outputWidth || !a_args.outputHeight) {
+					a_uncertain = true;
+					return 0u;
+				}
+				const State::Observation sphere{
+					.center = { a_bound.centerX, a_bound.centerY, a_bound.centerZ },
+					.radius = a_bound.radius,
+				};
+				std::uint32_t pixelSize = 0;
+				{
+					CharacterRect projected{};
+					const auto projection = state_->ProjectSphere(sphere, Util::GetEyePosition(),
+						globals::game::frameBufferCached.GetCameraViewProjUnjittered().Transpose(),
+						a_args.outputWidth, a_args.outputHeight, projected);
+					a_uncertain = a_uncertain || projection == CharacterProjectionResult::Uncertain;
+					if (projected.IsValid()) {
+						pixelSize = std::max(pixelSize, std::max(
+															projected.maxX - projected.minX, projected.maxY - projected.minY));
+					}
+				}
+				return pixelSize;
+			};
+			bool uncertain = false;
+			const CharacterActorBound* detailBound = &a_args.faceBound;
+			admission.facePixelSize = validBound(*detailBound) ? projectBound(*detailBound, uncertain) : 0u;
+			admission.hasFaceAnchor = admission.facePixelSize > 0u && validBound(a_args.faceBound);
+			if (!admission.hasFaceAnchor && !uncertain) {
+				// A torso/hair can remain visible with its face outside the view.
+				// The actor bound is deliberately conservative in that case.
+				detailBound = &a_args.actorBound;
+				admission.facePixelSize = projectBound(*detailBound, uncertain);
+			}
+			admission.distanceMeters = 0.0f;
+			if (validBound(*detailBound)) {
+				const auto view = Util::GetEyePosition();
+				const float dx = detailBound->centerX - view.x;
+				const float dy = detailBound->centerY - view.y;
+				const float dz = detailBound->centerZ - view.z;
+				admission.distanceMeters = Util::Units::GameUnitsToMeters(std::max(
+					0.0f, std::sqrt(dx * dx + dy * dy + dz * dz) - detailBound->radius));
+				if (!std::isfinite(admission.distanceMeters)) {
+					admission.distanceMeters = 0.0f;
+					uncertain = true;
+				}
+			}
+			admission.admitted = ResolveCharacterActorAdmission(a_frame, admission.facePixelSize,
+				admission.distanceMeters, uncertain, a_args.settings.minimumFacePixelSize,
+				a_args.settings.roiHoldFrames, a_args.settings.adaptiveRoiSelection, admission.history);
+			return admission.admitted;
+		} catch (...) {
+			return false;
+		}
+	}
+
+	bool CharacterRendering::ObserveGeometry(
+		std::uint32_t a_frame,
+		std::uint32_t a_actorFormId,
+		std::uintptr_t a_geometryIdentity,
+		CharacterCategory a_category,
+		float a_centerX,
+		float a_centerY,
+		float a_centerZ,
+		float a_radius) noexcept
+	{
+		if (!state_ || !a_actorFormId || !a_geometryIdentity ||
+			a_category == CharacterCategory::None ||
+			!std::isfinite(a_centerX) || !std::isfinite(a_centerY) ||
+			!std::isfinite(a_centerZ) || !std::isfinite(a_radius) || a_radius <= 0.0f) {
+			return false;
+		}
+		try {
+			std::scoped_lock lock(state_->mutex_);
+			if (!state_->BeginObservationFrame(a_frame))
+				return false;
+			const auto admission = state_->actorAdmissions_.find(a_actorFormId);
+			if (admission == state_->actorAdmissions_.end() ||
+				admission->second.frame != a_frame || !admission->second.admitted)
+				return false;
+			if (state_->observationKeys_.contains(a_geometryIdentity))
+				return true;
+			if (state_->observations_.size() >=
+				CharacterPolicy::kMaximumObservationsPerFrame) {
+				Increment(state_->snapshot_.observationCapacityDrops);
+				state_->unboundedCategoryMask_ |=
+					CharacterPolicy::CategoryBit(a_category);
+				// Preserve the exact authored semantic ID. The missing projection is
+				// represented as uncertainty and forces a conservative full-view ROI.
+				return true;
+			}
+			state_->observationKeys_.insert(a_geometryIdentity);
+			state_->observations_.push_back({
+				.actorFormId = a_actorFormId,
+				.geometryIdentity = a_geometryIdentity,
+				.category = a_category,
+				.center = { a_centerX, a_centerY, a_centerZ },
+				.radius = a_radius,
+			});
+			state_->InvalidateProjectionCache();
+			Increment(state_->snapshot_.observations);
+			Increment(state_->snapshot_.currentObservations);
+			const auto categoryIndex = static_cast<std::size_t>(a_category) - 1u;
+			if (categoryIndex <
+				state_->snapshot_.currentCategoryObservations.size()) {
+				Increment(state_->snapshot_.currentCategoryObservations[categoryIndex]);
+			}
+			return true;
+		} catch (...) {
+			// Render-hook observation must not affect the engine draw.
+			return false;
+		}
+	}
+
+	void CharacterRendering::ObserveClassificationRejection(
+		std::uint32_t a_frame,
+		CharacterClassificationRejection a_reason) noexcept
+	{
+		if (!state_ || a_reason >= CharacterClassificationRejection::Count)
+			return;
+		try {
+			const auto index = static_cast<std::size_t>(a_reason);
+			state_->RecordClassificationRejection(a_frame, index);
+		} catch (...) {
+			// Classification diagnostics must not affect the engine draw.
+		}
+	}
+
+	bool CharacterRendering::CaptureAuthoredCategories(
+		ID3D11Device* a_device,
+		ID3D11DeviceContext* a_context,
+		ID3D11Texture2D* a_categorySource,
+		ID3D11ShaderResourceView* a_depthSource,
+		std::uint32_t a_sourceWidth,
+		std::uint32_t a_sourceHeight,
+		std::uint32_t a_frame,
+		std::uint32_t a_enabledCategoryMask,
+		float a_jitterX,
+		float a_jitterY) noexcept
+	{
+		if (!state_)
+			return false;
+		try {
+			std::scoped_lock lock(state_->mutex_);
+			Increment(state_->snapshot_.categoryCaptureAttempts);
+			const auto fail = [&](std::string a_detail) {
+				Increment(state_->snapshot_.categoryCaptureFailures);
+				state_->InvalidateCaptureMetadata();
+				state_->InvalidatePreparedMasks();
+				state_->snapshot_.status = "failed";
+				state_->snapshot_.detail = std::move(a_detail);
+				return false;
+			};
+			if (!a_device || !a_context || !a_categorySource || !a_depthSource ||
+				!a_sourceWidth || !a_sourceHeight ||
+				a_frame == std::numeric_limits<std::uint32_t>::max() ||
+				(a_enabledCategoryMask & ~0xEu) != 0 ||
+				!std::isfinite(a_jitterX) || !std::isfinite(a_jitterY) ||
+				a_context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) {
+				return fail("character category capture arguments are invalid");
+			}
+			ComPtr<ID3D11Device> contextDevice;
+			a_context->GetDevice(&contextDevice);
+			ComPtr<ID3D11Device> categoryDevice;
+			a_categorySource->GetDevice(&categoryDevice);
+			ComPtr<ID3D11Resource> depthResource;
+			a_depthSource->GetResource(&depthResource);
+			ComPtr<ID3D11Texture2D> depthTexture;
+			ComPtr<ID3D11Device> depthDevice;
+			if (!depthResource || FAILED(depthResource.As(&depthTexture)) ||
+				!depthTexture) {
+				return fail("character depth capture source is not a Texture2D");
+			}
+			depthTexture->GetDevice(&depthDevice);
+			if (!Util::HaveSameCOMIdentity(a_device, contextDevice.Get()) ||
+				!Util::HaveSameCOMIdentity(a_device, categoryDevice.Get()) ||
+				!Util::HaveSameCOMIdentity(a_device, depthDevice.Get())) {
+				return fail("character category capture resources use different devices");
+			}
+
+			state_->AdoptDevice(a_device);
+			// Expire frame contents while retaining independent region history.
+			state_->InvalidatePreparedMasks(true);
+			if (!state_->BeginObservationFrame(a_frame))
+				return fail("character category capture arrived after a newer observation frame");
+			const bool hasSelectedObservation =
+				(state_->unboundedCategoryMask_ & a_enabledCategoryMask) != 0 ||
+				std::ranges::any_of(
+					state_->observations_,
+					[&](const State::Observation& a_observation) {
+						return (a_enabledCategoryMask &
+								   CharacterPolicy::CategoryBit(a_observation.category)) != 0;
+					});
+			if (!hasSelectedObservation) {
+				// A logical empty capture lets the rendering path bypass Feature 18
+				// without copying active-frame G-buffer data every empty frame.
+				state_->capturedFrame_ = a_frame;
+				state_->capturedCategoriesEmpty_ = true;
+				state_->capturedSourceRect_ = {};
+				state_->capturedWidth_ = a_sourceWidth;
+				state_->capturedHeight_ = a_sourceHeight;
+				state_->capturedEnabledCategoryMask_ = a_enabledCategoryMask;
+				state_->capturedJitterX_ = a_jitterX;
+				state_->capturedJitterY_ = a_jitterY;
+				state_->snapshot_.categoryCaptureFrame = a_frame;
+				state_->snapshot_.categoryCaptureReady = true;
+				state_->snapshot_.categoryCaptureEmpty = true;
+				state_->snapshot_.status = "ready_empty";
+				state_->snapshot_.detail =
+					"no enabled NPC character materials were observed; semantic snapshot bypassed";
+				Increment(state_->snapshot_.categoryCaptureSuccesses);
+				Increment(state_->snapshot_.categoryCaptureEmptyBypasses);
+				return true;
+			}
+
+			D3D11_TEXTURE2D_DESC categoryDesc{};
+			a_categorySource->GetDesc(&categoryDesc);
+			D3D11_TEXTURE2D_DESC depthDesc{};
+			depthTexture->GetDesc(&depthDesc);
+			D3D11_SHADER_RESOURCE_VIEW_DESC depthViewDesc{};
+			a_depthSource->GetDesc(&depthViewDesc);
+			const auto activeWidth =
+				static_cast<std::uint64_t>(a_sourceWidth);
+			if (categoryDesc.Format != CharacterCategoryAuthoring::kTargetFormat ||
+				categoryDesc.MipLevels != 1 || categoryDesc.ArraySize != 1 ||
+				categoryDesc.SampleDesc.Count != 1 ||
+				categoryDesc.Usage != D3D11_USAGE_DEFAULT ||
+				(categoryDesc.BindFlags & D3D11_BIND_RENDER_TARGET) == 0 ||
+				(categoryDesc.BindFlags & D3D11_BIND_SHADER_RESOURCE) == 0) {
+				return fail("character category source has an invalid layout");
+			}
+			if (depthDesc.Width != categoryDesc.Width ||
+				depthDesc.Height != categoryDesc.Height ||
+				depthDesc.MipLevels != 1 || depthDesc.ArraySize != 1 ||
+				depthDesc.SampleDesc.Count != 1 ||
+				depthDesc.Usage != D3D11_USAGE_DEFAULT ||
+				depthViewDesc.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D ||
+				depthViewDesc.Texture2D.MostDetailedMip != 0 ||
+				depthViewDesc.Texture2D.MipLevels != 1 ||
+				!IsSupportedDepthViewFormat(depthViewDesc.Format)) {
+				return fail("character depth capture source has an invalid layout");
+			}
+			if (activeWidth > categoryDesc.Width ||
+				a_sourceHeight > categoryDesc.Height) {
+				return fail(std::format(
+					"character capture extent {}x{} exceeds source {}x{}",
+					activeWidth, a_sourceHeight,
+					categoryDesc.Width, categoryDesc.Height));
+			}
+			D3D11_TEXTURE2D_DESC categoryCaptureDesc = categoryDesc;
+			categoryCaptureDesc.Width = static_cast<UINT>(activeWidth);
+			categoryCaptureDesc.Height = a_sourceHeight;
+			D3D11_TEXTURE2D_DESC depthCaptureDesc = depthDesc;
+			depthCaptureDesc.Width = static_cast<UINT>(activeWidth);
+			depthCaptureDesc.Height = a_sourceHeight;
+			if (!state_->EnsureCategoryCapture(a_device, categoryCaptureDesc)) {
+				return fail("character category capture texture could not be created");
+			}
+			if (!state_->EnsureDepthCapture(a_device, depthCaptureDesc)) {
+				return fail("character depth capture texture could not be created");
+			}
+			if (!state_->EnsureCaptureShader(a_device, a_categorySource))
+				return fail("character snapshot shader/resources could not be created");
+
+			// Capture only the current projected character area, not the much larger
+			// temporally retained provider ROI. Unknown projections still capture
+			// the full view. Every shader read checks this current-frame
+			// validity rectangle; untouched texels are never stale-mask evidence.
+			ComputeSubrect sourceRect{};
+			{
+				const auto cameraPosition = Util::GetEyePosition();
+				const auto cameraMatrix = globals::game::frameBufferCached
+				                              .GetCameraViewProjUnjittered()
+				                              .Transpose();
+				if ((state_->unboundedCategoryMask_ & a_enabledCategoryMask) != 0) {
+					sourceRect = BuildFullComputeSubrect(a_sourceWidth, a_sourceHeight);
+				}
+				for (const auto& observation : state_->observations_) {
+					if ((a_enabledCategoryMask & CharacterPolicy::CategoryBit(observation.category)) == 0)
+						continue;
+					CharacterRect rect{};
+					const auto projection = state_->ProjectSphere(observation, cameraPosition,
+						cameraMatrix, a_sourceWidth, a_sourceHeight, rect);
+					if (projection == CharacterProjectionResult::Offscreen)
+						continue;
+					if (!rect.IsValid()) {
+						sourceRect = BuildFullComputeSubrect(a_sourceWidth, a_sourceHeight);
+						break;
+					}
+					sourceRect = UnionCharacterWorkRects(sourceRect,
+						{ rect.minX, rect.minY, rect.maxX - rect.minX, rect.maxY - rect.minY });
+				}
+				// Cover render jitter, four-input-pixel feather and coverage taps.
+				const auto guard = static_cast<std::uint32_t>(std::min<float>(
+					static_cast<float>(std::max(a_sourceWidth, a_sourceHeight)),
+					std::ceil(std::max(std::abs(a_jitterX), std::abs(a_jitterY))) + 6.0f));
+				sourceRect = ExpandCharacterWorkRect(sourceRect,
+					a_sourceWidth, a_sourceHeight, guard);
+			}
+			OutputMergerStateGuard outputMerger(a_context);
+			if (!outputMerger.Captured())
+				return fail("character category capture could not preserve output state");
+			{
+				ComputeStateGuard computeState(a_context);
+				if (!computeState.Captured())
+					return fail("character category capture could not preserve compute state");
+				CS_PROFILE_SCOPE("Upscaling::DLSS5CharacterCategoryCapture");
+				std::array<ID3D11ShaderResourceView*, 2> srvs{
+					state_->captureSourceCategoriesSrv_.Get(), a_depthSource
+				};
+				std::array<ID3D11UnorderedAccessView*, 2> uavs{
+					state_->capturedCategoriesUav_.Get(), state_->capturedDepthUav_.Get()
+				};
+				ID3D11Buffer* captureCB = state_->captureConstants_.Get();
+				a_context->CSSetShader(state_->captureShader_.Get(), nullptr, 0);
+				a_context->CSSetShaderResources(0, static_cast<UINT>(srvs.size()), srvs.data());
+				a_context->CSSetUnorderedAccessViews(0, static_cast<UINT>(uavs.size()), uavs.data(), nullptr);
+				a_context->CSSetConstantBuffers(0, 1, &captureCB);
+				if (sourceRect.IsValid()) {
+					const auto& rect = sourceRect;
+					const std::array<std::uint32_t, 4> constants{
+						rect.baseX, rect.baseY, rect.width, rect.height
+					};
+					a_context->UpdateSubresource(captureCB, 0, nullptr, constants.data(), 0, 0);
+					a_context->Dispatch((rect.width + 7u) / 8u, (rect.height + 7u) / 8u, 1);
+				}
+			}
+			state_->capturedSourceRect_ = sourceRect;
+			state_->capturedFrame_ = a_frame;
+			state_->capturedCategoriesEmpty_ = false;
+			state_->capturedWidth_ = a_sourceWidth;
+			state_->capturedHeight_ = a_sourceHeight;
+			state_->capturedEnabledCategoryMask_ = a_enabledCategoryMask;
+			state_->capturedJitterX_ = a_jitterX;
+			state_->capturedJitterY_ = a_jitterY;
+			state_->snapshot_.categoryCaptureFrame = a_frame;
+			state_->snapshot_.categoryCaptureReady = true;
+			state_->snapshot_.categoryCaptureEmpty = false;
+			Increment(state_->snapshot_.categoryCaptureSuccesses);
+			state_->snapshot_.status = "captured";
+			state_->snapshot_.detail =
+				"same-frame post-terrain active-frame categories, synchronized pre-decal depth, and render jitter captured";
+			return true;
+		} catch (const std::exception& exception) {
+			std::scoped_lock lock(state_->mutex_);
+			Increment(state_->snapshot_.categoryCaptureFailures);
+			state_->InvalidateCaptureMetadata();
+			state_->InvalidatePreparedMasks();
+			state_->snapshot_.status = "failed";
+			state_->snapshot_.detail = exception.what();
+			return false;
+		} catch (...) {
+			std::scoped_lock lock(state_->mutex_);
+			Increment(state_->snapshot_.categoryCaptureFailures);
+			state_->InvalidateCaptureMetadata();
+			state_->InvalidatePreparedMasks();
+			state_->snapshot_.status = "failed";
+			state_->snapshot_.detail = "unknown character category capture exception";
+			return false;
+		}
+	}
+
+	bool CharacterRendering::PrepareMask(
+		const CharacterMaskPrepareArgs& a_args,
+		CharacterMaskPrepareResult& a_result) noexcept
+	{
+		a_result = {};
+		if (!state_)
+			return false;
+		const auto invalidFrame =
+			std::numeric_limits<std::uint32_t>::max();
+		const bool retainedSource =
+			a_args.frameId != invalidFrame &&
+			a_args.sourceWorldFrame != invalidFrame &&
+			a_args.sourceWorldFrame < a_args.frameId;
+		try {
+			std::scoped_lock lock(state_->mutex_);
+			Increment(state_->snapshot_.preparationAttempts);
+			state_->snapshot_.enabled = a_args.settings.enabled;
+			const std::uint32_t sourceWorldFrame = a_args.sourceWorldFrame;
+			const auto fail = [&](std::string a_detail) {
+				Increment(state_->snapshot_.preparationFailures);
+				// A retained request is only a lookup against the immutable source
+				// mask.  Its failure must not destroy that source mask, because a
+				// later compositor cycle may still satisfy the exact contract.
+				if (!retainedSource) {
+					state_->InvalidatePreparedSlot(
+						a_args.featureSlot, a_args.frameId);
+				}
+				state_->snapshot_.status =
+					retainedSource ? "retained-source-miss" : "failed";
+				state_->snapshot_.detail = std::move(a_detail);
+				return false;
+			};
+
+			if (!a_args.settings.enabled)
+				return fail("character mask preparation was requested while disabled");
+			if (!a_args.device || !a_args.context ||
+				a_args.featureSlot >= state_->slots_.size() ||
+				a_args.frameId == invalidFrame || sourceWorldFrame == invalidFrame ||
+				sourceWorldFrame > a_args.frameId ||
+				a_args.generation == 0 ||
+				!a_args.outputWidth || !a_args.outputHeight ||
+				!a_args.viewportCrop.MatchesEvaluationExtents(
+					a_args.viewportCrop.input.Width(),
+					a_args.viewportCrop.input.Height(),
+					a_args.outputWidth,
+					a_args.outputHeight) ||
+				!IsValidCharacterSettings(a_args.settings)) {
+				return fail("character mask preparation arguments are invalid");
+			}
+			if (a_args.context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
+				return fail("character masks require the immediate D3D11 context");
+			ComPtr<ID3D11Device> contextDevice;
+			a_args.context->GetDevice(&contextDevice);
+			if (!Util::HaveSameCOMIdentity(a_args.device, contextDevice.Get()))
+				return fail("character mask context belongs to another D3D11 device");
+
+			state_->AdoptDevice(a_args.device);
+			state_->PollReadbacks(a_args.context, a_args.frameId);
+			const bool needsAuthoredCategories = UsesAuthoredMask(a_args.settings.maskTestMode) ||
+			                                     a_args.settings.maskTestMode == CharacterMaskTestMode::InvertAuthored;
+			if (needsAuthoredCategories &&
+				(GetEnabledCharacterCategoryMask(a_args.settings) & ~state_->capturedEnabledCategoryMask_) != 0) {
+				return fail("character category selection expanded beyond the captured source policy");
+			}
+			const bool logicalEmptyCapture = state_->capturedCategoriesEmpty_;
+			if (state_->capturedFrame_ != sourceWorldFrame ||
+				state_->capturedWidth_ != a_args.viewportCrop.fullInput.width ||
+				state_->capturedHeight_ != a_args.viewportCrop.fullInput.height ||
+				(!logicalEmptyCapture &&
+					(!state_->capturedCategoriesSrv_ ||
+						!state_->capturedDepthSrv_))) {
+				return fail("no correlated character capture with matching logical frame dimensions is available");
+			}
+
+			ComPtr<ID3D11Texture2D> sourceTexture;
+			D3D11_TEXTURE2D_DESC sourceDesc{};
+			void* sourceIdentity = nullptr;
+			std::uint32_t sourceWidth = 0;
+			std::uintptr_t currentDepthIdentity = 0;
+			std::uintptr_t authoredDepthIdentity = 0;
+			if (!logicalEmptyCapture) {
+				std::string sourceError;
+				if (!state_->ValidateTexture(
+						state_->capturedCategoriesSrv_.Get(),
+						a_args.device,
+						CharacterCategoryAuthoring::kTargetFormat,
+						sourceTexture,
+						sourceDesc,
+						sourceIdentity,
+						sourceError)) {
+					return fail(std::move(sourceError));
+				}
+				// The capture owns an exact active-frame allocation, so its stored
+				// logical stride remains authoritative for the view.
+				sourceWidth = state_->capturedWidth_;
+				if (!sourceWidth ||
+					static_cast<std::uint64_t>(sourceWidth) != sourceDesc.Width ||
+					state_->capturedHeight_ != sourceDesc.Height) {
+					return fail(std::format(
+						"character-mask capture {}x{} does not equal logical frame input {}x{}",
+						sourceDesc.Width,
+						sourceDesc.Height,
+						a_args.viewportCrop.fullInput.width,
+						a_args.viewportCrop.fullInput.height));
+				}
+				if (a_args.viewportCrop.input.right > sourceWidth ||
+					a_args.viewportCrop.input.bottom > sourceDesc.Height) {
+					return fail(std::format(
+						"character-mask crop ({},{})-({},{}) exceeds view-local source {}x{}",
+						a_args.viewportCrop.input.left,
+						a_args.viewportCrop.input.top,
+						a_args.viewportCrop.input.right,
+						a_args.viewportCrop.input.bottom,
+						sourceWidth,
+						sourceDesc.Height));
+				}
+				ComPtr<ID3D11Texture2D> authoredDepthTexture;
+				std::string authoredDepthError;
+				if (!state_->ValidateDepthTexture(
+						state_->capturedDepthSrv_.Get(), a_args.device,
+						sourceDesc.Width, sourceDesc.Height,
+						CharacterDepthExtentPolicy::ExactCapture,
+						authoredDepthTexture, authoredDepthIdentity,
+						authoredDepthError)) {
+					return fail(std::move(authoredDepthError));
+				}
+				ComPtr<ID3D11Texture2D> currentDepthTexture;
+				std::string depthError;
+				if (!state_->ValidateDepthTexture(
+						a_args.depthGuide, a_args.device,
+						a_args.viewportCrop.input.Width(),
+						a_args.viewportCrop.input.Height(),
+						CharacterDepthExtentPolicy::ContainsActiveInput,
+						currentDepthTexture, currentDepthIdentity,
+						depthError)) {
+					return fail(std::move(depthError));
+				}
+			}
+
+			auto& slot = state_->slots_[a_args.featureSlot];
+			const State::PrepareKey key{
+				.sourceWorldFrame = sourceWorldFrame,
+				.generation = a_args.generation,
+				.width = a_args.outputWidth,
+				.height = a_args.outputHeight,
+				.settings = BuildSettingsKey(a_args.settings),
+				.crop = a_args.viewportCrop,
+				.authoredMaskIdentity = sourceIdentity,
+				.authoredDepthIdentity = authoredDepthIdentity,
+				.currentDepthIdentity = currentDepthIdentity,
+				.captureJitterX = state_->capturedJitterX_,
+				.captureJitterY = state_->capturedJitterY_,
+			};
+			if (retainedSource) {
+				// Retained menu frames reuse the exact mask/ROI that was produced
+				// alongside the frozen world inputs. Reprojecting with a newer camera
+				// pose would move the mask over old scene color.
+				if (!slot.prepared || slot.contentSerial == 0 ||
+					!slot.mask || !slot.maskSrv || !slot.maskUav ||
+					slot.width != a_args.outputWidth ||
+					slot.height != a_args.outputHeight) {
+					return fail("retained character source has no prepared mask");
+				}
+				if (slot.prepareKey != key) {
+					return fail(
+						"retained character mask no longer matches the source-frame contract");
+				}
+				slot.zeroCoverageBypassResolved = false;
+				slot.zeroCoverageBypassed = false;
+				slot.feature18Disposition =
+					CharacterFeature18Disposition::Unresolved;
+				auto& view = state_->snapshot_.view;
+				view.frame = a_args.frameId;
+				view.sourceWorldFrame = sourceWorldFrame;
+				view.contentSerial = slot.contentSerial;
+				view.featureSlot = a_args.featureSlot;
+				view.evaluationWidth = a_args.outputWidth;
+				view.evaluationHeight = a_args.outputHeight;
+				view.computeSubrect = slot.computeSubrect;
+				view.computeRegions = slot.computeRegions;
+				view.multiRoiReason = slot.multiRoiReason;
+				view.multiRoiPixels = slot.computeRegions.count == 2 ?
+				                          slot.computeRegions.regions[0].Area() + slot.computeRegions.regions[1].Area() :
+				                          slot.computeSubrect.Area();
+				const auto evaluationPixels =
+					static_cast<std::uint64_t>(a_args.outputWidth) *
+					a_args.outputHeight;
+				view.computeSubrectPixels = slot.computeSubrect.Area();
+				view.computeSubrectCoveragePercent = evaluationPixels ?
+				                                         100.0f * static_cast<float>(view.computeSubrectPixels) /
+				                                             static_cast<float>(evaluationPixels) :
+				                                         0.0f;
+				view.maskPixels = slot.maskPixels;
+				view.authoredCategoryPixels = slot.authoredCategoryPixels;
+				view.visibleCategoryPixels = slot.visibleCategoryPixels;
+				view.visibilityRejectedPixels = slot.visibilityRejectedPixels;
+				view.distanceRejectedPixels = slot.distanceRejectedPixels;
+				view.maskCoveragePercent = slot.maskCoveragePercent;
+				view.maskCoverageFrame = slot.maskCoverageFrame;
+				view.maskCoverageFeatureSlot = slot.maskCoverageFeatureSlot;
+				view.maskCoverageWidth = slot.maskCoverageWidth;
+				view.maskCoverageHeight = slot.maskCoverageHeight;
+				view.maskCoverageContentSerial =
+					slot.maskCoverageContentSerial;
+				view.maskCoverageReady = slot.maskCoverageReady;
+				view.maskCoverageMatchesCurrentPolicy = view.maskCoverageReady &&
+				                                        slot.maskCoverageContentSerial == slot.contentSerial;
+				view.zeroCoverageBypassRequested = !slot.requiresEvaluation;
+				view.zeroCoverageBypassResolved = false;
+				view.zeroCoverageBypassed = false;
+				view.feature18Disposition =
+					CharacterFeature18Disposition::Unresolved;
+				view.feature18EvaluationSucceeded = false;
+				view.zeroCoverageCpuProven = slot.zeroCoverageCpuProven;
+				view.maskPrepared = true;
+				view.evaluationRequired = slot.requiresEvaluation;
+				state_->lastSlot_ = a_args.featureSlot;
+				state_->RecordPreparedFrame(
+					a_args.frameId, sourceWorldFrame, a_args.generation,
+					a_args.featureSlot, slot.contentSerial,
+					a_args.outputWidth, a_args.outputHeight,
+					slot.requiresEvaluation, slot.computeRegions.count);
+			} else if (!state_->EnsureSlot(
+						   slot, a_args.device, a_args.featureSlot,
+						   a_args.outputWidth, a_args.outputHeight)) {
+				return fail(
+					"DLSS5 character-mask GPU resources could not be created");
+			} else if (!slot.prepared || slot.contentSerial == 0 ||
+					   slot.prepareKey != key) {
+				auto sourceArgs = a_args;
+				sourceArgs.frameId = sourceWorldFrame;
+				auto plan = state_->BuildPlan(sourceArgs);
+				const bool authoredMode =
+					UsesAuthoredMask(a_args.settings.maskTestMode);
+				const bool forcedEmpty =
+					a_args.settings.maskTestMode ==
+					CharacterMaskTestMode::ForceZero;
+				const bool fullOutputMask =
+					a_args.settings.maskTestMode ==
+						CharacterMaskTestMode::ForceOne ||
+					a_args.settings.maskTestMode ==
+						CharacterMaskTestMode::ForceHalf ||
+					a_args.settings.maskTestMode ==
+						CharacterMaskTestMode::InvertAuthored;
+				if (authoredMode && !logicalEmptyCapture &&
+					plan.projectionUncertain) {
+					// Projection is an optimization boundary, not semantic proof. Fall
+					// back to an exact full-view semantic resolve when actor bounds are
+					// unavailable so authored face/skin pixels cannot silently vanish.
+					plan.regions = { {
+						.minX = 0,
+						.minY = 0,
+						.maxX = a_args.outputWidth,
+						.maxY = a_args.outputHeight,
+					} };
+					plan.fullViewEligibilityFallback = true;
+					plan.eligibilitySignature = HashCombine(
+						plan.eligibilitySignature, 0x46554C4C455945ull);
+				}
+				if (fullOutputMask) {
+					plan.regions = { {
+						.minX = 0,
+						.minY = 0,
+						.maxX = a_args.outputWidth,
+						.maxY = a_args.outputHeight,
+					} };
+					plan.fullViewEligibilityFallback = true;
+					plan.eligibilitySignature = HashCombine(
+						plan.eligibilitySignature, 0x46554C4C4D41534Bull);
+				}
+				const auto diagnosticKey = logicalEmptyCapture ?
+				                               0u :
+				                               state_->BuildDiagnosticKey(
+												   sourceArgs, plan, sourceWidth,
+												   sourceDesc.Height);
+				const bool cpuProvenEmpty = forcedEmpty ||
+				                            (authoredMode &&
+												(logicalEmptyCapture || plan.regions.empty()));
+				const bool computeSubrectContractChanged =
+					!slot.computeSubrectContractValid ||
+					slot.computeSubrectGeneration != a_args.generation ||
+					slot.computeSubrectCrop != a_args.viewportCrop;
+				if (computeSubrectContractChanged) {
+					slot.stableComputeSubrect = {};
+					slot.stableMultiRoi = {};
+					slot.computeSubrectGeneration = a_args.generation;
+					slot.computeSubrectCrop = a_args.viewportCrop;
+					slot.computeSubrectContractValid = true;
+				}
+				if (slot.multiRoiPolicyKey != key.settings) {
+					slot.stableMultiRoi = {};
+					slot.multiRoiPolicyKey = key.settings;
+				}
+				const auto requiredComputeSubrect = cpuProvenEmpty ?
+				                                        ComputeSubrect{} :
+				                                    fullOutputMask ?
+				                                        BuildFullComputeSubrect(
+															a_args.outputWidth,
+															a_args.outputHeight) :
+				                                        BuildCharacterComputeSubrect(
+															plan.regions,
+															a_args.outputWidth,
+															a_args.outputHeight);
+				slot.maskWorkSubrect = requiredComputeSubrect;
+				if (cpuProvenEmpty || fullOutputMask) {
+					// Empty authored masks already break provider history. Do not
+					// retain a potentially large stale ROI for the next character.
+					// Diagnostic full-view modes must not contaminate authored ROI state.
+					slot.stableComputeSubrect = {};
+					slot.computeSubrect = requiredComputeSubrect;
+				} else {
+					slot.computeSubrect = ResolveStableCharacterComputeSubrect(
+						requiredComputeSubrect,
+						a_args.outputWidth,
+						a_args.outputHeight,
+						slot.stableComputeSubrect);
+				}
+				slot.computeRegions = {};
+				slot.multiRoiReason = CharacterMultiRoiReason::Disabled;
+				if (a_args.settings.multiRoi) {
+					if (!authoredMode || a_args.settings.debugView != CharacterDebugView::Off) {
+						slot.multiRoiReason = CharacterMultiRoiReason::DiagnosticMode;
+					} else if (cpuProvenEmpty) {
+						slot.multiRoiReason = CharacterMultiRoiReason::TooFewActors;
+					} else if (plan.fullViewEligibilityFallback) {
+						slot.multiRoiReason = CharacterMultiRoiReason::UncertainCoverage;
+					} else {
+						slot.computeRegions = ResolveCharacterMultiRoi(
+							plan.actorRegions, plan.regions, a_args.outputWidth, a_args.outputHeight,
+							sourceWorldFrame, slot.stableMultiRoi, slot.multiRoiReason);
+						if (slot.computeRegions.count == 2) {
+							// Composition still receives the enclosure, but inference uses
+							// the separate rectangles. Never expose stale pixels in gaps.
+							slot.computeSubrect = UnionCharacterComputeSubrect(
+								slot.computeRegions.regions[0], slot.computeRegions.regions[1]);
+						}
+					}
+				}
+				if (slot.computeRegions.count == 0)
+					slot.stableMultiRoi = {};
+				if (!cpuProvenEmpty &&
+					!slot.computeSubrect.Fits(
+						a_args.outputWidth, a_args.outputHeight)) {
+					return fail("character compute ROI is invalid");
+				}
+				slot.contentSerial = state_->AllocatePreparedContentSerial();
+				slot.requiresEvaluation = !cpuProvenEmpty;
+				slot.zeroCoverageBypassResolved = false;
+				slot.zeroCoverageBypassed = false;
+				slot.feature18Disposition =
+					CharacterFeature18Disposition::Unresolved;
+				slot.zeroCoverageCpuProven = false;
+				if (cpuProvenEmpty || logicalEmptyCapture) {
+					float clearValue = 0.0f;
+					switch (a_args.settings.maskTestMode) {
+					case CharacterMaskTestMode::ForceOne:
+					case CharacterMaskTestMode::InvertAuthored:
+						clearValue = 1.0f;
+						break;
+					case CharacterMaskTestMode::ForceHalf:
+						clearValue = 0.5f;
+						break;
+					default:
+						break;
+					}
+					state_->ClearMask(
+						slot, a_args.context, sourceWorldFrame,
+						a_args.featureSlot, a_args.outputWidth,
+						a_args.outputHeight, clearValue);
+				} else {
+					if (!state_->EnsureShader(a_args.device)) {
+						return fail(
+							"DLSS5 character-mask compute shader could not be created");
+					}
+					if (!state_->Dispatch(
+							sourceArgs,
+							state_->capturedCategoriesSrv_.Get(),
+							state_->capturedDepthSrv_.Get(),
+							slot, plan,
+							sourceWidth, sourceDesc.Height)) {
+						return fail("DLSS5 character-mask dispatch failed");
+					}
+				}
+				slot.requiresEvaluation = !cpuProvenEmpty;
+				slot.zeroCoverageBypassed = false;
+				slot.zeroCoverageCpuProven = cpuProvenEmpty;
+				if (cpuProvenEmpty)
+					Increment(state_->snapshot_.provenEmptyFeatureBypassRequests);
+				slot.prepareKey = key;
+				slot.prepared = true;
+
+				auto& view = state_->snapshot_.view;
+				view.frame = a_args.frameId;
+				view.sourceWorldFrame = sourceWorldFrame;
+				view.contentSerial = slot.contentSerial;
+				view.featureSlot = a_args.featureSlot;
+				view.evaluationWidth = a_args.outputWidth;
+				view.evaluationHeight = a_args.outputHeight;
+				view.visibleFaces = plan.visibleFaces;
+				view.visibleCharacterRegions = plan.visibleCharacters;
+				view.selectedCharacterRegions = plan.selectedCharacters;
+				view.adaptivelyCulledCharacterRegions =
+					plan.adaptivelyCulledCharacters;
+				view.mergedRegions = static_cast<std::uint32_t>(plan.regions.size());
+				view.regions = plan.regions;
+				view.roiPixels =
+					CharacterRegionPolicy::CoveredArea(plan.regions);
+				const auto evaluationPixels =
+					static_cast<std::uint64_t>(a_args.outputWidth) * a_args.outputHeight;
+				view.computeSubrect = slot.computeSubrect;
+				view.computeRegions = slot.computeRegions;
+				view.multiRoiReason = slot.multiRoiReason;
+				view.multiRoiPixels = slot.computeRegions.count == 2 ?
+				                          slot.computeRegions.regions[0].Area() + slot.computeRegions.regions[1].Area() :
+				                          slot.computeSubrect.Area();
+				view.computeSubrectPixels = slot.computeSubrect.Area();
+				view.computeSubrectCoveragePercent = evaluationPixels ?
+				                                         100.0f * static_cast<float>(view.computeSubrectPixels) /
+				                                             static_cast<float>(evaluationPixels) :
+				                                         0.0f;
+				view.roiCoveragePercent = evaluationPixels ?
+				                              100.0f * static_cast<float>(view.roiPixels) /
+				                                  static_cast<float>(evaluationPixels) :
+				                              0.0f;
+				view.maskPixels = slot.maskPixels;
+				view.authoredCategoryPixels = slot.authoredCategoryPixels;
+				view.visibleCategoryPixels = slot.visibleCategoryPixels;
+				view.visibilityRejectedPixels = slot.visibilityRejectedPixels;
+				view.distanceRejectedPixels = slot.distanceRejectedPixels;
+				view.maskCoveragePercent = slot.maskCoveragePercent;
+				view.maskCoverageFrame = slot.maskCoverageFrame;
+				view.maskCoverageFeatureSlot = slot.maskCoverageFeatureSlot;
+				view.maskCoverageWidth = slot.maskCoverageWidth;
+				view.maskCoverageHeight = slot.maskCoverageHeight;
+				view.maskCoverageContentSerial =
+					slot.maskCoverageContentSerial;
+				view.maskCoverageReady = slot.maskCoverageReady;
+				view.maskCoverageMatchesCurrentPolicy =
+					view.maskCoverageReady &&
+					slot.maskCoverageContentSerial == slot.contentSerial &&
+					slot.maskDiagnosticKey == diagnosticKey;
+				view.zeroCoverageBypassRequested =
+					!slot.requiresEvaluation;
+				view.zeroCoverageBypassResolved = false;
+				view.zeroCoverageBypassed = slot.zeroCoverageBypassed;
+				view.feature18Disposition =
+					CharacterFeature18Disposition::Unresolved;
+				view.feature18EvaluationSucceeded = false;
+				view.zeroCoverageCpuProven = slot.zeroCoverageCpuProven;
+				view.fullViewEligibilityFallback =
+					plan.fullViewEligibilityFallback;
+				view.depthCoordinatesValid = !logicalEmptyCapture;
+				view.authoredWidth = sourceDesc.Width;
+				view.authoredDepthHeight = sourceDesc.Height;
+				view.authoredBaseX = 0;
+				view.currentDepthWidth = a_args.viewportCrop.input.Width();
+				view.currentDepthHeight = a_args.viewportCrop.input.Height();
+				view.inputCropLeft = a_args.viewportCrop.input.left;
+				view.inputCropTop = a_args.viewportCrop.input.top;
+				view.inputCropWidth = a_args.viewportCrop.input.Width();
+				view.inputCropHeight = a_args.viewportCrop.input.Height();
+				view.outputCropLeft = a_args.viewportCrop.output.left;
+				view.outputCropTop = a_args.viewportCrop.output.top;
+				view.outputCropWidth = a_args.viewportCrop.output.Width();
+				view.outputCropHeight = a_args.viewportCrop.output.Height();
+				view.capturedJitterX = state_->capturedJitterX_;
+				view.capturedJitterY = state_->capturedJitterY_;
+				view.maskPrepared = true;
+				view.evaluationRequired = slot.requiresEvaluation;
+				state_->lastSlot_ = a_args.featureSlot;
+				state_->RecordPreparedFrame(
+					a_args.frameId, sourceWorldFrame, a_args.generation,
+					a_args.featureSlot, slot.contentSerial,
+					a_args.outputWidth, a_args.outputHeight,
+					slot.requiresEvaluation, slot.computeRegions.count);
+			}
+
+			a_result.prepared = true;
+			a_result.requiresEvaluation = slot.requiresEvaluation;
+			a_result.computeSubrect = slot.computeSubrect;
+			a_result.computeRegions = slot.computeRegions;
+			Increment(state_->snapshot_.preparationSuccesses);
+			state_->snapshot_.status = "ready";
+			state_->snapshot_.detail = std::format(
+				"CSX character selection mask prepared for slot {} at {}x{}; evaluation={}; sourceFrame={}; compute ROI=({},{} {}x{}); independent regions={}; inference pixels={}; region decision={}",
+				a_args.featureSlot,
+				a_args.outputWidth,
+				a_args.outputHeight,
+				slot.requiresEvaluation ? "required" : "bypassed-empty",
+				sourceWorldFrame,
+				slot.computeSubrect.baseX,
+				slot.computeSubrect.baseY,
+				slot.computeSubrect.width,
+				slot.computeSubrect.height,
+				slot.requiresEvaluation ? std::max(1u, slot.computeRegions.count) : 0u,
+				slot.computeRegions.count == 2 ?
+					slot.computeRegions.regions[0].Area() + slot.computeRegions.regions[1].Area() :
+					slot.computeSubrect.Area(),
+				GetCharacterMultiRoiReasonName(slot.multiRoiReason));
+			return true;
+		} catch (const std::exception& exception) {
+			std::scoped_lock lock(state_->mutex_);
+			Increment(state_->snapshot_.preparationFailures);
+			if (!retainedSource) {
+				state_->InvalidatePreparedSlot(
+					a_args.featureSlot, a_args.frameId);
+			}
+			state_->snapshot_.status =
+				retainedSource ? "retained-source-miss" : "failed";
+			state_->snapshot_.detail = exception.what();
+			return false;
+		} catch (...) {
+			std::scoped_lock lock(state_->mutex_);
+			Increment(state_->snapshot_.preparationFailures);
+			if (!retainedSource) {
+				state_->InvalidatePreparedSlot(
+					a_args.featureSlot, a_args.frameId);
+			}
+			state_->snapshot_.status =
+				retainedSource ? "retained-source-miss" : "failed";
+			state_->snapshot_.detail = "unknown character-mask preparation exception";
+			return false;
+		}
+	}
+
+	void CharacterRendering::ResolveFeature18Disposition(
+		std::uint32_t a_frameId,
+		std::uint32_t a_sourceWorldFrame,
+		std::uint64_t a_generation,
+		std::uint32_t a_preparedFeatureSlotMask,
+		std::uint32_t a_evaluatedFeatureSlotMask,
+		std::uint32_t a_successfulFeatureSlotMask,
+		std::uint32_t a_bypassedFeatureSlotMask) noexcept
+	{
+		if (!state_ ||
+			a_frameId == std::numeric_limits<std::uint32_t>::max() ||
+			a_sourceWorldFrame == std::numeric_limits<std::uint32_t>::max() ||
+			a_sourceWorldFrame > a_frameId || a_generation == 0)
+			return;
+		try {
+			std::scoped_lock lock(state_->mutex_);
+			const std::uint32_t validSlotMask =
+				(1u << static_cast<std::uint32_t>(state_->slots_.size())) - 1u;
+			CharacterPreparedFrameSnapshot* preparedFrame = nullptr;
+			for (auto& candidate : state_->snapshot_.preparedFrames) {
+				if (candidate.frame == a_frameId) {
+					preparedFrame = &candidate;
+					break;
+				}
+			}
+			if (!preparedFrame)
+				return;
+			const auto preparedMask =
+				a_preparedFeatureSlotMask & validSlotMask &
+				preparedFrame->preparedSlotMask;
+			const auto unresolvedMask =
+				preparedMask & ~preparedFrame->resolutionRecordedSlotMask;
+			const auto evaluatedMask =
+				a_evaluatedFeatureSlotMask & unresolvedMask;
+			const auto successfulMask =
+				a_successfulFeatureSlotMask & evaluatedMask;
+			const auto bypassedMask =
+				a_bypassedFeatureSlotMask & unresolvedMask & ~evaluatedMask;
+			for (std::uint32_t slotIndex = 0;
+				slotIndex < state_->slots_.size(); ++slotIndex) {
+				const auto slotBit = 1u << slotIndex;
+				if ((unresolvedMask & slotBit) == 0)
+					continue;
+				auto& slot = state_->slots_[slotIndex];
+				if (!slot.prepared ||
+					preparedFrame->sourceWorldFrames[slotIndex] != a_sourceWorldFrame ||
+					preparedFrame->generations[slotIndex] != a_generation ||
+					preparedFrame->contentSerials[slotIndex] == 0 ||
+					preparedFrame->contentSerials[slotIndex] != slot.contentSerial ||
+					slot.prepareKey.sourceWorldFrame != a_sourceWorldFrame ||
+					slot.prepareKey.generation != a_generation) {
+					continue;
+				}
+				const bool bypassRequested =
+					!slot.requiresEvaluation && slot.zeroCoverageCpuProven;
+				const bool evaluated = (evaluatedMask & slotBit) != 0;
+				const bool successful = (successfulMask & slotBit) != 0;
+				const bool bypassed =
+					bypassRequested && (bypassedMask & slotBit) != 0;
+				const auto disposition = successful ?
+				                             CharacterFeature18Disposition::Evaluated :
+				                         evaluated ?
+				                             CharacterFeature18Disposition::EvaluationFailed :
+				                         bypassed ?
+				                             CharacterFeature18Disposition::EmptyBypass :
+				                             CharacterFeature18Disposition::Aborted;
+				slot.zeroCoverageBypassResolved = true;
+				slot.zeroCoverageBypassed = bypassed;
+				slot.feature18Disposition = disposition;
+				preparedFrame->resolutionRecordedSlotMask |= slotBit;
+				switch (disposition) {
+				case CharacterFeature18Disposition::Evaluated:
+					preparedFrame->evaluatedSlotMask |= slotBit;
+					preparedFrame->successfulSlotMask |= slotBit;
+					break;
+				case CharacterFeature18Disposition::EvaluationFailed:
+					preparedFrame->evaluatedSlotMask |= slotBit;
+					break;
+				case CharacterFeature18Disposition::EmptyBypass:
+					preparedFrame->bypassedSlotMask |= slotBit;
+					break;
+				case CharacterFeature18Disposition::Aborted:
+					preparedFrame->abortedSlotMask |= slotBit;
+					break;
+				case CharacterFeature18Disposition::Unresolved:
+					break;
+				}
+				if (bypassed) {
+					if (slot.zeroCoverageCpuProven)
+						Increment(state_->snapshot_.provenEmptyFeatureBypasses);
+				}
+
+				auto& view = state_->snapshot_.view;
+				if (view.frame == a_frameId && view.featureSlot == slotIndex) {
+					view.zeroCoverageBypassResolved = true;
+					view.zeroCoverageBypassed = bypassed;
+					view.feature18Disposition = disposition;
+					view.feature18EvaluationSucceeded = successful;
+				}
+			}
+		} catch (...) {
+			// Diagnostics must never affect the render transaction.
+		}
+	}
+
+	void CharacterRendering::Reset() noexcept
+	{
+		if (!state_)
+			return;
+		try {
+			std::scoped_lock lock(state_->mutex_);
+			state_->observations_.clear();
+			state_->observationKeys_.clear();
+			state_->unboundedCategoryMask_ = 0;
+			state_->observationFrame_ = std::numeric_limits<std::uint32_t>::max();
+			state_->InvalidateProjectionCache();
+			state_->actorAdmissions_.clear();
+			state_->slots_ = {};
+			state_->shader_.Reset();
+			state_->constants_.Reset();
+			state_->shaderCompileFailed_ = false;
+			state_->capturedCategories_.Reset();
+			state_->capturedCategoriesSrv_.Reset();
+			state_->capturedCategoriesUav_.Reset();
+			state_->capturedDepth_.Reset();
+			state_->capturedDepthSrv_.Reset();
+			state_->capturedDepthUav_.Reset();
+			state_->captureShader_.Reset();
+			state_->captureConstants_.Reset();
+			state_->captureSourceCategoriesSrv_.Reset();
+			state_->captureShaderCompileFailed_ = false;
+			state_->InvalidateCaptureMetadata();
+			state_->device_.Reset();
+			state_->lastSlot_ = 1;
+			state_->preparedFrameHistoryNext_ = 0;
+			state_->snapshot_ = {};
+			state_->ResetClassificationRejections();
+		} catch (...) {
+		}
+	}
+
+	void CharacterRendering::Invalidate() noexcept
+	{
+		if (!state_)
+			return;
+		try {
+			std::scoped_lock lock(state_->mutex_);
+			state_->actorAdmissions_.clear();
+			state_->InvalidateProjectionCache();
+			state_->InvalidateCaptureMetadata();
+			state_->InvalidatePreparedMasks();
+			state_->snapshot_.status = "invalidated";
+			state_->snapshot_.detail.clear();
+		} catch (...) {
+		}
+	}
+
+	void CharacterRendering::ResetShaderCache() noexcept
+	{
+		if (!state_)
+			return;
+		try {
+			std::scoped_lock lock(state_->mutex_);
+			state_->shader_.Reset();
+			state_->constants_.Reset();
+			state_->shaderCompileFailed_ = false;
+			state_->captureShader_.Reset();
+			state_->captureShaderCompileFailed_ = false;
+			state_->InvalidateCaptureMetadata();
+			state_->InvalidatePreparedMasks();
+			state_->snapshot_.status = "shader_cache_reset";
+			state_->snapshot_.detail.clear();
+		} catch (...) {
+		}
+	}
+
+	CharacterSnapshot CharacterRendering::GetSnapshot() const
+	{
+		if (!state_)
+			return {};
+		std::scoped_lock lock(state_->mutex_);
+		auto snapshot = state_->snapshot_;
+		state_->PublishClassificationRejections(snapshot);
+		return snapshot;
+	}
+
+	ComPtr<ID3D11ShaderResourceView> CharacterRendering::GetDebugMaskSrv() const noexcept
+	{
+		if (!state_)
+			return {};
+		try {
+			std::scoped_lock lock(state_->mutex_);
+			const auto slot = state_->lastSlot_;
+			return slot < state_->slots_.size() && state_->slots_[slot].prepared ?
+			           state_->slots_[slot].maskSrv :
+			           ComPtr<ID3D11ShaderResourceView>{};
+		} catch (...) {
+			return {};
+		}
+	}
+
+	ComPtr<ID3D11ShaderResourceView> CharacterRendering::GetPreparedMaskSrv(
+		std::uint32_t a_featureSlot,
+		std::uint32_t a_frameId,
+		std::uint32_t a_sourceWorldFrame,
+		std::uint64_t a_generation,
+		std::uint32_t a_width,
+		std::uint32_t a_height) const noexcept
+	{
+		if (!state_ || a_featureSlot >= state_->slots_.size())
+			return {};
+		try {
+			std::scoped_lock lock(state_->mutex_);
+			const auto* slot = state_->FindPreparedSlot(a_featureSlot, a_frameId,
+				a_sourceWorldFrame, a_generation, a_width, a_height);
+			return slot ? slot->maskSrv : ComPtr<ID3D11ShaderResourceView>{};
+		} catch (...) {
+			return {};
+		}
+	}
+
+	ComputeSubrect CharacterRendering::GetMaskSupportRect(
+		ID3D11ShaderResourceView* a_mask,
+		std::uint32_t a_width, std::uint32_t a_height) const noexcept
+	{
+		const auto full = BuildFullComputeSubrect(a_width, a_height);
+		if (!state_ || !a_mask)
+			return full;
+		try {
+			std::scoped_lock lock(state_->mutex_);
+			for (const auto& slot : state_->slots_) {
+				if (slot.prepared && slot.maskSrv.Get() == a_mask &&
+					slot.width == a_width && slot.height == a_height) {
+					if (slot.maskUniform)
+						return slot.uniformMaskValue == 0.0f ? ComputeSubrect{} : full;
+					// Include the linear sampler footprint around the authored mask.
+					return slot.maskWorkSubrect.Fits(a_width, a_height) ?
+					           ExpandCharacterWorkRect(slot.maskWorkSubrect, a_width, a_height, 1) :
+					           full;
+				}
+			}
+		} catch (...) {
+		}
+		return full;
+	}
+
+	ComputeSubrect CharacterRendering::GetPreparedComputeSubrect(
+		std::uint32_t a_featureSlot,
+		std::uint32_t a_frameId,
+		std::uint32_t a_sourceWorldFrame,
+		std::uint64_t a_generation,
+		std::uint32_t a_width,
+		std::uint32_t a_height) const noexcept
+	{
+		if (!state_ || a_featureSlot >= state_->slots_.size())
+			return {};
+		try {
+			std::scoped_lock lock(state_->mutex_);
+			const auto* slot = state_->FindPreparedSlot(a_featureSlot, a_frameId,
+				a_sourceWorldFrame, a_generation, a_width, a_height);
+			return slot ? slot->computeSubrect : ComputeSubrect{};
+		} catch (...) {
+			return {};
+		}
+	}
+
+	CharacterComputeRegionPlan CharacterRendering::GetPreparedComputeRegions(
+		std::uint32_t a_featureSlot,
+		std::uint32_t a_frameId,
+		std::uint32_t a_sourceWorldFrame,
+		std::uint64_t a_generation,
+		std::uint32_t a_width,
+		std::uint32_t a_height) const noexcept
+	{
+		if (!state_)
+			return {};
+		try {
+			std::scoped_lock lock(state_->mutex_);
+			const auto* slot = state_->FindPreparedSlot(a_featureSlot, a_frameId,
+				a_sourceWorldFrame, a_generation, a_width, a_height);
+			return slot ? slot->computeRegions : CharacterComputeRegionPlan{};
+		} catch (...) {
+			return {};
+		}
+	}
+}

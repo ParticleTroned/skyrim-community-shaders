@@ -1,3 +1,4 @@
+#include "Common/CharacterCategoryMask.hlsli"
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Permutation.hlsli"
@@ -129,6 +130,9 @@ struct PS_OUTPUT
 	float4 Color: SV_Target0;
 	float4 MotionVectors: SV_Target1;
 	float4 Normal: SV_Target2;
+#if defined(DEFERRED)
+	float4 Masks2: SV_Target7;
+#endif
 #if defined(CLOUD_SHADOWS) && defined(CLOUDS) && !defined(DEFERRED)
 	float4 CloudShadows: SV_Target3;
 #endif
@@ -283,6 +287,10 @@ PS_OUTPUT main(PS_INPUT input)
 		if (depth < input.Position.z)
 			psout.Color.w = 0;
 	}
+#	endif
+
+#	if defined(DEFERRED)
+	psout.Masks2 = CharacterCategoryMask::Encode(0.0, 0u, psout.Color.w);
 #	endif
 
 	return psout;

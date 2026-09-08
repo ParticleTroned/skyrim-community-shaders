@@ -1,3 +1,4 @@
+#include "Common/CharacterCategoryMask.hlsli"
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
@@ -393,6 +394,7 @@ struct PS_OUTPUT
 	float4 Specular: SV_Target4;
 	float4 Reflectance: SV_Target5;
 	float4 Masks: SV_Target6;
+	float4 Masks2: SV_Target7;
 };
 #else
 struct PS_OUTPUT
@@ -925,6 +927,8 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Reflectance = float4(0, 0, 0, finalColor.w);
 	psout.Masks = float4(0, 0, 0, finalColor.w);
 #		endif
+
+	psout.Masks2 = CharacterCategoryMask::Encode(0.0, 0u, psout.Diffuse.w);
 
 #	elif defined(MOTIONVECTORS_NORMALS)
 	float2 screenMotionVector = MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition);

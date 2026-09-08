@@ -1,3 +1,4 @@
+#include "Common/CharacterCategoryMask.hlsli"
 #define LIGHTING
 
 #include "Common/Color.hlsli"
@@ -3111,7 +3112,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	// Stored as 1 - vertexAO so the cleared default (0) means no occlusion
 	// for pixels that do not write to this RT (sky, water, grass, effects).
-	psout.Masks2 = float4(1.0 - vertexAO, 0, 0, psout.Diffuse.w);
+	const uint characterCategory =
+		(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::CharacterExcluded) != 0u ?
+			CharacterCategoryMask::Excluded :
+			(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::CharacterCategoryMask) /
+				Permutation::ExtraFlags::CharacterFace;
+	psout.Masks2 = CharacterCategoryMask::Encode(
+		1.0 - vertexAO, characterCategory, psout.Diffuse.w);
 
 	float stochasticBlend = (screenNoise * screenNoise) < psout.Diffuse.w ? 1.0 : 0.0;
 	psout.NormalGlossiness.w = stochasticBlend;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CharacterMultiRoi.h"
 #include "Runtime.h"
 
 #include <array>
@@ -162,6 +163,12 @@ namespace NeuralRendering
 		std::uint32_t inputOffsetY = 0;
 		std::uint32_t outputOffsetX = 0;
 		std::uint32_t outputOffsetY = 0;
+		/** Output-local compute support; zero selects the full output. */
+		ComputeSubrect computeSubrect{};
+		/** Optional independent regions within computeSubrect, evaluated atomically. */
+		CharacterComputeRegionPlan computeRegions{};
+		/** The caller composites character output through its exact visibility mask. */
+		bool characterVisualIsolation = false;
 		bool featureUpscaling = false;
 		Tuning tuning{};
 		bool reset = false;
@@ -190,7 +197,7 @@ namespace NeuralRendering
 		Renderer(const Renderer&) = delete;
 		Renderer& operator=(const Renderer&) = delete;
 
-		/** Runs one Feature 18 slot and commits the external output only on success. */
+		/** Runs one mono frame and commits every requested region only on success. */
 		bool Apply(
 			const RendererApplyArgs& a_args,
 			RendererApplyOutcome* a_outcome = nullptr);

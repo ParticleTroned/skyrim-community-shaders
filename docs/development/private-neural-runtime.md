@@ -36,8 +36,8 @@ local cache values:
 `CSX_PRIVATE_SHADER_CACHE_ROOT` is optional for a development archive. Point it
 at an already validated SE cache root containing `ShaderCache/` and
 `ShaderCache-HorizonFix/` to create the final FOMOD archive without compiling
-shaders again. The same cache root can be used for both SE arrangements because
-their shader payload is identical.
+shaders again. Gogh SE and Vincent SE now have different shader payloads. Reuse only
+cache entries whose compatibility metadata matches the selected build.
 
 Configure and build the explicit, non-ALL target:
 
@@ -53,3 +53,10 @@ notice, preserves the exact official 2.12 DLSS-G file set, verifies the linked
 DLL against its path-free build manifest, and scans staged inputs for local
 profile/source paths and credential-shaped data. Do not publish or redistribute
 the result.
+
+## Character selection on Gogh SE
+
+Gogh SE also supports a runtime choice between full-scene NR and character
+NR. See [character Neural Rendering](character-neural-rendering.md) for
+settings, semantic selection, region histories, safe compositing and the
+SE/AE validation procedure.

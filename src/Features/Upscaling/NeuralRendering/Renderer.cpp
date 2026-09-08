@@ -2,6 +2,7 @@
 
 #include "D3D12Interop.h"
 #include "Globals.h"
+#include "PipelinePolicy.h"
 #include "Profiler.h"
 #include "Utils/D3D.h"
 #include "Utils/LazyShader.h"
@@ -340,7 +341,7 @@ namespace NeuralRendering
 			std::span<ID3D12Resource* const> a_resources,
 			bool a_toFeature)
 		{
-			std::array<D3D12_RESOURCE_BARRIER, 4> barriers{};
+			std::array<D3D12_RESOURCE_BARRIER, Runtime::kFeatureSlotCount * 4> barriers{};
 			for (std::size_t index = 0; index < a_resources.size(); ++index) {
 				auto& barrier = barriers[index];
 				barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -429,6 +430,7 @@ namespace NeuralRendering
 			DXGI_FORMAT colorFormat = DXGI_FORMAT_UNKNOWN;
 			DXGI_FORMAT motionFormat = DXGI_FORMAT_UNKNOWN;
 			DXGI_FORMAT outputFormat = DXGI_FORMAT_UNKNOWN;
+			bool featureUpscaling = false;
 
 			bool operator==(const ResourceKey&) const = default;
 		};
@@ -436,6 +438,11 @@ namespace NeuralRendering
 		struct HistoryKey
 		{
 			ResourceKey resources{};
+			ComputeSubrect computeSubrect{};
+			std::uint64_t regionHistory = 0;
+			std::uint64_t clusterIdentity = 0;
+			std::uint32_t regionCount = 0;
+			bool characterVisualIsolation = false;
 			std::uint64_t generation = 0;
 			std::uint32_t motionVectorScaleX = 0;
 			std::uint32_t motionVectorScaleY = 0;
@@ -480,6 +487,7 @@ namespace NeuralRendering
 			DXGI_FORMAT depthViewFormat = DXGI_FORMAT_UNKNOWN;
 			ResourceKey resourceKey{};
 			HistoryKey historyKey{};
+			ComputeSubrect outputSubrect{};
 		};
 
 		struct ValidationFailure
@@ -517,6 +525,17 @@ namespace NeuralRendering
 		bool EnsureSlotLocked(
 			std::uint32_t a_slot,
 			const ValidatedResources& a_resources);
+		bool PrepareInputsLocked(
+			const RendererApplyArgs& a_args,
+			const ValidatedResources& a_resources,
+			Slot& a_slot);
+		bool EvaluateSlotLocked(
+			ID3D12GraphicsCommandList* a_commandList,
+			const RendererApplyArgs& a_args,
+			const ValidatedResources& a_resources,
+			Slot& a_slot,
+			RendererApplyOutcome& a_outcome,
+			RecordingGuard& a_recordingGuard);
 		bool CopyDepthLocked(
 			const RendererApplyArgs& a_args,
 			Slot& a_slot);
@@ -614,6 +633,21 @@ namespace NeuralRendering
 			return fail(
 				"manual masks and UI correction are outside the safe Feature 18 contract");
 		}
+
+		const bool explicitSubrect = a_args.computeSubrect != ComputeSubrect{};
+		a_resources.outputSubrect = explicitSubrect ? a_args.computeSubrect :
+		                                              ComputeSubrect{ .width = a_args.outputWidth, .height = a_args.outputHeight };
+		if (!a_resources.outputSubrect.Fits(a_args.outputWidth, a_args.outputHeight))
+			return fail("the compute region must fit within the output dimensions");
+		const auto colorSubrect = MapComputeSubrect(
+			a_resources.outputSubrect, a_args.outputWidth, a_args.outputHeight,
+			a_args.colorWidth, a_args.colorHeight);
+		const auto guideSubrect = MapComputeSubrect(
+			a_resources.outputSubrect, a_args.outputWidth, a_args.outputHeight,
+			a_args.guideWidth, a_args.guideHeight);
+		if (!colorSubrect.Fits(a_args.colorWidth, a_args.colorHeight) ||
+			!guideSubrect.Fits(a_args.guideWidth, a_args.guideHeight))
+			return fail("the compute region does not map into the color/depth/motion guides");
 
 		ComPtr<ID3D11Device> contextDevice;
 		a_args.context->GetDevice(&contextDevice);
@@ -727,9 +761,12 @@ namespace NeuralRendering
 			.colorFormat = a_resources.color.desc.Format,
 			.motionFormat = a_resources.motionVectors.desc.Format,
 			.outputFormat = a_resources.output.desc.Format,
+			.featureUpscaling = a_args.featureUpscaling,
 		};
 		a_resources.historyKey = {
 			.resources = a_resources.resourceKey,
+			.computeSubrect = a_resources.outputSubrect,
+			.characterVisualIsolation = a_args.characterVisualIsolation,
 			.generation = a_args.generation,
 			.motionVectorScaleX = std::bit_cast<std::uint32_t>(a_args.motionVectorScaleX),
 			.motionVectorScaleY = std::bit_cast<std::uint32_t>(a_args.motionVectorScaleY),
@@ -1391,6 +1428,194 @@ namespace NeuralRendering
 		return true;
 	}
 
+	bool Renderer::State::PrepareInputsLocked(
+		const RendererApplyArgs& a_args,
+		const ValidatedResources& a_resources,
+		Slot& a_slot)
+	{
+		const auto preparationStarted = std::chrono::steady_clock::now();
+		activeStage_ = RendererStage::ColorInputCopy;
+		if (a_args.inputOffsetX == 0 &&
+			a_args.inputOffsetY == 0 &&
+			a_resources.color.desc.Width == a_args.colorWidth &&
+			a_resources.color.desc.Height == a_args.colorHeight) {
+			a_args.context->CopyResource(
+				a_slot.color.resource11.Get(),
+				a_resources.color.texture.Get());
+		} else {
+			const auto sourceRegion = MakeTextureRegion(
+				a_args.inputOffsetX,
+				a_args.inputOffsetY,
+				a_args.colorWidth,
+				a_args.colorHeight);
+			a_args.context->CopySubresourceRegion(
+				a_slot.color.resource11.Get(),
+				0,
+				0,
+				0,
+				0,
+				a_resources.color.texture.Get(),
+				0,
+				&sourceRegion);
+		}
+		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
+			return FailLocked(
+				RendererStage::ColorInputCopy,
+				reason,
+				"device removal followed the D3D11 color-input copy",
+				a_args.featureSlot,
+				true);
+		}
+		snapshot_.lastCompletedStage = RendererStage::ColorInputCopy;
+
+		activeStage_ = RendererStage::DepthGuideCopy;
+		if (!CopyDepthLocked(a_args, a_slot)) {
+			return FailLocked(
+				RendererStage::DepthGuideCopy,
+				E_FAIL,
+				"CopyDepthGuideCS compilation or dispatch setup failed",
+				a_args.featureSlot,
+				true);
+		}
+		Increment(snapshot_.counters.depthGuideCopies);
+		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
+			return FailLocked(
+				RendererStage::DepthGuideCopy,
+				reason,
+				"device removal followed the D3D11 depth-guide dispatch",
+				a_args.featureSlot,
+				true);
+		}
+		snapshot_.lastCompletedStage = RendererStage::DepthGuideCopy;
+
+		activeStage_ = RendererStage::MotionVectorCopy;
+		if (a_args.inputOffsetX == 0 &&
+			a_args.inputOffsetY == 0 &&
+			a_resources.motionVectors.desc.Width == a_args.guideWidth &&
+			a_resources.motionVectors.desc.Height == a_args.guideHeight) {
+			a_args.context->CopyResource(
+				a_slot.motionVectors.resource11.Get(),
+				a_resources.motionVectors.texture.Get());
+		} else {
+			const auto sourceRegion = MakeTextureRegion(
+				a_args.inputOffsetX,
+				a_args.inputOffsetY,
+				a_args.guideWidth,
+				a_args.guideHeight);
+			a_args.context->CopySubresourceRegion(
+				a_slot.motionVectors.resource11.Get(),
+				0,
+				0,
+				0,
+				0,
+				a_resources.motionVectors.texture.Get(),
+				0,
+				&sourceRegion);
+		}
+		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
+			return FailLocked(
+				RendererStage::MotionVectorCopy,
+				reason,
+				"device removal followed the D3D11 motion-vector copy",
+				a_args.featureSlot,
+				true);
+		}
+		snapshot_.lastCompletedStage = RendererStage::MotionVectorCopy;
+		RecordCpuDuration(
+			snapshot_.performance.d3d11PreparationCpuEnqueueSamples,
+			snapshot_.performance.d3d11PreparationCpuEnqueueMicroseconds,
+			snapshot_.performance.lastD3D11PreparationCpuEnqueueMicroseconds,
+			snapshot_.performance.maximumD3D11PreparationCpuEnqueueMicroseconds,
+			preparationStarted);
+
+		return true;
+	}
+
+	bool Renderer::State::EvaluateSlotLocked(
+		ID3D12GraphicsCommandList* a_commandList,
+		const RendererApplyArgs& a_args,
+		const ValidatedResources& a_resources,
+		Slot& a_slot,
+		RendererApplyOutcome& a_outcome,
+		RecordingGuard& a_recordingGuard)
+	{
+		const bool discontinuousHistoryReset =
+			a_slot.historyValid &&
+			!IsSequentialFrame(a_slot.lastSuccessfulFrame, a_args.frameId);
+		const bool forcedHistoryReset =
+			!a_slot.historyValid ||
+			a_slot.historyKey != a_resources.historyKey ||
+			discontinuousHistoryReset;
+		const bool effectiveReset = a_args.reset || forcedHistoryReset;
+		if (a_args.reset)
+			Increment(snapshot_.counters.callerHistoryResets);
+		if (forcedHistoryReset)
+			Increment(snapshot_.counters.forcedHistoryResets);
+		if (discontinuousHistoryReset)
+			Increment(snapshot_.counters.discontinuousHistoryResets);
+
+		activeStage_ = RendererStage::FeatureEvaluate;
+		bool evaluationAttempted = false;
+		const bool evaluated = Runtime::Instance().Execute(
+			a_commandList,
+			a_args.featureSlot,
+			a_slot.color.resource12.Get(),
+			a_slot.depth.resource12.Get(),
+			a_slot.motionVectors.resource12.Get(),
+			a_slot.output.resource12.Get(),
+			a_args.colorWidth,
+			a_args.colorHeight,
+			a_args.guideWidth,
+			a_args.guideHeight,
+			a_args.outputWidth,
+			a_args.outputHeight,
+			a_resources.outputSubrect,
+			a_args.motionVectorScaleX,
+			a_args.motionVectorScaleY,
+			a_args.featureUpscaling,
+			a_args.tuning,
+			effectiveReset,
+			&evaluationAttempted);
+		if (evaluationAttempted) {
+			Increment(snapshot_.counters.featureEvaluations);
+			a_outcome.evaluationAttemptedFeatureSlotMask |=
+				1u << a_args.featureSlot;
+		}
+		if (!evaluated) {
+			const std::string runtimeDetail = Runtime::Instance().Detail();
+			const bool aborted = interop_.AbortD3D12();
+			a_recordingGuard.active = interop_.IsRecording();
+			return FailLocked(
+				RendererStage::FeatureEvaluate,
+				aborted ? E_FAIL : interop_.LastError(),
+				aborted ?
+					std::format("Feature 18 evaluation failed: {}", runtimeDetail) :
+					std::format(
+						"Feature 18 evaluation failed and command abort failed at {}: {}",
+						interop_.LastOperation(),
+						runtimeDetail),
+				a_args.featureSlot,
+				true,
+				!aborted);
+		}
+		LogOnce(slotEvaluateSuccessLogged_[a_args.featureSlot], [&]() {
+			logger::info(
+				"[DLSSNR] First Feature 18 evaluate succeeded: slot={}, color={}x{}, guides={}x{}, output={}x{}, upscaling={}, reset={}",
+				a_args.featureSlot,
+				a_args.colorWidth,
+				a_args.colorHeight,
+				a_args.guideWidth,
+				a_args.guideHeight,
+				a_args.outputWidth,
+				a_args.outputHeight,
+				a_args.featureUpscaling,
+				effectiveReset);
+		});
+		snapshot_.lastCompletedStage = RendererStage::FeatureEvaluate;
+
+		return true;
+	}
+
 	bool Renderer::State::ApplyLocked(
 		const RendererApplyArgs& a_args,
 		RendererApplyOutcome& a_outcome)
@@ -1427,130 +1652,58 @@ namespace NeuralRendering
 		snapshot_.motionVectorFormat = 0;
 		snapshot_.outputFormat = 0;
 
-		ValidatedResources resources{};
-		auto validation = ValidateLocked(a_args, resources);
-		snapshot_.colorFormat =
-			static_cast<std::uint32_t>(resources.color.desc.Format);
-		snapshot_.depthSourceFormat =
-			static_cast<std::uint32_t>(resources.depth.desc.Format);
-		snapshot_.depthViewFormat =
-			static_cast<std::uint32_t>(resources.depthViewFormat);
-		snapshot_.motionVectorFormat =
-			static_cast<std::uint32_t>(resources.motionVectors.desc.Format);
-		snapshot_.outputFormat =
-			static_cast<std::uint32_t>(resources.output.desc.Format);
-		if (validation) {
-			return FailLocked(
-				RendererStage::Validation,
-				validation.result,
-				std::move(validation.detail),
-				a_args.featureSlot,
-				false);
+		const auto& plan = a_args.computeRegions;
+		if (const auto violation = GetCharacterRegionSubmissionViolation(
+				a_args.featureSlot, plan, a_args.computeSubrect,
+				a_args.outputWidth, a_args.outputHeight, a_args.characterVisualIsolation);
+			!violation.empty()) {
+			return FailLocked(RendererStage::Validation, E_INVALIDARG,
+				std::string(violation), a_args.featureSlot, false);
 		}
+
+		const auto regionCount = std::max(1u, plan.count);
+		std::array<RendererApplyArgs, Runtime::kFeatureSlotCount> regionArgs{};
+		std::array<ValidatedResources, Runtime::kFeatureSlotCount> resources{};
+		std::uint64_t pixelCount = 0;
+		for (std::uint32_t region = 0; region < regionCount; ++region) {
+			auto& args = regionArgs[region];
+			args = a_args;
+			args.featureSlot = region;
+			args.computeRegions = {};
+			if (plan.count)
+				args.computeSubrect = plan.regions[region];
+			if (auto validation = ValidateLocked(args, resources[region]); validation) {
+				return FailLocked(RendererStage::Validation, validation.result,
+					std::move(validation.detail), region, false);
+			}
+			auto& historyKey = resources[region].historyKey;
+			historyKey.regionCount = plan.count;
+			if (plan.count) {
+				historyKey.regionHistory = plan.historyKeys[region];
+				historyKey.clusterIdentity = plan.clusterIdentities[region];
+			}
+			Add(pixelCount, resources[region].outputSubrect.Area());
+		}
+		snapshot_.colorFormat = static_cast<std::uint32_t>(resources[0].color.desc.Format);
+		snapshot_.depthSourceFormat = static_cast<std::uint32_t>(resources[0].depth.desc.Format);
+		snapshot_.depthViewFormat = static_cast<std::uint32_t>(resources[0].depthViewFormat);
+		snapshot_.motionVectorFormat = static_cast<std::uint32_t>(resources[0].motionVectors.desc.Format);
+		snapshot_.outputFormat = static_cast<std::uint32_t>(resources[0].output.desc.Format);
 		snapshot_.lastCompletedStage = RendererStage::Validation;
 
 		activeStage_ = RendererStage::DeviceCompatibility;
 		if (!EnsureBackendLocked(a_args))
 			return false;
-		activeStage_ = RendererStage::ResourceCreation;
-		if (!EnsureSlotLocked(a_args.featureSlot, resources))
-			return false;
-		auto& slot = slots_[a_args.featureSlot];
-
-		const auto preparationStarted = std::chrono::steady_clock::now();
-		activeStage_ = RendererStage::ColorInputCopy;
-		if (a_args.inputOffsetX == 0 &&
-			a_args.inputOffsetY == 0 &&
-			resources.color.desc.Width == a_args.colorWidth &&
-			resources.color.desc.Height == a_args.colorHeight) {
-			a_args.context->CopyResource(
-				slot.color.resource11.Get(),
-				resources.color.texture.Get());
-		} else {
-			const auto sourceRegion = MakeTextureRegion(
-				a_args.inputOffsetX,
-				a_args.inputOffsetY,
-				a_args.colorWidth,
-				a_args.colorHeight);
-			a_args.context->CopySubresourceRegion(
-				slot.color.resource11.Get(),
-				0,
-				0,
-				0,
-				0,
-				resources.color.texture.Get(),
-				0,
-				&sourceRegion);
+		for (std::uint32_t region = 0; region < regionCount; ++region) {
+			SetActiveFeatureSlotLocked(region);
+			if (!EnsureSlotLocked(region, resources[region]))
+				return false;
 		}
-		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
-			return FailLocked(
-				RendererStage::ColorInputCopy,
-				reason,
-				"device removal followed the D3D11 color-input copy",
-				a_args.featureSlot,
-				true);
+		for (std::uint32_t region = 0; region < regionCount; ++region) {
+			SetActiveFeatureSlotLocked(region);
+			if (!PrepareInputsLocked(regionArgs[region], resources[region], slots_[region]))
+				return false;
 		}
-		snapshot_.lastCompletedStage = RendererStage::ColorInputCopy;
-
-		activeStage_ = RendererStage::DepthGuideCopy;
-		if (!CopyDepthLocked(a_args, slot)) {
-			return FailLocked(
-				RendererStage::DepthGuideCopy,
-				E_FAIL,
-				"CopyDepthGuideCS compilation or dispatch setup failed",
-				a_args.featureSlot,
-				true);
-		}
-		Increment(snapshot_.counters.depthGuideCopies);
-		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
-			return FailLocked(
-				RendererStage::DepthGuideCopy,
-				reason,
-				"device removal followed the D3D11 depth-guide dispatch",
-				a_args.featureSlot,
-				true);
-		}
-		snapshot_.lastCompletedStage = RendererStage::DepthGuideCopy;
-
-		activeStage_ = RendererStage::MotionVectorCopy;
-		if (a_args.inputOffsetX == 0 &&
-			a_args.inputOffsetY == 0 &&
-			resources.motionVectors.desc.Width == a_args.guideWidth &&
-			resources.motionVectors.desc.Height == a_args.guideHeight) {
-			a_args.context->CopyResource(
-				slot.motionVectors.resource11.Get(),
-				resources.motionVectors.texture.Get());
-		} else {
-			const auto sourceRegion = MakeTextureRegion(
-				a_args.inputOffsetX,
-				a_args.inputOffsetY,
-				a_args.guideWidth,
-				a_args.guideHeight);
-			a_args.context->CopySubresourceRegion(
-				slot.motionVectors.resource11.Get(),
-				0,
-				0,
-				0,
-				0,
-				resources.motionVectors.texture.Get(),
-				0,
-				&sourceRegion);
-		}
-		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
-			return FailLocked(
-				RendererStage::MotionVectorCopy,
-				reason,
-				"device removal followed the D3D11 motion-vector copy",
-				a_args.featureSlot,
-				true);
-		}
-		snapshot_.lastCompletedStage = RendererStage::MotionVectorCopy;
-		RecordCpuDuration(
-			snapshot_.performance.d3d11PreparationCpuEnqueueSamples,
-			snapshot_.performance.d3d11PreparationCpuEnqueueMicroseconds,
-			snapshot_.performance.lastD3D11PreparationCpuEnqueueMicroseconds,
-			snapshot_.performance.maximumD3D11PreparationCpuEnqueueMicroseconds,
-			preparationStarted);
 
 		activeStage_ = RendererStage::CommandBegin;
 		ID3D12GraphicsCommandList* commandList = nullptr;
@@ -1565,21 +1718,22 @@ namespace NeuralRendering
 		RecordingGuard recordingGuard(interop_);
 		snapshot_.lastCompletedStage = RendererStage::CommandBegin;
 
-		std::array<ID3D12Resource*, 4> sharedResources{
-			slot.color.resource12.Get(),
-			slot.depth.resource12.Get(),
-			slot.motionVectors.resource12.Get(),
-			slot.output.resource12.Get(),
-		};
+		std::array<ID3D12Resource*, Runtime::kFeatureSlotCount * 4> sharedResources{};
+		for (std::uint32_t region = 0; region < regionCount; ++region) {
+			const auto& slot = slots_[region];
+			sharedResources[region * 4u] = slot.color.resource12.Get();
+			sharedResources[region * 4u + 1u] = slot.depth.resource12.Get();
+			sharedResources[region * 4u + 2u] = slot.motionVectors.resource12.Get();
+			sharedResources[region * 4u + 3u] = slot.output.resource12.Get();
+		}
 		const auto resourceSpan = std::span<ID3D12Resource* const>(
-			sharedResources.data(), sharedResources.size());
+			sharedResources.data(), regionCount * 4u);
 		TransitionResources(commandList, resourceSpan, true);
 		if (!interop_.BeginFeatureTiming(
 				commandList,
 				D3D12InteropSubmissionTiming{
 					.pixelCount =
-						static_cast<std::uint64_t>(a_args.outputWidth) *
-						a_args.outputHeight,
+						pixelCount,
 				})) {
 			const bool aborted = interop_.AbortD3D12();
 			recordingGuard.active = interop_.IsRecording();
@@ -1592,78 +1746,12 @@ namespace NeuralRendering
 				!aborted);
 		}
 
-		const bool discontinuousHistoryReset =
-			slot.historyValid &&
-			!IsSequentialFrame(slot.lastSuccessfulFrame, a_args.frameId);
-		const bool forcedHistoryReset =
-			!slot.historyValid ||
-			slot.historyKey != resources.historyKey ||
-			discontinuousHistoryReset;
-		const bool effectiveReset = a_args.reset || forcedHistoryReset;
-		if (a_args.reset)
-			Increment(snapshot_.counters.callerHistoryResets);
-		if (forcedHistoryReset)
-			Increment(snapshot_.counters.forcedHistoryResets);
-		if (discontinuousHistoryReset)
-			Increment(snapshot_.counters.discontinuousHistoryResets);
-
-		activeStage_ = RendererStage::FeatureEvaluate;
-		bool evaluationAttempted = false;
-		const bool evaluated = Runtime::Instance().Execute(
-			commandList,
-			a_args.featureSlot,
-			slot.color.resource12.Get(),
-			slot.depth.resource12.Get(),
-			slot.motionVectors.resource12.Get(),
-			slot.output.resource12.Get(),
-			a_args.colorWidth,
-			a_args.colorHeight,
-			a_args.guideWidth,
-			a_args.guideHeight,
-			a_args.outputWidth,
-			a_args.outputHeight,
-			a_args.motionVectorScaleX,
-			a_args.motionVectorScaleY,
-			a_args.featureUpscaling,
-			a_args.tuning,
-			effectiveReset,
-			&evaluationAttempted);
-		if (evaluationAttempted) {
-			Increment(snapshot_.counters.featureEvaluations);
-			a_outcome.evaluationAttemptedFeatureSlotMask |=
-				1u << a_args.featureSlot;
+		for (std::uint32_t region = 0; region < regionCount; ++region) {
+			SetActiveFeatureSlotLocked(region);
+			if (!EvaluateSlotLocked(commandList, regionArgs[region], resources[region],
+					slots_[region], a_outcome, recordingGuard))
+				return false;
 		}
-		if (!evaluated) {
-			const std::string runtimeDetail = Runtime::Instance().Detail();
-			const bool aborted = interop_.AbortD3D12();
-			recordingGuard.active = interop_.IsRecording();
-			return FailLocked(
-				RendererStage::FeatureEvaluate,
-				aborted ? E_FAIL : interop_.LastError(),
-				aborted ?
-					std::format("Feature 18 evaluation failed: {}", runtimeDetail) :
-					std::format(
-						"Feature 18 evaluation failed and command abort failed at {}: {}",
-						interop_.LastOperation(),
-						runtimeDetail),
-				a_args.featureSlot,
-				true,
-				!aborted);
-		}
-		LogOnce(slotEvaluateSuccessLogged_[a_args.featureSlot], [&]() {
-			logger::info(
-				"[DLSSNR] First Feature 18 evaluate succeeded: slot={}, color={}x{}, guides={}x{}, output={}x{}, upscaling={}, reset={}",
-				a_args.featureSlot,
-				a_args.colorWidth,
-				a_args.colorHeight,
-				a_args.guideWidth,
-				a_args.guideHeight,
-				a_args.outputWidth,
-				a_args.outputHeight,
-				a_args.featureUpscaling,
-				effectiveReset);
-		});
-		snapshot_.lastCompletedStage = RendererStage::FeatureEvaluate;
 
 		if (!interop_.EndFeatureTiming(commandList)) {
 			const bool aborted = interop_.AbortD3D12();
@@ -1701,30 +1789,17 @@ namespace NeuralRendering
 				true);
 		}
 
-		// Caller output remains untouched until the private transaction succeeds.
+		// Every region must evaluate and submit before caller output is modified.
 		const auto outputCommitStarted = std::chrono::steady_clock::now();
-		if (a_args.outputOffsetX == 0 &&
-			a_args.outputOffsetY == 0 &&
-			resources.output.desc.Width == a_args.outputWidth &&
-			resources.output.desc.Height == a_args.outputHeight) {
-			a_args.context->CopyResource(
-				resources.output.texture.Get(),
-				slot.output.resource11.Get());
-		} else {
+		for (std::uint32_t region = 0; region < regionCount; ++region) {
+			const auto& roi = resources[region].outputSubrect;
 			const auto sourceRegion = MakeTextureRegion(
-				0,
-				0,
-				a_args.outputWidth,
-				a_args.outputHeight);
+				roi.baseX, roi.baseY, roi.width, roi.height);
 			a_args.context->CopySubresourceRegion(
-				resources.output.texture.Get(),
-				0,
-				a_args.outputOffsetX,
-				a_args.outputOffsetY,
-				0,
-				slot.output.resource11.Get(),
-				0,
-				&sourceRegion);
+				resources[region].output.texture.Get(), 0,
+				a_args.outputOffsetX + roi.baseX,
+				a_args.outputOffsetY + roi.baseY, 0,
+				slots_[region].output.resource11.Get(), 0, &sourceRegion);
 		}
 		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
 			return FailLocked(
@@ -1740,11 +1815,19 @@ namespace NeuralRendering
 			snapshot_.performance.lastOutputCommitCpuEnqueueMicroseconds,
 			snapshot_.performance.maximumOutputCommitCpuEnqueueMicroseconds,
 			outputCommitStarted);
-		slot.historyKey = resources.historyKey;
-		slot.lastSuccessfulFrame = a_args.frameId;
-		slot.historyValid = true;
+		for (std::uint32_t region = 0; region < regionCount; ++region) {
+			auto& slot = slots_[region];
+			slot.historyKey = resources[region].historyKey;
+			slot.lastSuccessfulFrame = a_args.frameId;
+			slot.historyValid = true;
+		}
+		// An inactive region cannot retain history through a topology transition.
+		for (std::size_t region = regionCount; region < slots_.size(); ++region)
+			slots_[region].historyValid = false;
 		activeStage_ = RendererStage::Complete;
 		SucceedLocked(a_args.featureSlot);
+		for (std::uint32_t region = 1; region < regionCount; ++region)
+			Increment(snapshot_.counters.slotSuccesses[region]);
 		RefreshInteropTelemetryLocked();
 		return true;
 	}

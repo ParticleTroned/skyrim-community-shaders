@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ComputeSubrect.h"
+
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -93,7 +95,8 @@ namespace NeuralRendering
 	class Runtime
 	{
 	public:
-		static constexpr std::size_t kFeatureSlotCount = 1;
+		// One mono input has at most two independent character region histories.
+		static constexpr std::size_t kFeatureSlotCount = 2;
 		static constexpr std::string_view kPatchedRuntimeSha256 = "8270B350CD82DE5CE89806872CDD6B6A9249B80836B91BBEB3573470744CC206";
 		static constexpr std::string_view kAlternatePatchedRuntimeSha256 = "CEB6432F6FBDF44D886014BCD47241932BF8B67439FEEF9BBDD0961436662650";
 		static constexpr std::string_view kSignedRuntimeSha256 = "E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E";
@@ -106,7 +109,8 @@ namespace NeuralRendering
 
 		bool Probe(const std::filesystem::path& a_explicitPath = {});
 		bool Initialize(ID3D12Device* a_device, const std::filesystem::path& a_dataPath = {});
-		/** Records whether execution reached the Feature 18 vendor evaluation call. */
+		/** Evaluates one bounded output region, mapping its color and guide inputs outwards.
+		 *  The optional flag records entry into the Feature 18 vendor evaluation call. */
 		bool Execute(
 			ID3D12GraphicsCommandList* a_commandList,
 			std::uint32_t a_slot,
@@ -120,6 +124,7 @@ namespace NeuralRendering
 			std::uint32_t a_guideHeight,
 			std::uint32_t a_outputWidth,
 			std::uint32_t a_outputHeight,
+			const ComputeSubrect& a_outputSubrect,
 			float a_motionVectorScaleX,
 			float a_motionVectorScaleY,
 			bool a_featureUpscaling,

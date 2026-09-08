@@ -138,6 +138,25 @@ namespace NeuralRendering
 		CharacterMaskTestMode maskTestMode = CharacterMaskTestMode::Authored;
 	};
 
+	struct CharacterActorBound
+	{
+		float centerX = 0.0f;
+		float centerY = 0.0f;
+		float centerZ = 0.0f;
+		float radius = 0.0f;
+	};
+
+	/** Stable actor/head bounds make admission independent of material draw order. */
+	struct CharacterActorAdmissionArgs
+	{
+		std::uintptr_t actorIdentity = 0;
+		CharacterActorBound faceBound{};
+		CharacterActorBound actorBound{};
+		std::uint32_t outputWidthPerEye = 0;
+		std::uint32_t outputHeight = 0;
+		CharacterSettings settings{};
+	};
+
 	struct CharacterEyeSnapshot
 	{
 		std::uint32_t frame = std::numeric_limits<std::uint32_t>::max();
@@ -306,6 +325,12 @@ namespace NeuralRendering
 		CharacterRendering(const CharacterRendering&) = delete;
 		CharacterRendering& operator=(const CharacterRendering&) = delete;
 
+		/** Returns the same admission for every material of this actor/world frame. */
+		[[nodiscard]] bool ShouldAuthorActor(
+			std::uint32_t a_frame,
+			std::uint32_t a_actorFormId,
+			const CharacterActorAdmissionArgs& a_args) noexcept;
+
 		/** Records one actor-owned material bound; true permits semantic-ID output. */
 		[[nodiscard]] bool ObserveGeometry(
 			std::uint32_t a_frame,
@@ -374,6 +399,10 @@ namespace NeuralRendering
 			std::uint64_t a_generation,
 			std::uint32_t a_width,
 			std::uint32_t a_height) const noexcept;
+		/** Current nonzero support for an already validated mask; unknown views fail open. */
+		[[nodiscard]] ComputeSubrect GetMaskSupportRect(
+			ID3D11ShaderResourceView* a_mask,
+			std::uint32_t a_width, std::uint32_t a_height) const noexcept;
 
 	private:
 		class State;

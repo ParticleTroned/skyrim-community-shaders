@@ -4715,9 +4715,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// Exact R8 codes reject interpolated IDs. The output alpha still supplies
 	// the inherited MRT source blend factor without becoming stored target data.
 	const uint characterCategory =
-		(Permutation::ExtraShaderDescriptor &
+		(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::CharacterExcluded) != 0u ?
+		CharacterCategoryMask::Excluded :
+		((Permutation::ExtraShaderDescriptor &
 			Permutation::ExtraFlags::CharacterCategoryMask) >>
-		8;
+		8);
 	psout.Masks2 = CharacterCategoryMask::Encode(
 		1.0 - vertexAO, characterCategory, psout.Diffuse.w);
 #		else

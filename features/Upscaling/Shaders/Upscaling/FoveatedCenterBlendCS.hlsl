@@ -14,6 +14,7 @@ cbuffer FoveatedCenterBlendCB : register(b0)
 	uint TargetOffsetX;
 	uint CharacterSelectionMode;
 	uint3 Padding;
+	float4 CharacterMaskBounds;
 };
 
 Texture2D<float4> CenterColor : register(t0);
@@ -40,8 +41,9 @@ RWTexture2D<float4> OutputColor : register(u0);
 		// Feature 18 uses its normal automatic mask. CSX's authored strength is
 		// authoritative when selecting its output over the normal-DLSS baseline.
 		// Do not even sample the partial Feature 18 output outside that mask.
-		float characterWeight = saturate(
-			CharacterMask.SampleLevel(LinearSampler, centerUV, 0));
+		float characterWeight = 0.0;
+		[branch] if (all(centerUV >= CharacterMaskBounds.xy) && all(centerUV < CharacterMaskBounds.zw))
+			characterWeight = saturate(CharacterMask.SampleLevel(LinearSampler, centerUV, 0));
 		float4 baselineColor = BaselineCenterColor.SampleLevel(LinearSampler, centerUV, 0);
 		centerColor = baselineColor;
 		if (characterWeight > 0.0) {

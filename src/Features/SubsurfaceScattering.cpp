@@ -882,8 +882,9 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 	if (!state)
 		return;
 
-	const auto characterCategoryMask = static_cast<uint>(
-		State::ExtraShaderDescriptors::CharacterCategoryMask);
+	const auto characterCategoryMask =
+		static_cast<uint>(State::ExtraShaderDescriptors::CharacterCategoryMask) |
+		static_cast<uint>(State::ExtraShaderDescriptors::CharacterExcluded);
 	state->permutationData.ExtraShaderDescriptor &= ~characterCategoryMask;
 
 	if (deferred && deferred->deferredPass) {
@@ -914,10 +915,18 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 		static thread_local std::uint32_t routeFrame =
 			std::numeric_limits<std::uint32_t>::max();
 		static thread_local bool routeRequested = false;
+		static thread_local NeuralRendering::CharacterSettings actorPolicy{};
+		static thread_local std::uint32_t actorProjectionWidth = 0;
+		static thread_local std::uint32_t actorProjectionHeight = 0;
 		if (routeFrame != state->frameCount) {
 			routeFrame = state->frameCount;
 			routeRequested =
 				upscaling.IsCharacterNeuralRenderingRouteRequested();
+			if (routeRequested) {
+				actorPolicy = upscaling.GetCharacterNeuralRenderingSettings();
+				(void)upscaling.GetCharacterNeuralRenderingProjectionExtent(
+					actorProjectionWidth, actorProjectionHeight);
+			}
 		}
 		if (routeRequested && a_pass && a_pass->geometry &&
 			IsCharacterMaterialCandidate(a_pass->shaderProperty)) {
@@ -926,6 +935,7 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 				NeuralRendering::CharacterCategory category =
 					NeuralRendering::CharacterCategory::None;
 				bool accepted = false;
+				bool excluded = false;
 			};
 			static thread_local std::uint32_t classificationFrame =
 				std::numeric_limits<std::uint32_t>::max();
@@ -962,21 +972,49 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 						NeuralRendering::CharacterCategory::None) {
 						characterRendering.ObserveClassificationRejection(
 							state->frameCount, classification.rejection);
+						// An opaque NPC material rejected for ambiguous semantics is
+						// excluded geometry, not background for neighboring NR coverage.
+						// Blended draws cannot safely author any exact categorical code.
+						entry->second.excluded =
+							classification.rejection != NeuralRendering::CharacterClassificationRejection::BlendedMaterial &&
+							classification.rejection != NeuralRendering::CharacterClassificationRejection::AlphaTestAndBlend;
 					} else {
+						const auto readBound = [](const RE::NiAVObject* a_object) {
+							if (!a_object)
+								return NeuralRendering::CharacterActorBound{};
+							const auto& sphere = a_object->worldBound;
+							return NeuralRendering::CharacterActorBound{
+								sphere.center.x, sphere.center.y, sphere.center.z, sphere.radius
+							};
+						};
+						const NeuralRendering::CharacterActorAdmissionArgs admission{
+							.actorIdentity = reinterpret_cast<std::uintptr_t>(actor),
+							.faceBound = readBound(actor->GetFaceNodeSkinned()),
+							.actorBound = readBound(actor->Get3D()),
+							.outputWidthPerEye = actorProjectionWidth,
+							.outputHeight = actorProjectionHeight,
+							.settings = actorPolicy,
+						};
 						const auto& bound = a_pass->geometry->worldBound;
 						entry->second.accepted =
+							characterRendering.ShouldAuthorActor(
+								state->frameCount, actor->GetFormID(), admission) &&
 							characterRendering.ObserveGeometry(
 								state->frameCount,
 								actor->GetFormID(), geometryIdentity,
 								classification.category,
 								bound.center.x, bound.center.y,
 								bound.center.z, bound.radius);
+						entry->second.excluded = !entry->second.accepted;
 					}
 				}
 			}
 			if (entry->second.accepted) {
 				state->permutationData.ExtraShaderDescriptor |=
 					static_cast<uint>(entry->second.category) << 8;
+			} else if (entry->second.excluded) {
+				state->permutationData.ExtraShaderDescriptor |=
+					static_cast<uint>(State::ExtraShaderDescriptors::CharacterExcluded);
 			}
 		}
 

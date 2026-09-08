@@ -149,35 +149,40 @@ motion-vector, optional control-mask, and output extents. D3D11 input
 preparation, submit-float conversion, depth conversion, Feature 18 pixel
 accounting, output commit, and late overlays are restricted to those mapped
 extents. The Upscaled-Center route still composites the full existing center so
-normal DLSS fills every pixel, but a zeroed exact mask prevents sampling the
-partial NR output outside the selection. Mask clears and D3D12 resource-state
-transitions remain whole-resource operations.
+normal DLSS fills every pixel. Current mask-support bounds skip mask reads
+outside the selection's enclosure, and zero mask values prevent sampling the
+partial NR output. Ordinary mask updates clear departed pixels by dispatching
+the union of the previous and current mask-work rectangles. Whole-mask clears
+are limited to initialization or changes to uniform masks; repeated unchanged
+uniform masks need no clear. D3D12 resource-state transitions remain whole-resource.
 
 The exact current-frame mask is generated on the GPU, while Feature 18 subrect
 coordinates are CPU scalar parameters. Reading the exact mask bounds back in the
 same frame would introduce a GPU/CPU synchronization stall. The implementation
 therefore uses the current projected semantic bounds as a conservative enclosure
 and keeps the R8 mask authoritative for final pixels. The provider rectangle is
-coarsely aligned with per-axis motion headroom equal to roughly one-twelfth of
-the output extent (clamped to 32–128 pixels), and remains spatially fixed while
+coarsely aligned with per-axis motion headroom equal to one-eighth of the
+required rectangle's extent plus 16 pixels (clamped to 32–96 pixels), and remains spatially fixed while
 the exact mask moves inside it. The full output rectangle, including its base,
 remains part of Feature 18's history identity: if required bounds
 escape, the provider expands the existing anchored envelope instead of sliding
 it, and CSX conservatively resets Feature 18 history for both eyes in the stereo
 batch. Returning across already covered screen space therefore does not cause
-another rectangle change. A contraction must save at least half of the current
-provider area and remain the identical candidate for 180 frames before it is
-accepted, preventing ordinary projected-size oscillation from causing periodic
-resets. A
+another rectangle change. A rolling envelope retains the last 60 newly prepared
+source frames. After a 30-evaluation contraction cooldown, a padded envelope
+that saves at least 25% of provider area can shrink or recenter the rectangle.
+Growth does not restart that cooldown, and contraction does not require identical
+pixel bounds. A
 generation/crop change or proven-empty frame clears the provider state and
 permits a fresh, smaller rectangle on re-entry. It does not dispatch Feature 18
 once per NPC.
 
 This stability policy deliberately trades temporary compute area for temporal
 continuity. A character traversing previously uncovered parts of an eye can
-grow the anchored envelope as far as the full eye; ROI savings return after the
-smaller candidate remains stable for the contraction interval, or immediately
-after a proven-empty epoch boundary.
+grow the anchored envelope as far as the full eye; old excursions age out of the
+recent envelope even while the subject keeps moving. Contraction still requires
+the area-saving threshold, and genuine rectangle changes still reset provider
+history. A proven-empty epoch boundary clears the retained state immediately.
 
 Several `NVSDK_NGX_D3D12_EvaluateFeature` calls are a separate possibility, not
 an ROI-list capability. Reusing one Feature 18 handle for several actors in the
@@ -326,17 +331,21 @@ drawn. In VR, `MASKS2` remains a two-byte attachment by changing from
 | Channel | Meaning                                                          |
 | ------- | ---------------------------------------------------------------- |
 | `x`     | inverse vertex AO at 8-bit UNORM precision                       |
-| `y`     | exact category code: none=`0`, face=`85`, skin=`170`, hair=`255` |
+| `y`     | exact category code: none=`0`, excluded NPC=`1`, face=`85`, skin=`170`, hair=`255` |
 
-The category lane accepts only those four R8 codes. An ordinary normalized
+The category lane accepts only those five R8 codes. An ordinary normalized
 blend therefore decodes as category zero unless it lands on an exact code.
 The pixel shader continues to output opacity in its fourth component, so the
 inherited MRT source-alpha blend factor remains available without introducing
 stored destination alpha that the former single-channel target did not have.
 
-After deferred terrain replay and before blended decals, CSX freezes the active
-packed stereo extent of `MASKS2` together with main depth from the same render
-point. Capturing before blended decals prevents ordinary alpha blending from
+After deferred terrain replay and before blended decals, a compute pass freezes
+current projected character rectangles of `MASKS2` together with main depth from
+the same render point. Rectangles include render jitter, coverage taps, and the
+maximum feather footprint. Unknown projections conservatively capture the full
+affected eye. Every later authored category/depth read checks this frame's valid
+capture rectangle, so untouched snapshot texels cannot supply stale evidence.
+Capturing before blended decals prevents ordinary alpha blending from
 diluting exact semantic IDs. The mask resolve later samples that synchronized
 depth and the current per-eye depth guide. A category pixel is rejected only
 when a materially closer later surface has taken ownership; a farther or
@@ -345,8 +354,10 @@ enablement and strength are then resolved into the dedicated per-eye
 `R8_UNORM` texture. The path avoids a second character draw traversal and
 avoids copying unused native-allocation padding, but its storage and bandwidth
 costs are not free.
-The frozen depth texture preserves the source texture format and SRV
-interpretation. The implemented depth-view allowlist is
+The frozen depth texture stores the original unlinearized SRV values in
+`R32_FLOAT`, independent of the source depth format. This permits rectangular
+compute capture without partial depth/stencil-resource copies. The source
+depth-view allowlist is
 `DXGI_FORMAT_R24_UNORM_X8_TYPELESS`,
 `DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS`, `DXGI_FORMAT_R32_FLOAT`, and
 `DXGI_FORMAT_R16_UNORM`; any other view format fails closed.
@@ -357,6 +368,13 @@ feathering. The default keeps rejection enabled. The diagnostic
 it preserves authored categories, strengths, eligibility regions, and any
 separately enabled edge-feather policy. Per-eye telemetry reports the frozen
 stereo base/crop and current local depth dimensions used by the shader.
+
+Four separately decoded point taps reconstruct subpixel strength coverage with
+bilinear weights; encoded category IDs are never interpolated. Each tap retains
+its own depth visibility and distance weight. Disabled or explicitly excluded
+center surfaces cannot absorb neighboring coverage. This targets jitter-driven
+edge flicker without accumulating stale temporal mask pixels. Interior coverage
+skips the optional, more expensive feather neighborhood.
 
 Keeping category identity independent of its current strength prevents
 optional feathering from growing enabled skin into a disabled face or hair
@@ -434,15 +452,18 @@ Rendering route.
 Actor bounds are projected independently with each eye's unjittered matrix and
 cached as one stereo plan for the frame. The left-eye projection is never
 reused for the right eye. Bounds are expanded, clamped to that eye's viewport,
-quantized for stability, and retained briefly only while the actor still has a
-current valid projection. Behind-camera, culled, too-distant,
+quantized for stability, and rebuilt from current projected material bounds.
+Size/adaptive admission has hysteresis, but does not retain stale screen
+rectangles. Behind-camera, culled, too-distant,
 outside-viewport, and too-small candidates are omitted without reusing a stale
 screen rectangle. A nonzero distance cutoff fades the exact mask during the
 final up-to-one metre inside the selected limit and drops provider work at the
 exact zero-weight boundary; it is not held for additional frames. Distance
 admission uses the nearest selected face, skin, or hair bound; perceptual
-priority and size admission use the observed face bounds, so a large body or
-hair bound cannot satisfy `Minimum Face Size`. A retained actor
+priority and size admission use the stable face-node bound before material
+authoring. When a usable face projection is absent, an actor-root bound is a
+conservative fallback and may admit a body that a strict face-only metric would
+reject. A retained actor
 uses a 75% exit threshold so minor projection changes cannot chatter at the
 entry gate. Admission uses the
 maximum face projection from the stereo pair, preventing one eye from
@@ -569,11 +590,14 @@ forces the main Upscaled-Center route to its existing staged neural output, so
 the normal-DLSS center remains the baseline without an extra copy. The submit
 float route already keeps its neural output separate. Frames with no
 eligible material observation are logical empty captures: they clear the
-per-eye masks and bypass both active-stereo provenance copies and Feature 18.
+per-eye masks and bypass provenance capture and Feature 18.
 Repeated capture callbacks with the same frame, active extent, category policy,
-and jitter reuse the first snapshot instead of copying it again.
-Authored and forced-mask coverage is sampled on stable policy/layout changes
-and at a 30-frame cadence per feature slot. Head motion and changing projected
+and jitter reuse the first snapshot instead of capturing it again.
+GPU coverage sampling requires a non-Off character debug view; ordinary play
+does not periodically scan the whole surface for diagnostics. When enabled,
+coverage is sampled on stable policy/layout changes and at a 30-frame cadence
+per feature slot. DevBench reports that requirement and whether sampling is
+enabled. Head motion and changing projected
 rectangles do not trigger extra counter/readback work. Readbacks are polled once
 per frame and ordered by a monotonic request serial. Authored-category counters
 scan every low-resolution input pixel in the active eye crop directly,
@@ -581,11 +605,12 @@ independent of output resampling, render jitter, depth rejection, and ROI
 motion. These delayed samples are diagnostics only: a stale zero sample never
 suppresses current-frame Feature 18. Same-frame empty material observations or
 a deterministically empty eligibility plan request a bypass immediately. On
-ordinary non-sampling frames the semantic-mask shader also dispatches only the
-compute rectangle; coverage sampling and debug views intentionally resolve the
-full surface. A one-eye projection disagreement is not treated as proof: that
-eye falls back to a full-eye eligibility rectangle while the authored category
-texture still selects the actual pixels. If the bounded CPU observation table
+ordinary non-debug frames the semantic-mask shader dispatches the union of the
+previous and current mask-work rectangles, independently of the larger retained
+provider rectangle. Debug views intentionally resolve the full surface. A bound
+proven offscreen in one eye no longer forces that eye to full-eye eligibility;
+only invalid or near-plane-uncertain projections require the conservative
+fallback. If the bounded CPU observation table
 fills, additional selected geometry continues to author category IDs and marks
 the projection unbounded; that exceptional frame likewise uses a full-eye
 rectangle instead of silently omitting the geometry. The stereo execution
@@ -609,14 +634,16 @@ strict final-image visibility remains unproven for those cases. Solving it
 requires a later visibility/composition signal with defined ownership, not a
 looser depth tolerance.
 
-The category channel has no actor identity. Separate visual eligibility
-rectangles prevent the normal case of an adaptively omitted actor entering the
-mask merely because it lies in a gap in the provider enclosure. When more than
-16 selected rectangles must be compacted, a different character inside a
-merged eligibility box still cannot be distinguished by actor identity. The
-per-pixel radial-depth cutoff remains exact for eye distance, but a strict
-per-actor projected-size guarantee in that exceptional crowd case would need an
-actor-ID buffer or a selected-geometry pass.
+The category channel has no actor identity. Instead, minimum-size and adaptive
+admission are decided once per actor/world frame before its materials author
+categories. The stable face-node bound supplies the detail-size metric, with a
+conservative actor-root fallback when unavailable or offscreen. Rejected opaque
+NPC materials receive the explicit excluded code, which coverage reconstruction
+and feathering cannot paint. Compacted or overlapping eligibility rectangles
+therefore cannot re-admit rejected NPC materials. Unusual, broad fallback bounds
+may still admit more work than a true face bound would. Adaptive rejection
+counts are stereo-wide authoring decisions; selected-region counts are per-eye,
+so these diagnostics are not an exact per-eye arithmetic decomposition.
 
 Per-pixel distance rejection controls the final composite; it cannot make the
 private network sparse inside a retained actor rectangle. Compute savings come
@@ -632,11 +659,12 @@ precision. Flat SE/AE permutations retain their original `R16_UNORM`
 representation.
 
 When character mode observes an enabled material, it additionally allocates an
-active packed-stereo RG8 category snapshot and a matching native-format depth
-snapshot, then copies only `2 * logical eye width` by logical render height each
-nonempty frame. Native allocation padding is excluded. Logical empty frames
-skip both copies, although previously allocated snapshot resources remain
-resident until reset or resource recreation. The two copies share the
+active packed-stereo RG8 category snapshot and an R32_FLOAT depth snapshot.
+Their allocation spans the logical stereo extent, but the capture shader writes
+only guarded current projected character rectangles. Native allocation padding
+is excluded. Logical empty frames skip capture, although previously allocated
+snapshot resources remain resident until reset or resource recreation. The
+simultaneous category/depth capture shares the
 `Upscaling::DLSS5CharacterCategoryCapture` profiling scope. Dedicated per-eye
 `R8_UNORM` CSX selection masks and their small diagnostic counter buffers are
 separate slot resources. The dynamic compute rectangle reduces the provider's
@@ -654,6 +682,13 @@ result. Disabling character mode restores the ordinary automatic-mask route.
 The branch reports the single-rectangle path as pinned/private, reports an ROI
 list as unsupported by the observed ABI, and reports multi-evaluation as an
 unvalidated experimental candidate rather than a production capability.
+
+The controller suite includes bounded ROI/motion invariants, actor admission,
+frame-wrap policy, and D3D11 WARP execution of the production capture, mask, and
+composite shaders. Synthetic shader tests cover stale-region rejection, dirty
+clears, subpixel coverage, category strengths, depth/distance rejection, excluded
+actors, stereo offsets, and poisoned unused NR output. These are functional
+tests, not NVIDIA inference timing or in-game visual qualification.
 
 A successful build validates type and shader integration only. A controlled VR
 run must still establish all of the following before the experiment can be

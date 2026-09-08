@@ -65,6 +65,7 @@ namespace Permutation
 		static const uint IsFemale = (1 << 6);
 		static const uint SuppressExternalEmittance = (1 << 7);
 		static const uint CharacterCategoryMask = (3 << 8);
+		static const uint CharacterExcluded = (1 << 10);
 		static const uint CharacterFace = (1 << 8);
 		static const uint CharacterSkin = (2 << 8);
 		static const uint CharacterHair = (3 << 8);

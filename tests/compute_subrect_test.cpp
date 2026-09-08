@@ -1,5 +1,5 @@
-#include "Features/Upscaling/NeuralRendering/ComputeSubrect.h"
 #include "Features/Upscaling/NeuralRendering/CharacterComputeSubrect.h"
+#include "Features/Upscaling/NeuralRendering/ComputeSubrect.h"
 
 #include <array>
 #include <limits>
@@ -8,8 +8,8 @@ int main()
 {
 	using NeuralRendering::BuildCenteredComputeSubrect;
 	using NeuralRendering::BuildCharacterComputeSubrect;
-	using NeuralRendering::ContainsComputeSubrect;
 	using NeuralRendering::ComputeSubrect;
+	using NeuralRendering::ContainsComputeSubrect;
 	using NeuralRendering::MapComputeSubrect;
 	using NeuralRendering::ResolveCharacterProviderRoiHeadroom;
 	using NeuralRendering::ResolveStableCharacterComputeSubrect;
@@ -20,10 +20,10 @@ int main()
 	static_assert(ComputeSubrect{ 90, 80, 10, 20 }.Fits(100, 100));
 	static_assert(!ComputeSubrect{ 90, 80, 11, 20 }.Fits(100, 100));
 	static_assert(ComputeSubrect{ 2, 3, 4, 5 }.Area() == 20);
-	static_assert(ResolveCharacterProviderRoiHeadroom(200) == 32);
-	static_assert(ResolveCharacterProviderRoiHeadroom(640) == 53);
-	static_assert(ResolveCharacterProviderRoiHeadroom(1512) == 126);
-	static_assert(ResolveCharacterProviderRoiHeadroom(1680) == 128);
+	static_assert(ResolveCharacterProviderRoiHeadroom(100) == 32);
+	static_assert(ResolveCharacterProviderRoiHeadroom(200) == 41);
+	static_assert(ResolveCharacterProviderRoiHeadroom(640) == 96);
+	static_assert(ResolveCharacterProviderRoiHeadroom(1680) == 96);
 
 	static_assert(
 		MapComputeSubrect({ 1, 1, 1, 1 }, 3, 3, 10, 10) ==
@@ -78,7 +78,7 @@ int main()
 	const ComputeSubrect initialRequired{ 100, 100, 80, 120 };
 	const auto initialProvider = ResolveStableCharacterComputeSubrect(
 		initialRequired, 1512, 1680, stable);
-	if (initialProvider != ComputeSubrect{ 0, 0, 320, 384 } ||
+	if (initialProvider != ComputeSubrect{ 64, 64, 192, 192 } ||
 		!initialProvider.Fits(1512, 1680) ||
 		!ContainsComputeSubrect(initialProvider, initialRequired)) {
 		return 8;
@@ -99,35 +99,11 @@ int main()
 	const ComputeSubrect escaped{ 300, 100, 80, 120 };
 	const auto expandedProvider = ResolveStableCharacterComputeSubrect(
 		escaped, 1512, 1680, stable);
-	if (expandedProvider != ComputeSubrect{ 0, 0, 512, 384 } ||
+	if (expandedProvider != ComputeSubrect{ 64, 64, 384, 192 } ||
 		expandedProvider.baseX != initialProvider.baseX ||
 		expandedProvider.baseY != initialProvider.baseY ||
 		!ContainsComputeSubrect(expandedProvider, escaped)) {
 		return 10;
-	}
-
-	// A genuinely wider requirement may grow an extent. Alternating contained
-	// candidates must not satisfy the stable-contraction delay.
-	const ComputeSubrect widerRequired{ 100, 100, 500, 120 };
-	const auto grownProvider = ResolveStableCharacterComputeSubrect(
-		widerRequired, 1512, 1680, stable);
-	if (grownProvider != ComputeSubrect{ 0, 0, 768, 384 } ||
-		!ContainsComputeSubrect(grownProvider, expandedProvider)) {
-		return 11;
-	}
-	for (std::uint32_t frame = 0;
-		frame < NeuralRendering::kCharacterProviderRoiShrinkDelayFrames * 2u;
-		++frame) {
-		const auto provider = ResolveStableCharacterComputeSubrect(
-			(frame & 1u) ? initialRequired : escaped,
-			1512, 1680, stable);
-		if (provider != grownProvider) {
-			return 12;
-		}
-	}
-	if (stable.pendingShrink != initialProvider ||
-		stable.shrinkCandidateFrames != 1) {
-		return 13;
 	}
 
 	// Expansion must preserve the far edges when a nonzero provider grows left
@@ -135,77 +111,166 @@ int main()
 	StableCharacterComputeSubrect reverse{};
 	const auto reverseInitial = ResolveStableCharacterComputeSubrect(
 		{ 1000, 1000, 80, 120 }, 1512, 1680, reverse);
-	if (reverseInitial != ComputeSubrect{ 832, 832, 384, 448 }) {
-		return 14;
+	if (!ContainsComputeSubrect(reverseInitial, { 1000, 1000, 80, 120 })) {
+		return 11;
 	}
 	const auto reverseExpanded = ResolveStableCharacterComputeSubrect(
 		{ 700, 700, 80, 120 }, 1512, 1680, reverse);
-	if (reverseExpanded != ComputeSubrect{ 512, 512, 704, 768 } ||
+	if (!ContainsComputeSubrect(reverseExpanded, reverseInitial) ||
+		!ContainsComputeSubrect(reverseExpanded, { 700, 700, 80, 120 }) ||
 		ResolveStableCharacterComputeSubrect(
 			{ 1000, 1000, 80, 120 }, 1512, 1680, reverse) !=
 			reverseExpanded) {
-		return 15;
+		return 12;
 	}
 
-	const ComputeSubrect largeRequired{ 128, 128, 800, 800 };
-	const auto largeProvider = ResolveStableCharacterComputeSubrect(
-		largeRequired, 1512, 1680, stable);
-	if (largeProvider != ComputeSubrect{ 0, 0, 1088, 1088 } ||
-		!ContainsComputeSubrect(largeProvider, grownProvider) ||
-		!ContainsComputeSubrect(largeProvider, largeRequired)) {
-		return 16;
-	}
-	const auto retainedLargeProvider = ResolveStableCharacterComputeSubrect(
-		initialRequired, 1512, 1680, stable);
-	if (retainedLargeProvider.width != largeProvider.width ||
-		retainedLargeProvider.height != largeProvider.height ||
-		!ContainsComputeSubrect(retainedLargeProvider, initialRequired) ||
-		!stable.pendingShrink.IsValid() ||
-		stable.shrinkCandidateFrames != 1) {
-		return 17;
-	}
-
+	// A transient full-eye requirement expires even when one projected pixel
+	// alternates across the production four/eight-pixel alignment boundaries.
 	StableCharacterComputeSubrect contraction{};
+	const ComputeSubrect fullEye{ 0, 0, 1512, 1680 };
 	const auto contractionLarge = ResolveStableCharacterComputeSubrect(
-		largeRequired, 1512, 1680, contraction);
+		fullEye, 1512, 1680, contraction);
+	ComputeSubrect oscillationUnion{};
 	for (std::uint32_t frame = 1;
-		frame < NeuralRendering::kCharacterProviderRoiShrinkDelayFrames;
+		frame <= NeuralRendering::kCharacterProviderRoiHistoryFrames;
 		++frame) {
-		if (ResolveStableCharacterComputeSubrect(
-				initialRequired, 1512, 1680, contraction) != contractionLarge) {
-			return 18;
+		const std::uint32_t projectedX = (frame & 1u) ? 644u : 643u;
+		const std::array regions{ NeuralRendering::CharacterRect{
+			projectedX / 4u * 4u, 780,
+			(projectedX + 103u) / 4u * 4u, 880 } };
+		const auto required = BuildCharacterComputeSubrect(regions, 1512, 1680);
+		oscillationUnion = NeuralRendering::UnionCharacterComputeSubrect(
+			oscillationUnion, required);
+		const auto provider = ResolveStableCharacterComputeSubrect(
+			required, 1512, 1680, contraction);
+		if (!ContainsComputeSubrect(provider, required))
+			return 13;
+		if (frame < NeuralRendering::kCharacterProviderRoiHistoryFrames &&
+			provider != contractionLarge) {
+			return 14;
 		}
 	}
-	const auto contractedProvider = ResolveStableCharacterComputeSubrect(
-		initialRequired, 1512, 1680, contraction);
-	if (contractedProvider != initialProvider ||
-		contraction.pendingShrink.IsValid() ||
-		contraction.shrinkCandidateFrames != 0) {
-		return 19;
+	const auto contractedProvider = contraction.provider;
+	if (contractedProvider.Area() > fullEye.Area() / 10u ||
+		!ContainsComputeSubrect(contractedProvider, oscillationUnion) ||
+		contraction.framesSinceContraction != 0) {
+		return 15;
+	}
+	// Repeated contained oscillation must not trade the old cost bug for a
+	// periodically shifting provider/history identity.
+	for (std::uint32_t frame = 0; frame < 10000; ++frame) {
+		const auto required = ComputeSubrect{
+			(frame & 1u) ? 640u : 632u, 776, 120, 112
+		};
+		if (ResolveStableCharacterComputeSubrect(
+				required, 1512, 1680, contraction) != contractedProvider) {
+			return 16;
+		}
 	}
 
+	// Continuous travel, including reversals, must neither starve contraction
+	// through frequent growth nor retain the entire historical screen path.
+	StableCharacterComputeSubrect moving{};
+	for (std::uint32_t frame = 0; frame < 6000; ++frame) {
+		const auto phase = frame % 600u;
+		const auto offset = phase < 300u ? phase * 4u : (600u - phase) * 4u;
+		const ComputeSubrect required{ 100u + offset, 700, 100, 100 };
+		const auto provider = ResolveStableCharacterComputeSubrect(
+			required, 1512, 1680, moving);
+		if (!provider.Fits(1512, 1680) ||
+			!ContainsComputeSubrect(provider, required) ||
+			provider.width > 768u || provider.height > 256u) {
+			return 17;
+		}
+	}
+
+	// An edge-to-edge excursion can grow to almost the entire eye immediately,
+	// but stale bounds are reclaimed while the latest edge remains covered.
 	StableCharacterComputeSubrect edge{};
 	(void)ResolveStableCharacterComputeSubrect(
 		initialRequired, 1512, 1680, edge);
 	const ComputeSubrect edgeRequired{ 1490, 1650, 22, 30 };
 	const auto edgeProvider = ResolveStableCharacterComputeSubrect(
 		edgeRequired, 1512, 1680, edge);
-	if (edgeProvider != ComputeSubrect{ 0, 0, 1512, 1680 } ||
-		!edgeProvider.Fits(1512, 1680) ||
+	if (!edgeProvider.Fits(1512, 1680) ||
+		!ContainsComputeSubrect(edgeProvider, initialRequired) ||
 		!ContainsComputeSubrect(edgeProvider, edgeRequired)) {
-		return 20;
+		return 18;
+	}
+	for (std::uint32_t frame = 0;
+		frame < NeuralRendering::kCharacterProviderRoiHistoryFrames;
+		++frame) {
+		(void)ResolveStableCharacterComputeSubrect(
+			edgeRequired, 1512, 1680, edge);
+	}
+	if (edge.provider.Area() >= edgeProvider.Area() / 4u ||
+		!ContainsComputeSubrect(edge.provider, edgeRequired)) {
+		return 19;
 	}
 
 	if (ResolveStableCharacterComputeSubrect(
-			{}, 1512, 1680, stable).IsValid() ||
-		stable.provider.IsValid() || stable.pendingShrink.IsValid() ||
-		stable.shrinkCandidateFrames != 0) {
-		return 21;
+			{}, 1512, 1680, stable)
+			.IsValid() ||
+		stable.provider.IsValid() || stable.recentCount != 0 ||
+		stable.framesSinceContraction != 0) {
+		return 20;
 	}
 	const auto reenteredProvider = ResolveStableCharacterComputeSubrect(
 		initialRequired, 1512, 1680, stable);
 	if (reenteredProvider != initialProvider) {
+		return 21;
+	}
+	// Even a growing eye extent starts a new coordinate/resource epoch rather
+	// than silently retaining a still-in-bounds old envelope or its ring.
+	const auto resizedProvider = ResolveStableCharacterComputeSubrect(
+		{ 200, 200, 100, 100 }, 1600, 1800, stable);
+	if (stable.recentCount != 1 || stable.width != 1600 || stable.height != 1800 ||
+		resizedProvider != NeuralRendering::BuildCharacterProviderComputeSubrect(
+							   { 200, 200, 100, 100 }, 1600, 1800)) {
 		return 22;
+	}
+	if (ResolveStableCharacterComputeSubrect(
+			{ 1590, 1790, 20, 20 }, 1600, 1800, stable)
+			.IsValid() ||
+		stable.recentCount != 0 || stable.provider.IsValid()) {
+		return 23;
+	}
+	const ComputeSubrect centralSmall{ 706, 790, 100, 100 };
+	const auto centralProvider = NeuralRendering::BuildCharacterProviderComputeSubrect(
+		centralSmall, 1512, 1680);
+	if (centralProvider != ComputeSubrect{ 640, 704, 256, 256 } ||
+		centralProvider != NeuralRendering::BuildCharacterProviderComputeSubrect(
+							   centralSmall, 3024, 3360)) {
+		return 24;
+	}
+
+	// Adversarial histories and changing surface sizes cannot lose either this
+	// frame's pixels or any still-retained recent requirement at contraction.
+	StableCharacterComputeSubrect assorted{};
+	std::uint32_t sequence = 0x4F49524Eu;
+	const auto next = [&sequence]() {
+		sequence = sequence * 1664525u + 1013904223u;
+		return sequence;
+	};
+	for (std::uint32_t frame = 0; frame < 10000; ++frame) {
+		const auto width = (frame / 137u) % 2u ? 1512u : 800u;
+		const auto height = (frame / 137u) % 2u ? 1680u : 600u;
+		const auto boxWidth = 1u + next() % 400u;
+		const auto boxHeight = 1u + next() % 400u;
+		const ComputeSubrect required{
+			next() % (width - boxWidth + 1u),
+			next() % (height - boxHeight + 1u), boxWidth, boxHeight
+		};
+		const auto provider = ResolveStableCharacterComputeSubrect(
+			required, width, height, assorted);
+		if (!provider.Fits(width, height) ||
+			!ContainsComputeSubrect(provider, required)) {
+			return 25;
+		}
+		for (std::uint32_t index = 0; index < assorted.recentCount; ++index) {
+			if (!ContainsComputeSubrect(provider, assorted.recentRequired[index]))
+				return 26;
+		}
 	}
 	return 0;
 }

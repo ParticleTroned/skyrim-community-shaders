@@ -263,6 +263,7 @@ public:
 		IsFemale = 1 << 6,
 		SuppressExternalEmittance = 1 << 7,
 		CharacterCategoryMask = 0b11 << 8,
+		CharacterExcluded = 1 << 10,
 		CharacterFace = 0b01 << 8,
 		CharacterSkin = 0b10 << 8,
 		CharacterHair = 0b11 << 8
@@ -287,6 +288,9 @@ public:
 	std::atomic_bool saveLoadSafeModeActive{ false };
 	std::atomic_uint32_t saveLoadSafeModeStartFrame{ 0 };
 	std::atomic_uint32_t saveLoadSafeModeEndFrame{ 0 };
+	// Save callbacks can arrive between render-frame updates. Serialize the
+	// persistence and mutation windows so expiry cannot clear a newer callback.
+	std::mutex saveLoadPersistenceMutex;
 	// Saving guards persistence without replacing the rendered world. Keep
 	// genuine load provenance and its grace independent of save-only events.
 	std::mutex worldLoadTransitionMutex;

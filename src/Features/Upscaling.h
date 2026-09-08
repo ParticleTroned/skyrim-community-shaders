@@ -1372,6 +1372,7 @@ public:
 		uint32_t targetOffsetX;
 		uint32_t characterSelectionMode;
 		uint32_t padding[3];
+		float4 characterMaskBounds;  // normalized min/max, includes the linear footprint
 	};
 
 	struct PeripheryTAACB
@@ -1407,7 +1408,7 @@ public:
 	static_assert(sizeof(DynamicResolutionStretchCB) == 48, "DynamicResolutionStretchCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(VRMenuLayerCompositeCB) == 16, "VRMenuLayerCompositeCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedPeripheryCB) == 96, "FoveatedPeripheryCB layout changed; update HLSL cbuffer.");
-	static_assert(sizeof(FoveatedCenterBlendCB) == 80, "FoveatedCenterBlendCB layout changed; update HLSL cbuffer.");
+	static_assert(sizeof(FoveatedCenterBlendCB) == 96, "FoveatedCenterBlendCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(PeripheryTAACB) == 304, "PeripheryTAACB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(CameraMotionVectorsCB) == 256, "CameraMotionVectorsCB layout changed; update HLSL cbuffer.");
 
@@ -1557,6 +1558,9 @@ public:
 	bool IsCharacterNeuralRenderingRouteRequested() const;
 	/** Returns the enabled Face/Skin/Hair category bits for G-buffer capture. */
 	std::uint32_t GetCharacterNeuralRenderingCategoryMask() const noexcept;
+	/** Canonical character policy and full-eye projection extent for draw-time admission. */
+	NeuralRendering::CharacterSettings GetCharacterNeuralRenderingSettings() const;
+	bool GetCharacterNeuralRenderingProjectionExtent(uint32_t& a_widthPerEye, uint32_t& a_height) const;
 	uint32_t GetRuntimeQualityMode() const;
 	uint32_t GetRuntimeDLSSPreset() const;
 	bool GetRuntimeFSR4Enabled() const;

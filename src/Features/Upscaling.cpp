@@ -16967,6 +16967,18 @@ bool Upscaling::IsCharacterNeuralRenderingRouteRequested() const
 	       admission.sourceWorldFrame == admission.currentFrame;
 }
 
+NeuralRendering::CharacterSettings Upscaling::GetCharacterNeuralRenderingSettings() const
+{
+	return BuildCharacterSettings(settings);
+}
+
+bool Upscaling::GetCharacterNeuralRenderingProjectionExtent(uint32_t& a_widthPerEye, uint32_t& a_height) const
+{
+	uint32_t inputWidth = 0;
+	uint32_t inputHeight = 0;
+	return GetRuntimeFoveatedRegionDimensions(inputWidth, inputHeight, a_widthPerEye, a_height);
+}
+
 std::uint32_t Upscaling::GetCharacterNeuralRenderingCategoryMask() const noexcept
 {
 	std::uint32_t mask = 0;
@@ -26315,6 +26327,16 @@ bool Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, I
 	cbData.centerHorizontalScale = ClampFoveatedCenterHorizontalScale(centerHorizontalScale);
 	cbData.targetOffsetX = targetOffsetX;
 	cbData.characterSelectionMode = characterMaskSRV ? 1u : 0u;
+	if (characterMaskSRV) {
+		const auto support = NeuralRendering::CharacterRendering::Instance()
+			.GetMaskSupportRect(characterMaskSRV, rect.outputWidth, rect.outputHeight);
+		cbData.characterMaskBounds = {
+			support.baseX * cbData.invSourceDim.x,
+			support.baseY * cbData.invSourceDim.y,
+			(support.baseX + support.width) * cbData.invSourceDim.x,
+			(support.baseY + support.height) * cbData.invSourceDim.y
+		};
+	}
 	foveatedCenterBlendCB->Update(cbData);
 
 	ID3D11Buffer* cb = foveatedCenterBlendCB->CB();

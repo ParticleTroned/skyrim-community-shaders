@@ -1724,6 +1724,19 @@ if(BUILD_CONTROLLER_TESTS)
         CharacterRegionPolicy
         PROPERTIES LABELS "ControllerTests"
     )
+    foreach(_character_policy actor mask_work)
+        set(_character_target "character_${_character_policy}_policy_test")
+        add_executable(${_character_target} EXCLUDE_FROM_ALL "tests/${_character_target}.cpp")
+        target_compile_features(${_character_target} PRIVATE cxx_std_23)
+        target_include_directories(${_character_target} PRIVATE "${PROJECT_SOURCE_DIR}/src")
+        add_test(NAME ${_character_target} COMMAND ${_character_target})
+        set_tests_properties(${_character_target} PROPERTIES LABELS "ControllerTests")
+    endforeach()
+    add_executable(character_mask_gpu_test EXCLUDE_FROM_ALL tests/character_mask_gpu_test.cpp)
+    target_compile_features(character_mask_gpu_test PRIVATE cxx_std_23)
+    target_link_libraries(character_mask_gpu_test PRIVATE d3d11 d3dcompiler)
+    add_test(NAME CharacterMaskGpu COMMAND character_mask_gpu_test "${PROJECT_SOURCE_DIR}/package/Shaders")
+    set_tests_properties(CharacterMaskGpu PROPERTIES LABELS "ControllerTests" TIMEOUT 60)
     add_executable(
         compute_subrect_test
         EXCLUDE_FROM_ALL
@@ -1797,6 +1810,9 @@ if(BUILD_CONTROLLER_TESTS)
             world_load_transition_policy_test
             vr_render_scale_mode_policy_test
             character_region_policy_test
+            character_actor_policy_test
+            character_mask_work_policy_test
+            character_mask_gpu_test
             compute_subrect_test
             frame_telemetry_ring_test
             dlss_viewport_crop_test

@@ -1,9 +1,11 @@
 #pragma once
 
+#include "CharacterMaskWorkPolicy.h"
 #include "CharacterRegionPolicy.h"
 #include "ComputeSubrect.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <span>
 
@@ -13,24 +15,39 @@ namespace NeuralRendering
 	inline constexpr std::uint32_t kCharacterComputeRoiGuardPixels = 2;
 	inline constexpr std::uint32_t kCharacterProviderRoiAlignment = 64;
 	inline constexpr std::uint32_t kCharacterProviderRoiMinimumHeadroomPixels = 32;
-	inline constexpr std::uint32_t kCharacterProviderRoiMaximumHeadroomPixels = 128;
-	inline constexpr std::uint32_t kCharacterProviderRoiHeadroomDivisor = 12;
-	inline constexpr std::uint32_t kCharacterProviderRoiShrinkDelayFrames = 180;
+	inline constexpr std::uint32_t kCharacterProviderRoiMaximumHeadroomPixels = 96;
+	inline constexpr std::uint32_t kCharacterProviderRoiMotionAllowancePixels = 16;
+	inline constexpr std::uint32_t kCharacterProviderRoiHeadroomDivisor = 8;
+	inline constexpr std::uint32_t kCharacterProviderRoiHistoryFrames = 60;
+	inline constexpr std::uint32_t kCharacterProviderRoiShrinkDelayFrames = 30;
 
 	struct StableCharacterComputeSubrect
 	{
 		ComputeSubrect provider{};
-		ComputeSubrect pendingShrink{};
-		std::uint32_t shrinkCandidateFrames = 0;
+		std::array<ComputeSubrect, kCharacterProviderRoiHistoryFrames> recentRequired{};
+		std::uint32_t recentCursor = 0;
+		std::uint32_t recentCount = 0;
+		std::uint32_t framesSinceContraction = 0;
+		std::uint32_t width = 0;
+		std::uint32_t height = 0;
 	};
 
 	[[nodiscard]] inline constexpr std::uint32_t ResolveCharacterProviderRoiHeadroom(
 		std::uint32_t a_extent) noexcept
 	{
 		return std::clamp(
-			a_extent / kCharacterProviderRoiHeadroomDivisor,
+			a_extent / kCharacterProviderRoiHeadroomDivisor +
+				kCharacterProviderRoiMotionAllowancePixels,
 			kCharacterProviderRoiMinimumHeadroomPixels,
 			kCharacterProviderRoiMaximumHeadroomPixels);
+	}
+
+	/** Both inputs are eye-local, already validated rectangles. */
+	[[nodiscard]] inline constexpr ComputeSubrect UnionCharacterComputeSubrect(
+		const ComputeSubrect& a_left,
+		const ComputeSubrect& a_right) noexcept
+	{
+		return UnionCharacterWorkRects(a_left, a_right);
 	}
 
 	[[nodiscard]] inline constexpr bool ContainsComputeSubrect(
@@ -59,18 +76,18 @@ namespace NeuralRendering
 	{
 		if (!a_required.Fits(a_width, a_height))
 			return {};
-		const auto headroomX = ResolveCharacterProviderRoiHeadroom(a_width);
-		const auto headroomY = ResolveCharacterProviderRoiHeadroom(a_height);
+		const auto headroomX = ResolveCharacterProviderRoiHeadroom(a_required.width);
+		const auto headroomY = ResolveCharacterProviderRoiHeadroom(a_required.height);
 
 		const auto alignDown = [](std::uint32_t a_value) {
 			return (a_value / kCharacterProviderRoiAlignment) *
 			       kCharacterProviderRoiAlignment;
 		};
 		const auto guardedEnd = [](
-			std::uint32_t a_base,
-			std::uint32_t a_extent,
-			std::uint32_t a_limit,
-			std::uint32_t a_headroom) {
+									std::uint32_t a_base,
+									std::uint32_t a_extent,
+									std::uint32_t a_limit,
+									std::uint32_t a_headroom) {
 			const auto guarded =
 				static_cast<std::uint64_t>(a_base) + a_extent +
 				a_headroom;
@@ -102,11 +119,12 @@ namespace NeuralRendering
 	}
 
 	/**
-	 * Keeps the provider ROI spatially anchored while the exact character mask
-	 * moves inside its headroom. Escaped bounds expand the existing envelope rather
-	 * than sliding it, so back-and-forth motion cannot churn Feature 18 history. A
-	 * large, stable contraction is delayed because every rectangle change remains
-	 * explicit history identity; proven-empty input starts a fresh epoch immediately.
+	 * Keeps contained motion anchored, but retains only a bounded recent-motion
+	 * envelope when reclaiming stale work. Contraction needs a 25% area saving and
+	 * a cooldown, not identical pixel bounds: ordinary motion cannot indefinitely
+	 * retain a full-eye excursion. Growth never postpones that cooldown. Every
+	 * changed rectangle still changes Feature 18 history identity at the caller.
+	 * Call once per newly prepared source frame; empty input starts a fresh epoch.
 	 */
 	[[nodiscard]] inline ComputeSubrect ResolveStableCharacterComputeSubrect(
 		const ComputeSubrect& a_required,
@@ -118,6 +136,16 @@ namespace NeuralRendering
 			a_state = {};
 			return {};
 		}
+		if (a_state.width != a_width || a_state.height != a_height) {
+			a_state = {};
+			a_state.width = a_width;
+			a_state.height = a_height;
+		}
+		a_state.recentRequired[a_state.recentCursor] = a_required;
+		a_state.recentCursor =
+			(a_state.recentCursor + 1u) % kCharacterProviderRoiHistoryFrames;
+		a_state.recentCount = std::min(
+			a_state.recentCount + 1u, kCharacterProviderRoiHistoryFrames);
 
 		const auto candidate = BuildCharacterProviderComputeSubrect(
 			a_required, a_width, a_height);
@@ -127,56 +155,36 @@ namespace NeuralRendering
 		}
 		if (!a_state.provider.Fits(a_width, a_height)) {
 			a_state.provider = candidate;
-			a_state.pendingShrink = {};
-			a_state.shrinkCandidateFrames = 0;
+			a_state.framesSinceContraction = 0;
 			return a_state.provider;
 		}
-		if (ContainsComputeSubrect(a_state.provider, a_required)) {
-			const auto candidateArea = candidate.Area();
-			const auto providerArea = a_state.provider.Area();
-			const bool meaningfulStableContraction =
-				candidate != a_state.provider &&
-				ContainsComputeSubrect(a_state.provider, candidate) &&
-				candidateArea <= providerArea / 2u;
-			if (!meaningfulStableContraction) {
-				a_state.pendingShrink = {};
-				a_state.shrinkCandidateFrames = 0;
-				return a_state.provider;
-			}
-			if (a_state.pendingShrink != candidate) {
-				a_state.pendingShrink = candidate;
-				a_state.shrinkCandidateFrames = 1;
-			} else if (a_state.shrinkCandidateFrames <
-				kCharacterProviderRoiShrinkDelayFrames) {
-				++a_state.shrinkCandidateFrames;
-			}
-			if (a_state.shrinkCandidateFrames >=
-				kCharacterProviderRoiShrinkDelayFrames) {
-				a_state.provider = candidate;
-				a_state.pendingShrink = {};
-				a_state.shrinkCandidateFrames = 0;
-			}
-			return a_state.provider;
+		if (!ContainsComputeSubrect(a_state.provider, a_required)) {
+			a_state.provider = UnionCharacterComputeSubrect(
+				a_state.provider, candidate);
 		}
 
-		a_state.pendingShrink = {};
-		a_state.shrinkCandidateFrames = 0;
-		const auto baseX = std::min(a_state.provider.baseX, candidate.baseX);
-		const auto baseY = std::min(a_state.provider.baseY, candidate.baseY);
-		const auto right = std::max(
-			static_cast<std::uint64_t>(a_state.provider.baseX) +
-				a_state.provider.width,
-			static_cast<std::uint64_t>(candidate.baseX) + candidate.width);
-		const auto bottom = std::max(
-			static_cast<std::uint64_t>(a_state.provider.baseY) +
-				a_state.provider.height,
-			static_cast<std::uint64_t>(candidate.baseY) + candidate.height);
-		a_state.provider = {
-			.baseX = baseX,
-			.baseY = baseY,
-			.width = static_cast<std::uint32_t>(right - baseX),
-			.height = static_cast<std::uint32_t>(bottom - baseY),
-		};
+		a_state.framesSinceContraction = std::min(
+			a_state.framesSinceContraction + 1u,
+			kCharacterProviderRoiShrinkDelayFrames);
+		if (a_state.framesSinceContraction >= kCharacterProviderRoiShrinkDelayFrames) {
+			ComputeSubrect recentBounds{};
+			for (std::uint32_t index = 0; index < a_state.recentCount; ++index) {
+				recentBounds = UnionCharacterComputeSubrect(
+					recentBounds, a_state.recentRequired[index]);
+			}
+			const auto recentCandidate = BuildCharacterProviderComputeSubrect(
+				recentBounds, a_width, a_height);
+			const auto providerArea = a_state.provider.Area();
+			const auto maximumContractedArea =
+				(providerArea / 4u) * 3u + (providerArea % 4u) * 3u / 4u;
+			if (recentCandidate.Fits(a_width, a_height) &&
+				recentCandidate.Area() <= maximumContractedArea) {
+				// The new envelope covers every recent requirement, including this
+				// frame. It may recenter as well as shrink; the caller resets history.
+				a_state.provider = recentCandidate;
+				a_state.framesSinceContraction = 0;
+			}
+		}
 		return a_state.provider;
 	}
 
@@ -199,8 +207,8 @@ namespace NeuralRendering
 			       kCharacterComputeRoiAlignment;
 		};
 		const auto alignUpClamped = [](
-			std::uint32_t a_value,
-			std::uint32_t a_limit) {
+										std::uint32_t a_value,
+										std::uint32_t a_limit) {
 			const auto aligned =
 				(static_cast<std::uint64_t>(a_value) +
 					kCharacterComputeRoiAlignment - 1u) /
@@ -209,8 +217,8 @@ namespace NeuralRendering
 				aligned, a_limit));
 		};
 		const auto guardedMax = [](
-			std::uint32_t a_value,
-			std::uint32_t a_limit) {
+									std::uint32_t a_value,
+									std::uint32_t a_limit) {
 			return static_cast<std::uint32_t>(std::min<std::uint64_t>(
 				static_cast<std::uint64_t>(a_value) +
 					kCharacterComputeRoiGuardPixels,

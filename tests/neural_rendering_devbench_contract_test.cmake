@@ -58,12 +58,24 @@ set(
     "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterComputeSubrect.h"
 )
 set(
+    _character_actor_policy_path
+    "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterActorPolicy.h"
+)
+set(
+    _character_mask_work_policy_path
+    "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterMaskWorkPolicy.h"
+)
+set(
     _character_category_shader_path
     "${PROJECT_ROOT}/package/Shaders/Common/CharacterCategoryMask.hlsli"
 )
 set(
     _character_mask_shader_path
     "${PROJECT_ROOT}/package/Shaders/DLSS5CharacterMaskCS.hlsl"
+)
+set(
+    _character_capture_shader_path
+    "${PROJECT_ROOT}/package/Shaders/DLSS5CharacterCaptureCS.hlsl"
 )
 set(_lighting_shader_path "${PROJECT_ROOT}/package/Shaders/Lighting.hlsl")
 set(_grass_shader_path "${PROJECT_ROOT}/package/Shaders/RunGrass.hlsl")
@@ -126,8 +138,12 @@ foreach(_required_path IN ITEMS
     "${_character_header_path}"
     "${_character_source_path}"
     "${_character_region_policy_path}"
+    "${_character_compute_subrect_path}"
+    "${_character_actor_policy_path}"
+    "${_character_mask_work_policy_path}"
     "${_character_category_shader_path}"
     "${_character_mask_shader_path}"
+    "${_character_capture_shader_path}"
     "${_lighting_shader_path}"
     "${_grass_shader_path}"
     "${_effect_shader_path}"
@@ -165,8 +181,11 @@ file(READ "${_character_header_path}" _character_header)
 file(READ "${_character_source_path}" _character_source)
 file(READ "${_character_region_policy_path}" _character_region_policy)
 file(READ "${_character_compute_subrect_path}" _character_compute_subrect)
+file(READ "${_character_actor_policy_path}" _character_actor_policy)
+file(READ "${_character_mask_work_policy_path}" _character_mask_work_policy)
 file(READ "${_character_category_shader_path}" _character_category_shader)
 file(READ "${_character_mask_shader_path}" _character_mask_shader)
+file(READ "${_character_capture_shader_path}" _character_capture_shader)
 file(READ "${_lighting_shader_path}" _lighting_shader)
 file(READ "${_grass_shader_path}" _grass_shader)
 file(READ "${_effect_shader_path}" _effect_shader)
@@ -183,7 +202,7 @@ file(READ "${_pipeline_policy_path}" _pipeline_policy)
 file(READ "${_vr_render_scale_mode_policy_path}" _vr_render_scale_mode_policy)
 set(
     _source_contract_text
-    "${_upscaling}\n${_upscaling_header}\n${_deferred}\n${_subsurface_header}\n${_subsurface_source}\n${_streamline}\n${_streamline_header}\n${_renderer_header}\n${_renderer_source}\n${_runtime_header}\n${_runtime_source}\n${_compute_subrect}\n${_character_header}\n${_character_source}\n${_character_region_policy}\n${_character_compute_subrect}\n${_character_category_shader}\n${_character_mask_shader}\n${_lighting_shader}\n${_grass_shader}\n${_effect_shader}\n${_distant_tree_shader}\n${_sky_shader}\n${_deferred_composite_shader}\n${_foveated_center_blend_shader}\n${_copy_depth_guide_shader}\n${_submit_stage_stretch_shader}\n${_character_doc}\n${_d3d12_interop_source}\n${_pipeline_policy}\n${_vr_render_scale_mode_policy}"
+    "${_upscaling}\n${_upscaling_header}\n${_deferred}\n${_subsurface_header}\n${_subsurface_source}\n${_streamline}\n${_streamline_header}\n${_renderer_header}\n${_renderer_source}\n${_runtime_header}\n${_runtime_source}\n${_compute_subrect}\n${_character_header}\n${_character_source}\n${_character_region_policy}\n${_character_compute_subrect}\n${_character_actor_policy}\n${_character_mask_work_policy}\n${_character_category_shader}\n${_character_mask_shader}\n${_character_capture_shader}\n${_lighting_shader}\n${_grass_shader}\n${_effect_shader}\n${_distant_tree_shader}\n${_sky_shader}\n${_deferred_composite_shader}\n${_foveated_center_blend_shader}\n${_copy_depth_guide_shader}\n${_submit_stage_stretch_shader}\n${_character_doc}\n${_d3d12_interop_source}\n${_pipeline_policy}\n${_vr_render_scale_mode_policy}"
 )
 
 foreach(_feature_mode_contract IN ITEMS
@@ -252,6 +271,9 @@ foreach(_selection_composite_contract IN ITEMS
     [[centerColor = baselineColor;]]
     [[if (characterWeight > 0.0)]]
     [[centerColor = lerp(baselineColor, neuralColor, characterWeight);]]
+    [[float4 CharacterMaskBounds;]]
+    [[all(centerUV >= CharacterMaskBounds.xy)]]
+    [[all(centerUV < CharacterMaskBounds.zw)]]
 )
     string(FIND
         "${_foveated_center_blend_shader}"
@@ -261,6 +283,24 @@ foreach(_selection_composite_contract IN ITEMS
     if(_selection_composite_position EQUAL -1)
         message(FATAL_ERROR
             "Character selection composite contract is missing: ${_selection_composite_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_selection_support_contract IN ITEMS
+    [[float4 characterMaskBounds;]]
+    [[static_assert(sizeof(FoveatedCenterBlendCB) == 96]]
+    [[GetMaskSupportRect(characterMaskSRV, rect.outputWidth, rect.outputHeight)]]
+    [[support.baseX * cbData.invSourceDim.x]]
+    [[(support.baseX + support.width) * cbData.invSourceDim.x]]
+    [[ExpandCharacterWorkRect(slot.maskWorkSubrect, a_width, a_height, 1)]]
+    [[slot.uniformMaskValue == 0.0f ? ComputeSubrect{} : full]]
+)
+    string(FIND "${_source_contract_text}" "${_selection_support_contract}"
+        _selection_support_position)
+    if(_selection_support_position EQUAL -1)
+        message(FATAL_ERROR
+            "Character composite support-bounds contract is missing: ${_selection_support_contract}"
         )
     endif()
 endforeach()
@@ -277,9 +317,13 @@ foreach(_mask_roi_dispatch_contract IN ITEMS
     [[CharacterSelectionMask[outputPixelId] = mask;]]
     [[ClearUnorderedAccessViewFloat(]]
     [[a_slot.maskUav.Get(), clearMask.data())]]
-    [[fullSurfaceDispatch ? 0u : a_slot.computeSubrect.baseX]]
+    [[UnionCharacterWorkRects(]]
+    [[a_slot.previousMaskWorkSubrect, a_slot.maskWorkSubrect)]]
+    [[fullSurfaceDispatch ? 0u : dirtyRegion.baseX]]
     [[fullSurfaceDispatch ?]]
-    [[a_slot.computeSubrect.width]]
+    [[dirtyRegion.width]]
+    [[if (!a_slot.maskInitialized)]]
+    [[a_slot.previousMaskWorkSubrect = a_slot.maskWorkSubrect;]]
 )
     string(FIND "${_source_contract_text}" "${_mask_roi_dispatch_contract}"
         _mask_roi_dispatch_position)
@@ -329,6 +373,44 @@ foreach(_dynamic_compute_roi_contract IN ITEMS
     if(_dynamic_compute_roi_position EQUAL -1)
         message(FATAL_ERROR
             "Dynamic character compute ROI contract is missing: ${_dynamic_compute_roi_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_stable_compute_roi_contract IN ITEMS
+    [[kCharacterProviderRoiMinimumHeadroomPixels = 32]]
+    [[kCharacterProviderRoiMaximumHeadroomPixels = 96]]
+    [[kCharacterProviderRoiHistoryFrames = 60]]
+    [[kCharacterProviderRoiShrinkDelayFrames = 30]]
+    [[std::array<ComputeSubrect, kCharacterProviderRoiHistoryFrames> recentRequired{};]]
+    [[if (!ContainsComputeSubrect(a_state.provider, a_required))]]
+    [[a_state.provider = UnionCharacterComputeSubrect(]]
+    [[recentBounds, a_state.recentRequired[index])]]
+    [[recentCandidate.Area() <= maximumContractedArea]]
+)
+    string(FIND "${_character_compute_subrect}" "${_stable_compute_roi_contract}"
+        _stable_compute_roi_position)
+    if(_stable_compute_roi_position EQUAL -1)
+        message(FATAL_ERROR
+            "Bounded stable character compute ROI contract is missing: ${_stable_compute_roi_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_mask_work_rect_contract IN ITEMS
+    [[UnionCharacterWorkRects(]]
+    [[if (!a_left.IsValid())]]
+    [[if (!a_right.IsValid())]]
+    [[static_cast<std::uint64_t>(a_left.baseX) + a_left.width]]
+    [[if (right > UINT32_MAX || bottom > UINT32_MAX)]]
+    [[ExpandCharacterWorkRect(]]
+    [[if (!a_rect.Fits(a_width, a_height))]]
+)
+    string(FIND "${_character_mask_work_policy}" "${_mask_work_rect_contract}"
+        _mask_work_rect_position)
+    if(_mask_work_rect_position EQUAL -1)
+        message(FATAL_ERROR
+            "Character mask dirty/support rectangle safety contract is missing: ${_mask_work_rect_contract}"
         )
     endif()
 endforeach()
@@ -1401,7 +1483,6 @@ foreach(_source_contract IN ITEMS
     [[neuralTemporalAdmission.admitted &&]]
     [[timingFenceValue > lastCompletedTimingFenceValue_]]
     [[RefreshProjectedActors(a_args);]]
-    [[if (!currentlyProjected.contains(it->first))]]
     [[.currentDepthIdentity = currentDepthIdentity,]]
     [[.captureJitterX = state_->capturedJitterX_,]]
     [[.captureJitterY = state_->capturedJitterY_,]]
@@ -1703,6 +1784,7 @@ foreach(_readback_contract IN ITEMS
     [[readback.serial >= slot.maskCoverageSerial]]
     [[const bool samplePending = std::ranges::any_of(]]
     [[const bool measurementDue =]]
+    [[a_args.settings.debugView != CharacterDebugView::Off && !samplePending]]
     [[a_slot.lastCoverageRequestPolicyKey != samplingPolicyKey]]
     [[periodicSampleDue]]
     [[coverageReadback->serial = AllocateCoverageSerial();]]
@@ -1713,6 +1795,19 @@ foreach(_readback_contract IN ITEMS
     if(_readback_contract_position EQUAL -1)
         message(FATAL_ERROR
             "Asynchronous character-mask readback contract is missing: ${_readback_contract}"
+        )
+    endif()
+endforeach()
+
+foreach(_diagnostic_sampling_telemetry_contract IN ITEMS
+    [[{ "gpuCoverageSamplingRequiresDebugView", true }]]
+    [[{ "gpuCoverageSamplingActive", debugView != NeuralRendering::CharacterDebugView::Off }]]
+)
+    string(FIND "${_bridge}" "${_diagnostic_sampling_telemetry_contract}"
+        _diagnostic_sampling_telemetry_position)
+    if(_diagnostic_sampling_telemetry_position EQUAL -1)
+        message(FATAL_ERROR
+            "Character diagnostic-only GPU sampling telemetry is missing: ${_diagnostic_sampling_telemetry_contract}"
         )
     endif()
 endforeach()
@@ -1912,12 +2007,17 @@ if(_prepare_mask_dispatch EQUAL -1 OR
 endif()
 
 foreach(_tuple_contract IN ITEMS
+    [[static const uint Excluded = 4u;]]
+    [[if (category == Excluded)]]
+    [[return 1.0 / 255.0;]]
     [[float4 Encode(float inverseVertexAo, uint category, float opacity)]]
     [[saturate(inverseVertexAo),]]
     [[EncodeCategory(category),]]
     [[0.0,]]
     [[saturate(opacity))]]
     [[const uint code = uint(round(saturate(encodedValue.y) * 255.0));]]
+    [[if (code == 1u)]]
+    [[return Excluded;]]
     [[if (code == 85u)]]
     [[if (code == 170u)]]
     [[return code == 255u ? 3u : 0u;]]
@@ -1942,6 +2042,9 @@ foreach(_mask_shader_contract IN ITEMS
     [[RWTexture2D<unorm float> CharacterSelectionMask : register(u0);]]
     [[RWByteAddressBuffer DiagnosticCounters : register(u1);]]
     [[groupshared uint GroupCounters[9];]]
+    [[uint4 AuthoredRegion;]]
+    [[any(eyePixel < int2(AuthoredRegion.xy))]]
+    [[any(eyePixel >= int2(AuthoredRegion.xy + AuthoredRegion.zw))]]
     [[const uint2 inputSize = uint2(SourceCrop.w, Options.x);]]
     [[measureCoverage && insideDispatch && all(outputPixelId < inputSize)]]
     [[ReadAuthoredCategory(int2(outputPixelId))]]
@@ -1958,7 +2061,11 @@ foreach(_mask_shader_contract IN ITEMS
     [[GetCategoryStrength(centerCategory) * centerDistanceWeight]]
     [[neighborDistanceWeight <= 0.0]]
     [[neighborDistanceWeight);]]
-    [[if (centerEligible && Options.w != 0 && Options.z != 0 && mask < 1.0)]]
+    [[float ReconstructCoverage(]]
+    [[coverageEdge = supportedCoverage < 0.999;]]
+    [[if (centerEligible && coverageEdge && Options.w != 0 && Options.z != 0 &&]]
+    [[if (neighborCategory == 0u ||]]
+    [[mask = min(mask, GetCategoryStrength(centerCategory) * centerDistanceWeight);]]
 )
     string(FIND
         "${_character_mask_shader}"
@@ -2081,13 +2188,23 @@ foreach(_capture_contract IN ITEMS
     [[depthCaptureDesc.Height = a_sourceHeight;]]
     [[state_->EnsureCategoryCapture(a_device, categoryCaptureDesc)]]
     [[state_->EnsureDepthCapture(]]
-    [[a_context->CopySubresourceRegion(]]
-    [[state_->capturedCategories_.Get(), 0, 0, 0, 0,]]
-    [[state_->capturedDepth_.Get(), 0, 0, 0, 0,]]
-    [[a_categorySource, 0, &activeStereoBox);]]
-    [[depthTexture.Get(), 0, &activeStereoBox);]]
+    [[state_->EnsureCaptureShader(a_device, a_categorySource)]]
+    [[std::array<ComputeSubrect, 2> sourceRects{};]]
+    [[sourceRects[eye] = BuildFullComputeSubrect(a_sourceEyeWidth, a_sourceHeight);]]
+    [[sourceRects[eye] = ExpandCharacterWorkRect(sourceRects[eye],]]
+    [[OutputMergerStateGuard outputMerger(a_context);]]
+    [[ComputeStateGuard computeState(a_context);]]
+    [[state_->captureSourceCategoriesSrv_.Get(), a_depthSource]]
+    [[state_->capturedCategoriesUav_.Get(), state_->capturedDepthUav_.Get()]]
+    [[eye * a_sourceEyeWidth + rect.baseX, rect.baseY, rect.width, rect.height]]
+    [[a_context->Dispatch((rect.width + 7u) / 8u, (rect.height + 7u) / 8u, 1);]]
+    [[state_->capturedSourceRects_ = sourceRects;]]
     [[ComPtr<ID3D11Texture2D> capturedDepth_;]]
     [[ComPtr<ID3D11ShaderResourceView> capturedDepthSrv_;]]
+    [[ComPtr<ID3D11UnorderedAccessView> capturedDepthUav_;]]
+    [[ComPtr<ID3D11UnorderedAccessView> capturedCategoriesUav_;]]
+    [[ComPtr<ID3D11ComputeShader> captureShader_;]]
+    [[std::array<ComputeSubrect, 2> capturedSourceRects_{};]]
     [[.authoredDepthIdentity = authoredDepthIdentity,]]
     [[.currentDepthIdentity = currentDepthIdentity,]]
     [[state_->capturedDepthSrv_.Get(),]]
@@ -2096,6 +2213,8 @@ foreach(_capture_contract IN ITEMS
     [[static_cast<std::uint64_t>(sourceEyeWidth) * 2u != sourceDesc.Width]]
     [[state_->capturedHeight_ != sourceDesc.Height]]
     [[constants.sourceCrop[0] = a_args.eyeIndex * a_sourceEyeWidth;]]
+    [[constants.authoredRegion[0] = capturedRegion.baseX;]]
+    [[constants.authoredRegion[2] = capturedRegion.width;]]
 )
     string(FIND
         "${_character_source}\n${_character_header}"
@@ -2109,12 +2228,33 @@ foreach(_capture_contract IN ITEMS
     endif()
 endforeach()
 
+foreach(_capture_shader_contract IN ITEMS
+    [[uint4 CaptureRegion;]]
+    [[Texture2D<unorm float2> SourceCategories : register(t0);]]
+    [[Texture2D<float> SourceDepth : register(t1);]]
+    [[RWTexture2D<unorm float2> FrozenCategories : register(u0);]]
+    [[RWTexture2D<float> FrozenDepth : register(u1);]]
+    [[if (any(id.xy >= CaptureRegion.zw))]]
+    [[const uint2 pixel = CaptureRegion.xy + id.xy;]]
+    [[FrozenCategories[pixel] = SourceCategories.Load(int3(pixel, 0));]]
+    [[FrozenDepth[pixel] = SourceDepth.Load(int3(pixel, 0));]]
+)
+    string(FIND "${_character_capture_shader}" "${_capture_shader_contract}"
+        _capture_shader_contract_position)
+    if(_capture_shader_contract_position EQUAL -1)
+        message(FATAL_ERROR
+            "Partial character-capture shader contract is missing: ${_capture_shader_contract}"
+        )
+    endif()
+endforeach()
+
 foreach(_forbidden_full_capture IN ITEMS
     [[a_context->CopyResource(
 					state_->capturedCategories_.Get(), a_categorySource);]]
     [[a_context->CopyResource(
 					state_->capturedDepth_.Get(), depthTexture.Get());]]
     [[sourceDesc.Width / 2u]]
+    [[CopySubresourceRegion(]]
 )
     string(FIND
         "${_character_source}"
@@ -2403,26 +2543,28 @@ foreach(_rejection_counter_contract IN ITEMS
 endforeach()
 
 foreach(_admission_contract IN ITEMS
-    [[actor.nearestFaceDistanceUnits]]
     [[actor.nearestSelectedDistanceUnits]]
     [[RefreshProjectedActors(a_args);]]
-    [[if (!actorRect.IsValid())]]
-    [[actor.selectedRects[a_args.eyeIndex ^ 1u].IsValid()]]
-    [[for (const auto& stereoAnchor : stereoAnchors)]]
-    [[stereoMaximumSize >= a_args.settings.minimumFacePixelSize]]
     [[CharacterRegionPolicy::IsWithinMaximumDistance(]]
+    [[bool CharacterRendering::ShouldAuthorActor(]]
+    [[ResolveCharacterActorAdmission(]]
+    [[if (a_projectionUncertain)]]
     [[CharacterRegionPolicy::ResolveFaceSizeExitThreshold(]]
     [[CharacterRegionPolicy::IsDetailRelevantWithHysteresis(]]
-    [[std::array<std::map<std::uint32_t, HeldRegion>, 4> heldRegions_]]
-    [[CharacterRegionPolicy::IsWithinHoldWindow(]]
-    [[if (!currentlyProjected.contains(it->first))]]
+    [[a_state.lastSizeEligibleFrame = a_frame;]]
+    [[static_cast<std::uint32_t>(a_frame - a_state.lastSizeEligibleFrame) > a_holdFrames]]
+    [[state_->actorAdmissions_[a_actorFormId]]
+    [[admission.frame == a_args.frameId && admission.history.sizeEligible]]
     [[CharacterRegionPolicy::SelectAdaptive(]]
     [[CharacterRegionPolicy::CompactToCapacity(]]
     [[CharacterRegionPolicy::CoveredArea(plan.regions)]]
     [[globals::game::frameBufferCached.GetCameraProjInverse(]]
+    [[characterRendering.ShouldAuthorActor(]]
+    [[entry->second.excluded = !entry->second.accepted;]]
+    [[ExtraShaderDescriptors::CharacterExcluded]]
 )
     string(FIND
-        "${_character_source}"
+        "${_character_source}\n${_character_actor_policy}\n${_subsurface_source}"
         "${_admission_contract}"
         _admission_position
     )

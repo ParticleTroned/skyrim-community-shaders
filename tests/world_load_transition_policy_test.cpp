@@ -92,5 +92,35 @@ int main()
 	if (Util::WorldLoadTransition::ExtendDeadline(lastFrame - 10, lastFrame - 20, grace) != 99)
 		return 16;
 
+	// Save-persistence and mutation guards share these modular deadline
+	// primitives. Their wrapped deadlines must remain pending until the exact
+	// post-wrap frame, and an older concurrent request must not shorten them.
+	const uint32_t wrappedPersistenceEnd =
+		Util::WorldLoadTransition::ExtendDeadline(0, lastFrame - 20, grace);
+	if (wrappedPersistenceEnd != 99 ||
+		Util::WorldLoadTransition::ReachedDeadline(lastFrame, wrappedPersistenceEnd) ||
+		Util::WorldLoadTransition::ReachedDeadline(98, wrappedPersistenceEnd) ||
+		!Util::WorldLoadTransition::ReachedDeadline(99, wrappedPersistenceEnd)) {
+		return 17;
+	}
+	const uint32_t preservedLongerDeadline =
+		Util::WorldLoadTransition::ExtendDeadline(
+			wrappedPersistenceEnd, lastFrame - 10, 5);
+	if (preservedLongerDeadline != wrappedPersistenceEnd)
+		return 18;
+	const uint32_t extendedAfterWrap =
+		Util::WorldLoadTransition::ExtendDeadline(
+			wrappedPersistenceEnd, 10, grace);
+	if (extendedAfterWrap != 130 ||
+		Util::WorldLoadTransition::ReachedDeadline(129, extendedAfterWrap) ||
+		!Util::WorldLoadTransition::ReachedDeadline(130, extendedAfterWrap)) {
+		return 19;
+	}
+
+	// Zero is reserved as the unfinished-transition sentinel even when ordinary
+	// unsigned addition would place a bounded grace period exactly on zero.
+	if (Util::WorldLoadTransition::ExtendDeadline(0, lastFrame - 10, 11) != 1)
+		return 20;
+
 	return 0;
 }

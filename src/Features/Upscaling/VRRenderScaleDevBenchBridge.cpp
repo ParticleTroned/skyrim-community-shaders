@@ -1228,6 +1228,8 @@ namespace
 							 { "categoryCaptureReady", snapshot.categoryCaptureReady },
 							 { "categoryCaptureEmpty", snapshot.categoryCaptureEmpty },
 							 { "authoredMaskCoverageSampleIntervalFrames", NeuralRendering::CharacterPolicy::kCoverageSampleIntervalFrames },
+							 { "gpuCoverageSamplingRequiresDebugView", true },
+							 { "gpuCoverageSamplingActive", debugView != NeuralRendering::CharacterDebugView::Off },
 							 { "forcedMaskCoverageSampleIntervalFrames", NeuralRendering::CharacterPolicy::kCoverageSampleIntervalFrames },
 							 { "preparationAttempts", snapshot.preparationAttempts },
 							 { "preparationSuccesses", snapshot.preparationSuccesses },

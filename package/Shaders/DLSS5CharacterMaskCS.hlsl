@@ -20,6 +20,7 @@ cbuffer CharacterMaskCB : register(b0)
 	float4 CategoryStrengths;   // face, skin, hair, reserved
 	float4 EligibilityRectangles[EligibilityRegionCapacity]; // eye-local output pixels, min.xy/max.xy
 	uint4 DispatchRegion;        // output-local offset.xy and dispatch extent.zw
+	uint4 AuthoredRegion;        // valid current-frame full-eye source offset.xy/extent.zw
 };
 
 Texture2D<unorm float2> AuthoredTuple : register(t0);
@@ -61,6 +62,10 @@ int2 GetGlobalSourcePixel(int2 localSourcePixel)
 uint ReadAuthoredCategory(int2 localSourcePixel)
 {
 	const int2 sourcePixel = GetGlobalSourcePixel(localSourcePixel);
+	const int2 eyePixel = sourcePixel - int2(SourceCrop.x, 0);
+	if (any(eyePixel < int2(AuthoredRegion.xy)) ||
+		any(eyePixel >= int2(AuthoredRegion.xy + AuthoredRegion.zw)))
+		return 0u;
 	return CharacterCategoryMask::DecodeCategory(
 		AuthoredTuple.Load(int3(sourcePixel, 0)));
 }
@@ -78,6 +83,10 @@ float GetCategoryStrength(uint category)
 
 float ReadAuthoredDepth(int2 localSourcePixel)
 {
+	const int2 eyePixel = GetGlobalSourcePixel(localSourcePixel) - int2(SourceCrop.x, 0);
+	if (any(eyePixel < int2(AuthoredRegion.xy)) ||
+		any(eyePixel >= int2(AuthoredRegion.xy + AuthoredRegion.zw)))
+		return 1.0;
 	return AuthoredDepth.Load(
 		int3(GetGlobalSourcePixel(localSourcePixel), 0));
 }
@@ -156,6 +165,47 @@ float GetDistanceWeight(int2 localSourcePixel, float rawDepth)
 	return saturate((VisibilityOptions.z - eyeDistance) / fadeWidth);
 }
 
+// Reconstruct coverage, never interpolate encoded categorical IDs. All samples
+// belong to this source frame; no stale temporal mask can ghost onto an occluder.
+float ReconstructCoverage(float2 sourcePosition, uint centerCategory,
+	float referenceDepth, out bool coverageEdge)
+{
+	coverageEdge = false;
+	if (centerCategory != 0u && GetCategoryStrength(centerCategory) <= 0.0)
+		return 0.0;
+	const int2 basePixel = int2(floor(sourcePosition));
+	const float2 fraction = frac(sourcePosition);
+	float mask = 0.0;
+	float supportedCoverage = 0.0;
+	[unroll] for (int y = 0; y < 2; ++y) {
+		[unroll] for (int x = 0; x < 2; ++x) {
+			const float weight = (x != 0 ? fraction.x : 1.0 - fraction.x) *
+				(y != 0 ? fraction.y : 1.0 - fraction.y);
+			if (weight <= 0.0)
+				continue;
+			const int2 samplePixel = basePixel + int2(x, y);
+			const uint category = ReadAuthoredCategory(samplePixel);
+			const float strength = GetCategoryStrength(category);
+			if (strength <= 0.0)
+				continue;
+			float currentDepth, authoredRawDepth;
+			if (!IsAuthoredSurfaceVisible(samplePixel, currentDepth, authoredRawDepth))
+				continue;
+			if (VisibilityOptions.y >= 0.5) {
+				const float authoredDepth = LinearizeDepth(authoredRawDepth);
+				const float tolerance = max(1.0,
+					max(abs(referenceDepth), abs(authoredDepth)) * VisibilityOptions.x);
+				if (authoredDepth > referenceDepth + tolerance)
+					continue;
+			}
+			supportedCoverage += weight;
+			mask += weight * strength * GetDistanceWeight(samplePixel, authoredRawDepth);
+		}
+	}
+	coverageEdge = supportedCoverage < 0.999;
+	return mask;
+}
+
 void CountCategory(uint category, uint firstCounter)
 {
 	if (category >= 1u && category <= 3u) {
@@ -189,9 +239,9 @@ void CountCategory(uint category, uint firstCounter)
 		const float2 sourcePosition =
 			outputUv * float2(SourceCrop.w, Options.x) - 0.5 - Jitter.xy;
 		const int2 sourcePixel = int2(floor(sourcePosition + 0.5));
-		const uint centerCategory = ReadAuthoredCategory(sourcePixel);
 		float mask = 0.0;
 		if (IsInsideEligibilityRegion(outputPixel)) {
+			const uint centerCategory = ReadAuthoredCategory(sourcePixel);
 			float centerDepth = 0.0;
 			float centerAuthoredRawDepth = 0.0;
 			const bool centerVisible =
@@ -204,7 +254,7 @@ void CountCategory(uint category, uint firstCounter)
 			if (measureCoverage) {
 				if (centerEligible)
 					CountCategory(centerCategory, VisibleFacePixels);
-				else if (centerCategory != 0u) {
+				else if (centerCategory >= 1u && centerCategory <= 3u) {
 					uint ignored;
 					if (!centerVisible) {
 						InterlockedAdd(
@@ -215,17 +265,23 @@ void CountCategory(uint category, uint firstCounter)
 					}
 				}
 			}
-			mask = centerEligible ?
-				GetCategoryStrength(centerCategory) * centerDistanceWeight :
-				0.0;
+			bool coverageEdge = false;
+			mask = centerEligible ? ReconstructCoverage(
+				sourcePosition, centerCategory, centerDepth, coverageEdge) : 0.0;
+			// Keep the exact center-surface cull/fade authoritative at the edge.
+			if (centerCategory != 0u)
+				mask = min(mask, GetCategoryStrength(centerCategory) * centerDistanceWeight);
 
-			if (centerEligible && Options.w != 0 && Options.z != 0 && mask < 1.0) {
+			if (centerEligible && coverageEdge && Options.w != 0 && Options.z != 0 &&
+				(centerCategory == 0u || GetCategoryStrength(centerCategory) > 0.0)) {
 				const int radius = min(int(Options.z), 4);
 				[loop] for (int y = -radius; y <= radius; ++y)
 				{
 					[loop] for (int x = -radius; x <= radius; ++x)
 					{
 						const int2 offset = int2(x, y);
+						if (all(offset == 0))
+							continue;
 						const uint neighborCategory =
 							ReadAuthoredCategory(sourcePixel + offset);
 						// Preserve category toggles inside character geometry while
@@ -258,6 +314,8 @@ void CountCategory(uint category, uint firstCounter)
 					}
 				}
 			}
+			if (centerCategory != 0u)
+				mask = min(mask, GetCategoryStrength(centerCategory) * centerDistanceWeight);
 		}
 
 		const uint testMode = uint(FeatherOptions.y + 0.5);

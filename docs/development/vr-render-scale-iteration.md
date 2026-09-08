@@ -15,6 +15,34 @@ Use identical save, location, CSX profile, change order, dwell frames, HMD resol
 
 ## DevBench automation
 
+### Submit-input freshness
+
+`communityshaders.renderscale status` includes `submitInputFreshness` when
+the DevBench bridge is enabled. Its fixed process-lifetime counters report
+outer-boundary acceptance and rejection reasons. `methods.fsr`,
+`methods.dlss`, and `methods.other` each expose producer-proof outcomes and
+work counts for guide encoding, color copies, input sanitation, vendor
+attempts/retries, and fallback preparation/output reuse. Compare two snapshots
+from the same process; individual counters are sampled independently.
+
+A matching descriptor address is insufficient: nested submissions must name
+the same non-null DirectX resource captured at the outer boundary. Copied
+descriptors can qualify. When peer proof fails, reuse of one observed eye is
+bounded by the correlated outer scope, compositor cycle, frame, source and
+guide resources, region, method, generation, flags, and color space. Such reuse
+cannot admit peer reads or stereo dispatch. Missing outer scope disables
+reuse because an in-place producer rewrite cannot be excluded. Reset,
+resource destruction, device loss, and attempted input replacement retire
+the corresponding cache claims before their resources can change.
+
+The PR65 repair has no new runtime comparison entry in
+`vr-render-scale-comparison-ledger.csv`: live qualification is pending a
+released MO2 owner and a configured verified fixture. Offline policy and
+composition coverage does not establish hook correctness, observed proof
+acceptance, visual quality, or GPU performance in Skyrim.
+
+### Controller actions
+
 Step 17 exposes the capture contract through the external devbench host used by
 Open Shaders. The bridge is built by default through `DEVBENCH_BRIDGE=ON`, is
 inert when the devbench SKSE plugin is absent, and can be omitted completely

@@ -73,9 +73,12 @@ int main()
 		.currentThread = 11,
 		.activeFlags = 3,
 		.currentFlags = 3,
-		.activeSourceIdentity = 0x1000,
+		.activeTextureIdentity = 0x4000,
+		.activeHandleIdentity = 0x1000,
 		.nestedTextureIdentity = 0x4000,
 		.nestedHandleIdentity = 0x1000,
+		.activeTextureIsDirectX = true,
+		.nestedTextureIsDirectX = true,
 	};
 	static_assert(ResolveOuterBoundaryToken(boundary) == 19);
 	constexpr auto wrongCycleBoundary = [boundary] {

@@ -11,6 +11,45 @@ namespace VRSubmitInputFreshnessPolicy
 		OuterPairBoundary,
 	};
 
+	enum class OuterBoundaryRejection : std::uint8_t
+	{
+		None,
+		MissingBoundary,
+		TokenMismatch,
+		CompositorCycleMismatch,
+		FrameMismatch,
+		ThreadMismatch,
+		FlagsMismatch,
+		MissingDescriptor,
+		UnsupportedTextureType,
+		MissingResource,
+		ResourceMismatch,
+		Count,
+	};
+
+	enum class ProducerRejection : std::uint8_t
+	{
+		None,
+		MissingCompositorCycle,
+		MissingOuterBoundary,
+		IncompleteEyePair,
+		UnprovenStereoLayout,
+		UnprovenSourceSignature,
+		MissingSource,
+		InvalidSubmitFrame,
+		WorldFrameMismatch,
+		IncompleteGuideFrame,
+		InvalidEyeRegion,
+		Count,
+	};
+
+	struct SubmitBoundaryIdentity
+	{
+		std::uint64_t matchedToken = 0;
+		std::uint64_t scopeToken = 0;
+		std::uint32_t submitFlags = 0;
+	};
+
 	struct OuterBoundaryObservation
 	{
 		std::uint64_t expectedToken = 0;
@@ -23,36 +62,79 @@ namespace VRSubmitInputFreshnessPolicy
 		std::uint32_t currentThread = 0;
 		std::uint32_t activeFlags = 0;
 		std::uint32_t currentFlags = 0;
-		std::uintptr_t activeSourceIdentity = 0;
+		std::uintptr_t activeTextureIdentity = 0;
+		std::uintptr_t activeHandleIdentity = 0;
 		std::uintptr_t nestedTextureIdentity = 0;
 		std::uintptr_t nestedHandleIdentity = 0;
+		bool activeTextureIsDirectX = false;
+		bool nestedTextureIsDirectX = false;
 	};
+
+	/** Rejects stale or unrelated outer scopes before examining texture identity. */
+	[[nodiscard]] constexpr OuterBoundaryRejection ResolveOuterScopeRejection(
+		const OuterBoundaryObservation& a_observation) noexcept
+	{
+		if (a_observation.expectedToken == 0 || a_observation.activeToken == 0)
+			return OuterBoundaryRejection::MissingBoundary;
+		if (a_observation.expectedToken != a_observation.activeToken)
+			return OuterBoundaryRejection::TokenMismatch;
+		if (a_observation.activeCompositorCycle == 0 ||
+			a_observation.activeCompositorCycle != a_observation.currentCompositorCycle)
+			return OuterBoundaryRejection::CompositorCycleMismatch;
+		if (a_observation.activeFrame != a_observation.currentFrame)
+			return OuterBoundaryRejection::FrameMismatch;
+		if (a_observation.activeThread != a_observation.currentThread)
+			return OuterBoundaryRejection::ThreadMismatch;
+		if (a_observation.activeFlags != a_observation.currentFlags)
+			return OuterBoundaryRejection::FlagsMismatch;
+		return OuterBoundaryRejection::None;
+	}
+
+	/** Reports why the nested submit cannot use the outer pair producer proof. */
+	[[nodiscard]] constexpr OuterBoundaryRejection ResolveOuterBoundaryRejection(
+		const OuterBoundaryObservation& a_observation) noexcept
+	{
+		const auto scopeRejection = ResolveOuterScopeRejection(a_observation);
+		if (scopeRejection != OuterBoundaryRejection::None)
+			return scopeRejection;
+		if (a_observation.activeTextureIdentity == 0 ||
+			a_observation.nestedTextureIdentity == 0)
+			return OuterBoundaryRejection::MissingDescriptor;
+		if (!a_observation.activeTextureIsDirectX ||
+			!a_observation.nestedTextureIsDirectX)
+			return OuterBoundaryRejection::UnsupportedTextureType;
+		if (a_observation.activeHandleIdentity == 0 ||
+			a_observation.nestedHandleIdentity == 0)
+			return OuterBoundaryRejection::MissingResource;
+		// Descriptor copies are allowed, but descriptor reuse cannot prove that
+		// the DirectX resource still belongs to the captured pair.
+		if (a_observation.activeHandleIdentity != a_observation.nestedHandleIdentity)
+			return OuterBoundaryRejection::ResourceMismatch;
+		return OuterBoundaryRejection::None;
+	}
 
 	/** Returns the exact outer pair token only when the nested submit matches it. */
 	[[nodiscard]] constexpr std::uint64_t ResolveOuterBoundaryToken(
 		const OuterBoundaryObservation& a_observation) noexcept
 	{
-		const bool sourceMatches =
-			a_observation.activeSourceIdentity != 0 &&
-			(a_observation.activeSourceIdentity ==
-					a_observation.nestedTextureIdentity ||
-				a_observation.activeSourceIdentity ==
-					a_observation.nestedHandleIdentity);
-		return a_observation.expectedToken != 0 &&
-		               a_observation.expectedToken ==
-		                   a_observation.activeToken &&
-		               a_observation.activeCompositorCycle != 0 &&
-		               a_observation.activeCompositorCycle ==
-		                   a_observation.currentCompositorCycle &&
-		               a_observation.activeFrame ==
-		                   a_observation.currentFrame &&
-		               a_observation.activeThread ==
-		                   a_observation.currentThread &&
-		               a_observation.activeFlags ==
-		                   a_observation.currentFlags &&
-		               sourceMatches ?
+		return ResolveOuterBoundaryRejection(a_observation) ==
+		               OuterBoundaryRejection::None ?
 		           a_observation.activeToken :
 		           0;
+	}
+
+	/** Separates an exact pair proof from the enclosing current-eye cache scope. */
+	[[nodiscard]] constexpr SubmitBoundaryIdentity ResolveSubmitBoundaryIdentity(
+		const OuterBoundaryObservation& a_observation) noexcept
+	{
+		return {
+			.matchedToken = ResolveOuterBoundaryToken(a_observation),
+			.scopeToken = ResolveOuterScopeRejection(a_observation) ==
+			                      OuterBoundaryRejection::None ?
+			                  a_observation.activeToken :
+			                  0,
+			.submitFlags = a_observation.currentFlags,
+		};
 	}
 
 	struct EyeRegion
@@ -67,6 +149,7 @@ namespace VRSubmitInputFreshnessPolicy
 		std::uint32_t depthOffsetX = 0;
 		std::uint32_t depthOffsetY = 0;
 
+		/** Requires nonempty color and guide regions before their inputs can be read. */
 		[[nodiscard]] constexpr bool IsValid() const noexcept
 		{
 			return right > left && bottom > top && depthWidth != 0 &&
@@ -74,6 +157,7 @@ namespace VRSubmitInputFreshnessPolicy
 		}
 	};
 
+	/** Requires identical color subresources and guide geometry for cached input reuse. */
 	[[nodiscard]] constexpr bool MatchesEyeRegion(
 		const EyeRegion& a_left,
 		const EyeRegion& a_right) noexcept
@@ -138,6 +222,7 @@ namespace VRSubmitInputFreshnessPolicy
 		std::uint32_t colorSpace = 0;
 		EyeRegion eyes[2]{};
 
+		/** Requires a complete outer pair and retained source identities for both eyes. */
 		[[nodiscard]] constexpr bool IsValid() const noexcept
 		{
 			return kind == ProofKind::OuterPairBoundary &&
@@ -150,24 +235,39 @@ namespace VRSubmitInputFreshnessPolicy
 		}
 	};
 
+	/** Reports the first missing input required to admit an exact stereo producer. */
+	[[nodiscard]] constexpr ProducerRejection ResolveProducerRejection(
+		const ProducerAdmission& a_admission) noexcept
+	{
+		if (a_admission.compositorCycle == 0)
+			return ProducerRejection::MissingCompositorCycle;
+		if (a_admission.matchedOuterBoundaryToken == 0)
+			return ProducerRejection::MissingOuterBoundary;
+		if (a_admission.producedEyeMask != 0x3u)
+			return ProducerRejection::IncompleteEyePair;
+		if (!a_admission.sourceContainsBothEyes)
+			return ProducerRejection::UnprovenStereoLayout;
+		if (!a_admission.sourceSignatureProven)
+			return ProducerRejection::UnprovenSourceSignature;
+		if (a_admission.colorSource == 0 || a_admission.depthSource == 0 ||
+			a_admission.motionVectorSource == 0)
+			return ProducerRejection::MissingSource;
+		if (a_admission.submitFrame == std::numeric_limits<std::uint32_t>::max())
+			return ProducerRejection::InvalidSubmitFrame;
+		if (a_admission.lastWorldRenderFrame != a_admission.submitFrame)
+			return ProducerRejection::WorldFrameMismatch;
+		if (a_admission.lastCompletedWorldRenderFrame != a_admission.submitFrame)
+			return ProducerRejection::IncompleteGuideFrame;
+		if (!a_admission.eyes[0].IsValid() || !a_admission.eyes[1].IsValid())
+			return ProducerRejection::InvalidEyeRegion;
+		return ProducerRejection::None;
+	}
+
 	/** Admits peer reads only for an exact engine pair and current completed guide frame. */
 	[[nodiscard]] constexpr ProducerProof ResolveProducerProof(
 		const ProducerAdmission& a_admission) noexcept
 	{
-		if (a_admission.compositorCycle == 0 ||
-			a_admission.matchedOuterBoundaryToken == 0 ||
-			a_admission.producedEyeMask != 0x3u ||
-			!a_admission.sourceContainsBothEyes ||
-			!a_admission.sourceSignatureProven ||
-			a_admission.colorSource == 0 || a_admission.depthSource == 0 ||
-			a_admission.motionVectorSource == 0 ||
-			a_admission.submitFrame ==
-				std::numeric_limits<std::uint32_t>::max() ||
-			a_admission.lastWorldRenderFrame != a_admission.submitFrame ||
-			a_admission.lastCompletedWorldRenderFrame !=
-				a_admission.submitFrame ||
-			!a_admission.eyes[0].IsValid() ||
-			!a_admission.eyes[1].IsValid()) {
+		if (ResolveProducerRejection(a_admission) != ProducerRejection::None) {
 			return {};
 		}
 
@@ -196,6 +296,7 @@ namespace VRSubmitInputFreshnessPolicy
 		return proof;
 	}
 
+	/** Rejects cached pair inputs after any producer, source, or region change. */
 	[[nodiscard]] constexpr bool MatchesProducerProof(
 		const ProducerProof& a_latched,
 		const ProducerProof& a_current) noexcept
@@ -224,6 +325,7 @@ namespace VRSubmitInputFreshnessPolicy
 		       MatchesEyeRegion(a_latched.eyes[1], a_current.eyes[1]);
 	}
 
+	/** Allows a peer read only when the exact pair proof includes that eye. */
 	[[nodiscard]] constexpr bool CanConsumePeerInputs(
 		const ProducerProof& a_proof,
 		std::uint32_t a_requestedEye) noexcept

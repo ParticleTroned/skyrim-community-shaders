@@ -1,7 +1,7 @@
 #include "Features/ScreenshotFeature.h"
 #include "Features/Upscaling.h"
 #include "Features/Upscaling/VRRenderScaleDevBenchBridge.h"
-#include "Features/Upscaling/VRSubmitInputFreshnessPolicy.h"
+#include "Features/Upscaling/VRSubmitInputFreshnessBoundary.h"
 #include "Features/VR.h"
 #include "Features/VR/InSceneOverlaySubmitPolicy.h"
 #include "Features/VR/OpenVRSubmitLeasePolicy.h"
@@ -47,17 +47,8 @@ namespace
 	std::mutex g_vrRenderScalePresentationWorkMutex;
 	std::mutex g_presentedMenuSurfaceMutex;
 	std::atomic<uint64_t> g_vrSubmitPairBoundarySequence{ 0 };
-	struct VRSubmitPairBoundaryState
-	{
-		uint64_t token = 0;
-		uint64_t compositorCycle = 0;
-		uint32_t frame = 0;
-		uint32_t thread = 0;
-		uint32_t flags = 0;
-		uintptr_t sourceIdentity = 0;
-		bool active = false;
-	};
-	thread_local VRSubmitPairBoundaryState g_vrSubmitPairBoundaryState{};
+	thread_local VRSubmitInputFreshnessPolicy::OuterPairBoundaryState
+		g_vrSubmitPairBoundaryState{};
 
 	enum class VRNativeRestoreCyclePresentationPath : uint8_t
 	{
@@ -688,7 +679,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 	{
 		static vr::EVRCompositorError thunk(
 			RE::BSOpenVR* _this,
-			const void* pTexture,
+			const vr::Texture_t* pTexture,
 			const vr::VRTextureBounds_t* pBounds,
 			vr::EVRSubmitFlags nSubmitFlags)
 		{
@@ -713,7 +704,9 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					.frame = globals::state ? globals::state->frameCount : 0u,
 					.thread = GetCurrentThreadId(),
 					.flags = static_cast<uint32_t>(nSubmitFlags),
-					.sourceIdentity = reinterpret_cast<uintptr_t>(pTexture),
+					.source =
+						VRSubmitInputFreshnessPolicy::CaptureSubmitTextureIdentity(
+							pTexture),
 					.active = true,
 				};
 			}
@@ -768,33 +761,22 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 			}
 			const auto& activePairBoundary =
 				g_vrSubmitPairBoundaryState;
-			const uint64_t submitPairBoundaryToken =
-				VRSubmitInputFreshnessPolicy::ResolveOuterBoundaryToken({
-					.expectedToken = activePairBoundary.active ?
-			                             activePairBoundary.token :
-			                             0,
-					.activeToken = activePairBoundary.token,
-					.activeCompositorCycle =
-						activePairBoundary.compositorCycle,
-					.currentCompositorCycle = compositorCycleToken,
-					.activeFrame = activePairBoundary.frame,
-					.currentFrame = globals::state ?
-			                            globals::state->frameCount :
-			                            0u,
-					.activeThread = activePairBoundary.thread,
-					.currentThread = GetCurrentThreadId(),
-					.activeFlags = activePairBoundary.flags,
-					.currentFlags = static_cast<uint32_t>(nSubmitFlags),
-					.activeSourceIdentity =
-						activePairBoundary.sourceIdentity,
-					.nestedTextureIdentity =
-						reinterpret_cast<uintptr_t>(pTexture),
-					.nestedHandleIdentity =
-						pTexture && pTexture->handle &&
-								pTexture->eType == vr::TextureType_DirectX ?
-							reinterpret_cast<uintptr_t>(pTexture->handle) :
-							0,
-				});
+			const auto submitBoundaryObservation =
+				VRSubmitInputFreshnessPolicy::ObserveNestedSubmit(
+					activePairBoundary,
+					pTexture,
+					compositorCycleToken,
+					globals::state ? globals::state->frameCount : 0u,
+					GetCurrentThreadId(),
+					nSubmitFlags);
+			const auto submitBoundaryIdentity =
+				VRSubmitInputFreshnessPolicy::ResolveSubmitBoundaryIdentity(
+					submitBoundaryObservation);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			VRRenderScaleDevBenchBridge::RecordSubmitBoundaryRejection(
+				VRSubmitInputFreshnessPolicy::ResolveOuterBoundaryRejection(
+					submitBoundaryObservation));
+#endif
 			// Retain the complete stereo generation while vendor, overlay, and
 			// OpenVR work runs. Observation commit revalidates this exact packet.
 			const auto renderScalePresentationPacket =
@@ -1733,7 +1715,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				vr::Texture_t upscaledTexture{};
 				vr::VRTextureBounds_t upscaledBounds{};
 				if (!presentationObservation.valid &&
-					upscaling.SubmitVRUpscaledFrame(eEye, compositorCycleToken, submitPairBoundaryToken, submitStageVendorResumeCooldownAtCycleStart, pTexture, pBounds, upscaledTexture, upscaledBounds, presentationObservation)) {
+					upscaling.SubmitVRUpscaledFrame(eEye, compositorCycleToken, submitBoundaryIdentity, submitStageVendorResumeCooldownAtCycleStart, pTexture, pBounds, upscaledTexture, upscaledBounds, presentationObservation)) {
 					refreshOriginalSubmitDecision();
 					if (!nativeRestoreGuardActive) {
 						probePresentationObservation = &presentationObservation;

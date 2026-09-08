@@ -28,7 +28,8 @@ foreach(_required_contract IN ITEMS
     "struct BSOpenVR_Submit"
     "stl::write_vfunc<0x03, BSOpenVR_Submit>"
     "ResolveOuterBoundaryToken("
-    "SubmitVRUpscaledFrame(eEye, compositorCycleToken, submitPairBoundaryToken"
+    "ObserveNestedSubmit("
+    "SubmitVRUpscaledFrame(eEye, compositorCycleToken, submitBoundaryIdentity"
     "ResolveProducerProof( submitInputAdmission)"
     "CanConsumePeerInputs( submitInputProof, eyeIndex)"
     "peerInputFreshnessProven && upscaleMethod == UpscaleMethod::kFSR"
@@ -41,7 +42,13 @@ foreach(_required_contract IN ITEMS
     "sanitizeSubmitStageInputEye(otherEyeIndex, otherSourceRegion)"
     "if (!peerInputSanitized) { replayOtherEyeFromFoveated = false; runtimeFSRStereoResourcesReady = false; }"
     "otherEyeState = otherEyeStateBeforeFullEncode"
-    "activeSourceIdentity == a_observation.nestedHandleIdentity"
+    "a_observation.activeHandleIdentity != a_observation.nestedHandleIdentity"
+    "submitStageCurrentEyePreparedInputs.Matches(currentEyeInputIdentity)"
+    "submitStageCurrentEyePreparedInputs.Invalidate(eyeMask)"
+    "cachedEyeState.currentEyeIdentity, currentEyeInputIdentity)"
+    "currentEyeSourceOwners.color.get() == sourceTexture"
+    "currentEyeSourceOwners.depth.get() == depth.texture"
+    "currentEyeSourceOwners.motionVectors.get() == motionVector.texture"
     "a_admission.lastWorldRenderFrame != a_admission.submitFrame"
     "a_admission.lastCompletedWorldRenderFrame != a_admission.submitFrame"
     "eyeMask & (1u << eye)"
@@ -57,6 +64,7 @@ endforeach()
 foreach(_forbidden_contract IN ITEMS
     "const bool runtimeFSRStereoRequested = upscaleMethod == UpscaleMethod::kFSR && sourceContainsBothEyes"
     "const bool replayOtherEyeFromFoveated = submitStageVendorEyeState[otherEyeIndex].ready"
+    "activeSourceIdentity"
 )
     string(FIND "${_contract}" "${_forbidden_contract}" _contract_position)
     if(NOT _contract_position EQUAL -1)

@@ -11,6 +11,7 @@
 #include "Upscaling/VRRenderScaleAuthorityPolicy.h"
 #include "Upscaling/VRRenderScalePreparationPolicy.h"
 #include "Upscaling/VRSubmitInputFreshnessPolicy.h"
+#include "Upscaling/VRSubmitInputReusePolicy.h"
 #include "Upscaling/VRVendorRelatchPolicy.h"
 #include "Utils/LazyShader.h"
 #include "VR/InSceneOverlaySubmitPolicy.h"
@@ -2667,7 +2668,8 @@ public:
 		uint64_t a_keepaliveToken,
 		uint64_t a_compositorCycleToken,
 		uint64_t a_initialLoadProtectionEpochAtSubmitEntry);
-	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCycleToken, uint64_t a_submitPairBoundaryToken, bool a_vendorResumeCooldownAtCycleStart, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
+	/** Upscales one observed eye; peer work requires an exact outer producer proof. */
+	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCycleToken, const VRSubmitInputFreshnessPolicy::SubmitBoundaryIdentity& a_submitBoundaryIdentity, bool a_vendorResumeCooldownAtCycleStart, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 		vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds, VRRenderScalePresentationObservation& a_presentationObservation);
 	bool PrepareVRNativeRestorePresentationObservation(
 		vr::EVREye a_eye,
@@ -3050,6 +3052,14 @@ public:
 	bool submitStagePreparedFrameFoveatedRegionEncode = false;
 	uint32_t submitStagePreparedEyeMask = 0;
 	VRSubmitInputFreshnessPolicy::ProducerProof submitStagePreparedInputProof{};
+	VRSubmitInputReusePolicy::PreparedInputs submitStageCurrentEyePreparedInputs{};
+	struct SubmitStageCurrentEyeSourceOwners
+	{
+		winrt::com_ptr<ID3D11Texture2D> color;
+		winrt::com_ptr<ID3D11Texture2D> depth;
+		winrt::com_ptr<ID3D11Texture2D> motionVectors;
+	};
+	std::array<SubmitStageCurrentEyeSourceOwners, 2> submitStageCurrentEyeSourceOwners{};
 	winrt::com_ptr<ID3D11Texture2D> submitStagePreparedColorSourceOwner;
 	winrt::com_ptr<ID3D11Texture2D> submitStagePreparedDepthSourceOwner;
 	winrt::com_ptr<ID3D11Texture2D> submitStagePreparedMotionVectorSourceOwner;
@@ -3069,6 +3079,7 @@ public:
 	{
 		bool ready = false;
 		VRSubmitInputFreshnessPolicy::ProducerProof inputProof{};
+		VRSubmitInputReusePolicy::CurrentEyeIdentity currentEyeIdentity{};
 		bool usedFoveatedVendorPath = false;
 		bool usedDLSSSharpening = false;
 		bool usedMenuFinalComposite = false;

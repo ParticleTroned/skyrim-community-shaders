@@ -579,18 +579,23 @@ namespace Util::ShaderCachePack
 			ReleaseWriterLease();
 			return false;
 		}
-		auto sortedIdentities = fileIdentityKeys;
-		std::ranges::sort(sortedIdentities);
-		leaseKey = sortedIdentities[0] + '|' + sortedIdentities[1];
+		bool registryConflict = false;
 		{
 			std::lock_guard registryLock(g_writerLeaseRegistryMutex);
-			if (!g_writerLeaseRegistry.insert(leaseKey).second) {
-				leaseKey.clear();
-				SetError(a_error, "managed shader pack writer lease is already held in this process");
-				ReleaseWriterLease();
-				return false;
+			registryConflict = std::ranges::any_of(fileIdentityKeys, [](const auto& a_identity) {
+				return g_writerLeaseRegistry.contains(a_identity);
+			});
+			if (!registryConflict) {
+				for (std::size_t index = 0; index < fileIdentityKeys.size(); ++index) {
+					g_writerLeaseRegistry.insert(fileIdentityKeys[index]);
+					processRegistryOwned[index] = true;
+				}
 			}
-			processRegistryOwned = true;
+		}
+		if (registryConflict) {
+			SetError(a_error, "managed shader pack member writer lease is already held in this process");
+			ReleaseWriterLease();
+			return false;
 		}
 #ifdef CSX_SHADER_CACHE_PACK_TESTING
 		if (ConsumeTestFailurePoint(TestFailurePoint::AfterRegistryInsert))
@@ -598,30 +603,29 @@ namespace Util::ShaderCachePack
 #endif
 
 #ifdef _WIN32
-		const auto digest = CryptoHash::Sha256Hex(leaseKey);
-		const auto leaseName = std::wstring(L"\\\\.\\pipe\\CSX.ShaderCachePack.") +
-		                       std::wstring(digest.begin(), digest.end());
-		// The pipe is never connected. FILE_FLAG_FIRST_PIPE_INSTANCE turns its
-		// machine-wide kernel name into a handle-owned lease: another process
-		// cannot create the same instance, CloseHandle is thread-agnostic, and
-		// Windows reclaims it if the owner terminates.
-		SetLastError(ERROR_SUCCESS);
-		leaseHandle = CreateNamedPipeW(
-			leaseName.c_str(),
-			PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
-			PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-			1, 1, 1, 0, nullptr);
-		const auto leaseError = GetLastError();
-		if (leaseHandle == INVALID_HANDLE_VALUE) {
-			leaseHandle = nullptr;
-			SetError(a_error, std::format(
-								  "managed shader pack writer lease is held or unavailable (Windows error {})",
-								  leaseError));
-			std::lock_guard registryLock(g_writerLeaseRegistryMutex);
-			g_writerLeaseRegistry.erase(leaseKey);
-			leaseKey.clear();
-			ReleaseWriterLease();
-			return false;
+		auto sortedIdentities = fileIdentityKeys;
+		std::ranges::sort(sortedIdentities);
+		// Each physical member needs its own lease because different A/B pairs
+		// can share a file. Kernel handles release ownership on process exit.
+		for (std::size_t index = 0; index < sortedIdentities.size(); ++index) {
+			const auto digest = CryptoHash::Sha256Hex(sortedIdentities[index]);
+			const auto leaseName = std::wstring(L"\\\\.\\pipe\\CSX.ShaderCachePack.") +
+			                       std::wstring(digest.begin(), digest.end());
+			SetLastError(ERROR_SUCCESS);
+			leaseHandles[index] = CreateNamedPipeW(
+				leaseName.c_str(),
+				PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+				PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+				1, 1, 1, 0, nullptr);
+			const auto leaseError = GetLastError();
+			if (leaseHandles[index] == INVALID_HANDLE_VALUE) {
+				leaseHandles[index] = nullptr;
+				SetError(a_error, std::format(
+									  "managed shader pack member writer lease is held or unavailable (Windows error {})",
+									  leaseError));
+				ReleaseWriterLease();
+				return false;
+			}
 		}
 #endif
 		leaseOwned = true;
@@ -654,9 +658,11 @@ namespace Util::ShaderCachePack
 	void Store::ReleaseWriterLease() noexcept
 	{
 #ifdef _WIN32
-		if (leaseHandle)
-			CloseHandle(static_cast<HANDLE>(leaseHandle));
-		leaseHandle = nullptr;
+		for (auto& handle : leaseHandles) {
+			if (handle)
+				CloseHandle(static_cast<HANDLE>(handle));
+			handle = nullptr;
+		}
 		for (auto& handle : fileIdentityHandles) {
 			if (handle)
 				CloseHandle(static_cast<HANDLE>(handle));
@@ -668,13 +674,15 @@ namespace Util::ShaderCachePack
 		}
 		pathGuardHandles.clear();
 #endif
-		if (processRegistryOwned && !leaseKey.empty()) {
+		if (std::ranges::any_of(processRegistryOwned, [](bool a_owned) { return a_owned; })) {
 			std::lock_guard registryLock(g_writerLeaseRegistryMutex);
-			g_writerLeaseRegistry.erase(leaseKey);
+			for (std::size_t index = 0; index < processRegistryOwned.size(); ++index) {
+				if (processRegistryOwned[index])
+					g_writerLeaseRegistry.erase(fileIdentityKeys[index]);
+			}
 		}
 		leaseOwned = false;
-		processRegistryOwned = false;
-		leaseKey.clear();
+		processRegistryOwned = {};
 		fileIdentityKeys = {};
 	}
 
@@ -762,6 +770,10 @@ namespace Util::ShaderCachePack
 				a_output.diagnostic = std::move(layoutError);
 				break;
 			}
+			if (header.sequence < a_output.nextSequence) {
+				a_output.diagnostic = "shader pack record sequence does not increase within its generation";
+				break;
+			}
 			std::vector<std::byte> payload(static_cast<std::size_t>(layout.payloadSize));
 			if (!ReadBytes(stream, offset + sizeof(RecordHeader), payload.data(), payload.size()))
 				break;
@@ -788,11 +800,7 @@ namespace Util::ShaderCachePack
 				.bytecodeSize = header.bytecodeSize,
 			};
 			a_output.records.push_back(std::move(location));
-			if (header.sequence == (std::numeric_limits<std::uint64_t>::max)()) {
-				a_output.diagnostic = "shader pack record sequence is exhausted";
-				break;
-			}
-			a_output.nextSequence = (std::max)(a_output.nextSequence, header.sequence + 1);
+			a_output.nextSequence = header.sequence + 1;
 			offset += layout.totalSize;
 			a_output.validSize = offset;
 		}
@@ -904,46 +912,42 @@ namespace Util::ShaderCachePack
 
 	bool Store::Open(std::string* a_error)
 	{
-		try {
-			std::unique_lock lock(mutex);
-			const bool result = OpenLocked(false, a_error);
-			if (!result)
-				ReleaseWriterLease();
-			return result;
-		} catch (const std::exception& e) {
-			SetError(a_error, e.what());
-			std::unique_lock lock(mutex);
-			InvalidateStateLocked();
-			ReleaseWriterLease();
-			return false;
-		} catch (...) {
-			SetError(a_error, "unknown shader pack open failure");
-			std::unique_lock lock(mutex);
-			InvalidateStateLocked();
-			ReleaseWriterLease();
-			return false;
-		}
+		return OpenWithInitialization(false, a_error);
 	}
 
 	bool Store::InitializeEmptyFilesAndOpen(std::string* a_error)
 	{
+		return OpenWithInitialization(true, a_error);
+	}
+
+	bool Store::OpenWithInitialization(bool a_allowEmptyInitialization, std::string* a_error)
+	{
+		std::unique_lock lock(mutex, std::defer_lock);
 		try {
-			std::unique_lock lock(mutex);
-			const bool result = OpenLocked(true, a_error);
+			lock.lock();
+			const bool result = OpenLocked(a_allowEmptyInitialization, a_error);
 			if (!result)
 				ReleaseWriterLease();
 			return result;
 		} catch (const std::exception& e) {
-			SetError(a_error, e.what());
-			std::unique_lock lock(mutex);
-			InvalidateStateLocked();
-			ReleaseWriterLease();
+			if (lock.owns_lock()) {
+				InvalidateStateLocked();
+				ReleaseWriterLease();
+			}
+			try {
+				SetError(a_error, e.what());
+			} catch (...) {
+			}
 			return false;
 		} catch (...) {
-			SetError(a_error, "unknown shader pack initialization failure");
-			std::unique_lock lock(mutex);
-			InvalidateStateLocked();
-			ReleaseWriterLease();
+			if (lock.owns_lock()) {
+				InvalidateStateLocked();
+				ReleaseWriterLease();
+			}
+			try {
+				SetError(a_error, "unknown shader pack admission failure");
+			} catch (...) {
+			}
 			return false;
 		}
 	}
@@ -1350,7 +1354,8 @@ namespace Util::ShaderCachePack
 		const Entry& a_entry,
 		std::uint64_t a_sequence,
 		bool a_checkpoint,
-		std::string* a_error) const
+		std::string* a_error,
+		bool* a_mutationStarted) const
 	{
 		std::ifstream identityStream(a_file.path, std::ios::binary);
 		FileHeader currentHeader{};
@@ -1391,8 +1396,8 @@ namespace Util::ShaderCachePack
 		RecordLayout layout;
 		if (!BuildRecordLayout(
 				header,
-				0,
-				(std::numeric_limits<std::uint64_t>::max)(),
+				a_file.validSize,
+				(std::numeric_limits<std::uint64_t>::max)() - a_file.validSize,
 				layout,
 				a_error)) {
 			return false;
@@ -1404,6 +1409,8 @@ namespace Util::ShaderCachePack
 		trailer.totalSize = layout.totalSize;
 		std::memcpy(trailer.payloadHash, hash.data(), hash.size());
 
+		if (a_mutationStarted)
+			*a_mutationStarted = true;
 		std::filesystem::resize_file(a_file.path, a_file.validSize);
 		{
 			std::ofstream stream(a_file.path, std::ios::binary | std::ios::app);
@@ -1423,14 +1430,22 @@ namespace Util::ShaderCachePack
 			SetError(a_error, "failed to durably flush committed shader pack record");
 			return false;
 		}
+#ifdef CSX_SHADER_CACHE_PACK_TESTING
+		if (ConsumeTestFailurePoint(TestFailurePoint::AfterAppendWrite)) {
+			SetError(a_error, "injected failure after shader pack append write");
+			return false;
+		}
+#endif
 		return true;
 	}
 
 	bool Store::Append(const Entry& a_entry, std::string* a_error)
 	{
 		bool admissionPending = false;
+		bool mutationStarted = false;
+		std::unique_lock lock(mutex, std::defer_lock);
 		try {
-			std::unique_lock lock(mutex);
+			lock.lock();
 			admissionPending = !opened;
 			if (admissionPending) {
 				if (!OpenLocked(false, a_error)) {
@@ -1442,8 +1457,13 @@ namespace Util::ShaderCachePack
 			const auto offset = active.validSize;
 			const auto sequence = active.nextSequence;
 			const auto removedTailBytes = active.fileSize - active.validSize;
-			if (!AppendLocked(active, a_entry, sequence, false, a_error))
+			if (!AppendLocked(active, a_entry, sequence, false, a_error, &mutationStarted)) {
+				if (mutationStarted) {
+					InvalidateStateLocked();
+					ReleaseWriterLease();
+				}
 				return false;
+			}
 			RecordHeader layoutHeader{};
 			layoutHeader.sequence = sequence;
 			layoutHeader.logicalSize = static_cast<std::uint32_t>(a_entry.logicalKey.size());
@@ -1457,7 +1477,8 @@ namespace Util::ShaderCachePack
 					(std::numeric_limits<std::uint64_t>::max)() - offset,
 					layout,
 					a_error)) {
-				opened = false;
+				InvalidateStateLocked();
+				ReleaseWriterLease();
 				return false;
 			}
 			RecordLocation location{
@@ -1487,6 +1508,10 @@ namespace Util::ShaderCachePack
 			stats.liveBytes += location.totalSize;
 			stats.liveRecordCount = activeLiveByLogical.size();
 			stats.supersededBytes = stats.committedBytes > stats.liveBytes ? stats.committedBytes - stats.liveBytes : 0;
+#ifdef CSX_SHADER_CACHE_PACK_TESTING
+			if (ConsumeTestFailurePoint(TestFailurePoint::DuringAppendIndexPublication))
+				throw std::runtime_error("injected exception during shader pack append index publication");
+#endif
 			exactIndex.insert_or_assign(location.exactKey, location);
 			auto& compatibleRecords = recordsByLogical[location.logicalKey];
 			std::erase_if(compatibleRecords, [&](const RecordLocation& a_record) {
@@ -1499,19 +1524,23 @@ namespace Util::ShaderCachePack
 				liveByLogical.insert_or_assign(location.logicalKey, location);
 			return true;
 		} catch (const std::exception& e) {
-			SetError(a_error, e.what());
-			if (admissionPending) {
-				std::unique_lock lock(mutex);
+			if (admissionPending || mutationStarted) {
 				InvalidateStateLocked();
 				ReleaseWriterLease();
 			}
+			try {
+				SetError(a_error, e.what());
+			} catch (...) {
+			}
 			return false;
 		} catch (...) {
-			SetError(a_error, "unknown shader pack append failure");
-			if (admissionPending) {
-				std::unique_lock lock(mutex);
+			if (admissionPending || mutationStarted) {
 				InvalidateStateLocked();
 				ReleaseWriterLease();
+			}
+			try {
+				SetError(a_error, "unknown shader pack append failure");
+			} catch (...) {
 			}
 			return false;
 		}
@@ -1554,8 +1583,9 @@ namespace Util::ShaderCachePack
 	bool Store::Compact(std::string* a_error)
 	{
 		InitializeProgress compactionProgress = InitializeProgress::Unchanged;
+		std::unique_lock lock(mutex, std::defer_lock);
 		try {
-			std::unique_lock lock(mutex);
+			lock.lock();
 			auto failAfterMutation = [&](std::string_view a_fallbackError = {}) noexcept {
 				InvalidateStateLocked();
 				ReleaseWriterLease();
@@ -1613,7 +1643,6 @@ namespace Util::ShaderCachePack
 			return true;
 		} catch (const std::exception& e) {
 			if (compactionProgress != InitializeProgress::Unchanged) {
-				std::unique_lock lock(mutex);
 				InvalidateStateLocked();
 				ReleaseWriterLease();
 			}
@@ -1624,7 +1653,6 @@ namespace Util::ShaderCachePack
 			return false;
 		} catch (...) {
 			if (compactionProgress != InitializeProgress::Unchanged) {
-				std::unique_lock lock(mutex);
 				InvalidateStateLocked();
 				ReleaseWriterLease();
 			}
@@ -1641,8 +1669,9 @@ namespace Util::ShaderCachePack
 		bool barrierCommitted = false;
 		bool admissionPending = false;
 		InitializeProgress resetProgress = InitializeProgress::Unchanged;
+		std::unique_lock lock(mutex, std::defer_lock);
 		try {
-			std::unique_lock lock(mutex);
+			lock.lock();
 			admissionPending = !opened;
 			if (admissionPending) {
 				if (!OpenLocked(false, a_error)) {
@@ -1778,8 +1807,7 @@ namespace Util::ShaderCachePack
 			return ResetDisposition::Complete;
 		} catch (const std::exception& e) {
 			const bool changedOrCommitted = barrierCommitted || resetProgress != InitializeProgress::Unchanged;
-			{
-				std::unique_lock lock(mutex);
+			if (lock.owns_lock()) {
 				InvalidateStateLocked();
 				ReleaseWriterLease();
 			}
@@ -1796,8 +1824,7 @@ namespace Util::ShaderCachePack
 			return changedOrCommitted ? ResetDisposition::CommittedDegraded : ResetDisposition::FailedBeforeCommit;
 		} catch (...) {
 			const bool changedOrCommitted = barrierCommitted || resetProgress != InitializeProgress::Unchanged;
-			{
-				std::unique_lock lock(mutex);
+			if (lock.owns_lock()) {
 				InvalidateStateLocked();
 				ReleaseWriterLease();
 			}

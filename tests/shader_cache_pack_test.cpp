@@ -827,6 +827,45 @@ int main(int argc, char** argv)
 		assert(!mutationError.empty());
 	}
 
+	// Failed append publication withdraws stale indexes and releases ownership;
+	// reopening recovers the committed prefix before another append can proceed.
+	for (const auto failurePoint : { TestFailurePoint::AfterAppendWrite, TestFailurePoint::DuringAppendIndexPublication }) {
+		const auto appendRoot = root / ("append-publication-" + std::to_string(static_cast<std::uint32_t>(failurePoint)));
+		std::filesystem::create_directories(appendRoot);
+		const auto first = appendRoot / "Optimized.A.csxpack";
+		const auto second = appendRoot / "Optimized.B.csxpack";
+		std::ofstream(first, std::ios::binary).close();
+		std::ofstream(second, std::ios::binary).close();
+		std::string appendError;
+		Store failed(first, second, Lane::Optimized, TestPackSetId());
+		assert(failed.InitializeEmptyFilesAndOpen(&appendError));
+		assert(failed.Append(MakeEntry("append", "original-exact", 0x31), &appendError));
+		assert(failed.Checkpoint(&appendError));
+		assert(!failed.Append(MakeEntry("append", "empty-exact", 0x32, 0), &appendError));
+		assert(failed.GetStats().available);
+		assert(failed.Find("original-exact", &appendError));
+		SetTestFailurePoints(static_cast<std::uint32_t>(failurePoint));
+		appendError.clear();
+		assert(!failed.Append(MakeEntry("append", "committed-exact", 0x33), &appendError));
+		assert(!appendError.empty());
+		assert(!failed.GetStats().available);
+		assert(!failed.Find("original-exact", &appendError));
+		assert(!failed.Find("committed-exact", &appendError));
+		const auto identities = failed.GetFileIdentityKeys();
+		assert(identities[0].empty() && identities[1].empty());
+
+		Store recovered(first, second, Lane::Optimized, TestPackSetId());
+		assert(recovered.Open(&appendError));
+		assert(recovered.GetStats().recordCount == 2);
+		assert(recovered.Find("original-exact", &appendError));
+		assert(recovered.Find("committed-exact", &appendError));
+		assert(recovered.Append(MakeEntry("append", "final-exact", 0x34), &appendError));
+		assert(recovered.Checkpoint(&appendError));
+		assert(recovered.Compact(&appendError));
+		const auto compatible = recovered.FindCompatible("append", [](std::string_view) { return true; }, &appendError);
+		assert(compatible && compatible->exactKey == "final-exact");
+	}
+
 	// Oversized record dimensions are contained as a corrupt tail instead of
 	// wrapping record arithmetic or addressing beyond the mapped payload.
 	{
@@ -887,7 +926,45 @@ int main(int argc, char** argv)
 		}
 	}
 
-	// A nonzero pack-set identity is also the cross-process writer lease key.
+	// Duplicate or decreasing sequences invalidate the tail so exact lookup,
+	// compatibility ranking, and compaction agree on the newest committed record.
+	for (const std::uint64_t secondSequence : { 1, 2 }) {
+		const auto sequenceRoot = root / ("record-sequence-order-" + std::to_string(secondSequence));
+		std::filesystem::create_directories(sequenceRoot);
+		const auto first = sequenceRoot / "Optimized.A.csxpack";
+		const auto second = sequenceRoot / "Optimized.B.csxpack";
+		std::ofstream(first, std::ios::binary).close();
+		std::ofstream(second, std::ios::binary).close();
+		std::string sequenceError;
+		std::uint64_t secondOffset = 0;
+		{
+			Store writer(first, second, Lane::Optimized, TestPackSetId());
+			assert(writer.InitializeEmptyFilesAndOpen(&sequenceError));
+			assert(writer.Append(MakeEntry("sequence", "older-exact", 0x41), &sequenceError));
+			secondOffset = std::filesystem::file_size(first);
+			assert(writer.Append(MakeEntry("sequence", "newer-exact", 0x42), &sequenceError));
+			assert(writer.Checkpoint(&sequenceError));
+		}
+		Overwrite(first, 96, std::uint64_t{ 2 });
+		Overwrite(first, secondOffset + 16, secondSequence);
+		Store reader(first, second, Lane::Optimized, TestPackSetId());
+		assert(reader.Open(&sequenceError));
+		assert(sequenceError.find("sequence") != std::string::npos);
+		assert(reader.GetStats().recordCount == 1);
+		assert(reader.GetStats().corruptTailBytes > 0);
+		assert(reader.Find("older-exact", &sequenceError));
+		assert(!reader.Find("newer-exact", &sequenceError));
+		const auto compatible = reader.FindCompatible("sequence", [](std::string_view) { return true; }, &sequenceError);
+		assert(compatible && compatible->exactKey == "older-exact");
+		assert(reader.Append(MakeEntry("sequence", "repaired-exact", 0x43), &sequenceError));
+		assert(reader.Checkpoint(&sequenceError));
+		assert(reader.Compact(&sequenceError));
+		assert(reader.Find("repaired-exact", &sequenceError));
+		assert(!reader.Find("newer-exact", &sequenceError));
+	}
+
+	// Physical member ownership excludes overlapping pairs as well as repeated
+	// or reversed pairs, independently of the supplied lane and set identity.
 	{
 		const auto leaseRoot = root / "lease";
 		std::filesystem::create_directories(leaseRoot);
@@ -908,6 +985,14 @@ int main(int argc, char** argv)
 		assert(!reversed.Open(&leaseError));
 		Store wrongLane(first, second, Lane::Developer, setID);
 		assert(!wrongLane.Open(&leaseError));
+		const auto alternateFirst = leaseRoot / "Alternate.A.csxpack";
+		const auto alternateSecond = leaseRoot / "Alternate.B.csxpack";
+		assert(std::filesystem::copy_file(first, alternateFirst));
+		assert(std::filesystem::copy_file(second, alternateSecond));
+		Store overlapFirst(first, alternateSecond, Lane::Optimized, setID);
+		assert(!overlapFirst.Open(&leaseError));
+		Store overlapSecond(alternateFirst, second, Lane::Optimized, setID);
+		assert(!overlapSecond.Open(&leaseError));
 		assert(std::filesystem::file_size(first) == firstSize);
 		assert(std::filesystem::file_size(second) == secondSize);
 #ifdef _WIN32
@@ -935,6 +1020,10 @@ int main(int argc, char** argv)
 		assert(CreateHardLinkW(aliasFirst.c_str(), first.c_str(), nullptr));
 		assert(CreateHardLinkW(aliasSecond.c_str(), second.c_str(), nullptr));
 		assert(RunLeaseProbe(argv[0], aliasFirst, aliasSecond, false) == 0);
+		assert(RunLeaseProbe(argv[0], first, alternateSecond, false) == 0);
+		assert(RunLeaseProbe(argv[0], alternateFirst, second, false) == 0);
+		assert(RunLeaseProbe(argv[0], aliasFirst, alternateSecond, false) == 0);
+		assert(RunLeaseProbe(argv[0], alternateFirst, alternateSecond, true) == 0);
 		for (const auto operation : { "append", "checkpoint", "compact", "reset" }) {
 			assert(RunLeaseMutationProbe(
 					   argv[0], second, first, operation,
@@ -943,6 +1032,8 @@ int main(int argc, char** argv)
 			assert(std::filesystem::file_size(second) == secondSize);
 		}
 #endif
+		Store independent(alternateFirst, alternateSecond, Lane::Optimized, setID);
+		assert(independent.Open(&leaseError));
 	}
 
 #ifdef _WIN32

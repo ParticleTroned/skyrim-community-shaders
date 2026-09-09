@@ -129,7 +129,9 @@ namespace Util::ShaderCachePack
 		AfterResetCleanupDurableFlush = 1u << 24,
 		ThrowAfterResetCleanupDurableFlush = 1u << 25,
 		ThrowBeforeResetCleanupVerification = 1u << 26,
-		ThrowDuringResetCleanupDiagnostic = 1u << 27
+		ThrowDuringResetCleanupDiagnostic = 1u << 27,
+		AfterAppendWrite = 1u << 28,
+		DuringAppendIndexPublication = 1u << 29
 	};
 	void SetTestFailurePoints(std::uint32_t a_failurePoints);
 #endif
@@ -246,12 +248,11 @@ namespace Util::ShaderCachePack
 		Lane lane;
 		PackSetId packSetId{};
 		bool opened = false;
-		std::string leaseKey;
 		std::array<std::string, 2> fileIdentityKeys{};
 		bool leaseOwned = false;
-		bool processRegistryOwned = false;
+		std::array<bool, 2> processRegistryOwned{};
 #ifdef _WIN32
-		void* leaseHandle = nullptr;
+		std::array<void*, 2> leaseHandles{};
 		std::array<void*, 2> fileIdentityHandles{};
 		std::vector<void*> pathGuardHandles;
 #endif
@@ -275,6 +276,7 @@ namespace Util::ShaderCachePack
 			ResetCleanup
 		};
 
+		bool OpenWithInitialization(bool a_allowEmptyInitialization, std::string* a_error);
 		bool OpenLocked(bool a_allowEmptyInitialization, std::string* a_error);
 		bool AcquireWriterLease(std::string* a_error);
 		void ReleaseWriterLease() noexcept;
@@ -286,7 +288,7 @@ namespace Util::ShaderCachePack
 			std::string* a_error,
 			InitializeProgress* a_progress = nullptr,
 			InitializePurpose a_purpose = InitializePurpose::General) const;
-		bool AppendLocked(ScannedFile& a_file, const Entry& a_entry, std::uint64_t a_sequence, bool a_checkpoint, std::string* a_error) const;
+		bool AppendLocked(ScannedFile& a_file, const Entry& a_entry, std::uint64_t a_sequence, bool a_checkpoint, std::string* a_error, bool* a_mutationStarted = nullptr) const;
 		std::optional<Entry> Read(const RecordLocation& a_location, std::string* a_error) const;
 		void RebuildIndexes();
 	};

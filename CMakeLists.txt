@@ -1672,6 +1672,18 @@ if(BUILD_CONTROLLER_TESTS)
         VRRenderScaleDevBenchContract
         PROPERTIES LABELS "ControllerTests"
     )
+    add_test(
+        NAME VRSubmitInputFreshnessContract
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            -P
+            "${PROJECT_SOURCE_DIR}/tests/vr_submit_input_freshness_contract_test.cmake"
+    )
+    set_tests_properties(
+        VRSubmitInputFreshnessContract
+        PROPERTIES LABELS "ControllerTests"
+    )
     add_controller_test(
         reflex_policy_test
         ReflexPolicy
@@ -1686,6 +1698,21 @@ if(BUILD_CONTROLLER_TESTS)
         fsr_runtime_lifecycle_policy_test
         FSRRuntimeLifecyclePolicy
         tests/fsr_runtime_lifecycle_policy_test.cpp
+    )
+    add_controller_test(
+        vr_submit_input_freshness_policy_test
+        VRSubmitInputFreshnessPolicy
+        tests/vr_submit_input_freshness_policy_test.cpp
+    )
+    add_controller_test(
+        vr_submit_input_freshness_composition_test
+        VRSubmitInputFreshnessComposition
+        tests/vr_submit_input_freshness_composition_test.cpp
+    )
+    target_include_directories(
+        vr_submit_input_freshness_composition_test
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/extern/CommonLibSSE-NG/extern/openvr/headers"
     )
     add_controller_test(
         overlay_policy_test
@@ -2108,6 +2135,8 @@ if(BUILD_CONTROLLER_TESTS)
             reflex_policy_test
             fsr_host_lifecycle_policy_test
             fsr_runtime_lifecycle_policy_test
+            vr_submit_input_freshness_policy_test
+            vr_submit_input_freshness_composition_test
             overlay_policy_test
             performance_tuning_statistics_test
             shader_cache_disable_policy_test

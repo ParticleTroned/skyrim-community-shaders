@@ -54,6 +54,84 @@ namespace
 	constexpr unsigned int kDevBenchToolExtensionRevision = 10;
 	std::atomic_bool g_registered{ false };
 	std::atomic_uint64_t g_nextDiagnosticTrimEpoch{ 1ull << 63 };
+	using SubmitBoundaryRejection = VRSubmitInputFreshnessPolicy::OuterBoundaryRejection;
+	using SubmitInputRejection = VRSubmitInputFreshnessPolicy::ProducerRejection;
+	using SubmitFreshnessWork = VRRenderScaleDevBenchBridge::SubmitFreshnessWork;
+	template <class Enum>
+	using SubmitFreshnessCounters = std::array<std::atomic_uint64_t,
+		static_cast<std::size_t>(Enum::Count)>;
+	SubmitFreshnessCounters<SubmitBoundaryRejection> g_submitBoundaryOutcomes{};
+	struct SubmitFreshnessMethodCounters
+	{
+		SubmitFreshnessCounters<SubmitInputRejection> inputOutcomes{};
+		SubmitFreshnessCounters<SubmitFreshnessWork> work{};
+	};
+	std::array<SubmitFreshnessMethodCounters, 3> g_submitFreshnessMethods{};
+	constexpr std::array<const char*, 3> kSubmitFreshnessMethodNames{
+		"fsr", "dlss", "other"
+	};
+	constexpr std::array<const char*, static_cast<std::size_t>(SubmitFreshnessWork::Count)>
+		kSubmitFreshnessWorkNames{
+			"fallbackPreparedHits", "fallbackOutputHits", "guideEncodeEyes",
+			"colorCopyEyes", "inputSanitizationEyes", "vendorEyeAttempts",
+			"vendorEyeRetries"
+		};
+
+	std::size_t SubmitFreshnessMethodIndex(std::uint32_t a_method) noexcept
+	{
+		if (a_method == static_cast<std::uint32_t>(Upscaling::UpscaleMethod::kFSR))
+			return 0;
+		if (a_method == static_cast<std::uint32_t>(Upscaling::UpscaleMethod::kDLSS))
+			return 1;
+		return 2;
+	}
+
+	template <class Enum>
+	void RecordSubmitFreshnessCounter(
+		SubmitFreshnessCounters<Enum>& a_counters,
+		Enum a_counter,
+		std::uint64_t a_amount = 1) noexcept
+	{
+		const auto index = static_cast<std::size_t>(a_counter);
+		if (index < a_counters.size())
+			a_counters[index].fetch_add(a_amount, std::memory_order_relaxed);
+	}
+
+	template <class Enum>
+	json SubmitFreshnessOutcomeJson(const SubmitFreshnessCounters<Enum>& a_counters)
+	{
+		json outcomes = json::object();
+		for (std::size_t index = 0; index < a_counters.size(); ++index) {
+			const auto name = magic_enum::enum_name(static_cast<Enum>(index));
+			outcomes[name == "None" ? "accepted" : std::string(name)] =
+				a_counters[index].load(std::memory_order_relaxed);
+		}
+		return outcomes;
+	}
+
+	json BuildSubmitInputFreshness()
+	{
+		json methods = json::object();
+		for (std::size_t method = 0; method < g_submitFreshnessMethods.size(); ++method) {
+			const auto& counters = g_submitFreshnessMethods[method];
+			json work = json::object();
+			for (std::size_t index = 0; index < counters.work.size(); ++index) {
+				work[kSubmitFreshnessWorkNames[index]] =
+					counters.work[index].load(std::memory_order_relaxed);
+			}
+			methods[kSubmitFreshnessMethodNames[method]] = {
+				{ "inputOutcomes", SubmitFreshnessOutcomeJson<SubmitInputRejection>(counters.inputOutcomes) },
+				{ "work", std::move(work) },
+			};
+		}
+		return {
+			{ "schemaVersion", 1 },
+			{ "counterScope", "process_lifetime" },
+			{ "snapshotConsistency", "independently_sampled_atomic_counters" },
+			{ "boundaryOutcomes", SubmitFreshnessOutcomeJson<SubmitBoundaryRejection>(g_submitBoundaryOutcomes) },
+			{ "methods", std::move(methods) },
+		};
+	}
 
 	const char* GetUpscaleMethodName(Upscaling::UpscaleMethod a_method)
 	{
@@ -1398,6 +1476,7 @@ namespace
 		return {
 			{ "frame", frame },
 			{ "adapter", BuildAdapterIdentity() },
+			{ "submitInputFreshness", BuildSubmitInputFreshness() },
 			{ "modeStatus", Upscaling::GetVRRenderScaleModeStatusName(a_upscaling.GetVRRenderScaleModeStatus()) },
 			{ "runtimeRouting", {
 									{ "configuredMethod", GetUpscaleMethodName(a_upscaling.GetConfiguredUpscaleMethodForTransition()) },
@@ -6633,6 +6712,32 @@ namespace
 
 namespace VRRenderScaleDevBenchBridge
 {
+	void RecordSubmitBoundaryRejection(
+		VRSubmitInputFreshnessPolicy::OuterBoundaryRejection a_reason) noexcept
+	{
+		RecordSubmitFreshnessCounter(g_submitBoundaryOutcomes, a_reason);
+	}
+
+	void RecordSubmitInputRejection(
+		VRSubmitInputFreshnessPolicy::ProducerRejection a_reason,
+		std::uint32_t a_method) noexcept
+	{
+		RecordSubmitFreshnessCounter(
+			g_submitFreshnessMethods[SubmitFreshnessMethodIndex(a_method)].inputOutcomes,
+			a_reason);
+	}
+
+	void RecordSubmitFreshnessWork(
+		SubmitFreshnessWork a_work,
+		std::uint32_t a_method,
+		std::uint64_t a_amount) noexcept
+	{
+		RecordSubmitFreshnessCounter(
+			g_submitFreshnessMethods[SubmitFreshnessMethodIndex(a_method)].work,
+			a_work,
+			a_amount);
+	}
+
 	void RecordPhysicalMutationBoundary(
 		std::uint64_t a_transitionEpoch,
 		PhysicalMutationBoundarySource a_source,
@@ -7350,6 +7455,24 @@ namespace VRRenderScaleDevBenchBridge
 				" Main-thread actions cancelled before admission return "
 				"main_thread_timeout; an action already admitted returns "
 				"main_thread_in_progress and may complete after the response.";
+			const std::string submitFreshnessDescription =
+				" status.submitInputFreshness reports fixed process-lifetime "
+				"boundaryOutcomes and methods.fsr/dlss/other.inputOutcomes with "
+				"accepted or rejection-reason counts. Each method.work reports "
+				"fallbackPreparedHits, fallbackOutputHits, guideEncodeEyes, "
+				"colorCopyEyes, inputSanitizationEyes, vendorEyeAttempts, and "
+				"vendorEyeRetries. Compare snapshots for interval deltas; these "
+				"independently sampled counters do not reset with captures. "
+				"Guide and copy counts measure dispatched eye regions; sanitization "
+				"counts measure eligible helper calls. Vendor attempts count calls "
+				"to the vendor dispatch helper after resource validation and each "
+				"eye in a runtime stereo batch; retries identify another attempt "
+				"with the same proven current-eye identity, including full-eye "
+				"fallback after foveated dispatch.";
+			descriptor["description"] =
+				descriptor["description"].get<std::string>() + submitFreshnessDescription;
+			descriptor["inputSchema"]["properties"]["action"]["description"] =
+				"Select a diagnostic or control action." + submitFreshnessDescription;
 			descriptor["inputSchema"]["properties"]["milestone"] = {
 				{ "type", "string" },
 				{ "enum", json::array({ "strict", "presentation", "cleanup" }) },

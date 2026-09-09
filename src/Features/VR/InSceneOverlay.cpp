@@ -1,6 +1,7 @@
 #include "Features/ScreenshotFeature.h"
 #include "Features/Upscaling.h"
 #include "Features/Upscaling/VRRenderScaleDevBenchBridge.h"
+#include "Features/Upscaling/VRSubmitInputFreshnessBoundary.h"
 #include "Features/VR.h"
 #include "Features/VR/InSceneOverlaySubmitPolicy.h"
 #include "Features/VR/OpenVRSubmitLeasePolicy.h"
@@ -45,6 +46,9 @@ namespace
 	std::mutex g_vrPostLoadCompositorSubmitMutex;
 	std::mutex g_vrRenderScalePresentationWorkMutex;
 	std::mutex g_presentedMenuSurfaceMutex;
+	std::atomic<uint64_t> g_vrSubmitPairBoundarySequence{ 0 };
+	thread_local VRSubmitInputFreshnessPolicy::OuterPairBoundaryState
+		g_vrSubmitPairBoundaryState{};
 
 	enum class VRNativeRestoreCyclePresentationPath : uint8_t
 	{
@@ -671,6 +675,50 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct BSOpenVR_Submit
+	{
+		static vr::EVRCompositorError thunk(
+			RE::BSOpenVR* _this,
+			const vr::Texture_t* pTexture,
+			const vr::VRTextureBounds_t* pBounds,
+			vr::EVRSubmitFlags nSubmitFlags)
+		{
+			const auto previousBoundary = g_vrSubmitPairBoundaryState;
+			g_vrSubmitPairBoundaryState = {};
+			if (!previousBoundary.active && pTexture) {
+				uint64_t token =
+					g_vrSubmitPairBoundarySequence.fetch_add(
+						1, std::memory_order_acq_rel) +
+					1;
+				if (token == 0) {
+					token = g_vrSubmitPairBoundarySequence.fetch_add(
+								1, std::memory_order_acq_rel) +
+					        1;
+				}
+				g_vrSubmitPairBoundaryState = {
+					.token = token,
+					.compositorCycle =
+						g_openVRSubmitCycleState.load(
+							std::memory_order_acquire) >>
+						1u,
+					.frame = globals::state ? globals::state->frameCount : 0u,
+					.thread = GetCurrentThreadId(),
+					.flags = static_cast<uint32_t>(nSubmitFlags),
+					.source =
+						VRSubmitInputFreshnessPolicy::CaptureSubmitTextureIdentity(
+							pTexture),
+					.active = true,
+				};
+			}
+			const SKSE::stl::scope_exit restoreBoundary([&]() noexcept {
+				g_vrSubmitPairBoundaryState = previousBoundary;
+			});
+
+			return func(_this, pTexture, pBounds, nSubmitFlags);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	struct IVRCompositor_Submit
 	{
 		static vr::EVRCompositorError thunk(vr::IVRCompositor* _this, vr::EVREye eEye, const vr::Texture_t* pTexture, const vr::VRTextureBounds_t* pBounds, vr::EVRSubmitFlags nSubmitFlags)
@@ -711,6 +759,24 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				submitStageVendorResumeCooldownAtCycleStart =
 					(compositorCycleState & kOpenVRCycleCooldownBit) != 0;
 			}
+			const auto& activePairBoundary =
+				g_vrSubmitPairBoundaryState;
+			const auto submitBoundaryObservation =
+				VRSubmitInputFreshnessPolicy::ObserveNestedSubmit(
+					activePairBoundary,
+					pTexture,
+					compositorCycleToken,
+					globals::state ? globals::state->frameCount : 0u,
+					GetCurrentThreadId(),
+					nSubmitFlags);
+			const auto submitBoundaryIdentity =
+				VRSubmitInputFreshnessPolicy::ResolveSubmitBoundaryIdentity(
+					submitBoundaryObservation);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			VRRenderScaleDevBenchBridge::RecordSubmitBoundaryRejection(
+				VRSubmitInputFreshnessPolicy::ResolveOuterBoundaryRejection(
+					submitBoundaryObservation));
+#endif
 			// Retain the complete stereo generation while vendor, overlay, and
 			// OpenVR work runs. Observation commit revalidates this exact packet.
 			const auto renderScalePresentationPacket =
@@ -1651,7 +1717,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				vr::Texture_t upscaledTexture{};
 				vr::VRTextureBounds_t upscaledBounds{};
 				if (!presentationObservation.valid &&
-					upscaling.SubmitVRUpscaledFrame(eEye, compositorCycleToken, submitStageVendorResumeCooldownAtCycleStart, pTexture, pBounds, upscaledTexture, upscaledBounds, presentationObservation)) {
+					upscaling.SubmitVRUpscaledFrame(eEye, compositorCycleToken, submitBoundaryIdentity, submitStageVendorResumeCooldownAtCycleStart, pTexture, pBounds, upscaledTexture, upscaledBounds, presentationObservation)) {
 					refreshOriginalSubmitDecision();
 					if (!nativeRestoreGuardActive) {
 						probePresentationObservation = &presentationObservation;
@@ -3346,6 +3412,7 @@ bool VR::InstallSubmitHook(bool a_enableProcessing)
 				hookResult);
 			return false;
 		}
+		stl::write_vfunc<0x03, BSOpenVR_Submit>(RE::VTABLE_BSOpenVR[0]);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (a_enableProcessing)
 			g_openVRSubmitProcessingEnabled.store(true, std::memory_order_release);

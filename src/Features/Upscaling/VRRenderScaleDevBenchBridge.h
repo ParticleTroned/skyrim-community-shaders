@@ -2,10 +2,43 @@
 
 #include <cstdint>
 
+namespace VRSubmitInputFreshnessPolicy
+{
+	enum class OuterBoundaryRejection : std::uint8_t;
+	enum class ProducerRejection : std::uint8_t;
+}
+
 /** @brief Registers the render-scale iteration tool with the external devbench host. */
 namespace VRRenderScaleDevBenchBridge
 {
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	enum class SubmitFreshnessWork : std::uint8_t
+	{
+		FallbackPreparedHits,
+		FallbackOutputHits,
+		GuideEncodeEyes,
+		ColorCopyEyes,
+		InputSanitizationEyes,
+		VendorEyeAttempts,
+		VendorEyeRetries,
+		Count
+	};
+
+	/** Records a pair-boundary admission outcome in fixed process-lifetime counters. */
+	void RecordSubmitBoundaryRejection(
+		VRSubmitInputFreshnessPolicy::OuterBoundaryRejection a_reason) noexcept;
+
+	/** Records a producer admission outcome separately for each vendor method. */
+	void RecordSubmitInputRejection(
+		VRSubmitInputFreshnessPolicy::ProducerRejection a_reason,
+		std::uint32_t a_method) noexcept;
+
+	/** Counts actual submit work without allocating or logging on the render thread. */
+	void RecordSubmitFreshnessWork(
+		SubmitFreshnessWork a_work,
+		std::uint32_t a_method,
+		std::uint64_t a_amount = 1) noexcept;
+
 	enum class PresentationAuditSelection : std::uint8_t
 	{
 		Observed,

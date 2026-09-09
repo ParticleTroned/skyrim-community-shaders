@@ -75,6 +75,29 @@ namespace
 {
 	constexpr UINT kNvidiaVendorId = 0x10DE;
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	using SubmitFreshnessEyeIdentities =
+		std::array<VRSubmitInputReusePolicy::CurrentEyeIdentity, 2>;
+	thread_local const SubmitFreshnessEyeIdentities* g_submitFreshnessVendorInputs = nullptr;
+	thread_local SubmitFreshnessEyeIdentities g_previousSubmitFreshnessVendorInputs{};
+
+	void RecordSubmitFreshnessVendorAttempt(uint32_t a_eye, Upscaling::UpscaleMethod a_method) noexcept
+	{
+		if (!g_submitFreshnessVendorInputs || a_eye >= 2)
+			return;
+		using Work = VRRenderScaleDevBenchBridge::SubmitFreshnessWork;
+		VRRenderScaleDevBenchBridge::RecordSubmitFreshnessWork(
+			Work::VendorEyeAttempts, static_cast<uint32_t>(a_method));
+		const auto& current = (*g_submitFreshnessVendorInputs)[a_eye];
+		auto& previous = g_previousSubmitFreshnessVendorInputs[a_eye];
+		if (VRSubmitInputReusePolicy::MatchesCurrentEyeIdentity(previous, current)) {
+			VRRenderScaleDevBenchBridge::RecordSubmitFreshnessWork(
+				Work::VendorEyeRetries, static_cast<uint32_t>(a_method));
+		}
+		previous = current;
+	}
+#endif
+
 	std::optional<UINT> GetActiveAdapterVendorID()
 	{
 		if (!globals::d3d::device)
@@ -23431,6 +23454,13 @@ void Upscaling::DestroyVRIntermediateTextures(bool a_clearRapidTransitionGuard)
 	submitStagePreparedGeneration = 0;
 	submitStagePreparedFramePresentationOnly = false;
 	submitStagePreparedFrameFoveatedRegionEncode = false;
+	submitStagePreparedEyeMask = 0;
+	submitStagePreparedInputProof = {};
+	submitStageCurrentEyePreparedInputs = {};
+	submitStageCurrentEyeSourceOwners = {};
+	submitStagePreparedColorSourceOwner = nullptr;
+	submitStagePreparedDepthSourceOwner = nullptr;
+	submitStagePreparedMotionVectorSourceOwner = nullptr;
 	submitStageVendorAdmissionCycle = 0;
 	submitStageVendorAdmissionGeneration = 0;
 	submitStageVendorAdmissionMethod = static_cast<uint32_t>(UpscaleMethod::kNONE);
@@ -23444,7 +23474,12 @@ void Upscaling::DestroyVRIntermediateTextures(bool a_clearRapidTransitionGuard)
 	submitStageHotPresentationContract = {};
 	submitStageVendorOutputFrame = std::numeric_limits<uint32_t>::max();
 	submitStageVendorOutputGeneration = 0;
+	submitStageVendorOutputCompositorCycle = 0;
+	submitStageVendorOutputPairProducerToken = 0;
+	submitStageVendorOutputSourceWorldFrame =
+		std::numeric_limits<uint32_t>::max();
 	submitStageVendorOutputSourceTexture = nullptr;
+	submitStageVendorOutputSourceOwner = nullptr;
 	submitStageVendorEyeState = {};
 	submitStageFoveatedCenterState = {};
 	submitStageRuntimeFSRStereoState = {};
@@ -36640,6 +36675,13 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRSubmitStageState(bool a
 	submitStagePreparedGeneration = 0;
 	submitStagePreparedFramePresentationOnly = false;
 	submitStagePreparedFrameFoveatedRegionEncode = false;
+	submitStagePreparedEyeMask = 0;
+	submitStagePreparedInputProof = {};
+	submitStageCurrentEyePreparedInputs = {};
+	submitStageCurrentEyeSourceOwners = {};
+	submitStagePreparedColorSourceOwner = nullptr;
+	submitStagePreparedDepthSourceOwner = nullptr;
+	submitStagePreparedMotionVectorSourceOwner = nullptr;
 	submitStageVendorAdmissionCycle = 0;
 	submitStageVendorAdmissionGeneration = 0;
 	submitStageVendorAdmissionMethod = static_cast<uint32_t>(UpscaleMethod::kNONE);
@@ -36653,7 +36695,12 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRSubmitStageState(bool a
 	submitStageHotPresentationContract = {};
 	submitStageVendorOutputFrame = std::numeric_limits<uint32_t>::max();
 	submitStageVendorOutputGeneration = 0;
+	submitStageVendorOutputCompositorCycle = 0;
+	submitStageVendorOutputPairProducerToken = 0;
+	submitStageVendorOutputSourceWorldFrame =
+		std::numeric_limits<uint32_t>::max();
 	submitStageVendorOutputSourceTexture = nullptr;
+	submitStageVendorOutputSourceOwner = nullptr;
 	submitStageVendorEyeState = {};
 	submitStageFoveatedCenterState = {};
 	submitStageRuntimeFSRStereoState = {};
@@ -39602,6 +39649,9 @@ bool Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Ups
 		}
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordSubmitFreshnessVendorAttempt(params.eyeIndex, a_upscaleMethod);
+#endif
 	if (a_upscaleMethod == UpscaleMethod::kDLSS) {
 		const sl::Extent extentIn{ 0u, 0u, params.inputWidth, params.inputHeight };
 		const sl::Extent extentOut{ 0u, 0u, params.outputWidth, params.outputHeight };
@@ -41920,11 +41970,14 @@ void Upscaling::ClearVRDirectUpscaledEyeOutput(uint32_t eyeIndex, ID3D11Unordere
 }
 
 bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource,
-	uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool copyDepthInput, bool allowFoveatedRegionEncode, bool* encodedFoveatedRegions, uint32_t contractGeneration)
+	uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool copyDepthInput, bool allowFoveatedRegionEncode, bool* encodedFoveatedRegions, uint32_t contractGeneration, uint32_t eyeMask)
 {
 	if (encodedFoveatedRegions)
 		*encodedFoveatedRegions = false;
+	eyeMask &= 0x3u;
 	if (!globals::game::isVR || !colorSource || !motionVectors || !depthSource || !inputWidthPerEye || !inputHeight || !outputWidthPerEye || !outputHeight)
+		return false;
+	if (eyeMask == 0)
 		return false;
 	const auto inputStereoLayout = ResolveVRSideBySideStereoLayout(inputWidthPerEye, inputHeight);
 	if (!inputStereoLayout.IsValid())
@@ -41935,6 +41988,23 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 	auto context = globals::d3d::context;
 	if (!state || !renderer || !context || !globals::deferred || !upscalingDataCB || !reactiveMaskTexture || !transparencyCompositionMaskTexture)
 		return false;
+
+	// Any attempted producer write retires cached outputs that referenced the
+	// previous contents, even when a later shader/resource step fails.
+	submitStagePreparedEyeMask = 0;
+	submitStagePreparedInputProof = {};
+	submitStagePreparedColorSourceOwner = nullptr;
+	submitStagePreparedDepthSourceOwner = nullptr;
+	submitStagePreparedMotionVectorSourceOwner = nullptr;
+	submitStageCurrentEyePreparedInputs.Invalidate(eyeMask);
+	submitStageRuntimeFSRStereoState = {};
+	for (uint32_t eye = 0; eye < 2; ++eye) {
+		if ((eyeMask & (1u << eye)) == 0)
+			continue;
+		submitStageVendorEyeState[eye] = {};
+		submitStageFoveatedCenterState[eye] = {};
+		submitStageCurrentEyeSourceOwners[eye] = {};
+	}
 
 	if (!reactiveMaskTexture->resource || !reactiveMaskTexture->uav ||
 		!transparencyCompositionMaskTexture->resource || !transparencyCompositionMaskTexture->uav)
@@ -41995,6 +42065,8 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 	}
 
 	for (uint32_t eye = 0; eye < 2; ++eye) {
+		if ((eyeMask & (1u << eye)) == 0)
+			continue;
 		if ((copyDepthInput && (!vrIntermediateDepth[eye] || !vrIntermediateDepth[eye]->resource)) ||
 			(upscaleMethod == UpscaleMethod::kFSR && (!vrIntermediateLinearDepth[eye] || !vrIntermediateLinearDepth[eye]->resource || !vrIntermediateLinearDepth[eye]->uav)) ||
 			!vrIntermediateMotionVectors[eye] || !vrIntermediateMotionVectors[eye]->uav ||
@@ -42057,6 +42129,11 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 			};
 			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 			context->Dispatch((dispatchWidth + 7u) >> 3, (dispatchHeight + 7u) >> 3, 1);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			VRRenderScaleDevBenchBridge::RecordSubmitFreshnessWork(
+				VRRenderScaleDevBenchBridge::SubmitFreshnessWork::GuideEncodeEyes,
+				static_cast<uint32_t>(upscaleMethod));
+#endif
 
 			if (copyDepthInput) {
 				D3D11_BOX srcBox{
@@ -42074,8 +42151,11 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 
 		auto dispatchFullEyes = [&]() -> bool {
 			bool allDispatched = true;
-			for (uint32_t eye = 0; eye < 2; ++eye)
+			for (uint32_t eye = 0; eye < 2; ++eye) {
+				if ((eyeMask & (1u << eye)) == 0)
+					continue;
 				allDispatched = dispatchEyeEncode(eye, 0, 0, inputWidthPerEye, inputHeight) && allDispatched;
+			}
 			return allDispatched;
 		};
 
@@ -42088,6 +42168,8 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 				CS_GPU_PASS("FoveatedRender::EncodeUpscalingTextures");
 				bool allDispatched = true;
 				for (uint32_t eye = 0; eye < 2; ++eye) {
+					if ((eyeMask & (1u << eye)) == 0)
+						continue;
 					allDispatched = dispatchEyeEncode(eye, regions[eye].minX, regions[eye].minY, regions[eye].maxX, regions[eye].maxY) && allDispatched;
 				}
 				dispatchedRegionEncode = allDispatched;
@@ -48219,6 +48301,13 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	submitStagePreparedGeneration = 0;
 	submitStagePreparedFramePresentationOnly = false;
 	submitStagePreparedFrameFoveatedRegionEncode = false;
+	submitStagePreparedEyeMask = 0;
+	submitStagePreparedInputProof = {};
+	submitStageCurrentEyePreparedInputs = {};
+	submitStageCurrentEyeSourceOwners = {};
+	submitStagePreparedColorSourceOwner = nullptr;
+	submitStagePreparedDepthSourceOwner = nullptr;
+	submitStagePreparedMotionVectorSourceOwner = nullptr;
 	submitStageVendorAdmissionCycle = 0;
 	submitStageVendorAdmissionGeneration = 0;
 	submitStageVendorAdmissionMethod = static_cast<uint32_t>(UpscaleMethod::kNONE);
@@ -48232,7 +48321,12 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	submitStageHotPresentationContract = {};
 	submitStageVendorOutputFrame = std::numeric_limits<uint32_t>::max();
 	submitStageVendorOutputGeneration = 0;
+	submitStageVendorOutputCompositorCycle = 0;
+	submitStageVendorOutputPairProducerToken = 0;
+	submitStageVendorOutputSourceWorldFrame =
+		std::numeric_limits<uint32_t>::max();
 	submitStageVendorOutputSourceTexture = nullptr;
+	submitStageVendorOutputSourceOwner = nullptr;
 	submitStageVendorEyeState = {};
 	submitStageFoveatedCenterState = {};
 	submitStageRuntimeFSRStereoState = {};
@@ -48313,7 +48407,7 @@ bool Upscaling::MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context)
 	return true;
 }
 
-bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCycleToken, bool a_vendorResumeCooldownAtCycleStart, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
+bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCycleToken, const VRSubmitInputFreshnessPolicy::SubmitBoundaryIdentity& a_submitBoundaryIdentity, bool a_vendorResumeCooldownAtCycleStart, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 	vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds, VRRenderScalePresentationObservation& a_presentationObservation)
 {
 	a_presentationObservation = {};
@@ -48986,13 +49080,142 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	const bool sourceContainsBothEyes =
+		sourceUsesCombinedStereoLayout || sourceDesc.ArraySize > 1;
+	std::array<VRSubmitSourceRegion, 2> canonicalSourceRegions{};
+	for (uint32_t stereoEye = 0; stereoEye < canonicalSourceRegions.size(); ++stereoEye) {
+		canonicalSourceRegions[stereoEye] = ResolveVRSubmitSourceRegion(
+			sourceDesc,
+			stereoEye,
+			sourceEyeWidthIn,
+			sourceEyeHeightIn,
+			sourceStereoLayout,
+			sourceUsesCombinedStereoLayout,
+			false,
+			nullptr);
+	}
+	const auto sourceRegionsMatch = [](
+										const VRSubmitSourceRegion& a_left,
+										const VRSubmitSourceRegion& a_right) {
+		return a_left.valid && a_right.valid &&
+		       a_left.matchesExpectedSize && a_right.matchesExpectedSize &&
+		       a_left.subresource == a_right.subresource &&
+		       a_left.box.left == a_right.box.left &&
+		       a_left.box.top == a_right.box.top &&
+		       a_left.box.right == a_right.box.right &&
+		       a_left.box.bottom == a_right.box.bottom &&
+		       a_left.depthWidth == a_right.depthWidth &&
+		       a_left.depthHeight == a_right.depthHeight &&
+		       a_left.depthOffsetX == a_right.depthOffsetX &&
+		       a_left.depthOffsetY == a_right.depthOffsetY;
+	};
+	const bool submitSourceSignatureProven =
+		sourceContainsBothEyes &&
+		canonicalSourceRegions[0].valid &&
+		canonicalSourceRegions[0].matchesExpectedSize &&
+		canonicalSourceRegions[1].valid &&
+		canonicalSourceRegions[1].matchesExpectedSize &&
+		sourceRegionsMatch(sourceRegion, canonicalSourceRegions[eyeIndex]);
+	const auto buildProofRegion = [](const VRSubmitSourceRegion& a_region) {
+		return VRSubmitInputFreshnessPolicy::EyeRegion{
+			.subresource = a_region.subresource,
+			.left = a_region.box.left,
+			.top = a_region.box.top,
+			.right = a_region.box.right,
+			.bottom = a_region.box.bottom,
+			.depthWidth = a_region.depthWidth,
+			.depthHeight = a_region.depthHeight,
+			.depthOffsetX = a_region.depthOffsetX,
+			.depthOffsetY = a_region.depthOffsetY,
+		};
+	};
+	VRSubmitInputFreshnessPolicy::ProducerAdmission submitInputAdmission{
+		.compositorCycle = a_compositorCycleToken,
+		.matchedOuterBoundaryToken = a_submitBoundaryIdentity.matchedToken,
+		.submitFrame = currentFrame,
+		.lastWorldRenderFrame = state->lastWorldRenderFrame,
+		.lastCompletedWorldRenderFrame =
+			state->lastCompletedWorldRenderFrame,
+		.method = static_cast<uint32_t>(upscaleMethod),
+		.generation = activeContractGeneration,
+		.producedEyeMask = submitSourceSignatureProven ? 0x3u :
+		                                                 (1u << eyeIndex),
+		.colorSource = reinterpret_cast<uintptr_t>(sourceTexture),
+		.depthSource = reinterpret_cast<uintptr_t>(depth.texture),
+		.motionVectorSource =
+			reinterpret_cast<uintptr_t>(motionVector.texture),
+		.sourceWidth = sourceDesc.Width,
+		.sourceHeight = sourceDesc.Height,
+		.sourceMipLevels = sourceDesc.MipLevels,
+		.sourceArraySize = sourceDesc.ArraySize,
+		.sourceFormat = static_cast<uint32_t>(sourceDesc.Format),
+		.sourceSampleCount = sourceDesc.SampleDesc.Count,
+		.colorSpace = static_cast<uint32_t>(a_inputTexture->eColorSpace),
+		.sourceContainsBothEyes = sourceContainsBothEyes,
+		.sourceSignatureProven = submitSourceSignatureProven,
+	};
+	submitInputAdmission.eyes[0] = buildProofRegion(canonicalSourceRegions[0]);
+	submitInputAdmission.eyes[1] = buildProofRegion(canonicalSourceRegions[1]);
+	const auto submitInputProof =
+		VRSubmitInputFreshnessPolicy::ResolveProducerProof(
+			submitInputAdmission);
+	const bool peerInputFreshnessProven =
+		VRSubmitInputFreshnessPolicy::CanConsumePeerInputs(
+			submitInputProof, eyeIndex);
+	const auto currentEyeInputIdentity =
+		VRSubmitInputReusePolicy::ResolveCurrentEyeIdentity(
+			submitInputAdmission, a_submitBoundaryIdentity, eyeIndex,
+			buildProofRegion(sourceRegion));
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	VRRenderScaleDevBenchBridge::RecordSubmitInputRejection(
+		VRSubmitInputFreshnessPolicy::ResolveProducerRejection(submitInputAdmission),
+		static_cast<uint32_t>(upscaleMethod));
+	SubmitFreshnessEyeIdentities submitFreshnessVendorInputs{};
+	submitFreshnessVendorInputs[eyeIndex] = currentEyeInputIdentity;
+	if (peerInputFreshnessProven) {
+		const uint32_t peerEye = eyeIndex ^ 1u;
+		submitFreshnessVendorInputs[peerEye] =
+			VRSubmitInputReusePolicy::ResolveCurrentEyeIdentity(
+				submitInputAdmission, a_submitBoundaryIdentity, peerEye,
+				buildProofRegion(canonicalSourceRegions[peerEye]));
+	}
+	const auto* previousSubmitFreshnessVendorInputs = g_submitFreshnessVendorInputs;
+	g_submitFreshnessVendorInputs = &submitFreshnessVendorInputs;
+	const auto restoreSubmitFreshnessVendorInputs = ScopeExit([&]() noexcept {
+		g_submitFreshnessVendorInputs = previousSubmitFreshnessVendorInputs;
+	});
+#endif
 	if (submitStageVendorOutputFrame != currentFrame ||
+		submitStageVendorOutputCompositorCycle != a_compositorCycleToken ||
+		submitStageVendorOutputPairProducerToken !=
+			submitInputProof.pairProducerToken ||
+		submitStageVendorOutputSourceWorldFrame !=
+			submitInputProof.sourceWorldFrame ||
 		submitStageVendorOutputSourceTexture != sourceTexture ||
 		submitStageVendorOutputGeneration != activeContractGeneration) {
 		submitStageVendorOutputFrame = currentFrame;
 		submitStageVendorOutputGeneration = activeContractGeneration;
+		submitStageVendorOutputCompositorCycle = a_compositorCycleToken;
+		submitStageVendorOutputPairProducerToken =
+			submitInputProof.pairProducerToken;
+		submitStageVendorOutputSourceWorldFrame =
+			submitInputProof.sourceWorldFrame;
 		submitStageVendorOutputSourceTexture = sourceTexture;
-		submitStageVendorEyeState = {};
+		submitStageVendorOutputSourceOwner.copy_from(sourceTexture);
+		for (uint32_t cachedEye = 0; cachedEye < 2; ++cachedEye) {
+			auto& cached = submitStageVendorEyeState[cachedEye];
+			const auto& owners = submitStageCurrentEyeSourceOwners[cachedEye];
+			const auto& source = cached.currentEyeIdentity.source;
+			const bool retainCurrentEyeOutput =
+				!peerInputFreshnessProven && cached.ready && !cached.inputProof.IsValid() &&
+				VRSubmitInputReusePolicy::SharesCurrentEyeProducerScope(
+					cached.currentEyeIdentity, currentEyeInputIdentity) &&
+				reinterpret_cast<uintptr_t>(owners.color.get()) == source.colorSource &&
+				reinterpret_cast<uintptr_t>(owners.depth.get()) == source.depthSource &&
+				reinterpret_cast<uintptr_t>(owners.motionVectors.get()) == source.motionVectorSource;
+			if (!retainCurrentEyeOutput)
+				cached = {};
+		}
 		submitStageFoveatedCenterState = {};
 		submitStageRuntimeFSRStereoState = {};
 		submitStageForceFullEyeVendorFallback = false;
@@ -49167,9 +49390,46 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		upscaleMethod == UpscaleMethod::kDLSS ||
 		submitStageFoveatedPeripheryTAAPathActive;
 
-	const bool submitStagePreparedThisFrame =
-		submitStagePreparedFrame == currentFrame &&
-		submitStagePreparedGeneration == activeContractGeneration;
+	const uint32_t requiredPreparedEyeMask =
+		peerInputFreshnessProven ? 0x3u : (1u << eyeIndex);
+	const auto& currentEyeSourceOwners = submitStageCurrentEyeSourceOwners[eyeIndex];
+	const bool currentEyePreparedInputsMatch =
+		!presentationOnly && !peerInputFreshnessProven &&
+		submitStageCurrentEyePreparedInputs.Matches(currentEyeInputIdentity) &&
+		currentEyeSourceOwners.color.get() == sourceTexture &&
+		currentEyeSourceOwners.depth.get() == depth.texture &&
+		currentEyeSourceOwners.motionVectors.get() == motionVector.texture;
+	const bool preparedInputProofMatches =
+		VRSubmitInputFreshnessPolicy::MatchesProducerProof(
+			submitStagePreparedInputProof, submitInputProof) &&
+		submitStagePreparedColorSourceOwner.get() == sourceTexture &&
+		submitStagePreparedDepthSourceOwner.get() == depth.texture &&
+		submitStagePreparedMotionVectorSourceOwner.get() == motionVector.texture;
+	const bool submitStagePreparedThisFrame = currentEyePreparedInputsMatch || (submitStagePreparedFrame == currentFrame &&
+																				   submitStagePreparedGeneration == activeContractGeneration &&
+																				   ((presentationOnly && submitStagePreparedFramePresentationOnly) ||
+																					   (!presentationOnly && !submitStagePreparedFramePresentationOnly &&
+																						   preparedInputProofMatches &&
+																						   (submitStagePreparedEyeMask & requiredPreparedEyeMask) ==
+																							   requiredPreparedEyeMask)));
+	if (currentEyePreparedInputsMatch) {
+		submitStagePreparedFrameFoveatedRegionEncode =
+			submitStageCurrentEyePreparedInputs.foveatedRegionEncode[eyeIndex];
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		VRRenderScaleDevBenchBridge::RecordSubmitFreshnessWork(
+			VRRenderScaleDevBenchBridge::SubmitFreshnessWork::FallbackPreparedHits,
+			static_cast<uint32_t>(upscaleMethod));
+#endif
+	}
+	const auto recordCurrentEyePreparation = [&](bool a_foveatedRegionEncode) {
+		if (!peerInputFreshnessProven && currentEyeInputIdentity.IsValid()) {
+			submitStageCurrentEyePreparedInputs.Record(currentEyeInputIdentity, a_foveatedRegionEncode);
+			auto& owners = submitStageCurrentEyeSourceOwners[eyeIndex];
+			owners.color.copy_from(sourceTexture);
+			owners.depth.copy_from(depth.texture);
+			owners.motionVectors.copy_from(motionVector.texture);
+		}
+	};
 	if (!submitStagePreparedThisFrame && !presentationOnly) {
 		if (!vendorLifecycleMutationDeferred &&
 			!ApplyPendingVendorRuntimeReset(upscaleMethod, "submit-stage ")) {
@@ -49227,9 +49487,16 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		submitStagePreparedGeneration = activeContractGeneration;
 		submitStagePreparedFramePresentationOnly = true;
 		submitStagePreparedFrameFoveatedRegionEncode = false;
+		submitStagePreparedEyeMask = 0;
+		submitStagePreparedInputProof = {};
+		submitStageCurrentEyePreparedInputs = {};
+		submitStageCurrentEyeSourceOwners = {};
+		submitStagePreparedColorSourceOwner = nullptr;
+		submitStagePreparedDepthSourceOwner = nullptr;
+		submitStagePreparedMotionVectorSourceOwner = nullptr;
 	} else if (!submitStagePreparedThisFrame || submitStagePreparedFramePresentationOnly) {
 		bool encodedFoveatedRegions = false;
-		if (!EncodeSubmitStageVRInputs(sourceTexture, motionVector.texture, depth.texture, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut, submitStageNeedsRawDepthInput, foveatedRequested, &encodedFoveatedRegions, activeContractGeneration)) {
+		if (!EncodeSubmitStageVRInputs(sourceTexture, motionVector.texture, depth.texture, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut, submitStageNeedsRawDepthInput, foveatedRequested, &encodedFoveatedRegions, activeContractGeneration, requiredPreparedEyeMask)) {
 			if (IsSubmitStageDeviceLost())
 				return false;
 			return false;
@@ -49239,6 +49506,19 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		submitStagePreparedGeneration = activeContractGeneration;
 		submitStagePreparedFramePresentationOnly = false;
 		submitStagePreparedFrameFoveatedRegionEncode = encodedFoveatedRegions;
+		submitStagePreparedEyeMask = requiredPreparedEyeMask;
+		submitStagePreparedInputProof = submitInputProof;
+		recordCurrentEyePreparation(encodedFoveatedRegions);
+		if (submitInputProof.IsValid()) {
+			submitStagePreparedColorSourceOwner.copy_from(sourceTexture);
+			submitStagePreparedDepthSourceOwner.copy_from(depth.texture);
+			submitStagePreparedMotionVectorSourceOwner.copy_from(
+				motionVector.texture);
+		} else {
+			submitStagePreparedColorSourceOwner = nullptr;
+			submitStagePreparedDepthSourceOwner = nullptr;
+			submitStagePreparedMotionVectorSourceOwner = nullptr;
+		}
 	}
 
 	if (!vrIntermediateColorIn[eyeIndex] || !vrIntermediateColorIn[eyeIndex]->resource ||
@@ -49340,6 +49620,73 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		if (!vendorColorOutput || !vendorColorOutput->resource || !vendorColorOutput->uav)
 			return false;
 	}
+	const bool runtimeFSRStereoRequested =
+		peerInputFreshnessProven &&
+		upscaleMethod == UpscaleMethod::kFSR &&
+		!fidelityFX.IsRuntimeUpscalerFailureLatched() &&
+		(fidelityFX.ShouldRequestRuntimeFsr4() ||
+			fidelityFX.ShouldUseRuntimeUpscalerForFSR());
+	std::array<FidelityFX::UpscaleRegionParameters, 2> runtimeFSRStereoRegions{};
+	const auto refreshRuntimeFSRStereoRegions = [&]() {
+		runtimeFSRStereoRegions = {};
+		if (!runtimeFSRStereoRequested)
+			return false;
+		for (uint32_t stereoEye = 0;
+			stereoEye < runtimeFSRStereoRegions.size(); ++stereoEye) {
+			if (!vrIntermediateColorIn[stereoEye] ||
+				!vrIntermediateColorIn[stereoEye]->resource ||
+				!vrIntermediateLinearDepth[stereoEye] ||
+				!vrIntermediateLinearDepth[stereoEye]->resource ||
+				!vrIntermediateMotionVectors[stereoEye] ||
+				!vrIntermediateMotionVectors[stereoEye]->resource ||
+				!vrIntermediateReactiveMask[stereoEye] ||
+				!vrIntermediateReactiveMask[stereoEye]->resource ||
+				!vrIntermediateTransparencyMask[stereoEye] ||
+				!vrIntermediateTransparencyMask[stereoEye]->resource ||
+				!vrIntermediateColorOut[stereoEye] ||
+				!vrIntermediateColorOut[stereoEye]->resource) {
+				return false;
+			}
+
+			runtimeFSRStereoRegions[stereoEye] = {
+				stereoEye,
+				vrIntermediateColorIn[stereoEye]->resource.get(),
+				vrIntermediateLinearDepth[stereoEye]->resource.get(),
+				vrIntermediateMotionVectors[stereoEye]->resource.get(),
+				vrIntermediateReactiveMask[stereoEye]->resource.get(),
+				vrIntermediateTransparencyMask[stereoEye]->resource.get(),
+				vrIntermediateColorOut[stereoEye]->resource.get(),
+				eyeWidthIn,
+				eyeHeightIn,
+				eyeWidthOut,
+				eyeHeightOut,
+				static_cast<float>(eyeWidthIn),
+				static_cast<float>(eyeHeightIn),
+				settings.sharpnessFSR
+			};
+		}
+		return true;
+	};
+	bool runtimeFSRStereoResourcesReady =
+		refreshRuntimeFSRStereoRegions();
+	const bool reuseRuntimeFSRStereoOutput =
+		runtimeFSRStereoResourcesReady &&
+		submitStageRuntimeFSRStereoState.Matches(
+			submitInputProof,
+			currentFrame,
+			activeContractGeneration,
+			eyeWidthIn,
+			eyeHeightIn,
+			eyeWidthOut,
+			eyeHeightOut,
+			sourceTexture,
+			runtimeFSRStereoRegions);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (reuseRuntimeFSRStereoOutput) {
+		RecordVRRenderScaleGPUPerformanceCounter(
+			VRRenderScaleGPUPerformanceCounter::RuntimeFSRStereoBatchReuses);
+	}
+#endif
 
 	const bool expectedFoveatedVendorPath = shouldUseFoveatedVendorThisEye;
 	const auto& cachedEyeState = submitStageVendorEyeState[eyeIndex];
@@ -49348,6 +49695,11 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	const bool canReuseSubmitStageEyeOutput =
 		!presentationOnly &&
 		cachedEyeState.ready &&
+		(VRSubmitInputFreshnessPolicy::MatchesProducerProof(
+			 cachedEyeState.inputProof, submitInputProof) ||
+			(currentEyePreparedInputsMatch && !cachedEyeState.inputProof.IsValid() &&
+				VRSubmitInputReusePolicy::MatchesCurrentEyeIdentity(
+					cachedEyeState.currentEyeIdentity, currentEyeInputIdentity))) &&
 		cachedEyeState.method == static_cast<uint32_t>(upscaleMethod) &&
 		cachedEyeState.generation == activeContractGeneration &&
 		cachedEyeState.usedFoveatedVendorPath == expectedFoveatedVendorPath &&
@@ -49370,6 +49722,13 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		vrIntermediateColorOut[eyeIndex] &&
 		vrIntermediateColorOut[eyeIndex]->resource;
 	if (canReuseSubmitStageEyeOutput) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (!peerInputFreshnessProven) {
+			VRRenderScaleDevBenchBridge::RecordSubmitFreshnessWork(
+				VRRenderScaleDevBenchBridge::SubmitFreshnessWork::FallbackOutputHits,
+				static_cast<uint32_t>(upscaleMethod));
+		}
+#endif
 		a_outputTexture = *a_inputTexture;
 		a_outputTexture.handle = vrIntermediateColorOut[eyeIndex]->resource.get();
 		a_outputTexture.eType = vr::TextureType_DirectX;
@@ -49379,31 +49738,46 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		return true;
 	}
 
-	context->CopySubresourceRegion(vrIntermediateColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, sourceTexture, sourceSubresource, &colorBox);
-	if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage source copy"))
-		return false;
+	if (!reuseRuntimeFSRStereoOutput) {
+		context->CopySubresourceRegion(vrIntermediateColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, sourceTexture, sourceSubresource, &colorBox);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		VRRenderScaleDevBenchBridge::RecordSubmitFreshnessWork(
+			VRRenderScaleDevBenchBridge::SubmitFreshnessWork::ColorCopyEyes,
+			static_cast<uint32_t>(upscaleMethod));
+#endif
+		submitStageRuntimeFSRStereoState = {};
+		if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage source copy"))
+			return false;
+	}
 
 	// Presentation RenderScale owns the temporal vendor input, so the ordinary
 	// PerEyeInput phase is intentionally disabled. Restore the same guarantee on
 	// the copied submit-stage eye before DLSS/FSR or Periphery TAA can consume it.
 	// The tiled exact predicate prevents hidden-area color from entering temporal
 	// history. Failure safely retains the original compositor submission.
-	if (!presentationOnly) {
+	const auto sanitizeSubmitStageInputEye = [&](uint32_t targetEyeIndex,
+												 const VRSubmitSourceRegion& targetSourceRegion) {
 		const bool inputMaskEligible =
 			ShouldClearHMDMaskInPhase(HMDMaskClearPhase::SubmitStageInput);
 		bool inputMaskCleared = false;
-		if (inputMaskEligible && depth.depthSRV &&
-			vrIntermediateColorIn[eyeIndex] && vrIntermediateColorIn[eyeIndex]->uav) {
+		if (inputMaskEligible && depth.depthSRV && targetEyeIndex < 2u &&
+			vrIntermediateColorIn[targetEyeIndex] &&
+			vrIntermediateColorIn[targetEyeIndex]->uav) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			VRRenderScaleDevBenchBridge::RecordSubmitFreshnessWork(
+				VRRenderScaleDevBenchBridge::SubmitFreshnessWork::InputSanitizationEyes,
+				static_cast<uint32_t>(upscaleMethod));
+#endif
 			inputMaskCleared = DispatchHMDMaskClear(
-				vrIntermediateColorIn[eyeIndex]->uav.get(),
+				vrIntermediateColorIn[targetEyeIndex]->uav.get(),
 				depth.depthSRV,
-				sourceRegion.depthWidth,
-				sourceRegion.depthHeight,
+				targetSourceRegion.depthWidth,
+				targetSourceRegion.depthHeight,
 				eyeWidthIn,
 				eyeHeightIn,
-				sourceRegion.depthOffsetX,
+				targetSourceRegion.depthOffsetX,
 				0u,
-				sourceRegion.depthOffsetY,
+				targetSourceRegion.depthOffsetY,
 				0u,
 				false,
 				false);
@@ -49411,12 +49785,16 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		if (!inputMaskCleared) {
 			static bool loggedSubmitStageInputMaskFailure[2] = {};
 			LogWarnOnceFmt(
-				loggedSubmitStageInputMaskFailure[eyeIndex],
+				loggedSubmitStageInputMaskFailure[std::min(targetEyeIndex, 1u)],
 				"[Upscaling][HAM] Submit-stage input sanitization was unavailable for eye {}; using the original compositor submission.",
-				eyeIndex);
+				targetEyeIndex);
 			return false;
 		}
-		if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage HMD mask input sanitization"))
+		return !MarkSubmitStageDeviceLostIfDeviceRemoved(
+			"submit-stage HMD mask input sanitization");
+	};
+	if (!presentationOnly && !reuseRuntimeFSRStereoOutput) {
+		if (!sanitizeSubmitStageInputEye(eyeIndex, sourceRegion))
 			return false;
 	}
 
@@ -49509,9 +49887,13 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		return true;
 	};
 
-	auto replayStoredFullEyeVendorOutput = [&](uint32_t targetEyeIndex, bool preferDLSSSharpening) -> bool {
-		const auto& targetEyeState = submitStageVendorEyeState[targetEyeIndex];
+	auto replayStoredFullEyeVendorOutput = [&](uint32_t targetEyeIndex,
+											   bool preferDLSSSharpening,
+											   SubmitStageVendorEyeState targetEyeState) -> bool {
 		if (!targetEyeState.ready ||
+			!peerInputFreshnessProven ||
+			!VRSubmitInputFreshnessPolicy::MatchesProducerProof(
+				targetEyeState.inputProof, submitInputProof) ||
 			targetEyeState.generation != activeContractGeneration ||
 			!targetEyeState.usedFoveatedVendorPath) {
 			return true;
@@ -49604,10 +49986,12 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			return false;
 		}
 
-		submitStageVendorEyeState[targetEyeIndex].usedFoveatedVendorPath = false;
-		submitStageVendorEyeState[targetEyeIndex].usedDLSSSharpening = replaySubmitDLSSSharpening;
-		submitStageVendorEyeState[targetEyeIndex].usedMenuFinalComposite = submitStageMenuFinalCompositeRequested;
-		submitStageVendorEyeState[targetEyeIndex].menuLayerGeneration = submitStageMenuLayerGeneration;
+		auto& replayedEyeState = submitStageVendorEyeState[targetEyeIndex];
+		replayedEyeState = targetEyeState;
+		replayedEyeState.usedFoveatedVendorPath = false;
+		replayedEyeState.usedDLSSSharpening = replaySubmitDLSSSharpening;
+		replayedEyeState.usedMenuFinalComposite = submitStageMenuFinalCompositeRequested;
+		replayedEyeState.menuLayerGeneration = submitStageMenuLayerGeneration;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		captureSubmitStageVendorDispatchEvidence(
 			submitStageVendorEyeState[targetEyeIndex]);
@@ -49625,8 +50009,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	if (upscaleMethod == UpscaleMethod::kDLSS)
 		streamline.ClearLastDLSSFailureState();
 
-	bool vendorSucceeded = false;
-	if (shouldUseFoveatedVendorThisEye) {
+	bool vendorSucceeded = reuseRuntimeFSRStereoOutput;
+	if (!vendorSucceeded && shouldUseFoveatedVendorThisEye) {
 		static bool loggedFoveatedSubmitException[2] = {};
 		try {
 			{
@@ -49728,6 +50112,17 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		}
 	}
 
+	const uint32_t otherEyeIndex = eyeIndex ^ 1u;
+	const auto otherEyeStateBeforeFullEncode =
+		submitStageVendorEyeState[otherEyeIndex];
+	bool replayOtherEyeFromFoveated =
+		peerInputFreshnessProven &&
+		otherEyeStateBeforeFullEncode.ready &&
+		VRSubmitInputFreshnessPolicy::MatchesProducerProof(
+			otherEyeStateBeforeFullEncode.inputProof,
+			submitInputProof) &&
+		otherEyeStateBeforeFullEncode.usedFoveatedVendorPath;
+
 	bool fullEyeVendorFallbackAvailable =
 		!(upscaleMethod == UpscaleMethod::kDLSS &&
 			foveatedRequested &&
@@ -49745,7 +50140,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			submitStageNeedsRawDepthInput,
 			false,
 			&encodedFoveatedRegions,
-			activeContractGeneration);
+			activeContractGeneration,
+			requiredPreparedEyeMask);
 		if (IsSubmitStageDeviceLost())
 			return false;
 
@@ -49754,6 +50150,21 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			submitStagePreparedGeneration = activeContractGeneration;
 			submitStagePreparedFramePresentationOnly = false;
 			submitStagePreparedFrameFoveatedRegionEncode = false;
+			submitStagePreparedEyeMask = requiredPreparedEyeMask;
+			submitStagePreparedInputProof = submitInputProof;
+			recordCurrentEyePreparation(false);
+			if (submitInputProof.IsValid()) {
+				submitStagePreparedColorSourceOwner.copy_from(sourceTexture);
+				submitStagePreparedDepthSourceOwner.copy_from(depth.texture);
+				submitStagePreparedMotionVectorSourceOwner.copy_from(
+					motionVector.texture);
+			} else {
+				submitStagePreparedColorSourceOwner = nullptr;
+				submitStagePreparedDepthSourceOwner = nullptr;
+				submitStagePreparedMotionVectorSourceOwner = nullptr;
+			}
+			runtimeFSRStereoResourcesReady =
+				refreshRuntimeFSRStereoRegions();
 		} else {
 			static bool loggedFullEyeEncodeFailure[2] = {};
 			if (!loggedFullEyeEncodeFailure[eyeIndex]) {
@@ -49767,63 +50178,65 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	}
 
 	if (!vendorSucceeded && fullEyeVendorFallbackAvailable) {
-		const uint32_t otherEyeIndex = eyeIndex ^ 1u;
-		const bool replayOtherEyeFromFoveated =
-			submitStageVendorEyeState[otherEyeIndex].ready &&
-			submitStageVendorEyeState[otherEyeIndex].usedFoveatedVendorPath;
 		bool runtimeStereoDispatchFailed = false;
-		const bool sourceContainsBothEyes =
-			sourceUsesCombinedStereoLayout || sourceDesc.ArraySize > 1;
-		const bool runtimeFSRStereoRequested =
-			upscaleMethod == UpscaleMethod::kFSR &&
-			sourceContainsBothEyes &&
-			!fidelityFX.IsRuntimeUpscalerFailureLatched() &&
-			(fidelityFX.ShouldRequestRuntimeFsr4() || fidelityFX.ShouldUseRuntimeUpscalerForFSR());
-		if (runtimeFSRStereoRequested) {
-			const auto otherSourceRegion = ResolveVRSubmitSourceRegion(
-				sourceDesc,
-				otherEyeIndex,
-				sourceEyeWidthIn,
-				sourceEyeHeightIn,
-				sourceStereoLayout,
-				sourceUsesCombinedStereoLayout,
-				false,
-				nullptr);
-			bool stereoResourcesReady =
-				otherSourceRegion.valid &&
-				otherSourceRegion.matchesExpectedSize;
-			std::array<FidelityFX::UpscaleRegionParameters, 2> stereoRegions{};
-			for (uint32_t stereoEye = 0; stereoEye < stereoRegions.size(); ++stereoEye) {
-				stereoResourcesReady = stereoResourcesReady &&
-				                       vrIntermediateColorIn[stereoEye] && vrIntermediateColorIn[stereoEye]->resource &&
-				                       vrIntermediateLinearDepth[stereoEye] && vrIntermediateLinearDepth[stereoEye]->resource &&
-				                       vrIntermediateMotionVectors[stereoEye] && vrIntermediateMotionVectors[stereoEye]->resource &&
-				                       vrIntermediateReactiveMask[stereoEye] && vrIntermediateReactiveMask[stereoEye]->resource &&
-				                       vrIntermediateTransparencyMask[stereoEye] && vrIntermediateTransparencyMask[stereoEye]->resource &&
-				                       vrIntermediateColorOut[stereoEye] && vrIntermediateColorOut[stereoEye]->resource;
-				if (!stereoResourcesReady)
-					break;
-
-				stereoRegions[stereoEye] = {
-					stereoEye,
-					vrIntermediateColorIn[stereoEye]->resource.get(),
-					vrIntermediateLinearDepth[stereoEye]->resource.get(),
-					vrIntermediateMotionVectors[stereoEye]->resource.get(),
-					vrIntermediateReactiveMask[stereoEye]->resource.get(),
-					vrIntermediateTransparencyMask[stereoEye]->resource.get(),
-					vrIntermediateColorOut[stereoEye]->resource.get(),
-					eyeWidthIn,
-					eyeHeightIn,
-					eyeWidthOut,
-					eyeHeightOut,
-					static_cast<float>(eyeWidthIn),
-					static_cast<float>(eyeHeightIn),
-					settings.sharpnessFSR
-				};
+		if (runtimeFSRStereoResourcesReady) {
+			const auto& otherSourceRegion =
+				canonicalSourceRegions[otherEyeIndex];
+			// Peer input is legal only inside the exact engine pair producer scope.
+			context->CopySubresourceRegion(
+				vrIntermediateColorIn[otherEyeIndex]->resource.get(),
+				0,
+				0,
+				0,
+				0,
+				sourceTexture,
+				otherSourceRegion.subresource,
+				&otherSourceRegion.box);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			VRRenderScaleDevBenchBridge::RecordSubmitFreshnessWork(
+				VRRenderScaleDevBenchBridge::SubmitFreshnessWork::ColorCopyEyes,
+				static_cast<uint32_t>(upscaleMethod));
+#endif
+			submitStageRuntimeFSRStereoState = {};
+			if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage stereo source copy"))
+				return false;
+			const bool peerInputSanitized =
+				sanitizeSubmitStageInputEye(otherEyeIndex, otherSourceRegion);
+			if (!peerInputSanitized && IsSubmitStageDeviceLost())
+				return false;
+			if (!peerInputSanitized) {
+				replayOtherEyeFromFoveated = false;
+				runtimeFSRStereoResourcesReady = false;
 			}
 
-			if (stereoResourcesReady) {
-				if (submitStageRuntimeFSRStereoState.Matches(
+			if (runtimeFSRStereoResourcesReady) {
+				FidelityFX::StereoUpscaleResult stereoResult{};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				RecordVRRenderScaleGPUPerformanceCounter(
+					VRRenderScaleGPUPerformanceCounter::RuntimeFSRStereoBatchAttempts);
+#endif
+				{
+					CS_GPU_PASS("Upscaling::SubmitStageUpscaleStereo");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					RecordSubmitFreshnessVendorAttempt(0, upscaleMethod);
+					RecordSubmitFreshnessVendorAttempt(1, upscaleMethod);
+#endif
+					stereoResult = fidelityFX.UpscaleStereoRegions(
+						runtimeFSRStereoRegions);
+				}
+				if (stereoResult == FidelityFX::StereoUpscaleResult::Ready) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					RecordVRRenderScaleGPUPerformanceCounter(
+						VRRenderScaleGPUPerformanceCounter::RuntimeFSRStereoBatchSuccesses);
+#endif
+					for (uint32_t stereoEye = 0;
+						stereoEye < runtimeFSRStereoRegions.size(); ++stereoEye) {
+						RecordVRRenderScaleFullEyeEvaluation(
+							upscaleMethod, stereoEye, true);
+					}
+
+					submitStageRuntimeFSRStereoState.Record(
+						submitInputProof,
 						currentFrame,
 						activeContractGeneration,
 						eyeWidthIn,
@@ -49831,106 +50244,74 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 						eyeWidthOut,
 						eyeHeightOut,
 						sourceTexture,
-						stereoRegions)) {
+						runtimeFSRStereoRegions);
 					vendorSucceeded = true;
+
+					if (replayOtherEyeFromFoveated) {
+						if (!finalizeSubmitStageEyeOutput(
+								otherEyeIndex,
+								*vrIntermediateColorOut[otherEyeIndex],
+								false,
+								otherEyeStateBeforeFullEncode.depthWidth,
+								otherEyeStateBeforeFullEncode.depthHeight,
+								otherEyeStateBeforeFullEncode.depthOffsetX,
+								otherEyeStateBeforeFullEncode.depthOffsetY)) {
+							return false;
+						}
+						auto& otherEyeState =
+							submitStageVendorEyeState[otherEyeIndex];
+						otherEyeState = otherEyeStateBeforeFullEncode;
+						otherEyeState.usedFoveatedVendorPath = false;
+						otherEyeState.usedDLSSSharpening = false;
+						otherEyeState.usedMenuFinalComposite =
+							submitStageMenuFinalCompositeRequested;
+						otherEyeState.menuLayerGeneration =
+							submitStageMenuLayerGeneration;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+						captureSubmitStageVendorDispatchEvidence(otherEyeState);
+#endif
+					}
+				} else if (stereoResult ==
+						   FidelityFX::StereoUpscaleResult::Deferred) {
+					if (a_compositorCycleToken != 0 &&
+						submitStageVendorAdmissionCycle == a_compositorCycleToken) {
+						submitStageVendorAdmissionPresentationOnly = true;
+					}
+					return presentStretchOutput(
+						eyeWidthIn,
+						eyeHeightIn,
+						VRRenderScalePresentationPath::PresentationStretch);
+				} else if (stereoResult ==
+						   FidelityFX::StereoUpscaleResult::Failed) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 					RecordVRRenderScaleGPUPerformanceCounter(
-						VRRenderScaleGPUPerformanceCounter::RuntimeFSRStereoBatchReuses);
+						VRRenderScaleGPUPerformanceCounter::RuntimeFSRStereoBatchFailures);
 #endif
+					for (uint32_t stereoEye = 0;
+						stereoEye < runtimeFSRStereoRegions.size(); ++stereoEye) {
+						RecordVRRenderScaleFullEyeEvaluation(
+							upscaleMethod, stereoEye, false);
+					}
+					HandleFSRLifecycleDeviceLoss(
+						fidelityFX.ProbeFSRDeviceStatus(),
+						"FSR stereo region dispatch");
+					runtimeStereoDispatchFailed = true;
 				} else {
-					context->CopySubresourceRegion(
-						vrIntermediateColorIn[otherEyeIndex]->resource.get(),
-						0,
-						0,
-						0,
-						0,
-						sourceTexture,
-						otherSourceRegion.subresource,
-						&otherSourceRegion.box);
-					if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage stereo source copy"))
-						return false;
-
-					FidelityFX::StereoUpscaleResult stereoResult{};
 #ifdef DEVBENCH_BRIDGE_ENABLED
 					RecordVRRenderScaleGPUPerformanceCounter(
-						VRRenderScaleGPUPerformanceCounter::RuntimeFSRStereoBatchAttempts);
+						VRRenderScaleGPUPerformanceCounter::RuntimeFSRStereoBatchNotHandled);
 #endif
-					{
-						CS_GPU_PASS("Upscaling::SubmitStageUpscaleStereo");
-						stereoResult = fidelityFX.UpscaleStereoRegions(stereoRegions);
-					}
-					if (stereoResult == FidelityFX::StereoUpscaleResult::Ready) {
-#ifdef DEVBENCH_BRIDGE_ENABLED
-						RecordVRRenderScaleGPUPerformanceCounter(
-							VRRenderScaleGPUPerformanceCounter::RuntimeFSRStereoBatchSuccesses);
-#endif
-						for (uint32_t stereoEye = 0; stereoEye < stereoRegions.size(); ++stereoEye)
-							RecordVRRenderScaleFullEyeEvaluation(upscaleMethod, stereoEye, true);
-
-						submitStageRuntimeFSRStereoState.Record(
-							currentFrame,
-							activeContractGeneration,
-							eyeWidthIn,
-							eyeHeightIn,
-							eyeWidthOut,
-							eyeHeightOut,
-							sourceTexture,
-							stereoRegions);
-						vendorSucceeded = true;
-
-						if (replayOtherEyeFromFoveated) {
-							const auto previousOtherEyeState = submitStageVendorEyeState[otherEyeIndex];
-							if (!finalizeSubmitStageEyeOutput(
-									otherEyeIndex,
-									*vrIntermediateColorOut[otherEyeIndex],
-									false,
-									previousOtherEyeState.depthWidth,
-									previousOtherEyeState.depthHeight,
-									previousOtherEyeState.depthOffsetX,
-									previousOtherEyeState.depthOffsetY)) {
-								return false;
-							}
-							auto& otherEyeState = submitStageVendorEyeState[otherEyeIndex];
-							otherEyeState.usedFoveatedVendorPath = false;
-							otherEyeState.usedDLSSSharpening = false;
-							otherEyeState.usedMenuFinalComposite = submitStageMenuFinalCompositeRequested;
-							otherEyeState.menuLayerGeneration = submitStageMenuLayerGeneration;
-#ifdef DEVBENCH_BRIDGE_ENABLED
-							captureSubmitStageVendorDispatchEvidence(otherEyeState);
-#endif
-						}
-					} else if (stereoResult == FidelityFX::StereoUpscaleResult::Deferred) {
-						if (a_compositorCycleToken != 0 &&
-							submitStageVendorAdmissionCycle == a_compositorCycleToken) {
-							submitStageVendorAdmissionPresentationOnly = true;
-						}
-						return presentStretchOutput(
-							eyeWidthIn,
-							eyeHeightIn,
-							VRRenderScalePresentationPath::PresentationStretch);
-					} else if (stereoResult == FidelityFX::StereoUpscaleResult::Failed) {
-#ifdef DEVBENCH_BRIDGE_ENABLED
-						RecordVRRenderScaleGPUPerformanceCounter(
-							VRRenderScaleGPUPerformanceCounter::RuntimeFSRStereoBatchFailures);
-#endif
-						for (uint32_t stereoEye = 0; stereoEye < stereoRegions.size(); ++stereoEye)
-							RecordVRRenderScaleFullEyeEvaluation(upscaleMethod, stereoEye, false);
-						HandleFSRLifecycleDeviceLoss(
-							fidelityFX.ProbeFSRDeviceStatus(),
-							"FSR stereo region dispatch");
-						runtimeStereoDispatchFailed = true;
-					} else {
-#ifdef DEVBENCH_BRIDGE_ENABLED
-						RecordVRRenderScaleGPUPerformanceCounter(
-							VRRenderScaleGPUPerformanceCounter::RuntimeFSRStereoBatchNotHandled);
-#endif
-					}
 				}
 			}
 		}
 
 		if (!vendorSucceeded && !runtimeStereoDispatchFailed) {
-			if (replayOtherEyeFromFoveated && !replayStoredFullEyeVendorOutput(otherEyeIndex, submitDLSSSharpening) && IsSubmitStageDeviceLost())
+			if (replayOtherEyeFromFoveated &&
+				!replayStoredFullEyeVendorOutput(
+					otherEyeIndex,
+					submitDLSSSharpening,
+					otherEyeStateBeforeFullEncode) &&
+				IsSubmitStageDeviceLost())
 				return false;
 
 			static bool loggedFullEyeSubmitException[2] = {};
@@ -50046,6 +50427,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	}
 
 	submitStageVendorEyeState[eyeIndex].ready = true;
+	submitStageVendorEyeState[eyeIndex].inputProof = submitInputProof;
+	submitStageVendorEyeState[eyeIndex].currentEyeIdentity =
+		peerInputFreshnessProven ? VRSubmitInputReusePolicy::CurrentEyeIdentity{} : currentEyeInputIdentity;
 	submitStageVendorEyeState[eyeIndex].usedFoveatedVendorPath = shouldUseFoveatedVendorThisEye && !submitStageForceFullEyeVendorFallback;
 	submitStageVendorEyeState[eyeIndex].usedDLSSSharpening = submitDLSSSharpening;
 	submitStageVendorEyeState[eyeIndex].usedMenuFinalComposite = submitStageMenuFinalCompositeRequested;

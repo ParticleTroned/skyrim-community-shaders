@@ -79,12 +79,7 @@ def load_shader_cache_contract():
 SHADER_CACHE_CONTRACT = load_shader_cache_contract()
 PACK_MANIFEST_FILE = SHADER_CACHE_CONTRACT.PACK_MANIFEST_FILE_NAME
 PACK_FILES = SHADER_CACHE_CONTRACT.PACK_FILE_NAMES
-PACK_LANES = {
-    "Optimized.A.csxpack": 1,
-    "Optimized.B.csxpack": 1,
-    "Developer.A.csxpack": 2,
-    "Developer.B.csxpack": 2,
-}
+PACK_LANES = SHADER_CACHE_CONTRACT.PACK_LANES
 
 
 def parse_args() -> argparse.Namespace:
@@ -173,14 +168,22 @@ def build_module_config() -> ET.ElementTree:
     add_option(
         runtime_plugins,
         name="Skyrim VR",
-        description="Install the prebuilt shader cache compiled for Skyrim VR.",
+        description=(
+            "Install the prebuilt shader cache compiled for Skyrim VR. "
+            "Includes Water shaders with and without Horizon Fix support; "
+            "the game selects the matching variant automatically."
+        ),
         flag=RUNTIME_FLAG,
         value=RUNTIME_VR,
     )
     add_option(
         runtime_plugins,
         name="Skyrim SE/AE",
-        description="Install the prebuilt shader cache compiled for Skyrim SE/AE.",
+        description=(
+            "Install the prebuilt shader cache compiled for Skyrim SE/AE. "
+            "Includes Water shaders with and without Horizon Fix support; "
+            "the game selects the matching variant automatically."
+        ),
         flag=RUNTIME_FLAG,
         value=RUNTIME_SE_AE,
     )
@@ -283,12 +286,9 @@ def validate_cache_source(
         else None
     )
     contract_runtime = "SE" if expected_runtime == RUNTIME_SE_AE else "VR"
-    observed_runtime = version_match.group("runtime") if version_match else None
-    if observed_runtime != contract_runtime:
+    if version_match is None:
         raise SystemExit(
-            f"shader cache runtime does not match its FOMOD slot: {info_path} "
-            f"(expected {contract_runtime!r}, observed {observed_runtime!r}; "
-            f"PluginVersion {plugin_version!r})"
+            f"invalid shader cache PluginVersion in {info_path}: {plugin_version!r}"
         )
     if shader_cache_abi != expected_shader_cache_abi:
         raise SystemExit(
@@ -333,27 +333,15 @@ def validate_cache_source(
         )
 
     allowed_root_files = {CACHE_INFO_FILE, PACK_MANIFEST_FILE, *PACK_FILES}
-    unexpected_root_files = sorted(
+    unexpected_entries = sorted(
         path.name
         for path in cache_directory.iterdir()
-        if path.is_file() and path.name not in allowed_root_files
+        if path.name not in allowed_root_files or not path.is_file()
     )
-    if unexpected_root_files:
+    if unexpected_entries:
         raise SystemExit(
-            f"managed shader cache {cache_directory} contains unexpected root files: "
-            + ", ".join(unexpected_root_files)
-        )
-
-    loose_blobs = sorted(
-        path
-        for path in cache_directory.rglob("*")
-        if path.is_file()
-        and path.suffix.lower() in SHADER_CACHE_CONTRACT.CACHE_EXTENSIONS
-    )
-    if loose_blobs:
-        raise SystemExit(
-            f"managed shader cache {cache_directory} still contains loose compiled shaders: "
-            + ", ".join(str(path.relative_to(cache_directory)) for path in loose_blobs[:8])
+            f"managed shader cache {cache_directory} contains unexpected entries: "
+            + ", ".join(unexpected_entries)
         )
 
     pack_stats = {
@@ -369,6 +357,7 @@ def validate_cache_source(
             pack_manifest,
             contract_runtime,
             pack_stats,
+            required_compatibility_variants=("default", "legacy-horizon-fix"),
         )
     except SystemExit as exc:
         raise SystemExit(

@@ -57,12 +57,13 @@ INFO_FILE_NAME = "Info.ini"
 MANIFEST_FILE_NAME = "Manifest.json"
 MANIFEST_SCHEMA_VERSION = 1
 PACK_MANIFEST_FILE_NAME = "PackManifest.json"
-PACK_FILE_NAMES = (
-    "Optimized.A.csxpack",
-    "Optimized.B.csxpack",
-    "Developer.A.csxpack",
-    "Developer.B.csxpack",
-)
+PACK_LANES = {
+    "Optimized.A.csxpack": 1,
+    "Optimized.B.csxpack": 1,
+    "Developer.A.csxpack": 2,
+    "Developer.B.csxpack": 2,
+}
+PACK_FILE_NAMES = tuple(PACK_LANES)
 PACK_FORMAT_VERSION = 1
 PACK_MANIFEST_SCHEMA_VERSION = 2
 PACK_MAX_RECORD_SIZE = 512 * 1024 * 1024
@@ -93,7 +94,7 @@ FEATURE_SHADER_DEFINE_PATTERN = re.compile(
     re.DOTALL,
 )
 FEATURE_SHADER_ABI_PATTERN = re.compile(
-    r'GetShaderCacheAbiVersion[^\{]*\{\s*return\s+"([^"]+)"',
+    r'GetShaderCacheAbiVersion[^\{]*\{\s*return\s+"([^"]*)"',
     re.DOTALL,
 )
 
@@ -201,6 +202,7 @@ def compatibility_variant_manifest(source_root: Path) -> dict[str, dict[str, Any
     if (
         not isinstance(document, dict)
         or document.get("schema") != "csx.shader.compatibility.variants"
+        or type(document.get("schemaVersion")) is not int
         or document.get("schemaVersion") != 1
         or not isinstance(document.get("variants"), list)
     ):
@@ -215,6 +217,13 @@ def compatibility_variant_manifest(source_root: Path) -> dict[str, dict[str, Any
             variant.get("shaderDefinesBySource"), dict
         ):
             raise SystemExit(f"malformed shader compatibility variant {variant['id']!r}")
+        identities: set[str] = set()
+        for registration in variant["registrations"]:
+            canonical_compatibility_registration(registration)
+            identity = registration["identity"]
+            if identity in identities:
+                raise SystemExit(f"duplicate compatibility identity {identity!r} in {variant['id']!r}")
+            identities.add(identity)
         variants[variant["id"]] = variant
     if "default" not in variants or "legacy-horizon-fix" not in variants:
         raise SystemExit("compatibility manifest must define default and legacy-horizon-fix")
@@ -248,7 +257,9 @@ def canonical_compatibility_registration(registration: dict[str, Any]) -> str:
         "resourceFingerprint",
         "scopes",
     )
-    if any(field not in registration for field in required):
+    if not isinstance(registration, dict) or any(
+        field not in registration for field in required
+    ):
         raise SystemExit("compatibility registration is missing required fields")
     identity = registration["identity"]
     if (
@@ -264,8 +275,24 @@ def canonical_compatibility_registration(registration: dict[str, Any]) -> str:
     current = registration["currentMinor"]
     minimum = registration["minimumCompatibleMinor"]
     maximum = registration["maximumCompatibleMinor"]
-    if not all(isinstance(value, int) for value in (major, current, minimum, maximum)) or major <= 0 or not minimum <= current <= maximum:
+    if (
+        not all(
+            type(value) is int and 0 <= value <= 0xFFFFFFFF
+            for value in (major, current, minimum, maximum)
+        )
+        or major == 0
+        or not minimum <= current <= maximum
+    ):
         raise SystemExit(f"invalid shader-facing version range for {identity}")
+    fingerprint = registration["resourceFingerprint"]
+    if (
+        not isinstance(fingerprint, str)
+        or len(fingerprint.encode("utf-8")) > 512
+        or any(ord(character) < 0x20 or ord(character) == 0x7F for character in fingerprint)
+    ):
+        raise SystemExit(f"invalid compatibility resource fingerprint for {identity}")
+    if not isinstance(registration["scopes"], list) or not 1 <= len(registration["scopes"]) <= 64:
+        raise SystemExit(f"compatibility registration {identity} requires one to 64 scopes")
     scope_names = {
         "shader-family": (1, "family"),
         "shader-source": (2, "source"),
@@ -274,7 +301,11 @@ def canonical_compatibility_registration(registration: dict[str, Any]) -> str:
     }
     scopes: list[tuple[int, str, str]] = []
     for scope in registration["scopes"]:
-        if not isinstance(scope, dict) or scope.get("kind") not in scope_names:
+        if (
+            not isinstance(scope, dict)
+            or not isinstance(scope.get("kind"), str)
+            or scope["kind"] not in scope_names
+        ):
             raise SystemExit(f"invalid compatibility scope for {identity}")
         if scope["kind"] in {"shader-source", "feature"}:
             raise SystemExit(
@@ -284,9 +315,12 @@ def canonical_compatibility_registration(registration: dict[str, Any]) -> str:
         value = "" if scope["kind"] == "global" else scope.get("value")
         if not isinstance(value, str) or (scope["kind"] != "global" and not value):
             raise SystemExit(f"invalid compatibility scope value for {identity}")
-        if len(value) > 512:
-            raise SystemExit(f"compatibility scope value is too long for {identity}")
-        value = value.lower()
+        if (
+            len(value.encode("utf-8")) > 512
+            or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+        ):
+            raise SystemExit(f"invalid compatibility scope value for {identity}")
+        value = value.encode("utf-8").lower().decode("utf-8")
         if scope["kind"] == "shader-source":
             value = normalize_shader_source(value, identity)
         scopes.append((order, canonical_name, value))
@@ -308,7 +342,7 @@ def canonical_compatibility_requirement_set(registrations: list[dict[str, Any]])
         (registration["identity"], canonical_compatibility_registration(registration))
         for registration in registrations
     )
-    return "".join(f"{len(value)}:{value}\n" for _, value in canonical)
+    return "".join(f"{len(value.encode('utf-8'))}:{value}\n" for _, value in canonical)
 
 
 def canonical_compatibility_domain_registration(
@@ -339,7 +373,7 @@ def canonical_compatibility_domain_set(
         )
         for registration in registrations
     )
-    return "".join(f"{len(value)}:{value}\n" for _, value in canonical)
+    return "".join(f"{len(value.encode('utf-8'))}:{value}\n" for _, value in canonical)
 
 
 def compatibility_registration_applies(
@@ -348,12 +382,12 @@ def compatibility_registration_applies(
     shader_source: str,
     features: set[str],
 ) -> bool:
-    family = shader_family.lower()
+    family = shader_family.encode("utf-8").lower().decode("utf-8")
     source = normalize_shader_source(shader_source, registration.get("identity", "provider"))
     normalized_features = {feature.lower() for feature in features}
     for scope in registration.get("scopes", []):
         kind = scope.get("kind")
-        value = str(scope.get("value", "")).lower()
+        value = str(scope.get("value", "")).encode("utf-8").lower().decode("utf-8")
         if kind == "global":
             return True
         if kind == "shader-family" and value == family:
@@ -375,17 +409,11 @@ def canonical_compatibility_requirement_for_shader(
     shader_source: str,
     features: set[str] | None = None,
 ) -> str:
-    applicable = [
-        registration
-        for registration in registrations
-        if compatibility_registration_applies(
-            registration,
-            shader_family,
-            shader_source,
-            features or set(),
+    return canonical_compatibility_requirement_set(
+        applicable_compatibility_registrations(
+            registrations, shader_family, shader_source, features
         )
-    ]
-    return canonical_compatibility_requirement_set(applicable)
+    )
 
 
 def applicable_compatibility_registrations(
@@ -447,6 +475,7 @@ def validate_shader_pack(
         raise SystemExit(f"shader pack has an invalid file header: {path}")
     offset = 80
     records = 0
+    previous_sequence = 0
     while offset < len(data):
         if len(data) - offset < 128:
             raise SystemExit(f"shader pack contains an incomplete record tail: {path}")
@@ -469,7 +498,7 @@ def validate_shader_pack(
             or record_version != PACK_FORMAT_VERSION
             or record_reserved
             or record_reserved2
-            or sequence == 0
+            or sequence <= previous_sequence
             or sequence == 0xFFFFFFFFFFFFFFFF
             or not logical_size
             or not exact_size
@@ -491,6 +520,7 @@ def validate_shader_pack(
         ):
             raise SystemExit(f"shader pack has an invalid committed record: {path}")
         records += 1
+        previous_sequence = sequence
         offset += total_size
     return {
         "lane": lane,
@@ -513,6 +543,9 @@ def validate_pack_manifest_contract(
     pack_manifest: object,
     expected_runtime: str,
     pack_stats: dict[str, dict[str, int | str]],
+    *,
+    expected_shader_cache_abi: str | None = None,
+    required_compatibility_variants: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Validate the canonical manifest/file contract used by all packagers."""
     if not isinstance(pack_manifest, dict):
@@ -558,6 +591,14 @@ def validate_pack_manifest_contract(
     ):
         raise SystemExit("managed pack manifest metadata is invalid")
 
+    if (
+        expected_shader_cache_abi is not None
+        and pack_manifest["shaderCacheABI"] != expected_shader_cache_abi
+    ):
+        raise SystemExit("managed pack manifest disagrees with Info.ini ShaderCacheABI")
+    if not set(required_compatibility_variants).issubset(variants):
+        raise SystemExit("managed pack manifest is missing required compatibility variants")
+
     if set(pack_stats) != set(PACK_FILE_NAMES):
         raise SystemExit("managed pack validation requires exactly four fixed pack files")
 
@@ -574,12 +615,7 @@ def validate_pack_manifest_contract(
         raise SystemExit(
             "managed pack manifest must describe exactly four fixed pack files"
         )
-    for file_name, expected_lane in (
-        ("Optimized.A.csxpack", 1),
-        ("Optimized.B.csxpack", 1),
-        ("Developer.A.csxpack", 2),
-        ("Developer.B.csxpack", 2),
-    ):
+    for file_name, expected_lane in PACK_LANES.items():
         entry = manifest_files.get(file_name)
         if not isinstance(entry, dict) or set(entry) != {
             "lane",
@@ -635,7 +671,7 @@ def validate_pack_manifest_contract(
     ):
         raise SystemExit("managed pack manifest disagrees with its pack files")
     for file_name, stats in pack_stats.items():
-        expected_lane = 1 if file_name.startswith("Optimized") else 2
+        expected_lane = PACK_LANES[file_name]
         actual_lane = manifest_count(
             stats.get("lane", expected_lane), f"actual {file_name}.lane"
         )
@@ -2275,12 +2311,6 @@ def validate_cache_archive(
         if entry.strip()
     ]
     entries = set(entry_list)
-    if horizon_variants is None:
-        horizon_prefix = f"{HORIZON_FIX_CACHE_DIRECTORY}/"
-        horizon_variants = any(
-            entry == HORIZON_FIX_CACHE_DIRECTORY or entry.startswith(horizon_prefix)
-            for entry in entries
-        )
     variants = (STANDARD_CACHE_VARIANT,)
     required_entries = {
         *(
@@ -2307,36 +2337,16 @@ def validate_cache_archive(
             f"{', '.join(duplicate_required_entries)}"
         )
 
-    cache_prefix = f"{CACHE_DIRECTORY}/"
     unexpected_cache_files = sorted(
         entry
         for entry in entries
-        if entry.startswith(cache_prefix)
-        and not entry.endswith("/")
-        and entry not in required_entries
+        if entry not in required_entries
+        and entry.rstrip("/") != CACHE_DIRECTORY
     )
     if unexpected_cache_files:
         raise SystemExit(
             f"packaged {runtime} cache contains unexpected managed-cache files: "
             f"{', '.join(unexpected_cache_files)}"
-        )
-
-    flattened_entries = sorted({INFO_FILE_NAME, PACK_MANIFEST_FILE_NAME} & entries)
-    if flattened_entries:
-        raise SystemExit(
-            f"packaged {runtime} cache contains flattened metadata: "
-            f"{', '.join(flattened_entries)}"
-        )
-
-    installer_entries = sorted(
-        entry
-        for entry in entries
-        if entry.casefold() == "fomod" or entry.casefold().startswith("fomod/")
-    )
-    if installer_entries:
-        raise SystemExit(
-            f"packaged {runtime} cache must not contain installer metadata: "
-            f"{', '.join(installer_entries)}"
         )
 
     with tempfile.TemporaryDirectory(
@@ -2390,26 +2400,24 @@ def validate_cache_archive(
             )
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise SystemExit(f"packaged {runtime} cache has an invalid pack manifest") from exc
+        if not isinstance(pack_manifest, dict):
+            raise SystemExit(f"packaged {runtime} cache pack manifest must be an object")
         pack_set_id = pack_manifest.get("packSetId")
         pack_stats = {
-            "Optimized.A.csxpack": validate_shader_pack(
-                pack_root / "Optimized.A.csxpack", 1, pack_set_id
-            ),
-            "Optimized.B.csxpack": validate_shader_pack(
-                pack_root / "Optimized.B.csxpack", 1, pack_set_id
-            ),
-            "Developer.A.csxpack": validate_shader_pack(
-                pack_root / "Developer.A.csxpack", 2, pack_set_id
-            ),
-            "Developer.B.csxpack": validate_shader_pack(
-                pack_root / "Developer.B.csxpack", 2, pack_set_id
-            ),
+            name: validate_shader_pack(pack_root / name, lane, pack_set_id)
+            for name, lane in PACK_LANES.items()
         }
         try:
             validate_pack_manifest_contract(
                 pack_manifest,
                 runtime,
                 pack_stats,
+                expected_shader_cache_abi=archived_shader_abi,
+                required_compatibility_variants=(
+                    ("default", "legacy-horizon-fix")
+                    if horizon_variants
+                    else ("default",)
+                ),
             )
         except SystemExit as exc:
             raise SystemExit(
@@ -2429,7 +2437,7 @@ def prepare_cache_archive(
 ) -> Path:
     """Create a validated candidate archive without changing published output."""
     variants = cache_variants_for(profile)
-    horizon_variants = HORIZON_FIX_CACHE_VARIANT in variants
+    horizon_variants = HORIZON_FIX_CACHE_VARIANT in compile_variants_for(profile)
     archive_name = f"ShaderCache-{runtime}-{safe_label(label)}.7z"
     temporary_archive = workspace / archive_name
     command = [

@@ -7,9 +7,11 @@ import configparser
 import copy
 import importlib.util
 import json
+import shutil
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -25,6 +27,109 @@ SPEC.loader.exec_module(BUILDER)
 
 
 class ShaderCachePackagingTests(unittest.TestCase):
+    @staticmethod
+    def _managed_cache(root: Path, runtime: str, *, horizon: bool = True) -> Path:
+        cache = root / BUILDER.CACHE_DIRECTORY
+        variants = [cache]
+        if horizon:
+            variants.append(root / BUILDER.HORIZON_FIX_CACHE_DIRECTORY)
+        for index, variant in enumerate(variants):
+            water = variant / "Water" / "1.pso"
+            water.parent.mkdir(parents=True)
+            water.write_bytes(f"{runtime}-water-{index}".encode("utf-8"))
+            lighting = variant / "Lighting" / "2.pso"
+            lighting.parent.mkdir()
+            lighting.write_bytes(f"{runtime}-lighting".encode("utf-8"))
+            (variant / BUILDER.MANIFEST_FILE_NAME).write_text(
+                json.dumps({
+                    "schemaVersion": 1,
+                    "entries": {
+                        "Water/1.pso": "1" * 32,
+                        "Lighting/2.pso": "3" * 32,
+                    },
+                }),
+                encoding="utf-8",
+            )
+        (cache / BUILDER.INFO_FILE_NAME).write_text(
+            f"[Cache]\nPluginVersion = CSX 3.18-VR\nShaderCacheABI = {'a' * 64}\n",
+            encoding="utf-8",
+        )
+        BUILDER.build_managed_shader_packs(
+            REPO, cache, variants[1] if horizon else None, runtime, "a" * 64
+        )
+        return cache
+
+    @staticmethod
+    def _archive_cache(root: Path) -> Path:
+        archive = root.parent / "cache.zip"
+        with zipfile.ZipFile(archive, "w") as stream:
+            for path in root.rglob("*"):
+                if path.is_file():
+                    stream.write(path, path.relative_to(root).as_posix())
+        return archive
+
+    @unittest.skipUnless(shutil.which("cmake"), "CMake is required to inspect cache archives")
+    def test_managed_archives_cover_se_vr_and_both_horizon_states(self) -> None:
+        for runtime in ("SE", "VR"):
+            for horizon in (False, True):
+                with self.subTest(runtime=runtime, horizon=horizon), tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary) / "runtime"
+                    cache = self._managed_cache(root, runtime, horizon=horizon)
+                    manifest = json.loads((cache / BUILDER.PACK_MANIFEST_FILE_NAME).read_text(encoding="utf-8"))
+                    self.assertEqual(manifest["runtime"], runtime)
+                    self.assertEqual(manifest["optimizedRecordCount"], 3 if horizon else 2)
+                    self.assertEqual(
+                        manifest["compatibilityVariants"],
+                        ["default", "legacy-horizon-fix"] if horizon else ["default"],
+                    )
+                    archive = self._archive_cache(root)
+                    BUILDER.validate_cache_archive(
+                        archive, shutil.which("cmake"), runtime, "CSX 3.18-VR",
+                        horizon_variants=horizon,
+                    )
+
+    @unittest.skipUnless(shutil.which("cmake"), "CMake is required to inspect cache archives")
+    def test_archive_rejects_mismatched_abi_and_invalid_manifest_shape(self) -> None:
+        for invalid_manifest in ([], None, {"shaderCacheABI": "b" * 64}):
+            with self.subTest(manifest=invalid_manifest), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary) / "runtime"
+                cache = self._managed_cache(root, "SE")
+                path = cache / BUILDER.PACK_MANIFEST_FILE_NAME
+                manifest = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(invalid_manifest, dict):
+                    manifest.update(invalid_manifest)
+                else:
+                    manifest = invalid_manifest
+                path.write_text(json.dumps(manifest), encoding="utf-8")
+                with self.assertRaises(SystemExit):
+                    BUILDER.validate_cache_archive(
+                        self._archive_cache(root), shutil.which("cmake"), "SE", "CSX 3.18-VR"
+                    )
+
+    @unittest.skipUnless(shutil.which("cmake"), "CMake is required to inspect cache archives")
+    def test_shipped_archive_requires_horizon_coverage(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "runtime"
+            self._managed_cache(root, "VR", horizon=False)
+            with self.assertRaisesRegex(SystemExit, "missing required compatibility variants"):
+                BUILDER.prepare_cache_archive(
+                    root, workspace, "VR", "test", "CSX 3.18-VR", shutil.which("cmake")
+                )
+
+    @unittest.skipUnless(shutil.which("cmake"), "CMake is required to inspect cache archives")
+    def test_archive_rejects_obsolete_separate_horizon_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "runtime"
+            self._managed_cache(root, "VR")
+            extra = root / BUILDER.HORIZON_FIX_CACHE_DIRECTORY / "Info.ini"
+            extra.parent.mkdir()
+            extra.write_text("obsolete", encoding="utf-8")
+            with self.assertRaisesRegex(SystemExit, "unexpected managed-cache files"):
+                BUILDER.validate_cache_archive(
+                    self._archive_cache(root), shutil.which("cmake"), "VR", "CSX 3.18-VR"
+                )
+
     @staticmethod
     def _sample_shader_config() -> dict[str, object]:
         profile_defines = [
@@ -257,6 +362,12 @@ class ShaderCachePackagingTests(unittest.TestCase):
         )
 
     def test_vr_horizon_variants_write_opposite_feature_states(self) -> None:
+        compile_states: list[str] = []
+
+        def record_manifest(*args, **kwargs) -> int:
+            compile_states.append(args[2])
+            return 0
+
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             features_dir = root / "stage" / "Features"
@@ -285,7 +396,14 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 self.assertTrue(states["CSUtility"])
                 info = configparser.ConfigParser(interpolation=None)
                 info.read(cache_dir / BUILDER.INFO_FILE_NAME, encoding="utf-8-sig")
-                self.assertEqual(info.get("HorizonFix", "ShaderCacheABI"), "1")
+                self.assertFalse(info.has_option("HorizonFix", "ShaderCacheABI"))
+                BUILDER.write_shader_cache_manifest(
+                    cache_dir, root / "stage", "VR", {}, record_manifest, "test-shader-abi"
+                )
+
+        self.assertEqual(len(compile_states), 2)
+        self.assertEqual(compile_states[0], compile_states[1])
+        self.assertNotIn("FeatureShaderABI=HorizonFix:", compile_states[0])
 
     def test_horizon_variant_delta_rejects_malformed_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -501,7 +619,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 cache_dir.mkdir()
                 (cache_dir / BUILDER.INFO_FILE_NAME).write_text(
                     "[Cache]\n"
-                    "[HorizonFix]\n"
+                    "[LightLimitFix]\n"
                     "Enabled = true\n"
                     "ShaderCacheABI = 1\n",
                     encoding="utf-8",
@@ -518,8 +636,8 @@ class ShaderCachePackagingTests(unittest.TestCase):
         self.assertEqual(
             states,
             [
-                f"ShaderCacheABI={'a' * 64};FeatureShaderABI=HorizonFix:1;",
-                f"VR;ShaderCacheABI={'a' * 64};FeatureShaderABI=HorizonFix:1;",
+                f"ShaderCacheABI={'a' * 64};FeatureShaderABI=LightLimitFix:1;",
+                f"VR;ShaderCacheABI={'a' * 64};FeatureShaderABI=LightLimitFix:1;",
             ],
         )
 

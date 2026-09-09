@@ -37,7 +37,7 @@ class FomodPackageTests(unittest.TestCase):
         pack_set_id = "0123456789abcdef0123456789abcdef"
         (cache_directory / BUILDER.CACHE_INFO_FILE).write_text(
             "[Cache]\n"
-            f"PluginVersion = CSX 3.18-{contract_runtime}\n"
+            "PluginVersion = CSX 3.18-VR\n"
             f"ShaderCacheABI = {shader_cache_abi}\n",
             encoding="utf-8",
         )
@@ -203,6 +203,49 @@ class FomodPackageTests(unittest.TestCase):
             "open shaders",
         ):
             self.assertNotIn(forbidden, serialized)
+
+    def test_accepts_se_cache_with_the_universal_core_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            core, se_cache, vr_cache = self._inputs(root)
+            cache = se_cache / BUILDER.CACHE_DIRECTORY
+            self.assertIn(
+                "PluginVersion = CSX 3.18-VR",
+                (cache / BUILDER.CACHE_INFO_FILE).read_text(encoding="utf-8"),
+            )
+            self.assertEqual(
+                self._read_json(cache / BUILDER.PACK_MANIFEST_FILE)["runtime"],
+                "SE",
+            )
+            BUILDER.stage_package(core, se_cache, vr_cache, root / "staged", "v3.18.0")
+
+    def test_runtime_choices_describe_both_horizon_states(self) -> None:
+        root = BUILDER.build_module_config().getroot()
+        for plugin in root.findall("./installSteps/installStep/optionalFileGroups/group/plugins/plugin")[:2]:
+            self.assertIn("with and without Horizon Fix", plugin.findtext("description"))
+
+    def test_rejects_runtime_cache_missing_horizon_coverage(self) -> None:
+        for runtime in (BUILDER.RUNTIME_SE_AE, BUILDER.RUNTIME_VR):
+            with self.subTest(runtime=runtime), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                core, se_cache, vr_cache = self._inputs(root)
+                cache_root = se_cache if runtime == BUILDER.RUNTIME_SE_AE else vr_cache
+                path = cache_root / BUILDER.CACHE_DIRECTORY / BUILDER.PACK_MANIFEST_FILE
+                manifest = self._read_json(path)
+                manifest["compatibilityVariants"] = ["default"]
+                self._write_json(path, manifest)
+                with self.assertRaisesRegex(SystemExit, "missing required compatibility variants"):
+                    BUILDER.stage_package(core, se_cache, vr_cache, root / "staged", "v3.18.0")
+
+    def test_rejects_nested_files_outside_the_managed_cache_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            core, se_cache, vr_cache = self._inputs(root)
+            extra = vr_cache / BUILDER.CACHE_DIRECTORY / "old" / "PackManifest.json"
+            extra.parent.mkdir()
+            extra.write_text("{}", encoding="utf-8")
+            with self.assertRaisesRegex(SystemExit, "unexpected entries"):
+                BUILDER.stage_package(core, se_cache, vr_cache, root / "staged", "v3.18.0")
 
     def test_rejects_cache_with_missing_managed_pack(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

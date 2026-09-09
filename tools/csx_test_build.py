@@ -24,6 +24,10 @@ class StateError(ValueError):
     """The persisted test-build state is missing or invalid."""
 
 
+class AllocationMismatch(StateError):
+    """The selected commit is not the state-only allocation commit."""
+
+
 def parse_date(value: str) -> str:
     try:
         parsed = dt.date.fromisoformat(value)
@@ -141,6 +145,115 @@ def discover_pull_requests_from_subjects(subjects: Iterable[str]) -> set[int]:
     return {int(match.group(1)) for subject in subjects for match in PR_RE.finditer(subject)}
 
 
+def _run_git(working_directory: Path, *arguments: str) -> str:
+    result = subprocess.run(
+        ["git", *arguments],
+        cwd=working_directory,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise StateError(f"git {' '.join(arguments)} failed: {detail}")
+    return result.stdout.strip()
+
+
+def _state_repository_path(path: Path) -> tuple[Path, str]:
+    resolved_path = path.resolve()
+    repository = Path(
+        _run_git(resolved_path.parent, "rev-parse", "--show-toplevel")
+    ).resolve()
+    try:
+        relative_path = resolved_path.relative_to(repository).as_posix()
+    except ValueError as error:
+        raise StateError(f"test-build state {path} is outside its repository") from error
+    return repository, relative_path
+
+
+def _source_base_version(repository: Path, source_sha: str) -> str:
+    try:
+        presets = json.loads(
+            _run_git(repository, "show", f"{source_sha}:CMakePresets.json")
+        )["configurePresets"]
+        matches = [
+            preset["cacheVariables"]["CSX_VERSION"]
+            for preset in presets
+            if preset.get("name") == "VR"
+        ]
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        raise StateError(
+            f"cannot read CSX_VERSION from {source_sha}:CMakePresets.json"
+        ) from error
+    if len(matches) != 1 or not isinstance(matches[0], str):
+        raise StateError(
+            f"source {source_sha} must define one VR CSX_VERSION in CMakePresets.json"
+        )
+    return matches[0]
+
+
+def verify_allocation_commit(
+    path: Path, state: dict[str, Any], allocation_revision: str = "HEAD"
+) -> tuple[str, str]:
+    """Return the exact source/allocation pair for a state-only allocation commit."""
+
+    validate_state(state)
+    source_sha = state["sourceSha"]
+    if source_sha is None:
+        raise StateError("the seed state has no allocation commit")
+
+    repository, state_path = _state_repository_path(path)
+    allocation_sha = _run_git(
+        repository, "rev-parse", f"{allocation_revision}^{{commit}}"
+    )
+    parent_sha = _run_git(repository, "rev-parse", f"{allocation_sha}^")
+    changed_paths = _run_git(
+        repository,
+        "diff-tree",
+        "--no-commit-id",
+        "--name-only",
+        "-r",
+        allocation_sha,
+        "--",
+    ).splitlines()
+
+    if parent_sha != source_sha:
+        raise AllocationMismatch(
+            f"allocation commit {allocation_sha} does not directly follow "
+            f"represented source {source_sha}"
+        )
+    if changed_paths != [state_path]:
+        raise AllocationMismatch(
+            f"allocation commit {allocation_sha} must change only {state_path}"
+        )
+    if _run_git(repository, "diff", "--name-only", allocation_sha, "--", state_path):
+        raise AllocationMismatch(
+            f"working copy of {state_path} does not match {allocation_sha}"
+        )
+    source_base_version = _source_base_version(repository, source_sha)
+    if source_base_version != state["baseVersion"]:
+        raise AllocationMismatch(
+            f"allocation baseVersion {state['baseVersion']} does not match "
+            f"source CSX_VERSION {source_base_version}"
+        )
+    return source_sha, allocation_sha
+
+
+def resolve_source_revision(
+    path: Path, state: dict[str, Any]
+) -> tuple[str, str | None]:
+    """Select product source without treating our state-only commit as product code."""
+
+    repository, _ = _state_repository_path(path)
+    head_sha = _run_git(repository, "rev-parse", "HEAD^{commit}")
+    if state["sourceSha"] is not None:
+        try:
+            return verify_allocation_commit(path, state, head_sha)
+        except AllocationMismatch:
+            pass
+    return head_sha, None
+
+
 def allocate(
     state: dict[str, Any],
     *,
@@ -178,13 +291,29 @@ def allocate(
 
 def write_state(path: Path, state: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", newline="\n", dir=path.parent, delete=False
-    ) as handle:
-        json.dump(state, handle, indent=4)
-        handle.write("\n")
-        temporary = Path(handle.name)
-    temporary.replace(path)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", newline="\n", dir=path.parent, delete=False
+        ) as handle:
+            temporary = Path(handle.name)
+            json.dump(state, handle, indent=4)
+            handle.write("\n")
+        temporary.replace(path)
+    except Exception:
+        cleanup_error: OSError | None = None
+        if temporary is not None and temporary.exists():
+            try:
+                temporary.unlink()
+            except OSError as error:
+                cleanup_error = error
+        if cleanup_error is not None:
+            print(
+                f"warning: failed to remove temporary state {temporary}: "
+                f"{cleanup_error}",
+                file=sys.stderr,
+            )
+        raise
 
 
 def emit(values: dict[str, str], github_output: Path | None) -> None:
@@ -203,6 +332,19 @@ def make_parser() -> argparse.ArgumentParser:
     read_parser = subparsers.add_parser("read", help="validate and report allocated state")
     read_parser.add_argument("--state", type=Path, required=True)
     read_parser.add_argument("--github-output", type=Path)
+
+    source_parser = subparsers.add_parser(
+        "source", help="select product source while recognizing an allocation commit"
+    )
+    source_parser.add_argument("--state", type=Path, required=True)
+    source_parser.add_argument("--github-output", type=Path)
+
+    verify_parser = subparsers.add_parser(
+        "verify", help="validate and report an exact allocation/source pair"
+    )
+    verify_parser.add_argument("--state", type=Path, required=True)
+    verify_parser.add_argument("--allocation-revision", default="HEAD")
+    verify_parser.add_argument("--github-output", type=Path)
 
     allocate_parser = subparsers.add_parser(
         "allocate", help="increment the state when the represented source SHA changed"
@@ -227,6 +369,25 @@ def main(argv: list[str] | None = None) -> int:
         state = load_state(args.state)
         if args.command == "read":
             emit(output_values(state, allocated=False), args.github_output)
+            return 0
+        if args.command == "source":
+            source_sha, allocation_sha = resolve_source_revision(args.state, state)
+            emit(
+                {
+                    "source_sha": source_sha,
+                    "existing_allocation_sha": allocation_sha or "",
+                },
+                args.github_output,
+            )
+            return 0
+        if args.command == "verify":
+            source_sha, allocation_sha = verify_allocation_commit(
+                args.state, state, args.allocation_revision
+            )
+            values = output_values(state, allocated=False)
+            values["source_sha"] = source_sha
+            values["allocation_sha"] = allocation_sha
+            emit(values, args.github_output)
             return 0
 
         prs = set(args.pr)

@@ -1,17 +1,18 @@
 name: "Test Build: Small Distribution"
 
 on:
-    push:
-        branches: [main-VR]
-        paths:
-            - "version/test-build.json"
     workflow_dispatch:
+        inputs:
+            allocation-revision:
+                description: "Exact state-only allocation commit SHA"
+                required: true
+                type: string
 
 permissions:
     contents: read
 
 concurrency:
-    group: csx-test-distribution-${{ github.ref }}-${{ github.sha }}
+    group: csx-test-distribution-${{ inputs.allocation-revision }}
     cancel-in-progress: false
 
 jobs:
@@ -27,26 +28,26 @@ jobs:
             - name: Checkout allocated build
               uses: actions/checkout@v6
               with:
+                  ref: ${{ inputs.allocation-revision }}
                   fetch-depth: 0
                   submodules: false
                   persist-credentials: false
 
-            - name: Validate and read test-build state
+            - name: Validate exact allocation and source
               id: identity
               run: |
                   set -euo pipefail
-                  python tools/csx_test_build.py read \
+                  python tools/csx_test_build.py verify \
                     --state version/test-build.json \
+                    --allocation-revision HEAD \
                     --github-output "$GITHUB_OUTPUT"
-                  SOURCE_SHA=$(python -c 'import json; print(json.load(open("version/test-build.json", encoding="utf-8"))["sourceSha"])')
-                  git merge-base --is-ancestor "$SOURCE_SHA" HEAD
 
     build:
         name: Build ${{ needs.metadata.outputs.display-version }}
         needs: metadata
         uses: ./.github/workflows/_shared-build.yaml
         with:
-            ref: ${{ github.sha }}
+            ref: ${{ needs.metadata.outputs.source-sha }}
             repository: ${{ github.repository }}
             run-cpp: true
             run-shader-validation: false

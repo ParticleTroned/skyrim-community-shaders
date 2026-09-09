@@ -1,6 +1,8 @@
 #pragma once
 
 #include "Api/ServiceFoundation.h"
+#include "Features/ScreenshotApiPolicy.h"
+#include "ScreenshotManifestSnapshot.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -37,6 +39,7 @@ public:
 	void Tick(ScreenshotFeature& a_feature, uint64_t a_engineFrame);
 
 	void OnSourceWaiting(std::string_view a_requestId, std::string_view a_actualSourceKind);
+	void OnSourceAcquired(std::string_view a_requestId, json a_acquisition);
 	void OnSourceFallback(
 		std::string_view a_requestId,
 		std::string_view a_reason,
@@ -70,6 +73,8 @@ private:
 		uint32_t sequenceOrdinal = 0;
 		uint64_t scheduledEngineFrame = 0;
 		uint64_t scheduledTimestampUs = 0;
+		std::string scheduledUtc;
+		std::string scheduleBasis;
 		uint64_t eventIndex = 0;
 		std::string acceptedUtc;
 		std::string terminalUtc;
@@ -90,6 +95,8 @@ private:
 		std::chrono::steady_clock::time_point createdAt = std::chrono::steady_clock::now();
 		std::chrono::steady_clock::time_point terminalAt{};
 	};
+
+	using ManifestChildNode = CSX::Screenshot::ManifestChildNode;
 
 	struct SequenceRecord
 	{
@@ -126,7 +133,8 @@ private:
 		std::filesystem::path directory;
 		std::filesystem::path partialManifestPath;
 		std::filesystem::path finalManifestPath;
-		json children = json::array();
+		std::shared_ptr<const ManifestChildNode> manifestChildren;
+		std::size_t childCount = 0;
 		json packaging = json::object();
 	};
 
@@ -137,7 +145,8 @@ private:
 		bool final = false;
 		std::filesystem::path destination;
 		std::filesystem::path partialPath;
-		json document = json::object();
+		json header = json::object();
+		std::shared_ptr<const ManifestChildNode> children;
 	};
 
 	struct ManifestResult
@@ -156,6 +165,7 @@ private:
 		std::mutex mutex;
 		std::condition_variable condition;
 		std::deque<ManifestJob> jobs;
+		std::deque<std::shared_ptr<const ManifestChildNode>> retiredChildren;
 		std::deque<ManifestResult> results;
 		std::size_t outstanding = 0;
 		bool stopRequested = false;
@@ -170,11 +180,26 @@ private:
 		json capture = json::object();
 	};
 
+	struct DispatchEntry
+	{
+		std::string requestId;
+		std::string parentRequestId;
+		uint32_t sequenceOrdinal = 0;
+		bool sequenceFrame = false;
+		json capture = json::object();
+		std::chrono::steady_clock::time_point expiresAt{};
+	};
+
 	CSX::Api::ServiceFoundation service;
 	mutable std::mutex mutex;
 	std::unordered_map<std::string, RequestRecord> requests;
 	std::deque<std::string> requestOrder;
 	std::unordered_map<std::string, SequenceRecord> sequences;
+	std::deque<std::string> sequenceOrder;
+	std::size_t sequenceCursor = 0;
+	std::deque<DispatchEntry> manualDispatchQueue;
+	std::deque<DispatchEntry> sequenceDispatchQueue;
+	CSX::ScreenshotPolicy::DispatchArbitration dispatchArbitration;
 	json persistedSettings = nullptr;
 	uint64_t completedArtifacts = 0;
 	uint64_t failedArtifacts = 0;
@@ -227,11 +252,15 @@ private:
 	void FinishSequenceChildLocked(RequestRecord& a_child);
 	void TryFinalizeSequenceLocked(SequenceRecord& a_sequence);
 	void FinalizeSequenceLocked(SequenceRecord& a_sequence, const ManifestResult* a_manifestResult);
-	json BuildSequenceManifestLocked(const SequenceRecord& a_sequence, bool a_final) const;
 	void QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool a_final);
 	void DrainManifestResultsLocked();
 	static void ManifestWorkerLoop(std::shared_ptr<ManifestWorkerState> a_state);
 	std::optional<DueFrame> PrepareDueFrameLocked(uint64_t a_engineFrame);
+	std::optional<DispatchEntry> PopDispatchLocked();
+	void RequeueDispatchLocked(DispatchEntry a_entry, bool a_manual);
+	bool RemoveQueuedDispatchLocked(std::string_view a_requestId);
+	void MarkSequenceCancellationLocked(SequenceRecord& a_sequence);
+	void CancelQueuedDispatchesLocked(std::string_view a_code, std::string_view a_reason);
 
 	static std::filesystem::path ResolveDestinationDirectory(
 		const ScreenshotFeature& a_feature,

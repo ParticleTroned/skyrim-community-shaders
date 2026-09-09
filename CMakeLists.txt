@@ -1685,6 +1685,18 @@ if(BUILD_CONTROLLER_TESTS)
         VRRenderScaleDevBenchContract
         PROPERTIES LABELS "ControllerTests"
     )
+    add_test(
+        NAME VRSubmitInputFreshnessContract
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            -P
+            "${PROJECT_SOURCE_DIR}/tests/vr_submit_input_freshness_contract_test.cmake"
+    )
+    set_tests_properties(
+        VRSubmitInputFreshnessContract
+        PROPERTIES LABELS "ControllerTests"
+    )
     add_controller_test(
         reflex_policy_test
         ReflexPolicy
@@ -1699,6 +1711,21 @@ if(BUILD_CONTROLLER_TESTS)
         fsr_runtime_lifecycle_policy_test
         FSRRuntimeLifecyclePolicy
         tests/fsr_runtime_lifecycle_policy_test.cpp
+    )
+    add_controller_test(
+        vr_submit_input_freshness_policy_test
+        VRSubmitInputFreshnessPolicy
+        tests/vr_submit_input_freshness_policy_test.cpp
+    )
+    add_controller_test(
+        vr_submit_input_freshness_composition_test
+        VRSubmitInputFreshnessComposition
+        tests/vr_submit_input_freshness_composition_test.cpp
+    )
+    target_include_directories(
+        vr_submit_input_freshness_composition_test
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/extern/CommonLibSSE-NG/extern/openvr/headers"
     )
     add_controller_test(
         overlay_policy_test
@@ -1864,6 +1891,107 @@ if(BUILD_CONTROLLER_TESTS)
 	set_tests_properties(ScreenshotApiPolicy PROPERTIES LABELS "ControllerTests")
 
     add_executable(
+        screenshot_manifest_snapshot_test
+        EXCLUDE_FROM_ALL
+        tests/screenshot_manifest_snapshot_test.cpp
+    )
+    target_compile_features(
+        screenshot_manifest_snapshot_test
+        PRIVATE cxx_std_23
+    )
+    target_include_directories(
+        screenshot_manifest_snapshot_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(
+        screenshot_manifest_snapshot_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    add_test(
+        NAME ScreenshotManifestSnapshot
+        COMMAND screenshot_manifest_snapshot_test
+    )
+    set_tests_properties(
+        ScreenshotManifestSnapshot
+        PROPERTIES LABELS "ControllerTests"
+    )
+
+    set(_screenshot_capture_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/screenshot-capture"
+    )
+    set(_screenshot_capture_test_headers
+        "${_screenshot_capture_test_dir}/screenshot_capture_types_under_test.h"
+        "${_screenshot_capture_test_dir}/screenshot_capture_selection_under_test.h"
+        "${_screenshot_capture_test_dir}/screenshot_capture_present_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_screenshot_capture_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_screenshot_capture_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_screenshot_capture_present.cmake"
+        DEPENDS
+            src/Features/ScreenshotFeature.cpp
+            src/Features/ScreenshotFeature.h
+            tests/extract_screenshot_capture_present.cmake
+        VERBATIM
+    )
+    add_executable(
+        screenshot_capture_present_test
+        EXCLUDE_FROM_ALL
+        tests/screenshot_capture_present_test.cpp
+        ${_screenshot_capture_test_headers}
+    )
+    target_compile_features(screenshot_capture_present_test PRIVATE cxx_std_23)
+    target_include_directories(
+        screenshot_capture_present_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src" "${_screenshot_capture_test_dir}"
+    )
+    add_test(
+        NAME ScreenshotCapturePresent
+        COMMAND screenshot_capture_present_test
+    )
+    set_tests_properties(
+        ScreenshotCapturePresent
+        PROPERTIES LABELS "ControllerTests"
+    )
+
+    set(_screenshot_dispatch_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/screenshot-dispatch"
+    )
+    set(_screenshot_dispatch_test_header
+        "${_screenshot_dispatch_test_dir}/screenshot_dispatch_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_screenshot_dispatch_test_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_screenshot_dispatch_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_screenshot_dispatch.cmake"
+        DEPENDS
+            src/Features/ScreenshotApi.cpp
+            tests/extract_screenshot_dispatch.cmake
+        VERBATIM
+    )
+    add_executable(
+        screenshot_dispatch_test
+        EXCLUDE_FROM_ALL
+        tests/screenshot_dispatch_test.cpp
+        "${_screenshot_dispatch_test_header}"
+    )
+    target_compile_features(screenshot_dispatch_test PRIVATE cxx_std_23)
+    target_include_directories(
+        screenshot_dispatch_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src" "${_screenshot_dispatch_test_dir}"
+    )
+    target_link_libraries(
+        screenshot_dispatch_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    add_test(NAME ScreenshotDispatch COMMAND screenshot_dispatch_test)
+    set_tests_properties(ScreenshotDispatch PROPERTIES LABELS "ControllerTests")
+
+    add_executable(
         api_upscaling_contract_test
         EXCLUDE_FROM_ALL
         tests/api_upscaling_contract_test.cpp
@@ -2020,6 +2148,8 @@ if(BUILD_CONTROLLER_TESTS)
             reflex_policy_test
             fsr_host_lifecycle_policy_test
             fsr_runtime_lifecycle_policy_test
+            vr_submit_input_freshness_policy_test
+            vr_submit_input_freshness_composition_test
             overlay_policy_test
             performance_tuning_statistics_test
             shader_cache_disable_policy_test
@@ -2043,6 +2173,9 @@ if(BUILD_CONTROLLER_TESTS)
 			api_screenshot_contract_test
 			main_thread_dispatch_state_test
 			screenshot_api_policy_test
+            screenshot_manifest_snapshot_test
+            screenshot_capture_present_test
+            screenshot_dispatch_test
             api_upscaling_contract_test
             api_upscaling_service_policy_test
             api_shader_service_policy_test

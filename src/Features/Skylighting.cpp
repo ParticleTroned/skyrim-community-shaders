@@ -1351,10 +1351,13 @@ RE::BSShaderProperty::RenderPassArray* Skylighting::BSLightingShaderProperty_Get
 			return precipitationOcclusionMapRenderPassList;
 	}
 
+	if (!(geometry->worldBound.radius > 32))
+		return precipitationOcclusionMapRenderPassList;
+
 	const bool validOccluder = property->flags.any(kZBufferWrite) &&
 	                           property->flags.none(kRefraction, kTempRefraction, kLODLandscape, kEyeReflect, kDecal, kDynamicDecal) &&
 	                           (skylighting.inOcclusion || property->flags.none(kMultiTextureLandscape, kNoLODLandBlend));
-	if (!validOccluder || !(geometry->worldBound.radius > 32))
+	if (!validOccluder)
 		return precipitationOcclusionMapRenderPassList;
 
 	if (skylighting.inOcclusion) {

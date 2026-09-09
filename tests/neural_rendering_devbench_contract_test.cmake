@@ -1034,6 +1034,9 @@ foreach(_status_contract IN ITEMS
     [[{ "adaptivelyCulledCharacterActors", eye.adaptivelyCulledCharacterRegions }]]
     [[{ "mergedEligibilityRegions", eye.mergedRegions }]]
     [[{ "fullEyeEligibilityFallback", eye.fullEyeEligibilityFallback }]]
+    [[{ "uncertainActors", eye.projectionUncertainActors }]]
+    [[{ "clippedGeometry", eye.projectionClippedGeometry }]]
+    [[NeuralRendering::CharacterProjectionReasonName(eye.projectionFallbackReason)]]
     [[{ "authoredMaskCoverageSampleIntervalFrames", NeuralRendering::CharacterPolicy::kCoverageSampleIntervalFrames }]]
     [[{ "forcedMaskCoverageSampleIntervalFrames", NeuralRendering::CharacterPolicy::kCoverageSampleIntervalFrames }]]
     [[{ "configured", visualIsolationConfigured }]]
@@ -1570,6 +1573,9 @@ foreach(_source_contract IN ITEMS
     [[neuralTemporalAdmission.admitted &&]]
     [[timingFenceValue > lastCompletedTimingFenceValue_]]
     [[RefreshProjectedActors(a_args);]]
+    [[ResolveCharacterProjectionPair(corners, rasterCorners,]]
+    [[globals::game::frameBufferCached.GetCameraPosAdjust(a_eye)]]
+    [[globals::game::frameBufferCached.GetCameraViewProj(eye).Transpose()]]
     [[.currentDepthIdentity = currentDepthIdentity,]]
     [[.captureJitterX = state_->capturedJitterX_,]]
     [[.captureJitterY = state_->capturedJitterY_,]]
@@ -1928,7 +1934,8 @@ endforeach()
 foreach(_strict_zero_contract IN ITEMS
     [[const bool cpuProvenEmpty =]]
     [[slot.requiresEvaluation = !cpuProvenEmpty;]]
-    [[!slot.requiresEvaluation && slot.zeroCoverageCpuProven]]
+    [[slot.requiresEvaluation = !(cpuProvenEmpty || slot.maskRoiGpuProvenEmpty);]]
+    [[!slot.requiresEvaluation && (slot.zeroCoverageCpuProven || slot.maskRoiGpuProvenEmpty)]]
     [[slot.zeroCoverageBypassed = false;]]
     [[Increment(state_->snapshot_.provenEmptyFeatureBypassRequests);]]
 )
@@ -1938,6 +1945,35 @@ foreach(_strict_zero_contract IN ITEMS
         message(FATAL_ERROR
             "Strict current-frame zero-mask bypass contract is missing: ${_strict_zero_contract}"
         )
+    endif()
+endforeach()
+foreach(_current_mask_roi_contract IN ITEMS
+    [[if (a_slot.maskBoundsPending)]]
+    [[return fallback(FAILED(result) ? "query_failed" : "previous_copy_pending", result);]]
+    [[ReadCharacterMaskBounds(a_args.context,]]
+    [[RejectMaskBounds(a_args, a_slot, readback.Reason(), readback.result, readback.waitMs);]]
+    [[a_slot.maskBoundsContentSerial != a_slot.contentSerial]]
+    [[a_slot.maskBoundsFrame != a_args.frameId]]
+    [[a_slot.maskBoundsSourceFrame != a_args.sourceWorldFrame]]
+    [[a_slot.maskBoundsGeneration != a_args.generation]]
+    [[a_slot.maskRoiLastFailure = a_reason;]]
+    [[a_slot.maskRoiLastFailureResult = static_cast<std::int32_t>(a_result);]]
+    [[a_slot.maskRoiLastFailureFrame = a_args.frameId;]]
+    [[a_slot.maskRoiLastFailureWaitMs = a_waitMs;]]
+    [[a_args.context->CopyResource(a_slot.maskBoundsStaging.Get(), a_slot.maskBounds.Get());]]
+    [[a_args.context->End(a_slot.maskBoundsReady.Get());]]
+    [[a_slot.maskRoiCurrentFrame = true;]]
+    [[a_slot.maskRoiGpuProvenEmpty = tight.empty;]]
+    [[slot.maskRoiCurrentFrame = false;]]
+    [[slot.maskRoiGpuProvenEmpty = false;]]
+    [[state_->QueueCurrentMaskBounds(a_args, slot, plan, sourceWorldFrame)]]
+    [[!a_args.deferMaskRoiReadback]]
+    [[const auto deadline = std::chrono::steady_clock::now() + kCharacterMaskReadbackBudget;]]
+    [[state_->ResolveCurrentMaskBounds(args, slot, deadline);]]
+)
+    string(FIND "${_character_source}" "${_current_mask_roi_contract}" _current_mask_roi_position)
+    if(_current_mask_roi_position EQUAL -1)
+        message(FATAL_ERROR "Current prepared-mask spatial evidence contract is missing: ${_current_mask_roi_contract}")
     endif()
 endforeach()
 foreach(_stale_zero_token IN ITEMS
@@ -3241,7 +3277,7 @@ foreach(_character_contract IN ITEMS
     [[{ "multiEvaluationMaximumRegionsPerEye", 2 }]]
     [[{ "multiEvaluationMechanism", "separate_persistent_feature18_instances" }]]
     [[{ "privateSingleSubrectValidation", "ghidra_dataflow_and_gpu_timing_validated" }]]
-    [[Feature 18 bypasses only same-frame CPU-proven empty eyes; delayed GPU coverage samples are diagnostic and never suppress current-frame evaluation.]]
+    [[Feature 18 bypasses CPU-proven empty eyes or experimental current prepared-mask GPU-proven empty eyes; delayed GPU coverage samples are diagnostic and never suppress current-frame evaluation.]]
     [[unions the current per-eye projected face, skin, and hair eligibility bounds into one private Feature 18 compute subrect]]
     [[Feature 18 color, depth-guide, motion-vector, provider-output, and late-overlay work are restricted to that rectangle.]]
     [[const bool characterVisualIsolationChanged =]]
@@ -3308,8 +3344,8 @@ foreach(_prepared_lookup_contract IN ITEMS
 endforeach()
 string(REGEX MATCHALL [[state_->FindPreparedSlot\(]] _prepared_lookup_calls "${_character_source}")
 list(LENGTH _prepared_lookup_calls _prepared_lookup_count)
-if(NOT _prepared_lookup_count EQUAL 3)
-    message(FATAL_ERROR "Mask, single rectangle and region-plan accessors must all use shared prepared-resource validation")
+if(NOT _prepared_lookup_count EQUAL 4)
+    message(FATAL_ERROR "Mask, single rectangle, region-plan accessors and queued finalization must all use shared prepared-resource validation")
 endif()
 
 string(FIND "${_renderer_source}" [[bool Renderer::State::ApplyBatchLocked(]] _region_batch_begin)

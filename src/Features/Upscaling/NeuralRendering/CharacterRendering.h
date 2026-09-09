@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../DLSSViewportCrop.h"
+#include "CharacterActorPolicy.h"
 #include "CharacterMultiRoi.h"
 #include "CharacterRegionPolicy.h"
 #include "CharacterSettings.h"
@@ -11,6 +12,7 @@
 #include <d3d11.h>
 #include <limits>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 #include <wrl/client.h>
@@ -54,6 +56,21 @@ namespace NeuralRendering
 		CharacterComputeRegionPlan computeRegions{};
 		std::uint64_t multiRoiPixels = 0;
 		CharacterMultiRoiReason multiRoiReason = CharacterMultiRoiReason::Disabled;
+		/** Current prepared-mask spatial evidence, separate from delayed coverage diagnostics. */
+		std::string maskRoiStatus = "disabled";
+		bool maskRoiCurrentFrame = false;
+		bool maskRoiGpuProvenEmpty = false;
+		std::uint32_t maskRoiOccupiedTiles = 0;
+		ComputeSubrect maskRoiRequiredSubrect{};
+		double maskRoiReadbackWaitMs = 0.0;
+		std::string maskRoiLastFailure;
+		std::int32_t maskRoiLastFailureResult = 0;
+		std::uint32_t maskRoiLastFailureFrame = std::numeric_limits<std::uint32_t>::max();
+		double maskRoiLastFailureWaitMs = 0.0;
+		/** Slot-lifetime counters; resource recreation or reset starts a fresh lifetime. */
+		std::uint64_t maskRoiReadbackAttempts = 0;
+		std::uint64_t maskRoiReadbackSuccesses = 0;
+		std::uint64_t maskRoiReadbackFallbacks = 0;
 		std::uint64_t computeSubrectPixels = 0;
 		float computeSubrectCoveragePercent = 0.0f;
 		std::uint64_t maskPixels = 0;
@@ -79,6 +96,11 @@ namespace NeuralRendering
 		bool feature18EvaluationSucceeded = false;
 		bool zeroCoverageCpuProven = false;
 		bool fullEyeEligibilityFallback = false;
+		std::uint32_t projectionUncertainActors = 0;
+		std::uint32_t projectionClippedGeometry = 0;
+		std::uint32_t projectionFallbackActorFormId = 0;
+		CharacterCategory projectionFallbackCategory = CharacterCategory::None;
+		CharacterProjectionReason projectionFallbackReason = CharacterProjectionReason::ProjectedBounds;
 		bool depthCoordinatesValid = false;
 		std::uint32_t authoredStereoWidth = 0;
 		std::uint32_t authoredDepthHeight = 0;
@@ -132,7 +154,7 @@ namespace NeuralRendering
 		std::string detail;
 		std::string visualMaskMechanism = "csx_output_composite_r8";
 		std::string computeRoiReason =
-			"One per-eye enclosing compute rectangle by default; opt-in experimental multi-ROI evaluates up to two disjoint character clusters independently";
+			"One projected-geometry enclosure per eye by default; experimental multi-ROI tightens from the current resolved mask and evaluates up to two disjoint spatial clusters, with conservative fallback";
 		bool enabled = false;
 		bool visualMaskImplemented = true;
 		bool visualMaskProviderValidated = false;
@@ -190,6 +212,8 @@ namespace NeuralRendering
 		std::uint32_t outputHeight = 0;
 		UpscalingDLSS::ViewportCrop viewportCrop{};
 		CharacterSettings settings{};
+		/** Queue the current mask reduction; finalize the complete stereo pair before inference. */
+		bool deferMaskRoiReadback = false;
 	};
 
 	struct CharacterMaskPrepareResult
@@ -247,6 +271,10 @@ namespace NeuralRendering
 		bool PrepareMask(
 			const CharacterMaskPrepareArgs& a_args,
 			CharacterMaskPrepareResult& a_result) noexcept;
+		/** Resolves queued current-mask bounds with one flush and one bounded batch deadline. */
+		bool FinalizePreparedMasks(
+			std::span<const CharacterMaskPrepareArgs> a_args,
+			std::span<CharacterMaskPrepareResult> a_results) noexcept;
 		/** Records the authoritative outcome for prepared Feature 18 slots. */
 		void ResolveFeature18Disposition(
 			std::uint32_t a_frameId,
@@ -324,4 +352,4 @@ namespace NeuralRendering
 		return "unknown";
 	}
 
-	}
+}

@@ -1,6 +1,9 @@
 build/
 bin/
 dist/
+# Persistent local release archives; unlike dist/, CMake packaging does not own
+# or recreate this directory.
+/artifacts/releases/
 .idea/
 .vs*/
 CMakeUserPresets.json

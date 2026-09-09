@@ -746,6 +746,23 @@ active dimensions without changing its full-capacity resource allocations.
 
 ## Failure behavior and validation boundary
 
+Per-eye world bounds use the cached camera origin with both the cached raster
+and unjittered view-projection matrices. Their projected rectangles are unioned
+before offscreen rejection, so jitter cannot turn visible edge coverage into a
+false empty eye. A bounding cube crossing the camera plane is clipped against
+the forward hemisphere and viewport side planes using fixed-capacity convex
+face clipping; one near/behind-camera corner no longer implies full-eye work.
+Clipping faces (not just box edges) preserves viewport-containing bounds.
+Invalid, nonfinite or numerically degenerate projections still conservatively
+fall back rather than deleting authored face, skin or hair pixels.
+
+`runtime.eyes[].projectionDiagnostics` reports clipped geometry and uncertain
+actor counts, plus the first uncertain actor ID, category and projection reason.
+These are current preparation diagnostics, not asynchronous mask coverage.
+A valid clipped bound can legitimately span the whole viewport: absence of
+`fullEyeEligibilityFallback` alone does not prove savings. Check the actual
+`computeSubrectCoveragePercent` and then measure GPU cost in the rebuilt game.
+
 Character mode fails closed. It does not bind the unvalidated private provider
 mask or reuse a stale peer-eye mask. If one eye is empty, only the nonempty eye
 is evaluated and the empty eye retains normal DLSS. If material
@@ -775,3 +792,96 @@ called visually correct:
 4. no history or mask leakage between eyes or Gogh insertion points;
 5. CSX composite response to the `R8_UNORM` `0..1` selection mask;
 6. GPU cost versus evaluation dimensions, mask coverage, and actor count.
+
+## Current prepared-mask ROI tightening experiment
+
+The existing **Experimental Multi-ROI** toggle now also enables a current-mask
+spatial reduction before selecting one or two dense Feature 18 rectangles.
+No additional setting or default change is introduced. With
+`neuralCharacterMultiRoiEnabled=false`, the projected-geometry path described
+above is unchanged. This section supersedes the earlier actor-bound-only
+description for the enabled experiment; it does not extend the route to flat
+SE/AE, which still lacks the category/presentation integration described above.
+
+Geometry projection remains conservative authoring/eligibility support. After
+the exact selection mask is resolved, the experiment measures its occupied
+spatial tiles for the current prepared content. These tiles, rather than the
+entire skin/hair mesh bounding spheres plus actor margins, define the smaller
+required support. Spatial clustering can separate mask islands even when their
+original actor eligibility rectangles overlap. Two NPCs do not guarantee two
+provider evaluations: guarded clusters can overlap or offer insufficient area
+savings, in which case one enclosing rectangle remains appropriate. Provider
+context padding and temporal stability still apply; inference is not sparse
+within any retained rectangle, and mask occupancy is not equal to inference
+area.
+
+Reading the spatial evidence is explicitly an experiment with CPU/GPU
+synchronization cost. Stereo preparation queues both exact eye masks, bounds
+reductions, staging copies and completion queries before **one flush and one
+shared 50 ms current-frame readiness deadline**. It does not spend the first
+eye's wait before even submitting the second eye. Standalone single-eye callers
+use the same bounded resolve. Mapping stays nonblocking
+(`D3D11_MAP_FLAG_DO_NOT_WAIT`), and long waits yield the CPU rather than busy-spin.
+The deadline bounds intentional waiting, not total frame time or arbitrary
+driver-call latency. If evidence is unavailable or invalid, the conservative
+CPU geometry plan remains available. Copy/content identity is checked before
+consumption; previous-frame evidence never narrows a current mask. Both eyes
+are probed even if one used the deadline, so already-ready evidence is usable.
+
+The previous 2 ms polling allowance could be exhausted by queued world rendering
+and earlier NR work, not by the tiny bounds copy itself. In the September 9 live
+test it produced zero successful readbacks (161 attempts per eye), perpetually
+retaining the 45.6% conservative enclosure. The corrected deadline is a bounded
+synchronization policy, **not a claim of net performance improvement**. Whole-frame
+qualification must include the CPU/GPU scheduling cost, not just fewer NR pixels.
+
+To avoid switching between tight and conservative rectangles on alternating
+readback successes/timeouts, each slot requires **3 distinct forward fresh valid
+bounds frames** before applying a tighter nonempty ROI. Skipped renderer IDs
+without a failed read do not restart warmup; duplicates cannot advance it, and
+backward epochs cannot inherit admission. During this admission
+warmup, `maskRoiStatus=current_bounds_warmup` and the conservative CPU plan stays
+in use. A failed or unavailable readback, exhausted budget, resource failure,
+or invalid spatial result resets admission and starts a **30-evaluation-frame
+retry backoff**. During `maskRoiStatus=readback_retry_backoff`, no new readback is
+attempted and the conservative CPU plan remains authoritative. These are fixed
+experimental safeguards, not additional user settings; they reduce deadline
+oscillation, but do not establish flicker-free in-game output.
+
+Fresh GPU evidence that the current prepared mask is entirely empty can bypass
+Feature 18 immediately for that exact content only, without waiting for the
+three-frame nonempty admission. This is separate from the delayed
+coverage-diagnostic readbacks: those remain informational and cannot suppress
+current evaluation. Prepared-content identity includes the source world frame,
+resource generation, dimensions, and content serial, including retained-world
+menu reuse. Debug/forced-mask modes retain their conservative diagnostic route.
+
+DevBench adds these fields directly under `runtime.eyes[]`:
+
+- `maskRoiStatus`: reduction/readback outcome, separate from the split decision.
+- `maskRoiCurrentFrame`: evidence belongs to this prepared content, not a delayed
+  coverage sample.
+- `maskRoiGpuProvenEmpty`: current-content GPU proof of an empty selection.
+- `maskRoiOccupiedTiles`: occupied spatial tiles, not selected pixel count.
+- `maskRoiRequiredSubrect`: the measured output-local required enclosure before
+  provider context/stability padding; `valid=false` for no valid rectangle.
+- `maskRoiReadbackWaitMs`: CPU readback/polling time, not Feature 18 GPU time.
+- `maskRoiLastFailure`, `maskRoiLastFailureResult`, `maskRoiLastFailureFrame`,
+  `maskRoiLastFailureWaitMs`: retained original failure, signed HRESULT, frame
+  and wait duration. These remain visible during backoff and subsequent success;
+  they describe the last failure, not necessarily the current frame's state.
+- `maskRoiReadbackAttempts`, `maskRoiReadbackSuccesses`, and
+  `maskRoiReadbackFallbacks`: slot-resource-lifetime counters; recreation/reset
+  begins a new lifetime. A readback success is not an NR evaluation success.
+
+`computeSubrectPixels` and `computeSubrectCoveragePercent` continue to describe
+the outer enclosure needed by composition. For a split, use **`multiRoiPixels`
+and `multiRoiCoveragePercent`**, which sum the separately evaluated rectangles,
+plus the actual region count and Feature 18 disposition. Do not mistake a
+successful tighter single region for a successful two-region split.
+
+This adds no native NVIDIA ROI-list contract and makes no promise of improved
+frame time. Validation must compare total frame cost, Feature 18 GPU cost,
+readback cost/fallback rate, VRAM, and temporal image quality with an unchanged
+scene and settings. Static support tests and compilation are not substitutes
+for in-game motion, split/merge, menu, eye-alignment, and insertion-route tests.

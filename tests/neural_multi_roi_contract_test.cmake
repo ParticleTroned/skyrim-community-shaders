@@ -56,6 +56,7 @@ file(READ "${_character_source_path}" _character_source)
 file(READ "${_renderer_source_path}" _renderer_source)
 file(READ "${_runtime_header_path}" _runtime_header)
 file(READ "${_devbench_bridge_path}" _devbench_bridge)
+file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterMaskReadback.h" _mask_readback_source)
 set(
     _contract_text
     "${_upscaling_header}\n${_upscaling_source}\n${_renderer_header}\n${_character_header}\n${_character_source}\n${_renderer_source}\n${_runtime_header}"
@@ -92,6 +93,19 @@ foreach(_telemetry_contract IN ITEMS
     [["multiRoiPixels"]]
     [["multiRoiFallback"]]
     [["multiRoiReason"]]
+    [[{ "maskRoiStatus", eye.maskRoiStatus }]]
+    [[{ "maskRoiCurrentFrame", eye.maskRoiCurrentFrame }]]
+    [[{ "maskRoiGpuProvenEmpty", eye.maskRoiGpuProvenEmpty }]]
+    [[{ "maskRoiOccupiedTiles", eye.maskRoiOccupiedTiles }]]
+    [[{ "maskRoiRequiredSubrect", {]]
+    [[{ "valid", eye.maskRoiRequiredSubrect.IsValid() }]]
+    [[{ "maskRoiReadbackWaitMs", eye.maskRoiReadbackWaitMs }]]
+    [[{ "maskRoiLastFailure", eye.maskRoiLastFailure }]]
+    [[{ "maskRoiLastFailureResult", eye.maskRoiLastFailureResult }]]
+    [[{ "maskRoiLastFailureWaitMs", eye.maskRoiLastFailureWaitMs }]]
+    [[{ "maskRoiReadbackAttempts", eye.maskRoiReadbackAttempts }]]
+    [[{ "maskRoiReadbackSuccesses", eye.maskRoiReadbackSuccesses }]]
+    [[{ "maskRoiReadbackFallbacks", eye.maskRoiReadbackFallbacks }]]
 )
     string(FIND "${_devbench_bridge}" "${_telemetry_contract}"
         _telemetry_contract_position)
@@ -102,12 +116,31 @@ foreach(_telemetry_contract IN ITEMS
     endif()
 endforeach()
 
+foreach(_mask_roi_snapshot_contract IN ITEMS
+    [[std::string maskRoiStatus = "disabled";]]
+    [[bool maskRoiCurrentFrame = false;]]
+    [[bool maskRoiGpuProvenEmpty = false;]]
+    [[std::uint32_t maskRoiOccupiedTiles = 0;]]
+    [[ComputeSubrect maskRoiRequiredSubrect{};]]
+    [[double maskRoiReadbackWaitMs = 0.0;]]
+    [[std::uint64_t maskRoiReadbackAttempts = 0;]]
+    [[std::uint64_t maskRoiReadbackSuccesses = 0;]]
+    [[std::uint64_t maskRoiReadbackFallbacks = 0;]]
+)
+    string(FIND "${_character_header}" "${_mask_roi_snapshot_contract}" _mask_roi_snapshot_position)
+    if(_mask_roi_snapshot_position EQUAL -1)
+        message(FATAL_ERROR "Current prepared-mask ROI snapshot contract is missing: ${_mask_roi_snapshot_contract}")
+    endif()
+endforeach()
+
 foreach(_prepare_contract IN ITEMS
     [[CharacterComputeRegionPlan computeRegions{};]]
     [[a_args.computeRegions = {};]]
     [[a_args.computeRegions = result.computeRegions;]]
     [[GetPreparedComputeRegions(]]
     [[FindPreparedSlot(]]
+    [[FinalizePreparedMasks(]]
+    [[deferMaskRoiReadback]]
 )
     string(FIND "${_contract_text}" "${_prepare_contract}"
         _prepare_contract_position)
@@ -117,6 +150,24 @@ foreach(_prepare_contract IN ITEMS
         )
     endif()
 endforeach()
+
+# The production synchronization helper is also executed by the WARP queue
+# tests. Keep its crucial bounded/nonblocking contract wired into the runtime.
+foreach(_bounded_readback_contract IN ITEMS
+    [[std::chrono::milliseconds(50)]]
+    [[D3D11_ASYNC_GETDATA_DONOTFLUSH]]
+    [[D3D11_MAP_FLAG_DO_NOT_WAIT]]
+    [[Clock::now() >= a_deadline]]
+)
+    string(FIND "${_mask_readback_source}" "${_bounded_readback_contract}" _bounded_readback_position)
+    if(_bounded_readback_position EQUAL -1)
+        message(FATAL_ERROR "Bounded mask readback contract missing: ${_bounded_readback_contract}")
+    endif()
+endforeach()
+string(FIND "${_character_source}" [[ReadCharacterMaskBounds(]] _production_readback_position)
+if(_production_readback_position EQUAL -1)
+    message(FATAL_ERROR "Character ROI must use the GPU-tested bounded readback helper")
+endif()
 
 foreach(_execution_contract IN ITEMS
     [[static constexpr std::size_t kFeatureSlotCount = 8;]]
@@ -184,6 +235,13 @@ foreach(_ui_contract IN ITEMS
     [[&settings.neuralCharacterMultiRoiEnabled]]
     [[Uses at most two persistent Feature 18 regions per eye]]
     [[Multi-ROI uses separate feature instances.]]
+    [[resolved visible face/skin/hair mask]]
+    [[Both eye reductions are queued before one flush and share a bounded 50 ms GPU-readiness deadline.]]
+    [[Nonempty tightening starts after 3 fresh validated frames.]]
+    [[backs off for 30 evaluation frames]]
+    [[stale mask evidence is never accepted]]
+    [[This is not native sparse-ROI support.]]
+    [[Compare summed planned pixels, not the enclosing rectangle]]
 )
     string(FIND "${_upscaling_source}" "${_ui_contract}"
         _ui_contract_position)

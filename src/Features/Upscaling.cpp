@@ -3761,12 +3761,35 @@ namespace
 		};
 	}
 
+	NeuralRendering::CharacterMaskPrepareArgs BuildCharacterMaskPrepareArgs(
+		const Upscaling::Settings& a_settings, std::uint32_t a_eyeIndex,
+		std::uint32_t a_sourceWorldFrame, const NeuralRendering::RendererApplyArgs& a_args,
+		bool a_deferReadback)
+	{
+		return {
+			.device = a_args.device,
+			.context = a_args.context,
+			.depthGuide = a_args.depthGuideSRV,
+			.eyeIndex = a_eyeIndex,
+			.featureSlot = a_args.featureSlot,
+			.frameId = a_args.frameId,
+			.sourceWorldFrame = a_sourceWorldFrame,
+			.generation = a_args.generation,
+			.outputWidth = a_args.outputWidth,
+			.outputHeight = a_args.outputHeight,
+			.viewportCrop = a_args.viewportCrop,
+			.settings = BuildCharacterSettings(a_settings),
+			.deferMaskRoiReadback = a_deferReadback,
+		};
+	}
+
 	bool PrepareCharacterSelectionMask(
 		const Upscaling::Settings& a_settings,
 		std::uint32_t a_eyeIndex,
 		std::uint32_t a_sourceWorldFrame,
 		bool& a_requiresEvaluation,
-		NeuralRendering::RendererApplyArgs& a_args) noexcept
+		NeuralRendering::RendererApplyArgs& a_args,
+		bool a_deferReadback = false) noexcept
 	{
 		a_requiresEvaluation = true;
 		a_args.controlMask = nullptr;
@@ -3788,20 +3811,8 @@ namespace
 		if (!globals::game::renderer || !a_args.depthGuideSRV)
 			return false;
 		NeuralRendering::CharacterMaskPrepareResult result{};
-		const NeuralRendering::CharacterMaskPrepareArgs prepareArgs{
-			.device = a_args.device,
-			.context = a_args.context,
-			.depthGuide = a_args.depthGuideSRV,
-			.eyeIndex = a_eyeIndex,
-			.featureSlot = a_args.featureSlot,
-			.frameId = a_args.frameId,
-			.sourceWorldFrame = a_sourceWorldFrame,
-			.generation = a_args.generation,
-			.outputWidth = a_args.outputWidth,
-			.outputHeight = a_args.outputHeight,
-			.viewportCrop = a_args.viewportCrop,
-			.settings = characterSettings,
-		};
+		const auto prepareArgs = BuildCharacterMaskPrepareArgs(
+			a_settings, a_eyeIndex, a_sourceWorldFrame, a_args, a_deferReadback);
 		if (!NeuralRendering::CharacterRendering::Instance().PrepareMask(
 				prepareArgs, result) ||
 			!result.prepared) {
@@ -15210,11 +15221,17 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 							&settings.neuralCharacterMultiRoiEnabled);
 						if (auto _tt = Util::HoverTooltipWrapper()) {
 							ImGui::TextUnformatted(
-								"Uses at most two persistent Feature 18 regions per eye to skip large gaps between characters.");
+								"Uses at most two persistent Feature 18 regions per eye, tightened around spatial clusters of the resolved visible face/skin/hair mask.");
 							ImGui::TextUnformatted(
-								"Nearby or overlapping regions use the existing enclosing rectangle. Exact face/skin/hair masking is unchanged.");
+								"Both eye reductions are queued before one flush and share a bounded 50 ms GPU-readiness deadline. Unavailable evidence conservatively uses projected geometry bounds; stale mask evidence is never accepted.");
+							ImGui::TextUnformatted(
+								"Nonempty tightening starts after 3 fresh validated frames. A readback failure keeps the conservative plan and backs off for 30 evaluation frames; fresh empty masks may bypass immediately.");
+							ImGui::TextUnformatted(
+								"Nearby or overlapping clusters use one enclosing region. Turning this off restores geometry-based ROI planning; exact face/skin/hair compositing is unchanged.");
 							ImGui::TextUnformatted(
 								"Experimental, off by default: extra instances increase VRAM; GPU savings and image stability need in-game validation.");
+							ImGui::TextUnformatted(
+								"This is not native sparse-ROI support. Compare summed planned pixels, not the enclosing rectangle, and include readback cost when measuring performance.");
 							ImGui::TextUnformatted(
 								"Split regions use one atomic batch even with Sequential Stereo selected. Turning this off retires the extra runtime instances.");
 							ImGui::TextUnformatted(
@@ -15445,7 +15462,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 							static_cast<unsigned long long>(eyeStatus.distanceRejectedPixels));
 						if (eyeStatus.zeroCoverageBypassed) {
 							ImGui::TextDisabled(
-								"  Feature 18 bypassed: current-frame CPU provenance proves the selection is empty.");
+								"  Feature 18 bypassed: current prepared-content evidence proves the selection is empty.");
 						}
 					}
 					ImGui::TextDisabled(
@@ -15461,6 +15478,19 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 							NeuralRendering::GetCharacterMultiRoiReasonName(eyeStatus.multiRoiReason),
 							eyeStatus.evaluationRequired ? std::max(1u, eyeStatus.computeRegions.count) : 0u,
 							static_cast<unsigned long long>(eyeStatus.multiRoiPixels));
+						ImGui::TextDisabled(
+							"  Mask ROI: %s | current %s | %u occupied tiles | readback %.3f ms",
+							eyeStatus.maskRoiStatus.c_str(),
+							eyeStatus.maskRoiCurrentFrame ? "yes" : "no",
+							eyeStatus.maskRoiOccupiedTiles,
+							eyeStatus.maskRoiReadbackWaitMs);
+						if (!eyeStatus.maskRoiLastFailure.empty()) {
+							ImGui::TextDisabled(
+								"  Last readback failure: %s | HRESULT 0x%08X | frame %u | %.3f ms",
+								eyeStatus.maskRoiLastFailure.c_str(),
+								static_cast<unsigned int>(eyeStatus.maskRoiLastFailureResult),
+								eyeStatus.maskRoiLastFailureFrame, eyeStatus.maskRoiLastFailureWaitMs);
+						}
 						for (uint32_t region = 0; region < eyeStatus.computeRegions.count; ++region) {
 							const auto& rect = eyeStatus.computeRegions.regions[region];
 							ImGui::TextDisabled(
@@ -26940,7 +26970,7 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 			bool characterEvaluationRequired = true;
 			if (!PrepareCharacterSelectionMask(
 					settings, eyeIndex, neuralSourceFrame,
-					characterEvaluationRequired, args)) {
+					characterEvaluationRequired, args, neuralBatchArgs != nullptr)) {
 				return false;
 			}
 			if (characterEvaluationRequired && !args.computeSubrect.IsValid()) {
@@ -26951,7 +26981,7 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 			neuralPrepared = true;
 			if (neuralResult)
 				neuralResult->bypassed = !characterEvaluationRequired;
-			if (characterEvaluationRequired && useSubmitNeuralFloatBridge) {
+			if (characterEvaluationRequired && useSubmitNeuralFloatBridge && !neuralBatchArgs) {
 				const auto colorSubrect = NeuralRendering::MapComputeSubrect(
 					args.computeSubrect,
 					args.outputWidth,
@@ -26976,9 +27006,9 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 						"DLSS NR Submit Float Input")) {
 					return false;
 				}
-				args.colorInput =
-					submitNeuralFloatColorIn[eyeIndex]->resource.get();
 			}
+			if (useSubmitNeuralFloatBridge)
+				args.colorInput = submitNeuralFloatColorIn[eyeIndex]->resource.get();
 
 			if (neuralBatchArgs) {
 				*neuralBatchArgs = args;
@@ -27369,6 +27399,54 @@ namespace
 		return mask;
 	}
 
+	bool FinalizePreparedNeuralStereoInputs(
+		Upscaling& a_upscaling,
+		std::array<Upscaling::NeuralCenterDispatchResult, 2>& a_results,
+		std::array<NeuralRendering::RendererApplyArgs, 2>& a_batchArgs)
+	{
+		if (BuildNeuralCenterEyeMask(a_results, &Upscaling::NeuralCenterDispatchResult::prepared) != 0b11u)
+			return true;
+		if (a_batchArgs[0].characterVisualIsolation || a_batchArgs[1].characterVisualIsolation) {
+			if (!a_batchArgs[0].characterVisualIsolation || !a_batchArgs[1].characterVisualIsolation)
+				return false;
+			std::array<NeuralRendering::CharacterMaskPrepareArgs, 2> prepareArgs{};
+			std::array<NeuralRendering::CharacterMaskPrepareResult, 2> maskResults{};
+			for (std::uint32_t eye = 0; eye < prepareArgs.size(); ++eye)
+				prepareArgs[eye] = BuildCharacterMaskPrepareArgs(a_upscaling.settings, eye,
+					a_batchArgs[eye].sourceWorldFrame, a_batchArgs[eye], true);
+			if (!NeuralRendering::CharacterRendering::Instance().FinalizePreparedMasks(prepareArgs, maskResults))
+				return false;
+			for (std::uint32_t eye = 0; eye < maskResults.size(); ++eye) {
+				a_batchArgs[eye].computeSubrect = maskResults[eye].computeSubrect;
+				a_batchArgs[eye].computeRegions = maskResults[eye].computeRegions;
+				a_results[eye].bypassed = !maskResults[eye].requiresEvaluation;
+			}
+		}
+		// Staging uses conservative plans. Wait until both current masks are
+		// finalized before converting the exact region that inference will read.
+		// Final-LDR conversion is performed by its caller after rollback setup.
+		for (std::uint32_t eye = 0; eye < a_batchArgs.size(); ++eye) {
+			const auto& args = a_batchArgs[eye];
+			if (a_results[eye].bypassed || args.insertionPoint != NeuralRendering::InsertionPoint::UpscaledCenter)
+				continue;
+			const auto& destination = a_upscaling.submitNeuralFloatColorIn[eye];
+			if (!destination || args.colorInput != destination->resource.get())
+				continue;
+			const auto& source = a_upscaling.foveatedCenterColorOut[eye];
+			const auto region = NeuralRendering::MapComputeSubrect(args.computeSubrect,
+				args.outputWidth, args.outputHeight, args.colorWidth, args.colorHeight);
+			if (!source || !source->srv || !destination->uav ||
+				!region.Fits(args.colorWidth, args.colorHeight) ||
+				!a_upscaling.DispatchSubmitStageColorRegion(source->srv.get(), destination->uav.get(),
+					source->desc.Width, source->desc.Height,
+					region.baseX, region.baseY, region.width, region.height,
+					region.width, region.height, region.baseX, region.baseY,
+					"DLSS NR Submit Float Input"))
+				return false;
+		}
+		return true;
+	}
+
 	bool WillEvaluatePreparedNeuralStereo(
 		const std::array<Upscaling::NeuralCenterDispatchResult, 2>& a_results) noexcept
 	{
@@ -27400,10 +27478,14 @@ namespace
 	NeuralStereoEvaluationSummary EvaluatePreparedNeuralStereo(
 		Upscaling& a_upscaling,
 		std::array<Upscaling::NeuralCenterDispatchResult, 2>& a_results,
-		const std::array<NeuralRendering::RendererApplyArgs, 2>& a_batchArgs,
+		std::array<NeuralRendering::RendererApplyArgs, 2>& a_batchArgs,
 		bool a_batchedStereo,
 		Upscaling::NeuralStereoRouteRole a_routeRole)
 	{
+		if (!FinalizePreparedNeuralStereoInputs(a_upscaling, a_results, a_batchArgs)) {
+			a_upscaling.RequestHistoryReset();
+			return {};
+		}
 		NeuralStereoEvaluationSummary summary{
 			.preparedEyeMask = BuildNeuralCenterEyeMask(
 				a_results, &Upscaling::NeuralCenterDispatchResult::prepared),
@@ -27833,7 +27915,7 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 			bool characterEvaluationRequired = true;
 			if (!PrepareCharacterSelectionMask(
 					settings, eye, a_neuralSourceFrame,
-					characterEvaluationRequired, args)) {
+					characterEvaluationRequired, args, true)) {
 				return false;
 			}
 			if (characterEvaluationRequired && !args.computeSubrect.IsValid()) {
@@ -27841,13 +27923,16 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 					args.outputWidth, args.outputHeight,
 					args.tuning.singleSubrectScale);
 			}
-			rollbackSubrects[eye] = args.computeSubrect;
 			neuralResults[eye].requested = true;
 			neuralResults[eye].prepared = true;
 			neuralResults[eye].bypassed = !characterEvaluationRequired;
 		}
 		lateStage = LateStage::Evaluation;
 		lateEye = 2u;
+		if (!FinalizePreparedNeuralStereoInputs(*this, neuralResults, neuralArgs))
+			return false;
+		for (std::uint32_t eye = 0; eye < neuralArgs.size(); ++eye)
+			rollbackSubrects[eye] = neuralArgs[eye].computeSubrect;
 		if (!WillEvaluatePreparedNeuralStereo(neuralResults)) {
 			const auto evaluation = EvaluatePreparedNeuralStereo(
 				*this, neuralResults, neuralArgs,

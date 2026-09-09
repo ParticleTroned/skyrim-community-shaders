@@ -920,6 +920,13 @@ namespace
 				{ "adaptivelyCulledCharacterActors", eye.adaptivelyCulledCharacterRegions },
 				{ "mergedEligibilityRegions", eye.mergedRegions },
 				{ "fullEyeEligibilityFallback", eye.fullEyeEligibilityFallback },
+				{ "projectionDiagnostics", {
+											   { "uncertainActors", eye.projectionUncertainActors },
+											   { "clippedGeometry", eye.projectionClippedGeometry },
+											   { "fallbackActorFormId", eye.projectionFallbackActorFormId != 0 ? json(eye.projectionFallbackActorFormId) : json(nullptr) },
+											   { "fallbackCategory", static_cast<std::uint32_t>(eye.projectionFallbackCategory) },
+											   { "fallbackReason", eye.projectionFallbackActorFormId != 0 ? json(NeuralRendering::CharacterProjectionReasonName(eye.projectionFallbackReason)) : json(nullptr) },
+										   } },
 				{ "eligibilityPixels", eye.roiPixels },
 				{ "eligibilityCoveragePercent", eye.roiCoveragePercent },
 				{ "computeSubrect", {
@@ -939,6 +946,25 @@ namespace
 				{ "multiRoiSplit", multiRoiSplit },
 				{ "multiRoiFallback", multiRoiFallback },
 				{ "multiRoiReason", NeuralRendering::GetCharacterMultiRoiReasonName(eye.multiRoiReason) },
+				{ "maskRoiStatus", eye.maskRoiStatus },
+				{ "maskRoiCurrentFrame", eye.maskRoiCurrentFrame },
+				{ "maskRoiGpuProvenEmpty", eye.maskRoiGpuProvenEmpty },
+				{ "maskRoiOccupiedTiles", eye.maskRoiOccupiedTiles },
+				{ "maskRoiRequiredSubrect", {
+											  { "baseX", eye.maskRoiRequiredSubrect.baseX },
+											  { "baseY", eye.maskRoiRequiredSubrect.baseY },
+											  { "width", eye.maskRoiRequiredSubrect.width },
+											  { "height", eye.maskRoiRequiredSubrect.height },
+											  { "valid", eye.maskRoiRequiredSubrect.IsValid() },
+										  } },
+				{ "maskRoiReadbackWaitMs", eye.maskRoiReadbackWaitMs },
+				{ "maskRoiLastFailure", eye.maskRoiLastFailure },
+				{ "maskRoiLastFailureResult", eye.maskRoiLastFailureResult },
+				{ "maskRoiLastFailureFrame", eye.maskRoiLastFailureFrame != UINT32_MAX ? json(eye.maskRoiLastFailureFrame) : json(nullptr) },
+				{ "maskRoiLastFailureWaitMs", eye.maskRoiLastFailureWaitMs },
+				{ "maskRoiReadbackAttempts", eye.maskRoiReadbackAttempts },
+				{ "maskRoiReadbackSuccesses", eye.maskRoiReadbackSuccesses },
+				{ "maskRoiReadbackFallbacks", eye.maskRoiReadbackFallbacks },
 				{ "maskPixels", eye.maskCoverageReady ? json(eye.maskPixels) : json(nullptr) },
 				{ "maskCoveragePercent", eye.maskCoverageReady ? json(eye.maskCoveragePercent) : json(nullptr) },
 				{ "maskCoverageSampleFrame", eye.maskCoverageReady ? json(eye.maskCoverageFrame) : json(nullptr) },
@@ -1292,7 +1318,7 @@ namespace
 													{ "privateSingleSubrectEnabled", dynamicCharacterRoiEnabled || privateSingleSubrectEnabled },
 													{ "privateSingleSubrectScale", settings.neuralRenderingSingleSubrectScale },
 													{ "privateSingleSubrectValidation", "ghidra_dataflow_and_gpu_timing_validated" },
-													{ "source", "current_frame_projected_face_skin_hair_bounds" },
+													{ "source", settings.neuralCharacterMultiRoiEnabled ? "current_prepared_mask_or_conservative_projected_bounds" : "current_frame_projected_face_skin_hair_bounds" },
 													{ "reason", snapshot.computeRoiReason },
 													{ "resolvedMode", dynamicCharacterMultiRegionEnabled ? "experimental_dynamic_character_up_to_two_regions_per_eye" : (dynamicCharacterSingleRectEnabled ? "dynamic_character_single_rect_inference" : (privateSingleSubrectEnabled ? "static_centered_single_rect_inference" : "full_frame_inference")) },
 													{ "inferenceRestrictedToRois", dynamicCharacterRoiEnabled || privateSingleSubrectEnabled },
@@ -4339,7 +4365,7 @@ namespace VRRenderScaleDevBenchBridge
 
 		static constexpr const char* descriptor =
 			R"({
-  "description":"Control and inspect Community Shaders VR render-scale stress iterations, DLSS Neural Rendering, character masking, and foveated-center tuning. nr_status returns the API-v9 NR runtime, routes, temporal admission, GPU telemetry, and frame-attributed per-eye character diagnostics. NR runtime admission is independent of Developer Mode and Streamline logging: any 310.8 runtime with the required exports and stable loaded-image identity is accepted, while SHA-256 is informational. Character diagnostics count authored face, skin, and hair pixels across the active low-resolution eye input, report visible/rejected evaluation pixels and exact frozen/current depth coordinates, and retain frame-keyed preparation history for asynchronous Feature 18 attribution. Same-frame category/depth capture is idempotent. Feature 18 bypasses only same-frame CPU-proven empty eyes; delayed GPU coverage samples are diagnostic and never suppress current-frame evaluation. Coverage measurement runs only on policy changes or a fixed cadence. Feature 18 always uses its working automatic-mask invocation; characterVisualIsolationEnabled=true unions the current per-eye projected face, skin, and hair eligibility bounds into one private Feature 18 compute subrect, then composites that partial output over normal DLSS through CSX's exact per-eye R8_UNORM 0..1 selection mask. Feature 18 color, depth-guide, motion-vector, provider-output, and late-overlay work are restricted to that rectangle. The Upscaled-Center baseline composite still covers the existing center so normal DLSS fills pixels outside the exact mask. The private provider ControlMask ABI is not used and multi/sparse provider ROI remains unsupported. Character isolation forces the Upscaled Center route to staged output so normal DLSS remains available without an extra baseline copy; final-LDR and submit routes already preserve a separate baseline. nr_configure strictly accepts one or more NR or character controls through the in-game reset/history contract; useAutoMask=false is rejected. Debug-view-only changes are applied without a history reset. nr_cycle_modes preserves the four-lane stereo implementation cycle. foveation_configure atomically applies validated foveation controls on the main thread. Existing render-scale mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.",
+  "description":"Control and inspect Community Shaders VR render-scale stress iterations, DLSS Neural Rendering, character masking, and foveated-center tuning. nr_status returns the API-v9 NR runtime, routes, temporal admission, GPU telemetry, and frame-attributed per-eye character diagnostics. NR runtime admission is independent of Developer Mode and Streamline logging: any 310.8 runtime with the required exports and stable loaded-image identity is accepted, while SHA-256 is informational. Character diagnostics count authored face, skin, and hair pixels across the active low-resolution eye input, report visible/rejected evaluation pixels and exact frozen/current depth coordinates, and retain frame-keyed preparation history for asynchronous Feature 18 attribution. Same-frame category/depth capture is idempotent. Feature 18 bypasses CPU-proven empty eyes or experimental current prepared-mask GPU-proven empty eyes; delayed GPU coverage samples are diagnostic and never suppress current-frame evaluation. Diagnostic coverage measurement runs only on policy changes or a fixed cadence. Experimental Multi-ROI queues both current prepared-mask reductions before one GPU flush and resolves them with a shared 50 ms readiness deadline; unavailable evidence retains conservative projected bounds and the last failure reason/HRESULT remains visible through retry backoff. Feature 18 always uses its working automatic-mask invocation; characterVisualIsolationEnabled=true unions the current per-eye projected face, skin, and hair eligibility bounds into one private Feature 18 compute subrect, while experimentalMultiRoi can tighten that enclosure from current resolved-mask spatial clusters or evaluate two disjoint clusters through independent feature instances. It composites the partial output over normal DLSS through CSX's exact per-eye R8_UNORM 0..1 selection mask. Feature 18 color, depth-guide, motion-vector, provider-output, and late-overlay work are restricted to that rectangle. The Upscaled-Center baseline composite still covers the existing center so normal DLSS fills pixels outside the exact mask. The private provider ControlMask ABI is not used and multi/sparse provider ROI remains unsupported. Character isolation forces the Upscaled Center route to staged output so normal DLSS remains available without an extra baseline copy; final-LDR and submit routes already preserve a separate baseline. nr_configure strictly accepts one or more NR or character controls through the in-game reset/history contract; useAutoMask=false is rejected. Debug-view-only changes are applied without a history reset. nr_cycle_modes preserves the four-lane stereo implementation cycle. foveation_configure atomically applies validated foveation controls on the main thread. Existing render-scale mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.",
   "inputSchema":{
     "type":"object",
     "properties":{

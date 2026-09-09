@@ -95,6 +95,14 @@ for an automation controller performing a read/modify/write sequence.
 
 ## Preflight and atomic apply
 
+The AMD and NVIDIA render-scale tuning protocols prepare their runtime fixture
+with `communityshaders.menu` action `prepare_tuning`. In an already loaded VR
+game, it enables developer logging, foveated vendor dispatch and periphery TAA
+with the fixed 0.3/0.3/0.7 settings. It does not require VR FPS Stabilizer or
+save settings. The protocol then issues its initial COC to Dragonsreach and
+keeps the existing positioning wait, checks, and transition pacing. The
+separate `prepare_coc` action retains its Stabilizer profile-sync requirement.
+
 `PreflightProfile` has no side effects and consumes no idempotency key. Its
 decision predicts no-change, synchronous apply, queued apply, blocked, or
 unsupported. The result reports both:

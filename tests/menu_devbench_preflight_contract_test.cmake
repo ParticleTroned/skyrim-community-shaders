@@ -23,6 +23,7 @@ string(JSON _action_count LENGTH
     "${_descriptor}" inputSchema properties action enum
 )
 set(_prepare_coc_found FALSE)
+set(_prepare_tuning_found FALSE)
 set(_set_layout_unlocked_found FALSE)
 set(_foliage_lighting_enabled_found FALSE)
 set(_truepbr_verbose_found FALSE)
@@ -34,6 +35,8 @@ foreach(_index RANGE 0 ${_action_last})
     )
     if(_action STREQUAL "prepare_coc")
         set(_prepare_coc_found TRUE)
+    elseif(_action STREQUAL "prepare_tuning")
+        set(_prepare_tuning_found TRUE)
     elseif(_action STREQUAL "set_foliage_lighting_enabled")
         set(_foliage_lighting_enabled_found TRUE)
     elseif(_action STREQUAL "set_truepbr_verbose_json_logging")
@@ -47,6 +50,9 @@ foreach(_index RANGE 0 ${_action_last})
 endforeach()
 if(NOT _prepare_coc_found)
     message(FATAL_ERROR "Menu DevBench schema is missing prepare_coc")
+endif()
+if(NOT _prepare_tuning_found)
+    message(FATAL_ERROR "Menu DevBench schema is missing prepare_tuning")
 endif()
 if(NOT _set_layout_unlocked_found)
     message(FATAL_ERROR "Menu DevBench schema is missing set_layout_unlocked")
@@ -85,10 +91,13 @@ endif()
 
 foreach(_required_behavior IN ITEMS
     "if (action == \"prepare_coc\")"
+    "if (action == \"prepare_tuning\")"
+    "PrepareRuntimePreflight(MenuDevBenchPreflightPolicy::Preparation::Coc)"
+    "PrepareRuntimePreflight(MenuDevBenchPreflightPolicy::Preparation::Tuning)"
     "CaptureCocPreflightSnapshot"
     "GetVRFpsStabilizerSessionConfig()"
     "IsVRFpsStabilizerSyncActive()"
-    "CanApplyRuntimeSettings(before.state)"
+    "CanApplyRuntimeSettings(before.state, a_preparation)"
     "SetLogLevel(spdlog::level::debug)"
     "settings.foveatedVendorDispatch = true"
     "settings.periphery_taa_enable = true"
@@ -123,7 +132,7 @@ endforeach()
 
 string(FIND
     "${_bridge}"
-    "CanApplyRuntimeSettings(before.state)"
+    "CanApplyRuntimeSettings(before.state, a_preparation)"
     _mutation_guard_position
 )
 string(FIND

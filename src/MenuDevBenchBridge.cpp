@@ -81,11 +81,11 @@ namespace
 		};
 	}
 
-	json CocPreflightSnapshotJson(const CocPreflightSnapshot& a_snapshot)
+	json CocPreflightSnapshotJson(const CocPreflightSnapshot& a_snapshot, MenuDevBenchPreflightPolicy::Preparation a_preparation)
 	{
 		const auto& state = a_snapshot.state;
 		return {
-			{ "ready", MenuDevBenchPreflightPolicy::IsReady(state) },
+			{ "ready", MenuDevBenchPreflightPolicy::IsReady(state, a_preparation) },
 			{ "vr", state.vr },
 			{ "inGame", state.inGame },
 			{ "developerMode", {
@@ -112,31 +112,32 @@ namespace
 		};
 	}
 
-	std::string CocPreflightBlockCode(const CocPreflightSnapshot& a_snapshot)
+	std::string CocPreflightBlockCode(const CocPreflightSnapshot& a_snapshot, MenuDevBenchPreflightPolicy::Preparation a_preparation)
 	{
 		if (!a_snapshot.state.vr)
 			return "skyrim_vr_required";
 		if (!a_snapshot.state.inGame)
 			return "in_game_state_required";
-		if (!a_snapshot.state.stabilizerActiveForSession)
+		if (a_preparation == MenuDevBenchPreflightPolicy::Preparation::Coc && !a_snapshot.state.stabilizerActiveForSession)
 			return "vr_fps_stabilizer_required";
 		return "preflight_not_ready";
 	}
 
-	json PrepareCocPreflight()
+	json PrepareRuntimePreflight(MenuDevBenchPreflightPolicy::Preparation a_preparation)
 	{
+		const auto action = a_preparation == MenuDevBenchPreflightPolicy::Preparation::Coc ? "prepare_coc" : "prepare_tuning";
 		const auto before = CaptureCocPreflightSnapshot();
-		if (!MenuDevBenchPreflightPolicy::CanApplyRuntimeSettings(before.state)) {
+		if (!MenuDevBenchPreflightPolicy::CanApplyRuntimeSettings(before.state, a_preparation)) {
 			return {
-				{ "action", "prepare_coc" },
+				{ "action", action },
 				{ "applied", false },
 				{ "changed", false },
 				{ "persisted", false },
 				{ "ready", false },
 				{ "promptRequired", true },
-				{ "errorCode", CocPreflightBlockCode(before) },
-				{ "before", CocPreflightSnapshotJson(before) },
-				{ "after", CocPreflightSnapshotJson(before) },
+				{ "errorCode", CocPreflightBlockCode(before, a_preparation) },
+				{ "before", CocPreflightSnapshotJson(before, a_preparation) },
+				{ "after", CocPreflightSnapshotJson(before, a_preparation) },
 			};
 		}
 
@@ -178,20 +179,20 @@ namespace
 		}
 
 		const auto after = CaptureCocPreflightSnapshot();
-		const bool ready = MenuDevBenchPreflightPolicy::IsReady(after.state);
+		const bool ready = MenuDevBenchPreflightPolicy::IsReady(after.state, a_preparation);
 		json result = {
-			{ "action", "prepare_coc" },
+			{ "action", action },
 			{ "applied", true },
 			{ "changed", !changes.empty() },
 			{ "persisted", false },
 			{ "ready", ready },
 			{ "promptRequired", !ready },
 			{ "changes", std::move(changes) },
-			{ "before", CocPreflightSnapshotJson(before) },
-			{ "after", CocPreflightSnapshotJson(after) },
+			{ "before", CocPreflightSnapshotJson(before, a_preparation) },
+			{ "after", CocPreflightSnapshotJson(after, a_preparation) },
 		};
 		if (!ready)
-			result["errorCode"] = CocPreflightBlockCode(after);
+			result["errorCode"] = CocPreflightBlockCode(after, a_preparation);
 		return result;
 	}
 
@@ -410,11 +411,11 @@ namespace
 	json BuildResult(const json& a_args)
 	{
 		const std::string action = a_args.value("action", std::string("status"));
-		if (action != "status" && action != "open" && action != "close" && action != "screenshot" && action != "set_path" && action != "set_layout_unlocked" && action != "texture_stats" && action != "set_depth_culling_performance_mode" && action != "set_depth_culling_legacy_mode" && action != "set_foliage_lighting_enabled" && action != "set_truepbr_verbose_json_logging" && action != "set_dynamic_cubemap_resolution" && action != "prepare_coc") {
+		if (action != "status" && action != "open" && action != "close" && action != "screenshot" && action != "set_path" && action != "set_layout_unlocked" && action != "texture_stats" && action != "set_depth_culling_performance_mode" && action != "set_depth_culling_legacy_mode" && action != "set_foliage_lighting_enabled" && action != "set_truepbr_verbose_json_logging" && action != "set_dynamic_cubemap_resolution" && action != "prepare_coc" && action != "prepare_tuning") {
 			return {
 				{ "error", "unknown action" },
 				{ "action", action },
-				{ "supported", json::array({ "status", "open", "close", "screenshot", "set_path", "set_layout_unlocked", "texture_stats", "set_depth_culling_performance_mode", "set_depth_culling_legacy_mode", "set_foliage_lighting_enabled", "set_truepbr_verbose_json_logging", "set_dynamic_cubemap_resolution", "prepare_coc" }) },
+				{ "supported", json::array({ "status", "open", "close", "screenshot", "set_path", "set_layout_unlocked", "texture_stats", "set_depth_culling_performance_mode", "set_depth_culling_legacy_mode", "set_foliage_lighting_enabled", "set_truepbr_verbose_json_logging", "set_dynamic_cubemap_resolution", "prepare_coc", "prepare_tuning" }) },
 			};
 		}
 		const std::string path = a_args.value("path", std::string());
@@ -453,7 +454,9 @@ namespace
 
 		return RunOnMainThread([action, path, enabled, resolution]() -> json {
 			if (action == "prepare_coc")
-				return PrepareCocPreflight();
+				return PrepareRuntimePreflight(MenuDevBenchPreflightPolicy::Preparation::Coc);
+			if (action == "prepare_tuning")
+				return PrepareRuntimePreflight(MenuDevBenchPreflightPolicy::Preparation::Tuning);
 			auto* menu = globals::menu;
 			if (!menu)
 				return { { "error", "CSX menu unavailable" } };
@@ -558,7 +561,7 @@ namespace MenuDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Inspect and control the CSX VR menu, desktop/headset layout lock, depth-culling A/B policy, Foliage Lighting runtime state, TruePBR verbose JSON logging, and dynamic cubemap resolution. The screenshot action is obsolete and retained temporarily for migration; use communityshaders.screenshot contractMajor 1 instead. set_layout_unlocked enables desktop move, resize, and docking plus headset custom placement and grip dragging. Resolution changes are staged in memory; save settings and restart to apply them. prepare_coc is a one-shot pre-assay gate: it requires in-game Skyrim VR and startup-active VR FPS Stabilizer profile sync, then enables runtime-only developer mode and the fixed FOV plus TAA 0.3/0.7 fixture without saving settings. Every response identifies the exact producing DLL. expectedBuildId makes requests fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","description":"screenshot is obsolete; use communityshaders.screenshot contractMajor 1 action capture","enum":["status","open","close","screenshot","set_path","set_layout_unlocked","texture_stats","set_depth_culling_performance_mode","set_depth_culling_legacy_mode","set_foliage_lighting_enabled","set_truepbr_verbose_json_logging","set_dynamic_cubemap_resolution","prepare_coc"],"default":"status"},"path":{"type":"string","enum":["auto","overlay","in_scene"]},"enabled":{"type":"boolean","description":"Boolean state required by a setter action."},"resolution":{"type":"integer","enum":[128,256],"description":"Dynamic cubemap resolution staged for the next game restart."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
+			R"({"description":"Inspect and control the CSX VR menu, desktop/headset layout lock, depth-culling A/B policy, Foliage Lighting runtime state, TruePBR verbose JSON logging, and dynamic cubemap resolution. The screenshot action is obsolete and retained temporarily for migration; use communityshaders.screenshot contractMajor 1 instead. set_layout_unlocked enables desktop move, resize, and docking plus headset custom placement and grip dragging. Resolution changes are staged in memory; save settings and restart to apply them. prepare_coc is a one-shot pre-assay gate: it requires in-game Skyrim VR and startup-active VR FPS Stabilizer profile sync, then enables runtime-only developer mode and the fixed FOV plus TAA 0.3/0.7 fixture without saving settings. prepare_tuning applies the same runtime-only fixture in-game without requiring VR FPS Stabilizer profile sync. Neither preparation action changes cells. Every response identifies the exact producing DLL. expectedBuildId makes requests fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","description":"screenshot is obsolete; use communityshaders.screenshot contractMajor 1 action capture","enum":["status","open","close","screenshot","set_path","set_layout_unlocked","texture_stats","set_depth_culling_performance_mode","set_depth_culling_legacy_mode","set_foliage_lighting_enabled","set_truepbr_verbose_json_logging","set_dynamic_cubemap_resolution","prepare_coc","prepare_tuning"],"default":"status"},"path":{"type":"string","enum":["auto","overlay","in_scene"]},"enabled":{"type":"boolean","description":"Boolean state required by a setter action."},"resolution":{"type":"integer","enum":[128,256],"description":"Dynamic cubemap resolution staged for the next game restart."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
 		devBench->RegisterTool("communityshaders.menu", descriptor, &ToolHandler, nullptr);
 		g_registered.store(true, std::memory_order_release);
 		logger::info("MenuDevBenchBridge: registered communityshaders.menu with devbench build {}", devBench->GetBuildNumber());

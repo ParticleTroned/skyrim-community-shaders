@@ -24,6 +24,11 @@ on:
                 type: boolean
                 required: false
                 default: true
+            include-se-ae:
+                description: "Include SE/AE shader cache (disable for VR-only testing)"
+                type: boolean
+                required: false
+                default: true
 
 permissions:
     contents: read
@@ -121,7 +126,7 @@ jobs:
         uses: ./.github/workflows/shader-cache.yaml
         with:
             target_ref: ${{ github.ref }}
-            runtime: both
+            runtime: ${{ (github.event_name != 'workflow_dispatch' || inputs.include-se-ae == true) && 'both' || 'VR' }}
 
     release:
         name: Post Release for Draft, Manual Run, or Tag
@@ -154,7 +159,9 @@ jobs:
             - name: Checkout release packaging tools
               uses: actions/checkout@v6
               with:
-                  sparse-checkout: tools
+                  sparse-checkout: |
+                      tools
+                      config
 
             - name: Setup Python for FOMOD packaging
               uses: actions/setup-python@v6
@@ -168,6 +175,7 @@ jobs:
                   path: dist/
 
             - name: Download SE shader cache
+              if: github.event_name != 'workflow_dispatch' || inputs.include-se-ae == true
               uses: actions/download-artifact@v7
               with:
                   name: ShaderCache-SE
@@ -244,8 +252,10 @@ jobs:
               shell: pwsh
               env:
                   RELEASE_TAG: ${{ steps.combined_notes.outputs.release_tag }}
+                  INCLUDE_SE_AE: ${{ github.event_name != 'workflow_dispatch' || inputs.include-se-ae == true }}
               run: |
                   $ErrorActionPreference = 'Stop'
+                  $includeSeAe = [bool]::Parse($env:INCLUDE_SE_AE)
 
                   function Get-SingleArchive {
                       param(
@@ -281,7 +291,10 @@ jobs:
                   }
 
                   $aio = Get-SingleArchive 'CSX_AIO-*.7z' 'AIO archive'
-                  $se = Get-SingleArchive 'ShaderCache-SE-*.7z' 'SE shader-cache archive'
+                  $se = $null
+                  if ($includeSeAe) {
+                      $se = Get-SingleArchive 'ShaderCache-SE-*.7z' 'SE shader-cache archive'
+                  }
                   $vr = Get-SingleArchive 'ShaderCache-VR-*.7z' 'VR shader-cache archive'
 
                   $runnerTemp = [System.IO.Path]::GetFullPath($env:RUNNER_TEMP)
@@ -301,19 +314,28 @@ jobs:
                   try {
                       New-Item -ItemType Directory -Path $workRoot | Out-Null
                       $coreRoot = Join-Path $workRoot 'core'
-                      $seRoot = Join-Path $workRoot 'se'
                       $vrRoot = Join-Path $workRoot 'vr'
                       $stagedRoot = Join-Path $workRoot 'staged'
                       Expand-CMakeArchive $aio $coreRoot
-                      Expand-CMakeArchive $se $seRoot
                       Expand-CMakeArchive $vr $vrRoot
 
-                      & python tools/build-fomod-package.py `
-                          --core $coreRoot `
-                          --se-cache $seRoot `
-                          --vr-cache $vrRoot `
-                          --output $stagedRoot `
-                          --version $env:RELEASE_TAG
+                      $fomodArgs = @(
+                          'tools/build-fomod-package.py',
+                          '--core', $coreRoot,
+                          '--vr-cache', $vrRoot,
+                          '--output', $stagedRoot,
+                          '--version', $env:RELEASE_TAG
+                      )
+                      $cacheRoots = @('ShaderCache-VR')
+                      if ($includeSeAe) {
+                          $seRoot = Join-Path $workRoot 'se'
+                          Expand-CMakeArchive $se $seRoot
+                          $fomodArgs += @('--include-se-ae', '--se-cache', $seRoot)
+                          $cacheRoots += 'ShaderCache-SE-AE'
+                      } else {
+                          $fomodArgs += '--no-include-se-ae'
+                      }
+                      & python @fomodArgs
                       if ($LASTEXITCODE -ne 0) {
                           throw 'FOMOD staging failed.'
                       }
@@ -344,25 +366,29 @@ jobs:
                       if ($LASTEXITCODE -ne 0) {
                           throw 'FOMOD archive could not be inspected.'
                       }
-                      foreach ($required in @(
+                      $requiredEntries = @(
                           'fomod/ModuleConfig.xml',
-                          'fomod/info.xml',
-                          'ShaderCache-VR/ShaderCache/Info.ini',
-                          'ShaderCache-VR/ShaderCache/PackManifest.json',
-                          'ShaderCache-VR/ShaderCache/Optimized.A.csxpack',
-                          'ShaderCache-VR/ShaderCache/Optimized.B.csxpack',
-                          'ShaderCache-VR/ShaderCache/Developer.A.csxpack',
-                          'ShaderCache-VR/ShaderCache/Developer.B.csxpack',
-                          'ShaderCache-SE-AE/ShaderCache/Info.ini',
-                          'ShaderCache-SE-AE/ShaderCache/PackManifest.json',
-                          'ShaderCache-SE-AE/ShaderCache/Optimized.A.csxpack',
-                          'ShaderCache-SE-AE/ShaderCache/Optimized.B.csxpack',
-                          'ShaderCache-SE-AE/ShaderCache/Developer.A.csxpack',
-                          'ShaderCache-SE-AE/ShaderCache/Developer.B.csxpack'
-                      )) {
+                          'fomod/info.xml'
+                      )
+                      foreach ($cacheRoot in $cacheRoots) {
+                          foreach ($member in @(
+                              'Info.ini',
+                              'PackManifest.json',
+                              'Optimized.A.csxpack',
+                              'Optimized.B.csxpack',
+                              'Developer.A.csxpack',
+                              'Developer.B.csxpack'
+                          )) {
+                              $requiredEntries += "$cacheRoot/ShaderCache/$member"
+                          }
+                      }
+                      foreach ($required in $requiredEntries) {
                           if ($required -notin $entries) {
                               throw "FOMOD archive is missing $required."
                           }
+                      }
+                      if (-not $includeSeAe -and ($entries -match '^ShaderCache-SE-AE(/|$)')) {
+                          throw 'VR-only FOMOD archive contains an excluded SE/AE cache.'
                       }
 
                       try {

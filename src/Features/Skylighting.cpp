@@ -1351,7 +1351,10 @@ RE::BSShaderProperty::RenderPassArray* Skylighting::BSLightingShaderProperty_Get
 			return precipitationOcclusionMapRenderPassList;
 	}
 
-	if (geometry->worldBound.radius <= 32)
+	const bool validOccluder = property->flags.any(kZBufferWrite) &&
+	                           property->flags.none(kRefraction, kTempRefraction, kLODLandscape, kEyeReflect, kDecal, kDynamicDecal) &&
+	                           (skylighting.inOcclusion || property->flags.none(kMultiTextureLandscape, kNoLODLandBlend));
+	if (!validOccluder || !(geometry->worldBound.radius > 32))
 		return precipitationOcclusionMapRenderPassList;
 
 	if (skylighting.inOcclusion) {
@@ -1389,42 +1392,33 @@ RE::BSShaderProperty::RenderPassArray* Skylighting::BSLightingShaderProperty_Get
 		}
 	}
 
-	bool valid = false;
+	stl::enumeration<RE::BSUtilityShader::Flags> technique;
+	technique.set(RenderDepth);
 
-	if (skylighting.inOcclusion) {
-		valid = property->flags.any(kZBufferWrite) && property->flags.none(kRefraction, kTempRefraction, kLODLandscape, kEyeReflect, kDecal, kDynamicDecal);
-	} else {
-		valid = property->flags.any(kZBufferWrite) && property->flags.none(kRefraction, kTempRefraction, kMultiTextureLandscape, kNoLODLandBlend, kLODLandscape, kEyeReflect, kDecal, kDynamicDecal);
+	if (property->flags.any(kVertexColors)) {
+		technique.set(Vc);
 	}
 
-	if (valid) {
-		stl::enumeration<RE::BSUtilityShader::Flags> technique;
-		technique.set(RenderDepth);
-
-		if (property->flags.any(kVertexColors)) {
-			technique.set(Vc);
-		}
-
-		const auto alphaProperty = static_cast<RE::NiAlphaProperty*>(geometry->GetGeometryRuntimeData().alphaProperty.get());
-		if (alphaProperty && alphaProperty->GetAlphaTesting()) {
-			technique.set(Texture);
-			technique.set(AlphaTest);
-		}
-
-		if (property->flags.any(kLODObjects, kHDLODObjects)) {
-			technique.set(LodObject);
-		}
-
-		if (property->flags.any(kTreeAnim)) {
-			technique.set(TreeAnim);
-		}
-
-		precipitationOcclusionMapRenderPassList->EmplacePass(
-			globals::game::utilityShader,
-			property,
-			geometry,
-			technique.underlying() + static_cast<uint32_t>(ShaderTechnique::UtilityGeneralStart));
+	const auto alphaProperty = static_cast<RE::NiAlphaProperty*>(geometry->GetGeometryRuntimeData().alphaProperty.get());
+	if (alphaProperty && alphaProperty->GetAlphaTesting()) {
+		technique.set(Texture);
+		technique.set(AlphaTest);
 	}
+
+	if (property->flags.any(kLODObjects, kHDLODObjects)) {
+		technique.set(LodObject);
+	}
+
+	if (property->flags.any(kTreeAnim)) {
+		technique.set(TreeAnim);
+	}
+
+	precipitationOcclusionMapRenderPassList->EmplacePass(
+		globals::game::utilityShader,
+		property,
+		geometry,
+		technique.underlying() + static_cast<uint32_t>(ShaderTechnique::UtilityGeneralStart));
+
 	return precipitationOcclusionMapRenderPassList;
 }
 

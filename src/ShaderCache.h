@@ -481,6 +481,7 @@ namespace SIE
 			const std::filesystem::path& a_shaderPath,
 			const Util::ContentHash::Hash128& a_compileStateDigest,
 			const Util::ContentHash::Hash128& a_packCompileStateDigest,
+			const Util::ContentHash::Hash128& a_sourceDigest,
 			uint64_t a_diskCacheGeneration);
 		void SetSaveLoadDiskPersistenceBlocked(bool a_blocked);
 		void DeleteDiskCache();
@@ -576,8 +577,11 @@ namespace SIE
 			ID3DBlob* a_blob,
 			const std::wstring& a_diskPath,
 			const Util::ContentHash::Hash128& a_compileStateDigest,
+			const Util::ContentHash::Hash128& a_packCompileStateDigest,
+			bool a_developerMode,
 			bool fromDisk = false,
-			std::optional<uint64_t> a_taskGeneration = std::nullopt);
+			std::optional<uint64_t> a_taskGeneration = std::nullopt,
+			std::optional<Util::ContentHash::Hash128> a_sourceDigest = std::nullopt);
 
 		enum class ClaimResult
 		{
@@ -991,6 +995,8 @@ namespace SIE
 			Util::ContentHash::Hash128 compileStateDigest;
 			Util::ContentHash::Hash128 packCompileStateDigest;
 			bool developerMode = false;
+			std::optional<Util::ContentHash::Hash128> sourceDigest;
+			Microsoft::WRL::ComPtr<ID3DBlob> compiledBlob;
 
 			bool operator<(const hlslRecord& other) const
 			{
@@ -1016,6 +1022,7 @@ namespace SIE
 			std::filesystem::path shaderPath;
 			Util::ContentHash::Hash128 compileStateDigest;
 			Util::ContentHash::Hash128 packCompileStateDigest;
+			Util::ContentHash::Hash128 sourceDigest;
 			bool developerMode = false;
 			uint64_t diskCacheGeneration = 0;
 		};

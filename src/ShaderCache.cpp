@@ -33,6 +33,7 @@
 #include "Utils/GenerationClaim.h"
 #include "Utils/ShaderCacheManifest.h"
 #include "Utils/ShaderCachePack.h"
+#include "Utils/ShaderSourceProvenance.h"
 
 #include "Features/DynamicCubemaps.h"
 #include "Features/Upscaling.h"
@@ -330,9 +331,22 @@ namespace SIE
 
 		std::optional<Util::ContentHash::Hash128> GetShaderContentDigest(
 			const std::filesystem::path& a_path,
-			const std::filesystem::path& a_shadersRoot)
+			const std::filesystem::path& a_shadersRoot,
+			bool a_refresh = false)
 		{
 			std::shared_lock epochLock(g_shaderSourceEpochMutex);
+			if (a_refresh) {
+				// Compiler input verification must observe edits before the watcher
+				// catches up, including replacements that preserve file timestamps.
+				std::unordered_map<std::string, IncludeParseEntry> parseCache;
+				std::mutex parseCacheMutex;
+				std::unordered_map<std::string, std::chrono::system_clock::time_point> mtimeResults;
+				GetMaxShaderMTimeInternal(a_path, a_shadersRoot, parseCache, parseCacheMutex, mtimeResults);
+				std::unordered_map<std::string, std::optional<Util::ContentHash::Hash128>> digestResults;
+				bool complete = true;
+				return GetShaderContentDigestInternal(
+					a_path, a_shadersRoot, parseCache, parseCacheMutex, digestResults, complete);
+			}
 			const auto generation = g_shaderSourceGeneration.load(std::memory_order_acquire);
 			Util::ContentHash::Hash128 fingerprint{};
 			GetMaxShaderMTimeLocked(a_path, a_shadersRoot, &fingerprint);
@@ -551,23 +565,13 @@ namespace SIE
 
 		void RecordShaderDigest(
 			const std::wstring& a_diskPath,
-			const std::filesystem::path& a_shaderPath,
+			const Util::ContentHash::Hash128& a_sourceDigest,
 			const Util::ContentHash::Hash128& a_compileStateDigest)
 		{
 			auto& manifest = GetShaderCacheManifest();
 			const auto manifestKey = GetManifestKey(a_diskPath);
-			const auto digest = GetShaderContentDigest(a_shaderPath, ShaderSourceRoot());
-			if (!digest) {
-				// The blob has already replaced any prior cache entry. Do not
-				// leave an old authoritative digest attached to the new bytes;
-				// removing it deliberately restores the legacy mtime fallback.
-				if (manifest.Erase(manifestKey))
-					FlushShaderCacheManifestLocked();
-				return;
-			}
-
 			const auto combined = Util::ContentHash::CombineHashes(
-				*digest,
+				a_sourceDigest,
 				a_compileStateDigest);
 			manifest.Set(manifestKey, combined.ToHex());
 
@@ -865,9 +869,10 @@ namespace SIE
 		std::optional<ShaderPackIdentity> BuildShaderPackIdentity(
 			const std::wstring& a_diskPath,
 			const std::filesystem::path& a_shaderPath,
-			const Util::ContentHash::Hash128& a_compileStateDigest)
+			const Util::ContentHash::Hash128& a_compileStateDigest,
+			std::optional<Util::ContentHash::Hash128> a_sourceDigest = std::nullopt)
 		{
-			const auto sourceDigest = GetShaderContentDigest(a_shaderPath, ShaderSourceRoot());
+			const auto sourceDigest = a_sourceDigest ? a_sourceDigest : GetShaderContentDigest(a_shaderPath, ShaderSourceRoot());
 			if (!sourceDigest)
 				return std::nullopt;
 			auto compatibility = CSX::Api::GetShaderCompatibilityRequirementSet(
@@ -944,11 +949,12 @@ namespace SIE
 			bool a_developerMode,
 			const std::wstring& a_diskPath,
 			const std::filesystem::path& a_shaderPath,
-			const Util::ContentHash::Hash128& a_compileStateDigest)
+			const Util::ContentHash::Hash128& a_compileStateDigest,
+			const Util::ContentHash::Hash128& a_sourceDigest)
 		{
 			try {
 				auto* store = GetShaderPackStore(a_developerMode);
-				const auto identity = BuildShaderPackIdentity(a_diskPath, a_shaderPath, a_compileStateDigest);
+				const auto identity = BuildShaderPackIdentity(a_diskPath, a_shaderPath, a_compileStateDigest, a_sourceDigest);
 				if (!store || !identity)
 					return false;
 				Util::ShaderCachePack::Entry entry{
@@ -1078,6 +1084,7 @@ namespace SIE
 			const std::filesystem::path& a_shaderPath,
 			const Util::ContentHash::Hash128& a_compileStateDigest,
 			const Util::ContentHash::Hash128& a_packCompileStateDigest,
+			const Util::ContentHash::Hash128& a_sourceDigest,
 			uint64_t a_diskCacheGeneration)
 		{
 			std::shared_lock lock{ g_diskCacheMutationMutex };
@@ -1089,7 +1096,7 @@ namespace SIE
 			}
 
 			if (GetShaderPackStore(a_developerMode)) {
-				if (!SaveShaderBlobToPack(a_shaderBlob, a_developerMode, a_diskPath, a_shaderPath, a_packCompileStateDigest))
+				if (!SaveShaderBlobToPack(a_shaderBlob, a_developerMode, a_diskPath, a_shaderPath, a_packCompileStateDigest, a_sourceDigest))
 					return false;
 				return true;
 			}
@@ -1120,7 +1127,7 @@ namespace SIE
 			}
 
 			logger::debug("Saved shader to {}", Util::WStringToString(a_diskPath));
-			RecordShaderDigest(a_diskPath, a_shaderPath, a_compileStateDigest);
+			RecordShaderDigest(a_diskPath, a_sourceDigest, a_compileStateDigest);
 			return true;
 		}
 	}
@@ -2535,6 +2542,8 @@ namespace SIE
 							shaderBlob,
 							diskPath,
 							compileState.digest,
+							packCompileStateDigest,
+							compileState.developerMode,
 							/*fromDisk=*/true,
 							a_taskGeneration)) {
 						shaderBlob->Release();
@@ -2624,6 +2633,8 @@ namespace SIE
 							shaderBlob,
 							diskPath,
 							compileState.digest,
+							packCompileStateDigest,
+							compileState.developerMode,
 							/*fromDisk=*/true,
 							a_taskGeneration)) {
 						shaderBlob->Release();
@@ -2668,6 +2679,8 @@ namespace SIE
 					nullptr,
 					diskPath,
 					compileState.digest,
+					packCompileStateDigest,
+					compileState.developerMode,
 					false,
 					a_taskGeneration);
 				return nullptr;
@@ -2694,8 +2707,23 @@ namespace SIE
 
 			// Track includes
 			TrackingIncludeHandler includeHandler(std::filesystem::path(path).parent_path());
-			const HRESULT compileResult = D3DCompileFromFile(path.c_str(), defines.data(), &includeHandler, "main",
-				GetShaderProfile(shaderClass), flags, 0, &shaderBlob, &errorBlob);
+			HRESULT compileResult = E_FAIL;
+			const auto sourceDigest = Util::ShaderSourceProvenance::CompileWithStableDigest(
+				[&](bool a_refresh) { return GetShaderContentDigest(path, ShaderSourceRoot(), a_refresh); },
+				[&] {
+					compileResult = D3DCompileFromFile(path.c_str(), defines.data(), &includeHandler, "main",
+						GetShaderProfile(shaderClass), flags, 0, &shaderBlob, &errorBlob);
+					return SUCCEEDED(compileResult);
+				},
+				[&](std::exception_ptr a_error) {
+					try {
+						std::rethrow_exception(a_error);
+					} catch (const std::exception& e) {
+						logger::warn("Cannot verify shader source content for {}; retaining compiled bytecode in memory: {}", pathString, e.what());
+					} catch (...) {
+						logger::warn("Cannot verify shader source content for {}; retaining compiled bytecode in memory", pathString);
+					}
+				});
 			// If the include handler captured any includes, register them so the watcher
 			// can invalidate dependents even if this compilation fails. Do NOT clear
 			// mappings when there are no captured includes to avoid removing prior
@@ -2730,6 +2758,8 @@ namespace SIE
 					nullptr,
 					diskPath,
 					compileState.digest,
+					packCompileStateDigest,
+					compileState.developerMode,
 					false,
 					a_taskGeneration);
 				return nullptr;
@@ -2752,14 +2782,19 @@ namespace SIE
 			}
 
 			try {
-				cache.PersistCompiledShaderBlob(
-					shaderBlob,
-					compileState.developerMode,
-					diskPath,
-					path,
-					compileState.digest,
-					packCompileStateDigest,
-					diskCacheGeneration);
+				if (sourceDigest) {
+					cache.PersistCompiledShaderBlob(
+						shaderBlob,
+						compileState.developerMode,
+						diskPath,
+						path,
+						compileState.digest,
+						packCompileStateDigest,
+						*sourceDigest,
+						diskCacheGeneration);
+				} else {
+					logger::debug("Shader source changed or could not be verified during compilation; keeping {} memory-only", pathString);
+				}
 			} catch (const std::exception& e) {
 				logger::error("Shader compiled successfully but persistence failed for {}: {}", Util::WStringToString(diskPath), e.what());
 			} catch (...) {
@@ -2772,8 +2807,11 @@ namespace SIE
 					shaderBlob,
 					diskPath,
 					compileState.digest,
+					packCompileStateDigest,
+					compileState.developerMode,
 					false,
-					a_taskGeneration)) {
+					a_taskGeneration,
+					sourceDigest)) {
 				shaderBlob->Release();
 				return nullptr;
 			}
@@ -3540,8 +3578,11 @@ namespace SIE
 		ID3DBlob* a_blob,
 		const std::wstring& a_diskPath,
 		const Util::ContentHash::Hash128& a_compileStateDigest,
+		const Util::ContentHash::Hash128& a_packCompileStateDigest,
+		bool a_developerMode,
 		bool fromDisk,
-		std::optional<uint64_t> a_taskGeneration)
+		std::optional<uint64_t> a_taskGeneration,
+		std::optional<Util::ContentHash::Hash128> a_sourceDigest)
 	{
 		auto key = SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true);
 		auto keyWithDescriptor = SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, false);
@@ -3603,8 +3644,10 @@ namespace SIE
 				shaderClass,
 				a_diskPath,
 				a_compileStateDigest,
-				CaptureGlobalCompileState().digest,
-				globals::state && globals::state->IsDeveloperMode()
+				a_packCompileStateDigest,
+				a_developerMode,
+				a_sourceDigest,
+				Microsoft::WRL::ComPtr<ID3DBlob>{ fromDisk ? nullptr : a_blob }
 			};
 
 			if (it != hlslToShaderMap.end()) {
@@ -3976,6 +4019,7 @@ namespace SIE
 		const std::filesystem::path& a_shaderPath,
 		const Util::ContentHash::Hash128& a_compileStateDigest,
 		const Util::ContentHash::Hash128& a_packCompileStateDigest,
+		const Util::ContentHash::Hash128& a_sourceDigest,
 		uint64_t a_diskCacheGeneration)
 	{
 		if (!a_shaderBlob ||
@@ -3992,6 +4036,7 @@ namespace SIE
 				a_shaderPath,
 				a_compileStateDigest,
 				a_packCompileStateDigest,
+				a_sourceDigest,
 				a_diskCacheGeneration);
 			return;
 		}
@@ -4004,6 +4049,7 @@ namespace SIE
 		deferredWrite.shaderPath = a_shaderPath;
 		deferredWrite.compileStateDigest = a_compileStateDigest;
 		deferredWrite.packCompileStateDigest = a_packCompileStateDigest;
+		deferredWrite.sourceDigest = a_sourceDigest;
 		deferredWrite.diskCacheGeneration = a_diskCacheGeneration;
 		const auto deferredKey = std::format(
 			"{}|{}|{}",
@@ -4741,8 +4787,8 @@ namespace SIE
 			if (!savedPaths.insert(record.diskPath).second)
 				continue;
 
-			auto shaderBlob = GetCompletedShader(record.key);
-			if (!shaderBlob || IsShaderLoadedFromDisk(record.key))
+			auto* shaderBlob = record.compiledBlob.Get();
+			if (!shaderBlob || !record.sourceDigest || GetCompletedShader(record.key) != shaderBlob)
 				continue;
 
 			const bool managedLane = GetShaderPackStore(record.developerMode) != nullptr;
@@ -4753,6 +4799,7 @@ namespace SIE
 					sourcePath,
 					record.compileStateDigest,
 					record.packCompileStateDigest,
+					*record.sourceDigest,
 					diskCacheGeneration) &&
 				managedLane) {
 				++pendingPackWrites[record.developerMode ? 1 : 0];
@@ -5739,6 +5786,7 @@ namespace SIE
 							write.shaderPath,
 							write.compileStateDigest,
 							write.packCompileStateDigest,
+							write.sourceDigest,
 							write.diskCacheGeneration)) {
 						if (managedLane)
 							++pendingPackWrites[write.developerMode ? 1 : 0];

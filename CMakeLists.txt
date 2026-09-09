@@ -1860,6 +1860,11 @@ if(BUILD_CONTROLLER_TESTS)
         tests/shader_cache_provenance_test.cpp
     )
     add_controller_test(
+        shader_source_provenance_test
+        ShaderSourceProvenance
+        tests/shader_source_provenance_test.cpp
+    )
+    add_controller_test(
         generation_claim_test
         GenerationClaim
         tests/generation_claim_test.cpp
@@ -2203,6 +2208,7 @@ if(BUILD_CONTROLLER_TESTS)
     foreach(
         CACHE_TEST_TARGET
         api_shader_compatibility_registry_test shader_cache_pack_test
+        shader_source_provenance_test
     )
         if(MSVC)
             target_compile_options(${CACHE_TEST_TARGET} PRIVATE /UNDEBUG)
@@ -2300,6 +2306,7 @@ if(BUILD_CONTROLLER_TESTS)
             shader_cache_disable_policy_test
             shader_cache_enable_policy_test
             shader_cache_provenance_test
+            shader_source_provenance_test
             cache_invalidation_test
             shader_compilation_scheduling_policy_test
             volumetric_lighting_tuning_policy_test

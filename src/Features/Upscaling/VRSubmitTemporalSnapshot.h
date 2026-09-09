@@ -107,6 +107,7 @@ namespace VRSubmitTemporalSnapshot
 		/** Repeated producer visits retain the first capture; a changed producer contract invalidates it. */
 		[[nodiscard]] bool Publish(const Key& a_key, const Scalars& a_scalars, const std::array<EyeCamera, 2>& a_eyes)
 		{
+			const bool repeatedLogicalFrame = attempted && key.frame == a_key.frame;
 			if (attempted && IsSameProducer(key, a_key)) {
 				if (a_key != key)
 					valid = false;
@@ -125,7 +126,8 @@ namespace VRSubmitTemporalSnapshot
 			attempted = true;
 			valid = false;
 			key = a_key;
-			if (!IsValid(a_key) || !IsValid(a_scalars))
+			// Jitter and vendor frame tokens permit one temporal sample per engine frame.
+			if (repeatedLogicalFrame || !IsValid(a_key) || !IsValid(a_scalars))
 				return false;
 
 			scalars = a_scalars;

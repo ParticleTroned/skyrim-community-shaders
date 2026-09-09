@@ -31423,7 +31423,7 @@ void Upscaling::RecordVRRenderScaleFullEyeEvaluation(UpscaleMethod a_upscaleMeth
 	logger::debug("[VRRenderScale] Cleared memory relief after clean full-eye evaluation for both eyes.");
 }
 
-bool Upscaling::RecordVRRenderScaleFidelityObservation(UpscaleMethod a_upscaleMethod, uint32_t a_eyeIndex, bool a_success, uint32_t a_generation, uint32_t a_inputWidth, uint32_t a_inputHeight, uint32_t a_outputWidth, uint32_t a_outputHeight, bool a_evaluated)
+bool Upscaling::RecordVRRenderScaleFidelityObservation(UpscaleMethod a_upscaleMethod, uint32_t a_eyeIndex, bool a_success, uint32_t a_generation, uint32_t a_inputWidth, uint32_t a_inputHeight, uint32_t a_outputWidth, uint32_t a_outputHeight, bool a_evaluated, [[maybe_unused]] const SubmitStageRuntimeFSRStereoState* a_fsrBatch)
 {
 	if (!globals::game::isVR || a_eyeIndex >= 2)
 		return a_success;
@@ -31433,11 +31433,15 @@ bool Upscaling::RecordVRRenderScaleFidelityObservation(UpscaleMethod a_upscaleMe
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	const auto fsrDispatch =
 		a_success && a_evaluated && a_upscaleMethod == UpscaleMethod::kFSR ?
-			fidelityFX.GetRuntimeUpscalerDispatchSnapshotForRenderThread() :
+			(a_fsrBatch ? a_fsrBatch->dispatchProof : fidelityFX.GetRuntimeUpscalerDispatchSnapshotForRenderThread()) :
 			FidelityFX::RuntimeUpscalerDispatchSnapshot{};
-	const bool fsrDispatchPathValid = fsrDispatch.valid && fsrDispatch.frame == frame;
 	const auto fsrDispatchBackend =
 		GetVRRenderScaleBackendFromFSRDispatchPath(fsrDispatch.path);
+	const bool fsrDispatchPathValid = a_fsrBatch ?
+	                                      a_fsrBatch->HasValidDispatchProof() && VRSubmitStereoBatch::IsValidDispatchProof(fsrDispatch) &&
+	                                          fsrDispatchBackend != VRRenderScaleBackendKind::None &&
+	                                          fidelityFX.IsRuntimeUpscalerDispatchProofUsable(fsrDispatch.path) :
+	                                      fsrDispatch.valid && fsrDispatch.frame == frame;
 #endif
 	uint32_t mismatchMask = static_cast<uint32_t>(VRRenderScaleFidelityMismatch::None);
 	VRRenderScaleFidelitySnapshot published{};
@@ -39500,8 +39504,7 @@ void Upscaling::DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSR
 	cbData.sourceOffset = sourceRegion.offset;
 	cbData.dispatchDim = { static_cast<float>(dispatchWidth), static_cast<float>(dispatchHeight) };
 	cbData.outputOffset = { static_cast<float>(outputOffsetX), static_cast<float>(outputOffsetY) };
-	const auto* temporalSnapshot = GetSubmitTemporalSnapshotForDispatch();
-	cbData.jitter = temporalSnapshot ? float2{ temporalSnapshot->scalars.jitterX, temporalSnapshot->scalars.jitterY } : jitter;
+	cbData.jitter = GetJitterForDispatch();
 	centerScale = ClampFoveatedCenterScale(centerScale);
 	centerHorizontalScale = ClampFoveatedCenterHorizontalScale(centerHorizontalScale);
 	const bool visualizeMask = settings.foveatedPeripheryMaskVisualization;
@@ -39632,8 +39635,7 @@ void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorS
 	cbData.inputTextureOffset = inputTextureRegion.offset;
 	cbData.dispatchDim = { static_cast<float>(dispatchWidth), static_cast<float>(dispatchHeight) };
 	cbData.outputOffset = { static_cast<float>(outputOffsetX), static_cast<float>(outputOffsetY) };
-	const auto* temporalSnapshot = GetSubmitTemporalSnapshotForDispatch();
-	cbData.jitter = temporalSnapshot ? float2{ temporalSnapshot->scalars.jitterX, temporalSnapshot->scalars.jitterY } : jitter;
+	cbData.jitter = GetJitterForDispatch();
 	cbData.centerOffset = { centerOffsetX, centerOffsetY };
 	centerScale = ClampFoveatedCenterScale(centerScale);
 	centerHorizontalScale = ClampFoveatedCenterHorizontalScale(centerHorizontalScale);
@@ -39844,8 +39846,7 @@ bool Upscaling::DispatchFoveatedSpatialComposite(ID3D11ShaderResourceView* perip
 	cbData.invPeripherySourceDim = { 1.0f / static_cast<float>(peripherySourceWidth), 1.0f / static_cast<float>(peripherySourceHeight) };
 	cbData.peripherySourceScale = { peripherySourceScaleX, peripherySourceScaleY };
 	cbData.peripherySourceOffset = { peripherySourceOffsetX, peripherySourceOffsetY };
-	const auto* temporalSnapshot = GetSubmitTemporalSnapshotForDispatch();
-	cbData.jitter = temporalSnapshot ? float2{ temporalSnapshot->scalars.jitterX, temporalSnapshot->scalars.jitterY } : jitter;
+	cbData.jitter = GetJitterForDispatch();
 	cbData.centerRectOffset = { static_cast<float>(centerRect.outputOffsetX), static_cast<float>(centerRect.outputOffsetY) };
 	cbData.centerRectDim = { static_cast<float>(centerRect.outputWidth), static_cast<float>(centerRect.outputHeight) };
 	cbData.invCenterSourceDim = { 1.0f / static_cast<float>(centerRect.outputWidth), 1.0f / static_cast<float>(centerRect.outputHeight) };
@@ -49040,6 +49041,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		a_presentationObservation.loadingOrMenuContext = a_loadingOrMenuContext;
 		a_presentationObservation.transitionCooldown = a_transitionCooldown;
 	};
+	const SubmitStageRuntimeFSRStereoState* submitStageFSRBatch = nullptr;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	const auto captureSubmitStageVendorDispatchEvidence =
 		[&](SubmitStageVendorEyeState& a_eyeState) {
@@ -49053,18 +49055,20 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 					return;
 				}
 				a_eyeState.vendorBackend = VRRenderScaleBackendKind::DLSS;
-				a_eyeState.vendorDispatchFrame = std::max(currentFrame, 1u);
+				const auto* temporalSnapshot = GetSubmitTemporalSnapshotForDispatch();
+				a_eyeState.vendorDispatchFrame = std::max(temporalSnapshot ? temporalSnapshot->key.frame : currentFrame, 1u);
 				return;
 			}
 			if (upscaleMethod != UpscaleMethod::kFSR)
 				return;
 
 			const auto dispatch =
-				fidelityFX.GetRuntimeUpscalerDispatchSnapshotForRenderThread();
+				submitStageFSRBatch ? submitStageFSRBatch->dispatchProof : fidelityFX.GetRuntimeUpscalerDispatchSnapshotForRenderThread();
 			const auto backend =
 				GetVRRenderScaleBackendFromFSRDispatchPath(dispatch.path);
-			if (!dispatch.valid || dispatch.frame != std::max(currentFrame, 1u) ||
-				dispatch.serial == 0 || backend == VRRenderScaleBackendKind::None ||
+			if (!VRSubmitStereoBatch::IsValidDispatchProof(dispatch) ||
+				(submitStageFSRBatch ? !submitStageFSRBatch->HasValidDispatchProof() : dispatch.frame != std::max(currentFrame, 1u)) ||
+				backend == VRRenderScaleBackendKind::None ||
 				!fidelityFX.IsRuntimeUpscalerDispatchProofUsable(dispatch.path)) {
 				return;
 			}
@@ -50214,10 +50218,12 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 				submitStageVendorAdmissionCycle = a_compositorCycleToken;
 				submitStageVendorAdmissionGeneration = activeContractGeneration;
 				submitStageVendorAdmissionMethod = static_cast<uint32_t>(upscaleMethod);
+				submitStageVendorAdmissionColorContract = sourceColorContract;
 				submitStageVendorAdmissionFrame = currentFrame;
 				submitStageVendorAdmissionEyeMask = 0;
 			}
 			if (submitStageVendorAdmissionCycle != a_compositorCycleToken ||
+				submitStageVendorAdmissionColorContract != sourceColorContract ||
 				!VRVendorRelatchPolicy::IsSameStereoDispatchContract(
 					submitStageVendorAdmissionGeneration,
 					activeContractGeneration,
@@ -50410,6 +50416,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		streamline.ClearLastDLSSFailureState();
 
 	bool vendorSucceeded = reuseRuntimeFSRStereoOutput;
+	if (reuseRuntimeFSRStereoOutput)
+		submitStageFSRBatch = &submitStageRuntimeFSRStereoState;
 	if (!vendorSucceeded && shouldUseFoveatedVendorThisEye) {
 		static bool loggedFoveatedSubmitException[2] = {};
 		try {
@@ -50639,6 +50647,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 							upscaleMethod, stereoEye, true);
 					}
 
+					SubmitStageRuntimeFSRStereoState::DispatchProof batchDispatchProof{};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					batchDispatchProof = fidelityFX.GetRuntimeUpscalerDispatchSnapshotForRenderThread();
+#endif
 					submitStageRuntimeFSRStereoState.Record(
 						submitInputProof,
 						currentFrame,
@@ -50649,8 +50661,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 						eyeWidthOut,
 						eyeHeightOut,
 						sourceTexture,
-						runtimeFSRStereoRegions);
+						runtimeFSRStereoRegions,
+						batchDispatchProof);
 					vendorSucceeded = true;
+					submitStageFSRBatch = &submitStageRuntimeFSRStereoState;
 
 					if (replayOtherEyeFromFoveated) {
 						if (!finalizeSubmitStageEyeOutput(
@@ -50795,22 +50809,22 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 
 		if (upscaleMethod == UpscaleMethod::kDLSS && !duplicateDLSSConstantsFailure) {
 			streamline.InvalidateDLSSOptionsCache();
-			streamline.ResetFrameTracking();
+			streamline.ResetFrameTracking(StreamlineFrameTokenPublication::ResetScope::DispatchFailure);
 		}
 		if (!duplicateDLSSConstantsFailure)
 			RequestHistoryReset();
+
+		if (a_compositorCycleToken != 0 &&
+			submitStageVendorAdmissionCycle == a_compositorCycleToken) {
+			// A failed fallback must not reopen vendor admission for a peer eye or retry.
+			submitStageVendorAdmissionPresentationOnly = true;
+		}
 
 		if (IsSubmitStageDeviceLost())
 			return false;
 
 		if (vrRenderScaleMode &&
 			presentStretchOutput(eyeWidthIn, eyeHeightIn, VRRenderScalePresentationPath::VendorFailureStretch)) {
-			if (a_compositorCycleToken != 0 &&
-				submitStageVendorAdmissionCycle == a_compositorCycleToken) {
-				// Keep the peer eye on the same fallback once either eye proves that
-				// this cycle's vendor admission cannot complete coherently.
-				submitStageVendorAdmissionPresentationOnly = true;
-			}
 			return true;
 		}
 
@@ -50865,7 +50879,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		eyeHeightIn,
 		eyeWidthOut,
 		eyeHeightOut,
-		true);
+		true,
+		submitStageFSRBatch);
 	if (vrRenderScaleMode) {
 		const bool mirrorRequested =
 			globals::features::vr.settings.StabilizeRenderScaleDesktopMirror ||

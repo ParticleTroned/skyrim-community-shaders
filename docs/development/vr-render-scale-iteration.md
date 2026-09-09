@@ -1,11 +1,31 @@
 # VR render-scale iteration records
 
+## 2026-09-10: submit contract integration review
+
+Rebased the submit input candidate onto `main-VR` at `ef7c366d`, retaining
+exact input freshness proofs, source COM ownership, and deferred FSR
+handling. The extracted batch cache retains dispatch evidence on reuse.
+Deferred presentation restores the color contract when resource replacement
+clears admission and rejects conflicting color metadata. Production-path
+regressions cover that recovery, Linear rejection, captured host temporal
+scalars, and normalized frame-zero evidence with distinct raw cache keys.
+The deferred color regression failed before the correction and passed after.
+
+This review generated no runtime measurement or candidate qualification
+report. The comparison ledger remains unchanged; the earlier build receipts
+do not qualify the rebased candidate for visual quality or performance.
+
 ## 2026-09-09: submit input contracts
 
 The `fix/vr-submit-input-contracts` candidate freezes stereo camera metadata
 before post-processing and makes submit color transfer/range explicit.
 The scope, fallback behavior, and validation cases are recorded in
 [VR submit input contracts](vr-submit-input-contracts.md).
+Adversarial review tightened logical-frame admission, preserved FSR batch
+dispatch evidence across desktop Present, and prevented failed DLSS fallback
+from reopening old token publication. Snapshot ownership is private and
+dispatch jitter selection is shared. Regressions cover these production
+policy and cache boundaries.
 This is an implementation and policy-test record, not a runtime measurement.
 The comparison ledger has no new candidate column because an exact fixture
 and accepted baseline are not configured for this run. Runtime qualification

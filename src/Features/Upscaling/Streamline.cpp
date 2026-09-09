@@ -1885,7 +1885,7 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 		recalculateCameraMatrices(slConstants);
 	}
 
-	const auto jitter = temporalSnapshot ? float2{ temporalSnapshot->scalars.jitterX, temporalSnapshot->scalars.jitterY } : upscaling.jitter;
+	const auto jitter = upscaling.GetJitterForDispatch();
 	slConstants.jitterOffset = { -jitter.x, -jitter.y };
 	const bool requestHistoryReset = upscaling.ShouldResetHistoryThisFrame();
 	slConstants.reset = requestHistoryReset ? sl::Boolean::eTrue : sl::Boolean::eFalse;
@@ -2741,9 +2741,9 @@ void Streamline::ResetDLSSIdleFences()
 		ClearVRDLSSSlotRecycleFence(pendingSlotRecycleIdleFence);
 }
 
-void Streamline::ResetFrameTracking()
+void Streamline::ResetFrameTracking(StreamlineFrameTokenPublication::ResetScope a_scope)
 {
-	frameTokenCoordinator.Reset();
+	frameTokenCoordinator.Reset(a_scope);
 	dlssFrameConstantsCache = {};
 }
 
@@ -2894,8 +2894,9 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	diagnostics.reactiveMask = reactiveMask;
 	diagnostics.transparencyMask = transparencyMask;
 	if (collectDLSSDiagnostics) {
-		diagnostics.jitterX = temporalSnapshot ? temporalSnapshot->scalars.jitterX : upscaling.jitter.x;
-		diagnostics.jitterY = temporalSnapshot ? temporalSnapshot->scalars.jitterY : upscaling.jitter.y;
+		const auto jitter = upscaling.GetJitterForDispatch();
+		diagnostics.jitterX = jitter.x;
+		diagnostics.jitterY = jitter.y;
 		diagnostics.colorBuffersHDR = colorBuffersHDR;
 		diagnostics.presentationUpscalingActive = upscaling.IsPresentationUpscalingActive();
 		diagnostics.renderScaleActive = upscaling.IsVRRenderScaleModeActive();

@@ -7,6 +7,12 @@
 
 namespace StreamlineFrameTokenPublication
 {
+	enum class ResetScope
+	{
+		Lifecycle,
+		DispatchFailure,
+	};
+
 	template <class Token>
 	class Coordinator
 	{
@@ -39,9 +45,11 @@ namespace StreamlineFrameTokenPublication
 			return Snapshot{ a_frame, *token, true };
 		}
 
-		/** Invalidates the published pair under the acquisition lock. */
-		void Reset()
+		/** Only lifecycle resets may discard publication; dispatch failure cannot reopen an older frame. */
+		void Reset(ResetScope a_scope = ResetScope::Lifecycle)
 		{
+			if (a_scope == ResetScope::DispatchFailure)
+				return;
 			std::lock_guard lock(mutex_);
 			published_.reset();
 		}

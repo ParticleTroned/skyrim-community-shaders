@@ -509,7 +509,8 @@ public:
 	bool SetDLSSOptions(DLSSViewportRole viewportRole, sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height, bool colorBuffersHDR, uint32_t qualityMode, uint32_t dlssPreset, const DLSSDispatchDiagnostics* diagnostics = nullptr);
 	void InvalidateDLSSOptionsCache();
 	void ResetDLSSIdleFences();
-	void ResetFrameTracking();
+	/** Clears constants tracking while preserving token publication during dispatch failure recovery. */
+	void ResetFrameTracking(StreamlineFrameTokenPublication::ResetScope a_scope = StreamlineFrameTokenPublication::ResetScope::Lifecycle);
 	void ClearLastDLSSFailureState() { lastDLSSFailureDuplicatedConstants = false; }
 	bool WasLastDLSSFailureDuplicatedConstants() const { return lastDLSSFailureDuplicatedConstants; }
 	bool HasDLSSResourcesPendingTeardown() const;

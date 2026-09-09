@@ -3759,7 +3759,7 @@ FidelityFX::UpscaleResult FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3
 	if (a_usedRuntimeUpscaler)
 		*a_usedRuntimeUpscaler = false;
 	if (!HasSupportedSubmitColorContract())
-		return false;
+		return UpscaleResult::Failed;
 	if (fsrHostStateQuarantined ||
 		std::ranges::any_of(fsrContextIndeterminate, [](bool a_indeterminate) { return a_indeterminate; })) {
 		return UpscaleResult::Failed;

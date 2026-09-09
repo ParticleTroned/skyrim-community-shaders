@@ -23,37 +23,54 @@ A repeated visit with the same producer and contract retains the first capture.
 A changed contract in that producer cycle, invalid input, or resource reset
 prevents reuse until a subsequent producer. The submit boundary requires the
 exact compositor cycle, generation, method, dimensions, and source resources
-before selecting temporal reconstruction. Missing evidence uses the existing spatial
-presentation path and requests a temporal-history reset.
+before selecting temporal reconstruction. Missing evidence uses the existing
+spatial presentation path and requests a temporal-history reset.
 
 Desktop Present may advance the engine frame counter without starting another
 compositor cycle. That does not by itself discard the camera snapshot. Before
 the first observed compositor boundary, matching remains strictly frame-based.
+A new compositor cycle also requires a new logical producer frame. Repeating
+the same frame in a later cycle invalidates capture and uses spatial
+presentation until a subsequent producer. This prevents another temporal
+history update with the same jitter sample and Streamline frame token.
 
 Submit preparation, vendor output, FSR stereo batches, foveated center work,
-periphery pairing, and mirror pairing share this producer identity. A second
-eye after desktop Present reuses the cycle's work; a new cycle cannot reuse
-an old output just because the engine frame counter stayed unchanged.
+periphery pairing, and mirror pairing include this producer identity.
+Input freshness admission remains authoritative: reusing peer inputs also
+requires the exact outer pair proof, current completed world frame, and
+retained color/depth/motion resources. Advancing Present alone does not prove
+that GPU inputs are still reusable. A new cycle cannot reuse old output just
+because the engine frame counter stayed unchanged.
 Invalidated cache entries remain invalid even when their cycle still matches.
+The FSR stereo batch retains its successful dispatch evidence with the output.
+An admitted reuse preserves the original dispatch frame, serial, and backend
+in both presentation evidence and fidelity observations.
 
 The dispatch scope owns a local copy and restores its previous state on every
 exit. DLSS, FSR, and foveated periphery processing consume the captured camera
 and jitter within that scope. Ordinary main-pass rendering retains its own
-inputs. Existing Streamline frame-token coordination and crop transforms
-remain authoritative.
+inputs. Snapshot storage and dispatch binding belong privately to Upscaling;
+a shared accessor selects dispatch jitter. Existing Streamline frame-token
+coordination and crop transforms remain authoritative.
 
 DLSS still requests the captured logical frame's Streamline token. If a newer
 token has already been published, the existing coordinator rejects the older
 request and presentation falls back safely. The integration never rewinds the
 coordinator or assigns old camera metadata to a newer token.
+Dispatch-failure cleanup preserves the published token while clearing cached
+constants. The cycle is locked to spatial fallback before attempting that
+fallback, so a failed stretch cannot reopen vendor admission for the peer eye.
+Lifecycle resets retain their existing ability to clear token publication.
+Deferred FSR presentation restores the cycle's color contract when resource
+replacement has cleared admission, and rejects a conflicting contract.
 
 History reset is monotonic: a reset requested after capture remains effective
 for same-frame fallback and subsequent dispatches. Capturing a false reset
 value cannot cancel a later lifecycle or vendor-failure reset.
 
 Auxiliary GPU encoding keeps its existing shared shader constants and
-submit-stage location. The
-snapshot freezes camera metadata and retains source identity; it does not
+submit-stage location. The snapshot freezes camera metadata and retains source
+identity; it does not
 claim that a retained texture's texels are immutable. Moving or duplicating
 GPU capture requires separate state-restoration and performance validation.
 
@@ -91,16 +108,24 @@ submit/menu implementation is not imported.
 
 `VRSubmitTemporalSnapshot` exercises immutable capture, both-eye payloads,
 frame/generation/method/dimension mismatch, invalid numeric values,
-same-producer invalidation, frame/cycle ordering, and late history resets.
-`VRSubmitColorContract` covers
-Auto/Gamma equivalence, Linear spatial admission, invalid contracts, and
+same-producer invalidation, repeated logical frames across cycles, frame/cycle
+ordering, and late history resets. `VRSubmitStereoBatch` exercises the actual
+batch cache's compatibility and retained dispatch evidence across Present,
+including frame-zero normalization without changing raw cache identity.
+`FSREyeDispatch` compiles the production dispatch and deferred presentation
+paths, checks Linear rejection and captured host scalars, and preserves
+color admission through deferred recovery.
+`StreamlineFrameTokenPublication` checks that failure cleanup cannot reopen
+an older token, while lifecycle reset still permits a fresh publication.
+`VRSubmitColorContract` covers Auto/Gamma equivalence, Linear spatial
+admission, invalid contracts, and
 separation of source range from vendor processing mode.
 
 Run the controller tests with the normal CMake wrapper:
 
 ```powershell
-pwsh ./tools/cmake.ps1 --build build/ALL --config Release --target vr_submit_temporal_snapshot_test vr_submit_color_contract_test
-ctest --test-dir build/ALL -C Release -R '^VRSubmit(TemporalSnapshot|ColorContract)$' --output-on-failure
+pwsh ./tools/cmake.ps1 --build build/ALL --config Release --target vr_submit_temporal_snapshot_test vr_submit_color_contract_test vr_submit_stereo_batch_test streamline_frame_token_publication_test
+ctest --test-dir build/ALL -C Release -R '^(VRSubmit(TemporalSnapshot|ColorContract|StereoBatch)|StreamlineFrameTokenPublication)$' --output-on-failure
 ```
 
 Runtime acceptance still requires the generated report from

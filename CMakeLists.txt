@@ -1743,6 +1743,11 @@ if(BUILD_CONTROLLER_TESTS)
         tests/vr_submit_color_contract_test.cpp
     )
     add_controller_test(
+        vr_submit_stereo_batch_test
+        VRSubmitStereoBatch
+        tests/vr_submit_stereo_batch_test.cpp
+    )
+    add_controller_test(
         main_thread_dispatch_policy_test
         MainThreadDispatchPolicy
         tests/main_thread_dispatch_policy_test.cpp
@@ -2304,6 +2309,7 @@ if(BUILD_CONTROLLER_TESTS)
             streamline_frame_token_publication_test
             vr_submit_temporal_snapshot_test
             vr_submit_color_contract_test
+            vr_submit_stereo_batch_test
             main_thread_dispatch_policy_test
             vr_render_scale_preparation_policy_test
             vr_presentation_stretch_telemetry_policy_test

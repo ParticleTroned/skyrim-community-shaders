@@ -260,6 +260,61 @@ namespace
 		return !tokens.Resolve(snapshot.key.frame, acquire);
 	}
 
+	bool NewCycleRequiresNewLogicalFrame()
+	{
+		Snapshot snapshot;
+		auto producer = ValidKey();
+		producer.compositorCycle = 10;
+		if (!snapshot.Publish(producer, ValidScalars(), {}))
+			return false;
+
+		auto repeated = producer;
+		++repeated.compositorCycle;
+		if (snapshot.Publish(repeated, ValidScalars(), {}) || snapshot.valid ||
+			snapshot.MatchesForDispatch(producer) || snapshot.MatchesForDispatch(repeated) ||
+			snapshot.Publish(repeated, ValidScalars(), {})) {
+			return false;
+		}
+
+		// A failed cycle cannot recapture after Present advances the logical frame.
+		auto changedFrame = repeated;
+		++changedFrame.frame;
+		if (snapshot.Publish(changedFrame, ValidScalars(), {}) || snapshot.valid)
+			return false;
+		++repeated.compositorCycle;
+		if (snapshot.Publish(repeated, ValidScalars(), {}) || snapshot.valid)
+			return false;
+		++repeated.frame;
+		++repeated.compositorCycle;
+		if (!snapshot.Publish(repeated, ValidScalars(), {}) || !snapshot.MatchesForDispatch(repeated))
+			return false;
+
+		// Before pose tracking starts, the same logical sample remains ineligible.
+		Snapshot beforePoses;
+		producer.compositorCycle = 0;
+		if (!beforePoses.Publish(producer, ValidScalars(), {}))
+			return false;
+		producer.compositorCycle = 1;
+		if (beforePoses.Publish(producer, ValidScalars(), {}) || beforePoses.valid)
+			return false;
+		++producer.frame;
+		++producer.compositorCycle;
+		if (!beforePoses.Publish(producer, ValidScalars(), {}))
+			return false;
+
+		Snapshot wrapped;
+		producer.frame = std::numeric_limits<std::uint32_t>::max() - 1u;
+		producer.compositorCycle = Policy::MaxCompositorCycle;
+		if (!wrapped.Publish(producer, ValidScalars(), {}))
+			return false;
+		producer.compositorCycle = 1;
+		if (wrapped.Publish(producer, ValidScalars(), {}) || wrapped.valid)
+			return false;
+		producer.frame = 0;
+		++producer.compositorCycle;
+		return wrapped.Publish(producer, ValidScalars(), {});
+	}
+
 	bool SubmitCachesFollowTheProducerAcrossPresent()
 	{
 		std::uint32_t cachedFrame = std::numeric_limits<std::uint32_t>::max();
@@ -335,6 +390,7 @@ int main()
 		RecoveryResetCanStrengthenCapturedDecision,
 		CompositorCycleSurvivesDesktopPresent,
 		CycleWrapAndNewerFrameTokenRemainSafe,
+		NewCycleRequiresNewLogicalFrame,
 		SubmitCachesFollowTheProducerAcrossPresent,
 		PendingRecoveryResetSurvivesDesktopPresent
 	};

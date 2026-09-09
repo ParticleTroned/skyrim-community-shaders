@@ -20,6 +20,9 @@ A provider owns a stable, lower-case identity such as
     beyond the contract version;
 -   one or more declarative scopes: shader family or global.
 
+Resource fingerprints and shader-family names must not contain ASCII control
+characters. These values participate in the line-delimited canonical contract.
+
 The ABI reserves shader-source and feature scope values, but version 1 rejects
 them explicitly. Offline pack generation does not yet retain authoritative
 per-record source and feature provenance for every ImageSpace remapping, so
@@ -70,8 +73,14 @@ uses the active registration set; installers do not need a compatibility FOMOD
 for variants that can coexist.
 
 The initial Water/Horizon compatibility remains a legacy adapter until its
-provider adopts this API. It is an example of the contract, not a permanent
-exception mechanism.
+provider adopts this API. It registers only when `HorizonFix.dll` is loaded
+and CSX's Horizon Fix feature is enabled. Both Water variants ship together
+for SE/AE and VR, so installing or removing the companion plugin requires a
+restart but no Horizon-specific FOMOD selection or cache reinstall.
+Horizon Fix returns an empty feature ABI because this provider already owns
+its contract. Its toggle therefore leaves non-Water content identities intact.
+Other loaded feature ABIs remain conservative inputs to every shader family's
+content identity.
 
 ## Managed cache storage
 
@@ -105,9 +114,10 @@ must ship all four files with valid headers.
 
 Every writable pack set has a nonzero 128-bit identity. Runtime header checks
 are unconditional, and mutation ownership combines canonical process-local
-exclusion with a crash-recoverable machine-wide Windows named-pipe lease. Its
-key is the sorted physical file identity of the A/B pair, independent of `TEMP`,
-argument order, lane labels, and hard-link aliases. Physical identity is
+exclusion with crash-recoverable machine-wide Windows named-pipe leases. Each
+physical member has its own lease, independent of `TEMP`, argument order, lane
+labels, and hard-link aliases. Overlapping A/B pairs cannot share a writer.
+Physical identity is
 mandatory on Windows: directories, reparse points in any path component,
 identity-query failures, and same-object A/B pairs are rejected. Admission
 resolves relative names once and retains non-delete-sharing handles for every
@@ -135,8 +145,9 @@ and accept a later generation even when its count changed. All numeric manifest
 fields are non-Boolean unsigned 64-bit integers; schema and format values must
 also equal their supported constants. Each installation-baseline A/B generation
 pair must differ by exactly one. Record sequences use the common domain
-`1..UINT64_MAX-1`; zero and `UINT64_MAX` are reserved and rejected by both the
-runtime scanner and packaging validator.
+`1..UINT64_MAX-1` and increase strictly within each file; zero, `UINT64_MAX`,
+duplicate, and decreasing sequences are rejected by both the runtime scanner
+and packaging validator.
 
 Explicit cache clearing first commits a new empty generation barrier, then
 reinitializes the superseded file, rather than creating or deleting VFS entries.

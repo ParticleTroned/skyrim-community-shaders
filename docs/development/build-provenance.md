@@ -49,7 +49,11 @@ provenance. Per-record content identities carry the global and enabled-feature
 ABIs, so multiple ABI generations can coexist in the same four pack files and
 only the affected lookup recompiles. The offline builder derives the same
 sorted feature-ABI salt from `Info.ini` as the runtime derives from loaded
-features.
+features. These feature salts are conservative across shader families.
+Horizon Fix instead delegates its ABI to the Water-scoped compatibility
+provider, so its enabled/disabled states share unrelated records. Any non-HLSL
+change to that integration must update the provider's contract in both
+`src/XSEPlugin.cpp` and `config/shader-compatibility-variants.json`.
 
 The prebuilt-cache generator calculates `ShaderCacheABI` using the same Python
 module and canonical contract file list as the DLL build. Precompiled caches do

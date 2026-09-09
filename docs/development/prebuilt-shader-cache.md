@@ -21,7 +21,7 @@ pixel, vertex, and compute shader permutations. It is not a GPU-driver cache,
 so it is not tied to a particular GPU vendor. It is tied to all of the
 following:
 
--   the SE or VR runtime;
+-   the SE/AE or VR shader runtime;
 -   the explicit global and feature shader ABI contracts;
 -   enabled feature states that affect compilation;
 -   the shipped shader source and recursive includes;
@@ -40,7 +40,14 @@ The default `shipped` release profile:
 -   omits the VR feature metadata from an SE cache;
 -   compiles optimized release bytecode, without developer/debug defines.
 
-Every shipped SE and VR build compiles standard and Horizon Fix inputs, then
+`SE` names the shared desktop shader cache for both Special Edition and
+Anniversary Edition. AE uses the SE permutation inventory and cache slot; VR
+uses its own inventory and `VR` compile state. Shared HLSL/include changes
+require rebuilding both caches; desktop-only shader changes require rebuilding
+the SE/AE cache. The compatibility and recovery rules below apply to all three
+game runtimes.
+
+Every shipped SE/AE and VR build compiles standard and Horizon Fix inputs, then
 places both compatible Water variants in one managed `ShaderCache`. Runtime
 registration selects the exact Water record; the installer no longer asks the
 user to choose a Horizon cache. The builder requires the loose inputs to have
@@ -372,10 +379,13 @@ any cache-contract field, update the named profile and rebuild it; never edit
 
 Normally, do not override these values. Official releases ship one
 multi-runtime core from the `ALL`/`ALL-VS2022` preset, so the builder derives
-both cache identities from that same preset. A cache's SE/VR permutation
+both cache version labels from that same preset. A cache's SE/VR permutation
 inventory remains runtime-specific, while its `Info.ini` plugin version
 identifies the compatible core. Use an override only when deliberately pairing
-a cache with an independently built runtime-specific core.
+a cache with an independently built runtime-specific core. In particular, an
+SE/AE cache can legitimately carry the shared core's `-VR` version label.
+`PackManifest.json.runtime` identifies its cache slot; the display-version
+suffix does not.
 
 For one runtime:
 
@@ -465,7 +475,7 @@ directory. Its optimized pack contains both the standard and Horizon-compatible
 Water records; runtime compatibility registration selects the exact record.
 
 For manual installation, copy the matching runtime's `ShaderCache` directory
-to `<Skyrim>\\Data\\ShaderCache`. Never merge the SE/AE and VR caches.
+to `<Skyrim>\Data\ShaderCache`. Never merge the SE/AE and VR caches.
 
 The normal release path bundles the AIO and both runtime caches into one FOMOD.
 Its only selection page offers **Skyrim VR**, **Skyrim SE/AE**, or
@@ -491,6 +501,9 @@ An exact or overlapping-range-compatible record is reused. Only a missing or
 incompatible record is compiled locally and appended, while older versions
 remain available until compaction. Enabling or disabling Horizon Fix does not
 require reinstalling the cache because both compatible Water records coexist.
+Restart the game after changing the companion plugin or CSX feature state so
+the frozen compatibility registry reflects it. The Horizon contract applies
+only when both the companion DLL and CSX compatibility feature are active.
 A partial or corrupt installed layout fails closed to source-only compilation
 without producing a legacy loose-cache tree beside the managed files.
 
@@ -499,8 +512,10 @@ the same ref. Do not package a cache from one commit with the AIO from another.
 
 For a smoke test, use a clean mod-manager profile, move any existing
 `ShaderCache` aside so it can be restored, and test the VR, SE/AE, and
-no-cache installer paths. For each runtime, test once with Horizon Fix disabled
-and once enabled; inspect `CommunityShaders.log` for pack validation,
+no-cache installer paths. Cover SE and AE separately even though they share the
+desktop cache. For each runtime, test with the companion DLL absent, present
+with the CSX feature enabled, and present with the CSX feature disabled; inspect
+`CommunityShaders.log` for pack validation,
 compatibility selection, fallback compilation, and unexpected invalidation.
 
 ## CI and release workflow
@@ -646,7 +661,8 @@ Initial runtime admission is non-mutating. Every shipped A/B member must already
 contain a valid header; zero-byte placeholders, directories, reparse points in
 any path component,
 unreadable files, and same-object aliases are rejected without modifying any
-peer. On Windows, the writer lease requires physical identity for each member,
+peer. On Windows, a writer lease excludes other stores for each physical member,
+including overlapping A/B pairs and hard-link aliases. Admission
 resolves relative names once, and retains non-delete-sharing parent and final
 file handles so admitted paths cannot be rebound or replaced while the lease is
 active. The four optimized/developer members must
@@ -660,12 +676,15 @@ initialized pair has completed Store admission and index publication.
 
 Schema-2 installation baselines require adjacent A/B generations. Later runtime
 compaction or reset may produce a larger actual generation gap. Record sequences
-are valid only from 1 through `UINT64_MAX-1`; zero and `UINT64_MAX` are reserved.
+are strictly increasing within each file and valid only from 1 through
+`UINT64_MAX-1`; zero and `UINT64_MAX` are reserved.
 The Python archive/FOMOD validator and C++ runtime enforce the same rules.
 
-If any managed file is missing, the whole pack feature is unavailable and CSX
-retains the previous loose-cache behavior. `Manifest.json` remains part of that
-compatibility path. An explicit clear resets existing pack files in place;
+If any managed member is installed but the layout is incomplete or invalid,
+CSX compiles from source without reading, writing, or deleting legacy cache
+files. Loose caching, including `Manifest.json`, applies only when no managed
+members are installed. An explicit clear resets admitted pack files in place;
+it preserves partial or invalid managed layouts for installation repair.
 normal source, feature, and external-contract changes never rotate or blanket
 delete the managed cache.
 
@@ -690,6 +709,9 @@ uncertain superseded member. Conversely, any compaction failure after inactive-
 member mutation withdraws Store authority and releases ownership before return;
 the lane then falls back to source compilation rather than exposing stale
 fallback locations or statistics.
+
+An exception during append also withdraws Store authority. A clean admission
+rescans durable records before any subsequent lookup can use the lane.
 
 Users can still compile local variants when:
 

@@ -11243,21 +11243,31 @@ namespace
 		return a_format == kVRSubmitPresentationFormat;
 	}
 
-	bool IsSupportedVRSubmitPresentationContract(
+	VRSubmitColorContract::Contract ResolveVRSubmitColorContract(
 		DXGI_FORMAT a_format,
 		vr::EColorSpace a_colorSpace) noexcept
 	{
-		if (!IsSupportedVRSubmitPresentationFormat(a_format))
-			return false;
-
+		using SourceColorSpace = VRSubmitColorContract::SourceColorSpace;
+		auto sourceColorSpace = SourceColorSpace::Unsupported;
 		switch (a_colorSpace) {
 		case vr::ColorSpace_Auto:
+			sourceColorSpace = SourceColorSpace::Automatic;
+			break;
 		case vr::ColorSpace_Gamma:
+			sourceColorSpace = SourceColorSpace::Gamma;
+			break;
 		case vr::ColorSpace_Linear:
-			return true;
+			sourceColorSpace = SourceColorSpace::Linear;
+			break;
 		default:
-			return false;
+			break;
 		}
+		return VRSubmitColorContract::Resolve(IsSupportedVRSubmitPresentationFormat(a_format), sourceColorSpace);
+	}
+
+	bool IsSupportedVRSubmitPresentationContract(DXGI_FORMAT a_format, vr::EColorSpace a_colorSpace) noexcept
+	{
+		return VRSubmitColorContract::IsPresentationSupported(ResolveVRSubmitColorContract(a_format, a_colorSpace));
 	}
 
 	bool SupportsFloatUnorderedAccessClear(DXGI_FORMAT a_format) noexcept
@@ -20460,6 +20470,98 @@ void Upscaling::InvalidateFrameScopedUpscalingState()
 	vrMainPassVendorDispatchCompletedFrame.store(
 		0,
 		std::memory_order_release);
+}
+
+void Upscaling::InvalidateSubmitTemporalSnapshot()
+{
+	std::lock_guard lock(submitTemporalInputsMutex);
+	submitTemporalInputs.snapshot.Invalidate();
+	submitTemporalInputs.depth = nullptr;
+	submitTemporalInputs.motion = nullptr;
+}
+
+void Upscaling::CaptureSubmitTemporalSnapshot()
+{
+	auto* state = globals::state;
+	auto* renderer = globals::game::renderer;
+	if (!globals::game::isVR || !state || !renderer || !IsPresentationUpscalingActive())
+		return;
+	if (state->lastWorldRenderFrame != state->frameCount)
+		return;
+
+	EnsureRuntimeResolutionStateCurrent();
+	const auto& plan = GetRuntimeResolutionPlan();
+	if (!IsVendorUpscalingMethod(plan.upscaleMethod))
+		return;
+	const bool renderScaleMode = plan.owner == ResolutionOwner::VRRenderScaleMode;
+	const auto renderSize = renderScaleMode ? plan.engineRenderSize : Util::ConvertToDynamic(state->screenSize, true);
+	const auto outputSize = renderScaleMode ? plan.finalOutputSize : state->screenSize;
+	const VRSubmitTemporalSnapshot::Key key{
+		.frame = state->frameCount,
+		.generation = GetVRVendorEvaluationContractGeneration(plan.upscaleMethod),
+		.method = static_cast<uint32_t>(plan.upscaleMethod),
+		.inputWidth = ClampPositiveDimension(renderSize.x) / 2u,
+		.inputHeight = ClampPositiveDimension(renderSize.y),
+		.outputWidth = ClampPositiveDimension(outputSize.x) / 2u,
+		.outputHeight = ClampPositiveDimension(outputSize.y),
+		.compositorCycle = submitTemporalCompositorCycle.load(std::memory_order_acquire),
+	};
+	auto* depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].texture;
+	auto* motion = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR].texture;
+	std::lock_guard lock(submitTemporalInputsMutex);
+	if (submitTemporalInputs.snapshot.valid && VRSubmitTemporalSnapshot::IsSameProducer(submitTemporalInputs.snapshot.key, key)) {
+		if (!submitTemporalInputs.snapshot.Matches(key) || submitTemporalInputs.depth.get() != depth || submitTemporalInputs.motion.get() != motion) {
+			submitTemporalInputs.snapshot.Invalidate();
+			submitTemporalInputs.depth = nullptr;
+			submitTemporalInputs.motion = nullptr;
+		}
+		return;
+	}
+	const VRSubmitTemporalSnapshot::Scalars scalars{
+		.jitterX = jitter.x,
+		.jitterY = jitter.y,
+		.cameraNear = *globals::game::cameraNear,
+		.cameraFar = *globals::game::cameraFar,
+		.verticalFov = Util::GetVerticalFOVRad(),
+		.frameTimeMilliseconds = *globals::game::deltaTime * 1000.0f,
+		.historyReset = historyResetThisFrame,
+	};
+	std::array<SubmitEyeCamera, 2> eyes{};
+	const auto& camera = globals::game::frameBufferCached;
+	const auto validMatrix = [](const Matrix& a_matrix) {
+		for (const auto& row : a_matrix.m) {
+			for (float value : row) {
+				if (!std::isfinite(value))
+					return false;
+			}
+		}
+		const float determinant = a_matrix.Determinant();
+		return std::isfinite(determinant) && determinant != 0.0f;
+	};
+	bool validCameras = true;
+	for (uint32_t eye = 0; eye < eyes.size(); ++eye) {
+		eyes[eye] = {
+			.viewInverse = camera.GetCameraViewInverse(eye),
+			.projectionUnjittered = camera.GetCameraProjUnjittered(eye),
+			.viewProjectionUnjittered = camera.GetCameraViewProjUnjittered(eye),
+			.previousViewProjectionUnjittered = camera.GetCameraPreviousViewProjUnjittered(eye),
+			.position = camera.GetCameraPosAdjust(eye),
+			.previousPosition = camera.GetCameraPreviousPosAdjust(eye),
+		};
+		const auto& captured = eyes[eye];
+		validCameras = validCameras && validMatrix(captured.viewInverse) && validMatrix(captured.projectionUnjittered) &&
+		               validMatrix(captured.viewProjectionUnjittered) && validMatrix(captured.previousViewProjectionUnjittered) &&
+		               std::isfinite(captured.position.x) && std::isfinite(captured.position.y) && std::isfinite(captured.position.z) &&
+		               std::isfinite(captured.previousPosition.x) && std::isfinite(captured.previousPosition.y) && std::isfinite(captured.previousPosition.z);
+	}
+	if (!submitTemporalInputs.snapshot.Publish(key, scalars, eyes) || !validCameras || !depth || !motion) {
+		submitTemporalInputs.snapshot.Invalidate();
+		submitTemporalInputs.depth = nullptr;
+		submitTemporalInputs.motion = nullptr;
+		return;
+	}
+	submitTemporalInputs.depth.copy_from(depth);
+	submitTemporalInputs.motion.copy_from(motion);
 }
 
 void Upscaling::RefreshRuntimeResolutionPlan()
@@ -36815,6 +36917,7 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRSubmitStageState(bool a
 		return VRVendorResourceResetResult::Pending;
 	}
 
+	InvalidateSubmitTemporalSnapshot();
 	InvalidateFrameScopedUpscalingState();
 	UnbindUpscalingResources();
 	auto dlssResetResult = VRVendorResourceResetResult::Ready;
@@ -39397,7 +39500,8 @@ void Upscaling::DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSR
 	cbData.sourceOffset = sourceRegion.offset;
 	cbData.dispatchDim = { static_cast<float>(dispatchWidth), static_cast<float>(dispatchHeight) };
 	cbData.outputOffset = { static_cast<float>(outputOffsetX), static_cast<float>(outputOffsetY) };
-	cbData.jitter = jitter;
+	const auto* temporalSnapshot = GetSubmitTemporalSnapshotForDispatch();
+	cbData.jitter = temporalSnapshot ? float2{ temporalSnapshot->scalars.jitterX, temporalSnapshot->scalars.jitterY } : jitter;
 	centerScale = ClampFoveatedCenterScale(centerScale);
 	centerHorizontalScale = ClampFoveatedCenterHorizontalScale(centerHorizontalScale);
 	const bool visualizeMask = settings.foveatedPeripheryMaskVisualization;
@@ -39528,7 +39632,8 @@ void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorS
 	cbData.inputTextureOffset = inputTextureRegion.offset;
 	cbData.dispatchDim = { static_cast<float>(dispatchWidth), static_cast<float>(dispatchHeight) };
 	cbData.outputOffset = { static_cast<float>(outputOffsetX), static_cast<float>(outputOffsetY) };
-	cbData.jitter = jitter;
+	const auto* temporalSnapshot = GetSubmitTemporalSnapshotForDispatch();
+	cbData.jitter = temporalSnapshot ? float2{ temporalSnapshot->scalars.jitterX, temporalSnapshot->scalars.jitterY } : jitter;
 	cbData.centerOffset = { centerOffsetX, centerOffsetY };
 	centerScale = ClampFoveatedCenterScale(centerScale);
 	centerHorizontalScale = ClampFoveatedCenterHorizontalScale(centerHorizontalScale);
@@ -39739,7 +39844,8 @@ bool Upscaling::DispatchFoveatedSpatialComposite(ID3D11ShaderResourceView* perip
 	cbData.invPeripherySourceDim = { 1.0f / static_cast<float>(peripherySourceWidth), 1.0f / static_cast<float>(peripherySourceHeight) };
 	cbData.peripherySourceScale = { peripherySourceScaleX, peripherySourceScaleY };
 	cbData.peripherySourceOffset = { peripherySourceOffsetX, peripherySourceOffsetY };
-	cbData.jitter = jitter;
+	const auto* temporalSnapshot = GetSubmitTemporalSnapshotForDispatch();
+	cbData.jitter = temporalSnapshot ? float2{ temporalSnapshot->scalars.jitterX, temporalSnapshot->scalars.jitterY } : jitter;
 	cbData.centerRectOffset = { static_cast<float>(centerRect.outputOffsetX), static_cast<float>(centerRect.outputOffsetY) };
 	cbData.centerRectDim = { static_cast<float>(centerRect.outputWidth), static_cast<float>(centerRect.outputHeight) };
 	cbData.invCenterSourceDim = { 1.0f / static_cast<float>(centerRect.outputWidth), 1.0f / static_cast<float>(centerRect.outputHeight) };
@@ -39984,6 +40090,8 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 		a_upscaleMethod == UpscaleMethod::kDLSS &&
 		dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter;
 	const uint32_t currentFrame = state ? state->frameCount : std::numeric_limits<uint32_t>::max();
+	const auto* temporalSnapshot = GetSubmitTemporalSnapshotForDispatch();
+	const uint64_t currentCompositorCycle = temporalSnapshot ? temporalSnapshot->key.compositorCycle : 0;
 	const uint32_t activeContractGeneration =
 		submitStageDLSSCenter ?
 			GetVRVendorEvaluationContractGeneration(a_upscaleMethod) :
@@ -39995,6 +40103,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 	if (trackSubmitStageDLSSCenter) {
 		centerKey.ready = true;
 		centerKey.frame = currentFrame;
+		centerKey.compositorCycle = currentCompositorCycle;
 		centerKey.method = static_cast<uint32_t>(a_upscaleMethod);
 		centerKey.generation = activeContractGeneration;
 		centerKey.qualityMode = runtimeQualityMode;
@@ -40028,7 +40137,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 	}
 	auto matchesSubmitStageDLSSCenter = [](const SubmitStageFoveatedCenterState& a_cached, const SubmitStageFoveatedCenterState& a_key) {
 		return a_cached.ready &&
-		       a_cached.frame == a_key.frame &&
+		       VRSubmitTemporalSnapshot::MatchesProducer(a_cached.frame, a_cached.compositorCycle, a_key.frame, a_key.compositorCycle) &&
 		       a_cached.method == a_key.method &&
 		       a_cached.generation == a_key.generation &&
 		       a_cached.qualityMode == a_key.qualityMode &&
@@ -40220,10 +40329,11 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 	float4 currentCameraPosAdjust{};
 	float4 previousCameraPosAdjust{};
 	if (params.usePeripheryTAA) {
-		currentViewProjInverse = globals::game::frameBufferCached.GetCameraViewProjUnjittered(eyeIndex).Invert();
-		previousViewProj = globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered(eyeIndex);
-		currentCameraPosAdjust = globals::game::frameBufferCached.GetCameraPosAdjust(eyeIndex);
-		previousCameraPosAdjust = globals::game::frameBufferCached.GetCameraPreviousPosAdjust(eyeIndex);
+		const auto* temporalSnapshot = GetSubmitTemporalSnapshotForDispatch();
+		currentViewProjInverse = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].viewProjectionUnjittered : globals::game::frameBufferCached.GetCameraViewProjUnjittered(eyeIndex)).Invert();
+		previousViewProj = temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].previousViewProjectionUnjittered : globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered(eyeIndex);
+		currentCameraPosAdjust = temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].position : globals::game::frameBufferCached.GetCameraPosAdjust(eyeIndex);
+		previousCameraPosAdjust = temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].previousPosition : globals::game::frameBufferCached.GetCameraPreviousPosAdjust(eyeIndex);
 	}
 
 	ID3D11UnorderedAccessView* outputColorUAV = params.outputUAV ? params.outputUAV : vrIntermediateColorOut[eyeIndex]->uav.get();
@@ -40701,7 +40811,10 @@ FidelityFX::UpscaleResult Upscaling::DispatchSubmitStageFoveatedVendorEye(Upscal
 	const uint32_t peripheryTAAReadIndex = peripheryTAAHistoryReadIndex;
 	const uint32_t peripheryTAAWriteIndex = 1u - peripheryTAAReadIndex;
 	const uint32_t currentFrame = state->frameCount;
-	const bool previousPeripheryFrameMatches = submitStageFoveatedPeripheryTAAFrame == currentFrame;
+	const auto* temporalSnapshot = GetSubmitTemporalSnapshotForDispatch();
+	const uint64_t currentCompositorCycle = temporalSnapshot ? temporalSnapshot->key.compositorCycle : 0;
+	const bool previousPeripheryFrameMatches = VRSubmitTemporalSnapshot::MatchesProducer(
+		submitStageFoveatedPeripheryTAAFrame, submitStageFoveatedPeripheryTAACycle, currentFrame, currentCompositorCycle);
 	const bool previousPeripheryEyeReady = previousPeripheryFrameMatches && submitStageFoveatedPeripheryTAAEyeReady[eyeIndex];
 	auto peripheryEyeReadyGuard = ScopeExit([&]() {
 		if (!usePeripheryTAA)
@@ -40709,7 +40822,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchSubmitStageFoveatedVendorEye(Upscal
 
 		if (previousPeripheryFrameMatches) {
 			submitStageFoveatedPeripheryTAAEyeReady[eyeIndex] = previousPeripheryEyeReady;
-		} else if (submitStageFoveatedPeripheryTAAFrame == currentFrame) {
+		} else if (VRSubmitTemporalSnapshot::MatchesProducer(submitStageFoveatedPeripheryTAAFrame, submitStageFoveatedPeripheryTAACycle, currentFrame, currentCompositorCycle)) {
 			submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
 			submitStageFoveatedPeripheryTAAEyeReady = {};
 		}
@@ -40800,8 +40913,9 @@ FidelityFX::UpscaleResult Upscaling::DispatchSubmitStageFoveatedVendorEye(Upscal
 	}
 
 	if (usePeripheryTAA) {
-		if (submitStageFoveatedPeripheryTAAFrame != currentFrame) {
+		if (!VRSubmitTemporalSnapshot::MatchesProducer(submitStageFoveatedPeripheryTAAFrame, submitStageFoveatedPeripheryTAACycle, currentFrame, currentCompositorCycle)) {
 			submitStageFoveatedPeripheryTAAFrame = currentFrame;
+			submitStageFoveatedPeripheryTAACycle = currentCompositorCycle;
 			submitStageFoveatedPeripheryTAAEyeReady = {};
 		}
 
@@ -45111,6 +45225,7 @@ void Upscaling::NotifyVRPostLoadCompositorCycleStarted(
 {
 	if (a_compositorCycleToken == 0)
 		return;
+	submitTemporalCompositorCycle.store(a_compositorCycleToken, std::memory_order_release);
 	InvalidateVRRenderScaleStereoPresentationPacket();
 	if (a_poseBoundaryAccepted) {
 		ServiceSubmitStageVendorResumePromotion(a_compositorCycleToken);
@@ -48670,6 +48785,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	auto* sourceTexture = static_cast<ID3D11Texture2D*>(a_inputTexture->handle);
 	D3D11_TEXTURE2D_DESC sourceDesc{};
 	sourceTexture->GetDesc(&sourceDesc);
+	const auto sourceColorContract = ResolveVRSubmitColorContract(sourceDesc.Format, a_inputTexture->eColorSpace);
 	if (!IsSupportedVRSubmitPresentationContract(sourceDesc.Format, a_inputTexture->eColorSpace)) {
 		static std::atomic_bool loggedUnsupportedPresentationContract{ false };
 		if (!loggedUnsupportedPresentationContract.exchange(true, std::memory_order_relaxed)) {
@@ -49211,12 +49327,17 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		useAuthoritativeDLSSProfile ? existingVendorProvider.qualityMode : 0u;
 	uint32_t authoritativeDLSSPreset =
 		useAuthoritativeDLSSProfile ? existingVendorProvider.dlssPreset : kDLSSPresetK;
+	if (!VRSubmitColorContract::IsVendorSupported(sourceColorContract)) {
+		presentationOnly = true;
+		RequestHistoryReset();
+	}
 	if (a_compositorCycleToken != 0) {
 		const uint32_t methodValue = static_cast<uint32_t>(upscaleMethod);
 		if (submitStageVendorAdmissionCycle != a_compositorCycleToken) {
 			submitStageVendorAdmissionCycle = a_compositorCycleToken;
 			submitStageVendorAdmissionGeneration = activeContractGeneration;
 			submitStageVendorAdmissionMethod = methodValue;
+			submitStageVendorAdmissionColorContract = sourceColorContract;
 			submitStageVendorAdmissionPresentationOnly = presentationOnly;
 			submitStageVendorAdmissionExactProviderReady =
 				vendorLifecycleMutationDeferred &&
@@ -49234,13 +49355,15 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			// same fallback, even if a loading edge arrives between submissions.
 			// The token is authoritative: never establish a second admission when
 			// a physical method/generation unexpectedly changes between its eyes.
-			if (!VRVendorRelatchPolicy::IsSameStereoDispatchContract(
+			if (submitStageVendorAdmissionColorContract != sourceColorContract ||
+				!VRVendorRelatchPolicy::IsSameStereoDispatchContract(
 					submitStageVendorAdmissionGeneration,
 					activeContractGeneration,
 					submitStageVendorAdmissionMethod,
 					methodValue)) {
 				// A compositor cycle cannot span physical generations. The first eye
 				// has already committed its identity, so fail the peer eye closed.
+				RequestHistoryReset();
 				submitStageVendorAdmissionExactProviderReady = false;
 				return false;
 			}
@@ -49275,8 +49398,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	const bool trackSubmitAdmissionEye = a_compositorCycleToken != 0;
 	auto recordSubmitAdmissionEye = ScopeExit([&]() {
 		if (trackSubmitAdmissionEye &&
-			submitStageVendorAdmissionCycle == a_compositorCycleToken &&
-			submitStageVendorAdmissionFrame == currentFrame) {
+			submitStageVendorAdmissionCycle == a_compositorCycleToken) {
 			submitStageVendorAdmissionEyeMask |= 1u << eyeIndex;
 		}
 	});
@@ -49390,13 +49512,13 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		g_submitFreshnessVendorInputs = previousSubmitFreshnessVendorInputs;
 	});
 #endif
-	if (submitStageVendorOutputFrame != currentFrame ||
-		submitStageVendorOutputCompositorCycle != a_compositorCycleToken ||
+	if (!VRSubmitTemporalSnapshot::MatchesProducer(submitStageVendorOutputFrame, submitStageVendorOutputCompositorCycle, currentFrame, a_compositorCycleToken) ||
 		submitStageVendorOutputPairProducerToken !=
 			submitInputProof.pairProducerToken ||
 		submitStageVendorOutputSourceWorldFrame !=
 			submitInputProof.sourceWorldFrame ||
 		submitStageVendorOutputSourceTexture != sourceTexture ||
+		submitStageVendorOutputColorContract != sourceColorContract ||
 		submitStageVendorOutputGeneration != activeContractGeneration) {
 		submitStageVendorOutputFrame = currentFrame;
 		submitStageVendorOutputGeneration = activeContractGeneration;
@@ -49406,6 +49528,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		submitStageVendorOutputSourceWorldFrame =
 			submitInputProof.sourceWorldFrame;
 		submitStageVendorOutputSourceTexture = sourceTexture;
+		submitStageVendorOutputColorContract = sourceColorContract;
 		submitStageVendorOutputSourceOwner.copy_from(sourceTexture);
 		for (uint32_t cachedEye = 0; cachedEye < 2; ++cachedEye) {
 			auto& cached = submitStageVendorEyeState[cachedEye];
@@ -49610,7 +49733,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		submitStagePreparedColorSourceOwner.get() == sourceTexture &&
 		submitStagePreparedDepthSourceOwner.get() == depth.texture &&
 		submitStagePreparedMotionVectorSourceOwner.get() == motionVector.texture;
-	const bool submitStagePreparedThisFrame = currentEyePreparedInputsMatch || (submitStagePreparedFrame == currentFrame &&
+	const bool submitStagePreparedThisFrame = currentEyePreparedInputsMatch || (VRSubmitTemporalSnapshot::MatchesProducer(submitStagePreparedFrame, submitStagePreparedCycle, currentFrame, a_compositorCycleToken) &&
 																				   submitStagePreparedGeneration == activeContractGeneration &&
 																				   ((presentationOnly && submitStagePreparedFramePresentationOnly) ||
 																					   (!presentationOnly && !submitStagePreparedFramePresentationOnly &&
@@ -49664,8 +49787,44 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	if (!presentationOnly && (!motionVector.texture || !depth.texture))
 		return false;
 
+	SubmitTemporalInputs temporalInputs;
+	if (!presentationOnly) {
+		const VRSubmitTemporalSnapshot::Key temporalKey{
+			.frame = currentFrame,
+			.generation = activeContractGeneration,
+			.method = static_cast<uint32_t>(upscaleMethod),
+			.inputWidth = eyeWidthIn,
+			.inputHeight = eyeHeightIn,
+			.outputWidth = eyeWidthOut,
+			.outputHeight = eyeHeightOut,
+			.compositorCycle = a_compositorCycleToken,
+		};
+		{
+			std::lock_guard lock(submitTemporalInputsMutex);
+			if (submitTemporalInputs.snapshot.MatchesForDispatch(temporalKey) &&
+				submitTemporalInputs.depth.get() == depth.texture &&
+				submitTemporalInputs.motion.get() == motionVector.texture) {
+				temporalInputs = submitTemporalInputs;
+			}
+		}
+		if (!temporalInputs.snapshot.valid) {
+			// Missing producer evidence cannot be reconstructed from a later menu camera.
+			presentationOnly = true;
+			RequestHistoryReset();
+			if (a_compositorCycleToken != 0 && submitStageVendorAdmissionCycle == a_compositorCycleToken)
+				submitStageVendorAdmissionPresentationOnly = true;
+		}
+	}
+	const auto* previousTemporalInputs = submitTemporalDispatchSnapshot;
+	const auto* previousColorContract = submitColorDispatchContract;
+	submitTemporalDispatchSnapshot = temporalInputs.snapshot.valid ? &temporalInputs.snapshot : nullptr;
+	submitColorDispatchContract = &sourceColorContract;
+	const auto restoreSubmitInputs = ScopeExit([&]() noexcept {
+		submitTemporalDispatchSnapshot = previousTemporalInputs;
+		submitColorDispatchContract = previousColorContract;
+	});
 	const bool shouldUseFoveatedVendorThisEye =
-		foveatedRequested &&
+		!presentationOnly && foveatedRequested &&
 		!submitStageForceFullEyeVendorFallback;
 
 	const uint32_t presentationInputWidth = sourceEyeWidthIn;
@@ -49689,6 +49848,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		}
 
 		submitStagePreparedFrame = currentFrame;
+		submitStagePreparedCycle = a_compositorCycleToken;
 		submitStagePreparedGeneration = activeContractGeneration;
 		submitStagePreparedFramePresentationOnly = true;
 		submitStagePreparedFrameFoveatedRegionEncode = false;
@@ -49708,6 +49868,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		}
 
 		submitStagePreparedFrame = currentFrame;
+		submitStagePreparedCycle = a_compositorCycleToken;
 		submitStagePreparedGeneration = activeContractGeneration;
 		submitStagePreparedFramePresentationOnly = false;
 		submitStagePreparedFrameFoveatedRegionEncode = encodedFoveatedRegions;
@@ -49879,6 +50040,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		submitStageRuntimeFSRStereoState.Matches(
 			submitInputProof,
 			currentFrame,
+			a_compositorCycleToken,
 			activeContractGeneration,
 			eyeWidthIn,
 			eyeHeightIn,
@@ -49907,6 +50069,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 					cachedEyeState.currentEyeIdentity, currentEyeInputIdentity))) &&
 		cachedEyeState.method == static_cast<uint32_t>(upscaleMethod) &&
 		cachedEyeState.generation == activeContractGeneration &&
+		cachedEyeState.colorContract == sourceColorContract &&
 		cachedEyeState.usedFoveatedVendorPath == expectedFoveatedVendorPath &&
 		cachedEyeState.usedDLSSSharpening == submitDLSSSharpening &&
 		cachedEyeState.usedMenuFinalComposite == submitStageMenuFinalCompositeRequested &&
@@ -50387,6 +50550,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 
 		if (fullEyeVendorFallbackAvailable) {
 			submitStagePreparedFrame = currentFrame;
+			submitStagePreparedCycle = a_compositorCycleToken;
 			submitStagePreparedGeneration = activeContractGeneration;
 			submitStagePreparedFramePresentationOnly = false;
 			submitStagePreparedFrameFoveatedRegionEncode = false;
@@ -50478,6 +50642,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 					submitStageRuntimeFSRStereoState.Record(
 						submitInputProof,
 						currentFrame,
+						a_compositorCycleToken,
 						activeContractGeneration,
 						eyeWidthIn,
 						eyeHeightIn,
@@ -50673,6 +50838,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	submitStageVendorEyeState[eyeIndex].menuLayerGeneration = submitStageMenuLayerGeneration;
 	submitStageVendorEyeState[eyeIndex].method = static_cast<uint32_t>(upscaleMethod);
 	submitStageVendorEyeState[eyeIndex].generation = activeContractGeneration;
+	submitStageVendorEyeState[eyeIndex].colorContract = sourceColorContract;
 	submitStageVendorEyeState[eyeIndex].inputWidth = eyeWidthIn;
 	submitStageVendorEyeState[eyeIndex].inputHeight = eyeHeightIn;
 	submitStageVendorEyeState[eyeIndex].outputWidth = eyeWidthOut;
@@ -50728,8 +50894,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 				vrIntermediateColorOut[0]->desc.Format == sourceDesc.Format &&
 				vrIntermediateColorOut[1]->desc.Format == sourceDesc.Format;
 			const auto consumeReadyMirrorPair = [&]() {
-				if (submitStageMirrorFrame != currentFrame || submitStageMirrorSourceTexture != sourceTexture) {
+				if (!VRSubmitTemporalSnapshot::MatchesProducer(submitStageMirrorFrame, submitStageMirrorCycle, currentFrame, a_compositorCycleToken) || submitStageMirrorSourceTexture != sourceTexture) {
 					submitStageMirrorFrame = currentFrame;
+					submitStageMirrorCycle = a_compositorCycleToken;
 					submitStageMirrorSourceTexture = sourceTexture;
 					submitStageMirrorEyeReady = {};
 				}
@@ -56581,6 +56748,8 @@ void Upscaling::PrepareMenuCameraMotionVectors()
 
 bool Upscaling::ShouldResetHistoryThisFrame() const
 {
+	if (const auto* snapshot = GetSubmitTemporalSnapshotForDispatch())
+		return VRSubmitTemporalSnapshot::ResolveHistoryReset(snapshot->scalars.historyReset, historyResetThisFrame, historyResetRequested);
 	return historyResetThisFrame;
 }
 
@@ -58005,6 +58174,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 		upscaling.UpdateHistoryResetState(upscaleMethod);
 		upscaling.LatchHistoryResetForCurrentFrame();
+		upscaling.CaptureSubmitTemporalSnapshot();
 
 		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);

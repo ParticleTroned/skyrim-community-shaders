@@ -24,6 +24,7 @@
 #include "NvidiaBoundedLog.h"
 #include "NvidiaPipelinePolicy.h"
 #include "ReflexPolicy.h"
+#include "VRSubmitColorContract.h"
 
 namespace
 {
@@ -336,6 +337,9 @@ namespace
 
 	bool GetDLSSColorBuffersHDR(ID3D11Resource* a_colorIn)
 	{
+		if (const auto* contract = globals::features::upscaling.GetSubmitColorContractForDispatch())
+			return VRSubmitColorContract::DLSSUsesHDR(*contract);
+
 		D3D11_TEXTURE2D_DESC desc{};
 		if (!TryGetTexture2DDesc(a_colorIn, desc))
 			return true;
@@ -1772,6 +1776,13 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 	auto& upscaling = globals::features::upscaling;
 	if (!state)
 		return false;
+	const auto* temporalSnapshot = upscaling.GetSubmitTemporalSnapshotForDispatch();
+	if (temporalSnapshot &&
+		(!temporalSnapshot->valid || eyeIndex >= temporalSnapshot->eyes.size() ||
+			temporalSnapshot->key.frame != static_cast<uint32_t>(*frameToken))) {
+		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::FrameToken, "temporal-snapshot-mismatch", diagnostics);
+		return false;
+	}
 	bool applyCroppedConstantsCorrection = false;
 	float clampedViewportScaleX = std::clamp(viewportScaleX, 1e-4f, 1.0f);
 	float clampedViewportScaleY = std::clamp(viewportScaleY, 1e-4f, 1.0f);
@@ -1787,26 +1798,29 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 	sl::Constants slConstants = {};
 
 	// Calculate aspect ratio for the SINGLE EYE
-	float2 fullOutputSize = upscaling.GetRuntimeResolutionPlan().finalOutputSize;
+	float2 fullOutputSize = temporalSnapshot ?
+	                            float2{ static_cast<float>(temporalSnapshot->key.outputWidth) * 2.0f, static_cast<float>(temporalSnapshot->key.outputHeight) } :
+	                            upscaling.GetRuntimeResolutionPlan().finalOutputSize;
 	if (fullOutputSize.x <= 0.0f || fullOutputSize.y <= 0.0f)
 		fullOutputSize = state->screenSize;
 	float eyeWidth = fullOutputSize.x * (globals::game::isVR ? 0.5f : 1.0f);
 	float eyeHeight = fullOutputSize.y;
 	slConstants.cameraAspectRatio = (eyeWidth * clampedViewportScaleX) / (eyeHeight * clampedViewportScaleY);
 
-	slConstants.cameraFOV = Util::GetVerticalFOVRad();
-	slConstants.cameraNear = *globals::game::cameraNear;
-	slConstants.cameraFar = *globals::game::cameraFar;
+	slConstants.cameraFOV = temporalSnapshot ? temporalSnapshot->scalars.verticalFov : Util::GetVerticalFOVRad();
+	slConstants.cameraNear = temporalSnapshot ? temporalSnapshot->scalars.cameraNear : *globals::game::cameraNear;
+	slConstants.cameraFar = temporalSnapshot ? temporalSnapshot->scalars.cameraFar : *globals::game::cameraFar;
 
-	auto viewMatrix = globals::game::frameBufferCached.GetCameraViewInverse(eyeIndex).Transpose();
-	auto cameraViewToClip = globals::game::frameBufferCached.GetCameraProjUnjittered(eyeIndex).Transpose();
+	auto viewMatrix = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].viewInverse : globals::game::frameBufferCached.GetCameraViewInverse(eyeIndex)).Transpose();
+	auto cameraViewToClip = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].projectionUnjittered : globals::game::frameBufferCached.GetCameraProjUnjittered(eyeIndex)).Transpose();
 
 	slConstants.cameraMotionIncluded = sl::Boolean::eTrue;
 	slConstants.cameraPinholeOffset = { 0.f, 0.f };
 	slConstants.cameraRight = { viewMatrix._11, viewMatrix._12, viewMatrix._13 };
 	slConstants.cameraUp = { viewMatrix._21, viewMatrix._22, viewMatrix._23 };
 	slConstants.cameraFwd = { viewMatrix._31, viewMatrix._32, viewMatrix._33 };
-	slConstants.cameraPos = *(sl::float3*)&globals::game::frameBufferCached.GetCameraPosAdjust(eyeIndex);
+	const auto& cameraPosition = temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].position : globals::game::frameBufferCached.GetCameraPosAdjust(eyeIndex);
+	slConstants.cameraPos = { cameraPosition.x, cameraPosition.y, cameraPosition.z };
 	slConstants.cameraViewToClip = *(sl::float4x4*)&cameraViewToClip;
 	slConstants.depthInverted = sl::Boolean::eFalse;
 
@@ -1840,8 +1854,8 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 		// recalculateCameraMatrices() uses a single static prev-frame slot -- unusable for two viewports.
 		sl::matrixFullInvert(slConstants.clipToCameraView, slConstants.cameraViewToClip);
 
-		auto currViewProj = globals::game::frameBufferCached.GetCameraViewProjUnjittered(eyeIndex).Transpose();
-		auto prevViewProj = globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered(eyeIndex).Transpose();
+		auto currViewProj = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].viewProjectionUnjittered : globals::game::frameBufferCached.GetCameraViewProjUnjittered(eyeIndex)).Transpose();
+		auto prevViewProj = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].previousViewProjectionUnjittered : globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered(eyeIndex)).Transpose();
 
 		sl::float4x4 currViewProjSL = *(sl::float4x4*)&currViewProj;
 		sl::float4x4 prevViewProjSL = *(sl::float4x4*)&prevViewProj;
@@ -1871,7 +1885,7 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 		recalculateCameraMatrices(slConstants);
 	}
 
-	auto jitter = upscaling.jitter;
+	const auto jitter = temporalSnapshot ? float2{ temporalSnapshot->scalars.jitterX, temporalSnapshot->scalars.jitterY } : upscaling.jitter;
 	slConstants.jitterOffset = { -jitter.x, -jitter.y };
 	const bool requestHistoryReset = upscaling.ShouldResetHistoryThisFrame();
 	slConstants.reset = requestHistoryReset ? sl::Boolean::eTrue : sl::Boolean::eFalse;
@@ -1911,8 +1925,8 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 		signature.viewportScaleYQ = QuantizeDLSSDiagnosticFloat(clampedViewportScaleY);
 		signature.pinholeOffsetXQ = QuantizeDLSSDiagnosticFloat(clampedPinholeOffsetX);
 		signature.pinholeOffsetYQ = QuantizeDLSSDiagnosticFloat(clampedPinholeOffsetY);
-		signature.jitterXQ = QuantizeDLSSDiagnosticFloat(upscaling.jitter.x);
-		signature.jitterYQ = QuantizeDLSSDiagnosticFloat(upscaling.jitter.y);
+		signature.jitterXQ = QuantizeDLSSDiagnosticFloat(jitter.x);
+		signature.jitterYQ = QuantizeDLSSDiagnosticFloat(jitter.y);
 		signature.historyResetRequested = requestHistoryReset;
 		signature.constantsIdentity = ComputeConstantsIdentity(slConstants);
 		return signature;
@@ -2794,6 +2808,12 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 
 	auto& upscaling = globals::features::upscaling;
 	auto state = globals::state;
+	const auto* temporalSnapshot = upscaling.GetSubmitTemporalSnapshotForDispatch();
+	const auto* colorContract = upscaling.GetSubmitColorContractForDispatch();
+	if (colorContract && !VRSubmitColorContract::IsVendorSupported(*colorContract))
+		return false;
+	if (temporalSnapshot && (!temporalSnapshot->valid || !state))
+		return false;
 	const bool vendorLifecycleMutationDeferred =
 		globals::game::isVR &&
 		upscaling.ShouldDeferVRVendorLifecycleMutation();
@@ -2807,7 +2827,9 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	float viewportScaleY = 1.0f;
 	if (state) {
 		const auto& resolutionPlan = upscaling.GetRuntimeResolutionPlan();
-		auto fullOutputSize = resolutionPlan.finalOutputSize;
+		auto fullOutputSize = temporalSnapshot ?
+		                          float2{ static_cast<float>(temporalSnapshot->key.outputWidth) * 2.0f, static_cast<float>(temporalSnapshot->key.outputHeight) } :
+		                          resolutionPlan.finalOutputSize;
 		if (fullOutputSize.x <= 0.0f || fullOutputSize.y <= 0.0f)
 			fullOutputSize = state->screenSize;
 
@@ -2848,7 +2870,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	DLSSDispatchDiagnostics diagnostics{};
 	DLSSDispatchDiagnostics* diagnosticsPtr = &diagnostics;
 	diagnostics.label = label ? label : "DLSS Evaluate";
-	diagnostics.frame = state ? state->frameCount : 0u;
+	diagnostics.frame = temporalSnapshot ? temporalSnapshot->key.frame : (state ? state->frameCount : 0u);
 	diagnostics.eyeIndex = eyeIndex;
 	diagnostics.requestedViewport = requestedViewport;
 	diagnostics.resolvedViewport = vp;
@@ -2872,8 +2894,8 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	diagnostics.reactiveMask = reactiveMask;
 	diagnostics.transparencyMask = transparencyMask;
 	if (collectDLSSDiagnostics) {
-		diagnostics.jitterX = upscaling.jitter.x;
-		diagnostics.jitterY = upscaling.jitter.y;
+		diagnostics.jitterX = temporalSnapshot ? temporalSnapshot->scalars.jitterX : upscaling.jitter.x;
+		diagnostics.jitterY = temporalSnapshot ? temporalSnapshot->scalars.jitterY : upscaling.jitter.y;
 		diagnostics.colorBuffersHDR = colorBuffersHDR;
 		diagnostics.presentationUpscalingActive = upscaling.IsPresentationUpscalingActive();
 		diagnostics.renderScaleActive = upscaling.IsVRRenderScaleModeActive();

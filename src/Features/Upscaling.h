@@ -10,6 +10,8 @@
 #include "Upscaling/VRPresentationStretchTelemetryPolicy.h"
 #include "Upscaling/VRRenderScaleAuthorityPolicy.h"
 #include "Upscaling/VRRenderScalePreparationPolicy.h"
+#include "Upscaling/VRSubmitColorContract.h"
+#include "Upscaling/VRSubmitTemporalSnapshot.h"
 #include "Upscaling/VRSubmitInputFreshnessPolicy.h"
 #include "Upscaling/VRSubmitInputReusePolicy.h"
 #include "Upscaling/VRVendorRelatchPolicy.h"
@@ -3067,7 +3069,35 @@ public:
 	PerfModeState::BootSnapshot pendingVRRenderScaleRecoverySnapshot{};
 	std::atomic<bool> vrDLSSSettingsRelatched{ false };
 	mutable std::atomic_bool submitStageDeviceLost{ false };
+	struct SubmitEyeCamera
+	{
+		Matrix viewInverse{};
+		Matrix projectionUnjittered{};
+		Matrix viewProjectionUnjittered{};
+		Matrix previousViewProjectionUnjittered{};
+		float4 position{};
+		float4 previousPosition{};
+	};
+	using SubmitTemporalSnapshot = VRSubmitTemporalSnapshot::Snapshot<SubmitEyeCamera>;
+	struct SubmitTemporalInputs
+	{
+		SubmitTemporalSnapshot snapshot;
+		winrt::com_ptr<ID3D11Texture2D> depth;
+		winrt::com_ptr<ID3D11Texture2D> motion;
+	};
+	mutable std::mutex submitTemporalInputsMutex;
+	SubmitTemporalInputs submitTemporalInputs;
+	std::atomic_uint64_t submitTemporalCompositorCycle{ 0 };
+	inline static thread_local const SubmitTemporalSnapshot* submitTemporalDispatchSnapshot = nullptr;
+	inline static thread_local const VRSubmitColorContract::Contract* submitColorDispatchContract = nullptr;
+	/** Captures both world cameras before post-processing can replace engine constants. */
+	void CaptureSubmitTemporalSnapshot();
+	void InvalidateSubmitTemporalSnapshot();
+	/** Only submit dispatches consume frozen inputs; ordinary rendering retains its own camera. */
+	const SubmitTemporalSnapshot* GetSubmitTemporalSnapshotForDispatch() const noexcept { return submitTemporalDispatchSnapshot; }
+	const VRSubmitColorContract::Contract* GetSubmitColorContractForDispatch() const noexcept { return submitColorDispatchContract; }
 	uint32_t submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
+	uint64_t submitStagePreparedCycle = 0;
 	uint32_t submitStagePreparedGeneration = 0;
 	bool submitStagePreparedFramePresentationOnly = false;
 	bool submitStagePreparedFrameFoveatedRegionEncode = false;
@@ -3087,6 +3117,7 @@ public:
 	uint64_t submitStageVendorAdmissionCycle = 0;
 	uint32_t submitStageVendorAdmissionGeneration = 0;
 	uint32_t submitStageVendorAdmissionMethod = static_cast<uint32_t>(UpscaleMethod::kNONE);
+	VRSubmitColorContract::Contract submitStageVendorAdmissionColorContract{};
 	bool submitStageVendorAdmissionPresentationOnly = true;
 	bool submitStageVendorAdmissionExactProviderReady = false;
 	bool submitStageVendorAdmissionAuthoritativeDLSSProfile = false;
@@ -3107,6 +3138,7 @@ public:
 		uint64_t menuLayerGeneration = 0;
 		uint32_t method = static_cast<uint32_t>(UpscaleMethod::kNONE);
 		uint32_t generation = 0;
+		VRSubmitColorContract::Contract colorContract{};
 		uint32_t inputWidth = 0;
 		uint32_t inputHeight = 0;
 		uint32_t outputWidth = 0;
@@ -3131,6 +3163,7 @@ public:
 	{
 		bool ready = false;
 		uint32_t frame = std::numeric_limits<uint32_t>::max();
+		uint64_t compositorCycle = 0;
 		uint32_t method = static_cast<uint32_t>(UpscaleMethod::kNONE);
 		uint32_t generation = 0;
 		uint32_t qualityMode = 0;
@@ -3167,6 +3200,7 @@ public:
 		bool ready = false;
 		VRSubmitInputFreshnessPolicy::ProducerProof inputProof{};
 		uint32_t frame = std::numeric_limits<uint32_t>::max();
+		uint64_t compositorCycle = 0;
 		uint32_t generation = 0;
 		uint32_t inputWidth = 0;
 		uint32_t inputHeight = 0;
@@ -3186,6 +3220,7 @@ public:
 		[[nodiscard]] bool Matches(
 			const VRSubmitInputFreshnessPolicy::ProducerProof& a_inputProof,
 			uint32_t a_frame,
+			uint64_t a_compositorCycle,
 			uint32_t a_generation,
 			uint32_t a_inputWidth,
 			uint32_t a_inputHeight,
@@ -3197,7 +3232,8 @@ public:
 			if (!ready ||
 				!VRSubmitInputFreshnessPolicy::MatchesProducerProof(
 					inputProof, a_inputProof) ||
-				frame != a_frame || generation != a_generation ||
+				!VRSubmitTemporalSnapshot::MatchesProducer(frame, compositorCycle, a_frame, a_compositorCycle) ||
+				generation != a_generation ||
 				inputWidth != a_inputWidth || inputHeight != a_inputHeight ||
 				outputWidth != a_outputWidth || outputHeight != a_outputHeight ||
 				sourceTexture != a_sourceTexture ||
@@ -3224,6 +3260,7 @@ public:
 		void Record(
 			const VRSubmitInputFreshnessPolicy::ProducerProof& a_inputProof,
 			uint32_t a_frame,
+			uint64_t a_compositorCycle,
 			uint32_t a_generation,
 			uint32_t a_inputWidth,
 			uint32_t a_inputHeight,
@@ -3235,6 +3272,7 @@ public:
 			ready = true;
 			inputProof = a_inputProof;
 			frame = a_frame;
+			compositorCycle = a_compositorCycle;
 			generation = a_generation;
 			inputWidth = a_inputWidth;
 			inputHeight = a_inputHeight;
@@ -3266,6 +3304,7 @@ public:
 		std::numeric_limits<uint32_t>::max();
 	ID3D11Texture2D* submitStageVendorOutputSourceTexture = nullptr;
 	winrt::com_ptr<ID3D11Texture2D> submitStageVendorOutputSourceOwner;
+	VRSubmitColorContract::Contract submitStageVendorOutputColorContract{};
 	std::array<SubmitStageVendorEyeState, 2> submitStageVendorEyeState = {};
 	std::array<SubmitStageFoveatedCenterState, 2> submitStageFoveatedCenterState = {};
 	SubmitStageRuntimeFSRStereoState submitStageRuntimeFSRStereoState{};
@@ -3307,9 +3346,11 @@ public:
 	std::atomic<uint32_t> vrDLSSRapidTransitionCleanEyeMask{ 0 };
 	std::atomic_bool vrDLSSRapidTransitionGuardLogged{ false };
 	uint32_t submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
+	uint64_t submitStageMirrorCycle = 0;
 	std::array<bool, 2> submitStageMirrorEyeReady = {};
 	ID3D11Texture2D* submitStageMirrorSourceTexture = nullptr;
 	uint32_t submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
+	uint64_t submitStageFoveatedPeripheryTAACycle = 0;
 	std::array<bool, 2> submitStageFoveatedPeripheryTAAEyeReady = {};
 	std::atomic_bool vrRenderScaleResourceTrackingSyncPending{ false };
 	void CopySharedD3D12Resources();

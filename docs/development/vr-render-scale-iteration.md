@@ -1,5 +1,16 @@
 # VR render-scale iteration records
 
+## 2026-09-09: submit input contracts
+
+The `fix/vr-submit-input-contracts` candidate freezes stereo camera metadata
+before post-processing and makes submit color transfer/range explicit.
+The scope, fallback behavior, and validation cases are recorded in
+[VR submit input contracts](vr-submit-input-contracts.md).
+This is an implementation and policy-test record, not a runtime measurement.
+The comparison ledger has no new candidate column because an exact fixture
+and accepted baseline are not configured for this run. Runtime qualification
+must precede any visual-quality, stability, or performance claim.
+
 The VR render-scale controller can capture a bounded CSX-menu stress session and write a versioned JSON record for an MCP/Ghidra optimization loop. The capture observes user-driven changes; it never changes render-scale settings itself.
 
 ## Capture workflow

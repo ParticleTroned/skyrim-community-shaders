@@ -437,6 +437,18 @@ Successful builder completion already proves:
 -   every pack header, SHA-256 record, commit trailer, record count, lane, and
     A/B generation validates using the same binary layout consumed by C++.
 
+Raw archive and FOMOD validation also reconstruct each record's canonical
+identity and check the actual permutation coverage of every declared
+compatibility variant. Empty packs, declaration-only Horizon support, missing
+Water counterparts, and inconsistent record metadata are rejected. Matching
+installation-baseline metadata alone does not prove a usable release cache.
+Coverage uses records visible under the runtime's active/fallback generation
+rules. Every path must retain a shared content contract across variants, and
+at least one Water pair must have different bytecode. Additional contents may
+coexist; each visible optimized record must still match a declared variant's
+canonical identity. Record metadata is compared byte for byte, as on an exact
+runtime hit.
+
 Optional operator checks:
 
 ```powershell
@@ -517,6 +529,37 @@ desktop cache. For each runtime, test with the companion DLL absent, present
 with the CSX feature enabled, and present with the CSX feature disabled; inspect
 `CommunityShaders.log` for pack validation,
 compatibility selection, fallback compilation, and unexpected invalidation.
+
+### Generate a VR-only development FOMOD
+
+The assembler includes SE/AE by default. For a VR development or test package,
+pass `--no-include-se-ae` and omit `--se-cache`:
+
+```powershell
+& $cachePython tools/build-fomod-package.py `
+    --core build/ALL/aio `
+    --vr-cache dist/shader-cache/VR `
+    --no-include-se-ae `
+    --output dist/fomod-vr-test `
+    --version "VR-test"
+```
+
+Use an existing matching AIO Core and managed VR cache, and choose a new output
+directory. The command stages `Core`, `ShaderCache-VR`, and `fomod`; the
+installer offers **Skyrim VR** and **No prebuilt shader cache**. Both Horizon
+Water variants remain required inside the VR cache. It does not build or
+require an SE/AE cache and does not change the universal Core DLL.
+
+To generate that cache alone, use `tools/build-shader-cache.py --runtime VR`.
+For the normal two-runtime FOMOD, omit the exclusion flag (or pass
+`--include-se-ae`) and supply both `--se-cache` and `--vr-cache`.
+`--no-include-se-ae` together with `--se-cache` is an argument error.
+
+In a manual **Release: Build Artifacts** workflow run, clear `include-se-ae`
+to build and package only the VR cache. This skips the SE/AE compilation job,
+archive download, and FOMOD payload. The workflow's existing tag and release
+publication rules still apply. Automatic tag/release runs always include
+both runtimes; manual runs include both by default.
 
 ## CI and release workflow
 
@@ -712,6 +755,13 @@ fallback locations or statistics.
 
 An exception during append also withdraws Store authority. A clean admission
 rescans durable records before any subsequent lookup can use the lane.
+
+Bytecode keeps the source and compile-state digests and optimized/developer
+lane captured for that compilation, including across a deferred disk write.
+The compiler checks its source closure again with fresh file reads before
+admitting the blob for persistence. A detected change or failed verification
+skips disk persistence; a later write never retags an earlier blob with newer
+sources.
 
 Users can still compile local variants when:
 

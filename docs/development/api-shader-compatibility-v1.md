@@ -64,6 +64,13 @@ Digests are lookup accelerators and corruption checks. Pack records retain the
 canonical requirement set so collisions or tooling disagreements can be
 detected rather than silently accepted.
 
+Compiled bytecode retains its source digest, compile-state digest, and lane
+from compilation through deferred persistence and feature-set commit. A fresh
+source-closure read after compilation must agree with the captured input; a
+detected change or failed verification keeps the blob memory-only.
+Persistence never labels an earlier blob with source contents or settings
+read later.
+
 ## Offline/precompiled packs
 
 The full-build cache generator consumes the same fields through its declarative
@@ -81,6 +88,12 @@ Horizon Fix returns an empty feature ABI because this provider already owns
 its contract. Its toggle therefore leaves non-Water content identities intact.
 Other loaded feature ABIs remain conservative inputs to every shader family's
 content identity.
+
+Release archive validation verifies the actual record identities and coverage
+of every declared variant. A manifest claiming Horizon support is insufficient:
+each Water permutation must have its matching standard and Horizon records,
+and unrelated records must remain shared. Runtime admission still permits the
+documented installation-baseline advances after appends, compaction, or reset.
 
 ## Managed cache storage
 

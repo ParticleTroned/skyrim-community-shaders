@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Stage the release AIO with one managed shader cache per runtime.
 
-The caller supplies extracted AIO, SE, and VR archive roots. Each runtime
-archive must contain one ``ShaderCache`` whose managed pack contains all
+The caller supplies extracted AIO, VR, and optionally SE archive roots.
+Each runtime archive must contain one ``ShaderCache`` whose managed pack contains all
 supported compatibility variants. The staged result installs the AIO
 unconditionally and uses one manual FOMOD page to select a runtime.
 
@@ -82,14 +82,13 @@ PACK_FILES = SHADER_CACHE_CONTRACT.PACK_FILE_NAMES
 PACK_LANES = SHADER_CACHE_CONTRACT.PACK_LANES
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--core", required=True, type=Path)
     parser.add_argument(
         "--se-cache",
-        required=True,
         type=Path,
-        help="Extracted SE archive root containing one managed cache.",
+        help="Extracted SE archive root; required when SE/AE is included.",
     )
     parser.add_argument(
         "--vr-cache",
@@ -97,9 +96,28 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Extracted VR archive root containing one managed cache.",
     )
+    parser.add_argument(
+        "--include-se-ae",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Include the SE/AE cache and installer choice (default: included).",
+    )
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--version", required=True)
-    return parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.include_se_ae and args.se_cache is None:
+        parser.error("--se-cache is required unless --no-include-se-ae is set")
+    if not args.include_se_ae and args.se_cache is not None:
+        parser.error("--se-cache cannot be used with --no-include-se-ae")
+    return args
+
+
+def selected_cache_variants(include_se_ae: bool) -> tuple[CacheVariant, ...]:
+    return tuple(
+        variant
+        for variant in CACHE_VARIANTS
+        if include_se_ae or variant.runtime != RUNTIME_SE_AE
+    )
 
 
 def path_entry_exists(path: Path) -> bool:
@@ -140,7 +158,7 @@ def add_selection_page(
     return step, plugins
 
 
-def build_module_config() -> ET.ElementTree:
+def build_module_config(include_se_ae: bool = True) -> ET.ElementTree:
     root = ET.Element(
         "config",
         {
@@ -176,17 +194,18 @@ def build_module_config() -> ET.ElementTree:
         flag=RUNTIME_FLAG,
         value=RUNTIME_VR,
     )
-    add_option(
-        runtime_plugins,
-        name="Skyrim SE/AE",
-        description=(
-            "Install the prebuilt shader cache compiled for Skyrim SE/AE. "
-            "Includes Water shaders with and without Horizon Fix support; "
-            "the game selects the matching variant automatically."
-        ),
-        flag=RUNTIME_FLAG,
-        value=RUNTIME_SE_AE,
-    )
+    if include_se_ae:
+        add_option(
+            runtime_plugins,
+            name="Skyrim SE/AE",
+            description=(
+                "Install the prebuilt shader cache compiled for Skyrim SE/AE. "
+                "Includes Water shaders with and without Horizon Fix support; "
+                "the game selects the matching variant automatically."
+            ),
+            flag=RUNTIME_FLAG,
+            value=RUNTIME_SE_AE,
+        )
     add_option(
         runtime_plugins,
         name="No prebuilt shader cache",
@@ -200,7 +219,7 @@ def build_module_config() -> ET.ElementTree:
 
     conditional_installs = ET.SubElement(root, "conditionalFileInstalls")
     patterns = ET.SubElement(conditional_installs, "patterns")
-    for variant in CACHE_VARIANTS:
+    for variant in selected_cache_variants(include_se_ae):
         pattern = ET.SubElement(patterns, "pattern")
         dependencies = ET.SubElement(pattern, "dependencies", {"operator": "And"})
         ET.SubElement(
@@ -344,11 +363,15 @@ def validate_cache_source(
             + ", ".join(unexpected_entries)
         )
 
+    inventory = SHADER_CACHE_CONTRACT.PackagedCompatibilityInventory(
+        SHADER_CACHE_CONTRACT.REPO, pack_manifest.get("compatibilityVariants")
+    )
     pack_stats = {
         name: SHADER_CACHE_CONTRACT.validate_shader_pack(
             cache_directory / name,
             PACK_LANES[name],
             pack_set_id,
+            inspect_record=inventory.inspector(name) if PACK_LANES[name] == 1 else None,
         )
         for name in PACK_FILES
     }
@@ -364,6 +387,7 @@ def validate_cache_source(
             f"managed pack manifest disagrees with its pack files: "
             f"{pack_manifest_path}: {exc}"
         ) from exc
+    inventory.validate(pack_stats)
 
 
 def flag_pairs(element: ET.Element) -> tuple[tuple[str, str], ...]:
@@ -373,7 +397,7 @@ def flag_pairs(element: ET.Element) -> tuple[tuple[str, str], ...]:
     )
 
 
-def validate_module_config(config_path: Path) -> None:
+def validate_module_config(config_path: Path, include_se_ae: bool = True) -> None:
     try:
         root = ET.parse(config_path).getroot()
     except (OSError, ET.ParseError) as exc:
@@ -435,10 +459,14 @@ def validate_module_config(config_path: Path) -> None:
     expected_pages = (
         (
             "Choose the Skyrim runtime",
-            (
-                ("Skyrim VR", RUNTIME_FLAG, RUNTIME_VR),
-                ("Skyrim SE/AE", RUNTIME_FLAG, RUNTIME_SE_AE),
-                ("No prebuilt shader cache", RUNTIME_FLAG, RUNTIME_NONE),
+            tuple(
+                option
+                for option in (
+                    ("Skyrim VR", RUNTIME_FLAG, RUNTIME_VR),
+                    ("Skyrim SE/AE", RUNTIME_FLAG, RUNTIME_SE_AE),
+                    ("No prebuilt shader cache", RUNTIME_FLAG, RUNTIME_NONE),
+                )
+                if include_se_ae or option[2] != RUNTIME_SE_AE
             ),
         ),
     )
@@ -475,8 +503,11 @@ def validate_module_config(config_path: Path) -> None:
             raise SystemExit("manual FOMOD choices must set flags, not install files")
 
     patterns = root.findall("./conditionalFileInstalls/patterns/pattern")
-    if len(patterns) != len(CACHE_VARIANTS):
-        raise SystemExit("FOMOD must contain exactly two cache install patterns")
+    variants = selected_cache_variants(include_se_ae)
+    if len(patterns) != len(variants):
+        raise SystemExit(
+            f"FOMOD must contain exactly {len(variants)} cache install patterns"
+        )
     actual_mappings: dict[tuple[tuple[str, str], ...], tuple[str, str, str]] = {}
     for pattern in patterns:
         dependencies = pattern.find("./dependencies")
@@ -500,23 +531,32 @@ def validate_module_config(config_path: Path) -> None:
             CACHE_DIRECTORY,
             "0",
         )
-        for variant in CACHE_VARIANTS
+        for variant in variants
     }
     if actual_mappings != expected_mappings:
-        raise SystemExit("FOMOD does not map both managed runtime caches")
+        raise SystemExit("FOMOD does not map the included managed runtime caches")
 
 
-def validate_staged_package(output: Path, version: str) -> None:
+def validate_staged_package(
+    output: Path, version: str, include_se_ae: bool = True
+) -> None:
     core = output / CORE_DIRECTORY
     if not core.is_dir():
         raise SystemExit("staged FOMOD is missing its AIO Core directory")
     shader_cache_abi = core_shader_cache_abi(core)
+    variants = selected_cache_variants(include_se_ae)
     for variant in CACHE_VARIANTS:
+        if variant not in variants:
+            if path_entry_exists(output / variant.staging_directory):
+                raise SystemExit(
+                    f"staged FOMOD contains excluded cache: {variant.staging_directory}"
+                )
+            continue
         cache_directory = output / variant.staging_directory / CACHE_DIRECTORY
         validate_cache_source(cache_directory, variant.runtime, shader_cache_abi)
 
     fomod_directory = output / FOMOD_DIRECTORY
-    validate_module_config(fomod_directory / MODULE_CONFIG_FILE)
+    validate_module_config(fomod_directory / MODULE_CONFIG_FILE, include_se_ae)
     try:
         info_root = ET.parse(fomod_directory / INFO_FILE).getroot()
     except (OSError, ET.ParseError) as exc:
@@ -533,11 +573,17 @@ def validate_staged_package(output: Path, version: str) -> None:
 
 def stage_package(
     core: Path,
-    se_cache: Path,
+    se_cache: Path | None,
     vr_cache: Path,
     output: Path,
     version: str,
+    *,
+    include_se_ae: bool = True,
 ) -> None:
+    if include_se_ae and se_cache is None:
+        raise SystemExit("--se-cache is required unless --no-include-se-ae is set")
+    if not include_se_ae and se_cache is not None:
+        raise SystemExit("--se-cache cannot be used with --no-include-se-ae")
     if not core.is_dir():
         raise SystemExit(f"missing extracted AIO tree: {core}")
     if not version.strip() or "\n" in version or "\r" in version:
@@ -545,6 +591,8 @@ def stage_package(
     if path_entry_exists(output):
         raise SystemExit(f"refusing to replace existing staging path: {output}")
     for input_root in (core, se_cache, vr_cache):
+        if input_root is None:
+            continue
         if output == input_root or output.is_relative_to(input_root):
             raise SystemExit(
                 f"FOMOD staging path must not be inside an input tree: {input_root}"
@@ -553,8 +601,10 @@ def stage_package(
     runtime_roots = {RUNTIME_SE_AE: se_cache, RUNTIME_VR: vr_cache}
     shader_cache_abi = core_shader_cache_abi(core)
     sources: dict[CacheVariant, Path] = {}
-    for variant in CACHE_VARIANTS:
-        source = runtime_roots[variant.runtime] / CACHE_DIRECTORY
+    for variant in selected_cache_variants(include_se_ae):
+        runtime_root = runtime_roots[variant.runtime]
+        assert runtime_root is not None
+        source = runtime_root / CACHE_DIRECTORY
         validate_cache_source(source, variant.runtime, shader_cache_abi)
         sources[variant] = source
 
@@ -569,7 +619,7 @@ def stage_package(
 
         fomod_directory = output / FOMOD_DIRECTORY
         fomod_directory.mkdir()
-        build_module_config().write(
+        build_module_config(include_se_ae).write(
             fomod_directory / MODULE_CONFIG_FILE,
             encoding="utf-8",
             xml_declaration=True,
@@ -579,7 +629,7 @@ def stage_package(
             encoding="utf-8",
             xml_declaration=True,
         )
-        validate_staged_package(output, version)
+        validate_staged_package(output, version, include_se_ae)
     except (OSError, SystemExit):
         shutil.rmtree(output, ignore_errors=True)
         raise
@@ -589,10 +639,11 @@ def main() -> int:
     args = parse_args()
     stage_package(
         args.core.resolve(),
-        args.se_cache.resolve(),
+        args.se_cache.resolve() if args.se_cache is not None else None,
         args.vr_cache.resolve(),
         args.output.resolve(),
         args.version,
+        include_se_ae=args.include_se_ae,
     )
     print(f"staged managed-cache FOMOD at {args.output.resolve()}")
     return 0

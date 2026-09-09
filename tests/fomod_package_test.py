@@ -4,11 +4,15 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -25,6 +29,20 @@ SPEC.loader.exec_module(BUILDER)
 
 class FomodPackageTests(unittest.TestCase):
     SHADER_CACHE_ABI = "a" * 64
+
+    @staticmethod
+    def _cache_entries() -> list[dict]:
+        contract = BUILDER.SHADER_CACHE_CONTRACT
+        variants = contract.compatibility_variant_manifest(REPO)
+        return [
+            {
+                **contract.shader_pack_record_identity(
+                    "Water/1.pso", "1" * 32, variants[name]["registrations"]
+                ),
+                "bytecode": b"DXBC" + name.encode("utf-8"),
+            }
+            for name in ("default", "legacy-horizon-fix")
+        ]
 
     @staticmethod
     def _write_cache(
@@ -52,14 +70,14 @@ class FomodPackageTests(unittest.TestCase):
                     "packSetId": pack_set_id,
                     "runtime": contract_runtime,
                     "shaderCacheABI": shader_cache_abi,
-                    "optimizedRecordCount": 0,
+                    "optimizedRecordCount": 2,
                     "developerRecordCount": 0,
                     "compatibilityVariants": ["default", "legacy-horizon-fix"],
                     "files": {
                         "Optimized.A.csxpack": {
                             "lane": 1,
                             "generation": 1,
-                            "recordCount": 0,
+                            "recordCount": 2,
                         },
                         "Optimized.B.csxpack": {
                             "lane": 1,
@@ -86,7 +104,7 @@ class FomodPackageTests(unittest.TestCase):
                 cache_directory / pack_name,
                 BUILDER.PACK_LANES[pack_name],
                 1 if ".A." in pack_name else 0,
-                [],
+                FomodPackageTests._cache_entries() if pack_name == "Optimized.A.csxpack" else [],
                 pack_set_id,
             )
 
@@ -128,6 +146,162 @@ class FomodPackageTests(unittest.TestCase):
     @staticmethod
     def _write_json(path: Path, value: dict) -> None:
         path.write_text(json.dumps(value), encoding="utf-8")
+
+    def test_cli_runtime_selection_requires_matching_cache_arguments(self) -> None:
+        common = [
+            "--core", "core", "--vr-cache", "vr", "--output", "staged",
+            "--version", "v3.18.0",
+        ]
+        for flags in ([], ["--include-se-ae"]):
+            with self.subTest(flags=flags):
+                args = BUILDER.parse_args([*common, "--se-cache", "se", *flags])
+                self.assertTrue(args.include_se_ae)
+                self.assertEqual(args.se_cache, Path("se"))
+        args = BUILDER.parse_args([*common, "--no-include-se-ae"])
+        self.assertFalse(args.include_se_ae)
+        self.assertIsNone(args.se_cache)
+
+        for flags, diagnostic in (
+            ([], "--se-cache is required"),
+            (["--include-se-ae"], "--se-cache is required"),
+            (
+                ["--no-include-se-ae", "--se-cache", "se"],
+                "--se-cache cannot be used with --no-include-se-ae",
+            ),
+        ):
+            with self.subTest(flags=flags), mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                with self.assertRaises(SystemExit) as caught:
+                    BUILDER.parse_args([*common, *flags])
+                self.assertEqual(caught.exception.code, 2)
+                self.assertIn(diagnostic, stderr.getvalue())
+
+    def test_cli_stages_extracted_archives_for_full_and_vr_only_packages(self) -> None:
+        for flags, include_se_ae in (
+            ([], True),
+            (["--include-se-ae"], True),
+            (["--no-include-se-ae"], False),
+        ):
+            with self.subTest(flags=flags), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                core, se_cache, vr_cache = self._inputs(root)
+                sources = {"--core": core, "--vr-cache": vr_cache}
+                if include_se_ae:
+                    sources["--se-cache"] = se_cache
+                command = [sys.executable, str(BUILDER_PATH), *flags]
+                expected_files = {}
+                for argument, source in sources.items():
+                    archive = shutil.make_archive(str(root / f"{source.name}-archive"), "zip", source)
+                    extracted = root / "extracted" / source.name
+                    with zipfile.ZipFile(archive) as packed:
+                        packed.extractall(extracted)
+                    command.extend([argument, str(extracted)])
+                    prefix = {
+                        "--core": BUILDER.CORE_DIRECTORY,
+                        "--vr-cache": "ShaderCache-VR",
+                        "--se-cache": "ShaderCache-SE-AE",
+                    }[argument]
+                    expected_files.update({
+                        f"{prefix}/{path.relative_to(source).as_posix()}": path.read_bytes()
+                        for path in source.rglob("*") if path.is_file()
+                    })
+                output = root / "staged"
+                command.extend(["--output", str(output), "--version", "v3.18.0"])
+                result = subprocess.run(command, capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                BUILDER.validate_staged_package(output, "v3.18.0", include_se_ae)
+                archive = shutil.make_archive(str(root / "fomod"), "zip", output)
+                with zipfile.ZipFile(archive) as packed:
+                    actual_files = {
+                        item.filename: packed.read(item)
+                        for item in packed.infolist() if not item.is_dir()
+                    }
+                self.assertEqual(set(actual_files), {
+                    *expected_files,
+                    f"{BUILDER.FOMOD_DIRECTORY}/{BUILDER.MODULE_CONFIG_FILE}",
+                    f"{BUILDER.FOMOD_DIRECTORY}/{BUILDER.INFO_FILE}",
+                })
+                for name, content in expected_files.items():
+                    self.assertEqual(actual_files[name], content, name)
+
+                config = ET.fromstring(actual_files[
+                    f"{BUILDER.FOMOD_DIRECTORY}/{BUILDER.MODULE_CONFIG_FILE}"
+                ])
+                choices = config.findall("./installSteps/installStep/optionalFileGroups/group/plugins/plugin")
+                expected_selections = {
+                    BUILDER.RUNTIME_VR: {"Core", "ShaderCache-VR/ShaderCache"},
+                    BUILDER.RUNTIME_NONE: {"Core"},
+                }
+                if include_se_ae:
+                    expected_selections[BUILDER.RUNTIME_SE_AE] = {"Core", "ShaderCache-SE-AE/ShaderCache"}
+                self.assertEqual(
+                    {choice.findtext("./conditionFlags/flag") for choice in choices},
+                    set(expected_selections),
+                )
+                patterns = config.findall("./conditionalFileInstalls/patterns/pattern")
+                for choice in choices:
+                    selection = choice.findtext("./conditionFlags/flag")
+                    folders = list(config.findall("./requiredInstallFiles/folder"))
+                    for pattern in patterns:
+                        if BUILDER.flag_pairs(pattern.find("dependencies")) == ((BUILDER.RUNTIME_FLAG, selection),):
+                            folders.extend(pattern.findall("./files/folder"))
+                    self.assertEqual(
+                        {folder.get("source").replace("\\", "/") for folder in folders},
+                        expected_selections[selection],
+                    )
+                if not include_se_ae:
+                    serialized = ET.tostring(config, encoding="unicode")
+                    self.assertNotIn("SE/AE", serialized)
+                    self.assertNotIn(BUILDER.RUNTIME_SE_AE, serialized)
+
+    def test_vr_only_validation_rejects_se_ae_choices_patterns_and_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            core, _, vr_cache = self._inputs(root)
+            output = root / "staged"
+            BUILDER.stage_package(core, None, vr_cache, output, "v3.18.0", include_se_ae=False)
+            config_path = output / BUILDER.FOMOD_DIRECTORY / BUILDER.MODULE_CONFIG_FILE
+            for selector in (
+                "./installSteps/installStep/optionalFileGroups/group/plugins",
+                "./conditionalFileInstalls/patterns",
+            ):
+                with self.subTest(selector=selector):
+                    config = BUILDER.build_module_config(include_se_ae=False)
+                    full_config = BUILDER.build_module_config()
+                    config.getroot().find(selector).append(full_config.getroot().find(selector)[1])
+                    config.write(config_path, encoding="utf-8", xml_declaration=True)
+                    with self.assertRaises(SystemExit):
+                        BUILDER.validate_staged_package(output, "v3.18.0", include_se_ae=False)
+            BUILDER.build_module_config(include_se_ae=False).write(config_path)
+            (output / "ShaderCache-SE-AE").mkdir()
+            with self.assertRaisesRegex(SystemExit, "excluded cache"):
+                BUILDER.validate_staged_package(output, "v3.18.0", include_se_ae=False)
+
+    def test_stage_rejects_conflicting_se_ae_inclusion_before_creating_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            core, se_cache, vr_cache = self._inputs(root)
+            for se_input, include_se_ae, diagnostic in (
+                (None, True, "--se-cache is required"),
+                (se_cache, False, "--se-cache cannot be used"),
+            ):
+                with self.subTest(include_se_ae=include_se_ae):
+                    output = root / "staged"
+                    with self.assertRaisesRegex(SystemExit, diagnostic):
+                        BUILDER.stage_package(core, se_input, vr_cache, output, "v3.18.0", include_se_ae=include_se_ae)
+                    self.assertFalse(output.exists())
+
+    def test_vr_only_package_still_requires_valid_vr_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            core, _, vr_cache = self._inputs(root)
+            path = vr_cache / BUILDER.CACHE_DIRECTORY / BUILDER.PACK_MANIFEST_FILE
+            manifest = self._read_json(path)
+            manifest["runtime"] = "SE"
+            self._write_json(path, manifest)
+            output = root / "staged"
+            with self.assertRaisesRegex(SystemExit, "expected 'VR'"):
+                BUILDER.stage_package(core, None, vr_cache, output, "v3.18.0", include_se_ae=False)
+            self.assertFalse(output.exists())
 
     def test_stages_one_page_two_managed_cache_fomod(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -234,8 +408,74 @@ class FomodPackageTests(unittest.TestCase):
                 manifest = self._read_json(path)
                 manifest["compatibilityVariants"] = ["default"]
                 self._write_json(path, manifest)
-                with self.assertRaisesRegex(SystemExit, "missing required compatibility variants"):
+                with self.assertRaisesRegex(SystemExit, "compatibility"):
                     BUILDER.stage_package(core, se_cache, vr_cache, root / "staged", "v3.18.0")
+
+    def test_rejects_declared_variants_without_complete_canonical_records(self) -> None:
+        contract = BUILDER.SHADER_CACHE_CONTRACT
+        standard, horizon = self._cache_entries()
+        variants = contract.compatibility_variant_manifest(REPO)
+
+        def record(relative: str, content: str, variant: str) -> dict:
+            return {
+                **contract.shader_pack_record_identity(relative, content, variants[variant]["registrations"]),
+                "bytecode": b"DXBC-test",
+            }
+
+        invalid_entries = {
+            "empty": [],
+            "missing-horizon": [standard],
+            "missing-default": [horizon],
+            "unrelated-pair": [record("Lighting/2.pso", "2" * 32, name) for name in variants],
+            "incomplete-pair": [standard, horizon, record("Water/2.pso", "1" * 32, "default")],
+            "different-content": [standard, record("Water/1.pso", "2" * 32, "legacy-horizon-fix")],
+            "forged-key": [standard, {**horizon, "exactKey": horizon["exactKey"] + "-invalid"}],
+            "forged-metadata": [standard, {**horizon, "metadata": standard["metadata"]}],
+            "noncanonical-metadata": [standard, {**horizon, "metadata": json.dumps(json.loads(horizon["metadata"]), indent=2)}],
+            "invalid-bytecode": [standard, {**horizon, "bytecode": b"not-bytecode"}],
+            "relabeled-bytecode": [standard, {**horizon, "bytecode": standard["bytecode"]}],
+        }
+        for runtime in (BUILDER.RUNTIME_SE_AE, BUILDER.RUNTIME_VR):
+            for name, entries in invalid_entries.items():
+                with self.subTest(runtime=runtime, mutation=name), tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    core, se_cache, vr_cache = self._inputs(root)
+                    cache = (se_cache if runtime == BUILDER.RUNTIME_SE_AE else vr_cache) / BUILDER.CACHE_DIRECTORY
+                    manifest_path = cache / BUILDER.PACK_MANIFEST_FILE
+                    manifest = self._read_json(manifest_path)
+                    manifest["optimizedRecordCount"] = len(entries)
+                    manifest["files"]["Optimized.A.csxpack"]["recordCount"] = len(entries)
+                    self._write_json(manifest_path, manifest)
+                    contract.write_shader_pack(
+                        cache / "Optimized.A.csxpack", 1, 1, entries, manifest["packSetId"]
+                    )
+                    with self.assertRaises(SystemExit):
+                        BUILDER.stage_package(core, se_cache, vr_cache, root / "staged", "v3.18.0")
+                    self.assertFalse((root / "staged").exists())
+
+    def test_updated_pack_coverage_follows_runtime_generation_visibility(self) -> None:
+        contract = BUILDER.SHADER_CACHE_CONTRACT
+        standard, horizon = self._cache_entries()
+        for active_generation, fallback_generation, accepted in ((2, 1, True), (4, 1, False), (1, 0, False)):
+            with self.subTest(active=active_generation, fallback=fallback_generation), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                core, se_cache, vr_cache = self._inputs(root)
+                cache = vr_cache / BUILDER.CACHE_DIRECTORY
+                manifest_path = cache / BUILDER.PACK_MANIFEST_FILE
+                manifest = self._read_json(manifest_path)
+                manifest["optimizedRecordCount"] = 1
+                manifest["files"]["Optimized.A.csxpack"]["recordCount"] = 1
+                self._write_json(manifest_path, manifest)
+                for name, generation, entries in (
+                    ("Optimized.A.csxpack", active_generation, [standard]),
+                    ("Optimized.B.csxpack", fallback_generation, [horizon]),
+                ):
+                    contract.write_shader_pack(cache / name, 1, generation, entries, manifest["packSetId"])
+                if accepted:
+                    BUILDER.stage_package(core, se_cache, vr_cache, root / "staged", "v3.18.0")
+                else:
+                    with self.assertRaisesRegex(SystemExit, "coverage"):
+                        BUILDER.stage_package(core, se_cache, vr_cache, root / "staged", "v3.18.0")
 
     def test_rejects_nested_files_outside_the_managed_cache_layout(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

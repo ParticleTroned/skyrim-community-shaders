@@ -68,6 +68,53 @@ def apply_contract_case(base_manifest: dict, base_stats: dict, case: dict) -> tu
 
 def main() -> int:
     builder = load_builder()
+    variants = builder.compatibility_variant_manifest(REPO)
+
+    def packaged_record(relative: str, content: str, variant: str, bytecode: bytes) -> dict:
+        return {
+            **builder.shader_pack_record_identity(relative, content, variants[variant]["registrations"]),
+            "bytecode": bytecode,
+        }
+
+    standard_water = packaged_record("Water/1.pso", "1" * 32, "default", b"DXBC-standard")
+    horizon_water = packaged_record("Water/1.pso", "1" * 32, "legacy-horizon-fix", b"DXBC-horizon")
+    pair = [standard_water, horizon_water]
+    inventory_cases = (
+        ("preserved-pair-after-append", 1, [
+            *pair,
+            packaged_record("Water/1.pso", "2" * 32, "default", b"DXBC-updated"),
+        ], 0, [], True),
+        ("unaffected-permutation", 1, [
+            *pair,
+            packaged_record("Water/2.pso", "1" * 32, "default", b"DXBC-identical"),
+            packaged_record("Water/2.pso", "1" * 32, "legacy-horizon-fix", b"DXBC-identical"),
+        ], 0, [], True),
+        ("last-exact-record-wins", 1, [
+            *pair, {**horizon_water, "bytecode": standard_water["bytecode"]},
+        ], 0, [], False),
+        ("active-exact-record-wins", 2, pair, 1, [
+            {**horizon_water, "metadata": "invalid"},
+        ], True),
+        ("obsolete-generation-ignored", 5, pair, 1, [
+            {**horizon_water, "exactKey": "obsolete", "metadata": "invalid"},
+        ], True),
+    )
+    for name, active_generation, active_records, fallback_generation, fallback_records, expected in inventory_cases:
+        inventory = builder.PackagedCompatibilityInventory(REPO, ["default", "legacy-horizon-fix"])
+        for file_name, entries in (("Optimized.A.csxpack", active_records), ("Optimized.B.csxpack", fallback_records)):
+            inspect = inventory.inspector(file_name)
+            for entry in entries:
+                inspect(entry["logicalKey"], entry["exactKey"], entry["metadata"], entry["bytecode"])
+        try:
+            inventory.validate({
+                "Optimized.A.csxpack": {"generation": active_generation},
+                "Optimized.B.csxpack": {"generation": fallback_generation},
+            })
+            accepted = True
+        except SystemExit:
+            accepted = False
+        assert accepted is expected, name
+
     scoped_registration = {
         "identity": "org.example.scope",
         "owner": "test",
@@ -123,6 +170,15 @@ def main() -> int:
     ):
         length, value = canonicalize([unicode_registration]).split(":", 1)
         assert int(length) == len(value[:-1].encode("utf-8"))
+    for separator in ("\x85", "\u2028", "\u2029"):
+        registration = {
+            **family_registration,
+            "resourceFingerprint": f"resource{separator}segment",
+            "scopes": [{"kind": "shader-family", "value": f"Water{separator}family"}],
+        }
+        domain = builder.canonical_compatibility_domain_registration(registration)
+        assert f"resource=resource{separator}segment" in domain
+        assert f"scope=family:water{separator}family" in domain
     upper_unicode_family = {
         **family_registration,
         "scopes": [{"kind": "shader-family", "value": "WÄTER"}],

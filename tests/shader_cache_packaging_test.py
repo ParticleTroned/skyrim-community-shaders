@@ -36,10 +36,10 @@ class ShaderCachePackagingTests(unittest.TestCase):
         for index, variant in enumerate(variants):
             water = variant / "Water" / "1.pso"
             water.parent.mkdir(parents=True)
-            water.write_bytes(f"{runtime}-water-{index}".encode("utf-8"))
+            water.write_bytes(f"DXBC{runtime}-water-{index}".encode("utf-8"))
             lighting = variant / "Lighting" / "2.pso"
             lighting.parent.mkdir()
-            lighting.write_bytes(f"{runtime}-lighting".encode("utf-8"))
+            lighting.write_bytes(f"DXBC{runtime}-lighting".encode("utf-8"))
             (variant / BUILDER.MANIFEST_FILE_NAME).write_text(
                 json.dumps({
                     "schemaVersion": 1,
@@ -115,6 +115,21 @@ class ShaderCachePackagingTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "missing required compatibility variants"):
                 BUILDER.prepare_cache_archive(
                     root, workspace, "VR", "test", "CSX 3.18-VR", shutil.which("cmake")
+                )
+
+    @unittest.skipUnless(shutil.which("cmake"), "CMake is required to inspect cache archives")
+    def test_archive_rejects_horizon_declaration_without_records(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "runtime"
+            cache = self._managed_cache(root, "VR", horizon=False)
+            path = cache / BUILDER.PACK_MANIFEST_FILE_NAME
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+            manifest["compatibilityVariants"].append("legacy-horizon-fix")
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(SystemExit, "coverage"):
+                BUILDER.validate_cache_archive(
+                    self._archive_cache(root), shutil.which("cmake"), "VR", "CSX 3.18-VR",
+                    horizon_variants=True,
                 )
 
     @unittest.skipUnless(shutil.which("cmake"), "CMake is required to inspect cache archives")

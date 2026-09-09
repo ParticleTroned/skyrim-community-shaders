@@ -296,7 +296,8 @@ The response includes at least:
   },
   "limits": {
     "activeSourceCaptures": 1,
-    "outstandingArtifacts": 2,
+    "outstandingCaptureJobs": 2,
+    "maximumOutputsPerCaptureJob": 4,
     "pendingOperations": 64,
     "maximumOutputsPerFrame": 4,
     "maximumSequenceFrames": 10000,
@@ -309,7 +310,7 @@ The response includes at least:
 ```
 
 These numbers are examples, not frozen limits. The implementation reports its
-actual values. The present worker's two-outstanding-artifact limit may remain
+actual values. The present worker's two-outstanding-capture-job limit may remain
 initially; a sequence scheduler must adapt rather than enlarge it blindly.
 
 ### Operational status
@@ -334,12 +335,14 @@ worker backlog, and journal retention without initiating work:
   "dispatcher": {
     "activeAcquisitionRequestId": null,
     "pendingOperations": 0,
+    "queuedManualCaptures": 0,
+    "queuedSequenceFrames": 0,
     "activeSequences": 0
   },
   "worker": {
     "running": true,
-    "outstandingArtifacts": 0,
-    "capacity": 2,
+    "outstandingCaptureJobs": 0,
+    "captureJobCapacity": 2,
     "completedArtifacts": 18,
     "failedArtifacts": 0
   },
@@ -596,6 +599,12 @@ Manual/UI still requests and sequences share a fair dispatcher. A sequence may
 have only one child in source acquisition at a time. The coordinator must
 prevent a high-frequency sequence from starving manual requests.
 
+Manual captures retain FIFO order and their arbitration turn while retrying
+source contention or encoder backpressure, up to a ten-second dispatch
+deadline. A completed attempt hands the next turn to the other class.
+Sequence capacity misses are immediately recorded as dropped children so
+the requested `skip` or `abort` policy applies at the missed slot.
+
 ### Failure and stop behavior
 
 `failurePolicy` is `continue` or `abort`.
@@ -630,6 +639,11 @@ CS_sequence_2026-08-20_041530_2f8c91a0/
 every pixel write. On normal finalization it becomes `sequence.json`. Recovery
 can identify an interrupted sequence from the partial manifest and preserved
 frames.
+
+Manifest snapshots are immutable. Both document assembly and retirement of
+retained child snapshots run on the manifest worker. Retirement releases the
+chain iteratively, including when requests are acknowledged or expire, so
+long sequences cannot cause recursive destruction on the render path.
 
 The final manifest includes:
 

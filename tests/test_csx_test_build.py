@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools.csx_test_build import (
     SEED_BASE_VERSION,
@@ -23,12 +24,14 @@ from tools.csx_test_build import (
     validate_state,
     verify_allocation_commit,
     verify_seed_commit,
+    verify_test_distribution,
     write_state,
 )
 
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE_PATH = Path("version/test-build.json")
+TAG_NAME = "csx-test-build-RC218-2026-09-07"
 SEED = {
     "schemaVersion": 2,
     "sequence": SEED_SEQUENCE,
@@ -99,6 +102,14 @@ class TestBuildStateTests(unittest.TestCase):
 
         self.assertFalse(changed)
         self.assertEqual(repeated, initial)
+
+    def test_failed_atomic_replace_removes_temporary_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            state_path = Path(temporary) / "test-build.json"
+            with mock.patch.object(Path, "replace", side_effect=OSError("blocked")):
+                with self.assertRaisesRegex(OSError, "blocked"):
+                    write_state(state_path, SEED)
+            self.assertEqual(list(Path(temporary).iterdir()), [])
 
     def test_counter_remains_global_when_base_version_changes(self) -> None:
         initial, _ = allocate(
@@ -368,7 +379,12 @@ class DispatchTests(unittest.TestCase):
         dispatches = 0
         inventories = 0
         runs = [
-            {"status": "completed", "conclusion": "failure", "headSha": "a" * 40}
+            {
+                "status": "completed",
+                "conclusion": "failure",
+                "headSha": "a" * 40,
+                "headBranch": TAG_NAME,
+            }
         ] * 2
 
         def runner(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
@@ -386,7 +402,7 @@ class DispatchTests(unittest.TestCase):
                 repository_slug="owner/repository",
                 workflow="test-build-distribution.yaml",
                 allocation_sha="a" * 40,
-                tag_name="csx-test-build-RC218-2026-09-07",
+                tag_name=TAG_NAME,
                 runner=runner,
                 sleeper=lambda _: None,
             )
@@ -400,7 +416,13 @@ class DispatchTests(unittest.TestCase):
             nonlocal dispatches
             if args[:3] == ["gh", "run", "list"]:
                 runs = (
-                    [{"status": "queued", "headSha": "a" * 40}]
+                    [
+                        {
+                            "status": "queued",
+                            "headSha": "a" * 40,
+                            "headBranch": TAG_NAME,
+                        }
+                    ]
                     if dispatches == 3 else []
                 )
                 return completed(args, stdout=json.dumps(runs))
@@ -414,7 +436,7 @@ class DispatchTests(unittest.TestCase):
                 repository_slug="owner/repository",
                 workflow="test-build-distribution.yaml",
                 allocation_sha="a" * 40,
-                tag_name="csx-test-build-RC218-2026-09-07",
+                tag_name=TAG_NAME,
                 runner=runner,
                 sleeper=lambda _: None,
             ),
@@ -433,7 +455,13 @@ class DispatchTests(unittest.TestCase):
                 runs = (
                     []
                     if calls == 1
-                    else [{"status": "queued", "headSha": "a" * 40}]
+                    else [
+                        {
+                            "status": "queued",
+                            "headSha": "a" * 40,
+                            "headBranch": TAG_NAME,
+                        }
+                    ]
                 )
                 return completed(args, stdout=json.dumps(runs))
             if args[:3] == ["gh", "workflow", "run"]:
@@ -444,13 +472,128 @@ class DispatchTests(unittest.TestCase):
             repository_slug="owner/repository",
             workflow="test-build-distribution.yaml",
             allocation_sha="a" * 40,
-            tag_name="csx-test-build-RC218-2026-09-07",
+            tag_name=TAG_NAME,
             runner=runner,
             sleeper=sleeps.append,
         )
 
         self.assertEqual(result, "existing")
         self.assertEqual(sleeps, [10])
+
+    def test_noncanonical_ref_run_does_not_block_dispatch(self) -> None:
+        dispatches = 0
+
+        def runner(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            nonlocal dispatches
+            if args[:3] == ["gh", "run", "list"]:
+                runs = [
+                    {
+                        "status": "queued",
+                        "headSha": "a" * 40,
+                        "headBranch": "arbitrary-branch",
+                    }
+                ]
+                return completed(args, stdout=json.dumps(runs))
+            if args[:3] == ["gh", "workflow", "run"]:
+                dispatches += 1
+                return completed(args)
+            raise AssertionError(args)
+
+        self.assertEqual(
+            ensure_distribution_dispatch(
+                repository_slug="owner/repository",
+                workflow="test-build-distribution.yaml",
+                allocation_sha="a" * 40,
+                tag_name=TAG_NAME,
+                runner=runner,
+            ),
+            "dispatched",
+        )
+        self.assertEqual(dispatches, 1)
+
+    def test_canonical_ref_with_wrong_sha_fails_closed(self) -> None:
+        def runner(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            if args[:3] == ["gh", "run", "list"]:
+                runs = [
+                    {
+                        "status": "queued",
+                        "headSha": "b" * 40,
+                        "headBranch": TAG_NAME,
+                    }
+                ]
+                return completed(args, stdout=json.dumps(runs))
+            raise AssertionError(args)
+
+        with self.assertRaisesRegex(StateError, "different allocation"):
+            ensure_distribution_dispatch(
+                repository_slug="owner/repository",
+                workflow="test-build-distribution.yaml",
+                allocation_sha="a" * 40,
+                tag_name=TAG_NAME,
+                runner=runner,
+            )
+
+
+class TestDistributionPackageTests(unittest.TestCase):
+    EXPECTED = "CSX_AIO-3.19-VR-RC218-2026-09-07.7z"
+
+    def test_clean_archive_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            dist = Path(temporary)
+            archive = dist / self.EXPECTED
+            archive.write_bytes(b"archive")
+
+            def runner(
+                args: list[str], **_: object
+            ) -> subprocess.CompletedProcess[str]:
+                self.assertEqual(args, ["cmake", "-E", "tar", "tf", str(archive)])
+                return completed(args, stdout="SKSE/Plugins/CommunityShaders.dll\n")
+
+            self.assertEqual(
+                verify_test_distribution(dist, self.EXPECTED, runner=runner), 1
+            )
+
+    def test_nested_staged_output_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            dist = Path(temporary)
+            (dist / self.EXPECTED).write_bytes(b"archive")
+            (dist / "supplement").mkdir()
+            with self.assertRaisesRegex(StateError, "must contain only"):
+                verify_test_distribution(dist, self.EXPECTED)
+
+    def test_forbidden_archive_material_is_rejected(self) -> None:
+        forbidden = (
+            "SKSE/Plugins/DevBench/bridge.dll",
+            "ShaderCache/Optimized.A.csxpack",
+            "MGO-Presets/Performance.json",
+            "Shaders/compiled/example.cso",
+        )
+        for member in forbidden:
+            with self.subTest(member=member), tempfile.TemporaryDirectory() as temporary:
+                dist = Path(temporary)
+                archive = dist / self.EXPECTED
+                archive.write_bytes(b"archive")
+
+                def runner(
+                    args: list[str], **_: object
+                ) -> subprocess.CompletedProcess[str]:
+                    return completed(args, stdout=f"{member}\n")
+
+                with self.assertRaisesRegex(StateError, "forbidden material"):
+                    verify_test_distribution(dist, self.EXPECTED, runner=runner)
+
+    def test_unreadable_archive_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            dist = Path(temporary)
+            (dist / self.EXPECTED).write_bytes(b"not an archive")
+
+            def runner(
+                args: list[str], **_: object
+            ) -> subprocess.CompletedProcess[str]:
+                return completed(args, returncode=1, stderr="invalid archive")
+
+            with self.assertRaisesRegex(StateError, "invalid archive"):
+                verify_test_distribution(dist, self.EXPECTED, runner=runner)
 
 
 class CMakeIdentityTests(unittest.TestCase):
@@ -497,6 +640,8 @@ class WorkflowContractTests(unittest.TestCase):
         )[1].split("- name:", maxsplit=1)[0]
         self.assertIn("GH_TOKEN: ${{ github.token }}", allocation_step)
         self.assertIn("git log --first-parent -1", workflow)
+        self.assertNotIn("merged-pr", workflow)
+        self.assertNotIn("PR_ARGUMENTS", workflow)
 
     def test_test_tags_do_not_use_the_stable_release_version_gate(self) -> None:
         workflow = (
@@ -518,6 +663,14 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("expected-package-name:", workflow)
         self.assertIn('"$DISPATCH_REF" != "refs/tags/$TAG_NAME"', workflow)
         self.assertIn('"$DISPATCH_SHA" != "$ALLOCATION_SHA"', workflow)
+
+    def test_test_package_upload_uses_the_verified_file_only(self) -> None:
+        workflow = (
+            ROOT / ".github" / "workflows" / "_shared-build.yaml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("csx_test_build.py verify-package", workflow)
+        self.assertIn("path: dist/${{ inputs.expected-package-name }}", workflow)
+        self.assertIn("if-no-files-found: error", workflow)
 
     def test_quiet_cancellation_cannot_interrupt_publication(self) -> None:
         workflow = (

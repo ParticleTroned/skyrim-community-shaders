@@ -4,11 +4,6 @@ on:
     pull_request_target:
         types: [closed]
     workflow_dispatch:
-        inputs:
-            merged-pr:
-                description: "Optional merged PR number for manual recovery"
-                required: false
-                type: string
 
 permissions:
     actions: write
@@ -114,7 +109,6 @@ jobs:
               id: allocation
               env:
                   GH_TOKEN: ${{ github.token }}
-                  MERGED_PR: ${{ github.event.pull_request.number || inputs.merged-pr }}
                   HEAD_SHA: ${{ steps.current.outputs.head_sha }}
                   LAST_STATE_SHA: ${{ steps.current.outputs.last_state_sha }}
                   STATE_KIND: ${{ steps.current.outputs.state_kind }}
@@ -127,21 +121,12 @@ jobs:
                     SOURCE_SHA=$PREVIOUS_SOURCE_SHA
                   fi
 
-                  PR_ARGUMENTS=()
-                  if [ -n "$MERGED_PR" ]; then
-                    if ! [[ "$MERGED_PR" =~ ^[1-9][0-9]*$ ]]; then
-                      echo "merged-pr must be a positive integer." >&2
-                      exit 1
-                    fi
-                    PR_ARGUMENTS=(--pr "$MERGED_PR")
-                  fi
                   python tools/csx_test_build.py allocate \
                     --state version/test-build.json \
                     --base-version "$BASE_VERSION" \
                     --source-sha "$SOURCE_SHA" \
                     --previous-state-sha "$LAST_STATE_SHA" \
                     --date "$(date -u +%Y-%m-%d)" \
-                    "${PR_ARGUMENTS[@]}" \
                     --discover-git-range \
                     --repository-slug "${{ github.repository }}" \
                     --github-output "$GITHUB_OUTPUT"

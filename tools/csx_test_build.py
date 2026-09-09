@@ -27,6 +27,9 @@ BASE_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+-(?:SE|VR)$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 PR_RE = re.compile(r"(?:\(#|pull request #)([0-9]+)", re.IGNORECASE)
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+TEST_PACKAGE_RE = re.compile(r"^CSX_AIO-[A-Za-z0-9.-]+\.7z$")
+COMPILED_SHADER_SUFFIXES = {".cso", ".pso", ".vso"}
+FORBIDDEN_PACKAGE_MARKERS = ("devbench", "shadercache", "mgo-presets")
 
 CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -641,6 +644,21 @@ def dispatch_decision(
     return "dispatch"
 
 
+def canonical_distribution_runs(runs: Any, tag_name: str) -> list[dict[str, Any]]:
+    if not isinstance(runs, list):
+        raise StateError("GitHub run inventory must be a JSON array")
+    canonical = []
+    for run in runs:
+        if not isinstance(run, dict):
+            raise StateError("GitHub run inventory contains a non-object")
+        head_branch = run.get("headBranch")
+        if not isinstance(head_branch, str):
+            raise StateError("GitHub run inventory lacks a canonical ref name")
+        if head_branch == tag_name:
+            canonical.append(run)
+    return canonical
+
+
 def ensure_distribution_dispatch(
     *,
     repository_slug: str,
@@ -680,7 +698,7 @@ def ensure_distribution_dispatch(
                 "--limit",
                 "20",
                 "--json",
-                "databaseId,status,conclusion,headSha",
+                "databaseId,status,conclusion,headSha,headBranch",
             ],
             runner=runner,
             description="cannot reconcile distribution workflow runs",
@@ -689,6 +707,7 @@ def ensure_distribution_dispatch(
             runs = json.loads(inventory or "[]")
         except json.JSONDecodeError as error:
             raise StateError("GitHub returned malformed workflow-run JSON") from error
+        runs = canonical_distribution_runs(runs, tag_name)
         decision = dispatch_decision(
             runs,
             max_attempts=max_attempts,
@@ -734,6 +753,51 @@ def ensure_distribution_dispatch(
         sleeper(min(10 * (2 ** (dispatch_commands - 1)), 60))
 
 
+def verify_test_distribution(
+    dist_path: Path,
+    expected_name: str,
+    *,
+    runner: CommandRunner = subprocess.run,
+) -> int:
+    if not TEST_PACKAGE_RE.fullmatch(expected_name):
+        raise StateError("test build requires one canonical AIO package name")
+    try:
+        staged = list(dist_path.iterdir())
+    except OSError as error:
+        raise StateError(f"cannot inspect test distribution {dist_path}: {error}") from error
+    if len(staged) != 1 or not staged[0].is_file() or staged[0].name != expected_name:
+        names = ", ".join(sorted(item.name for item in staged)) or "<empty>"
+        raise StateError(
+            f"test distribution must contain only {expected_name}; found: {names}"
+        )
+
+    archive = staged[0]
+    listing = _run(
+        ["cmake", "-E", "tar", "tf", str(archive)],
+        runner=runner,
+    )
+    if listing.returncode != 0:
+        detail = (listing.stderr or listing.stdout or "unknown archive error").strip()
+        raise StateError(f"cannot inspect test distribution archive: {detail}")
+    members = [line.strip() for line in listing.stdout.splitlines() if line.strip()]
+    if not members:
+        raise StateError("test distribution archive is empty")
+
+    for member in members:
+        normalized = member.replace("\\", "/")
+        parts = [part for part in normalized.split("/") if part not in {"", "."}]
+        if normalized.startswith("/") or ".." in parts:
+            raise StateError(f"test distribution contains an unsafe path: {member}")
+        lowered = [part.lower() for part in parts]
+        if any(
+            marker in part
+            for part in lowered
+            for marker in FORBIDDEN_PACKAGE_MARKERS
+        ) or Path(normalized).suffix.lower() in COMPILED_SHADER_SUFFIXES:
+            raise StateError(f"test distribution contains forbidden material: {member}")
+    return len(members)
+
+
 def write_state(path: Path, state: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -742,7 +806,17 @@ def write_state(path: Path, state: dict[str, Any]) -> None:
         json.dump(state, handle, indent=4)
         handle.write("\n")
         temporary = Path(handle.name)
-    temporary.replace(path)
+    try:
+        temporary.replace(path)
+    except OSError:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError as cleanup_error:
+            print(
+                f"error: cannot remove temporary state {temporary}: {cleanup_error}",
+                file=sys.stderr,
+            )
+        raise
 
 
 def emit(values: dict[str, str], github_output: Path | None) -> None:
@@ -807,6 +881,12 @@ def make_parser() -> argparse.ArgumentParser:
     )
     dispatch_parser.add_argument("--allocation-sha", required=True)
     dispatch_parser.add_argument("--tag-name", required=True)
+
+    package_parser = subparsers.add_parser(
+        "verify-package", help="verify one staged test distribution"
+    )
+    package_parser.add_argument("--dist", type=Path, default=Path("dist"))
+    package_parser.add_argument("--expected-name", required=True)
     return parser
 
 
@@ -822,6 +902,11 @@ def main(argv: list[str] | None = None) -> int:
                     tag_name=args.tag_name,
                 )
             )
+            return 0
+
+        if args.command == "verify-package":
+            members = verify_test_distribution(args.dist, args.expected_name)
+            print(f"package_members={members}")
             return 0
 
         if args.command == "verify-allocation":

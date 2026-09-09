@@ -152,24 +152,26 @@ jobs:
 
             - name: Verify test-distribution contents
               if: success() && inputs.test-build-id != ''
-              shell: pwsh
               run: |
-                  $expectedName = '${{ inputs.expected-package-name }}'
-                  if (-not $expectedName -or $expectedName -notmatch '^CSX_AIO-[A-Za-z0-9.-]+\.7z$') {
-                    Write-Error "A test build requires one canonical expected package name." -ErrorAction Stop
-                  }
-                  $files = @(Get-ChildItem -LiteralPath dist -File)
-                  if ($files.Count -ne 1 -or $files[0].Name -cne $expectedName) {
-                    $actual = ($files | ForEach-Object Name) -join ', '
-                    Write-Error "Expected only '$expectedName' in dist; found: $actual" -ErrorAction Stop
-                  }
+                  python tools/csx_test_build.py verify-package `
+                    --dist dist `
+                    --expected-name '${{ inputs.expected-package-name }}'
 
             - name: Upload dist artifacts
-              if: success() && matrix.compiler.name == 'vs2026'
+              if: success() && matrix.compiler.name == 'vs2026' && inputs.test-build-id == ''
               uses: actions/upload-artifact@v7
               with:
                   name: ${{ inputs.artifact-name }}
                   path: dist/
+                  retention-days: 30
+
+            - name: Upload exact test distribution
+              if: success() && matrix.compiler.name == 'vs2026' && inputs.test-build-id != ''
+              uses: actions/upload-artifact@v7
+              with:
+                  name: ${{ inputs.artifact-name }}
+                  path: dist/${{ inputs.expected-package-name }}
+                  if-no-files-found: error
                   retention-days: 30
 
     shader-validation:

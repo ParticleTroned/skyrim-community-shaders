@@ -61,13 +61,18 @@ invocation, uncertain dispatch commands also consume that budget while GitHub's
 run inventory catches up. An uncertain final attempt is reconciled before the
 publisher reports exhaustion.
 The allocation workflow also supports explicit manual dispatch for initial
-activation and recovery. It applies the same lineage, tag, retry, and remote
-head checks and never bypasses the allocator.
+activation and recovery. Complete Git/GitHub range discovery is the sole source
+of authoritative PR provenance; a manual run cannot inject a PR number. It
+applies the same lineage, tag, retry, and remote-head checks and never bypasses
+the allocator.
 
 The distribution builds only the normal AIO package, with DevBench disabled.
 It does not invoke the prebuilt shader-cache workflow or package supplementary
 presets or caches. Before upload, the shared build requires `dist/` to contain
-exactly the expected AIO archive.
+exactly the expected AIO archive. It inspects the archive member list and
+rejects DevBench, prebuilt shader-cache, preset-supplement, or compiled shader
+objects, then uploads that exact validated file rather than the containing
+directory.
 
 The test identity is passed explicitly to CMake. CMake admits only an empty
 stable identity or a positive RC with a real Gregorian date. Rebuilding an

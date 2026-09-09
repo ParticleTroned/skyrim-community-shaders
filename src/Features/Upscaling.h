@@ -1717,7 +1717,7 @@ public:
 	// Owned here so both Streamline (DLSS) and FidelityFX (FSR) can use them.
 	eastl::unique_ptr<Texture2D> vrIntermediateColorIn[2];            // per-eye render resolution
 	eastl::unique_ptr<Texture2D> vrIntermediateColorOut[2];           // per-eye output resolution
-	eastl::unique_ptr<Texture2D> vrIntermediateDepth[2];              // per-eye render resolution (R24G8_TYPELESS, shared depth copy)
+	eastl::unique_ptr<Texture2D> vrIntermediateDepth[2];              // per-eye render resolution, numeric raw R32_FLOAT depth
 	eastl::unique_ptr<Texture2D> vrIntermediateLinearDepth[2];        // per-eye render resolution (R32_FLOAT, FSR input)
 	eastl::unique_ptr<Texture2D> vrIntermediateMotionVectors[2];      // per-eye render resolution
 	eastl::unique_ptr<Texture2D> vrIntermediateReactiveMask[2];       // per-eye render resolution
@@ -1947,6 +1947,9 @@ public:
 	static inline LumaSharpen lumaSharpen;  ///< Luma-only adaptive unsharp mask for DLSS
 
 	winrt::com_ptr<ID3D11PixelShader> copyDepthToSharedBufferPS;
+	winrt::com_ptr<ID3D11ComputeShader> copyRawDepthRegionCS;
+	winrt::com_ptr<ID3D11Buffer> copyRawDepthRegionCB;
+	winrt::com_ptr<ID3D11ShaderResourceView> copyRawDepthRegionSourceSRV;
 
 	float projectionPosScaleX = 0.0f;
 	float projectionPosScaleY = 0.0f;
@@ -2336,6 +2339,9 @@ public:
 	bool EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool copyDepthInput = true, bool allowFoveatedRegionEncode = false, bool* encodedFoveatedRegions = nullptr, uint32_t contractGeneration = 0);
 	bool StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight);
 	bool DispatchSubmitStageColorRegion(ID3D11ShaderResourceView* sourceSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t sourceTextureWidth, uint32_t sourceTextureHeight, uint32_t sourceOffsetX, uint32_t sourceOffsetY, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight, uint32_t outputOffsetX, uint32_t outputOffsetY, const char* perfLabel);
+	/** Legal eye/crop extraction from a depth SRV into numeric raw R32_FLOAT depth. */
+	bool CopyRawDepthRegion(ID3D11Resource* source, Texture2D& destination,
+		const D3D11_BOX& sourceBox, UINT destinationX = 0, UINT destinationY = 0);
 	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3D11Resource* source, uint32_t width, uint32_t height, bool copyBindFlags, bool createSRV, bool createUAV, bool createRTV, const char* name, DXGI_FORMAT formatOverride = DXGI_FORMAT_UNKNOWN);
 	bool PrepareSubmitNeuralFloatResources(uint32_t eyeIndex, ID3D11Resource* source, uint32_t width, uint32_t height, bool directCommit, bool validateOnly);
 	ID3D11Resource* GetSubmitNeuralFloatEvaluationOutput(uint32_t eyeIndex, bool directCommit) const noexcept;

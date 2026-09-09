@@ -2094,7 +2094,11 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		// Copy right-eye depth before eye 0 evaluation; eye 0 output can overlap right-eye input
 		// in the combined target at non-DLAA scales.
 		D3D11_BOX rightIn = { eyeWidthIn, 0, 0, eyeWidthIn * 2, eyeHeightIn, 1 };
-		context->CopySubresourceRegion(upscaling.vrIntermediateDepth[1]->resource.get(), 0, 0, 0, 0, depthTexture.texture, 0, &rightIn);
+		if (!upscaling.CopyRawDepthRegion(depthTexture.texture, *upscaling.vrIntermediateDepth[1], rightIn)) {
+			upscaling.RequestHistoryReset();
+			upscaling.dlssUpscaleOutputInSharpenerTexture = false;
+			return;
+		}
 		const bool canRestoreDirectEye0Output =
 			!outputToSharpener &&
 			upscaling.vrIntermediateColorOut[0] &&

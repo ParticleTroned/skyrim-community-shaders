@@ -18845,6 +18845,7 @@ void Upscaling::DestroyVRIntermediateTextures(bool a_clearRapidTransitionGuard)
 	};
 
 	retireArray(vrIntermediateColorIn, retired.colorIn);
+	copyRawDepthRegionSourceSRV = nullptr;
 	retireArray(vrIntermediateColorOut, retired.colorOut);
 	retireArray(vrIntermediateDepth, retired.depth);
 	retireArray(vrIntermediateLinearDepth, retired.linearDepth);
@@ -25615,38 +25616,158 @@ bool Upscaling::CommitSubmitNeuralFloatOutput(
 		computeSubrect, computeRegions);
 }
 
-bool Upscaling::EnsureFoveatedDepthGuideSRV(Texture2D& texture, const char* name)
+namespace
 {
-	if (texture.srv)
-		return true;
-
-	DXGI_FORMAT viewFormat = DXGI_FORMAT_UNKNOWN;
-	switch (texture.desc.Format) {
+	DXGI_FORMAT RawDepthViewFormat(DXGI_FORMAT a_format) noexcept
+	{
+	switch (a_format) {
 	case DXGI_FORMAT_R24G8_TYPELESS:
 	case DXGI_FORMAT_D24_UNORM_S8_UINT:
-		viewFormat = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
-		break;
+		return DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
 	case DXGI_FORMAT_R32G8X24_TYPELESS:
 	case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
-		viewFormat = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
-		break;
+		return DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
 	case DXGI_FORMAT_R32_TYPELESS:
 	case DXGI_FORMAT_D32_FLOAT:
-		viewFormat = DXGI_FORMAT_R32_FLOAT;
-		break;
+		return DXGI_FORMAT_R32_FLOAT;
 	case DXGI_FORMAT_R16_TYPELESS:
 	case DXGI_FORMAT_D16_UNORM:
-		viewFormat = DXGI_FORMAT_R16_UNORM;
-		break;
+		return DXGI_FORMAT_R16_UNORM;
 	case DXGI_FORMAT_R24_UNORM_X8_TYPELESS:
 	case DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS:
 	case DXGI_FORMAT_R32_FLOAT:
 	case DXGI_FORMAT_R16_UNORM:
-		viewFormat = texture.desc.Format;
-		break;
+		return a_format;
 	default:
-		break;
+		return DXGI_FORMAT_UNKNOWN;
 	}
+	}
+}
+
+bool Upscaling::CopyRawDepthRegion(ID3D11Resource* source, Texture2D& destination,
+	const D3D11_BOX& sourceBox, UINT destinationX, UINT destinationY)
+{
+	auto* context = globals::d3d::context;
+	auto* device = globals::d3d::device;
+	D3D11_TEXTURE2D_DESC sourceDesc{};
+	if (!context || !device || !source || !destination.resource || !destination.uav ||
+		!TryGetTexture2DDesc(source, sourceDesc) || sourceDesc.SampleDesc.Count != 1 ||
+		sourceDesc.ArraySize != 1 || sourceDesc.MipLevels != 1 ||
+		destination.desc.Format != DXGI_FORMAT_R32_FLOAT ||
+		sourceBox.front != 0 || sourceBox.back != 1 ||
+		sourceBox.right <= sourceBox.left || sourceBox.bottom <= sourceBox.top ||
+		sourceBox.right > sourceDesc.Width || sourceBox.bottom > sourceDesc.Height ||
+		destinationX > destination.desc.Width || destinationY > destination.desc.Height ||
+		sourceBox.right - sourceBox.left > destination.desc.Width - destinationX ||
+		sourceBox.bottom - sourceBox.top > destination.desc.Height - destinationY ||
+		GetCOMIdentityAddress(source) == GetCOMIdentityAddress(destination.resource.get()))
+		return false;
+	// Copy/dispatch must not inherit an actor's occlusion predicate. Preserve
+	// the caller's state across both the shader path and ordinary R32 copies.
+	winrt::com_ptr<ID3D11Predicate> previousPredicate;
+	BOOL previousPredicateValue = FALSE;
+	context->GetPredication(previousPredicate.put(), &previousPredicateValue);
+	if (previousPredicate)
+		context->SetPredication(nullptr, FALSE);
+	auto restorePredicate = ScopeExit([&]() {
+		if (previousPredicate)
+			context->SetPredication(previousPredicate.get(), previousPredicateValue);
+	});
+	// Ordinary R32 intermediates support subrectangle copies. Depth/stencil
+	// sources require shader extraction; their partial CopySubresourceRegion is
+	// invalid even when their typeless DXGI family matches the destination.
+	if (sourceDesc.Format == DXGI_FORMAT_R32_FLOAT &&
+		(sourceDesc.BindFlags & D3D11_BIND_DEPTH_STENCIL) == 0) {
+		context->CopySubresourceRegion(destination.resource.get(), 0,
+			destinationX, destinationY, 0, source, 0, &sourceBox);
+		return true;
+	}
+	const auto viewFormat = RawDepthViewFormat(sourceDesc.Format);
+	if (viewFormat == DXGI_FORMAT_UNKNOWN || (sourceDesc.BindFlags & D3D11_BIND_SHADER_RESOURCE) == 0)
+		return false;
+	if (!copyRawDepthRegionCS)
+		copyRawDepthRegionCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
+			L"Data\\Shaders\\DLSS5DepthRegionCS.hlsl", {}, "cs_5_0")));
+	if (!copyRawDepthRegionCS)
+		return false;
+	if (!copyRawDepthRegionCB) {
+		D3D11_BUFFER_DESC desc{};
+		desc.ByteWidth = sizeof(std::uint32_t) * 8u;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+		if (FAILED(device->CreateBuffer(&desc, nullptr, copyRawDepthRegionCB.put())))
+			return false;
+	}
+	winrt::com_ptr<ID3D11Resource> cachedSource;
+	if (copyRawDepthRegionSourceSRV)
+		copyRawDepthRegionSourceSRV->GetResource(cachedSource.put());
+	if (GetCOMIdentityAddress(cachedSource.get()) != GetCOMIdentityAddress(source)) {
+		copyRawDepthRegionSourceSRV = nullptr;
+		D3D11_SHADER_RESOURCE_VIEW_DESC desc{};
+		desc.Format = viewFormat;
+		desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+		desc.Texture2D.MipLevels = 1;
+		if (FAILED(device->CreateShaderResourceView(source, &desc, copyRawDepthRegionSourceSRV.put())))
+			return false;
+	}
+	ID3D11ComputeShader* previousShader = nullptr;
+	std::array<ID3D11ClassInstance*, D3D11_SHADER_MAX_INTERFACES> previousInstances{};
+	UINT previousInstanceCount = static_cast<UINT>(previousInstances.size());
+	ID3D11Buffer* previousBuffer = nullptr;
+	ID3D11ShaderResourceView* previousSource = nullptr;
+	ID3D11UnorderedAccessView* previousOutput = nullptr;
+	std::array<ID3D11RenderTargetView*, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT> previousTargets{};
+	ID3D11DepthStencilView* previousDepth = nullptr;
+	context->CSGetShader(&previousShader, previousInstances.data(), &previousInstanceCount);
+	context->CSGetConstantBuffers(0, 1, &previousBuffer);
+	context->CSGetShaderResources(0, 1, &previousSource);
+	context->CSGetUnorderedAccessViews(0, 1, &previousOutput);
+	context->OMGetRenderTargets(static_cast<UINT>(previousTargets.size()), previousTargets.data(), &previousDepth);
+	auto restore = ScopeExit([&]() {
+		ID3D11ShaderResourceView* nullSource = nullptr;
+		ID3D11UnorderedAccessView* nullOutput = nullptr;
+		context->CSSetShaderResources(0, 1, &nullSource);
+		context->CSSetUnorderedAccessViews(0, 1, &nullOutput, nullptr);
+		context->CSSetShader(previousShader, previousInstances.data(), previousInstanceCount);
+		context->CSSetConstantBuffers(0, 1, &previousBuffer);
+		context->CSSetShaderResources(0, 1, &previousSource);
+		context->CSSetUnorderedAccessViews(0, 1, &previousOutput, nullptr);
+		context->OMSetRenderTargets(static_cast<UINT>(previousTargets.size()), previousTargets.data(), previousDepth);
+		if (previousShader) previousShader->Release();
+		for (UINT i = 0; i < previousInstanceCount; ++i) if (previousInstances[i]) previousInstances[i]->Release();
+		if (previousBuffer) previousBuffer->Release();
+		if (previousSource) previousSource->Release();
+		if (previousOutput) previousOutput->Release();
+		for (auto* target : previousTargets) if (target) target->Release();
+		if (previousDepth) previousDepth->Release();
+	});
+	context->OMSetRenderTargets(0, nullptr, nullptr);
+	ID3D11UnorderedAccessView* nullOutput = nullptr;
+	context->CSSetUnorderedAccessViews(0, 1, &nullOutput, nullptr);
+	const std::array<std::uint32_t, 8> constants{
+		sourceBox.left, sourceBox.top, destinationX, destinationY,
+		sourceBox.right - sourceBox.left, sourceBox.bottom - sourceBox.top, 0u, 0u
+	};
+	context->UpdateSubresource(copyRawDepthRegionCB.get(), 0, nullptr, constants.data(), 0, 0);
+	ID3D11Buffer* buffer = copyRawDepthRegionCB.get();
+	ID3D11ShaderResourceView* sourceView = copyRawDepthRegionSourceSRV.get();
+	ID3D11UnorderedAccessView* destinationView = destination.uav.get();
+	context->CSSetShader(copyRawDepthRegionCS.get(), nullptr, 0);
+	context->CSSetConstantBuffers(0, 1, &buffer);
+	context->CSSetShaderResources(0, 1, &sourceView);
+	context->CSSetUnorderedAccessViews(0, 1, &destinationView, nullptr);
+	{
+		CS_PROFILE_SCOPE("Upscaling::RawDepthRegion");
+		context->Dispatch((constants[4] + 7u) / 8u, (constants[5] + 7u) / 8u, 1);
+	}
+	return true;
+}
+
+bool Upscaling::EnsureFoveatedDepthGuideSRV(Texture2D& texture, const char* name)
+{
+	if (texture.srv)
+		return true;
+	const auto viewFormat = RawDepthViewFormat(texture.desc.Format);
 
 	static bool loggedUnsupportedFormat = false;
 	if (viewFormat == DXGI_FORMAT_UNKNOWN) {
@@ -26667,8 +26788,21 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 		return false;
 	if (!prepareFoveatedTexture(foveatedCenterColorOut[eyeIndex], colorIn, rect.outputWidth, rect.outputHeight, false, true, createFsrViews, false, ("Upscale_FoveatedCenter_ColorOut_" + suffix).c_str()))
 		return false;
-	if (!prepareFoveatedTexture(foveatedCenterDepth[eyeIndex], depthIn, centerInputAllocationWidth, centerInputAllocationHeight, true, createFsrViews, false, false, ("Upscale_FoveatedCenter_Depth_" + suffix).c_str()))
+	// FSR already supplies numeric R32 depth. Raw DLSS depth uses the same
+	// numeric storage but must be extracted from DSV sources through an SRV.
+	if (!validateStagedResources) {
+		if (!EnsureFoveatedTexture(foveatedCenterDepth[eyeIndex], depthIn,
+				centerInputAllocationWidth, centerInputAllocationHeight,
+				false, true, true, false, ("Upscale_FoveatedCenter_Depth_" + suffix).c_str(),
+				DXGI_FORMAT_R32_FLOAT))
+			return false;
+	} else if (!foveatedCenterDepth[eyeIndex] || !foveatedCenterDepth[eyeIndex]->resource ||
+		!foveatedCenterDepth[eyeIndex]->srv || !foveatedCenterDepth[eyeIndex]->uav ||
+		foveatedCenterDepth[eyeIndex]->desc.Format != DXGI_FORMAT_R32_FLOAT ||
+		foveatedCenterDepth[eyeIndex]->desc.Width != centerInputAllocationWidth ||
+		foveatedCenterDepth[eyeIndex]->desc.Height != centerInputAllocationHeight) {
 		return false;
+	}
 	if (!prepareFoveatedTexture(foveatedCenterMotionVectors[eyeIndex], motionVectorsIn, centerInputAllocationWidth, centerInputAllocationHeight, false, createFsrViews, false, false, ("Upscale_FoveatedCenter_MVec_" + suffix).c_str()))
 		return false;
 	if (!prepareFoveatedTexture(foveatedCenterReactiveMask[eyeIndex], reactiveMaskIn, centerInputAllocationWidth, centerInputAllocationHeight, false, createFsrViews, false, false, ("Upscale_FoveatedCenter_Reactive_" + suffix).c_str()))
@@ -26893,7 +27027,8 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 			};
 
 			context->CopySubresourceRegion(foveatedCenterColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, colorIn, 0, &colorSrcBox);
-			context->CopySubresourceRegion(foveatedCenterDepth[eyeIndex]->resource.get(), 0, 0, 0, 0, depthIn, 0, &depthSrcBox);
+			if (!CopyRawDepthRegion(depthIn, *foveatedCenterDepth[eyeIndex], depthSrcBox))
+				return false;
 			context->CopySubresourceRegion(foveatedCenterMotionVectors[eyeIndex]->resource.get(), 0, 0, 0, 0, motionVectorsIn, 0, &auxSrcBox);
 			context->CopySubresourceRegion(foveatedCenterReactiveMask[eyeIndex]->resource.get(), 0, 0, 0, 0, reactiveMaskIn, 0, &auxSrcBox);
 			context->CopySubresourceRegion(foveatedCenterTransparencyMask[eyeIndex]->resource.get(), 0, 0, 0, 0, transparencyMaskIn, 0, &auxSrcBox);
@@ -29636,27 +29771,31 @@ void Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 				CreateTextureFromSource(colorSrc, outWidth, outHeight, false, true, true, ("Upscale_ColorOut_" + suffix).c_str(), requiresColorOutRTV) :
 				CreateNamedTexture2D(outWidth, outHeight, colorOutFormat, true, true, requiresColorOutRTV, ("Upscale_ColorOut_" + suffix).c_str());
 
-		// Depth copy: R24G8_TYPELESS matches the game's D24S8 typeless cast-group.
-		// This avoids format-group copy failures on some drivers.
+		// Shader extraction preserves numeric raw depth while permitting legal
+		// per-eye/crop writes from the game's depth/stencil source.
 		{
 			D3D11_TEXTURE2D_DESC depthDesc = {};
 			depthDesc.Width = allocationInWidth;
 			depthDesc.Height = allocationInHeight;
 			depthDesc.MipLevels = 1;
 			depthDesc.ArraySize = 1;
-			depthDesc.Format = DXGI_FORMAT_R24G8_TYPELESS;
+			depthDesc.Format = DXGI_FORMAT_R32_FLOAT;
 			depthDesc.SampleDesc.Count = 1;
 			depthDesc.Usage = D3D11_USAGE_DEFAULT;
-			depthDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+			depthDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 			vrIntermediateDepth[i] = eastl::make_unique<Texture2D>(depthDesc);
 
 			Util::SetResourceName(vrIntermediateDepth[i]->resource.get(), ("Upscale_Depth_" + suffix).c_str());
 
 			D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-			srvDesc.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+			srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
 			srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
 			srvDesc.Texture2D.MipLevels = 1;
 			vrIntermediateDepth[i]->CreateSRV(srvDesc);
+			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+			uavDesc.Format = DXGI_FORMAT_R32_FLOAT;
+			uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+			vrIntermediateDepth[i]->CreateUAV(uavDesc);
 		}
 
 		// FSR input depth: typed R32_FLOAT so FidelityFX receives a known surface format.
@@ -29748,7 +29887,7 @@ void Upscaling::EnsureVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 			const eastl::unique_ptr<Texture2D>& transparencyMask) {
 			return coversInput(colorIn, colorSrcDesc.Format, true) &&
 		           matchesOutput(colorOut) &&
-		           coversInput(depth, DXGI_FORMAT_R24G8_TYPELESS, false) &&
+		           coversInput(depth, DXGI_FORMAT_R32_FLOAT, true) &&
 		           coversInput(linearDepth, DXGI_FORMAT_R32_FLOAT, true) &&
 		           coversInput(motionVectors, mvecSrcDesc.Format, true) &&
 		           coversInput(reactiveMask, reactiveSrcDesc.Format, true) &&
@@ -30110,8 +30249,8 @@ bool Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 		D3D11_BOX srcBox = { offsetXIn, 0, 0, offsetXIn + eyeWidthIn, eyeHeightIn, 1 };
 
 		context->CopySubresourceRegion(vrIntermediateColorIn[i]->resource.get(), 0, 0, 0, 0, colorSrc, 0, &srcBox);
-		if (copyDepthInput)
-			context->CopySubresourceRegion(vrIntermediateDepth[i]->resource.get(), 0, 0, 0, 0, depthSrc, 0, &srcBox);
+		if (copyDepthInput && !CopyRawDepthRegion(depthSrc, *vrIntermediateDepth[i], srcBox))
+			return false;
 		if (copyAuxiliaryInputs) {
 			context->CopySubresourceRegion(vrIntermediateMotionVectors[i]->resource.get(), 0, 0, 0, 0, mvecSrc, 0, &srcBox);
 			context->CopySubresourceRegion(vrIntermediateTransparencyMask[i]->resource.get(), 0, 0, 0, 0, transparencySrc, 0, &srcBox);
@@ -30182,7 +30321,9 @@ bool Upscaling::AreVRPerEyeUpscalingResourcesReady(bool requireDepth, bool requi
 			!vrIntermediateTransparencyMask[eye] || !vrIntermediateTransparencyMask[eye]->resource) {
 			return false;
 		}
-		if (requireDepth && (!vrIntermediateDepth[eye] || !vrIntermediateDepth[eye]->resource)) {
+		if (requireDepth && (!vrIntermediateDepth[eye] || !vrIntermediateDepth[eye]->resource ||
+			!vrIntermediateDepth[eye]->srv || !vrIntermediateDepth[eye]->uav ||
+			vrIntermediateDepth[eye]->desc.Format != DXGI_FORMAT_R32_FLOAT)) {
 			return false;
 		}
 		if (requireLinearDepth && (!vrIntermediateLinearDepth[eye] || !vrIntermediateLinearDepth[eye]->resource)) {
@@ -30213,7 +30354,8 @@ bool Upscaling::AreVRIntermediateTexturesCompatibleForFSR(uint32_t a_displayEyeW
 	for (uint32_t eye = 0; eye < 2; ++eye) {
 		if (!coversDisplay(vrIntermediateColorIn[eye], true, true) ||
 			!coversDisplay(vrIntermediateColorOut[eye], true, true) ||
-			!coversDisplay(vrIntermediateDepth[eye], true, false) ||
+			!coversDisplay(vrIntermediateDepth[eye], true, true) ||
+			vrIntermediateDepth[eye]->desc.Format != DXGI_FORMAT_R32_FLOAT ||
 			!coversDisplay(vrIntermediateLinearDepth[eye], true, true) ||
 			!coversDisplay(vrIntermediateMotionVectors[eye], true, true) ||
 			!coversDisplay(vrIntermediateReactiveMask[eye], true, true) ||
@@ -30901,7 +31043,8 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 					sourceEyeRegion.minY + inputMaxY,
 					1
 				};
-				context->CopySubresourceRegion(vrIntermediateDepth[eye]->resource.get(), 0, inputMinX, inputMinY, 0, depthSource, 0, &srcBox);
+				if (!CopyRawDepthRegion(depthSource, *vrIntermediateDepth[eye], srcBox, inputMinX, inputMinY))
+					return false;
 			}
 			return true;
 		};
@@ -32189,6 +32332,9 @@ void Upscaling::ClearShaderCache()
 	vrClearHMDMaskCS = nullptr;           // com_ptr automatically releases
 	vrClearHMDMaskCB = nullptr;           // com_ptr automatically releases
 	copyDepthToSharedBufferPS = nullptr;  // com_ptr automatically releases
+	copyRawDepthRegionCS = nullptr;
+	copyRawDepthRegionCB = nullptr;
+	copyRawDepthRegionSourceSRV = nullptr;
 	rcas.ClearShaderCache();
 	lumaSharpen.ClearShaderCache();
 	NeuralRendering::Renderer::Instance().ResetShaderCache();

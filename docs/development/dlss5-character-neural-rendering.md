@@ -416,6 +416,25 @@ depth-view allowlist is
 `DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS`, `DXGI_FORMAT_R32_FLOAT`, and
 `DXGI_FORMAT_R16_UNORM`; any other view format fails closed.
 
+Current-depth crops must use the same legal extraction contract. A partial
+`CopySubresourceRegion` from an engine depth-stencil resource is not supported
+by D3D11; depth-stencil copies require the whole subresource. Upscaling extracts
+the requested eye/crop with scalar shader loads into `R32_FLOAT` instead,
+preserving the original nonlinear depth values and explicit source/destination
+offsets. Intermediate depth views and retained-resource compatibility checks
+must agree on that format. FSR's separate linear-depth lane keeps its existing
+semantics. See the [Microsoft copy contract](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-copysubresourceregion).
+
+The September 9 live empty-mask diagnosis isolated this boundary: both eyes
+contained thousands of authored face/skin/hair pixels, but visibility rejected
+every selected output pixel. Temporarily disabling only visibility restored
+current-mask ROI and successful NR output; the original settings were restored.
+One observed tight single ROI covered approximately 5% per eye. This proves the
+visibility dependency, not qualification of the replacement depth producer,
+two-region execution, or a controlled whole-frame performance improvement.
+Do not address invalid current depth by permanently disabling visibility or
+loosening the comparison tolerance.
+
 Core frozen/current visibility rejection is controlled independently from edge
 feathering. The default keeps rejection enabled. The diagnostic
 `Authored (Ignore Visibility Depth)` mode bypasses only that core comparison;

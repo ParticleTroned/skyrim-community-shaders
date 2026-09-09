@@ -103,8 +103,7 @@ namespace CSX::Api
 			ShaderCompatibilityRegistration& a_output);
 		static bool Applies(
 			const ShaderCompatibilityRegistration& a_registration,
-			std::string_view a_shaderFamily,
-			std::string_view a_shaderSource);
+			std::string_view a_shaderFamily);
 	};
 
 	ShaderCompatibilityRegistry& GetShaderCompatibilityRegistry();

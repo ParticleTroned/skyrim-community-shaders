@@ -2200,11 +2200,16 @@ if(BUILD_CONTROLLER_TESTS)
             "${PROJECT_SOURCE_DIR}/include"
             "${PROJECT_SOURCE_DIR}/src"
     )
-    if(MSVC)
-        target_compile_options(shader_cache_pack_test PRIVATE /UNDEBUG)
-    else()
-        target_compile_options(shader_cache_pack_test PRIVATE -UNDEBUG)
-    endif()
+    foreach(
+        CACHE_TEST_TARGET
+        api_shader_compatibility_registry_test shader_cache_pack_test
+    )
+        if(MSVC)
+            target_compile_options(${CACHE_TEST_TARGET} PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(${CACHE_TEST_TARGET} PRIVATE -UNDEBUG)
+        endif()
+    endforeach()
     target_link_libraries(
         shader_cache_pack_test
         PRIVATE bcrypt.lib nlohmann_json::nlohmann_json

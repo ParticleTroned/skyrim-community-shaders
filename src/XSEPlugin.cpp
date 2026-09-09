@@ -14,6 +14,7 @@
 #include "BuildProvenance.h"
 #include "Compatibility.h"
 #include "Deferred.h"
+#include "Features/HorizonFix.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
 #include "Features/Upscaling.h"
@@ -201,7 +202,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				// Temporary adapter for the existing Horizon Fix integration. Future
 				// external shader providers register their own identity through
 				// csx.shader.compatibility instead of requiring a CSX exception.
-				if (GetModuleHandleW(L"HorizonFix.dll")) {
+				if (globals::features::horizonFix.loaded) {
 					const CSX::ShaderCompatibilityAPI::Scope001 scope{
 						.structSize = sizeof(CSX::ShaderCompatibilityAPI::Scope001),
 						.kind = CSX::ShaderCompatibilityAPI::ScopeKind::kShaderFamily,

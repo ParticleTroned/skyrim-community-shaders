@@ -52,6 +52,10 @@ int main()
 	assert(duplicate.status == ShaderCompatibilityAPI::Status::kSuccess);
 	assert(duplicate.idempotent && duplicate.handle == first.handle);
 	assert(duplicate.digest == first.digest);
+	auto displayOnlyChange = water;
+	displayOnlyChange.owner = "renamed provider";
+	displayOnlyChange.displayVersion = "43.0.0";
+	assert(registry.Register(displayOnlyChange).idempotent);
 
 	auto conflict = water;
 	conflict.currentMinor = 3;
@@ -65,6 +69,19 @@ int main()
 	const auto unrelatedSet = registry.BuildRequirementSet("grass", "shaders/grass.hlsl");
 	assert(unrelatedSet.handles.empty());
 	assert(waterSet.digest != unrelatedSet.digest);
+	assert(registry.BuildRequirementSet("WATER", "Data\\Shaders\\Water.hlsl").digest == waterSet.digest);
+
+	for (const char control : { '\n', '\r', '\t', '\x01', '\x1f', '\x7f' }) {
+		const auto injected = std::string("resource:test") + control + "scope=family:water";
+		auto invalidFingerprint = water;
+		invalidFingerprint.resourceFingerprint = injected.c_str();
+		assert(registry.Register(invalidFingerprint).status == ShaderCompatibilityAPI::Status::kInvalidArgument);
+		auto invalidScope = waterScope;
+		invalidScope.value = injected.c_str();
+		auto invalidFamily = water;
+		invalidFamily.scopes = &invalidScope;
+		assert(registry.Register(invalidFamily).status == ShaderCompatibilityAPI::Status::kInvalidScope);
+	}
 
 	auto cachedRegistration = waterSet.registrations.front();
 	cachedRegistration.currentMinor = 2;
@@ -110,6 +127,8 @@ int main()
 	assert(snapshot.phase == ShaderCompatibilityAPI::Phase::kFrozen);
 	assert(snapshot.registrationCount == 1);
 	assert(!snapshot.compatibilitySetDigest.empty());
+	assert(snapshot.compatibilitySetDigest == waterSet.digest);
+	assert(registry.BuildRequirementSet("WATER", "different/source.hlsl").digest == waterSet.digest);
 	assert(registry.Register(water).idempotent);
 
 	const ShaderCompatibilityAPI::Scope001 globalScope{
@@ -128,5 +147,16 @@ int main()
 	unterminatedIdentity.fill('a');
 	auto unterminated = Registration(unterminatedIdentity.data(), 0, &globalScope, 1);
 	assert(registry.Register(unterminated).status == ShaderCompatibilityAPI::Status::kInvalidIdentity);
+
+	Api::ShaderCompatibilityRegistry forward;
+	Api::ShaderCompatibilityRegistry reverse;
+	assert(forward.Register(water).accepted);
+	assert(forward.Register(late).accepted);
+	assert(reverse.Register(late).accepted);
+	assert(reverse.Register(water).accepted);
+	forward.Freeze();
+	reverse.Freeze();
+	assert(forward.GetSnapshot().compatibilitySetDigest == reverse.GetSnapshot().compatibilitySetDigest);
+	assert(forward.BuildRequirementSet("Water", "").digest == reverse.BuildRequirementSet("water", "").digest);
 	return 0;
 }

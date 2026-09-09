@@ -34,31 +34,61 @@ class FomodPackageTests(unittest.TestCase):
     ) -> None:
         cache_directory.mkdir(parents=True, exist_ok=True)
         contract_runtime = "SE" if runtime == BUILDER.RUNTIME_SE_AE else "VR"
+        pack_set_id = "0123456789abcdef0123456789abcdef"
         (cache_directory / BUILDER.CACHE_INFO_FILE).write_text(
             "[Cache]\n"
-            "PluginVersion = CSX 3.18-VR\n"
+            f"PluginVersion = CSX 3.18-{contract_runtime}\n"
             f"ShaderCacheABI = {shader_cache_abi}\n",
-            encoding="utf-8",
-        )
-        (cache_directory / BUILDER.MANIFEST_FILE).write_text(
-            json.dumps({"schemaVersion": 1, "entries": {}}),
             encoding="utf-8",
         )
         (cache_directory / BUILDER.PACK_MANIFEST_FILE).write_text(
             json.dumps(
                 {
                     "schema": "csx.shader-cache.pack-manifest",
-                    "schemaVersion": 1,
+                    "schemaVersion": 2,
                     "formatVersion": 1,
+                    "fileStateSemantics": "installation-baseline-v1",
+                    "hashAlgorithm": "sha256",
+                    "packSetId": pack_set_id,
                     "runtime": contract_runtime,
                     "shaderCacheABI": shader_cache_abi,
+                    "optimizedRecordCount": 0,
+                    "developerRecordCount": 0,
                     "compatibilityVariants": ["default", "legacy-horizon-fix"],
+                    "files": {
+                        "Optimized.A.csxpack": {
+                            "lane": 1,
+                            "generation": 1,
+                            "recordCount": 0,
+                        },
+                        "Optimized.B.csxpack": {
+                            "lane": 1,
+                            "generation": 0,
+                            "recordCount": 0,
+                        },
+                        "Developer.A.csxpack": {
+                            "lane": 2,
+                            "generation": 1,
+                            "recordCount": 0,
+                        },
+                        "Developer.B.csxpack": {
+                            "lane": 2,
+                            "generation": 0,
+                            "recordCount": 0,
+                        },
+                    },
                 }
             ),
             encoding="utf-8",
         )
         for pack_name in BUILDER.PACK_FILES:
-            (cache_directory / pack_name).write_bytes(b"pack")
+            BUILDER.SHADER_CACHE_CONTRACT.write_shader_pack(
+                cache_directory / pack_name,
+                BUILDER.PACK_LANES[pack_name],
+                1 if ".A." in pack_name else 0,
+                [],
+                pack_set_id,
+            )
 
     def _inputs(self, root: Path) -> tuple[Path, Path, Path]:
         core = root / "core"
@@ -188,6 +218,30 @@ class FomodPackageTests(unittest.TestCase):
                     "v3.18.0",
                 )
 
+    def test_rejects_pack_with_only_a_plausible_filename(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            core, se_cache, vr_cache = self._inputs(root)
+            (vr_cache / BUILDER.CACHE_DIRECTORY / BUILDER.PACK_FILES[0]).write_bytes(
+                b"pack"
+            )
+            with self.assertRaises(SystemExit):
+                BUILDER.stage_package(
+                    core, se_cache, vr_cache, root / "staged", "v3.18.0"
+                )
+
+    def test_rejects_legacy_manifest_as_a_seventh_root_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            core, se_cache, vr_cache = self._inputs(root)
+            (vr_cache / BUILDER.CACHE_DIRECTORY / "Manifest.json").write_text(
+                "{}", encoding="utf-8"
+            )
+            with self.assertRaises(SystemExit):
+                BUILDER.stage_package(
+                    core, se_cache, vr_cache, root / "staged", "v3.18.0"
+                )
+
     def test_rejects_info_abi_that_does_not_match_core(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -203,11 +257,7 @@ class FomodPackageTests(unittest.TestCase):
             output = root / "staged"
             with self.assertRaises(SystemExit) as caught:
                 BUILDER.stage_package(
-                    core,
-                    se_cache,
-                    vr_cache,
-                    output,
-                    "v3.18.0",
+                    core, se_cache, vr_cache, output, "v3.18.0"
                 )
             message = str(caught.exception)
             self.assertIn(str(info_path), message)
@@ -343,6 +393,107 @@ class FomodPackageTests(unittest.TestCase):
                         core, se_cache, vr_cache, output, "v3.18.0"
                     )
             self.assertFalse(output.exists())
+
+    def test_rejects_residual_loose_compiled_shader(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            core, se_cache, vr_cache = self._inputs(root)
+            loose = vr_cache / BUILDER.CACHE_DIRECTORY / "Water" / "1.pso"
+            loose.parent.mkdir()
+            loose.write_bytes(b"legacy")
+            with self.assertRaises(SystemExit):
+                BUILDER.stage_package(
+                    core, se_cache, vr_cache, root / "staged", "v3.18.0"
+                )
+
+    def test_rejects_pack_manifest_for_another_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            core, se_cache, vr_cache = self._inputs(root)
+            manifest_path = (
+                vr_cache / BUILDER.CACHE_DIRECTORY / BUILDER.PACK_MANIFEST_FILE
+            )
+            manifest = self._read_json(manifest_path)
+            manifest["runtime"] = "SE"
+            self._write_json(manifest_path, manifest)
+            output = root / "staged"
+            with self.assertRaises(SystemExit) as caught:
+                BUILDER.stage_package(
+                    core, se_cache, vr_cache, output, "v3.18.0"
+                )
+            message = str(caught.exception)
+            self.assertIn(str(manifest_path), message)
+            self.assertIn("expected 'VR'", message)
+            self.assertIn("observed 'SE'", message)
+            self.assertFalse(output.exists())
+
+    def test_rejects_manifest_count_not_present_in_pack(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            core, se_cache, vr_cache = self._inputs(root)
+            manifest_path = (
+                vr_cache / BUILDER.CACHE_DIRECTORY / BUILDER.PACK_MANIFEST_FILE
+            )
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["optimizedRecordCount"] = 1
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                BUILDER.stage_package(
+                    core, se_cache, vr_cache, root / "staged", "v3.18.0"
+                )
+
+    def test_rejects_pack_set_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            core, se_cache, vr_cache = self._inputs(root)
+            pack_path = vr_cache / BUILDER.CACHE_DIRECTORY / BUILDER.PACK_FILES[0]
+            BUILDER.SHADER_CACHE_CONTRACT.write_shader_pack(
+                pack_path,
+                BUILDER.PACK_LANES[BUILDER.PACK_FILES[0]],
+                1,
+                [],
+                "fedcba9876543210fedcba9876543210",
+            )
+            with self.assertRaises(SystemExit):
+                BUILDER.stage_package(
+                    core, se_cache, vr_cache, root / "staged", "v3.18.0"
+                )
+
+    def test_rejects_reserved_or_malformed_manifest_contract(self) -> None:
+        mutations = (
+            ("zero identity", lambda manifest: manifest.__setitem__("packSetId", "0" * 32)),
+            ("missing hash", lambda manifest: manifest.pop("hashAlgorithm")),
+            ("wrong count type", lambda manifest: manifest.__setitem__("optimizedRecordCount", "0")),
+            ("boolean count", lambda manifest: manifest.__setitem__("optimizedRecordCount", False)),
+            ("missing file", lambda manifest: manifest["files"].pop("Developer.B.csxpack")),
+            (
+                "wrong lane",
+                lambda manifest: manifest["files"]["Developer.A.csxpack"].__setitem__("lane", 1),
+            ),
+            (
+                "ambiguous generation",
+                lambda manifest: manifest["files"]["Optimized.B.csxpack"].__setitem__("generation", 1),
+            ),
+            (
+                "nonadjacent baseline generations",
+                lambda manifest: manifest["files"]["Optimized.B.csxpack"].__setitem__("generation", 3),
+            ),
+        )
+        for name, mutate in mutations:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                _, _, vr_cache = self._inputs(root)
+                cache = vr_cache / BUILDER.CACHE_DIRECTORY
+                manifest_path = cache / BUILDER.PACK_MANIFEST_FILE
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                mutate(manifest)
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                with self.assertRaises(SystemExit):
+                    BUILDER.validate_cache_source(
+                        cache,
+                        BUILDER.RUNTIME_VR,
+                        self.SHADER_CACHE_ABI,
+                    )
 
     def test_refuses_to_replace_existing_staging_tree(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

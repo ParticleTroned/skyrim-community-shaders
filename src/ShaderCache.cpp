@@ -15,6 +15,7 @@
 #include <d3dcompiler.h>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <nlohmann/json.hpp>
@@ -183,6 +184,28 @@ namespace SIE
 
 		std::unordered_map<std::string, IncludeParseEntry> g_shaderIncludeParseCache;
 		std::mutex g_shaderIncludeParseCacheMutex;
+		struct ShaderClosureCacheEntry
+		{
+			std::uint64_t generation = 0;
+			std::optional<Util::ContentHash::Hash128> digest;
+			std::vector<std::string> dependencies;
+		};
+		std::unordered_map<std::string, ShaderClosureCacheEntry> g_shaderClosureCache;
+		std::mutex g_shaderClosureCacheMutex;
+		std::atomic_uint64_t g_shaderSourceGeneration{ 1 };
+
+		void InvalidateShaderSourceCaches()
+		{
+			g_shaderSourceGeneration.fetch_add(1, std::memory_order_acq_rel);
+			{
+				std::lock_guard lock(g_shaderIncludeParseCacheMutex);
+				g_shaderIncludeParseCache.clear();
+			}
+			{
+				std::lock_guard lock(g_shaderClosureCacheMutex);
+				g_shaderClosureCache.clear();
+			}
+		}
 
 		std::chrono::system_clock::time_point GetMaxShaderMTime(
 			const std::filesystem::path& a_path,
@@ -316,6 +339,16 @@ namespace SIE
 			const std::filesystem::path& a_path,
 			const std::filesystem::path& a_shadersRoot)
 		{
+			const auto generation = g_shaderSourceGeneration.load(std::memory_order_acquire);
+			const auto cacheKey = NormalizedPathKey(a_path) + '|' + NormalizedPathKey(a_shadersRoot);
+			{
+				std::lock_guard lock(g_shaderClosureCacheMutex);
+				if (const auto cached = g_shaderClosureCache.find(cacheKey);
+					cached != g_shaderClosureCache.end() && cached->second.generation == generation &&
+					!cached->second.dependencies.empty()) {
+					return cached->second.dependencies;
+				}
+			}
 			GetMaxShaderMTime(a_path, a_shadersRoot);
 			std::vector<std::filesystem::path> queue{ a_path };
 			std::unordered_set<std::string> visited;
@@ -344,6 +377,13 @@ namespace SIE
 			}
 			std::ranges::sort(dependencies);
 			dependencies.erase(std::ranges::unique(dependencies).begin(), dependencies.end());
+			{
+				std::lock_guard lock(g_shaderClosureCacheMutex);
+				auto& cached = g_shaderClosureCache[cacheKey];
+				if (cached.generation != generation)
+					cached = ShaderClosureCacheEntry{ .generation = generation };
+				cached.dependencies = dependencies;
+			}
 			return dependencies;
 		}
 
@@ -399,6 +439,17 @@ namespace SIE
 			state += "ShaderCacheABI=";
 			state += BuildProvenance::GetShaderCacheAbiId();
 			state += ';';
+			std::vector<std::pair<std::string, std::string>> featureAbis;
+			for (auto* feature : Feature::GetFeatureList()) {
+				if (!feature->loaded)
+					continue;
+				const auto abi = feature->GetShaderCacheAbiVersion();
+				if (!abi.empty())
+					featureAbis.emplace_back(feature->GetShortName(), abi);
+			}
+			std::ranges::sort(featureAbis);
+			for (const auto& [name, abi] : featureAbis)
+				state += std::format("FeatureShaderABI={}:{};", name, abi);
 			state += a_snapshot.shaderDefines->canonicalText;
 			return Util::ContentHash::HashString(state);
 		}
@@ -489,36 +540,108 @@ namespace SIE
 			std::string logicalKey;
 			std::string exactKey;
 			std::string metadata;
+			std::string contentContract;
+			CSX::Api::ShaderCompatibilityRequirementSet compatibility;
 		};
 
-		bool ManagedShaderPackFilesPresent()
+		nlohmann::json SerializeCompatibilityRanges(
+			const CSX::Api::ShaderCompatibilityRequirementSet& a_requirements)
 		{
-			std::error_code error;
-			for (const auto* path : {
-					 L"Data/ShaderCache/Optimized.A.csxpack",
-					 L"Data/ShaderCache/Optimized.B.csxpack",
-					 L"Data/ShaderCache/Developer.A.csxpack",
-					 L"Data/ShaderCache/Developer.B.csxpack" }) {
-				error.clear();
-				if (!std::filesystem::is_regular_file(path, error) || error)
-					return false;
+			auto ranges = nlohmann::json::array();
+			for (const auto& registration : a_requirements.registrations) {
+				ranges.push_back({
+					{ "identity", registration.identity },
+					{ "contractMajor", registration.contractMajor },
+					{ "currentMinor", registration.currentMinor },
+					{ "minimumCompatibleMinor", registration.minimumCompatibleMinor },
+					{ "maximumCompatibleMinor", registration.maximumCompatibleMinor },
+				});
 			}
-			return true;
+			return ranges;
+		}
+
+		std::optional<std::uint32_t> ReadMetadataVersion(const nlohmann::json& a_value)
+		{
+			if (!a_value.is_number_unsigned())
+				return std::nullopt;
+			const auto value = a_value.get<std::uint64_t>();
+			if (value > (std::numeric_limits<std::uint32_t>::max)())
+				return std::nullopt;
+			return static_cast<std::uint32_t>(value);
+		}
+
+		bool IsCompatibleShaderPackMetadata(
+			std::string_view a_metadata,
+			const ShaderPackIdentity& a_requested)
+		{
+			try {
+				const auto metadata = nlohmann::json::parse(a_metadata);
+				if (!metadata.is_object() || metadata.value("schemaVersion", 0) != 3 ||
+					metadata.value("contentContract", std::string{}) != a_requested.contentContract ||
+					metadata.value("compatibilityDomain", std::string{}) != a_requested.compatibility.domainCanonical)
+					return false;
+
+				const auto ranges = metadata.find("compatibilityRanges");
+				if (ranges == metadata.end() || !ranges->is_array() ||
+					ranges->size() != a_requested.compatibility.registrations.size())
+					return false;
+
+				std::vector<CSX::Api::ShaderCompatibilityRegistration> cachedRegistrations;
+				cachedRegistrations.reserve(ranges->size());
+				for (std::size_t index = 0; index < ranges->size(); ++index) {
+					const auto& range = (*ranges)[index];
+					if (!range.is_object())
+						return false;
+					const auto identity = range.find("identity");
+					const auto major = range.find("contractMajor");
+					const auto current = range.find("currentMinor");
+					const auto minimum = range.find("minimumCompatibleMinor");
+					const auto maximum = range.find("maximumCompatibleMinor");
+					if (identity == range.end() || !identity->is_string() ||
+						major == range.end() || current == range.end() || minimum == range.end() || maximum == range.end())
+						return false;
+					const auto majorValue = ReadMetadataVersion(*major);
+					const auto currentValue = ReadMetadataVersion(*current);
+					const auto minimumValue = ReadMetadataVersion(*minimum);
+					const auto maximumValue = ReadMetadataVersion(*maximum);
+					const auto& requested = a_requested.compatibility.registrations[index];
+					if (!majorValue || !currentValue || !minimumValue || !maximumValue ||
+						*majorValue == 0 || *minimumValue > *currentValue || *currentValue > *maximumValue ||
+						identity->get_ref<const std::string&>() != requested.identity)
+						return false;
+
+					auto cached = requested;
+					cached.contractMajor = *majorValue;
+					cached.currentMinor = *currentValue;
+					cached.minimumCompatibleMinor = *minimumValue;
+					cached.maximumCompatibleMinor = *maximumValue;
+					cachedRegistrations.push_back(std::move(cached));
+				}
+
+				auto cached = CSX::Api::BuildShaderCompatibilityRequirementSet(
+					std::move(cachedRegistrations));
+				if (cached.canonical != metadata.value("compatibilityRequirementSet", std::string{}))
+					return false;
+				return CSX::Api::AreShaderCompatibilityRequirementSetsCompatible(
+					cached, a_requested.compatibility);
+			} catch (...) {
+				return false;
+			}
+		}
+
+		std::string GetShaderPackFamily(const std::wstring& a_diskPath)
+		{
+			const auto key = GetManifestKey(a_diskPath);
+			const auto separator = key.find('/');
+			return key.substr(0, separator);
 		}
 
 		struct ManagedPackSet
 		{
-			Util::ShaderCachePack::Store optimized{
-				L"Data/ShaderCache/Optimized.A.csxpack",
-				L"Data/ShaderCache/Optimized.B.csxpack",
-				Util::ShaderCachePack::Lane::Optimized
-			};
-			Util::ShaderCachePack::Store developer{
-				L"Data/ShaderCache/Developer.A.csxpack",
-				L"Data/ShaderCache/Developer.B.csxpack",
-				Util::ShaderCachePack::Lane::Developer
-			};
-			std::once_flag opened;
+			std::once_flag initialized;
+			Util::ShaderCachePack::LayoutState layoutState = Util::ShaderCachePack::LayoutState::Absent;
+			std::unique_ptr<Util::ShaderCachePack::Store> optimized;
+			std::unique_ptr<Util::ShaderCachePack::Store> developer;
 			std::atomic_bool optimizedAvailable{ false };
 			std::atomic_bool developerAvailable{ false };
 		};
@@ -529,56 +652,164 @@ namespace SIE
 			return packs;
 		}
 
+		void InitializeManagedPacks()
+		{
+			auto& packs = ManagedPacks();
+			std::call_once(packs.initialized, [&] {
+				constexpr std::array<const wchar_t*, 4> packPaths{
+					L"Data/ShaderCache/Optimized.A.csxpack",
+					L"Data/ShaderCache/Optimized.B.csxpack",
+					L"Data/ShaderCache/Developer.A.csxpack",
+					L"Data/ShaderCache/Developer.B.csxpack"
+				};
+				constexpr auto manifestPath = L"Data/ShaderCache/PackManifest.json";
+				std::array<bool, 5> present{};
+				std::error_code error;
+				present[0] = std::filesystem::exists(manifestPath, error) && !error;
+				for (std::size_t index = 0; index < packPaths.size(); ++index) {
+					error.clear();
+					present[index + 1] = std::filesystem::exists(packPaths[index], error) && !error;
+				}
+				const auto presentCount = std::ranges::count(present, true);
+				const auto memberState = Util::ShaderCachePack::ClassifyLayoutMembers(present);
+				if (memberState == Util::ShaderCachePack::LayoutState::Absent)
+					return;
+				packs.layoutState = Util::ShaderCachePack::LayoutState::PartialOrInvalid;
+				if (memberState == Util::ShaderCachePack::LayoutState::PartialOrInvalid) {
+					logger::error(
+						"Managed shader pack layout is partial ({}/{} fixed members present); retaining legacy loose-cache fallback until repaired or cleared",
+						presentCount,
+						present.size());
+					return;
+				}
+
+				try {
+					std::ifstream manifestStream(manifestPath);
+					if (!manifestStream) {
+						logger::error("Managed shader pack layout is installed but PackManifest.json is missing or unreadable");
+						return;
+					}
+					nlohmann::json manifest;
+					manifestStream >> manifest;
+					const auto expectedRuntime = REL::Module::IsVR() ? "VR" : "SE";
+					std::string manifestError;
+					const auto contract = Util::ShaderCachePack::ParseManifestContract(
+						manifest,
+						expectedRuntime,
+						&manifestError);
+					if (!contract) {
+						logger::error("Managed shader pack manifest is invalid; retaining legacy loose-cache fallback: {}", manifestError);
+						return;
+					}
+
+					auto optimized = std::make_unique<Util::ShaderCachePack::Store>(
+						packPaths[0], packPaths[1], Util::ShaderCachePack::Lane::Optimized, contract->packSetId);
+					auto developer = std::make_unique<Util::ShaderCachePack::Store>(
+						packPaths[2], packPaths[3], Util::ShaderCachePack::Lane::Developer, contract->packSetId);
+					auto openLane = [&](Util::ShaderCachePack::Store& a_store,
+										std::string_view a_name) {
+						std::string diagnostic;
+						const bool opened = a_store.Open(&diagnostic);
+						if (!opened)
+							logger::warn("{} managed shader pack unavailable: {}", a_name, diagnostic);
+						else if (!diagnostic.empty())
+							logger::warn("{} managed shader pack opened in degraded A/B state: {}", a_name, diagnostic);
+						return opened;
+					};
+
+					const bool optimizedOpen = openLane(
+						*optimized,
+						"Optimized");
+					const bool developerOpen = openLane(
+						*developer,
+						"Developer");
+
+					bool manifestFilesValid = false;
+					if (optimizedOpen && developerOpen) {
+						const auto optimizedIdentities = optimized->GetFileIdentityKeys();
+						const auto developerIdentities = developer->GetFileIdentityKeys();
+						const std::array identities{
+							optimizedIdentities[0], optimizedIdentities[1],
+							developerIdentities[0], developerIdentities[1]
+						};
+						const auto optimizedStates = optimized->GetFileStates();
+						const auto developerStates = developer->GetFileStates();
+						const std::array states{
+							optimizedStates[0], optimizedStates[1], developerStates[0], developerStates[1]
+						};
+						manifestFilesValid = Util::ShaderCachePack::ValidateDistinctFileIdentities(
+												 identities, &manifestError) &&
+						                     Util::ShaderCachePack::ValidateManifestFileStates(
+												 *contract, states, &manifestError);
+					} else {
+						manifestError = "one or more managed shader pack lanes failed read-only admission";
+					}
+					packs.optimizedAvailable.store(manifestFilesValid, std::memory_order_release);
+					packs.developerAvailable.store(manifestFilesValid, std::memory_order_release);
+
+					packs.layoutState = Util::ShaderCachePack::ClassifyValidatedLayout(
+						memberState, manifestFilesValid, manifestFilesValid);
+					if (packs.layoutState != Util::ShaderCachePack::LayoutState::Complete) {
+						logger::error(
+							"Managed shader pack layout is not fully valid; retaining legacy loose-cache fallback: {}",
+							manifestError);
+						return;
+					}
+					packs.optimized = std::move(optimized);
+					packs.developer = std::move(developer);
+
+					logger::info(
+						"Managed shader pack layout initialized (optimized={}, developer={})",
+						optimizedOpen,
+						developerOpen);
+				} catch (const std::exception& e) {
+					packs.optimizedAvailable.store(false, std::memory_order_release);
+					packs.developerAvailable.store(false, std::memory_order_release);
+					packs.layoutState = Util::ShaderCachePack::LayoutState::PartialOrInvalid;
+					packs.optimized.reset();
+					packs.developer.reset();
+					logger::error("Managed shader pack initialization failed: {}", e.what());
+				} catch (...) {
+					packs.optimizedAvailable.store(false, std::memory_order_release);
+					packs.developerAvailable.store(false, std::memory_order_release);
+					packs.layoutState = Util::ShaderCachePack::LayoutState::PartialOrInvalid;
+					packs.optimized.reset();
+					packs.developer.reset();
+					logger::error("Managed shader pack initialization failed");
+				}
+			});
+		}
+
+		bool ManagedShaderPackLayoutInstalled()
+		{
+			InitializeManagedPacks();
+			return ManagedPacks().layoutState == Util::ShaderCachePack::LayoutState::Complete;
+		}
+
+		bool ManagedShaderPackLayoutPresent()
+		{
+			InitializeManagedPacks();
+			return ManagedPacks().layoutState != Util::ShaderCachePack::LayoutState::Absent;
+		}
+
 		void QuarantineShaderPackLane(bool a_developerMode, std::string_view a_cause)
 		{
 			auto& packs = ManagedPacks();
 			auto& available = a_developerMode ? packs.developerAvailable : packs.optimizedAvailable;
 			if (available.exchange(false, std::memory_order_acq_rel)) {
 				logger::error(
-					"Quarantined {} managed shader pack for this process; using loose/source fallback: {}",
+					"Quarantined {} managed shader pack for this process; using source fallback: {}",
 					a_developerMode ? "developer" : "optimized", a_cause);
 			}
 		}
 
 		Util::ShaderCachePack::Store* GetShaderPackStore(bool a_developerMode)
 		{
-			if (!ManagedShaderPackFilesPresent())
-				return nullptr;
-
+			InitializeManagedPacks();
 			auto& packs = ManagedPacks();
-			std::call_once(packs.opened, [&] {
-				try {
-					std::string optimizedError;
-					std::string developerError;
-					const bool optimizedOpen = packs.optimized.Open(&optimizedError);
-					const bool developerOpen = packs.developer.Open(&developerError);
-					packs.optimizedAvailable.store(optimizedOpen, std::memory_order_release);
-					packs.developerAvailable.store(developerOpen, std::memory_order_release);
-					if (!optimizedOpen || !developerOpen) {
-						packs.optimizedAvailable.store(false, std::memory_order_release);
-						packs.developerAvailable.store(false, std::memory_order_release);
-						logger::warn(
-							"Managed shader pack set unavailable; retaining loose-cache compatibility as a unit (optimized='{}', developer='{}')",
-							optimizedError, developerError);
-						return;
-					}
-					logger::info(
-						"Opened managed shader pack set (optimized generation {}, developer generation {})",
-						packs.optimized.GetStats().activeGeneration,
-						packs.developer.GetStats().activeGeneration);
-				} catch (const std::exception& e) {
-					packs.optimizedAvailable.store(false, std::memory_order_release);
-					packs.developerAvailable.store(false, std::memory_order_release);
-					logger::error("Managed shader pack initialization failed; using loose/source fallback: {}", e.what());
-				} catch (...) {
-					packs.optimizedAvailable.store(false, std::memory_order_release);
-					packs.developerAvailable.store(false, std::memory_order_release);
-					logger::error("Managed shader pack initialization failed; using loose/source fallback");
-				}
-			});
 			if (!(a_developerMode ? packs.developerAvailable : packs.optimizedAvailable).load(std::memory_order_acquire))
 				return nullptr;
-			return a_developerMode ? &packs.developer : &packs.optimized;
+			return a_developerMode ? packs.developer.get() : packs.optimized.get();
 		}
 
 		std::optional<ShaderPackIdentity> BuildShaderPackIdentity(
@@ -589,15 +820,23 @@ namespace SIE
 			const auto sourceDigest = GetShaderContentDigest(a_shaderPath, ShaderSourceRoot());
 			if (!sourceDigest)
 				return std::nullopt;
-			const auto family = a_shaderPath.stem().string();
-			const auto compatibility = CSX::Api::GetShaderCompatibilityRequirementSet(family, a_shaderPath.string());
+			auto compatibility = CSX::Api::GetShaderCompatibilityRequirementSet(
+				GetShaderPackFamily(a_diskPath), a_shaderPath.string());
 			const auto contentContract = Util::ContentHash::CombineHashes(*sourceDigest, a_compileStateDigest).ToHex();
 			ShaderPackIdentity identity;
-			identity.logicalKey = std::format("{}|compat={}", GetManifestKey(a_diskPath), compatibility.digest);
-			identity.exactKey = std::format("{}|content={}", identity.logicalKey, contentContract);
-			identity.metadata = std::format(
-				"schema=1\nsource={}\ncompile={}\ncompatibility-length={}\n{}",
-				sourceDigest->ToHex(), a_compileStateDigest.ToHex(), compatibility.canonical.size(), compatibility.canonical);
+			identity.logicalKey = std::format("{}|compat-domain={}", GetManifestKey(a_diskPath), compatibility.domainDigest);
+			identity.exactKey = std::format(
+				"{}|content={}|compat={}", identity.logicalKey, contentContract, compatibility.digest);
+			identity.contentContract = contentContract;
+			identity.compatibility = compatibility;
+			identity.metadata = nlohmann::json{
+				{ "compatibilityDomain", compatibility.domainCanonical },
+				{ "compatibilityRanges", SerializeCompatibilityRanges(compatibility) },
+				{ "compatibilityRequirementSet", compatibility.canonical },
+				{ "contentContract", contentContract },
+				{ "schemaVersion", 3 }
+			}
+			                        .dump();
 			return identity;
 		}
 
@@ -613,12 +852,27 @@ namespace SIE
 				if (!identity)
 					return nullptr;
 				std::string error;
-				const auto entry = a_store.Find(identity->exactKey, &error);
+				auto entry = a_store.Find(identity->exactKey, &error);
+				const bool exactMatch = entry.has_value();
+				if (!entry && error.empty()) {
+					entry = a_store.FindCompatible(
+						identity->logicalKey,
+						[&](std::string_view a_metadata) {
+							return IsCompatibleShaderPackMetadata(a_metadata, *identity);
+						},
+						&error);
+				}
 				if (!entry) {
 					if (!error.empty())
 						QuarantineShaderPackLane(a_developerMode, error);
 					return nullptr;
 				}
+				if (exactMatch && entry->metadata != identity->metadata) {
+					QuarantineShaderPackLane(a_developerMode, "managed shader pack metadata disagrees with the requested canonical identity");
+					return nullptr;
+				}
+				if (!exactMatch)
+					logger::debug("Reused managed shader record through an overlapping external compatibility range: {}", identity->logicalKey);
 				ID3DBlob* blob = nullptr;
 				if (FAILED(D3DCreateBlob(entry->bytecode.size(), &blob)) || !blob)
 					return nullptr;
@@ -661,7 +915,7 @@ namespace SIE
 					logger::error("Failed to append shader pack record for {}: {}", Util::WStringToString(a_diskPath), error);
 					return false;
 				}
-				logger::debug("Saved shader record to {} pack: {}", a_developerMode ? "developer" : "optimized", identity->exactKey);
+				logger::debug("Appended shader record to {} pack pending checkpoint: {}", a_developerMode ? "developer" : "optimized", identity->exactKey);
 				return true;
 			} catch (const std::exception& e) {
 				QuarantineShaderPackLane(a_developerMode, e.what());
@@ -703,26 +957,43 @@ namespace SIE
 			}
 		}
 
-		bool ManagedShaderPacksAvailable()
+		Util::ShaderCachePack::ResetDisposition ResetManagedShaderPacks()
 		{
-			return GetShaderPackStore(false) && GetShaderPackStore(true);
-		}
-
-		bool ResetManagedShaderPacks()
-		{
-			bool success = true;
+			InitializeManagedPacks();
+			auto& packs = ManagedPacks();
+			auto aggregate = Util::ShaderCachePack::ResetDisposition::Complete;
 			for (const bool developerMode : { false, true }) {
-				auto* store = GetShaderPackStore(developerMode);
-				if (!store)
+				auto* store = developerMode ? packs.developer.get() : packs.optimized.get();
+				auto& available = developerMode ? packs.developerAvailable : packs.optimizedAvailable;
+				if (!store) {
+					aggregate = Util::ShaderCachePack::ResetDisposition::FailedBeforeCommit;
 					continue;
+				}
 				std::string error;
-				if (!store->Reset(&error)) {
-					success = false;
+				const auto disposition = store->Reset(&error);
+				if (disposition == Util::ShaderCachePack::ResetDisposition::FailedBeforeCommit) {
+					aggregate = disposition;
 					QuarantineShaderPackLane(developerMode, error);
 					logger::error("Failed to reset {} shader pack: {}", developerMode ? "developer" : "optimized", error);
+					continue;
+				}
+
+				const bool laneAvailable = store->GetStats().available;
+				if (laneAvailable)
+					available.store(true, std::memory_order_release);
+				else
+					QuarantineShaderPackLane(developerMode, error.empty() ? "reset reopen failed" : error);
+				if (disposition == Util::ShaderCachePack::ResetDisposition::CommittedDegraded) {
+					if (aggregate == Util::ShaderCachePack::ResetDisposition::Complete)
+						aggregate = disposition;
+					logger::warn(
+						"{} shader-pack reset committed with degraded state (available={}): {}",
+						developerMode ? "Developer" : "Optimized",
+						laneAvailable,
+						error);
 				}
 			}
-			return success;
+			return aggregate;
 		}
 
 		bool RemoveLooseDiskCacheEntries()
@@ -771,6 +1042,13 @@ namespace SIE
 				if (!SaveShaderBlobToPack(a_shaderBlob, a_developerMode, a_diskPath, a_shaderPath, a_packCompileStateDigest))
 					return false;
 				return true;
+			}
+			if (ManagedShaderPackLayoutPresent()) {
+				logger::debug(
+					"Skipped loose shader-cache write because a managed layout owns persistence for the {} lane: {}",
+					a_developerMode ? "developer" : "optimized",
+					Util::WStringToString(a_diskPath));
+				return false;
 			}
 
 			std::error_code error;
@@ -2149,16 +2427,21 @@ namespace SIE
 			}
 
 			auto compileState = CaptureGlobalCompileState();
-			const auto packCompileStateDigest = compileState.digest;
 			const auto shaderSourcePath = GetShaderPath(
 				shader.shaderType == RE::BSShader::Type::ImageSpace ?
 					static_cast<const RE::BSImagespaceShader&>(shader).originalShaderName :
 					shader.fxpFilename);
-			const auto compatibility = CSX::Api::GetShaderCompatibilityRequirementSet(
+			auto diskPath = GetDiskPath(
 				shader.fxpFilename,
+				descriptor,
+				shaderClass,
+				compileState.shaderDefines->canonicalText);
+			const auto packCompileStateDigest = compileState.digest;
+			const auto compatibility = CSX::Api::GetShaderCompatibilityRequirementSet(
+				GetShaderPackFamily(diskPath),
 				Util::WStringToString(shaderSourcePath));
 			compileState.digest = Util::ContentHash::CombineHashes(
-				compileState.digest,
+				packCompileStateDigest,
 				Util::ContentHash::HashString(compatibility.canonical));
 			const uint64_t diskCacheGeneration = GetDiskCacheGeneration();
 			auto& cache = ShaderCache::Instance();
@@ -2180,11 +2463,6 @@ namespace SIE
 			const auto type = shader.shaderType.get();
 
 			// check diskcache
-			auto diskPath = GetDiskPath(
-				shader.fxpFilename,
-				descriptor,
-				shaderClass,
-				compileState.shaderDefines->canonicalText);
 			ID3DBlob* shaderBlob = nullptr;
 			auto* managedPack = useDiskCache ? GetShaderPackStore(compileState.developerMode) : nullptr;
 			if (managedPack) {
@@ -2196,14 +2474,24 @@ namespace SIE
 					packCompileStateDigest);
 				if (shaderBlob) {
 					logger::debug("Loaded shader from managed pack: {}", Util::WStringToString(diskPath));
-					cache.AddCompletedShader(
-						shaderClass, shader, descriptor, shaderBlob, diskPath, compileState.digest, /*fromDisk=*/true);
+					if (!cache.AddCompletedShader(
+							shaderClass,
+							shader,
+							descriptor,
+							shaderBlob,
+							diskPath,
+							compileState.digest,
+							/*fromDisk=*/true,
+							a_taskGeneration)) {
+						shaderBlob->Release();
+						return nullptr;
+					}
 					return shaderBlob;
 				}
 				managedPack = GetShaderPackStore(compileState.developerMode);
 			}
 
-			if (Util::ShaderCachePack::ShouldReadLooseBlob(useDiskCache, managedPack != nullptr) &&
+			if (Util::ShaderCachePack::ShouldReadLooseBlob(useDiskCache, ManagedShaderPackLayoutPresent()) &&
 				std::filesystem::exists(diskPath)) {
 				// Determine whether the disk-cached shader is still valid.
 				bool diskCacheOutdated = false;
@@ -2927,6 +3215,8 @@ namespace SIE
 					deferredDiskWrites.size());
 			}
 			deferredDiskWrites.clear();
+			deferredDiskWriteOrder.clear();
+			deferredDiskWritesInFlight = 0;
 			deferredManifestFlushPending = false;
 		}
 
@@ -3663,24 +3953,23 @@ namespace SIE
 		deferredWrite.compileStateDigest = a_compileStateDigest;
 		deferredWrite.packCompileStateDigest = a_packCompileStateDigest;
 		deferredWrite.diskCacheGeneration = a_diskCacheGeneration;
+		const auto deferredKey = std::format(
+			"{}|{}|{}",
+			a_diskCacheGeneration,
+			a_developerMode ? 1 : 0,
+			Util::WStringToString(a_diskPath));
 		{
 			std::lock_guard lock{ deferredDiskWritesMutex };
 			if (!acceptDeferredDiskWrites.load(std::memory_order_acquire))
 				return;
 
-			const auto existing = std::find_if(
-				deferredDiskWrites.begin(),
-				deferredDiskWrites.end(),
-				[&](const DeferredDiskWrite& a_write) {
-					return a_write.diskCacheGeneration == a_diskCacheGeneration &&
-				           a_write.developerMode == a_developerMode &&
-				           a_write.diskPath == a_diskPath;
-				});
-			if (existing != deferredDiskWrites.end())
-				*existing = std::move(deferredWrite);
-			else if (deferredDiskWrites.size() < kMaximumDeferredDiskWrites)
-				deferredDiskWrites.push_back(std::move(deferredWrite));
-			else if (!deferredDiskWriteLimitReported.exchange(true, std::memory_order_acq_rel))
+			if (const auto existing = deferredDiskWrites.find(deferredKey);
+				existing != deferredDiskWrites.end()) {
+				existing->second = std::move(deferredWrite);
+			} else if (deferredDiskWrites.size() + deferredDiskWritesInFlight < kMaximumDeferredDiskWrites) {
+				deferredDiskWriteOrder.push_back(deferredKey);
+				deferredDiskWrites.emplace(deferredKey, std::move(deferredWrite));
+			} else if (!deferredDiskWriteLimitReported.exchange(true, std::memory_order_acq_rel))
 				logger::warn(
 					"Shader-cache persistence queue reached its {}-record bound; additional records remain usable in memory but will not be persisted",
 					kMaximumDeferredDiskWrites);
@@ -3817,7 +4106,7 @@ namespace SIE
 		// compatibility requirements. The local compiler producer is useful
 		// provenance for loose caches, but it is not a packed-bytecode validity
 		// requirement and must not invalidate a shipped portable pack.
-		if (ManagedShaderPacksAvailable())
+		if (ManagedShaderPackLayoutInstalled())
 			cachedShaderCompiler = BuildProvenance::GetShaderCompilerIdentity();
 
 		const auto featureStates = GetCurrentFeatureStates();
@@ -3982,11 +4271,18 @@ namespace SIE
 	{
 		std::scoped_lock lock{ compilationSet.compilationMutex, g_diskCacheMutationMutex };
 		AdvanceDiskCacheGeneration();
-		if (ManagedShaderPacksAvailable()) {
-			const bool reset = ResetManagedShaderPacks();
+		if (ManagedShaderPackLayoutInstalled()) {
+			const auto reset = ResetManagedShaderPacks();
+			if (reset == Util::ShaderCachePack::ResetDisposition::FailedBeforeCommit) {
+				logger::error("Managed shader-pack clear did not commit for every lane; retaining cache metadata and process-local quarantine");
+				return;
+			}
 			const bool removedLoose = RemoveLooseDiskCacheEntries();
 			DiscardShaderCacheManifestLocked();
-			logger::info("Cleared managed shader packs in place (reset={}, legacyCleanup={})", reset, removedLoose);
+			logger::info(
+				"Cleared managed shader packs in place (reset={}, legacyCleanup={})",
+				reset == Util::ShaderCachePack::ResetDisposition::Complete ? "complete" : "committed-degraded",
+				removedLoose);
 			return;
 		}
 		if (RemovePath(DiskCachePath(), "active")) {
@@ -3999,15 +4295,20 @@ namespace SIE
 	{
 		std::scoped_lock lock{ compilationSet.compilationMutex, g_diskCacheMutationMutex };
 		AdvanceDiskCacheGeneration();
-		if (ManagedShaderPacksAvailable()) {
-			const bool reset = ResetManagedShaderPacks();
+		if (ManagedShaderPackLayoutInstalled()) {
+			const auto reset = ResetManagedShaderPacks();
+			if (reset == Util::ShaderCachePack::ResetDisposition::FailedBeforeCommit) {
+				logger::error("Managed shader-cache clear did not commit for every lane; retaining cache metadata and lifecycle state");
+				return;
+			}
 			const bool removedLoose = RemoveLooseDiskCacheEntries();
 			const bool removedPrevious = RemovePath(PreviousDiskCachePath(), "previous");
 			const bool removedSwap = RemovePath(SwapDiskCachePath(), "temporary");
 			DiscardShaderCacheManifestLocked();
 			logger::info(
 				"Cleared managed shader cache in place (reset={}, legacyCleanup={}, previousCleanup={}, swapCleanup={})",
-				reset, removedLoose, removedPrevious, removedSwap);
+				reset == Util::ShaderCachePack::ResetDisposition::Complete ? "complete" : "committed-degraded",
+				removedLoose, removedPrevious, removedSwap);
 			diskCacheHeld = false;
 			featureSetChanged = false;
 			featureSetRevertPending = false;
@@ -4267,7 +4568,7 @@ namespace SIE
 		previousCacheMismatches.clear();
 		heldMismatchDefines.clear();
 
-		const bool managedPacks = ManagedShaderPacksAvailable();
+		const bool managedPacks = ManagedShaderPackLayoutInstalled();
 		if (!managedPacks)
 			RefreshPreviousDiskCacheInfo();
 		cacheMismatches = ClassifyCacheInfo(ini);
@@ -4374,6 +4675,7 @@ namespace SIE
 		}
 
 		std::set<std::wstring> savedPaths;
+		std::array<std::size_t, 2> pendingPackWrites{};
 		for (const auto& [sourcePath, record] : records) {
 			if (!savedPaths.insert(record.diskPath).second)
 				continue;
@@ -4382,14 +4684,33 @@ namespace SIE
 			if (!shaderBlob || IsShaderLoadedFromDisk(record.key))
 				continue;
 
-			SaveShaderBlobToDisk(
-				shaderBlob,
-				record.developerMode,
-				record.diskPath,
-				sourcePath,
-				record.compileStateDigest,
-				record.packCompileStateDigest,
-				diskCacheGeneration);
+			const bool managedLane = GetShaderPackStore(record.developerMode) != nullptr;
+			if (SaveShaderBlobToDisk(
+					shaderBlob,
+					record.developerMode,
+					record.diskPath,
+					sourcePath,
+					record.compileStateDigest,
+					record.packCompileStateDigest,
+					diskCacheGeneration) &&
+				managedLane) {
+				++pendingPackWrites[record.developerMode ? 1 : 0];
+			}
+		}
+		for (const bool developerMode : { false, true }) {
+			const auto pendingWrites = pendingPackWrites[developerMode ? 1 : 0];
+			if (pendingWrites == 0)
+				continue;
+			std::string checkpointError;
+			if (auto* store = GetShaderPackStore(developerMode);
+				!store || !store->Checkpoint(&checkpointError)) {
+				QuarantineShaderPackLane(developerMode, checkpointError);
+				logger::error(
+					"{} shader-pack records remain usable in memory but {} records were not durably persisted: {}",
+					developerMode ? "Developer" : "Optimized",
+					pendingWrites,
+					checkpointError);
+			}
 		}
 		FlushShaderCacheManifest();
 
@@ -4414,7 +4735,7 @@ namespace SIE
 
 	bool ShaderCache::RestorePreviousDiskCache()
 	{
-		if (ManagedShaderPacksAvailable()) {
+		if (ManagedShaderPackLayoutInstalled()) {
 			logger::warn("Cannot restore a legacy previous-cache directory while managed shader packs are active");
 			return false;
 		}
@@ -5292,6 +5613,7 @@ namespace SIE
 		for (;;) {
 			std::deque<DeferredDiskWrite> writes;
 			bool flushManifest = false;
+			std::size_t extractedWrites = 0;
 			{
 				std::unique_lock lock{ deferredDiskWritesMutex };
 				deferredDiskWritesCV.wait(lock, stoken, [this, stoken] {
@@ -5302,21 +5624,36 @@ namespace SIE
 					return stoken.stop_requested() ||
 					       (hasPendingWork && !persistenceBlocked);
 				});
-				if (stoken.stop_requested() &&
-					(deferredDiskWrites.empty() ||
-						saveLoadDiskPersistenceBlocked.load(std::memory_order_acquire))) {
+				if (stoken.stop_requested()) {
+					if (!deferredDiskWrites.empty()) {
+						logger::warn(
+							"Discarding {} deferred shader-cache writes at the bounded shutdown boundary",
+							deferredDiskWrites.size());
+					}
+					deferredDiskWrites.clear();
+					deferredDiskWriteOrder.clear();
+					deferredManifestFlushPending = false;
 					break;
 				}
 
-				writes.swap(deferredDiskWrites);
+				while (!deferredDiskWriteOrder.empty() && writes.size() < kDeferredDiskWriteBatchSize) {
+					auto key = std::move(deferredDiskWriteOrder.front());
+					deferredDiskWriteOrder.pop_front();
+					const auto found = deferredDiskWrites.find(key);
+					if (found == deferredDiskWrites.end())
+						continue;
+					writes.push_back(std::move(found->second));
+					deferredDiskWrites.erase(found);
+					++deferredDiskWritesInFlight;
+					++extractedWrites;
+				}
 				flushManifest = deferredManifestFlushPending;
 				deferredManifestFlushPending = false;
 			}
 
-			std::size_t savedWrites = 0;
+			std::size_t durableWrites = 0;
 			std::size_t skippedWrites = 0;
-			bool optimizedPackWritten = false;
-			bool developerPackWritten = false;
+			std::array<std::size_t, 2> pendingPackWrites{};
 			while (!writes.empty()) {
 				if (saveLoadDiskPersistenceBlocked.load(std::memory_order_acquire))
 					break;
@@ -5329,6 +5666,7 @@ namespace SIE
 				}
 
 				try {
+					const bool managedLane = GetShaderPackStore(write.developerMode) != nullptr;
 					if (SaveShaderBlobToDisk(
 							write.shaderBlob.Get(),
 							write.developerMode,
@@ -5337,13 +5675,10 @@ namespace SIE
 							write.compileStateDigest,
 							write.packCompileStateDigest,
 							write.diskCacheGeneration)) {
-						++savedWrites;
-						if (GetShaderPackStore(write.developerMode)) {
-							if (write.developerMode)
-								developerPackWritten = true;
-							else
-								optimizedPackWritten = true;
-						}
+						if (managedLane)
+							++pendingPackWrites[write.developerMode ? 1 : 0];
+						else
+							++durableWrites;
 					} else {
 						++skippedWrites;
 					}
@@ -5361,39 +5696,63 @@ namespace SIE
 				}
 			}
 
-			for (const auto [developerMode, written] : {
-					 std::pair{ false, optimizedPackWritten }, std::pair{ true, developerPackWritten } }) {
-				if (!written)
+			for (const bool developerMode : { false, true }) {
+				const auto pendingWrites = pendingPackWrites[developerMode ? 1 : 0];
+				if (pendingWrites == 0)
 					continue;
 				try {
 					std::string checkpointError;
-					if (auto* store = GetShaderPackStore(developerMode); store && !store->Checkpoint(&checkpointError)) {
+					if (auto* store = GetShaderPackStore(developerMode);
+						store && store->Checkpoint(&checkpointError)) {
+						durableWrites += pendingWrites;
+					} else {
+						skippedWrites += pendingWrites;
 						QuarantineShaderPackLane(developerMode, checkpointError);
 						logger::error("Failed to checkpoint {} shader pack batch: {}", developerMode ? "developer" : "optimized", checkpointError);
 					}
 				} catch (const std::exception& e) {
+					skippedWrites += pendingWrites;
 					QuarantineShaderPackLane(developerMode, e.what());
 					logger::error("Failed to checkpoint {} shader pack batch: {}", developerMode ? "developer" : "optimized", e.what());
+				} catch (...) {
+					skippedWrites += pendingWrites;
+					QuarantineShaderPackLane(developerMode, "unknown checkpoint failure");
 				}
 			}
 
-			const bool stopping = stoken.stop_requested();
-			if (!writes.empty()) {
-				if (stopping) {
-					logger::warn(
-						"Discarding {} deferred shader-cache writes because disk persistence became blocked during shutdown",
-						writes.size());
-				} else {
-					std::lock_guard lock{ deferredDiskWritesMutex };
-					while (!writes.empty()) {
-						deferredDiskWrites.push_front(std::move(writes.back()));
-						writes.pop_back();
+			bool requeuedWrites = false;
+			std::size_t supersededWrites = 0;
+			{
+				std::lock_guard lock{ deferredDiskWritesMutex };
+				deferredDiskWritesInFlight =
+					deferredDiskWritesInFlight >= extractedWrites ?
+						deferredDiskWritesInFlight - extractedWrites :
+						0;
+				while (!writes.empty()) {
+					auto write = std::move(writes.front());
+					writes.pop_front();
+					const auto key = std::format(
+						"{}|{}|{}",
+						write.diskCacheGeneration,
+						write.developerMode ? 1 : 0,
+						Util::WStringToString(write.diskPath));
+					if (deferredDiskWrites.contains(key)) {
+						++supersededWrites;
+					} else if (
+						deferredDiskWrites.size() + deferredDiskWritesInFlight < kMaximumDeferredDiskWrites) {
+						deferredDiskWriteOrder.push_front(key);
+						deferredDiskWrites.emplace(key, std::move(write));
+						requeuedWrites = true;
+					} else {
+						++skippedWrites;
 					}
-					deferredManifestFlushPending =
-						deferredManifestFlushPending || flushManifest || savedWrites != 0;
 				}
-			} else if (flushManifest || savedWrites != 0) {
-				if (saveLoadDiskPersistenceBlocked.load(std::memory_order_acquire) && !stopping) {
+				if (requeuedWrites && (flushManifest || durableWrites != 0))
+					deferredManifestFlushPending = true;
+			}
+
+			if (!requeuedWrites && (flushManifest || durableWrites != 0)) {
+				if (saveLoadDiskPersistenceBlocked.load(std::memory_order_acquire)) {
 					std::lock_guard lock{ deferredDiskWritesMutex };
 					deferredManifestFlushPending = true;
 				} else {
@@ -5401,10 +5760,11 @@ namespace SIE
 				}
 			}
 
-			if (savedWrites != 0 || skippedWrites != 0) {
+			if (durableWrites != 0 || skippedWrites != 0) {
 				logger::debug(
-					"Deferred shader-cache persistence completed: {} saved, {} skipped",
-					savedWrites,
+					"Deferred shader-cache persistence completed: {} durable, {} superseded, {} skipped",
+					durableWrites,
+					supersededWrites,
 					skippedWrites);
 			}
 		}
@@ -5742,6 +6102,7 @@ namespace SIE
 		auto shaderBlob = cache.GetCompletedShader(task);
 
 		bool shouldLogCompletion = false;
+		bool batchBecameTerminal = false;
 		double completionTimeMs = 0.0;
 		uint64_t completedSnapshot = 0;
 		uint64_t failedSnapshot = 0;
@@ -5803,6 +6164,7 @@ namespace SIE
 				failedSnapshot = failedTasks.load(std::memory_order_relaxed);
 				totalSnapshot = totalTasks.load(std::memory_order_relaxed);
 			}
+			batchBecameTerminal = completedTasks + failedTasks >= totalTasks;
 
 			// Update task tracking
 			processedTasks.insert(task);
@@ -5815,8 +6177,9 @@ namespace SIE
 			logger::info("Shader compilation completed: {}/{} tasks ({} failed) in {}",
 				completedSnapshot, totalSnapshot, failedSnapshot, GetHumanTime(completionTimeMs));
 			FlushShaderCacheManifest();
-			cache.TryCompleteStartupCompilationPhase();
 		}
+		if (batchBecameTerminal)
+			cache.TryCompleteStartupCompilationPhase();
 
 		conditionVariable.notify_one();
 	}
@@ -6036,6 +6399,7 @@ namespace SIE
 	void UpdateListener::UpdateCache(const std::filesystem::path& filePath, SIE::ShaderCache* cache, bool& fileDone)
 	{
 		fileDone = true;
+		InvalidateShaderSourceCaches();
 		// Skip directories
 		if (std::filesystem::is_directory(filePath)) {
 			return;

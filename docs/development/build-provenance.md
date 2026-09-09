@@ -12,9 +12,10 @@ branch name or display version. Every DLL build has three related identities:
     accepts the matching SE/AE and VR cache packs; runtime shader permutations
     remain separated by each record's compile-state digest. The ABI invalidates
     globally incompatible cache blobs without changing merely because
-    cache-controller or unrelated C++ code was edited. Feature-scoped non-HLSL
-    incompatibilities use
-    `Feature::GetShaderCacheAbiVersion()` instead.
+    cache-controller or unrelated C++ code was edited. Shader-enabled features
+    default to feature ABI `1`; a feature can override
+    `Feature::GetShaderCacheAbiVersion()` and bumps it only when its non-HLSL
+    compiled-shader contract changes.
 
 `refresh_build_provenance` runs before every DLL compilation. It intentionally
 does not rely on CMake configure time, because an existing build tree can
@@ -42,6 +43,13 @@ Runtime-generated `Info.ini` files record `BuildId`, `ArtifactSHA256`,
 an explicit `ShaderCacheABI`. Build ID, artifact hash, plugin version, and
 ordinary feature versions are evidence. Global/scoped shader ABI and a changed
 runtime compiler invalidate the corresponding cache scope.
+
+Managed-pack admission treats `PackManifest.json`'s shader ABI as build
+provenance. Per-record content identities carry the global and enabled-feature
+ABIs, so multiple ABI generations can coexist in the same four pack files and
+only the affected lookup recompiles. The offline builder derives the same
+sorted feature-ABI salt from `Info.ini` as the runtime derives from loaded
+features.
 
 The prebuilt-cache generator calculates `ShaderCacheABI` using the same Python
 module and canonical contract file list as the DLL build. Precompiled caches do

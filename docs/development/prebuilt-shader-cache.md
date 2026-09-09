@@ -22,8 +22,8 @@ so it is not tied to a particular GPU vendor. It is tied to all of the
 following:
 
 -   the SE or VR runtime;
--   the exact CSX plugin version;
--   installed feature versions and enabled states;
+-   the explicit global and feature shader ABI contracts;
+-   enabled feature states that affect compilation;
 -   the shipped shader source and recursive includes;
 -   compiler flags and custom shader defines;
 -   the permutation inventory in the matching validation YAML.
@@ -220,12 +220,13 @@ This compiles HLSL but does not build the C++ plugin. The builder:
 3. compiles standard and Horizon Fix inputs for each shipped runtime, and one
    input for named profiles, with pinned hlslkit;
 4. remaps runtime ImageSpace directories;
-5. writes `Manifest.json` from source and recursive-include content;
-6. writes `Info.ini` with plugin and feature versions;
+5. writes a temporary `Manifest.json` from source, recursive includes, global
+   ABI, and enabled feature ABI contracts;
+6. writes `Info.ini` with provenance and explicit feature shader ABI values;
 7. validates metadata, every manifest entry, every blob, the `DXBC` signature,
    and the bounded Water-only delta between each runtime's inputs;
 8. writes optimized and developer A/B packs, verifies every SHA-256 committed
-   record and generation, and removes the thousands of loose runtime blobs;
+   record and generation, and removes the loose blobs and temporary manifest;
 9. packages each runtime's managed cache into a raw archive with no installer
    metadata or automatic runtime detection;
 10. publishes output only after every requested runtime has passed the earlier
@@ -247,7 +248,6 @@ dist/shader-cache/
 |-- SE/
 |   |-- ShaderCache/
 |   |   |-- Info.ini
-|   |   |-- Manifest.json
 |   |   |-- PackManifest.json
 |   |   |-- Optimized.A.csxpack
 |   |   |-- Optimized.B.csxpack
@@ -256,7 +256,6 @@ dist/shader-cache/
 |-- VR/
 |   |-- ShaderCache/
 |   |   |-- Info.ini
-|   |   |-- Manifest.json
 |   |   |-- PackManifest.json
 |   |   |-- Optimized.A.csxpack
 |   |   |-- Optimized.B.csxpack
@@ -416,13 +415,14 @@ Successful builder completion already proves:
 -   every requested single-cache named profile contains at least one compiled
     blob;
 -   every `.pso`, `.vso`, and `.cso` starts with `DXBC`;
--   `Manifest.json` uses the supported schema;
+-   the temporary loose-cache manifest uses the supported schema and is removed
+    after its content contracts are embedded in pack records;
 -   every blob has exactly one valid 32-character lowercase digest;
 -   the manifest contains no entry without a blob;
 -   `Info.ini` contains the requested plugin version;
 -   the archive was created and is nonempty;
--   every archive contains `ShaderCache/Info.ini`, `Manifest.json`,
-    `PackManifest.json`, and all four managed pack files;
+-   every archive contains exactly six cache-root files:
+    `ShaderCache/Info.ini`, `PackManifest.json`, and all four managed pack files;
 -   raw runtime archives contain no `fomod` installer tree;
 -   every pack header, SHA-256 record, commit trailer, record count, lane, and
     A/B generation validates using the same binary layout consumed by C++.
@@ -446,7 +446,7 @@ foreach ($runtime in @("SE", "VR")) {
     $manifest = Get-Content (Join-Path $cacheRoot "PackManifest.json") -Raw |
         ConvertFrom-Json
     $packs = Get-ChildItem $cacheRoot -File -Filter "*.csxpack"
-    if ($manifest.schemaVersion -ne 1 -or $packs.Count -ne 4 -or
+    if ($manifest.schemaVersion -ne 2 -or $packs.Count -ne 4 -or
         $manifest.optimizedRecordCount -le 0) {
         throw "$runtime manifest validation failed."
     }
@@ -483,10 +483,16 @@ to and to declare the same shader-cache ABI as the core AIO's
 `SKSE/Plugins/CSX.BuildManifest.json`. A disagreement fails the release before
 the FOMOD archive can replace the plain AIO.
 
-The plugin independently validates cache identity, shader ABI, source content,
-and registered compatibility requirements. A missing or mismatched record is
-compiled locally. Enabling or disabling Horizon Fix does not require reinstalling
-the cache because both compatible Water records coexist in the managed pack.
+The plugin validates the managed container's runtime and storage format, then
+selects records by shader ABI, feature ABI, source content, compile settings,
+and registered compatibility requirements. The pack manifest's seed ABI is
+provenance; it does not discard the container merely because the DLL changed.
+An exact or overlapping-range-compatible record is reused. Only a missing or
+incompatible record is compiled locally and appended, while older versions
+remain available until compaction. Enabling or disabling Horizon Fix does not
+require reinstalling the cache because both compatible Water records coexist.
+A partial or corrupt installed layout fails closed to source-only compilation
+without producing a legacy loose-cache tree beside the managed files.
 
 Ship the caches, DLL, shaders, compatibility manifest, and feature metadata from
 the same ref. Do not package a cache from one commit with the AIO from another.
@@ -636,11 +642,54 @@ when active-generation superseded bytes and fragmentation cross their bounded
 thresholds. It writes current logical records into the inactive file at a
 higher generation and leaves the old generation searchable as fallback.
 
+Initial runtime admission is non-mutating. Every shipped A/B member must already
+contain a valid header; zero-byte placeholders, directories, reparse points in
+any path component,
+unreadable files, and same-object aliases are rejected without modifying any
+peer. On Windows, the writer lease requires physical identity for each member,
+resolves relative names once, and retains non-delete-sharing parent and final
+file handles so admitted paths cannot be rebound or replaced while the lease is
+active. The four optimized/developer members must
+resolve to four distinct file identities, and any whole-layout rejection
+releases all provisional lane ownership. The same release applies when direct
+append or reset performs lazy admission and that admission rejects or throws.
+Explicit zero-byte bootstrap verifies both truncation and durable flush during
+ordinary or exceptional rollback and reports whether the original empty state
+was restored or could not be established. Rollback remains armed until the
+initialized pair has completed Store admission and index publication.
+
+Schema-2 installation baselines require adjacent A/B generations. Later runtime
+compaction or reset may produce a larger actual generation gap. Record sequences
+are valid only from 1 through `UINT64_MAX-1`; zero and `UINT64_MAX` are reserved.
+The Python archive/FOMOD validator and C++ runtime enforce the same rules.
+
 If any managed file is missing, the whole pack feature is unavailable and CSX
 retains the previous loose-cache behavior. `Manifest.json` remains part of that
 compatibility path. An explicit clear resets existing pack files in place;
 normal source, feature, and external-contract changes never rotate or blanket
 delete the managed cache.
+
+A reset barrier becomes authoritative before superseded-file cleanup. If the
+empty generation reopens successfully but cleanup fails, the Store remains
+available with a degraded-cleanup diagnostic. If the first or final reopen
+fails, the Store clears all pre-reset indexes and statistics, releases its
+writer ownership, and the runtime quarantines that lane while compiling from
+source. Initialization also reports its mutation phase to reset: failure before
+opening the target for truncation is non-mutating, while any failure or exception
+after that boundary is commit-uncertain (or known durable), invalidates the
+pre-reset Store, and releases its path and writer ownership.
+
+Explicit zero-byte bootstrap arms rollback before initializing the first member.
+Rollback attempts and verifies both members independently under a nonthrowing
+recovery boundary; optional diagnostic construction happens only afterward and
+cannot pre-empt physical restoration.
+
+Once reset has reopened its higher empty generation, a cleanup-only failure or
+exception retains that generation as available authority and excludes the
+uncertain superseded member. Conversely, any compaction failure after inactive-
+member mutation withdraws Store authority and releases ownership before return;
+the lane then falls back to source compilation rather than exposing stale
+fallback locations or statistics.
 
 Users can still compile local variants when:
 

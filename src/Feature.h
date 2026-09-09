@@ -236,7 +236,10 @@ public:
 	 * provenance only; override this with a stable value and bump it only when
 	 * already-compiled blobs for this feature must be discarded.
 	 */
-	virtual std::string_view GetShaderCacheAbiVersion() const { return {}; }
+	virtual std::string_view GetShaderCacheAbiVersion()
+	{
+		return GetShaderDefineName().empty() ? std::string_view{} : std::string_view{ "1" };
+	}
 	virtual void ClearShaderCache() {}
 	/** @brief Invalidates this feature's shader cache during a scene-scoped clear.
 	 *  Features may override this when they can avoid an eager full-cache rebuild. */

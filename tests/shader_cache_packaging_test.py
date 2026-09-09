@@ -273,6 +273,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 BUILDER.write_info_ini(
                     cache_dir,
                     root / "stage",
+                    REPO,
                     "CSX 12.345-VR",
                     "VR",
                     BUILDER.SHIPPED_CACHE_PROFILE,
@@ -282,6 +283,9 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 states = BUILDER.read_feature_states(cache_dir)
                 self.assertIs(states["HorizonFix"], enabled)
                 self.assertTrue(states["CSUtility"])
+                info = configparser.ConfigParser(interpolation=None)
+                info.read(cache_dir / BUILDER.INFO_FILE_NAME, encoding="utf-8-sig")
+                self.assertEqual(info.get("HorizonFix", "ShaderCacheABI"), "1")
 
     def test_horizon_variant_delta_rejects_malformed_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -384,6 +388,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
             BUILDER.write_info_ini(
                 cache_dir,
                 root / "stage",
+                REPO,
                 "CSX 12.345-VR",
                 "VR",
                 BUILDER.PATKA_CACHE_PROFILE,
@@ -447,6 +452,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 BUILDER.write_info_ini(
                     cache_dir,
                     root / "stage",
+                    REPO,
                     "CSX 12.345-VR",
                     "VR",
                     BUILDER.PATKA_CACHE_PROFILE,
@@ -491,8 +497,17 @@ class ShaderCachePackagingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             for runtime in ("SE", "VR"):
+                cache_dir = root / runtime
+                cache_dir.mkdir()
+                (cache_dir / BUILDER.INFO_FILE_NAME).write_text(
+                    "[Cache]\n"
+                    "[HorizonFix]\n"
+                    "Enabled = true\n"
+                    "ShaderCacheABI = 1\n",
+                    encoding="utf-8",
+                )
                 BUILDER.write_shader_cache_manifest(
-                    root / runtime,
+                    cache_dir,
                     root / "Shaders",
                     runtime,
                     {},
@@ -503,8 +518,8 @@ class ShaderCachePackagingTests(unittest.TestCase):
         self.assertEqual(
             states,
             [
-                f"ShaderCacheABI={'a' * 64};",
-                f"VR;ShaderCacheABI={'a' * 64};",
+                f"ShaderCacheABI={'a' * 64};FeatureShaderABI=HorizonFix:1;",
+                f"VR;ShaderCacheABI={'a' * 64};FeatureShaderABI=HorizonFix:1;",
             ],
         )
 

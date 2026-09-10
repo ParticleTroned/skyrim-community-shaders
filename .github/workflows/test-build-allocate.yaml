@@ -153,11 +153,13 @@ jobs:
                   git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
                   git add version/test-build.json
                   git commit \
-                    -m "chore(build): allocate $DISPLAY_VERSION [skip ci]" \
+                    -m "build(release): allocate test build [skip ci]" \
                     -m "Rationale:
                   Record one durable identity for the settled merge batch." \
                     -m "Implementation:
-                  Advance the validated state and bind it to its exact source."
+                  Advance the validated state and bind it to its exact source.
+                  Test build: $DISPLAY_VERSION
+                  Source: $SOURCE_SHA"
                   ALLOCATION_SHA=$(git rev-parse HEAD)
                   python tools/csx_test_build.py verify-allocation \
                     --repository . \

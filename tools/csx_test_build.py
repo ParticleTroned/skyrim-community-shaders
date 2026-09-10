@@ -68,6 +68,7 @@ def load_state(path: Path) -> dict[str, Any]:
 
 
 def validate_state(state: Any) -> None:
+    """Validate JSON field types and the seed/allocation invariants."""
     if not isinstance(state, dict):
         raise StateError("test-build state must be a JSON object")
     expected = {
@@ -83,7 +84,11 @@ def validate_state(state: Any) -> None:
         raise StateError(
             "test-build state keys must be exactly: " + ", ".join(sorted(expected))
         )
-    if state["schemaVersion"] != SCHEMA_VERSION:
+    if (
+        not isinstance(state["schemaVersion"], int)
+        or isinstance(state["schemaVersion"], bool)
+        or state["schemaVersion"] != SCHEMA_VERSION
+    ):
         raise StateError(f"unsupported schemaVersion {state['schemaVersion']!r}")
     if (
         not isinstance(state["sequence"], int)

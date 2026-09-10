@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,6 +22,7 @@ from tools.csx_test_build import (
     dispatch_decision,
     ensure_distribution_dispatch,
     output_values,
+    parse_state,
     validate_state,
     verify_allocation_commit,
     verify_seed_commit,
@@ -155,6 +157,43 @@ class TestBuildStateTests(unittest.TestCase):
         malformed["surprise"] = True
         with self.assertRaises(StateError):
             validate_state(malformed)
+
+    def test_rejects_noninteger_schema_versions_from_json(self) -> None:
+        for value in (True, False, 2.0, "2", None, [], {}):
+            with self.subTest(value=value):
+                malformed = dict(SEED, schemaVersion=value)
+                with self.assertRaisesRegex(StateError, "schemaVersion"):
+                    parse_state(json.dumps(malformed), "malformed.json")
+
+    def test_cli_rejects_invalid_persisted_field_types(self) -> None:
+        invalid_values = {
+            "schemaVersion": (True, False, 2.0, "2", None, [], {}),
+            "dateUtc": (True, False, 2, 2.0, None, [], {}),
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            state_path = Path(temporary) / "test-build.json"
+            for field, values in invalid_values.items():
+                for index, value in enumerate(values):
+                    with self.subTest(field=field, value=value):
+                        output_path = Path(temporary) / f"{field}-{index}-output"
+                        text = json.dumps(dict(SEED, **{field: value}))
+                        state_path.write_text(text, encoding="utf-8")
+                        result = subprocess.run(
+                            [
+                                sys.executable,
+                                str(ROOT / "tools/csx_test_build.py"),
+                                "read", "--state", str(state_path),
+                                "--github-output", str(output_path),
+                            ],
+                            check=False, capture_output=True, text=True,
+                        )
+                        self.assertEqual(result.returncode, 2, result.stderr)
+                        self.assertEqual(result.stdout, "")
+                        self.assertIn("error: ", result.stderr)
+                        self.assertIn(field, result.stderr)
+                        self.assertNotIn("Traceback", result.stderr)
+                        self.assertFalse(output_path.exists())
+                        self.assertEqual(state_path.read_text(encoding="utf-8"), text)
 
 
 class PullRequestDiscoveryTests(unittest.TestCase):

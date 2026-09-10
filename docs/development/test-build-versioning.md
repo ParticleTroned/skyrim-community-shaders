@@ -18,6 +18,11 @@ monotonically increasing; it does not reset when `CSX_VERSION` changes. The
 root state is bound to the existing RC217 tag and its UTC date, so the next
 allocation is RC218.
 
+Schema and sequence values must be integers; booleans and floating-point
+forms are rejected. UTC dates must be strings in real `YYYY-MM-DD` form.
+Invalid persisted fields fail validation before state or workflow outputs
+are written.
+
 The state records the base version, UTC date, represented source commit, and
 the pull requests associated with the complete first-parent merge range. It
 also names the commit that last changed the state. Each allocation is accepted

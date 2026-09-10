@@ -1,0 +1,23 @@
+warnings: {}
+errors: {}
+shaders:
+    - file: EncodeTexturesCS.hlsl
+      configs:
+          CSHADER:
+              common_defines:
+                  - COMPUTESHADER
+                  - DX11
+                  - WINPC
+              entries:
+                  - entry: Upscaling:Compute:EncodeTextures
+                    defines: []
+                  - entry: Upscaling:Compute:EncodeTexturesDLSS
+                    defines:
+                        - DLSS
+                  - entry: Upscaling:Compute:EncodeTexturesFSR
+                    defines:
+                        - FSR
+                  - entry: Upscaling:Compute:EncodeTexturesFSRDepthOutput
+                    defines:
+                        - FSR
+                        - DEPTH_OUTPUT

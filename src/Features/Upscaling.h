@@ -1955,7 +1955,8 @@ public:
 		float vrSeamHardening;
 		float2 sourceOffset;  // Source offset in combined stereo inputs
 		float2 outputOffset;  // Output offset in per-eye intermediates
-		float2 pad;
+		// Full-eye [minX, maxX) bounds, never the foveated dispatch crop; full texture in flat.
+		float2 sourceSamplingXBounds;
 	};
 
 	struct DynamicResolutionStretchCB
@@ -2046,6 +2047,8 @@ public:
 
 	static_assert(sizeof(JitterCB) == 16, "JitterCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(UpscalingDataCB) == 64, "UpscalingDataCB layout changed; update HLSL cbuffer.");
+	static_assert(offsetof(UpscalingDataCB, sourceSamplingXBounds) == 56,
+		"UpscalingDataCB source bounds offset changed; update HLSL cbuffer.");
 	static_assert(sizeof(DynamicResolutionStretchCB) == 32, "DynamicResolutionStretchCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(VRMenuLayerCompositeCB) == 16, "VRMenuLayerCompositeCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedPeripheryCB) == 96, "FoveatedPeripheryCB layout changed; update HLSL cbuffer.");

@@ -1,5 +1,220 @@
 # VR render-scale iteration records
 
+## September 10: fast reporting execution and verified reuse
+
+The repository reporting wrapper now supports one invocation for candidate
+finalization, validation/publication of a prepared append-only ledger update,
+and comparison. It indexes ledger metrics once, reuses only content-verified
+outputs, and records stage timings and limitations. The
+[reporting workflow](vr-render-scale-comparison-reporting.md#fast-routine-completion)
+and `AGENTS.md` require brief useful progress updates without redundant work.
+All comparison detail remains required; PR inclusion stays user-decided.
+
+On copied baseline evidence (renderer `1595cffd`, main-VR equivalent
+`9074b4676`, compiled `390fdea25`), compared with measured `348803c18`, the
+final offline check took 21.476 seconds for generation and 2.253 seconds for
+verified reuse. An earlier invocation took 63.779/7.688 seconds; these are
+observations, not latency guarantees. The full 871,216,257-byte scalar CSV
+remained byte-identical, and both invocations checked all 1,056 ledger timing
+cells. The existing ledger was unchanged. Older retry-detail limitations
+remained explicit. Live cleanup and new DLL inspection were not replayed.
+
+Sixteen focused tests passed, including cache invalidation, concurrent input
+changes, historical-cell preservation, stale ledger rejection, missing retry
+details, unflushed-worker rejection and late helper diagnostics. Evidence:
+`artifacts/reporting-performance-20260910/pipeline-validation.json`.
+The prepared-ledger publication path was tested with temporary fixtures;
+the existing canonical ledger was audited without applying another update.
+
+## September 10: automatic comparison and separate change assessment
+
+Every future ledger update includes the
+[detailed side-by-side reporting contract](vr-render-scale-comparison-reporting.md)
+automatically. PR inclusion remains the user's decision. Execution,
+terminal results, full-history health and improvement-or-neutral assessment
+are independent; unmet change standards do not relabel a completed test.
+
+The maintained offline finalizer and comparison reporter now expose all
+recovered failures and raw cumulative gates. The imposed two-frame stretch
+cutoff is diagnostic only, and the proven native-target presentation gate
+mismatch is separate from actual health failures. The baseline has no
+counted adverse switch-health findings; head's recovered failures at rows
+26 and 28 mean `DOES_NOT_MEET_STANDARD`, despite lower mean milliseconds.
+
+The side-by-side tables include relatch-proof and strict-completion frames
+and milliseconds, stretch episode counts, total frames and duration, with
+baseline/candidate deltas for every pass and transition. In pass 2, head
+uses 508 strict-completion frames versus 494 and 77 stretch frames versus
+73, while stretch time falls from 4,805.654 ms to 4,310.798 ms. Relatch proof
+has 25 measured boundaries per pass; missing/inapplicable boundaries are
+not substituted with zero. See the [updated comparison](nvidia-renderscale-baseline-vs-head-20260910.md).
+
+Automation source commit `5ab021f12362a4229556334f05a92ef41f5958af` is
+integrated into its local `dev` branch. The repository comparison wrapper
+uses that maintained source directly. Finalizer/comparison regression
+tests, four ledger tests, both skill validations, package validation and
+source/package parity passed. The integrated reporter rechecked 132
+receipts and all 1,056 existing numeric timing cells. The installed plugin
+cache was not rotated, and this work did not publish or modify a PR.
+
+## September 10: old-baseline versus measured-head health audit
+
+The [complete per-transition comparison](nvidia-renderscale-baseline-vs-head-20260910.md)
+compares renderer base `1595cffd` (main-VR renderer equivalent `9074b4676`),
+compiled as `390fdea25` with the preparation bridge backport, against the
+earlier measured main-VR head `348803c18`. Head mean strict latency is
+8.497% lower in pass 1 and 11.992% lower in pass 2. These are descriptive
+transition measurements, with environmental limits recorded in the report.
+
+The raw-receipt audit qualifies the terminal-PASS statements below.
+Head transitions 26 and 28 each record two fidelity mismatches and one
+vendor-failure stretch eye observation in both passes, then recover.
+The old baseline records zero for these counters. Both raw cumulative
+records reject the fixed stretch-frame cutoff and scaled-presentation gate
+at the final native target. These are retained diagnostics, excluded from
+health assessment for the reasons above. Head additionally fails the
+applicable fidelity and fallback gates. Stored terminal and Task 2
+verdicts remain separate from these findings.
+
+The comparison validates all 132 retained rows and 1,056 numeric timing
+cells against the existing ledger, without changing its historical cells.
+Memory remains inconclusive, and no resolved GPU frame timings exist.
+The report includes exact source commits, Build IDs, DLL identities,
+per-pass telemetry, retry evidence, and an interactive comparison.
+
+## September 10: 1595cffd comparison baseline completed
+
+Run `renderscale-tuning-nvidia-20260910T090649592Z` completed 33 + 33
+transitions on clean Release source
+`390fdea2533ae447849c5f07766c796872996a61`, the `1595cffd` comparison
+baseline with tuning preparation backported. All 66 render rows passed;
+per-transition Task 2 counts are 66 PASS / 0 FAIL / 0 INCONCLUSIVE.
+Strict completion averaged 838.490 ms and 830.058 ms. Pacing was VALID,
+with maximum client dispatch gap 54.370 ms. All 32 stretch-selected
+rows recovered; producer retries were 10 and 9.
+
+All task-owned captures are verified inactive, the complete 444-record
+journal is flushed, and the worker published COMPLETE and exited.
+Physical DLL, adjacent manifest, AIO receipt, archive, and extracted
+payload identities match. Memory classification is inconclusive;
+reporting is complete after the omitted packaged memory summary was
+reconstructed from six preserved boundaries. The existing ledger gained
+one column containing all 66 strict timings, 528 numeric timing cells,
+and complete timing groups, with all 887 rows and historical cells
+preserved. See the [run report](nvidia-renderscale-tuning-390fdea25-20260910.md).
+
+## September 10: selected recent ledger run
+
+At the user's request, the five September 9 run columns were removed from
+the comparison ledger: the early dirty build, both PR66 attempts, and both
+previous `348803c18` runs. Today's `nvidia-2026-09-10T07-19-50-405Z` is the
+only retained run from September 9-10. All 15 older run columns, today's
+complete column, and all 887 metric rows are unchanged. Earlier reports
+below describe the historical ledger before this selection; raw evidence
+and historical comparison reports remain retained.
+
+## September 10: completed NVIDIA two-pass assay
+
+Run `nvidia-2026-09-10T07-19-50-405Z` completed 33 + 33 transitions on
+clean source `348803c1831c8cd71ceb75a58143ad0bcb00abb2`. All render rows
+passed; per-transition Task 2 counts are 66 PASS / 0 FAIL / 0 INCONCLUSIVE.
+Pacing was VALID, with maximum client dispatch gap 40.695 ms. Strict
+completion averaged 767.246 ms and 730.514 ms in the two passes. All
+31 stretch-selected rows recovered; producer retry counts were 8 and 10.
+
+Both passes verified telemetry inactive. Memory classification is
+inconclusive, with private memory and system commit decreasing in both
+passes. The deployed DLL hash matches the AIO payload and build manifest;
+the manifest Build ID matches the running producer. Reporting is complete:
+the full journal was independently validated and flushed, and all captures
+are inactive. The stalled worker was subsequently recovered by cancelling
+its aborted notification reader. It published COMPLETE, exited, and released
+its own endpoint lock at 08:19:19 UTC, with the evidence journal unchanged.
+The [run report](nvidia-renderscale-tuning-20260910.md) records these limits.
+The existing comparison ledger gained one column containing all 66 strict
+timings, 528 numeric timing cells, and full numeric timing groups. All
+historical cells and the 887 existing metric rows were verified intact.
+
+## September 9–10: interrupted NVIDIA cadence run
+
+Run `nv-mtuivutb` retained 39 transitions (33 + 6) on clean source
+`348803c1831c8cd71ceb75a58143ad0bcb00abb2`. Every retained render and
+per-transition Task 2 result is PASS, but orchestration interruption and long
+gaps leave stress cadence unqualified and memory `repeat_not_completed`.
+The [run report](nvidia-renderscale-tuning-nv-mtuivutb.md) records the evidence,
+timing definitions, and writer benchmark. All 39 strict timings and available
+presentation, cleanup, tail, frame, and QPC timings were added to the existing
+comparison ledger with historical cells verified intact. No live rerun was
+performed while correcting the worker and evidence queue.
+
+Continue updating the existing
+[VR render-scale comparison ledger](vr-render-scale-comparison-ledger.csv)
+in place. Preserve its build columns and historical values, and append
+available numeric timings for each measured transition and pass. Record
+the route, timing definition and units, and distinguish missing receipts,
+failed measurements, and transitions not run. Run reports explain the
+results and link to this ledger; they do not establish another ledger.
+
+The NVIDIA matrix uses metric names such as
+`tuning_pass1_transition_01_dlss_hoshipa_to_none_strict_ms`: pass, ordinal,
+source, destination, and dispatch-relative strict-completion milliseconds.
+The five-second pre-dispatch wait is excluded. The September 9 backfill
+preserves 198 available numeric timings across four existing build columns,
+including all 66 timings of the interrupted and continued current run.
+
+## Completed NVIDIA transitions with interrupted repeat: 9 September 2026
+
+Run `nv-mtud89dr`, continued as `nv-mtud89dr-s2`, retained all 66
+transitions on clean `main-VR` source
+`348803c1831c8cd71ceb75a58143ad0bcb00abb2` (`v3.19.0-pr28` +274).
+Both passes have 33 render PASS rows; Task 2 counts are 66 PASS / 0 FAIL /
+0 INCONCLUSIVE, and all 24 DLSS trace windows are complete. The repeat
+was interrupted after row 8 and continued at row 9 in the same game
+process with new telemetry captures. It is recorded as one repeat pursued
+across two runs. Uninterrupted-assay reporting remains INCOMPLETE, and
+continuous-repeat memory confirmation is inconclusive.
+
+Strict completion averaged 792.385 ms in pass 1 and 833.175 ms in the
+combined repeat. The previous PR66 run `nv-mtu8nhph` averaged 794.846 ms
+over the same 33 first-pass transitions; the current difference is -0.31%.
+These are transition latencies, and session conditions prevent attributing
+the difference solely to PR66. The prior PR66 repeat retained only rows 1-9.
+
+The ledger labels now distinguish relative revisions and measured source
+commits. PR66 branch `fix/vr-dlss-eye-bound-dilation` is
+`85ee7d4a572544410fa29463d5d704b50984610f`; its measured merge is
+`89e3964582730b92c1885eaef8f865e2d1d02ea9`. The RC166 tag/base is
+`b95958cc0c119625d8a7dd9657442c92122f240d`; the historical measured
+RC166 +13 baseline records source
+`94165e2e70db2bbefd878aecbfa7733ee336ab63`, whose object is unavailable
+in this checkout. Existing historical metric cells are preserved.
+See the [transition table and evidence summary](nvidia-renderscale-tuning-nv-mtud89dr.md).
+
+That table also includes the RC166 +13 baseline and the latest complete
+September 2-3 run, `nvidia-mtlid7m3` (September 3, 13:00 UTC), on source
+`539705004aa993816b79773fa287f91324312fbc` with uncommitted changes
+(`v3.19.0-pr39` +230; recorded RC166 +510). RC166 has no matched
+33-transition assay, and the September 3 per-transition timing bundle is
+unavailable in the inspected local evidence locations. Both references
+used 2468x2740 output per eye. The added columns state these limitations;
+no historical timing values or percentages are inferred.
+The committed record was checked: `539705004` preserves earlier ledger and
+summary data, including August 29 timing tables. The September 3 run's
+column was added by `190c28a39`; its timing cells already refer to an
+external evidence bundle rather than containing numeric timings.
+
+## Updated NVIDIA tuning: 9 September 2026
+
+Run `nvidia-mtu6cpo8` on clean source `89e3964582730b92c1885eaef8f865e2d1d02ea9`
+completed 33 first-pass transitions with render PASS and Task 2 counts
+33 PASS / 0 FAIL / 0 INCONCLUSIVE. The second baseline timed out after
+20 seconds under memory-deferred admission, so execution is INTERRUPTED
+and all 33 repeat rows are NOT RUN. The 17 presentation-stretch rows
+recovered; first-pass strict completion averaged 2569.260 ms with a
+16264.205 ms maximum. Memory confirmation is `repeat_not_completed`.
+See [the retained failure summary](nvidia-renderscale-tuning-nvidia-mtu6cpo8.md)
+and the uniquely headed partial column in the comparison ledger.
+
 The VR render-scale controller can capture a bounded CSX-menu stress session and write a versioned JSON record for an MCP/Ghidra optimization loop. The capture observes user-driven changes; it never changes render-scale settings itself.
 
 ## Capture workflow
@@ -274,6 +489,15 @@ and protocol evidence, and state the safety property that an optimization must
 preserve. Valid states are `Monitor`, `Investigating`, `Ready`, and `Closed`.
 
 #### Durable cross-machine record
+
+The [9 September NVIDIA comparison](nvidia-renderscale-tuning-20260909.md)
+preserves partial results from `nvidia-mtu2u3dm`: 57 full transition receipts,
+all 24 compact trace summaries, and five memory boundaries. Available evidence
+shows no functional regression against `nvidia-mtlid7m3`; cross-commit timing
+and memory improvement remain unproven because resolution changed and the
+second memory endpoint is missing. The matched 24-row repeat has similar mean
+latency, with slower individual FSR3 rows retained explicitly. Partial evidence
+is included in the ledger with its coverage and missing values identified.
 
 The comparison ledger is the canonical aggregate measurement record. This
 iteration guide retains conclusions, active investigations, and safety
@@ -1009,3 +1233,21 @@ The record lists the principal native symbols under `analysis.symbols`. In Ghidr
     and `FidelityFX::DestroyFSRResources` for FSR context lifetime validation.
 
 Use Ghidra to validate control flow and ownership against the shipped binary, while using the JSON record as runtime evidence. A candidate should be promoted only when repeated scenario records pass and improve the target metric without regressing another accepted backend or pressure scenario.
+
+# NVIDIA comparison follow-up: nv-mtu8nhph (2026-09-09)
+
+The same-build NVIDIA assay retained 42 of 66 transitions: all 33 in
+pass 1 and the first nine in pass 2. All retained render and per-row Task 2
+checks passed. Execution is interrupted because the orchestration cell
+became unavailable; the remaining 24 destinations are NOT RUN. Guarded
+cleanup verified every task-owned capture inactive.
+
+Matched pass-1 strict transition means are 794.846 ms current,
+2569.260 ms for the preceding same-build attempt, and 787.217 ms for the
+earlier September 9 baseline. Current latency is 69.06% below the preceding
+attempt and 0.97% above the earlier baseline. These are transition timings,
+not steady-state GPU costs. Memory confirmation is `repeat_not_completed`.
+
+See [the run comparison](nvidia-renderscale-tuning-nv-mtu8nhph.md) and the
+new `nv-mtu8nhph` ledger column. Full local evidence remains under
+`artifacts/renderscale-tuning/nv-mtu8nhph/`; raw evidence is not versioned.

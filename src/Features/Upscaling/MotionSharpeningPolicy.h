@@ -15,21 +15,40 @@ namespace MotionSharpening
 		float strengthCap = 1.0f;
 	};
 
-	inline bool IsValid(const Settings& value) noexcept
+	inline bool AreValidValues(double adjustment, double thresholdPixels, double strengthCap) noexcept
 	{
-		return std::isfinite(value.adjustment) && value.adjustment >= -1.0f && value.adjustment <= 1.0f &&
-		       std::isfinite(value.thresholdPixels) && value.thresholdPixels >= 0.0f && value.thresholdPixels <= 64.0f &&
-		       std::isfinite(value.strengthCap) && value.strengthCap >= 0.0f && value.strengthCap <= 1.0f;
+		return std::isfinite(adjustment) && adjustment >= -1.0 && adjustment <= 1.0 &&
+		       std::isfinite(thresholdPixels) && thresholdPixels >= 0.0 && thresholdPixels <= 64.0 &&
+		       std::isfinite(strengthCap) && strengthCap >= 0.0 && strengthCap <= 1.0;
 	}
 
-	/** Settings use the same normalized strength scale as the DLSS sharpness slider. */
-	inline Settings Sanitize(Settings value) noexcept
+	inline bool IsValid(const Settings& value) noexcept
+	{
+		return AreValidValues(value.adjustment, value.thresholdPixels, value.strengthCap);
+	}
+
+	/** Rejects the entire live request before narrowing JSON numbers to shader floats. */
+	inline bool TryCreateSettings(bool enabled, double adjustment, double thresholdPixels, double strengthCap, Settings& output) noexcept
+	{
+		if (!AreValidValues(adjustment, thresholdPixels, strengthCap))
+			return false;
+		output = { enabled, static_cast<float>(adjustment), static_cast<float>(thresholdPixels), static_cast<float>(strengthCap) };
+		return true;
+	}
+
+	/** Loaded numbers are bounded before narrowing; strengths use the DLSS slider scale. */
+	inline Settings Sanitize(bool enabled, double adjustment, double thresholdPixels, double strengthCap) noexcept
 	{
 		const Settings defaults{};
-		value.adjustment = std::isfinite(value.adjustment) ? std::clamp(value.adjustment, -1.0f, 1.0f) : defaults.adjustment;
-		value.thresholdPixels = std::isfinite(value.thresholdPixels) ? std::clamp(value.thresholdPixels, 0.0f, 64.0f) : defaults.thresholdPixels;
-		value.strengthCap = std::isfinite(value.strengthCap) ? std::clamp(value.strengthCap, 0.0f, 1.0f) : defaults.strengthCap;
-		return value;
+		return { enabled,
+			std::isfinite(adjustment) ? static_cast<float>(std::clamp(adjustment, -1.0, 1.0)) : defaults.adjustment,
+			std::isfinite(thresholdPixels) ? static_cast<float>(std::clamp(thresholdPixels, 0.0, 64.0)) : defaults.thresholdPixels,
+			std::isfinite(strengthCap) ? static_cast<float>(std::clamp(strengthCap, 0.0, 1.0)) : defaults.strengthCap };
+	}
+
+	inline Settings Sanitize(Settings value) noexcept
+	{
+		return Sanitize(value.enabled, value.adjustment, value.thresholdPixels, value.strengthCap);
 	}
 
 	struct Rect

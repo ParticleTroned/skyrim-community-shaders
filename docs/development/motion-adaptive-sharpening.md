@@ -31,7 +31,11 @@ Settings persist through the existing Save Settings operation as
 `motionAdaptiveRCAS`, `motionSharpnessAdjustment`,
 `motionSharpnessThreshold`, and `motionSharpnessCap`. Older configuration
 files retain disabled defaults. Nonfinite settings loaded from a file use
-finite defaults; out-of-range values are clamped.
+finite defaults; out-of-range values are clamped before conversion to
+shader floats, including finite JSON numbers larger than a float can hold.
+Malformed optional values are logged and replaced with their field defaults;
+an invalid enable value disables the option. Unrelated upscaling settings
+still load normally.
 
 ## Input and failure behavior
 
@@ -65,6 +69,8 @@ shader/setup attempt is logged and held until the shader cache is cleared.
 Compute shader, class instances, constant buffer, SRVs, and UAV state are
 restored with scope-based cleanup around the optional pass. No additional
 color or motion textures are allocated.
+The prior compute output is unbound before binding inputs so an overlapping
+UAV cannot make D3D11 silently replace the color or motion SRV with null.
 
 ## DevBench
 
@@ -82,7 +88,8 @@ color or motion textures are allocated.
 ```
 
 All four settings are required. Invalid types, nonfinite numbers, and
-out-of-range values reject the request before changing settings. The
+out-of-range values reject the request before narrowing to floats or
+changing settings. Values just outside a bound cannot round into range. The
 setter stages settings in memory and returns `persisted: false`; Save
 Settings persists them. It does not select DLSS or switch the sharpener.
 
@@ -99,6 +106,12 @@ finished. Values are `not_dispatched`, `disabled`, `applied`,
 -   `MotionSharpeningPolicy` covers settings bounds/nonfinite handling,
     packed eyes, cropped submit geometry, unavailable/overflowing bounds,
     and normalized-eye motion conversion to output pixels.
+-   `SharpenerBindings` exercises the production binding helper on D3D11
+    WARP with color, motion, output and empty prior UAV bindings, for both
+    adaptive and fixed sharpening, while preserving an unrelated UAV slot.
+-   `MotionSharpeningSettings` feeds malformed optional fields through the
+    production normalizer and JSON deserialization, checking unrelated
+    settings, missing defaults, huge values and serialization round trips.
 -   `TestMotionSharpening.hlsl` covers the fixed strength curve, zero
     strength, signed adjustment, threshold/cap behavior, invalid motion,
     output-to-source mapping, stereo edge clamps, and cropped motion units.

@@ -5,6 +5,7 @@
 #include "../../GpuPass.h"
 #include "../../Profiler.h"
 #include "../../Utils/D3D.h"
+#include "SharpenerBindings.h"
 
 #include <cstdint>
 #include <d3d11_4.h>
@@ -85,12 +86,8 @@ namespace UpscalingSharpener
 		context->CSSetShader(computeShader, nullptr, 0);
 		context->CSSetConstantBuffers(0, 1, &bufferArray);
 
-		ID3D11ShaderResourceView* srvs[] = { inputSRV, motionSRV };
 		const UINT srvCount = motionSRV ? 2u : 1u;
-		context->CSSetShaderResources(0, srvCount, srvs);
-
-		ID3D11UnorderedAccessView* uavs[] = { outputUAV };
-		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+		BindComputeViews(context, inputSRV, outputUAV, motionSRV);
 
 		const uint32_t dispatchX = (outputWidth + 7) / 8;
 		const uint32_t dispatchY = (outputHeight + 7) / 8;

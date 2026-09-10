@@ -1652,6 +1652,21 @@ if(BUILD_CONTROLLER_TESTS)
         tests/motion_sharpening_policy_test.cpp
     )
     add_controller_test(
+        sharpener_bindings_test
+        SharpenerBindings
+        tests/sharpener_bindings_test.cpp
+    )
+    target_link_libraries(sharpener_bindings_test PRIVATE d3d11.lib)
+    add_controller_test(
+        motion_sharpening_settings_test
+        MotionSharpeningSettings
+        tests/motion_sharpening_settings_test.cpp
+    )
+    target_link_libraries(
+        motion_sharpening_settings_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    add_controller_test(
         performance_tuning_statistics_test
         PerformanceTuningStatistics
         tests/performance_tuning_statistics_test.cpp
@@ -2290,6 +2305,8 @@ if(BUILD_CONTROLLER_TESTS)
         DEPENDS
             perf_mode_restart_state_test
             motion_sharpening_policy_test
+            sharpener_bindings_test
+            motion_sharpening_settings_test
             vr_vendor_relatch_policy_test
             vr_render_scale_authority_policy_test
             vr_render_scale_mode_policy_test

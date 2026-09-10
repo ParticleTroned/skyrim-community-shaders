@@ -455,9 +455,8 @@ namespace
 				!a_args.contains("strengthCap") || !a_args["strengthCap"].is_number()) {
 				return { { "error", "requires enabled, adjustment, thresholdPixels, and strengthCap" }, { "action", action } };
 			}
-			motionSharpening = { a_args["enabled"].get<bool>(), a_args["adjustment"].get<float>(),
-				a_args["thresholdPixels"].get<float>(), a_args["strengthCap"].get<float>() };
-			if (!MotionSharpening::IsValid(motionSharpening)) {
+			if (!MotionSharpening::TryCreateSettings(a_args["enabled"].get<bool>(), a_args["adjustment"].get<double>(),
+					a_args["thresholdPixels"].get<double>(), a_args["strengthCap"].get<double>(), motionSharpening)) {
 				return { { "error", "adjustment must be [-1,1], thresholdPixels [0,64], and strengthCap [0,1]; all must be finite" }, { "action", action } };
 			}
 		}

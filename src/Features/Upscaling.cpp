@@ -15780,9 +15780,8 @@ bool Upscaling::SetRenderScaleLinkedToUpscaling(bool a_enabled)
 		if (IsOpenCompositeUpscalingBlocked() || IsRenderDocUpscalingBlocked() ||
 			IsSubmitStageDeviceLost() || IsVRStartupNativeFallbackRestartRequired())
 			return false;
-		// The checkbox can be changed while a method selection is still queued.
-		// Preserve that complete selection instead of mixing the old method with
-		// the new quality/preset and replacing the user's pending request.
+		// Link changes preserve the complete queued selection so the old method
+		// cannot replace the user's pending method with its new quality/preset.
 		const auto queuedSelection = [&] {
 			std::scoped_lock lock(pendingVRRenderScaleRequestMutex);
 			auto selected = pendingVRRenderScaleRequest;
@@ -20261,9 +20260,6 @@ void Upscaling::RestorePerformanceCostMeasurementState(const json& a_state)
 	if (!a_state.is_object())
 		return;
 
-	if (ApplyOpenCompositeUpscalingBlocker(true))
-		return;
-
 	const uint32_t primaryMethod = a_state.value("upscaleMethod", settings.upscaleMethod);
 	const uint32_t fallbackMethod = a_state.value("upscaleMethodNoDLSS", settings.upscaleMethodNoDLSS);
 	const uint32_t qualityMode = ClampQualityModeUInt(a_state.value("qualityMode", settings.qualityMode));
@@ -20286,8 +20282,11 @@ void Upscaling::RestorePerformanceCostMeasurementState(const json& a_state)
 		VRUpscalingTransitionOrigin::CSMenu,
 		0,
 		fsr4RuntimeEnable);
-	if (restored.disposition == UpscalingTransitionApplyDisposition::Rejected)
-		return;
+	if (restored.disposition == UpscalingTransitionApplyDisposition::Rejected) {
+		logger::warn(
+			"[Upscaling] Performance cost measurement transition restore rejected: {}. Restoring independent saved preferences.",
+			magic_enum::enum_name(restored.rejection));
+	}
 	settings.renderScaleLinkedToUpscaling = a_state.value("renderScaleLinkedToUpscaling", settings.renderScaleLinkedToUpscaling);
 	settings.foveatedVendorDispatch = a_state.value("foveatedVendorDispatch", settings.foveatedVendorDispatch);
 	settings.periphery_taa_enable = a_state.value("periphery_taa_enable", settings.periphery_taa_enable);

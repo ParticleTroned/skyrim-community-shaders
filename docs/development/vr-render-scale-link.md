@@ -43,6 +43,19 @@ link only for method/quality changes when a profile omits its Render Scale field
 an explicit on/off value still wins. The option is VR-only and is reset/omitted
 for non-VR settings.
 
+## Performance measurement restore
+
+Restoring a saved performance-measurement snapshot always restores its link,
+foveation, and periphery-TAA preferences, including when the physical profile
+transition is rejected. Foveated settings are sanitized and frame-scoped state
+is invalidated afterward. Missing preference keys retain their current values;
+non-object snapshots have no effect.
+
+The shared transition entry point continues to enforce OpenComposite, startup
+native fallback, ownership, and queue admission. Rejection logs its reason and
+does not force the saved physical profile past those guards. Restoring a link
+preference does not submit another transition or imply physical completion.
+
 ## DevBench control
 
 The `communityshaders.renderscale` action `set_render_scale_link` accepts a
@@ -62,9 +75,19 @@ unlinked selections, and explicit-profile precedence. The source contract test
 checks persistence, both menu variants, accepted-transition ordering, and the
 separation between selection defaults and explicit profiles.
 
-The isolated `main-VR` port passed the universal `ALL` Release plugin build
-with `DEVBENCH_BRIDGE=ON`, the `controller_tests` build, and all 55 registered
-CTest tests. No plugin was deployed or game launched for this PR preparation.
+The 2026-09-10 rebase onto `main-VR` commit `1afb9eca9` passed nine focused
+CTest tests, built with MSVC Release, C++23, and `/W4 /WX /permissive-`.
+`UpscalingMeasurementRestore` compiles the production restore body and result
+types against observable transition effects. All 24 scenarios pass, including
+eight rejection scenarios that fail before the correction. The existing
+actual-body selection/admission harness also passes all 16 scenarios.
+
+The focused suite additionally covers mode, authority, vendor-relatch,
+provider-selection, restart, tuning-statistics, and link-integration contracts.
+Its command and logs are retained locally in
+`build/pr70-review-evidence-20260910/`. The new restore test is registered with
+the repository's `controller_tests` target. No fresh full plugin build,
+deployment, or game launch was performed for this rebase and review fix.
 
 These checks do not establish in-game stability. Live validation should exercise
 DLSS Render Scale on → DLAA → scaled DLSS with the link both on and off, manual
@@ -79,4 +102,4 @@ FSR runtime routing, and startup-native-fallback contracts of `main-VR`.
 The candidate has not undergone the generated `csx-render-scale-pr-v1` live
 qualification. No new hardware timing, visual verdict, or matched baseline is
 claimed; historical comparison-ledger measurements do not validate this port.
-Keep the PR in draft until the required candidate/baseline evidence is attached.
+Complete the required candidate/baseline qualification before merging.

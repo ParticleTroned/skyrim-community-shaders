@@ -67,6 +67,13 @@ port from `72b04290b` has no new live qualification or performance measurement.
 Consequently, no candidate measurement is added to the comparison ledger, and
 its historical results must not be treated as evidence for this change.
 
+The 2026-09-10 rebase onto `1afb9eca9` also preserves independent saved
+preferences when performance-measurement restoration rejects a physical
+transition. The rejection remains guarded and is logged with its reason.
+See the [link validation record](vr-render-scale-link.md#validation) for the
+24 restore scenarios and focused checks. This source review adds no runtime
+measurement or qualification result; the existing ledger remains unchanged.
+
 ### Controller actions
 
 Step 17 exposes the capture contract through the external devbench host used by

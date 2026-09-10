@@ -1712,6 +1712,38 @@ if(BUILD_CONTROLLER_TESTS)
         FSRRuntimeLifecyclePolicy
         tests/fsr_runtime_lifecycle_policy_test.cpp
     )
+    set(_fsr_eye_dispatch_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/fsr-eye-dispatch"
+    )
+    set(_fsr_eye_dispatch_test_headers
+        "${_fsr_eye_dispatch_test_dir}/fsr_eye_dispatch_types_under_test.h"
+        "${_fsr_eye_dispatch_test_dir}/fsr_eye_dispatch_params_under_test.h"
+        "${_fsr_eye_dispatch_test_dir}/fsr_eye_dispatch_under_test.h"
+        "${_fsr_eye_dispatch_test_dir}/fsr_deferred_presentation_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_fsr_eye_dispatch_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_fsr_eye_dispatch_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_fsr_eye_dispatch.cmake"
+        DEPENDS
+            src/Features/Upscaling.cpp
+            src/Features/Upscaling.h
+            src/Features/Upscaling/FidelityFX.cpp
+            src/Features/Upscaling/FidelityFX.h
+            tests/extract_fsr_eye_dispatch.cmake
+        VERBATIM
+    )
+    add_controller_test(
+        fsr_eye_dispatch_test
+        FSREyeDispatch
+        tests/fsr_eye_dispatch_test.cpp
+    )
+    target_sources(fsr_eye_dispatch_test PRIVATE ${_fsr_eye_dispatch_test_headers})
+    target_include_directories(
+        fsr_eye_dispatch_test PRIVATE "${_fsr_eye_dispatch_test_dir}"
+    )
     add_controller_test(
         vr_submit_input_freshness_policy_test
         VRSubmitInputFreshnessPolicy
@@ -2148,6 +2180,7 @@ if(BUILD_CONTROLLER_TESTS)
             reflex_policy_test
             fsr_host_lifecycle_policy_test
             fsr_runtime_lifecycle_policy_test
+            fsr_eye_dispatch_test
             vr_submit_input_freshness_policy_test
             vr_submit_input_freshness_composition_test
             overlay_policy_test

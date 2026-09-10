@@ -41,6 +41,21 @@ released MO2 owner and a configured verified fixture. Offline policy and
 composition coverage does not establish hook correctness, observed proof
 acceptance, visual quality, or GPU performance in Skyrim.
 
+### Deferred FSR eye dispatch
+
+An FSR eye whose provider is still preparing resources returns `Deferred`.
+The submit path presents ordinary stretch for the remainder of that
+compositor cycle and retries on a later cycle. It does not record a failed
+vendor evaluation or authorize reads from an unproven peer eye. Genuine
+provider and device failures retain their existing failure handling.
+
+See [the deferred-eye repair record](vr-fsr-deferred-eye-dispatch.md) for
+the cold-entry failure mechanism and validation limits. This implementation
+has no new measured entry in `vr-render-scale-comparison-ledger.csv`:
+builds, tests, and runtime qualification are deferred by the operator while
+another workload is running. No candidate timing or qualification result
+has been inferred from the source change.
+
 ### Controller actions
 
 Step 17 exposes the capture contract through the external devbench host used by

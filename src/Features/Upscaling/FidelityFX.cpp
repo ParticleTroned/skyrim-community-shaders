@@ -3361,10 +3361,12 @@ FidelityFX::LifecycleResult FidelityFX::ExecuteRuntimeUpscalerBatch(
 }
 
 bool FidelityFX::CanDispatchHostFallbackForRegions(
-	std::span<const UpscaleRegionParameters> a_regions) const
+	std::span<const UpscaleRegionParameters> a_regions,
+	uint32_t a_contextCount) const
 {
 	if (a_regions.empty() ||
-		a_regions.size() > std::size(fsrContext) ||
+		a_contextCount == 0 || a_contextCount > std::size(fsrContext) ||
+		a_regions.size() > a_contextCount ||
 		!FSRHostLifecyclePolicy::CanAttemptHostFallback(
 			IsHostFSR3Supported(),
 			runtimeUpscalerUsedForFrame)) {
@@ -3372,14 +3374,15 @@ bool FidelityFX::CanDispatchHostFallbackForRegions(
 	}
 
 	for (const auto& region : a_regions) {
-		if (region.contextIndex >= fsrContextCount ||
+		if (region.contextIndex >= a_contextCount ||
+			region.contextIndex >= fsrContextCount ||
 			!fsrContextValid[region.contextIndex] ||
 			!AreFSRResourcesCompatible(
 				region.renderWidth,
 				region.renderHeight,
 				region.displayWidth,
 				region.displayHeight,
-				static_cast<uint32_t>(a_regions.size()))) {
+				a_contextCount)) {
 			return false;
 		}
 	}
@@ -3714,7 +3717,7 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(std::span<c
 	return ResolveRuntimeUpscalerLifecycleFailure("runtime upscaler dispatch");
 }
 
-bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color, ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
+FidelityFX::UpscaleResult FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color, ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
 	ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_output,
 	uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight,
 	float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness, bool* a_usedRuntimeUpscaler)
@@ -3723,43 +3726,58 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 		*a_usedRuntimeUpscaler = false;
 	if (fsrHostStateQuarantined ||
 		std::ranges::any_of(fsrContextIndeterminate, [](bool a_indeterminate) { return a_indeterminate; })) {
-		return false;
+		return UpscaleResult::Failed;
 	}
 	if (!a_color || !a_depth || !a_motionVectors || !a_reactiveMask || !a_transparencyCompositionMask || !a_output ||
 		!a_renderWidth || !a_renderHeight || !a_displayWidth || !a_displayHeight) {
-		return false;
+		return UpscaleResult::Failed;
 	}
 	auto state = globals::state;
 	if (!state)
-		return false;
+		return UpscaleResult::Failed;
 	auto& upscaling = globals::features::upscaling;
 	const auto runtimePlan = ResolveRuntimeDispatchPlan();
+	if (runtimePlan.deferred)
+		return UpscaleResult::Deferred;
 	if (!runtimePlan.valid)
-		return false;
+		return UpscaleResult::Failed;
+
+	const UpscaleRegionParameters region{
+		a_contextIndex,
+		a_color,
+		a_depth,
+		a_motionVectors,
+		a_reactiveMask,
+		a_transparencyCompositionMask,
+		a_output,
+		a_renderWidth,
+		a_renderHeight,
+		a_displayWidth,
+		a_displayHeight,
+		a_motionVectorScaleX,
+		a_motionVectorScaleY,
+		a_sharpness
+	};
+	const bool safeHostFallbackReady = CanDispatchHostFallbackForRegions(
+		std::span{ &region, 1u }, runtimePlan.contextCount);
+	if (!runtimePlan.selected && runtimePlan.providerSetupDeferred &&
+		FSRRuntimeLifecyclePolicy::ResolvePendingDispatch(safeHostFallbackReady) ==
+			FSRRuntimeLifecyclePolicy::PendingDispatchResolution::Defer) {
+		return UpscaleResult::Deferred;
+	}
 
 	if (runtimePlan.selected) {
-		const UpscaleRegionParameters region{
-			a_contextIndex,
-			a_color,
-			a_depth,
-			a_motionVectors,
-			a_reactiveMask,
-			a_transparencyCompositionMask,
-			a_output,
-			a_renderWidth,
-			a_renderHeight,
-			a_displayWidth,
-			a_displayHeight,
-			a_motionVectorScaleX,
-			a_motionVectorScaleY,
-			a_sharpness
-		};
 		const auto runtimeResult = ExecuteRuntimeUpscalerBatch(runtimePlan, std::span{ &region, 1u });
 		if (runtimeResult == LifecycleResult::Ready) {
 			runtimeUpscalerUsedForFrame = true;
 			if (a_usedRuntimeUpscaler)
 				*a_usedRuntimeUpscaler = true;
-			return true;
+			return UpscaleResult::Ready;
+		}
+		if (runtimeResult == LifecycleResult::Pending &&
+			FSRRuntimeLifecyclePolicy::ResolvePendingDispatch(safeHostFallbackReady) ==
+				FSRRuntimeLifecyclePolicy::PendingDispatchResolution::Defer) {
+			return UpscaleResult::Deferred;
 		}
 		runtimeHostFallbackForFrame = true;
 		ArmRuntimeHostFallback(runtimePlan.contextCount);
@@ -3767,13 +3785,13 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 		if (runtimeResult == LifecycleResult::DeviceLost) {
 			QuarantineRuntimeUpscalerForSession(
 				"runtime-provider device loss");
-			return false;
+			return UpscaleResult::Failed;
 		}
 		if (runtimeResult == LifecycleResult::RuntimeDeviceLost) {
 			// The optional D3D12 provider may have consumed or submitted this eye.
 			// Keep this stereo cycle on the established presentation fallback; the
 			// next frame can select host D3D11 FSR coherently for both eyes.
-			return false;
+			return UpscaleResult::Failed;
 		}
 		if (runtimeResult == LifecycleResult::Failed) {
 			// A terminal runtime-provider failure can leave AMD's DX12 provider state
@@ -3788,10 +3806,10 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 				[](bool a_indeterminate) { return a_indeterminate; })) {
 			// A faulting provider may have consumed or submitted this eye. Do not
 			// mix an immediate host dispatch into the same stereo cycle.
-			return false;
+			return UpscaleResult::Failed;
 		}
 		if (runtimeUpscalerUsedForFrame)
-			return false;
+			return UpscaleResult::Failed;
 	}
 
 	// OpenVR accepts each eye independently. Once this frame has published a
@@ -3800,7 +3818,7 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 	// Fail this eye so the existing presentation fallback owns the remainder of
 	// the cycle; the next frame can select host FSR coherently for both eyes.
 	if (runtimeUpscalerUsedForFrame && !runtimePlan.selected)
-		return false;
+		return UpscaleResult::Failed;
 
 	if (runtimePlan.runtimeRequested && !runtimePlan.selected)
 		ArmRuntimeHostFallback(runtimePlan.contextCount);
@@ -3817,15 +3835,15 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 			a_displayWidth,
 			a_displayHeight,
 			runtimePlan.contextCount)) {
-		return false;
+		return UpscaleResult::Failed;
 	}
 
 	if (!HasFSRResources() || a_contextIndex >= fsrContextCount || !fsrContextValid[a_contextIndex])
-		return false;
+		return UpscaleResult::Failed;
 
 	auto context = globals::d3d::context;
 	if (!context)
-		return false;
+		return UpscaleResult::Failed;
 
 	auto jitter = upscaling.jitter;
 	const auto fallbackFramePath =
@@ -3888,7 +3906,7 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 		}
 	}
 
-	return dispatchOK;
+	return dispatchOK ? UpscaleResult::Ready : UpscaleResult::Failed;
 }
 
 FidelityFX::StereoUpscaleResult FidelityFX::UpscaleStereoRegions(
@@ -3915,7 +3933,7 @@ FidelityFX::StereoUpscaleResult FidelityFX::UpscaleStereoRegions(
 	if (!runtimePlan.valid)
 		return StereoUpscaleResult::Failed;
 	const bool safeHostFallbackReady =
-		CanDispatchHostFallbackForRegions(a_regions);
+		CanDispatchHostFallbackForRegions(a_regions, runtimePlan.contextCount);
 	if (runtimePlan.contextCount != a_regions.size())
 		return StereoUpscaleResult::Failed;
 	if (!runtimePlan.selected) {
@@ -4024,6 +4042,7 @@ FidelityFX::UpscaleResult FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture
 		const uint32_t eyeRenderHeight = static_cast<uint32_t>(renderSize.y);
 
 		bool allEvaluated = true;
+		bool anyEyeEvaluated = false;
 		std::array<bool, 2> usedRuntimeUpscaler{};
 		std::array<UpscaleRegionParameters, 2> stereoRegions{};
 		for (uint32_t eye = 0; eye < stereoRegions.size(); ++eye) {
@@ -4055,24 +4074,34 @@ FidelityFX::UpscaleResult FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture
 		} else {
 			for (const auto& region : stereoRegions) {
 				const uint32_t eye = region.contextIndex;
-				if (!UpscaleRegion(
-						eye,
-						region.color,
-						region.depth,
-						region.motionVectors,
-						region.reactiveMask,
-						region.transparencyCompositionMask,
-						region.output,
-						region.renderWidth,
-						region.renderHeight,
-						region.displayWidth,
-						region.displayHeight,
-						region.motionVectorScaleX,
-						region.motionVectorScaleY,
-						region.sharpness,
-						std::addressof(usedRuntimeUpscaler[eye]))) {
+				const auto eyeResult = UpscaleRegion(
+					eye,
+					region.color,
+					region.depth,
+					region.motionVectors,
+					region.reactiveMask,
+					region.transparencyCompositionMask,
+					region.output,
+					region.renderWidth,
+					region.renderHeight,
+					region.displayWidth,
+					region.displayHeight,
+					region.motionVectorScaleX,
+					region.motionVectorScaleY,
+					region.sharpness,
+					std::addressof(usedRuntimeUpscaler[eye]));
+				if (eyeResult == UpscaleResult::Deferred) {
+					if (!allEvaluated)
+						break;
+					if (anyEyeEvaluated)
+						upscaling.RequestHistoryReset();
+					return UpscaleResult::Deferred;
+				}
+				if (eyeResult == UpscaleResult::Failed) {
 					logger::error("[FidelityFX] Upscale dispatch failed for VR eye {}.", eye);
 					allEvaluated = false;
+				} else {
+					anyEyeEvaluated = true;
 				}
 			}
 		}
@@ -4117,7 +4146,7 @@ FidelityFX::UpscaleResult FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture
 		return allEvaluated ? UpscaleResult::Ready : UpscaleResult::Failed;
 	}
 
-	const bool evaluated = UpscaleRegion(
+	const auto result = UpscaleRegion(
 		0,
 		a_upscalingTexture,
 		a_depth,
@@ -4133,8 +4162,8 @@ FidelityFX::UpscaleResult FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture
 		renderSize.y,
 		a_sharpness,
 		nullptr);
-	if (!evaluated) {
+	if (result == UpscaleResult::Failed) {
 		logger::error("[FidelityFX] Upscale dispatch failed.");
 	}
-	return evaluated ? UpscaleResult::Ready : UpscaleResult::Failed;
+	return result;
 }

@@ -269,6 +269,7 @@ struct FidelityFX
 	}
 	LifecycleResult EnsureRuntimeCommandContexts();
 	LifecycleResult EnsureRuntimeUpscalerInterop();
+	bool IsRuntimeUpscalerInteropReady() const;
 	bool HasCompleteRuntimeUpscalerSharedResources(uint32_t) const;
 	LifecycleResult EnsureRuntimeUpscalerContexts(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 	LifecycleResult EnsureRuntimeUpscalerSharedResources(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,

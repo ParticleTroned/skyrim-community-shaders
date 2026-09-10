@@ -250,6 +250,7 @@ struct FidelityFX
 		const bool runtimePathEligible = true;
 		auto& plan = controlledPlan;
 		const bool existingResourcesOnly = plan.vendorLifecycleMutationDeferred;
+		plan.contextsCompatible = runtimeContextsCompatible;
 #include "fsr_runtime_gate_under_test.h"
 	}
 	LifecycleResult ExecuteRuntimeUpscalerBatch(const RuntimeDispatchPlan&, std::span<const UpscaleRegionParameters> a_regions)

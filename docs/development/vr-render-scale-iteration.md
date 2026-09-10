@@ -1,5 +1,22 @@
 # VR render-scale iteration records
 
+## September 10: PR65 baseline comparison across both repeats
+
+The clearer [PR65 comparison](pr65-nvidia-baseline-repeat-means-20260910.md) keeps the
+older renderer baseline compiled as 390fdea25 and groups the four main-VR
+passes from 348803c18 and 7c8e3e656, as requested. Mean strict completion
+is 834.274 ms baseline versus 799.212 ms main-VR, a 4.203% reduction.
+The repeat means are 748.880 and 849.543 ms, so direction is inconsistent
+between repeats. Trailing SE columns retain baseline, each repeat and
+combined-pass dispersion; combined pass-based SE is 30.754 ms, while SE
+across the two repeat means is 50.332 ms. Neither is a significance claim.
+
+All 132 main-VR transitions passed at terminal, but recovered fidelity and
+vendor failures recur at rows 26 and 28 in all four passes; the baseline
+had none. Health remains DOES_NOT_MEET_STANDARD. This regrouping adds no
+measurements, preserves the existing ledger, and audits 1,584 distinct
+numeric timing cells across the three retained runs.
+
 ## September 10: independent PR65 repeat on main-VR 7c8e3e656
 
 Run `nvidia-20260910T124329625Z` completed all 33 + 33

@@ -1647,6 +1647,11 @@ if(BUILD_CONTROLLER_TESTS)
         tests/perf_mode_restart_state_test.cpp
     )
     add_controller_test(
+        motion_sharpening_policy_test
+        MotionSharpeningPolicy
+        tests/motion_sharpening_policy_test.cpp
+    )
+    add_controller_test(
         performance_tuning_statistics_test
         PerformanceTuningStatistics
         tests/performance_tuning_statistics_test.cpp
@@ -2284,6 +2289,7 @@ if(BUILD_CONTROLLER_TESTS)
         controller_tests
         DEPENDS
             perf_mode_restart_state_test
+            motion_sharpening_policy_test
             vr_vendor_relatch_policy_test
             vr_render_scale_authority_policy_test
             vr_render_scale_mode_policy_test

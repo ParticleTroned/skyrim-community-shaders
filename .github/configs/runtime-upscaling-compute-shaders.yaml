@@ -1,6 +1,16 @@
 warnings: {}
 errors: {}
 shaders:
+    - file: RCAS.hlsl
+      configs:
+          CSHADER:
+              common_defines: []
+              entries:
+                  - entry: Upscaling:Compute:RCAS
+                    defines: []
+                  - entry: Upscaling:Compute:MotionAdaptiveRCAS
+                    defines:
+                        - MOTION_ADAPTIVE
     - file: EncodeTexturesCS.hlsl
       configs:
           CSHADER:

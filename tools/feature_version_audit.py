@@ -725,7 +725,7 @@ def analyze_features(FEATURES_DIR, feature_meta_map, base_ref, only_changed=Fals
         # ini needs no human action -- report it for visibility but don't
         # block the release on it (only a genuinely missing ini, below, does).
         if changes and all(s == "A" for s, _ in changes):
-            if ini_path:
+            if ini_path and new_ver is not None:
                 note = f"New feature (with ini v{new_ver_str})"
                 new_features.append((feature_dir.name, new_ver_str, bump_commit))
             else:
@@ -741,7 +741,7 @@ def analyze_features(FEATURES_DIR, feature_meta_map, base_ref, only_changed=Fals
             note = f"New ini added (v{new_ver_str})"
             new_features.append((feature_dir.name, new_ver_str, bump_commit))
         # Detect files added but ini missing
-        if not ini_path and any(s == "A" for s, _ in changes):
+        elif not ini_path and any(s == "A" for s, _ in changes):
             note = "Files added, ini missing!"
             new_features.append((feature_dir.name, "-", bump_commit))
             is_attention = True
@@ -999,8 +999,11 @@ def build_feature_actions(bump_suggestions, metadata_issues, new_features, get_c
             consolidated[norm] = {"actions": [], "author": None}
         consolidated[norm]["actions"].append(f"Update INI: add {', '.join(fields)}")
 
-    # Add new features with authors
-    for feat_name, _, commit in new_features:
+    # Correctly versioned new features are already reported in the dedicated
+    # table. Only incomplete registrations belong in actionable suggestions.
+    for feat_name, version, commit in new_features:
+        if version != "-":
+            continue
         norm = normalize_name(feat_name)
         display_name_map.setdefault(norm, feat_name)
         if ' ' in feat_name and ' ' not in display_name_map[norm]:
@@ -1221,9 +1224,6 @@ def main():
 
         # Recompute actionable after applying bumps
         actionable = any(fa.get('needs_bump') or "missing" in fa.get('note', '').lower() for fa in feature_analysis)
-        if new_features:
-            actionable = True
-
     if args.pr_check:
         print_actionable_suggestions(feature_actions)
     else:

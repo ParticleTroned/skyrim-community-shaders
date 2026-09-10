@@ -46,6 +46,10 @@ function Get-CsxVisualStudioInstallationPaths {
     }
 
     $candidates = [System.Collections.Generic.List[string]]::new()
+    if ($env:VSINSTALLDIR) {
+        $candidates.Add($env:VSINSTALLDIR)
+    }
+
     $vswhereCandidates = [System.Collections.Generic.List[string]]::new()
     $vswhereCommand = Get-Command vswhere.exe -ErrorAction SilentlyContinue
     if ($vswhereCommand) {

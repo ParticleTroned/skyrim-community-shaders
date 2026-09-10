@@ -60,12 +60,24 @@ try {
 
     if ($env:OS -eq "Windows_NT") {
         $savedEnvironment = @{}
-        foreach ($name in @("VCToolsInstallDir", "INCLUDE", "LIB", "CSX_VSDEVCMD", "CSX_MSVC_TEST_MARKER")) {
+        foreach ($name in @(
+            "VCToolsInstallDir",
+            "INCLUDE",
+            "LIB",
+            "CSX_VSDEVCMD",
+            "CSX_MSVC_TEST_MARKER",
+            "VSINSTALLDIR"
+        )) {
             $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
         }
 
         try {
-            $vsDevCmd = Join-Path $testRoot "VsDevCmd.bat"
+            $testVisualStudio = Join-Path $testRoot "Visual Studio"
+            $vsDevCmdDirectory = Join-Path $testVisualStudio "Common7\Tools"
+            New-Item -ItemType Directory -Force -Path $vsDevCmdDirectory | Out-Null
+            New-Item -ItemType Directory -Force `
+                -Path (Join-Path $testVisualStudio "VC\Tools\MSVC") | Out-Null
+            $vsDevCmd = Join-Path $vsDevCmdDirectory "VsDevCmd.bat"
             [IO.File]::WriteAllLines($vsDevCmd, @(
                 "@echo off",
                 "set `"VCToolsInstallDir=C:\csx-test\VC\Tools\`"",
@@ -100,6 +112,17 @@ try {
                 throw "The imported Visual Studio environment is incomplete."
             }
 
+            [Environment]::SetEnvironmentVariable("CSX_VSDEVCMD", $null, "Process")
+            $env:VSINSTALLDIR = $testVisualStudio
+            $activeVsDevCmd = Resolve-CsxVsDevCmd -Required
+            Assert-Equal -Expected $vsDevCmd -Actual $activeVsDevCmd `
+                -Message "The active Visual Studio installation was not preferred."
+
+            [Environment]::SetEnvironmentVariable(
+                "VSINSTALLDIR",
+                $savedEnvironment["VSINSTALLDIR"],
+                "Process"
+            )
             foreach ($name in @("VCToolsInstallDir", "INCLUDE", "LIB", "CSX_VSDEVCMD")) {
                 [Environment]::SetEnvironmentVariable($name, $null, "Process")
             }

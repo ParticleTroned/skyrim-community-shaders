@@ -1,5 +1,39 @@
 # VR render-scale iteration records
 
+## September 10: independent PR65 repeat on main-VR 7c8e3e656
+
+Run `nvidia-20260910T124329625Z` completed all 33 + 33
+transitions in one process. All 66 terminal checks passed; Task 2 counts
+are 66 PASS / 0 FAIL / 0 INCONCLUSIVE. Candidate reporting and detailed
+retry telemetry are COMPLETE. Captures are verified inactive; all 444
+journal records were flushed. Physical DLL, manifest, AIO receipt and
+package payload match runtime Build ID `9e88a559cc66`, clean Release
+source/main-VR `7c8e3e656`.
+
+Mean strict completion was 866.009 / 833.078 ms,
+12.872% / 14.040% above the preceding measured main-VR
+`348803c18`. Relatch proof means were 807.337 / 763.765 ms and
+13.920 / 13.840 frames; strict means were 15.576 / 15.455 frames.
+Stretch totaled 89 / 83 frames and 5719.962 / 5383.107 ms, with no active
+tail. The imposed stretch cutoff remains diagnostic. Owned retries were
+10 / 10; detailed viewport waits and guard/promotion intervals are retained.
+
+Recovered fidelity/vendor findings on rows 26 and 28 recurred in both
+passes and in the reference. Full-history assessment is
+DOES_NOT_MEET_STANDARD; all five terminal failure categories are zero.
+Memory classification is inconclusive. Scene time differs and there is
+no versioned tolerance policy; timing deltas remain descriptive. The older
+reference lacks detailed retry telemetry despite its retained COMPLETE
+label, so that paired diagnostic comparison remains unavailable.
+
+The canonical ledger preserves every historical cell and adds 528 numeric
+timing cells plus all 66 full timing/retry records. One comparison verified
+1,056 paired numeric cells in 2.654 s.
+See the [durable report](nvidia-renderscale-tuning-7c8e3e656-20260910.md) for every
+pass/transition, failure/recovery, memory result, evidence link and stage
+timing. Raw evidence remains local. The user requested this comparison
+as an independent repeat on PR65; previous run columns remain intact.
+
 ## September 10: fast reporting execution and verified reuse
 
 The repository reporting wrapper now supports one invocation for candidate

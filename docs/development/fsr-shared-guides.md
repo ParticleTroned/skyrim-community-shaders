@@ -97,8 +97,13 @@ fallback and acceptance after replacement.
 import constructor, creates the four guide formats on matching hardware
 D3D11/D3D12 devices, writes known D3D11 UAV values, fences to D3D12
 readback, fences back, destroys the import and reopens the same NT handle.
-It checks every pixel for both imports. Unsupported hardware device
-creation returns CTest skip code 77; a sharing or data mismatch fails.
+It checks every pixel for both imports. Unsupported hardware or missing
+fence interfaces return CTest skip code 77. Device loss, allocation errors,
+invalid calls, sharing failures and data mismatches fail the test.
+`FSRSharedGuideInteropCapability` independently checks that distinction
+without creating a graphics device. The `controller_tests` build target
+includes the interop executable; its hardware test keeps the separate
+`GraphicsTests` label.
 
 These tests do not substitute for the existing VR render-scale release
 qualification. Full-eye, submit-stage, foveated fallback, quality changes,

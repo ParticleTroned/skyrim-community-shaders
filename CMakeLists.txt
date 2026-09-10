@@ -1831,6 +1831,14 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE d3d11 d3d12 dxgi runtimeobject Microsoft::DirectX-Headers
     )
     add_test(NAME FSRSharedGuideInterop COMMAND fsr_shared_guide_interop_test)
+    add_test(
+        NAME FSRSharedGuideInteropCapability
+        COMMAND fsr_shared_guide_interop_test --capability-policy-only
+    )
+    set_tests_properties(
+        FSRSharedGuideInteropCapability
+        PROPERTIES LABELS "ControllerTests"
+    )
     set_tests_properties(
         FSRSharedGuideInterop
         PROPERTIES LABELS "GraphicsTests" SKIP_RETURN_CODE 77
@@ -2343,6 +2351,7 @@ if(BUILD_CONTROLLER_TESTS)
             fsr_host_lifecycle_policy_test
             fsr_runtime_lifecycle_policy_test
             fsr_shared_guides_policy_test
+            fsr_shared_guide_interop_test
             fsr_eye_dispatch_test
             vr_submit_input_freshness_policy_test
             vr_submit_input_freshness_composition_test

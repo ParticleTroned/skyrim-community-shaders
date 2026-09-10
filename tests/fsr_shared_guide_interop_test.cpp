@@ -8,7 +8,9 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <new>
 #include <stdexcept>
+#include <string_view>
 
 namespace DX
 {
@@ -39,6 +41,33 @@ namespace
 			throw std::runtime_error(a_message);
 	}
 
+	bool HasInteropCapability(HRESULT a_result)
+	{
+		if (a_result == E_NOINTERFACE || a_result == DXGI_ERROR_UNSUPPORTED)
+			return false;
+		DX::ThrowIfFailed(a_result);
+		return true;
+	}
+
+	void CheckCapabilityFailures()
+	{
+		Require(HasInteropCapability(S_OK), "Available interop capability was rejected");
+		Require(!HasInteropCapability(E_NOINTERFACE), "Missing interface did not skip");
+		Require(!HasInteropCapability(DXGI_ERROR_UNSUPPORTED), "Unsupported device did not skip");
+		for (const HRESULT failure : { E_OUTOFMEMORY, E_INVALIDARG, E_FAIL, DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET }) {
+			bool propagated = false;
+			try {
+				(void)HasInteropCapability(failure);
+			} catch (const winrt::hresult_error& error) {
+				propagated = error.code() == failure;
+			} catch (const std::bad_alloc&) {
+				propagated = failure == E_OUTOFMEMORY;
+			}
+			Require(propagated, "Interop failure was hidden as unsupported hardware");
+		}
+		std::cout << "Interop capability failure classification passed\n";
+	}
+
 	struct Devices
 	{
 		winrt::com_ptr<ID3D11Device> device11;
@@ -54,20 +83,23 @@ namespace
 		{
 			const HRESULT deviceResult = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
 				0, nullptr, 0, D3D11_SDK_VERSION, device11.put(), nullptr, context11.put());
-			if (FAILED(deviceResult))
+			if (!HasInteropCapability(deviceResult))
+				return false;
+			winrt::com_ptr<ID3D11Device5> device5;
+			if (!HasInteropCapability(context11->QueryInterface(IID_PPV_ARGS(context4.put()))) ||
+				!HasInteropCapability(device11->QueryInterface(IID_PPV_ARGS(device5.put()))))
 				return false;
 			winrt::com_ptr<IDXGIAdapter> adapter;
 			DX::ThrowIfFailed(device11.as<IDXGIDevice>()->GetAdapter(adapter.put()));
-			if (FAILED(D3D12CreateDevice(adapter.get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(device12.put()))))
+			if (!HasInteropCapability(D3D12CreateDevice(adapter.get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(device12.put()))))
 				return false;
-			context4 = context11.as<ID3D11DeviceContext4>();
 			D3D12_COMMAND_QUEUE_DESC queueDesc{};
 			queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
 			DX::ThrowIfFailed(device12->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(queue.put())));
 			DX::ThrowIfFailed(device12->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(fence12.put())));
 			winrt::handle handle;
 			DX::ThrowIfFailed(device12->CreateSharedHandle(fence12.get(), nullptr, GENERIC_ALL, nullptr, handle.put()));
-			DX::ThrowIfFailed(device11.as<ID3D11Device5>()->OpenSharedFence(handle.get(), IID_PPV_ARGS(fence11.put())));
+			DX::ThrowIfFailed(device5->OpenSharedFence(handle.get(), IID_PPV_ARGS(fence11.put())));
 			return true;
 		}
 	};
@@ -170,12 +202,17 @@ namespace
 	}
 }
 
-int main()
+int main(int a_argc, char** a_argv)
 {
 	try {
+		Require(a_argc == 1 || (a_argc == 2 && std::string_view(a_argv[1]) == "--capability-policy-only"),
+			"Unknown test argument");
+		CheckCapabilityFailures();
+		if (a_argc == 2)
+			return 0;
 		Devices devices;
 		if (!devices.Initialize()) {
-			std::cout << "SKIP: compatible D3D11/D3D12 hardware unavailable\n";
+			std::cout << "SKIP: compatible D3D11/D3D12 hardware or fence interfaces unavailable\n";
 			return 77;
 		}
 		CheckFormat(devices, DXGI_FORMAT_R32_FLOAT, 4, 0x3F800000u);

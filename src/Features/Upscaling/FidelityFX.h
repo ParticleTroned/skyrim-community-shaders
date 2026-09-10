@@ -307,6 +307,7 @@ private:
 	uint32_t temporalContextLastDispatchFrame = ~uint32_t{ 0 };
 	std::atomic<RuntimeUpscalerFramePath> temporalLastDispatchPath{ RuntimeUpscalerFramePath::kInactive };
 	FSRTemporalTuningPolicy::RejectedRequest temporalRejectedRequest{};
+	LifecycleResult RecordRuntimeProviderResult(bool a_supported);
 	LifecycleResult ConfigureTemporalTuningContexts(const TemporalTuningSnapshot& a_request);
 
 	winrt::com_ptr<ID3D11Fence> runtimeD3D11Fence;

@@ -44,16 +44,25 @@ so sequential eye submissions retain the same reconstruction profile.
 
 If any configure call fails, no partially configured eye is dispatched.
 The complete fresh context set is destroyed and recreated without tuning.
-The rejected request is retained with the provider ID and result code;
-unchanged requests are not retried each frame. Changing the profile or
-provider permits another attempt. A faulting provider follows the existing
+The rejected request is retained with its revision, provider ID and result
+code; unchanged requests are not retried each frame. Changing the profile
+or provider permits another attempt, including edits away and back before
+the next render-thread application. A faulting provider follows the existing
 session quarantine and host-fallback policy, retaining indeterminate
 resources. Unknown capability is not a successful tuning application.
 
 Malformed, nonfinite or out-of-range live requests leave the prior settings
-unchanged. Invalid numeric values in a loaded profile disable the complete
-profile and log the fallback. Settings and diagnostic snapshots use a
-mutex; unchanged frame compatibility uses only an atomic revision read.
+unchanged. Numeric bounds are checked before conversion to float. Invalid
+values or types in a loaded profile disable only the reconstruction profile
+and log the fallback; unrelated upscaling settings still load. Unknown live
+keys are rejected, while unknown persisted keys remain forward compatible.
+Persistence, live patches and the DevBench schema share the numeric field
+contract. Settings and diagnostic snapshots use a mutex; unchanged frame
+compatibility uses only an atomic revision read.
+
+Every fresh-context provider identity query uses the same protected call.
+A query fault marks its exact context indeterminate and returns through the
+existing runtime quarantine before configuration or dispatch can proceed.
 
 ## DevBench
 
@@ -95,6 +104,13 @@ request even after default contexts have been restored.
 provider guards, disabled-profile compatibility, rejection-latch identity,
 and injected failure/fault at each key of each eye. Every injected failure
 stops subsequent configure calls and preserves its context, key and error.
+
+`FSRTemporalTuningSerialization` compiles the production profile loader and
+checks malformed type isolation, atomic live patches, exact numeric bounds,
+unknown keys, older profiles and save/load round trips.
+`FSRTemporalTuningProvider` compiles the production protected query and
+provider-result handler, injects a Windows structured exception, and checks
+context quarantine, failure propagation and retained diagnostic evidence.
 
 Runtime validation must compare fixed scenes and identical camera paths,
 including foliage, bright particles, water and disocclusions. Test live

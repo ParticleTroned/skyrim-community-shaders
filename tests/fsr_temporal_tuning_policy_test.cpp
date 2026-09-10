@@ -66,12 +66,13 @@ int main()
 	Check(Equivalent({}, inactiveEdit), "editing disabled values must not rebuild contexts");
 	Check(!Equivalent({}, enabled), "enabling must invalidate context configuration");
 	Check(!Equivalent(enabled, {}), "disabling must recreate true vendor defaults");
-	RejectedRequest rejected{ true, enabled, Version(3, 1, 4) };
-	Check(rejected.Matches(enabled, Version(3, 1, 4)), "same rejected request must not retry every frame");
-	Check(!rejected.Matches(enabled, Version(3, 1, 5)), "replacement provider permits a fresh capability attempt");
+	RejectedRequest rejected{ true, enabled, Version(3, 1, 4), 7 };
+	Check(rejected.Matches(enabled, Version(3, 1, 4), 7), "same rejected request must not retry every frame");
+	Check(!rejected.Matches(enabled, Version(3, 1, 5), 7), "replacement provider permits a fresh capability attempt");
 	auto edited = enabled;
 	edited.velocityFactor = 0.5f;
-	Check(!rejected.Matches(edited, Version(3, 1, 4)), "explicit setting changes permit retry");
+	Check(!rejected.Matches(edited, Version(3, 1, 4), 8), "explicit setting changes permit retry");
+	Check(!rejected.Matches(enabled, Version(3, 1, 4), 9), "edits away and back before application must permit a fresh attempt");
 
 	unsigned calls = 0;
 	auto success = [&](unsigned, unsigned, float) {

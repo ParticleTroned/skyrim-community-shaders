@@ -23,6 +23,7 @@
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FSRHostLifecyclePolicy.h"
 #include "Upscaling/FSRTemporalTuningDevBenchBridge.h"
+#include "Upscaling/FSRTemporalTuningSerialization.h"
 #include "Upscaling/FidelityFX.h"
 #include "Upscaling/NvidiaComIdentity.h"
 #include "Upscaling/ReflexPolicy.h"
@@ -324,9 +325,13 @@ namespace
 
 namespace FSRTemporalTuningPolicy
 {
-	NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Settings,
-		enabled, velocityFactor, reactivenessScale, shadingChangeScale,
-		accumulationAddedPerFrame, minimumDisocclusionAccumulation)
+	void from_json(const json& a_json, Settings& a_settings)
+	{
+		Settings candidate{};
+		if (const auto* error = ApplySettingsPatch(a_json, candidate, false))
+			logger::warn("[Upscaling] Invalid FSR temporal tuning profile: {}; restoring vendor defaults.", error);
+		a_settings = candidate;
+	}
 }
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(

@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 
 namespace FSRTemporalTuningPolicy
@@ -20,17 +21,28 @@ namespace FSRTemporalTuningPolicy
 
 	inline constexpr float kMaximumResponseScale = 4.0f;
 
+	struct NumericSetting
+	{
+		const char* name;
+		float Settings::* member;
+		float minimum;
+		float maximum;
+	};
+	inline constexpr std::array<NumericSetting, 5> kNumericSettings{ { { "velocityFactor", &Settings::velocityFactor, 0.0f, 1.0f },
+		{ "reactivenessScale", &Settings::reactivenessScale, 0.0f, kMaximumResponseScale },
+		{ "shadingChangeScale", &Settings::shadingChangeScale, 0.0f, kMaximumResponseScale },
+		{ "accumulationAddedPerFrame", &Settings::accumulationAddedPerFrame, 0.0f, 1.0f },
+		{ "minimumDisocclusionAccumulation", &Settings::minimumDisocclusionAccumulation, -1.0f, 1.0f } } };
+
 	/** Bounds unbounded SDK response multipliers for the supported user interface. */
 	[[nodiscard]] inline bool IsValid(const Settings& a_settings) noexcept
 	{
-		const auto bounded = [](float value, float minimum, float maximum) {
-			return std::isfinite(value) && value >= minimum && value <= maximum;
-		};
-		return bounded(a_settings.velocityFactor, 0.0f, 1.0f) &&
-		       bounded(a_settings.reactivenessScale, 0.0f, kMaximumResponseScale) &&
-		       bounded(a_settings.shadingChangeScale, 0.0f, kMaximumResponseScale) &&
-		       bounded(a_settings.accumulationAddedPerFrame, 0.0f, 1.0f) &&
-		       bounded(a_settings.minimumDisocclusionAccumulation, -1.0f, 1.0f);
+		for (const auto& field : kNumericSettings) {
+			const float value = a_settings.*field.member;
+			if (!std::isfinite(value) || value < field.minimum || value > field.maximum)
+				return false;
+		}
+		return true;
 	}
 
 	/** Only documented FSR 3.1.4/3.1.5 providers support this complete override set. */
@@ -59,9 +71,10 @@ namespace FSRTemporalTuningPolicy
 	/** Supplies public configure values in velocity/reactivity/shading/accumulation order. */
 	[[nodiscard]] constexpr std::array<float, 5> Values(const Settings& a_settings) noexcept
 	{
-		return { a_settings.velocityFactor, a_settings.reactivenessScale,
-			a_settings.shadingChangeScale, a_settings.accumulationAddedPerFrame,
-			a_settings.minimumDisocclusionAccumulation };
+		std::array<float, kNumericSettings.size()> values{};
+		for (std::size_t i = 0; i < values.size(); ++i)
+			values[i] = a_settings.*kNumericSettings[i].member;
+		return values;
 	}
 
 	enum class Status : std::uint8_t
@@ -102,9 +115,10 @@ namespace FSRTemporalTuningPolicy
 		bool valid = false;
 		Settings settings{};
 		std::uint64_t providerId = 0;
-		[[nodiscard]] bool Matches(const Settings& a_settings, std::uint64_t a_providerId) const noexcept
+		std::uint64_t requestRevision = 0;
+		[[nodiscard]] bool Matches(const Settings& a_settings, std::uint64_t a_providerId, std::uint64_t a_requestRevision) const noexcept
 		{
-			return valid && settings == a_settings && providerId == a_providerId;
+			return valid && settings == a_settings && providerId == a_providerId && requestRevision == a_requestRevision;
 		}
 	};
 

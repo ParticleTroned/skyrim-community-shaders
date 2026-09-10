@@ -5,43 +5,29 @@
 #	include "Api/DevBenchMainThreadDispatch.h"
 #	include "BuildProvenance.h"
 #	include "Features/Upscaling.h"
+#	include "FSRTemporalTuningSerialization.h"
 #	include "Globals.h"
 #	include "State.h"
 
 #	include <DevBenchAPI.h>
 #	include <nlohmann/json.hpp>
 
-#	include <array>
 #	include <atomic>
 #	include <exception>
 #	include <stdexcept>
 #	include <string>
-#	include <string_view>
 
 namespace
 {
 	using json = nlohmann::json;
-	using Settings = FSRTemporalTuningPolicy::Settings;
 	std::atomic_bool installAttempted{ false };
-
-	json SettingsJson(const Settings& settings)
-	{
-		return {
-			{ "enabled", settings.enabled },
-			{ "velocityFactor", settings.velocityFactor },
-			{ "reactivenessScale", settings.reactivenessScale },
-			{ "shadingChangeScale", settings.shadingChangeScale },
-			{ "accumulationAddedPerFrame", settings.accumulationAddedPerFrame },
-			{ "minimumDisocclusionAccumulation", settings.minimumDisocclusionAccumulation }
-		};
-	}
 
 	json SnapshotJson()
 	{
 		const auto snapshot = Upscaling::fidelityFX.GetTemporalTuningSnapshot();
 		return {
-			{ "requested", SettingsJson(snapshot.requested) },
-			{ "contextSettings", SettingsJson(snapshot.contextSettings) },
+			{ "requested", json(snapshot.requested) },
+			{ "contextSettings", json(snapshot.contextSettings) },
 			{ "status", FSRTemporalTuningPolicy::StatusLabel(snapshot.status) },
 			{ "providerId", snapshot.providerId },
 			{ "providerVersionSupported", FSRTemporalTuningPolicy::SupportsProvider(snapshot.providerId) },
@@ -75,28 +61,8 @@ namespace
 		return CSX::Api::RunDevBenchMainThreadTask(SKSE::GetTaskInterface(), [patch, persist]() -> json {
 			auto& upscaling = globals::features::upscaling;
 			auto settings = upscaling.settings.fsrTemporalTuning;
-			for (const auto& [key, value] : patch.items()) {
-				if (key == "enabled") {
-					if (!value.is_boolean())
-						return { { "error", "enabled must be boolean" } };
-					settings.enabled = value.get<bool>();
-					continue;
-				}
-				float* target = nullptr;
-				if (key == "velocityFactor")
-					target = &settings.velocityFactor;
-				else if (key == "reactivenessScale")
-					target = &settings.reactivenessScale;
-				else if (key == "shadingChangeScale")
-					target = &settings.shadingChangeScale;
-				else if (key == "accumulationAddedPerFrame")
-					target = &settings.accumulationAddedPerFrame;
-				else if (key == "minimumDisocclusionAccumulation")
-					target = &settings.minimumDisocclusionAccumulation;
-				if (!target || !value.is_number())
-					return { { "error", "unknown or nonnumeric tuning setting" }, { "setting", key } };
-				*target = value.get<float>();
-			}
+			if (const auto* error = FSRTemporalTuningPolicy::ApplySettingsPatch(patch, settings))
+				return { { "error", error }, { "accepted", false } };
 			if (!upscaling.SetFSRTemporalTuningSettings(settings))
 				return { { "error", "settings must be finite and within the declared ranges; no settings changed" } };
 			const bool saved = persist && globals::state && globals::state->Save();
@@ -144,14 +110,9 @@ void FSRTemporalTuningDevBenchBridge::Install()
 	if (!devBench)
 		return;
 	static const std::string descriptor = [] {
-		json settingsProperties = {
-			{ "enabled", { { "type", "boolean" } } },
-			{ "velocityFactor", { { "type", "number" }, { "minimum", 0 }, { "maximum", 1 } } },
-			{ "reactivenessScale", { { "type", "number" }, { "minimum", 0 }, { "maximum", FSRTemporalTuningPolicy::kMaximumResponseScale } } },
-			{ "shadingChangeScale", { { "type", "number" }, { "minimum", 0 }, { "maximum", FSRTemporalTuningPolicy::kMaximumResponseScale } } },
-			{ "accumulationAddedPerFrame", { { "type", "number" }, { "minimum", 0 }, { "maximum", 1 } } },
-			{ "minimumDisocclusionAccumulation", { { "type", "number" }, { "minimum", -1 }, { "maximum", 1 } } }
-		};
+		json settingsProperties{ { "enabled", { { "type", "boolean" } } } };
+		for (const auto& field : FSRTemporalTuningPolicy::kNumericSettings)
+			settingsProperties[field.name] = { { "type", "number" }, { "minimum", field.minimum }, { "maximum", field.maximum } };
 		return json{
 			{ "description", "Inspect or set optional FSR temporal reconstruction overrides on SE, AE and VR. Disabled by default. Only verified runtime FSR 3.1.4/3.1.5 providers accept this complete key set; host FSR and FSR4 retain vendor defaults. set atomically patches requested settings, and render-thread context recreation applies the complete profile to all eyes before dispatch. Rejection recreates untouched vendor defaults and latches that request; provider faults follow runtime quarantine. status reports requested versus applied settings, pending/unsupported/rejected/faulted state and last configure result. persist saves the user configuration only when explicitly true. No resolution, provider selection or public upscaling ABI changes." },
 			{ "inputSchema", { { "type", "object" }, { "additionalProperties", false },

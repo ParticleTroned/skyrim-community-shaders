@@ -304,6 +304,7 @@ public:
 		uint qualityMode = 3;            // Shared upscaler preset; defaults to Quality
 		uint dlssPreset = kDLSSPresetK;  // Settings ids: J, K, L, M, F, E (default K)
 		uint renderScaleMode = 1;
+		bool renderScaleLinkedToUpscaling = true;
 		uint perfMode = 1;
 		uint frameLimitMode = 1;
 		uint frameGenerationMode = 0;  // Disabled by default
@@ -579,6 +580,7 @@ public:
 		uint64_t preparationOptionsGeneration = 0;
 		UpscaleMethod method = UpscaleMethod::kNONE;
 		uint32_t qualityMode = 0;
+		bool renderScaleModePreference = false;
 		bool renderScaleModeEnabled = false;
 		uint32_t dlssPreset = kDLSSPresetK;
 		bool perfModeEnabled = false;
@@ -1592,6 +1594,7 @@ public:
 		float dlssSharpness = 0.0f;
 		float fsrSharpness = 0.0f;
 		float renderScale = 1.0f;
+		bool renderScaleModePreference = false;
 		bool renderScaleModeEnabled = false;
 		bool perfModeEnabled = false;
 		bool fsr4RuntimeEnabled = false;
@@ -2169,6 +2172,9 @@ public:
 		uint32_t a_fallbackMethod);
 	virtual json CapturePerformanceCostMeasurementState() const override;
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
+	void DrawVRRenderScaleLinkSetting(UpscaleMethod a_upscaleMethod);
+	/** Apply the shared menu/API link policy without bypassing transition admission. */
+	bool SetRenderScaleLinkedToUpscaling(bool a_enabled);
 	void DrawFoveatedSetupInstructions();
 	void DrawFoveatedSettings(bool a_essentialsLayout = false);
 	virtual void SaveSettings(json& o_json) override;
@@ -2225,6 +2231,9 @@ public:
 	// Rebuild only the cached plan from already-latched state; backend dispatch code must only read the cached plan.
 	void RefreshRuntimeResolutionPlan();
 	bool IsRenderScaleModeRequested() const;
+	/** Return saved intent while native AA suspends physical Render Scale. */
+	bool GetVRRenderScaleModePreference() const;
+	bool GetVRRenderScalePreferenceForSelection(UpscaleMethod a_targetMethod) const;
 	bool GetVRRenderScaleModeRequested() const;
 	bool CanUseVRRenderScaleMode() const;
 	bool IsVRRenderScaleModeLatched() const;
@@ -2238,6 +2247,7 @@ public:
 	}
 	bool IsVRStartupNativeFallbackSavedIntentActive() const;
 	bool CanRetryVRStartupNativeFallbackFromCSMenu(bool a_forceMemorySample = false);
+	/** Explicit VR intent uses atomic admission; a_allowDefer applies only outside VR. */
 	void SetVRRenderScaleModeRequested(bool a_enabled, const char* a_reason = nullptr, bool a_allowDefer = false, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
 	bool IsPerfModeActive() const;
 	bool IsPerfModePresentationActive() const;

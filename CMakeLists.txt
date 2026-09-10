@@ -1662,6 +1662,57 @@ if(BUILD_CONTROLLER_TESTS)
         tests/vr_render_scale_authority_policy_test.cpp
     )
     add_controller_test(
+        vr_render_scale_mode_policy_test
+        VRRenderScaleModePolicy
+        tests/vr_render_scale_mode_policy_test.cpp
+    )
+    set(_upscaling_restore_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/upscaling_restore_test"
+    )
+    set(_upscaling_restore_test_headers
+        "${_upscaling_restore_test_dir}/upscaling_measurement_restore_types.h"
+        "${_upscaling_restore_test_dir}/upscaling_measurement_restore_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_upscaling_restore_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_upscaling_restore_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_upscaling_measurement_restore.cmake"
+        DEPENDS
+            src/Features/Upscaling.cpp
+            src/Features/Upscaling.h
+            tests/extract_upscaling_measurement_restore.cmake
+        VERBATIM
+    )
+    add_controller_test(
+        upscaling_measurement_restore_test
+        UpscalingMeasurementRestore
+        tests/upscaling_measurement_restore_test.cpp
+    )
+    target_sources(
+        upscaling_measurement_restore_test
+        PRIVATE ${_upscaling_restore_test_headers}
+    )
+    target_include_directories(
+        upscaling_measurement_restore_test
+        PRIVATE "${_upscaling_restore_test_dir}"
+    )
+    target_link_libraries(
+        upscaling_measurement_restore_test
+        PRIVATE nlohmann_json::nlohmann_json magic_enum::magic_enum
+    )
+    add_test(
+        NAME VRRenderScaleLinkContract
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${CMAKE_CURRENT_SOURCE_DIR}" -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/render_scale_link_contract_test.cmake"
+    )
+    set_tests_properties(
+        VRRenderScaleLinkContract
+        PROPERTIES LABELS "ControllerTests"
+    )
+    add_controller_test(
         upscaling_provider_selection_policy_test
         UpscalingProviderSelectionPolicy
         tests/upscaling_provider_selection_policy_test.cpp
@@ -2212,6 +2263,8 @@ if(BUILD_CONTROLLER_TESTS)
             perf_mode_restart_state_test
             vr_vendor_relatch_policy_test
             vr_render_scale_authority_policy_test
+            vr_render_scale_mode_policy_test
+            upscaling_measurement_restore_test
             upscaling_provider_selection_policy_test
             vr_render_scale_qualification_policy_test
             vr_render_scale_replacement_telemetry_policy_test

@@ -1941,6 +1941,14 @@ if(BUILD_CONTROLLER_TESTS)
 	add_test(NAME MainThreadDispatchState COMMAND main_thread_dispatch_state_test)
 	set_tests_properties(MainThreadDispatchState PROPERTIES LABELS "ControllerTests")
 
+    add_controller_test(
+        devbench_main_thread_dispatch_test
+        DevBenchMainThreadDispatch
+        tests/devbench_main_thread_dispatch_test.cpp
+    )
+    target_link_libraries(devbench_main_thread_dispatch_test PRIVATE nlohmann_json::nlohmann_json)
+    set_tests_properties(DevBenchMainThreadDispatch PROPERTIES TIMEOUT 10)
+
 	add_executable(
 		screenshot_api_policy_test
 		EXCLUDE_FROM_ALL
@@ -2234,6 +2242,7 @@ if(BUILD_CONTROLLER_TESTS)
             api_service_registry_test
 			api_screenshot_contract_test
 			main_thread_dispatch_state_test
+            devbench_main_thread_dispatch_test
 			screenshot_api_policy_test
             screenshot_manifest_snapshot_test
             screenshot_capture_present_test

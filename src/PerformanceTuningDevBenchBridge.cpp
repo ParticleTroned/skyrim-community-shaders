@@ -2,6 +2,7 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
+#	include "Api/DevBenchMainThreadDispatch.h"
 #	include "BuildProvenance.h"
 #	include "Menu/PerformanceTuningRenderer.h"
 
@@ -9,19 +10,16 @@
 #	include <nlohmann/json.hpp>
 
 #	include <atomic>
-#	include <chrono>
 #	include <cstddef>
 #	include <cstdint>
+#	include <exception>
 #	include <functional>
-#	include <future>
-#	include <memory>
 #	include <stdexcept>
 #	include <string>
 
 namespace
 {
 	using json = nlohmann::json;
-	constexpr auto kMainThreadTimeout = std::chrono::milliseconds(5000);
 	constexpr std::size_t kDefaultTracePageSize = 128;
 	constexpr std::size_t kMaximumTracePageSize = 512;
 	std::atomic_bool g_installAttempted{ false };
@@ -29,30 +27,7 @@ namespace
 
 	json RunOnMainThread(std::function<json()> a_run)
 	{
-		auto* tasks = SKSE::GetTaskInterface();
-		if (!tasks)
-			return { { "error", "SKSE task interface unavailable" } };
-
-		auto promise = std::make_shared<std::promise<json>>();
-		auto cancelled = std::make_shared<std::atomic_bool>(false);
-		auto future = promise->get_future();
-		tasks->AddTask([promise, cancelled, run = std::move(a_run)]() mutable {
-			if (cancelled->load(std::memory_order_acquire))
-				return;
-			try {
-				promise->set_value(run());
-			} catch (const std::exception& e) {
-				promise->set_value(json{ { "error", "main-thread task failed" }, { "detail", e.what() } });
-			} catch (...) {
-				promise->set_value(json{ { "error", "main-thread task failed" } });
-			}
-		});
-
-		if (future.wait_for(kMainThreadTimeout) != std::future_status::ready) {
-			cancelled->store(true, std::memory_order_release);
-			return { { "error", "main thread did not run within 5000ms" } };
-		}
-		return future.get();
+		return CSX::Api::RunDevBenchMainThreadTask(SKSE::GetTaskInterface(), std::move(a_run));
 	}
 
 	json BuildResult(const json& a_args)

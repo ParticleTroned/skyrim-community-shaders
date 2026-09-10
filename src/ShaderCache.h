@@ -7,7 +7,9 @@
 #include <efsw/efsw.hpp>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include <wrl/client.h>
@@ -479,6 +481,7 @@ namespace SIE
 			const std::filesystem::path& a_shaderPath,
 			const Util::ContentHash::Hash128& a_compileStateDigest,
 			const Util::ContentHash::Hash128& a_packCompileStateDigest,
+			const Util::ContentHash::Hash128& a_sourceDigest,
 			uint64_t a_diskCacheGeneration);
 		void SetSaveLoadDiskPersistenceBlocked(bool a_blocked);
 		void DeleteDiskCache();
@@ -574,8 +577,11 @@ namespace SIE
 			ID3DBlob* a_blob,
 			const std::wstring& a_diskPath,
 			const Util::ContentHash::Hash128& a_compileStateDigest,
+			const Util::ContentHash::Hash128& a_packCompileStateDigest,
+			bool a_developerMode,
 			bool fromDisk = false,
-			std::optional<uint64_t> a_taskGeneration = std::nullopt);
+			std::optional<uint64_t> a_taskGeneration = std::nullopt,
+			std::optional<Util::ContentHash::Hash128> a_sourceDigest = std::nullopt);
 
 		enum class ClaimResult
 		{
@@ -989,6 +995,8 @@ namespace SIE
 			Util::ContentHash::Hash128 compileStateDigest;
 			Util::ContentHash::Hash128 packCompileStateDigest;
 			bool developerMode = false;
+			std::optional<Util::ContentHash::Hash128> sourceDigest;
+			Microsoft::WRL::ComPtr<ID3DBlob> compiledBlob;
 
 			bool operator<(const hlslRecord& other) const
 			{
@@ -1014,6 +1022,7 @@ namespace SIE
 			std::filesystem::path shaderPath;
 			Util::ContentHash::Hash128 compileStateDigest;
 			Util::ContentHash::Hash128 packCompileStateDigest;
+			Util::ContentHash::Hash128 sourceDigest;
 			bool developerMode = false;
 			uint64_t diskCacheGeneration = 0;
 		};
@@ -1076,15 +1085,18 @@ namespace SIE
 		ankerl::unordered_dense::map<std::string, DeferredEviction> deferredEvictions;            // pending hot-reload evictions; guarded by mapMutex
 		std::atomic<size_t> deferredEvictionCount{ 0 };                                           // lock-free empty fast path
 
-		std::deque<DeferredDiskWrite> deferredDiskWrites;
+		std::unordered_map<std::string, DeferredDiskWrite> deferredDiskWrites;
+		std::deque<std::string> deferredDiskWriteOrder;
 		static constexpr std::size_t kMaximumDeferredDiskWrites = 8192;
+		static constexpr std::size_t kDeferredDiskWriteBatchSize = 64;
 		std::mutex deferredDiskWritesMutex;
 		std::condition_variable_any deferredDiskWritesCV;
 		std::jthread deferredDiskWriterJthread;
 		std::atomic_bool acceptDeferredDiskWrites{ true };
 		std::atomic_bool deferredDiskWriteLimitReported{ false };
 		std::atomic_bool saveLoadDiskPersistenceBlocked{ false };
-		bool deferredManifestFlushPending = false;  // guarded by deferredDiskWritesMutex
+		std::size_t deferredDiskWritesInFlight = 0;  // guarded by deferredDiskWritesMutex
+		bool deferredManifestFlushPending = false;   // guarded by deferredDiskWritesMutex
 
 		// efsw file watcher
 		efsw::FileWatcher* fileWatcher = nullptr;

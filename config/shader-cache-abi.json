@@ -1,12 +1,15 @@
 {
-  "schemaVersion": 1,
-  "globalAbi": "engine-cache-v3-managed-pack",
-  "policy": {
-    "releaseVersionsAreProvenance": true,
-    "sourceClosureIsEntryValidity": true,
-    "featureAbiIsExplicit": true,
-    "externalCompatibilityIsScoped": true,
-    "managedPackFormat": 1,
-    "managedPackHash": "sha256"
-  }
+    "schemaVersion": 1,
+    "globalAbi": "engine-cache-v4-compatible-records",
+    "policy": {
+        "releaseVersionsAreProvenance": true,
+        "sourceClosureIsEntryValidity": true,
+        "featureAbiIsExplicit": true,
+        "externalCompatibilityIsScoped": true,
+        "externalMinorRangesAreCompatible": true,
+        "packManifestAbiIsProvenance": true,
+        "managedPackFormat": 1,
+        "managedPackHash": "sha256",
+        "managedCacheRootFiles": 6
+    }
 }

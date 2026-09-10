@@ -3,7 +3,6 @@
 #include "Utils/CryptoHash.h"
 
 #include <algorithm>
-#include <cctype>
 #include <limits>
 #include <ranges>
 #include <sstream>
@@ -26,7 +25,7 @@ namespace
 	{
 		std::string result(a_value);
 		std::ranges::transform(result, result.begin(), [](unsigned char a_character) {
-			return static_cast<char>(std::tolower(a_character));
+			return static_cast<char>(a_character >= 'A' && a_character <= 'Z' ? a_character + ('a' - 'A') : a_character);
 		});
 		return result;
 	}
@@ -35,11 +34,20 @@ namespace
 	{
 		if (!a_value)
 			return !a_required;
-		const std::string_view value(a_value);
-		if ((a_required && value.empty()) || value.size() > a_maximum)
+		std::size_t length = 0;
+		while (length <= a_maximum && a_value[length] != '\0')
+			++length;
+		if (length > a_maximum || (a_required && length == 0))
 			return false;
-		a_output.assign(value);
+		a_output.assign(a_value, length);
 		return true;
+	}
+
+	bool IsCanonicalText(std::string_view a_value)
+	{
+		return std::ranges::none_of(a_value, [](unsigned char a_character) {
+			return a_character < 0x20 || a_character == 0x7f;
+		});
 	}
 
 	bool IsIdentity(std::string_view a_value)
@@ -47,18 +55,24 @@ namespace
 		if (a_value.empty() || a_value.size() > kMaximumIdentityLength || a_value.front() == '.' || a_value.back() == '.')
 			return false;
 		return std::ranges::all_of(a_value, [](unsigned char a_character) {
-			return std::islower(a_character) || std::isdigit(a_character) || a_character == '.' || a_character == '_' || a_character == '-';
+			return (a_character >= 'a' && a_character <= 'z') || (a_character >= '0' && a_character <= '9') ||
+			       a_character == '.' || a_character == '_' || a_character == '-';
 		});
 	}
 
 	std::string ScopeName(ScopeKind a_kind)
 	{
 		switch (a_kind) {
-		case ScopeKind::kShaderFamily: return "family";
-		case ScopeKind::kShaderSource: return "source";
-		case ScopeKind::kFeature: return "feature";
-		case ScopeKind::kGlobal: return "global";
-		default: return "invalid";
+		case ScopeKind::kShaderFamily:
+			return "family";
+		case ScopeKind::kShaderSource:
+			return "source";
+		case ScopeKind::kFeature:
+			return "feature";
+		case ScopeKind::kGlobal:
+			return "global";
+		default:
+			return "invalid";
 		}
 	}
 
@@ -66,9 +80,20 @@ namespace
 	{
 		std::ostringstream value;
 		value << "identity=" << a_registration.identity
-		      << "\ncontract=" << a_registration.contractMajor << '.' << a_registration.currentMinor
-		      << "\ncompatible=" << a_registration.minimumCompatibleMinor << '-' << a_registration.maximumCompatibleMinor
-		      << "\nresource=" << a_registration.resourceFingerprint;
+			  << "\ncontract=" << a_registration.contractMajor << '.' << a_registration.currentMinor
+			  << "\ncompatible=" << a_registration.minimumCompatibleMinor << '-' << a_registration.maximumCompatibleMinor
+			  << "\nresource=" << a_registration.resourceFingerprint;
+		for (const auto& scope : a_registration.scopes)
+			value << "\nscope=" << ScopeName(scope.kind) << ':' << scope.value;
+		return value.str();
+	}
+
+	std::string BuildDomainCanonical(const ShaderCompatibilityRegistration& a_registration)
+	{
+		std::ostringstream value;
+		value << "identity=" << a_registration.identity
+			  << "\ncontract-major=" << a_registration.contractMajor
+			  << "\nresource=" << a_registration.resourceFingerprint;
 		for (const auto& scope : a_registration.scopes)
 			value << "\nscope=" << ScopeName(scope.kind) << ':' << scope.value;
 		return value.str();
@@ -94,6 +119,8 @@ namespace CSX::Api
 			!CopyBounded(a_input.displayVersion, kMaximumTextLength, a_output.displayVersion, false) ||
 			!CopyBounded(a_input.resourceFingerprint, kMaximumFingerprintLength, a_output.resourceFingerprint, false))
 			return Failure(Status::kInvalidArgument, "invalid-text", "registration text is missing or exceeds its bounded size");
+		if (!IsCanonicalText(a_output.resourceFingerprint))
+			return Failure(Status::kInvalidArgument, "invalid-fingerprint", "resource fingerprint must not contain control characters");
 		if (a_input.contractMajor == 0 || a_input.minimumCompatibleMinor > a_input.currentMinor ||
 			a_input.currentMinor > a_input.maximumCompatibleMinor)
 			return Failure(Status::kInvalidVersion, "invalid-version-range", "contract major must be non-zero and min <= current <= max");
@@ -111,12 +138,16 @@ namespace CSX::Api
 				return Failure(Status::kStructureTooSmall, "scope-structure-too-small", "scope structure is smaller than Scope001");
 			if (input.kind < ScopeKind::kShaderFamily || input.kind > ScopeKind::kGlobal)
 				return Failure(Status::kInvalidScope, "invalid-scope-kind", "scope kind is not recognized");
+			if (input.kind == ScopeKind::kShaderSource || input.kind == ScopeKind::kFeature)
+				return Failure(Status::kInvalidScope, "unsupported-scope-kind", "shader-source and feature scopes are reserved until runtime and offline identity share authoritative provenance");
 			std::string value;
 			const bool global = input.kind == ScopeKind::kGlobal;
 			if (!CopyBounded(input.value, kMaximumScopeValueLength, value, !global))
 				return Failure(Status::kInvalidScope, "invalid-scope-value", "scope value is missing or exceeds its bounded size");
 			if (global)
 				value.clear();
+			else if (!IsCanonicalText(value))
+				return Failure(Status::kInvalidScope, "invalid-scope-value", "scope values must not contain control characters");
 			else
 				value = Lower(value);
 			a_output.scopes.push_back({ input.kind, std::move(value) });
@@ -159,6 +190,7 @@ namespace CSX::Api
 		++revision;
 		result.revision = revision;
 		compatibilitySetDigest.clear();
+		requirementCache.clear();
 		return result;
 	}
 
@@ -188,49 +220,91 @@ namespace CSX::Api
 
 	bool ShaderCompatibilityRegistry::Applies(
 		const ShaderCompatibilityRegistration& a_registration,
-		std::string_view a_shaderFamily,
-		std::string_view a_shaderSource,
-		std::string_view a_feature)
+		std::string_view a_shaderFamily)
 	{
-		const auto family = Lower(a_shaderFamily);
-		auto source = Lower(a_shaderSource);
-		std::ranges::replace(source, '\\', '/');
-		const auto feature = Lower(a_feature);
 		return std::ranges::any_of(a_registration.scopes, [&](const ShaderCompatibilityScope& a_scope) {
 			switch (a_scope.kind) {
-			case ScopeKind::kGlobal: return true;
-			case ScopeKind::kShaderFamily: return a_scope.value == family;
+			case ScopeKind::kGlobal:
+				return true;
+			case ScopeKind::kShaderFamily:
+				return a_scope.value == a_shaderFamily;
 			case ScopeKind::kShaderSource:
-				return a_scope.value == source ||
-					(source.size() > a_scope.value.size() && source.ends_with(a_scope.value) &&
-					 source[source.size() - a_scope.value.size() - 1] == '/');
-			case ScopeKind::kFeature: return !feature.empty() && a_scope.value == feature;
-			default: return false;
+				return false;
+			case ScopeKind::kFeature:
+				return false;
+			default:
+				return false;
 			}
 		});
 	}
 
 	ShaderCompatibilityRequirementSet ShaderCompatibilityRegistry::BuildRequirementSet(
 		std::string_view a_shaderFamily,
-		std::string_view a_shaderSource,
-		std::string_view a_feature) const
+		std::string_view) const
 	{
 		std::scoped_lock lock(mutex);
-		std::vector<const ShaderCompatibilityRegistration*> applicable;
-		for (const auto& registration : registrations) {
-			if (Applies(registration, a_shaderFamily, a_shaderSource, a_feature))
-				applicable.push_back(&registration);
+		const auto cacheKey = Lower(a_shaderFamily);
+		if (phase == ShaderCompatibilityAPI::Phase::kFrozen) {
+			if (const auto cached = requirementCache.find(cacheKey); cached != requirementCache.end())
+				return cached->second;
 		}
-		std::ranges::sort(applicable, {}, [](const auto* a_registration) { return a_registration->identity; });
+		std::vector<ShaderCompatibilityRegistration> requirements;
+		for (const auto& registration : registrations) {
+			if (Applies(registration, cacheKey))
+				requirements.push_back(registration);
+		}
+		auto result = BuildShaderCompatibilityRequirementSet(std::move(requirements));
+		if (phase == ShaderCompatibilityAPI::Phase::kFrozen)
+			requirementCache.insert_or_assign(cacheKey, result);
+		return result;
+	}
+
+	ShaderCompatibilityRequirementSet BuildShaderCompatibilityRequirementSet(
+		std::vector<ShaderCompatibilityRegistration> a_registrations)
+	{
+		std::ranges::sort(a_registrations, {}, &ShaderCompatibilityRegistration::identity);
 		ShaderCompatibilityRequirementSet result;
 		std::ostringstream canonical;
-		for (const auto* registration : applicable) {
-			canonical << registration->canonical.size() << ':' << registration->canonical << '\n';
-			result.handles.push_back(registration->handle);
+		std::ostringstream domainCanonical;
+		for (auto& registration : a_registrations) {
+			registration.canonical = BuildCanonical(registration);
+			registration.digest = Util::CryptoHash::Sha256Hex(registration.canonical);
+			canonical << registration.canonical.size() << ':' << registration.canonical << '\n';
+			const auto domain = BuildDomainCanonical(registration);
+			domainCanonical << domain.size() << ':' << domain << '\n';
+			result.handles.push_back(registration.handle);
 		}
 		result.canonical = canonical.str();
 		result.digest = Util::CryptoHash::Sha256Hex(result.canonical);
+		result.domainCanonical = domainCanonical.str();
+		result.domainDigest = Util::CryptoHash::Sha256Hex(result.domainCanonical);
+		result.registrations = std::move(a_registrations);
 		return result;
+	}
+
+	bool AreShaderCompatibilityRequirementSetsCompatible(
+		const ShaderCompatibilityRequirementSet& a_cached,
+		const ShaderCompatibilityRequirementSet& a_current)
+	{
+		if (a_cached.domainCanonical != a_current.domainCanonical ||
+			a_cached.registrations.size() != a_current.registrations.size())
+			return false;
+
+		for (std::size_t index = 0; index < a_current.registrations.size(); ++index) {
+			const auto& cached = a_cached.registrations[index];
+			const auto& current = a_current.registrations[index];
+			if (cached.identity != current.identity ||
+				cached.contractMajor != current.contractMajor ||
+				cached.resourceFingerprint != current.resourceFingerprint ||
+				cached.scopes != current.scopes)
+				return false;
+
+			const auto minimum = (std::max)(cached.minimumCompatibleMinor, current.minimumCompatibleMinor);
+			const auto maximum = (std::min)(cached.maximumCompatibleMinor, current.maximumCompatibleMinor);
+			if (minimum > maximum)
+				return false;
+		}
+		return true;
 	}
 
 	void ShaderCompatibilityRegistry::Freeze()
@@ -238,15 +312,7 @@ namespace CSX::Api
 		std::scoped_lock lock(mutex);
 		if (phase == ShaderCompatibilityAPI::Phase::kFrozen)
 			return;
-		std::vector<const ShaderCompatibilityRegistration*> ordered;
-		ordered.reserve(registrations.size());
-		for (const auto& registration : registrations)
-			ordered.push_back(&registration);
-		std::ranges::sort(ordered, {}, [](const auto* a_registration) { return a_registration->identity; });
-		std::ostringstream canonical;
-		for (const auto* registration : ordered)
-			canonical << registration->canonical.size() << ':' << registration->canonical << '\n';
-		compatibilitySetDigest = Util::CryptoHash::Sha256Hex(canonical.str());
+		compatibilitySetDigest = BuildShaderCompatibilityRequirementSet(registrations).digest;
 		phase = ShaderCompatibilityAPI::Phase::kFrozen;
 		++revision;
 	}
@@ -264,9 +330,8 @@ namespace CSX::Api
 
 	ShaderCompatibilityRequirementSet GetShaderCompatibilityRequirementSet(
 		std::string_view a_shaderFamily,
-		std::string_view a_shaderSource,
-		std::string_view a_feature)
+		std::string_view a_shaderSource)
 	{
-		return GetShaderCompatibilityRegistry().BuildRequirementSet(a_shaderFamily, a_shaderSource, a_feature);
+		return GetShaderCompatibilityRegistry().BuildRequirementSet(a_shaderFamily, a_shaderSource);
 	}
 }

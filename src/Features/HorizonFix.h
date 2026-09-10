@@ -12,14 +12,16 @@
  *
  * This feature's only job is to enable that define while the HorizonFix plugin is installed. It
  * self-disables in PostPostLoad when the plugin is absent, so water keeps exact vanilla
- * far-clip behavior without it - and because that runs before shader cache validation, regular
- * feature validation recompiles the water shaders whenever HorizonFix is installed or removed.
+ * far-clip behavior. Detection fixes the active contract before cache admission; managed
+ * caches retain both Water variants, and only a missing variant compiles from source.
  */
 struct HorizonFix : Feature
 {
 	virtual inline std::string GetName() override { return "Horizon Fix"; }
 	virtual inline std::string GetShortName() override { return "HorizonFix"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "HORIZON_FIX"; }
+	// The Water-scoped compatibility provider owns this feature's shader ABI.
+	virtual std::string_view GetShaderCacheAbiVersion() override { return ""; }
 	virtual inline bool HasShaderDefine(RE::BSShader::Type t) override { return t == RE::BSShader::Type::Water; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kWater; }
 	virtual inline bool SupportsVR() override { return true; }

@@ -1860,6 +1860,11 @@ if(BUILD_CONTROLLER_TESTS)
         tests/shader_cache_provenance_test.cpp
     )
     add_controller_test(
+        shader_source_provenance_test
+        ShaderSourceProvenance
+        tests/shader_source_provenance_test.cpp
+    )
+    add_controller_test(
         generation_claim_test
         GenerationClaim
         tests/generation_claim_test.cpp
@@ -2190,13 +2195,31 @@ if(BUILD_CONTROLLER_TESTS)
         src/Utils/CryptoHash.cpp
     )
     target_compile_features(shader_cache_pack_test PRIVATE cxx_std_23)
+    target_compile_definitions(
+        shader_cache_pack_test
+        PRIVATE CSX_SHADER_CACHE_PACK_TESTING
+    )
     target_include_directories(
         shader_cache_pack_test
         PRIVATE
             "${PROJECT_SOURCE_DIR}/include"
             "${PROJECT_SOURCE_DIR}/src"
     )
-    target_link_libraries(shader_cache_pack_test PRIVATE bcrypt.lib)
+    foreach(
+        CACHE_TEST_TARGET
+        api_shader_compatibility_registry_test shader_cache_pack_test
+        shader_source_provenance_test
+    )
+        if(MSVC)
+            target_compile_options(${CACHE_TEST_TARGET} PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(${CACHE_TEST_TARGET} PRIVATE -UNDEBUG)
+        endif()
+    endforeach()
+    target_link_libraries(
+        shader_cache_pack_test
+        PRIVATE bcrypt.lib nlohmann_json::nlohmann_json
+    )
     add_test(NAME ShaderCachePack COMMAND shader_cache_pack_test)
     set_tests_properties(ShaderCachePack PROPERTIES LABELS "ControllerTests")
 
@@ -2283,6 +2306,7 @@ if(BUILD_CONTROLLER_TESTS)
             shader_cache_disable_policy_test
             shader_cache_enable_policy_test
             shader_cache_provenance_test
+            shader_source_provenance_test
             cache_invalidation_test
             shader_compilation_scheduling_policy_test
             volumetric_lighting_tuning_policy_test

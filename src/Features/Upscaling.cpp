@@ -22,6 +22,7 @@
 #include "State.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FSRHostLifecyclePolicy.h"
+#include "Upscaling/FSRTemporalTuningDevBenchBridge.h"
 #include "Upscaling/FidelityFX.h"
 #include "Upscaling/NvidiaComIdentity.h"
 #include "Upscaling/ReflexPolicy.h"
@@ -321,6 +322,13 @@ namespace
 	}
 }
 
+namespace FSRTemporalTuningPolicy
+{
+	NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Settings,
+		enabled, velocityFactor, reactivenessScale, shadingChangeScale,
+		accumulationAddedPerFrame, minimumDisocclusionAccumulation)
+}
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Upscaling::Settings,
 	upscaleMethod,
@@ -336,6 +344,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	frameGenerationAllowInMenus,
 	streamlineLogLevel,
 	sharpnessFSR,
+	fsrTemporalTuning,
 	sharpnessDLSS,
 	dlssSharpener,
 	fsr4RuntimeEnable,
@@ -4957,6 +4966,10 @@ namespace
 		settings.frameGenerationForceEnable = ClampToggleUInt(settings.frameGenerationForceEnable);
 		settings.streamlineLogLevel = ClampStreamlineLogLevelUInt(settings.streamlineLogLevel);
 		settings.sharpnessFSR = ClampFiniteUnitRange(settings.sharpnessFSR, defaults.sharpnessFSR);
+		if (!FSRTemporalTuningPolicy::IsValid(settings.fsrTemporalTuning)) {
+			logger::warn("[Upscaling] Invalid FSR temporal tuning settings; restoring vendor defaults.");
+			settings.fsrTemporalTuning = {};
+		}
 		settings.sharpnessDLSS = ClampFiniteUnitRange(settings.sharpnessDLSS, defaults.sharpnessDLSS);
 		settings.dlssSharpener = ClampDLSSSharpenerModeUInt(settings.dlssSharpener);
 		settings.periphery_taa_center_blend_feather = ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather);
@@ -16188,6 +16201,41 @@ void Upscaling::DrawSettings()
 				ImGui::TextUnformatted("Adjusts post-upscale sharpness for FSR.");
 				ImGui::TextUnformatted("Range: low 0.0 (softest) to high 1.0 (sharpest).");
 			}
+			if (ImGui::TreeNode("Temporal reconstruction tuning")) {
+				static FSRTemporalTuningPolicy::Settings draft{};
+				static FSRTemporalTuningPolicy::Settings lastSettings{};
+				if (lastSettings != settings.fsrTemporalTuning) {
+					draft = settings.fsrTemporalTuning;
+					lastSettings = settings.fsrTemporalTuning;
+				}
+				ImGui::TextWrapped("Optional FSR 3.1.4/3.1.5 tuning. Other FSR providers retain their defaults. Apply changes together; disabling restores vendor defaults.");
+				ImGui::Checkbox("Enable reconstruction overrides", &draft.enabled);
+				ImGui::SliderFloat("Velocity factor", &draft.velocityFactor, 0.0f, 1.0f);
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted("Lower values can stabilize bright pixels in motion.");
+				ImGui::SliderFloat("Reactiveness scale", &draft.reactivenessScale, 0.0f, FSRTemporalTuningPolicy::kMaximumResponseScale);
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted("Higher values reduce history influence where the reactive mask is present.");
+				ImGui::SliderFloat("Shading change scale", &draft.shadingChangeScale, 0.0f, FSRTemporalTuningPolicy::kMaximumResponseScale);
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted("Higher values respond more strongly to lighting changes.");
+				ImGui::SliderFloat("Accumulation per frame", &draft.accumulationAddedPerFrame, 0.0f, 1.0f);
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted("Lower values can reduce ghosting but increase thin-detail flicker.");
+				ImGui::SliderFloat("Minimum disocclusion accumulation", &draft.minimumDisocclusionAccumulation, -1.0f, 1.0f);
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted("Higher values can reduce flicker around moving thin objects but increase ghosting.");
+				if (ImGui::Button("Apply reconstruction tuning"))
+					SetFSRTemporalTuningSettings(draft);
+				ImGui::SameLine();
+				if (ImGui::Button("Restore vendor reconstruction")) {
+					draft = {};
+					SetFSRTemporalTuningSettings(draft);
+				}
+				const auto tuning = fidelityFX.GetTemporalTuningSnapshot();
+				ImGui::Text("State: %s", FSRTemporalTuningPolicy::StatusLabel(tuning.status));
+				ImGui::TreePop();
+			}
 		} else if (upscaleMethod == UpscaleMethod::kDLSS) {
 			settings.dlssPreset = ClampDLSSPresetUInt(settings.dlssPreset);
 			const uint32_t effectiveDLSSPreset = GetEffectiveDLSSPreset();
@@ -18100,6 +18148,7 @@ void Upscaling::LoadSettings(json& o_json)
 		logger::warn("[Upscaling] Loaded upscaleMethodNoDLSS {} out of range, clamping to {}", settings.upscaleMethodNoDLSS, static_cast<uint>(UpscaleMethod::kFSR));
 	}
 	SanitizeUpscalingSettings(settings);
+	SetFSRTemporalTuningSettings(settings.fsrTemporalTuning);
 	ApplyOpenCompositeUpscalingBlocker(true);
 	const float originalReflexFPSLimit = settings.reflexFPSLimit;
 	if (!std::isfinite(settings.reflexFPSLimit)) {
@@ -18145,6 +18194,7 @@ void Upscaling::RestoreDefaultSettings()
 	settings.reflexLowLatencyBoost = false;
 	settings.reflexUseFPSLimit = false;
 	SanitizeUpscalingSettings(settings);
+	SetFSRTemporalTuningSettings(settings.fsrTemporalTuning);
 	ApplyOpenCompositeUpscalingBlocker(true);
 	ApplyLoadedVRUpscalingTransition(
 		*this,
@@ -18192,6 +18242,7 @@ struct BSOpenVR_GetRenderTargetSize
 void Upscaling::DataLoaded()
 {
 	VRRenderScaleDevBenchBridge::Install();
+	FSRTemporalTuningDevBenchBridge::Install();
 	ApplyOpenCompositeUpscalingBlocker(true);
 	const auto blocker = GetOpenCompositeUpscalingBlocker();
 	if (blocker.active) {
@@ -20407,6 +20458,15 @@ void Upscaling::RecordVRMainPassDispatchStage(
 	}
 }
 #endif
+
+bool Upscaling::SetFSRTemporalTuningSettings(const FSRTemporalTuningPolicy::Settings& a_settings)
+{
+	if (!fidelityFX.RequestTemporalTuning(a_settings))
+		return false;
+	settings.fsrTemporalTuning = a_settings;
+	InvalidateFrameScopedUpscalingState();
+	return true;
+}
 
 float Upscaling::ResolveRuntimeMipBias(bool a_temporal)
 {

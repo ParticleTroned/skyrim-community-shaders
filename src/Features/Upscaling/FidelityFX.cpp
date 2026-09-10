@@ -549,7 +549,7 @@ namespace
 		return result;
 	}
 
-	ffxReturnCode_t ConfigureFrameGenerationProtected(
+	ffxReturnCode_t ConfigureFidelityFXProtected(
 		ffx::Context* a_context,
 		const ffxConfigureDescHeader* a_desc,
 		bool& a_crashed)
@@ -559,6 +559,19 @@ namespace
 		__try {
 			if (ffxModule.Configure)
 				result = ffxModule.Configure(a_context, a_desc);
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			a_crashed = true;
+		}
+		return result;
+	}
+
+	ffxReturnCode_t QueryTemporalProviderProtected(ffx::Context* a_context, ffxQueryGetProviderVersion* a_query, bool& a_crashed)
+	{
+		a_crashed = false;
+		ffxReturnCode_t result = FFX_API_RETURN_ERROR;
+		__try {
+			if (ffxModule.Query)
+				result = ffxModule.Query(a_context, &a_query->header);
 		} __except (EXCEPTION_EXECUTE_HANDLER) {
 			a_crashed = true;
 		}
@@ -1308,7 +1321,10 @@ FidelityFX::RuntimeUpscalerFramePath FidelityFX::GetRuntimeUpscalerProviderFrame
 
 void FidelityFX::RecordRuntimeUpscalerFramePath(RuntimeUpscalerFramePath a_path)
 {
+	temporalLastDispatchPath.store(a_path, std::memory_order_relaxed);
 	const uint32_t frame = globals::state ? globals::state->frameCount : 0;
+	if (globals::state && (a_path == RuntimeUpscalerFramePath::kRuntimeFsr31 || a_path == RuntimeUpscalerFramePath::kRuntimeFsr4))
+		temporalContextLastDispatchFrame = frame;
 	if (!runtimeUpscalerLastFramePathValid || runtimeUpscalerLastFrameIndex != frame) {
 		runtimeUpscalerLastFramePathValid = true;
 		runtimeUpscalerLastFrameIndex = frame;
@@ -1379,7 +1395,7 @@ bool FidelityFX::ConfirmFrameGenerationDisabled(uint64_t a_frameID) noexcept
 
 	bool crashed = false;
 	const bool confirmed =
-		ConfigureFrameGenerationProtected(&frameGenContext, &disable.header, crashed) == FFX_API_RETURN_OK &&
+		ConfigureFidelityFXProtected(&frameGenContext, &disable.header, crashed) == FFX_API_RETURN_OK &&
 		!crashed;
 	frameGenerationDisableConfirmed.store(confirmed, std::memory_order_release);
 	return confirmed;
@@ -1561,7 +1577,7 @@ bool FidelityFX::Present(bool a_useFrameGeneration) noexcept
 
 		configParameters.header.pNext = nullptr;
 		bool crashed = false;
-		if (ConfigureFrameGenerationProtected(&frameGenContext, &configParameters.header, crashed) != FFX_API_RETURN_OK || crashed) {
+		if (ConfigureFidelityFXProtected(&frameGenContext, &configParameters.header, crashed) != FFX_API_RETURN_OK || crashed) {
 			const bool disableConfirmed = !crashed && ConfirmFrameGenerationDisabled(frameID);
 			QuarantineFrameGenerationForSession("frame-generation configuration", disableConfirmed);
 			return false;
@@ -1574,7 +1590,7 @@ bool FidelityFX::Present(bool a_useFrameGeneration) noexcept
 
 		uiConfig.header.pNext = nullptr;
 		crashed = false;
-		if (ConfigureFrameGenerationProtected(&swapChainContext, &uiConfig.header, crashed) != FFX_API_RETURN_OK || crashed) {
+		if (ConfigureFidelityFXProtected(&swapChainContext, &uiConfig.header, crashed) != FFX_API_RETURN_OK || crashed) {
 			const bool disableConfirmed = ConfirmFrameGenerationDisabled(frameID);
 			QuarantineFrameGenerationForSession("UI composition configuration", disableConfirmed);
 			return false;
@@ -1912,6 +1928,16 @@ FidelityFX::LifecycleResult FidelityFX::DestroyRuntimeUpscalerContexts(bool a_wa
 		runtimeUpscalerContextIndeterminate[i] = false;
 	}
 
+	{
+		std::scoped_lock lock(temporalTuningMutex);
+		temporalLastDispatchPath.store(RuntimeUpscalerFramePath::kInactive, std::memory_order_relaxed);
+		temporalContextLastDispatchFrame = ~uint32_t{ 0 };
+		temporalTuningSnapshot.configuredContexts = 0;
+		temporalTuningSnapshot.contextSettings = {};
+		if (temporalTuningSnapshot.status != FSRTemporalTuningPolicy::Status::Rejected &&
+			temporalTuningSnapshot.status != FSRTemporalTuningPolicy::Status::Faulted)
+			temporalTuningSnapshot.status = FSRTemporalTuningPolicy::Status::Inactive;
+	}
 	runtimeUpscalerContextCount = 0;
 	runtimeUpscalerMaxRenderWidth = 0;
 	runtimeUpscalerMaxRenderHeight = 0;
@@ -2314,7 +2340,10 @@ bool FidelityFX::AreRuntimeUpscalerContextsCompatible(
 			return false;
 	}
 
-	return runtimeUpscalerContextCount == a_contextCount &&
+	return FSRTemporalTuningPolicy::CanReuseContextProfile(temporalContextRevision,
+			   temporalRequestRevision.load(std::memory_order_acquire),
+			   globals::state && temporalContextLastDispatchFrame == globals::state->frameCount) &&
+	       runtimeUpscalerContextCount == a_contextCount &&
 	       runtimeUpscalerMaxRenderWidth == a_fullRenderWidth &&
 	       runtimeUpscalerMaxRenderHeight == a_fullRenderHeight &&
 	       runtimeUpscalerMaxDisplayWidth == a_fullDisplayWidth &&
@@ -3160,6 +3189,128 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerInterop()
 	return complete ? LifecycleResult::Ready : LifecycleResult::Pending;
 }
 
+bool FidelityFX::RequestTemporalTuning(const FSRTemporalTuningPolicy::Settings& a_settings)
+{
+	if (!FSRTemporalTuningPolicy::IsValid(a_settings))
+		return false;
+	std::scoped_lock lock(temporalTuningMutex);
+	if (!FSRTemporalTuningPolicy::Equivalent(temporalTuningSnapshot.requested, a_settings)) {
+		temporalTuningSnapshot.status = FSRTemporalTuningPolicy::Status::Pending;
+		++temporalTuningSnapshot.requestRevision;
+	}
+	temporalTuningSnapshot.requested = a_settings;
+	temporalRequestRevision.store(temporalTuningSnapshot.requestRevision, std::memory_order_release);
+	return true;
+}
+
+FidelityFX::TemporalTuningSnapshot FidelityFX::GetTemporalTuningSnapshot() const
+{
+	std::scoped_lock lock(temporalTuningMutex);
+	auto snapshot = temporalTuningSnapshot;
+	snapshot.lastDispatchPath = temporalLastDispatchPath.load(std::memory_order_relaxed);
+	const bool hostPath = snapshot.lastDispatchPath == RuntimeUpscalerFramePath::kHostFsr31 ||
+	                      snapshot.lastDispatchPath == RuntimeUpscalerFramePath::kHostFsr31Fallback;
+	if (hostPath) {
+		snapshot.contextSettings = {};
+		snapshot.configuredContexts = 0;
+		snapshot.providerId = 0;
+		if (snapshot.status != FSRTemporalTuningPolicy::Status::Rejected &&
+			snapshot.status != FSRTemporalTuningPolicy::Status::Faulted)
+			snapshot.status = snapshot.requested.enabled ? FSRTemporalTuningPolicy::Status::UnsupportedProvider :
+			                                               FSRTemporalTuningPolicy::Status::VendorDefaults;
+	}
+	return snapshot;
+}
+
+FidelityFX::LifecycleResult FidelityFX::ConfigureTemporalTuningContexts(const TemporalTuningSnapshot& a_request)
+{
+	using Status = FSRTemporalTuningPolicy::Status;
+	const auto& a_settings = a_request.requested;
+	temporalContextRevision = a_request.requestRevision;
+	auto publish = [&](Status status, uint64_t providerId, uint32_t contexts, int32_t result = 0) {
+		std::scoped_lock lock(temporalTuningMutex);
+		temporalTuningSnapshot.contextSettings = status == Status::Applied ? a_settings : FSRTemporalTuningPolicy::Settings{};
+		temporalTuningSnapshot.status = temporalTuningSnapshot.requestRevision == a_request.requestRevision ? status : Status::Pending;
+		temporalTuningSnapshot.providerId = providerId;
+		temporalTuningSnapshot.configuredContexts = contexts;
+		temporalTuningSnapshot.lastConfigureResult = result;
+	};
+	if (!a_settings.enabled) {
+		temporalRejectedRequest = {};
+		publish(Status::VendorDefaults, runtimeUpscalerProviderMatchedVersionId, 0);
+		return LifecycleResult::Ready;
+	}
+	if (!ffxModule.Configure || !ffxModule.Query) {
+		publish(Status::UnsupportedProvider, 0, 0);
+		return LifecycleResult::Ready;
+	}
+
+	uint64_t providerId = 0;
+	for (uint32_t eye = 0; eye < runtimeUpscalerContextCount; ++eye) {
+		ffxQueryGetProviderVersion query{};
+		query.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
+		bool crashed = false;
+		const auto result = QueryTemporalProviderProtected(&runtimeUpscalerContexts[eye], &query, crashed);
+		if (crashed) {
+			runtimeUpscalerContextIndeterminate[eye] = true;
+			publish(Status::Faulted, providerId, 0, static_cast<int32_t>(result));
+			QuarantineRuntimeUpscalerForSession("a temporal tuning provider query fault");
+			const auto failure = ResolveRuntimeUpscalerLifecycleFailure("temporal tuning provider query fault");
+			runtimeUpscalerQuarantineRetirement = NormalizeRuntimeQuarantineResult(failure);
+			return failure;
+		}
+		if (result != FFX_API_RETURN_OK || !FSRTemporalTuningPolicy::SupportsProvider(query.versionId) ||
+			(eye > 0 && query.versionId != providerId)) {
+			publish(Status::UnsupportedProvider, query.versionId, 0, static_cast<int32_t>(result));
+			return LifecycleResult::Ready;
+		}
+		providerId = query.versionId;
+	}
+	if (temporalRejectedRequest.Matches(a_settings, providerId)) {
+		const auto lastResult = GetTemporalTuningSnapshot().lastConfigureResult;
+		publish(Status::Rejected, providerId, 0, lastResult);
+		return LifecycleResult::Ready;
+	}
+	temporalRejectedRequest = {};
+
+	constexpr std::array<uint64_t, 5> keys{
+		FFX_API_CONFIGURE_UPSCALE_KEY_FVELOCITYFACTOR,
+		FFX_API_CONFIGURE_UPSCALE_KEY_FREACTIVENESSSCALE,
+		FFX_API_CONFIGURE_UPSCALE_KEY_FSHADINGCHANGESCALE,
+		FFX_API_CONFIGURE_UPSCALE_KEY_FACCUMULATIONADDEDPERFRAME,
+		FFX_API_CONFIGURE_UPSCALE_KEY_FMINDISOCCLUSIONACCUMULATION
+	};
+	const auto configured = FSRTemporalTuningPolicy::ConfigureFreshContexts(
+		a_settings, runtimeUpscalerContextCount,
+		[&](uint32_t eye, uint32_t key, float value) {
+			ffx::ConfigureDescUpscaleKeyValue descriptor{};
+			descriptor.key = keys[key];
+			descriptor.ptr = &value;
+			bool crashed = false;
+			const auto result = ConfigureFidelityFXProtected(&runtimeUpscalerContexts[eye], &descriptor.header, crashed);
+			return FSRTemporalTuningPolicy::ConfigureResult{ result == FFX_API_RETURN_OK, crashed, static_cast<int32_t>(result) };
+		});
+	if (!configured.success) {
+		temporalRejectedRequest = { true, a_settings, providerId };
+		publish(configured.faulted ? Status::Faulted : Status::Rejected, providerId, 0, configured.code);
+		logger::warn("[FidelityFX] Temporal tuning rejected for context {}, key {}: {}{}; no tuned eye will dispatch.",
+			configured.context, keys[configured.key], configured.code, configured.faulted ? " (provider fault)" : "");
+		if (configured.faulted) {
+			runtimeUpscalerContextIndeterminate[configured.context] = true;
+			QuarantineRuntimeUpscalerForSession("a temporal tuning configure fault");
+			const auto failure = ResolveRuntimeUpscalerLifecycleFailure("temporal tuning configure fault");
+			runtimeUpscalerQuarantineRetirement = NormalizeRuntimeQuarantineResult(failure);
+			return failure;
+		}
+		// Fresh contexts have never dispatched; replacing the set restores exact vendor defaults.
+		const auto cleanup = DestroyRuntimeUpscalerContexts(false);
+		return cleanup == LifecycleResult::Ready ? LifecycleResult::Pending : cleanup;
+	}
+	publish(Status::Applied, providerId, runtimeUpscalerContextCount);
+	globals::features::upscaling.RequestHistoryReset();
+	return LifecycleResult::Ready;
+}
+
 FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight, uint32_t a_contextCount, uint32_t a_requestedVersion)
 {
 	const auto pendingFenceResult = PollPendingRuntimeUpscalerTeardownFence(
@@ -3361,6 +3512,9 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a
 	runtimeUpscalerMaxDisplayHeight = a_fullDisplayHeight;
 	runtimeUpscalerRequestedVersion = a_requestedVersion;
 	recordRuntimeProviderResult(true);
+	const auto tuningResult = ConfigureTemporalTuningContexts(GetTemporalTuningSnapshot());
+	if (tuningResult != LifecycleResult::Ready)
+		return tuningResult;
 
 	if ((runtimeUpscalerProviderMatchedVersionId != 0 || !runtimeUpscalerProviderMatchedVersionName.empty()) &&
 		!RuntimeProviderMatchesVersion(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName, a_requestedVersion)) {

@@ -1981,6 +1981,11 @@ if(BUILD_CONTROLLER_TESTS)
         FSRRuntimeLifecyclePolicy
         tests/fsr_runtime_lifecycle_policy_test.cpp
     )
+    add_controller_test(
+        fsr_temporal_tuning_policy_test
+        FSRTemporalTuningPolicy
+        tests/fsr_temporal_tuning_policy_test.cpp
+    )
     set(_fsr_eye_dispatch_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/fsr-eye-dispatch"
     )
@@ -2500,6 +2505,7 @@ if(BUILD_CONTROLLER_TESTS)
             reflex_policy_test
             fsr_host_lifecycle_policy_test
             fsr_runtime_lifecycle_policy_test
+            fsr_temporal_tuning_policy_test
             fsr_eye_dispatch_test
             vr_submit_input_freshness_policy_test
             vr_submit_input_freshness_composition_test

@@ -14,6 +14,8 @@
 #include <utility>
 #include <vector>
 
+#include "FSRSharedGuidePolicy.h"
+
 #include <FidelityFX/host/backends/dx11/ffx_dx11.h>
 #include <FidelityFX/host/ffx_fsr3.h>
 #include <FidelityFX/host/ffx_interface.h>
@@ -186,6 +188,11 @@ public:
 	bool IsRuntimeFsr4Available() const;
 	bool ShouldRequestRuntimeFsr4() const;
 	bool ShouldUseRuntimeUpscalerForFSR() const;
+	/** Diagnostic A/B switch; disabling direct guides retains all fenced import ownership. */
+	void SetRuntimeSharedGuideInputsEnabled(bool a_enabled) noexcept { runtimeSharedGuideInputsEnabled.store(a_enabled, std::memory_order_release); }
+	[[nodiscard]] bool AreRuntimeSharedGuideInputsEnabled() const noexcept { return runtimeSharedGuideInputsEnabled.load(std::memory_order_acquire); }
+	/** A quarantined provider's imported inputs must be replaced before any D3D11 reuse. */
+	[[nodiscard]] bool IsRuntimeSharedGuideQuarantined(ID3D11Resource* a_source) const noexcept;
 	bool HasRuntimeUpscalerSupportCheckResult() const;
 	bool IsRuntimeUpscalerSupportConfirmed() const;
 	bool IsRuntimeUpscalerProviderMatchingRequestedVersion() const;
@@ -288,6 +295,13 @@ private:
 	RuntimeWrappedResources runtimeReactiveShared{};
 	RuntimeWrappedResources runtimeTransparencyShared{};
 	RuntimeWrappedResources runtimeOutputShared{};
+	struct RuntimeSharedGuideImport
+	{
+		winrt::com_ptr<ID3D11Resource> source;
+		std::unique_ptr<WrappedResource> imported;
+	};
+	std::array<std::array<RuntimeSharedGuideImport, FSRSharedGuidePolicy::kGuideCount>, 2> runtimeSharedGuideImports{};
+	std::atomic_bool runtimeSharedGuideInputsEnabled{ true };
 
 	HMODULE frameGenerationModule = nullptr;
 	HMODULE runtimeUpscalerModule = nullptr;
@@ -370,6 +384,10 @@ private:
 		const D3D11_TEXTURE2D_DESC& a_transparencyDesc,
 		const D3D11_TEXTURE2D_DESC& a_outputDesc);
 	LifecycleResult ExecuteRuntimeUpscalerBatch(const RuntimeDispatchPlan& a_plan, std::span<const UpscaleRegionParameters> a_regions);
+	/** Returns a retained exact full-eye guide import, or null to use the copy fallback. */
+	WrappedResource* ResolveRuntimeSharedGuide(uint32_t a_eye, FSRSharedGuidePolicy::Guide a_guide,
+		ID3D11Resource* a_source, const D3D11_TEXTURE2D_DESC& a_desc);
+	[[nodiscard]] bool HasQuarantinedRuntimeSharedGuides(const UpscaleRegionParameters& a_region) const noexcept;
 	[[nodiscard]] bool CanDispatchHostFallbackForRegions(std::span<const UpscaleRegionParameters> a_regions, const RuntimeDispatchPlan& a_plan) const;
 	LifecycleResult DispatchRuntimeUpscalerBatch(std::span<const UpscaleRegionParameters> a_regions);
 	LifecycleResult DestroyRuntimeUpscalerContexts(bool a_waitForIdle = true);

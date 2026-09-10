@@ -22,6 +22,8 @@ class WrappedResource
 {
 public:
 	WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* a_d3d11Device, ID3D12Device* a_d3d12Device);
+	/** Imports an existing NT-shared texture, retaining its D3D11 and D3D12 ownership. */
+	WrappedResource(ID3D11Texture2D* a_texture, ID3D12Device* a_d3d12Device, HANDLE a_sharedHandle = nullptr);
 	~WrappedResource() = default;
 	WrappedResource(const WrappedResource&) = delete;
 	WrappedResource& operator=(const WrappedResource&) = delete;

@@ -11469,6 +11469,22 @@ namespace
 		logged = true;
 	}
 
+	eastl::unique_ptr<Texture2D> CreateUpscalingTexture(D3D11_TEXTURE2D_DESC a_desc, const char* a_name, bool a_shareWithRuntime)
+	{
+		if (a_shareWithRuntime) {
+			a_desc.MiscFlags |= D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
+			try {
+				return eastl::make_unique<Texture2D>(a_desc, a_name);
+			} catch (const std::exception& e) {
+				if (FAILED(globals::d3d::device->GetDeviceRemovedReason()))
+					throw;
+				logger::warn("[Upscaling] Shared guide '{}' creation failed; retaining the copy path: {}", a_name, e.what());
+				a_desc.MiscFlags &= ~(D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE);
+			}
+		}
+		return eastl::make_unique<Texture2D>(a_desc, a_name);
+	}
+
 	eastl::unique_ptr<Texture2D> CreateNamedTexture2D(uint32_t width, uint32_t height, DXGI_FORMAT format, bool createSRV, bool createUAV, bool createRTV, const char* name)
 	{
 		D3D11_TEXTURE2D_DESC desc{};
@@ -38558,7 +38574,7 @@ ID3D11PixelShader* Upscaling::GetVRMenuLayerCompositePS()
 }
 
 eastl::unique_ptr<Texture2D> Upscaling::CreateTextureFromSource(ID3D11Resource* src, uint32_t width, uint32_t height,
-	bool copyBindFlags, bool createSRV, bool createUAV, const char* name, bool createRTV)
+	bool copyBindFlags, bool createSRV, bool createUAV, const char* name, bool createRTV, bool shareWithRuntime)
 {
 	D3D11_TEXTURE2D_DESC srcDesc;
 	static_cast<ID3D11Texture2D*>(src)->GetDesc(&srcDesc);
@@ -38575,11 +38591,7 @@ eastl::unique_ptr<Texture2D> Upscaling::CreateTextureFromSource(ID3D11Resource* 
 	if (createRTV)
 		desc.BindFlags |= D3D11_BIND_RENDER_TARGET;
 
-	auto tex = eastl::make_unique<Texture2D>(desc);
-
-	if (name) {
-		Util::SetResourceName(tex->resource.get(), name);
-	}
+	auto tex = CreateUpscalingTexture(desc, name, shareWithRuntime);
 
 	if (createSRV) {
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
@@ -40840,6 +40852,8 @@ bool Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 		GetRuntimeUpscaleMethod() == UpscaleMethod::kFSR;
 	const uint32_t allocationInWidth = useStableFSRInputBounds ? std::max(inWidth, outWidth) : inWidth;
 	const uint32_t allocationInHeight = useStableFSRInputBounds ? std::max(inHeight, outHeight) : inHeight;
+	const bool shareGuidesWithRuntime = useStableFSRInputBounds &&
+	                                    (fidelityFX.ShouldUseRuntimeUpscalerForFSR() || fidelityFX.ShouldRequestRuntimeFsr4());
 	RetiredVRIntermediateTextures replacement{};
 
 	for (int i = 0; i < 2; i++) {
@@ -40885,9 +40899,8 @@ bool Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 			linearDepthDesc.SampleDesc.Count = 1;
 			linearDepthDesc.Usage = D3D11_USAGE_DEFAULT;
 			linearDepthDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-			replacement.linearDepth[i] = eastl::make_unique<Texture2D>(linearDepthDesc);
-
-			Util::SetResourceName(replacement.linearDepth[i]->resource.get(), ("Upscale_LinearDepth_" + suffix).c_str());
+			replacement.linearDepth[i] = CreateUpscalingTexture(linearDepthDesc,
+				("Upscaling::LinearDepth_" + suffix).c_str(), shareGuidesWithRuntime);
 
 			D3D11_SHADER_RESOURCE_VIEW_DESC linearSRVDesc = {};
 			linearSRVDesc.Format = DXGI_FORMAT_R32_FLOAT;
@@ -40902,9 +40915,9 @@ bool Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 			replacement.linearDepth[i]->CreateUAV(linearUAVDesc);
 		}
 
-		replacement.motionVectors[i] = CreateTextureFromSource(mvecSrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscale_MVec_" + suffix).c_str());
-		replacement.reactiveMask[i] = CreateTextureFromSource(reactiveSrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscale_Reactive_" + suffix).c_str());
-		replacement.transparencyMask[i] = CreateTextureFromSource(transparencySrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscale_Transparency_" + suffix).c_str());
+		replacement.motionVectors[i] = CreateTextureFromSource(mvecSrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscaling::MotionVectors_" + suffix).c_str(), false, shareGuidesWithRuntime);
+		replacement.reactiveMask[i] = CreateTextureFromSource(reactiveSrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscaling::Reactive_" + suffix).c_str(), false, shareGuidesWithRuntime);
+		replacement.transparencyMask[i] = CreateTextureFromSource(transparencySrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscaling::Transparency_" + suffix).c_str(), false, shareGuidesWithRuntime);
 	}
 	for (uint32_t eye = 0; eye < 2; ++eye) {
 		if (!replacement.colorIn[eye] ||
@@ -41039,7 +41052,7 @@ void Upscaling::EnsureVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 		vrIntermediateTransparencyMask[0] && vrIntermediateTransparencyMask[1];
 
 	const bool generationChanged = vrIntermediateTextureGeneration != contractGeneration;
-	bool needsRecreate = !hasAllIntermediates || (!useStableFSRInputBounds && generationChanged);
+	bool needsRecreate = !hasAllIntermediates || HasQuarantinedVRGuideInputs() || (!useStableFSRInputBounds && generationChanged);
 	bool currentHasRequiredViews = false;
 	if (hasAllIntermediates) {
 		currentHasRequiredViews = true;
@@ -41340,6 +41353,9 @@ bool Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 		return false;
 	}
 
+	if (HasQuarantinedVRGuideInputs())
+		return false;
+
 	if (!vrIntermediateColorIn[0] || !vrIntermediateColorIn[0]->resource || !vrIntermediateColorIn[0]->uav ||
 		!vrIntermediateColorIn[1] || !vrIntermediateColorIn[1]->resource || !vrIntermediateColorIn[1]->uav ||
 		(copyDepthInput && (!vrIntermediateDepth[0] || !vrIntermediateDepth[0]->resource ||
@@ -41401,6 +41417,8 @@ bool Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 
 bool Upscaling::AreVRPerEyeUpscalingResourcesReady(bool requireDepth, bool requireLinearDepth) const
 {
+	if (HasQuarantinedVRGuideInputs())
+		return false;
 	for (uint32_t eye = 0; eye < 2; ++eye) {
 		if (!vrIntermediateColorIn[eye] || !vrIntermediateColorIn[eye]->resource ||
 			!vrIntermediateColorIn[eye]->uav ||
@@ -41424,7 +41442,7 @@ bool Upscaling::AreVRPerEyeUpscalingResourcesReady(bool requireDepth, bool requi
 
 bool Upscaling::AreVRIntermediateTexturesCompatibleForFSR(uint32_t a_displayEyeWidth, uint32_t a_displayEyeHeight) const
 {
-	if (!a_displayEyeWidth || !a_displayEyeHeight)
+	if (!a_displayEyeWidth || !a_displayEyeHeight || HasQuarantinedVRGuideInputs())
 		return false;
 
 	const auto coversDisplay = [a_displayEyeWidth, a_displayEyeHeight](
@@ -41454,6 +41472,21 @@ bool Upscaling::AreVRIntermediateTexturesCompatibleForFSR(uint32_t a_displayEyeW
 	return true;
 }
 
+bool Upscaling::HasQuarantinedVRGuideInputs() const
+{
+	for (uint32_t eye = 0; eye < 2; ++eye) {
+		const std::array<const Texture2D*, 4> guides{
+			vrIntermediateLinearDepth[eye].get(), vrIntermediateMotionVectors[eye].get(),
+			vrIntermediateReactiveMask[eye].get(), vrIntermediateTransparencyMask[eye].get()
+		};
+		for (const auto* guide : guides) {
+			if (guide && fidelityFX.IsRuntimeSharedGuideQuarantined(guide->resource.get()))
+				return true;
+		}
+	}
+	return false;
+}
+
 bool Upscaling::AreActiveVRIntermediateTexturesCompatible(
 	UpscaleMethod a_upscaleMethod,
 	uint32_t a_inputWidth,
@@ -41466,7 +41499,7 @@ bool Upscaling::AreActiveVRIntermediateTexturesCompatible(
 	ID3D11Resource* a_transparencySource,
 	uint32_t a_contractGeneration) const
 {
-	if (!globals::game::isVR ||
+	if (HasQuarantinedVRGuideInputs() || !globals::game::isVR ||
 		!IsVendorUpscalingMethod(a_upscaleMethod) ||
 		!a_inputWidth || !a_inputHeight || !a_outputWidth || !a_outputHeight ||
 		!a_colorSource || !a_motionVectorSource || !a_reactiveSource || !a_transparencySource) {
@@ -42267,6 +42300,9 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 		MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage intermediate creation");
 		return false;
 	}
+
+	if (HasQuarantinedVRGuideInputs())
+		return false;
 
 	for (uint32_t eye = 0; eye < 2; ++eye) {
 		if ((eyeMask & (1u << eye)) == 0)
@@ -57186,6 +57222,9 @@ void Upscaling::Upscale()
 #endif
 				return false;
 			}
+
+			if (HasQuarantinedVRGuideInputs())
+				return false;
 
 			for (uint32_t eye = 0; eye < 2; ++eye) {
 				if (!vrIntermediateMotionVectors[eye] || !vrIntermediateMotionVectors[eye]->uav ||

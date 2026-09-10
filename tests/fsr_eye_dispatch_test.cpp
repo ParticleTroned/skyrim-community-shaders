@@ -168,6 +168,7 @@ struct FidelityFX
 	uint32_t fsrContextDisplayHeight = 0;
 	bool fsrDispatchCrashLogged = false;
 	bool hostSupported = false;
+	bool sharedGuidesQuarantined = false;
 	bool hostDispatchReady = true;
 	bool hostDispatchFault = false;
 	RuntimeDispatchPlan plan{
@@ -176,7 +177,7 @@ struct FidelityFX
 		.selected = true,
 		.contextCount = 2,
 	};
-	LifecycleResult runtimeResult = LifecycleResult::Pending;
+	LifecycleResult simulatedRuntimeResult = LifecycleResult::Pending;
 	uint32_t runtimeCalls = 0;
 	uint32_t runtimeEyeMask = 0;
 	uint32_t runtimeRegionCount = 0;
@@ -206,7 +207,7 @@ struct FidelityFX
 		runtimeRegionCount += static_cast<uint32_t>(a_regions.size());
 		for (const auto& region : a_regions)
 			runtimeEyeMask |= 1u << region.contextIndex;
-		return runtimeResult;
+		return simulatedRuntimeResult;
 	}
 	bool IsHostFSR3Supported() const { return hostSupported; }
 	bool HasFSRResources() const;
@@ -238,6 +239,7 @@ struct FidelityFX
 	}
 	void ArmRuntimeHostFallback(uint32_t);
 	bool CanDispatchHostFallbackForRegions(std::span<const UpscaleRegionParameters>, const RuntimeDispatchPlan&) const;
+	bool HasQuarantinedRuntimeSharedGuides(const UpscaleRegionParameters&) const { return sharedGuidesQuarantined; }
 	UpscaleResult UpscaleRegion(uint32_t, ID3D11Resource*, ID3D11Resource*, ID3D11Resource*,
 		ID3D11Resource*, ID3D11Resource*, ID3D11Resource*, uint32_t, uint32_t,
 		uint32_t, uint32_t, float, float, float, bool* = nullptr);
@@ -369,7 +371,7 @@ namespace
 						upscaling.fidelityFX.runtimeEyeMask == (1u << eye),
 					"Single-eye admission consumed its unproven peer");
 				RequireDeferredUntouched(upscaling);
-				upscaling.fidelityFX.runtimeResult = Lifecycle::Ready;
+				upscaling.fidelityFX.simulatedRuntimeResult = Lifecycle::Ready;
 				Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, params) == Result::Ready &&
 						upscaling.successfulEvaluations == 1 && upscaling.failedEvaluations == 0 &&
 						upscaling.fidelityFX.runtimeUpscalerUsedForFrame,
@@ -429,7 +431,7 @@ namespace
 				auto& upscaling = Reset();
 				auto& provider = upscaling.fidelityFX;
 				provider.plan.runtimeFsr4Requested = fsr4;
-				provider.runtimeResult = failure;
+				provider.simulatedRuntimeResult = failure;
 				Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(1, 504)) == Result::Failed &&
 						upscaling.failedEvaluations == 1 && upscaling.successfulEvaluations == 0 &&
 						provider.deviceProbes == 1 && upscaling.deviceLossHandlers == 1 &&
@@ -560,7 +562,7 @@ namespace
 			provider.ResolveEligibleRuntimeShaderGate(false, false);
 			Require(!provider.plan.providerSetupDeferred && provider.plan.selected != hostAvailable,
 				"Clearing the gate retained an unused host latch or mixed providers after host output");
-			provider.runtimeResult = Lifecycle::Ready;
+			provider.simulatedRuntimeResult = Lifecycle::Ready;
 			Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(1, 1284)) == Result::Ready &&
 					provider.runtimeCalls == (hostAvailable ? 0u : 1u) &&
 					provider.hostCalls == (hostAvailable ? 2u : 0u) &&
@@ -595,7 +597,7 @@ namespace
 					(hostAvailable ? FidelityFX::StereoUpscaleResult::NotHandled : FidelityFX::StereoUpscaleResult::Deferred),
 				"Stereo setup deferral did not retain the host/deferred distinction");
 			provider.ResolveEligibleRuntimeShaderGate(false, false);
-			provider.runtimeResult = Lifecycle::Ready;
+			provider.simulatedRuntimeResult = Lifecycle::Ready;
 			Require(provider.UpscaleStereoRegions(stereo) ==
 					(hostAvailable ? FidelityFX::StereoUpscaleResult::NotHandled : FidelityFX::StereoUpscaleResult::Ready) &&
 					provider.runtimeCalls == (hostAvailable ? 0u : 1u) &&
@@ -737,7 +739,7 @@ namespace
 				"Deferred presentation overwrote another stereo cycle or contract");
 		}
 		auto& upscaling = Reset();
-		upscaling.fidelityFX.runtimeResult = Lifecycle::Ready;
+		upscaling.fidelityFX.simulatedRuntimeResult = Lifecycle::Ready;
 		Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(1, 1284)) == Result::Ready,
 			"The right-first fixture did not advance vendor history");
 		DeferredPresentation invalidatedOutput;
@@ -745,7 +747,7 @@ namespace
 		invalidatedOutput.submitStageVendorOutputCompositorCycle = 0;
 		invalidatedOutput.submitStageVendorOutputGeneration = 0;
 		invalidatedOutput.submitStageVendorEyeState = {};
-		upscaling.fidelityFX.runtimeResult = Lifecycle::Pending;
+		upscaling.fidelityFX.simulatedRuntimeResult = Lifecycle::Pending;
 		Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(0, 1284)) == Result::Deferred &&
 				invalidatedOutput.Present() && invalidatedOutput.historyResets == 1 &&
 				upscaling.successfulEvaluations == 1 && upscaling.failedEvaluations == 0,
@@ -757,8 +759,24 @@ namespace
 	}
 }
 
+void QuarantinedSharedGuidesRequireReplacement()
+{
+	auto& upscaling = Reset();
+	auto& provider = upscaling.fidelityFX;
+	EnableHost(provider);
+	provider.plan.selected = false;
+	provider.sharedGuidesQuarantined = true;
+	Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(0, 1284)) == Result::Failed,
+		"Host fallback reused a quarantined direct guide");
+	Require(provider.hostCalls == 0, "Quarantined guide reached host dispatch");
+	provider.sharedGuidesQuarantined = false;
+	Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(0, 1284)) == Result::Ready,
+		"Replacement guides did not restore compatible host fallback");
+}
+
 int main()
 {
+	QuarantinedSharedGuidesRequireReplacement();
 	ColdRuntimeWithoutPeerProof();
 	DeferredAdmissionAndHostFallback();
 	GenuineFailuresRemainFailures();

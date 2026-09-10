@@ -1781,6 +1781,13 @@ namespace
 										  { "avoidedPixels", avoidedInputPixels },
 										  { "activePixelRatio", potentialInputPixels ? static_cast<double>(activeInputPixels) / potentialInputPixels : 0.0 },
 									  } },
+			{ "runtimeFSRSharedGuides", {
+											{ "enabled", a_upscaling.fidelityFX.AreRuntimeSharedGuideInputsEnabled() },
+											{ "directGuideInputs", value(Counter::FSRDirectGuideInputs) },
+											{ "directGuidePixels", value(Counter::FSRDirectGuidePixels) },
+											{ "fallbackGuideCopies", value(Counter::FSRGuideCopyFallbacks) },
+											{ "importFailures", value(Counter::FSRGuideImportFailures) },
+										} },
 			{ "item6RuntimeFSRStereo", {
 										   { "batchAttempts", value(Counter::RuntimeFSRStereoBatchAttempts) },
 										   { "batchReuses", value(Counter::RuntimeFSRStereoBatchReuses) },
@@ -4894,6 +4901,7 @@ namespace
 			"cpu_performance_start",
 			"cpu_performance_stop",
 			"cpu_performance_reset",
+			"fsr_shared_guides",
 			"gpu_performance_status",
 			"gpu_performance_start",
 			"gpu_performance_stop",
@@ -6265,6 +6273,29 @@ namespace
 			});
 		}
 
+		if (action == "fsr_shared_guides") {
+			std::optional<bool> enabled;
+			if (a_args.contains("enabled")) {
+				if (!a_args["enabled"].is_boolean())
+					return json{ { "error", "fsr_shared_guides enabled must be a boolean" } };
+				enabled = a_args["enabled"].get<bool>();
+			}
+			return RunOnMainThread([enabled]() {
+				if (!globals::game::isVR)
+					return json{ { "error", "shared guide diagnostics require Skyrim VR" } };
+				auto& upscaling = globals::features::upscaling;
+				if (enabled && upscaling.IsVRRenderScaleGPUPerformanceTelemetryActive())
+					return json{ { "error", "stop GPU performance capture before changing shared guide mode" } };
+				if (enabled)
+					upscaling.fidelityFX.SetRuntimeSharedGuideInputsEnabled(*enabled);
+				return json{
+					{ "action", "fsr_shared_guides" },
+					{ "enabled", upscaling.fidelityFX.AreRuntimeSharedGuideInputsEnabled() },
+					{ "scope", "eligible full-eye runtime FSR inputs only; copied guides remain the fallback" },
+				};
+			});
+		}
+
 		if (action == "gpu_performance_status") {
 			return RunOnMainThread([]() {
 				if (!globals::game::isVR)
@@ -7476,6 +7507,14 @@ namespace VRRenderScaleDevBenchBridge
 			                            "accepted reports admission, not physical completion. The setting "
 			                            "is saved through the normal CS settings save operation.";
 			descriptor["inputSchema"]["properties"]["action"]["enum"].push_back("set_render_scale_link");
+			descriptor["inputSchema"]["properties"]["action"]["enum"].push_back("fsr_shared_guides");
+			descriptor["description"] = descriptor["description"].get<std::string>() +
+			                            " fsr_shared_guides inspects the session-only full-eye FSR shared-guide mode; "
+			                            "optional boolean enabled selects direct imports or reference copies while GPU "
+			                            "performance capture is inactive. Imports remain retained until fenced teardown. "
+			                            "GPU status exposes runtimeFSRSharedGuides direct inputs/pixels, fallback guide "
+			                            "copies and import failures; item5ActiveFSRCopies counts actual input copies, "
+			                            "with avoidedPixels including direct sharing and inactive rectangle savings.";
 			descriptor["inputSchema"]["properties"]["foveation"]["description"] =
 				"Optional exact settings fixture. Float comparisons use the "
 				"tolerance returned in each receipt; live execution flags must "

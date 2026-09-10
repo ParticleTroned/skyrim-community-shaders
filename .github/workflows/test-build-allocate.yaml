@@ -1,0 +1,139 @@
+name: "Test Build: Allocate After Merge"
+
+on:
+    pull_request_target:
+        types: [closed]
+
+permissions:
+    contents: read
+    pull-requests: read
+
+jobs:
+    settle:
+        name: Wait for an eligible merge batch
+        if: >
+            github.event.pull_request.merged == true &&
+            github.event.pull_request.base.ref == github.event.repository.default_branch
+        concurrency:
+            # Only an eligible merge may restart the quiet period. Unique groups
+            # keep skipped closed-PR events away from the cancellation boundary.
+            group: >-
+                ${{ github.event.pull_request.merged == true &&
+                    github.event.pull_request.base.ref == github.event.repository.default_branch &&
+                    'csx-test-build-settle' ||
+                    format('csx-test-build-ignored-{0}', github.run_id) }}
+            cancel-in-progress: true
+        runs-on: ubuntu-latest
+        steps:
+            - name: Wait for a merge batch to settle
+              run: sleep 180
+
+    allocate:
+        name: Allocate merged test-build batch
+        needs: settle
+        permissions:
+            contents: write
+            pull-requests: read
+        concurrency:
+            # Allocation and publication are serialized but never cancelled.
+            # A rerun recovers the existing state-only allocation commit.
+            group: csx-test-build-publication
+            cancel-in-progress: false
+        runs-on: ubuntu-latest
+        outputs:
+            ready: ${{ steps.identity.outputs.ready }}
+            build-id: ${{ steps.identity.outputs.build_id }}
+            artifact-name: ${{ steps.identity.outputs.artifact_name }}
+            display-version: ${{ steps.identity.outputs.display_version }}
+            source-sha: ${{ steps.identity.outputs.source_sha }}
+            allocation-sha: ${{ steps.identity.outputs.allocation_sha }}
+        steps:
+            # pull_request_target is intentional: only the trusted default
+            # branch is checked out and executed; PR-head code is never used.
+            - name: Checkout current default branch
+              uses: actions/checkout@v6
+              with:
+                  ref: ${{ github.event.repository.default_branch }}
+                  fetch-depth: 0
+                  persist-credentials: true
+                  token: ${{ secrets.RELEASE_PAT || github.token }}
+
+            - name: Select represented product source
+              id: source
+              run: |
+                  set -euo pipefail
+                  python tools/csx_test_build.py source \
+                    --state version/test-build.json \
+                    --github-output "$GITHUB_OUTPUT"
+
+            - name: Allocate the next test-build identity
+              id: allocation
+              env:
+                  MERGED_PR: ${{ github.event.pull_request.number }}
+                  SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+              run: |
+                  set -euo pipefail
+                  BASE_VERSION=$(jq -r '.configurePresets[] | select(.name == "VR") | .cacheVariables.CSX_VERSION' CMakePresets.json)
+                  python tools/csx_test_build.py allocate \
+                    --state version/test-build.json \
+                    --base-version "$BASE_VERSION" \
+                    --source-sha "$SOURCE_SHA" \
+                    --date "$(date -u +%Y-%m-%d)" \
+                    --pr "$MERGED_PR" \
+                    --discover-git-range \
+                    --github-output "$GITHUB_OUTPUT"
+
+            - name: Commit allocated state
+              id: publish
+              if: steps.allocation.outputs.allocated == 'true'
+              env:
+                  DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+                  SOURCE_SHA: ${{ steps.allocation.outputs.source_sha }}
+                  DISPLAY_VERSION: ${{ steps.allocation.outputs.display_version }}
+              run: |
+                  set -euo pipefail
+                  git fetch origin "$DEFAULT_BRANCH"
+                  REMOTE_SHA=$(git rev-parse "origin/$DEFAULT_BRANCH")
+                  if [ "$REMOTE_SHA" != "$SOURCE_SHA" ]; then
+                    echo "Default branch moved from $SOURCE_SHA to $REMOTE_SHA; a later merge event will allocate the complete batch."
+                    exit 0
+                  fi
+
+                  git config user.name "github-actions[bot]"
+                  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+                  git add version/test-build.json
+                  git commit \
+                    -m "chore(build): allocate $DISPLAY_VERSION [skip ci]" \
+                    -m "Rationale:
+                  Record one durable identity for the settled merge batch." \
+                    -m "Implementation:
+                  Advance the validated test-build state for $SOURCE_SHA."
+                  git push origin "HEAD:$DEFAULT_BRANCH"
+                  echo "state_pushed=true" >> "$GITHUB_OUTPUT"
+
+            - name: Bind the exact allocation and source
+              id: identity
+              if: >
+                  steps.allocation.outputs.allocated == 'false' ||
+                  steps.publish.outputs.state_pushed == 'true'
+              run: |
+                  set -euo pipefail
+                  python tools/csx_test_build.py verify \
+                    --state version/test-build.json \
+                    --allocation-revision HEAD \
+                    --github-output "$GITHUB_OUTPUT"
+                  echo "ready=true" >> "$GITHUB_OUTPUT"
+
+    build:
+        name: Build ${{ needs.allocate.outputs.display-version }}
+        needs: allocate
+        if: needs.allocate.outputs.ready == 'true'
+        uses: ./.github/workflows/_shared-build.yaml
+        with:
+            ref: ${{ needs.allocate.outputs.source-sha }}
+            repository: ${{ github.repository }}
+            run-cpp: true
+            run-shader-validation: false
+            run-shader-tests: false
+            test-build-id: ${{ needs.allocate.outputs.build-id }}
+            artifact-name: ${{ needs.allocate.outputs.artifact-name }}

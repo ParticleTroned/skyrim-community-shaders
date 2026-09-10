@@ -22,7 +22,7 @@ BEGIN
 			VALUE "InternalName", "@PROJECT_NAME@"
 			VALUE "LegalCopyright", "GPL-3.0 License"
 			VALUE "ProductName", "@PROJECT_DESCRIPTION@"
-			VALUE "ProductVersion", "CSX @CSX_VERSION@"
+			VALUE "ProductVersion", "@CSX_BUILD_LABEL@"
 		END
 	END
 	BLOCK "VarFileInfo"

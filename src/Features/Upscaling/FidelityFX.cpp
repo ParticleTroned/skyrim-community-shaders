@@ -2883,8 +2883,6 @@ FidelityFX::RuntimeDispatchPlan FidelityFX::ResolveRuntimeDispatchPlan()
 			 !exactCurrentProviderReady) ||
 			awaitingInitialVRRenderScaleLatch ||
 			(runtimePathEligible && shaderCompilationActive && !runtimeContextsCompatible));
-	if (runtimeDeferredByGate)
-		runtimeHostFallbackForFrame = true;
 	plan.providerSetupDeferred = runtimeDeferredByGate;
 	plan.selected =
 		runtimePathEligible &&
@@ -3362,27 +3360,31 @@ FidelityFX::LifecycleResult FidelityFX::ExecuteRuntimeUpscalerBatch(
 
 bool FidelityFX::CanDispatchHostFallbackForRegions(
 	std::span<const UpscaleRegionParameters> a_regions,
-	uint32_t a_contextCount) const
+	const RuntimeDispatchPlan& a_plan) const
 {
 	if (a_regions.empty() ||
-		a_contextCount == 0 || a_contextCount > std::size(fsrContext) ||
-		a_regions.size() > a_contextCount ||
+		a_plan.contextCount == 0 || a_plan.contextCount > std::size(fsrContext) ||
+		a_regions.size() > a_plan.contextCount ||
 		!FSRHostLifecyclePolicy::CanAttemptHostFallback(
 			IsHostFSR3Supported(),
 			runtimeUpscalerUsedForFrame)) {
 		return false;
 	}
 
+	// Deferred lifecycle mutation requires the dispatch's exact display bounds.
 	for (const auto& region : a_regions) {
-		if (region.contextIndex >= a_contextCount ||
+		if (region.contextIndex >= a_plan.contextCount ||
 			region.contextIndex >= fsrContextCount ||
 			!fsrContextValid[region.contextIndex] ||
+			region.displayWidth == 0 || region.displayHeight == 0 ||
+			region.displayWidth > fsrContextDisplayWidth ||
+			region.displayHeight > fsrContextDisplayHeight ||
 			!AreFSRResourcesCompatible(
 				region.renderWidth,
 				region.renderHeight,
-				region.displayWidth,
-				region.displayHeight,
-				a_contextCount)) {
+				a_plan.vendorLifecycleMutationDeferred ? region.displayWidth : fsrContextDisplayWidth,
+				a_plan.vendorLifecycleMutationDeferred ? region.displayHeight : fsrContextDisplayHeight,
+				a_plan.contextCount)) {
 			return false;
 		}
 	}
@@ -3759,7 +3761,7 @@ FidelityFX::UpscaleResult FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3
 		a_sharpness
 	};
 	const bool safeHostFallbackReady = CanDispatchHostFallbackForRegions(
-		std::span{ &region, 1u }, runtimePlan.contextCount);
+		std::span{ &region, 1u }, runtimePlan);
 	if (!runtimePlan.selected && runtimePlan.providerSetupDeferred &&
 		FSRRuntimeLifecyclePolicy::ResolvePendingDispatch(safeHostFallbackReady) ==
 			FSRRuntimeLifecyclePolicy::PendingDispatchResolution::Defer) {
@@ -3820,8 +3822,10 @@ FidelityFX::UpscaleResult FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3
 	if (runtimeUpscalerUsedForFrame && !runtimePlan.selected)
 		return UpscaleResult::Failed;
 
-	if (runtimePlan.runtimeRequested && !runtimePlan.selected)
+	if (runtimePlan.runtimeRequested && !runtimePlan.selected) {
+		runtimeHostFallbackForFrame = true;
 		ArmRuntimeHostFallback(runtimePlan.contextCount);
+	}
 	if (!runtimePlan.runtimeRequested) {
 		runtimeFallbackResetDispatchesRemaining = 0;
 		runtimeResumeResetDispatchesRemaining = 0;
@@ -3933,7 +3937,7 @@ FidelityFX::StereoUpscaleResult FidelityFX::UpscaleStereoRegions(
 	if (!runtimePlan.valid)
 		return StereoUpscaleResult::Failed;
 	const bool safeHostFallbackReady =
-		CanDispatchHostFallbackForRegions(a_regions, runtimePlan.contextCount);
+		CanDispatchHostFallbackForRegions(a_regions, runtimePlan);
 	if (runtimePlan.contextCount != a_regions.size())
 		return StereoUpscaleResult::Failed;
 	if (!runtimePlan.selected) {
@@ -3948,9 +3952,10 @@ FidelityFX::StereoUpscaleResult FidelityFX::UpscaleStereoRegions(
 				runtimeUpscalerUsedForFrame)) {
 			return StereoUpscaleResult::Failed;
 		}
-		if (runtimePlan.runtimeRequested)
+		if (runtimePlan.runtimeRequested) {
+			runtimeHostFallbackForFrame = true;
 			ArmRuntimeHostFallback(runtimePlan.contextCount);
-		else {
+		} else {
 			runtimeFallbackResetDispatchesRemaining = 0;
 			runtimeResumeResetDispatchesRemaining = 0;
 			runtimeHostFallbackActive = false;

@@ -49924,16 +49924,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 
 	auto presentDeferredVendorOutput = [&]() {
 		UnbindUpscalingResources();
-		if (submitStageVendorOutputFrame == currentFrame &&
-			submitStageVendorOutputCompositorCycle == a_compositorCycleToken &&
-			submitStageVendorOutputGeneration == activeContractGeneration &&
-			std::ranges::any_of(submitStageVendorEyeState, [&](const auto& a_eye) {
-				return a_eye.ready && a_eye.method == static_cast<uint32_t>(upscaleMethod) &&
-				       a_eye.generation == activeContractGeneration;
-			})) {
-			// A completed eye may already own temporal history for this cycle.
-			RequestHistoryReset();
-		}
+		// Source-cache invalidation can hide an earlier eye's history advance.
+		RequestHistoryReset();
 		if (a_compositorCycleToken != 0) {
 			// Intermediate replacement can clear admission during the current submit.
 			if (submitStageVendorAdmissionCycle == 0) {
@@ -50431,10 +50423,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			if (replayOtherEyeFromFoveated) {
 				const auto replayResult = replayStoredFullEyeVendorOutput(
 					otherEyeIndex, submitDLSSSharpening, otherEyeStateBeforeFullEncode);
-				if (replayResult == FidelityFX::UpscaleResult::Deferred) {
-					RequestHistoryReset();
+				if (replayResult == FidelityFX::UpscaleResult::Deferred)
 					return presentDeferredVendorOutput();
-				}
 				if (replayResult == FidelityFX::UpscaleResult::Failed && IsSubmitStageDeviceLost())
 					return false;
 			}
@@ -57199,6 +57189,7 @@ void Upscaling::Upscale()
 					transparencyCompositionMaskTexture->resource.get(),
 					foveatedOutput);
 				if (foveatedResult == FidelityFX::UpscaleResult::Deferred) {
+					RequestHistoryReset();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 					recordMainPassStage(VRMainPassDispatchStage::LifecycleDeferred);
 #endif
@@ -57264,7 +57255,9 @@ void Upscaling::Upscale()
 						VRMainPassDispatchStage::FidelityDispatchSucceeded :
 						VRMainPassDispatchStage::FidelityDispatchFailed);
 #endif
-				if (fsrResult == FidelityFX::UpscaleResult::Failed) {
+				if (fsrResult == FidelityFX::UpscaleResult::Deferred) {
+					RequestHistoryReset();
+				} else if (fsrResult == FidelityFX::UpscaleResult::Failed) {
 					HandleFSRLifecycleDeviceLoss(
 						fidelityFX.ProbeFSRDeviceStatus(),
 						"FSR main-pass dispatch");

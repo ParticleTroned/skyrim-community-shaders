@@ -1720,6 +1720,7 @@ if(BUILD_CONTROLLER_TESTS)
         "${_fsr_eye_dispatch_test_dir}/fsr_eye_dispatch_params_under_test.h"
         "${_fsr_eye_dispatch_test_dir}/fsr_eye_dispatch_under_test.h"
         "${_fsr_eye_dispatch_test_dir}/fsr_deferred_presentation_under_test.h"
+        "${_fsr_eye_dispatch_test_dir}/fsr_runtime_gate_under_test.h"
     )
     add_custom_command(
         OUTPUT ${_fsr_eye_dispatch_test_headers}

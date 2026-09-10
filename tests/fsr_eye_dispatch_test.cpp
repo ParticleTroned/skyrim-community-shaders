@@ -160,9 +160,14 @@ struct FidelityFX
 	uint32_t fsrContextCount = 0;
 	std::array<bool, 2> fsrContextValid{};
 	std::array<uint32_t, 2> fsrContext{ 0, 1 };
+	uint32_t scratchStorage = 0;
+	uint32_t* fsrScratchBuffer = nullptr;
+	uint32_t fsrContextMaxRenderWidth = 0;
+	uint32_t fsrContextMaxRenderHeight = 0;
+	uint32_t fsrContextDisplayWidth = 0;
+	uint32_t fsrContextDisplayHeight = 0;
 	bool fsrDispatchCrashLogged = false;
 	bool hostSupported = false;
-	bool hostResourcesCompatible = false;
 	bool hostDispatchReady = true;
 	bool hostDispatchFault = false;
 	RuntimeDispatchPlan plan{
@@ -185,6 +190,16 @@ struct FidelityFX
 	RuntimeUpscalerFramePath lastFramePath = RuntimeUpscalerFramePath::kInactive;
 
 	RuntimeDispatchPlan ResolveRuntimeDispatchPlan() const { return plan; }
+	// Exercise the production gate on an otherwise eligible runtime; provider
+	// setup and GPU dispatch remain controlled test dependencies.
+	void ResolveEligibleRuntimeShaderGate(bool shaderCompilationActive, bool runtimeContextsCompatible)
+	{
+		const bool exactCurrentProviderReady = false;
+		const bool awaitingInitialVRRenderScaleLatch = false;
+		const bool runtimePathEligible = true;
+		const bool runtimeUpscalerSessionQuarantined = false;
+#include "fsr_runtime_gate_under_test.h"
+	}
 	LifecycleResult ExecuteRuntimeUpscalerBatch(const RuntimeDispatchPlan&, std::span<const UpscaleRegionParameters> a_regions)
 	{
 		++runtimeCalls;
@@ -194,13 +209,8 @@ struct FidelityFX
 		return runtimeResult;
 	}
 	bool IsHostFSR3Supported() const { return hostSupported; }
-	bool HasFSRResources() const { return fsrContextCount != 0; }
-	bool AreFSRResourcesCompatible(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t a_count) const
-	{
-		return hostResourcesCompatible && fsrContextCount == a_count &&
-		       std::all_of(fsrContextValid.begin(), fsrContextValid.begin() + a_count,
-			       [](bool a_valid) { return a_valid; });
-	}
+	bool HasFSRResources() const;
+	bool AreFSRResourcesCompatible(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) const;
 	void QuarantineRuntimeUpscalerForSession(const char*) { ++quarantines; }
 	void QuarantineHostFSRContext(uint32_t, const char*) { ++hostQuarantines; }
 	void LatchRuntimeFsr4Failure() { ++fsr4Failures; }
@@ -227,10 +237,11 @@ struct FidelityFX
 		return hostDispatchReady && !hostDispatchFault;
 	}
 	void ArmRuntimeHostFallback(uint32_t);
-	bool CanDispatchHostFallbackForRegions(std::span<const UpscaleRegionParameters>, uint32_t) const;
+	bool CanDispatchHostFallbackForRegions(std::span<const UpscaleRegionParameters>, const RuntimeDispatchPlan&) const;
 	UpscaleResult UpscaleRegion(uint32_t, ID3D11Resource*, ID3D11Resource*, ID3D11Resource*,
 		ID3D11Resource*, ID3D11Resource*, ID3D11Resource*, uint32_t, uint32_t,
 		uint32_t, uint32_t, float, float, float, bool* = nullptr);
+	StereoUpscaleResult UpscaleStereoRegions(const std::array<UpscaleRegionParameters, 2>&);
 };
 
 struct Upscaling
@@ -316,9 +327,13 @@ namespace
 	void EnableHost(FidelityFX& a_provider)
 	{
 		a_provider.hostSupported = true;
-		a_provider.hostResourcesCompatible = true;
 		a_provider.fsrContextCount = 2;
 		a_provider.fsrContextValid = { true, true };
+		a_provider.fsrScratchBuffer = &a_provider.scratchStorage;
+		a_provider.fsrContextMaxRenderWidth = 1512;
+		a_provider.fsrContextMaxRenderHeight = 1680;
+		a_provider.fsrContextDisplayWidth = 1512;
+		a_provider.fsrContextDisplayHeight = 1680;
 	}
 
 	void RequireDeferredUntouched(const Upscaling& a_upscaling)
@@ -398,7 +413,7 @@ namespace
 			if (blocker == 0)
 				provider.fsrContextValid[1] = false;
 			if (blocker == 1)
-				provider.hostResourcesCompatible = false;
+				provider.fsrScratchBuffer = nullptr;
 			if (blocker == 2)
 				provider.runtimeUpscalerUsedForFrame = true;
 			Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(0, 1284)) == Result::Deferred,
@@ -409,14 +424,37 @@ namespace
 
 	void GenuineFailuresRemainFailures()
 	{
-		for (auto failure : { Lifecycle::Failed, Lifecycle::DeviceLost, Lifecycle::RuntimeDeviceLost }) {
+		for (bool fsr4 : { false, true }) {
+			for (auto failure : { Lifecycle::Failed, Lifecycle::DeviceLost, Lifecycle::RuntimeDeviceLost }) {
+				auto& upscaling = Reset();
+				auto& provider = upscaling.fidelityFX;
+				provider.plan.runtimeFsr4Requested = fsr4;
+				provider.runtimeResult = failure;
+				Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(1, 504)) == Result::Failed &&
+						upscaling.failedEvaluations == 1 && upscaling.successfulEvaluations == 0 &&
+						provider.deviceProbes == 1 && upscaling.deviceLossHandlers == 1 &&
+						provider.hostCalls == 0 &&
+						provider.quarantines == (failure == Lifecycle::RuntimeDeviceLost ? 0u : 1u) &&
+						provider.fsr4Failures == (fsr4 && failure == Lifecycle::Failed ? 1u : 0u),
+					"A provider failure lost terminal classification, quarantine, or its FSR4 latch");
+			}
+		}
+		for (bool crashed : { false, true }) {
 			auto& upscaling = Reset();
-			upscaling.fidelityFX.runtimeResult = failure;
+			auto& provider = upscaling.fidelityFX;
+			EnableHost(provider);
+			provider.plan.selected = false;
+			provider.plan.runtimeRequested = false;
+			provider.hostDispatchReady = false;
+			provider.hostDispatchFault = crashed;
 			Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(1, 504)) == Result::Failed &&
+					provider.runtimeCalls == 0 && provider.hostCalls == 1 && provider.hostEyeMask == 2 &&
+					provider.hostQuarantines == (crashed ? 1u : 0u) &&
+					provider.fsrDispatchCrashLogged == crashed &&
+					provider.quarantines == 0 && provider.fsr4Failures == 0 &&
 					upscaling.failedEvaluations == 1 && upscaling.successfulEvaluations == 0 &&
-					upscaling.fidelityFX.deviceProbes == 1 && upscaling.deviceLossHandlers == 1 &&
-					upscaling.fidelityFX.hostCalls == 0,
-				"A genuine provider failure was hidden as deferred or ready");
+					provider.deviceProbes == 1 && upscaling.deviceLossHandlers == 1,
+				"A host SDK error/fault was hidden or quarantined the wrong provider");
 		}
 		for (bool ready : { false, true }) {
 			auto& upscaling = Reset();
@@ -426,6 +464,181 @@ namespace
 					upscaling.streamline.dispatches == 1 &&
 					upscaling.failedEvaluations == (ready ? 0u : 1u),
 				"Typed FSR results changed DLSS success/failure classification");
+		}
+	}
+
+	void HostFallbackPreservesContextBounds()
+	{
+		for (bool setupDeferred : { false, true }) {
+			auto& upscaling = Reset();
+			auto& provider = upscaling.fidelityFX;
+			EnableHost(provider);
+			provider.plan.selected = !setupDeferred;
+			provider.plan.providerSetupDeferred = setupDeferred;
+			auto params = Region(0, 504);
+			params.outputWidth = 756;
+			params.outputHeight = 840;
+			params.dlssViewportRole = Streamline::DLSSViewportRole::FoveatedCenter;
+			Require(!provider.AreFSRResourcesCompatible(504, 560, 756, 840, 2),
+				"Lifecycle compatibility accepted a different configured display size");
+			Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, params) == Result::Ready &&
+					provider.hostCalls == 1 && provider.lastHostReset &&
+					upscaling.failedEvaluations == 0 && upscaling.successfulEvaluations == 0,
+				"A valid foveated subextent could not use a complete host context");
+		}
+		for (uint32_t blocker = 0; blocker < 8; ++blocker) {
+			auto& upscaling = Reset();
+			auto& provider = upscaling.fidelityFX;
+			EnableHost(provider);
+			auto params = Region(0, 504);
+			if (blocker == 0)
+				provider.fsrContextMaxRenderWidth = params.inputWidth - 1;
+			if (blocker == 1)
+				provider.fsrContextMaxRenderHeight = params.inputHeight - 1;
+			if (blocker == 2)
+				provider.fsrContextDisplayWidth = params.outputWidth - 1;
+			if (blocker == 3)
+				provider.fsrContextDisplayHeight = params.outputHeight - 1;
+			if (blocker == 4)
+				provider.fsrContextValid[1] = false;
+			if (blocker == 5)
+				provider.fsrScratchBuffer = nullptr;
+			if (blocker == 6)
+				provider.fsrContextCount = 1;
+			if (blocker == 7)
+				provider.hostSupported = false;
+			Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, params) == Result::Deferred,
+				"Pending runtime used oversized or incomplete host resources");
+			RequireDeferredUntouched(upscaling);
+		}
+		for (bool subextent : { false, true }) {
+			auto& upscaling = Reset();
+			auto& provider = upscaling.fidelityFX;
+			EnableHost(provider);
+			provider.plan.vendorLifecycleMutationDeferred = true;
+			auto params = Region(0, 504);
+			if (subextent) {
+				params.outputWidth = 756;
+				params.outputHeight = 840;
+				params.dlssViewportRole = Streamline::DLSSViewportRole::FoveatedCenter;
+			}
+			Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, params) ==
+					(subextent ? Result::Deferred : Result::Ready),
+				"Host fallback admission disagreed with the deferred lifecycle's display contract");
+			if (subextent)
+				RequireDeferredUntouched(upscaling);
+			else
+				Require(provider.hostCalls == 1, "An exact existing host contract could not dispatch");
+		}
+		for (bool indeterminate : { false, true }) {
+			auto& upscaling = Reset();
+			auto& provider = upscaling.fidelityFX;
+			EnableHost(provider);
+			provider.fsrHostStateQuarantined = !indeterminate;
+			provider.fsrContextIndeterminate[1] = indeterminate;
+			Require(!provider.HasFSRResources() &&
+					upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(0, 504)) == Result::Failed &&
+					provider.runtimeCalls == 0 && provider.hostCalls == 0,
+				"Quarantined or indeterminate host ownership remained dispatchable");
+		}
+	}
+
+	void GateDeferralDoesNotSelectHostForTheFrame()
+	{
+		for (bool hostAvailable : { false, true }) {
+			auto& upscaling = Reset();
+			auto& provider = upscaling.fidelityFX;
+			if (hostAvailable)
+				EnableHost(provider);
+			provider.ResolveEligibleRuntimeShaderGate(true, false);
+			Require(provider.plan.providerSetupDeferred && !provider.plan.selected &&
+					!provider.runtimeHostFallbackForFrame,
+				"An unresolved setup gate selected host before a dispatch decision");
+			Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(0, 1284)) ==
+					(hostAvailable ? Result::Ready : Result::Deferred),
+				"Setup deferral did not distinguish a complete host provider");
+			provider.ResolveEligibleRuntimeShaderGate(false, false);
+			Require(!provider.plan.providerSetupDeferred && provider.plan.selected != hostAvailable,
+				"Clearing the gate retained an unused host latch or mixed providers after host output");
+			provider.runtimeResult = Lifecycle::Ready;
+			Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(1, 1284)) == Result::Ready &&
+					provider.runtimeCalls == (hostAvailable ? 0u : 1u) &&
+					provider.hostCalls == (hostAvailable ? 2u : 0u) &&
+					provider.hostEyeMask == (hostAvailable ? 3u : 0u) &&
+					provider.runtimeHostFallbackForFrame == hostAvailable,
+				"The next eye did not honor the actual provider selected in this frame");
+		}
+
+		std::array<FidelityFX::UpscaleRegionParameters, 2> stereo{};
+		for (uint32_t eye = 0; eye < stereo.size(); ++eye) {
+			const auto params = Region(eye, 1284);
+			stereo[eye] = {
+				.contextIndex = eye,
+				.color = params.colorIn,
+				.depth = params.depth,
+				.motionVectors = params.motionVectors,
+				.reactiveMask = params.reactiveMask,
+				.transparencyCompositionMask = params.transparencyMask,
+				.output = params.colorOut,
+				.renderWidth = params.inputWidth,
+				.renderHeight = params.inputHeight,
+				.displayWidth = params.outputWidth,
+				.displayHeight = params.outputHeight,
+			};
+		}
+		for (bool hostAvailable : { false, true }) {
+			auto& provider = Reset().fidelityFX;
+			if (hostAvailable)
+				EnableHost(provider);
+			provider.ResolveEligibleRuntimeShaderGate(true, false);
+			Require(provider.UpscaleStereoRegions(stereo) ==
+					(hostAvailable ? FidelityFX::StereoUpscaleResult::NotHandled : FidelityFX::StereoUpscaleResult::Deferred),
+				"Stereo setup deferral did not retain the host/deferred distinction");
+			provider.ResolveEligibleRuntimeShaderGate(false, false);
+			provider.runtimeResult = Lifecycle::Ready;
+			Require(provider.UpscaleStereoRegions(stereo) ==
+					(hostAvailable ? FidelityFX::StereoUpscaleResult::NotHandled : FidelityFX::StereoUpscaleResult::Ready) &&
+					provider.runtimeCalls == (hostAvailable ? 0u : 1u) &&
+					provider.runtimeHostFallbackForFrame == hostAvailable,
+				"Clearing the gate changed an admitted host pair or blocked an unconsumed runtime pair");
+		}
+	}
+
+	void InvalidInputsFailBeforeProviderDispatch()
+	{
+		for (uint32_t invalid = 0; invalid < 6; ++invalid) {
+			auto& upscaling = Reset();
+			auto params = Region(0, 504);
+			if (invalid == 0)
+				params.eyeIndex = 2;
+			if (invalid == 1)
+				params.colorIn = nullptr;
+			if (invalid == 2)
+				params.depth = nullptr;
+			if (invalid == 3)
+				params.inputWidth = 0;
+			if (invalid == 4)
+				params.outputHeight = 0;
+			if (invalid == 5)
+				params.outputWidth = 1513;
+			Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, params) == Result::Failed &&
+					upscaling.fidelityFX.runtimeCalls == 0 && upscaling.fidelityFX.hostCalls == 0 &&
+					upscaling.failedEvaluations == 0 && upscaling.deviceLossHandlers == 0,
+				"Invalid eye resources or extents reached provider dispatch");
+		}
+		for (uint32_t count : { 0u, 3u }) {
+			auto& provider = Reset().fidelityFX;
+			EnableHost(provider);
+			FidelityFX::UpscaleRegionParameters region{};
+			region.renderWidth = 504;
+			region.renderHeight = 560;
+			region.displayWidth = 1512;
+			region.displayHeight = 1680;
+			provider.plan.contextCount = count;
+			Require(!provider.CanDispatchHostFallbackForRegions(std::span{ &region, 1u }, provider.plan),
+				"Invalid host context count was accepted");
+			provider.fsrContextCount = count;
+			Require(!provider.HasFSRResources(), "Invalid host context count indexed the context array");
 		}
 	}
 
@@ -497,7 +710,7 @@ namespace
 			}
 			Require(presentation.Present() && presentation.stretches == 1 && presentation.unbinds == 1 &&
 					presentation.lastPath == DeferredPresentation::VRRenderScalePresentationPath::PresentationStretch &&
-					presentation.historyResets == 0 && presentation.submitStageVendorAdmissionPresentationOnly &&
+					presentation.historyResets == 1 && presentation.submitStageVendorAdmissionPresentationOnly &&
 					presentation.submitStageVendorAdmissionCycle == presentation.a_compositorCycleToken &&
 					presentation.submitStageVendorAdmissionGeneration == presentation.activeContractGeneration &&
 					presentation.submitStageVendorAdmissionMethod == static_cast<uint32_t>(presentation.upscaleMethod) &&
@@ -506,7 +719,7 @@ namespace
 					!presentation.submitStageVendorAdmissionAuthoritativeDLSSProfile &&
 					presentation.submitStageVendorAdmissionDLSSQualityMode == 0 &&
 					presentation.submitStageVendorAdmissionDLSSPreset == DeferredPresentation::kDLSSPresetK,
-				"Deferred first-eye presentation lost its cycle hold or recorded failure recovery");
+				"Deferred presentation lost its cycle hold or temporal-history protection");
 			if (admissionWasCleared)
 				Require(presentation.submitStageVendorAdmissionEyeMask == 0,
 					"Restoring cleared admission retained an old eye claim");
@@ -523,22 +736,20 @@ namespace
 					!presentation.submitStageVendorAdmissionPresentationOnly,
 				"Deferred presentation overwrote another stereo cycle or contract");
 		}
-		for (uint32_t staleField = 0; staleField < 6; ++staleField) {
-			DeferredPresentation presentation;
-			presentation.submitStageVendorEyeState[0].ready = true;
-			if (staleField == 1)
-				--presentation.submitStageVendorOutputFrame;
-			if (staleField == 2)
-				--presentation.submitStageVendorOutputCompositorCycle;
-			if (staleField == 3)
-				--presentation.submitStageVendorOutputGeneration;
-			if (staleField == 4)
-				++presentation.submitStageVendorEyeState[0].method;
-			if (staleField == 5)
-				--presentation.submitStageVendorEyeState[0].generation;
-			Require(presentation.Present() && presentation.historyResets == (staleField == 0 ? 1u : 0u),
-				"Deferred presentation reset history without a completed eye from this cycle");
-		}
+		auto& upscaling = Reset();
+		upscaling.fidelityFX.runtimeResult = Lifecycle::Ready;
+		Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(1, 1284)) == Result::Ready,
+			"The right-first fixture did not advance vendor history");
+		DeferredPresentation invalidatedOutput;
+		invalidatedOutput.submitStageVendorOutputFrame = 0;
+		invalidatedOutput.submitStageVendorOutputCompositorCycle = 0;
+		invalidatedOutput.submitStageVendorOutputGeneration = 0;
+		invalidatedOutput.submitStageVendorEyeState = {};
+		upscaling.fidelityFX.runtimeResult = Lifecycle::Pending;
+		Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(0, 1284)) == Result::Deferred &&
+				invalidatedOutput.Present() && invalidatedOutput.historyResets == 1 &&
+				upscaling.successfulEvaluations == 1 && upscaling.failedEvaluations == 0,
+			"Invalidating cached output erased an earlier eye's temporal-history protection");
 		DeferredPresentation failedStretch;
 		failedStretch.stretchReady = false;
 		Require(!failedStretch.Present() && failedStretch.submitStageVendorAdmissionPresentationOnly,
@@ -551,5 +762,8 @@ int main()
 	ColdRuntimeWithoutPeerProof();
 	DeferredAdmissionAndHostFallback();
 	GenuineFailuresRemainFailures();
+	HostFallbackPreservesContextBounds();
+	GateDeferralDoesNotSelectHostForTheFrame();
+	InvalidInputsFailBeforeProviderDispatch();
 	DeferredPresentationRetainsCycleOwnership();
 }

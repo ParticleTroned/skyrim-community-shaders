@@ -1,5 +1,9 @@
 #pragma once
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#include "VRRenderScaleRetryTelemetry.h"
+#endif
+
 #include "../../Buffer.h"
 #include "../../State.h"
 #include "StreamlineFrameTokenPublication.h"
@@ -477,7 +481,11 @@ public:
 	}
 
 	/** @brief Makes the bounded VR viewport slot for a DLSS profile safe to use without dispatching DLSS. */
-	DLSSViewportPreparationResult PrepareVRDLSSViewport(DLSSViewportRole viewportRole, uint32_t qualityMode, uint32_t dlssPreset);
+	DLSSViewportPreparationResult PrepareVRDLSSViewport(DLSSViewportRole viewportRole, uint32_t qualityMode, uint32_t dlssPreset
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		, VRRenderScaleRetryTelemetry::ViewportObservation* a_observation = nullptr
+#endif
+	);
 	bool ResolveDLSSViewport(DLSSViewportRole viewportRole, sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset, sl::ViewportHandle& outViewport);
 	int FindVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t qualityMode, uint32_t dlssPreset) const;
 	bool TryResolveExistingVRDLSSViewport(

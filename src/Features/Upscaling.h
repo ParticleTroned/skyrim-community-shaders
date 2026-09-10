@@ -29,6 +29,10 @@
 #include <vector>
 #include <winrt/base.h>
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Upscaling/VRRenderScaleRetryTelemetry.h"
+#endif
+
 namespace RE
 {
 	class MapMenu;
@@ -1861,6 +1865,8 @@ public:
 	GetVRRenderScaleAuthorityDiagnosticSnapshot() const;
 	VRRenderScalePreparationTelemetrySnapshot
 	GetVRRenderScalePreparationTelemetrySnapshot() const;
+	/** @brief Returns bounded retry causes, observed waits and stabilization milestones. */
+	json BuildVRRenderScaleRetryTelemetry() const;
 	/** @brief Returns the latest admission decision for one exact preparation request. */
 	VRRenderScalePreparationAdmissionSnapshot
 	GetVRRenderScalePreparationAdmissionSnapshot(
@@ -2948,6 +2954,8 @@ public:
 	mutable std::mutex vrRenderScalePreparationTelemetryMutex;
 	VRRenderScalePreparationTelemetrySnapshot
 		vrRenderScalePreparationTelemetry{};
+	mutable std::mutex vrRenderScaleRetryTelemetryMutex;
+	VRRenderScaleRetryTelemetry::State vrRenderScaleRetryTelemetry{};
 #endif
 	std::atomic<uint64_t> nextVRRenderScaleTransitionEpoch{ 1 };
 	mutable std::mutex vrRenderScaleTransitionControllerMutex;
@@ -3378,11 +3386,21 @@ public:
 	void ServiceDeferredVRRenderScalePostLoadRecovery();
 	void CompleteVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch, uint64_t a_transitionEpoch);
 	void RecordVRVendorRuntimeLifecycle(UpscaleMethod a_upscaleMethod, VRVendorRuntimeLifecyclePhase a_phase, uint32_t a_generation = 0, const char* a_reason = nullptr);
-	void RecordVRRenderScaleTransitionRetry(VRRenderScaleRetryKind a_kind);
+	void RecordVRRenderScaleTransitionRetry(VRRenderScaleRetryKind a_kind
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		, const char* a_reason = "unspecified",
+		std::source_location a_source = std::source_location::current()
+#endif
+	);
 	void RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind a_kind);
 	void ArchiveVRRenderScaleTransitionMetricsLocked(bool a_completed, bool a_superseded, uint32_t a_frame);
 	void RecordVRRenderScaleCoalescedDuplicate();
-	void RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_type, VRRenderScaleRetryKind a_retryKind = VRRenderScaleRetryKind::Other, VRRenderScaleFailureKind a_failureKind = VRRenderScaleFailureKind::None);
+	void RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_type, VRRenderScaleRetryKind a_retryKind = VRRenderScaleRetryKind::Other, VRRenderScaleFailureKind a_failureKind = VRRenderScaleFailureKind::None
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		, const char* a_reason = "unspecified",
+		std::source_location a_source = std::source_location::current()
+#endif
+	);
 	bool HasVRRenderScaleMemoryReliefCleanupPending() const;
 	void ClearVRRenderScaleMemoryRelief();
 	void ApplyVRRenderScaleMemoryReliefTransitionCleanup(const char* a_reason = nullptr, bool a_preserveVRIntermediateTextures = false);
@@ -3402,6 +3420,17 @@ public:
 		const VRRenderScaleDesiredProfile& a_request);
 	[[nodiscard]] uint64_t GetPreparedVRRenderScaleRequestID() const;
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	VRRenderScaleRetryTelemetry::Context CaptureVRRenderScaleRetryContext() const;
+	void AppendVRRenderScaleRetryEventLocked(VRRenderScaleRetryTelemetry::Event a_event);
+	void RecordVRRenderScaleRetryEvent(VRRenderScaleRetryTelemetry::Event a_event);
+	void RecordVRRenderScaleViewportPreparation(
+		const VRRenderScaleRetryTelemetry::ViewportObservation& a_observation,
+		Streamline::DLSSViewportPreparationResult a_result, uint32_t a_generation);
+	void RecordVRRenderScaleResumeEvent(VRRenderScaleRetryTelemetry::EventType a_type,
+		const char* a_reason, uint32_t a_requiredStableCycles = 0, bool a_doorHandoff = false);
+	void CloseVRRenderScaleViewportWaitsLocked(const char* a_reason);
+	void CloseVRRenderScaleViewportWaitLocked(
+		VRRenderScaleRetryTelemetry::ViewportState& a_viewport, const char* a_reason);
 	void RecordVRRenderScalePreparationEvent(
 		VRRenderScalePreparationEvent a_event);
 	void RecordVRRenderScalePreparationRequestQueued(

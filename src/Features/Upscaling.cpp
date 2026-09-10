@@ -25086,7 +25086,11 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 							  uint32_t a_minDelayFrames,
 							  bool a_includeExistingRetryDelay = true,
 							  VRRenderScaleRetryKind a_retryKind = VRRenderScaleRetryKind::Other,
-							  uint64_t a_nativeRestoreRetirementSerial = 0) {
+							  uint64_t a_nativeRestoreRetirementSerial = 0
+#ifdef DEVBENCH_BRIDGE_ENABLED
+							  , std::source_location a_retrySource = std::source_location::current()
+#endif
+	) {
 		const auto controllerSnapshot = GetVRRenderScaleTransitionSnapshot();
 		if (relatchEpoch != 0 &&
 			controllerSnapshot.targetEpoch != 0 &&
@@ -25141,10 +25145,22 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				std::memory_order_release);
 		}
 
-		RecordVRRenderScaleTransitionRetry(a_retryKind);
+		RecordVRRenderScaleTransitionRetry(a_retryKind
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			, "render_target_relatch_requeued", a_retrySource
+#endif
+		);
 		SetVRRenderScaleTransitionState(VRRenderScaleTransitionState::WaitingForSafePoint, "render-target relatch retry");
 	};
 	SetVRRenderScaleTransitionState(VRRenderScaleTransitionState::Preparing, "render-target relatch admitted");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	{
+		VRRenderScaleRetryTelemetry::Event event{};
+		event.type = VRRenderScaleRetryTelemetry::EventType::RelatchAdmitted;
+		event.reason = "render_target_relatch_admitted";
+		RecordVRRenderScaleRetryEvent(event);
+	}
+#endif
 	const auto previousBootSnapshot = perfMode.GetBootSnapshot();
 	const auto previousControllerSnapshot = GetVRRenderScaleTransitionSnapshot();
 	Settings relatchSettings = settings;
@@ -28968,6 +28984,9 @@ void Upscaling::ArmSubmitStageVendorResumeCooldown(
 	submitStageVendorResumeProofDrivenRelease.store(
 		a_proofDrivenRelease,
 		std::memory_order_release);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordVRRenderScaleResumeEvent(VRRenderScaleRetryTelemetry::EventType::GuardArmed, "vendor_resume_guard_armed");
+#endif
 	if (emitDiagLogs) {
 		logger::debug(
 			"[VRRenderScale][Diag] Armed submit-stage vendor resume proof method={} guardFrame={} proofDriven={} pendingDLSS={} pendingFSR={} fsrResources={}",
@@ -28984,6 +29003,9 @@ void Upscaling::ClearSubmitStageVendorResumeCooldown()
 {
 	const std::scoped_lock resumeStateLock(
 		submitStageVendorResumeStableEyeMaskMutex);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordVRRenderScaleResumeEvent(VRRenderScaleRetryTelemetry::EventType::GuardCleared, "vendor_resume_guard_cleared");
+#endif
 	submitStageVendorResumeFrame.store(0, std::memory_order_release);
 	submitStageVendorResumeProofDrivenRelease.store(false, std::memory_order_release);
 	ClearSubmitStageVendorResumeStability();
@@ -29031,10 +29053,18 @@ void Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFra
 			submitStageVendorResumeStableEyeMaskMutex);
 		stabilitySerial = submitStageVendorResumeStabilitySerial;
 	}
-	const auto revokeProofDrivenRelease = [&]() {
+	const auto revokeProofDrivenRelease = [&](
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		const char* a_reason
+#endif
+	) {
 		const std::scoped_lock lock(
 			submitStageVendorResumeStableEyeMaskMutex);
 		if (stabilitySerial == submitStageVendorResumeStabilitySerial) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (submitStageVendorResumeProofDrivenRelease.load(std::memory_order_acquire))
+				RecordVRRenderScaleResumeEvent(VRRenderScaleRetryTelemetry::EventType::ProofRevoked, a_reason);
+#endif
 			submitStageVendorResumeProofDrivenRelease.store(
 				false,
 				std::memory_order_release);
@@ -29055,17 +29085,35 @@ void Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFra
 
 		const uint32_t qualityMode = GetRuntimeQualityMode();
 		const uint32_t dlssPreset = GetRuntimeDLSSPreset();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		VRRenderScaleRetryTelemetry::ViewportObservation fullEyeObservation{};
+		VRRenderScaleRetryTelemetry::ViewportObservation centerObservation{};
+#endif
 		const auto fullEyeViewportPreparation = streamline.PrepareVRDLSSViewport(
 			Streamline::DLSSViewportRole::FullEye,
 			qualityMode,
-			dlssPreset);
+			dlssPreset
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			, &fullEyeObservation
+#endif
+		);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		RecordVRRenderScaleViewportPreparation(fullEyeObservation, fullEyeViewportPreparation, a_generation);
+#endif
 		auto foveatedCenterViewportPreparation = Streamline::DLSSViewportPreparationResult::Ready;
 		if (fullEyeViewportPreparation != Streamline::DLSSViewportPreparationResult::Failed &&
 			IsFoveatedVendorDispatchEnabled(a_upscaleMethod)) {
 			foveatedCenterViewportPreparation = streamline.PrepareVRDLSSViewport(
 				Streamline::DLSSViewportRole::SubmitStageFoveatedCenter,
 				qualityMode,
-				dlssPreset);
+				dlssPreset
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				, &centerObservation
+#endif
+			);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			RecordVRRenderScaleViewportPreparation(centerObservation, foveatedCenterViewportPreparation, a_generation);
+#endif
 		}
 		const auto combineViewportPreparationResults = [](auto a_lhs, auto a_rhs) {
 			if (a_lhs == Streamline::DLSSViewportPreparationResult::Failed ||
@@ -29082,7 +29130,11 @@ void Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFra
 			combineViewportPreparationResults(fullEyeViewportPreparation, foveatedCenterViewportPreparation);
 		if (dlssViewportPreparation !=
 			Streamline::DLSSViewportPreparationResult::Ready) {
-			revokeProofDrivenRelease();
+			revokeProofDrivenRelease(
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				"dlss_viewport_preparation_not_ready"
+#endif
+			);
 		}
 
 		if (dlssViewportPreparation == Streamline::DLSSViewportPreparationResult::Pending) {
@@ -29093,7 +29145,11 @@ void Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFra
 					VRVendorRuntimeLifecyclePhase::WaitingForDrain,
 					a_generation,
 					"submit-stage viewport recycle");
-				RecordVRRenderScaleTransitionRetry(VRRenderScaleRetryKind::Backend);
+				RecordVRRenderScaleTransitionRetry(VRRenderScaleRetryKind::Backend
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					, "dlss_viewport_recycle"
+#endif
+				);
 			}
 		} else if (dlssViewportPreparation == Streamline::DLSSViewportPreparationResult::Failed) {
 			submitStageDLSSViewportPreparationPending.store(false, std::memory_order_release);
@@ -29131,7 +29187,11 @@ void Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFra
 			a_outputWidth,
 			a_outputHeight,
 			false)) {
-		revokeProofDrivenRelease();
+		revokeProofDrivenRelease(
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			"fidelity_observation_rejected"
+#endif
+		);
 		ClearSubmitStageVendorResumeStability();
 		return;
 	}
@@ -29179,6 +29239,13 @@ void Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFra
 			std::memory_order_acquire) ||
 		ElapsedFrames(guardStartFrame, currentFrame) >=
 			kVRUpscalingTransitionApplyDelayFrames;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (settleRequirementSatisfied && !a_stabilizerDoorHandoff &&
+		!submitStageVendorResumeProofDrivenRelease.load(std::memory_order_acquire)) {
+		RecordVRRenderScaleResumeEvent(VRRenderScaleRetryTelemetry::EventType::SettleGuardSatisfied,
+			"minimum_settle_age_observed", requiredStableFrames);
+	}
+#endif
 	if (!VRVendorRelatchPolicy::CanPublishSubmitStagePromotionCandidate({
 			.coherentStereoCycle = true,
 			.providerPreparationReady =
@@ -29194,6 +29261,11 @@ void Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFra
 	submitStageVendorResumeReleaseCandidateCycle.store(
 		a_compositorCycleToken,
 		std::memory_order_release);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordVRRenderScaleResumeEvent(VRRenderScaleRetryTelemetry::EventType::PromotionCandidate,
+		a_stabilizerDoorHandoff ? "door_handoff_stereo_qualified" : "stereo_and_settle_qualified",
+		requiredStableFrames, a_stabilizerDoorHandoff);
+#endif
 	logger::debug(
 		"[VRRenderScale] Qualified submit-stage vendor evaluation after {} stable candidate frames; promotion is scheduled for the next compositor cycle.",
 		stableFrames);
@@ -29257,6 +29329,9 @@ void Upscaling::ServiceSubmitStageVendorResumePromotion(
 		return;
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordVRRenderScaleResumeEvent(VRRenderScaleRetryTelemetry::EventType::Promoted, "vendor_evaluation_enabled");
+#endif
 	ClearSubmitStageVendorResumeCooldown();
 	ClearSubmitStageBoundsFallbackWatchdog();
 	logger::debug(
@@ -30671,7 +30746,11 @@ bool Upscaling::CanAdmitVRRenderScalePostLoadRecoveryRelatch(
 	}
 	if (!admitted) {
 		RecordVRRenderScaleTransitionRetry(
-			recoverySnapshot.cleanupDrained ? VRRenderScaleRetryKind::Pressure : VRRenderScaleRetryKind::Retirement);
+			recoverySnapshot.cleanupDrained ? VRRenderScaleRetryKind::Pressure : VRRenderScaleRetryKind::Retirement
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			, recoverySnapshot.cleanupDrained ? "post_load_memory_settle" : "post_load_cleanup_drain"
+#endif
+		);
 	}
 	return admitted;
 }
@@ -51785,6 +51864,226 @@ Upscaling::GetVRRenderScalePreparationTelemetrySnapshot() const
 	return snapshot;
 }
 
+VRRenderScaleRetryTelemetry::Context Upscaling::CaptureVRRenderScaleRetryContext() const
+{
+	if (!vrRenderScaleStressSessionActive.load(std::memory_order_acquire))
+		return {};
+	const auto controller = GetVRRenderScaleTransitionSnapshot();
+	const auto& profile = controller.applying.valid && controller.applying.transitionEpoch == controller.targetEpoch ?
+		controller.applying : controller.requested.valid ? controller.requested : controller.applied;
+	std::scoped_lock lock(vrRenderScaleStressSessionMutex);
+	if (!vrRenderScaleStressSession.active)
+		return {};
+	return { vrRenderScaleStressSession.sessionID, profile.requestID,
+		profile.transitionEpoch, static_cast<uint32_t>(profile.method), profile.qualityMode, profile.dlssPreset };
+}
+
+void Upscaling::AppendVRRenderScaleRetryEventLocked(VRRenderScaleRetryTelemetry::Event a_event)
+{
+	auto& telemetry = vrRenderScaleRetryTelemetry;
+	if (!telemetry.active || a_event.context.sessionID != telemetry.sessionID ||
+		a_event.context.requestID == 0 || a_event.context.transitionEpoch == 0)
+		return;
+	a_event.sequence = telemetry.nextSequence++;
+	if (a_event.qpc == 0)
+		a_event.qpc = QueryVRRenderScalePresentationQpc();
+	if (a_event.frame == 0)
+		a_event.frame = CurrentVRRenderScaleTelemetryFrame();
+	telemetry.events[telemetry.nextIndex] = a_event;
+	telemetry.nextIndex = (telemetry.nextIndex + 1u) % VRRenderScaleRetryTelemetry::kCapacity;
+	if (telemetry.count < VRRenderScaleRetryTelemetry::kCapacity)
+		++telemetry.count;
+	else
+		++telemetry.overwrittenEvents;
+}
+
+void Upscaling::RecordVRRenderScaleRetryEvent(VRRenderScaleRetryTelemetry::Event a_event)
+{
+	if (!vrRenderScaleStressSessionActive.load(std::memory_order_acquire))
+		return;
+	if (a_event.context.sessionID == 0)
+		a_event.context = CaptureVRRenderScaleRetryContext();
+	std::scoped_lock lock(vrRenderScaleRetryTelemetryMutex);
+	AppendVRRenderScaleRetryEventLocked(a_event);
+}
+
+void Upscaling::CloseVRRenderScaleViewportWaitLocked(
+	VRRenderScaleRetryTelemetry::ViewportState& a_viewport, const char* a_reason)
+{
+	if (!a_viewport.pending)
+		return;
+	auto end = a_viewport.begin;
+	end.type = VRRenderScaleRetryTelemetry::EventType::ViewportWaitEnd;
+	end.reason = a_reason;
+	end.beginSequence = a_viewport.begin.sequence;
+	end.beginQpc = a_viewport.begin.qpc;
+	end.beginFrame = a_viewport.begin.frame;
+	end.qpc = 0;
+	end.frame = 0;
+	end.pendingObservations = a_viewport.pendingObservations;
+	AppendVRRenderScaleRetryEventLocked(end);
+	a_viewport.pending = false;
+}
+
+void Upscaling::CloseVRRenderScaleViewportWaitsLocked(const char* a_reason)
+{
+	for (auto& viewport : vrRenderScaleRetryTelemetry.viewports)
+		CloseVRRenderScaleViewportWaitLocked(viewport, a_reason);
+}
+
+void Upscaling::RecordVRRenderScaleViewportPreparation(
+	const VRRenderScaleRetryTelemetry::ViewportObservation& a_observation,
+	Streamline::DLSSViewportPreparationResult a_result, uint32_t a_generation)
+{
+	using namespace VRRenderScaleRetryTelemetry;
+	if (!vrRenderScaleStressSessionActive.load(std::memory_order_acquire) || a_observation.role >= kViewportRoles)
+		return;
+	std::scoped_lock lock(vrRenderScaleRetryTelemetryMutex);
+	auto& telemetry = vrRenderScaleRetryTelemetry;
+	if (!telemetry.active || telemetry.guardContext.sessionID != telemetry.sessionID ||
+		telemetry.guardContext.requestID == 0 || telemetry.guardContext.transitionEpoch == 0)
+		return;
+	auto& viewport = telemetry.viewports[a_observation.role];
+	const bool pending = a_result == Streamline::DLSSViewportPreparationResult::Pending;
+	const bool failed = a_result == Streamline::DLSSViewportPreparationResult::Failed;
+	if (viewport.observed && viewport.generation != a_generation) {
+		CloseVRRenderScaleViewportWaitLocked(viewport, "viewport_generation_changed");
+		viewport = {};
+	}
+	if (viewport.pending && pending) {
+		if (viewport.pendingObservations != UINT32_MAX)
+			++viewport.pendingObservations;
+		return;
+	}
+	if (viewport.observed && !viewport.pending && !pending && viewport.failed == failed)
+		return;
+	Event event{};
+	event.context = telemetry.guardContext;
+	event.generation = a_generation;
+	event.viewportObserved = true;
+	event.viewport = a_observation;
+	event.reason = a_observation.reason;
+	event.qpc = QueryVRRenderScalePresentationQpc();
+	event.frame = CurrentVRRenderScaleTelemetryFrame();
+	if (viewport.pending) {
+		event.type = EventType::ViewportWaitEnd;
+		event.reason = a_result == Streamline::DLSSViewportPreparationResult::Ready ?
+			"viewport_preparation_ready" : "viewport_preparation_failed";
+		event.beginSequence = viewport.begin.sequence;
+		event.beginQpc = viewport.begin.qpc;
+		event.beginFrame = viewport.begin.frame;
+		event.pendingObservations = viewport.pendingObservations;
+	} else {
+		event.type = pending ? EventType::ViewportWaitBegin :
+			a_result == Streamline::DLSSViewportPreparationResult::Ready ? EventType::ViewportReady : EventType::Failure;
+		event.pendingObservations = pending ? 1u : 0u;
+	}
+	event.sequence = telemetry.nextSequence;
+	AppendVRRenderScaleRetryEventLocked(event);
+	viewport.observed = true;
+	viewport.pending = pending;
+	viewport.failed = failed;
+	viewport.generation = a_generation;
+	if (pending) {
+		viewport.begin = event;
+		viewport.pendingObservations = 1;
+	}
+}
+
+void Upscaling::RecordVRRenderScaleResumeEvent(VRRenderScaleRetryTelemetry::EventType a_type,
+	const char* a_reason, uint32_t a_requiredStableCycles, bool a_doorHandoff)
+{
+	using namespace VRRenderScaleRetryTelemetry;
+	if (!vrRenderScaleStressSessionActive.load(std::memory_order_acquire))
+		return;
+	const auto context = a_type == EventType::GuardArmed ? CaptureVRRenderScaleRetryContext() : Context{};
+	std::scoped_lock lock(vrRenderScaleRetryTelemetryMutex);
+	auto& telemetry = vrRenderScaleRetryTelemetry;
+	if (a_type == EventType::GuardArmed) {
+		if (!telemetry.active || context.sessionID != telemetry.sessionID)
+			return;
+		CloseVRRenderScaleViewportWaitsLocked("guard_rearmed");
+		telemetry.viewports = {};
+		telemetry.guardContext = context;
+		telemetry.settleGuardObserved = false;
+	}
+	if (a_type == EventType::SettleGuardSatisfied) {
+		if (telemetry.settleGuardObserved)
+			return;
+		telemetry.settleGuardObserved = true;
+	}
+	Event event{};
+	event.context = telemetry.guardContext;
+	event.type = a_type;
+	event.reason = a_reason;
+	event.guardStartFrame = submitStageVendorResumeFrame.load(std::memory_order_acquire);
+	event.minimumSettleFrames = kVRUpscalingTransitionApplyDelayFrames;
+	event.stableCycles = submitStageVendorResumeStableFrames.load(std::memory_order_acquire);
+	event.requiredStableCycles = a_requiredStableCycles;
+	event.proofDrivenRelease = submitStageVendorResumeProofDrivenRelease.load(std::memory_order_acquire);
+	if (a_type == EventType::ProofRevoked)
+		event.proofDrivenRelease = false;
+	event.settleGuardRequired = !event.proofDrivenRelease && !a_doorHandoff;
+	AppendVRRenderScaleRetryEventLocked(event);
+	if (a_type == EventType::GuardCleared) {
+		CloseVRRenderScaleViewportWaitsLocked("guard_cleared");
+		telemetry.guardContext = {};
+	}
+}
+
+json Upscaling::BuildVRRenderScaleRetryTelemetry() const
+{
+	using namespace VRRenderScaleRetryTelemetry;
+	auto snapshot = std::make_unique<VRRenderScaleRetryTelemetry::State>();
+	{
+		std::scoped_lock lock(vrRenderScaleRetryTelemetryMutex);
+		*snapshot = vrRenderScaleRetryTelemetry;
+	}
+	json events = json::array();
+	const auto milliseconds = [&](uint64_t ticks) -> json {
+		return snapshot->qpcFrequency != 0 ? json(1000.0 * static_cast<double>(ticks) / snapshot->qpcFrequency) : json(nullptr);
+	};
+	for (uint32_t i = 0; i < snapshot->count; ++i) {
+		const auto& event = snapshot->events[(snapshot->nextIndex + kCapacity - snapshot->count + i) % kCapacity];
+		const bool intervalValid = event.beginQpc != 0 && event.qpc >= event.beginQpc;
+		json row = {
+			{ "sequence", event.sequence }, { "sessionId", event.context.sessionID },
+			{ "requestId", event.context.requestID }, { "transitionEpoch", event.context.transitionEpoch },
+			{ "method", magic_enum::enum_name(static_cast<UpscaleMethod>(event.context.method)) },
+			{ "qualityMode", event.context.qualityMode }, { "dlssPreset", event.context.dlssPreset },
+			{ "event", magic_enum::enum_name(event.type) }, { "reason", event.reason },
+			{ "sourceFile", std::filesystem::path(event.sourceFile).filename().string() }, { "sourceLine", event.sourceLine },
+			{ "retryKind", magic_enum::enum_name(static_cast<VRRenderScaleRetryKind>(event.retryKind)) },
+			{ "timestampQpc", event.qpc }, { "frame", event.frame }, { "generation", event.generation },
+			{ "beginSequence", event.beginSequence }, { "beginQpc", event.beginQpc }, { "beginFrame", event.beginFrame },
+			{ "observedWaitMs", intervalValid ? milliseconds(event.qpc - event.beginQpc) : json(nullptr) },
+			{ "pendingObservations", event.pendingObservations },
+			{ "guardStartFrame", event.guardStartFrame }, { "minimumSettleFrames", event.minimumSettleFrames },
+			{ "stableCycles", event.stableCycles }, { "requiredStableCycles", event.requiredStableCycles },
+			{ "proofDrivenRelease", event.proofDrivenRelease }, { "settleGuardRequired", event.settleGuardRequired },
+			{ "guardDeadlineFrame", event.guardStartFrame != 0 && event.settleGuardRequired ?
+				json(static_cast<uint64_t>(event.guardStartFrame) + event.minimumSettleFrames) : json(nullptr) }
+		};
+		if (event.viewportObserved) {
+			const auto& viewport = event.viewport;
+			row["viewport"] = {
+				{ "role", magic_enum::enum_name(static_cast<Streamline::DLSSViewportRole>(viewport.role)) },
+				{ "slot", viewport.slot == kNoSlot ? json(nullptr) : json(viewport.slot) },
+				{ "cacheHit", viewport.cacheHit }, { "victimValid", viewport.victimValid },
+				{ "victimQuality", viewport.victimValid ? json(viewport.victimQuality) : json(nullptr) },
+				{ "victimPreset", viewport.victimValid ? json(viewport.victimPreset) : json(nullptr) },
+				{ "victimLastUse", viewport.victimLastUse }, { "fenceAlreadyPending", viewport.fenceAlreadyPending },
+				{ "fenceResult", magic_enum::enum_name(viewport.fenceResult) }, { "reason", viewport.reason }
+			};
+		}
+		events.push_back(std::move(row));
+	}
+	return { { "schemaVersion", 1 }, { "devBenchOnly", true }, { "active", snapshot->active },
+		{ "sessionId", snapshot->sessionID }, { "qpcFrequency", snapshot->qpcFrequency },
+		{ "capacity", kCapacity }, { "retainedEvents", snapshot->count },
+		{ "overwrittenEvents", snapshot->overwrittenEvents }, { "coalescedEvents", 0 }, { "events", std::move(events) } };
+}
+
 Upscaling::VRRenderScalePreparationAdmissionSnapshot
 Upscaling::GetVRRenderScalePreparationAdmissionSnapshot(
 	uint64_t a_requestID,
@@ -52070,6 +52369,13 @@ void Upscaling::StartVRRenderScaleStressSession()
 		vrRenderScalePreparationTelemetry.qpcFrequency =
 			presentationQpcFrequency;
 	}
+	{
+		std::scoped_lock telemetryLock(vrRenderScaleRetryTelemetryMutex);
+		vrRenderScaleRetryTelemetry = {};
+		vrRenderScaleRetryTelemetry.active = true;
+		vrRenderScaleRetryTelemetry.sessionID = sessionID;
+		vrRenderScaleRetryTelemetry.qpcFrequency = presentationQpcFrequency;
+	}
 #endif
 	vrRenderScaleStressSessionActive.store(true, std::memory_order_release);
 	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::SessionStarted);
@@ -52126,6 +52432,13 @@ void Upscaling::StopVRRenderScaleStressSession()
 		count = vrRenderScaleStressSession.count;
 		overwritten = vrRenderScaleStressSession.overwrittenEvents;
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	{
+		std::scoped_lock telemetryLock(vrRenderScaleRetryTelemetryMutex);
+		CloseVRRenderScaleViewportWaitsLocked("capture_stopped");
+		vrRenderScaleRetryTelemetry.active = false;
+	}
+#endif
 	logger::info(
 		"[VRRenderScale][Stress] Stopped capture session {} with {} retained event(s) and {} overwritten event(s).",
 		sessionID,
@@ -52147,8 +52460,9 @@ void Upscaling::ResetVRRenderScaleStressSession()
 	}
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	std::scoped_lock telemetryLock(
-		vrRenderScalePreparationTelemetryMutex);
+		vrRenderScalePreparationTelemetryMutex, vrRenderScaleRetryTelemetryMutex);
 	vrRenderScalePreparationTelemetry = {};
+	vrRenderScaleRetryTelemetry = {};
 #endif
 }
 
@@ -52338,6 +52652,9 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 			{ "existingVendorDispatchReady", event.existingVendorDispatchReady } });
 	}
 	record["events"] = std::move(events);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	record["retryTelemetry"] = BuildVRRenderScaleRetryTelemetry();
+#endif
 
 	json metrics = json::array();
 	uint32_t maximumRetries = 0;
@@ -54638,7 +54955,11 @@ void Upscaling::ArchiveVRRenderScaleTransitionMetricsLocked(bool a_completed, bo
 	metrics.current = {};
 }
 
-void Upscaling::RecordVRRenderScaleTransitionRetry(VRRenderScaleRetryKind a_kind)
+void Upscaling::RecordVRRenderScaleTransitionRetry(VRRenderScaleRetryKind a_kind
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	, const char* a_reason, std::source_location a_source
+#endif
+)
 {
 	bool recorded = false;
 	{
@@ -54669,7 +54990,11 @@ void Upscaling::RecordVRRenderScaleTransitionRetry(VRRenderScaleRetryKind a_kind
 		recorded = true;
 	}
 	if (recorded)
-		RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::Retry, a_kind);
+		RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::Retry, a_kind
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			, VRRenderScaleFailureKind::None, a_reason, a_source
+#endif
+		);
 }
 
 void Upscaling::RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind a_kind)
@@ -54712,7 +55037,11 @@ void Upscaling::RecordVRRenderScaleCoalescedDuplicate()
 	}
 }
 
-void Upscaling::RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_type, VRRenderScaleRetryKind a_retryKind, VRRenderScaleFailureKind a_failureKind)
+void Upscaling::RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_type, VRRenderScaleRetryKind a_retryKind, VRRenderScaleFailureKind a_failureKind
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	, const char* a_reason, std::source_location a_source
+#endif
+)
 {
 	uint64_t activeSessionID = 0;
 	{
@@ -54785,6 +55114,25 @@ void Upscaling::RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_ty
 	event.vendorLifecycleGateRelevant = vendorWorkGate.lifecycleGateRelevant;
 	event.vendorLifecycleMutationDeferred = vendorWorkGate.lifecycleMutationDeferred;
 	event.existingVendorDispatchReady = vendorWorkGate.existingVendorDispatchReady;
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (a_type == VRRenderScaleStressEventType::Retry || a_type == VRRenderScaleStressEventType::Applied ||
+		a_type == VRRenderScaleStressEventType::Stable || a_type == VRRenderScaleStressEventType::Failure) {
+		using namespace VRRenderScaleRetryTelemetry;
+		Event diagnostic{};
+		diagnostic.context = { event.sessionID, event.requestID, event.transitionEpoch,
+			static_cast<uint32_t>(event.method), event.qualityMode, event.dlssPreset };
+		diagnostic.frame = event.frame;
+		diagnostic.type = a_type == VRRenderScaleStressEventType::Retry ? EventType::Retry :
+			a_type == VRRenderScaleStressEventType::Applied ? EventType::Applied :
+			a_type == VRRenderScaleStressEventType::Stable ? EventType::Stable : EventType::Failure;
+		diagnostic.reason = a_reason;
+		diagnostic.retryKind = static_cast<uint32_t>(a_retryKind);
+		diagnostic.sourceFile = a_source.file_name();
+		diagnostic.sourceLine = a_source.line();
+		RecordVRRenderScaleRetryEvent(diagnostic);
+	}
+#endif
 
 	if (event.type == VRRenderScaleStressEventType::Retry && vrRenderScaleStressSession.count != 0) {
 		const uint32_t capacity = static_cast<uint32_t>(vrRenderScaleStressSession.events.size());

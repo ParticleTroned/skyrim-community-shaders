@@ -2387,8 +2387,18 @@ bool Streamline::FreeVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t 
 Streamline::DLSSViewportPreparationResult Streamline::PrepareVRDLSSViewport(
 	DLSSViewportRole viewportRole,
 	uint32_t qualityMode,
-	uint32_t dlssPreset)
+	uint32_t dlssPreset
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	, VRRenderScaleRetryTelemetry::ViewportObservation* a_observation
+#endif
+)
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (a_observation) {
+		*a_observation = {};
+		a_observation->role = GetDLSSViewportRoleIndex(viewportRole);
+	}
+#endif
 	if (!globals::game::isVR)
 		return DLSSViewportPreparationResult::Ready;
 
@@ -2400,6 +2410,15 @@ Streamline::DLSSViewportPreparationResult Streamline::PrepareVRDLSSViewport(
 	// LRU victim, or that other role will restart its drain indefinitely.
 	auto& pendingSlotRecycle = pendingVRDLSSSlotRecycleIdleFences[roleIndex];
 	int slotIndex = FindVRDLSSViewportSlot(viewportRole, clampedQualityMode, clampedPreset);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (a_observation) {
+		a_observation->cacheHit = slotIndex >= 0;
+		a_observation->fenceAlreadyPending = pendingSlotRecycle.query != nullptr;
+		a_observation->reason = slotIndex >= 0 ? "cache_hit" : "unused_slot";
+		if (slotIndex >= 0)
+			a_observation->slot = static_cast<uint32_t>(slotIndex);
+	}
+#endif
 	if (slotIndex >= 0) {
 		if (pendingSlotRecycle.query &&
 			pendingSlotRecycle.victimSlot == static_cast<uint32_t>(slotIndex)) {
@@ -2418,6 +2437,15 @@ Streamline::DLSSViewportPreparationResult Streamline::PrepareVRDLSSViewport(
 					"superseded VR DLSS viewport slot recycle");
 				if (idleFenceResult != D3D11IdleFenceResult::Pending)
 					pendingSlotRecycle.victimSlot = kVRDLSSViewportSlotCount;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (a_observation) {
+					a_observation->reason = "cache_hit_superseded_recycle";
+					a_observation->fenceResult = idleFenceResult == D3D11IdleFenceResult::Pending ?
+						VRRenderScaleRetryTelemetry::FenceResult::Pending :
+						idleFenceResult == D3D11IdleFenceResult::Ready ?
+						VRRenderScaleRetryTelemetry::FenceResult::Ready : VRRenderScaleRetryTelemetry::FenceResult::Failed;
+				}
+#endif
 				if (idleFenceResult == D3D11IdleFenceResult::Failed)
 					return DLSSViewportPreparationResult::Failed;
 			} else {
@@ -2429,6 +2457,10 @@ Streamline::DLSSViewportPreparationResult Streamline::PrepareVRDLSSViewport(
 
 	if (pendingSlotRecycle.query) {
 		if (pendingSlotRecycle.victimSlot >= kVRDLSSViewportSlotCount) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (a_observation)
+				a_observation->reason = "invalid_recycle_slot";
+#endif
 			ClearVRDLSSSlotRecycleFence(pendingSlotRecycle);
 			return DLSSViewportPreparationResult::Failed;
 		}
@@ -2440,11 +2472,29 @@ Streamline::DLSSViewportPreparationResult Streamline::PrepareVRDLSSViewport(
 	}
 
 	auto& slot = vrDLSSViewportSlots[roleIndex][slotIndex];
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (a_observation) {
+		a_observation->slot = static_cast<uint32_t>(slotIndex);
+		a_observation->victimValid = slot.valid;
+		a_observation->victimQuality = slot.qualityMode;
+		a_observation->victimPreset = slot.dlssPreset;
+		a_observation->victimLastUse = slot.lastUse;
+	}
+#endif
 	if (slot.valid) {
 		if (auto context = globals::d3d::context) {
 			if (!pendingSlotRecycle.query)
 				pendingSlotRecycle.victimSlot = static_cast<uint32_t>(slotIndex);
 			const auto idleFenceResult = BeginOrPollD3D11IdleFence(context, pendingSlotRecycle.query, "VR DLSS viewport slot recycle");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (a_observation) {
+				a_observation->reason = "viewport_recycle_fence";
+				a_observation->fenceResult = idleFenceResult == D3D11IdleFenceResult::Pending ?
+					VRRenderScaleRetryTelemetry::FenceResult::Pending :
+					idleFenceResult == D3D11IdleFenceResult::Ready ?
+					VRRenderScaleRetryTelemetry::FenceResult::Ready : VRRenderScaleRetryTelemetry::FenceResult::Failed;
+			}
+#endif
 			if (idleFenceResult == D3D11IdleFenceResult::Pending) {
 				static bool loggedSlotRecyclePending = false;
 				if (!loggedSlotRecyclePending) {
@@ -2469,6 +2519,10 @@ Streamline::DLSSViewportPreparationResult Streamline::PrepareVRDLSSViewport(
 			ClearVRDLSSSlotRecycleFence(pendingSlotRecycle);
 		}
 		if (!FreeVRDLSSViewportSlot(viewportRole, static_cast<uint32_t>(slotIndex), true)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (a_observation)
+				a_observation->reason = "viewport_release_failed";
+#endif
 			static bool loggedSlotRecycleFreeFailure = false;
 			if (!loggedSlotRecycleFreeFailure) {
 				logger::warn("[Streamline] VR DLSS viewport preparation failed because the previous slot resources could not be released.");

@@ -1024,3 +1024,24 @@ The record lists the principal native symbols under `analysis.symbols`. In Ghidr
     and `FidelityFX::DestroyFSRResources` for FSR context lifetime validation.
 
 Use Ghidra to validate control flow and ownership against the shipped binary, while using the JSON record as runtime evidence. A candidate should be promoted only when repeated scenario records pass and improve the target metric without regressing another accepted backend or pressure scenario.
+
+## September 10: PR75 NVIDIA two-pass completion versus main-VR
+
+Run `nvidia-2026-09-10T17-12-40-813Z`, clean PR75 c615779a9 on main-VR
+7c8e3e656, completed 33+33 transitions in game PID 41824. Terminal render
+PASS; Task 2 counts 66/0/0; complete reporting and verified capture cleanup.
+Full-history applicable health is MET/MET, with zero fidelity or vendor
+fallback observations. The main-VR reference nvidia-20260910T124329625Z
+had 4 fidelity and 2 vendor-failure eye observations in each pass, on
+rows 26 and 28; both routes are clean in this candidate's two passes.
+Strict means are 816.198/804.581 ms versus 866.009/833.078 ms, changes
+-5.752%/-3.421%. Row 25 is slower in both passes. Memory is inconclusive.
+The formal improvement-or-neutral assessment remains INCONCLUSIVE due to
+different weather/game hour, unavailable fixture fingerprint and no declared
+tolerance policy. Raw excluded diagnostic gates remain retained.
+
+All summary/comparison fields, 66 transitions and both passes reconstruct
+exactly from the canonical ledger; 1,056 paired numeric cells passed audit.
+Prior attempt evidence and historical cells remain preserved. The user
+authorized a PR75 update with means and SE in the style of PR65. See
+[the complete PR75 comparison](pr75-nvidia-mainvr-comparison-20260910.md).

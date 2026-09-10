@@ -1843,6 +1843,11 @@ if(BUILD_CONTROLLER_TESTS)
         tests/vr_depth_culling_enable_policy_test.cpp
     )
     add_controller_test(
+        vr_depth_culling_telemetry_policy_test
+        VRDepthCullingTelemetryPolicy
+        tests/vr_depth_culling_telemetry_policy_test.cpp
+    )
+    add_controller_test(
         vr_depth_culling_temporal_policy_test
         VRDepthCullingTemporalPolicy
         tests/vr_depth_culling_temporal_policy_test.cpp
@@ -2230,6 +2235,7 @@ if(BUILD_CONTROLLER_TESTS)
             volumetric_lighting_tuning_policy_test
             vr_depth_culling_cache_refresh_policy_test
             vr_depth_culling_enable_policy_test
+            vr_depth_culling_telemetry_policy_test
             vr_depth_culling_temporal_policy_test
             vr_wand_interaction_policy_test
             vr_wand_surface_geometry_test

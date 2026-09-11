@@ -212,6 +212,11 @@
             "reason": "retain the shared MGO interface baseline outside tier ownership"
         },
         {
+            "path": ["VR", "EnableWandPointing"],
+            "value": true,
+            "reason": "wand navigation is the deliberate common VR interaction default"
+        },
+        {
             "path": ["Weather Picker", "Enabled"],
             "value": true,
             "reason": "the weather editor is an operational tool, not a shader tier"
@@ -469,6 +474,7 @@
         { "path": ["General", "Skip Unchanged Shaders"], "value": true },
         { "path": ["Menu", "SmartClearShaderCacheDefault"], "value": false },
         { "path": ["Menu", "UI Mode"], "value": 0 },
+        { "path": ["VR", "EnableWandPointing"], "value": true },
         { "path": ["Weather Picker", "Enabled"], "value": true },
         { "path": ["Image Based Lighting", "EnableIBL"], "value": 1 },
         { "path": ["Volumetric Shadows", "Enabled"], "value": true },

@@ -20,8 +20,10 @@ namespace OCUEffectFoveation
 			InvalidOrStale,
 			Active
 		};
+		/** Report why the most recent renderer-frame read selected native or optional sampling. */
 		Status GetStatus() const noexcept { return status; }
 
+		/** Read once per renderer frame and provider; unavailable publications return native constants. */
 		Constants ReadForFrame(std::uint64_t a_rendererFrame, bool a_enabled) noexcept
 		{
 			if (!a_enabled) {

@@ -12,7 +12,11 @@ namespace CSXAcceptedDrawAPI
 	inline constexpr uint32_t Version = 1;
 	enum Result : uint32_t
 	{
-		Success = 0, Unsupported = 1, NotReady = 2, InvalidArgument = 3, Failed = 4
+		Success = 0,
+		Unsupported = 1,
+		NotReady = 2,
+		InvalidArgument = 3,
+		Failed = 4
 	};
 	enum Capability : uint64_t
 	{
@@ -24,10 +28,24 @@ namespace CSXAcceptedDrawAPI
 		PackedStereoDepth = 1ull << 5
 	};
 	inline constexpr uint64_t RequiredCapabilities = FullSceneIndexedCoverage | NativeVRGeometry |
-		PostDrawLiveState | IsolatedReplay | QuiescentUnregister | PackedStereoDepth;
-	enum DrawKind : uint32_t { Indexed = 1, IndexedInstanced = 2 };
-	enum PassKind : uint32_t { MainScene = 1, Shadow = 2, Reflection = 3, UICapture = 4, Other = 5 };
-	enum StereoLayout : uint32_t { PackedStereo2D = 1 };
+	                                                 PostDrawLiveState | IsolatedReplay | QuiescentUnregister | PackedStereoDepth;
+	enum DrawKind : uint32_t
+	{
+		Indexed = 1,
+		IndexedInstanced = 2
+	};
+	enum PassKind : uint32_t
+	{
+		MainScene = 1,
+		Shadow = 2,
+		Reflection = 3,
+		UICapture = 4,
+		Other = 5
+	};
+	enum StereoLayout : uint32_t
+	{
+		PackedStereo2D = 1
+	};
 	struct Arguments
 	{
 		uint32_t kind, indexCount, instanceCount, startIndex;

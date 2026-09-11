@@ -18,11 +18,17 @@ namespace CSX::Api
 			uint64_t events, callbacks, replays, rejectedReplays, observerFaults;
 			uint32_t subscribers;
 		};
+		/** Reserve a bounded slot; reject lifecycle calls made from any observer. */
 		uint32_t Register(CSXAcceptedDrawAPI::ObserverFn a_observer, void* a_user, uint64_t* a_subscription);
+		/** Deactivate a slot and wait for its callbacks before releasing borrowed user state. */
 		uint32_t Unregister(uint64_t a_subscription);
+		/** Lock-free hint allowing the render path to skip resource inspection. */
 		bool HasObservers() const { return subscribers.load(std::memory_order_acquire) != 0; }
+		/** Deliver synchronously with single-use replay; contain and deactivate throwing observers. */
 		void Dispatch(CSXAcceptedDrawAPI::Draw a_draw, NativeReplay a_replay) noexcept;
+		/** Read diagnostic counters; concurrent updates need not form one coherent snapshot. */
 		Statistics Inspect() const;
+		/** True throughout a callback and its replay on this thread, across registries. */
 		static bool IsDispatching() { return delivery.registry != nullptr; }
 
 	private:

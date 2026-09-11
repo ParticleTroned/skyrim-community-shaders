@@ -54,6 +54,10 @@ The optional compute shader uses a 32-byte constant buffer at b10, restoring
 the previous binding, including D3D11.1 offsets. The shader helper and GI
 wrapper carry an internal version-2 marker to reject mixed shader files.
 This internal shader version is independent of the external v1 API.
+Optional variants compile independently after the native shader batch is
+ready. A missing, incompatible or failed optional variant keeps native
+sampling available, clears the previous optional permutation and does not
+trigger a per-frame compilation retry. Clear the shader cache to retry it.
 
 This feature changes the CSX AO/GI sample budget. It does not change
 render resolution, vendor upscaler dispatch parameters, or DAPA settings.
@@ -69,12 +73,22 @@ Replacing it with a build lacking an implementation removes that feature.
 An interface cannot add integration code to an unrelated build.
 
 Controller test targets are `accepted_draw_registry_test`,
-`ocu_effect_foveation_client_test`, and `ocu_effect_foveation_policy_test`.
+`ocu_effect_foveation_client_test`, `ocu_effect_foveation_policy_test`, and
+`ocu_effect_integration_test`. The integration test compiles the production
+shader batch and setting handler against controlled dependencies. It
+checks independent optional failures, stale permutation removal, required
+batch atomicity, 96 setting combinations, and DevBench validation.
 `api_service_registry_test` checks the shared registry. The optional
 DevBench profiler action `accepted_draws` reports provider readiness and
 replay/fault counters. The `ocu_foveation` action reports requested and active
 sampling plus its fallback reason without changing settings or starting a
 capture. Both actions are advertised in the tool and inspect descriptors.
+Use `communityshaders.profiler` with
+`{"action":"set_ocu_foveation","enabled":true}` (or `false`) to stage the
+setting through the same transition as the UI. It requires a JSON boolean
+and loaded SSGI in Skyrim VR. A changed value queues shader compilation
+and a history reset for the next SSGI pass. Repeating the current value
+does neither. Settings are not written to disk by this action.
 The existing feature API settings inspection includes
 `ExperimentalOCUEffectFoveation`; the GI settings UI reports runtime status.
 

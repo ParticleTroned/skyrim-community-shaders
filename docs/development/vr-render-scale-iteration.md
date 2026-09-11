@@ -1,5 +1,15 @@
 # VR render-scale iteration records
 
+The optional runtime FSR shared-guide path and its persistent in-game
+toggle are documented in [Runtime FSR shared guide inputs](fsr-shared-guides.md).
+The DevBench A/B action updates the same preference; Save Settings
+preserves either choice across game restarts.
+It removes eligible full-eye guide staging copies while preserving the
+existing interop fences, copied fallback and quarantined ownership. This
+implementation has no performance claim or runtime qualification result;
+new measurements must use the existing comparison ledger and reporting
+workflow.
+
 ## September 11: all PR73 tables compare against PR66
 
 The user selected measured PR66 a09e1cc77 as the reference for both

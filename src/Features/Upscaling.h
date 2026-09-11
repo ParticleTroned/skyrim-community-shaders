@@ -316,6 +316,7 @@ public:
 		bool frameGenerationAllowInMenus = false;
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
 		float sharpnessFSR = 0.9f;
+		bool fsrSharedGuideInputs = true;
 		FSRTemporalTuningPolicy::Settings fsrTemporalTuning{};
 		float sharpnessDLSS = 0.9f;
 		uint dlssSharpener = static_cast<uint>(DLSSSharpenerMode::RCAS);
@@ -1771,6 +1772,10 @@ public:
 		FSRActiveInputCopyCalls,
 		FSRActiveInputPixels,
 		FSRAvoidedInputPixels,
+		FSRDirectGuideInputs,
+		FSRDirectGuidePixels,
+		FSRGuideCopyFallbacks,
+		FSRGuideImportFailures,
 		RuntimeFSRStereoBatchAttempts,
 		RuntimeFSRStereoBatchReuses,
 		RuntimeFSRStereoBatchSuccesses,
@@ -2213,6 +2218,10 @@ public:
 	uint32_t GetRuntimeQualityMode() const;
 	uint32_t GetRuntimeDLSSPreset() const;
 	bool GetRuntimeFSR4Enabled() const;
+	/** Shared menu/DevBench admission: VR only, with no active GPU performance capture. */
+	[[nodiscard]] bool CanChangeFSRSharedGuideInputs() const noexcept;
+	/** Updates live and savable preferences on the UI/main thread without releasing imported resources. */
+	bool SetFSRSharedGuideInputsEnabled(bool a_enabled) noexcept;
 	DLSSSharpenerMode GetDLSSSharpenerMode() const;
 	bool ShouldApplyDLSSSharpening() const;
 	bool ShouldRouteDLSSMainPassThroughSharpener() const;
@@ -2536,12 +2545,14 @@ public:
 
 	// Helper: Create a Texture2D matching source format at a given size
 	static eastl::unique_ptr<Texture2D> CreateTextureFromSource(ID3D11Resource* src, uint32_t width, uint32_t height,
-		bool copyBindFlags = false, bool createSRV = false, bool createUAV = false, const char* name = nullptr, bool createRTV = false);
+		bool copyBindFlags = false, bool createSRV = false, bool createUAV = false, const char* name = nullptr, bool createRTV = false, bool shareWithRuntime = false);
 
 	// Shared Pipeline Steps
 	bool PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* depthSrc, ID3D11Resource* mvecSrc,
 		ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, bool copyAuxiliaryInputs = true, bool copyDepthInput = true);
 	bool AreVRPerEyeUpscalingResourcesReady(bool requireDepth, bool requireLinearDepth) const;
+	/** Rejects any guide retained by an unsafe optional-provider ownership domain. */
+	bool HasQuarantinedVRGuideInputs() const;
 	bool AreVRIntermediateTexturesCompatibleForFSR(uint32_t a_displayEyeWidth, uint32_t a_displayEyeHeight) const;
 	bool AreActiveVRIntermediateTexturesCompatible(
 		UpscaleMethod a_upscaleMethod,

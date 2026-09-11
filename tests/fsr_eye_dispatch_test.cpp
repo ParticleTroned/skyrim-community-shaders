@@ -172,6 +172,7 @@ struct FidelityFX
 	uint32_t fsrContextDisplayHeight = 0;
 	bool fsrDispatchCrashLogged = false;
 	bool hostSupported = false;
+	bool sharedGuidesQuarantined = false;
 	bool hostDispatchReady = true;
 	bool hostDispatchFault = false;
 	RuntimeDispatchPlan plan{
@@ -248,6 +249,7 @@ struct FidelityFX
 	}
 	void ArmRuntimeHostFallback(uint32_t);
 	bool CanDispatchHostFallbackForRegions(std::span<const UpscaleRegionParameters>, const RuntimeDispatchPlan&) const;
+	bool HasQuarantinedRuntimeSharedGuides(const UpscaleRegionParameters&) const { return sharedGuidesQuarantined; }
 	UpscaleResult UpscaleRegion(uint32_t, ID3D11Resource*, ID3D11Resource*, ID3D11Resource*,
 		ID3D11Resource*, ID3D11Resource*, ID3D11Resource*, uint32_t, uint32_t,
 		uint32_t, uint32_t, float, float, float, bool* = nullptr);
@@ -825,8 +827,24 @@ namespace
 	}
 }
 
+void QuarantinedSharedGuidesRequireReplacement()
+{
+	auto& upscaling = Reset();
+	auto& provider = upscaling.fidelityFX;
+	EnableHost(provider);
+	provider.plan.selected = false;
+	provider.sharedGuidesQuarantined = true;
+	Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(0, 1284)) == Result::Failed,
+		"Host fallback reused a quarantined direct guide");
+	Require(provider.hostCalls == 0, "Quarantined guide reached host dispatch");
+	provider.sharedGuidesQuarantined = false;
+	Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(0, 1284)) == Result::Ready,
+		"Replacement guides did not restore compatible host fallback");
+}
+
 int main()
 {
+	QuarantinedSharedGuidesRequireReplacement();
 	SubmitContractsReachHostDispatch();
 	ColdRuntimeWithoutPeerProof();
 	DeferredAdmissionAndHostFallback();

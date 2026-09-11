@@ -24,6 +24,7 @@
 #include "../../Utils/FileSystem.h"
 #include "../Upscaling.h"
 #include "DX12SwapChain.h"
+#include "NvidiaComIdentity.h"
 
 ffxFunctions ffxModule;
 
@@ -2084,6 +2085,12 @@ FidelityFX::LifecycleResult FidelityFX::DestroyRuntimeUpscalerResources(bool a_w
 	ResetOwnedResourceArray(runtimeReactiveShared);
 	ResetOwnedResourceArray(runtimeTransparencyShared);
 	ResetOwnedResourceArray(runtimeOutputShared);
+	for (auto& eye : runtimeSharedGuideImports) {
+		for (auto& guide : eye) {
+			guide.imported.reset();
+			guide.source = nullptr;
+		}
+	}
 
 	runtimeColorSharedDesc = {};
 	runtimeDepthSharedDesc = {};
@@ -2266,6 +2273,10 @@ bool FidelityFX::HasRuntimeUpscalerResources() const
 		state.sharedResource = state.sharedResource || resource != nullptr;
 	for (const auto& resource : runtimeOutputShared)
 		state.sharedResource = state.sharedResource || resource != nullptr;
+	for (const auto& eye : runtimeSharedGuideImports) {
+		for (const auto& guide : eye)
+			state.sharedResource = state.sharedResource || guide.source != nullptr;
+	}
 	return FSRRuntimeLifecyclePolicy::HasRetirementRelevantState(state);
 }
 
@@ -3709,6 +3720,97 @@ FidelityFX::LifecycleResult FidelityFX::ExecuteRuntimeUpscalerBatch(
 	return ResolveRuntimeUpscalerLifecycleFailure("runtime upscaler setup/dispatch");
 }
 
+bool FidelityFX::IsRuntimeSharedGuideQuarantined(ID3D11Resource* a_source) const noexcept
+{
+	if (!runtimeUpscalerSessionQuarantined || !a_source)
+		return false;
+	for (const auto& eye : runtimeSharedGuideImports) {
+		for (const auto& guide : eye) {
+			if (guide.imported && CSX::NvidiaComIdentity::IsSame(guide.source.get(), a_source))
+				return true;
+		}
+	}
+	return false;
+}
+
+bool FidelityFX::HasQuarantinedRuntimeSharedGuides(const UpscaleRegionParameters& a_region) const noexcept
+{
+	return IsRuntimeSharedGuideQuarantined(a_region.depth) ||
+	       IsRuntimeSharedGuideQuarantined(a_region.motionVectors) ||
+	       IsRuntimeSharedGuideQuarantined(a_region.reactiveMask) ||
+	       IsRuntimeSharedGuideQuarantined(a_region.transparencyCompositionMask);
+}
+
+WrappedResource* FidelityFX::ResolveRuntimeSharedGuide(uint32_t a_eye, FSRSharedGuidePolicy::Guide a_guide,
+	ID3D11Resource* a_source, const D3D11_TEXTURE2D_DESC& a_desc)
+{
+	using namespace FSRSharedGuidePolicy;
+	const auto guideIndex = static_cast<std::size_t>(a_guide);
+	if (!globals::game::isVR || a_eye >= runtimeSharedGuideImports.size() || guideIndex >= kGuideCount || !a_source)
+		return nullptr;
+	auto& upscaling = globals::features::upscaling;
+	auto& swapChain = upscaling.dx12SwapChain;
+	Texture2D* expectedGuide = nullptr;
+	switch (a_guide) {
+	case Guide::Depth:
+		expectedGuide = upscaling.vrIntermediateLinearDepth[a_eye].get();
+		break;
+	case Guide::MotionVectors:
+		expectedGuide = upscaling.vrIntermediateMotionVectors[a_eye].get();
+		break;
+	case Guide::Reactive:
+		expectedGuide = upscaling.vrIntermediateReactiveMask[a_eye].get();
+		break;
+	case Guide::Transparency:
+		expectedGuide = upscaling.vrIntermediateTransparencyMask[a_eye].get();
+		break;
+	default:
+		return nullptr;
+	}
+	const bool eligible = expectedGuide && expectedGuide->resource &&
+	                      CSX::NvidiaComIdentity::IsSame(expectedGuide->resource.get(), a_source) &&
+	                      a_desc.Width == runtimeUpscalerMaxRenderWidth && a_desc.Height == runtimeUpscalerMaxRenderHeight &&
+	                      a_desc.MipLevels == 1 && a_desc.ArraySize == 1 && a_desc.SampleDesc.Count == 1 && a_desc.SampleDesc.Quality == 0 &&
+	                      a_desc.Usage == D3D11_USAGE_DEFAULT && a_desc.CPUAccessFlags == 0 &&
+	                      (a_desc.MiscFlags & (D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE)) ==
+	                          (D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE) &&
+	                      !(a_desc.MiscFlags & D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX);
+	auto& cached = runtimeSharedGuideImports[a_eye][guideIndex];
+	const auto route = SelectRoute(AreRuntimeSharedGuideInputsEnabled(), eligible,
+		cached.source != nullptr, CSX::NvidiaComIdentity::IsSame(cached.source.get(), a_source),
+		cached.imported && cached.imported->resource && cached.imported->resource11);
+	if (route == Route::Copy)
+		return nullptr;
+	if (route == Route::Direct)
+		return cached.imported.get();
+
+	// Retaining even a rejected identity bounds retries and prevents address reuse.
+	cached.source.copy_from(a_source);
+	try {
+		winrt::com_ptr<ID3D11Device> sourceDevice;
+		a_source->GetDevice(sourceDevice.put());
+		if (!CSX::NvidiaComIdentity::IsSame(sourceDevice.get(), swapChain.d3d11Device.get()))
+			return nullptr;
+		winrt::com_ptr<ID3D11Texture2D> texture;
+		DX::ThrowIfFailed(cached.source->QueryInterface(IID_PPV_ARGS(texture.put())));
+		cached.imported = std::make_unique<WrappedResource>(texture.get(), swapChain.d3d12Device.get(), expectedGuide->GetOrCreateSharedHandle());
+		return cached.imported.get();
+	} catch (const winrt::hresult_error& e) {
+		logger::warn("[FidelityFX] Shared guide import failed for eye {} guide {}; retaining the copy path: 0x{:08X}",
+			a_eye, guideIndex, static_cast<uint32_t>(e.code()));
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		upscaling.RecordVRRenderScaleGPUPerformanceCounter(Upscaling::VRRenderScaleGPUPerformanceCounter::FSRGuideImportFailures);
+#endif
+		return nullptr;
+	} catch (const std::exception& e) {
+		logger::warn("[FidelityFX] Shared guide import failed for eye {} guide {}; retaining the copy path: {}", a_eye, guideIndex, e.what());
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		upscaling.RecordVRRenderScaleGPUPerformanceCounter(Upscaling::VRRenderScaleGPUPerformanceCounter::FSRGuideImportFailures);
+#endif
+		return nullptr;
+	}
+}
+
 bool FidelityFX::CanDispatchHostFallbackForRegions(
 	std::span<const UpscaleRegionParameters> a_regions,
 	const RuntimeDispatchPlan& a_plan) const
@@ -3724,7 +3826,8 @@ bool FidelityFX::CanDispatchHostFallbackForRegions(
 
 	// Deferred lifecycle mutation requires the dispatch's exact display bounds.
 	for (const auto& region : a_regions) {
-		if (region.contextIndex >= a_plan.contextCount ||
+		if (HasQuarantinedRuntimeSharedGuides(region) ||
+			region.contextIndex >= a_plan.contextCount ||
 			region.contextIndex >= fsrContextCount ||
 			!fsrContextValid[region.contextIndex] ||
 			region.displayWidth == 0 || region.displayHeight == 0 ||
@@ -3782,6 +3885,7 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(std::span<c
 			return LifecycleResult::Pending;
 		}
 		if (region.renderWidth > desc.color.Width || region.renderHeight > desc.color.Height ||
+			region.renderWidth > runtimeUpscalerMaxRenderWidth || region.renderHeight > runtimeUpscalerMaxRenderHeight ||
 			region.renderWidth > desc.depth.Width || region.renderHeight > desc.depth.Height ||
 			region.renderWidth > desc.motion.Width || region.renderHeight > desc.motion.Height ||
 			region.renderWidth > desc.reactive.Width || region.renderHeight > desc.reactive.Height ||
@@ -3879,6 +3983,7 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(std::span<c
 	bool commandListSubmitted = false;
 	bool commandFenceTracked = false;
 	bool commandListRecording = false;
+	std::array<std::array<WrappedResource*, FSRSharedGuidePolicy::kGuideCount>, 2> guideInputs{};
 	auto recoverCommandContext = [&]() {
 		if (!commandListSubmitted) {
 			if (commandListRecording) {
@@ -3908,39 +4013,45 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(std::span<c
 			D3D11_BOX sourceBox{ 0, 0, 0, a_width, a_height, 1 };
 			swapChain.d3d11Context->CopySubresourceRegion(a_destination->resource11.get(), 0, 0, 0, 0, a_source, 0, &sourceBox);
 		};
-		for (const auto& region : a_regions) {
+		for (size_t regionIndex = 0; regionIndex < a_regions.size(); ++regionIndex) {
+			const auto& region = a_regions[regionIndex];
+			const auto& desc = descriptions[regionIndex];
 			const uint32_t contextIndex = region.contextIndex;
 			copyIntoShared(region.color, runtimeColorShared[contextIndex], region.renderWidth, region.renderHeight);
-			copyIntoShared(region.depth, runtimeDepthShared[contextIndex], region.renderWidth, region.renderHeight);
-			copyIntoShared(region.motionVectors, runtimeMotionShared[contextIndex], region.renderWidth, region.renderHeight);
-			copyIntoShared(region.reactiveMask, runtimeReactiveShared[contextIndex], region.renderWidth, region.renderHeight);
-			copyIntoShared(region.transparencyCompositionMask, runtimeTransparencyShared[contextIndex], region.renderWidth, region.renderHeight);
-		}
-#ifdef DEVBENCH_BRIDGE_ENABLED
-		if (upscaling.IsVRRenderScaleGPUPerformanceTelemetryActive()) {
-			uint64_t activeInputPixels = 0;
-			uint64_t allocatedInputPixels = 0;
-			for (const auto& region : a_regions) {
-				const uint64_t activePixels = static_cast<uint64_t>(region.renderWidth) * region.renderHeight;
-				activeInputPixels += activePixels * 5u;
-				allocatedInputPixels +=
-					static_cast<uint64_t>(runtimeColorSharedDesc.Width) * runtimeColorSharedDesc.Height +
-					static_cast<uint64_t>(runtimeDepthSharedDesc.Width) * runtimeDepthSharedDesc.Height +
-					static_cast<uint64_t>(runtimeMotionSharedDesc.Width) * runtimeMotionSharedDesc.Height +
-					static_cast<uint64_t>(runtimeReactiveSharedDesc.Width) * runtimeReactiveSharedDesc.Height +
-					static_cast<uint64_t>(runtimeTransparencySharedDesc.Width) * runtimeTransparencySharedDesc.Height;
+			const std::array<ID3D11Resource*, FSRSharedGuidePolicy::kGuideCount> sources{
+				region.depth, region.motionVectors, region.reactiveMask, region.transparencyCompositionMask
+			};
+			const std::array<const D3D11_TEXTURE2D_DESC*, FSRSharedGuidePolicy::kGuideCount> guideDescriptions{
+				&desc.depth, &desc.motion, &desc.reactive, &desc.transparency
+			};
+			const std::array<const std::unique_ptr<WrappedResource>*, FSRSharedGuidePolicy::kGuideCount> staging{
+				&runtimeDepthShared[contextIndex], &runtimeMotionShared[contextIndex],
+				&runtimeReactiveShared[contextIndex], &runtimeTransparencyShared[contextIndex]
+			};
+			[[maybe_unused]] uint32_t directGuideCount = 0;
+			for (size_t guide = 0; guide < FSRSharedGuidePolicy::kGuideCount; ++guide) {
+				auto* imported = ResolveRuntimeSharedGuide(contextIndex,
+					static_cast<FSRSharedGuidePolicy::Guide>(guide), sources[guide], *guideDescriptions[guide]);
+				guideInputs[contextIndex][guide] = imported ? imported : staging[guide]->get();
+				if (imported)
+					++directGuideCount;
+				else
+					copyIntoShared(sources[guide], *staging[guide], region.renderWidth, region.renderHeight);
 			}
-			upscaling.RecordVRRenderScaleGPUPerformanceCounter(
-				Upscaling::VRRenderScaleGPUPerformanceCounter::FSRActiveInputCopyCalls,
-				static_cast<uint64_t>(a_regions.size()) * 5u);
-			upscaling.RecordVRRenderScaleGPUPerformanceCounter(
-				Upscaling::VRRenderScaleGPUPerformanceCounter::FSRActiveInputPixels,
-				activeInputPixels);
-			upscaling.RecordVRRenderScaleGPUPerformanceCounter(
-				Upscaling::VRRenderScaleGPUPerformanceCounter::FSRAvoidedInputPixels,
-				allocatedInputPixels > activeInputPixels ? allocatedInputPixels - activeInputPixels : 0u);
-		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (upscaling.IsVRRenderScaleGPUPerformanceTelemetryActive()) {
+				using Counter = Upscaling::VRRenderScaleGPUPerformanceCounter;
+				const auto work = FSRSharedGuidePolicy::CountInputCopies(region.renderWidth, region.renderHeight,
+					runtimeUpscalerMaxRenderWidth, runtimeUpscalerMaxRenderHeight, directGuideCount);
+				upscaling.RecordVRRenderScaleGPUPerformanceCounter(Counter::FSRActiveInputCopyCalls, work.copyCalls);
+				upscaling.RecordVRRenderScaleGPUPerformanceCounter(Counter::FSRActiveInputPixels, work.activePixels);
+				upscaling.RecordVRRenderScaleGPUPerformanceCounter(Counter::FSRAvoidedInputPixels, work.avoidedPixels);
+				upscaling.RecordVRRenderScaleGPUPerformanceCounter(Counter::FSRDirectGuideInputs, work.directGuides);
+				upscaling.RecordVRRenderScaleGPUPerformanceCounter(Counter::FSRDirectGuidePixels, work.directGuidePixels);
+				upscaling.RecordVRRenderScaleGPUPerformanceCounter(Counter::FSRGuideCopyFallbacks, FSRSharedGuidePolicy::kGuideCount - directGuideCount);
+			}
 #endif
+		}
 
 		const uint64_t d3d11SubmitFence = runtimeFenceValue++;
 		DX::ThrowIfFailed(swapChain.d3d11Context->Signal(runtimeD3D11Fence.get(), d3d11SubmitFence));
@@ -3954,10 +4065,8 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(std::span<c
 		for (const auto& region : a_regions) {
 			const uint32_t contextIndex = region.contextIndex;
 			beginBarriers[barrierCount++] = CD3DX12_RESOURCE_BARRIER::Transition(runtimeColorShared[contextIndex]->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-			beginBarriers[barrierCount++] = CD3DX12_RESOURCE_BARRIER::Transition(runtimeDepthShared[contextIndex]->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-			beginBarriers[barrierCount++] = CD3DX12_RESOURCE_BARRIER::Transition(runtimeMotionShared[contextIndex]->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-			beginBarriers[barrierCount++] = CD3DX12_RESOURCE_BARRIER::Transition(runtimeReactiveShared[contextIndex]->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-			beginBarriers[barrierCount++] = CD3DX12_RESOURCE_BARRIER::Transition(runtimeTransparencyShared[contextIndex]->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+			for (auto* guide : guideInputs[contextIndex])
+				beginBarriers[barrierCount++] = CD3DX12_RESOURCE_BARRIER::Transition(guide->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 			beginBarriers[barrierCount++] = CD3DX12_RESOURCE_BARRIER::Transition(runtimeOutputShared[contextIndex]->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 		}
 		commandList->ResourceBarrier(barrierCount, beginBarriers.data());
@@ -3969,13 +4078,16 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(std::span<c
 			const auto& region = a_regions[regionIndex];
 			const uint32_t contextIndex = region.contextIndex;
 			ffx::DispatchDescUpscale dispatchParameters{};
+			const auto guideResource = [&](FSRSharedGuidePolicy::Guide a_guide) {
+				return ffxApiGetResourceDX12(guideInputs[contextIndex][static_cast<size_t>(a_guide)]->resource.get(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
+			};
 			dispatchParameters.commandList = commandList;
 			dispatchParameters.color = ffxApiGetResourceDX12(runtimeColorShared[contextIndex]->resource.get(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
-			dispatchParameters.depth = ffxApiGetResourceDX12(runtimeDepthShared[contextIndex]->resource.get(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
-			dispatchParameters.motionVectors = ffxApiGetResourceDX12(runtimeMotionShared[contextIndex]->resource.get(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
+			dispatchParameters.depth = guideResource(FSRSharedGuidePolicy::Guide::Depth);
+			dispatchParameters.motionVectors = guideResource(FSRSharedGuidePolicy::Guide::MotionVectors);
 			dispatchParameters.exposure = FfxApiResource({});
-			dispatchParameters.reactive = ffxApiGetResourceDX12(runtimeReactiveShared[contextIndex]->resource.get(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
-			dispatchParameters.transparencyAndComposition = ffxApiGetResourceDX12(runtimeTransparencyShared[contextIndex]->resource.get(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
+			dispatchParameters.reactive = guideResource(FSRSharedGuidePolicy::Guide::Reactive);
+			dispatchParameters.transparencyAndComposition = guideResource(FSRSharedGuidePolicy::Guide::Transparency);
 			dispatchParameters.output = ffxApiGetResourceDX12(runtimeOutputShared[contextIndex]->resource.get(), FFX_API_RESOURCE_STATE_UNORDERED_ACCESS, FFX_API_RESOURCE_USAGE_UAV);
 			dispatchParameters.jitterOffset = { -temporal.jitterX, -temporal.jitterY };
 			dispatchParameters.motionVectorScale = { region.motionVectorScaleX, region.motionVectorScaleY };
@@ -4021,10 +4133,8 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(std::span<c
 			for (const auto& region : a_regions) {
 				const uint32_t contextIndex = region.contextIndex;
 				endBarriers[barrierCount++] = CD3DX12_RESOURCE_BARRIER::Transition(runtimeColorShared[contextIndex]->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);
-				endBarriers[barrierCount++] = CD3DX12_RESOURCE_BARRIER::Transition(runtimeDepthShared[contextIndex]->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);
-				endBarriers[barrierCount++] = CD3DX12_RESOURCE_BARRIER::Transition(runtimeMotionShared[contextIndex]->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);
-				endBarriers[barrierCount++] = CD3DX12_RESOURCE_BARRIER::Transition(runtimeReactiveShared[contextIndex]->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);
-				endBarriers[barrierCount++] = CD3DX12_RESOURCE_BARRIER::Transition(runtimeTransparencyShared[contextIndex]->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);
+				for (auto* guide : guideInputs[contextIndex])
+					endBarriers[barrierCount++] = CD3DX12_RESOURCE_BARRIER::Transition(guide->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);
 				endBarriers[barrierCount++] = CD3DX12_RESOURCE_BARRIER::Transition(runtimeOutputShared[contextIndex]->resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON);
 			}
 			commandList->ResourceBarrier(barrierCount, endBarriers.data());
@@ -4177,6 +4287,8 @@ FidelityFX::UpscaleResult FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3
 	// Fail this eye so the existing presentation fallback owns the remainder of
 	// the cycle; the next frame can select host FSR coherently for both eyes.
 	if (runtimeUpscalerUsedForFrame && !runtimePlan.selected)
+		return UpscaleResult::Failed;
+	if (HasQuarantinedRuntimeSharedGuides(region))
 		return UpscaleResult::Failed;
 
 	if (runtimePlan.runtimeRequested && !runtimePlan.selected) {

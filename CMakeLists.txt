@@ -1982,6 +1982,58 @@ if(BUILD_CONTROLLER_TESTS)
         tests/fsr_runtime_lifecycle_policy_test.cpp
     )
     add_controller_test(
+        fsr_shared_guides_policy_test
+        FSRSharedGuidesPolicy
+        tests/fsr_shared_guides_policy_test.cpp
+    )
+    set(_fsr_shared_guide_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/fsr-shared-guide"
+    )
+    set(_fsr_shared_guide_headers
+        "${_fsr_shared_guide_test_dir}/shared_guide_handle_under_test.h"
+        "${_fsr_shared_guide_test_dir}/shared_guide_import_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_fsr_shared_guide_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_fsr_shared_guide_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_fsr_shared_guide_interop.cmake"
+        DEPENDS
+            src/Buffer.h
+            src/Features/Upscaling/DX12SwapChain.cpp
+            tests/extract_fsr_shared_guide_interop.cmake
+        VERBATIM
+    )
+    add_executable(
+        fsr_shared_guide_interop_test
+        EXCLUDE_FROM_ALL
+        tests/fsr_shared_guide_interop_test.cpp
+        ${_fsr_shared_guide_headers}
+    )
+    target_compile_features(fsr_shared_guide_interop_test PRIVATE cxx_std_23)
+    target_include_directories(
+        fsr_shared_guide_interop_test
+        PRIVATE "${_fsr_shared_guide_test_dir}"
+    )
+    target_link_libraries(
+        fsr_shared_guide_interop_test
+        PRIVATE d3d11 d3d12 dxgi runtimeobject Microsoft::DirectX-Headers
+    )
+    add_test(NAME FSRSharedGuideInterop COMMAND fsr_shared_guide_interop_test)
+    add_test(
+        NAME FSRSharedGuideInteropCapability
+        COMMAND fsr_shared_guide_interop_test --capability-policy-only
+    )
+    set_tests_properties(
+        FSRSharedGuideInteropCapability
+        PROPERTIES LABELS "ControllerTests"
+    )
+    set_tests_properties(
+        FSRSharedGuideInterop
+        PROPERTIES LABELS "GraphicsTests" SKIP_RETURN_CODE 77
+    )
+    add_controller_test(
         fsr_temporal_tuning_policy_test
         FSRTemporalTuningPolicy
         tests/fsr_temporal_tuning_policy_test.cpp
@@ -2532,6 +2584,8 @@ if(BUILD_CONTROLLER_TESTS)
             reflex_policy_test
             fsr_host_lifecycle_policy_test
             fsr_runtime_lifecycle_policy_test
+            fsr_shared_guides_policy_test
+            fsr_shared_guide_interop_test
             fsr_temporal_tuning_policy_test
             fsr_temporal_tuning_serialization_test
             fsr_temporal_tuning_provider_test

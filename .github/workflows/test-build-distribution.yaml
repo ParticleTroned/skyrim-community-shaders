@@ -1,0 +1,56 @@
+name: "Test Build: Small Distribution"
+
+on:
+    workflow_dispatch:
+        inputs:
+            allocation-revision:
+                description: "Exact state-only allocation commit SHA"
+                required: true
+                type: string
+
+permissions:
+    contents: read
+
+concurrency:
+    group: csx-test-distribution-${{ inputs.allocation-revision }}
+    cancel-in-progress: false
+
+jobs:
+    metadata:
+        name: Read allocated identity
+        runs-on: ubuntu-latest
+        outputs:
+            build-id: ${{ steps.identity.outputs.build_id }}
+            artifact-name: ${{ steps.identity.outputs.artifact_name }}
+            display-version: ${{ steps.identity.outputs.display_version }}
+            source-sha: ${{ steps.identity.outputs.source_sha }}
+        steps:
+            - name: Checkout allocated build
+              uses: actions/checkout@v6
+              with:
+                  ref: ${{ inputs.allocation-revision }}
+                  fetch-depth: 0
+                  submodules: false
+                  persist-credentials: false
+
+            - name: Validate exact allocation and source
+              id: identity
+              run: |
+                  set -euo pipefail
+                  python tools/csx_test_build.py verify \
+                    --state version/test-build.json \
+                    --allocation-revision HEAD \
+                    --github-output "$GITHUB_OUTPUT"
+
+    build:
+        name: Build ${{ needs.metadata.outputs.display-version }}
+        needs: metadata
+        uses: ./.github/workflows/_shared-build.yaml
+        with:
+            ref: ${{ needs.metadata.outputs.source-sha }}
+            repository: ${{ github.repository }}
+            run-cpp: true
+            run-shader-validation: false
+            run-shader-tests: false
+            test-build-id: ${{ needs.metadata.outputs.build-id }}
+            artifact-name: ${{ needs.metadata.outputs.artifact-name }}

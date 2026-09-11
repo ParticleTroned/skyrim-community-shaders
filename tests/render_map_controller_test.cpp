@@ -493,12 +493,22 @@ namespace
 			.resource = { .d3dObject = 0xA300, .dimension = ResourceDimension::kTexture2D },
 			.view = { .kind = TargetViewKind::kShaderResource, .d3dObject = 0xA400 },
 		};
+		const ResourceViewInput changedSrv{
+			.resource = { .d3dObject = 0xA300, .dimension = ResourceDimension::kTexture2D },
+			.view = { .kind = TargetViewKind::kShaderResource, .d3dObject = 0xA401 },
+		};
 		runtime.BindResourceViews(
 			0xA000, ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, 1, &srv,
 			false, ResourceBindingSource::kPostCallQuery);
 		runtime.RecordExecuteCommandList(0xA000, 0xA200, false);
 		runtime.BindResourceViews(
 			0xA000, ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, 1, &srv,
+			false, ResourceBindingSource::kPostCallQuery);
+		runtime.BindResourceViews(
+			0xA000, ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, 1, &changedSrv,
+			false, ResourceBindingSource::kPostCallQuery);
+		runtime.BindResourceViews(
+			0xA000, ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, 1, nullptr,
 			false, ResourceBindingSource::kPostCallQuery);
 		std::shared_ptr<const CompletedCapture> capture;
 		Check(controller.Stop(descriptor.captureId, capture) == ControlStatus::kSuccess && capture,
@@ -541,12 +551,21 @@ namespace
 				effectiveBindings.push_back(event);
 			}
 		}
-		Check(effectiveBindings.size() == 2 &&
-				  effectiveBindings[0]["payload"]["targetViewObservationId"] ==
-					  effectiveBindings[1]["payload"]["targetViewObservationId"] &&
-				  effectiveBindings[0]["payload"]["slot"] == 2 &&
-				  effectiveBindings[1]["payload"]["slot"] == 2,
-			"serialized restore-false execution lost the same-view effective SRV rebind");
+		Check(effectiveBindings.size() == 4,
+			std::format("serialized {} effective SRV bindings instead of four", effectiveBindings.size()));
+		const auto& initialViewId = effectiveBindings[0]["payload"]["viewObservationId"];
+		const auto& reboundViewId = effectiveBindings[1]["payload"]["viewObservationId"];
+		const auto& changedViewId = effectiveBindings[2]["payload"]["viewObservationId"];
+		const auto& nullViewId = effectiveBindings[3]["payload"]["viewObservationId"];
+		Check(initialViewId.is_string() && reboundViewId.is_string() &&
+				  initialViewId == reboundViewId,
+			"serialized restore-false execution lost the same-view effective SRV identity");
+		Check(changedViewId.is_string() && changedViewId != reboundViewId,
+			"serialized effective SRV identity did not change with the view");
+		Check(nullViewId.is_null(), "serialized null effective SRV retained a view identity");
+		Check(std::all_of(effectiveBindings.begin(), effectiveBindings.end(),
+				  [](const nlohmann::json& a_event) { return a_event["payload"]["slot"] == 2; }),
+			"serialized effective SRV identity controls changed the tested slot");
 
 		Check(controller.Start(config, descriptor) == ControlStatus::kSuccess,
 			"failed-finish serialization capture did not start");

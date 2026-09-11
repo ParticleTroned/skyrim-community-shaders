@@ -375,6 +375,7 @@ namespace CSX::RenderMap
 		}
 
 		void ObserveEffectiveStateBeforeDraw(ID3D11DeviceContext* a_context);
+		void ObserveEffectiveStateBeforeDispatch(ID3D11DeviceContext* a_context);
 
 		template <class... Args>
 		void RecordDrawWithEffectiveState(
@@ -384,6 +385,17 @@ namespace CSX::RenderMap
 			if (a_context && a_context->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE)
 				ObserveEffectiveStateBeforeDraw(a_context);
 			GetRuntime().RecordDraw(
+				reinterpret_cast<std::uintptr_t>(a_context), a_operation, a_arguments...);
+		}
+
+		template <class... Args>
+		void RecordDispatchWithEffectiveState(
+			ID3D11DeviceContext* a_context, DispatchOperation a_operation, Args... a_arguments)
+		{
+			RegisterDeferredContextIfNeeded(a_context);
+			if (a_context && a_context->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE)
+				ObserveEffectiveStateBeforeDispatch(a_context);
+			GetRuntime().RecordDispatch(
 				reinterpret_cast<std::uintptr_t>(a_context), a_operation, a_arguments...);
 		}
 
@@ -567,6 +579,19 @@ namespace CSX::RenderMap
 				a_source, a_expectedCaptureGeneration);
 			if (a_source == ResourceBindingSource::kPostCallQuery)
 				GetRuntime().ClaimResourceViewStateSeed(reinterpret_cast<std::uintptr_t>(a_context));
+		}
+
+		void ObserveEffectiveStateBeforeDispatch(ID3D11DeviceContext* a_context)
+		{
+			if (!a_context)
+				return;
+			auto& runtime = GetRuntime();
+			const auto generation = runtime.ClaimResourceViewStateSeed(
+				reinterpret_cast<std::uintptr_t>(a_context));
+			if (generation != 0) {
+				ObserveAllEffectiveResourceViews(
+					a_context, ResourceBindingSource::kCaptureStateSnapshot, generation);
+			}
 		}
 
 		struct ID3D11DeviceContext_OMSetRenderTargets
@@ -772,8 +797,7 @@ namespace CSX::RenderMap
 			static void thunk(ID3D11DeviceContext* a_context, UINT a_threadGroupCountX,
 				UINT a_threadGroupCountY, UINT a_threadGroupCountZ)
 			{
-				RegisterDeferredContextIfNeeded(a_context);
-				GetRuntime().RecordDispatch(reinterpret_cast<std::uintptr_t>(a_context),
+				RecordDispatchWithEffectiveState(a_context,
 					DispatchOperation::kDispatch, a_threadGroupCountX, a_threadGroupCountY,
 					a_threadGroupCountZ);
 				func(a_context, a_threadGroupCountX, a_threadGroupCountY, a_threadGroupCountZ);
@@ -786,8 +810,7 @@ namespace CSX::RenderMap
 			static void thunk(ID3D11DeviceContext* a_context, ID3D11Buffer* a_argumentBuffer,
 				UINT a_alignedByteOffset)
 			{
-				RegisterDeferredContextIfNeeded(a_context);
-				GetRuntime().RecordDispatch(reinterpret_cast<std::uintptr_t>(a_context),
+				RecordDispatchWithEffectiveState(a_context,
 					DispatchOperation::kDispatchIndirect,
 					reinterpret_cast<std::uintptr_t>(a_argumentBuffer), a_alignedByteOffset);
 				func(a_context, a_argumentBuffer, a_alignedByteOffset);

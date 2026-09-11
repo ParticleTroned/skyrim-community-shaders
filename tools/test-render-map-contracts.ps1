@@ -145,6 +145,9 @@ $contextHooksSource = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'src/Re
 Assert-True ($hooksSource.Contains('stl::detour_vfunc<27, ID3D11Device_CreateDeferredContext>')) 'CreateDeferredContext is not hooked at D3D11 device slot 27'
 Assert-True ($contextHooksSource.Contains('stl::detour_vfunc<58, ID3D11DeviceContext_ExecuteCommandList>')) 'ExecuteCommandList is not hooked at context slot 58'
 Assert-True ($contextHooksSource.Contains('stl::detour_vfunc<114, ID3D11DeviceContext_FinishCommandList>')) 'FinishCommandList is not hooked at context slot 114'
+$dispatchWrapperCalls = [regex]::Matches($contextHooksSource, 'RecordDispatchWithEffectiveState\(').Count
+Assert-True ($dispatchWrapperCalls -eq 3) 'Direct and indirect dispatch do not both route through effective-state recovery'
+Assert-True ($contextHooksSource.Contains('ObserveEffectiveStateBeforeDispatch(a_context);')) 'Dispatch recovery does not observe effective state before publication'
 
 $python = Resolve-Python3 -RequestedPath $PythonExecutable
 & $python -m py_compile (Join-Path $repoRoot 'tools/build-render-graph.py')
@@ -182,4 +185,4 @@ try {
     }
 }
 
-Write-Output "Render-map contracts passed: 2 schemas, $($fixtureEvents.Count) baseline deferred-command fixtures, $($validEdgeCaseEvents.Count) valid edge cases, $($fixtureEdgeCases.invalid.Count) rejected edge cases, 13 cross-identity cases, 3 hook slots, and the offline graph suite."
+Write-Output "Render-map contracts passed: 2 schemas, $($fixtureEvents.Count) baseline deferred-command fixtures, $($validEdgeCaseEvents.Count) valid edge cases, $($fixtureEdgeCases.invalid.Count) rejected edge cases, 13 cross-identity cases, 5 hook contracts, and the offline graph suite."

@@ -5,6 +5,7 @@
 #include <cstring>
 #include <functional>
 #include <new>
+#include <thread>
 
 namespace CSX::RenderMap
 {
@@ -940,6 +941,34 @@ namespace CSX::RenderMap
 	{
 		failNextCommandListCatalogueAdmission.store(true, std::memory_order_release);
 	}
+
+	void Runtime::PauseNextDeferredPublicationForTesting() noexcept
+	{
+		resumeDeferredPublication.store(false, std::memory_order_release);
+		deferredPublicationPaused.store(false, std::memory_order_release);
+		pauseNextDeferredPublication.store(true, std::memory_order_release);
+	}
+
+	bool Runtime::IsDeferredPublicationPausedForTesting() const noexcept
+	{
+		return deferredPublicationPaused.load(std::memory_order_acquire);
+	}
+
+	void Runtime::ResumeDeferredPublicationForTesting() noexcept
+	{
+		resumeDeferredPublication.store(true, std::memory_order_release);
+	}
+
+	void Runtime::PauseDeferredPublicationBeforeAppendForTesting() noexcept
+	{
+		if (!pauseNextDeferredPublication.exchange(false, std::memory_order_acq_rel))
+			return;
+		deferredPublicationPaused.store(true, std::memory_order_release);
+		while (!resumeDeferredPublication.load(std::memory_order_acquire))
+			std::this_thread::yield();
+		deferredPublicationPaused.store(false, std::memory_order_release);
+		resumeDeferredPublication.store(false, std::memory_order_release);
+	}
 #endif
 
 	std::uint64_t Runtime::StartDeferredRecording(
@@ -981,13 +1010,15 @@ namespace CSX::RenderMap
 	}
 
 	void Runtime::MarkDeferredRecordingIncomplete(
-		std::uintptr_t a_context, std::uint64_t a_contextObservationId,
+		std::uintptr_t a_context, std::uint64_t a_captureGeneration,
+		std::uint64_t a_contextObservationId,
 		std::uint64_t a_recordingObservationId,
 		CommandRecordingIncompleteReason a_reason) noexcept
 	{
 		std::scoped_lock lock(deferredContextMutex);
 		const auto found = deferredContexts.find(a_context);
 		if (found == deferredContexts.end() ||
+			found->second.observationGeneration != a_captureGeneration ||
 			found->second.observationId != a_contextObservationId ||
 			found->second.recordingObservationId != a_recordingObservationId) {
 			return;
@@ -1001,8 +1032,10 @@ namespace CSX::RenderMap
 		if (a_context == 0)
 			return {};
 		if (a_context == immediateContext.load(std::memory_order_acquire)) {
+			const auto captureGeneration = collector.ActiveGeneration();
 			return {
 				.kind = DeviceContextKind::kImmediate,
+				.captureGeneration = captureGeneration,
 				.observationId = EnsureImmediateContextObservation(),
 				.commandSequence = immediateContextCommandSequence.load(std::memory_order_acquire),
 			};
@@ -1041,6 +1074,7 @@ namespace CSX::RenderMap
 		}
 		return {
 			.kind = DeviceContextKind::kDeferred,
+			.captureGeneration = state.observationGeneration,
 			.observationId = state.observationId,
 			.commandSequence = state.commandSequence,
 			.recordingObservationId = state.recordingObservationId,
@@ -2004,7 +2038,9 @@ namespace CSX::RenderMap
 			{
 				std::scoped_lock lock(deferredContextMutex);
 				const auto found = deferredContexts.find(a_context);
-				if (found == deferredContexts.end() || found->second.observationId != context.observationId)
+				if (found == deferredContexts.end() ||
+					found->second.observationGeneration != context.captureGeneration ||
+					found->second.observationId != context.observationId)
 					return;
 				auto& state = found->second;
 				commandSequence = ++state.commandSequence;
@@ -2016,16 +2052,20 @@ namespace CSX::RenderMap
 				collector.CountFiltered();
 				return;
 			}
+#if defined(CSX_RENDER_MAP_TESTING)
+			PauseDeferredPublicationBeforeAppendForTesting();
+#endif
 			const auto recordResult = collector.RecordForGeneration(
 				EventKind::kDraw,
 				DrawCallPayload(
 					a_context, a_operation, vertexObservationId, pixelObservationId,
 					a_argument0, a_argument1, a_argument2, a_argument3),
-				context.observationId, collector.ActiveGeneration(), commandSequence,
+				context.observationId, context.captureGeneration, commandSequence,
 				0, 0, 0, recordingObservationId, true);
 			if (recordResult != RecordResult::kRecorded) {
 				MarkDeferredRecordingIncomplete(
-					a_context, context.observationId, recordingObservationId,
+					a_context, context.captureGeneration, context.observationId,
+					recordingObservationId,
 					CommandRecordingIncompleteReason::kEventNotRecorded);
 			}
 			return;
@@ -2096,7 +2136,9 @@ namespace CSX::RenderMap
 			{
 				std::scoped_lock lock(deferredContextMutex);
 				const auto found = deferredContexts.find(a_context);
-				if (found == deferredContexts.end() || found->second.observationId != context.observationId)
+				if (found == deferredContexts.end() ||
+					found->second.observationGeneration != context.captureGeneration ||
+					found->second.observationId != context.observationId)
 					return;
 				auto& state = found->second;
 				commandSequence = ++state.commandSequence;
@@ -2107,16 +2149,20 @@ namespace CSX::RenderMap
 				collector.CountFiltered();
 				return;
 			}
+#if defined(CSX_RENDER_MAP_TESTING)
+			PauseDeferredPublicationBeforeAppendForTesting();
+#endif
 			const auto recordResult = collector.RecordForGeneration(
 				EventKind::kDispatch,
 				DispatchCallPayload(
 					a_context, a_operation, computeObservationId,
 					a_argument0, a_argument1, a_argument2, a_argument3),
-				context.observationId, collector.ActiveGeneration(), commandSequence,
+				context.observationId, context.captureGeneration, commandSequence,
 				0, 0, 0, recordingObservationId, true);
 			if (recordResult != RecordResult::kRecorded) {
 				MarkDeferredRecordingIncomplete(
-					a_context, context.observationId, recordingObservationId,
+					a_context, context.captureGeneration, context.observationId,
+					recordingObservationId,
 					CommandRecordingIncompleteReason::kEventNotRecorded);
 			}
 			return;

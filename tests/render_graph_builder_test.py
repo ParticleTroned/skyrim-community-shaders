@@ -970,6 +970,27 @@ def main() -> int:
     )
     assert event_resource_edges(restore_false_dispatch_graph, 13) == []
 
+    recovered_dispatch = json.loads(json.dumps(stale_dispatch))
+    recovered_dispatch["sequence"] = 9
+    recovered_dispatch["timestampQpc"] = 1009
+    lost_execute_dispatch_graph = build_graph(
+        tool, manifest,
+        stale_dispatch_prefix + [
+            envelope(7, "resource-view-bind", {
+                "schema": "resource-view-binding-v2", "source": "capture-state-snapshot",
+                "viewObservationId": None, "bindingKind": "shader-resource",
+                "stage": "compute", "slot": 0,
+            }),
+            envelope(8, "resource-view-state-observed", {
+                "schema": "resource-view-state-observed-v1", "source": "capture-state-snapshot",
+                "bindingKind": "shader-resource", "stage": "compute", "startSlot": 0,
+                "count": 128, "changedSlotCount": 1,
+            }),
+            recovered_dispatch,
+        ],
+    )
+    assert event_resource_edges(lost_execute_dispatch_graph, 9) == []
+
     partial_rebind = envelope(13, "resource-view-bind", {
         "schema": "resource-view-binding-v1",
         "viewObservationId": "obs-shader-resource-view-3-g1",
@@ -1124,6 +1145,20 @@ def main() -> int:
         event["execution"]["observationDomain"] = "command-recording"
         return event
 
+    def recorded_dispatch(sequence: int, context_id: str, recording_id: str) -> dict:
+        event = envelope(sequence, "dispatch", {
+            "schema": "dispatch-call-v2", "operation": "dispatch",
+            "deviceContextPointer": "0x0", "computeShaderObservationId": None,
+            "arguments": {
+                "threadGroupCountX": 1, "threadGroupCountY": 1,
+                "threadGroupCountZ": 1,
+            },
+        })
+        event["deviceContextObservationId"] = context_id
+        event["commandRecordingObservationId"] = recording_id
+        event["execution"]["observationDomain"] = "command-recording"
+        return event
+
     def finish_event(
         sequence: int, envelope_recording: str, payload_recording: str,
         context_id: str, command_list: dict,
@@ -1180,6 +1215,35 @@ def main() -> int:
     assert valid_edge_types.count("materializes") == 2
     assert valid_edge_types.count("finishes") == 1
     assert valid_edge_types.count("executes") == 1
+
+    for factory in (recorded_draw, recorded_dispatch):
+        valid_recording_graph = build_graph(
+            tool, manifest,
+            identity_declarations() + [factory(6, context_a["id"], recording_a["id"])],
+        )
+        assert sum(edge["type"] == "records" for edge in valid_recording_graph["edges"]) == 3
+        for invalid_domain in ("cpu-call", "unknown", None):
+            invalid_recording = factory(6, context_a["id"], recording_a["id"])
+            if invalid_domain is None:
+                invalid_recording["execution"].pop("observationDomain")
+            else:
+                invalid_recording["execution"]["observationDomain"] = invalid_domain
+            invalid_recording_graph = build_graph(
+                tool, manifest, identity_declarations() + [invalid_recording],
+            )
+            invalid_node = next(
+                node for node in invalid_recording_graph["nodes"]
+                if node["attributes"].get("eventSequence") == 6
+            )
+            assert not [
+                edge for edge in invalid_recording_graph["edges"]
+                if edge["type"] == "records" and edge["to"] == invalid_node["id"]
+            ]
+            assert any(
+                gap["blocking"] and "recording ownership and execution authority were suppressed"
+                in gap["description"]
+                for gap in invalid_recording_graph["gaps"]
+            )
 
     contradiction_results: set[str] = set()
 
@@ -1265,6 +1329,13 @@ def main() -> int:
         wrong_domain, "is not a sequenced CPU-call observation",
         identity_declarations() + [immediate_context_event(6)],
     )
+    for invalid_sequence in (-1, None, True):
+        invalid_execute_sequence = execute_event(7, list_a, recording_a["id"])
+        invalid_execute_sequence["execution"]["commandStreamSequence"] = invalid_sequence
+        assert_execute_rejected(
+            invalid_execute_sequence, "is not a sequenced CPU-call observation",
+            identity_declarations() + [immediate_context_event(6)],
+        )
     recording_envelope = execute_event(7, list_a, recording_a["id"])
     recording_envelope["commandRecordingObservationId"] = recording_a["id"]
     assert_execute_rejected(
@@ -1412,6 +1483,79 @@ def main() -> int:
         )
         assert sum(edge["type"] == "records" for edge in exact_duplicate_graph["edges"]) == 2
         assert sum(edge["type"] == "materializes" for edge in exact_duplicate_graph["edges"]) == 2
+
+    conflict_context_id = "obs-device-context-1-g1"
+
+    def deferred_context_event(sequence: int) -> dict:
+        event = envelope(sequence, "device-context-observed", {
+            "schema": "device-context-observation-v2",
+            "deviceContextObservationId": conflict_context_id,
+            "contextPointer": "0x901", "pointerGeneration": 1,
+            "kind": "deferred", "creationEvidence": "create-deferred-context-hook",
+            "contextFlags": 0,
+        })
+        event["deviceContextObservationId"] = conflict_context_id
+        return event
+
+    def ordinary_context_execution(sequence: int, event_type: str) -> dict:
+        if event_type == "draw":
+            payload = {
+                "schema": "draw-call-v4", "operation": "draw",
+                "deviceContextPointer": "0x900", "vertexShaderObservationId": None,
+                "pixelShaderObservationId": None,
+                "targetBindingObservationId": "obs-target-binding-5-g1",
+                "submissionObservationId": None, "preparedGeometrySetupObservationId": None,
+                "arguments": {"vertexCount": 3, "startVertexLocation": 0},
+            }
+        else:
+            payload = {
+                "schema": "dispatch-call-v2", "operation": "dispatch",
+                "deviceContextPointer": "0x900", "computeShaderObservationId": None,
+                "arguments": {
+                    "threadGroupCountX": 1, "threadGroupCountY": 1,
+                    "threadGroupCountZ": 1,
+                },
+            }
+        event = envelope(sequence, event_type, payload)
+        event["deviceContextObservationId"] = conflict_context_id
+        return event
+
+    for event_type in ("draw", "dispatch"):
+        if event_type == "draw":
+            state_prefix = json.loads(json.dumps(hazard_events[:7]))
+        else:
+            state_prefix = json.loads(json.dumps(hazard_events[:6]))
+            state_prefix.append(envelope(6, "resource-view-bind", {
+                "schema": "resource-view-binding-v1",
+                "viewObservationId": "obs-shader-resource-view-3-g1",
+                "bindingKind": "shader-resource", "stage": "compute", "slot": 0,
+            }))
+        valid_declaration = immediate_context_event(7, conflict_context_id)
+        valid_execution = ordinary_context_execution(8, event_type)
+        valid_context_graph = build_graph(
+            tool, manifest, state_prefix + [valid_declaration, valid_execution],
+        )
+        assert event_resource_edges(valid_context_graph, 8)
+
+        for contradictory_first in (False, True):
+            declarations = [
+                immediate_context_event(7, conflict_context_id),
+                deferred_context_event(8),
+            ]
+            if contradictory_first:
+                declarations.reverse()
+                for sequence, declaration in enumerate(declarations, start=7):
+                    declaration["sequence"] = sequence
+                    declaration["timestampQpc"] = 1000 + sequence
+            conflicted_execution = ordinary_context_execution(9, event_type)
+            conflicted_context_graph = build_graph(
+                tool, manifest, state_prefix + declarations + [conflicted_execution],
+            )
+            assert event_resource_edges(conflicted_context_graph, 9) == []
+            assert any(
+                gap["blocking"] and "names conflicted device context" in gap["description"]
+                for gap in conflicted_context_graph["gaps"]
+            )
 
     assert contradiction_results == set(identity_fixture["contradictions"])
 

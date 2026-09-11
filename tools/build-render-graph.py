@@ -930,7 +930,8 @@ def derive(
             if (
                 execution.get("observationDomain") != "cpu-call" or
                 not isinstance(command_stream_sequence, int) or
-                isinstance(command_stream_sequence, bool)
+                isinstance(command_stream_sequence, bool) or
+                command_stream_sequence < 0
             ):
                 graph.gap(
                     f"ExecuteCommandList event {sequence} is not a sequenced CPU-call observation; "
@@ -1519,7 +1520,18 @@ def derive(
             )
             recording_id = event.get("commandRecordingObservationId")
             observation_domain = event.get("execution", {}).get("observationDomain")
-            if recording_id:
+            recording_envelope_valid = not (
+                event_type in {"draw", "dispatch"} and
+                recording_id is not None and
+                observation_domain != "command-recording"
+            )
+            if not recording_envelope_valid:
+                graph.gap(
+                    f"Recorded {event_type} event {sequence} uses observation domain "
+                    f"{observation_domain!r}; recording ownership and execution authority were suppressed.",
+                    [execution], True, "other",
+                )
+            if recording_id and recording_envelope_valid:
                 recording = valid_recording(recording_id)
                 context_id = event.get("deviceContextObservationId")
                 if recording and recording_context_matches(
@@ -1537,8 +1549,17 @@ def derive(
                         [execution], True,
                     )
             if event_type in {"draw", "dispatch"}:
+                if not recording_envelope_valid:
+                    continue
                 context_id = event.get("deviceContextObservationId")
                 context = device_contexts.get(context_id or "")
+                if context is not None and context.get("valid") is not True:
+                    graph.gap(
+                        f"{event_type.capitalize()} event {sequence} names conflicted device context "
+                        f"{context_id}; context-based resource authority was suppressed.",
+                        [execution], True, "other",
+                    )
+                    continue
                 is_deferred = bool(context and context["payload"].get("kind") == "deferred")
                 is_recording_domain = observation_domain == "command-recording"
                 if is_recording_domain or recording_id or is_deferred:

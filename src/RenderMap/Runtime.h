@@ -376,6 +376,9 @@ namespace CSX::RenderMap
 #if defined(CSX_RENDER_MAP_TESTING)
 		void FailNextDeferredContextCatalogueAdmissionForTesting() noexcept;
 		void FailNextCommandListCatalogueAdmissionForTesting() noexcept;
+		void PauseNextDeferredPublicationForTesting() noexcept;
+		bool IsDeferredPublicationPausedForTesting() const noexcept;
+		void ResumeDeferredPublicationForTesting() noexcept;
 #endif
 
 	private:
@@ -466,6 +469,7 @@ namespace CSX::RenderMap
 		struct ContextObservation
 		{
 			DeviceContextKind kind{ DeviceContextKind::kUnknown };
+			std::uint64_t captureGeneration{ 0 };
 			std::uint64_t observationId{ 0 };
 			std::uint64_t commandSequence{ 0 };
 			std::uint64_t recordingObservationId{ 0 };
@@ -477,9 +481,13 @@ namespace CSX::RenderMap
 			DeferredContextState& a_state,
 			std::uint64_t a_captureGeneration, bool a_partialAtCaptureStart) noexcept;
 		void MarkDeferredRecordingIncomplete(
-			std::uintptr_t a_context, std::uint64_t a_contextObservationId,
+			std::uintptr_t a_context, std::uint64_t a_captureGeneration,
+			std::uint64_t a_contextObservationId,
 			std::uint64_t a_recordingObservationId,
 			CommandRecordingIncompleteReason a_reason) noexcept;
+#if defined(CSX_RENDER_MAP_TESTING)
+		void PauseDeferredPublicationBeforeAppendForTesting() noexcept;
+#endif
 		void ResetImmediatePipelineState() noexcept;
 		void ApplyEffectiveResourceViewResetLocked() noexcept;
 		std::uint64_t NextCommandStreamSequence() noexcept;
@@ -537,6 +545,9 @@ namespace CSX::RenderMap
 #if defined(CSX_RENDER_MAP_TESTING)
 		std::atomic_bool failNextDeferredContextCatalogueAdmission{ false };
 		std::atomic_bool failNextCommandListCatalogueAdmission{ false };
+		std::atomic_bool pauseNextDeferredPublication{ false };
+		std::atomic_bool deferredPublicationPaused{ false };
+		std::atomic_bool resumeDeferredPublication{ false };
 #endif
 		mutable std::shared_mutex persistentStageShaderMutex;
 		std::unordered_map<PersistentStageShaderKey, PersistentStageShaderIdentity,

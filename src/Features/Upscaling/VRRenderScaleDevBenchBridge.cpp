@@ -1742,6 +1742,7 @@ namespace
 														{ "pressureDeferrals", controller.metrics.current.pressureDeferrals },
 														{ "retirementDeferrals", controller.metrics.current.retirementDeferrals },
 														{ "backendDeferrals", controller.metrics.current.backendDeferrals },
+														{ "readinessDeferrals", controller.metrics.current.readinessDeferrals },
 														{ "failures", controller.metrics.current.failures },
 														{ "fidelityMismatches", controller.metrics.current.fidelityMismatches },
 														{ "memoryTrimCount", controller.metrics.current.memoryTrimCount },
@@ -7505,10 +7506,17 @@ namespace VRRenderScaleDevBenchBridge
 				"eye in a runtime stereo batch; retries identify another attempt "
 				"with the same proven current-eye identity, including full-eye "
 				"fallback after foveated dispatch.";
+			const std::string readinessRetryDescription =
+				" Render-scale metrics expose readinessDeferrals as the subset of "
+				"backendDeferrals proven to wait before provider/shared-resource "
+				"release. These remain included in retries; retryTelemetry labels "
+				"them PreMutationReadiness. Only otherwise healthy immutable "
+				"settings transitions poll these waits each frame and retain "
+				"proof-driven settling; partial teardown and recovery stay guarded.";
 			descriptor["description"] =
-				descriptor["description"].get<std::string>() + submitFreshnessDescription;
+				descriptor["description"].get<std::string>() + submitFreshnessDescription + readinessRetryDescription;
 			descriptor["inputSchema"]["properties"]["action"]["description"] =
-				"Select a diagnostic or control action." + submitFreshnessDescription;
+				"Select a diagnostic or control action." + submitFreshnessDescription + readinessRetryDescription;
 			descriptor["inputSchema"]["properties"]["milestone"] = {
 				{ "type", "string" },
 				{ "enum", json::array({ "strict", "presentation", "cleanup" }) },

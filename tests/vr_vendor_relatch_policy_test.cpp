@@ -1631,7 +1631,29 @@ namespace
 		state.retries = 1;
 		if (CanUseProofDrivenPromotion(state))
 			return false;
+		state.readinessDeferrals = 1;
+		if (!CanUseProofDrivenPromotion(state))
+			return false;
+		state.retries = 7;
+		state.readinessDeferrals = 7;
+		if (!CanUseProofDrivenPromotion(state))
+			return false;
+		state.readinessDeferrals = 6;
+		if (CanUseProofDrivenPromotion(state))
+			return false;
+		state.readinessDeferrals = 8;
+		if (CanUseProofDrivenPromotion(state))
+			return false;
+		state.retries = std::numeric_limits<std::uint32_t>::max() - 1u;
+		state.readinessDeferrals = state.retries;
+		if (!CanUseProofDrivenPromotion(state))
+			return false;
+		++state.retries;
+		++state.readinessDeferrals;
+		if (CanUseProofDrivenPromotion(state))
+			return false;
 		state.retries = 0;
+		state.readinessDeferrals = 0;
 		state.failures = 1;
 		if (CanUseProofDrivenPromotion(state))
 			return false;
@@ -1650,6 +1672,85 @@ namespace
 		state.emergencyRecovery = false;
 		state.presentationDeadlineFallback = true;
 		return !CanUseProofDrivenPromotion(state);
+	}
+
+	constexpr bool CoversReadinessRetryAdmission()
+	{
+		if (kReadinessPollRetryFrames != 1u ||
+			CanRetryReadinessWithoutSettleGuard({}))
+			return false;
+
+		const ReadinessRetryAdmission ready{
+			.promotion = {
+				.immutableSettingsTransition = true,
+				.exactAttemptMetrics = true,
+			},
+			.pendingBeforeRelease = true,
+			.physicalMutationStarted = false,
+			.providerQuarantined = false,
+		};
+		if (!CanRetryReadinessWithoutSettleGuard(ready))
+			return false;
+
+		auto state = ready;
+		for (std::uint32_t retry = 1; retry <= 3; ++retry) {
+			state.promotion.retries = retry;
+			state.promotion.readinessDeferrals = retry;
+			if (!CanRetryReadinessWithoutSettleGuard(state))
+				return false;
+		}
+		++state.promotion.retries;
+		if (CanRetryReadinessWithoutSettleGuard(state))
+			return false;
+		state = ready;
+		state.promotion.readinessDeferrals = 1;
+		if (CanRetryReadinessWithoutSettleGuard(state))
+			return false;
+		state.promotion.retries = std::numeric_limits<std::uint32_t>::max();
+		state.promotion.readinessDeferrals = state.promotion.retries;
+		if (CanRetryReadinessWithoutSettleGuard(state))
+			return false;
+
+		state = ready;
+		state.pendingBeforeRelease = false;
+		if (CanRetryReadinessWithoutSettleGuard(state))
+			return false;
+		state = ready;
+		state.physicalMutationStarted = true;
+		if (CanRetryReadinessWithoutSettleGuard(state))
+			return false;
+		state = ready;
+		state.providerQuarantined = true;
+		if (CanRetryReadinessWithoutSettleGuard(state))
+			return false;
+
+		state = ready;
+		state.promotion.immutableSettingsTransition = false;
+		if (CanRetryReadinessWithoutSettleGuard(state))
+			return false;
+		state = ready;
+		state.promotion.exactAttemptMetrics = false;
+		if (CanRetryReadinessWithoutSettleGuard(state))
+			return false;
+		state = ready;
+		state.promotion.failures = 1;
+		if (CanRetryReadinessWithoutSettleGuard(state))
+			return false;
+		state = ready;
+		state.promotion.recoveryOwned = true;
+		if (CanRetryReadinessWithoutSettleGuard(state))
+			return false;
+		state = ready;
+		state.promotion.providerNeutralRecovery = true;
+		if (CanRetryReadinessWithoutSettleGuard(state))
+			return false;
+		state = ready;
+		state.promotion.emergencyRecovery = true;
+		if (CanRetryReadinessWithoutSettleGuard(state))
+			return false;
+		state = ready;
+		state.promotion.presentationDeadlineFallback = true;
+		return !CanRetryReadinessWithoutSettleGuard(state);
 	}
 
 	constexpr bool CoversInitialRelatchPacing()
@@ -3558,6 +3659,7 @@ namespace
 	static_assert(CoversDeferredDispatchSelection());
 	static_assert(CoversSubmitStagePromotionAdmission());
 	static_assert(CoversProofDrivenPromotionAdmission());
+	static_assert(CoversReadinessRetryAdmission());
 	static_assert(CoversInitialRelatchPacing());
 	static_assert(CoversStereoDispatchContractIdentity());
 	static_assert(CoversPendingVendorResetOwnership());

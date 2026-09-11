@@ -3,7 +3,9 @@
 The submit-stage path captures stereo camera constants before the engine's
 post-processing chain and carries an explicit description of submitted color
 to DLSS and FSR. These boundaries preserve the existing render-scale
-controller, resource retirement, menu transactions, and compositor ownership.
+resource retirement, menu transactions, and compositor ownership. Readiness
+retry classification keeps ordinary GPU drain waits separate from failed or
+partially completed teardown.
 
 ## Temporal capture
 
@@ -74,6 +76,39 @@ identity; it does not
 claim that a retained texture's texels are immutable. Moving or duplicating
 GPU capture requires separate state-restoration and performance validation.
 
+## Readiness during render-scale changes
+
+An otherwise healthy immutable settings transition polls a proven
+pre-mutation provider-readiness wait after one frame. Both the standalone
+FSR drain and vendor-reset path must prove that the pending result occurred
+before provider or shared-resource release. A generic `Pending` result is
+insufficient: FSR destruction can defer after earlier teardown has succeeded.
+
+The faster path excludes retirement-capacity debt, quarantined providers,
+prior native-restore cleanup, memory-relief cleanup, physical mutation,
+recovery, presentation-deadline fallback and any unclassified retry or
+failure. Retry accounting checks the expected transition epoch so an older
+request cannot contribute readiness evidence to its successor.
+
+Every wait remains in `retries` and `backendDeferrals`. The subset with
+complete readiness provenance also increments `readinessDeferrals` and
+appears as `PreMutationReadiness` in retry telemetry. Current status and
+retained transition metrics expose the count. Saturated or inconsistent
+counts cannot admit the faster path.
+
+After successful teardown and mutation, an attempt containing only those
+readiness deferrals remains eligible for proof-driven settling. Promotion
+still requires the existing exact generation/provider contract and coherent
+stereo evidence. Other retries retain the existing minimum settling guard.
+GPU fences, memory/retirement admission, deadlines, history invalidation,
+and device-loss or partial-teardown handling remain authoritative.
+
+This correction targets the extra poll/settling delays identified in the
+NVIDIA tuning results. It does not establish that the broader observed
+frame-throughput regression is fixed. The retained PR66 comparison measures
+PR73 source `d9780bb74`, before this correction. New runtime tuning and the
+separate release qualification are still required for the updated source.
+
 ## Color contract
 
 The supported presentation source remains `R8G8B8A8_UNORM`. Storage format,
@@ -120,6 +155,10 @@ an older token, while lifecycle reset still permits a fresh publication.
 `VRSubmitColorContract` covers Auto/Gamma equivalence, Linear spatial
 admission, invalid contracts, and
 separation of source range from vendor processing mode.
+`VRVendorRelatchPolicy` covers repeated readiness waits, mixed retry kinds,
+counter saturation, missing provenance, mutation/quarantine, invalid attempt
+identity, and every recovery/failure exclusion. Its existing stereo
+promotion checks remain in the same suite.
 
 Run the controller tests with the normal CMake wrapper:
 

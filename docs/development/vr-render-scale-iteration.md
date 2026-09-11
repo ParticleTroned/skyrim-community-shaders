@@ -1094,3 +1094,20 @@ exactly from the canonical ledger; 1,056 paired numeric cells passed audit.
 Prior attempt evidence and historical cells remain preserved. The user
 authorized a PR75 update with means and SE in the style of PR65. See
 [the complete PR75 comparison](pr75-nvidia-mainvr-comparison-20260910.md).
+
+## September 11: PR73 readiness-deferral correction
+
+The PR73 follow-up separates proven pre-mutation provider readiness from
+other backend retries. Eligible immutable settings transitions poll after
+one frame and retain proof-driven settling after successful teardown.
+Mixed retries, failures, prior cleanup, memory relief, partial mutation,
+quarantine and recovery retain the existing conservative behavior. All
+waits remain counted, with a separate readiness subset in DevBench metrics.
+See [the readiness contract](vr-submit-input-contracts.md#readiness-during-render-scale-changes).
+
+The prior NVIDIA comparison belongs to compiled source `d9780bb74` and
+remains pre-correction evidence. This implementation update adds no new
+runtime measurement or timing to the comparison ledger. Policy tests and
+universal compiler checks cannot establish post-fix performance or visual
+robustness; the updated source still needs runtime tuning and the separate
+`csx-render-scale-pr-v1` qualification with a matching accepted baseline.

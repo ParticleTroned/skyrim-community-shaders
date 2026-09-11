@@ -1033,7 +1033,8 @@ public:
 		Other,
 		Pressure,
 		Retirement,
-		Backend
+		Backend,
+		PreMutationReadiness
 	};
 
 	enum class VRRenderScaleFailureKind : uint8_t
@@ -1066,6 +1067,7 @@ public:
 		uint32_t pressureDeferrals = 0;
 		uint32_t retirementDeferrals = 0;
 		uint32_t backendDeferrals = 0;
+		uint32_t readinessDeferrals = 0;
 		uint32_t failures = 0;
 		uint32_t outOfMemoryFailures = 0;
 		uint32_t deviceLostFailures = 0;
@@ -2568,7 +2570,8 @@ public:
 	bool ApplyLockedFullResolutionDynamicResolutionState(RE::BSGraphics::State* a_state);
 	bool ApplyDynamicResolutionState(RE::BSGraphics::State* a_state);
 	void PrepareFullResolutionPostProcessing(RE::BSGraphics::State* a_state = nullptr, bool a_resetProjection = false);
-	VRVendorResourceResetResult ResetVRSubmitStageState(bool a_destroyDLSSResources = true, bool a_destroySharedResources = true, bool a_preserveVRIntermediateTextures = false);
+	/** @brief Reports idle-fence deferral separately from retirement capacity or partial teardown. */
+	VRVendorResourceResetResult ResetVRSubmitStageState(bool a_destroyDLSSResources = true, bool a_destroySharedResources = true, bool a_preserveVRIntermediateTextures = false, bool* a_readinessDeferredBeforeRelease = nullptr);
 	void RequestVRSubmitStageHistoryReset();
 	bool IsSubmitStageUpscalingActive() const;
 	bool IsSubmitStageDeviceLost() const;
@@ -3400,10 +3403,12 @@ public:
 	void RecordVRVendorRuntimeLifecycle(UpscaleMethod a_upscaleMethod, VRVendorRuntimeLifecyclePhase a_phase, uint32_t a_generation = 0, const char* a_reason = nullptr);
 	void RecordVRRenderScaleTransitionRetry(VRRenderScaleRetryKind a_kind
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		, const char* a_reason = "unspecified",
+		,
+		const char* a_reason = "unspecified",
 		std::source_location a_source = std::source_location::current()
 #endif
-	);
+			,
+		uint64_t a_expectedEpoch = 0);
 	void RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind a_kind);
 	void ArchiveVRRenderScaleTransitionMetricsLocked(bool a_completed, bool a_superseded, uint32_t a_frame);
 	void RecordVRRenderScaleCoalescedDuplicate();
@@ -3890,7 +3895,8 @@ private:
 	VRVendorResourceResetResult HandleVRDLSSResourceTeardownResult(Streamline::DLSSResourceTeardownResult a_result, uint32_t a_generation, const char* a_lifecycleReason, const char* a_deviceLostContext);
 	void ScheduleVRIntermediateTextureCleanup();
 	void ServiceVRIntermediateTextureCleanup(bool a_forceFence = false);
-	VRVendorResourceResetResult ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources = true, bool a_waitForFSRIdleTeardown = false, bool a_fsrTeardownAlreadyReady = false, bool a_destroySharedResources = true, bool a_preserveVRIntermediateTextures = false, bool a_includePendingFSRReset = true);
+	/** @brief Reports readiness deferral only before this call releases provider or shared resources. */
+	VRVendorResourceResetResult ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources = true, bool a_waitForFSRIdleTeardown = false, bool a_fsrTeardownAlreadyReady = false, bool a_destroySharedResources = true, bool a_preserveVRIntermediateTextures = false, bool a_includePendingFSRReset = true, bool* a_readinessDeferredBeforeRelease = nullptr);
 	VRVendorResourceResetResult RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bool a_recreateTemporalResources);
 	VRRenderScaleHotPresentationContract CaptureVRRenderScaleHotPresentationContractLocked(
 		uint64_t a_compositorCycleToken,

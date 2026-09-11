@@ -25366,9 +25366,11 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 
 		RecordVRRenderScaleTransitionRetry(a_retryKind
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			, "render_target_relatch_requeued", a_retrySource
+			,
+			"render_target_relatch_requeued", a_retrySource
 #endif
-		);
+			,
+			relatchEpoch);
 		SetVRRenderScaleTransitionState(VRRenderScaleTransitionState::WaitingForSafePoint, "render-target relatch retry");
 	};
 	SetVRRenderScaleTransitionState(VRRenderScaleTransitionState::Preparing, "render-target relatch admitted");
@@ -26544,8 +26546,12 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		VRLowPeakNativeRestoreOperation nativeRestoreOperation{};
 		static bool loggedLowPeakNativeRestoreCleanupDefer = false;
 		bool lowPeakNativeRestoreCleanupCompleted = false;
+		bool nativeRestoreCleanupObserved = false;
 		const auto serviceLowPeakNativeRestoreCleanup = [&]() {
 			auto progress = GetVRLowPeakNativeRestoreProgress();
+			nativeRestoreCleanupObserved = nativeRestoreCleanupObserved ||
+			                               (progress.ownerEpoch != 0 &&
+											   progress.phase != VRVendorRelatchPolicy::NativeRestorePhase::Idle);
 			if (progress.ownerEpoch != 0 &&
 				progress.ownerEpoch != relatchEpoch &&
 				progress.phase != VRVendorRelatchPolicy::NativeRestorePhase::Idle) {
@@ -28163,6 +28169,29 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			}
 		};
 		bool fsrTeardownReadyForRelatch = false;
+		const auto canRetryReadinessWithoutSettleGuard = [&](bool a_pendingBeforeRelease) {
+			const auto currentController = GetVRRenderScaleTransitionSnapshot();
+			const auto& metrics = currentController.metrics.current;
+			const auto mutation = GetVRRenderScalePhysicalMutationSnapshot();
+			return VRVendorRelatchPolicy::CanRetryReadinessWithoutSettleGuard({
+				.promotion = {
+					.immutableSettingsTransition = immutableSettingsRelatch,
+					.exactAttemptMetrics = metrics.valid && relatchEpoch != 0 &&
+			                               metrics.transitionEpoch == relatchEpoch &&
+			                               currentController.targetEpoch == relatchEpoch,
+					.retries = metrics.retries,
+					.readinessDeferrals = metrics.readinessDeferrals,
+					.failures = metrics.failures,
+					.recoveryOwned = postLoadRecoveryEpoch != 0 || epochOwnedNativeRestore,
+					.providerNeutralRecovery = providerNeutralNativeRecoveryRequested,
+					.emergencyRecovery = postMutationEmergencyRecoveryAttempt,
+					.presentationDeadlineFallback = presentationDeadlineFallbackRequested,
+				},
+				.pendingBeforeRelease = a_pendingBeforeRelease && !IsSubmitStageDeviceLost(),
+				.physicalMutationStarted = mutation.epoch != 0 || mutation.serializationEpoch != 0 || creatorAdmissionAfterDLSSVendorTeardown || lowPeakNativeRestoreCleanupCompleted || nativeRestoreCleanupObserved || memoryReliefActiveForRelatch,
+				.providerQuarantined = fidelityFX.IsHostFSRStateQuarantined() || fidelityFX.IsRuntimeUpscalerFailureLatched(),
+			});
+		};
 		// Physical target replacement must follow the last FSR frame even when
 		// compatible provider resources survive the transition.
 		const bool drainFSRResourcesBeforeRelatch =
@@ -28194,7 +28223,11 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 						VRVendorRuntimeLifecyclePhase::WaitingForDrain,
 						relatchContractGeneration,
 						"render-target relatch FSR drain");
-					requeueRelatch(lifecyclePollRetryFrames, false, VRRenderScaleRetryKind::Backend);
+					const bool readinessRetry = canRetryReadinessWithoutSettleGuard(true);
+					requeueRelatch(
+						readinessRetry ? VRVendorRelatchPolicy::kReadinessPollRetryFrames : lifecyclePollRetryFrames,
+						false,
+						readinessRetry ? VRRenderScaleRetryKind::PreMutationReadiness : VRRenderScaleRetryKind::Backend);
 				} else {
 					// A terminal drain failure is not made transient by retrying the
 					// same immutable transition. Leave the previous stable profile
@@ -28224,6 +28257,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			return false;
 		const uint64_t retirementSerialBeforeVendorReset =
 			vrIntermediateRetirementLastIssuedSerial.load(std::memory_order_acquire);
+		bool readinessDeferredBeforeRelease = false;
 		const auto vendorResetResult =
 			(creatorAdmissionAfterDLSSVendorTeardown ||
 				lowPeakNativeRestoreCleanupCompleted ||
@@ -28237,7 +28271,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					fsrTeardownReadyForRelatch,
 					!relatchPlan.reuseSharedSubmitResources,
 					relatchPlan.preserveCompatibleFSRIntermediates,
-					!epochOwnedNativeRestore);
+					!epochOwnedNativeRestore,
+					&readinessDeferredBeforeRelease);
 		if (epochOwnedNativeRestore) {
 			const uint64_t retirementSerialAfterVendorReset =
 				vrIntermediateRetirementLastIssuedSerial.load(std::memory_order_acquire);
@@ -28286,7 +28321,11 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			}
 			if (teardownDisposition ==
 				VRVendorRelatchPolicy::NativeRestoreTeardownDisposition::Retry) {
-				requeueRelatch(lifecyclePollRetryFrames, false, VRRenderScaleRetryKind::Backend);
+				const bool readinessRetry = canRetryReadinessWithoutSettleGuard(readinessDeferredBeforeRelease);
+				requeueRelatch(
+					readinessRetry ? VRVendorRelatchPolicy::kReadinessPollRetryFrames : lifecyclePollRetryFrames,
+					false,
+					readinessRetry ? VRRenderScaleRetryKind::PreMutationReadiness : VRRenderScaleRetryKind::Backend);
 			} else if (terminalInactiveFSRFailure) {
 				// The failed FSR allocation remains owned, but a terminal teardown
 				// result cannot become safe through another identical frame retry.
@@ -29125,6 +29164,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					attemptMetrics.valid &&
 					attemptMetrics.transitionEpoch == relatchEpoch,
 				.retries = attemptMetrics.retries,
+				.readinessDeferrals = attemptMetrics.readinessDeferrals,
 				.failures = attemptMetrics.failures,
 				.recoveryOwned = postLoadRecoveryEpoch != 0,
 				.providerNeutralRecovery =
@@ -36908,8 +36948,10 @@ Upscaling::VRVendorResourceResetResult Upscaling::HandleVRDLSSResourceTeardownRe
 	           VRVendorResourceResetResult::Failed;
 }
 
-Upscaling::VRVendorResourceResetResult Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources, bool a_destroySharedResources, bool a_preserveVRIntermediateTextures)
+Upscaling::VRVendorResourceResetResult Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources, bool a_destroySharedResources, bool a_preserveVRIntermediateTextures, bool* a_readinessDeferredBeforeRelease)
 {
+	if (a_readinessDeferredBeforeRelease)
+		*a_readinessDeferredBeforeRelease = false;
 	if (!globals::game::isVR)
 		return VRVendorResourceResetResult::Ready;
 	const uint64_t transitionEpoch = GetVRRenderScaleTransitionSnapshot().targetEpoch;
@@ -36931,6 +36973,8 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRSubmitStageState(bool a
 			streamline.HasDLSSResourcesPendingTeardown();
 #endif
 		const auto dlssTeardownResult = streamline.DestroyDLSSResources();
+		if (a_readinessDeferredBeforeRelease)
+			*a_readinessDeferredBeforeRelease = dlssTeardownResult == Streamline::DLSSResourceTeardownResult::Pending;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (hadDLSSResources &&
 			(dlssTeardownResult == Streamline::DLSSResourceTeardownResult::Ready ||
@@ -37129,8 +37173,10 @@ void Upscaling::ClearVRRenderScaleInfoTransition()
 	++vrRenderScaleTransitionController.revision;
 }
 
-Upscaling::VRVendorResourceResetResult Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources, bool a_waitForFSRIdleTeardown, bool a_fsrTeardownAlreadyReady, bool a_destroySharedResources, bool a_preserveVRIntermediateTextures, bool a_includePendingFSRReset)
+Upscaling::VRVendorResourceResetResult Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources, bool a_waitForFSRIdleTeardown, bool a_fsrTeardownAlreadyReady, bool a_destroySharedResources, bool a_preserveVRIntermediateTextures, bool a_includePendingFSRReset, bool* a_readinessDeferredBeforeRelease)
 {
+	if (a_readinessDeferredBeforeRelease)
+		*a_readinessDeferredBeforeRelease = false;
 	if (!globals::game::isVR)
 		return VRVendorResourceResetResult::Ready;
 
@@ -37168,6 +37214,10 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRVendorRuntimeResources(
 	if (destroyFSRResources && !a_fsrTeardownAlreadyReady)
 		fsrTeardownResult = fidelityFX.PollFSRResourceTeardownReady("VR vendor runtime FSR resource teardown");
 	if (fsrTeardownResult != FidelityFX::LifecycleResult::Ready) {
+		if (a_readinessDeferredBeforeRelease)
+			*a_readinessDeferredBeforeRelease = fsrTeardownResult == FidelityFX::LifecycleResult::Pending &&
+			                                    !fidelityFX.IsHostFSRStateQuarantined() &&
+			                                    !fidelityFX.IsRuntimeUpscalerFailureLatched();
 		HandleFSRLifecycleDeviceLoss(
 			fsrTeardownResult,
 			"VR vendor runtime FSR resource drain");
@@ -37187,7 +37237,8 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRVendorRuntimeResources(
 	const auto submitStageResetResult = ResetVRSubmitStageState(
 		a_destroyDLSSResources,
 		a_destroySharedResources,
-		a_preserveVRIntermediateTextures);
+		a_preserveVRIntermediateTextures,
+		a_readinessDeferredBeforeRelease);
 	if (submitStageResetResult != VRVendorResourceResetResult::Ready)
 		return submitStageResetResult;
 
@@ -53130,6 +53181,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 			{ "pressureDeferrals", a_metrics.pressureDeferrals },
 			{ "retirementDeferrals", a_metrics.retirementDeferrals },
 			{ "backendDeferrals", a_metrics.backendDeferrals },
+			{ "readinessDeferrals", a_metrics.readinessDeferrals },
 			{ "failures", a_metrics.failures },
 			{ "outOfMemoryFailures", a_metrics.outOfMemoryFailures },
 			{ "deviceLostFailures", a_metrics.deviceLostFailures },
@@ -55315,15 +55367,17 @@ void Upscaling::ArchiveVRRenderScaleTransitionMetricsLocked(bool a_completed, bo
 
 void Upscaling::RecordVRRenderScaleTransitionRetry(VRRenderScaleRetryKind a_kind
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	, const char* a_reason, std::source_location a_source
+	,
+	const char* a_reason, std::source_location a_source
 #endif
-)
+	,
+	uint64_t a_expectedEpoch)
 {
 	bool recorded = false;
 	{
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
 		auto& metrics = vrRenderScaleTransitionController.metrics.current;
-		if (!metrics.valid)
+		if (!metrics.valid || (a_expectedEpoch != 0 && metrics.transitionEpoch != a_expectedEpoch))
 			return;
 
 		const auto increment = [](uint32_t& a_value) {
@@ -55340,6 +55394,10 @@ void Upscaling::RecordVRRenderScaleTransitionRetry(VRRenderScaleRetryKind a_kind
 			break;
 		case VRRenderScaleRetryKind::Backend:
 			increment(metrics.backendDeferrals);
+			break;
+		case VRRenderScaleRetryKind::PreMutationReadiness:
+			increment(metrics.backendDeferrals);
+			increment(metrics.readinessDeferrals);
 			break;
 		default:
 			break;

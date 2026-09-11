@@ -1,3 +1,4 @@
+#include "Api/AcceptedDrawService.h"
 #include "Api/EditorDevBenchBridge.h"
 #include "Api/EditorService.h"
 #include "Api/FeatureDevBenchBridge.h"
@@ -193,6 +194,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				CSX::Api::ShaderDevBenchBridge::Install();
 				Deferred::Hooks::Install();
 				Hooks::Install();
+				CSX::Api::RegisterAcceptedDrawService();
 				EngineFix::InstallOnPostPostLoadFixes();
 				FrameAnnotations::OnPostPostLoad();
 

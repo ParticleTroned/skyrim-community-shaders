@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Buffer.h"
+#include "OCUEffectFoveationClient.h"
 
 namespace Util
 {
@@ -52,6 +53,7 @@ public:
 	virtual json CapturePerformanceCostMeasurementState() const override;
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
 	void DrawFoveationSettings();
+	void DrawOCUEffectFoveationSettings();
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
@@ -124,6 +126,7 @@ public:
 		float VRCullDistance = 1500.0f;       // 0 disables VR distance culling
 		float CenterFullResMaskScale = 0.0f;  // runtime cache; SSGI FOV derives this from the shared VR foveation profile
 		bool EnableFoveated = REL::Module::IsVR() ? true : false;
+		bool ExperimentalOCUEffectFoveation = false;
 		bool EnableStereoSync = false;    // VR-only bilateral cross-eye stabilization pass
 		bool UseStereoReproject = false;  // VR-only exact cross-eye transfer for AO/diffuse GI when compatible
 		// visual
@@ -206,6 +209,10 @@ public:
 	STATIC_ASSERT_ALIGNAS_16(SSGICB);
 	eastl::unique_ptr<ConstantBuffer> ssgiCB;
 	SSGICB ssgiCBData{};
+	eastl::unique_ptr<ConstantBuffer> ocuEffectCB;
+	OCUEffectFoveation::Client ocuEffectClient;
+	std::atomic_bool ocuEffectActive{ false };
+	std::atomic<const char*> ocuEffectStatus{ "OCU peripheral sampling disabled" };
 
 	eastl::unique_ptr<Texture2D> texNoise = nullptr;
 	eastl::unique_ptr<Texture2D> texWorkingDepth = nullptr;
@@ -249,6 +256,8 @@ public:
 	winrt::com_ptr<ID3D11ComputeShader> radianceDisoccAOOnlyCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> giCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> giAOOnlyCompute = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> giOCUEffectCompute = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> giAOOnlyOCUEffectCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> giEye0OnlyCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> giAOOnlyEye0OnlyCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> centerGIMaskedCompute = nullptr;

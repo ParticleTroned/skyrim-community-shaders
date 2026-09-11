@@ -1,205 +1,392 @@
-# PR73 readiness measurement comparison, September 11
+# PR73 NVIDIA measurements against PR66
 
-<!-- pr73-readiness-nvidia-comparison-20260911 -->
+<!-- pr73-three-build-pr66-reference-v1 -->
 
-### September 11: readiness correction versus the previous PR73 measurement
+### NVIDIA measurements: PR66 reference, previous PR73, new PR73
 
-**The new PR73 build averaged 790.202 ms per switch versus
-870.905 ms previously: 9.27% lower.**
-Mean full-pass stretch duration changed from 5744.173 to
-5138.086 ms (-10.55%). The prior
-PR73 measurement and its PR66 comparison remain unchanged below.
+**Against PR66, new PR73 averages 790.202 ms per switch versus
+800.231 ms (-1.253%). Mean full-pass stretch duration is
+5138.086 ms versus 4549.605 ms (+12.935%).**
+Previous PR73 remains visible in every table: 870.905 ms per switch
+(+8.832% versus PR66) and 5744.173 ms stretch
+(+26.257% versus PR66).
 
-Previous source: `d9780bb743134d975a561618f8b1cf89f8d20304`.
-New source: `c73bae9a776e67614bba84ee0cecf3d076de259f`.
-Both have main-VR base `ef7c366dd73989b2b87751c0ef975db7c6fd310f`.
-The new run is `renderscale-tuning-nvidia-2026-09-11T05-18-34-649Z`;
-the previous run is `nvidia-20260910T214350263Z`.
+**Every change column uses measured PR66 `a09e1cc77` as its reference.**
+Previous PR73 is `d9780bb74`; new PR73 is `c73bae9a7`. The original
+measurements are preserved as separate columns, including both passes,
+all 33 routes, uncertainty, health, stretch, identity and memory.
 
-Both builds completed 33 + 33 transitions in one process per build.
-Each retains terminal counts 66 PASS / 0 FAIL and Task 2 counts
-66 PASS / 0 FAIL / 0 INCONCLUSIVE. Both passes meet applicable health
-checks, with zero device-loss, OOM, producer-terminal, lifecycle,
-fidelity, vendor-fallback, bounds-fallback, memory-trim and
-retirement-fence failure observations. No recovery apply or replay was used.
+Each build completed 66/66 transitions with terminal 66 PASS / 0 FAIL,
+Task 2 counts 66 PASS / 0 FAIL / 0 INCONCLUSIVE, and applicable health
+MET in both passes. Formal improvement-or-neutral assessment is
+**INCONCLUSIVE**. Scene and toolchain context differ, complete matching
+fixture evidence is unavailable, and no versioned tolerance policy was
+specified. The results are descriptive; they do not establish a causal
+patch effect, significance, steady-state GPU cost or FPS.
 
-Formal improvement-or-neutral assessment remains **INCONCLUSIVE**:
-scene conditions differ, a complete matching fixture fingerprint is
-unavailable, and no versioned tolerance policy was supplied. These are
-descriptive timings, excluding five-second pre-dispatch waits; they do
-not establish significance, steady-state FPS, or a causal patch effect.
-Separate `csx-render-scale-pr-v1` qualification and live SE/AE testing
-remain pending.
+#### Main comparison
 
-#### Three retained measurements
+Each timing first averages identical routes within each pass: 33 for
+completion/presentation/cleanup and 25 applicable relatch boundaries.
+Stretch uses full-pass totals. Mean and sample SE use two ordered pass
+summaries per build. They are not independent experimental replicates.
+All milliseconds exclude the five-second pre-dispatch wait.
 
-PR66 is retained for continuity with the previous comparison. Its main-VR
-base differs from both PR73 builds. Each entry is mean ± sample standard
-error across two ordered pass summaries, not independent replicates.
+| Measurement                  | PR66 mean ±SE     | PR73 previous mean ±SE | PR73 new mean ±SE | Previous change vs PR66 | New change vs PR66  |
+| ---------------------------- | ----------------- | ---------------------- | ----------------- | ----------------------- | ------------------- |
+| Strict completion ms         | 800.231 ±6.895    | 870.905 ±7.792         | 790.202 ±10.254   | +70.674 (+8.832%)       | -10.029 (-1.253%)   |
+| Presentation ready ms        | 673.511 ±0.953    | 737.070 ±3.536         | 666.183 ±10.440   | +63.558 (+9.437%)       | -7.328 (-1.088%)    |
+| Cleanup tail ms              | 102.409 ±5.973    | 108.160 ±10.364        | 100.125 ±0.188    | +5.751 (+5.616%)        | -2.284 (-2.230%)    |
+| Relatch proof ms             | 741.221 ±6.126    | 811.129 ±3.247         | 729.748 ±5.026    | +69.908 (+9.432%)       | -11.473 (-1.548%)   |
+| Strict frames                | 15.197 ±0.106     | 15.288 ±0.167          | 15.288 ±0.258     | +0.091 (+0.598%)        | +0.091 (+0.598%)    |
+| Relatch proof frames         | 13.580 ±0.180     | 13.700 ±0.140          | 13.620 ±0.260     | +0.120 (+0.884%)        | +0.040 (+0.295%)    |
+| Stretch episodes per pass    | 17.500 ±0.500     | 18.500 ±0.500          | 17.000 ±0.000     | +1.000 (+5.714%)        | -0.500 (-2.857%)    |
+| Stretch frames per pass      | 73.500 ±4.500     | 85.500 ±2.500          | 86.000 ±7.000     | +12.000 (+16.327%)      | +12.500 (+17.007%)  |
+| Stretch duration per pass ms | 4549.605 ±406.073 | 5744.173 ±347.342      | 5138.086 ±462.688 | +1194.568 (+26.257%)    | +588.481 (+12.935%) |
 
-| Measurement                  |    PR66 a09e1cc77 | Previous PR73 d9780bb74 | New PR73 c73bae9a7 | New vs previous |
-| ---------------------------- | ----------------: | ----------------------: | -----------------: | --------------: |
-| Strict completion ms         |    800.231 ±6.895 |          870.905 ±7.792 |    790.202 ±10.254 |         -9.267% |
-| Presentation ready ms        |    673.511 ±0.953 |          737.070 ±3.536 |    666.183 ±10.440 |         -9.617% |
-| Cleanup tail ms              |    102.409 ±5.973 |         108.160 ±10.364 |     100.125 ±0.188 |         -7.429% |
-| Relatch proof ms             |    741.221 ±6.126 |          811.129 ±3.247 |     729.748 ±5.026 |        -10.033% |
-| Strict frames                |     15.197 ±0.106 |           15.288 ±0.167 |      15.288 ±0.258 |         +0.000% |
-| Relatch proof frames         |     13.580 ±0.180 |           13.700 ±0.140 |      13.620 ±0.260 |         -0.584% |
-| Stretch episodes per pass    |     17.500 ±0.500 |           18.500 ±0.500 |      17.000 ±0.000 |         -8.108% |
-| Stretch frames per pass      |     73.500 ±4.500 |           85.500 ±2.500 |      86.000 ±7.000 |         +0.585% |
-| Stretch duration per pass ms | 4549.605 ±406.073 |       5744.173 ±347.342 |  5138.086 ±462.688 |        -10.551% |
+#### Each pass remains visible
 
-#### Both passes and stretch history
+| Pass | Metric                    | PR66     | PR73 previous | PR73 new | Previous change vs PR66 | New change vs PR66  |
+| ---- | ------------------------- | -------- | ------------- | -------- | ----------------------- | ------------------- |
+| 1    | Strict mean ms            | 793.336  | 863.112       | 779.947  | +69.776 (+8.795%)       | -13.389 (-1.688%)   |
+| 1    | Strict median ms          | 751.644  | 802.940       | 734.508  | +51.296 (+6.825%)       | -17.135 (-2.280%)   |
+| 1    | Strict p95 ms             | 1389.267 | 1571.075      | 1368.052 | +181.808 (+13.087%)     | -21.215 (-1.527%)   |
+| 1    | Strict maximum ms         | 1856.757 | 1978.488      | 1469.693 | +121.731 (+6.556%)      | -387.064 (-20.846%) |
+| 1    | Mean strict frames        | 15.091   | 15.455        | 15.030   | +0.364 (+2.410%)        | -0.061 (-0.402%)    |
+| 1    | Mean relatch proof ms     | 735.095  | 814.377       | 724.722  | +79.281 (+10.785%)      | -10.373 (-1.411%)   |
+| 1    | Mean relatch proof frames | 13.400   | 13.840        | 13.360   | +0.440 (+3.284%)        | -0.040 (-0.299%)    |
+| 1    | Mean cleanup tail ms      | 96.436   | 97.796        | 99.937   | +1.360 (+1.410%)        | +3.501 (+3.630%)    |
+| 2    | Strict mean ms            | 807.126  | 878.697       | 800.456  | +71.571 (+8.867%)       | -6.670 (-0.826%)    |
+| 2    | Strict median ms          | 771.931  | 828.547       | 781.304  | +56.616 (+7.334%)       | +9.373 (+1.214%)    |
+| 2    | Strict p95 ms             | 1444.193 | 1616.172      | 1478.497 | +171.979 (+11.908%)     | +34.304 (+2.375%)   |
+| 2    | Strict maximum ms         | 1932.147 | 2045.208      | 1520.555 | +113.061 (+5.852%)      | -411.592 (-21.302%) |
+| 2    | Mean strict frames        | 15.303   | 15.121        | 15.545   | -0.182 (-1.188%)        | +0.242 (+1.584%)    |
+| 2    | Mean relatch proof ms     | 747.347  | 807.882       | 734.774  | +60.535 (+8.100%)       | -12.573 (-1.682%)   |
+| 2    | Mean relatch proof frames | 13.760   | 13.560        | 13.880   | -0.200 (-1.453%)        | +0.120 (+0.872%)    |
+| 2    | Mean cleanup tail ms      | 108.382  | 118.524       | 100.313  | +10.142 (+9.358%)       | -8.069 (-7.445%)    |
 
-| Pass | Previous strict mean ms | New strict mean ms |  Change | Previous/new p95 ms | Previous/new max ms | Retries previous/new | Stretch frames previous/new | Stretch ms previous/new |
-| ---- | ----------------------: | -----------------: | ------: | ------------------- | ------------------- | -------------------- | --------------------------- | ----------------------- |
-| 1    |                 863.112 |            779.947 | -9.636% | 1571.075/1368.052   | 1978.488/1469.693   | 10/9                 | 83/79                       | 5396.831/4675.398       |
-| 2    |                 878.697 |            800.456 | -8.904% | 1616.172/1478.497   | 2045.208/1520.555   | 9/10                 | 88/93                       | 6091.515/5600.774       |
+#### Health, retries and recovered stretch
 
-Row 16 is slower in both new passes; all routes
-remain visible below. Stretch milliseconds decrease in both passes, but
-pass 2 stretch frames increase from 88 to 93 and mean strict frames
-increase from 15.121 to 15.545. The longest stretch episode changes
-from 419.555 to 620.308 ms in pass 1, and from 809.540 to 648.801 ms
-in pass 2; exact producer values in the tables and ledger are authoritative.
+Counts cover both complete passes unless pass 1 / pass 2 is stated.
 
-Both builds have 31 selected stretch transitions, all recovered. Full-pass
-episode counts and selected-transition counts cover different windows.
-No active stretch tail remains. Raw fixed-cutoff failures remain
-DIAGNOSTIC_ONLY under imposed settling; the scaled-presentation gate
-against proven native output remains CONTRACT_MISMATCH. Other gates
-remain applicable. Raw failures, reasons, observations and limits are retained.
+| Result                                     | PR66         | PR73 previous | PR73 new     |
+| ------------------------------------------ | ------------ | ------------- | ------------ |
+| Completed / terminal PASS                  | 66 / 66      | 66 / 66       | 66 / 66      |
+| Task 2 PASS / FAIL / INCONCLUSIVE          | 66 / 0 / 0   | 66 / 0 / 0    | 66 / 0 / 0   |
+| Applicable health pass 1 / pass 2          | MET / MET    | MET / MET     | MET / MET    |
+| Producer retries pass 1 / pass 2           | 9 / 10       | 10 / 9        | 9 / 10       |
+| Selected stretch / recovered / unrecovered | 32 / 32 / 0  | 31 / 31 / 0   | 31 / 31 / 0  |
+| Separate protocol recovery applies         | 0            | 0             | 0            |
+| Device loss                                | 0            | 0             | 0            |
+| OOM                                        | 0            | 0             | 0            |
+| Producer terminal failures                 | 0            | 0             | 0            |
+| DLSS lifecycle failures                    | 0            | 0             | 0            |
+| FSR lifecycle failures                     | 0            | 0             | 0            |
+| Memory-trim failures                       | 0            | 0             | 0            |
+| Retirement-fence failures                  | 0            | 0             | 0            |
+| Fidelity mismatch observations             | 0            | 0             | 0            |
+| Vendor-failure stretch-eye observations    | 0            | 0             | 0            |
+| Bounds-mismatch fallback observations      | 0            | 0             | 0            |
+| Vendor-native qualification failures       | 0            | 0             | 0            |
+| Credible liveness timeouts                 | 0            | 0             | 0            |
+| Protocol replays                           | 0            | 0             | 0            |
+| Reporting                                  | COMPLETE     | COMPLETE      | COMPLETE     |
+| Memory classification                      | inconclusive | inconclusive  | inconclusive |
+
+| Pass | Stretch metric          | PR66     | PR73 previous | PR73 new | Previous change vs PR66 | New change vs PR66  |
+| ---- | ----------------------- | -------- | ------------- | -------- | ----------------------- | ------------------- |
+| 1    | Episodes                | 17.000   | 19.000        | 17.000   | +2.000 (+11.765%)       | +0.000 (+0.000%)    |
+| 1    | Completed frames        | 69.000   | 83.000        | 79.000   | +14.000 (+20.290%)      | +10.000 (+14.493%)  |
+| 1    | Completed milliseconds  | 4143.532 | 5396.831      | 4675.398 | +1253.299 (+30.247%)    | +531.865 (+12.836%) |
+| 1    | Maximum observed frames | 6.000    | 6.000         | 13.000   | +0.000 (+0.000%)        | +7.000 (+116.667%)  |
+| 1    | Longest episode ms      | 376.746  | 419.555       | 620.308  | +42.809 (+11.363%)      | +243.562 (+64.649%) |
+| 1    | Active tail at stop     | false    | false         | false    | n/a; state              | n/a; state          |
+| 2    | Episodes                | 18.000   | 18.000        | 17.000   | +0.000 (+0.000%)        | -1.000 (-5.556%)    |
+| 2    | Completed frames        | 78.000   | 88.000        | 93.000   | +10.000 (+12.821%)      | +15.000 (+19.231%)  |
+| 2    | Completed milliseconds  | 4955.678 | 6091.515      | 5600.774 | +1135.838 (+22.920%)    | +645.097 (+13.017%) |
+| 2    | Maximum observed frames | 6.000    | 13.000        | 13.000   | +7.000 (+116.667%)      | +7.000 (+116.667%)  |
+| 2    | Longest episode ms      | 408.503  | 809.540       | 648.801  | +401.037 (+98.172%)     | +240.298 (+58.824%) |
+| 2    | Active tail at stop     | false    | false         | false    | n/a; state              | n/a; state          |
+
+Raw cumulative acceptance remains false in all six passes. The fixed
+two-frame stretch cutoff is DIAGNOSTIC_ONLY under imposed settling;
+the scaled-presentation gate against proven native-AA output remains
+CONTRACT_MISMATCH. All raw gate results, observed values and limits remain
+in the ledger and detailed comparison. Other gates remain applicable.
+No active tail or incomplete stereo cycle remains at stop. Selected
+transition counts and full-capture episode counts cover different windows.
+
+New PR73 rows 3, 8, 16, 19, 21, 26, 30 are slower than PR66 in both
+passes. The largest higher two-pass route mean is row 18,
+FSR3 Balanced -> FSR3 Performance: 756.014 -> 1114.494 ms
+(+358.480 (+47.417%)). The largest lower route
+mean is row 25, FSR3 Native AA -> DLSS Hoshipa:
+1700.185 -> 1213.551 ms
+(-486.634 (-28.622%)). Lower overall means do not
+establish that every route improved.
 
 <details>
-<summary>Every transition: previous and new PR73 in both passes</summary>
+<summary>Every switch: PR66, previous PR73 and new PR73 mean and SE</summary>
 
-All timings are milliseconds. Retry counts follow route identity.
-All shown terminal render and Task 2 classifications are PASS in both runs.
+All changes below are relative to PR66. Each route has two observations
+per build; per-pass timings follow in the next tables.
 
-| Row | Route                             | Retries P1 old/new | Retries P2 old/new |     P1 old/new ms | P1 delta |     P2 old/new ms | P2 delta |      Old mean ±SE |      New mean ±SE |
-| --- | --------------------------------- | ------------------ | ------------------ | ----------------: | -------: | ----------------: | -------: | ----------------: | ----------------: |
-| 1   | DLSS Hoshipa -> NONE              | 0/0                | 0/0                |   802.940/656.586 | -146.354 |   771.853/697.747 |  -74.106 |   787.397 ±15.543 |   677.167 ±20.580 |
-| 2   | NONE -> TAA                       | 0/0                | 0/0                |   182.563/153.417 |  -29.146 |   197.624/177.483 |  -20.141 |    190.093 ±7.530 |   165.450 ±12.033 |
-| 3   | TAA -> DLAA                       | 0/0                | 0/0                |   245.994/279.702 |  +33.709 |   259.645/257.493 |   -2.152 |    252.820 ±6.826 |   268.598 ±11.105 |
-| 4   | DLAA -> DLSS Hoshipa              | 0/0                | 0/0                |   972.176/865.768 | -106.408 |  1038.109/990.084 |  -48.025 |  1005.142 ±32.967 |   927.926 ±62.158 |
-| 5   | DLSS Hoshipa -> DLSS UQ           | 0/0                | 0/0                | 1248.969/1120.619 | -128.350 |   972.278/987.027 |  +14.749 | 1110.623 ±138.345 |  1053.823 ±66.796 |
-| 6   | DLSS UQ -> DLSS Quality           | 1/1                | 1/1                | 1152.159/1091.192 |  -60.967 | 1257.361/1125.321 | -132.040 |  1204.760 ±52.601 |  1108.257 ±17.064 |
-| 7   | DLSS Quality -> DLSS Balanced     | 1/1                | 1/1                | 1445.305/1271.037 | -174.268 | 1254.924/1148.391 | -106.532 |  1350.114 ±95.191 |  1209.714 ±61.323 |
-| 8   | DLSS Balanced -> DLSS Performance | 1/1                | 1/1                | 1318.676/1301.079 |  -17.596 | 1228.255/1195.793 |  -32.463 |  1273.465 ±45.210 |  1248.436 ±52.643 |
-| 9   | DLSS Performance -> DLSS UP       | 1/1                | 1/1                | 1263.565/1209.841 |  -53.724 | 1432.332/1128.613 | -303.719 |  1347.948 ±84.383 |  1169.227 ±40.614 |
-| 10  | DLSS UP -> DLAA                   | 0/0                | 0/0                |   762.358/734.508 |  -27.849 |   957.865/760.687 | -197.178 |   860.111 ±97.754 |   747.598 ±13.089 |
-| 11  | DLAA -> TAA                       | 0/0                | 0/0                |   474.974/457.950 |  -17.023 |   502.720/425.129 |  -77.591 |   488.847 ±13.873 |   441.540 ±16.411 |
-| 12  | TAA -> NONE                       | 0/0                | 0/0                |   177.775/173.229 |   -4.546 |   217.142/165.307 |  -51.835 |   197.459 ±19.683 |    169.268 ±3.961 |
-| 13  | NONE -> FSR3 Native AA            | 0/0                | 0/0                |   844.424/815.505 |  -28.919 |   643.345/582.542 |  -60.803 |  743.884 ±100.539 |  699.023 ±116.482 |
-| 14  | FSR3 Native AA -> FSR3 Hoshipa    | 1/1                | 1/1                | 1467.444/1279.581 | -187.863 | 1553.553/1370.679 | -182.874 |  1510.499 ±43.054 |  1325.130 ±45.549 |
-| 15  | FSR3 Hoshipa -> FSR3 UQ           | 0/0                | 0/1                |  1137.621/727.243 | -410.378 |  817.940/1256.793 | +438.854 |  977.780 ±159.840 |  992.018 ±264.775 |
-| 16  | FSR3 UQ -> FSR3 Quality           | 0/0                | 0/0                |   816.388/923.933 | +107.545 |   724.718/795.099 |  +70.381 |   770.553 ±45.835 |   859.516 ±64.417 |
-| 17  | FSR3 Quality -> FSR3 Balanced     | 0/0                | 0/0                |   795.401/689.066 | -106.334 |   899.652/844.197 |  -55.455 |   847.526 ±52.125 |   766.632 ±77.565 |
-| 18  | FSR3 Balanced -> FSR3 Performance | 0/0                | 1/1                |   861.596/735.192 | -126.403 | 1570.412/1493.796 |  -76.616 | 1216.004 ±354.408 | 1114.494 ±379.302 |
-| 19  | FSR3 Performance -> FSR3 UP       | 0/1                | 0/0                |  734.869/1220.774 | +485.906 |   828.547/771.313 |  -57.233 |   781.708 ±46.839 |  996.044 ±224.731 |
-| 20  | FSR3 UP -> FSR3 Native AA         | 0/0                | 0/0                |   727.042/713.693 |  -13.349 |   750.567/763.533 |  +12.966 |   738.804 ±11.762 |   738.613 ±24.920 |
-| 21  | FSR3 Native AA -> TAA             | 0/0                | 0/0                |   476.993/481.173 |   +4.180 |   548.025/519.992 |  -28.033 |   512.509 ±35.516 |   500.582 ±19.409 |
-| 22  | TAA -> NONE                       | 0/0                | 0/0                |   167.992/167.496 |   -0.496 |   173.281/182.075 |   +8.794 |    170.637 ±2.645 |    174.786 ±7.290 |
-| 23  | NONE -> DLAA                      | 0/0                | 0/0                |   247.137/246.583 |   -0.553 |   333.987/258.243 |  -75.744 |   290.562 ±43.425 |    252.413 ±5.830 |
-| 24  | DLAA -> FSR3 Native AA            | 1/1                | 0/1                |  1100.556/871.391 | -229.165 |   883.114/830.242 |  -52.871 |  991.835 ±108.721 |   850.817 ±20.574 |
-| 25  | FSR3 Native AA -> DLSS Hoshipa    | 1/1                | 0/0                | 1560.185/1469.693 |  -90.492 |  1198.841/957.409 | -241.432 | 1379.513 ±180.672 | 1213.551 ±256.142 |
-| 26  | DLSS Hoshipa -> FSR3 Hoshipa      | 1/0                | 1/1                |  1587.410/954.918 | -632.492 | 1684.811/1468.298 | -216.514 |  1636.111 ±48.701 | 1211.608 ±256.690 |
-| 27  | FSR3 Hoshipa -> NONE              | 0/0                | 0/0                |   770.143/702.902 |  -67.241 |   879.623/781.304 |  -98.319 |   824.883 ±54.740 |   742.103 ±39.201 |
-| 28  | NONE -> FSR3 UP                   | 0/0                | 0/0                |  1002.200/881.771 | -120.429 |  1077.337/905.797 | -171.540 |  1039.768 ±37.568 |   893.784 ±12.013 |
-| 29  | FSR3 UP -> DLSS UP                | 2/1                | 2/1                | 1978.488/1468.512 | -509.976 | 2045.208/1520.555 | -524.653 |  2011.848 ±33.360 |  1494.534 ±26.021 |
-| 30  | DLSS UP -> TAA                    | 0/0                | 0/0                |   724.710/702.745 |  -21.965 |   782.914/730.674 |  -52.241 |   753.812 ±29.102 |   716.709 ±13.964 |
-| 31  | TAA -> FSR3 Native AA             | 0/0                | 0/0                |   648.718/685.023 |  +36.305 |   661.378/594.050 |  -67.328 |    655.048 ±6.330 |   639.536 ±45.487 |
-| 32  | FSR3 Native AA -> NONE            | 0/0                | 0/0                |   512.205/442.075 |  -70.130 |   538.073/479.112 |  -58.961 |   525.139 ±12.934 |   460.593 ±18.519 |
-| 33  | NONE -> DLAA                      | 0/0                | 0/0                |   273.734/244.053 |  -29.681 |   311.572/250.271 |  -61.300 |   292.653 ±18.919 |    247.162 ±3.109 |
+| Row | Switch                            | PR66 mean ±SE ms  | PR73 previous mean ±SE ms | PR73 new mean ±SE ms | Previous change vs PR66 | New change vs PR66  |
+| --- | --------------------------------- | ----------------- | ------------------------- | -------------------- | ----------------------- | ------------------- |
+| 1   | DLSS Hoshipa -> NONE              | 722.449 ±42.199   | 787.397 ±15.543           | 677.167 ±20.580      | +64.948 (+8.990%)       | -45.282 (-6.268%)   |
+| 2   | NONE -> TAA                       | 168.565 ±0.901    | 190.093 ±7.530            | 165.450 ±12.033      | +21.528 (+12.771%)      | -3.115 (-1.848%)    |
+| 3   | TAA -> DLAA                       | 248.797 ±1.431    | 252.820 ±6.826            | 268.598 ±11.105      | +4.023 (+1.617%)        | +19.801 (+7.959%)   |
+| 4   | DLAA -> DLSS Hoshipa              | 977.697 ±66.171   | 1005.142 ±32.967          | 927.926 ±62.158      | +27.446 (+2.807%)       | -49.771 (-5.091%)   |
+| 5   | DLSS Hoshipa -> DLSS UQ           | 1094.610 ±56.426  | 1110.623 ±138.345         | 1053.823 ±66.796     | +16.013 (+1.463%)       | -40.787 (-3.726%)   |
+| 6   | DLSS UQ -> DLSS Quality           | 1140.792 ±55.647  | 1204.760 ±52.601          | 1108.257 ±17.064     | +63.968 (+5.607%)       | -32.535 (-2.852%)   |
+| 7   | DLSS Quality -> DLSS Balanced     | 1256.953 ±54.410  | 1350.114 ±95.191          | 1209.714 ±61.323     | +93.162 (+7.412%)       | -47.238 (-3.758%)   |
+| 8   | DLSS Balanced -> DLSS Performance | 1229.582 ±38.015  | 1273.465 ±45.210          | 1248.436 ±52.643     | +43.883 (+3.569%)       | +18.854 (+1.533%)   |
+| 9   | DLSS Performance -> DLSS UP       | 1190.332 ±67.252  | 1347.948 ±84.383          | 1169.227 ±40.614     | +157.617 (+13.241%)     | -21.105 (-1.773%)   |
+| 10  | DLSS UP -> DLAA                   | 770.069 ±9.221    | 860.111 ±97.754           | 747.598 ±13.089      | +90.042 (+11.693%)      | -22.471 (-2.918%)   |
+| 11  | DLAA -> TAA                       | 449.437 ±13.799   | 488.847 ±13.873           | 441.540 ±16.411      | +39.410 (+8.769%)       | -7.897 (-1.757%)    |
+| 12  | TAA -> NONE                       | 177.383 ±6.144    | 197.459 ±19.683           | 169.268 ±3.961       | +20.075 (+11.318%)      | -8.115 (-4.575%)    |
+| 13  | NONE -> FSR3 Native AA            | 694.233 ±52.933   | 743.884 ±100.539          | 699.023 ±116.482     | +49.651 (+7.152%)       | +4.790 (+0.690%)    |
+| 14  | FSR3 Native AA -> FSR3 Hoshipa    | 1364.448 ±13.465  | 1510.499 ±43.054          | 1325.130 ±45.549     | +146.050 (+10.704%)     | -39.318 (-2.882%)   |
+| 15  | FSR3 Hoshipa -> FSR3 UQ           | 899.911 ±3.739    | 977.780 ±159.840          | 992.018 ±264.775     | +77.869 (+8.653%)       | +92.107 (+10.235%)  |
+| 16  | FSR3 UQ -> FSR3 Quality           | 717.414 ±14.424   | 770.553 ±45.835           | 859.516 ±64.417      | +53.139 (+7.407%)       | +142.102 (+19.808%) |
+| 17  | FSR3 Quality -> FSR3 Balanced     | 745.684 ±26.247   | 847.526 ±52.125           | 766.632 ±77.565      | +101.842 (+13.658%)     | +20.948 (+2.809%)   |
+| 18  | FSR3 Balanced -> FSR3 Performance | 756.014 ±4.852    | 1216.004 ±354.408         | 1114.494 ±379.302    | +459.990 (+60.844%)     | +358.480 (+47.417%) |
+| 19  | FSR3 Performance -> FSR3 UP       | 754.341 ±27.018   | 781.708 ±46.839           | 996.044 ±224.731     | +27.367 (+3.628%)       | +241.703 (+32.042%) |
+| 20  | FSR3 UP -> FSR3 Native AA         | 908.898 ±169.130  | 738.804 ±11.762           | 738.613 ±24.920      | -170.093 (-18.714%)     | -170.285 (-18.735%) |
+| 21  | FSR3 Native AA -> TAA             | 482.457 ±18.991   | 512.509 ±35.516           | 500.582 ±19.409      | +30.052 (+6.229%)       | +18.126 (+3.757%)   |
+| 22  | TAA -> NONE                       | 170.225 ±0.324    | 170.637 ±2.645            | 174.786 ±7.290       | +0.412 (+0.242%)        | +4.561 (+2.679%)    |
+| 23  | NONE -> DLAA                      | 256.918 ±6.207    | 290.562 ±43.425           | 252.413 ±5.830       | +33.643 (+13.095%)      | -4.505 (-1.754%)    |
+| 24  | DLAA -> FSR3 Native AA            | 1159.057 ±25.603  | 991.835 ±108.721          | 850.817 ±20.574      | -167.222 (-14.427%)     | -308.240 (-26.594%) |
+| 25  | FSR3 Native AA -> DLSS Hoshipa    | 1700.185 ±156.572 | 1379.513 ±180.672         | 1213.551 ±256.142    | -320.672 (-18.861%)     | -486.634 (-28.622%) |
+| 26  | DLSS Hoshipa -> FSR3 Hoshipa      | 917.134 ±15.772   | 1636.111 ±48.701          | 1211.608 ±256.690    | +718.977 (+78.394%)     | +294.474 (+32.108%) |
+| 27  | FSR3 Hoshipa -> NONE              | 785.491 ±33.847   | 824.883 ±54.740           | 742.103 ±39.201      | +39.392 (+5.015%)       | -43.388 (-5.524%)   |
+| 28  | NONE -> FSR3 UP                   | 947.580 ±36.918   | 1039.768 ±37.568          | 893.784 ±12.013      | +92.189 (+9.729%)       | -53.796 (-5.677%)   |
+| 29  | FSR3 UP -> DLSS UP                | 1689.419 ±242.727 | 2011.848 ±33.360          | 1494.534 ±26.021     | +322.429 (+19.085%)     | -194.886 (-11.536%) |
+| 30  | DLSS UP -> TAA                    | 688.825 ±7.789    | 753.812 ±29.102           | 716.709 ±13.964      | +64.987 (+9.435%)       | +27.884 (+4.048%)   |
+| 31  | TAA -> FSR3 Native AA             | 618.945 ±41.551   | 655.048 ±6.330            | 639.536 ±45.487      | +36.102 (+5.833%)       | +20.591 (+3.327%)   |
+| 32  | FSR3 Native AA -> NONE            | 459.127 ±8.772    | 525.139 ±12.934           | 460.593 ±18.519      | +66.012 (+14.378%)      | +1.467 (+0.319%)    |
+| 33  | NONE -> DLAA                      | 264.647 ±11.614   | 292.653 ±18.919           | 247.162 ±3.109       | +28.005 (+10.582%)      | -17.485 (-6.607%)   |
 
 </details>
 
-#### Identity, memory and complete ledger
+<details>
+<summary>Every switch in both passes: completion, relatch and all three builds</summary>
 
-The new physical 28,173,824-byte DLL, adjacent manifest and AIO receipt
-match runtime Build ID
-`d098079db31d3f43d3433ba4023e500774ff1895ee85ea648c726731bc68a31f`.
-Its SHA-256 is
-`9a777935e69bbd3c4d7b6400c7291727d6bec15c65708495fbed6719d0b19581`.
-The previous Build ID remains
-`ac724629b68fbaaceadd64f217d48ad54269165031b984c2c9bb1deb24165f35`.
-Both retain clean Release source and their full compile identities.
-New-run captures are verified inactive and all journal evidence is flushed.
+Relatch is dispatch to the first exact new-generation proof. n.d. is
+inapplicable or unavailable, never zero. All terminal render and Task 2
+classifications are PASS. Triplets are always PR66 / previous PR73 / new PR73.
 
-Memory remains separately inconclusive for both runs. New pass private
-memory deltas are -237.355 / -219.543 MiB; system commit deltas are
--347.191 / -416.984 MiB; DXGI deltas are -750.688 / -174.313 MiB.
-Tracked texture deltas are +263 / +236 and +2402.766 / +2358.765 MiB,
-relative to freshly reset trackers. All six boundaries, pressure,
-ratios and unrounded predicates remain in the complete ledger; these
-measurements do not prove or disprove a leak.
+##### Pass 1
 
-The canonical ledger preserves prior measurements and adds every new
-summary field, transition/pass result, retry reason/wait, health gate,
-memory/resource/profiler field, provenance and comparison delta. Both
-complete summaries/comparisons reconstruct exactly from detail cells;
-each comparison audits all 1,056 paired numeric timing cells. The pinned
-main-VR comparison also remains retained. Raw receipt trees stay local.
+| Row | PR66 strict ms | PR73 previous strict ms | PR73 new strict ms | Previous change vs PR66 | New change vs PR66  | Strict frames PR66 / previous / new | Relatch ms PR66 / previous / new | Relatch frames PR66 / previous / new | Cleanup tail ms PR66 / previous / new |
+| --- | -------------- | ----------------------- | ------------------ | ----------------------- | ------------------- | ----------------------------------- | -------------------------------- | ------------------------------------ | ------------------------------------- |
+| 1   | 680.250        | 802.940                 | 656.586            | +122.691 (+18.036%)     | -23.663 (-3.479%)   | 15.000 / 15.000 / 14.000            | 451.448 / 548.756 / 447.513      | 10.000 / 10.000 / 9.000              | 178.621 / 253.353 / 208.767           |
+| 2   | 169.466        | 182.563                 | 153.417            | +13.097 (+7.728%)       | -16.049 (-9.470%)   | 4.000 / 3.000 / 3.000               | n.d. / n.d. / n.d.               | n.d. / n.d. / n.d.                   | 0.000 / 0.000 / 0.000                 |
+| 3   | 250.227        | 245.994                 | 279.702            | -4.234 (-1.692%)        | +29.475 (+11.779%)  | 3.000 / 3.000 / 4.000               | n.d. / n.d. / n.d.               | n.d. / n.d. / n.d.                   | 0.000 / 0.000 / 0.000                 |
+| 4   | 911.526        | 972.176                 | 865.768            | +60.650 (+6.654%)       | -45.758 (-5.020%)   | 17.000 / 19.000 / 17.000            | 670.423 / 724.070 / 627.653      | 12.000 / 14.000 / 12.000             | 40.280 / 83.844 / 118.537             |
+| 5   | 1151.036       | 1248.969                | 1120.619           | +97.933 (+8.508%)       | -30.417 (-2.643%)   | 17.000 / 17.000 / 18.000            | 904.847 / 984.583 / 873.355      | 12.000 / 12.000 / 13.000             | 123.257 / 136.246 / 82.596            |
+| 6   | 1085.145       | 1152.159                | 1091.192           | +67.014 (+6.176%)       | +6.047 (+0.557%)    | 21.000 / 21.000 / 22.000            | 830.726 / 891.715 / 833.888      | 16.000 / 16.000 / 17.000             | 127.602 / 132.684 / 132.806           |
+| 7   | 1311.362       | 1445.305                | 1271.037           | +133.943 (+10.214%)     | -40.325 (-3.075%)   | 21.000 / 23.000 / 22.000            | 1035.316 / 1165.206 / 1018.191   | 16.000 / 18.000 / 17.000             | 134.973 / 144.887 / 126.116           |
+| 8   | 1267.597       | 1318.676                | 1301.079           | +51.079 (+4.030%)       | +33.482 (+2.641%)   | 21.000 / 21.000 / 22.000            | 996.634 / 1069.725 / 1054.738    | 16.000 / 16.000 / 17.000             | 138.557 / 127.542 / 125.830           |
+| 9   | 1257.584       | 1263.565                | 1209.841           | +5.982 (+0.476%)        | -47.742 (-3.796%)   | 21.000 / 21.000 / 22.000            | 990.309 / 998.537 / 967.714      | 16.000 / 16.000 / 17.000             | 142.827 / 90.287 / 123.616            |
+| 10  | 760.848        | 762.358                 | 734.508            | +1.510 (+0.198%)        | -26.340 (-3.462%)   | 15.000 / 15.000 / 14.000            | 545.917 / 530.409 / 513.422      | 10.000 / 9.000 / 9.000               | 170.268 / 168.055 / 176.294           |
+| 11  | 463.236        | 474.974                 | 457.950            | +11.737 (+2.534%)       | -5.286 (-1.141%)    | 11.000 / 9.000 / 10.000             | 195.942 / 172.897 / 167.174      | 4.000 / 3.000 / 3.000                | 266.049 / 301.070 / 289.946           |
+| 12  | 171.239        | 177.775                 | 173.229            | +6.536 (+3.817%)        | +1.990 (+1.162%)    | 4.000 / 3.000 / 4.000               | n.d. / n.d. / n.d.               | n.d. / n.d. / n.d.                   | 0.000 / 0.000 / 0.000                 |
+| 13  | 747.166        | 844.424                 | 815.505            | +97.257 (+13.017%)      | +68.339 (+9.146%)   | 10.000 / 10.000 / 10.000            | 706.069 / 798.457 / 775.813      | 9.000 / 9.000 / 9.000                | 0.000 / 0.000 / 0.000                 |
+| 14  | 1350.983       | 1467.444                | 1279.581           | +116.461 (+8.620%)      | -71.403 (-5.285%)   | 29.000 / 28.000 / 27.000            | 1133.803 / 1236.707 / 1067.112   | 24.000 / 23.000 / 22.000             | 83.792 / 47.141 / 123.918             |
+| 15  | 903.650        | 1137.621                | 727.243            | +233.970 (+25.892%)     | -176.408 (-19.522%) | 19.000 / 25.000 / 16.000            | 561.661 / 596.158 / 552.085      | 11.000 / 12.000 / 12.000             | 0.000 / 0.000 / 0.000                 |
+| 16  | 731.838        | 816.388                 | 923.933            | +84.551 (+11.553%)      | +192.096 (+26.248%) | 16.000 / 15.000 / 20.000            | 559.842 / 668.735 / 558.886      | 12.000 / 12.000 / 12.000             | 0.000 / 0.000 / 0.000                 |
+| 17  | 719.437        | 795.401                 | 689.066            | +75.964 (+10.559%)      | -30.370 (-4.221%)   | 16.000 / 16.000 / 15.000            | 545.157 / 599.119 / 561.537      | 12.000 / 12.000 / 12.000             | 0.000 / 0.000 / 0.000                 |
+| 18  | 760.866        | 861.596                 | 735.192            | +100.730 (+13.239%)     | -25.673 (-3.374%)   | 16.000 / 16.000 / 16.000            | 584.199 / 667.640 / 568.182      | 12.000 / 12.000 / 12.000             | 0.000 / 0.000 / 0.000                 |
+| 19  | 781.359        | 734.869                 | 1220.774           | -46.490 (-5.950%)       | +439.416 (+56.237%) | 16.000 / 16.000 / 27.000            | 606.125 / 563.838 / 1014.818     | 12.000 / 12.000 / 22.000             | 0.000 / 0.000 / 0.000                 |
+| 20  | 739.768        | 727.042                 | 713.693            | -12.726 (-1.720%)       | -26.075 (-3.525%)   | 15.000 / 15.000 / 15.000            | 477.821 / 490.525 / 474.688      | 10.000 / 10.000 / 10.000             | 208.899 / 174.929 / 238.498           |
+| 21  | 463.465        | 476.993                 | 481.173            | +13.528 (+2.919%)       | +17.708 (+3.821%)   | 11.000 / 11.000 / 11.000            | n.d. / n.d. / n.d.               | n.d. / n.d. / n.d.                   | 257.940 / 272.470 / 275.101           |
+| 22  | 170.549        | 167.992                 | 167.496            | -2.557 (-1.499%)        | -3.053 (-1.790%)    | 4.000 / 4.000 / 4.000               | n.d. / n.d. / n.d.               | n.d. / n.d. / n.d.                   | 0.000 / 0.000 / 0.000                 |
+| 23  | 263.125        | 247.137                 | 246.583            | -15.988 (-6.076%)       | -16.542 (-6.287%)   | 4.000 / 3.000 / 3.000               | n.d. / n.d. / n.d.               | n.d. / n.d. / n.d.                   | 0.000 / 0.000 / 0.000                 |
+| 24  | 1184.660       | 1100.556                | 871.391            | -84.104 (-7.099%)       | -313.269 (-26.444%) | 21.000 / 20.000 / 15.000            | 935.371 / 883.800 / 654.841      | 16.000 / 15.000 / 10.000             | 191.620 / 174.735 / 171.357           |
+| 25  | 1856.757       | 1560.185                | 1469.693           | -296.572 (-15.973%)     | -387.064 (-20.846%) | 34.000 / 29.000 / 28.000            | 1603.945 / 1301.794 / 1219.770   | 29.000 / 24.000 / 23.000             | 128.616 / 130.707 / 126.364           |
+| 26  | 932.906        | 1587.410                | 954.918            | +654.504 (+70.158%)     | +22.012 (+2.359%)   | 18.000 / 28.000 / 18.000            | 721.216 / 1372.103 / 727.532     | 13.000 / 23.000 / 13.000             | 85.433 / 85.375 / 90.981              |
+| 27  | 751.644        | 770.143                 | 702.902            | +18.499 (+2.461%)       | -48.742 (-6.485%)   | 16.000 / 16.000 / 16.000            | 490.102 / 535.230 / 466.149      | 10.000 / 10.000 / 10.000             | 260.734 / 234.663 / 169.372           |
+| 28  | 910.661        | 1002.200                | 881.771            | +91.539 (+10.052%)      | -28.890 (-3.172%)   | 16.000 / 16.000 / 16.000            | 673.450 / 771.843 / 671.509      | 11.000 / 11.000 / 11.000             | 50.538 / 43.188 / 81.917              |
+| 29  | 1446.692       | 1978.488                | 1468.512           | +531.796 (+36.759%)     | +21.820 (+1.508%)   | 28.000 / 34.000 / 28.000            | 1173.442 / 1715.327 / 1189.563   | 23.000 / 29.000 / 23.000             | 137.629 / 136.900 / 141.939           |
+| 30  | 681.036        | 724.710                 | 702.745            | +43.674 (+6.413%)       | +21.710 (+3.188%)   | 15.000 / 15.000 / 14.000            | 445.611 / 467.748 / 469.033      | 10.000 / 9.000 / 9.000               | 188.881 / 188.207 / 233.010           |
+| 31  | 577.394        | 648.718                 | 685.023            | +71.324 (+12.353%)      | +107.629 (+18.641%) | 10.000 / 10.000 / 11.000            | 538.000 / 604.494 / 642.888      | 9.000 / 9.000 / 10.000               | 0.000 / 0.000 / 0.000                 |
+| 32  | 450.355        | 512.205                 | 442.075            | +61.850 (+13.734%)      | -8.280 (-1.839%)    | 11.000 / 10.000 / 10.000            | n.d. / n.d. / n.d.               | n.d. / n.d. / n.d.                   | 265.870 / 300.987 / 260.948           |
+| 33  | 276.262        | 273.734                 | 244.053            | -2.528 (-0.915%)        | -32.209 (-11.659%)  | 3.000 / 3.000 / 4.000               | n.d. / n.d. / n.d.               | n.d. / n.d. / n.d.                   | 0.000 / 0.000 / 0.000                 |
 
-<!-- end pr73-readiness-nvidia-comparison-20260911 -->
+##### Pass 2
 
-# Upscaling switch comparison
+| Row | PR66 strict ms | PR73 previous strict ms | PR73 new strict ms | Previous change vs PR66 | New change vs PR66  | Strict frames PR66 / previous / new | Relatch ms PR66 / previous / new | Relatch frames PR66 / previous / new | Cleanup tail ms PR66 / previous / new |
+| --- | -------------- | ----------------------- | ------------------ | ----------------------- | ------------------- | ----------------------------------- | -------------------------------- | ------------------------------------ | ------------------------------------- |
+| 1   | 764.649        | 771.853                 | 697.747            | +7.205 (+0.942%)        | -66.901 (-8.749%)   | 16.000 / 14.000 / 16.000            | 523.896 / 518.899 / 471.767      | 10.000 / 9.000 / 10.000              | 239.937 / 252.330 / 225.225           |
+| 2   | 167.665        | 197.624                 | 177.483            | +29.959 (+17.868%)      | +9.818 (+5.856%)    | 4.000 / 4.000 / 3.000               | n.d. / n.d. / n.d.               | n.d. / n.d. / n.d.                   | 0.000 / 0.000 / 0.000                 |
+| 3   | 247.366        | 259.645                 | 257.493            | +12.280 (+4.964%)       | +10.127 (+4.094%)   | 3.000 / 3.000 / 3.000               | n.d. / n.d. / n.d.               | n.d. / n.d. / n.d.                   | 0.000 / 0.000 / 0.000                 |
+| 4   | 1043.867       | 1038.109                | 990.084            | -5.758 (-0.552%)        | -53.783 (-5.152%)   | 19.000 / 17.000 / 17.000            | 772.572 / 758.697 / 711.942      | 14.000 / 12.000 / 12.000             | 140.250 / 140.370 / 146.144           |
+| 5   | 1038.184       | 972.278                 | 987.027            | -65.906 (-6.348%)       | -51.157 (-4.928%)   | 19.000 / 18.000 / 18.000            | 761.827 / 712.533 / 716.796      | 14.000 / 13.000 / 13.000             | 140.851 / 129.374 / 135.981           |
+| 6   | 1196.438       | 1257.361                | 1125.321           | +60.922 (+5.092%)       | -71.118 (-5.944%)   | 23.000 / 23.000 / 22.000            | 915.181 / 978.390 / 866.754      | 18.000 / 18.000 / 17.000             | 144.789 / 140.420 / 132.556           |
+| 7   | 1202.543       | 1254.924                | 1148.391           | +52.381 (+4.356%)       | -54.151 (-4.503%)   | 22.000 / 21.000 / 22.000            | 917.597 / 926.545 / 882.602      | 17.000 / 16.000 / 17.000             | 147.564 / 183.454 / 141.234           |
+| 8   | 1191.568       | 1228.255                | 1195.793           | +36.688 (+3.079%)       | +4.225 (+0.355%)    | 22.000 / 21.000 / 23.000            | 896.100 / 942.854 / 917.860      | 17.000 / 16.000 / 18.000             | 153.015 / 155.445 / 136.876           |
+| 9   | 1123.080       | 1432.332                | 1128.613           | +309.252 (+27.536%)     | +5.533 (+0.493%)    | 21.000 / 21.000 / 23.000            | 848.555 / 1114.544 / 879.612     | 16.000 / 16.000 / 18.000             | 140.686 / 159.471 / 126.963           |
+| 10  | 779.290        | 957.865                 | 760.687            | +178.575 (+22.915%)     | -18.603 (-2.387%)   | 14.000 / 14.000 / 16.000            | 558.579 / 647.072 / 543.377      | 9.000 / 9.000 / 10.000               | 174.664 / 223.846 / 169.106           |
+| 11  | 435.637        | 502.720                 | 425.129            | +67.083 (+15.399%)      | -10.508 (-2.412%)   | 10.000 / 10.000 / 10.000            | 162.582 / 203.213 / 164.484      | 3.000 / 4.000 / 3.000                | 272.294 / 298.230 / 259.787           |
+| 12  | 183.527        | 217.142                 | 165.307            | +33.615 (+18.316%)      | -18.220 (-9.928%)   | 3.000 / 4.000 / 3.000               | n.d. / n.d. / n.d.               | n.d. / n.d. / n.d.                   | 0.000 / 0.000 / 0.000                 |
+| 13  | 641.300        | 643.345                 | 582.542            | +2.045 (+0.319%)        | -58.758 (-9.162%)   | 10.000 / 10.000 / 10.000            | 594.114 / 600.892 / 537.261      | 9.000 / 9.000 / 9.000                | 0.000 / 0.000 / 0.000                 |
+| 14  | 1377.913       | 1553.553                | 1370.679           | +175.640 (+12.747%)     | -7.234 (-0.525%)    | 28.000 / 29.000 / 27.000            | 1120.356 / 1291.335 / 1159.519   | 23.000 / 24.000 / 22.000             | 152.101 / 102.740 / 0.000             |
+| 15  | 896.172        | 817.940                 | 1256.793           | -78.232 (-8.730%)       | +360.621 (+40.240%) | 19.000 / 17.000 / 27.000            | 558.729 / 597.518 / 1042.162     | 12.000 / 12.000 / 22.000             | 0.000 / 0.000 / 0.000                 |
+| 16  | 702.990        | 724.718                 | 795.099            | +21.727 (+3.091%)       | +92.108 (+13.102%)  | 16.000 / 15.000 / 17.000            | 568.091 / 590.962 / 559.353      | 12.000 / 12.000 / 12.000             | 0.000 / 0.000 / 0.000                 |
+| 17  | 771.931        | 899.652                 | 844.197            | +127.721 (+16.546%)     | +72.266 (+9.362%)   | 17.000 / 16.000 / 16.000            | 552.657 / 694.932 / 654.882      | 12.000 / 12.000 / 12.000             | 0.000 / 0.000 / 0.000                 |
+| 18  | 751.162        | 1570.412                | 1493.796           | +819.250 (+109.064%)    | +742.634 (+98.865%) | 16.000 / 28.000 / 31.000            | 576.083 / 1249.287 / 1077.834    | 12.000 / 22.000 / 22.000             | 0.000 / 0.000 / 0.000                 |
+| 19  | 727.324        | 828.547                 | 771.313            | +101.223 (+13.917%)     | +43.990 (+6.048%)   | 16.000 / 15.000 / 16.000            | 555.956 / 608.832 / 596.193      | 12.000 / 11.000 / 12.000             | 0.000 / 0.000 / 0.000                 |
+| 20  | 1078.028       | 750.567                 | 763.533            | -327.461 (-30.376%)     | -314.495 (-29.173%) | 21.000 / 15.000 / 14.000            | 853.302 / 500.976 / 508.995      | 16.000 / 10.000 / 9.000              | 176.190 / 249.480 / 203.027           |
+| 21  | 501.448        | 548.025                 | 519.992            | +46.577 (+9.289%)       | +18.544 (+3.698%)   | 10.000 / 10.000 / 11.000            | n.d. / n.d. / n.d.               | n.d. / n.d. / n.d.                   | 298.618 / 293.676 / 297.067           |
+| 22  | 169.901        | 173.281                 | 182.075            | +3.381 (+1.990%)        | +12.175 (+7.166%)   | 4.000 / 4.000 / 4.000               | n.d. / n.d. / n.d.               | n.d. / n.d. / n.d.                   | 0.000 / 0.000 / 0.000                 |
+| 23  | 250.712        | 333.987                 | 258.243            | +83.275 (+33.215%)      | +7.531 (+3.004%)    | 3.000 / 5.000 / 3.000               | n.d. / n.d. / n.d.               | n.d. / n.d. / n.d.                   | 0.000 / 0.000 / 0.000                 |
+| 24  | 1133.454       | 883.114                 | 830.242            | -250.340 (-22.086%)     | -303.211 (-26.751%) | 20.000 / 14.000 / 15.000            | 912.054 / 631.751 / 614.816      | 15.000 / 9.000 / 10.000              | 177.982 / 203.236 / 173.511           |
+| 25  | 1543.613       | 1198.841                | 957.409            | -344.772 (-22.335%)     | -586.205 (-37.976%) | 28.000 / 18.000 / 17.000            | 1279.758 / 901.682 / 700.260     | 23.000 / 13.000 / 12.000             | 134.215 / 154.893 / 131.440           |
+| 26  | 901.361        | 1684.811                | 1468.298           | +783.450 (+86.919%)     | +566.936 (+62.898%) | 17.000 / 29.000 / 28.000            | 675.179 / 1412.734 / 1242.348    | 12.000 / 24.000 / 23.000             | 138.115 / 112.747 / 87.524            |
+| 27  | 819.338        | 879.623                 | 781.304            | +60.285 (+7.358%)       | -38.034 (-4.642%)   | 16.000 / 16.000 / 17.000            | 558.577 / 611.828 / 549.839      | 10.000 / 10.000 / 11.000             | 259.509 / 266.559 / 230.755           |
+| 28  | 984.498        | 1077.337                | 905.797            | +92.839 (+9.430%)       | -78.701 (-7.994%)   | 16.000 / 16.000 / 16.000            | 762.689 / 822.310 / 687.592      | 11.000 / 11.000 / 11.000             | 89.058 / 111.810 / 43.517             |
+| 29  | 1932.147       | 2045.208                | 1520.555           | +113.061 (+5.852%)      | -411.592 (-21.302%) | 34.000 / 34.000 / 28.000            | 1677.335 / 1765.292 / 1235.624   | 29.000 / 29.000 / 23.000             | 87.671 / 146.113 / 156.038            |
+| 30  | 696.614        | 782.914                 | 730.674            | +86.300 (+12.389%)      | +34.059 (+4.889%)   | 15.000 / 15.000 / 16.000            | 464.188 / 499.340 / 503.565      | 9.000 / 9.000 / 10.000               | 231.920 / 282.973 / 226.805           |
+| 31  | 660.497        | 661.378                 | 594.050            | +0.881 (+0.133%)        | -66.447 (-10.060%)  | 10.000 / 10.000 / 10.000            | 617.707 / 614.628 / 543.908      | 9.000 / 9.000 / 9.000                | 0.000 / 0.000 / 0.000                 |
+| 32  | 467.899        | 538.073                 | 479.112            | +70.174 (+14.998%)      | +11.213 (+2.397%)   | 10.000 / 10.000 / 11.000            | n.d. / n.d. / n.d.               | n.d. / n.d. / n.d.                   | 277.163 / 304.106 / 286.758           |
+| 33  | 253.033        | 311.572                 | 250.271            | +58.539 (+23.135%)      | -2.762 (-1.091%)    | 3.000 / 3.000 / 3.000               | n.d. / n.d. / n.d.               | n.d. / n.d. / n.d.                   | 0.000 / 0.000 / 0.000                 |
+
+</details>
+
+<details>
+<summary>Exact builds, packages, memory, evidence and limits: all three measurements</summary>
+
+| Identity               | PR66                                                             | PR73 previous                                                      | PR73 new                                                           |
+| ---------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| Compiled source        | a09e1cc77de098f85e74e6d5bb341dc184f83640                         | d9780bb743134d975a561618f8b1cf89f8d20304                           | c73bae9a776e67614bba84ee0cecf3d076de259f                           |
+| Renderer source/base   | a09e1cc77de098f85e74e6d5bb341dc184f83640                         | d9780bb743134d975a561618f8b1cf89f8d20304                           | c73bae9a776e67614bba84ee0cecf3d076de259f                           |
+| Main-VR base           | bf4ae54a7d49620c41cb32ee9ecfd44657688ead                         | ef7c366dd73989b2b87751c0ef975db7c6fd310f                           | ef7c366dd73989b2b87751c0ef975db7c6fd310f                           |
+| Run ID                 | renderscale-tuning-nvidia-2026-09-10T18-15-33-375Z               | nvidia-20260910T214350263Z                                         | renderscale-tuning-nvidia-2026-09-11T05-18-34-649Z                 |
+| Build ID               | 9b08428afdafd770435b8ec562537cec28d733c94c12bf020914b9461785d757 | ac724629b68fbaaceadd64f217d48ad54269165031b984c2c9bb1deb24165f35   | d098079db31d3f43d3433ba4023e500774ff1895ee85ea648c726731bc68a31f   |
+| DLL SHA-256            | aecc263e8df015df8b6f961b670c9365ae1b911222e2667f99b9941595aa6461 | 53adff3245c00856fa8cf18bfb99ad5c36a832f465d604c96980476198a3c89f   | 9a777935e69bbd3c4d7b6400c7291727d6bec15c65708495fbed6719d0b19581   |
+| DLL size bytes         | 28062720                                                         | 28170752                                                           | 28173824                                                           |
+| AIO archive            | CSX-main-VR-bf4ae54a7-PR66-a09e1cc77-DevBench-AIO.7z             | CSX_AIO-3.19-VR-mainVR-ef7c366d-PR73-d9780bb7-DevBench-no-cache.7z | CSX_AIO-3.19-VR-mainVR-ef7c366d-PR73-c73bae9a-DevBench-no-cache.7z |
+| AIO archive SHA-256    | 23ff48b205ef8cd2c6242bfb6f456715a0eb8a88b22fe2e6e4393145ac204d2b | be2a53af9c31b78081f63dd7df95be7b75bebb35e4cef458aed0952b09fd42f4   | 99415f28e954605af644d29d373172bafc5d5c42c5dde595cfec6b34364c3b0a   |
+| AIO archive size bytes | 77330198                                                         | 89079735                                                           | 89652569                                                           |
+| Configuration          | Release; clean source; DevBench ON; no FOMOD/cache               | Release; clean source; DevBench ON; no FOMOD/cache                 | Release; clean source; DevBench ON; no FOMOD/cache                 |
+| CPU compiler           | 19.51.36252.0                                                    | 19.51.36252.0                                                      | 19.51.36252.0                                                      |
+| Shader compiler        | d3dcompiler_47.dll:10.0.26100.9444                               | d3dcompiler_47.dll:10.0.26100.9444                                 | d3dcompiler_47.dll:10.0.26100.9444                                 |
+| Evidence/reporting     | COMPLETE                                                         | COMPLETE                                                           | COMPLETE                                                           |
+
+PR66 is the same measured integration build used by the original PR73
+comparison; its main-VR base differs from both PR73 builds. All three runs
+used Dragonsreach, DLSS K, explicit FSR3, foveation 0.3/0.3/0.7,
+five-second pre-dispatch pacing and a 20-second strict deadline.
+Scene/toolchain context differs. Driver, power, headset refresh and full
+modlist/cache equivalence are not established. Both comparisons to PR66
+remain formally INCONCLUSIVE. Fresh resolved GPU evidence does not
+establish a steady-state GPU/FPS comparison.
+
+Memory values below are end minus start per pass; counts are textures,
+all other quantities are MiB. Differences in the last two columns are
+relative to PR66's growth in the same pass, not relative to previous PR73.
+
+| Metric                   | Pass | PR66     | PR73 previous | PR73 new | Previous minus PR66 | New minus PR66 |
+| ------------------------ | ---- | -------- | ------------- | -------- | ------------------- | -------------- |
+| Process private MiB      | 1    | -114.105 | -234.930      | -237.355 | -120.824            | -123.250       |
+| System commit MiB        | 1    | -101.223 | -819.988      | -347.191 | -718.766            | -245.969       |
+| DXGI usage MiB           | 1    | -674.609 | -611.203      | -750.688 | 63.406              | -76.078        |
+| Tracked live textures    | 1    | 256.000  | 241.000       | 263.000  | -15.000             | 7.000          |
+| Tracked live texture MiB | 1    | 2424.026 | 2375.922      | 2402.766 | -48.104             | -21.260        |
+| Process private MiB      | 2    | -213.449 | -225.910      | -219.543 | -12.461             | -6.094         |
+| System commit MiB        | 2    | 40.145   | 351.215       | -416.984 | 311.070             | -457.129       |
+| DXGI usage MiB           | 2    | -323.090 | -294.102      | -174.312 | 28.988              | 148.777        |
+| Tracked live textures    | 2    | 233.000  | 233.000       | 236.000  | 0.000               | 3.000          |
+| Tracked live texture MiB | 2    | 2349.432 | 2349.432      | 2358.765 | 0.000               | 9.333          |
+
+All three memory classifications are inconclusive. Trackers reset at each
+pass start; their deltas do not establish retention or a leak. All six
+memory boundaries per run, cooldown, pressure, ratios and exact predicate
+inputs remain in the complete ledger. Neither memory classification nor
+normal final pressure proves or disproves a leak.
+
+Physical DLLs, adjacent manifests and AIO receipts match all three runtime
+producers. Owned captures are verified inactive and journals fully flushed.
+The ledger retains complete summaries, per-pass/per-transition results,
+retry causes and waits, counters, gates, resource/profiler details and all
+comparisons. Existing historical cells remain unchanged. Exact repeated
+JSON subtrees may refer to existing ledger detail cells by run ID, metric
+and JSON Pointer; resolving those references reconstructs every new
+comparison field exactly. Numeric timing rows remain ordinary numbers.
+This keeps full evidence available without duplicating existing records.
+
+The new PR66 comparison passes the 1,056-cell timing audit. Complete
+summary and comparison reconstruction is validated separately. Raw evidence
+trees remain local. This update reuses retained measurements; it does not
+rerun the game. Separate `csx-render-scale-pr-v1` qualification and live
+SE/AE scenarios remain pending.
+
+</details>
+
+Published reports: [complete current comparison](pr73-readiness-nvidia-comparison-20260911.md),
+[preserved original PR66/PR73 report](pr73-vs-pr66-nvidia-comparison-20260910.md), and
+[canonical ledger](vr-render-scale-comparison-ledger.csv).
+
+<!-- end pr73-three-build-pr66-reference-v1 -->
+
+## Full retained new-PR73 versus PR66 analysis
 
 Change assessment: **INCONCLUSIVE**. Test execution remains **COMPLETE / COMPLETE** (baseline/candidate).
 
 This assessment describes whether the change meets the improvement-or-neutral standard. It does not rewrite terminal results or mark a completed test as failed. PR inclusion is the user's decision.
 
-| Identity                | Baseline                                                                                | Candidate                                                                                                       |
-| ----------------------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| Run                     | nvidia-20260910T214350263Z                                                              | renderscale-tuning-nvidia-2026-09-11T05-18-34-649Z                                                              |
-| Renderer base           | d9780bb743134d975a561618f8b1cf89f8d20304                                                | c73bae9a776e67614bba84ee0cecf3d076de259f                                                                        |
-| Main-VR base/equivalent | ef7c366dd73989b2b87751c0ef975db7c6fd310f                                                | ef7c366dd73989b2b87751c0ef975db7c6fd310f                                                                        |
-| Compiled source         | d9780bb743134d975a561618f8b1cf89f8d20304                                                | c73bae9a776e67614bba84ee0cecf3d076de259f                                                                        |
-| Build ID                | ac724629b68fbaaceadd64f217d48ad54269165031b984c2c9bb1deb24165f35                        | d098079db31d3f43d3433ba4023e500774ff1895ee85ea648c726731bc68a31f                                                |
-| DLL SHA-256             | 53adff3245c00856fa8cf18bfb99ad5c36a832f465d604c96980476198a3c89f                        | 9a777935e69bbd3c4d7b6400c7291727d6bec15c65708495fbed6719d0b19581                                                |
-| Evidence root           | C:\src\skyrim-community-shaders\artifacts\renderscale-tuning\nvidia-20260910T214350263Z | C:\src\skyrim-community-shaders\artifacts\renderscale-tuning\renderscale-tuning-nvidia-2026-09-11T05-18-34-649Z |
+| Identity                | Baseline                                                                                                        | Candidate                                                                                                       |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Run                     | renderscale-tuning-nvidia-2026-09-10T18-15-33-375Z                                                              | renderscale-tuning-nvidia-2026-09-11T05-18-34-649Z                                                              |
+| Renderer base           | a09e1cc77de098f85e74e6d5bb341dc184f83640                                                                        | c73bae9a776e67614bba84ee0cecf3d076de259f                                                                        |
+| Main-VR base/equivalent | bf4ae54a7d49620c41cb32ee9ecfd44657688ead                                                                        | ef7c366dd73989b2b87751c0ef975db7c6fd310f                                                                        |
+| Compiled source         | a09e1cc77de098f85e74e6d5bb341dc184f83640                                                                        | c73bae9a776e67614bba84ee0cecf3d076de259f                                                                        |
+| Build ID                | 9b08428afdafd770435b8ec562537cec28d733c94c12bf020914b9461785d757                                                | d098079db31d3f43d3433ba4023e500774ff1895ee85ea648c726731bc68a31f                                                |
+| DLL SHA-256             | aecc263e8df015df8b6f961b670c9365ae1b911222e2667f99b9941595aa6461                                                | 9a777935e69bbd3c4d7b6400c7291727d6bec15c65708495fbed6719d0b19581                                                |
+| Evidence root           | C:\src\skyrim-community-shaders\artifacts\renderscale-tuning\renderscale-tuning-nvidia-2026-09-10T18-15-33-375Z | C:\src\skyrim-community-shaders\artifacts\renderscale-tuning\renderscale-tuning-nvidia-2026-09-11T05-18-34-649Z |
 
-Assessment limits: retained_context_not_matched:scene; matching_fixture_fingerprint_unavailable; explicit_versioned_tolerance_policy_missing.
+Assessment limits: retained_context_not_matched:scene; retained_context_not_matched:toolchain; matching_fixture_fingerprint_unavailable; explicit_versioned_tolerance_policy_missing.
 
 ## Per-pass summary
 
 | Lane   | Pass | Rows B/C | Mean ms B/C     | Mean delta % | Retries B/C | Fidelity B/C | Vendor failures B/C | New failure rows | Health standard B/C |
 | ------ | ---- | -------- | --------------- | ------------ | ----------- | ------------ | ------------------- | ---------------- | ------------------- |
-| nvidia | 1    | 33/33    | 863.112/779.947 | -9.636       | 10/9        | 0/0          | 0/0                 | none             | MET/MET             |
-| nvidia | 2    | 33/33    | 878.697/800.456 | -8.904       | 9/10        | 0/0          | 0/0                 | none             | MET/MET             |
+| nvidia | 1    | 33/33    | 793.336/779.947 | -1.688       | 9/9         | 0/0          | 0/0                 | none             | MET/MET             |
+| nvidia | 2    | 33/33    | 807.126/800.456 | -0.826       | 10/10       | 0/0          | 0/0                 | none             | MET/MET             |
 
 ## Side-by-side relatch, completion and stretch summary
 
 Relatch proof is dispatch to the first exact new generation proof. Strict completion includes the remaining qualification/cleanup conditions. Relatch sample counts exclude missing or inapplicable boundaries; neither is replaced with zero. Stretch totals span the full owned pass capture.
 
-| Lane   | Pass | Metric                     | Unit        | Baseline  | Candidate | Delta     | Delta % |
-| ------ | ---- | -------------------------- | ----------- | --------- | --------- | --------- | ------- |
-| nvidia | 1    | Relatch proof mean         | ms          | 814.377   | 724.722   | -89.654   | -11.009 |
-| nvidia | 1    | Relatch proof mean         | frames      | 13.840    | 13.360    | -0.480    | -3.468  |
-| nvidia | 1    | Relatch proof total        | ms          | 20359.413 | 18118.055 | -2241.359 | -11.009 |
-| nvidia | 1    | Relatch proof total        | frames      | 346       | 334       | -12       | -3.468  |
-| nvidia | 1    | Relatch proof samples      | transitions | 25        | 25        | 0         | 0       |
-| nvidia | 1    | Strict completion mean     | ms          | 863.112   | 779.947   | -83.165   | -9.636  |
-| nvidia | 1    | Strict completion mean     | frames      | 15.455    | 15.030    | -0.424    | -2.745  |
-| nvidia | 1    | Strict completion total    | ms          | 28482.708 | 25738.254 | -2744.454 | -9.636  |
-| nvidia | 1    | Strict completion total    | frames      | 510       | 496       | -14       | -2.745  |
-| nvidia | 1    | Stretch completed episodes | episodes    | 19        | 17        | -2        | -10.526 |
-| nvidia | 1    | Stretch completed total    | frames      | 83        | 79        | -4        | -4.819  |
-| nvidia | 1    | Stretch completed total    | ms          | 5396.831  | 4675.398  | -721.434  | -13.368 |
-| nvidia | 1    | Stretch longest episode    | ms          | 419.555   | 620.308   | 200.753   | 47.849  |
-| nvidia | 2    | Relatch proof mean         | ms          | 807.882   | 734.774   | -73.108   | -9.049  |
-| nvidia | 2    | Relatch proof mean         | frames      | 13.560    | 13.880    | 0.320     | 2.360   |
-| nvidia | 2    | Relatch proof total        | ms          | 20197.047 | 18369.345 | -1827.702 | -9.049  |
-| nvidia | 2    | Relatch proof total        | frames      | 339       | 347       | 8         | 2.360   |
-| nvidia | 2    | Relatch proof samples      | transitions | 25        | 25        | 0         | 0       |
-| nvidia | 2    | Strict completion mean     | ms          | 878.697   | 800.456   | -78.241   | -8.904  |
-| nvidia | 2    | Strict completion mean     | frames      | 15.121    | 15.545    | 0.424     | 2.806   |
-| nvidia | 2    | Strict completion total    | ms          | 28997.004 | 26415.048 | -2581.956 | -8.904  |
-| nvidia | 2    | Strict completion total    | frames      | 499       | 513       | 14        | 2.806   |
-| nvidia | 2    | Stretch completed episodes | episodes    | 18        | 17        | -1        | -5.556  |
-| nvidia | 2    | Stretch completed total    | frames      | 88        | 93        | 5         | 5.682   |
-| nvidia | 2    | Stretch completed total    | ms          | 6091.515  | 5600.774  | -490.741  | -8.056  |
-| nvidia | 2    | Stretch longest episode    | ms          | 809.540   | 648.801   | -160.739  | -19.856 |
+| Lane   | Pass | Metric                     | Unit        | Baseline  | Candidate | Delta    | Delta % |
+| ------ | ---- | -------------------------- | ----------- | --------- | --------- | -------- | ------- |
+| nvidia | 1    | Relatch proof mean         | ms          | 735.095   | 724.722   | -10.373  | -1.411  |
+| nvidia | 1    | Relatch proof mean         | frames      | 13.400    | 13.360    | -0.040   | -0.299  |
+| nvidia | 1    | Relatch proof total        | ms          | 18377.376 | 18118.055 | -259.321 | -1.411  |
+| nvidia | 1    | Relatch proof total        | frames      | 335       | 334       | -1       | -0.299  |
+| nvidia | 1    | Relatch proof samples      | transitions | 25        | 25        | 0        | 0       |
+| nvidia | 1    | Strict completion mean     | ms          | 793.336   | 779.947   | -13.389  | -1.688  |
+| nvidia | 1    | Strict completion mean     | frames      | 15.091    | 15.030    | -0.061   | -0.402  |
+| nvidia | 1    | Strict completion total    | ms          | 26180.089 | 25738.254 | -441.836 | -1.688  |
+| nvidia | 1    | Strict completion total    | frames      | 498       | 496       | -2       | -0.402  |
+| nvidia | 1    | Stretch completed episodes | episodes    | 17        | 17        | 0        | 0       |
+| nvidia | 1    | Stretch completed total    | frames      | 69        | 79        | 10       | 14.493  |
+| nvidia | 1    | Stretch completed total    | ms          | 4143.532  | 4675.398  | 531.865  | 12.836  |
+| nvidia | 1    | Stretch longest episode    | ms          | 376.746   | 620.308   | 243.563  | 64.649  |
+| nvidia | 2    | Relatch proof mean         | ms          | 747.347   | 734.774   | -12.573  | -1.682  |
+| nvidia | 2    | Relatch proof mean         | frames      | 13.760    | 13.880    | 0.120    | 0.872   |
+| nvidia | 2    | Relatch proof total        | ms          | 18683.664 | 18369.345 | -314.319 | -1.682  |
+| nvidia | 2    | Relatch proof total        | frames      | 344       | 347       | 3        | 0.872   |
+| nvidia | 2    | Relatch proof samples      | transitions | 25        | 25        | 0        | 0       |
+| nvidia | 2    | Strict completion mean     | ms          | 807.126   | 800.456   | -6.670   | -0.826  |
+| nvidia | 2    | Strict completion mean     | frames      | 15.303    | 15.545    | 0.242    | 1.584   |
+| nvidia | 2    | Strict completion total    | ms          | 26635.148 | 26415.048 | -220.100 | -0.826  |
+| nvidia | 2    | Strict completion total    | frames      | 505       | 513       | 8        | 1.584   |
+| nvidia | 2    | Stretch completed episodes | episodes    | 18        | 17        | -1       | -5.556  |
+| nvidia | 2    | Stretch completed total    | frames      | 78        | 93        | 15       | 19.231  |
+| nvidia | 2    | Stretch completed total    | ms          | 4955.678  | 5600.774  | 645.097  | 13.017  |
+| nvidia | 2    | Stretch longest episode    | ms          | 408.503   | 648.801   | 240.298  | 58.824  |
 
 ## nvidia:1
 
@@ -207,147 +394,147 @@ B/C cells are baseline/candidate; times are ms excluding the pre-dispatch wait. 
 
 | Row | Switch                      | Strict B/C          | Delta ms | Delta % | Retries B/C | F/V B -> C | Pair    |
 | --- | --------------------------- | ------------------- | -------- | ------- | ----------- | ---------- | ------- |
-| 1   | DLSS Hoshipa -> NONE        | 802.940 / 656.586   | -146.354 | -18.227 | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 2   | NONE -> TAA                 | 182.563 / 153.417   | -29.146  | -15.965 | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 3   | TAA -> DLAA                 | 245.994 / 279.702   | 33.709   | 13.703  | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 4   | DLAA -> DLSS Hoshipa        | 972.176 / 865.768   | -106.408 | -10.945 | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 5   | DLSS Hoshipa -> DLSS UQ     | 1248.969 / 1120.619 | -128.350 | -10.276 | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 6   | DLSS UQ -> DLSS Q           | 1152.159 / 1091.192 | -60.967  | -5.292  | 1/1         | 0/0 -> 0/0 | MATCHED |
-| 7   | DLSS Q -> DLSS Bal          | 1445.305 / 1271.037 | -174.268 | -12.057 | 1/1         | 0/0 -> 0/0 | MATCHED |
-| 8   | DLSS Bal -> DLSS Perf       | 1318.676 / 1301.079 | -17.596  | -1.334  | 1/1         | 0/0 -> 0/0 | MATCHED |
-| 9   | DLSS Perf -> DLSS UP        | 1263.565 / 1209.841 | -53.724  | -4.252  | 1/1         | 0/0 -> 0/0 | MATCHED |
-| 10  | DLSS UP -> DLAA             | 762.358 / 734.508   | -27.849  | -3.653  | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 11  | DLAA -> TAA                 | 474.974 / 457.950   | -17.023  | -3.584  | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 12  | TAA -> NONE                 | 177.775 / 173.229   | -4.546   | -2.557  | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 13  | NONE -> FSR AA              | 844.424 / 815.505   | -28.919  | -3.425  | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 14  | FSR AA -> FSR Hoshipa       | 1467.444 / 1279.581 | -187.863 | -12.802 | 1/1         | 0/0 -> 0/0 | MATCHED |
-| 15  | FSR Hoshipa -> FSR UQ       | 1137.621 / 727.243  | -410.378 | -36.073 | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 16  | FSR UQ -> FSR Q             | 816.388 / 923.933   | 107.545  | 13.173  | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 17  | FSR Q -> FSR Bal            | 795.401 / 689.066   | -106.334 | -13.369 | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 18  | FSR Bal -> FSR Perf         | 861.596 / 735.192   | -126.403 | -14.671 | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 19  | FSR Perf -> FSR UP          | 734.869 / 1220.774  | 485.906  | 66.121  | 0/1         | 0/0 -> 0/0 | MATCHED |
-| 20  | FSR UP -> FSR AA            | 727.042 / 713.693   | -13.349  | -1.836  | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 21  | FSR AA -> TAA               | 476.993 / 481.173   | 4.180    | 0.876   | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 22  | TAA -> NONE                 | 167.992 / 167.496   | -0.496   | -0.295  | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 23  | NONE -> DLAA                | 247.137 / 246.583   | -0.553   | -0.224  | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 24  | DLAA -> FSR AA              | 1100.556 / 871.391  | -229.165 | -20.823 | 1/1         | 0/0 -> 0/0 | MATCHED |
-| 25  | FSR AA -> DLSS Hoshipa      | 1560.185 / 1469.693 | -90.492  | -5.800  | 1/1         | 0/0 -> 0/0 | MATCHED |
-| 26  | DLSS Hoshipa -> FSR Hoshipa | 1587.410 / 954.918  | -632.492 | -39.844 | 1/0         | 0/0 -> 0/0 | MATCHED |
-| 27  | FSR Hoshipa -> NONE         | 770.143 / 702.902   | -67.241  | -8.731  | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 28  | NONE -> FSR UP              | 1002.200 / 881.771  | -120.429 | -12.016 | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 29  | FSR UP -> DLSS UP           | 1978.488 / 1468.512 | -509.976 | -25.776 | 2/1         | 0/0 -> 0/0 | MATCHED |
-| 30  | DLSS UP -> TAA              | 724.710 / 702.745   | -21.965  | -3.031  | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 31  | TAA -> FSR AA               | 648.718 / 685.023   | 36.305   | 5.596   | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 32  | FSR AA -> NONE              | 512.205 / 442.075   | -70.130  | -13.692 | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 33  | NONE -> DLAA                | 273.734 / 244.053   | -29.681  | -10.843 | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 1   | DLSS Hoshipa -> NONE        | 680.250 / 656.586   | -23.663  | -3.479  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 2   | NONE -> TAA                 | 169.466 / 153.417   | -16.049  | -9.470  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 3   | TAA -> DLAA                 | 250.227 / 279.702   | 29.475   | 11.779  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 4   | DLAA -> DLSS Hoshipa        | 911.526 / 865.768   | -45.758  | -5.020  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 5   | DLSS Hoshipa -> DLSS UQ     | 1151.036 / 1120.619 | -30.417  | -2.643  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 6   | DLSS UQ -> DLSS Q           | 1085.145 / 1091.192 | 6.047    | 0.557   | 1/1         | 0/0 -> 0/0 | MATCHED |
+| 7   | DLSS Q -> DLSS Bal          | 1311.362 / 1271.037 | -40.325  | -3.075  | 1/1         | 0/0 -> 0/0 | MATCHED |
+| 8   | DLSS Bal -> DLSS Perf       | 1267.597 / 1301.079 | 33.482   | 2.641   | 1/1         | 0/0 -> 0/0 | MATCHED |
+| 9   | DLSS Perf -> DLSS UP        | 1257.584 / 1209.841 | -47.742  | -3.796  | 1/1         | 0/0 -> 0/0 | MATCHED |
+| 10  | DLSS UP -> DLAA             | 760.848 / 734.508   | -26.340  | -3.462  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 11  | DLAA -> TAA                 | 463.236 / 457.950   | -5.286   | -1.141  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 12  | TAA -> NONE                 | 171.239 / 173.229   | 1.990    | 1.162   | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 13  | NONE -> FSR AA              | 747.166 / 815.505   | 68.339   | 9.146   | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 14  | FSR AA -> FSR Hoshipa       | 1350.983 / 1279.581 | -71.403  | -5.285  | 1/1         | 0/0 -> 0/0 | MATCHED |
+| 15  | FSR Hoshipa -> FSR UQ       | 903.650 / 727.243   | -176.408 | -19.522 | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 16  | FSR UQ -> FSR Q             | 731.838 / 923.933   | 192.096  | 26.248  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 17  | FSR Q -> FSR Bal            | 719.437 / 689.066   | -30.370  | -4.221  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 18  | FSR Bal -> FSR Perf         | 760.866 / 735.192   | -25.673  | -3.374  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 19  | FSR Perf -> FSR UP          | 781.359 / 1220.774  | 439.416  | 56.237  | 0/1         | 0/0 -> 0/0 | MATCHED |
+| 20  | FSR UP -> FSR AA            | 739.768 / 713.693   | -26.075  | -3.525  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 21  | FSR AA -> TAA               | 463.465 / 481.173   | 17.708   | 3.821   | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 22  | TAA -> NONE                 | 170.549 / 167.496   | -3.053   | -1.790  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 23  | NONE -> DLAA                | 263.125 / 246.583   | -16.542  | -6.287  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 24  | DLAA -> FSR AA              | 1184.660 / 871.391  | -313.269 | -26.444 | 1/1         | 0/0 -> 0/0 | MATCHED |
+| 25  | FSR AA -> DLSS Hoshipa      | 1856.757 / 1469.693 | -387.064 | -20.846 | 2/1         | 0/0 -> 0/0 | MATCHED |
+| 26  | DLSS Hoshipa -> FSR Hoshipa | 932.906 / 954.918   | 22.012   | 2.359   | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 27  | FSR Hoshipa -> NONE         | 751.644 / 702.902   | -48.742  | -6.485  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 28  | NONE -> FSR UP              | 910.661 / 881.771   | -28.890  | -3.172  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 29  | FSR UP -> DLSS UP           | 1446.692 / 1468.512 | 21.820   | 1.508   | 1/1         | 0/0 -> 0/0 | MATCHED |
+| 30  | DLSS UP -> TAA              | 681.036 / 702.745   | 21.710   | 3.188   | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 31  | TAA -> FSR AA               | 577.394 / 685.023   | 107.629  | 18.641  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 32  | FSR AA -> NONE              | 450.355 / 442.075   | -8.280   | -1.839  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 33  | NONE -> DLAA                | 276.262 / 244.053   | -32.209  | -11.659 | 0/0         | 0/0 -> 0/0 | MATCHED |
 
 | Row | Presentation B/C    | Cleanup B/C         | Cleanup tail B/C  | Phase durations B                                                                                                                                                                                                                                         | Phase durations C                                                                                                                                                                                                                                        |
 | --- | ------------------- | ------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | 549.587 / 447.820   | 802.940 / 656.586   | 253.353 / 208.767 | {"blockedOrPreparationToFirstPhysicalMutationMs":312.0717,"dispatchToBlockedOrPreparationMs":97.5029,"firstNewGenerationToCleanupDrainedMs":254.184,"firstPhysicalMutationToFirstNewGenerationMs":139.1818,"presentationToStrictCompletionMs":253.3529}   | {"blockedOrPreparationToFirstPhysicalMutationMs":2.6563,"dispatchToBlockedOrPreparationMs":335.0722,"firstNewGenerationToCleanupDrainedMs":209.0736,"firstPhysicalMutationToFirstNewGenerationMs":109.7841,"presentationToStrictCompletionMs":208.7666}  |
-| 2   | 182.563 / 153.417   | 182.563 / 153.417   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":92.3404,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                     | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":153.4173,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                   |
-| 3   | 245.994 / 279.702   | 245.994 / 279.702   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":245.9936,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":279.7022,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                   |
-| 4   | 807.611 / 667.767   | 891.455 / 786.303   | 83.844 / 118.537  | {"blockedOrPreparationToFirstPhysicalMutationMs":3.7582,"dispatchToBlockedOrPreparationMs":381.2807,"firstNewGenerationToCleanupDrainedMs":167.3852,"firstPhysicalMutationToFirstNewGenerationMs":339.0311,"presentationToStrictCompletionMs":164.564}    | {"blockedOrPreparationToFirstPhysicalMutationMs":3.0033,"dispatchToBlockedOrPreparationMs":320.4408,"firstNewGenerationToCleanupDrainedMs":158.6505,"firstPhysicalMutationToFirstNewGenerationMs":304.2086,"presentationToStrictCompletionMs":198.0014}  |
-| 5   | 1026.444 / 955.618  | 1162.689 / 1038.214 | 136.246 / 82.596  | {"blockedOrPreparationToFirstPhysicalMutationMs":3.1391,"dispatchToBlockedOrPreparationMs":392.2223,"firstNewGenerationToCleanupDrainedMs":178.1069,"firstPhysicalMutationToFirstNewGenerationMs":589.2212,"presentationToStrictCompletionMs":222.5252}   | {"blockedOrPreparationToFirstPhysicalMutationMs":2.8194,"dispatchToBlockedOrPreparationMs":329.09,"firstNewGenerationToCleanupDrainedMs":164.8594,"firstPhysicalMutationToFirstNewGenerationMs":541.4455,"presentationToStrictCompletionMs":165.0008}    |
-| 6   | 934.609 / 875.191   | 1067.292 / 1007.997 | 132.684 / 132.806 | {"blockedOrPreparationToFirstPhysicalMutationMs":4.5337,"dispatchToBlockedOrPreparationMs":383.5321,"firstNewGenerationToCleanupDrainedMs":175.5771,"firstPhysicalMutationToFirstNewGenerationMs":503.6494,"presentationToStrictCompletionMs":217.5505}   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.2817,"dispatchToBlockedOrPreparationMs":347.7403,"firstNewGenerationToCleanupDrainedMs":174.1092,"firstPhysicalMutationToFirstNewGenerationMs":482.8658,"presentationToStrictCompletionMs":216.0018}  |
-| 7   | 1210.306 / 1060.666 | 1355.192 / 1186.782 | 144.887 / 126.116 | {"blockedOrPreparationToFirstPhysicalMutationMs":4.8268,"dispatchToBlockedOrPreparationMs":401.0507,"firstNewGenerationToCleanupDrainedMs":189.9864,"firstPhysicalMutationToFirstNewGenerationMs":759.3282,"presentationToStrictCompletionMs":234.9993}   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.1464,"dispatchToBlockedOrPreparationMs":341.1366,"firstNewGenerationToCleanupDrainedMs":168.5915,"firstPhysicalMutationToFirstNewGenerationMs":673.9075,"presentationToStrictCompletionMs":210.3715}  |
-| 8   | 1110.512 / 1095.133 | 1238.053 / 1220.963 | 127.542 / 125.830 | {"blockedOrPreparationToFirstPhysicalMutationMs":4.6262,"dispatchToBlockedOrPreparationMs":374.8056,"firstNewGenerationToCleanupDrainedMs":168.328,"firstPhysicalMutationToFirstNewGenerationMs":690.2935,"presentationToStrictCompletionMs":208.1641}    | {"blockedOrPreparationToFirstPhysicalMutationMs":3.2782,"dispatchToBlockedOrPreparationMs":350.8879,"firstNewGenerationToCleanupDrainedMs":166.2255,"firstPhysicalMutationToFirstNewGenerationMs":700.5718,"presentationToStrictCompletionMs":205.9462}  |
-| 9   | 1087.546 / 1006.707 | 1177.833 / 1130.323 | 90.287 / 123.616  | {"blockedOrPreparationToFirstPhysicalMutationMs":3.5079,"dispatchToBlockedOrPreparationMs":343.5565,"firstNewGenerationToCleanupDrainedMs":179.2961,"firstPhysicalMutationToFirstNewGenerationMs":651.4723,"presentationToStrictCompletionMs":176.0199}   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.2557,"dispatchToBlockedOrPreparationMs":335.1845,"firstNewGenerationToCleanupDrainedMs":162.6084,"firstPhysicalMutationToFirstNewGenerationMs":629.2742,"presentationToStrictCompletionMs":203.1347}  |
-| 10  | 594.303 / 558.214   | 762.358 / 734.508   | 168.055 / 176.294 | {"blockedOrPreparationToFirstPhysicalMutationMs":3.2328,"dispatchToBlockedOrPreparationMs":333.0018,"firstNewGenerationToCleanupDrainedMs":231.9483,"firstPhysicalMutationToFirstNewGenerationMs":194.1747,"presentationToStrictCompletionMs":168.0551}   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.5139,"dispatchToBlockedOrPreparationMs":333.0484,"firstNewGenerationToCleanupDrainedMs":221.0865,"firstPhysicalMutationToFirstNewGenerationMs":176.8596,"presentationToStrictCompletionMs":176.2943}  |
-| 11  | 173.903 / 168.004   | 474.974 / 457.950   | 301.070 / 289.946 | {"blockedOrPreparationToFirstPhysicalMutationMs":4.1011,"dispatchToBlockedOrPreparationMs":130.0806,"firstNewGenerationToCleanupDrainedMs":302.0767,"firstPhysicalMutationToFirstNewGenerationMs":38.7151,"presentationToStrictCompletionMs":301.0701}    | {"blockedOrPreparationToFirstPhysicalMutationMs":3.388,"dispatchToBlockedOrPreparationMs":126.0806,"firstNewGenerationToCleanupDrainedMs":290.7759,"firstPhysicalMutationToFirstNewGenerationMs":37.7057,"presentationToStrictCompletionMs":289.9458}    |
-| 12  | 177.775 / 173.229   | 177.775 / 173.229   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":177.7751,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":173.229,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    |
-| 13  | 844.424 / 815.505   | 844.424 / 815.505   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":241.4002,"dispatchToBlockedOrPreparationMs":434.4351,"firstNewGenerationToCleanupDrainedMs":45.9668,"firstPhysicalMutationToFirstNewGenerationMs":122.6216,"presentationToStrictCompletionMs":0}         | {"blockedOrPreparationToFirstPhysicalMutationMs":210.5794,"dispatchToBlockedOrPreparationMs":443.6748,"firstNewGenerationToCleanupDrainedMs":39.6922,"firstPhysicalMutationToFirstNewGenerationMs":121.5584,"presentationToStrictCompletionMs":0}        |
-| 14  | 1372.035 / 1109.697 | 1419.176 / 1233.615 | 47.141 / 123.918  | {"blockedOrPreparationToFirstPhysicalMutationMs":298.7148,"dispatchToBlockedOrPreparationMs":439.3714,"firstNewGenerationToCleanupDrainedMs":182.4697,"firstPhysicalMutationToFirstNewGenerationMs":498.6203,"presentationToStrictCompletionMs":95.4095}  | {"blockedOrPreparationToFirstPhysicalMutationMs":256.5249,"dispatchToBlockedOrPreparationMs":387.052,"firstNewGenerationToCleanupDrainedMs":166.5031,"firstPhysicalMutationToFirstNewGenerationMs":423.5352,"presentationToStrictCompletionMs":169.8841} |
-| 15  | 1137.621 / 727.243  | 637.376 / 591.690   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":5.4656,"dispatchToBlockedOrPreparationMs":374.2975,"firstNewGenerationToCleanupDrainedMs":41.2185,"firstPhysicalMutationToFirstNewGenerationMs":216.3949,"presentationToStrictCompletionMs":0}           | {"blockedOrPreparationToFirstPhysicalMutationMs":4.0031,"dispatchToBlockedOrPreparationMs":352.8401,"firstNewGenerationToCleanupDrainedMs":39.6052,"firstPhysicalMutationToFirstNewGenerationMs":195.2417,"presentationToStrictCompletionMs":0}          |
-| 16  | 816.388 / 923.933   | 717.128 / 600.731   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":5.5924,"dispatchToBlockedOrPreparationMs":407.9993,"firstNewGenerationToCleanupDrainedMs":48.3925,"firstPhysicalMutationToFirstNewGenerationMs":255.1434,"presentationToStrictCompletionMs":0}           | {"blockedOrPreparationToFirstPhysicalMutationMs":4.0463,"dispatchToBlockedOrPreparationMs":335.5841,"firstNewGenerationToCleanupDrainedMs":41.8456,"firstPhysicalMutationToFirstNewGenerationMs":219.2555,"presentationToStrictCompletionMs":0}          |
-| 17  | 795.401 / 689.066   | 644.980 / 603.652   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":5.3619,"dispatchToBlockedOrPreparationMs":361.9918,"firstNewGenerationToCleanupDrainedMs":45.8614,"firstPhysicalMutationToFirstNewGenerationMs":231.7649,"presentationToStrictCompletionMs":0}           | {"blockedOrPreparationToFirstPhysicalMutationMs":4.5866,"dispatchToBlockedOrPreparationMs":368.0976,"firstNewGenerationToCleanupDrainedMs":42.1154,"firstPhysicalMutationToFirstNewGenerationMs":188.8525,"presentationToStrictCompletionMs":0}          |
-| 18  | 861.596 / 735.192   | 713.826 / 607.982   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":5.2232,"dispatchToBlockedOrPreparationMs":443.781,"firstNewGenerationToCleanupDrainedMs":46.186,"firstPhysicalMutationToFirstNewGenerationMs":218.6355,"presentationToStrictCompletionMs":0}             | {"blockedOrPreparationToFirstPhysicalMutationMs":3.943,"dispatchToBlockedOrPreparationMs":363.053,"firstNewGenerationToCleanupDrainedMs":39.7992,"firstPhysicalMutationToFirstNewGenerationMs":201.1864,"presentationToStrictCompletionMs":0}            |
-| 19  | 734.869 / 1220.774  | 604.526 / 1055.203  | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":5.2401,"dispatchToBlockedOrPreparationMs":345.1883,"firstNewGenerationToCleanupDrainedMs":40.6882,"firstPhysicalMutationToFirstNewGenerationMs":213.4096,"presentationToStrictCompletionMs":0}           | {"blockedOrPreparationToFirstPhysicalMutationMs":262.079,"dispatchToBlockedOrPreparationMs":395.007,"firstNewGenerationToCleanupDrainedMs":40.3851,"firstPhysicalMutationToFirstNewGenerationMs":357.732,"presentationToStrictCompletionMs":0}           |
-| 20  | 552.113 / 475.195   | 727.042 / 713.693   | 174.929 / 238.498 | {"blockedOrPreparationToFirstPhysicalMutationMs":4.038,"dispatchToBlockedOrPreparationMs":367.0488,"firstNewGenerationToCleanupDrainedMs":236.5171,"firstPhysicalMutationToFirstNewGenerationMs":119.4382,"presentationToStrictCompletionMs":174.9289}    | {"blockedOrPreparationToFirstPhysicalMutationMs":6.0452,"dispatchToBlockedOrPreparationMs":340.1828,"firstNewGenerationToCleanupDrainedMs":239.0053,"firstPhysicalMutationToFirstNewGenerationMs":128.4599,"presentationToStrictCompletionMs":238.4978}  |
-| 21  | 204.523 / 206.072   | 476.993 / 481.173   | 272.470 / 275.101 | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":123.4185,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":272.4697}             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":137.6313,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":275.1007}            |
-| 22  | 167.992 / 167.496   | 167.992 / 167.496   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":167.9918,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":167.4957,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                   |
-| 23  | 247.137 / 246.583   | 247.137 / 246.583   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":247.1366,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":246.5831,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                   |
-| 24  | 925.821 / 700.034   | 1100.556 / 871.391  | 174.735 / 171.357 | {"blockedOrPreparationToFirstPhysicalMutationMs":288.9222,"dispatchToBlockedOrPreparationMs":452.6056,"firstNewGenerationToCleanupDrainedMs":216.7565,"firstPhysicalMutationToFirstNewGenerationMs":142.2719,"presentationToStrictCompletionMs":174.735}  | {"blockedOrPreparationToFirstPhysicalMutationMs":3.5963,"dispatchToBlockedOrPreparationMs":500.3463,"firstNewGenerationToCleanupDrainedMs":216.5493,"firstPhysicalMutationToFirstNewGenerationMs":150.8989,"presentationToStrictCompletionMs":171.3567}  |
-| 25  | 1344.409 / 1260.391 | 1475.116 / 1386.754 | 130.707 / 126.364 | {"blockedOrPreparationToFirstPhysicalMutationMs":328.1896,"dispatchToBlockedOrPreparationMs":486.4611,"firstNewGenerationToCleanupDrainedMs":173.322,"firstPhysicalMutationToFirstNewGenerationMs":487.1429,"presentationToStrictCompletionMs":215.7761}  | {"blockedOrPreparationToFirstPhysicalMutationMs":324.2224,"dispatchToBlockedOrPreparationMs":405.8027,"firstNewGenerationToCleanupDrainedMs":166.9843,"firstPhysicalMutationToFirstNewGenerationMs":489.745,"presentationToStrictCompletionMs":209.3018} |
-| 26  | 1455.241 / 819.040  | 1540.616 / 910.022  | 85.375 / 90.981   | {"blockedOrPreparationToFirstPhysicalMutationMs":333.2343,"dispatchToBlockedOrPreparationMs":477.0536,"firstNewGenerationToCleanupDrainedMs":168.5136,"firstPhysicalMutationToFirstNewGenerationMs":561.8147,"presentationToStrictCompletionMs":132.1692} | {"blockedOrPreparationToFirstPhysicalMutationMs":4.3084,"dispatchToBlockedOrPreparationMs":374.1965,"firstNewGenerationToCleanupDrainedMs":182.4897,"firstPhysicalMutationToFirstNewGenerationMs":349.0272,"presentationToStrictCompletionMs":135.8773}  |
-| 27  | 535.480 / 533.530   | 770.143 / 702.902   | 234.663 / 169.372 | {"blockedOrPreparationToFirstPhysicalMutationMs":4.5465,"dispatchToBlockedOrPreparationMs":366.8679,"firstNewGenerationToCleanupDrainedMs":234.9134,"firstPhysicalMutationToFirstNewGenerationMs":163.8152,"presentationToStrictCompletionMs":234.6634}   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.4752,"dispatchToBlockedOrPreparationMs":346.9035,"firstNewGenerationToCleanupDrainedMs":236.7528,"firstPhysicalMutationToFirstNewGenerationMs":115.7706,"presentationToStrictCompletionMs":169.372}   |
-| 28  | 914.125 / 755.190   | 957.313 / 837.107   | 43.188 / 81.917   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.7464,"dispatchToBlockedOrPreparationMs":436.0405,"firstNewGenerationToCleanupDrainedMs":185.4704,"firstPhysicalMutationToFirstNewGenerationMs":332.0561,"presentationToStrictCompletionMs":88.0751}    | {"blockedOrPreparationToFirstPhysicalMutationMs":3.3804,"dispatchToBlockedOrPreparationMs":382.759,"firstNewGenerationToCleanupDrainedMs":165.5979,"firstPhysicalMutationToFirstNewGenerationMs":285.3699,"presentationToStrictCompletionMs":126.5807}   |
-| 29  | 1759.497 / 1233.191 | 1896.398 / 1375.130 | 136.900 / 141.939 | {"blockedOrPreparationToFirstPhysicalMutationMs":758.6718,"dispatchToBlockedOrPreparationMs":435.4322,"firstNewGenerationToCleanupDrainedMs":181.0707,"firstPhysicalMutationToFirstNewGenerationMs":521.223,"presentationToStrictCompletionMs":218.9908}  | {"blockedOrPreparationToFirstPhysicalMutationMs":22.6826,"dispatchToBlockedOrPreparationMs":668.5188,"firstNewGenerationToCleanupDrainedMs":185.5666,"firstPhysicalMutationToFirstNewGenerationMs":498.362,"presentationToStrictCompletionMs":235.3212}  |
-| 30  | 536.504 / 469.735   | 724.710 / 702.745   | 188.207 / 233.010 | {"blockedOrPreparationToFirstPhysicalMutationMs":3.8994,"dispatchToBlockedOrPreparationMs":346.1577,"firstNewGenerationToCleanupDrainedMs":256.9617,"firstPhysicalMutationToFirstNewGenerationMs":117.6914,"presentationToStrictCompletionMs":188.2065}   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.1336,"dispatchToBlockedOrPreparationMs":353.8621,"firstNewGenerationToCleanupDrainedMs":233.7121,"firstPhysicalMutationToFirstNewGenerationMs":112.0376,"presentationToStrictCompletionMs":233.0102}  |
-| 31  | 648.718 / 685.023   | 648.718 / 685.023   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":58.2698,"dispatchToBlockedOrPreparationMs":443.9177,"firstNewGenerationToCleanupDrainedMs":44.2242,"firstPhysicalMutationToFirstNewGenerationMs":102.3061,"presentationToStrictCompletionMs":0}          | {"blockedOrPreparationToFirstPhysicalMutationMs":47.443,"dispatchToBlockedOrPreparationMs":406.2882,"firstNewGenerationToCleanupDrainedMs":42.135,"firstPhysicalMutationToFirstNewGenerationMs":189.157,"presentationToStrictCompletionMs":0}            |
-| 32  | 211.218 / 181.126   | 512.205 / 442.075   | 300.987 / 260.948 | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":130.5879,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":300.9867}             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":121.4218,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":260.9483}            |
-| 33  | 273.734 / 244.053   | 273.734 / 244.053   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":273.7338,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":244.0526,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                   |
+| 1   | 501.629 / 447.820   | 680.250 / 656.586   | 178.621 / 208.767 | {"blockedOrPreparationToFirstPhysicalMutationMs":3.4113,"dispatchToBlockedOrPreparationMs":331.8357,"firstNewGenerationToCleanupDrainedMs":228.8014,"firstPhysicalMutationToFirstNewGenerationMs":116.2013,"presentationToStrictCompletionMs":178.6206}   | {"blockedOrPreparationToFirstPhysicalMutationMs":2.6563,"dispatchToBlockedOrPreparationMs":335.0722,"firstNewGenerationToCleanupDrainedMs":209.0736,"firstPhysicalMutationToFirstNewGenerationMs":109.7841,"presentationToStrictCompletionMs":208.7666}  |
+| 2   | 169.466 / 153.417   | 169.466 / 153.417   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":169.466,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                     | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":153.4173,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                   |
+| 3   | 250.227 / 279.702   | 250.227 / 279.702   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":250.2275,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":279.7022,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                   |
+| 4   | 789.446 / 667.767   | 829.726 / 786.303   | 40.280 / 118.537  | {"blockedOrPreparationToFirstPhysicalMutationMs":3.3058,"dispatchToBlockedOrPreparationMs":343.3656,"firstNewGenerationToCleanupDrainedMs":159.3035,"firstPhysicalMutationToFirstNewGenerationMs":323.7512,"presentationToStrictCompletionMs":122.0799}   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.0033,"dispatchToBlockedOrPreparationMs":320.4408,"firstNewGenerationToCleanupDrainedMs":158.6505,"firstPhysicalMutationToFirstNewGenerationMs":304.2086,"presentationToStrictCompletionMs":198.0014}  |
+| 5   | 945.179 / 955.618   | 1068.436 / 1038.214 | 123.257 / 82.596  | {"blockedOrPreparationToFirstPhysicalMutationMs":3.4538,"dispatchToBlockedOrPreparationMs":359.0552,"firstNewGenerationToCleanupDrainedMs":163.5892,"firstPhysicalMutationToFirstNewGenerationMs":542.3382,"presentationToStrictCompletionMs":205.8572}   | {"blockedOrPreparationToFirstPhysicalMutationMs":2.8194,"dispatchToBlockedOrPreparationMs":329.09,"firstNewGenerationToCleanupDrainedMs":164.8594,"firstPhysicalMutationToFirstNewGenerationMs":541.4455,"presentationToStrictCompletionMs":165.0008}    |
+| 6   | 877.562 / 875.191   | 1005.163 / 1007.997 | 127.602 / 132.806 | {"blockedOrPreparationToFirstPhysicalMutationMs":3.9724,"dispatchToBlockedOrPreparationMs":353.8686,"firstNewGenerationToCleanupDrainedMs":174.4377,"firstPhysicalMutationToFirstNewGenerationMs":472.8845,"presentationToStrictCompletionMs":207.5839}   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.2817,"dispatchToBlockedOrPreparationMs":347.7403,"firstNewGenerationToCleanupDrainedMs":174.1092,"firstPhysicalMutationToFirstNewGenerationMs":482.8658,"presentationToStrictCompletionMs":216.0018}  |
+| 7   | 1092.614 / 1060.666 | 1227.587 / 1186.782 | 134.973 / 126.116 | {"blockedOrPreparationToFirstPhysicalMutationMs":3.4825,"dispatchToBlockedOrPreparationMs":365.9809,"firstNewGenerationToCleanupDrainedMs":192.2705,"firstPhysicalMutationToFirstNewGenerationMs":665.8528,"presentationToStrictCompletionMs":218.7486}   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.1464,"dispatchToBlockedOrPreparationMs":341.1366,"firstNewGenerationToCleanupDrainedMs":168.5915,"firstPhysicalMutationToFirstNewGenerationMs":673.9075,"presentationToStrictCompletionMs":210.3715}  |
+| 8   | 1048.367 / 1095.133 | 1186.924 / 1220.963 | 138.557 / 125.830 | {"blockedOrPreparationToFirstPhysicalMutationMs":3.8603,"dispatchToBlockedOrPreparationMs":343.9502,"firstNewGenerationToCleanupDrainedMs":190.2907,"firstPhysicalMutationToFirstNewGenerationMs":648.823,"presentationToStrictCompletionMs":219.2301}    | {"blockedOrPreparationToFirstPhysicalMutationMs":3.2782,"dispatchToBlockedOrPreparationMs":350.8879,"firstNewGenerationToCleanupDrainedMs":166.2255,"firstPhysicalMutationToFirstNewGenerationMs":700.5718,"presentationToStrictCompletionMs":205.9462}  |
+| 9   | 1031.843 / 1006.707 | 1174.671 / 1130.323 | 142.827 / 123.616 | {"blockedOrPreparationToFirstPhysicalMutationMs":3.3977,"dispatchToBlockedOrPreparationMs":360.4948,"firstNewGenerationToCleanupDrainedMs":184.3618,"firstPhysicalMutationToFirstNewGenerationMs":626.4163,"presentationToStrictCompletionMs":225.7405}   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.2557,"dispatchToBlockedOrPreparationMs":335.1845,"firstNewGenerationToCleanupDrainedMs":162.6084,"firstPhysicalMutationToFirstNewGenerationMs":629.2742,"presentationToStrictCompletionMs":203.1347}  |
+| 10  | 590.580 / 558.214   | 760.848 / 734.508   | 170.268 / 176.294 | {"blockedOrPreparationToFirstPhysicalMutationMs":3.5661,"dispatchToBlockedOrPreparationMs":360.7792,"firstNewGenerationToCleanupDrainedMs":214.9309,"firstPhysicalMutationToFirstNewGenerationMs":181.5719,"presentationToStrictCompletionMs":170.2681}   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.5139,"dispatchToBlockedOrPreparationMs":333.0484,"firstNewGenerationToCleanupDrainedMs":221.0865,"firstPhysicalMutationToFirstNewGenerationMs":176.8596,"presentationToStrictCompletionMs":176.2943}  |
+| 11  | 197.187 / 168.004   | 463.236 / 457.950   | 266.049 / 289.946 | {"blockedOrPreparationToFirstPhysicalMutationMs":4.6416,"dispatchToBlockedOrPreparationMs":149.8394,"firstNewGenerationToCleanupDrainedMs":267.2946,"firstPhysicalMutationToFirstNewGenerationMs":41.4606,"presentationToStrictCompletionMs":266.0491}    | {"blockedOrPreparationToFirstPhysicalMutationMs":3.388,"dispatchToBlockedOrPreparationMs":126.0806,"firstNewGenerationToCleanupDrainedMs":290.7759,"firstPhysicalMutationToFirstNewGenerationMs":37.7057,"presentationToStrictCompletionMs":289.9458}    |
+| 12  | 171.239 / 173.229   | 171.239 / 173.229   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":171.239,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                     | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":173.229,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    |
+| 13  | 747.166 / 815.505   | 747.166 / 815.505   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":192.6286,"dispatchToBlockedOrPreparationMs":394.74,"firstNewGenerationToCleanupDrainedMs":41.0968,"firstPhysicalMutationToFirstNewGenerationMs":118.7009,"presentationToStrictCompletionMs":0}           | {"blockedOrPreparationToFirstPhysicalMutationMs":210.5794,"dispatchToBlockedOrPreparationMs":443.6748,"firstNewGenerationToCleanupDrainedMs":39.6922,"firstPhysicalMutationToFirstNewGenerationMs":121.5584,"presentationToStrictCompletionMs":0}        |
+| 14  | 1222.442 / 1109.697 | 1306.234 / 1233.615 | 83.792 / 123.918  | {"blockedOrPreparationToFirstPhysicalMutationMs":260.1297,"dispatchToBlockedOrPreparationMs":447.4412,"firstNewGenerationToCleanupDrainedMs":172.4308,"firstPhysicalMutationToFirstNewGenerationMs":426.2326,"presentationToStrictCompletionMs":128.541}  | {"blockedOrPreparationToFirstPhysicalMutationMs":256.5249,"dispatchToBlockedOrPreparationMs":387.052,"firstNewGenerationToCleanupDrainedMs":166.5031,"firstPhysicalMutationToFirstNewGenerationMs":423.5352,"presentationToStrictCompletionMs":169.8841} |
+| 15  | 903.650 / 727.243   | 561.963 / 591.690   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":4.0595,"dispatchToBlockedOrPreparationMs":360.1568,"firstNewGenerationToCleanupDrainedMs":0.3022,"firstPhysicalMutationToFirstNewGenerationMs":197.4448,"presentationToStrictCompletionMs":0}            | {"blockedOrPreparationToFirstPhysicalMutationMs":4.0031,"dispatchToBlockedOrPreparationMs":352.8401,"firstNewGenerationToCleanupDrainedMs":39.6052,"firstPhysicalMutationToFirstNewGenerationMs":195.2417,"presentationToStrictCompletionMs":0}          |
+| 16  | 731.838 / 923.933   | 602.543 / 600.731   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":4.4262,"dispatchToBlockedOrPreparationMs":343.501,"firstNewGenerationToCleanupDrainedMs":42.7009,"firstPhysicalMutationToFirstNewGenerationMs":211.9146,"presentationToStrictCompletionMs":0}            | {"blockedOrPreparationToFirstPhysicalMutationMs":4.0463,"dispatchToBlockedOrPreparationMs":335.5841,"firstNewGenerationToCleanupDrainedMs":41.8456,"firstPhysicalMutationToFirstNewGenerationMs":219.2555,"presentationToStrictCompletionMs":0}          |
+| 17  | 719.437 / 689.066   | 587.405 / 603.652   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":4.4142,"dispatchToBlockedOrPreparationMs":350.0745,"firstNewGenerationToCleanupDrainedMs":42.2475,"firstPhysicalMutationToFirstNewGenerationMs":190.6686,"presentationToStrictCompletionMs":0}           | {"blockedOrPreparationToFirstPhysicalMutationMs":4.5866,"dispatchToBlockedOrPreparationMs":368.0976,"firstNewGenerationToCleanupDrainedMs":42.1154,"firstPhysicalMutationToFirstNewGenerationMs":188.8525,"presentationToStrictCompletionMs":0}          |
+| 18  | 760.866 / 735.192   | 630.628 / 607.982   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":4.9396,"dispatchToBlockedOrPreparationMs":378.3542,"firstNewGenerationToCleanupDrainedMs":46.4289,"firstPhysicalMutationToFirstNewGenerationMs":200.9055,"presentationToStrictCompletionMs":0}           | {"blockedOrPreparationToFirstPhysicalMutationMs":3.943,"dispatchToBlockedOrPreparationMs":363.053,"firstNewGenerationToCleanupDrainedMs":39.7992,"firstPhysicalMutationToFirstNewGenerationMs":201.1864,"presentationToStrictCompletionMs":0}            |
+| 19  | 781.359 / 1220.774  | 650.456 / 1055.203  | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":5.493,"dispatchToBlockedOrPreparationMs":388.6542,"firstNewGenerationToCleanupDrainedMs":44.3308,"firstPhysicalMutationToFirstNewGenerationMs":211.9777,"presentationToStrictCompletionMs":0}            | {"blockedOrPreparationToFirstPhysicalMutationMs":262.079,"dispatchToBlockedOrPreparationMs":395.007,"firstNewGenerationToCleanupDrainedMs":40.3851,"firstPhysicalMutationToFirstNewGenerationMs":357.732,"presentationToStrictCompletionMs":0}           |
+| 20  | 530.869 / 475.195   | 739.768 / 713.693   | 208.899 / 238.498 | {"blockedOrPreparationToFirstPhysicalMutationMs":4.5574,"dispatchToBlockedOrPreparationMs":341.9606,"firstNewGenerationToCleanupDrainedMs":261.9474,"firstPhysicalMutationToFirstNewGenerationMs":131.3026,"presentationToStrictCompletionMs":208.8989}   | {"blockedOrPreparationToFirstPhysicalMutationMs":6.0452,"dispatchToBlockedOrPreparationMs":340.1828,"firstNewGenerationToCleanupDrainedMs":239.0053,"firstPhysicalMutationToFirstNewGenerationMs":128.4599,"presentationToStrictCompletionMs":238.4978}  |
+| 21  | 205.525 / 206.072   | 463.465 / 481.173   | 257.940 / 275.101 | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":141.074,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":257.9402}              | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":137.6313,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":275.1007}            |
+| 22  | 170.549 / 167.496   | 170.549 / 167.496   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":170.5487,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":167.4957,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                   |
+| 23  | 263.125 / 246.583   | 263.125 / 246.583   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":263.1251,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":246.5831,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                   |
+| 24  | 993.040 / 700.034   | 1184.660 / 871.391  | 191.620 / 171.357 | {"blockedOrPreparationToFirstPhysicalMutationMs":302.0873,"dispatchToBlockedOrPreparationMs":459.3461,"firstNewGenerationToCleanupDrainedMs":249.2883,"firstPhysicalMutationToFirstNewGenerationMs":173.9381,"presentationToStrictCompletionMs":191.6197} | {"blockedOrPreparationToFirstPhysicalMutationMs":3.5963,"dispatchToBlockedOrPreparationMs":500.3463,"firstNewGenerationToCleanupDrainedMs":216.5493,"firstPhysicalMutationToFirstNewGenerationMs":150.8989,"presentationToStrictCompletionMs":171.3567}  |
+| 25  | 1645.743 / 1260.391 | 1774.359 / 1386.754 | 128.616 / 126.364 | {"blockedOrPreparationToFirstPhysicalMutationMs":691.2409,"dispatchToBlockedOrPreparationMs":433.694,"firstNewGenerationToCleanupDrainedMs":170.4138,"firstPhysicalMutationToFirstNewGenerationMs":479.0101,"presentationToStrictCompletionMs":211.0144}  | {"blockedOrPreparationToFirstPhysicalMutationMs":324.2224,"dispatchToBlockedOrPreparationMs":405.8027,"firstNewGenerationToCleanupDrainedMs":166.9843,"firstPhysicalMutationToFirstNewGenerationMs":489.745,"presentationToStrictCompletionMs":209.3018} |
+| 26  | 803.459 / 819.040   | 888.892 / 910.022   | 85.433 / 90.981   | {"blockedOrPreparationToFirstPhysicalMutationMs":4.7511,"dispatchToBlockedOrPreparationMs":381.6439,"firstNewGenerationToCleanupDrainedMs":167.6765,"firstPhysicalMutationToFirstNewGenerationMs":334.8207,"presentationToStrictCompletionMs":129.4467}   | {"blockedOrPreparationToFirstPhysicalMutationMs":4.3084,"dispatchToBlockedOrPreparationMs":374.1965,"firstNewGenerationToCleanupDrainedMs":182.4897,"firstPhysicalMutationToFirstNewGenerationMs":349.0272,"presentationToStrictCompletionMs":135.8773}  |
+| 27  | 490.910 / 533.530   | 751.644 / 702.902   | 260.734 / 169.372 | {"blockedOrPreparationToFirstPhysicalMutationMs":4.59,"dispatchToBlockedOrPreparationMs":345.411,"firstNewGenerationToCleanupDrainedMs":261.5421,"firstPhysicalMutationToFirstNewGenerationMs":140.1008,"presentationToStrictCompletionMs":260.7342}      | {"blockedOrPreparationToFirstPhysicalMutationMs":3.4752,"dispatchToBlockedOrPreparationMs":346.9035,"firstNewGenerationToCleanupDrainedMs":236.7528,"firstPhysicalMutationToFirstNewGenerationMs":115.7706,"presentationToStrictCompletionMs":169.372}   |
+| 28  | 810.416 / 755.190   | 860.954 / 837.107   | 50.538 / 81.917   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.5332,"dispatchToBlockedOrPreparationMs":391.0506,"firstNewGenerationToCleanupDrainedMs":187.5037,"firstPhysicalMutationToFirstNewGenerationMs":278.8664,"presentationToStrictCompletionMs":100.2448}   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.3804,"dispatchToBlockedOrPreparationMs":382.759,"firstNewGenerationToCleanupDrainedMs":165.5979,"firstPhysicalMutationToFirstNewGenerationMs":285.3699,"presentationToStrictCompletionMs":126.5807}   |
+| 29  | 1218.375 / 1233.191 | 1356.004 / 1375.130 | 137.629 / 141.939 | {"blockedOrPreparationToFirstPhysicalMutationMs":292.5704,"dispatchToBlockedOrPreparationMs":402.8201,"firstNewGenerationToCleanupDrainedMs":182.5617,"firstPhysicalMutationToFirstNewGenerationMs":478.0519,"presentationToStrictCompletionMs":228.3174} | {"blockedOrPreparationToFirstPhysicalMutationMs":22.6826,"dispatchToBlockedOrPreparationMs":668.5188,"firstNewGenerationToCleanupDrainedMs":185.5666,"firstPhysicalMutationToFirstNewGenerationMs":498.362,"presentationToStrictCompletionMs":235.3212}  |
+| 30  | 492.154 / 469.735   | 681.036 / 702.745   | 188.881 / 233.010 | {"blockedOrPreparationToFirstPhysicalMutationMs":4.2695,"dispatchToBlockedOrPreparationMs":336.9345,"firstNewGenerationToCleanupDrainedMs":235.4251,"firstPhysicalMutationToFirstNewGenerationMs":104.4067,"presentationToStrictCompletionMs":188.8815}   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.1336,"dispatchToBlockedOrPreparationMs":353.8621,"firstNewGenerationToCleanupDrainedMs":233.7121,"firstPhysicalMutationToFirstNewGenerationMs":112.0376,"presentationToStrictCompletionMs":233.0102}  |
+| 31  | 577.394 / 685.023   | 577.394 / 685.023   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":50.1296,"dispatchToBlockedOrPreparationMs":401.3615,"firstNewGenerationToCleanupDrainedMs":39.3942,"firstPhysicalMutationToFirstNewGenerationMs":86.5087,"presentationToStrictCompletionMs":0}           | {"blockedOrPreparationToFirstPhysicalMutationMs":47.443,"dispatchToBlockedOrPreparationMs":406.2882,"firstNewGenerationToCleanupDrainedMs":42.135,"firstPhysicalMutationToFirstNewGenerationMs":189.157,"presentationToStrictCompletionMs":0}            |
+| 32  | 184.484 / 181.126   | 450.355 / 442.075   | 265.870 / 260.948 | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":123.8185,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":265.8704}             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":121.4218,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":260.9483}            |
+| 33  | 276.262 / 244.053   | 276.262 / 244.053   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":276.2618,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":244.0526,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                   |
 
 | Row | Relatch proof frames B/C | Delta frames | Relatch proof ms B/C | Delta ms | Strict frames B/C | Delta frames |
 | --- | ------------------------ | ------------ | -------------------- | -------- | ----------------- | ------------ |
-| 1   | 10 / 9                   | -1           | 548.756 / 447.513    | -101.244 | 15 / 14           | -1           |
-| 2   | n/a / n/a                | n/a          | n/a / n/a            | n/a      | 3 / 3             | 0            |
+| 1   | 10 / 9                   | -1           | 451.448 / 447.513    | -3.936   | 15 / 14           | -1           |
+| 2   | n/a / n/a                | n/a          | n/a / n/a            | n/a      | 4 / 3             | -1           |
 | 3   | n/a / n/a                | n/a          | n/a / n/a            | n/a      | 3 / 4             | 1            |
-| 4   | 14 / 12                  | -2           | 724.070 / 627.653    | -96.417  | 19 / 17           | -2           |
-| 5   | 12 / 13                  | 1            | 984.583 / 873.355    | -111.228 | 17 / 18           | 1            |
-| 6   | 16 / 17                  | 1            | 891.715 / 833.888    | -57.827  | 21 / 22           | 1            |
-| 7   | 18 / 17                  | -1           | 1165.206 / 1018.191  | -147.015 | 23 / 22           | -1           |
-| 8   | 16 / 17                  | 1            | 1069.725 / 1054.738  | -14.987  | 21 / 22           | 1            |
-| 9   | 16 / 17                  | 1            | 998.537 / 967.714    | -30.822  | 21 / 22           | 1            |
-| 10  | 9 / 9                    | 0            | 530.409 / 513.422    | -16.987  | 15 / 14           | -1           |
-| 11  | 3 / 3                    | 0            | 172.897 / 167.174    | -5.723   | 9 / 10            | 1            |
-| 12  | n/a / n/a                | n/a          | n/a / n/a            | n/a      | 3 / 4             | 1            |
-| 13  | 9 / 9                    | 0            | 798.457 / 775.813    | -22.644  | 10 / 10           | 0            |
-| 14  | 23 / 22                  | -1           | 1236.707 / 1067.112  | -169.594 | 28 / 27           | -1           |
-| 15  | 12 / 12                  | 0            | 596.158 / 552.085    | -44.073  | 25 / 16           | -9           |
-| 16  | 12 / 12                  | 0            | 668.735 / 558.886    | -109.849 | 15 / 20           | 5            |
-| 17  | 12 / 12                  | 0            | 599.119 / 561.537    | -37.582  | 16 / 15           | -1           |
-| 18  | 12 / 12                  | 0            | 667.640 / 568.182    | -99.457  | 16 / 16           | 0            |
-| 19  | 12 / 22                  | 10           | 563.838 / 1014.818   | 450.980  | 16 / 27           | 11           |
-| 20  | 10 / 10                  | 0            | 490.525 / 474.688    | -15.837  | 15 / 15           | 0            |
+| 4   | 12 / 12                  | 0            | 670.423 / 627.653    | -42.770  | 17 / 17           | 0            |
+| 5   | 12 / 13                  | 1            | 904.847 / 873.355    | -31.492  | 17 / 18           | 1            |
+| 6   | 16 / 17                  | 1            | 830.726 / 833.888    | 3.162    | 21 / 22           | 1            |
+| 7   | 16 / 17                  | 1            | 1035.316 / 1018.191  | -17.126  | 21 / 22           | 1            |
+| 8   | 16 / 17                  | 1            | 996.634 / 1054.738   | 58.104   | 21 / 22           | 1            |
+| 9   | 16 / 17                  | 1            | 990.309 / 967.714    | -22.594  | 21 / 22           | 1            |
+| 10  | 10 / 9                   | -1           | 545.917 / 513.422    | -32.495  | 15 / 14           | -1           |
+| 11  | 4 / 3                    | -1           | 195.942 / 167.174    | -28.767  | 11 / 10           | -1           |
+| 12  | n/a / n/a                | n/a          | n/a / n/a            | n/a      | 4 / 4             | 0            |
+| 13  | 9 / 9                    | 0            | 706.069 / 775.813    | 69.743   | 10 / 10           | 0            |
+| 14  | 24 / 22                  | -2           | 1133.803 / 1067.112  | -66.691  | 29 / 27           | -2           |
+| 15  | 11 / 12                  | 1            | 561.661 / 552.085    | -9.576   | 19 / 16           | -3           |
+| 16  | 12 / 12                  | 0            | 559.842 / 558.886    | -0.956   | 16 / 20           | 4            |
+| 17  | 12 / 12                  | 0            | 545.157 / 561.537    | 16.379   | 16 / 15           | -1           |
+| 18  | 12 / 12                  | 0            | 584.199 / 568.182    | -16.017  | 16 / 16           | 0            |
+| 19  | 12 / 22                  | 10           | 606.125 / 1014.818   | 408.693  | 16 / 27           | 11           |
+| 20  | 10 / 10                  | 0            | 477.821 / 474.688    | -3.133   | 15 / 15           | 0            |
 | 21  | n/a / n/a                | n/a          | n/a / n/a            | n/a      | 11 / 11           | 0            |
 | 22  | n/a / n/a                | n/a          | n/a / n/a            | n/a      | 4 / 4             | 0            |
-| 23  | n/a / n/a                | n/a          | n/a / n/a            | n/a      | 3 / 3             | 0            |
-| 24  | 15 / 10                  | -5           | 883.800 / 654.841    | -228.958 | 20 / 15           | -5           |
-| 25  | 24 / 23                  | -1           | 1301.794 / 1219.770  | -82.024  | 29 / 28           | -1           |
-| 26  | 23 / 13                  | -10          | 1372.103 / 727.532   | -644.570 | 28 / 18           | -10          |
-| 27  | 10 / 10                  | 0            | 535.230 / 466.149    | -69.080  | 16 / 16           | 0            |
-| 28  | 11 / 11                  | 0            | 771.843 / 671.509    | -100.334 | 16 / 16           | 0            |
-| 29  | 29 / 23                  | -6           | 1715.327 / 1189.563  | -525.764 | 34 / 28           | -6           |
-| 30  | 9 / 9                    | 0            | 467.748 / 469.033    | 1.285    | 15 / 14           | -1           |
-| 31  | 9 / 10                   | 1            | 604.494 / 642.888    | 38.395   | 10 / 11           | 1            |
-| 32  | n/a / n/a                | n/a          | n/a / n/a            | n/a      | 10 / 10           | 0            |
+| 23  | n/a / n/a                | n/a          | n/a / n/a            | n/a      | 4 / 3             | -1           |
+| 24  | 16 / 10                  | -6           | 935.371 / 654.841    | -280.530 | 21 / 15           | -6           |
+| 25  | 29 / 23                  | -6           | 1603.945 / 1219.770  | -384.175 | 34 / 28           | -6           |
+| 26  | 13 / 13                  | 0            | 721.216 / 727.532    | 6.316    | 18 / 18           | 0            |
+| 27  | 10 / 10                  | 0            | 490.102 / 466.149    | -23.953  | 16 / 16           | 0            |
+| 28  | 11 / 11                  | 0            | 673.450 / 671.509    | -1.941   | 16 / 16           | 0            |
+| 29  | 23 / 23                  | 0            | 1173.442 / 1189.563  | 16.121   | 28 / 28           | 0            |
+| 30  | 10 / 9                   | -1           | 445.611 / 469.033    | 23.423   | 15 / 14           | -1           |
+| 31  | 9 / 10                   | 1            | 538.000 / 642.888    | 104.888  | 10 / 11           | 1            |
+| 32  | n/a / n/a                | n/a          | n/a / n/a            | n/a      | 11 / 10           | -1           |
 | 33  | n/a / n/a                | n/a          | n/a / n/a            | n/a      | 3 / 4             | 1            |
 
-| Row | Stretch episodes B/C | Delta | Stretch frames B/C | Delta | Stretch ms B/C     | Delta ms |
-| --- | -------------------- | ----- | ------------------ | ----- | ------------------ | -------- |
-| 1   | 1 / 1                | 0     | 1 / 1              | 0     | 143.665 / 112.696  | -30.970  |
-| 2   | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
-| 3   | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
-| 4   | 1 / 1                | 0     | 2 / 2              | 0     | 206.027 / 197.994  | -8.033   |
-| 5   | 1 / 1                | 0     | 2 / 2              | 0     | 217.854 / 206.392  | -11.462  |
-| 6   | 1 / 1                | 0     | 6 / 6              | 0     | 366.943 / 380.289  | 13.346   |
-| 7   | 1 / 1                | 0     | 6 / 6              | 0     | 419.555 / 375.718  | -43.837  |
-| 8   | 1 / 1                | 0     | 6 / 6              | 0     | 378.178 / 386.744  | 8.566    |
-| 9   | 1 / 1                | 0     | 6 / 6              | 0     | 385.807 / 373.362  | -12.445  |
-| 10  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
-| 11  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
-| 12  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
-| 13  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
-| 14  | 1 / 1                | 0     | 6 / 6              | 0     | 308.534 / 276.049  | -32.485  |
-| 15  | 1 / 1                | 0     | 3 / 3              | 0     | 139.854 / 139.395  | -0.459   |
-| 16  | 1 / 1                | 0     | 3 / 3              | 0     | 162.321 / 156.803  | -5.518   |
-| 17  | 1 / 1                | 0     | 3 / 3              | 0     | 177.140 / 139.603  | -37.537  |
-| 18  | 1 / 1                | 0     | 3 / 3              | 0     | 158.000 / 141.290  | -16.710  |
-| 19  | 1 / 1                | 0     | 3 / 13             | 10    | 162.532 / 620.308  | 457.776  |
-| 20  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
-| 21  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
-| 22  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
-| 23  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
-| 24  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
-| 25  | 1 / 1                | 0     | 6 / 6              | 0     | 373.515 / 366.609  | -6.906   |
-| 26  | 2 / 1                | -1    | 11 / 2             | -9    | 714.010 / 114.709  | -599.300 |
-| 27  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
-| 28  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
-| 29  | 3 / 2                | -1    | 16 / 11            | -5    | 1082.895 / 687.436 | -395.459 |
-| 30  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
-| 31  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
-| 32  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
-| 33  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
+| Row | Stretch episodes B/C | Delta | Stretch frames B/C | Delta | Stretch ms B/C    | Delta ms |
+| --- | -------------------- | ----- | ------------------ | ----- | ----------------- | -------- |
+| 1   | 1 / 1                | 0     | 1 / 1              | 0     | 119.890 / 112.696 | -7.195   |
+| 2   | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0             | 0        |
+| 3   | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0             | 0        |
+| 4   | 1 / 1                | 0     | 2 / 2              | 0     | 199.802 / 197.994 | -1.808   |
+| 5   | 1 / 1                | 0     | 2 / 2              | 0     | 199.320 / 206.392 | 7.072    |
+| 6   | 1 / 1                | 0     | 6 / 6              | 0     | 371.552 / 380.289 | 8.738    |
+| 7   | 1 / 1                | 0     | 6 / 6              | 0     | 376.746 / 375.718 | -1.028   |
+| 8   | 1 / 1                | 0     | 6 / 6              | 0     | 366.685 / 386.744 | 20.059   |
+| 9   | 1 / 1                | 0     | 6 / 6              | 0     | 370.248 / 373.362 | 3.114    |
+| 10  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0             | 0        |
+| 11  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0             | 0        |
+| 12  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0             | 0        |
+| 13  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0             | 0        |
+| 14  | 1 / 1                | 0     | 6 / 6              | 0     | 268.924 / 276.049 | 7.125    |
+| 15  | 1 / 1                | 0     | 3 / 3              | 0     | 142.698 / 139.395 | -3.303   |
+| 16  | 1 / 1                | 0     | 3 / 3              | 0     | 160.236 / 156.803 | -3.434   |
+| 17  | 1 / 1                | 0     | 3 / 3              | 0     | 140.158 / 139.603 | -0.555   |
+| 18  | 1 / 1                | 0     | 3 / 3              | 0     | 148.345 / 141.290 | -7.055   |
+| 19  | 1 / 1                | 0     | 3 / 13             | 10    | 154.845 / 620.308 | 465.463  |
+| 20  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0             | 0        |
+| 21  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0             | 0        |
+| 22  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0             | 0        |
+| 23  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0             | 0        |
+| 24  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0             | 0        |
+| 25  | 1 / 1                | 0     | 6 / 6              | 0     | 363.912 / 366.609 | 2.697    |
+| 26  | 1 / 1                | 0     | 2 / 2              | 0     | 94.387 / 114.709  | 20.322   |
+| 27  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0             | 0        |
+| 28  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0             | 0        |
+| 29  | 2 / 2                | 0     | 11 / 11            | 0     | 665.784 / 687.436 | 21.652   |
+| 30  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0             | 0        |
+| 31  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0             | 0        |
+| 32  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0             | 0        |
+| 33  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0             | 0        |
 
 ## nvidia:2
 
@@ -355,109 +542,109 @@ B/C cells are baseline/candidate; times are ms excluding the pre-dispatch wait. 
 
 | Row | Switch                      | Strict B/C          | Delta ms | Delta % | Retries B/C | F/V B -> C | Pair    |
 | --- | --------------------------- | ------------------- | -------- | ------- | ----------- | ---------- | ------- |
-| 1   | DLSS Hoshipa -> NONE        | 771.853 / 697.747   | -74.106  | -9.601  | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 2   | NONE -> TAA                 | 197.624 / 177.483   | -20.141  | -10.191 | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 3   | TAA -> DLAA                 | 259.645 / 257.493   | -2.152   | -0.829  | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 4   | DLAA -> DLSS Hoshipa        | 1038.109 / 990.084  | -48.025  | -4.626  | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 5   | DLSS Hoshipa -> DLSS UQ     | 972.278 / 987.027   | 14.749   | 1.517   | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 6   | DLSS UQ -> DLSS Q           | 1257.361 / 1125.321 | -132.040 | -10.501 | 1/1         | 0/0 -> 0/0 | MATCHED |
-| 7   | DLSS Q -> DLSS Bal          | 1254.924 / 1148.391 | -106.532 | -8.489  | 1/1         | 0/0 -> 0/0 | MATCHED |
-| 8   | DLSS Bal -> DLSS Perf       | 1228.255 / 1195.793 | -32.463  | -2.643  | 1/1         | 0/0 -> 0/0 | MATCHED |
-| 9   | DLSS Perf -> DLSS UP        | 1432.332 / 1128.613 | -303.719 | -21.204 | 1/1         | 0/0 -> 0/0 | MATCHED |
-| 10  | DLSS UP -> DLAA             | 957.865 / 760.687   | -197.178 | -20.585 | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 11  | DLAA -> TAA                 | 502.720 / 425.129   | -77.591  | -15.434 | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 12  | TAA -> NONE                 | 217.142 / 165.307   | -51.835  | -23.871 | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 13  | NONE -> FSR AA              | 643.345 / 582.542   | -60.803  | -9.451  | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 14  | FSR AA -> FSR Hoshipa       | 1553.553 / 1370.679 | -182.874 | -11.771 | 1/1         | 0/0 -> 0/0 | MATCHED |
-| 15  | FSR Hoshipa -> FSR UQ       | 817.940 / 1256.793  | 438.854  | 53.654  | 0/1         | 0/0 -> 0/0 | MATCHED |
-| 16  | FSR UQ -> FSR Q             | 724.718 / 795.099   | 70.381   | 9.712   | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 17  | FSR Q -> FSR Bal            | 899.652 / 844.197   | -55.455  | -6.164  | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 18  | FSR Bal -> FSR Perf         | 1570.412 / 1493.796 | -76.616  | -4.879  | 1/1         | 0/0 -> 0/0 | MATCHED |
-| 19  | FSR Perf -> FSR UP          | 828.547 / 771.313   | -57.233  | -6.908  | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 20  | FSR UP -> FSR AA            | 750.567 / 763.533   | 12.966   | 1.728   | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 21  | FSR AA -> TAA               | 548.025 / 519.992   | -28.033  | -5.115  | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 22  | TAA -> NONE                 | 173.281 / 182.075   | 8.794    | 5.075   | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 23  | NONE -> DLAA                | 333.987 / 258.243   | -75.744  | -22.679 | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 24  | DLAA -> FSR AA              | 883.114 / 830.242   | -52.871  | -5.987  | 0/1         | 0/0 -> 0/0 | MATCHED |
-| 25  | FSR AA -> DLSS Hoshipa      | 1198.841 / 957.409  | -241.432 | -20.139 | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 26  | DLSS Hoshipa -> FSR Hoshipa | 1684.811 / 1468.298 | -216.514 | -12.851 | 1/1         | 0/0 -> 0/0 | MATCHED |
-| 27  | FSR Hoshipa -> NONE         | 879.623 / 781.304   | -98.319  | -11.177 | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 28  | NONE -> FSR UP              | 1077.337 / 905.797  | -171.540 | -15.923 | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 29  | FSR UP -> DLSS UP           | 2045.208 / 1520.555 | -524.653 | -25.653 | 2/1         | 0/0 -> 0/0 | MATCHED |
-| 30  | DLSS UP -> TAA              | 782.914 / 730.674   | -52.241  | -6.673  | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 31  | TAA -> FSR AA               | 661.378 / 594.050   | -67.328  | -10.180 | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 32  | FSR AA -> NONE              | 538.073 / 479.112   | -58.961  | -10.958 | 0/0         | 0/0 -> 0/0 | MATCHED |
-| 33  | NONE -> DLAA                | 311.572 / 250.271   | -61.300  | -19.675 | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 1   | DLSS Hoshipa -> NONE        | 764.649 / 697.747   | -66.901  | -8.749  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 2   | NONE -> TAA                 | 167.665 / 177.483   | 9.818    | 5.856   | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 3   | TAA -> DLAA                 | 247.366 / 257.493   | 10.127   | 4.094   | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 4   | DLAA -> DLSS Hoshipa        | 1043.867 / 990.084  | -53.783  | -5.152  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 5   | DLSS Hoshipa -> DLSS UQ     | 1038.184 / 987.027  | -51.157  | -4.928  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 6   | DLSS UQ -> DLSS Q           | 1196.438 / 1125.321 | -71.118  | -5.944  | 1/1         | 0/0 -> 0/0 | MATCHED |
+| 7   | DLSS Q -> DLSS Bal          | 1202.543 / 1148.391 | -54.151  | -4.503  | 1/1         | 0/0 -> 0/0 | MATCHED |
+| 8   | DLSS Bal -> DLSS Perf       | 1191.568 / 1195.793 | 4.225    | 0.355   | 1/1         | 0/0 -> 0/0 | MATCHED |
+| 9   | DLSS Perf -> DLSS UP        | 1123.080 / 1128.613 | 5.533    | 0.493   | 1/1         | 0/0 -> 0/0 | MATCHED |
+| 10  | DLSS UP -> DLAA             | 779.290 / 760.687   | -18.603  | -2.387  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 11  | DLAA -> TAA                 | 435.637 / 425.129   | -10.508  | -2.412  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 12  | TAA -> NONE                 | 183.527 / 165.307   | -18.220  | -9.928  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 13  | NONE -> FSR AA              | 641.300 / 582.542   | -58.758  | -9.162  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 14  | FSR AA -> FSR Hoshipa       | 1377.913 / 1370.679 | -7.234   | -0.525  | 1/1         | 0/0 -> 0/0 | MATCHED |
+| 15  | FSR Hoshipa -> FSR UQ       | 896.172 / 1256.793  | 360.621  | 40.240  | 0/1         | 0/0 -> 0/0 | MATCHED |
+| 16  | FSR UQ -> FSR Q             | 702.990 / 795.099   | 92.108   | 13.102  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 17  | FSR Q -> FSR Bal            | 771.931 / 844.197   | 72.266   | 9.362   | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 18  | FSR Bal -> FSR Perf         | 751.162 / 1493.796  | 742.634  | 98.865  | 0/1         | 0/0 -> 0/0 | MATCHED |
+| 19  | FSR Perf -> FSR UP          | 727.324 / 771.313   | 43.990   | 6.048   | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 20  | FSR UP -> FSR AA            | 1078.028 / 763.533  | -314.495 | -29.173 | 1/0         | 0/0 -> 0/0 | MATCHED |
+| 21  | FSR AA -> TAA               | 501.448 / 519.992   | 18.544   | 3.698   | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 22  | TAA -> NONE                 | 169.901 / 182.075   | 12.175   | 7.166   | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 23  | NONE -> DLAA                | 250.712 / 258.243   | 7.531    | 3.004   | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 24  | DLAA -> FSR AA              | 1133.454 / 830.242  | -303.211 | -26.751 | 1/1         | 0/0 -> 0/0 | MATCHED |
+| 25  | FSR AA -> DLSS Hoshipa      | 1543.613 / 957.409  | -586.205 | -37.976 | 1/0         | 0/0 -> 0/0 | MATCHED |
+| 26  | DLSS Hoshipa -> FSR Hoshipa | 901.361 / 1468.298  | 566.936  | 62.898  | 0/1         | 0/0 -> 0/0 | MATCHED |
+| 27  | FSR Hoshipa -> NONE         | 819.338 / 781.304   | -38.034  | -4.642  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 28  | NONE -> FSR UP              | 984.498 / 905.797   | -78.701  | -7.994  | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 29  | FSR UP -> DLSS UP           | 1932.147 / 1520.555 | -411.592 | -21.302 | 2/1         | 0/0 -> 0/0 | MATCHED |
+| 30  | DLSS UP -> TAA              | 696.614 / 730.674   | 34.059   | 4.889   | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 31  | TAA -> FSR AA               | 660.497 / 594.050   | -66.447  | -10.060 | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 32  | FSR AA -> NONE              | 467.899 / 479.112   | 11.213   | 2.397   | 0/0         | 0/0 -> 0/0 | MATCHED |
+| 33  | NONE -> DLAA                | 253.033 / 250.271   | -2.762   | -1.091  | 0/0         | 0/0 -> 0/0 | MATCHED |
 
 | Row | Presentation B/C    | Cleanup B/C         | Cleanup tail B/C  | Phase durations B                                                                                                                                                                                                                                         | Phase durations C                                                                                                                                                                                                                                         |
 | --- | ------------------- | ------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | 519.524 / 472.522   | 771.853 / 697.747   | 252.330 / 225.225 | {"blockedOrPreparationToFirstPhysicalMutationMs":3.7265,"dispatchToBlockedOrPreparationMs":394.2918,"firstNewGenerationToCleanupDrainedMs":252.9548,"firstPhysicalMutationToFirstNewGenerationMs":120.8803,"presentationToStrictCompletionMs":252.3298}   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.0479,"dispatchToBlockedOrPreparationMs":350.0684,"firstNewGenerationToCleanupDrainedMs":225.9804,"firstPhysicalMutationToFirstNewGenerationMs":118.6504,"presentationToStrictCompletionMs":225.225}    |
-| 2   | 197.624 / 177.483   | 197.624 / 177.483   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":197.6237,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":177.4832,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    |
-| 3   | 259.645 / 257.493   | 259.645 / 257.493   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":259.6454,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":257.4931,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    |
-| 4   | 803.023 / 758.801   | 943.393 / 904.945   | 140.370 / 146.144 | {"blockedOrPreparationToFirstPhysicalMutationMs":3.8405,"dispatchToBlockedOrPreparationMs":393.8367,"firstNewGenerationToCleanupDrainedMs":184.6964,"firstPhysicalMutationToFirstNewGenerationMs":361.0196,"presentationToStrictCompletionMs":235.0857}   | {"blockedOrPreparationToFirstPhysicalMutationMs":2.9947,"dispatchToBlockedOrPreparationMs":360.3242,"firstNewGenerationToCleanupDrainedMs":193.0035,"firstPhysicalMutationToFirstNewGenerationMs":348.6226,"presentationToStrictCompletionMs":231.2829}   |
-| 5   | 756.751 / 762.040   | 886.125 / 898.021   | 129.374 / 135.981 | {"blockedOrPreparationToFirstPhysicalMutationMs":3.8012,"dispatchToBlockedOrPreparationMs":365.3724,"firstNewGenerationToCleanupDrainedMs":173.592,"firstPhysicalMutationToFirstNewGenerationMs":343.3596,"presentationToStrictCompletionMs":215.527}     | {"blockedOrPreparationToFirstPhysicalMutationMs":3.76,"dispatchToBlockedOrPreparationMs":358.469,"firstNewGenerationToCleanupDrainedMs":181.2246,"firstPhysicalMutationToFirstNewGenerationMs":354.5673,"presentationToStrictCompletionMs":224.9864}      |
-| 6   | 1031.045 / 908.790  | 1171.465 / 1041.346 | 140.420 / 132.556 | {"blockedOrPreparationToFirstPhysicalMutationMs":3.6885,"dispatchToBlockedOrPreparationMs":446.7609,"firstNewGenerationToCleanupDrainedMs":193.075,"firstPhysicalMutationToFirstNewGenerationMs":527.941,"presentationToStrictCompletionMs":226.3152}     | {"blockedOrPreparationToFirstPhysicalMutationMs":3.7777,"dispatchToBlockedOrPreparationMs":371.3996,"firstNewGenerationToCleanupDrainedMs":174.592,"firstPhysicalMutationToFirstNewGenerationMs":491.5763,"presentationToStrictCompletionMs":216.5307}    |
-| 7   | 974.690 / 924.311   | 1158.145 / 1065.545 | 183.454 / 141.234 | {"blockedOrPreparationToFirstPhysicalMutationMs":3.5767,"dispatchToBlockedOrPreparationMs":375.1493,"firstNewGenerationToCleanupDrainedMs":231.5996,"firstPhysicalMutationToFirstNewGenerationMs":547.8189,"presentationToStrictCompletionMs":280.2336}   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.6605,"dispatchToBlockedOrPreparationMs":392.5265,"firstNewGenerationToCleanupDrainedMs":182.9429,"firstPhysicalMutationToFirstNewGenerationMs":486.4149,"presentationToStrictCompletionMs":224.0807}   |
-| 8   | 989.882 / 963.668   | 1145.327 / 1100.544 | 155.445 / 136.876 | {"blockedOrPreparationToFirstPhysicalMutationMs":5.1262,"dispatchToBlockedOrPreparationMs":397.3086,"firstNewGenerationToCleanupDrainedMs":202.4733,"firstPhysicalMutationToFirstNewGenerationMs":540.4192,"presentationToStrictCompletionMs":238.3733}   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.0819,"dispatchToBlockedOrPreparationMs":399.8201,"firstNewGenerationToCleanupDrainedMs":182.6845,"firstPhysicalMutationToFirstNewGenerationMs":514.9579,"presentationToStrictCompletionMs":232.1241}   |
-| 9   | 1177.624 / 921.524  | 1337.095 / 1048.488 | 159.471 / 126.963 | {"blockedOrPreparationToFirstPhysicalMutationMs":5.0036,"dispatchToBlockedOrPreparationMs":492.9627,"firstNewGenerationToCleanupDrainedMs":222.5509,"firstPhysicalMutationToFirstNewGenerationMs":616.5778,"presentationToStrictCompletionMs":254.7074}   | {"blockedOrPreparationToFirstPhysicalMutationMs":4.7925,"dispatchToBlockedOrPreparationMs":406.9526,"firstNewGenerationToCleanupDrainedMs":168.8756,"firstPhysicalMutationToFirstNewGenerationMs":467.8669,"presentationToStrictCompletionMs":207.0885}   |
-| 10  | 734.019 / 591.581   | 957.865 / 760.687   | 223.846 / 169.106 | {"blockedOrPreparationToFirstPhysicalMutationMs":4.3981,"dispatchToBlockedOrPreparationMs":428.804,"firstNewGenerationToCleanupDrainedMs":310.7936,"firstPhysicalMutationToFirstNewGenerationMs":213.8696,"presentationToStrictCompletionMs":223.8465}    | {"blockedOrPreparationToFirstPhysicalMutationMs":4.7673,"dispatchToBlockedOrPreparationMs":353.5765,"firstNewGenerationToCleanupDrainedMs":217.3099,"firstPhysicalMutationToFirstNewGenerationMs":185.0336,"presentationToStrictCompletionMs":169.1063}   |
-| 11  | 204.491 / 165.343   | 502.720 / 425.129   | 298.230 / 259.787 | {"blockedOrPreparationToFirstPhysicalMutationMs":4.6884,"dispatchToBlockedOrPreparationMs":103.1938,"firstNewGenerationToCleanupDrainedMs":299.5075,"firstPhysicalMutationToFirstNewGenerationMs":95.3306,"presentationToStrictCompletionMs":298.2296}    | {"blockedOrPreparationToFirstPhysicalMutationMs":4.0572,"dispatchToBlockedOrPreparationMs":123.3176,"firstNewGenerationToCleanupDrainedMs":260.6446,"firstPhysicalMutationToFirstNewGenerationMs":37.1097,"presentationToStrictCompletionMs":259.7866}    |
-| 12  | 217.142 / 165.307   | 217.142 / 165.307   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":217.142,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                     | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":165.307,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                     |
-| 13  | 643.345 / 582.542   | 643.345 / 582.542   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":55.5131,"dispatchToBlockedOrPreparationMs":449.6862,"firstNewGenerationToCleanupDrainedMs":42.4529,"firstPhysicalMutationToFirstNewGenerationMs":95.6928,"presentationToStrictCompletionMs":0}           | {"blockedOrPreparationToFirstPhysicalMutationMs":50.8977,"dispatchToBlockedOrPreparationMs":390.5072,"firstNewGenerationToCleanupDrainedMs":45.281,"firstPhysicalMutationToFirstNewGenerationMs":95.8559,"presentationToStrictCompletionMs":0}            |
-| 14  | 1395.573 / 1370.679 | 1498.313 / 1324.611 | 102.740 / 0       | {"blockedOrPreparationToFirstPhysicalMutationMs":299.5089,"dispatchToBlockedOrPreparationMs":465.0504,"firstNewGenerationToCleanupDrainedMs":206.9776,"firstPhysicalMutationToFirstNewGenerationMs":526.7758,"presentationToStrictCompletionMs":157.9802} | {"blockedOrPreparationToFirstPhysicalMutationMs":305.751,"dispatchToBlockedOrPreparationMs":424.6356,"firstNewGenerationToCleanupDrainedMs":165.0926,"firstPhysicalMutationToFirstNewGenerationMs":429.132,"presentationToStrictCompletionMs":0}          |
-| 15  | 817.940 / 1256.793  | 641.878 / 1083.699  | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":5.3628,"dispatchToBlockedOrPreparationMs":354.2863,"firstNewGenerationToCleanupDrainedMs":44.36,"firstPhysicalMutationToFirstNewGenerationMs":237.8689,"presentationToStrictCompletionMs":0}             | {"blockedOrPreparationToFirstPhysicalMutationMs":281.994,"dispatchToBlockedOrPreparationMs":394.7142,"firstNewGenerationToCleanupDrainedMs":41.5369,"firstPhysicalMutationToFirstNewGenerationMs":365.4539,"presentationToStrictCompletionMs":0}          |
-| 16  | 724.718 / 795.099   | 633.573 / 604.079   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":5.7923,"dispatchToBlockedOrPreparationMs":388.2959,"firstNewGenerationToCleanupDrainedMs":42.611,"firstPhysicalMutationToFirstNewGenerationMs":196.8739,"presentationToStrictCompletionMs":0}            | {"blockedOrPreparationToFirstPhysicalMutationMs":3.4423,"dispatchToBlockedOrPreparationMs":344.7541,"firstNewGenerationToCleanupDrainedMs":44.7263,"firstPhysicalMutationToFirstNewGenerationMs":211.1566,"presentationToStrictCompletionMs":0}           |
-| 17  | 899.652 / 844.197   | 741.693 / 702.346   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":5.2518,"dispatchToBlockedOrPreparationMs":419.9445,"firstNewGenerationToCleanupDrainedMs":46.7604,"firstPhysicalMutationToFirstNewGenerationMs":269.736,"presentationToStrictCompletionMs":0}            | {"blockedOrPreparationToFirstPhysicalMutationMs":5.6416,"dispatchToBlockedOrPreparationMs":419.1894,"firstNewGenerationToCleanupDrainedMs":47.4633,"firstPhysicalMutationToFirstNewGenerationMs":230.0514,"presentationToStrictCompletionMs":0}           |
-| 18  | 1570.412 / 1493.796 | 1303.027 / 1126.684 | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":320.1174,"dispatchToBlockedOrPreparationMs":440.0657,"firstNewGenerationToCleanupDrainedMs":53.7404,"firstPhysicalMutationToFirstNewGenerationMs":489.1037,"presentationToStrictCompletionMs":0}         | {"blockedOrPreparationToFirstPhysicalMutationMs":275.2212,"dispatchToBlockedOrPreparationMs":429.5467,"firstNewGenerationToCleanupDrainedMs":48.8497,"firstPhysicalMutationToFirstNewGenerationMs":373.0666,"presentationToStrictCompletionMs":0}         |
-| 19  | 828.547 / 771.313   | 658.593 / 640.714   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":4.8719,"dispatchToBlockedOrPreparationMs":365.5769,"firstNewGenerationToCleanupDrainedMs":49.7613,"firstPhysicalMutationToFirstNewGenerationMs":238.3832,"presentationToStrictCompletionMs":0}           | {"blockedOrPreparationToFirstPhysicalMutationMs":4.5632,"dispatchToBlockedOrPreparationMs":388.3442,"firstNewGenerationToCleanupDrainedMs":44.5207,"firstPhysicalMutationToFirstNewGenerationMs":203.2858,"presentationToStrictCompletionMs":0}           |
-| 20  | 501.087 / 560.505   | 750.567 / 763.533   | 249.480 / 203.027 | {"blockedOrPreparationToFirstPhysicalMutationMs":4.9704,"dispatchToBlockedOrPreparationMs":372.8314,"firstNewGenerationToCleanupDrainedMs":249.5907,"firstPhysicalMutationToFirstNewGenerationMs":123.1741,"presentationToStrictCompletionMs":249.4798}   | {"blockedOrPreparationToFirstPhysicalMutationMs":4.8874,"dispatchToBlockedOrPreparationMs":354.7334,"firstNewGenerationToCleanupDrainedMs":254.5382,"firstPhysicalMutationToFirstNewGenerationMs":149.3737,"presentationToStrictCompletionMs":203.0274}   |
-| 21  | 254.349 / 222.925   | 548.025 / 519.992   | 293.676 / 297.067 | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":150.7232,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":293.6762}             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":143.4389,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":297.0673}             |
-| 22  | 173.281 / 182.075   | 173.281 / 182.075   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":173.2812,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":182.0753,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    |
-| 23  | 333.987 / 258.243   | 333.987 / 258.243   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":333.9867,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":258.243,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                     |
-| 24  | 679.878 / 656.731   | 883.114 / 830.242   | 203.236 / 173.511 | {"blockedOrPreparationToFirstPhysicalMutationMs":4.6665,"dispatchToBlockedOrPreparationMs":446.5848,"firstNewGenerationToCleanupDrainedMs":251.3625,"firstPhysicalMutationToFirstNewGenerationMs":180.4998,"presentationToStrictCompletionMs":203.236}    | {"blockedOrPreparationToFirstPhysicalMutationMs":2.9576,"dispatchToBlockedOrPreparationMs":464.0565,"firstNewGenerationToCleanupDrainedMs":215.4267,"firstPhysicalMutationToFirstNewGenerationMs":147.8015,"presentationToStrictCompletionMs":173.5111}   |
-| 25  | 952.259 / 742.117   | 1107.152 / 873.556  | 154.893 / 131.440 | {"blockedOrPreparationToFirstPhysicalMutationMs":70.1894,"dispatchToBlockedOrPreparationMs":442.3875,"firstNewGenerationToCleanupDrainedMs":205.4701,"firstPhysicalMutationToFirstNewGenerationMs":389.1053,"presentationToStrictCompletionMs":246.5821}  | {"blockedOrPreparationToFirstPhysicalMutationMs":26.7315,"dispatchToBlockedOrPreparationMs":349.6094,"firstNewGenerationToCleanupDrainedMs":173.2963,"firstPhysicalMutationToFirstNewGenerationMs":323.9192,"presentationToStrictCompletionMs":215.2918}  |
-| 26  | 1516.839 / 1333.261 | 1629.586 / 1420.786 | 112.747 / 87.524  | {"blockedOrPreparationToFirstPhysicalMutationMs":302.4972,"dispatchToBlockedOrPreparationMs":495.5607,"firstNewGenerationToCleanupDrainedMs":216.8519,"firstPhysicalMutationToFirstNewGenerationMs":614.6761,"presentationToStrictCompletionMs":167.9725} | {"blockedOrPreparationToFirstPhysicalMutationMs":284.7751,"dispatchToBlockedOrPreparationMs":436.6673,"firstNewGenerationToCleanupDrainedMs":178.4377,"firstPhysicalMutationToFirstNewGenerationMs":520.9055,"presentationToStrictCompletionMs":135.0364} |
-| 27  | 613.064 / 550.550   | 879.623 / 781.304   | 266.559 / 230.755 | {"blockedOrPreparationToFirstPhysicalMutationMs":5.2975,"dispatchToBlockedOrPreparationMs":405.8918,"firstNewGenerationToCleanupDrainedMs":267.7948,"firstPhysicalMutationToFirstNewGenerationMs":200.6391,"presentationToStrictCompletionMs":266.5594}   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.4852,"dispatchToBlockedOrPreparationMs":401.9437,"firstNewGenerationToCleanupDrainedMs":231.4649,"firstPhysicalMutationToFirstNewGenerationMs":144.4103,"presentationToStrictCompletionMs":230.7545}   |
-| 28  | 915.326 / 816.038   | 1027.137 / 859.556  | 111.810 / 43.517  | {"blockedOrPreparationToFirstPhysicalMutationMs":3.9692,"dispatchToBlockedOrPreparationMs":479.2482,"firstNewGenerationToCleanupDrainedMs":204.8266,"firstPhysicalMutationToFirstNewGenerationMs":339.0928,"presentationToStrictCompletionMs":162.0104}   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.3751,"dispatchToBlockedOrPreparationMs":397.3447,"firstNewGenerationToCleanupDrainedMs":171.9637,"firstPhysicalMutationToFirstNewGenerationMs":286.8724,"presentationToStrictCompletionMs":89.7583}    |
-| 29  | 1814.022 / 1282.281 | 1960.135 / 1438.319 | 146.113 / 156.038 | {"blockedOrPreparationToFirstPhysicalMutationMs":734.4687,"dispatchToBlockedOrPreparationMs":468.2664,"firstNewGenerationToCleanupDrainedMs":194.8429,"firstPhysicalMutationToFirstNewGenerationMs":562.5572,"presentationToStrictCompletionMs":231.1859} | {"blockedOrPreparationToFirstPhysicalMutationMs":23.5635,"dispatchToBlockedOrPreparationMs":703.5446,"firstNewGenerationToCleanupDrainedMs":202.6941,"firstPhysicalMutationToFirstNewGenerationMs":508.5164,"presentationToStrictCompletionMs":238.2744}  |
-| 30  | 499.941 / 503.869   | 782.914 / 730.674   | 282.973 / 226.805 | {"blockedOrPreparationToFirstPhysicalMutationMs":3.9882,"dispatchToBlockedOrPreparationMs":368.1975,"firstNewGenerationToCleanupDrainedMs":283.5744,"firstPhysicalMutationToFirstNewGenerationMs":127.1543,"presentationToStrictCompletionMs":282.9732}   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.2535,"dispatchToBlockedOrPreparationMs":391.7451,"firstNewGenerationToCleanupDrainedMs":227.109,"firstPhysicalMutationToFirstNewGenerationMs":108.566,"presentationToStrictCompletionMs":226.8046}     |
-| 31  | 661.378 / 594.050   | 661.378 / 594.050   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":63.6418,"dispatchToBlockedOrPreparationMs":449.8247,"firstNewGenerationToCleanupDrainedMs":46.7498,"firstPhysicalMutationToFirstNewGenerationMs":101.1616,"presentationToStrictCompletionMs":0}          | {"blockedOrPreparationToFirstPhysicalMutationMs":49.0265,"dispatchToBlockedOrPreparationMs":404.5485,"firstNewGenerationToCleanupDrainedMs":50.1418,"firstPhysicalMutationToFirstNewGenerationMs":90.333,"presentationToStrictCompletionMs":0}            |
-| 32  | 233.967 / 192.354   | 538.073 / 479.112   | 304.106 / 286.758 | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":135.8276,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":304.1062}             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":129.1379,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":286.7583}             |
-| 33  | 311.572 / 250.271   | 311.572 / 250.271   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":311.5717,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":250.2714,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    |
+| 1   | 524.712 / 472.522   | 764.649 / 697.747   | 239.937 / 225.225 | {"blockedOrPreparationToFirstPhysicalMutationMs":3.6788,"dispatchToBlockedOrPreparationMs":398.9273,"firstNewGenerationToCleanupDrainedMs":240.7526,"firstPhysicalMutationToFirstNewGenerationMs":121.2898,"presentationToStrictCompletionMs":239.9367}   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.0479,"dispatchToBlockedOrPreparationMs":350.0684,"firstNewGenerationToCleanupDrainedMs":225.9804,"firstPhysicalMutationToFirstNewGenerationMs":118.6504,"presentationToStrictCompletionMs":225.225}    |
+| 2   | 167.665 / 177.483   | 167.665 / 177.483   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":167.665,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                     | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":177.4832,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    |
+| 3   | 247.366 / 257.493   | 247.366 / 257.493   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":247.3658,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":257.4931,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    |
+| 4   | 816.593 / 758.801   | 956.843 / 904.945   | 140.250 / 146.144 | {"blockedOrPreparationToFirstPhysicalMutationMs":4.6999,"dispatchToBlockedOrPreparationMs":408.322,"firstNewGenerationToCleanupDrainedMs":184.2716,"firstPhysicalMutationToFirstNewGenerationMs":359.55,"presentationToStrictCompletionMs":227.2739}      | {"blockedOrPreparationToFirstPhysicalMutationMs":2.9947,"dispatchToBlockedOrPreparationMs":360.3242,"firstNewGenerationToCleanupDrainedMs":193.0035,"firstPhysicalMutationToFirstNewGenerationMs":348.6226,"presentationToStrictCompletionMs":231.2829}   |
+| 5   | 812.136 / 762.040   | 952.986 / 898.021   | 140.851 / 135.981 | {"blockedOrPreparationToFirstPhysicalMutationMs":4.0876,"dispatchToBlockedOrPreparationMs":414.3874,"firstNewGenerationToCleanupDrainedMs":191.1592,"firstPhysicalMutationToFirstNewGenerationMs":343.3521,"presentationToStrictCompletionMs":226.0486}   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.76,"dispatchToBlockedOrPreparationMs":358.469,"firstNewGenerationToCleanupDrainedMs":181.2246,"firstPhysicalMutationToFirstNewGenerationMs":354.5673,"presentationToStrictCompletionMs":224.9864}      |
+| 6   | 963.683 / 908.790   | 1108.473 / 1041.346 | 144.789 / 132.556 | {"blockedOrPreparationToFirstPhysicalMutationMs":5.1046,"dispatchToBlockedOrPreparationMs":402.0685,"firstNewGenerationToCleanupDrainedMs":193.2912,"firstPhysicalMutationToFirstNewGenerationMs":508.0083,"presentationToStrictCompletionMs":232.7553}   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.7777,"dispatchToBlockedOrPreparationMs":371.3996,"firstNewGenerationToCleanupDrainedMs":174.592,"firstPhysicalMutationToFirstNewGenerationMs":491.5763,"presentationToStrictCompletionMs":216.5307}    |
+| 7   | 965.785 / 924.311   | 1113.348 / 1065.545 | 147.564 / 141.234 | {"blockedOrPreparationToFirstPhysicalMutationMs":4.1118,"dispatchToBlockedOrPreparationMs":391.181,"firstNewGenerationToCleanupDrainedMs":195.7517,"firstPhysicalMutationToFirstNewGenerationMs":522.3038,"presentationToStrictCompletionMs":236.7582}    | {"blockedOrPreparationToFirstPhysicalMutationMs":3.6605,"dispatchToBlockedOrPreparationMs":392.5265,"firstNewGenerationToCleanupDrainedMs":182.9429,"firstPhysicalMutationToFirstNewGenerationMs":486.4149,"presentationToStrictCompletionMs":224.0807}   |
+| 8   | 944.879 / 963.668   | 1097.893 / 1100.544 | 153.015 / 136.876 | {"blockedOrPreparationToFirstPhysicalMutationMs":3.849,"dispatchToBlockedOrPreparationMs":386.0721,"firstNewGenerationToCleanupDrainedMs":201.7934,"firstPhysicalMutationToFirstNewGenerationMs":506.1788,"presentationToStrictCompletionMs":246.6891}    | {"blockedOrPreparationToFirstPhysicalMutationMs":3.0819,"dispatchToBlockedOrPreparationMs":399.8201,"firstNewGenerationToCleanupDrainedMs":182.6845,"firstPhysicalMutationToFirstNewGenerationMs":514.9579,"presentationToStrictCompletionMs":232.1241}   |
+| 9   | 892.407 / 921.524   | 1033.092 / 1048.488 | 140.686 / 126.963 | {"blockedOrPreparationToFirstPhysicalMutationMs":4.0101,"dispatchToBlockedOrPreparationMs":350.1775,"firstNewGenerationToCleanupDrainedMs":184.5374,"firstPhysicalMutationToFirstNewGenerationMs":494.3675,"presentationToStrictCompletionMs":230.6732}   | {"blockedOrPreparationToFirstPhysicalMutationMs":4.7925,"dispatchToBlockedOrPreparationMs":406.9526,"firstNewGenerationToCleanupDrainedMs":168.8756,"firstPhysicalMutationToFirstNewGenerationMs":467.8669,"presentationToStrictCompletionMs":207.0885}   |
+| 10  | 604.626 / 591.581   | 779.290 / 760.687   | 174.664 / 169.106 | {"blockedOrPreparationToFirstPhysicalMutationMs":4.5596,"dispatchToBlockedOrPreparationMs":361.0118,"firstNewGenerationToCleanupDrainedMs":220.7107,"firstPhysicalMutationToFirstNewGenerationMs":193.0078,"presentationToStrictCompletionMs":174.6636}   | {"blockedOrPreparationToFirstPhysicalMutationMs":4.7673,"dispatchToBlockedOrPreparationMs":353.5765,"firstNewGenerationToCleanupDrainedMs":217.3099,"firstPhysicalMutationToFirstNewGenerationMs":185.0336,"presentationToStrictCompletionMs":169.1063}   |
+| 11  | 163.343 / 165.343   | 435.637 / 425.129   | 272.294 / 259.787 | {"blockedOrPreparationToFirstPhysicalMutationMs":3.6609,"dispatchToBlockedOrPreparationMs":121.2179,"firstNewGenerationToCleanupDrainedMs":273.0555,"firstPhysicalMutationToFirstNewGenerationMs":37.7029,"presentationToStrictCompletionMs":272.2943}    | {"blockedOrPreparationToFirstPhysicalMutationMs":4.0572,"dispatchToBlockedOrPreparationMs":123.3176,"firstNewGenerationToCleanupDrainedMs":260.6446,"firstPhysicalMutationToFirstNewGenerationMs":37.1097,"presentationToStrictCompletionMs":259.7866}    |
+| 12  | 183.527 / 165.307   | 183.527 / 165.307   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":183.5274,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":165.307,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                     |
+| 13  | 641.300 / 582.542   | 641.300 / 582.542   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":59.0337,"dispatchToBlockedOrPreparationMs":429.1853,"firstNewGenerationToCleanupDrainedMs":47.1866,"firstPhysicalMutationToFirstNewGenerationMs":105.8945,"presentationToStrictCompletionMs":0}          | {"blockedOrPreparationToFirstPhysicalMutationMs":50.8977,"dispatchToBlockedOrPreparationMs":390.5072,"firstNewGenerationToCleanupDrainedMs":45.281,"firstPhysicalMutationToFirstNewGenerationMs":95.8559,"presentationToStrictCompletionMs":0}            |
+| 14  | 1171.620 / 1370.679 | 1323.721 / 1324.611 | 152.101 / 0       | {"blockedOrPreparationToFirstPhysicalMutationMs":262.493,"dispatchToBlockedOrPreparationMs":397.1475,"firstNewGenerationToCleanupDrainedMs":203.3643,"firstPhysicalMutationToFirstNewGenerationMs":460.7159,"presentationToStrictCompletionMs":206.2935}  | {"blockedOrPreparationToFirstPhysicalMutationMs":305.751,"dispatchToBlockedOrPreparationMs":424.6356,"firstNewGenerationToCleanupDrainedMs":165.0926,"firstPhysicalMutationToFirstNewGenerationMs":429.132,"presentationToStrictCompletionMs":0}          |
+| 15  | 896.172 / 1256.793  | 558.987 / 1083.699  | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":4.1702,"dispatchToBlockedOrPreparationMs":352.6839,"firstNewGenerationToCleanupDrainedMs":0.2574,"firstPhysicalMutationToFirstNewGenerationMs":201.8751,"presentationToStrictCompletionMs":0}            | {"blockedOrPreparationToFirstPhysicalMutationMs":281.994,"dispatchToBlockedOrPreparationMs":394.7142,"firstNewGenerationToCleanupDrainedMs":41.5369,"firstPhysicalMutationToFirstNewGenerationMs":365.4539,"presentationToStrictCompletionMs":0}          |
+| 16  | 702.990 / 795.099   | 611.687 / 604.079   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":4.7991,"dispatchToBlockedOrPreparationMs":368.7131,"firstNewGenerationToCleanupDrainedMs":43.5961,"firstPhysicalMutationToFirstNewGenerationMs":194.5788,"presentationToStrictCompletionMs":0}           | {"blockedOrPreparationToFirstPhysicalMutationMs":3.4423,"dispatchToBlockedOrPreparationMs":344.7541,"firstNewGenerationToCleanupDrainedMs":44.7263,"firstPhysicalMutationToFirstNewGenerationMs":211.1566,"presentationToStrictCompletionMs":0}           |
+| 17  | 771.931 / 844.197   | 595.296 / 702.346   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":6.0713,"dispatchToBlockedOrPreparationMs":350.708,"firstNewGenerationToCleanupDrainedMs":42.6388,"firstPhysicalMutationToFirstNewGenerationMs":195.8778,"presentationToStrictCompletionMs":0}            | {"blockedOrPreparationToFirstPhysicalMutationMs":5.6416,"dispatchToBlockedOrPreparationMs":419.1894,"firstNewGenerationToCleanupDrainedMs":47.4633,"firstPhysicalMutationToFirstNewGenerationMs":230.0514,"presentationToStrictCompletionMs":0}           |
+| 18  | 751.162 / 1493.796  | 619.652 / 1126.684  | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":4.5809,"dispatchToBlockedOrPreparationMs":376.7105,"firstNewGenerationToCleanupDrainedMs":43.5683,"firstPhysicalMutationToFirstNewGenerationMs":194.792,"presentationToStrictCompletionMs":0}            | {"blockedOrPreparationToFirstPhysicalMutationMs":275.2212,"dispatchToBlockedOrPreparationMs":429.5467,"firstNewGenerationToCleanupDrainedMs":48.8497,"firstPhysicalMutationToFirstNewGenerationMs":373.0666,"presentationToStrictCompletionMs":0}         |
+| 19  | 727.324 / 771.313   | 556.316 / 640.714   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":4.8053,"dispatchToBlockedOrPreparationMs":356.7758,"firstNewGenerationToCleanupDrainedMs":0.3603,"firstPhysicalMutationToFirstNewGenerationMs":194.375,"presentationToStrictCompletionMs":0}             | {"blockedOrPreparationToFirstPhysicalMutationMs":4.5632,"dispatchToBlockedOrPreparationMs":388.3442,"firstNewGenerationToCleanupDrainedMs":44.5207,"firstPhysicalMutationToFirstNewGenerationMs":203.2858,"presentationToStrictCompletionMs":0}           |
+| 20  | 901.838 / 560.505   | 1078.028 / 763.533  | 176.190 / 203.027 | {"blockedOrPreparationToFirstPhysicalMutationMs":267.4793,"dispatchToBlockedOrPreparationMs":463.6941,"firstNewGenerationToCleanupDrainedMs":224.7261,"firstPhysicalMutationToFirstNewGenerationMs":122.1281,"presentationToStrictCompletionMs":176.1895} | {"blockedOrPreparationToFirstPhysicalMutationMs":4.8874,"dispatchToBlockedOrPreparationMs":354.7334,"firstNewGenerationToCleanupDrainedMs":254.5382,"firstPhysicalMutationToFirstNewGenerationMs":149.3737,"presentationToStrictCompletionMs":203.0274}   |
+| 21  | 202.830 / 222.925   | 501.448 / 519.992   | 298.618 / 297.067 | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":136.706,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":298.6185}              | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":143.4389,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":297.0673}             |
+| 22  | 169.901 / 182.075   | 169.901 / 182.075   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":169.9006,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":182.0753,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    |
+| 23  | 250.712 / 258.243   | 250.712 / 258.243   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":250.7117,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":258.243,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                     |
+| 24  | 955.472 / 656.731   | 1133.454 / 830.242  | 177.982 / 173.511 | {"blockedOrPreparationToFirstPhysicalMutationMs":266.0538,"dispatchToBlockedOrPreparationMs":500.9016,"firstNewGenerationToCleanupDrainedMs":221.3993,"firstPhysicalMutationToFirstNewGenerationMs":145.0989,"presentationToStrictCompletionMs":177.9818} | {"blockedOrPreparationToFirstPhysicalMutationMs":2.9576,"dispatchToBlockedOrPreparationMs":464.0565,"firstNewGenerationToCleanupDrainedMs":215.4267,"firstPhysicalMutationToFirstNewGenerationMs":147.8015,"presentationToStrictCompletionMs":173.5111}   |
+| 25  | 1323.681 / 742.117  | 1457.896 / 873.556  | 134.215 / 131.440 | {"blockedOrPreparationToFirstPhysicalMutationMs":321.4216,"dispatchToBlockedOrPreparationMs":449.9428,"firstNewGenerationToCleanupDrainedMs":178.1383,"firstPhysicalMutationToFirstNewGenerationMs":508.3934,"presentationToStrictCompletionMs":219.9317} | {"blockedOrPreparationToFirstPhysicalMutationMs":26.7315,"dispatchToBlockedOrPreparationMs":349.6094,"firstNewGenerationToCleanupDrainedMs":173.2963,"firstPhysicalMutationToFirstNewGenerationMs":323.9192,"presentationToStrictCompletionMs":215.2918}  |
+| 26  | 763.246 / 1333.261  | 901.361 / 1420.786  | 138.115 / 87.524  | {"blockedOrPreparationToFirstPhysicalMutationMs":4.1998,"dispatchToBlockedOrPreparationMs":367.3261,"firstNewGenerationToCleanupDrainedMs":226.1821,"firstPhysicalMutationToFirstNewGenerationMs":303.6534,"presentationToStrictCompletionMs":138.1153}   | {"blockedOrPreparationToFirstPhysicalMutationMs":284.7751,"dispatchToBlockedOrPreparationMs":436.6673,"firstNewGenerationToCleanupDrainedMs":178.4377,"firstPhysicalMutationToFirstNewGenerationMs":520.9055,"presentationToStrictCompletionMs":135.0364} |
+| 27  | 559.830 / 550.550   | 819.338 / 781.304   | 259.509 / 230.755 | {"blockedOrPreparationToFirstPhysicalMutationMs":4.7194,"dispatchToBlockedOrPreparationMs":406.2385,"firstNewGenerationToCleanupDrainedMs":260.7611,"firstPhysicalMutationToFirstNewGenerationMs":147.6192,"presentationToStrictCompletionMs":259.5085}   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.4852,"dispatchToBlockedOrPreparationMs":401.9437,"firstNewGenerationToCleanupDrainedMs":231.4649,"firstPhysicalMutationToFirstNewGenerationMs":144.4103,"presentationToStrictCompletionMs":230.7545}   |
+| 28  | 849.139 / 816.038   | 938.197 / 859.556   | 89.058 / 43.517   | {"blockedOrPreparationToFirstPhysicalMutationMs":4.3027,"dispatchToBlockedOrPreparationMs":443.3656,"firstNewGenerationToCleanupDrainedMs":175.5081,"firstPhysicalMutationToFirstNewGenerationMs":315.0207,"presentationToStrictCompletionMs":135.3592}   | {"blockedOrPreparationToFirstPhysicalMutationMs":3.3751,"dispatchToBlockedOrPreparationMs":397.3447,"firstNewGenerationToCleanupDrainedMs":171.9637,"firstPhysicalMutationToFirstNewGenerationMs":286.8724,"presentationToStrictCompletionMs":89.7583}    |
+| 29  | 1762.502 / 1282.281 | 1850.173 / 1438.319 | 87.671 / 156.038  | {"blockedOrPreparationToFirstPhysicalMutationMs":717.4208,"dispatchToBlockedOrPreparationMs":454.3886,"firstNewGenerationToCleanupDrainedMs":172.8374,"firstPhysicalMutationToFirstNewGenerationMs":505.5261,"presentationToStrictCompletionMs":169.6445} | {"blockedOrPreparationToFirstPhysicalMutationMs":23.5635,"dispatchToBlockedOrPreparationMs":703.5446,"firstNewGenerationToCleanupDrainedMs":202.6941,"firstPhysicalMutationToFirstNewGenerationMs":508.5164,"presentationToStrictCompletionMs":238.2744}  |
+| 30  | 464.694 / 503.869   | 696.614 / 730.674   | 231.920 / 226.805 | {"blockedOrPreparationToFirstPhysicalMutationMs":3.7447,"dispatchToBlockedOrPreparationMs":350.0409,"firstNewGenerationToCleanupDrainedMs":232.4266,"firstPhysicalMutationToFirstNewGenerationMs":110.402,"presentationToStrictCompletionMs":231.9199}    | {"blockedOrPreparationToFirstPhysicalMutationMs":3.2535,"dispatchToBlockedOrPreparationMs":391.7451,"firstNewGenerationToCleanupDrainedMs":227.109,"firstPhysicalMutationToFirstNewGenerationMs":108.566,"presentationToStrictCompletionMs":226.8046}     |
+| 31  | 660.497 / 594.050   | 660.497 / 594.050   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":61.1083,"dispatchToBlockedOrPreparationMs":461.9829,"firstNewGenerationToCleanupDrainedMs":42.7901,"firstPhysicalMutationToFirstNewGenerationMs":94.6154,"presentationToStrictCompletionMs":0}           | {"blockedOrPreparationToFirstPhysicalMutationMs":49.0265,"dispatchToBlockedOrPreparationMs":404.5485,"firstNewGenerationToCleanupDrainedMs":50.1418,"firstPhysicalMutationToFirstNewGenerationMs":90.333,"presentationToStrictCompletionMs":0}            |
+| 32  | 190.736 / 192.354   | 467.899 / 479.112   | 277.163 / 286.758 | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":129.4716,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":277.1627}             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":129.1379,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":286.7583}             |
+| 33  | 253.033 / 250.271   | 253.033 / 250.271   | 0 / 0             | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":253.0332,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    | {"blockedOrPreparationToFirstPhysicalMutationMs":null,"dispatchToBlockedOrPreparationMs":250.2714,"firstNewGenerationToCleanupDrainedMs":null,"firstPhysicalMutationToFirstNewGenerationMs":null,"presentationToStrictCompletionMs":0}                    |
 
 | Row | Relatch proof frames B/C | Delta frames | Relatch proof ms B/C | Delta ms | Strict frames B/C | Delta frames |
 | --- | ------------------------ | ------------ | -------------------- | -------- | ----------------- | ------------ |
-| 1   | 9 / 10                   | 1            | 518.899 / 471.767    | -47.132  | 14 / 16           | 2            |
+| 1   | 10 / 10                  | 0            | 523.896 / 471.767    | -52.129  | 16 / 16           | 0            |
 | 2   | n/a / n/a                | n/a          | n/a / n/a            | n/a      | 4 / 3             | -1           |
 | 3   | n/a / n/a                | n/a          | n/a / n/a            | n/a      | 3 / 3             | 0            |
-| 4   | 12 / 12                  | 0            | 758.697 / 711.942    | -46.755  | 17 / 17           | 0            |
-| 5   | 13 / 13                  | 0            | 712.533 / 716.796    | 4.263    | 18 / 18           | 0            |
-| 6   | 18 / 17                  | -1           | 978.390 / 866.754    | -111.637 | 23 / 22           | -1           |
-| 7   | 16 / 17                  | 1            | 926.545 / 882.602    | -43.943  | 21 / 22           | 1            |
-| 8   | 16 / 18                  | 2            | 942.854 / 917.860    | -24.994  | 21 / 23           | 2            |
-| 9   | 16 / 18                  | 2            | 1114.544 / 879.612   | -234.932 | 21 / 23           | 2            |
-| 10  | 9 / 10                   | 1            | 647.072 / 543.377    | -103.694 | 14 / 16           | 2            |
-| 11  | 4 / 3                    | -1           | 203.213 / 164.484    | -38.728  | 10 / 10           | 0            |
-| 12  | n/a / n/a                | n/a          | n/a / n/a            | n/a      | 4 / 3             | -1           |
-| 13  | 9 / 9                    | 0            | 600.892 / 537.261    | -63.631  | 10 / 10           | 0            |
-| 14  | 24 / 22                  | -2           | 1291.335 / 1159.519  | -131.816 | 29 / 27           | -2           |
-| 15  | 12 / 22                  | 10           | 597.518 / 1042.162   | 444.644  | 17 / 27           | 10           |
-| 16  | 12 / 12                  | 0            | 590.962 / 559.353    | -31.609  | 15 / 17           | 2            |
-| 17  | 12 / 12                  | 0            | 694.932 / 654.882    | -40.050  | 16 / 16           | 0            |
-| 18  | 22 / 22                  | 0            | 1249.287 / 1077.834  | -171.452 | 28 / 31           | 3            |
-| 19  | 11 / 12                  | 1            | 608.832 / 596.193    | -12.639  | 15 / 16           | 1            |
-| 20  | 10 / 9                   | -1           | 500.976 / 508.995    | 8.019    | 15 / 14           | -1           |
+| 4   | 14 / 12                  | -2           | 772.572 / 711.942    | -60.630  | 19 / 17           | -2           |
+| 5   | 14 / 13                  | -1           | 761.827 / 716.796    | -45.031  | 19 / 18           | -1           |
+| 6   | 18 / 17                  | -1           | 915.181 / 866.754    | -48.428  | 23 / 22           | -1           |
+| 7   | 17 / 17                  | 0            | 917.597 / 882.602    | -34.995  | 22 / 22           | 0            |
+| 8   | 17 / 18                  | 1            | 896.100 / 917.860    | 21.760   | 22 / 23           | 1            |
+| 9   | 16 / 18                  | 2            | 848.555 / 879.612    | 31.057   | 21 / 23           | 2            |
+| 10  | 9 / 10                   | 1            | 558.579 / 543.377    | -15.202  | 14 / 16           | 2            |
+| 11  | 3 / 3                    | 0            | 162.582 / 164.484    | 1.903    | 10 / 10           | 0            |
+| 12  | n/a / n/a                | n/a          | n/a / n/a            | n/a      | 3 / 3             | 0            |
+| 13  | 9 / 9                    | 0            | 594.114 / 537.261    | -56.853  | 10 / 10           | 0            |
+| 14  | 23 / 22                  | -1           | 1120.356 / 1159.519  | 39.162   | 28 / 27           | -1           |
+| 15  | 12 / 22                  | 10           | 558.729 / 1042.162   | 483.433  | 19 / 27           | 8            |
+| 16  | 12 / 12                  | 0            | 568.091 / 559.353    | -8.738   | 16 / 17           | 1            |
+| 17  | 12 / 12                  | 0            | 552.657 / 654.882    | 102.225  | 17 / 16           | -1           |
+| 18  | 12 / 22                  | 10           | 576.083 / 1077.834   | 501.751  | 16 / 31           | 15           |
+| 19  | 12 / 12                  | 0            | 555.956 / 596.193    | 40.237   | 16 / 16           | 0            |
+| 20  | 16 / 9                   | -7           | 853.302 / 508.995    | -344.307 | 21 / 14           | -7           |
 | 21  | n/a / n/a                | n/a          | n/a / n/a            | n/a      | 10 / 11           | 1            |
 | 22  | n/a / n/a                | n/a          | n/a / n/a            | n/a      | 4 / 4             | 0            |
-| 23  | n/a / n/a                | n/a          | n/a / n/a            | n/a      | 5 / 3             | -2           |
-| 24  | 9 / 10                   | 1            | 631.751 / 614.816    | -16.935  | 14 / 15           | 1            |
-| 25  | 13 / 12                  | -1           | 901.682 / 700.260    | -201.422 | 18 / 17           | -1           |
-| 26  | 24 / 23                  | -1           | 1412.734 / 1242.348  | -170.386 | 29 / 28           | -1           |
-| 27  | 10 / 11                  | 1            | 611.828 / 549.839    | -61.989  | 16 / 17           | 1            |
-| 28  | 11 / 11                  | 0            | 822.310 / 687.592    | -134.718 | 16 / 16           | 0            |
-| 29  | 29 / 23                  | -6           | 1765.292 / 1235.624  | -529.668 | 34 / 28           | -6           |
-| 30  | 9 / 10                   | 1            | 499.340 / 503.565    | 4.225    | 15 / 16           | 1            |
-| 31  | 9 / 9                    | 0            | 614.628 / 543.908    | -70.720  | 10 / 10           | 0            |
+| 23  | n/a / n/a                | n/a          | n/a / n/a            | n/a      | 3 / 3             | 0            |
+| 24  | 15 / 10                  | -5           | 912.054 / 614.816    | -297.239 | 20 / 15           | -5           |
+| 25  | 23 / 12                  | -11          | 1279.758 / 700.260   | -579.498 | 28 / 17           | -11          |
+| 26  | 12 / 23                  | 11           | 675.179 / 1242.348   | 567.169  | 17 / 28           | 11           |
+| 27  | 10 / 11                  | 1            | 558.577 / 549.839    | -8.738   | 16 / 17           | 1            |
+| 28  | 11 / 11                  | 0            | 762.689 / 687.592    | -75.097  | 16 / 16           | 0            |
+| 29  | 29 / 23                  | -6           | 1677.335 / 1235.624  | -441.711 | 34 / 28           | -6           |
+| 30  | 9 / 10                   | 1            | 464.188 / 503.565    | 39.377   | 15 / 16           | 1            |
+| 31  | 9 / 9                    | 0            | 617.707 / 543.908    | -73.799  | 10 / 10           | 0            |
 | 32  | n/a / n/a                | n/a          | n/a / n/a            | n/a      | 10 / 11           | 1            |
 | 33  | n/a / n/a                | n/a          | n/a / n/a            | n/a      | 3 / 3             | 0            |
 
@@ -466,32 +653,32 @@ B/C cells are baseline/candidate; times are ms excluding the pre-dispatch wait. 
 | 1   | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
 | 2   | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
 | 3   | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
-| 4   | 1 / 1                | 0     | 2 / 2              | 0     | 221.998 / 228.557  | 6.559    |
-| 5   | 1 / 1                | 0     | 2 / 2              | 0     | 218.343 / 242.748  | 24.404   |
-| 6   | 1 / 1                | 0     | 6 / 6              | 0     | 395.562 / 385.643  | -9.919   |
-| 7   | 1 / 1                | 0     | 6 / 6              | 0     | 435.796 / 376.351  | -59.445  |
-| 8   | 1 / 1                | 0     | 6 / 6              | 0     | 417.755 / 404.965  | -12.790  |
-| 9   | 1 / 1                | 0     | 6 / 6              | 0     | 484.747 / 363.200  | -121.547 |
+| 4   | 1 / 1                | 0     | 2 / 2              | 0     | 237.463 / 228.557  | -8.906   |
+| 5   | 1 / 1                | 0     | 2 / 2              | 0     | 232.347 / 242.748  | 10.400   |
+| 6   | 1 / 1                | 0     | 6 / 6              | 0     | 400.832 / 385.643  | -15.190  |
+| 7   | 1 / 1                | 0     | 6 / 6              | 0     | 401.917 / 376.351  | -25.566  |
+| 8   | 1 / 1                | 0     | 6 / 6              | 0     | 401.944 / 404.965  | 3.022    |
+| 9   | 1 / 1                | 0     | 6 / 6              | 0     | 390.033 / 363.200  | -26.832  |
 | 10  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
 | 11  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
 | 12  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
 | 13  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
-| 14  | 1 / 1                | 0     | 6 / 6              | 0     | 321.888 / 275.831  | -46.057  |
-| 15  | 1 / 1                | 0     | 3 / 13             | 10    | 156.505 / 647.943  | 491.438  |
-| 16  | 1 / 1                | 0     | 3 / 3              | 0     | 141.262 / 157.094  | 15.831   |
-| 17  | 1 / 1                | 0     | 3 / 3              | 0     | 205.356 / 171.022  | -34.334  |
-| 18  | 1 / 1                | 0     | 13 / 13            | 0     | 809.540 / 648.801  | -160.739 |
-| 19  | 1 / 1                | 0     | 3 / 3              | 0     | 183.573 / 149.211  | -34.362  |
-| 20  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
+| 14  | 1 / 1                | 0     | 6 / 6              | 0     | 307.782 / 275.831  | -31.951  |
+| 15  | 1 / 1                | 0     | 3 / 13             | 10    | 143.903 / 647.943  | 504.041  |
+| 16  | 1 / 1                | 0     | 3 / 3              | 0     | 141.176 / 157.094  | 15.918   |
+| 17  | 1 / 1                | 0     | 3 / 3              | 0     | 144.864 / 171.022  | 26.158   |
+| 18  | 1 / 1                | 0     | 3 / 13             | 10    | 144.350 / 648.801  | 504.452  |
+| 19  | 1 / 1                | 0     | 3 / 3              | 0     | 143.964 / 149.211  | 5.247    |
+| 20  | 1 / 0                | -1    | 5 / 0              | -5    | 334.871 / 0        | -334.871 |
 | 21  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
 | 22  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
 | 23  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
 | 24  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
-| 25  | 1 / 1                | 0     | 2 / 2              | 0     | 261.100 / 211.046  | -50.054  |
-| 26  | 2 / 2                | 0     | 11 / 11            | 0     | 722.255 / 638.025  | -84.230  |
+| 25  | 1 / 1                | 0     | 6 / 2              | -4    | 395.523 / 211.046  | -184.478 |
+| 26  | 1 / 2                | 1     | 2 / 11             | 9     | 93.461 / 638.025   | 544.564  |
 | 27  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
 | 28  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
-| 29  | 3 / 2                | -1    | 16 / 11            | -5    | 1115.836 / 700.338 | -415.498 |
+| 29  | 3 / 2                | -1    | 16 / 11            | -5    | 1041.248 / 700.338 | -340.910 |
 | 30  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
 | 31  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
 | 32  | 0 / 0                | 0     | 0 / 0              | 0     | 0 / 0              | 0        |
@@ -499,14 +686,14 @@ B/C cells are baseline/candidate; times are ms excluding the pre-dispatch wait. 
 
 ## Cumulative gates and other health evidence
 
-### nvidia-20260910T214350263Z / nvidia / pass 1
+### renderscale-tuning-nvidia-2026-09-10T18-15-33-375Z / nvidia / pass 1
 
 Accepted: false. Health evidence: COMPLETE.
 
-| Raw unmet gate                   | Observed                                                                                                                                            | Limit                                                                                 | Assessment role   | Reason                                                                                          |
-| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------- |
-| presentation_stretch_frame_bound | {"activeFrames":0,"activeFramesAtStop":0,"maximumCompletedFrames":6,"maximumObservedFrames":6}                                                      | {"maximumFrames":2}                                                                   | DIAGNOSTIC_ONLY   | Fixed stretch cutoff is inapplicable to imposed settling; compare measured frames and duration. |
-| presentation_recovered           | {"lastBothEyesVendorFrame":159796,"leftPath":"NativeOriginal","referenceFrame":160181,"rightPath":"NativeOriginal","stableVendorPresentation":true} | {"bothEyes":true,"maximumAgeFrames":2,"path":"VendorEvaluated","stableContract":true} | CONTRACT_MISMATCH | Scaled-presentation gate conflicts with the proven native terminal target.                      |
+| Raw unmet gate                   | Observed                                                                                                                                          | Limit                                                                                 | Assessment role   | Reason                                                                                          |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------- |
+| presentation_stretch_frame_bound | {"activeFrames":0,"activeFramesAtStop":0,"maximumCompletedFrames":6,"maximumObservedFrames":6}                                                    | {"maximumFrames":2}                                                                   | DIAGNOSTIC_ONLY   | Fixed stretch cutoff is inapplicable to imposed settling; compare measured frames and duration. |
+| presentation_recovered           | {"lastBothEyesVendorFrame":18078,"leftPath":"NativeOriginal","referenceFrame":18480,"rightPath":"NativeOriginal","stableVendorPresentation":true} | {"bothEyes":true,"maximumAgeFrames":2,"path":"VendorEvaluated","stableContract":true} | CONTRACT_MISMATCH | Scaled-presentation gate conflicts with the proven native terminal target.                      |
 
 | Failure counter                       | Observations |
 | ------------------------------------- | ------------ |
@@ -521,14 +708,14 @@ Accepted: false. Health evidence: COMPLETE.
 | vendorFailureStretchEyeObservations   | 0            |
 | boundsMismatchFallbackEyeObservations | 0            |
 
-### nvidia-20260910T214350263Z / nvidia / pass 2
+### renderscale-tuning-nvidia-2026-09-10T18-15-33-375Z / nvidia / pass 2
 
 Accepted: false. Health evidence: COMPLETE.
 
-| Raw unmet gate                   | Observed                                                                                                                                            | Limit                                                                                 | Assessment role   | Reason                                                                                          |
-| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------- |
-| presentation_stretch_frame_bound | {"activeFrames":0,"activeFramesAtStop":0,"maximumCompletedFrames":13,"maximumObservedFrames":13}                                                    | {"maximumFrames":2}                                                                   | DIAGNOSTIC_ONLY   | Fixed stretch cutoff is inapplicable to imposed settling; compare measured frames and duration. |
-| presentation_recovered           | {"lastBothEyesVendorFrame":164115,"leftPath":"NativeOriginal","referenceFrame":164474,"rightPath":"NativeOriginal","stableVendorPresentation":true} | {"bothEyes":true,"maximumAgeFrames":2,"path":"VendorEvaluated","stableContract":true} | CONTRACT_MISMATCH | Scaled-presentation gate conflicts with the proven native terminal target.                      |
+| Raw unmet gate                   | Observed                                                                                                                                          | Limit                                                                                 | Assessment role   | Reason                                                                                          |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------- |
+| presentation_stretch_frame_bound | {"activeFrames":0,"activeFramesAtStop":0,"maximumCompletedFrames":6,"maximumObservedFrames":6}                                                    | {"maximumFrames":2}                                                                   | DIAGNOSTIC_ONLY   | Fixed stretch cutoff is inapplicable to imposed settling; compare measured frames and duration. |
+| presentation_recovered           | {"lastBothEyesVendorFrame":22718,"leftPath":"NativeOriginal","referenceFrame":23111,"rightPath":"NativeOriginal","stableVendorPresentation":true} | {"bothEyes":true,"maximumAgeFrames":2,"path":"VendorEvaluated","stableContract":true} | CONTRACT_MISMATCH | Scaled-presentation gate conflicts with the proven native terminal target.                      |
 
 | Failure counter                       | Observations |
 | ------------------------------------- | ------------ |
@@ -593,14 +780,14 @@ Memory classification is retained independently. Negative deltas do not prove le
 
 | Lane   | Pass | Metric            | B start/end/change                             | C start/end/change                            | Change difference C-B |
 | ------ | ---- | ----------------- | ---------------------------------------------- | --------------------------------------------- | --------------------- |
-| nvidia | 1    | processPrivateMiB | 16720.40234375 / 16485.47265625 / -234.9296875 | 16733.71484375 / 16496.359375 / -237.35546875 | -2.426                |
-| nvidia | 1    | systemCommitMiB   | 56627.2421875 / 55807.25390625 / -819.98828125 | 55395.53125 / 55048.33984375 / -347.19140625  | 472.797               |
-| nvidia | 1    | dxgiUsageMiB      | 4176.86328125 / 3565.66015625 / -611.203125    | 4285.1640625 / 3534.4765625 / -750.6875       | -139.484              |
-| nvidia | 1    | liveTextures      | 0 / 241 / 241                                  | 0 / 263 / 263                                 | 22                    |
-| nvidia | 1    | liveTextureMiB    | 0 / 2375.9215354919434 / 2375.9215354919434    | 0 / 2402.765727996826 / 2402.765727996826     | 26.844                |
-| nvidia | 2    | processPrivateMiB | 16859.75 / 16633.83984375 / -225.91015625      | 16822.87109375 / 16603.328125 / -219.54296875 | 6.367                 |
-| nvidia | 2    | systemCommitMiB   | 56129.0625 / 56480.27734375 / 351.21484375     | 55520.37890625 / 55103.39453125 / -416.984375 | -768.199              |
-| nvidia | 2    | dxgiUsageMiB      | 3898.15234375 / 3604.05078125 / -294.1015625   | 3822.21484375 / 3647.90234375 / -174.3125     | 119.789               |
+| nvidia | 1    | processPrivateMiB | 16521.3203125 / 16407.21484375 / -114.10546875 | 16733.71484375 / 16496.359375 / -237.35546875 | -123.250              |
+| nvidia | 1    | systemCommitMiB   | 54414.625 / 54313.40234375 / -101.22265625     | 55395.53125 / 55048.33984375 / -347.19140625  | -245.969              |
+| nvidia | 1    | dxgiUsageMiB      | 4201.6171875 / 3527.0078125 / -674.609375      | 4285.1640625 / 3534.4765625 / -750.6875       | -76.078               |
+| nvidia | 1    | liveTextures      | 0 / 256 / 256                                  | 0 / 263 / 263                                 | 7                     |
+| nvidia | 1    | liveTextureMiB    | 0 / 2424.0259971618652 / 2424.0259971618652    | 0 / 2402.765727996826 / 2402.765727996826     | -21.260               |
+| nvidia | 2    | processPrivateMiB | 16831.234375 / 16617.78515625 / -213.44921875  | 16822.87109375 / 16603.328125 / -219.54296875 | -6.094                |
+| nvidia | 2    | systemCommitMiB   | 54507.67578125 / 54547.8203125 / 40.14453125   | 55520.37890625 / 55103.39453125 / -416.984375 | -457.129              |
+| nvidia | 2    | dxgiUsageMiB      | 3889.8828125 / 3566.79296875 / -323.08984375   | 3822.21484375 / 3647.90234375 / -174.3125     | 148.777               |
 | nvidia | 2    | liveTextures      | 0 / 233 / 233                                  | 0 / 236 / 236                                 | 3                     |
 | nvidia | 2    | liveTextureMiB    | 0 / 2349.4316596984863 / 2349.4316596984863    | 0 / 2358.7650413513184 / 2358.7650413513184   | 9.333                 |
 
@@ -610,247 +797,247 @@ Counters span different observed frame counts and changing methods. They are not
 
 <details><summary>nvidia pass 1: all captured scalar counters</summary>
 
-| Metric (captured units)                                 | Baseline    | Candidate   | Delta      |
-| ------------------------------------------------------- | ----------- | ----------- | ---------- |
-| cpu/active                                              | false       | false       | n/a        |
-| cpu/compactPresentationContract/publishes               | 2184        | 2294        | 110        |
-| cpu/compactPresentationContract/reuses                  | 2162        | 2272        | 110        |
-| cpu/devBenchOnly                                        | true        | true        | n/a        |
-| cpu/generationResourceValidation/contractInvalidations  | 70          | 71          | 1          |
-| cpu/generationResourceValidation/contractPublishes      | 154         | 145         | -9         |
-| cpu/generationResourceValidation/fullValidations        | 582         | 567         | -15        |
-| cpu/generationResourceValidation/stableChecks           | 8304        | 8647        | 343        |
-| cpu/generationResourceValidation/stableHits             | 8227        | 8568        | 341        |
-| cpu/generationResourceValidation/stableMisses           | 77          | 79          | 2          |
-| cpu/schemaVersion                                       | 1           | 1           | 0          |
-| cpu/sessionId                                           | 1           | 1           | 0          |
-| cpu/stateProportionalSafety/boundsGuard/candidates      | 0           | 0           | 0          |
-| cpu/stateProportionalSafety/boundsGuard/fastSkips       | 4211        | 4457        | 246        |
-| cpu/stateProportionalSafety/deferredRecovery/candidates | 0           | 0           | 0          |
-| cpu/stateProportionalSafety/deferredRecovery/fastSkips  | 4211        | 4457        | 246        |
-| cpu/stateProportionalSafety/engineRetirement/fastSkips  | 4169        | 4415        | 246        |
-| cpu/stateProportionalSafety/engineRetirement/services   | 42          | 42          | 0          |
-| cpu/stateProportionalSafety/memoryTelemetry/candidates  | 4211        | 4457        | 246        |
-| cpu/stateProportionalSafety/memoryTelemetry/fastSkips   | 0           | 0           | 0          |
-| cpu/stateProportionalSafety/memoryTrim/fastSkips        | 4190        | 4436        | 246        |
-| cpu/stateProportionalSafety/memoryTrim/services         | 21          | 21          | 0          |
-| cpu/stateProportionalSafety/nativeGuard/candidates      | 34          | 35          | 1          |
-| cpu/stateProportionalSafety/nativeGuard/fastSkips       | 4177        | 4422        | 245        |
-| cpu/stateProportionalSafety/postMutationGuard/fastSkips | 4118        | 4362        | 244        |
-| cpu/stateProportionalSafety/postMutationGuard/services  | 94          | 94          | 0          |
-| cpu/stateProportionalSafety/promotion/candidates        | 15          | 15          | 0          |
-| cpu/stateProportionalSafety/promotion/fastSkips         | 4196        | 4442        | 246        |
-| cpu/strongStereoPacket/captures                         | 4540        | 4749        | 209        |
-| cpu/strongStereoPacket/commitAccepts                    | 4347        | 4570        | 223        |
-| cpu/strongStereoPacket/commitRejects                    | 67          | 64          | -3         |
-| cpu/strongStereoPacket/commitValidations                | 4414        | 4634        | 220        |
-| cpu/strongStereoPacket/cycleReuses                      | 2229        | 2335        | 106        |
-| cpu/strongStereoPacket/fastSkips                        | 3882        | 4165        | 283        |
-| cpu/strongStereoPacket/invalidations                    | 4770        | 5009        | 239        |
-| cpu/strongStereoPacket/lifetimeRebuilds                 | 104         | 101         | -3         |
-| cpu/strongStereoPacket/lifetimeReuses                   | 2207        | 2313        | 106        |
-| cpu/strongStereoPacket/queueHoldAverageMicroseconds     | 1.855       | 1.630       | -0.225     |
-| cpu/strongStereoPacket/queueHoldMaximumMicroseconds     | 24          | 26.800      | 2.800      |
-| cpu/strongStereoPacket/queueWaitAverageMicroseconds     | 0.136       | 0.108       | -0.028     |
-| cpu/strongStereoPacket/queueWaitMaximumMicroseconds     | 1.500       | 1.400       | -0.100     |
-| cpu/window/currentFrame                                 | 160182      | 17085       | -143097    |
-| cpu/window/elapsedFrames                                | 4212        | 4456        | 244        |
-| cpu/window/initialized                                  | true        | true        | n/a        |
-| cpu/window/startFrame                                   | 155970      | 12629       | -143341    |
-| gpu/active                                              | false       | false       | n/a        |
-| gpu/currentFrame                                        | 160182      | 17086       | -143096    |
-| gpu/item10PeripheryTAAHistory/avoidedPixelRatio         | 0.501       | 0.501       | 0          |
-| gpu/item10PeripheryTAAHistory/croppedPixels             | 6072400224  | 6408627984  | 336227760  |
-| gpu/item10PeripheryTAAHistory/dispatches                | 4786        | 5051        | 265        |
-| gpu/item10PeripheryTAAHistory/fullEyePixels             | 12157205760 | 12830348160 | 673142400  |
-| gpu/item10PeripheryTAAHistory/pixelRatio                | 0.499       | 0.499       | 0          |
-| gpu/item5ActiveFSRCopies/activePixelRatio               | 0.306       | 0.308       | 0.002      |
-| gpu/item5ActiveFSRCopies/activePixels                   | 11703352280 | 12453511360 | 750159080  |
-| gpu/item5ActiveFSRCopies/avoidedPixels                  | 26551457320 | 28036639040 | 1485181720 |
-| gpu/item5ActiveFSRCopies/copyCalls                      | 15060       | 15940       | 880        |
-| gpu/item6RuntimeFSRStereo/batchAttempts                 | 0           | 0           | 0          |
-| gpu/item6RuntimeFSRStereo/batchFailures                 | 0           | 0           | 0          |
-| gpu/item6RuntimeFSRStereo/batchNotHandled               | 0           | 0           | 0          |
-| gpu/item6RuntimeFSRStereo/batchReuses                   | 0           | 0           | 0          |
-| gpu/item6RuntimeFSRStereo/batchSuccesses                | 0           | 0           | 0          |
-| gpu/item6RuntimeFSRStereo/interopTransactionsAvoided    | 0           | 0           | 0          |
-| gpu/item7EarlyHAM/directOutputSkips                     | 1987        | 2105        | 118        |
-| gpu/item7EarlyHAM/executedClears                        | 2002        | 2116        | 114        |
-| gpu/item7EarlyHAM/protectedPostProcessInputs            | 2002        | 2116        | 114        |
-| gpu/item8MirrorWriteback/blitPairs                      | 0           | 0           | 0          |
-| gpu/item8MirrorWriteback/consumerEyeObservations        | 0           | 0           | 0          |
-| gpu/item8MirrorWriteback/copyPairs                      | 0           | 0           | 0          |
-| gpu/item8MirrorWriteback/skippedEyeObservations         | 4148        | 4380        | 232        |
-| gpu/item9SpatialComposite/centerRectPixels              | 0           | 0           | 0          |
-| gpu/item9SpatialComposite/dispatches                    | 0           | 0           | 0          |
-| gpu/item9SpatialComposite/fullEyePixels                 | 0           | 0           | 0          |
-| gpu/observedFrames                                      | 4212        | 4457        | 245        |
-| gpu/startFrame                                          | 155970      | 12629       | -143341    |
-| profiler/available                                      | true        | true        | n/a        |
-| profiler/capabilities                                   | 63          | 63          | 0          |
-| profiler/capturing                                      | false       | false       | n/a        |
-| profiler/enabled                                        | true        | true        | n/a        |
-| profiler/frame/acquiredSlots                            | 0           | 0           | 0          |
-| profiler/frame/captured                                 | 0           | 0           | 0          |
-| profiler/frame/peakAcquiredSlots                        | 0           | 0           | 0          |
-| profiler/frame/slotRefusals                             | 0           | 0           | 0          |
-| profiler/limits/frameLatency                            | 3           | 3           | 0          |
-| profiler/limits/historyCapacity                         | 300         | 300         | 0          |
-| profiler/limits/maximumTimers                           | 128         | 128         | 0          |
-| profiler/timerCount                                     | 0           | 0           | 0          |
-| profiler/totalsMs/cpu                                   | n/a         | n/a         | n/a        |
-| profiler/totalsMs/gpu                                   | n/a         | n/a         | n/a        |
-| profiler/totalsMs/resolvedCpu                           | n/a         | n/a         | n/a        |
-| profiler/totalsMs/resolvedGpu                           | n/a         | n/a         | n/a        |
-| texture/active                                          | false       | false       | n/a        |
-| texture/attachFailures                                  | 0           | 0           | 0          |
-| texture/createdCount                                    | 3969        | 3962        | -7         |
-| texture/createdEstimatedBytes                           | 38791801128 | 38741091672 | -50709456  |
-| texture/currentCohort                                   | 0           | 0           | 0          |
-| texture/destroyedCount                                  | 3728        | 3699        | -29        |
-| texture/destroyedEstimatedBytes                         | 36300466828 | 36221609196 | -78857632  |
-| texture/droppedTextureRecords                           | 0           | 0           | 0          |
-| texture/faceGenAssignmentFailures                       | 0           | 0           | 0          |
-| texture/faceGenTintAssignmentCount                      | 0           | 0           | 0          |
-| texture/groupCount                                      | 893         | 893         | 0          |
-| texture/liveTextureRecordCount                          | 241         | 263         | 22         |
-| texture/maxTrackedLiveTextures                          | 16384       | 16384       | 0          |
-| texture/maxTrackedTextureGroups                         | 4096        | 4096        | 0          |
-| texture/niSourceTextureMatchedCount                     | 32          | 54          | 22         |
-| texture/niSourceTextureMatchedEstimatedBytes            | 115682720   | 143830896   | 28148176   |
-| texture/niSourceTextureOwnerRecordsDropped              | 0           | 0           | 0          |
-| texture/niSourceTextureResourceCount                    | 1482        | 1504        | 22         |
-| texture/niSourceTextureTraversalLimitReached            | false       | false       | n/a        |
-| texture/outstandingCount                                | 241         | 263         | 22         |
-| texture/outstandingEstimatedBytes                       | 2491334300  | 2519482476  | 28148176   |
-| texture/outstandingUnknownEstimateCount                 | 0           | 0           | 0          |
-| texture/recordingFailures                               | 0           | 0           | 0          |
-| texture/sentinelAllocationFailures                      | 0           | 0           | 0          |
-| texture/sessionID                                       | 1           | 1           | 0          |
-| texture/supported                                       | true        | true        | n/a        |
+| Metric (captured units)                                 | Baseline    | Candidate   | Delta     |
+| ------------------------------------------------------- | ----------- | ----------- | --------- |
+| cpu/active                                              | false       | false       | n/a       |
+| cpu/compactPresentationContract/publishes               | 2222        | 2294        | 72        |
+| cpu/compactPresentationContract/reuses                  | 2200        | 2272        | 72        |
+| cpu/devBenchOnly                                        | true        | true        | n/a       |
+| cpu/generationResourceValidation/contractInvalidations  | 70          | 71          | 1         |
+| cpu/generationResourceValidation/contractPublishes      | 151         | 145         | -6        |
+| cpu/generationResourceValidation/fullValidations        | 568         | 567         | -1        |
+| cpu/generationResourceValidation/stableChecks           | 8397        | 8647        | 250       |
+| cpu/generationResourceValidation/stableHits             | 8316        | 8568        | 252       |
+| cpu/generationResourceValidation/stableMisses           | 81          | 79          | -2        |
+| cpu/schemaVersion                                       | 1           | 1           | 0         |
+| cpu/sessionId                                           | 1           | 1           | 0         |
+| cpu/stateProportionalSafety/boundsGuard/candidates      | 0           | 0           | 0         |
+| cpu/stateProportionalSafety/boundsGuard/fastSkips       | 4328        | 4457        | 129       |
+| cpu/stateProportionalSafety/deferredRecovery/candidates | 0           | 0           | 0         |
+| cpu/stateProportionalSafety/deferredRecovery/fastSkips  | 4328        | 4457        | 129       |
+| cpu/stateProportionalSafety/engineRetirement/fastSkips  | 4286        | 4415        | 129       |
+| cpu/stateProportionalSafety/engineRetirement/services   | 42          | 42          | 0         |
+| cpu/stateProportionalSafety/memoryTelemetry/candidates  | 4328        | 4457        | 129       |
+| cpu/stateProportionalSafety/memoryTelemetry/fastSkips   | 0           | 0           | 0         |
+| cpu/stateProportionalSafety/memoryTrim/fastSkips        | 4307        | 4436        | 129       |
+| cpu/stateProportionalSafety/memoryTrim/services         | 21          | 21          | 0         |
+| cpu/stateProportionalSafety/nativeGuard/candidates      | 34          | 35          | 1         |
+| cpu/stateProportionalSafety/nativeGuard/fastSkips       | 4294        | 4422        | 128       |
+| cpu/stateProportionalSafety/postMutationGuard/fastSkips | 4238        | 4362        | 124       |
+| cpu/stateProportionalSafety/postMutationGuard/services  | 90          | 94          | 4         |
+| cpu/stateProportionalSafety/promotion/candidates        | 15          | 15          | 0         |
+| cpu/stateProportionalSafety/promotion/fastSkips         | 4313        | 4442        | 129       |
+| cpu/strongStereoPacket/captures                         | 4628        | 4749        | 121       |
+| cpu/strongStereoPacket/commitAccepts                    | 4424        | 4570        | 146       |
+| cpu/strongStereoPacket/commitRejects                    | 66          | 64          | -2        |
+| cpu/strongStereoPacket/commitValidations                | 4490        | 4634        | 144       |
+| cpu/strongStereoPacket/cycleReuses                      | 2275        | 2335        | 60        |
+| cpu/strongStereoPacket/fastSkips                        | 4028        | 4165        | 137       |
+| cpu/strongStereoPacket/invalidations                    | 4882        | 5009        | 127       |
+| cpu/strongStereoPacket/lifetimeRebuilds                 | 100         | 101         | 1         |
+| cpu/strongStereoPacket/lifetimeReuses                   | 2253        | 2313        | 60        |
+| cpu/strongStereoPacket/queueHoldAverageMicroseconds     | 1.855       | 1.630       | -0.225    |
+| cpu/strongStereoPacket/queueHoldMaximumMicroseconds     | 68.100      | 26.800      | -41.300   |
+| cpu/strongStereoPacket/queueWaitAverageMicroseconds     | 0.147       | 0.108       | -0.039    |
+| cpu/strongStereoPacket/queueWaitMaximumMicroseconds     | 11.900      | 1.400       | -10.500   |
+| cpu/window/currentFrame                                 | 18480       | 17085       | -1395     |
+| cpu/window/elapsedFrames                                | 4328        | 4456        | 128       |
+| cpu/window/initialized                                  | true        | true        | n/a       |
+| cpu/window/startFrame                                   | 14152       | 12629       | -1523     |
+| gpu/active                                              | false       | false       | n/a       |
+| gpu/currentFrame                                        | 18482       | 17086       | -1396     |
+| gpu/item10PeripheryTAAHistory/avoidedPixelRatio         | 0.501       | 0.501       | 0         |
+| gpu/item10PeripheryTAAHistory/croppedPixels             | 6230998224  | 6408627984  | 177629760 |
+| gpu/item10PeripheryTAAHistory/dispatches                | 4911        | 5051        | 140       |
+| gpu/item10PeripheryTAAHistory/fullEyePixels             | 12474725760 | 12830348160 | 355622400 |
+| gpu/item10PeripheryTAAHistory/pixelRatio                | 0.499       | 0.499       | 0         |
+| gpu/item5ActiveFSRCopies/activePixelRatio               | 0.306       | 0.308       | 0.001     |
+| gpu/item5ActiveFSRCopies/activePixels                   | 12047940400 | 12453511360 | 405570960 |
+| gpu/item5ActiveFSRCopies/avoidedPixels                  | 27299138000 | 28036639040 | 737501040 |
+| gpu/item5ActiveFSRCopies/copyCalls                      | 15490       | 15940       | 450       |
+| gpu/item6RuntimeFSRStereo/batchAttempts                 | 0           | 0           | 0         |
+| gpu/item6RuntimeFSRStereo/batchFailures                 | 0           | 0           | 0         |
+| gpu/item6RuntimeFSRStereo/batchNotHandled               | 0           | 0           | 0         |
+| gpu/item6RuntimeFSRStereo/batchReuses                   | 0           | 0           | 0         |
+| gpu/item6RuntimeFSRStereo/batchSuccesses                | 0           | 0           | 0         |
+| gpu/item6RuntimeFSRStereo/interopTransactionsAvoided    | 0           | 0           | 0         |
+| gpu/item7EarlyHAM/directOutputSkips                     | 2045        | 2105        | 60        |
+| gpu/item7EarlyHAM/executedClears                        | 2052        | 2116        | 64        |
+| gpu/item7EarlyHAM/protectedPostProcessInputs            | 2052        | 2116        | 64        |
+| gpu/item8MirrorWriteback/blitPairs                      | 0           | 0           | 0         |
+| gpu/item8MirrorWriteback/consumerEyeObservations        | 0           | 0           | 0         |
+| gpu/item8MirrorWriteback/copyPairs                      | 0           | 0           | 0         |
+| gpu/item8MirrorWriteback/skippedEyeObservations         | 4256        | 4380        | 124       |
+| gpu/item9SpatialComposite/centerRectPixels              | 0           | 0           | 0         |
+| gpu/item9SpatialComposite/dispatches                    | 0           | 0           | 0         |
+| gpu/item9SpatialComposite/fullEyePixels                 | 0           | 0           | 0         |
+| gpu/observedFrames                                      | 4330        | 4457        | 127       |
+| gpu/startFrame                                          | 14152       | 12629       | -1523     |
+| profiler/available                                      | true        | true        | n/a       |
+| profiler/capabilities                                   | 63          | 63          | 0         |
+| profiler/capturing                                      | false       | false       | n/a       |
+| profiler/enabled                                        | true        | true        | n/a       |
+| profiler/frame/acquiredSlots                            | 0           | 0           | 0         |
+| profiler/frame/captured                                 | 0           | 0           | 0         |
+| profiler/frame/peakAcquiredSlots                        | 0           | 0           | 0         |
+| profiler/frame/slotRefusals                             | 0           | 0           | 0         |
+| profiler/limits/frameLatency                            | 3           | 3           | 0         |
+| profiler/limits/historyCapacity                         | 300         | 300         | 0         |
+| profiler/limits/maximumTimers                           | 128         | 128         | 0         |
+| profiler/timerCount                                     | 0           | 0           | 0         |
+| profiler/totalsMs/cpu                                   | n/a         | n/a         | n/a       |
+| profiler/totalsMs/gpu                                   | n/a         | n/a         | n/a       |
+| profiler/totalsMs/resolvedCpu                           | n/a         | n/a         | n/a       |
+| profiler/totalsMs/resolvedGpu                           | n/a         | n/a         | n/a       |
+| texture/active                                          | false       | false       | n/a       |
+| texture/attachFailures                                  | 0           | 0           | 0         |
+| texture/createdCount                                    | 3974        | 3962        | -12       |
+| texture/createdEstimatedBytes                           | 38786366328 | 38741091672 | -45274656 |
+| texture/currentCohort                                   | 0           | 0           | 0         |
+| texture/destroyedCount                                  | 3718        | 3699        | -19       |
+| texture/destroyedEstimatedBytes                         | 36244590844 | 36221609196 | -22981648 |
+| texture/droppedTextureRecords                           | 0           | 0           | 0         |
+| texture/faceGenAssignmentFailures                       | 0           | 0           | 0         |
+| texture/faceGenTintAssignmentCount                      | 0           | 0           | 0         |
+| texture/groupCount                                      | 896         | 893         | -3        |
+| texture/liveTextureRecordCount                          | 256         | 263         | 7         |
+| texture/maxTrackedLiveTextures                          | 16384       | 16384       | 0         |
+| texture/maxTrackedTextureGroups                         | 4096        | 4096        | 0         |
+| texture/niSourceTextureMatchedCount                     | 47          | 54          | 7         |
+| texture/niSourceTextureMatchedEstimatedBytes            | 166123904   | 143830896   | -22293008 |
+| texture/niSourceTextureOwnerRecordsDropped              | 0           | 0           | 0         |
+| texture/niSourceTextureResourceCount                    | 1473        | 1504        | 31        |
+| texture/niSourceTextureTraversalLimitReached            | false       | false       | n/a       |
+| texture/outstandingCount                                | 256         | 263         | 7         |
+| texture/outstandingEstimatedBytes                       | 2541775484  | 2519482476  | -22293008 |
+| texture/outstandingUnknownEstimateCount                 | 0           | 0           | 0         |
+| texture/recordingFailures                               | 0           | 0           | 0         |
+| texture/sentinelAllocationFailures                      | 0           | 0           | 0         |
+| texture/sessionID                                       | 1           | 1           | 0         |
+| texture/supported                                       | true        | true        | n/a       |
 
 </details>
 
 <details><summary>nvidia pass 2: all captured scalar counters</summary>
 
-| Metric (captured units)                                 | Baseline    | Candidate   | Delta      |
-| ------------------------------------------------------- | ----------- | ----------- | ---------- |
-| cpu/active                                              | false       | false       | n/a        |
-| cpu/compactPresentationContract/publishes               | 2032        | 2249        | 217        |
-| cpu/compactPresentationContract/reuses                  | 2010        | 2227        | 217        |
-| cpu/devBenchOnly                                        | true        | true        | n/a        |
-| cpu/generationResourceValidation/contractInvalidations  | 70          | 70          | 0          |
-| cpu/generationResourceValidation/contractPublishes      | 147         | 151         | 4          |
-| cpu/generationResourceValidation/fullValidations        | 566         | 584         | 18         |
-| cpu/generationResourceValidation/stableChecks           | 7790        | 8533        | 743        |
-| cpu/generationResourceValidation/stableHits             | 7713        | 8456        | 743        |
-| cpu/generationResourceValidation/stableMisses           | 77          | 77          | 0          |
-| cpu/schemaVersion                                       | 1           | 1           | 0          |
-| cpu/sessionId                                           | 2           | 2           | 0          |
-| cpu/stateProportionalSafety/boundsGuard/candidates      | 0           | 0           | 0          |
-| cpu/stateProportionalSafety/boundsGuard/fastSkips       | 3911        | 4313        | 402        |
-| cpu/stateProportionalSafety/deferredRecovery/candidates | 0           | 0           | 0          |
-| cpu/stateProportionalSafety/deferredRecovery/fastSkips  | 3911        | 4313        | 402        |
-| cpu/stateProportionalSafety/engineRetirement/fastSkips  | 3869        | 4271        | 402        |
-| cpu/stateProportionalSafety/engineRetirement/services   | 42          | 42          | 0          |
-| cpu/stateProportionalSafety/memoryTelemetry/candidates  | 3911        | 4313        | 402        |
-| cpu/stateProportionalSafety/memoryTelemetry/fastSkips   | 0           | 0           | 0          |
-| cpu/stateProportionalSafety/memoryTrim/fastSkips        | 3890        | 4292        | 402        |
-| cpu/stateProportionalSafety/memoryTrim/services         | 21          | 21          | 0          |
-| cpu/stateProportionalSafety/nativeGuard/candidates      | 34          | 34          | 0          |
-| cpu/stateProportionalSafety/nativeGuard/fastSkips       | 3877        | 4279        | 402        |
-| cpu/stateProportionalSafety/postMutationGuard/fastSkips | 3816        | 4215        | 399        |
-| cpu/stateProportionalSafety/postMutationGuard/services  | 94          | 98          | 4          |
-| cpu/stateProportionalSafety/promotion/candidates        | 15          | 15          | 0          |
-| cpu/stateProportionalSafety/promotion/fastSkips         | 3896        | 4298        | 402        |
-| cpu/strongStereoPacket/captures                         | 4210        | 4646        | 436        |
-| cpu/strongStereoPacket/commitAccepts                    | 4045        | 4479        | 434        |
-| cpu/strongStereoPacket/commitRejects                    | 65          | 65          | 0          |
-| cpu/strongStereoPacket/commitValidations                | 4110        | 4544        | 434        |
-| cpu/strongStereoPacket/cycleReuses                      | 2064        | 2283        | 219        |
-| cpu/strongStereoPacket/fastSkips                        | 3612        | 3980        | 368        |
-| cpu/strongStereoPacket/invalidations                    | 4455        | 4854        | 399        |
-| cpu/strongStereoPacket/lifetimeRebuilds                 | 103         | 102         | -1         |
-| cpu/strongStereoPacket/lifetimeReuses                   | 2043        | 2261        | 218        |
-| cpu/strongStereoPacket/queueHoldAverageMicroseconds     | 1.966       | 1.673       | -0.293     |
-| cpu/strongStereoPacket/queueHoldMaximumMicroseconds     | 18.100      | 64.200      | 46.100     |
-| cpu/strongStereoPacket/queueWaitAverageMicroseconds     | 0.141       | 0.106       | -0.036     |
-| cpu/strongStereoPacket/queueWaitMaximumMicroseconds     | 2.500       | 1.200       | -1.300     |
-| cpu/window/currentFrame                                 | 164474      | 21805       | -142669    |
-| cpu/window/elapsedFrames                                | 3910        | 4313        | 403        |
-| cpu/window/initialized                                  | true        | true        | n/a        |
-| cpu/window/startFrame                                   | 160564      | 17492       | -143072    |
-| gpu/active                                              | false       | false       | n/a        |
-| gpu/currentFrame                                        | 164476      | 21807       | -142669    |
-| gpu/item10PeripheryTAAHistory/avoidedPixelRatio         | 0.501       | 0.501       | 0          |
-| gpu/item10PeripheryTAAHistory/croppedPixels             | 5591531088  | 6208160112  | 616629024  |
-| gpu/item10PeripheryTAAHistory/dispatches                | 4407        | 4893        | 486        |
-| gpu/item10PeripheryTAAHistory/fullEyePixels             | 11194485120 | 12429002880 | 1234517760 |
-| gpu/item10PeripheryTAAHistory/pixelRatio                | 0.499       | 0.499       | 0          |
-| gpu/item5ActiveFSRCopies/activePixelRatio               | 0.315       | 0.307       | -0.008     |
-| gpu/item5ActiveFSRCopies/activePixels                   | 11319119960 | 12004040680 | 684920720  |
-| gpu/item5ActiveFSRCopies/avoidedPixels                  | 24624144040 | 27063620120 | 2439476080 |
-| gpu/item5ActiveFSRCopies/copyCalls                      | 14150       | 15380       | 1230       |
-| gpu/item6RuntimeFSRStereo/batchAttempts                 | 0           | 0           | 0          |
-| gpu/item6RuntimeFSRStereo/batchFailures                 | 0           | 0           | 0          |
-| gpu/item6RuntimeFSRStereo/batchNotHandled               | 0           | 0           | 0          |
-| gpu/item6RuntimeFSRStereo/batchReuses                   | 0           | 0           | 0          |
-| gpu/item6RuntimeFSRStereo/batchSuccesses                | 0           | 0           | 0          |
-| gpu/item6RuntimeFSRStereo/interopTransactionsAvoided    | 0           | 0           | 0          |
-| gpu/item7EarlyHAM/directOutputSkips                     | 1847        | 2027        | 180        |
-| gpu/item7EarlyHAM/executedClears                        | 1826        | 2072        | 246        |
-| gpu/item7EarlyHAM/protectedPostProcessInputs            | 1826        | 2072        | 246        |
-| gpu/item8MirrorWriteback/blitPairs                      | 0           | 0           | 0          |
-| gpu/item8MirrorWriteback/consumerEyeObservations        | 0           | 0           | 0          |
-| gpu/item8MirrorWriteback/copyPairs                      | 0           | 0           | 0          |
-| gpu/item8MirrorWriteback/skippedEyeObservations         | 3834        | 4260        | 426        |
-| gpu/item9SpatialComposite/centerRectPixels              | 0           | 0           | 0          |
-| gpu/item9SpatialComposite/dispatches                    | 0           | 0           | 0          |
-| gpu/item9SpatialComposite/fullEyePixels                 | 0           | 0           | 0          |
-| gpu/observedFrames                                      | 3912        | 4315        | 403        |
-| gpu/startFrame                                          | 160564      | 17492       | -143072    |
-| profiler/available                                      | true        | true        | n/a        |
-| profiler/capabilities                                   | 63          | 63          | 0          |
-| profiler/capturing                                      | false       | false       | n/a        |
-| profiler/enabled                                        | true        | true        | n/a        |
-| profiler/frame/acquiredSlots                            | 0           | 0           | 0          |
-| profiler/frame/captured                                 | 0           | 0           | 0          |
-| profiler/frame/peakAcquiredSlots                        | 0           | 0           | 0          |
-| profiler/frame/slotRefusals                             | 0           | 0           | 0          |
-| profiler/limits/frameLatency                            | 3           | 3           | 0          |
-| profiler/limits/historyCapacity                         | 300         | 300         | 0          |
-| profiler/limits/maximumTimers                           | 128         | 128         | 0          |
-| profiler/timerCount                                     | 0           | 0           | 0          |
-| profiler/totalsMs/cpu                                   | n/a         | n/a         | n/a        |
-| profiler/totalsMs/gpu                                   | n/a         | n/a         | n/a        |
-| profiler/totalsMs/resolvedCpu                           | n/a         | n/a         | n/a        |
-| profiler/totalsMs/resolvedGpu                           | n/a         | n/a         | n/a        |
-| texture/active                                          | false       | false       | n/a        |
-| texture/attachFailures                                  | 0           | 0           | 0          |
-| texture/createdCount                                    | 3964        | 3965        | 1          |
-| texture/createdEstimatedBytes                           | 38844584736 | 38833321536 | -11263200  |
-| texture/currentCohort                                   | 0           | 0           | 0          |
-| texture/destroyedCount                                  | 3731        | 3729        | -2         |
-| texture/destroyedEstimatedBytes                         | 36381027084 | 36359977124 | -21049960  |
-| texture/droppedTextureRecords                           | 0           | 0           | 0          |
-| texture/faceGenAssignmentFailures                       | 0           | 0           | 0          |
-| texture/faceGenTintAssignmentCount                      | 0           | 0           | 0          |
-| texture/groupCount                                      | 885         | 887         | 2          |
-| texture/liveTextureRecordCount                          | 233         | 236         | 3          |
-| texture/maxTrackedLiveTextures                          | 16384       | 16384       | 0          |
-| texture/maxTrackedTextureGroups                         | 4096        | 4096        | 0          |
-| texture/niSourceTextureMatchedCount                     | 26          | 29          | 3          |
-| texture/niSourceTextureMatchedEstimatedBytes            | 87906272    | 97693032    | 9786760    |
-| texture/niSourceTextureOwnerRecordsDropped              | 0           | 0           | 0          |
-| texture/niSourceTextureResourceCount                    | 1502        | 1509        | 7          |
-| texture/niSourceTextureTraversalLimitReached            | false       | false       | n/a        |
-| texture/outstandingCount                                | 233         | 236         | 3          |
-| texture/outstandingEstimatedBytes                       | 2463557652  | 2473344412  | 9786760    |
-| texture/outstandingUnknownEstimateCount                 | 0           | 0           | 0          |
-| texture/recordingFailures                               | 0           | 0           | 0          |
-| texture/sentinelAllocationFailures                      | 0           | 0           | 0          |
-| texture/sessionID                                       | 2           | 2           | 0          |
-| texture/supported                                       | true        | true        | n/a        |
+| Metric (captured units)                                 | Baseline    | Candidate   | Delta     |
+| ------------------------------------------------------- | ----------- | ----------- | --------- |
+| cpu/active                                              | false       | false       | n/a       |
+| cpu/compactPresentationContract/publishes               | 2189        | 2249        | 60        |
+| cpu/compactPresentationContract/reuses                  | 2167        | 2227        | 60        |
+| cpu/devBenchOnly                                        | true        | true        | n/a       |
+| cpu/generationResourceValidation/contractInvalidations  | 70          | 70          | 0         |
+| cpu/generationResourceValidation/contractPublishes      | 156         | 151         | -5        |
+| cpu/generationResourceValidation/fullValidations        | 575         | 584         | 9         |
+| cpu/generationResourceValidation/stableChecks           | 8303        | 8533        | 230       |
+| cpu/generationResourceValidation/stableHits             | 8226        | 8456        | 230       |
+| cpu/generationResourceValidation/stableMisses           | 77          | 77          | 0         |
+| cpu/schemaVersion                                       | 1           | 1           | 0         |
+| cpu/sessionId                                           | 2           | 2           | 0         |
+| cpu/stateProportionalSafety/boundsGuard/candidates      | 0           | 0           | 0         |
+| cpu/stateProportionalSafety/boundsGuard/fastSkips       | 4221        | 4313        | 92        |
+| cpu/stateProportionalSafety/deferredRecovery/candidates | 0           | 0           | 0         |
+| cpu/stateProportionalSafety/deferredRecovery/fastSkips  | 4221        | 4313        | 92        |
+| cpu/stateProportionalSafety/engineRetirement/fastSkips  | 4179        | 4271        | 92        |
+| cpu/stateProportionalSafety/engineRetirement/services   | 42          | 42          | 0         |
+| cpu/stateProportionalSafety/memoryTelemetry/candidates  | 4221        | 4313        | 92        |
+| cpu/stateProportionalSafety/memoryTelemetry/fastSkips   | 0           | 0           | 0         |
+| cpu/stateProportionalSafety/memoryTrim/fastSkips        | 4200        | 4292        | 92        |
+| cpu/stateProportionalSafety/memoryTrim/services         | 21          | 21          | 0         |
+| cpu/stateProportionalSafety/nativeGuard/candidates      | 34          | 34          | 0         |
+| cpu/stateProportionalSafety/nativeGuard/fastSkips       | 4187        | 4279        | 92        |
+| cpu/stateProportionalSafety/postMutationGuard/fastSkips | 4130        | 4215        | 85        |
+| cpu/stateProportionalSafety/postMutationGuard/services  | 90          | 98          | 8         |
+| cpu/stateProportionalSafety/promotion/candidates        | 15          | 15          | 0         |
+| cpu/stateProportionalSafety/promotion/fastSkips         | 4206        | 4298        | 92        |
+| cpu/strongStereoPacket/captures                         | 4548        | 4646        | 98        |
+| cpu/strongStereoPacket/commitAccepts                    | 4359        | 4479        | 120       |
+| cpu/strongStereoPacket/commitRejects                    | 65          | 65          | 0         |
+| cpu/strongStereoPacket/commitValidations                | 4424        | 4544        | 120       |
+| cpu/strongStereoPacket/cycleReuses                      | 2233        | 2283        | 50        |
+| cpu/strongStereoPacket/fastSkips                        | 3894        | 3980        | 86        |
+| cpu/strongStereoPacket/invalidations                    | 4767        | 4854        | 87        |
+| cpu/strongStereoPacket/lifetimeRebuilds                 | 103         | 102         | -1        |
+| cpu/strongStereoPacket/lifetimeReuses                   | 2212        | 2261        | 49        |
+| cpu/strongStereoPacket/queueHoldAverageMicroseconds     | 1.879       | 1.673       | -0.206    |
+| cpu/strongStereoPacket/queueHoldMaximumMicroseconds     | 25.400      | 64.200      | 38.800    |
+| cpu/strongStereoPacket/queueWaitAverageMicroseconds     | 0.143       | 0.106       | -0.037    |
+| cpu/strongStereoPacket/queueWaitMaximumMicroseconds     | 1.600       | 1.200       | -0.400    |
+| cpu/window/currentFrame                                 | 23112       | 21805       | -1307     |
+| cpu/window/elapsedFrames                                | 4220        | 4313        | 93        |
+| cpu/window/initialized                                  | true        | true        | n/a       |
+| cpu/window/startFrame                                   | 18892       | 17492       | -1400     |
+| gpu/active                                              | false       | false       | n/a       |
+| gpu/currentFrame                                        | 23113       | 21807       | -1306     |
+| gpu/item10PeripheryTAAHistory/avoidedPixelRatio         | 0.501       | 0.501       | 0         |
+| gpu/item10PeripheryTAAHistory/croppedPixels             | 6071131440  | 6208160112  | 137028672 |
+| gpu/item10PeripheryTAAHistory/dispatches                | 4785        | 4893        | 108       |
+| gpu/item10PeripheryTAAHistory/fullEyePixels             | 12154665600 | 12429002880 | 274337280 |
+| gpu/item10PeripheryTAAHistory/pixelRatio                | 0.499       | 0.499       | 0         |
+| gpu/item5ActiveFSRCopies/activePixelRatio               | 0.309       | 0.307       | -0.002    |
+| gpu/item5ActiveFSRCopies/activePixels                   | 11865705520 | 12004040680 | 138335160 |
+| gpu/item5ActiveFSRCopies/avoidedPixels                  | 26516112080 | 27063620120 | 547508040 |
+| gpu/item5ActiveFSRCopies/copyCalls                      | 15110       | 15380       | 270       |
+| gpu/item6RuntimeFSRStereo/batchAttempts                 | 0           | 0           | 0         |
+| gpu/item6RuntimeFSRStereo/batchFailures                 | 0           | 0           | 0         |
+| gpu/item6RuntimeFSRStereo/batchNotHandled               | 0           | 0           | 0         |
+| gpu/item6RuntimeFSRStereo/batchReuses                   | 0           | 0           | 0         |
+| gpu/item6RuntimeFSRStereo/batchSuccesses                | 0           | 0           | 0         |
+| gpu/item6RuntimeFSRStereo/interopTransactionsAvoided    | 0           | 0           | 0         |
+| gpu/item7EarlyHAM/directOutputSkips                     | 1991        | 2027        | 36        |
+| gpu/item7EarlyHAM/executedClears                        | 2016        | 2072        | 56        |
+| gpu/item7EarlyHAM/protectedPostProcessInputs            | 2016        | 2072        | 56        |
+| gpu/item8MirrorWriteback/blitPairs                      | 0           | 0           | 0         |
+| gpu/item8MirrorWriteback/consumerEyeObservations        | 0           | 0           | 0         |
+| gpu/item8MirrorWriteback/copyPairs                      | 0           | 0           | 0         |
+| gpu/item8MirrorWriteback/skippedEyeObservations         | 4168        | 4260        | 92        |
+| gpu/item9SpatialComposite/centerRectPixels              | 0           | 0           | 0         |
+| gpu/item9SpatialComposite/dispatches                    | 0           | 0           | 0         |
+| gpu/item9SpatialComposite/fullEyePixels                 | 0           | 0           | 0         |
+| gpu/observedFrames                                      | 4221        | 4315        | 94        |
+| gpu/startFrame                                          | 18892       | 17492       | -1400     |
+| profiler/available                                      | true        | true        | n/a       |
+| profiler/capabilities                                   | 63          | 63          | 0         |
+| profiler/capturing                                      | false       | false       | n/a       |
+| profiler/enabled                                        | true        | true        | n/a       |
+| profiler/frame/acquiredSlots                            | 0           | 0           | 0         |
+| profiler/frame/captured                                 | 0           | 0           | 0         |
+| profiler/frame/peakAcquiredSlots                        | 0           | 0           | 0         |
+| profiler/frame/slotRefusals                             | 0           | 0           | 0         |
+| profiler/limits/frameLatency                            | 3           | 3           | 0         |
+| profiler/limits/historyCapacity                         | 300         | 300         | 0         |
+| profiler/limits/maximumTimers                           | 128         | 128         | 0         |
+| profiler/timerCount                                     | 0           | 0           | 0         |
+| profiler/totalsMs/cpu                                   | n/a         | n/a         | n/a       |
+| profiler/totalsMs/gpu                                   | n/a         | n/a         | n/a       |
+| profiler/totalsMs/resolvedCpu                           | n/a         | n/a         | n/a       |
+| profiler/totalsMs/resolvedGpu                           | n/a         | n/a         | n/a       |
+| texture/active                                          | false       | false       | n/a       |
+| texture/attachFailures                                  | 0           | 0           | 0         |
+| texture/createdCount                                    | 3968        | 3965        | -3        |
+| texture/createdEstimatedBytes                           | 38826844112 | 38833321536 | 6477424   |
+| texture/currentCohort                                   | 0           | 0           | 0         |
+| texture/destroyedCount                                  | 3735        | 3729        | -6        |
+| texture/destroyedEstimatedBytes                         | 36363286460 | 36359977124 | -3309336  |
+| texture/droppedTextureRecords                           | 0           | 0           | 0         |
+| texture/faceGenAssignmentFailures                       | 0           | 0           | 0         |
+| texture/faceGenTintAssignmentCount                      | 0           | 0           | 0         |
+| texture/groupCount                                      | 887         | 887         | 0         |
+| texture/liveTextureRecordCount                          | 233         | 236         | 3         |
+| texture/maxTrackedLiveTextures                          | 16384       | 16384       | 0         |
+| texture/maxTrackedTextureGroups                         | 4096        | 4096        | 0         |
+| texture/niSourceTextureMatchedCount                     | 26          | 29          | 3         |
+| texture/niSourceTextureMatchedEstimatedBytes            | 87906272    | 97693032    | 9786760   |
+| texture/niSourceTextureOwnerRecordsDropped              | 0           | 0           | 0         |
+| texture/niSourceTextureResourceCount                    | 1506        | 1509        | 3         |
+| texture/niSourceTextureTraversalLimitReached            | false       | false       | n/a       |
+| texture/outstandingCount                                | 233         | 236         | 3         |
+| texture/outstandingEstimatedBytes                       | 2463557652  | 2473344412  | 9786760   |
+| texture/outstandingUnknownEstimateCount                 | 0           | 0           | 0         |
+| texture/recordingFailures                               | 0           | 0           | 0         |
+| texture/sentinelAllocationFailures                      | 0           | 0           | 0         |
+| texture/sessionID                                       | 2           | 2           | 0         |
+| texture/supported                                       | true        | true        | n/a       |
 
 </details>
 
@@ -861,7 +1048,7 @@ Counters span different observed frame counts and changing methods. They are not
 | adapter                  | true   |
 | scene                    | false  |
 | foveation                | true   |
-| toolchain                | true   |
+| toolchain                | false  |
 | dependencies             | true   |
 | shaderCompiler           | true   |
 
@@ -870,3 +1057,35 @@ Full start/end memory evidence, CPU/GPU/resource counters, phase timings, retry 
 -   Headset refresh, driver version, power state and full modlist/cache equality require retained proof.
 -   One process and ordered repeats do not establish causal or statistically significant gains.
 -   Missing profiler samples are unavailable time evidence, never zero cost.
+
+## Validation of the PR66 reference and table correction
+
+All nine PR tables include PR66, previous PR73 and new PR73. Both sets
+of change columns use PR66. Retained values cover every one of the 198
+strict transition measurements across three builds, both passes, full
+health, stretch, identities, packages and memory. The previous measurement
+is retained as its own column, and its original report remains available.
+
+The canonical local and PR-head ledgers preserve every historical cell.
+All 10 fields of the complete new comparison reconstruct exactly after
+resolving 143 references to identical JSON subtrees already in the ledger.
+Every reference is bound by run ID, metric row, RFC 6901 pointer and
+content SHA-256. The field mapping and decoding contract are stored in
+`tuning_detail_pr66_reference_coverage_json`; there are no external-data
+dependencies for reconstruction. Full table values also reconstruct
+exactly. The ordinary numeric timing audit verifies 1,056 paired cells.
+
+The maintained comparison command ran once in
+2.916 seconds. Complete ledger preparation,
+reference verification and field reconstruction took
+23.705 seconds. This reporting correction
+does not replay any measurement or alter either runtime build.
+
+-   [Complete field and ledger audit](../../artifacts/renderscale-tuning/renderscale-tuning-nvidia-2026-09-11T05-18-34-649Z/pr66-correction-ledger-validation.json)
+-   [All table values and route statistics](../../artifacts/renderscale-tuning/renderscale-tuning-nvidia-2026-09-11T05-18-34-649Z/pr66-corrected-table-values.json)
+-   [Table coverage validation](../../artifacts/renderscale-tuning/renderscale-tuning-nvidia-2026-09-11T05-18-34-649Z/pr66-corrected-table-validation.json)
+-   [Retained direct comparison](../../artifacts/renderscale-tuning/renderscale-tuning-nvidia-2026-09-11T05-18-34-649Z-vs-pr66/comparison.json)
+
+Scoped documentation hooks and `git diff --check` are recorded in the
+publication receipt. Release qualification and live SE/AE validation
+remain pending; the formal change and memory assessments are inconclusive.

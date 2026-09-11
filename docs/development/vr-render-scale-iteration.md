@@ -1,5 +1,29 @@
 # VR render-scale iteration records
 
+## September 11: all PR73 tables compare against PR66
+
+The user selected measured PR66 a09e1cc77 as the reference for both
+previous PR73 d9780bb74 and new PR73 c73bae9a7. All nine PR tables now
+show all three builds: means/SE, each pass, health, stretch, every route,
+completion/relatch frames and milliseconds, identities/packages and memory.
+Both sets of deltas use PR66. Prior measurements remain separate columns.
+
+New PR73 mean strict completion is 790.202 versus 800.231 ms for PR66
+(-1.253%); full-pass stretch duration is 5138.086 versus 4549.605 ms
+(+12.935%). New rows 3, 8, 16, 19, 21, 26 and 30 are slower in both
+passes. All three builds retain terminal 66 PASS and Task 2 counts
+66/0/0, with applicable health MET/MET. Formal change assessment remains
+INCONCLUSIVE because scene/toolchain context differs, a full matching
+fixture fingerprint is unavailable and no tolerance policy was specified.
+
+Complete comparison and table values reconstruct exactly from the ledger;
+143 verified same-ledger references preserve repeated JSON subtrees.
+All historical cells remain unchanged and all 1,056 paired timing cells
+pass. Comparison took 2.916 s and complete
+ledger retention/verification took 23.705 s.
+See [the corrected report](pr73-readiness-nvidia-comparison-20260911.md) for the uniform PR66 comparison
+and complete validation. Prior comparisons remain historical evidence.
+
 ## September 11: PR73 previous/new measurement comparison
 
 The user requested preservation of the previous PR73 measurement and an

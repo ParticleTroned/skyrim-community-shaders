@@ -6284,10 +6284,8 @@ namespace
 				if (!globals::game::isVR)
 					return json{ { "error", "shared guide diagnostics require Skyrim VR" } };
 				auto& upscaling = globals::features::upscaling;
-				if (enabled && upscaling.IsVRRenderScaleGPUPerformanceTelemetryActive())
+				if (enabled && !upscaling.SetFSRSharedGuideInputsEnabled(*enabled))
 					return json{ { "error", "stop GPU performance capture before changing shared guide mode" } };
-				if (enabled)
-					upscaling.fidelityFX.SetRuntimeSharedGuideInputsEnabled(*enabled);
 				return json{
 					{ "action", "fsr_shared_guides" },
 					{ "enabled", upscaling.fidelityFX.AreRuntimeSharedGuideInputsEnabled() },
@@ -7511,7 +7509,8 @@ namespace VRRenderScaleDevBenchBridge
 			descriptor["description"] = descriptor["description"].get<std::string>() +
 			                            " fsr_shared_guides inspects the session-only full-eye FSR shared-guide mode; "
 			                            "optional boolean enabled selects direct imports or reference copies while GPU "
-			                            "performance capture is inactive. Imports remain retained until fenced teardown. "
+			                            "performance capture is inactive. The in-game Upscaling checkbox Share FSR guide "
+			                            "textures uses the same session state and capture guard. Imports remain retained until fenced teardown. "
 			                            "GPU status exposes runtimeFSRSharedGuides direct inputs/pixels, fallback guide "
 			                            "copies and import failures; item5ActiveFSRCopies counts actual input copies, "
 			                            "with avoidedPixels including direct sharing and inactive rectangle savings.";

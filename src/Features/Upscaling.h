@@ -2210,6 +2210,10 @@ public:
 	uint32_t GetRuntimeQualityMode() const;
 	uint32_t GetRuntimeDLSSPreset() const;
 	bool GetRuntimeFSR4Enabled() const;
+	/** Shared menu/DevBench admission: VR only, with no active GPU performance capture. */
+	[[nodiscard]] bool CanChangeFSRSharedGuideInputs() const noexcept;
+	/** Changes the session-only mode on the UI/main-thread path without releasing imported resources. */
+	bool SetFSRSharedGuideInputsEnabled(bool a_enabled) noexcept;
 	DLSSSharpenerMode GetDLSSSharpenerMode() const;
 	bool ShouldApplyDLSSSharpening() const;
 	bool ShouldRouteDLSSMainPassThroughSharpener() const;

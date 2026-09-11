@@ -51,6 +51,24 @@ all guide encode paths reject them; host fallback requires replacement
 guides, while retained COM owners preserve the quarantined generation.
 Mixed-provider stereo rejection and presentation fallback remain active.
 
+## In-game control
+
+In Skyrim VR, select FSR3 or FSR4 in the Community Shaders **Upscaling**
+settings. **Share FSR guide textures (session only)** appears below **Sharpness**.
+It is enabled by default and affects the current session only; restarting
+the game restores the enabled default. Saving a configuration does not
+persist this diagnostic mode.
+
+The checkbox and DevBench use the same live state and mutation guard.
+An active GPU performance capture disables the checkbox and displays a
+message to stop the capture first. Builds without the DevBench bridge
+still expose the checkbox. SE/AE do not expose this VR control.
+
+Disabling selects copied inputs without releasing retained imports.
+Enabling allows eligible full-eye guides to be shared; it does not force
+resource recreation or change provider, quality, history or render scale.
+Noneligible inputs continue to use the existing copy fallback.
+
 ## DevBench A/B inspection
 
 The existing render-scale DevBench tool adds `fsr_shared_guides`:

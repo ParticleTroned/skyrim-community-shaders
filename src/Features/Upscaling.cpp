@@ -16193,6 +16193,22 @@ void Upscaling::DrawSettings()
 				ImGui::TextUnformatted("Adjusts post-upscale sharpness for FSR.");
 				ImGui::TextUnformatted("Range: low 0.0 (softest) to high 1.0 (sharpest).");
 			}
+			if (globals::game::isVR) {
+				const bool canChangeSharedGuides = CanChangeFSRSharedGuideInputs();
+				bool sharedGuides = fidelityFX.AreRuntimeSharedGuideInputsEnabled();
+				{
+					ImGui::BeginDisabled(!canChangeSharedGuides);
+					auto endDisabled = ScopeExit([]() { ImGui::EndDisabled(); });
+					if (ImGui::Checkbox("Share FSR guide textures (session only)", &sharedGuides))
+						SetFSRSharedGuideInputsEnabled(sharedGuides);
+				}
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("May improve FSR performance by avoiding extra GPU copies.");
+					ImGui::TextUnformatted("Disable if you notice flickering, ghosting or differences between eyes.");
+				}
+				if (!canChangeSharedGuides)
+					ImGui::TextDisabled("Stop GPU performance capture to change guide sharing.");
+			}
 		} else if (upscaleMethod == UpscaleMethod::kDLSS) {
 			settings.dlssPreset = ClampDLSSPresetUInt(settings.dlssPreset);
 			const uint32_t effectiveDLSSPreset = GetEffectiveDLSSPreset();
@@ -20410,6 +20426,23 @@ void Upscaling::RecordVRMainPassDispatchStage(
 	}
 }
 #endif
+
+bool Upscaling::CanChangeFSRSharedGuideInputs() const noexcept
+{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	return globals::game::isVR && !IsVRRenderScaleGPUPerformanceTelemetryActive();
+#else
+	return globals::game::isVR;
+#endif
+}
+
+bool Upscaling::SetFSRSharedGuideInputsEnabled(bool a_enabled) noexcept
+{
+	if (!CanChangeFSRSharedGuideInputs())
+		return false;
+	fidelityFX.SetRuntimeSharedGuideInputsEnabled(a_enabled);
+	return true;
+}
 
 float Upscaling::ResolveRuntimeMipBias(bool a_temporal)
 {

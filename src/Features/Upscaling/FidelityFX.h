@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <string_view>
@@ -28,6 +29,7 @@
 
 #include "../../Buffer.h"
 #include "../../State.h"
+#include "FSRTemporalTuningPolicy.h"
 #include "VRRelatchDrainFence.h"
 #include "VRRelatchDrainPolicy.h"
 
@@ -107,6 +109,22 @@ public:
 	static constexpr uint32_t Fsr3Version = FFX_UPSCALER_MAKE_VERSION(FFX_FSR3_VERSION_MAJOR, FFX_FSR3_VERSION_MINOR, FFX_FSR3_VERSION_PATCH);
 	static constexpr std::wstring_view RuntimeUpscalerDllName = L"amd_fidelityfx_upscaler_dx12.dll";
 	static constexpr std::string_view RuntimeUpscalerDllNameUtf8 = "amd_fidelityfx_upscaler_dx12.dll";
+	/** Requested profile and last context application; retained context evidence may outlive FSR dispatch. */
+	struct TemporalTuningSnapshot
+	{
+		FSRTemporalTuningPolicy::Settings requested{};
+		FSRTemporalTuningPolicy::Settings contextSettings{};
+		FSRTemporalTuningPolicy::Status status = FSRTemporalTuningPolicy::Status::Inactive;
+		uint64_t providerId = 0;
+		uint32_t configuredContexts = 0;
+		int32_t lastConfigureResult = 0;
+		uint64_t requestRevision = 0;
+		RuntimeUpscalerFramePath lastDispatchPath = RuntimeUpscalerFramePath::kInactive;
+	};
+	/** Queues validated settings; thread-safe requests defer GPU changes to the render safe point. */
+	bool RequestTemporalTuning(const FSRTemporalTuningPolicy::Settings& a_settings);
+	/** Returns thread-safe request/application evidence, suppressing dormant overrides on host FSR. */
+	TemporalTuningSnapshot GetTemporalTuningSnapshot() const;
 	~FidelityFX();
 
 	HMODULE module = nullptr;
@@ -283,6 +301,15 @@ private:
 	D3D11_TEXTURE2D_DESC runtimeOutputSharedDesc{};
 	ffx::Context runtimeUpscalerContexts[2]{};
 	bool runtimeUpscalerContextIndeterminate[2]{};
+	mutable std::mutex temporalTuningMutex;
+	TemporalTuningSnapshot temporalTuningSnapshot{};
+	std::atomic_uint64_t temporalRequestRevision{ 0 };
+	uint64_t temporalContextRevision = 0;
+	uint32_t temporalContextLastDispatchFrame = ~uint32_t{ 0 };
+	std::atomic<RuntimeUpscalerFramePath> temporalLastDispatchPath{ RuntimeUpscalerFramePath::kInactive };
+	FSRTemporalTuningPolicy::RejectedRequest temporalRejectedRequest{};
+	LifecycleResult RecordRuntimeProviderResult(bool a_supported);
+	LifecycleResult ConfigureTemporalTuningContexts(const TemporalTuningSnapshot& a_request);
 
 	winrt::com_ptr<ID3D11Fence> runtimeD3D11Fence;
 	winrt::com_ptr<ID3D12Fence> runtimeD3D12Fence;

@@ -839,12 +839,9 @@ def derive(
             coherent = True
             command_stream_sequence = event.get("execution", {}).get("commandStreamSequence")
             if (
-                command_stream_sequence is not None and
-                (
-                    not isinstance(command_stream_sequence, int) or
-                    isinstance(command_stream_sequence, bool) or
-                    command_stream_sequence < 0
-                )
+                not isinstance(command_stream_sequence, int) or
+                isinstance(command_stream_sequence, bool) or
+                command_stream_sequence < 0
             ):
                 graph.gap(
                     f"FinishCommandList event {sequence} carries an invalid command-stream sequence; "

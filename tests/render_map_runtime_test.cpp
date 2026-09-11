@@ -1749,6 +1749,118 @@ namespace
 		}
 	}
 
+	void TestImmediateStagePublicationRetainsCaptureGeneration()
+	{
+		constexpr std::uintptr_t immediateContext = 0xC010;
+		constexpr std::uintptr_t deferredContext = 0xC020;
+		constexpr std::uintptr_t sourceShader = 0xC030;
+		constexpr std::uintptr_t unrelatedShader = 0xC040;
+		constexpr std::uint64_t staleDrawArgument = 0xC050;
+		constexpr std::uint64_t successorDrawArgument = 0xC060;
+		auto config = Config();
+		config.maxEvents = 128;
+		config.maxStageShaderObservations = 8;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+
+		enum class Publisher
+		{
+			kSetter,
+			kCacheMiss,
+			kTechnique,
+		};
+		const std::array publishers{
+			Publisher::kSetter,
+			Publisher::kCacheMiss,
+			Publisher::kTechnique,
+		};
+
+		const auto verifyDrawShader = [&](const CaptureSnapshot& a_snapshot, std::string_view a_case) {
+			const auto draw = std::find_if(a_snapshot.events.begin(), a_snapshot.events.end(),
+				[](const EventRecord& event) {
+					return event.kind == EventKind::kDraw &&
+				           event.payload.words[4] == successorDrawArgument;
+				});
+			Check(draw != a_snapshot.events.end() && draw->payload.words[2] != 0,
+				std::format("{} did not retain an authoritative successor shader", a_case));
+			const auto shader = draw == a_snapshot.events.end() ? a_snapshot.events.end() :
+			                                                      std::find_if(a_snapshot.events.begin(), a_snapshot.events.end(),
+																	  [draw](const EventRecord& event) {
+																		  return event.kind == EventKind::kStageShaderObserved &&
+				                                                                 event.payload.words[0] == draw->payload.words[2];
+																	  });
+			Check(shader != a_snapshot.events.end() && shader->payload.words[1] == sourceShader,
+				std::format("{} relabelled the source shader as a successor observation", a_case));
+		};
+
+		for (const auto publisher : publishers) {
+			Runtime runtime;
+			runtime.SetImmediateContext(immediateContext);
+			if (publisher != Publisher::kSetter)
+				runtime.BindStage(immediateContext, ShaderStage::kVertex, sourceShader);
+			Check(runtime.StartCapture(config) == StartResult::kStarted,
+				"immediate publication source capture did not start");
+			runtime.PauseNextImmediateStagePublicationForTesting();
+			std::thread staleWorker([&] {
+				switch (publisher) {
+				case Publisher::kSetter:
+					runtime.BindStage(immediateContext, ShaderStage::kVertex, sourceShader);
+					break;
+				case Publisher::kCacheMiss:
+					runtime.RecordDraw(immediateContext, DrawOperation::kDraw, staleDrawArgument);
+					break;
+				case Publisher::kTechnique:
+					runtime.RecordTechniqueResolution({
+						.shaderFound = true,
+						.vertex = {
+							.route = ShaderSelectionRoute::kEngine,
+							.shader = {
+								.stage = ShaderStage::kVertex,
+								.d3dObject = sourceShader,
+							},
+						},
+					});
+					break;
+				}
+			});
+			WaitForDeferredPublicationPause(runtime, staleWorker);
+
+			auto first = runtime.StopCapture();
+			Check(first.has_value() && runtime.StartCapture(config) == StartResult::kStarted,
+				"immediate publication capture turnover failed");
+			runtime.RegisterDeferredContext(deferredContext, 0);
+			runtime.BindStage(deferredContext, ShaderStage::kVertex, unrelatedShader);
+			runtime.ResumeDeferredPublicationForTesting();
+			staleWorker.join();
+			runtime.RecordDraw(immediateContext, DrawOperation::kDraw, successorDrawArgument);
+
+			auto second = runtime.StopCapture();
+			Check(second.has_value(), "immediate publication successor capture did not stop");
+			Check(std::none_of(second->events.begin(), second->events.end(),
+					  [](const EventRecord& event) {
+						  return event.kind == EventKind::kDraw &&
+				                 event.payload.words[4] == staleDrawArgument;
+					  }),
+				"stale immediate draw entered the successor capture");
+			verifyDrawShader(*second, "capture-turnover publication");
+		}
+
+		Runtime stableRuntime;
+		stableRuntime.SetImmediateContext(immediateContext);
+		Check(stableRuntime.StartCapture(config) == StartResult::kStarted,
+			"stable immediate publication capture did not start");
+		stableRuntime.PauseNextImmediateStagePublicationForTesting();
+		std::thread stableWorker([&] {
+			stableRuntime.BindStage(immediateContext, ShaderStage::kVertex, sourceShader);
+		});
+		WaitForDeferredPublicationPause(stableRuntime, stableWorker);
+		stableRuntime.ResumeDeferredPublicationForTesting();
+		stableWorker.join();
+		stableRuntime.RecordDraw(immediateContext, DrawOperation::kDraw, successorDrawArgument);
+		auto stable = stableRuntime.StopCapture();
+		Check(stable.has_value(), "stable immediate publication capture did not stop");
+		verifyDrawShader(*stable, "stable-generation publication");
+	}
+
 	void TestDeferredPublicationRetainsCaptureGeneration()
 	{
 		constexpr std::uintptr_t oldContext = 0xC100;
@@ -2087,6 +2199,7 @@ int main()
 		TestExecuteRestoreStateIsIndependentOfCaptureAdmission();
 		TestDeferredRecordingReportsPartialFilteredAndFailedFinishes();
 		TestDiagnosticCatalogueAdmissionFailuresFailOpen();
+		TestImmediateStagePublicationRetainsCaptureGeneration();
 		TestDeferredPublicationRetainsCaptureGeneration();
 		TestDeferredControlPublicationRetainsRecordingLifetime();
 		return 0;

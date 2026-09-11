@@ -1237,14 +1237,29 @@ def main() -> int:
             for gap in invalid_finish_graph["gaps"]
         )
 
-    null_finish = finish_event(
-        8, recording_a["id"], recording_a["id"], context_a["id"], list_a,
-    )
-    null_finish["execution"]["commandStreamSequence"] = None
-    null_finish_graph = build_graph(
-        tool, manifest, identity_declarations() + [null_finish],
-    )
-    assert any(edge["type"] == "finishes" for edge in null_finish_graph["edges"])
+    for missing_sequence in (False, True):
+        invalid_finish = finish_event(
+            8, recording_a["id"], recording_a["id"], context_a["id"], list_a,
+        )
+        if missing_sequence:
+            invalid_finish["execution"].pop("commandStreamSequence")
+        else:
+            invalid_finish["execution"]["commandStreamSequence"] = None
+        invalid_finish_graph = build_graph(
+            tool, manifest, identity_declarations() + [invalid_finish],
+        )
+        invalid_finish_node = next(
+            node for node in invalid_finish_graph["nodes"]
+            if node["kind"] == "command-list-finish"
+        )
+        assert not [
+            edge for edge in invalid_finish_graph["edges"]
+            if edge["type"] == "finishes" and edge["to"] == invalid_finish_node["id"]
+        ]
+        assert any(
+            gap["blocking"] and "invalid command-stream sequence" in gap["description"]
+            for gap in invalid_finish_graph["gaps"]
+        )
 
     for factory in (recorded_draw, recorded_dispatch):
         valid_recording_graph = build_graph(

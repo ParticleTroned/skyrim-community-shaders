@@ -614,9 +614,7 @@ namespace CSX::RenderMap
 			immediateContextCommandSequence.store(0, std::memory_order_release);
 			boundTargetBindingObservationId.store(0, std::memory_order_release);
 			targetStateObservationGeneration.store(0, std::memory_order_release);
-			boundVertexShaderObservationId.store(0, std::memory_order_release);
-			boundPixelShaderObservationId.store(0, std::memory_order_release);
-			boundComputeShaderObservationId.store(0, std::memory_order_release);
+			ResetImmediateStageObservations(false);
 			{
 				std::scoped_lock lock(deferredContextMutex);
 				for (auto& [_, state] : deferredContexts) {
@@ -845,12 +843,7 @@ namespace CSX::RenderMap
 		immediateContextObservationId.store(0, std::memory_order_release);
 		immediateContextObservationGeneration.store(0, std::memory_order_release);
 		immediateContextCommandSequence.store(0, std::memory_order_release);
-		boundVertexShader.store(0, std::memory_order_release);
-		boundPixelShader.store(0, std::memory_order_release);
-		boundComputeShader.store(0, std::memory_order_release);
-		boundVertexShaderObservationId.store(0, std::memory_order_release);
-		boundPixelShaderObservationId.store(0, std::memory_order_release);
-		boundComputeShaderObservationId.store(0, std::memory_order_release);
+		ResetImmediateStageObservations(true);
 		boundTargetBindingObservationId.store(0, std::memory_order_release);
 		targetStateObservationGeneration.store(0, std::memory_order_release);
 	}
@@ -899,12 +892,7 @@ namespace CSX::RenderMap
 
 	void Runtime::ResetImmediatePipelineState() noexcept
 	{
-		boundVertexShader.store(0, std::memory_order_release);
-		boundPixelShader.store(0, std::memory_order_release);
-		boundComputeShader.store(0, std::memory_order_release);
-		boundVertexShaderObservationId.store(0, std::memory_order_release);
-		boundPixelShaderObservationId.store(0, std::memory_order_release);
-		boundComputeShaderObservationId.store(0, std::memory_order_release);
+		ResetImmediateStageObservations(true);
 		boundTargetBindingObservationId.store(0, std::memory_order_release);
 		targetStateObservationGeneration.store(0, std::memory_order_release);
 		resourceViewStateObservationGeneration.store(0, std::memory_order_release);
@@ -953,6 +941,13 @@ namespace CSX::RenderMap
 		pauseNextDeferredPublication.store(true, std::memory_order_release);
 	}
 
+	void Runtime::PauseNextImmediateStagePublicationForTesting() noexcept
+	{
+		resumeDeferredPublication.store(false, std::memory_order_release);
+		deferredPublicationPaused.store(false, std::memory_order_release);
+		pauseNextImmediateStagePublication.store(true, std::memory_order_release);
+	}
+
 	void Runtime::PauseNextDeferredFinishCleanupForTesting() noexcept
 	{
 		resumeDeferredPublication.store(false, std::memory_order_release);
@@ -973,6 +968,17 @@ namespace CSX::RenderMap
 	void Runtime::PauseDeferredPublicationBeforeAppendForTesting() noexcept
 	{
 		if (!pauseNextDeferredPublication.exchange(false, std::memory_order_acq_rel))
+			return;
+		deferredPublicationPaused.store(true, std::memory_order_release);
+		while (!resumeDeferredPublication.load(std::memory_order_acquire))
+			std::this_thread::yield();
+		deferredPublicationPaused.store(false, std::memory_order_release);
+		resumeDeferredPublication.store(false, std::memory_order_release);
+	}
+
+	void Runtime::PauseImmediateStagePublicationForTesting() noexcept
+	{
+		if (!pauseNextImmediateStagePublication.exchange(false, std::memory_order_acq_rel))
 			return;
 		deferredPublicationPaused.store(true, std::memory_order_release);
 		while (!resumeDeferredPublication.load(std::memory_order_acquire))
@@ -1155,19 +1161,10 @@ namespace CSX::RenderMap
 		}
 		switch (a_stage) {
 		case ShaderStage::kVertex:
-			boundVertexShader.store(a_d3dObject, std::memory_order_release);
-			boundVertexShaderObservationId.store(
-				ObserveBoundStage(a_stage, a_d3dObject).observationId, std::memory_order_release);
-			break;
 		case ShaderStage::kPixel:
-			boundPixelShader.store(a_d3dObject, std::memory_order_release);
-			boundPixelShaderObservationId.store(
-				ObserveBoundStage(a_stage, a_d3dObject).observationId, std::memory_order_release);
-			break;
 		case ShaderStage::kCompute:
-			boundComputeShader.store(a_d3dObject, std::memory_order_release);
-			boundComputeShaderObservationId.store(
-				ObserveBoundStage(a_stage, a_d3dObject).observationId, std::memory_order_release);
+			SetImmediateBoundStage(a_stage, a_d3dObject);
+			PublishBoundStageObservation(a_stage, a_d3dObject, ObserveBoundStage(a_stage, a_d3dObject));
 			break;
 		}
 	}
@@ -1978,35 +1975,118 @@ namespace CSX::RenderMap
 		return immediateContextCommandSequence.fetch_add(1, std::memory_order_acq_rel) + 1;
 	}
 
-	std::uint64_t Runtime::EnsureBoundStageObservation(ShaderStage a_stage) noexcept
+	void Runtime::ResetImmediateStageObservations(bool a_clearBindings) noexcept
+	{
+		std::scoped_lock lock(immediateStageObservationMutex);
+		immediateStageObservationRevision.fetch_add(1, std::memory_order_acq_rel);
+		if (a_clearBindings) {
+			boundVertexShader.store(0, std::memory_order_release);
+			boundPixelShader.store(0, std::memory_order_release);
+			boundComputeShader.store(0, std::memory_order_release);
+		}
+		boundVertexShaderObservationId.store(0, std::memory_order_release);
+		boundPixelShaderObservationId.store(0, std::memory_order_release);
+		boundComputeShaderObservationId.store(0, std::memory_order_release);
+		boundVertexShaderObservationGeneration.store(0, std::memory_order_release);
+		boundPixelShaderObservationGeneration.store(0, std::memory_order_release);
+		boundComputeShaderObservationGeneration.store(0, std::memory_order_release);
+		immediateStageObservationRevision.fetch_add(1, std::memory_order_release);
+	}
+
+	void Runtime::SetImmediateBoundStage(
+		ShaderStage a_stage,
+		std::uintptr_t a_d3dObject) noexcept
 	{
 		std::atomic_uintptr_t* boundShader = nullptr;
 		std::atomic_uint64_t* boundObservation = nullptr;
+		std::atomic_uint64_t* boundGeneration = nullptr;
 		switch (a_stage) {
 		case ShaderStage::kVertex:
 			boundShader = &boundVertexShader;
 			boundObservation = &boundVertexShaderObservationId;
+			boundGeneration = &boundVertexShaderObservationGeneration;
 			break;
 		case ShaderStage::kPixel:
 			boundShader = &boundPixelShader;
 			boundObservation = &boundPixelShaderObservationId;
+			boundGeneration = &boundPixelShaderObservationGeneration;
 			break;
 		case ShaderStage::kCompute:
 			boundShader = &boundComputeShader;
 			boundObservation = &boundComputeShaderObservationId;
+			boundGeneration = &boundComputeShaderObservationGeneration;
 			break;
 		}
-		if (!boundShader || !boundObservation)
+		if (!boundShader || !boundObservation || !boundGeneration)
+			return;
+
+		std::scoped_lock lock(immediateStageObservationMutex);
+		immediateStageObservationRevision.fetch_add(1, std::memory_order_acq_rel);
+		boundShader->store(a_d3dObject, std::memory_order_release);
+		boundObservation->store(0, std::memory_order_release);
+		boundGeneration->store(0, std::memory_order_release);
+		immediateStageObservationRevision.fetch_add(1, std::memory_order_release);
+	}
+
+	Runtime::ImmediateStageObservation Runtime::ReadImmediateStageObservation(
+		ShaderStage a_stage) const noexcept
+	{
+		const std::atomic_uintptr_t* boundShader = nullptr;
+		const std::atomic_uint64_t* boundObservation = nullptr;
+		const std::atomic_uint64_t* boundGeneration = nullptr;
+		switch (a_stage) {
+		case ShaderStage::kVertex:
+			boundShader = &boundVertexShader;
+			boundObservation = &boundVertexShaderObservationId;
+			boundGeneration = &boundVertexShaderObservationGeneration;
+			break;
+		case ShaderStage::kPixel:
+			boundShader = &boundPixelShader;
+			boundObservation = &boundPixelShaderObservationId;
+			boundGeneration = &boundPixelShaderObservationGeneration;
+			break;
+		case ShaderStage::kCompute:
+			boundShader = &boundComputeShader;
+			boundObservation = &boundComputeShaderObservationId;
+			boundGeneration = &boundComputeShaderObservationGeneration;
+			break;
+		}
+		if (!boundShader || !boundObservation || !boundGeneration)
+			return {};
+
+		for (std::uint32_t attempt = 0; attempt < 8; ++attempt) {
+			const auto before = immediateStageObservationRevision.load(std::memory_order_acquire);
+			if ((before & 1) != 0)
+				continue;
+			const ImmediateStageObservation observation{
+				.d3dObject = boundShader->load(std::memory_order_acquire),
+				.observationId = boundObservation->load(std::memory_order_acquire),
+				.captureGeneration = boundGeneration->load(std::memory_order_acquire),
+			};
+			const auto after = immediateStageObservationRevision.load(std::memory_order_acquire);
+			if (before == after && (after & 1) == 0)
+				return observation;
+		}
+		return {};
+	}
+
+	std::uint64_t Runtime::EnsureBoundStageObservation(ShaderStage a_stage) noexcept
+	{
+		const auto existing = ReadImmediateStageObservation(a_stage);
+		const auto activeGeneration = collector.ActiveGeneration();
+		if (existing.observationId != 0 && existing.captureGeneration == activeGeneration)
+			return existing.observationId;
+		if (existing.d3dObject == 0)
 			return 0;
 
-		const auto existing = boundObservation->load(std::memory_order_acquire);
-		if (existing != 0)
-			return existing;
-		const auto observed = ObserveBoundStage(
-			a_stage, boundShader->load(std::memory_order_acquire));
-		if (observed.observationId != 0)
-			boundObservation->store(observed.observationId, std::memory_order_release);
-		return observed.observationId;
+		PublishBoundStageObservation(
+			a_stage, existing.d3dObject,
+			ObserveBoundStage(a_stage, existing.d3dObject));
+		const auto published = ReadImmediateStageObservation(a_stage);
+		return published.observationId != 0 &&
+		               published.captureGeneration == collector.ActiveGeneration() ?
+		           published.observationId :
+		           0;
 	}
 
 	std::optional<Runtime::PersistentStageShaderIdentity> Runtime::FindCreatedStageShader(
@@ -2044,20 +2124,44 @@ namespace CSX::RenderMap
 	{
 		if (a_d3dObject == 0 || a_observation.observationId == 0)
 			return;
+
+#if defined(CSX_RENDER_MAP_TESTING)
+		PauseImmediateStagePublicationForTesting();
+#endif
+
+		std::atomic_uintptr_t* boundShader = nullptr;
+		std::atomic_uint64_t* boundObservation = nullptr;
+		std::atomic_uint64_t* boundGeneration = nullptr;
 		switch (a_stage) {
 		case ShaderStage::kVertex:
-			if (boundVertexShader.load(std::memory_order_acquire) == a_d3dObject)
-				boundVertexShaderObservationId.store(a_observation.observationId, std::memory_order_release);
+			boundShader = &boundVertexShader;
+			boundObservation = &boundVertexShaderObservationId;
+			boundGeneration = &boundVertexShaderObservationGeneration;
 			break;
 		case ShaderStage::kPixel:
-			if (boundPixelShader.load(std::memory_order_acquire) == a_d3dObject)
-				boundPixelShaderObservationId.store(a_observation.observationId, std::memory_order_release);
+			boundShader = &boundPixelShader;
+			boundObservation = &boundPixelShaderObservationId;
+			boundGeneration = &boundPixelShaderObservationGeneration;
 			break;
 		case ShaderStage::kCompute:
-			if (boundComputeShader.load(std::memory_order_acquire) == a_d3dObject)
-				boundComputeShaderObservationId.store(a_observation.observationId, std::memory_order_release);
+			boundShader = &boundComputeShader;
+			boundObservation = &boundComputeShaderObservationId;
+			boundGeneration = &boundComputeShaderObservationGeneration;
 			break;
 		}
+		if (!boundShader || !boundObservation || !boundGeneration)
+			return;
+
+		std::scoped_lock lock(immediateStageObservationMutex);
+		const auto activeGeneration = collector.ActiveGeneration();
+		if (activeGeneration == 0 ||
+			a_observation.sessionGeneration != activeGeneration ||
+			boundShader->load(std::memory_order_acquire) != a_d3dObject)
+			return;
+		immediateStageObservationRevision.fetch_add(1, std::memory_order_acq_rel);
+		boundObservation->store(a_observation.observationId, std::memory_order_release);
+		boundGeneration->store(a_observation.sessionGeneration, std::memory_order_release);
+		immediateStageObservationRevision.fetch_add(1, std::memory_order_release);
 	}
 
 	void Runtime::RecordDraw(

@@ -377,6 +377,7 @@ namespace CSX::RenderMap
 		void FailNextDeferredContextCatalogueAdmissionForTesting() noexcept;
 		void FailNextCommandListCatalogueAdmissionForTesting() noexcept;
 		void PauseNextDeferredPublicationForTesting() noexcept;
+		void PauseNextImmediateStagePublicationForTesting() noexcept;
 		void PauseNextDeferredFinishCleanupForTesting() noexcept;
 		bool IsDeferredPublicationPausedForTesting() const noexcept;
 		void ResumeDeferredPublicationForTesting() noexcept;
@@ -476,6 +477,13 @@ namespace CSX::RenderMap
 			std::uint64_t recordingObservationId{ 0 };
 		};
 
+		struct ImmediateStageObservation
+		{
+			std::uintptr_t d3dObject{ 0 };
+			std::uint64_t observationId{ 0 };
+			std::uint64_t captureGeneration{ 0 };
+		};
+
 		std::uint64_t EnsureImmediateContextObservation() noexcept;
 		ContextObservation EnsureContextObservation(std::uintptr_t a_context) noexcept;
 		std::uint64_t StartDeferredRecording(
@@ -488,9 +496,13 @@ namespace CSX::RenderMap
 			CommandRecordingIncompleteReason a_reason) noexcept;
 #if defined(CSX_RENDER_MAP_TESTING)
 		void PauseDeferredPublicationBeforeAppendForTesting() noexcept;
+		void PauseImmediateStagePublicationForTesting() noexcept;
 		void PauseDeferredFinishCleanupForTesting() noexcept;
 #endif
 		void ResetImmediatePipelineState() noexcept;
+		void ResetImmediateStageObservations(bool a_clearBindings) noexcept;
+		void SetImmediateBoundStage(ShaderStage a_stage, std::uintptr_t a_d3dObject) noexcept;
+		ImmediateStageObservation ReadImmediateStageObservation(ShaderStage a_stage) const noexcept;
 		void ApplyEffectiveResourceViewResetLocked() noexcept;
 		std::uint64_t NextCommandStreamSequence() noexcept;
 		std::uint64_t EnsureBoundStageObservation(ShaderStage a_stage) noexcept;
@@ -525,6 +537,10 @@ namespace CSX::RenderMap
 		std::atomic_uint64_t boundVertexShaderObservationId{ 0 };
 		std::atomic_uint64_t boundPixelShaderObservationId{ 0 };
 		std::atomic_uint64_t boundComputeShaderObservationId{ 0 };
+		std::atomic_uint64_t boundVertexShaderObservationGeneration{ 0 };
+		std::atomic_uint64_t boundPixelShaderObservationGeneration{ 0 };
+		std::atomic_uint64_t boundComputeShaderObservationGeneration{ 0 };
+		std::atomic_uint64_t immediateStageObservationRevision{ 0 };
 		std::atomic_uint64_t boundTargetBindingObservationId{ 0 };
 		std::atomic_uint64_t targetStateObservationGeneration{ 0 };
 		std::atomic_uint64_t resourceViewStateObservationGeneration{ 0 };
@@ -534,6 +550,7 @@ namespace CSX::RenderMap
 		std::atomic_uint64_t immediateContextObservationGeneration{ 0 };
 		std::atomic_uint64_t immediateContextCommandSequence{ 0 };
 		std::mutex immediateContextObservationMutex;
+		std::mutex immediateStageObservationMutex;
 		std::mutex resourceViewStateMutex;
 		std::mutex activeCpuMapMutex;
 		std::mutex deferredContextMutex;
@@ -550,6 +567,7 @@ namespace CSX::RenderMap
 		std::atomic_bool failNextDeferredContextCatalogueAdmission{ false };
 		std::atomic_bool failNextCommandListCatalogueAdmission{ false };
 		std::atomic_bool pauseNextDeferredPublication{ false };
+		std::atomic_bool pauseNextImmediateStagePublication{ false };
 		std::atomic_bool pauseNextDeferredFinishCleanup{ false };
 		std::atomic_bool deferredPublicationPaused{ false };
 		std::atomic_bool resumeDeferredPublication{ false };

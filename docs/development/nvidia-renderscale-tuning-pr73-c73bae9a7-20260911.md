@@ -47,7 +47,7 @@ against a 250.00 ms diagnostic budget. No transition was replayed.
 
 ## Evidence and validation
 
-The [canonical ledger](vr-render-scale-comparison-ledger.csv) contains all
+The [canonical ledger](vr-render-scale-ledger.md) contains all
 finalized fields, both passes, all transitions and the complete comparison.
 Field-for-field reconstruction of both summary and comparison passed;
 all historical cells are preserved, and all 1,056 paired numeric timing

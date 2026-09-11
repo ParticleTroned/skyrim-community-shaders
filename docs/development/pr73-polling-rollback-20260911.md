@@ -31,7 +31,7 @@ Task 2 results are 66 PASS / 0 FAIL / 0 INCONCLUSIVE; applicable full-history
 health is MET/MET. Formal improvement versus PR66 remains INCONCLUSIVE.
 
 The [existing comparison](pr73-readiness-nvidia-comparison-20260911.md) and
-[canonical ledger](vr-render-scale-comparison-ledger.csv) retain the measured
+[canonical ledger](vr-render-scale-ledger.md) retain the measured
 results. The preserved tested binary provides the restoration identity;
 a new source revert commit does not retroactively change its Build ID.
 No new performance measurement or release qualification is claimed.

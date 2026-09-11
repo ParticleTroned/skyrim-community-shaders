@@ -155,7 +155,7 @@ exact DLL manifest and capture evidence when collecting new results.
 
 The historical measurements in PR73 still belong to PR66 `a09e1cc77`,
 previous PR73 `d9780bb74` and measured PR73 `c73bae9a7`. They do not validate
-this candidate. The [canonical comparison ledger](vr-render-scale-comparison-ledger.csv)
+this candidate. The [canonical comparison ledger](vr-render-scale-ledger.md)
 and its existing numeric cells are unchanged because this preparation adds
 no runtime measurements. No performance improvement is claimed. The
 separate `csx-render-scale-pr-v1` qualification remains unrun.

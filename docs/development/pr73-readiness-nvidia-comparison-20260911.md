@@ -329,7 +329,7 @@ SE/AE scenarios remain pending.
 
 Published reports: [complete current comparison](pr73-readiness-nvidia-comparison-20260911.md),
 [preserved original PR66/PR73 report](pr73-vs-pr66-nvidia-comparison-20260910.md), and
-[canonical ledger](vr-render-scale-comparison-ledger.csv).
+[canonical ledger](vr-render-scale-ledger.md).
 
 <!-- end pr73-three-build-pr66-reference-v1 -->
 

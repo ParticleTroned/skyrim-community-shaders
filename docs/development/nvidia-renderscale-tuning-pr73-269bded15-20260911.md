@@ -39,7 +39,7 @@ existing lossless subtree-reference encoding already required
 109,580,999 bytes, exceeding its
 104,857,600-byte blob limit. Every new field
 remains in the complete local canonical ledger; the repository-published
-[published ledger snapshot](vr-render-scale-comparison-ledger.csv) does not
+[published ledger snapshot](vr-render-scale-ledger.md) does not
 yet include this run. This report publishes the
 current run and comparison tables without rewriting historical ledger cells.
 The estimate and exact preservation checks remain in the evidence directory.

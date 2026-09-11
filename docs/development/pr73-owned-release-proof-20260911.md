@@ -125,7 +125,7 @@ or deploy to that session. Live lifecycle cases and the required
 readiness can be claimed.
 
 No runtime rows are added by this offline correction. The
-[canonical comparison ledger](vr-render-scale-comparison-ledger.csv)
+[canonical comparison ledger](vr-render-scale-ledger.md)
 remains the durable measurement record, with all historical cells and the
 latest complete local evidence preserved. The previously documented
 GitHub file-size limitation remains; report links do not replace ledger

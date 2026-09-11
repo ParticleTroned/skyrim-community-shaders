@@ -107,7 +107,7 @@ documentation files. It supplies equivalent runtime source, but its
 different compiled identity cannot substitute for the requested exact
 parent. Its earlier measurements remain in the
 [existing run comparison](nvidia-renderscale-tuning-pr73-269bded15-20260911.md)
-and [canonical ledger](vr-render-scale-comparison-ledger.csv).
+and [canonical ledger](vr-render-scale-ledger.md).
 
 ## Live comparison status
 

@@ -186,7 +186,7 @@ and the full scalar export remain local. The separate
 </details>
 <!-- end pr75-nvidia-mainvr-comparison-v1 -->
 
-[Canonical comparison ledger](vr-render-scale-comparison-ledger.csv).
+[Canonical comparison ledger](vr-render-scale-ledger.md).
 
 The detailed comparison below preserves every pass and route. The
 following assay report includes the full memory table and retry diagnostics.

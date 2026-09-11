@@ -2147,6 +2147,24 @@ if(BUILD_CONTROLLER_TESTS)
             "${PROJECT_SOURCE_DIR}/extern/CommonLibSSE-NG/extern/openvr/headers"
     )
     add_controller_test(
+        ocu_effect_foveation_policy_test
+        OCUEffectFoveationPolicy
+        tests/ocu_effect_foveation_policy_test.cpp
+    )
+    target_include_directories(
+        ocu_effect_foveation_policy_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
+    add_controller_test(
+        ocu_effect_foveation_client_test
+        OCUEffectFoveationClient
+        tests/ocu_effect_foveation_client_test.cpp
+    )
+    target_include_directories(
+        ocu_effect_foveation_client_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
+    add_controller_test(
         overlay_policy_test
         OverlayPolicy
         tests/overlay_policy_test.cpp
@@ -2239,6 +2257,23 @@ if(BUILD_CONTROLLER_TESTS)
     target_link_libraries(
         water_appearance_migration_test
         PRIVATE nlohmann_json::nlohmann_json
+    )
+
+    add_executable(
+        accepted_draw_registry_test
+        EXCLUDE_FROM_ALL
+        tests/accepted_draw_registry_test.cpp
+        src/Api/AcceptedDrawRegistry.cpp
+    )
+    target_compile_features(accepted_draw_registry_test PRIVATE cxx_std_23)
+    target_include_directories(
+        accepted_draw_registry_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src" "${PROJECT_SOURCE_DIR}/include"
+    )
+    add_test(NAME AcceptedDrawRegistry COMMAND accepted_draw_registry_test)
+    set_tests_properties(
+        AcceptedDrawRegistry
+        PROPERTIES LABELS "ControllerTests"
     )
 
     add_executable(
@@ -2628,6 +2663,9 @@ if(BUILD_CONTROLLER_TESTS)
             fsr_eye_dispatch_test
             vr_submit_input_freshness_policy_test
             vr_submit_input_freshness_composition_test
+            ocu_effect_foveation_policy_test
+            ocu_effect_foveation_client_test
+            accepted_draw_registry_test
             overlay_policy_test
             performance_tuning_statistics_test
             shader_cache_disable_policy_test

@@ -1,4 +1,5 @@
 #include "Hooks.h"
+#include "Api/AcceptedDrawService.h"
 
 #include "ShaderTools/BSShaderHooks.h"
 #include "Utils/ExternalEmittance.h"
@@ -760,6 +761,8 @@ namespace EffectExtensions
 	{
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
+			if (globals::game::isVR)
+				CSX::Api::BeginAcceptedDrawGeometry(pass);
 			func(shader, pass, renderFlags);
 
 			auto state = globals::state;
@@ -772,6 +775,8 @@ namespace EffectExtensions
 					state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::EffectShadows);
 				}
 			}
+			if (globals::game::isVR)
+				CSX::Api::ActivateAcceptedDrawGeometry(pass);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -785,6 +790,8 @@ namespace LightingExtensions
 		{
 			globals::state->UpdateLightingShaderPermutation(pass);
 
+			if (globals::game::isVR)
+				CSX::Api::BeginAcceptedDrawGeometry(pass);
 			func(shader, pass, renderFlags);
 
 			auto state = globals::state;
@@ -795,10 +802,24 @@ namespace LightingExtensions
 				if (auto baseObject = userData->GetBaseObject())
 					if (baseObject->As<RE::TESObjectTREE>())
 						state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::IsTree);
+			if (globals::game::isVR)
+				CSX::Api::ActivateAcceptedDrawGeometry(pass);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 }
+
+template <unsigned ShaderKind>
+struct AcceptedDrawRestoreGeometry
+{
+	static void thunk(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_flags)
+	{
+		CSX::Api::SuspendAcceptedDrawGeometry();
+		func(a_shader, a_pass, a_flags);
+		CSX::Api::EndAcceptedDrawGeometry(a_pass);
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
 
 namespace GrassExtensions
 {
@@ -1316,6 +1337,7 @@ namespace Hooks
 			stl::detour_vfunc<23, ID3D11Device_CreateSamplerState>(globals::d3d::device);
 
 			globals::InstallD3DHooks(globals::d3d::context);
+			CSX::Api::InitializeAcceptedDrawService(globals::d3d::context);
 
 			globals::menu->Init();
 		}
@@ -1916,6 +1938,11 @@ namespace Hooks
 		logger::info("Installing SetupGeometry hooks");
 		stl::write_vfunc<0x6, EffectExtensions::BSEffectShader_SetupGeometry>(RE::VTABLE_BSEffectShader[0]);
 		stl::write_vfunc<0x6, LightingExtensions::BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
+		if (globals::game::isVR) {
+			stl::write_vfunc<0x7, AcceptedDrawRestoreGeometry<0>>(RE::VTABLE_BSEffectShader[0]);
+			stl::write_vfunc<0x7, AcceptedDrawRestoreGeometry<1>>(RE::VTABLE_BSLightingShader[0]);
+			CSX::Api::AcceptedDrawGeometryHooksInstalled();
+		}
 		stl::write_thunk_call<GrassExtensions::BSGrassShaderProperty_ctor>(REL::RelocationID(15214, 15383).address() + REL::Relocate(0x45B, 0x4F5));
 		stl::write_vfunc<0x6, GrassExtensions::BSGrassShader_SetupGeometry>(RE::VTABLE_BSGrassShader[0]);
 

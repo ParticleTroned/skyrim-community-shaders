@@ -1641,6 +1641,32 @@ if(BUILD_CONTROLLER_TESTS)
         set_tests_properties(${TEST_NAME} PROPERTIES LABELS "ControllerTests")
     endfunction()
 
+    set(_vr_scene_guards_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/vr-scene-guards"
+    )
+    add_custom_command(
+        OUTPUT "${_vr_scene_guards_test_dir}/vr_scene_guards_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_vr_scene_guards_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_vr_scene_guards.cmake"
+        DEPENDS
+            src/Features/LightLimitFix.cpp
+            tests/extract_vr_scene_guards.cmake
+        VERBATIM
+    )
+    add_controller_test(vr_scene_guards_test VRSceneGuards tests/vr_scene_guards_test.cpp)
+    target_sources(
+        vr_scene_guards_test
+        PRIVATE "${_vr_scene_guards_test_dir}/vr_scene_guards_under_test.h"
+    )
+    target_include_directories(
+        vr_scene_guards_test
+        PRIVATE "${_vr_scene_guards_test_dir}"
+    )
+    target_link_libraries(vr_scene_guards_test PRIVATE xbyak::xbyak)
+    set_tests_properties(VRSceneGuards PROPERTIES TIMEOUT 30)
+
     add_controller_test(
         pbr_material_registry_test
         PBRMaterialRegistry
@@ -2447,6 +2473,7 @@ if(BUILD_CONTROLLER_TESTS)
     add_custom_target(
         controller_tests
         DEPENDS
+            vr_scene_guards_test
             pbr_material_registry_test
             perf_mode_restart_state_test
             vr_vendor_relatch_policy_test

@@ -30,7 +30,7 @@ namespace
 			{ "contextSettings", json(snapshot.contextSettings) },
 			{ "status", FSRTemporalTuningPolicy::StatusLabel(snapshot.status) },
 			{ "providerId", snapshot.providerId },
-			{ "providerVersionSupported", FSRTemporalTuningPolicy::SupportsProvider(snapshot.providerId) },
+			{ "configurationApplied", snapshot.contextSettings.enabled && snapshot.configuredContexts != 0 },
 			{ "configuredContexts", snapshot.configuredContexts },
 			{ "lastConfigureResult", snapshot.lastConfigureResult },
 			{ "requestRevision", snapshot.requestRevision },
@@ -114,7 +114,7 @@ void FSRTemporalTuningDevBenchBridge::Install()
 		for (const auto& field : FSRTemporalTuningPolicy::kNumericSettings)
 			settingsProperties[field.name] = { { "type", "number" }, { "minimum", field.minimum }, { "maximum", field.maximum } };
 		return json{
-			{ "description", "Inspect or set optional FSR temporal reconstruction overrides on SE, AE and VR. Disabled by default. Only verified runtime FSR 3.1.4/3.1.5 providers accept this complete key set; host FSR and FSR4 retain vendor defaults. set atomically patches requested settings, and render-thread context recreation applies the complete profile to all eyes before dispatch. Rejection recreates untouched vendor defaults and latches that request; provider faults follow runtime quarantine. status reports requested versus applied settings, pending/unsupported/rejected/faulted state and last configure result. persist saves the user configuration only when explicitly true. No resolution, provider selection or public upscaling ABI changes." },
+			{ "description", "Inspect or set optional runtime FSR temporal reconstruction overrides, including FSR 4.1.1, on SE, AE and VR. Disabled by default. Provider versions are not gated; configuration results determine acceptance of the complete key set. Host FSR retains vendor defaults. set atomically patches requested settings, and render-thread context recreation applies the complete profile to all eyes before dispatch. Rejection recreates untouched vendor defaults and latches that request; provider faults follow runtime quarantine. status reports requested versus applied settings, configurationApplied, pending/unsupported/rejected/faulted state and last configure result. configurationApplied means all configure calls succeeded, not proof of a visual effect. persist saves the user configuration only when explicitly true. No resolution, provider selection or public upscaling ABI changes." },
 			{ "inputSchema", { { "type", "object" }, { "additionalProperties", false },
 								 { "properties", { { "action", { { "type", "string" }, { "enum", { "status", "set" } }, { "default", "status" } } },
 													 { "settings", { { "type", "object" }, { "additionalProperties", false }, { "minProperties", 1 }, { "properties", std::move(settingsProperties) } } },

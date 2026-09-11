@@ -40,6 +40,7 @@ namespace FSRTemporalTuningPolicy
 		return nullptr;
 	}
 
+	/** Persists every supported field from the same definition used for validation. */
 	inline void to_json(nlohmann::json& a_json, const Settings& a_settings)
 	{
 		a_json = { { "enabled", a_settings.enabled } };

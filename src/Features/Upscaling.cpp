@@ -16213,7 +16213,7 @@ void Upscaling::DrawSettings()
 					draft = settings.fsrTemporalTuning;
 					lastSettings = settings.fsrTemporalTuning;
 				}
-				ImGui::TextWrapped("Optional FSR 3.1.4/3.1.5 tuning. Other FSR providers retain their defaults. Apply changes together; disabling restores vendor defaults.");
+				ImGui::TextWrapped("Optional runtime FSR tuning, including FSR 4.1.1. Apply changes together; disabling restores vendor defaults. If the provider rejects a setting, the complete profile returns to vendor defaults.");
 				ImGui::Checkbox("Enable reconstruction overrides", &draft.enabled);
 				ImGui::SliderFloat("Velocity factor", &draft.velocityFactor, 0.0f, 1.0f);
 				if (auto _tt = Util::HoverTooltipWrapper())

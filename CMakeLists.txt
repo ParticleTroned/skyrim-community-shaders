@@ -1989,8 +1989,9 @@ if(BUILD_CONTROLLER_TESTS)
     set(_fsr_temporal_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/fsr-temporal-tuning")
     set(_fsr_temporal_headers
         "${_fsr_temporal_test_dir}/temporal_settings_load_under_test.h"
-        "${_fsr_temporal_test_dir}/temporal_provider_query_under_test.h"
+        "${_fsr_temporal_test_dir}/temporal_provider_calls_under_test.h"
         "${_fsr_temporal_test_dir}/temporal_provider_result_under_test.h"
+        "${_fsr_temporal_test_dir}/temporal_snapshot_under_test.h"
     )
     add_custom_command(
         OUTPUT ${_fsr_temporal_headers}
@@ -1998,6 +1999,7 @@ if(BUILD_CONTROLLER_TESTS)
             "-DOUTPUT_DIRECTORY=${_fsr_temporal_test_dir}" -P
             "${PROJECT_SOURCE_DIR}/tests/extract_fsr_temporal_tuning.cmake"
         DEPENDS src/Features/Upscaling.cpp src/Features/Upscaling/FidelityFX.cpp
+            src/Features/Upscaling/FidelityFX.h
             tests/extract_fsr_temporal_tuning.cmake
         VERBATIM
     )
@@ -2009,6 +2011,7 @@ if(BUILD_CONTROLLER_TESTS)
         target_include_directories(${_temporal_test} PRIVATE "${_fsr_temporal_test_dir}")
     endforeach()
     target_link_libraries(fsr_temporal_tuning_serialization_test PRIVATE nlohmann_json::nlohmann_json)
+    target_include_directories(fsr_temporal_tuning_provider_test PRIVATE "${PROJECT_SOURCE_DIR}/include")
 
     set(_fsr_eye_dispatch_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/fsr-eye-dispatch"

@@ -1,7 +1,7 @@
 # Optional FSR temporal reconstruction tuning
 
-The Upscaling menu exposes an optional reconstruction profile for verified
-FSR 3.1.4 and 3.1.5 runtime providers. It is disabled by default: existing
+The Upscaling menu exposes an optional reconstruction profile for runtime
+FSR providers, including FSR 4.1.1. It is disabled by default: existing
 configurations issue no new configure calls and retain vendor defaults.
 These controls affect temporal reconstruction, separately from sharpening.
 They do not select a provider or change render resolution.
@@ -28,11 +28,20 @@ contexts instead of writing these values as presumed provider defaults.
 ## Compatibility and failure behavior
 
 The public FidelityFX configure API is used on SE, AE and VR through the
-existing runtime FSR path. Every context must report the same supported
-provider ID. The entire five-key set is limited to exact FSR 3.1.4/3.1.5
-versions. Host FSR, older or unknown providers, future unverified versions
-and FSR4 retain vendor behavior, with an explicit unsupported state. There
-is no inference of FSR4 support from FSR3 key availability.
+existing runtime FSR path. Every context must report the same nonzero
+provider ID. There is no provider-version allowlist: FSR3 and FSR4 use
+the same complete five-key configuration path, and the provider's actual
+configure results determine whether the profile is accepted. An older,
+newer or otherwise unknown provider is also attempted rather than rejected
+by version. Host FSR retains vendor behavior because it does not use this
+runtime configure API. Missing API functions or unavailable/mismatched
+context identities report `unsupported_provider` without configuring.
+
+FSR 4.1.1 uses the same enable, edit, apply, save/load and restore controls
+as FSR3. Successful configure calls establish API acceptance; they do not
+establish that each value changes the rendered image. The slider tradeoffs
+above are documented for FSR3. Their visual influence under FSR4 remains
+subject to testing on an FSR4 provider.
 
 Changing an enabled profile invalidates context compatibility through an
 atomic request revision. The existing GPU drain and context recreation
@@ -88,7 +97,7 @@ configuration. A failed save reports that the live request was accepted
 but was not persisted. `expectedBuildId` can require an exact producer DLL.
 
 Inspect `requested`, `contextSettings`, `status`, `providerId`,
-`providerVersionSupported`, `configuredContexts`, `lastConfigureResult`,
+`configurationApplied`, `configuredContexts`, `lastConfigureResult`,
 `requestRevision`, and `lastDispatchPath`. A host dispatch reports inactive
 overrides even if dormant runtime contexts still contain a tuned profile.
 These fields describe the latest FSR dispatch and its context configuration;
@@ -98,19 +107,29 @@ The dispatch path uses the existing values: 0 inactive, 1 host FSR3,
 proof of application; `rejected_vendor_defaults` records a rejected
 request even after default contexts have been restored.
 
+`configurationApplied` reports that the current context profile is enabled
+and the complete context set accepted its configure calls. It can remain
+true while a newer requested profile is pending. It replaces the former
+`providerVersionSupported` inference; provider version is not a support
+gate. The field is false on the host path and after rejection or faults.
+
 ## Validation
 
-`FSRTemporalTuningPolicy` checks bounds (including NaN and infinity), exact
-provider guards, disabled-profile compatibility, rejection-latch identity,
+`FSRTemporalTuningPolicy` checks bounds (including NaN and infinity),
+disabled-profile compatibility, rejection-latch identity,
 and injected failure/fault at each key of each eye. Every injected failure
 stops subsequent configure calls and preserves its context, key and error.
 
 `FSRTemporalTuningSerialization` compiles the production profile loader and
 checks malformed type isolation, atomic live patches, exact numeric bounds,
 unknown keys, older profiles and save/load round trips.
-`FSRTemporalTuningProvider` compiles the production protected query and
-provider-result handler, injects a Windows structured exception, and checks
-context quarantine, failure propagation and retained diagnostic evidence.
+`FSRTemporalTuningProvider` uses the public SDK descriptors and compiles the
+production protected calls, request/snapshot handlers and complete context
+configuration path. Injected FSR 4.1.1, FSR3 and unknown provider identities
+cover mono/stereo application without version gates. It tests every stereo
+configure rejection and Windows structured exception, default restoration
+handoff, retry latching, cleanup failure, identity mismatch, concurrent
+edits, host fallback status and retained diagnostic evidence.
 
 Runtime validation must compare fixed scenes and identical camera paths,
 including foliage, bright particles, water and disocclusions. Test live

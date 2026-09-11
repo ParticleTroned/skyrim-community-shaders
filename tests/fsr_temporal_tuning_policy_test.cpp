@@ -11,13 +11,6 @@ namespace
 	{
 		return (major << 22) | (minor << 12) | patch;
 	}
-	static_assert(SupportsProvider(Version(3, 1, 4)));
-	static_assert(SupportsProvider((123ull << 32) | Version(3, 1, 5)));
-	static_assert(!SupportsProvider(0));
-	static_assert(!SupportsProvider(Version(3, 1, 3)));
-	static_assert(!SupportsProvider(Version(3, 1, 6)));
-	static_assert(!SupportsProvider(Version(3, 2, 4)));
-	static_assert(!SupportsProvider(Version(4, 1, 4)));
 	static_assert(!Settings{}.enabled);
 	static_assert(Values(Settings{})[4] < 0.0f);
 	static_assert(CanReuseContextProfile(3, 3, false));

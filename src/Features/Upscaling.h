@@ -2230,7 +2230,7 @@ public:
 #endif
 	/** @brief Resolve material mip bias from the active resolution owner or OpenComposite Unleashed. */
 	float ResolveRuntimeMipBias(bool a_temporal);
-	/** Validates and queues an optional FSR reconstruction profile without changing resolution. */
+	/** Validates and queues reconstruction settings on the game/UI thread; does not change resolution. */
 	bool SetFSRTemporalTuningSettings(const FSRTemporalTuningPolicy::Settings& a_settings);
 	// Refresh both the cached plan and restart-required state from the current VR render-scale settings.
 	void RefreshRuntimeResolutionState();

@@ -3293,7 +3293,7 @@ FidelityFX::LifecycleResult FidelityFX::ConfigureTemporalTuningContexts(const Te
 			runtimeUpscalerQuarantineRetirement = NormalizeRuntimeQuarantineResult(failure);
 			return failure;
 		}
-		if (result != FFX_API_RETURN_OK || !FSRTemporalTuningPolicy::SupportsProvider(query.versionId) ||
+		if (result != FFX_API_RETURN_OK || query.versionId == 0 ||
 			(eye > 0 && query.versionId != providerId)) {
 			publish(Status::UnsupportedProvider, query.versionId, 0, static_cast<int32_t>(result));
 			return LifecycleResult::Ready;

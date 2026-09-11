@@ -109,6 +109,7 @@ public:
 	static constexpr uint32_t Fsr3Version = FFX_UPSCALER_MAKE_VERSION(FFX_FSR3_VERSION_MAJOR, FFX_FSR3_VERSION_MINOR, FFX_FSR3_VERSION_PATCH);
 	static constexpr std::wstring_view RuntimeUpscalerDllName = L"amd_fidelityfx_upscaler_dx12.dll";
 	static constexpr std::string_view RuntimeUpscalerDllNameUtf8 = "amd_fidelityfx_upscaler_dx12.dll";
+	/** Requested profile and last context application; retained context evidence may outlive FSR dispatch. */
 	struct TemporalTuningSnapshot
 	{
 		FSRTemporalTuningPolicy::Settings requested{};
@@ -120,9 +121,9 @@ public:
 		uint64_t requestRevision = 0;
 		RuntimeUpscalerFramePath lastDispatchPath = RuntimeUpscalerFramePath::kInactive;
 	};
-	/** Queues validated settings; GPU context changes run at the existing render safe point. */
+	/** Queues validated settings; thread-safe requests defer GPU changes to the render safe point. */
 	bool RequestTemporalTuning(const FSRTemporalTuningPolicy::Settings& a_settings);
-	/** Returns synchronized request/application evidence for UI and DevBench. */
+	/** Returns thread-safe request/application evidence, suppressing dormant overrides on host FSR. */
 	TemporalTuningSnapshot GetTemporalTuningSnapshot() const;
 	~FidelityFX();
 

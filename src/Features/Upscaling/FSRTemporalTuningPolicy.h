@@ -7,7 +7,7 @@
 
 namespace FSRTemporalTuningPolicy
 {
-	/** Optional FSR 3.1 reconstruction overrides; disabled preserves provider defaults. */
+	/** Optional runtime FSR reconstruction overrides; disabled preserves provider defaults. */
 	struct Settings
 	{
 		bool enabled = false;
@@ -45,16 +45,6 @@ namespace FSRTemporalTuningPolicy
 		return true;
 	}
 
-	/** Only documented FSR 3.1.4/3.1.5 providers support this complete override set. */
-	[[nodiscard]] constexpr bool SupportsProvider(std::uint64_t a_providerId) noexcept
-	{
-		const auto version = static_cast<std::uint32_t>(a_providerId);
-		const auto major = (version >> 22) & 0x3FFu;
-		const auto minor = (version >> 12) & 0x3FFu;
-		const auto patch = version & 0xFFFu;
-		return major == 3 && minor == 1 && (patch == 4 || patch == 5);
-	}
-
 	/** Editing inactive values must not recreate a provider context. */
 	[[nodiscard]] constexpr bool Equivalent(const Settings& a_left, const Settings& a_right) noexcept
 	{
@@ -88,6 +78,7 @@ namespace FSRTemporalTuningPolicy
 		Faulted
 	};
 
+	/** Stable status strings shared by the menu and DevBench responses. */
 	[[nodiscard]] constexpr const char* StatusLabel(Status a_status) noexcept
 	{
 		switch (a_status) {

@@ -49,3 +49,6 @@ If revisited:
 -   Include this fix when deliberately integrating the deferred stereo
     reprojection feature and its later depth-fill pass. Reassess stencil
     ownership, dynamic-resolution bounds, and frame cost with that feature.
+
+The viewport follow-up is assessed separately in
+[Open Shaders #595](deferred-pr595-stereo-viewport.md).

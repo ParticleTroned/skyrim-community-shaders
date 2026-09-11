@@ -1240,3 +1240,27 @@ unchanged. Separate `csx-render-scale-pr-v1` qualification remains unrun.
 Manual coverage must include None/TAA-to-vendor and menu/native-AA callback
 liveness as well as both passes and transitions 26 and 28.
 See [the candidate contract and exact validation](pr73-owned-drain-manual-test-20260911.md).
+
+## September 11: PR73 269bded15 NVIDIA measurement
+
+Run `nv-pr73-269bded1-mtwz6pez` completed 66 transitions across both NVIDIA passes:
+terminal PASS, Task 2 66/0/0,
+reporting COMPLETE, and applicable health standards
+MET, MET.
+The owned drain path ran 18 times and observed readiness one frame after
+Pending; every observed settling guard still satisfied at age six frames.
+The four earlier long-stretch cases improved, while their previously short
+counterpart passes regressed. Neither comparison establishes an overall
+improvement; see their exact assessments and retained context limits in
+[the measured report](nvidia-renderscale-tuning-pr73-269bded15-20260911.md).
+
+The reporter's unknown-event defect was repaired offline from unchanged
+raw evidence. The complete summary, both comparisons and all numeric
+timings are preserved in the local canonical ledger; historical cells remain
+unchanged. Owned capture cleanup and journal flush were verified before
+the worker exited. A later external game/MO2 exit remains a separate
+diagnostic with no established cause. Release qualification remains unrun.
+
+The published ledger snapshot remains unchanged because a lossless
+addition exceeds GitHub's 100 MiB file limit. The measured report
+publishes both full comparisons and explains this storage limit.

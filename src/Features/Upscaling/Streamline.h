@@ -585,6 +585,10 @@ public:
 	[[nodiscard]] bool IsDLSSRelatchDrainReady(uint64_t a_epoch) const noexcept;
 	void CancelDLSSRelatchDrain() noexcept;
 	void InvalidateDLSSRelatchDrain() noexcept;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** Copies observations of the existing drain fence without polling it. */
+	void CaptureDLSSRelatchDrainTelemetry(VRRenderScaleRetryTelemetry::Event& a_event) const noexcept;
+#endif
 
 	enum class LifecycleState : uint8_t
 	{

@@ -18,6 +18,10 @@ namespace VRRelatchDrainPolicy
 			return Matches(a_epoch) && ready;
 		}
 
+		/** Identity of provider use and of the current, non-reusable drain ticket. */
+		[[nodiscard]] constexpr std::uint64_t ProviderRevision() const noexcept { return providerRevision; }
+		[[nodiscard]] constexpr std::uint64_t TicketSerial(std::uint64_t a_epoch) const noexcept { return Matches(a_epoch) ? ticketSerial : 0; }
+
 		/** Returns true only when the caller must issue a new drain fence. */
 		[[nodiscard]] constexpr bool Begin(std::uint64_t a_epoch) noexcept
 		{
@@ -25,6 +29,8 @@ namespace VRRelatchDrainPolicy
 				return false;
 			epoch = a_epoch;
 			revision = providerRevision;
+			if (ticketSerial != UINT64_MAX)
+				++ticketSerial;
 			ready = false;
 			return true;
 		}
@@ -52,6 +58,7 @@ namespace VRRelatchDrainPolicy
 
 	private:
 		std::uint64_t providerRevision = 1;
+		std::uint64_t ticketSerial = 0;
 		std::uint64_t epoch = 0;
 		std::uint64_t revision = 0;
 		bool ready = false;

@@ -7514,12 +7514,29 @@ namespace VRRenderScaleDevBenchBridge
 				"settings transitions poll these waits each frame and retain "
 				"proof-driven settling; partial teardown and recovery stay guarded.";
 			const std::string ownedDrainDescription =
-				" Owned settings-drain retries remain Backend retries with the full "
-				"six-frame settling guard. retryTelemetry records RelatchDrainBegin, "
+				" Owned settings-drain waits remain included in Backend retry totals. "
+				"Only a complete healthy owned-release certificate permits proof-driven "
+				"release; unproven operations retain the six-frame guard. retryTelemetry records RelatchDrainBegin, "
 				"RelatchDrainPending, RelatchDrainReady, RelatchDrainInvalidated, "
 				"RelatchCommitBegin and RelatchSharedCleanup with request ownership "
 				"and frame/QPC observations. Polling performs no provider teardown; "
-				"commit requires the completed native stereo boundary.";
+				"commit requires the completed native stereo boundary. Additive "
+				"ownedRelease schema v1 binds source/target generations, required "
+				"providers, revisions, ticket serials and opaque device/context/queue "
+				"identities. drainFences records existing issue and observed-ready QPC "
+				"timestamps without extra GPU work. OwnedReleaseConsumed, "
+				"OwnedTargetPublished, OwnedProviderPrepared and OwnedReleaseEligibility "
+				"separate historical drain consumption, target publication/preparation "
+				"and scoped eligibility. Guard-exemption eligibility does not enable "
+				"vendor dispatch: target preparation and coherent stereo remain required "
+				"by promotion. Obligation bits 1,2,4,8,16,32 identify "
+				"old-provider drain, completed reset, owned detached retirement, physical "
+				"publication, target-provider preparation and coherent stereo. Owned "
+				"detached retirement is not a claim that cleanup-only fences completed; "
+				"the existing cleanup milestone reports that debt separately. "
+				"blockingCleanupReadyQpc observes when guard eligibility verifies "
+				"blocking ownership obligations, not cleanup-only fence completion. Missing "
+				"timestamps/identities are null; opaque identities are decimal strings.";
 			descriptor["description"] =
 				descriptor["description"].get<std::string>() + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription;
 			descriptor["inputSchema"]["properties"]["action"]["description"] =

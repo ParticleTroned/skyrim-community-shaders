@@ -2513,6 +2513,9 @@ void FidelityFX::CancelFSRRelatchDrain() noexcept
 	fsrRelatchDrainRuntimeFence = nullptr;
 	fsrRelatchDrainRuntimeQueue = nullptr;
 	fsrRelatchDrainRuntimeFenceValue = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	fsrRelatchDrainRuntimeObservation = {};
+#endif
 }
 
 void FidelityFX::InvalidateFSRRelatchDrain() noexcept
@@ -2590,6 +2593,20 @@ FidelityFX::LifecycleResult FidelityFX::PollFSRRelatchDrain(uint64_t a_epoch)
 				CancelFSRRelatchDrain();
 				return LifecycleResult::Failed;
 			}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			LARGE_INTEGER issued{};
+			QueryPerformanceCounter(&issued);
+			fsrRelatchDrainRuntimeObservation = {
+				.observed = true,
+				.role = VRRenderScaleRetryTelemetry::DrainFenceRole::FSRRuntime,
+				.result = VRRenderScaleRetryTelemetry::FenceResult::Pending,
+				.issueQpc = static_cast<uint64_t>(issued.QuadPart),
+				.deviceIdentity = reinterpret_cast<uintptr_t>(swapChain.d3d12Device.get()),
+				.queueIdentity = reinterpret_cast<uintptr_t>(fsrRelatchDrainRuntimeQueue.get()),
+				.fenceIdentity = reinterpret_cast<uintptr_t>(fsrRelatchDrainRuntimeFence.get()),
+				.fenceValue = fsrRelatchDrainRuntimeFenceValue
+			};
+#endif
 		}
 		if (fsrRelatchDrainRuntimeFence.get() != runtimeD3D12Fence.get() ||
 			fsrRelatchDrainRuntimeQueue.get() != swapChain.commandQueue.get())
@@ -2599,12 +2616,29 @@ FidelityFX::LifecycleResult FidelityFX::PollFSRRelatchDrain(uint64_t a_epoch)
 			return LifecycleResult::RuntimeDeviceLost;
 		if (completedValue < fsrRelatchDrainRuntimeFenceValue)
 			return LifecycleResult::Pending;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		LARGE_INTEGER observedReady{};
+		QueryPerformanceCounter(&observedReady);
+		fsrRelatchDrainRuntimeObservation.readyQpc = static_cast<uint64_t>(observedReady.QuadPart);
+		fsrRelatchDrainRuntimeObservation.result = VRRenderScaleRetryTelemetry::FenceResult::Ready;
+#endif
 	} else if (hostResult == VRRelatchDrainFence::Result::Pending) {
 		return LifecycleResult::Pending;
 	}
 	fsrRelatchDrainProof.MarkReady(a_epoch);
 	return LifecycleResult::Ready;
 }
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+void FidelityFX::CaptureFSRRelatchDrainTelemetry(VRRenderScaleRetryTelemetry::Event& a_event) const noexcept
+{
+	a_event.drainFences[0] = fsrRelatchDrainHostFence.GetObservation();
+	a_event.drainFences[0].role = VRRenderScaleRetryTelemetry::DrainFenceRole::FSRHost;
+	a_event.drainFences[1] = fsrRelatchDrainInteropFence.GetObservation();
+	a_event.drainFences[1].role = VRRenderScaleRetryTelemetry::DrainFenceRole::FSRInterop;
+	a_event.drainFences[2] = fsrRelatchDrainRuntimeObservation;
+}
+#endif
 
 FidelityFX::LifecycleResult FidelityFX::PollFSRResourceTeardownReady(const char* a_reason, uint64_t a_drainEpoch)
 {

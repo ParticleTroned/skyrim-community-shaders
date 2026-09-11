@@ -1,4 +1,6 @@
 #include "Features/Upscaling/VRRelatchDrainPolicy.h"
+#include "Features/Upscaling/VRRelatchReleasePolicy.h"
+#include "Features/Upscaling/VRRenderScaleRetryTelemetry.h"
 #include "Features/Upscaling/VRVendorRelatchPolicy.h"
 
 #include <algorithm>
@@ -31,7 +33,9 @@ namespace globals
 	{
 		int originalDevice = 0;
 		int otherDevice = 0;
+		int originalContext = 0;
 		int* device = &originalDevice;
+		int* context = &originalContext;
 	}
 	namespace features
 	{
@@ -50,6 +54,7 @@ struct Identity
 {
 	int* value = nullptr;
 	int* get() const { return value; }
+	void copy_from(int* a_value) { value = a_value; }
 	explicit operator bool() const { return value != nullptr; }
 	Identity& operator=(std::nullptr_t)
 	{
@@ -64,26 +69,14 @@ struct FenceDependency
 	void Reset() { ++resets; }
 };
 
-namespace VRRenderScaleRetryTelemetry
+using ID3D11Device = int;
+using ID3D11DeviceContext = int;
+using ID3D12CommandQueue = int;
+using ID3D12Fence = int;
+namespace winrt
 {
-	enum class EventType
-	{
-		RelatchDrainReady,
-		RelatchDrainInvalidated,
-		RelatchCommitBegin,
-		RelatchSharedCleanup
-	};
-	struct Context
-	{};
-	struct Event
-	{
-		EventType type{};
-		const char* reason = nullptr;
-		uint32_t generation = 0;
-		Context context;
-		uint32_t beginFrame = 0;
-		uint32_t pendingObservations = 0;
-	};
+	template <class T>
+	using com_ptr = Identity;
 }
 
 struct FidelityFX
@@ -101,6 +94,9 @@ struct FidelityFX
 	FenceDependency fsrRelatchDrainHostFence, fsrRelatchDrainInteropFence;
 	Identity fsrRelatchDrainDevice, fsrRelatchDrainRuntimeFence, fsrRelatchDrainRuntimeQueue, runtimeD3D12Fence;
 	uint64_t fsrRelatchDrainRuntimeFenceValue = 0;
+	VRRenderScaleRetryTelemetry::DrainFenceObservation fsrRelatchDrainRuntimeObservation{};
+	mutable uint32_t telemetryCaptures = 0;
+	void CaptureFSRRelatchDrainTelemetry(VRRenderScaleRetryTelemetry::Event&) const noexcept { ++telemetryCaptures; }
 	uint32_t fsrContextCount = 0;
 	std::array<int, 2> fsrContext{};
 	std::array<bool, 2> fsrContextValid{}, fsrContextIndeterminate{}, runtimeUpscalerContextIndeterminate{};
@@ -110,11 +106,18 @@ struct FidelityFX
 	bool runtimeUpscalerFailureLatched = false;
 	bool ownershipDetached = false;
 	bool IsRuntimeUpscalerOwnershipDetached() const { return ownershipDetached; }
+	uint64_t GetFSRRelatchDrainRevision() const noexcept { return fsrRelatchDrainProof.ProviderRevision(); }
+	uint64_t GetFSRRelatchDrainTicket(uint64_t a_epoch) const noexcept { return fsrRelatchDrainProof.TicketSerial(a_epoch); }
+	Identity GetFSRRelatchRuntimeFence() const noexcept { return runtimeD3D12Fence; }
 	bool IsHostFSRStateQuarantined() const { return fsrHostStateQuarantined; }
 	bool IsRuntimeUpscalerFailureLatched() const { return runtimeUpscalerFailureLatched; }
-	LifecycleResult PollFSRRelatchDrain(uint64_t)
+	LifecycleResult PollFSRRelatchDrain(uint64_t a_epoch)
 	{
 		++polls;
+		(void)fsrRelatchDrainProof.Begin(a_epoch);
+		if (pollResult == LifecycleResult::Ready)
+			fsrRelatchDrainProof.MarkReady(a_epoch);
+		fsrRelatchDrainDevice.value = globals::d3d::device;
 		return pollResult;
 	}
 	void CancelFSRRelatchDrain() noexcept;
@@ -132,14 +135,20 @@ struct Streamline
 	};
 	DLSSResourceTeardownResult pollResult = DLSSResourceTeardownResult::Ready;
 	uint32_t polls = 0;
+	mutable uint32_t telemetryCaptures = 0;
+	void CaptureDLSSRelatchDrainTelemetry(VRRenderScaleRetryTelemetry::Event&) const noexcept { ++telemetryCaptures; }
 	VRRelatchDrainPolicy::Proof dlssRelatchDrainProof;
 	FenceDependency dlssRelatchDrainFence;
 	Identity dlssRelatchDrainDevice;
 	int* boundDeviceIdentity = &globals::d3d::originalDevice;
 	bool initialized = true, featureDLSS = true, slDLSSSetOptions = true, slFreeResources = true;
-	DLSSResourceTeardownResult PollDLSSRelatchDrain(uint64_t)
+	DLSSResourceTeardownResult PollDLSSRelatchDrain(uint64_t a_epoch)
 	{
 		++polls;
+		(void)dlssRelatchDrainProof.Begin(a_epoch);
+		if (pollResult == DLSSResourceTeardownResult::Ready)
+			dlssRelatchDrainProof.MarkReady(a_epoch);
+		dlssRelatchDrainDevice.value = globals::d3d::device;
 		return pollResult;
 	}
 	void CancelDLSSRelatchDrain() noexcept;
@@ -200,7 +209,17 @@ struct Upscaling
 	{
 		uint64_t targetEpoch = 7;
 		VRRenderScaleProfileSnapshot requested, applying;
+		struct
+		{
+			struct Metrics
+			{
+				bool valid = true, superseded = false;
+				uint64_t transitionEpoch = 7, requestID = 4;
+				uint32_t retries = 1, readinessDeferrals = 0, backendDeferrals = 1, pressureDeferrals = 0, retirementDeferrals = 0, failures = 0;
+			} current;
+		} metrics;
 	} transition;
+	using VRRenderScaleTransitionMetrics = decltype(transition.metrics.current);
 	Transition GetVRRenderScaleTransitionSnapshot() const { return transition; }
 	mutable std::recursive_mutex perfModeRenderTargetRecreateQueueMutex;
 	std::atomic<bool> pendingPerfModeRenderTargetRecreate{ true };
@@ -216,6 +235,7 @@ struct Upscaling
 	VRRenderScaleRelatchDrainState vrRenderScaleRelatchDrain;
 	std::atomic<uint64_t> vrRenderScaleRelatchDrainEpoch{ 0 };
 	uint64_t vrRenderScaleRelatchDrainDisabledEpoch = 0;
+	uint64_t vrRenderScaleOwnedReleaseRejectedEpoch = 0;
 	uint32_t vrRenderScaleRelatchBoundaryFrame = 0;
 	bool deviceLost = false, deviceRemoved = false;
 	uint32_t fsrFailureHandlers = 0, deviceRemovalProbes = 0, applyCalls = 0;
@@ -243,6 +263,8 @@ struct Upscaling
 	void ClearVRRenderScaleRelatchDrain();
 	VRVendorResourceResetResult PollVRRenderScaleRelatchDrain();
 	void ServiceVRRenderScaleRelatchAtFrameBoundary();
+	static VRRelatchReleasePolicy::RetryHistory GetOwnedReleaseRetryHistory(const VRRenderScaleTransitionMetrics&);
+	bool IsVRRenderScaleOwnedDrainConsumable() const;
 	bool ApplyPendingPerfModeRenderTargetRecreate(const char*)
 	{
 		++applyCalls;
@@ -283,6 +305,7 @@ namespace globals::features
 	Upscaling upscaling;
 }
 
+#include "vr_relatch_drain_consumable_under_test.h"
 #include "vr_relatch_drain_controller_under_test.h"
 #include "vr_relatch_drain_providers_under_test.h"
 
@@ -307,9 +330,10 @@ namespace
 		globals::state->frameCount = 100;
 		globals::game::isVR = true;
 		globals::d3d::device = &globals::d3d::originalDevice;
+		globals::d3d::context = &globals::d3d::originalContext;
 		g_vrRelatchFrameBoundaryActive = false;
 		g_vrRelatchDrainCommitEpoch = 0;
-		controller.vrRenderScaleRelatchDrain = { .epoch = 7, .sourceGeneration = 10, .targetGeneration = 11, .needsFSR = true, .needsDLSS = true, .waitingForProviderDrain = true, .retryQueuedFrame = 100, .beginFrame = 100 };
+		controller.vrRenderScaleRelatchDrain = { .epoch = 7, .requestID = 4, .sourceGeneration = 10, .targetGeneration = 11, .fsrRevision = controller.fidelityFX.fsrRelatchDrainProof.ProviderRevision(), .dlssRevision = controller.streamline.dlssRelatchDrainProof.ProviderRevision(), .needsFSR = true, .needsDLSS = true, .waitingForProviderDrain = true, .retryQueuedFrame = 100, .beginFrame = 100 };
 		controller.vrRenderScaleRelatchDrainEpoch = 7;
 		return controller;
 	}
@@ -482,6 +506,120 @@ namespace
 		Require(controller.RunCleanupPhase() && controller.completedCleanups == 2, "A fresh epoch inherited the previous completed cleanup");
 	}
 
+	void CancelledTicketsCannotAliasReissuedProofs()
+	{
+		auto& controller = Reset();
+		auto& fsr = controller.fidelityFX;
+		auto& dlss = controller.streamline;
+		(void)fsr.fsrRelatchDrainProof.Begin(7);
+		(void)dlss.dlssRelatchDrainProof.Begin(7);
+		fsr.fsrRelatchDrainProof.MarkReady(7);
+		dlss.dlssRelatchDrainProof.MarkReady(7);
+		const auto fsrRevision = fsr.fsrRelatchDrainProof.ProviderRevision();
+		const auto dlssRevision = dlss.dlssRelatchDrainProof.ProviderRevision();
+		const auto fsrTicket = fsr.fsrRelatchDrainProof.TicketSerial(7);
+		const auto dlssTicket = dlss.dlssRelatchDrainProof.TicketSerial(7);
+		Require(fsrTicket != 0 && dlssTicket != 0, "A started drain did not publish an exact ticket");
+		fsr.CancelFSRRelatchDrain();
+		dlss.CancelDLSSRelatchDrain();
+		Require(fsr.fsrRelatchDrainProof.TicketSerial(7) == 0 && dlss.dlssRelatchDrainProof.TicketSerial(7) == 0 &&
+					!fsr.IsFSRRelatchDrainReady(7) && !dlss.IsDLSSRelatchDrainReady(7),
+			"Provider cancellation retained the old ticket or readiness");
+		Require(fsr.fsrRelatchDrainProof.Begin(7) && dlss.dlssRelatchDrainProof.Begin(7),
+			"A cancelled same-epoch drain did not create fresh tickets");
+		Require(fsr.fsrRelatchDrainProof.ProviderRevision() == fsrRevision && dlss.dlssRelatchDrainProof.ProviderRevision() == dlssRevision &&
+					fsr.fsrRelatchDrainProof.TicketSerial(7) != fsrTicket && dlss.dlssRelatchDrainProof.TicketSerial(7) != dlssTicket,
+			"Same-epoch reissue aliased a cancelled ticket or invented provider use");
+		fsr.InvalidateFSRRelatchDrain();
+		dlss.InvalidateDLSSRelatchDrain();
+		Require(fsr.fsrRelatchDrainProof.ProviderRevision() != fsrRevision && dlss.dlssRelatchDrainProof.ProviderRevision() != dlssRevision &&
+					fsr.fsrRelatchDrainProof.TicketSerial(7) == 0 && dlss.dlssRelatchDrainProof.TicketSerial(7) == 0,
+			"Provider use failed to revoke both the revision and ticket identity");
+	}
+
+	void ConsumptionRequiresExactLiveProviderTicketsAndOwner()
+	{
+		for (uint32_t blocker = 0; blocker < 19; ++blocker) {
+			auto& controller = Reset();
+			auto& drain = controller.vrRenderScaleRelatchDrain;
+			drain.priorCleanupDebt = false;
+			drain.device.copy_from(globals::d3d::device);
+			drain.contextOwner.copy_from(globals::d3d::context);
+			drain.beforeWait = { .valid = true, .epoch = 7, .requestID = 4 };
+			drain.afterOwnedWait = { .valid = true, .epoch = 7, .requestID = 4, .retries = 1, .backendDeferrals = 1 };
+			controller.fidelityFX.pollResult = FSR::Ready;
+			Require(controller.PollVRRenderScaleRelatchDrain() == Upscaling::VRVendorResourceResetResult::Ready &&
+						controller.IsVRRenderScaleOwnedDrainConsumable(),
+				"The exact production poll did not create consumable owner-bound tickets");
+			switch (blocker) {
+			case 0:
+				controller.fidelityFX.CancelFSRRelatchDrain();
+				(void)controller.fidelityFX.fsrRelatchDrainProof.Begin(7);
+				controller.fidelityFX.fsrRelatchDrainProof.MarkReady(7);
+				break;
+			case 1:
+				controller.streamline.InvalidateDLSSRelatchDrain();
+				(void)controller.streamline.dlssRelatchDrainProof.Begin(7);
+				controller.streamline.dlssRelatchDrainProof.MarkReady(7);
+				break;
+			case 2:
+				++controller.perfMode.snapshot.generation;
+				break;
+			case 3:
+				++controller.pendingVRRenderScaleContractGeneration;
+				break;
+			case 4:
+				++controller.transition.targetEpoch;
+				break;
+			case 5:
+				++controller.transition.metrics.current.requestID;
+				break;
+			case 6:
+				controller.dx12SwapChain.commandQueue.value = &globals::d3d::otherDevice;
+				break;
+			case 7:
+				globals::d3d::device = &globals::d3d::otherDevice;
+				break;
+			case 8:
+				globals::d3d::context = &globals::d3d::otherDevice;
+				break;
+			case 9:
+				controller.fidelityFX.runtimeD3D12Fence.value = &globals::d3d::otherDevice;
+				break;
+			case 10:
+				++controller.transition.metrics.current.retries;
+				++controller.transition.metrics.current.backendDeferrals;
+				break;
+			case 11:
+				controller.transition.metrics.current.retries = controller.transition.metrics.current.backendDeferrals = UINT32_MAX;
+				break;
+			case 12:
+				drain.priorCleanupDebt = true;
+				break;
+			case 13:
+				controller.vrRenderScaleOwnedReleaseRejectedEpoch = 7;
+				break;
+			case 14:
+				drain.needsFSR = drain.needsDLSS = false;
+				break;
+			case 15:
+				controller.transition.metrics.current.superseded = true;
+				break;
+			case 16:
+				drain.fsrRevision = UINT64_MAX;
+				break;
+			case 17:
+				drain.dlssTicket = UINT64_MAX;
+				break;
+			case 18:
+				controller.transition.metrics.current.failures = 1;
+				break;
+			}
+			Require(!controller.IsVRRenderScaleOwnedDrainConsumable(),
+				"Changed live ownership, ticket, provider identity, or retry history retained consumption authority");
+		}
+	}
+
 	void DownstreamFailureRestoresBoundaryScope()
 	{
 		auto& controller = Reset();
@@ -508,5 +646,7 @@ int main()
 	ChangedOwnerAndRecoveryCancelBothProviders();
 	ReadyProofRejectsDeviceAndProviderChanges();
 	CleanupBackpressureDoesNotRepeatCompletedCleanup();
+	CancelledTicketsCannotAliasReissuedProofs();
+	ConsumptionRequiresExactLiveProviderTicketsAndOwner();
 	DownstreamFailureRestoresBoundaryScope();
 }

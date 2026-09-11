@@ -180,8 +180,21 @@ public:
 	LifecycleResult PollFSRRelatchDrain(uint64_t a_epoch);
 	/** Tests whether the same healthy provider revision still owns the completed drain. */
 	[[nodiscard]] bool IsFSRRelatchDrainReady(uint64_t a_epoch) const noexcept;
+	/** Read-only identities for exact drain consumption and subsequent target validation. */
+	[[nodiscard]] uint64_t GetFSRRelatchDrainRevision() const noexcept { return fsrRelatchDrainProof.ProviderRevision(); }
+	[[nodiscard]] uint64_t GetFSRRelatchDrainTicket(uint64_t a_epoch) const noexcept { return fsrRelatchDrainProof.TicketSerial(a_epoch); }
+	[[nodiscard]] winrt::com_ptr<ID3D12Fence> GetFSRRelatchRuntimeFence() const noexcept { return runtimeD3D12Fence; }
+	[[nodiscard]] bool IsFSRRelatchReleaseIdentityCurrent(uint64_t a_revision, ID3D12Fence* a_fence) const noexcept
+	{
+		return fsrRelatchDrainProof.ProviderRevision() == a_revision && runtimeD3D12Fence.get() == a_fence &&
+		       !IsRuntimeUpscalerOwnershipDetached();
+	}
 	void CancelFSRRelatchDrain() noexcept;
 	void InvalidateFSRRelatchDrain() noexcept;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** Copies observations of the existing drain fences without polling them. */
+	void CaptureFSRRelatchDrainTelemetry(VRRenderScaleRetryTelemetry::Event& a_event) const noexcept;
+#endif
 	void ResetFSRIdleFence();
 	LifecycleResult ResetRuntimeUpscalerResources(bool a_invalidateProviderCache = false);
 
@@ -285,6 +298,9 @@ private:
 	winrt::com_ptr<ID3D12Fence> fsrRelatchDrainRuntimeFence;
 	winrt::com_ptr<ID3D12CommandQueue> fsrRelatchDrainRuntimeQueue;
 	uint64_t fsrRelatchDrainRuntimeFenceValue = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	VRRenderScaleRetryTelemetry::DrainFenceObservation fsrRelatchDrainRuntimeObservation{};
+#endif
 
 	static constexpr uint32_t kRuntimeCommandContextCount = 8;
 	struct RuntimeCommandContext

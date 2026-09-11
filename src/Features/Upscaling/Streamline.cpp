@@ -3462,6 +3462,14 @@ Streamline::DLSSResourceTeardownResult Streamline::PollDLSSRelatchDrain(uint64_t
 	return result == VRRelatchDrainFence::Result::Pending ? DLSSResourceTeardownResult::Pending : DLSSResourceTeardownResult::Failed;
 }
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+void Streamline::CaptureDLSSRelatchDrainTelemetry(VRRenderScaleRetryTelemetry::Event& a_event) const noexcept
+{
+	a_event.drainFences[3] = dlssRelatchDrainFence.GetObservation();
+	a_event.drainFences[3].role = VRRenderScaleRetryTelemetry::DrainFenceRole::DLSSHost;
+}
+#endif
+
 /** Releases DLSS resources after consuming the exact drain proof or the legacy idle fence. */
 Streamline::DLSSResourceTeardownResult Streamline::DestroyDLSSResources(uint64_t a_drainEpoch)
 {

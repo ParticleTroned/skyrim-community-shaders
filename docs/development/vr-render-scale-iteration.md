@@ -1285,3 +1285,21 @@ Future reporting explicitly selects corrected automation `c900f176` and
 finalizes each new candidate from its journal. The installed live worker
 does not finalize reports; choosing a toolkit alone does not regenerate
 an existing summary.
+
+## September 11: owned completion preserves presentation proof
+
+The [focused PR73 correction](pr73-owned-release-proof-20260911.md)
+separates an exact consumed provider drain from new-target preparation and
+coherent stereo presentation. One observed owned Backend wait can retain
+proof-driven release only after successful reset, precise detached
+retirement accounting and exact physical publication. Raw retry history,
+native stereo mutation boundaries and the six-frame fallback remain.
+Seventeen focused tests passed; live comparison and visual qualification
+remain unrun, so this is not a measured performance or release-readiness
+claim. No runtime ledger cells were added or changed.
+
+The overall integration parent is `ef7c366d`; `bc077786d` is the narrower
+owned-drain change parent. A clean DevBench-enabled `ef7c366d` AIO now
+passes build, shader and archive identity checks with the measured
+candidate's recipe. Its canonical identity differs only in source commit.
+The operator retains deployment, MO2 and game startup.

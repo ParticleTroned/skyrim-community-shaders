@@ -8,6 +8,7 @@
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
 #include "Upscaling/VRPresentationStretchTelemetryPolicy.h"
+#include "Upscaling/VRRelatchReleasePolicy.h"
 #include "Upscaling/VRRenderScaleAuthorityPolicy.h"
 #include "Upscaling/VRRenderScalePreparationPolicy.h"
 #include "Upscaling/VRSubmitColorContract.h"
@@ -2440,6 +2441,7 @@ public:
 		VRRenderScaleCPUPerformanceCounter a_counter,
 		uint64_t a_value) const noexcept;
 #endif
+	static constexpr size_t kVRRetiredIntermediateTextureMaxSets = 4u;
 	struct RetiredVRIntermediateTextures
 	{
 		uint32_t retireFrame = 0;
@@ -2461,6 +2463,8 @@ public:
 	winrt::com_ptr<ID3D11Query> vrIntermediateTextureCleanupFence;
 	// A pending fence owns only the tail-eligible prefix captured at End().
 	uint64_t vrIntermediateTextureCleanupFenceBatchMaxSerial = 0;
+	std::atomic<uint64_t> vrRenderScaleCleanupFailureSerial{ 0 };
+	void RecordVRRenderScaleCleanupFailure() noexcept;
 	std::atomic<uint64_t> vrIntermediateRetirementNextSerial{ 1 };
 	std::atomic<uint64_t> vrIntermediateRetirementLastIssuedSerial{ 0 };
 	std::atomic<uint64_t> vrIntermediateRetirementCompletedSerial{ 0 };
@@ -3009,8 +3013,22 @@ public:
 	struct VRRenderScaleRelatchDrainState
 	{
 		uint64_t epoch = 0;
+		uint64_t requestID = 0;
 		uint32_t sourceGeneration = 0;
 		uint32_t targetGeneration = 0;
+		uint64_t fsrRevision = 0;
+		uint64_t dlssRevision = 0;
+		uint64_t fsrTicket = 0;
+		uint64_t dlssTicket = 0;
+		winrt::com_ptr<ID3D11Device> device;
+		winrt::com_ptr<ID3D11DeviceContext> contextOwner;
+		winrt::com_ptr<ID3D12CommandQueue> runtimeQueue;
+		winrt::com_ptr<ID3D12Fence> runtimeFence;
+		VRRelatchReleasePolicy::RetryHistory beforeWait{};
+		VRRelatchReleasePolicy::RetryHistory afterOwnedWait{};
+		uint64_t retirementSerialAtBegin = 0;
+		uint64_t retirementFailureSerialAtBegin = 0;
+		bool priorCleanupDebt = true;
 		bool needsFSR = false;
 		bool needsDLSS = false;
 		bool fsrReadyObserved = false;
@@ -3025,6 +3043,44 @@ public:
 #endif
 	};
 	VRRenderScaleRelatchDrainState vrRenderScaleRelatchDrain{};
+	struct VRRenderScaleOwnedReleaseReceipt
+	{
+		VRRenderScaleRelatchDrainState drain{};
+		bool consumed = false;
+		bool sharedCleanupSatisfied = false;
+		bool targetPrepared = false;
+		bool memoryAdmissionSatisfied = false;
+		UpscaleMethod method = UpscaleMethod::kNONE;
+		uint32_t qualityMode = 0;
+		uint64_t targetFSRRevision = 0;
+		uint64_t targetDLSSRevision = 0;
+		winrt::com_ptr<ID3D12Fence> targetRuntimeFence;
+		winrt::com_ptr<ID3D12CommandQueue> targetRuntimeQueue;
+		uint64_t ownedRetirementSerial = 0;
+		std::array<VRRelatchReleasePolicy::IntermediateRetirementRecord, kVRRetiredIntermediateTextureMaxSets> intermediates{};
+		uint32_t intermediateCount = 0;
+		uint32_t inputWidth = 0;
+		uint32_t inputHeight = 0;
+		uint32_t outputWidth = 0;
+		uint32_t outputHeight = 0;
+		bool fsr4RuntimeEnable = false;
+		VRRelatchReleasePolicy::RetryHistory publishedHistory{};
+		VRRelatchReleasePolicy::EngineRetirementEvidence engine{};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		bool preparationRecorded = false;
+#endif
+	};
+	uint64_t vrRenderScaleOwnedReleaseRejectedEpoch = 0;
+	VRRenderScaleOwnedReleaseReceipt submitStageOwnedReleaseReceipt{};
+	static VRRelatchReleasePolicy::RetryHistory GetOwnedReleaseRetryHistory(const VRRenderScaleTransitionMetrics& a_metrics);
+	/** Consumes only render-thread tickets under the native presentation serialization. */
+	bool IsVRRenderScaleOwnedDrainConsumable() const;
+	/** Revalidates historical ownership under native presentation serialization without polling. */
+	bool CanUseVRRenderScaleOwnedRelease(const VRRenderScaleOwnedReleaseReceipt& a_receipt);
+	void RevalidateVRRenderScaleOwnedRelease();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	void RecordVRRenderScaleOwnedReleaseEvent(VRRenderScaleRetryTelemetry::EventType a_type, const VRRenderScaleOwnedReleaseReceipt& a_receipt, bool a_eligible, const char* a_reason);
+#endif
 	std::atomic_uint64_t vrRenderScaleRelatchDrainEpoch{ 0 };
 	uint64_t vrRenderScaleRelatchDrainDisabledEpoch = 0;
 	uint32_t vrRenderScaleRelatchBoundaryFrame = 0;
@@ -3803,7 +3859,7 @@ private:
 	mutable std::mutex vrPostLoadCompositorHoldMutex;
 	std::mutex vrPostLoadCompositorRepairMutex;
 
-	void ArmSubmitStageVendorResumeCooldown(uint32_t a_currentFrame, bool a_proofDrivenRelease = false);
+	void ArmSubmitStageVendorResumeCooldown(uint32_t a_currentFrame, bool a_proofDrivenRelease = false, const VRRenderScaleOwnedReleaseReceipt* a_ownedRelease = nullptr);
 	void ClearSubmitStageVendorResumeCooldown();
 	void ClearSubmitStageVendorResumeStability();
 	[[nodiscard]] VRPostLoadCompositorHoldRoute ResolveVRPostLoadCompositorHoldRoute(

@@ -1670,6 +1670,7 @@ if(BUILD_CONTROLLER_TESTS)
         "${_vr_relatch_drain_test_dir}/vr_relatch_drain_helpers_under_test.h"
         "${_vr_relatch_drain_test_dir}/vr_relatch_drain_cleanup_under_test.h"
         "${_vr_relatch_drain_test_dir}/vr_relatch_drain_providers_under_test.h"
+        "${_vr_relatch_drain_test_dir}/vr_relatch_drain_consumable_under_test.h"
     )
     add_custom_command(
         OUTPUT ${_vr_relatch_drain_test_headers}
@@ -1704,10 +1705,100 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(VRRelatchDrainController PROPERTIES TIMEOUT 15)
     add_controller_test(
+        vr_relatch_release_policy_test
+        VRRelatchReleasePolicy
+        tests/vr_relatch_release_policy_test.cpp
+    )
+    set(_vr_relatch_promotion_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/vr-relatch-promotion"
+    )
+    set(_vr_relatch_promotion_test_headers
+        "${_vr_relatch_promotion_test_dir}/vr_relatch_promotion_under_test.h"
+        "${_vr_relatch_promotion_test_dir}/vr_relatch_promotion_helpers_under_test.h"
+        "${_vr_relatch_promotion_test_dir}/vr_relatch_release_state_under_test.h"
+        "${_vr_relatch_promotion_test_dir}/vr_relatch_release_under_test.h"
+        "${_vr_relatch_promotion_test_dir}/vr_relatch_publication_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_vr_relatch_promotion_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_vr_relatch_promotion_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_vr_relatch_promotion.cmake"
+        DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/Features/Upscaling.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Features/Upscaling.h"
+            tests/extract_vr_relatch_promotion.cmake
+        VERBATIM
+    )
+    add_custom_target(
+        generate_vr_relatch_promotion_test
+        DEPENDS ${_vr_relatch_promotion_test_headers}
+    )
+    foreach(_bridge_variant ON OFF)
+        string(TOLOWER "${_bridge_variant}" _bridge_suffix)
+        set(_promotion_target "vr_relatch_promotion_${_bridge_suffix}_test")
+        add_controller_test(
+            ${_promotion_target}
+            "VRRelatchPromotion${_bridge_variant}"
+            tests/vr_relatch_promotion_test.cpp
+        )
+        add_dependencies(
+            ${_promotion_target}
+            generate_vr_relatch_promotion_test
+        )
+        target_include_directories(
+            ${_promotion_target}
+            PRIVATE "${_vr_relatch_promotion_test_dir}"
+        )
+        if(_bridge_variant STREQUAL "ON")
+            target_compile_definitions(
+                ${_promotion_target}
+                PRIVATE DEVBENCH_BRIDGE_ENABLED=1
+            )
+        endif()
+        set_tests_properties(
+            "VRRelatchPromotion${_bridge_variant}"
+            PROPERTIES TIMEOUT 15
+        )
+    endforeach()
+    add_controller_test(
         vr_render_scale_frame_boundary_policy_test
         VRRenderScaleFrameBoundaryPolicy
         tests/vr_render_scale_frame_boundary_policy_test.cpp
     )
+    set(_vr_relatch_native_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/vr-relatch-native"
+    )
+    set(_vr_relatch_native_test_headers
+        "${_vr_relatch_native_test_dir}/vr_relatch_native_boundary_under_test.h"
+        "${_vr_relatch_native_test_dir}/vr_relatch_native_eye_completion_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_vr_relatch_native_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_vr_relatch_native_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_vr_relatch_native_boundary.cmake"
+        DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/Features/VR/InSceneOverlay.cpp"
+            tests/extract_vr_relatch_native_boundary.cmake
+        VERBATIM
+    )
+    add_controller_test(
+        vr_relatch_native_boundary_test
+        VRRelatchNativeBoundary
+        tests/vr_relatch_native_boundary_test.cpp
+    )
+    target_sources(
+        vr_relatch_native_boundary_test
+        PRIVATE ${_vr_relatch_native_test_headers}
+    )
+    target_include_directories(
+        vr_relatch_native_boundary_test
+        PRIVATE "${_vr_relatch_native_test_dir}"
+    )
+    set_tests_properties(VRRelatchNativeBoundary PROPERTIES TIMEOUT 15)
     add_controller_test(
         vr_render_scale_authority_policy_test
         VRRenderScaleAuthorityPolicy
@@ -2354,6 +2445,10 @@ if(BUILD_CONTROLLER_TESTS)
             vr_vendor_relatch_policy_test
             vr_relatch_drain_policy_test
             vr_relatch_drain_controller_test
+            vr_relatch_release_policy_test
+            vr_relatch_promotion_on_test
+            vr_relatch_promotion_off_test
+            vr_relatch_native_boundary_test
             vr_render_scale_frame_boundary_policy_test
             vr_render_scale_authority_policy_test
             vr_render_scale_mode_policy_test

@@ -33,9 +33,11 @@ extract_between("${_source}" "thread_local bool g_vrRelatchFrameBoundaryActive" 
 extract_between("${_source}" "const uint64_t relatchDrainEpoch = vrRenderScaleRelatchDrain.epoch == relatchEpoch" "\n\t\tif (emitDiagLogs)" _cleanup)
 extract_between("${_fsr}" "void FidelityFX::CancelFSRRelatchDrain()" "FidelityFX::LifecycleResult FidelityFX::PollFSRRelatchDrain(" _fsr_proof)
 extract_between("${_dlss}" "void Streamline::CancelDLSSRelatchDrain()" "Streamline::DLSSResourceTeardownResult Streamline::PollDLSSRelatchDrain(" _dlss_proof)
+extract_between("${_source}" "VRRelatchReleasePolicy::RetryHistory Upscaling::GetOwnedReleaseRetryHistory(" "bool Upscaling::CanUseVRRenderScaleOwnedRelease(" _consumable)
 
 file(WRITE "${OUTPUT_DIRECTORY}/vr_relatch_drain_controller_under_test.h" "${_controller}")
 file(WRITE "${OUTPUT_DIRECTORY}/vr_relatch_drain_state_under_test.h" "${_state}")
 file(WRITE "${OUTPUT_DIRECTORY}/vr_relatch_drain_helpers_under_test.h" "${_scope}\n${_delay}\n${_elapsed}\n}\n")
 file(WRITE "${OUTPUT_DIRECTORY}/vr_relatch_drain_cleanup_under_test.h" "${_cleanup}")
 file(WRITE "${OUTPUT_DIRECTORY}/vr_relatch_drain_providers_under_test.h" "${_fsr_proof}\n${_dlss_proof}")
+file(WRITE "${OUTPUT_DIRECTORY}/vr_relatch_drain_consumable_under_test.h" "${_consumable}")

@@ -2289,6 +2289,8 @@ public:
 		uint32_t a_minDelayFrames = 0,
 		bool a_providerNeutralNativeRecovery = false);
 	bool ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller = nullptr);
+	/** Service settings relatches only after the complete native stereo submit has returned. */
+	void ServiceVRRenderScaleRelatchAtFrameBoundary();
 	void RecordTrueHMDRenderTargetSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight);
 	bool TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t& a_height, bool a_allowCreate = false);
 	bool ConsumePerfModeBootLatchCreate();
@@ -2571,7 +2573,7 @@ public:
 	bool ApplyDynamicResolutionState(RE::BSGraphics::State* a_state);
 	void PrepareFullResolutionPostProcessing(RE::BSGraphics::State* a_state = nullptr, bool a_resetProjection = false);
 	/** @brief Reports idle-fence deferral separately from retirement capacity or partial teardown. */
-	VRVendorResourceResetResult ResetVRSubmitStageState(bool a_destroyDLSSResources = true, bool a_destroySharedResources = true, bool a_preserveVRIntermediateTextures = false, bool* a_readinessDeferredBeforeRelease = nullptr);
+	VRVendorResourceResetResult ResetVRSubmitStageState(bool a_destroyDLSSResources = true, bool a_destroySharedResources = true, bool a_preserveVRIntermediateTextures = false, bool* a_readinessDeferredBeforeRelease = nullptr, uint64_t a_relatchDrainEpoch = 0);
 	void RequestVRSubmitStageHistoryReset();
 	bool IsSubmitStageUpscalingActive() const;
 	bool IsSubmitStageDeviceLost() const;
@@ -3004,6 +3006,34 @@ public:
 	uint32_t vrFSRRuntimeResourceGeneration = 0;
 	std::atomic<uint32_t> vrMainPassVendorDispatchCompletedFrame{ 0 };
 	mutable std::recursive_mutex perfModeRenderTargetRecreateQueueMutex;
+	struct VRRenderScaleRelatchDrainState
+	{
+		uint64_t epoch = 0;
+		uint32_t sourceGeneration = 0;
+		uint32_t targetGeneration = 0;
+		bool needsFSR = false;
+		bool needsDLSS = false;
+		bool fsrReadyObserved = false;
+		bool dlssReadyObserved = false;
+		bool sharedCleanupCompleted = false;
+		bool waitingForProviderDrain = false;
+		uint32_t retryQueuedFrame = 0;
+		uint32_t beginFrame = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		VRRenderScaleRetryTelemetry::Context context{};
+		uint32_t polls = 0;
+#endif
+	};
+	VRRenderScaleRelatchDrainState vrRenderScaleRelatchDrain{};
+	std::atomic_uint64_t vrRenderScaleRelatchDrainEpoch{ 0 };
+	uint64_t vrRenderScaleRelatchDrainDisabledEpoch = 0;
+	uint32_t vrRenderScaleRelatchBoundaryFrame = 0;
+	bool RequiresVRRenderScaleRelatchFrameBoundary() const;
+	void ClearVRRenderScaleRelatchDrain();
+	VRVendorResourceResetResult PollVRRenderScaleRelatchDrain();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	void RecordVRRenderScaleRelatchDrainEvent(VRRenderScaleRetryTelemetry::EventType a_type, const char* a_reason);
+#endif
 	std::atomic<bool> pendingPerfModeRenderTargetRecreate{ false };
 	// Queue-owned evidence that a provider-neutral recovery or explicitly unsafe
 	// offered-resource identity must replace physical targets even when dimensions
@@ -3420,7 +3450,7 @@ public:
 	);
 	bool HasVRRenderScaleMemoryReliefCleanupPending() const;
 	void ClearVRRenderScaleMemoryRelief();
-	void ApplyVRRenderScaleMemoryReliefTransitionCleanup(const char* a_reason = nullptr, bool a_preserveVRIntermediateTextures = false);
+	bool ApplyVRRenderScaleMemoryReliefTransitionCleanup(const char* a_reason = nullptr, bool a_preserveVRIntermediateTextures = false);
 	void RecordVRRenderScaleFullEyeEvaluation(UpscaleMethod a_upscaleMethod, uint32_t a_eyeIndex, bool a_success);
 	bool RecordVRRenderScaleFidelityObservation(UpscaleMethod a_upscaleMethod, uint32_t a_eyeIndex, bool a_success, uint32_t a_generation, uint32_t a_inputWidth, uint32_t a_inputHeight, uint32_t a_outputWidth, uint32_t a_outputHeight, bool a_evaluated, const SubmitStageRuntimeFSRStereoState* a_fsrBatch = nullptr);
 	void RecordVRDLSSRenderScaleRelatch(bool a_previousActive, bool a_currentActive, UpscaleMethod a_previousMethod, UpscaleMethod a_currentMethod, VRUpscalingTransitionOrigin a_origin, uint32_t a_frame);
@@ -3896,7 +3926,7 @@ private:
 	void ScheduleVRIntermediateTextureCleanup();
 	void ServiceVRIntermediateTextureCleanup(bool a_forceFence = false);
 	/** @brief Reports readiness deferral only before this call releases provider or shared resources. */
-	VRVendorResourceResetResult ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources = true, bool a_waitForFSRIdleTeardown = false, bool a_fsrTeardownAlreadyReady = false, bool a_destroySharedResources = true, bool a_preserveVRIntermediateTextures = false, bool a_includePendingFSRReset = true, bool* a_readinessDeferredBeforeRelease = nullptr);
+	VRVendorResourceResetResult ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources = true, bool a_waitForFSRIdleTeardown = false, bool a_fsrTeardownAlreadyReady = false, bool a_destroySharedResources = true, bool a_preserveVRIntermediateTextures = false, bool a_includePendingFSRReset = true, bool* a_readinessDeferredBeforeRelease = nullptr, uint64_t a_relatchDrainEpoch = 0);
 	VRVendorResourceResetResult RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bool a_recreateTemporalResources);
 	VRRenderScaleHotPresentationContract CaptureVRRenderScaleHotPresentationContractLocked(
 		uint64_t a_compositorCycleToken,

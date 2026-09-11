@@ -13,9 +13,26 @@ namespace VRRenderScaleRetryTelemetry
 
 	enum class EventType : uint8_t
 	{
-		Retry, RelatchAdmitted, Applied, Stable, Failure,
-		ViewportReady, ViewportWaitBegin, ViewportWaitEnd,
-		GuardArmed, ProofRevoked, SettleGuardSatisfied, PromotionCandidate, Promoted, GuardCleared
+		Retry,
+		RelatchAdmitted,
+		Applied,
+		Stable,
+		Failure,
+		ViewportReady,
+		ViewportWaitBegin,
+		ViewportWaitEnd,
+		GuardArmed,
+		ProofRevoked,
+		SettleGuardSatisfied,
+		PromotionCandidate,
+		Promoted,
+		GuardCleared,
+		RelatchDrainBegin,
+		RelatchDrainPending,
+		RelatchDrainReady,
+		RelatchDrainInvalidated,
+		RelatchCommitBegin,
+		RelatchSharedCleanup
 	};
 
 	enum class FenceResult : uint8_t { NotPolled, Pending, Ready, Failed };

@@ -7,6 +7,8 @@
 #include "../../Buffer.h"
 #include "../../State.h"
 #include "StreamlineFrameTokenPublication.h"
+#include "VRRelatchDrainFence.h"
+#include "VRRelatchDrainPolicy.h"
 
 #include <array>
 #include <atomic>
@@ -166,6 +168,9 @@ public:
 	uint64_t vrDLSSViewportUseCounter = 0;
 	std::array<bool, 2> activeDLSSViewportResourcesAllocated = {};
 	ID3D11Query* pendingDLSSResourceFreeIdleFence = nullptr;
+	VRRelatchDrainPolicy::Proof dlssRelatchDrainProof;
+	VRRelatchDrainFence dlssRelatchDrainFence;
+	winrt::com_ptr<ID3D11Device> dlssRelatchDrainDevice;
 	struct VRDLSSSlotRecycleFence
 	{
 		ID3D11Query* query = nullptr;
@@ -574,7 +579,12 @@ public:
 	bool EnsureReflexDisabledForFrameGeneration();
 	void UpdateReflex();
 
-	DLSSResourceTeardownResult DestroyDLSSResources();
+	DLSSResourceTeardownResult DestroyDLSSResources(uint64_t a_drainEpoch = 0);
+	/** Render-thread-only readiness observation; never frees or reconfigures DLSS. */
+	DLSSResourceTeardownResult PollDLSSRelatchDrain(uint64_t a_epoch);
+	[[nodiscard]] bool IsDLSSRelatchDrainReady(uint64_t a_epoch) const noexcept;
+	void CancelDLSSRelatchDrain() noexcept;
+	void InvalidateDLSSRelatchDrain() noexcept;
 
 	enum class LifecycleState : uint8_t
 	{

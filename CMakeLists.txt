@@ -1657,6 +1657,16 @@ if(BUILD_CONTROLLER_TESTS)
         tests/vr_vendor_relatch_policy_test.cpp
     )
     add_controller_test(
+        vr_relatch_drain_policy_test
+        VRRelatchDrainPolicy
+        tests/vr_relatch_drain_policy_test.cpp
+    )
+    add_controller_test(
+        vr_render_scale_frame_boundary_policy_test
+        VRRenderScaleFrameBoundaryPolicy
+        tests/vr_render_scale_frame_boundary_policy_test.cpp
+    )
+    add_controller_test(
         vr_render_scale_authority_policy_test
         VRRenderScaleAuthorityPolicy
         tests/vr_render_scale_authority_policy_test.cpp
@@ -2300,6 +2310,8 @@ if(BUILD_CONTROLLER_TESTS)
         DEPENDS
             perf_mode_restart_state_test
             vr_vendor_relatch_policy_test
+            vr_relatch_drain_policy_test
+            vr_render_scale_frame_boundary_policy_test
             vr_render_scale_authority_policy_test
             vr_render_scale_mode_policy_test
             upscaling_measurement_restore_test

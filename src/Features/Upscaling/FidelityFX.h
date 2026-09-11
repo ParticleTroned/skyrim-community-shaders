@@ -28,6 +28,8 @@
 
 #include "../../Buffer.h"
 #include "../../State.h"
+#include "VRRelatchDrainFence.h"
+#include "VRRelatchDrainPolicy.h"
 
 class WrappedResource;
 
@@ -137,7 +139,7 @@ public:
 
 	LifecycleResult CreateFSRResources();
 
-	LifecycleResult DestroyFSRResources(bool a_waitForIdle = true);
+	LifecycleResult DestroyFSRResources(bool a_waitForIdle = true, uint64_t a_drainEpoch = 0);
 	bool HasFSRResources() const;
 	bool AreFSRResourcesCompatible(uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight, uint32_t a_contextCount) const;
 	/** @brief Returns whether the active D3D11 feature level can execute the host FSR3 shader set. */
@@ -173,7 +175,13 @@ public:
 	[[nodiscard]] FfxErrorCode GetLastFSRContextCreateResult() const noexcept { return fsrLastContextCreateResult; }
 	[[nodiscard]] HRESULT GetLastFSRDeviceRemovedReason() const noexcept { return fsrLastDeviceRemovedReason; }
 	LifecycleResult ProbeFSRDeviceStatus() noexcept { return RecordFSRDeviceStatus(); }
-	LifecycleResult PollFSRResourceTeardownReady(const char* a_reason = nullptr);
+	LifecycleResult PollFSRResourceTeardownReady(const char* a_reason = nullptr, uint64_t a_drainEpoch = 0);
+	/** Render-thread-only readiness observation; never retires provider resources. */
+	LifecycleResult PollFSRRelatchDrain(uint64_t a_epoch);
+	/** Tests whether the same healthy provider revision still owns the completed drain. */
+	[[nodiscard]] bool IsFSRRelatchDrainReady(uint64_t a_epoch) const noexcept;
+	void CancelFSRRelatchDrain() noexcept;
+	void InvalidateFSRRelatchDrain() noexcept;
 	void ResetFSRIdleFence();
 	LifecycleResult ResetRuntimeUpscalerResources(bool a_invalidateProviderCache = false);
 
@@ -270,6 +278,13 @@ private:
 	uint64_t pendingRuntimeTeardownD3D12FenceValue = 0;
 	uint64_t runtimeFenceValue = 1;
 	bool runtimeUpscalerIdleProofValid = false;
+	VRRelatchDrainPolicy::Proof fsrRelatchDrainProof;
+	VRRelatchDrainFence fsrRelatchDrainHostFence;
+	VRRelatchDrainFence fsrRelatchDrainInteropFence;
+	winrt::com_ptr<ID3D11Device> fsrRelatchDrainDevice;
+	winrt::com_ptr<ID3D12Fence> fsrRelatchDrainRuntimeFence;
+	winrt::com_ptr<ID3D12CommandQueue> fsrRelatchDrainRuntimeQueue;
+	uint64_t fsrRelatchDrainRuntimeFenceValue = 0;
 
 	static constexpr uint32_t kRuntimeCommandContextCount = 8;
 	struct RuntimeCommandContext

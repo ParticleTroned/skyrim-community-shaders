@@ -7513,10 +7513,17 @@ namespace VRRenderScaleDevBenchBridge
 				"them PreMutationReadiness. Only otherwise healthy immutable "
 				"settings transitions poll these waits each frame and retain "
 				"proof-driven settling; partial teardown and recovery stay guarded.";
+			const std::string ownedDrainDescription =
+				" Owned settings-drain retries remain Backend retries with the full "
+				"six-frame settling guard. retryTelemetry records RelatchDrainBegin, "
+				"RelatchDrainPending, RelatchDrainReady, RelatchDrainInvalidated, "
+				"RelatchCommitBegin and RelatchSharedCleanup with request ownership "
+				"and frame/QPC observations. Polling performs no provider teardown; "
+				"commit requires the completed native stereo boundary.";
 			descriptor["description"] =
-				descriptor["description"].get<std::string>() + submitFreshnessDescription + readinessRetryDescription;
+				descriptor["description"].get<std::string>() + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription;
 			descriptor["inputSchema"]["properties"]["action"]["description"] =
-				"Select a diagnostic or control action." + submitFreshnessDescription + readinessRetryDescription;
+				"Select a diagnostic or control action." + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription;
 			descriptor["inputSchema"]["properties"]["milestone"] = {
 				{ "type", "string" },
 				{ "enum", json::array({ "strict", "presentation", "cleanup" }) },

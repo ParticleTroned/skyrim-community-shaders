@@ -1415,6 +1415,7 @@ bool Streamline::LoadInterposer()
 void Streamline::Shutdown()
 {
 	std::scoped_lock lifecycleLock(lifecycleMutex);
+	InvalidateDLSSRelatchDrain();
 	const auto state = lifecycleState.load(std::memory_order_acquire);
 	if (state == LifecycleState::Uninitialized || state == LifecycleState::ShuttingDown ||
 		state == LifecycleState::ShutdownQuarantined)
@@ -1517,6 +1518,7 @@ bool Streamline::TrySetD3DDevice(ID3D11Device* a_device)
 	if (boundDeviceIdentity == a_device)
 		return true;
 
+	InvalidateDLSSRelatchDrain();
 	const sl::Result result = slSetD3DDevice(a_device);
 	if (result != sl::Result::eOk) {
 		logger::error("[Streamline] D3D device binding failed: {}", magic_enum::enum_name(result));
@@ -2173,6 +2175,7 @@ bool Streamline::SetDLSSOptions(DLSSViewportRole viewportRole, sl::ViewportHandl
 	dlssOptions.preExposure = 1.0f;
 	dlssOptions.sharpness = 0.0f;
 
+	InvalidateDLSSRelatchDrain();
 	if (SL_FAILED(result, slDLSSSetOptions(p_viewport, dlssOptions))) {
 		logger::critical("[Streamline] Could not enable DLSS for viewport {} eye {}: {}",
 			static_cast<uint32_t>(p_viewport),
@@ -2341,6 +2344,7 @@ bool Streamline::CanPrepareVRDLSSViewportWithoutRecycle(
 
 bool Streamline::FreeDLSSViewportResources(sl::ViewportHandle a_viewport, uint32_t a_eyeIndex, bool a_logFailures)
 {
+	InvalidateDLSSRelatchDrain();
 	if (!slDLSSSetOptions || !slFreeResources)
 		return true;
 
@@ -3030,6 +3034,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	}
 
 	emitPCLMarker(sl::PCLMarker::eRenderSubmitStart, "DLSS-EvaluateStart", 0);
+	InvalidateDLSSRelatchDrain();
 	sl::Result evalResult = slEvaluateFeature(sl::kFeatureDLSS, *frameToken, inputs, _countof(inputs), context);
 	emitPCLMarker(sl::PCLMarker::eRenderSubmitEnd, "DLSS-EvaluateEnd", 1);
 
@@ -3407,13 +3412,61 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		return evaluated;
 	}
 }
-/**
- * @brief Releases DLSS resources and disables DLSS for the current viewport.
- *
- * Sets the DLSS mode to off and frees all DLSS-related resources associated with the viewport.
- */
-Streamline::DLSSResourceTeardownResult Streamline::DestroyDLSSResources()
+void Streamline::CancelDLSSRelatchDrain() noexcept
 {
+	dlssRelatchDrainProof.Cancel();
+	dlssRelatchDrainFence.Reset();
+	dlssRelatchDrainDevice = nullptr;
+}
+
+void Streamline::InvalidateDLSSRelatchDrain() noexcept
+{
+	CancelDLSSRelatchDrain();
+	dlssRelatchDrainProof.Invalidate();
+}
+
+bool Streamline::IsDLSSRelatchDrainReady(uint64_t a_epoch) const noexcept
+{
+	return globals::game::isVR && dlssRelatchDrainProof.IsReady(a_epoch) &&
+	       dlssRelatchDrainDevice.get() == globals::d3d::device &&
+	       boundDeviceIdentity == dlssRelatchDrainDevice.get() &&
+	       initialized && featureDLSS && slDLSSSetOptions && slFreeResources;
+}
+
+Streamline::DLSSResourceTeardownResult Streamline::PollDLSSRelatchDrain(uint64_t a_epoch)
+{
+	if (!globals::game::isVR || a_epoch == 0 || !globals::d3d::device || !globals::d3d::context ||
+		boundDeviceIdentity != globals::d3d::device ||
+		!initialized || !featureDLSS || !slDLSSSetOptions || !slFreeResources ||
+		FAILED(globals::d3d::device->GetDeviceRemovedReason())) {
+		return DLSSResourceTeardownResult::Failed;
+	}
+	if (!dlssRelatchDrainProof.Matches(a_epoch)) {
+		CancelDLSSRelatchDrain();
+		(void)dlssRelatchDrainProof.Begin(a_epoch);
+		dlssRelatchDrainDevice.copy_from(globals::d3d::device);
+	}
+	if (dlssRelatchDrainDevice.get() != globals::d3d::device)
+		return DLSSResourceTeardownResult::Failed;
+	if (IsDLSSRelatchDrainReady(a_epoch))
+		return DLSSResourceTeardownResult::Ready;
+	if (!HasDLSSResourcesPendingTeardown()) {
+		dlssRelatchDrainProof.MarkReady(a_epoch);
+		return DLSSResourceTeardownResult::Ready;
+	}
+	const auto result = dlssRelatchDrainFence.Poll(globals::d3d::context, "Upscaling::DLSSRelatchDrain");
+	if (result == VRRelatchDrainFence::Result::Ready) {
+		dlssRelatchDrainProof.MarkReady(a_epoch);
+		return DLSSResourceTeardownResult::Ready;
+	}
+	return result == VRRelatchDrainFence::Result::Pending ? DLSSResourceTeardownResult::Pending : DLSSResourceTeardownResult::Failed;
+}
+
+/** Releases DLSS resources after consuming the exact drain proof or the legacy idle fence. */
+Streamline::DLSSResourceTeardownResult Streamline::DestroyDLSSResources(uint64_t a_drainEpoch)
+{
+	if (a_drainEpoch != 0 && !IsDLSSRelatchDrainReady(a_drainEpoch))
+		return DLSSResourceTeardownResult::Pending;
 	const bool hasTrackedViewportOwnership = [&]() {
 		if (activeDLSSViewportResourcesAllocated[0] ||
 			activeDLSSViewportResourcesAllocated[1] ||
@@ -3449,7 +3502,7 @@ Streamline::DLSSResourceTeardownResult Streamline::DestroyDLSSResources()
 		return DLSSResourceTeardownResult::Ready;
 	}
 
-	if (auto context = globals::d3d::context) {
+	if (auto context = globals::d3d::context; context && a_drainEpoch == 0) {
 		const auto idleFenceResult = BeginOrPollD3D11IdleFence(context, pendingDLSSResourceFreeIdleFence, "DLSS resource free");
 		if (idleFenceResult == D3D11IdleFenceResult::Pending) {
 			static bool loggedDLSSResourceFreePending = false;
@@ -3465,6 +3518,7 @@ Streamline::DLSSResourceTeardownResult Streamline::DestroyDLSSResources()
 		ResetDLSSIdleFences();
 	}
 
+	InvalidateDLSSRelatchDrain();
 	bool activeViewportResourcesFreed = true;
 	if (activeDLSSViewportResourcesAllocated[0]) {
 		const bool leftFreed = FreeDLSSViewportResources(viewport, 0, true);

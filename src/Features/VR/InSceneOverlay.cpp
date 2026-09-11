@@ -5,6 +5,7 @@
 #include "Features/VR.h"
 #include "Features/VR/InSceneOverlaySubmitPolicy.h"
 #include "Features/VR/OpenVRSubmitLeasePolicy.h"
+#include "Features/VR/VRRenderScaleFrameBoundaryPolicy.h"
 #include "Globals.h"
 #include "Hooks.h"
 #include "Menu.h"
@@ -44,11 +45,13 @@ namespace
 	std::atomic<uint64_t> g_openVRSubmitCycleState{ 0 };
 	std::mutex g_openVRSubmitCyclePublishMutex;
 	std::mutex g_vrPostLoadCompositorSubmitMutex;
-	std::mutex g_vrRenderScalePresentationWorkMutex;
+	std::recursive_mutex g_vrRenderScalePresentationWorkMutex;
 	std::mutex g_presentedMenuSurfaceMutex;
 	std::atomic<uint64_t> g_vrSubmitPairBoundarySequence{ 0 };
 	thread_local VRSubmitInputFreshnessPolicy::OuterPairBoundaryState
 		g_vrSubmitPairBoundaryState{};
+	thread_local VRRenderScaleFrameBoundaryPolicy::PairCompletion
+		g_vrRelatchPairCompletion{};
 
 	enum class VRNativeRestoreCyclePresentationPath : uint8_t
 	{
@@ -644,10 +647,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				pGamePoseArray,
 				unGamePoseArrayCount);
 			{
-				const std::scoped_lock cyclePublishLock(
-					g_openVRSubmitCyclePublishMutex);
 				const std::scoped_lock presentationWorkLock(
 					g_vrRenderScalePresentationWorkMutex);
+				const std::scoped_lock cyclePublishLock(
+					g_openVRSubmitCyclePublishMutex);
 				const uint64_t previousCycleState =
 					g_openVRSubmitCycleState.load(std::memory_order_acquire);
 				const uint64_t previousCompositorCycleToken =
@@ -683,8 +686,14 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 			const vr::VRTextureBounds_t* pBounds,
 			vr::EVRSubmitFlags nSubmitFlags)
 		{
+			// Keep the full native stereo call and its relatch boundary serialized
+			// with nested eye work and compositor-cycle publication.
+			const std::scoped_lock presentationWorkLock(
+				g_vrRenderScalePresentationWorkMutex);
 			const auto previousBoundary = g_vrSubmitPairBoundaryState;
+			const auto previousCompletion = g_vrRelatchPairCompletion;
 			g_vrSubmitPairBoundaryState = {};
+			g_vrRelatchPairCompletion = {};
 			if (!previousBoundary.active && pTexture) {
 				uint64_t token =
 					g_vrSubmitPairBoundarySequence.fetch_add(
@@ -709,12 +718,34 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 							pTexture),
 					.active = true,
 				};
+				g_vrRelatchPairCompletion.identity = {
+					.token = token,
+					.compositorCycle = g_vrSubmitPairBoundaryState.compositorCycle,
+					.frame = g_vrSubmitPairBoundaryState.frame,
+					.thread = g_vrSubmitPairBoundaryState.thread,
+				};
 			}
 			const SKSE::stl::scope_exit restoreBoundary([&]() noexcept {
 				g_vrSubmitPairBoundaryState = previousBoundary;
+				g_vrRelatchPairCompletion = previousCompletion;
 			});
 
-			return func(_this, pTexture, pBounds, nSubmitFlags);
+			const auto result = func(_this, pTexture, pBounds, nSubmitFlags);
+			const VRRenderScaleFrameBoundaryPolicy::PairIdentity completedIdentity{
+				.token = g_vrSubmitPairBoundaryState.token,
+				.compositorCycle =
+					g_openVRSubmitCycleState.load(std::memory_order_acquire) >> 1u,
+				.frame = globals::state ? globals::state->frameCount : 0u,
+				.thread = GetCurrentThreadId(),
+			};
+			if (!previousBoundary.active &&
+				VRRenderScaleFrameBoundaryPolicy::CanServiceCompletedPair(
+					g_vrRelatchPairCompletion, completedIdentity)) {
+				g_vrSubmitPairBoundaryState = {};
+				g_vrRelatchPairCompletion = {};
+				globals::features::upscaling.ServiceVRRenderScaleRelatchAtFrameBoundary();
+			}
+			return result;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -727,6 +758,13 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 			auto& upscaling = globals::features::upscaling;
 			const std::scoped_lock presentationWorkLock(
 				g_vrRenderScalePresentationWorkMutex);
+			const auto completedPairToken = g_vrSubmitPairBoundaryState.token;
+			const SKSE::stl::scope_exit recordEyeCompletion([=]() noexcept {
+				VRRenderScaleFrameBoundaryPolicy::RecordEyeCompletion(
+					g_vrRelatchPairCompletion,
+					completedPairToken,
+					static_cast<uint32_t>(eEye));
+			});
 			uint64_t compositorCycleState =
 				g_openVRSubmitCycleState.load(std::memory_order_acquire);
 			uint64_t compositorCycleToken = compositorCycleState >> 1u;

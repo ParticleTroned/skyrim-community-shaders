@@ -1202,3 +1202,28 @@ terminal PASS, Task 2 66/0/0, and applicable health MET in both passes. The
 PR66 comparison and all historical ledger cells remain unchanged. Formal
 improvement assessment remains INCONCLUSIVE, and the separate render-scale
 release qualification is unrun. See [the rollback record](pr73-polling-rollback-20260911.md).
+
+## September 11: PR73 owned provider drain candidate
+
+The next candidate separates provider drain observation from relatch
+mutation and services explicit settings relatches after the owning native
+stereo call and both matching eye calls return. Drain evidence belongs to
+the exact transition, generations and provider resource revision; subsequent
+provider use invalidates it. Readiness can advance only the operation's own
+queued six-frame retry. A still-pending drain at the original six-frame
+deadline returns to the conservative path for that epoch.
+
+The six-frame post-replacement settling guard, its eligibility rules and
+Backend retry history remain unchanged. Provider observation does not
+repeat cleanup or teardown. A completed shared cleanup is retained by its
+owner, while independent retirement fences, memory checks and recovery
+restrictions continue to apply. This avoids the withdrawn attempt's
+unqualified acceleration of the entire destructive transaction.
+
+Nine focused portable policy tests pass with MSVC C++23 `/W4 /WX`;
+the tested source/header hashes were stable throughout. The universal DLL
+build, DevBench-enabled AIO verification and runtime testing are pending.
+The package is being prepared for manual testing; no new runtime or
+performance result is claimed. Historical comparison ledger cells remain
+unchanged. Separate `csx-render-scale-pr-v1` qualification remains unrun.
+See [the candidate contract and exact validation](pr73-owned-drain-manual-test-20260911.md).

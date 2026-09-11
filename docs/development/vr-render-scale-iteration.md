@@ -1,5 +1,17 @@
 # VR render-scale iteration records
 
+## September 11: separate pending-drain polling from settling
+
+PR73 now permits one-frame polling of a proven healthy provider drain while
+retaining Backend retry accounting and the full presentation settling guard
+when memory relief prevents proof-driven release. Failure, ownership,
+mutation, quarantine, retirement and recovery checks remain intact.
+The focused MSVC vendor-relatch and stretch-accounting policy tests pass.
+
+See [the implementation contract](pr73-pending-drain-polling.md).
+No new runtime measurements accompany this implementation; the canonical
+ledger and all previous PR66/PR73 measurements remain unchanged.
+
 ## September 11: all PR73 tables compare against PR66
 
 The user selected measured PR66 a09e1cc77 as the reference for both

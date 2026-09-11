@@ -13,12 +13,93 @@ namespace VRRenderScaleRetryTelemetry
 
 	enum class EventType : uint8_t
 	{
-		Retry, RelatchAdmitted, Applied, Stable, Failure,
-		ViewportReady, ViewportWaitBegin, ViewportWaitEnd,
-		GuardArmed, ProofRevoked, SettleGuardSatisfied, PromotionCandidate, Promoted, GuardCleared
+		Retry,
+		RelatchAdmitted,
+		Applied,
+		Stable,
+		Failure,
+		ViewportReady,
+		ViewportWaitBegin,
+		ViewportWaitEnd,
+		GuardArmed,
+		ProofRevoked,
+		SettleGuardSatisfied,
+		PromotionCandidate,
+		Promoted,
+		GuardCleared,
+		RelatchDrainBegin,
+		RelatchDrainPending,
+		RelatchDrainReady,
+		RelatchDrainInvalidated,
+		RelatchCommitBegin,
+		RelatchSharedCleanup,
+		OwnedReleaseConsumed,
+		OwnedTargetPublished,
+		OwnedProviderPrepared,
+		OwnedReleaseEligibility
 	};
 
 	enum class FenceResult : uint8_t { NotPolled, Pending, Ready, Failed };
+	enum class DrainFenceRole : uint8_t
+	{
+		FSRHost,
+		FSRInterop,
+		FSRRuntime,
+		DLSSHost
+	};
+	enum OwnedReleaseObligation : uint32_t
+	{
+		OldProviderDrained = 1u << 0,
+		ProviderResetCompleted = 1u << 1,
+		DetachedRetirementOwned = 1u << 2,
+		PhysicalContractPublished = 1u << 3,
+		TargetProviderPrepared = 1u << 4,
+		CoherentStereo = 1u << 5
+	};
+
+	/** Observations of existing fence operations; identities are opaque, never dereferenced. */
+	struct DrainFenceObservation
+	{
+		bool observed = false;
+		DrainFenceRole role = DrainFenceRole::FSRHost;
+		FenceResult result = FenceResult::NotPolled;
+		uint64_t issueQpc = 0;
+		uint64_t readyQpc = 0;
+		uint64_t deviceIdentity = 0;
+		uint64_t contextIdentity = 0;
+		uint64_t queueIdentity = 0;
+		uint64_t fenceIdentity = 0;
+		uint64_t fenceValue = 0;
+	};
+
+	/** Historical ownership certificate; recording it does not authorize reuse of a live drain proof. */
+	struct OwnedReleaseObservation
+	{
+		bool observed = false;
+		uint32_t sourceGeneration = 0;
+		uint32_t requiredProviders = 0;  // FSR = 1, DLSS = 2.
+		uint64_t fsrRevision = 0;
+		uint64_t dlssRevision = 0;
+		uint64_t targetFSRRevision = 0;
+		uint64_t targetDLSSRevision = 0;
+		uint64_t fsrTicketSerial = 0;
+		uint64_t dlssTicketSerial = 0;
+		uint64_t certificateSerial = 0;
+		uint64_t targetQueueIdentity = 0;
+		uint64_t targetFenceIdentity = 0;
+		uint64_t deviceIdentity = 0;
+		uint64_t contextIdentity = 0;
+		uint64_t queueIdentity = 0;
+		uint64_t requestQueuedQpc = 0;
+		uint64_t blockingCleanupReadyQpc = 0;
+		uint32_t requiredObligations = 0;
+		uint32_t satisfiedObligations = 0;
+		bool oldProofConsumed = false;
+		bool targetPublished = false;
+		bool providerPrepared = false;
+		bool eligible = false;
+		bool presentationEligibility = false;
+	};
 
 	/** @brief Observations from existing viewport checks; never requests a GPU operation. */
 	struct ViewportObservation
@@ -69,6 +150,8 @@ namespace VRRenderScaleRetryTelemetry
 		uint32_t requiredStableCycles = 0;
 		bool proofDrivenRelease = false;
 		bool settleGuardRequired = false;
+		OwnedReleaseObservation ownedRelease{};
+		std::array<DrainFenceObservation, 4> drainFences{};
 	};
 
 	struct ViewportState

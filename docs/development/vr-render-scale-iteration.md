@@ -1,5 +1,452 @@
 # VR render-scale iteration records
 
+## September 11: all PR73 tables compare against PR66
+
+The user selected measured PR66 a09e1cc77 as the reference for both
+previous PR73 d9780bb74 and new PR73 c73bae9a7. All nine PR tables now
+show all three builds: means/SE, each pass, health, stretch, every route,
+completion/relatch frames and milliseconds, identities/packages and memory.
+Both sets of deltas use PR66. Prior measurements remain separate columns.
+
+New PR73 mean strict completion is 790.202 versus 800.231 ms for PR66
+(-1.253%); full-pass stretch duration is 5138.086 versus 4549.605 ms
+(+12.935%). New rows 3, 8, 16, 19, 21, 26 and 30 are slower in both
+passes. All three builds retain terminal 66 PASS and Task 2 counts
+66/0/0, with applicable health MET/MET. Formal change assessment remains
+INCONCLUSIVE because scene/toolchain context differs, a full matching
+fixture fingerprint is unavailable and no tolerance policy was specified.
+
+Complete comparison and table values reconstruct exactly from the ledger;
+143 verified same-ledger references preserve repeated JSON subtrees.
+All historical cells remain unchanged and all 1,056 paired timing cells
+pass. Comparison took 2.916 s and complete
+ledger retention/verification took 23.705 s.
+See [the corrected report](pr73-readiness-nvidia-comparison-20260911.md) for the uniform PR66 comparison
+and complete validation. Prior comparisons remain historical evidence.
+
+## September 11: PR73 previous/new measurement comparison
+
+The user requested preservation of the previous PR73 measurement and an
+additional comparison with readiness source c73bae9a7. Previous source
+d9780bb74 and new source c73bae9a7 share main-VR base ef7c366dd.
+Mean strict completion changed 870.905 -> 790.202 ms
+(-9.267%); both pass means are lower. Full-pass
+stretch duration changed 5744.173 -> 5138.086 ms
+(-10.551%). Both runs retain terminal
+66 PASS, Task 2 counts 66/0/0 and applicable health MET/MET.
+Scene matching and a tolerance policy remain unavailable; the formal
+assessment and separate memory classification remain INCONCLUSIVE.
+
+Every previous ledger cell is preserved. Additional detail rows retain
+the entire comparison and three-build/per-route statistics with exact
+reconstruction; all 1,056 paired timing cells pass. Previous PR66/PR73
+tables remain intact. See [the full comparison](pr73-readiness-nvidia-comparison-20260911.md)
+for both passes, route regressions, stretch maxima, retry reasons,
+memory predicates, complete provenance and assessment limits.
+
+## September 11: PR73 readiness c73bae9a7 NVIDIA tuning
+
+Run `renderscale-tuning-nvidia-2026-09-11T05-18-34-649Z` completed 33 + 33
+transitions, terminal 66 PASS; Task 2 counts 66 PASS / 0 FAIL /
+0 INCONCLUSIVE. Both passes meet applicable health checks with no counted
+failure observations. Physical DLL/manifest/AIO verification matches clean
+Release source c73bae9a7, main-VR base ef7c366dd and runtime Build ID
+d098079db31d. Captures are inactive, journal flushed and reporting COMPLETE.
+
+Against pinned previous measured main-VR 7c8e3e656, strict means are
+779.947 / 800.456 ms (-9.938% / -3.916%).
+Reference fidelity/vendor observations on rows 26 and 28 are absent.
+Retry counts are 9 / 10; 31 selected stretch transitions recovered.
+Full-pass stretch is 79 / 93 frames and 4675.398 / 5600.774 ms.
+The fixed cutoff remains diagnostic and the proven-native terminal gate
+remains a contract mismatch. Formal change assessment and memory
+classification are separately INCONCLUSIVE; scene matching and a declared
+tolerance policy are unavailable. Per-route regressions remain explicit.
+
+The canonical ledger retains every summary and comparison field, verified
+by exact reconstruction, with 1,056 paired numeric timing cells audited
+and every historical cell preserved. Finalization took
+17.791 s; comparison took
+4.096 s; complete ledger reporting took
+12.637 s. See the [durable report](nvidia-renderscale-tuning-pr73-c73bae9a7-20260911.md)
+for all pass/transition tables, memory predicates, gate observations,
+provenance, evidence links and validation receipts. Raw evidence stays local.
+
+## September 10: PR65 baseline comparison across both repeats
+
+The clearer [PR65 comparison](pr65-nvidia-baseline-repeat-means-20260910.md) keeps the
+older renderer baseline compiled as 390fdea25 and groups the four main-VR
+passes from 348803c18 and 7c8e3e656, as requested. Mean strict completion
+is 834.274 ms baseline versus 799.212 ms main-VR, a 4.203% reduction.
+The repeat means are 748.880 and 849.543 ms, so direction is inconsistent
+between repeats. Trailing SE columns retain baseline, each repeat and
+combined-pass dispersion; combined pass-based SE is 30.754 ms, while SE
+across the two repeat means is 50.332 ms. Neither is a significance claim.
+
+All 132 main-VR transitions passed at terminal, but recovered fidelity and
+vendor failures recur at rows 26 and 28 in all four passes; the baseline
+had none. Health remains DOES_NOT_MEET_STANDARD. This regrouping adds no
+measurements, preserves the existing ledger, and audits 1,584 distinct
+numeric timing cells across the three retained runs.
+
+## September 10: PR66 source 80f83d2dd on main-VR 7c8e3e656
+
+Run `nvidia-2026-09-10T13-36-15-291Z` completed 33 + 33
+transitions in one process. All 66 terminal render checks passed; Task 2
+counts are 66 PASS / 0 FAIL / 0 INCONCLUSIVE. Reporting and retry evidence
+are COMPLETE; captures are verified inactive and all 442 journal records
+are flushed. Physical DLL hash/size, adjacent manifest and AIO receipt
+match runtime Build ID `3a3898d47e65`, clean Release source `80f83d2dd`.
+Git confirms main-VR base `7c8e3e656`; no reporting bridge was backported.
+
+Against the preceding relevant main-VR run `nvidia-20260910T124329625Z`,
+strict means are 871.699 / 809.922 ms (+0.657% / -2.780%).
+Relatch proof means are 826.449 / 726.564 ms and 14.040 / 12.440 frames;
+strict means are 15.485 / 14.455 frames. Stretch totals are 88 / 65 frames
+and 5733.872 / 4581.027 ms, with 20 / 17 episodes and no active tail.
+All 33 selected stretch transitions recovered. Owned retries are 11 / 6;
+viewport waits and settling/promotion intervals remain individually retained.
+
+Recovered fidelity/vendor-fallback observations on rows 26 and 28 recur
+in both passes and in the reference. Full-history assessment remains
+DOES_NOT_MEET_STANDARD; device-loss, OOM, producer-terminal,
+vendor-native-qualification and credible-liveness failure counts are zero.
+The fixed stretch cutoff is diagnostic and the proven-native terminal
+scaled-presentation gate is a contract mismatch; raw gates remain visible.
+Memory classification is inconclusive. Game hour and vcpkg toolchain-file
+hash differ, and there is no versioned tolerance policy. Timing deltas
+are descriptive; no steady-state GPU/FPS or neutral/improvement claim follows.
+
+The canonical ledger retains every historical cell and adds 528 numeric
+timing cells plus 66 full timing/retry records. One comparison verified
+1,056 paired timing cells in 3.476 s. See the
+[durable report](nvidia-renderscale-tuning-pr66-80f83d2dd-20260910.md) for all
+pass/transition comparisons, memory predicates, limits and evidence links.
+Raw evidence stays local. PR inclusion remains the user's decision.
+
+The ledger detail supplement adds 211 metric rows in the same run column,
+covering all 66 complete transitions, both complete pass health records,
+memory/resources/profiler details, evidence gaps and comparison deltas.
+The finalized summary was reconstructed from ledger cells with exact field
+equality. Every prior cell and column remains intact. The comparison was
+reused after hash validation and all 1,056 numeric timing cells were audited;
+the supplement took 2.544 seconds. See the report's complete-ledger coverage
+section and validation receipt. Historical runs' new detail rows remain
+explicitly unpopulated, without implying unavailable source telemetry.
+
+## September 10: independent PR65 repeat on main-VR 7c8e3e656
+
+Run `nvidia-20260910T124329625Z` completed all 33 + 33
+transitions in one process. All 66 terminal checks passed; Task 2 counts
+are 66 PASS / 0 FAIL / 0 INCONCLUSIVE. Candidate reporting and detailed
+retry telemetry are COMPLETE. Captures are verified inactive; all 444
+journal records were flushed. Physical DLL, manifest, AIO receipt and
+package payload match runtime Build ID `9e88a559cc66`, clean Release
+source/main-VR `7c8e3e656`.
+
+Mean strict completion was 866.009 / 833.078 ms,
+12.872% / 14.040% above the preceding measured main-VR
+`348803c18`. Relatch proof means were 807.337 / 763.765 ms and
+13.920 / 13.840 frames; strict means were 15.576 / 15.455 frames.
+Stretch totaled 89 / 83 frames and 5719.962 / 5383.107 ms, with no active
+tail. The imposed stretch cutoff remains diagnostic. Owned retries were
+10 / 10; detailed viewport waits and guard/promotion intervals are retained.
+
+Recovered fidelity/vendor findings on rows 26 and 28 recurred in both
+passes and in the reference. Full-history assessment is
+DOES_NOT_MEET_STANDARD; all five terminal failure categories are zero.
+Memory classification is inconclusive. Scene time differs and there is
+no versioned tolerance policy; timing deltas remain descriptive. The older
+reference lacks detailed retry telemetry despite its retained COMPLETE
+label, so that paired diagnostic comparison remains unavailable.
+
+The canonical ledger preserves every historical cell and adds 528 numeric
+timing cells plus all 66 full timing/retry records. One comparison verified
+1,056 paired numeric cells in 2.654 s.
+See the [durable report](nvidia-renderscale-tuning-7c8e3e656-20260910.md) for every
+pass/transition, failure/recovery, memory result, evidence link and stage
+timing. Raw evidence remains local. The user requested this comparison
+as an independent repeat on PR65; previous run columns remain intact.
+
+## September 10: NVIDIA tuning of PR66 review merge 89e396458
+
+Run `renderscale-tuning-nvidia-2026-09-10T11-53-09-916Z` completed
+33 + 33 transitions on clean Release source `89e396458`, the PR66
+review merge on main-VR base `348803c18`. Physical DLL, adjacent manifest,
+AIO receipt/archive and runtime Build ID `880b0ef46dd9` match. Both passes
+verified capture cleanup inactive and all 444 journal records were flushed.
+
+All 66 terminal render checks passed; per-transition Task 2 counts are
+66 PASS / 0 FAIL / 0 INCONCLUSIVE. Recovered fidelity/vendor failures at
+rows 26 and 28 recurred in both passes and also exist in the reference.
+The full-history assessment is DOES_NOT_MEET_STANDARD. Mean strict latency
+was 865.774 / 835.988 ms, 12.842% / 14.438% above measured main-VR
+`348803c18`. Relatch proof means were 812.873 / 782.504 ms; strict means
+were 15.515 / 15.455 frames. Allowed stretch totaled 83 / 82 frames and
+5324.710 / 5291.078 ms. The imposed stretch cutoff remains diagnostic.
+
+Memory classification is inconclusive. Reporting remains incomplete
+because detailed retry telemetry is unavailable; the old baseline's
+retained COMPLETE label does not satisfy the current retry contract.
+Scene time differs and no versioned tolerance was supplied, so timing
+deltas remain descriptive. No new affected health routes were observed.
+
+The existing ledger preserves every old cell and adds all 528 measured
+timing cells plus all 66 full timing records. The one generated comparison
+audited 1,056 baseline/candidate timing cells in 2.618 seconds. Full pass
+and transition tables, health gates, memory, telemetry, evidence links
+and the reporting limitation are in the
+[durable run report](nvidia-renderscale-tuning-pr66-89e396458-20260910.md). Raw evidence remains local; PR
+inclusion is user-decided.
+
+## September 10: fast reporting execution and verified reuse
+
+The repository reporting wrapper now supports one invocation for candidate
+finalization, validation/publication of a prepared append-only ledger update,
+and comparison. It indexes ledger metrics once, reuses only content-verified
+outputs, and records stage timings and limitations. The
+[reporting workflow](vr-render-scale-comparison-reporting.md#fast-routine-completion)
+and `AGENTS.md` require brief useful progress updates without redundant work.
+All comparison detail remains required; PR inclusion stays user-decided.
+
+On copied baseline evidence (renderer `1595cffd`, main-VR equivalent
+`9074b4676`, compiled `390fdea25`), compared with measured `348803c18`, the
+final offline check took 21.476 seconds for generation and 2.253 seconds for
+verified reuse. An earlier invocation took 63.779/7.688 seconds; these are
+observations, not latency guarantees. The full 871,216,257-byte scalar CSV
+remained byte-identical, and both invocations checked all 1,056 ledger timing
+cells. The existing ledger was unchanged. Older retry-detail limitations
+remained explicit. Live cleanup and new DLL inspection were not replayed.
+
+Sixteen focused tests passed, including cache invalidation, concurrent input
+changes, historical-cell preservation, stale ledger rejection, missing retry
+details, unflushed-worker rejection and late helper diagnostics. Evidence:
+`artifacts/reporting-performance-20260910/pipeline-validation.json`.
+The prepared-ledger publication path was tested with temporary fixtures;
+the existing canonical ledger was audited without applying another update.
+
+## September 10: automatic comparison and separate change assessment
+
+Every future ledger update includes the
+[detailed side-by-side reporting contract](vr-render-scale-comparison-reporting.md)
+automatically. PR inclusion remains the user's decision. Execution,
+terminal results, full-history health and improvement-or-neutral assessment
+are independent; unmet change standards do not relabel a completed test.
+
+The maintained offline finalizer and comparison reporter now expose all
+recovered failures and raw cumulative gates. The imposed two-frame stretch
+cutoff is diagnostic only, and the proven native-target presentation gate
+mismatch is separate from actual health failures. The baseline has no
+counted adverse switch-health findings; head's recovered failures at rows
+26 and 28 mean `DOES_NOT_MEET_STANDARD`, despite lower mean milliseconds.
+
+The side-by-side tables include relatch-proof and strict-completion frames
+and milliseconds, stretch episode counts, total frames and duration, with
+baseline/candidate deltas for every pass and transition. In pass 2, head
+uses 508 strict-completion frames versus 494 and 77 stretch frames versus
+73, while stretch time falls from 4,805.654 ms to 4,310.798 ms. Relatch proof
+has 25 measured boundaries per pass; missing/inapplicable boundaries are
+not substituted with zero. See the [updated comparison](nvidia-renderscale-baseline-vs-head-20260910.md).
+
+Automation source commit `5ab021f12362a4229556334f05a92ef41f5958af` is
+integrated into its local `dev` branch. The repository comparison wrapper
+uses that maintained source directly. Finalizer/comparison regression
+tests, four ledger tests, both skill validations, package validation and
+source/package parity passed. The integrated reporter rechecked 132
+receipts and all 1,056 existing numeric timing cells. The installed plugin
+cache was not rotated, and this work did not publish or modify a PR.
+
+## September 10: old-baseline versus measured-head health audit
+
+The [complete per-transition comparison](nvidia-renderscale-baseline-vs-head-20260910.md)
+compares renderer base `1595cffd` (main-VR renderer equivalent `9074b4676`),
+compiled as `390fdea25` with the preparation bridge backport, against the
+earlier measured main-VR head `348803c18`. Head mean strict latency is
+8.497% lower in pass 1 and 11.992% lower in pass 2. These are descriptive
+transition measurements, with environmental limits recorded in the report.
+
+The raw-receipt audit qualifies the terminal-PASS statements below.
+Head transitions 26 and 28 each record two fidelity mismatches and one
+vendor-failure stretch eye observation in both passes, then recover.
+The old baseline records zero for these counters. Both raw cumulative
+records reject the fixed stretch-frame cutoff and scaled-presentation gate
+at the final native target. These are retained diagnostics, excluded from
+health assessment for the reasons above. Head additionally fails the
+applicable fidelity and fallback gates. Stored terminal and Task 2
+verdicts remain separate from these findings.
+
+The comparison validates all 132 retained rows and 1,056 numeric timing
+cells against the existing ledger, without changing its historical cells.
+Memory remains inconclusive, and no resolved GPU frame timings exist.
+The report includes exact source commits, Build IDs, DLL identities,
+per-pass telemetry, retry evidence, and an interactive comparison.
+
+## September 10: 1595cffd comparison baseline completed
+
+Run `renderscale-tuning-nvidia-20260910T090649592Z` completed 33 + 33
+transitions on clean Release source
+`390fdea2533ae447849c5f07766c796872996a61`, the `1595cffd` comparison
+baseline with tuning preparation backported. All 66 render rows passed;
+per-transition Task 2 counts are 66 PASS / 0 FAIL / 0 INCONCLUSIVE.
+Strict completion averaged 838.490 ms and 830.058 ms. Pacing was VALID,
+with maximum client dispatch gap 54.370 ms. All 32 stretch-selected
+rows recovered; producer retries were 10 and 9.
+
+All task-owned captures are verified inactive, the complete 444-record
+journal is flushed, and the worker published COMPLETE and exited.
+Physical DLL, adjacent manifest, AIO receipt, archive, and extracted
+payload identities match. Memory classification is inconclusive;
+reporting is complete after the omitted packaged memory summary was
+reconstructed from six preserved boundaries. The existing ledger gained
+one column containing all 66 strict timings, 528 numeric timing cells,
+and complete timing groups, with all 887 rows and historical cells
+preserved. See the [run report](nvidia-renderscale-tuning-390fdea25-20260910.md).
+
+## September 10: selected recent ledger run
+
+At the user's request, the five September 9 run columns were removed from
+the comparison ledger: the early dirty build, both PR66 attempts, and both
+previous `348803c18` runs. Today's `nvidia-2026-09-10T07-19-50-405Z` is the
+only retained run from September 9-10. All 15 older run columns, today's
+complete column, and all 887 metric rows are unchanged. Earlier reports
+below describe the historical ledger before this selection; raw evidence
+and historical comparison reports remain retained.
+
+## September 10: completed NVIDIA two-pass assay
+
+Run `nvidia-2026-09-10T07-19-50-405Z` completed 33 + 33 transitions on
+clean source `348803c1831c8cd71ceb75a58143ad0bcb00abb2`. All render rows
+passed; per-transition Task 2 counts are 66 PASS / 0 FAIL / 0 INCONCLUSIVE.
+Pacing was VALID, with maximum client dispatch gap 40.695 ms. Strict
+completion averaged 767.246 ms and 730.514 ms in the two passes. All
+31 stretch-selected rows recovered; producer retry counts were 8 and 10.
+
+Both passes verified telemetry inactive. Memory classification is
+inconclusive, with private memory and system commit decreasing in both
+passes. The deployed DLL hash matches the AIO payload and build manifest;
+the manifest Build ID matches the running producer. Reporting is complete:
+the full journal was independently validated and flushed, and all captures
+are inactive. The stalled worker was subsequently recovered by cancelling
+its aborted notification reader. It published COMPLETE, exited, and released
+its own endpoint lock at 08:19:19 UTC, with the evidence journal unchanged.
+The [run report](nvidia-renderscale-tuning-20260910.md) records these limits.
+The existing comparison ledger gained one column containing all 66 strict
+timings, 528 numeric timing cells, and full numeric timing groups. All
+historical cells and the 887 existing metric rows were verified intact.
+
+## September 9–10: interrupted NVIDIA cadence run
+
+Run `nv-mtuivutb` retained 39 transitions (33 + 6) on clean source
+`348803c1831c8cd71ceb75a58143ad0bcb00abb2`. Every retained render and
+per-transition Task 2 result is PASS, but orchestration interruption and long
+gaps leave stress cadence unqualified and memory `repeat_not_completed`.
+The [run report](nvidia-renderscale-tuning-nv-mtuivutb.md) records the evidence,
+timing definitions, and writer benchmark. All 39 strict timings and available
+presentation, cleanup, tail, frame, and QPC timings were added to the existing
+comparison ledger with historical cells verified intact. No live rerun was
+performed while correcting the worker and evidence queue.
+
+Continue updating the existing
+[VR render-scale comparison ledger](vr-render-scale-ledger.md)
+in place. Preserve its build columns and historical values, and append
+available numeric timings for each measured transition and pass. Record
+the route, timing definition and units, and distinguish missing receipts,
+failed measurements, and transitions not run. Run reports explain the
+results and link to this ledger; they do not establish another ledger.
+
+The NVIDIA matrix uses metric names such as
+`tuning_pass1_transition_01_dlss_hoshipa_to_none_strict_ms`: pass, ordinal,
+source, destination, and dispatch-relative strict-completion milliseconds.
+The five-second pre-dispatch wait is excluded. The September 9 backfill
+preserves 198 available numeric timings across four existing build columns,
+including all 66 timings of the interrupted and continued current run.
+
+## Completed NVIDIA transitions with interrupted repeat: 9 September 2026
+
+Run `nv-mtud89dr`, continued as `nv-mtud89dr-s2`, retained all 66
+transitions on clean `main-VR` source
+`348803c1831c8cd71ceb75a58143ad0bcb00abb2` (`v3.19.0-pr28` +274).
+Both passes have 33 render PASS rows; Task 2 counts are 66 PASS / 0 FAIL /
+0 INCONCLUSIVE, and all 24 DLSS trace windows are complete. The repeat
+was interrupted after row 8 and continued at row 9 in the same game
+process with new telemetry captures. It is recorded as one repeat pursued
+across two runs. Uninterrupted-assay reporting remains INCOMPLETE, and
+continuous-repeat memory confirmation is inconclusive.
+
+Strict completion averaged 792.385 ms in pass 1 and 833.175 ms in the
+combined repeat. The previous PR66 run `nv-mtu8nhph` averaged 794.846 ms
+over the same 33 first-pass transitions; the current difference is -0.31%.
+These are transition latencies, and session conditions prevent attributing
+the difference solely to PR66. The prior PR66 repeat retained only rows 1-9.
+
+The ledger labels now distinguish relative revisions and measured source
+commits. PR66 branch `fix/vr-dlss-eye-bound-dilation` is
+`85ee7d4a572544410fa29463d5d704b50984610f`; its measured merge is
+`89e3964582730b92c1885eaef8f865e2d1d02ea9`. The RC166 tag/base is
+`b95958cc0c119625d8a7dd9657442c92122f240d`; the historical measured
+RC166 +13 baseline records source
+`94165e2e70db2bbefd878aecbfa7733ee336ab63`, whose object is unavailable
+in this checkout. Existing historical metric cells are preserved.
+See the [transition table and evidence summary](nvidia-renderscale-tuning-nv-mtud89dr.md).
+
+That table also includes the RC166 +13 baseline and the latest complete
+September 2-3 run, `nvidia-mtlid7m3` (September 3, 13:00 UTC), on source
+`539705004aa993816b79773fa287f91324312fbc` with uncommitted changes
+(`v3.19.0-pr39` +230; recorded RC166 +510). RC166 has no matched
+33-transition assay, and the September 3 per-transition timing bundle is
+unavailable in the inspected local evidence locations. Both references
+used 2468x2740 output per eye. The added columns state these limitations;
+no historical timing values or percentages are inferred.
+The committed record was checked: `539705004` preserves earlier ledger and
+summary data, including August 29 timing tables. The September 3 run's
+column was added by `190c28a39`; its timing cells already refer to an
+external evidence bundle rather than containing numeric timings.
+
+## Updated NVIDIA tuning: 9 September 2026
+
+Run `nvidia-mtu6cpo8` on clean source `89e3964582730b92c1885eaef8f865e2d1d02ea9`
+completed 33 first-pass transitions with render PASS and Task 2 counts
+33 PASS / 0 FAIL / 0 INCONCLUSIVE. The second baseline timed out after
+20 seconds under memory-deferred admission, so execution is INTERRUPTED
+and all 33 repeat rows are NOT RUN. The 17 presentation-stretch rows
+recovered; first-pass strict completion averaged 2569.260 ms with a
+16264.205 ms maximum. Memory confirmation is `repeat_not_completed`.
+See [the retained failure summary](nvidia-renderscale-tuning-nvidia-mtu6cpo8.md)
+and the uniquely headed partial column in the comparison ledger.
+
+The VR render-scale controller can capture a bounded CSX-menu stress session and write a versioned JSON record for an MCP/Ghidra optimization loop. The capture observes user-driven changes; it never changes render-scale settings itself.
+
+## 2026-09-10: submit contract integration review
+
+Rebased the submit input candidate onto `main-VR` at `ef7c366d`, retaining
+exact input freshness proofs, source COM ownership, and deferred FSR
+handling. The extracted batch cache retains dispatch evidence on reuse.
+Deferred presentation restores the color contract when resource replacement
+clears admission and rejects conflicting color metadata. Production-path
+regressions cover that recovery, Linear rejection, captured host temporal
+scalars, and normalized frame-zero evidence with distinct raw cache keys.
+The deferred color regression failed before the correction and passed after.
+
+This review generated no runtime measurement or candidate qualification
+report. The comparison ledger remains unchanged; the earlier build receipts
+do not qualify the rebased candidate for visual quality or performance.
+
+## 2026-09-09: submit input contracts
+
+The `fix/vr-submit-input-contracts` candidate freezes stereo camera metadata
+before post-processing and makes submit color transfer/range explicit.
+The scope, fallback behavior, and validation cases are recorded in
+[VR submit input contracts](vr-submit-input-contracts.md).
+Adversarial review tightened logical-frame admission, preserved FSR batch
+dispatch evidence across desktop Present, and prevented failed DLSS fallback
+from reopening old token publication. Snapshot ownership is private and
+dispatch jitter selection is shared. Regressions cover these production
+policy and cache boundaries.
+This is an implementation and policy-test record, not a runtime measurement.
+The comparison ledger has no new candidate column because an exact fixture
+and accepted baseline are not configured for this run. Runtime qualification
+must precede any visual-quality, stability, or performance claim.
+
 The VR render-scale controller can capture a bounded CSX-menu stress session and write a versioned JSON record for an MCP/Ghidra optimization loop. The capture observes user-driven changes; it never changes render-scale settings itself.
 
 ## Capture workflow
@@ -273,7 +720,7 @@ The two references used the following final render-scale state:
 | CPU/GPU performance window | Captured                                     | Did not start                        | Must start for CPU/GPU claims |
 
 The canonical comparison ledger is
-[`vr-render-scale-comparison-ledger.csv`](vr-render-scale-comparison-ledger.csv).
+[`vr-render-scale-comparison-ledger.csv`](vr-render-scale-ledger.md).
 Its first row names each build by its full source commit; append each later
 measurement as a new column to the right. Do not replace the two pinned
 reference columns. Use `n/a` rather than zero when a capture lane did not start
@@ -307,6 +754,15 @@ and protocol evidence, and state the safety property that an optimization must
 preserve. Valid states are `Monitor`, `Investigating`, `Ready`, and `Closed`.
 
 #### Durable cross-machine record
+
+The [9 September NVIDIA comparison](nvidia-renderscale-tuning-20260909.md)
+preserves partial results from `nvidia-mtu2u3dm`: 57 full transition receipts,
+all 24 compact trace summaries, and five memory boundaries. Available evidence
+shows no functional regression against `nvidia-mtlid7m3`; cross-commit timing
+and memory improvement remain unproven because resolution changed and the
+second memory endpoint is missing. The matched 24-row repeat has similar mean
+latency, with slower individual FSR3 rows retained explicitly. Partial evidence
+is included in the ledger with its coverage and missing values identified.
 
 The comparison ledger is the canonical aggregate measurement record. This
 iteration guide retains conclusions, active investigations, and safety
@@ -1043,6 +1499,46 @@ The record lists the principal native symbols under `analysis.symbols`. In Ghidr
 
 Use Ghidra to validate control flow and ownership against the shipped binary, while using the JSON record as runtime evidence. A candidate should be promoted only when repeated scenario records pass and improve the target metric without regressing another accepted backend or pressure scenario.
 
+# NVIDIA comparison follow-up: nv-mtu8nhph (2026-09-09)
+
+The same-build NVIDIA assay retained 42 of 66 transitions: all 33 in
+pass 1 and the first nine in pass 2. All retained render and per-row Task 2
+checks passed. Execution is interrupted because the orchestration cell
+became unavailable; the remaining 24 destinations are NOT RUN. Guarded
+cleanup verified every task-owned capture inactive.
+
+Matched pass-1 strict transition means are 794.846 ms current,
+2569.260 ms for the preceding same-build attempt, and 787.217 ms for the
+earlier September 9 baseline. Current latency is 69.06% below the preceding
+attempt and 0.97% above the earlier baseline. These are transition timings,
+not steady-state GPU costs. Memory confirmation is `repeat_not_completed`.
+
+See [the run comparison](nvidia-renderscale-tuning-nv-mtu8nhph.md) and the
+new `nv-mtu8nhph` ledger column. Full local evidence remains under
+`artifacts/renderscale-tuning/nv-mtu8nhph/`; raw evidence is not versioned.
+
+## September 10: PR75 c615779a9 baseline interruption
+
+Run `renderscale-tuning-nvidia-2026-09-10T14-36-07-046Z` stopped before
+the first measured transition. The DLSS Hoshipa baseline timed out after
+20000.9316 ms / 525 frames with operation 1 WaitingForSafePoint; all
+66 matrix transitions are NOT RUN. Captures and qualification are verified
+inactive, while the worker cleanup flag and ownership lock remain retained.
+Physical DLL/manifest/AIO Build ID cbef73dfc7a1 matches clean PR75 source
+c615779a9, based on main-VR 7c8e3e656. Six journal records are flushed.
+The ledger retains the complete baseline failure, finalized summary and
+comparison with exact field reconstruction and historical-cell preservation.
+The prior relevant main-VR reference contributes 528 audited numeric
+timings; candidate matrix timings are unavailable. See the
+[complete failure report](nvidia-renderscale-tuning-pr75-c615779a9-20260910.md).
+
+Follow-up: the original operation completed after menu protection cleared
+at 16:43:11 local time; the log records Active at 16:43:13.876. This was
+outside the assay and does not change its interrupted result. Automation
+cleanup bookkeeping is fixed and tested in local dev commit 9d87747; the
+installed plugin is unchanged. The ledger preserves the full follow-up,
+and the unchanged comparison was reused with 528 timing cells audited.
+
 ## September 10: PR75 NVIDIA two-pass completion versus main-VR
 
 Run `nvidia-2026-09-10T17-12-40-813Z`, clean PR75 c615779a9 on main-VR
@@ -1063,3 +1559,368 @@ exactly from the canonical ledger; 1,056 paired numeric cells passed audit.
 Prior attempt evidence and historical cells remain preserved. The user
 authorized a PR75 update with means and SE in the style of PR65. See
 [the complete PR75 comparison](pr75-nvidia-mainvr-comparison-20260910.md).
+
+## September 10: PR66 a09e1cc77 NVIDIA two-pass completion
+
+Run `renderscale-tuning-nvidia-2026-09-10T18-15-33-375Z`, clean PR66 a09e1cc77
+on main-VR bf4ae54a7, completed 33+33 transitions in PID 44000. Terminal
+render PASS; Task 2 counts 66/0/0; applicable health MET/MET; reporting
+COMPLETE, captures inactive and journal flushed. Physical DLL, manifest
+and AIO receipt match producer Build ID 9b08428afdaf.
+
+Against the previous measured main-VR reference 7c8e3e656, strict means
+are 793.336/807.126 ms versus 866.009/833.078 ms (-8.392%/-3.115%).
+The reference's fidelity/vendor fallback observations are absent in both
+passes. Row 25 remains slower in both passes. Retries are 9/10; all
+32 selected-stretch transitions recovered. Memory and formal improvement
+assessment remain inconclusive; scene/toolchain, fixture fingerprint and
+tolerance-policy limitations remain explicit.
+
+All summary/comparison fields reconstruct exactly from the canonical
+ledger, including every transition, pass, health gate and memory field.
+All 1,056 paired numeric timing cells passed audit, with historical cells
+preserved. See [the full comparison](nvidia-renderscale-tuning-pr66-a09e1cc77-20260910.md).
+
+## September 10: PR66 compared directly with measured PR75
+
+The user-selected reference is PR75 run `nvidia-2026-09-10T17-12-40-813Z`,
+compiled from c615779a9. Candidate `renderscale-tuning-nvidia-2026-09-10T18-15-33-375Z`
+is PR66 a09e1cc77 on merged PR75/main-VR bf4ae54a7. All three PR66
+patches match the older published 80f83d2dd head under git range-diff;
+the measured and published binaries remain explicitly distinguished.
+
+Mean strict completion is 800.231 ms against
+810.390 ms (-1.254%). Pass deltas are
+-2.801%/+0.316%; health is MET/MET for both builds, with
+66 terminal PASS and Task 2 counts 66/0/0 each. The repeat's stretch
+duration increased. Memory and formal improvement remain inconclusive.
+Every route's means, SE and original pass timings are retained, including
+higher timings. This comparison preserves the prior main-VR comparison.
+
+All 1,056 numeric timing cells passed audit. Both complete summaries,
+the complete PR75 comparison and unrounded statistics reconstruct exactly
+from the canonical ledger; historical cells remain intact. The user
+authorized inclusion in PR66. See [the detailed comparison](pr66-vs-pr75-nvidia-comparison-20260910.md).
+
+## September 10: PR73 NVIDIA completion compared with measured PR66
+
+Run `nvidia-20260910T214350263Z` completed 33+33 transitions in one
+game process from exact PR73 head d9780bb74 on main-VR ef7c366dd.
+Terminal render PASS; Task 2 counts 66/0/0; applicable health MET/MET;
+reporting COMPLETE, captures inactive and journal flushed. The physical
+DLL, adjacent manifest and AIO receipt match Build ID ac724629b68f.
+
+The user-selected reference is measured PR66 a09e1cc77 on bf4ae54a7.
+PR73 averages 870.905 ms against 800.231 ms
+(+8.832%), with pass changes +8.795%/+8.867%.
+Both runs have zero fidelity/vendor-fallback observations. All 31 PR73
+selected-stretch transitions recovered; full-pass stretch duration is
+higher in both passes. Memory and formal improvement-or-neutral assessment
+remain inconclusive, with scene/toolchain, fixture and policy limits retained.
+
+All 1,056 numeric timing cells passed audit. The complete summary,
+comparison and unrounded mean/SE inputs reconstruct exactly from the
+canonical ledger, preserving historical cells. The reporting CSV limit
+was corrected with 20 passing regression tests. The user authorized the
+PR73 description update using PR66's summary, SE and expandable tables.
+See [the full PR73/PR66 comparison](pr73-vs-pr66-nvidia-comparison-20260910.md).
+
+## September 11: PR73 cf1616728 interrupted during transition 26
+
+Run `nvidia-2026-09-11T06-52-05-183Z` retained pass-1 rows 1-25, all terminal
+render PASS and Task 2 counts 25/0/0. Transition 26, DLSS Hoshipa to FSR3
+Hoshipa, lost its entire scenario response; dispatch and outcome remain
+ambiguous. Pass1 27-33 and pass2 1-33 are NOT RUN. The game process was
+subsequently absent; transport receipts do not establish its exit cause.
+Cleanup failed to connect, capture shutdown is unverified, and the
+ownership lock remains retained. The full journal is flushed.
+
+Physical DLL/manifest/AIO identity matches clean PR73 cf1616728 on
+main-VR ef7c366dd, Build ID a8d2e6a5f759. For the same first 25 routes,
+strict mean is 805.170 versus 834.665 ms
+(-3.534%) against measured main-VR 7c8e3e656. Nine retries and
+14 recovered selected-stretch transitions are retained. Full-run health,
+memory and formal improvement remain inconclusive; reporting is incomplete.
+
+Complete available summary/comparison fields reconstruct exactly from
+the canonical ledger, with 728 numeric timing cells audited and historical
+cells preserved. Missing transition, pass-end and repeat evidence remains
+explicit. See [the complete interrupted-run report](nvidia-renderscale-tuning-pr73-cf1616728-20260911.md).
+
+### PR73 cf1616728: crash cause follow-up
+
+The crash log now confirms PID 34484 suffered an execute access violation
+at 08:55:59 local during row26. Renderer logs confirm request27/epoch28
+was applied; this supersedes the initial receipt-only dispatch uncertainty.
+The failure followed memory-relief cleanup and DLSS teardown while engine
+render resources were being recreated from State::Draw. The only runtime
+change since successful c73bae9a7 is cf1616728 pending-drain polling, making
+it a suspected regression; the invalid control-flow target is not yet
+attributed to a specific source defect. Full logs, exact runtime diff and
+findings are preserved in the existing run directory and canonical ledger.
+Original summaries/comparisons remain unchanged; complete reconstruction
+and all 728 timing cells passed the follow-up audit. See the
+[updated report](nvidia-renderscale-tuning-pr73-cf1616728-20260911.md).
+
+## September 11: PR73 readiness-deferral correction
+
+The PR73 follow-up separates proven pre-mutation provider readiness from
+other backend retries. Eligible immutable settings transitions poll after
+one frame and retain proof-driven settling after successful teardown.
+Mixed retries, failures, prior cleanup, memory relief, partial mutation,
+quarantine and recovery retain the existing conservative behavior. All
+waits remain counted, with a separate readiness subset in DevBench metrics.
+See [the readiness contract](vr-submit-input-contracts.md#readiness-during-render-scale-changes).
+
+The prior NVIDIA comparison belongs to compiled source `d9780bb74` and
+remains pre-correction evidence. This implementation update adds no new
+runtime measurement or timing to the comparison ledger. Policy tests and
+universal compiler checks cannot establish post-fix performance or visual
+robustness; the updated source still needs runtime tuning and the separate
+`csx-render-scale-pr-v1` qualification with a matching accepted baseline.
+
+## September 11: restore the measured PR73 readiness implementation
+
+The pending-drain polling follow-up `cf1616728` is reverted at the user's
+request. Runtime source and policy tests return exactly to the successful
+`c73bae9a7` implementation, retaining its original conservative handling of
+memory relief and Backend retries. No timing adjustment is substituted.
+
+The later build crashed in pass 1, transition 26 (DLSS HoshiPa to FSR3
+HoshiPa), after 25 completed transitions. Run
+`nvidia-2026-09-11T06-52-05-183Z` and its crash logs remain preserved locally.
+The exact invalid-pointer cause is unproven; the rollback restores tested
+behavior without claiming the six-frame delay proves resource safety.
+
+The latest performance data in PR73 still belongs to `c73bae9a7`: 66/66
+terminal PASS, Task 2 66/0/0, and applicable health MET in both passes. The
+PR66 comparison and all historical ledger cells remain unchanged. Formal
+improvement assessment remains INCONCLUSIVE, and the separate render-scale
+release qualification is unrun. See [the rollback record](pr73-polling-rollback-20260911.md).
+
+## September 11: PR73 owned provider drain candidate
+
+Source `269bded159c66f4d8b1a45a836078dfa6cdf3241` separates provider
+drain observation from relatch mutation and services explicit settings
+relatches after the owning native stereo call and both matching eye calls
+return. Drain evidence belongs to
+the exact transition, generations and provider resource revision; subsequent
+provider use invalidates it. Readiness can advance only the operation's own
+queued six-frame retry. A still-pending drain at the original six-frame
+deadline returns to the conservative path for that epoch.
+
+The six-frame post-replacement settling guard, its eligibility rules and
+Backend retry history remain unchanged. Provider observation does not
+repeat cleanup or teardown. A completed shared cleanup is retained by its
+owner, while independent retirement fences, memory checks and recovery
+restrictions continue to apply. This avoids the withdrawn attempt's
+unqualified acceleration of the entire destructive transaction.
+
+The owned path applies only where the existing readiness predicate already
+requires Backend handling. Eligible `PreMutationReadiness` requests retain
+their existing path and settling eligibility.
+
+Nine focused portable policy tests pass with MSVC C++23 `/W4 /WX`;
+the tested source/header hashes were stable throughout. Five production
+translation units pass DevBench-disabled universal syntax checks, including
+a final `Upscaling.cpp` recheck after the eligibility correction. Changed
+C++ ranges and new files pass the pinned formatter; scoped hooks pass.
+Whole-file legacy C++ and CMake formatting remains excluded. The clean
+universal Release DLL and DevBench-enabled AIO pass package and producer
+verification; shader tests pass 163 assertions in 1 test case.
+Build ID: `9b8b7f17af7ec7012eb194ad945b45756db313352ef6b2ec84d88a50bef9247b`.
+The archive is ready for manual testing. No automatic deployment, runtime
+or performance result is claimed. Historical comparison ledger cells remain
+unchanged. Separate `csx-render-scale-pr-v1` qualification remains unrun.
+Manual coverage must include None/TAA-to-vendor and menu/native-AA callback
+liveness as well as both passes and transitions 26 and 28.
+See [the candidate contract and exact validation](pr73-owned-drain-manual-test-20260911.md).
+
+## September 11: PR73 269bded15 NVIDIA measurement
+
+Run `nv-pr73-269bded1-mtwz6pez` completed 66 transitions across both NVIDIA passes:
+terminal PASS, Task 2 66/0/0,
+reporting COMPLETE, and applicable health standards
+MET, MET.
+The owned drain path ran 18 times and observed readiness one frame after
+Pending; every observed settling guard still satisfied at age six frames.
+The four earlier long-stretch cases improved, while their previously short
+counterpart passes regressed. Neither comparison establishes an overall
+improvement; see their exact assessments and retained context limits in
+[the measured report](nvidia-renderscale-tuning-pr73-269bded15-20260911.md).
+
+The reporter's unknown-event defect was repaired offline from unchanged
+raw evidence. The complete summary, both comparisons and all numeric
+timings are preserved in the existing ledger; historical cells remain
+unchanged. Owned capture cleanup and journal flush were verified before
+the worker exited. A later external game/MO2 exit remains a separate
+diagnostic with no established cause. Release qualification remains unrun.
+
+## September 11: PR73 exact parent and drain failure coverage
+
+The CI harness repair `e74c5c427` restores the missing drain hook and
+removes a fixture-only shadowed member. Its strict MSVC build and all
+12 focused controller tests passed. Follow-up `fa778f63d` adds eight
+passing controller scenario groups for owned-drain deadline, failure,
+invalidation and cleanup behavior, with scripted external dependencies.
+
+Exact parent `bc077786d` is now built with the candidate's canonical
+toolchain, options, dependencies and shader-cache ABI. Both archives and
+their identities are verified. The operator retains deployment, MO2 and
+game startup; no new runtime measurement or visual qualification was made.
+Existing ledger timings remain unchanged. See the
+[parent and failure validation record](pr73-exact-parent-validation-20260911.md)
+for exact Build IDs, test evidence, warnings and remaining hardware scope.
+
+Future reporting explicitly selects corrected automation `c900f176` and
+finalizes each new candidate from its journal. The installed live worker
+does not finalize reports; choosing a toolkit alone does not regenerate
+an existing summary.
+
+## September 11: PR73 exact parent bc077786d NVIDIA tuning
+
+Run `renderscale-tuning-nvidia-20260911T153415138Z` completed all
+33 + 33 transitions in one process. Terminal counts are 66 PASS /
+0 FAIL; Task 2 counts are 66 PASS / 0 FAIL /
+0 INCONCLUSIVE without an aggregate verdict.
+Both passes meet applicable full-history health checks with zero counted
+failure observations. Reporting is COMPLETE; captures are inactive and
+the journal has zero pending evidence.
+
+The physical DLL, adjacent manifest and AIO receipt match clean Release
+source/renderer bc077786db08637eec8b4c3f718e971e58700a60,
+main-VR base ef7c366dd73989b2b87751c0ef975db7c6fd310f and runtime
+Build ID 0786ca167c161b413ace0cc8ef7d3a76907ef7b36ac4763c8bc3ed9ebb39cfd1. No reporting backport was applied.
+Against user-pinned PR66 a09e1cc77 on main-VR bf4ae54a7, strict means are
+942.965 / 807.993 ms (+18.861% /
++0.107%). Eighteen routes are slower in both passes. Pass 1's largest increase is row
+14 (+825.483 ms);
+pass 2's is row 15
+(+444.418 ms).
+
+Retries are 10 / 9. All
+32 selected stretch
+transitions recovered. Full-pass stretch is 84 /
+80 frames and
+5988.474 /
+5198.280 ms, with no active tail.
+Raw cumulative acceptance remains false: the fixed stretch cutoff is
+DIAGNOSTIC_ONLY and the proven-native terminal gate a CONTRACT_MISMATCH.
+No applicable health gate fails. Change assessment and memory confirmation
+remain separately INCONCLUSIVE; scene/toolchain context differs, fixture
+matching and an explicit tolerance policy are unavailable. Profiler totals
+are unavailable timings because both passes have zero resolved samples.
+Feedback AUTO-20260911-154621563-951D86E2 retains this reporting defect.
+The recorded local-metadata startup deviation added no DevBench call,
+mutation or measured dispatch gap.
+
+Exact ledger reconstruction passed for every summary, comparison and
+supplemental field; all 1,056 paired timing
+cells pass and every historical cell is preserved. Comparison took
+4.431 s; complete ledger reporting took
+17.037 s including comparison. Separate finalization
+elapsed time was not instrumented and is unavailable. See the
+[durable report](nvidia-renderscale-tuning-pr73-parent-bc077786d-20260911.md) for every pass/route comparison, actual
+relatch/strict frames and milliseconds, stretch, retry reasons, gates,
+memory, complete provenance and validation receipts. The
+[canonical ledger](vr-render-scale-ledger.md) retains the full
+results; raw evidence remains local and PR inclusion is the user's decision.
+
+## September 11: PR73 parent bc077786d repeat at 15:54 UTC
+
+Run `renderscale-tuning-nvidia-20260911T155459454Z` completed
+66 / 66 transitions. Terminal counts are 66 PASS /
+0 FAIL; Task 2 counts are 66 / 0 / 0
+(PASS / FAIL / INCONCLUSIVE), without an aggregate Task 2 verdict. Full-history
+health is NO_COUNTED_FAILURES; reporting is COMPLETE.
+Captures are inactive and all evidence is flushed. The physical
+DLL/manifest/AIO receipt matches source `bc077786db08637eec8b4c3f718e971e58700a60`,
+main-VR `ef7c366dd73989b2b87751c0ef975db7c6fd310f` and Build ID
+`0786ca167c161b413ace0cc8ef7d3a76907ef7b36ac4763c8bc3ed9ebb39cfd1`.
+
+Pass 1 strict mean is 905.409 ms: +14.127%
+against pinned PR66 and -3.983% against the previous same-build
+run. Pass 2 strict mean is 998.312 ms: +23.687%
+against pinned PR66 and +23.554% against the previous same-build
+run. Passes remain separate. PR66 assessment is
+INCONCLUSIVE; same-build assessment is INCONCLUSIVE.
+Memory evidence is complete; memory verdict is inconclusive.
+Both complete comparisons retain context limits, every route and
+pass, retries, actual relatch/strict frames and milliseconds, stretch
+and full-history health. Exact ledger reconstruction passed for the
+summary, both comparisons and supplementals; historical cells and
+numeric timing coverage are preserved. Complete ledger reporting
+took 79.393 s. See the
+[durable repeat report](nvidia-renderscale-tuning-pr73-parent-bc077786d-20260911-repeat-155459.md) and
+[canonical ledger](vr-render-scale-ledger.md) for full
+results, diagnostics, provenance and exact validation. The previous
+report remains unchanged; raw evidence remains local.
+
+Pacing remains EXCEEDED: exact QPC cadence beyond
+the five-second server wait reached 344.0369 ms,
+with 3 / 64 intervals above the 250 ms budget. The
+separate client-side maximum was 44.6864 ms.
+Full offending intervals and feedback receipts remain in the
+report and ledger without rewriting runtime classifications.
+
+## September 11: PR73 owned release 554e484e3 NVIDIA tuning
+
+Run `renderscale-tuning-nvidia-2026-09-11T17-09-55-165Z` completed 33 + 33 transitions.
+Terminal counts are 66 PASS / 0 FAIL. Task 2 counts are 66 PASS / 0 FAIL /
+0 INCONCLUSIVE, without an aggregate verdict. Full-history health is
+NO_COUNTED_FAILURES and reporting COMPLETE. All captures are inactive and
+the journal is flushed. Clean Release source/renderer
+`554e484e3957178e2d144bf35266bfdcc0948642`, main-VR base
+`ef7c366dd73989b2b87751c0ef975db7c6fd310f` and Build ID
+`e7e9fa2d13f28c6727b9567741511a418c54113c190db2616bfb2c2ad1158d96` match the physical DLL, manifest and AIO receipt.
+
+Strict means are 815.094 / 768.534 ms, +2.743% / -4.781% versus pinned
+PR66. Each pass has 15 retries and 18 stretch episodes totaling 62 frames;
+stretch durations are 4080.674 / 4085.360 ms. All 32 selected stretch
+transitions recovered. Both applicable health standards are MET; the raw
+fixed stretch/native-target gates retain their diagnostic classifications.
+Comparison assessments and memory classification remain INCONCLUSIVE.
+Profiler totals have no resolved samples; feedback
+AUTO-20260911-154621563-951D86E2 was amended with this run.
+
+PR73 was updated first at the user's request. The complete summary, both
+comparisons and supplemental records reconstruct exactly from the existing
+ledger; all 528 candidate timing cells and 1,056 cells per comparison pass
+the timing audit. Historical cells are preserved. Ledger reporting took
+33.558 seconds and reused both comparisons after hash checks.
+See the [full durable report](nvidia-renderscale-tuning-pr73-554e484e3-20260911.md) for every pass and transition,
+actual strict/relatch frames and times, stretch, retries, owned release,
+memory, complete gates, provenance, limits and evidence links. The
+[canonical ledger](vr-render-scale-ledger.md) retains all data;
+raw evidence remains local.
+
+## September 11: owned completion preserves presentation proof
+
+The [focused PR73 correction](pr73-owned-release-proof-20260911.md)
+separates an exact consumed provider drain from new-target preparation and
+coherent stereo presentation. One observed owned Backend wait can retain
+proof-driven release only after successful reset, precise detached
+retirement accounting and exact physical publication. Raw retry history,
+native stereo mutation boundaries and the six-frame fallback remain.
+Seventeen focused tests passed; live comparison and visual qualification
+remain unrun, so this is not a measured performance or release-readiness
+claim. No runtime ledger cells were added or changed.
+
+The overall integration parent is `ef7c366d`; `bc077786d` is the narrower
+owned-drain change parent. A clean DevBench-enabled `ef7c366d` AIO now
+passes build, shader and archive identity checks with the measured
+candidate's recipe. Its canonical identity differs only in source commit.
+The operator retains deployment, MO2 and game startup.
+
+### PR73 owned-release correction: clean build verification
+
+Source `554e484e3` now has verified universal DevBench ON and OFF builds,
+75/75 CI controller tests, and 163 package shader assertions. The ON AIO
+contains neither FOMOD nor a prebuilt shader cache. Production compile/link
+settings match measured `269bded15` and exact integration parent `ef7c366d`;
+all three archives are preserved for manual comparison. Reporter `9e3a0a9e`
+is integrated into local automation dev. See the exact Build IDs, hashes,
+commands and limitations in
+[the correction report](pr73-owned-release-proof-20260911.md#final-clean-build-evidence).
+No new runtime measurements or visual qualification are claimed, and no
+runtime ledger cells were changed by this offline validation.

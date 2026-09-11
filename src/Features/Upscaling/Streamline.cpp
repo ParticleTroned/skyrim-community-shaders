@@ -24,6 +24,7 @@
 #include "NvidiaBoundedLog.h"
 #include "NvidiaPipelinePolicy.h"
 #include "ReflexPolicy.h"
+#include "VRSubmitColorContract.h"
 
 namespace
 {
@@ -336,6 +337,9 @@ namespace
 
 	bool GetDLSSColorBuffersHDR(ID3D11Resource* a_colorIn)
 	{
+		if (const auto* contract = globals::features::upscaling.GetSubmitColorContractForDispatch())
+			return VRSubmitColorContract::DLSSUsesHDR(*contract);
+
 		D3D11_TEXTURE2D_DESC desc{};
 		if (!TryGetTexture2DDesc(a_colorIn, desc))
 			return true;
@@ -1411,6 +1415,7 @@ bool Streamline::LoadInterposer()
 void Streamline::Shutdown()
 {
 	std::scoped_lock lifecycleLock(lifecycleMutex);
+	InvalidateDLSSRelatchDrain();
 	const auto state = lifecycleState.load(std::memory_order_acquire);
 	if (state == LifecycleState::Uninitialized || state == LifecycleState::ShuttingDown ||
 		state == LifecycleState::ShutdownQuarantined)
@@ -1513,6 +1518,7 @@ bool Streamline::TrySetD3DDevice(ID3D11Device* a_device)
 	if (boundDeviceIdentity == a_device)
 		return true;
 
+	InvalidateDLSSRelatchDrain();
 	const sl::Result result = slSetD3DDevice(a_device);
 	if (result != sl::Result::eOk) {
 		logger::error("[Streamline] D3D device binding failed: {}", magic_enum::enum_name(result));
@@ -1772,6 +1778,13 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 	auto& upscaling = globals::features::upscaling;
 	if (!state)
 		return false;
+	const auto* temporalSnapshot = upscaling.GetSubmitTemporalSnapshotForDispatch();
+	if (temporalSnapshot &&
+		(!temporalSnapshot->valid || eyeIndex >= temporalSnapshot->eyes.size() ||
+			temporalSnapshot->key.frame != static_cast<uint32_t>(*frameToken))) {
+		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::FrameToken, "temporal-snapshot-mismatch", diagnostics);
+		return false;
+	}
 	bool applyCroppedConstantsCorrection = false;
 	float clampedViewportScaleX = std::clamp(viewportScaleX, 1e-4f, 1.0f);
 	float clampedViewportScaleY = std::clamp(viewportScaleY, 1e-4f, 1.0f);
@@ -1787,26 +1800,29 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 	sl::Constants slConstants = {};
 
 	// Calculate aspect ratio for the SINGLE EYE
-	float2 fullOutputSize = upscaling.GetRuntimeResolutionPlan().finalOutputSize;
+	float2 fullOutputSize = temporalSnapshot ?
+	                            float2{ static_cast<float>(temporalSnapshot->key.outputWidth) * 2.0f, static_cast<float>(temporalSnapshot->key.outputHeight) } :
+	                            upscaling.GetRuntimeResolutionPlan().finalOutputSize;
 	if (fullOutputSize.x <= 0.0f || fullOutputSize.y <= 0.0f)
 		fullOutputSize = state->screenSize;
 	float eyeWidth = fullOutputSize.x * (globals::game::isVR ? 0.5f : 1.0f);
 	float eyeHeight = fullOutputSize.y;
 	slConstants.cameraAspectRatio = (eyeWidth * clampedViewportScaleX) / (eyeHeight * clampedViewportScaleY);
 
-	slConstants.cameraFOV = Util::GetVerticalFOVRad();
-	slConstants.cameraNear = *globals::game::cameraNear;
-	slConstants.cameraFar = *globals::game::cameraFar;
+	slConstants.cameraFOV = temporalSnapshot ? temporalSnapshot->scalars.verticalFov : Util::GetVerticalFOVRad();
+	slConstants.cameraNear = temporalSnapshot ? temporalSnapshot->scalars.cameraNear : *globals::game::cameraNear;
+	slConstants.cameraFar = temporalSnapshot ? temporalSnapshot->scalars.cameraFar : *globals::game::cameraFar;
 
-	auto viewMatrix = globals::game::frameBufferCached.GetCameraViewInverse(eyeIndex).Transpose();
-	auto cameraViewToClip = globals::game::frameBufferCached.GetCameraProjUnjittered(eyeIndex).Transpose();
+	auto viewMatrix = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].viewInverse : globals::game::frameBufferCached.GetCameraViewInverse(eyeIndex)).Transpose();
+	auto cameraViewToClip = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].projectionUnjittered : globals::game::frameBufferCached.GetCameraProjUnjittered(eyeIndex)).Transpose();
 
 	slConstants.cameraMotionIncluded = sl::Boolean::eTrue;
 	slConstants.cameraPinholeOffset = { 0.f, 0.f };
 	slConstants.cameraRight = { viewMatrix._11, viewMatrix._12, viewMatrix._13 };
 	slConstants.cameraUp = { viewMatrix._21, viewMatrix._22, viewMatrix._23 };
 	slConstants.cameraFwd = { viewMatrix._31, viewMatrix._32, viewMatrix._33 };
-	slConstants.cameraPos = *(sl::float3*)&globals::game::frameBufferCached.GetCameraPosAdjust(eyeIndex);
+	const auto& cameraPosition = temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].position : globals::game::frameBufferCached.GetCameraPosAdjust(eyeIndex);
+	slConstants.cameraPos = { cameraPosition.x, cameraPosition.y, cameraPosition.z };
 	slConstants.cameraViewToClip = *(sl::float4x4*)&cameraViewToClip;
 	slConstants.depthInverted = sl::Boolean::eFalse;
 
@@ -1840,8 +1856,8 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 		// recalculateCameraMatrices() uses a single static prev-frame slot -- unusable for two viewports.
 		sl::matrixFullInvert(slConstants.clipToCameraView, slConstants.cameraViewToClip);
 
-		auto currViewProj = globals::game::frameBufferCached.GetCameraViewProjUnjittered(eyeIndex).Transpose();
-		auto prevViewProj = globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered(eyeIndex).Transpose();
+		auto currViewProj = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].viewProjectionUnjittered : globals::game::frameBufferCached.GetCameraViewProjUnjittered(eyeIndex)).Transpose();
+		auto prevViewProj = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].previousViewProjectionUnjittered : globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered(eyeIndex)).Transpose();
 
 		sl::float4x4 currViewProjSL = *(sl::float4x4*)&currViewProj;
 		sl::float4x4 prevViewProjSL = *(sl::float4x4*)&prevViewProj;
@@ -1871,7 +1887,7 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 		recalculateCameraMatrices(slConstants);
 	}
 
-	auto jitter = upscaling.jitter;
+	const auto jitter = upscaling.GetJitterForDispatch();
 	slConstants.jitterOffset = { -jitter.x, -jitter.y };
 	const bool requestHistoryReset = upscaling.ShouldResetHistoryThisFrame();
 	slConstants.reset = requestHistoryReset ? sl::Boolean::eTrue : sl::Boolean::eFalse;
@@ -1911,8 +1927,8 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 		signature.viewportScaleYQ = QuantizeDLSSDiagnosticFloat(clampedViewportScaleY);
 		signature.pinholeOffsetXQ = QuantizeDLSSDiagnosticFloat(clampedPinholeOffsetX);
 		signature.pinholeOffsetYQ = QuantizeDLSSDiagnosticFloat(clampedPinholeOffsetY);
-		signature.jitterXQ = QuantizeDLSSDiagnosticFloat(upscaling.jitter.x);
-		signature.jitterYQ = QuantizeDLSSDiagnosticFloat(upscaling.jitter.y);
+		signature.jitterXQ = QuantizeDLSSDiagnosticFloat(jitter.x);
+		signature.jitterYQ = QuantizeDLSSDiagnosticFloat(jitter.y);
 		signature.historyResetRequested = requestHistoryReset;
 		signature.constantsIdentity = ComputeConstantsIdentity(slConstants);
 		return signature;
@@ -2159,6 +2175,7 @@ bool Streamline::SetDLSSOptions(DLSSViewportRole viewportRole, sl::ViewportHandl
 	dlssOptions.preExposure = 1.0f;
 	dlssOptions.sharpness = 0.0f;
 
+	InvalidateDLSSRelatchDrain();
 	if (SL_FAILED(result, slDLSSSetOptions(p_viewport, dlssOptions))) {
 		logger::critical("[Streamline] Could not enable DLSS for viewport {} eye {}: {}",
 			static_cast<uint32_t>(p_viewport),
@@ -2327,6 +2344,7 @@ bool Streamline::CanPrepareVRDLSSViewportWithoutRecycle(
 
 bool Streamline::FreeDLSSViewportResources(sl::ViewportHandle a_viewport, uint32_t a_eyeIndex, bool a_logFailures)
 {
+	InvalidateDLSSRelatchDrain();
 	if (!slDLSSSetOptions || !slFreeResources)
 		return true;
 
@@ -2727,9 +2745,9 @@ void Streamline::ResetDLSSIdleFences()
 		ClearVRDLSSSlotRecycleFence(pendingSlotRecycleIdleFence);
 }
 
-void Streamline::ResetFrameTracking()
+void Streamline::ResetFrameTracking(StreamlineFrameTokenPublication::ResetScope a_scope)
 {
-	frameTokenCoordinator.Reset();
+	frameTokenCoordinator.Reset(a_scope);
 	dlssFrameConstantsCache = {};
 }
 
@@ -2794,6 +2812,12 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 
 	auto& upscaling = globals::features::upscaling;
 	auto state = globals::state;
+	const auto* temporalSnapshot = upscaling.GetSubmitTemporalSnapshotForDispatch();
+	const auto* colorContract = upscaling.GetSubmitColorContractForDispatch();
+	if (colorContract && !VRSubmitColorContract::IsVendorSupported(*colorContract))
+		return false;
+	if (temporalSnapshot && (!temporalSnapshot->valid || !state))
+		return false;
 	const bool vendorLifecycleMutationDeferred =
 		globals::game::isVR &&
 		upscaling.ShouldDeferVRVendorLifecycleMutation();
@@ -2807,7 +2831,9 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	float viewportScaleY = 1.0f;
 	if (state) {
 		const auto& resolutionPlan = upscaling.GetRuntimeResolutionPlan();
-		auto fullOutputSize = resolutionPlan.finalOutputSize;
+		auto fullOutputSize = temporalSnapshot ?
+		                          float2{ static_cast<float>(temporalSnapshot->key.outputWidth) * 2.0f, static_cast<float>(temporalSnapshot->key.outputHeight) } :
+		                          resolutionPlan.finalOutputSize;
 		if (fullOutputSize.x <= 0.0f || fullOutputSize.y <= 0.0f)
 			fullOutputSize = state->screenSize;
 
@@ -2848,7 +2874,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	DLSSDispatchDiagnostics diagnostics{};
 	DLSSDispatchDiagnostics* diagnosticsPtr = &diagnostics;
 	diagnostics.label = label ? label : "DLSS Evaluate";
-	diagnostics.frame = state ? state->frameCount : 0u;
+	diagnostics.frame = temporalSnapshot ? temporalSnapshot->key.frame : (state ? state->frameCount : 0u);
 	diagnostics.eyeIndex = eyeIndex;
 	diagnostics.requestedViewport = requestedViewport;
 	diagnostics.resolvedViewport = vp;
@@ -2872,8 +2898,9 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	diagnostics.reactiveMask = reactiveMask;
 	diagnostics.transparencyMask = transparencyMask;
 	if (collectDLSSDiagnostics) {
-		diagnostics.jitterX = upscaling.jitter.x;
-		diagnostics.jitterY = upscaling.jitter.y;
+		const auto jitter = upscaling.GetJitterForDispatch();
+		diagnostics.jitterX = jitter.x;
+		diagnostics.jitterY = jitter.y;
 		diagnostics.colorBuffersHDR = colorBuffersHDR;
 		diagnostics.presentationUpscalingActive = upscaling.IsPresentationUpscalingActive();
 		diagnostics.renderScaleActive = upscaling.IsVRRenderScaleModeActive();
@@ -3007,6 +3034,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	}
 
 	emitPCLMarker(sl::PCLMarker::eRenderSubmitStart, "DLSS-EvaluateStart", 0);
+	InvalidateDLSSRelatchDrain();
 	sl::Result evalResult = slEvaluateFeature(sl::kFeatureDLSS, *frameToken, inputs, _countof(inputs), context);
 	emitPCLMarker(sl::PCLMarker::eRenderSubmitEnd, "DLSS-EvaluateEnd", 1);
 
@@ -3384,13 +3412,69 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		return evaluated;
 	}
 }
-/**
- * @brief Releases DLSS resources and disables DLSS for the current viewport.
- *
- * Sets the DLSS mode to off and frees all DLSS-related resources associated with the viewport.
- */
-Streamline::DLSSResourceTeardownResult Streamline::DestroyDLSSResources()
+void Streamline::CancelDLSSRelatchDrain() noexcept
 {
+	dlssRelatchDrainProof.Cancel();
+	dlssRelatchDrainFence.Reset();
+	dlssRelatchDrainDevice = nullptr;
+}
+
+void Streamline::InvalidateDLSSRelatchDrain() noexcept
+{
+	CancelDLSSRelatchDrain();
+	dlssRelatchDrainProof.Invalidate();
+}
+
+bool Streamline::IsDLSSRelatchDrainReady(uint64_t a_epoch) const noexcept
+{
+	return globals::game::isVR && dlssRelatchDrainProof.IsReady(a_epoch) &&
+	       dlssRelatchDrainDevice.get() == globals::d3d::device &&
+	       boundDeviceIdentity == dlssRelatchDrainDevice.get() &&
+	       initialized && featureDLSS && slDLSSSetOptions && slFreeResources;
+}
+
+Streamline::DLSSResourceTeardownResult Streamline::PollDLSSRelatchDrain(uint64_t a_epoch)
+{
+	if (!globals::game::isVR || a_epoch == 0 || !globals::d3d::device || !globals::d3d::context ||
+		boundDeviceIdentity != globals::d3d::device ||
+		!initialized || !featureDLSS || !slDLSSSetOptions || !slFreeResources ||
+		FAILED(globals::d3d::device->GetDeviceRemovedReason())) {
+		return DLSSResourceTeardownResult::Failed;
+	}
+	if (!dlssRelatchDrainProof.Matches(a_epoch)) {
+		CancelDLSSRelatchDrain();
+		(void)dlssRelatchDrainProof.Begin(a_epoch);
+		dlssRelatchDrainDevice.copy_from(globals::d3d::device);
+	}
+	if (dlssRelatchDrainDevice.get() != globals::d3d::device)
+		return DLSSResourceTeardownResult::Failed;
+	if (IsDLSSRelatchDrainReady(a_epoch))
+		return DLSSResourceTeardownResult::Ready;
+	if (!HasDLSSResourcesPendingTeardown()) {
+		dlssRelatchDrainProof.MarkReady(a_epoch);
+		return DLSSResourceTeardownResult::Ready;
+	}
+	const auto result = dlssRelatchDrainFence.Poll(globals::d3d::context, "Upscaling::DLSSRelatchDrain");
+	if (result == VRRelatchDrainFence::Result::Ready) {
+		dlssRelatchDrainProof.MarkReady(a_epoch);
+		return DLSSResourceTeardownResult::Ready;
+	}
+	return result == VRRelatchDrainFence::Result::Pending ? DLSSResourceTeardownResult::Pending : DLSSResourceTeardownResult::Failed;
+}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+void Streamline::CaptureDLSSRelatchDrainTelemetry(VRRenderScaleRetryTelemetry::Event& a_event) const noexcept
+{
+	a_event.drainFences[3] = dlssRelatchDrainFence.GetObservation();
+	a_event.drainFences[3].role = VRRenderScaleRetryTelemetry::DrainFenceRole::DLSSHost;
+}
+#endif
+
+/** Releases DLSS resources after consuming the exact drain proof or the legacy idle fence. */
+Streamline::DLSSResourceTeardownResult Streamline::DestroyDLSSResources(uint64_t a_drainEpoch)
+{
+	if (a_drainEpoch != 0 && !IsDLSSRelatchDrainReady(a_drainEpoch))
+		return DLSSResourceTeardownResult::Pending;
 	const bool hasTrackedViewportOwnership = [&]() {
 		if (activeDLSSViewportResourcesAllocated[0] ||
 			activeDLSSViewportResourcesAllocated[1] ||
@@ -3426,7 +3510,7 @@ Streamline::DLSSResourceTeardownResult Streamline::DestroyDLSSResources()
 		return DLSSResourceTeardownResult::Ready;
 	}
 
-	if (auto context = globals::d3d::context) {
+	if (auto context = globals::d3d::context; context && a_drainEpoch == 0) {
 		const auto idleFenceResult = BeginOrPollD3D11IdleFence(context, pendingDLSSResourceFreeIdleFence, "DLSS resource free");
 		if (idleFenceResult == D3D11IdleFenceResult::Pending) {
 			static bool loggedDLSSResourceFreePending = false;
@@ -3442,6 +3526,7 @@ Streamline::DLSSResourceTeardownResult Streamline::DestroyDLSSResources()
 		ResetDLSSIdleFences();
 	}
 
+	InvalidateDLSSRelatchDrain();
 	bool activeViewportResourcesFreed = true;
 	if (activeDLSSViewportResourcesAllocated[0]) {
 		const bool leftFreed = FreeDLSSViewportResources(viewport, 0, true);

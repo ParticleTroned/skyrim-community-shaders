@@ -100,8 +100,17 @@ try {
                 throw "The imported Visual Studio environment is incomplete."
             }
 
-            foreach ($name in @("VCToolsInstallDir", "INCLUDE", "LIB", "CSX_VSDEVCMD")) {
-                [Environment]::SetEnvironmentVariable($name, $null, "Process")
+            $env:CSX_MSVC_TEST_MARKER = "retained"
+            if ($null -ne (Initialize-CsxMsvcEnvironment -Required)) {
+                throw "An initialized MSVC environment must be reused."
+            }
+            Assert-Equal -Expected "retained" -Actual $env:CSX_MSVC_TEST_MARKER `
+                -Message "The active Visual Studio environment was initialized again."
+
+            # Restore the complete inherited toolchain before the real probe;
+            # partial clearing mixes another installation with active VS state.
+            foreach ($entry in $savedEnvironment.GetEnumerator()) {
+                [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, "Process")
             }
 
             $actualVsDevCmd = Initialize-CsxMsvcEnvironment -Required

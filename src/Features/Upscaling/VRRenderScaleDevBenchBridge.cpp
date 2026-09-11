@@ -1742,6 +1742,7 @@ namespace
 														{ "pressureDeferrals", controller.metrics.current.pressureDeferrals },
 														{ "retirementDeferrals", controller.metrics.current.retirementDeferrals },
 														{ "backendDeferrals", controller.metrics.current.backendDeferrals },
+														{ "readinessDeferrals", controller.metrics.current.readinessDeferrals },
 														{ "failures", controller.metrics.current.failures },
 														{ "fidelityMismatches", controller.metrics.current.fidelityMismatches },
 														{ "memoryTrimCount", controller.metrics.current.memoryTrimCount },
@@ -7505,10 +7506,41 @@ namespace VRRenderScaleDevBenchBridge
 				"eye in a runtime stereo batch; retries identify another attempt "
 				"with the same proven current-eye identity, including full-eye "
 				"fallback after foveated dispatch.";
+			const std::string readinessRetryDescription =
+				" Render-scale metrics expose readinessDeferrals as the subset of "
+				"backendDeferrals proven to wait before provider/shared-resource "
+				"release. These remain included in retries; retryTelemetry labels "
+				"them PreMutationReadiness. Only otherwise healthy immutable "
+				"settings transitions poll these waits each frame and retain "
+				"proof-driven settling; partial teardown and recovery stay guarded.";
+			const std::string ownedDrainDescription =
+				" Owned settings-drain waits remain included in Backend retry totals. "
+				"Only a complete healthy owned-release certificate permits proof-driven "
+				"release; unproven operations retain the six-frame guard. retryTelemetry records RelatchDrainBegin, "
+				"RelatchDrainPending, RelatchDrainReady, RelatchDrainInvalidated, "
+				"RelatchCommitBegin and RelatchSharedCleanup with request ownership "
+				"and frame/QPC observations. Polling performs no provider teardown; "
+				"commit requires the completed native stereo boundary. Additive "
+				"ownedRelease schema v1 binds source/target generations, required "
+				"providers, revisions, ticket serials and opaque device/context/queue "
+				"identities. drainFences records existing issue and observed-ready QPC "
+				"timestamps without extra GPU work. OwnedReleaseConsumed, "
+				"OwnedTargetPublished, OwnedProviderPrepared and OwnedReleaseEligibility "
+				"separate historical drain consumption, target publication/preparation "
+				"and scoped eligibility. Guard-exemption eligibility does not enable "
+				"vendor dispatch: target preparation and coherent stereo remain required "
+				"by promotion. Obligation bits 1,2,4,8,16,32 identify "
+				"old-provider drain, completed reset, owned detached retirement, physical "
+				"publication, target-provider preparation and coherent stereo. Owned "
+				"detached retirement is not a claim that cleanup-only fences completed; "
+				"the existing cleanup milestone reports that debt separately. "
+				"blockingCleanupReadyQpc observes when guard eligibility verifies "
+				"blocking ownership obligations, not cleanup-only fence completion. Missing "
+				"timestamps/identities are null; opaque identities are decimal strings.";
 			descriptor["description"] =
-				descriptor["description"].get<std::string>() + submitFreshnessDescription;
+				descriptor["description"].get<std::string>() + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription;
 			descriptor["inputSchema"]["properties"]["action"]["description"] =
-				"Select a diagnostic or control action." + submitFreshnessDescription;
+				"Select a diagnostic or control action." + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription;
 			descriptor["inputSchema"]["properties"]["milestone"] = {
 				{ "type", "string" },
 				{ "enum", json::array({ "strict", "presentation", "cleanup" }) },

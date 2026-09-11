@@ -1,6 +1,8 @@
 #include "FidelityFX.h"
 #include "FSRHostLifecyclePolicy.h"
 #include "FSRRuntimeLifecyclePolicy.h"
+#include "VRSubmitColorContract.h"
+#include "VRSubmitTemporalSnapshot.h"
 
 #include <algorithm>
 #include <array>
@@ -35,6 +37,29 @@ namespace
 	constexpr uint32_t kNvidiaVendorId = 0x10DEu;
 
 	void* s_fidelityFxDllDirectoryCookie = nullptr;
+
+	bool HasSupportedSubmitColorContract()
+	{
+		const auto* contract = globals::features::upscaling.GetSubmitColorContractForDispatch();
+		return !contract || VRSubmitColorContract::IsVendorSupported(*contract);
+	}
+
+	VRSubmitTemporalSnapshot::Scalars GetDispatchTemporalParameters()
+	{
+		const auto& upscaling = globals::features::upscaling;
+		if (const auto* snapshot = upscaling.GetSubmitTemporalSnapshotForDispatch())
+			return snapshot->scalars;
+
+		return {
+			.jitterX = upscaling.jitter.x,
+			.jitterY = upscaling.jitter.y,
+			.cameraNear = *globals::game::cameraNear,
+			.cameraFar = *globals::game::cameraFar,
+			.verticalFov = Util::GetVerticalFOVRad(),
+			.frameTimeMilliseconds = *globals::game::deltaTime * 1000.0f,
+			.historyReset = upscaling.ShouldResetHistoryThisFrame(),
+		};
+	}
 
 	bool ShouldEmitFidelityFXDiagLogs()
 	{
@@ -884,6 +909,7 @@ bool FidelityFX::IsRuntimeUpscalerOwnershipDetached() const noexcept
 
 void FidelityFX::QuarantineHostFSRState(const char* a_reason)
 {
+	InvalidateFSRRelatchDrain();
 	if (fsrHostStateQuarantined)
 		return;
 
@@ -941,6 +967,7 @@ FidelityFX::LifecycleResult FidelityFX::RetireRuntimeUpscalerWhileHostFSRQuarant
 
 FidelityFX::LifecycleResult FidelityFX::DestroyTrackedHostFSRContexts(const char* a_operation)
 {
+	InvalidateFSRRelatchDrain();
 	if (fsrHostStateQuarantined)
 		return GetQuarantinedHostFSRResult(a_operation);
 
@@ -984,6 +1011,7 @@ FidelityFX::LifecycleResult FidelityFX::DestroyTrackedHostFSRContexts(const char
 
 FidelityFX::LifecycleResult FidelityFX::ReleaseHostFSRResources()
 {
+	InvalidateFSRRelatchDrain();
 	const bool anyValidContext =
 		std::ranges::any_of(fsrContextValid, [](bool a_valid) { return a_valid; });
 	const bool anyIndeterminateContext =
@@ -1213,6 +1241,7 @@ FidelityFX::RuntimeUpscalerDispatchSnapshot FidelityFX::GetRuntimeUpscalerDispat
 
 void FidelityFX::ResetRuntimeUpscalerTracking(bool a_invalidateProviderCache)
 {
+	InvalidateFSRRelatchDrain();
 	if (IsRuntimeUpscalerOwnershipDetached())
 		return;
 
@@ -1251,6 +1280,7 @@ void FidelityFX::LatchRuntimeFsr4Failure()
 
 void FidelityFX::QuarantineRuntimeUpscalerForSession(const char* a_reason)
 {
+	InvalidateFSRRelatchDrain();
 	runtimeUpscalerFailureLatched = true;
 	if (runtimeUpscalerSessionQuarantined)
 		return;
@@ -1720,6 +1750,7 @@ FidelityFX::LifecycleResult FidelityFX::CreateFSRResources()
 
 	auto fsrDevice = ffxGetDeviceDX11_Fsr31(globals::d3d::device);
 
+	InvalidateFSRRelatchDrain();
 	const size_t scratchBufferSize = ffxGetScratchMemorySizeDX11(numContexts);
 	fsrScratchBuffer = calloc(scratchBufferSize, 1);
 	if (!fsrScratchBuffer) {
@@ -1784,7 +1815,9 @@ FidelityFX::LifecycleResult FidelityFX::CreateFSRResources()
 		contextDescription.maxUpscaleSize.height = displayHeight;
 		contextDescription.displaySize.width = displayWidth;
 		contextDescription.displaySize.height = displayHeight;
-		contextDescription.flags = FFX_FSR3_ENABLE_UPSCALING_ONLY | FFX_FSR3_ENABLE_AUTO_EXPOSURE | FFX_FSR3_ENABLE_HIGH_DYNAMIC_RANGE;
+		contextDescription.flags = FFX_FSR3_ENABLE_UPSCALING_ONLY | FFX_FSR3_ENABLE_AUTO_EXPOSURE;
+		if constexpr (VRSubmitColorContract::kLegacyFsrHighDynamicRange)
+			contextDescription.flags |= FFX_FSR3_ENABLE_HIGH_DYNAMIC_RANGE;
 		contextDescription.backendInterfaceUpscaling = fsrInterface;
 
 		fsrContext[i] = {};
@@ -1855,6 +1888,7 @@ FidelityFX::LifecycleResult FidelityFX::DestroyRuntimeUpscalerContexts(bool a_wa
 		if (!runtimeUpscalerContexts[i])
 			continue;
 
+		InvalidateFSRRelatchDrain();
 		const auto retainedContext = runtimeUpscalerContexts[i];
 		bool destroyCrashed = false;
 		const auto destroyResult = DestroyRuntimeUpscalerContextProtected(
@@ -1889,6 +1923,7 @@ FidelityFX::LifecycleResult FidelityFX::DestroyRuntimeUpscalerContexts(bool a_wa
 
 void FidelityFX::ResetRuntimeCommandContexts()
 {
+	InvalidateFSRRelatchDrain();
 	for (auto& commandContext : runtimeCommandContexts) {
 		commandContext.commandList = nullptr;
 		commandContext.commandAllocator = nullptr;
@@ -1924,6 +1959,7 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeCommandContexts()
 			if (commandContext.commandAllocator && commandContext.commandList)
 				continue;
 
+			InvalidateFSRRelatchDrain();
 			winrt::com_ptr<ID3D12CommandAllocator> commandAllocator;
 			winrt::com_ptr<ID3D12GraphicsCommandList4> commandList;
 			DX::ThrowIfFailed(swapChain.d3d12Device->CreateCommandAllocator(
@@ -2015,6 +2051,7 @@ FidelityFX::LifecycleResult FidelityFX::DestroyRuntimeUpscalerResources(bool a_w
 			return idleResult;
 	}
 
+	InvalidateFSRRelatchDrain();
 	ResetOwnedResourceArray(runtimeColorShared);
 	ResetOwnedResourceArray(runtimeDepthShared);
 	ResetOwnedResourceArray(runtimeMotionShared);
@@ -2467,8 +2504,146 @@ bool FidelityFX::HasFSRResourcesPendingTeardown() const
 	       (!IsRuntimeUpscalerOwnershipDetached() && HasRuntimeUpscalerResources());
 }
 
-FidelityFX::LifecycleResult FidelityFX::PollFSRResourceTeardownReady(const char* a_reason)
+void FidelityFX::CancelFSRRelatchDrain() noexcept
 {
+	fsrRelatchDrainProof.Cancel();
+	fsrRelatchDrainHostFence.Reset();
+	fsrRelatchDrainInteropFence.Reset();
+	fsrRelatchDrainDevice = nullptr;
+	fsrRelatchDrainRuntimeFence = nullptr;
+	fsrRelatchDrainRuntimeQueue = nullptr;
+	fsrRelatchDrainRuntimeFenceValue = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	fsrRelatchDrainRuntimeObservation = {};
+#endif
+}
+
+void FidelityFX::InvalidateFSRRelatchDrain() noexcept
+{
+	CancelFSRRelatchDrain();
+	fsrRelatchDrainProof.Invalidate();
+}
+
+bool FidelityFX::IsFSRRelatchDrainReady(uint64_t a_epoch) const noexcept
+{
+	const auto& swapChain = globals::features::upscaling.dx12SwapChain;
+	return globals::game::isVR && fsrRelatchDrainProof.IsReady(a_epoch) &&
+	       fsrRelatchDrainDevice.get() == globals::d3d::device &&
+	       fsrContextCount <= std::size(fsrContext) &&
+	       (fsrScratchBuffer || !std::ranges::any_of(fsrContextValid, [](bool a_value) { return a_value; })) &&
+	       !fsrHostStateQuarantined && !runtimeUpscalerSessionQuarantined &&
+	       !runtimeUpscalerFailureLatched && !IsRuntimeUpscalerOwnershipDetached() &&
+	       !std::ranges::any_of(fsrContextIndeterminate, [](bool a_value) { return a_value; }) &&
+	       !std::ranges::any_of(runtimeUpscalerContextIndeterminate, [](bool a_value) { return a_value; }) &&
+	       (!fsrRelatchDrainRuntimeFence ||
+			   (fsrRelatchDrainRuntimeFence.get() == runtimeD3D12Fence.get() &&
+				   fsrRelatchDrainRuntimeQueue.get() == swapChain.commandQueue.get()));
+}
+
+FidelityFX::LifecycleResult FidelityFX::PollFSRRelatchDrain(uint64_t a_epoch)
+{
+	if (!globals::game::isVR || a_epoch == 0 || !globals::d3d::device || !globals::d3d::context)
+		return LifecycleResult::Failed;
+	if (FAILED(globals::d3d::device->GetDeviceRemovedReason()))
+		return LifecycleResult::DeviceLost;
+	if (IsRuntimeUpscalerOwnershipDetached())
+		return LifecycleResult::RuntimeDeviceLost;
+	if (fsrHostStateQuarantined || runtimeUpscalerSessionQuarantined || runtimeUpscalerFailureLatched ||
+		fsrContextCount > std::size(fsrContext) ||
+		(!fsrScratchBuffer && std::ranges::any_of(fsrContextValid, [](bool a_value) { return a_value; })) ||
+		std::ranges::any_of(fsrContextIndeterminate, [](bool a_value) { return a_value; }) ||
+		std::ranges::any_of(runtimeUpscalerContextIndeterminate, [](bool a_value) { return a_value; })) {
+		return LifecycleResult::Failed;
+	}
+	if (!fsrRelatchDrainProof.Matches(a_epoch)) {
+		CancelFSRRelatchDrain();
+		(void)fsrRelatchDrainProof.Begin(a_epoch);
+		fsrRelatchDrainDevice.copy_from(globals::d3d::device);
+	}
+	if (fsrRelatchDrainDevice.get() != globals::d3d::device)
+		return LifecycleResult::Failed;
+	if (IsFSRRelatchDrainReady(a_epoch))
+		return LifecycleResult::Ready;
+	if (!HasFSRResourcesPendingTeardown()) {
+		fsrRelatchDrainProof.MarkReady(a_epoch);
+		return LifecycleResult::Ready;
+	}
+
+	const auto hostResult = fsrRelatchDrainHostFence.Poll(globals::d3d::context, "Upscaling::FSRRelatchDrain");
+	if (hostResult == VRRelatchDrainFence::Result::Failed)
+		return LifecycleResult::Failed;
+	if (HasRuntimeUpscalerResources()) {
+		auto& swapChain = globals::features::upscaling.dx12SwapChain;
+		if (!swapChain.d3d11Context || !swapChain.d3d12Device || !swapChain.commandQueue || !runtimeD3D12Fence)
+			return LifecycleResult::Failed;
+		if (FAILED(swapChain.d3d12Device->GetDeviceRemovedReason()))
+			return LifecycleResult::RuntimeDeviceLost;
+		const auto interopResult = fsrRelatchDrainInteropFence.Poll(swapChain.d3d11Context.get(), "Upscaling::FSRRelatchInteropDrain");
+		if (interopResult == VRRelatchDrainFence::Result::Failed)
+			return LifecycleResult::Failed;
+		if (hostResult == VRRelatchDrainFence::Result::Pending || interopResult == VRRelatchDrainFence::Result::Pending)
+			return LifecycleResult::Pending;
+		if (fsrRelatchDrainRuntimeFenceValue == 0) {
+			if (runtimeFenceValue == 0 || runtimeFenceValue == std::numeric_limits<uint64_t>::max())
+				return LifecycleResult::Failed;
+			fsrRelatchDrainRuntimeFence = runtimeD3D12Fence;
+			fsrRelatchDrainRuntimeQueue = swapChain.commandQueue;
+			fsrRelatchDrainRuntimeFenceValue = runtimeFenceValue++;
+			if (FAILED(fsrRelatchDrainRuntimeQueue->Signal(fsrRelatchDrainRuntimeFence.get(), fsrRelatchDrainRuntimeFenceValue))) {
+				CancelFSRRelatchDrain();
+				return LifecycleResult::Failed;
+			}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			LARGE_INTEGER issued{};
+			QueryPerformanceCounter(&issued);
+			fsrRelatchDrainRuntimeObservation = {
+				.observed = true,
+				.role = VRRenderScaleRetryTelemetry::DrainFenceRole::FSRRuntime,
+				.result = VRRenderScaleRetryTelemetry::FenceResult::Pending,
+				.issueQpc = static_cast<uint64_t>(issued.QuadPart),
+				.deviceIdentity = reinterpret_cast<uintptr_t>(swapChain.d3d12Device.get()),
+				.queueIdentity = reinterpret_cast<uintptr_t>(fsrRelatchDrainRuntimeQueue.get()),
+				.fenceIdentity = reinterpret_cast<uintptr_t>(fsrRelatchDrainRuntimeFence.get()),
+				.fenceValue = fsrRelatchDrainRuntimeFenceValue
+			};
+#endif
+		}
+		if (fsrRelatchDrainRuntimeFence.get() != runtimeD3D12Fence.get() ||
+			fsrRelatchDrainRuntimeQueue.get() != swapChain.commandQueue.get())
+			return LifecycleResult::Failed;
+		const uint64_t completedValue = fsrRelatchDrainRuntimeFence->GetCompletedValue();
+		if (completedValue == std::numeric_limits<uint64_t>::max())
+			return LifecycleResult::RuntimeDeviceLost;
+		if (completedValue < fsrRelatchDrainRuntimeFenceValue)
+			return LifecycleResult::Pending;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		LARGE_INTEGER observedReady{};
+		QueryPerformanceCounter(&observedReady);
+		fsrRelatchDrainRuntimeObservation.readyQpc = static_cast<uint64_t>(observedReady.QuadPart);
+		fsrRelatchDrainRuntimeObservation.result = VRRenderScaleRetryTelemetry::FenceResult::Ready;
+#endif
+	} else if (hostResult == VRRelatchDrainFence::Result::Pending) {
+		return LifecycleResult::Pending;
+	}
+	fsrRelatchDrainProof.MarkReady(a_epoch);
+	return LifecycleResult::Ready;
+}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+void FidelityFX::CaptureFSRRelatchDrainTelemetry(VRRenderScaleRetryTelemetry::Event& a_event) const noexcept
+{
+	a_event.drainFences[0] = fsrRelatchDrainHostFence.GetObservation();
+	a_event.drainFences[0].role = VRRenderScaleRetryTelemetry::DrainFenceRole::FSRHost;
+	a_event.drainFences[1] = fsrRelatchDrainInteropFence.GetObservation();
+	a_event.drainFences[1].role = VRRenderScaleRetryTelemetry::DrainFenceRole::FSRInterop;
+	a_event.drainFences[2] = fsrRelatchDrainRuntimeObservation;
+}
+#endif
+
+FidelityFX::LifecycleResult FidelityFX::PollFSRResourceTeardownReady(const char* a_reason, uint64_t a_drainEpoch)
+{
+	if (a_drainEpoch != 0)
+		return IsFSRRelatchDrainReady(a_drainEpoch) ? LifecycleResult::Ready : LifecycleResult::Pending;
 	const char* reason = a_reason && *a_reason ? a_reason : "FSR resource teardown";
 	if (fsrHostStateQuarantined)
 		return RetireRuntimeUpscalerWhileHostFSRQuarantined(reason);
@@ -2579,8 +2754,10 @@ FidelityFX::LifecycleResult FidelityFX::RetireQuarantinedRuntimeUpscalerResource
 	return LifecycleResult::Ready;
 }
 
-FidelityFX::LifecycleResult FidelityFX::DestroyFSRResources(bool a_waitForIdle)
+FidelityFX::LifecycleResult FidelityFX::DestroyFSRResources(bool a_waitForIdle, uint64_t a_drainEpoch)
 {
+	if (a_drainEpoch != 0 && !IsFSRRelatchDrainReady(a_drainEpoch))
+		return LifecycleResult::Pending;
 	const bool emitDiagLogs = ShouldEmitFidelityFXDiagLogs();
 	if (emitDiagLogs) {
 		logger::debug(
@@ -2606,12 +2783,13 @@ FidelityFX::LifecycleResult FidelityFX::DestroyFSRResources(bool a_waitForIdle)
 		return GetQuarantinedHostFSRResult("FSR resource teardown");
 	}
 
-	if (a_waitForIdle) {
+	if (a_waitForIdle && a_drainEpoch == 0) {
 		const auto idleResult = PollFSRResourceTeardownReady("FSR resource teardown");
 		if (idleResult != LifecycleResult::Ready)
 			return idleResult;
 	}
 
+	InvalidateFSRRelatchDrain();
 	ResetFSRIdleFence();
 
 	if (fsrContextCount > std::size(fsrContext)) {
@@ -2950,6 +3128,7 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerInterop()
 		}
 
 		if (!runtimeD3D12Fence || !runtimeD3D11Fence) {
+			InvalidateFSRRelatchDrain();
 			winrt::handle sharedFenceHandle;
 			DX::ThrowIfFailed(swapChain.d3d12Device->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(&runtimeD3D12Fence)));
 			DX::ThrowIfFailed(swapChain.d3d12Device->CreateSharedHandle(runtimeD3D12Fence.get(), nullptr, GENERIC_ALL, nullptr, sharedFenceHandle.put()));
@@ -3069,7 +3248,9 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a
 
 	for (uint32_t i = 0; i < a_contextCount; ++i) {
 		ffx::CreateContextDescUpscale createDesc{};
-		createDesc.flags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
+		createDesc.flags = FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
+		if constexpr (VRSubmitColorContract::kLegacyFsrHighDynamicRange)
+			createDesc.flags |= FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE;
 		createDesc.maxRenderSize = { a_fullRenderWidth, a_fullRenderHeight };
 		createDesc.maxUpscaleSize = { a_fullDisplayWidth, a_fullDisplayHeight };
 		createDesc.fpMessage = RuntimeFfxMessage;
@@ -3099,6 +3280,7 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a
 			attempt.attempted = true;
 			bool createCrashed = false;
 			bool ownershipIndeterminate = false;
+			InvalidateFSRRelatchDrain();
 			attempt.result = TryCreateRuntimeUpscalerContext(
 				runtimeUpscalerContexts[i],
 				attempt.attempt,
@@ -3280,6 +3462,7 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerSharedResources(uin
 	RuntimeWrappedResources newTransparencyShared{};
 	RuntimeWrappedResources newOutputShared{};
 	try {
+		InvalidateFSRRelatchDrain();
 		for (uint32_t i = 0; i < a_contextCount; ++i) {
 			newColorShared[i] = std::make_unique<WrappedResource>(desiredColorDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
 			newDepthShared[i] = std::make_unique<WrappedResource>(desiredDepthDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
@@ -3393,6 +3576,8 @@ bool FidelityFX::CanDispatchHostFallbackForRegions(
 
 FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(std::span<const UpscaleRegionParameters> a_regions)
 {
+	if (!HasSupportedSubmitColorContract())
+		return LifecycleResult::Failed;
 	if (a_regions.empty() || a_regions.size() > std::size(runtimeUpscalerContexts))
 		return LifecycleResult::Failed;
 
@@ -3548,6 +3733,7 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(std::span<c
 	try {
 		// From this point onward the runtime shared resources can be referenced by
 		// newly queued cross-API work, so an earlier teardown proof is consumed.
+		InvalidateFSRRelatchDrain();
 		runtimeUpscalerIdleProofValid = false;
 		// FFX permits oversized resources but defines input work by renderSize.
 		auto copyIntoShared = [&](ID3D11Resource* a_source, const std::unique_ptr<WrappedResource>& a_destination, uint32_t a_width, uint32_t a_height) {
@@ -3608,6 +3794,7 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(std::span<c
 		}
 		commandList->ResourceBarrier(barrierCount, beginBarriers.data());
 
+		const auto temporal = GetDispatchTemporalParameters();
 		const uint32_t resumeResetCount = runtimeResumeResetDispatchesRemaining;
 		dispatchOk = true;
 		for (size_t regionIndex = 0; regionIndex < a_regions.size(); ++regionIndex) {
@@ -3622,7 +3809,7 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(std::span<c
 			dispatchParameters.reactive = ffxApiGetResourceDX12(runtimeReactiveShared[contextIndex]->resource.get(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
 			dispatchParameters.transparencyAndComposition = ffxApiGetResourceDX12(runtimeTransparencyShared[contextIndex]->resource.get(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
 			dispatchParameters.output = ffxApiGetResourceDX12(runtimeOutputShared[contextIndex]->resource.get(), FFX_API_RESOURCE_STATE_UNORDERED_ACCESS, FFX_API_RESOURCE_USAGE_UAV);
-			dispatchParameters.jitterOffset = { -upscaling.jitter.x, -upscaling.jitter.y };
+			dispatchParameters.jitterOffset = { -temporal.jitterX, -temporal.jitterY };
 			dispatchParameters.motionVectorScale = { region.motionVectorScaleX, region.motionVectorScaleY };
 			dispatchParameters.renderSize = { region.renderWidth, region.renderHeight };
 			dispatchParameters.upscaleSize = { region.displayWidth, region.displayHeight };
@@ -3630,12 +3817,12 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(std::span<c
 			dispatchParameters.enableSharpening = sharpening.enabled;
 			dispatchParameters.sharpness = sharpening.sharpness;
 			LogFSRSharpeningDispatch(sharpening, "runtime");
-			dispatchParameters.frameTimeDelta = *globals::game::deltaTime * 1000.f;
+			dispatchParameters.frameTimeDelta = temporal.frameTimeMilliseconds;
 			dispatchParameters.preExposure = 1.0f;
 			dispatchParameters.reset = upscaling.ShouldResetHistoryThisFrame() || regionIndex < resumeResetCount;
-			dispatchParameters.cameraNear = *globals::game::cameraNear;
-			dispatchParameters.cameraFar = *globals::game::cameraFar;
-			dispatchParameters.cameraFovAngleVertical = Util::GetVerticalFOVRad();
+			dispatchParameters.cameraNear = temporal.cameraNear;
+			dispatchParameters.cameraFar = temporal.cameraFar;
+			dispatchParameters.cameraFovAngleVertical = temporal.verticalFov;
 			dispatchParameters.viewSpaceToMetersFactor = 0.01428222656f;
 			dispatchParameters.flags = 0;
 
@@ -3726,6 +3913,8 @@ FidelityFX::UpscaleResult FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3
 {
 	if (a_usedRuntimeUpscaler)
 		*a_usedRuntimeUpscaler = false;
+	if (!HasSupportedSubmitColorContract())
+		return UpscaleResult::Failed;
 	if (fsrHostStateQuarantined ||
 		std::ranges::any_of(fsrContextIndeterminate, [](bool a_indeterminate) { return a_indeterminate; })) {
 		return UpscaleResult::Failed;
@@ -3849,7 +4038,7 @@ FidelityFX::UpscaleResult FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3
 	if (!context)
 		return UpscaleResult::Failed;
 
-	auto jitter = upscaling.jitter;
+	const auto temporal = GetDispatchTemporalParameters();
 	const auto fallbackFramePath =
 		runtimePlan.runtimeRequested ? RuntimeUpscalerFramePath::kHostFsr31Fallback : RuntimeUpscalerFramePath::kHostFsr31;
 	RecordRuntimeUpscalerFramePath(fallbackFramePath);
@@ -3872,25 +4061,26 @@ FidelityFX::UpscaleResult FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3
 	dispatchParameters.renderSize.height = a_renderHeight;
 	dispatchParameters.upscaleSize.width = a_displayWidth;
 	dispatchParameters.upscaleSize.height = a_displayHeight;
-	dispatchParameters.jitterOffset.x = -jitter.x;
-	dispatchParameters.jitterOffset.y = -jitter.y;
-	dispatchParameters.frameTimeDelta = *globals::game::deltaTime * 1000.f;
-	dispatchParameters.cameraFar = *globals::game::cameraFar;
-	dispatchParameters.cameraNear = *globals::game::cameraNear;
+	dispatchParameters.jitterOffset.x = -temporal.jitterX;
+	dispatchParameters.jitterOffset.y = -temporal.jitterY;
+	dispatchParameters.frameTimeDelta = temporal.frameTimeMilliseconds;
+	dispatchParameters.cameraFar = temporal.cameraFar;
+	dispatchParameters.cameraNear = temporal.cameraNear;
 	const auto sharpening = ResolveFSRSharpeningSettings(a_sharpness);
 	dispatchParameters.enableSharpening = sharpening.enabled;
 	dispatchParameters.sharpness = sharpening.sharpness;
 	LogFSRSharpeningDispatch(sharpening, "host");
-	dispatchParameters.cameraFovAngleVertical = Util::GetVerticalFOVRad();
+	dispatchParameters.cameraFovAngleVertical = temporal.verticalFov;
 	dispatchParameters.viewSpaceToMetersFactor = 0.01428222656f;
 	const bool runtimeFallbackReset = runtimePlan.runtimeRequested && runtimeFallbackResetDispatchesRemaining > 0;
 	if (runtimeFallbackReset)
 		runtimeFallbackResetDispatchesRemaining--;
-	dispatchParameters.reset = globals::features::upscaling.ShouldResetHistoryThisFrame() || runtimeFallbackReset;
+	dispatchParameters.reset = upscaling.ShouldResetHistoryThisFrame() || runtimeFallbackReset;
 	dispatchParameters.preExposure = 1.0f;
 	dispatchParameters.flags = 0;
 
 	bool hostDispatchCrashed = false;
+	InvalidateFSRRelatchDrain();
 	const bool dispatchOK = DispatchHostFsr3UpscaleProtected(fsrContext[a_contextIndex], dispatchParameters, hostDispatchCrashed);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	if (dispatchOK)
@@ -3916,6 +4106,8 @@ FidelityFX::UpscaleResult FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3
 FidelityFX::StereoUpscaleResult FidelityFX::UpscaleStereoRegions(
 	const std::array<UpscaleRegionParameters, 2>& a_regions)
 {
+	if (!HasSupportedSubmitColorContract())
+		return StereoUpscaleResult::Failed;
 	if (fsrHostStateQuarantined ||
 		std::ranges::any_of(fsrContextIndeterminate, [](bool a_indeterminate) { return a_indeterminate; })) {
 		return StereoUpscaleResult::Failed;

@@ -1,0 +1,69 @@
+{
+    "status": "PASS",
+    "originalSha256": "b9c0f6326174c5d4524b8a2dfdc2cf1754ead3386745b31dc4d048305943ae21",
+    "allCellsReconstructedExactly": true,
+    "dataRows": 1228,
+    "runColumns": 30,
+    "verifiedDataCells": 38068,
+    "files": [
+        {
+            "file": "vr-render-scale-ledger-0001-history.csv",
+            "bytes": 83486866,
+            "MiB": 79.619,
+            "sha256": "aaed3cfcf8332c26091f681545589398743f04f7c14d723c94ca10ea3cc40ff8",
+            "sourceColumnIndices": [
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 20, 21, 22, 26, 28, 29
+            ],
+            "runHeaders": [
+                "main-VR | v3.19.0-pr39 +125 | a6ca42849 | column-1",
+                "RC166 baseline | RC166 +13 | 94165e2e7 | column-2",
+                "main-VR | v3.19.0-pr39 +132 dirty | 69aec3546 | column-3",
+                "main-VR | v3.19.0-pr39 +134 dirty | 31e383b61 | column-4",
+                "main-VR | v3.19.0-pr39 +136 | 34a588148 | column-5",
+                "main-VR | v3.19.0-pr39 +138 | 9e1ac9755 | column-6",
+                "main-VR | v3.19.0-pr39 +138 | 9e1ac9755 | 20260828T050904Z",
+                "main-VR | v3.19.0-pr39 +138 | 9e1ac9755 | 20260828T091327Z",
+                "RC166 comparison | RC166 +23 | 86d21fc0a | column-9",
+                "main-VR | v3.19.0-pr39 +158 dirty | 49761bc99 | 20260829T100038310Z",
+                "main-VR | v3.19.0-pr39 +192 dirty | 2032a0e29 | column-11",
+                "main-VR | v3.19.0-pr39 +198 dirty | f08cc3f19 | nvidia-mtgw3qfz",
+                "main-VR | v3.19.0-pr39 +223 dirty | 2c1ec0113 | nvidia-mtkh0qku",
+                "main-VR | v3.19.0-pr39 +225 dirty | 0ac8f603c | nvidia-mtl3ic44",
+                "main-VR | v3.19.0-pr39 +230 dirty | 539705004 | nvidia-mtlid7m3",
+                "1595cffd comparison | 390fdea2533ae447849c5f07766c796872996a61 | renderscale-tuning-nvidia-20260910T090649592Z",
+                "PR66 on main-VR 7c8e3e656 | 80f83d2ddad9a5c3c5274cfe5454b3c9b2af287c | nvidia-2026-09-10T13-36-15-291Z",
+                "renderscale-tuning-nvidia-2026-09-10T14-36-07-046Z; PR75 c615779a9; INTERRUPTED baseline; 0/66",
+                "PR75 | c615779a903d7e3f8f95c7edcf303a02ad08dced | nvidia-2026-09-10T17-12-40-813Z",
+                "PR73 cf1616728 INTERRUPTED 25/66 on main-VR ef7c366dd | cf16167283cf70b74aedab348e740b23f0e6a49d | nvidia-2026-09-11T06-52-05-183Z",
+                "PR73 exact parent on main-VR ef7c366dd | bc077786db08637eec8b4c3f718e971e58700a60 | renderscale-tuning-nvidia-20260911T153415138Z",
+                "PR73 exact parent repeat on main-VR ef7c366dd | bc077786db08637eec8b4c3f718e971e58700a60 | renderscale-tuning-nvidia-20260911T155459454Z"
+            ]
+        },
+        {
+            "file": "vr-render-scale-ledger-0002-history.csv",
+            "bytes": 83607079,
+            "MiB": 79.734,
+            "sha256": "d91538d67bd94ad5e4c0a7283a2b10fac124506b3f1137f2dd8203754451d89b",
+            "sourceColumnIndices": [18, 24, 25, 27],
+            "runHeaders": [
+                "PR66 review on main-VR | 89e3964582730b92c1885eaef8f865e2d1d02ea9 | renderscale-tuning-nvidia-2026-09-10T11-53-09-916Z",
+                "PR73 on main-VR ef7c366dd | d9780bb743134d975a561618f8b1cf89f8d20304 | nvidia-20260910T214350263Z",
+                "PR73 on main-VR ef7c366dd | c73bae9a776e67614bba84ee0cecf3d076de259f | renderscale-tuning-nvidia-2026-09-11T05-18-34-649Z",
+                "PR73 on main-VR ef7c366dd | 269bded159c66f4d8b1a45a836078dfa6cdf3241 | nv-pr73-269bded1-mtwz6pez"
+            ]
+        },
+        {
+            "file": "vr-render-scale-ledger-0003-pr73.csv",
+            "bytes": 72209582,
+            "MiB": 68.864,
+            "sha256": "952adfc9f40967923f562db4d23698517cb8426560d4b102dd934fca253f5bee",
+            "sourceColumnIndices": [16, 19, 23, 30],
+            "runHeaders": [
+                "main-VR | 348803c1831c8cd71ceb75a58143ad0bcb00abb2 | nvidia-2026-09-10T07-19-50-405Z",
+                "main-VR | 7c8e3e6568972f0dfbae83d60e3b6d2cbd68bc99 | nvidia-20260910T124329625Z",
+                "PR66 | a09e1cc77de098f85e74e6d5bb341dc184f83640 | renderscale-tuning-nvidia-2026-09-10T18-15-33-375Z",
+                "PR73 owned-release candidate on main-VR ef7c366dd | 554e484e3957178e2d144bf35266bfdcc0948642 | renderscale-tuning-nvidia-2026-09-11T17-09-55-165Z"
+            ]
+        }
+    ]
+}

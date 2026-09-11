@@ -7,6 +7,8 @@
 #include "../../Buffer.h"
 #include "../../State.h"
 #include "StreamlineFrameTokenPublication.h"
+#include "VRRelatchDrainFence.h"
+#include "VRRelatchDrainPolicy.h"
 
 #include <array>
 #include <atomic>
@@ -166,6 +168,9 @@ public:
 	uint64_t vrDLSSViewportUseCounter = 0;
 	std::array<bool, 2> activeDLSSViewportResourcesAllocated = {};
 	ID3D11Query* pendingDLSSResourceFreeIdleFence = nullptr;
+	VRRelatchDrainPolicy::Proof dlssRelatchDrainProof;
+	VRRelatchDrainFence dlssRelatchDrainFence;
+	winrt::com_ptr<ID3D11Device> dlssRelatchDrainDevice;
 	struct VRDLSSSlotRecycleFence
 	{
 		ID3D11Query* query = nullptr;
@@ -509,7 +514,8 @@ public:
 	bool SetDLSSOptions(DLSSViewportRole viewportRole, sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height, bool colorBuffersHDR, uint32_t qualityMode, uint32_t dlssPreset, const DLSSDispatchDiagnostics* diagnostics = nullptr);
 	void InvalidateDLSSOptionsCache();
 	void ResetDLSSIdleFences();
-	void ResetFrameTracking();
+	/** Clears constants tracking while preserving token publication during dispatch failure recovery. */
+	void ResetFrameTracking(StreamlineFrameTokenPublication::ResetScope a_scope = StreamlineFrameTokenPublication::ResetScope::Lifecycle);
 	void ClearLastDLSSFailureState() { lastDLSSFailureDuplicatedConstants = false; }
 	bool WasLastDLSSFailureDuplicatedConstants() const { return lastDLSSFailureDuplicatedConstants; }
 	bool HasDLSSResourcesPendingTeardown() const;
@@ -573,7 +579,16 @@ public:
 	bool EnsureReflexDisabledForFrameGeneration();
 	void UpdateReflex();
 
-	DLSSResourceTeardownResult DestroyDLSSResources();
+	DLSSResourceTeardownResult DestroyDLSSResources(uint64_t a_drainEpoch = 0);
+	/** Render-thread-only readiness observation; never frees or reconfigures DLSS. */
+	DLSSResourceTeardownResult PollDLSSRelatchDrain(uint64_t a_epoch);
+	[[nodiscard]] bool IsDLSSRelatchDrainReady(uint64_t a_epoch) const noexcept;
+	void CancelDLSSRelatchDrain() noexcept;
+	void InvalidateDLSSRelatchDrain() noexcept;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** Copies observations of the existing drain fence without polling it. */
+	void CaptureDLSSRelatchDrainTelemetry(VRRenderScaleRetryTelemetry::Event& a_event) const noexcept;
+#endif
 
 	enum class LifecycleState : uint8_t
 	{

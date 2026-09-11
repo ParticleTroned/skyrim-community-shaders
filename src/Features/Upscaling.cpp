@@ -336,6 +336,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	frameGenerationAllowInMenus,
 	streamlineLogLevel,
 	sharpnessFSR,
+	fsrSharedGuideInputs,
 	sharpnessDLSS,
 	dlssSharpener,
 	fsr4RuntimeEnable,
@@ -4992,6 +4993,7 @@ namespace
 
 	void ResetVRSpecificUpscalingSettings(Upscaling::Settings& settings)
 	{
+		settings.fsrSharedGuideInputs = true;
 		settings.renderScaleMode = 0;
 		settings.renderScaleLinkedToUpscaling = false;
 		settings.perfMode = 0;
@@ -5013,6 +5015,7 @@ namespace
 
 	void StripVRSpecificUpscalingSettings(json& o_json)
 	{
+		o_json.erase("fsrSharedGuideInputs");
 		o_json.erase("renderScaleMode");
 		o_json.erase("renderScaleLinkedToUpscaling");
 		o_json.erase("perfMode");
@@ -16199,7 +16202,7 @@ void Upscaling::DrawSettings()
 				{
 					ImGui::BeginDisabled(!canChangeSharedGuides);
 					auto endDisabled = ScopeExit([]() { ImGui::EndDisabled(); });
-					if (ImGui::Checkbox("Share FSR guide textures (session only)", &sharedGuides))
+					if (ImGui::Checkbox("Share FSR guide textures", &sharedGuides))
 						SetFSRSharedGuideInputsEnabled(sharedGuides);
 				}
 				if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -18139,6 +18142,9 @@ void Upscaling::LoadSettings(json& o_json)
 	}
 	settings.reflexFPSLimit = clampedReflexFPSLimit;
 
+	if (!SetFSRSharedGuideInputsEnabled(settings.fsrSharedGuideInputs))
+		settings.fsrSharedGuideInputs = previousSettings.fsrSharedGuideInputs;
+
 	ApplyLoadedVRUpscalingTransition(
 		*this,
 		previousSettings,
@@ -18166,6 +18172,8 @@ void Upscaling::RestoreDefaultSettings()
 	settings.reflexLowLatencyBoost = false;
 	settings.reflexUseFPSLimit = false;
 	SanitizeUpscalingSettings(settings);
+	if (!SetFSRSharedGuideInputsEnabled(settings.fsrSharedGuideInputs))
+		settings.fsrSharedGuideInputs = previousSettings.fsrSharedGuideInputs;
 	ApplyOpenCompositeUpscalingBlocker(true);
 	ApplyLoadedVRUpscalingTransition(
 		*this,
@@ -20441,6 +20449,7 @@ bool Upscaling::SetFSRSharedGuideInputsEnabled(bool a_enabled) noexcept
 	if (!CanChangeFSRSharedGuideInputs())
 		return false;
 	fidelityFX.SetRuntimeSharedGuideInputsEnabled(a_enabled);
+	settings.fsrSharedGuideInputs = a_enabled;
 	return true;
 }
 

@@ -7506,11 +7506,16 @@ namespace VRRenderScaleDevBenchBridge
 			                            "is saved through the normal CS settings save operation.";
 			descriptor["inputSchema"]["properties"]["action"]["enum"].push_back("set_render_scale_link");
 			descriptor["inputSchema"]["properties"]["action"]["enum"].push_back("fsr_shared_guides");
+			descriptor["inputSchema"]["properties"]["enabled"]["description"] =
+				"Action-specific enabled state. For fsr_shared_guides, omit to inspect; supplied values "
+				"update the live preference while GPU capture is inactive. Save Settings persists the choice.";
 			descriptor["description"] = descriptor["description"].get<std::string>() +
-			                            " fsr_shared_guides inspects the session-only full-eye FSR shared-guide mode; "
+			                            " fsr_shared_guides inspects the full-eye FSR shared-guide mode; "
 			                            "optional boolean enabled selects direct imports or reference copies while GPU "
 			                            "performance capture is inactive. The in-game Upscaling checkbox Share FSR guide "
-			                            "textures uses the same session state and capture guard. Imports remain retained until fenced teardown. "
+			                            "textures uses the same setting and capture guard. Changes apply immediately and "
+			                            "persist through Save Settings; this action does not write configuration files. "
+			                            "Imports remain retained until fenced teardown. "
 			                            "GPU status exposes runtimeFSRSharedGuides direct inputs/pixels, fallback guide "
 			                            "copies and import failures; item5ActiveFSRCopies counts actual input copies, "
 			                            "with avoidedPixels including direct sharing and inactive rectangle savings.";

@@ -54,10 +54,12 @@ Mixed-provider stereo rejection and presentation fallback remain active.
 ## In-game control
 
 In Skyrim VR, select FSR3 or FSR4 in the Community Shaders **Upscaling**
-settings. **Share FSR guide textures (session only)** appears below **Sharpness**.
-It is enabled by default and affects the current session only; restarting
-the game restores the enabled default. Saving a configuration does not
-persist this diagnostic mode.
+settings. **Share FSR guide textures** appears below **Sharpness**.
+Changes apply immediately. Use the normal **Save Settings** button to keep
+the choice across game restarts; both enabled and disabled choices persist
+as `Upscaling.fsrSharedGuideInputs`. Existing configurations without this
+setting default to enabled. Loading settings and restoring defaults also
+update the live mode when GPU performance capture is inactive.
 
 The checkbox and DevBench use the same live state and mutation guard.
 An active GPU performance capture disables the checkbox and displays a
@@ -79,8 +81,10 @@ The existing render-scale DevBench tool adds `fsr_shared_guides`:
 {"action":"fsr_shared_guides","enabled":true}
 ```
 
-The optional boolean is a session-only diagnostic switch, defaulting to
-true. Stop GPU telemetry before changing it, then start a new
+The optional boolean updates the same live and savable preference as the
+in-game checkbox. The action does not write configuration files; a later
+**Save Settings** also persists this choice. Stop GPU telemetry before
+changing it, then start a new
 `gpu_performance_start` capture and exercise an unchanged full-eye FSR
 profile. Disabling direct imports retains their ownership and forces the
 reference input copies. Enabling imports does not force resource creation.

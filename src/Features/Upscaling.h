@@ -312,6 +312,7 @@ public:
 		bool frameGenerationAllowInMenus = false;
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
 		float sharpnessFSR = 0.9f;
+		bool fsrSharedGuideInputs = true;
 		float sharpnessDLSS = 0.9f;
 		uint dlssSharpener = static_cast<uint>(DLSSSharpenerMode::RCAS);
 		bool fsr4RuntimeEnable = true;
@@ -2212,7 +2213,7 @@ public:
 	bool GetRuntimeFSR4Enabled() const;
 	/** Shared menu/DevBench admission: VR only, with no active GPU performance capture. */
 	[[nodiscard]] bool CanChangeFSRSharedGuideInputs() const noexcept;
-	/** Changes the session-only mode on the UI/main-thread path without releasing imported resources. */
+	/** Updates live and savable preferences on the UI/main thread without releasing imported resources. */
 	bool SetFSRSharedGuideInputsEnabled(bool a_enabled) noexcept;
 	DLSSSharpenerMode GetDLSSSharpenerMode() const;
 	bool ShouldApplyDLSSSharpening() const;

@@ -1,5 +1,5 @@
 #ifdef MOTION_ADAPTIVE
-#	include "../MotionSharpening.hlsli"
+#	include "Upscaling/MotionSharpening.hlsli"
 #endif
 
 cbuffer LumaSharpenConfig : register(b0)

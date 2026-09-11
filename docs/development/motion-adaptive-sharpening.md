@@ -78,6 +78,9 @@ restored with scope-based cleanup around the optional pass. No additional
 color or motion textures are allocated.
 The prior compute output is unbound before binding inputs so an overlapping
 UAV cannot make D3D11 silently replace the color or motion SRV with null.
+Both shaders include `Upscaling/MotionSharpening.hlsli` relative to the
+runtime loader's `Data/Shaders` root. Paths relative to the including
+shader are not supported by that loader.
 
 ## DevBench
 
@@ -122,6 +125,10 @@ off, `lastDispatch` reports `not_applicable`.
 -   `MotionSharpeningSettings` feeds malformed optional fields through the
     production normalizer and JSON deserialization, checking unrelated
     settings, missing defaults, huge values and serialization round trips.
+-   `MotionSharpeningRuntimeCompile` compiles both real shader files through
+    the production `Util::CustomInclude` resolver. All 16 fixed/adaptive
+    flat/VR/HDR permutations pass. The regression reproduced failures in
+    all eight adaptive permutations before the include paths were fixed.
 -   `TestMotionSharpening.hlsl` covers the fixed strength curve, zero
     strength, signed adjustment, threshold/cap behavior, invalid motion,
     output-to-source mapping, stereo edge clamps, and cropped motion units.
@@ -143,6 +150,14 @@ files are preserved locally under
 `build/pr78-luma-evidence-20260911/`. The three controller tests and seven
 HLSL cases also pass against the extension, including the relocated shared
 shader include.
+
+The follow-up adversarial review evidence is preserved locally under
+`build/pr78-adversarial-evidence-20260911/`. All 16 fixed/adaptive DXBC
+comparisons remain identical to `7e6a2564c`. Both WARP shader suites pass
+using the production include resolver, and the affected loader/upscaling
+translation units pass universal syntax checks with DevBench on and off.
+The earlier tests using standard file-relative includes did not exercise
+the runtime include contract; the new regression covers that gap.
 
 In-game visual/performance comparisons and VR render-scale qualification
 remain required validation before release. They were not run while

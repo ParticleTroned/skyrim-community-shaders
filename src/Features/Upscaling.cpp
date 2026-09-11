@@ -16265,7 +16265,7 @@ void Upscaling::DrawSettings()
 					ImGui::SliderFloat("Motion threshold (pixels/frame)", &settings.motionSharpnessThreshold, 0.0f, 64.0f, "%.1f");
 					ImGui::SliderFloat("Motion sharpness cap", &settings.motionSharpnessCap, 0.0f, 1.0f, "%.2f");
 					if (auto _tt = Util::HoverTooltipWrapper()) {
-						ImGui::TextUnformatted("Caps adjusted sharpness on the same 0â€“1 scale as Sharpness.");
+						ImGui::TextUnformatted("Caps adjusted sharpness on the same 0-1 scale as Sharpness.");
 					}
 				}
 			}

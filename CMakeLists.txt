@@ -1658,6 +1658,19 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_link_libraries(sharpener_bindings_test PRIVATE d3d11.lib)
     add_controller_test(
+        motion_sharpening_runtime_compile_test
+        MotionSharpeningRuntimeCompile
+        tests/motion_sharpening_runtime_compile_test.cpp
+    )
+    target_link_libraries(
+        motion_sharpening_runtime_compile_test
+        PRIVATE d3dcompiler.lib
+    )
+    set_tests_properties(
+        MotionSharpeningRuntimeCompile
+        PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    )
+    add_controller_test(
         motion_sharpening_settings_test
         MotionSharpeningSettings
         tests/motion_sharpening_settings_test.cpp

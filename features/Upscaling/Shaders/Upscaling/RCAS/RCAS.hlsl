@@ -24,7 +24,7 @@
 #define FSR_RCAS_LIMIT (0.25 - (1.0 / 16.0))
 
 #ifdef MOTION_ADAPTIVE
-#	include "../MotionSharpening.hlsli"
+#	include "Upscaling/MotionSharpening.hlsli"
 #endif
 
 cbuffer RCASConfig : register(b0)

@@ -598,8 +598,13 @@ namespace CSX::RenderMap
 
 	StartResult Runtime::StartCapture(const CollectorConfig& a_config)
 	{
-		const auto result = collector.Start(a_config);
-		if (result == StartResult::kStarted) {
+		std::scoped_lock lifecycleLock(captureLifecycleMutex);
+		if (collector.IsCapturing() || collector.IsDraining())
+			return collector.Start(a_config);
+
+		// Reset while hooks still observe an inactive collector; publishing first
+		// could admit new-generation evidence and then erase it here.
+		{
 			{
 				std::scoped_lock lock(activeCpuMapMutex);
 				activeCpuMaps.clear();
@@ -625,20 +630,19 @@ namespace CSX::RenderMap
 					state.boundComputeShaderObservationId = 0;
 				}
 			}
-			{
-				std::scoped_lock lock(commandListMutex);
-				// Command-list identities are capture-local. Lists created before this
-				// capture are deliberately re-admitted as first-seen execution evidence.
-				commandLists.clear();
-			}
+			std::scoped_lock lock(commandListMutex);
+			// Command-list identities are capture-local. Lists created before this
+			// capture are deliberately re-admitted as first-seen execution evidence.
+			commandLists.clear();
 		}
-		return result;
+		return collector.Start(a_config);
 	}
 
 	std::optional<CaptureSnapshot> Runtime::StopCapture(
 		StopReason a_reason,
 		std::chrono::milliseconds a_drainTimeout)
 	{
+		std::scoped_lock lifecycleLock(captureLifecycleMutex);
 		return collector.Stop(a_reason, a_drainTimeout);
 	}
 

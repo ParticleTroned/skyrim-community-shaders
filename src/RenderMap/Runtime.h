@@ -516,6 +516,8 @@ namespace CSX::RenderMap
 			std::uint64_t a_commandStreamSequence) noexcept;
 
 		Collector collector;
+		// Serializes reset-before-publish capture transitions with shutdown.
+		std::mutex captureLifecycleMutex;
 		std::atomic_uintptr_t immediateContext{ 0 };
 		std::atomic_uintptr_t boundVertexShader{ 0 };
 		std::atomic_uintptr_t boundPixelShader{ 0 };

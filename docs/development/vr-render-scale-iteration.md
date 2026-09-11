@@ -1205,9 +1205,10 @@ release qualification is unrun. See [the rollback record](pr73-polling-rollback-
 
 ## September 11: PR73 owned provider drain candidate
 
-The next candidate separates provider drain observation from relatch
-mutation and services explicit settings relatches after the owning native
-stereo call and both matching eye calls return. Drain evidence belongs to
+Source `269bded159c66f4d8b1a45a836078dfa6cdf3241` separates provider
+drain observation from relatch mutation and services explicit settings
+relatches after the owning native stereo call and both matching eye calls
+return. Drain evidence belongs to
 the exact transition, generations and provider resource revision; subsequent
 provider use invalidates it. Readiness can advance only the operation's own
 queued six-frame retry. A still-pending drain at the original six-frame
@@ -1220,10 +1221,22 @@ owner, while independent retirement fences, memory checks and recovery
 restrictions continue to apply. This avoids the withdrawn attempt's
 unqualified acceleration of the entire destructive transaction.
 
+The owned path applies only where the existing readiness predicate already
+requires Backend handling. Eligible `PreMutationReadiness` requests retain
+their existing path and settling eligibility.
+
 Nine focused portable policy tests pass with MSVC C++23 `/W4 /WX`;
-the tested source/header hashes were stable throughout. The universal DLL
-build, DevBench-enabled AIO verification and runtime testing are pending.
-The package is being prepared for manual testing; no new runtime or
-performance result is claimed. Historical comparison ledger cells remain
+the tested source/header hashes were stable throughout. Five production
+translation units pass DevBench-disabled universal syntax checks, including
+a final `Upscaling.cpp` recheck after the eligibility correction. Changed
+C++ ranges and new files pass the pinned formatter; scoped hooks pass.
+Whole-file legacy C++ and CMake formatting remains excluded. The clean
+universal Release DLL and DevBench-enabled AIO pass package and producer
+verification; shader tests pass 163 assertions in 1 test case.
+Build ID: `9b8b7f17af7ec7012eb194ad945b45756db313352ef6b2ec84d88a50bef9247b`.
+The archive is ready for manual testing. No automatic deployment, runtime
+or performance result is claimed. Historical comparison ledger cells remain
 unchanged. Separate `csx-render-scale-pr-v1` qualification remains unrun.
+Manual coverage must include None/TAA-to-vendor and menu/native-AA callback
+liveness as well as both passes and transitions 26 and 28.
 See [the candidate contract and exact validation](pr73-owned-drain-manual-test-20260911.md).

@@ -5,6 +5,8 @@ render-scale application. It follows the rollback `bc077786d`, which restored
 the measured `c73bae9a7` implementation. The six-frame presentation settling
 guard and its existing eligibility rules remain unchanged.
 
+Implementation source: `269bded159c66f4d8b1a45a836078dfa6cdf3241`.
+
 ## Why
 
 The retained PR66/PR73 comparison contains four longer-stretch cases: row 15
@@ -95,24 +97,61 @@ Configure, build and CTest exited zero. Source and included-header SHA-256
 values matched before and after the check. This verifies portable policy
 behavior; it does not execute D3D resource lifetime or native stereo hooks.
 
+Passed: production syntax checks with universal SE/AE/VR enabled and
+DevBench disabled, using MSVC `/Zs /W4 /WX`, for `Upscaling.cpp`,
+`FidelityFX.cpp`, `Streamline.cpp`, `VR/InSceneOverlay.cpp` and
+`VRRenderScaleDevBenchBridge.cpp`. Existing PCH-independent header warning
+exclusions were retained. `Upscaling.cpp` was rechecked after the final
+Backend-only eligibility correction and formatting; its monitored source
+hashes remained stable during compilation. The combined results and exact
+response files are in `artifacts/pr73-owned-drain-20260911/syntax/`.
+The full DevBench-disabled DLL link and live SE/AE scenarios are unrun.
+
+Passed: pinned clang-format `22.1.4` over changed ranges in existing C++
+files and complete new C++ files, plus scoped whitespace, line-ending and
+Prettier hooks. Whole-file legacy C++ formatting was skipped to preserve
+unrelated code. Whole-file Gersemi was not run; the 12 added CMake lines
+were checked against adjacent test registrations. Exact commands and
+results are in `formatting-report.json`, `formatting-upscaling-final.json`
+and the scoped pre-commit receipts in the same evidence directory.
+
 The exact command, argument lists, logs and source hashes are preserved in
 `artifacts/pr73-owned-drain-20260911/controller-test-results.json`, with
 JUnit results in `controller-tests.xml`. From the main repository root:
 
 ```powershell
 python artifacts/pr73-owned-drain-20260911/run-controller-tests.py
+pwsh -NoProfile -File artifacts/pr73-owned-drain-20260911/syntax/compile-submit.ps1
 ```
 
-The universal Release DLL build, DevBench-enabled AIO packaging and archive
-identity checks are pending. No archive or new producer identity is claimed
-by this preparation record. Automatic deployment and runtime testing have
-not run; the requested package is for manual testing.
+Passed: clean universal Release DLL and `Package-AIO-Manual`, with
+`DEVBENCH_BRIDGE=ON` and automatic deployment disabled. Shader unit tests
+passed: 163 assertions in 1 test case. Staged and archived DLL, PDB and
+manifest identity checks passed, as did `7z t` and inspection of all
+435 archive entries. No prebuilt shader cache or FOMOD is included.
+
+-   Build ID: `9b8b7f17af7ec7012eb194ad945b45756db313352ef6b2ec84d88a50bef9247b`.
+-   DLL SHA-256: `086b2207bd4b615af5f7a1bb4f567bb0dba8e1c1ec5e5498cd440c623682380a` (28,184,576 bytes).
+-   AIO: `CSX_AIO-3.19-VR-mainVR-ef7c366d-PR73-269bded1-DevBench-no-cache.7z` (89,639,416 bytes).
+-   Archive SHA-256: `614edd3a3ca1f217103b87d29de2ea95621192608dcc2f6d9e539dd440817e5f`.
+
+Recorded build/configure warning: FidelityFX SDK CMake CMP0116
+deprecation warning.
+
+The exact producer manifest, package hashes, commands and stage timings are
+preserved in `artifacts/pr73-owned-drain-20260911/build-receipt.json`.
+The delivered archive has an adjacent receipt and SHA-256 file in local
+`dist/`. Automatic deployment and runtime testing have not run; this
+archive is prepared for manual testing.
 
 Manual validation should cover both NVIDIA passes, especially rows 26 and
-28 and the retained longer-stretch cases on rows 15, 18 and 19. Delayed drain
-completion, supersession and incomplete stereo completion need runtime
-coverage as well as the portable policy checks. Preserve the exact DLL
-manifest and capture evidence when collecting new results.
+28 and the retained longer-stretch cases on rows 15, 18 and 19. Also check
+that None/TAA-to-vendor requests complete and that opening or closing menus
+and changing native-AA profiles continues to produce the completed stereo
+callback. Record any stalled request and its last valid callback.
+Delayed drain completion, supersession and incomplete stereo completion
+need runtime coverage as well as the portable policy checks. Preserve the
+exact DLL manifest and capture evidence when collecting new results.
 
 The historical measurements in PR73 still belong to PR66 `a09e1cc77`,
 previous PR73 `d9780bb74` and measured PR73 `c73bae9a7`. They do not validate

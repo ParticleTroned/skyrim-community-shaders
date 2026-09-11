@@ -377,6 +377,7 @@ namespace CSX::RenderMap
 		void FailNextDeferredContextCatalogueAdmissionForTesting() noexcept;
 		void FailNextCommandListCatalogueAdmissionForTesting() noexcept;
 		void PauseNextDeferredPublicationForTesting() noexcept;
+		void PauseNextDeferredFinishCleanupForTesting() noexcept;
 		bool IsDeferredPublicationPausedForTesting() const noexcept;
 		void ResumeDeferredPublicationForTesting() noexcept;
 #endif
@@ -487,6 +488,7 @@ namespace CSX::RenderMap
 			CommandRecordingIncompleteReason a_reason) noexcept;
 #if defined(CSX_RENDER_MAP_TESTING)
 		void PauseDeferredPublicationBeforeAppendForTesting() noexcept;
+		void PauseDeferredFinishCleanupForTesting() noexcept;
 #endif
 		void ResetImmediatePipelineState() noexcept;
 		void ApplyEffectiveResourceViewResetLocked() noexcept;
@@ -546,6 +548,7 @@ namespace CSX::RenderMap
 		std::atomic_bool failNextDeferredContextCatalogueAdmission{ false };
 		std::atomic_bool failNextCommandListCatalogueAdmission{ false };
 		std::atomic_bool pauseNextDeferredPublication{ false };
+		std::atomic_bool pauseNextDeferredFinishCleanup{ false };
 		std::atomic_bool deferredPublicationPaused{ false };
 		std::atomic_bool resumeDeferredPublication{ false };
 #endif

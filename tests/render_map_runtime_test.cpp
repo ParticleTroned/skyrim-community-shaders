@@ -1851,6 +1851,208 @@ namespace
 					  }),
 			"same-generation deferred work was incorrectly rejected");
 	}
+
+	void TestDeferredControlPublicationRetainsRecordingLifetime()
+	{
+		constexpr std::uintptr_t oldContext = 0xD100;
+		constexpr std::uintptr_t successorShader = 0xD300;
+		auto config = Config();
+		config.maxEvents = 128;
+		config.maxStageShaderObservations = 8;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+
+		enum class FinishOutcome
+		{
+			kSuccess,
+			kFailure,
+			kNoList,
+			kCatalogueAdmissionFailure,
+		};
+		const std::array outcomes{
+			FinishOutcome::kSuccess,
+			FinishOutcome::kFailure,
+			FinishOutcome::kNoList,
+			FinishOutcome::kCatalogueAdmissionFailure,
+		};
+		const std::array successorContexts{
+			oldContext,
+			std::uintptr_t{ 0xD400 },
+			std::uintptr_t{ 0xD500 },
+		};
+
+		for (const auto outcome : outcomes) {
+			for (const auto restoreState : { false, true }) {
+				for (std::size_t successorIndex = 0; successorIndex < successorContexts.size(); ++successorIndex) {
+					Runtime runtime;
+					Check(runtime.StartCapture(config) == StartResult::kStarted,
+						"finish turnover source capture did not start");
+					runtime.RegisterDeferredContext(oldContext, 0);
+					runtime.RecordDraw(oldContext, DrawOperation::kDraw, 1);
+					if (outcome == FinishOutcome::kCatalogueAdmissionFailure)
+						runtime.FailNextCommandListCatalogueAdmissionForTesting();
+					runtime.PauseNextDeferredPublicationForTesting();
+					const auto commandList = outcome == FinishOutcome::kNoList ? 0 : std::uintptr_t{ 0xD200 };
+					const auto result = outcome == FinishOutcome::kFailure ?
+					                        static_cast<std::int32_t>(0x80004005u) :
+					                        0;
+					std::thread staleWorker([&] {
+						runtime.RecordFinishCommandList(oldContext, commandList, restoreState, result);
+					});
+					WaitForDeferredPublicationPause(runtime, staleWorker);
+
+					auto first = runtime.StopCapture();
+					Check(first.has_value() && runtime.StartCapture(config) == StartResult::kStarted,
+						"finish turnover capture transition failed");
+					if (successorIndex == 2)
+						runtime.RegisterDeferredContext(0xD600, 0);
+					const auto successorContext = successorContexts[successorIndex];
+					runtime.RegisterDeferredContext(successorContext, 0);
+					runtime.BindStage(successorContext, ShaderStage::kVertex, successorShader);
+					runtime.BindStage(successorContext, ShaderStage::kCompute, successorShader + 1);
+					runtime.ResumeDeferredPublicationForTesting();
+					staleWorker.join();
+					runtime.RecordDraw(successorContext, DrawOperation::kDraw, 2);
+					runtime.RecordDispatch(successorContext, DispatchOperation::kDispatch, 1, 1, 1);
+
+					auto second = runtime.StopCapture();
+					Check(second.has_value(), "finish turnover successor capture did not stop");
+					const auto draw = std::find_if(second->events.begin(), second->events.end(),
+						[](const EventRecord& event) {
+							return event.kind == EventKind::kDraw && event.payload.words[4] == 2;
+						});
+					Check(draw != second->events.end() && draw->payload.words[2] != 0,
+						"stale finish cleanup erased the successor stage binding");
+					const auto stage = std::find_if(second->events.begin(), second->events.end(),
+						[draw](const EventRecord& event) {
+							return event.kind == EventKind::kStageShaderObserved &&
+						           event.payload.words[0] == draw->payload.words[2];
+						});
+					Check(stage != second->events.end() && stage->payload.words[1] == successorShader,
+						"stale finish cleanup relabelled the successor stage binding");
+					const auto dispatch = std::find_if(second->events.begin(), second->events.end(),
+						[](const EventRecord& event) { return event.kind == EventKind::kDispatch; });
+					Check(dispatch != second->events.end() && dispatch->payload.words[2] != 0,
+						"stale finish cleanup erased the successor compute binding");
+					const auto computeStage = std::find_if(second->events.begin(), second->events.end(),
+						[dispatch](const EventRecord& event) {
+							return event.kind == EventKind::kStageShaderObserved &&
+						           event.payload.words[0] == dispatch->payload.words[2];
+						});
+					Check(computeStage != second->events.end() &&
+							  computeStage->payload.words[1] == successorShader + 1,
+						"stale finish cleanup relabelled the successor compute binding");
+					const auto recordingCount = std::count_if(second->events.begin(), second->events.end(),
+						[draw](const EventRecord& event) {
+							return event.kind == EventKind::kCommandRecordingObserved &&
+						           event.payload.words[1] == draw->deviceContextObservationId;
+						});
+					Check(recordingCount == 1,
+						std::format("stale finish cleanup left {} successor recording epochs for outcome {}, restore {}, context {}",
+							recordingCount, static_cast<int>(outcome), restoreState, successorIndex));
+					Check(std::none_of(second->events.begin(), second->events.end(),
+							  [](const EventRecord& event) {
+								  return event.kind == EventKind::kFinishCommandList;
+							  }),
+						"stale finish publication entered the successor capture");
+				}
+			}
+		}
+
+		Runtime stoppedRuntime;
+		Check(stoppedRuntime.StartCapture(config) == StartResult::kStarted,
+			"finish no-successor capture did not start");
+		stoppedRuntime.RegisterDeferredContext(oldContext, 0);
+		stoppedRuntime.PauseNextDeferredFinishCleanupForTesting();
+		std::thread stoppedWorker([&] {
+			stoppedRuntime.RecordFinishCommandList(oldContext, 0xD200, false, 0);
+		});
+		WaitForDeferredPublicationPause(stoppedRuntime, stoppedWorker);
+		auto stoppedSnapshot = stoppedRuntime.StopCapture();
+		stoppedRuntime.ResumeDeferredPublicationForTesting();
+		stoppedWorker.join();
+		Check(stoppedSnapshot.has_value(), "finish no-successor capture did not stop");
+
+		for (const auto restoreState : { false, true }) {
+			Runtime runtime;
+			Check(runtime.StartCapture(config) == StartResult::kStarted,
+				"finish cleanup-turnover source capture did not start");
+			runtime.RegisterDeferredContext(oldContext, 0);
+			runtime.PauseNextDeferredFinishCleanupForTesting();
+			std::thread staleWorker([&] {
+				runtime.RecordFinishCommandList(oldContext, 0xD200, restoreState, 0);
+			});
+			WaitForDeferredPublicationPause(runtime, staleWorker);
+
+			auto first = runtime.StopCapture();
+			Check(first.has_value() && std::any_of(first->events.begin(), first->events.end(),
+										   [](const EventRecord& event) {
+											   return event.kind == EventKind::kFinishCommandList;
+										   }),
+				"finish did not publish before the cleanup turnover barrier");
+			Check(runtime.StartCapture(config) == StartResult::kStarted,
+				"finish cleanup-turnover successor capture did not start");
+			runtime.RegisterDeferredContext(oldContext, 0);
+			runtime.BindStage(oldContext, ShaderStage::kVertex, successorShader);
+			runtime.ResumeDeferredPublicationForTesting();
+			staleWorker.join();
+			runtime.RecordDraw(oldContext, DrawOperation::kDraw, 4);
+
+			auto second = runtime.StopCapture();
+			Check(second.has_value(), "finish cleanup-turnover successor capture did not stop");
+			const auto draw = std::find_if(second->events.begin(), second->events.end(),
+				[](const EventRecord& event) {
+					return event.kind == EventKind::kDraw && event.payload.words[4] == 4;
+				});
+			Check(draw != second->events.end() && draw->payload.words[2] != 0,
+				"post-publication finish cleanup erased the successor stage binding");
+			Check(std::count_if(second->events.begin(), second->events.end(),
+					  [draw](const EventRecord& event) {
+						  return event.kind == EventKind::kCommandRecordingObserved &&
+				                 event.payload.words[1] == draw->deviceContextObservationId;
+					  }) == 1,
+				"post-publication finish cleanup restarted the successor recording epoch");
+		}
+
+		for (std::size_t successorIndex = 0; successorIndex < successorContexts.size(); ++successorIndex) {
+			Runtime runtime;
+			Check(runtime.StartCapture(config) == StartResult::kStarted,
+				"stage turnover source capture did not start");
+			runtime.RegisterDeferredContext(oldContext, 0);
+			runtime.PauseNextDeferredPublicationForTesting();
+			std::thread staleWorker([&] {
+				runtime.BindStage(oldContext, ShaderStage::kVertex, 0xD700);
+			});
+			WaitForDeferredPublicationPause(runtime, staleWorker);
+
+			auto first = runtime.StopCapture();
+			Check(first.has_value() && runtime.StartCapture(config) == StartResult::kStarted,
+				"stage turnover capture transition failed");
+			if (successorIndex == 2)
+				runtime.RegisterDeferredContext(0xD600, 0);
+			const auto successorContext = successorContexts[successorIndex];
+			runtime.RegisterDeferredContext(successorContext, 0);
+			runtime.BindStage(successorContext, ShaderStage::kVertex, successorShader);
+			runtime.ResumeDeferredPublicationForTesting();
+			staleWorker.join();
+			runtime.RecordDraw(successorContext, DrawOperation::kDraw, 3);
+
+			auto second = runtime.StopCapture();
+			Check(second.has_value(), "stage turnover successor capture did not stop");
+			const auto draw = std::find_if(second->events.begin(), second->events.end(),
+				[](const EventRecord& event) {
+					return event.kind == EventKind::kDraw && event.payload.words[4] == 3;
+				});
+			Check(draw != second->events.end() && draw->payload.words[2] != 0,
+				"stale stage publication erased the successor binding");
+			const auto stage = std::find_if(second->events.begin(), second->events.end(),
+				[draw](const EventRecord& event) {
+					return event.kind == EventKind::kStageShaderObserved &&
+				           event.payload.words[0] == draw->payload.words[2];
+				});
+			Check(stage != second->events.end() && stage->payload.words[1] == successorShader,
+				"stale stage publication replaced the successor binding");
+		}
+	}
 }
 
 int main()
@@ -1886,6 +2088,7 @@ int main()
 		TestDeferredRecordingReportsPartialFilteredAndFailedFinishes();
 		TestDiagnosticCatalogueAdmissionFailuresFailOpen();
 		TestDeferredPublicationRetainsCaptureGeneration();
+		TestDeferredControlPublicationRetainsRecordingLifetime();
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

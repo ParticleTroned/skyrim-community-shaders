@@ -1244,6 +1244,25 @@ def main() -> int:
                 in gap["description"]
                 for gap in invalid_recording_graph["gaps"]
             )
+        for invalid_sequence in (-1, None, True):
+            invalid_recording = factory(6, context_a["id"], recording_a["id"])
+            invalid_recording["execution"]["commandStreamSequence"] = invalid_sequence
+            invalid_recording_graph = build_graph(
+                tool, manifest, identity_declarations() + [invalid_recording],
+            )
+            invalid_node = next(
+                node for node in invalid_recording_graph["nodes"]
+                if node["attributes"].get("eventSequence") == 6
+            )
+            assert not [
+                edge for edge in invalid_recording_graph["edges"]
+                if edge["type"] == "records" and edge["to"] == invalid_node["id"]
+            ]
+            assert any(
+                gap["blocking"] and "does not carry a non-negative integer command-stream sequence"
+                in gap["description"]
+                for gap in invalid_recording_graph["gaps"]
+            )
 
     contradiction_results: set[str] = set()
 

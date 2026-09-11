@@ -949,6 +949,13 @@ namespace CSX::RenderMap
 		pauseNextDeferredPublication.store(true, std::memory_order_release);
 	}
 
+	void Runtime::PauseNextDeferredFinishCleanupForTesting() noexcept
+	{
+		resumeDeferredPublication.store(false, std::memory_order_release);
+		deferredPublicationPaused.store(false, std::memory_order_release);
+		pauseNextDeferredFinishCleanup.store(true, std::memory_order_release);
+	}
+
 	bool Runtime::IsDeferredPublicationPausedForTesting() const noexcept
 	{
 		return deferredPublicationPaused.load(std::memory_order_acquire);
@@ -962,6 +969,17 @@ namespace CSX::RenderMap
 	void Runtime::PauseDeferredPublicationBeforeAppendForTesting() noexcept
 	{
 		if (!pauseNextDeferredPublication.exchange(false, std::memory_order_acq_rel))
+			return;
+		deferredPublicationPaused.store(true, std::memory_order_release);
+		while (!resumeDeferredPublication.load(std::memory_order_acquire))
+			std::this_thread::yield();
+		deferredPublicationPaused.store(false, std::memory_order_release);
+		resumeDeferredPublication.store(false, std::memory_order_release);
+	}
+
+	void Runtime::PauseDeferredFinishCleanupForTesting() noexcept
+	{
+		if (!pauseNextDeferredFinishCleanup.exchange(false, std::memory_order_acq_rel))
 			return;
 		deferredPublicationPaused.store(true, std::memory_order_release);
 		while (!resumeDeferredPublication.load(std::memory_order_acquire))
@@ -1096,9 +1114,17 @@ namespace CSX::RenderMap
 			if (context.kind != DeviceContextKind::kDeferred || context.observationId == 0)
 				return;
 			const auto observed = ObserveBoundStage(a_stage, a_d3dObject);
+#if defined(CSX_RENDER_MAP_TESTING)
+			PauseDeferredPublicationBeforeAppendForTesting();
+#endif
 			std::scoped_lock lock(deferredContextMutex);
 			const auto found = deferredContexts.find(a_context);
-			if (found == deferredContexts.end() || found->second.observationId != context.observationId)
+			if (found == deferredContexts.end() ||
+				collector.ActiveGeneration() != context.captureGeneration ||
+				found->second.observationGeneration != context.captureGeneration ||
+				found->second.observationId != context.observationId ||
+				found->second.recordingObservationId != context.recordingObservationId ||
+				(a_d3dObject != 0 && observed.sessionGeneration != context.captureGeneration))
 				return;
 			auto& state = found->second;
 			++state.commandSequence;
@@ -1153,14 +1179,18 @@ namespace CSX::RenderMap
 		const auto context = EnsureContextObservation(a_context);
 		if (context.kind != DeviceContextKind::kDeferred || context.observationId == 0)
 			return;
-		const auto captureGeneration = collector.ActiveGeneration();
+		const auto captureGeneration = context.captureGeneration;
 		std::uint64_t recordingObservationId = 0;
 		std::uint64_t recordingIncompleteReasons = 0;
 		std::uint64_t commandSequence = 0;
 		{
 			std::scoped_lock lock(deferredContextMutex);
 			const auto found = deferredContexts.find(a_context);
-			if (found == deferredContexts.end() || found->second.observationId != context.observationId)
+			if (found == deferredContexts.end() ||
+				collector.ActiveGeneration() != captureGeneration ||
+				found->second.observationGeneration != captureGeneration ||
+				found->second.observationId != context.observationId ||
+				found->second.recordingObservationId != context.recordingObservationId)
 				return;
 			auto& state = found->second;
 			recordingObservationId = state.recordingObservationId;
@@ -1240,6 +1270,9 @@ namespace CSX::RenderMap
 			sourceRecordingComplete = false;
 		}
 
+#if defined(CSX_RENDER_MAP_TESTING)
+		PauseDeferredPublicationBeforeAppendForTesting();
+#endif
 		collector.RecordForGeneration(
 			EventKind::kFinishCommandList,
 			FinishCommandListPayload(
@@ -1250,10 +1283,17 @@ namespace CSX::RenderMap
 			context.observationId, captureGeneration, commandSequence,
 			0, 0, 0, recordingObservationId, true);
 
+#if defined(CSX_RENDER_MAP_TESTING)
+		PauseDeferredFinishCleanupForTesting();
+#endif
 		{
 			std::scoped_lock lock(deferredContextMutex);
 			const auto found = deferredContexts.find(a_context);
-			if (found == deferredContexts.end() || found->second.observationId != context.observationId)
+			if (found == deferredContexts.end() ||
+				collector.ActiveGeneration() != captureGeneration ||
+				found->second.observationGeneration != captureGeneration ||
+				found->second.observationId != context.observationId ||
+				found->second.recordingObservationId != recordingObservationId)
 				return;
 			auto& state = found->second;
 			state.recordingObservationId = 0;

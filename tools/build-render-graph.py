@@ -1520,15 +1520,30 @@ def derive(
             )
             recording_id = event.get("commandRecordingObservationId")
             observation_domain = event.get("execution", {}).get("observationDomain")
-            recording_envelope_valid = not (
+            command_stream_sequence = event.get("execution", {}).get("commandStreamSequence")
+            command_stream_sequence_valid = (
+                isinstance(command_stream_sequence, int) and
+                not isinstance(command_stream_sequence, bool) and
+                command_stream_sequence >= 0
+            )
+            recording_domain_valid = not (
                 event_type in {"draw", "dispatch"} and
                 recording_id is not None and
                 observation_domain != "command-recording"
             )
-            if not recording_envelope_valid:
+            recording_envelope_valid = recording_domain_valid and (
+                event_type not in {"draw", "dispatch"} or command_stream_sequence_valid
+            )
+            if not recording_domain_valid:
                 graph.gap(
                     f"Recorded {event_type} event {sequence} uses observation domain "
                     f"{observation_domain!r}; recording ownership and execution authority were suppressed.",
+                    [execution], True, "other",
+                )
+            if event_type in {"draw", "dispatch"} and not command_stream_sequence_valid:
+                graph.gap(
+                    f"{event_type.capitalize()} event {sequence} does not carry a non-negative integer "
+                    "command-stream sequence; recording ownership and execution authority were suppressed.",
                     [execution], True, "other",
                 )
             if recording_id and recording_envelope_valid:

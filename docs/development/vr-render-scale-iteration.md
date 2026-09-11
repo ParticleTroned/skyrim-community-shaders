@@ -1303,3 +1303,16 @@ owned-drain change parent. A clean DevBench-enabled `ef7c366d` AIO now
 passes build, shader and archive identity checks with the measured
 candidate's recipe. Its canonical identity differs only in source commit.
 The operator retains deployment, MO2 and game startup.
+
+### PR73 owned-release correction: clean build verification
+
+Source `554e484e3` now has verified universal DevBench ON and OFF builds,
+75/75 CI controller tests, and 163 package shader assertions. The ON AIO
+contains neither FOMOD nor a prebuilt shader cache. Production compile/link
+settings match measured `269bded15` and exact integration parent `ef7c366d`;
+all three archives are preserved for manual comparison. Reporter `9e3a0a9e`
+is integrated into local automation dev. See the exact Build IDs, hashes,
+commands and limitations in
+[the correction report](pr73-owned-release-proof-20260911.md#final-clean-build-evidence).
+No new runtime measurements or visual qualification are claimed, and no
+runtime ledger cells were changed by this offline validation.

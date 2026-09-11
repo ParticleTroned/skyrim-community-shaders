@@ -1,5 +1,53 @@
 # VR render-scale iteration records
 
+## September 11: PR73 previous/new measurement comparison
+
+The user requested preservation of the previous PR73 measurement and an
+additional comparison with readiness source c73bae9a7. Previous source
+d9780bb74 and new source c73bae9a7 share main-VR base ef7c366dd.
+Mean strict completion changed 870.905 -> 790.202 ms
+(-9.267%); both pass means are lower. Full-pass
+stretch duration changed 5744.173 -> 5138.086 ms
+(-10.551%). Both runs retain terminal
+66 PASS, Task 2 counts 66/0/0 and applicable health MET/MET.
+Scene matching and a tolerance policy remain unavailable; the formal
+assessment and separate memory classification remain INCONCLUSIVE.
+
+Every previous ledger cell is preserved. Additional detail rows retain
+the entire comparison and three-build/per-route statistics with exact
+reconstruction; all 1,056 paired timing cells pass. Previous PR66/PR73
+tables remain intact. See [the full comparison](pr73-readiness-nvidia-comparison-20260911.md)
+for both passes, route regressions, stretch maxima, retry reasons,
+memory predicates, complete provenance and assessment limits.
+
+## September 11: PR73 readiness c73bae9a7 NVIDIA tuning
+
+Run `renderscale-tuning-nvidia-2026-09-11T05-18-34-649Z` completed 33 + 33
+transitions, terminal 66 PASS; Task 2 counts 66 PASS / 0 FAIL /
+0 INCONCLUSIVE. Both passes meet applicable health checks with no counted
+failure observations. Physical DLL/manifest/AIO verification matches clean
+Release source c73bae9a7, main-VR base ef7c366dd and runtime Build ID
+d098079db31d. Captures are inactive, journal flushed and reporting COMPLETE.
+
+Against pinned previous measured main-VR 7c8e3e656, strict means are
+779.947 / 800.456 ms (-9.938% / -3.916%).
+Reference fidelity/vendor observations on rows 26 and 28 are absent.
+Retry counts are 9 / 10; 31 selected stretch transitions recovered.
+Full-pass stretch is 79 / 93 frames and 4675.398 / 5600.774 ms.
+The fixed cutoff remains diagnostic and the proven-native terminal gate
+remains a contract mismatch. Formal change assessment and memory
+classification are separately INCONCLUSIVE; scene matching and a declared
+tolerance policy are unavailable. Per-route regressions remain explicit.
+
+The canonical ledger retains every summary and comparison field, verified
+by exact reconstruction, with 1,056 paired numeric timing cells audited
+and every historical cell preserved. Finalization took
+17.791 s; comparison took
+4.096 s; complete ledger reporting took
+12.637 s. See the [durable report](nvidia-renderscale-tuning-pr73-c73bae9a7-20260911.md)
+for all pass/transition tables, memory predicates, gate observations,
+provenance, evidence links and validation receipts. Raw evidence stays local.
+
 ## 2026-09-10: submit contract integration review
 
 Rebased the submit input candidate onto `main-VR` at `ef7c366d`, retaining

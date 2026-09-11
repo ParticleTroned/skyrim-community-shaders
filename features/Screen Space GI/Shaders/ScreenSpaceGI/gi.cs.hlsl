@@ -26,6 +26,10 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #include "Common/Color.hlsli"
+#ifdef OCU_EFFECT_FOVEATION
+#	define OCU_EFFECT_FOVEATION_GI_VERSION 2
+#	include "Common/OCUEffectFoveation.hlsli"
+#endif
 #include "Common/FastMath.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
@@ -116,8 +120,24 @@ void CalculateGI(
 	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
 	float2 normalizedScreenPos = Stereo::ConvertFromStereoUV(uv, eyeIndex);
 
-	const float rcpNumSlices = rcp((float)NumSlices);
+	uint numSlices = NumSlices;
 	uint numSteps = NumSteps;
+#ifdef OCU_EFFECT_FOVEATION
+	float peripheralWeight = OCUPeripheralEffectWeight(normalizedScreenPos, eyeIndex);
+	// Preserve the original integration radius and normalize by the actual
+	// sample count. Every pixel still evaluates AO and indirect illumination.
+	numSlices = max(1u, (uint)ceil(lerp((float)NumSlices, max(2.0, (float)NumSlices * 0.5), peripheralWeight)));
+	numSteps = max(1u, (uint)ceil(lerp((float)NumSteps, max(2.0, (float)NumSteps * 0.75), peripheralWeight)));
+	numSlices = min(NumSlices, numSlices);
+	numSteps = min(NumSteps, numSteps);
+#	ifdef TEMPORAL_DENOISER
+	// Moving gaze reuses the native ray positions across frames, avoiding a
+	// different peripheral estimator in the history of a newly focused pixel.
+	if (OCUEffectPolicy.w > 0)
+		numSteps = NumSteps;
+#	endif
+#endif
+	const float rcpNumSlices = rcp((float)numSlices);
 	float rcpNumSteps = rcp((float)max(numSteps, 1u));
 
 	// if the offset is under approx pixel size (pixelTooCloseThreshold), push it out to the minimum distance
@@ -180,7 +200,7 @@ void CalculateGI(
 		const float varianceStepScale = lerp(0.55, 1.0, localVariance);
 		const float adaptiveStepScale = min(farStepScale, varianceStepScale);
 		const uint adaptiveSteps = max(1u, (uint)round((float)NumSteps * adaptiveStepScale));
-		numSteps = min(NumSteps, adaptiveSteps);
+		numSteps = min(numSteps, adaptiveSteps);
 		rcpNumSteps = rcp((float)max(numSteps, 1u));
 	}
 #endif
@@ -199,8 +219,16 @@ void CalculateGI(
 	const float roughness = max(0.2, saturate(1 - FULLRES_LOAD(srcNormalRoughness, dtid, uv * frameScale, samplerLinearClamp).z));  // can't handle low roughness
 #endif
 
-	for (uint slice = 0; slice < NumSlices; slice++) {
-		float phi = (Math::PI * rcpNumSlices) * (slice + noiseSlice);
+	for (uint slice = 0; slice < numSlices; slice++) {
+		uint sampleSlice = slice;
+		float angularScale = rcpNumSlices;
+#if defined(OCU_EFFECT_FOVEATION) && defined(TEMPORAL_DENOISER)
+		if (OCUEffectPolicy.w > 0 && numSlices < NumSlices) {
+			sampleSlice = (slice + FrameIndex) % NumSlices;
+			angularScale = rcp((float)NumSlices);
+		}
+#endif
+		float phi = (Math::PI * angularScale) * (sampleSlice + noiseSlice);
 		float3 directionVec = 0;
 		sincos(phi, directionVec.y, directionVec.x);
 
@@ -233,7 +261,7 @@ void CalculateGI(
 #endif
 
 		// R1 sequence (http://extremelearning.com.au/unreasonable-effectiveness-of-quasirandom-sequences/)
-		float stepNoise = frac(noiseStep + slice * 0.6180339887498948482);
+		float stepNoise = frac(noiseStep + sampleSlice * 0.6180339887498948482);
 
 		[unroll] for (int sideSign = -1; sideSign <= 1; sideSign += 2)
 		{

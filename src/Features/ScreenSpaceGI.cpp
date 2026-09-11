@@ -3,6 +3,7 @@
 #include <DirectXTex.h>
 #include <algorithm>
 #include <cmath>
+#include <d3d11_1.h>
 
 #include "Deferred.h"
 #include "FoveatedCommon.h"
@@ -31,6 +32,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ResourceProfile,
 	VRCullDistance,
 	EnableFoveated,
+	ExperimentalOCUEffectFoveation,
 	EnableStereoSync,
 	UseStereoReproject,
 	MinScreenRadius,
@@ -56,6 +58,40 @@ namespace
 	constexpr float kVRCullDistanceMax = 20480.0f;
 	constexpr int kResolutionModeMin = 0;
 	constexpr int kResolutionModeMax = 2;
+
+	class ScopedOCUEffectBuffer
+	{
+	public:
+		ScopedOCUEffectBuffer(ID3D11DeviceContext* a_context, ID3D11Buffer* a_buffer) : context(a_buffer ? a_context : nullptr)
+		{
+			if (context) {
+				if (SUCCEEDED(context->QueryInterface(__uuidof(ID3D11DeviceContext1), context1.put_void())))
+					context1->CSGetConstantBuffers1(10, 1, previous.put(), &firstConstant, &numConstants);
+				else
+					context->CSGetConstantBuffers(10, 1, previous.put());
+				context->CSSetConstantBuffers(10, 1, &a_buffer);
+			}
+		}
+		~ScopedOCUEffectBuffer()
+		{
+			if (context) {
+				auto buffer = previous.get();
+				if (context1)
+					context1->CSSetConstantBuffers1(10, 1, &buffer, &firstConstant, &numConstants);
+				else
+					context->CSSetConstantBuffers(10, 1, &buffer);
+			}
+		}
+		ScopedOCUEffectBuffer(const ScopedOCUEffectBuffer&) = delete;
+		ScopedOCUEffectBuffer& operator=(const ScopedOCUEffectBuffer&) = delete;
+
+	private:
+		ID3D11DeviceContext* context;
+		winrt::com_ptr<ID3D11DeviceContext1> context1;
+		winrt::com_ptr<ID3D11Buffer> previous;
+		UINT firstConstant = 0;
+		UINT numConstants = 0;
+	};
 
 	float ClampVRCullDistance(float a_distance)
 	{
@@ -121,7 +157,10 @@ namespace
 
 	bool IsRuntimeFoveatedActive(const ScreenSpaceGI::Settings& a_settings)
 	{
-		return REL::Module::IsVR() && a_settings.EnableFoveated && IsSharedFoveatedMaskActive();
+		// The OCU sample-count experiment preserves the complete GI/temporal path.
+		// Do not let the older AO-only crop silently replace that path.
+		return REL::Module::IsVR() && !a_settings.ExperimentalOCUEffectFoveation &&
+		       a_settings.EnableFoveated && IsSharedFoveatedMaskActive();
 	}
 
 	uint32_t QuantizeCenterOffset(float a_value)
@@ -163,6 +202,7 @@ namespace
 		a_settings.VRCullDistance = defaults.VRCullDistance;
 		a_settings.CenterFullResMaskScale = defaults.CenterFullResMaskScale;
 		a_settings.EnableFoveated = defaults.EnableFoveated;
+		a_settings.ExperimentalOCUEffectFoveation = defaults.ExperimentalOCUEffectFoveation;
 		a_settings.EnableStereoSync = defaults.EnableStereoSync;
 		a_settings.UseStereoReproject = defaults.UseStereoReproject;
 	}
@@ -172,6 +212,7 @@ namespace
 		o_json.erase("VRCullDistance");
 		o_json.erase("CenterFullResMaskScale");
 		o_json.erase("EnableFoveated");
+		o_json.erase("ExperimentalOCUEffectFoveation");
 		o_json.erase("EnableStereoSync");
 		o_json.erase("UseStereoReproject");
 	}
@@ -271,6 +312,7 @@ namespace
 		a_settings.VRCullDistance = ClampVRCullDistance(a_settings.VRCullDistance);
 		if (!REL::Module::IsVR()) {
 			a_settings.EnableFoveated = false;
+			a_settings.ExperimentalOCUEffectFoveation = false;
 			a_settings.UseStereoReproject = false;
 			a_settings.CenterFullResMaskScale = 0.0f;
 		} else {
@@ -402,6 +444,8 @@ void ScreenSpaceGI::DrawSettings()
 	}
 
 	///////////////////////////////
+	DrawOCUEffectFoveationSettings();
+
 	drawCenteredSeparatorText("Presets");
 	ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.45f, 0.45f, 1.0f));
 	ImGui::TextWrapped("These presets keep SSGI baselines close to the regular quality and resource controls.");
@@ -772,6 +816,34 @@ void ScreenSpaceGI::DrawSettings()
 	}
 }
 
+void ScreenSpaceGI::SetOCUEffectFoveationEnabled(bool a_enabled)
+{
+	a_enabled = REL::Module::IsVR() && a_enabled;
+	if (settings.ExperimentalOCUEffectFoveation == a_enabled)
+		return;
+	settings.ExperimentalOCUEffectFoveation = a_enabled;
+	recompileFlag = true;
+	queuedResetHistory.store(true, std::memory_order_release);
+	ocuEffectActive.store(false, std::memory_order_relaxed);
+	ocuEffectStatus.store(a_enabled ? "Native sampling: awaiting SSGI pass" : "OCU peripheral sampling disabled", std::memory_order_relaxed);
+}
+
+void ScreenSpaceGI::DrawOCUEffectFoveationSettings()
+{
+	if (!REL::Module::IsVR())
+		return;
+	bool enabled = settings.ExperimentalOCUEffectFoveation;
+	if (ImGui::Checkbox("OCU peripheral sampling (experimental)", &enabled))
+		SetOCUEffectFoveationEnabled(enabled);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextWrapped("Uses OCU's current eye positions and foveation rings to reduce peripheral AO/GI samples while keeping central samples and the lighting effects enabled.");
+		ImGui::TextWrapped("Does not require upscaling or render scale. Native quality is used when OCU's profile is unavailable. Experimental: peripheral noise and moving-eye quality need headset testing.");
+		ImGui::TextWrapped("Takes priority over SSGI FOV. Stereo Sync and Stereo Reprojection retain their existing behavior and use native sampling.");
+	}
+	if (settings.ExperimentalOCUEffectFoveation)
+		ImGui::TextDisabled("%s", ocuEffectStatus.load(std::memory_order_relaxed));
+}
+
 void ScreenSpaceGI::DrawFoveationSettings()
 {
 	if (!REL::Module::IsVR()) {
@@ -781,12 +853,13 @@ void ScreenSpaceGI::DrawFoveationSettings()
 
 	ApplyPlatformSettingOverrides(settings);
 	SyncResolvedSharedMaskScale(settings);
+	DrawOCUEffectFoveationSettings();
 	const bool featureRuntimeActive = loaded && settings.Enabled;
 	const auto profile = globals::features::upscaling.GetActiveUpscalingFoveatedProfile();
 	const bool foveatedAvailable = profile.available && FoveatedCommon::IsActiveCoverage(profile.sharedVisibleScale);
 	bool foveatedEnabled = settings.EnableFoveated;
 	{
-		auto foveatedGuard = Util::DisableGuard(!featureRuntimeActive || !foveatedAvailable);
+		auto foveatedGuard = Util::DisableGuard(!featureRuntimeActive || !foveatedAvailable || settings.ExperimentalOCUEffectFoveation);
 		if (ImGui::Checkbox("SSGI FOV", &foveatedEnabled)) {
 			settings.EnableFoveated = foveatedEnabled;
 			if (settings.EnableFoveated) {
@@ -832,6 +905,8 @@ void ScreenSpaceGI::DrawPerformanceSettings(bool a_advanced)
 		Util::Text::Error("Compute shaders failed to compile!");
 
 	DrawScreenSpaceGIEnabledCheckbox(settings);
+
+	DrawOCUEffectFoveationSettings();
 
 	const int previousResourceProfile = settings.ResourceProfile;
 	{
@@ -1070,6 +1145,14 @@ void ScreenSpaceGI::SetupResources()
 	logger::debug("Creating buffers...");
 	{
 		ssgiCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<SSGICB>());
+		ocuEffectCB = nullptr;
+		try {
+			if (REL::Module::IsVR())
+				ocuEffectCB = eastl::make_unique<ConstantBuffer>(
+					ConstantBufferDesc<OCUEffectFoveation::Constants>(), "ScreenSpaceGI::OCUEffectFoveation");
+		} catch (const std::exception& e) {
+			logger::warn("OCU effect constants unavailable; keeping native SSGI sampling: {}", e.what());
+		}
 	}
 
 	logger::debug("Creating textures...");
@@ -1325,6 +1408,8 @@ void ScreenSpaceGI::ClearShaderCache()
 		&radianceDisoccAOOnlyCompute,
 		&giCompute,
 		&giAOOnlyCompute,
+		&giOCUEffectCompute,
+		&giAOOnlyOCUEffectCompute,
 		&giEye0OnlyCompute,
 		&giAOOnlyEye0OnlyCompute,
 		&centerGIMaskedCompute,
@@ -1361,6 +1446,7 @@ bool ScreenSpaceGI::CompileComputeShaders(Util::ShaderCompileTiming* a_timing)
 		bool includeAdaptiveSamplingDefines = false;
 	};
 
+	std::vector<ShaderCompileInfo> optionalShaderInfos;
 	std::vector<ShaderCompileInfo>
 		shaderInfos = {
 			{ &prefilterDepthsCompute, "prefilterDepths.cs.hlsl", { { "LINEAR_FILTER", "" } } },
@@ -1372,6 +1458,8 @@ bool ScreenSpaceGI::CompileComputeShaders(Util::ShaderCompileTiming* a_timing)
 			{ &centerBlendAOOnlyCompute, "centerBlend.cs.hlsl", {}, false, false, false },
 		};
 	if (REL::Module::IsVR()) {
+		if (settings.ExperimentalOCUEffectFoveation)
+			optionalShaderInfos.push_back({ &giAOOnlyOCUEffectCompute, "giOCUEffect.cs.hlsl", {}, true, true, false, true });
 		shaderInfos.push_back({ &giAOOnlyEye0OnlyCompute, "gi.cs.hlsl", { { "STEREO_EYE0_ONLY", "" }, { "FRAMEBUFFER", "" } }, true, true, false, true });
 		shaderInfos.push_back({ &reprojectAOOnlyCompute, "reproject.cs.hlsl", { { "FRAMEBUFFER", "" } }, true, false, false });
 		shaderInfos.push_back({ &stereoSyncAOOnlyCompute, "stereoSync.cs.hlsl", { { "FRAMEBUFFER", "" } }, true, false, false });
@@ -1381,6 +1469,8 @@ bool ScreenSpaceGI::CompileComputeShaders(Util::ShaderCompileTiming* a_timing)
 		shaderInfos.push_back({ &prefilterRadianceCompute, "prefilterRadiance.cs.hlsl", {} });
 		shaderInfos.push_back({ &radianceDisoccCompute, "radianceDisocc.cs.hlsl", {} });
 		shaderInfos.push_back({ &giCompute, "gi.cs.hlsl", {}, true, true, true, true });
+		if (REL::Module::IsVR() && settings.ExperimentalOCUEffectFoveation)
+			optionalShaderInfos.push_back({ &giOCUEffectCompute, "giOCUEffect.cs.hlsl", {}, true, true, true, true });
 		shaderInfos.push_back({ &centerGIMaskedCompute, "gi.cs.hlsl", { { "CENTER_FULL_PASS", "" } }, false, false, true, true });
 		shaderInfos.push_back({ &blurCompute, "blur.cs.hlsl", {} });
 		if (REL::Module::IsVR()) {
@@ -1392,7 +1482,7 @@ bool ScreenSpaceGI::CompileComputeShaders(Util::ShaderCompileTiming* a_timing)
 		shaderInfos.push_back({ &upsampleCompute, "upsample.cs.hlsl", {} });
 		shaderInfos.push_back({ &centerBlendCompute, "centerBlend.cs.hlsl", {}, false, false });
 	}
-	for (auto& info : shaderInfos) {
+	const auto compileShader = [&](ShaderCompileInfo& info) {
 		if (REL::Module::IsVR())
 			info.defines.push_back({ "VR", "" });
 		if (info.includeResolutionDefines) {
@@ -1409,26 +1499,37 @@ bool ScreenSpaceGI::CompileComputeShaders(Util::ShaderCompileTiming* a_timing)
 			info.defines.push_back({ "GI_SPECULAR", "" });
 		if (info.includeAdaptiveSamplingDefines && settings.EnableAdaptiveSampling)
 			info.defines.push_back({ "ADAPTIVE_SAMPLING", "" });
-	}
-
-	std::vector<winrt::com_ptr<ID3D11ComputeShader>> compiledShaders(
-		shaderInfos.size());
-	bool compilationComplete = true;
-	for (std::size_t i = 0; i < shaderInfos.size(); ++i) {
-		auto& info = shaderInfos[i];
 		auto path = std::filesystem::path("Data\\Shaders\\ScreenSpaceGI") / info.filename;
-		compiledShaders[i].attach(reinterpret_cast<ID3D11ComputeShader*>(
+		winrt::com_ptr<ID3D11ComputeShader> shader;
+		shader.attach(reinterpret_cast<ID3D11ComputeShader*>(
 			Util::CompileShader(
 				path.c_str(),
 				info.defines,
 				"cs_5_0",
 				"main",
 				a_timing)));
+		return shader;
+	};
+
+	// Optional variants must never retain a previous permutation after failure.
+	giAOOnlyOCUEffectCompute = nullptr;
+	giOCUEffectCompute = nullptr;
+	std::vector<winrt::com_ptr<ID3D11ComputeShader>> compiledShaders(shaderInfos.size());
+	bool compilationComplete = true;
+	for (std::size_t i = 0; i < shaderInfos.size(); ++i) {
+		compiledShaders[i] = compileShader(shaderInfos[i]);
 		compilationComplete = compiledShaders[i] && compilationComplete;
 	}
 	if (compilationComplete) {
 		for (std::size_t i = 0; i < shaderInfos.size(); ++i)
 			*shaderInfos[i].programPtr = std::move(compiledShaders[i]);
+		for (auto& info : optionalShaderInfos) {
+			try {
+				*info.programPtr = compileShader(info);
+			} catch (const std::exception& error) {
+				logger::warn("Optional OCU shader failed; keeping native SSGI sampling: {}", error.what());
+			}
+		}
 	}
 
 	recompileFlag = false;
@@ -1603,6 +1704,8 @@ void ScreenSpaceGI::UpdateSB()
 
 void ScreenSpaceGI::DrawSSGI()
 {
+	ocuEffectActive.store(false, std::memory_order_relaxed);
+	ocuEffectStatus.store(settings.ExperimentalOCUEffectFoveation ? "Native sampling: SSGI pass not active" : "OCU peripheral sampling disabled", std::memory_order_relaxed);
 	ApplyPlatformSettingOverrides(settings);
 	SyncResolvedSharedMaskScale(settings);
 
@@ -1722,6 +1825,7 @@ void ScreenSpaceGI::DrawSSGI()
 	};
 	hashCombine(static_cast<uint64_t>(resolutionMode));
 	hashCombine(static_cast<uint64_t>(foveatedSsgiActive));
+	hashCombine(static_cast<uint64_t>(settings.ExperimentalOCUEffectFoveation));
 	hashCombine(static_cast<uint64_t>(modeCenterScaleMilli));
 	if (modeCenterScaleMilli > 0) {
 		hashCombine(static_cast<uint64_t>(modeCenterHorizontalScaleMilli));
@@ -2126,11 +2230,59 @@ void ScreenSpaceGI::DrawSSGI()
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-		context->CSSetShader(useStereoReproject ? activeStereoReprojectGICompute : activeGICompute, nullptr, 0);
+		// Keep cross-eye reuse at native sample density; otherwise one eye could
+		// import reduced peripheral samples into the other eye's protected center.
+		auto effectShader = runILPath ? giOCUEffectCompute.get() : giAOOnlyOCUEffectCompute.get();
+		const bool effectRequested = isVR && settings.ExperimentalOCUEffectFoveation &&
+		                             !useStereoReproject && !stereoSyncBaseEnabled && ocuEffectCB && effectShader;
+		const auto effectConstants = ocuEffectClient.ReadForFrame(globals::state->frameCount, effectRequested);
+		bool useOCUEffect = effectConstants.Active();
+		const char* effectStatus = "OCU peripheral sampling disabled";
+		if (settings.ExperimentalOCUEffectFoveation) {
+			if (useStereoReproject)
+				effectStatus = "Native sampling: Stereo Reprojection is active";
+			else if (stereoSyncBaseEnabled)
+				effectStatus = "Native sampling: Stereo Sync is active";
+			else if (!effectShader || !ocuEffectCB)
+				effectStatus = "Native sampling: experimental shader or buffer unavailable";
+			else {
+				switch (ocuEffectClient.GetStatus()) {
+				case OCUEffectFoveation::Client::Status::ProviderUnavailable:
+					effectStatus = "Native sampling: compatible OCU runtime unavailable";
+					break;
+				case OCUEffectFoveation::Client::Status::QueryUnsupported:
+					effectStatus = "Native sampling: OCU profile query unsupported";
+					break;
+				case OCUEffectFoveation::Client::Status::ProfileDisabled:
+					effectStatus = "Native sampling: OCU foveation profile is disabled";
+					break;
+				case OCUEffectFoveation::Client::Status::InvalidOrStale:
+					effectStatus = "Native sampling: OCU profile is invalid or stale";
+					break;
+				case OCUEffectFoveation::Client::Status::Active:
+					effectStatus = "OCU peripheral sampling active";
+					break;
+				default:
+					break;
+				}
+			}
+		}
+		if (useOCUEffect) {
+			try {
+				ocuEffectCB->Update(effectConstants);
+			} catch (const std::exception&) {
+				useOCUEffect = false;
+				effectStatus = "Native sampling: OCU constant update failed";
+			}
+		}
+		context->CSSetShader(useOCUEffect ? effectShader : (useStereoReproject ? activeStereoReprojectGICompute : activeGICompute), nullptr, 0);
 		{
+			ScopedOCUEffectBuffer effectBuffer(context, useOCUEffect ? ocuEffectCB->CB() : nullptr);
 			CS_GPU_PASS("ScreenSpaceGI::GI");
 			context->Dispatch((internalRes[0] + 7u) >> 3, (internalRes[1] + 7u) >> 3, 1);
 		}
+		ocuEffectActive.store(useOCUEffect, std::memory_order_relaxed);
+		ocuEffectStatus.store(effectStatus, std::memory_order_relaxed);
 
 		inputAoTexIdx = !inputAoTexIdx;
 		inputGITexIdx = !inputGITexIdx;

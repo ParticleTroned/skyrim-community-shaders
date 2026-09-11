@@ -1,4 +1,5 @@
 #include "Upscaling.h"
+#include "Api/AcceptedDrawService.h"
 
 #include "BuildProvenance.h"
 #include "Deferred.h"
@@ -11853,9 +11854,15 @@ namespace
 	template <std::size_t Bank>
 	struct VRMenuTraceD3D11DrawIndexed
 	{
+		static void Replay(ID3D11DeviceContext* a_context, const CSXAcceptedDrawAPI::Arguments& a_args)
+		{
+			func(a_context, a_args.indexCount, a_args.startIndex, a_args.baseVertex);
+		}
 		static void thunk(ID3D11DeviceContext* a_context, UINT a_indexCount, UINT a_startIndexLocation, INT a_baseVertexLocation)
 		{
 			func(a_context, a_indexCount, a_startIndexLocation, a_baseVertexLocation);
+			CSX::Api::PublishAcceptedDraw(a_context,
+				{ CSXAcceptedDrawAPI::Indexed, a_indexCount, 1, a_startIndexLocation, a_baseVertexLocation, 0 }, &Replay);
 			TraceVRMenuPresentationD3DDraw(
 				a_context,
 				"DrawIndexed",
@@ -11881,6 +11888,10 @@ namespace
 	template <std::size_t Bank>
 	struct VRMenuTraceD3D11DrawIndexedInstanced
 	{
+		static void Replay(ID3D11DeviceContext* a_context, const CSXAcceptedDrawAPI::Arguments& a_args)
+		{
+			func(a_context, a_args.indexCount, a_args.instanceCount, a_args.startIndex, a_args.baseVertex, a_args.startInstance);
+		}
 		static void thunk(
 			ID3D11DeviceContext* a_context,
 			UINT a_indexCountPerInstance,
@@ -11896,6 +11907,10 @@ namespace
 				a_startIndexLocation,
 				a_baseVertexLocation,
 				a_startInstanceLocation);
+			CSX::Api::PublishAcceptedDraw(a_context,
+				{ CSXAcceptedDrawAPI::IndexedInstanced, a_indexCountPerInstance, a_instanceCount,
+					a_startIndexLocation, a_baseVertexLocation, a_startInstanceLocation },
+				&Replay);
 			TraceVRMenuPresentationD3DDraw(
 				a_context,
 				"DrawIndexedInstanced",
@@ -12548,8 +12563,14 @@ namespace
 	template <std::size_t Bank>
 	LONG QueueVRMenuPresentationTraceD3DHookBank(
 		ID3D11DeviceContext* a_context,
-		VRMenuPresentationTraceD3DHookPendingRegistration& a_pending)
+		VRMenuPresentationTraceD3DHookPendingRegistration& a_pending,
+		bool a_indexedOnly)
 	{
+		if (a_indexedOnly) {
+			return QueueVRMenuPresentationTraceD3DHooks<
+				VRMenuPresentationTraceD3DHookRegistration<12, VRMenuPresentationTraceD3DHookMethod::DrawIndexed, VRMenuTraceD3D11DrawIndexed<Bank>>,
+				VRMenuPresentationTraceD3DHookRegistration<20, VRMenuPresentationTraceD3DHookMethod::DrawIndexedInstanced, VRMenuTraceD3D11DrawIndexedInstanced<Bank>>>(a_context, a_pending);
+		}
 		return QueueVRMenuPresentationTraceD3DHooks<
 			VRMenuPresentationTraceD3DHookRegistration<8, VRMenuPresentationTraceD3DHookMethod::PSSetShaderResources, VRMenuTraceD3D11PSSetShaderResources<Bank>>,
 			VRMenuPresentationTraceD3DHookRegistration<12, VRMenuPresentationTraceD3DHookMethod::DrawIndexed, VRMenuTraceD3D11DrawIndexed<Bank>>,
@@ -12580,29 +12601,69 @@ namespace
 	LONG QueueVRMenuPresentationTraceD3DHookBank(
 		std::size_t a_bank,
 		ID3D11DeviceContext* a_context,
-		VRMenuPresentationTraceD3DHookPendingRegistration& a_pending)
+		VRMenuPresentationTraceD3DHookPendingRegistration& a_pending,
+		bool a_indexedOnly = false)
 	{
 		switch (a_bank) {
 		case 0:
-			return QueueVRMenuPresentationTraceD3DHookBank<0>(a_context, a_pending);
+			return QueueVRMenuPresentationTraceD3DHookBank<0>(a_context, a_pending, a_indexedOnly);
 		case 1:
-			return QueueVRMenuPresentationTraceD3DHookBank<1>(a_context, a_pending);
+			return QueueVRMenuPresentationTraceD3DHookBank<1>(a_context, a_pending, a_indexedOnly);
 		case 2:
-			return QueueVRMenuPresentationTraceD3DHookBank<2>(a_context, a_pending);
+			return QueueVRMenuPresentationTraceD3DHookBank<2>(a_context, a_pending, a_indexedOnly);
 		case 3:
-			return QueueVRMenuPresentationTraceD3DHookBank<3>(a_context, a_pending);
+			return QueueVRMenuPresentationTraceD3DHookBank<3>(a_context, a_pending, a_indexedOnly);
 		case 4:
-			return QueueVRMenuPresentationTraceD3DHookBank<4>(a_context, a_pending);
+			return QueueVRMenuPresentationTraceD3DHookBank<4>(a_context, a_pending, a_indexedOnly);
 		case 5:
-			return QueueVRMenuPresentationTraceD3DHookBank<5>(a_context, a_pending);
+			return QueueVRMenuPresentationTraceD3DHookBank<5>(a_context, a_pending, a_indexedOnly);
 		case 6:
-			return QueueVRMenuPresentationTraceD3DHookBank<6>(a_context, a_pending);
+			return QueueVRMenuPresentationTraceD3DHookBank<6>(a_context, a_pending, a_indexedOnly);
 		case 7:
-			return QueueVRMenuPresentationTraceD3DHookBank<7>(a_context, a_pending);
+			return QueueVRMenuPresentationTraceD3DHookBank<7>(a_context, a_pending, a_indexedOnly);
 		default:
 			return ERROR_NOT_ENOUGH_MEMORY;
 		}
 	}
+
+	std::size_t RecordVRMenuPresentationTraceD3DHookBank(const VRMenuPresentationTraceD3DHookPendingRegistration& a_pending)
+	{
+		for (std::size_t method = 0; method < a_pending.queued.size(); ++method) {
+			if (!a_pending.queued[method])
+				continue;
+			auto& count = g_vrMenuPresentationTraceD3DHookTargetCounts[method];
+			g_vrMenuPresentationTraceD3DHookTargets[method][count++] = a_pending.targets[method];
+		}
+		return g_vrMenuPresentationTraceD3DHookBanksUsed++;
+	}
+}
+
+bool Upscaling::InstallAcceptedDrawD3DHooks(ID3D11DeviceContext* a_context)
+{
+	if (!globals::game::isVR || !a_context || a_context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
+		return false;
+	std::scoped_lock lock(g_vrMenuPresentationTraceD3DHookInstallMutex);
+	const auto* vtable = *reinterpret_cast<std::uintptr_t**>(a_context);
+	if (IsVRMenuPresentationTraceD3DHookTargetCovered(VRMenuPresentationTraceD3DHookMethod::DrawIndexed, vtable[12]) &&
+		IsVRMenuPresentationTraceD3DHookTargetCovered(VRMenuPresentationTraceD3DHookMethod::DrawIndexedInstanced, vtable[20]))
+		return true;
+	if (g_vrMenuPresentationTraceD3DHookBanksUsed >= kVRMenuPresentationTraceD3DHookBankCount)
+		return false;
+	VRMenuPresentationTraceD3DHookPendingRegistration pending{};
+	LONG result = DetourTransactionBegin();
+	if (result != NO_ERROR)
+		return false;
+	result = DetourUpdateThread(GetCurrentThread());
+	if (result == NO_ERROR)
+		result = QueueVRMenuPresentationTraceD3DHookBank(g_vrMenuPresentationTraceD3DHookBanksUsed, a_context, pending, true);
+	if (result != NO_ERROR) {
+		DetourTransactionAbort();
+		return false;
+	}
+	if (DetourTransactionCommit() != NO_ERROR)
+		return false;
+	RecordVRMenuPresentationTraceD3DHookBank(pending);
+	return true;
 }
 
 void Upscaling::InstallVRMenuPresentationTraceD3DHooks(ID3D11DeviceContext* a_context)
@@ -12688,17 +12749,11 @@ void Upscaling::InstallVRMenuPresentationTraceD3DHooks(ID3D11DeviceContext* a_co
 		return;
 	}
 
-	for (std::size_t method = 0; method < pending.queued.size(); ++method) {
-		if (!pending.queued[method])
-			continue;
-		auto& count = g_vrMenuPresentationTraceD3DHookTargetCounts[method];
-		g_vrMenuPresentationTraceD3DHookTargets[method][count++] = pending.targets[method];
-	}
+	const std::size_t bank = RecordVRMenuPresentationTraceD3DHookBank(pending);
 	if (queueCreateDeferredContextHook) {
 		g_vrMenuPresentationTraceCreateDeferredContextTarget = createDeferredContextTarget;
 		g_vrMenuPresentationTraceCreateDeferredContextHookInstalled.store(true, std::memory_order_release);
 	}
-	const std::size_t bank = g_vrMenuPresentationTraceD3DHookBanksUsed++;
 	const bool drawCoverageComplete =
 		IsVRMenuPresentationTraceD3DContextDrawCoverageCompleteUnlocked(a_context);
 	g_vrMenuPresentationTraceD3DHooksInstalled.store(true, std::memory_order_release);
@@ -14608,6 +14663,7 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 	uint32_t a_callerRva,
 	const char** a_decisionReason)
 {
+	const CSX::Api::SuppressAcceptedDraw suppressAcceptedDraw;
 	bool requiredBridgeOperation = false;
 	auto decide = [&](const char* a_reason, bool a_result) {
 		if (a_decisionReason)

@@ -1642,6 +1642,12 @@ if(BUILD_CONTROLLER_TESTS)
     endfunction()
 
     add_controller_test(
+        pbr_material_registry_test
+        PBRMaterialRegistry
+        tests/pbr_material_registry_test.cpp
+    )
+    set_tests_properties(PBRMaterialRegistry PROPERTIES TIMEOUT 30)
+    add_controller_test(
         perf_mode_restart_state_test
         PerfModeRestartState
         tests/perf_mode_restart_state_test.cpp
@@ -2441,6 +2447,7 @@ if(BUILD_CONTROLLER_TESTS)
     add_custom_target(
         controller_tests
         DEPENDS
+            pbr_material_registry_test
             perf_mode_restart_state_test
             vr_vendor_relatch_policy_test
             vr_relatch_drain_policy_test

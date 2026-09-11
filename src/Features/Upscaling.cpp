@@ -544,7 +544,7 @@ void Upscaling::RecordVRRenderScaleGPUPerformanceCounter(VRRenderScaleGPUPerform
 namespace
 {
 	constexpr float kDLSSRCASSharpnessOverdrive = MotionSharpening::kMaximumRCASGain;
-	constexpr float kDLSSLumaSharpnessOverdrive = 2.5f;
+	constexpr float kDLSSLumaSharpnessOverdrive = MotionSharpening::kMaximumLumaGain;
 
 	// Keep this layout in lockstep with ClearHMDMaskCB in
 	// ClearHMDMaskCS.hlsl.
@@ -4442,15 +4442,19 @@ namespace
 	bool DispatchDLSSSharpener(Upscaling& a_upscaling, ID3D11ShaderResourceView* a_inputSRV, ID3D11UnorderedAccessView* a_outputUAV,
 		ID3D11ShaderResourceView* a_motionVectors = nullptr, std::span<const MotionSharpening::Region> a_regions = {})
 	{
+		const MotionSharpening::Settings motionSettings{ a_upscaling.settings.motionAdaptiveRCAS,
+			a_upscaling.settings.motionSharpnessAdjustment, a_upscaling.settings.motionSharpnessThreshold,
+			a_upscaling.settings.motionSharpnessCap };
 		switch (a_upscaling.GetDLSSSharpenerMode()) {
 		case Upscaling::DLSSSharpenerMode::RCAS:
 			return Upscaling::rcas.ApplyMotionAdaptiveSharpen(a_inputSRV, a_outputUAV,
 				GetDLSSRCASSharpness(a_upscaling.settings.sharpnessDLSS), a_upscaling.settings.sharpnessDLSS,
-				{ a_upscaling.settings.motionAdaptiveRCAS, a_upscaling.settings.motionSharpnessAdjustment,
-					a_upscaling.settings.motionSharpnessThreshold, a_upscaling.settings.motionSharpnessCap },
+				motionSettings,
 				a_motionVectors, a_regions);
 		case Upscaling::DLSSSharpenerMode::LumaUnsharp:
-			return Upscaling::lumaSharpen.ApplySharpen(a_inputSRV, a_outputUAV, GetDLSSLumaSharpness(a_upscaling.settings.sharpnessDLSS));
+			return Upscaling::lumaSharpen.ApplyMotionAdaptiveSharpen(a_inputSRV, a_outputUAV,
+				GetDLSSLumaSharpness(a_upscaling.settings.sharpnessDLSS), a_upscaling.settings.sharpnessDLSS,
+				motionSettings, a_motionVectors, a_regions);
 		case Upscaling::DLSSSharpenerMode::Off:
 		default:
 			return true;
@@ -16250,12 +16254,11 @@ void Upscaling::DrawSettings()
 				}
 			}
 
-			if (GetDLSSSharpenerMode() == DLSSSharpenerMode::RCAS) {
+			if (GetDLSSSharpenerMode() != DLSSSharpenerMode::Off) {
 				ImGui::Checkbox("Motion-adaptive sharpening", &settings.motionAdaptiveRCAS);
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted("Adjusts RCAS strength in moving parts of the image. Disabled by default.");
-					ImGui::TextUnformatted("Negative adjustment reduces shimmer during head or camera movement.");
-					ImGui::TextUnformatted("Uses fixed sharpening when current motion data is unavailable.");
+					ImGui::TextUnformatted("Adjusts RCAS or Luma Unsharp strength in moving parts of the image.");
+					ImGui::TextUnformatted("Negative adjustment may reduce shimmer during movement but soften detail.");
 				}
 				if (settings.motionAdaptiveRCAS) {
 					ImGui::SliderFloat("Motion adjustment", &settings.motionSharpnessAdjustment, -1.0f, 1.0f, "%.2f");
@@ -43840,7 +43843,7 @@ void Upscaling::SetupResources()
 	if (GetDLSSSharpenerMode() == DLSSSharpenerMode::RCAS)
 		rcas.Initialize(settings.motionAdaptiveRCAS);
 	else if (GetDLSSSharpenerMode() == DLSSSharpenerMode::LumaUnsharp)
-		lumaSharpen.Initialize();
+		lumaSharpen.Initialize(settings.motionAdaptiveRCAS);
 
 	if (d3d12SwapChainActive)
 		dx12SwapChain.CreateSharedResources();

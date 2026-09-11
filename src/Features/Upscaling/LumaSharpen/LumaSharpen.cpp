@@ -18,8 +18,10 @@ LumaSharpen::~LumaSharpen()
 	lumaSharpenConfigCB = nullptr;
 }
 
-void LumaSharpen::Initialize()
+void LumaSharpen::Initialize(bool enableMotionAdaptive)
 {
+	if (enableMotionAdaptive)
+		motionAdaptive.Initialize();
 	if (lumaSharpenConfigCB && lumaSharpenComputeShader)
 		return;
 
@@ -33,6 +35,20 @@ void LumaSharpen::Initialize()
 void LumaSharpen::ClearShaderCache()
 {
 	lumaSharpenComputeShader = nullptr;
+	motionAdaptive.ClearShaderCache();
+}
+
+bool LumaSharpen::ApplyMotionAdaptiveSharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAccessView* outputUAV,
+	float sharpness, float baseStrength, const MotionSharpening::Settings& settings,
+	ID3D11ShaderResourceView* motionVectors, std::span<const MotionSharpening::Region> regions)
+{
+	return motionAdaptive.Apply(inputSRV, outputUAV, sharpness, baseStrength, settings, motionVectors, regions,
+		[&]() { return ApplySharpen(inputSRV, outputUAV, sharpness); });
+}
+
+const char* LumaSharpen::GetMotionAdaptiveStatus() const noexcept
+{
+	return motionAdaptive.GetStatus();
 }
 
 void LumaSharpen::CreateComputeShader()
@@ -59,8 +75,8 @@ bool LumaSharpen::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11Unorder
 	}
 
 	LumaSharpenConfig config{};
-	config.sharpness = std::clamp(sharpness, 0.0f, 2.5f);
-	config.limit = 0.75f;
+	config.sharpness = std::clamp(sharpness, 0.0f, MotionSharpening::kMaximumLumaGain);
+	config.limit = MotionSharpening::kLumaDetailLimit;
 
 	return UpscalingSharpener::DispatchComputePass(
 		lumaSharpenComputeShader.get(),

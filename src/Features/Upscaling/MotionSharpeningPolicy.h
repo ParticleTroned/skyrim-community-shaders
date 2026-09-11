@@ -7,6 +7,8 @@
 namespace MotionSharpening
 {
 	inline constexpr float kMaximumRCASGain = 1.15457f;
+	inline constexpr float kMaximumLumaGain = 2.5f;
+	inline constexpr float kLumaDetailLimit = 0.75f;
 	struct Settings
 	{
 		bool enabled = false;

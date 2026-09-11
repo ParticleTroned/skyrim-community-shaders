@@ -1,11 +1,9 @@
 #pragma once
 
 #include "../../../Buffer.h"
-#include "../MotionSharpeningPolicy.h"
+#include "../MotionAdaptiveSharpening.h"
 
-#include <atomic>
 #include <d3d11_4.h>
-#include <memory>
 #include <span>
 #include <winrt/base.h>
 
@@ -26,7 +24,7 @@ public:
 	 *
 	 * Safe to call multiple times - will early-out if already initialized.
 	 */
-	void Initialize(bool motionAdaptive = false);
+	void Initialize(bool enableMotionAdaptive = false);
 	void ClearShaderCache();
 
 	/**
@@ -48,23 +46,9 @@ public:
 	const char* GetMotionAdaptiveStatus() const noexcept;
 
 private:
-	enum class MotionStatus : uint8_t
-	{
-		NotDispatched,
-		Disabled,
-		MotionUnavailable,
-		InvalidGeometry,
-		ShaderUnavailable,
-		Applied,
-		DispatchFailed
-	};
-	std::atomic<MotionStatus> motionStatus{ MotionStatus::NotDispatched };
+	UpscalingSharpener::MotionAdaptiveSharpening motionAdaptive{ UpscalingSharpener::Pass::RCAS };
 	void CreateComputeShader();
-	bool EnsureMotionAdaptiveResources();
 
 	winrt::com_ptr<ID3D11ComputeShader> rcasComputeShader;
-	winrt::com_ptr<ID3D11ComputeShader> motionAdaptiveComputeShader;
-	std::unique_ptr<ConstantBuffer> motionAdaptiveConfigCB;
-	bool motionAdaptiveShaderFailed = false;
 	ConstantBuffer* rcasConfigCB = nullptr;
 };

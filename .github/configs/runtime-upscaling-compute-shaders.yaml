@@ -11,6 +11,16 @@ shaders:
                   - entry: Upscaling:Compute:MotionAdaptiveRCAS
                     defines:
                         - MOTION_ADAPTIVE
+    - file: LumaSharpen.hlsl
+      configs:
+          CSHADER:
+              common_defines: []
+              entries:
+                  - entry: Upscaling:Compute:LumaSharpen
+                    defines: []
+                  - entry: Upscaling:Compute:MotionAdaptiveLumaSharpen
+                    defines:
+                        - MOTION_ADAPTIVE
     - file: EncodeTexturesCS.hlsl
       configs:
           CSHADER:

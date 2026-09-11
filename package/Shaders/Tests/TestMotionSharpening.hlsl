@@ -1,4 +1,4 @@
-#include "/Shaders/Upscaling/RCAS/MotionSharpening.hlsli"
+#include "/Shaders/Upscaling/MotionSharpening.hlsli"
 #include "/Test/STF/ShaderTestFramework.hlsli"
 
 /// @tags upscaling, sharpening, motion

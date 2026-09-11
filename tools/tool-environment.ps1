@@ -125,7 +125,8 @@ function Resolve-CsxVsDevCmd {
     }
 
     # Reinitializing another installation would mix its tools with inherited SDK state.
-    if ($env:VSINSTALLDIR) {
+    if ($env:VSINSTALLDIR -and
+        (Test-Path -LiteralPath $env:VSINSTALLDIR -PathType Container)) {
         $candidate = Join-Path $env:VSINSTALLDIR "Common7\Tools\VsDevCmd.bat"
         if ((Test-Path -LiteralPath $candidate -PathType Leaf) -and
             (Test-Path -LiteralPath (Join-Path $env:VSINSTALLDIR "VC\Tools\MSVC") -PathType Container)) {

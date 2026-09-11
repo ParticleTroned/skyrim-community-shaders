@@ -30,11 +30,25 @@ function Restore-TestEnvironment {
 
     foreach ($name in [Environment]::GetEnvironmentVariables("Process").Keys) {
         if (-not $Snapshot.Contains($name)) {
-            [Environment]::SetEnvironmentVariable($name, $null, "Process")
+            Remove-Item -LiteralPath "Env:$name"
         }
     }
     foreach ($entry in $Snapshot.GetEnumerator()) {
         [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, "Process")
+    }
+}
+
+function Assert-TestEnvironment {
+    param([Parameter(Mandatory = $true)][System.Collections.IDictionary] $Snapshot)
+
+    $actualEnvironment = [Environment]::GetEnvironmentVariables("Process")
+    Assert-Equal -Expected $Snapshot.Count -Actual $actualEnvironment.Count `
+        -Message "Environment restoration must preserve the exact set of variables."
+    foreach ($entry in $Snapshot.GetEnumerator()) {
+        if (-not $actualEnvironment.Contains($entry.Key) -or
+            $actualEnvironment[$entry.Key] -cne $entry.Value) {
+            throw "Environment restoration changed '$($entry.Key)'."
+        }
     }
 }
 
@@ -91,15 +105,46 @@ try {
             Assert-Equal -Expected $discoveredVsDevCmd -Actual (Resolve-CsxVsDevCmd -Required) `
                 -Message "An absent active installation must fall back to discovery."
 
+            $missingDrive = [char[]](90..68) | Where-Object {
+                -not (Get-PSDrive -Name $_ -ErrorAction SilentlyContinue)
+            } | Select-Object -First 1
+            if (-not $missingDrive) {
+                throw "No unused drive letter is available for the missing-drive regression."
+            }
+            $env:VSINSTALLDIR = "${missingDrive}:\Missing Visual Studio"
+            Assert-Equal -Expected $discoveredVsDevCmd -Actual (Resolve-CsxVsDevCmd -Required) `
+                -Message "An unavailable active drive must fall back to discovery."
+
             $activeInstallation = Join-Path $testRoot "Active Visual Studio"
             $activeTools = Join-Path $activeInstallation "Common7\Tools"
             New-Item -ItemType Directory -Force -Path $activeTools | Out-Null
-            New-Item -ItemType Directory -Force -Path (Join-Path $activeInstallation "VC\Tools\MSVC") | Out-Null
             $activeVsDevCmd = Join-Path $activeTools "VsDevCmd.bat"
+            $env:VSINSTALLDIR = $activeInstallation
+            New-Item -ItemType Directory -Force -Path (Join-Path $activeInstallation "VC\Tools\MSVC") | Out-Null
+            Assert-Equal -Expected $discoveredVsDevCmd -Actual (Resolve-CsxVsDevCmd -Required) `
+                -Message "An active installation without VsDevCmd must fall back to discovery."
             Copy-Item -LiteralPath $vsDevCmd -Destination $activeVsDevCmd
+            $installationWithoutMsvc = Join-Path $testRoot "Visual Studio Without MSVC"
+            $toolsWithoutMsvc = Join-Path $installationWithoutMsvc "Common7\Tools"
+            New-Item -ItemType Directory -Force -Path $toolsWithoutMsvc | Out-Null
+            Copy-Item -LiteralPath $vsDevCmd -Destination (Join-Path $toolsWithoutMsvc "VsDevCmd.bat")
+            $env:VSINSTALLDIR = $installationWithoutMsvc
+            Assert-Equal -Expected $discoveredVsDevCmd -Actual (Resolve-CsxVsDevCmd -Required) `
+                -Message "An active installation without MSVC must fall back to discovery."
             $env:VSINSTALLDIR = $activeInstallation
             Assert-Equal -Expected $activeVsDevCmd -Actual (Resolve-CsxVsDevCmd -Required) `
                 -Message "The active installation must take precedence over discovered installations."
+
+            $env:CSX_VSDEVCMD = Join-Path $testRoot "Missing-VsDevCmd.bat"
+            $overrideError = $null
+            try {
+                Resolve-CsxVsDevCmd -Required | Out-Null
+            } catch {
+                $overrideError = $_.Exception.Message
+            }
+            if ($overrideError -notlike "CSX_VSDEVCMD does not point to VsDevCmd.bat:*") {
+                throw "An invalid explicit override must fail instead of selecting the active installation."
+            }
 
             foreach ($name in @("VCToolsInstallDir", "INCLUDE", "LIB")) {
                 [Environment]::SetEnvironmentVariable($name, $null, "Process")
@@ -138,6 +183,7 @@ try {
 
             # VsDevCmd imports PATH, SDK and installation state as one environment.
             Restore-TestEnvironment -Snapshot $savedEnvironment
+            Assert-TestEnvironment -Snapshot $savedEnvironment
             Initialize-CsxMsvcEnvironment -Required | Out-Null
             $expectedVsDevCmd = Resolve-CsxVsDevCmd -Required
             foreach ($name in @("VCToolsInstallDir", "INCLUDE", "LIB")) {
@@ -166,6 +212,7 @@ try {
         } finally {
             Restore-TestEnvironment -Snapshot $savedEnvironment
         }
+        Assert-TestEnvironment -Snapshot $savedEnvironment
     }
 } finally {
     if (Test-Path -LiteralPath $testRoot) {

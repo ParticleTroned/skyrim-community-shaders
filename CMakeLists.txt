@@ -1641,6 +1641,38 @@ if(BUILD_CONTROLLER_TESTS)
         set_tests_properties(${TEST_NAME} PROPERTIES LABELS "ControllerTests")
     endfunction()
 
+    set(_vr_scene_guards_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/vr-scene-guards"
+    )
+    add_custom_command(
+        OUTPUT "${_vr_scene_guards_test_dir}/vr_scene_guards_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_vr_scene_guards_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_vr_scene_guards.cmake"
+        DEPENDS
+            src/Features/LightLimitFix.cpp
+            tests/extract_vr_scene_guards.cmake
+        VERBATIM
+    )
+    add_controller_test(vr_scene_guards_test VRSceneGuards tests/vr_scene_guards_test.cpp)
+    target_sources(
+        vr_scene_guards_test
+        PRIVATE "${_vr_scene_guards_test_dir}/vr_scene_guards_under_test.h"
+    )
+    target_include_directories(
+        vr_scene_guards_test
+        PRIVATE "${_vr_scene_guards_test_dir}"
+    )
+    target_link_libraries(vr_scene_guards_test PRIVATE xbyak::xbyak)
+    set_tests_properties(VRSceneGuards PROPERTIES TIMEOUT 30)
+
+    add_controller_test(
+        pbr_material_registry_test
+        PBRMaterialRegistry
+        tests/pbr_material_registry_test.cpp
+    )
+    set_tests_properties(PBRMaterialRegistry PROPERTIES TIMEOUT 30)
     add_controller_test(
         perf_mode_restart_state_test
         PerfModeRestartState
@@ -1656,6 +1688,149 @@ if(BUILD_CONTROLLER_TESTS)
         VRVendorRelatchPolicy
         tests/vr_vendor_relatch_policy_test.cpp
     )
+    add_controller_test(
+        vr_relatch_drain_policy_test
+        VRRelatchDrainPolicy
+        tests/vr_relatch_drain_policy_test.cpp
+    )
+    set(_vr_relatch_drain_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/vr-relatch-drain"
+    )
+    set(_vr_relatch_drain_test_headers
+        "${_vr_relatch_drain_test_dir}/vr_relatch_drain_controller_under_test.h"
+        "${_vr_relatch_drain_test_dir}/vr_relatch_drain_state_under_test.h"
+        "${_vr_relatch_drain_test_dir}/vr_relatch_drain_helpers_under_test.h"
+        "${_vr_relatch_drain_test_dir}/vr_relatch_drain_cleanup_under_test.h"
+        "${_vr_relatch_drain_test_dir}/vr_relatch_drain_providers_under_test.h"
+        "${_vr_relatch_drain_test_dir}/vr_relatch_drain_consumable_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_vr_relatch_drain_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_vr_relatch_drain_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_vr_relatch_drain_controller.cmake"
+        DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/Features/Upscaling.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Features/Upscaling.h"
+            "${PROJECT_SOURCE_DIR}/src/Features/Upscaling/FidelityFX.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Features/Upscaling/Streamline.cpp"
+            tests/extract_vr_relatch_drain_controller.cmake
+        VERBATIM
+    )
+    add_controller_test(
+        vr_relatch_drain_controller_test
+        VRRelatchDrainController
+        tests/vr_relatch_drain_controller_test.cpp
+    )
+    target_sources(
+        vr_relatch_drain_controller_test
+        PRIVATE ${_vr_relatch_drain_test_headers}
+    )
+    target_include_directories(
+        vr_relatch_drain_controller_test
+        PRIVATE "${_vr_relatch_drain_test_dir}"
+    )
+    target_compile_definitions(
+        vr_relatch_drain_controller_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED=1
+    )
+    set_tests_properties(VRRelatchDrainController PROPERTIES TIMEOUT 15)
+    add_controller_test(
+        vr_relatch_release_policy_test
+        VRRelatchReleasePolicy
+        tests/vr_relatch_release_policy_test.cpp
+    )
+    set(_vr_relatch_promotion_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/vr-relatch-promotion"
+    )
+    set(_vr_relatch_promotion_test_headers
+        "${_vr_relatch_promotion_test_dir}/vr_relatch_promotion_under_test.h"
+        "${_vr_relatch_promotion_test_dir}/vr_relatch_promotion_helpers_under_test.h"
+        "${_vr_relatch_promotion_test_dir}/vr_relatch_release_state_under_test.h"
+        "${_vr_relatch_promotion_test_dir}/vr_relatch_release_under_test.h"
+        "${_vr_relatch_promotion_test_dir}/vr_relatch_publication_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_vr_relatch_promotion_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_vr_relatch_promotion_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_vr_relatch_promotion.cmake"
+        DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/Features/Upscaling.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Features/Upscaling.h"
+            tests/extract_vr_relatch_promotion.cmake
+        VERBATIM
+    )
+    add_custom_target(
+        generate_vr_relatch_promotion_test
+        DEPENDS ${_vr_relatch_promotion_test_headers}
+    )
+    foreach(_bridge_variant ON OFF)
+        string(TOLOWER "${_bridge_variant}" _bridge_suffix)
+        set(_promotion_target "vr_relatch_promotion_${_bridge_suffix}_test")
+        add_controller_test(
+            ${_promotion_target}
+            "VRRelatchPromotion${_bridge_variant}"
+            tests/vr_relatch_promotion_test.cpp
+        )
+        add_dependencies(
+            ${_promotion_target}
+            generate_vr_relatch_promotion_test
+        )
+        target_include_directories(
+            ${_promotion_target}
+            PRIVATE "${_vr_relatch_promotion_test_dir}"
+        )
+        if(_bridge_variant STREQUAL "ON")
+            target_compile_definitions(
+                ${_promotion_target}
+                PRIVATE DEVBENCH_BRIDGE_ENABLED=1
+            )
+        endif()
+        set_tests_properties(
+            "VRRelatchPromotion${_bridge_variant}"
+            PROPERTIES TIMEOUT 15
+        )
+    endforeach()
+    add_controller_test(
+        vr_render_scale_frame_boundary_policy_test
+        VRRenderScaleFrameBoundaryPolicy
+        tests/vr_render_scale_frame_boundary_policy_test.cpp
+    )
+    set(_vr_relatch_native_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/vr-relatch-native"
+    )
+    set(_vr_relatch_native_test_headers
+        "${_vr_relatch_native_test_dir}/vr_relatch_native_boundary_under_test.h"
+        "${_vr_relatch_native_test_dir}/vr_relatch_native_eye_completion_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_vr_relatch_native_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_vr_relatch_native_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_vr_relatch_native_boundary.cmake"
+        DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/Features/VR/InSceneOverlay.cpp"
+            tests/extract_vr_relatch_native_boundary.cmake
+        VERBATIM
+    )
+    add_controller_test(
+        vr_relatch_native_boundary_test
+        VRRelatchNativeBoundary
+        tests/vr_relatch_native_boundary_test.cpp
+    )
+    target_sources(
+        vr_relatch_native_boundary_test
+        PRIVATE ${_vr_relatch_native_test_headers}
+    )
+    target_include_directories(
+        vr_relatch_native_boundary_test
+        PRIVATE "${_vr_relatch_native_test_dir}"
+    )
+    set_tests_properties(VRRelatchNativeBoundary PROPERTIES TIMEOUT 15)
     add_controller_test(
         vr_render_scale_authority_policy_test
         VRRenderScaleAuthorityPolicy
@@ -1731,6 +1906,21 @@ if(BUILD_CONTROLLER_TESTS)
         streamline_frame_token_publication_test
         StreamlineFrameTokenPublication
         tests/streamline_frame_token_publication_test.cpp
+    )
+    add_controller_test(
+        vr_submit_temporal_snapshot_test
+        VRSubmitTemporalSnapshot
+        tests/vr_submit_temporal_snapshot_test.cpp
+    )
+    add_controller_test(
+        vr_submit_color_contract_test
+        VRSubmitColorContract
+        tests/vr_submit_color_contract_test.cpp
+    )
+    add_controller_test(
+        vr_submit_stereo_batch_test
+        VRSubmitStereoBatch
+        tests/vr_submit_stereo_batch_test.cpp
     )
     add_controller_test(
         main_thread_dispatch_policy_test
@@ -1843,6 +2033,38 @@ if(BUILD_CONTROLLER_TESTS)
         FSRSharedGuideInterop
         PROPERTIES LABELS "GraphicsTests" SKIP_RETURN_CODE 77
     )
+    add_controller_test(
+        fsr_temporal_tuning_policy_test
+        FSRTemporalTuningPolicy
+        tests/fsr_temporal_tuning_policy_test.cpp
+    )
+    set(_fsr_temporal_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/fsr-temporal-tuning")
+    set(_fsr_temporal_headers
+        "${_fsr_temporal_test_dir}/temporal_settings_load_under_test.h"
+        "${_fsr_temporal_test_dir}/temporal_provider_calls_under_test.h"
+        "${_fsr_temporal_test_dir}/temporal_provider_result_under_test.h"
+        "${_fsr_temporal_test_dir}/temporal_snapshot_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_fsr_temporal_headers}
+        COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_fsr_temporal_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_fsr_temporal_tuning.cmake"
+        DEPENDS src/Features/Upscaling.cpp src/Features/Upscaling/FidelityFX.cpp
+            src/Features/Upscaling/FidelityFX.h
+            tests/extract_fsr_temporal_tuning.cmake
+        VERBATIM
+    )
+    add_custom_target(fsr_temporal_tuning_test_headers DEPENDS ${_fsr_temporal_headers})
+    add_controller_test(fsr_temporal_tuning_serialization_test FSRTemporalTuningSerialization tests/fsr_temporal_tuning_serialization_test.cpp)
+    add_controller_test(fsr_temporal_tuning_provider_test FSRTemporalTuningProvider tests/fsr_temporal_tuning_provider_test.cpp)
+    foreach(_temporal_test fsr_temporal_tuning_serialization_test fsr_temporal_tuning_provider_test)
+        add_dependencies(${_temporal_test} fsr_temporal_tuning_test_headers)
+        target_include_directories(${_temporal_test} PRIVATE "${_fsr_temporal_test_dir}")
+    endforeach()
+    target_link_libraries(fsr_temporal_tuning_serialization_test PRIVATE nlohmann_json::nlohmann_json)
+    target_include_directories(fsr_temporal_tuning_provider_test PRIVATE "${PROJECT_SOURCE_DIR}/include")
+
     set(_fsr_eye_dispatch_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/fsr-eye-dispatch"
     )
@@ -2335,8 +2557,17 @@ if(BUILD_CONTROLLER_TESTS)
     add_custom_target(
         controller_tests
         DEPENDS
+            vr_scene_guards_test
+            pbr_material_registry_test
             perf_mode_restart_state_test
             vr_vendor_relatch_policy_test
+            vr_relatch_drain_policy_test
+            vr_relatch_drain_controller_test
+            vr_relatch_release_policy_test
+            vr_relatch_promotion_on_test
+            vr_relatch_promotion_off_test
+            vr_relatch_native_boundary_test
+            vr_render_scale_frame_boundary_policy_test
             vr_render_scale_authority_policy_test
             vr_render_scale_mode_policy_test
             upscaling_measurement_restore_test
@@ -2344,6 +2575,9 @@ if(BUILD_CONTROLLER_TESTS)
             vr_render_scale_qualification_policy_test
             vr_render_scale_replacement_telemetry_policy_test
             streamline_frame_token_publication_test
+            vr_submit_temporal_snapshot_test
+            vr_submit_color_contract_test
+            vr_submit_stereo_batch_test
             main_thread_dispatch_policy_test
             vr_render_scale_preparation_policy_test
             vr_presentation_stretch_telemetry_policy_test
@@ -2352,6 +2586,9 @@ if(BUILD_CONTROLLER_TESTS)
             fsr_runtime_lifecycle_policy_test
             fsr_shared_guides_policy_test
             fsr_shared_guide_interop_test
+            fsr_temporal_tuning_policy_test
+            fsr_temporal_tuning_serialization_test
+            fsr_temporal_tuning_provider_test
             fsr_eye_dispatch_test
             vr_submit_input_freshness_policy_test
             vr_submit_input_freshness_composition_test

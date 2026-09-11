@@ -9,6 +9,7 @@
 #include "State.h"
 #include "Util.h"
 
+#include <atomic>
 #include <mutex>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -278,18 +279,18 @@ void TruePBR::DrawSettings()
 				ImGui::TreePop();
 			}
 			if (wasEdited) {
-				for (auto& [material, extensions] : BSLightingShaderMaterialPBR::All) {
+				BSLightingShaderMaterialPBR::All.ForEach([&](auto* material, const auto& extensions) {
 					if (extensions.textureSetData == selectedPbrTextureSet) {
 						material->ApplyTextureSetData(*extensions.textureSetData);
 					}
-				}
-				for (auto& [material, textureSets] : BSLightingShaderMaterialPBRLandscape::All) {
+				});
+				BSLightingShaderMaterialPBRLandscape::All.ForEach([&](auto* material, const auto& textureSets) {
 					for (uint32_t textureSetIndex = 0; textureSetIndex < BSLightingShaderMaterialPBRLandscape::NumTiles; ++textureSetIndex) {
 						if (textureSets[textureSetIndex] == selectedPbrTextureSet) {
 							SetupPBRLandscapeTextureParameters(*material, *textureSets[textureSetIndex], textureSetIndex);
 						}
 					}
-				}
+				});
 			}
 			if (selectedPbrTextureSet != nullptr) {
 				if (ImGui::Button("Save")) {
@@ -391,11 +392,11 @@ void TruePBR::DrawSettings()
 				ImGui::TreePop();
 			}
 			if (wasEdited) {
-				for (auto& [material, extensions] : BSLightingShaderMaterialPBR::All) {
+				BSLightingShaderMaterialPBR::All.ForEach([&](auto* material, const auto& extensions) {
 					if (extensions.materialObjectData == selectedPbrMaterialObject) {
 						material->ApplyMaterialObjectData(*extensions.materialObjectData);
 					}
-				}
+				});
 			}
 			if (selectedPbrMaterialObject != nullptr) {
 				if (ImGui::Button("Save")) {
@@ -594,11 +595,13 @@ void TruePBR::ReloadTextureSetData()
 			return false;
 		} }, enableVerboseJsonLogging);
 
-	for (const auto& [material, textureSets] : BSLightingShaderMaterialPBRLandscape::All) {
+	BSLightingShaderMaterialPBRLandscape::All.ForEach([](auto* material, const auto& textureSets) {
 		for (uint32_t textureSetIndex = 0; textureSetIndex < BSLightingShaderMaterialPBRLandscape::NumTiles; ++textureSetIndex) {
-			SetupPBRLandscapeTextureParameters(*material, *textureSets[textureSetIndex], textureSetIndex);
+			if (const auto* textureSetData = textureSets[textureSetIndex]) {
+				SetupPBRLandscapeTextureParameters(*material, *textureSetData, textureSetIndex);
+			}
 		}
-	}
+	});
 }
 
 TruePBR::PBRTextureSetData* TruePBR::GetPBRTextureSetData(const RE::TESForm* textureSet)
@@ -783,9 +786,8 @@ namespace
 
 		auto* material = static_cast<BSLightingShaderMaterialPBR*>(property->material);
 		if (!IsLikelyValidPointer(material)) {
-			static bool loggedInvalidMaterialAddress = false;
-			if (!loggedInvalidMaterialAddress) {
-				loggedInvalidMaterialAddress = true;
+			static std::atomic_flag loggedInvalidMaterialAddress{};
+			if (!loggedInvalidMaterialAddress.test_and_set(std::memory_order_relaxed)) {
 				logger::error("[TruePBR] Invalid material pointer {:X} (geometry: {}) - keeping original render state",
 					reinterpret_cast<std::uintptr_t>(material),
 					GetGeometryName(geometry));
@@ -793,10 +795,9 @@ namespace
 			return nullptr;
 		}
 
-		if (BSLightingShaderMaterialPBR::All.find(material) == BSLightingShaderMaterialPBR::All.end()) {
-			static bool loggedUnknownPBRMaterial = false;
-			if (!loggedUnknownPBRMaterial) {
-				loggedUnknownPBRMaterial = true;
+		if (!BSLightingShaderMaterialPBR::All.Contains(material)) {
+			static std::atomic_flag loggedUnknownPBRMaterial{};
+			if (!loggedUnknownPBRMaterial.test_and_set(std::memory_order_relaxed)) {
 				logger::warn("[TruePBR] Ignoring unregistered vertex-lighting material on geometry {} to avoid invalid PBR casts",
 					GetGeometryName(geometry));
 			}
@@ -816,9 +817,8 @@ namespace
 
 		auto* material = static_cast<BSLightingShaderMaterialPBRLandscape*>(property->material);
 		if (!IsLikelyValidPointer(material)) {
-			static bool loggedInvalidLandscapeMaterialAddress = false;
-			if (!loggedInvalidLandscapeMaterialAddress) {
-				loggedInvalidLandscapeMaterialAddress = true;
+			static std::atomic_flag loggedInvalidLandscapeMaterialAddress{};
+			if (!loggedInvalidLandscapeMaterialAddress.test_and_set(std::memory_order_relaxed)) {
 				logger::error("[TruePBR] Invalid landscape material pointer {:X} (geometry: {}) - keeping original render state",
 					reinterpret_cast<std::uintptr_t>(material),
 					GetGeometryName(geometry));
@@ -826,10 +826,9 @@ namespace
 			return nullptr;
 		}
 
-		if (BSLightingShaderMaterialPBRLandscape::All.find(material) == BSLightingShaderMaterialPBRLandscape::All.end()) {
-			static bool loggedUnknownPBRLandscapeMaterial = false;
-			if (!loggedUnknownPBRLandscapeMaterial) {
-				loggedUnknownPBRLandscapeMaterial = true;
+		if (!BSLightingShaderMaterialPBRLandscape::All.Contains(material)) {
+			static std::atomic_flag loggedUnknownPBRLandscapeMaterial{};
+			if (!loggedUnknownPBRLandscapeMaterial.test_and_set(std::memory_order_relaxed)) {
 				logger::warn("[TruePBR] Ignoring unregistered landscape PBR material on geometry {} to avoid invalid casts",
 					GetGeometryName(geometry));
 			}
@@ -954,9 +953,8 @@ struct BSLightingShaderProperty_GetRenderPasses
 		// Guard against invalid hook-chain returns (e.g. other SKSE mods returning non-pointer values), which can surface as cold-breath CTDs.
 		const auto renderPassesAddress = reinterpret_cast<std::uintptr_t>(renderPasses);
 		if (!IsLikelyValidPointer(renderPasses, alignof(RE::BSShaderProperty::RenderPassArray))) {
-			static bool loggedInvalidRenderPassAddress = false;
-			if (!loggedInvalidRenderPassAddress) {
-				loggedInvalidRenderPassAddress = true;
+			static std::atomic_flag loggedInvalidRenderPassAddress{};
+			if (!loggedInvalidRenderPassAddress.test_and_set(std::memory_order_relaxed)) {
 				logger::error("[TruePBR] Invalid GetRenderPasses pointer {:X} (geometry: {}) - returning null for safety (prevents known cold-breath CTD path)",
 					renderPassesAddress,
 					GetGeometryName(geometry));
@@ -1464,7 +1462,7 @@ bool TruePBR::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 				material->landscapeRMAOSTextures[textureIndex] = stateData.defaultTextureWhite;
 			}
 
-			auto& textureSets = BSLightingShaderMaterialPBRLandscape::All[material];
+			std::array<TruePBR::PBRTextureSetData*, BSLightingShaderMaterialPBRLandscape::NumTiles> textureSets{};
 
 			if (auto defTexture = land->loadedData->defQuadTextures[quadIndex]) {
 				SetupLandscapeTexture(*material, *defTexture, 0, textureSets);
@@ -1476,6 +1474,10 @@ bool TruePBR::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 					SetupLandscapeTexture(*material, *landTexture, textureIndex + 1, textureSets);
 				}
 			}
+
+			BSLightingShaderMaterialPBRLandscape::All.Update(material, [&textureSets](auto& registeredTextureSets) {
+				registeredTextureSets = textureSets;
+			});
 
 			if (globals::game::bEnableLandFade->GetBool()) {
 				shaderProperty->unk108 = false;
@@ -1652,37 +1654,41 @@ struct TESBoundObject_Clone3D
 						if (shaderProperty->GetMaterialType() == RE::BSShaderMaterial::Type::kLighting &&
 							shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting)) {
 							if (auto* material = TryGetRegisteredPBRMaterial(shaderProperty, geometry)) {
-								auto& ext = BSLightingShaderMaterialPBR::All[material];
-								const auto prevOwnerRefID = ext.lastOwnerRefFormID;
-
-								// Fork-before-write: if this material instance is already owned
-								// by a different ref whose MATO payload differs from the incoming
-								// one, clone it so we don't contaminate the previous owner's
-								// geometry. GetPBRMaterialObjectData returns stable addresses into
-								// pbrMaterialObjects, so pointer identity detects different MATOs.
-								const bool wouldContaminate =
-									(prevOwnerRefID != 0) &&
-									(prevOwnerRefID != ref->GetFormID()) &&
-									(ext.materialObjectData != pbrData);
-
-								BSLightingShaderMaterialPBR* targetMat = material;
+								const auto ownerFormID = ref->GetFormID();
+								const auto applyData = [pbrData, ownerFormID](auto* target, auto& extensions) {
+									target->ApplyMaterialObjectData(*pbrData);
+									extensions.materialObjectData = pbrData;
+									extensions.lastOwnerRefFormID = ownerFormID;
+								};
+								bool wouldContaminate = false;
+								if (!BSLightingShaderMaterialPBR::All.TryUpdate(material, [&](auto& extensions) {
+										// Claim and update together so different refs cannot both
+										// overwrite an apparently unowned pooled material.
+										wouldContaminate = extensions.lastOwnerRefFormID != 0 &&
+									                       extensions.lastOwnerRefFormID != ownerFormID &&
+									                       extensions.materialObjectData != pbrData;
+										if (!wouldContaminate) {
+											applyData(material, extensions);
+										}
+									})) {
+									return RE::BSVisit::BSVisitControl::kContinue;
+								}
 
 								if (wouldContaminate) {
+									// Create and CopyMembers register metadata themselves;
+									// engine calls must stay outside the registry lock.
 									auto* freshMat = static_cast<BSLightingShaderMaterialPBR*>(material->Create());
 									if (freshMat) {
 										freshMat->CopyMembers(material);
+										BSLightingShaderMaterialPBR::All.Update(freshMat, [&](auto& extensions) {
+											applyData(freshMat, extensions);
+										});
 										shaderProperty->material = freshMat;
-										targetMat = freshMat;
 									} else {
 										logger::warn("[TruePBR] failed to clone PBR material for ref {:08X}; skipping to avoid contamination", ref->GetFormID());
 										return RE::BSVisit::BSVisitControl::kContinue;
 									}
 								}
-
-								targetMat->ApplyMaterialObjectData(*pbrData);
-								auto& targetExt = BSLightingShaderMaterialPBR::All[targetMat];
-								targetExt.materialObjectData = pbrData;
-								targetExt.lastOwnerRefFormID = ref->GetFormID();
 							}
 						}
 					}

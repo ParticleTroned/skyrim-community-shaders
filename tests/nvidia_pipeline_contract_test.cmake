@@ -306,7 +306,9 @@ file(READ "${PROJECT_ROOT}/src/Features/Upscaling/FidelityFX.cpp" _fidelityfx)
 foreach(_required IN ITEMS
     "completeLoaderInterface"
     "frameGenerationSessionQuarantined.exchange(true"
-    "ConfigureFrameGenerationProtected"
+    "ConfigureFidelityFXProtected(&frameGenContext, &disable.header, crashed)"
+    "ConfigureFidelityFXProtected(&frameGenContext, &configParameters.header, crashed)"
+    "ConfigureFidelityFXProtected(&swapChainContext, &uiConfig.header, crashed)"
     "DispatchFrameGenerationProtected"
     "frameGenContextIndeterminate"
     "swapChainContextIndeterminate"

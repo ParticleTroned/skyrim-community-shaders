@@ -1,0 +1,23 @@
+#pragma once
+
+#include <cstdint>
+#include <string_view>
+
+// Captured Skyrim VR 1.4.15 instruction windows; provenance is recorded in
+// docs/development/vr-scene-guard-review.md.
+struct CapturedSceneGuardSite
+{
+	std::uintptr_t rva;
+	std::string_view hex;
+};
+
+inline constexpr CapturedSceneGuardSite capturedSites[]{
+	{ 0xCBFC60, "48895c2410574883ec2083baf000000000488bfa488bd9" },
+	{ 0xCBFD15, "4183f9067524488b07488bd3488bcfff90a8010000" },
+	{ 0xCBFD52, "89b39c000000488b742430488b5c24384883c4205fc3" },
+	{ 0xCBFDB2, "83b99c0000000074dc4183c8ffe99cfeffff" },
+	{ 0x134C370, "488bc4554154415541564157488da8e8feffff4881ecf0010000" },
+	{ 0x134C38A, "48c74530feffffff4889581048897018488978200f2970c80f2978b8440f2940a8440f294898440f295088440f299878ffffff440f29a068ffffff" },
+	{ 0x134C5F9, "488b7b40c7459800000000c7459c0000803f48c745a00000803f488b87800100000f1000" },
+	{ 0x134C99E, "4c8d9c24f0010000498b5b38498b7340498b7b48410f2873f0410f287be0450f2843d0450f284bc0450f2853b0450f285ba0450f286390498be3415f415e415d415c5dc3" },
+};

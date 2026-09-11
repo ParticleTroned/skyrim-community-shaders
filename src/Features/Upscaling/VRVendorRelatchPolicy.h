@@ -1336,6 +1336,7 @@ namespace VRVendorRelatchPolicy
 		bool immutableSettingsTransition = false;
 		bool exactAttemptMetrics = false;
 		std::uint32_t retries = 0;
+		std::uint32_t readinessDeferrals = 0;
 		std::uint32_t failures = 0;
 		bool recoveryOwned = false;
 		bool providerNeutralRecovery = false;
@@ -1347,11 +1348,33 @@ namespace VRVendorRelatchPolicy
 		const ProofDrivenPromotionAdmission& a_state) noexcept
 	{
 		return a_state.immutableSettingsTransition &&
-		       a_state.exactAttemptMetrics && a_state.retries == 0 &&
+		       a_state.exactAttemptMetrics &&
+		       a_state.retries != std::numeric_limits<std::uint32_t>::max() &&
+		       a_state.retries == a_state.readinessDeferrals &&
 		       a_state.failures == 0 && !a_state.recoveryOwned &&
 		       !a_state.providerNeutralRecovery &&
 		       !a_state.emergencyRecovery &&
 		       !a_state.presentationDeadlineFallback;
+	}
+
+	inline constexpr std::uint32_t kReadinessPollRetryFrames = 1u;
+
+	struct ReadinessRetryAdmission
+	{
+		ProofDrivenPromotionAdmission promotion{};
+		bool pendingBeforeRelease = false;
+		bool physicalMutationStarted = true;
+		bool providerQuarantined = true;
+	};
+
+	/** Only proven readiness waits may retain proof-driven promotion after retry. */
+	[[nodiscard]] constexpr bool CanRetryReadinessWithoutSettleGuard(
+		const ReadinessRetryAdmission& a_state) noexcept
+	{
+		return CanUseProofDrivenPromotion(a_state.promotion) &&
+		       a_state.pendingBeforeRelease &&
+		       !a_state.physicalMutationStarted &&
+		       !a_state.providerQuarantined;
 	}
 
 	[[nodiscard]] constexpr bool IsSameStereoDispatchContract(

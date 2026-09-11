@@ -151,10 +151,25 @@ namespace
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	bool IsReadableRange(const void* a_ptr, std::size_t a_size) noexcept;
+
 	template <std::size_t N>
 	bool MatchesInstructions(std::uintptr_t a_address, const std::uint8_t (&a_expected)[N]) noexcept
 	{
-		return std::equal(std::begin(a_expected), std::end(a_expected), reinterpret_cast<const std::uint8_t*>(a_address));
+		const auto* actual = reinterpret_cast<const std::uint8_t*>(a_address);
+		const auto rva = a_address - REL::Module::get().base();
+		if (!IsReadableRange(actual, N)) {
+			logger::error("[LLF] Instruction check at SkyrimVR.exe+{:X}: {} bytes are not readable", rva, N);
+			return false;
+		}
+
+		const auto mismatch = std::mismatch(std::begin(a_expected), std::end(a_expected), actual);
+		if (mismatch.first == std::end(a_expected)) {
+			return true;
+		}
+		logger::error("[LLF] Instruction check at SkyrimVR.exe+{:X}, byte +{:X}: expected {:02X}, observed {:02X}",
+			rva, mismatch.first - std::begin(a_expected), *mismatch.first, *mismatch.second);
+		return false;
 	}
 
 	class VRValidatedObjectGuard : public Xbyak::CodeGenerator
@@ -2352,16 +2367,9 @@ void LightLimitFix::Hooks::InstallVRSceneGraphCullingObjectGuard()
 		return;
 	}
 
-	// Skyrim VR 1.4.15 can retain a readable NiNode child after teardown has
-	// cleared its vtable. The scene-culling helper then reads that stale object
-	// and dispatches through slot 0x1A8 of the null vtable. The helper entry,
-	// virtual-call context, internal tail-entry context, and void epilogue were verified
-	// against the live, decrypted runtime after the same Windhelm-to-Dragonsreach
-	// crash reproduced both before and after the room-light/effect-shader guards.
+	// This entry guard owns only the prologue; interior OnVisible hooks remain independent.
+	// Verify the displaced instruction and incoming-object contract against the live image.
 	constexpr std::uintptr_t helperEntryRVA = 0xCBFC60;
-	constexpr std::uintptr_t virtualCallContextRVA = 0xCBFD15;
-	constexpr std::uintptr_t helperEpilogueRVA = 0xCBFD52;
-	constexpr std::uintptr_t helperTailContextRVA = 0xCBFDB2;
 	constexpr std::size_t patchedInstructionSize = 5;
 	constexpr std::uint8_t expectedHelperEntry[] = {
 		0x48, 0x89, 0x5C, 0x24, 0x10,
@@ -2371,38 +2379,10 @@ void LightLimitFix::Hooks::InstallVRSceneGraphCullingObjectGuard()
 		0x48, 0x8B, 0xFA,
 		0x48, 0x8B, 0xD9
 	};
-	constexpr std::uint8_t expectedVirtualCallContext[] = {
-		0x41, 0x83, 0xF9, 0x06,
-		0x75, 0x24,
-		0x48, 0x8B, 0x07,
-		0x48, 0x8B, 0xD3,
-		0x48, 0x8B, 0xCF,
-		0xFF, 0x90, 0xA8, 0x01, 0x00, 0x00
-	};
-	constexpr std::uint8_t expectedHelperEpilogue[] = {
-		0x89, 0xB3, 0x9C, 0x00, 0x00, 0x00,
-		0x48, 0x8B, 0x74, 0x24, 0x30,
-		0x48, 0x8B, 0x5C, 0x24, 0x38,
-		0x48, 0x83, 0xC4, 0x20,
-		0x5F,
-		0xC3
-	};
-	constexpr std::uint8_t expectedHelperTailContext[] = {
-		0x83, 0xB9, 0x9C, 0x00, 0x00, 0x00, 0x00,
-		0x74, 0xDC,
-		0x41, 0x83, 0xC8, 0xFF,
-		0xE9, 0x9C, 0xFE, 0xFF, 0xFF
-	};
 
 	const auto moduleBase = REL::Module::get().base();
 	const auto helperEntry = moduleBase + helperEntryRVA;
-	const auto virtualCallContext = moduleBase + virtualCallContextRVA;
-	const auto helperEpilogue = moduleBase + helperEpilogueRVA;
-	const auto helperTailContext = moduleBase + helperTailContextRVA;
-	if (!MatchesInstructions(helperEntry, expectedHelperEntry) ||
-		!MatchesInstructions(virtualCallContext, expectedVirtualCallContext) ||
-		!MatchesInstructions(helperEpilogue, expectedHelperEpilogue) ||
-		!MatchesInstructions(helperTailContext, expectedHelperTailContext)) {
+	if (!MatchesInstructions(helperEntry, expectedHelperEntry)) {
 		logger::error("[LLF] VR scene-graph culling-object guard not installed: unexpected SkyrimVR.exe instructions");
 		return;
 	}
@@ -2454,20 +2434,19 @@ void LightLimitFix::Hooks::InstallVRShadowMapCameraGuard()
 		0x48, 0x8B, 0x7B, 0x40,
 		0xC7, 0x45, 0x98, 0x00, 0x00, 0x00, 0x00,
 		0xC7, 0x45, 0x9C, 0x00, 0x00, 0x80, 0x3F,
-		0x48, 0xC7, 0x45, 0xA0, 0x00, 0x00, 0x80, 0x3F,
-		0x48, 0x8B, 0x87, 0x80, 0x01, 0x00, 0x00,
-		0x0F, 0x10, 0x00
+		0x48, 0xC7, 0x45, 0xA0, 0x00, 0x00, 0x80, 0x3F
 	};
 	constexpr std::uint8_t expectedLateFrustumLoad[] = {
-		0x48, 0x8B, 0x87, 0x80, 0x01, 0x00, 0x00
+		0x48, 0x8B, 0x87, 0x80, 0x01, 0x00, 0x00,
+		0x0F, 0x10, 0x00
 	};
 	constexpr std::uint8_t expectedHelperEpilogue[] = {
 		0x4C, 0x8D, 0x9C, 0x24, 0xF0, 0x01, 0x00, 0x00,
 		0x49, 0x8B, 0x5B, 0x38,
 		0x49, 0x8B, 0x73, 0x40,
 		0x49, 0x8B, 0x7B, 0x48,
-		0x45, 0x0F, 0x28, 0x73, 0xF0,
-		0x45, 0x0F, 0x28, 0x7B, 0xE0,
+		0x41, 0x0F, 0x28, 0x73, 0xF0,
+		0x41, 0x0F, 0x28, 0x7B, 0xE0,
 		0x45, 0x0F, 0x28, 0x43, 0xD0,
 		0x45, 0x0F, 0x28, 0x4B, 0xC0,
 		0x45, 0x0F, 0x28, 0x53, 0xB0,

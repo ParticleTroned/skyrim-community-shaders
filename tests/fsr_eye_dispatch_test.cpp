@@ -1,6 +1,8 @@
 #include "Features/Upscaling/FSRHostLifecyclePolicy.h"
 #include "Features/Upscaling/FSRRuntimeLifecyclePolicy.h"
+#include "Features/Upscaling/VRSubmitColorContract.h"
 #include "Features/Upscaling/VRSubmitInputFreshnessPolicy.h"
+#include "Features/Upscaling/VRSubmitTemporalSnapshot.h"
 #include "Features/Upscaling/VRVendorRelatchPolicy.h"
 
 #include <algorithm>
@@ -68,9 +70,11 @@ ID3D11Resource* ffxGetResource(ID3D11Resource* a_resource, const wchar_t*) { ret
 namespace logger
 {
 	template <class... Args>
-	void debug(std::string_view, Args&&...) {}
+	void debug(std::string_view, Args&&...)
+	{}
 	template <class... Args>
-	void critical(std::string_view, Args&&...) {}
+	void critical(std::string_view, Args&&...)
+	{}
 }
 namespace Util
 {
@@ -177,17 +181,20 @@ struct FidelityFX
 		.selected = true,
 		.contextCount = 2,
 	};
-	LifecycleResult simulatedRuntimeResult = LifecycleResult::Pending;
+	LifecycleResult runtimeDispatchResult = LifecycleResult::Pending;
 	uint32_t runtimeCalls = 0;
 	uint32_t runtimeEyeMask = 0;
 	uint32_t runtimeRegionCount = 0;
 	uint32_t hostCalls = 0;
 	uint32_t hostEyeMask = 0;
+	uint32_t relatchDrainInvalidations = 0;
+	uint32_t lastHostDrainInvalidations = 0;
 	uint32_t quarantines = 0;
 	uint32_t hostQuarantines = 0;
 	uint32_t fsr4Failures = 0;
 	uint32_t deviceProbes = 0;
 	bool lastHostReset = false;
+	FfxFsr3DispatchUpscaleDescription lastHostParameters{};
 	RuntimeUpscalerFramePath lastFramePath = RuntimeUpscalerFramePath::kInactive;
 
 	RuntimeDispatchPlan ResolveRuntimeDispatchPlan() const { return plan; }
@@ -207,7 +214,7 @@ struct FidelityFX
 		runtimeRegionCount += static_cast<uint32_t>(a_regions.size());
 		for (const auto& region : a_regions)
 			runtimeEyeMask |= 1u << region.contextIndex;
-		return simulatedRuntimeResult;
+		return runtimeDispatchResult;
 	}
 	bool IsHostFSR3Supported() const { return hostSupported; }
 	bool HasFSRResources() const;
@@ -222,6 +229,7 @@ struct FidelityFX
 		return LifecycleResult::Ready;
 	}
 	void RecordRuntimeUpscalerFramePath(RuntimeUpscalerFramePath a_path) { lastFramePath = a_path; }
+	void InvalidateFSRRelatchDrain() noexcept { ++relatchDrainInvalidations; }
 	struct Sharpening
 	{
 		bool enabled;
@@ -231,9 +239,11 @@ struct FidelityFX
 	void LogFSRSharpeningDispatch(Sharpening, const char*) {}
 	bool DispatchHostFsr3UpscaleProtected(uint32_t a_eye, const FfxFsr3DispatchUpscaleDescription& a_params, bool& a_crashed)
 	{
+		lastHostDrainInvalidations = relatchDrainInvalidations;
 		++hostCalls;
 		hostEyeMask |= 1u << a_eye;
 		lastHostReset = a_params.reset;
+		lastHostParameters = a_params;
 		a_crashed = hostDispatchFault;
 		return hostDispatchReady && !hostDispatchFault;
 	}
@@ -253,6 +263,11 @@ struct Upscaling
 	FidelityFX fidelityFX;
 	Streamline streamline;
 	Float2 jitter;
+	VRSubmitTemporalSnapshot::Snapshot<int> temporalSnapshot;
+	VRSubmitColorContract::Contract colorContract;
+	bool hasSubmitColorContract = false;
+	const auto* GetSubmitTemporalSnapshotForDispatch() const { return temporalSnapshot.valid ? &temporalSnapshot : nullptr; }
+	const VRSubmitColorContract::Contract* GetSubmitColorContractForDispatch() const { return hasSubmitColorContract ? &colorContract : nullptr; }
 	struct Settings
 	{
 		float sharpnessFSR = 0;
@@ -338,18 +353,42 @@ namespace
 		a_provider.fsrContextDisplayHeight = 1680;
 	}
 
+	void SubmitContractsReachHostDispatch()
+	{
+		auto& upscaling = Reset();
+		auto& provider = upscaling.fidelityFX;
+		upscaling.hasSubmitColorContract = true;
+		upscaling.colorContract = { VRSubmitColorContract::Transfer::Linear, VRSubmitColorContract::DynamicRange::LDR };
+		EnableHost(provider);
+		Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(0, 1284)) == Result::Failed &&
+					provider.hostCalls == 0 && provider.runtimeCalls == 0,
+			"Linear submit input reached a vendor dispatch");
+		upscaling.colorContract.transfer = VRSubmitColorContract::Transfer::Gamma;
+		provider.plan.runtimeRequested = false;
+		upscaling.temporalSnapshot.valid = true;
+		upscaling.temporalSnapshot.scalars = { 0.25f, -0.5f, 2.0f, 20000.0f, 1.25f, 8.0f, false };
+		upscaling.historyResetRequested = true;
+		Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(1, 1284)) == Result::Ready,
+			"Gamma submit input could not use the host provider");
+		const auto& parameters = provider.lastHostParameters;
+		Require(parameters.jitterOffset.x == -0.25f && parameters.jitterOffset.y == 0.5f &&
+					parameters.cameraNear == 2.0f && parameters.cameraFar == 20000.0f &&
+					parameters.cameraFovAngleVertical == 1.25f && parameters.frameTimeDelta == 8.0f && parameters.reset,
+			"Host dispatch did not retain captured scalars and a late history reset");
+	}
+
 	void RequireDeferredUntouched(const Upscaling& a_upscaling)
 	{
 		const auto& provider = a_upscaling.fidelityFX;
 		Require(a_upscaling.failedEvaluations == 0 && a_upscaling.successfulEvaluations == 0 &&
-				a_upscaling.deviceLossHandlers == 0 && provider.deviceProbes == 0,
+					a_upscaling.deviceLossHandlers == 0 && provider.deviceProbes == 0,
 			"Deferred eye dispatch recorded an evaluation or device failure");
 		Require(!provider.runtimeHostFallbackActive && !provider.runtimeHostFallbackForFrame &&
-				provider.runtimeFallbackResetDispatchesRemaining == 0 &&
-				provider.runtimeResumeResetDispatchesRemaining == 0 &&
-				provider.quarantines == 0 && provider.hostQuarantines == 0 && provider.fsr4Failures == 0 &&
-				provider.hostCalls == 0 && !a_upscaling.historyResetRequested,
-			"Deferred eye dispatch armed fallback, consumed history, or quarantined a provider");
+					provider.runtimeFallbackResetDispatchesRemaining == 0 &&
+					provider.runtimeResumeResetDispatchesRemaining == 0 &&
+					provider.quarantines == 0 && provider.hostQuarantines == 0 && provider.fsr4Failures == 0 &&
+					provider.hostCalls == 0 && provider.relatchDrainInvalidations == 0 && !a_upscaling.historyResetRequested,
+			"Deferred eye dispatch changed drain proof, fallback, history, or quarantine state");
 	}
 
 	void ColdRuntimeWithoutPeerProof()
@@ -359,7 +398,7 @@ namespace
 		admission.compositorCycle = 7;
 		const auto proof = ResolveProducerProof(admission);
 		Require(ResolveProducerRejection(admission) == ProducerRejection::MissingOuterBoundary &&
-				!CanConsumePeerInputs(proof, 0) && !CanConsumePeerInputs(proof, 1),
+					!CanConsumePeerInputs(proof, 0) && !CanConsumePeerInputs(proof, 1),
 			"The cold-runtime fixture unexpectedly authorized peer inputs");
 		for (uint32_t width : { 1284u, 504u }) {
 			for (uint32_t eye : { 0u, 1u }) {
@@ -368,13 +407,13 @@ namespace
 				Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, params) == Result::Deferred,
 					"Cold single-eye runtime Pending became a vendor failure");
 				Require(upscaling.fidelityFX.runtimeCalls == 1 && upscaling.fidelityFX.runtimeRegionCount == 1 &&
-						upscaling.fidelityFX.runtimeEyeMask == (1u << eye),
+							upscaling.fidelityFX.runtimeEyeMask == (1u << eye),
 					"Single-eye admission consumed its unproven peer");
 				RequireDeferredUntouched(upscaling);
-				upscaling.fidelityFX.simulatedRuntimeResult = Lifecycle::Ready;
+				upscaling.fidelityFX.runtimeDispatchResult = Lifecycle::Ready;
 				Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, params) == Result::Ready &&
-						upscaling.successfulEvaluations == 1 && upscaling.failedEvaluations == 0 &&
-						upscaling.fidelityFX.runtimeUpscalerUsedForFrame,
+							upscaling.successfulEvaluations == 1 && upscaling.failedEvaluations == 0 &&
+							upscaling.fidelityFX.runtimeUpscalerUsedForFrame,
 					"A deferred runtime eye did not recover on its next ready dispatch");
 			}
 		}
@@ -401,11 +440,11 @@ namespace
 			provider.plan.selected = !setupDeferred;
 			provider.plan.providerSetupDeferred = setupDeferred;
 			Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(0, 1284)) == Result::Ready &&
-					provider.hostCalls == 1 && provider.hostEyeMask == 1 &&
-					provider.runtimeCalls == (setupDeferred ? 0u : 1u) &&
-					provider.lastFramePath == FidelityFX::RuntimeUpscalerFramePath::kHostFsr31Fallback &&
-					provider.lastHostReset && provider.runtimeFallbackResetDispatchesRemaining == 1 &&
-					provider.runtimeResumeResetDispatchesRemaining == 2,
+						provider.hostCalls == 1 && provider.hostEyeMask == 1 &&
+						provider.runtimeCalls == (setupDeferred ? 0u : 1u) &&
+						provider.lastFramePath == FidelityFX::RuntimeUpscalerFramePath::kHostFsr31Fallback &&
+						provider.lastHostReset && provider.runtimeFallbackResetDispatchesRemaining == 1 &&
+						provider.runtimeResumeResetDispatchesRemaining == 2,
 				"Compatible host fallback failed to dispatch/reset only the current eye");
 		}
 		for (uint32_t blocker = 0; blocker < 3; ++blocker) {
@@ -424,6 +463,29 @@ namespace
 		}
 	}
 
+	void HostDispatchInvalidatesRelatchDrainBeforeSubmission()
+	{
+		for (bool runtimeFallback : { false, true }) {
+			for (uint32_t failure = 0; failure < 3; ++failure) {
+				for (uint32_t eye : { 0u, 1u }) {
+					auto& upscaling = Reset();
+					auto& provider = upscaling.fidelityFX;
+					EnableHost(provider);
+					provider.plan.runtimeRequested = runtimeFallback;
+					provider.plan.selected = runtimeFallback;
+					provider.hostDispatchReady = failure == 0;
+					provider.hostDispatchFault = failure == 2;
+					Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(eye, 1284)) ==
+									(failure == 0 ? Result::Ready : Result::Failed) &&
+								provider.runtimeCalls == (runtimeFallback ? 1u : 0u) &&
+								provider.hostCalls == 1 && provider.hostEyeMask == (1u << eye) &&
+								provider.relatchDrainInvalidations == 1 && provider.lastHostDrainInvalidations == 1,
+						"Host submission did not invalidate its relatch drain proof before dispatch");
+				}
+			}
+		}
+	}
+
 	void GenuineFailuresRemainFailures()
 	{
 		for (bool fsr4 : { false, true }) {
@@ -431,13 +493,13 @@ namespace
 				auto& upscaling = Reset();
 				auto& provider = upscaling.fidelityFX;
 				provider.plan.runtimeFsr4Requested = fsr4;
-				provider.simulatedRuntimeResult = failure;
+				provider.runtimeDispatchResult = failure;
 				Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(1, 504)) == Result::Failed &&
-						upscaling.failedEvaluations == 1 && upscaling.successfulEvaluations == 0 &&
-						provider.deviceProbes == 1 && upscaling.deviceLossHandlers == 1 &&
-						provider.hostCalls == 0 &&
-						provider.quarantines == (failure == Lifecycle::RuntimeDeviceLost ? 0u : 1u) &&
-						provider.fsr4Failures == (fsr4 && failure == Lifecycle::Failed ? 1u : 0u),
+							upscaling.failedEvaluations == 1 && upscaling.successfulEvaluations == 0 &&
+							provider.deviceProbes == 1 && upscaling.deviceLossHandlers == 1 &&
+							provider.hostCalls == 0 &&
+							provider.quarantines == (failure == Lifecycle::RuntimeDeviceLost ? 0u : 1u) &&
+							provider.fsr4Failures == (fsr4 && failure == Lifecycle::Failed ? 1u : 0u),
 					"A provider failure lost terminal classification, quarantine, or its FSR4 latch");
 			}
 		}
@@ -450,21 +512,21 @@ namespace
 			provider.hostDispatchReady = false;
 			provider.hostDispatchFault = crashed;
 			Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(1, 504)) == Result::Failed &&
-					provider.runtimeCalls == 0 && provider.hostCalls == 1 && provider.hostEyeMask == 2 &&
-					provider.hostQuarantines == (crashed ? 1u : 0u) &&
-					provider.fsrDispatchCrashLogged == crashed &&
-					provider.quarantines == 0 && provider.fsr4Failures == 0 &&
-					upscaling.failedEvaluations == 1 && upscaling.successfulEvaluations == 0 &&
-					provider.deviceProbes == 1 && upscaling.deviceLossHandlers == 1,
+						provider.runtimeCalls == 0 && provider.hostCalls == 1 && provider.hostEyeMask == 2 &&
+						provider.hostQuarantines == (crashed ? 1u : 0u) &&
+						provider.fsrDispatchCrashLogged == crashed &&
+						provider.quarantines == 0 && provider.fsr4Failures == 0 &&
+						upscaling.failedEvaluations == 1 && upscaling.successfulEvaluations == 0 &&
+						provider.deviceProbes == 1 && upscaling.deviceLossHandlers == 1,
 				"A host SDK error/fault was hidden or quarantined the wrong provider");
 		}
 		for (bool ready : { false, true }) {
 			auto& upscaling = Reset();
 			upscaling.streamline.ready = ready;
 			Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kDLSS, Region(0, 1284)) ==
-					(ready ? Result::Ready : Result::Failed) &&
-					upscaling.streamline.dispatches == 1 &&
-					upscaling.failedEvaluations == (ready ? 0u : 1u),
+							(ready ? Result::Ready : Result::Failed) &&
+						upscaling.streamline.dispatches == 1 &&
+						upscaling.failedEvaluations == (ready ? 0u : 1u),
 				"Typed FSR results changed DLSS success/failure classification");
 		}
 	}
@@ -484,8 +546,8 @@ namespace
 			Require(!provider.AreFSRResourcesCompatible(504, 560, 756, 840, 2),
 				"Lifecycle compatibility accepted a different configured display size");
 			Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, params) == Result::Ready &&
-					provider.hostCalls == 1 && provider.lastHostReset &&
-					upscaling.failedEvaluations == 0 && upscaling.successfulEvaluations == 0,
+						provider.hostCalls == 1 && provider.lastHostReset &&
+						upscaling.failedEvaluations == 0 && upscaling.successfulEvaluations == 0,
 				"A valid foveated subextent could not use a complete host context");
 		}
 		for (uint32_t blocker = 0; blocker < 8; ++blocker) {
@@ -525,7 +587,7 @@ namespace
 				params.dlssViewportRole = Streamline::DLSSViewportRole::FoveatedCenter;
 			}
 			Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, params) ==
-					(subextent ? Result::Deferred : Result::Ready),
+						(subextent ? Result::Deferred : Result::Ready),
 				"Host fallback admission disagreed with the deferred lifecycle's display contract");
 			if (subextent)
 				RequireDeferredUntouched(upscaling);
@@ -539,8 +601,8 @@ namespace
 			provider.fsrHostStateQuarantined = !indeterminate;
 			provider.fsrContextIndeterminate[1] = indeterminate;
 			Require(!provider.HasFSRResources() &&
-					upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(0, 504)) == Result::Failed &&
-					provider.runtimeCalls == 0 && provider.hostCalls == 0,
+						upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(0, 504)) == Result::Failed &&
+						provider.runtimeCalls == 0 && provider.hostCalls == 0,
 				"Quarantined or indeterminate host ownership remained dispatchable");
 		}
 	}
@@ -554,20 +616,20 @@ namespace
 				EnableHost(provider);
 			provider.ResolveEligibleRuntimeShaderGate(true, false);
 			Require(provider.plan.providerSetupDeferred && !provider.plan.selected &&
-					!provider.runtimeHostFallbackForFrame,
+						!provider.runtimeHostFallbackForFrame,
 				"An unresolved setup gate selected host before a dispatch decision");
 			Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(0, 1284)) ==
-					(hostAvailable ? Result::Ready : Result::Deferred),
+						(hostAvailable ? Result::Ready : Result::Deferred),
 				"Setup deferral did not distinguish a complete host provider");
 			provider.ResolveEligibleRuntimeShaderGate(false, false);
 			Require(!provider.plan.providerSetupDeferred && provider.plan.selected != hostAvailable,
 				"Clearing the gate retained an unused host latch or mixed providers after host output");
-			provider.simulatedRuntimeResult = Lifecycle::Ready;
+			provider.runtimeDispatchResult = Lifecycle::Ready;
 			Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(1, 1284)) == Result::Ready &&
-					provider.runtimeCalls == (hostAvailable ? 0u : 1u) &&
-					provider.hostCalls == (hostAvailable ? 2u : 0u) &&
-					provider.hostEyeMask == (hostAvailable ? 3u : 0u) &&
-					provider.runtimeHostFallbackForFrame == hostAvailable,
+						provider.runtimeCalls == (hostAvailable ? 0u : 1u) &&
+						provider.hostCalls == (hostAvailable ? 2u : 0u) &&
+						provider.hostEyeMask == (hostAvailable ? 3u : 0u) &&
+						provider.runtimeHostFallbackForFrame == hostAvailable,
 				"The next eye did not honor the actual provider selected in this frame");
 		}
 
@@ -594,14 +656,14 @@ namespace
 				EnableHost(provider);
 			provider.ResolveEligibleRuntimeShaderGate(true, false);
 			Require(provider.UpscaleStereoRegions(stereo) ==
-					(hostAvailable ? FidelityFX::StereoUpscaleResult::NotHandled : FidelityFX::StereoUpscaleResult::Deferred),
+						(hostAvailable ? FidelityFX::StereoUpscaleResult::NotHandled : FidelityFX::StereoUpscaleResult::Deferred),
 				"Stereo setup deferral did not retain the host/deferred distinction");
 			provider.ResolveEligibleRuntimeShaderGate(false, false);
-			provider.simulatedRuntimeResult = Lifecycle::Ready;
+			provider.runtimeDispatchResult = Lifecycle::Ready;
 			Require(provider.UpscaleStereoRegions(stereo) ==
-					(hostAvailable ? FidelityFX::StereoUpscaleResult::NotHandled : FidelityFX::StereoUpscaleResult::Ready) &&
-					provider.runtimeCalls == (hostAvailable ? 0u : 1u) &&
-					provider.runtimeHostFallbackForFrame == hostAvailable,
+							(hostAvailable ? FidelityFX::StereoUpscaleResult::NotHandled : FidelityFX::StereoUpscaleResult::Ready) &&
+						provider.runtimeCalls == (hostAvailable ? 0u : 1u) &&
+						provider.runtimeHostFallbackForFrame == hostAvailable,
 				"Clearing the gate changed an admitted host pair or blocked an unconsumed runtime pair");
 		}
 	}
@@ -624,8 +686,8 @@ namespace
 			if (invalid == 5)
 				params.outputWidth = 1513;
 			Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, params) == Result::Failed &&
-					upscaling.fidelityFX.runtimeCalls == 0 && upscaling.fidelityFX.hostCalls == 0 &&
-					upscaling.failedEvaluations == 0 && upscaling.deviceLossHandlers == 0,
+						upscaling.fidelityFX.runtimeCalls == 0 && upscaling.fidelityFX.hostCalls == 0 &&
+						upscaling.failedEvaluations == 0 && upscaling.deviceLossHandlers == 0,
 				"Invalid eye resources or extents reached provider dispatch");
 		}
 		for (uint32_t count : { 0u, 3u }) {
@@ -671,6 +733,8 @@ namespace
 		uint64_t submitStageVendorAdmissionCycle = a_compositorCycleToken;
 		uint32_t submitStageVendorAdmissionGeneration = activeContractGeneration;
 		uint32_t submitStageVendorAdmissionMethod = static_cast<uint32_t>(upscaleMethod);
+		VRSubmitColorContract::Contract sourceColorContract{ VRSubmitColorContract::Transfer::Gamma, VRSubmitColorContract::DynamicRange::LDR };
+		VRSubmitColorContract::Contract submitStageVendorAdmissionColorContract = sourceColorContract;
 		uint32_t submitStageVendorAdmissionFrame = currentFrame;
 		uint32_t submitStageVendorAdmissionEyeMask = 1;
 		bool submitStageVendorAdmissionPresentationOnly = false;
@@ -706,27 +770,29 @@ namespace
 			DeferredPresentation presentation;
 			if (admissionWasCleared) {
 				presentation.submitStageVendorAdmissionCycle = 0;
+				presentation.submitStageVendorAdmissionColorContract = {};
 				presentation.submitStageVendorAdmissionGeneration = 0;
 				presentation.submitStageVendorAdmissionMethod = 0;
 				presentation.submitStageVendorAdmissionFrame = 0;
 			}
 			Require(presentation.Present() && presentation.stretches == 1 && presentation.unbinds == 1 &&
-					presentation.lastPath == DeferredPresentation::VRRenderScalePresentationPath::PresentationStretch &&
-					presentation.historyResets == 1 && presentation.submitStageVendorAdmissionPresentationOnly &&
-					presentation.submitStageVendorAdmissionCycle == presentation.a_compositorCycleToken &&
-					presentation.submitStageVendorAdmissionGeneration == presentation.activeContractGeneration &&
-					presentation.submitStageVendorAdmissionMethod == static_cast<uint32_t>(presentation.upscaleMethod) &&
-					presentation.submitStageVendorAdmissionFrame == presentation.currentFrame &&
-					!presentation.submitStageVendorAdmissionExactProviderReady &&
-					!presentation.submitStageVendorAdmissionAuthoritativeDLSSProfile &&
-					presentation.submitStageVendorAdmissionDLSSQualityMode == 0 &&
-					presentation.submitStageVendorAdmissionDLSSPreset == DeferredPresentation::kDLSSPresetK,
+						presentation.lastPath == DeferredPresentation::VRRenderScalePresentationPath::PresentationStretch &&
+						presentation.historyResets == 1 && presentation.submitStageVendorAdmissionPresentationOnly &&
+						presentation.submitStageVendorAdmissionCycle == presentation.a_compositorCycleToken &&
+						presentation.submitStageVendorAdmissionGeneration == presentation.activeContractGeneration &&
+						presentation.submitStageVendorAdmissionMethod == static_cast<uint32_t>(presentation.upscaleMethod) &&
+						presentation.submitStageVendorAdmissionFrame == presentation.currentFrame &&
+						presentation.submitStageVendorAdmissionColorContract == presentation.sourceColorContract &&
+						!presentation.submitStageVendorAdmissionExactProviderReady &&
+						!presentation.submitStageVendorAdmissionAuthoritativeDLSSProfile &&
+						presentation.submitStageVendorAdmissionDLSSQualityMode == 0 &&
+						presentation.submitStageVendorAdmissionDLSSPreset == DeferredPresentation::kDLSSPresetK,
 				"Deferred presentation lost its cycle hold or temporal-history protection");
 			if (admissionWasCleared)
 				Require(presentation.submitStageVendorAdmissionEyeMask == 0,
 					"Restoring cleared admission retained an old eye claim");
 		}
-		for (uint32_t mismatch = 0; mismatch < 3; ++mismatch) {
+		for (uint32_t mismatch = 0; mismatch < 4; ++mismatch) {
 			DeferredPresentation presentation;
 			if (mismatch == 0)
 				++presentation.submitStageVendorAdmissionCycle;
@@ -734,12 +800,14 @@ namespace
 				++presentation.submitStageVendorAdmissionGeneration;
 			if (mismatch == 2)
 				++presentation.submitStageVendorAdmissionMethod;
+			if (mismatch == 3)
+				presentation.submitStageVendorAdmissionColorContract.transfer = VRSubmitColorContract::Transfer::Linear;
 			Require(!presentation.Present() && presentation.stretches == 0 &&
-					!presentation.submitStageVendorAdmissionPresentationOnly,
+						!presentation.submitStageVendorAdmissionPresentationOnly,
 				"Deferred presentation overwrote another stereo cycle or contract");
 		}
 		auto& upscaling = Reset();
-		upscaling.fidelityFX.simulatedRuntimeResult = Lifecycle::Ready;
+		upscaling.fidelityFX.runtimeDispatchResult = Lifecycle::Ready;
 		Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(1, 1284)) == Result::Ready,
 			"The right-first fixture did not advance vendor history");
 		DeferredPresentation invalidatedOutput;
@@ -747,10 +815,10 @@ namespace
 		invalidatedOutput.submitStageVendorOutputCompositorCycle = 0;
 		invalidatedOutput.submitStageVendorOutputGeneration = 0;
 		invalidatedOutput.submitStageVendorEyeState = {};
-		upscaling.fidelityFX.simulatedRuntimeResult = Lifecycle::Pending;
+		upscaling.fidelityFX.runtimeDispatchResult = Lifecycle::Pending;
 		Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(0, 1284)) == Result::Deferred &&
-				invalidatedOutput.Present() && invalidatedOutput.historyResets == 1 &&
-				upscaling.successfulEvaluations == 1 && upscaling.failedEvaluations == 0,
+					invalidatedOutput.Present() && invalidatedOutput.historyResets == 1 &&
+					upscaling.successfulEvaluations == 1 && upscaling.failedEvaluations == 0,
 			"Invalidating cached output erased an earlier eye's temporal-history protection");
 		DeferredPresentation failedStretch;
 		failedStretch.stretchReady = false;
@@ -777,8 +845,10 @@ void QuarantinedSharedGuidesRequireReplacement()
 int main()
 {
 	QuarantinedSharedGuidesRequireReplacement();
+	SubmitContractsReachHostDispatch();
 	ColdRuntimeWithoutPeerProof();
 	DeferredAdmissionAndHostFallback();
+	HostDispatchInvalidatesRelatchDrainBeforeSubmission();
 	GenuineFailuresRemainFailures();
 	HostFallbackPreservesContextBounds();
 	GateDeferralDoesNotSelectHostForTheFrame();

@@ -1,0 +1,29 @@
+if(NOT DEFINED PROJECT_ROOT OR NOT DEFINED OUTPUT_DIRECTORY)
+    message(FATAL_ERROR "PROJECT_ROOT and OUTPUT_DIRECTORY are required")
+endif()
+file(READ "${PROJECT_ROOT}/src/Features/Upscaling.cpp" _upscaling)
+file(READ "${PROJECT_ROOT}/src/Features/Upscaling/FidelityFX.cpp" _fidelity)
+file(
+    READ "${PROJECT_ROOT}/src/Features/Upscaling/FidelityFX.h"
+    _fidelity_header
+)
+file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
+
+function(extract_between source start end output)
+    string(FIND "${source}" "${start}" _start)
+    if(_start EQUAL -1)
+        message(FATAL_ERROR "Temporal tuning test cannot find ${start}")
+    endif()
+    string(SUBSTRING "${source}" ${_start} -1 _remaining)
+    string(FIND "${_remaining}" "${end}" _end)
+    if(_end EQUAL -1)
+        message(FATAL_ERROR "Temporal tuning test cannot find ${end}")
+    endif()
+    string(SUBSTRING "${_remaining}" 0 ${_end} _extracted)
+    file(WRITE "${OUTPUT_DIRECTORY}/${output}" "${_extracted}")
+endfunction()
+
+extract_between("${_upscaling}" "void from_json(const json& a_json, Settings& a_settings)" "\n}\n\nNLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT" "temporal_settings_load_under_test.h")
+extract_between("${_fidelity}" "ffxReturnCode_t ConfigureFidelityFXProtected(" "ffxReturnCode_t DispatchFrameGenerationProtected(" "temporal_provider_calls_under_test.h")
+extract_between("${_fidelity}" "FidelityFX::LifecycleResult FidelityFX::RecordRuntimeProviderResult(" "FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerContexts(" "temporal_provider_result_under_test.h")
+extract_between("${_fidelity_header}" "struct TemporalTuningSnapshot" "/** Queues validated settings;" "temporal_snapshot_under_test.h")

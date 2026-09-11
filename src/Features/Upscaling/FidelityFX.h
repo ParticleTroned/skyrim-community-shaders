@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <string_view>
@@ -30,6 +31,9 @@
 
 #include "../../Buffer.h"
 #include "../../State.h"
+#include "FSRTemporalTuningPolicy.h"
+#include "VRRelatchDrainFence.h"
+#include "VRRelatchDrainPolicy.h"
 
 class WrappedResource;
 
@@ -107,6 +111,22 @@ public:
 	static constexpr uint32_t Fsr3Version = FFX_UPSCALER_MAKE_VERSION(FFX_FSR3_VERSION_MAJOR, FFX_FSR3_VERSION_MINOR, FFX_FSR3_VERSION_PATCH);
 	static constexpr std::wstring_view RuntimeUpscalerDllName = L"amd_fidelityfx_upscaler_dx12.dll";
 	static constexpr std::string_view RuntimeUpscalerDllNameUtf8 = "amd_fidelityfx_upscaler_dx12.dll";
+	/** Requested profile and last context application; retained context evidence may outlive FSR dispatch. */
+	struct TemporalTuningSnapshot
+	{
+		FSRTemporalTuningPolicy::Settings requested{};
+		FSRTemporalTuningPolicy::Settings contextSettings{};
+		FSRTemporalTuningPolicy::Status status = FSRTemporalTuningPolicy::Status::Inactive;
+		uint64_t providerId = 0;
+		uint32_t configuredContexts = 0;
+		int32_t lastConfigureResult = 0;
+		uint64_t requestRevision = 0;
+		RuntimeUpscalerFramePath lastDispatchPath = RuntimeUpscalerFramePath::kInactive;
+	};
+	/** Queues validated settings; thread-safe requests defer GPU changes to the render safe point. */
+	bool RequestTemporalTuning(const FSRTemporalTuningPolicy::Settings& a_settings);
+	/** Returns thread-safe request/application evidence, suppressing dormant overrides on host FSR. */
+	TemporalTuningSnapshot GetTemporalTuningSnapshot() const;
 	~FidelityFX();
 
 	HMODULE module = nullptr;
@@ -139,7 +159,7 @@ public:
 
 	LifecycleResult CreateFSRResources();
 
-	LifecycleResult DestroyFSRResources(bool a_waitForIdle = true);
+	LifecycleResult DestroyFSRResources(bool a_waitForIdle = true, uint64_t a_drainEpoch = 0);
 	bool HasFSRResources() const;
 	bool AreFSRResourcesCompatible(uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight, uint32_t a_contextCount) const;
 	/** @brief Returns whether the active D3D11 feature level can execute the host FSR3 shader set. */
@@ -175,7 +195,26 @@ public:
 	[[nodiscard]] FfxErrorCode GetLastFSRContextCreateResult() const noexcept { return fsrLastContextCreateResult; }
 	[[nodiscard]] HRESULT GetLastFSRDeviceRemovedReason() const noexcept { return fsrLastDeviceRemovedReason; }
 	LifecycleResult ProbeFSRDeviceStatus() noexcept { return RecordFSRDeviceStatus(); }
-	LifecycleResult PollFSRResourceTeardownReady(const char* a_reason = nullptr);
+	LifecycleResult PollFSRResourceTeardownReady(const char* a_reason = nullptr, uint64_t a_drainEpoch = 0);
+	/** Render-thread-only readiness observation; never retires provider resources. */
+	LifecycleResult PollFSRRelatchDrain(uint64_t a_epoch);
+	/** Tests whether the same healthy provider revision still owns the completed drain. */
+	[[nodiscard]] bool IsFSRRelatchDrainReady(uint64_t a_epoch) const noexcept;
+	/** Read-only identities for exact drain consumption and subsequent target validation. */
+	[[nodiscard]] uint64_t GetFSRRelatchDrainRevision() const noexcept { return fsrRelatchDrainProof.ProviderRevision(); }
+	[[nodiscard]] uint64_t GetFSRRelatchDrainTicket(uint64_t a_epoch) const noexcept { return fsrRelatchDrainProof.TicketSerial(a_epoch); }
+	[[nodiscard]] winrt::com_ptr<ID3D12Fence> GetFSRRelatchRuntimeFence() const noexcept { return runtimeD3D12Fence; }
+	[[nodiscard]] bool IsFSRRelatchReleaseIdentityCurrent(uint64_t a_revision, ID3D12Fence* a_fence) const noexcept
+	{
+		return fsrRelatchDrainProof.ProviderRevision() == a_revision && runtimeD3D12Fence.get() == a_fence &&
+		       !IsRuntimeUpscalerOwnershipDetached();
+	}
+	void CancelFSRRelatchDrain() noexcept;
+	void InvalidateFSRRelatchDrain() noexcept;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** Copies observations of the existing drain fences without polling them. */
+	void CaptureFSRRelatchDrainTelemetry(VRRenderScaleRetryTelemetry::Event& a_event) const noexcept;
+#endif
 	void ResetFSRIdleFence();
 	LifecycleResult ResetRuntimeUpscalerResources(bool a_invalidateProviderCache = false);
 
@@ -188,7 +227,7 @@ public:
 	bool IsRuntimeFsr4Available() const;
 	bool ShouldRequestRuntimeFsr4() const;
 	bool ShouldUseRuntimeUpscalerForFSR() const;
-	/** Diagnostic A/B switch; disabling direct guides retains all fenced import ownership. */
+	/** Applies the guide routing preference without releasing fenced import ownership. */
 	void SetRuntimeSharedGuideInputsEnabled(bool a_enabled) noexcept { runtimeSharedGuideInputsEnabled.store(a_enabled, std::memory_order_release); }
 	[[nodiscard]] bool AreRuntimeSharedGuideInputsEnabled() const noexcept { return runtimeSharedGuideInputsEnabled.load(std::memory_order_acquire); }
 	/** A quarantined provider's imported inputs must be replaced before any D3D11 reuse. */
@@ -269,6 +308,15 @@ private:
 	D3D11_TEXTURE2D_DESC runtimeOutputSharedDesc{};
 	ffx::Context runtimeUpscalerContexts[2]{};
 	bool runtimeUpscalerContextIndeterminate[2]{};
+	mutable std::mutex temporalTuningMutex;
+	TemporalTuningSnapshot temporalTuningSnapshot{};
+	std::atomic_uint64_t temporalRequestRevision{ 0 };
+	uint64_t temporalContextRevision = 0;
+	uint32_t temporalContextLastDispatchFrame = ~uint32_t{ 0 };
+	std::atomic<RuntimeUpscalerFramePath> temporalLastDispatchPath{ RuntimeUpscalerFramePath::kInactive };
+	FSRTemporalTuningPolicy::RejectedRequest temporalRejectedRequest{};
+	LifecycleResult RecordRuntimeProviderResult(bool a_supported);
+	LifecycleResult ConfigureTemporalTuningContexts(const TemporalTuningSnapshot& a_request);
 
 	winrt::com_ptr<ID3D11Fence> runtimeD3D11Fence;
 	winrt::com_ptr<ID3D12Fence> runtimeD3D12Fence;
@@ -277,6 +325,16 @@ private:
 	uint64_t pendingRuntimeTeardownD3D12FenceValue = 0;
 	uint64_t runtimeFenceValue = 1;
 	bool runtimeUpscalerIdleProofValid = false;
+	VRRelatchDrainPolicy::Proof fsrRelatchDrainProof;
+	VRRelatchDrainFence fsrRelatchDrainHostFence;
+	VRRelatchDrainFence fsrRelatchDrainInteropFence;
+	winrt::com_ptr<ID3D11Device> fsrRelatchDrainDevice;
+	winrt::com_ptr<ID3D12Fence> fsrRelatchDrainRuntimeFence;
+	winrt::com_ptr<ID3D12CommandQueue> fsrRelatchDrainRuntimeQueue;
+	uint64_t fsrRelatchDrainRuntimeFenceValue = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	VRRenderScaleRetryTelemetry::DrainFenceObservation fsrRelatchDrainRuntimeObservation{};
+#endif
 
 	static constexpr uint32_t kRuntimeCommandContextCount = 8;
 	struct RuntimeCommandContext

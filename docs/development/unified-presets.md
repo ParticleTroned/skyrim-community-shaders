@@ -81,6 +81,8 @@ The three generated presets never hard-disable a feature: every `Disable at
 Boot` value is false. Tier exclusions use feature-owned live/soft settings.
 CS Editor is not present in the boot-disable map, and Weather Picker remains
 enabled because both are operational tools rather than shader tiers.
+Wand pointing is likewise a guarded common VR interaction default, so every
+tier enables it independently of shader-quality choices.
 
 Generation and `-Check` take one physical-repository publication lock,
 independent of command-line paths. Before writing, the generator resolves path

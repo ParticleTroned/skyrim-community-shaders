@@ -1661,6 +1661,48 @@ if(BUILD_CONTROLLER_TESTS)
         VRRelatchDrainPolicy
         tests/vr_relatch_drain_policy_test.cpp
     )
+    set(_vr_relatch_drain_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/vr-relatch-drain"
+    )
+    set(_vr_relatch_drain_test_headers
+        "${_vr_relatch_drain_test_dir}/vr_relatch_drain_controller_under_test.h"
+        "${_vr_relatch_drain_test_dir}/vr_relatch_drain_state_under_test.h"
+        "${_vr_relatch_drain_test_dir}/vr_relatch_drain_helpers_under_test.h"
+        "${_vr_relatch_drain_test_dir}/vr_relatch_drain_cleanup_under_test.h"
+        "${_vr_relatch_drain_test_dir}/vr_relatch_drain_providers_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_vr_relatch_drain_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_vr_relatch_drain_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_vr_relatch_drain_controller.cmake"
+        DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/Features/Upscaling.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Features/Upscaling.h"
+            "${PROJECT_SOURCE_DIR}/src/Features/Upscaling/FidelityFX.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Features/Upscaling/Streamline.cpp"
+            tests/extract_vr_relatch_drain_controller.cmake
+        VERBATIM
+    )
+    add_controller_test(
+        vr_relatch_drain_controller_test
+        VRRelatchDrainController
+        tests/vr_relatch_drain_controller_test.cpp
+    )
+    target_sources(
+        vr_relatch_drain_controller_test
+        PRIVATE ${_vr_relatch_drain_test_headers}
+    )
+    target_include_directories(
+        vr_relatch_drain_controller_test
+        PRIVATE "${_vr_relatch_drain_test_dir}"
+    )
+    target_compile_definitions(
+        vr_relatch_drain_controller_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED=1
+    )
+    set_tests_properties(VRRelatchDrainController PROPERTIES TIMEOUT 15)
     add_controller_test(
         vr_render_scale_frame_boundary_policy_test
         VRRenderScaleFrameBoundaryPolicy
@@ -2311,6 +2353,7 @@ if(BUILD_CONTROLLER_TESTS)
             perf_mode_restart_state_test
             vr_vendor_relatch_policy_test
             vr_relatch_drain_policy_test
+            vr_relatch_drain_controller_test
             vr_render_scale_frame_boundary_policy_test
             vr_render_scale_authority_policy_test
             vr_render_scale_mode_policy_test

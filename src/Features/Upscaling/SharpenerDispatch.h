@@ -5,6 +5,7 @@
 #include "../../GpuPass.h"
 #include "../../Profiler.h"
 #include "../../Utils/D3D.h"
+#include "SharpenerBindings.h"
 
 #include <cstdint>
 #include <d3d11_4.h>
@@ -58,7 +59,10 @@ namespace UpscalingSharpener
 		const Config& config,
 		ID3D11ShaderResourceView* inputSRV,
 		ID3D11UnorderedAccessView* outputUAV,
-		Pass pass)
+		Pass pass,
+		ID3D11ShaderResourceView* motionSRV = nullptr,
+		uint32_t regionWidth = 0,
+		uint32_t regionHeight = 0)
 	{
 		auto context = globals::d3d::context;
 		if (!context || !computeShader || !configCB || !inputSRV || !outputUAV)
@@ -69,6 +73,12 @@ namespace UpscalingSharpener
 		if (!TryGetOutputDimensions(outputUAV, outputWidth, outputHeight)) {
 			return false;
 		}
+		if (motionSRV) {
+			if (!regionWidth || !regionHeight || regionWidth > outputWidth || regionHeight > outputHeight)
+				return false;
+			outputWidth = regionWidth;
+			outputHeight = regionHeight;
+		}
 
 		configCB->Update(config);
 		auto bufferArray = configCB->CB();
@@ -76,11 +86,8 @@ namespace UpscalingSharpener
 		context->CSSetShader(computeShader, nullptr, 0);
 		context->CSSetConstantBuffers(0, 1, &bufferArray);
 
-		ID3D11ShaderResourceView* srvs[] = { inputSRV };
-		context->CSSetShaderResources(0, 1, srvs);
-
-		ID3D11UnorderedAccessView* uavs[] = { outputUAV };
-		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+		const UINT srvCount = motionSRV ? 2u : 1u;
+		BindComputeViews(context, inputSRV, outputUAV, motionSRV);
 
 		const uint32_t dispatchX = (outputWidth + 7) / 8;
 		const uint32_t dispatchY = (outputHeight + 7) / 8;
@@ -89,8 +96,8 @@ namespace UpscalingSharpener
 			context->Dispatch(dispatchX, dispatchY, 1);
 		}
 
-		ID3D11ShaderResourceView* nullSRVs[] = { nullptr };
-		context->CSSetShaderResources(0, 1, nullSRVs);
+		ID3D11ShaderResourceView* nullSRVs[] = { nullptr, nullptr };
+		context->CSSetShaderResources(0, srvCount, nullSRVs);
 
 		ID3D11UnorderedAccessView* nullUAVs[] = { nullptr };
 		context->CSSetUnorderedAccessViews(0, 1, nullUAVs, nullptr);

@@ -320,6 +320,10 @@ public:
 		FSRTemporalTuningPolicy::Settings fsrTemporalTuning{};
 		float sharpnessDLSS = 0.9f;
 		uint dlssSharpener = static_cast<uint>(DLSSSharpenerMode::RCAS);
+		bool motionAdaptiveRCAS = false;
+		float motionSharpnessAdjustment = -0.5f;
+		float motionSharpnessThreshold = 2.0f;
+		float motionSharpnessCap = 1.0f;
 		bool fsr4RuntimeEnable = true;
 		uint fsr4RuntimeSelectionSchemaVersion = kFsr4RuntimeSelectionSchemaVersion;
 		bool pipelineDiagnostics = false;
@@ -2583,7 +2587,8 @@ public:
 		bool a_compositeCommittedMenuLayer = false);
 	void PresentVRMenuDesktopMirror(IDXGISwapChain* a_swapChain);
 	bool EnsureSubmitStageDLSSSharpenerTexture(uint32_t eyeIndex, const Texture2D& colorOutput);
-	bool ApplySubmitStageDLSSSharpening(uint32_t eyeIndex, const Texture2D& sharpenInput);
+	bool ApplySubmitStageDLSSSharpening(uint32_t eyeIndex, const Texture2D& sharpenInput,
+		ID3D11ShaderResourceView* motionVectors, const MotionSharpening::Region& motionRegion);
 
 	void ConfigureTAA();
 	void ConfigureUpscaling(RE::BSGraphics::State* a_state);

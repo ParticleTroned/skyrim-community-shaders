@@ -25,6 +25,7 @@
 #include "Upscaling/FSRTemporalTuningDevBenchBridge.h"
 #include "Upscaling/FSRTemporalTuningSerialization.h"
 #include "Upscaling/FidelityFX.h"
+#include "Upscaling/MotionSharpeningSettings.h"
 #include "Upscaling/NvidiaComIdentity.h"
 #include "Upscaling/ReflexPolicy.h"
 #include "Upscaling/Streamline.h"
@@ -353,6 +354,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	fsrTemporalTuning,
 	sharpnessDLSS,
 	dlssSharpener,
+	motionAdaptiveRCAS,
+	motionSharpnessAdjustment,
+	motionSharpnessThreshold,
+	motionSharpnessCap,
 	fsr4RuntimeEnable,
 	fsr4RuntimeSelectionSchemaVersion,
 	pipelineDiagnostics,
@@ -553,8 +558,8 @@ void Upscaling::RecordVRRenderScaleGPUPerformanceCounter(VRRenderScaleGPUPerform
 
 namespace
 {
-	constexpr float kDLSSRCASSharpnessOverdrive = 1.15457f;  // Previous 1.75x curve at slider 0.7.
-	constexpr float kDLSSLumaSharpnessOverdrive = 2.5f;
+	constexpr float kDLSSRCASSharpnessOverdrive = MotionSharpening::kMaximumRCASGain;
+	constexpr float kDLSSLumaSharpnessOverdrive = MotionSharpening::kMaximumLumaGain;
 
 	// Keep this layout in lockstep with ClearHMDMaskCB in
 	// ClearHMDMaskCS.hlsl.
@@ -4450,13 +4455,22 @@ namespace
 		return kDLSSSharpenerModeNames[index];
 	}
 
-	bool DispatchDLSSSharpener(Upscaling& a_upscaling, ID3D11ShaderResourceView* a_inputSRV, ID3D11UnorderedAccessView* a_outputUAV)
+	bool DispatchDLSSSharpener(Upscaling& a_upscaling, ID3D11ShaderResourceView* a_inputSRV, ID3D11UnorderedAccessView* a_outputUAV,
+		ID3D11ShaderResourceView* a_motionVectors = nullptr, std::span<const MotionSharpening::Region> a_regions = {})
 	{
+		const MotionSharpening::Settings motionSettings{ a_upscaling.settings.motionAdaptiveRCAS,
+			a_upscaling.settings.motionSharpnessAdjustment, a_upscaling.settings.motionSharpnessThreshold,
+			a_upscaling.settings.motionSharpnessCap };
 		switch (a_upscaling.GetDLSSSharpenerMode()) {
 		case Upscaling::DLSSSharpenerMode::RCAS:
-			return Upscaling::rcas.ApplySharpen(a_inputSRV, a_outputUAV, GetDLSSRCASSharpness(a_upscaling.settings.sharpnessDLSS));
+			return Upscaling::rcas.ApplyMotionAdaptiveSharpen(a_inputSRV, a_outputUAV,
+				GetDLSSRCASSharpness(a_upscaling.settings.sharpnessDLSS), a_upscaling.settings.sharpnessDLSS,
+				motionSettings,
+				a_motionVectors, a_regions);
 		case Upscaling::DLSSSharpenerMode::LumaUnsharp:
-			return Upscaling::lumaSharpen.ApplySharpen(a_inputSRV, a_outputUAV, GetDLSSLumaSharpness(a_upscaling.settings.sharpnessDLSS));
+			return Upscaling::lumaSharpen.ApplyMotionAdaptiveSharpen(a_inputSRV, a_outputUAV,
+				GetDLSSLumaSharpness(a_upscaling.settings.sharpnessDLSS), a_upscaling.settings.sharpnessDLSS,
+				motionSettings, a_motionVectors, a_regions);
 		case Upscaling::DLSSSharpenerMode::Off:
 		default:
 			return true;
@@ -4978,6 +4992,11 @@ namespace
 		}
 		settings.sharpnessDLSS = ClampFiniteUnitRange(settings.sharpnessDLSS, defaults.sharpnessDLSS);
 		settings.dlssSharpener = ClampDLSSSharpenerModeUInt(settings.dlssSharpener);
+		const auto motionSharpening = MotionSharpening::Sanitize({ settings.motionAdaptiveRCAS, settings.motionSharpnessAdjustment,
+			settings.motionSharpnessThreshold, settings.motionSharpnessCap });
+		settings.motionSharpnessAdjustment = motionSharpening.adjustment;
+		settings.motionSharpnessThreshold = motionSharpening.thresholdPixels;
+		settings.motionSharpnessCap = motionSharpening.strengthCap;
 		settings.periphery_taa_center_blend_feather = ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather);
 		SanitizeFoveatedSettings(settings);
 		settings.periphery_taa_outer_scale = ClampPeripheryTAAOuterScaleForCenter(
@@ -16334,6 +16353,22 @@ void Upscaling::DrawSettings()
 				}
 			}
 
+			if (GetDLSSSharpenerMode() != DLSSSharpenerMode::Off) {
+				ImGui::Checkbox("Motion-adaptive sharpening", &settings.motionAdaptiveRCAS);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("Adjusts RCAS or Luma Unsharp strength in moving parts of the image.");
+					ImGui::TextUnformatted("Negative adjustment may reduce shimmer during movement but soften detail.");
+				}
+				if (settings.motionAdaptiveRCAS) {
+					ImGui::SliderFloat("Motion adjustment", &settings.motionSharpnessAdjustment, -1.0f, 1.0f, "%.2f");
+					ImGui::SliderFloat("Motion threshold (pixels/frame)", &settings.motionSharpnessThreshold, 0.0f, 64.0f, "%.1f");
+					ImGui::SliderFloat("Motion sharpness cap", &settings.motionSharpnessCap, 0.0f, 1.0f, "%.2f");
+					if (auto _tt = Util::HoverTooltipWrapper()) {
+						ImGui::TextUnformatted("Caps adjusted sharpness on the same 0-1 scale as Sharpness.");
+					}
+				}
+			}
+
 			if (isNvidiaAdapter) {
 				ImGui::TextWrapped("Note: Use K for DLAA/Quality/Balanced. For Performance and Ultra Performance, use L/M on newer RTX cards. On RTX 3000-series cards, start with F and compare E if you want the other legacy profile.");
 			}
@@ -18151,6 +18186,8 @@ void Upscaling::LoadSettings(json& o_json)
 	const bool hasRenderScaleModeSetting = o_json.contains("renderScaleMode");
 	const bool hasLegacyPerfModeSetting = o_json.contains("perfMode");
 	const bool hasLegacySettings = o_json.is_object() && !o_json.empty();
+	if (MotionSharpening::NormalizeLoadedSettings(o_json))
+		logger::warn("[Upscaling] Malformed optional motion sharpening settings were reset to defaults.");
 	settings = o_json;
 	if (!hasFsr4RuntimeSelectionSchemaVersion)
 		settings.fsr4RuntimeSelectionSchemaVersion = 0;
@@ -42082,7 +42119,8 @@ bool Upscaling::EnsureSubmitStageDLSSSharpenerTexture(uint32_t eyeIndex, const T
 	return matchesOutput();
 }
 
-bool Upscaling::ApplySubmitStageDLSSSharpening(uint32_t eyeIndex, const Texture2D& sharpenInput)
+bool Upscaling::ApplySubmitStageDLSSSharpening(uint32_t eyeIndex, const Texture2D& sharpenInput,
+	ID3D11ShaderResourceView* motionVectors, const MotionSharpening::Region& motionRegion)
 {
 	if (!ShouldApplyDLSSSharpening())
 		return true;
@@ -42109,7 +42147,8 @@ bool Upscaling::ApplySubmitStageDLSSSharpening(uint32_t eyeIndex, const Texture2
 		bool sharpened = false;
 		{
 			CS_GPU_PASS("Upscaling::SubmitStageSharpen");
-			sharpened = DispatchDLSSSharpener(*this, sharpenInput.srv.get(), colorOutput->uav.get());
+			sharpened = DispatchDLSSSharpener(*this, sharpenInput.srv.get(), colorOutput->uav.get(), motionVectors,
+				std::span<const MotionSharpening::Region>(&motionRegion, 1));
 		}
 		if (!sharpened) {
 			LogWarnOnceFmt(
@@ -44683,9 +44722,9 @@ void Upscaling::SetupResources()
 	RefreshRuntimeResolutionState();
 
 	if (GetDLSSSharpenerMode() == DLSSSharpenerMode::RCAS)
-		rcas.Initialize();
+		rcas.Initialize(settings.motionAdaptiveRCAS);
 	else if (GetDLSSSharpenerMode() == DLSSSharpenerMode::LumaUnsharp)
-		lumaSharpen.Initialize();
+		lumaSharpen.Initialize(settings.motionAdaptiveRCAS);
 
 	if (d3d12SwapChainActive)
 		dx12SwapChain.CreateSharedResources();
@@ -51015,7 +51054,16 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	auto finalizeSubmitStageEyeOutput = [&](uint32_t targetEyeIndex, Texture2D& targetVendorColorOutput, bool targetSubmitDLSSSharpening,
 											uint32_t clearDepthWidth, uint32_t clearDepthHeight, uint32_t clearDepthOffsetX, uint32_t clearDepthOffsetY) -> bool {
 		if (targetSubmitDLSSSharpening) {
-			if (!ApplySubmitStageDLSSSharpening(targetEyeIndex, targetVendorColorOutput)) {
+			// Raw engine motion covers the full eye even when vendor inputs encode only foveated crops.
+			const MotionSharpening::Region motionRegion{
+				.output = { 0, 0, eyeWidthOut, eyeHeightOut },
+				.source = { clearDepthOffsetX, clearDepthOffsetY, clearDepthWidth, clearDepthHeight },
+				.sourceEye = { targetEyeIndex * eyeWidthIn, 0, eyeWidthIn, eyeHeightIn },
+			};
+			const bool currentMotion = submitInputProof.IsValid() && !ShouldResetHistoryThisFrame() &&
+			                           !resolutionPlan.menuContextActive && !resolutionPlan.loadingMenuActive && !presentationRenderTarget;
+			if (!ApplySubmitStageDLSSSharpening(targetEyeIndex, targetVendorColorOutput,
+					currentMotion ? motionVector.SRV : nullptr, motionRegion)) {
 				if (IsSubmitStageDeviceLost())
 					return false;
 				context->CopyResource(vrIntermediateColorOut[targetEyeIndex]->resource.get(), targetVendorColorOutput.resource.get());
@@ -58802,10 +58850,38 @@ void Upscaling::ApplySharpening()
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
 	const bool shouldApplySharpening = ShouldApplyDLSSSharpening();
+	std::array<MotionSharpening::Region, 2> motionRegions{};
+	uint32_t motionRegionCount = 0;
+	ID3D11ShaderResourceView* motionSRV = nullptr;
+	if (settings.motionAdaptiveRCAS && !ShouldResetHistoryThisFrame() &&
+		!runtimeResolutionPlan.menuContextActive && !runtimeResolutionPlan.loadingMenuActive) {
+		const auto renderSize = runtimeResolutionPlan.engineRenderSize;
+		const uint32_t eyeCount = globals::game::isVR ? 2u : 1u;
+		const uint32_t outputWidth = sharpenerTexture->desc.Width;
+		const uint32_t outputHeight = sharpenerTexture->desc.Height;
+		if (std::isfinite(renderSize.x) && std::isfinite(renderSize.y) &&
+			renderSize.x >= eyeCount && renderSize.y >= 1.0f &&
+			renderSize.x <= D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION && renderSize.y <= D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION &&
+			outputWidth % eyeCount == 0) {
+			const uint32_t inputEyeWidth = static_cast<uint32_t>(renderSize.x / eyeCount);
+			const uint32_t inputHeight = static_cast<uint32_t>(renderSize.y);
+			const uint32_t outputEyeWidth = outputWidth / eyeCount;
+			for (uint32_t eye = 0; eye < eyeCount; ++eye) {
+				motionRegions[eye] = {
+					.output = { eye * outputEyeWidth, 0, outputEyeWidth, outputHeight },
+					.source = { eye * inputEyeWidth, 0, inputEyeWidth, inputHeight },
+					.sourceEye = { eye * inputEyeWidth, 0, inputEyeWidth, inputHeight },
+				};
+			}
+			motionRegionCount = eyeCount;
+			motionSRV = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR].SRV;
+		}
+	}
 	if (!shouldApplySharpening ||
 		!main.UAV ||
 		!sharpenerTexture->srv ||
-		!DispatchDLSSSharpener(*this, sharpenerTexture->srv.get(), main.UAV)) {
+		!DispatchDLSSSharpener(*this, sharpenerTexture->srv.get(), main.UAV, motionSRV,
+			std::span<const MotionSharpening::Region>(motionRegions.data(), motionRegionCount))) {
 		// Preserve DLSS output if the optional external sharpener is disabled or
 		// unavailable. This copy is the required non-aliasing finalization path,
 		// not an additional sharpening round trip.

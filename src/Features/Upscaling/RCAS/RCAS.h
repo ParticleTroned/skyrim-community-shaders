@@ -1,8 +1,10 @@
 #pragma once
 
 #include "../../../Buffer.h"
+#include "../MotionAdaptiveSharpening.h"
 
 #include <d3d11_4.h>
+#include <span>
 #include <winrt/base.h>
 
 /**
@@ -22,7 +24,7 @@ public:
 	 *
 	 * Safe to call multiple times - will early-out if already initialized.
 	 */
-	void Initialize();
+	void Initialize(bool enableMotionAdaptive = false);
 	void ClearShaderCache();
 
 	/**
@@ -35,7 +37,16 @@ public:
 	 */
 	bool ApplySharpen(ID3D11ShaderResourceView* inputTexture, ID3D11UnorderedAccessView* outputUAV, float sharpness);
 
+	/** Applies bounded motion adjustment, retaining fixed RCAS when motion is unavailable or invalid. */
+	bool ApplyMotionAdaptiveSharpen(ID3D11ShaderResourceView* inputTexture, ID3D11UnorderedAccessView* outputUAV,
+		float sharpness, float baseStrength, const MotionSharpening::Settings& settings,
+		ID3D11ShaderResourceView* motionVectors, std::span<const MotionSharpening::Region> regions);
+
+	/** Reports the last attempted RCAS dispatch; applicability is determined by the active upscaler. */
+	const char* GetMotionAdaptiveStatus() const noexcept;
+
 private:
+	UpscalingSharpener::MotionAdaptiveSharpening motionAdaptive{ UpscalingSharpener::Pass::RCAS };
 	void CreateComputeShader();
 
 	winrt::com_ptr<ID3D11ComputeShader> rcasComputeShader;

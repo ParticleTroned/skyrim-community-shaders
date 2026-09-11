@@ -15,8 +15,10 @@ RCAS::~RCAS()
 	rcasConfigCB = nullptr;
 }
 
-void RCAS::Initialize()
+void RCAS::Initialize(bool enableMotionAdaptive)
 {
+	if (enableMotionAdaptive)
+		motionAdaptive.Initialize();
 	if (rcasConfigCB && rcasComputeShader)
 		return;
 
@@ -30,6 +32,20 @@ void RCAS::Initialize()
 void RCAS::ClearShaderCache()
 {
 	rcasComputeShader = nullptr;
+	motionAdaptive.ClearShaderCache();
+}
+
+bool RCAS::ApplyMotionAdaptiveSharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAccessView* outputUAV,
+	float sharpness, float baseStrength, const MotionSharpening::Settings& settings,
+	ID3D11ShaderResourceView* motionVectors, std::span<const MotionSharpening::Region> regions)
+{
+	return motionAdaptive.Apply(inputSRV, outputUAV, sharpness, baseStrength, settings, motionVectors, regions,
+		[&]() { return ApplySharpen(inputSRV, outputUAV, sharpness); });
+}
+
+const char* RCAS::GetMotionAdaptiveStatus() const noexcept
+{
+	return motionAdaptive.GetStatus();
 }
 
 void RCAS::CreateComputeShader()

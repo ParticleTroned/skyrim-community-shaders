@@ -220,6 +220,19 @@ namespace Stereo
 		return uv;
 	}
 
+	/** Clamps a UV to texel centers within one eye for bilinear sampling. */
+	float2 ClampToEyeUV(float2 uv, uint eyeIndex, uint2 frameDim)
+	{
+#ifdef VR
+		const uint width = max(frameDim.x, 2u);
+		const uint leftWidth = width >> 1;
+		const float minCenter = eyeIndex == 0 ? 0.5f : leftWidth + 0.5f;
+		const float maxCenter = eyeIndex == 0 ? leftWidth - 0.5f : width - 0.5f;
+		uv.x = clamp(uv.x, minCenter / width, maxCenter / width);
+#endif
+		return uv;
+	}
+
 	/**
 	* @brief Clamps a pixel coordinate to the eye-local X bounds of the packed stereo buffer.
 	*
@@ -259,7 +272,7 @@ namespace Stereo
 		return eyeIndex;
 	}
 
-#endif      // PSHADER
+#endif  // PSHADER
 
 #ifdef VSHADER
 	struct VR_OUTPUT

@@ -4,12 +4,13 @@
 #include "Common/SharedData.hlsli"
 #include "Common/VR.hlsli"
 #include "Common/VRReproject.hlsli"
+#include "Common/VRStereoEffects.hlsli"
 
 typedef VS_OUTPUT PS_INPUT;
 
 struct PS_OUTPUT
 {
-	float4 Color : SV_Target0;
+	float4 Color: SV_Target0;
 };
 
 #if defined(PSHADER)
@@ -38,7 +39,7 @@ static const int maxBinaryIterations = 6;
 
 static const float rayLength = 1.0;
 
-#if defined(VR)
+#	if defined(VR)
 static const int minFoveatedIterations = 16;
 
 float GetVRSSRFoveationWeight(float ssrFoveationMode, float2 eyeUv, uint eyeIndex)
@@ -69,47 +70,63 @@ int GetSSRBinaryIterations(int raymarchIterations)
 	int iterationCount = (int)ceil(log2((float)raymarchIterations));
 	return min(max(iterationCount, 1), maxBinaryIterations);
 }
-#endif
+#	endif
 
-float2 ConvertRaySample(float2 raySample, uint eyeIndex)
+/** Maps an eye-local ray sample to current-frame dynamic-resolution SBS coordinates. */
+float2 ConvertRaySample(float2 raySample, uint eyeIndex, uint2 textureDimensions)
 {
-	return FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(Stereo::ConvertToStereoUV(raySample, eyeIndex));
+	float2 stereoUV = Stereo::ConvertToStereoUV(raySample, eyeIndex);
+	float2 screenPosition = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(stereoUV);
+#	if defined(VR)
+	screenPosition = VRStereoEffects::ClampDynamicStereoUVToEyeTexel(
+		screenPosition, eyeIndex, textureDimensions, FrameBuffer::DynamicResolutionParams1.xy);
+#	endif
+	return screenPosition;
 }
 
+/** Maps an eye-local ray sample to previous-frame dynamic-resolution SBS coordinates. */
 float2 ConvertRaySamplePrevious(float2 raySample, uint eyeIndex)
 {
-	return FrameBuffer::GetPreviousDynamicResolutionAdjustedScreenPosition(Stereo::ConvertToStereoUV(raySample, eyeIndex));
+	float2 stereoUV = Stereo::ConvertToStereoUV(raySample, eyeIndex);
+	float2 screenPosition = FrameBuffer::GetPreviousDynamicResolutionAdjustedScreenPosition(stereoUV);
+#	if defined(VR)
+	screenPosition = VRStereoEffects::ClampDynamicStereoUVToEyeTexel(
+		screenPosition, eyeIndex, AlphaTex, FrameBuffer::DynamicResolutionParams1.zw);
+#	endif
+	return screenPosition;
 }
 
 float4 GetReflectionColor(
 	float3 projReflectionDirection,
 	float3 projPosition,
-	uint eyeIndex
-#if defined(VR)
+	uint eyeIndex,
+	uint2 depthTextureDimensions
+#	if defined(VR)
 	,
 	int raymarchIterations,
 	int binaryIterations,
 	float foveationWeight
-#endif
-	)
+#	endif
+)
 {
 	float3 prevRaySample;
 	float3 raySample = projPosition;
 
-#if defined(VR)
-#	define SSR_RAYMARCH_ITERATIONS raymarchIterations
-#	define SSR_BINARY_ITERATIONS binaryIterations
-#	define SSR_FOVEATION_ALPHA_WEIGHT foveationWeight
-#else
-#	define SSR_RAYMARCH_ITERATIONS maxIterations
-#	define SSR_BINARY_ITERATIONS maxBinaryIterations
-#	define SSR_FOVEATION_ALPHA_WEIGHT 1.0
-#endif
+#	if defined(VR)
+#		define SSR_RAYMARCH_ITERATIONS raymarchIterations
+#		define SSR_BINARY_ITERATIONS binaryIterations
+#		define SSR_FOVEATION_ALPHA_WEIGHT foveationWeight
+#	else
+#		define SSR_RAYMARCH_ITERATIONS maxIterations
+#		define SSR_BINARY_ITERATIONS maxBinaryIterations
+#		define SSR_FOVEATION_ALPHA_WEIGHT 1.0
+#	endif
 
-#if defined(VR)
+#	if defined(VR)
 	[loop]
-#endif
-	for (int i = 0; i < SSR_RAYMARCH_ITERATIONS; i++) {
+#	endif
+		for (int i = 0; i < SSR_RAYMARCH_ITERATIONS; i++)
+	{
 		prevRaySample = raySample;
 		raySample = projPosition + (float(i) / float(SSR_RAYMARCH_ITERATIONS)) * projReflectionDirection;
 
@@ -120,7 +137,7 @@ float4 GetReflectionColor(
 		if (FrameBuffer::IsOutsideFrame(sampleUV))
 			return 0.0;
 
-		float iterationDepth = DepthTex.SampleLevel(DepthSampler, ConvertRaySample(sampleUV, sampleEyeIndex), 0).x;
+		float iterationDepth = DepthTex.SampleLevel(DepthSampler, ConvertRaySample(sampleUV, sampleEyeIndex, depthTextureDimensions), 0).x;
 
 		if (saturate((raySample.z - iterationDepth) / SSRParams.y) > 0.0) {
 			float3 binaryMinRaySample = prevRaySample;
@@ -129,14 +146,15 @@ float4 GetReflectionColor(
 			float depthThicknessFactor;
 			uint hitEyeIndex = sampleEyeIndex;
 
-#if defined(VR)
+#	if defined(VR)
 			[loop]
-#endif
-			for (int k = 0; k < SSR_BINARY_ITERATIONS; k++) {
+#	endif
+				for (int k = 0; k < SSR_BINARY_ITERATIONS; k++)
+			{
 				binaryRaySample = lerp(binaryMinRaySample, binaryMaxRaySample, 0.5);
 
 				Stereo::ResolveMonoUVForEye(binaryRaySample, eyeIndex, sampleUV, hitEyeIndex);
-				iterationDepth = DepthTex.SampleLevel(DepthSampler, ConvertRaySample(sampleUV, hitEyeIndex), 0).x;
+				iterationDepth = DepthTex.SampleLevel(DepthSampler, ConvertRaySample(sampleUV, hitEyeIndex, depthTextureDimensions), 0).x;
 
 				// Compute expected depth vs actual depth
 				depthThicknessFactor = 1.0 - saturate(abs(binaryRaySample.z - iterationDepth) / SSRParams.y);
@@ -175,7 +193,12 @@ float4 GetReflectionColor(
 				uint finalEyeIndex;
 				Stereo::ResolveMonoUVForEye(float3(binaryRaySample.xy, iterationDepth), eyeIndex, finalSampleUV, finalEyeIndex);
 
-				float3 color = ColorTex.SampleLevel(ColorSampler, ConvertRaySample(finalSampleUV, finalEyeIndex), 0).xyz;
+				uint2 colorTextureDimensions = uint2(1, 1);
+#	if defined(VR)
+				ColorTex.GetDimensions(colorTextureDimensions.x, colorTextureDimensions.y);
+#	endif
+				float2 colorScreenPosition = ConvertRaySample(finalSampleUV, finalEyeIndex, colorTextureDimensions);
+				float3 color = ColorTex.SampleLevel(ColorSampler, colorScreenPosition, 0).xyz;
 
 				// Final sample to world-space
 				float4 positionWS = float4(float2(finalSampleUV.x, 1.0 - finalSampleUV.y) * 2.0 - 1.0, iterationDepth, 1.0);
@@ -202,9 +225,9 @@ float4 GetReflectionColor(
 		}
 	}
 
-#undef SSR_RAYMARCH_ITERATIONS
-#undef SSR_BINARY_ITERATIONS
-#undef SSR_FOVEATION_ALPHA_WEIGHT
+#	undef SSR_RAYMARCH_ITERATIONS
+#	undef SSR_BINARY_ITERATIONS
+#	undef SSR_FOVEATION_ALPHA_WEIGHT
 
 	return 0.0;
 }
@@ -222,11 +245,20 @@ PS_OUTPUT main(PS_INPUT input)
 	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(input.TexCoord);
 	float2 uv = input.TexCoord;
 	float2 screenPosition = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(uv);
+	float2 normalScreenPosition = screenPosition;
+	float2 depthScreenPosition = screenPosition;
 
 	uv = Stereo::ConvertFromStereoUV(uv, eyeIndex);
 
 	float ssrFoveationWeight = 1.0;
 #	if defined(VR)
+	uint2 depthTextureDimensions;
+	DepthTex.GetDimensions(depthTextureDimensions.x, depthTextureDimensions.y);
+	normalScreenPosition = VRStereoEffects::ClampDynamicStereoUVToEyeTexel(
+		screenPosition, eyeIndex, NormalTex, FrameBuffer::DynamicResolutionParams1.xy);
+	depthScreenPosition = VRStereoEffects::ClampDynamicStereoUVToEyeTexel(
+		screenPosition, eyeIndex, depthTextureDimensions, FrameBuffer::DynamicResolutionParams1.xy);
+
 	float ssrFoveationMode = SharedData::VRFoveationModes.x;
 	[branch] if (ssrFoveationMode >= FOVEATED_SHADER_DETAIL_MODE_FEATHERED)
 	{
@@ -238,14 +270,14 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 #	endif
 
-	[branch] if (NormalTex.Sample(NormalSampler, screenPosition).z <= 0)
+	[branch] if (NormalTex.Sample(NormalSampler, normalScreenPosition).z <= 0)
 	{
 		return psout;
 	}
 
 	float3 viewNormal = DefaultNormal;
 
-	float depth = DepthTex.SampleLevel(DepthSampler, screenPosition, 0).x;
+	float depth = DepthTex.SampleLevel(DepthSampler, depthScreenPosition, 0).x;
 
 	float4 positionVS = float4(float2(uv.x, 1.0 - uv.y) * 2.0 - 1.0, depth, 1.0);
 	positionVS = mul(FrameBuffer::CameraProjInverse[eyeIndex], positionVS);
@@ -277,9 +309,11 @@ PS_OUTPUT main(PS_INPUT input)
 		raymarchIterations = GetSSRRaymarchIterations(ssrFoveationWeight);
 		binaryIterations = GetSSRBinaryIterations(raymarchIterations);
 	}
-	psout.Color = GetReflectionColor(projReflectionDirection, projPosition, eyeIndex, raymarchIterations, binaryIterations, ssrFoveationWeight);
+	psout.Color = GetReflectionColor(
+		projReflectionDirection, projPosition, eyeIndex, depthTextureDimensions,
+		raymarchIterations, binaryIterations, ssrFoveationWeight);
 #	else
-	psout.Color = GetReflectionColor(projReflectionDirection, projPosition, eyeIndex);
+	psout.Color = GetReflectionColor(projReflectionDirection, projPosition, eyeIndex, uint2(1, 1));
 #	endif
 
 	return psout;

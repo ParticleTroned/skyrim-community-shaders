@@ -1264,3 +1264,24 @@ diagnostic with no established cause. Release qualification remains unrun.
 The published ledger snapshot remains unchanged because a lossless
 addition exceeds GitHub's 100 MiB file limit. The measured report
 publishes both full comparisons and explains this storage limit.
+
+## September 11: PR73 exact parent and drain failure coverage
+
+The CI harness repair `e74c5c427` restores the missing drain hook and
+removes a fixture-only shadowed member. Its strict MSVC build and all
+12 focused controller tests passed. Follow-up `fa778f63d` adds eight
+passing controller scenario groups for owned-drain deadline, failure,
+invalidation and cleanup behavior, with scripted external dependencies.
+
+Exact parent `bc077786d` is now built with the candidate's canonical
+toolchain, options, dependencies and shader-cache ABI. Both archives and
+their identities are verified. The operator retains deployment, MO2 and
+game startup; no new runtime measurement or visual qualification was made.
+Existing ledger timings remain unchanged. See the
+[parent and failure validation record](pr73-exact-parent-validation-20260911.md)
+for exact Build IDs, test evidence, warnings and remaining hardware scope.
+
+Future reporting explicitly selects corrected automation `c900f176` and
+finalizes each new candidate from its journal. The installed live worker
+does not finalize reports; choosing a toolkit alone does not regenerate
+an existing summary.

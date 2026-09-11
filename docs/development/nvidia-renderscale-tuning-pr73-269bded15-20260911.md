@@ -125,6 +125,15 @@ interval rows are published in the generated "Owned provider drain and
 commit intervals" section below; the eight rows above are the focused
 comparison requested for the earlier outliers.
 
+The installed automation plugin `0.9.0+codex.20260911050803` still contains
+the older parser. Until the corrected release is installed, subsequent
+reporting must explicitly select the maintained source with
+`--toolkit-root C:/src/skyrim-vr-automation` and finalize each new candidate
+with `--finalize-candidate <request.json>`. Selecting a toolkit alone does
+not regenerate an existing summary. The live worker only records evidence;
+this explicit offline finalization avoids the gap without a plugin
+reinstall. The installed parser itself remains unchanged.
+
 An earlier startup handoff, `nv-pr73-269bded1-mtwywzvs`, was blocked before
 measured mutation by the dead `cf1616728` crash-run endpoint lock. The exact
 lock and diagnostics were preserved and its retirement was explicitly

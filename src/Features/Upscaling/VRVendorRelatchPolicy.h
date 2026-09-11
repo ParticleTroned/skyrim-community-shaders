@@ -1365,33 +1365,16 @@ namespace VRVendorRelatchPolicy
 		bool pendingBeforeRelease = false;
 		bool physicalMutationStarted = true;
 		bool providerQuarantined = true;
-		bool memoryReliefActive = false;
 	};
-
-	/** Poll a healthy pending drain without changing its promotion requirements. */
-	[[nodiscard]] constexpr bool CanPollPendingReadinessEveryFrame(
-		const ReadinessRetryAdmission& a_state) noexcept
-	{
-		const auto& promotion = a_state.promotion;
-		return promotion.immutableSettingsTransition &&
-		       promotion.exactAttemptMetrics &&
-		       promotion.retries != std::numeric_limits<std::uint32_t>::max() &&
-		       promotion.failures == 0 && !promotion.recoveryOwned &&
-		       !promotion.providerNeutralRecovery &&
-		       !promotion.emergencyRecovery &&
-		       !promotion.presentationDeadlineFallback &&
-		       a_state.pendingBeforeRelease &&
-		       !a_state.physicalMutationStarted &&
-		       !a_state.providerQuarantined;
-	}
 
 	/** Only proven readiness waits may retain proof-driven promotion after retry. */
 	[[nodiscard]] constexpr bool CanRetryReadinessWithoutSettleGuard(
 		const ReadinessRetryAdmission& a_state) noexcept
 	{
-		return CanPollPendingReadinessEveryFrame(a_state) &&
-		       !a_state.memoryReliefActive &&
-		       CanUseProofDrivenPromotion(a_state.promotion);
+		return CanUseProofDrivenPromotion(a_state.promotion) &&
+		       a_state.pendingBeforeRelease &&
+		       !a_state.physicalMutationStarted &&
+		       !a_state.providerQuarantined;
 	}
 
 	[[nodiscard]] constexpr bool IsSameStereoDispatchContract(

@@ -1,21 +1,5 @@
 # VR render-scale iteration records
 
-## September 11: separate pending-drain polling from settling
-
-PR73 now permits one-frame polling of a proven healthy provider drain while
-retaining Backend retry accounting and the full presentation settling guard
-when memory relief prevents proof-driven release. Failure, ownership,
-mutation, quarantine, retirement and recovery checks remain intact.
-The focused MSVC vendor-relatch and stretch-accounting policy tests pass.
-Clean source cf1616728 also passes a universal Release/DevBench DLL build,
-DevBench-disabled Upscaling syntax check and all 163 shader assertions.
-The AIO passes archive/manifest verification and omits prebuilt shader cache
-and FOMOD. The user will perform deployment and runtime testing manually.
-
-See [the implementation contract](pr73-pending-drain-polling.md).
-No new runtime measurements accompany this implementation; the canonical
-ledger and all previous PR66/PR73 measurements remain unchanged.
-
 ## September 11: all PR73 tables compare against PR66
 
 The user selected measured PR66 a09e1cc77 as the reference for both
@@ -1199,3 +1183,22 @@ runtime measurement or timing to the comparison ledger. Policy tests and
 universal compiler checks cannot establish post-fix performance or visual
 robustness; the updated source still needs runtime tuning and the separate
 `csx-render-scale-pr-v1` qualification with a matching accepted baseline.
+
+## September 11: restore the measured PR73 readiness implementation
+
+The pending-drain polling follow-up `cf1616728` is reverted at the user's
+request. Runtime source and policy tests return exactly to the successful
+`c73bae9a7` implementation, retaining its original conservative handling of
+memory relief and Backend retries. No timing adjustment is substituted.
+
+The later build crashed in pass 1, transition 26 (DLSS HoshiPa to FSR3
+HoshiPa), after 25 completed transitions. Run
+`nvidia-2026-09-11T06-52-05-183Z` and its crash logs remain preserved locally.
+The exact invalid-pointer cause is unproven; the rollback restores tested
+behavior without claiming the six-frame delay proves resource safety.
+
+The latest performance data in PR73 still belongs to `c73bae9a7`: 66/66
+terminal PASS, Task 2 66/0/0, and applicable health MET in both passes. The
+PR66 comparison and all historical ledger cells remain unchanged. Formal
+improvement assessment remains INCONCLUSIVE, and the separate render-scale
+release qualification is unrun. See [the rollback record](pr73-polling-rollback-20260911.md).

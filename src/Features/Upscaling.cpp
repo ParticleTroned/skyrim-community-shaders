@@ -28169,16 +28169,16 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			}
 		};
 		bool fsrTeardownReadyForRelatch = false;
-		const auto getReadinessRetryAdmission = [&](bool a_pendingBeforeRelease) {
+		const auto canRetryReadinessWithoutSettleGuard = [&](bool a_pendingBeforeRelease) {
 			const auto currentController = GetVRRenderScaleTransitionSnapshot();
 			const auto& metrics = currentController.metrics.current;
 			const auto mutation = GetVRRenderScalePhysicalMutationSnapshot();
-			return VRVendorRelatchPolicy::ReadinessRetryAdmission{
+			return VRVendorRelatchPolicy::CanRetryReadinessWithoutSettleGuard({
 				.promotion = {
 					.immutableSettingsTransition = immutableSettingsRelatch,
 					.exactAttemptMetrics = metrics.valid && relatchEpoch != 0 &&
-				                           metrics.transitionEpoch == relatchEpoch &&
-				                           currentController.targetEpoch == relatchEpoch,
+			                               metrics.transitionEpoch == relatchEpoch &&
+			                               currentController.targetEpoch == relatchEpoch,
 					.retries = metrics.retries,
 					.readinessDeferrals = metrics.readinessDeferrals,
 					.failures = metrics.failures,
@@ -28188,10 +28188,9 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					.presentationDeadlineFallback = presentationDeadlineFallbackRequested,
 				},
 				.pendingBeforeRelease = a_pendingBeforeRelease && !IsSubmitStageDeviceLost(),
-				.physicalMutationStarted = mutation.epoch != 0 || mutation.serializationEpoch != 0 || creatorAdmissionAfterDLSSVendorTeardown || lowPeakNativeRestoreCleanupCompleted || nativeRestoreCleanupObserved,
+				.physicalMutationStarted = mutation.epoch != 0 || mutation.serializationEpoch != 0 || creatorAdmissionAfterDLSSVendorTeardown || lowPeakNativeRestoreCleanupCompleted || nativeRestoreCleanupObserved || memoryReliefActiveForRelatch,
 				.providerQuarantined = fidelityFX.IsHostFSRStateQuarantined() || fidelityFX.IsRuntimeUpscalerFailureLatched(),
-				.memoryReliefActive = memoryReliefActiveForRelatch,
-			};
+			});
 		};
 		// Physical target replacement must follow the last FSR frame even when
 		// compatible provider resources survive the transition.
@@ -28224,11 +28223,9 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 						VRVendorRuntimeLifecyclePhase::WaitingForDrain,
 						relatchContractGeneration,
 						"render-target relatch FSR drain");
-					const auto readinessAdmission = getReadinessRetryAdmission(true);
-					const bool readinessRetry = VRVendorRelatchPolicy::CanRetryReadinessWithoutSettleGuard(readinessAdmission);
-					const bool pollEveryFrame = VRVendorRelatchPolicy::CanPollPendingReadinessEveryFrame(readinessAdmission);
+					const bool readinessRetry = canRetryReadinessWithoutSettleGuard(true);
 					requeueRelatch(
-						pollEveryFrame ? VRVendorRelatchPolicy::kReadinessPollRetryFrames : lifecyclePollRetryFrames,
+						readinessRetry ? VRVendorRelatchPolicy::kReadinessPollRetryFrames : lifecyclePollRetryFrames,
 						false,
 						readinessRetry ? VRRenderScaleRetryKind::PreMutationReadiness : VRRenderScaleRetryKind::Backend);
 				} else {
@@ -28324,11 +28321,9 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			}
 			if (teardownDisposition ==
 				VRVendorRelatchPolicy::NativeRestoreTeardownDisposition::Retry) {
-				const auto readinessAdmission = getReadinessRetryAdmission(readinessDeferredBeforeRelease);
-				const bool readinessRetry = VRVendorRelatchPolicy::CanRetryReadinessWithoutSettleGuard(readinessAdmission);
-				const bool pollEveryFrame = VRVendorRelatchPolicy::CanPollPendingReadinessEveryFrame(readinessAdmission);
+				const bool readinessRetry = canRetryReadinessWithoutSettleGuard(readinessDeferredBeforeRelease);
 				requeueRelatch(
-					pollEveryFrame ? VRVendorRelatchPolicy::kReadinessPollRetryFrames : lifecyclePollRetryFrames,
+					readinessRetry ? VRVendorRelatchPolicy::kReadinessPollRetryFrames : lifecyclePollRetryFrames,
 					false,
 					readinessRetry ? VRRenderScaleRetryKind::PreMutationReadiness : VRRenderScaleRetryKind::Backend);
 			} else if (terminalInactiveFSRFailure) {

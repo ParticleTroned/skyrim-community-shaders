@@ -1720,10 +1720,6 @@ namespace
 		if (CanRetryReadinessWithoutSettleGuard(state))
 			return false;
 		state = ready;
-		state.memoryReliefActive = true;
-		if (CanRetryReadinessWithoutSettleGuard(state))
-			return false;
-		state = ready;
 		state.providerQuarantined = true;
 		if (CanRetryReadinessWithoutSettleGuard(state))
 			return false;
@@ -1755,106 +1751,6 @@ namespace
 		state = ready;
 		state.promotion.presentationDeadlineFallback = true;
 		return !CanRetryReadinessWithoutSettleGuard(state);
-	}
-
-	constexpr bool CoversPendingReadinessPollSequence()
-	{
-		ReadinessRetryAdmission state{
-			.promotion = {
-				.immutableSettingsTransition = true,
-				.exactAttemptMetrics = true,
-			},
-			.pendingBeforeRelease = true,
-			.physicalMutationStarted = false,
-			.providerQuarantined = false,
-			.memoryReliefActive = true,
-		};
-		// Backend pending after memory relief keeps ordinary retry accounting;
-		// faster polling must never manufacture proof-driven promotion credit.
-		for (std::uint32_t retry = 0; retry < 4; ++retry) {
-			if (!CanPollPendingReadinessEveryFrame(state) ||
-				CanRetryReadinessWithoutSettleGuard(state)) {
-				return false;
-			}
-			++state.promotion.retries;
-		}
-		state.memoryReliefActive = false;
-		if (!CanPollPendingReadinessEveryFrame(state) ||
-			CanRetryReadinessWithoutSettleGuard(state) ||
-			CanUseProofDrivenPromotion(state.promotion)) {
-			return false;
-		}
-
-		state.pendingBeforeRelease = false;
-		return !CanPollPendingReadinessEveryFrame(state) &&
-		       !CanRetryReadinessWithoutSettleGuard(state) &&
-		       !CanUseProofDrivenPromotion(state.promotion);
-	}
-
-	constexpr bool CoversPendingReadinessPollAdmission()
-	{
-		if (CanPollPendingReadinessEveryFrame({}))
-			return false;
-		const ReadinessRetryAdmission ready{
-			.promotion = {
-				.immutableSettingsTransition = true,
-				.exactAttemptMetrics = true,
-				.retries = 3,
-				.readinessDeferrals = 0,
-			},
-			.pendingBeforeRelease = true,
-			.physicalMutationStarted = false,
-			.providerQuarantined = false,
-		};
-		if (!CanPollPendingReadinessEveryFrame(ready))
-			return false;
-
-		for (std::uint32_t invalidation = 0; invalidation < 10; ++invalidation) {
-			auto state = ready;
-			switch (invalidation) {
-			case 0:
-				state.pendingBeforeRelease = false;
-				break;
-			case 1:
-				state.physicalMutationStarted = true;
-				break;
-			case 2:
-				state.providerQuarantined = true;
-				break;
-			case 3:
-				state.promotion.immutableSettingsTransition = false;
-				break;
-			case 4:
-				state.promotion.exactAttemptMetrics = false;
-				break;
-			case 5:
-				state.promotion.failures = 1;
-				break;
-			case 6:
-				state.promotion.recoveryOwned = true;
-				break;
-			case 7:
-				state.promotion.providerNeutralRecovery = true;
-				break;
-			case 8:
-				state.promotion.emergencyRecovery = true;
-				break;
-			case 9:
-				state.promotion.presentationDeadlineFallback = true;
-				break;
-			default:
-				return false;
-			}
-			if (CanPollPendingReadinessEveryFrame(state))
-				return false;
-		}
-
-		auto state = ready;
-		state.promotion.retries = std::numeric_limits<std::uint32_t>::max() - 1u;
-		if (!CanPollPendingReadinessEveryFrame(state))
-			return false;
-		++state.promotion.retries;
-		return !CanPollPendingReadinessEveryFrame(state);
 	}
 
 	constexpr bool CoversInitialRelatchPacing()
@@ -3764,8 +3660,6 @@ namespace
 	static_assert(CoversSubmitStagePromotionAdmission());
 	static_assert(CoversProofDrivenPromotionAdmission());
 	static_assert(CoversReadinessRetryAdmission());
-	static_assert(CoversPendingReadinessPollSequence());
-	static_assert(CoversPendingReadinessPollAdmission());
 	static_assert(CoversInitialRelatchPacing());
 	static_assert(CoversStereoDispatchContractIdentity());
 	static_assert(CoversPendingVendorResetOwnership());

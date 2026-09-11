@@ -7,6 +7,10 @@ retaining Backend retry accounting and the full presentation settling guard
 when memory relief prevents proof-driven release. Failure, ownership,
 mutation, quarantine, retirement and recovery checks remain intact.
 The focused MSVC vendor-relatch and stretch-accounting policy tests pass.
+Clean source cf1616728 also passes a universal Release/DevBench DLL build,
+DevBench-disabled Upscaling syntax check and all 163 shader assertions.
+The AIO passes archive/manifest verification and omits prebuilt shader cache
+and FOMOD. The user will perform deployment and runtime testing manually.
 
 See [the implementation contract](pr73-pending-drain-polling.md).
 No new runtime measurements accompany this implementation; the canonical

@@ -54,6 +54,8 @@ public:
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
 	void DrawFoveationSettings();
 	void DrawOCUEffectFoveationSettings();
+	/** Stage optional sampling for the next render pass; shared by UI and DevBench. */
+	void SetOCUEffectFoveationEnabled(bool a_enabled);
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;

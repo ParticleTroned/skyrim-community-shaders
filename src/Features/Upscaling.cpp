@@ -12625,6 +12625,17 @@ namespace
 			return ERROR_NOT_ENOUGH_MEMORY;
 		}
 	}
+
+	std::size_t RecordVRMenuPresentationTraceD3DHookBank(const VRMenuPresentationTraceD3DHookPendingRegistration& a_pending)
+	{
+		for (std::size_t method = 0; method < a_pending.queued.size(); ++method) {
+			if (!a_pending.queued[method])
+				continue;
+			auto& count = g_vrMenuPresentationTraceD3DHookTargetCounts[method];
+			g_vrMenuPresentationTraceD3DHookTargets[method][count++] = a_pending.targets[method];
+		}
+		return g_vrMenuPresentationTraceD3DHookBanksUsed++;
+	}
 }
 
 bool Upscaling::InstallAcceptedDrawD3DHooks(ID3D11DeviceContext* a_context)
@@ -12651,13 +12662,7 @@ bool Upscaling::InstallAcceptedDrawD3DHooks(ID3D11DeviceContext* a_context)
 	}
 	if (DetourTransactionCommit() != NO_ERROR)
 		return false;
-	for (std::size_t method = 0; method < pending.queued.size(); ++method) {
-		if (pending.queued[method]) {
-			auto& count = g_vrMenuPresentationTraceD3DHookTargetCounts[method];
-			g_vrMenuPresentationTraceD3DHookTargets[method][count++] = pending.targets[method];
-		}
-	}
-	++g_vrMenuPresentationTraceD3DHookBanksUsed;
+	RecordVRMenuPresentationTraceD3DHookBank(pending);
 	return true;
 }
 
@@ -12744,17 +12749,11 @@ void Upscaling::InstallVRMenuPresentationTraceD3DHooks(ID3D11DeviceContext* a_co
 		return;
 	}
 
-	for (std::size_t method = 0; method < pending.queued.size(); ++method) {
-		if (!pending.queued[method])
-			continue;
-		auto& count = g_vrMenuPresentationTraceD3DHookTargetCounts[method];
-		g_vrMenuPresentationTraceD3DHookTargets[method][count++] = pending.targets[method];
-	}
+	const std::size_t bank = RecordVRMenuPresentationTraceD3DHookBank(pending);
 	if (queueCreateDeferredContextHook) {
 		g_vrMenuPresentationTraceCreateDeferredContextTarget = createDeferredContextTarget;
 		g_vrMenuPresentationTraceCreateDeferredContextHookInstalled.store(true, std::memory_order_release);
 	}
-	const std::size_t bank = g_vrMenuPresentationTraceD3DHookBanksUsed++;
 	const bool drawCoverageComplete =
 		IsVRMenuPresentationTraceD3DContextDrawCoverageCompleteUnlocked(a_context);
 	g_vrMenuPresentationTraceD3DHooksInstalled.store(true, std::memory_order_release);

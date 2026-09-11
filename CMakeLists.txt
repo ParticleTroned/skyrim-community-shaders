@@ -2164,6 +2164,37 @@ if(BUILD_CONTROLLER_TESTS)
         ocu_effect_foveation_client_test
         PRIVATE "${PROJECT_SOURCE_DIR}/include"
     )
+    set(_ocu_effect_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/ocu-effect")
+    set(_ocu_effect_test_headers
+        "${_ocu_effect_test_dir}/ocu_shader_batch_under_test.h"
+        "${_ocu_effect_test_dir}/ocu_setting_under_test.h"
+        "${_ocu_effect_test_dir}/ocu_devbench_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_ocu_effect_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_ocu_effect_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_ocu_effect_integration.cmake"
+        DEPENDS
+            src/Features/ScreenSpaceGI.cpp
+            src/ProfilerDevBenchBridge.cpp
+            tests/extract_ocu_effect_integration.cmake
+        VERBATIM
+    )
+    add_controller_test(ocu_effect_integration_test OCUEffectIntegration tests/ocu_effect_integration_test.cpp)
+    target_sources(
+        ocu_effect_integration_test
+        PRIVATE ${_ocu_effect_test_headers}
+    )
+    target_include_directories(
+        ocu_effect_integration_test
+        PRIVATE "${_ocu_effect_test_dir}"
+    )
+    target_link_libraries(
+        ocu_effect_integration_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
     add_controller_test(
         overlay_policy_test
         OverlayPolicy
@@ -2275,7 +2306,6 @@ if(BUILD_CONTROLLER_TESTS)
         AcceptedDrawRegistry
         PROPERTIES LABELS "ControllerTests"
     )
-
     add_executable(
         api_runtime_thread_affinity_test
         EXCLUDE_FROM_ALL
@@ -2665,6 +2695,7 @@ if(BUILD_CONTROLLER_TESTS)
             vr_submit_input_freshness_composition_test
             ocu_effect_foveation_policy_test
             ocu_effect_foveation_client_test
+            ocu_effect_integration_test
             accepted_draw_registry_test
             overlay_policy_test
             performance_tuning_statistics_test

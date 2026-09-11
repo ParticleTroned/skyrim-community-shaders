@@ -816,14 +816,25 @@ void ScreenSpaceGI::DrawSettings()
 	}
 }
 
+void ScreenSpaceGI::SetOCUEffectFoveationEnabled(bool a_enabled)
+{
+	a_enabled = REL::Module::IsVR() && a_enabled;
+	if (settings.ExperimentalOCUEffectFoveation == a_enabled)
+		return;
+	settings.ExperimentalOCUEffectFoveation = a_enabled;
+	recompileFlag = true;
+	queuedResetHistory.store(true, std::memory_order_release);
+	ocuEffectActive.store(false, std::memory_order_relaxed);
+	ocuEffectStatus.store(a_enabled ? "Native sampling: awaiting SSGI pass" : "OCU peripheral sampling disabled", std::memory_order_relaxed);
+}
+
 void ScreenSpaceGI::DrawOCUEffectFoveationSettings()
 {
 	if (!REL::Module::IsVR())
 		return;
-	if (ImGui::Checkbox("OCU peripheral sampling (experimental)", &settings.ExperimentalOCUEffectFoveation)) {
-		recompileFlag = true;
-		queuedResetHistory.store(true, std::memory_order_release);
-	}
+	bool enabled = settings.ExperimentalOCUEffectFoveation;
+	if (ImGui::Checkbox("OCU peripheral sampling (experimental)", &enabled))
+		SetOCUEffectFoveationEnabled(enabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextWrapped("Uses OCU's current eye positions and foveation rings to reduce peripheral AO/GI samples while keeping central samples and the lighting effects enabled.");
 		ImGui::TextWrapped("Does not require upscaling or render scale. Native quality is used when OCU's profile is unavailable. Experimental: peripheral noise and moving-eye quality need headset testing.");
@@ -1136,8 +1147,9 @@ void ScreenSpaceGI::SetupResources()
 		ssgiCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<SSGICB>());
 		ocuEffectCB = nullptr;
 		try {
-			ocuEffectCB = eastl::make_unique<ConstantBuffer>(
-				ConstantBufferDesc<OCUEffectFoveation::Constants>(), "ScreenSpaceGI::OCUEffectFoveation");
+			if (REL::Module::IsVR())
+				ocuEffectCB = eastl::make_unique<ConstantBuffer>(
+					ConstantBufferDesc<OCUEffectFoveation::Constants>(), "ScreenSpaceGI::OCUEffectFoveation");
 		} catch (const std::exception& e) {
 			logger::warn("OCU effect constants unavailable; keeping native SSGI sampling: {}", e.what());
 		}
@@ -1434,6 +1446,7 @@ bool ScreenSpaceGI::CompileComputeShaders(Util::ShaderCompileTiming* a_timing)
 		bool includeAdaptiveSamplingDefines = false;
 	};
 
+	std::vector<ShaderCompileInfo> optionalShaderInfos;
 	std::vector<ShaderCompileInfo>
 		shaderInfos = {
 			{ &prefilterDepthsCompute, "prefilterDepths.cs.hlsl", { { "LINEAR_FILTER", "" } } },
@@ -1446,7 +1459,7 @@ bool ScreenSpaceGI::CompileComputeShaders(Util::ShaderCompileTiming* a_timing)
 		};
 	if (REL::Module::IsVR()) {
 		if (settings.ExperimentalOCUEffectFoveation)
-			shaderInfos.push_back({ &giAOOnlyOCUEffectCompute, "giOCUEffect.cs.hlsl", {}, true, true, false, true });
+			optionalShaderInfos.push_back({ &giAOOnlyOCUEffectCompute, "giOCUEffect.cs.hlsl", {}, true, true, false, true });
 		shaderInfos.push_back({ &giAOOnlyEye0OnlyCompute, "gi.cs.hlsl", { { "STEREO_EYE0_ONLY", "" }, { "FRAMEBUFFER", "" } }, true, true, false, true });
 		shaderInfos.push_back({ &reprojectAOOnlyCompute, "reproject.cs.hlsl", { { "FRAMEBUFFER", "" } }, true, false, false });
 		shaderInfos.push_back({ &stereoSyncAOOnlyCompute, "stereoSync.cs.hlsl", { { "FRAMEBUFFER", "" } }, true, false, false });
@@ -1457,7 +1470,7 @@ bool ScreenSpaceGI::CompileComputeShaders(Util::ShaderCompileTiming* a_timing)
 		shaderInfos.push_back({ &radianceDisoccCompute, "radianceDisocc.cs.hlsl", {} });
 		shaderInfos.push_back({ &giCompute, "gi.cs.hlsl", {}, true, true, true, true });
 		if (REL::Module::IsVR() && settings.ExperimentalOCUEffectFoveation)
-			shaderInfos.push_back({ &giOCUEffectCompute, "giOCUEffect.cs.hlsl", {}, true, true, true, true });
+			optionalShaderInfos.push_back({ &giOCUEffectCompute, "giOCUEffect.cs.hlsl", {}, true, true, true, true });
 		shaderInfos.push_back({ &centerGIMaskedCompute, "gi.cs.hlsl", { { "CENTER_FULL_PASS", "" } }, false, false, true, true });
 		shaderInfos.push_back({ &blurCompute, "blur.cs.hlsl", {} });
 		if (REL::Module::IsVR()) {
@@ -1469,7 +1482,7 @@ bool ScreenSpaceGI::CompileComputeShaders(Util::ShaderCompileTiming* a_timing)
 		shaderInfos.push_back({ &upsampleCompute, "upsample.cs.hlsl", {} });
 		shaderInfos.push_back({ &centerBlendCompute, "centerBlend.cs.hlsl", {}, false, false });
 	}
-	for (auto& info : shaderInfos) {
+	const auto compileShader = [&](ShaderCompileInfo& info) {
 		if (REL::Module::IsVR())
 			info.defines.push_back({ "VR", "" });
 		if (info.includeResolutionDefines) {
@@ -1486,26 +1499,37 @@ bool ScreenSpaceGI::CompileComputeShaders(Util::ShaderCompileTiming* a_timing)
 			info.defines.push_back({ "GI_SPECULAR", "" });
 		if (info.includeAdaptiveSamplingDefines && settings.EnableAdaptiveSampling)
 			info.defines.push_back({ "ADAPTIVE_SAMPLING", "" });
-	}
-
-	std::vector<winrt::com_ptr<ID3D11ComputeShader>> compiledShaders(
-		shaderInfos.size());
-	bool compilationComplete = true;
-	for (std::size_t i = 0; i < shaderInfos.size(); ++i) {
-		auto& info = shaderInfos[i];
 		auto path = std::filesystem::path("Data\\Shaders\\ScreenSpaceGI") / info.filename;
-		compiledShaders[i].attach(reinterpret_cast<ID3D11ComputeShader*>(
+		winrt::com_ptr<ID3D11ComputeShader> shader;
+		shader.attach(reinterpret_cast<ID3D11ComputeShader*>(
 			Util::CompileShader(
 				path.c_str(),
 				info.defines,
 				"cs_5_0",
 				"main",
 				a_timing)));
+		return shader;
+	};
+
+	// Optional variants must never retain a previous permutation after failure.
+	giAOOnlyOCUEffectCompute = nullptr;
+	giOCUEffectCompute = nullptr;
+	std::vector<winrt::com_ptr<ID3D11ComputeShader>> compiledShaders(shaderInfos.size());
+	bool compilationComplete = true;
+	for (std::size_t i = 0; i < shaderInfos.size(); ++i) {
+		compiledShaders[i] = compileShader(shaderInfos[i]);
 		compilationComplete = compiledShaders[i] && compilationComplete;
 	}
 	if (compilationComplete) {
 		for (std::size_t i = 0; i < shaderInfos.size(); ++i)
 			*shaderInfos[i].programPtr = std::move(compiledShaders[i]);
+		for (auto& info : optionalShaderInfos) {
+			try {
+				*info.programPtr = compileShader(info);
+			} catch (const std::exception& error) {
+				logger::warn("Optional OCU shader failed; keeping native SSGI sampling: {}", error.what());
+			}
+		}
 	}
 
 	recompileFlag = false;

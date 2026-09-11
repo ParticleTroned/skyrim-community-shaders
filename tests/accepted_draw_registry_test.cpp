@@ -144,10 +144,12 @@ namespace
 			scope.Activate(&first, &geometry);
 		}
 		Check(!scope.Begin(&second) && !scope.Current(), "overflow inherited geometry");
-		Check(scope.End(&second) && scope.Current() == &geometry, "overflow failed to unwind");
+		Check(!scope.End(&first) && !scope.Current(), "unverified overflow restore exposed stale geometry");
 		for (unsigned i = 0; i < 32; ++i)
-			Check(scope.End(&first), "scope unwind failed");
-		Check(!scope.Current(), "completed scope retained geometry");
+			Check(!scope.End(&first) && !scope.Current(), "invalidated scope revived while unwinding");
+		Check(scope.Begin(&second), "fresh scope failed after overflow");
+		scope.Activate(&second, &geometry);
+		Check(scope.Current() == &geometry && scope.End(&second) && !scope.Current(), "fresh scope did not recover");
 	}
 }
 

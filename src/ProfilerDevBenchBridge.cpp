@@ -79,21 +79,35 @@ namespace
 		};
 	}
 
+	json BuildOCUEffectFoveationResult(const json& a_args)
+	{
+		const auto action = a_args.at("action").get<std::string>();
+		const bool mutation = action == "set_ocu_foveation";
+		if (mutation && (!a_args.contains("enabled") || !a_args.at("enabled").is_boolean()))
+			return { { "error", "enabled must be a boolean" } };
+		const bool enabled = mutation && a_args.at("enabled").get<bool>();
+		return RunOnMainThread([action, mutation, enabled]() -> json {
+			auto& gi = globals::features::screenSpaceGI;
+			if (mutation) {
+				if (!globals::game::isVR || !gi.loaded)
+					return { { "error", "OCU peripheral sampling requires loaded SSGI in Skyrim VR" } };
+				gi.SetOCUEffectFoveationEnabled(enabled);
+			}
+			return {
+				{ "action", action }, { "vr", globals::game::isVR },
+				{ "loaded", gi.loaded }, { "enabled", gi.settings.Enabled },
+				{ "requested", gi.settings.ExperimentalOCUEffectFoveation },
+				{ "active", gi.loaded && gi.settings.Enabled && gi.settings.ExperimentalOCUEffectFoveation && gi.ocuEffectActive.load(std::memory_order_relaxed) },
+				{ "status", gi.ocuEffectStatus.load(std::memory_order_relaxed) }
+			};
+		});
+	}
+
 	json BuildProfilerResult(const json& a_args)
 	{
 		const std::string action = a_args.value("action", std::string("status"));
-		if (action == "ocu_foveation") {
-			return RunOnMainThread([]() -> json {
-				const auto& gi = globals::features::screenSpaceGI;
-				return {
-					{ "action", "ocu_foveation" }, { "vr", globals::game::isVR },
-					{ "loaded", gi.loaded }, { "enabled", gi.settings.Enabled },
-					{ "requested", gi.settings.ExperimentalOCUEffectFoveation },
-					{ "active", gi.ocuEffectActive.load(std::memory_order_relaxed) },
-					{ "status", gi.ocuEffectStatus.load(std::memory_order_relaxed) }
-				};
-			});
-		}
+		if (action == "ocu_foveation" || action == "set_ocu_foveation")
+			return BuildOCUEffectFoveationResult(a_args);
 		if (action == "accepted_draws") {
 			const auto status = CSX::Api::InspectAcceptedDrawService();
 			return {
@@ -109,7 +123,7 @@ namespace
 			return {
 				{ "error", "unknown action" },
 				{ "action", action },
-				{ "supported", json::array({ "status", "enable", "disable", "accepted_draws", "ocu_foveation" }) },
+				{ "supported", json::array({ "status", "enable", "disable", "accepted_draws", "ocu_foveation", "set_ocu_foveation" }) },
 			};
 		}
 
@@ -180,7 +194,7 @@ namespace
 			{ "registered", g_registered.load(std::memory_order_acquire) },
 			{ "tool", "communityshaders.profiler" },
 			{ "usage", R"(Invoke the top-level devbench tool with {"action":"status"} when exposed. If the client has not exposed dynamic tools, dispatch it through devbench scenario with a tool step: {"tool":"communityshaders.profiler","args":{"action":"status"}}.)" },
-			{ "actions", json::array({ "status", "enable", "disable", "accepted_draws", "ocu_foveation" }) },
+			{ "actions", json::array({ "status", "enable", "disable", "accepted_draws", "ocu_foveation", "set_ocu_foveation" }) },
 		};
 		BuildProvenance::AttachProducer(result);
 		const auto serialized = result.dump();
@@ -221,7 +235,7 @@ namespace ProfilerDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Inspect and control the CSX GPU/CPU profiler. accepted_draws reports VR accepted-draw API readiness, callbacks, isolated replays and faults without enabling capture. ocu_foveation reports requested and active peripheral GI sampling and its fallback reason without changing settings or enabling capture. Every response identifies the exact producing DLL. expectedBuildId makes captures fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","enable","disable","accepted_draws","ocu_foveation"],"default":"status"},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
+			R"({"description":"Inspect and control the CSX GPU/CPU profiler. accepted_draws reports VR accepted-draw API readiness, callbacks, isolated replays and faults without enabling capture. ocu_foveation reports requested and active peripheral GI sampling and its fallback reason without changing settings or enabling capture. set_ocu_foveation requires boolean enabled, stages this VR-only SSGI setting until settings are saved, and resets history on the next render pass. Every response identifies the exact producing DLL. expectedBuildId makes captures fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","enable","disable","accepted_draws","ocu_foveation","set_ocu_foveation"],"default":"status"},"enabled":{"type":"boolean","description":"Required by set_ocu_foveation; stages optional peripheral sampling without saving settings."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
 		devBench->RegisterTool(
 			"communityshaders.profiler",
 			descriptor,

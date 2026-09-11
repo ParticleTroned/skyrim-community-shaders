@@ -12,6 +12,7 @@ namespace OCUEffectFoveation
 	{
 		float centers[4]{};
 		float policy[4]{};  // inner radius, mid radius, strength, eye-tracked
+		/** Zero-initialized constants preserve native sample density. */
 		bool Active() const noexcept { return policy[2] > 0.0f; }
 	};
 	static_assert(sizeof(Constants) == 32);
@@ -24,6 +25,7 @@ namespace OCUEffectFoveation
 	public:
 		static constexpr double MaxPublicationAgeSeconds = 0.100;
 
+		/** Reject malformed, repeated or older-than-100ms publications without advancing freshness. */
 		Constants Consume(const ocu_effect_foveation::Snapshot& a_snapshot,
 			std::int64_t a_nowQpc, std::int64_t a_localQpcFrequency) noexcept
 		{

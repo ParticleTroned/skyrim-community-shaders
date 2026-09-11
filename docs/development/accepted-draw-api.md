@@ -31,6 +31,8 @@ Skyrim VR 1.4.15, not arbitrary shader families or compute dispatches.
 CSX's shader setup/restore pairs provide the live native `BSGeometry`.
 Nested scopes preserve the parent identity; incomplete setup, restoration,
 overflow, and mismatched pairing cannot reuse an unrelated geometry.
+An overflowed restore invalidates the entire stored stack because its pass
+identity was not recorded; a fresh, verified setup is required to recover.
 
 The two immediate-context draw entry points reuse CSX's D3D hook-bank
 bookkeeping. Enabling the API does not enable developer-mode menu tracing

@@ -23,9 +23,10 @@ int main()
 		static_assert(std::is_standard_layout_v<CaptureRequest001>);
 		static_assert(std::is_standard_layout_v<CaptureProgress001>);
 		static_assert(std::is_standard_layout_v<Interface001>);
-		Check(ServiceMajor == 1 && ServiceMinor == 0 && SchemaRevision == 1, "unexpected profiler contract version");
+		Check(ServiceMajor == 1 && ServiceMinor == 1 && SchemaRevision == 2, "unexpected profiler contract version");
 		Check((ServiceCapabilities & kCapabilitySnapshot) != 0 &&
-			(ServiceCapabilities & kCapabilityHistoryReset) != 0,
+				  (ServiceCapabilities & kCapabilityHistoryReset) != 0 &&
+				  (ServiceCapabilities & kCapabilitySelfTime) != 0,
 			"published profiler capability mask is incomplete");
 		Check((kCapabilityBoundedCapture & kCapabilityHistory) == 0, "capability bits overlap");
 		Check(static_cast<std::uint32_t>(CaptureState::kCompleted) != static_cast<std::uint32_t>(CaptureState::kRunning), "capture states overlap");

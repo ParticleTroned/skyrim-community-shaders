@@ -9,6 +9,7 @@
 #include <format>
 #include <iostream>
 #include <iterator>
+#include <source_location>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -25,11 +26,15 @@ namespace
 	bool engineFixesLoaded = false;
 	int runtimeVersion = 1415;
 	std::size_t assertions = 0;
-	void Require(bool condition)
+	void Require(bool condition, const std::source_location& location = std::source_location::current())
 	{
 		++assertions;
 		if (!condition) {
-			throw std::runtime_error(std::format("Scene guard assertion {} failed", assertions));
+			throw std::runtime_error(std::format(
+				"Scene guard assertion {} failed at {}:{}",
+				assertions,
+				location.file_name(),
+				location.line()));
 		}
 	}
 }

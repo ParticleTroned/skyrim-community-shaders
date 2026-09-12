@@ -537,10 +537,11 @@ void Skylighting::ResetSkylighting()
 	context->ClearUnorderedAccessViewFloat(texProbeArray->uav.get(), unitSH);
 
 	UINT clearZero[4] = { 0, 0, 0, 0 };
+	// Resetting the packed state restarts both SH confidence and shadow jitter.
 	context->ClearUnorderedAccessViewUint(texAccumFramesArray->uav.get(), clearZero);
 
-	// Start new probes fully lit and replace one history bit per frame. Clearing
-	// to zero would make the first valid sample appear only 1/32 visible.
+	// New probes stay fully lit until accepted samples replace their history.
+	// Clearing to zero would make the first valid sample appear only 1/32 visible.
 	UINT clearLit[4] = { UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX };
 	context->ClearUnorderedAccessViewUint(texShadowBitmask->uav.get(), clearLit);
 
@@ -877,7 +878,8 @@ void Skylighting::SetupResources()
 		texProbeArray->CreateSRV(srvDesc);
 		texProbeArray->CreateUAV(uavDesc);
 
-		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R8_UINT;
+		// Preserve the eight-bit SH count alongside a five-bit shadow sample cursor.
+		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R16_UINT;
 
 		texAccumFramesArray = new Texture3D(texDesc, "Skylighting::AccumFramesArray");
 		texAccumFramesArray->CreateSRV(srvDesc);

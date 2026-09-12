@@ -77,6 +77,10 @@ static const float3 noise3D[32] = {
 	int3 validMin = max(0, settings.ValidMargin.xyz);
 	int3 validMax = int3(arrayDims) - 1 + min(0, settings.ValidMargin.xyz);
 	bool isValid = all(cellIDInt >= validMin) && all(cellIDInt <= validMax);  // check if the cell is newly added
+	// Low eight bits retain SH accumulation; the next five advance shadow jitter per probe.
+	uint probeUpdateState = isValid ? outAccumFramesArray[probeTexID] : 0;
+	uint storedAccumFrames = probeUpdateState & 0xFFu;
+	uint shadowSampleIndex = (probeUpdateState >> 8) & 31u;
 	float3 cellCentreMS = float3(cellID) + 0.5 - arrayDimsF * 0.5;
 	cellCentreMS = cellCentreMS / arrayDimsF * Skylighting::GetArraySize(settings) + settings.PosOffset.xyz;
 
@@ -85,7 +89,7 @@ static const float3 noise3D[32] = {
 	float2 occlusionUV = cellCentreOS.xy * 0.5 + 0.5;
 
 	if (all(occlusionUV > 0) && all(occlusionUV < 1)) {
-		uint accumFrames = isValid ? (outAccumFramesArray[probeTexID] + 1) : 1;
+		uint accumFrames = storedAccumFrames + 1;
 		float visibility = srcOcclusionDepth.SampleCmpLevelZero(comparisonSampler, occlusionUV, cellCentreOS.z);
 
 		sh2 occlusionSH = settings.OcclusionSHBasis4Pi * visibility;
@@ -99,13 +103,11 @@ static const float3 noise3D[32] = {
 		occlusionSH = lerp(unitSH, occlusionSH, min(fadeInThreshold, accumFrames) / fadeInThreshold);  // confidence fade in
 
 		outProbeArray[probeTexID] = occlusionSH;
-		outAccumFramesArray[probeTexID] = accumFrames;
+		storedAccumFrames = min(accumFrames, 255u);
 	} else if (!isValid) {
 		outProbeArray[probeTexID] = unitSH;
-		outAccumFramesArray[probeTexID] = 0;
 	}
 
-	uint bitIndex = SharedData::FrameCountAlwaysActive % 32;
 	uint bitmask = isValid ? outShadowBitmask[probeTexID] : 0xFFFFFFFFu;
 	float shadowSample = 1.0;
 	bool advanceShadowHistory = settings.ShadowDataAvailable == 0;
@@ -120,7 +122,9 @@ static const float3 noise3D[32] = {
 
 		if (onScreen) {
 			DirectionalShadowLightData shadowData = DirectionalShadowLights[0];
-			float3 jitteredMS = cellCentreMS + noise3D[bitIndex] * 128;
+			float3 jitteredMS = cellCentreMS + noise3D[shadowSampleIndex] * 128;
+			// Rejected jitter positions must not pin a boundary probe to one sample forever.
+			shadowSampleIndex = (shadowSampleIndex + 1u) & 31u;
 			float4 jitteredCS = mul(FrameBuffer::CameraViewProj[0], float4(jitteredMS, 1));
 
 			if (jitteredCS.w > 0) {
@@ -151,13 +155,13 @@ static const float3 noise3D[32] = {
 	}
 
 	if (advanceShadowHistory) {
-		bitmask &= ~(1u << bitIndex);
-		if (shadowSample > 0.5)
-			bitmask |= 1u << bitIndex;
+		// Every accepted sample retires the oldest bit, independent of update cadence.
+		bitmask = (bitmask << 1) | (shadowSample > 0.5 ? 1u : 0u);
 		outShadowBitmask[probeTexID] = bitmask;
 		outShadowVisibility[probeTexID] = float(countbits(bitmask)) / 32.0;
 	} else if (!isValid) {
 		outShadowBitmask[probeTexID] = 0xFFFFFFFFu;
 		outShadowVisibility[probeTexID] = 1.0;
 	}
+	outAccumFramesArray[probeTexID] = storedAccumFrames | (shadowSampleIndex << 8);
 }

@@ -39,6 +39,18 @@ on:
                 description: "JSON array of changed paths for incremental shader validation; empty => full validation"
                 type: string
                 default: ""
+            test-build-id:
+                description: "Optional deterministic test build ID (RC<number>-YYYY-MM-DD)"
+                type: string
+                default: ""
+            artifact-name:
+                description: "Name of the uploaded distribution artifact"
+                type: string
+                default: "dist-artifacts"
+            expected-package-name:
+                description: "Exact sole dist file required for a test build"
+                type: string
+                default: ""
         outputs:
             version:
                 description: "CMake project version extracted from the build"
@@ -88,7 +100,7 @@ jobs:
               uses: lukka/run-cmake@v10
               with:
                   configurePreset: ${{ matrix.compiler.cmake-preset }}
-                  configurePresetAdditionalArgs: "['-DBUILD_SHADER_TESTS=OFF', '-DBUILD_CONTROLLER_TESTS=ON', '-DCSX_REQUIRE_CLEAN_PROVENANCE=ON']"
+                  configurePresetAdditionalArgs: "['-DBUILD_SHADER_TESTS=OFF', '-DBUILD_CONTROLLER_TESTS=ON', '-DCSX_REQUIRE_CLEAN_PROVENANCE=ON', '-DCSX_TEST_BUILD=${{ inputs.test-build-id }}', '-DZIP_TO_DIST=${{ inputs.test-build-id != '' && 'OFF' || 'ON' }}', '-DDEVBENCH_BRIDGE=OFF']"
                   buildPreset: ${{ matrix.compiler.cmake-preset }}
 
             - name: Verify DLL provenance sidecar
@@ -123,7 +135,7 @@ jobs:
                   "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
             - name: Fail if CMake version does not match tag
-              if: success() && github.ref_type == 'tag'
+              if: success() && github.ref_type == 'tag' && inputs.test-build-id == ''
               shell: pwsh
               run: |
                   $tag = '${{ github.ref_name }}'
@@ -138,12 +150,28 @@ jobs:
                     Write-Host "CMakeLists.txt version matches tag."
                   }
 
+            - name: Verify test-distribution contents
+              if: success() && inputs.test-build-id != ''
+              run: |
+                  python tools/csx_test_build.py verify-package `
+                    --dist dist `
+                    --expected-name '${{ inputs.expected-package-name }}'
+
             - name: Upload dist artifacts
-              if: success() && matrix.compiler.name == 'vs2026'
+              if: success() && matrix.compiler.name == 'vs2026' && inputs.test-build-id == ''
               uses: actions/upload-artifact@v7
               with:
-                  name: dist-artifacts
+                  name: ${{ inputs.artifact-name }}
                   path: dist/
+                  retention-days: 30
+
+            - name: Upload exact test distribution
+              if: success() && matrix.compiler.name == 'vs2026' && inputs.test-build-id != ''
+              uses: actions/upload-artifact@v7
+              with:
+                  name: ${{ inputs.artifact-name }}
+                  path: dist/${{ inputs.expected-package-name }}
+                  if-no-files-found: error
                   retention-days: 30
 
     shader-validation:
@@ -157,7 +185,7 @@ jobs:
                 config:
                     - name: "Flatrim"
                       file: ".github/configs/shader-validation.yaml"
-                      runtime_file: ""
+                      runtime_file: ".github/configs/runtime-upscaling-compute-shaders.yaml"
                     - name: "VR"
                       file: ".github/configs/shader-validation-vr.yaml"
                       runtime_file: ".github/configs/runtime-foveated-compute-shaders-vr.yaml"

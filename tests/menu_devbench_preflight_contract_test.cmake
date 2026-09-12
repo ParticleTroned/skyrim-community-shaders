@@ -23,7 +23,11 @@ string(JSON _action_count LENGTH
     "${_descriptor}" inputSchema properties action enum
 )
 set(_prepare_coc_found FALSE)
+set(_prepare_tuning_found FALSE)
 set(_set_layout_unlocked_found FALSE)
+set(_depth_culling_telemetry_enabled_found FALSE)
+set(_depth_culling_telemetry_reset_found FALSE)
+set(_foliage_lighting_enabled_found FALSE)
 set(_truepbr_verbose_found FALSE)
 set(_dynamic_cubemap_resolution_found FALSE)
 math(EXPR _action_last "${_action_count} - 1")
@@ -33,6 +37,14 @@ foreach(_index RANGE 0 ${_action_last})
     )
     if(_action STREQUAL "prepare_coc")
         set(_prepare_coc_found TRUE)
+    elseif(_action STREQUAL "prepare_tuning")
+        set(_prepare_tuning_found TRUE)
+    elseif(_action STREQUAL "set_depth_culling_telemetry_enabled")
+        set(_depth_culling_telemetry_enabled_found TRUE)
+    elseif(_action STREQUAL "reset_depth_culling_telemetry")
+        set(_depth_culling_telemetry_reset_found TRUE)
+    elseif(_action STREQUAL "set_foliage_lighting_enabled")
+        set(_foliage_lighting_enabled_found TRUE)
     elseif(_action STREQUAL "set_truepbr_verbose_json_logging")
         set(_truepbr_verbose_found TRUE)
     elseif(_action STREQUAL "set_dynamic_cubemap_resolution")
@@ -45,8 +57,26 @@ endforeach()
 if(NOT _prepare_coc_found)
     message(FATAL_ERROR "Menu DevBench schema is missing prepare_coc")
 endif()
+if(NOT _prepare_tuning_found)
+    message(FATAL_ERROR "Menu DevBench schema is missing prepare_tuning")
+endif()
 if(NOT _set_layout_unlocked_found)
     message(FATAL_ERROR "Menu DevBench schema is missing set_layout_unlocked")
+endif()
+if(NOT _depth_culling_telemetry_enabled_found)
+    message(FATAL_ERROR
+        "Menu DevBench schema is missing set_depth_culling_telemetry_enabled"
+    )
+endif()
+if(NOT _depth_culling_telemetry_reset_found)
+    message(FATAL_ERROR
+        "Menu DevBench schema is missing reset_depth_culling_telemetry"
+    )
+endif()
+if(NOT _foliage_lighting_enabled_found)
+    message(FATAL_ERROR
+        "Menu DevBench schema is missing set_foliage_lighting_enabled"
+    )
 endif()
 if(NOT _truepbr_verbose_found)
     message(FATAL_ERROR
@@ -76,17 +106,24 @@ if(NOT _performance_resolution EQUAL 128 OR NOT _quality_resolution EQUAL 256)
 endif()
 
 foreach(_required_behavior IN ITEMS
+    "return CSX::Api::RunDevBenchMainThreadTask(SKSE::GetTaskInterface(), std::move(a_run));"
     "if (action == \"prepare_coc\")"
+    "if (action == \"prepare_tuning\")"
+    "PrepareRuntimePreflight(MenuDevBenchPreflightPolicy::Preparation::Coc)"
+    "PrepareRuntimePreflight(MenuDevBenchPreflightPolicy::Preparation::Tuning)"
     "CaptureCocPreflightSnapshot"
     "GetVRFpsStabilizerSessionConfig()"
     "IsVRFpsStabilizerSyncActive()"
-    "CanApplyRuntimeSettings(before.state)"
+    "CanApplyRuntimeSettings(before.state, a_preparation)"
     "SetLogLevel(spdlog::level::debug)"
     "settings.foveatedVendorDispatch = true"
     "settings.periphery_taa_enable = true"
     "kFoveatedCenterArea"
     "kPeripheryTAACenterArea"
     "kPeripheryTAAOuterScale"
+    "{ \"foliageLightingEnabled\", globals::features::foliageLighting.IsEnabled() }"
+    "{ \"foliageLightingActive\", globals::features::foliageLighting.IsRuntimeEnabled() }"
+    "globals::features::foliageLighting.SetEnabled(enabled)"
     "{ \"truePbrVerboseJsonLogging\", globals::features::truePBR.enableVerboseJsonLogging }"
     "globals::features::truePBR.enableVerboseJsonLogging = enabled"
     "{ \"configuredResolution\", dynamicCubemaps.settings.CubemapResolution }"
@@ -101,6 +138,10 @@ foreach(_required_behavior IN ITEMS
     "{ \"menuScale\", vr.GetEffectiveMenuScale() }"
     "{ \"savedMenuScale\", vr.settings.VRMenuScale }"
     "globals::features::vr.SetMenuLayoutUnlocked(enabled)"
+    "VRDepthCullingTemporal::SetTelemetryEnabled(enabled)"
+    "VRDepthCullingTemporal::TryResetStatus()"
+    "depth_culling_telemetry_busy"
+    "\"durationHistogramNanoseconds\""
 )
     string(FIND "${_bridge}" "${_required_behavior}" _behavior_position)
     if(_behavior_position EQUAL -1)
@@ -112,7 +153,7 @@ endforeach()
 
 string(FIND
     "${_bridge}"
-    "CanApplyRuntimeSettings(before.state)"
+    "CanApplyRuntimeSettings(before.state, a_preparation)"
     _mutation_guard_position
 )
 string(FIND

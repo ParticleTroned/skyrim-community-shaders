@@ -7,7 +7,9 @@
 #include <efsw/efsw.hpp>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include <wrl/client.h>
@@ -457,8 +459,11 @@ namespace SIE
 		inline static bool IsShaderSourceAvailable(const RE::BSShader& shader);
 
 		bool IsCompiling();
+		void TryCompleteStartupCompilationPhase();
 		bool IsEnabled() const;
 		bool IsEnableRequested() const;
+		/** Restores the persisted startup state without scheduling runtime transitions. */
+		void RestoreEnabledSetting(bool value);
 		void SetEnabled(bool value);
 		void ServicePendingDisable();
 		bool IsAsync() const;
@@ -471,9 +476,12 @@ namespace SIE
 		void SetDiskCache(bool value);
 		void PersistCompiledShaderBlob(
 			ID3DBlob* a_shaderBlob,
+			bool a_developerMode,
 			const std::wstring& a_diskPath,
 			const std::filesystem::path& a_shaderPath,
 			const Util::ContentHash::Hash128& a_compileStateDigest,
+			const Util::ContentHash::Hash128& a_packCompileStateDigest,
+			const Util::ContentHash::Hash128& a_sourceDigest,
 			uint64_t a_diskCacheGeneration);
 		void SetSaveLoadDiskPersistenceBlocked(bool a_blocked);
 		void DeleteDiskCache();
@@ -489,6 +497,7 @@ namespace SIE
 		bool HasFeatureSetChanges() const { return featureSetChanged; }
 		bool HasFeatureSetRevertPending() const { return featureSetRevertPending.load(std::memory_order_acquire); }
 		bool HasFeatureSetCacheBackup() const { return featureSetCacheBackedUp; }
+		bool HasSelectivelySeededFeatureSetCache() const { return featureSetCacheSelectivelySeeded; }
 		bool HasPreviousDiskCache() const { return previousDiskCacheAvailable; }
 		bool IsDiskCacheHeld() const { return diskCacheHeld.load(std::memory_order_acquire); }
 		bool IsDiskCacheActive() const
@@ -568,8 +577,11 @@ namespace SIE
 			ID3DBlob* a_blob,
 			const std::wstring& a_diskPath,
 			const Util::ContentHash::Hash128& a_compileStateDigest,
+			const Util::ContentHash::Hash128& a_packCompileStateDigest,
+			bool a_developerMode,
 			bool fromDisk = false,
-			std::optional<uint64_t> a_taskGeneration = std::nullopt);
+			std::optional<uint64_t> a_taskGeneration = std::nullopt,
+			std::optional<Util::ContentHash::Hash128> a_sourceDigest = std::nullopt);
 
 		enum class ClaimResult
 		{
@@ -697,6 +709,10 @@ namespace SIE
 		std::jthread managementJthread;  // dedicated thread for ManageCompilationSet (not in pool)
 		std::atomic<bool> backgroundCompilation = false;
 		std::atomic<bool> menuLoaded = false;
+		// Set only after DataLoaded and the initial compilation batch have both
+		// completed. Keep this distinct from menu/UI lifecycle state so early menu
+		// initialization or background-mode entry cannot raise worker priority.
+		std::atomic<bool> startupCompilationComplete = false;
 
 		enum class LightingShaderTechniques
 		{
@@ -977,6 +993,10 @@ namespace SIE
 			SIE::ShaderClass shaderClass;
 			std::wstring diskPath;
 			Util::ContentHash::Hash128 compileStateDigest;
+			Util::ContentHash::Hash128 packCompileStateDigest;
+			bool developerMode = false;
+			std::optional<Util::ContentHash::Hash128> sourceDigest;
+			Microsoft::WRL::ComPtr<ID3DBlob> compiledBlob;
 
 			bool operator<(const hlslRecord& other) const
 			{
@@ -1001,13 +1021,16 @@ namespace SIE
 			std::wstring diskPath;
 			std::filesystem::path shaderPath;
 			Util::ContentHash::Hash128 compileStateDigest;
+			Util::ContentHash::Hash128 packCompileStateDigest;
+			Util::ContentHash::Hash128 sourceDigest;
+			bool developerMode = false;
 			uint64_t diskCacheGeneration = 0;
 		};
 		ShaderCache();
 		void ManageCompilationSet(std::stop_token stoken);
 		void ProcessCompilationSet(std::stop_token stoken, SIE::ShaderCompilationTask task);
 		void ProcessDeferredDiskWrites(std::stop_token stoken);
-		bool BackupActiveDiskCache();
+		bool BackupActiveDiskCache(const std::vector<std::string>& a_changedDefines);
 		void DeleteActiveDiskCache();
 		void RefreshPreviousDiskCacheInfo();
 
@@ -1030,6 +1053,7 @@ namespace SIE
 		bool featureSetChanged = false;
 		std::atomic_bool featureSetRevertPending{ false };
 		bool featureSetCacheBackedUp = false;
+		bool featureSetCacheSelectivelySeeded = false;
 		bool previousDiskCacheAvailable = false;
 		std::vector<CacheMismatch> cacheMismatches;
 		std::vector<CacheMismatch> previousCacheMismatches;
@@ -1061,13 +1085,18 @@ namespace SIE
 		ankerl::unordered_dense::map<std::string, DeferredEviction> deferredEvictions;            // pending hot-reload evictions; guarded by mapMutex
 		std::atomic<size_t> deferredEvictionCount{ 0 };                                           // lock-free empty fast path
 
-		std::deque<DeferredDiskWrite> deferredDiskWrites;
+		std::unordered_map<std::string, DeferredDiskWrite> deferredDiskWrites;
+		std::deque<std::string> deferredDiskWriteOrder;
+		static constexpr std::size_t kMaximumDeferredDiskWrites = 8192;
+		static constexpr std::size_t kDeferredDiskWriteBatchSize = 64;
 		std::mutex deferredDiskWritesMutex;
 		std::condition_variable_any deferredDiskWritesCV;
 		std::jthread deferredDiskWriterJthread;
 		std::atomic_bool acceptDeferredDiskWrites{ true };
+		std::atomic_bool deferredDiskWriteLimitReported{ false };
 		std::atomic_bool saveLoadDiskPersistenceBlocked{ false };
-		bool deferredManifestFlushPending = false;  // guarded by deferredDiskWritesMutex
+		std::size_t deferredDiskWritesInFlight = 0;  // guarded by deferredDiskWritesMutex
+		bool deferredManifestFlushPending = false;   // guarded by deferredDiskWritesMutex
 
 		// efsw file watcher
 		efsw::FileWatcher* fileWatcher = nullptr;
@@ -1099,7 +1128,7 @@ namespace SIE
 		 *
 		 * @return Void. Updates internal state and modifies `clearCache` and `fileDone` by reference.
 		 */
-		void UpdateCache(const std::filesystem::path& filePath, SIE::ShaderCache* cache, bool& clearCache, bool& retFlag);
+		void UpdateCache(const std::filesystem::path& filePath, SIE::ShaderCache* cache, bool& retFlag);
 		void processQueue();
 		void handleFileAction(efsw::WatchID, const std::string& dir, const std::string& filename, efsw::Action action, std::string) override;
 

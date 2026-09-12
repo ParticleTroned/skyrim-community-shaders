@@ -2,6 +2,7 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
+#	include "Api/DevBenchMainThreadDispatch.h"
 #	include "BuildProvenance.h"
 #	include "Menu/PerformanceTuningRenderer.h"
 
@@ -9,19 +10,16 @@
 #	include <nlohmann/json.hpp>
 
 #	include <atomic>
-#	include <chrono>
 #	include <cstddef>
 #	include <cstdint>
+#	include <exception>
 #	include <functional>
-#	include <future>
-#	include <memory>
 #	include <stdexcept>
 #	include <string>
 
 namespace
 {
 	using json = nlohmann::json;
-	constexpr auto kMainThreadTimeout = std::chrono::milliseconds(5000);
 	constexpr std::size_t kDefaultTracePageSize = 128;
 	constexpr std::size_t kMaximumTracePageSize = 512;
 	std::atomic_bool g_installAttempted{ false };
@@ -29,40 +27,18 @@ namespace
 
 	json RunOnMainThread(std::function<json()> a_run)
 	{
-		auto* tasks = SKSE::GetTaskInterface();
-		if (!tasks)
-			return { { "error", "SKSE task interface unavailable" } };
-
-		auto promise = std::make_shared<std::promise<json>>();
-		auto cancelled = std::make_shared<std::atomic_bool>(false);
-		auto future = promise->get_future();
-		tasks->AddTask([promise, cancelled, run = std::move(a_run)]() mutable {
-			if (cancelled->load(std::memory_order_acquire))
-				return;
-			try {
-				promise->set_value(run());
-			} catch (const std::exception& e) {
-				promise->set_value(json{ { "error", "main-thread task failed" }, { "detail", e.what() } });
-			} catch (...) {
-				promise->set_value(json{ { "error", "main-thread task failed" } });
-			}
-		});
-
-		if (future.wait_for(kMainThreadTimeout) != std::future_status::ready) {
-			cancelled->store(true, std::memory_order_release);
-			return { { "error", "main thread did not run within 5000ms" } };
-		}
-		return future.get();
+		return CSX::Api::RunDevBenchMainThreadTask(SKSE::GetTaskInterface(), std::move(a_run));
 	}
 
 	json BuildResult(const json& a_args)
 	{
 		const std::string action = a_args.value("action", std::string("status"));
-		if (action != "status" && action != "start_upscaling_sweep" && action != "cancel") {
+		if (action != "status" && action != "start_feature_cost" &&
+			action != "start_upscaling_sweep" && action != "cancel") {
 			return {
 				{ "error", "unknown action" },
 				{ "action", action },
-				{ "supported", json::array({ "status", "start_upscaling_sweep", "cancel" }) },
+				{ "supported", json::array({ "status", "start_feature_cost", "start_upscaling_sweep", "cancel" }) },
 			};
 		}
 
@@ -91,12 +67,18 @@ namespace
 		if (a_args.contains("dlssPreset") && !a_args.at("dlssPreset").is_string())
 			return { { "error", "dlssPreset must be J, K, L, M, F, or E" } };
 		const std::string dlssPreset = a_args.value("dlssPreset", std::string());
+		if (a_args.contains("featureShortName") && !a_args.at("featureShortName").is_string())
+			return { { "error", "featureShortName must be a string" } };
+		const std::string featureShortName = a_args.value("featureShortName", std::string());
 
 		return RunOnMainThread([action,
 								   matrix,
 								   dlssPreset,
+								   featureShortName,
 								   traceAfterSequence,
 								   maximumTraceSamples]() -> json {
+			if (action == "start_feature_cost")
+				return PerformanceTuningRenderer::StartDevBenchFeatureCostMeasurement(featureShortName);
 			if (action == "start_upscaling_sweep")
 				return PerformanceTuningRenderer::StartDevBenchUpscalingCostSweep(matrix, dlssPreset);
 			if (action == "cancel")
@@ -149,7 +131,7 @@ namespace PerformanceTuningDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"json({"description":"Run and inspect nonblocking closed-menu performance measurements. status performs no setup mutation and exposes the minimal in-game VR, idle, menu, measurement, cooldown, adapter, and runtime readiness facts. start_upscaling_sweep measures every target relative to None using the same five-second initial cooldown, five one-second target windows, nine-second None wait, five one-second None windows, exact restoration, and ten-second inter-case cooldown. auto selects the NVIDIA matrix on a DLSS-capable NVIDIA system or the AMD matrix on an FSR4-capable AMD system. NVIDIA requires a caller-selected DLSS profile (J, K, L, M, F, or E), applies it to every DLSS/DLAA case, and also measures FSR3. A start without dlssPreset returns promptRequired without changing runtime state. AMD measures FSR3 and FSR4 across Native AA plus every render-scale quality and fails closed instead of labeling a latched provider fallback as FSR4. status returns results and a paged 100 ms raw Game/GPU/CPU trace spanning cooldown, wait, measurement, and restoration phases. Every response identifies the exact producing DLL; expectedBuildId fails closed on a stale build.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["status","start_upscaling_sweep","cancel"],"default":"status"},"matrix":{"type":"string","enum":["auto","nvidia","amd"],"default":"auto","description":"Hardware matrix. auto selects from the active adapter and runtime capabilities."},"dlssPreset":{"type":"string","enum":["J","K","L","M","F","E"],"description":"Required to start the NVIDIA matrix; omitted starts return a prompt without changing state."},"traceAfterSequence":{"type":"integer","minimum":0,"description":"Return raw timing samples after this sequence."},"maximumTraceSamples":{"type":"integer","minimum":1,"maximum":512,"default":128,"description":"Maximum raw timing samples returned by status."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})json";
+			R"json({"description":"Run and inspect nonblocking closed-menu performance measurements. status performs no setup mutation and reports surfaced feature-cost capabilities, completed results, active ownership, readiness, and a paged 100 ms Game/GPU/CPU trace. start_feature_cost measures one surfaced feature relative to Off, or None for Upscaling, using its current settings, exact restoration, and the same stabilized windows as the UI. It accepts either an open CS menu, which is restored afterward, or an already closed menu, which remains closed. start_upscaling_sweep measures every target relative to None using the same five-second initial cooldown, five one-second target windows, nine-second None wait, five one-second None windows, exact restoration, and ten-second inter-case cooldown. auto selects the NVIDIA matrix on a DLSS-capable NVIDIA system or the AMD matrix on an FSR4-capable AMD system. NVIDIA requires a caller-selected DLSS profile (J, K, L, M, F, or E), applies it to every DLSS/DLAA case, and also measures FSR3. A start without dlssPreset returns promptRequired without changing runtime state. AMD measures FSR3 and FSR4 across Native AA plus every render-scale quality and fails closed instead of labeling a latched provider fallback as FSR4. Every response identifies the exact producing DLL; expectedBuildId fails closed on a stale build.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["status","start_feature_cost","start_upscaling_sweep","cancel"],"default":"status"},"featureShortName":{"type":"string","minLength":1,"description":"Feature short name from status.availableFeatureCosts; required by start_feature_cost."},"matrix":{"type":"string","enum":["auto","nvidia","amd"],"default":"auto","description":"Hardware matrix. auto selects from the active adapter and runtime capabilities."},"dlssPreset":{"type":"string","enum":["J","K","L","M","F","E"],"description":"Required to start the NVIDIA matrix; omitted starts return a prompt without changing runtime state."},"traceAfterSequence":{"type":"integer","minimum":0,"description":"Return raw timing samples after this sequence."},"maximumTraceSamples":{"type":"integer","minimum":1,"maximum":512,"default":128,"description":"Maximum raw timing samples returned by status."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})json";
 		devBench->RegisterTool(
 			"communityshaders.performance_tuning",
 			descriptor,

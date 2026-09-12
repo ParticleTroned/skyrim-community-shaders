@@ -177,6 +177,32 @@ identity, and per-eye path/generation. Provider invalidation, dirtying, or
 teardown starts physical mutation even when engine-target creation has not yet
 begun.
 
+### Replacement presentation state matrix
+
+Replacement admission and current presentation have separate authority. The
+following matrix defines their shared decision boundary; memory, shader,
+provider-preparation, work-gate, retirement, and trim deferrals all use the
+same pre-mutation row.
+
+| Physical phase                                        | Current contract proof                                                                                                | Required disposition                                                                             |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| No replacement                                        | Exact native or vendor contract                                                                                       | Present normally                                                                                 |
+| Replacement queued or preparing; mutation not started | Exact current DLSS or FSR provider, publication, device, dimensions, options, backend, resources, and stereo identity | Evaluate the current provider                                                                    |
+| Replacement queued or preparing; mutation not started | Strongly owned immutable completed output                                                                             | Reuse that output                                                                                |
+| Replacement queued or preparing; mutation not started | Missing, dirty, stale, or wrong-generation current proof                                                              | Use presentation stretch or the established fail-safe path; never evaluate the unproven provider |
+| Creator entered or physical mutation unresolved       | Any previous-generation proof                                                                                         | Forbid the previous generation and fail closed through recovery                                  |
+| Replacement contract published                        | Exact new publication, provider generation, resources, device, path, and coherent stereo proof                        | Present the new generation                                                                       |
+| Replacement contract published                        | Incomplete or mismatched new proof                                                                                    | Quarantine or fail closed until the exact new proof exists                                       |
+
+Ordinary world and the CS in-scene menu use this matrix directly. LoadingMenu,
+post-load cover, main-menu, RaceSex, and other presentation-owned contexts keep
+their existing stretch, black-keepalive, quarantine, or fail-closed overrides.
+A proven stabilizer door handoff may release the cover only before mutation;
+after mutation it follows recovery. Cleanup-only debt never changes the
+current-provider decision. A pending vendor reset owned by a different,
+nonzero replacement generation does not by itself dirty the current provider;
+an unowned reset or one owned by the current generation does.
+
 The strict waiter stops on the first observation that satisfies both
 milestones. A frame-level vendor or fidelity failure remains in the receipt and
 fails the final assay verdict, but a later coherent stereo presentation may

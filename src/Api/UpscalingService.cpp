@@ -1,10 +1,12 @@
 #include "Api/UpscalingService.h"
 
+#include "Api/MainThreadDispatchPolicy.h"
 #include "Api/RuntimeThreadAffinity.h"
 #include "Api/ServiceRegistry.h"
 #include "Api/UpscalingContract.h"
 #include "Api/UpscalingServicePolicy.h"
 #include "Features/Upscaling.h"
+#include "Features/Upscaling/VRRenderScaleModePolicy.h"
 #include "Globals.h"
 #include "State.h"
 #include "VRAPI/CSserviceapi.h"
@@ -13,6 +15,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <deque>
 #include <future>
@@ -266,8 +269,8 @@ namespace
 
 		Status GetCapabilities(Capabilities001& a_output)
 		{
-			if (!RefreshFromAnyThread())
-				return Status::kServiceUnavailable;
+			if (const auto refreshStatus = RefreshFromAnyThread(); refreshStatus != Status::kSuccess)
+				return refreshStatus;
 			std::lock_guard lock(mutex);
 			a_output = capabilities;
 			return Status::kSuccess;
@@ -275,8 +278,8 @@ namespace
 
 		Status GetSnapshot(Snapshot001& a_output)
 		{
-			if (!RefreshFromAnyThread())
-				return Status::kServiceUnavailable;
+			if (const auto refreshStatus = RefreshFromAnyThread(); refreshStatus != Status::kSuccess)
+				return refreshStatus;
 			std::lock_guard lock(mutex);
 			a_output = snapshot;
 			return Status::kSuccess;
@@ -287,14 +290,14 @@ namespace
 			const auto validation = CSX::Api::ValidateUpscalingPreflightRequest(a_request);
 			if (validation != Status::kSuccess)
 				return validation;
-			auto result = RunOnMainThread<PreflightEvaluation>([this, request = a_request] {
+			auto dispatch = RunOnMainThread<PreflightEvaluation>([this, request = a_request] {
 				RefreshLive();
 				return EvaluatePreflight(request);
 			});
-			if (!result)
-				return Status::kServiceUnavailable;
-			a_output = result->result;
-			return result->status;
+			if (!dispatch.value)
+				return dispatch.admitted ? Status::kBusy : Status::kServiceUnavailable;
+			a_output = dispatch.value->result;
+			return dispatch.value->status;
 		}
 
 		Status Apply(const ApplyRequest001& a_request, ApplyResult001& a_output)
@@ -328,13 +331,46 @@ namespace
 					a_output.idempotentReplay = 1;
 					return found->second.ready ? found->second.status : Status::kBusy;
 				}
+				if (!CSX::Api::HasUpscalingServiceCapacity(
+						commands.size(), operations.size(), pendingOperationReservations, kMaximumCommands)) {
+					a_output = ApplyResult001{};
+					a_output.status = Status::kBusy;
+					a_output.disposition = ApplyDisposition::kRejected;
+					a_output.normalizedTarget = a_request.target;
+					return Status::kBusy;
+				}
 				StoredCommand reservation;
 				reservation.signature = signature;
 				reservation.result.status = Status::kBusy;
 				reservation.result.disposition = ApplyDisposition::kRejected;
-				commands.emplace(key, std::move(reservation));
-				commandOrder.push_back(key);
+				const auto [inserted, didInsert] = commands.emplace(key, std::move(reservation));
+				assert(didInsert);
+				try {
+					commandOrder.push_back(key);
+				} catch (...) {
+					commands.erase(inserted);
+					throw;
+				}
+				++pendingOperationReservations;
 			}
+			std::uint64_t operationId = 0;
+			bool commandTerminal = false;
+			bool ownsOperationReservation = true;
+			const SKSE::stl::scope_exit releaseOperationReservation([&]() noexcept {
+				if (!ownsOperationReservation)
+					return;
+				std::lock_guard lock(mutex);
+				assert(pendingOperationReservations != 0);
+				--pendingOperationReservations;
+			});
+			const SKSE::stl::scope_exit rollbackUnreadyCommand([&]() noexcept {
+				if (!commandTerminal)
+					DiscardUnreadyAdmission(key, operationId);
+			});
+			const auto completeCommand = [&](Status a_status, const ApplyResult001& a_result) {
+				CompleteCommand(key, a_status, a_result);
+				commandTerminal = true;
+			};
 
 			PreflightRequest001 preflightRequest;
 			preflightRequest.expectedStateRevision = signature.expectedStateRevision;
@@ -364,7 +400,7 @@ namespace
 					receipt.status = preflight.decision == PreflightDecision::kUnsupported ?
 					                     Status::kUnsupportedProfile :
 					                     Status::kBlocked;
-				CompleteCommand(key, receipt.status, receipt);
+				completeCommand(receipt.status, receipt);
 				a_output = receipt;
 				return receipt.status;
 			}
@@ -376,11 +412,11 @@ namespace
 					std::lock_guard lock(mutex);
 					latestAdmittedTarget = signature.target;
 				}
-				if (RefreshFromAnyThread()) {
+				if (RefreshFromAnyThread() == Status::kSuccess) {
 					std::lock_guard lock(mutex);
 					receipt.resultingStateRevision = snapshot.stateRevision;
 				}
-				CompleteCommand(key, receipt.status, receipt);
+				completeCommand(receipt.status, receipt);
 				a_output = receipt;
 				return Status::kSuccess;
 			}
@@ -389,12 +425,11 @@ namespace
 			if (!tasks) {
 				receipt.status = Status::kServiceUnavailable;
 				receipt.disposition = ApplyDisposition::kRejected;
-				CompleteCommand(key, receipt.status, receipt);
+				completeCommand(receipt.status, receipt);
 				a_output = receipt;
 				return receipt.status;
 			}
 
-			std::uint64_t operationId = 0;
 			{
 				std::lock_guard lock(mutex);
 				operationId = AllocateOperationIdLocked();
@@ -411,6 +446,9 @@ namespace
 				operation.snapshot.latestStateRevision = preflight.evaluatedStateRevision;
 				operation.snapshot.target = signature.target;
 				operations.emplace(operationId, std::move(operation));
+				assert(pendingOperationReservations != 0);
+				--pendingOperationReservations;
+				ownsOperationReservation = false;
 				AppendEventLocked(operationId, EventType::kAccepted, OperationState::kQueued, Status::kSuccess);
 				AppendEventLocked(operationId, EventType::kQueued, OperationState::kQueued, Status::kSuccess);
 			}
@@ -428,11 +466,11 @@ namespace
 				receipt.disposition = ApplyDisposition::kRejected;
 				receipt.operationId = 0;
 				FailOperation(operationId, receipt.status, kConditionNone);
-				CompleteCommand(key, receipt.status, receipt);
+				completeCommand(receipt.status, receipt);
 				a_output = receipt;
 				return receipt.status;
 			}
-			CompleteCommand(key, Status::kSuccess, receipt);
+			completeCommand(Status::kSuccess, receipt);
 			a_output = receipt;
 			return Status::kSuccess;
 		}
@@ -441,8 +479,8 @@ namespace
 		{
 			if (a_operationId == 0)
 				return Status::kInvalidArgument;
-			if (!RefreshFromAnyThread())
-				return Status::kServiceUnavailable;
+			if (const auto refreshStatus = RefreshFromAnyThread(); refreshStatus != Status::kSuccess)
+				return refreshStatus;
 			std::lock_guard lock(mutex);
 			const auto found = operations.find(a_operationId);
 			if (found == operations.end())
@@ -459,8 +497,8 @@ namespace
 		{
 			if (a_query.limit == 0 || (a_capacity != 0 && !a_events))
 				return Status::kInvalidArgument;
-			if (!RefreshFromAnyThread())
-				return Status::kServiceUnavailable;
+			if (const auto refreshStatus = RefreshFromAnyThread(); refreshStatus != Status::kSuccess)
+				return refreshStatus;
 
 			std::lock_guard lock(mutex);
 			a_page = EventPage001{};
@@ -468,7 +506,7 @@ namespace
 			a_page.oldestRetainedEventId = events.empty() ? nextEventId : events.front().eventId;
 			a_page.latestEventId = nextEventId - 1;
 			a_page.cursorExpired = a_query.afterEventId != 0 &&
-			                           a_query.afterEventId + 1 < a_page.oldestRetainedEventId;
+			                       a_query.afterEventId + 1 < a_page.oldestRetainedEventId;
 			for (const auto& event : events) {
 				if (event.eventId <= a_query.afterEventId ||
 					(a_query.operationId != 0 && event.operationId != a_query.operationId)) {
@@ -503,6 +541,7 @@ namespace
 		std::uint64_t capabilityRevision = 0;
 		std::uint64_t nextOperationId = 1;
 		std::uint64_t nextEventId = 1;
+		std::size_t pendingOperationReservations = 0;
 		std::unordered_map<std::string, StoredCommand> commands;
 		std::deque<std::string> commandOrder;
 		std::unordered_map<std::uint64_t, LiveOperation> operations;
@@ -600,20 +639,27 @@ namespace
 			.ReadEvents = ReadEventsThunk,
 		};
 
+		template <class T>
+		struct MainThreadDispatchResult
+		{
+			std::optional<T> value;
+			bool admitted = false;
+		};
+
 		template <class T, class F>
-		std::optional<T> RunOnMainThread(F&& a_run)
+		MainThreadDispatchResult<T> RunOnMainThread(F&& a_run)
 		{
 			if (CSX::Api::IsRuntimeMainThread())
-				return a_run();
+				return { a_run(), false };
 			auto* tasks = SKSE::GetTaskInterface();
 			if (!tasks)
-				return std::nullopt;
+				return {};
 			auto promise = std::make_shared<std::promise<T>>();
-			auto cancelled = std::make_shared<std::atomic_bool>(false);
+			auto claim = std::make_shared<CSX::Api::MainThreadDispatchClaim>();
 			auto future = promise->get_future();
-			tasks->AddTask([promise, cancelled, run = std::forward<F>(a_run)]() mutable {
+			tasks->AddTask([promise, claim, run = std::forward<F>(a_run)]() mutable {
 				CSX::Api::EnterRuntimeMainThreadTask();
-				if (cancelled->load(std::memory_order_acquire))
+				if (!claim->TryClaim())
 					return;
 				try {
 					promise->set_value(run());
@@ -623,25 +669,29 @@ namespace
 					} catch (...) {
 					}
 				}
+				claim->Complete();
 			});
 			if (future.wait_for(kMainThreadTimeout) != std::future_status::ready) {
-				cancelled->store(true, std::memory_order_release);
-				return std::nullopt;
+				if (claim->TryCancel())
+					return {};
+				return { std::nullopt, true };
 			}
 			try {
-				return future.get();
+				return { future.get(), false };
 			} catch (...) {
-				return std::nullopt;
+				return {};
 			}
 		}
 
-		bool RefreshFromAnyThread()
+		Status RefreshFromAnyThread()
 		{
-			auto refreshed = RunOnMainThread<bool>([this] {
+			auto dispatch = RunOnMainThread<bool>([this] {
 				RefreshLive();
 				return true;
 			});
-			return refreshed.value_or(false);
+			if (dispatch.value)
+				return Status::kSuccess;
+			return dispatch.admitted ? Status::kBusy : Status::kServiceUnavailable;
 		}
 
 		Capabilities001 BuildCapabilities() const
@@ -710,10 +760,17 @@ namespace
 			auto& upscaling = globals::features::upscaling;
 			Snapshot001 output;
 			output.profilePresence = kProfileConfigured | kProfileEffective;
+			const auto configuredMethod = upscaling.GetConfiguredUpscaleMethodForTransition();
+			// Public profiles describe executable modes, not a preference retained during native AA.
+			const auto configuredRenderScale = VRRenderScaleModePolicy::Resolve(
+				configuredMethod == Upscaling::UpscaleMethod::kDLSS ||
+					configuredMethod == Upscaling::UpscaleMethod::kFSR,
+				upscaling.settings.qualityMode != 0,
+				upscaling.settings.renderScaleMode != 0);
 			output.configured = MakeProfile(
-				upscaling.GetConfiguredUpscaleMethodForTransition(),
+				configuredMethod,
 				upscaling.settings.qualityMode,
-				upscaling.settings.renderScaleMode != 0,
+				configuredRenderScale.enabled,
 				upscaling.settings.dlssPreset,
 				upscaling.settings.fsr4RuntimeEnable);
 			output.effective = MakeProfile(
@@ -826,11 +883,11 @@ namespace
 			const float scale = Upscaling::GetQualityModeResolutionScale(
 				static_cast<std::uint32_t>(a_request.target.qualityMode));
 			result.predictedRenderEyeWidth = a_request.target.renderScaleMode ?
-				Upscaling::ScaleVRRenderDimension(currentSnapshot.displayEyeWidth, scale) :
-				currentSnapshot.displayEyeWidth;
+			                                     Upscaling::ScaleVRRenderDimension(currentSnapshot.displayEyeWidth, scale) :
+			                                     currentSnapshot.displayEyeWidth;
 			result.predictedRenderEyeHeight = a_request.target.renderScaleMode ?
-				Upscaling::ScaleVRRenderDimension(currentSnapshot.displayEyeHeight, scale) :
-				currentSnapshot.displayEyeHeight;
+			                                      Upscaling::ScaleVRRenderDimension(currentSnapshot.displayEyeHeight, scale) :
+			                                      currentSnapshot.displayEyeHeight;
 
 			if (a_request.expectedStateRevision != AnyStateRevision &&
 				a_request.expectedStateRevision != currentSnapshot.stateRevision) {
@@ -854,8 +911,7 @@ namespace
 				observed |= kConditionProviderUnavailable;
 			if (a_request.target.method == Method::kFSR &&
 				a_request.target.fsrRuntime == FSRRuntime::kFSR4) {
-				observed |= currentCapabilities.fsrRuntimeUnavailableConditions[
-					static_cast<std::uint32_t>(FSRRuntime::kFSR4)];
+				observed |= currentCapabilities.fsrRuntimeUnavailableConditions[static_cast<std::uint32_t>(FSRRuntime::kFSR4)];
 			}
 			const auto admission = CSX::Api::ResolveUpscalingAdmission(
 				observed,
@@ -1105,6 +1161,33 @@ namespace
 			found->second.result = a_result;
 			found->second.ready = true;
 			TrimLocked();
+		}
+
+		void DiscardUnreadyAdmission(
+			const std::string& a_key,
+			std::uint64_t a_operationId) noexcept
+		{
+			try {
+				std::lock_guard lock(mutex);
+				const auto command = commands.find(a_key);
+				if (command == commands.end() || command->second.ready)
+					return;
+
+				commands.erase(command);
+				if (const auto ordered = std::ranges::find(commandOrder, a_key);
+					ordered != commandOrder.end()) {
+					commandOrder.erase(ordered);
+				}
+				if (a_operationId != 0) {
+					operations.erase(a_operationId);
+					std::erase_if(events, [a_operationId](const Event001& a_event) {
+						return a_event.operationId == a_operationId;
+					});
+				}
+			} catch (...) {
+				OutputDebugStringA(
+					"[UpscalingAPI] Exceptional command admission rollback failed; service capacity may be degraded.\n");
+			}
 		}
 
 		void TrimLocked()

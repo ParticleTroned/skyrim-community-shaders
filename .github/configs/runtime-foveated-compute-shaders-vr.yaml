@@ -26,6 +26,23 @@ shaders:
               entries:
                   - entry: Upscaling:Compute:ClearHMDMask
                     defines: []
+    - file: EncodeTexturesCS.hlsl
+      configs:
+          CSHADER:
+              common_defines: *runtime_vr_compute_defines
+              entries:
+                  - entry: Upscaling:Compute:EncodeTextures
+                    defines: []
+                  - entry: Upscaling:Compute:EncodeTexturesDLSS
+                    defines:
+                        - DLSS
+                  - entry: Upscaling:Compute:EncodeTexturesFSR
+                    defines:
+                        - FSR
+                  - entry: Upscaling:Compute:EncodeTexturesFSRDepthOutput
+                    defines:
+                        - FSR
+                        - DEPTH_OUTPUT
     - file: FoveatedCenterBlendCS.hlsl
       configs:
           CSHADER:

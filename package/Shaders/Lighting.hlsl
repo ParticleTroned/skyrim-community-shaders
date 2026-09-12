@@ -949,6 +949,7 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #	if defined(WETTERNESS)
 #		define CS_WETNESS_SETTINGS SharedData::wetternessSettings
 #		include "Wetterness/WetternessLighting.hlsli"
+#		include "Wetterness/PuddleMask.hlsli"
 #		define CS_TEX_PRECIP_OCCLUSION Wetterness::TexPrecipOcclusion
 #		define CS_GET_RAIN_DROPS(worldPos, time, normal, strength) Wetterness::GetRainDrops(worldPos, time, normal, strength)
 #		define CS_REORIENT_NORMAL(n1, n2) Wetterness::ReorientNormal(n1, n2)
@@ -1445,35 +1446,36 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 			float puddleSlopeMask = smoothstep(puddleSlopeStart, puddleSlopeEnd, saturate(worldNormal.z));
 			// Slope gate is exact: if this is zero, downstream puddle/noise terms are guaranteed to be zero.
 			if (puddleSlopeMask > 0.0) {
-				float puddleRadiusSafe = max(CS_WETNESS_SETTINGS.PuddleRadius, 1e-3);
-				float puddleRadiusT = saturate((puddleRadiusSafe - puddleRadiusMin) / max(1e-3, puddleRadiusMax - puddleRadiusMin));
-				float puddleFootprintT = sqrt(puddleRadiusT);
-				float puddleFootprintThreshold = lerp(0.72, 0.20, puddleFootprintT);
-				float puddleFootprintSoftness = lerp(0.08, 0.22, puddleFootprintT);
-
-				float puddleLayoutSafe = clamp(CS_WETNESS_SETTINGS.PuddleLayout, 0.3, 10.0);
-				float3 puddleCoordsBase = ((input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz) * 0.5 + 0.5) * 0.01;
-				float layoutT = saturate((puddleLayoutSafe - 0.3) / 9.7);
-				float layoutFrequency = lerp(0.75, 2.10, layoutT);
-				float3 layoutSeed = float3(12.7, 19.1, 23.3) * puddleLayoutSafe;
-				float layoutWarpStrength = lerp(0.0, 0.38, layoutT);
-				float layoutWarp = 0.0;
-				// Keep exact look: only skip layout-warp noise when warp strength is exactly zero.
-				if (layoutWarpStrength > 0.0) {
-					layoutWarp = Random::perlinNoise(puddleCoordsBase * lerp(0.22, 0.72, layoutT) + layoutSeed) * 2.0 - 1.0;
+				[branch] if (CS_WETNESS_SETTINGS.PuddleMaskMode == Wetterness::PUDDLE_MASK_SIMPLE)
+				{
+					puddleFootprintMask = puddleSlopeMask;
+					puddle = puddleWetness * puddleSlopeMask;
 				}
-				float3 puddlePatternOffset = float3(31.0, 17.0, 43.0) * layoutT;
-				float3 puddleCoords = puddleCoordsBase * layoutFrequency + layoutWarp * float3(0.20, 0.14, 0.18) * layoutWarpStrength + puddlePatternOffset;
-				float puddleNoiseSignal = Random::perlinNoise(puddleCoords) * 0.5 + 0.5;
-				float puddleSignal = puddleNoiseSignal;
-				float puddleRadiusGate = smoothstep(
-					puddleFootprintThreshold - puddleFootprintSoftness,
-					puddleFootprintThreshold + puddleFootprintSoftness,
-					puddleNoiseSignal);
-				puddleSignal = puddleSignal * ((minWetnessAngle / puddleMaxAngleSafe) * CS_WETNESS_SETTINGS.MaxPuddleWetness * 0.25) + 0.5;
-				float puddleBlend = puddleWetness;
-				puddleFootprintMask = puddleRadiusGate * puddleSlopeMask;
-				puddle = puddleSignal * puddleBlend * puddleSlopeMask * puddleRadiusGate;
+				else
+				{
+					float puddleRadiusSafe = max(CS_WETNESS_SETTINGS.PuddleRadius, 1e-3);
+					float puddleRadiusT = saturate((puddleRadiusSafe - puddleRadiusMin) / max(1e-3, puddleRadiusMax - puddleRadiusMin));
+					float puddleFootprintT = sqrt(puddleRadiusT);
+					float puddleFootprintThreshold = lerp(0.72, 0.20, puddleFootprintT);
+					float puddleFootprintSoftness = lerp(0.08, 0.22, puddleFootprintT);
+
+					float puddleLayoutSafe = clamp(CS_WETNESS_SETTINGS.PuddleLayout, 0.3, 10.0);
+					float3 puddleCoordsBase = ((input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz) * 0.5 + 0.5) * 0.01;
+					float layoutT = saturate((puddleLayoutSafe - 0.3) / 9.7);
+					float layoutFrequency = lerp(0.75, 2.10, layoutT);
+					float puddleNoiseSignal = Wetterness::GetPuddleNoiseSignal(
+						puddleCoordsBase, puddleLayoutSafe, layoutT, layoutFrequency,
+						CS_WETNESS_SETTINGS.PuddleMaskMode, SampColorSampler);
+					float puddleSignal = puddleNoiseSignal;
+					float puddleRadiusGate = smoothstep(
+						puddleFootprintThreshold - puddleFootprintSoftness,
+						puddleFootprintThreshold + puddleFootprintSoftness,
+						puddleNoiseSignal);
+					puddleSignal = puddleSignal * ((minWetnessAngle / puddleMaxAngleSafe) * CS_WETNESS_SETTINGS.MaxPuddleWetness * 0.25) + 0.5;
+					float puddleBlend = puddleWetness;
+					puddleFootprintMask = puddleRadiusGate * puddleSlopeMask;
+					puddle = puddleSignal * puddleBlend * puddleSlopeMask * puddleRadiusGate;
+				}
 			}
 		}
 #		endif

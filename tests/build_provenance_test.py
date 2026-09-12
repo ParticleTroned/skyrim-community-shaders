@@ -26,6 +26,32 @@ class BuildProvenanceTests(unittest.TestCase):
             PROVENANCE.sha256_bytes(PROVENANCE.canonical_bytes(right)),
         )
 
+    def test_shader_cache_abi_is_runtime_neutral_and_explicit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            contract = root / "config/shader-cache-abi.json"
+            contract.parent.mkdir(parents=True)
+            contract.write_text('{"schemaVersion":1,"globalAbi":"one"}\n', encoding="utf-8")
+            unrelated = root / "src/ShaderCache.cpp"
+            unrelated.parent.mkdir(parents=True)
+            unrelated.write_text("first implementation\n", encoding="utf-8")
+
+            first = PROVENANCE.shader_contract_identity(
+                root, ["config/shader-cache-abi.json"]
+            )
+            self.assertNotIn("runtime", first)
+            unrelated.write_text("second implementation\n", encoding="utf-8")
+            second = PROVENANCE.shader_contract_identity(
+                root, ["config/shader-cache-abi.json"]
+            )
+            self.assertEqual(first, second)
+
+            contract.write_text('{"schemaVersion":1,"globalAbi":"two"}\n', encoding="utf-8")
+            third = PROVENANCE.shader_contract_identity(
+                root, ["config/shader-cache-abi.json"]
+            )
+            self.assertNotEqual(first, third)
+
     def test_finalize_binds_exact_artifact_and_verify_rejects_change(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

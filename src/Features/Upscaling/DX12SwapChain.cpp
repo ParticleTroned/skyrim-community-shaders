@@ -4,6 +4,9 @@
 #include <dxgi1_6.h>
 
 #include <memory>
+#include <optional>
+#include <stdexcept>
+#include <utility>
 
 #include "../Upscaling.h"
 #include "FidelityFX.h"
@@ -28,44 +31,60 @@ void DX12SwapChain::CreateD3D12Device(IDXGIAdapter* a_adapter)
 	}
 }
 
-void DX12SwapChain::CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC a_swapChainDesc)
+void DX12SwapChain::CreateSwapChain(
+	IDXGIAdapter* adapter,
+	DXGI_SWAP_CHAIN_DESC a_backendSwapChainDesc,
+	DXGI_SWAP_CHAIN_DESC a_publicSwapChainDesc)
 {
 	CreateD3D12Device(adapter);
+	publicSwapChainDesc = a_publicSwapChainDesc;
 
-	IDXGIFactory4* dxgiFactory;
-	DX::ThrowIfFailed(adapter->GetParent(IID_PPV_ARGS(&dxgiFactory)));
+	winrt::com_ptr<IDXGIFactory4> dxgiFactory;
+	DX::ThrowIfFailed(adapter->GetParent(IID_PPV_ARGS(dxgiFactory.put())));
 
 	swapChainDesc = {};
-	swapChainDesc.Width = a_swapChainDesc.BufferDesc.Width;
-	swapChainDesc.Height = a_swapChainDesc.BufferDesc.Height;
-	swapChainDesc.Format = a_swapChainDesc.BufferDesc.Format;
+	swapChainDesc.Width = a_backendSwapChainDesc.BufferDesc.Width;
+	swapChainDesc.Height = a_backendSwapChainDesc.BufferDesc.Height;
+	swapChainDesc.Format = a_backendSwapChainDesc.BufferDesc.Format;
 	swapChainDesc.SampleDesc.Count = 1;
 	swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
 	swapChainDesc.BufferCount = 2;
-	swapChainDesc.SwapEffect = a_swapChainDesc.SwapEffect;
-	swapChainDesc.Flags = a_swapChainDesc.Flags;
+	swapChainDesc.SwapEffect = a_backendSwapChainDesc.SwapEffect;
+	swapChainDesc.Flags = a_backendSwapChainDesc.Flags;
 
 	ffx::CreateContextDescFrameGenerationSwapChainForHwndDX12 ffxSwapChainDesc{};
 
 	ffxSwapChainDesc.desc = &swapChainDesc;
-	ffxSwapChainDesc.dxgiFactory = dxgiFactory;
+	ffxSwapChainDesc.dxgiFactory = dxgiFactory.get();
 	ffxSwapChainDesc.fullscreenDesc = nullptr;
 	ffxSwapChainDesc.gameQueue = commandQueue.get();
-	ffxSwapChainDesc.hwnd = a_swapChainDesc.OutputWindow;
+	ffxSwapChainDesc.hwnd = a_backendSwapChainDesc.OutputWindow;
 	ffxSwapChainDesc.swapchain = &swapChain;
 
 	auto& fidelityFX = globals::features::upscaling.fidelityFX;
 
-	if (ffx::CreateContext(fidelityFX.swapChainContext, nullptr, ffxSwapChainDesc) != ffx::ReturnCode::Ok) {
-		logger::critical("[FidelityFX] Failed to create swap chain context!");
+	ffxSwapChainDesc.header.pNext = nullptr;
+	fidelityFX.swapChainContextValid = fidelityFX.CreateFrameGenerationContext(
+		fidelityFX.swapChainContext, &ffxSwapChainDesc.header);
+	if (swapChain)
+		swapChainOwner.attach(swapChain);
+	if (!fidelityFX.swapChainContextValid) {
+		throw std::runtime_error("FidelityFX swap-chain context creation failed");
 	}
 
 	DX::ThrowIfFailed(swapChain->GetBuffer(0, IID_PPV_ARGS(&swapChainBuffers[0])));
 	DX::ThrowIfFailed(swapChain->GetBuffer(1, IID_PPV_ARGS(&swapChainBuffers[1])));
 
 	frameIndex = swapChain->GetCurrentBackBufferIndex();
+	if (publicSwapChainDesc.BufferDesc.Width == 0)
+		publicSwapChainDesc.BufferDesc.Width = swapChainDesc.Width;
+	if (publicSwapChainDesc.BufferDesc.Height == 0)
+		publicSwapChainDesc.BufferDesc.Height = swapChainDesc.Height;
+	if (publicSwapChainDesc.BufferDesc.Format == DXGI_FORMAT_UNKNOWN)
+		publicSwapChainDesc.BufferDesc.Format = swapChainDesc.Format;
 
-	fidelityFX.SetupFrameGeneration();
+	if (!fidelityFX.SetupFrameGeneration())
+		throw std::runtime_error("FidelityFX frame-generation context creation failed");
 }
 
 void DX12SwapChain::CreateInterop()
@@ -75,9 +94,56 @@ void DX12SwapChain::CreateInterop()
 	DX::ThrowIfFailed(d3d12Device->CreateSharedHandle(d3d12Fence.get(), nullptr, GENERIC_ALL, nullptr, sharedFenceHandle.put()));
 	DX::ThrowIfFailed(d3d11Device->OpenSharedFence(sharedFenceHandle.get(), IID_PPV_ARGS(&d3d11Fence)));
 
-	swapChainProxy = new DXGISwapChainProxy(swapChain);
+	swapChainProxy = new DXGISwapChainProxy(*this, swapChain);
 
 	RecreateWrappedResources(swapChainDesc);
+}
+
+bool DX12SwapChain::ResetUnpublished() noexcept
+{
+	auto& upscaling = globals::features::upscaling;
+	auto& fidelityFX = globals::features::upscaling.fidelityFX;
+	if (!fidelityFX.ResetFrameGenerationContexts()) {
+		lifecycle.CancelConstruction(false, upscaling.d3d12SwapChainActive);
+		logger::critical(
+			"[DX12SwapChain] Unpublished proxy cleanup left FidelityFX ownership indeterminate; retaining the complete candidate generation");
+		return false;
+	}
+
+	if (swapChainProxy) {
+		auto* unpublishedProxy = std::exchange(swapChainProxy, nullptr);
+		unpublishedProxy->Release();
+	}
+	ResetResources();
+	lifecycle.CancelConstruction(true, upscaling.d3d12SwapChainActive);
+	return true;
+}
+
+void DX12SwapChain::ResetResources() noexcept
+{
+	swapChain = nullptr;
+	swapChainOwner = nullptr;
+	swapChainBufferWrapped.reset();
+	uiBufferWrapped.reset();
+	depthBufferShared12.reset();
+	motionVectorBufferShared12.reset();
+	for (auto& buffer : swapChainBuffers)
+		buffer = nullptr;
+	d3d11Fence = nullptr;
+	d3d12Fence = nullptr;
+	d3d11Context = nullptr;
+	d3d11Device = nullptr;
+	for (auto& list : commandLists)
+		list = nullptr;
+	for (auto& allocator : commandAllocators)
+		allocator = nullptr;
+	commandQueue = nullptr;
+	d3d12Device = nullptr;
+	swapChainDesc = {};
+	publicSwapChainDesc = {};
+	frameIndex = 0;
+	fenceSequence.Reset();
+	runtimeQuarantined = false;
 }
 
 void DX12SwapChain::RecreateWrappedResources(const DXGI_SWAP_CHAIN_DESC1& desc)
@@ -87,9 +153,8 @@ void DX12SwapChain::RecreateWrappedResources(const DXGI_SWAP_CHAIN_DESC1& desc)
 	texDesc11.Height = desc.Height;
 	texDesc11.MipLevels = 1;
 	texDesc11.ArraySize = 1;
-	texDesc11.Format = desc.Format;
-	texDesc11.SampleDesc.Count = 1;
-	texDesc11.SampleDesc.Quality = 0;
+	texDesc11.Format = publicSwapChainDesc.BufferDesc.Format;
+	texDesc11.SampleDesc = publicSwapChainDesc.SampleDesc;
 	texDesc11.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
 
 	// Build both replacements before releasing the active resources so a failed
@@ -103,9 +168,40 @@ void DX12SwapChain::RecreateWrappedResources(const DXGI_SWAP_CHAIN_DESC1& desc)
 	uiBufferWrapped = std::move(newUiBuffer);
 }
 
-DXGISwapChainProxy* DX12SwapChain::GetSwapChainProxy()
+bool DX12SwapChain::TryBeginConstruction() noexcept
 {
-	return swapChainProxy;
+	return lifecycle.TryBeginConstruction();
+}
+
+DXGISwapChainProxy* DX12SwapChain::TakeSwapChainProxy()
+{
+	if (!swapChainProxy ||
+		!lifecycle.Publish(globals::features::upscaling.d3d12SwapChainActive))
+		return nullptr;
+	return std::exchange(swapChainProxy, nullptr);
+}
+
+void DX12SwapChain::OnProxyDestroyed(IDXGISwapChain4* a_swapChain) noexcept
+{
+	if (swapChain != a_swapChain)
+		return;
+	if (!lifecycle.BeginRetirement())
+		return;
+
+	auto& upscaling = globals::features::upscaling;
+	if (!upscaling.fidelityFX.ResetFrameGenerationContexts()) {
+		logger::critical(
+			"[DX12SwapChain] Published proxy destruction left FidelityFX ownership indeterminate; retaining every dependent D3D resource");
+		lifecycle.CompleteRetirement(false, upscaling.d3d12SwapChainActive);
+		return;
+	}
+	ResetResources();
+	lifecycle.CompleteRetirement(true, upscaling.d3d12SwapChainActive);
+}
+
+CSX::NvidiaPipelinePolicy::ProxyLifecycleState DX12SwapChain::GetLifecycleState() const noexcept
+{
+	return lifecycle.GetState();
 }
 
 void DX12SwapChain::SetD3D11Device(ID3D11Device* a_d3d11Device)
@@ -135,19 +231,30 @@ HRESULT DX12SwapChain::GetBuffer(UINT buffer, REFIID riid, void** ppSurface)
 
 HRESULT DX12SwapChain::ResizeBuffers(UINT bufferCount, UINT width, UINT height, DXGI_FORMAT format, UINT flags)
 {
-	if (!swapChain)
+	if (!swapChain || runtimeQuarantined)
 		return DXGI_ERROR_INVALID_CALL;
 
 	// DXGI defines zero as "preserve the current buffer count". FidelityFX's
 	// frame-generation swap-chain stores the supplied value verbatim and uses it
 	// as its replacement-buffer count, so forwarding zero leaves it with no valid
 	// source resource at the next Present.
-	const UINT effectiveBufferCount = bufferCount ? bufferCount : swapChainDesc.BufferCount;
-	if (!bufferCount)
-		logger::warn("[FidelityFX] Normalized ResizeBuffers count from 0 to {} to preserve replacement buffers", effectiveBufferCount);
-	if (effectiveBufferCount != 2) {
-		logger::error("[DX12SwapChain] Rejected unsupported resize buffer count {} (CS requires 2)", effectiveBufferCount);
+	const auto backendBufferCount = CSX::NvidiaPipelinePolicy::ResolveBackendBufferCount(
+		bufferCount, publicSwapChainDesc.BufferCount);
+	if (!backendBufferCount) {
+		const UINT publicBufferCount = bufferCount ? bufferCount : publicSwapChainDesc.BufferCount;
+		logger::error("[DX12SwapChain] Rejected unsupported caller-visible resize buffer count {}", publicBufferCount);
 		return DXGI_ERROR_UNSUPPORTED;
+	}
+	const DXGI_FORMAT publicFormat = format == DXGI_FORMAT_UNKNOWN ?
+	                                     publicSwapChainDesc.BufferDesc.Format :
+	                                     format;
+	const DXGI_FORMAT backendFormat = format == DXGI_FORMAT_UNKNOWN ?
+	                                      DXGI_FORMAT_UNKNOWN :
+	                                      ResolveBackendFormat(publicFormat);
+	auto& fidelityFX = globals::features::upscaling.fidelityFX;
+	if (!fidelityFX.ResetFrameGenerationRenderContext()) {
+		runtimeQuarantined = true;
+		return E_FAIL;
 	}
 
 	// These references are to FidelityFX replacement buffers. They must not keep
@@ -155,98 +262,390 @@ HRESULT DX12SwapChain::ResizeBuffers(UINT bufferCount, UINT width, UINT height, 
 	// before CS records another copy.
 	swapChainBuffers[0] = nullptr;
 	swapChainBuffers[1] = nullptr;
-	const HRESULT result = swapChain->ResizeBuffers(effectiveBufferCount, width, height, format, flags);
-	if (FAILED(result))
+	const HRESULT result = swapChain->ResizeBuffers(*backendBufferCount, width, height, backendFormat, flags);
+	if (FAILED(result)) {
+		const HRESULT recovery = RestoreFrameGenerationAfterFailedResize();
+		if (FAILED(recovery))
+			return recovery;
 		return result;
+	}
 
-	DXGI_SWAP_CHAIN_DESC1 resizedDesc{};
-	const HRESULT descResult = swapChain->GetDesc1(&resizedDesc);
-	if (FAILED(descResult))
-		return descResult;
-
-	const bool wrappedResourcesChanged = resizedDesc.Width != swapChainDesc.Width ||
-	                                     resizedDesc.Height != swapChainDesc.Height ||
-	                                     resizedDesc.Format != swapChainDesc.Format;
-	if (wrappedResourcesChanged)
-		RecreateWrappedResources(resizedDesc);
-	swapChainDesc = resizedDesc;
-
-	DX::ThrowIfFailed(swapChain->GetBuffer(0, IID_PPV_ARGS(swapChainBuffers[0].put())));
-	DX::ThrowIfFailed(swapChain->GetBuffer(1, IID_PPV_ARGS(swapChainBuffers[1].put())));
-	frameIndex = swapChain->GetCurrentBackBufferIndex();
+	const HRESULT refresh = RefreshAfterResize(publicFormat);
+	if (FAILED(refresh))
+		return refresh;
+	if (!fidelityFX.SetupFrameGeneration()) {
+		runtimeQuarantined = true;
+		logger::error("[DX12SwapChain] Resized frame-generation context creation failed; quarantining the proxy");
+		return E_FAIL;
+	}
 	return S_OK;
 }
 
-HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
+HRESULT DX12SwapChain::ResizeBuffers1(
+	UINT bufferCount,
+	UINT width,
+	UINT height,
+	DXGI_FORMAT format,
+	UINT flags,
+	const UINT* creationNodeMask,
+	IUnknown* const* presentQueue)
 {
-	auto& upscaling = globals::features::upscaling;
+	if (!swapChain || runtimeQuarantined)
+		return DXGI_ERROR_INVALID_CALL;
+	(void)presentQueue;
 
-	// Wait for D3D11 to finish
-	DX::ThrowIfFailed(d3d11Context->Signal(d3d11Fence.get(), fenceValue));
-	DX::ThrowIfFailed(commandQueue->Wait(d3d12Fence.get(), fenceValue));
-	fenceValue++;
-
-	// New frame, reset
-	DX::ThrowIfFailed(commandAllocators[frameIndex]->Reset());
-	DX::ThrowIfFailed(commandLists[frameIndex]->Reset(commandAllocators[frameIndex].get(), nullptr));
-
-	// Copy shared texture to swap chain buffer
-	{
-		auto fakeSwapChain = swapChainBufferWrapped->resource.get();
-		auto realSwapChain = swapChainBuffers[frameIndex].get();
-		{
-			std::vector<D3D12_RESOURCE_BARRIER> barriers;
-			barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(fakeSwapChain, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE));
-			barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(realSwapChain, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST));
-			commandLists[frameIndex]->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
-		}
-
-		commandLists[frameIndex]->CopyResource(realSwapChain, fakeSwapChain);
-
-		{
-			std::vector<D3D12_RESOURCE_BARRIER> barriers;
-			barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(fakeSwapChain, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON));
-			barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(realSwapChain, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT));
-			commandLists[frameIndex]->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
-		}
+	const auto backendBufferCount = CSX::NvidiaPipelinePolicy::ResolveBackendBufferCount(
+		bufferCount, publicSwapChainDesc.BufferCount);
+	if (!backendBufferCount)
+		return DXGI_ERROR_UNSUPPORTED;
+	const DXGI_FORMAT publicFormat = format == DXGI_FORMAT_UNKNOWN ?
+	                                     publicSwapChainDesc.BufferDesc.Format :
+	                                     format;
+	const DXGI_FORMAT backendFormat = format == DXGI_FORMAT_UNKNOWN ?
+	                                      DXGI_FORMAT_UNKNOWN :
+	                                      ResolveBackendFormat(publicFormat);
+	auto& fidelityFX = globals::features::upscaling.fidelityFX;
+	if (!fidelityFX.ResetFrameGenerationRenderContext()) {
+		runtimeQuarantined = true;
+		return E_FAIL;
 	}
 
-	globals::features::upscaling.fidelityFX.Present(upscaling.ShouldUseFrameGenerationThisFrame());
-
-	DX::ThrowIfFailed(commandLists[frameIndex]->Close());
-
-	ID3D12CommandList* commandListsToExecute[] = { commandLists[frameIndex].get() };
-	commandQueue->ExecuteCommandLists(1, commandListsToExecute);
-
-	// Present the frame
-	DX::ThrowIfFailed(swapChain->Present(SyncInterval, Flags));
-
-	// Wait for D3D12 to finish
-	DX::ThrowIfFailed(commandQueue->Signal(d3d12Fence.get(), fenceValue));
-	DX::ThrowIfFailed(d3d11Context->Wait(d3d11Fence.get(), fenceValue));
-	fenceValue++;
-
-	// Update the frame index
-	frameIndex = swapChain->GetCurrentBackBufferIndex();
-
-	float clearColor[4]{ 0, 0, 0, 0 };
-	d3d11Context->ClearRenderTargetView(uiBufferWrapped->rtv.get(), clearColor);
-
-	// If VSync is disabled, use frame limiter to prevent tearing and optimise pacing
-	if (SyncInterval == 0)
-		upscaling.FrameLimiter();
-
+	swapChainBuffers[0] = nullptr;
+	swapChainBuffers[1] = nullptr;
+	const std::array<UINT, 2> backendNodeMasks{
+		creationNodeMask ? creationNodeMask[0] : 0u,
+		creationNodeMask ? creationNodeMask[0] : 0u,
+	};
+	const std::array<IUnknown*, 2> backendPresentQueues{
+		commandQueue.get(),
+		commandQueue.get(),
+	};
+	const HRESULT result = swapChain->ResizeBuffers1(
+		*backendBufferCount, width, height, backendFormat, flags, backendNodeMasks.data(), backendPresentQueues.data());
+	if (FAILED(result)) {
+		const HRESULT recovery = RestoreFrameGenerationAfterFailedResize();
+		if (FAILED(recovery))
+			return recovery;
+		return result;
+	}
+	const HRESULT refresh = RefreshAfterResize(publicFormat);
+	if (FAILED(refresh))
+		return refresh;
+	if (!fidelityFX.SetupFrameGeneration()) {
+		runtimeQuarantined = true;
+		logger::error("[DX12SwapChain] Resized frame-generation context creation failed; quarantining the proxy");
+		return E_FAIL;
+	}
 	return S_OK;
+}
+
+HRESULT DX12SwapChain::RefreshAfterResize(DXGI_FORMAT publicFormat) noexcept
+{
+	try {
+		DXGI_SWAP_CHAIN_DESC1 resizedDesc{};
+		HRESULT result = swapChain->GetDesc1(&resizedDesc);
+		if (FAILED(result)) {
+			runtimeQuarantined = true;
+			return result;
+		}
+
+		std::unique_ptr<WrappedResource> newSwapChainBuffer;
+		std::unique_ptr<WrappedResource> newUiBuffer;
+		const bool resourcesChanged = resizedDesc.Width != swapChainDesc.Width ||
+		                              resizedDesc.Height != swapChainDesc.Height ||
+		                              resizedDesc.Format != swapChainDesc.Format ||
+		                              publicFormat != publicSwapChainDesc.BufferDesc.Format;
+		if (resourcesChanged) {
+			D3D11_TEXTURE2D_DESC textureDesc{};
+			textureDesc.Width = resizedDesc.Width;
+			textureDesc.Height = resizedDesc.Height;
+			textureDesc.MipLevels = 1;
+			textureDesc.ArraySize = 1;
+			textureDesc.Format = publicFormat;
+			textureDesc.SampleDesc = publicSwapChainDesc.SampleDesc;
+			textureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+			newSwapChainBuffer = std::make_unique<WrappedResource>(textureDesc, d3d11Device.get(), d3d12Device.get());
+			textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+			newUiBuffer = std::make_unique<WrappedResource>(textureDesc, d3d11Device.get(), d3d12Device.get());
+		}
+
+		winrt::com_ptr<ID3D12Resource> newBuffers[2];
+		result = swapChain->GetBuffer(0, IID_PPV_ARGS(newBuffers[0].put()));
+		if (SUCCEEDED(result))
+			result = swapChain->GetBuffer(1, IID_PPV_ARGS(newBuffers[1].put()));
+		if (FAILED(result)) {
+			runtimeQuarantined = true;
+			return result;
+		}
+
+		if (resourcesChanged) {
+			swapChainBufferWrapped = std::move(newSwapChainBuffer);
+			uiBufferWrapped = std::move(newUiBuffer);
+		}
+		swapChainBuffers[0] = std::move(newBuffers[0]);
+		swapChainBuffers[1] = std::move(newBuffers[1]);
+		swapChainDesc = resizedDesc;
+		publicSwapChainDesc.BufferDesc.Width = resizedDesc.Width;
+		publicSwapChainDesc.BufferDesc.Height = resizedDesc.Height;
+		publicSwapChainDesc.BufferDesc.Format = publicFormat;
+		publicSwapChainDesc.BufferDesc.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED;
+		publicSwapChainDesc.BufferDesc.Scaling = DXGI_MODE_SCALING_UNSPECIFIED;
+		publicSwapChainDesc.Flags = resizedDesc.Flags;
+		frameIndex = swapChain->GetCurrentBackBufferIndex();
+		return S_OK;
+	} catch (const std::exception& error) {
+		logger::error("[DX12SwapChain] Resize refresh failed; quarantining the proxy: {}", error.what());
+	} catch (...) {
+		logger::error("[DX12SwapChain] Resize refresh failed; quarantining the proxy");
+	}
+	runtimeQuarantined = true;
+	return E_FAIL;
+}
+
+HRESULT DX12SwapChain::RestoreFrameGenerationAfterFailedResize() noexcept
+{
+	const HRESULT refresh = RefreshAfterResize(publicSwapChainDesc.BufferDesc.Format);
+	if (FAILED(refresh))
+		return refresh;
+	if (!globals::features::upscaling.fidelityFX.SetupFrameGeneration()) {
+		runtimeQuarantined = true;
+		logger::error("[DX12SwapChain] Failed resize could not restore the prior frame-generation context; quarantining the proxy");
+		return E_FAIL;
+	}
+	return S_OK;
+}
+
+DXGI_FORMAT DX12SwapChain::ResolveBackendFormat(DXGI_FORMAT publicFormat) noexcept
+{
+	if (publicFormat == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB)
+		return DXGI_FORMAT_B8G8R8A8_UNORM;
+	if (publicFormat == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB)
+		return DXGI_FORMAT_R8G8B8A8_UNORM;
+	return publicFormat;
+}
+
+HRESULT DX12SwapChain::Present(UINT syncInterval, UINT flags)
+{
+	return PresentInternal(syncInterval, flags, nullptr);
+}
+
+HRESULT DX12SwapChain::Present1(UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* presentParameters)
+{
+	if (!presentParameters)
+		return E_POINTER;
+	return PresentInternal(syncInterval, flags, presentParameters);
+}
+
+HRESULT DX12SwapChain::PresentInternal(
+	UINT syncInterval,
+	UINT flags,
+	const DXGI_PRESENT_PARAMETERS* presentParameters) noexcept
+{
+	if (!swapChain)
+		return DXGI_ERROR_INVALID_CALL;
+	if ((flags & DXGI_PRESENT_TEST) != 0) {
+		return presentParameters ?
+		           swapChain->Present1(syncInterval, flags, presentParameters) :
+		           swapChain->Present(syncInterval, flags);
+	}
+
+	if (runtimeQuarantined || !swapChain || frameIndex >= std::size(commandAllocators) ||
+		!d3d11Context || !d3d11Fence || !d3d12Fence || !commandQueue ||
+		!commandAllocators[frameIndex] || !commandLists[frameIndex] ||
+		!swapChainBufferWrapped || !swapChainBufferWrapped->resource ||
+		!uiBufferWrapped || !uiBufferWrapped->rtv || !swapChainBuffers[frameIndex]) {
+		return DXGI_ERROR_INVALID_CALL;
+	}
+
+	auto fail = [this](HRESULT a_result, const char* a_operation) {
+		runtimeQuarantined = true;
+		logger::error("[DX12SwapChain] {} failed with 0x{:08X}; quarantining the proxy", a_operation, static_cast<uint32_t>(a_result));
+		return a_result;
+	};
+	auto check = [&](HRESULT a_result, const char* a_operation) -> std::optional<HRESULT> {
+		if (FAILED(a_result))
+			return fail(a_result, a_operation);
+		return std::nullopt;
+	};
+
+	try {
+		auto& upscaling = globals::features::upscaling;
+
+		// Advance before signaling so the first wait cannot observe the fence's
+		// already-complete creation value.
+		const auto producerFenceValue = fenceSequence.Next();
+		if (!producerFenceValue)
+			return fail(E_FAIL, "D3D interop fence exhaustion");
+		if (auto result = check(d3d11Context->Signal(d3d11Fence.get(), *producerFenceValue), "D3D11 fence signal"))
+			return *result;
+		if (auto result = check(commandQueue->Wait(d3d12Fence.get(), *producerFenceValue), "D3D12 queue wait"))
+			return *result;
+
+		// New frame, reset
+		if (auto result = check(commandAllocators[frameIndex]->Reset(), "command allocator reset"))
+			return *result;
+		if (auto result = check(commandLists[frameIndex]->Reset(commandAllocators[frameIndex].get(), nullptr), "command list reset"))
+			return *result;
+
+		// Copy shared texture to swap chain buffer
+		{
+			auto fakeSwapChain = swapChainBufferWrapped->resource.get();
+			auto realSwapChain = swapChainBuffers[frameIndex].get();
+			const std::array beforeCopy{
+				CD3DX12_RESOURCE_BARRIER::Transition(fakeSwapChain, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE),
+				CD3DX12_RESOURCE_BARRIER::Transition(realSwapChain, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST)
+			};
+			commandLists[frameIndex]->ResourceBarrier(static_cast<UINT>(beforeCopy.size()), beforeCopy.data());
+
+			commandLists[frameIndex]->CopyResource(realSwapChain, fakeSwapChain);
+
+			const std::array afterCopy{
+				CD3DX12_RESOURCE_BARRIER::Transition(fakeSwapChain, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON),
+				CD3DX12_RESOURCE_BARRIER::Transition(realSwapChain, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT)
+			};
+			commandLists[frameIndex]->ResourceBarrier(static_cast<UINT>(afterCopy.size()), afterCopy.data());
+		}
+
+		const bool useFrameGeneration = upscaling.ShouldUseFrameGenerationThisFrame() &&
+		                                upscaling.streamline.EnsureReflexDisabledForFrameGeneration();
+		if (!CSX::NvidiaPipelinePolicy::CanContinueBasePresentation(
+				upscaling.fidelityFX.Present(useFrameGeneration),
+				upscaling.fidelityFX.IsFrameGenerationDisableConfirmed())) {
+			return fail(E_FAIL, "FidelityFX frame-generation disable confirmation");
+		}
+
+		if (auto result = check(commandLists[frameIndex]->Close(), "command list close"))
+			return *result;
+
+		ID3D12CommandList* commandListsToExecute[] = { commandLists[frameIndex].get() };
+		commandQueue->ExecuteCommandLists(1, commandListsToExecute);
+
+		// Present the frame
+		const HRESULT presentResult = presentParameters ?
+		                                  swapChain->Present1(syncInterval, flags, presentParameters) :
+		                                  swapChain->Present(syncInterval, flags);
+		const auto presentDisposition = CSX::NvidiaPipelinePolicy::ClassifyPresentResult(
+			FAILED(presentResult), presentResult == DXGI_ERROR_WAS_STILL_DRAWING);
+
+		// Wait for D3D12 to finish
+		const auto consumerFenceValue = fenceSequence.Next();
+		if (!consumerFenceValue)
+			return fail(E_FAIL, "D3D interop fence exhaustion");
+		if (auto result = check(commandQueue->Signal(d3d12Fence.get(), *consumerFenceValue), "D3D12 fence signal"))
+			return *result;
+		if (auto result = check(d3d11Context->Wait(d3d11Fence.get(), *consumerFenceValue), "D3D11 fence wait"))
+			return *result;
+		if (presentDisposition == CSX::NvidiaPipelinePolicy::PresentResultDisposition::Retryable)
+			return presentResult;
+		if (presentDisposition == CSX::NvidiaPipelinePolicy::PresentResultDisposition::Fatal)
+			return fail(presentResult, "swap-chain present");
+
+		// Update the frame index
+		frameIndex = swapChain->GetCurrentBackBufferIndex();
+
+		float clearColor[4]{ 0, 0, 0, 0 };
+		d3d11Context->ClearRenderTargetView(uiBufferWrapped->rtv.get(), clearColor);
+
+		// If VSync is disabled, use frame limiter to prevent tearing and optimise pacing
+		if (syncInterval == 0)
+			upscaling.FrameLimiter();
+
+		return presentResult;
+	} catch (const std::exception& error) {
+		logger::error("[DX12SwapChain] Present raised an exception; quarantining the proxy: {}", error.what());
+	} catch (...) {
+		logger::error("[DX12SwapChain] Present raised an unknown exception; quarantining the proxy");
+	}
+	runtimeQuarantined = true;
+	return E_FAIL;
 }
 
 HRESULT DX12SwapChain::GetDevice(REFIID uuid, void** ppDevice)
 {
-	if (uuid == __uuidof(ID3D11Device) || uuid == __uuidof(ID3D11Device1) || uuid == __uuidof(ID3D11Device2) || uuid == __uuidof(ID3D11Device3) || uuid == __uuidof(ID3D11Device4) || uuid == __uuidof(ID3D11Device5)) {
-		*ppDevice = d3d11Device.get();
-		return S_OK;
+	if (!ppDevice)
+		return E_POINTER;
+	*ppDevice = nullptr;
+	return d3d11Device ? d3d11Device->QueryInterface(uuid, ppDevice) : DXGI_ERROR_INVALID_CALL;
+}
+
+HRESULT DX12SwapChain::GetDesc(DXGI_SWAP_CHAIN_DESC* desc) const noexcept
+{
+	if (!desc)
+		return E_POINTER;
+	*desc = publicSwapChainDesc;
+	return S_OK;
+}
+
+HRESULT DX12SwapChain::GetDesc1(DXGI_SWAP_CHAIN_DESC1* desc) const noexcept
+{
+	if (!desc)
+		return E_POINTER;
+	if (!swapChain)
+		return DXGI_ERROR_INVALID_CALL;
+
+	const HRESULT result = swapChain->GetDesc1(desc);
+	if (FAILED(result))
+		return result;
+	desc->Width = publicSwapChainDesc.BufferDesc.Width;
+	desc->Height = publicSwapChainDesc.BufferDesc.Height;
+	desc->Format = publicSwapChainDesc.BufferDesc.Format;
+	desc->Stereo = FALSE;
+	desc->SampleDesc = publicSwapChainDesc.SampleDesc;
+	desc->BufferUsage = publicSwapChainDesc.BufferUsage;
+	desc->BufferCount = 1;
+	desc->SwapEffect = publicSwapChainDesc.SwapEffect;
+	desc->Flags = publicSwapChainDesc.Flags;
+	return S_OK;
+}
+
+HRESULT DX12SwapChain::SetFullscreenState(BOOL fullscreen, IDXGIOutput* target) noexcept
+{
+	if (!swapChain || runtimeQuarantined)
+		return DXGI_ERROR_INVALID_CALL;
+	if (fullscreen) {
+		logger::warn("[DX12SwapChain] Fullscreen transition is not representable by the windowed FidelityFX proxy");
+		return DXGI_ERROR_UNSUPPORTED;
+	}
+	const HRESULT result = swapChain->SetFullscreenState(FALSE, target);
+	if (SUCCEEDED(result))
+		publicSwapChainDesc.Windowed = TRUE;
+	return result;
+}
+
+HRESULT DX12SwapChain::GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC* desc) const noexcept
+{
+	if (!desc)
+		return E_POINTER;
+	if (!swapChain)
+		return DXGI_ERROR_INVALID_CALL;
+	const HRESULT result = swapChain->GetFullscreenDesc(desc);
+	if (SUCCEEDED(result))
+		desc->Windowed = publicSwapChainDesc.Windowed;
+	return result;
+}
+
+HRESULT DX12SwapChain::ResizeTarget(const DXGI_MODE_DESC* target) noexcept
+{
+	if (!target)
+		return E_POINTER;
+	if (!swapChain || runtimeQuarantined)
+		return DXGI_ERROR_INVALID_CALL;
+	if (target->Width != publicSwapChainDesc.BufferDesc.Width ||
+		target->Height != publicSwapChainDesc.BufferDesc.Height ||
+		target->Format != publicSwapChainDesc.BufferDesc.Format) {
+		logger::warn("[DX12SwapChain] ResizeTarget cannot change the public proxy buffer contract");
+		return DXGI_ERROR_UNSUPPORTED;
 	}
 
-	return swapChain->GetDevice(uuid, ppDevice);
+	DXGI_MODE_DESC backendTarget = *target;
+	backendTarget.Format = ResolveBackendFormat(target->Format);
+	const HRESULT result = swapChain->ResizeTarget(&backendTarget);
+	if (SUCCEEDED(result)) {
+		publicSwapChainDesc.BufferDesc.RefreshRate = target->RefreshRate;
+		publicSwapChainDesc.BufferDesc.ScanlineOrdering = target->ScanlineOrdering;
+		publicSwapChainDesc.BufferDesc.Scaling = target->Scaling;
+	}
+	return result;
 }
 
 HANDLE DX12SwapChain::GetFrameLatencyWaitableObject()
@@ -277,6 +676,21 @@ float DX12SwapChain::GetFrameTime() const
 	return frameTime;
 }
 
+WrappedResource::WrappedResource(ID3D11Texture2D* a_texture, ID3D12Device* a_d3d12Device, HANDLE a_sharedHandle)
+{
+	DX::ThrowIfFailed(a_texture && a_d3d12Device ? S_OK : E_INVALIDARG);
+	winrt::handle temporaryHandle;
+	if (!a_sharedHandle) {
+		winrt::com_ptr<IDXGIResource1> dxgiResource;
+		DX::ThrowIfFailed(a_texture->QueryInterface(IID_PPV_ARGS(dxgiResource.put())));
+		DX::ThrowIfFailed(dxgiResource->CreateSharedHandle(nullptr,
+			DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr, temporaryHandle.put()));
+		a_sharedHandle = temporaryHandle.get();
+	}
+	DX::ThrowIfFailed(a_d3d12Device->OpenSharedHandle(a_sharedHandle, IID_PPV_ARGS(resource.put())));
+	resource11.copy_from(a_texture);
+}
+
 WrappedResource::WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* a_d3d11Device, ID3D12Device* a_d3d12Device)
 {
 	// Create D3D11 shared texture directly instead of wrapping D3D12 resource
@@ -285,17 +699,8 @@ WrappedResource::WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* 
 	winrt::com_ptr<ID3D11ShaderResourceView> newSRV;
 	winrt::com_ptr<ID3D11UnorderedAccessView> newUAV;
 	winrt::com_ptr<ID3D11RenderTargetView> newRTV;
-	winrt::com_ptr<ID3D12Resource> newResource12;
 	DX::ThrowIfFailed(a_d3d11Device->CreateTexture2D(&a_texDesc, nullptr, newResource11.put()));
-
-	// Get shared handle from D3D11 texture to enable D3D12 access
-	winrt::com_ptr<IDXGIResource1> dxgiResource;
-	DX::ThrowIfFailed(newResource11->QueryInterface(IID_PPV_ARGS(dxgiResource.put())));
-	winrt::handle sharedHandle;
-	DX::ThrowIfFailed(dxgiResource->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr, sharedHandle.put()));
-
-	// Open the shared D3D11 texture as D3D12 resource
-	DX::ThrowIfFailed(a_d3d12Device->OpenSharedHandle(sharedHandle.get(), IID_PPV_ARGS(newResource12.put())));
+	WrappedResource imported(newResource11.get(), a_d3d12Device);
 
 	if (a_texDesc.BindFlags & D3D11_BIND_SHADER_RESOURCE) {
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
@@ -341,31 +746,53 @@ WrappedResource::WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* 
 	srv = std::move(newSRV);
 	uav = std::move(newUAV);
 	rtv = std::move(newRTV);
-	resource = std::move(newResource12);
+	resource = std::move(imported.resource);
 }
 
-DXGISwapChainProxy::DXGISwapChainProxy(IDXGISwapChain4* a_swapChain)
+DXGISwapChainProxy::DXGISwapChainProxy(DX12SwapChain& a_owner, IDXGISwapChain4* a_swapChain) :
+	owner(a_owner)
 {
-	swapChain = a_swapChain;
+	// The owner retains the FidelityFX reference so a failed teardown can retain
+	// the full generation. The public proxy holds its own ordinary COM reference.
+	swapChain.copy_from(a_swapChain);
 }
 
 /****IUknown****/
 HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::QueryInterface(REFIID riid, void** ppvObj)
 {
-	auto ret = swapChain->QueryInterface(riid, ppvObj);
-	if (*ppvObj)
-		*ppvObj = this;
-	return ret;
+	if (!ppvObj)
+		return E_POINTER;
+	*ppvObj = nullptr;
+	if (riid != __uuidof(IUnknown) &&
+		riid != __uuidof(IDXGIObject) &&
+		riid != __uuidof(IDXGIDeviceSubObject) &&
+		riid != __uuidof(IDXGISwapChain) &&
+		riid != __uuidof(IDXGISwapChain1) &&
+		riid != __uuidof(IDXGISwapChain2) &&
+		riid != __uuidof(IDXGISwapChain3) &&
+		riid != __uuidof(IDXGISwapChain4)) {
+		return E_NOINTERFACE;
+	}
+
+	*ppvObj = static_cast<IDXGISwapChain4*>(this);
+	AddRef();
+	return S_OK;
 }
 
 ULONG STDMETHODCALLTYPE DXGISwapChainProxy::AddRef()
 {
-	return swapChain->AddRef();
+	return ++referenceCount;
 }
 
 ULONG STDMETHODCALLTYPE DXGISwapChainProxy::Release()
 {
-	return swapChain->Release();
+	const ULONG remaining = --referenceCount;
+	if (remaining == 0) {
+		auto* underlying = swapChain.get();
+		owner.OnProxyDestroyed(underlying);
+		delete this;
+	}
+	return remaining;
 }
 
 /****IDXGIObject****/
@@ -392,23 +819,23 @@ HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::GetParent(_In_ REFIID riid, _COM_O
 /****IDXGIDeviceSubObject****/
 HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::GetDevice(_In_ REFIID riid, _COM_Outptr_ void** ppDevice)
 {
-	return globals::features::upscaling.dx12SwapChain.GetDevice(riid, ppDevice);
+	return owner.GetDevice(riid, ppDevice);
 }
 
 /****IDXGISwapChain****/
 HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::Present(UINT SyncInterval, UINT Flags)
 {
-	return globals::features::upscaling.dx12SwapChain.Present(SyncInterval, Flags);
+	return owner.Present(SyncInterval, Flags);
 }
 
 HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::GetBuffer(UINT buffer, _In_ REFIID riid, _COM_Outptr_ void** ppSurface)
 {
-	return globals::features::upscaling.dx12SwapChain.GetBuffer(buffer, riid, ppSurface);
+	return owner.GetBuffer(buffer, riid, ppSurface);
 }
 
 HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::SetFullscreenState(BOOL Fullscreen, _In_opt_ IDXGIOutput* pTarget)
 {
-	return swapChain->SetFullscreenState(Fullscreen, pTarget);
+	return owner.SetFullscreenState(Fullscreen, pTarget);
 }
 
 HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::GetFullscreenState(_Out_opt_ BOOL* pFullscreen, _COM_Outptr_opt_result_maybenull_ IDXGIOutput** ppTarget)
@@ -418,17 +845,17 @@ HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::GetFullscreenState(_Out_opt_ BOOL*
 
 HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::GetDesc(_Out_ DXGI_SWAP_CHAIN_DESC* pDesc)
 {
-	return swapChain->GetDesc(pDesc);
+	return owner.GetDesc(pDesc);
 }
 
 HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::ResizeBuffers(UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags)
 {
-	return globals::features::upscaling.dx12SwapChain.ResizeBuffers(BufferCount, Width, Height, NewFormat, SwapChainFlags);
+	return owner.ResizeBuffers(BufferCount, Width, Height, NewFormat, SwapChainFlags);
 }
 
 HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::ResizeTarget(_In_ const DXGI_MODE_DESC* pNewTargetParameters)
 {
-	return swapChain->ResizeTarget(pNewTargetParameters);
+	return owner.ResizeTarget(pNewTargetParameters);
 }
 
 HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::GetContainingOutput(_COM_Outptr_ IDXGIOutput** ppOutput)
@@ -444,6 +871,133 @@ HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::GetFrameStatistics(_Out_ DXGI_FRAM
 HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::GetLastPresentCount(_Out_ UINT* pLastPresentCount)
 {
 	return swapChain->GetLastPresentCount(pLastPresentCount);
+}
+
+/****IDXGISwapChain1****/
+HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::GetDesc1(DXGI_SWAP_CHAIN_DESC1* pDesc)
+{
+	return owner.GetDesc1(pDesc);
+}
+
+HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pDesc)
+{
+	return owner.GetFullscreenDesc(pDesc);
+}
+
+HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::GetHwnd(HWND* pHwnd)
+{
+	return swapChain->GetHwnd(pHwnd);
+}
+
+HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::GetCoreWindow(REFIID refiid, void** ppUnk)
+{
+	return swapChain->GetCoreWindow(refiid, ppUnk);
+}
+
+HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::Present1(UINT SyncInterval, UINT PresentFlags, const DXGI_PRESENT_PARAMETERS* pPresentParameters)
+{
+	return owner.Present1(SyncInterval, PresentFlags, pPresentParameters);
+}
+
+BOOL STDMETHODCALLTYPE DXGISwapChainProxy::IsTemporaryMonoSupported()
+{
+	return swapChain->IsTemporaryMonoSupported();
+}
+
+HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::GetRestrictToOutput(IDXGIOutput** ppRestrictToOutput)
+{
+	return swapChain->GetRestrictToOutput(ppRestrictToOutput);
+}
+
+HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::SetBackgroundColor(const DXGI_RGBA* pColor)
+{
+	return swapChain->SetBackgroundColor(pColor);
+}
+
+HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::GetBackgroundColor(DXGI_RGBA* pColor)
+{
+	return swapChain->GetBackgroundColor(pColor);
+}
+
+HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::SetRotation(DXGI_MODE_ROTATION Rotation)
+{
+	return swapChain->SetRotation(Rotation);
+}
+
+HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::GetRotation(DXGI_MODE_ROTATION* pRotation)
+{
+	return swapChain->GetRotation(pRotation);
+}
+
+/****IDXGISwapChain2****/
+HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::SetSourceSize(UINT Width, UINT Height)
+{
+	return swapChain->SetSourceSize(Width, Height);
+}
+
+HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::GetSourceSize(UINT* pWidth, UINT* pHeight)
+{
+	return swapChain->GetSourceSize(pWidth, pHeight);
+}
+
+HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::SetMaximumFrameLatency(UINT MaxLatency)
+{
+	return swapChain->SetMaximumFrameLatency(MaxLatency);
+}
+
+HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::GetMaximumFrameLatency(UINT* pMaxLatency)
+{
+	return swapChain->GetMaximumFrameLatency(pMaxLatency);
+}
+
+HANDLE STDMETHODCALLTYPE DXGISwapChainProxy::GetFrameLatencyWaitableObject()
+{
+	return swapChain->GetFrameLatencyWaitableObject();
+}
+
+HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::SetMatrixTransform(const DXGI_MATRIX_3X2_F* pMatrix)
+{
+	return swapChain->SetMatrixTransform(pMatrix);
+}
+
+HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::GetMatrixTransform(DXGI_MATRIX_3X2_F* pMatrix)
+{
+	return swapChain->GetMatrixTransform(pMatrix);
+}
+
+/****IDXGISwapChain3****/
+UINT STDMETHODCALLTYPE DXGISwapChainProxy::GetCurrentBackBufferIndex()
+{
+	return 0;
+}
+
+HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::CheckColorSpaceSupport(DXGI_COLOR_SPACE_TYPE ColorSpace, UINT* pColorSpaceSupport)
+{
+	return swapChain->CheckColorSpaceSupport(ColorSpace, pColorSpaceSupport);
+}
+
+HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::SetColorSpace1(DXGI_COLOR_SPACE_TYPE ColorSpace)
+{
+	return swapChain->SetColorSpace1(ColorSpace);
+}
+
+HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::ResizeBuffers1(
+	UINT BufferCount,
+	UINT Width,
+	UINT Height,
+	DXGI_FORMAT Format,
+	UINT SwapChainFlags,
+	const UINT* pCreationNodeMask,
+	IUnknown* const* ppPresentQueue)
+{
+	return owner.ResizeBuffers1(
+		BufferCount, Width, Height, Format, SwapChainFlags, pCreationNodeMask, ppPresentQueue);
+}
+
+/****IDXGISwapChain4****/
+HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::SetHDRMetaData(DXGI_HDR_METADATA_TYPE Type, UINT Size, void* pMetaData)
+{
+	return swapChain->SetHDRMetaData(Type, Size, pMetaData);
 }
 
 void DX12SwapChain::SetUIBuffer()

@@ -8,10 +8,16 @@ The three `CSX Unified` MGO presets use one settings policy on AMD and NVIDIA:
 | Balanced    | Quality           | Off                  | Low         | On         | On              |
 | Quality     | Ultra Quality     | AO-only, provisional | Medium      | On         | On              |
 
-The capability boundary remains vendor-neutral:
+The capability boundary is the existing pair of upscaling settings. Together
+they describe one preference, not a staged DLSS-to-FSR transition:
 
 -   `upscaleMethod=3` requests DLSS when Streamline reports DLSS available;
 -   `upscaleMethodNoDLSS=2` selects FSR when DLSS is unavailable.
+
+When the active adapter is known to be non-NVIDIA, CSX resolves the preference
+directly to FSR without publishing DLSS as the runtime target. On NVIDIA, CSX
+waits for Streamline's capability result before publishing either DLSS or the
+fallback. An unknown adapter remains unresolved rather than guessing.
 
 Provider-specific tuning remains in the same generated JSON. DLSS reads its
 preset and sharpener values; FSR reads its own sharpness and runtime-provider

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "NvidiaPipelinePolicy.h"
+
 #include <Windows.Foundation.h>
 #include <stdio.h>
 #include <winrt/base.h>
@@ -11,12 +13,17 @@
 
 #include <directx/d3dx12.h>
 
+#include <atomic>
 #include <memory>
+
+class DX12SwapChain;
 
 class WrappedResource
 {
 public:
 	WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* a_d3d11Device, ID3D12Device* a_d3d12Device);
+	/** Imports an existing NT-shared texture, retaining its D3D11 and D3D12 ownership. */
+	WrappedResource(ID3D11Texture2D* a_texture, ID3D12Device* a_d3d12Device, HANDLE a_sharedHandle = nullptr);
 	~WrappedResource() = default;
 	WrappedResource(const WrappedResource&) = delete;
 	WrappedResource& operator=(const WrappedResource&) = delete;
@@ -30,12 +37,10 @@ public:
 	winrt::com_ptr<ID3D12Resource> resource;
 };
 
-struct DXGISwapChainProxy : IDXGISwapChain
+struct DXGISwapChainProxy : IDXGISwapChain4
 {
 public:
-	DXGISwapChainProxy(IDXGISwapChain4* a_swapChain);
-
-	IDXGISwapChain4* swapChain;
+	DXGISwapChainProxy(DX12SwapChain& a_owner, IDXGISwapChain4* a_swapChain);
 
 	/****IUnknown****/
 	virtual HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppvObj) override;
@@ -62,6 +67,46 @@ public:
 	virtual HRESULT STDMETHODCALLTYPE GetContainingOutput(_COM_Outptr_ IDXGIOutput** ppOutput);
 	virtual HRESULT STDMETHODCALLTYPE GetFrameStatistics(_Out_ DXGI_FRAME_STATISTICS* pStats);
 	virtual HRESULT STDMETHODCALLTYPE GetLastPresentCount(_Out_ UINT* pLastPresentCount);
+
+	/****IDXGISwapChain1****/
+	virtual HRESULT STDMETHODCALLTYPE GetDesc1(_Out_ DXGI_SWAP_CHAIN_DESC1* pDesc) override;
+	virtual HRESULT STDMETHODCALLTYPE GetFullscreenDesc(_Out_ DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pDesc) override;
+	virtual HRESULT STDMETHODCALLTYPE GetHwnd(_Out_ HWND* pHwnd) override;
+	virtual HRESULT STDMETHODCALLTYPE GetCoreWindow(_In_ REFIID refiid, _COM_Outptr_ void** ppUnk) override;
+	virtual HRESULT STDMETHODCALLTYPE Present1(UINT SyncInterval, UINT PresentFlags, _In_ const DXGI_PRESENT_PARAMETERS* pPresentParameters) override;
+	virtual BOOL STDMETHODCALLTYPE IsTemporaryMonoSupported() override;
+	virtual HRESULT STDMETHODCALLTYPE GetRestrictToOutput(_Out_ IDXGIOutput** ppRestrictToOutput) override;
+	virtual HRESULT STDMETHODCALLTYPE SetBackgroundColor(_In_ const DXGI_RGBA* pColor) override;
+	virtual HRESULT STDMETHODCALLTYPE GetBackgroundColor(_Out_ DXGI_RGBA* pColor) override;
+	virtual HRESULT STDMETHODCALLTYPE SetRotation(_In_ DXGI_MODE_ROTATION Rotation) override;
+	virtual HRESULT STDMETHODCALLTYPE GetRotation(_Out_ DXGI_MODE_ROTATION* pRotation) override;
+
+	/****IDXGISwapChain2****/
+	virtual HRESULT STDMETHODCALLTYPE SetSourceSize(UINT Width, UINT Height) override;
+	virtual HRESULT STDMETHODCALLTYPE GetSourceSize(_Out_ UINT* pWidth, _Out_ UINT* pHeight) override;
+	virtual HRESULT STDMETHODCALLTYPE SetMaximumFrameLatency(UINT MaxLatency) override;
+	virtual HRESULT STDMETHODCALLTYPE GetMaximumFrameLatency(_Out_ UINT* pMaxLatency) override;
+	virtual HANDLE STDMETHODCALLTYPE GetFrameLatencyWaitableObject() override;
+	virtual HRESULT STDMETHODCALLTYPE SetMatrixTransform(const DXGI_MATRIX_3X2_F* pMatrix) override;
+	virtual HRESULT STDMETHODCALLTYPE GetMatrixTransform(_Out_ DXGI_MATRIX_3X2_F* pMatrix) override;
+
+	/****IDXGISwapChain3****/
+	virtual UINT STDMETHODCALLTYPE GetCurrentBackBufferIndex() override;
+	virtual HRESULT STDMETHODCALLTYPE CheckColorSpaceSupport(DXGI_COLOR_SPACE_TYPE ColorSpace, _Out_ UINT* pColorSpaceSupport) override;
+	virtual HRESULT STDMETHODCALLTYPE SetColorSpace1(DXGI_COLOR_SPACE_TYPE ColorSpace) override;
+	virtual HRESULT STDMETHODCALLTYPE ResizeBuffers1(UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT Format, UINT SwapChainFlags,
+		_In_reads_(BufferCount) const UINT* pCreationNodeMask,
+		_In_reads_(BufferCount) IUnknown* const* ppPresentQueue) override;
+
+	/****IDXGISwapChain4****/
+	virtual HRESULT STDMETHODCALLTYPE SetHDRMetaData(DXGI_HDR_METADATA_TYPE Type, UINT Size, _In_reads_opt_(Size) void* pMetaData) override;
+
+private:
+	~DXGISwapChainProxy() = default;
+
+	DX12SwapChain& owner;
+	winrt::com_ptr<IDXGISwapChain4> swapChain;
+	std::atomic_ulong referenceCount{ 1 };
 };
 
 class DX12SwapChain
@@ -73,8 +118,10 @@ public:
 	winrt::com_ptr<ID3D12GraphicsCommandList4> commandLists[2];
 
 	IDXGISwapChain4* swapChain = nullptr;
+	winrt::com_ptr<IDXGISwapChain4> swapChainOwner;
 
 	DXGI_SWAP_CHAIN_DESC1 swapChainDesc{};
+	DXGI_SWAP_CHAIN_DESC publicSwapChainDesc{};
 
 	std::unique_ptr<WrappedResource> swapChainBufferWrapped;
 	std::unique_ptr<WrappedResource> uiBufferWrapped;
@@ -92,7 +139,7 @@ public:
 	winrt::com_ptr<ID3D12Resource> swapChainBuffers[2];
 
 	UINT frameIndex = 0;
-	UINT64 fenceValue = 0;
+	CSX::NvidiaPipelinePolicy::InteropFenceSequence fenceSequence;
 
 	LARGE_INTEGER qpf;
 
@@ -104,23 +151,47 @@ public:
 	float GetFrameTime() const;
 
 	void CreateD3D12Device(IDXGIAdapter* a_adapter);
-	void CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC swapChainDesc);
+	void CreateSwapChain(
+		IDXGIAdapter* adapter,
+		DXGI_SWAP_CHAIN_DESC backendSwapChainDesc,
+		DXGI_SWAP_CHAIN_DESC publicSwapChainDesc);
 
 	void CreateInterop();
 	void RecreateWrappedResources(const DXGI_SWAP_CHAIN_DESC1& desc);
 
-	DXGISwapChainProxy* GetSwapChainProxy();
+	bool TryBeginConstruction() noexcept;
+	DXGISwapChainProxy* TakeSwapChainProxy();
 	void SetD3D11Device(ID3D11Device* a_d3d11Device);
 	void SetD3D11DeviceContext(ID3D11DeviceContext* a_d3d11Context);
 
 	HRESULT GetBuffer(UINT buffer, REFIID riid, void** ppSurface);
 	HRESULT ResizeBuffers(UINT bufferCount, UINT width, UINT height, DXGI_FORMAT format, UINT flags);
+	HRESULT ResizeBuffers1(UINT bufferCount, UINT width, UINT height, DXGI_FORMAT format, UINT flags,
+		const UINT* creationNodeMask, IUnknown* const* presentQueue);
 	HRESULT Present(UINT SyncInterval, UINT Flags);
+	HRESULT Present1(UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* presentParameters);
 	HRESULT GetDevice(_In_ REFIID riid, _COM_Outptr_ void** ppDevice);
+	HRESULT GetDesc(_Out_ DXGI_SWAP_CHAIN_DESC* desc) const noexcept;
+	HRESULT GetDesc1(_Out_ DXGI_SWAP_CHAIN_DESC1* desc) const noexcept;
+	HRESULT SetFullscreenState(BOOL fullscreen, IDXGIOutput* target) noexcept;
+	HRESULT GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC* desc) const noexcept;
+	HRESULT ResizeTarget(const DXGI_MODE_DESC* target) noexcept;
 	HANDLE GetFrameLatencyWaitableObject();
 
 	void SetUIBuffer();
 
 	// D3D12 interop resource management
 	void CreateSharedResources();
+	bool ResetUnpublished() noexcept;
+	void OnProxyDestroyed(IDXGISwapChain4* a_swapChain) noexcept;
+	[[nodiscard]] CSX::NvidiaPipelinePolicy::ProxyLifecycleState GetLifecycleState() const noexcept;
+
+private:
+	void ResetResources() noexcept;
+	HRESULT PresentInternal(UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* presentParameters) noexcept;
+	HRESULT RefreshAfterResize(DXGI_FORMAT publicFormat) noexcept;
+	HRESULT RestoreFrameGenerationAfterFailedResize() noexcept;
+	static DXGI_FORMAT ResolveBackendFormat(DXGI_FORMAT publicFormat) noexcept;
+	CSX::NvidiaPipelinePolicy::ProxyLifecycleGate lifecycle;
+	bool runtimeQuarantined = false;
 };

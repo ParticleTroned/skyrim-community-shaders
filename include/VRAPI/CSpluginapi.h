@@ -326,8 +326,9 @@ namespace CSPluginAPI
 		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(preset);
 		const auto upscaleMethod = detail::GetLegacyDLSSPreferredUpscaleMethod(upscaling);
 		const bool renderScaleModeEnabled =
-			upscaling.IsRenderScaleModeRequested() &&
-			Upscaling::GetQualityModeResolutionScale(qualityMode) < 0.99f;
+			globals::game::isVR ? upscaling.GetVRRenderScaleModePreference() :
+				upscaling.IsRenderScaleModeRequested() &&
+					Upscaling::GetQualityModeResolutionScale(qualityMode) < 0.99f;
 		upscaling.ApplyCSMenuUpscalingTransition(
 			upscaleMethod,
 			renderScaleModeEnabled,
@@ -370,7 +371,7 @@ namespace CSPluginAPI
 		if (stageVRDLSSProfileChange) {
 			upscaling.ApplyCSMenuUpscalingTransition(
 				upscaleMethod,
-				upscaling.GetPerfModeRequested(),
+				upscaling.GetVRRenderScaleModePreference(),
 				upscaling.GetEffectiveDLSSQualityMode(),
 				dlssPreset,
 				"CSX API legacy DLSS profile change",
@@ -468,7 +469,8 @@ namespace CSPluginAPI
 		auto& upscaling = globals::features::upscaling;
 		upscaling.ApplyCSMenuUpscalingTransition(
 			detail::ToInternalUpscaleMethod(method),
-			upscaling.IsRenderScaleModeRequested(),
+			globals::game::isVR ? upscaling.GetVRRenderScaleModePreference() :
+				upscaling.IsRenderScaleModeRequested(),
 			upscaling.GetEffectiveDLSSQualityMode(),
 			upscaling.GetEffectiveDLSSPreset(),
 			"CSX API upscaler method change",

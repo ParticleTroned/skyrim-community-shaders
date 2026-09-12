@@ -102,7 +102,13 @@ public:
 		Util::LazyShader<ID3D11ComputeShader> left;
 		Util::LazyShader<ID3D11ComputeShader> right;
 	};
-	static constexpr std::size_t kRaymarchShaderVariantCount = 2;
+	// Binaries that can run VR retain native plus every supported render-scale
+	// profile. Flat-only builds need only the active variant.
+#ifdef ENABLE_SKYRIM_VR
+	static constexpr std::size_t kRaymarchShaderVariantCount = 8;
+#else
+	static constexpr std::size_t kRaymarchShaderVariantCount = 1;
+#endif
 	std::array<RaymarchShaderVariant, kRaymarchShaderVariantCount> raymarchShaderVariants{};
 	uint64_t raymarchShaderUseCounter = 0;
 	uint compiledSampleCount = 0;

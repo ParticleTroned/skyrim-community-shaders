@@ -1,14 +1,22 @@
 #pragma once
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#include "VRRenderScaleRetryTelemetry.h"
+#endif
+
 #include "../../Buffer.h"
 #include "../../State.h"
 #include "StreamlineFrameTokenPublication.h"
+#include "VRRelatchDrainFence.h"
+#include "VRRelatchDrainPolicy.h"
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <d3d11_4.h>
 #include <directx/d3d12.h>
+#include <mutex>
 #include <vector>
 
 #define NV_WINDOWS
@@ -34,14 +42,14 @@ public:
 	inline std::string GetShortName() { return "Streamline"; }
 
 	bool enabledAtBoot = false;
-	bool initialized = false;
-	bool triedInitialization = false;
-	bool featureCheckComplete = false;
+	std::atomic_bool initialized{ false };
+	std::atomic_bool triedInitialization{ false };
+	std::atomic_bool featureCheckComplete{ false };
 
-	bool featureDLSS = false;
-	bool featureReflex = false;
-	bool featurePCL = false;
-	bool reflexSupportedOnCurrentAdapter = false;
+	std::atomic_bool featureDLSS{ false };
+	std::atomic_bool featureReflex{ false };
+	std::atomic_bool featurePCL{ false };
+	std::atomic_bool reflexSupportedOnCurrentAdapter{ false };
 
 	sl::ViewportHandle viewport{ 0 };
 	sl::ViewportHandle viewportRight{ 1 };
@@ -126,8 +134,12 @@ public:
 		uint32_t dlssPreset = 0;
 		uint32_t extentInWidth = 0;
 		uint32_t extentInHeight = 0;
+		uint32_t extentInLeft = 0;
+		uint32_t extentInTop = 0;
 		uint32_t extentOutWidth = 0;
 		uint32_t extentOutHeight = 0;
+		uint32_t extentOutLeft = 0;
+		uint32_t extentOutTop = 0;
 		int32_t viewportScaleXQ = 0;
 		int32_t viewportScaleYQ = 0;
 		int32_t pinholeOffsetXQ = 0;
@@ -135,6 +147,7 @@ public:
 		int32_t jitterXQ = 0;
 		int32_t jitterYQ = 0;
 		bool historyResetRequested = false;
+		uint64_t constantsIdentity = 0;
 	};
 
 	struct VRDLSSViewportSlot
@@ -155,7 +168,15 @@ public:
 	uint64_t vrDLSSViewportUseCounter = 0;
 	std::array<bool, 2> activeDLSSViewportResourcesAllocated = {};
 	ID3D11Query* pendingDLSSResourceFreeIdleFence = nullptr;
-	std::array<ID3D11Query*, kVRDLSSViewportRoleCount> pendingVRDLSSSlotRecycleIdleFences{};
+	VRRelatchDrainPolicy::Proof dlssRelatchDrainProof;
+	VRRelatchDrainFence dlssRelatchDrainFence;
+	winrt::com_ptr<ID3D11Device> dlssRelatchDrainDevice;
+	struct VRDLSSSlotRecycleFence
+	{
+		ID3D11Query* query = nullptr;
+		uint32_t victimSlot = kVRDLSSViewportSlotCount;
+	};
+	std::array<VRDLSSSlotRecycleFence, kVRDLSSViewportRoleCount> pendingVRDLSSSlotRecycleIdleFences{};
 
 	struct ReflexOptionsCache
 	{
@@ -437,11 +458,15 @@ public:
 	// Cached DLL version info for Streamline plugin directory
 	static std::vector<std::pair<std::string, std::string>> dllVersions;
 
-	void LoadInterposer();
+	bool LoadInterposer();
+	void Shutdown();
+	bool TryUpgradeInterface(void** a_interface);
+	bool TrySetD3DDevice(ID3D11Device* a_device);
+	void MarkAdapterUnavailable(const char* a_reason);
 
-	void CheckFeatures(IDXGIAdapter* a_adapter);
+	bool CheckFeatures(IDXGIAdapter* a_adapter);
 
-	void PostDevice();
+	bool PostDevice();
 
 	bool CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameToken* frameToken, uint32_t eyeIndex = 0, float viewportScaleX = 1.0f, float viewportScaleY = 1.0f, float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f, const DLSSDispatchDiagnostics* diagnostics = nullptr
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -454,10 +479,18 @@ public:
 		uint32_t a_frame,
 		const char* a_consumer);
 
-	bool IsRTXAndBelow40Series(IDXGIAdapter* a_adapter);
+	bool IsRTXAndBelow40Series(const DXGI_ADAPTER_DESC& a_adapterDesc) const;
+	[[nodiscard]] bool IsFrameGenerationQuarantinedByReflex() const noexcept
+	{
+		return frameGenerationQuarantinedByReflex.load(std::memory_order_acquire);
+	}
 
 	/** @brief Makes the bounded VR viewport slot for a DLSS profile safe to use without dispatching DLSS. */
-	DLSSViewportPreparationResult PrepareVRDLSSViewport(DLSSViewportRole viewportRole, uint32_t qualityMode, uint32_t dlssPreset);
+	DLSSViewportPreparationResult PrepareVRDLSSViewport(DLSSViewportRole viewportRole, uint32_t qualityMode, uint32_t dlssPreset
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		, VRRenderScaleRetryTelemetry::ViewportObservation* a_observation = nullptr
+#endif
+	);
 	bool ResolveDLSSViewport(DLSSViewportRole viewportRole, sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset, sl::ViewportHandle& outViewport);
 	int FindVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t qualityMode, uint32_t dlssPreset) const;
 	bool TryResolveExistingVRDLSSViewport(
@@ -470,13 +503,19 @@ public:
 		ID3D11Resource* a_colorInput,
 		sl::ViewportHandle& a_viewport) const;
 	int ChooseVRDLSSViewportSlotForAllocation(DLSSViewportRole viewportRole) const;
+	/** @brief Reports whether a profile can use an existing or unused slot without evicting another profile. */
+	[[nodiscard]] bool CanPrepareVRDLSSViewportWithoutRecycle(
+		DLSSViewportRole a_viewportRole,
+		uint32_t a_qualityMode,
+		uint32_t a_dlssPreset) const noexcept;
 	bool FreeDLSSViewportResources(sl::ViewportHandle a_viewport, uint32_t a_eyeIndex, bool a_logFailures);
 	bool FreeVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t slotIndex, bool logFailures);
 	DLSSOptionsCache& GetDLSSOptionsCache(DLSSViewportRole viewportRole, uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset);
 	bool SetDLSSOptions(DLSSViewportRole viewportRole, sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height, bool colorBuffersHDR, uint32_t qualityMode, uint32_t dlssPreset, const DLSSDispatchDiagnostics* diagnostics = nullptr);
 	void InvalidateDLSSOptionsCache();
 	void ResetDLSSIdleFences();
-	void ResetFrameTracking();
+	/** Clears constants tracking while preserving token publication during dispatch failure recovery. */
+	void ResetFrameTracking(StreamlineFrameTokenPublication::ResetScope a_scope = StreamlineFrameTokenPublication::ResetScope::Lifecycle);
 	void ClearLastDLSSFailureState() { lastDLSSFailureDuplicatedConstants = false; }
 	bool WasLastDLSSFailureDuplicatedConstants() const { return lastDLSSFailureDuplicatedConstants; }
 	bool HasDLSSResourcesPendingTeardown() const;
@@ -507,6 +546,13 @@ public:
 		}
 		return false;
 	}
+	/** @brief Reports whether the complete Streamline DLSS activation contract is live. */
+	[[nodiscard]] bool IsDLSSRuntimeReady() const noexcept;
+	/** @brief Reports whether Streamline still owns the exact current D3D device. */
+	[[nodiscard]] bool IsBoundToD3DDevice(ID3D11Device* a_device) const noexcept
+	{
+		return a_device && boundDeviceIdentity == a_device;
+	}
 	/** @brief Proves exact option identity and ownership for both eyes of one slot. */
 	[[nodiscard]] bool HasCompleteVRDLSSViewportResources(
 		DLSSViewportRole a_viewportRole,
@@ -515,13 +561,52 @@ public:
 		uint32_t a_outputWidth,
 		uint32_t a_outputHeight,
 		ID3D11Resource* a_colorInput) const noexcept;
+	/** @brief Proves one exact stereo allocation against each eye's input format. */
+	[[nodiscard]] bool HasCompleteVRDLSSViewportResources(
+		DLSSViewportRole a_viewportRole,
+		uint32_t a_qualityMode,
+		uint32_t a_dlssPreset,
+		const std::array<uint32_t, 2>& a_outputWidths,
+		const std::array<uint32_t, 2>& a_outputHeights,
+		const std::array<ID3D11Resource*, 2>& a_colorInputs) const noexcept;
 
 	bool Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors);
 	bool UpscaleRegion(uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,
 		ID3D11Resource* mvec, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask,
 		uint32_t renderWidth, uint32_t renderHeight, uint32_t outputWidth, uint32_t outputHeight,
 		float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f);
+	/** @brief Enforces the same-frame Reflex exclusion required before frame generation admission. */
+	bool EnsureReflexDisabledForFrameGeneration();
 	void UpdateReflex();
 
-	DLSSResourceTeardownResult DestroyDLSSResources();
+	DLSSResourceTeardownResult DestroyDLSSResources(uint64_t a_drainEpoch = 0);
+	/** Render-thread-only readiness observation; never frees or reconfigures DLSS. */
+	DLSSResourceTeardownResult PollDLSSRelatchDrain(uint64_t a_epoch);
+	[[nodiscard]] bool IsDLSSRelatchDrainReady(uint64_t a_epoch) const noexcept;
+	void CancelDLSSRelatchDrain() noexcept;
+	void InvalidateDLSSRelatchDrain() noexcept;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** Copies observations of the existing drain fence without polling it. */
+	void CaptureDLSSRelatchDrainTelemetry(VRRenderScaleRetryTelemetry::Event& a_event) const noexcept;
+#endif
+
+	enum class LifecycleState : uint8_t
+	{
+		Uninitialized,
+		Initializing,
+		Initialized,
+		Unavailable,
+		ShuttingDown,
+		ShutdownQuarantined,
+	};
+	std::mutex lifecycleMutex;
+	std::atomic<LifecycleState> lifecycleState{ LifecycleState::Uninitialized };
+	ID3D11Device* boundDeviceIdentity = nullptr;
+	bool adapterSupportsDLSS = false;
+	bool adapterSupportsReflex = false;
+	bool adapterSupportsPCL = false;
+	bool runtimeHasDLSS = false;
+	bool runtimeHasReflex = false;
+	bool runtimeHasPCL = false;
+	std::atomic_bool frameGenerationQuarantinedByReflex{ false };
 };

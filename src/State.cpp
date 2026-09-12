@@ -995,7 +995,10 @@ static std::filesystem::path GetConfigPath(State::ConfigMode a_configMode)
 	}
 }
 
-void State::Load(ConfigMode a_configMode, bool a_allowReload)
+void State::Load(
+	ConfigMode a_configMode,
+	bool a_allowReload,
+	SettingsApplyMode a_applyMode)
 {
 	json settings = json::object();
 	bool errorDetected = false;
@@ -1172,7 +1175,7 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 	try {
 		// Load core settings (Menu, Advanced, General, Replace Original Shaders)
 		logger::info("Loading core settings");
-		LoadFromJson(settings, false);
+		LoadFromJson(settings, false, a_applyMode);
 		// Ensure 'Disable at Boot' section exists in the JSON
 		if (!settings.contains("Disable at Boot") || !settings["Disable at Boot"].is_object()) {
 			// Initialize to an empty object if it doesn't exist
@@ -1278,7 +1281,7 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 	}
 	if (errorDetected && a_allowReload && a_configMode != ConfigMode::DEFAULT) {
 		logger::warn("Loading default settings after the selected config failed");
-		Load(ConfigMode::DEFAULT, false);
+		Load(ConfigMode::DEFAULT, false, a_applyMode);
 	}
 	if (!errorDetected && globals::menu)
 		globals::menu->ResetSettingsDirtyState();
@@ -1358,7 +1361,10 @@ void State::SaveToJson(
 	}
 }
 
-void State::LoadFromJson(nlohmann::json& settings, bool a_loadFeatureSettings)
+void State::LoadFromJson(
+	nlohmann::json& settings,
+	bool a_loadFeatureSettings,
+	SettingsApplyMode a_applyMode)
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
 	if (a_loadFeatureSettings)
@@ -1410,8 +1416,13 @@ void State::LoadFromJson(nlohmann::json& settings, bool a_loadFeatureSettings)
 
 	if (settings.contains("General") && settings["General"].is_object()) {
 		json& general = settings["General"];
-		if (general.contains("Enable Shaders") && general["Enable Shaders"].is_boolean())
-			shaderCache->SetEnabled(general["Enable Shaders"]);
+		if (general.contains("Enable Shaders") && general["Enable Shaders"].is_boolean()) {
+			const bool enableShaders = general["Enable Shaders"];
+			if (a_applyMode == SettingsApplyMode::StartupHydration)
+				shaderCache->RestoreEnabledSetting(enableShaders);
+			else
+				shaderCache->SetEnabled(enableShaders);
+		}
 		if (general.contains("Enable Disk Cache") && general["Enable Disk Cache"].is_boolean())
 			shaderCache->SetDiskCache(general["Enable Disk Cache"]);
 		if (general.contains("Skip Unchanged Shaders") && general["Skip Unchanged Shaders"].is_boolean())

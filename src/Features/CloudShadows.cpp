@@ -7,6 +7,12 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 namespace
 {
+	bool IsCloudShadowSceneReady()
+	{
+		auto* sky = globals::game::sky;
+		return sky && sky->mode.get() == RE::Sky::Mode::kFull && sky->currentClimate;
+	}
+
 	bool DrawEnabledCheckbox(CloudShadows::Settings& a_settings)
 	{
 		bool enabled = a_settings.Enabled != 0;
@@ -32,6 +38,34 @@ void CloudShadows::DrawSettings()
 void CloudShadows::DrawEssentialSettings()
 {
 	DrawEnabledCheckbox(settings);
+}
+
+void CloudShadows::DrawPerformanceSettings(bool)
+{
+	DrawEnabledCheckbox(settings);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(
+			"Disabling skips cloud-shadow cubemap updates and projection. Measure outdoors under a full sky.");
+	}
+	if (!IsCloudShadowSceneReady())
+		ImGui::TextDisabled("Actual cost measurement requires an outdoor scene with a full sky.");
+}
+
+json CloudShadows::CapturePerformanceSettingsState() const
+{
+	return {
+		{ "Enabled", settings.Enabled != 0 }
+	};
+}
+
+bool CloudShadows::IsPerformanceCostMeasurementEnabled() const
+{
+	return settings.Enabled != 0 && IsCloudShadowSceneReady();
+}
+
+bool CloudShadows::IsPerformanceCostMeasurementReady() const
+{
+	return IsCloudShadowSceneReady();
 }
 
 void CloudShadows::LoadSettings(json& o_json)

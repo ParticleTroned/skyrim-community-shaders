@@ -177,13 +177,14 @@ public:
 		float GrassWetnessPhase = 0.0f;
 		float GrassWetRoughness = 0.4f;
 		float GrassWetDarkeningStrength = 0.0f;
-		float GrassWetnessPad = 0.0f;
+		uint PuddleMaskMode = 0;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 	static_assert(offsetof(PerFrame, settings) == 80, "Wetterness::PerFrame settings offset changed.");
 	static_assert(offsetof(PerFrame, PackedPostRainControl) == 240, "Wetterness::PerFrame tail-control offset changed.");
 	static_assert(offsetof(PerFrame, GrassWetnessPhase) == 256, "Wetterness::PerFrame grass controls offset changed.");
 	static_assert(offsetof(PerFrame, GrassWetDarkeningStrength) == 264, "Wetterness::PerFrame grass darkening offset changed.");
+	static_assert(offsetof(PerFrame, PuddleMaskMode) == 268, "Wetterness::PerFrame puddle mask mode offset changed.");
 	static_assert(sizeof(PerFrame) == 272, "Wetterness::PerFrame size changed; update wetness shader/CB contract.");
 	static_assert((sizeof(PerFrame) % 16) == 0, "Wetterness::PerFrame must stay 16-byte sized");
 
@@ -198,7 +199,17 @@ public:
 		float2 RainOverride = float2(0.0f, 0.0f);
 	} debugSettings;
 
+	/** Selects the puddle-footprint generation path used by lighting shaders. */
+	enum class PuddleMaskMode : uint32_t
+	{
+		Simple = 0,
+		Textured = 1,
+		TexturedHighQuality = 2,
+		LegacyProcedural = 3
+	};
+
 	Settings settings;
+	PuddleMaskMode puddleMaskMode = PuddleMaskMode::Textured;
 	bool enableWeatherDrivenDryingModel = true;
 	float puddleDryingHours = 15.0f;
 	float puddleLayout = 3.0f;
@@ -243,6 +254,7 @@ public:
 	float GetEffectiveGrassGlossiness(float dryGlossiness, const PerFrame& frameData) const;
 	float GetEffectiveGrassSpecularStrength(float drySpecularStrength, const PerFrame& frameData) const;
 
+	/** Creates the cached puddle mask, falling back to Simple on failure. */
 	virtual void SetupResources() override;
 	virtual void Prepass() override;
 
@@ -288,6 +300,8 @@ public:
 
 private:
 	void DrawEnabledCheckbox();
+	/** Draws the shared puddle-mask quality selector. */
+	void DrawPuddleMaskSettings();
 	void DrawWeatherAnalysis() const;
 	void ResetRuntimeState() const;
 	void InvalidateSanitizedSettingsCache();
@@ -312,4 +326,5 @@ private:
 	mutable RuntimeState runtimeState{};
 	mutable Settings sanitizedSettingsCache{};
 	mutable bool sanitizedSettingsCacheValid = false;
+	winrt::com_ptr<ID3D11ShaderResourceView> puddleMaskSrv;
 };

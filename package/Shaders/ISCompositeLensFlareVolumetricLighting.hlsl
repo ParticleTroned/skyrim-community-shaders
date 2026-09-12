@@ -2,12 +2,13 @@
 #include "Common/DummyVSTexCoord.hlsl"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/SharedData.hlsli"
+#include "Common/VRStereoEffects.hlsli"
 
 typedef VS_OUTPUT PS_INPUT;
 
 struct PS_OUTPUT
 {
-	float3 Color : SV_Target0;
+	float3 Color: SV_Target0;
 };
 
 #if defined(PSHADER)
@@ -22,7 +23,7 @@ cbuffer PerGeometry : register(b2)
 	float4 VolumetricLightingColor : packoffset(c0);
 };
 
-#if defined(VOLUMETRIC_LIGHTING)
+#	if defined(VOLUMETRIC_LIGHTING)
 static const float kGodrayOpacityMax = 2.0;
 static const float kGodrayTuningEpsilon = 0.0001;
 
@@ -40,7 +41,7 @@ float ApplyGodrayOpacity(float value)
 	float shapedValue = 1.0 - pow(max(1.0 - boundedValue, 0.0), opacity);
 	return shapedValue + max(positiveValue - 1.0, 0.0) * opacity;
 }
-#endif
+#	endif
 
 PS_OUTPUT main(PS_INPUT input)
 {
@@ -50,6 +51,11 @@ PS_OUTPUT main(PS_INPUT input)
 
 #	if defined(VOLUMETRIC_LIGHTING)
 	float2 screenPosition = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
+#		if defined(VR)
+	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(input.TexCoord);
+	screenPosition = VRStereoEffects::ClampDynamicStereoUVToEyeTexel(
+		screenPosition, eyeIndex, VLSourceTex, FrameBuffer::DynamicResolutionParams1.xy);
+#		endif
 	float volumetricLightingPower = ApplyGodrayOpacity(VLSourceTex.Sample(VLSourceSampler, screenPosition).x);
 	color += VolumetricLightingColor.xyz * Color::VolumetricLighting(volumetricLightingPower.xxx).x;
 #	endif

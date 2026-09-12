@@ -2,8 +2,10 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
+#	include "Api/DevBenchMainThreadDispatch.h"
 #	include "BuildProvenance.h"
 #	include "Features/DynamicCubemaps.h"
+#	include "Features/FoliageLighting.h"
 #	include "Features/ScreenshotFeature.h"
 #	include "Features/Upscaling.h"
 #	include "Features/VR.h"
@@ -19,21 +21,40 @@
 
 #	include <algorithm>
 #	include <atomic>
-#	include <chrono>
 #	include <cstdint>
 #	include <functional>
-#	include <future>
 #	include <limits>
-#	include <memory>
 #	include <stdexcept>
 #	include <string>
 
 namespace
 {
 	using json = nlohmann::json;
-	constexpr auto kMainThreadTimeout = std::chrono::milliseconds(5000);
 	std::atomic_bool g_installAttempted{ false };
 	std::atomic_bool g_registered{ false };
+
+	json MotionSharpeningStatus()
+	{
+		const auto& upscaling = globals::features::upscaling;
+		const auto& settings = upscaling.settings;
+		const auto sharpener = upscaling.GetDLSSSharpenerMode();
+		const bool luma = sharpener == Upscaling::DLSSSharpenerMode::LumaUnsharp;
+		return {
+			{ "enabled", settings.motionAdaptiveRCAS },
+			{ "adjustment", settings.motionSharpnessAdjustment },
+			{ "thresholdPixels", settings.motionSharpnessThreshold },
+			{ "strengthCap", settings.motionSharpnessCap },
+			{ "applicable", upscaling.GetRuntimeUpscaleMethod() == Upscaling::UpscaleMethod::kDLSS &&
+								sharpener != Upscaling::DLSSSharpenerMode::Off && settings.sharpnessDLSS > 0.0f },
+			{ "sharpener", sharpener == Upscaling::DLSSSharpenerMode::Off ? "off" : luma ? "luma_unsharp" :
+																						   "rcas" },
+			{ "lastDispatch", sharpener == Upscaling::DLSSSharpenerMode::Off ? "not_applicable" :
+							  luma                                           ? Upscaling::lumaSharpen.GetMotionAdaptiveStatus() :
+																			   Upscaling::rcas.GetMotionAdaptiveStatus() },
+			{ "lastRCASDispatch", Upscaling::rcas.GetMotionAdaptiveStatus() },
+			{ "lastLumaDispatch", Upscaling::lumaSharpen.GetMotionAdaptiveStatus() },
+		};
+	}
 
 	struct CocPreflightSnapshot
 	{
@@ -80,11 +101,11 @@ namespace
 		};
 	}
 
-	json CocPreflightSnapshotJson(const CocPreflightSnapshot& a_snapshot)
+	json CocPreflightSnapshotJson(const CocPreflightSnapshot& a_snapshot, MenuDevBenchPreflightPolicy::Preparation a_preparation)
 	{
 		const auto& state = a_snapshot.state;
 		return {
-			{ "ready", MenuDevBenchPreflightPolicy::IsReady(state) },
+			{ "ready", MenuDevBenchPreflightPolicy::IsReady(state, a_preparation) },
 			{ "vr", state.vr },
 			{ "inGame", state.inGame },
 			{ "developerMode", {
@@ -111,31 +132,32 @@ namespace
 		};
 	}
 
-	std::string CocPreflightBlockCode(const CocPreflightSnapshot& a_snapshot)
+	std::string CocPreflightBlockCode(const CocPreflightSnapshot& a_snapshot, MenuDevBenchPreflightPolicy::Preparation a_preparation)
 	{
 		if (!a_snapshot.state.vr)
 			return "skyrim_vr_required";
 		if (!a_snapshot.state.inGame)
 			return "in_game_state_required";
-		if (!a_snapshot.state.stabilizerActiveForSession)
+		if (a_preparation == MenuDevBenchPreflightPolicy::Preparation::Coc && !a_snapshot.state.stabilizerActiveForSession)
 			return "vr_fps_stabilizer_required";
 		return "preflight_not_ready";
 	}
 
-	json PrepareCocPreflight()
+	json PrepareRuntimePreflight(MenuDevBenchPreflightPolicy::Preparation a_preparation)
 	{
+		const auto action = a_preparation == MenuDevBenchPreflightPolicy::Preparation::Coc ? "prepare_coc" : "prepare_tuning";
 		const auto before = CaptureCocPreflightSnapshot();
-		if (!MenuDevBenchPreflightPolicy::CanApplyRuntimeSettings(before.state)) {
+		if (!MenuDevBenchPreflightPolicy::CanApplyRuntimeSettings(before.state, a_preparation)) {
 			return {
-				{ "action", "prepare_coc" },
+				{ "action", action },
 				{ "applied", false },
 				{ "changed", false },
 				{ "persisted", false },
 				{ "ready", false },
 				{ "promptRequired", true },
-				{ "errorCode", CocPreflightBlockCode(before) },
-				{ "before", CocPreflightSnapshotJson(before) },
-				{ "after", CocPreflightSnapshotJson(before) },
+				{ "errorCode", CocPreflightBlockCode(before, a_preparation) },
+				{ "before", CocPreflightSnapshotJson(before, a_preparation) },
+				{ "after", CocPreflightSnapshotJson(before, a_preparation) },
 			};
 		}
 
@@ -177,20 +199,20 @@ namespace
 		}
 
 		const auto after = CaptureCocPreflightSnapshot();
-		const bool ready = MenuDevBenchPreflightPolicy::IsReady(after.state);
+		const bool ready = MenuDevBenchPreflightPolicy::IsReady(after.state, a_preparation);
 		json result = {
-			{ "action", "prepare_coc" },
+			{ "action", action },
 			{ "applied", true },
 			{ "changed", !changes.empty() },
 			{ "persisted", false },
 			{ "ready", ready },
 			{ "promptRequired", !ready },
 			{ "changes", std::move(changes) },
-			{ "before", CocPreflightSnapshotJson(before) },
-			{ "after", CocPreflightSnapshotJson(after) },
+			{ "before", CocPreflightSnapshotJson(before, a_preparation) },
+			{ "after", CocPreflightSnapshotJson(after, a_preparation) },
 		};
 		if (!ready)
-			result["errorCode"] = CocPreflightBlockCode(after);
+			result["errorCode"] = CocPreflightBlockCode(after, a_preparation);
 		return result;
 	}
 
@@ -288,30 +310,7 @@ namespace
 
 	json RunOnMainThread(std::function<json()> a_run)
 	{
-		auto* tasks = SKSE::GetTaskInterface();
-		if (!tasks)
-			return { { "error", "SKSE task interface unavailable" } };
-
-		auto promise = std::make_shared<std::promise<json>>();
-		auto cancelled = std::make_shared<std::atomic_bool>(false);
-		auto future = promise->get_future();
-		tasks->AddTask([promise, cancelled, run = std::move(a_run)]() mutable {
-			if (cancelled->load(std::memory_order_acquire))
-				return;
-			try {
-				promise->set_value(run());
-			} catch (const std::exception& e) {
-				promise->set_value(json{ { "error", "main-thread task failed" }, { "detail", e.what() } });
-			} catch (...) {
-				promise->set_value(json{ { "error", "main-thread task failed" } });
-			}
-		});
-
-		if (future.wait_for(kMainThreadTimeout) != std::future_status::ready) {
-			cancelled->store(true, std::memory_order_release);
-			return { { "error", "main thread did not run within 5000ms" } };
-		}
-		return future.get();
+		return CSX::Api::RunDevBenchMainThreadTask(SKSE::GetTaskInterface(), std::move(a_run));
 	}
 
 	json BuildStatus()
@@ -330,9 +329,26 @@ namespace
 		const json depthCullingTemporalStatus = {
 			{ "installed", depthCullingTemporal.installed },
 			{ "cullingEnabled", depthCullingTemporal.cullingEnabled },
+			{ "telemetryEnabled", depthCullingTemporal.telemetryEnabled },
 			{ "policy", VRDepthCullingTemporal::GetModeName(depthCullingTemporal.mode) },
 			{ "envelopeMisses", depthCullingTemporal.envelopeMisses },
+			{ "recoveryAttempts", depthCullingTemporal.recoveryAttempts },
+			{ "objectsInspected", depthCullingTemporal.objectsInspected },
+			{ "invalidTransforms", depthCullingTemporal.invalidTransforms },
+			{ "invalidMotionEnvelopes", depthCullingTemporal.invalidMotionEnvelopes },
+			{ "frustumTests", depthCullingTemporal.frustumTests },
+			{ "totalEligible", depthCullingTemporal.totalEligible },
 			{ "totalPromoted", depthCullingTemporal.totalPromoted },
+			{ "totalDurationNanoseconds", depthCullingTemporal.totalDurationNanoseconds },
+			{ "maximumDurationNanoseconds", depthCullingTemporal.maximumDurationNanoseconds },
+			{ "durationHistogramNanoseconds", {
+												  { "upperBounds", [] {
+													   json bounds = VRDepthCullingTelemetryPolicy::DurationUpperBoundsNanoseconds;
+													   bounds.push_back(nullptr);
+													   return bounds;
+												   }() },
+												  { "counts", depthCullingTemporal.durationHistogram },
+											  } },
 			{ "lastObjectCount", depthCullingTemporal.lastObjectCount },
 			{ "lastEligibleCount", depthCullingTemporal.lastEligibleCount },
 			{ "lastPromotedCount", depthCullingTemporal.lastPromotedCount },
@@ -375,6 +391,9 @@ namespace
 			{ "depthCullingInteriorEnabled", vr.settings.EnableDepthBufferCullingInterior },
 			{ "depthCullingPerformanceMode", vr.settings.DepthCullingPerformanceMode },
 			{ "depthCullingLegacyMode", vr.settings.DepthCullingLegacyMode },
+			{ "foliageLightingEnabled", globals::features::foliageLighting.IsEnabled() },
+			{ "motionAdaptiveSharpening", MotionSharpeningStatus() },
+			{ "foliageLightingActive", globals::features::foliageLighting.IsRuntimeEnabled() },
 			{ "truePbrVerboseJsonLogging", globals::features::truePBR.enableVerboseJsonLogging },
 			{ "dynamicCubemaps", {
 									 { "configuredResolution", dynamicCubemaps.settings.CubemapResolution },
@@ -407,11 +426,11 @@ namespace
 	json BuildResult(const json& a_args)
 	{
 		const std::string action = a_args.value("action", std::string("status"));
-		if (action != "status" && action != "open" && action != "close" && action != "screenshot" && action != "set_path" && action != "set_layout_unlocked" && action != "texture_stats" && action != "set_depth_culling_performance_mode" && action != "set_depth_culling_legacy_mode" && action != "set_truepbr_verbose_json_logging" && action != "set_dynamic_cubemap_resolution" && action != "prepare_coc") {
+		if (action != "status" && action != "open" && action != "close" && action != "screenshot" && action != "set_path" && action != "set_layout_unlocked" && action != "texture_stats" && action != "set_depth_culling_performance_mode" && action != "set_depth_culling_legacy_mode" && action != "set_depth_culling_telemetry_enabled" && action != "reset_depth_culling_telemetry" && action != "set_foliage_lighting_enabled" && action != "set_truepbr_verbose_json_logging" && action != "set_dynamic_cubemap_resolution" && action != "prepare_coc" && action != "prepare_tuning" && action != "set_motion_adaptive_sharpening") {
 			return {
 				{ "error", "unknown action" },
 				{ "action", action },
-				{ "supported", json::array({ "status", "open", "close", "screenshot", "set_path", "set_layout_unlocked", "texture_stats", "set_depth_culling_performance_mode", "set_depth_culling_legacy_mode", "set_truepbr_verbose_json_logging", "set_dynamic_cubemap_resolution", "prepare_coc" }) },
+				{ "supported", json::array({ "status", "open", "close", "screenshot", "set_path", "set_layout_unlocked", "texture_stats", "set_depth_culling_performance_mode", "set_depth_culling_legacy_mode", "set_depth_culling_telemetry_enabled", "reset_depth_culling_telemetry", "set_foliage_lighting_enabled", "set_truepbr_verbose_json_logging", "set_dynamic_cubemap_resolution", "prepare_coc", "prepare_tuning", "set_motion_adaptive_sharpening" }) },
 			};
 		}
 		const std::string path = a_args.value("path", std::string());
@@ -422,7 +441,7 @@ namespace
 				{ "path", path },
 			};
 		}
-		if ((action == "set_layout_unlocked" || action == "set_depth_culling_performance_mode" || action == "set_depth_culling_legacy_mode" || action == "set_truepbr_verbose_json_logging") &&
+		if ((action == "set_layout_unlocked" || action == "set_depth_culling_performance_mode" || action == "set_depth_culling_legacy_mode" || action == "set_depth_culling_telemetry_enabled" || action == "set_foliage_lighting_enabled" || action == "set_truepbr_verbose_json_logging") &&
 			(!a_args.contains("enabled") || !a_args.at("enabled").is_boolean())) {
 			return {
 				{ "error", action + " requires boolean enabled" },
@@ -436,6 +455,19 @@ namespace
 				{ "action", action },
 			};
 		}
+		MotionSharpening::Settings motionSharpening{};
+		if (action == "set_motion_adaptive_sharpening") {
+			if (!a_args.contains("enabled") || !a_args["enabled"].is_boolean() ||
+				!a_args.contains("adjustment") || !a_args["adjustment"].is_number() ||
+				!a_args.contains("thresholdPixels") || !a_args["thresholdPixels"].is_number() ||
+				!a_args.contains("strengthCap") || !a_args["strengthCap"].is_number()) {
+				return { { "error", "requires enabled, adjustment, thresholdPixels, and strengthCap" }, { "action", action } };
+			}
+			if (!MotionSharpening::TryCreateSettings(a_args["enabled"].get<bool>(), a_args["adjustment"].get<double>(),
+					a_args["thresholdPixels"].get<double>(), a_args["strengthCap"].get<double>(), motionSharpening)) {
+				return { { "error", "adjustment must be [-1,1], thresholdPixels [0,64], and strengthCap [0,1]; all must be finite" }, { "action", action } };
+			}
+		}
 		const bool enabled = a_args.value("enabled", false);
 		const uint32_t resolution = a_args.value("resolution", 0u);
 		if (action == "set_dynamic_cubemap_resolution" &&
@@ -448,19 +480,54 @@ namespace
 			};
 		}
 
-		return RunOnMainThread([action, path, enabled, resolution]() -> json {
+		return RunOnMainThread([action, path, enabled, resolution, motionSharpening]() -> json {
 			if (action == "prepare_coc")
-				return PrepareCocPreflight();
+				return PrepareRuntimePreflight(MenuDevBenchPreflightPolicy::Preparation::Coc);
+			if (action == "prepare_tuning")
+				return PrepareRuntimePreflight(MenuDevBenchPreflightPolicy::Preparation::Tuning);
+			if (action == "set_depth_culling_telemetry_enabled") {
+				VRDepthCullingTemporal::SetTelemetryEnabled(enabled);
+				return { { "action", action }, { "enabled", enabled }, { "status", BuildStatus() } };
+			}
+			if (action == "reset_depth_culling_telemetry") {
+				if (!VRDepthCullingTemporal::TryResetStatus()) {
+					return {
+						{ "error", "depth-culling telemetry is currently being updated" },
+						{ "errorCode", "depth_culling_telemetry_busy" },
+						{ "retrySafe", true },
+					};
+				}
+				return { { "action", action }, { "reset", true }, { "status", BuildStatus() } };
+			}
 			auto* menu = globals::menu;
 			if (!menu)
 				return { { "error", "CSX menu unavailable" } };
+			if (action == "set_motion_adaptive_sharpening") {
+				auto& settings = globals::features::upscaling.settings;
+				settings.motionAdaptiveRCAS = motionSharpening.enabled;
+				settings.motionSharpnessAdjustment = motionSharpening.adjustment;
+				settings.motionSharpnessThreshold = motionSharpening.thresholdPixels;
+				settings.motionSharpnessCap = motionSharpening.strengthCap;
+				menu->RequestSettingsDirtyCheck();
+				return { { "action", action }, { "persisted", false }, { "motionAdaptiveSharpening", MotionSharpeningStatus() } };
+			}
 			json delegatedRequest = nullptr;
+			json deprecation = nullptr;
 			if (action == "open") {
 				menu->OpenMenu();
 			} else if (action == "close") {
 				menu->CloseMenu();
 			} else if (action == "screenshot") {
-				delegatedRequest = globals::features::screenshotFeature.RequestLegacyCapture("communityshaders.menu");
+				delegatedRequest = globals::features::screenshotFeature.RequestApiCapture("communityshaders.menu");
+				deprecation = {
+					{ "obsolete", true },
+					{ "message", "communityshaders.menu screenshot is obsolete; migrate to communityshaders.screenshot contractMajor 1" },
+					{ "replacement", {
+										 { "tool", "communityshaders.screenshot" },
+										 { "contractMajor", 1 },
+										 { "action", "capture" },
+									 } },
+				};
 			} else if (action == "set_path") {
 				auto& vr = globals::features::vr;
 				vr.HideOverlaysIfPresent();
@@ -478,6 +545,9 @@ namespace
 				globals::features::vr.SetDepthCullingPerformanceMode(enabled);
 			} else if (action == "set_depth_culling_legacy_mode") {
 				globals::features::vr.SetDepthCullingLegacyMode(enabled);
+			} else if (action == "set_foliage_lighting_enabled") {
+				globals::features::foliageLighting.SetEnabled(enabled);
+				menu->RequestSettingsDirtyCheck();
 			} else if (action == "set_truepbr_verbose_json_logging") {
 				globals::features::truePBR.enableVerboseJsonLogging = enabled;
 			} else if (action == "set_dynamic_cubemap_resolution") {
@@ -488,7 +558,15 @@ namespace
 				return { { "action", action }, { "texture", InspectMenuTexture() }, { "status", BuildStatus() } };
 			if (action == "set_dynamic_cubemap_resolution")
 				return { { "action", action }, { "resolution", resolution }, { "persisted", false }, { "status", BuildStatus() } };
-			return { { "action", action }, { "path", path }, { "delegatedRequest", std::move(delegatedRequest) }, { "status", BuildStatus() } };
+			json result = {
+				{ "action", action },
+				{ "path", path },
+				{ "delegatedRequest", std::move(delegatedRequest) },
+				{ "status", BuildStatus() },
+			};
+			if (!deprecation.is_null())
+				result["deprecation"] = std::move(deprecation);
+			return result;
 		});
 	}
 
@@ -534,7 +612,7 @@ namespace MenuDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Inspect and control the CSX VR menu, desktop/headset layout lock, depth-culling A/B policy, TruePBR verbose JSON logging, and dynamic cubemap resolution. set_layout_unlocked enables desktop move, resize, and docking plus headset custom placement and grip dragging. Resolution changes are staged in memory; save settings and restart to apply them. prepare_coc is a one-shot pre-assay gate: it requires in-game Skyrim VR and startup-active VR FPS Stabilizer profile sync, then enables runtime-only developer mode and the fixed FOV plus TAA 0.3/0.7 fixture without saving settings. Every response identifies the exact producing DLL. expectedBuildId makes requests fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","open","close","screenshot","set_path","set_layout_unlocked","texture_stats","set_depth_culling_performance_mode","set_depth_culling_legacy_mode","set_truepbr_verbose_json_logging","set_dynamic_cubemap_resolution","prepare_coc"],"default":"status"},"path":{"type":"string","enum":["auto","overlay","in_scene"]},"enabled":{"type":"boolean","description":"Boolean state required by a setter action."},"resolution":{"type":"integer","enum":[128,256],"description":"Dynamic cubemap resolution staged for the next game restart."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
+			R"({"description":"Inspect and control the CSX VR menu, desktop/headset layout lock, depth-culling A/B policy and recovery telemetry, Foliage Lighting runtime state, TruePBR verbose JSON logging, dynamic cubemap resolution, and optional DLSS/DLAA RCAS and Luma Unsharp motion-adaptive sharpening. set_motion_adaptive_sharpening applies signed strength adjustment above a threshold in output pixels per frame, capped on the 0-1 sharpness scale; it requires all four settings and stages them until settings are saved. The selected fixed sharpener is used without valid current motion; status reports the selected sharpener, last dispatch result and current applicability. FSR sharpening is unchanged. The screenshot action is obsolete and retained temporarily for migration; use communityshaders.screenshot contractMajor 1 instead. set_layout_unlocked enables desktop move, resize, and docking plus headset custom placement and grip dragging. Resolution changes are staged in memory; save settings and restart to apply them. Depth-culling telemetry controls affect measurements only, never culling policy. prepare_coc is a one-shot pre-assay gate: it requires in-game Skyrim VR and startup-active VR FPS Stabilizer profile sync, then enables runtime-only developer mode and the fixed FOV plus TAA 0.3/0.7 fixture without saving settings. prepare_tuning applies the same runtime-only fixture in-game without requiring VR FPS Stabilizer profile sync. Neither preparation action changes cells. Every response identifies the exact producing DLL. expectedBuildId makes requests fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","description":"screenshot is obsolete; use communityshaders.screenshot contractMajor 1 action capture","enum":["status","open","close","screenshot","set_path","set_layout_unlocked","texture_stats","set_depth_culling_performance_mode","set_depth_culling_legacy_mode","set_depth_culling_telemetry_enabled","reset_depth_culling_telemetry","set_foliage_lighting_enabled","set_truepbr_verbose_json_logging","set_dynamic_cubemap_resolution","prepare_coc","prepare_tuning","set_motion_adaptive_sharpening"],"default":"status"},"path":{"type":"string","enum":["auto","overlay","in_scene"]},"enabled":{"type":"boolean","description":"Boolean state required by a setter action."},"adjustment":{"type":"number","minimum":-1,"maximum":1,"description":"Signed RCAS or Luma Unsharp sharpness adjustment in motion."},"thresholdPixels":{"type":"number","minimum":0,"maximum":64,"description":"Motion threshold in output pixels per frame."},"strengthCap":{"type":"number","minimum":0,"maximum":1,"description":"Maximum adjusted strength on the DLSS sharpness slider scale."},"resolution":{"type":"integer","enum":[128,256],"description":"Dynamic cubemap resolution staged for the next game restart."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
 		devBench->RegisterTool("communityshaders.menu", descriptor, &ToolHandler, nullptr);
 		g_registered.store(true, std::memory_order_release);
 		logger::info("MenuDevBenchBridge: registered communityshaders.menu with devbench build {}", devBench->GetBuildNumber());

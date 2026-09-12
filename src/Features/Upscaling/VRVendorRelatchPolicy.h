@@ -159,15 +159,15 @@ namespace VRVendorRelatchPolicy
 	[[nodiscard]] constexpr bool CanReleaseGameEntryVendorGate(
 		const GameEntryConvergence& a_state) noexcept
 	{
+		// Queued relatch/profile work consumes this release; treating it as a
+		// prerequisite would leave both the work and its owning gate blocked.
 		return a_state.hasGateOwner &&
 		       !a_state.mainMenuActive &&
 		       !a_state.loadingPresentationActive &&
 		       !a_state.raceSexPresentationActive &&
 		       !a_state.saveLoadProtectionActive &&
 		       a_state.completedWorldFrame &&
-		       !a_state.recoveryPending &&
-		       !a_state.relatchPending &&
-		       !a_state.profileTransitionPending;
+		       !a_state.recoveryPending;
 	}
 
 	enum class MissedLoadingMenuCloseAction : std::uint8_t
@@ -599,6 +599,40 @@ namespace VRVendorRelatchPolicy
 		       a_requestID == a_preparedRequestID;
 	}
 
+	[[nodiscard]] constexpr bool HasDirectMenuRequestAuthority(
+		bool a_directMenuEdit,
+		std::uint64_t a_requestID) noexcept
+	{
+		// Origin alone is insufficient because reload and measurement share
+		// CSMenu. Only the immutable committed-edit bit grants direct privileges.
+		return a_directMenuEdit && a_requestID != 0;
+	}
+
+	[[nodiscard]] constexpr bool CanUseDirectMenuRequestPacing(
+		bool a_directMenuEdit,
+		std::uint64_t a_requestID) noexcept
+	{
+		return HasDirectMenuRequestAuthority(a_directMenuEdit, a_requestID);
+	}
+
+	struct MenuEditDispatch
+	{
+		bool publishRequest = false;
+		bool directMenuEdit = false;
+	};
+
+	[[nodiscard]] constexpr MenuEditDispatch SelectMenuEditDispatch(
+		bool a_valueChanged,
+		bool a_editCommitted) noexcept
+	{
+		// Continuous controls remain on the ordinary latest-wins coalescing path
+		// until ImGui reports the final committed value.
+		return {
+			.publishRequest = a_valueChanged || a_editCommitted,
+			.directMenuEdit = a_editCommitted,
+		};
+	}
+
 	struct DispatchAdmission
 	{
 		bool isVR = false;
@@ -613,6 +647,30 @@ namespace VRVendorRelatchPolicy
 		return a_state.vendorEvaluationSelected &&
 		       a_state.resourcesReady &&
 		       (!a_state.isVR || !a_state.relatchInProgress);
+	}
+
+	struct MainPassProviderQuiesceAdmission
+	{
+		bool isVR = false;
+		bool relatchPending = false;
+		bool relatchPlanValid = false;
+		bool relatchPlanOwnsTargetEpoch = false;
+		bool vendorEvaluationSelected = false;
+		bool previousProviderMatches = false;
+		bool destroysProviderResources = false;
+	};
+
+	// A replacement cannot prove its predecessor idle while the native main pass
+	// keeps submitting work to the provider that its admitted plan will destroy.
+	[[nodiscard]] constexpr bool ShouldQuiesceMainPassProvider(
+		const MainPassProviderQuiesceAdmission& a_state) noexcept
+	{
+		return a_state.isVR && a_state.relatchPending &&
+		       a_state.relatchPlanValid &&
+		       a_state.relatchPlanOwnsTargetEpoch &&
+		       a_state.vendorEvaluationSelected &&
+		       a_state.previousProviderMatches &&
+		       a_state.destroysProviderResources;
 	}
 
 	struct NativeRestorePresentationAdmission
@@ -972,6 +1030,39 @@ namespace VRVendorRelatchPolicy
 		           a_state.delayFrames;
 	}
 
+	struct InitialRelatchPacingAdmission
+	{
+		bool newPhysicalTuple = false;
+		bool directMenuRequest = false;
+		bool immutableSettingsRequest = false;
+		bool protectedRecovery = false;
+		std::uint64_t requestID = 0;
+		std::uint32_t requestQueuedFrame = 0;
+		std::uint32_t currentFrame = 0;
+		std::uint32_t coalescingFrames = 0;
+		std::uint32_t ordinaryDelayFrames = 0;
+		std::uint32_t minimumDelayFrames = 0;
+	};
+
+	[[nodiscard]] constexpr std::uint32_t SelectInitialRelatchDelayFrames(
+		const InitialRelatchPacingAdmission& a_state) noexcept
+	{
+		const bool coalescingCompleted =
+			a_state.immutableSettingsRequest && a_state.requestID != 0 &&
+			a_state.requestQueuedFrame != 0 &&
+			a_state.currentFrame > a_state.requestQueuedFrame &&
+			a_state.currentFrame - a_state.requestQueuedFrame >=
+				a_state.coalescingFrames;
+		const bool useSingleFrameBoundary =
+			a_state.newPhysicalTuple && !a_state.protectedRecovery &&
+			(a_state.directMenuRequest || coalescingCompleted);
+		const std::uint32_t selectedDelay =
+			useSingleFrameBoundary ? 1u : a_state.ordinaryDelayFrames;
+		return selectedDelay < a_state.minimumDelayFrames ?
+		           a_state.minimumDelayFrames :
+		           selectedDelay;
+	}
+
 	struct NativeRestoreFenceReadyResumeAdmission
 	{
 		bool relatchPending = false;
@@ -1191,22 +1282,414 @@ namespace VRVendorRelatchPolicy
 	enum class DeferredDispatchAction : std::uint8_t
 	{
 		EvaluateExisting,
-		PresentationStretch
+		ReuseCompletedOutput,
+		PresentationStretch,
+		FailClosed
 	};
 
 	struct DeferredDispatchAdmission
 	{
 		bool mutationDeferred = false;
+		bool physicalMutationStarted = false;
+		bool hardFailure = false;
 		bool exactProviderReady = false;
+		bool completedOutputReady = false;
 	};
 
 	[[nodiscard]] constexpr DeferredDispatchAction SelectDeferredDispatchAction(
 		const DeferredDispatchAdmission& a_state) noexcept
 	{
-		if (!a_state.mutationDeferred || a_state.exactProviderReady)
+		if (a_state.hardFailure || a_state.physicalMutationStarted)
+			return DeferredDispatchAction::FailClosed;
+		if (a_state.exactProviderReady)
+			return DeferredDispatchAction::EvaluateExisting;
+		if (a_state.completedOutputReady)
+			return DeferredDispatchAction::ReuseCompletedOutput;
+		if (!a_state.mutationDeferred)
 			return DeferredDispatchAction::EvaluateExisting;
 
 		return DeferredDispatchAction::PresentationStretch;
+	}
+
+	struct SubmitStagePromotionAdmission
+	{
+		bool coherentStereoCycle = false;
+		bool providerPreparationReady = false;
+		bool settleRequirementSatisfied = false;
+		std::uint32_t consecutiveStableCycles = 0;
+		std::uint32_t requiredStableCycles = 0;
+	};
+
+	[[nodiscard]] constexpr bool CanPublishSubmitStagePromotionCandidate(
+		const SubmitStagePromotionAdmission& a_state) noexcept
+	{
+		return a_state.coherentStereoCycle &&
+		       a_state.providerPreparationReady &&
+		       a_state.settleRequirementSatisfied &&
+		       a_state.requiredStableCycles != 0 &&
+		       a_state.consecutiveStableCycles >=
+		           a_state.requiredStableCycles;
+	}
+
+	struct ProofDrivenPromotionAdmission
+	{
+		bool immutableSettingsTransition = false;
+		bool exactAttemptMetrics = false;
+		std::uint32_t retries = 0;
+		std::uint32_t readinessDeferrals = 0;
+		std::uint32_t failures = 0;
+		bool recoveryOwned = false;
+		bool providerNeutralRecovery = false;
+		bool emergencyRecovery = false;
+		bool presentationDeadlineFallback = false;
+	};
+
+	[[nodiscard]] constexpr bool CanUseProofDrivenPromotion(
+		const ProofDrivenPromotionAdmission& a_state) noexcept
+	{
+		return a_state.immutableSettingsTransition &&
+		       a_state.exactAttemptMetrics &&
+		       a_state.retries != std::numeric_limits<std::uint32_t>::max() &&
+		       a_state.retries == a_state.readinessDeferrals &&
+		       a_state.failures == 0 && !a_state.recoveryOwned &&
+		       !a_state.providerNeutralRecovery &&
+		       !a_state.emergencyRecovery &&
+		       !a_state.presentationDeadlineFallback;
+	}
+
+	inline constexpr std::uint32_t kReadinessPollRetryFrames = 1u;
+
+	struct ReadinessRetryAdmission
+	{
+		ProofDrivenPromotionAdmission promotion{};
+		bool pendingBeforeRelease = false;
+		bool physicalMutationStarted = true;
+		bool providerQuarantined = true;
+	};
+
+	/** Only proven readiness waits may retain proof-driven promotion after retry. */
+	[[nodiscard]] constexpr bool CanRetryReadinessWithoutSettleGuard(
+		const ReadinessRetryAdmission& a_state) noexcept
+	{
+		return CanUseProofDrivenPromotion(a_state.promotion) &&
+		       a_state.pendingBeforeRelease &&
+		       !a_state.physicalMutationStarted &&
+		       !a_state.providerQuarantined;
+	}
+
+	[[nodiscard]] constexpr bool IsSameStereoDispatchContract(
+		std::uint32_t a_admittedGeneration,
+		std::uint32_t a_currentGeneration,
+		std::uint32_t a_admittedMethod,
+		std::uint32_t a_currentMethod) noexcept
+	{
+		return a_admittedGeneration == a_currentGeneration &&
+		       a_admittedMethod == a_currentMethod;
+	}
+
+	[[nodiscard]] constexpr bool DoesPendingVendorResetInvalidateProvider(
+		bool a_resetPending,
+		std::uint32_t a_resetGeneration,
+		std::uint32_t a_providerGeneration) noexcept
+	{
+		if (!a_resetPending)
+			return false;
+
+		return a_resetGeneration == 0 || a_providerGeneration == 0 ||
+		       a_resetGeneration == a_providerGeneration;
+	}
+
+	struct DLSSProviderReadiness
+	{
+		bool resetInvalidatesProvider = false;
+		bool generationValid = false;
+		bool generationMatches = false;
+		bool runtimeReady = false;
+		bool completeViewportResources = false;
+	};
+
+	[[nodiscard]] constexpr bool IsDLSSLifecycleReady(
+		const DLSSProviderReadiness& a_state) noexcept
+	{
+		// Viewport resources are created by the first evaluation. Requiring them
+		// here would make activation depend on an evaluation it still blocks.
+		return !a_state.resetInvalidatesProvider &&
+		       a_state.generationValid && a_state.generationMatches &&
+		       a_state.runtimeReady;
+	}
+
+	[[nodiscard]] constexpr bool IsExactExistingDLSSDispatchReady(
+		const DLSSProviderReadiness& a_state) noexcept
+	{
+		return IsDLSSLifecycleReady(a_state) &&
+		       a_state.completeViewportResources;
+	}
+
+	struct DLSSSlotRecycleAdmission
+	{
+		bool globalTeardownPending = false;
+		bool roleRecyclePending = false;
+		std::uint32_t victimSlot = 0;
+		std::uint32_t requestedSlot = 0;
+		std::uint32_t slotCount = 0;
+	};
+
+	[[nodiscard]] constexpr bool CanUseDLSSSlotDuringRecycle(
+		const DLSSSlotRecycleAdmission& a_state) noexcept
+	{
+		if (a_state.globalTeardownPending || a_state.slotCount == 0 ||
+			a_state.requestedSlot >= a_state.slotCount) {
+			return false;
+		}
+		if (!a_state.roleRecyclePending)
+			return true;
+
+		// An invalid victim on a live fence is incomplete ownership evidence.
+		return a_state.victimSlot < a_state.slotCount &&
+		       a_state.victimSlot != a_state.requestedSlot;
+	}
+
+	struct SynchronousVendorLifecycleRebindAdmission
+	{
+		bool completedSynchronously = false;
+		bool targetVendorActive = false;
+		bool sourceOwned = false;
+		bool targetEpochOwned = false;
+		bool previousLifecycleOwned = false;
+		bool lifecycleReady = false;
+		bool runtimeReady = false;
+		bool methodMatches = false;
+		bool backendMatches = false;
+		bool resourceContractMatches = false;
+		bool generationMatches = false;
+	};
+
+	// Reusing physical resources may advance the logical contract epoch only
+	// when the previous stable contract still owns that exact ready provider.
+	[[nodiscard]] constexpr bool CanRebindSynchronousVendorLifecycle(
+		const SynchronousVendorLifecycleRebindAdmission& a_state) noexcept
+	{
+		return a_state.completedSynchronously &&
+		       a_state.targetVendorActive &&
+		       a_state.sourceOwned &&
+		       a_state.targetEpochOwned &&
+		       a_state.previousLifecycleOwned &&
+		       a_state.lifecycleReady &&
+		       a_state.runtimeReady &&
+		       a_state.methodMatches &&
+		       a_state.backendMatches &&
+		       a_state.resourceContractMatches &&
+		       a_state.generationMatches;
+	}
+
+	struct NativeRestoreSuccessorAdmission
+	{
+		bool recoveryOrigin = false;
+		std::uint64_t incomingEpoch = 0;
+		std::uint64_t presentationGuardEpoch = 0;
+		NativeRestoreProgress progress{};
+	};
+
+	// Ordinary successors cannot replace an incomplete native restore owner. The
+	// recovery path may transfer that ownership explicitly under its stronger locks.
+	[[nodiscard]] constexpr bool ShouldDeferNativeRestoreSuccessor(
+		const NativeRestoreSuccessorAdmission& a_state) noexcept
+	{
+		if (a_state.recoveryOrigin)
+			return false;
+
+		const bool foreignPresentationGuard =
+			a_state.presentationGuardEpoch != 0 &&
+			(a_state.incomingEpoch == 0 ||
+				a_state.presentationGuardEpoch != a_state.incomingEpoch);
+		const bool foreignRestoreTransaction =
+			HasNativeRestoreTransaction(a_state.progress) &&
+			(a_state.incomingEpoch == 0 ||
+				a_state.progress.ownerEpoch != a_state.incomingEpoch);
+		return foreignPresentationGuard || foreignRestoreTransaction;
+	}
+
+	struct ProviderRetirementSuccessorAdmission
+	{
+		bool recoveryOrigin = false;
+		bool incomingUsesProvider = false;
+		bool stableProfileValid = false;
+		bool stableUsesProvider = false;
+		bool resetPending = false;
+		bool lifecycleRetiring = false;
+	};
+
+	// A provider cannot be re-entered while its last non-owning stable contract is
+	// still retiring it. Let the inactive contract keep presenting until teardown.
+	[[nodiscard]] constexpr bool ShouldDeferProviderRetirementSuccessor(
+		const ProviderRetirementSuccessorAdmission& a_state) noexcept
+	{
+		return !a_state.recoveryOrigin &&
+		       a_state.incomingUsesProvider &&
+		       a_state.stableProfileValid &&
+		       !a_state.stableUsesProvider &&
+		       (a_state.resetPending || a_state.lifecycleRetiring);
+	}
+
+	struct AppliedContractGenerationSelection
+	{
+		bool bootContractActive = false;
+		bool vendorEvaluationSelected = false;
+		bool relatchPlanOwnsTransition = false;
+		std::uint32_t bootGeneration = 0;
+		std::uint32_t sourceGeneration = 0;
+		std::uint32_t relatchGeneration = 0;
+	};
+
+	// Render Scale-off vendor evaluation owns a real provider contract even though
+	// the physical boot latch is inactive. Preserve only an exact relatch owner.
+	[[nodiscard]] constexpr std::uint32_t SelectAppliedContractGeneration(
+		const AppliedContractGenerationSelection& a_state) noexcept
+	{
+		if (a_state.bootContractActive)
+			return a_state.bootGeneration;
+		if (!a_state.vendorEvaluationSelected)
+			return a_state.bootGeneration;
+		if (a_state.relatchPlanOwnsTransition && a_state.relatchGeneration != 0)
+			return a_state.relatchGeneration;
+		return a_state.sourceGeneration;
+	}
+
+	struct VendorEvaluationRelatchSelection
+	{
+		bool isVR = false;
+		bool methodChanged = false;
+		bool previousMethodUsesVendor = false;
+		bool targetMethodUsesVendor = false;
+		bool targetMethodIsDLSS = false;
+		bool targetMethodIsFSR = false;
+		bool targetRenderScaleActive = false;
+		bool fsrRuntimeSelectionChanged = false;
+	};
+
+	// First-time fixed-resolution DLSS can retain native engine targets while its
+	// provider is created. Existing vendors and every FSR path require relatch.
+	[[nodiscard]] constexpr bool NeedsVendorEvaluationRelatch(
+		const VendorEvaluationRelatchSelection& a_state) noexcept
+	{
+		if (!a_state.isVR)
+			return false;
+
+		const bool firstFixedDLSSActivationKeepsNativeTargets =
+			a_state.methodChanged &&
+			!a_state.previousMethodUsesVendor &&
+			a_state.targetMethodUsesVendor &&
+			a_state.targetMethodIsDLSS &&
+			!a_state.targetRenderScaleActive;
+		const bool vendorMethodBoundary =
+			a_state.methodChanged &&
+			(a_state.previousMethodUsesVendor || a_state.targetMethodUsesVendor) &&
+			!firstFixedDLSSActivationKeepsNativeTargets;
+		const bool fsrRuntimeBoundary =
+			a_state.targetMethodIsFSR &&
+			a_state.fsrRuntimeSelectionChanged;
+		return vendorMethodBoundary || fsrRuntimeBoundary;
+	}
+
+	struct PhysicalRelatchAdmission
+	{
+		bool renderScaleActive = false;
+		bool renderScaleEligible = false;
+		bool restartRequired = false;
+		bool postLoadRecovery = false;
+		bool nativeRestoreRecovery = false;
+		bool providerNeutralRecovery = false;
+		bool vendorEvaluationSelected = false;
+	};
+
+	// Fixed-resolution vendor evaluation owns a physical provider contract even
+	// though the reduced render-target latch is inactive.
+	[[nodiscard]] constexpr bool AllowsPhysicalRelatch(
+		const PhysicalRelatchAdmission& a_state) noexcept
+	{
+		return a_state.renderScaleActive ||
+		       a_state.renderScaleEligible ||
+		       a_state.restartRequired ||
+		       a_state.postLoadRecovery ||
+		       a_state.nativeRestoreRecovery ||
+		       a_state.providerNeutralRecovery ||
+		       a_state.vendorEvaluationSelected;
+	}
+
+	struct VendorEvaluationGenerationSelection
+	{
+		bool renderScaleActive = false;
+		bool publishedProviderMatches = false;
+		std::uint32_t renderScaleGeneration = 0;
+		std::uint32_t publishedProviderGeneration = 0;
+	};
+
+	// The encode intermediates must carry the same generation as the provider
+	// they feed, including the native-sized Render Scale-off path.
+	[[nodiscard]] constexpr std::uint32_t SelectVendorEvaluationGeneration(
+		const VendorEvaluationGenerationSelection& a_state) noexcept
+	{
+		if (a_state.renderScaleActive)
+			return a_state.renderScaleGeneration;
+		if (a_state.publishedProviderMatches)
+			return a_state.publishedProviderGeneration;
+		return 0;
+	}
+
+	struct RelatchResourceTrackingSyncAdmission
+	{
+		bool syncPending = false;
+		bool physicalRelatchPending = false;
+		bool physicalRelatchInProgress = false;
+		bool appliedProfileValid = false;
+		bool appliedOwnsCurrentTarget = false;
+		bool appliedStatePublishable = false;
+		bool frameGenerationChanged = false;
+		bool foveatedChanged = false;
+		bool peripheryTAAChanged = false;
+	};
+
+	// The relatch owns method, quality, Render Scale, and FSR runtime selection.
+	// Only resource changes outside that transaction require a second teardown.
+	[[nodiscard]] constexpr bool CanSyncRelatchResourceTracking(
+		const RelatchResourceTrackingSyncAdmission& a_state) noexcept
+	{
+		return a_state.syncPending &&
+		       !a_state.physicalRelatchPending &&
+		       !a_state.physicalRelatchInProgress &&
+		       a_state.appliedProfileValid &&
+		       a_state.appliedOwnsCurrentTarget &&
+		       a_state.appliedStatePublishable &&
+		       !a_state.frameGenerationChanged &&
+		       !a_state.foveatedChanged &&
+		       !a_state.peripheryTAAChanged;
+	}
+
+	struct VendorPresentationContractAdmission
+	{
+		bool appliedProfileValid = false;
+		bool vendorMethodSelected = false;
+		bool appliedProfileActive = false;
+		bool bootContractActive = false;
+		bool activeBootMatchesApplied = false;
+		bool nativeDimensionsMatch = false;
+	};
+
+	// Both reduced-resolution and native-sized vendor providers require stereo
+	// presentation proof. The inactive boot latch is valid only for the latter.
+	[[nodiscard]] constexpr bool CanStabilizeVendorPresentationContract(
+		const VendorPresentationContractAdmission& a_state) noexcept
+	{
+		if (!a_state.appliedProfileValid || !a_state.vendorMethodSelected)
+			return false;
+
+		if (a_state.appliedProfileActive) {
+			return a_state.bootContractActive &&
+			       a_state.activeBootMatchesApplied;
+		}
+
+		return !a_state.bootContractActive &&
+		       a_state.nativeDimensionsMatch;
 	}
 
 	enum class PostLoadRecoverySettleAction : std::uint8_t
@@ -1902,9 +2385,9 @@ namespace VRVendorRelatchPolicy
 	{
 		return a_immutableRequestPublished &&
 		       (a_action ==
-				   StartupNativeFallbackControlAction::ResolveDisabled ||
-			   a_action ==
-				   StartupNativeFallbackControlAction::ResolveRetry);
+					   StartupNativeFallbackControlAction::ResolveDisabled ||
+				   a_action ==
+					   StartupNativeFallbackControlAction::ResolveRetry);
 	}
 
 	struct PostLoadRecoveryTransitionBinding
@@ -2123,10 +2606,44 @@ namespace VRVendorRelatchPolicy
 		return a_fsrEvaluation;
 	}
 
+	struct PresentationStabilizationAdmission
+	{
+		bool renderScaleActive = false;
+		bool vendorMethod = false;
+		bool nativeTargetConvergenceDeferred = false;
+		bool nativeGuardOwned = false;
+	};
+
+	struct PresentationStabilizationPlan
+	{
+		bool vendorSubmitStage = false;
+		bool nativePresentation = false;
+
+		[[nodiscard]] constexpr bool RequiresProof() const noexcept
+		{
+			return vendorSubmitStage || nativePresentation;
+		}
+	};
+
+	// Vendor evaluation does not imply vendor presentation. Fixed-resolution
+	// DLSS/FSR evaluates in the main pass and must prove the native submit path.
+	[[nodiscard]] constexpr PresentationStabilizationPlan
+	SelectPresentationStabilization(
+		const PresentationStabilizationAdmission& a_state) noexcept
+	{
+		return {
+			.vendorSubmitStage =
+				a_state.renderScaleActive && a_state.vendorMethod,
+			.nativePresentation =
+				!a_state.renderScaleActive &&
+				(a_state.vendorMethod ||
+					a_state.nativeTargetConvergenceDeferred ||
+					a_state.nativeGuardOwned),
+		};
+	}
+
 	struct CompatibleFSRRelatchReuseAdmission
 	{
-		bool directMenuRelatch = false;
-		bool recoveryRelatch = false;
 		bool targetIsFSR = false;
 		bool previousWasFSR = false;
 		bool resetPending = false;
@@ -2137,14 +2654,12 @@ namespace VRVendorRelatchPolicy
 		bool resourcesCompatible = false;
 	};
 
-	// A presentation-only recovery relatch must not turn a compatible, live FSR
-	// context into teardown/recreation work. Explicit reset, incompatibility,
-	// pressure, or device-loss evidence still owns replacement.
+	// Request origin does not change resource ownership. Preserve compatible live
+	// FSR contexts unless concrete reset, pressure, or failure evidence owns them.
 	[[nodiscard]] constexpr bool CanReuseCompatibleFSRResources(
 		const CompatibleFSRRelatchReuseAdmission& a_state) noexcept
 	{
-		return (a_state.directMenuRelatch || a_state.recoveryRelatch) &&
-		       a_state.targetIsFSR &&
+		return a_state.targetIsFSR &&
 		       a_state.previousWasFSR &&
 		       !a_state.resetPending &&
 		       a_state.memoryPressureNormal &&
@@ -2152,6 +2667,40 @@ namespace VRVendorRelatchPolicy
 		       !a_state.preservingActiveContract &&
 		       !a_state.deviceLost &&
 		       a_state.resourcesCompatible;
+	}
+
+	struct InactivePhysicalTargetReuseAdmission
+	{
+		bool targetInactive = false;
+		bool previousProfileValid = false;
+		bool previousProfileInactive = false;
+		bool previousProfileFullResolution = false;
+		bool dimensionsUnchanged = false;
+		bool publishableLayout = false;
+		bool stateScreenDimensionsMatch = false;
+		bool resourcePublicationMatches = false;
+		bool retirementIdle = false;
+		bool postLoadRecoveryInactive = false;
+		bool deviceOperational = false;
+	};
+
+	// A fixed-resolution provider change owns vendor resources, not Skyrim's
+	// physical targets. Deferred optional targets may converge after publication;
+	// the required full-resolution scene layout must remain exact.
+	[[nodiscard]] constexpr bool CanReusePublishableInactivePhysicalTargets(
+		const InactivePhysicalTargetReuseAdmission& a_state) noexcept
+	{
+		return a_state.targetInactive &&
+		       a_state.previousProfileValid &&
+		       a_state.previousProfileInactive &&
+		       a_state.previousProfileFullResolution &&
+		       a_state.dimensionsUnchanged &&
+		       a_state.publishableLayout &&
+		       a_state.stateScreenDimensionsMatch &&
+		       a_state.resourcePublicationMatches &&
+		       a_state.retirementIdle &&
+		       a_state.postLoadRecoveryInactive &&
+		       a_state.deviceOperational;
 	}
 
 	struct PreparedDLSSActivationReuseAdmission
@@ -2185,6 +2734,44 @@ namespace VRVendorRelatchPolicy
 		       !a_state.preservingActiveContract &&
 		       !a_state.deviceLost &&
 		       a_state.exactFullEyeProviderReady;
+	}
+
+	struct InactiveDLSSActivationRetentionAdmission
+	{
+		bool immutableSettingsRequest = false;
+		bool targetActive = false;
+		bool targetIsDLSS = false;
+		bool currentInactiveDLSS = false;
+		bool resetPending = false;
+		bool memoryPressureNormal = false;
+		bool memoryReliefActive = false;
+		bool postLoadResetPending = false;
+		bool recoveryOwned = false;
+		bool preservingActiveContract = false;
+		bool deviceLost = false;
+		bool deviceMatches = false;
+		bool retainedAllocationPreviouslyAdmitted = false;
+		bool exactFullEyeAllocationReady = false;
+		bool exactFoveatedCenterAllocationReady = false;
+		bool targetSlotsAvailableWithoutRecycle = false;
+	};
+
+	// Native DLSS allocations may remain while a target uses unused bounded slots.
+	// An exact prior admission survives requeues; this proves neither presentation.
+	[[nodiscard]] constexpr bool CanRetainInactiveDLSSForActivation(
+		const InactiveDLSSActivationRetentionAdmission& a_state) noexcept
+	{
+		return a_state.immutableSettingsRequest && a_state.targetActive &&
+		       a_state.targetIsDLSS && a_state.currentInactiveDLSS &&
+		       !a_state.resetPending && a_state.memoryPressureNormal &&
+		       (!a_state.memoryReliefActive ||
+				   a_state.retainedAllocationPreviouslyAdmitted) &&
+		       !a_state.postLoadResetPending &&
+		       !a_state.recoveryOwned && !a_state.preservingActiveContract &&
+		       !a_state.deviceLost && a_state.deviceMatches &&
+		       (a_state.exactFullEyeAllocationReady ||
+				   a_state.exactFoveatedCenterAllocationReady) &&
+		       a_state.targetSlotsAvailableWithoutRecycle;
 	}
 
 	struct RuntimeFSRFallbackReuseAdmission

@@ -2,8 +2,8 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
+#	include "Api/DevBenchMainThreadDispatch.h"
 #	include "Api/ProfilerService.h"
-#	include "Api/RuntimeThreadAffinity.h"
 #	include "Api/ServiceFoundation.h"
 #	include "BuildProvenance.h"
 
@@ -11,11 +11,9 @@
 #	include <nlohmann/json.hpp>
 
 #	include <atomic>
-#	include <chrono>
+#	include <exception>
 #	include <functional>
-#	include <future>
 #	include <limits>
-#	include <memory>
 #	include <mutex>
 #	include <set>
 #	include <stdexcept>
@@ -31,7 +29,6 @@ namespace
 	using CSX::ProfilerAPI::Status;
 	using CSX::ProfilerAPI::TimerDescriptor001;
 	using CSX::ProfilerAPI::TimingDomain;
-	constexpr auto kMainThreadTimeout = std::chrono::milliseconds(5000);
 	std::atomic_bool g_registered{ false };
 	std::mutex g_terminalEventMutex;
 	std::set<std::uint64_t> g_reportedTerminalCaptures;
@@ -78,29 +75,7 @@ namespace
 
 	json RunOnMainThread(std::function<json()> a_run)
 	{
-		auto* tasks = SKSE::GetTaskInterface();
-		if (!tasks)
-			return { { "_dispatchError", "SKSE task interface unavailable" } };
-		auto promise = std::make_shared<std::promise<json>>();
-		auto cancelled = std::make_shared<std::atomic_bool>(false);
-		auto future = promise->get_future();
-		tasks->AddTask([promise, cancelled, run = std::move(a_run)]() mutable {
-			CSX::Api::EnterRuntimeMainThreadTask();
-			if (cancelled->load(std::memory_order_acquire))
-				return;
-			try {
-				promise->set_value(run());
-			} catch (const std::exception& e) {
-				promise->set_value(json{ { "_dispatchError", e.what() } });
-			} catch (...) {
-				promise->set_value(json{ { "_dispatchError", "unknown main-thread failure" } });
-			}
-		});
-		if (future.wait_for(kMainThreadTimeout) != std::future_status::ready) {
-			cancelled->store(true, std::memory_order_release);
-			return { { "_dispatchError", "main thread did not run within 5000ms" } };
-		}
-		return future.get();
+		return CSX::Api::RunDevBenchMainThreadTask(SKSE::GetTaskInterface(), std::move(a_run), CSX::Api::DevBenchDispatchErrorFormat::profiler);
 	}
 
 	json ProgressJson(const CaptureProgress001& a_progress)

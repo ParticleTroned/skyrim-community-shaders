@@ -368,6 +368,7 @@ void HomePageRenderer::RenderCacheMismatchSection()
 	const bool featureSetChanged = shaderCache->HasFeatureSetChanges();
 	const bool revertPending = shaderCache->HasFeatureSetRevertPending();
 	const bool featureSetCacheBackedUp = shaderCache->HasFeatureSetCacheBackup();
+	const bool featureSetCacheSelectivelySeeded = shaderCache->HasSelectivelySeededFeatureSetCache();
 	const bool previousCacheAvailable = shaderCache->HasPreviousDiskCache();
 	const bool cacheHeld = shaderCache->IsDiskCacheHeld() && !featureSetChanged && !revertPending;
 	const bool featureChangeHeld = shaderCache->IsDiskCacheHeld() && featureSetChanged && !featureSetCacheBackedUp;
@@ -396,10 +397,15 @@ void HomePageRenderer::RenderCacheMismatchSection()
 		summaryText = "Your feature setup changed, but CSX could not keep a usable previous cache for restore. CSX is building shaders for this session and will rebuild the cache for the current setup when compilation finishes.";
 		actionText = "Restore is unavailable because no usable previous cache was kept for this change. Let compilation finish to rebuild the cache for the current setup.";
 	} else if (featureSetChanged && featureSetCacheBackedUp) {
-		if (previousCacheAvailable) {
-			summaryText = "Your feature setup changed. CSX saved the previous cache and is building a new cache for the current setup. You can restore the previous cache after compilation finishes.";
+		if (!featureSetCacheSelectivelySeeded) {
+			summaryText = "Your feature setup changed. CSX saved the complete previous cache, but could not safely retain individual shader families, so it is rebuilding the active cache.";
+			actionText = previousCacheAvailable ?
+			                 "You can restore the previous cache after compilation finishes, or let CSX finish rebuilding for the current setup." :
+			                 "Let compilation finish so CSX can verify the saved previous cache.";
+		} else if (previousCacheAvailable) {
+			summaryText = "Your feature setup changed. CSX retained unaffected shaders, saved the complete previous cache, and is compiling only affected shaders for the current setup. You can restore the previous cache after compilation finishes.";
 		} else {
-			summaryText = "Your feature setup changed. CSX saved the previous cache and is building a new cache for the current setup. Restore availability will be verified after compilation finishes.";
+			summaryText = "Your feature setup changed. CSX retained unaffected shaders and is compiling only affected shaders for the current setup. Restore availability will be verified after compilation finishes.";
 			actionText = "Let compilation finish so CSX can verify the saved previous cache.";
 		}
 	} else if (featureSetChanged) {

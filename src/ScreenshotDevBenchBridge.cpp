@@ -4,46 +4,23 @@
 #include "Globals.h"
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Api/DevBenchMainThreadDispatch.h"
 #	include <DevBenchAPI.h>
 #	include <nlohmann/json.hpp>
 
 #	include <atomic>
-#	include <chrono>
-#	include <future>
+#	include <exception>
 #	include <functional>
 
 namespace
 {
 	using json = nlohmann::json;
-	constexpr auto kMainThreadTimeout = std::chrono::milliseconds(5000);
 	std::atomic_bool g_installAttempted{ false };
 	std::atomic_bool g_registered{ false };
 
 	json RunOnMainThread(std::function<json()> a_run)
 	{
-		auto* tasks = SKSE::GetTaskInterface();
-		if (!tasks)
-			return { { "ok", false }, { "error", { { "code", "dispatcher_unavailable" }, { "message", "SKSE task interface unavailable" } } } };
-
-		auto promise = std::make_shared<std::promise<json>>();
-		auto cancelled = std::make_shared<std::atomic_bool>(false);
-		auto future = promise->get_future();
-		tasks->AddTask([promise, cancelled, run = std::move(a_run)]() mutable {
-			if (cancelled->load(std::memory_order_acquire))
-				return;
-			try {
-				promise->set_value(run());
-			} catch (const std::exception& e) {
-				promise->set_value(json{ { "ok", false }, { "error", { { "code", "dispatcher_failed" }, { "message", e.what() } } } });
-			} catch (...) {
-				promise->set_value(json{ { "ok", false }, { "error", { { "code", "dispatcher_failed" }, { "message", "unknown main-thread failure" } } } });
-			}
-		});
-		if (future.wait_for(kMainThreadTimeout) != std::future_status::ready) {
-			cancelled->store(true, std::memory_order_release);
-			return { { "ok", false }, { "error", { { "code", "dispatcher_timeout" }, { "message", "main thread did not run within 5000ms" }, { "retryable", true } } } };
-		}
-		return future.get();
+		return CSX::Api::RunDevBenchMainThreadTask(SKSE::GetTaskInterface(), std::move(a_run), CSX::Api::DevBenchDispatchErrorFormat::screenshot);
 	}
 
 	void ToolHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write) noexcept

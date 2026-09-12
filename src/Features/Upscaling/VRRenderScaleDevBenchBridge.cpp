@@ -2,6 +2,7 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
+#	include "Api/MainThreadDispatchPolicy.h"
 #	include "Api/RuntimeThreadAffinity.h"
 #	include "Api/ServiceRegistry.h"
 #	include "BuildProvenance.h"
@@ -53,6 +54,84 @@ namespace
 	constexpr unsigned int kDevBenchToolExtensionRevision = 10;
 	std::atomic_bool g_registered{ false };
 	std::atomic_uint64_t g_nextDiagnosticTrimEpoch{ 1ull << 63 };
+	using SubmitBoundaryRejection = VRSubmitInputFreshnessPolicy::OuterBoundaryRejection;
+	using SubmitInputRejection = VRSubmitInputFreshnessPolicy::ProducerRejection;
+	using SubmitFreshnessWork = VRRenderScaleDevBenchBridge::SubmitFreshnessWork;
+	template <class Enum>
+	using SubmitFreshnessCounters = std::array<std::atomic_uint64_t,
+		static_cast<std::size_t>(Enum::Count)>;
+	SubmitFreshnessCounters<SubmitBoundaryRejection> g_submitBoundaryOutcomes{};
+	struct SubmitFreshnessMethodCounters
+	{
+		SubmitFreshnessCounters<SubmitInputRejection> inputOutcomes{};
+		SubmitFreshnessCounters<SubmitFreshnessWork> work{};
+	};
+	std::array<SubmitFreshnessMethodCounters, 3> g_submitFreshnessMethods{};
+	constexpr std::array<const char*, 3> kSubmitFreshnessMethodNames{
+		"fsr", "dlss", "other"
+	};
+	constexpr std::array<const char*, static_cast<std::size_t>(SubmitFreshnessWork::Count)>
+		kSubmitFreshnessWorkNames{
+			"fallbackPreparedHits", "fallbackOutputHits", "guideEncodeEyes",
+			"colorCopyEyes", "inputSanitizationEyes", "vendorEyeAttempts",
+			"vendorEyeRetries"
+		};
+
+	std::size_t SubmitFreshnessMethodIndex(std::uint32_t a_method) noexcept
+	{
+		if (a_method == static_cast<std::uint32_t>(Upscaling::UpscaleMethod::kFSR))
+			return 0;
+		if (a_method == static_cast<std::uint32_t>(Upscaling::UpscaleMethod::kDLSS))
+			return 1;
+		return 2;
+	}
+
+	template <class Enum>
+	void RecordSubmitFreshnessCounter(
+		SubmitFreshnessCounters<Enum>& a_counters,
+		Enum a_counter,
+		std::uint64_t a_amount = 1) noexcept
+	{
+		const auto index = static_cast<std::size_t>(a_counter);
+		if (index < a_counters.size())
+			a_counters[index].fetch_add(a_amount, std::memory_order_relaxed);
+	}
+
+	template <class Enum>
+	json SubmitFreshnessOutcomeJson(const SubmitFreshnessCounters<Enum>& a_counters)
+	{
+		json outcomes = json::object();
+		for (std::size_t index = 0; index < a_counters.size(); ++index) {
+			const auto name = magic_enum::enum_name(static_cast<Enum>(index));
+			outcomes[name == "None" ? "accepted" : std::string(name)] =
+				a_counters[index].load(std::memory_order_relaxed);
+		}
+		return outcomes;
+	}
+
+	json BuildSubmitInputFreshness()
+	{
+		json methods = json::object();
+		for (std::size_t method = 0; method < g_submitFreshnessMethods.size(); ++method) {
+			const auto& counters = g_submitFreshnessMethods[method];
+			json work = json::object();
+			for (std::size_t index = 0; index < counters.work.size(); ++index) {
+				work[kSubmitFreshnessWorkNames[index]] =
+					counters.work[index].load(std::memory_order_relaxed);
+			}
+			methods[kSubmitFreshnessMethodNames[method]] = {
+				{ "inputOutcomes", SubmitFreshnessOutcomeJson<SubmitInputRejection>(counters.inputOutcomes) },
+				{ "work", std::move(work) },
+			};
+		}
+		return {
+			{ "schemaVersion", 1 },
+			{ "counterScope", "process_lifetime" },
+			{ "snapshotConsistency", "independently_sampled_atomic_counters" },
+			{ "boundaryOutcomes", SubmitFreshnessOutcomeJson<SubmitBoundaryRejection>(g_submitBoundaryOutcomes) },
+			{ "methods", std::move(methods) },
+		};
+	}
 
 	const char* GetUpscaleMethodName(Upscaling::UpscaleMethod a_method)
 	{
@@ -130,6 +209,31 @@ namespace
 		default:
 			return "unknown";
 		}
+	}
+
+	bool IsFSRBackend(Upscaling::VRRenderScaleBackendKind a_backend)
+	{
+		return a_backend == Upscaling::VRRenderScaleBackendKind::FSRHost ||
+		       a_backend == Upscaling::VRRenderScaleBackendKind::FSRRuntime ||
+		       a_backend == Upscaling::VRRenderScaleBackendKind::FSR4Runtime;
+	}
+
+	bool HasCurrentVendorDispatch(
+		Upscaling::UpscaleMethod a_method,
+		Upscaling::VRRenderScaleBackendKind a_backend,
+		uint32_t a_presentationFrame,
+		uint32_t a_dispatchFrame,
+		uint64_t a_dispatchSerial,
+		bool a_runtimeFallback)
+	{
+		if (a_presentationFrame == 0 || a_dispatchFrame != a_presentationFrame)
+			return false;
+		if (a_method == Upscaling::UpscaleMethod::kDLSS) {
+			return a_backend == Upscaling::VRRenderScaleBackendKind::DLSS &&
+			       !a_runtimeFallback;
+		}
+		return a_method == Upscaling::UpscaleMethod::kFSR &&
+		       IsFSRBackend(a_backend) && a_dispatchSerial != 0;
 	}
 
 	const char* GetPreparationEventTypeName(
@@ -219,6 +323,7 @@ namespace
 			std::pair{ Reason::DeviceChanged, "device_changed" },
 			std::pair{ Reason::ShaderFailure, "shader_failure" },
 			std::pair{ Reason::ProviderFailure, "provider_failure" },
+			std::pair{ Reason::NonDirectEdit, "non_direct_edit" },
 		};
 		json output = json::array();
 		for (const auto& [reason, name] : reasons) {
@@ -389,25 +494,34 @@ namespace
 		                                      ClassifyPreparationAdmission(admission.outcome, admission.reasonMask) :
 		                                      ReplacementTelemetry::PreparationAdmission::NotApplicable;
 
-		const auto& left = a_controller.presentation.eyes[0];
-		const auto& right = a_controller.presentation.eyes[1];
+		const auto stereoIdentityMatches = [](const auto& a_eyes) {
+			const auto& left = a_eyes[0];
+			const auto& right = a_eyes[1];
+			return left.valid && right.valid && left.path == right.path &&
+			       left.frame == right.frame &&
+			       left.compositorCycleToken != 0 &&
+			       left.compositorCycleToken == right.compositorCycleToken &&
+			       left.transitionEpoch == right.transitionEpoch &&
+			       left.contractGeneration == right.contractGeneration &&
+			       left.method == right.method && left.deviceIdentity != 0 &&
+			       left.deviceIdentity == right.deviceIdentity &&
+			       left.resourceRevision != 0 &&
+			       left.resourceRevision == right.resourceRevision &&
+			       !left.loadingOrMenuContext && !right.loadingOrMenuContext &&
+			       !left.transitionCooldown && !right.transitionCooldown;
+		};
+		const auto& liveEyes = a_controller.presentation.eyes;
+		const auto& presentationEyes =
+			stereoIdentityMatches(liveEyes) ?
+				liveEyes :
+				a_controller.presentation.lastCoherentVendorEyes;
+		const auto& left = presentationEyes[0];
+		const auto& right = presentationEyes[1];
 		const auto& currentProfile = a_controller.stable.valid ?
 		                                 a_controller.stable :
 		                                 a_controller.applied;
 		const bool commonStereoIdentity =
-			left.valid && right.valid && left.path == right.path &&
-			left.frame == right.frame &&
-			left.compositorCycleToken != 0 &&
-			left.compositorCycleToken == right.compositorCycleToken &&
-			left.transitionEpoch == right.transitionEpoch &&
-			left.contractGeneration == right.contractGeneration &&
-			left.method == right.method &&
-			left.deviceIdentity != 0 &&
-			left.deviceIdentity == right.deviceIdentity &&
-			left.resourceRevision != 0 &&
-			left.resourceRevision == right.resourceRevision &&
-			!left.loadingOrMenuContext && !right.loadingOrMenuContext &&
-			!left.transitionCooldown && !right.transitionCooldown;
+			stereoIdentityMatches(presentationEyes);
 		State::RenderTargetResourcePublicationDiagnostics resourcePublication{};
 		if (globals::state) {
 			resourcePublication =
@@ -441,6 +555,34 @@ namespace
 		const bool nativeDimensions = exactDimensions &&
 		                              left.inputWidth == left.outputWidth &&
 		                              left.inputHeight == left.outputHeight;
+		const bool vendorBackendCoherent =
+			left.vendorBackend != Upscaling::VRRenderScaleBackendKind::None &&
+			left.vendorBackend == right.vendorBackend;
+		const bool dlssBackend =
+			left.vendorBackend == Upscaling::VRRenderScaleBackendKind::DLSS;
+		const bool fsrBackend = IsFSRBackend(left.vendorBackend);
+		const bool vendorDispatchProven =
+			ReplacementTelemetry::HasCoherentVendorDispatch({
+				.backendCoherent = vendorBackendCoherent,
+				.dispatchFramesCurrent =
+					HasCurrentVendorDispatch(
+						left.method, left.vendorBackend, left.frame,
+						left.vendorDispatchFrame, left.vendorDispatchSerial,
+						left.vendorRuntimeFallback) &&
+					HasCurrentVendorDispatch(
+						right.method, right.vendorBackend, right.frame,
+						right.vendorDispatchFrame, right.vendorDispatchSerial,
+						right.vendorRuntimeFallback),
+				.runtimeFallbackCoherent =
+					left.vendorRuntimeFallback == right.vendorRuntimeFallback,
+				.dlssBackend = dlssBackend,
+				.fsrBackend = fsrBackend,
+				.runtimeFallback = left.vendorRuntimeFallback,
+				.leftDispatchSerial = left.vendorDispatchSerial,
+				.rightDispatchSerial = right.vendorDispatchSerial,
+				.sharedFSRDispatchRequired =
+					left.path == Upscaling::VRRenderScalePresentationPath::NativeOriginal,
+			});
 		const auto proofKind = ReplacementTelemetry::ClassifyPresentationProof({
 			.coherentStereoCycle = commonStereoIdentity,
 			.currentProfileMatches = currentContractMatches,
@@ -448,8 +590,7 @@ namespace
 			.exactDimensions = exactDimensions &&
 		                       left.vendorBackend == right.vendorBackend,
 			.nativeDimensions = nativeDimensions,
-			.vendorBackendPresent =
-				left.vendorBackend != Upscaling::VRRenderScaleBackendKind::None,
+			.vendorDispatchProven = vendorDispatchProven,
 			.renderScaleDisabled = exactNativeWithoutProfile ||
 		                           (currentProfile.valid &&
 									   !currentProfile.renderScaleModeEnabled),
@@ -495,6 +636,11 @@ namespace
 					.frame = a_boundary.frame,
 					.qpcTick = a_boundary.tick,
 				});
+		const auto workGate = a_upscaling.GetVRVendorWorkGateSnapshot();
+		const bool externalWorkGateDeferred =
+			workGate.lifecycleGateRelevant &&
+			(workGate.effectiveLifecycleMask != 0 ||
+				workGate.postLoadResetPending);
 		ReplacementTelemetry::MutationAdmissionFacts mutationFacts{
 			.hasReplacement = replacement != nullptr,
 			.superseded = a_controller.metrics.current.valid &&
@@ -521,7 +667,7 @@ namespace
 				(a_controller.fsrLifecycle.transitionEpoch == replacementTransitionEpoch &&
 					a_controller.fsrLifecycle.phase ==
 						Upscaling::VRVendorRuntimeLifecyclePhase::WaitingForDrain),
-			.workGateDeferred = a_upscaling.GetVRVendorWorkGateSnapshot().lifecycleMutationDeferred,
+			.workGateDeferred = externalWorkGateDeferred,
 			.cleanupDebt = a_controller.memoryTrim.pending ||
 			               a_controller.retirement.pendingSets != 0 ||
 			               a_controller.engineTargetRetirement.pending,
@@ -609,6 +755,9 @@ namespace
 				{ "transitionEpoch", a_eye.transitionEpoch },
 				{ "method", GetUpscaleMethodName(a_eye.method) },
 				{ "backend", GetBackendName(a_eye.vendorBackend) },
+				{ "vendorDispatchFrame", a_eye.vendorDispatchFrame },
+				{ "vendorDispatchSerial", a_eye.vendorDispatchSerial },
+				{ "vendorRuntimeFallback", a_eye.vendorRuntimeFallback },
 				{ "loadingOrMenuContext", a_eye.loadingOrMenuContext },
 				{ "transitionCooldown", a_eye.transitionCooldown },
 			};
@@ -637,6 +786,9 @@ namespace
 			{ "backendValue", currentPresentationProven ?
 								  json(static_cast<uint32_t>(left.vendorBackend)) :
 								  json(nullptr) },
+			{ "vendorDispatchProven", currentPresentationProven ?
+										  json(vendorDispatchProven) :
+										  json(nullptr) },
 			{ "requestId", currentPresentationProven ?
 							   json(currentProfile.requestID) :
 							   json(nullptr) },
@@ -678,7 +830,7 @@ namespace
 		};
 
 		return {
-			{ "schemaRevision", 12 },
+			{ "schemaRevision", 15 },
 			{ "observationFrame", a_frame },
 			{ "presentationProof", presentationProof },
 			{ "currentPresentationProven", currentPresentationProven },
@@ -1003,6 +1155,144 @@ namespace
 		};
 	}
 
+	json AuthorityJson(Upscaling& a_upscaling)
+	{
+		const auto snapshot =
+			a_upscaling.GetVRRenderScaleAuthorityDiagnosticSnapshot();
+		const auto& facts = snapshot.facts;
+		const auto& resolution = snapshot.resolution;
+		json owners = json::array();
+		for (std::uint8_t index = 0;
+			index < static_cast<std::uint8_t>(
+						VRRenderScaleAuthorityPolicy::Owner::Count);
+			++index) {
+			const auto owner =
+				static_cast<VRRenderScaleAuthorityPolicy::Owner>(index);
+			if ((resolution.owners &
+					VRRenderScaleAuthorityPolicy::ToMask(owner)) != 0) {
+				owners.push_back(
+					VRRenderScaleAuthorityPolicy::GetOwnerName(owner));
+			}
+		}
+
+		json services = json::array();
+		for (std::uint8_t index = 0;
+			index < static_cast<std::uint8_t>(
+						VRRenderScaleAuthorityPolicy::ServiceClass::Count);
+			++index) {
+			const auto service =
+				static_cast<VRRenderScaleAuthorityPolicy::ServiceClass>(index);
+			if ((resolution.services &
+					VRRenderScaleAuthorityPolicy::ToMask(service)) != 0) {
+				services.push_back(
+					VRRenderScaleAuthorityPolicy::GetServiceClassName(service));
+			}
+		}
+
+		json inconsistencies = json::array();
+		for (std::uint8_t index = 0;
+			index < static_cast<std::uint8_t>(
+						VRRenderScaleAuthorityPolicy::Inconsistency::Count);
+			++index) {
+			const auto inconsistency =
+				static_cast<VRRenderScaleAuthorityPolicy::Inconsistency>(index);
+			if ((resolution.inconsistencies &
+					VRRenderScaleAuthorityPolicy::ToMask(inconsistency)) != 0) {
+				inconsistencies.push_back(
+					VRRenderScaleAuthorityPolicy::GetInconsistencyName(
+						inconsistency));
+			}
+		}
+
+		return {
+			{ "schemaVersion", 1 },
+			{ "diagnosticOnly", true },
+			{ "productionSchedulingEffect", "none" },
+			{ "controllerRevision", snapshot.controllerRevision },
+			{ "controllerRevisionStable", snapshot.controllerRevisionStable },
+			{ "ownerMask", resolution.owners },
+			{ "owners", std::move(owners) },
+			{ "serviceMask", resolution.services },
+			{ "serviceClasses", std::move(services) },
+			{ "unmappedOwnerMask", resolution.unmappedOwners },
+			{ "inconsistencyMask", resolution.inconsistencies },
+			{ "inconsistencies", std::move(inconsistencies) },
+			{ "ownerSummary", {
+								  { "controller", {
+													  { "transitionEpoch", facts.controllerTransitionEpoch },
+													  { "presentationEpoch", facts.controllerPresentationEpoch },
+													  { "stateMirrorBusy", facts.controllerStateMirrorBusy },
+													  { "stableRuntimeProfileHint", facts.stableRuntimeProfileHint },
+												  } },
+								  { "pendingRequest", {
+														  { "present", facts.pendingRequestPresent },
+														  { "requestId", facts.pendingRequestID },
+														  { "transitionEpoch", facts.pendingRequestEpoch },
+													  } },
+								  { "deferredRequest", {
+														   { "present", facts.deferredRequestPresent },
+														   { "requestId", facts.deferredRequestID },
+														   { "transitionEpoch", facts.deferredRequestEpoch },
+														   { "hint", facts.deferredRequestHint },
+													   } },
+								  { "physicalRelatch", {
+														   { "queued", facts.physicalRelatchQueued },
+														   { "inProgress", facts.physicalRelatchInProgress },
+														   { "transitionEpoch", facts.physicalRelatchEpoch },
+													   } },
+								  { "postLoad", {
+													{ "resetPending", facts.postLoadResetPending },
+													{ "resetEpoch", facts.pendingPostLoadResetEpoch },
+													{ "deferredRecoveryEpoch", facts.deferredPostLoadRecoveryEpoch },
+													{ "recoveryActive", facts.postLoadRecoveryActive },
+													{ "recoveryEpoch", facts.postLoadRecoveryEpoch },
+												} },
+								  { "preMutationFallback", {
+															   { "admissionActive", facts.preMutationFallbackAdmissionActive },
+															   { "transitionEpoch", facts.preMutationFallbackEpoch },
+															   { "providerNeutralRecoveryEpoch", facts.providerNeutralRecoveryEpoch },
+														   } },
+								  { "postMutation", {
+														{ "unresolvedPhysicalEpoch", facts.unresolvedPhysicalMutationEpoch },
+														{ "serializationEpoch", facts.postMutationSerializationEpoch },
+														{ "chainSerial", facts.postMutationChainSerial },
+													} },
+								  { "vendorWorkGate", {
+														  { "ownerMask", facts.vendorWorkGateOwnerMask },
+														  { "ownerEpoch", facts.vendorWorkGateOwnerEpoch },
+													  } },
+								  { "compositorHold", {
+														  { "active", facts.compositorHoldActive },
+														  { "epoch", facts.compositorHoldEpoch },
+														  { "cycleDrainPending", facts.compositorCycleDrainPending },
+														  { "awaitingSyncEpoch", facts.compositorAwaitingSyncEpoch },
+													  } },
+								  { "nativeRestore", {
+														 { "active", facts.nativeRestoreActive },
+														 { "ownerEpoch", facts.nativeRestoreOwnerEpoch },
+														 { "presentationGuardEpoch", facts.nativeRestorePresentationGuardEpoch },
+													 } },
+								  { "cleanup", {
+												   { "intermediateRetirementPending", facts.intermediateRetirementPending },
+												   { "engineTargetRetirementPending", facts.engineTargetRetirementPending },
+												   { "memoryTrimPending", facts.memoryTrimPending },
+												   { "memoryTrimOwnerEpoch", facts.memoryTrimOwnerEpoch },
+											   } },
+								  { "providerLifecycle", {
+															 { "dlssResetPending", facts.dlssResetPending },
+															 { "dlssResetGeneration", facts.dlssResetGeneration },
+															 { "fsrResetPending", facts.fsrResetPending },
+															 { "fsrResetGeneration", facts.fsrResetGeneration },
+															 { "dlssActive", facts.dlssLifecycleActive },
+															 { "fsrActive", facts.fsrLifecycleActive },
+															 { "resourceTrackingSyncPending", facts.resourceTrackingSyncPending },
+															 { "dlssViewportPreparationPending", facts.dlssViewportPreparationPending },
+														 } },
+								  { "fpsStabilizerSyncFrame", facts.fpsStabilizerSyncFrame },
+							  } },
+		};
+	}
+
 	json CPUPerformanceJson(Upscaling& a_upscaling)
 	{
 		using Counter = Upscaling::VRRenderScaleCPUPerformanceCounter;
@@ -1139,6 +1429,11 @@ namespace
 		const auto controller = a_upscaling.GetVRRenderScaleTransitionSnapshot();
 		const auto session = a_upscaling.GetVRRenderScaleStressSessionSnapshot();
 		const auto vendorWorkGate = a_upscaling.GetVRVendorWorkGateSnapshot();
+		const auto& resolutionPlan = a_upscaling.GetRuntimeResolutionPlan();
+		const auto mainPassDiagnostics =
+			a_upscaling.GetVRMainPassDispatchDiagnosticSnapshot();
+		const auto nativeRestorePreparation =
+			a_upscaling.GetVRNativeRestorePreparationDiagnosticSnapshot();
 		const uint32_t frame = globals::state ? globals::state->frameCount : 0u;
 
 		json eyes = json::array();
@@ -1181,16 +1476,70 @@ namespace
 		return {
 			{ "frame", frame },
 			{ "adapter", BuildAdapterIdentity() },
+			{ "submitInputFreshness", BuildSubmitInputFreshness() },
 			{ "modeStatus", Upscaling::GetVRRenderScaleModeStatusName(a_upscaling.GetVRRenderScaleModeStatus()) },
+			{ "runtimeRouting", {
+									{ "configuredMethod", GetUpscaleMethodName(a_upscaling.GetConfiguredUpscaleMethodForTransition()) },
+									{ "runtimeMethod", GetUpscaleMethodName(a_upscaling.GetRuntimeUpscaleMethod()) },
+									{ "runtimeQualityMode", a_upscaling.GetRuntimeQualityMode() },
+									{ "renderScaleRequested", a_upscaling.IsRenderScaleModeRequested() },
+									{ "renderScaleLatched", a_upscaling.IsVRRenderScaleModeLatched() },
+									{ "perfModeActive", a_upscaling.IsPerfModeActive() },
+									{ "presentationUpscalingActive", a_upscaling.IsPresentationUpscalingActive() },
+								} },
+			{ "runtimeResolutionPlan", {
+										   { "method", GetUpscaleMethodName(resolutionPlan.upscaleMethod) },
+										   { "owner", std::string(magic_enum::enum_name(resolutionPlan.owner)) },
+										   { "outputTarget", std::string(magic_enum::enum_name(resolutionPlan.outputTarget)) },
+										   { "qualityMode", resolutionPlan.qualityMode },
+										   { "engineRenderWidth", resolutionPlan.engineRenderSize.x },
+										   { "engineRenderHeight", resolutionPlan.engineRenderSize.y },
+										   { "finalOutputWidth", resolutionPlan.finalOutputSize.x },
+										   { "finalOutputHeight", resolutionPlan.finalOutputSize.y },
+										   { "vendorMethod", resolutionPlan.vendorMethod },
+										   { "menuContextActive", resolutionPlan.menuContextActive },
+									   } },
+			{ "mainPassDispatch", {
+									  { "lastStage", std::string(magic_enum::enum_name(mainPassDiagnostics.lastStage)) },
+									  { "lastFrame", mainPassDiagnostics.lastFrame },
+									  { "callCount", mainPassDiagnostics.callCount },
+									  { "encodeAttemptCount", mainPassDiagnostics.encodeAttemptCount },
+									  { "encodeSuccessCount", mainPassDiagnostics.encodeSuccessCount },
+									  { "vendorResetBlockedCount", mainPassDiagnostics.vendorResetBlockedCount },
+									  { "fidelityAttemptCount", mainPassDiagnostics.fidelityAttemptCount },
+									  { "fidelitySuccessCount", mainPassDiagnostics.fidelitySuccessCount },
+								  } },
+			{ "nativeRestorePreparation", {
+											  { "rejectMask", nativeRestorePreparation.rejectMask },
+											  { "frame", nativeRestorePreparation.frame },
+											  { "compositorCycleToken", nativeRestorePreparation.compositorCycleToken },
+											  { "commitOutcome", nativeRestorePreparation.commitOutcome },
+											  { "commitFrame", nativeRestorePreparation.commitFrame },
+											  { "commitCompositorCycleToken", nativeRestorePreparation.commitCompositorCycleToken },
+											  { "commitAttemptCount", nativeRestorePreparation.commitAttemptCount },
+											  { "commitSuccessCount", nativeRestorePreparation.commitSuccessCount },
+										  } },
+			{ "authorityLiveness", AuthorityJson(a_upscaling) },
 			{ "cpuPerformance", CPUPerformanceJson(a_upscaling) },
 			{ "preparation", PreparationTelemetryJson(a_upscaling) },
+			{ "retryTelemetry", a_upscaling.BuildVRRenderScaleRetryTelemetry() },
 			{ "pipelineDiagnostics", {
 										 { "configuredForNextStartup", a_upscaling.settings.pipelineDiagnostics },
 										 { "configuredStructuredForNextStartup", a_upscaling.settings.pipelineDiagnosticsStructured },
 										 { "capture", VRPipelineDiagnostics::GetStatusSnapshot() },
 									 } },
 			{ "fsrDispatch", FsrDispatchJson(controller, globals::shaderCache && globals::shaderCache->IsCompiling()) },
+			{ "fsrHostLifecycle", {
+									  { "quarantined", a_upscaling.fidelityFX.IsHostFSRStateQuarantined() },
+									  { "lastContextCreateResult", static_cast<int32_t>(a_upscaling.fidelityFX.GetLastFSRContextCreateResult()) },
+								  } },
 			{ "vendorWorkGate", VendorWorkGateJson(vendorWorkGate) },
+			{ "renderScaleSelectionPolicy", {
+												{ "linkedToUpscaling", a_upscaling.settings.renderScaleLinkedToUpscaling },
+												{ "rememberedPreference", a_upscaling.GetVRRenderScaleModePreference() },
+												{ "requestedActive", a_upscaling.GetVRRenderScaleModeRequested() },
+												{ "physicallyActive", a_upscaling.IsVRRenderScaleModeLatched() },
+											} },
 			{ "loadPresentationProbe", a_upscaling.BuildVRLoadPresentationProbeStatus() },
 			{ "hmdMaskDiagnostics", a_upscaling.BuildVRHMDMaskDiagnosticsStatus() },
 			{ "session", {
@@ -1256,6 +1605,7 @@ namespace
 													  { "valid", controller.relatchPlan.valid },
 													  { "transitionEpoch", controller.relatchPlan.transitionEpoch },
 													  { "previousVendorMethod", GetUpscaleMethodName(controller.relatchPlan.previousVendorMethod) },
+													  { "retainInactiveDLSSResources", controller.relatchPlan.retainInactiveDLSSResources },
 													  { "memoryPressure", Upscaling::GetVRRenderScaleMemoryPressureName(controller.relatchPlan.memoryPressure) },
 													  { "estimatedAdditionalBytes", controller.relatchPlan.estimatedAdditionalBytes },
 													  { "projectedAdditionalBytes", controller.relatchPlan.projectedAdditionalBytes },
@@ -1392,6 +1742,7 @@ namespace
 														{ "pressureDeferrals", controller.metrics.current.pressureDeferrals },
 														{ "retirementDeferrals", controller.metrics.current.retirementDeferrals },
 														{ "backendDeferrals", controller.metrics.current.backendDeferrals },
+														{ "readinessDeferrals", controller.metrics.current.readinessDeferrals },
 														{ "failures", controller.metrics.current.failures },
 														{ "fidelityMismatches", controller.metrics.current.fidelityMismatches },
 														{ "memoryTrimCount", controller.metrics.current.memoryTrimCount },
@@ -1431,6 +1782,13 @@ namespace
 										  { "avoidedPixels", avoidedInputPixels },
 										  { "activePixelRatio", potentialInputPixels ? static_cast<double>(activeInputPixels) / potentialInputPixels : 0.0 },
 									  } },
+			{ "runtimeFSRSharedGuides", {
+											{ "enabled", a_upscaling.fidelityFX.AreRuntimeSharedGuideInputsEnabled() },
+											{ "directGuideInputs", value(Counter::FSRDirectGuideInputs) },
+											{ "directGuidePixels", value(Counter::FSRDirectGuidePixels) },
+											{ "fallbackGuideCopies", value(Counter::FSRGuideCopyFallbacks) },
+											{ "importFailures", value(Counter::FSRGuideImportFailures) },
+										} },
 			{ "item6RuntimeFSRStereo", {
 										   { "batchAttempts", value(Counter::RuntimeFSRStereoBatchAttempts) },
 										   { "batchReuses", value(Counter::RuntimeFSRStereoBatchReuses) },
@@ -1966,7 +2324,6 @@ namespace
 		                 boundary.ownershipToken == a_ownershipToken &&
 		                 boundary.requestID != 0 &&
 		                 boundary.transitionEpoch != 0 &&
-		                 boundary.contractGeneration != 0 &&
 		                 boundary.deviceIdentity != 0 &&
 		                 boundary.frame != 0 && boundary.tick != 0 &&
 		                 !boundary.source.empty();
@@ -2050,6 +2407,14 @@ namespace
 			{ "qualityMode", a_cycle.qualityMode },
 			{ "renderScaleMode", a_cycle.renderScaleMode },
 			{ "backendValue", a_cycle.backend },
+			{ "leftVendorDispatchFrame", a_cycle.leftVendorDispatchFrame },
+			{ "leftVendorDispatchSerial", a_cycle.leftVendorDispatchSerial },
+			{ "rightVendorDispatchFrame", a_cycle.rightVendorDispatchFrame },
+			{ "rightVendorDispatchSerial", a_cycle.rightVendorDispatchSerial },
+			{ "vendorRuntimeFallback", a_cycle.vendorRuntimeFallback },
+			{ "vendorDispatchProven", a_cycle.vendorDispatchProven },
+			{ "sharedVendorDispatchRequired",
+				a_cycle.sharedVendorDispatchRequired },
 			{ "disposition", ReplacementTelemetry::GetDispositionName(
 								 a_cycle.disposition) },
 			{ "submitted", a_cycle.submitted },
@@ -2058,6 +2423,8 @@ namespace
 			{ "afterMutation", a_cycle.afterMutation },
 			{ "boundarySpanning", a_cycle.boundarySpanning },
 			{ "exactCurrent", a_cycle.exactCurrent },
+			{ "exactCurrentPresentationAvailable",
+				a_cycle.exactCurrentPresentationAvailable },
 			{ "exactReplacement", a_cycle.exactReplacement },
 			{ "blockedPreMutation", a_cycle.blockedPreMutation },
 			{ "loadingOrMenuContext", a_cycle.loadingOrMenuContext },
@@ -3239,9 +3606,10 @@ namespace
 			requestID != a_transition.expectedReplacementRequestID ||
 			transitionEpoch == 0 ||
 			transitionEpoch != a_transition.expectedReplacementTransitionEpoch ||
-			contractGeneration == 0 ||
-			contractGeneration !=
-				a_transition.expectedReplacementContractGeneration ||
+			!ReplacementTelemetry::MatchesTargetContractGeneration(
+				target.renderScaleMode,
+				static_cast<uint32_t>(contractGeneration),
+				a_transition.expectedReplacementContractGeneration) ||
 			publicationGeneration == 0 ||
 			resourceRevision == 0 || deviceIdentity == 0 ||
 			deviceIdentity != a_transition.expectedReplacementDeviceIdentity ||
@@ -3287,7 +3655,6 @@ namespace
 					evidence, "replacementDeviceIdentity"));
 			if (a_value.expectedReplacementRequestID == 0 &&
 				replacementRequestID != 0 && replacementTransitionEpoch != 0 &&
-				replacementContractGeneration != 0 &&
 				replacementDeviceIdentity != 0) {
 				a_value.expectedReplacementRequestID = replacementRequestID;
 				a_value.expectedReplacementTransitionEpoch =
@@ -3296,6 +3663,16 @@ namespace
 					replacementContractGeneration;
 				a_value.expectedReplacementDeviceIdentity =
 					replacementDeviceIdentity;
+			} else if (a_value.expectedReplacementRequestID ==
+						   replacementRequestID &&
+					   a_value.expectedReplacementTransitionEpoch ==
+						   replacementTransitionEpoch &&
+					   a_value.expectedReplacementDeviceIdentity ==
+						   replacementDeviceIdentity &&
+					   a_value.expectedReplacementContractGeneration == 0 &&
+					   replacementContractGeneration != 0) {
+				a_value.expectedReplacementContractGeneration =
+					replacementContractGeneration;
 			}
 			const bool firstMutationRecorded =
 				!a_value.firstPhysicalMutationEvidence.is_null();
@@ -4515,6 +4892,7 @@ namespace
 	json RenderScaleActions()
 	{
 		return json::array({ "status",
+			"set_render_scale_link",
 			"qualification_status",
 			"qualification_begin",
 			"qualification_dispatch",
@@ -4524,6 +4902,7 @@ namespace
 			"cpu_performance_start",
 			"cpu_performance_stop",
 			"cpu_performance_reset",
+			"fsr_shared_guides",
 			"gpu_performance_status",
 			"gpu_performance_start",
 			"gpu_performance_stop",
@@ -4594,11 +4973,11 @@ namespace
 			return { { "error", "SKSE task interface unavailable" } };
 
 		auto promise = std::make_shared<std::promise<json>>();
-		auto cancelled = std::make_shared<std::atomic_bool>(false);
+		auto claim = std::make_shared<CSX::Api::MainThreadDispatchClaim>();
 		auto future = promise->get_future();
-		taskInterface->AddTask([promise, cancelled, run = std::move(a_run)]() mutable {
+		taskInterface->AddTask([promise, claim, run = std::move(a_run)]() mutable {
 			CSX::Api::EnterRuntimeMainThreadTask();
-			if (cancelled->load(std::memory_order_acquire))
+			if (!claim->TryClaim())
 				return;
 			try {
 				promise->set_value(run());
@@ -4607,10 +4986,17 @@ namespace
 			} catch (...) {
 				promise->set_value(json{ { "error", "main-thread task failed" } });
 			}
+			claim->Complete();
 		});
 
 		if (future.wait_for(a_timeout) != std::future_status::ready) {
-			cancelled->store(true, std::memory_order_release);
+			if (!claim->TryCancel()) {
+				return {
+					{ "status", "in_progress" },
+					{ "errorCode", "main_thread_in_progress" },
+					{ "timeoutMs", a_timeout.count() },
+				};
+			}
 			return {
 				{ "error", "main thread did not run before the request deadline" },
 				{ "errorCode", "main_thread_timeout" },
@@ -4769,7 +5155,7 @@ namespace
 			a_transition.firstNewGenerationProvenEvidence);
 
 		json receipt{
-			{ "schemaRevision", 12 },
+			{ "schemaRevision", 15 },
 			{ "action", "qualification_wait" },
 			{ "transitionId", a_transition.transitionID },
 			{ "ownerId", a_transition.ownerID },
@@ -4926,6 +5312,27 @@ namespace
 				if (!globals::game::isVR)
 					return json{ { "error", "render-scale iteration control requires Skyrim VR" } };
 				return json{ { "action", "status" }, { "status", BuildStatus(globals::features::upscaling) } };
+			});
+		}
+
+		if (action == "set_render_scale_link") {
+			if (!a_args.contains("enabled") || !a_args["enabled"].is_boolean())
+				return { { "error", "set_render_scale_link requires boolean parameter 'enabled'" } };
+			return RunOnMainThread([enabled = a_args["enabled"].get<bool>()]() {
+				if (!globals::game::isVR)
+					return json{ { "error", "render-scale linking requires Skyrim VR" } };
+				if (!globals::state || !globals::state->IsDeveloperMode())
+					return json{ { "error", "developer mode is required to change render-scale linking" } };
+				auto& upscaling = globals::features::upscaling;
+				if (!upscaling.GetVRRenderScaleStressSessionSnapshot().active)
+					return json{ { "error", "start a stress capture before changing render-scale linking" } };
+				const bool accepted = upscaling.SetRenderScaleLinkedToUpscaling(enabled);
+				return json{
+					{ "action", "set_render_scale_link" },
+					{ "enabled", enabled },
+					{ "accepted", accepted },
+					{ "status", BuildStatus(upscaling) },
+				};
 			});
 		}
 
@@ -5152,9 +5559,12 @@ namespace
 					ownerID,
 					cocCellEditorID,
 					startPerformanceTelemetry]() {
-					const uint64_t clockAvailabilityTick = QueryQualificationTick();
-					const uint32_t frame = globals::state ? globals::state->frameCount : 0;
-					if (clockAvailabilityTick == 0) {
+					const uint64_t observationTick = QueryQualificationTick();
+					const uint32_t observationFrame =
+						globals::state ?
+							globals::state->frameCountAtomic.load(std::memory_order_relaxed) :
+							0u;
+					if (observationTick == 0) {
 						return json{
 							{ "error", "QueryPerformanceCounter is unavailable" },
 							{ "errorCode", "monotonic_clock_unavailable" },
@@ -5172,10 +5582,10 @@ namespace
 								std::memory_order_acquire),
 							upscaling.vrRenderScalePostMutationSerializationEpoch.load(
 								std::memory_order_acquire),
-							clockAvailabilityTick,
-							frame);
-					dispatchPresentationEvidence["tick"] = clockAvailabilityTick;
-					dispatchPresentationEvidence["frame"] = frame;
+							observationTick,
+							observationFrame);
+					dispatchPresentationEvidence["observationTick"] = observationTick;
+					dispatchPresentationEvidence["observationFrame"] = observationFrame;
 					auto& store = GetQualificationStore();
 					std::lock_guard lock(store.mutex);
 					if (!store.active ||
@@ -5198,20 +5608,33 @@ namespace
 						};
 					}
 
+					if (startPerformanceTelemetry &&
+						(upscaling.IsVRRenderScaleCPUPerformanceTelemetryActive() ||
+							upscaling.IsVRRenderScaleGPUPerformanceTelemetryActive())) {
+						return json{
+							{ "error", "qualification dispatch requires inactive CPU and GPU performance telemetry" },
+							{ "errorCode", "performance_telemetry_already_active" },
+							{ "cpuPerformance", CPUPerformanceJson(upscaling) },
+							{ "gpuPerformance", BuildGPUPerformanceStatus(upscaling) },
+						};
+					}
+
+					const uint64_t dispatchTick = QueryQualificationTick();
+					const uint32_t dispatchFrame =
+						globals::state ?
+							globals::state->frameCountAtomic.load(std::memory_order_relaxed) :
+							0u;
+					if (dispatchTick == 0) {
+						return json{
+							{ "error", "QueryPerformanceCounter became unavailable" },
+							{ "errorCode", "monotonic_clock_unavailable" },
+						};
+					}
 					json performanceTelemetry = nullptr;
 					if (startPerformanceTelemetry) {
-						if (upscaling.IsVRRenderScaleCPUPerformanceTelemetryActive() ||
-							upscaling.IsVRRenderScaleGPUPerformanceTelemetryActive()) {
-							return json{
-								{ "error", "qualification dispatch requires inactive CPU and GPU performance telemetry" },
-								{ "errorCode", "performance_telemetry_already_active" },
-								{ "cpuPerformance", CPUPerformanceJson(upscaling) },
-								{ "gpuPerformance", BuildGPUPerformanceStatus(upscaling) },
-							};
-						}
-
 						const uint64_t cpuSessionID =
-							upscaling.StartVRRenderScaleCPUPerformanceTelemetry();
+							upscaling.StartVRRenderScaleCPUPerformanceTelemetry(
+								dispatchFrame);
 						if (cpuSessionID == 0) {
 							return json{
 								{ "error", "the CPU telemetry session ID allocator failed" },
@@ -5219,7 +5642,8 @@ namespace
 								{ "cpuPerformance", CPUPerformanceJson(upscaling) },
 							};
 						}
-						upscaling.StartVRRenderScaleGPUPerformanceTelemetry();
+						upscaling.StartVRRenderScaleGPUPerformanceTelemetry(
+							dispatchFrame);
 						const auto cpuSnapshot =
 							upscaling.GetVRRenderScaleCPUPerformanceSnapshot();
 						const auto gpuSnapshot =
@@ -5228,42 +5652,33 @@ namespace
 							Upscaling::VRRenderScaleCPUPerformanceCounter::WindowStartFrame)];
 						const uint64_t gpuStartFrame = gpuSnapshot[static_cast<std::size_t>(
 							Upscaling::VRRenderScaleGPUPerformanceCounter::WindowStartFrame)];
-						if (cpuStartFrame != frame || gpuStartFrame != frame) {
+						if (cpuStartFrame != dispatchFrame ||
+							gpuStartFrame != dispatchFrame) {
 							upscaling.StopVRRenderScaleGPUPerformanceTelemetry();
 							upscaling.StopVRRenderScaleCPUPerformanceTelemetry();
 							return json{
 								{ "error", "performance telemetry did not bind to the qualification dispatch frame" },
 								{ "errorCode", "performance_telemetry_dispatch_frame_mismatch" },
-								{ "dispatchFrame", frame },
+								{ "dispatchFrame", dispatchFrame },
 								{ "cpuStartFrame", cpuStartFrame },
 								{ "gpuStartFrame", gpuStartFrame },
 							};
 						}
 						performanceTelemetry = {
 							{ "started", true },
-							{ "dispatchFrame", frame },
+							{ "dispatchFrame", dispatchFrame },
 							{ "cpuPerformance", CPUPerformanceJson(upscaling) },
 							{ "gpuPerformance", BuildGPUPerformanceStatus(upscaling) },
 						};
 					}
-					uint64_t tick = QueryQualificationTick();
-					if (tick == 0) {
-						if (startPerformanceTelemetry) {
-							upscaling.StopVRRenderScaleGPUPerformanceTelemetry();
-							upscaling.StopVRRenderScaleCPUPerformanceTelemetry();
-						}
-						return json{
-							{ "error", "QueryPerformanceCounter became unavailable" },
-							{ "errorCode", "monotonic_clock_unavailable" },
-						};
-					}
+					dispatchPresentationEvidence["tick"] = dispatchTick;
+					dispatchPresentationEvidence["frame"] = dispatchFrame;
 					if (cocCellEditorID) {
 						const auto command = std::format("coc {}", *cocCellEditorID);
-						tick = QueryQualificationTick();
 						RE::Console::ExecuteCommand(command.c_str());
 					}
-					store.active->dispatchTick = tick;
-					store.active->dispatchFrame = frame;
+					store.active->dispatchTick = dispatchTick;
+					store.active->dispatchFrame = dispatchFrame;
 					store.active->cocCellEditorID = cocCellEditorID;
 					store.active->dispatchPresentationEvidence =
 						std::move(dispatchPresentationEvidence);
@@ -5281,10 +5696,10 @@ namespace
 										{ "elapsedOrigin", cocCellEditorID ?
 															   "coc_command" :
 															   "qualification_dispatch" },
-										{ "dispatchTick", tick },
+										{ "dispatchTick", dispatchTick },
 										{ "tickFrequency", store.active->baseline.tickFrequency },
 									} },
-						{ "dispatchFrame", frame },
+						{ "dispatchFrame", dispatchFrame },
 						{ "replacementPresentation", store.active->dispatchPresentationEvidence },
 					};
 					if (cocCellEditorID) {
@@ -5859,6 +6274,27 @@ namespace
 			});
 		}
 
+		if (action == "fsr_shared_guides") {
+			std::optional<bool> enabled;
+			if (a_args.contains("enabled")) {
+				if (!a_args["enabled"].is_boolean())
+					return json{ { "error", "fsr_shared_guides enabled must be a boolean" } };
+				enabled = a_args["enabled"].get<bool>();
+			}
+			return RunOnMainThread([enabled]() {
+				if (!globals::game::isVR)
+					return json{ { "error", "shared guide diagnostics require Skyrim VR" } };
+				auto& upscaling = globals::features::upscaling;
+				if (enabled && !upscaling.SetFSRSharedGuideInputsEnabled(*enabled))
+					return json{ { "error", "stop GPU performance capture before changing shared guide mode" } };
+				return json{
+					{ "action", "fsr_shared_guides" },
+					{ "enabled", upscaling.fidelityFX.AreRuntimeSharedGuideInputsEnabled() },
+					{ "scope", "eligible full-eye runtime FSR inputs only; copied guides remain the fallback" },
+				};
+			});
+		}
+
 		if (action == "gpu_performance_status") {
 			return RunOnMainThread([]() {
 				if (!globals::game::isVR)
@@ -6224,13 +6660,18 @@ namespace
 
 				const auto before = upscaling.GetPendingVRRenderScaleDesiredProfile();
 				const uint32_t dlssPreset = requestedPreset.value_or(before.dlssPreset);
+				const bool directMenuEdit = true;
 				const auto applied = upscaling.ApplyCSMenuUpscalingTransition(
 					method,
 					enabled,
 					qualityMode,
 					dlssPreset,
 					"devbench render-scale iteration",
-					Upscaling::VRUpscalingTransitionOrigin::CSMenu);
+					Upscaling::VRUpscalingTransitionOrigin::CSMenu,
+					0,
+					std::nullopt,
+					VRVendorRelatchPolicy::StartupNativeFallbackControl::None,
+					directMenuEdit);
 
 				const bool accepted = applied.disposition != Upscaling::UpscalingTransitionApplyDisposition::Rejected;
 				const bool asynchronous =
@@ -6243,6 +6684,7 @@ namespace
 					{ "enabled", enabled },
 					{ "qualityMode", qualityMode },
 					{ "dlssPreset", dlssPreset },
+					{ "directMenuEdit", directMenuEdit },
 					{ "accepted", accepted },
 					{ "asynchronous", asynchronous },
 					{ "disposition", GetApplyDispositionName(applied.disposition) },
@@ -6329,6 +6771,32 @@ namespace
 
 namespace VRRenderScaleDevBenchBridge
 {
+	void RecordSubmitBoundaryRejection(
+		VRSubmitInputFreshnessPolicy::OuterBoundaryRejection a_reason) noexcept
+	{
+		RecordSubmitFreshnessCounter(g_submitBoundaryOutcomes, a_reason);
+	}
+
+	void RecordSubmitInputRejection(
+		VRSubmitInputFreshnessPolicy::ProducerRejection a_reason,
+		std::uint32_t a_method) noexcept
+	{
+		RecordSubmitFreshnessCounter(
+			g_submitFreshnessMethods[SubmitFreshnessMethodIndex(a_method)].inputOutcomes,
+			a_reason);
+	}
+
+	void RecordSubmitFreshnessWork(
+		SubmitFreshnessWork a_work,
+		std::uint32_t a_method,
+		std::uint64_t a_amount) noexcept
+	{
+		RecordSubmitFreshnessCounter(
+			g_submitFreshnessMethods[SubmitFreshnessMethodIndex(a_method)].work,
+			a_work,
+			a_amount);
+	}
+
 	void RecordPhysicalMutationBoundary(
 		std::uint64_t a_transitionEpoch,
 		PhysicalMutationBoundarySource a_source,
@@ -6347,8 +6815,7 @@ namespace VRRenderScaleDevBenchBridge
 						 std::addressof(controller.requested),
 						 std::addressof(controller.applying) }) {
 					if (profile->valid && profile->requestID != 0 &&
-						profile->transitionEpoch == a_transitionEpoch &&
-						profile->contractGeneration != 0) {
+						profile->transitionEpoch == a_transitionEpoch) {
 						return profile;
 					}
 				}
@@ -6384,6 +6851,10 @@ namespace VRRenderScaleDevBenchBridge
 							"exact_vendor_evaluation" ||
 						OptionalNonNegativeIntegerOrZero(
 							dispatchProof, "methodValue") != a_providerMethod)) ||
+				(a_source == PhysicalMutationBoundarySource::ProviderActivation &&
+					(a_providerMethod == 0 ||
+						static_cast<uint32_t>(replacement->method) !=
+							a_providerMethod)) ||
 				!ReplacementTelemetry::OwnsMutationBoundary({
 					.ownerActive = true,
 					.auditActive = store.active->presentationAudit.active,
@@ -6413,10 +6884,14 @@ namespace VRRenderScaleDevBenchBridge
 			const std::string_view source =
 				a_source == PhysicalMutationBoundarySource::ProviderInvalidation ?
 					"provider_invalidation" :
+				a_source == PhysicalMutationBoundarySource::ProviderActivation ?
+					"provider_activation" :
 					"engine_target_creator";
 			const std::string_view reason =
 				a_source == PhysicalMutationBoundarySource::ProviderInvalidation ?
 					"provider_resource_invalidation" :
+				a_source == PhysicalMutationBoundarySource::ProviderActivation ?
+					"provider_resource_activation" :
 					"engine_target_creator";
 			store.active->firstPhysicalMutationEvidence = {
 				{ "tick", tick },
@@ -6463,9 +6938,10 @@ namespace VRRenderScaleDevBenchBridge
 			}
 			const auto* replacement = [&]() -> const Upscaling::VRRenderScaleProfileSnapshot* {
 				for (const auto* profile : {
-						 std::addressof(controller.requested),
+						 std::addressof(controller.applied),
+						 std::addressof(controller.stable),
 						 std::addressof(controller.applying),
-						 std::addressof(controller.stable) }) {
+						 std::addressof(controller.requested) }) {
 					if (profile->valid && targetEpoch != 0 &&
 						profile->transitionEpoch == targetEpoch) {
 						return profile;
@@ -6473,6 +6949,14 @@ namespace VRRenderScaleDevBenchBridge
 				}
 				return nullptr;
 			}();
+			const auto* publishedReplacement =
+				controller.applied.valid && targetEpoch != 0 &&
+						controller.applied.transitionEpoch == targetEpoch ?
+					std::addressof(controller.applied) :
+				controller.stable.valid && targetEpoch != 0 &&
+						controller.stable.transitionEpoch == targetEpoch ?
+					std::addressof(controller.stable) :
+					nullptr;
 			auto& store = GetQualificationStore();
 			std::lock_guard lock(store.mutex);
 			if (!store.active || store.active->dispatchTick == 0 ||
@@ -6516,7 +7000,6 @@ namespace VRRenderScaleDevBenchBridge
 			                                  store.active->ownershipToken &&
 			                              boundaryRequestID != 0 &&
 			                              boundaryTransitionEpoch != 0 &&
-			                              boundaryContractGeneration != 0 &&
 			                              boundaryDeviceIdentity != 0 &&
 			                              boundaryFrame != 0 && boundaryTick != 0;
 			const bool physicalMutationStarted =
@@ -6560,6 +7043,38 @@ namespace VRRenderScaleDevBenchBridge
 				dispatchProof["renderScaleMode"].get<bool>();
 			const auto dispatchBackend = static_cast<uint32_t>(
 				OptionalNonNegativeIntegerOrZero(dispatchProof, "backendValue"));
+			const auto observationMethod = static_cast<Upscaling::UpscaleMethod>(
+				a_observation.method);
+			const auto observationBackend =
+				static_cast<Upscaling::VRRenderScaleBackendKind>(
+					a_observation.backend);
+			const bool observationVendorDispatchProven =
+				HasCurrentVendorDispatch(
+					observationMethod,
+					observationBackend,
+					a_observation.frame,
+					a_observation.vendorDispatchFrame,
+					a_observation.vendorDispatchSerial,
+					a_observation.vendorRuntimeFallback);
+			const bool sharedVendorDispatchRequired =
+				observationMethod == Upscaling::UpscaleMethod::kFSR &&
+				a_observation.path == static_cast<uint32_t>(
+										  Upscaling::VRRenderScalePresentationPath::NativeOriginal);
+			const auto exactPathMatchesTarget =
+				[&](Upscaling::UpscaleMethod a_method, bool a_renderScaleMode) {
+					if (a_method == Upscaling::UpscaleMethod::kDLSS ||
+						a_method == Upscaling::UpscaleMethod::kFSR) {
+						const auto expectedPath = a_renderScaleMode ?
+					                                  Upscaling::VRRenderScalePresentationPath::VendorEvaluated :
+					                                  Upscaling::VRRenderScalePresentationPath::NativeOriginal;
+						return a_observation.path == static_cast<uint32_t>(expectedPath) &&
+					           observationVendorDispatchProven;
+					}
+					return a_observation.path == static_cast<uint32_t>(
+													 Upscaling::VRRenderScalePresentationPath::NativeOriginal) &&
+				           observationBackend ==
+				               Upscaling::VRRenderScaleBackendKind::None;
+				};
 			const bool selectionSuppressesCurrent =
 				a_observation.selection ==
 					PresentationAuditSelection::BlackKeepalive ||
@@ -6601,7 +7116,10 @@ namespace VRRenderScaleDevBenchBridge
 											  publication.publishedGeneration ==
 												  dispatchPublicationGeneration &&
 											  a_observation.method ==
-												  dispatchMethod));
+												  dispatchMethod &&
+											  exactPathMatchesTarget(
+												  static_cast<Upscaling::UpscaleMethod>(dispatchMethod),
+												  dispatchRenderScaleMode)));
 			const bool differsFromDispatch = !dispatchProven ||
 			                                 a_observation.transitionEpoch !=
 			                                     dispatchTransitionEpoch ||
@@ -6612,11 +7130,56 @@ namespace VRRenderScaleDevBenchBridge
 			                                     dispatchDeviceIdentity ||
 			                                 a_observation.resourceRevision !=
 			                                     dispatchResourceRevision;
-			const auto& stable = controller.stable;
+			const auto providerGenerationForProfile =
+				[&](const auto& a_profile) {
+					if (a_profile.method == Upscaling::UpscaleMethod::kDLSS)
+						return controller.dlssLifecycle.runtimeGeneration;
+					if (a_profile.method == Upscaling::UpscaleMethod::kFSR)
+						return controller.fsrLifecycle.runtimeGeneration;
+					return uint32_t{ 0 };
+				};
+			const auto exactResourceContractMatches =
+				[&](const auto& a_profile) {
+					const auto& resources = a_profile.resources;
+					const bool vendorProfile =
+						a_profile.method == Upscaling::UpscaleMethod::kDLSS ||
+						a_profile.method == Upscaling::UpscaleMethod::kFSR;
+					const bool observedBackendMatchesMethod =
+						a_profile.method == Upscaling::UpscaleMethod::kDLSS ?
+							observationBackend ==
+								Upscaling::VRRenderScaleBackendKind::DLSS :
+						a_profile.method == Upscaling::UpscaleMethod::kFSR ?
+							IsFSRBackend(observationBackend) :
+							observationBackend ==
+								Upscaling::VRRenderScaleBackendKind::None;
+					return resources.valid &&
+				           resources.active == a_profile.active &&
+				           resources.method == a_profile.method &&
+				           resources.qualityMode == a_profile.qualityMode &&
+				           (a_profile.method != Upscaling::UpscaleMethod::kDLSS ||
+							   resources.dlssPreset == a_profile.dlssPreset) &&
+				           resources.renderEyeWidth == a_profile.renderEyeWidth &&
+				           resources.renderEyeHeight == a_profile.renderEyeHeight &&
+				           resources.displayEyeWidth == a_profile.displayEyeWidth &&
+				           resources.displayEyeHeight == a_profile.displayEyeHeight &&
+				           resources.contextCount == 2u &&
+				           observedBackendMatchesMethod &&
+				           (vendorProfile ?
+								   (a_profile.active ?
+										   resources.backend == observationBackend :
+										   resources.backend == Upscaling::VRRenderScaleBackendKind::None) :
+								   resources.backend == Upscaling::VRRenderScaleBackendKind::None);
+				};
 			const auto exactProfileMatches = [&](const auto& a_profile) {
+				const bool requiresPublishedGeneration =
+					a_profile.method == Upscaling::UpscaleMethod::kDLSS ||
+					a_profile.method == Upscaling::UpscaleMethod::kFSR;
 				return a_profile.valid &&
+				       ReplacementTelemetry::MatchesTargetContractGeneration(
+						   requiresPublishedGeneration,
+						   a_observation.contractGeneration,
+						   a_profile.contractGeneration) &&
 				       a_observation.transitionEpoch == a_profile.transitionEpoch &&
-				       a_observation.contractGeneration == a_profile.contractGeneration &&
 				       a_observation.method == static_cast<uint32_t>(a_profile.method) &&
 				       a_observation.renderWidth == a_profile.renderEyeWidth &&
 				       a_observation.renderHeight == a_profile.renderEyeHeight &&
@@ -6624,60 +7187,73 @@ namespace VRRenderScaleDevBenchBridge
 				       a_observation.displayHeight == a_profile.displayEyeHeight &&
 				       a_observation.deviceIdentity ==
 				           reinterpret_cast<uintptr_t>(globals::d3d::device) &&
-				       a_observation.resourceRevision != 0 && publication.current;
+				       a_observation.resourceRevision != 0;
 			};
 			const auto boundaryMatchesProfile = [&](const auto& a_profile) {
+				const bool requiresPublishedGeneration =
+					a_profile.method == Upscaling::UpscaleMethod::kDLSS ||
+					a_profile.method == Upscaling::UpscaleMethod::kFSR;
 				return boundaryRecorded && a_profile.valid &&
 				       a_profile.requestID == boundaryRequestID &&
 				       a_profile.transitionEpoch == boundaryTransitionEpoch &&
-				       a_profile.contractGeneration ==
-				           boundaryContractGeneration &&
+				       ReplacementTelemetry::MatchesMutationBoundaryGeneration(
+						   requiresPublishedGeneration,
+						   boundaryContractGeneration,
+						   a_profile.contractGeneration) &&
 				       a_observation.deviceIdentity == boundaryDeviceIdentity;
 			};
 			const auto exactPathMatchesProfile = [&](const auto& a_profile) {
-				if (a_profile.method == Upscaling::UpscaleMethod::kDLSS) {
-					return a_observation.path ==
-					           static_cast<uint32_t>(
-								   Upscaling::VRRenderScalePresentationPath::VendorEvaluated) &&
-					       a_observation.backend == static_cast<uint32_t>(
-														Upscaling::VRRenderScaleBackendKind::DLSS);
-				}
-				if (a_profile.method == Upscaling::UpscaleMethod::kFSR) {
-					return a_observation.path ==
-					           static_cast<uint32_t>(
-								   Upscaling::VRRenderScalePresentationPath::VendorEvaluated) &&
-					       a_observation.backend != static_cast<uint32_t>(
-														Upscaling::VRRenderScaleBackendKind::None);
-				}
-				return a_observation.path == static_cast<uint32_t>(
-												 Upscaling::VRRenderScalePresentationPath::NativeOriginal) &&
-				       a_observation.backend == static_cast<uint32_t>(
-													Upscaling::VRRenderScaleBackendKind::None);
+				return exactPathMatchesTarget(
+					a_profile.method,
+					a_profile.renderScaleModeEnabled);
 			};
-			const bool exactStableAfterMutation = physicalMutationStarted &&
-			                                      differsFromDispatch &&
-			                                      a_observation.selection == PresentationAuditSelection::Observed &&
-			                                      exactProfileMatches(stable) &&
-			                                      boundaryMatchesProfile(stable) &&
-			                                      exactPathMatchesProfile(stable);
-			const bool exactReplacement = exactStableAfterMutation ||
-			                              (replacement &&
-											  differsFromDispatch &&
-											  a_observation.selection == PresentationAuditSelection::Observed &&
-											  physicalMutationStarted &&
-											  exactProfileMatches(*replacement) &&
-											  boundaryMatchesProfile(*replacement) &&
-											  exactPathMatchesProfile(*replacement));
+			const bool exactReplacement =
+				publishedReplacement &&
+				ReplacementTelemetry::IsPublishedReplacementProven({
+					.physicalMutationStarted = physicalMutationStarted,
+					.differsFromDispatch = differsFromDispatch,
+					.observed =
+						a_observation.selection ==
+						PresentationAuditSelection::Observed,
+					.profileMatches = exactProfileMatches(*publishedReplacement),
+					.mutationBoundaryMatches =
+						boundaryMatchesProfile(*publishedReplacement),
+					.presentationPathMatches =
+						exactPathMatchesProfile(*publishedReplacement),
+					.resourceContractMatches =
+						exactResourceContractMatches(*publishedReplacement),
+					.providerGenerationMatches =
+						(publishedReplacement->method != Upscaling::UpscaleMethod::kDLSS &&
+							publishedReplacement->method != Upscaling::UpscaleMethod::kFSR) ||
+						providerGenerationForProfile(*publishedReplacement) ==
+							publishedReplacement->contractGeneration,
+					.publicationCurrent = publication.current,
+				});
+			const bool dispatchUsesVendor =
+				dispatchMethod == static_cast<uint32_t>(
+									  Upscaling::UpscaleMethod::kDLSS) ||
+				dispatchMethod == static_cast<uint32_t>(
+									  Upscaling::UpscaleMethod::kFSR);
+			const bool exactCurrentPresentationAvailable =
+				!physicalMutationStarted && dispatchProven &&
+				a_observation.transitionEpoch == dispatchTransitionEpoch &&
+				a_observation.contractGeneration == dispatchContractGeneration &&
+				a_observation.method == dispatchMethod &&
+				static_cast<uint64_t>(a_observation.deviceIdentity) ==
+					dispatchDeviceIdentity &&
+				a_observation.resourceRevision == dispatchResourceRevision &&
+				observedDispatchDimensions && publication.current &&
+				publication.publishedGeneration ==
+					dispatchPublicationGeneration &&
+				(!dispatchUsesVendor || gate.existingVendorDispatchReady);
 			const uint32_t identityMethod = suppressesPreviousBeforeMutation ?
 			                                    dispatchMethod :
 			                                    a_observation.method;
 			const uint32_t identityBackend = suppressesPreviousBeforeMutation ?
 			                                     dispatchBackend :
 			                                     a_observation.backend;
-			const auto* identityProfile = exactReplacement && stable.valid ?
-			                                  std::addressof(stable) :
-			                              exactReplacement ? replacement :
-			                                                 nullptr;
+			const auto* identityProfile =
+				exactReplacement ? publishedReplacement : nullptr;
 			const uint32_t identityQualityMode = exactCurrent ?
 			                                         dispatchQualityMode :
 			                                     identityProfile ? identityProfile->qualityMode :
@@ -6704,6 +7280,14 @@ namespace VRRenderScaleDevBenchBridge
 			ReplacementTelemetry::PresentationDisposition disposition =
 				ToAuditDisposition(static_cast<
 					Upscaling::VRRenderScalePresentationPath>(a_observation.path));
+			const bool exactVendorObservationPath =
+				a_observation.path == static_cast<uint32_t>(
+										  Upscaling::VRRenderScalePresentationPath::VendorEvaluated) ||
+				a_observation.path == static_cast<uint32_t>(
+										  Upscaling::VRRenderScalePresentationPath::NativeOriginal);
+			if (observationVendorDispatchProven && exactVendorObservationPath)
+				disposition =
+					ReplacementTelemetry::PresentationDisposition::ExactVendor;
 			if (a_observation.selection ==
 				PresentationAuditSelection::BlackKeepalive) {
 				disposition =
@@ -6715,9 +7299,10 @@ namespace VRRenderScaleDevBenchBridge
 			}
 			const uint64_t identityRequestID = exactCurrent ?
 			                                       dispatchRequestID :
-			                                   exactReplacement && stable.valid ? stable.requestID :
-			                                   replacement                      ? replacement->requestID :
-			                                                                      controller.stable.requestID;
+			                                   identityProfile ?
+			                                       identityProfile->requestID :
+			                                   replacement ? replacement->requestID :
+			                                                 controller.stable.requestID;
 			const uint64_t identityTransitionEpoch = suppressesPreviousBeforeMutation ?
 			                                             dispatchTransitionEpoch :
 			                                             a_observation.transitionEpoch;
@@ -6766,11 +7351,18 @@ namespace VRRenderScaleDevBenchBridge
 				.qualityMode = identityQualityMode,
 				.renderScaleMode = identityRenderScaleMode,
 				.backend = identityBackend,
+				.vendorDispatchFrame = a_observation.vendorDispatchFrame,
+				.vendorDispatchSerial = a_observation.vendorDispatchSerial,
+				.vendorRuntimeFallback = a_observation.vendorRuntimeFallback,
+				.vendorDispatchProven = observationVendorDispatchProven,
+				.sharedVendorDispatchRequired = sharedVendorDispatchRequired,
 				.disposition = disposition,
 				.loadingOrMenuContext = identityLoadingOrMenuContext,
 				.transitionCooldown = identityTransitionCooldown,
 				.submitted = a_observation.submitted,
 				.exactCurrent = exactCurrent,
+				.exactCurrentPresentationAvailable =
+					exactCurrentPresentationAvailable,
 				.exactReplacement = exactReplacement,
 				.blockedPreMutation = blockedPreMutation,
 				.physicalMutationStarted = physicalMutationStarted,
@@ -6788,12 +7380,19 @@ namespace VRRenderScaleDevBenchBridge
 				store.active->firstNewGenerationProvenEvidence.is_null() &&
 				boundaryRequestID == completed.requestID &&
 				boundaryTransitionEpoch == completed.transitionEpoch &&
-				boundaryContractGeneration == completed.contractGeneration &&
+				ReplacementTelemetry::MatchesMutationBoundaryGeneration(
+					completed.method == static_cast<uint32_t>(
+											Upscaling::UpscaleMethod::kDLSS) ||
+						completed.method == static_cast<uint32_t>(
+												Upscaling::UpscaleMethod::kFSR),
+					boundaryContractGeneration,
+					completed.contractGeneration) &&
 				boundaryDeviceIdentity == completed.deviceIdentity) {
 				const auto eyeEvidence = [&](uint32_t a_eyeIndex) {
+					const bool leftEye = a_eyeIndex == 0;
 					return json{
-						{ "frame", a_eyeIndex == 0 ? completed.leftFrame : completed.rightFrame },
-						{ "qpcTick", a_eyeIndex == 0 ? completed.leftQpcTick : completed.rightQpcTick },
+						{ "frame", leftEye ? completed.leftFrame : completed.rightFrame },
+						{ "qpcTick", leftEye ? completed.leftQpcTick : completed.rightQpcTick },
 						{ "compositorCycleToken", completed.compositorCycleToken },
 						{ "transitionEpoch", completed.transitionEpoch },
 						{ "generation", completed.contractGeneration },
@@ -6801,6 +7400,13 @@ namespace VRRenderScaleDevBenchBridge
 										static_cast<Upscaling::UpscaleMethod>(completed.method)) },
 						{ "backend", GetBackendName(
 										 static_cast<Upscaling::VRRenderScaleBackendKind>(completed.backend)) },
+						{ "vendorDispatchFrame", leftEye ?
+													 completed.leftVendorDispatchFrame :
+													 completed.rightVendorDispatchFrame },
+						{ "vendorDispatchSerial", leftEye ?
+													  completed.leftVendorDispatchSerial :
+													  completed.rightVendorDispatchSerial },
+						{ "vendorRuntimeFallback", completed.vendorRuntimeFallback },
 						{ "deviceIdentity", static_cast<uint64_t>(completed.deviceIdentity) },
 						{ "resourceRevision", completed.resourceRevision },
 						{ "renderWidth", completed.renderWidth },
@@ -6836,6 +7442,9 @@ namespace VRRenderScaleDevBenchBridge
 					{ "backend", GetBackendName(
 									 static_cast<Upscaling::VRRenderScaleBackendKind>(completed.backend)) },
 					{ "backendValue", completed.backend },
+					{ "vendorDispatchProven", completed.vendorDispatchProven },
+					{ "sharedVendorDispatchRequired",
+						completed.sharedVendorDispatchRequired },
 					{ "compositorCycleToken", completed.compositorCycleToken },
 					{ "leftEye", eyeEvidence(0) },
 					{ "rightEye", eyeEvidence(1) },
@@ -6869,7 +7478,7 @@ namespace VRRenderScaleDevBenchBridge
 		}
 
 		static constexpr const char* diagnosticDescriptor =
-			R"json({"description":"Control and inspect CSX VR render-scale, including bounded exact-owner preparation stage telemetry and a single-owner, QPC-timed server-side qualification barrier that returns the first coherent exact-cell/profile observation without menu queries or client polling. qualification_begin requires an active stress session plus caller-supplied transitionId and ownerId; qualification_dispatch freezes the latency origin immediately before the command and can atomically reset/start CPU plus GPU performance telemetry on that dispatch frame; qualification_wait accepts the same ownership pair, an exact editor ID and/or form ID, an optional target profile, an optional exact foveation fixture, and a timeout that defaults to 120000ms and cannot exceed it. None and TAA targets validate the authoritative effective profile and native presentation without requiring inactive controller projections to mirror TAA. target.fsrRuntime matches the configured preference; coherent desired, authoritative, resource, lifecycle, and eye-dispatch evidence independently validates the physical FSR backend, including capability fallback. Omit target when an external controller owns profile selection; the waiter then requires a post-dispatch profile change and validates the mutually coherent observed profile without changing it. DLSS dispatch tracing remains opt-in and non-blocking. stop, dlss_trace_stop, and cpu_performance_stop accept expectedSessionId to fail closed if capture ownership changed; gpu_performance_stop accepts expectedStartFrame as its ownership guard; expectedStartFrame remains a legacy optional secondary guard for CPU telemetry. CPU performance status, start, and stop responses expose cpuPerformance.sessionId and state; stop retains the session ID and reset clears it to zero. Every response identifies the producing DLL; expectedBuildId fails closed on a stale build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","qualification_status","qualification_begin","qualification_dispatch","qualification_wait","qualification_cancel","cpu_performance_status","cpu_performance_start","cpu_performance_stop","cpu_performance_reset","gpu_performance_status","gpu_performance_start","gpu_performance_stop","gpu_performance_reset","dlss_trace_status","dlss_trace_start","dlss_trace_read","dlss_trace_stop","dlss_trace_reset","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","ham_status","ham_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"transitionId":{"type":"integer","minimum":1,"description":"Caller-owned nonzero qualification transition ID. Begin, dispatch, wait, and cancel must present it."},"ownerId":{"type":"string","minLength":1,"maxLength":128,"description":"Caller-generated qualification owner identity. Begin, dispatch, wait, and cancel must present the same value."},"startPerformanceTelemetry":{"type":"boolean","default":false,"description":"qualification_dispatch only: require inactive CPU and GPU captures, reset/start both on the dispatch frame, and return their ownership receipts."},"expectedCell":{"type":"integer","minimum":1,"maximum":4294967295,"description":"Optional exact destination cell form ID. qualification_wait requires this or expectedCellEditorId; when both are supplied both must match."},"expectedCellEditorId":{"type":"string","minLength":1,"maxLength":128,"description":"Preferred stable exact destination cell editor ID for qualification_wait."},"timeoutMs":{"type":"integer","minimum":1,"maximum":120000,"default":120000,"description":"Maximum qualification deadline measured from qualification_dispatch on the server QPC clock; the waiter returns immediately when the requested milestone is satisfied."},"target":{"type":"object","additionalProperties":false,"properties":{"method":{"type":"string","enum":["none","taa","dlss","fsr"]},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"renderScaleMode":{"type":"boolean"},"dlssProfile":{"type":"string","enum":["J","K","L","M","F","E"]},"fsrRuntime":{"type":"string","enum":["fsr3","fsr4"],"description":"Configured FSR runtime preference only. Physical backend fallback is validated independently."}},"required":["method","qualityMode","renderScaleMode"],"description":"Optional exact expected profile for a runner-owned selection. None and TAA require qualityMode 0 and renderScaleMode false. Omit it for an externally owned selection; the waiter observes and returns the exact coherent profile without mutating upscaling state."},"foveation":{"type":"object","additionalProperties":false,"properties":{"foveatedVendorDispatch":{"type":"boolean"},"foveatedCenterArea":{"type":"number","minimum":0,"maximum":1},"peripheryTAAEnable":{"type":"boolean"},"peripheryTAACenterArea":{"type":"number","minimum":0,"maximum":1},"peripheryTAAOuterScale":{"type":"number","minimum":0,"maximum":1}},"required":["foveatedVendorDispatch","foveatedCenterArea","peripheryTAAEnable","peripheryTAACenterArea","peripheryTAAOuterScale"],"description":"Optional exact settings fixture. Float comparisons use the tolerance returned in each receipt; active physical flags must agree with the requested enable states."},"afterSequence":{"type":"integer","minimum":0,"description":"For dlss_trace_read, return records after this sequence."},"limit":{"type":"integer","minimum":1,"maximum":256,"description":"Maximum ring records returned by dlss_trace_read; defaults to 32 and pinned failures are returned separately."},"expectedSessionId":{"type":"integer","minimum":1,"description":"Optional ownership guard for stop, dlss_trace_stop, and cpu_performance_stop. The corresponding active session must match before it is stopped."},"expectedStartFrame":{"type":"integer","minimum":0,"description":"Optional ownership guard for gpu_performance_stop and legacy secondary guard for cpu_performance_stop. When present, the active capture window start frame must match before it is stopped."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}},"required":["action"]}})json";
+			R"json({"description":"Control and inspect CSX VR render-scale, including DevBench-only retryTelemetry schema v1 with non-coalesced causes, source locations, per-role viewport wait intervals, QPC timestamps and stabilization milestones in status and qualification receipts, plus bounded exact-owner preparation stage telemetry and a single-owner, QPC-timed server-side qualification barrier that returns the first coherent exact-cell/profile observation without menu queries or client polling. qualification_begin requires an active stress session plus caller-supplied transitionId and ownerId; qualification_dispatch freezes the latency origin immediately before the command and can atomically reset/start CPU plus GPU performance telemetry on that dispatch frame; qualification_wait accepts the same ownership pair, an exact editor ID and/or form ID, an optional target profile, an optional exact foveation fixture, and a timeout that defaults to 120000ms and cannot exceed it. None and TAA targets validate the authoritative effective profile and native presentation without requiring inactive controller projections to mirror TAA. target.fsrRuntime matches the configured preference; coherent desired, authoritative, resource, lifecycle, and eye-dispatch evidence independently validates the physical FSR backend, including capability fallback. Omit target when an external controller owns profile selection; the waiter then requires a post-dispatch profile change and validates the mutually coherent observed profile without changing it. DLSS dispatch tracing remains opt-in and non-blocking. stop, dlss_trace_stop, and cpu_performance_stop accept expectedSessionId to fail closed if capture ownership changed; gpu_performance_stop accepts expectedStartFrame as its ownership guard; expectedStartFrame remains a legacy optional secondary guard for CPU telemetry. CPU performance status, start, and stop responses expose cpuPerformance.sessionId and state; stop retains the session ID and reset clears it to zero. Every response identifies the producing DLL; expectedBuildId fails closed on a stale build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","qualification_status","qualification_begin","qualification_dispatch","qualification_wait","qualification_cancel","cpu_performance_status","cpu_performance_start","cpu_performance_stop","cpu_performance_reset","gpu_performance_status","gpu_performance_start","gpu_performance_stop","gpu_performance_reset","dlss_trace_status","dlss_trace_start","dlss_trace_read","dlss_trace_stop","dlss_trace_reset","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","ham_status","ham_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"transitionId":{"type":"integer","minimum":1,"description":"Caller-owned nonzero qualification transition ID. Begin, dispatch, wait, and cancel must present it."},"ownerId":{"type":"string","minLength":1,"maxLength":128,"description":"Caller-generated qualification owner identity. Begin, dispatch, wait, and cancel must present the same value."},"startPerformanceTelemetry":{"type":"boolean","default":false,"description":"qualification_dispatch only: require inactive CPU and GPU captures, reset/start both on the dispatch frame, and return their ownership receipts."},"expectedCell":{"type":"integer","minimum":1,"maximum":4294967295,"description":"Optional exact destination cell form ID. qualification_wait requires this or expectedCellEditorId; when both are supplied both must match."},"expectedCellEditorId":{"type":"string","minLength":1,"maxLength":128,"description":"Preferred stable exact destination cell editor ID for qualification_wait."},"timeoutMs":{"type":"integer","minimum":1,"maximum":120000,"default":120000,"description":"Maximum qualification deadline measured from qualification_dispatch on the server QPC clock; the waiter returns immediately when the requested milestone is satisfied."},"target":{"type":"object","additionalProperties":false,"properties":{"method":{"type":"string","enum":["none","taa","dlss","fsr"]},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"renderScaleMode":{"type":"boolean"},"dlssProfile":{"type":"string","enum":["J","K","L","M","F","E"]},"fsrRuntime":{"type":"string","enum":["fsr3","fsr4"],"description":"Configured FSR runtime preference only. Physical backend fallback is validated independently."}},"required":["method","qualityMode","renderScaleMode"],"description":"Optional exact expected profile for a runner-owned selection. None and TAA require qualityMode 0 and renderScaleMode false. Omit it for an externally owned selection; the waiter observes and returns the exact coherent profile without mutating upscaling state."},"foveation":{"type":"object","additionalProperties":false,"properties":{"foveatedVendorDispatch":{"type":"boolean"},"foveatedCenterArea":{"type":"number","minimum":0,"maximum":1},"peripheryTAAEnable":{"type":"boolean"},"peripheryTAACenterArea":{"type":"number","minimum":0,"maximum":1},"peripheryTAAOuterScale":{"type":"number","minimum":0,"maximum":1}},"required":["foveatedVendorDispatch","foveatedCenterArea","peripheryTAAEnable","peripheryTAACenterArea","peripheryTAAOuterScale"],"description":"Optional exact settings fixture. Float comparisons use the tolerance returned in each receipt; active physical flags must agree with the requested enable states."},"afterSequence":{"type":"integer","minimum":0,"description":"For dlss_trace_read, return records after this sequence."},"limit":{"type":"integer","minimum":1,"maximum":256,"description":"Maximum ring records returned by dlss_trace_read; defaults to 32 and pinned failures are returned separately."},"expectedSessionId":{"type":"integer","minimum":1,"description":"Optional ownership guard for stop, dlss_trace_stop, and cpu_performance_stop. The corresponding active session must match before it is stopped."},"expectedStartFrame":{"type":"integer","minimum":0,"description":"Optional ownership guard for gpu_performance_stop and legacy secondary guard for cpu_performance_stop. When present, the active capture window start frame must match before it is stopped."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}},"required":["action"]}})json";
 		static const std::string runtimeDiagnosticDescriptor = [&] {
 			auto descriptor = json::parse(diagnosticDescriptor);
 			auto description = descriptor["description"].get<std::string>();
@@ -6889,7 +7498,28 @@ namespace VRRenderScaleDevBenchBridge
 					previousNativeDescription.size(),
 					nativeDescription);
 			}
-			descriptor["description"] = description;
+			descriptor["description"] = description +
+			                            " set_render_scale_link requires boolean enabled, developer mode, "
+			                            "and an active stress capture. It uses the in-game checkbox policy: "
+			                            "enable requests Render Scale without changing quality; disable "
+			                            "preserves the remembered preference and current physical mode. "
+			                            "accepted reports admission, not physical completion. The setting "
+			                            "is saved through the normal CS settings save operation.";
+			descriptor["inputSchema"]["properties"]["action"]["enum"].push_back("set_render_scale_link");
+			descriptor["inputSchema"]["properties"]["action"]["enum"].push_back("fsr_shared_guides");
+			descriptor["inputSchema"]["properties"]["enabled"]["description"] =
+				"Action-specific enabled state. For fsr_shared_guides, omit to inspect; supplied values "
+				"update the live preference while GPU capture is inactive. Save Settings persists the choice.";
+			descriptor["description"] = descriptor["description"].get<std::string>() +
+			                            " fsr_shared_guides inspects the full-eye FSR shared-guide mode; "
+			                            "optional boolean enabled selects direct imports or reference copies while GPU "
+			                            "performance capture is inactive. The in-game Upscaling checkbox Share FSR guide "
+			                            "textures uses the same setting and capture guard. Changes apply immediately and "
+			                            "persist through Save Settings; this action does not write configuration files. "
+			                            "Imports remain retained until fenced teardown. "
+			                            "GPU status exposes runtimeFSRSharedGuides direct inputs/pixels, fallback guide "
+			                            "copies and import failures; item5ActiveFSRCopies counts actual input copies, "
+			                            "with avoidedPixels including direct sharing and inactive rectangle savings.";
 			descriptor["inputSchema"]["properties"]["foveation"]["description"] =
 				"Optional exact settings fixture. Float comparisons use the "
 				"tolerance returned in each receipt; live execution flags must "
@@ -6900,6 +7530,60 @@ namespace VRRenderScaleDevBenchBridge
 				"cleanup; absent milestone preserves strict combined semantics. Its "
 				"terminal receipt reports independent milestone timings, cleanup "
 				"tail, and the replacement-presentation timeline.";
+			descriptor["description"] =
+				descriptor["description"].get<std::string>() +
+				" Main-thread actions cancelled before admission return "
+				"main_thread_timeout; an action already admitted returns "
+				"main_thread_in_progress and may complete after the response.";
+			const std::string submitFreshnessDescription =
+				" status.submitInputFreshness reports fixed process-lifetime "
+				"boundaryOutcomes and methods.fsr/dlss/other.inputOutcomes with "
+				"accepted or rejection-reason counts. Each method.work reports "
+				"fallbackPreparedHits, fallbackOutputHits, guideEncodeEyes, "
+				"colorCopyEyes, inputSanitizationEyes, vendorEyeAttempts, and "
+				"vendorEyeRetries. Compare snapshots for interval deltas; these "
+				"independently sampled counters do not reset with captures. "
+				"Guide and copy counts measure dispatched eye regions; sanitization "
+				"counts measure eligible helper calls. Vendor attempts count calls "
+				"to the vendor dispatch helper after resource validation and each "
+				"eye in a runtime stereo batch; retries identify another attempt "
+				"with the same proven current-eye identity, including full-eye "
+				"fallback after foveated dispatch.";
+			const std::string readinessRetryDescription =
+				" Render-scale metrics expose readinessDeferrals as the subset of "
+				"backendDeferrals proven to wait before provider/shared-resource "
+				"release. These remain included in retries; retryTelemetry labels "
+				"them PreMutationReadiness. Only otherwise healthy immutable "
+				"settings transitions poll these waits each frame and retain "
+				"proof-driven settling; partial teardown and recovery stay guarded.";
+			const std::string ownedDrainDescription =
+				" Owned settings-drain waits remain included in Backend retry totals. "
+				"Only a complete healthy owned-release certificate permits proof-driven "
+				"release; unproven operations retain the six-frame guard. retryTelemetry records RelatchDrainBegin, "
+				"RelatchDrainPending, RelatchDrainReady, RelatchDrainInvalidated, "
+				"RelatchCommitBegin and RelatchSharedCleanup with request ownership "
+				"and frame/QPC observations. Polling performs no provider teardown; "
+				"commit requires the completed native stereo boundary. Additive "
+				"ownedRelease schema v1 binds source/target generations, required "
+				"providers, revisions, ticket serials and opaque device/context/queue "
+				"identities. drainFences records existing issue and observed-ready QPC "
+				"timestamps without extra GPU work. OwnedReleaseConsumed, "
+				"OwnedTargetPublished, OwnedProviderPrepared and OwnedReleaseEligibility "
+				"separate historical drain consumption, target publication/preparation "
+				"and scoped eligibility. Guard-exemption eligibility does not enable "
+				"vendor dispatch: target preparation and coherent stereo remain required "
+				"by promotion. Obligation bits 1,2,4,8,16,32 identify "
+				"old-provider drain, completed reset, owned detached retirement, physical "
+				"publication, target-provider preparation and coherent stereo. Owned "
+				"detached retirement is not a claim that cleanup-only fences completed; "
+				"the existing cleanup milestone reports that debt separately. "
+				"blockingCleanupReadyQpc observes when guard eligibility verifies "
+				"blocking ownership obligations, not cleanup-only fence completion. Missing "
+				"timestamps/identities are null; opaque identities are decimal strings.";
+			descriptor["description"] =
+				descriptor["description"].get<std::string>() + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription;
+			descriptor["inputSchema"]["properties"]["action"]["description"] =
+				"Select a diagnostic or control action." + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription;
 			descriptor["inputSchema"]["properties"]["milestone"] = {
 				{ "type", "string" },
 				{ "enum", json::array({ "strict", "presentation", "cleanup" }) },

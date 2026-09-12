@@ -1,0 +1,43 @@
+warnings: {}
+errors: {}
+shaders:
+    - file: RCAS.hlsl
+      configs:
+          CSHADER:
+              common_defines: []
+              entries:
+                  - entry: Upscaling:Compute:RCAS
+                    defines: []
+                  - entry: Upscaling:Compute:MotionAdaptiveRCAS
+                    defines:
+                        - MOTION_ADAPTIVE
+    - file: LumaSharpen.hlsl
+      configs:
+          CSHADER:
+              common_defines: []
+              entries:
+                  - entry: Upscaling:Compute:LumaSharpen
+                    defines: []
+                  - entry: Upscaling:Compute:MotionAdaptiveLumaSharpen
+                    defines:
+                        - MOTION_ADAPTIVE
+    - file: EncodeTexturesCS.hlsl
+      configs:
+          CSHADER:
+              common_defines:
+                  - COMPUTESHADER
+                  - DX11
+                  - WINPC
+              entries:
+                  - entry: Upscaling:Compute:EncodeTextures
+                    defines: []
+                  - entry: Upscaling:Compute:EncodeTexturesDLSS
+                    defines:
+                        - DLSS
+                  - entry: Upscaling:Compute:EncodeTexturesFSR
+                    defines:
+                        - FSR
+                  - entry: Upscaling:Compute:EncodeTexturesFSRDepthOutput
+                    defines:
+                        - FSR
+                        - DEPTH_OUTPUT

@@ -40,16 +40,36 @@ public:
 		};
 	}
 
+	virtual void DrawSettingsHeaderControls() override;
 	virtual void DrawSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual void DrawPerformanceSettings(bool) override;
+	virtual json CapturePerformanceSettingsState() const override;
+	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override;
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { SetEnabled(a_enabled); }
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
 
 	Settings GetCommonBufferData() const;
+	/** @return Whether the persisted Foliage Lighting master switch is enabled. */
+	bool IsEnabled() const { return enabled.load(std::memory_order_acquire); }
+	/** @return Whether Foliage Lighting is contributing to the current frame. */
+	bool IsRuntimeEnabled() const { return loaded && IsEnabled(); }
+	/** Enables or disables all contributions without discarding detailed tuning. */
+	void SetEnabled(bool a_enabled) { enabled.store(a_enabled, std::memory_order_release); }
 
 	Settings settings;
 
 private:
+	std::atomic_bool enabled = true;
+
 	static Settings GetDisabledSettings();
+	bool HasEnabledContribution() const;
+	void DrawFoliageScatteringSetting();
+	void DrawFoliageAmbientBoostSetting(bool a_truePBRActive);
+	void DrawFoliageAmbientFlipSetting();
+	void DrawGrassScatteringSetting();
 	static void SanitizeSettings(Settings& a_settings);
 };

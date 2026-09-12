@@ -7,7 +7,9 @@
 -   [VR depth-culling temporal policy](vr-depth-culling-temporal-policy.md) — bounded recovery for one-frame-late Skyrim VR OBB results.
 -   [VR depth-culling evidence](vr-depth-culling-temporal-evidence.md) — source history, live Skyrim VR layout evidence, and exact local validation.
 -   [API service registry](api-service-registry.md) — parallel versioned service discovery while retaining the legacy CSAP interface.
+-   [Screenshot API and sequences](screenshot-api-and-sequences.md) — asynchronous still/sequence contract, native CSXR discovery, receipts, events, and manifests.
 -   [Shader API v1](api-shader-v1.md) — versioned inspection, feature-state, compilation, and cache-lifecycle controls with preflight safety.
+-   [Shader compatibility API v1](api-shader-compatibility-v1.md) — startup registration of external shader-facing contracts and narrowly scoped cache identities.
 
 ## Getting Started
 
@@ -17,6 +19,11 @@
 -   **[Shader Runtime A/B](./shader-runtime-ab.md)** - RenderDoc same-frame shader equivalence checks
 -   **[GPU-Unified Presets](./unified-presets.md)** - One preset path with capability-selected DLSS or FSR
 -   **[Render-scale PR qualification](./render-scale-pr-qualification.md)** - Bounded 20-COC, 25-menu-transition, and three-sequence release gate
+-   **[VR render-scale iteration](./vr-render-scale-iteration.md)** - Durable optimization references, safety invariants, and current investigation state
+-   **[VR render-scale authority map](./vr-render-scale-authority-map.md)** - Authoritative owners, service paths, and diagnostic liveness invariants
+-   **[VR render-scale comparison ledger](./vr-render-scale-comparison-ledger.csv)** - Cross-machine aggregate results without raw per-run evidence
+-   **[NVIDIA render-scale tuning](./nvidia-renderscale-tuning-20260829.md)** - Compact result from the first public-API transition matrix
+-   **[NVIDIA render-scale tuning failure](./nvidia-renderscale-tuning-failure.md)** - Public-API operation and qualification divergence captured by the interrupted 33-transition assay
 -   **[Screenshot API and Sequences](./screenshot-api-and-sequences.md)** - Versioned asynchronous still/sequence contract, acknowledgements, manifests, and implementation gates
 
 ## Quick Links

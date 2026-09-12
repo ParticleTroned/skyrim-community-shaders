@@ -7,6 +7,12 @@
 
 namespace StreamlineFrameTokenPublication
 {
+	enum class ResetScope
+	{
+		Lifecycle,
+		DispatchFailure,
+	};
+
 	template <class Token>
 	class Coordinator
 	{
@@ -28,6 +34,8 @@ namespace StreamlineFrameTokenPublication
 			if (published_ && published_->frame == a_frame) {
 				return Snapshot{ published_->frame, published_->token, false };
 			}
+			if (published_ && IsOlderFrame(a_frame, published_->frame))
+				return std::nullopt;
 
 			auto token = std::forward<Acquire>(a_acquire)(a_frame);
 			if (!token)
@@ -37,14 +45,24 @@ namespace StreamlineFrameTokenPublication
 			return Snapshot{ a_frame, *token, true };
 		}
 
-		/** Invalidates the published pair under the acquisition lock. */
-		void Reset()
+		/** Only lifecycle resets may discard publication; dispatch failure cannot reopen an older frame. */
+		void Reset(ResetScope a_scope = ResetScope::Lifecycle)
 		{
+			if (a_scope == ResetScope::DispatchFailure)
+				return;
 			std::lock_guard lock(mutex_);
 			published_.reset();
 		}
 
 	private:
+		static constexpr bool IsOlderFrame(
+			std::uint32_t a_candidate,
+			std::uint32_t a_published) noexcept
+		{
+			return a_candidate != a_published &&
+			       a_published - a_candidate < 0x80000000u;
+		}
+
 		struct Published
 		{
 			std::uint32_t frame = 0;

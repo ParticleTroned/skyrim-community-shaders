@@ -1,7 +1,5 @@
 #pragma once
 
-#include <atomic>
-
 #include "RE/B/BSVolumetricLightingRenderData.h"
 #include "VolumetricLightingTuning.h"
 
@@ -69,7 +67,6 @@ public:
 	void SetExteriorEnabled(bool enabled);
 	/** @return The active context's finite-safe shader opacity, or neutral when tuning is unavailable. */
 	float GetRuntimeGodrayOpacity() const;
-	virtual void DataLoaded() override;
 	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;
 	virtual void EarlyPrepass() override;
@@ -142,7 +139,6 @@ private:
 	void SanitizeSettings();
 	void SetupVL();
 	void ClearVolumetricLightingTargets();
-	void TryApplyVRImageSpaceCacheRefresh();
 	static int32_t ClampQualityIndex(int32_t quality);
 	static TextureSize ClampTextureSize(const TextureSize& size);
 
@@ -169,7 +165,6 @@ private:
 	bool inInterior = false;
 	bool inInteriorWithSun = false;
 	bool rainOnlySuppressionActive = false;
-	std::atomic<bool> vrImageSpaceCacheRefreshPending = false;
 	VolumetricLightingDescriptor runtimeDescriptor{};
 
 	struct VLData
@@ -178,7 +173,11 @@ private:
 		int32_t screenY;
 		int32_t screenXMin1;
 		int32_t screenYMin1;
+		int32_t eyeWidth;
+		uint32_t horizontalGroupsPerEye;
+		uint32_t pad[2];
 	};
+	STATIC_ASSERT_ALIGNAS_16(VLData);
 	VLData vlData = VLData();
 	ConstantBuffer* vlDataCB = nullptr;
 

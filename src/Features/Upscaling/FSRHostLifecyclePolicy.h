@@ -1,7 +1,25 @@
 #pragma once
 
+#include <cstdint>
+
 namespace FSRHostLifecyclePolicy
 {
+	inline constexpr std::uint32_t MinimumFeatureLevel = 0xB100;
+
+	[[nodiscard]] constexpr bool SupportsHostFsr3FeatureLevel(
+		std::uint32_t a_featureLevel) noexcept
+	{
+		// Current host shaders bind more than eight compute UAV slots.
+		return a_featureLevel >= MinimumFeatureLevel;
+	}
+
+	[[nodiscard]] constexpr bool CanAttemptHostFallback(
+		bool a_hostSupported,
+		bool a_runtimeProviderUsedForFrame) noexcept
+	{
+		return a_hostSupported && !a_runtimeProviderUsedForFrame;
+	}
+
 	enum class CallDisposition
 	{
 		Succeeded,
@@ -16,8 +34,8 @@ namespace FSRHostLifecyclePolicy
 		if (a_faulted)
 			return CallDisposition::Faulted;
 		return a_succeeded ?
-			CallDisposition::Succeeded :
-			CallDisposition::ReturnedError;
+		           CallDisposition::Succeeded :
+		           CallDisposition::ReturnedError;
 	}
 
 	[[nodiscard]] constexpr bool RequiresOwnershipQuarantine(
@@ -46,5 +64,21 @@ namespace FSRHostLifecyclePolicy
 		return !a_quarantined &&
 		       !a_hasValidContext &&
 		       !a_hasIndeterminateContext;
+	}
+
+	[[nodiscard]] constexpr bool CanRetainQuarantinedHostOwnership(
+		bool a_quarantined,
+		bool a_targetUsesHostFSR) noexcept
+	{
+		// Indeterminate SDK ownership cannot be released safely, but it does not
+		// own another provider's textures or prevent that provider from recovering.
+		return a_quarantined && !a_targetUsesHostFSR;
+	}
+
+	[[nodiscard]] constexpr bool CanQueueHostActivation(
+		bool a_quarantined,
+		bool a_targetUsesHostFSR) noexcept
+	{
+		return !a_quarantined || !a_targetUsesHostFSR;
 	}
 }

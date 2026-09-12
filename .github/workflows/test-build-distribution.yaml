@@ -1,0 +1,96 @@
+name: "Test Build: Small Distribution"
+run-name: Test Build ${{ inputs.allocation-sha }}
+
+on:
+    workflow_dispatch:
+        inputs:
+            allocation-sha:
+                description: "Exact immutable allocation commit"
+                required: true
+                type: string
+
+permissions:
+    contents: read
+
+concurrency:
+    group: csx-test-distribution-${{ inputs.allocation-sha }}
+    cancel-in-progress: false
+
+jobs:
+    metadata:
+        name: Verify allocated identity
+        runs-on: ubuntu-latest
+        outputs:
+            build-id: ${{ steps.identity.outputs.build_id }}
+            artifact-name: ${{ steps.identity.outputs.artifact_name }}
+            display-version: ${{ steps.identity.outputs.display_version }}
+            package-name: ${{ steps.identity.outputs.package_name }}
+            source-sha: ${{ steps.identity.outputs.source_sha }}
+        steps:
+            - name: Checkout exact allocation
+              uses: actions/checkout@v6
+              with:
+                  ref: ${{ inputs.allocation-sha }}
+                  fetch-depth: 0
+                  submodules: false
+                  persist-credentials: false
+
+            - name: Verify immutable allocation and source identity
+              id: identity
+              env:
+                  ALLOCATION_SHA: ${{ inputs.allocation-sha }}
+                  DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+                  DISPATCH_REF: ${{ github.ref }}
+                  DISPATCH_SHA: ${{ github.sha }}
+              run: |
+                  set -euo pipefail
+                  if ! [[ "$ALLOCATION_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+                    echo "allocation-sha must be one canonical commit SHA" >&2
+                    exit 1
+                  fi
+                  if [ "$(git rev-parse HEAD)" != "$ALLOCATION_SHA" ]; then
+                    echo "Checkout does not match the requested allocation." >&2
+                    exit 1
+                  fi
+
+                  git fetch --tags origin \
+                    "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+                  git merge-base --is-ancestor "$ALLOCATION_SHA" "origin/$DEFAULT_BRANCH"
+                  python tools/csx_test_build.py verify-allocation \
+                    --repository . \
+                    --allocation-sha "$ALLOCATION_SHA" \
+                    --state version/test-build.json \
+                    --github-output "$GITHUB_OUTPUT"
+
+                  TAG_NAME=$(python tools/csx_test_build.py read \
+                    --state version/test-build.json | sed -n 's/^tag_name=//p')
+                  if [ "$DISPATCH_REF" != "refs/tags/$TAG_NAME" ] || [ "$DISPATCH_SHA" != "$ALLOCATION_SHA" ]; then
+                    echo "Dispatch must use the allocation's exact immutable tag and commit." >&2
+                    exit 1
+                  fi
+                  if [ "$(git rev-parse "refs/tags/$TAG_NAME")" != "$ALLOCATION_SHA" ]; then
+                    echo "Immutable allocation tag does not match the requested commit." >&2
+                    exit 1
+                  fi
+
+                  STATE_BASE=$(python tools/csx_test_build.py read \
+                    --state version/test-build.json | sed -n 's/^base_version=//p')
+                  SOURCE_BASE=$(jq -r '.configurePresets[] | select(.name == "VR") | .cacheVariables.CSX_VERSION' CMakePresets.json)
+                  if [ "$STATE_BASE" != "$SOURCE_BASE" ]; then
+                    echo "State base version $STATE_BASE does not match source base version $SOURCE_BASE." >&2
+                    exit 1
+                  fi
+
+    build:
+        name: Build ${{ needs.metadata.outputs.display-version }}
+        needs: metadata
+        uses: ./.github/workflows/_shared-build.yaml
+        with:
+            ref: ${{ inputs.allocation-sha }}
+            repository: ${{ github.repository }}
+            run-cpp: true
+            run-shader-validation: false
+            run-shader-tests: false
+            test-build-id: ${{ needs.metadata.outputs.build-id }}
+            artifact-name: ${{ needs.metadata.outputs.artifact-name }}
+            expected-package-name: ${{ needs.metadata.outputs.package-name }}

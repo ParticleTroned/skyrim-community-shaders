@@ -9,6 +9,7 @@ set(_json_files
     "docs/development/schemas/screenshot-sequence-manifest-v1.schema.json"
     "tests/data/screenshot-api/capture-request-v1.json"
     "tests/data/screenshot-api/sequence-request-v1.json"
+    "tests/data/screenshot-api/sequence-manifest-v1.json"
     "docs/development/unified-preset-policy.json"
 )
 
@@ -26,6 +27,23 @@ foreach(_relative IN LISTS _json_files)
         message(FATAL_ERROR "Expected a JSON object in ${_relative}")
     endif()
 endforeach()
+
+file(READ "${PROJECT_ROOT}/tests/data/screenshot-api/sequence-manifest-v1.json" _manifest_fixture)
+foreach(_manifest_member IN ITEMS
+    producer client acceptedUtc completedUtc requested effective actual counts
+    children warnings errors packaging terminalOutcome
+)
+    string(JSON _manifest_member_type ERROR_VARIABLE _manifest_error TYPE "${_manifest_fixture}" "${_manifest_member}")
+    if(_manifest_error)
+        message(FATAL_ERROR "Sequence manifest fixture is missing ${_manifest_member}: ${_manifest_error}")
+    endif()
+endforeach()
+string(JSON _fixture_cancelled GET "${_manifest_fixture}" counts cancelled)
+string(JSON _fixture_fallback GET "${_manifest_fixture}" actual fallbacksPresent)
+string(JSON _fixture_view GET "${_manifest_fixture}" children 0 artifacts 0 actual view)
+if(NOT _fixture_cancelled EQUAL 0 OR NOT _fixture_fallback OR NOT _fixture_view STREQUAL "source_native")
+    message(FATAL_ERROR "Sequence manifest fixture does not preserve counters, fallback, and artifact provenance")
+endif()
 
 file(READ "${PROJECT_ROOT}/docs/development/unified-preset-policy.json" _policy)
 foreach(_legacy IN ITEMS
@@ -54,9 +72,10 @@ foreach(_action IN ITEMS
 endforeach()
 
 foreach(_event IN ITEMS
-    request.accepted source.waiting source.fallback artifact.queued
+    request.accepted source.waiting source.acquired source.timeout source.fallback artifact.queued
     artifact.encoding artifact.written artifact.failed sequence.frame_scheduled
-    sequence.stop_requested sequence.finalizing request.terminal
+    sequence.frame_dropped sequence.stop_requested sequence.finalizing
+    packaging.queued packaging.completed packaging.failed request.terminal
 )
     string(FIND "${_implementation}" "\"${_event}\"" _event_position)
     if(_event_position EQUAL -1)
@@ -66,8 +85,9 @@ endforeach()
 
 foreach(_required_contract_text IN ITEMS
     runtime_session persistent_user settings_default file_reference
-    maximumOutputsPerFrame retentionSeconds manifest_write_failed
+    maximumOutputsPerFrame retentionSeconds manifest_failed
 	DescribeCommittedArtifact BuildProvenance::GetProducer artifact_hash_failed
+	terminalOutcome completedUtc fallbacksPresent cancelled manifestChildren
 )
     string(FIND "${_implementation}" "${_required_contract_text}" _contract_position)
     if(_contract_position EQUAL -1)
@@ -88,6 +108,55 @@ string(FIND "${_bridge}" "communityshaders.screenshot" _tool_position)
 if(_tool_position EQUAL -1)
     message(FATAL_ERROR "communityshaders.screenshot is not registered")
 endif()
+
+file(READ "${PROJECT_ROOT}/include/VRAPI/CSscreenshotapi.h" _native_header)
+string(FIND "${_native_header}" "ServiceName[] = \"csx.screenshot\"" _native_name_position)
+string(FIND "${_native_header}" "Status (*Dispatch)" _native_dispatch_position)
+if(_native_name_position EQUAL -1 OR _native_dispatch_position EQUAL -1)
+    message(FATAL_ERROR "Screenshot API native CSXR contract is missing")
+endif()
+
+file(READ "${PROJECT_ROOT}/src/Api/ServiceRegistryProvider.cpp" _registry_provider)
+string(FIND "${_registry_provider}" "InitializeScreenshotService();" _native_registration_position)
+if(_native_registration_position EQUAL -1)
+    message(FATAL_ERROR "Screenshot API is not registered with CSXR")
+endif()
+
+file(READ "${PROJECT_ROOT}/src/Features/ScreenshotFeature.cpp" _feature_controls)
+string(FIND "${_feature_controls}" "void ScreenshotFeature::RequestUiCapture()" _ui_adapter_position)
+string(FIND "${_feature_controls}" "RequestApiCapture(\"ui\")" _ui_v1_position)
+string(FIND "${_feature_controls}" "DispatchScreenshotServiceRequest" _control_dispatch_position)
+if(_ui_adapter_position EQUAL -1 OR _ui_v1_position EQUAL -1 OR _control_dispatch_position EQUAL -1)
+    message(FATAL_ERROR "Native screenshot UI must submit through the public contract-v1 screenshot service")
+endif()
+foreach(_acquisition_contract_text IN ITEMS
+    BuildAcquisitionRecord publicationGeneration deviceIdentity
+    submittedBounds requiredEyeMask IsSamePublication
+)
+    string(FIND "${_feature_controls}" "${_acquisition_contract_text}" _acquisition_position)
+    if(_acquisition_position EQUAL -1)
+        message(FATAL_ERROR "Screenshot acquisition provenance is missing: ${_acquisition_contract_text}")
+    endif()
+endforeach()
+
+file(READ "${PROJECT_ROOT}/src/Menu.cpp" _menu)
+string(FIND "${_menu}" "screenshotFeature.RequestUiCapture()" _hotkey_v1_position)
+if(_hotkey_v1_position EQUAL -1)
+    message(FATAL_ERROR "Screenshot hotkey does not use the contract-v1 UI adapter")
+endif()
+
+file(READ "${PROJECT_ROOT}/src/MenuDevBenchBridge.cpp" _menu_bridge)
+foreach(_obsolete_contract_text IN ITEMS
+    "communityshaders.menu screenshot is obsolete"
+    "\"obsolete\", true"
+    "\"tool\", \"communityshaders.screenshot\""
+    "\"contractMajor\", 1"
+)
+    string(FIND "${_menu_bridge}" "${_obsolete_contract_text}" _obsolete_position)
+    if(_obsolete_position EQUAL -1)
+        message(FATAL_ERROR "Obsolete menu screenshot adapter is missing migration metadata: ${_obsolete_contract_text}")
+    endif()
+endforeach()
 string(FIND "${_bridge}" "#ifdef DEVBENCH_BRIDGE_ENABLED" _bridge_guard_position)
 if(_bridge_guard_position EQUAL -1)
     message(FATAL_ERROR "Screenshot bridge does not use the project's DevBench compile guard")

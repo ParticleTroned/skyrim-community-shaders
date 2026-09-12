@@ -2,6 +2,8 @@
 > This is an unofficial fork of [Skyrim Community Shaders](https://github.com/doodlum/skyrim-community-shaders)
 > by Doodlum & contributors. It is not affiliated with or endorsed by the Community Shaders team.
 
+NOTE: This repository does not contain any effects 11-related code from upstream !!!
+
 # Community Shaders Expanded (CSX) – Unofficial Fork
 
 SKSE core plugin for community-driven advanced graphics modifications.
@@ -80,14 +82,17 @@ cmake --preset ALL
 # Build using the preset
 cmake --build --preset ALL
 
-# Install an AIO package somewhere, e.g. $MOD_FOLDER
-cmake --install --preset ALL -- --prefix $MOD_FOLDER
+# Refresh the isolated AIO staging package in ./build/ALL/aio
+cmake --install ./build/ALL --config Release
+
+# Copy the staged package into the mod folder without deleting that folder
+cmake -E copy_directory ./build/ALL/aio $MOD_FOLDER
 ```
 
 # Notes
 
 -   If you prefer to run the VC environment manually, launch Developer PowerShell or the x64 Native Tools prompt instead of calling vcvarsall.bat directly from PowerShell.
--   The convenience wrapper `BuildRelease.bat` also captures these steps.
+-   `BuildRelease.bat ALL` performs the configure and package build. Use an auto-deployment preset when the output should be copied directly to a mod folder.
 
 #### Build a zip package
 

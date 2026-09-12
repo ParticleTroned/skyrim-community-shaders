@@ -212,6 +212,8 @@ namespace
 
 	void NormalizeSettingsForRuntime(Skylighting::Settings& a_settings)
 	{
+		constexpr float maxZenith = Skylighting::Settings{}.MaxZenith;
+		a_settings.MaxZenith = std::isfinite(a_settings.MaxZenith) ? std::clamp(a_settings.MaxZenith, 0.0f, maxZenith) : maxZenith;
 		a_settings.ProbeFieldSize = ClampProbeFieldSize(a_settings.ProbeFieldSize);
 		a_settings.ProbeGridQuality = ClampProbeGridQuality(a_settings.ProbeGridQuality);
 		a_settings.OcclusionUpdateInterval = ClampUpdateInterval(a_settings.OcclusionUpdateInterval);
@@ -746,7 +748,8 @@ void Skylighting::DrawSettings()
 	}
 
 	ImGui::Separator();
-	ImGui::SliderAngle("Max Zenith Angle", &settings.MaxZenith, 0, 90);
+	if (ImGui::SliderAngle("Max Zenith Angle", &settings.MaxZenith, 0, 90))
+		NormalizeSettingsForRuntime(settings);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Smaller angles create a more focused top-down shadow.");
 }

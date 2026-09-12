@@ -1203,7 +1203,7 @@ namespace
 		Check(runtime.StartCapture(config) == StartResult::kStarted,
 			"filtered eye capture did not start");
 		for (std::uint32_t index = 0; index < 100; ++index)
-			runtime.RecordVisibilityCandidate(0x1000 + index, index, 1);
+			runtime.RecordVisibilityCandidate(0x1000 + index, index, 1, 1);
 		runtime.RecordEyeSubmission(
 			{ .d3dObject = 0x9000, .dimension = ResourceDimension::kTexture2D, .widthOrBytes = 2048, .height = 2048, .depthOrArraySize = 1, .mipLevels = 1 },
 			Eye::kRight, 2, 0.5f, 0.0f, 1.0f, 1.0f, 0, 9);

@@ -106,7 +106,7 @@ static const float3 noise3D[32] = {
 	}
 
 	uint bitIndex = SharedData::FrameCountAlwaysActive % 32;
-	uint bitmask = isValid ? outShadowBitmask[dtid] : 0xFFFFFFFFu;
+	uint bitmask = isValid ? outShadowBitmask[probeTexID] : 0xFFFFFFFFu;
 	float shadowSample = 1.0;
 	bool advanceShadowHistory = settings.ShadowDataAvailable == 0;
 
@@ -132,7 +132,7 @@ static const float3 noise3D[32] = {
 						// The point is valid but beyond directional-shadow coverage.
 						advanceShadowHistory = true;
 					} else {
-					float3 positionWS = jitteredMS + FrameBuffer::CameraPosAdjust[0].xyz;
+						float3 positionWS = jitteredMS + FrameBuffer::CameraPosAdjust[0].xyz;
 						uint cascadeIndex = (linearDepth > shadowData.EndSplitDistances.x) ? 1u : 0u;
 						float3 positionLS = mul(shadowData.ShadowProj[cascadeIndex], float4(positionWS, 1)).xyz;
 
@@ -154,10 +154,10 @@ static const float3 noise3D[32] = {
 		bitmask &= ~(1u << bitIndex);
 		if (shadowSample > 0.5)
 			bitmask |= 1u << bitIndex;
-		outShadowBitmask[dtid] = bitmask;
-		outShadowVisibility[dtid] = float(countbits(bitmask)) / 32.0;
+		outShadowBitmask[probeTexID] = bitmask;
+		outShadowVisibility[probeTexID] = float(countbits(bitmask)) / 32.0;
 	} else if (!isValid) {
-		outShadowBitmask[dtid] = 0xFFFFFFFFu;
-		outShadowVisibility[dtid] = 1.0;
+		outShadowBitmask[probeTexID] = 0xFFFFFFFFu;
+		outShadowVisibility[probeTexID] = 1.0;
 	}
 }

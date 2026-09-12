@@ -1722,6 +1722,44 @@ if(BUILD_CONTROLLER_TESTS)
         tests/sharpener_bindings_test.cpp
     )
     target_link_libraries(sharpener_bindings_test PRIVATE d3d11.lib)
+    set(_skylighting_slice_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/skylighting-slice"
+    )
+    set(_skylighting_slice_naming_header
+        "${_skylighting_slice_test_dir}/d3d_resource_naming.h"
+    )
+    add_custom_command(
+        OUTPUT "${_skylighting_slice_naming_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_skylighting_slice_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_d3d_resource_naming.cmake"
+        DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/Utils/D3D.cpp"
+            tests/extract_d3d_resource_naming.cmake
+        VERBATIM
+    )
+    add_controller_test(
+        skylighting_probe_slice_test
+        SkylightingProbeSlice
+        tests/skylighting_probe_slice_test.cpp
+    )
+    target_sources(
+        skylighting_probe_slice_test
+        PRIVATE "${_skylighting_slice_naming_header}"
+    )
+    target_include_directories(
+        skylighting_probe_slice_test
+        PRIVATE "${_skylighting_slice_test_dir}"
+    )
+    target_link_libraries(
+        skylighting_probe_slice_test
+        PRIVATE d3d11.lib d3dcompiler.lib
+    )
+    set_tests_properties(
+        SkylightingProbeSlice
+        PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" TIMEOUT 30
+    )
     add_controller_test(
         motion_sharpening_runtime_compile_test
         MotionSharpeningRuntimeCompile
@@ -2641,6 +2679,7 @@ if(BUILD_CONTROLLER_TESTS)
             perf_mode_restart_state_test
             motion_sharpening_policy_test
             sharpener_bindings_test
+            skylighting_probe_slice_test
             motion_sharpening_settings_test
             vr_vendor_relatch_policy_test
             vr_relatch_drain_policy_test

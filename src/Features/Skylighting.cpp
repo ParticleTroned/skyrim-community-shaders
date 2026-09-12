@@ -1501,22 +1501,36 @@ void Skylighting::RenderOcclusion()
 		frameCount++;
 
 		auto& precipitation = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
-		RE::BSGraphics::DepthStencilData precipitationCopy = precipitation;
+		const RE::BSGraphics::DepthStencilData precipitationCopy = precipitation;
+
+		static float& PrecipitationShaderCubeSize = (*(float*)REL::RelocationID(515451, 401590).address());
+		const float originalPrecipitationShaderCubeSize = PrecipitationShaderCubeSize;
+
+		static RE::NiPoint3& PrecipitationShaderDirection = (*(RE::NiPoint3*)REL::RelocationID(515509, 401648).address());
+		const RE::NiPoint3 originalParticleShaderDirection = PrecipitationShaderDirection;
+		static REL::Relocation<void(RE::Precipitation*, RE::NiPointer<RE::NiCamera>)> _computeProjection{ REL::RelocationID(25643, 26185) };
+		const float originaLastCubeSize = precip->lastCubeSize;
+		const bool originalOcclusionState = inOcclusion;
+		bool projectionChanged = false;
+
+		const SKSE::stl::scope_exit restoreEngineState([&]() noexcept {
+			inOcclusion = originalOcclusionState;
+			PrecipitationShaderCubeSize = originalPrecipitationShaderCubeSize;
+			precip->lastCubeSize = originaLastCubeSize;
+			PrecipitationShaderDirection = originalParticleShaderDirection;
+			precipitation = precipitationCopy;
+			if (projectionChanged) {
+				ZoneScopedN("Skylighting - Restore Projection");
+				_computeProjection(precip, occlusionCamera);
+			}
+		});
 
 		precipitation.depthSRV = texOcclusion->srv.get();
 		precipitation.texture = texOcclusion->resource.get();
 		precipitation.views[0] = texOcclusion->dsv.get();
 
-		static float& PrecipitationShaderCubeSize = (*(float*)REL::RelocationID(515451, 401590).address());
-		float originalPrecipitationShaderCubeSize = PrecipitationShaderCubeSize;
-
-		static RE::NiPoint3& PrecipitationShaderDirection = (*(RE::NiPoint3*)REL::RelocationID(515509, 401648).address());
-		RE::NiPoint3 originalParticleShaderDirection = PrecipitationShaderDirection;
-
 		inOcclusion = true;
 		PrecipitationShaderCubeSize = ClampProbeFieldSize(settings.ProbeFieldSize);
-
-		float originaLastCubeSize = precip->lastCubeSize;
 		precip->lastCubeSize = PrecipitationShaderCubeSize;
 
 		float2 vPoint;
@@ -1543,14 +1557,14 @@ void Skylighting::RenderOcclusion()
 			vPoint = { vPoint.x * cos(vPoint.y), vPoint.x * sin(vPoint.y) };
 		}
 
-		float3 PrecipitationShaderDirectionF = -float3{ vPoint.x, vPoint.y, sqrt(1 - vPoint.LengthSquared()) };
+		float3 PrecipitationShaderDirectionF = -float3{ vPoint.x, vPoint.y, sqrt(std::max(0.0f, 1.0f - vPoint.LengthSquared())) };
 		PrecipitationShaderDirectionF.Normalize();
 
 		PrecipitationShaderDirection = { PrecipitationShaderDirectionF.x, PrecipitationShaderDirectionF.y, PrecipitationShaderDirectionF.z };
 
-		static REL::Relocation<void(RE::Precipitation*, RE::NiPointer<RE::NiCamera>)> _computeProjection{ REL::RelocationID(25643, 26185) };
 		{
 			ZoneScopedN("Skylighting - Setup Projection");
+			projectionChanged = true;
 			_computeProjection(precip, occlusionCamera);
 			precip->SetupMask();
 		}
@@ -1560,23 +1574,9 @@ void Skylighting::RenderOcclusion()
 			CS_GPU_PASS("Skylighting::OcclusionMask");
 			precip->RenderMask(reinterpret_cast<RE::BSParticleShaderRainEmitter*>(&rainCapture));
 		}
-		inOcclusion = false;
-
 		OcclusionDir = -float4{ PrecipitationShaderDirectionF.x, PrecipitationShaderDirectionF.y, PrecipitationShaderDirectionF.z, 0 };
 		occlusionSHBasis4Pi = EvaluateDirectionalSHBasis4Pi(float3{ OcclusionDir.x, OcclusionDir.y, OcclusionDir.z });
 		OcclusionTransform = reinterpret_cast<RE::BSParticleShaderRainEmitter*>(&rainCapture)->occlusionProjection;
-
-		PrecipitationShaderCubeSize = originalPrecipitationShaderCubeSize;
-		precip->lastCubeSize = originaLastCubeSize;
-
-		PrecipitationShaderDirection = originalParticleShaderDirection;
-
-		precipitation = precipitationCopy;
-
-		{
-			ZoneScopedN("Skylighting - Restore Projection");
-			_computeProjection(precip, occlusionCamera);
-		}
 	}
 }
 

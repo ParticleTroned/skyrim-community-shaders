@@ -206,6 +206,7 @@ struct FidelityFX
 		const bool awaitingInitialVRRenderScaleLatch = false;
 		const bool runtimePathEligible = true;
 		const bool runtimeUpscalerSessionQuarantined = false;
+		plan.contextsCompatible = runtimeContextsCompatible;
 #include "fsr_runtime_gate_under_test.h"
 	}
 	LifecycleResult ExecuteRuntimeUpscalerBatch(const RuntimeDispatchPlan&, std::span<const UpscaleRegionParameters> a_regions)

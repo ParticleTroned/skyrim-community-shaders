@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../../Buffer.h"
+#include "../MotionAdaptiveSharpening.h"
 
 #include <d3d11_4.h>
 #include <winrt/base.h>
@@ -17,12 +18,19 @@ public:
 	LumaSharpen() = default;
 	~LumaSharpen();
 
-	void Initialize();
+	void Initialize(bool enableMotionAdaptive = false);
 	void ClearShaderCache();
 
 	bool ApplySharpen(ID3D11ShaderResourceView* inputTexture, ID3D11UnorderedAccessView* outputUAV, float sharpness);
+	/** Adjusts luminance sharpening using the shared per-eye motion policy and fixed fallback. */
+	bool ApplyMotionAdaptiveSharpen(ID3D11ShaderResourceView* inputTexture, ID3D11UnorderedAccessView* outputUAV,
+		float sharpness, float baseStrength, const MotionSharpening::Settings& settings,
+		ID3D11ShaderResourceView* motionVectors, std::span<const MotionSharpening::Region> regions);
+	/** Reports the last attempted Luma dispatch, independently of current upscaler selection. */
+	const char* GetMotionAdaptiveStatus() const noexcept;
 
 private:
+	UpscalingSharpener::MotionAdaptiveSharpening motionAdaptive{ UpscalingSharpener::Pass::LumaSharpen };
 	void CreateComputeShader();
 
 	winrt::com_ptr<ID3D11ComputeShader> lumaSharpenComputeShader;

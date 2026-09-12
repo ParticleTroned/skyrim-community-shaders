@@ -612,7 +612,7 @@ void VolumetricLighting::PostPostLoad()
 
 void VolumetricLighting::SetupResources()
 {
-	vlDataCB = new ConstantBuffer(ConstantBufferDesc<VLData>());
+	vlDataCB = new ConstantBuffer(ConstantBufferDesc<VLData>(), "VolumetricLighting::Dimensions");
 }
 
 void VolumetricLighting::EarlyPrepass()
@@ -631,6 +631,10 @@ void VolumetricLighting::EarlyPrepass()
 	vlData.screenY = height;
 	vlData.screenXMin1 = width - 1;
 	vlData.screenYMin1 = height - 1;
+	vlData.eyeWidth = globals::game::isVR ? width / 2 : width;
+	const int32_t maximumEyeWidth = globals::game::isVR ? width - vlData.eyeWidth : width;
+	vlData.horizontalGroupsPerEye =
+		(maximumEyeWidth + BlurThreadGroupSizeX - BlurWindow * 2u - 1u) / (BlurThreadGroupSizeX - BlurWindow * 2u);
 	vlDataCB->Update(vlData);
 
 	const bool currentlyInInterior = LocationContext::HasInteriorCell();
@@ -765,7 +769,7 @@ VolumetricLighting::VolumetricLightingDescriptor* VolumetricLighting::ApplyVolum
 	const bool needsColorTuning =
 		hasActiveProfile &&
 		(!VolumetricLightingTuning::IsNear(profile.Saturation, 1.0f) ||
-		 !VolumetricLightingTuning::IsNear(profile.CustomColorContribution, 0.0f));
+			!VolumetricLightingTuning::IsNear(profile.CustomColorContribution, 0.0f));
 	if (VolumetricLightingTuning::IsNear(intensityScale, 1.0f) && !needsColorTuning)
 		return descriptor;
 
@@ -827,7 +831,7 @@ void VolumetricLighting::SetDimensionsCB() const
 
 void VolumetricLighting::SetGroupCountsHCS(uint32_t& threadGroupCountX) const
 {
-	threadGroupCountX = (vlData.screenX + BlurThreadGroupSizeX - BlurWindow * 2u - 1u) / (BlurThreadGroupSizeX - BlurWindow * 2u);
+	threadGroupCountX = vlData.horizontalGroupsPerEye * (globals::game::isVR ? 2u : 1u);
 }
 
 void VolumetricLighting::SetGroupCountsVCS(uint32_t& threadGroupCountY) const

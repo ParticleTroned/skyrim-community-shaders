@@ -159,6 +159,33 @@ namespace
 		return first && next && !stale && acquisitions == 2;
 	}
 
+	bool TestDispatchFailureCannotReopenStaleFrame()
+	{
+		Coordinator coordinator;
+		Token current{ 11 };
+		Token stale{ 10 };
+		Token next{ 12 };
+		std::uint32_t acquisitions = 0;
+		const auto publish = [&](std::uint32_t a_frame, Token& a_token) {
+			return coordinator.Resolve(a_frame, [&](std::uint32_t) -> std::optional<Token*> {
+				++acquisitions;
+				return &a_token;
+			});
+		};
+
+		if (!publish(11, current) || publish(10, stale) || acquisitions != 1)
+			return false;
+		coordinator.Reset(StreamlineFrameTokenPublication::ResetScope::DispatchFailure);
+		if (publish(10, stale) || acquisitions != 1)
+			return false;
+		const auto reused = publish(11, current);
+		if (!reused || reused->token != &current || reused->acquired || acquisitions != 1)
+			return false;
+
+		const auto advanced = publish(12, next);
+		return advanced && advanced->token == &next && advanced->acquired && acquisitions == 2;
+	}
+
 	bool TestFrameCounterWrapRemainsMonotonic()
 	{
 		Coordinator coordinator;
@@ -333,6 +360,7 @@ int main()
 	return TestConcurrentPublication() &&
 	               TestFailureAndReset() &&
 	               TestStaleFrameCannotReplacePublication() &&
+	               TestDispatchFailureCannotReopenStaleFrame() &&
 	               TestFrameCounterWrapRemainsMonotonic() &&
 	               TestOptionalPipelinePolicies() &&
 	               TestProxyLifecycleAndPublicContracts() &&

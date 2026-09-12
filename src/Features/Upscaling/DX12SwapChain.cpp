@@ -676,6 +676,21 @@ float DX12SwapChain::GetFrameTime() const
 	return frameTime;
 }
 
+WrappedResource::WrappedResource(ID3D11Texture2D* a_texture, ID3D12Device* a_d3d12Device, HANDLE a_sharedHandle)
+{
+	DX::ThrowIfFailed(a_texture && a_d3d12Device ? S_OK : E_INVALIDARG);
+	winrt::handle temporaryHandle;
+	if (!a_sharedHandle) {
+		winrt::com_ptr<IDXGIResource1> dxgiResource;
+		DX::ThrowIfFailed(a_texture->QueryInterface(IID_PPV_ARGS(dxgiResource.put())));
+		DX::ThrowIfFailed(dxgiResource->CreateSharedHandle(nullptr,
+			DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr, temporaryHandle.put()));
+		a_sharedHandle = temporaryHandle.get();
+	}
+	DX::ThrowIfFailed(a_d3d12Device->OpenSharedHandle(a_sharedHandle, IID_PPV_ARGS(resource.put())));
+	resource11.copy_from(a_texture);
+}
+
 WrappedResource::WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* a_d3d11Device, ID3D12Device* a_d3d12Device)
 {
 	// Create D3D11 shared texture directly instead of wrapping D3D12 resource
@@ -684,17 +699,8 @@ WrappedResource::WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* 
 	winrt::com_ptr<ID3D11ShaderResourceView> newSRV;
 	winrt::com_ptr<ID3D11UnorderedAccessView> newUAV;
 	winrt::com_ptr<ID3D11RenderTargetView> newRTV;
-	winrt::com_ptr<ID3D12Resource> newResource12;
 	DX::ThrowIfFailed(a_d3d11Device->CreateTexture2D(&a_texDesc, nullptr, newResource11.put()));
-
-	// Get shared handle from D3D11 texture to enable D3D12 access
-	winrt::com_ptr<IDXGIResource1> dxgiResource;
-	DX::ThrowIfFailed(newResource11->QueryInterface(IID_PPV_ARGS(dxgiResource.put())));
-	winrt::handle sharedHandle;
-	DX::ThrowIfFailed(dxgiResource->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr, sharedHandle.put()));
-
-	// Open the shared D3D11 texture as D3D12 resource
-	DX::ThrowIfFailed(a_d3d12Device->OpenSharedHandle(sharedHandle.get(), IID_PPV_ARGS(newResource12.put())));
+	WrappedResource imported(newResource11.get(), a_d3d12Device);
 
 	if (a_texDesc.BindFlags & D3D11_BIND_SHADER_RESOURCE) {
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
@@ -740,7 +746,7 @@ WrappedResource::WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* 
 	srv = std::move(newSRV);
 	uav = std::move(newUAV);
 	rtv = std::move(newRTV);
-	resource = std::move(newResource12);
+	resource = std::move(imported.resource);
 }
 
 DXGISwapChainProxy::DXGISwapChainProxy(DX12SwapChain& a_owner, IDXGISwapChain4* a_swapChain) :

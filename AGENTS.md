@@ -142,16 +142,93 @@ contradict this policy.
     of this protocol.
 -   Every `main-VR` commit that changes or evaluates VR render-scale behavior
     must include any corresponding updates to the durable cross-machine record:
-    `docs/development/vr-render-scale-comparison-ledger.csv`,
+    the numbered ledgers indexed by `docs/development/vr-render-scale-ledger.md`,
     `docs/development/vr-render-scale-iteration.md`, and the relevant compact
     tuning or failure summary. If runtime evidence follows an implementation
     commit, make an immediate documentation commit before starting the next
     render-scale change. Do not version raw per-run evidence trees merely to
     preserve a measurement.
+-   Create a new immutable numbered ledger for every finalized measurement
+    and whenever publishing measurements for a different PR. Use
+    `docs/development/vr-render-scale-ledger-NNNN-prNUMBER.csv`, increasing
+    the repository-wide sequence from its current maximum; never reuse a
+    number or overwrite an earlier snapshot. Each new ledger contains only
+    the explicitly selected baseline runs and measurements made for the PR
+    that commits it. Include that PR's earlier measurements when relevant;
+    unrelated run history remains in earlier ledgers. Commit the snapshot,
+    index and corresponding report with that PR. The initial `0001` and
+    `0002` history archives preserve the pre-numbering record unchanged.
+    Keep each CSV below 100 MiB; if one PR needs more space, split its run
+    columns into consecutive numbered files with the same PR identity.
+    Follow `docs/development/vr-render-scale-comparison-reporting.md`.
+    Every render-scale run update must preserve numeric per-transition
+    timings in that ledger for each pass or repeat, including the transition
+    ordinal, source-to-destination route, timing definition, units, and
+    unambiguous run/build commit identity. Aggregates and links to local
+    evidence are insufficient. Preserve interrupted repeat segments and
+    distinguish missing receipts, failed measurements, and transitions not
+    run with explicit reasons; never substitute zero or an inferred timing.
+    Before finalizing the update, verify every available measured timing is
+    represented and historical cells remain intact. Reports must reference
+    this ledger, and raw evidence trees remain local.
+-   The canonical ledger must contain the complete run results, with no
+    omitted available information. Preserve every field of the finalized
+    summary, including every transition and pass, terminal and Task 2
+    classifications, retries and reasons, recoveries, counters, health gates
+    with observed values/limits/applicability, memory, resource and profiler
+    details, provenance, and evidence gaps. Include the per-transition and
+    per-pass comparison deltas and assessment. Reports, aggregates, and links
+    to local evidence do not substitute for these ledger contents. Use
+    structured detail cells where needed and append missing metric rows
+    without changing historical cells. Verify field-for-field reconstruction
+    against the complete saved summary and comparison details, in addition
+    to the numeric timing audit. Preserve false, zero, null and empty values;
+    unavailable data require explicit reasons, never a generic placeholder
+    in place of available evidence. Missing ledger coverage means reporting
+    is incomplete. Follow the complete-ledger contract in
+    `docs/development/vr-render-scale-comparison-reporting.md`.
+-   Every upscaling/render-scale ledger update automatically includes a detailed
+    side-by-side analysis under
+    `docs/development/vr-render-scale-comparison-reporting.md`. Compare every
+    retained transition and pass with the pinned reference, preserving exact
+    compiled source, renderer base, main-VR base/equivalence, and Build IDs.
+    Report completion, terminal results, full-history health, and whether the
+    change meets the improvement-or-neutral standard separately. Recovered
+    failures and applicable cumulative gate failures must remain visible.
+    Report actual relatch/strict-completion frames and milliseconds, stretch
+    frames and duration; the fixed stretch cutoff is not a health gate when
+    settling imposes the stretch. Keep its raw result as a labeled diagnostic.
+    PR inclusion of this comparison is solely the user's decision. Do not make
+    it a PR requirement, publication default, or merge gate; this does not
+    change the separate existing release-qualification protocol.
+-   Keep routine render-scale reporting fast: use the maintained single-command
+    workflow in `docs/development/vr-render-scale-comparison-reporting.md`.
+    Generate the comparison once after preparing the ledger update. Reuse
+    outputs only after evidence, code, deployment inputs and output hashes
+    match; always audit ledger timings. Preserve full evidence and missing-data
+    limitations. Brief progress lines are welcome, but do not add polling,
+    repeated extraction, tests, packaging or prose rewrites to a normal run
+    without a change, failure or unresolved concern that requires them.
+    Retain stage timings in the result; surface material findings, blockers and
+    unexpected delays promptly.
 -   Scope pre-commit to staged files or the changed revision range. Do not use `--all-files` merely to validate a focused change; legacy third-party files preserve intentional formatting.
 -   Never interrupt shader compilation or cache generation because output is temporarily silent. Check process and cache activity and allow the documented build window.
 -   Preserve user-owned build outputs and shader caches unless the task explicitly requires their removal or regeneration.
 -   Report exact passed, failed, skipped, or blocked checks. Do not turn a warning into a pass or omit a known validation limitation.
+-   Finalize runtime DLL verification from the preserved producer Build ID and
+    source commit. Resolve the exact enabled AIO mod and compare its physical
+    `CommunityShaders.dll` SHA-256 and size with its adjacent
+    `CSX.BuildManifest.json` and AIO build receipt. Match the manifest Build ID
+    to the runtime producer and retain the compile identity. Reuse known AIO
+    paths; use one bounded MO2 inspection only when needed. Check enabled loose
+    providers, Overwrite, and unmanaged Data directly. Do not stop at MO2's
+    virtual module path or recursively search game and build trees.
+-   Keep worker lifecycle diagnostics separate from reporting completeness.
+    Once owned captures are verified inactive, the complete evidence journal
+    is flushed, required evidence is validated, and DLL identity is verified,
+    a delayed helper shutdown or stale worker status does not make reporting
+    incomplete. Preserve its diagnostic and ownership lock for later repair;
+    do not wait indefinitely or replay measurements.
 
 ## Repository tooling
 

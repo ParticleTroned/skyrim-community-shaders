@@ -65,6 +65,9 @@ namespace Permutation
 		static const uint IsFemale = (1 << 6);
 		static const uint SuppressExternalEmittance = (1 << 7);
 		static const uint AdditiveLighting = (1 << 8);
+		static const uint CurrentFrameDepthCulling = (1 << 9);
+		static const uint CurrentFrameDepthCullingObjectIndex = 0x0FFF0000;
+		static const uint CurrentFrameDepthCullingObjectIndexShift = 16;
 	}
 
 	namespace ExtraFeatureFlags

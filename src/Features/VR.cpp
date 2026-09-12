@@ -58,6 +58,51 @@ bool VR::OverlayRenderContext::IsValid() const
 
 namespace
 {
+	CSX::RenderMap::ResourceViewInput DescribeDepthCullingVisibilityView(
+		ID3D11ShaderResourceView* a_view)
+	{
+		using namespace CSX::RenderMap;
+		ResourceViewInput result;
+		result.view.kind = TargetViewKind::kShaderResource;
+		result.view.d3dObject = reinterpret_cast<std::uintptr_t>(a_view);
+		if (!a_view)
+			return result;
+
+		ID3D11Resource* resource = nullptr;
+		a_view->GetResource(&resource);
+		if (resource) {
+			result.resource.d3dObject = reinterpret_cast<std::uintptr_t>(resource);
+			D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+			resource->GetType(&dimension);
+			if (dimension == D3D11_RESOURCE_DIMENSION_BUFFER) {
+				D3D11_BUFFER_DESC desc{};
+				reinterpret_cast<ID3D11Buffer*>(resource)->GetDesc(&desc);
+				result.resource.dimension = ResourceDimension::kBuffer;
+				result.resource.widthOrBytes = desc.ByteWidth;
+				result.resource.usage = desc.Usage;
+				result.resource.bindFlags = desc.BindFlags;
+				result.resource.cpuAccessFlags = desc.CPUAccessFlags;
+				result.resource.miscFlags = desc.MiscFlags;
+				result.resource.structureByteStride = desc.StructureByteStride;
+			}
+			resource->Release();
+		}
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC desc{};
+		a_view->GetDesc(&desc);
+		result.view.format = desc.Format;
+		result.view.dimension = desc.ViewDimension;
+		if (desc.ViewDimension == D3D11_SRV_DIMENSION_BUFFER) {
+			result.view.firstElement = desc.Buffer.FirstElement;
+			result.view.elementCount = desc.Buffer.NumElements;
+		} else if (desc.ViewDimension == D3D11_SRV_DIMENSION_BUFFEREX) {
+			result.view.firstElement = desc.BufferEx.FirstElement;
+			result.view.elementCount = desc.BufferEx.NumElements;
+			result.view.flags = desc.BufferEx.Flags;
+		}
+		return result;
+	}
+
 	void EmitVRPipelineEnvironmentDiagnosticsOnce(const VR& a_vr)
 	{
 		static std::mutex startupDiagnosticsMutex;

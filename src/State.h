@@ -334,7 +334,9 @@ public:
 		GrassSphereNormal = 1 << 5,
 		IsFemale = 1 << 6,
 		SuppressExternalEmittance = 1 << 7,
-		AdditiveLighting = 1 << 8
+		AdditiveLighting = 1 << 8,
+		CurrentFrameDepthCulling = 1 << 9,
+		CurrentFrameDepthCullingObjectIndex = 0x0FFF0000
 	};
 
 	enum class ExtraFeatureDescriptors : uint32_t

@@ -7,6 +7,8 @@ struct Skylighting : Feature
 {
 private:
 	static constexpr std::string_view MOD_ID = "139352";
+	bool HasProbeUpdateResources() const;
+	bool probeUpdateBufferEnabled = false;
 
 public:
 	virtual bool SupportsVR() override { return true; };
@@ -133,6 +135,7 @@ public:
 	float4 OcclusionDir;
 	uint frameCount = 0;
 	float3 prevCellID = { 0, 0, 0 };
+	float3 probeUpdateCellID = { 0, 0, 0 };
 	float4 occlusionSHBasis4Pi = { 3.5449078f, 0, 0, 0 };
 	uint probeUpdateSliceStart = 0;
 	uint probeUpdateSliceCount = 128;

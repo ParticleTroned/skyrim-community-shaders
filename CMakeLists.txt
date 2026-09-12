@@ -2547,6 +2547,39 @@ if(BUILD_CONTROLLER_TESTS)
     add_test(NAME ScreenshotDispatch COMMAND screenshot_dispatch_test)
     set_tests_properties(ScreenshotDispatch PROPERTIES LABELS "ControllerTests")
 
+    set(_skylighting_lifecycle_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/skylighting-lifecycle"
+    )
+    set(_skylighting_lifecycle_headers
+        "${_skylighting_lifecycle_test_dir}/skylighting_buffer_under_test.h"
+        "${_skylighting_lifecycle_test_dir}/skylighting_lifecycle_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_skylighting_lifecycle_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_skylighting_lifecycle_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_skylighting_lifecycle.cmake"
+        DEPENDS
+            src/Features/Skylighting.cpp
+            src/Features/Skylighting.h
+            tests/extract_skylighting_lifecycle.cmake
+        VERBATIM
+    )
+    add_controller_test(
+        skylighting_lifecycle_test
+        SkylightingLifecycle
+        tests/skylighting_lifecycle_test.cpp
+    )
+    target_sources(
+        skylighting_lifecycle_test
+        PRIVATE ${_skylighting_lifecycle_headers}
+    )
+    target_include_directories(
+        skylighting_lifecycle_test
+        PRIVATE "${_skylighting_lifecycle_test_dir}"
+    )
+
     add_executable(
         api_upscaling_contract_test
         EXCLUDE_FROM_ALL
@@ -2804,6 +2837,7 @@ if(BUILD_CONTROLLER_TESTS)
             screenshot_manifest_snapshot_test
             screenshot_capture_present_test
             screenshot_dispatch_test
+            skylighting_lifecycle_test
             api_upscaling_contract_test
             api_upscaling_service_policy_test
             api_shader_service_policy_test

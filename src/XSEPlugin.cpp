@@ -17,6 +17,7 @@
 #include "Features/HorizonFix.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
+#include "Features/Skylighting.h"
 #include "Features/Upscaling.h"
 #include "FrameAnnotations.h"
 #include "Globals.h"
@@ -82,6 +83,7 @@ namespace
 
 	void ResetRuntimeStateAfterGameLoad()
 	{
+		globals::features::skylighting.QueueResetSkylighting();
 		if (globals::state) {
 			globals::state->pendingPostLoadRuntimeReset = true;
 		}

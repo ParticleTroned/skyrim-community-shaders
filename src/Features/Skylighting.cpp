@@ -257,7 +257,7 @@ namespace
 		if (globals::d3d::device && globals::game::renderer)
 			a_skylighting.ResetSkylighting();
 		else
-			a_skylighting.queuedResetSkylighting = true;
+			a_skylighting.QueueResetSkylighting();
 	}
 
 	void DrawSkylightingRuntimeToggle(Skylighting& a_skylighting)
@@ -312,7 +312,7 @@ namespace
 		if (canResetRuntimeResources)
 			a_skylighting.ResetSkylighting();
 		else
-			a_skylighting.queuedResetSkylighting = true;
+			a_skylighting.QueueResetSkylighting();
 	}
 
 	void ApplySkylightingPerformancePreset(
@@ -515,15 +515,33 @@ void Skylighting::ApplyProbeGridQuality()
 	settings.StableSliceCount = ClampStableSliceCount(settings.StableSliceCount, probeArrayDims[2]);
 }
 
+void Skylighting::QueueResetSkylighting()
+{
+	queuedResetSkylighting.store(true, std::memory_order_release);
+}
+
+bool Skylighting::UpdateInteriorState()
+{
+	const bool interior = Util::IsInterior();
+	if (previousInteriorState && *previousInteriorState != interior)
+		QueueResetSkylighting();
+	previousInteriorState = interior;
+	return interior;
+}
+
 void Skylighting::ResetSkylighting()
 {
+	// Consume before clearing so a loading event during the reset remains queued.
+	queuedResetSkylighting.exchange(false, std::memory_order_acq_rel);
+	needsOcclusionRefresh = true;
+
 	auto context = globals::d3d::context;
 	if (!context ||
 		!texProbeArray || !texProbeArray->srv.get() || !texProbeArray->uav.get() ||
 		!texAccumFramesArray || !texAccumFramesArray->uav.get() ||
 		!texShadowBitmask || !texShadowBitmask->srv.get() || !texShadowBitmask->uav.get() ||
 		!texShadowVisibility || !texShadowVisibility->srv.get() || !texShadowVisibility->uav.get()) {
-		queuedResetSkylighting = true;
+		QueueResetSkylighting();
 		return;
 	}
 
@@ -553,7 +571,6 @@ void Skylighting::ResetSkylighting()
 	forceProbeUpdateThisFrame = true;
 	probeUpdateFrameCounter = 0;
 	occlusionUpdateFrameCounter = 0;
-	queuedResetSkylighting = false;
 }
 
 void Skylighting::SetPerformanceCostMeasurementEnabled(bool a_enabled)
@@ -606,7 +623,7 @@ void Skylighting::RestorePerformanceCostMeasurementState(const json& a_state)
 	if (canResetRuntimeResources)
 		ResetSkylighting();
 	else
-		queuedResetSkylighting = true;
+		QueueResetSkylighting();
 }
 
 void Skylighting::DrawSettings()
@@ -1029,14 +1046,30 @@ void Skylighting::CompileComputeShaders()
 	}
 }
 
+bool Skylighting::HasProbeUpdateResources() const
+{
+	auto sky = globals::game::sky;
+	return sky && sky->mode.get() == RE::Sky::Mode::kFull && globals::d3d::context &&
+	       probeUpdateCompute.get() && comparisonSampler.get() &&
+	       texOcclusion && texOcclusion->srv.get() &&
+	       texProbeArray && texProbeArray->srv.get() && texProbeArray->uav.get() &&
+	       texAccumFramesArray && texAccumFramesArray->uav.get() &&
+	       texShadowBitmask && texShadowBitmask->uav.get() &&
+	       texShadowVisibility && texShadowVisibility->srv.get() && texShadowVisibility->uav.get();
+}
+
 Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 {
+	probeUpdateBufferEnabled = false;
 	auto data = Skylighting::SkylightingCB{};
 
 	if (!a_inWorld)
 		return data;
 
 	if (!IsRuntimeActive())
+		return data;
+
+	if (UpdateInteriorState() || queuedResetSkylighting.load(std::memory_order_acquire) || needsOcclusionRefresh || !HasProbeUpdateResources())
 		return data;
 
 	if (globals::state->isMapMenuOpen)
@@ -1055,7 +1088,7 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 	cellID = { round(cellID.x), round(cellID.y), round(cellID.z) };
 	auto cellOrigin = cellID * cellSize;
 	float3 cellIDDiff = prevCellID - cellID;
-	prevCellID = cellID;
+	probeUpdateCellID = cellID;
 	DirectX::XMINT3 cellIDDiffI = { (int)cellIDDiff.x, (int)cellIDDiff.y, (int)cellIDDiff.z };
 
 	bool shouldForceFullUpdate =
@@ -1077,9 +1110,7 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 		ResetProbeUpdateWindow(*this);
 	}
 
-	if (forcedFullUpdateFrames > 0)
-		forcedFullUpdateFrames--;
-
+	probeUpdateBufferEnabled = true;
 	return {
 		.OcclusionViewProj = OcclusionTransform,
 		.OcclusionSHBasis4Pi = occlusionSHBasis4Pi,
@@ -1104,7 +1135,11 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 void Skylighting::Prepass()
 {
 	auto context = globals::d3d::context;
-	if (!IsRuntimeActive()) {
+	if (!IsRuntimeActive() || UpdateInteriorState() || queuedResetSkylighting.load(std::memory_order_acquire) || needsOcclusionRefresh ||
+		globals::state->isMapMenuOpen || !HasProbeUpdateResources() || !probeUpdateBufferEnabled) {
+		// A loading event may invalidate history after the world buffer was uploaded.
+		if (context && probeUpdateBufferEnabled)
+			globals::state->UpdateFeatureData(true);
 		if (context) {
 			ID3D11ShaderResourceView* srv = nullptr;
 			context->PSSetShaderResources(50, 1, &srv);
@@ -1112,23 +1147,6 @@ void Skylighting::Prepass()
 		}
 		return;
 	}
-
-	if (globals::state->isMapMenuOpen)
-		return;
-
-	bool interior = true;
-
-	if (auto sky = globals::game::sky)
-		interior = sky->mode.get() != RE::Sky::Mode::kFull;
-
-	if (interior ||
-		!probeUpdateCompute.get() || !comparisonSampler.get() ||
-		!texOcclusion || !texOcclusion->srv.get() ||
-		!texProbeArray || !texProbeArray->srv.get() || !texProbeArray->uav.get() ||
-		!texAccumFramesArray || !texAccumFramesArray->uav.get() ||
-		!texShadowBitmask || !texShadowBitmask->uav.get() ||
-		!texShadowVisibility || !texShadowVisibility->srv.get() || !texShadowVisibility->uav.get())
-		return;
 
 	{
 		// Both probe volumes were exposed to pixel shaders by the previous frame.
@@ -1185,6 +1203,10 @@ void Skylighting::Prepass()
 					CS_GPU_PASS("Skylighting::ProbeUpdate");
 					context->Dispatch((probeArrayDims[0] + 7u) >> 3, (probeArrayDims[1] + 7u) >> 3, dispatchSliceCount);
 				}
+				// Buffer publication can repeat or outlive a skipped dispatch.
+				prevCellID = probeUpdateCellID;
+				if (forcedFullUpdateFrames > 0)
+					forcedFullUpdateFrames--;
 
 				if (updatingIncrementalSlices) {
 					probeUpdateCornerMask |= occlusionCornerBit;
@@ -1462,7 +1484,7 @@ void Skylighting::RenderOcclusion()
 	if (!precip)
 		return;
 
-	if (Util::IsInterior())
+	if (UpdateInteriorState())
 		return;
 
 	if (!shaderCache->IsEnabled()) {
@@ -1482,18 +1504,20 @@ void Skylighting::RenderOcclusion()
 	}
 
 	auto occlusionCamera = precip->occlusionData.camera;
-	if (!occlusionCamera)
+	if (!occlusionCamera || !renderer ||
+		!texOcclusion || !texOcclusion->resource.get() || !texOcclusion->srv.get() || !texOcclusion->dsv.get())
 		return;
 
 	{
 		CS_GPU_PASS("Skylighting::SkylightingMask");
 
-		const bool forceOcclusionRefresh = queuedResetSkylighting;
-		if (queuedResetSkylighting)
+		if (queuedResetSkylighting.load(std::memory_order_acquire))
 			ResetSkylighting();
+		if (queuedResetSkylighting.load(std::memory_order_acquire))
+			return;
 
 		const uint occlusionUpdateInterval = GetOcclusionUpdateInterval(settings);
-		const bool shouldUpdateOcclusion = ShouldRunPeriodicUpdate(occlusionUpdateFrameCounter, occlusionUpdateInterval, forceOcclusionRefresh);
+		const bool shouldUpdateOcclusion = ShouldRunPeriodicUpdate(occlusionUpdateFrameCounter, occlusionUpdateInterval, needsOcclusionRefresh);
 
 		if (!shouldUpdateOcclusion)
 			return;
@@ -1564,6 +1588,7 @@ void Skylighting::RenderOcclusion()
 
 		OcclusionDir = -float4{ PrecipitationShaderDirectionF.x, PrecipitationShaderDirectionF.y, PrecipitationShaderDirectionF.z, 0 };
 		occlusionSHBasis4Pi = EvaluateDirectionalSHBasis4Pi(float3{ OcclusionDir.x, OcclusionDir.y, OcclusionDir.z });
+		needsOcclusionRefresh = false;
 		OcclusionTransform = reinterpret_cast<RE::BSParticleShaderRainEmitter*>(&rainCapture)->occlusionProjection;
 
 		PrecipitationShaderCubeSize = originalPrecipitationShaderCubeSize;
@@ -1587,11 +1612,8 @@ void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
 
 RE::BSEventNotifyControl Skylighting::MenuOpenCloseEventHandler::ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
 {
-	// When entering a new cell through a loadscreen, update every frame until completion
-	if (a_event->menuName == RE::LoadingMenu::MENU_NAME) {
-		if (!a_event->opening)
-			globals::features::skylighting.queuedResetSkylighting = true;
-	}
+	if (a_event && a_event->menuName == RE::LoadingMenu::MENU_NAME && !a_event->opening)
+		globals::features::skylighting.QueueResetSkylighting();
 
 	return RE::BSEventNotifyControl::kContinue;
 }

@@ -8,10 +8,13 @@
 
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <memory>
+#include <numbers>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -154,6 +157,8 @@ namespace
 		ComPtr<ID3D11ShaderResourceView> lightView;
 		std::array<ComPtr<ID3D11Texture2D>, 2> depth;
 		std::array<ComPtr<ID3D11ShaderResourceView>, 2> depthView;
+		ComPtr<ID3D11Texture2D> occlusionDepth;
+		ComPtr<ID3D11ShaderResourceView> occlusionView;
 		ComPtr<ID3D11SamplerState> sampler;
 
 		ShadowFixture(ID3D11Device* device)
@@ -205,6 +210,18 @@ namespace
 				Check(device->CreateShaderResourceView(depth[lit].Get(), &viewDesc, depthView[lit].GetAddressOf()));
 				Util::SetResourceName(depthView[lit].Get(), "SkylightingTest::%sCascadeDepth SRV", lit ? "Lit" : "Dark");
 			}
+			D3D11_TEXTURE2D_DESC occlusionDesc{};
+			occlusionDesc.Width = occlusionDesc.Height = occlusionDesc.MipLevels = occlusionDesc.ArraySize = 1;
+			occlusionDesc.Format = DXGI_FORMAT_R32_FLOAT;
+			occlusionDesc.SampleDesc.Count = 1;
+			occlusionDesc.Usage = D3D11_USAGE_IMMUTABLE;
+			occlusionDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+			const float occlusionValue = 1.0f;
+			D3D11_SUBRESOURCE_DATA initialOcclusion{ &occlusionValue, sizeof(float) };
+			Check(device->CreateTexture2D(&occlusionDesc, &initialOcclusion, occlusionDepth.GetAddressOf()));
+			Util::SetResourceName(occlusionDepth.Get(), "SkylightingTest::OcclusionDepth");
+			Check(device->CreateShaderResourceView(occlusionDepth.Get(), nullptr, occlusionView.GetAddressOf()));
+			Util::SetResourceName(occlusionView.Get(), "SkylightingTest::OcclusionDepth SRV");
 			D3D11_SAMPLER_DESC samplerDesc{};
 			samplerDesc.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_MIP_POINT;
 			samplerDesc.AddressU = samplerDesc.AddressV = samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
@@ -214,10 +231,14 @@ namespace
 			Util::SetResourceName(sampler.Get(), "SkylightingTest::ShadowComparisonSampler");
 		}
 
-		void Bind(ID3D11DeviceContext* context, bool lit)
+		void Bind(ID3D11DeviceContext* context, bool lit, bool directional)
 		{
-			ID3D11ShaderResourceView* views[]{ lightView.Get(), depthView[lit].Get() };
-			context->CSSetShaderResources(2, 2, views);
+			ID3D11ShaderResourceView* occlusion = occlusionView.Get();
+			context->CSSetShaderResources(0, 1, &occlusion);
+			if (directional) {
+				ID3D11ShaderResourceView* views[]{ lightView.Get(), depthView[lit].Get() };
+				context->CSSetShaderResources(2, 2, views);
+			}
 			ID3D11SamplerState* rawSampler = sampler.Get();
 			context->CSSetSamplers(0, 1, &rawSampler);
 		}
@@ -234,49 +255,151 @@ namespace
 		bool onScreen = false;
 		bool shadowLit = true;
 		uint32_t frameCount = 0;
+		bool occlusionCovered = false;
+		bool rejectFirstJitter = false;
 	};
 
-	void RunPermutation(ID3D11Device* device, ID3D11DeviceContext* context, const std::filesystem::path& path, bool vr)
-	{
-		ShaderIncludes includes;
-		std::vector<D3D_SHADER_MACRO> defines{ { "COMPUTESHADER", "" }, { "WINPC", "" }, { "DX11", "" } };
-		if (vr)
-			defines.push_back({ "VR", "" });
-		defines.push_back({ nullptr, nullptr });
-		ComPtr<ID3DBlob> bytecode, errors;
-		const auto compiled = D3DCompileFromFile(path.c_str(),
-			defines.data(), &includes, "main", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
-			0, bytecode.GetAddressOf(), errors.GetAddressOf());
-		if (errors)
-			std::cerr.write(static_cast<const char*>(errors->GetBufferPointer()), errors->GetBufferSize());
-		Check(compiled);
-		ComPtr<ID3D11ShaderReflection> reflection;
-		Check(D3DReflect(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
-		ComPtr<ID3D11ComputeShader> shader;
-		Check(device->CreateComputeShader(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), nullptr, shader.GetAddressOf()));
-		Util::SetResourceName(shader.Get(), "SkylightingTest::UpdateProbesCS %s", vr ? "VR" : "Flat");
-		ConstantBuffer feature(device, reflection.Get(), "SharedData::FeatureData");
-		ConstantBuffer shared(device, reflection.Get(), "SharedData::SharedData");
-		ConstantBuffer frame(device, reflection.Get(), "FrameBuffer::PerFrame");
-		feature.SetMember("SharedData::skylightingSettings", "Enabled", 1u);
-		feature.SetMember("SharedData::skylightingSettings", "ArrayDims", std::array{ volumeWidth, volumeWidth, volumeDepth });
-		feature.SetMember("SharedData::skylightingSettings", "ArrayOrigin", std::array{ 1u, 2u, 3u });
-		// Keep the occlusion projection outside coverage so the test needs no scene depth.
-		std::array<float, 16> occlusionProjection{};
-		occlusionProjection[3] = 3.0f;
-		feature.SetMember("SharedData::skylightingSettings", "OcclusionViewProj", occlusionProjection);
+	using ProbeLighting = std::array<float, 4>;
 
-		Volume<std::array<float, 4>> probes(device, DXGI_FORMAT_R32G32B32A32_FLOAT, "Probes");
-		Volume<uint32_t> accumulation(device, DXGI_FORMAT_R32_UINT, "Accumulation");
-		Volume<uint32_t> history(device, DXGI_FORMAT_R32_UINT, "ShadowHistory");
-		Volume<float> visibility(device, DXGI_FORMAT_R32_FLOAT, "ShadowVisibility");
-		ShadowFixture shadow(device);
-		std::vector<uint32_t> initialHistory(volumeElements);
-		std::vector<float> initialVisibility(volumeElements);
-		for (size_t i = 0; i < volumeElements; ++i) {
-			initialHistory[i] = 0xAAAA0000u | (static_cast<uint32_t>(i) << 1);
-			initialVisibility[i] = -1.0f - static_cast<float>(i);
+	struct ProbeState
+	{
+		std::vector<ProbeLighting> lighting{ volumeElements, { 4.0f, 0.0f, 0.0f, 0.0f } };
+		std::vector<uint16_t> accumulation = std::vector<uint16_t>(volumeElements);
+		std::vector<uint32_t> history = std::vector<uint32_t>(volumeElements);
+		std::vector<float> visibility = std::vector<float>(volumeElements);
+
+		ProbeState()
+		{
+			for (size_t i = 0; i < volumeElements; ++i) {
+				accumulation[i] = static_cast<uint16_t>(((i % 32) << 8) | (17 + i % 200));
+				history[i] = 0xAAAA0000u | (static_cast<uint32_t>(i) << 1);
+				visibility[i] = -1.0f - static_cast<float>(i);
+			}
 		}
+	};
+
+	bool IsSelected(size_t element, const SliceCase& test)
+	{
+		const auto z = static_cast<uint32_t>(element / (volumeWidth * volumeWidth));
+		return z >= test.start && z - test.start < test.count;
+	}
+
+	struct ProbeFixture
+	{
+		ID3D11DeviceContext* context;
+		std::string runtime;
+		ComPtr<ID3D11ComputeShader> shader;
+		ComPtr<ID3D11ShaderReflection> reflection;
+		Volume<ProbeLighting> probes;
+		Volume<uint16_t> accumulation;
+		Volume<uint32_t> history;
+		Volume<float> visibility;
+		ShadowFixture shadow;
+		std::unique_ptr<ConstantBuffer> feature, shared, frame;
+
+		ProbeFixture(ID3D11Device* device, ID3D11DeviceContext* context, const std::filesystem::path& path, bool vr) :
+			context(context), runtime(vr ? "VR " : "SE/AE "),
+			probes(device, DXGI_FORMAT_R32G32B32A32_FLOAT, "Probes"),
+			accumulation(device, DXGI_FORMAT_R16_UINT, "Accumulation"),
+			history(device, DXGI_FORMAT_R32_UINT, "ShadowHistory"),
+			visibility(device, DXGI_FORMAT_R32_FLOAT, "ShadowVisibility"), shadow(device)
+		{
+			ShaderIncludes includes;
+			std::vector<D3D_SHADER_MACRO> defines{ { "COMPUTESHADER", "" }, { "WINPC", "" }, { "DX11", "" } };
+			if (vr)
+				defines.push_back({ "VR", "" });
+			defines.push_back({ nullptr, nullptr });
+			ComPtr<ID3DBlob> bytecode, errors;
+			const auto compiled = D3DCompileFromFile(path.c_str(), defines.data(), &includes, "main", "cs_5_0",
+				D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, bytecode.GetAddressOf(), errors.GetAddressOf());
+			if (errors)
+				std::cerr << static_cast<const char*>(errors->GetBufferPointer());
+			Check(compiled);
+			Check(D3DReflect(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
+			Check(device->CreateComputeShader(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), nullptr, shader.GetAddressOf()));
+			Util::SetResourceName(shader.Get(), "SkylightingTest::UpdateProbesCS %s", vr ? "VR" : "Flat");
+			feature = std::make_unique<ConstantBuffer>(device, reflection.Get(), "SharedData::FeatureData");
+			shared = std::make_unique<ConstantBuffer>(device, reflection.Get(), "SharedData::SharedData");
+			frame = std::make_unique<ConstantBuffer>(device, reflection.Get(), "FrameBuffer::PerFrame");
+			Set("Enabled", 1u);
+			Set("ArrayDims", std::array{ volumeWidth, volumeWidth, volumeDepth });
+			Set("ArrayOrigin", std::array{ 1u, 2u, 3u });
+			Set("ProbeFieldSize", 10240.0f);
+			Set("OcclusionSHBasis4Pi", ProbeLighting{ 8.0f, 0.0f, 0.0f, 0.0f });
+		}
+
+		template <class T>
+		void Set(const char* member, const T& value)
+		{
+			feature->SetMember("SharedData::skylightingSettings", member, value);
+		}
+
+		void Reset(const ProbeState& state)
+		{
+			context->ClearState();
+			probes.Fill(context, state.lighting);
+			accumulation.Fill(context, state.accumulation);
+			history.Fill(context, state.history);
+			visibility.Fill(context, state.visibility);
+		}
+
+		void Dispatch(const SliceCase& test)
+		{
+			Set("ProbeUpdateSliceStart", test.start);
+			Set("ProbeUpdateSliceCount", test.count);
+			Set("ShadowDataAvailable", static_cast<uint32_t>(test.shadowAvailable));
+			Set("ValidMargin", std::array{ 0, 0, test.invalid ? static_cast<int>(volumeDepth) : 0, 0 });
+			// Align physical probe x=0 with camera-relative x=0 for the jitter rejection case.
+			Set("PosOffset", std::array{ test.rejectFirstJitter ? -4480.0f : 0.0f, 0.0f, 0.0f });
+			std::array<float, 16> occlusionProjection{};
+			occlusionProjection[3] = test.occlusionCovered ? 0.0f : 3.0f;
+			occlusionProjection[11] = 0.5f;
+			Set("OcclusionViewProj", occlusionProjection);
+			feature->Bind(context);
+			shared->SetVariable("SharedData::FrameCountAlwaysActive", test.frameCount);
+			shared->SetVariable("SharedData::CameraData", std::array{ 1.0f, 0.0f, 0.0f, 1.0f });
+			shared->Bind(context);
+			std::array<float, 16> cameraProjection{};
+			cameraProjection[11] = test.rejectFirstJitter ? 0.9f : 0.5f;
+			cameraProjection[8] = test.rejectFirstJitter ? 1.0f / 128.0f : 0.0f;
+			cameraProjection[15] = test.onScreen ? 1.0f : 0.0f;
+			frame->SetVariable("FrameBuffer::CameraViewProj", cameraProjection);
+			frame->Bind(context);
+			shadow.Bind(context, test.shadowLit, test.onScreen);
+			ID3D11UnorderedAccessView* views[]{ probes.uav.Get(), accumulation.uav.Get(), history.uav.Get(), visibility.uav.Get() };
+			context->CSSetUnorderedAccessViews(0, 4, views, nullptr);
+			context->CSSetShader(shader.Get(), nullptr, 0);
+			context->Dispatch(1, 1, test.dispatchDepth);
+			context->ClearState();
+		}
+
+		void Verify(const ProbeState& expected, const std::string& name)
+		{
+			const auto actualLighting = probes.Read(context);
+			const auto actualAccumulation = accumulation.Read(context);
+			const auto actualHistory = history.Read(context);
+			const auto actualVisibility = visibility.Read(context);
+			for (size_t i = 0; i < volumeElements; ++i) {
+				const auto fail = [&](const char* field) {
+					throw std::runtime_error(runtime + name + " incorrect " + field + " at element " + std::to_string(i));
+				};
+				if (actualHistory[i] != expected.history[i])
+					fail("shadow history");
+				if (actualVisibility[i] != expected.visibility[i])
+					fail("shadow visibility");
+				if (actualAccumulation[i] != expected.accumulation[i])
+					fail("packed probe state");
+				for (size_t component = 0; component < 4; ++component) {
+					if (!std::isfinite(actualLighting[i][component]) ||
+						std::abs(actualLighting[i][component] - expected.lighting[i][component]) > 0.00001f)
+						fail("SH lighting");
+				}
+			}
+		}
+	};
+
+	void CheckSlices(ProbeFixture& fixture)
+	{
 		const SliceCase cases[]{
 			{ "full volume", 0, volumeDepth, volumeDepth, false, false },
 			{ "offset history and slice-count guard", 3, 2, 3, false, false },
@@ -288,55 +411,151 @@ namespace
 			{ "dark cascade updates offset history", 3, 2, 2, false, true, true, false, 17 }
 		};
 		for (const auto& test : cases) {
-			context->ClearState();
-			probes.Fill(context, std::vector<std::array<float, 4>>(volumeElements));
-			accumulation.Fill(context, std::vector<uint32_t>(volumeElements));
-			history.Fill(context, initialHistory);
-			visibility.Fill(context, initialVisibility);
-			feature.SetMember("SharedData::skylightingSettings", "ProbeUpdateSliceStart", test.start);
-			feature.SetMember("SharedData::skylightingSettings", "ProbeUpdateSliceCount", test.count);
-			feature.SetMember("SharedData::skylightingSettings", "ShadowDataAvailable", static_cast<uint32_t>(test.shadowAvailable));
-			feature.SetMember("SharedData::skylightingSettings", "ValidMargin", std::array{ 0, 0, test.invalid ? static_cast<int>(volumeDepth) : 0, 0 });
-			feature.Bind(context);
-			shared.SetVariable("SharedData::FrameCountAlwaysActive", test.frameCount);
-			shared.SetVariable("SharedData::CameraData", std::array{ 1.0f, 0.0f, 0.0f, 1.0f });
-			shared.Bind(context);
-			// Row-major projection fixes NDC depth at 0.5 and linear depth at 1.
-			std::array<float, 16> cameraProjection{};
-			cameraProjection[11] = 0.5f;
-			cameraProjection[15] = test.onScreen ? 1.0f : 0.0f;
-			frame.SetVariable("FrameBuffer::CameraViewProj", cameraProjection);
-			frame.Bind(context);
-			if (test.onScreen)
-				shadow.Bind(context, test.shadowLit);
-			ID3D11UnorderedAccessView* views[]{ probes.uav.Get(), accumulation.uav.Get(), history.uav.Get(), visibility.uav.Get() };
-			context->CSSetUnorderedAccessViews(0, 4, views, nullptr);
-			context->CSSetShader(shader.Get(), nullptr, 0);
-			context->Dispatch(1, 1, test.dispatchDepth);
-			context->ClearState();
-			const auto actualHistory = history.Read(context);
-			const auto actualVisibility = visibility.Read(context);
+			ProbeState expected;
+			fixture.Reset(expected);
+			fixture.Dispatch(test);
 			for (size_t i = 0; i < volumeElements; ++i) {
-				const auto z = static_cast<uint32_t>(i / (volumeWidth * volumeWidth));
-				const bool selected = z >= test.start && z - test.start < test.count;
-				uint32_t expectedHistory = initialHistory[i];
-				float expectedVisibility = initialVisibility[i];
-				if (selected && (test.invalid || !test.shadowAvailable || test.onScreen)) {
-					expectedHistory = test.invalid ? UINT32_MAX : initialHistory[i];
-					if (!test.shadowAvailable || test.onScreen) {
-						const uint32_t historyBit = 1u << (test.frameCount % 32);
-						expectedHistory &= ~historyBit;
-						if (!test.onScreen || test.shadowLit)
-							expectedHistory |= historyBit;
-					}
-					expectedVisibility = static_cast<float>(std::popcount(expectedHistory)) / 32.0f;
+				if (!IsSelected(i, test))
+					continue;
+				if (test.invalid) {
+					expected.history[i] = UINT32_MAX;
+					expected.visibility[i] = 1.0f;
+					expected.accumulation[i] = 0;
+					expected.lighting[i] = { std::sqrt(4.0f * std::numbers::pi_v<float>), 0.0f, 0.0f, 0.0f };
 				}
-				if (actualHistory[i] != expectedHistory || actualVisibility[i] != expectedVisibility)
-					throw std::runtime_error(std::string(vr ? "VR " : "SE/AE ") + test.name +
-											 " changed the wrong probe history or visibility at element " + std::to_string(i));
+				if (!test.shadowAvailable || test.onScreen) {
+					expected.history[i] = (expected.history[i] << 1) | (!test.onScreen || test.shadowLit ? 1u : 0u);
+					expected.visibility[i] = static_cast<float>(std::popcount(expected.history[i])) / 32.0f;
+				}
+				if (test.onScreen) {
+					const auto cursor = ((expected.accumulation[i] >> 8) + 1u) % 32;
+					expected.accumulation[i] = static_cast<uint16_t>((cursor << 8) | (expected.accumulation[i] & 255u));
+				}
 			}
-			std::cout << (vr ? "VR " : "SE/AE ") << test.name << " passed\n";
+			fixture.Verify(expected, test.name);
+			std::cout << fixture.runtime << test.name << " passed\n";
 		}
+	}
+
+	void CheckTemporalConvergence(ProbeFixture& fixture)
+	{
+		struct Schedule
+		{
+			const char* name;
+			std::array<uint32_t, 4> firstFrames;
+			uint32_t period;
+		};
+		// Replay the second stationary batch's accepted-update frames, including corner reuse.
+		const Schedule schedules[]{
+			{ "Performance", { 25, 32, 40, 48 }, 192 },
+			{ "Hoshipa", { 10, 12, 15, 18 }, 72 },
+			{ "32-frame spacing", { 0, 32, 64, 96 }, 128 }
+		};
+		for (const auto& schedule : schedules) {
+			SliceCase test{ schedule.name, 3, 2, 2, false, true, true, false };
+			ProbeState expected;
+			const auto initial = expected;
+			for (size_t i = 0; i < volumeElements; ++i) {
+				if (IsSelected(i, test)) {
+					expected.history[i] = UINT32_MAX;
+					expected.visibility[i] = 1.0f;
+				}
+			}
+			fixture.Reset(expected);
+			for (uint32_t update = 0; update < 64; ++update) {
+				test.frameCount = schedule.firstFrames[update % 4] + schedule.period * (update / 4);
+				test.shadowLit = update >= 32;
+				fixture.Dispatch(test);
+				const uint32_t phaseUpdates = update % 32 + 1;
+				const uint32_t mask = phaseUpdates == 32 ? (test.shadowLit ? UINT32_MAX : 0u) :
+				                      test.shadowLit     ? ((1u << phaseUpdates) - 1u) :
+				                                           (UINT32_MAX << phaseUpdates);
+				for (size_t i = 0; i < volumeElements; ++i) {
+					if (!IsSelected(i, test))
+						continue;
+					expected.history[i] = mask;
+					expected.visibility[i] = test.shadowLit ? phaseUpdates / 32.0f : 1.0f - phaseUpdates / 32.0f;
+					const uint32_t cursor = ((initial.accumulation[i] >> 8) + update + 1) % 32;
+					expected.accumulation[i] = static_cast<uint16_t>((cursor << 8) | (initial.accumulation[i] & 255u));
+				}
+				fixture.Verify(expected, std::string(schedule.name) + " accepted update " + std::to_string(update + 1));
+			}
+			std::cout << fixture.runtime << schedule.name << " 32 dark then 32 lit observations passed\n";
+		}
+	}
+
+	void CheckRejectedJitterRecovery(ProbeFixture& fixture)
+	{
+		SliceCase test{ "independent cursors and rejected jitter recovery", 3, 2, 2, false, true, true, false, 0, false, true };
+		ProbeState expected;
+		for (size_t i = 0; i < volumeElements; ++i) {
+			if (IsSelected(i, test))
+				expected.accumulation[i] = static_cast<uint16_t>((((i / volumeWidth) % 2) << 8) | 19u);
+		}
+		fixture.Reset(expected);
+		for (uint32_t attempt = 0; attempt < 2; ++attempt) {
+			test.frameCount = 32 * attempt;
+			fixture.Dispatch(test);
+			for (size_t i = 0; i < volumeElements; ++i) {
+				if (!IsSelected(i, test))
+					continue;
+				const uint32_t startCursor = static_cast<uint32_t>((i / volumeWidth) % 2);
+				// At x=0, jitter 0 and 2 leave depth coverage; jitter 1 remains inside.
+				if (i % volumeWidth == 0 && startCursor + attempt == 1) {
+					expected.history[i] <<= 1;
+					expected.visibility[i] = static_cast<float>(std::popcount(expected.history[i])) / 32.0f;
+				}
+				expected.accumulation[i] = static_cast<uint16_t>(((startCursor + attempt + 1) << 8) | 19u);
+			}
+			fixture.Verify(expected, std::string(test.name) + " attempt " + std::to_string(attempt + 1));
+		}
+		std::cout << fixture.runtime << test.name << " passed\n";
+	}
+
+	void CheckAccumulationIndependence(ProbeFixture& fixture)
+	{
+		SliceCase test{ "SH count, saturation and shadow cursor independence", 3, 2, 2, false, true, true, true, 17, true };
+		ProbeState expected;
+		for (size_t i = 0; i < volumeElements; ++i)
+			expected.accumulation[i] = static_cast<uint16_t>(((i % 32) << 8) | (254 + i % 2));
+		fixture.Reset(expected);
+		for (uint32_t update = 0; update < 2; ++update) {
+			fixture.Dispatch(test);
+			for (size_t i = 0; i < volumeElements; ++i) {
+				if (!IsSelected(i, test))
+					continue;
+				const uint32_t blendCount = (expected.accumulation[i] & 255u) + 1;
+				expected.lighting[i][0] += (8.0f - expected.lighting[i][0]) / static_cast<float>(blendCount);
+				const uint32_t cursor = ((expected.accumulation[i] >> 8) + 1) % 32;
+				expected.accumulation[i] = static_cast<uint16_t>((cursor << 8) | 255u);
+				expected.history[i] = (expected.history[i] << 1) | 1u;
+				expected.visibility[i] = static_cast<float>(std::popcount(expected.history[i])) / 32.0f;
+			}
+			fixture.Verify(expected, std::string(test.name) + " update " + std::to_string(update + 1));
+		}
+		// A new covered probe starts both accumulators independently of its discarded packed state.
+		test.invalid = true;
+		fixture.Dispatch(test);
+		for (size_t i = 0; i < volumeElements; ++i) {
+			if (!IsSelected(i, test))
+				continue;
+			const float unoccluded = std::sqrt(4.0f * std::numbers::pi_v<float>);
+			expected.lighting[i][0] = unoccluded + (8.0f - unoccluded) / 15.0f;
+			expected.accumulation[i] = 0x0101u;
+			expected.history[i] = UINT32_MAX;
+			expected.visibility[i] = 1.0f;
+		}
+		fixture.Verify(expected, "invalid covered probe resets SH count and shadow cursor");
+		std::cout << fixture.runtime << test.name << " and invalid reset passed\n";
+	}
+
+	void RunPermutation(ID3D11Device* device, ID3D11DeviceContext* context, const std::filesystem::path& path, bool vr)
+	{
+		ProbeFixture fixture(device, context, path, vr);
+		CheckSlices(fixture);
+		CheckTemporalConvergence(fixture);
+		CheckRejectedJitterRecovery(fixture);
+		CheckAccumulationIndependence(fixture);
 	}
 }
 

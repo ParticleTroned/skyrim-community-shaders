@@ -27,8 +27,8 @@ namespace
 	using json = nlohmann::json;
 	using CSX::RenderMap::ControlStatus;
 	constexpr std::uint32_t kContractMajor = 1;
-	constexpr std::uint32_t kContractMinor = 7;
-	constexpr std::uint32_t kSchemaRevision = 8;
+	constexpr std::uint32_t kContractMinor = 8;
+	constexpr std::uint32_t kSchemaRevision = 9;
 	constexpr std::uint64_t kMaximumFrames = 600;
 	constexpr std::uint64_t kMaximumDurationMs = 10000;
 	constexpr std::uint64_t kMaximumEvents = 65536;
@@ -38,6 +38,22 @@ namespace
 	constexpr std::uint32_t kMaximumResourceObservations = 32768;
 	constexpr std::uint32_t kMaximumTargetViewObservations = 32768;
 	constexpr std::uint32_t kMaximumTargetBindingObservations = 32768;
+	constexpr std::uint32_t kMaximumSceneObjectObservations = 32768;
+	constexpr std::uint32_t kMaximumGeometryObservations = 65536;
+	constexpr std::uint32_t kMaximumMaterialStateObservations = 65536;
+	constexpr std::uint64_t kDefaultFrames = 4;
+	constexpr std::uint64_t kDefaultDurationMs = 2000;
+	constexpr std::uint64_t kDefaultEvents = 8192;
+	constexpr std::uint64_t kDefaultBytes = kMaximumBytes;
+	constexpr std::uint32_t kDefaultScopeDepth = 8;
+	constexpr std::uint32_t kDefaultShaderObservations = 64;
+	constexpr std::uint32_t kDefaultStageShaderObservations = 128;
+	constexpr std::uint32_t kDefaultResourceObservations = 1024;
+	constexpr std::uint32_t kDefaultTargetViewObservations = 64;
+	constexpr std::uint32_t kDefaultTargetBindingObservations = 64;
+	constexpr std::uint32_t kDefaultSceneObjectObservations = 512;
+	constexpr std::uint32_t kDefaultGeometryObservations = 1024;
+	constexpr std::uint32_t kDefaultMaterialStateObservations = 1024;
 	std::atomic_bool g_registered{ false };
 	std::mutex g_artifactMutex;
 	std::unordered_map<std::string, CSX::RenderMap::CaptureArtifactContext> g_artifactContexts;
@@ -174,6 +190,24 @@ namespace
 		return found != a_args.end() && found->is_number_unsigned();
 	}
 
+	json InvalidBound(
+		const json& a_args,
+		std::string_view a_field,
+		std::uint64_t a_value,
+		std::uint64_t a_minimum,
+		std::uint64_t a_maximum)
+	{
+		auto error = Foundation().MakeError(
+			a_args, "invalid_bounds", "capture bound is outside the advertised range",
+			"validation", false, a_field);
+		error["error"]["details"] = {
+			{ "value", a_value },
+			{ "minimum", a_minimum },
+			{ "maximum", a_maximum },
+		};
+		return error;
+	}
+
 	json BuildResult(const json& a_args)
 	{
 		const auto action = a_args.value("action", std::string{});
@@ -183,6 +217,24 @@ namespace
 			return Foundation().MakeError(a_args, "unknown_action", "action is not supported", "validation", false, "action");
 
 		if (action == "registry") {
+			CSX::RenderMap::CollectorConfig defaultConfig{
+				.maxFrames = kDefaultFrames,
+				.maxEvents = kDefaultEvents,
+				.maxBytes = kDefaultBytes,
+				.maxDuration = std::chrono::milliseconds(kDefaultDurationMs),
+				.maxScopeDepth = static_cast<std::uint8_t>(kDefaultScopeDepth),
+				.maxShaderObservations = kDefaultShaderObservations,
+				.maxStageShaderObservations = kDefaultStageShaderObservations,
+				.maxResourceObservations = kDefaultResourceObservations,
+				.maxTargetViewObservations = kDefaultTargetViewObservations,
+				.maxTargetBindingObservations = kDefaultTargetBindingObservations,
+				.maxSceneObjectObservations = kDefaultSceneObjectObservations,
+				.maxGeometryObservations = kDefaultGeometryObservations,
+				.maxMaterialStateObservations = kDefaultMaterialStateObservations,
+			};
+			auto defaultCatalogueConfig = defaultConfig;
+			defaultCatalogueConfig.maxEvents = 0;
+			const auto fixedCatalogueBytes = CSX::RenderMap::Collector::RequiredStorageBytes(defaultCatalogueConfig);
 			auto response = Foundation().MakeEnvelope(a_args, true);
 			response["result"] = {
 				{ "service", "communityshaders.render-map" },
@@ -227,7 +279,28 @@ namespace
 								{ "maximumResourceObservations", kMaximumResourceObservations },
 								{ "maximumTargetViewObservations", kMaximumTargetViewObservations },
 								{ "maximumTargetBindingObservations", kMaximumTargetBindingObservations },
+								{ "maximumSceneObjectObservations", kMaximumSceneObjectObservations },
+								{ "maximumGeometryObservations", kMaximumGeometryObservations },
+								{ "maximumMaterialStateObservations", kMaximumMaterialStateObservations },
 							} },
+				{ "defaults", {
+								  { "maxFrames", kDefaultFrames },
+								  { "maxDurationMs", kDefaultDurationMs },
+								  { "maxEvents", kDefaultEvents },
+								  { "maxBytes", kDefaultBytes },
+								  { "maxScopeDepth", kDefaultScopeDepth },
+								  { "maxShaderObservations", kDefaultShaderObservations },
+								  { "maxStageShaderObservations", kDefaultStageShaderObservations },
+								  { "maxResourceObservations", kDefaultResourceObservations },
+								  { "maxTargetViewObservations", kDefaultTargetViewObservations },
+								  { "maxTargetBindingObservations", kDefaultTargetBindingObservations },
+								  { "maxSceneObjectObservations", kDefaultSceneObjectObservations },
+								  { "maxGeometryObservations", kDefaultGeometryObservations },
+								  { "maxMaterialStateObservations", kDefaultMaterialStateObservations },
+								  { "fixedCatalogueBytes", fixedCatalogueBytes },
+								  { "minimumMaxBytes", fixedCatalogueBytes + 1 },
+								  { "budgetSemantics", "maxBytes must exceed fixedCatalogueBytes; remaining bytes bound event storage" },
+							  } },
 				{ "mainThreadAffine", false },
 				{ "automaticStop", false },
 			};
@@ -241,42 +314,79 @@ namespace
 		}
 
 		if (action == "start") {
-			const auto maxFrames = a_args.value("maxFrames", 4ull);
-			const auto maxDurationMs = a_args.value("maxDurationMs", 2000ull);
-			const auto maxEvents = a_args.value("maxEvents", 8192ull);
-			const auto defaultBytes = CSX::RenderMap::Collector::EventRecordSize() * maxEvents;
-			const auto maxBytes = a_args.value("maxBytes", static_cast<std::uint64_t>(defaultBytes));
-			const auto maxScopeDepth = a_args.value("maxScopeDepth", 8u);
-			const auto maxShaderObservations = a_args.value("maxShaderObservations", 1024u);
-			const auto maxStageShaderObservations = a_args.value("maxStageShaderObservations", 4096u);
-			const auto maxResourceObservations = a_args.value("maxResourceObservations", 4096u);
-			const auto maxTargetViewObservations = a_args.value("maxTargetViewObservations", 4096u);
-			const auto maxTargetBindingObservations = a_args.value("maxTargetBindingObservations", 4096u);
-			if (maxFrames == 0 || maxFrames > kMaximumFrames || maxDurationMs == 0 || maxDurationMs > kMaximumDurationMs ||
-				maxEvents == 0 || maxEvents > kMaximumEvents || maxBytes < CSX::RenderMap::Collector::EventRecordSize() ||
-				maxBytes > kMaximumBytes || maxScopeDepth == 0 || maxScopeDepth > CSX::RenderMap::kMaximumScopeDepth ||
-				maxShaderObservations == 0 || maxShaderObservations > kMaximumShaderObservations ||
-				maxStageShaderObservations == 0 || maxStageShaderObservations > kMaximumStageShaderObservations ||
-				maxResourceObservations == 0 || maxResourceObservations > kMaximumResourceObservations ||
-				maxTargetViewObservations == 0 || maxTargetViewObservations > kMaximumTargetViewObservations ||
-				maxTargetBindingObservations == 0 || maxTargetBindingObservations > kMaximumTargetBindingObservations) {
-				return Foundation().MakeError(a_args, "invalid_bounds", "capture bounds exceed the advertised limits", "validation", false);
+			const auto maxFrames = a_args.value("maxFrames", kDefaultFrames);
+			const auto maxDurationMs = a_args.value("maxDurationMs", kDefaultDurationMs);
+			const auto maxEvents = a_args.value("maxEvents", kDefaultEvents);
+			const auto maxBytes = a_args.value("maxBytes", kDefaultBytes);
+			const auto maxScopeDepth = a_args.value("maxScopeDepth", kDefaultScopeDepth);
+			const auto maxShaderObservations = a_args.value("maxShaderObservations", kDefaultShaderObservations);
+			const auto maxStageShaderObservations = a_args.value("maxStageShaderObservations", kDefaultStageShaderObservations);
+			const auto maxResourceObservations = a_args.value("maxResourceObservations", kDefaultResourceObservations);
+			const auto maxTargetViewObservations = a_args.value("maxTargetViewObservations", kDefaultTargetViewObservations);
+			const auto maxTargetBindingObservations = a_args.value("maxTargetBindingObservations", kDefaultTargetBindingObservations);
+			const auto maxSceneObjectObservations = a_args.value("maxSceneObjectObservations", kDefaultSceneObjectObservations);
+			const auto maxGeometryObservations = a_args.value("maxGeometryObservations", kDefaultGeometryObservations);
+			const auto maxMaterialStateObservations = a_args.value("maxMaterialStateObservations", kDefaultMaterialStateObservations);
+			if (maxFrames == 0 || maxFrames > kMaximumFrames)
+				return InvalidBound(a_args, "maxFrames", maxFrames, 1, kMaximumFrames);
+			if (maxDurationMs == 0 || maxDurationMs > kMaximumDurationMs)
+				return InvalidBound(a_args, "maxDurationMs", maxDurationMs, 1, kMaximumDurationMs);
+			if (maxEvents == 0 || maxEvents > kMaximumEvents)
+				return InvalidBound(a_args, "maxEvents", maxEvents, 1, kMaximumEvents);
+			if (maxBytes == 0 || maxBytes > kMaximumBytes)
+				return InvalidBound(a_args, "maxBytes", maxBytes, 1, kMaximumBytes);
+			if (maxScopeDepth == 0 || maxScopeDepth > CSX::RenderMap::kMaximumScopeDepth)
+				return InvalidBound(a_args, "maxScopeDepth", maxScopeDepth, 1, CSX::RenderMap::kMaximumScopeDepth);
+			if (maxShaderObservations == 0 || maxShaderObservations > kMaximumShaderObservations)
+				return InvalidBound(a_args, "maxShaderObservations", maxShaderObservations, 1, kMaximumShaderObservations);
+			if (maxStageShaderObservations == 0 || maxStageShaderObservations > kMaximumStageShaderObservations)
+				return InvalidBound(a_args, "maxStageShaderObservations", maxStageShaderObservations, 1, kMaximumStageShaderObservations);
+			if (maxResourceObservations == 0 || maxResourceObservations > kMaximumResourceObservations)
+				return InvalidBound(a_args, "maxResourceObservations", maxResourceObservations, 1, kMaximumResourceObservations);
+			if (maxTargetViewObservations == 0 || maxTargetViewObservations > kMaximumTargetViewObservations)
+				return InvalidBound(a_args, "maxTargetViewObservations", maxTargetViewObservations, 1, kMaximumTargetViewObservations);
+			if (maxTargetBindingObservations == 0 || maxTargetBindingObservations > kMaximumTargetBindingObservations)
+				return InvalidBound(a_args, "maxTargetBindingObservations", maxTargetBindingObservations, 1, kMaximumTargetBindingObservations);
+			if (maxSceneObjectObservations == 0 || maxSceneObjectObservations > kMaximumSceneObjectObservations)
+				return InvalidBound(a_args, "maxSceneObjectObservations", maxSceneObjectObservations, 1, kMaximumSceneObjectObservations);
+			if (maxGeometryObservations == 0 || maxGeometryObservations > kMaximumGeometryObservations)
+				return InvalidBound(a_args, "maxGeometryObservations", maxGeometryObservations, 1, kMaximumGeometryObservations);
+			if (maxMaterialStateObservations == 0 || maxMaterialStateObservations > kMaximumMaterialStateObservations)
+				return InvalidBound(a_args, "maxMaterialStateObservations", maxMaterialStateObservations, 1, kMaximumMaterialStateObservations);
+
+			CSX::RenderMap::CollectorConfig config{
+				.maxFrames = maxFrames,
+				.maxEvents = maxEvents,
+				.maxBytes = maxBytes,
+				.maxDuration = std::chrono::milliseconds(maxDurationMs),
+				.maxScopeDepth = static_cast<std::uint8_t>(maxScopeDepth),
+				.maxShaderObservations = maxShaderObservations,
+				.maxStageShaderObservations = maxStageShaderObservations,
+				.maxResourceObservations = maxResourceObservations,
+				.maxTargetViewObservations = maxTargetViewObservations,
+				.maxTargetBindingObservations = maxTargetBindingObservations,
+				.maxSceneObjectObservations = maxSceneObjectObservations,
+				.maxGeometryObservations = maxGeometryObservations,
+				.maxMaterialStateObservations = maxMaterialStateObservations,
+			};
+			auto catalogueConfig = config;
+			catalogueConfig.maxEvents = 0;
+			const auto fixedCatalogueBytes = CSX::RenderMap::Collector::RequiredStorageBytes(catalogueConfig);
+			if (maxBytes <= fixedCatalogueBytes) {
+				auto error = Foundation().MakeError(
+					a_args, "invalid_bounds",
+					"maxBytes does not leave space for events after the fixed observation catalogues",
+					"validation", false, "maxBytes");
+				error["error"]["details"] = {
+					{ "maxBytes", maxBytes },
+					{ "fixedCatalogueBytes", fixedCatalogueBytes },
+					{ "minimumMaxBytes", fixedCatalogueBytes + 1 },
+				};
+				return error;
 			}
 
 			CSX::RenderMap::CaptureDescriptor descriptor;
-			const auto status = CSX::RenderMap::GetCaptureController().Start({
-																				 .maxFrames = maxFrames,
-																				 .maxEvents = maxEvents,
-																				 .maxBytes = maxBytes,
-																				 .maxDuration = std::chrono::milliseconds(maxDurationMs),
-																				 .maxScopeDepth = static_cast<std::uint8_t>(maxScopeDepth),
-																				 .maxShaderObservations = maxShaderObservations,
-																				 .maxStageShaderObservations = maxStageShaderObservations,
-																				 .maxResourceObservations = maxResourceObservations,
-																				 .maxTargetViewObservations = maxTargetViewObservations,
-																				 .maxTargetBindingObservations = maxTargetBindingObservations,
-																			 },
-				descriptor);
+			const auto status = CSX::RenderMap::GetCaptureController().Start(config, descriptor);
 			if (status != ControlStatus::kSuccess)
 				return ControlFailure(a_args, status);
 			{
@@ -408,6 +518,9 @@ namespace CSX::RenderMap::DevBenchBridge
 				"maxResourceObservations":{"type":"integer","minimum":1,"maximum":32768},
 				"maxTargetViewObservations":{"type":"integer","minimum":1,"maximum":32768},
 				"maxTargetBindingObservations":{"type":"integer","minimum":1,"maximum":32768},
+				"maxSceneObjectObservations":{"type":"integer","minimum":1,"maximum":32768},
+				"maxGeometryObservations":{"type":"integer","minimum":1,"maximum":65536},
+				"maxMaterialStateObservations":{"type":"integer","minimum":1,"maximum":65536},
 				"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":500}
 			}}
 		})";

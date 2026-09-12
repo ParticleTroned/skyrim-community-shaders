@@ -60,6 +60,36 @@ namespace
 		Check(collector.Start(config) == StartResult::kInvalidBounds, "zero target-binding-observation bound was accepted");
 	}
 
+	void TestDevBenchDefaultBudget()
+	{
+		constexpr std::uint64_t maximumBytes = 32ull * 1024ull * 1024ull;
+		CollectorConfig config{
+			.captureNumericId = 42,
+			.maxFrames = 4,
+			.maxEvents = 8192,
+			.maxBytes = maximumBytes,
+			.maxDuration = std::chrono::milliseconds(2000),
+			.maxScopeDepth = 8,
+			.maxShaderObservations = 64,
+			.maxStageShaderObservations = 128,
+			.maxResourceObservations = 1024,
+			.maxTargetViewObservations = 64,
+			.maxTargetBindingObservations = 64,
+			.maxSceneObjectObservations = 512,
+			.maxGeometryObservations = 1024,
+			.maxMaterialStateObservations = 1024,
+		};
+		auto catalogueConfig = config;
+		catalogueConfig.maxEvents = 0;
+		Check(Collector::RequiredStorageBytes(catalogueConfig) < maximumBytes,
+			"DevBench default catalogues consume the entire advertised byte budget");
+
+		Collector collector;
+		Check(collector.Start(config) == StartResult::kStarted,
+			"DevBench default capture profile was rejected");
+		Check(collector.Stop().has_value(), "DevBench default capture profile did not stop");
+	}
+
 	void TestNestedScopes()
 	{
 		Collector collector;
@@ -285,6 +315,7 @@ int main()
 {
 	try {
 		TestBoundsValidation();
+		TestDevBenchDefaultBudget();
 		TestNestedScopes();
 		TestCapacityLimits();
 		TestFrameLimit();

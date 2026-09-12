@@ -571,6 +571,7 @@ namespace SIE
 		/** @brief Publishes a result unless its task is stale or an eviction consumes it.
 		 *  @return True when a_blob remains usable by the caller. */
 		bool AddCompletedShader(
+			const std::string& key,
 			ShaderClass shaderClass,
 			const RE::BSShader& shader,
 			uint32_t descriptor,
@@ -1061,7 +1062,7 @@ namespace SIE
 		mutable std::mutex compileFailuresMutex;
 		std::deque<CompileFailure> recentCompileFailures;
 		std::vector<std::string> heldMismatchDefines;
-		bool isSkipUnchangedShaders = true;  ///< when true, recompile a disk-cached shader only if its source is newer
+		std::atomic<bool> isSkipUnchangedShaders = true;  ///< Permit verified disk hits; false compiles from source while retaining disk writes.
 		bool isAsync = true;
 		bool isDump = false;
 		bool hideError = false;

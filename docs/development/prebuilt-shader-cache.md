@@ -25,7 +25,7 @@ following:
 -   the explicit global and feature shader ABI contracts;
 -   enabled feature states that affect compilation;
 -   the shipped shader source and recursive includes;
--   compiler flags and custom shader defines;
+-   compiler flags and the resolved stage, feature, descriptor, and custom defines;
 -   the permutation inventory in the matching validation YAML.
 
 The default `shipped` release profile:
@@ -91,6 +91,9 @@ the supplied cache.
 | SE permutation inventory                        | `.github/configs/shader-validation.yaml`            |
 | VR permutation inventory                        | `.github/configs/shader-validation-vr.yaml`         |
 | Runtime content digest                          | `src/Utils/ContentHash.h` and `src/ShaderCache.cpp` |
+| Runtime macro serialization                     | `src/Utils/ShaderDefines.h`                         |
+| Offline compiler adapter                        | `tools/shader_cache_compile.py`                     |
+| Offline compile-input manifest                  | `tools/shader_cache_manifest.py`                    |
 | Runtime manifest schema and atomic persistence  | `src/Utils/ShaderCacheManifest.h`                   |
 | Managed A/B pack format and runtime store       | `src/Utils/ShaderCachePack.*`                       |
 | External compatibility ABI                      | `include/VRAPI/CSshadercompatibilityapi.h`          |
@@ -101,8 +104,54 @@ the supplied cache.
 | Managed-cache FOMOD assembly                    | `tools/build-fomod-package.py`                      |
 | Release integration                             | `.github/workflows/release-build.yaml`              |
 
-The manifest algorithm exists in C++ and in pinned hlslkit because it must run
-both in the plugin and in Python. Treat it as one cross-language contract.
+The source-closure algorithm exists in C++ and in pinned hlslkit. The
+repository's `shader_cache_manifest.py` adds the resolved compiler macros and
+writes schema 2 manifests; hlslkit's schema 1 writer is not used for shipping.
+Treat source hashing, macro serialization, and digest composition as one
+cross-language contract.
+
+The runtime captures the exact macro array before cache lookup and passes that
+same array to `D3DCompileFromFile`. Canonical macro encoding sorts by name,
+preserves the order of conflicting values, and removes identical neighbors.
+Each name and value is prefixed by its UTF-8 byte length and a colon; empty
+and null values both encode as `0:`. Lengths preserve boundaries even when a
+value contains spaces, colons, or equals signs. Diagnostic macro text keeps
+its readable `NAME[=VALUE] ` format. In-memory keys use the encoded form, and
+completion publishes under the key captured before compilation. The pack
+compile-state hash combines the global hash with the hash of the encoded macros; its
+content contract combines the source closure with that compile-state hash.
+Loose-cache compile state additionally includes the external compatibility
+requirement hash, as before. Deferred writes preserve these captured digests.
+
+The builder reuses `hlslkit.compile_shaders.parse_shader_configs` on the exact
+filtered YAML given to the compiler. Every blob must map to a unique compiler
+task after ImageSpace remapping, and every task must have exactly one blob.
+Missing outputs, duplicate mappings, or unavailable source digests abort
+publication. The manifest replaces its predecessor atomically only after all
+entries validate. Updating a descriptor's C++ macro mapping now invalidates
+its cached bytecode even when its HLSL and explicit ABI versions are unchanged.
+
+The builder spells captured bare defines explicitly empty in the filtered
+YAML. `shader_cache_compile.py` adapts the pinned compiler only within its
+own process: it validates those definitions as macro names and passes FXC a
+whitespace replacement. FXC otherwise treats `/DNAME` as `NAME=1`, and a
+trailing `/DNAME=` can consume the next argument. The whitespace replacement
+matches the runtime's empty D3D macro; explicit nonempty values retain the
+upstream validation and command path. The adapter retains hlslkit's task
+scheduler, diagnostics, failure handling, and subprocess ownership.
+
+Runtime stage and descriptor macros are collected separately from custom
+macros, then combined in dynamic storage. Custom definitions cannot overrun
+the descriptor buffer. The cache-read toggle uses atomic access across UI
+and compiler threads.
+
+Schema 1, missing, damaged, and unverified loose manifests require source
+compilation; timestamps cannot establish macro compatibility. Managed packs
+retain their storage format and older records, but records with the previous
+content fingerprint miss and recompile on demand. Rebuild distributed SE/AE
+and VR caches with the matching builder to avoid that first-use compilation.
+With `Skip Unchanged Shaders` disabled, disk reads are skipped while successful
+compiles still update the cache. In-memory reuse remains available.
 
 ## Prerequisites
 
@@ -443,8 +492,10 @@ compatibility variant. Empty packs, declaration-only Horizon support, missing
 Water counterparts, and inconsistent record metadata are rejected. Matching
 installation-baseline metadata alone does not prove a usable release cache.
 Coverage uses records visible under the runtime's active/fallback generation
-rules. Every path must retain a shared content contract across variants, and
-at least one Water pair must have different bytecode. Additional contents may
+rules. Every path must retain a shared content contract across variants unless
+that source has a declared compatibility define change. Horizon Water records
+have distinct macro fingerprints, and at least one Water pair must have
+different bytecode. Additional contents may
 coexist; each visible optimized record must still match a declared variant's
 canonical identity. Record metadata is compared byte for byte, as on an exact
 runtime hit.
@@ -506,7 +557,7 @@ to and to declare the same shader-cache ABI as the core AIO's
 the FOMOD archive can replace the plain AIO.
 
 The plugin validates the managed container's runtime and storage format, then
-selects records by shader ABI, feature ABI, source content, compile settings,
+selects records by shader ABI, feature ABI, source content, resolved macros, compile settings,
 and registered compatibility requirements. The pack manifest's seed ABI is
 provenance; it does not discard the container merely because the DLL changed.
 An exact or overlapping-range-compatible record is reused. Only a missing or
@@ -620,7 +671,7 @@ ShaderCache-SE-AE/ShaderCache/
 | Selected profile constants, excluded packages, or ImageSpace mapping in the builder          | Rebuild every affected profile/runtime                                                            |
 | Plugin version label                                                                         | Update `CMakePresets.json`, then rebuild matching runtime caches                                  |
 | Compiler flags, macro ordering, cache filename/key, descriptor mapping, or source resolution | Coordinate runtime and builder changes, then rebuild                                              |
-| Digest algorithm or manifest shape                                                           | Update both languages, bump the schema, update the pin, then rebuild everything                   |
+| Digest algorithm or manifest shape                                                           | Update both languages and schema; update the pin if source hashing changes, then rebuild          |
 | Pinned hlslkit revision                                                                      | Perform the compatibility procedure below; never bump blindly                                     |
 | Unrelated C++ or documentation only                                                          | A cache rebuild is not intrinsically required, although release CI still produces fresh artifacts |
 
@@ -672,12 +723,33 @@ Before changing the pin:
    include parsing, root-first include resolution, Windows path sorting,
    cycle handling, global compile-state text, manifest keys, and ImageSpace
    source mapping with `src/Utils/ContentHash.h` and `src/ShaderCache.cpp`.
+   Check resolved-task parsing and macro serialization against
+   `src/Utils/ShaderDefines.h` and `tools/shader_cache_manifest.py`.
 3. Keep `tools/build-shader-cache.py` validation aligned.
-4. If compatibility changes, increment the manifest schema in hlslkit, the
-   builder, and `src/Utils/ShaderCacheManifest.h`.
+4. If compatibility changes, increment the repository manifest schema in
+   `tools/shader_cache_manifest.py`, the builder, and
+   `src/Utils/ShaderCacheManifest.h`. Update the expected hlslkit source
+   schema only when the pinned source-closure contract changes.
 5. Update this runbook if prerequisites or commands changed.
 6. Perform static checks, then an authorized SE+VR build and runtime smoke
    test.
+
+For a focused compile-input regression check, build the
+`shader_compile_identity_test` target in Release, then run with an interpreter
+that has `tools/shader-cache-requirements.txt` installed:
+
+```powershell
+python -B tests/shader_compile_identity_test.py build/ALL/Release/shader_compile_identity_test.exe
+python -B tests/shader_cache_packaging_test.py
+python -B tests/shader_cache_pack_builder_test.py build/ALL/Release/shader_cache_pack_test.exe
+```
+
+The first command checks macro-only invalidation, the shipped SE/VR inventories,
+ImageSpace remapping, stage/value distinctions, legacy-manifest rejection,
+C++/Python digest parity, ambiguous-value separation, large macro lists,
+atomic manifest failure behavior, complete task coverage, and identical DXBC
+from the offline adapter and runtime compiler for empty macros.
+These checks do not replace the in-game smoke test.
 
 A digest mismatch is safe because the runtime recompiles, but it makes the
 prebuilt cache ineffective. “Safe fallback” is not a successful release

@@ -1,8 +1,7 @@
 #pragma once
 
-// Sidecar manifest for Data/ShaderCache. A missing or malformed file is
-// intentionally treated as empty so older caches retain the timestamp-based
-// validity behavior.
+// Sidecar manifest for Data/ShaderCache. Missing or malformed manifests
+// cannot prove source and compile-input validity and require recompilation.
 
 #include <nlohmann/json.hpp>
 
@@ -26,7 +25,7 @@ namespace Util::ShaderCacheManifest
 	class Manifest
 	{
 	public:
-		static constexpr int kSchemaVersion = 1;
+		static constexpr int kSchemaVersion = 2;
 
 		void Load(const std::filesystem::path& a_manifestPath)
 		{
@@ -49,7 +48,7 @@ namespace Util::ShaderCacheManifest
 			if (!json.is_object() ||
 				!json.contains("schemaVersion") ||
 				!json["schemaVersion"].is_number_integer() ||
-				json["schemaVersion"].get<int>() != kSchemaVersion ||
+				json["schemaVersion"] != kSchemaVersion ||
 				!json.contains("entries") ||
 				!json["entries"].is_object())
 				return;

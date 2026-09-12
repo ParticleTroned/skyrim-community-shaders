@@ -2239,6 +2239,15 @@ if(BUILD_CONTROLLER_TESTS)
         tests/shader_cache_provenance_test.cpp
     )
     add_controller_test(
+        shader_compile_identity_test
+        ShaderCompileIdentity
+        tests/shader_compile_identity_test.cpp
+    )
+    target_link_libraries(
+        shader_compile_identity_test
+        PRIVATE xxHash::xxhash nlohmann_json::nlohmann_json d3dcompiler.lib
+    )
+    add_controller_test(
         shader_source_provenance_test
         ShaderSourceProvenance
         tests/shader_source_provenance_test.cpp
@@ -2588,6 +2597,7 @@ if(BUILD_CONTROLLER_TESTS)
         CACHE_TEST_TARGET
         api_shader_compatibility_registry_test shader_cache_pack_test
         shader_source_provenance_test
+        shader_compile_identity_test
     )
         if(MSVC)
             target_compile_options(${CACHE_TEST_TARGET} PRIVATE /UNDEBUG)
@@ -2721,6 +2731,7 @@ if(BUILD_CONTROLLER_TESTS)
             shader_cache_enable_policy_test
             shader_cache_provenance_test
             shader_source_provenance_test
+            shader_compile_identity_test
             cache_invalidation_test
             shader_compilation_scheduling_policy_test
             volumetric_lighting_tuning_policy_test

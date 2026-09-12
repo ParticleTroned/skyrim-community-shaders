@@ -117,6 +117,7 @@ jobs:
                   found=false
                   for test_file in \
                     tests/shader_cache_packaging_test.py \
+                    tests/shader_compile_identity_test.py \
                     tests/fomod_package_test.py \
                     tests/release_fomod_workflow_test.py; do
                     if [ -f "$test_file" ]; then

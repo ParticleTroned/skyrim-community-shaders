@@ -31,7 +31,7 @@ namespace CSX::RenderMap
 		std::uint64_t PackFloats(float a_low, float a_high) noexcept
 		{
 			return static_cast<std::uint64_t>(std::bit_cast<std::uint32_t>(a_low)) |
-				(static_cast<std::uint64_t>(std::bit_cast<std::uint32_t>(a_high)) << 32u);
+			       (static_cast<std::uint64_t>(std::bit_cast<std::uint32_t>(a_high)) << 32u);
 		}
 
 		EventPayload RenderPassPayload(const RenderPassBoundary& a_boundary) noexcept
@@ -107,9 +107,9 @@ namespace CSX::RenderMap
 			std::uint64_t a_pixelObservationId) noexcept
 		{
 			const auto flags = static_cast<std::uint64_t>(a_resolution.vertex.route) |
-				(static_cast<std::uint64_t>(a_resolution.pixel.route) << 8u) |
-				(a_resolution.shaderFound ? (1ull << 16u) : 0u) |
-				(a_resolution.skipPixelShader ? (1ull << 17u) : 0u);
+			                   (static_cast<std::uint64_t>(a_resolution.pixel.route) << 8u) |
+			                   (a_resolution.shaderFound ? (1ull << 16u) : 0u) |
+			                   (a_resolution.skipPixelShader ? (1ull << 17u) : 0u);
 			return {
 				.schema = static_cast<std::uint16_t>(PayloadSchema::kTechniqueResolution),
 				.words = {
@@ -215,7 +215,7 @@ namespace CSX::RenderMap
 			const GeometryObservationResult& a_observation) noexcept
 		{
 			const auto availability = (a_geometry.worldTransformAvailable ? 1ull : 0ull) |
-				(a_geometry.worldBoundAvailable ? 2ull : 0ull);
+			                          (a_geometry.worldBoundAvailable ? 2ull : 0ull);
 			return {
 				.schema = static_cast<std::uint16_t>(PayloadSchema::kGeometryObservation),
 				.words = {
@@ -235,7 +235,7 @@ namespace CSX::RenderMap
 			const MaterialStateObservationResult& a_observation) noexcept
 		{
 			const auto availability = (a_material.shaderPropertyAvailable ? 1ull : 0ull) |
-				(a_material.materialAvailable ? 2ull : 0ull);
+			                          (a_material.materialAvailable ? 2ull : 0ull);
 			return {
 				.schema = static_cast<std::uint16_t>(PayloadSchema::kMaterialStateObservation),
 				.words = {
@@ -402,7 +402,7 @@ namespace CSX::RenderMap
 			const ResourceVersionInput& a_version) noexcept
 		{
 			const auto eye = static_cast<std::uint64_t>(a_version.eye) |
-				(static_cast<std::uint64_t>(a_version.eyeMask) << 8u);
+			                 (static_cast<std::uint64_t>(a_version.eyeMask) << 8u);
 			return {
 				.schema = static_cast<std::uint16_t>(PayloadSchema::kResourceVersion),
 				.words = {
@@ -421,11 +421,12 @@ namespace CSX::RenderMap
 		EventPayload VisibilityCandidatePayload(
 			std::uintptr_t a_object,
 			std::uint32_t a_objectIndex,
-			std::uint64_t a_producerFrame) noexcept
+			std::uint64_t a_producerFrame,
+			std::uint32_t a_engineFrame) noexcept
 		{
 			return {
 				.schema = static_cast<std::uint16_t>(PayloadSchema::kVisibilityCandidate),
-				.words = { a_object, a_objectIndex, a_producerFrame },
+				.words = { a_object, a_objectIndex, a_producerFrame, a_engineFrame },
 			};
 		}
 
@@ -433,11 +434,12 @@ namespace CSX::RenderMap
 			std::uint64_t a_versionObservationId,
 			std::uint64_t a_viewObservationId,
 			std::uint32_t a_objectCount,
-			std::uint64_t a_producerFrame) noexcept
+			std::uint64_t a_producerFrame,
+			std::uint32_t a_engineFrame) noexcept
 		{
 			return {
 				.schema = static_cast<std::uint16_t>(PayloadSchema::kVisibilityResult),
-				.words = { a_versionObservationId, a_viewObservationId, a_objectCount, a_producerFrame },
+				.words = { a_versionObservationId, a_viewObservationId, a_objectCount, a_producerFrame, a_engineFrame },
 			};
 		}
 
@@ -448,9 +450,9 @@ namespace CSX::RenderMap
 			std::uint64_t a_effectiveViewObservationId) noexcept
 		{
 			const auto flags = static_cast<std::uint64_t>(a_submission.category) |
-				(static_cast<std::uint64_t>(a_submission.slot) << 16u) |
-				(a_submission.bindingMatches ? (1ull << 32u) : 0u) |
-				(a_submission.forcedVisible ? (1ull << 33u) : 0u);
+			                   (static_cast<std::uint64_t>(a_submission.slot) << 16u) |
+			                   (a_submission.bindingMatches ? (1ull << 32u) : 0u) |
+			                   (a_submission.forcedVisible ? (1ull << 33u) : 0u);
 			return {
 				.schema = static_cast<std::uint16_t>(PayloadSchema::kVisibilitySubmission),
 				.words = {
@@ -622,7 +624,8 @@ namespace CSX::RenderMap
 			.definesSuffix = a_boundary.definesSuffix,
 		});
 		const auto captureGeneration = shaderObservation.sessionGeneration != 0 ?
-			shaderObservation.sessionGeneration : collector.ActiveGeneration();
+		                                   shaderObservation.sessionGeneration :
+		                                   collector.ActiveGeneration();
 		if (shaderObservation.firstSeen) {
 			collector.RecordForGeneration(
 				EventKind::kShaderObserved, ShaderObservationPayload(a_boundary, shaderObservation), 0, captureGeneration);
@@ -741,7 +744,7 @@ namespace CSX::RenderMap
 		const auto vertex = ObserveStageShaderWithPersistent(a_resolution.vertex.shader);
 		const auto pixel = ObserveStageShaderWithPersistent(a_resolution.pixel.shader);
 		const auto captureGeneration = vertex.sessionGeneration != 0 ? vertex.sessionGeneration :
-			(pixel.sessionGeneration != 0 ? pixel.sessionGeneration : collector.ActiveGeneration());
+		                                                               (pixel.sessionGeneration != 0 ? pixel.sessionGeneration : collector.ActiveGeneration());
 		if (captureGeneration == 0)
 			return;
 		PublishBoundStageObservation(a_resolution.vertex.shader.stage, a_resolution.vertex.shader.d3dObject, vertex);
@@ -899,7 +902,8 @@ namespace CSX::RenderMap
 		if (generation == 0)
 			return 0;
 		return targetStateObservationGeneration.exchange(generation, std::memory_order_acq_rel) == generation ?
-			0 : generation;
+		           0 :
+		           generation;
 	}
 
 	ResourceObservationResult Runtime::ObserveResource(
@@ -971,10 +975,10 @@ namespace CSX::RenderMap
 			return;
 
 		const auto maximumSlots = a_bindingKind == ResourceBindingKind::kShaderResource ?
-			static_cast<std::uint32_t>(kMaximumShaderResourceSlots) :
-			static_cast<std::uint32_t>(kMaximumUnorderedAccessSlots);
+		                              static_cast<std::uint32_t>(kMaximumShaderResourceSlots) :
+		                              static_cast<std::uint32_t>(kMaximumUnorderedAccessSlots);
 		const auto count = a_startSlot >= maximumSlots ? 0u :
-			std::min(a_viewCount, maximumSlots - a_startSlot);
+		                                                 std::min(a_viewCount, maximumSlots - a_startSlot);
 		std::array<bool, kMaximumShaderResourceSlots> recordSlot{};
 		std::uint32_t changedSlotCount = 0;
 		if (a_source == ResourceBindingSource::kRequestedCall) {
@@ -1010,7 +1014,8 @@ namespace CSX::RenderMap
 			if (a_views && a_views[index].view.d3dObject != 0) {
 				auto input = a_views[index];
 				input.view.kind = a_bindingKind == ResourceBindingKind::kShaderResource ?
-					TargetViewKind::kShaderResource : TargetViewKind::kUnorderedAccess;
+				                      TargetViewKind::kShaderResource :
+				                      TargetViewKind::kUnorderedAccess;
 				const auto observation = ObserveResourceView(input, contextObservationId, commandStreamSequence);
 				viewObservationId = observation.observationId;
 				if (observation.sessionGeneration != 0)
@@ -1045,7 +1050,8 @@ namespace CSX::RenderMap
 		if (generation == 0)
 			return 0;
 		return resourceViewStateObservationGeneration.exchange(generation, std::memory_order_acq_rel) == generation ?
-			0 : generation;
+		           0 :
+		           generation;
 	}
 
 	void Runtime::RecordResourceFlow(
@@ -1067,7 +1073,7 @@ namespace CSX::RenderMap
 		const auto source = ObserveResource(a_source, contextObservationId, commandStreamSequence);
 		const auto destination = ObserveResource(a_destination, contextObservationId, commandStreamSequence);
 		const auto generation = source.sessionGeneration != 0 ? source.sessionGeneration :
-			(destination.sessionGeneration != 0 ? destination.sessionGeneration : collector.ActiveGeneration());
+		                                                        (destination.sessionGeneration != 0 ? destination.sessionGeneration : collector.ActiveGeneration());
 		collector.RecordForGeneration(
 			EventKind::kResourceFlow,
 			ResourceFlowPayload(
@@ -1165,7 +1171,8 @@ namespace CSX::RenderMap
 		if (resource.observationId == 0 || resource.sessionGeneration != a_expectedCaptureGeneration)
 			return;
 		const auto mappedDuration = matched && a_completedQpcTick >= map.completedQpcTick ?
-			a_completedQpcTick - map.completedQpcTick : 0;
+		                                a_completedQpcTick - map.completedQpcTick :
+		                                0;
 		collector.RecordForGeneration(
 			EventKind::kResourceCpuAccess,
 			ResourceCpuAccessPayload(
@@ -1181,13 +1188,17 @@ namespace CSX::RenderMap
 	void Runtime::RecordVisibilityCandidate(
 		std::uintptr_t a_object,
 		std::uint32_t a_objectIndex,
-		std::uint64_t a_producerFrame) noexcept
+		std::uint64_t a_producerFrame,
+		std::uint32_t a_engineFrame) noexcept
 	{
 		if (!collector.IsCapturing() || a_object == 0)
 			return;
-		collector.Record(
+		const auto generation = collector.ActiveGeneration();
+		collector.RecordForGeneration(
 			EventKind::kVisibilityCandidate,
-			VisibilityCandidatePayload(a_object, a_objectIndex, a_producerFrame));
+			VisibilityCandidatePayload(a_object, a_objectIndex, a_producerFrame, a_engineFrame),
+			0,
+			generation);
 	}
 
 	std::uint64_t Runtime::RecordVisibilityResultReady(
@@ -1229,7 +1240,7 @@ namespace CSX::RenderMap
 			EventKind::kVisibilityResultReady,
 			VisibilityResultPayload(
 				versionObservationId, viewObservation.observationId,
-				a_objectCount, a_version.producerFrame),
+				a_objectCount, a_version.producerFrame, a_version.engineFrame),
 			contextObservationId,
 			resource.sessionGeneration,
 			commandStreamSequence);
@@ -1300,12 +1311,14 @@ namespace CSX::RenderMap
 			a_captureGeneration == 0 || collector.ActiveGeneration() != a_captureGeneration) {
 			return;
 		}
-		collector.Record(
+		collector.RecordForGeneration(
 			EventKind::kCullDecision,
 			CullDecisionPayload(
 				a_resourceVersionObservationId, a_objectIndex, a_producerVisible,
 				a_totalDraws, a_lightingDraws, a_distantTreeDraws, a_grassDraws,
-				a_producerFrame));
+				a_producerFrame),
+			0,
+			a_captureGeneration);
 	}
 
 	void Runtime::RecordEyeSubmission(
@@ -1556,7 +1569,8 @@ namespace CSX::RenderMap
 
 		const auto sceneObject = collector.ObserveSceneObject(a_boundary.sceneObject);
 		const auto captureGeneration = sceneObject.sessionGeneration != 0 ?
-			sceneObject.sessionGeneration : collector.ActiveGeneration();
+		                                   sceneObject.sessionGeneration :
+		                                   collector.ActiveGeneration();
 		if (sceneObject.firstSeen) {
 			collector.RecordForGeneration(
 				EventKind::kObjectObserved,

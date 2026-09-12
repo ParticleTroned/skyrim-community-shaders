@@ -64,7 +64,14 @@ namespace
 
 	CSX::RenderMap::Eye RenderMapEye(vr::EVREye a_eye) noexcept
 	{
-		return a_eye == vr::Eye_Left ? CSX::RenderMap::Eye::kLeft : CSX::RenderMap::Eye::kRight;
+		switch (a_eye) {
+		case vr::Eye_Left:
+			return CSX::RenderMap::Eye::kLeft;
+		case vr::Eye_Right:
+			return CSX::RenderMap::Eye::kRight;
+		default:
+			return CSX::RenderMap::Eye::kUnknown;
+		}
 	}
 #endif
 

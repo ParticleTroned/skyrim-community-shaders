@@ -3,6 +3,7 @@
 #include "RenderMap/Collector.h"
 
 #include <cstdint>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
@@ -94,6 +95,7 @@ namespace CSX::RenderMap
 		std::uint32_t subresourceCount{ 1 };
 		std::uint64_t writeEpoch{ 0 };
 		std::uint64_t producerFrame{ kUnknownFrame };
+		std::uint32_t engineFrame{ std::numeric_limits<std::uint32_t>::max() };
 		ResourceReadinessDomain readinessDomain{ ResourceReadinessDomain::kUnknown };
 		Eye eye{ Eye::kUnknown };
 		std::uint8_t eyeMask{ 0 };
@@ -272,7 +274,8 @@ namespace CSX::RenderMap
 		void RecordVisibilityCandidate(
 			std::uintptr_t a_object,
 			std::uint32_t a_objectIndex,
-			std::uint64_t a_producerFrame) noexcept;
+			std::uint64_t a_producerFrame,
+			std::uint32_t a_engineFrame) noexcept;
 		std::uint64_t RecordVisibilityResultReady(
 			std::uintptr_t a_context,
 			const ResourceVersionInput& a_version,
@@ -432,7 +435,8 @@ namespace CSX::RenderMap
 			effectiveResourceViews{};
 		mutable std::shared_mutex persistentStageShaderMutex;
 		std::unordered_map<PersistentStageShaderKey, PersistentStageShaderIdentity,
-			PersistentStageShaderKeyHash> persistentStageShaders;
+			PersistentStageShaderKeyHash>
+			persistentStageShaders;
 	};
 
 	Runtime& GetRuntime() noexcept;

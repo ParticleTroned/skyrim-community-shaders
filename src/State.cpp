@@ -506,8 +506,7 @@ void State::Draw()
 
 		if (permutationData != permutationDataPrevious) {
 			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::PermutationCBUpdate, stateDrawDiagFrame, stateDrawDiagActive);
-			permutationCB->Update(permutationData);
-			permutationDataPrevious = permutationData;
+			CommitPermutationData();
 		}
 
 		if (currentShader && updateShader) {
@@ -529,6 +528,14 @@ void State::Draw()
 
 		updateShader = false;
 	}
+}
+
+void State::CommitPermutationData()
+{
+	if (!permutationCB || permutationData == permutationDataPrevious)
+		return;
+	permutationCB->Update(permutationData);
+	permutationDataPrevious = permutationData;
 }
 
 void State::Debug()

@@ -143,6 +143,8 @@ public:
 	};
 
 	void Draw();
+	/// Commits a descriptor correction that must become visible before the next draw.
+	void CommitPermutationData();
 	void Debug();
 	void Reset();
 	void Setup();

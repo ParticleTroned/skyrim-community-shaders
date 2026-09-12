@@ -84,37 +84,40 @@ namespace
 		if (!a_material)
 			return;
 		switch (a_material->GetType()) {
-		case RE::BSShaderMaterial::Type::kLighting: {
-			auto* lighting = static_cast<RE::BSLightingShaderMaterialBase*>(a_material);
-			std::array<RE::NiSourceTexture*, 64> textures{};
-			const auto textureCount = lighting->GetTextures(textures.data());
-			const auto retainedCount = std::min<std::size_t>(textureCount, textures.size());
-			for (std::size_t index = 0; index < retainedCount; ++index) {
-				AppendMaterialTextureBinding(
-					a_observation,
-					CSX::RenderMap::MaterialTextureRole::kRuntimeMaterialList,
-					static_cast<std::uint32_t>(index),
-					textures[index]);
+		case RE::BSShaderMaterial::Type::kLighting:
+			{
+				auto* lighting = static_cast<RE::BSLightingShaderMaterialBase*>(a_material);
+				std::array<RE::NiSourceTexture*, 64> textures{};
+				const auto textureCount = lighting->GetTextures(textures.data());
+				const auto retainedCount = std::min<std::size_t>(textureCount, textures.size());
+				for (std::size_t index = 0; index < retainedCount; ++index) {
+					AppendMaterialTextureBinding(
+						a_observation,
+						CSX::RenderMap::MaterialTextureRole::kRuntimeMaterialList,
+						static_cast<std::uint32_t>(index),
+						textures[index]);
+				}
+				if (textureCount > textures.size())
+					a_observation.textureBindingsTruncated = true;
+				break;
 			}
-			if (textureCount > textures.size())
-				a_observation.textureBindingsTruncated = true;
-			break;
-		}
-		case RE::BSShaderMaterial::Type::kEffect: {
-			auto* effect = static_cast<RE::BSEffectShaderMaterial*>(a_material);
-			AppendMaterialTextureBinding(a_observation, CSX::RenderMap::MaterialTextureRole::kEffectSource, 0, effect->sourceTexture.get());
-			AppendMaterialTextureBinding(a_observation, CSX::RenderMap::MaterialTextureRole::kEffectGreyscale, 1, effect->greyscaleTexture.get());
-			break;
-		}
-		case RE::BSShaderMaterial::Type::kWater: {
-			auto* water = static_cast<RE::BSWaterShaderMaterial*>(a_material);
-			AppendMaterialTextureBinding(a_observation, CSX::RenderMap::MaterialTextureRole::kWaterStaticReflection, 0, water->staticReflectionTexture.get());
-			AppendMaterialTextureBinding(a_observation, CSX::RenderMap::MaterialTextureRole::kWaterNormal1, 1, water->normalTexture1.get());
-			AppendMaterialTextureBinding(a_observation, CSX::RenderMap::MaterialTextureRole::kWaterNormal2, 2, water->normalTexture2.get());
-			AppendMaterialTextureBinding(a_observation, CSX::RenderMap::MaterialTextureRole::kWaterNormal3, 3, water->normalTexture3.get());
-			AppendMaterialTextureBinding(a_observation, CSX::RenderMap::MaterialTextureRole::kWaterNormal4, 4, water->normalTexture4.get());
-			break;
-		}
+		case RE::BSShaderMaterial::Type::kEffect:
+			{
+				auto* effect = static_cast<RE::BSEffectShaderMaterial*>(a_material);
+				AppendMaterialTextureBinding(a_observation, CSX::RenderMap::MaterialTextureRole::kEffectSource, 0, effect->sourceTexture.get());
+				AppendMaterialTextureBinding(a_observation, CSX::RenderMap::MaterialTextureRole::kEffectGreyscale, 1, effect->greyscaleTexture.get());
+				break;
+			}
+		case RE::BSShaderMaterial::Type::kWater:
+			{
+				auto* water = static_cast<RE::BSWaterShaderMaterial*>(a_material);
+				AppendMaterialTextureBinding(a_observation, CSX::RenderMap::MaterialTextureRole::kWaterStaticReflection, 0, water->staticReflectionTexture.get());
+				AppendMaterialTextureBinding(a_observation, CSX::RenderMap::MaterialTextureRole::kWaterNormal1, 1, water->normalTexture1.get());
+				AppendMaterialTextureBinding(a_observation, CSX::RenderMap::MaterialTextureRole::kWaterNormal2, 2, water->normalTexture2.get());
+				AppendMaterialTextureBinding(a_observation, CSX::RenderMap::MaterialTextureRole::kWaterNormal3, 3, water->normalTexture3.get());
+				AppendMaterialTextureBinding(a_observation, CSX::RenderMap::MaterialTextureRole::kWaterNormal4, 4, water->normalTexture4.get());
+				break;
+			}
 		default:
 			break;
 		}
@@ -275,7 +278,7 @@ namespace
 		const auto hashStatus = BCryptHashData(
 			hash, reinterpret_cast<PUCHAR>(const_cast<void*>(a_data)), static_cast<ULONG>(a_size), 0);
 		const auto finishStatus = hashStatus < 0 ? hashStatus :
-			BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0);
+		                                           BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0);
 		BCryptDestroyHash(hash);
 		if (finishStatus < 0) {
 			return false;
@@ -338,7 +341,8 @@ namespace
 		if (!g_techniqueSelectionContext)
 			return;
 		auto& selected = a_stage == CSX::RenderMap::ShaderStage::kPixel ?
-			g_techniqueSelectionContext->pixel : g_techniqueSelectionContext->vertex;
+		                     g_techniqueSelectionContext->pixel :
+		                     g_techniqueSelectionContext->vertex;
 		selected = {
 			.wrapper = reinterpret_cast<std::uintptr_t>(a_wrapper),
 			.d3dObject = reinterpret_cast<std::uintptr_t>(a_wrapper ? a_wrapper->shader : nullptr),
@@ -358,7 +362,7 @@ namespace
 			return false;
 		a_size = found->second.bytecodeSize;
 		a_sha256 = found->second.hashAvailable ? found->second.sha256 :
-			std::array<char, CSX::RenderMap::kSha256HexLength + 1>{};
+		                                         std::array<char, CSX::RenderMap::kSha256HexLength + 1>{};
 		return true;
 	}
 }
@@ -1163,7 +1167,7 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 			CaptureStageSelection<RE::BSGraphics::PixelShader>(
 				nullptr, CSX::RenderMap::ShaderStage::kPixel,
 				skipPixelShader ? CSX::RenderMap::ShaderSelectionRoute::kSkipped :
-					CSX::RenderMap::ShaderSelectionRoute::kMissing);
+								  CSX::RenderMap::ShaderSelectionRoute::kMissing);
 #endif
 		} else {
 			state->settingCustomShader = true;
@@ -1182,7 +1186,7 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 				CSX::RenderMap::ShaderSelectionRoute::kCSXFallback);
 			CaptureStageSelection(pixelShader, CSX::RenderMap::ShaderStage::kPixel,
 				skipPixelShader ? CSX::RenderMap::ShaderSelectionRoute::kSkipped :
-					CSX::RenderMap::ShaderSelectionRoute::kCSXFallback);
+								  CSX::RenderMap::ShaderSelectionRoute::kCSXFallback);
 #endif
 			shaderFound = true;
 		}
@@ -1205,7 +1209,7 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 			selectedStages.vertex = { .route = CSX::RenderMap::ShaderSelectionRoute::kMissing };
 			selectedStages.pixel = {
 				.route = skipPixelShader ? CSX::RenderMap::ShaderSelectionRoute::kSkipped :
-					CSX::RenderMap::ShaderSelectionRoute::kMissing,
+				                           CSX::RenderMap::ShaderSelectionRoute::kMissing,
 			};
 		} else if (skipPixelShader) {
 			selectedStages.pixel = { .route = CSX::RenderMap::ShaderSelectionRoute::kSkipped };
@@ -1345,9 +1349,35 @@ namespace LightingExtensions
 					if (baseObject->As<RE::TESObjectTREE>())
 						state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::IsTree);
 
+			auto& vr = globals::features::vr;
+			if (vr.IsCurrentFrameDepthCullingEnabled() || vr.GetDepthCullingDiagnostics().IsCollecting()) {
+				vr.BindCurrentFrameDepthCulling(
+					pass,
+					pass->geometry,
+					CSX::VRDepthCullingDiagnostics::DrawCategory::Lighting);
+			}
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
+}
+
+namespace DistantTreeExtensions
+{
+	struct BSDistantTreeShader_SetupGeometry
+	{
+		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
+		{
+			func(shader, pass, renderFlags);
+			auto& vr = globals::features::vr;
+			if (vr.IsCurrentFrameDepthCullingEnabled() || vr.GetDepthCullingDiagnostics().IsCollecting()) {
+				vr.BindCurrentFrameDepthCulling(
+					pass,
+					pass->geometry,
+			}
+					CSX::VRDepthCullingDiagnostics::DrawCategory::DistantTree);
+		}
+	} static inline REL::Relocation<decltype(thunk)> func;
+};
 }
 
 namespace GrassExtensions
@@ -1397,9 +1427,16 @@ namespace GrassExtensions
 				}
 			}
 
+			auto& vr = globals::features::vr;
+			if (vr.IsCurrentFrameDepthCullingEnabled() || vr.GetDepthCullingDiagnostics().IsCollecting()) {
+				vr.BindCurrentFrameDepthCulling(
+					pass,
+					pass->geometry,
+			}
+					CSX::VRDepthCullingDiagnostics::DrawCategory::Grass);
 		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
+	} static inline REL::Relocation<decltype(thunk)> func;
+};
 }
 
 namespace WaterBlendHistory
@@ -1524,6 +1561,7 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 		func(isCompute);
 		globals::features::terrainBlending.OnSetDirtyStates(isCompute, callerRva);
 		globals::state->Draw();
+		globals::features::vr.ArmCurrentFrameDepthCullingDraw(isCompute);
 		return;
 	}
 
@@ -1543,6 +1581,7 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 
 	phaseStartTicks = phaseEndTicks;
 	globals::state->Draw();
+	globals::features::vr.ArmCurrentFrameDepthCullingDraw(isCompute);
 	phaseEndTicks = ReadFrameDiagCounterTicks();
 	RecordCSFrameHookPhase(CSFrameHookPhase::StateDraw, frame, phaseEndTicks - phaseStartTicks);
 	RecordCSFrameHookPhase(CSFrameHookPhase::SetDirtyStatesTotal, frame, phaseEndTicks - totalStartTicks);
@@ -2060,7 +2099,7 @@ namespace Hooks
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			CaptureStageSelection(a_vertexShader, CSX::RenderMap::ShaderStage::kVertex,
 				a_vertexShader ? CSX::RenderMap::ShaderSelectionRoute::kEngine :
-					CSX::RenderMap::ShaderSelectionRoute::kMissing);
+								 CSX::RenderMap::ShaderSelectionRoute::kMissing);
 #endif
 			*globals::game::currentVertexShader = a_vertexShader;
 			globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(a_vertexShader->shader), NULL, NULL);
@@ -2099,7 +2138,7 @@ namespace Hooks
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			CaptureStageSelection(a_pixelShader, CSX::RenderMap::ShaderStage::kPixel,
 				a_pixelShader ? CSX::RenderMap::ShaderSelectionRoute::kEngine :
-					CSX::RenderMap::ShaderSelectionRoute::kMissing);
+								CSX::RenderMap::ShaderSelectionRoute::kMissing);
 #endif
 			*globals::game::currentPixelShader = a_pixelShader;
 
@@ -2265,10 +2304,13 @@ namespace Hooks
 		}
 
 		// Original call from 1.4.0
+		auto& vr = globals::features::vr;
+		auto* previousDepthCullingPass = vr.EnterCurrentFrameDepthCullingRenderPass(a_pass);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		[[maybe_unused]] const auto renderMapScope = EnterRenderPassBoundary(a_pass, a_technique, a_alphaTest, a_renderFlags);
 #endif
 		func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+		vr.LeaveCurrentFrameDepthCullingRenderPass(previousDepthCullingPass);
 	}
 
 	struct BSBatchRenderer_RenderPassImmediately2  // This is from 1.4.0 but absent in 1.4.6
@@ -2311,10 +2353,13 @@ namespace Hooks
 			}
 
 			// Original call
+			auto& vr = globals::features::vr;
+			auto* previousDepthCullingPass = vr.EnterCurrentFrameDepthCullingRenderPass(a_pass);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			[[maybe_unused]] const auto renderMapScope = EnterRenderPassBoundary(a_pass, a_technique, a_alphaTest, a_renderFlags);
 #endif
 			func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+			vr.LeaveCurrentFrameDepthCullingRenderPass(previousDepthCullingPass);
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;  // This is from 1.4.0 but absent in 1.4.6
@@ -2322,6 +2367,8 @@ namespace Hooks
 
 	void DrawRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
 	{
+		auto& vr = globals::features::vr;
+		auto* previousDepthCullingPass = vr.EnterCurrentFrameDepthCullingRenderPass(a_pass);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		[[maybe_unused]] const auto renderMapScope = EnterRenderPassBoundary(a_pass, a_technique, a_alphaTest, a_renderFlags);
 #endif
@@ -2330,6 +2377,7 @@ namespace Hooks
 		}
 
 		BSBatchRenderer_RenderPassImmediately2::func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+		vr.LeaveCurrentFrameDepthCullingRenderPass(previousDepthCullingPass);
 	}
 
 #ifdef TRACY_ENABLE

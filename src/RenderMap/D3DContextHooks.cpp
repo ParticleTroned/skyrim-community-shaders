@@ -1,5 +1,7 @@
 #include "RenderMap/D3DContextHooks.h"
 
+#include "Features/VR.h"
+#include "Globals.h"
 #include "RenderMap/Runtime.h"
 
 #include <d3d11.h>
@@ -9,6 +11,30 @@
 
 namespace CSX::RenderMap
 {
+	namespace
+	{
+		struct CurrentFrameDepthCullingDrawScope
+		{
+			ID3D11DeviceContext* context = nullptr;
+			bool active = false;
+
+			explicit CurrentFrameDepthCullingDrawScope(ID3D11DeviceContext* a_context) :
+				context(a_context)
+			{
+				auto& vr = globals::features::vr;
+				active = vr.HasArmedCurrentFrameDepthCullingDraw();
+				if (active)
+					vr.BeginCurrentFrameDepthCullingDraw(context);
+			}
+
+			~CurrentFrameDepthCullingDrawScope()
+			{
+				if (active)
+					globals::features::vr.EndCurrentFrameDepthCullingDraw(context);
+			}
+		};
+	}
+
 	ResourceObservationInput DescribeResource(ID3D11Resource* a_resource) noexcept
 	{
 		ResourceObservationInput result;
@@ -18,7 +44,8 @@ namespace CSX::RenderMap
 		D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
 		a_resource->GetType(&dimension);
 		switch (dimension) {
-			case D3D11_RESOURCE_DIMENSION_BUFFER: {
+		case D3D11_RESOURCE_DIMENSION_BUFFER:
+			{
 				D3D11_BUFFER_DESC desc{};
 				reinterpret_cast<ID3D11Buffer*>(a_resource)->GetDesc(&desc);
 				result.dimension = ResourceDimension::kBuffer;
@@ -30,7 +57,8 @@ namespace CSX::RenderMap
 				result.structureByteStride = desc.StructureByteStride;
 				break;
 			}
-			case D3D11_RESOURCE_DIMENSION_TEXTURE1D: {
+		case D3D11_RESOURCE_DIMENSION_TEXTURE1D:
+			{
 				D3D11_TEXTURE1D_DESC desc{};
 				reinterpret_cast<ID3D11Texture1D*>(a_resource)->GetDesc(&desc);
 				result.dimension = ResourceDimension::kTexture1D;
@@ -44,7 +72,8 @@ namespace CSX::RenderMap
 				result.miscFlags = desc.MiscFlags;
 				break;
 			}
-			case D3D11_RESOURCE_DIMENSION_TEXTURE2D: {
+		case D3D11_RESOURCE_DIMENSION_TEXTURE2D:
+			{
 				D3D11_TEXTURE2D_DESC desc{};
 				reinterpret_cast<ID3D11Texture2D*>(a_resource)->GetDesc(&desc);
 				result.dimension = ResourceDimension::kTexture2D;
@@ -61,7 +90,8 @@ namespace CSX::RenderMap
 				result.miscFlags = desc.MiscFlags;
 				break;
 			}
-			case D3D11_RESOURCE_DIMENSION_TEXTURE3D: {
+		case D3D11_RESOURCE_DIMENSION_TEXTURE3D:
+			{
 				D3D11_TEXTURE3D_DESC desc{};
 				reinterpret_cast<ID3D11Texture3D*>(a_resource)->GetDesc(&desc);
 				result.dimension = ResourceDimension::kTexture3D;
@@ -76,8 +106,8 @@ namespace CSX::RenderMap
 				result.miscFlags = desc.MiscFlags;
 				break;
 			}
-			default:
-				break;
+		default:
+			break;
 		}
 		return result;
 	}
@@ -116,19 +146,37 @@ namespace CSX::RenderMap
 			result.view.format = desc.Format;
 			result.view.dimension = desc.ViewDimension;
 			switch (desc.ViewDimension) {
-			case D3D11_RTV_DIMENSION_TEXTURE1D: result.view.mipSlice = desc.Texture1D.MipSlice; break;
+			case D3D11_RTV_DIMENSION_TEXTURE1D:
+				result.view.mipSlice = desc.Texture1D.MipSlice;
+				break;
 			case D3D11_RTV_DIMENSION_TEXTURE1DARRAY:
-				result.view.mipSlice = desc.Texture1DArray.MipSlice; result.view.firstArraySlice = desc.Texture1DArray.FirstArraySlice; result.view.arraySize = desc.Texture1DArray.ArraySize; break;
-			case D3D11_RTV_DIMENSION_TEXTURE2D: result.view.mipSlice = desc.Texture2D.MipSlice; break;
+				result.view.mipSlice = desc.Texture1DArray.MipSlice;
+				result.view.firstArraySlice = desc.Texture1DArray.FirstArraySlice;
+				result.view.arraySize = desc.Texture1DArray.ArraySize;
+				break;
+			case D3D11_RTV_DIMENSION_TEXTURE2D:
+				result.view.mipSlice = desc.Texture2D.MipSlice;
+				break;
 			case D3D11_RTV_DIMENSION_TEXTURE2DARRAY:
-				result.view.mipSlice = desc.Texture2DArray.MipSlice; result.view.firstArraySlice = desc.Texture2DArray.FirstArraySlice; result.view.arraySize = desc.Texture2DArray.ArraySize; break;
+				result.view.mipSlice = desc.Texture2DArray.MipSlice;
+				result.view.firstArraySlice = desc.Texture2DArray.FirstArraySlice;
+				result.view.arraySize = desc.Texture2DArray.ArraySize;
+				break;
 			case D3D11_RTV_DIMENSION_TEXTURE2DMSARRAY:
-				result.view.firstArraySlice = desc.Texture2DMSArray.FirstArraySlice; result.view.arraySize = desc.Texture2DMSArray.ArraySize; break;
+				result.view.firstArraySlice = desc.Texture2DMSArray.FirstArraySlice;
+				result.view.arraySize = desc.Texture2DMSArray.ArraySize;
+				break;
 			case D3D11_RTV_DIMENSION_TEXTURE3D:
-				result.view.mipSlice = desc.Texture3D.MipSlice; result.view.firstArraySlice = desc.Texture3D.FirstWSlice; result.view.arraySize = desc.Texture3D.WSize; break;
+				result.view.mipSlice = desc.Texture3D.MipSlice;
+				result.view.firstArraySlice = desc.Texture3D.FirstWSlice;
+				result.view.arraySize = desc.Texture3D.WSize;
+				break;
 			case D3D11_RTV_DIMENSION_BUFFER:
-				result.view.firstElement = desc.Buffer.FirstElement; result.view.elementCount = desc.Buffer.NumElements; break;
-			default: break;
+				result.view.firstElement = desc.Buffer.FirstElement;
+				result.view.elementCount = desc.Buffer.NumElements;
+				break;
+			default:
+				break;
 			}
 			return result;
 		}
@@ -144,15 +192,28 @@ namespace CSX::RenderMap
 			result.view.dimension = desc.ViewDimension;
 			result.view.flags = desc.Flags;
 			switch (desc.ViewDimension) {
-			case D3D11_DSV_DIMENSION_TEXTURE1D: result.view.mipSlice = desc.Texture1D.MipSlice; break;
+			case D3D11_DSV_DIMENSION_TEXTURE1D:
+				result.view.mipSlice = desc.Texture1D.MipSlice;
+				break;
 			case D3D11_DSV_DIMENSION_TEXTURE1DARRAY:
-				result.view.mipSlice = desc.Texture1DArray.MipSlice; result.view.firstArraySlice = desc.Texture1DArray.FirstArraySlice; result.view.arraySize = desc.Texture1DArray.ArraySize; break;
-			case D3D11_DSV_DIMENSION_TEXTURE2D: result.view.mipSlice = desc.Texture2D.MipSlice; break;
+				result.view.mipSlice = desc.Texture1DArray.MipSlice;
+				result.view.firstArraySlice = desc.Texture1DArray.FirstArraySlice;
+				result.view.arraySize = desc.Texture1DArray.ArraySize;
+				break;
+			case D3D11_DSV_DIMENSION_TEXTURE2D:
+				result.view.mipSlice = desc.Texture2D.MipSlice;
+				break;
 			case D3D11_DSV_DIMENSION_TEXTURE2DARRAY:
-				result.view.mipSlice = desc.Texture2DArray.MipSlice; result.view.firstArraySlice = desc.Texture2DArray.FirstArraySlice; result.view.arraySize = desc.Texture2DArray.ArraySize; break;
+				result.view.mipSlice = desc.Texture2DArray.MipSlice;
+				result.view.firstArraySlice = desc.Texture2DArray.FirstArraySlice;
+				result.view.arraySize = desc.Texture2DArray.ArraySize;
+				break;
 			case D3D11_DSV_DIMENSION_TEXTURE2DMSARRAY:
-				result.view.firstArraySlice = desc.Texture2DMSArray.FirstArraySlice; result.view.arraySize = desc.Texture2DMSArray.ArraySize; break;
-			default: break;
+				result.view.firstArraySlice = desc.Texture2DMSArray.FirstArraySlice;
+				result.view.arraySize = desc.Texture2DMSArray.ArraySize;
+				break;
+			default:
+				break;
 			}
 			return result;
 		}
@@ -167,24 +228,55 @@ namespace CSX::RenderMap
 			result.view.format = desc.Format;
 			result.view.dimension = desc.ViewDimension;
 			switch (desc.ViewDimension) {
-			case D3D11_SRV_DIMENSION_BUFFER: result.view.firstElement = desc.Buffer.FirstElement; result.view.elementCount = desc.Buffer.NumElements; break;
-			case D3D11_SRV_DIMENSION_TEXTURE1D: result.view.mipSlice = desc.Texture1D.MostDetailedMip; result.view.arraySize = desc.Texture1D.MipLevels; break;
+			case D3D11_SRV_DIMENSION_BUFFER:
+				result.view.firstElement = desc.Buffer.FirstElement;
+				result.view.elementCount = desc.Buffer.NumElements;
+				break;
+			case D3D11_SRV_DIMENSION_TEXTURE1D:
+				result.view.mipSlice = desc.Texture1D.MostDetailedMip;
+				result.view.arraySize = desc.Texture1D.MipLevels;
+				break;
 			case D3D11_SRV_DIMENSION_TEXTURE1DARRAY:
-				result.view.mipSlice = desc.Texture1DArray.MostDetailedMip; result.view.arraySize = desc.Texture1DArray.MipLevels; result.view.firstArraySlice = desc.Texture1DArray.FirstArraySlice; result.view.elementCount = desc.Texture1DArray.ArraySize; break;
-			case D3D11_SRV_DIMENSION_TEXTURE2D: result.view.mipSlice = desc.Texture2D.MostDetailedMip; result.view.arraySize = desc.Texture2D.MipLevels; break;
+				result.view.mipSlice = desc.Texture1DArray.MostDetailedMip;
+				result.view.arraySize = desc.Texture1DArray.MipLevels;
+				result.view.firstArraySlice = desc.Texture1DArray.FirstArraySlice;
+				result.view.elementCount = desc.Texture1DArray.ArraySize;
+				break;
+			case D3D11_SRV_DIMENSION_TEXTURE2D:
+				result.view.mipSlice = desc.Texture2D.MostDetailedMip;
+				result.view.arraySize = desc.Texture2D.MipLevels;
+				break;
 			case D3D11_SRV_DIMENSION_TEXTURE2DARRAY:
-				result.view.mipSlice = desc.Texture2DArray.MostDetailedMip; result.view.arraySize = desc.Texture2DArray.MipLevels; result.view.firstArraySlice = desc.Texture2DArray.FirstArraySlice; result.view.elementCount = desc.Texture2DArray.ArraySize; break;
-			case D3D11_SRV_DIMENSION_TEXTURE2DMSARRAY: result.view.firstArraySlice = desc.Texture2DMSArray.FirstArraySlice; result.view.arraySize = desc.Texture2DMSArray.ArraySize; break;
-			case D3D11_SRV_DIMENSION_TEXTURE3D: result.view.mipSlice = desc.Texture3D.MostDetailedMip; result.view.arraySize = desc.Texture3D.MipLevels; break;
-			case D3D11_SRV_DIMENSION_TEXTURECUBE: result.view.mipSlice = desc.TextureCube.MostDetailedMip; result.view.arraySize = desc.TextureCube.MipLevels; break;
+				result.view.mipSlice = desc.Texture2DArray.MostDetailedMip;
+				result.view.arraySize = desc.Texture2DArray.MipLevels;
+				result.view.firstArraySlice = desc.Texture2DArray.FirstArraySlice;
+				result.view.elementCount = desc.Texture2DArray.ArraySize;
+				break;
+			case D3D11_SRV_DIMENSION_TEXTURE2DMSARRAY:
+				result.view.firstArraySlice = desc.Texture2DMSArray.FirstArraySlice;
+				result.view.arraySize = desc.Texture2DMSArray.ArraySize;
+				break;
+			case D3D11_SRV_DIMENSION_TEXTURE3D:
+				result.view.mipSlice = desc.Texture3D.MostDetailedMip;
+				result.view.arraySize = desc.Texture3D.MipLevels;
+				break;
+			case D3D11_SRV_DIMENSION_TEXTURECUBE:
+				result.view.mipSlice = desc.TextureCube.MostDetailedMip;
+				result.view.arraySize = desc.TextureCube.MipLevels;
+				break;
 			case D3D11_SRV_DIMENSION_TEXTURECUBEARRAY:
 				result.view.mipSlice = desc.TextureCubeArray.MostDetailedMip;
 				result.view.arraySize = desc.TextureCubeArray.MipLevels;
 				result.view.firstArraySlice = desc.TextureCubeArray.First2DArrayFace;
 				result.view.elementCount = desc.TextureCubeArray.NumCubes * 6u;
 				break;
-			case D3D11_SRV_DIMENSION_BUFFEREX: result.view.firstElement = desc.BufferEx.FirstElement; result.view.elementCount = desc.BufferEx.NumElements; result.view.flags = desc.BufferEx.Flags; break;
-			default: break;
+			case D3D11_SRV_DIMENSION_BUFFEREX:
+				result.view.firstElement = desc.BufferEx.FirstElement;
+				result.view.elementCount = desc.BufferEx.NumElements;
+				result.view.flags = desc.BufferEx.Flags;
+				break;
+			default:
+				break;
 			}
 			return result;
 		}
@@ -199,23 +291,41 @@ namespace CSX::RenderMap
 			result.view.format = desc.Format;
 			result.view.dimension = desc.ViewDimension;
 			switch (desc.ViewDimension) {
-			case D3D11_UAV_DIMENSION_BUFFER: result.view.firstElement = desc.Buffer.FirstElement; result.view.elementCount = desc.Buffer.NumElements; result.view.flags = desc.Buffer.Flags; break;
-			case D3D11_UAV_DIMENSION_TEXTURE1D: result.view.mipSlice = desc.Texture1D.MipSlice; break;
+			case D3D11_UAV_DIMENSION_BUFFER:
+				result.view.firstElement = desc.Buffer.FirstElement;
+				result.view.elementCount = desc.Buffer.NumElements;
+				result.view.flags = desc.Buffer.Flags;
+				break;
+			case D3D11_UAV_DIMENSION_TEXTURE1D:
+				result.view.mipSlice = desc.Texture1D.MipSlice;
+				break;
 			case D3D11_UAV_DIMENSION_TEXTURE1DARRAY:
-				result.view.mipSlice = desc.Texture1DArray.MipSlice; result.view.firstArraySlice = desc.Texture1DArray.FirstArraySlice; result.view.arraySize = desc.Texture1DArray.ArraySize; break;
-			case D3D11_UAV_DIMENSION_TEXTURE2D: result.view.mipSlice = desc.Texture2D.MipSlice; break;
+				result.view.mipSlice = desc.Texture1DArray.MipSlice;
+				result.view.firstArraySlice = desc.Texture1DArray.FirstArraySlice;
+				result.view.arraySize = desc.Texture1DArray.ArraySize;
+				break;
+			case D3D11_UAV_DIMENSION_TEXTURE2D:
+				result.view.mipSlice = desc.Texture2D.MipSlice;
+				break;
 			case D3D11_UAV_DIMENSION_TEXTURE2DARRAY:
-				result.view.mipSlice = desc.Texture2DArray.MipSlice; result.view.firstArraySlice = desc.Texture2DArray.FirstArraySlice; result.view.arraySize = desc.Texture2DArray.ArraySize; break;
+				result.view.mipSlice = desc.Texture2DArray.MipSlice;
+				result.view.firstArraySlice = desc.Texture2DArray.FirstArraySlice;
+				result.view.arraySize = desc.Texture2DArray.ArraySize;
+				break;
 			case D3D11_UAV_DIMENSION_TEXTURE3D:
-				result.view.mipSlice = desc.Texture3D.MipSlice; result.view.firstArraySlice = desc.Texture3D.FirstWSlice; result.view.arraySize = desc.Texture3D.WSize; break;
-			default: break;
+				result.view.mipSlice = desc.Texture3D.MipSlice;
+				result.view.firstArraySlice = desc.Texture3D.FirstWSlice;
+				result.view.arraySize = desc.Texture3D.WSize;
+				break;
+			default:
+				break;
 			}
 			return result;
 		}
 		std::uint64_t PackSignedAndUnsigned(std::int32_t a_signed, std::uint32_t a_unsigned) noexcept
 		{
 			return static_cast<std::uint32_t>(a_signed) |
-				(static_cast<std::uint64_t>(a_unsigned) << 32u);
+			       (static_cast<std::uint64_t>(a_unsigned) << 32u);
 		}
 
 		void ObserveRenderTargets(
@@ -328,13 +438,26 @@ namespace CSX::RenderMap
 				a_viewCount, static_cast<UINT>(kMaximumShaderResourceSlots - a_startSlot));
 			std::array<ID3D11ShaderResourceView*, kMaximumShaderResourceSlots> views{};
 			switch (a_stage) {
-			case ResourceStage::kVertex: a_context->VSGetShaderResources(a_startSlot, count, views.data()); break;
-			case ResourceStage::kHull: a_context->HSGetShaderResources(a_startSlot, count, views.data()); break;
-			case ResourceStage::kDomain: a_context->DSGetShaderResources(a_startSlot, count, views.data()); break;
-			case ResourceStage::kGeometry: a_context->GSGetShaderResources(a_startSlot, count, views.data()); break;
-			case ResourceStage::kPixel: a_context->PSGetShaderResources(a_startSlot, count, views.data()); break;
-			case ResourceStage::kCompute: a_context->CSGetShaderResources(a_startSlot, count, views.data()); break;
-			default: return;
+			case ResourceStage::kVertex:
+				a_context->VSGetShaderResources(a_startSlot, count, views.data());
+				break;
+			case ResourceStage::kHull:
+				a_context->HSGetShaderResources(a_startSlot, count, views.data());
+				break;
+			case ResourceStage::kDomain:
+				a_context->DSGetShaderResources(a_startSlot, count, views.data());
+				break;
+			case ResourceStage::kGeometry:
+				a_context->GSGetShaderResources(a_startSlot, count, views.data());
+				break;
+			case ResourceStage::kPixel:
+				a_context->PSGetShaderResources(a_startSlot, count, views.data());
+				break;
+			case ResourceStage::kCompute:
+				a_context->CSGetShaderResources(a_startSlot, count, views.data());
+				break;
+			default:
+				return;
 			}
 			ObserveShaderResources(
 				a_context, a_stage, a_startSlot, count, views.data(), a_source,
@@ -351,8 +474,8 @@ namespace CSX::RenderMap
 			std::uint64_t a_expectedCaptureGeneration = 0)
 		{
 			for (const auto stage : std::array{
-				ResourceStage::kVertex, ResourceStage::kHull, ResourceStage::kDomain,
-				ResourceStage::kGeometry, ResourceStage::kPixel, ResourceStage::kCompute }) {
+					 ResourceStage::kVertex, ResourceStage::kHull, ResourceStage::kDomain,
+					 ResourceStage::kGeometry, ResourceStage::kPixel, ResourceStage::kCompute }) {
 				ObserveEffectiveShaderResources(
 					a_context, stage, 0, static_cast<UINT>(kMaximumShaderResourceSlots),
 					a_source, a_expectedCaptureGeneration);
@@ -494,19 +617,19 @@ namespace CSX::RenderMap
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-#define CSX_RESOURCE_BIND_HOOK(Name, Stage) \
-		struct Name \
-		{ \
-			static void thunk(ID3D11DeviceContext* a_context, UINT a_startSlot, UINT a_viewCount, \
-				ID3D11ShaderResourceView* const* a_views) \
-			{ \
-				func(a_context, a_startSlot, a_viewCount, a_views); \
-				ObserveShaderResources(a_context, Stage, a_startSlot, a_viewCount, a_views); \
-				ObserveEffectiveShaderResources( \
-					a_context, Stage, a_startSlot, a_viewCount, ResourceBindingSource::kPostCallQuery); \
-			} \
-			static inline REL::Relocation<decltype(thunk)> func; \
-		}
+#define CSX_RESOURCE_BIND_HOOK(Name, Stage)                                                         \
+	struct Name                                                                                     \
+	{                                                                                               \
+		static void thunk(ID3D11DeviceContext* a_context, UINT a_startSlot, UINT a_viewCount,       \
+			ID3D11ShaderResourceView* const* a_views)                                               \
+		{                                                                                           \
+			func(a_context, a_startSlot, a_viewCount, a_views);                                     \
+			ObserveShaderResources(a_context, Stage, a_startSlot, a_viewCount, a_views);            \
+			ObserveEffectiveShaderResources(                                                        \
+				a_context, Stage, a_startSlot, a_viewCount, ResourceBindingSource::kPostCallQuery); \
+		}                                                                                           \
+		static inline REL::Relocation<decltype(thunk)> func;                                        \
+	}
 
 		CSX_RESOURCE_BIND_HOOK(ID3D11DeviceContext_VSSetShaderResources, ResourceStage::kVertex);
 		CSX_RESOURCE_BIND_HOOK(ID3D11DeviceContext_HSSetShaderResources, ResourceStage::kHull);
@@ -572,6 +695,7 @@ namespace CSX::RenderMap
 				UINT a_instanceCount, UINT a_startIndexLocation, INT a_baseVertexLocation,
 				UINT a_startInstanceLocation)
 			{
+				CurrentFrameDepthCullingDrawScope depthCullingScope(a_context);
 				RecordDrawWithEffectiveState(a_context,
 					DrawOperation::kDrawIndexedInstanced, a_indexCountPerInstance, a_instanceCount,
 					a_startIndexLocation, PackSignedAndUnsigned(a_baseVertexLocation, a_startInstanceLocation));
@@ -586,6 +710,7 @@ namespace CSX::RenderMap
 			static void thunk(ID3D11DeviceContext* a_context, UINT a_indexCount,
 				UINT a_startIndexLocation, INT a_baseVertexLocation)
 			{
+				CurrentFrameDepthCullingDrawScope depthCullingScope(a_context);
 				RecordDrawWithEffectiveState(a_context,
 					DrawOperation::kDrawIndexed, a_indexCount, a_startIndexLocation,
 					static_cast<std::uint32_t>(a_baseVertexLocation));
@@ -598,6 +723,7 @@ namespace CSX::RenderMap
 		{
 			static void thunk(ID3D11DeviceContext* a_context, UINT a_vertexCount, UINT a_startVertexLocation)
 			{
+				CurrentFrameDepthCullingDrawScope depthCullingScope(a_context);
 				RecordDrawWithEffectiveState(a_context,
 					DrawOperation::kDraw, a_vertexCount, a_startVertexLocation);
 				func(a_context, a_vertexCount, a_startVertexLocation);
@@ -610,6 +736,7 @@ namespace CSX::RenderMap
 			static void thunk(ID3D11DeviceContext* a_context, UINT a_vertexCountPerInstance,
 				UINT a_instanceCount, UINT a_startVertexLocation, UINT a_startInstanceLocation)
 			{
+				CurrentFrameDepthCullingDrawScope depthCullingScope(a_context);
 				RecordDrawWithEffectiveState(a_context,
 					DrawOperation::kDrawInstanced, a_vertexCountPerInstance, a_instanceCount,
 					a_startVertexLocation, a_startInstanceLocation);
@@ -623,6 +750,7 @@ namespace CSX::RenderMap
 		{
 			static void thunk(ID3D11DeviceContext* a_context)
 			{
+				CurrentFrameDepthCullingDrawScope depthCullingScope(a_context);
 				RecordDrawWithEffectiveState(a_context, DrawOperation::kDrawAuto);
 				func(a_context);
 			}
@@ -634,6 +762,7 @@ namespace CSX::RenderMap
 			static void thunk(ID3D11DeviceContext* a_context, ID3D11Buffer* a_argumentBuffer,
 				UINT a_alignedByteOffset)
 			{
+				CurrentFrameDepthCullingDrawScope depthCullingScope(a_context);
 				RecordDrawWithEffectiveState(a_context,
 					DrawOperation::kDrawIndexedInstancedIndirect,
 					reinterpret_cast<std::uintptr_t>(a_argumentBuffer), a_alignedByteOffset);
@@ -647,6 +776,7 @@ namespace CSX::RenderMap
 			static void thunk(ID3D11DeviceContext* a_context, ID3D11Buffer* a_argumentBuffer,
 				UINT a_alignedByteOffset)
 			{
+				CurrentFrameDepthCullingDrawScope depthCullingScope(a_context);
 				RecordDrawWithEffectiveState(a_context,
 					DrawOperation::kDrawInstancedIndirect,
 					reinterpret_cast<std::uintptr_t>(a_argumentBuffer), a_alignedByteOffset);

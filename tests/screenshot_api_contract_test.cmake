@@ -172,8 +172,12 @@ endif()
 
 file(READ "${PROJECT_ROOT}/src/XSEPlugin.cpp" _plugin_lifecycle)
 string(FIND "${_plugin_lifecycle}" "case SKSE::MessagingInterface::kPostLoad:" _postload_position)
+string(FIND "${_plugin_lifecycle}" "if (!RegisterCommunityShadersAPIMessageListener())" _api_listener_position)
 string(FIND "${_plugin_lifecycle}" "ScreenshotDevBenchBridge::Install();" _early_install_position)
-if(_postload_position EQUAL -1 OR _early_install_position LESS _postload_position)
+if(_postload_position EQUAL -1 OR _api_listener_position LESS _postload_position)
+	message(FATAL_ERROR "The wildcard CSX API listener must be registered during PostLoad after every plugin is loaded")
+endif()
+if(_early_install_position LESS _postload_position)
     message(FATAL_ERROR "Screenshot DevBench discovery must be attempted during PostLoad")
 endif()
 

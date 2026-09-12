@@ -23,7 +23,7 @@ function(extract_between source start end output)
 endfunction()
 
 extract_between("${_fidelity_header}" "enum class LifecycleResult" "#ifdef DEVBENCH_BRIDGE_ENABLED" _types)
-extract_between("${_fidelity_header}" "struct RuntimeDispatchPlan" "bool CanUseRuntimeUpscalerPath(" _plan)
+extract_between("${_fidelity_header}" "struct RuntimeDispatchPlan" "bool TryGetCurrentAdapterDesc(" _plan)
 file(WRITE "${OUTPUT_DIRECTORY}/fsr_eye_dispatch_types_under_test.h" "${_types}\n${_plan}")
 
 extract_between("${_upscaling_header}" "struct VendorEyeDispatchParams" "\n\t};" _params)

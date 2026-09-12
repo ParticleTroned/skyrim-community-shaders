@@ -2,6 +2,7 @@
 #define LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS
 
 #include "Common/Color.hlsli"
+#include "Common/CurrentFrameDepthCulling.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
 #include "Common/LodLandscape.hlsli"

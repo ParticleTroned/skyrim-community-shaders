@@ -173,6 +173,14 @@ namespace
 		return false;
 	}
 
+	template <std::size_t N>
+	bool MatchesInstructionsQuietly(std::uintptr_t a_address, const std::uint8_t (&a_expected)[N]) noexcept
+	{
+		const auto* actual = reinterpret_cast<const std::uint8_t*>(a_address);
+		return IsReadableRange(actual, N) &&
+		       std::equal(std::begin(a_expected), std::end(a_expected), actual);
+	}
+
 	bool IsEngineFixesLoaded() noexcept
 	{
 		return GetModuleHandleW(L"EngineFixes.dll") != nullptr;
@@ -2429,9 +2437,9 @@ void LightLimitFix::Hooks::InstallVRSceneGraphCullingObjectGuard()
 		MatchesInstructions(helperTailContext, expectedHelperTailContext);
 	const auto guardDecision = LightLimitFixVRHookPolicy::DecideSceneGraphGuard(
 		helperSignaturesMatch,
-		MatchesInstructions(virtualCallContext, expectedVirtualCallContext),
+		MatchesInstructionsQuietly(virtualCallContext, expectedVirtualCallContext),
 		IsEngineFixesLoaded(),
-		MatchesInstructions(virtualCallContext, expectedVirtualCallPrefix),
+		MatchesInstructionsQuietly(virtualCallContext, expectedVirtualCallPrefix),
 		LightLimitFixVRHookPolicy::HasExternalBranchPrefix(
 			reinterpret_cast<const std::uint8_t*>(virtualCallContext + std::size(expectedVirtualCallPrefix)),
 			2));

@@ -2739,6 +2739,7 @@ if(BUILD_CONTROLLER_TESTS)
             pbr_material_registry_test
             perf_mode_restart_state_test
             motion_sharpening_policy_test
+            motion_sharpening_runtime_compile_test
             sharpener_bindings_test
             skylighting_probe_slice_test
             motion_sharpening_settings_test

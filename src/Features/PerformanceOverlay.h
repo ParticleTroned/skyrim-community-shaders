@@ -3,14 +3,11 @@
 #include "Menu.h"
 #include "OverlayFeature.h"
 #include "PerformanceOverlay/ABTesting/ABTestAggregator.h"
+#include "PerformanceOverlay/DrawCallRow.h"
 #include "Utils/PerfUtils.h"
 #include <nlohmann/json.hpp>
-#include <optional>
 #include <unordered_map>
 #include <variant>
-
-// Forward declarations
-struct DrawCallRow;
 
 // Special shader type enum for summary rows
 enum class SpecialShaderType
@@ -22,20 +19,6 @@ enum class SpecialShaderType
 
 // Constants for special draw call values
 static constexpr int kDrawCallsNotApplicable = -1;  // Special value to indicate draw calls are not applicable
-
-struct DrawCallRow
-{
-	std::string label;
-	int shaderType;  // Use int for consistency with the rest of the codebase
-	int drawCalls;
-	float frameTime;
-	float percent;
-	float costPerCall;
-	std::string tooltip;
-	bool enabled;
-	std::optional<float> testFrameTime;
-	std::optional<float> testCostPerCall;
-};
 
 struct ShaderRow
 {
@@ -173,7 +156,7 @@ struct PerformanceOverlay : OverlayFeature
 	// ============================================================================
 	// A/B TESTING FUNCTIONS
 	// ============================================================================
-	void DrawABTestSection(const std::vector<DrawCallRow>& allRows);
+	void DrawABTestSection();
 	void DrawABTestResultsTable();
 	void DrawABTestStatisticalValidity(const Menu::ThemeSettings& theme, const ABTestAggregator& aggregator) const;
 	void ConvertABTestResultsToRows(const std::vector<AggregatedDrawCallStats>& results, std::vector<DrawCallRow>& mainRows, std::vector<DrawCallRow>& summaryRows) const;

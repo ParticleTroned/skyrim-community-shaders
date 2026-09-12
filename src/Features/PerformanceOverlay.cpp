@@ -491,7 +491,7 @@ void PerformanceOverlay::DrawOverlay()
 	ImGui::SetWindowFontScale(1.0f);  // Reset font scale
 
 	// --- A/B Test Section ---
-	DrawABTestSection(allRows);
+	DrawABTestSection();
 
 	ImGui::End();
 	this->resetWindowPositionPending = false;
@@ -1236,53 +1236,17 @@ std::vector<ColumnConfig> PerformanceOverlay::BuildABTestResultsTableColumns(con
   * @brief Draws the A/B testing section of the performance overlay
   *
   * This function handles all A/B testing related UI including:
-  * - A/B test state management and data collection
   * - Display of aggregated A/B test results
   * - Settings difference comparison table
   * - A/B test controls (clear results, show/hide settings diff)
   *
-  * @param allRows The current draw call rows for data collection
   */
-void PerformanceOverlay::DrawABTestSection(const std::vector<DrawCallRow>& allRows)
+void PerformanceOverlay::DrawABTestSection()
 {
 	auto* menu = Menu::GetSingleton();
 	auto* abTestingManager = ABTestingManager::GetSingleton();
 	bool abTestingEnabled = abTestingManager && abTestingManager->IsEnabled();
-	static ABVariant lastVariant = ABVariant::A;
-	static bool lastUsingTestConfig = false;
-	static bool wasAbTestActive = false;
-	bool currentUsingTestConfig = abTestingManager && abTestingManager->IsUsingTestConfig();
-	static std::string lastSettingsA, lastSettingsB;
-	std::string currentSettingsA, currentSettingsB;
 	auto& aggregator = abTestingManager->GetAggregator();
-	if (abTestingEnabled) {
-		// Serialize current settings for A and B from the aggregator
-		if (aggregator.HasSettingsA())
-			currentSettingsA = aggregator.GetSettingsA().dump();
-		if (aggregator.HasSettingsB())
-			currentSettingsB = aggregator.GetSettingsB().dump();
-	}
-	// Detect A/B test start/stop and variant switches
-	bool settingsChanged = (currentSettingsA != lastSettingsA) || (currentSettingsB != lastSettingsB);
-	if (abTestingEnabled && (!wasAbTestActive || settingsChanged)) {
-		aggregator.Clear();
-		aggregator.OnABSwitch(currentUsingTestConfig ? ABVariant::B : ABVariant::A);
-		lastSettingsA = currentSettingsA;
-		lastSettingsB = currentSettingsB;
-	}
-	if (abTestingEnabled && (currentUsingTestConfig != lastUsingTestConfig)) {
-		aggregator.OnABSwitch(currentUsingTestConfig ? ABVariant::B : ABVariant::A);
-	}
-	if (!abTestingEnabled && wasAbTestActive) {
-		aggregator.OnTestEnd();
-	}
-	wasAbTestActive = abTestingEnabled;
-	lastUsingTestConfig = currentUsingTestConfig;
-
-	// --- A/B Test Data Collection ---
-	if (abTestingEnabled) {
-		aggregator.OnFrame(allRows);  // Pass both main and summary rows
-	}
 
 	// Display A/B test results if available
 	if (aggregator.HasResults()) {
@@ -1295,7 +1259,13 @@ void PerformanceOverlay::DrawABTestSection(const std::vector<DrawCallRow>& allRo
 			showSettingsDiff = !showSettingsDiff;
 		}
 		ImGui::SameLine();
-		if (ImGui::Button("Clear A/B Test Results")) {
+		bool clearResults = false;
+		{
+			// Active tests still need their snapshots for swapping and restoration.
+			Util::DisableGuard disabled(abTestingEnabled);
+			clearResults = ImGui::Button("Clear A/B Test Results");
+		}
+		if (clearResults) {
 			aggregator.Clear();
 			this->settingsDiff.clear();
 			this->settingsDiffLoaded = false;

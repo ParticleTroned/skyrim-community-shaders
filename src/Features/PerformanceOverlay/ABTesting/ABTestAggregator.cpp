@@ -1,31 +1,40 @@
 #include "ABTestAggregator.h"
-#include "Features/PerformanceOverlay.h"
 #include <algorithm>
 #include <map>
 #include <numeric>
 
-void ABTestAggregator::OnABSwitch(ABVariant variant)
+void ABTestAggregator::FinishInterval(Clock::time_point now)
 {
-	auto now = std::chrono::steady_clock::now();
-
-	// End the current interval if it exists
 	if (currentInterval) {
-		currentInterval->endTime = now;
-		intervals.push_back(std::move(*currentInterval));
+		if (!currentInterval->warmup) {
+			currentInterval->endTime = now;
+			intervals.push_back(std::move(*currentInterval));
+		}
+		currentInterval.reset();
 	}
+}
 
-	// Start a new interval
-	currentInterval = std::make_unique<ABInterval>(variant, std::vector<std::vector<DrawCallRow>>{}, now, now);
+void ABTestAggregator::OnABSwitch(ABVariant variant, Clock::time_point now)
+{
+	if (currentInterval && currentInterval->variant == variant)
+		return;
+	FinishInterval(now);
 
-	// Record test start time on first switch
-	if (intervals.empty()) {
+	const bool warmup = initialBWarmupPending && variant == ABVariant::B;
+	if (variant == ABVariant::A)
+		initialBWarmupPending = false;
+
+	currentInterval = std::make_unique<ABInterval>(variant, std::vector<std::vector<DrawCallRow>>{}, now, now, warmup);
+
+	// Initialization costs must not contribute to measured duration.
+	if (!warmup && intervals.empty()) {
 		testStartTime = now;
 	}
 }
 
 void ABTestAggregator::OnFrame(const std::vector<DrawCallRow>& rows)
 {
-	if (!currentInterval)
+	if (!currentInterval || currentInterval->warmup)
 		return;
 
 	// Find the Total row to check for outliers and shader compilation
@@ -64,16 +73,13 @@ void ABTestAggregator::OnFrame(const std::vector<DrawCallRow>& rows)
 	}
 }
 
-void ABTestAggregator::OnTestEnd()
+void ABTestAggregator::OnTestEnd(Clock::time_point now)
 {
-	auto now = std::chrono::steady_clock::now();
-	testEndTime = now;
-
-	if (currentInterval) {
-		currentInterval->endTime = now;
-		intervals.push_back(std::move(*currentInterval));
-		currentInterval.reset();
-	}
+	if (!currentInterval)
+		return;
+	FinishInterval(now);
+	if (!intervals.empty())
+		testEndTime = now;
 }
 
 void ABTestAggregator::Clear()
@@ -85,6 +91,9 @@ void ABTestAggregator::Clear()
 	hasSettingsB = false;
 	settingsA.clear();
 	settingsB.clear();
+	testStartTime = {};
+	testEndTime = {};
+	initialBWarmupPending = true;
 }
 
 static float mean(const std::vector<float>& v)

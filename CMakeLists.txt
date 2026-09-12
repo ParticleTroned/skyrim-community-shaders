@@ -2665,6 +2665,20 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_link_libraries(profiler_timing_test PRIVATE d3d11.lib runtimeobject.lib)
 
+    add_controller_test(
+        ab_test_aggregator_test
+        ABTestAggregator
+        tests/ab_test_aggregator_test.cpp
+    )
+    target_sources(
+        ab_test_aggregator_test
+        PRIVATE src/Features/PerformanceOverlay/ABTesting/ABTestAggregator.cpp
+    )
+    target_link_libraries(
+        ab_test_aggregator_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+
     add_executable(
         api_editor_contract_test
         EXCLUDE_FROM_ALL
@@ -2763,6 +2777,7 @@ if(BUILD_CONTROLLER_TESTS)
             api_weather_service_policy_test
             api_profiler_contract_test
             profiler_timing_test
+            ab_test_aggregator_test
             api_editor_contract_test
             api_feature_contract_test
     )

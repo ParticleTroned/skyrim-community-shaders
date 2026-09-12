@@ -1,4 +1,5 @@
 #pragma once
+#include "Features/PerformanceOverlay/DrawCallRow.h"
 #include <chrono>
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -24,9 +25,6 @@ enum class ABVariant
 	B
 };
 
-// Forward declarations
-struct DrawCallRow;
-
 struct AggregatedDrawCallStats
 {
 	std::string label;
@@ -44,17 +42,24 @@ struct ABInterval
 	std::vector<std::vector<DrawCallRow>> frameRows;
 	std::chrono::steady_clock::time_point startTime;
 	std::chrono::steady_clock::time_point endTime;
+	bool warmup = false;
 	int excludedFrames = 0;  // Frames excluded due to outliers or shader compilation
 };
 
 class ABTestAggregator
 {
 public:
-	void OnABSwitch(ABVariant variant);
+	using Clock = std::chrono::steady_clock;
+
+	/** Start an interval; initial B intervals are unmeasured until A starts. */
+	void OnABSwitch(ABVariant variant, Clock::time_point now = Clock::now());
 	void OnFrame(const std::vector<DrawCallRow>& rows);
-	void OnTestEnd();
+	/** Finalize the measured interval, or discard an unfinished warm-up. */
+	void OnTestEnd(Clock::time_point now = Clock::now());
 	std::vector<AggregatedDrawCallStats> GetAggregatedResults() const;
 	bool HasResults() const { return !intervals.empty(); }
+	/** True while the initial unmeasured Variant B interval is active. */
+	bool IsWarmingUp() const { return currentInterval && currentInterval->warmup; }
 	void Clear();
 
 	// --- Settings diff functionality ---
@@ -76,6 +81,7 @@ public:
 	bool HasSettingsB() const { return hasSettingsB; }
 
 private:
+	void FinishInterval(Clock::time_point now);
 	std::vector<ABInterval> intervals;
 	std::unique_ptr<ABInterval> currentInterval;
 
@@ -91,4 +97,5 @@ private:
 
 	// Frame history for outlier detection
 	std::vector<float> recentFrameTimes;
+	bool initialBWarmupPending = true;
 };

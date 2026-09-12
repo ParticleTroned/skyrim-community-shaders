@@ -54,5 +54,6 @@ private:
 
 	// Track what changed between USER and TEST configs
 	float GetRemainingSeconds() const;
+	const char* GetVariantLabel() const;
 	std::vector<std::string> GetConfigDifferences() const;
 };

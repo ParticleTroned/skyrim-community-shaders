@@ -59,6 +59,11 @@ void ABTestingManager::Enable()
 		// Restore overlay enabled state after config operations
 		performanceOverlay.settings.ShowInOverlay = overlayWasEnabled;
 
+		aggregator.Clear();
+		aggregator.SetSettingsA(userConfigSnapshot);
+		aggregator.SetSettingsB(testConfigSnapshot);
+		aggregator.OnABSwitch(ABVariant::B);
+
 		logger::info("A/B Testing enabled - starting with Variant B (TEST). Both variants cached in memory for unbiased swapping.");
 	}
 }
@@ -66,6 +71,7 @@ void ABTestingManager::Enable()
 void ABTestingManager::Disable()
 {
 	if (abTestingEnabled) {
+		aggregator.OnTestEnd();
 		auto* state = globals::state;
 		auto& performanceOverlay = globals::features::performanceOverlay;
 
@@ -145,7 +151,7 @@ void ABTestingManager::DrawSettingsUI()
 
 	if (abTestingEnabled) {
 		ImGui::Text("%s : %.1fs left",
-			usingTestConfig ? "Variant B (TEST)" : "Variant A (USER)",
+			GetVariantLabel(),
 			GetRemainingSeconds());
 
 		auto differences = GetConfigDifferencesForDisplay();
@@ -180,9 +186,16 @@ void ABTestingManager::DrawSettingsUI()
 			"Workflow: Configure your test settings, then enable A/B testing.\n"
 			"- Variant B (TEST) = Your current settings when you enable testing\n"
 			"- Variant A (USER) = Your previously saved user configuration\n"
-			"Testing starts with Variant B, then swaps every N seconds.\n"
+			"The initial Variant B interval is an unmeasured warm-up, then testing begins with Variant A.\n"
 			"Set to 0 to disable and restore TEST settings.");
 	}
+}
+
+const char* ABTestingManager::GetVariantLabel() const
+{
+	if (aggregator.IsWarmingUp())
+		return "Variant B (TEST) warm-up";
+	return usingTestConfig ? "Variant B (TEST)" : "Variant A (USER)";
 }
 
 float ABTestingManager::GetRemainingSeconds() const
@@ -280,7 +293,7 @@ void ABTestingManager::DrawOverlayUI()
 
 	// Show current variant and time
 	ImGui::Text(fmt::format("{} : {:.1f}s left",
-		usingTestConfig ? "Variant B (TEST)" : "Variant A (USER)", GetRemainingSeconds())
+		GetVariantLabel(), GetRemainingSeconds())
 			.c_str());
 
 	// Show what changed (for both variants)

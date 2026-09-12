@@ -1691,11 +1691,14 @@ json ScreenshotFeature::BuildCaptureDescriptor(
 	                    vrCaptureSource == VRCaptureSource::FramedStereo;
 	json outputs = json::array();
 	auto append = [&](std::string_view a_view, std::string_view a_suffix) {
-		outputs.push_back({
+		json output = {
 			{ "view", a_view },
 			{ "encoding", { { "format", a_usePng ? "png" : "bmp" }, { "colourContract", "sdr_srgb" } } },
 			{ "nameSuffix", a_suffix },
-		});
+		};
+		if (a_view == "framed_combined")
+			output["dominantEye"] = vrFramedDominantEye == vr::Eye_Right ? "right" : "left";
+		outputs.push_back(std::move(output));
 	};
 
 	if (!vrRuntime || vrCaptureSource == VRCaptureSource::DesktopMirror) {
@@ -1821,6 +1824,7 @@ void ScreenshotFeature::LoadSettings(json& a_json)
 	if (a_json.contains("CopyToClipboard"))
 		copyToClipboard = a_json["CopyToClipboard"];
 	screenshotEye = ParseCaptureEye(a_json, "ScreenshotEye", screenshotEye);
+	const bool hasCanonicalFrameCaptureEye = a_json.contains("FrameCaptureEye");
 	frameCaptureEye = ParseCaptureEye(a_json, "FrameCaptureEye", frameCaptureEye);
 	vr::EVREye legacyFramedEye = vr::Eye_Left;
 	if (a_json.contains("VRCaptureSource") && a_json["VRCaptureSource"].is_string()) {
@@ -1893,6 +1897,9 @@ void ScreenshotFeature::LoadSettings(json& a_json)
 		sequenceDefaults.saveSeparateEyes = a_json.value("SequenceSaveSeparateEyes", sequenceDefaults.saveSeparateEyes);
 		sequenceDefaults.writePreviewVideo = a_json.value("SequenceWritePreviewVideo", sequenceDefaults.writePreviewVideo);
 	}
+	if (!hasCanonicalFrameCaptureEye)
+		frameCaptureEye = sequenceDefaults.saveSeparateEyes ? CaptureEye::Both : CaptureEye::Left;
+	sequenceDefaults.saveSeparateEyes = frameCaptureEye == CaptureEye::Both;
 
 	subrect.LoadSettings(a_json);
 	SetEnabled(captureEnabled);
@@ -1948,7 +1955,7 @@ void ScreenshotFeature::SaveSettings(json& a_json)
 		{ "Schedule", { { "Basis", "game_frames" }, { "IntervalFrames", sequenceDefaults.intervalFrames } } },
 		{ "Backpressure", { { "Policy", "skip" }, { "MaximumConsecutiveSkips", 10 } } },
 		{ "FailurePolicy", "continue" },
-		{ "Outputs", { { "SeparateEyes", sequenceDefaults.saveSeparateEyes } } },
+		{ "Outputs", { { "SeparateEyes", frameCaptureEye == CaptureEye::Both } } },
 		{ "Packaging", { { "PreviewVideo", { { "Requested", sequenceDefaults.writePreviewVideo }, { "FramesPerSecond", sequenceDefaults.previewFramesPerSecond } } } } },
 	};
 	// Remove migrated experimental spellings so preset layers have one

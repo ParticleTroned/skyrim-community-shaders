@@ -988,6 +988,8 @@ void ScreenshotApi::ApplySettingsPatch(ScreenshotFeature& a_feature, const json&
 			if (!seq->contains("Eye"))
 				a_feature.frameCaptureEye = separateEyes ? ScreenshotFeature::CaptureEye::Both : ScreenshotFeature::CaptureEye::Left;
 		}
+		a_feature.sequenceDefaults.saveSeparateEyes =
+			a_feature.frameCaptureEye == ScreenshotFeature::CaptureEye::Both;
 		if (seq->contains("Packaging") && (*seq)["Packaging"].is_object() && (*seq)["Packaging"].contains("PreviewVideo")) {
 			const auto& preview = (*seq)["Packaging"]["PreviewVideo"];
 			if (preview.contains("Requested"))

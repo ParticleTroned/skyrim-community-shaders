@@ -130,6 +130,21 @@ string(FIND "${_feature_controls}" "DispatchScreenshotServiceRequest" _control_d
 if(_ui_adapter_position EQUAL -1 OR _ui_v1_position EQUAL -1 OR _control_dispatch_position EQUAL -1)
     message(FATAL_ERROR "Native screenshot UI must submit through the public contract-v1 screenshot service")
 endif()
+foreach(_settings_migration_text IN ITEMS
+    "const bool hasCanonicalFrameCaptureEye"
+    "if (!hasCanonicalFrameCaptureEye)"
+    "frameCaptureEye == CaptureEye::Both"
+    "output[\"dominantEye\"] = vrFramedDominantEye"
+)
+    string(FIND "${_feature_controls}" "${_settings_migration_text}" _settings_migration_position)
+    if(_settings_migration_position EQUAL -1)
+        message(FATAL_ERROR "Screenshot settings migration is missing: ${_settings_migration_text}")
+    endif()
+endforeach()
+string(FIND "${_implementation}" "a_feature.sequenceDefaults.saveSeparateEyes =\n\t\t\ta_feature.frameCaptureEye == ScreenshotFeature::CaptureEye::Both" _legacy_eye_sync_position)
+if(_legacy_eye_sync_position EQUAL -1)
+    message(FATAL_ERROR "Sequence settings_apply must synchronize the legacy SeparateEyes mirror")
+endif()
 foreach(_acquisition_contract_text IN ITEMS
     BuildAcquisitionRecord publicationGeneration deviceIdentity
     submittedBounds requiredEyeMask IsSamePublication

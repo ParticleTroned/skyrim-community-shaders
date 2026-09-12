@@ -120,6 +120,7 @@ struct ScreenshotFeature : public Feature
 
 private:
 	friend class ScreenshotApi;
+	nlohmann::json BuildCaptureDescriptor(CaptureEye a_eye, bool a_usePng, bool a_clipboard) const;
 	std::string uiSequenceRequestId;
 	std::chrono::steady_clock::time_point nextUiSequencePoll{};
 	struct StagedPlane

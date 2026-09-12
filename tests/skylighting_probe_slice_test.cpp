@@ -68,6 +68,16 @@ namespace
 		}
 
 		template <class T>
+		void SetVariable(const char* name, const T& value)
+		{
+			D3D11_SHADER_VARIABLE_DESC variable{};
+			Check(reflection->GetVariableByName(name)->GetDesc(&variable));
+			if (sizeof(value) > variable.Size || variable.StartOffset + sizeof(value) > bytes.size())
+				throw std::runtime_error("Reflected shader variable exceeds its constant buffer");
+			std::memcpy(bytes.data() + variable.StartOffset, &value, sizeof(value));
+		}
+
+		template <class T>
 		void SetMember(const char* variable, const char* member, const T& value)
 		{
 			auto* reflectedVariable = reflection->GetVariableByName(variable);
@@ -138,6 +148,81 @@ namespace
 		}
 	};
 
+	struct ShadowFixture
+	{
+		ComPtr<ID3D11Buffer> light;
+		ComPtr<ID3D11ShaderResourceView> lightView;
+		std::array<ComPtr<ID3D11Texture2D>, 2> depth;
+		std::array<ComPtr<ID3D11ShaderResourceView>, 2> depthView;
+		ComPtr<ID3D11SamplerState> sampler;
+
+		ShadowFixture(ID3D11Device* device)
+		{
+			struct DirectionalShadowLight
+			{
+				std::array<std::array<float, 16>, 2> projection;
+				std::array<std::array<float, 16>, 2> inverseProjection;
+				std::array<float, 2> endSplitDistances;
+				std::array<float, 2> startSplitDistances;
+			} lightData{};
+			// Both column-major cascade matrices project every probe inside the depth map.
+			for (auto& projection : lightData.projection) {
+				projection[12] = 0.5f;
+				projection[13] = 0.5f;
+				projection[14] = 0.5f;
+				projection[15] = 1.0f;
+			}
+			lightData.endSplitDistances = { 2.0f, 4.0f };
+			D3D11_BUFFER_DESC bufferDesc{};
+			bufferDesc.ByteWidth = sizeof(lightData);
+			bufferDesc.Usage = D3D11_USAGE_IMMUTABLE;
+			bufferDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+			bufferDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+			bufferDesc.StructureByteStride = sizeof(lightData);
+			D3D11_SUBRESOURCE_DATA initialLight{ &lightData };
+			Check(device->CreateBuffer(&bufferDesc, &initialLight, light.GetAddressOf()));
+			Util::SetResourceName(light.Get(), "SkylightingTest::DirectionalShadowLight");
+			Check(device->CreateShaderResourceView(light.Get(), nullptr, lightView.GetAddressOf()));
+			Util::SetResourceName(lightView.Get(), "SkylightingTest::DirectionalShadowLight SRV");
+
+			for (size_t lit = 0; lit < depth.size(); ++lit) {
+				D3D11_TEXTURE2D_DESC textureDesc{};
+				textureDesc.Width = textureDesc.Height = textureDesc.MipLevels = 1;
+				textureDesc.ArraySize = 2;
+				textureDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+				textureDesc.SampleDesc.Count = 1;
+				textureDesc.Usage = D3D11_USAGE_IMMUTABLE;
+				textureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+				const float depthValue = static_cast<float>(lit);
+				const D3D11_SUBRESOURCE_DATA initialDepth[]{ { &depthValue, sizeof(float) }, { &depthValue, sizeof(float) } };
+				Check(device->CreateTexture2D(&textureDesc, initialDepth, depth[lit].GetAddressOf()));
+				Util::SetResourceName(depth[lit].Get(), "SkylightingTest::%sCascadeDepth", lit ? "Lit" : "Dark");
+				D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};
+				viewDesc.Format = DXGI_FORMAT_R32_FLOAT;
+				viewDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+				viewDesc.Texture2DArray.MipLevels = 1;
+				viewDesc.Texture2DArray.ArraySize = 2;
+				Check(device->CreateShaderResourceView(depth[lit].Get(), &viewDesc, depthView[lit].GetAddressOf()));
+				Util::SetResourceName(depthView[lit].Get(), "SkylightingTest::%sCascadeDepth SRV", lit ? "Lit" : "Dark");
+			}
+			D3D11_SAMPLER_DESC samplerDesc{};
+			samplerDesc.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_MIP_POINT;
+			samplerDesc.AddressU = samplerDesc.AddressV = samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+			samplerDesc.ComparisonFunc = D3D11_COMPARISON_LESS_EQUAL;
+			samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
+			Check(device->CreateSamplerState(&samplerDesc, sampler.GetAddressOf()));
+			Util::SetResourceName(sampler.Get(), "SkylightingTest::ShadowComparisonSampler");
+		}
+
+		void Bind(ID3D11DeviceContext* context, bool lit)
+		{
+			ID3D11ShaderResourceView* views[]{ lightView.Get(), depthView[lit].Get() };
+			context->CSSetShaderResources(2, 2, views);
+			ID3D11SamplerState* rawSampler = sampler.Get();
+			context->CSSetSamplers(0, 1, &rawSampler);
+		}
+	};
+
 	struct SliceCase
 	{
 		const char* name;
@@ -146,6 +231,9 @@ namespace
 		uint32_t dispatchDepth;
 		bool invalid;
 		bool shadowAvailable;
+		bool onScreen = false;
+		bool shadowLit = true;
+		uint32_t frameCount = 0;
 	};
 
 	void RunPermutation(ID3D11Device* device, ID3D11DeviceContext* context, const std::filesystem::path& path, bool vr)
@@ -182,6 +270,7 @@ namespace
 		Volume<uint32_t> accumulation(device, DXGI_FORMAT_R32_UINT, "Accumulation");
 		Volume<uint32_t> history(device, DXGI_FORMAT_R32_UINT, "ShadowHistory");
 		Volume<float> visibility(device, DXGI_FORMAT_R32_FLOAT, "ShadowVisibility");
+		ShadowFixture shadow(device);
 		std::vector<uint32_t> initialHistory(volumeElements);
 		std::vector<float> initialVisibility(volumeElements);
 		for (size_t i = 0; i < volumeElements; ++i) {
@@ -194,7 +283,9 @@ namespace
 			{ "tail slice and volume-depth guard", 7, 3, 3, false, false },
 			{ "invalid probe without shadow data", 3, 2, 2, true, false },
 			{ "invalid offscreen probe reset", 3, 2, 2, true, true },
-			{ "valid offscreen history retained", 3, 2, 2, false, true }
+			{ "valid offscreen history retained", 3, 2, 2, false, true },
+			{ "lit cascade updates offset history", 3, 2, 2, false, true, true, true, 10 },
+			{ "dark cascade updates offset history", 3, 2, 2, false, true, true, false, 17 }
 		};
 		for (const auto& test : cases) {
 			context->ClearState();
@@ -207,9 +298,17 @@ namespace
 			feature.SetMember("SharedData::skylightingSettings", "ShadowDataAvailable", static_cast<uint32_t>(test.shadowAvailable));
 			feature.SetMember("SharedData::skylightingSettings", "ValidMargin", std::array{ 0, 0, test.invalid ? static_cast<int>(volumeDepth) : 0, 0 });
 			feature.Bind(context);
+			shared.SetVariable("SharedData::FrameCountAlwaysActive", test.frameCount);
+			shared.SetVariable("SharedData::CameraData", std::array{ 1.0f, 0.0f, 0.0f, 1.0f });
 			shared.Bind(context);
-			// A zero clip-space w deliberately makes directional shadow sampling unavailable.
+			// Row-major projection fixes NDC depth at 0.5 and linear depth at 1.
+			std::array<float, 16> cameraProjection{};
+			cameraProjection[11] = 0.5f;
+			cameraProjection[15] = test.onScreen ? 1.0f : 0.0f;
+			frame.SetVariable("FrameBuffer::CameraViewProj", cameraProjection);
 			frame.Bind(context);
+			if (test.onScreen)
+				shadow.Bind(context, test.shadowLit);
 			ID3D11UnorderedAccessView* views[]{ probes.uav.Get(), accumulation.uav.Get(), history.uav.Get(), visibility.uav.Get() };
 			context->CSSetUnorderedAccessViews(0, 4, views, nullptr);
 			context->CSSetShader(shader.Get(), nullptr, 0);
@@ -222,8 +321,14 @@ namespace
 				const bool selected = z >= test.start && z - test.start < test.count;
 				uint32_t expectedHistory = initialHistory[i];
 				float expectedVisibility = initialVisibility[i];
-				if (selected && (test.invalid || !test.shadowAvailable)) {
-					expectedHistory = test.invalid ? UINT32_MAX : initialHistory[i] | 1u;
+				if (selected && (test.invalid || !test.shadowAvailable || test.onScreen)) {
+					expectedHistory = test.invalid ? UINT32_MAX : initialHistory[i];
+					if (!test.shadowAvailable || test.onScreen) {
+						const uint32_t historyBit = 1u << (test.frameCount % 32);
+						expectedHistory &= ~historyBit;
+						if (!test.onScreen || test.shadowLit)
+							expectedHistory |= historyBit;
+					}
 					expectedVisibility = static_cast<float>(std::popcount(expectedHistory)) / 32.0f;
 				}
 				if (actualHistory[i] != expectedHistory || actualVisibility[i] != expectedVisibility)

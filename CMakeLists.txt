@@ -2674,10 +2674,6 @@ if(BUILD_CONTROLLER_TESTS)
         ab_test_aggregator_test
         PRIVATE src/Features/PerformanceOverlay/ABTesting/ABTestAggregator.cpp
     )
-    target_link_libraries(
-        ab_test_aggregator_test
-        PRIVATE nlohmann_json::nlohmann_json
-    )
 
     add_executable(
         api_editor_contract_test

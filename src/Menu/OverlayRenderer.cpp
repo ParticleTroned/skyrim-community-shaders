@@ -391,6 +391,12 @@ void OverlayRenderer::RenderOverlay(
 
 	HandleFontReload(menu, cachedFontSize, currentFontSize);
 	InitializeImGuiFrame(menu);
+	auto& performanceOverlay = globals::features::performanceOverlay;
+	if (ABTestingManager::GetSingleton()->IsEnabled() ||
+		std::ranges::find(drawableOverlays, &performanceOverlay) != drawableOverlays.end()) {
+		performanceOverlay.UpdateGraphValues();
+	}
+	HandleABTesting();
 
 	if (ShouldShowShaderCompilationStatus(menu))
 		RenderShaderCompilationStatus(keyIdToString);
@@ -417,7 +423,7 @@ void OverlayRenderer::RenderOverlay(
 
 	RenderFeatureOverlays(drawableOverlays);
 	RenderFirstTimeSetupOverlay();
-	HandleABTesting();
+	ABTestingManager::GetSingleton()->DrawOverlayUI();
 	PatchOverlappingWindowBackgrounds();
 	if (globals::features::vr.IsOpenVRCompatible()) {
 		globals::features::vr.UpdateWandHoverFeedback();
@@ -842,7 +848,6 @@ void OverlayRenderer::HandleABTesting()
 {
 	// A/B Testing management
 	auto* abTestingManager = ABTestingManager::GetSingleton();
-	abTestingManager->Update();
 
 	// Always update test data during TEST phase, regardless of overlay visibility
 	if (abTestingManager->IsEnabled()) {
@@ -850,7 +855,7 @@ void OverlayRenderer::HandleABTesting()
 
 		// Add A/B test aggregator data collection here
 		auto& overlay = globals::features::performanceOverlay;
-		auto [mainRows, summaryRows] = overlay.BuildDrawCallRows();
+		auto [mainRows, summaryRows] = overlay.BuildDrawCallRows(true);
 		std::vector<DrawCallRow> allRows = mainRows;
 		allRows.insert(allRows.end(), summaryRows.begin(), summaryRows.end());
 
@@ -858,8 +863,8 @@ void OverlayRenderer::HandleABTesting()
 		abTestingManager->GetAggregator().OnFrame(allRows);
 	}
 
-	// Draw A/B testing overlay
-	abTestingManager->DrawOverlayUI();
+	// Current timing belongs to the configuration that rendered before this update.
+	abTestingManager->Update();
 }
 
 void OverlayRenderer::FinalizeImGuiFrame(const std::vector<OverlayFeature*>& overlays)

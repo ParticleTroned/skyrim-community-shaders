@@ -157,6 +157,8 @@ struct PerformanceOverlay : OverlayFeature
 	// A/B TESTING FUNCTIONS
 	// ============================================================================
 	void DrawABTestSection();
+	/** Invalidate cached presentation data when a new A/B configuration pair starts. */
+	void ClearABTestSettingsDiff();
 	void DrawABTestResultsTable();
 	void DrawABTestStatisticalValidity(const Menu::ThemeSettings& theme, const ABTestAggregator& aggregator) const;
 	void ConvertABTestResultsToRows(const std::vector<AggregatedDrawCallStats>& results, std::vector<DrawCallRow>& mainRows, std::vector<DrawCallRow>& summaryRows) const;
@@ -170,7 +172,7 @@ struct PerformanceOverlay : OverlayFeature
 	void DrawDrawCallsTable(const std::vector<DrawCallRow>& mainRows, const std::vector<DrawCallRow>& summaryRows);
 	DrawCallLegends BuildDrawCallLegends(const Menu::ThemeSettings& theme, bool anyTestData) const;
 	std::vector<ColumnConfig> BuildDrawCallTableColumns(const Menu::ThemeSettings& theme, const DrawCallLegends& legends, bool anyTestData);
-	std::pair<std::vector<DrawCallRow>, std::vector<DrawCallRow>> BuildDrawCallRows() const;
+	std::pair<std::vector<DrawCallRow>, std::vector<DrawCallRow>> BuildDrawCallRows(bool a_measurement = false) const;
 	std::function<void(int, int, const DrawCallRow&)> CreateTableRowHandler(const std::vector<ColumnConfig>& columns);
 
 	// ============================================================================

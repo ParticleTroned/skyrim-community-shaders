@@ -456,9 +456,6 @@ void PerformanceOverlay::DrawOverlay()
 	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f * scale, 1.0f * scale));
 	ImGui::SetWindowFontScale(this->settings.TextSize);
 
-	// Update graph values
-	this->UpdateGraphValues();
-
 	bool needsSeparator = false;
 
 	if (this->settings.ShowFPS) {
@@ -705,13 +702,16 @@ void PerformanceOverlay::DrawABTestResultsTable()
 	auto* abTestingManager = ABTestingManager::GetSingleton();
 	auto& aggregator = abTestingManager->GetAggregator();
 	auto results = aggregator.GetAggregatedResults();
-	if (results.empty())
-		return;
 
 	auto* menu = Menu::GetSingleton();
 	const auto& theme = menu->GetTheme();
 
 	DrawABTestStatisticalValidity(theme, aggregator);
+	const auto removed = std::erase_if(results, [](const auto& row) { return !row.HasBothVariants(); });
+	if (removed > 0 || results.empty())
+		ImGui::TextDisabled("Comparison rows require measured samples from both A and B.");
+	if (results.empty())
+		return;
 
 	std::vector<DrawCallRow> mainRows, summaryRows;
 	ConvertABTestResultsToRows(results, mainRows, summaryRows);
@@ -742,33 +742,26 @@ void PerformanceOverlay::DrawABTestResultsTable()
   * @brief Draws statistical validity information for A/B test results
   *
   * This function displays test duration, valid frame counts, and exclusion rates
-  * with color-coded indicators for statistical validity. It helps users understand
-  * whether the A/B test results are reliable and statistically significant.
+  * with color-coded indicators for sample coverage in each variant.
   *
   * @param theme The current UI theme settings
   * @param aggregator The A/B test aggregator containing test statistics
   */
 void PerformanceOverlay::DrawABTestStatisticalValidity(const Menu::ThemeSettings& theme, const ABTestAggregator& aggregator) const
 {
-	float totalDuration = aggregator.GetTotalTestDuration();
-	int totalFrames = aggregator.GetTotalFrameCount();
-	int excludedFrames = 0;
-	for (const auto& interval : aggregator.GetIntervals()) {
-		excludedFrames += interval.excludedFrames;
-	}
-	int validFrames = totalFrames;
-	int totalWithExcluded = totalFrames + excludedFrames;
-	float validPercent = (totalWithExcluded > 0) ? (100.0f * validFrames / totalWithExcluded) : 100.0f;
+	const auto statsA = aggregator.GetVariantStatistics(ABVariant::A);
+	const auto statsB = aggregator.GetVariantStatistics(ABVariant::B);
+	float totalDuration = statsA.duration + statsB.duration;
+	int validFrames = statsA.frames + statsB.frames;
+	int excludedFrames = statsA.excludedFrames + statsB.excludedFrames;
+	int totalWithExcluded = validFrames + excludedFrames;
+	float validPercent = (totalWithExcluded > 0) ? (100.0f * validFrames / totalWithExcluded) : 0.0f;
 
-	bool hasEnoughSamples = validFrames >= kMinimumSamplesForValidity;
-	bool hasGoodDuration = totalDuration >= kMinimumTestDuration;
-	bool hasLowExclusionRate = validPercent >= kMinimumValidFramesPercent;
-	bool isStatisticallyValid = hasEnoughSamples && hasGoodDuration && hasLowExclusionRate;
-
+	const auto coverage = aggregator.GetCoverage();
 	ImVec4 validityColor = theme.Palette.Text;
-	if (isStatisticallyValid) {
+	if (coverage == ABTestCoverage::Sufficient) {
 		validityColor = theme.StatusPalette.SuccessColor;
-	} else if (validFrames >= kMinimumSamplesForMarginal && totalDuration >= kMinimumDurationForMarginal) {
+	} else if (coverage == ABTestCoverage::Marginal) {
 		validityColor = theme.StatusPalette.Warning;
 	} else {
 		validityColor = theme.StatusPalette.Error;
@@ -781,10 +774,10 @@ void PerformanceOverlay::DrawABTestStatisticalValidity(const Menu::ThemeSettings
 	if (ImGui::IsItemHovered()) {
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			char validStr[128], marginalStr[128];
-			snprintf(validStr, sizeof(validStr), "Statistically valid (>%d samples, >%.0fs duration, >%.0f%% valid)", kMinimumSamplesForValidity, static_cast<float>(kMinimumTestDuration), kMinimumValidFramesPercent);
-			snprintf(marginalStr, sizeof(marginalStr), "Marginal validity (>%d samples, >%.0fs duration)", kMinimumSamplesForMarginal, static_cast<float>(kMinimumDurationForMarginal));
+			snprintf(validStr, sizeof(validStr), "Per variant: at least %d samples, %.0fs duration, %.0f%% valid", kMinimumSamplesForValidity, static_cast<float>(kMinimumTestDuration), kMinimumValidFramesPercent);
+			snprintf(marginalStr, sizeof(marginalStr), "Marginal per variant: %d samples, %.0fs duration, %.0f%% valid", kMinimumSamplesForMarginal, static_cast<float>(kMinimumDurationForMarginal), kMinimumValidFramesPercent);
 			Util::ColoredTextLines validityLegend = {
-				{ "Valid frames are those not excluded as outliers.\nA low percentage may indicate instability or test interruptions.\nExcluded frames are those with frame times > 3x median or > 100ms.\nThis removes shader compilation spikes, JSON loading overhead, and other anomalies\nthat would skew the performance comparison.", theme.Palette.Text },
+				{ "Frames require valid timing data. Outliers exceed 100ms or 3x that variant's median.\nBoth variants must meet the sample coverage thresholds.\nCoverage alone does not establish statistical significance.", theme.Palette.Text },
 				{ "", theme.Palette.Text },
 				{ validStr, theme.StatusPalette.SuccessColor },
 				{ marginalStr, theme.StatusPalette.Warning },
@@ -793,6 +786,7 @@ void PerformanceOverlay::DrawABTestStatisticalValidity(const Menu::ThemeSettings
 			Util::DrawColoredMultiLineTooltip(validityLegend);
 		}
 	}
+	ImGui::TextDisabled("A: %d frames, %.1fs | B: %d frames, %.1fs", statsA.frames, statsA.duration, statsB.frames, statsB.duration);
 }
 
 /**
@@ -1232,6 +1226,12 @@ std::vector<ColumnConfig> PerformanceOverlay::BuildABTestResultsTableColumns(con
 	return columns;
 }
 
+void PerformanceOverlay::ClearABTestSettingsDiff()
+{
+	settingsDiff.clear();
+	settingsDiffLoaded = false;
+}
+
 /**
   * @brief Draws the A/B testing section of the performance overlay
   *
@@ -1267,8 +1267,7 @@ void PerformanceOverlay::DrawABTestSection()
 		}
 		if (clearResults) {
 			aggregator.Clear();
-			this->settingsDiff.clear();
-			this->settingsDiffLoaded = false;
+			ClearABTestSettingsDiff();
 			showSettingsDiff = false;
 			// Also clear cached snapshots so diff does not linger after user opts to clear
 			if (abTestingManager) {
@@ -1308,7 +1307,7 @@ void PerformanceOverlay::DrawABTestSection()
 				auto results = aggregator.GetAggregatedResults();
 				for (const auto& stat : results) {
 					auto maybeSpecialType = magic_enum::enum_cast<SpecialShaderType>(stat.shaderType);
-					if (maybeSpecialType.has_value() && *maybeSpecialType == SpecialShaderType::Total) {  // Total row
+					if (maybeSpecialType.has_value() && *maybeSpecialType == SpecialShaderType::Total && stat.HasBothVariants()) {
 						if (stat.meanA < stat.meanB) {
 							variantABetter = true;  // A has lower frame time (better)
 						} else if (stat.meanB < stat.meanA) {
@@ -1616,10 +1615,11 @@ std::vector<ColumnConfig> PerformanceOverlay::BuildDrawCallTableColumns(const Me
 	return columns;
 }
 
-std::pair<std::vector<DrawCallRow>, std::vector<DrawCallRow>> PerformanceOverlay::BuildDrawCallRows() const
+std::pair<std::vector<DrawCallRow>, std::vector<DrawCallRow>> PerformanceOverlay::BuildDrawCallRows(bool a_measurement) const
 {
 	std::vector<DrawCallRow> mainRows;
-	float smoothedFrameTime = static_cast<float>(this->state.smoothFrameTimeMs);
+	// Measurement cadence must not depend on the UI refresh interval.
+	float smoothedFrameTime = a_measurement ? this->state.frameTimeMs : this->state.smoothFrameTimeMs;
 	float measuredSum = 0.0f;
 
 	globals::state->ForEachShaderTypeWithMetrics([&mainRows, &measuredSum, smoothedFrameTime, this](auto type, int typeIndex, float drawCalls, float frameTime, float percent, float costPerCall) {

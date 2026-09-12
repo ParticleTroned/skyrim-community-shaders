@@ -39,6 +39,7 @@ public:
 	void ClearCachedSnapshots();
 
 private:
+	static constexpr uint32_t kMaxTestInterval = 10;
 	uint32_t testInterval = 0;
 	bool abTestingEnabled = false;
 	bool usingTestConfig = false;

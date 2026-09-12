@@ -19,12 +19,14 @@ ABTestingManager* ABTestingManager::GetSingleton()
 
 void ABTestingManager::SetTestInterval(uint32_t interval)
 {
-	testInterval = interval;
+	testInterval = std::min(interval, kMaxTestInterval);
+	if (testInterval == 0)
+		Disable();
 }
 
 void ABTestingManager::Enable()
 {
-	if (!abTestingEnabled) {
+	if (!abTestingEnabled && testInterval > 0) {
 		auto* state = globals::state;
 		auto& performanceOverlay = globals::features::performanceOverlay;
 
@@ -60,8 +62,7 @@ void ABTestingManager::Enable()
 		performanceOverlay.settings.ShowInOverlay = overlayWasEnabled;
 
 		aggregator.Clear();
-		aggregator.SetSettingsA(userConfigSnapshot);
-		aggregator.SetSettingsB(testConfigSnapshot);
+		performanceOverlay.ClearABTestSettingsDiff();
 		aggregator.OnABSwitch(ABVariant::B);
 
 		logger::info("A/B Testing enabled - starting with Variant B (TEST). Both variants cached in memory for unbiased swapping.");
@@ -83,6 +84,7 @@ void ABTestingManager::Disable()
 		// Restore TEST config from memory snapshot (no disk read)
 		if (hasTestSnapshot) {
 			state->LoadFromJson(testConfigSnapshot);
+			usingTestConfig = true;
 		} else {
 			logger::warn("No TEST snapshot available, staying with current config.");
 		}
@@ -167,12 +169,10 @@ void ABTestingManager::DrawSettingsUI()
 	const float minSliderWidth = std::min(160.0f, availableWidth);
 	ImGui::SetNextItemWidth(std::clamp(availableWidth * 0.55f, minSliderWidth, availableWidth));
 	int interval = static_cast<int>(testInterval);
-	if (ImGui::SliderInt("A/B Test Interval", &interval, 0, 10)) {
+	if (ImGui::SliderInt("A/B Test Interval", &interval, 0, static_cast<int>(kMaxTestInterval))) {
 		bool overlayWasEnabled = performanceOverlay.settings.ShowInOverlay;
-		testInterval = static_cast<uint32_t>(std::clamp(interval, 0, 10));
-		if (testInterval == 0) {
-			Disable();
-		} else if (!abTestingEnabled) {
+		SetTestInterval(static_cast<uint32_t>(std::max(interval, 0)));
+		if (testInterval > 0 && !abTestingEnabled) {
 			Enable();
 		} else {
 			logger::info("Setting new A/B test interval {}.", testInterval);
@@ -259,14 +259,14 @@ std::vector<SettingsDiffEntry> ABTestingManager::GetConfigDiffEntries(float epsi
 
 void ABTestingManager::ClearCachedSnapshots()
 {
-	try {
-		testConfigSnapshot.clear();
-		userConfigSnapshot.clear();
-		hasTestSnapshot = false;
-		hasUserSnapshot = false;
-	} catch (...) {
-		// No-op if clear fails
+	if (abTestingEnabled) {
+		logger::warn("Cannot clear A/B configuration snapshots while a test is active.");
+		return;
 	}
+	testConfigSnapshot.clear();
+	userConfigSnapshot.clear();
+	hasTestSnapshot = false;
+	hasUserSnapshot = false;
 }
 
 std::vector<std::string> ABTestingManager::GetConfigDifferences() const

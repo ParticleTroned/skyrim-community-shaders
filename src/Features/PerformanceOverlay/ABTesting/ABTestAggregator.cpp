@@ -1,7 +1,9 @@
 #include "ABTestAggregator.h"
+#include "Utils/ProfilerTiming.h"
+#include "Utils/Statistics.h"
 #include <algorithm>
+#include <cmath>
 #include <map>
-#include <numeric>
 
 void ABTestAggregator::FinishInterval(Clock::time_point now)
 {
@@ -37,40 +39,27 @@ void ABTestAggregator::OnFrame(const std::vector<DrawCallRow>& rows)
 	if (!currentInterval || currentInterval->warmup)
 		return;
 
-	// Find the Total row to check for outliers and shader compilation
-	float totalFrameTime = 0.0f;
-	for (const auto& row : rows) {
-		if (row.shaderType == -1) {  // Total row
-			totalFrameTime = row.frameTime;
-			break;
-		}
+	const auto total = std::ranges::find_if(rows, [](const auto& row) { return row.shaderType == -1; });
+	if (total == rows.end() || total->frameTime <= 0.0f || total->frameTime > kMaxOutlierFrameTime ||
+		!std::ranges::all_of(rows, [](const auto& row) {
+			// Other is a residual of independently sampled timings and can be negative.
+			const float time = row.shaderType == -2 ? std::abs(row.frameTime) : row.frameTime;
+			return Util::ProfilerTiming::IsValidSample(time);
+		})) {
+		++currentInterval->excludedFrames;
+		return;
 	}
 
-	// Outlier detection: exclude frames that are more than 3x the median or > 100ms
-	// This catches shader compilation spikes, JSON loading, and other anomalies
-	recentFrameTimes.push_back(totalFrameTime);
-	if (recentFrameTimes.size() > kFrameHistoryBaseline) {  // Keep last 30 frames for baseline
-		recentFrameTimes.erase(recentFrameTimes.begin());
+	// A slower configuration needs its own baseline, not the faster variant's.
+	auto& history = recentFrameTimes[currentInterval->variant == ABVariant::A ? 0 : 1];
+	history.push_back(total->frameTime);
+	if (history.size() > kFrameHistoryBaseline)
+		history.erase(history.begin());
+	if (history.size() >= kMinimumFramesForAnalysis && total->frameTime > Util::Median(history) * kOutlierMultiplier) {
+		++currentInterval->excludedFrames;
+		return;
 	}
-
-	bool isOutlier = false;
-	if (recentFrameTimes.size() >= kMinimumFramesForAnalysis) {  // Need at least 10 frames for statistical analysis
-		// Calculate median of recent frames
-		std::vector<float> sortedTimes = recentFrameTimes;
-		std::sort(sortedTimes.begin(), sortedTimes.end());
-		float median = sortedTimes[sortedTimes.size() / 2];
-
-		// Check if current frame is an outlier
-		if (totalFrameTime > median * kOutlierMultiplier || totalFrameTime > kMaxOutlierFrameTime) {
-			isOutlier = true;
-			currentInterval->excludedFrames++;
-		}
-	}
-
-	// Only add frame if it's not an outlier
-	if (!isOutlier) {
-		currentInterval->frameRows.push_back(rows);
-	}
+	currentInterval->frameRows.push_back(rows);
 }
 
 void ABTestAggregator::OnTestEnd(Clock::time_point now)
@@ -86,38 +75,19 @@ void ABTestAggregator::Clear()
 {
 	intervals.clear();
 	currentInterval.reset();
-	recentFrameTimes.clear();
-	hasSettingsA = false;
-	hasSettingsB = false;
-	settingsA.clear();
-	settingsB.clear();
+	for (auto& history : recentFrameTimes)
+		history.clear();
 	testStartTime = {};
 	testEndTime = {};
 	initialBWarmupPending = true;
-}
-
-static float mean(const std::vector<float>& v)
-{
-	if (v.empty())
-		return 0.0f;
-	return std::accumulate(v.begin(), v.end(), 0.0f) / v.size();
-}
-
-static float median(std::vector<float> v)
-{
-	if (v.empty())
-		return 0.0f;
-	std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
-	return v[v.size() / 2];
 }
 
 std::vector<AggregatedDrawCallStats> ABTestAggregator::GetAggregatedResults() const
 {
 	// Map: shaderType -> label
 	std::map<int, std::string> labelMap;
-	// Map: shaderType -> all frameTimes/costPerCall for A and B
+	// Map shader types to their measured times in each configuration.
 	std::map<int, std::vector<float>> aFrameTimes, bFrameTimes;
-	std::map<int, std::vector<float>> aCostPerCall, bCostPerCall;
 
 	for (const auto& interval : intervals) {
 		for (const auto& frameRows : interval.frameRows) {
@@ -125,10 +95,8 @@ std::vector<AggregatedDrawCallStats> ABTestAggregator::GetAggregatedResults() co
 				labelMap[row.shaderType] = row.label;
 				if (interval.variant == ABVariant::A) {
 					aFrameTimes[row.shaderType].push_back(row.frameTime);
-					aCostPerCall[row.shaderType].push_back(row.costPerCall);
 				} else {
 					bFrameTimes[row.shaderType].push_back(row.frameTime);
-					bCostPerCall[row.shaderType].push_back(row.costPerCall);
 				}
 			}
 		}
@@ -139,10 +107,10 @@ std::vector<AggregatedDrawCallStats> ABTestAggregator::GetAggregatedResults() co
 		AggregatedDrawCallStats stats;
 		stats.label = label;
 		stats.shaderType = shaderType;
-		stats.meanA = mean(aFrameTimes[shaderType]);
-		stats.meanB = mean(bFrameTimes[shaderType]);
-		stats.medianA = median(aFrameTimes[shaderType]);
-		stats.medianB = median(bFrameTimes[shaderType]);
+		stats.meanA = Util::Mean(aFrameTimes[shaderType]);
+		stats.meanB = Util::Mean(bFrameTimes[shaderType]);
+		stats.medianA = Util::Median(aFrameTimes[shaderType]);
+		stats.medianB = Util::Median(bFrameTimes[shaderType]);
 		stats.delta = stats.meanB - stats.meanA;
 		stats.frameCountA = static_cast<int>(aFrameTimes[shaderType].size());
 		stats.frameCountB = static_cast<int>(bFrameTimes[shaderType].size());
@@ -168,55 +136,41 @@ std::vector<AggregatedDrawCallStats> ABTestAggregator::GetAggregatedResults() co
 		return a.shaderType < b.shaderType;
 	});
 
-	// Ensure Total and Other are always included even if they have no data
-	bool hasTotal = false, hasOther = false;
-	for (const auto& stat : result) {
-		if (stat.shaderType == -1)
-			hasTotal = true;
-		if (stat.shaderType == -2)
-			hasOther = true;
-	}
+	return result;
+}
 
-	if (!hasTotal) {
-		AggregatedDrawCallStats totalStat;
-		totalStat.label = "Total:";
-		totalStat.shaderType = -1;
-		result.push_back(totalStat);
-	}
-
-	if (!hasOther) {
-		AggregatedDrawCallStats otherStat;
-		otherStat.label = "Other:";
-		otherStat.shaderType = -2;
-		result.push_back(otherStat);
+ABVariantStatistics ABTestAggregator::GetVariantStatistics(ABVariant variant) const
+{
+	ABVariantStatistics result;
+	for (const auto& interval : intervals) {
+		if (interval.variant == variant) {
+			result.frames += static_cast<int>(interval.frameRows.size());
+			result.excludedFrames += interval.excludedFrames;
+			result.duration += std::chrono::duration<float>(interval.endTime - interval.startTime).count();
+		}
 	}
 	return result;
 }
 
-void ABTestAggregator::SetSettingsA(const nlohmann::json& settings)
+ABTestCoverage ABTestAggregator::GetCoverage() const
 {
-	if (!hasSettingsA) {
-		settingsA = settings;
-		hasSettingsA = true;
-	}
-}
-
-void ABTestAggregator::SetSettingsB(const nlohmann::json& settings)
-{
-	if (!hasSettingsB) {
-		settingsB = settings;
-		hasSettingsB = true;
-	}
+	const std::array stats{ GetVariantStatistics(ABVariant::A), GetVariantStatistics(ABVariant::B) };
+	if (std::ranges::all_of(stats, [](const auto& value) {
+			return value.frames >= kMinimumSamplesForValidity && value.duration >= kMinimumTestDuration &&
+		           value.ValidPercent() >= kMinimumValidFramesPercent;
+		}))
+		return ABTestCoverage::Sufficient;
+	if (std::ranges::all_of(stats, [](const auto& value) {
+			return value.frames >= kMinimumSamplesForMarginal && value.duration >= kMinimumDurationForMarginal &&
+		           value.ValidPercent() >= kMinimumValidFramesPercent;
+		}))
+		return ABTestCoverage::Marginal;
+	return ABTestCoverage::Insufficient;
 }
 
 float ABTestAggregator::GetTotalTestDuration() const
 {
-	if (intervals.empty())
-		return 0.0f;
-
-	auto start = intervals.front().startTime;
-	auto end = intervals.back().endTime;
-	return std::chrono::duration<float>(end - start).count();
+	return GetVariantStatistics(ABVariant::A).duration + GetVariantStatistics(ABVariant::B).duration;
 }
 
 int ABTestAggregator::GetTotalFrameCount() const

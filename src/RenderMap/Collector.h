@@ -61,6 +61,8 @@ namespace CSX::RenderMap
 		kCullDecision,
 		kDraw,
 		kDispatch,
+		kCommandRecordingObserved,
+		kCommandListObserved,
 		kFinishCommandList,
 		kExecuteCommandList,
 		kShaderObserved,
@@ -84,11 +86,13 @@ namespace CSX::RenderMap
 	inline constexpr EventKindMask EventKindBit(EventKind a_kind) noexcept
 	{
 		return a_kind < EventKind::kCount ?
-			EventKindMask{ 1 } << static_cast<std::uint16_t>(a_kind) : 0;
+		           EventKindMask{ 1 } << static_cast<std::uint16_t>(a_kind) :
+		           0;
 	}
 
 	inline constexpr EventKindMask kAllEventKindsMask =
 		(EventKindMask{ 1 } << static_cast<std::uint16_t>(EventKind::kCount)) - 1;
+	inline constexpr std::uint16_t kEventFlagDeferredContext = 1u << 0;
 
 	const char* EventKindName(EventKind a_kind) noexcept;
 	EventKindMask ResolveEventKindDependencies(EventKindMask a_requested) noexcept;
@@ -197,7 +201,7 @@ namespace CSX::RenderMap
 	struct EventRecord
 	{
 		std::uint16_t schemaMajor{ 1 };
-		std::uint16_t schemaMinor{ 14 };
+		std::uint16_t schemaMinor{ 17 };
 		EventKind kind{ EventKind::kCaptureMarker };
 		std::uint16_t reserved{ 0 };
 		std::uint64_t captureNumericId{ 0 };
@@ -705,7 +709,9 @@ namespace CSX::RenderMap
 			std::uint64_t a_commandStreamSequence = 0,
 			std::uint64_t a_targetBindingObservationId = 0,
 			std::uint64_t a_submissionObservationId = 0,
-			std::uint64_t a_preparedGeometrySetupObservationId = 0) noexcept;
+			std::uint64_t a_preparedGeometrySetupObservationId = 0,
+			std::uint64_t a_commandRecordingObservationId = 0,
+			bool a_deferredContext = false) noexcept;
 		RecordResult RecordForGeneration(
 			EventKind a_kind,
 			const EventPayload& a_payload,
@@ -714,7 +720,9 @@ namespace CSX::RenderMap
 			std::uint64_t a_commandStreamSequence = 0,
 			std::uint64_t a_targetBindingObservationId = 0,
 			std::uint64_t a_submissionObservationId = 0,
-			std::uint64_t a_preparedGeometrySetupObservationId = 0) noexcept;
+			std::uint64_t a_preparedGeometrySetupObservationId = 0,
+			std::uint64_t a_commandRecordingObservationId = 0,
+			bool a_deferredContext = false) noexcept;
 
 		ScopeGuard EnterScope(
 			ScopeKind a_kind,

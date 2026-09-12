@@ -8,8 +8,8 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <fstream>
 #include <format>
+#include <fstream>
 #include <iomanip>
 #include <set>
 #include <sstream>
@@ -34,7 +34,8 @@ namespace CSX::RenderMap
 			DWORD copiedBytes = 0;
 			if (const auto status = BCryptGetProperty(
 					algorithm, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectBytes),
-					sizeof(objectBytes), &copiedBytes, 0); status < 0) {
+					sizeof(objectBytes), &copiedBytes, 0);
+				status < 0) {
 				BCryptCloseAlgorithmProvider(algorithm, 0);
 				throw std::runtime_error(std::format("BCryptGetProperty failed ({:#x})", static_cast<std::uint32_t>(status)));
 			}
@@ -42,7 +43,8 @@ namespace CSX::RenderMap
 			std::vector<UCHAR> hashObject(objectBytes);
 			BCRYPT_HASH_HANDLE hash = nullptr;
 			if (const auto status = BCryptCreateHash(
-					algorithm, &hash, hashObject.data(), static_cast<ULONG>(hashObject.size()), nullptr, 0, 0); status < 0) {
+					algorithm, &hash, hashObject.data(), static_cast<ULONG>(hashObject.size()), nullptr, 0, 0);
+				status < 0) {
 				BCryptCloseAlgorithmProvider(algorithm, 0);
 				throw std::runtime_error(std::format("BCryptCreateHash failed ({:#x})", static_cast<std::uint32_t>(status)));
 			}
@@ -59,7 +61,7 @@ namespace CSX::RenderMap
 
 			std::array<UCHAR, 32> digest{};
 			const auto finishStatus = hashStatus < 0 ? hashStatus :
-				BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0);
+			                                           BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0);
 			BCryptDestroyHash(hash);
 			BCryptCloseAlgorithmProvider(algorithm, 0);
 			if (finishStatus < 0)
@@ -86,7 +88,7 @@ namespace CSX::RenderMap
 			}
 			if (std::filesystem::exists(a_path, ec) || ec) {
 				a_error = ec ? std::format("could not inspect artifact destination: {}", ec.message()) :
-					"artifact destination already exists";
+				               "artifact destination already exists";
 				return false;
 			}
 
@@ -142,7 +144,7 @@ namespace CSX::RenderMap
 		std::uint64_t LostEventCount(const CaptureStatistics& a_statistics)
 		{
 			return a_statistics.droppedStopped +
-				a_statistics.droppedEventLimit + a_statistics.droppedByteLimit;
+			       a_statistics.droppedEventLimit + a_statistics.droppedByteLimit;
 		}
 
 		json SerializeGapEvent(
@@ -153,36 +155,46 @@ namespace CSX::RenderMap
 		{
 			return {
 				{ "schema", {
-					{ "name", "csx.render-event" }, { "major", 1 }, { "minor", 14 },
-					{ "producerVersion", "collector-v1" },
-				} },
+								{ "name", "csx.render-event" },
+								{ "major", 1 },
+								{ "minor", 17 },
+								{ "producerVersion", "collector-v1" },
+							} },
 				{ "captureId", a_capture.descriptor.captureId },
 				{ "sequence", a_sequence },
 				{ "timestampQpc", a_capture.snapshot.endTimestampTicks },
 				{ "processId", a_processId },
 				{ "threadId", 0 },
 				{ "frame", {
-					{ "cpuFrame", nullptr }, { "sceneEpoch", nullptr }, { "submissionEpoch", nullptr },
-					{ "eye", "unknown" }, { "eyeMask", nullptr },
-				} },
+							   { "cpuFrame", nullptr },
+							   { "sceneEpoch", nullptr },
+							   { "submissionEpoch", nullptr },
+							   { "eye", "unknown" },
+							   { "eyeMask", nullptr },
+						   } },
 				{ "execution", {
-					{ "observationDomain", "unknown" }, { "commandStreamSequence", nullptr },
-					{ "gpuTimestampTicks", nullptr }, { "gpuTimestampFrequencyHz", nullptr },
-				} },
+								   { "observationDomain", "unknown" },
+								   { "commandStreamSequence", nullptr },
+								   { "gpuTimestampTicks", nullptr },
+								   { "gpuTimestampFrequencyHz", nullptr },
+							   } },
 				{ "deviceContextObservationId", nullptr },
 				{ "type", "gap" },
 				{ "scopes", {
-					{ "renderPass", nullptr }, { "technique", nullptr },
-					{ "geometry", nullptr }, { "commandList", nullptr },
-				} },
-				{ "causes", json::array() }, { "manifestRefs", json::array() },
-				{ "engineRefs", json::array() }, { "observationRefs", json::array() },
+								{ "renderPass", nullptr },
+								{ "technique", nullptr },
+								{ "geometry", nullptr },
+								{ "commandList", nullptr },
+							} },
+				{ "causes", json::array() },
+				{ "manifestRefs", json::array() },
+				{ "engineRefs", json::array() },
+				{ "observationRefs", json::array() },
 				{ "payload", {
-					{ "droppedEventCount", a_dropped },
-					{ "reason",
-						a_capture.snapshot.statistics.droppedByteLimit != 0 ? "byte-limit" :
-						a_capture.snapshot.statistics.droppedEventLimit != 0 ? "event-limit" : "stop-race" },
-				} },
+								 { "droppedEventCount", a_dropped },
+								 { "reason", a_capture.snapshot.statistics.droppedByteLimit != 0 ? "byte-limit" : a_capture.snapshot.statistics.droppedEventLimit != 0 ? "event-limit" :
+																																										 "stop-race" },
+							 } },
 				{ "extensions", { { "csx.syntheticGap", true } } },
 			};
 		}
@@ -213,7 +225,8 @@ namespace CSX::RenderMap
 			if (lostEvents != 0) {
 				eventKinds.insert("gap");
 				eventsJsonl += SerializeGapEvent(
-					a_capture, a_processId, a_capture.snapshot.events.size(), lostEvents).dump();
+					a_capture, a_processId, a_capture.snapshot.events.size(), lostEvents)
+				                   .dump();
 				eventsJsonl.push_back('\n');
 			}
 			const auto observedEventKinds = eventKinds;
@@ -230,16 +243,16 @@ namespace CSX::RenderMap
 			const auto serializedEventCount = snapshot.events.size() + (lostEvents == 0 ? 0 : 1);
 			const bool truncated = lostEvents != 0;
 			const bool structurallyIncomplete = snapshot.statistics.scopeOverflow != 0 ||
-				snapshot.statistics.scopeMismatch != 0 || snapshot.statistics.droppedShaderObservations != 0 ||
-				snapshot.statistics.droppedStageShaderObservations != 0 ||
-				snapshot.statistics.droppedResourceObservations != 0 ||
-				snapshot.statistics.droppedTargetViewObservations != 0 ||
-				snapshot.statistics.droppedTargetBindingObservations != 0 ||
-				snapshot.statistics.droppedSceneObjectObservations != 0 ||
-				snapshot.statistics.droppedGeometryObservations != 0 ||
-				snapshot.statistics.droppedMaterialStateObservations != 0;
+			                                    snapshot.statistics.scopeMismatch != 0 || snapshot.statistics.droppedShaderObservations != 0 ||
+			                                    snapshot.statistics.droppedStageShaderObservations != 0 ||
+			                                    snapshot.statistics.droppedResourceObservations != 0 ||
+			                                    snapshot.statistics.droppedTargetViewObservations != 0 ||
+			                                    snapshot.statistics.droppedTargetBindingObservations != 0 ||
+			                                    snapshot.statistics.droppedSceneObjectObservations != 0 ||
+			                                    snapshot.statistics.droppedGeometryObservations != 0 ||
+			                                    snapshot.statistics.droppedMaterialStateObservations != 0;
 			const bool terminalFailure = snapshot.stopReason == StopReason::kShutdown ||
-				snapshot.stopReason == StopReason::kFailure;
+			                             snapshot.stopReason == StopReason::kFailure;
 			const bool incomplete = truncated || structurallyIncomplete || terminalFailure;
 			bundle.eventsArtifact = DescribeArtifact(
 				"events-jsonl", eventsPath, "application/x-ndjson", !incomplete);
@@ -269,9 +282,11 @@ namespace CSX::RenderMap
 				completionErrors.push_back("capture ended during shutdown or failure handling");
 			const auto summary = SerializeCaptureSummary(a_capture);
 			json extensions = a_context.extensions.is_object() ?
-				a_context.extensions : json::object();
+			                      a_context.extensions :
+			                      json::object();
 			extensions.update({
-				{ "csx.processId", a_processId }, { "csx.sessionGeneration", snapshot.sessionGeneration },
+				{ "csx.processId", a_processId },
+				{ "csx.sessionGeneration", snapshot.sessionGeneration },
 				{ "csx.acceptedEventCount", snapshot.events.size() },
 				{ "csx.filteredEventCount", snapshot.statistics.filtered },
 				{ "csx.requestedEventKinds", SerializeEventKindMask(snapshot.config.requestedEventKindMask) },
@@ -298,9 +313,11 @@ namespace CSX::RenderMap
 
 			json manifest = {
 				{ "schema", {
-					{ "name", "csx.render-capture-manifest" }, { "major", 1 }, { "minor", 7 },
-					{ "producerVersion", "collector-v1" },
-				} },
+								{ "name", "csx.render-capture-manifest" },
+								{ "major", 1 },
+								{ "minor", 7 },
+								{ "producerVersion", "collector-v1" },
+							} },
 				{ "captureId", a_capture.descriptor.captureId },
 				{ "status", incomplete ? "incomplete" : "complete" },
 				{ "createdAtUtc", a_context.createdAtUtc },
@@ -310,37 +327,42 @@ namespace CSX::RenderMap
 				{ "environment", a_context.environment },
 				{ "scenario", a_context.scenario },
 				{ "bounds", {
-					{ "eventKinds", eventKinds },
-					{ "requestedEventKinds", SerializeEventKindMask(snapshot.config.requestedEventKindMask) },
-					{ "resolvedEventKinds", SerializeEventKindMask(snapshot.config.eventKindMask) },
-					{ "observedEventKinds", observedEventKinds },
-					{ "maxFrames", snapshot.config.maxFrames },
-					{ "maxDurationMs", std::chrono::duration_cast<std::chrono::milliseconds>(snapshot.config.maxDuration).count() },
-					{ "maxEvents", snapshot.config.maxEvents }, { "maxBytes", snapshot.config.maxBytes },
-					{ "maxShaderObservations", snapshot.config.maxShaderObservations },
-					{ "maxStageShaderObservations", snapshot.config.maxStageShaderObservations },
-					{ "maxResourceObservations", snapshot.config.maxResourceObservations },
-					{ "maxTargetViewObservations", snapshot.config.maxTargetViewObservations },
-					{ "maxTargetBindingObservations", snapshot.config.maxTargetBindingObservations },
-					{ "maxSceneObjectObservations", snapshot.config.maxSceneObjectObservations },
-					{ "maxGeometryObservations", snapshot.config.maxGeometryObservations },
-					{ "maxMaterialStateObservations", snapshot.config.maxMaterialStateObservations },
-					{ "geometryShaderTypes", SerializeGeometryShaderTypeMask(snapshot.config.geometryShaderTypeMask) },
-					{ "executionWithinSelectedGeometry", snapshot.config.executionWithinSelectedGeometry },
-					{ "pointerPolicy", "retain" },
-				} },
+								{ "eventKinds", eventKinds },
+								{ "requestedEventKinds", SerializeEventKindMask(snapshot.config.requestedEventKindMask) },
+								{ "resolvedEventKinds", SerializeEventKindMask(snapshot.config.eventKindMask) },
+								{ "observedEventKinds", observedEventKinds },
+								{ "maxFrames", snapshot.config.maxFrames },
+								{ "maxDurationMs", std::chrono::duration_cast<std::chrono::milliseconds>(snapshot.config.maxDuration).count() },
+								{ "maxEvents", snapshot.config.maxEvents },
+								{ "maxBytes", snapshot.config.maxBytes },
+								{ "maxShaderObservations", snapshot.config.maxShaderObservations },
+								{ "maxStageShaderObservations", snapshot.config.maxStageShaderObservations },
+								{ "maxResourceObservations", snapshot.config.maxResourceObservations },
+								{ "maxTargetViewObservations", snapshot.config.maxTargetViewObservations },
+								{ "maxTargetBindingObservations", snapshot.config.maxTargetBindingObservations },
+								{ "maxSceneObjectObservations", snapshot.config.maxSceneObjectObservations },
+								{ "maxGeometryObservations", snapshot.config.maxGeometryObservations },
+								{ "maxMaterialStateObservations", snapshot.config.maxMaterialStateObservations },
+								{ "geometryShaderTypes", SerializeGeometryShaderTypeMask(snapshot.config.geometryShaderTypeMask) },
+								{ "executionWithinSelectedGeometry", snapshot.config.executionWithinSelectedGeometry },
+								{ "pointerPolicy", "retain" },
+							} },
 				{ "clock", {
-					{ "source", "QueryPerformanceCounter" }, { "frequencyHz", snapshot.clockFrequencyHz },
-					{ "startTick", snapshot.startTimestampTicks },
-				} },
+							   { "source", "QueryPerformanceCounter" },
+							   { "frequencyHz", snapshot.clockFrequencyHz },
+							   { "startTick", snapshot.startTimestampTicks },
+						   } },
 				{ "artifacts", json::array({ bundle.eventsArtifact }) },
 				{ "completion", {
-					{ "reason", summary["completion"]["reason"] },
-					{ "firstSequence", serializedEventCount == 0 ? json(nullptr) : json(0) },
-					{ "lastSequence", serializedEventCount == 0 ? json(nullptr) : json(serializedEventCount - 1) },
-					{ "eventCount", serializedEventCount }, { "droppedEventCount", lostEvents },
-					{ "truncated", truncated }, { "collectorOverheadUs", nullptr }, { "errors", completionErrors },
-				} },
+									{ "reason", summary["completion"]["reason"] },
+									{ "firstSequence", serializedEventCount == 0 ? json(nullptr) : json(0) },
+									{ "lastSequence", serializedEventCount == 0 ? json(nullptr) : json(serializedEventCount - 1) },
+									{ "eventCount", serializedEventCount },
+									{ "droppedEventCount", lostEvents },
+									{ "truncated", truncated },
+									{ "collectorOverheadUs", nullptr },
+									{ "errors", completionErrors },
+								} },
 				{ "extensions", std::move(extensions) },
 			};
 
@@ -348,9 +370,12 @@ namespace CSX::RenderMap
 			if (!WriteTextFileAtomicNoReplace(manifestPath, manifest.dump(2), bundle.error))
 				return bundle;
 			bundle.manifestArtifact = {
-				{ "kind", "capture-manifest" }, { "path", manifestPath.string() },
-				{ "mediaType", "application/json" }, { "sha256", FileSha256(manifestPath) },
-				{ "bytes", std::filesystem::file_size(manifestPath) }, { "complete", true },
+				{ "kind", "capture-manifest" },
+				{ "path", manifestPath.string() },
+				{ "mediaType", "application/json" },
+				{ "sha256", FileSha256(manifestPath) },
+				{ "bytes", std::filesystem::file_size(manifestPath) },
+				{ "complete", true },
 			};
 			bundle.success = true;
 			return bundle;

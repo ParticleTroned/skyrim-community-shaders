@@ -1373,11 +1373,11 @@ namespace DistantTreeExtensions
 				vr.BindCurrentFrameDepthCulling(
 					pass,
 					pass->geometry,
-			}
 					CSX::VRDepthCullingDiagnostics::DrawCategory::DistantTree);
+			}
 		}
-	} static inline REL::Relocation<decltype(thunk)> func;
-};
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
 }
 
 namespace GrassExtensions
@@ -1432,11 +1432,11 @@ namespace GrassExtensions
 				vr.BindCurrentFrameDepthCulling(
 					pass,
 					pass->geometry,
-			}
 					CSX::VRDepthCullingDiagnostics::DrawCategory::Grass);
+			}
 		}
-	} static inline REL::Relocation<decltype(thunk)> func;
-};
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
 }
 
 namespace WaterBlendHistory
@@ -1664,6 +1664,24 @@ struct ID3D11Device_CreateComputeShader
 			RegisterShaderBytecode(
 				CSX::RenderMap::ShaderStage::kCompute, *ppComputeShader, pShaderBytecode, BytecodeLength);
 		return hr;
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+#endif
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+struct ID3D11Device_CreateDeferredContext
+{
+	static HRESULT STDMETHODCALLTYPE thunk(
+		ID3D11Device* a_device, UINT a_contextFlags,
+		ID3D11DeviceContext** a_deferredContext)
+	{
+		const auto result = func(a_device, a_contextFlags, a_deferredContext);
+		if (SUCCEEDED(result) && a_deferredContext && *a_deferredContext) {
+			CSX::RenderMap::GetRuntime().RegisterDeferredContext(
+				reinterpret_cast<std::uintptr_t>(*a_deferredContext), a_contextFlags);
+		}
+		return result;
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
 };
@@ -1954,6 +1972,9 @@ namespace Hooks
 #endif
 
 			stl::detour_vfunc<23, ID3D11Device_CreateSamplerState>(globals::d3d::device);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			stl::detour_vfunc<27, ID3D11Device_CreateDeferredContext>(globals::d3d::device);
+#endif
 
 			globals::InstallD3DHooks(globals::d3d::context);
 

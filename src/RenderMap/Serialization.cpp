@@ -4,7 +4,6 @@
 #include <array>
 #include <bit>
 #include <format>
-#include <limits>
 #include <string>
 
 namespace CSX::RenderMap
@@ -56,11 +55,6 @@ namespace CSX::RenderMap
 			return a_value == kUnknownFrame ? json(nullptr) : json(a_value);
 		}
 
-		json OptionalEngineFrame(std::uint64_t a_value)
-		{
-			return a_value == std::numeric_limits<std::uint32_t>::max() ? json(nullptr) : json(a_value);
-		}
-
 		json PointerEvidence(std::uint64_t a_value)
 		{
 			return a_value == 0 ? json(nullptr) : json(std::format("0x{:X}", a_value));
@@ -85,6 +79,65 @@ namespace CSX::RenderMap
 		{
 			return a_observationId == 0 ? json(nullptr) :
 			                              json(std::format("obs-device-context-{}-g{}", a_observationId, a_generation));
+		}
+
+		json CommandRecordingObservationId(std::uint64_t a_observationId, std::uint64_t a_generation)
+		{
+			return a_observationId == 0 ? json(nullptr) :
+			                              json(std::format("obs-command-recording-{}-g{}", a_observationId, a_generation));
+		}
+
+		json CommandListObservationId(std::uint64_t a_observationId, std::uint64_t a_generation)
+		{
+			return a_observationId == 0 ? json(nullptr) :
+			                              json(std::format("obs-command-list-{}-g{}", a_observationId, a_generation));
+		}
+
+		std::uint64_t CommandRecordingId(const EventRecord& a_event) noexcept
+		{
+			return a_event.scopes.commandList.token == 0 ?
+			           a_event.scopes.commandList.observationId :
+			           0;
+		}
+
+		json CommandRecordingIncompleteReasons(std::uint64_t a_reasons)
+		{
+			json reasons = json::array();
+			for (const auto [reason, name] : std::array{
+					 std::pair{ CommandRecordingIncompleteReason::kPartialAtCaptureStart, "partial-at-capture-start" },
+					 std::pair{ CommandRecordingIncompleteReason::kDeclarationUnavailable, "declaration-unavailable" },
+					 std::pair{ CommandRecordingIncompleteReason::kEventNotRecorded, "event-not-recorded" },
+					 std::pair{ CommandRecordingIncompleteReason::kHookCoverageUnqualified, "hook-coverage-unqualified" } }) {
+				if ((a_reasons & static_cast<std::uint64_t>(reason)) != 0)
+					reasons.push_back(name);
+			}
+			return reasons;
+		}
+
+		const char* DeviceContextKindName(DeviceContextKind a_kind) noexcept
+		{
+			switch (a_kind) {
+			case DeviceContextKind::kImmediate:
+				return "immediate";
+			case DeviceContextKind::kDeferred:
+				return "deferred";
+			default:
+				return "unknown";
+			}
+		}
+
+		const char* ContextCreationEvidenceName(ContextCreationEvidence a_evidence) noexcept
+		{
+			switch (a_evidence) {
+			case ContextCreationEvidence::kInitialImmediate:
+				return "initial-immediate-context";
+			case ContextCreationEvidence::kCreateDeferredContext:
+				return "create-deferred-context-hook";
+			case ContextCreationEvidence::kFirstSeen:
+				return "first-seen-fallback";
+			default:
+				return "unknown";
+			}
 		}
 
 		json ResourceVersionObservationId(std::uint64_t a_observationId, std::uint64_t a_generation)
@@ -860,7 +913,15 @@ namespace CSX::RenderMap
 			case PayloadSchema::kDrawCall:
 				{
 					json refs = json::array();
-					appendDeviceContext(refs, "immediate-context", a_event.payload.words[0]);
+					appendDeviceContext(
+						refs,
+						CommandRecordingId(a_event) != 0 ? "recording-context" :
+						(a_event.reserved & kEventFlagDeferredContext) != 0 ?
+														   "deferred-context" :
+														   "immediate-context",
+						a_event.payload.words[0]);
+					if (CommandRecordingId(a_event) != 0)
+						refs.push_back({ { "id", CommandRecordingObservationId(CommandRecordingId(a_event), a_event.sessionGeneration) }, { "kind", "command-recording" }, { "role", "recorded-command" }, { "pointerEvidence", nullptr } });
 					appendTargetBinding(refs);
 					if (a_event.preparedGeometrySetupObservationId != 0) {
 						refs.push_back({
@@ -890,7 +951,15 @@ namespace CSX::RenderMap
 			case PayloadSchema::kDispatchCall:
 				{
 					json refs = json::array();
-					appendDeviceContext(refs, "immediate-context", a_event.payload.words[0]);
+					appendDeviceContext(
+						refs,
+						CommandRecordingId(a_event) != 0 ? "recording-context" :
+						(a_event.reserved & kEventFlagDeferredContext) != 0 ?
+														   "deferred-context" :
+														   "immediate-context",
+						a_event.payload.words[0]);
+					if (CommandRecordingId(a_event) != 0)
+						refs.push_back({ { "id", CommandRecordingObservationId(CommandRecordingId(a_event), a_event.sessionGeneration) }, { "kind", "command-recording" }, { "role", "recorded-command" }, { "pointerEvidence", nullptr } });
 					const auto id = a_event.payload.words[2];
 					if (id == 0)
 						return refs;
@@ -907,6 +976,54 @@ namespace CSX::RenderMap
 				{
 					json refs = json::array();
 					appendDeviceContext(refs, "first-observed", a_event.payload.words[1]);
+					return refs;
+				}
+			case PayloadSchema::kCommandRecordingObservation:
+				return json::array({ {
+										 { "id", CommandRecordingObservationId(a_event.payload.words[0], a_event.sessionGeneration) },
+										 { "kind", "command-recording" },
+										 { "role", "first-observed" },
+										 { "pointerEvidence", nullptr },
+									 },
+					{
+						{ "id", DeviceContextObservationId(a_event.payload.words[1], a_event.sessionGeneration) },
+						{ "kind", "device-context" },
+						{ "role", "recorded-by" },
+						{ "pointerEvidence", nullptr },
+					} });
+			case PayloadSchema::kCommandListObservation:
+				{
+					json refs = json::array({ {
+						{ "id", CommandListObservationId(a_event.payload.words[0], a_event.sessionGeneration) },
+						{ "kind", "command-list" },
+						{ "role", "first-observed" },
+						{ "pointerEvidence", PointerEvidence(a_event.payload.words[1]) },
+					} });
+					if (a_event.payload.words[3] != 0)
+						refs.push_back({ { "id", DeviceContextObservationId(a_event.payload.words[3], a_event.sessionGeneration) }, { "kind", "device-context" }, { "role", "source-context" }, { "pointerEvidence", nullptr } });
+					if (a_event.payload.words[4] != 0)
+						refs.push_back({ { "id", CommandRecordingObservationId(a_event.payload.words[4], a_event.sessionGeneration) }, { "kind", "command-recording" }, { "role", "source-recording" }, { "pointerEvidence", nullptr } });
+					return refs;
+				}
+			case PayloadSchema::kFinishCommandList:
+				{
+					json refs = json::array();
+					if (a_event.payload.words[0] != 0)
+						refs.push_back({ { "id", CommandRecordingObservationId(a_event.payload.words[0], a_event.sessionGeneration) }, { "kind", "command-recording" }, { "role", "finished-recording" }, { "pointerEvidence", nullptr } });
+					if (a_event.payload.words[1] != 0)
+						refs.push_back({ { "id", CommandListObservationId(a_event.payload.words[1], a_event.sessionGeneration) }, { "kind", "command-list" }, { "role", "materialized-list" }, { "pointerEvidence", PointerEvidence(a_event.payload.words[2]) } });
+					return refs;
+				}
+			case PayloadSchema::kExecuteCommandList:
+				{
+					json refs = json::array({ {
+						{ "id", CommandListObservationId(a_event.payload.words[0], a_event.sessionGeneration) },
+						{ "kind", "command-list" },
+						{ "role", "executed-list" },
+						{ "pointerEvidence", PointerEvidence(a_event.payload.words[1]) },
+					} });
+					if (a_event.payload.words[2] != 0)
+						refs.push_back({ { "id", CommandRecordingObservationId(a_event.payload.words[2], a_event.sessionGeneration) }, { "kind", "command-recording" }, { "role", "source-recording" }, { "pointerEvidence", nullptr } });
 					return refs;
 				}
 			case PayloadSchema::kTargetViewObservation:
@@ -1184,9 +1301,9 @@ namespace CSX::RenderMap
 						break;
 					}
 					return {
-						{ "schema", "draw-call-v3" },
+						{ "schema", "draw-call-v4" },
 						{ "operation", DrawOperationName(operation) },
-						{ "immediateContextPointer", PointerEvidence(a_payload.words[0]) },
+						{ "deviceContextPointer", PointerEvidence(a_payload.words[0]) },
 						{ "vertexShaderObservationId", StageShaderObservationId(
 														   ShaderStage::kVertex, a_payload.words[2], a_generation) },
 						{ "pixelShaderObservationId", StageShaderObservationId(
@@ -1213,9 +1330,9 @@ namespace CSX::RenderMap
 																							 { "threadGroupCountZ", a_payload.words[5] },
 																						 };
 					return {
-						{ "schema", "dispatch-call-v1" },
+						{ "schema", "dispatch-call-v2" },
 						{ "operation", DispatchOperationName(operation) },
-						{ "immediateContextPointer", PointerEvidence(a_payload.words[0]) },
+						{ "deviceContextPointer", PointerEvidence(a_payload.words[0]) },
 						{ "computeShaderObservationId", StageShaderObservationId(
 															ShaderStage::kCompute, a_payload.words[2], a_generation) },
 						{ "arguments", std::move(arguments) },
@@ -1223,13 +1340,53 @@ namespace CSX::RenderMap
 				}
 			case PayloadSchema::kDeviceContextObservation:
 				return {
-					{ "schema", "device-context-observation-v1" },
+					{ "schema", "device-context-observation-v2" },
 					{ "deviceContextObservationId", DeviceContextObservationId(
 														a_payload.words[0], a_generation) },
 					{ "contextPointer", PointerEvidence(a_payload.words[1]) },
 					{ "pointerGeneration", a_payload.words[2] },
-					{ "kind", a_payload.words[3] == 1 ? "immediate" : "unknown" },
-					{ "creationEvidence", "initial-immediate-context" },
+					{ "kind", DeviceContextKindName(static_cast<DeviceContextKind>(a_payload.words[3])) },
+					{ "creationEvidence", ContextCreationEvidenceName(static_cast<ContextCreationEvidence>(a_payload.words[4])) },
+					{ "contextFlags", a_payload.words[5] },
+				};
+			case PayloadSchema::kCommandRecordingObservation:
+				return {
+					{ "schema", "command-recording-observation-v1" },
+					{ "commandRecordingObservationId", CommandRecordingObservationId(a_payload.words[0], a_generation) },
+					{ "deviceContextObservationId", DeviceContextObservationId(a_payload.words[1], a_generation) },
+					{ "epoch", a_payload.words[2] },
+					{ "partialAtCaptureStart", a_payload.words[3] != 0 },
+				};
+			case PayloadSchema::kCommandListObservation:
+				return {
+					{ "schema", "command-list-observation-v2" },
+					{ "commandListObservationId", CommandListObservationId(a_payload.words[0], a_generation) },
+					{ "commandListPointer", PointerEvidence(a_payload.words[1]) },
+					{ "pointerGeneration", a_payload.words[2] },
+					{ "sourceDeviceContextObservationId", DeviceContextObservationId(a_payload.words[3], a_generation) },
+					{ "sourceCommandRecordingObservationId", CommandRecordingObservationId(a_payload.words[4], a_generation) },
+					{ "sourceRecordingComplete", a_payload.words[5] != 0 },
+					{ "sourceRecordingIncompleteReasons", CommandRecordingIncompleteReasons(a_payload.words[6]) },
+				};
+			case PayloadSchema::kFinishCommandList:
+				return {
+					{ "schema", "finish-command-list-v2" },
+					{ "commandRecordingObservationId", CommandRecordingObservationId(a_payload.words[0], a_generation) },
+					{ "commandListObservationId", CommandListObservationId(a_payload.words[1], a_generation) },
+					{ "commandListPointer", PointerEvidence(a_payload.words[2]) },
+					{ "restoreDeferredContextState", a_payload.words[3] != 0 },
+					{ "hresult", static_cast<std::int32_t>(a_payload.words[4]) },
+					{ "succeeded", static_cast<std::int32_t>(a_payload.words[4]) >= 0 },
+					{ "sourceRecordingComplete", a_payload.words[5] != 0 },
+					{ "sourceRecordingIncompleteReasons", CommandRecordingIncompleteReasons(a_payload.words[6]) },
+				};
+			case PayloadSchema::kExecuteCommandList:
+				return {
+					{ "schema", "execute-command-list-v1" },
+					{ "commandListObservationId", CommandListObservationId(a_payload.words[0], a_generation) },
+					{ "commandListPointer", PointerEvidence(a_payload.words[1]) },
+					{ "sourceCommandRecordingObservationId", CommandRecordingObservationId(a_payload.words[2], a_generation) },
+					{ "restoreContextState", a_payload.words[3] != 0 },
 				};
 			case PayloadSchema::kTargetViewObservation:
 				{
@@ -1418,7 +1575,6 @@ namespace CSX::RenderMap
 					{ "objectPointer", PointerEvidence(a_payload.words[0]) },
 					{ "objectIndex", a_payload.words[1] },
 					{ "producerFrame", OptionalFrame(a_payload.words[2]) },
-					{ "engineFrame", OptionalEngineFrame(a_payload.words[3]) },
 				};
 			case PayloadSchema::kVisibilityResult:
 				return {
@@ -1428,7 +1584,6 @@ namespace CSX::RenderMap
 											   TargetViewKind::kShaderResource, a_payload.words[1], a_generation) },
 					{ "objectCount", a_payload.words[2] },
 					{ "producerFrame", OptionalFrame(a_payload.words[3]) },
-					{ "engineFrame", OptionalEngineFrame(a_payload.words[4]) },
 				};
 			case PayloadSchema::kVisibilitySubmission:
 				{
@@ -1638,19 +1793,21 @@ namespace CSX::RenderMap
 						   { "eyeMask", a_event.frame.eyeMask == 0 ? json(nullptr) : json(a_event.frame.eyeMask) },
 					   } },
 			{ "execution", {
-							   { "observationDomain", "cpu-call" },
+							   { "observationDomain", CommandRecordingId(a_event) != 0 ? "command-recording" : (a_event.reserved & kEventFlagDeferredContext) != 0 ? "unknown" :
+																																									 "cpu-call" },
 							   { "commandStreamSequence", a_event.commandStreamSequence == 0 ? json(nullptr) : json(a_event.commandStreamSequence) },
 							   { "gpuTimestampTicks", nullptr },
 							   { "gpuTimestampFrequencyHz", nullptr },
 						   } },
 			{ "deviceContextObservationId", DeviceContextObservationId(a_event.deviceContextObservationId, a_event.sessionGeneration) },
+			{ "commandRecordingObservationId", CommandRecordingObservationId(CommandRecordingId(a_event), a_event.sessionGeneration) },
 			{ "submissionObservationId", SubmissionObservationId(a_event.submissionObservationId, a_event.sessionGeneration) },
 			{ "type", EventKindName(a_event.kind) },
 			{ "scopes", {
 							{ "renderPass", ScopeId(a_event.scopes.renderPass, "render-pass", a_event.sessionGeneration) },
 							{ "technique", ScopeId(a_event.scopes.technique, "technique", a_event.sessionGeneration) },
 							{ "geometry", ScopeId(a_event.scopes.geometry, "geometry", a_event.sessionGeneration) },
-							{ "commandList", ScopeId(a_event.scopes.commandList, "command-list", a_event.sessionGeneration) },
+							{ "commandList", a_event.scopes.commandList.token == 0 ? json(nullptr) : ScopeId(a_event.scopes.commandList, "command-list", a_event.sessionGeneration) },
 						} },
 			{ "causes", json::array() },
 			{ "manifestRefs", json::array() },

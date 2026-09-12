@@ -1,3 +1,4 @@
+#include "Api/DepthCullingDevBenchBridge.h"
 #include "Api/EditorDevBenchBridge.h"
 #include "Api/EditorService.h"
 #include "Api/FeatureDevBenchBridge.h"
@@ -25,6 +26,7 @@
 #include "MenuDevBenchBridge.h"
 #include "PerformanceTuningDevBenchBridge.h"
 #include "ProfilerDevBenchBridge.h"
+#include "RenderMap/DevBenchBridge.h"
 #include "SceneSettingsManager.h"
 #include "ScreenshotDevBenchBridge.h"
 #include "ShaderCache.h"
@@ -168,6 +170,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 			// PostPostLoad attempt below provides the deterministic retry.
 			CSX::Api::ProfilerApiDevBenchBridge::Install();
 			ScreenshotDevBenchBridge::Install();
+			CSX::Api::DepthCullingDevBenchBridge::Install();
+			CSX::RenderMap::DevBenchBridge::Install();
 			CSX::Api::UpscalingDevBenchBridge::Install();
 			CSX::Api::WeatherDevBenchBridge::Install();
 			CSX::Api::EditorDevBenchBridge::Install();
@@ -180,6 +184,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 			if (errors.empty()) {
 				ScreenshotDevBenchBridge::Install();
 				CSX::Api::ProfilerApiDevBenchBridge::Install();
+				CSX::Api::DepthCullingDevBenchBridge::Install();
+				CSX::RenderMap::DevBenchBridge::Install();
 				// DevBench publishes its interface from its own PostLoad listener. If
 				// CSX's listener ran first, this is the first deterministic retry after
 				// all PostLoad listeners have completed.
@@ -288,6 +294,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				PerformanceTuningDevBenchBridge::Install();
 				ScreenshotDevBenchBridge::Install();
 				CSX::Api::ProfilerApiDevBenchBridge::Install();
+				CSX::Api::DepthCullingDevBenchBridge::Install();
+				CSX::RenderMap::DevBenchBridge::Install();
 				CSX::Api::UpscalingDevBenchBridge::Install();
 				CSX::Api::WeatherDevBenchBridge::Install();
 				CSX::Api::ShaderDevBenchBridge::Install();

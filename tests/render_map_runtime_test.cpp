@@ -1,11 +1,13 @@
 #include "RenderMap/Runtime.h"
 
 #include <algorithm>
+#include <chrono>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace
@@ -842,6 +844,71 @@ namespace
 			"effective resource-state tracking leaked across capture generations");
 	}
 
+	void TestRestoreFalseReobservesEffectiveResourceViews()
+	{
+		Runtime runtime;
+		auto config = Config();
+		config.maxEvents = 128;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		runtime.SetImmediateContext(0xF500);
+		Check(runtime.StartCapture(config) == StartResult::kStarted,
+			"post-execute resource-state capture did not start");
+		const ResourceViewInput srvA{
+			.resource = { .d3dObject = 0xF510, .dimension = ResourceDimension::kTexture2D },
+			.view = { .kind = TargetViewKind::kShaderResource, .d3dObject = 0xF520 },
+		};
+		const ResourceViewInput srvB{
+			.resource = { .d3dObject = 0xF530, .dimension = ResourceDimension::kTexture2D },
+			.view = { .kind = TargetViewKind::kShaderResource, .d3dObject = 0xF540 },
+		};
+		const ResourceViewInput uav{
+			.resource = { .d3dObject = 0xF550, .dimension = ResourceDimension::kTexture2D },
+			.view = { .kind = TargetViewKind::kUnorderedAccess, .d3dObject = 0xF560 },
+		};
+		const auto query = [&](ResourceBindingKind a_kind, ResourceStage a_stage,
+							   std::uint32_t a_slot, const ResourceViewInput* a_view) {
+			runtime.BindResourceViews(
+				0xF500, a_kind, a_stage, a_slot, 1, a_view, false,
+				ResourceBindingSource::kPostCallQuery);
+		};
+
+		query(ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, &srvA);
+		query(ResourceBindingKind::kUnorderedAccess, ResourceStage::kCompute, 1, &uav);
+		runtime.RecordExecuteCommandList(0xF500, 0xF570, false);
+		query(ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, &srvA);
+		query(ResourceBindingKind::kUnorderedAccess, ResourceStage::kCompute, 1, nullptr);
+		query(ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, &srvB);
+		runtime.RecordExecuteCommandList(0xF500, 0xF570, true);
+		query(ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, &srvB);
+
+		auto snapshot = runtime.StopCapture();
+		Check(snapshot.has_value(), "post-execute resource-state capture did not stop");
+		std::vector<const EventRecord*> bindings;
+		std::vector<const EventRecord*> summaries;
+		for (const auto& event : snapshot->events) {
+			if (event.kind == EventKind::kResourceViewBind &&
+				event.payload.words[4] == static_cast<std::uint64_t>(ResourceBindingSource::kPostCallQuery)) {
+				bindings.push_back(&event);
+			}
+			if (event.kind == EventKind::kResourceViewStateObserved)
+				summaries.push_back(&event);
+		}
+		Check(bindings.size() == 5 && summaries.size() == 6,
+			"restore-state resource queries emitted the wrong delta sequence");
+		Check(bindings[0]->payload.words[0] != 0 &&
+				  bindings[2]->payload.words[0] == bindings[0]->payload.words[0],
+			"restore-false execution did not republish a same-view SRV rebind");
+		Check(bindings[3]->payload.words[0] == 0 &&
+				  bindings[3]->payload.words[1] == static_cast<std::uint64_t>(ResourceBindingKind::kUnorderedAccess),
+			"restore-false execution did not publish an explicit UAV unbind");
+		Check(bindings[4]->payload.words[0] != 0 &&
+				  bindings[4]->payload.words[0] != bindings[0]->payload.words[0],
+			"changed-view control did not publish the replacement SRV");
+		Check(summaries[2]->payload.words[5] == 1 && summaries[3]->payload.words[5] == 1 &&
+				  summaries[4]->payload.words[5] == 1 && summaries[5]->payload.words[5] == 0,
+			"restore-false reseeding or restore-true preservation was not delta coherent");
+	}
+
 	void TestCpuMapUnmapBoundariesArePairedAndTimed()
 	{
 		Runtime runtime;
@@ -1123,6 +1190,10 @@ namespace
 		Check((techniquePair & EventKindBit(EventKind::kTechniqueEnd)) != 0 &&
 				  (techniquePair & EventKindBit(EventKind::kShaderObserved)) != 0,
 			"scope selection did not resolve its paired boundary and identity");
+		const auto drawDependencies = ResolveEventKindDependencies(EventKindBit(EventKind::kDraw));
+		Check((drawDependencies & EventKindBit(EventKind::kCommandRecordingObserved)) != 0 &&
+				  (drawDependencies & EventKindBit(EventKind::kDeviceContextObserved)) != 0,
+			"draw selection did not retain deferred recording and context provenance");
 
 		Runtime runtime;
 		auto config = Config();
@@ -1412,6 +1483,699 @@ namespace
 				  snapshot->sceneObjectObservations[0].observationId,
 			"geometry declaration did not bind its optional scene object");
 	}
+
+	void TestDeferredRecordingMaterializesAndExecutesCommandList()
+	{
+		Runtime runtime;
+		auto config = Config();
+		config.maxEvents = 64;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		Check(runtime.StartCapture(config) == StartResult::kStarted,
+			"deferred command-list capture did not start");
+		runtime.SetImmediateContext(0x1000);
+		runtime.RegisterDeferredContext(0x2000, 7);
+		runtime.BindStage(0x2000, ShaderStage::kVertex, 0x3000);
+		runtime.BindStage(0x2000, ShaderStage::kPixel, 0x4000);
+		runtime.RecordDraw(0x2000, DrawOperation::kDrawIndexed, 36, 0, 0);
+		runtime.RecordFinishCommandList(0x2000, 0x5000, false, 0);
+		runtime.BindStage(0x1000, ShaderStage::kVertex, 0x6000);
+		runtime.RecordExecuteCommandList(0x1000, 0x5000, false);
+		runtime.RecordExecuteCommandList(0x1000, 0x5000, true);
+		runtime.RecordDraw(0x1000, DrawOperation::kDraw, 3);
+
+		auto snapshot = runtime.StopCapture();
+		Check(snapshot.has_value(), "deferred command-list capture did not stop");
+		const auto findFirst = [&](EventKind a_kind) {
+			return std::find_if(snapshot->events.begin(), snapshot->events.end(),
+				[&](const EventRecord& a_event) { return a_event.kind == a_kind; });
+		};
+		const auto context = findFirst(EventKind::kDeviceContextObserved);
+		const auto recording = findFirst(EventKind::kCommandRecordingObserved);
+		const auto recordedDraw = findFirst(EventKind::kDraw);
+		const auto list = findFirst(EventKind::kCommandListObserved);
+		const auto finish = findFirst(EventKind::kFinishCommandList);
+		Check(context != snapshot->events.end() && context->payload.words[3] == static_cast<std::uint64_t>(DeviceContextKind::kDeferred) &&
+				  context->payload.words[4] == static_cast<std::uint64_t>(ContextCreationEvidence::kCreateDeferredContext) &&
+				  context->payload.words[5] == 7,
+			"deferred context identity did not retain kind, creation evidence, and flags");
+		Check(recording != snapshot->events.end() && recordedDraw != snapshot->events.end() &&
+				  recordedDraw->deviceContextObservationId == context->payload.words[0] &&
+				  recordedDraw->scopes.commandList.token == 0 &&
+				  recordedDraw->scopes.commandList.observationId == recording->payload.words[0],
+			"recorded draw did not retain its deferred context and recording epoch");
+		Check(list != snapshot->events.end() && finish != snapshot->events.end() &&
+				  list->payload.words[4] == recording->payload.words[0] &&
+				  list->payload.words[5] == 0 &&
+				  (list->payload.words[6] & static_cast<std::uint64_t>(
+												CommandRecordingIncompleteReason::kHookCoverageUnqualified)) != 0 &&
+				  finish->payload.words[0] == recording->payload.words[0] &&
+				  finish->payload.words[1] == list->payload.words[0] &&
+				  finish->payload.words[5] == 0 &&
+				  finish->payload.words[6] == list->payload.words[6],
+			"FinishCommandList did not materialize the exact source recording");
+		std::vector<const EventRecord*> executions;
+		for (const auto& event : snapshot->events) {
+			if (event.kind == EventKind::kExecuteCommandList)
+				executions.push_back(&event);
+		}
+		Check(executions.size() == 2 && executions[0]->payload.words[0] == list->payload.words[0] &&
+				  executions[1]->payload.words[0] == list->payload.words[0] &&
+				  executions[0]->payload.words[2] == recording->payload.words[0],
+			"repeated execution did not reuse the command-list and source-recording identities");
+		const auto immediateDraw = std::find_if(
+			std::next(recordedDraw), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; });
+		Check(immediateDraw != snapshot->events.end() && immediateDraw->payload.words[2] == 0,
+			"RestoreContextState=false did not invalidate the immediate pipeline tracker");
+	}
+
+	void TestExecuteRestoreStateIsIndependentOfCaptureAdmission()
+	{
+		Runtime resetRuntime;
+		resetRuntime.SetImmediateContext(0x1000);
+		resetRuntime.BindStage(0x1000, ShaderStage::kVertex, 0x6000);
+		resetRuntime.BindStage(0x1000, ShaderStage::kPixel, 0x7000);
+		resetRuntime.BindStage(0x1000, ShaderStage::kCompute, 0x8000);
+		resetRuntime.RecordExecuteCommandList(0x1000, 0x5000, false);
+		Check(resetRuntime.StartCapture(Config()) == StartResult::kStarted,
+			"post-execute reset capture did not start");
+		resetRuntime.RecordDraw(0x1000, DrawOperation::kDraw, 3);
+		resetRuntime.RecordDispatch(0x1000, DispatchOperation::kDispatch, 1, 1, 1);
+		auto resetSnapshot = resetRuntime.StopCapture();
+		Check(resetSnapshot.has_value(), "post-execute reset capture did not stop");
+		const auto resetDraw = std::find_if(resetSnapshot->events.begin(), resetSnapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; });
+		const auto resetDispatch = std::find_if(resetSnapshot->events.begin(), resetSnapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDispatch; });
+		Check(resetDraw != resetSnapshot->events.end() && resetDraw->payload.words[2] == 0 &&
+				  resetDraw->payload.words[3] == 0 && resetDispatch != resetSnapshot->events.end() &&
+				  resetDispatch->payload.words[2] == 0,
+			"restore-false execution outside capture retained stale stage identities");
+
+		Runtime preserveRuntime;
+		preserveRuntime.SetImmediateContext(0x1000);
+		preserveRuntime.BindStage(0x1000, ShaderStage::kVertex, 0x6000);
+		preserveRuntime.RecordExecuteCommandList(0x1000, 0x5000, true);
+		Check(preserveRuntime.StartCapture(Config()) == StartResult::kStarted,
+			"post-execute preservation capture did not start");
+		preserveRuntime.RecordDraw(0x1000, DrawOperation::kDraw, 3);
+		auto preserveSnapshot = preserveRuntime.StopCapture();
+		Check(preserveSnapshot.has_value(), "post-execute preservation capture did not stop");
+		const auto preserveDraw = std::find_if(
+			preserveSnapshot->events.begin(), preserveSnapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; });
+		Check(preserveDraw != preserveSnapshot->events.end() && preserveDraw->payload.words[2] != 0,
+			"restore-true execution outside capture did not preserve the tracked stage identity");
+	}
+
+	void TestDeferredRecordingReportsPartialFilteredAndFailedFinishes()
+	{
+		Runtime runtime;
+		runtime.RegisterDeferredContext(0x2100, 0);
+		auto config = Config();
+		config.maxEvents = 32;
+		config.requestedEventKindMask = EventKindBit(EventKind::kFinishCommandList);
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		Check(runtime.StartCapture(config) == StartResult::kStarted,
+			"partial deferred recording capture did not start");
+		runtime.RecordDraw(0x2100, DrawOperation::kDraw, 3);
+		runtime.RecordFinishCommandList(0x2100, 0x5100, true, 0);
+		auto partial = runtime.StopCapture();
+		Check(partial.has_value(), "partial deferred recording capture did not stop");
+		const auto list = std::find_if(partial->events.begin(), partial->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kCommandListObserved; });
+		Check(list != partial->events.end() && list->payload.words[5] == 0 &&
+				  (list->payload.words[6] & static_cast<std::uint64_t>(
+												CommandRecordingIncompleteReason::kPartialAtCaptureStart)) != 0 &&
+				  (list->payload.words[6] & static_cast<std::uint64_t>(
+												CommandRecordingIncompleteReason::kEventNotRecorded)) != 0,
+			"partial or filtered deferred work was incorrectly reported as complete");
+
+		config.requestedEventKindMask = kAllEventKindsMask;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		Check(runtime.StartCapture(config) == StartResult::kStarted,
+			"failed FinishCommandList capture did not start");
+		runtime.RecordFinishCommandList(0x2100, 0xDEAD, false, static_cast<std::int32_t>(0x80004005u));
+		auto failed = runtime.StopCapture();
+		Check(failed.has_value(), "failed FinishCommandList capture did not stop");
+		const auto finish = std::find_if(failed->events.begin(), failed->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kFinishCommandList; });
+		Check(finish != failed->events.end() && finish->payload.words[1] == 0 &&
+				  finish->payload.words[2] == 0 &&
+				  static_cast<std::int32_t>(finish->payload.words[4]) < 0 &&
+				  finish->payload.words[5] == 0,
+			"failed FinishCommandList did not preserve its no-list failure outcome");
+	}
+
+	void TestDiagnosticCatalogueAdmissionFailuresFailOpen()
+	{
+		auto config = Config();
+		config.maxEvents = 128;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+
+		Runtime inactiveContextRuntime;
+		inactiveContextRuntime.FailNextDeferredContextCatalogueAdmissionForTesting();
+		inactiveContextRuntime.RegisterDeferredContext(0xB000, 0);
+		Check(inactiveContextRuntime.StartCapture(config) == StartResult::kStarted,
+			"inactive context admission-failure capture did not start");
+		inactiveContextRuntime.RecordDraw(0xB000, DrawOperation::kDraw, 3);
+		auto inactiveContextSnapshot = inactiveContextRuntime.StopCapture();
+		Check(inactiveContextSnapshot.has_value() && inactiveContextSnapshot->events.empty(),
+			"inactive context admission failure fabricated a later deferred identity");
+
+		Runtime contextRuntime;
+		Check(contextRuntime.StartCapture(config) == StartResult::kStarted,
+			"context admission-failure capture did not start");
+		contextRuntime.FailNextDeferredContextCatalogueAdmissionForTesting();
+		contextRuntime.RegisterDeferredContext(0xB100, 0);
+		contextRuntime.RegisterDeferredContext(0xB100, 0);
+		contextRuntime.FailNextDeferredContextCatalogueAdmissionForTesting();
+		contextRuntime.RegisterDeferredContext(0xB100, 0, false);
+		contextRuntime.RegisterDeferredContext(0xB200, 0);
+		auto contextSnapshot = contextRuntime.StopCapture();
+		Check(contextSnapshot.has_value(), "context admission-failure capture did not stop");
+		Check(std::count_if(contextSnapshot->events.begin(), contextSnapshot->events.end(),
+				  [](const EventRecord& event) {
+					  return event.kind == EventKind::kDeviceContextObserved && event.payload.words[1] == 0xB100;
+				  }) == 1 &&
+				  std::none_of(contextSnapshot->events.begin(), contextSnapshot->events.end(),
+					  [](const EventRecord& event) {
+						  return event.kind == EventKind::kDeviceContextObserved && event.payload.words[1] == 0xB200;
+					  }),
+			"deferred-context admission failure fabricated or lost catalogue identity");
+
+		Runtime finishRuntime;
+		Check(finishRuntime.StartCapture(config) == StartResult::kStarted,
+			"finish admission-failure capture did not start");
+		finishRuntime.RegisterDeferredContext(0xB300, 0);
+		finishRuntime.RecordDraw(0xB300, DrawOperation::kDraw, 3);
+		finishRuntime.FailNextCommandListCatalogueAdmissionForTesting();
+		finishRuntime.RecordFinishCommandList(0xB300, 0xB400, false, 0);
+		auto finishSnapshot = finishRuntime.StopCapture();
+		Check(finishSnapshot.has_value(), "finish admission-failure capture did not stop");
+		const auto finish = std::find_if(finishSnapshot->events.begin(), finishSnapshot->events.end(),
+			[](const EventRecord& event) { return event.kind == EventKind::kFinishCommandList; });
+		Check(finish != finishSnapshot->events.end() && finish->payload.words[1] == 0 &&
+				  finish->payload.words[2] == 0xB400 && finish->payload.words[5] == 0 &&
+				  (finish->payload.words[6] & static_cast<std::uint64_t>(
+												  CommandRecordingIncompleteReason::kEventNotRecorded)) != 0,
+			"finish admission failure did not preserve a truthful successful D3D outcome");
+		Check(std::count_if(finishSnapshot->events.begin(), finishSnapshot->events.end(),
+				  [](const EventRecord& event) { return event.kind == EventKind::kCommandRecordingObserved; }) == 2,
+			"finish admission failure did not advance to the next recording epoch");
+
+		Runtime executeRuntime;
+		executeRuntime.SetImmediateContext(0xB500);
+		Check(executeRuntime.StartCapture(config) == StartResult::kStarted,
+			"execute admission-failure capture did not start");
+		const ResourceViewInput srv{
+			.resource = { .d3dObject = 0xB510, .dimension = ResourceDimension::kTexture2D },
+			.view = { .kind = TargetViewKind::kShaderResource, .d3dObject = 0xB520 },
+		};
+		const ResourceViewInput uav{
+			.resource = { .d3dObject = 0xB550, .dimension = ResourceDimension::kTexture2D },
+			.view = { .kind = TargetViewKind::kUnorderedAccess, .d3dObject = 0xB560 },
+		};
+		executeRuntime.BindStage(0xB500, ShaderStage::kVertex, 0xB530);
+		executeRuntime.BindResourceViews(
+			0xB500, ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, 1, &srv,
+			false, ResourceBindingSource::kPostCallQuery);
+		executeRuntime.BindResourceViews(
+			0xB500, ResourceBindingKind::kShaderResource, ResourceStage::kCompute, 0, 1, &srv,
+			false, ResourceBindingSource::kPostCallQuery);
+		executeRuntime.BindResourceViews(
+			0xB500, ResourceBindingKind::kUnorderedAccess, ResourceStage::kCompute, 1, 1, &uav,
+			false, ResourceBindingSource::kPostCallQuery);
+		executeRuntime.FailNextCommandListCatalogueAdmissionForTesting();
+		executeRuntime.RecordExecuteCommandList(0xB500, 0xB540, false);
+		const auto recoveryGeneration = executeRuntime.ClaimResourceViewStateSeed(0xB500);
+		Check(recoveryGeneration == executeRuntime.ActiveCaptureGeneration(),
+			"restore-false execute failure did not request an effective resource observation");
+		executeRuntime.BindResourceViews(
+			0xB500, ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, 1, nullptr,
+			false, ResourceBindingSource::kCaptureStateSnapshot, recoveryGeneration);
+		executeRuntime.BindResourceViews(
+			0xB500, ResourceBindingKind::kShaderResource, ResourceStage::kCompute, 0, 1, nullptr,
+			false, ResourceBindingSource::kCaptureStateSnapshot, recoveryGeneration);
+		executeRuntime.BindResourceViews(
+			0xB500, ResourceBindingKind::kUnorderedAccess, ResourceStage::kCompute, 1, 1, nullptr,
+			false, ResourceBindingSource::kCaptureStateSnapshot, recoveryGeneration);
+		executeRuntime.RecordDraw(0xB500, DrawOperation::kDraw, 3);
+		executeRuntime.RecordDispatch(0xB500, DispatchOperation::kDispatch, 1, 1, 1);
+		auto executeSnapshot = executeRuntime.StopCapture();
+		Check(executeSnapshot.has_value(), "execute admission-failure capture did not stop");
+		Check(std::none_of(executeSnapshot->events.begin(), executeSnapshot->events.end(),
+				  [](const EventRecord& event) {
+					  return event.kind == EventKind::kCommandListObserved ||
+			                 event.kind == EventKind::kExecuteCommandList;
+				  }),
+			"first-seen execute admission failure fabricated command-list evidence");
+		const auto nullBindings = std::count_if(executeSnapshot->events.begin(), executeSnapshot->events.end(),
+			[](const EventRecord& event) {
+				return event.kind == EventKind::kResourceViewBind && event.payload.words[0] == 0 &&
+			           event.payload.words[4] ==
+			               static_cast<std::uint64_t>(ResourceBindingSource::kCaptureStateSnapshot);
+			});
+		const auto draw = std::find_if(executeSnapshot->events.begin(), executeSnapshot->events.end(),
+			[](const EventRecord& event) { return event.kind == EventKind::kDraw; });
+		const auto dispatch = std::find_if(executeSnapshot->events.begin(), executeSnapshot->events.end(),
+			[](const EventRecord& event) { return event.kind == EventKind::kDispatch; });
+		Check(nullBindings == 3 && draw != executeSnapshot->events.end() &&
+				  draw->payload.words[2] == 0 && dispatch != executeSnapshot->events.end() &&
+				  dispatch->payload.words[2] == 0,
+			"execute admission failure did not preserve dispatch recovery and explicit unbind evidence");
+	}
+
+	void WaitForDeferredPublicationPause(Runtime& a_runtime, std::thread& a_worker)
+	{
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+		while (!a_runtime.IsDeferredPublicationPausedForTesting() &&
+			   std::chrono::steady_clock::now() < deadline) {
+			std::this_thread::yield();
+		}
+		if (!a_runtime.IsDeferredPublicationPausedForTesting()) {
+			a_runtime.ResumeDeferredPublicationForTesting();
+			a_worker.join();
+			Check(false, "deferred publication did not reach the test barrier");
+		}
+	}
+
+	void TestImmediateStagePublicationRetainsCaptureGeneration()
+	{
+		constexpr std::uintptr_t immediateContext = 0xC010;
+		constexpr std::uintptr_t deferredContext = 0xC020;
+		constexpr std::uintptr_t sourceShader = 0xC030;
+		constexpr std::uintptr_t unrelatedShader = 0xC040;
+		constexpr std::uint64_t staleDrawArgument = 0xC050;
+		constexpr std::uint64_t successorDrawArgument = 0xC060;
+		auto config = Config();
+		config.maxEvents = 128;
+		config.maxStageShaderObservations = 8;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+
+		enum class Publisher
+		{
+			kSetter,
+			kCacheMiss,
+			kTechnique,
+		};
+		const std::array publishers{
+			Publisher::kSetter,
+			Publisher::kCacheMiss,
+			Publisher::kTechnique,
+		};
+
+		const auto verifyDrawShader = [&](const CaptureSnapshot& a_snapshot, std::string_view a_case) {
+			const auto draw = std::find_if(a_snapshot.events.begin(), a_snapshot.events.end(),
+				[](const EventRecord& event) {
+					return event.kind == EventKind::kDraw &&
+				           event.payload.words[4] == successorDrawArgument;
+				});
+			Check(draw != a_snapshot.events.end() && draw->payload.words[2] != 0,
+				std::format("{} did not retain an authoritative successor shader", a_case));
+			const auto shader = draw == a_snapshot.events.end() ? a_snapshot.events.end() :
+			                                                      std::find_if(a_snapshot.events.begin(), a_snapshot.events.end(),
+																	  [draw](const EventRecord& event) {
+																		  return event.kind == EventKind::kStageShaderObserved &&
+				                                                                 event.payload.words[0] == draw->payload.words[2];
+																	  });
+			Check(shader != a_snapshot.events.end() && shader->payload.words[1] == sourceShader,
+				std::format("{} relabelled the source shader as a successor observation", a_case));
+		};
+
+		for (const auto publisher : publishers) {
+			Runtime runtime;
+			runtime.SetImmediateContext(immediateContext);
+			if (publisher != Publisher::kSetter)
+				runtime.BindStage(immediateContext, ShaderStage::kVertex, sourceShader);
+			Check(runtime.StartCapture(config) == StartResult::kStarted,
+				"immediate publication source capture did not start");
+			runtime.PauseNextImmediateStagePublicationForTesting();
+			std::thread staleWorker([&] {
+				switch (publisher) {
+				case Publisher::kSetter:
+					runtime.BindStage(immediateContext, ShaderStage::kVertex, sourceShader);
+					break;
+				case Publisher::kCacheMiss:
+					runtime.RecordDraw(immediateContext, DrawOperation::kDraw, staleDrawArgument);
+					break;
+				case Publisher::kTechnique:
+					runtime.RecordTechniqueResolution({
+						.shaderFound = true,
+						.vertex = {
+							.route = ShaderSelectionRoute::kEngine,
+							.shader = {
+								.stage = ShaderStage::kVertex,
+								.d3dObject = sourceShader,
+							},
+						},
+					});
+					break;
+				}
+			});
+			WaitForDeferredPublicationPause(runtime, staleWorker);
+
+			auto first = runtime.StopCapture();
+			Check(first.has_value() && runtime.StartCapture(config) == StartResult::kStarted,
+				"immediate publication capture turnover failed");
+			runtime.RegisterDeferredContext(deferredContext, 0);
+			runtime.BindStage(deferredContext, ShaderStage::kVertex, unrelatedShader);
+			runtime.ResumeDeferredPublicationForTesting();
+			staleWorker.join();
+			runtime.RecordDraw(immediateContext, DrawOperation::kDraw, successorDrawArgument);
+
+			auto second = runtime.StopCapture();
+			Check(second.has_value(), "immediate publication successor capture did not stop");
+			Check(std::none_of(second->events.begin(), second->events.end(),
+					  [](const EventRecord& event) {
+						  return event.kind == EventKind::kDraw &&
+				                 event.payload.words[4] == staleDrawArgument;
+					  }),
+				"stale immediate draw entered the successor capture");
+			verifyDrawShader(*second, "capture-turnover publication");
+		}
+
+		Runtime stableRuntime;
+		stableRuntime.SetImmediateContext(immediateContext);
+		Check(stableRuntime.StartCapture(config) == StartResult::kStarted,
+			"stable immediate publication capture did not start");
+		stableRuntime.PauseNextImmediateStagePublicationForTesting();
+		std::thread stableWorker([&] {
+			stableRuntime.BindStage(immediateContext, ShaderStage::kVertex, sourceShader);
+		});
+		WaitForDeferredPublicationPause(stableRuntime, stableWorker);
+		stableRuntime.ResumeDeferredPublicationForTesting();
+		stableWorker.join();
+		stableRuntime.RecordDraw(immediateContext, DrawOperation::kDraw, successorDrawArgument);
+		auto stable = stableRuntime.StopCapture();
+		Check(stable.has_value(), "stable immediate publication capture did not stop");
+		verifyDrawShader(*stable, "stable-generation publication");
+	}
+
+	void TestDeferredPublicationRetainsCaptureGeneration()
+	{
+		constexpr std::uintptr_t oldContext = 0xC100;
+		constexpr std::uint64_t staleArgument = 0xA11CE;
+		auto config = Config();
+		config.maxEvents = 128;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+
+		const auto runTurnover = [&](std::uintptr_t a_successorContext, bool a_allocateUnrelatedFirst) {
+			Runtime runtime;
+			Check(runtime.StartCapture(config) == StartResult::kStarted,
+				"deferred turnover source capture did not start");
+			runtime.RegisterDeferredContext(oldContext, 0);
+			runtime.PauseNextDeferredPublicationForTesting();
+			std::thread staleWorker([&] {
+				runtime.RecordDraw(oldContext, DrawOperation::kDraw, staleArgument);
+			});
+			WaitForDeferredPublicationPause(runtime, staleWorker);
+
+			auto first = runtime.StopCapture();
+			const auto successorStarted = runtime.StartCapture(config) == StartResult::kStarted;
+			if (successorStarted) {
+				if (a_allocateUnrelatedFirst) {
+					runtime.RegisterDeferredContext(0xC200, 0);
+					runtime.RecordDraw(0xC200, DrawOperation::kDraw, 0xC200);
+				}
+				runtime.RegisterDeferredContext(a_successorContext, 0);
+			}
+			runtime.ResumeDeferredPublicationForTesting();
+			staleWorker.join();
+			Check(first.has_value() && successorStarted,
+				"deferred turnover capture transition failed");
+
+			runtime.RecordDraw(a_successorContext, DrawOperation::kDraw, 0xB0B);
+			runtime.RecordFinishCommandList(a_successorContext, 0xC400, false, 0);
+			auto second = runtime.StopCapture();
+			Check(second.has_value(), "deferred turnover successor capture did not stop");
+			Check(std::none_of(second->events.begin(), second->events.end(),
+					  [](const EventRecord& event) {
+						  return event.kind == EventKind::kDraw && event.payload.words[4] == staleArgument;
+					  }),
+				"stale deferred work was relabelled into the successor capture");
+			Check(std::any_of(second->events.begin(), second->events.end(),
+					  [a_successorContext](const EventRecord& event) {
+						  return event.kind == EventKind::kDraw && event.payload.words[0] == a_successorContext &&
+				                 event.payload.words[4] == 0xB0B;
+					  }),
+				"valid successor deferred work was not recorded");
+			const auto list = std::find_if(second->events.begin(), second->events.end(),
+				[](const EventRecord& event) {
+					return event.kind == EventKind::kCommandListObserved && event.payload.words[1] == 0xC400;
+				});
+			Check(list != second->events.end() &&
+					  (list->payload.words[6] & static_cast<std::uint64_t>(
+													CommandRecordingIncompleteReason::kEventNotRecorded)) == 0,
+				"stale deferred fallback mutated the successor recording");
+		};
+
+		// Matching ordinals across different and reused context pointers are the
+		// dangerous cases; an unrelated allocation also covers non-matching IDs.
+		runTurnover(0xC300, false);
+		runTurnover(0xC300, true);
+		runTurnover(oldContext, false);
+
+		Runtime stoppedRuntime;
+		Check(stoppedRuntime.StartCapture(config) == StartResult::kStarted,
+			"deferred no-successor capture did not start");
+		stoppedRuntime.RegisterDeferredContext(oldContext, 0);
+		stoppedRuntime.PauseNextDeferredPublicationForTesting();
+		std::thread stoppedWorker([&] {
+			stoppedRuntime.RecordDraw(oldContext, DrawOperation::kDraw, staleArgument);
+		});
+		WaitForDeferredPublicationPause(stoppedRuntime, stoppedWorker);
+		auto stoppedSnapshot = stoppedRuntime.StopCapture();
+		stoppedRuntime.ResumeDeferredPublicationForTesting();
+		stoppedWorker.join();
+		Check(stoppedSnapshot.has_value() &&
+				  std::none_of(stoppedSnapshot->events.begin(), stoppedSnapshot->events.end(),
+					  [](const EventRecord& event) {
+						  return event.kind == EventKind::kDraw && event.payload.words[4] == staleArgument;
+					  }),
+			"stale deferred work was retained after capture stopped");
+
+		Runtime sameGenerationRuntime;
+		Check(sameGenerationRuntime.StartCapture(config) == StartResult::kStarted,
+			"same-generation deferred capture did not start");
+		sameGenerationRuntime.RegisterDeferredContext(oldContext, 0);
+		sameGenerationRuntime.PauseNextDeferredPublicationForTesting();
+		std::thread sameGenerationWorker([&] {
+			sameGenerationRuntime.RecordDraw(oldContext, DrawOperation::kDraw, staleArgument);
+		});
+		WaitForDeferredPublicationPause(sameGenerationRuntime, sameGenerationWorker);
+		sameGenerationRuntime.ResumeDeferredPublicationForTesting();
+		sameGenerationWorker.join();
+		auto sameGenerationSnapshot = sameGenerationRuntime.StopCapture();
+		Check(sameGenerationSnapshot.has_value() &&
+				  std::any_of(sameGenerationSnapshot->events.begin(), sameGenerationSnapshot->events.end(),
+					  [](const EventRecord& event) {
+						  return event.kind == EventKind::kDraw && event.payload.words[4] == staleArgument;
+					  }),
+			"same-generation deferred work was incorrectly rejected");
+	}
+
+	void TestDeferredControlPublicationRetainsRecordingLifetime()
+	{
+		constexpr std::uintptr_t oldContext = 0xD100;
+		constexpr std::uintptr_t successorShader = 0xD300;
+		auto config = Config();
+		config.maxEvents = 128;
+		config.maxStageShaderObservations = 8;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+
+		enum class FinishOutcome
+		{
+			kSuccess,
+			kFailure,
+			kNoList,
+			kCatalogueAdmissionFailure,
+		};
+		const std::array outcomes{
+			FinishOutcome::kSuccess,
+			FinishOutcome::kFailure,
+			FinishOutcome::kNoList,
+			FinishOutcome::kCatalogueAdmissionFailure,
+		};
+		const std::array successorContexts{
+			oldContext,
+			std::uintptr_t{ 0xD400 },
+			std::uintptr_t{ 0xD500 },
+		};
+
+		for (const auto outcome : outcomes) {
+			for (const auto restoreState : { false, true }) {
+				for (std::size_t successorIndex = 0; successorIndex < successorContexts.size(); ++successorIndex) {
+					Runtime runtime;
+					Check(runtime.StartCapture(config) == StartResult::kStarted,
+						"finish turnover source capture did not start");
+					runtime.RegisterDeferredContext(oldContext, 0);
+					runtime.RecordDraw(oldContext, DrawOperation::kDraw, 1);
+					if (outcome == FinishOutcome::kCatalogueAdmissionFailure)
+						runtime.FailNextCommandListCatalogueAdmissionForTesting();
+					runtime.PauseNextDeferredPublicationForTesting();
+					const auto commandList = outcome == FinishOutcome::kNoList ? 0 : std::uintptr_t{ 0xD200 };
+					const auto result = outcome == FinishOutcome::kFailure ?
+					                        static_cast<std::int32_t>(0x80004005u) :
+					                        0;
+					std::thread staleWorker([&] {
+						runtime.RecordFinishCommandList(oldContext, commandList, restoreState, result);
+					});
+					WaitForDeferredPublicationPause(runtime, staleWorker);
+
+					auto first = runtime.StopCapture();
+					Check(first.has_value() && runtime.StartCapture(config) == StartResult::kStarted,
+						"finish turnover capture transition failed");
+					if (successorIndex == 2)
+						runtime.RegisterDeferredContext(0xD600, 0);
+					const auto successorContext = successorContexts[successorIndex];
+					runtime.RegisterDeferredContext(successorContext, 0);
+					runtime.BindStage(successorContext, ShaderStage::kVertex, successorShader);
+					runtime.BindStage(successorContext, ShaderStage::kCompute, successorShader + 1);
+					runtime.ResumeDeferredPublicationForTesting();
+					staleWorker.join();
+					runtime.RecordDraw(successorContext, DrawOperation::kDraw, 2);
+					runtime.RecordDispatch(successorContext, DispatchOperation::kDispatch, 1, 1, 1);
+
+					auto second = runtime.StopCapture();
+					Check(second.has_value(), "finish turnover successor capture did not stop");
+					const auto draw = std::find_if(second->events.begin(), second->events.end(),
+						[](const EventRecord& event) {
+							return event.kind == EventKind::kDraw && event.payload.words[4] == 2;
+						});
+					Check(draw != second->events.end() && draw->payload.words[2] != 0,
+						"stale finish cleanup erased the successor stage binding");
+					const auto stage = std::find_if(second->events.begin(), second->events.end(),
+						[draw](const EventRecord& event) {
+							return event.kind == EventKind::kStageShaderObserved &&
+						           event.payload.words[0] == draw->payload.words[2];
+						});
+					Check(stage != second->events.end() && stage->payload.words[1] == successorShader,
+						"stale finish cleanup relabelled the successor stage binding");
+					const auto dispatch = std::find_if(second->events.begin(), second->events.end(),
+						[](const EventRecord& event) { return event.kind == EventKind::kDispatch; });
+					Check(dispatch != second->events.end() && dispatch->payload.words[2] != 0,
+						"stale finish cleanup erased the successor compute binding");
+					const auto computeStage = std::find_if(second->events.begin(), second->events.end(),
+						[dispatch](const EventRecord& event) {
+							return event.kind == EventKind::kStageShaderObserved &&
+						           event.payload.words[0] == dispatch->payload.words[2];
+						});
+					Check(computeStage != second->events.end() &&
+							  computeStage->payload.words[1] == successorShader + 1,
+						"stale finish cleanup relabelled the successor compute binding");
+					const auto recordingCount = std::count_if(second->events.begin(), second->events.end(),
+						[draw](const EventRecord& event) {
+							return event.kind == EventKind::kCommandRecordingObserved &&
+						           event.payload.words[1] == draw->deviceContextObservationId;
+						});
+					Check(recordingCount == 1,
+						std::format("stale finish cleanup left {} successor recording epochs for outcome {}, restore {}, context {}",
+							recordingCount, static_cast<int>(outcome), restoreState, successorIndex));
+					Check(std::none_of(second->events.begin(), second->events.end(),
+							  [](const EventRecord& event) {
+								  return event.kind == EventKind::kFinishCommandList;
+							  }),
+						"stale finish publication entered the successor capture");
+				}
+			}
+		}
+
+		Runtime stoppedRuntime;
+		Check(stoppedRuntime.StartCapture(config) == StartResult::kStarted,
+			"finish no-successor capture did not start");
+		stoppedRuntime.RegisterDeferredContext(oldContext, 0);
+		stoppedRuntime.PauseNextDeferredFinishCleanupForTesting();
+		std::thread stoppedWorker([&] {
+			stoppedRuntime.RecordFinishCommandList(oldContext, 0xD200, false, 0);
+		});
+		WaitForDeferredPublicationPause(stoppedRuntime, stoppedWorker);
+		auto stoppedSnapshot = stoppedRuntime.StopCapture();
+		stoppedRuntime.ResumeDeferredPublicationForTesting();
+		stoppedWorker.join();
+		Check(stoppedSnapshot.has_value(), "finish no-successor capture did not stop");
+
+		for (const auto restoreState : { false, true }) {
+			Runtime runtime;
+			Check(runtime.StartCapture(config) == StartResult::kStarted,
+				"finish cleanup-turnover source capture did not start");
+			runtime.RegisterDeferredContext(oldContext, 0);
+			runtime.PauseNextDeferredFinishCleanupForTesting();
+			std::thread staleWorker([&] {
+				runtime.RecordFinishCommandList(oldContext, 0xD200, restoreState, 0);
+			});
+			WaitForDeferredPublicationPause(runtime, staleWorker);
+
+			auto first = runtime.StopCapture();
+			Check(first.has_value() && std::any_of(first->events.begin(), first->events.end(),
+										   [](const EventRecord& event) {
+											   return event.kind == EventKind::kFinishCommandList;
+										   }),
+				"finish did not publish before the cleanup turnover barrier");
+			Check(runtime.StartCapture(config) == StartResult::kStarted,
+				"finish cleanup-turnover successor capture did not start");
+			runtime.RegisterDeferredContext(oldContext, 0);
+			runtime.BindStage(oldContext, ShaderStage::kVertex, successorShader);
+			runtime.ResumeDeferredPublicationForTesting();
+			staleWorker.join();
+			runtime.RecordDraw(oldContext, DrawOperation::kDraw, 4);
+
+			auto second = runtime.StopCapture();
+			Check(second.has_value(), "finish cleanup-turnover successor capture did not stop");
+			const auto draw = std::find_if(second->events.begin(), second->events.end(),
+				[](const EventRecord& event) {
+					return event.kind == EventKind::kDraw && event.payload.words[4] == 4;
+				});
+			Check(draw != second->events.end() && draw->payload.words[2] != 0,
+				"post-publication finish cleanup erased the successor stage binding");
+			Check(std::count_if(second->events.begin(), second->events.end(),
+					  [draw](const EventRecord& event) {
+						  return event.kind == EventKind::kCommandRecordingObserved &&
+				                 event.payload.words[1] == draw->deviceContextObservationId;
+					  }) == 1,
+				"post-publication finish cleanup restarted the successor recording epoch");
+		}
+
+		for (std::size_t successorIndex = 0; successorIndex < successorContexts.size(); ++successorIndex) {
+			Runtime runtime;
+			Check(runtime.StartCapture(config) == StartResult::kStarted,
+				"stage turnover source capture did not start");
+			runtime.RegisterDeferredContext(oldContext, 0);
+			runtime.PauseNextDeferredPublicationForTesting();
+			std::thread staleWorker([&] {
+				runtime.BindStage(oldContext, ShaderStage::kVertex, 0xD700);
+			});
+			WaitForDeferredPublicationPause(runtime, staleWorker);
+
+			auto first = runtime.StopCapture();
+			Check(first.has_value() && runtime.StartCapture(config) == StartResult::kStarted,
+				"stage turnover capture transition failed");
+			if (successorIndex == 2)
+				runtime.RegisterDeferredContext(0xD600, 0);
+			const auto successorContext = successorContexts[successorIndex];
+			runtime.RegisterDeferredContext(successorContext, 0);
+			runtime.BindStage(successorContext, ShaderStage::kVertex, successorShader);
+			runtime.ResumeDeferredPublicationForTesting();
+			staleWorker.join();
+			runtime.RecordDraw(successorContext, DrawOperation::kDraw, 3);
+
+			auto second = runtime.StopCapture();
+			Check(second.has_value(), "stage turnover successor capture did not stop");
+			const auto draw = std::find_if(second->events.begin(), second->events.end(),
+				[](const EventRecord& event) {
+					return event.kind == EventKind::kDraw && event.payload.words[4] == 3;
+				});
+			Check(draw != second->events.end() && draw->payload.words[2] != 0,
+				"stale stage publication erased the successor binding");
+			const auto stage = std::find_if(second->events.begin(), second->events.end(),
+				[draw](const EventRecord& event) {
+					return event.kind == EventKind::kStageShaderObserved &&
+				           event.payload.words[0] == draw->payload.words[2];
+				});
+			Check(stage != second->events.end() && stage->payload.words[1] == successorShader,
+				"stale stage publication replaced the successor binding");
+		}
+	}
 }
 
 int main()
@@ -1434,6 +2198,7 @@ int main()
 		TestResourceFlowStateIsTypedAndOrdered();
 		TestCpuMapUnmapBoundariesArePairedAndTimed();
 		TestEffectiveResourceViewQueriesAreRevisionedAndDeltaEncoded();
+		TestRestoreFalseReobservesEffectiveResourceViews();
 		TestExecutionJoinsDeclaredScopes();
 		TestVisibilitySubmissionJoinsActualDraw();
 		TestEventKindSelectionPreservesDependenciesAndCapacity();
@@ -1441,6 +2206,13 @@ int main()
 		TestGeometrySelectionFiltersBeforeSemanticWork();
 		TestPreparedGeometryHandoffRejectsStaleCandidates();
 		TestGeometryBoundaryBindsExactSemanticObservations();
+		TestDeferredRecordingMaterializesAndExecutesCommandList();
+		TestExecuteRestoreStateIsIndependentOfCaptureAdmission();
+		TestDeferredRecordingReportsPartialFilteredAndFailedFinishes();
+		TestDiagnosticCatalogueAdmissionFailuresFailOpen();
+		TestImmediateStagePublicationRetainsCaptureGeneration();
+		TestDeferredPublicationRetainsCaptureGeneration();
+		TestDeferredControlPublicationRetainsRecordingLifetime();
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

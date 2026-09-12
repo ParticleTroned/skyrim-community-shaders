@@ -8,10 +8,10 @@
 #include <format>
 #include <fstream>
 #include <iostream>
-#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace
 {
@@ -210,31 +210,6 @@ namespace
 			"active-stop returned the wrong capture");
 	}
 
-	void TestUnknownEngineFrameSerialization()
-	{
-		EventRecord candidate;
-		candidate.kind = EventKind::kVisibilityCandidate;
-		candidate.payload.schema = static_cast<std::uint16_t>(PayloadSchema::kVisibilityCandidate);
-		candidate.payload.words = {
-			0x1000, 7, kUnknownFrame, std::numeric_limits<std::uint32_t>::max()
-		};
-		const auto candidateJson = SerializeEvent(candidate, "capture-test", 42);
-		Check(candidateJson["payload"]["producerFrame"].is_null() &&
-				  candidateJson["payload"]["engineFrame"].is_null(),
-			"unknown visibility candidate frame domains did not serialize as null");
-
-		EventRecord result;
-		result.kind = EventKind::kVisibilityResultReady;
-		result.payload.schema = static_cast<std::uint16_t>(PayloadSchema::kVisibilityResult);
-		result.payload.words = {
-			1, 2, 24, kUnknownFrame, std::numeric_limits<std::uint32_t>::max()
-		};
-		const auto resultJson = SerializeEvent(result, "capture-test", 42);
-		Check(resultJson["payload"]["producerFrame"].is_null() &&
-				  resultJson["payload"]["engineFrame"].is_null(),
-			"unknown visibility result frame domains did not serialize as null");
-	}
-
 	void TestCompletedHistoryBound()
 	{
 		CaptureController controller(1);
@@ -387,7 +362,7 @@ namespace
 				  (*effectiveSummaryIterator)["payload"]["changedSlotCount"] == 1,
 			"effective resource-view query summary was not serialized");
 		const auto& draw = *drawIterator;
-		Check(draw["type"] == "draw" && draw["payload"]["schema"] == "draw-call-v3" &&
+		Check(draw["type"] == "draw" && draw["payload"]["schema"] == "draw-call-v4" &&
 				  draw["payload"]["preparedGeometrySetupObservationId"].is_null(),
 			"draw event schema is wrong");
 		Check(draw["payload"]["targetBindingObservationId"].is_string(),
@@ -411,8 +386,10 @@ namespace
 			page["events"].begin(), page["events"].end(),
 			[](const nlohmann::json& a_event) { return a_event["type"] == "device-context-observed"; });
 		Check(contextIterator != page["events"].end(), "serialized context declaration is missing");
-		Check((*contextIterator)["payload"]["schema"] == "device-context-observation-v1" &&
-				  (*contextIterator)["payload"]["kind"] == "immediate",
+		Check((*contextIterator)["payload"]["schema"] == "device-context-observation-v2" &&
+				  (*contextIterator)["payload"]["kind"] == "immediate" &&
+				  (*contextIterator)["payload"]["creationEvidence"] == "initial-immediate-context" &&
+				  (*contextIterator)["payload"]["contextFlags"] == 0,
 			"serialized context declaration is malformed");
 	}
 
@@ -475,7 +452,7 @@ namespace
 		const auto& observedGeometry = page["events"][1];
 		const auto& material = page["events"][2];
 		const auto& setup = page["events"][3];
-		Check(object["schema"]["minor"] == 14 && object["payload"]["schema"] == "scene-object-observation-v1",
+		Check(object["schema"]["minor"] == 17 && object["payload"]["schema"] == "scene-object-observation-v1",
 			"scene-object declaration schema is wrong");
 		Check(observedGeometry["payload"]["schema"] == "geometry-observation-v1" &&
 				  observedGeometry["payload"]["sceneObjectObservationId"] == object["payload"]["sceneObjectObservationId"],
@@ -490,12 +467,123 @@ namespace
 		Check(setup["observationRefs"].size() == 2,
 			"geometry setup did not publish both typed semantic references");
 		const auto& draw = page["events"][6];
-		Check(draw["payload"]["schema"] == "draw-call-v3" &&
+		Check(draw["payload"]["schema"] == "draw-call-v4" &&
 				  draw["scopes"]["geometry"].is_null() &&
 				  draw["payload"]["preparedGeometrySetupObservationId"] == setup["scopes"]["geometry"] &&
 				  draw["observationRefs"][1]["kind"] == "geometry-setup" &&
 				  draw["observationRefs"][1]["role"] == "prepared-at-draw",
 			"draw did not serialize the post-setup prepared geometry handoff");
+	}
+
+	void TestDeferredCommandSerialization()
+	{
+		CaptureController controller;
+		auto config = Config();
+		config.maxEvents = 64;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		CaptureDescriptor descriptor;
+		Check(controller.Start(config, descriptor) == ControlStatus::kSuccess,
+			"deferred serialization capture did not start");
+		auto& runtime = GetRuntime();
+		runtime.SetImmediateContext(0xA000);
+		runtime.RegisterDeferredContext(0xA100, 0);
+		runtime.RecordDraw(0xA100, DrawOperation::kDraw, 3);
+		runtime.RecordFinishCommandList(0xA100, 0xA200, false, 0);
+		const ResourceViewInput srv{
+			.resource = { .d3dObject = 0xA300, .dimension = ResourceDimension::kTexture2D },
+			.view = { .kind = TargetViewKind::kShaderResource, .d3dObject = 0xA400 },
+		};
+		const ResourceViewInput changedSrv{
+			.resource = { .d3dObject = 0xA300, .dimension = ResourceDimension::kTexture2D },
+			.view = { .kind = TargetViewKind::kShaderResource, .d3dObject = 0xA401 },
+		};
+		runtime.BindResourceViews(
+			0xA000, ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, 1, &srv,
+			false, ResourceBindingSource::kPostCallQuery);
+		runtime.RecordExecuteCommandList(0xA000, 0xA200, false);
+		runtime.BindResourceViews(
+			0xA000, ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, 1, &srv,
+			false, ResourceBindingSource::kPostCallQuery);
+		runtime.BindResourceViews(
+			0xA000, ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, 1, &changedSrv,
+			false, ResourceBindingSource::kPostCallQuery);
+		runtime.BindResourceViews(
+			0xA000, ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 2, 1, nullptr,
+			false, ResourceBindingSource::kPostCallQuery);
+		std::shared_ptr<const CompletedCapture> capture;
+		Check(controller.Stop(descriptor.captureId, capture) == ControlStatus::kSuccess && capture,
+			"deferred serialization capture did not stop");
+		const auto page = SerializeEventPage(*capture, 0, 64, 42);
+		const auto findEvent = [&](std::string_view a_type) {
+			return std::find_if(page["events"].begin(), page["events"].end(),
+				[&](const nlohmann::json& a_event) {
+					return a_event["type"].get<std::string>() == a_type;
+				});
+		};
+		const auto draw = findEvent("draw");
+		const auto list = findEvent("command-list-observed");
+		const auto finish = findEvent("finish-command-list");
+		const auto execute = findEvent("execute-command-list");
+		Check(draw != page["events"].end() &&
+				  (*draw)["payload"]["schema"] == "draw-call-v4" &&
+				  (*draw)["payload"]["deviceContextPointer"] == "0xA100" &&
+				  (*draw)["execution"]["observationDomain"] == "command-recording" &&
+				  std::any_of((*draw)["observationRefs"].begin(), (*draw)["observationRefs"].end(),
+					  [](const nlohmann::json& a_ref) { return a_ref["kind"] == "command-recording"; }),
+			"deferred draw did not serialize its versioned context and recording provenance");
+		Check(list != page["events"].end() && finish != page["events"].end() &&
+				  (*list)["payload"]["schema"] == "command-list-observation-v2" &&
+				  (*finish)["payload"]["schema"] == "finish-command-list-v2" &&
+				  (*list)["payload"]["sourceRecordingComplete"] == false &&
+				  (*finish)["payload"]["sourceRecordingComplete"] == false &&
+				  (*list)["payload"]["sourceRecordingIncompleteReasons"].get<std::vector<std::string>>() ==
+					  std::vector<std::string>{ "hook-coverage-unqualified" },
+			"deferred command-list serialization overstated recording completeness");
+		Check(execute != page["events"].end() &&
+				  (*execute)["execution"]["observationDomain"] == "cpu-call" &&
+				  (*execute)["commandRecordingObservationId"].is_null() &&
+				  (*execute)["payload"]["sourceCommandRecordingObservationId"].is_string(),
+			"ExecuteCommandList was mislabelled as a recorded deferred command");
+		std::vector<nlohmann::json> effectiveBindings;
+		for (const auto& event : page["events"]) {
+			if (event["type"] == "resource-view-bind" &&
+				event["payload"]["source"] == "post-call-query") {
+				effectiveBindings.push_back(event);
+			}
+		}
+		Check(effectiveBindings.size() == 4,
+			std::format("serialized {} effective SRV bindings instead of four", effectiveBindings.size()));
+		const auto& initialViewId = effectiveBindings[0]["payload"]["viewObservationId"];
+		const auto& reboundViewId = effectiveBindings[1]["payload"]["viewObservationId"];
+		const auto& changedViewId = effectiveBindings[2]["payload"]["viewObservationId"];
+		const auto& nullViewId = effectiveBindings[3]["payload"]["viewObservationId"];
+		Check(initialViewId.is_string() && reboundViewId.is_string() &&
+				  initialViewId == reboundViewId,
+			"serialized restore-false execution lost the same-view effective SRV identity");
+		Check(changedViewId.is_string() && changedViewId != reboundViewId,
+			"serialized effective SRV identity did not change with the view");
+		Check(nullViewId.is_null(), "serialized null effective SRV retained a view identity");
+		Check(std::all_of(effectiveBindings.begin(), effectiveBindings.end(),
+				  [](const nlohmann::json& a_event) { return a_event["payload"]["slot"] == 2; }),
+			"serialized effective SRV identity controls changed the tested slot");
+
+		Check(controller.Start(config, descriptor) == ControlStatus::kSuccess,
+			"failed-finish serialization capture did not start");
+		runtime.RecordFinishCommandList(
+			0xA100, 0xDEAD, true, static_cast<std::int32_t>(0x80004005u));
+		Check(controller.Stop(descriptor.captureId, capture) == ControlStatus::kSuccess && capture,
+			"failed-finish serialization capture did not stop");
+		const auto failedPage = SerializeEventPage(*capture, 0, 64, 42);
+		const auto failedFinish = std::find_if(
+			failedPage["events"].begin(), failedPage["events"].end(),
+			[](const nlohmann::json& a_event) {
+				return a_event["type"].get<std::string>() == "finish-command-list";
+			});
+		Check(failedFinish != failedPage["events"].end() &&
+				  (*failedFinish)["payload"]["succeeded"] == false &&
+				  (*failedFinish)["payload"]["commandListObservationId"].is_null() &&
+				  (*failedFinish)["payload"]["commandListPointer"].is_null(),
+			"failed FinishCommandList serialized a materialized list identity or pointer");
 	}
 
 	void TestDurableArtifacts()
@@ -575,11 +663,11 @@ int main()
 {
 	try {
 		TestControllerAndSerialization();
-		TestUnknownEngineFrameSerialization();
 		TestStopActiveWithoutCaptureId();
 		TestCompletedHistoryBound();
 		TestResolvedStageSerialization();
 		TestSemanticIdentitySerialization();
+		TestDeferredCommandSerialization();
 		TestDurableArtifacts();
 		TestGapArtifact();
 		return 0;

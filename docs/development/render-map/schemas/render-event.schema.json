@@ -35,6 +35,9 @@
         "deviceContextObservationId": {
             "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }]
         },
+        "commandRecordingObservationId": {
+            "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }]
+        },
         "submissionObservationId": {
             "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }]
         },
@@ -63,6 +66,45 @@
         "extensions": { "$ref": "#/$defs/extensions" }
     },
     "allOf": [
+        {
+            "if": {
+                "required": ["type", "execution"],
+                "properties": {
+                    "type": { "enum": ["draw", "dispatch"] },
+                    "execution": {
+                        "required": ["observationDomain"],
+                        "properties": {
+                            "observationDomain": { "const": "command-recording" }
+                        }
+                    }
+                }
+            },
+            "then": {
+                "required": ["commandRecordingObservationId"],
+                "properties": {
+                    "deviceContextObservationId": { "$ref": "#/$defs/observationId" },
+                    "commandRecordingObservationId": { "$ref": "#/$defs/observationId" }
+                }
+            }
+        },
+        {
+            "if": {
+                "required": ["type", "commandRecordingObservationId"],
+                "properties": {
+                    "type": { "enum": ["draw", "dispatch"] },
+                    "commandRecordingObservationId": { "$ref": "#/$defs/observationId" }
+                }
+            },
+            "then": {
+                "properties": {
+                    "execution": {
+                        "properties": {
+                            "observationDomain": { "const": "command-recording" }
+                        }
+                    }
+                }
+            }
+        },
         {
             "if": { "properties": { "type": { "const": "draw" } } },
             "then": {
@@ -95,7 +137,6 @@
                                 "required": [
                                     "schema",
                                     "operation",
-                                    "immediateContextPointer",
                                     "vertexShaderObservationId",
                                     "pixelShaderObservationId",
                                     "targetBindingObservationId",
@@ -103,7 +144,9 @@
                                     "arguments"
                                 ],
                                 "properties": {
-                                    "schema": { "enum": ["draw-call-v2", "draw-call-v3"] },
+                                    "schema": {
+                                        "enum": ["draw-call-v2", "draw-call-v3", "draw-call-v4"]
+                                    },
                                     "operation": {
                                         "enum": [
                                             "draw",
@@ -116,6 +159,7 @@
                                         ]
                                     },
                                     "immediateContextPointer": { "type": ["string", "null"] },
+                                    "deviceContextPointer": { "type": ["string", "null"] },
                                     "vertexShaderObservationId": {
                                         "anyOf": [
                                             { "$ref": "#/$defs/observationId" },
@@ -151,7 +195,18 @@
                                 "allOf": [
                                     {
                                         "if": {
-                                            "properties": { "schema": { "const": "draw-call-v3" } }
+                                            "properties": { "schema": { "const": "draw-call-v4" } }
+                                        },
+                                        "then": { "required": ["deviceContextPointer"] },
+                                        "else": { "required": ["immediateContextPointer"] }
+                                    },
+                                    {
+                                        "if": {
+                                            "properties": {
+                                                "schema": {
+                                                    "enum": ["draw-call-v3", "draw-call-v4"]
+                                                }
+                                            }
                                         },
                                         "then": {
                                             "required": ["preparedGeometrySetupObservationId"]
@@ -187,14 +242,14 @@
                                 "required": [
                                     "schema",
                                     "operation",
-                                    "immediateContextPointer",
                                     "computeShaderObservationId",
                                     "arguments"
                                 ],
                                 "properties": {
-                                    "schema": { "const": "dispatch-call-v1" },
+                                    "schema": { "enum": ["dispatch-call-v1", "dispatch-call-v2"] },
                                     "operation": { "enum": ["dispatch", "dispatch-indirect"] },
                                     "immediateContextPointer": { "type": ["string", "null"] },
+                                    "deviceContextPointer": { "type": ["string", "null"] },
                                     "computeShaderObservationId": {
                                         "anyOf": [
                                             { "$ref": "#/$defs/observationId" },
@@ -203,6 +258,17 @@
                                     },
                                     "arguments": { "type": "object" }
                                 },
+                                "allOf": [
+                                    {
+                                        "if": {
+                                            "properties": {
+                                                "schema": { "const": "dispatch-call-v2" }
+                                            }
+                                        },
+                                        "then": { "required": ["deviceContextPointer"] },
+                                        "else": { "required": ["immediateContextPointer"] }
+                                    }
+                                ],
                                 "additionalProperties": true
                             }
                         ]
@@ -225,12 +291,263 @@
                             "creationEvidence"
                         ],
                         "properties": {
-                            "schema": { "const": "device-context-observation-v1" },
+                            "schema": {
+                                "enum": [
+                                    "device-context-observation-v1",
+                                    "device-context-observation-v2"
+                                ]
+                            },
                             "deviceContextObservationId": { "$ref": "#/$defs/observationId" },
                             "contextPointer": { "type": ["string", "null"] },
                             "pointerGeneration": { "type": "integer", "minimum": 1 },
-                            "kind": { "const": "immediate" },
-                            "creationEvidence": { "const": "initial-immediate-context" }
+                            "kind": { "enum": ["immediate", "deferred", "unknown"] },
+                            "creationEvidence": {
+                                "enum": [
+                                    "initial-immediate-context",
+                                    "create-deferred-context-hook",
+                                    "first-seen-fallback",
+                                    "unknown"
+                                ]
+                            },
+                            "contextFlags": { "type": "integer", "minimum": 0 }
+                        },
+                        "allOf": [
+                            {
+                                "if": {
+                                    "properties": {
+                                        "schema": { "const": "device-context-observation-v2" }
+                                    }
+                                },
+                                "then": { "required": ["contextFlags"] }
+                            }
+                        ],
+                        "additionalProperties": false
+                    }
+                }
+            }
+        },
+        {
+            "if": { "properties": { "type": { "const": "command-recording-observed" } } },
+            "then": {
+                "properties": {
+                    "payload": {
+                        "type": "object",
+                        "required": [
+                            "schema",
+                            "commandRecordingObservationId",
+                            "deviceContextObservationId",
+                            "epoch",
+                            "partialAtCaptureStart"
+                        ],
+                        "properties": {
+                            "schema": { "const": "command-recording-observation-v1" },
+                            "commandRecordingObservationId": { "$ref": "#/$defs/observationId" },
+                            "deviceContextObservationId": { "$ref": "#/$defs/observationId" },
+                            "epoch": { "type": "integer", "minimum": 1 },
+                            "partialAtCaptureStart": { "type": "boolean" }
+                        },
+                        "additionalProperties": false
+                    }
+                }
+            }
+        },
+        {
+            "if": { "properties": { "type": { "const": "command-list-observed" } } },
+            "then": {
+                "properties": {
+                    "payload": {
+                        "type": "object",
+                        "required": [
+                            "schema",
+                            "commandListObservationId",
+                            "commandListPointer",
+                            "pointerGeneration",
+                            "sourceDeviceContextObservationId",
+                            "sourceCommandRecordingObservationId",
+                            "sourceRecordingComplete",
+                            "sourceRecordingIncompleteReasons"
+                        ],
+                        "properties": {
+                            "schema": { "const": "command-list-observation-v2" },
+                            "commandListObservationId": { "$ref": "#/$defs/observationId" },
+                            "commandListPointer": { "type": ["string", "null"] },
+                            "pointerGeneration": { "type": "integer", "minimum": 1 },
+                            "sourceDeviceContextObservationId": {
+                                "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }]
+                            },
+                            "sourceCommandRecordingObservationId": {
+                                "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }]
+                            },
+                            "sourceRecordingComplete": { "type": "boolean" },
+                            "sourceRecordingIncompleteReasons": {
+                                "$ref": "#/$defs/commandRecordingIncompleteReasons"
+                            }
+                        },
+                        "allOf": [
+                            {
+                                "if": {
+                                    "properties": { "sourceRecordingComplete": { "const": true } },
+                                    "required": ["sourceRecordingComplete"]
+                                },
+                                "then": {
+                                    "properties": {
+                                        "sourceDeviceContextObservationId": {
+                                            "$ref": "#/$defs/observationId"
+                                        },
+                                        "sourceCommandRecordingObservationId": {
+                                            "$ref": "#/$defs/observationId"
+                                        },
+                                        "sourceRecordingIncompleteReasons": { "maxItems": 0 }
+                                    }
+                                },
+                                "else": {
+                                    "properties": {
+                                        "sourceRecordingIncompleteReasons": { "minItems": 1 }
+                                    }
+                                }
+                            }
+                        ],
+                        "additionalProperties": false
+                    }
+                }
+            }
+        },
+        {
+            "if": { "properties": { "type": { "const": "finish-command-list" } } },
+            "then": {
+                "properties": {
+                    "payload": {
+                        "type": "object",
+                        "required": [
+                            "schema",
+                            "commandRecordingObservationId",
+                            "commandListObservationId",
+                            "commandListPointer",
+                            "restoreDeferredContextState",
+                            "hresult",
+                            "succeeded",
+                            "sourceRecordingComplete",
+                            "sourceRecordingIncompleteReasons"
+                        ],
+                        "properties": {
+                            "schema": { "const": "finish-command-list-v2" },
+                            "commandRecordingObservationId": {
+                                "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }]
+                            },
+                            "commandListObservationId": {
+                                "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }]
+                            },
+                            "commandListPointer": { "type": ["string", "null"] },
+                            "restoreDeferredContextState": { "type": "boolean" },
+                            "hresult": { "type": "integer" },
+                            "succeeded": { "type": "boolean" },
+                            "sourceRecordingComplete": { "type": "boolean" },
+                            "sourceRecordingIncompleteReasons": {
+                                "$ref": "#/$defs/commandRecordingIncompleteReasons"
+                            }
+                        },
+                        "allOf": [
+                            {
+                                "if": {
+                                    "properties": { "sourceRecordingComplete": { "const": true } },
+                                    "required": ["sourceRecordingComplete"]
+                                },
+                                "then": {
+                                    "properties": {
+                                        "commandRecordingObservationId": {
+                                            "$ref": "#/$defs/observationId"
+                                        },
+                                        "sourceRecordingIncompleteReasons": { "maxItems": 0 }
+                                    }
+                                },
+                                "else": {
+                                    "properties": {
+                                        "sourceRecordingIncompleteReasons": { "minItems": 1 }
+                                    }
+                                }
+                            },
+                            {
+                                "if": {
+                                    "properties": { "succeeded": { "const": false } },
+                                    "required": ["succeeded"]
+                                },
+                                "then": {
+                                    "properties": {
+                                        "hresult": { "maximum": -1 },
+                                        "commandListObservationId": { "type": "null" },
+                                        "commandListPointer": { "type": "null" }
+                                    }
+                                },
+                                "else": {
+                                    "properties": { "hresult": { "minimum": 0 } }
+                                }
+                            },
+                            {
+                                "if": {
+                                    "properties": {
+                                        "succeeded": { "const": true },
+                                        "commandListObservationId": { "type": "null" }
+                                    },
+                                    "required": ["succeeded", "commandListObservationId"]
+                                },
+                                "then": {
+                                    "properties": {
+                                        "sourceRecordingComplete": { "const": false },
+                                        "sourceRecordingIncompleteReasons": { "minItems": 1 }
+                                    }
+                                }
+                            },
+                            {
+                                "if": {
+                                    "properties": {
+                                        "commandListObservationId": {
+                                            "$ref": "#/$defs/observationId"
+                                        }
+                                    },
+                                    "required": ["commandListObservationId"]
+                                },
+                                "then": {
+                                    "properties": {
+                                        "succeeded": { "const": true },
+                                        "commandListPointer": { "type": "string" }
+                                    }
+                                }
+                            }
+                        ],
+                        "additionalProperties": false
+                    }
+                }
+            }
+        },
+        {
+            "if": { "properties": { "type": { "const": "execute-command-list" } } },
+            "then": {
+                "properties": {
+                    "deviceContextObservationId": { "$ref": "#/$defs/observationId" },
+                    "commandRecordingObservationId": { "type": "null" },
+                    "execution": {
+                        "properties": {
+                            "observationDomain": { "const": "cpu-call" },
+                            "commandStreamSequence": { "type": "integer", "minimum": 0 }
+                        }
+                    },
+                    "payload": {
+                        "type": "object",
+                        "required": [
+                            "schema",
+                            "commandListObservationId",
+                            "commandListPointer",
+                            "sourceCommandRecordingObservationId",
+                            "restoreContextState"
+                        ],
+                        "properties": {
+                            "schema": { "const": "execute-command-list-v1" },
+                            "commandListObservationId": { "$ref": "#/$defs/observationId" },
+                            "commandListPointer": { "type": ["string", "null"] },
+                            "sourceCommandRecordingObservationId": {
+                                "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }]
+                            },
+                            "restoreContextState": { "type": "boolean" }
                         },
                         "additionalProperties": false
                     }
@@ -647,15 +964,13 @@
                                     "schema",
                                     "objectPointer",
                                     "objectIndex",
-                                    "producerFrame",
-                                    "engineFrame"
+                                    "producerFrame"
                                 ],
                                 "properties": {
                                     "schema": { "const": "visibility-candidate-v1" },
                                     "objectPointer": { "type": ["string", "null"] },
                                     "objectIndex": { "type": "integer", "minimum": 0 },
-                                    "producerFrame": { "type": ["integer", "null"], "minimum": 0 },
-                                    "engineFrame": { "type": ["integer", "null"], "minimum": 0 }
+                                    "producerFrame": { "type": ["integer", "null"], "minimum": 0 }
                                 },
                                 "additionalProperties": false
                             },
@@ -687,8 +1002,7 @@
                                     "resourceVersionObservationId",
                                     "viewObservationId",
                                     "objectCount",
-                                    "producerFrame",
-                                    "engineFrame"
+                                    "producerFrame"
                                 ],
                                 "properties": {
                                     "schema": { "const": "visibility-result-ready-v1" },
@@ -702,8 +1016,7 @@
                                         ]
                                     },
                                     "objectCount": { "type": "integer", "minimum": 0 },
-                                    "producerFrame": { "type": ["integer", "null"], "minimum": 0 },
-                                    "engineFrame": { "type": ["integer", "null"], "minimum": 0 }
+                                    "producerFrame": { "type": ["integer", "null"], "minimum": 0 }
                                 },
                                 "additionalProperties": false
                             },
@@ -1345,6 +1658,8 @@
                 "cull-decision",
                 "draw",
                 "dispatch",
+                "command-recording-observed",
+                "command-list-observed",
                 "finish-command-list",
                 "execute-command-list",
                 "shader-observed",
@@ -1396,6 +1711,7 @@
                 "observationDomain": {
                     "enum": [
                         "cpu-call",
+                        "command-recording",
                         "gpu-command-stream",
                         "gpu-completion",
                         "cpu-readback",
@@ -1422,6 +1738,18 @@
                 }
             }
         },
+        "commandRecordingIncompleteReasons": {
+            "type": "array",
+            "items": {
+                "enum": [
+                    "partial-at-capture-start",
+                    "declaration-unavailable",
+                    "event-not-recorded",
+                    "hook-coverage-unqualified"
+                ]
+            },
+            "uniqueItems": true
+        },
         "observationRef": {
             "type": "object",
             "required": ["id", "kind", "role", "pointerEvidence"],
@@ -1440,6 +1768,7 @@
                         "visibility-test",
                         "device",
                         "device-context",
+                        "command-recording",
                         "command-list",
                         "shader",
                         "vertex-shader",

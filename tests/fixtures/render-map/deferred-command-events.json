@@ -1,0 +1,306 @@
+[
+    {
+        "schema": {
+            "name": "csx.render-event",
+            "major": 1,
+            "minor": 17,
+            "producerVersion": "collector-v1"
+        },
+        "captureId": "capture-deferred-command-contract",
+        "sequence": 0,
+        "timestampQpc": 1000,
+        "processId": 1,
+        "threadId": 2,
+        "frame": {
+            "cpuFrame": 1,
+            "sceneEpoch": 1,
+            "submissionEpoch": null,
+            "eye": "unknown",
+            "eyeMask": null
+        },
+        "execution": {
+            "observationDomain": "cpu-call",
+            "commandStreamSequence": null,
+            "gpuTimestampTicks": null,
+            "gpuTimestampFrequencyHz": null
+        },
+        "deviceContextObservationId": "obs-device-context-1-g1",
+        "commandRecordingObservationId": null,
+        "submissionObservationId": null,
+        "type": "device-context-observed",
+        "scopes": { "renderPass": null, "technique": null, "geometry": null, "commandList": null },
+        "causes": [],
+        "manifestRefs": [],
+        "engineRefs": [],
+        "observationRefs": [
+            {
+                "id": "obs-device-context-1-g1",
+                "kind": "device-context",
+                "role": "first-observed",
+                "pointerEvidence": "0x100"
+            }
+        ],
+        "payload": {
+            "schema": "device-context-observation-v2",
+            "deviceContextObservationId": "obs-device-context-1-g1",
+            "contextPointer": "0x100",
+            "pointerGeneration": 1,
+            "kind": "deferred",
+            "creationEvidence": "create-deferred-context-hook",
+            "contextFlags": 0
+        },
+        "extensions": {}
+    },
+    {
+        "schema": {
+            "name": "csx.render-event",
+            "major": 1,
+            "minor": 17,
+            "producerVersion": "collector-v1"
+        },
+        "captureId": "capture-deferred-command-contract",
+        "sequence": 1,
+        "timestampQpc": 1001,
+        "processId": 1,
+        "threadId": 2,
+        "frame": {
+            "cpuFrame": 1,
+            "sceneEpoch": 1,
+            "submissionEpoch": null,
+            "eye": "unknown",
+            "eyeMask": null
+        },
+        "execution": {
+            "observationDomain": "command-recording",
+            "commandStreamSequence": null,
+            "gpuTimestampTicks": null,
+            "gpuTimestampFrequencyHz": null
+        },
+        "deviceContextObservationId": "obs-device-context-1-g1",
+        "commandRecordingObservationId": "obs-command-recording-2-g1",
+        "submissionObservationId": null,
+        "type": "command-recording-observed",
+        "scopes": { "renderPass": null, "technique": null, "geometry": null, "commandList": null },
+        "causes": [],
+        "manifestRefs": [],
+        "engineRefs": [],
+        "observationRefs": [
+            {
+                "id": "obs-command-recording-2-g1",
+                "kind": "command-recording",
+                "role": "first-observed",
+                "pointerEvidence": null
+            },
+            {
+                "id": "obs-device-context-1-g1",
+                "kind": "device-context",
+                "role": "recorded-by",
+                "pointerEvidence": null
+            }
+        ],
+        "payload": {
+            "schema": "command-recording-observation-v1",
+            "commandRecordingObservationId": "obs-command-recording-2-g1",
+            "deviceContextObservationId": "obs-device-context-1-g1",
+            "epoch": 1,
+            "partialAtCaptureStart": false
+        },
+        "extensions": {}
+    },
+    {
+        "schema": {
+            "name": "csx.render-event",
+            "major": 1,
+            "minor": 17,
+            "producerVersion": "collector-v1"
+        },
+        "captureId": "capture-deferred-command-contract",
+        "sequence": 2,
+        "timestampQpc": 1002,
+        "processId": 1,
+        "threadId": 2,
+        "frame": {
+            "cpuFrame": 1,
+            "sceneEpoch": 1,
+            "submissionEpoch": null,
+            "eye": "unknown",
+            "eyeMask": null
+        },
+        "execution": {
+            "observationDomain": "command-recording",
+            "commandStreamSequence": 1,
+            "gpuTimestampTicks": null,
+            "gpuTimestampFrequencyHz": null
+        },
+        "deviceContextObservationId": "obs-device-context-1-g1",
+        "commandRecordingObservationId": "obs-command-recording-2-g1",
+        "submissionObservationId": null,
+        "type": "draw",
+        "scopes": { "renderPass": null, "technique": null, "geometry": null, "commandList": null },
+        "causes": [],
+        "manifestRefs": [],
+        "engineRefs": [],
+        "observationRefs": [
+            {
+                "id": "obs-device-context-1-g1",
+                "kind": "device-context",
+                "role": "recording-context",
+                "pointerEvidence": "0x100"
+            },
+            {
+                "id": "obs-command-recording-2-g1",
+                "kind": "command-recording",
+                "role": "recorded-command",
+                "pointerEvidence": null
+            }
+        ],
+        "payload": {
+            "schema": "draw-call-v4",
+            "operation": "draw",
+            "deviceContextPointer": "0x100",
+            "vertexShaderObservationId": null,
+            "pixelShaderObservationId": null,
+            "targetBindingObservationId": null,
+            "submissionObservationId": null,
+            "preparedGeometrySetupObservationId": null,
+            "arguments": { "vertexCount": 3, "startVertexLocation": 0 }
+        },
+        "extensions": {}
+    },
+    {
+        "schema": {
+            "name": "csx.render-event",
+            "major": 1,
+            "minor": 17,
+            "producerVersion": "collector-v1"
+        },
+        "captureId": "capture-deferred-command-contract",
+        "sequence": 3,
+        "timestampQpc": 1003,
+        "processId": 1,
+        "threadId": 2,
+        "frame": {
+            "cpuFrame": 1,
+            "sceneEpoch": 1,
+            "submissionEpoch": null,
+            "eye": "unknown",
+            "eyeMask": null
+        },
+        "execution": {
+            "observationDomain": "command-recording",
+            "commandStreamSequence": 2,
+            "gpuTimestampTicks": null,
+            "gpuTimestampFrequencyHz": null
+        },
+        "deviceContextObservationId": "obs-device-context-1-g1",
+        "commandRecordingObservationId": "obs-command-recording-2-g1",
+        "submissionObservationId": null,
+        "type": "command-list-observed",
+        "scopes": { "renderPass": null, "technique": null, "geometry": null, "commandList": null },
+        "causes": [],
+        "manifestRefs": [],
+        "engineRefs": [],
+        "observationRefs": [],
+        "payload": {
+            "schema": "command-list-observation-v2",
+            "commandListObservationId": "obs-command-list-3-g1",
+            "commandListPointer": "0x200",
+            "pointerGeneration": 1,
+            "sourceDeviceContextObservationId": "obs-device-context-1-g1",
+            "sourceCommandRecordingObservationId": "obs-command-recording-2-g1",
+            "sourceRecordingComplete": false,
+            "sourceRecordingIncompleteReasons": ["hook-coverage-unqualified"]
+        },
+        "extensions": {}
+    },
+    {
+        "schema": {
+            "name": "csx.render-event",
+            "major": 1,
+            "minor": 17,
+            "producerVersion": "collector-v1"
+        },
+        "captureId": "capture-deferred-command-contract",
+        "sequence": 4,
+        "timestampQpc": 1004,
+        "processId": 1,
+        "threadId": 2,
+        "frame": {
+            "cpuFrame": 1,
+            "sceneEpoch": 1,
+            "submissionEpoch": null,
+            "eye": "unknown",
+            "eyeMask": null
+        },
+        "execution": {
+            "observationDomain": "command-recording",
+            "commandStreamSequence": 2,
+            "gpuTimestampTicks": null,
+            "gpuTimestampFrequencyHz": null
+        },
+        "deviceContextObservationId": "obs-device-context-1-g1",
+        "commandRecordingObservationId": "obs-command-recording-2-g1",
+        "submissionObservationId": null,
+        "type": "finish-command-list",
+        "scopes": { "renderPass": null, "technique": null, "geometry": null, "commandList": null },
+        "causes": [],
+        "manifestRefs": [],
+        "engineRefs": [],
+        "observationRefs": [],
+        "payload": {
+            "schema": "finish-command-list-v2",
+            "commandRecordingObservationId": "obs-command-recording-2-g1",
+            "commandListObservationId": "obs-command-list-3-g1",
+            "commandListPointer": "0x200",
+            "restoreDeferredContextState": false,
+            "hresult": 0,
+            "succeeded": true,
+            "sourceRecordingComplete": false,
+            "sourceRecordingIncompleteReasons": ["hook-coverage-unqualified"]
+        },
+        "extensions": {}
+    },
+    {
+        "schema": {
+            "name": "csx.render-event",
+            "major": 1,
+            "minor": 17,
+            "producerVersion": "collector-v1"
+        },
+        "captureId": "capture-deferred-command-contract",
+        "sequence": 5,
+        "timestampQpc": 1005,
+        "processId": 1,
+        "threadId": 2,
+        "frame": {
+            "cpuFrame": 1,
+            "sceneEpoch": 1,
+            "submissionEpoch": null,
+            "eye": "unknown",
+            "eyeMask": null
+        },
+        "execution": {
+            "observationDomain": "cpu-call",
+            "commandStreamSequence": 3,
+            "gpuTimestampTicks": null,
+            "gpuTimestampFrequencyHz": null
+        },
+        "deviceContextObservationId": "obs-device-context-4-g1",
+        "commandRecordingObservationId": null,
+        "submissionObservationId": null,
+        "type": "execute-command-list",
+        "scopes": { "renderPass": null, "technique": null, "geometry": null, "commandList": null },
+        "causes": [],
+        "manifestRefs": [],
+        "engineRefs": [],
+        "observationRefs": [],
+        "payload": {
+            "schema": "execute-command-list-v1",
+            "commandListObservationId": "obs-command-list-3-g1",
+            "commandListPointer": "0x200",
+            "sourceCommandRecordingObservationId": "obs-command-recording-2-g1",
+            "restoreContextState": false
+        },
+        "extensions": {}
+    }
+]

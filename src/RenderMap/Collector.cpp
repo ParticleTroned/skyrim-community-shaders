@@ -23,16 +23,50 @@ namespace CSX::RenderMap
 	const char* EventKindName(EventKind a_kind) noexcept
 	{
 		static constexpr std::array names{
-			"capture-marker", "gap", "frame-begin", "frame-end",
-			"scene-accumulation-begin", "scene-accumulation-end", "eye-begin", "eye-end",
-			"object-observed", "geometry-observed", "material-observed", "render-pass-created",
-			"render-pass-enter", "render-pass-exit", "technique-begin", "technique-end",
-			"geometry-setup-begin", "geometry-setup-end", "pipeline-object-created", "pipeline-bind",
-			"render-target-bind", "depth-source-ready", "visibility-candidate", "visibility-result-ready",
-			"visibility-consumed", "cull-decision", "draw", "dispatch", "finish-command-list",
-			"execute-command-list", "shader-observed", "stage-shader-observed", "technique-resolved",
-			"device-context-observed", "target-view-observed", "resource-observed",
-			"resource-view-bind", "resource-view-state-observed", "resource-flow", "resource-cpu-access", "resource-version-observed", "eye-submitted",
+			"capture-marker",
+			"gap",
+			"frame-begin",
+			"frame-end",
+			"scene-accumulation-begin",
+			"scene-accumulation-end",
+			"eye-begin",
+			"eye-end",
+			"object-observed",
+			"geometry-observed",
+			"material-observed",
+			"render-pass-created",
+			"render-pass-enter",
+			"render-pass-exit",
+			"technique-begin",
+			"technique-end",
+			"geometry-setup-begin",
+			"geometry-setup-end",
+			"pipeline-object-created",
+			"pipeline-bind",
+			"render-target-bind",
+			"depth-source-ready",
+			"visibility-candidate",
+			"visibility-result-ready",
+			"visibility-consumed",
+			"cull-decision",
+			"draw",
+			"dispatch",
+			"command-recording-observed",
+			"command-list-observed",
+			"finish-command-list",
+			"execute-command-list",
+			"shader-observed",
+			"stage-shader-observed",
+			"technique-resolved",
+			"device-context-observed",
+			"target-view-observed",
+			"resource-observed",
+			"resource-view-bind",
+			"resource-view-state-observed",
+			"resource-flow",
+			"resource-cpu-access",
+			"resource-version-observed",
+			"eye-submitted",
 		};
 		const auto index = static_cast<std::size_t>(a_kind);
 		return index < names.size() ? names[index] : "gap";
@@ -64,15 +98,20 @@ namespace CSX::RenderMap
 				add(EventKind::kMaterialObserved);
 			}
 
-			if (has(EventKind::kRenderPassEnter)) add(EventKind::kRenderPassCreated);
-			if (has(EventKind::kTechniqueBegin)) add(EventKind::kShaderObserved);
-			if (has(EventKind::kPipelineBind)) add(EventKind::kPipelineObjectCreated);
-			if (has(EventKind::kStageShaderObserved)) add(EventKind::kShaderObserved);
+			if (has(EventKind::kRenderPassEnter))
+				add(EventKind::kRenderPassCreated);
+			if (has(EventKind::kTechniqueBegin))
+				add(EventKind::kShaderObserved);
+			if (has(EventKind::kPipelineBind))
+				add(EventKind::kPipelineObjectCreated);
+			if (has(EventKind::kStageShaderObserved))
+				add(EventKind::kShaderObserved);
 			if (has(EventKind::kTechniqueResolved)) {
 				add(EventKind::kShaderObserved);
 				add(EventKind::kStageShaderObserved);
 			}
-			if (has(EventKind::kMaterialObserved)) add(EventKind::kResourceObserved);
+			if (has(EventKind::kMaterialObserved))
+				add(EventKind::kResourceObserved);
 
 			if (has(EventKind::kRenderTargetBind) || has(EventKind::kDepthSourceReady) ||
 				has(EventKind::kResourceViewBind) || has(EventKind::kResourceViewStateObserved) ||
@@ -86,7 +125,14 @@ namespace CSX::RenderMap
 				has(EventKind::kEyeSubmitted)) {
 				add(EventKind::kResourceObserved);
 			}
-			if (has(EventKind::kVisibilityResultReady)) add(EventKind::kResourceVersionObserved);
+			if (has(EventKind::kVisibilityResultReady))
+				add(EventKind::kResourceVersionObserved);
+			if (has(EventKind::kCommandListObserved) || has(EventKind::kFinishCommandList))
+				add(EventKind::kCommandRecordingObserved);
+			if (has(EventKind::kFinishCommandList) || has(EventKind::kExecuteCommandList))
+				add(EventKind::kCommandListObserved);
+			if (has(EventKind::kCommandRecordingObserved) || has(EventKind::kCommandListObserved))
+				add(EventKind::kDeviceContextObserved);
 
 			if (has(EventKind::kRenderTargetBind) || has(EventKind::kResourceViewBind) ||
 				has(EventKind::kResourceViewStateObserved) ||
@@ -99,6 +145,7 @@ namespace CSX::RenderMap
 			}
 
 			if (has(EventKind::kDraw) || has(EventKind::kDispatch)) {
+				add(EventKind::kCommandRecordingObserved);
 				add(EventKind::kStageShaderObserved);
 				add(EventKind::kRenderTargetBind);
 				add(EventKind::kResourceViewBind);
@@ -288,15 +335,15 @@ namespace CSX::RenderMap
 			const SceneObjectObservationInput& a_input) noexcept
 		{
 			return !a_record.referenceNameTruncated && !a_record.baseFormNameTruncated &&
-				a_input.referenceName.size() <= kMaximumSceneObjectNameLength &&
-				a_input.baseFormName.size() <= kMaximumSceneObjectNameLength &&
-				a_record.pointerEvidence == a_input.reference &&
-				a_record.referenceFormId == a_input.referenceFormId &&
-				a_record.baseFormId == a_input.baseFormId &&
-				StoredString(a_record.referenceName) == a_input.referenceName &&
-				StoredString(a_record.baseFormName) == a_input.baseFormName &&
-				a_record.referenceFormDynamic == a_input.referenceFormDynamic &&
-				a_record.baseFormDynamic == a_input.baseFormDynamic;
+			       a_input.referenceName.size() <= kMaximumSceneObjectNameLength &&
+			       a_input.baseFormName.size() <= kMaximumSceneObjectNameLength &&
+			       a_record.pointerEvidence == a_input.reference &&
+			       a_record.referenceFormId == a_input.referenceFormId &&
+			       a_record.baseFormId == a_input.baseFormId &&
+			       StoredString(a_record.referenceName) == a_input.referenceName &&
+			       StoredString(a_record.baseFormName) == a_input.baseFormName &&
+			       a_record.referenceFormDynamic == a_input.referenceFormDynamic &&
+			       a_record.baseFormDynamic == a_input.baseFormDynamic;
 		}
 
 		std::uint64_t HashGeometryIdentity(const GeometryObservationInput& a_input) noexcept
@@ -320,18 +367,18 @@ namespace CSX::RenderMap
 			const GeometryObservationInput& a_input) noexcept
 		{
 			return !a_record.runtimeTypeNameTruncated && !a_record.nameTruncated &&
-				a_input.runtimeTypeName.size() <= kMaximumRuntimeTypeNameLength &&
-				a_input.name.size() <= kMaximumGeometryNameLength &&
-				a_record.pointerEvidence == a_input.geometry &&
-				StoredString(a_record.runtimeTypeName) == a_input.runtimeTypeName &&
-				StoredString(a_record.name) == a_input.name &&
-				a_record.geometryType == a_input.geometryType &&
-				a_record.vertexDescriptor == a_input.vertexDescriptor &&
-				a_record.worldTransform == a_input.worldTransform &&
-				a_record.worldBound == a_input.worldBound &&
-				a_record.sceneObjectObservationId == a_input.sceneObjectObservationId &&
-				a_record.worldTransformAvailable == a_input.worldTransformAvailable &&
-				a_record.worldBoundAvailable == a_input.worldBoundAvailable;
+			       a_input.runtimeTypeName.size() <= kMaximumRuntimeTypeNameLength &&
+			       a_input.name.size() <= kMaximumGeometryNameLength &&
+			       a_record.pointerEvidence == a_input.geometry &&
+			       StoredString(a_record.runtimeTypeName) == a_input.runtimeTypeName &&
+			       StoredString(a_record.name) == a_input.name &&
+			       a_record.geometryType == a_input.geometryType &&
+			       a_record.vertexDescriptor == a_input.vertexDescriptor &&
+			       a_record.worldTransform == a_input.worldTransform &&
+			       a_record.worldBound == a_input.worldBound &&
+			       a_record.sceneObjectObservationId == a_input.sceneObjectObservationId &&
+			       a_record.worldTransformAvailable == a_input.worldTransformAvailable &&
+			       a_record.worldBoundAvailable == a_input.worldBoundAvailable;
 		}
 
 		std::uint64_t HashMaterialStateIdentity(const MaterialStateObservationInput& a_input) noexcept
@@ -369,21 +416,21 @@ namespace CSX::RenderMap
 			std::uint64_t a_fingerprint) noexcept
 		{
 			const auto baseMatches = !a_record.shaderPropertyRuntimeTypeNameTruncated &&
-				a_input.shaderPropertyRuntimeTypeName.size() <= kMaximumRuntimeTypeNameLength &&
-				a_record.fingerprint == a_fingerprint &&
-				a_record.shaderPropertyEvidence == a_input.shaderProperty &&
-				StoredString(a_record.shaderPropertyRuntimeTypeName) == a_input.shaderPropertyRuntimeTypeName &&
-				a_record.shaderPropertyFlags == a_input.shaderPropertyFlags &&
-				a_record.alpha == a_input.alpha &&
-				a_record.engineMaterialType == a_input.engineMaterialType &&
-				a_record.materialEvidence == a_input.material &&
-				a_record.materialType == a_input.materialType &&
-				a_record.feature == a_input.feature &&
-				a_record.hashKey == a_input.hashKey &&
-				a_record.textureBindingCount == a_input.textureBindingCount &&
-				a_record.shaderPropertyAvailable == a_input.shaderPropertyAvailable &&
-				a_record.materialAvailable == a_input.materialAvailable &&
-				a_record.textureBindingsTruncated == a_input.textureBindingsTruncated;
+			                         a_input.shaderPropertyRuntimeTypeName.size() <= kMaximumRuntimeTypeNameLength &&
+			                         a_record.fingerprint == a_fingerprint &&
+			                         a_record.shaderPropertyEvidence == a_input.shaderProperty &&
+			                         StoredString(a_record.shaderPropertyRuntimeTypeName) == a_input.shaderPropertyRuntimeTypeName &&
+			                         a_record.shaderPropertyFlags == a_input.shaderPropertyFlags &&
+			                         a_record.alpha == a_input.alpha &&
+			                         a_record.engineMaterialType == a_input.engineMaterialType &&
+			                         a_record.materialEvidence == a_input.material &&
+			                         a_record.materialType == a_input.materialType &&
+			                         a_record.feature == a_input.feature &&
+			                         a_record.hashKey == a_input.hashKey &&
+			                         a_record.textureBindingCount == a_input.textureBindingCount &&
+			                         a_record.shaderPropertyAvailable == a_input.shaderPropertyAvailable &&
+			                         a_record.materialAvailable == a_input.materialAvailable &&
+			                         a_record.textureBindingsTruncated == a_input.textureBindingsTruncated;
 			if (!baseMatches)
 				return false;
 			for (std::size_t index = 0; index < a_input.textureBindingCount; ++index) {
@@ -430,18 +477,18 @@ namespace CSX::RenderMap
 		bool SameShaderIdentity(const ShaderObservationRecord& a_record, const ShaderObservationInput& a_input) noexcept
 		{
 			return !a_record.fxpFilenameTruncated && !a_record.imageSpaceNameTruncated &&
-				!a_record.compileSourceNameTruncated &&
-				!a_record.definesSuffixTruncated &&
-				a_input.fxpFilename.size() <= kMaximumShaderNameLength &&
-				a_input.imageSpaceName.size() <= kMaximumShaderNameLength &&
-				a_input.compileSourceName.size() <= kMaximumShaderNameLength &&
-				a_input.definesSuffix.size() <= kMaximumShaderDefinesSuffixLength &&
-				a_record.pointerEvidence == a_input.shader &&
-				a_record.shaderType == a_input.shaderType &&
-				StoredString(a_record.fxpFilename) == a_input.fxpFilename.substr(0, kMaximumShaderNameLength) &&
-				StoredString(a_record.imageSpaceName) == a_input.imageSpaceName.substr(0, kMaximumShaderNameLength) &&
-				StoredString(a_record.compileSourceName) == a_input.compileSourceName.substr(0, kMaximumShaderNameLength) &&
-				StoredString(a_record.definesSuffix) == a_input.definesSuffix.substr(0, kMaximumShaderDefinesSuffixLength);
+			       !a_record.compileSourceNameTruncated &&
+			       !a_record.definesSuffixTruncated &&
+			       a_input.fxpFilename.size() <= kMaximumShaderNameLength &&
+			       a_input.imageSpaceName.size() <= kMaximumShaderNameLength &&
+			       a_input.compileSourceName.size() <= kMaximumShaderNameLength &&
+			       a_input.definesSuffix.size() <= kMaximumShaderDefinesSuffixLength &&
+			       a_record.pointerEvidence == a_input.shader &&
+			       a_record.shaderType == a_input.shaderType &&
+			       StoredString(a_record.fxpFilename) == a_input.fxpFilename.substr(0, kMaximumShaderNameLength) &&
+			       StoredString(a_record.imageSpaceName) == a_input.imageSpaceName.substr(0, kMaximumShaderNameLength) &&
+			       StoredString(a_record.compileSourceName) == a_input.compileSourceName.substr(0, kMaximumShaderNameLength) &&
+			       StoredString(a_record.definesSuffix) == a_input.definesSuffix.substr(0, kMaximumShaderDefinesSuffixLength);
 		}
 
 		std::uint64_t HashStageShaderIdentity(const StageShaderObservationInput& a_input) noexcept
@@ -494,15 +541,14 @@ namespace CSX::RenderMap
 					return false;
 				}
 			}
-			return
-				a_input.bytecodeSha256.size() <= kSha256HexLength &&
-				a_input.cachePath.size() <= kMaximumShaderCachePathLength &&
-				a_record.stage == a_input.stage && a_record.wrapperEvidence == a_input.wrapper &&
-				a_record.pointerEvidence == a_input.d3dObject &&
-				a_record.wrapperDescriptor == a_input.wrapperDescriptor &&
-				a_record.bytecodeSize == a_input.bytecodeSize &&
-				StoredString(a_record.bytecodeSha256) == a_input.bytecodeSha256 &&
-				StoredString(a_record.cachePath) == a_input.cachePath;
+			return a_input.bytecodeSha256.size() <= kSha256HexLength &&
+			       a_input.cachePath.size() <= kMaximumShaderCachePathLength &&
+			       a_record.stage == a_input.stage && a_record.wrapperEvidence == a_input.wrapper &&
+			       a_record.pointerEvidence == a_input.d3dObject &&
+			       a_record.wrapperDescriptor == a_input.wrapperDescriptor &&
+			       a_record.bytecodeSize == a_input.bytecodeSize &&
+			       StoredString(a_record.bytecodeSha256) == a_input.bytecodeSha256 &&
+			       StoredString(a_record.cachePath) == a_input.cachePath;
 		}
 
 		void CopyEngineShaderAliases(
@@ -520,7 +566,7 @@ namespace CSX::RenderMap
 				stored.compileSourceNameTruncated = CopyBounded(
 					a_input.engineAliases[index].compileSourceName, stored.compileSourceName);
 				a_record.engineAliasesTruncated = a_record.engineAliasesTruncated ||
-					stored.loaderTypeTruncated || stored.compileSourceNameTruncated;
+				                                  stored.loaderTypeTruncated || stored.compileSourceNameTruncated;
 			}
 		}
 
@@ -627,7 +673,7 @@ namespace CSX::RenderMap
 				stored.compileSourceNameTruncated = CopyBounded(
 					supplied.compileSourceName, stored.compileSourceName);
 				a_record.engineAliasesTruncated = a_record.engineAliasesTruncated ||
-					stored.loaderTypeTruncated || stored.compileSourceNameTruncated;
+				                                  stored.loaderTypeTruncated || stored.compileSourceNameTruncated;
 			}
 			a_record.engineAliasTotalCount = std::max({
 				a_record.engineAliasTotalCount,
@@ -636,7 +682,7 @@ namespace CSX::RenderMap
 				a_record.engineAliasCount,
 			});
 			a_record.engineAliasesTruncated = a_record.engineAliasesTruncated ||
-				a_record.engineAliasTotalCount > a_record.engineAliasCount;
+			                                  a_record.engineAliasTotalCount > a_record.engineAliasCount;
 		}
 
 		std::uint64_t HashTargetViewIdentity(const TargetViewObservationInput& a_input) noexcept
@@ -699,13 +745,13 @@ namespace CSX::RenderMap
 			const ResourceObservationInput& a_input) noexcept
 		{
 			return a_record.d3dObject == a_input.d3dObject && a_record.dimension == a_input.dimension &&
-				a_record.widthOrBytes == a_input.widthOrBytes && a_record.height == a_input.height &&
-				a_record.depthOrArraySize == a_input.depthOrArraySize && a_record.mipLevels == a_input.mipLevels &&
-				a_record.format == a_input.format && a_record.sampleCount == a_input.sampleCount &&
-				a_record.sampleQuality == a_input.sampleQuality && a_record.usage == a_input.usage &&
-				a_record.bindFlags == a_input.bindFlags && a_record.cpuAccessFlags == a_input.cpuAccessFlags &&
-				a_record.miscFlags == a_input.miscFlags &&
-				a_record.structureByteStride == a_input.structureByteStride;
+			       a_record.widthOrBytes == a_input.widthOrBytes && a_record.height == a_input.height &&
+			       a_record.depthOrArraySize == a_input.depthOrArraySize && a_record.mipLevels == a_input.mipLevels &&
+			       a_record.format == a_input.format && a_record.sampleCount == a_input.sampleCount &&
+			       a_record.sampleQuality == a_input.sampleQuality && a_record.usage == a_input.usage &&
+			       a_record.bindFlags == a_input.bindFlags && a_record.cpuAccessFlags == a_input.cpuAccessFlags &&
+			       a_record.miscFlags == a_input.miscFlags &&
+			       a_record.structureByteStride == a_input.structureByteStride;
 		}
 
 		bool SameTargetViewIdentity(
@@ -713,11 +759,11 @@ namespace CSX::RenderMap
 			const TargetViewObservationInput& a_input) noexcept
 		{
 			return a_record.kind == a_input.kind && a_record.pointerEvidence == a_input.d3dObject &&
-				a_record.resourceObservationId == a_input.resourceObservationId && a_record.format == a_input.format &&
-				a_record.dimension == a_input.dimension && a_record.mipSlice == a_input.mipSlice &&
-				a_record.firstArraySlice == a_input.firstArraySlice && a_record.arraySize == a_input.arraySize &&
-				a_record.firstElement == a_input.firstElement && a_record.elementCount == a_input.elementCount &&
-				a_record.flags == a_input.flags;
+			       a_record.resourceObservationId == a_input.resourceObservationId && a_record.format == a_input.format &&
+			       a_record.dimension == a_input.dimension && a_record.mipSlice == a_input.mipSlice &&
+			       a_record.firstArraySlice == a_input.firstArraySlice && a_record.arraySize == a_input.arraySize &&
+			       a_record.firstElement == a_input.firstElement && a_record.elementCount == a_input.elementCount &&
+			       a_record.flags == a_input.flags;
 		}
 
 		std::uint64_t HashTargetBindingIdentity(const TargetBindingObservationInput& a_input) noexcept
@@ -743,8 +789,8 @@ namespace CSX::RenderMap
 			const TargetBindingObservationInput& a_input) noexcept
 		{
 			return a_record.renderTargetCount == a_input.renderTargetCount &&
-				a_record.depthTargetObservationId == a_input.depthTargetObservationId &&
-				a_record.renderTargetObservationIds == a_input.renderTargetObservationIds;
+			       a_record.depthTargetObservationId == a_input.depthTargetObservationId &&
+			       a_record.renderTargetObservationIds == a_input.renderTargetObservationIds;
 		}
 
 		struct StagePointerIdentity
@@ -942,7 +988,7 @@ namespace CSX::RenderMap
 		if (a_config.maxBytes <= catalogueBytes)
 			return StartResult::kInvalidBounds;
 		const auto capacityByBytes = (a_config.maxBytes - catalogueBytes) /
-			(sizeof(Session::Slot) + sizeof(EventRecord));
+		                             (sizeof(Session::Slot) + sizeof(EventRecord));
 		const auto capacity = std::min(a_config.maxEvents, static_cast<std::uint64_t>(capacityByBytes));
 		if (capacity == 0 || capacity > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
 			return StartResult::kInvalidBounds;
@@ -993,7 +1039,8 @@ namespace CSX::RenderMap
 		session->generation = nextSessionGeneration.fetch_add(1, std::memory_order_relaxed);
 		session->capacity = capacity;
 		session->capacityLimit = a_config.maxEvents <= capacityByBytes ?
-			RecordResult::kEventLimit : RecordResult::kByteLimit;
+		                             RecordResult::kEventLimit :
+		                             RecordResult::kByteLimit;
 		session->maxDurationTicks = DurationToTicks(a_config.maxDuration);
 		if (session->maxDurationTicks == 0)
 			return StartResult::kInvalidBounds;
@@ -1157,7 +1204,7 @@ namespace CSX::RenderMap
 	{
 		const auto session = activeSession.load(std::memory_order_acquire);
 		return session && session->accepting.load(std::memory_order_acquire) && a_shaderType < 64 &&
-			(session->config.geometryShaderTypeMask & (std::uint64_t{ 1 } << a_shaderType)) != 0;
+		       (session->config.geometryShaderTypeMask & (std::uint64_t{ 1 } << a_shaderType)) != 0;
 	}
 
 	bool Collector::IsExecutionAllowedByGeometryScope(
@@ -1170,7 +1217,7 @@ namespace CSX::RenderMap
 			return true;
 		const auto& state = SynchronizeThreadState(this, session->generation);
 		return state.depths[ScopeIndex(ScopeKind::kGeometry)] != 0 ||
-			a_preparedGeometrySetupObservationId != 0;
+		       a_preparedGeometrySetupObservationId != 0;
 	}
 
 	void Collector::CountFiltered(std::uint64_t a_count) noexcept
@@ -1187,12 +1234,15 @@ namespace CSX::RenderMap
 		std::uint64_t a_commandStreamSequence,
 		std::uint64_t a_targetBindingObservationId,
 		std::uint64_t a_submissionObservationId,
-		std::uint64_t a_preparedGeometrySetupObservationId) noexcept
+		std::uint64_t a_preparedGeometrySetupObservationId,
+		std::uint64_t a_commandRecordingObservationId,
+		bool a_deferredContext) noexcept
 	{
 		return RecordForGeneration(
 			a_kind, a_payload, a_deviceContextObservationId, 0, a_commandStreamSequence,
 			a_targetBindingObservationId, a_submissionObservationId,
-			a_preparedGeometrySetupObservationId);
+			a_preparedGeometrySetupObservationId, a_commandRecordingObservationId,
+			a_deferredContext);
 	}
 
 	RecordResult Collector::RecordForGeneration(
@@ -1203,7 +1253,9 @@ namespace CSX::RenderMap
 		std::uint64_t a_commandStreamSequence,
 		std::uint64_t a_targetBindingObservationId,
 		std::uint64_t a_submissionObservationId,
-		std::uint64_t a_preparedGeometrySetupObservationId) noexcept
+		std::uint64_t a_preparedGeometrySetupObservationId,
+		std::uint64_t a_commandRecordingObservationId,
+		bool a_deferredContext) noexcept
 	{
 		auto session = activeSession.load(std::memory_order_acquire);
 		if (!session)
@@ -1266,6 +1318,7 @@ namespace CSX::RenderMap
 
 		EventRecord record;
 		record.kind = a_kind;
+		record.reserved = a_deferredContext ? kEventFlagDeferredContext : 0;
 		record.captureNumericId = session->config.captureNumericId;
 		record.sessionGeneration = session->generation;
 		record.sequence = index;
@@ -1278,6 +1331,8 @@ namespace CSX::RenderMap
 		record.preparedGeometrySetupObservationId = a_preparedGeometrySetupObservationId;
 		record.frame = state.frame;
 		record.scopes = SnapshotScopes(state);
+		if (a_commandRecordingObservationId != 0)
+			record.scopes.commandList = { 0, a_commandRecordingObservationId };
 		record.payload = a_payload;
 
 		auto& slot = session->slots[static_cast<std::size_t>(index)];
@@ -1327,8 +1382,9 @@ namespace CSX::RenderMap
 			return 0;
 		const auto observationId = session->nextObservationId.fetch_add(1, std::memory_order_relaxed);
 		return activeSession.load(std::memory_order_acquire) == session &&
-				session->accepting.load(std::memory_order_acquire) ?
-			observationId : 0;
+		               session->accepting.load(std::memory_order_acquire) ?
+		           observationId :
+		           0;
 	}
 
 	ShaderObservationResult Collector::ObserveShader(const ShaderObservationInput& a_input) noexcept

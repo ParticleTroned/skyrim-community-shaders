@@ -1,0 +1,29 @@
+{
+    "contexts": {
+        "a": { "id": "obs-device-context-80-g1", "pointer": "0x800" },
+        "b": { "id": "obs-device-context-81-g1", "pointer": "0x810" }
+    },
+    "recordings": {
+        "a": { "id": "obs-command-recording-82-g1", "context": "a", "epoch": 1 },
+        "b": { "id": "obs-command-recording-83-g1", "context": "b", "epoch": 1 }
+    },
+    "commandLists": {
+        "a": { "id": "obs-command-list-84-g1", "recording": "a", "pointer": "0x840" },
+        "b": { "id": "obs-command-list-85-g1", "recording": "b", "pointer": "0x850" }
+    },
+    "contradictions": [
+        "draw-context-versus-recording-owner",
+        "command-list-context-versus-recording-owner",
+        "finish-envelope-versus-payload-recording",
+        "finish-list-versus-recording",
+        "execute-source-recording-versus-list",
+        "duplicate-device-context-identity",
+        "duplicate-command-recording-identity",
+        "duplicate-command-list-identity",
+        "duplicate-device-context-envelope-identity",
+        "duplicate-command-recording-envelope-identity",
+        "duplicate-command-recording-envelope-owner",
+        "duplicate-command-list-envelope-owner",
+        "duplicate-command-list-envelope-recording"
+    ]
+}

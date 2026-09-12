@@ -114,6 +114,16 @@ namespace CSX::RenderMap
 
 	namespace
 	{
+		void RegisterDeferredContextIfNeeded(ID3D11DeviceContext* a_context) noexcept
+		{
+			if (a_context && a_context->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED) {
+				GetRuntime().RegisterDeferredContext(
+					reinterpret_cast<std::uintptr_t>(a_context),
+					a_context->GetContextFlags(),
+					false);
+			}
+		}
+
 		std::uint64_t ReadQpc() noexcept
 		{
 			LARGE_INTEGER value{};
@@ -391,13 +401,27 @@ namespace CSX::RenderMap
 		}
 
 		void ObserveEffectiveStateBeforeDraw(ID3D11DeviceContext* a_context);
+		void ObserveEffectiveStateBeforeDispatch(ID3D11DeviceContext* a_context);
 
 		template <class... Args>
 		void RecordDrawWithEffectiveState(
 			ID3D11DeviceContext* a_context, DrawOperation a_operation, Args... a_arguments)
 		{
-			ObserveEffectiveStateBeforeDraw(a_context);
+			RegisterDeferredContextIfNeeded(a_context);
+			if (a_context && a_context->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE)
+				ObserveEffectiveStateBeforeDraw(a_context);
 			GetRuntime().RecordDraw(
+				reinterpret_cast<std::uintptr_t>(a_context), a_operation, a_arguments...);
+		}
+
+		template <class... Args>
+		void RecordDispatchWithEffectiveState(
+			ID3D11DeviceContext* a_context, DispatchOperation a_operation, Args... a_arguments)
+		{
+			RegisterDeferredContextIfNeeded(a_context);
+			if (a_context && a_context->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE)
+				ObserveEffectiveStateBeforeDispatch(a_context);
+			GetRuntime().RecordDispatch(
 				reinterpret_cast<std::uintptr_t>(a_context), a_operation, a_arguments...);
 		}
 
@@ -583,6 +607,19 @@ namespace CSX::RenderMap
 				GetRuntime().ClaimResourceViewStateSeed(reinterpret_cast<std::uintptr_t>(a_context));
 		}
 
+		void ObserveEffectiveStateBeforeDispatch(ID3D11DeviceContext* a_context)
+		{
+			if (!a_context)
+				return;
+			auto& runtime = GetRuntime();
+			const auto generation = runtime.ClaimResourceViewStateSeed(
+				reinterpret_cast<std::uintptr_t>(a_context));
+			if (generation != 0) {
+				ObserveAllEffectiveResourceViews(
+					a_context, ResourceBindingSource::kCaptureStateSnapshot, generation);
+			}
+		}
+
 		struct ID3D11DeviceContext_OMSetRenderTargets
 		{
 			static void thunk(ID3D11DeviceContext* a_context, UINT a_renderTargetCount,
@@ -658,6 +695,7 @@ namespace CSX::RenderMap
 			static void thunk(ID3D11DeviceContext* a_context, ID3D11PixelShader* a_shader,
 				ID3D11ClassInstance* const* a_classInstances, UINT a_classInstanceCount)
 			{
+				RegisterDeferredContextIfNeeded(a_context);
 				func(a_context, a_shader, a_classInstances, a_classInstanceCount);
 				GetRuntime().BindStage(reinterpret_cast<std::uintptr_t>(a_context), ShaderStage::kPixel,
 					reinterpret_cast<std::uintptr_t>(a_shader));
@@ -670,6 +708,7 @@ namespace CSX::RenderMap
 			static void thunk(ID3D11DeviceContext* a_context, ID3D11VertexShader* a_shader,
 				ID3D11ClassInstance* const* a_classInstances, UINT a_classInstanceCount)
 			{
+				RegisterDeferredContextIfNeeded(a_context);
 				func(a_context, a_shader, a_classInstances, a_classInstanceCount);
 				GetRuntime().BindStage(reinterpret_cast<std::uintptr_t>(a_context), ShaderStage::kVertex,
 					reinterpret_cast<std::uintptr_t>(a_shader));
@@ -682,6 +721,7 @@ namespace CSX::RenderMap
 			static void thunk(ID3D11DeviceContext* a_context, ID3D11ComputeShader* a_shader,
 				ID3D11ClassInstance* const* a_classInstances, UINT a_classInstanceCount)
 			{
+				RegisterDeferredContextIfNeeded(a_context);
 				func(a_context, a_shader, a_classInstances, a_classInstanceCount);
 				GetRuntime().BindStage(reinterpret_cast<std::uintptr_t>(a_context), ShaderStage::kCompute,
 					reinterpret_cast<std::uintptr_t>(a_shader));
@@ -790,7 +830,7 @@ namespace CSX::RenderMap
 			static void thunk(ID3D11DeviceContext* a_context, UINT a_threadGroupCountX,
 				UINT a_threadGroupCountY, UINT a_threadGroupCountZ)
 			{
-				GetRuntime().RecordDispatch(reinterpret_cast<std::uintptr_t>(a_context),
+				RecordDispatchWithEffectiveState(a_context,
 					DispatchOperation::kDispatch, a_threadGroupCountX, a_threadGroupCountY,
 					a_threadGroupCountZ);
 				func(a_context, a_threadGroupCountX, a_threadGroupCountY, a_threadGroupCountZ);
@@ -803,10 +843,41 @@ namespace CSX::RenderMap
 			static void thunk(ID3D11DeviceContext* a_context, ID3D11Buffer* a_argumentBuffer,
 				UINT a_alignedByteOffset)
 			{
-				GetRuntime().RecordDispatch(reinterpret_cast<std::uintptr_t>(a_context),
+				RecordDispatchWithEffectiveState(a_context,
 					DispatchOperation::kDispatchIndirect,
 					reinterpret_cast<std::uintptr_t>(a_argumentBuffer), a_alignedByteOffset);
 				func(a_context, a_argumentBuffer, a_alignedByteOffset);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct ID3D11DeviceContext_ExecuteCommandList
+		{
+			static void thunk(ID3D11DeviceContext* a_context, ID3D11CommandList* a_commandList,
+				BOOL a_restoreContextState)
+			{
+				func(a_context, a_commandList, a_restoreContextState);
+				GetRuntime().RecordExecuteCommandList(
+					reinterpret_cast<std::uintptr_t>(a_context),
+					reinterpret_cast<std::uintptr_t>(a_commandList),
+					a_restoreContextState != FALSE);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct ID3D11DeviceContext_FinishCommandList
+		{
+			static HRESULT thunk(ID3D11DeviceContext* a_context,
+				BOOL a_restoreDeferredContextState, ID3D11CommandList** a_commandList)
+			{
+				RegisterDeferredContextIfNeeded(a_context);
+				const auto result = func(a_context, a_restoreDeferredContextState, a_commandList);
+				GetRuntime().RecordFinishCommandList(
+					reinterpret_cast<std::uintptr_t>(a_context),
+					reinterpret_cast<std::uintptr_t>(SUCCEEDED(result) && a_commandList ? *a_commandList : nullptr),
+					a_restoreDeferredContextState != FALSE,
+					static_cast<std::int32_t>(result));
+				return result;
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -1042,10 +1113,12 @@ namespace CSX::RenderMap
 		stl::detour_vfunc<53, ID3D11DeviceContext_ClearDepthStencilView>(a_context);
 		stl::detour_vfunc<54, ID3D11DeviceContext_GenerateMips>(a_context);
 		stl::detour_vfunc<57, ID3D11DeviceContext_ResolveSubresource>(a_context);
+		stl::detour_vfunc<58, ID3D11DeviceContext_ExecuteCommandList>(a_context);
 		stl::detour_vfunc<59, ID3D11DeviceContext_HSSetShaderResources>(a_context);
 		stl::detour_vfunc<63, ID3D11DeviceContext_DSSetShaderResources>(a_context);
 		stl::detour_vfunc<67, ID3D11DeviceContext_CSSetShaderResources>(a_context);
 		stl::detour_vfunc<68, ID3D11DeviceContext_CSSetUnorderedAccessViews>(a_context);
 		stl::detour_vfunc<69, ID3D11DeviceContext_CSSetShader>(a_context);
+		stl::detour_vfunc<114, ID3D11DeviceContext_FinishCommandList>(a_context);
 	}
 }

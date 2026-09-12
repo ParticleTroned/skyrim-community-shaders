@@ -9,24 +9,32 @@
 #include <format>
 #include <iostream>
 #include <iterator>
+#include <source_location>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include "Features/LightLimitFix/VRHookPolicy.h"
+
 namespace
 {
 	std::vector<std::uint8_t> image(0x1A00000);
 	std::vector<std::string> errors;
 	bool vrRuntime = true;
+	bool engineFixesLoaded = false;
 	int runtimeVersion = 1415;
 	std::size_t assertions = 0;
-	void Require(bool condition)
+	void Require(bool condition, const std::source_location& location = std::source_location::current())
 	{
 		++assertions;
 		if (!condition) {
-			throw std::runtime_error(std::format("Scene guard assertion {} failed", assertions));
+			throw std::runtime_error(std::format(
+				"Scene guard assertion {} failed at {}:{}",
+				assertions,
+				location.file_name(),
+				location.line()));
 		}
 	}
 }
@@ -134,6 +142,7 @@ namespace
 			std::memcpy(image.data() + rva, &executable, sizeof(executable));
 		}
 		vrRuntime = true;
+		engineFixesLoaded = false;
 		runtimeVersion = 1415;
 		SKSE::trampoline.writes.clear();
 		SKSE::trampoline.allocations = 0;
@@ -158,8 +167,9 @@ namespace
 		// Engine Fixes 7.7.1 owns this five-byte interior branch, outside our prologue.
 		constexpr std::array<std::uint8_t, 5> foreignHook{ 0xE9, 0x11, 0x22, 0x33, 0x44 };
 		std::copy(foreignHook.begin(), foreignHook.end(), image.begin() + 0xCBFD24);
+		engineFixesLoaded = true;
 		LightLimitFix::Hooks::InstallVRSceneGraphCullingObjectGuard();
-		Require(errors.empty() && SKSE::trampoline.writes.size() == 1);
+		Require(errors.empty() && SKSE::trampoline.writes.empty());
 		Require(std::equal(foreignHook.begin(), foreignHook.end(), image.begin() + 0xCBFD24));
 	}
 

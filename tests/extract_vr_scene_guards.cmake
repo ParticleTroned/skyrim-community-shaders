@@ -23,4 +23,10 @@ extract_between("class VRSceneGraphCullingObjectGuard" "enum class VRRoomLightCu
 extract_between("bool IsReadableRange(const void* a_ptr, std::size_t a_size) noexcept\n\t{" "bool IsSafeLightRange")
 extract_between("bool IsExecutableAddress" "bool IsSafeDirectionalNiLight")
 extract_between("void LightLimitFix::Hooks::InstallVRSceneGraphCullingObjectGuard()" "void LightLimitFix::Hooks::InstallVRRoomLightCullingProcessGuards()")
+string(
+    REPLACE "return GetModuleHandleW(L\"EngineFixes.dll\") != nullptr;"
+            "return engineFixesLoaded;"
+            _output
+            "${_output}"
+)
 file(WRITE "${OUTPUT_DIRECTORY}/vr_scene_guards_under_test.h" "${_output}")

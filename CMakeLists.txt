@@ -1641,6 +1641,39 @@ if(BUILD_CONTROLLER_TESTS)
         set_tests_properties(${TEST_NAME} PROPERTIES LABELS "ControllerTests")
     endfunction()
 
+    add_controller_test(
+        scene_light_snapshot_test
+        SceneLightSnapshot
+        tests/scene_light_snapshot_test.cpp
+    )
+    set(_scene_light_snapshot_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/scene-light-snapshot"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_scene_light_snapshot_test_dir}/scene_light_snapshot_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_scene_light_snapshot_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_scene_light_snapshot.cmake"
+        DEPENDS
+            src/Features/LightLimitFix.cpp
+            tests/extract_scene_light_snapshot.cmake
+        VERBATIM
+    )
+    target_sources(
+        scene_light_snapshot_test
+        PRIVATE
+            "${_scene_light_snapshot_test_dir}/scene_light_snapshot_under_test.h"
+    )
+    target_include_directories(
+        scene_light_snapshot_test
+        PRIVATE
+            "${_scene_light_snapshot_test_dir}"
+            "${PROJECT_SOURCE_DIR}/extern/CommonLibSSE-NG/include"
+    )
+    set_tests_properties(SceneLightSnapshot PROPERTIES TIMEOUT 30)
+
     set(_vr_scene_guards_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/vr-scene-guards"
     )
@@ -2590,6 +2623,7 @@ if(BUILD_CONTROLLER_TESTS)
     add_custom_target(
         controller_tests
         DEPENDS
+            scene_light_snapshot_test
             vr_scene_guards_test
             pbr_material_registry_test
             perf_mode_restart_state_test

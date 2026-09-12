@@ -6,12 +6,14 @@
 #include "Utils/PointLightFlags.h"
 
 #include "Features/LightLimitFix/ParticleLights.h"
+#include "Features/LightLimitFix/SceneLightSnapshot.h"
 
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
 #include <shared_mutex>
+#include <unordered_map>
 
 class ParticleLights;
 struct LightLimitFix : OverlayFeature
@@ -19,6 +21,11 @@ struct LightLimitFix : OverlayFeature
 private:
 	static constexpr std::string_view MOD_ID = "99548";
 	eastl::hash_map<RE::BSLight*, RE::NiLight*> effectLightValidationCache;
+	using SceneLightSnapshot = LightLimitFixDetail::SceneLightSnapshot<RE::NiPointer<RE::BSLight>>;
+	std::unordered_map<RE::ShadowSceneNode*, SceneLightSnapshot> sceneLightSnapshots;
+	bool sceneLightSnapshotFailed = false;
+	/// Retain VR lights on the render thread until frame or load reset.
+	const SceneLightSnapshot* GetSceneLightSnapshot(RE::ShadowSceneNode* a_node);
 
 public:
 	virtual inline std::string GetName() override { return "Light Limit Fix"; }

@@ -23,6 +23,7 @@
 #include <cstring>
 #include <functional>
 #include <limits>
+#include <new>
 #include <optional>
 #include <utility>
 
@@ -1499,6 +1500,9 @@ void LightLimitFix::SetupRenderTargetResources()
 void LightLimitFix::Reset()
 {
 	effectLightValidationCache.clear();
+	// Frame and load resets release retained lights outside the engine's queue lock.
+	sceneLightSnapshots.clear();
+	sceneLightSnapshotFailed = false;
 
 	{
 		std::lock_guard<std::mutex> currentLock{ currentParticleLightsMutex };
@@ -1603,6 +1607,39 @@ void LightLimitFix::BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pa
 	}
 }
 
+const LightLimitFix::SceneLightSnapshot* LightLimitFix::GetSceneLightSnapshot(RE::ShadowSceneNode* a_node)
+{
+	if (!a_node || sceneLightSnapshotFailed)
+		return nullptr;
+	if (const auto it = sceneLightSnapshots.find(a_node); it != sceneLightSnapshots.end())
+		return &it->second;
+
+	try {
+		SceneLightSnapshot snapshot;
+		{
+			auto& runtime = a_node->GetRuntimeData();
+			// VR's queue drain drops active and queued references under this lock.
+			const RE::BSSpinLockGuard lock{ runtime.lightQueueLock };
+			for (const auto& light : runtime.activeLights)
+				snapshot.Retain(light, true);
+			for (const auto& light : runtime.activeShadowLights)
+				snapshot.Retain(light, true);
+			for (const auto& light : runtime.lightQueueAdd)
+				snapshot.Retain(light, false);
+			for (const auto& light : runtime.lightQueueRemove)
+				snapshot.Retain(light, false);
+			for (const auto& light : runtime.unk190)
+				snapshot.Retain(light, false);
+		}
+		// Publish only complete captures; failed captures release references after unlocking.
+		return &sceneLightSnapshots.try_emplace(a_node, std::move(snapshot)).first->second;
+	} catch (const std::bad_alloc&) {
+		sceneLightSnapshotFailed = true;
+		logger::error("Light Limit Fix: scene light capture allocation failed; skipping engine lights until reset");
+		return nullptr;
+	}
+}
+
 void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(RE::BSRenderPass* a_pass)
 {
 	if (!a_pass || !a_pass->sceneLights) {
@@ -1624,7 +1661,14 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 		return;
 	}
 
-	bool inWorld = accumulator->GetRuntimeData().activeShadowSceneNode == smState->shadowSceneNode[0];
+	auto* activeNode = accumulator->GetRuntimeData().activeShadowSceneNode;
+	bool inWorld = activeNode == smState->shadowSceneNode[0];
+	const bool retainSceneLights = globals::game::isVR;
+	const auto* snapshot = retainSceneLights ? GetSceneLightSnapshot(activeNode) : nullptr;
+	if (retainSceneLights && !snapshot) {
+		ClearStrictLightData(strictLightDataTemp, false);
+		return;
+	}
 	const bool isInterior = LocationContext::Get().inInterior;
 
 	constexpr uint32_t kStrictLightCapacity = 15;
@@ -1643,6 +1687,8 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 	{
 		for (uint32_t i = 0; i < strictLightCount; i++) {
 			auto bsLight = a_pass->sceneLights[i + 1];
+			if (retainSceneLights)
+				bsLight = snapshot->Find(bsLight);
 			if (!bsLight) {
 				continue;
 			}
@@ -1687,6 +1733,8 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 
 		for (uint32_t i = 0; i < shadowLightCount; i++) {
 			auto bsLight = a_pass->sceneLights[i + 1];
+			if (retainSceneLights)
+				bsLight = snapshot->Find(bsLight);
 			if (!bsLight || !bsLight->IsShadowLight()) {
 				continue;
 			}
@@ -3015,6 +3063,11 @@ void LightLimitFix::UpdateLights()
 		clearAndUpdate();
 		return;
 	}
+	const auto* snapshot = globals::game::isVR ? GetSceneLightSnapshot(shadowSceneNode) : nullptr;
+	if (globals::game::isVR && !snapshot) {
+		clearAndUpdate();
+		return;
+	}
 
 	// Cache data since cameraData can become invalid in first-person
 
@@ -3051,8 +3104,8 @@ void LightLimitFix::UpdateLights()
 		light.roomFlags.SetBit(roomIndex, 1);
 	};
 
-	auto addLight = [&](const RE::NiPointer<RE::BSLight>& e) {
-		if (auto bsLight = e.get()) {
+	auto addLight = [&](RE::BSLight* bsLight) {
+		if (bsLight) {
 			if (auto niLight = bsLight->light.get()) {
 				if (IsValidLight(bsLight)) {
 					auto& runtimeData = niLight->GetLightRuntimeData();
@@ -3113,11 +3166,16 @@ void LightLimitFix::UpdateLights()
 
 	{
 		CS_PROFILE_CPU_SCOPE("LightLimitFix::SceneLightsCPU");
-		for (auto& e : shadowSceneNode->GetRuntimeData().activeLights) {
-			addLight(e);
-		}
-		for (auto& e : shadowSceneNode->GetRuntimeData().activeShadowLights) {
-			addLight(e);
+		if (globals::game::isVR) {
+			for (auto* light : snapshot->ActiveLights())
+				addLight(light);
+		} else {
+			for (auto& light : shadowSceneNode->GetRuntimeData().activeLights)
+				addLight(light.get());
+			for (auto& light : shadowSceneNode->GetRuntimeData().activeShadowLights) {
+				const RE::NiPointer<RE::BSLight> owner = light;
+				addLight(owner.get());
+			}
 		}
 	}
 

@@ -124,6 +124,7 @@ foreach(_action IN ITEMS
     cpu_performance_start
     cpu_performance_stop
     cpu_performance_reset
+	fsr_shared_guides
 	gpu_performance_status
 	gpu_performance_start
 	gpu_performance_stop

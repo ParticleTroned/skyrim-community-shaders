@@ -152,10 +152,25 @@ namespace
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	bool IsReadableRange(const void* a_ptr, std::size_t a_size) noexcept;
+
 	template <std::size_t N>
 	bool MatchesInstructions(std::uintptr_t a_address, const std::uint8_t (&a_expected)[N]) noexcept
 	{
-		return std::equal(std::begin(a_expected), std::end(a_expected), reinterpret_cast<const std::uint8_t*>(a_address));
+		const auto* actual = reinterpret_cast<const std::uint8_t*>(a_address);
+		const auto rva = a_address - REL::Module::get().base();
+		if (!IsReadableRange(actual, N)) {
+			logger::error("[LLF] Instruction check at SkyrimVR.exe+{:X}: {} bytes are not readable", rva, N);
+			return false;
+		}
+
+		const auto mismatch = std::mismatch(std::begin(a_expected), std::end(a_expected), actual);
+		if (mismatch.first == std::end(a_expected)) {
+			return true;
+		}
+		logger::error("[LLF] Instruction check at SkyrimVR.exe+{:X}, byte +{:X}: expected {:02X}, observed {:02X}",
+			rva, mismatch.first - std::begin(a_expected), *mismatch.first, *mismatch.second);
+		return false;
 	}
 
 	bool IsEngineFixesLoaded() noexcept
@@ -2358,12 +2373,8 @@ void LightLimitFix::Hooks::InstallVRSceneGraphCullingObjectGuard()
 		return;
 	}
 
-	// Skyrim VR 1.4.15 can retain a readable NiNode child after teardown has
-	// cleared its vtable. The scene-culling helper then reads that stale object
-	// and dispatches through slot 0x1A8 of the null vtable. The helper entry,
-	// virtual-call context, internal tail-entry context, and void epilogue were verified
-	// against the live, decrypted runtime after the same Windhelm-to-Dragonsreach
-	// crash reproduced both before and after the room-light/effect-shader guards.
+	// This entry guard owns only the prologue; interior OnVisible hooks remain independent.
+	// Verify the displaced instruction and incoming-object contract against the live image.
 	constexpr std::uintptr_t helperEntryRVA = 0xCBFC60;
 	constexpr std::uintptr_t virtualCallContextRVA = 0xCBFD15;
 	constexpr std::uintptr_t helperEpilogueRVA = 0xCBFD52;
@@ -2480,12 +2491,11 @@ void LightLimitFix::Hooks::InstallVRShadowMapCameraGuard()
 		0x48, 0x8B, 0x7B, 0x40,
 		0xC7, 0x45, 0x98, 0x00, 0x00, 0x00, 0x00,
 		0xC7, 0x45, 0x9C, 0x00, 0x00, 0x80, 0x3F,
-		0x48, 0xC7, 0x45, 0xA0, 0x00, 0x00, 0x80, 0x3F,
-		0x48, 0x8B, 0x87, 0x80, 0x01, 0x00, 0x00,
-		0x0F, 0x10, 0x00
+		0x48, 0xC7, 0x45, 0xA0, 0x00, 0x00, 0x80, 0x3F
 	};
 	constexpr std::uint8_t expectedLateFrustumLoad[] = {
-		0x48, 0x8B, 0x87, 0x80, 0x01, 0x00, 0x00
+		0x48, 0x8B, 0x87, 0x80, 0x01, 0x00, 0x00,
+		0x0F, 0x10, 0x00
 	};
 	constexpr std::uint8_t expectedHelperEpilogue[] = {
 		0x4C, 0x8D, 0x9C, 0x24, 0xF0, 0x01, 0x00, 0x00,

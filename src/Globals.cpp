@@ -1,5 +1,7 @@
 #include "Globals.h"
 
+#include "RenderMap/D3DContextHooks.h"
+
 #include "Deferred.h"
 #include "Features/AdaptiveBrightness.h"
 #include "Features/CSEditor.h"
@@ -315,5 +317,6 @@ namespace globals
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
 		Upscaling::InstallVRMenuPresentationTraceD3DHooks(a_context);
 		UnderwaterDepthOfField::InstallD3DHooks(a_context);
+		CSX::RenderMap::InstallD3DContextHooks(a_context);
 	}
 }

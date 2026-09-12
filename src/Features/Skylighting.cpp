@@ -999,12 +999,7 @@ bool Skylighting::HasCurrentShadowData() const
 
 void Skylighting::ClearShaderCache()
 {
-	static const std::vector<winrt::com_ptr<ID3D11ComputeShader>*> shaderPtrs = {
-		&probeUpdateCompute
-	};
-
-	for (auto shader : shaderPtrs)
-		*shader = nullptr;
+	probeUpdateCompute = nullptr;
 
 	CompileComputeShaders();
 }

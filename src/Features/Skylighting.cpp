@@ -942,8 +942,6 @@ void Skylighting::SetupResources()
 
 void Skylighting::SetupRenderTargetResources()
 {
-	QueueResetSkylighting();
-
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
 	if (resourceDevice != device) {
@@ -1051,8 +1049,21 @@ void Skylighting::CompileComputeShaders()
 	}
 }
 
+bool Skylighting::HasProbeUpdateResources() const
+{
+	auto sky = globals::game::sky;
+	return sky && sky->mode.get() == RE::Sky::Mode::kFull && globals::d3d::context &&
+	       probeUpdateCompute.get() && comparisonSampler.get() &&
+	       texOcclusion && texOcclusion->srv.get() &&
+	       texProbeArray && texProbeArray->srv.get() && texProbeArray->uav.get() &&
+	       texAccumFramesArray && texAccumFramesArray->uav.get() &&
+	       texShadowBitmask && texShadowBitmask->uav.get() &&
+	       texShadowVisibility && texShadowVisibility->srv.get() && texShadowVisibility->uav.get();
+}
+
 Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 {
+	probeUpdateBufferEnabled = false;
 	auto data = Skylighting::SkylightingCB{};
 
 	if (!a_inWorld)
@@ -1061,7 +1072,7 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 	if (!IsRuntimeActive())
 		return data;
 
-	if (UpdateInteriorState() || queuedResetSkylighting.load(std::memory_order_acquire) || needsOcclusionRefresh)
+	if (UpdateInteriorState() || queuedResetSkylighting.load(std::memory_order_acquire) || needsOcclusionRefresh || !HasProbeUpdateResources())
 		return data;
 
 	if (globals::state->isMapMenuOpen)
@@ -1080,7 +1091,7 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 	cellID = { round(cellID.x), round(cellID.y), round(cellID.z) };
 	auto cellOrigin = cellID * cellSize;
 	float3 cellIDDiff = prevCellID - cellID;
-	prevCellID = cellID;
+	probeUpdateCellID = cellID;
 	DirectX::XMINT3 cellIDDiffI = { (int)cellIDDiff.x, (int)cellIDDiff.y, (int)cellIDDiff.z };
 
 	bool shouldForceFullUpdate =
@@ -1102,9 +1113,7 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 		ResetProbeUpdateWindow(*this);
 	}
 
-	if (forcedFullUpdateFrames > 0)
-		forcedFullUpdateFrames--;
-
+	probeUpdateBufferEnabled = true;
 	return {
 		.OcclusionViewProj = OcclusionTransform,
 		.OcclusionSHBasis4Pi = occlusionSHBasis4Pi,
@@ -1129,7 +1138,11 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 void Skylighting::Prepass()
 {
 	auto context = globals::d3d::context;
-	if (!IsRuntimeActive() || UpdateInteriorState() || queuedResetSkylighting.load(std::memory_order_acquire) || needsOcclusionRefresh) {
+	if (!IsRuntimeActive() || UpdateInteriorState() || queuedResetSkylighting.load(std::memory_order_acquire) || needsOcclusionRefresh ||
+		globals::state->isMapMenuOpen || !HasProbeUpdateResources() || !probeUpdateBufferEnabled) {
+		// A loading event may invalidate history after the world buffer was uploaded.
+		if (context && probeUpdateBufferEnabled)
+			globals::state->UpdateFeatureData(true);
 		if (context) {
 			ID3D11ShaderResourceView* srv = nullptr;
 			context->PSSetShaderResources(50, 1, &srv);
@@ -1137,22 +1150,6 @@ void Skylighting::Prepass()
 		}
 		return;
 	}
-
-	if (globals::state->isMapMenuOpen)
-		return;
-
-	bool interior = true;
-	if (auto sky = globals::game::sky)
-		interior = sky->mode.get() != RE::Sky::Mode::kFull;
-
-	if (interior || !context ||
-		!probeUpdateCompute.get() || !comparisonSampler.get() ||
-		!texOcclusion || !texOcclusion->srv.get() ||
-		!texProbeArray || !texProbeArray->srv.get() || !texProbeArray->uav.get() ||
-		!texAccumFramesArray || !texAccumFramesArray->uav.get() ||
-		!texShadowBitmask || !texShadowBitmask->uav.get() ||
-		!texShadowVisibility || !texShadowVisibility->srv.get() || !texShadowVisibility->uav.get())
-		return;
 
 	{
 		// Both probe volumes were exposed to pixel shaders by the previous frame.
@@ -1209,6 +1206,10 @@ void Skylighting::Prepass()
 					CS_GPU_PASS("Skylighting::ProbeUpdate");
 					context->Dispatch((probeArrayDims[0] + 7u) >> 3, (probeArrayDims[1] + 7u) >> 3, dispatchSliceCount);
 				}
+				// Buffer publication can repeat or outlive a skipped dispatch.
+				prevCellID = probeUpdateCellID;
+				if (forcedFullUpdateFrames > 0)
+					forcedFullUpdateFrames--;
 
 				if (updatingIncrementalSlices) {
 					probeUpdateCornerMask |= occlusionCornerBit;

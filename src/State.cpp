@@ -32,7 +32,6 @@
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
 #include "Features/PerformanceOverlay.h"
-#include "Features/Skylighting.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
@@ -464,7 +463,6 @@ void State::Draw()
 			globals::features::lightLimitFix.Reset();
 			globals::features::interiorSun.isInteriorWithSun = false;
 			globals::features::wetterness.ResetRuntimeStateAfterGameLoad();
-			globals::features::skylighting.QueueResetSkylighting();
 			pendingPostLoadRuntimeReset = false;
 			logger::info("Applied deferred post-load runtime reset");
 		}

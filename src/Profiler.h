@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <d3d11.h>
 #include <functional>
 #include <string>
@@ -43,8 +44,9 @@ public:
 	struct TimerResult
 	{
 		std::string name;
+		// Self time; profiled descendants are excluded before same-name aggregation.
 		float gpuTimeMs = 0.0f;
-		// Portion of gpuTimeMs contributed by depth-0 intervals this cycle.
+		// Inclusive depth-0 contribution; its sum remains the resolved GPU total.
 		float topLevelMs = 0.0f;
 		float avgMs = 0.0f;
 		float p95Ms = 0.0f;
@@ -65,7 +67,7 @@ public:
 		const float* cpuHistoryBuffer = nullptr;
 		uint32_t cpuHistoryHead = 0;
 		uint32_t cpuHistoryCount = 0;
-		// Outermost histories are written in lockstep with their full histories.
+		// Inclusive feature-root histories remain aligned with the self-time histories.
 		const float* outermostGpuHistoryBuffer = nullptr;
 		const float* outermostCpuHistoryBuffer = nullptr;
 
@@ -198,7 +200,7 @@ private:
 	{
 		std::string name;
 		float cpuMs = 0.0f;
-		uint32_t depth = 0;
+		float cpuSelfMs = 0.0f;
 		bool outermostCpuInRoot = true;
 	};
 
@@ -212,6 +214,10 @@ private:
 			std::string name;
 			LARGE_INTEGER cpuBegin{};
 			float cpuMs = 0.0f;
+			float cpuSelfMs = 0.0f;
+			double nestedCpuMs = 0.0;
+			uint64_t cpuOrdinal = 0;
+			int32_t parentSlot = -1;
 			uint32_t depth = 0;
 			bool ended = false;
 			bool outermostGpuInRoot = true;
@@ -248,7 +254,8 @@ private:
 	{
 		std::string name;
 		LARGE_INTEGER cpuBegin{};
-		uint32_t depth = 0;
+		double nestedCpuMs = 0.0;
+		uint64_t ordinal = 0;
 		bool outermostCpuInRoot = true;
 	};
 
@@ -279,6 +286,7 @@ private:
 	uint64_t collectedDetailedCycles = 0;
 	std::vector<CpuTimer> activeCpuTimers;
 	std::vector<CompletedCpuTimer> completedCpuTimers;
+	uint64_t nextCpuOrdinal = 0;
 	float totalTimeMs = 0.0f;
 	float cpuTotalTimeMs = 0.0f;
 	// Resolve-consistent totals remain paired with results while live totals idle at zero.
@@ -308,6 +316,7 @@ private:
 	void StoreCompletedCpuTimers(FrameQueries& frame);
 	bool HasActiveGpuAncestorWithSameRoot(std::string_view name) const;
 	bool HasActiveCpuAncestorWithSameRoot(std::string_view name) const;
+	void AddCpuChildTime(uint64_t childOrdinal, double coveredMs);
 	void ResetFrameState(FrameQueries& frame);
 	void ResetPendingFrames();
 	static bool HasPendingFrameData(const FrameQueries& frame);

@@ -1,4 +1,5 @@
 #include "Profiler.h"
+#include "Utils/ProfilerTiming.h"
 
 #include <algorithm>
 #include <cmath>
@@ -7,11 +8,9 @@
 
 namespace
 {
-	constexpr float kMaxSaneProfilerSampleMs = 1000.0f;
-
 	bool IsValidProfilerSample(float ms)
 	{
-		return std::isfinite(ms) && ms >= 0.0f && ms <= kMaxSaneProfilerSampleMs;
+		return Util::ProfilerTiming::IsValidSample(ms);
 	}
 
 	bool HasSameProfilerRoot(std::string_view left, std::string_view right)
@@ -336,6 +335,10 @@ bool Profiler::BeginPass(std::string_view name, bool fireCallbacks)
 	auto& timer = frame.timers[timerIndex];
 	timer.name.assign(name);
 	timer.cpuMs = 0.0f;
+	timer.cpuSelfMs = 0.0f;
+	timer.nestedCpuMs = 0.0;
+	timer.cpuOrdinal = ++nextCpuOrdinal;
+	timer.parentSlot = frame.activeTimerStack.empty() ? -1 : static_cast<int32_t>(frame.activeTimerStack.back());
 	timer.depth = static_cast<uint32_t>(frame.activeTimerStack.size());
 	timer.ended = false;
 	timer.outermostGpuInRoot = !HasActiveGpuAncestorWithSameRoot(name);
@@ -369,6 +372,9 @@ void Profiler::EndPass(bool fireCallbacks)
 	LARGE_INTEGER cpuEnd;
 	QueryPerformanceCounter(&cpuEnd);
 	timer.cpuMs = static_cast<float>(static_cast<double>(cpuEnd.QuadPart - timer.cpuBegin.QuadPart) * cpuTicksToMs);
+	const auto completion = Util::ProfilerTiming::CompleteCpuScope(timer.name.empty() ? -1.0 : timer.cpuMs, timer.nestedCpuMs);
+	timer.cpuSelfMs = static_cast<float>(completion.selfMs);
+	AddCpuChildTime(timer.cpuOrdinal, completion.coveredMs);
 
 	context->End(timer.end.get());
 	timer.ended = true;
@@ -392,8 +398,7 @@ bool Profiler::BeginCpuPass(std::string_view name)
 
 	auto& timer = activeCpuTimers.emplace_back();
 	timer.name.assign(name);
-	const bool insideGpuPass = frameActive && !frames[writeFrame].activeTimerStack.empty();
-	timer.depth = static_cast<uint32_t>(activeCpuTimers.size() - 1) + (insideGpuPass ? 1u : 0u);
+	timer.ordinal = ++nextCpuOrdinal;
 	timer.outermostCpuInRoot = outermostCpuInRoot;
 	QueryPerformanceCounter(&timer.cpuBegin);
 	return true;
@@ -407,18 +412,17 @@ void Profiler::EndCpuPass()
 	auto timer = std::move(activeCpuTimers.back());
 	activeCpuTimers.pop_back();
 
-	if (timer.name.empty())
-		return;
-
 	LARGE_INTEGER cpuEnd;
 	QueryPerformanceCounter(&cpuEnd);
 
 	CompletedCpuTimer completed;
 	completed.name = std::move(timer.name);
 	completed.cpuMs = static_cast<float>(static_cast<double>(cpuEnd.QuadPart - timer.cpuBegin.QuadPart) * cpuTicksToMs);
-	completed.depth = timer.depth;
+	const auto completion = Util::ProfilerTiming::CompleteCpuScope(completed.name.empty() ? -1.0 : completed.cpuMs, timer.nestedCpuMs);
+	completed.cpuSelfMs = static_cast<float>(completion.selfMs);
+	AddCpuChildTime(timer.ordinal, completion.coveredMs);
 	completed.outermostCpuInRoot = timer.outermostCpuInRoot;
-	if (!IsValidProfilerSample(completed.cpuMs))
+	if (completed.name.empty() || !IsValidProfilerSample(completed.cpuMs))
 		return;
 	completedCpuTimers.push_back(std::move(completed));
 }
@@ -522,6 +526,9 @@ bool Profiler::CollectResults()
 	const bool hadCpuTimers = !frame.cpuTimers.empty();
 
 	if (frame.inFlight) {
+		std::vector<Util::ProfilerTiming::Interval> intervals(frame.activeCount);
+		for (uint32_t i = 0; i < frame.activeCount; ++i)
+			intervals[i].parent = frame.timers[i].parentSlot;
 		HRESULT hr = context->GetData(frame.disjoint.get(), &disjointData, sizeof(disjointData), D3D11_ASYNC_GETDATA_DONOTFLUSH);
 		if (hr == S_FALSE)
 			return false;
@@ -539,38 +546,44 @@ bool Profiler::CollectResults()
 				if (beginHr == S_FALSE || endHr == S_FALSE)
 					return false;
 
-				// CPU and GPU validity are independent: a hitch on one side must
-				// not discard a valid sample from the other.
-				const bool gpuValid = beginHr == S_OK && endHr == S_OK && tsEnd >= tsBegin &&
-				                      IsValidProfilerSample(static_cast<float>(static_cast<double>(tsEnd - tsBegin) * ticksToMs));
-				const float gpuMs = gpuValid ? static_cast<float>(static_cast<double>(tsEnd - tsBegin) * ticksToMs) : 0.0f;
-				const bool cpuValid = IsValidProfilerSample(timer.cpuMs);
-				if (!gpuValid && !cpuValid)
-					continue;
-
-				// Repeated pass names accumulate here and enter history once below.
-				auto& entry = activeTimers[timer.name];
-				GetOrCreateTimer(timer.name);
-				if (gpuValid) {
-					entry.gpuMs += gpuMs;
-					if (timer.outermostGpuInRoot)
-						entry.outermostGpuMs += gpuMs;
-					entry.hasGpu = true;
-					if (timer.depth == 0) {
-						activeTotalMs += gpuMs;
-						entry.topLevelMs += gpuMs;
-					}
-				}
-				if (cpuValid) {
-					entry.cpuMs += timer.cpuMs;
-					if (timer.outermostCpuInRoot)
-						entry.outermostCpuMs += timer.cpuMs;
-					entry.hasCpu = true;
-					if (timer.depth == 0)
-						activeCpuTotalMs += timer.cpuMs;
-				}
+				if (beginHr == S_OK && endHr == S_OK && tsEnd >= tsBegin)
+					intervals[i].inclusiveMs = static_cast<double>(tsEnd - tsBegin) * ticksToMs;
 			}
 			gpuFrameResolved = true;
+		}
+
+		const auto selfTimes = Util::ProfilerTiming::ResolveSelfTimes(intervals);
+		for (uint32_t i = 0; i < frame.activeCount; ++i) {
+			const auto& timer = frame.timers[i];
+			if (timer.name.empty() || !timer.ended)
+				continue;
+			const bool gpuValid = Util::ProfilerTiming::IsValidSample(intervals[i].inclusiveMs);
+			const bool cpuValid = IsValidProfilerSample(timer.cpuMs);
+			if (!gpuValid && !cpuValid)
+				continue;
+
+			// Resolve nesting before aggregating repeated names into one history sample.
+			auto& entry = activeTimers[timer.name];
+			GetOrCreateTimer(timer.name);
+			if (gpuValid) {
+				const auto inclusiveMs = static_cast<float>(intervals[i].inclusiveMs);
+				entry.gpuMs += static_cast<float>(selfTimes[i]);
+				if (timer.outermostGpuInRoot)
+					entry.outermostGpuMs += inclusiveMs;
+				entry.hasGpu = true;
+				if (timer.depth == 0) {
+					activeTotalMs += inclusiveMs;
+					entry.topLevelMs += inclusiveMs;
+				}
+			}
+			// A disjoint GPU clock does not invalidate CPU wall-clock measurements.
+			if (cpuValid) {
+				entry.cpuMs += timer.cpuSelfMs;
+				if (timer.outermostCpuInRoot)
+					entry.outermostCpuMs += timer.cpuMs;
+				entry.hasCpu = true;
+				activeCpuTotalMs += timer.cpuSelfMs;
+			}
 		}
 		frame.inFlight = false;
 	}
@@ -582,19 +595,19 @@ bool Profiler::CollectResults()
 			continue;
 
 		auto& entry = activeTimers[timer.name];
-		entry.cpuMs += timer.cpuMs;
+		entry.cpuMs += timer.cpuSelfMs;
 		if (timer.outermostCpuInRoot)
 			entry.outermostCpuMs += timer.cpuMs;
 		entry.hasCpu = true;
-		if (timer.depth == 0)
-			activeCpuTotalMs += timer.cpuMs;
+		activeCpuTotalMs += timer.cpuSelfMs;
 
 		GetOrCreateTimer(timer.name);
 	}
 
 	// Exactly one history sample per named timer and resolved cycle keeps all
 	// histories aligned for percentile-of-sum calculations in the UI.
-	const bool cpuCycleResolved = gpuFrameResolved || hadCpuTimers;
+	const bool cpuCycleResolved = gpuFrameResolved || hadCpuTimers ||
+	                              std::any_of(activeTimers.begin(), activeTimers.end(), [](const auto& timer) { return timer.second.hasCpu; });
 	if (cpuCycleResolved)
 		IncrementSaturating(collectedDetailedCycles);
 	for (auto& known : knownTimers) {
@@ -762,6 +775,31 @@ bool Profiler::HasActiveGpuAncestorWithSameRoot(std::string_view name) const
 			return true;
 	}
 	return false;
+}
+
+void Profiler::AddCpuChildTime(uint64_t childOrdinal, double coveredMs)
+{
+	uint64_t parentOrdinal = 0;
+	double* nestedMs = nullptr;
+	// GPU-backed and CPU-only scopes share one chronological CPU nesting order.
+	if (frameActive) {
+		auto& frame = frames[writeFrame];
+		for (const auto index : frame.activeTimerStack) {
+			auto& timer = frame.timers[index];
+			if (timer.cpuOrdinal < childOrdinal && timer.cpuOrdinal > parentOrdinal) {
+				parentOrdinal = timer.cpuOrdinal;
+				nestedMs = &timer.nestedCpuMs;
+			}
+		}
+	}
+	for (auto& timer : activeCpuTimers) {
+		if (timer.ordinal < childOrdinal && timer.ordinal > parentOrdinal) {
+			parentOrdinal = timer.ordinal;
+			nestedMs = &timer.nestedCpuMs;
+		}
+	}
+	if (nestedMs)
+		*nestedMs += coveredMs;
 }
 
 bool Profiler::HasActiveCpuAncestorWithSameRoot(std::string_view name) const

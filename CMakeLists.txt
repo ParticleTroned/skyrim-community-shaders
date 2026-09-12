@@ -2571,6 +2571,18 @@ if(BUILD_CONTROLLER_TESTS)
         PROPERTIES LABELS "ControllerTests"
     )
 
+    add_controller_test(
+        profiler_timing_test
+        ProfilerTiming
+        tests/profiler_timing_test.cpp
+    )
+    target_sources(profiler_timing_test PRIVATE src/Profiler.cpp)
+    target_compile_definitions(
+        profiler_timing_test
+        PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
+    )
+    target_link_libraries(profiler_timing_test PRIVATE d3d11.lib runtimeobject.lib)
+
     add_executable(
         api_editor_contract_test
         EXCLUDE_FROM_ALL
@@ -2664,6 +2676,7 @@ if(BUILD_CONTROLLER_TESTS)
             shader_cache_pack_test
             api_weather_service_policy_test
             api_profiler_contract_test
+            profiler_timing_test
             api_editor_contract_test
             api_feature_contract_test
     )

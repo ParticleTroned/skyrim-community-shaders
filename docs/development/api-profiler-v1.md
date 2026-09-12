@@ -8,7 +8,7 @@ the CSXR service registry; DevBench exposes the parallel contract as
 
 ## Contract
 
-- Service: `csx.profiler`; contract `1.0`; schema revision `1`.
+- Service: `csx.profiler`; contract `1.1`; schema revision `2`.
 - Native calls are main-thread-affine. Timer names are borrowed until the next
   profiler update and must be copied by callers.
 - The process-lifetime interface reports runtime unavailability rather than
@@ -31,6 +31,37 @@ contribution, and history counts. A prefix can select one feature family.
 `history` pages oldest-to-newest samples for one timer index and timing domain.
 Indices are snapshot-local: clients must refresh the catalog after clearing
 history, device reinitialization, or feature changes.
+
+The `kCapabilitySelfTime` capability identifies GPU and CPU timer values,
+statistics, and histories as self time: profiled descendants are excluded
+before repeated names are combined. CPU accounting includes nesting between
+CPU-only and GPU-backed scopes. Version 1.0 / schema revision 1 reported
+inclusive timer values. Native layouts and signatures remain unchanged.
+
+GPU `topLevelMs` and resolved GPU totals retain inclusive depth-zero scope
+time. CPU totals sum self times across both scope types. Invalid GPU queries
+do not invalidate CPU samples, and valid GPU descendants skip invalid
+ancestors when resolving self time. No result is published while a required
+GPU query is pending.
+
+Detailed UI rows and combined totals use self time. Per-feature summaries
+retain inclusive outermost scope costs, so nested feature costs can overlap
+and must not be added together. Comparisons with captures from schema 1
+must account for this change in timer semantics.
+
+## Migration from 1.0 to 1.1
+
+Native clients must accept minor version 1 in their service discovery query
+(`maximumMinor >= 1`). A client capped at minor version 0 cannot discover
+the 1.1 service. Require `minimumMinor = 1` or `kCapabilitySelfTime` when
+calculations depend on additive self-time samples; clients supporting both
+versions should inspect the returned version and capabilities.
+
+DevBench callers keep `contractMajor: 1`. Responses advertise minor version
+1 and schema revision 2, and the registry reports
+`timingSemantics: gpu_cpu_self_time`. The legacy profiler status reports the
+same timing-semantics marker. Update analysis that assumed inclusive timer
+values, and label historical comparisons with the producing version.
 
 ## Bounded captures
 

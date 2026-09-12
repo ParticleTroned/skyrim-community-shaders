@@ -3,6 +3,11 @@
 #include <algorithm>
 #include <type_traits>
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include <array>
+#	include <chrono>
+#endif
+
 #include <DDSTextureLoader.h>
 
 #include "GpuPass.h"
@@ -21,6 +26,54 @@
 
 #include "Hooks.h"
 #include "Utils/D3D.h"
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+namespace
+{
+	enum class SceneDepthCopyReason : size_t
+	{
+		Deferred,
+		MasterDisabled,
+		NoDeferredPass,
+		OutsideWorld,
+		EarlyCopyUnavailable,
+		Count
+	};
+
+	void RecordSceneDepthCopy(SceneDepthCopyReason a_reason, bool a_copied)
+	{
+		static std::array<uint64_t, static_cast<size_t>(SceneDepthCopyReason::Count)> copies{};
+		static uint64_t attempts = 0;
+		static uint64_t failures = 0;
+		static uint64_t frames = 0;
+		static std::optional<uint32_t> lastFrame;
+		static bool reportedFirstFallback = false;
+		static auto lastReport = std::chrono::steady_clock::now();
+
+		const auto frame = globals::state->frameCount;
+		++attempts;
+		if (!lastFrame || *lastFrame != frame) {
+			++frames;
+			lastFrame = frame;
+		}
+		if (a_copied)
+			++copies[static_cast<size_t>(a_reason)];
+		else
+			++failures;
+
+		const auto now = std::chrono::steady_clock::now();
+		const bool firstFallback = a_reason != SceneDepthCopyReason::Deferred && !reportedFirstFallback;
+		if (!firstFallback && now - lastReport < std::chrono::seconds(10))
+			return;
+		reportedFirstFallback |= firstFallback;
+		lastReport = now;
+		logger::info(
+			"[Deferred::SceneDepth] cumulative attempts={} frames={} early={} fallbackDisabled={} fallbackNoPass={} fallbackOutsideWorld={} fallbackEarlyUnavailable={} failures={} frame={} enabled={}",
+			attempts, frames, copies[0], copies[1], copies[2], copies[3], copies[4], failures,
+			frame, globals::shaderCache->IsEnabled());
+	}
+}
+#endif
 
 struct DepthStates
 {
@@ -123,6 +176,7 @@ void SetupRenderTarget(RE::RENDER_TARGET target, D3D11_TEXTURE2D_DESC texDesc, D
 
 void Deferred::ReleaseRenderTargets()
 {
+	finalSceneDepthFrame.reset();
 	ReleaseRenderTargetSlot(ALBEDO);
 	ReleaseRenderTargetSlot(SPECULAR);
 	ReleaseRenderTargetSlot(REFLECTANCE);
@@ -135,6 +189,7 @@ void Deferred::ReleaseRenderTargets()
 
 void Deferred::SetupResources()
 {
+	finalSceneDepthFrame.reset();
 	auto renderer = globals::game::renderer;
 	static ID3D11Device* shaderDevice = nullptr;
 	if (shaderDevice != globals::d3d::device) {
@@ -466,6 +521,7 @@ void Deferred::ReflectionsPrepasses()
 void Deferred::EarlyPrepasses()
 {
 	CS_GPU_PASS("Deferred::EarlyPrepass");
+	finalSceneDepthFrame.reset();
 
 	auto shaderCache = globals::shaderCache;
 
@@ -501,6 +557,7 @@ void Deferred::PrepassPasses()
 
 void Deferred::StartDeferred()
 {
+	finalSceneDepthFrame.reset();
 	if (!globals::state->inWorld)
 		return;
 	globals::state->UpdateSharedData(true, false);
@@ -559,6 +616,41 @@ void Deferred::StartDeferred()
 	OverrideBlendStates();
 }
 
+bool Deferred::IsSceneDepthFinal() const
+{
+	return globals::state && finalSceneDepthFrame && *finalSceneDepthFrame == globals::state->frameCount;
+}
+
+bool Deferred::CopySceneDepth()
+{
+	auto renderer = globals::game::renderer;
+	auto context = globals::d3d::context;
+	if (!renderer || !context || !globals::state)
+		return false;
+
+	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	auto& depthCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+
+	// A master-switch change can skip terrain rendering after its SRV redirection.
+	auto& terrainBlending = globals::features::terrainBlending;
+	if (terrainBlending.loaded && terrainBlending.blendedDepthTexture) {
+		auto* blendedDepthSRV = terrainBlending.blendedDepthTexture->srv.get();
+		if (blendedDepthSRV && depth.depthSRV == blendedDepthSRV)
+			depth.depthSRV = terrainBlending.depthSRVBackup;
+		if (blendedDepthSRV && depthCopy.depthSRV == blendedDepthSRV)
+			depthCopy.depthSRV = terrainBlending.prepassSRVBackup;
+	}
+
+	if (!depth.texture || !depthCopy.texture || !depthCopy.depthSRV)
+		return false;
+
+	CS_GPU_PASS("Deferred::CopySceneDepth");
+	// Water also consumes this copy, including pixels outside the active scaled area.
+	context->CopyResource(depthCopy.texture, depth.texture);
+	finalSceneDepthFrame = globals::state->frameCount;
+	return true;
+}
+
 void Deferred::DeferredPasses()
 {
 	CS_GPU_PASS("Deferred::DeferredPasses");
@@ -567,6 +659,12 @@ void Deferred::DeferredPasses()
 	auto context = globals::d3d::context;
 
 	Util::BindGlobalConstantBuffersForCS(context);
+	const bool copiedDepth = CopySceneDepth();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordSceneDepthCopy(SceneDepthCopyReason::Deferred, copiedDepth);
+#else
+	(void)copiedDepth;
+#endif
 
 	auto specular = renderer->GetRuntimeData().renderTargets[SPECULAR];
 	auto albedo = renderer->GetRuntimeData().renderTargets[ALBEDO];
@@ -882,6 +980,8 @@ void Deferred::Hooks::Main_RenderWorld::thunk(bool a1)
 
 void Deferred::Hooks::Main_RenderWorld_Start::thunk(RE::BSBatchRenderer* This, uint32_t StartRange, uint32_t EndRanges, uint32_t RenderFlags, int GeometryGroup)
 {
+	// Each opaque pass invalidates the prior copy, even with deferred rendering disabled.
+	globals::deferred->finalSceneDepthFrame.reset();
 	if (globals::shaderCache->IsEnabled() && globals::state->inWorld) {
 		// Here is where the first opaque objects start rendering
 		globals::deferred->StartDeferred();
@@ -906,18 +1006,24 @@ void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumula
 
 	func(This, RenderFlags);
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const bool hadDeferredPass = globals::state->inWorld && deferred->deferredPass;
+#endif
 	deferred->EndDeferred();
 
-	// Copy depth from before water
-	auto renderer = globals::game::renderer;
-	auto context = globals::d3d::context;
-
-	auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-	auto depthCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
-
-	context->CopyResource(depthCopy.texture, depth.texture);
-
-	// After this point, water starts rendering
+	// Water still needs completed opaque depth when no deferred pass produced it.
+	if (!deferred->IsSceneDepthFinal()) {
+		const bool copiedDepth = deferred->CopySceneDepth();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		const auto reason = !globals::state->inWorld           ? SceneDepthCopyReason::OutsideWorld :
+		                    hadDeferredPass                    ? SceneDepthCopyReason::EarlyCopyUnavailable :
+		                    !globals::shaderCache->IsEnabled() ? SceneDepthCopyReason::MasterDisabled :
+		                                                         SceneDepthCopyReason::NoDeferredPass;
+		RecordSceneDepthCopy(reason, copiedDepth);
+#else
+		(void)copiedDepth;
+#endif
+	}
 };
 
 void Deferred::Hooks::BSCubeMapCamera_RenderCubemap::thunk(RE::NiAVObject* camera, int a2, bool a3, bool a4, bool a5)

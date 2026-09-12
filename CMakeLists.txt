@@ -1641,6 +1641,45 @@ if(BUILD_CONTROLLER_TESTS)
         set_tests_properties(${TEST_NAME} PROPERTIES LABELS "ControllerTests")
     endfunction()
 
+    set(_scene_depth_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/scene-depth"
+    )
+    add_custom_command(
+        OUTPUT "${_scene_depth_test_dir}/scene_depth_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_scene_depth_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_scene_depth.cmake"
+        DEPENDS
+            src/Deferred.cpp
+            src/Utils/D3D.cpp
+            tests/extract_scene_depth.cmake
+        VERBATIM
+    )
+    add_custom_target(
+        scene_depth_test_sources
+        DEPENDS "${_scene_depth_test_dir}/scene_depth_under_test.h"
+    )
+    foreach(_scene_depth_variant IN ITEMS plain devbench)
+        add_controller_test(
+            scene_depth_${_scene_depth_variant}_test
+            SceneDepth_${_scene_depth_variant}
+            tests/scene_depth_test.cpp
+        )
+        add_dependencies(
+            scene_depth_${_scene_depth_variant}_test
+            scene_depth_test_sources
+        )
+        target_include_directories(
+            scene_depth_${_scene_depth_variant}_test
+            PRIVATE "${_scene_depth_test_dir}"
+        )
+    endforeach()
+    target_compile_definitions(
+        scene_depth_devbench_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
+
     add_controller_test(
         scene_light_snapshot_test
         SceneLightSnapshot
@@ -2635,6 +2674,8 @@ if(BUILD_CONTROLLER_TESTS)
     add_custom_target(
         controller_tests
         DEPENDS
+            scene_depth_plain_test
+            scene_depth_devbench_test
             scene_light_snapshot_test
             vr_scene_guards_test
             pbr_material_registry_test

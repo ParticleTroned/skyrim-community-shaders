@@ -234,25 +234,17 @@ private:
 		InvalidDescriptor
 	};
 
-	struct ReadbackContextProtection
-	{
-		winrt::com_ptr<ID3D11DeviceContext> context;
-		bool restoreToUnprotected = false;
-	};
-
 	struct ScreenshotWorkerState
 	{
 		std::mutex mutex;
 		std::condition_variable condition;
 		std::queue<PendingScreenshot> queue;
-		std::vector<ReadbackContextProtection> readbackProtections;
 		std::shared_ptr<ScreenshotApi> api;
 		std::size_t outstandingCount = 0;
 		std::atomic_bool notifyAllowed{ true };
 		bool accepting = true;
 		bool stopRequested = false;
 		bool exited = false;
-		bool restoreReadbackProtection = false;
 	};
 
 	std::shared_ptr<ScreenshotWorkerState> screenshotWorkerState;
@@ -278,7 +270,6 @@ private:
 
 	bool QueueScreenshot(PendingScreenshot&& screenshot);
 	bool EnsureReadbackContextProtection(ID3D11DeviceContext* a_context);
-	void RestoreReadbackContextProtectionIfIdle();
 	bool TryReserveScreenshotSlot();
 	void ReleaseScreenshotSlot();
 	static void ReleaseScreenshotSlot(const std::shared_ptr<ScreenshotWorkerState>& a_state);
@@ -315,6 +306,5 @@ private:
 		uint32_t a_sequenceOrdinal = 0);
 	bool CancelApiCapture(std::string_view a_requestId);
 	void EnsureScreenshotApi();
-	static void RestoreReadbackContextProtectionIfIdle(const std::shared_ptr<ScreenshotWorkerState>& a_state);
 	static void ShowInGameNotification(std::string message);
 };

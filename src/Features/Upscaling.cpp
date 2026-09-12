@@ -34,6 +34,7 @@
 #include "Upscaling/VRRenderScaleModePolicy.h"
 #include "Upscaling/VRVendorRelatchPolicy.h"
 #include "Utils/D3D.h"
+#include "Utils/D3DContextProtection.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Game.h"
 #include "Utils/NormalizedCoordinates.h"
@@ -15607,6 +15608,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	D3D_FEATURE_LEVEL* pFeatureLevel,
 	ID3D11DeviceContext** ppImmediateContext)
 {
+	Flags = Util::ThreadSafeDeviceFlags(Flags);
 	auto& upscaling = globals::features::upscaling;
 	if (IsRenderDocUpscalingBlocked(true)) {
 		if (!g_renderDocUpscalingD3DHookBypassLogged.exchange(true, std::memory_order_acq_rel)) {
@@ -15614,7 +15616,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 				"[Upscaling] Bypassing D3D11 upscaling device hook because {}.",
 				GetRenderDocUpscalingBlockReason());
 		}
-		return ptrD3D11CreateDeviceAndSwapChainUpscaling(pAdapter,
+		const auto result = ptrD3D11CreateDeviceAndSwapChainUpscaling(pAdapter,
 			DriverType,
 			Software,
 			Flags,
@@ -15626,6 +15628,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 			ppDevice,
 			pFeatureLevel,
 			ppImmediateContext);
+		return Util::ProtectDeviceCreation(result, ppDevice, ppImmediateContext, ppSwapChain);
 	}
 
 	try {
@@ -15695,6 +15698,8 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 			if (SUCCEEDED(proxyDeviceResult) && candidateDevice && candidateContext) {
 				try {
+					if (FAILED(Util::ProtectImmediateContext(candidateContext.get())))
+						throw std::runtime_error("proxy immediate-context protection failed");
 					DXGI_SWAP_CHAIN_DESC proxyDesc = *pSwapChainDesc;
 					proxyDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 					proxyDesc.BufferCount = std::max(proxyDesc.BufferCount, 2u);
@@ -15766,6 +15771,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 		ppDevice,
 		pFeatureLevel,
 		ppImmediateContext);
+	ret = Util::ProtectDeviceCreation(ret, ppDevice, ppImmediateContext, ppSwapChain);
 
 	if (FAILED(ret) || !ppDevice || !*ppDevice) {
 		return ret;

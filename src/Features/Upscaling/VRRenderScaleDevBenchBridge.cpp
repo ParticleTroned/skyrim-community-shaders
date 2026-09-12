@@ -15,6 +15,8 @@
 #	include "Globals.h"
 #	include "ShaderCache.h"
 #	include "State.h"
+#	include "Utils/D3DContextProtection.h"
+#	include "Utils/VRLoadingMenuClear.h"
 #	include "Utils/Form.h"
 #	include "VRAPI/CSserviceapi.h"
 #	include "VRAPI/CSupscalingapi.h"
@@ -51,7 +53,7 @@ namespace
 	static_assert(kDLSSDevBenchTraceDefaultReadLimit <= Streamline::kDLSSDevBenchTraceCapacity);
 	constexpr uint64_t kQualificationMaximumTimeoutMs = 120'000;
 	constexpr double kQualificationFoveationFloatTolerance = 0.0001;
-	constexpr unsigned int kDevBenchToolExtensionRevision = 10;
+	constexpr unsigned int kDevBenchToolExtensionRevision = 12;
 	std::atomic_bool g_registered{ false };
 	std::atomic_uint64_t g_nextDiagnosticTrimEpoch{ 1ull << 63 };
 	using SubmitBoundaryRejection = VRSubmitInputFreshnessPolicy::OuterBoundaryRejection;
@@ -1424,6 +1426,35 @@ namespace
 		};
 	}
 
+	json BuildGraphicsContextStatus()
+	{
+		const auto observation = Util::InspectImmediateContextProtection(globals::d3d::context);
+		const auto loadingClear = Util::VRLoadingMenuClear::GetStatus();
+		const bool apiReady = SUCCEEDED(observation.status) && observation.multithreadProtected;
+		return {
+			{ "policy", "device_lifetime" },
+			{ "contextAvailable", observation.contextAvailable },
+			{ "immediateContext", observation.immediateContext },
+			{ "deviceFlags", observation.deviceFlags },
+			{ "singleThreadedDevice", (observation.deviceFlags & D3D11_CREATE_DEVICE_SINGLETHREADED) != 0 },
+			{ "multithreadAvailable", observation.multithreadAvailable },
+			{ "multithreadProtected", observation.multithreadProtected },
+			{ "apiReady", apiReady },
+			{ "ready", apiReady && loadingClear.ready },
+			{ "hresult", static_cast<int32_t>(observation.status) },
+			{ "loadingMenuClear", {
+									  { "state", loadingClear.state },
+									  { "installed", loadingClear.installed },
+									  { "applicable", loadingClear.applicable },
+									  { "ready", loadingClear.ready },
+									  { "attempted", loadingClear.attempted },
+									  { "executed", loadingClear.executed },
+									  { "deferred", loadingClear.deferred },
+									  { "missingRenderer", loadingClear.missingRenderer },
+								  } },
+		};
+	}
+
 	json BuildStatus(Upscaling& a_upscaling)
 	{
 		const auto controller = a_upscaling.GetVRRenderScaleTransitionSnapshot();
@@ -1534,6 +1565,7 @@ namespace
 									  { "lastContextCreateResult", static_cast<int32_t>(a_upscaling.fidelityFX.GetLastFSRContextCreateResult()) },
 								  } },
 			{ "vendorWorkGate", VendorWorkGateJson(vendorWorkGate) },
+			{ "graphicsContext", BuildGraphicsContextStatus() },
 			{ "renderScaleSelectionPolicy", {
 												{ "linkedToUpscaling", a_upscaling.settings.renderScaleLinkedToUpscaling },
 												{ "rememberedPreference", a_upscaling.GetVRRenderScaleModePreference() },
@@ -4928,7 +4960,8 @@ namespace
 			"texture_lifetime_status",
 			"texture_lifetime_checkpoint",
 			"texture_lifetime_stop",
-			"texture_lifetime_reset" });
+			"texture_lifetime_reset",
+			"graphics_context_status" });
 	}
 
 	void RunHandler(
@@ -6550,6 +6583,12 @@ namespace
 			});
 		}
 
+		if (action == "graphics_context_status") {
+			return RunOnMainThread([action]() {
+				return json{ { "action", action }, { "graphicsContext", BuildGraphicsContextStatus() } };
+			});
+		}
+
 		if (action == "texture_lifetime_start") {
 			return RunOnMainThread([]() {
 				if (!globals::game::isVR)
@@ -7507,6 +7546,17 @@ namespace VRRenderScaleDevBenchBridge
 			                            "is saved through the normal CS settings save operation.";
 			descriptor["inputSchema"]["properties"]["action"]["enum"].push_back("set_render_scale_link");
 			descriptor["inputSchema"]["properties"]["action"]["enum"].push_back("fsr_shared_guides");
+			descriptor["inputSchema"]["properties"]["action"]["enum"].push_back("graphics_context_status");
+			descriptor["description"] = descriptor["description"].get<std::string>() +
+			                            " graphics_context_status reads the current immediate context on the main thread without changing protection. "
+			                            "graphicsContext reports device flags, interface availability, multithreadProtected, HRESULT and ready. "
+			                            "The device_lifetime policy is always enabled for SE, AE and VR, independently of diagnostic recording. "
+			                            "apiReady requires a multi-thread-capable device and active immediate-context protection; "
+			                            "ready additionally requires the applicable loading-menu guard to be installed. These are implementation readiness checks, "
+			                            "not runtime stability or whole-pass isolation certification. loadingMenuClear separately reports the "
+			                            "VR loading-message renderer guard installation and attempted, executed, deferred and missingRenderer counters. "
+			                            "Contended loading-message clears remain pending for the native render-side clear. Counters are independently sampled. "
+			                            "status includes the same graphicsContext object.";
 			descriptor["inputSchema"]["properties"]["enabled"]["description"] =
 				"Action-specific enabled state. For fsr_shared_guides, omit to inspect; supplied values "
 				"update the live preference while GPU capture is inactive. Save Settings persists the choice.";

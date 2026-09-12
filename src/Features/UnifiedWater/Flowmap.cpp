@@ -1,5 +1,6 @@
 ﻿#include "Flowmap.h"
 
+#include "Utils/D3DContextProtection.h"
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
 #include <charconv>
@@ -177,31 +178,10 @@ bool Flowmap::GenerateFlowmap(bool useMips)
 		return false;
 	}
 
-	static winrt::com_ptr<REX::W32::ID3D11Multithread> multithread;
-	BOOL wasMultithreadProtected = FALSE;
-	if (SUCCEEDED(ctx->QueryInterface(multithread.put()))) {
-		wasMultithreadProtected = multithread->SetMultithreadProtected(TRUE);
-	} else {
-		logger::error("[Unified Water] [Flowmap] ID3D11Multithread not available");
+	if (FAILED(Util::ProtectImmediateContext(ctx))) {
+		logger::error("[Unified Water] [Flowmap] Immediate-context protection is unavailable");
 		return false;
 	}
-
-	multithread->Enter();
-
-	struct MultithreadGuard
-	{
-		winrt::com_ptr<REX::W32::ID3D11Multithread> mt;
-		BOOL wasProtected = FALSE;
-		MultithreadGuard(winrt::com_ptr<REX::W32::ID3D11Multithread> m, BOOL a_wasProtected) :
-			mt(m), wasProtected(a_wasProtected) {}
-		~MultithreadGuard()
-		{
-			if (mt) {
-				mt->Leave();
-				mt->SetMultithreadProtected(wasProtected);
-			}
-		}
-	} guard(multithread, wasMultithreadProtected);
 
 	const auto tamriel = RE::TESForm::LookupByEditorID<RE::TESWorldSpace>("Tamriel");
 	if (!tamriel) {
@@ -356,6 +336,8 @@ bool Flowmap::GenerateFlowmap(bool useMips)
 	}
 
 	{
+		// Per-call protection and state restoration isolate this private work
+		// without holding the immediate context through texture I/O or encoding.
 		ctx->ExecuteCommandList(commandList.get(), TRUE);
 
 		const auto filename = std::format(L"Tamriel-Flowmap.{}.{}.{}.{}.dds", width, height, offsetX, offsetY);

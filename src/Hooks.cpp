@@ -1,7 +1,9 @@
 #include "Hooks.h"
 
 #include "ShaderTools/BSShaderHooks.h"
+#include "Utils/D3DContextProtection.h"
 #include "Utils/ExternalEmittance.h"
+#include "Utils/VRLoadingMenuClear.h"
 
 #include "Feature.h"
 #include "Globals.h"
@@ -943,7 +945,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 	auto ret = ptrD3D11CreateDeviceAndSwapChain(pAdapter,
 		DriverType,
 		Software,
-		Flags,
+		Util::ThreadSafeDeviceFlags(Flags),
 		&featureLevel,
 		1,
 		SDKVersion,
@@ -953,7 +955,10 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 		pFeatureLevel,
 		ppImmediateContext);
 
-	return ret;
+	const auto protectedResult = Util::ProtectDeviceCreation(ret, ppDevice, ppImmediateContext, ppSwapChain);
+	if (SUCCEEDED(ret) && FAILED(protectedResult))
+		logger::error("D3D11 immediate-context protection failed: 0x{:08X}", static_cast<uint32_t>(protectedResult));
+	return protectedResult;
 }
 
 void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
@@ -1300,6 +1305,12 @@ namespace Hooks
 
 			logger::info("Accessing render device information");
 			globals::ReInit();
+			const auto protectionResult = Util::ProtectImmediateContext(globals::d3d::context);
+			if (FAILED(protectionResult)) {
+				logger::critical("Renderer immediate-context protection failed: 0x{:08X}", static_cast<uint32_t>(protectionResult));
+				stl::report_and_fail("The graphics context cannot be protected for concurrent rendering. See CommunityShaders.log.");
+			}
+			logger::info("D3D11 immediate-context multithread protection enabled for the device lifetime");
 
 			logger::info("Detouring virtual function tables");
 			stl::detour_vfunc<8, IDXGISwapChain_Present>(globals::d3d::swapChain);
@@ -1850,6 +1861,7 @@ namespace Hooks
 	 */
 	void Install()
 	{
+		Util::VRLoadingMenuClear::Install();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		InstallVRFaceGenTintAssignmentDiagnostic();
 #endif

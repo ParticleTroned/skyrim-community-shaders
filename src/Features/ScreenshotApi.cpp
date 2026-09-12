@@ -170,6 +170,28 @@ namespace
 		}
 	}
 
+	std::string CaptureEyeName(ScreenshotFeature::CaptureEye a_eye)
+	{
+		switch (a_eye) {
+		case ScreenshotFeature::CaptureEye::Right:
+			return "right";
+		case ScreenshotFeature::CaptureEye::Both:
+			return "both";
+		case ScreenshotFeature::CaptureEye::Left:
+		default:
+			return "left";
+		}
+	}
+
+	ScreenshotFeature::CaptureEye CaptureEyeFromName(std::string_view a_eye)
+	{
+		if (a_eye == "right")
+			return ScreenshotFeature::CaptureEye::Right;
+		if (a_eye == "both")
+			return ScreenshotFeature::CaptureEye::Both;
+		return ScreenshotFeature::CaptureEye::Left;
+	}
+
 	bool IsTerminal(std::string_view a_state)
 	{
 		return a_state == "completed" || a_state == "completed_with_warnings" ||
@@ -452,10 +474,7 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 		descriptorRequest["useSettings"] = sequenceUsesSettings;
 		json descriptor;
 		try {
-			descriptor = NormalizeCaptureDescriptor(
-				a_feature,
-				descriptorRequest,
-				sequenceUsesSettings && a_feature.sequenceDefaults.saveSeparateEyes);
+			descriptor = NormalizeCaptureDescriptor(a_feature, descriptorRequest, true);
 			descriptor["destination"]["resolvedDirectory"] =
 				PathUtf8(ResolveDestinationDirectory(a_feature, descriptor, true));
 		} catch (const std::exception& e) {
@@ -639,12 +658,21 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(
 	const ScreenshotFeature& a_feature,
 	const json& a_request,
-	bool a_addSeparateEyeOutputs) const
+	bool a_sequenceSettings) const
 {
 	json capture = a_request.value("capture", json::object());
 	const bool useSettings = a_request.value("useSettings", capture.empty());
 	if (!capture.is_object())
 		throw std::runtime_error("capture must be an object");
+	const bool settingsUsePng = a_sequenceSettings ? a_feature.frameCaptureUsePng : a_feature.sdrUsePng;
+	if (useSettings) {
+		auto settingsCapture = a_feature.BuildCaptureDescriptor(
+			a_sequenceSettings ? a_feature.frameCaptureEye : a_feature.screenshotEye,
+			settingsUsePng,
+			!a_sequenceSettings && a_feature.copyToClipboard);
+		settingsCapture.merge_patch(capture);
+		capture = std::move(settingsCapture);
+	}
 
 	json source = capture.value("source", json::object());
 	std::string sourceKind = source.value("kind", useSettings ? SourceName(a_feature.vrCaptureSource) : std::string{});
@@ -654,11 +682,7 @@ ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(
 		sourceKind = "desktop_mirror";
 	if (sourceKind != "desktop_mirror" && sourceKind != "hmd_submission")
 		throw std::runtime_error("capture.source.kind must be desktop_mirror or hmd_submission");
-	const auto fallback = source.value(
-		"fallback",
-		useSettings && sourceKind == "hmd_submission" && ViewName(a_feature) == "side_by_side" ?
-			"desktop_mirror" :
-			"reject");
+	const auto fallback = source.value("fallback", "reject");
 	if (fallback != "reject" && fallback != "desktop_mirror")
 		throw std::runtime_error("capture.source.fallback must be reject or desktop_mirror");
 
@@ -669,25 +693,8 @@ ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(
 		outputs.push_back({
 			{ "view", useSettings ? ViewName(a_feature) : "source_native" },
 			{ "dominantEye", a_feature.vrFramedDominantEye == vr::Eye_Right ? "right" : "left" },
-			{ "encoding", { { "format", a_feature.sdrUsePng ? "png" : "bmp" }, { "colourContract", "sdr_srgb" } } },
+			{ "encoding", { { "format", settingsUsePng ? "png" : "bmp" }, { "colourContract", "sdr_srgb" } } },
 		});
-	}
-	if (a_addSeparateEyeOutputs && sourceKind == "hmd_submission") {
-		const auto encoding = outputs.front().value("encoding", json::object());
-		auto containsView = [&outputs](std::string_view a_view) {
-			return std::any_of(outputs.begin(), outputs.end(), [a_view](const json& output) {
-				return output.value("view", std::string{}) == a_view;
-			});
-		};
-		const bool addLeft = !containsView("left_eye");
-		const bool addRight = !containsView("right_eye");
-		const std::size_t additions = static_cast<std::size_t>(addLeft) + static_cast<std::size_t>(addRight);
-		if (!CSX::ScreenshotPolicy::CanAugmentOutputs(outputs.size(), additions))
-			throw std::runtime_error("settings-derived eye outputs exceed the 4-output limit");
-		if (addLeft)
-			outputs.push_back({ { "view", "left_eye" }, { "encoding", encoding }, { "nameSuffix", "left" } });
-		if (addRight)
-			outputs.push_back({ { "view", "right_eye" }, { "encoding", encoding }, { "nameSuffix", "right" } });
 	}
 	if (outputs.empty() || outputs.size() > CSX::ScreenshotPolicy::MaximumOutputsPerFrame)
 		throw std::runtime_error("capture outputs must contain 1 to 4 entries");
@@ -704,7 +711,7 @@ ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(
 		if (sourceKind == "desktop_mirror" && view != "source_native")
 			throw std::runtime_error("desktop_mirror supports only source_native outputs");
 		auto encoding = output.value("encoding", json::object());
-		const auto format = encoding.value("format", std::string("png"));
+		const auto format = encoding.value("format", std::string(useSettings && !settingsUsePng ? "bmp" : "png"));
 		if (format != "png" && format != "bmp")
 			throw std::runtime_error("encoding format must be png or bmp");
 		if (encoding.value("colourContract", std::string("sdr_srgb")) != "sdr_srgb")
@@ -788,17 +795,19 @@ ScreenshotApi::json ScreenshotApi::BuildSettings(const ScreenshotFeature& a_feat
 		{ "VR", {
 					{ "Source", SourceName(a_feature.vrCaptureSource) },
 					{ "View", ViewName(a_feature) },
+					{ "Eye", CaptureEyeName(a_feature.screenshotEye) },
 					{ "DominantEye", a_feature.vrFramedDominantEye == vr::Eye_Right ? "right" : "left" },
 					{ "ApplyCrop", a_feature.applyCropToScreenshot },
 				} },
 		{ "Sequence", {
 						  { "Destination", { { "Policy", "settings_default" }, { "Directory", a_feature.frameCapturePath }, { "Overwrite", "never" } } },
 						  { "Encoding", { { "Format", a_feature.frameCaptureUsePng ? "png" : "bmp" }, { "ColourContract", "sdr_srgb" } } },
+						  { "Eye", CaptureEyeName(a_feature.frameCaptureEye) },
 						  { "FrameCount", a_feature.sequenceDefaults.frameCount },
 						  { "Schedule", { { "Basis", "game_frames" }, { "IntervalFrames", a_feature.sequenceDefaults.intervalFrames } } },
 						  { "Backpressure", { { "Policy", "skip" }, { "MaximumConsecutiveSkips", 10 } } },
 						  { "FailurePolicy", "continue" },
-						  { "Outputs", { { "SeparateEyes", a_feature.sequenceDefaults.saveSeparateEyes } } },
+						  { "Outputs", { { "SeparateEyes", a_feature.frameCaptureEye == ScreenshotFeature::CaptureEye::Both } } },
 						  { "Packaging", { { "PreviewVideo", { { "Requested", a_feature.sequenceDefaults.writePreviewVideo }, { "FramesPerSecond", a_feature.sequenceDefaults.previewFramesPerSecond } } } } },
 					  } },
 	};
@@ -864,11 +873,40 @@ ScreenshotApi::json ScreenshotApi::ValidateSettingsPatch(const json& a_patch) co
 		if (a_patch.contains("Clipboard") && (!a_patch["Clipboard"].is_string() ||
 												 (a_patch["Clipboard"] != "none" && a_patch["Clipboard"] != "file_reference")))
 			errors.push_back({ { "field", "Clipboard" }, { "code", "unsupported_value" } });
+		if (const auto vr = a_patch.find("VR"); vr != a_patch.end()) {
+			if (!vr->is_object()) {
+				errors.push_back({ { "field", "VR" }, { "code", "wrong_type" } });
+			} else if (vr->contains("Eye") &&
+					   (!(*vr)["Eye"].is_string() ||
+						   ((*vr)["Eye"] != "left" && (*vr)["Eye"] != "right" && (*vr)["Eye"] != "both"))) {
+				errors.push_back({ { "field", "VR.Eye" }, { "code", "unsupported_value" } });
+			}
+		}
 		if (const auto seq = a_patch.find("Sequence"); seq != a_patch.end()) {
 			if (!seq->is_object())
 				errors.push_back({ { "field", "Sequence" }, { "code", "wrong_type" } });
 			else {
 				checkUInt(*seq, "FrameCount", 1, kMaximumSequenceFrames, "Sequence.FrameCount");
+				if (seq->contains("Eye") &&
+					(!(*seq)["Eye"].is_string() ||
+						((*seq)["Eye"] != "left" && (*seq)["Eye"] != "right" && (*seq)["Eye"] != "both"))) {
+					errors.push_back({ { "field", "Sequence.Eye" }, { "code", "unsupported_value" } });
+				}
+				if (const auto encoding = seq->find("Encoding"); encoding != seq->end()) {
+					if (!encoding->is_object()) {
+						errors.push_back({ { "field", "Sequence.Encoding" }, { "code", "wrong_type" } });
+					} else {
+						if (encoding->contains("Format") &&
+							(!(*encoding)["Format"].is_string() ||
+								((*encoding)["Format"] != "png" && (*encoding)["Format"] != "bmp"))) {
+							errors.push_back({ { "field", "Sequence.Encoding.Format" }, { "code", "unsupported_value" } });
+						}
+						if (encoding->contains("ColourContract") &&
+							(!(*encoding)["ColourContract"].is_string() || (*encoding)["ColourContract"] != "sdr_srgb")) {
+							errors.push_back({ { "field", "Sequence.Encoding.ColourContract" }, { "code", "unsupported_value" } });
+						}
+					}
+				}
 				if (const auto destination = seq->find("Destination"); destination != seq->end()) {
 					if (!destination->is_object()) {
 						errors.push_back({ { "field", "Sequence.Destination" }, { "code", "wrong_type" } });
@@ -928,15 +966,28 @@ void ScreenshotApi::ApplySettingsPatch(ScreenshotFeature& a_feature, const json&
 		a_feature.sdrUsePng = a_patch["Encoding"]["Format"].get<std::string>() != "bmp";
 	if (a_patch.contains("Clipboard"))
 		a_feature.copyToClipboard = a_patch["Clipboard"].get<std::string>() == "file_reference";
+	if (a_patch.contains("VR") && a_patch["VR"].is_object() && a_patch["VR"].contains("Eye"))
+		a_feature.screenshotEye = CaptureEyeFromName(a_patch["VR"]["Eye"].get<std::string>());
 	if (const auto seq = a_patch.find("Sequence"); seq != a_patch.end() && seq->is_object()) {
 		if (seq->contains("Destination") && (*seq)["Destination"].is_object() && (*seq)["Destination"].contains("Directory"))
 			a_feature.frameCapturePath = (*seq)["Destination"]["Directory"].get<std::string>();
 		if (seq->contains("FrameCount"))
 			a_feature.sequenceDefaults.frameCount = (*seq)["FrameCount"].get<uint32_t>();
+		if (seq->contains("Encoding") && (*seq)["Encoding"].is_object() && (*seq)["Encoding"].contains("Format"))
+			a_feature.frameCaptureUsePng = (*seq)["Encoding"]["Format"].get<std::string>() != "bmp";
+		if (seq->contains("Eye")) {
+			a_feature.frameCaptureEye = CaptureEyeFromName((*seq)["Eye"].get<std::string>());
+			a_feature.sequenceDefaults.saveSeparateEyes =
+				a_feature.frameCaptureEye == ScreenshotFeature::CaptureEye::Both;
+		}
 		if (seq->contains("Schedule") && (*seq)["Schedule"].is_object() && (*seq)["Schedule"].contains("IntervalFrames"))
 			a_feature.sequenceDefaults.intervalFrames = (*seq)["Schedule"]["IntervalFrames"].get<uint32_t>();
-		if (seq->contains("Outputs") && (*seq)["Outputs"].is_object() && (*seq)["Outputs"].contains("SeparateEyes"))
-			a_feature.sequenceDefaults.saveSeparateEyes = (*seq)["Outputs"]["SeparateEyes"].get<bool>();
+		if (seq->contains("Outputs") && (*seq)["Outputs"].is_object() && (*seq)["Outputs"].contains("SeparateEyes")) {
+			const bool separateEyes = (*seq)["Outputs"]["SeparateEyes"].get<bool>();
+			a_feature.sequenceDefaults.saveSeparateEyes = separateEyes;
+			if (!seq->contains("Eye"))
+				a_feature.frameCaptureEye = separateEyes ? ScreenshotFeature::CaptureEye::Both : ScreenshotFeature::CaptureEye::Left;
+		}
 		if (seq->contains("Packaging") && (*seq)["Packaging"].is_object() && (*seq)["Packaging"].contains("PreviewVideo")) {
 			const auto& preview = (*seq)["Packaging"]["PreviewVideo"];
 			if (preview.contains("Requested"))

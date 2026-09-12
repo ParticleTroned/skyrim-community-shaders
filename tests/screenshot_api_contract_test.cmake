@@ -88,6 +88,7 @@ foreach(_required_contract_text IN ITEMS
     maximumOutputsPerFrame retentionSeconds manifest_failed
 	DescribeCommittedArtifact BuildProvenance::GetProducer artifact_hash_failed
 	terminalOutcome completedUtc fallbacksPresent cancelled manifestChildren
+	screenshotEye frameCaptureEye frameCaptureUsePng a_sequenceSettings
 )
     string(FIND "${_implementation}" "${_required_contract_text}" _contract_position)
     if(_contract_position EQUAL -1)

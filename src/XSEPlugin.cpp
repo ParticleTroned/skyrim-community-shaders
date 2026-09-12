@@ -72,13 +72,12 @@ namespace
 			return false;
 		}
 
-		CSX::Api::InitializeServiceRegistryProvider();
 		if (!messaging->RegisterListener(nullptr, CommunityShadersAPIMessageHandler)) {
 			PushStartupError("Failed to register CSX API message listener. Check CommunityShaders.log for details.");
 			return false;
 		}
 
-		logger::info("Registered legacy CSAP and versioned CSXR API message listener before PostLoad dispatch");
+		logger::info("Registered legacy CSAP and versioned CSXR API message listener at PostLoad");
 		return true;
 	}
 
@@ -160,6 +159,11 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	switch (message->type) {
 	case SKSE::MessagingInterface::kPostLoad:
 		{
+			// A wildcard listener registered during DLL load only covers plugins
+			// already loaded at that instant. PostLoad includes every SKSE plugin.
+			if (!RegisterCommunityShadersAPIMessageListener())
+				break;
+
 			// Establish the API owner from an actual SKSE game-thread task. The
 			// lifecycle callback itself is not a reliable thread-affinity oracle.
 			CSX::Api::ScheduleRuntimeMainThreadBinding();
@@ -379,8 +383,7 @@ bool Load()
 		logger::error("SKSE messaging interface unavailable");
 		return false;
 	}
-	if (!RegisterCommunityShadersAPIMessageListener())
-		return false;
+	CSX::Api::InitializeServiceRegistryProvider();
 
 	if (!messaging->RegisterListener("SKSE", MessageHandler)) {
 		logger::error("Failed to register SKSE message listener");

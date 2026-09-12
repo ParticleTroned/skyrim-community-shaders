@@ -257,7 +257,7 @@ namespace
 		if (globals::d3d::device && globals::game::renderer)
 			a_skylighting.ResetSkylighting();
 		else
-			a_skylighting.queuedResetSkylighting = true;
+			a_skylighting.QueueResetSkylighting();
 	}
 
 	void DrawSkylightingRuntimeToggle(Skylighting& a_skylighting)
@@ -312,7 +312,7 @@ namespace
 		if (canResetRuntimeResources)
 			a_skylighting.ResetSkylighting();
 		else
-			a_skylighting.queuedResetSkylighting = true;
+			a_skylighting.QueueResetSkylighting();
 	}
 
 	void ApplySkylightingPerformancePreset(
@@ -515,15 +515,33 @@ void Skylighting::ApplyProbeGridQuality()
 	settings.StableSliceCount = ClampStableSliceCount(settings.StableSliceCount, probeArrayDims[2]);
 }
 
+void Skylighting::QueueResetSkylighting()
+{
+	queuedResetSkylighting.store(true, std::memory_order_release);
+}
+
+bool Skylighting::UpdateInteriorState()
+{
+	const bool interior = Util::IsInterior();
+	if (previousInteriorState && *previousInteriorState != interior)
+		QueueResetSkylighting();
+	previousInteriorState = interior;
+	return interior;
+}
+
 void Skylighting::ResetSkylighting()
 {
+	// Consume before clearing so a loading event during the reset remains queued.
+	queuedResetSkylighting.exchange(false, std::memory_order_acq_rel);
+	needsOcclusionRefresh = true;
+
 	auto context = globals::d3d::context;
 	if (!context ||
 		!texProbeArray || !texProbeArray->srv.get() || !texProbeArray->uav.get() ||
 		!texAccumFramesArray || !texAccumFramesArray->uav.get() ||
 		!texShadowBitmask || !texShadowBitmask->srv.get() || !texShadowBitmask->uav.get() ||
 		!texShadowVisibility || !texShadowVisibility->srv.get() || !texShadowVisibility->uav.get()) {
-		queuedResetSkylighting = true;
+		QueueResetSkylighting();
 		return;
 	}
 
@@ -553,7 +571,6 @@ void Skylighting::ResetSkylighting()
 	forceProbeUpdateThisFrame = true;
 	probeUpdateFrameCounter = 0;
 	occlusionUpdateFrameCounter = 0;
-	queuedResetSkylighting = false;
 }
 
 void Skylighting::SetPerformanceCostMeasurementEnabled(bool a_enabled)
@@ -606,7 +623,7 @@ void Skylighting::RestorePerformanceCostMeasurementState(const json& a_state)
 	if (canResetRuntimeResources)
 		ResetSkylighting();
 	else
-		queuedResetSkylighting = true;
+		QueueResetSkylighting();
 }
 
 void Skylighting::DrawSettings()
@@ -922,6 +939,8 @@ void Skylighting::SetupResources()
 
 void Skylighting::SetupRenderTargetResources()
 {
+	QueueResetSkylighting();
+
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
 	if (resourceDevice != device) {
@@ -1039,6 +1058,9 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 	if (!IsRuntimeActive())
 		return data;
 
+	if (UpdateInteriorState() || queuedResetSkylighting.load(std::memory_order_acquire) || needsOcclusionRefresh)
+		return data;
+
 	if (globals::state->isMapMenuOpen)
 		return data;
 
@@ -1104,7 +1126,7 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 void Skylighting::Prepass()
 {
 	auto context = globals::d3d::context;
-	if (!IsRuntimeActive()) {
+	if (!IsRuntimeActive() || UpdateInteriorState() || queuedResetSkylighting.load(std::memory_order_acquire) || needsOcclusionRefresh) {
 		if (context) {
 			ID3D11ShaderResourceView* srv = nullptr;
 			context->PSSetShaderResources(50, 1, &srv);
@@ -1117,11 +1139,10 @@ void Skylighting::Prepass()
 		return;
 
 	bool interior = true;
-
 	if (auto sky = globals::game::sky)
 		interior = sky->mode.get() != RE::Sky::Mode::kFull;
 
-	if (interior ||
+	if (interior || !context ||
 		!probeUpdateCompute.get() || !comparisonSampler.get() ||
 		!texOcclusion || !texOcclusion->srv.get() ||
 		!texProbeArray || !texProbeArray->srv.get() || !texProbeArray->uav.get() ||
@@ -1462,7 +1483,7 @@ void Skylighting::RenderOcclusion()
 	if (!precip)
 		return;
 
-	if (Util::IsInterior())
+	if (UpdateInteriorState())
 		return;
 
 	if (!shaderCache->IsEnabled()) {
@@ -1482,18 +1503,20 @@ void Skylighting::RenderOcclusion()
 	}
 
 	auto occlusionCamera = precip->occlusionData.camera;
-	if (!occlusionCamera)
+	if (!occlusionCamera || !renderer ||
+		!texOcclusion || !texOcclusion->resource.get() || !texOcclusion->srv.get() || !texOcclusion->dsv.get())
 		return;
 
 	{
 		CS_GPU_PASS("Skylighting::SkylightingMask");
 
-		const bool forceOcclusionRefresh = queuedResetSkylighting;
-		if (queuedResetSkylighting)
+		if (queuedResetSkylighting.load(std::memory_order_acquire))
 			ResetSkylighting();
+		if (queuedResetSkylighting.load(std::memory_order_acquire))
+			return;
 
 		const uint occlusionUpdateInterval = GetOcclusionUpdateInterval(settings);
-		const bool shouldUpdateOcclusion = ShouldRunPeriodicUpdate(occlusionUpdateFrameCounter, occlusionUpdateInterval, forceOcclusionRefresh);
+		const bool shouldUpdateOcclusion = ShouldRunPeriodicUpdate(occlusionUpdateFrameCounter, occlusionUpdateInterval, needsOcclusionRefresh);
 
 		if (!shouldUpdateOcclusion)
 			return;
@@ -1564,6 +1587,7 @@ void Skylighting::RenderOcclusion()
 
 		OcclusionDir = -float4{ PrecipitationShaderDirectionF.x, PrecipitationShaderDirectionF.y, PrecipitationShaderDirectionF.z, 0 };
 		occlusionSHBasis4Pi = EvaluateDirectionalSHBasis4Pi(float3{ OcclusionDir.x, OcclusionDir.y, OcclusionDir.z });
+		needsOcclusionRefresh = false;
 		OcclusionTransform = reinterpret_cast<RE::BSParticleShaderRainEmitter*>(&rainCapture)->occlusionProjection;
 
 		PrecipitationShaderCubeSize = originalPrecipitationShaderCubeSize;
@@ -1587,11 +1611,8 @@ void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
 
 RE::BSEventNotifyControl Skylighting::MenuOpenCloseEventHandler::ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
 {
-	// When entering a new cell through a loadscreen, update every frame until completion
-	if (a_event->menuName == RE::LoadingMenu::MENU_NAME) {
-		if (!a_event->opening)
-			globals::features::skylighting.queuedResetSkylighting = true;
-	}
+	if (a_event && a_event->menuName == RE::LoadingMenu::MENU_NAME && !a_event->opening)
+		globals::features::skylighting.QueueResetSkylighting();
 
 	return RE::BSEventNotifyControl::kContinue;
 }

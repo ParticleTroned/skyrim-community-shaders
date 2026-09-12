@@ -1,5 +1,8 @@
 #pragma once
 
+#include <atomic>
+#include <optional>
+
 struct Skylighting : Feature
 {
 private:
@@ -122,7 +125,9 @@ public:
 	uint probeArrayDims[3] = { 256, 256, 128 };
 
 	// cached variables
-	bool queuedResetSkylighting = true;
+	std::atomic_bool queuedResetSkylighting{ true };
+	bool needsOcclusionRefresh = true;
+	std::optional<bool> previousInteriorState;
 	bool inOcclusion = false;
 	REX::W32::XMFLOAT4X4 OcclusionTransform;
 	float4 OcclusionDir;
@@ -138,7 +143,12 @@ public:
 	uint probeUpdateFrameCounter = 0;
 	uint occlusionUpdateFrameCounter = 0;
 
+	/** @brief Queues a render-thread history rebuild without touching graphics resources. */
+	void QueueResetSkylighting();
+	/** @brief Clears probe history on the render thread and requires a fresh occlusion capture. */
 	void ResetSkylighting();
+	/** @brief Checks the render-thread location state and invalidates history on transitions. */
+	bool UpdateInteriorState();
 	void ApplyProbeGridQuality();
 
 	std::chrono::time_point<std::chrono::system_clock> lastUpdateTimer = std::chrono::system_clock::now();

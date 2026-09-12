@@ -35,7 +35,8 @@ namespace
 
 	CSX::Api::ServiceFoundation& Foundation()
 	{
-		static CSX::Api::ServiceFoundation foundation({ CSX::ProfilerAPI::ServiceName, 1, 0, 1 });
+		static CSX::Api::ServiceFoundation foundation({ CSX::ProfilerAPI::ServiceName,
+			CSX::ProfilerAPI::ServiceMajor, CSX::ProfilerAPI::ServiceMinor, CSX::ProfilerAPI::SchemaRevision });
 		static std::once_flag metadataInitialized;
 		std::call_once(metadataInitialized, [&] {
 			foundation.SetServerMetadataProvider([] {
@@ -147,6 +148,7 @@ namespace
 				{ "major", CSX::ProfilerAPI::ServiceMajor },
 				{ "minor", CSX::ProfilerAPI::ServiceMinor },
 				{ "schemaRevision", CSX::ProfilerAPI::SchemaRevision },
+				{ "timingSemantics", "gpu_cpu_self_time" },
 				{ "capabilities", CSX::ProfilerAPI::ServiceCapabilities },
 				{ "mainThreadAffine", true },
 				{ "registryMainThreadAffine", false },
@@ -320,12 +322,12 @@ namespace CSX::Api::ProfilerApiDevBenchBridge
 			return;
 		}
 		const char* descriptor = R"({
-			"description":"Versioned CSX profiler API with non-mutating inspection, timer histories, and bounded capture sessions. The legacy communityshaders.profiler tool remains available.",
+			"description":"Versioned CSX profiler API with non-mutating inspection, timer histories, and bounded capture sessions. GPU and CPU timer values, statistics, and histories are self time excluding profiled descendants. GPU topLevelMs and resolved totals retain inclusive depth-zero scope time; CPU totals sum self time. The legacy communityshaders.profiler tool remains available.",
 			"inputSchema":{"type":"object","required":["contractMajor","clientId","commandId","action"],"properties":{
 				"contractMajor":{"type":"integer","const":1},"clientId":{"type":"string","minLength":1,"maxLength":128},
 				"commandId":{"type":"string","minLength":1,"maxLength":128},"expectedBuildId":{"type":"string"},
 				"action":{"type":"string","enum":["registry","snapshot","timers","history","set_enabled","clear_history","start_capture","capture_status","cancel_capture","events","acknowledge_events"]},
-				"prefix":{"type":"string"},"timerIndex":{"type":"integer","minimum":0},"domain":{"type":"string","enum":["gpu","cpu"]},
+				"prefix":{"type":"string"},"timerIndex":{"type":"integer","minimum":0},"domain":{"type":"string","enum":["gpu","cpu"],"description":"Timing domain for self-time history samples."},
 				"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":300},"enabled":{"type":"boolean"},
 				"frameCount":{"type":"integer","minimum":1,"maximum":300},"clearHistory":{"type":"boolean"},"captureId":{"type":"integer","minimum":1},
 				"afterEventId":{"type":"integer","minimum":0},"throughEventId":{"type":"integer","minimum":0}

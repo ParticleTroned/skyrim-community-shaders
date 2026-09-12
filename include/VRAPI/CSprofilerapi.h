@@ -6,8 +6,8 @@ namespace CSX::ProfilerAPI
 {
 	inline constexpr char ServiceName[] = "csx.profiler";
 	inline constexpr std::uint32_t ServiceMajor = 1;
-	inline constexpr std::uint32_t ServiceMinor = 0;
-	inline constexpr std::uint32_t SchemaRevision = 1;
+	inline constexpr std::uint32_t ServiceMinor = 1;
+	inline constexpr std::uint32_t SchemaRevision = 2;
 
 	enum class Status : std::uint32_t
 	{
@@ -30,7 +30,9 @@ namespace CSX::ProfilerAPI
 		kCapabilityHistory = 1ull << 2,
 		kCapabilityBoundedCapture = 1ull << 3,
 		kCapabilityRuntimeControl = 1ull << 4,
-		kCapabilityHistoryReset = 1ull << 5
+		kCapabilityHistoryReset = 1ull << 5,
+		/** Timer values, statistics, and histories exclude profiled descendants. */
+		kCapabilitySelfTime = 1ull << 6
 	};
 
 	inline constexpr std::uint64_t ServiceCapabilities =
@@ -39,7 +41,8 @@ namespace CSX::ProfilerAPI
 		kCapabilityHistory |
 		kCapabilityBoundedCapture |
 		kCapabilityRuntimeControl |
-		kCapabilityHistoryReset;
+		kCapabilityHistoryReset |
+		kCapabilitySelfTime;
 
 	enum class TimingDomain : std::uint32_t
 	{
@@ -87,11 +90,14 @@ namespace CSX::ProfilerAPI
 		std::uint32_t activeCpu = 0;
 		std::uint32_t gpuHistoryCount = 0;
 		std::uint32_t cpuHistoryCount = 0;
+		/** GPU self time; averages, percentiles, and histories use the same basis. */
 		float gpuMs = 0.0f;
+		/** Inclusive depth-zero contribution to the resolved GPU total. */
 		float gpuTopLevelMs = 0.0f;
 		float gpuAverageMs = 0.0f;
 		float gpuP95Ms = 0.0f;
 		float gpuP99Ms = 0.0f;
+		/** CPU self time across both CPU-only and GPU-backed scopes. */
 		float cpuMs = 0.0f;
 		float cpuAverageMs = 0.0f;
 		float cpuP95Ms = 0.0f;

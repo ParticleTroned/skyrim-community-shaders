@@ -1,5 +1,7 @@
 #include "SettingsSerialization.h"
 
+#include "PresetCompatibility.h"
+
 #include <algorithm>
 #include <format>
 #include <fstream>
@@ -58,6 +60,7 @@ namespace
 		addCoreGroup({ "General" });
 		addCoreGroup({ "Advanced", "Disable at Boot", "RenderDoc", "Replace Original Shaders" });
 		addCoreGroup({ "Version" });
+		addCoreGroup({ PresetCompatibility::kSettingsKey });
 
 		std::map<std::string, std::vector<FeatureSection>> featuresByCategory;
 		for (auto* feature : Feature::GetFeatureList()) {

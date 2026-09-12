@@ -68,20 +68,6 @@
     "Water": true
   },
   "Version": "CSX 3.19-VR",
-  "Preset Compatibility": {
-    "contractVersion": 1,
-    "presetId": "csx-unified-balanced",
-    "presetVersion": "d2026.08.30.2",
-    "target": {
-      "runtime": "VR",
-      "minimumVersion": "3.19",
-      "maximumVersionExclusive": "3.20"
-    },
-    "settingsContract": {
-      "revision": 5,
-      "sourceTreeSha256": "9EA2FE0BDA7892348E0597F55C56A2057054DACFFA72042D24E9D33438D427E3"
-    }
-  },
   "Upscaling": {
     "dlssPreset": 1,
     "dlssSharpener": 1,
@@ -296,7 +282,7 @@
     "DepthCullingLegacyMode": false,
     "DepthCullingPerformanceMode": false,
     "EnableDepthBufferCullingExterior": true,
-    "EnableDepthBufferCullingInterior": false,
+    "EnableDepthBufferCullingInterior": true,
     "EnableDragToReposition": false,
     "EnableDynamicCubemapFoveation": true,
     "EnableDynamicCubemapVisibilityThrottle": false,
@@ -362,7 +348,7 @@
     "mouseSpeed": 10.0
   },
   "Weather Picker": {
-    "Enabled": true,
+    "Enabled": false,
     "Position": [
       50.0,
       50.0
@@ -372,21 +358,21 @@
   },
   "Hair Specular": {
     "BaseColorMult": 0.81,
-    "DiffuseIndirectMult": 0.7,
+    "DiffuseIndirectMult": 0.699999988079071,
     "DiffuseMult": 1.02,
     "EnableSelfShadow": 1,
     "EnableTangentShift": 1,
     "Enabled": 1,
     "HairGlossiness": 70.0,
     "HairMode": 1,
-    "HairSaturation": 0.8,
+    "HairSaturation": 0.800000011920929,
     "PrimaryTangentShift": 0.5,
     "SecondaryTangentShift": -0.25,
-    "SelfShadowExponent": 0.1,
+    "SelfShadowExponent": 0.10000000149011612,
     "SelfShadowScale": 2.5,
     "SelfShadowStrength": 1.0,
     "SpecularIndirectMult": 3.0,
-    "SpecularMult": 1.38,
+    "SpecularMult": 1.3799999952316284,
     "Transmission": 1.0
   },
   "Subsurface Scattering": {

@@ -1,0 +1,135 @@
+{
+    "schemaVersion": 1,
+    "evidenceRoot": "L:\\Codex\\evidence\\CSX\\unified-presets-v2-sampling-20260830",
+    "samplingPlan": {
+        "commonProtocol": {
+            "comparison": "A-B-A",
+            "framesPerCapture": 120,
+            "freezeGameHourAndTimeScale": true,
+            "preserveExactBuildSettingsCacheSceneAndRuntime": true,
+            "repeatWhenMagnitudeOrSignIsUnstable": true
+        },
+        "nextLanes": [
+            {
+                "priority": 1,
+                "anchor": "interior with volumetrics and close character",
+                "features": ["Volumetric Lighting", "Subsurface Scattering", "Hair Specular"]
+            },
+            {
+                "priority": 2,
+                "anchor": "exterior active rain",
+                "features": ["Wetterness"]
+            },
+            {
+                "priority": 3,
+                "anchor": "Quality AO-only SSGI exterior and interior",
+                "features": ["Screen Space GI"]
+            },
+            {
+                "priority": 4,
+                "anchor": "matched physical SteamVR and OCU routes",
+                "features": ["runtime comparability"]
+            },
+            {
+                "priority": 5,
+                "anchor": "matched NVIDIA hardware",
+                "features": ["native DLSS selection", "vendor-neutral tier validation"]
+            }
+        ]
+    },
+    "sessions": [
+        {
+            "id": "20260830-ocu-whiterun-cloudy",
+            "purpose": "locked-time exterior feature screen",
+            "runtime": {
+                "route": "Open Composite Unleashed / VDXR",
+                "headset": "Pico 4 Ultra",
+                "gpu": "AMD Radeon RX 7900 XT",
+                "physicalHmd": true,
+                "renderDimensionsPerEye": [1992, 1992],
+                "displayDimensionsPerEye": [2592, 2592],
+                "upscaler": "FSR 4 Ultra Quality",
+                "vrRenderScale": true
+            },
+            "build": {
+                "source": "c46b93b2-dirty",
+                "dllSha256": "3B72C74468BD9F5CCB14A2D69A6ABF0F8EDAF2C9E5A3545CDF182A881CF37013",
+                "buildId": "41d74c779750ce92a86d129241ce1c4f7a2558a65ac249610cfcc47c36285458",
+                "shaderCacheFiles": 3606,
+                "shaderCacheBytes": 181575174,
+                "shaderCacheTreeSha256": "623B701118F244A3970E2CD869B6615EBED2B0D162AC2879E9BBB0205A120CCB",
+                "shaderCacheUnchanged": true
+            },
+            "scene": {
+                "cell": "WhiterunPlainsDistrict03",
+                "worldspace": "WhiterunWorld",
+                "location": "Whiterun",
+                "position": [21819.05, -7580.31, -3560.85],
+                "weather": "SkyrimCloudyTU",
+                "weatherForm": "0x10A243~Skyrim.esm",
+                "gameHour": 8.5,
+                "timeScale": 0,
+                "timeRestoredAfterRun": true
+            },
+            "control": {
+                "framesPerCapture": 120,
+                "baselineB1Ms": {
+                    "Deferred::GeometryInterval": 10.79,
+                    "Engine::RenderWorld": 13.19,
+                    "RuntimeUpscalerDispatch": 7.59,
+                    "DeferredPasses": 0.65,
+                    "DeferredComposite": 0.6
+                },
+                "baselineB2Ms": {
+                    "Deferred::GeometryInterval": 10.97,
+                    "Engine::RenderWorld": 13.39,
+                    "RuntimeUpscalerDispatch": 7.62,
+                    "DeferredPasses": 0.64,
+                    "DeferredComposite": 0.61
+                }
+            },
+            "featureTrials": [
+                {
+                    "feature": "Skylighting",
+                    "enabledMinusDisabledFrameMs": 4.11,
+                    "standardErrorMs": 0.45,
+                    "enabledMinusDisabledFps": -5.46,
+                    "fpsStandardError": 0.66,
+                    "enabledMinusDisabledCpuMs": 0.59,
+                    "cpuStandardErrorMs": 0.19,
+                    "significant": true,
+                    "presetInterpretation": "strong tier lever"
+                },
+                {
+                    "feature": "Grass Collision",
+                    "enabledMinusDisabledFrameMs": -0.47,
+                    "standardErrorMs": 0.65,
+                    "enabledMinusDisabledFps": 0.53,
+                    "fpsStandardError": 0.74,
+                    "enabledMinusDisabledCpuMs": 0.1,
+                    "cpuStandardErrorMs": 0.17,
+                    "significant": false,
+                    "presetInterpretation": "visual and interaction choice; cost inconclusive"
+                },
+                {
+                    "feature": "Volumetric Lighting",
+                    "enabledMinusDisabledFrameMs": 0.44,
+                    "standardErrorMs": 0.24,
+                    "enabledMinusDisabledFps": -0.51,
+                    "fpsStandardError": 0.28,
+                    "enabledMinusDisabledCpuMs": 0.1,
+                    "cpuStandardErrorMs": 0.14,
+                    "significant": false,
+                    "presetInterpretation": "retain common High pending interior anchor"
+                }
+            ],
+            "limitations": [
+                "The feature-cost API gameGpuMs field was invalid because it remained zero or epsilon.",
+                "The B2 capture completed, but a transient HTTP 503 made wrapper restoration fail; explicit recovery verified the profiler disabled.",
+                "AO-only SSGI was disabled in the live baseline and needs an enabled Quality lane.",
+                "Wetterness needs active rain; SSS and Hair Specular need a character-focused anchor.",
+                "Absolute SteamVR and NVIDIA comparisons remain pending."
+            ]
+        }
+    ]
+}

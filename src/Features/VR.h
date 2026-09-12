@@ -1,5 +1,6 @@
 #pragma once
 #include "Buffer.h"
+#include "Features/VR/DepthCullingDiagnostics.h"
 #include "Features/VR/OpenVRDetection.h"
 #include "Menu.h"
 #include "OverlayFeature.h"
@@ -252,6 +253,7 @@ public:
 		// Performance optimization settings
 		bool EnableDepthBufferCullingExterior = true;  ///< Master depth-culling option; enabled in exteriors
 		bool EnableDepthBufferCullingInterior = true;  ///< Also enable depth culling in interiors
+		bool EnableCurrentFrameDepthCulling = false;   ///< Consume the current-frame GPU OBB result instead of Skyrim's delayed CPU result
 		bool DepthCullingPerformanceMode = false;      ///< Accept native stale results instead of bounded recovery
 		bool DepthCullingLegacyMode = false;           ///< Use native results without temporal pose capture or recovery
 		float MinOccludeeBoxExtent = 10.0f;            ///< Minimum bounding box size for occlusion culling

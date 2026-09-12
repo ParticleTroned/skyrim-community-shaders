@@ -13,6 +13,7 @@
 #include "RE/B/BSOpenVRControllerDevice.h"
 #include "RE/N/NiPoint3.h"
 #include "RE/P/PlayerCharacter.h"
+#include "RenderMap/Runtime.h"
 #include "ScreenSpaceGI.h"
 #include "ScreenSpaceShadows.h"
 #include "ShaderCache.h"
@@ -554,6 +555,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	VR::Settings,
 	EnableDepthBufferCullingInterior,
 	EnableDepthBufferCullingExterior,
+	EnableCurrentFrameDepthCulling,
 	DepthCullingPerformanceMode,
 	DepthCullingLegacyMode,
 	MinOccludeeBoxExtent,
@@ -3023,6 +3025,12 @@ namespace
 
 		if (exteriorChanged || interiorChanged)
 			a_vr.UpdateDepthBufferCulling();
+
+		ImGui::Checkbox("Current-frame GPU depth culling (experimental)", &settings.EnableCurrentFrameDepthCulling);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Uses the current frame's stereo GPU occlusion result to skip hidden Lighting, Distant Tree, and Grass pixels.");
+			ImGui::TextUnformatted("When disabled, Skyrim's existing delayed depth-culling path remains active.");
+		}
 
 		ImGui::SetNextItemWidth(-std::numeric_limits<float>::min());
 		if (ImGui::SliderFloat("Min Occludee Box Extent", &settings.MinOccludeeBoxExtent, 0.0f, 1000.0f, "%.1f")) {

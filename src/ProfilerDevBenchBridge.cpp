@@ -61,6 +61,7 @@ namespace
 		}
 
 		return {
+			{ "timingSemantics", "gpu_cpu_self_time" },
 			{ "enabled", a_profiler.IsUserEnabled() },
 			{ "capturing", a_profiler.IsEnabled() },
 			{ "frame_count", globals::state ? globals::state->frameCount : 0u },
@@ -196,7 +197,7 @@ namespace ProfilerDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Inspect and control the CSX GPU/CPU profiler. Every response identifies the exact producing DLL. expectedBuildId makes captures fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","enable","disable"],"default":"status"},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
+			R"({"description":"Inspect and control the CSX GPU/CPU profiler. Timer values and statistics are self time with profiled descendants excluded; topLevelMs and resolvedTotalMs retain inclusive depth-zero GPU time. CPU totals sum CPU self time. Every response identifies the exact producing DLL. expectedBuildId makes captures fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","enable","disable"],"default":"status","description":"Status reports timingSemantics=gpu_cpu_self_time."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
 		devBench->RegisterTool(
 			"communityshaders.profiler",
 			descriptor,

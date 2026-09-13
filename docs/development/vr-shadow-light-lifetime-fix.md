@@ -76,6 +76,73 @@ observed presentation hang.
 
 ## Adversarial review
 
+### Native shadow render ownership
+
+The later PID 22880 run exposed a separate native consumer: generation 28
+was destroyed by a loading thread while its parabolic render call was
+active. Destruction ended 0.6308 ms before render returned. The native
+function reads the light's descriptor count at SkyrimVR+`0x137140C` after
+the descriptor-render call. No exception was recorded in this run. The
+zero-length NVIDIA command observed in the hang remains a separate finding;
+the capture does not establish which code wrote that command.
+
+The VR native shadow loop now takes its own local owning snapshot. It copies
+the active and pending owning lists and the accumulated render order under
+`lightQueueLock`, then releases the lock before virtual dispatch. The owning
+references survive the entire loop, independently of LLF frame/load resets.
+Rendering and final reference releases occur outside the engine lock.
+The shared `SceneLightSnapshot::RetainScene` method supplies the same list
+coverage to both native rendering and existing LLF consumers. Native capture
+omits the unused active-light enumeration and copies render order in one
+range assignment to avoid repeated vector growth under the queue lock.
+
+The hook replaces the raw selection/dispatch loop at SkyrimVR+`0x13231FB`
+through `0x1323230`. Ghidra analysis of the retained PID 22880 image verifies
+the native selector at `0x12FA250`: it indexes the raw array at node+`0x258`.
+The replacement checks keys against retained owners before reading a light
+or its virtual table. It preserves the original render order, the native
+index passed by reference, and null-terminated traversal, and additionally
+bounds traversal by the captured array size. An unknown owner, a non-shadow
+object, or a non-advancing index ends the pass. Allocation failure skips the
+pass after releasing the lock and any acquired references. Rendering
+exceptions propagate normally while local references unwind.
+
+Installation is restricted to Skyrim VR 1.4.15 and requires all 53 bytes of
+the original loop to match before either write. A mismatch logs the refusal
+and leaves the loop untouched. The native call enters a register adapter
+that tail-jumps to the C++ replacement. This preserves the native return
+address and unwind metadata; the replacement returns through a patched
+jump to the original loop continuation. Existing native render virtual hooks
+remain in the call path. This fix has no dependency on the shadow-lifetime
+observer or driver-command recorder. SE and AE receive no new executable
+patch or render-path change.
+
+Focused validation of the isolated production change:
+
+-   `pwsh artifacts/native-shadow-render-pr-20260913/build.ps1 -Focused`
+    passed.
+-   `ctest --test-dir build/native-shadow-render-pr-build -C Release -R "^(SceneLightSnapshot|VRSceneGuards)$" --output-on-failure -V`
+    passed both tests in 0.12 seconds. The ownership harness exercises concurrent worker
+    teardown during rendering, raw-array clearing, pending owners, rejected
+    stale keys and non-shadow lights, native index advancement and bounds,
+    release on render exceptions, nine existing capture allocation failures and four native
+    capture allocation failures. The machine-code harness passes 477
+    assertions, including every-byte loop mismatch rejection, runtime scope,
+    register argument transfer, stack alignment and native return identity.
+-   Runtime testing is reserved for the user. This implementation has no
+    in-game stability or performance result yet. It protects light lifetime;
+    arbitrary concurrent changes to light fields and other engine objects
+    are outside this contract.
+
+The isolated production tests and PR preparation receipts are preserved
+under `artifacts/native-shadow-render-pr-20260913/`. Earlier native analysis,
+build/test receipts and handoff metadata remain locally under
+`artifacts/vr-native-shadow-lifetime-fix/`. The full originating
+hang evidence remains under
+`artifacts/shadow-coc20-5s-pid22880-20260912T114320Z/`.
+
+### LLF snapshot review
+
 -   Correctness: retained references come only from owning engine lists under
     their mutation lock. Both pass loops validate raw keys before dereferencing
     them. Skipping a missing strict light compacts output without changing the

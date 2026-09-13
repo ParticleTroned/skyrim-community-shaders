@@ -7,7 +7,7 @@
 
 namespace LightLimitFixDetail
 {
-	/// Owns a frame's lights; pass pointers are lookup keys, never ownership sources.
+	/// Owns captured lights; pass pointers are lookup keys, never ownership sources.
 	template <class LightPointer>
 	class SceneLightSnapshot
 	{
@@ -26,6 +26,22 @@ namespace LightLimitFixDetail
 				activeLights.push_back(light);
 				it->second.active = true;
 			}
+		}
+
+		/// Capture active and pending owners while the scene's light queue lock is held.
+		template <class RuntimeData>
+		void RetainScene(const RuntimeData& a_runtime, bool a_trackActive = true)
+		{
+			for (const auto& light : a_runtime.activeLights)
+				Retain(light, a_trackActive);
+			for (const auto& light : a_runtime.activeShadowLights)
+				Retain(light, a_trackActive);
+			for (const auto& light : a_runtime.lightQueueAdd)
+				Retain(light, false);
+			for (const auto& light : a_runtime.lightQueueRemove)
+				Retain(light, false);
+			for (const auto& light : a_runtime.unk190)
+				Retain(light, false);
 		}
 
 		/// Reject uncaptured pass addresses without reading the pointed-to memory.

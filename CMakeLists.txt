@@ -2774,6 +2774,7 @@ if(BUILD_CONTROLLER_TESTS)
             motion_sharpening_policy_test
             sharpener_bindings_test
             skylighting_probe_slice_test
+            motion_sharpening_runtime_compile_test
             motion_sharpening_settings_test
             vr_vendor_relatch_policy_test
             vr_relatch_drain_policy_test

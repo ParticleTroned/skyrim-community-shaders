@@ -1,0 +1,25 @@
+{
+    "status": "PASS",
+    "summaryFieldReconstruction": true,
+    "comparisonReconstruction": true,
+    "historicalCellsPreserved": 1228,
+    "numericTimingCells": 375,
+    "transitions": 25,
+    "ledgerBytes": 25258136,
+    "ledgerSha256": "0d97153eb868be0e72ee4ee9e0a9c097d79fee24f5bc20182576fef439c3214c",
+    "summarySha256": "2287a8e3421beb9c6d5a87872c18f6030e581a9fd5fbe0c9306c82affc7d5567",
+    "comparisonSha256": "cafab8ee019ee9892c81f15de552893bbd3e26814c22324152f8f15148ae4d61",
+    "elapsedSeconds": 3.655508900003042,
+    "legacyMetricAliasesPopulated": 154,
+    "pr73ReferenceAudit": {
+        "pr": 73,
+        "url": "https://github.com/ParticleTroned/skyrim-community-shaders/pull/73",
+        "descriptionAndCommentsChecked": true,
+        "commentsChecked": 7,
+        "comparableCocMeasurementFound": false,
+        "publishedAssay": "NVIDIA upscaling-setting switches in Dragonsreach; no COC scene loading",
+        "numericSpeedComparison": "UNAVAILABLE: no matched PR73 COC strict timings",
+        "headRefOid": "9d0cddebd87d5be3cd9c1317553df7e65ab21750",
+        "mergeCommit": { "oid": "cf3834e182c719dfd4c0539d746b65d2a287ab78" }
+    }
+}

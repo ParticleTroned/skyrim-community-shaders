@@ -1987,3 +1987,21 @@ timing audits pass. Full ledger reporting took 16.155 s.
 The [second-run report](nvidia-renderscale-tuning-pr82-e4cfd8f2f-20260913-repeat-192024.md) retains every route/pass, counter,
 memory boundary, retry and provenance limitation. PR82's tables retain
 PR73 and both new runs, using seconds for switch durations.
+
+## September 13: 25 COCs at ten-second pacing
+
+The e4cfd8f2f integration build (2f6432ddbcbd, PID 38084) completed all
+25 strict terminal checks in 321.316 s. Mean strict completion is
+3.267 s into Dragonsreach and 2.071 s into Windhelm. Twelve relatch
+requeues recovered; no counted device, OOM, lifecycle or fidelity failure.
+Cumulative acceptance remains false for metrics_complete, the fixed
+stretch cutoff and the vendor-only final-presentation gate. One superseded
+final preparation record and all raw gate values remain preserved.
+All owned captures are inactive, pending probe readbacks are zero, and
+the 300-frame profiler capture completed. Bounded trace/probe retention
+gaps remain explicit. This is completed_with_anomalies with an
+INCONCLUSIVE performance assessment.
+
+[Ledger 0006](vr-render-scale-ledger-0006-pr82.csv) and the [report](coc25-10s-pr82-e4cfd8f2f-20260913.md) preserve
+all timings, capture details and the historical COC comparison. The PR82
+NVIDIA tables retain PR73 and both September 13 tuning runs unchanged.

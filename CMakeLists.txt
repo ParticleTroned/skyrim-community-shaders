@@ -1758,6 +1758,118 @@ if(BUILD_CONTROLLER_TESTS)
     target_link_libraries(vr_scene_guards_test PRIVATE xbyak::xbyak)
     set_tests_properties(VRSceneGuards PROPERTIES TIMEOUT 30)
 
+    set(_ordinary_save_state_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/ordinary-save-state"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_ordinary_save_state_test_dir}/ordinary_save_state_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_ordinary_save_state_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_ordinary_save_state.cmake"
+        DEPENDS
+            src/State.h
+            src/State.cpp
+            tests/extract_ordinary_save_state.cmake
+        VERBATIM
+    )
+    add_controller_test(ordinary_save_state_test OrdinarySaveState tests/ordinary_save_state_test.cpp)
+    target_sources(
+        ordinary_save_state_test
+        PRIVATE
+            "${_ordinary_save_state_test_dir}/ordinary_save_state_under_test.h"
+    )
+    target_include_directories(
+        ordinary_save_state_test
+        PRIVATE "${_ordinary_save_state_test_dir}"
+    )
+    add_controller_test(vr_ordinary_save_recovery_test VROrdinarySaveRecovery tests/vr_ordinary_save_recovery_test.cpp)
+
+    set(_ordinary_save_presentation_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/ordinary-save-presentation"
+    )
+    set(_ordinary_save_presentation_headers
+        "${_ordinary_save_presentation_test_dir}/ordinary_save_presentation_under_test.h"
+        "${_ordinary_save_presentation_test_dir}/ordinary_save_submit_finish_under_test.h"
+        "${_ordinary_save_presentation_test_dir}/ordinary_save_submit_admission_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_ordinary_save_presentation_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_ordinary_save_presentation_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_ordinary_save_presentation.cmake"
+        DEPENDS
+            src/Features/Upscaling.cpp
+            tests/extract_ordinary_save_presentation.cmake
+        VERBATIM
+    )
+    add_controller_test(ordinary_save_presentation_test OrdinarySavePresentation tests/ordinary_save_presentation_test.cpp)
+    target_sources(
+        ordinary_save_presentation_test
+        PRIVATE ${_ordinary_save_presentation_headers}
+    )
+    target_include_directories(
+        ordinary_save_presentation_test
+        PRIVATE "${_ordinary_save_presentation_test_dir}"
+    )
+    set_tests_properties(
+        OrdinarySaveState
+        OrdinarySavePresentation
+        PROPERTIES TIMEOUT 30
+    )
+
+    set(_foveated_save_reuse_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/foveated-save-reuse-test"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_foveated_save_reuse_test_dir}/foveated_save_reuse_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_foveated_save_reuse_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_foveated_save_reuse.cmake"
+        DEPENDS
+            src/Features/Upscaling.cpp
+            tests/extract_foveated_save_reuse.cmake
+        VERBATIM
+    )
+    add_controller_test(foveated_save_reuse_test FoveatedSaveReuse tests/foveated_save_reuse_test.cpp)
+    target_sources(
+        foveated_save_reuse_test
+        PRIVATE
+            "${_foveated_save_reuse_test_dir}/foveated_save_reuse_under_test.h"
+    )
+    target_include_directories(
+        foveated_save_reuse_test
+        PRIVATE "${_foveated_save_reuse_test_dir}"
+    )
+
+    set(_fsr_save_reuse_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/fsr-save-reuse-test"
+    )
+    add_custom_command(
+        OUTPUT "${_fsr_save_reuse_test_dir}/fsr_save_reuse_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_fsr_save_reuse_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_fsr_save_reuse.cmake"
+        DEPENDS
+            src/Features/Upscaling/FidelityFX.cpp
+            tests/extract_fsr_save_reuse.cmake
+        VERBATIM
+    )
+    add_controller_test(fsr_save_reuse_test FSRSaveReuse tests/fsr_save_reuse_test.cpp)
+    target_sources(
+        fsr_save_reuse_test
+        PRIVATE "${_fsr_save_reuse_test_dir}/fsr_save_reuse_under_test.h"
+    )
+    target_include_directories(
+        fsr_save_reuse_test
+        PRIVATE "${_fsr_save_reuse_test_dir}"
+    )
+
     add_controller_test(
         pbr_material_registry_test
         PBRMaterialRegistry
@@ -2802,6 +2914,10 @@ if(BUILD_CONTROLLER_TESTS)
             scene_depth_devbench_test
             scene_light_snapshot_test
             vr_scene_guards_test
+            ordinary_save_state_test
+            vr_ordinary_save_recovery_test
+            ordinary_save_presentation_test
+            foveated_save_reuse_test
             pbr_material_registry_test
             perf_mode_restart_state_test
             motion_sharpening_policy_test

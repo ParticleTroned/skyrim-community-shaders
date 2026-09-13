@@ -31,6 +31,13 @@ file(WRITE "${OUTPUT_DIRECTORY}/fsr_eye_dispatch_params_under_test.h" "${_params
 
 extract_between("${_fidelity_source}" "bool HasSupportedSubmitColorContract()" "bool ShouldEmitFidelityFXDiagLogs()" _submit_contract)
 extract_between("${_fidelity_source}" "void FidelityFX::ArmRuntimeHostFallback(" "FidelityFX::RuntimeDispatchPlan FidelityFX::ResolveRuntimeDispatchPlan(" _arm)
+extract_between("${_fidelity_source}" "FidelityFX::RuntimeDispatchPlan FidelityFX::ResolveRuntimeDispatchPlan()" "FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerInterop()" _resolve_plan)
+string(
+    REPLACE "FidelityFX::ResolveRuntimeDispatchPlan()"
+    "FidelityFX::ResolveRuntimeDispatchPlanUnderTest()"
+    _resolve_plan
+    "${_resolve_plan}"
+)
 extract_between("${_fidelity_source}" "bool FidelityFX::HasFSRResources()" "bool FidelityFX::IsRuntimeUpscalerDispatchProofUsable(" _resources)
 extract_between("${_fidelity_source}" "bool FidelityFX::AreFSRResourcesCompatible(" "bool FidelityFX::IsHostFSR3Supported()" _compatibility)
 extract_between("${_fidelity_source}" "bool FidelityFX::CanDispatchHostFallbackForRegions(" "FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(" _fallback)
@@ -39,7 +46,7 @@ extract_between("${_fidelity_source}" "FidelityFX::StereoUpscaleResult FidelityF
 extract_between("${_upscaling_source}" "FidelityFX::UpscaleResult Upscaling::DispatchVendorEyeRegion(" "FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(" _vendor)
 file(
     WRITE "${OUTPUT_DIRECTORY}/fsr_eye_dispatch_under_test.h"
-    "${_submit_contract}\n${_arm}\n${_resources}\n${_compatibility}\n${_fallback}\n${_region}\n${_stereo}\n${_vendor}"
+    "${_submit_contract}\n${_arm}\n${_resolve_plan}\n${_resources}\n${_compatibility}\n${_fallback}\n${_region}\n${_stereo}\n${_vendor}"
 )
 
 extract_between("${_fidelity_source}" "const bool runtimeDeferredByGate =" "static bool loggedRuntimeDeferredForShaderCompilation =" _gate)

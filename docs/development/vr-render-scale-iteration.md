@@ -10,6 +10,24 @@ implementation has no performance claim or runtime qualification result;
 new measurements must use the existing comparison ledger and reporting
 workflow.
 
+## September 13: ordinary-save presentation recovery
+
+Ordinary saves can resume presentation after six consecutive, successfully
+prepared stereo frames while the original 120-frame mutation grace remains
+active. Loading, initialization, missing provenance and resource changes
+retain their protection. Save notifications and guard expiry are serialized
+so an overlapping event cannot lose its mutation block.
+
+The early path reuses existing resources, including valid cropped FSR
+contexts, and verifies the shared producer scope for each eye pair. Its
+admission and completion policies have focused source-extracted tests.
+Revoked save proof also downgrades cached admission for the rest of the
+compositor cycle, including when the mutation grace expires between eyes.
+See [ordinary-save recovery](ordinary-save-render-recovery.md) for the
+contract and DevBench status fields. No save timing, visual qualification
+or performance measurement has been made for this implementation; it adds
+no measurement rows or numbered ledger snapshot.
+
 ## September 11: all PR73 tables compare against PR66
 
 The user selected measured PR66 a09e1cc77 as the reference for both

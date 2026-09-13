@@ -7,6 +7,7 @@
 #include "Upscaling/LumaSharpen/LumaSharpen.h"
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
+#include "Upscaling/VROrdinarySaveRecovery.h"
 #include "Upscaling/VRPresentationStretchTelemetryPolicy.h"
 #include "Upscaling/VRRelatchReleasePolicy.h"
 #include "Upscaling/VRRenderScaleAuthorityPolicy.h"
@@ -2804,6 +2805,10 @@ public:
 		bool loadingPresentationActive = false;
 		bool raceSexPresentationActive = false;
 		bool saveLoadProtectionActive = false;
+		bool ordinarySavePresentationReady = false;
+		bool ordinarySavePersistenceBlocked = false;
+		uint64_t ordinarySaveToken = 0;
+		VROrdinarySaveRecovery::Proof ordinarySaveProof;
 		bool completedWorldFrame = false;
 		bool recoveryPending = false;
 		bool relatchPending = false;
@@ -2843,6 +2848,18 @@ public:
 	void RequestPostLoadRuntimeReset();
 	bool ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod);
 	[[nodiscard]] bool ShouldDeferVRVendorLifecycleMutation() const;
+	/** Ordinary-save recovery may only reuse resources while persistence remains guarded. */
+	[[nodiscard]] bool ShouldReuseOrdinarySaveResources() const;
+	/** True after an ordinary save has retained one exact, coherent stereo contract. */
+	[[nodiscard]] bool CanResumeOrdinarySavePresentation() const;
+	/** Validate the ordinary-save contract on the render thread before reading live resources. */
+	[[nodiscard]] std::optional<VROrdinarySaveRecovery::Identity> GetOrdinarySavePresentationIdentity() const;
+	/** Observe both submitted eyes against their immutable world-render producer. */
+	void ObserveOrdinarySavePresentation(uint32_t a_frame, uint64_t a_cycle, uint32_t a_eye,
+		const VRSubmitInputFreshnessPolicy::SubmitBoundaryIdentity& a_boundary,
+		const VROrdinarySaveRecovery::Identity& a_identity, bool a_inputsReady);
+	mutable std::mutex ordinarySaveRecoveryMutex;
+	VROrdinarySaveRecovery::Proof ordinarySaveRecovery;
 	[[nodiscard]] bool IsVRVendorLifecycleGateRelevant() const;
 	[[nodiscard]] VRExistingVendorProviderSnapshot GetExistingVRVendorProviderSnapshot() const;
 	[[nodiscard]] bool CanDispatchExistingVRVendorEvaluation(UpscaleMethod a_upscaleMethod) const;

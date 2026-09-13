@@ -597,13 +597,46 @@ bool State::IsEngineSaveLoadActivityActive() const
 	return engineSaveLoadActivityActive.load(std::memory_order_acquire);
 }
 
+uint64_t State::GetOrdinarySaveRenderRecoveryToken() const
+{
+	std::lock_guard lock(saveLoadSafeModeMutex);
+	const uint64_t recoveryState = saveLoadRenderRecoveryState;
+	if ((recoveryState & kSaveLoadRenderRecoverySourceMask) !=
+			static_cast<uint64_t>(SaveLoadRenderRecoverySource::OrdinarySave) ||
+		!engineSaveLoadActivityKnown ||
+		IsEngineSaveLoadActivityActive()) {
+		return 0;
+	}
+	return recoveryState;
+}
+
 bool State::IsPersistentMutationBlocked() const
 {
 	return persistentMutationBlocked.load(std::memory_order_acquire);
 }
 
+void State::RecordSaveLoadRenderRecoverySource(SaveLoadRenderRecoverySource a_source)
+{
+	const auto previousSource = static_cast<SaveLoadRenderRecoverySource>(
+		saveLoadRenderRecoveryState & kSaveLoadRenderRecoverySourceMask);
+	const auto source = previousSource == SaveLoadRenderRecoverySource::Other ?
+	                        SaveLoadRenderRecoverySource::Other :
+	                        a_source;
+	const uint64_t nextGeneration =
+		(saveLoadRenderRecoveryState & ~kSaveLoadRenderRecoverySourceMask) + kSaveLoadRenderRecoverySourceMask + 1;
+	saveLoadRenderRecoveryState = nextGeneration | static_cast<uint64_t>(source);
+}
+
+void State::NotifyOrdinarySave(uint32_t a_currentFrame)
+{
+	std::lock_guard lock(saveLoadSafeModeMutex);
+	ExtendSaveLoadSafeModeImpl(a_currentFrame, kSaveLoadSafeModeGraceFrames);
+	RecordSaveLoadRenderRecoverySource(SaveLoadRenderRecoverySource::OrdinarySave);
+}
+
 void State::BeginSaveLoadSafeMode(uint32_t a_currentFrame)
 {
+	std::lock_guard lock(saveLoadSafeModeMutex);
 	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
 	saveLoadSafeModeStartFrame.store(currentFrame, std::memory_order_release);
 	saveLoadSafeModeEndFrame.store(0, std::memory_order_release);
@@ -611,9 +644,17 @@ void State::BeginSaveLoadSafeMode(uint32_t a_currentFrame)
 		globals::shaderCache->SetSaveLoadDiskPersistenceBlocked(true);
 	saveLoadSafeModeActive.store(true, std::memory_order_release);
 	persistentMutationBlocked.store(true, std::memory_order_release);
+	RecordSaveLoadRenderRecoverySource(SaveLoadRenderRecoverySource::Other);
 }
 
 void State::ExtendSaveLoadSafeMode(uint32_t a_currentFrame, uint32_t a_frameCount)
+{
+	std::lock_guard lock(saveLoadSafeModeMutex);
+	ExtendSaveLoadSafeModeImpl(a_currentFrame, a_frameCount);
+	RecordSaveLoadRenderRecoverySource(SaveLoadRenderRecoverySource::Other);
+}
+
+void State::ExtendSaveLoadSafeModeImpl(uint32_t a_currentFrame, uint32_t a_frameCount)
 {
 	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
 	const uint32_t endFrame = currentFrame + std::max(a_frameCount, 1u);
@@ -629,6 +670,7 @@ void State::ExtendSaveLoadSafeMode(uint32_t a_currentFrame, uint32_t a_frameCoun
 
 void State::BeginPersistentMutationBlock(uint32_t a_currentFrame, uint32_t a_frameCount)
 {
+	std::lock_guard lock(saveLoadSafeModeMutex);
 	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
 	const uint32_t endFrame = currentFrame + std::max(a_frameCount, 1u);
 	StoreMax(persistentMutationBlockEndFrame, endFrame);
@@ -637,6 +679,7 @@ void State::BeginPersistentMutationBlock(uint32_t a_currentFrame, uint32_t a_fra
 
 void State::ExtendPersistentMutationBlock(uint32_t a_currentFrame, uint32_t a_frameCount)
 {
+	std::lock_guard lock(saveLoadSafeModeMutex);
 	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
 	const uint32_t endFrame = currentFrame + std::max(a_frameCount, 1u);
 	StoreMax(persistentMutationBlockEndFrame, endFrame);
@@ -645,22 +688,36 @@ void State::ExtendPersistentMutationBlock(uint32_t a_currentFrame, uint32_t a_fr
 
 void State::UpdateSaveLoadSafeMode()
 {
+	std::lock_guard lock(saveLoadSafeModeMutex);
 	const uint32_t currentFrame = std::max(frameCount, 1u);
 	bool safeModeActive = saveLoadSafeModeActive.load(std::memory_order_acquire);
 	const bool wasSafeModeActive = safeModeActive;
 
-	bool engineSaveLoadActive = false;
+	bool engineStateKnown = false;
+	bool engineSaving = false;
+	bool engineLoadingOrInitializing = false;
 	if (auto* saveLoad = RE::BGSSaveLoadGame::GetSingleton()) {
-		engineSaveLoadActive =
+		engineStateKnown = true;
+		engineSaving = saveLoad->GetSaveGameSaving();
+		engineLoadingOrInitializing =
 			saveLoad->GetSaveGameLoading() ||
-			saveLoad->GetSaveGameSaving() ||
 			saveLoad->GetInitingForms() ||
 			saveLoad->GetDeferInitForms() ||
 			saveLoad->GetPositioningPlayerCharacter();
 	}
+	const bool engineSaveLoadActive = engineSaving || engineLoadingOrInitializing;
 	engineSaveLoadActivityActive.store(
 		engineSaveLoadActive,
 		std::memory_order_release);
+	engineSaveLoadActivityKnown = engineStateKnown;
+	const bool ordinarySaveRecoveryUnsafe = !engineStateKnown ||
+	                                        engineLoadingOrInitializing || IsMainOrLoadingMenuOpen() || pendingPostLoadRuntimeReset;
+	if (ordinarySaveRecoveryUnsafe) {
+		RecordSaveLoadRenderRecoverySource(SaveLoadRenderRecoverySource::Other);
+	} else if (engineSaving && !engineSavingWasActive) {
+		RecordSaveLoadRenderRecoverySource(SaveLoadRenderRecoverySource::OrdinarySave);
+	}
+	engineSavingWasActive = engineSaving;
 
 	if (engineSaveLoadActive) {
 		if (!safeModeActive) {
@@ -703,6 +760,10 @@ void State::UpdateSaveLoadSafeMode()
 
 	if (wasSafeModeActive && !safeModeActive && globals::shaderCache)
 		globals::shaderCache->SetSaveLoadDiskPersistenceBlocked(false);
+
+	if (!safeModeActive && !ordinarySaveRecoveryUnsafe) {
+		saveLoadRenderRecoveryState &= ~kSaveLoadRenderRecoverySourceMask;
+	}
 }
 
 void State::Reset()

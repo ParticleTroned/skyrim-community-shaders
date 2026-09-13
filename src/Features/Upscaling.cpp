@@ -4462,13 +4462,22 @@ namespace
 		const MotionSharpening::Settings motionSettings{ a_upscaling.settings.motionAdaptiveRCAS,
 			a_upscaling.settings.motionSharpnessAdjustment, a_upscaling.settings.motionSharpnessThreshold,
 			a_upscaling.settings.motionSharpnessCap };
+		const bool motionResourcesRequired = motionSettings.enabled && a_motionVectors && !a_regions.empty();
+		const auto canDispatch = [&](const auto& a_sharpener) {
+			return !a_upscaling.ShouldReuseOrdinarySaveResources() ||
+			       a_sharpener.CanApplyWithoutResourceCreation(motionResourcesRequired);
+		};
 		switch (a_upscaling.GetDLSSSharpenerMode()) {
 		case Upscaling::DLSSSharpenerMode::RCAS:
+			if (!canDispatch(Upscaling::rcas))
+				return false;
 			return Upscaling::rcas.ApplyMotionAdaptiveSharpen(a_inputSRV, a_outputUAV,
 				GetDLSSRCASSharpness(a_upscaling.settings.sharpnessDLSS), a_upscaling.settings.sharpnessDLSS,
 				motionSettings,
 				a_motionVectors, a_regions);
 		case Upscaling::DLSSSharpenerMode::LumaUnsharp:
+			if (!canDispatch(Upscaling::lumaSharpen))
+				return false;
 			return Upscaling::lumaSharpen.ApplyMotionAdaptiveSharpen(a_inputSRV, a_outputUAV,
 				GetDLSSLumaSharpness(a_upscaling.settings.sharpnessDLSS), a_upscaling.settings.sharpnessDLSS,
 				motionSettings, a_motionVectors, a_regions);
@@ -5877,7 +5886,8 @@ namespace
 
 	bool IsVRTransitionMaskRepairSafetyContextActive(const State* a_state)
 	{
-		return IsSaveLoadTransitionContextActive(a_state);
+		return IsSaveLoadTransitionContextActive(a_state) &&
+		       !globals::features::upscaling.CanResumeOrdinarySavePresentation();
 	}
 
 	bool IsVRRenderScalePhysicalMaskHandoffActive(const Upscaling& a_upscaling)
@@ -5934,9 +5944,8 @@ namespace
 
 	bool ShouldDeferVRTransitionMaskRepair(const Upscaling& a_upscaling, const State* a_state)
 	{
-		// RC141's save/load predicate remains authoritative for ordinary door,
-		// fast-travel, and map-travel relatches. The broader physical-handoff
-		// deferral is required only while protecting the initial process load.
+		// Loads retain their full grace; only proven ordinary saves can reuse masks.
+		// Initial process loading additionally protects the physical handoff.
 		return IsVRTransitionMaskRepairSafetyContextActive(a_state) ||
 		       (a_upscaling.IsVRInitialLoadPresentationProtectionActive() &&
 				   IsVRRenderScalePhysicalMaskHandoffActive(a_upscaling));
@@ -5946,10 +5955,8 @@ namespace
 		const Upscaling& a_upscaling,
 		const State* a_state)
 	{
-		// The ordinary mask-repair path retains the full save-load grace. A
-		// compositor-protected loading release needs only concrete engine/reset
-		// activity plus an active physical render-scale handoff; otherwise the
-		// grace would still indirectly impose a fixed black-screen delay.
+		// Protected loading release uses concrete engine/reset and physical handoff
+		// activity so the mutation grace cannot hold an already safe compositor frame.
 		const bool engineOrResetActivity =
 			a_state &&
 			(a_state->IsEngineSaveLoadActivityActive() ||
@@ -5966,7 +5973,8 @@ namespace
 
 	bool ShouldBypassVRFoveatedVendorDispatchForTransition(const Upscaling& a_upscaling, const State* a_state)
 	{
-		return IsSaveLoadTransitionContextActive(a_state) ||
+		return (IsSaveLoadTransitionContextActive(a_state) &&
+				   !a_upscaling.CanResumeOrdinarySavePresentation()) ||
 		       IsVRLoadingSubmitProtectionContextActive(a_upscaling, a_state);
 	}
 
@@ -19278,6 +19286,13 @@ Upscaling::VRVendorWorkGateSnapshot Upscaling::GetVRVendorWorkGateSnapshot(
 		IsRaceSexMenuContextActive(ui) ||
 		IsVRRaceSexMenuEventContextActive(state);
 	snapshot.saveLoadProtectionActive = IsSaveLoadTransitionContextActive(state);
+	snapshot.ordinarySaveToken = state ? state->GetOrdinarySaveRenderRecoveryToken() : 0;
+	snapshot.ordinarySavePersistenceBlocked = state && state->IsPersistentMutationBlocked();
+	snapshot.ordinarySavePresentationReady = CanResumeOrdinarySavePresentation();
+	{
+		std::lock_guard lock(ordinarySaveRecoveryMutex);
+		snapshot.ordinarySaveProof = ordinarySaveRecovery;
+	}
 	snapshot.completedWorldFrame = HasCompletedVRWorldFrameAfterLatestLoad(state);
 	snapshot.recoveryPending = snapshot.postLoadResetPending;
 	snapshot.gameEntryReleaseReady =
@@ -38559,6 +38574,63 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 	return true;
 }
 
+bool Upscaling::ShouldReuseOrdinarySaveResources() const
+{
+	return globals::game::isVR && globals::state && IsVRRenderScaleModeLatched() &&
+	       globals::state->GetOrdinarySaveRenderRecoveryToken() != 0;
+}
+
+std::optional<VROrdinarySaveRecovery::Identity> Upscaling::GetOrdinarySavePresentationIdentity() const
+{
+	auto* state = globals::state;
+	if (!ShouldReuseOrdinarySaveResources() || state->pendingPostLoadRuntimeReset ||
+		postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
+		ShouldDeferVRVendorLifecycleMutation() || HasPendingVRUpscalingTransition() ||
+		IsNonLoadingVRMenuPresentationContextActive() || IsLoadingMenuContextActive() ||
+		IsVRLoadingSubmitProtectionContextActive(*this, state)) {
+		return std::nullopt;
+	}
+	const auto method = GetRuntimeUpscaleMethod();
+	if (HasPendingVRVendorRuntimeReset(*this, method) || IsSubmitStageDeviceLost() ||
+		!IsVendorRuntimeReadyForActiveContract(method) || !IsCommonVendorResourceContractCurrent(method) ||
+		!IsVRRenderScalePhysicalContractConverged(method, GetRuntimeQualityMode())) {
+		return std::nullopt;
+	}
+	const auto token = state->GetOrdinarySaveRenderRecoveryToken();
+	const auto generation = GetActiveVRRenderScaleContractGeneration();
+	return VROrdinarySaveRecovery::Identity{
+		token, BuildResourceCheckStableKey(*this, method), generation, static_cast<uint32_t>(method),
+		commonVendorResourceGeneration, vrIntermediateTextureGeneration
+	};
+}
+
+bool Upscaling::CanResumeOrdinarySavePresentation() const
+{
+	const auto identity = GetOrdinarySavePresentationIdentity();
+	if (!identity)
+		return false;
+	const auto cycle = submitTemporalCompositorCycle.load(std::memory_order_acquire);
+	std::lock_guard lock(ordinarySaveRecoveryMutex);
+	return ordinarySaveRecovery.CanResume(*identity, globals::state->lastCompletedWorldRenderFrame, cycle);
+}
+
+void Upscaling::ObserveOrdinarySavePresentation(uint32_t a_frame, uint64_t a_cycle, uint32_t a_eye,
+	const VRSubmitInputFreshnessPolicy::SubmitBoundaryIdentity& a_boundary,
+	const VROrdinarySaveRecovery::Identity& a_identity, bool a_inputsReady)
+{
+	auto* state = globals::state;
+	const auto currentIdentity = a_inputsReady ? GetOrdinarySavePresentationIdentity() : std::nullopt;
+	const bool ready = currentIdentity && *currentIdentity == a_identity &&
+	                   state->lastWorldRenderFrame == a_frame && state->lastCompletedWorldRenderFrame == a_frame;
+	std::lock_guard lock(ordinarySaveRecoveryMutex);
+	const auto previousQualifiedFrame = ordinarySaveRecovery.qualifiedFrame;
+	ordinarySaveRecovery.Observe(a_identity, a_frame, a_cycle, a_eye, a_boundary, ready);
+	if (!previousQualifiedFrame && ordinarySaveRecovery.qualifiedFrame) {
+		logger::debug("[Upscaling] Ordinary save {} qualified stereo recovery at frame {}; persistence remains guarded.",
+			a_identity.saveToken, a_frame);
+	}
+}
+
 bool Upscaling::ShouldDeferVRVendorLifecycleMutation() const
 {
 	if (!globals::game::isVR)
@@ -39280,6 +39352,12 @@ bool Upscaling::EnsureResourcesCurrent(UpscaleMethod a_upscalemethod)
 	if (ShouldDeferVRVendorLifecycleMutation()) {
 		return false;
 	}
+	if (ShouldReuseOrdinarySaveResources()) {
+		return !HasPendingVRVendorRuntimeReset(*this, a_upscalemethod) &&
+		       !HasPendingVRUpscalingTransition() &&
+		       IsVendorRuntimeReadyForActiveContract(a_upscalemethod) &&
+		       IsCommonVendorResourceContractCurrent(a_upscalemethod);
+	}
 
 	const uint32_t currentFrame = GetFrameScopedUpscalingWorkFrame();
 	const uint64_t currentGateState = GetVRVendorEffectiveWorkGateState();
@@ -39370,6 +39448,8 @@ ID3D11PixelShader* Upscaling::GetUnderwaterMaskUpscalePS(UnderwaterMaskUpscaleVa
 	auto& shader = a_variant == UnderwaterMaskUpscaleVariant::RawDepthNoStencil     ? underwaterMaskUpscaleRawDepthNoStencilPS :
 	               a_variant == UnderwaterMaskUpscaleVariant::DynamicDepthNoStencil ? underwaterMaskUpscaleDynamicDepthNoStencilPS :
 	                                                                                  underwaterMaskUpscalePS;
+	if (ShouldReuseOrdinarySaveResources() && !shader)
+		return nullptr;
 	std::vector<std::pair<const char*, const char*>> defines = { { "PSHADER", "" } };
 	if (globals::game::isVR) {
 		defines.push_back({ "VR", "" });
@@ -39399,6 +39479,8 @@ ID3D11PixelShader* Upscaling::GetCameraMotionVectorsPS()
 
 ID3D11VertexShader* Upscaling::GetUpscaleVS()
 {
+	if (ShouldReuseOrdinarySaveResources() && !upscaleVS)
+		return nullptr;
 	return upscaleVS.Get(
 		L"Data/Shaders/Upscaling/UpscaleVS.hlsl", { { "VSHADER", "" } },
 		"vs_5_0", "main", "Upscaling::FullscreenVS");
@@ -39434,6 +39516,8 @@ ID3D11ComputeShader* Upscaling::GetPeripheryTAACS()
 
 ID3D11ComputeShader* Upscaling::GetSubmitStageStretchCS()
 {
+	if (ShouldReuseOrdinarySaveResources())
+		return submitStageStretchCS.get();
 	return submitStageStretchCS.Get(
 		L"Data/Shaders/Upscaling/SubmitStageStretchCS.hlsl", {}, "cs_5_0",
 		"main", "Upscaling::SubmitStageStretchCS");
@@ -39808,7 +39892,7 @@ bool Upscaling::EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3
 	if (!TryGetTexture2DDesc(source, sourceDesc))
 		return false;
 
-	bool recreate = !texture;
+	bool recreate = !texture || !texture->resource;
 	if (!recreate) {
 		recreate = texture->desc.Width != width ||
 		           texture->desc.Height != height ||
@@ -39822,6 +39906,8 @@ bool Upscaling::EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3
 	}
 
 	if (recreate) {
+		if (ShouldReuseOrdinarySaveResources())
+			return false;
 		InvalidateVRRenderScaleStereoPresentationPacket(true);
 		static bool loggedTextureCreateFailure = false;
 		const auto createFailureMessage = [&]() {
@@ -39896,6 +39982,12 @@ bool Upscaling::EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3
 
 bool Upscaling::EnsureFoveatedDispatchShaders(bool usePeripheryTAA, bool visualizeMask, const char* context, const char* fallbackAction)
 {
+	if (ShouldReuseOrdinarySaveResources()) {
+		return ((!usePeripheryTAA && !visualizeMask) || (foveatedPeripheryCS && foveatedPeripheryCB)) &&
+		       (!usePeripheryTAA || (peripheryTAACS && peripheryTAACB)) &&
+		       (!usePeripheryTAA || (foveatedCenterBlendCS && foveatedCenterBlendCB)) &&
+		       ((usePeripheryTAA || visualizeMask) || (foveatedSpatialCompositeCS && foveatedSpatialCompositeCB));
+	}
 	const char* contextText = context ? context : "";
 	const char* fallbackText = fallbackAction ? fallbackAction : "skipping foveated vendor dispatch";
 	static bool loggedFoveatedShaderFailure = false;
@@ -39940,6 +40032,31 @@ bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t
 	const auto& regionPlan = foveatedRectCache.plan;
 	if (!regionPlan.IsValid() || regionPlan.outputWidthPerEye != outputWidthPerEye || regionPlan.outputHeight != outputHeight)
 		return false;
+	if (ShouldReuseOrdinarySaveResources()) {
+		const auto matchesTexture = [](const auto& texture, uint32_t width, uint32_t height, DXGI_FORMAT format) {
+			return texture && texture->resource && texture->srv && texture->uav &&
+			       texture->desc.Width == width && texture->desc.Height == height &&
+			       texture->desc.Format == format;
+		};
+		// Check both eyes before any history ownership can change during the save grace.
+		for (uint32_t eye = 0; eye < 2; ++eye) {
+			const auto& required = regionPlan.eyes[eye].peripheryTAAHistoryOutput;
+			const auto& active = peripheryTAAHistoryRects[eye];
+			if (!required.IsValid() || required.maxX > outputWidthPerEye || required.maxY > outputHeight ||
+				active.minX != required.minX || active.minY != required.minY ||
+				active.maxX != required.maxX || active.maxY != required.maxY) {
+				return false;
+			}
+			for (uint32_t slot = 0; slot < 2; ++slot) {
+				if (!matchesTexture(peripheryTAAHistoryColor[eye][slot], required.Width(), required.Height(), colorDesc.Format) ||
+					!matchesTexture(peripheryTAAVelocityHistory[eye][slot], required.Width(), required.Height(), DXGI_FORMAT_R16G16_FLOAT) ||
+					!matchesTexture(peripheryTAALockHistory[eye][slot], required.Width(), required.Height(), DXGI_FORMAT_R16_FLOAT)) {
+					return false;
+				}
+			}
+		}
+		return true;
+	}
 
 	bool recreatedResources = false;
 	static bool loggedPeripheryTAAResourceFailure = false;
@@ -40064,6 +40181,8 @@ bool Upscaling::EnsurePeripheryTAATileBuffer(uint32_t eyeIndex, uint32_t tileCap
 	auto& tileCapacityCurrent = peripheryTAATileCapacity[eyeIndex];
 	if (tileBuffer && tileCapacityCurrent >= tileCapacity && tileBuffer->srv)
 		return true;
+	if (ShouldReuseOrdinarySaveResources())
+		return false;
 
 	D3D11_BUFFER_DESC sbDesc{};
 	sbDesc.Usage = D3D11_USAGE_DYNAMIC;
@@ -42011,6 +42130,8 @@ bool Upscaling::EnsureVRPresentationTextures(uint32_t inWidth, uint32_t inHeight
 
 	if (!needsRecreate)
 		return true;
+	if (ShouldReuseOrdinarySaveResources())
+		return false;
 
 	logger::debug("[VRRenderScale] (Re)creating presentation textures: per-eye in {}x{}, out {}x{}",
 		inWidth, inHeight, outWidth, outHeight);
@@ -42110,6 +42231,8 @@ bool Upscaling::EnsureSubmitStageDLSSSharpenerTexture(uint32_t eyeIndex, const T
 	};
 	if (matchesOutput())
 		return true;
+	if (ShouldReuseOrdinarySaveResources())
+		return false;
 
 	InvalidateVRRenderScaleStereoPresentationPacket(true);
 	const std::string suffix = eyeIndex == 0 ? "Left" : "Right";
@@ -43381,6 +43504,8 @@ bool Upscaling::StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWid
 			return false;
 	}
 	if (!stretchCS) {
+		if (ShouldReuseOrdinarySaveResources())
+			return false;
 		float clearColor[4] = {};
 		context->ClearUnorderedAccessViewFloat(vrIntermediateColorOut[eyeIndex]->uav.get(), clearColor);
 
@@ -43513,6 +43638,8 @@ bool Upscaling::EnsureHMDMaskClearResources()
 	auto* device = globals::d3d::device;
 	if (!device)
 		return false;
+	if (ShouldReuseOrdinarySaveResources())
+		return vrClearHMDMaskCS && vrClearHMDMaskCB;
 
 	static bool loggedHMDMaskClearFailure = false;
 	try {
@@ -49542,6 +49669,17 @@ bool Upscaling::MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context)
 bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCycleToken, const VRSubmitInputFreshnessPolicy::SubmitBoundaryIdentity& a_submitBoundaryIdentity, bool a_vendorResumeCooldownAtCycleStart, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 	vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds, VRRenderScalePresentationObservation& a_presentationObservation)
 {
+	bool ordinarySaveOutputReady = false;
+	bool ordinarySaveInputsReady = false;
+	uint32_t ordinarySaveProducerFrame = 0;
+	VROrdinarySaveRecovery::Identity ordinarySaveIdentity{};
+	const auto finishOrdinarySave = ScopeExit([&]() {
+		if (globals::state && globals::state->IsSaveLoadSafeModeActive()) {
+			ObserveOrdinarySavePresentation(ordinarySaveProducerFrame, a_compositorCycleToken,
+				static_cast<uint32_t>(a_eye), a_submitBoundaryIdentity, ordinarySaveIdentity,
+				ordinarySaveInputsReady && ordinarySaveOutputReady);
+		}
+	});
 	a_presentationObservation = {};
 	if (!a_inputTexture || !a_inputTexture->handle || a_inputTexture->eType != vr::TextureType_DirectX) {
 		return false;
@@ -50197,6 +50335,12 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	} else {
 		submitStageVendorAdmissionFrame = currentFrame;
 	}
+	// Revoked save proof must downgrade cached admission for the remaining eye and retries.
+	if (ShouldReuseOrdinarySaveResources() && !CanResumeOrdinarySavePresentation()) {
+		presentationOnly = true;
+		if (a_compositorCycleToken != 0)
+			submitStageVendorAdmissionPresentationOnly = true;
+	}
 	if (vrRenderScaleRelatchDrainEpoch.load(std::memory_order_acquire) != 0) {
 		presentationOnly = true;
 		exactExistingProviderReady = false;
@@ -50369,6 +50513,34 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		submitStageForceFullEyeVendorFallback = false;
 	}
 
+	if (state->IsSaveLoadSafeModeActive()) {
+		const VRSubmitTemporalSnapshot::Key key{
+			.frame = currentFrame,
+			.generation = activeContractGeneration,
+			.method = static_cast<uint32_t>(upscaleMethod),
+			.inputWidth = eyeWidthIn,
+			.inputHeight = eyeHeightIn,
+			.outputWidth = eyeWidthOut,
+			.outputHeight = eyeHeightOut,
+			.compositorCycle = a_compositorCycleToken
+		};
+		bool temporalReady = false;
+		uint32_t producerFrame = 0;
+		{
+			std::lock_guard lock(submitTemporalInputsMutex);
+			temporalReady = submitTemporalInputs.snapshot.MatchesForDispatch(key) &&
+			                submitTemporalInputs.depth.get() == depth.texture &&
+			                submitTemporalInputs.motion.get() == motionVector.texture;
+			producerFrame = submitTemporalInputs.snapshot.key.frame;
+		}
+		const auto identity = GetOrdinarySavePresentationIdentity();
+		ordinarySaveIdentity = identity.value_or(VROrdinarySaveRecovery::Identity{});
+		ordinarySaveProducerFrame = producerFrame;
+		ordinarySaveInputsReady = identity && identity->generation == activeContractGeneration &&
+		                          identity->method == static_cast<uint32_t>(upscaleMethod) &&
+		                          temporalReady && sourceRegion.matchesExpectedSize && !presentationRenderTarget &&
+		                          (peerInputFreshnessProven || currentEyeInputIdentity.IsValid());
+	}
 	const bool dlssRapidTransitionBypass =
 		upscaleMethod == UpscaleMethod::kDLSS &&
 		ShouldBypassVRDLSSFoveatedForRapidTransition();
@@ -50474,7 +50646,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			!perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) &&
 			!HasPendingVRVendorRuntimeReset(*this, upscaleMethod) &&
 			physicalContractConverged &&
-			(!transitionProtectionActive || protectedPresentationHandoffReady) &&
+			(!transitionProtectionActive || CanResumeOrdinarySavePresentation() || protectedPresentationHandoffReady) &&
 			(!maskRepairSafetyContextActive || protectedPresentationHandoffReady) &&
 			(!transitionFoveatedBypass || protectedPresentationHandoffReady) &&
 			motionVector.texture &&
@@ -50923,6 +51095,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		a_outputBounds = { 0.0f, 0.0f, 1.0f, 1.0f };
 		menuPresentationSucceeded = menuPresentationAttempt;
 		setVendorPresentationObservation(cachedEyeState);
+		ordinarySaveOutputReady = true;
 		return true;
 	}
 
@@ -51021,6 +51194,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			eyeHeightIn,
 			submitPresentationContext || currentMenuPresentationContext || resolutionPlan.knownMenuContextActive || resolutionPlan.menuContextActive,
 			transitionPresentationCooldown);
+		ordinarySaveOutputReady = true;
 		return true;
 	};
 
@@ -51801,6 +51975,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		menuPresentationSucceeded = menuPresentationAttempt;
 		setVendorPresentationObservation(
 			submitStageVendorEyeState[eyeIndex]);
+		ordinarySaveOutputReady = true;
 		return true;
 	}
 
@@ -51847,6 +52022,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	a_outputBounds = a_inputBounds ? *a_inputBounds : vr::VRTextureBounds_t{ 0.0f, 0.0f, 1.0f, 1.0f };
 	setVendorPresentationObservation(
 		submitStageVendorEyeState[eyeIndex]);
+	ordinarySaveOutputReady = true;
 	return true;
 }
 

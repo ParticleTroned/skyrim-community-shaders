@@ -1980,6 +1980,14 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeCommandContexts()
 	auto& swapChain = globals::features::upscaling.dx12SwapChain;
 	if (!swapChain.d3d12Device)
 		return LifecycleResult::Pending;
+	if (globals::features::upscaling.ShouldReuseOrdinarySaveResources()) {
+		const bool complete = std::ranges::all_of(
+			runtimeCommandContexts,
+			[](const RuntimeCommandContext& a_context) {
+				return a_context.commandAllocator && a_context.commandList;
+			});
+		return complete ? LifecycleResult::Ready : LifecycleResult::Pending;
+	}
 
 	try {
 		for (auto& commandContext : runtimeCommandContexts) {
@@ -3004,11 +3012,14 @@ FidelityFX::RuntimeDispatchPlan FidelityFX::ResolveRuntimeDispatchPlan()
 	plan.vendorLifecycleMutationDeferred =
 		globals::game::isVR &&
 		upscaling.ShouldDeferVRVendorLifecycleMutation();
+	// Ordinary saves retain provider ownership without changing valid region extents.
+	const bool existingResourcesOnly =
+		plan.vendorLifecycleMutationDeferred || upscaling.ShouldReuseOrdinarySaveResources();
 	Upscaling::VRExistingVendorProviderSnapshot existingProvider{};
-	if (plan.vendorLifecycleMutationDeferred)
+	if (existingResourcesOnly)
 		existingProvider = upscaling.GetExistingVRVendorProviderSnapshot();
 	const bool exactCurrentProviderReady =
-		plan.vendorLifecycleMutationDeferred &&
+		existingResourcesOnly &&
 		upscaling.CanDispatchExistingVRVendorEvaluation(
 			Upscaling::UpscaleMethod::kFSR,
 			existingProvider);
@@ -3020,7 +3031,7 @@ FidelityFX::RuntimeDispatchPlan FidelityFX::ResolveRuntimeDispatchPlan()
 		runtimeHostFallbackForFrame = false;
 		runtimeUpscalerUsedForFrame = false;
 	}
-	if (runtimeUpscalerSessionQuarantined && !plan.vendorLifecycleMutationDeferred) {
+	if (runtimeUpscalerSessionQuarantined && !existingResourcesOnly) {
 		const auto retirementResult = RetireQuarantinedRuntimeUpscalerResources();
 		if (retirementResult == LifecycleResult::Failed) {
 			static bool loggedQuarantineRetirementFailure = false;
@@ -3059,7 +3070,7 @@ FidelityFX::RuntimeDispatchPlan FidelityFX::ResolveRuntimeDispatchPlan()
 		plan.runtimeRequested &&
 		CanUseRuntimeUpscalerPath() &&
 		!awaitingInitialVRRenderScaleLatch &&
-		(!plan.vendorLifecycleMutationDeferred || exactCurrentProviderReady);
+		(!existingResourcesOnly || exactCurrentProviderReady);
 
 	bool runtimeContextsCompatible = false;
 	if (runtimePathEligible) {
@@ -3097,7 +3108,7 @@ FidelityFX::RuntimeDispatchPlan FidelityFX::ResolveRuntimeDispatchPlan()
 	const bool runtimeDeferredByGate =
 		plan.runtimeRequested &&
 		!runtimeUpscalerSessionQuarantined &&
-		((plan.vendorLifecycleMutationDeferred &&
+		((existingResourcesOnly &&
 			 !exactCurrentProviderReady) ||
 			awaitingInitialVRRenderScaleLatch ||
 			(runtimePathEligible && shaderCompilationActive && !runtimeContextsCompatible));
@@ -3151,6 +3162,16 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerInterop()
 
 	if (!globals::d3d::device || !globals::d3d::context)
 		return LifecycleResult::Pending;
+	const auto hasInteropResources = [&]() {
+		return swapChain.d3d11Device.get() &&
+		       swapChain.d3d11Context.get() &&
+		       swapChain.d3d12Device.get() &&
+		       swapChain.commandQueue.get() &&
+		       runtimeD3D11Fence.get() &&
+		       runtimeD3D12Fence.get();
+	};
+	if (globals::features::upscaling.ShouldReuseOrdinarySaveResources())
+		return hasInteropResources() ? EnsureRuntimeCommandContexts() : LifecycleResult::Pending;
 
 	try {
 		if (!swapChain.d3d11Device)
@@ -3190,14 +3211,7 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerInterop()
 		return ResolveRuntimeUpscalerLifecycleFailure("DX11-to-DX12 runtime interop initialization");
 	}
 
-	const bool complete =
-		swapChain.d3d11Device.get() &&
-		swapChain.d3d11Context.get() &&
-		swapChain.d3d12Device.get() &&
-		swapChain.commandQueue.get() &&
-		runtimeD3D11Fence.get() &&
-		runtimeD3D12Fence.get();
-	return complete ? LifecycleResult::Ready : LifecycleResult::Pending;
+	return hasInteropResources() ? LifecycleResult::Ready : LifecycleResult::Pending;
 }
 
 FidelityFX::LifecycleResult FidelityFX::RecordRuntimeProviderResult(bool a_supported)
@@ -3390,6 +3404,9 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a
 			a_requestedVersion)) {
 		return LifecycleResult::Ready;
 	}
+
+	if (globals::features::upscaling.ShouldReuseOrdinarySaveResources())
+		return LifecycleResult::Pending;
 
 	const auto idleResult = PollRuntimeUpscalerTeardownReady("runtime upscaler context recreation");
 	if (idleResult != LifecycleResult::Ready)
@@ -3621,6 +3638,9 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerSharedResources(uin
 		return LifecycleResult::Ready;
 	}
 
+	if (globals::features::upscaling.ShouldReuseOrdinarySaveResources())
+		return LifecycleResult::Pending;
+
 	const auto idleResult = PollRuntimeUpscalerTeardownReady("runtime shared-resource recreation");
 	if (idleResult != LifecycleResult::Ready)
 		return idleResult;
@@ -3783,6 +3803,8 @@ WrappedResource* FidelityFX::ResolveRuntimeSharedGuide(uint32_t a_eye, FSRShared
 		return nullptr;
 	if (route == Route::Direct)
 		return cached.imported.get();
+	if (upscaling.ShouldReuseOrdinarySaveResources())
+		return nullptr;
 
 	// Retaining even a rejected identity bounds retries and prevents address reuse.
 	cached.source.copy_from(a_source);

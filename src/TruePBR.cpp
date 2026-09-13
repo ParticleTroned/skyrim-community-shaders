@@ -765,14 +765,6 @@ struct ExtendedRendererState
 
 namespace
 {
-	bool IsLikelyValidPointer(const void* pointer, std::size_t alignment = alignof(void*))
-	{
-		const auto address = reinterpret_cast<std::uintptr_t>(pointer);
-		constexpr std::uintptr_t MinUserModeAddress = 0x10000;
-		constexpr std::uintptr_t MaxUserModeAddress = 0x00007FFFFFFFFFFFULL;
-		return address >= MinUserModeAddress && address <= MaxUserModeAddress && (address & (alignment - 1)) == 0;
-	}
-
 	const char* GetGeometryName(const RE::BSGeometry* geometry)
 	{
 		return geometry && geometry->name.c_str() ? geometry->name.c_str() : "<null>";
@@ -785,7 +777,7 @@ namespace
 		}
 
 		auto* material = static_cast<BSLightingShaderMaterialPBR*>(property->material);
-		if (!IsLikelyValidPointer(material)) {
+		if (!Util::IsLikelyValidPointer(material)) {
 			static std::atomic_flag loggedInvalidMaterialAddress{};
 			if (!loggedInvalidMaterialAddress.test_and_set(std::memory_order_relaxed)) {
 				logger::error("[TruePBR] Invalid material pointer {:X} (geometry: {}) - keeping original render state",
@@ -816,7 +808,7 @@ namespace
 		}
 
 		auto* material = static_cast<BSLightingShaderMaterialPBRLandscape*>(property->material);
-		if (!IsLikelyValidPointer(material)) {
+		if (!Util::IsLikelyValidPointer(material)) {
 			static std::atomic_flag loggedInvalidLandscapeMaterialAddress{};
 			if (!loggedInvalidLandscapeMaterialAddress.test_and_set(std::memory_order_relaxed)) {
 				logger::error("[TruePBR] Invalid landscape material pointer {:X} (geometry: {}) - keeping original render state",
@@ -952,7 +944,7 @@ struct BSLightingShaderProperty_GetRenderPasses
 		}
 		// Guard against invalid hook-chain returns (e.g. other SKSE mods returning non-pointer values), which can surface as cold-breath CTDs.
 		const auto renderPassesAddress = reinterpret_cast<std::uintptr_t>(renderPasses);
-		if (!IsLikelyValidPointer(renderPasses, alignof(RE::BSShaderProperty::RenderPassArray))) {
+		if (!Util::IsLikelyValidPointer(renderPasses, alignof(RE::BSShaderProperty::RenderPassArray))) {
 			static std::atomic_flag loggedInvalidRenderPassAddress{};
 			if (!loggedInvalidRenderPassAddress.test_and_set(std::memory_order_relaxed)) {
 				logger::error("[TruePBR] Invalid GetRenderPasses pointer {:X} (geometry: {}) - returning null for safety (prevents known cold-breath CTD path)",
@@ -1008,18 +1000,25 @@ struct BSLightingShaderProperty_GetRenderPasses
 	static inline REL::Relocation<decltype(thunk)> func;
 };
 
-bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material)
+bool TruePBR::UsesCustomMaterialSetup(uint32_t rawTechnique) const
 {
-	if (!settings.Enabled)
+	if (!loaded || !settings.Enabled)
 		return false;
 
 	using enum SIE::ShaderCache::LightingShaderTechniques;
+	const auto lightingType = static_cast<SIE::ShaderCache::LightingShaderTechniques>((rawTechnique >> 24) & 0x3F);
+	return lightingType != LODLand && lightingType != LODLandNoise &&
+	       (rawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr)) != 0;
+}
 
-	const auto& lightingPSConstants = ShaderConstants::LightingPS::Get();
+bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material)
+{
+	if (UsesCustomMaterialSetup(shader->currentRawTechnique)) {
+		using enum SIE::ShaderCache::LightingShaderTechniques;
+		const auto& lightingPSConstants = ShaderConstants::LightingPS::Get();
+		auto lightingFlags = shader->currentRawTechnique & ~(~0u << 24);
+		auto lightingType = static_cast<SIE::ShaderCache::LightingShaderTechniques>((shader->currentRawTechnique >> 24) & 0x3F);
 
-	auto lightingFlags = shader->currentRawTechnique & ~(~0u << 24);
-	auto lightingType = static_cast<SIE::ShaderCache::LightingShaderTechniques>((shader->currentRawTechnique >> 24) & 0x3F);
-	if (!(lightingType == LODLand || lightingType == LODLandNoise) && (lightingFlags & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr))) {
 		auto shadowState = globals::game::shadowState;
 		auto renderer = globals::game::renderer;
 		auto graphicsState = globals::game::graphicsState;
@@ -1133,8 +1132,7 @@ bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::B
 		} else if (lightingType == None || lightingType == TreeAnim) {
 			auto* pbrMaterial = static_cast<const BSLightingShaderMaterialPBR*>(material);
 			const auto renderTargetIndex = pbrMaterial->diffuseRenderTargetSourceIndex;
-			const auto renderTargetCount = Util::GetRenderTargetCount();
-			if (renderTargetIndex >= 0 && renderTargetIndex < renderTargetCount) {
+			if (Util::IsValidRenderTargetIndex(renderTargetIndex)) {
 				shadowState->SetPSTexture(0, renderer->GetRuntimeData().renderTargets[renderTargetIndex]);
 			} else {
 				if (renderTargetIndex != -1) {

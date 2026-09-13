@@ -63,6 +63,12 @@ namespace Util
 		return REL::Module::IsVR() ? RE::RENDER_TARGETS_DEPTHSTENCIL::kVRTOTAL : RE::RENDER_TARGETS_DEPTHSTENCIL::kTOTAL;
 	}
 
+	/** @brief Checks a texture-backed render-target index; the material sentinel -1 is not a target. */
+	[[nodiscard]] inline bool IsValidRenderTargetIndex(std::int32_t index)
+	{
+		return index >= 0 && index < GetRenderTargetCount();
+	}
+
 	HRESULT SaveTextureToFile(ID3D11Device* device, ID3D11DeviceContext* context, const std::filesystem::path& path, ID3D11Texture2D* tex);
 	HRESULT LoadTextureFromFile(ID3D11Device* device, const std::filesystem::path& path, ID3D11Texture2D** outTex, ID3D11ShaderResourceView** outSRV);
 

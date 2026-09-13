@@ -1758,6 +1758,49 @@ if(BUILD_CONTROLLER_TESTS)
     target_link_libraries(vr_scene_guards_test PRIVATE xbyak::xbyak)
     set_tests_properties(VRSceneGuards PROPERTIES TIMEOUT 30)
 
+    set(_native_lighting_material_guard_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/native-lighting-material-guard"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_native_lighting_material_guard_test_dir}/native_lighting_material_guard_under_test.h"
+            "${_native_lighting_material_guard_test_dir}/native_lighting_material_utilities_under_test.h"
+            "${_native_lighting_material_guard_test_dir}/native_lighting_material_types_under_test.h"
+            "${_native_lighting_material_guard_test_dir}/native_lighting_material_pbr_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_native_lighting_material_guard_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_native_lighting_material_guard.cmake"
+        DEPENDS
+            src/Hooks.cpp
+            src/TruePBR.cpp
+            src/TruePBR.h
+            src/ShaderCache.h
+            src/Utils/Game.h
+            src/Utils/D3D.h
+            extern/CommonLibSSE-NG/include/RE/B/BSLightingShader.h
+            tests/extract_native_lighting_material_guard.cmake
+        VERBATIM
+    )
+    add_controller_test(
+        native_lighting_material_guard_test
+        NativeLightingMaterialGuard
+        tests/native_lighting_material_guard_test.cpp
+    )
+    target_sources(
+        native_lighting_material_guard_test
+        PRIVATE
+            "${_native_lighting_material_guard_test_dir}/native_lighting_material_guard_under_test.h"
+            "${_native_lighting_material_guard_test_dir}/native_lighting_material_utilities_under_test.h"
+            "${_native_lighting_material_guard_test_dir}/native_lighting_material_types_under_test.h"
+            "${_native_lighting_material_guard_test_dir}/native_lighting_material_pbr_under_test.h"
+    )
+    target_include_directories(
+        native_lighting_material_guard_test
+        PRIVATE "${_native_lighting_material_guard_test_dir}"
+    )
+    set_tests_properties(NativeLightingMaterialGuard PROPERTIES TIMEOUT 30)
+
     set(_ordinary_save_state_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/ordinary-save-state"
     )

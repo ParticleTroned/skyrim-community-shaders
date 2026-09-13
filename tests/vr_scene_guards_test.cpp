@@ -253,24 +253,33 @@ namespace
 		Reset();
 		LightLimitFix::Hooks::InstallVRShadowLightLifetimeGuard();
 		Require(errors.empty() && SKSE::trampoline.allocations == 1);
-		Xbyak::CodeGenerator adapter;
-		adapter.db(SKSE::trampoline.lastCode.data(), SKSE::trampoline.lastCode.size());
-		adapter.ready();
 		Xbyak::CodeGenerator nativeFrame;
-		nativeFrame.push(nativeFrame.rsi);
-		nativeFrame.sub(nativeFrame.rsp, 0x70);
+		Xbyak::Label adapterEntry, continuation;
+		// The native frame stores RBX and the index in its caller's home space.
+		nativeFrame.db(image.data() + 0x1323190, 0x17);
 		nativeFrame.mov(nativeFrame.rsi, nativeFrame.rcx);
+		nativeFrame.mov(nativeFrame.r14, nativeFrame.rdx);
+		nativeFrame.mov(nativeFrame.ebx, nativeFrame.dword[nativeFrame.r14]);
+		nativeFrame.mov(nativeFrame.dword[nativeFrame.r14], 0x1D);
 		nativeFrame.mov(nativeFrame.dword[nativeFrame.rsp + 0x60], 0);
-		nativeFrame.mov(nativeFrame.rax, reinterpret_cast<std::uintptr_t>(adapter.getCode()));
-		nativeFrame.call(nativeFrame.rax);
+		nativeFrame.nop(0x6B - nativeFrame.getSize());
+		nativeFrame.call(adapterEntry);
 		const auto returnOffset = nativeFrame.getSize();
+		nativeFrame.jmp(continuation, Xbyak::CodeGenerator::T_NEAR);
+		// Reaching displaced instructions must fail instead of hiding a broken return jump.
+		while (nativeFrame.getSize() < 0xA0)
+			nativeFrame.int3();
+		nativeFrame.L(continuation);
+		nativeFrame.db(image.data() + 0x1323230, 3);
 		nativeFrame.mov(nativeFrame.eax, nativeFrame.dword[nativeFrame.rsp + 0x60]);
-		nativeFrame.add(nativeFrame.rsp, 0x70);
-		nativeFrame.pop(nativeFrame.rsi);
-		nativeFrame.ret();
+		nativeFrame.db(image.data() + 0x132323A, 0xE);
+		nativeFrame.L(adapterEntry);
+		nativeFrame.db(SKSE::trampoline.lastCode.data(), SKSE::trampoline.lastCode.size());
 		nativeFrame.ready();
-		const auto index = nativeFrame.getCode<std::uint32_t (*)(void*)>()(image.data());
+		std::uint32_t nativeState = 0x12345678;
+		const auto index = nativeFrame.getCode<std::uint32_t (*)(void*, std::uint32_t*)>()(image.data(), &nativeState);
 		Require(index == 2 && observedShadowNode == image.data() && shadowCallAligned);
+		Require(nativeState == 0x12345678 && returnOffset == 0x70);
 		Require(observedShadowReturn == reinterpret_cast<std::uintptr_t>(nativeFrame.getCode() + returnOffset));
 	}
 

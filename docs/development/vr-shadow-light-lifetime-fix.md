@@ -122,22 +122,25 @@ remain in the call path. This fix has no dependency on the shadow-lifetime
 observer or driver-command recorder. SE and AE receive no new executable
 patch or render-path change.
 
-Focused validation after the PR #96 adversarial review:
+Focused validation after the second PR #96 adversarial review:
 
--   `pwsh artifacts/pr96-adversarial-review-20260913/build.ps1 -Focused`
+-   `pwsh artifacts/pr96-adversarial-review-2-20260913/build.ps1 -Focused`
     passed.
 -   `ctest --test-dir build/native-shadow-render-pr-build -C Release -R "^(SceneLightSnapshot|VRSceneGuards)$" --output-on-failure -V`
-    passed both tests in 0.16 seconds. The ownership harness exercises concurrent worker
+    passed both tests in 0.15 seconds. The ownership harness exercises concurrent worker
     teardown during rendering, raw-array clearing, pending owners, rejected
     stale keys and non-shadow lights, native index advancement and bounds,
     release of the last reference on render exceptions, nine existing capture
     allocation failures and four native capture allocation failures. It also
     verifies that empty passes allocate nothing, index wraparound stops the
     loop, and later lights survive teardown during the first render call.
-    The machine-code harness passes 743 assertions, including every-byte
+    The machine-code harness passes 744 assertions, including every-byte
     function mismatch rejection, runtime scope, installed branch targets,
     argument transfer through the installer-generated adapter, stack
-    alignment and native return identity.
+    alignment and native return identity. It executes the captured prologue
+    and register restores with the native caller-home-space index location,
+    verifies saved-state restoration, and exercises the return jump over
+    displaced instructions filled with traps.
 -   All 184 fixture bytes match the retained PID 22880 capture, SHA-256
     `4859ce0f79962f3574e830c48d23d75f3798234e87e0aeea5ec825b5db9322e4`.
 -   Runtime testing is reserved for the user. This implementation has no
@@ -149,9 +152,14 @@ The review found an incomplete instruction-admission check and unnecessary
 capture work on empty passes; both are corrected above. The existing
 snapshot helper, byte-check helper and trampoline remain shared. The scope
 stays confined to native shadow lifetime, with no diagnostic dependency.
+The second review found no additional production-code defect. It corrected
+the simplified-frame test gap above; production sources remain identical
+to the validated DLL source `90d545008c1dda2b0d9e9d91b82021281698bbcd`.
+No DLL rebuild is claimed for this test/documentation-only revision.
 
 The adversarial review evidence is preserved under
-`artifacts/pr96-adversarial-review-20260913/`. Initial isolated tests and PR
+`artifacts/pr96-adversarial-review-20260913/` and
+`artifacts/pr96-adversarial-review-2-20260913/`. Initial isolated tests and PR
 preparation receipts remain under `artifacts/native-shadow-render-pr-20260913/`.
 Earlier native analysis,
 build/test receipts and handoff metadata remain locally under

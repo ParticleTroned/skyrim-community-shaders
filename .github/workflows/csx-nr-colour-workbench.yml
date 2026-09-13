@@ -1,0 +1,47 @@
+name: Temporary NR colour workbench
+on:
+  push:
+    branches: [work/nr-colour-20260913-f7f2679]
+    paths: [.github/workflows/csx-nr-colour-workbench.yml, tools/nr_colour_workbench.py]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: false
+      - name: Inspect shared NR call sites
+        shell: python
+        run: |
+          import pathlib, re
+          p = pathlib.Path('src/Features/Upscaling.cpp')
+          lines = p.read_text().splitlines()
+          patterns = [r'NeuralRendering::Renderer', r'nr_configure', r'nr_status', r'localToneStrength', r'LocalToneStrength', r'useAutoExposure', r'preExposure', r'exposureScale', r'kBufferTypeExposure', r'neural.*Settings', r'Neural.*Settings']
+          wanted = set()
+          for i, line in enumerate(lines):
+              if any(re.search(pat, line) for pat in patterns):
+                  wanted.update(range(max(0, i - 12), min(len(lines), i + 24)))
+          previous = -2
+          for i in sorted(wanted):
+              if i != previous + 1: print('\n--- Upscaling.cpp ---')
+              print(f'{i+1}: {lines[i]}')
+              previous = i
+          for name in ['src/Features/Upscaling.h', 'src/Features/Upscaling/NeuralRendering/Runtime.h']:
+              print('\n=== '+name+' ===')
+              ls=pathlib.Path(name).read_text().splitlines()
+              wanted=set()
+              for i, line in enumerate(ls):
+                  if re.search(r'NeuralRendering|struct Tuning|neuralRendering|localToneStrength',line):
+                      wanted.update(range(max(0,i-8), min(len(ls),i+35)))
+              for i in sorted(wanted): print(f'{i+1}: {ls[i]}')
+      - name: Source snapshot for analysis
+        run: git archive --format=zip --output=nr-source.zip f7f2679ef616167a499f00dbf563a20cf18133f5
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nr-source-snapshot
+          path: nr-source.zip
+          retention-days: 1

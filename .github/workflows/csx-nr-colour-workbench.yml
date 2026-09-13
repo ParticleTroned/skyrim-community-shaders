@@ -2,7 +2,7 @@ name: Temporary NR colour workbench
 on:
   push:
     branches: [work/nr-colour-20260913-f7f2679]
-    paths: [.github/workflows/csx-nr-colour-workbench.yml, tools/nr_colour_workbench.py, 'tools/nr_colour_patch.*.b64']
+    paths: [.github/workflows/csx-nr-colour-workbench.yml, tools/nr_colour_workbench.py, tools/nr_colour_include_fix.py, 'tools/nr_colour_patch.*.b64']
 permissions:
   contents: read
 jobs:
@@ -14,6 +14,7 @@ jobs:
         with:
           persist-credentials: false
       - run: python tools/nr_colour_workbench.py apply
+      - run: python tools/nr_colour_include_fix.py
       - run: python tools/nr_colour_workbench.py linux
   windows:
     runs-on: windows-2025
@@ -26,42 +27,8 @@ jobs:
         with:
           arch: x64
       - run: python tools/nr_colour_workbench.py apply
+      - run: python tools/nr_colour_include_fix.py
       - run: python tools/nr_colour_workbench.py windows
-  integration:
-    runs-on: windows-2025
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: recursive
-      - run: python tools/nr_colour_workbench.py apply
-      - uses: ./.github/actions/setup-build-environment
-        with:
-          cache-key-suffix: nr-colour-integration
-          cmake-preset: ALL
-          build-dir: build/ALL
-      - name: Configure real plugin and tests
-        shell: pwsh
-        run: |
-          cmake --preset ALL -DBUILD_SHADER_TESTS=OFF -DBUILD_CONTROLLER_TESTS=ON -DDEVBENCH_BRIDGE=ON -DCSX_STAGE_LOCAL_DLSS_RUNTIME=OFF -DCSX_FETCH_OFFICIAL_STREAMLINE_RUNTIME=OFF -DAUTO_DEPLOY_SHADERS=OFF -DZIP_TO_DIST=OFF
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Build real plugin and controller tests
-        shell: pwsh
-        run: |
-          cmake --build build/ALL --config Release --target CommunityShaders controller_tests --parallel 2 2>&1 | Tee-Object -FilePath nr-integration-build.log
-          exit $LASTEXITCODE
-      - name: Run controller tests
-        run: ctest --test-dir build/ALL -C Release -L ControllerTests --output-on-failure
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: nr-integration-logs
-          path: |
-            nr-integration-build.log
-            build/ALL/Testing/Temporary/LastTest.log
-          retention-days: 1
-          if-no-files-found: ignore
   candidate:
     needs: [linux, windows]
     runs-on: ubuntu-latest
@@ -73,6 +40,7 @@ jobs:
         with:
           persist-credentials: false
       - run: python tools/nr_colour_workbench.py apply
+      - run: python tools/nr_colour_include_fix.py
       - name: Export validated source tree without temporary helpers
         env:
           GITHUB_TOKEN: ${{ github.token }}

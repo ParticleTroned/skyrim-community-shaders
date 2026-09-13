@@ -344,7 +344,7 @@ The existing comparison ledger gained one column containing all 66 strict
 timings, 528 numeric timing cells, and full numeric timing groups. All
 historical cells and the 887 existing metric rows were verified intact.
 
-## September 9–10: interrupted NVIDIA cadence run
+## September 9â€“10: interrupted NVIDIA cadence run
 
 Run `nv-mtuivutb` retained 39 transitions (33 + 6) on clean source
 `348803c1831c8cd71ceb75a58143ad0bcb00abb2`. Every retained render and
@@ -1934,3 +1934,30 @@ commands and limitations in
 [the correction report](pr73-owned-release-proof-20260911.md#final-clean-build-evidence).
 No new runtime measurements or visual qualification are claimed, and no
 runtime ledger cells were changed by this offline validation.
+
+## September 13: main-VR measured for PR82 against last PR73
+
+Run renderscale-tuning-nvidia-2026-09-13T18-46-33-800Z completed two 33-transition passes,
+66 terminal PASS and 66 Task 2 PASS, zero FAIL/INCONCLUSIVE. Full-history
+health is NO_COUNTED_FAILURES; reporting COMPLETE. Captures are inactive
+and the journal is flushed. Physical AIO DLL, manifest and build receipt
+agree with clean main-VR source e4cfd8f2f, Build ID 2f6432ddbcbd.
+This AIO does not contain PR82 head 76f9418ab and does not validate its
+accepted-draw or OCU gaze APIs.
+
+Only last PR73 source 554e484e3 is the user-selected baseline. Strict
+means are 917.809 / 897.031 ms versus 815.094 / 768.534 ms:
++12.602% / +16.720%. Retries remain 15 / 15; stretch is 64 / 62 frames
+and 4716.293 / 4713.132 ms. All 33 selected stretch rows recovered;
+pass 1 row 1 adds one episode. No active tail or applicable gate failure.
+Memory and formal change assessment remain INCONCLUSIVE. Adapter LUID,
+scene and dependency records differ. Driver, fixture, tolerance and
+resolved GPU-sample evidence limit interpretation.
+
+[Ledger 0004](vr-render-scale-ledger-0004-pr82.csv) contains exactly
+these two runs. Both summaries and complete comparison reconstruct
+exactly; all 1,056 numeric timing cells match. Baseline cells are intact.
+Ledger finalization took 8.017 seconds, including
+4.433 seconds for comparison/audit. See the
+[full report](nvidia-renderscale-tuning-pr82-e4cfd8f2f-20260913.md) and linked tables/coverage receipt for every
+transition, pass, retry, memory boundary, gate, counter and limitation.

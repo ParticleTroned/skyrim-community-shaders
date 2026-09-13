@@ -1641,6 +1641,25 @@ if(BUILD_CONTROLLER_TESTS)
         set_tests_properties(${TEST_NAME} PROPERTIES LABELS "ControllerTests")
     endfunction()
 
+    add_controller_test(
+        d3d_context_protection_test
+        D3DContextProtection
+        tests/d3d_context_protection_test.cpp
+    )
+    target_sources(
+        d3d_context_protection_test
+        PRIVATE src/Utils/D3DContextProtection.cpp
+    )
+    target_link_libraries(d3d_context_protection_test PRIVATE d3d11 dxgi user32)
+    set_tests_properties(D3DContextProtection PROPERTIES TIMEOUT 60)
+
+    add_controller_test(
+        vr_loading_menu_clear_test
+        VRLoadingMenuClear
+        tests/vr_loading_menu_clear_test.cpp
+    )
+    set_tests_properties(VRLoadingMenuClear PROPERTIES TIMEOUT 30)
+
     set(_scene_depth_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/scene-depth"
     )
@@ -2732,6 +2751,8 @@ if(BUILD_CONTROLLER_TESTS)
     add_custom_target(
         controller_tests
         DEPENDS
+            d3d_context_protection_test
+            vr_loading_menu_clear_test
             scene_depth_plain_test
             scene_depth_devbench_test
             scene_light_snapshot_test

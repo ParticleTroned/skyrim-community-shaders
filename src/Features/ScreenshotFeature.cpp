@@ -12,6 +12,7 @@
 #include "Menu.h"
 #include "State.h"
 #include "Utils/D3D.h"
+#include "Utils/D3DContextProtection.h"
 #include "Utils/FileSystem.h"
 #include "Utils/NormalizedCoordinates.h"
 #include "Utils/WinApi.h"
@@ -1756,7 +1757,6 @@ ScreenshotFeature::~ScreenshotFeature()
 	StopWorkerThread();
 	if (screenshotApi && !screenshotApi->DrainForShutdown(std::chrono::seconds(2)))
 		logger::error("Screenshot manifest work did not drain within the shutdown bound.");
-	RestoreReadbackContextProtectionIfIdle();
 }
 
 bool ScreenshotFeature::IsInMenu() const
@@ -2745,64 +2745,7 @@ nlohmann::json ScreenshotFeature::BuildAcquisitionRecord(
 
 bool ScreenshotFeature::EnsureReadbackContextProtection(ID3D11DeviceContext* a_context)
 {
-	winrt::com_ptr<REX::W32::ID3D11Multithread> multithread;
-	if (!a_context || FAILED(a_context->QueryInterface(multithread.put()))) {
-		return false;
-	}
-
-	std::lock_guard queueLock(screenshotWorkerState->mutex);
-	const auto existing = std::find_if(
-		screenshotWorkerState->readbackProtections.begin(),
-		screenshotWorkerState->readbackProtections.end(),
-		[a_context](const ReadbackContextProtection& protection) {
-			return protection.context.get() == a_context;
-		});
-	if (existing != screenshotWorkerState->readbackProtections.end()) {
-		multithread->SetMultithreadProtected(TRUE);
-		return true;
-	}
-
-	try {
-		ReadbackContextProtection protection;
-		protection.context.copy_from(a_context);
-		screenshotWorkerState->readbackProtections.push_back(std::move(protection));
-	} catch (const std::exception& e) {
-		logger::error("Failed to track screenshot readback protection: {}", e.what());
-		return false;
-	} catch (...) {
-		logger::error("Failed to track screenshot readback protection.");
-		return false;
-	}
-
-	const BOOL wasProtected = multithread->SetMultithreadProtected(TRUE);
-	screenshotWorkerState->readbackProtections.back().restoreToUnprotected = wasProtected == FALSE;
-	screenshotWorkerState->restoreReadbackProtection = true;
-	return true;
-}
-
-void ScreenshotFeature::RestoreReadbackContextProtectionIfIdle()
-{
-	RestoreReadbackContextProtectionIfIdle(screenshotWorkerState);
-}
-
-void ScreenshotFeature::RestoreReadbackContextProtectionIfIdle(const std::shared_ptr<ScreenshotWorkerState>& a_state)
-{
-	std::lock_guard queueLock(a_state->mutex);
-	if (!a_state->restoreReadbackProtection || a_state->outstandingCount != 0) {
-		return;
-	}
-
-	for (const auto& protection : a_state->readbackProtections) {
-		if (!protection.restoreToUnprotected || !protection.context) {
-			continue;
-		}
-		winrt::com_ptr<REX::W32::ID3D11Multithread> multithread;
-		if (SUCCEEDED(protection.context->QueryInterface(multithread.put()))) {
-			multithread->SetMultithreadProtected(FALSE);
-		}
-	}
-	a_state->readbackProtections.clear();
-	a_state->restoreReadbackProtection = false;
+	return SUCCEEDED(Util::ProtectImmediateContext(a_context));
 }
 
 bool ScreenshotFeature::QueueScreenshot(PendingScreenshot&& screenshot)
@@ -3383,7 +3326,6 @@ void ScreenshotFeature::ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerSta
 			reportFailure("Screenshot worker failed with an unknown exception.");
 		}
 	}
-	RestoreReadbackContextProtectionIfIdle(a_state);
 	if (uninitializeCom)
 		CoUninitialize();
 	{
@@ -3849,7 +3791,6 @@ void ScreenshotFeature::ObserveAcceptedVRSubmit(
 
 void ScreenshotFeature::OnBeforePresent(IDXGISwapChain* a_swapChain)
 {
-	RestoreReadbackContextProtectionIfIdle();
 	EnsureScreenshotApi();
 	screenshotApi->Tick(*this, globals::state ? globals::state->frameCount : 0u);
 	if (!HasPendingCapture()) {

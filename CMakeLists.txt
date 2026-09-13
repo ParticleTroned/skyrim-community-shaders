@@ -1818,6 +1818,18 @@ if(BUILD_CONTROLLER_TESTS)
         SkylightingProbeSlice
         PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" TIMEOUT 30
     )
+    add_test(
+        NAME SkylightingSettings
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/skylighting_settings_test.py"
+    )
+    set_tests_properties(
+        SkylightingSettings
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
+    )
     add_controller_test(
         motion_sharpening_runtime_compile_test
         MotionSharpeningRuntimeCompile
@@ -2762,6 +2774,7 @@ if(BUILD_CONTROLLER_TESTS)
             motion_sharpening_policy_test
             sharpener_bindings_test
             skylighting_probe_slice_test
+            motion_sharpening_runtime_compile_test
             motion_sharpening_settings_test
             vr_vendor_relatch_policy_test
             vr_relatch_drain_policy_test

@@ -26,6 +26,8 @@ private:
 	bool sceneLightSnapshotFailed = false;
 	/// Retain VR lights on the render thread until frame or load reset.
 	const SceneLightSnapshot* GetSceneLightSnapshot(RE::ShadowSceneNode* a_node);
+	/// Retain the native VR shadow pass's lights before virtual dispatch, through render completion.
+	static void RenderVRShadowLights(RE::ShadowSceneNode* a_node, std::uint32_t& a_index);
 
 public:
 	virtual inline std::string GetName() override { return "Light Limit Fix"; }
@@ -497,6 +499,7 @@ public:
 		static void InstallVRNonShadowCasterLightFlagsGuard();
 		static void InstallVRSceneGraphCullingObjectGuard();
 		static void InstallVRShadowMapCameraGuard();
+		static void InstallVRShadowLightLifetimeGuard();
 		static void InstallVRRoomLightCullingProcessGuards();
 		static void InstallVRRoomLightEntryGuards();
 		static void InstallVREffectShaderLightGuards();
@@ -515,6 +518,7 @@ public:
 			InstallVRNonShadowCasterLightFlagsGuard();
 			InstallVRSceneGraphCullingObjectGuard();
 			InstallVRShadowMapCameraGuard();
+			InstallVRShadowLightLifetimeGuard();
 			InstallVRRoomLightCullingProcessGuards();
 			InstallVRRoomLightEntryGuards();
 			InstallVREffectShaderLightGuards();

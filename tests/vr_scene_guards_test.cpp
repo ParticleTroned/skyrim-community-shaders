@@ -1,5 +1,6 @@
 #define NOMINMAX
 #include <Windows.h>
+#include <intrin.h>
 #include <xbyak/xbyak.h>
 
 #include <algorithm>
@@ -22,6 +23,9 @@ namespace
 	bool vrRuntime = true;
 	int runtimeVersion = 1415;
 	std::size_t assertions = 0;
+	void* observedShadowNode = nullptr;
+	std::uintptr_t observedShadowReturn = 0;
+	bool shadowCallAligned = false;
 	void Require(bool condition)
 	{
 		++assertions;
@@ -81,27 +85,30 @@ namespace SKSE
 		std::uintptr_t rva;
 		std::size_t size;
 		std::uint8_t opcode;
+		std::uintptr_t target;
 	};
 	struct Trampoline
 	{
 		std::vector<Write> writes;
 		std::size_t allocations = 0;
+		std::vector<std::uint8_t> lastCode;
 		void* allocate(const Xbyak::CodeGenerator& code)
 		{
 			Require(code.getSize() > 0);
 			++allocations;
-			return const_cast<std::uint8_t*>(code.getCode());
+			lastCode.assign(code.getCode(), code.getCode() + code.getSize());
+			return lastCode.data();
 		}
 		template <std::size_t N>
-		void write_branch(std::uintptr_t address, std::uintptr_t)
+		void write_branch(std::uintptr_t address, std::uintptr_t target)
 		{
-			writes.push_back({ address - REL::Module::get().base(), N, 0xE9 });
+			writes.push_back({ address - REL::Module::get().base(), N, 0xE9, target });
 			std::memset(reinterpret_cast<void*>(address), 0xE9, N);
 		}
 		template <std::size_t N>
-		void write_call(std::uintptr_t address, std::uintptr_t)
+		void write_call(std::uintptr_t address, std::uintptr_t target)
 		{
-			writes.push_back({ address - REL::Module::get().base(), N, 0xE8 });
+			writes.push_back({ address - REL::Module::get().base(), N, 0xE8, target });
 			std::memset(reinterpret_cast<void*>(address), 0xE8, N);
 		}
 	} trampoline;
@@ -109,10 +116,18 @@ namespace SKSE
 }
 struct LightLimitFix
 {
+	static void RenderVRShadowLights(void* a_node, std::uint32_t& a_index)
+	{
+		observedShadowNode = a_node;
+		observedShadowReturn = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+		shadowCallAligned = (reinterpret_cast<std::uintptr_t>(_AddressOfReturnAddress()) & 15) == 8;
+		a_index += 2;
+	}
 	struct Hooks
 	{
 		static void InstallVRSceneGraphCullingObjectGuard();
 		static void InstallVRShadowMapCameraGuard();
+		static void InstallVRShadowLightLifetimeGuard();
 	};
 };
 
@@ -137,6 +152,7 @@ namespace
 		runtimeVersion = 1415;
 		SKSE::trampoline.writes.clear();
 		SKSE::trampoline.allocations = 0;
+		SKSE::trampoline.lastCode.clear();
 		errors.clear();
 	}
 
@@ -207,8 +223,64 @@ namespace
 			vrRuntime = version == 1416;
 			LightLimitFix::Hooks::InstallVRSceneGraphCullingObjectGuard();
 			LightLimitFix::Hooks::InstallVRShadowMapCameraGuard();
+			LightLimitFix::Hooks::InstallVRShadowLightLifetimeGuard();
 			Require(SKSE::trampoline.writes.empty() && SKSE::trampoline.allocations == 0);
 		}
+	}
+
+	void TestNativeShadowLoopInstallation()
+	{
+		Reset();
+		LightLimitFix::Hooks::InstallVRShadowLightLifetimeGuard();
+		Require(errors.empty() && SKSE::trampoline.allocations == 1);
+		const auto& writes = SKSE::trampoline.writes;
+		Require(writes.size() == 2);
+		Require(writes[0].rva == 0x1323200 && writes[0].size == 5 && writes[0].opcode == 0xE9);
+		Require(writes[1].rva == 0x13231FB && writes[1].size == 5 && writes[1].opcode == 0xE8);
+		Require(writes[0].target == REL::Module::get().base() + 0x1323230);
+		Require(writes[1].target == reinterpret_cast<std::uintptr_t>(SKSE::trampoline.lastCode.data()));
+		for (std::size_t byte = 0; byte < 0xB8; ++byte) {
+			Reset();
+			image[0x1323190 + byte] ^= 0x80;
+			LightLimitFix::Hooks::InstallVRShadowLightLifetimeGuard();
+			Require(SKSE::trampoline.writes.empty() && SKSE::trampoline.allocations == 0);
+			Require(errors.size() == 2);
+		}
+	}
+
+	void TestNativeShadowLoopExecution()
+	{
+		Reset();
+		LightLimitFix::Hooks::InstallVRShadowLightLifetimeGuard();
+		Require(errors.empty() && SKSE::trampoline.allocations == 1);
+		Xbyak::CodeGenerator nativeFrame;
+		Xbyak::Label adapterEntry, continuation;
+		// The native frame stores RBX and the index in its caller's home space.
+		nativeFrame.db(image.data() + 0x1323190, 0x17);
+		nativeFrame.mov(nativeFrame.rsi, nativeFrame.rcx);
+		nativeFrame.mov(nativeFrame.r14, nativeFrame.rdx);
+		nativeFrame.mov(nativeFrame.ebx, nativeFrame.dword[nativeFrame.r14]);
+		nativeFrame.mov(nativeFrame.dword[nativeFrame.r14], 0x1D);
+		nativeFrame.mov(nativeFrame.dword[nativeFrame.rsp + 0x60], 0);
+		nativeFrame.nop(0x6B - nativeFrame.getSize());
+		nativeFrame.call(adapterEntry);
+		const auto returnOffset = nativeFrame.getSize();
+		nativeFrame.jmp(continuation, Xbyak::CodeGenerator::T_NEAR);
+		// Reaching displaced instructions must fail instead of hiding a broken return jump.
+		while (nativeFrame.getSize() < 0xA0)
+			nativeFrame.int3();
+		nativeFrame.L(continuation);
+		nativeFrame.db(image.data() + 0x1323230, 3);
+		nativeFrame.mov(nativeFrame.eax, nativeFrame.dword[nativeFrame.rsp + 0x60]);
+		nativeFrame.db(image.data() + 0x132323A, 0xE);
+		nativeFrame.L(adapterEntry);
+		nativeFrame.db(SKSE::trampoline.lastCode.data(), SKSE::trampoline.lastCode.size());
+		nativeFrame.ready();
+		std::uint32_t nativeState = 0x12345678;
+		const auto index = nativeFrame.getCode<std::uint32_t (*)(void*, std::uint32_t*)>()(image.data(), &nativeState);
+		Require(index == 2 && observedShadowNode == image.data() && shadowCallAligned);
+		Require(nativeState == 0x12345678 && returnOffset == 0x70);
+		Require(observedShadowReturn == reinterpret_cast<std::uintptr_t>(nativeFrame.getCode() + returnOffset));
 	}
 
 	void TestEntryGuardExecution()
@@ -383,6 +455,8 @@ int main()
 		TestInstallation();
 		TestRejectedSites();
 		TestRuntimeScope();
+		TestNativeShadowLoopInstallation();
+		TestNativeShadowLoopExecution();
 		TestEntryGuardExecution();
 		TestNativeLateExit();
 		std::cout << "VR scene guard installation: " << assertions << " assertions passed\n";

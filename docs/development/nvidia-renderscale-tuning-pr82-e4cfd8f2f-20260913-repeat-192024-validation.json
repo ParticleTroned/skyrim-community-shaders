@@ -1,0 +1,64 @@
+{
+    "status": "COMPLETE",
+    "runId": "renderscale-tuning-nvidia-2026-09-13T19-20-24-614Z",
+    "baselineRunId": "renderscale-tuning-nvidia-2026-09-11T17-09-55-165Z",
+    "ledger": "vr-render-scale-ledger-0005-pr82.csv",
+    "ledgerSha256": "f8af96ed9ebd482d17a647d5f238645dd0139b7189b6f50f3de5d1fc80850c43",
+    "ledgerBytes": 101265210,
+    "metricRows": 1273,
+    "runColumns": 3,
+    "ledgerParts": [
+        {
+            "file": "vr-render-scale-ledger-0005-pr82.csv",
+            "bytes": 101265210,
+            "sha256": "f8af96ed9ebd482d17a647d5f238645dd0139b7189b6f50f3de5d1fc80850c43",
+            "columns": [
+                "PR73 owned-release candidate on main-VR ef7c366dd | 554e484e3957178e2d144bf35266bfdcc0948642 | renderscale-tuning-nvidia-2026-09-11T17-09-55-165Z",
+                "renderscale-tuning-nvidia-2026-09-13T18-46-33-800Z; source e4cfd8f2f842380586a1f0e6bb0dd4ded6538d41; PR82 test AIO (main-VR)",
+                "renderscale-tuning-nvidia-2026-09-13T19-20-24-614Z; source e4cfd8f2f842380586a1f0e6bb0dd4ded6538d41; PR82 test AIO (main-VR)"
+            ]
+        }
+    ],
+    "comparisonsReconstructedExactly": ["pr73", "first_run"],
+    "firstRunSummaryReconstructedExactly": true,
+    "verifiedNumericCellsPerComparison": {
+        "pr73": 1056,
+        "first_run": 1056
+    },
+    "firstRunAssessment": {
+        "status": "INCONCLUSIVE",
+        "scope": "improvement_or_neutral",
+        "changesTestResult": false,
+        "reasons": [
+            "retained_context_not_matched:scene",
+            "matching_fixture_fingerprint_unavailable",
+            "explicit_versioned_tolerance_policy_missing"
+        ],
+        "slowerOutsideTolerance": []
+    },
+    "summaryReconstructedExactly": true,
+    "baselineSummaryReconstructedExactly": true,
+    "comparisonReconstructedExactly": true,
+    "baselineCellsPreserved": true,
+    "sourceLedgerSha256": "c2290064f2d2fa457a354f5a1371eb239f74fbbc4f9e50242ab12a6f0a50f641",
+    "verifiedNumericCells": 1056,
+    "candidateNumericTimings": 528,
+    "summarySha256": "e8662b582006342e80b29d8a2fd2a9782d1c481ea9dda1a5ccbcaaaa06e1e8d7",
+    "baselineSummarySha256": "9e61a8520c7d44b2bf235a1ac82627f44f8b35db58215990ff04721b9c03b3c1",
+    "comparisonSha256": "b78bfd0aaec74cd3520a34a32165fbed89751f931acda9be9aa30b7759a0792a",
+    "assessment": {
+        "status": "INCONCLUSIVE",
+        "scope": "improvement_or_neutral",
+        "changesTestResult": false,
+        "reasons": [
+            "retained_context_not_matched:adapter",
+            "retained_context_not_matched:scene",
+            "retained_context_not_matched:dependencies",
+            "matching_fixture_fingerprint_unavailable",
+            "explicit_versioned_tolerance_policy_missing"
+        ],
+        "slowerOutsideTolerance": []
+    },
+    "comparisonMs": 8911.89590000431,
+    "elapsedMs": 16155.207799994969
+}

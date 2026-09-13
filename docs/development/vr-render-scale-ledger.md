@@ -9,12 +9,13 @@ same PR. Earlier snapshots stay unchanged. See the
 
 ## Retained snapshots
 
-| Version | File                                                           |                          Size | Contents                                                                                      |
-| ------- | -------------------------------------------------------------- | ----------------------------: | --------------------------------------------------------------------------------------------- |
-| 0001    | [History 1](vr-render-scale-ledger-0001-history.csv)           | 83,486,866 bytes / 79.619 MiB | Oldest retained runs plus intermediate runs selected to balance the archives; 22 run columns  |
-| 0002    | [History 2](vr-render-scale-ledger-0002-history.csv)           | 83,607,079 bytes / 79.734 MiB | Remaining intermediate PR66/PR73 runs; 4 run columns                                          |
-| 0003    | [PR73 and baselines](vr-render-scale-ledger-0003-pr73.csv)     | 72,209,582 bytes / 68.864 MiB | Both PR65 baseline repeats, PR66 reference, latest PR73 measurement; 4 run columns            |
-| 0004    | [PR82 and PR73 baseline](vr-render-scale-ledger-0004-pr82.csv) | 62,247,890 bytes / 59.364 MiB | Latest PR73 baseline 554e484e3 and current main-VR e4cfd8f2f measured for PR82; 2 run columns |
+| Version | File                                                           |                           Size | Contents                                                                                      |
+| ------- | -------------------------------------------------------------- | -----------------------------: | --------------------------------------------------------------------------------------------- |
+| 0001    | [History 1](vr-render-scale-ledger-0001-history.csv)           |  83,486,866 bytes / 79.619 MiB | Oldest retained runs plus intermediate runs selected to balance the archives; 22 run columns  |
+| 0002    | [History 2](vr-render-scale-ledger-0002-history.csv)           |  83,607,079 bytes / 79.734 MiB | Remaining intermediate PR66/PR73 runs; 4 run columns                                          |
+| 0003    | [PR73 and baselines](vr-render-scale-ledger-0003-pr73.csv)     |  72,209,582 bytes / 68.864 MiB | Both PR65 baseline repeats, PR66 reference, latest PR73 measurement; 4 run columns            |
+| 0004    | [PR82 and PR73 baseline](vr-render-scale-ledger-0004-pr82.csv) |  62,247,890 bytes / 59.364 MiB | Latest PR73 baseline 554e484e3 and current main-VR e4cfd8f2f measured for PR82; 2 run columns |
+| 0005    | [PR82 second run](vr-render-scale-ledger-0005-pr82.csv)        | 101,265,210 bytes / 96.574 MiB | Latest PR73 baseline and both e4cfd8f2f runs, with complete comparisons; 3 run columns        |
 
 The archives differ by 120,213 bytes. All three are plain CSV files below
 100 MiB. Their column headers retain exact run and compiled-source
@@ -26,7 +27,7 @@ Snapshot `0003` pins PR65 sources `348803c18` and `7c8e3e656`, PR66 source
 `renderscale-tuning-nvidia-2026-09-11T17-09-55-165Z`. The older PR73
 comparison source `269bded15` is retained in `0002`.
 
-The next finalized measurement uses `0005-pr<PR number>`. If one PR's
+The next finalized measurement uses `0006-pr<PR number>`. If one PR's
 complete evidence exceeds the file limit, use consecutive numbers with
 that PR identity and list its parts together here. Baselines may recur
 in later snapshots, but their copied cells must remain exact.
@@ -67,3 +68,10 @@ AIO, with 1,263 metric rows. Both complete summaries and comparison
 reconstruct exactly; all 1,056 timing cells pass audit. Original baseline
 cells remain unchanged. Current source e4cfd8f2f is not PR82 head
 76f9418ab. See the [report](nvidia-renderscale-tuning-pr82-e4cfd8f2f-20260913.md).
+
+## September 13: second PR82 measurement
+
+Snapshot 0005 retains the selected PR73 baseline and both current-build
+runs, with 1,273 metric rows. Every cell from snapshot 0004 is unchanged;
+all three summaries and both comparisons reconstruct exactly. Both
+1,056-cell timing audits pass. See the [second-run report](nvidia-renderscale-tuning-pr82-e4cfd8f2f-20260913-repeat-192024.md).

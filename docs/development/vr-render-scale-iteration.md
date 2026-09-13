@@ -1961,3 +1961,29 @@ Ledger finalization took 8.017 seconds, including
 4.433 seconds for comparison/audit. See the
 [full report](nvidia-renderscale-tuning-pr82-e4cfd8f2f-20260913.md) and linked tables/coverage receipt for every
 transition, pass, retry, memory boundary, gate, counter and limitation.
+
+## September 13: second main-VR run for PR82
+
+Run renderscale-tuning-nvidia-2026-09-13T19-20-24-614Z completed 66/66 transitions on the
+same PID 38084 and Build ID 2f6432ddbcbd as the first run. Both passes
+retain all terminal and Task 2 PASS results. Health is
+NO_COUNTED_FAILURES, reporting COMPLETE, captures inactive and journal
+flushed. Physical AIO/manifest/receipt identity was reverified.
+Measured source e4cfd8f2f remains distinct from PR82 implementation 76f9418ab.
+
+Strict means are 0.941 / 0.938 s: +15.437% / +22.059% versus PR73
+554e484e3 and +2.518% / +4.575% versus the first same-build run.
+Relative to PR73, 28/33 and 33/33 routes are slower. Retries are 14 / 15.
+Stretch is 59 / 62 frames over 4.780 / 4.870 s, with all 32 selected
+rows recovered. No active tail or applicable health-gate failure.
+Four of 64 between-transition QPC intervals exceed the 250 ms
+diagnostic allowance, peaking at 297.089 ms; all four are in pass 1.
+These gaps exclude the measured strict interval. Memory and both
+formal comparison assessments remain INCONCLUSIVE; no GPU/FPS claim.
+
+[Ledger 0005](vr-render-scale-ledger-0005-pr82.csv) preserves all three
+complete summaries, both comparisons and all prior cells. Both 1,056-cell
+timing audits pass. Full ledger reporting took 16.155 s.
+The [second-run report](nvidia-renderscale-tuning-pr82-e4cfd8f2f-20260913-repeat-192024.md) retains every route/pass, counter,
+memory boundary, retry and provenance limitation. PR82's tables retain
+PR73 and both new runs, using seconds for switch durations.

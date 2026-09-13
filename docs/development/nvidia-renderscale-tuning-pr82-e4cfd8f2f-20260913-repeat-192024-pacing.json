@@ -1,0 +1,697 @@
+{
+    "schema": "renderscale-pacing-diagnostic-v1",
+    "runId": "renderscale-tuning-nvidia-2026-09-13T19-20-24-614Z",
+    "buildId": "2f6432ddbcbd05826c1fb1ccd66f25e14755d718a5e760a58cbae58b7f625efd",
+    "workerPacing": {
+        "status": "EXCEEDED",
+        "maximumClientDispatchGapMs": 49.87299999999959,
+        "budgetMs": 250
+    },
+    "definition": "next dispatch QPC minus previous strict terminal QPC minus prescribed 5000 ms wait",
+    "intervalCount": 64,
+    "maximumBeyondPrescribedWaitMs": 297.08880000000045,
+    "exceedances": [
+        {
+            "pass": 1,
+            "previousOrdinal": 27,
+            "ordinal": 28,
+            "previousStrictTick": 1099508517003,
+            "nextDispatchTick": 1099561225827,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 270.8824000000004,
+            "budgetExceeded": true
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 28,
+            "ordinal": 29,
+            "previousStrictTick": 1099572951364,
+            "nextDispatchTick": 1099625543747,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 259.2383,
+            "budgetExceeded": true
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 30,
+            "ordinal": 31,
+            "previousStrictTick": 1099699698325,
+            "nextDispatchTick": 1099752336234,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 263.79089999999997,
+            "budgetExceeded": true
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 31,
+            "ordinal": 32,
+            "previousStrictTick": 1099759930104,
+            "nextDispatchTick": 1099812900992,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 297.08880000000045,
+            "budgetExceeded": true
+        }
+    ],
+    "intervals": [
+        {
+            "pass": 1,
+            "previousOrdinal": 1,
+            "ordinal": 2,
+            "previousStrictTick": 1097912718011,
+            "nextDispatchTick": 1097963520963,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 80.29519999999957,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 2,
+            "ordinal": 3,
+            "previousStrictTick": 1097965653040,
+            "nextDispatchTick": 1098016694836,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 104.17960000000039,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 3,
+            "ordinal": 4,
+            "previousStrictTick": 1098019742351,
+            "nextDispatchTick": 1098071170861,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 142.85099999999966,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 4,
+            "ordinal": 5,
+            "previousStrictTick": 1098084336135,
+            "nextDispatchTick": 1098135787795,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 145.16600000000017,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 5,
+            "ordinal": 6,
+            "previousStrictTick": 1098148863323,
+            "nextDispatchTick": 1098200382137,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 151.8814000000002,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 6,
+            "ordinal": 7,
+            "previousStrictTick": 1098214318455,
+            "nextDispatchTick": 1098266129266,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 181.08110000000033,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 7,
+            "ordinal": 8,
+            "previousStrictTick": 1098280083269,
+            "nextDispatchTick": 1098332144320,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 206.10509999999977,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 8,
+            "ordinal": 9,
+            "previousStrictTick": 1098346980064,
+            "nextDispatchTick": 1098398669846,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 168.97819999999956,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 9,
+            "ordinal": 10,
+            "previousStrictTick": 1098412430302,
+            "nextDispatchTick": 1098463902044,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 147.17420000000038,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 10,
+            "ordinal": 11,
+            "previousStrictTick": 1098473366000,
+            "nextDispatchTick": 1098525462184,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 209.6184000000003,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 11,
+            "ordinal": 12,
+            "previousStrictTick": 1098531286541,
+            "nextDispatchTick": 1098583112351,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 182.58100000000013,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 12,
+            "ordinal": 13,
+            "previousStrictTick": 1098585266439,
+            "nextDispatchTick": 1098636741370,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 147.49309999999969,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 13,
+            "ordinal": 14,
+            "previousStrictTick": 1098644541538,
+            "nextDispatchTick": 1098696285974,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 174.4435999999996,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 14,
+            "ordinal": 15,
+            "previousStrictTick": 1098710491052,
+            "nextDispatchTick": 1098762269367,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 177.83150000000023,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 15,
+            "ordinal": 16,
+            "previousStrictTick": 1098772856609,
+            "nextDispatchTick": 1098824299763,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 144.3154000000004,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 16,
+            "ordinal": 17,
+            "previousStrictTick": 1098835436108,
+            "nextDispatchTick": 1098887067976,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 163.1868000000004,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 17,
+            "ordinal": 18,
+            "previousStrictTick": 1098898641384,
+            "nextDispatchTick": 1098950192831,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 155.14469999999983,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 18,
+            "ordinal": 19,
+            "previousStrictTick": 1098960636489,
+            "nextDispatchTick": 1099012325249,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 168.8760000000002,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 19,
+            "ordinal": 20,
+            "previousStrictTick": 1099023990778,
+            "nextDispatchTick": 1099076131458,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 214.0680000000002,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 20,
+            "ordinal": 21,
+            "previousStrictTick": 1099086553457,
+            "nextDispatchTick": 1099138679194,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 212.57369999999992,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 21,
+            "ordinal": 22,
+            "previousStrictTick": 1099145058180,
+            "nextDispatchTick": 1099197086930,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 202.875,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 22,
+            "ordinal": 23,
+            "previousStrictTick": 1099199360769,
+            "nextDispatchTick": 1099251411774,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 205.10049999999956,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 23,
+            "ordinal": 24,
+            "previousStrictTick": 1099254373476,
+            "nextDispatchTick": 1099306617039,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 224.35630000000037,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 24,
+            "ordinal": 25,
+            "previousStrictTick": 1099316478838,
+            "nextDispatchTick": 1099368538549,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 205.97109999999975,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 25,
+            "ordinal": 26,
+            "previousStrictTick": 1099382083207,
+            "nextDispatchTick": 1099434569632,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 248.64249999999993,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 26,
+            "ordinal": 27,
+            "previousStrictTick": 1099447192499,
+            "nextDispatchTick": 1099499305271,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 211.27720000000045,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 27,
+            "ordinal": 28,
+            "previousStrictTick": 1099508517003,
+            "nextDispatchTick": 1099561225827,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 270.8824000000004,
+            "budgetExceeded": true
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 28,
+            "ordinal": 29,
+            "previousStrictTick": 1099572951364,
+            "nextDispatchTick": 1099625543747,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 259.2383,
+            "budgetExceeded": true
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 29,
+            "ordinal": 30,
+            "previousStrictTick": 1099638251905,
+            "nextDispatchTick": 1099690594373,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 234.2467999999999,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 30,
+            "ordinal": 31,
+            "previousStrictTick": 1099699698325,
+            "nextDispatchTick": 1099752336234,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 263.79089999999997,
+            "budgetExceeded": true
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 31,
+            "ordinal": 32,
+            "previousStrictTick": 1099759930104,
+            "nextDispatchTick": 1099812900992,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 297.08880000000045,
+            "budgetExceeded": true
+        },
+        {
+            "pass": 1,
+            "previousOrdinal": 32,
+            "ordinal": 33,
+            "previousStrictTick": 1099819756115,
+            "nextDispatchTick": 1099872101115,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 234.5,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 1,
+            "ordinal": 2,
+            "previousStrictTick": 1100078578506,
+            "nextDispatchTick": 1100130095338,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 151.6832000000004,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 2,
+            "ordinal": 3,
+            "previousStrictTick": 1100132509037,
+            "nextDispatchTick": 1100183412276,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 90.32390000000032,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 3,
+            "ordinal": 4,
+            "previousStrictTick": 1100186308891,
+            "nextDispatchTick": 1100237261133,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 95.22419999999966,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 4,
+            "ordinal": 5,
+            "previousStrictTick": 1100249533160,
+            "nextDispatchTick": 1100300993508,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 146.03480000000036,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 5,
+            "ordinal": 6,
+            "previousStrictTick": 1100314059971,
+            "nextDispatchTick": 1100365339225,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 127.92540000000008,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 6,
+            "ordinal": 7,
+            "previousStrictTick": 1100378712392,
+            "nextDispatchTick": 1100430333818,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 162.14260000000013,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 7,
+            "ordinal": 8,
+            "previousStrictTick": 1100443514746,
+            "nextDispatchTick": 1100495156152,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 164.14059999999972,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 8,
+            "ordinal": 9,
+            "previousStrictTick": 1100508356745,
+            "nextDispatchTick": 1100559635009,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 127.82639999999992,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 9,
+            "ordinal": 10,
+            "previousStrictTick": 1100573152081,
+            "nextDispatchTick": 1100624473663,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 132.15819999999985,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 10,
+            "ordinal": 11,
+            "previousStrictTick": 1100634249299,
+            "nextDispatchTick": 1100685893152,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 164.38529999999992,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 11,
+            "ordinal": 12,
+            "previousStrictTick": 1100691698306,
+            "nextDispatchTick": 1100743144161,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 144.58550000000014,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 12,
+            "ordinal": 13,
+            "previousStrictTick": 1100745262229,
+            "nextDispatchTick": 1100796765055,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 150.28259999999955,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 13,
+            "ordinal": 14,
+            "previousStrictTick": 1100804424122,
+            "nextDispatchTick": 1100855597302,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 117.31800000000021,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 14,
+            "ordinal": 15,
+            "previousStrictTick": 1100870021643,
+            "nextDispatchTick": 1100921438347,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 141.67039999999997,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 15,
+            "ordinal": 16,
+            "previousStrictTick": 1100936470939,
+            "nextDispatchTick": 1100988108642,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 163.77030000000013,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 16,
+            "ordinal": 17,
+            "previousStrictTick": 1101000480790,
+            "nextDispatchTick": 1101052040059,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 155.9269000000004,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 17,
+            "ordinal": 18,
+            "previousStrictTick": 1101063006751,
+            "nextDispatchTick": 1101114835133,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 182.83820000000014,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 18,
+            "ordinal": 19,
+            "previousStrictTick": 1101124936930,
+            "nextDispatchTick": 1101176542990,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 160.60599999999977,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 19,
+            "ordinal": 20,
+            "previousStrictTick": 1101187445230,
+            "nextDispatchTick": 1101239537335,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 209.21050000000014,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 20,
+            "ordinal": 21,
+            "previousStrictTick": 1101251697229,
+            "nextDispatchTick": 1101303477689,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 178.04600000000028,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 21,
+            "ordinal": 22,
+            "previousStrictTick": 1101309067599,
+            "nextDispatchTick": 1101360671518,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 160.39189999999962,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 22,
+            "ordinal": 23,
+            "previousStrictTick": 1101362724761,
+            "nextDispatchTick": 1101414352307,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 162.7546000000002,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 23,
+            "ordinal": 24,
+            "previousStrictTick": 1101417593546,
+            "nextDispatchTick": 1101469795366,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 220.1819999999998,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 24,
+            "ordinal": 25,
+            "previousStrictTick": 1101479572540,
+            "nextDispatchTick": 1101531483024,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 191.04839999999967,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 25,
+            "ordinal": 26,
+            "previousStrictTick": 1101544406334,
+            "nextDispatchTick": 1101596501161,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 209.48269999999957,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 26,
+            "ordinal": 27,
+            "previousStrictTick": 1101609345851,
+            "nextDispatchTick": 1101661353830,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 200.79789999999957,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 27,
+            "ordinal": 28,
+            "previousStrictTick": 1101670363202,
+            "nextDispatchTick": 1101722359181,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 199.59789999999975,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 28,
+            "ordinal": 29,
+            "previousStrictTick": 1101733716348,
+            "nextDispatchTick": 1101785638785,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 192.2437,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 29,
+            "ordinal": 30,
+            "previousStrictTick": 1101798555377,
+            "nextDispatchTick": 1101850594365,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 203.89879999999994,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 30,
+            "ordinal": 31,
+            "previousStrictTick": 1101859152435,
+            "nextDispatchTick": 1101910760629,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 160.81940000000031,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 31,
+            "ordinal": 32,
+            "previousStrictTick": 1101917952668,
+            "nextDispatchTick": 1101969923715,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 197.10469999999987,
+            "budgetExceeded": false
+        },
+        {
+            "pass": 2,
+            "previousOrdinal": 32,
+            "ordinal": 33,
+            "previousStrictTick": 1101975919752,
+            "nextDispatchTick": 1102027996546,
+            "qpcFrequencyHz": 10000000,
+            "beyondPrescribedWaitMs": 207.6794,
+            "budgetExceeded": false
+        }
+    ]
+}

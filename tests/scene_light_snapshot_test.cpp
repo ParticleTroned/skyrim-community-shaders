@@ -5,10 +5,13 @@
 #include <cassert>
 #include <cstdint>
 #include <cstdlib>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <mutex>
 #include <new>
+#include <optional>
+#include <source_location>
 #include <span>
 #include <string_view>
 #include <thread>
@@ -24,10 +27,12 @@ namespace
 	bool verifyCaptureLock = false;
 	unsigned loggedFailures = 0;
 
-	void Require(bool a_condition)
+	void Require(bool a_condition, std::source_location a_location = std::source_location::current())
 	{
-		if (!a_condition)
+		if (!a_condition) {
+			std::cerr << "Scene light assertion failed at " << a_location.file_name() << ':' << a_location.line() << '\n';
 			std::abort();
+		}
 	}
 
 	struct Light
@@ -38,7 +43,7 @@ namespace
 			Require(!queueLockHeld);
 			++destroyed;
 		}
-		virtual bool IsShadowLight() const { return true; }
+		virtual bool IsShadowLight() const { return castsShadow; }
 		void IncRefCount()
 		{
 			Require(!verifyCaptureLock || queueLockHeld);
@@ -50,12 +55,25 @@ namespace
 				delete this;
 		}
 		std::atomic<unsigned> references{ 0 };
+		bool castsShadow = true;
 		std::atomic<unsigned>& destroyed;
 	};
 
 	struct ShadowLight : Light
 	{
 		using Light::Light;
+		void Render(std::uint32_t& a_index)
+		{
+			Require(!queueLockHeld);
+			if (onRender)
+				onRender();
+			Require(references > 0);
+			++renderCalls;
+			a_index += indexStep;
+		}
+		std::function<void()> onRender;
+		unsigned renderCalls = 0;
+		std::uint32_t indexStep = 1;
 	};
 
 	using Snapshot = LightLimitFixDetail::SceneLightSnapshot<RE::NiPointer<Light>>;
@@ -85,6 +103,7 @@ namespace logger
 namespace RE
 {
 	using BSLight = Light;
+	using BSShadowLight = ShadowLight;
 
 	struct BSSpinLockGuard
 	{
@@ -99,6 +118,7 @@ namespace RE
 		std::vector<NiPointer<Light>> lightQueueAdd;
 		std::vector<NiPointer<Light>> lightQueueRemove;
 		std::vector<NiPointer<Light>> unk190;
+		std::vector<ShadowLight*> shadowLightsAccum;
 		std::mutex lightQueueLock;
 		ShadowSceneNode& GetRuntimeData() { return *this; }
 	};
@@ -110,6 +130,7 @@ struct LightLimitFix
 	std::unordered_map<RE::ShadowSceneNode*, Snapshot> sceneLightSnapshots;
 	bool sceneLightSnapshotFailed = false;
 	const Snapshot* GetSceneLightSnapshot(RE::ShadowSceneNode* a_node);
+	static void RenderVRShadowLights(RE::ShadowSceneNode* a_node, std::uint32_t& a_index);
 };
 
 namespace globals::game
@@ -278,11 +299,166 @@ void TestEnumerationOwnership()
 	}
 }
 
+void TestNativeRenderLifetime()
+{
+	std::atomic<unsigned> destroyed{ 0 };
+	RE::ShadowSceneNode node;
+	auto light = RE::make_nismart<ShadowLight>(destroyed);
+	auto nextLight = RE::make_nismart<ShadowLight>(destroyed);
+	auto* key = light.get();
+	light->indexStep = 2;
+	node.activeShadowLights.push_back(light);
+	node.activeShadowLights.push_back(nextLight);
+	node.shadowLightsAccum = { key, key, nextLight.get(), nullptr };
+	light->onRender = [&] {
+		std::thread cleanup([&] {
+			RE::BSSpinLockGuard lock{ node.lightQueueLock };
+			node.activeShadowLights.clear();
+			node.shadowLightsAccum.clear();
+		});
+		cleanup.join();
+		Require(destroyed == 0);
+	};
+	unsigned nextCalls = 0;
+	nextLight->onRender = [&] {
+		Require(destroyed == 0);
+		++nextCalls;
+	};
+	light.reset();
+	nextLight.reset();
+	std::uint32_t index = 0;
+	verifyCaptureLock = true;
+	LightLimitFix::RenderVRShadowLights(&node, index);
+	verifyCaptureLock = false;
+	Require(index == 3 && nextCalls == 1 && destroyed == 2 && !queueLockHeld);
+	LightLimitFix::RenderVRShadowLights(nullptr, index);
+}
+
+void TestEmptyNativeRender()
+{
+	std::atomic<unsigned> destroyed{ 0 };
+	RE::ShadowSceneNode node;
+	auto light = RE::make_nismart<ShadowLight>(destroyed);
+	node.activeShadowLights.push_back(light);
+	const auto before = loggedFailures;
+	auto checkEmpty = [&](std::uint32_t a_index) {
+		const auto initialIndex = a_index;
+		allocationsUntilFailure = 0;
+		LightLimitFix::RenderVRShadowLights(&node, a_index);
+		Require(allocationsUntilFailure == 0);
+		allocationsUntilFailure = -1;
+		Require(a_index == initialIndex && !queueLockHeld && loggedFailures == before);
+		Require(light->references == 2 && light->renderCalls == 0);
+	};
+	checkEmpty(0);
+	node.shadowLightsAccum = { nullptr, light.get() };
+	checkEmpty(0);
+	checkEmpty(2);
+	checkEmpty(UINT32_MAX);
+	std::cout << "Empty native passes allocate nothing\n";
+}
+
+void TestNativeRenderSelection()
+{
+	std::atomic<unsigned> destroyed{ 0 };
+	RE::ShadowSceneNode node;
+	auto first = RE::make_nismart<ShadowLight>(destroyed);
+	auto second = RE::make_nismart<ShadowLight>(destroyed);
+	node.lightQueueRemove.push_back(first);
+	node.unk190.push_back(second);
+	node.shadowLightsAccum = { first.get(), second.get(), nullptr };
+	std::uint32_t index = 0;
+	LightLimitFix::RenderVRShadowLights(&node, index);
+	Require(index == 2 && first->renderCalls == 1 && second->renderCalls == 1);
+
+	first->castsShadow = false;
+	index = 0;
+	LightLimitFix::RenderVRShadowLights(&node, index);
+	Require(index == 0 && first->renderCalls == 1 && second->renderCalls == 1);
+	first->castsShadow = true;
+
+	node.shadowLightsAccum[0] = reinterpret_cast<ShadowLight*>(0x33509950);
+	index = 0;
+	LightLimitFix::RenderVRShadowLights(&node, index);
+	Require(index == 0 && first->renderCalls == 1);
+	node.shadowLightsAccum = { first.get() };
+	first->indexStep = 0;
+	LightLimitFix::RenderVRShadowLights(&node, index);
+	Require(index == 0 && first->renderCalls == 2);
+	first->indexStep = 2;
+	LightLimitFix::RenderVRShadowLights(&node, index);
+	Require(index == 2 && first->renderCalls == 3);
+	node.shadowLightsAccum = { first.get(), second.get() };
+	second->indexStep = UINT32_MAX;
+	index = 1;
+	LightLimitFix::RenderVRShadowLights(&node, index);
+	Require(index == 0 && first->renderCalls == 3 && second->renderCalls == 2);
+}
+
+void TestNativeRenderAllocationFailures()
+{
+	unsigned failures = 0;
+	for (int failureAfter = 0; failureAfter < 64; ++failureAfter) {
+		std::atomic<unsigned> destroyed{ 0 };
+		RE::ShadowSceneNode node;
+		auto light = RE::make_nismart<ShadowLight>(destroyed);
+		node.activeShadowLights.push_back(light);
+		node.shadowLightsAccum = { light.get(), nullptr };
+		const auto before = loggedFailures;
+		std::uint32_t index = 0;
+		allocationsUntilFailure = failureAfter;
+		LightLimitFix::RenderVRShadowLights(&node, index);
+		allocationsUntilFailure = -1;
+		Require(!queueLockHeld && light->references == 2);
+		if (index == 1) {
+			Require(failures > 0 && light->renderCalls == 1 && loggedFailures == before);
+			std::cout << failures << " native render allocation failures passed\n";
+			return;
+		}
+		++failures;
+		Require(index == 0 && light->renderCalls == 0 && loggedFailures == before + 1);
+	}
+	Require(false);
+}
+
+void TestNativeRenderUnwind()
+{
+	std::atomic<unsigned> destroyed{ 0 };
+	RE::ShadowSceneNode node;
+	auto light = RE::make_nismart<ShadowLight>(destroyed);
+	node.activeShadowLights.push_back(light);
+	node.shadowLightsAccum = { light.get(), nullptr };
+	light->onRender = [&] {
+		{
+			RE::BSSpinLockGuard lock{ node.lightQueueLock };
+			node.activeShadowLights.clear();
+		}
+		Require(destroyed == 0);
+		throw std::bad_alloc{};
+	};
+	light.reset();
+	std::uint32_t index = 0;
+	bool propagated = false;
+	const auto before = loggedFailures;
+	try {
+		LightLimitFix::RenderVRShadowLights(&node, index);
+	} catch (const std::bad_alloc&) {
+		propagated = true;
+	}
+	Require(propagated && index == 0 && !queueLockHeld);
+	Require(destroyed == 1 && loggedFailures == before);
+}
+
 int main()
 {
 	TestOwnership();
 	TestCapture();
 	TestAllocationFailures();
 	TestEnumerationOwnership();
+	TestNativeRenderLifetime();
+	TestEmptyNativeRender();
+	TestNativeRenderSelection();
+	TestNativeRenderAllocationFailures();
+	TestNativeRenderUnwind();
 	std::cout << "Scene light NiPointer ownership, native capture integration and allocation failures passed\n";
 }

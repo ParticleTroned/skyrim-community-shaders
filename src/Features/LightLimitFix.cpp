@@ -400,6 +400,19 @@ namespace
 		}
 	};
 
+	class VRShadowLightRenderLoop : public Xbyak::CodeGenerator
+	{
+	public:
+		explicit VRShadowLightRenderLoop(std::uintptr_t a_render)
+		{
+			// Tail entry preserves the native return address and its unwind metadata.
+			mov(rcx, rsi);
+			lea(rdx, ptr[rsp + 0x68]);
+			mov(rax, a_render);
+			jmp(rax);
+		}
+	};
+
 	enum class VRRoomLightCullingUse
 	{
 		kPortalGraphEntry,
@@ -1620,16 +1633,7 @@ const LightLimitFix::SceneLightSnapshot* LightLimitFix::GetSceneLightSnapshot(RE
 			auto& runtime = a_node->GetRuntimeData();
 			// VR's queue drain drops active and queued references under this lock.
 			const RE::BSSpinLockGuard lock{ runtime.lightQueueLock };
-			for (const auto& light : runtime.activeLights)
-				snapshot.Retain(light, true);
-			for (const auto& light : runtime.activeShadowLights)
-				snapshot.Retain(light, true);
-			for (const auto& light : runtime.lightQueueAdd)
-				snapshot.Retain(light, false);
-			for (const auto& light : runtime.lightQueueRemove)
-				snapshot.Retain(light, false);
-			for (const auto& light : runtime.unk190)
-				snapshot.Retain(light, false);
+			snapshot.RetainScene(runtime);
 		}
 		// Publish only complete captures; failed captures release references after unlocking.
 		return &sceneLightSnapshots.try_emplace(a_node, std::move(snapshot)).first->second;
@@ -1637,6 +1641,38 @@ const LightLimitFix::SceneLightSnapshot* LightLimitFix::GetSceneLightSnapshot(RE
 		sceneLightSnapshotFailed = true;
 		logger::error("Light Limit Fix: scene light capture allocation failed; skipping engine lights until reset");
 		return nullptr;
+	}
+}
+
+void LightLimitFix::RenderVRShadowLights(RE::ShadowSceneNode* a_node, std::uint32_t& a_index)
+{
+	if (!a_node)
+		return;
+	std::optional<SceneLightSnapshot> snapshot;
+	std::vector<RE::BSShadowLight*> renderOrder;
+	try {
+		auto& runtime = a_node->GetRuntimeData();
+		const RE::BSSpinLockGuard lock{ runtime.lightQueueLock };
+		if (a_index >= runtime.shadowLightsAccum.size() || !runtime.shadowLightsAccum[a_index])
+			return;
+		snapshot.emplace();
+		// Native dispatch uses accumulated order and needs no clustered-light enumeration.
+		snapshot->RetainScene(runtime, false);
+		renderOrder.assign(runtime.shadowLightsAccum.begin(), runtime.shadowLightsAccum.end());
+	} catch (const std::bad_alloc&) {
+		logger::error("Light Limit Fix: native shadow capture allocation failed; skipping shadow maps");
+		return;
+	}
+
+	while (a_index < renderOrder.size()) {
+		// Raw accumulated entries are keys; only owning-list references authorize a virtual call.
+		auto* light = snapshot->Find(renderOrder[a_index]);
+		if (!light || !light->IsShadowLight())
+			break;
+		const auto previousIndex = a_index;
+		static_cast<RE::BSShadowLight*>(light)->Render(a_index);
+		if (a_index <= previousIndex)
+			break;
 	}
 }
 
@@ -2560,6 +2596,56 @@ void LightLimitFix::Hooks::InstallVRShadowMapCameraGuard()
 	REL::safe_fill(cameraLateFrustumLoad + 5, REL::NOP, lateFrustumLoadInstructionSize - 5);
 
 	logger::info("[LLF] Installed VR shadow-map camera guard");
+}
+
+void LightLimitFix::Hooks::InstallVRShadowLightLifetimeGuard()
+{
+	if (!REL::Module::IsVR())
+		return;
+	if (REL::Module::get().version() != SKSE::RUNTIME_VR_1_4_15) {
+		logger::error("[LLF] VR shadow light lifetime guard not installed: unsupported Skyrim VR runtime {}", REL::Module::get().version().string());
+		return;
+	}
+
+	constexpr std::uintptr_t loopRVA = 0x13231FB;
+	// The adapter depends on RSI, the caller's stack layout and the continuation's restores.
+	constexpr std::uint8_t expectedSetup[] = {
+		0x40, 0x56, 0x57, 0x41, 0x56, 0x48, 0x83, 0xEC, 0x40,
+		0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE, 0xFF, 0xFF, 0xFF,
+		0x48, 0x89, 0x5C, 0x24, 0x70, 0x0F, 0xB6, 0x3D, 0x5A, 0xE5, 0xE5, 0x01,
+		0x40, 0x88, 0x7C, 0x24, 0x28, 0xC6, 0x05, 0x4E, 0xE5, 0xE5, 0x01, 0x00,
+		0x48, 0x8B, 0x35, 0xBF, 0xFE, 0x0F, 0x02, 0xE8, 0xCA, 0xB5, 0xFA, 0xFF,
+		0x84, 0xC0, 0x74, 0x69, 0x8B, 0x0D, 0x88, 0xFD, 0x3C, 0x02,
+		0x65, 0x48, 0x8B, 0x04, 0x25, 0x58, 0x00, 0x00, 0x00, 0xBA, 0x68, 0x07, 0x00, 0x00,
+		0x4C, 0x8B, 0x34, 0xC8, 0x4C, 0x03, 0xF2, 0x41, 0x8B, 0x1E, 0x89, 0x5C, 0x24, 0x68,
+		0x41, 0xC7, 0x06, 0x1D, 0x00, 0x00, 0x00, 0xC7, 0x44, 0x24, 0x60, 0x00, 0x00, 0x00, 0x00
+	};
+	constexpr std::uint8_t expectedLoop[] = {
+		0x33, 0xD2, 0x48, 0x8B, 0xCE, 0xE8, 0x4B, 0x70, 0xFD, 0xFF,
+		0x48, 0x85, 0xC0, 0x74, 0x26, 0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00,
+		0x4C, 0x8B, 0x00, 0x48, 0x8D, 0x54, 0x24, 0x60, 0x48, 0x8B, 0xC8,
+		0x41, 0xFF, 0x50, 0x50, 0x8B, 0x54, 0x24, 0x60, 0x48, 0x8B, 0xCE,
+		0xE8, 0x25, 0x70, 0xFD, 0xFF, 0x48, 0x85, 0xC0, 0x75, 0xE0
+	};
+	constexpr std::uint8_t expectedContinuation[] = {
+		0x41, 0x89, 0x1E, 0x40, 0x88, 0x3D, 0xCE, 0xE4, 0xE5, 0x01,
+		0x48, 0x8B, 0x5C, 0x24, 0x70, 0x48, 0x83, 0xC4, 0x40, 0x41, 0x5E, 0x5F, 0x5E, 0xC3
+	};
+	const auto loop = REL::Module::get().base() + loopRVA;
+	if (!MatchesInstructions(loop - sizeof(expectedSetup), expectedSetup) ||
+		!MatchesInstructions(loop, expectedLoop) ||
+		!MatchesInstructions(loop + sizeof(expectedLoop), expectedContinuation)) {
+		logger::error("[LLF] VR shadow light lifetime guard not installed: unexpected SkyrimVR.exe instructions");
+		return;
+	}
+
+	VRShadowLightRenderLoop code{ reinterpret_cast<std::uintptr_t>(&LightLimitFix::RenderVRShadowLights) };
+	code.ready();
+	auto& trampoline = SKSE::GetTrampoline();
+	const auto guard = reinterpret_cast<std::uintptr_t>(trampoline.allocate(code));
+	trampoline.write_branch<5>(loop + 5, loop + sizeof(expectedLoop));
+	trampoline.write_call<5>(loop, guard);
+	logger::info("[LLF] Installed VR shadow light lifetime guard");
 }
 
 void LightLimitFix::Hooks::InstallVRRoomLightCullingProcessGuards()

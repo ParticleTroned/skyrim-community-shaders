@@ -10,6 +10,18 @@ implementation has no performance claim or runtime qualification result;
 new measurements must use the existing comparison ledger and reporting
 workflow.
 
+## September 13: FOV mask preview admission
+
+FOV mask visualization now draws through presentation independently of
+cropped vendor dispatch, including full coverage. Saved VR profiles retain
+the setting. Existing save/lifecycle resource guards remain authoritative;
+mask outputs cannot qualify ordinary-save recovery or stand in for vendor
+output. Both VR rendering modes share mask drawing and preserve desktop
+mirror presentation. See [FOV mask visualization](fov-mask-visualization.md)
+for the contract and focused regression coverage. No runtime measurement
+or visual qualification accompanies this implementation, so it creates
+no numbered ledger snapshot.
+
 ## September 13: ordinary-save presentation recovery
 
 Ordinary saves can resume presentation after six consecutive, successfully

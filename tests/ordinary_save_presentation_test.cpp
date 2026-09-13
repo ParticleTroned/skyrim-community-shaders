@@ -101,6 +101,7 @@ public:
 		const VRSubmitInputFreshnessPolicy::SubmitBoundaryIdentity&,
 		const VROrdinarySaveRecovery::Identity&, bool);
 
+	bool maskPreview = false;
 	bool Submit(uint32_t a_eye, bool a_inputsReady, bool a_outputReady,
 		const std::function<void()>& a_duringOutput = {})
 	{
@@ -115,6 +116,7 @@ public:
 		const uint32_t currentFrame = globals::state->lastCompletedWorldRenderFrame;
 		const auto sourceColorContract = VRSubmitColorContract::Resolve(true,
 			VRSubmitColorContract::SourceColorSpace::Gamma);
+		const bool foveatedMaskVisualizationPreview = maskPreview;
 		bool vendorLifecycleMutationDeferred = lifecycleDeferred;
 		bool exactExistingProviderReady = false;
 		bool useAuthoritativeDLSSProfile = false;
@@ -128,7 +130,7 @@ public:
 			a_duringOutput();
 		if (!a_outputReady)
 			return presentationOnly;
-		ordinarySaveOutputReady = true;
+#include "ordinary_save_preview_output_under_test.h"
 		return presentationOnly;
 	}
 };
@@ -218,6 +220,20 @@ int main()
 		"Successful fallback output cannot substitute for missing temporal inputs");
 
 	qualify(70);
+	upscaling.maskPreview = true;
+	check(upscaling.Submit(0, true, true) && upscaling.Submit(1, true, true),
+		"Mask preview must use presentation without a vendor evaluation");
+	check(!upscaling.ordinarySaveRecovery.qualifiedCycle,
+		"A successful mask preview must revoke earlier save recovery proof");
+	for (uint32_t current = 77; current < 84; ++current) {
+		frame(current);
+		upscaling.Submit(0, true, true);
+		upscaling.Submit(1, true, true);
+	}
+	check(!upscaling.CanResumeOrdinarySavePresentation() && upscaling.ordinarySaveRecovery.stableFrames == 0,
+		"Preview eye pairs must never qualify ordinary-save recovery");
+	upscaling.maskPreview = false;
+	qualify(90);
 	for (bool* gate : { &upscaling.lifecycleDeferred, &upscaling.transitionPending, &upscaling.vendorReset,
 			 &upscaling.deviceLost, &upscaling.menu, &upscaling.loading, &upscaling.protectedLoading,
 			 &state.pendingPostLoadRuntimeReset }) {

@@ -40,3 +40,8 @@ extract_section(
     "\tif (vrRenderScaleRelatchDrainEpoch.load(std::memory_order_acquire) != 0)"
     ordinary_save_submit_admission_under_test.h
 )
+extract_section(
+    "ordinarySaveOutputReady = !foveatedMaskVisualizationPreview;"
+    "\t\treturn true;"
+    ordinary_save_preview_output_under_test.h
+)

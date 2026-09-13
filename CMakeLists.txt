@@ -1853,6 +1853,7 @@ if(BUILD_CONTROLLER_TESTS)
         "${_ordinary_save_presentation_test_dir}/ordinary_save_presentation_under_test.h"
         "${_ordinary_save_presentation_test_dir}/ordinary_save_submit_finish_under_test.h"
         "${_ordinary_save_presentation_test_dir}/ordinary_save_submit_admission_under_test.h"
+        "${_ordinary_save_presentation_test_dir}/ordinary_save_preview_output_under_test.h"
     )
     add_custom_command(
         OUTPUT ${_ordinary_save_presentation_headers}
@@ -1878,6 +1879,50 @@ if(BUILD_CONTROLLER_TESTS)
         OrdinarySaveState
         OrdinarySavePresentation
         PROPERTIES TIMEOUT 30
+    )
+
+    set(_foveated_mask_visualization_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/foveated-mask-visualization-test"
+    )
+    set(_foveated_mask_visualization_header
+        "${_foveated_mask_visualization_test_dir}/foveated_mask_visualization_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_foveated_mask_visualization_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_foveated_mask_visualization_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_foveated_mask_visualization.cmake"
+        DEPENDS
+            src/Features/Upscaling.cpp
+            tests/extract_foveated_mask_visualization.cmake
+        VERBATIM
+    )
+    foreach(_preview_variant IN ITEMS off on)
+        add_controller_test(foveated_mask_visualization_${_preview_variant}_test FoveatedMaskVisualization_${_preview_variant} tests/foveated_mask_visualization_test.cpp)
+        target_sources(
+            foveated_mask_visualization_${_preview_variant}_test
+            PRIVATE "${_foveated_mask_visualization_header}"
+        )
+        target_include_directories(
+            foveated_mask_visualization_${_preview_variant}_test
+            PRIVATE "${_foveated_mask_visualization_test_dir}"
+        )
+    endforeach()
+    target_compile_definitions(
+        foveated_mask_visualization_on_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
+
+    add_test(
+        NAME FoveatedMaskVisualizationIntegration
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/foveated_mask_visualization_source_test.py"
+    )
+    set_tests_properties(
+        FoveatedMaskVisualizationIntegration
+        PROPERTIES LABELS "ControllerTests"
     )
 
     set(_foveated_save_reuse_test_dir
@@ -3003,6 +3048,8 @@ if(BUILD_CONTROLLER_TESTS)
             vr_ordinary_save_recovery_test
             ordinary_save_presentation_test
             foveated_save_reuse_test
+            foveated_mask_visualization_off_test
+            foveated_mask_visualization_on_test
             pbr_material_registry_test
             perf_mode_restart_state_test
             motion_sharpening_policy_test

@@ -17150,6 +17150,7 @@ void Upscaling::DrawFoveatedSettings(bool a_essentialsLayout)
 	ImGui::Checkbox("FOV Mask Visualization", &settings.foveatedPeripheryMaskVisualization);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Use this while tuning FOV masks.");
+		ImGui::TextUnformatted("Also works at full coverage. Temporarily pauses during loading and game menus.");
 		ImGui::TextUnformatted("Green = upscaling center mask.");
 		if (settings.periphery_taa_enable)
 			ImGui::TextUnformatted("Gold = TAA ring, blue = outer lightweight ring.");
@@ -18229,9 +18230,6 @@ void Upscaling::LoadSettings(json& o_json)
 		o_json.value("vrSubmitStageLogDiagnostics", false)) {
 		settings.pipelineDiagnostics = true;
 	}
-	// Force mask visualization OFF on load for all existing profiles.
-	settings.foveatedPeripheryMaskVisualization = false;
-
 	if (settings.upscaleMethod > static_cast<uint>(UpscaleMethod::kDLSS)) {
 		logger::warn("[Upscaling] Loaded upscaleMethod {} out of range, clamping to {}", settings.upscaleMethod, static_cast<uint>(UpscaleMethod::kDLSS));
 	}
@@ -38775,7 +38773,7 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	static uint32_t previousDLSSPreset = GetRuntimeDLSSPreset();
 	static uint32_t previousRenderScaleMode = getTrackedRenderScaleMode();
 	static uint32_t previousPerfMode = getTrackedPerfMode();
-	static FoveatedLayoutKey previousFoveatedLayout = makeFoveatedLayoutKey(settings.periphery_taa_enable, settings.periphery_taa_enable && !settings.foveatedPeripheryMaskVisualization);
+	static FoveatedLayoutKey previousFoveatedLayout = makeFoveatedLayoutKey(settings.periphery_taa_enable, settings.periphery_taa_enable);
 
 	bool frameGenModeCurrent = (settings.frameGenerationMode && d3d12SwapChainActive);
 	bool frameGenModeChanged = frameGenModeCurrent != previousFrameGenMode;
@@ -39614,7 +39612,8 @@ bool Upscaling::IsPeripheryTAAEnabled(UpscaleMethod a_upscaleMethod) const
 
 bool Upscaling::IsPeripheryTAAPathActive(UpscaleMethod a_upscaleMethod) const
 {
-	return IsPeripheryTAAEnabled(a_upscaleMethod) && !settings.foveatedPeripheryMaskVisualization;
+	// Preview bypasses temporal dispatch without changing the resource layout.
+	return IsPeripheryTAAEnabled(a_upscaleMethod);
 }
 
 bool Upscaling::UseActiveFoveatedPeripheryTAAProfile() const
@@ -40374,24 +40373,70 @@ void Upscaling::DestroyPeripheryTAAResources()
 	submitStageFoveatedPeripheryTAAEyeReady = {};
 }
 
-void Upscaling::DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t sourceWidth, uint32_t sourceHeight, uint32_t outputWidth, uint32_t outputHeight, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, bool keepBindingsBound, float sourceScaleX, float sourceScaleY, float sourceOffsetX, float sourceOffsetY, float centerOffsetX, float centerOffsetY)
+bool Upscaling::IsFoveatedMaskVisualizationEnabled(UpscaleMethod a_upscaleMethod) const
+{
+	return globals::game::isVR && IsFoveatedVendorDispatchRequested(settings, a_upscaleMethod) &&
+	       settings.foveatedPeripheryMaskVisualization && globals::state &&
+	       !globals::state->pendingPostLoadRuntimeReset &&
+	       !IsMainMenuContextActive() && !IsLoadingMenuContextActive() &&
+	       !IsVRLoadingSubmitProtectionContextActive(*this, globals::state) &&
+	       !IsVRMenuPresentationContextActive() &&
+	       !runtimeResolutionPlan.knownMenuContextActive &&
+	       !runtimeResolutionPlan.menuContextActive && !runtimeResolutionPlan.loadingMenuActive;
+}
+
+bool Upscaling::DispatchFoveatedMaskVisualization(uint32_t a_eyeIndex)
+{
+	if (!globals::game::isVR || a_eyeIndex >= std::size(vrIntermediateColorOut) ||
+		!settings.foveatedPeripheryMaskVisualization || IsSubmitStageDeviceLost())
+		return false;
+	const auto& output = vrIntermediateColorOut[a_eyeIndex];
+	if (!output || !output->resource || !output->uav || !output->desc.Width || !output->desc.Height)
+		return false;
+	// A preview can reuse resources during a save or relatch, but cannot create them.
+	if (ShouldDeferVRVendorLifecycleMutation() && (!foveatedPeripheryCS || !foveatedPeripheryCB))
+		return false;
+	if (!EnsureFoveatedDispatchShaders(false, true, "Mask preview ", "keeping normal presentation"))
+		return false;
+
+	CS_GPU_PASS("Upscaling::FoveatedMaskVisualization");
+	const auto unbind = ScopeExit([&]() { UnbindUpscalingResources(); });
+	static bool loggedMaskPreviewFailure = false;
+	try {
+		const auto profile = GetFoveatedMaskProfileParams(settings, settings.periphery_taa_enable);
+		const auto offset = GetResolvedFoveatedMaskCenterOffsets(settings.periphery_taa_enable)[a_eyeIndex];
+		return DispatchFoveatedPeripheryPass(nullptr, output->uav.get(), 0, 0,
+				   output->desc.Width, output->desc.Height, 0, 0, output->desc.Width, output->desc.Height,
+				   profile.centerScale, profile.centerHorizontalScale, false, 1.0f, 1.0f, 0.0f, 0.0f, offset.x, offset.y, true) &&
+		       !MarkSubmitStageDeviceLostIfDeviceRemoved("FOV mask visualization");
+	} catch (const std::exception& e) {
+		LogWarnOnce(loggedMaskPreviewFailure, "[Upscaling] FOV mask preview unavailable; keeping normal presentation", e);
+		MarkSubmitStageDeviceLostIfNeeded(e, "FOV mask visualization");
+	} catch (...) {
+		LogWarnOnce(loggedMaskPreviewFailure, "[Upscaling] FOV mask preview unavailable; keeping normal presentation");
+		MarkSubmitStageDeviceLostIfDeviceRemoved("FOV mask visualization");
+	}
+	return false;
+}
+
+bool Upscaling::DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t sourceWidth, uint32_t sourceHeight, uint32_t outputWidth, uint32_t outputHeight, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, bool keepBindingsBound, float sourceScaleX, float sourceScaleY, float sourceOffsetX, float sourceOffsetY, float centerOffsetX, float centerOffsetY, bool visualizeMask)
 {
 	auto* peripheryCS = GetFoveatedPeripheryCS();
-	if (!peripheryCS || !sourceSRV || !outputUAV || !foveatedPeripheryCB)
-		return;
+	if (!peripheryCS || (!visualizeMask && !sourceSRV) || !outputUAV || !foveatedPeripheryCB)
+		return false;
 	if (!dispatchWidth || !dispatchHeight)
-		return;
+		return false;
 
 	auto context = globals::d3d::context;
 	auto deferred = globals::deferred;
 	if (!context || !deferred || !deferred->linearSampler)
-		return;
+		return false;
 	if (outputOffsetX >= outputWidth || outputOffsetY >= outputHeight)
-		return;
+		return false;
 	dispatchWidth = std::min(dispatchWidth, outputWidth - outputOffsetX);
 	dispatchHeight = std::min(dispatchHeight, outputHeight - outputOffsetY);
 	if (!dispatchWidth || !dispatchHeight)
-		return;
+		return false;
 
 	FoveatedPeripheryCB cbData{};
 	cbData.outputDim = { static_cast<float>(outputWidth), static_cast<float>(outputHeight) };
@@ -40408,10 +40453,9 @@ void Upscaling::DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSR
 	cbData.sourceOffset = sourceRegion.offset;
 	cbData.dispatchDim = { static_cast<float>(dispatchWidth), static_cast<float>(dispatchHeight) };
 	cbData.outputOffset = { static_cast<float>(outputOffsetX), static_cast<float>(outputOffsetY) };
-	cbData.jitter = GetJitterForDispatch();
+	cbData.jitter = visualizeMask ? float2{} : GetJitterForDispatch();
 	centerScale = ClampFoveatedCenterScale(centerScale);
 	centerHorizontalScale = ClampFoveatedCenterHorizontalScale(centerHorizontalScale);
-	const bool visualizeMask = settings.foveatedPeripheryMaskVisualization;
 	const bool showThreeZoneMask = visualizeMask && settings.periphery_taa_enable;
 	const float centerFeather = showThreeZoneMask ? ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather) : FoveatedCommon::kCenterFeather;
 	const float taaOuterScale = ClampPeripheryTAAOuterScaleForCenter(settings.periphery_taa_outer_scale, centerScale);
@@ -40464,6 +40508,7 @@ void Upscaling::DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSR
 		context->CSSetConstantBuffers(0, 1, nullCB);
 		context->CSSetShader(nullptr, nullptr, 0);
 	}
+	return true;
 }
 
 void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorSRV, ID3D11ShaderResourceView* currentDepthSRV, ID3D11ShaderResourceView* currentMotionVectorSRV,
@@ -41337,7 +41382,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 		if (!bindPeripheryBindings())
 			return false;
 
-		DispatchFoveatedPeripheryPass(
+		return DispatchFoveatedPeripheryPass(
 			params.peripherySourceSRV,
 			outputColorUAV,
 			params.peripherySourceWidth,
@@ -41356,8 +41401,8 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 			params.peripherySourceOffsetX,
 			params.peripherySourceOffsetY,
 			centerOffset.x,
-			centerOffset.y);
-		return true;
+			centerOffset.y,
+			params.visualizeMask);
 	};
 
 	auto dispatchPeripheryTAA = [&](ID3D11ShaderResourceView* tileListSRV, uint32_t tileCount, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight) -> bool {
@@ -41532,8 +41577,8 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMeth
 	if (!GetRuntimeFoveatedRegionDimensions(inputWidthPerEye, inputHeight, outputWidthPerEye, outputHeight))
 		return FidelityFX::UpscaleResult::Failed;
 
-	const bool visualizeMask = settings.foveatedPeripheryMaskVisualization;
-	const bool usePeripheryTAA = IsPeripheryTAAPathActive(a_upscaleMethod);
+	const bool visualizeMask = false;
+	const bool usePeripheryTAA = IsPeripheryTAAEnabled(a_upscaleMethod);
 	const bool usePeripheryTAAProfile = IsPeripheryTAAEnabled(a_upscaleMethod);
 	const auto foveatedProfile = GetFoveatedMaskProfileParams(settings, usePeripheryTAAProfile);
 	const float centerScale = foveatedProfile.centerScale;
@@ -41673,8 +41718,8 @@ FidelityFX::UpscaleResult Upscaling::DispatchSubmitStageFoveatedVendorEye(Upscal
 	if (!outputResource || !outputUAV)
 		return FidelityFX::UpscaleResult::Failed;
 
-	const bool visualizeMask = settings.foveatedPeripheryMaskVisualization;
-	const bool usePeripheryTAA = IsPeripheryTAAPathActive(a_upscaleMethod);
+	const bool visualizeMask = false;
+	const bool usePeripheryTAA = IsPeripheryTAAEnabled(a_upscaleMethod);
 	const bool usePeripheryTAAProfile = IsPeripheryTAAEnabled(a_upscaleMethod);
 	const auto foveatedProfile = GetFoveatedMaskProfileParams(settings, usePeripheryTAAProfile);
 	const float centerScale = foveatedProfile.centerScale;
@@ -42089,7 +42134,7 @@ void Upscaling::EnsureVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 }
 
 bool Upscaling::EnsureVRPresentationTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
-	ID3D11Resource* colorSrc)
+	ID3D11Resource* colorSrc, bool allowResourceCreation)
 {
 	if (!colorSrc || !inWidth || !inHeight || !outWidth || !outHeight)
 		return false;
@@ -42130,7 +42175,7 @@ bool Upscaling::EnsureVRPresentationTextures(uint32_t inWidth, uint32_t inHeight
 
 	if (!needsRecreate)
 		return true;
-	if (ShouldReuseOrdinarySaveResources())
+	if (!allowResourceCreation || ShouldReuseOrdinarySaveResources())
 		return false;
 
 	logger::debug("[VRRenderScale] (Re)creating presentation textures: per-eye in {}x{}, out {}x{}",
@@ -44803,8 +44848,10 @@ void Upscaling::SetupResources()
 	dynamicResolutionStretchCB = new ConstantBuffer(ConstantBufferDesc<DynamicResolutionStretchCB>(), "Upscaling::DynamicResolutionStretchCB");
 	delete vrMenuLayerCompositeCB;
 	vrMenuLayerCompositeCB = new ConstantBuffer(ConstantBufferDesc<VRMenuLayerCompositeCB>(), "Upscaling::VRMenuLayerCompositeCB");
-	delete foveatedPeripheryCB;
-	foveatedPeripheryCB = new ConstantBuffer(ConstantBufferDesc<FoveatedPeripheryCB>());
+	foveatedPeripheryCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<FoveatedPeripheryCB>(), "Upscaling::FoveatedPeripheryCB");
+	// Warm the preview before save protection can prohibit shader creation.
+	if (globals::game::isVR)
+		EnsureFoveatedDispatchShaders(false, true, "Mask preview ", "keeping normal presentation");
 	delete foveatedCenterBlendCB;
 	foveatedCenterBlendCB = new ConstantBuffer(ConstantBufferDesc<FoveatedCenterBlendCB>());
 	delete foveatedSpatialCompositeCB;
@@ -49666,6 +49713,107 @@ bool Upscaling::MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context)
 	return true;
 }
 
+bool Upscaling::UpdateVRSubmitDesktopMirror(uint32_t eyeIndex, uint32_t currentFrame, uint64_t a_compositorCycleToken,
+	ID3D11Texture2D* sourceTexture, const D3D11_TEXTURE2D_DESC& sourceDesc, uint32_t eyeWidthOut, uint32_t eyeHeightOut)
+{
+	auto* context = globals::d3d::context;
+	if (!context || !sourceTexture || eyeIndex >= 2 || !eyeWidthOut || !eyeHeightOut)
+		return false;
+	const bool mirrorRequested =
+		globals::features::vr.settings.StabilizeRenderScaleDesktopMirror ||
+		globals::features::screenshotFeature.HasPendingDesktopMirrorCapture();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordVRRenderScaleGPUPerformanceCounter(
+		mirrorRequested ?
+			VRRenderScaleGPUPerformanceCounter::MirrorConsumerRequests :
+			VRRenderScaleGPUPerformanceCounter::MirrorConsumerSkips);
+#endif
+	if (!mirrorRequested) {
+		vrDesktopMirrorBlitRTV = nullptr;
+		vrDesktopMirrorBlitTarget = nullptr;
+		submitStageMirrorEyeReady = {};
+	} else {
+		const bool canMirrorToSource =
+			sourceDesc.ArraySize == 1 &&
+			sourceDesc.Width >= eyeWidthOut * 2 &&
+			sourceDesc.Height >= eyeHeightOut &&
+			vrIntermediateColorOut[0] && vrIntermediateColorOut[1] &&
+			vrIntermediateColorOut[0]->resource && vrIntermediateColorOut[1]->resource &&
+			vrIntermediateColorOut[0]->desc.Width >= eyeWidthOut &&
+			vrIntermediateColorOut[0]->desc.Height >= eyeHeightOut &&
+			vrIntermediateColorOut[1]->desc.Width >= eyeWidthOut &&
+			vrIntermediateColorOut[1]->desc.Height >= eyeHeightOut &&
+			vrIntermediateColorOut[0]->desc.Format == sourceDesc.Format &&
+			vrIntermediateColorOut[1]->desc.Format == sourceDesc.Format;
+		const auto consumeReadyMirrorPair = [&]() {
+			if (!VRSubmitTemporalSnapshot::MatchesProducer(submitStageMirrorFrame, submitStageMirrorCycle, currentFrame, a_compositorCycleToken) || submitStageMirrorSourceTexture != sourceTexture) {
+				submitStageMirrorFrame = currentFrame;
+				submitStageMirrorCycle = a_compositorCycleToken;
+				submitStageMirrorSourceTexture = sourceTexture;
+				submitStageMirrorEyeReady = {};
+			}
+
+			submitStageMirrorEyeReady[eyeIndex] = true;
+			if (!submitStageMirrorEyeReady[0] || !submitStageMirrorEyeReady[1])
+				return false;
+
+			submitStageMirrorEyeReady = {};
+			return true;
+		};
+		if (canMirrorToSource) {
+			vrDesktopMirrorBlitRTV = nullptr;
+			vrDesktopMirrorBlitTarget = nullptr;
+
+			if (consumeReadyMirrorPair()) {
+				D3D11_BOX mirrorBox{ 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
+				context->CopySubresourceRegion(sourceTexture, 0, 0, 0, 0, vrIntermediateColorOut[0]->resource.get(), 0, &mirrorBox);
+				context->CopySubresourceRegion(sourceTexture, 0, eyeWidthOut, 0, 0, vrIntermediateColorOut[1]->resource.get(), 0, &mirrorBox);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				RecordVRRenderScaleGPUPerformanceCounter(
+					VRRenderScaleGPUPerformanceCounter::MirrorCopyPairs);
+#endif
+				if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage mirror writeback"))
+					return false;
+			}
+		} else {
+			if (consumeReadyMirrorPair()) {
+				// Preview may run before vendor recovery; keep its mirror allocation-free too.
+				if ((ShouldReuseOrdinarySaveResources() || ShouldDeferVRVendorLifecycleMutation()) &&
+					(vrDesktopMirrorBlitTarget != sourceTexture || !vrDesktopMirrorBlitRTV ||
+						!vrDesktopMirrorBlitPS || !upscaleVS))
+					return true;
+				static bool loggedSubmitStageMirrorFallbackFailure = false;
+				const bool mirrorUpdated = BlitVRRenderScaleDesktopMirror(sourceTexture, sourceDesc, eyeWidthOut, eyeHeightOut);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (mirrorUpdated) {
+					RecordVRRenderScaleGPUPerformanceCounter(
+						VRRenderScaleGPUPerformanceCounter::MirrorBlitPairs);
+				}
+#endif
+				if (!mirrorUpdated && IsSubmitStageDeviceLost())
+					return false;
+				if (!mirrorUpdated && !loggedSubmitStageMirrorFallbackFailure) {
+					logger::warn(
+						"[Upscaling] Desktop mirror fallback could not update incompatible render-scale submit texture. source={}x{} array={} format={} outputL={}x{} format={} outputR={}x{} format={}",
+						sourceDesc.Width,
+						sourceDesc.Height,
+						sourceDesc.ArraySize,
+						static_cast<uint32_t>(sourceDesc.Format),
+						vrIntermediateColorOut[0] ? vrIntermediateColorOut[0]->desc.Width : 0,
+						vrIntermediateColorOut[0] ? vrIntermediateColorOut[0]->desc.Height : 0,
+						vrIntermediateColorOut[0] ? static_cast<uint32_t>(vrIntermediateColorOut[0]->desc.Format) : 0,
+						vrIntermediateColorOut[1] ? vrIntermediateColorOut[1]->desc.Width : 0,
+						vrIntermediateColorOut[1] ? vrIntermediateColorOut[1]->desc.Height : 0,
+						vrIntermediateColorOut[1] ? static_cast<uint32_t>(vrIntermediateColorOut[1]->desc.Format) : 0);
+					loggedSubmitStageMirrorFallbackFailure = true;
+				}
+			}
+		}
+	}
+
+	return true;
+}
+
 bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCycleToken, const VRSubmitInputFreshnessPolicy::SubmitBoundaryIdentity& a_submitBoundaryIdentity, bool a_vendorResumeCooldownAtCycleStart, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 	vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds, VRRenderScalePresentationObservation& a_presentationObservation)
 {
@@ -49832,6 +49980,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		directMenuPresentationContext ||
 		presentationRenderTarget;
 	const bool communityShadersMenuOpen = IsCommunityShadersMenuOpen();
+	const bool foveatedMaskVisualizationPreview =
+		IsFoveatedMaskVisualizationEnabled(upscaleMethod) && !submitPresentationContext;
 	const bool sceneFeatureMenuPauseContext =
 		globals::game::isVR &&
 		(currentMenuPresentationContext || communityShadersMenuOpen);
@@ -50284,6 +50434,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		presentationOnly = true;
 		RequestHistoryReset();
 	}
+	if (foveatedMaskVisualizationPreview) {
+		presentationOnly = true;
+		RequestHistoryReset();
+	}
 	if (a_compositorCycleToken != 0) {
 		const uint32_t methodValue = static_cast<uint32_t>(upscaleMethod);
 		if (submitStageVendorAdmissionCycle != a_compositorCycleToken) {
@@ -50689,17 +50843,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		}
 	}
 
-	const bool foveatedMaskVisualizationPreview =
-		settings.foveatedPeripheryMaskVisualization &&
-		communityShadersMenuOpen &&
-		!currentMenuPresentationContext &&
-		!submitPresentationContext &&
-		!resolutionPlan.knownMenuContextActive &&
-		!resolutionPlan.menuContextActive;
 	const bool foveatedRequested =
 		!presentationOnly &&
 		!vendorLifecycleMutationDeferred &&
-		(!sceneFeatureMenuPauseContext || foveatedMaskVisualizationPreview) &&
+		!sceneFeatureMenuPauseContext &&
 		IsFoveatedVendorDispatchEnabled(upscaleMethod) &&
 		!foveatedTransitionBypass &&
 		!foveatedFailureBackoffActive;
@@ -51160,7 +51307,13 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	}
 
 	const auto presentStretchOutput = [&](uint32_t inputWidth, uint32_t inputHeight, VRRenderScalePresentationPath a_path) {
-		if (!StretchSubmitStageEyeOutput(eyeIndex, inputWidth, inputHeight, eyeWidthOut, eyeHeightOut) ||
+		if (foveatedMaskVisualizationPreview) {
+			submitStageVendorEyeState = {};
+			submitStageRuntimeFSRStereoState = {};
+			submitStageFoveatedCenterState = {};
+		}
+		const bool maskDrawn = foveatedMaskVisualizationPreview && DispatchFoveatedMaskVisualization(eyeIndex);
+		if ((!maskDrawn && !StretchSubmitStageEyeOutput(eyeIndex, inputWidth, inputHeight, eyeWidthOut, eyeHeightOut)) ||
 			!vrIntermediateColorOut[eyeIndex] || !vrIntermediateColorOut[eyeIndex]->resource) {
 			return false;
 		}
@@ -51194,7 +51347,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			eyeHeightIn,
 			submitPresentationContext || currentMenuPresentationContext || resolutionPlan.knownMenuContextActive || resolutionPlan.menuContextActive,
 			transitionPresentationCooldown);
-		ordinarySaveOutputReady = true;
+		if (maskDrawn && vrRenderScaleMode &&
+			!UpdateVRSubmitDesktopMirror(eyeIndex, currentFrame, a_compositorCycleToken, sourceTexture, sourceDesc, eyeWidthOut, eyeHeightOut))
+			return false;
+		ordinarySaveOutputReady = !foveatedMaskVisualizationPreview;
 		return true;
 	};
 
@@ -51881,92 +52037,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		true,
 		submitStageFSRBatch);
 	if (vrRenderScaleMode) {
-		const bool mirrorRequested =
-			globals::features::vr.settings.StabilizeRenderScaleDesktopMirror ||
-			globals::features::screenshotFeature.HasPendingDesktopMirrorCapture();
-#ifdef DEVBENCH_BRIDGE_ENABLED
-		RecordVRRenderScaleGPUPerformanceCounter(
-			mirrorRequested ?
-				VRRenderScaleGPUPerformanceCounter::MirrorConsumerRequests :
-				VRRenderScaleGPUPerformanceCounter::MirrorConsumerSkips);
-#endif
-		if (!mirrorRequested) {
-			vrDesktopMirrorBlitRTV = nullptr;
-			vrDesktopMirrorBlitTarget = nullptr;
-			submitStageMirrorEyeReady = {};
-		} else {
-			const bool canMirrorToSource =
-				sourceDesc.ArraySize == 1 &&
-				sourceDesc.Width >= eyeWidthOut * 2 &&
-				sourceDesc.Height >= eyeHeightOut &&
-				vrIntermediateColorOut[0] && vrIntermediateColorOut[1] &&
-				vrIntermediateColorOut[0]->resource && vrIntermediateColorOut[1]->resource &&
-				vrIntermediateColorOut[0]->desc.Width >= eyeWidthOut &&
-				vrIntermediateColorOut[0]->desc.Height >= eyeHeightOut &&
-				vrIntermediateColorOut[1]->desc.Width >= eyeWidthOut &&
-				vrIntermediateColorOut[1]->desc.Height >= eyeHeightOut &&
-				vrIntermediateColorOut[0]->desc.Format == sourceDesc.Format &&
-				vrIntermediateColorOut[1]->desc.Format == sourceDesc.Format;
-			const auto consumeReadyMirrorPair = [&]() {
-				if (!VRSubmitTemporalSnapshot::MatchesProducer(submitStageMirrorFrame, submitStageMirrorCycle, currentFrame, a_compositorCycleToken) || submitStageMirrorSourceTexture != sourceTexture) {
-					submitStageMirrorFrame = currentFrame;
-					submitStageMirrorCycle = a_compositorCycleToken;
-					submitStageMirrorSourceTexture = sourceTexture;
-					submitStageMirrorEyeReady = {};
-				}
-
-				submitStageMirrorEyeReady[eyeIndex] = true;
-				if (!submitStageMirrorEyeReady[0] || !submitStageMirrorEyeReady[1])
-					return false;
-
-				submitStageMirrorEyeReady = {};
-				return true;
-			};
-			if (canMirrorToSource) {
-				vrDesktopMirrorBlitRTV = nullptr;
-				vrDesktopMirrorBlitTarget = nullptr;
-
-				if (consumeReadyMirrorPair()) {
-					D3D11_BOX mirrorBox{ 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
-					context->CopySubresourceRegion(sourceTexture, 0, 0, 0, 0, vrIntermediateColorOut[0]->resource.get(), 0, &mirrorBox);
-					context->CopySubresourceRegion(sourceTexture, 0, eyeWidthOut, 0, 0, vrIntermediateColorOut[1]->resource.get(), 0, &mirrorBox);
-#ifdef DEVBENCH_BRIDGE_ENABLED
-					RecordVRRenderScaleGPUPerformanceCounter(
-						VRRenderScaleGPUPerformanceCounter::MirrorCopyPairs);
-#endif
-					if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage mirror writeback"))
-						return false;
-				}
-			} else {
-				if (consumeReadyMirrorPair()) {
-					static bool loggedSubmitStageMirrorFallbackFailure = false;
-					const bool mirrorUpdated = BlitVRRenderScaleDesktopMirror(sourceTexture, sourceDesc, eyeWidthOut, eyeHeightOut);
-#ifdef DEVBENCH_BRIDGE_ENABLED
-					if (mirrorUpdated) {
-						RecordVRRenderScaleGPUPerformanceCounter(
-							VRRenderScaleGPUPerformanceCounter::MirrorBlitPairs);
-					}
-#endif
-					if (!mirrorUpdated && IsSubmitStageDeviceLost())
-						return false;
-					if (!mirrorUpdated && !loggedSubmitStageMirrorFallbackFailure) {
-						logger::warn(
-							"[Upscaling] Desktop mirror fallback could not update incompatible render-scale submit texture. source={}x{} array={} format={} outputL={}x{} format={} outputR={}x{} format={}",
-							sourceDesc.Width,
-							sourceDesc.Height,
-							sourceDesc.ArraySize,
-							static_cast<uint32_t>(sourceDesc.Format),
-							vrIntermediateColorOut[0] ? vrIntermediateColorOut[0]->desc.Width : 0,
-							vrIntermediateColorOut[0] ? vrIntermediateColorOut[0]->desc.Height : 0,
-							vrIntermediateColorOut[0] ? static_cast<uint32_t>(vrIntermediateColorOut[0]->desc.Format) : 0,
-							vrIntermediateColorOut[1] ? vrIntermediateColorOut[1]->desc.Width : 0,
-							vrIntermediateColorOut[1] ? vrIntermediateColorOut[1]->desc.Height : 0,
-							vrIntermediateColorOut[1] ? static_cast<uint32_t>(vrIntermediateColorOut[1]->desc.Format) : 0);
-						loggedSubmitStageMirrorFallbackFailure = true;
-					}
-				}
-			}
-		}
+		if (!UpdateVRSubmitDesktopMirror(eyeIndex, currentFrame, a_compositorCycleToken, sourceTexture, sourceDesc, eyeWidthOut, eyeHeightOut))
+			return false;
 
 		a_outputTexture = *a_inputTexture;
 		a_outputTexture.handle = vrIntermediateColorOut[eyeIndex]->resource.get();
@@ -58241,6 +58313,7 @@ void Upscaling::Upscale()
 	// Continue evaluating RC173's existing physical contract while a replacement
 	// waits; only fall back when no proven provider can service this frame.
 	if (vendorLifecycleMutationDeferred &&
+		!IsFoveatedMaskVisualizationEnabled(upscaleMethod) &&
 		!CanDispatchExistingVRVendorEvaluation(upscaleMethod)) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		recordMainPassStage(VRMainPassDispatchStage::LifecycleDeferred);
@@ -58265,6 +58338,26 @@ void Upscaling::Upscale()
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		recordMainPassStage(VRMainPassDispatchStage::SubmitStageOwned);
 #endif
+		return;
+	}
+
+	if (IsFoveatedMaskVisualizationEnabled(upscaleMethod)) {
+		RequestHistoryReset();
+		uint32_t inputWidth = 0, inputHeight = 0, outputWidth = 0, outputHeight = 0;
+		if (!GetRuntimeFoveatedRegionDimensions(inputWidth, inputHeight, outputWidth, outputHeight))
+			return;
+		auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+		try {
+			if (!EnsureVRPresentationTextures(inputWidth, inputHeight, outputWidth, outputHeight, main.texture, !vendorLifecycleMutationDeferred))
+				return;
+			context->OMSetRenderTargets(0, nullptr, nullptr);
+			if (DispatchFoveatedMaskVisualization(0) && DispatchFoveatedMaskVisualization(1))
+				FinalizePerEyeOutputs(main.texture);
+		} catch (const std::exception& e) {
+			static bool loggedMaskPreviewFailure = false;
+			LogWarnOnce(loggedMaskPreviewFailure, "[Upscaling] FOV mask preview unavailable; keeping the original frame", e);
+			MarkSubmitStageDeviceLostIfNeeded(e, "main-pass FOV mask preview");
+		}
 		return;
 	}
 

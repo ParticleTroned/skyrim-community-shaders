@@ -68,6 +68,17 @@ class ShaderCachePackagingTests(unittest.TestCase):
                     stream.write(path, path.relative_to(root).as_posix())
         return archive
 
+    @staticmethod
+    def _publication_cache(root: Path, marker: bytes) -> Path:
+        cache = root / BUILDER.CACHE_DIRECTORY
+        cache.mkdir(parents=True)
+        (cache / BUILDER.INFO_FILE_NAME).write_text(
+            "[Cache]\nPluginVersion = CSX publication test\n",
+            encoding="utf-8",
+        )
+        (cache / "marker.bin").write_bytes(marker)
+        return root
+
     @unittest.skipUnless(shutil.which("cmake"), "CMake is required to inspect cache archives")
     def test_managed_archives_cover_se_vr_and_both_horizon_states(self) -> None:
         for runtime in ("SE", "VR"):
@@ -248,6 +259,154 @@ class ShaderCachePackagingTests(unittest.TestCase):
             )
             self.assertTrue(staging.is_dir())
             self.assertFalse(destination.exists())
+
+    def test_runtime_publication_replaces_cache_and_removes_recovery_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            out_root = root / "out"
+            out_root.mkdir()
+            self._publication_cache(out_root / "VR", b"previous")
+            candidate = self._publication_cache(root / "candidate", b"candidate")
+
+            published = BUILDER.publish_runtime_cache(candidate, out_root, "VR")
+
+            self.assertEqual(published, out_root / "VR")
+            self.assertEqual(
+                (published / BUILDER.CACHE_DIRECTORY / "marker.bin").read_bytes(),
+                b"candidate",
+            )
+            self.assertFalse((out_root / ".VR.publishing").exists())
+            self.assertFalse((out_root / ".VR.previous").exists())
+
+    def test_runtime_publication_restores_previous_cache_after_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            out_root = root / "out"
+            out_root.mkdir()
+            destination = self._publication_cache(out_root / "VR", b"previous")
+            candidate = self._publication_cache(root / "candidate", b"candidate")
+            staging = out_root / ".VR.publishing"
+            original_replace = Path.replace
+
+            def fail_publication(path: Path, target: Path) -> Path:
+                if path == staging:
+                    raise PermissionError("simulated publication failure")
+                return original_replace(path, target)
+
+            with (
+                mock.patch.object(Path, "replace", new=fail_publication),
+                mock.patch.object(BUILDER.time, "sleep"),
+                self.assertRaisesRegex(SystemExit, "validated staging retained"),
+            ):
+                BUILDER.publish_runtime_cache(candidate, out_root, "VR")
+
+            self.assertEqual(
+                (destination / BUILDER.CACHE_DIRECTORY / "marker.bin").read_bytes(),
+                b"previous",
+            )
+            self.assertEqual(
+                (staging / BUILDER.CACHE_DIRECTORY / "marker.bin").read_bytes(),
+                b"candidate",
+            )
+            self.assertFalse((out_root / ".VR.previous").exists())
+
+    def test_runtime_publication_retains_recovery_after_restore_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            out_root = root / "out"
+            out_root.mkdir()
+            destination = self._publication_cache(out_root / "VR", b"previous")
+            staging = out_root / ".VR.publishing"
+            recovery = out_root / ".VR.previous" / "VR"
+            original_replace = Path.replace
+
+            with tempfile.TemporaryDirectory(dir=root) as workspace_text:
+                candidate = self._publication_cache(
+                    Path(workspace_text) / "candidate",
+                    b"candidate",
+                )
+
+                def fail_publication_and_restore(path: Path, target: Path) -> Path:
+                    if path == staging or path == recovery:
+                        raise PermissionError("simulated publication or restore failure")
+                    return original_replace(path, target)
+
+                with (
+                    mock.patch.object(
+                        Path,
+                        "replace",
+                        new=fail_publication_and_restore,
+                    ),
+                    mock.patch.object(BUILDER.time, "sleep"),
+                    self.assertRaises(SystemExit) as raised,
+                ):
+                    BUILDER.publish_runtime_cache(candidate, out_root, "VR")
+
+            self.assertFalse(destination.exists())
+            self.assertIn(str(recovery), str(raised.exception))
+            self.assertEqual(
+                (recovery / BUILDER.CACHE_DIRECTORY / "marker.bin").read_bytes(),
+                b"previous",
+            )
+            self.assertEqual(
+                (staging / BUILDER.CACHE_DIRECTORY / "marker.bin").read_bytes(),
+                b"candidate",
+            )
+
+    def test_runtime_publication_refuses_existing_recovery_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            out_root = root / "out"
+            out_root.mkdir()
+            destination = self._publication_cache(out_root / "VR", b"previous")
+            candidate = self._publication_cache(root / "candidate", b"candidate")
+            recovery = out_root / ".VR.previous"
+            recovery.mkdir()
+            (recovery / "operator-note.txt").write_text("retain", encoding="utf-8")
+
+            with self.assertRaisesRegex(SystemExit, "recovery path exists"):
+                BUILDER.publish_runtime_cache(candidate, out_root, "VR")
+
+            self.assertEqual(
+                (destination / BUILDER.CACHE_DIRECTORY / "marker.bin").read_bytes(),
+                b"previous",
+            )
+            self.assertEqual(
+                (recovery / "operator-note.txt").read_text(encoding="utf-8"),
+                "retain",
+            )
+            self.assertFalse((out_root / ".VR.publishing").exists())
+
+    def test_runtime_publication_preserves_interrupted_recovery_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            out_root = root / "out"
+            out_root.mkdir()
+            recovery = self._publication_cache(
+                out_root / ".VR.previous" / "VR",
+                b"previous",
+            )
+            staging = self._publication_cache(
+                out_root / ".VR.publishing",
+                b"candidate",
+            )
+            retry_candidate = self._publication_cache(
+                root / "retry-candidate",
+                b"retry",
+            )
+
+            with self.assertRaisesRegex(SystemExit, "recovery path exists"):
+                BUILDER.publish_runtime_cache(retry_candidate, out_root, "VR")
+
+            self.assertEqual(
+                (recovery / BUILDER.CACHE_DIRECTORY / "marker.bin").read_bytes(),
+                b"previous",
+            )
+            self.assertEqual(
+                (staging / BUILDER.CACHE_DIRECTORY / "marker.bin").read_bytes(),
+                b"candidate",
+            )
+            self.assertFalse((out_root / "VR").exists())
 
     @staticmethod
     def _all_define_names(node: object) -> set[str]:

@@ -2253,6 +2253,9 @@ void ScreenSpaceGI::DrawSSGI()
 				case OCUEffectFoveation::Client::Status::QueryUnsupported:
 					effectStatus = "Native sampling: OCU profile query unsupported";
 					break;
+				case OCUEffectFoveation::Client::Status::QueryFailed:
+					effectStatus = "Native sampling: OCU profile query failed";
+					break;
 				case OCUEffectFoveation::Client::Status::ProfileDisabled:
 					effectStatus = "Native sampling: OCU foveation profile is disabled";
 					break;

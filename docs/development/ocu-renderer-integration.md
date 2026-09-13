@@ -38,6 +38,8 @@ game frame; CSX copies it once and uses it for both eyes.
 
 The client validates the interface, shape, values and publication freshness.
 Absent, disabled, unsupported or stale profiles use native sampling.
+An ordinary C++ exception from the optional provider also selects native
+sampling and reports a query failure; the next frame can recover normally.
 Source eye-sample timestamps are optional and are not a validity gate.
 Fresh profiles recover on the next read without a cooldown. DAPA replay
 does not publish another gaze frame or reset CSX's temporal history.
@@ -73,7 +75,8 @@ Replacing it with a build lacking an implementation removes that feature.
 An interface cannot add integration code to an unrelated build.
 
 Controller test targets are `accepted_draw_registry_test`,
-`ocu_effect_foveation_client_test`, `ocu_effect_foveation_policy_test`, and
+`accepted_draw_service_test`, `ocu_effect_foveation_client_test`,
+`ocu_effect_foveation_policy_test`, and
 `ocu_effect_integration_test`. The integration test compiles the production
 shader batch and setting handler against controlled dependencies. It
 checks independent optional failures, stale permutation removal, required

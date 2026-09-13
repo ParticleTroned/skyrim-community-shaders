@@ -103,9 +103,7 @@ namespace CSX::Api
 		}
 		const auto thread = GetCurrentThreadId();
 		auto owner = renderThread.load(std::memory_order_acquire);
-		if (!owner && renderThread.compare_exchange_strong(owner, thread, std::memory_order_acq_rel))
-			owner = thread;
-		if (owner != thread) {
+		if (owner && owner != thread) {
 			wrongThreadDraws.fetch_add(1, std::memory_order_relaxed);
 			return;
 		}
@@ -126,6 +124,13 @@ namespace CSX::Api
 		sceneDepth->GetDesc(&description);
 		if (description.ArraySize != 1 || description.SampleDesc.Count != 1) {
 			filteredDraws.fetch_add(1, std::memory_order_relaxed);
+			return;
+		}
+		// Rejected shadow/reflection draws cannot claim scene-thread ownership.
+		if (!owner && renderThread.compare_exchange_strong(owner, thread, std::memory_order_acq_rel))
+			owner = thread;
+		if (owner != thread) {
+			wrongThreadDraws.fetch_add(1, std::memory_order_relaxed);
 			return;
 		}
 		registry.Dispatch({ sizeof(Draw), Version, 0, a_context, geometryScope.Current(),

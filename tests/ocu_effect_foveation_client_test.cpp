@@ -14,11 +14,14 @@ namespace
 	int moduleChecks = 0;
 	bool exportAvailable = true;
 	bool systemExportAvailable = false;
+	bool queryThrows = false;
 	int lastQueryProvider = 0;
 	std::int64_t mockNow = 1000000;
 	std::uint32_t __cdecl Query(std::uint32_t version, std::uint32_t bytes, ocu_effect_foveation::Snapshot* output)
 	{
 		++queryCalls;
+		if (queryThrows)
+			throw std::runtime_error("injected provider failure");
 		lastQueryProvider = 1;
 		if (version != 1 || bytes != sizeof(mockSnapshot) || !output)
 			throw std::runtime_error("Client query ABI mismatch");
@@ -173,6 +176,15 @@ int main()
 		mockSnapshot.frameId = 1;
 		require(globalClient.ReadForFrame(21, true).Active() && lastQueryProvider == 2,
 			"Already-loaded system-wide OCU works without app-local loader and without recovery delay");
+		queryThrows = true;
+		require(!globalClient.ReadForFrame(22, true).Active() && globalClient.GetStatus() == Client::Status::QueryFailed,
+			"Provider exceptions must use native sampling instead of terminating the renderer");
+		const auto queriesAfterFault = queryCalls;
+		require(!globalClient.ReadForFrame(22, true).Active() && queryCalls == queriesAfterFault,
+			"Provider faults must retain one query per renderer frame");
+		queryThrows = false;
+		mockSnapshot.frameId = 2;
+		require(globalClient.ReadForFrame(23, true).Active(), "A fresh profile must recover immediately after a provider exception");
 		std::cout << "PASS: " << assertions << " production client/cache/fallback assertions\n";
 		return 0;
 	} catch (const std::exception& e) {

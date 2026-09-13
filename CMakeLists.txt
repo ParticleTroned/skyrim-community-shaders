@@ -2310,6 +2310,7 @@ if(BUILD_CONTROLLER_TESTS)
         "${_ocu_effect_test_dir}/ocu_shader_batch_under_test.h"
         "${_ocu_effect_test_dir}/ocu_setting_under_test.h"
         "${_ocu_effect_test_dir}/ocu_devbench_under_test.h"
+        "${_ocu_effect_test_dir}/accepted_draw_publish_under_test.h"
     )
     add_custom_command(
         OUTPUT ${_ocu_effect_test_headers}
@@ -2320,6 +2321,7 @@ if(BUILD_CONTROLLER_TESTS)
         DEPENDS
             src/Features/ScreenSpaceGI.cpp
             src/ProfilerDevBenchBridge.cpp
+            src/Api/AcceptedDrawService.cpp
             tests/extract_ocu_effect_integration.cmake
         VERBATIM
     )
@@ -2454,8 +2456,22 @@ if(BUILD_CONTROLLER_TESTS)
     add_test(NAME AcceptedDrawRegistry COMMAND accepted_draw_registry_test)
     set_tests_properties(
         AcceptedDrawRegistry
-        PROPERTIES LABELS "ControllerTests"
+        PROPERTIES LABELS "ControllerTests" TIMEOUT 30
     )
+    add_controller_test(
+        accepted_draw_service_test
+        AcceptedDrawService
+        tests/accepted_draw_service_test.cpp
+    )
+    target_sources(
+        accepted_draw_service_test
+        PRIVATE src/Api/AcceptedDrawRegistry.cpp ${_ocu_effect_test_headers}
+    )
+    target_include_directories(
+        accepted_draw_service_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/include" "${_ocu_effect_test_dir}"
+    )
+    set_tests_properties(AcceptedDrawService PROPERTIES TIMEOUT 30)
     add_executable(
         api_runtime_thread_affinity_test
         EXCLUDE_FROM_ALL
@@ -2910,6 +2926,7 @@ if(BUILD_CONTROLLER_TESTS)
             ocu_effect_foveation_client_test
             ocu_effect_integration_test
             accepted_draw_registry_test
+            accepted_draw_service_test
             overlay_policy_test
             performance_tuning_statistics_test
             shader_cache_disable_policy_test

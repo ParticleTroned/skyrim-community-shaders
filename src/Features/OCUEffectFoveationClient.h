@@ -16,6 +16,7 @@ namespace OCUEffectFoveation
 			Disabled,
 			ProviderUnavailable,
 			QueryUnsupported,
+			QueryFailed,
 			ProfileDisabled,
 			InvalidOrStale,
 			Active
@@ -62,9 +63,15 @@ namespace OCUEffectFoveation
 
 			ocu_effect_foveation::Snapshot snapshot{};
 			status = Status::QueryUnsupported;
-			if (query(ocu_effect_foveation::Version, sizeof(snapshot), &snapshot) !=
-				static_cast<std::uint32_t>(ocu_effect_foveation::Result::Success))
+			try {
+				if (query(ocu_effect_foveation::Version, sizeof(snapshot), &snapshot) !=
+					static_cast<std::uint32_t>(ocu_effect_foveation::Result::Success))
+					return {};
+			} catch (...) {
+				// Optional provider failures must preserve the native sampling path.
+				status = Status::QueryFailed;
 				return {};
+			}
 			if (snapshot.structSize != sizeof(snapshot) || snapshot.version != ocu_effect_foveation::Version)
 				return {};
 			if (snapshot.mode == ocu_effect_foveation::Mode::Disabled) {

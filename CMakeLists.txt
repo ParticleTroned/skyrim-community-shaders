@@ -1409,12 +1409,22 @@ add_custom_command(
     OUTPUT ${CORE_PACKAGE}
     # The install step consumes the built DLL. Depend on the target itself so
     # a newly registered feature cannot be packaged with a stale core binary.
-    DEPENDS ${PROJECT_NAME} ${CORE_SOURCES}
+    DEPENDS
+        ${PROJECT_NAME}
+        ${CORE_SOURCES}
+        ${FFX_RUNTIME_FILES}
+        ${STREAMLINE_RUNTIME_FILES}
     COMMAND
         ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${FEATURE_PATH}
         --component SKSE
     COMMAND
         ${CMAKE_COMMAND} -E copy_directory ${CORE_FEATURE_PATHS} ${FEATURE_PATH}
+    COMMAND
+        ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${FEATURE_PATH}
+        --component FidelityFXRuntime
+    COMMAND
+        ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${FEATURE_PATH}
+        --component StreamlineRuntime
     COMMAND ${CMAKE_COMMAND} -E rm -f -- ${FEATURE_PATH}/Core
     COMMAND ${CMAKE_COMMAND} -E remove_directory "${FEATURE_PATH}/Shaders/Tests"
     COMMAND ${CMAKE_COMMAND} -E tar cfv ${CORE_PACKAGE} --format=7zip -- .

@@ -23,6 +23,9 @@ namespace
 	bool vrRuntime = true;
 	int runtimeVersion = 1415;
 	std::size_t assertions = 0;
+	void* observedShadowNode = nullptr;
+	std::uintptr_t observedShadowReturn = 0;
+	bool shadowCallAligned = false;
 	void Require(bool condition)
 	{
 		++assertions;
@@ -82,27 +85,30 @@ namespace SKSE
 		std::uintptr_t rva;
 		std::size_t size;
 		std::uint8_t opcode;
+		std::uintptr_t target;
 	};
 	struct Trampoline
 	{
 		std::vector<Write> writes;
 		std::size_t allocations = 0;
+		std::vector<std::uint8_t> lastCode;
 		void* allocate(const Xbyak::CodeGenerator& code)
 		{
 			Require(code.getSize() > 0);
 			++allocations;
-			return const_cast<std::uint8_t*>(code.getCode());
+			lastCode.assign(code.getCode(), code.getCode() + code.getSize());
+			return lastCode.data();
 		}
 		template <std::size_t N>
-		void write_branch(std::uintptr_t address, std::uintptr_t)
+		void write_branch(std::uintptr_t address, std::uintptr_t target)
 		{
-			writes.push_back({ address - REL::Module::get().base(), N, 0xE9 });
+			writes.push_back({ address - REL::Module::get().base(), N, 0xE9, target });
 			std::memset(reinterpret_cast<void*>(address), 0xE9, N);
 		}
 		template <std::size_t N>
-		void write_call(std::uintptr_t address, std::uintptr_t)
+		void write_call(std::uintptr_t address, std::uintptr_t target)
 		{
-			writes.push_back({ address - REL::Module::get().base(), N, 0xE8 });
+			writes.push_back({ address - REL::Module::get().base(), N, 0xE8, target });
 			std::memset(reinterpret_cast<void*>(address), 0xE8, N);
 		}
 	} trampoline;
@@ -110,7 +116,13 @@ namespace SKSE
 }
 struct LightLimitFix
 {
-	static void RenderVRShadowLights(void*, std::uint32_t&) {}
+	static void RenderVRShadowLights(void* a_node, std::uint32_t& a_index)
+	{
+		observedShadowNode = a_node;
+		observedShadowReturn = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+		shadowCallAligned = (reinterpret_cast<std::uintptr_t>(_AddressOfReturnAddress()) & 15) == 8;
+		a_index += 2;
+	}
 	struct Hooks
 	{
 		static void InstallVRSceneGraphCullingObjectGuard();
@@ -140,6 +152,7 @@ namespace
 		runtimeVersion = 1415;
 		SKSE::trampoline.writes.clear();
 		SKSE::trampoline.allocations = 0;
+		SKSE::trampoline.lastCode.clear();
 		errors.clear();
 	}
 
@@ -224,29 +237,24 @@ namespace
 		Require(writes.size() == 2);
 		Require(writes[0].rva == 0x1323200 && writes[0].size == 5 && writes[0].opcode == 0xE9);
 		Require(writes[1].rva == 0x13231FB && writes[1].size == 5 && writes[1].opcode == 0xE8);
-		for (std::size_t byte = 0; byte < 0x35; ++byte) {
+		Require(writes[0].target == REL::Module::get().base() + 0x1323230);
+		Require(writes[1].target == reinterpret_cast<std::uintptr_t>(SKSE::trampoline.lastCode.data()));
+		for (std::size_t byte = 0; byte < 0xB8; ++byte) {
 			Reset();
-			image[0x13231FB + byte] ^= 0x80;
+			image[0x1323190 + byte] ^= 0x80;
 			LightLimitFix::Hooks::InstallVRShadowLightLifetimeGuard();
 			Require(SKSE::trampoline.writes.empty() && SKSE::trampoline.allocations == 0);
 			Require(errors.size() == 2);
 		}
 	}
 
-	void* observedShadowNode = nullptr;
-	std::uintptr_t observedShadowReturn = 0;
-	bool shadowCallAligned = false;
-	void NativeShadowCallback(void* a_node, std::uint32_t& a_index)
-	{
-		observedShadowNode = a_node;
-		observedShadowReturn = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
-		shadowCallAligned = (reinterpret_cast<std::uintptr_t>(_AddressOfReturnAddress()) & 15) == 8;
-		a_index += 2;
-	}
-
 	void TestNativeShadowLoopExecution()
 	{
-		VRShadowLightRenderLoop adapter{ reinterpret_cast<std::uintptr_t>(&NativeShadowCallback) };
+		Reset();
+		LightLimitFix::Hooks::InstallVRShadowLightLifetimeGuard();
+		Require(errors.empty() && SKSE::trampoline.allocations == 1);
+		Xbyak::CodeGenerator adapter;
+		adapter.db(SKSE::trampoline.lastCode.data(), SKSE::trampoline.lastCode.size());
 		adapter.ready();
 		Xbyak::CodeGenerator nativeFrame;
 		nativeFrame.push(nativeFrame.rsi);

@@ -95,6 +95,9 @@ The shared `SceneLightSnapshot::RetainScene` method supplies the same list
 coverage to both native rendering and existing LLF consumers. Native capture
 omits the unused active-light enumeration and copies render order in one
 range assignment to avoid repeated vector growth under the queue lock.
+An empty, exhausted or initially null-terminated pass returns under the
+same lock before constructing the snapshot. It performs no allocation or
+light-reference acquisition.
 
 The hook replaces the raw selection/dispatch loop at SkyrimVR+`0x13231FB`
 through `0x1323230`. Ghidra analysis of the retained PID 22880 image verifies
@@ -107,9 +110,11 @@ object, or a non-advancing index ends the pass. Allocation failure skips the
 pass after releasing the lock and any acquired references. Rendering
 exceptions propagate normally while local references unwind.
 
-Installation is restricted to Skyrim VR 1.4.15 and requires all 53 bytes of
-the original loop to match before either write. A mismatch logs the refusal
-and leaves the loop untouched. The native call enters a register adapter
+Installation is restricted to Skyrim VR 1.4.15 and requires all 184 bytes of
+the native function to match before either write. This covers the setup of
+RSI and the stack index, the 53-byte loop, and the continuation's state and
+register restores. A mismatch logs the refusal and leaves the function
+untouched. The native call enters a register adapter
 that tail-jumps to the C++ replacement. This preserves the native return
 address and unwind metadata; the replacement returns through a patched
 jump to the original loop continuation. Existing native render virtual hooks
@@ -117,25 +122,38 @@ remain in the call path. This fix has no dependency on the shadow-lifetime
 observer or driver-command recorder. SE and AE receive no new executable
 patch or render-path change.
 
-Focused validation of the isolated production change:
+Focused validation after the PR #96 adversarial review:
 
--   `pwsh artifacts/native-shadow-render-pr-20260913/build.ps1 -Focused`
+-   `pwsh artifacts/pr96-adversarial-review-20260913/build.ps1 -Focused`
     passed.
 -   `ctest --test-dir build/native-shadow-render-pr-build -C Release -R "^(SceneLightSnapshot|VRSceneGuards)$" --output-on-failure -V`
-    passed both tests in 0.12 seconds. The ownership harness exercises concurrent worker
+    passed both tests in 0.16 seconds. The ownership harness exercises concurrent worker
     teardown during rendering, raw-array clearing, pending owners, rejected
     stale keys and non-shadow lights, native index advancement and bounds,
-    release on render exceptions, nine existing capture allocation failures and four native
-    capture allocation failures. The machine-code harness passes 477
-    assertions, including every-byte loop mismatch rejection, runtime scope,
-    register argument transfer, stack alignment and native return identity.
+    release of the last reference on render exceptions, nine existing capture
+    allocation failures and four native capture allocation failures. It also
+    verifies that empty passes allocate nothing, index wraparound stops the
+    loop, and later lights survive teardown during the first render call.
+    The machine-code harness passes 743 assertions, including every-byte
+    function mismatch rejection, runtime scope, installed branch targets,
+    argument transfer through the installer-generated adapter, stack
+    alignment and native return identity.
+-   All 184 fixture bytes match the retained PID 22880 capture, SHA-256
+    `4859ce0f79962f3574e830c48d23d75f3798234e87e0aeea5ec825b5db9322e4`.
 -   Runtime testing is reserved for the user. This implementation has no
     in-game stability or performance result yet. It protects light lifetime;
     arbitrary concurrent changes to light fields and other engine objects
     are outside this contract.
 
-The isolated production tests and PR preparation receipts are preserved
-under `artifacts/native-shadow-render-pr-20260913/`. Earlier native analysis,
+The review found an incomplete instruction-admission check and unnecessary
+capture work on empty passes; both are corrected above. The existing
+snapshot helper, byte-check helper and trampoline remain shared. The scope
+stays confined to native shadow lifetime, with no diagnostic dependency.
+
+The adversarial review evidence is preserved under
+`artifacts/pr96-adversarial-review-20260913/`. Initial isolated tests and PR
+preparation receipts remain under `artifacts/native-shadow-render-pr-20260913/`.
+Earlier native analysis,
 build/test receipts and handoff metadata remain locally under
 `artifacts/vr-native-shadow-lifetime-fix/`. The full originating
 hang evidence remains under

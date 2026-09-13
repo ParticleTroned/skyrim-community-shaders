@@ -304,10 +304,12 @@ void TestNativeRenderLifetime()
 	std::atomic<unsigned> destroyed{ 0 };
 	RE::ShadowSceneNode node;
 	auto light = RE::make_nismart<ShadowLight>(destroyed);
+	auto nextLight = RE::make_nismart<ShadowLight>(destroyed);
 	auto* key = light.get();
 	light->indexStep = 2;
 	node.activeShadowLights.push_back(light);
-	node.shadowLightsAccum = { key, key, nullptr };
+	node.activeShadowLights.push_back(nextLight);
+	node.shadowLightsAccum = { key, key, nextLight.get(), nullptr };
 	light->onRender = [&] {
 		std::thread cleanup([&] {
 			RE::BSSpinLockGuard lock{ node.lightQueueLock };
@@ -317,13 +319,43 @@ void TestNativeRenderLifetime()
 		cleanup.join();
 		Require(destroyed == 0);
 	};
+	unsigned nextCalls = 0;
+	nextLight->onRender = [&] {
+		Require(destroyed == 0);
+		++nextCalls;
+	};
 	light.reset();
+	nextLight.reset();
 	std::uint32_t index = 0;
 	verifyCaptureLock = true;
 	LightLimitFix::RenderVRShadowLights(&node, index);
 	verifyCaptureLock = false;
-	Require(index == 2 && destroyed == 1 && !queueLockHeld);
+	Require(index == 3 && nextCalls == 1 && destroyed == 2 && !queueLockHeld);
 	LightLimitFix::RenderVRShadowLights(nullptr, index);
+}
+
+void TestEmptyNativeRender()
+{
+	std::atomic<unsigned> destroyed{ 0 };
+	RE::ShadowSceneNode node;
+	auto light = RE::make_nismart<ShadowLight>(destroyed);
+	node.activeShadowLights.push_back(light);
+	const auto before = loggedFailures;
+	auto checkEmpty = [&](std::uint32_t a_index) {
+		const auto initialIndex = a_index;
+		allocationsUntilFailure = 0;
+		LightLimitFix::RenderVRShadowLights(&node, a_index);
+		Require(allocationsUntilFailure == 0);
+		allocationsUntilFailure = -1;
+		Require(a_index == initialIndex && !queueLockHeld && loggedFailures == before);
+		Require(light->references == 2 && light->renderCalls == 0);
+	};
+	checkEmpty(0);
+	node.shadowLightsAccum = { nullptr, light.get() };
+	checkEmpty(0);
+	checkEmpty(2);
+	checkEmpty(UINT32_MAX);
+	std::cout << "Empty native passes allocate nothing\n";
 }
 
 void TestNativeRenderSelection()
@@ -356,6 +388,11 @@ void TestNativeRenderSelection()
 	first->indexStep = 2;
 	LightLimitFix::RenderVRShadowLights(&node, index);
 	Require(index == 2 && first->renderCalls == 3);
+	node.shadowLightsAccum = { first.get(), second.get() };
+	second->indexStep = UINT32_MAX;
+	index = 1;
+	LightLimitFix::RenderVRShadowLights(&node, index);
+	Require(index == 0 && first->renderCalls == 3 && second->renderCalls == 2);
 }
 
 void TestNativeRenderAllocationFailures()
@@ -391,7 +428,15 @@ void TestNativeRenderUnwind()
 	auto light = RE::make_nismart<ShadowLight>(destroyed);
 	node.activeShadowLights.push_back(light);
 	node.shadowLightsAccum = { light.get(), nullptr };
-	light->onRender = [] { throw std::bad_alloc{}; };
+	light->onRender = [&] {
+		{
+			RE::BSSpinLockGuard lock{ node.lightQueueLock };
+			node.activeShadowLights.clear();
+		}
+		Require(destroyed == 0);
+		throw std::bad_alloc{};
+	};
+	light.reset();
 	std::uint32_t index = 0;
 	bool propagated = false;
 	const auto before = loggedFailures;
@@ -401,7 +446,7 @@ void TestNativeRenderUnwind()
 		propagated = true;
 	}
 	Require(propagated && index == 0 && !queueLockHeld);
-	Require(light->references == 2 && loggedFailures == before);
+	Require(destroyed == 1 && loggedFailures == before);
 }
 
 int main()
@@ -411,6 +456,7 @@ int main()
 	TestAllocationFailures();
 	TestEnumerationOwnership();
 	TestNativeRenderLifetime();
+	TestEmptyNativeRender();
 	TestNativeRenderSelection();
 	TestNativeRenderAllocationFailures();
 	TestNativeRenderUnwind();

@@ -1,4 +1,5 @@
 #include "ExposureCapture.h"
+#include "ComputeStateGuard.h"
 #include "Globals.h"
 #include "Features/Upscaling.h"
 #include "State.h"
@@ -30,10 +31,11 @@ namespace NeuralRendering::Color
 			previous[I](shader, technique);
 		}
 
-		bool SameDevice(ID3D11DeviceContext* context, ID3D11Device* device)
+		bool ResourceOnDevice(ID3D11Resource* resource, ID3D11Device* device)
 		{
+			if (!resource || !device) return false;
 			ComPtr<ID3D11Device> actual;
-			context->GetDevice(&actual);
+			resource->GetDevice(&actual);
 			return actual.Get() == device;
 		}
 		bool CreateValueTexture(ID3D11Device* device, ExposureBinding& value, bool uav, ComPtr<ID3D11UnorderedAccessView>& view)
@@ -54,45 +56,7 @@ namespace NeuralRendering::Color
 			value.resource = std::move(texture); value.srv = std::move(srv); view = std::move(output);
 			return true;
 		}
-		// Capture changes CS t0/u0/shader only. Preserve class instances and
-		// predication too; PS bindings are observed, never modified.
-		struct Guard
-		{
-			ID3D11DeviceContext* context;
-			ComPtr<ID3D11ComputeShader> shader;
-			ComPtr<ID3D11ShaderResourceView> srv;
-			ComPtr<ID3D11UnorderedAccessView> uav;
-			ComPtr<ID3D11Predicate> predicate;
-			std::array<ID3D11ClassInstance*, D3D11_SHADER_MAX_INTERFACES> classes{};
-			UINT classCount = D3D11_SHADER_MAX_INTERFACES;
-			BOOL predicateValue = FALSE;
-			explicit Guard(ID3D11DeviceContext* c) : context(c)
-			{
-				c->CSGetShader(&shader, classes.data(), &classCount);
-				c->CSGetShaderResources(0, 1, &srv);
-				c->CSGetUnorderedAccessViews(0, 1, &uav);
-				c->GetPredication(&predicate, &predicateValue);
-				c->SetPredication(nullptr, FALSE);
-				Clear();
-			}
-			void Clear()
-			{
-				ID3D11ShaderResourceView* s = nullptr;
-				ID3D11UnorderedAccessView* u = nullptr;
-				context->CSSetShaderResources(0, 1, &s);
-				context->CSSetUnorderedAccessViews(0, 1, &u, nullptr);
-			}
-			~Guard()
-			{
-				Clear();
-				context->CSSetShader(shader.Get(), classes.data(), classCount);
-				auto* s = srv.Get(); auto* u = uav.Get();
-				context->CSSetShaderResources(0, 1, &s);
-				context->CSSetUnorderedAccessViews(0, 1, &u, nullptr);
-				context->SetPredication(predicate.Get(), predicateValue);
-				for (UINT i = 0; i < classCount; ++i) if (classes[i]) classes[i]->Release();
-			}
-		};
+
 	}
 
 	struct ExposureCapture::State
@@ -111,9 +75,7 @@ namespace NeuralRendering::Color
 		struct Latch
 		{
 			ExposureBinding value;
-			ExposureTransaction key{};
-			std::uint64_t captureEpoch = 0;
-			bool occupied = false;
+			ExposureLatchPolicy policy{};
 		};
 		std::atomic_bool requested{ false };
 		std::atomic_uint64_t epoch{ 1 };
@@ -224,12 +186,12 @@ namespace NeuralRendering::Color
 			ComPtr<ID3D11RenderTargetView> target;
 			c->OMGetRenderTargets(1, &target, nullptr);
 			if (target) { D3D11_RENDER_TARGET_VIEW_DESC out{}; target->GetDesc(&out); evidence.outputViewFormat = static_cast<std::uint32_t>(out.Format); }
-			Guard guard(c);
+			ComputeStateGuard<1> guard(c);
 			auto* s = average.Get(); auto* u = e.uav.Get();
 			c->CSSetShaderResources(0, 1, &s); c->CSSetUnorderedAccessViews(0, 1, &u, nullptr);
 			c->CSSetShader(shader.Get(), nullptr, 0);
 			{ CS_PROFILE_SCOPE("Upscaling::NRColorExposureCapture"); c->Dispatch(1, 1, 1); }
-			guard.Clear();
+			guard.Unbind();
 			e.value.evidence = evidence;
 			e.value.state = ExposureBindingState::SnapshotQueued;
 			++status.captures; status.lastReason.clear();
@@ -295,7 +257,7 @@ namespace NeuralRendering::Color
 			const std::array<Restore, 2> thunks{ &RestoreTechnique<0>, &RestoreTechnique<1> };
 			for (std::size_t i = 0; i < effects.size(); ++i) {
 				const auto index = RE::ImageSpaceManager::GetCurrentIndex(effects[i]);
-				if (index >= manager->effects.capacity()) continue;
+				if (index >= manager->effects.size()) continue;
 				auto* effect = manager->effects[static_cast<std::uint16_t>(index)];
 				if (!effect) continue;
 				auto* shader = static_cast<RE::BSImagespaceShader*>(effect);
@@ -327,24 +289,39 @@ namespace NeuralRendering::Color
 	}
 	bool ExposureCapture::Bind(ID3D11DeviceContext* c, ExposureBinding& output, const ExposureTransaction& key)
 	{
-		if (!c || key.route >= 2 || key.insertion >= 2) return false;
+		output.evidence = {}; output.state = ExposureBindingState::ResourceFailure;
+		if (!c || c->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE || key.route >= 2 || key.insertion >= 2 ||
+			key.sourceWorldFrame == std::numeric_limits<std::uint32_t>::max()) return false;
 		std::scoped_lock lock(state_->mutex);
 		ComPtr<ID3D11Device> device; c->GetDevice(&device);
+		if (!device) return false;
+		const bool contextMatches = state_->context.Get() == c && state_->device.Get() == device.Get();
+		// Never reuse a successful latch after switching contexts/devices. Returning
+		// false lets the outer transaction fall back before either eye is committed.
+		if ((state_->context && !contextMatches) ||
+			(output.resource && !ResourceOnDevice(output.resource.Get(), device.Get()))) {
+			output.state = ExposureBindingState::ContextMismatch;
+			return false;
+		}
 		ComPtr<ID3D11UnorderedAccessView> unused;
 		if (!output.resource && !CreateValueTexture(device.Get(), output, false, unused)) return false;
-		output.evidence = {}; output.state = ExposureBindingState::WaitingForHDRPass;
+		output.state = ExposureBindingState::WaitingForHDRPass;
 		const auto invalidate = [&]() {
 			const std::array<float, 4> invalid{ 0, 0, 1, 0 };
 			c->UpdateSubresource(output.resource.Get(), 0, nullptr, invalid.data(), static_cast<UINT>(sizeof(invalid)), 0);
 		};
-		const bool contextMatches = state_->context.Get() == c && SameDevice(c, state_->device.Get());
 		if (contextMatches) state_->Poll();
 		auto& latch = state_->latches[key.route * 2u + key.insertion];
 		const auto epoch = state_->epoch.load(std::memory_order_acquire);
 		// Once chosen, exposure availability is frozen for the whole stereo/ROI
 		// transaction, even if an API request toggles capture midway through it.
-		if (!latch.occupied || latch.key != key) {
-			latch.key = key; latch.captureEpoch = epoch; latch.occupied = true;
+		const auto decision = latch.policy.Begin(key, reinterpret_cast<std::uintptr_t>(c),
+			reinterpret_cast<std::uintptr_t>(device.Get()));
+		if (decision == ExposureLatchDecision::Reject) {
+			output.state = ExposureBindingState::ContextMismatch;
+			return false;
+		}
+		if (decision == ExposureLatchDecision::NewTransaction) {
 			latch.value.evidence = {}; latch.value.state = ExposureBindingState::StaleOrAmbiguous;
 			const auto match = std::find_if(state_->entries.begin(), state_->entries.end(), [&](const State::Entry& e) {
 				return MatchesExposure(e.value.evidence.stamp, key.sourceWorldFrame, epoch);
@@ -353,7 +330,11 @@ namespace NeuralRendering::Color
 				latch.value.state = state_->context ? ExposureBindingState::ContextMismatch : ExposureBindingState::WaitingForHDRPass;
 			} else if (match != state_->entries.end()) {
 				if (!latch.value.resource && !CreateValueTexture(device.Get(), latch.value, false, unused)) {
-					latch.occupied = false; return false;
+					latch.policy.Clear(); return false;
+				}
+				if (!ResourceOnDevice(latch.value.resource.Get(), device.Get()) ||
+					!ResourceOnDevice(match->value.resource.Get(), device.Get())) {
+					latch.policy.Clear(); output.state = ExposureBindingState::ContextMismatch; return false;
 				}
 				c->CopyResource(latch.value.resource.Get(), match->value.resource.Get());
 				latch.value.evidence = match->value.evidence;
@@ -361,8 +342,12 @@ namespace NeuralRendering::Color
 			}
 		}
 		output.state = latch.value.state; output.evidence = latch.value.evidence;
-		if (output.state == ExposureBindingState::SnapshotQueued) c->CopyResource(output.resource.Get(), latch.value.resource.Get());
-		else invalidate();
+		if (output.state == ExposureBindingState::SnapshotQueued) {
+			if (!ResourceOnDevice(latch.value.resource.Get(), device.Get())) {
+				output.evidence = {}; output.state = ExposureBindingState::ContextMismatch; return false;
+			}
+			c->CopyResource(output.resource.Get(), latch.value.resource.Get());
+		} else invalidate();
 		return true;
 	}
 	void ExposureCapture::Reset() noexcept
@@ -379,7 +364,7 @@ namespace NeuralRendering::Color
 			e.value.Abandon(); (void)e.uav.Detach(); (void)e.staging.Detach();
 			(void)e.gammaStaging.Detach(); (void)e.ready.Detach(); e.pending = false;
 		}
-		for (auto& l : state_->latches) { l.value.Abandon(); l.occupied = false; }
+		for (auto& l : state_->latches) { l.value.Abandon(); l.policy.Clear(); }
 		(void)state_->shader.Detach(); (void)state_->device.Detach(); (void)state_->context.Detach();
 		state_->epoch.fetch_add(1, std::memory_order_acq_rel);
 	}

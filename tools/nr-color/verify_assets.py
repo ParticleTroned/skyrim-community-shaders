@@ -18,6 +18,7 @@ def verify(root: Path, deployed_data: Path | None = None) -> dict:
     mappings += [(FEATURE / SHADERS / name, SHADERS / name) for name in NAMES]
     errors: list[str] = []
     rows: list[dict] = []
+    packaged = {(root / source).resolve() for source, _ in mappings}
     if not (root / FEATURE / "CORE").is_file():
         errors.append("Missing colour CORE marker")
     for source, target in mappings:
@@ -26,19 +27,34 @@ def verify(root: Path, deployed_data: Path | None = None) -> dict:
         if not path.is_file():
             errors.append(f"Missing source: {source}")
         else:
-            raw = path.read_bytes()
-            row["sourceSha256"] = hashlib.sha256(raw).hexdigest()
-            text = raw.decode("utf-8-sig")
+            try:
+                raw = path.read_bytes()
+                row["sourceSha256"] = hashlib.sha256(raw).hexdigest()
+                text = raw.decode("utf-8-sig")
+            except (OSError, UnicodeError) as error:
+                errors.append(f"Unreadable source {source}: {error}")
+                rows.append(row)
+                continue
             if path.suffix in (".hlsl", ".hlsli"):
                 for include in re.findall(r'^\s*#\s*include\s+"([^"]+)"', text, re.M):
-                    if not (path.parent / include).is_file():
+                    dependency = (path.parent / include).resolve()
+                    if not dependency.is_file():
                         errors.append(f"Unresolved shader include {include} from {source}")
-            if path.suffix == ".ini" and "Version = 1-1-0" not in text:
-                errors.append("NeuralColor manifest version is not 1-1-0")
+                    elif dependency not in packaged:
+                        # A locally present helper not in the deployment mapping is
+                        # not a complete shader package. Every mapped include is
+                        # itself scanned and hash-checked, closing dependencies.
+                        errors.append(f"Shader include is not packaged: {include} from {source}")
+            if path.suffix == ".ini" and "Version = 1-2-0" not in text:
+                errors.append("NeuralColor manifest version is not 1-2-0")
             if deployed_data is not None:
                 deployed = deployed_data / target
                 row["deployedPresent"] = deployed.is_file()
-                row["deployedSha256"] = hashlib.sha256(deployed.read_bytes()).hexdigest() if deployed.is_file() else None
+                try:
+                    row["deployedSha256"] = hashlib.sha256(deployed.read_bytes()).hexdigest() if deployed.is_file() else None
+                except OSError as error:
+                    row["deployedSha256"] = None
+                    errors.append(f"Unreadable deployed asset {target}: {error}")
                 row["matches"] = row["deployedSha256"] == row["sourceSha256"]
                 if not row["matches"]:
                     errors.append(f"Missing/stale deployed asset: {target}")
@@ -51,7 +67,10 @@ def verify(root: Path, deployed_data: Path | None = None) -> dict:
         if not path.is_file():
             errors.append(f"Missing runtime producer {name}")
             continue
-        actual.update(re.findall(r'L"(Data/Shaders/[^"\n]+\.hlsl)"', path.read_text(encoding="utf-8-sig")))
+        try:
+            actual.update(re.findall(r'L"(Data/Shaders/[^"\n]+\.hlsl)"', path.read_text(encoding="utf-8-sig")))
+        except (OSError, UnicodeError) as error:
+            errors.append(f"Unreadable runtime producer {name}: {error}")
     if actual != expected:
         errors.append(f"Runtime shader inventory mismatch: missing={sorted(expected-actual)}, extra={sorted(actual-expected)}")
     return {"ok": not errors, "assets": rows, "errors": errors, "runtimePaths": sorted(actual),

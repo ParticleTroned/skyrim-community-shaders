@@ -2,6 +2,7 @@
 Texture2D<float4> Baseline : register(t0);
 Texture2D<float4> Neural : register(t1);
 Texture2D<float4> Result : register(t2);
+Texture2D<float4> Prepared : register(t4);
 RWStructuredBuffer<float4> Statistics : register(u0);
 groupshared float4 sums0[256];
 groupshared float4 sums1[256];
@@ -27,7 +28,7 @@ void main(uint3 id : SV_GroupThreadID)
 		bool bv = all(isfinite(b)), nv = all(isfinite(n)), rv = all(isfinite(r));
 		float3 ignored;
 		invalid.x += ForwardColor(b, ignored) ? 0.0 : 1.0;
-		invalid.y += InverseColor(n, ignored) ? 0.0 : 1.0;
+		invalid.y += ReconstructCandidate(b, Prepared.Load(int3(RegionOffset + p, 0)).rgb, n, ignored) ? 0.0 : 1.0;
 		s3 += float4(bv ? 0.0 : 1.0, nv ? 0.0 : 1.0, rv ? 0.0 : 1.0, 1.0);
 		if (!bv || !rv) continue;
 		float3 delta = abs(r - b);

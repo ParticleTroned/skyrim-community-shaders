@@ -6,14 +6,11 @@ RWTexture2D<float4> Result : register(u0);
 
 float3 Candidate(uint2 local, float3 baseline)
 {
-	float3 check, originalProxy, neuralSource;
-	if (!ForwardColor(baseline, check) ||
-		!InverseColor(Prepared.Load(int3(RegionOffset + local, 0)).rgb, originalProxy) ||
-		!InverseColor(Neural.Load(int3(RegionOffset + local, 0)).rgb, neuralSource))
-		return baseline;
-	// Use the actual quantized input, not a recomputed approximate proxy.
-	float3 result = baseline + (neuralSource - originalProxy);
-	return all(isfinite(result)) ? result : baseline;
+	float3 result;
+	bool valid = ReconstructCandidate(baseline,
+		Prepared.Load(int3(RegionOffset + local, 0)).rgb,
+		Neural.Load(int3(RegionOffset + local, 0)).rgb, result);
+	return valid ? result : baseline;
 }
 
 [numthreads(8, 8, 1)]
@@ -40,8 +37,8 @@ void main(uint3 id : SV_DispatchThreadID)
 	float baseY = Luminance(baseWorking), neuralY = Luminance(neuralWorking);
 	float3 preserved = baseline.rgb;
 	if (DetailStrength > 0.0 && baseY > 1e-5 && neuralY > 1e-5 &&
-		all(baseWorking >= 0.0) && all(isfinite(baseWorking)) && all(isfinite(neuralWorking))) {
-		float residual = log2(neuralY / baseY), weightedResidual = 0.0, totalWeight = 0.0;
+		all(baseWorking >= 0.0) && all(neuralWorking >= 0.0) && all(isfinite(baseWorking)) && all(isfinite(neuralWorking))) {
+		float residual = (log2(neuralY) - log2(baseY)), weightedResidual = 0.0, totalWeight = 0.0;
 		// Only initialized pixels of this physical ROI, never multi-ROI gaps.
 		[unroll] for (int y = -1; y <= 1; ++y) {
 			[unroll] for (int x = -1; x <= 1; ++x) {
@@ -49,10 +46,10 @@ void main(uint3 id : SV_DispatchThreadID)
 				float3 b = ToWorking(Baseline.Load(int3(p, 0)).rgb);
 				float3 n = ToWorking(Candidate(p, Baseline.Load(int3(p, 0)).rgb));
 				float by = Luminance(b), ny = Luminance(n);
-				if (by > 1e-5 && ny > 1e-5 && all(isfinite(b)) && all(isfinite(n))) {
-					float distance = abs(log2(by / baseY));
+				if (by > 1e-5 && ny > 1e-5 && all(b >= 0.0) && all(n >= 0.0) && all(isfinite(b)) && all(isfinite(n))) {
+					float distance = abs((log2(by) - log2(baseY)));
 					float weight = exp2(-4.0 * distance) * ((x == 0 && y == 0) ? 4.0 : 1.0);
-					weightedResidual += weight * log2(ny / by); totalWeight += weight;
+					weightedResidual += weight * (log2(ny) - log2(by)); totalWeight += weight;
 				}
 			}
 		}
@@ -61,8 +58,8 @@ void main(uint3 id : SV_DispatchThreadID)
 		float edgeWeight = saturate(float(min(edge.x, edge.y)) / 4.0);
 		float stops = clamp((residual - lowFrequency) * DetailStrength * edgeWeight, -MaximumDetailStops, MaximumDetailStops);
 		float3 detail = FromWorking(baseWorking * exp2(stops));
-		if (all(isfinite(detail))) preserved = detail;
+		if (RepresentableRGB(detail)) preserved = detail;
 	}
 	float3 result = AppearanceMix <= 0.0 ? preserved : lerp(preserved, candidate, AppearanceMix);
-	Result[local] = float4(all(isfinite(result)) ? result : baseline.rgb, baseline.a);
+	Result[local] = float4(RepresentableRGB(result) ? result : baseline.rgb, baseline.a);
 }

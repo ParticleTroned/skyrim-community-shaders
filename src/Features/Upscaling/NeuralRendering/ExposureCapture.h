@@ -42,12 +42,6 @@ namespace NeuralRendering::Color
 		ExposureBindingState state = ExposureBindingState::NotRequested;
 		void Abandon() noexcept { (void)resource.Detach(); (void)srv.Detach(); }
 	};
-	struct ExposureTransaction
-	{
-		std::uint32_t frame = 0, sourceWorldFrame = 0, insertion = 0, route = 0;
-		std::uint64_t generation = 0;
-		bool operator==(const ExposureTransaction&) const = default;
-	};
 
 	// Only Request/GetStatus are called from UI/DevBench threads. Installation,
 	// capture, binding and resource retirement belong to the render thread.

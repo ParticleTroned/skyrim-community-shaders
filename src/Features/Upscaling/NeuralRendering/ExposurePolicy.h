@@ -15,7 +15,7 @@ namespace NeuralRendering::Color
 	[[nodiscard]] inline ExposureValue EvaluateHDRExposure(float average, float target) noexcept
 	{
 		ExposureValue value{ average, target };
-		if (!Finite(average) || !Finite(target)) return value;
+		if (!Finite(average) || !Finite(target) || average < 0 || target < 0) return value;
 		if (average == 0 || target == 0) {
 			value.validity = ExposureValidity::UnitFallback;
 			return value;
@@ -32,7 +32,8 @@ namespace NeuralRendering::Color
 		if (requested.exposureSource == ExposureSource::Manual) return true;
 		// Reject a zero/uninitialized adaptation texture rather than describing
 		// its unit fallback as measured exposure. The shader makes the same test.
-		if (captured.validity != ExposureValidity::Ratio) return false;
+		if (captured.validity != ExposureValidity::Ratio || !Finite(captured.average) || !Finite(captured.target) ||
+			!Finite(captured.ratio) || captured.average <= 0 || captured.target <= 0 || captured.ratio <= 0) return false;
 		effective.exposureSource = ExposureSource::Manual;
 		effective.exposureMultiplier *= captured.ratio;
 		return Valid(effective);
@@ -45,7 +46,43 @@ namespace NeuralRendering::Color
 	};
 	[[nodiscard]] constexpr bool MatchesExposure(const ExposureStamp& stamp, std::uint32_t sourceWorldFrame, std::uint64_t epoch) noexcept
 	{
-		return stamp.sequence != 0 && !stamp.ambiguous && stamp.epoch == epoch &&
+		return epoch != 0 && stamp.sequence != 0 && !stamp.ambiguous && stamp.epoch == epoch &&
 		       stamp.frame == sourceWorldFrame && sourceWorldFrame != std::numeric_limits<std::uint32_t>::max();
 	}
+
+	struct ExposureTransaction
+	{
+		std::uint32_t frame = 0, sourceWorldFrame = 0, insertion = 0, route = 0;
+		std::uint64_t generation = 0;
+		bool operator==(const ExposureTransaction&) const = default;
+	};
+
+	enum class ExposureLatchDecision : std::uint32_t { NewTransaction, Reuse, Reject };
+
+	// Shared by production Bind and the portable lifecycle tests. Capture epoch
+	// is intentionally NOT part of this key: a UI toggle or a late HDR callback
+	// cannot change an already-latched pair's availability or exposure. Resource
+	// reset/retirement clears this policy, while context/device changes fail closed.
+	struct ExposureLatchPolicy
+	{
+		ExposureTransaction key{};
+		std::uintptr_t contextIdentity = 0, deviceIdentity = 0;
+		bool occupied = false;
+
+		[[nodiscard]] ExposureLatchDecision Begin(const ExposureTransaction& next,
+			std::uintptr_t context, std::uintptr_t device) noexcept
+		{
+			if (!context || !device || next.route >= 2 || next.insertion >= 2 ||
+				next.sourceWorldFrame == std::numeric_limits<std::uint32_t>::max())
+				return ExposureLatchDecision::Reject;
+			// Do not allow any copy through resources belonging to another context
+			// generation, even when presentation/source frame numbers are identical.
+			if (occupied && (contextIdentity != context || deviceIdentity != device))
+				return ExposureLatchDecision::Reject;
+			if (occupied && key == next) return ExposureLatchDecision::Reuse;
+			key = next; contextIdentity = context; deviceIdentity = device; occupied = true;
+			return ExposureLatchDecision::NewTransaction;
+		}
+		void Clear() noexcept { *this = {}; }
+	};
 }

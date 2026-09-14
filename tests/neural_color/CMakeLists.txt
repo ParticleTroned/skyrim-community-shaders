@@ -9,8 +9,22 @@ add_executable(nr_exposure_policy_test exposure_policy_test.cpp)
 target_compile_features(nr_exposure_policy_test PRIVATE cxx_std_20)
 target_include_directories(nr_exposure_policy_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../../src")
 add_test(NAME NRExposurePolicy COMMAND nr_exposure_policy_test)
+add_executable(nr_exposure_lifecycle_test exposure_lifecycle_test.cpp)
+target_compile_features(nr_exposure_lifecycle_test PRIVATE cxx_std_20)
+target_include_directories(nr_exposure_lifecycle_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../../src")
+add_test(NAME NRExposureLifecycle COMMAND nr_exposure_lifecycle_test)
+add_executable(nr_adversarial_policy_test adversarial_policy_test.cpp)
+target_compile_features(nr_adversarial_policy_test PRIVATE cxx_std_20)
+target_include_directories(nr_adversarial_policy_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../../src")
+add_test(NAME NRColorAdversarialPolicy COMMAND nr_adversarial_policy_test)
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
+    add_test(NAME NRColorAdversarialAssessment
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/adversarial_assessment_test.py")
+    add_test(NAME NRColorRunnerWorkflow
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/runner_test.py")
+    add_test(NAME NRColorAssetVerifierFixtures
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/asset_verifier_test.py")
     add_test(NAME NRColorSourceContracts
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/source_contract_test.py")
     add_test(NAME NRColorAssessmentContracts

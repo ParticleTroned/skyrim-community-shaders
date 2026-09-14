@@ -1,10 +1,11 @@
 #include "ColorPipeline.h"
+#include "ComputeStateGuard.h"
 #include "Utils/D3D.h"
 
 #include <algorithm>
 #include <chrono>
-#include <cstring>
 #include <cstddef>
+#include <cstring>
 #include <limits>
 #include <utility>
 
@@ -22,91 +23,47 @@ namespace NeuralRendering::Color
 		static_assert(sizeof(Constants) == 48);
 		static_assert(offsetof(Constants, exposure) == 32);
 
-		Constants MakeConstants(const Work& work, const Configuration& config)
+		Storage OutputStorage(DXGI_FORMAT format)
 		{
+			switch (format) {
+			case DXGI_FORMAT_R11G11B10_FLOAT: return Storage::R11G11B10;
+			case DXGI_FORMAT_R16G16B16A16_FLOAT: return Storage::Float16;
+			case DXGI_FORMAT_R8G8B8A8_UNORM: case DXGI_FORMAT_R10G10B10A2_UNORM:
+			case DXGI_FORMAT_R16G16B16A16_UNORM: return Storage::UNorm;
+			default: return Storage::Float32; // Ensure admits only the explicit formats below.
+			}
+		}
+		Constants MakeConstants(const Work& work)
+		{
+			const auto& config = work.configuration;
 			const auto& roi = work.observation.rect;
-			const auto profile = EffectiveProfile(config, work.observation.insertion);
+			const auto& profile = work.observation.profile;
 			const std::uint32_t flags = (config.experiments.transportBypass ? 1u : 0u) |
 				(!config.experiments.applyModelEdit ? 2u : 0u) |
 				(profile.exposureSource == ExposureSource::CapturedHDR ? 4u : 0u) |
-				(NeedsExposureCapture(config) ? 8u : 0u);
+				(NeedsExposureCapture(config) ? 8u : 0u) | static_cast<std::uint32_t>(OutputStorage(work.format));
 			return { roi.baseX, roi.baseY, roi.width, roi.height,
-				static_cast<std::uint32_t>(config.EffectiveMode()),
-				static_cast<std::uint32_t>(profile.domain), static_cast<std::uint32_t>(profile.transform), flags,
-				profile.exposureMultiplier, config.settings.detailStrength,
-				config.settings.appearanceMix, config.settings.maximumDetailStops };
+				static_cast<std::uint32_t>(config.EffectiveMode()), static_cast<std::uint32_t>(profile.domain),
+				static_cast<std::uint32_t>(profile.transform), flags, profile.exposureMultiplier,
+				config.settings.detailStrength, config.settings.appearanceMix, config.settings.maximumDetailStops };
 		}
-
-		class StateGuard
-		{
-		public:
-			explicit StateGuard(ID3D11DeviceContext* context) : context_(context)
-			{
-				context_->CSGetShader(&shader_, classes_.data(), &classCount_);
-				context_->CSGetShaderResources(0, 4, srvs_.data());
-				context_->CSGetUnorderedAccessViews(0, 1, &uav_);
-				context_->CSGetConstantBuffers(0, 1, &cb_);
-				context_->GetPredication(&predicate_, &predicateValue_);
-				context_->SetPredication(nullptr, FALSE);
-				Unbind();
-			}
-			StateGuard(const StateGuard&) = delete;
-			StateGuard& operator=(const StateGuard&) = delete;
-			~StateGuard()
-			{
-				Unbind();
-				context_->CSSetShader(shader_, classes_.data(), classCount_);
-				context_->CSSetConstantBuffers(0, 1, &cb_);
-				context_->CSSetShaderResources(0, 4, srvs_.data());
-				context_->CSSetUnorderedAccessViews(0, 1, &uav_, nullptr);
-				context_->SetPredication(predicate_, predicateValue_);
-				if (shader_) shader_->Release();
-				for (UINT i = 0; i < classCount_; ++i) if (classes_[i]) classes_[i]->Release();
-				for (auto* view : srvs_) if (view) view->Release();
-				if (uav_) uav_->Release();
-				if (cb_) cb_->Release();
-				if (predicate_) predicate_->Release();
-			}
-			void Unbind() const
-			{
-				ID3D11ShaderResourceView* emptySRVs[4]{};
-				ID3D11UnorderedAccessView* emptyUAV = nullptr;
-				context_->CSSetShaderResources(0, 4, emptySRVs);
-				context_->CSSetUnorderedAccessViews(0, 1, &emptyUAV, nullptr);
-			}
-		private:
-			ID3D11DeviceContext* context_;
-			ID3D11ComputeShader* shader_ = nullptr;
-			std::array<ID3D11ClassInstance*, D3D11_SHADER_MAX_INTERFACES> classes_{};
-			UINT classCount_ = D3D11_SHADER_MAX_INTERFACES;
-			std::array<ID3D11ShaderResourceView*, 4> srvs_{};
-			ID3D11UnorderedAccessView* uav_ = nullptr;
-			ID3D11Buffer* cb_ = nullptr;
-			ID3D11Predicate* predicate_ = nullptr;
-			BOOL predicateValue_ = FALSE;
-		};
-
 		bool CreateTexture(ID3D11Device* device, Texture& texture,
 			std::uint32_t width, std::uint32_t height, DXGI_FORMAT format, bool output)
 		{
 			D3D11_TEXTURE2D_DESC desc{};
-			desc.Width = width; desc.Height = height;
-			desc.MipLevels = 1; desc.ArraySize = 1; desc.Format = format;
-			desc.SampleDesc.Count = 1; desc.Usage = D3D11_USAGE_DEFAULT;
+			desc.Width = width; desc.Height = height; desc.MipLevels = 1; desc.ArraySize = 1;
+			desc.Format = format; desc.SampleDesc.Count = 1; desc.Usage = D3D11_USAGE_DEFAULT;
 			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | (output ? D3D11_BIND_UNORDERED_ACCESS : 0u);
 			return SUCCEEDED(device->CreateTexture2D(&desc, nullptr, &texture.resource)) &&
-			       SUCCEEDED(device->CreateShaderResourceView(texture.resource.Get(), nullptr, &texture.srv)) &&
-			       (!output || SUCCEEDED(device->CreateUnorderedAccessView(texture.resource.Get(), nullptr, &texture.uav)));
+				SUCCEEDED(device->CreateShaderResourceView(texture.resource.Get(), nullptr, &texture.srv)) &&
+				(!output || SUCCEEDED(device->CreateUnorderedAccessView(texture.resource.Get(), nullptr, &texture.uav)));
 		}
-
 		bool CreateReadback(ID3D11Device* device, Readback& readback)
 		{
 			D3D11_BUFFER_DESC desc{};
 			desc.ByteWidth = static_cast<UINT>(kMeasurementValues * sizeof(float));
-			desc.Usage = D3D11_USAGE_DEFAULT;
-			desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
-			desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-			desc.StructureByteStride = 4 * sizeof(float);
+			desc.Usage = D3D11_USAGE_DEFAULT; desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+			desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED; desc.StructureByteStride = 4 * sizeof(float);
 			D3D11_UNORDERED_ACCESS_VIEW_DESC view{};
 			view.Format = DXGI_FORMAT_UNKNOWN; view.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
 			view.Buffer.NumElements = static_cast<UINT>(kMeasurementValues / 4);
@@ -116,7 +73,7 @@ namespace NeuralRendering::Color
 			desc.MiscFlags = 0; desc.StructureByteStride = 0;
 			D3D11_QUERY_DESC query{ D3D11_QUERY_EVENT, 0 };
 			return SUCCEEDED(device->CreateBuffer(&desc, nullptr, &readback.staging)) &&
-			       SUCCEEDED(device->CreateQuery(&query, &readback.ready));
+				SUCCEEDED(device->CreateQuery(&query, &readback.ready));
 		}
 		std::uint64_t Elapsed(std::chrono::steady_clock::time_point start)
 		{
@@ -144,8 +101,7 @@ namespace NeuralRendering::Color
 		}
 		auto& capture = ExposureCapture::Instance();
 		configuration_ = next;
-		// Atomic request only. No engine, file, or GPU operations on API threads.
-		capture.Request(NeedsExposureCapture(next));
+		capture.Request(NeedsExposureCapture(next)); // Atomic request only, no engine/GPU work.
 		return true;
 	}
 	void Registry::Record(const Observation& observation) noexcept
@@ -164,7 +120,9 @@ namespace NeuralRendering::Color
 		try {
 			std::scoped_lock lock(mutex_);
 			if (measurement.source.slot >= status_.measurements.size()) return;
-			status_.measurements[measurement.source.slot] = measurement; ++status_.samples;
+			auto& previous = status_.measurements[measurement.source.slot];
+			if (previous.source.measurementOrder > measurement.source.measurementOrder) { ++status_.dropped; return; }
+			previous = measurement; ++status_.samples;
 		} catch (...) { /* Optional diagnostics never alter rendering. */ }
 	}
 	void Registry::DropMeasurement() noexcept
@@ -178,10 +136,9 @@ namespace NeuralRendering::Color
 	}
 	void Work::Abandon() noexcept
 	{
-		baseline.Abandon(); result.Abandon(); exposure.Abandon();
+		baseline.Abandon(); result.Abandon(); exposure.Abandon(); prepared = false;
 		for (auto& readback : readbacks) readback.Abandon();
 	}
-
 	bool Pipeline::EnsureShaders(ID3D11Device* device, bool diagnostics)
 	{
 		if (compileFailed_) return false;
@@ -222,7 +179,7 @@ namespace NeuralRendering::Color
 			const auto width = (roi.width + 63u) & ~63u, height = (roi.height + 63u) & ~63u;
 			if (!CreateTexture(device, baseline, width, height, format, false) || !CreateTexture(device, result, width, height, format, true)) return false;
 			work.baseline = std::move(baseline); work.result = std::move(result);
-			work.capacityWidth = width; work.capacityHeight = height; work.format = format;
+			work.capacityWidth = width; work.capacityHeight = height; work.format = format; work.prepared = false;
 		}
 		if (diagnostics && measure_ && !work.readbackAttempted) {
 			work.readbackAttempted = true;
@@ -253,18 +210,21 @@ namespace NeuralRendering::Color
 	bool Pipeline::Prepare(ID3D11DeviceContext* context, Work& work, ID3D11Resource* original,
 		ID3D11Resource* prepared, ID3D11UnorderedAccessView* preparedUAV, const Configuration& config, Observation observation)
 	{
-		if (!context || !original || !prepared || !preparedUAV || !work.baseline.resource || !constants_) return false;
+		work.prepared = false;
+		if (!context || !original || !prepared || !preparedUAV || !work.baseline.resource || !constants_ ||
+			measurementOrder_ == std::numeric_limits<std::uint64_t>::max()) return false;
 		Poll(context, work);
 		const auto start = std::chrono::steady_clock::now();
-		work.observation = std::move(observation);
+		work.observation = std::move(observation); work.configuration = config;
 		auto& o = work.observation;
+		o.measurementOrder = ++measurementOrder_;
 		o.profile = EffectiveProfile(config, o.insertion); o.mode = config.EffectiveMode(); o.revision = config.revision;
 		o.bypass = config.experiments.transportBypass; o.modelEditShown = config.experiments.applyModelEdit; o.processed = false;
 		std::uint64_t pixelBytes = 4;
 		if (work.format == DXGI_FORMAT_R16G16B16A16_FLOAT || work.format == DXGI_FORMAT_R16G16B16A16_UNORM) pixelBytes = 8;
 		if (work.format == DXGI_FORMAT_R32G32B32A32_FLOAT) pixelBytes = 16;
 		o.retainedBytes = 2 * pixelBytes * work.capacityWidth * work.capacityHeight;
-		StateGuard guard(context);
+		ComputeStateGuard<5> guard(context);
 		if (NeedsExposureCapture(config)) {
 			const ExposureTransaction key{ o.frame, o.sourceWorldFrame, o.insertion, (o.slot % 4u) / 2u, o.generation };
 			if (!ExposureCapture::Instance().Bind(context, work.exposure, key)) return false;
@@ -279,7 +239,7 @@ namespace NeuralRendering::Color
 		if (o.profile.transform == Transform::Identity) {
 			context->CopySubresourceRegion(prepared, 0, roi.baseX, roi.baseY, 0, original, 0, &box);
 		} else {
-			const auto constants = MakeConstants(work, config);
+			const auto constants = MakeConstants(work);
 			context->UpdateSubresource(constants_.Get(), 0, nullptr, &constants, 0, 0);
 			auto* cb = constants_.Get(); auto* source = work.baseline.srv.Get();
 			context->CSSetConstantBuffers(0, 1, &cb); context->CSSetShaderResources(0, 1, &source);
@@ -287,17 +247,19 @@ namespace NeuralRendering::Color
 			CS_PROFILE_SCOPE("Upscaling::NRColorPrepare");
 			context->Dispatch((roi.width + 7u) / 8u, (roi.height + 7u) / 8u, 1);
 		}
+		work.prepared = true;
 		o.preparationCpuMicroseconds = Elapsed(start); Registry::Instance().Record(o); return true;
 	}
 	bool Pipeline::Reconstruct(ID3D11DeviceContext* context, Work& work, ID3D11Resource* neural,
-		ID3D11ShaderResourceView* neuralSRV, ID3D11ShaderResourceView* preparedSRV, const Configuration& config)
+		ID3D11ShaderResourceView* neuralSRV, ID3D11ShaderResourceView* preparedSRV, const Configuration& requested)
 	{
-		if (!context || !neural || !neuralSRV || !preparedSRV || !work.result.uav || !reconstruct_ || !constants_) return false;
-		const auto start = std::chrono::steady_clock::now(); StateGuard guard(context);
-		const auto& roi = work.observation.rect; const auto constants = MakeConstants(work, config);
+		if (!context || !neural || !neuralSRV || !preparedSRV || !work.result.uav || !reconstruct_ || !constants_ ||
+			!work.prepared || requested.revision != work.configuration.revision) return false;
+		const auto& config = work.configuration; // The same immutable settings as Prepare.
+		const auto start = std::chrono::steady_clock::now(); ComputeStateGuard<5> guard(context);
+		const auto& roi = work.observation.rect; const auto constants = MakeConstants(work);
 		context->UpdateSubresource(constants_.Get(), 0, nullptr, &constants, 0, 0);
 		auto* cb = constants_.Get(); context->CSSetConstantBuffers(0, 1, &cb);
-		// Read the immutable exposure captured by Prepare, never the latest global value.
 		auto* exposure = NeedsExposureCapture(config) ? work.exposure.srv.Get() : nullptr;
 		if (config.EffectiveMode() == Mode::LegacyRaw && !config.experiments.transportBypass && config.experiments.applyModelEdit) {
 			D3D11_BOX box{ roi.baseX, roi.baseY, 0, roi.baseX + roi.width, roi.baseY + roi.height, 1 };
@@ -312,17 +274,18 @@ namespace NeuralRendering::Color
 		guard.Unbind();
 		work.observation.processed = true; work.observation.reconstructionCpuMicroseconds = Elapsed(start);
 		Registry::Instance().Record(work.observation);
-		if (config.experiments.diagnostics) Measure(context, work, neuralSRV);
+		if (config.experiments.diagnostics) Measure(context, work, neuralSRV, preparedSRV);
 		return true;
 	}
-	void Pipeline::Measure(ID3D11DeviceContext* context, Work& work, ID3D11ShaderResourceView* neural)
+	void Pipeline::Measure(ID3D11DeviceContext* context, Work& work,
+		ID3D11ShaderResourceView* neural, ID3D11ShaderResourceView* prepared)
 	{
 		auto available = std::find_if(work.readbacks.begin(), work.readbacks.end(), [](const Readback& item) { return item.ready && !item.pending; });
 		if (!measure_ || available == work.readbacks.end()) { Registry::Instance().DropMeasurement(); return; }
 		auto& readback = *available;
 		auto* exposure = work.observation.exposureState != ExposureBindingState::NotRequested ? work.exposure.srv.Get() : nullptr;
-		ID3D11ShaderResourceView* sources[]{ work.baseline.srv.Get(), neural, work.result.srv.Get(), exposure };
-		auto* output = readback.uav.Get(); context->CSSetShaderResources(0, 4, sources);
+		ID3D11ShaderResourceView* sources[]{ work.baseline.srv.Get(), neural, work.result.srv.Get(), exposure, prepared };
+		auto* output = readback.uav.Get(); context->CSSetShaderResources(0, 5, sources);
 		context->CSSetUnorderedAccessViews(0, 1, &output, nullptr); context->CSSetShader(measure_.Get(), nullptr, 0);
 		context->Dispatch(1, 1, 1);
 		ID3D11UnorderedAccessView* empty = nullptr; context->CSSetUnorderedAccessViews(0, 1, &empty, nullptr);
@@ -331,7 +294,7 @@ namespace NeuralRendering::Color
 	}
 	void Pipeline::Commit(ID3D11DeviceContext* context, const Work& work, ID3D11Resource* destination)
 	{
-		StateGuard guard(context); const auto& roi = work.observation.rect;
+		ComputeStateGuard<5> guard(context); const auto& roi = work.observation.rect;
 		D3D11_BOX box{ 0, 0, 0, roi.width, roi.height, 1 };
 		context->CopySubresourceRegion(destination, 0, roi.baseX, roi.baseY, 0, work.result.resource.Get(), 0, &box);
 	}

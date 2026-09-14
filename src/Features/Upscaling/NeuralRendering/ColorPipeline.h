@@ -17,6 +17,7 @@ namespace NeuralRendering::Color
 	{
 		std::uint32_t frame = 0, sourceWorldFrame = 0, slot = 0, insertion = 0;
 		std::uint64_t generation = 0, revision = 0;
+		std::uint64_t measurementOrder = 0; // Monotonic CPU submission order, not a frame timestamp.
 		ComputeSubrect rect{};
 		std::uint32_t sourceFormat = 0, outputFormat = 0;
 		Mode mode = Mode::LegacyRaw;
@@ -79,7 +80,8 @@ namespace NeuralRendering::Color
 		std::array<Readback, 3> readbacks{};
 		std::uint32_t capacityWidth = 0, capacityHeight = 0;
 		DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
-		bool readbackAttempted = false;
+		bool readbackAttempted = false, prepared = false;
+		Configuration configuration{};
 		Observation observation{};
 		void Abandon() noexcept;
 	};
@@ -98,9 +100,10 @@ namespace NeuralRendering::Color
 	private:
 		bool EnsureShaders(ID3D11Device*, bool diagnostics);
 		void Poll(ID3D11DeviceContext*, Work&);
-		void Measure(ID3D11DeviceContext*, Work&, ID3D11ShaderResourceView* neural);
+		void Measure(ID3D11DeviceContext*, Work&, ID3D11ShaderResourceView* neural, ID3D11ShaderResourceView* prepared);
 		Microsoft::WRL::ComPtr<ID3D11ComputeShader> prepare_, reconstruct_, measure_;
 		Microsoft::WRL::ComPtr<ID3D11Buffer> constants_;
 		bool compileFailed_ = false, measureCompileAttempted_ = false;
+		std::uint64_t measurementOrder_ = 0; // Intentionally survives Reset, like Registry status.
 	};
 }

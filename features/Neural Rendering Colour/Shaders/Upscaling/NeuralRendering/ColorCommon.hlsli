@@ -8,7 +8,8 @@ cbuffer NRColorCB : register(b0)
 	uint ColorMode;
 	uint ColorDomain;
 	uint ColorTransform;
-	// 1: transport copy, 2: hide edit, 4: use captured exposure, 8: observe capture.
+	// 1: transport, 2: hide edit, 4: captured exposure, 8: observe capture.
+	// Storage bits 0x300: 0=FP32, 0x100=R11G11B10, 0x200=FP16, 0x300=UNORM.
 	uint ControlFlags;
 	float ExposureMultiplier;
 	float DetailStrength;
@@ -30,7 +31,7 @@ bool EffectiveExposure(out float exposure)
 		float4 captured = ExposureSnapshot.Load(int3(0, 0, 0));
 		// A GPU snapshot must contain a valid ratio, not the zero-input unit
 		// fallback. Missing/stale capture is explicitly invalid, never "1 known".
-		if (!all(isfinite(captured)) || captured.w != 1.0)
+		if (!all(isfinite(captured)) || any(captured.xyz <= 0.0) || captured.w != 1.0)
 			return false;
 		exposure *= captured.z;
 	}
@@ -68,6 +69,31 @@ bool InverseColor(float3 model, out float3 source)
 	}
 	source /= exposure;
 	return all(isfinite(source));
+}
+// FP32-finite results may still overflow a packed/half UAV or silently clamp
+// on UNORM storage. Reject those edits before the store; do not change exposure.
+bool RepresentableRGB(float3 value)
+{
+	if (!all(isfinite(value))) return false;
+	uint storage = ControlFlags & 0x300u;
+	if (storage == 0x100u) return all(value >= 0.0) && all(value <= float3(65024.0, 65024.0, 64512.0));
+	if (storage == 0x200u) return all(abs(value) <= 65504.0);
+	if (storage == 0x300u) return all(value >= 0.0) && all(value <= 1.0);
+	return true;
+}
+
+// Shared by reconstruction and measurement: a rejected prepared inverse or
+// unrepresentable result must not masquerade as a perfect zero-error round trip.
+bool ReconstructCandidate(float3 baseline, float3 prepared, float3 neural, out float3 result)
+{
+	result = baseline;
+	float3 check, originalProxy, neuralSource;
+	if (!ForwardColor(baseline, check) || !InverseColor(prepared, originalProxy) || !InverseColor(neural, neuralSource))
+		return false;
+	precise float3 candidate = baseline + (neuralSource - originalProxy);
+	if (!RepresentableRGB(candidate)) return false;
+	result = candidate;
+	return true;
 }
 float3 ToWorking(float3 value) { return ColorDomain == 2 ? DecodeSRGB3(value) : value; }
 float3 FromWorking(float3 value) { return ColorDomain == 2 ? EncodeSRGB3(value) : value; }

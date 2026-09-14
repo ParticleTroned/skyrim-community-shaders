@@ -116,10 +116,23 @@ namespace NeuralRendering::Color
 		       oldValue.experiments.transportBypass != newValue.experiments.transportBypass;
 	}
 
+	// Storage flags occupy previously unused ControlFlags bits; the CB stays 48 bytes.
+	// Keep values aligned with ColorCommon.hlsli (covered by contract tests).
+	enum class Storage : std::uint32_t { Float32 = 0, R11G11B10 = 0x100, Float16 = 0x200, UNorm = 0x300 };
 	using RGB = std::array<float, 3>;
 	[[nodiscard]] inline bool Finite(const RGB& value) noexcept
 	{
 		return Finite(value[0]) && Finite(value[1]) && Finite(value[2]);
+	}
+	[[nodiscard]] inline bool Representable(const RGB& value, Storage storage) noexcept
+	{
+		if (!Finite(value)) return false;
+		for (std::size_t i = 0; i < 3; ++i) {
+			if (storage == Storage::R11G11B10 && (value[i] < 0 || value[i] > (i == 2 ? 64512.0f : 65024.0f))) return false;
+			if (storage == Storage::Float16 && std::abs(value[i]) > 65504.0f) return false;
+			if (storage == Storage::UNorm && (value[i] < 0 || value[i] > 1)) return false;
+		}
+		return storage == Storage::Float32 || storage == Storage::R11G11B10 || storage == Storage::Float16 || storage == Storage::UNorm;
 	}
 	[[nodiscard]] inline float Decode(float x) noexcept
 	{
@@ -184,8 +197,9 @@ namespace NeuralRendering::Color
 
 	[[nodiscard]] inline RGB Reconstruct(const RGB& baseline, const RGB& prepared, const RGB& neural, const Profile& profile) noexcept
 	{
-		RGB inverseInput{}, inverseOutput{}, result{};
-		if (!Finite(baseline) || !Inverse(prepared, profile, inverseInput) || !Inverse(neural, profile, inverseOutput))
+		RGB check{}, inverseInput{}, inverseOutput{}, result{};
+		if (!Finite(baseline)) return {};
+		if (!Forward(baseline, profile, check) || !Inverse(prepared, profile, inverseInput) || !Inverse(neural, profile, inverseOutput))
 			return baseline;
 		for (std::size_t i = 0; i < result.size(); ++i)
 			result[i] = baseline[i] + (inverseOutput[i] - inverseInput[i]);

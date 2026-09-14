@@ -24,7 +24,7 @@ class Contracts(unittest.TestCase):
         self.assertIn("RegionSize) - 1", source)
         self.assertIn("DetailStrength == 0.0 && AppearanceMix == 0.0", source)
         self.assertIn("baseline.a", source)
-        self.assertIn("neuralSource - originalProxy", source)
+        self.assertIn("neuralSource - originalProxy", (SHADERS / "ColorCommon.hlsli").read_text())
 
     def test_async_measurement_and_resource_lifetime(self):
         source = (NR / "ColorPipeline.cpp").read_text()
@@ -32,8 +32,9 @@ class Contracts(unittest.TestCase):
         self.assertIn("D3D11_MAP_FLAG_DO_NOT_WAIT", source)
         self.assertNotIn("->Flush(", source)
         self.assertIn("measurement.source = readback.source", source)
-        self.assertIn("SetPredication(nullptr, FALSE)", source)
-        self.assertIn("SetPredication(predicate_, predicateValue_)", source)
+        guard = (NR / "ComputeStateGuard.h").read_text()
+        self.assertIn("SetPredication(nullptr, FALSE)", guard)
+        self.assertIn("SetPredication(predicate_.Get(), predicateValue_)", guard)
         self.assertIn("for (auto& readback : readbacks) readback.Abandon()", source)
 
     def test_feature_and_packaging(self):
@@ -41,7 +42,7 @@ class Contracts(unittest.TestCase):
         self.assertIn("&NeuralColor::Instance()", source)
         self.assertTrue((ROOT / "features/Neural Rendering Colour/CORE").exists())
         ini = ROOT / "features/Neural Rendering Colour/Shaders/Features/NeuralColor.ini"
-        self.assertIn("Version = 1-1-0", ini.read_text())
+        self.assertIn("Version = 1-2-0", ini.read_text())
         ui = (ROOT / "src/Features/NeuralColor.cpp").read_text()
         self.assertIn('"communityshaders.nr_color"', ui)
         save = ui[ui.index("void NeuralColor::SaveSettings"):ui.index("void NeuralColor::RestoreDefaultSettings")]

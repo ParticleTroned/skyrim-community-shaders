@@ -19,7 +19,8 @@ def sample(slot=0, frame=100, captured=False):
             0, 0, 1, 1, 1, 1, 1, 1]
     return {"source": {"frame": frame, "sourceWorldFrame": frame, "generation": 4,
                        "physicalSlot": slot, "insertionPoint": 0, "revision": 7, "processed": True,
-                       "failure": "", "profile": {"exposureSource": "captured_hdr" if captured else "manual"},
+                       "failure": "", "effectiveMode": "managed", "rect": [0, 0, 8, 8], "sourceFormat": 26, "outputFormat": 26,
+                       "profile": {"domain": "linear" if captured else "unknown", "transform": "reversible_proxy" if captured else "identity", "exposureMultiplier": 1.0, "exposureSource": "captured_hdr" if captured else "manual"},
                        "modelEditShown": True, "transportBypass": True,
                        "exposureBinding": "gpu_snapshot_queued", "exposure": {"frame": frame, "epoch": 2, "sequence": 10, "ambiguous": False}},
             "values": data}
@@ -104,7 +105,7 @@ class AssessmentTests(unittest.TestCase):
         nr = ROOT / "src/Features/Upscaling/NeuralRendering"
         pipeline = (nr / "ColorPipeline.cpp").read_text()
         capture = (nr / "ExposureCapture.cpp").read_text()
-        self.assertIn("CSSetShaderResources(0, 4", pipeline)
+        self.assertIn("CSSetShaderResources(0, 5", pipeline)
         self.assertIn("work.exposure.srv.Get()", pipeline)
         self.assertNotIn("captureEpoch != epoch", capture)  # Never split an active eye pair on an API toggle.
         for source in (pipeline, capture):
@@ -119,7 +120,7 @@ class AssessmentTests(unittest.TestCase):
 
     def test_revisions_are_not_overwritten_after_a_conflict(self):
         class Changed:
-            def call(self, *_): return {"revision": 99}
+            def call(self, *_, **__): return {"revision": 99, "slots": [], "measurements": []}
         class Args:
             timeout = 1; warmup_frames = 0; sample_frames = 1
         with self.assertRaises(assess.MutationUncertain):

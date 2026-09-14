@@ -9,7 +9,7 @@ void main(uint3 id : SV_DispatchThreadID)
 	float2 average = EngineAverage.Load(int3(0, 0, 0)).xy;
 	float ratio = 1.0;
 	float validity = 0.0;
-	if (all(isfinite(average))) {
+	if (all(isfinite(average)) && all(average >= 0.0)) {
 		if (average.x == 0.0 || average.y == 0.0) {
 			// ISHDR leaves input unchanged here; distinguish this from a measured 1.
 			validity = 2.0;

@@ -1,5 +1,6 @@
 #include "Renderer.h"
 
+#include "ColorPipeline.h"
 #include "D3D12Interop.h"
 #include "PipelinePolicy.h"
 #include "Utils/D3D.h"
@@ -552,6 +553,7 @@ namespace NeuralRendering
 			std::uintptr_t controlMaskIdentity = 0;
 			ComputeSubrect computeSubrect{};
 			std::uint64_t regionIdentity = 0;
+			std::uint64_t colorInputEpoch = 0;
 			bool useAutoMask = false;
 			bool uiCorrection = false;
 
@@ -565,6 +567,7 @@ namespace NeuralRendering
 			SharedTexture motionVectors;
 			SharedTexture controlMask;
 			SharedTexture output;
+			Color::Work colorWork;
 			ResourceKey resourceKey{};
 			HistoryKey historyKey{};
 			std::uint32_t lastSuccessfulFrame =
@@ -623,6 +626,22 @@ namespace NeuralRendering
 		bool IsFailureLatchedLocked() const noexcept { return failureLatched_; }
 		bool IsQuarantinedLocked() const noexcept { return quarantined_; }
 
+		// Latch a configuration for both eyes of each source/evaluation transaction,
+		// including callers that enter through separate public Apply calls.
+		void CaptureColorConfiguration(const RendererApplyArgs& args)
+		{
+			const auto route = args.featureSlot < Runtime::kFeatureSlotCount ?
+				ClassifyFeatureSlotMask(1u << args.featureSlot) : FeatureSlotRoute::Unexpected;
+			const std::size_t routeIndex = route == FeatureSlotRoute::Submit ? 1u : 0u;
+			const ColorTransactionKey key{ args.frameId, args.sourceWorldFrame, args.generation, args.insertionPoint };
+			if (!colorTransactionValid_[routeIndex] || key != colorTransactionKeys_[routeIndex]) {
+				colorConfigurations_[routeIndex] = Color::Registry::Instance().Snapshot();
+				colorTransactionKeys_[routeIndex] = key;
+				colorTransactionValid_[routeIndex] = true;
+			}
+			colorConfiguration_ = colorConfigurations_[routeIndex];
+		}
+		Color::Configuration colorConfiguration_{};
 		mutable std::mutex mutex_;
 
 	private:
@@ -668,7 +687,18 @@ namespace NeuralRendering
 			bool a_countApplyFailure = true);
 		void SucceedLocked(std::uint32_t a_slot) noexcept;
 
+		struct ColorTransactionKey
+		{
+			std::uint32_t frame, worldFrame;
+			std::uint64_t generation;
+			InsertionPoint insertion;
+			bool operator==(const ColorTransactionKey&) const = default;
+		};
+		std::array<ColorTransactionKey, 2> colorTransactionKeys_{};
+		std::array<Color::Configuration, 2> colorConfigurations_{};
+		std::array<bool, 2> colorTransactionValid_{};
 		D3D12Interop interop_;
+		Color::Pipeline colorPipeline_;
 		std::array<Slot, Runtime::kFeatureSlotCount> slots_{};
 		ComPtr<ID3D11Device> device_;
 		ComPtr<ID3D11DeviceContext> context_;
@@ -717,6 +747,9 @@ namespace NeuralRendering
 			return fail("feature-slot generation must be nonzero");
 		if (!IsValidInsertionPoint(a_args.insertionPoint))
 			return fail("Feature 18 insertion point is invalid");
+		if (colorConfiguration_.Enabled() &&
+			(a_args.colorWidth != a_args.outputWidth || a_args.colorHeight != a_args.outputHeight))
+			return fail("NR colour processing currently requires matching colour/output dimensions; guides may be lower resolution");
 		if (!a_args.colorInput || !a_args.depthGuide || !a_args.depthGuideSRV ||
 			!a_args.motionVectors || !a_args.colorOutput) {
 			return fail("color, depth, motion-vector, and output resources are required");
@@ -979,6 +1012,7 @@ namespace NeuralRendering
 			.style = a_args.tuning.style,
 			.controlMaskIdentity = a_resources.controlMaskIdentity,
 			.computeSubrect = a_resources.outputSubrect,
+			.colorInputEpoch = colorConfiguration_.inputEpoch[static_cast<std::size_t>(a_args.insertionPoint)],
 			.useAutoMask = a_args.tuning.useAutoMask,
 			.uiCorrection = a_args.tuning.uiCorrection,
 		};
@@ -1203,6 +1237,20 @@ namespace NeuralRendering
 		snapshot_.quarantined = quarantined_;
 		snapshot_.outputCommitted = false;
 		snapshot_.detail = std::move(a_detail);
+		if (colorConfiguration_.Enabled() && a_slot < slots_.size()) {
+			auto observation = slots_[a_slot].colorWork.observation;
+			observation.frame = snapshot_.frameId;
+			observation.sourceWorldFrame = snapshot_.sourceWorldFrame;
+			observation.slot = a_slot;
+			observation.revision = colorConfiguration_.revision;
+			observation.failure = snapshot_.detail;
+			observation.rect = {};
+			observation.generation = snapshot_.generation;
+			observation.insertion = static_cast<std::uint32_t>(snapshot_.insertionPoint);
+			observation.mode = colorConfiguration_.settings.mode;
+			observation.processed = false;
+			Color::Registry::Instance().Record(observation);
+		}
 		RefreshRuntimeTelemetryLocked();
 		snapshot_.successes = snapshot_.counters.successes;
 		snapshot_.failures = snapshot_.counters.failures;
@@ -1327,6 +1375,7 @@ namespace NeuralRendering
 		}
 
 		slots_ = {};
+		colorPipeline_.Reset();
 		device_.Reset();
 		context_.Reset();
 		if (a_resetShader) {
@@ -1359,9 +1408,11 @@ namespace NeuralRendering
 			Abandon(slot.motionVectors);
 			Abandon(slot.controlMask);
 			Abandon(slot.output);
+			slot.colorWork.Abandon();
 			slot.resourcesValid = false;
 			slot.historyValid = false;
 		}
+		colorPipeline_.Abandon();
 	}
 
 	void Renderer::State::AbandonRuntimeOwnershipNoexcept() noexcept
@@ -1589,7 +1640,7 @@ namespace NeuralRendering
 			a_resources.resourceKey.outputWidth,
 			a_resources.resourceKey.outputHeight,
 			a_resources.resourceKey.outputFormat,
-			false);
+			true);
 		D3D11_TEXTURE2D_DESC controlMaskDesc{};
 		if (a_resources.resourceKey.controlMaskPresent) {
 			controlMaskDesc = MakeSharedDescription(
@@ -1715,7 +1766,8 @@ namespace NeuralRendering
 	{
 		a_outcome = {};
 		// All regions of both eyes must use immutable inputs and one commit boundary.
-		if (a_args[0].computeRegions.count != 0u || a_args[1].computeRegions.count != 0u)
+		if (colorConfiguration_.Enabled() ||
+			a_args[0].computeRegions.count != 0u || a_args[1].computeRegions.count != 0u)
 			return ApplyBatchLocked(a_args, a_outcome);
 		SetActiveFeatureSlotLocked(a_args[0].featureSlot);
 		if (quarantined_ || failureLatched_) {
@@ -1945,15 +1997,55 @@ namespace NeuralRendering
 			slots[index] = &slots_[a_args[index].featureSlot];
 		}
 
+		// Allocate/compile for every physical region before changing any caller output.
+		// The legacy raw lane does not allocate or dispatch colour resources.
+		if (colorConfiguration_.Enabled()) {
+			for (std::size_t index = 0; index < a_args.size(); ++index) {
+				const auto profile = Color::EffectiveProfile(colorConfiguration_,
+					static_cast<std::uint32_t>(a_args[index].insertionPoint));
+				const auto format = resources[index].resourceKey.colorFormat;
+				const bool floatStorage = format == DXGI_FORMAT_R11G11B10_FLOAT ||
+					format == DXGI_FORMAT_R16G16B16A16_FLOAT || format == DXGI_FORMAT_R32G32B32A32_FLOAT;
+				if (profile.transform != Color::Transform::Identity && !floatStorage)
+					return FailLocked(RendererStage::Validation, E_INVALIDARG,
+						"NR encoding/proxy experiment requires floating-point processing resources", a_args[index].featureSlot, false);
+				if (!colorPipeline_.Ensure(a_args[index].device, slots[index]->colorWork,
+						resources[index].outputSubrect, resources[index].resourceKey.outputFormat,
+						colorConfiguration_.experiments.diagnostics)) {
+					return FailLocked(RendererStage::ResourceCreation, E_FAIL,
+						"shared NR colour shaders/resources are unavailable", a_args[index].featureSlot, true);
+				}
+			}
+		}
+
 		const auto preparationStarted = std::chrono::steady_clock::now();
 		activeStage_ = RendererStage::ColorInputCopy;
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
-			CopyTextureSubrect(
-				a_args.front().context,
-				slots[index]->color.resource11.Get(),
-				resources[index].color.texture.Get(),
-				resources[index].colorSubrect);
+			if (colorConfiguration_.Enabled()) {
+				Color::Observation observation{};
+				observation.frame = a_args[index].frameId;
+				observation.sourceWorldFrame = a_args[index].sourceWorldFrame;
+				observation.slot = a_args[index].featureSlot;
+				observation.insertion = static_cast<std::uint32_t>(a_args[index].insertionPoint);
+				observation.generation = a_args[index].generation;
+				observation.rect = resources[index].outputSubrect;
+				observation.sourceFormat = static_cast<std::uint32_t>(resources[index].resourceKey.colorFormat);
+				observation.outputFormat = static_cast<std::uint32_t>(resources[index].resourceKey.outputFormat);
+				observation.atomicStereo = logicalEyeCount == 2u;
+				if (!colorPipeline_.Prepare(a_args.front().context, slots[index]->colorWork,
+						resources[index].color.texture.Get(), slots[index]->color.resource11.Get(),
+						slots[index]->color.uav11.Get(), colorConfiguration_, observation)) {
+					return FailLocked(RendererStage::ColorInputCopy, E_FAIL,
+						"shared NR colour preparation failed", a_args[index].featureSlot, true);
+				}
+			} else {
+				CopyTextureSubrect(
+					a_args.front().context,
+					slots[index]->color.resource11.Get(),
+					resources[index].color.texture.Get(),
+					resources[index].colorSubrect);
+			}
 		}
 		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
 			return FailLocked(
@@ -2066,13 +2158,16 @@ namespace NeuralRendering
 				};
 			};
 			addInput(slots[index]->color.resource12.Get());
+			if (colorConfiguration_.experiments.transportBypass)
+				sharedResources[sharedResourceCount - 1u].featureState = D3D12_RESOURCE_STATE_COPY_SOURCE;
 			addInput(slots[index]->depth.resource12.Get());
 			addInput(slots[index]->motionVectors.resource12.Get());
 			if (a_args[index].controlMask)
 				addInput(slots[index]->controlMask.resource12.Get());
 			sharedResources[sharedResourceCount++] = {
 				.resource = slots[index]->output.resource12.Get(),
-				.featureState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+				.featureState = colorConfiguration_.experiments.transportBypass ?
+					D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
 			};
 			Add(pixelCount, resources[index].outputSubrect.Area());
 			featureSlotMask |= 1u << a_args[index].featureSlot;
@@ -2080,16 +2175,17 @@ namespace NeuralRendering
 		const auto resourceSpan =
 			std::span(sharedResources.data(), sharedResourceCount);
 		TransitionResources(commandList, resourceSpan, true);
-		if (!interop_.BeginFeatureTiming(
-				commandList,
-				D3D12InteropSubmissionTiming{
-					.frameId = a_args.front().frameId,
-					.pixelCount = pixelCount,
-					.evaluationCount = static_cast<std::uint32_t>(a_args.size()),
-					.featureSlotMask = featureSlotMask,
-					.insertionPoint = a_args.front().insertionPoint,
-					.logicalEyeCount = logicalEyeCount,
-				})) {
+		const D3D12InteropSubmissionTiming timing{
+			.frameId = a_args.front().frameId,
+			.pixelCount = pixelCount,
+			.evaluationCount = colorConfiguration_.experiments.transportBypass ? 0u : static_cast<std::uint32_t>(a_args.size()),
+			.featureSlotMask = featureSlotMask,
+			.insertionPoint = a_args.front().insertionPoint,
+			.logicalEyeCount = logicalEyeCount,
+		};
+		const bool timingStarted = colorConfiguration_.experiments.transportBypass ?
+			interop_.RecordTransportSubmission(timing) : interop_.BeginFeatureTiming(commandList, timing);
+		if (!timingStarted) {
 			const bool aborted = interop_.AbortD3D12();
 			recordingGuard.active = interop_.IsRecording();
 			return FailLocked(
@@ -2141,6 +2237,19 @@ namespace NeuralRendering
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			auto& slot = *slots[index];
 			const auto& args = a_args[index];
+			if (colorConfiguration_.experiments.transportBypass) {
+				const auto& roi = resources[index].outputSubrect;
+				D3D12_TEXTURE_COPY_LOCATION destination{};
+				destination.pResource = slot.output.resource12.Get();
+				destination.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+				D3D12_TEXTURE_COPY_LOCATION source{};
+				source.pResource = slot.color.resource12.Get();
+				source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+				const D3D12_BOX box{ roi.baseX, roi.baseY, 0, roi.baseX + roi.width, roi.baseY + roi.height, 1 };
+				commandList->CopyTextureRegion(&destination, roi.baseX, roi.baseY, 0, &source, &box);
+				// No NGX call, inference mask or inference timer is reported for a copy.
+				continue;
+			}
 			const auto motionVectorScale =
 				UpscalingDLSS::BuildMotionVectorPixelScale(args.viewportCrop);
 			SetActiveFeatureSlotLocked(args.featureSlot);
@@ -2219,7 +2328,7 @@ namespace NeuralRendering
 		}
 		snapshot_.lastCompletedStage = RendererStage::FeatureEvaluate;
 
-		if (!interop_.EndFeatureTiming(commandList)) {
+		if (!colorConfiguration_.experiments.transportBypass && !interop_.EndFeatureTiming(commandList)) {
 			const bool aborted = interop_.AbortD3D12();
 			recordingGuard.active = interop_.IsRecording();
 			return FailLocked(
@@ -2255,16 +2364,37 @@ namespace NeuralRendering
 				true);
 		}
 
+		// Reconstruct ALL physical regions before the first external write. This is
+		// shared by standard, single-ROI and multi-ROI NR, before character blending.
+		if (colorConfiguration_.Enabled()) {
+			for (std::size_t index = 0; index < a_args.size(); ++index) {
+				if (!colorPipeline_.Reconstruct(a_args.front().context, slots[index]->colorWork,
+						slots[index]->output.resource11.Get(), slots[index]->output.srv11.Get(),
+						slots[index]->color.srv11.Get(), colorConfiguration_)) {
+					return FailLocked(RendererStage::OutputCommit, E_FAIL,
+						"shared NR colour reconstruction failed before pair commit", a_args[index].featureSlot, true);
+				}
+			}
+			if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason))
+				return FailLocked(RendererStage::OutputCommit, reason,
+					"device removal during private NR colour reconstruction", a_args.front().featureSlot, true);
+		}
+
 		// Both private inputs are prepared before submission and neither caller-owned
 		// output is written until every eye has recorded successfully.
 		const auto outputCommitStarted = std::chrono::steady_clock::now();
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
-			CopyTextureSubrect(
-				a_args.front().context,
-				resources[index].output.texture.Get(),
-				slots[index]->output.resource11.Get(),
-				resources[index].outputSubrect);
+			if (colorConfiguration_.Enabled()) {
+				colorPipeline_.Commit(a_args.front().context, slots[index]->colorWork,
+					resources[index].output.texture.Get());
+			} else {
+				CopyTextureSubrect(
+					a_args.front().context,
+					resources[index].output.texture.Get(),
+					slots[index]->output.resource11.Get(),
+					resources[index].outputSubrect);
+			}
 		}
 		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
 			return FailLocked(
@@ -2286,7 +2416,7 @@ namespace NeuralRendering
 			slots[index]->lastSuccessfulFrame = a_args[index].frameId;
 			slots[index]->lastSuccessfulSourceWorldFrame =
 				a_args[index].sourceWorldFrame;
-			slots[index]->historyValid = true;
+			slots[index]->historyValid = !colorConfiguration_.experiments.transportBypass;
 		}
 		activeStage_ = RendererStage::Complete;
 		for (const auto& args : a_args) {
@@ -2324,8 +2454,9 @@ namespace NeuralRendering
 
 	Renderer::Renderer()
 	{
-		// Construct the runtime first so Renderer teardown precedes runtime teardown.
+		// Construct shared services first so Renderer teardown precedes their teardown.
 		(void)Runtime::Instance();
+		(void)Color::Registry::Instance();
 		state_ = new State();
 	}
 
@@ -2347,6 +2478,7 @@ namespace NeuralRendering
 		const auto failuresBefore = state_->snapshot_.counters.failures;
 		state_->SetActiveFeatureSlotLocked(a_args.featureSlot);
 		try {
+			state_->CaptureColorConfiguration(a_args);
 			CS_PROFILE_SCOPE("Upscaling::DLSSNeuralRendering");
 			const bool succeeded = state_->ApplyLocked(a_args, outcome);
 			if (a_outcome)
@@ -2378,6 +2510,7 @@ namespace NeuralRendering
 		const auto failuresBefore = state_->snapshot_.counters.failures;
 		state_->SetActiveFeatureSlotLocked(a_args[0].featureSlot);
 		try {
+			state_->CaptureColorConfiguration(a_args[0]);
 			CS_PROFILE_SCOPE("Upscaling::DLSSNeuralRenderingStereo");
 			const bool succeeded = state_->ApplyStereoLocked(a_args, outcome);
 			Increment(
@@ -2412,6 +2545,7 @@ namespace NeuralRendering
 		const auto failuresBefore = state_->snapshot_.counters.failures;
 		state_->SetActiveFeatureSlotLocked(a_args[0].featureSlot);
 		try {
+			state_->CaptureColorConfiguration(a_args[0]);
 			CS_PROFILE_SCOPE("Upscaling::DLSSNeuralRenderingSequentialStereo");
 			const bool succeeded =
 				state_->ApplySequentialStereoLocked(a_args, outcome);

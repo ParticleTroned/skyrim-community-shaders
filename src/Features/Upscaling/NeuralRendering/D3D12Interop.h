@@ -98,6 +98,8 @@ namespace NeuralRendering
 			const D3D12InteropSubmissionTiming& a_timing);
 		/** Closes the Feature 18 scope; EndD3D12 requires exactly one completed scope. */
 		bool EndFeatureTiming(ID3D12GraphicsCommandList* a_commandList);
+		/** Completes a copy-only diagnostic scope without claiming an inference sample. */
+		bool RecordTransportSubmission(const D3D12InteropSubmissionTiming& a_timing);
 		bool EndD3D12();
 		bool AbortD3D12();
 		bool WaitForIdle();

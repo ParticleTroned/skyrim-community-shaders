@@ -32,15 +32,15 @@ The unknown/native-domain brightness metric is not calibrated luminance.
 
 **Display > Neural Rendering Colour** provides:
 
-- **Enable colour processing**: retain the chosen mode/sliders while bypassing
-  their application. The ordinary NR master switch remains in Upscaling.
-- **Apply neural edit (A/B; inference stays running)**: show the untouched
-  baseline or the processed candidate without changing model input/history.
-  This is a visual comparison, NOT an NR-off performance measurement.
-- Mode, detail contribution, appearance mix and maximum detail stops.
-- **Capture engine HDR exposure**, separate early/late domain/codec/exposure
-  candidates, transport bypass, asynchronous measurements and override reset.
-- **Check installed colour shaders** and structured diagnostics.
+-   **Enable colour processing**: retain the chosen mode/sliders while bypassing
+    their application. The ordinary NR master switch remains in Upscaling.
+-   **Apply neural edit (A/B; inference stays running)**: show the untouched
+    baseline or the processed candidate without changing model input/history.
+    This is a visual comparison, NOT an NR-off performance measurement.
+-   Mode, detail contribution, appearance mix and maximum detail stops.
+-   **Capture engine HDR exposure**, separate early/late domain/codec/exposure
+    candidates, transport bypass, asynchronous measurements and override reset.
+-   **Check installed colour shaders** and structured diagnostics.
 
 Ordinary settings use the existing saved-settings JSON. Assessment profiles,
 exposure capture, transport bypass and A/B state are transient. Both UI and
@@ -48,7 +48,7 @@ DevBench call the same compare-and-set registry; neither polls a configuration
 file or performs GPU work from a DevBench worker thread.
 
 `Shaders/Features/NeuralColor.ini` is ONLY a feature/version manifest, now
-**1-1-0**. It is installed by the build; users do not edit it to assess colours.
+**1-2-0**. It is installed by the build; users do not edit it to assess colours.
 The separate older `work/face-of-gogh-colour-20260914` experiment used an editable
 `NRColor.ini`; that is not this branch's control interface.
 
@@ -130,19 +130,36 @@ so automation/dev can enforce semantic success. Configuration acknowledges
 registry state, not completed GPU work; require processed, fresh measurements.
 
 ```json
-{"action":"configure","settings":{"enabled":true,"mode":"preserve_source"},"experiments":{"applyModelEdit":true,"diagnostics":true,"captureEngineExposure":true}}
+{
+    "action": "configure",
+    "settings": { "enabled": true, "mode": "preserve_source" },
+    "experiments": { "applyModelEdit": true, "diagnostics": true, "captureEngineExposure": true }
+}
 ```
 
 Display-only A/B, retaining real inference:
 
 ```json
-{"action":"configure","experiments":{"applyModelEdit":false}}
+{ "action": "configure", "experiments": { "applyModelEdit": false } }
 ```
 
 Frame-matched exposure candidate (NOT an assertion that early input is linear):
 
 ```json
-{"action":"configure","settings":{"enabled":true,"mode":"managed"},"experiments":{"upscaled_center":{"domain":"linear","transform":"reversible_proxy","exposureSource":"captured_hdr","exposureMultiplier":1.0},"applyModelEdit":true,"diagnostics":true}}
+{
+    "action": "configure",
+    "settings": { "enabled": true, "mode": "managed" },
+    "experiments": {
+        "upscaled_center": {
+            "domain": "linear",
+            "transform": "reversible_proxy",
+            "exposureSource": "captured_hdr",
+            "exposureMultiplier": 1.0
+        },
+        "applyModelEdit": true,
+        "diagnostics": true
+    }
+}
 ```
 
 Use `expectedRevision` from status for automatic changes. Read-only provenance
@@ -151,14 +168,14 @@ runner projects only editable fields when restoring settings.
 
 Measurements retain the previous first sixteen values and append two float4s:
 
-| Indices | Meaning |
-| --- | --- |
-| 0..3 | Baseline mean RGB; valid baseline/result comparisons |
-| 4..7 | Result mean RGB; mean absolute RGB difference |
-| 8..11 | Max absolute difference; result near-black count; result >=1 count; raw NR outside 0..1 count |
-| 12..15 | Nonfinite baseline/NR/result counts; total samples |
-| 16..19 | Invalid forward/inverse samples; effective exposure; effective-exposure-valid flag |
-| 20..23 | Captured average/target/ratio/validity (0 invalid, 1 ratio, 2 unit fallback) |
+| Indices | Meaning                                                                                       |
+| ------- | --------------------------------------------------------------------------------------------- |
+| 0..3    | Baseline mean RGB; valid baseline/result comparisons                                          |
+| 4..7    | Result mean RGB; mean absolute RGB difference                                                 |
+| 8..11   | Max absolute difference; result near-black count; result >=1 count; raw NR outside 0..1 count |
+| 12..15  | Nonfinite baseline/NR/result counts; total samples                                            |
+| 16..19  | Invalid forward/inverse samples; effective exposure; effective-exposure-valid flag            |
+| 20..23  | Captured average/target/ratio/validity (0 invalid, 1 ratio, 2 unit fallback)                  |
 
 Above-one is not necessarily HDR clipping. CPU enqueue measurements are not GPU
 timing. Optional capture/readback and colour passes have overhead to measure
@@ -219,7 +236,7 @@ This implements automatic data collection/assessment, not fabricated certainty.
 All required shaders are in the colour feature package: ColorPrepareCS,
 ColorReconstructCS, ColorMeasureCS, ColorExposureCS, plus ColorCommon.hlsli.
 Normal recursive source/feature discovery and shader-copy paths include them.
-Install the rebuilt plugin AND feature/shader files. The manifest is 1-1-0.
+Install the rebuilt plugin AND feature/shader files. The manifest is 1-2-0.
 
 ```powershell
 python tools/nr-color/verify_assets.py
@@ -240,3 +257,44 @@ contract suite needs a complete checkout. Windows targets retain the original
 WARP suite and add production exposure/t3/A-B/96-byte statistics coverage.
 Windows plugin compilation, both WARP executions, PowerShell live orchestration,
 actual engine-hook timing and Skyrim image/performance testing are NOT claimed.
+
+## Windows build follow-up (2026-09-14)
+
+The complete checkout of `977fc12a904f1a6898cd1e5d68efe15fbf3456e3`
+exposed an FXC error: the measurement shader used the reserved HLSL
+interpolation keyword `linear` as a local identifier. Renaming it to
+`pixelIndex` preserves the sampling calculation and allows both WARP
+executables to compile and run the production shaders.
+
+Validation after that correction:
+
+-   Universal SE/AE/VR Release plugin compile and link passed with MSVC
+    19.51.36252.0 and Windows SDK 10.0.28000.0. The
+    `Internal-DLSSNR-AIO` configuration enables DevBench and stages the
+    existing fingerprinted local NR runtime; automatic deployment is off.
+-   `python tools/nr-color/verify_assets.py` passed the source inventory.
+-   `cmake -S tests/neural_color -B build/nr-color-tests` and
+    `cmake --build build/nr-color-tests --config Release` passed.
+-   `ctest --test-dir build/nr-color-tests -C Release --output-on-failure`
+    passed all 12 tests, including both WARP targets and the full-checkout
+    source contracts. The colour WARP target reported 197,989 checks.
+-   `python tools/nr-color/assess.py --include-captured` produced its
+    plan-only output. No live assessment was performed by that command.
+
+The first plugin build failed in FidelityFX shader generation under the
+deeply nested worktree path. Reconfiguring the same checkout through a
+short source junction and a short binary directory allowed that generation
+and the complete plugin build to pass. The CMake launcher requires separate
+`-D` and value arguments for values containing a Windows drive colon.
+
+The standalone shader compiler still reports X3571 for conditional sRGB
+power expressions and X4000 in `EffectiveExposure`. The WARP tests pass,
+but this is not a warning-free shader validation. The plugin compile/link
+log contains no C++ warnings or errors; configure retains the dependency's
+CMP0116 deprecation warning.
+
+These checks establish buildability and the exercised policy/shader
+behaviour. They do not establish the correct NVIDIA NR colour treatment,
+live exposure-hook timing, actual NGX inference, winning MO2/VFS files, or
+headset presentation. Deployment must retain the `1-2-0` colour package
+with the rebuilt DLL before those separate live checks.

@@ -1513,16 +1513,20 @@ namespace
 
 void AdaptiveBrightness::DrawSettingsHeaderControls()
 {
-	if (ImGui::Checkbox("Enable Adaptive Profiles", &settings.enabled))
-		ResetWaterWindSmoothing();
+	bool enabled = settings.enabled;
+	if (ImGui::Checkbox("Enable", &enabled))
+		SetEnabled(enabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Blend the active lighting, atmosphere, Bloom, and water appearance profile by location and exterior time.");
-		ImGui::Text("Every base and location layer uses the same Lighting, Bloom, Water, and wind controls.");
+		ImGui::Text("Enable all Adaptive Balance adjustments across Global, profile, and location layers.");
+		ImGui::Text("When off, its lighting, Bloom, water appearance, and wind response adjustments are bypassed.");
+		ImGui::Text("Engine wind and independent renderer features keep their own settings.");
 	}
 
 	if (settings.enabled) {
 		const auto contextLabel = GetContextLabel();
 		ImGui::TextWrapped("%s", contextLabel.c_str());
+	} else {
+		ImGui::TextDisabled("Adaptive Balance is off. Saved adjustments are preserved.");
 	}
 }
 
@@ -1545,7 +1549,7 @@ void AdaptiveBrightness::DrawSettings()
 		if (ImGui::BeginTabItem("Profiles", nullptr, profileSectionFlags)) {
 			ImGui::TextWrapped("Tune the lighting, atmosphere, Bloom, and water appearance used for each time and location type. Context profiles are ordered from broad Worldspace and Location scopes to specific Cities; exact locations and cells remain under Locations.");
 			if (!settings.enabled)
-				ImGui::TextDisabled("Adaptive profile switching is off. Saved profile values can still be reviewed.");
+				ImGui::TextDisabled("Adaptive Balance is off. Saved profile values can still be reviewed.");
 
 			ImGui::BeginDisabled(!settings.enabled);
 			DrawExteriorTimeSettings();
@@ -1584,7 +1588,7 @@ void AdaptiveBrightness::DrawSettings()
 		if (ImGui::BeginTabItem("Locations", nullptr, locationSectionFlags)) {
 			ImGui::TextWrapped("Create precise profile overrides for worldspaces, regional locations, cities, specific locations, or exact cells.");
 			if (!settings.enabled)
-				ImGui::TextDisabled("Adaptive profile switching is off. Saved overrides can still be reviewed.");
+				ImGui::TextDisabled("Adaptive Balance is off. Saved overrides can still be reviewed.");
 			DrawLocationOverrides(false, true, settings.enabled);
 			ImGui::EndTabItem();
 		}
@@ -1633,7 +1637,7 @@ void AdaptiveBrightness::DrawGlobalSettings(bool a_showAdvancedControls)
 		"##AdaptiveBalanceGlobalSettings",
 		a_showAdvancedControls,
 		true,
-		true);
+		settings.enabled);
 	ClampProfileSettings(settings.globalProfile);
 }
 
@@ -1646,19 +1650,24 @@ void AdaptiveBrightness::DrawEssentialSettings()
 
 void AdaptiveBrightness::DrawPerformanceSettings(bool a_advanced)
 {
+	DrawSettingsHeaderControls();
 	DrawGlobalSettings(a_advanced);
 }
 
 json AdaptiveBrightness::CapturePerformanceSettingsState() const
 {
 	return {
+		{ "enabled", settings.enabled },
 		{ "globalProfile", settings.globalProfile }
 	};
 }
 
 void AdaptiveBrightness::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 {
+	if (performanceCostMeasurementEnabled == a_enabled)
+		return;
 	performanceCostMeasurementEnabled = a_enabled;
+	ResetWaterWindSmoothing();
 }
 
 void AdaptiveBrightness::LoadSettings(json& o_json)
@@ -2846,14 +2855,17 @@ bool AdaptiveBrightness::IsRuntimeAvailable() const
 	return GetCurrentPlayerCell(RE::PlayerCharacter::GetSingleton()) != nullptr;
 }
 
-bool AdaptiveBrightness::IsAdjustmentRuntimeActive() const
+void AdaptiveBrightness::SetEnabled(bool a_enabled)
 {
-	return performanceCostMeasurementEnabled && IsRuntimeAvailable();
+	if (settings.enabled == a_enabled)
+		return;
+	settings.enabled = a_enabled;
+	ResetWaterWindSmoothing();
 }
 
 bool AdaptiveBrightness::IsRuntimeEnabled() const
 {
-	return settings.enabled && IsAdjustmentRuntimeActive();
+	return settings.enabled && performanceCostMeasurementEnabled && IsRuntimeAvailable();
 }
 
 AdaptiveBrightness::Profile AdaptiveBrightness::GetInteriorProfile() const
@@ -3467,13 +3479,13 @@ AdaptiveBrightness::EffectiveLinearLightingSettings AdaptiveBrightness::GetEffec
 	bool a_linearLightingEnabled) const
 {
 	const auto baseSettings = a_linearLightingEnabled ? a_linearLightingSettings : GetNeutralLinearLightingSettings();
-	const bool runtimeAvailable = IsAdjustmentRuntimeActive();
+	const bool runtimeAvailable = IsRuntimeEnabled();
 	auto layeredBase = baseSettings;
 	if (runtimeAvailable)
 		layeredBase = ApplyProfile(layeredBase, settings.globalProfile);
 	auto effectiveSettings = layeredBase;
 
-	if (runtimeAvailable && settings.enabled) {
+	if (runtimeAvailable) {
 		const auto activeProfiles = GetActiveProfileBlend();
 		const auto& locationLayers = GetActiveLocationLayers();
 		const auto branches = ComposeProfileBranches(
@@ -3496,13 +3508,13 @@ SharedLightingSettings AdaptiveBrightness::GetEffectiveSharedLightingSettings() 
 {
 	SharedLightingSettings neutralSettings{};
 	SanitizeSharedLightingSettings(neutralSettings);
-	const bool runtimeAvailable = IsAdjustmentRuntimeActive();
+	const bool runtimeAvailable = IsRuntimeEnabled();
 	auto layeredBase = neutralSettings;
 	if (runtimeAvailable)
 		layeredBase = ApplyProfile(layeredBase, settings.globalProfile);
 	auto effectiveSettings = layeredBase;
 
-	if (runtimeAvailable && settings.enabled) {
+	if (runtimeAvailable) {
 		const auto activeProfiles = GetActiveProfileBlend();
 		const auto& locationLayers = GetActiveLocationLayers();
 		const auto branches = ComposeProfileBranches(
@@ -3520,12 +3532,10 @@ SharedLightingSettings AdaptiveBrightness::GetEffectiveSharedLightingSettings() 
 
 Bloom::Settings AdaptiveBrightness::GetEffectiveBloomSettings() const
 {
-	if (!IsAdjustmentRuntimeActive())
+	if (!IsRuntimeEnabled())
 		return Bloom::GetCommonBufferData(Bloom::Profile{}, 0.0f);
 
 	const auto& globalBloom = settings.globalProfile.bloom;
-	if (!settings.enabled)
-		return Bloom::GetCommonBufferData(globalBloom, 1.0f);
 
 	const auto activeProfiles = GetActiveProfileBlend();
 	const auto& locationLayers = GetActiveLocationLayers();
@@ -3542,8 +3552,10 @@ Bloom::Settings AdaptiveBrightness::GetEffectiveBloomSettings() const
 
 WaterAppearance::Settings AdaptiveBrightness::GetEffectiveWaterAppearanceSettings() const
 {
-	if (!IsAdjustmentRuntimeActive())
+	if (!IsRuntimeEnabled()) {
+		ResetWaterWindSmoothing();
 		return WaterAppearance::GetCommonBufferData(WaterAppearance::Profile{});
+	}
 
 	const auto& globalProfile = settings.globalProfile;
 	const auto applyWind = [&](WaterAppearance::Profile water, const WaterWindSettings& waterWind) {
@@ -3553,8 +3565,6 @@ WaterAppearance::Settings AdaptiveBrightness::GetEffectiveWaterAppearanceSetting
 		}
 		return water;
 	};
-	if (!settings.enabled)
-		return WaterAppearance::GetCommonBufferData(applyWind(globalProfile.water, globalProfile.waterWind));
 
 	struct WaterLayerState
 	{

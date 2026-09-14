@@ -256,7 +256,7 @@ struct AdaptiveBrightness : Feature
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual json CapturePerformanceSettingsState() const override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
-	virtual bool IsPerformanceCostMeasurementEnabled() const override { return performanceCostMeasurementEnabled && IsRuntimeAvailable(); }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override { return IsRuntimeEnabled(); }
 	virtual bool UsesTotalPerformanceCostMeasurement() const override { return true; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
 	virtual bool IsPerformanceCostMeasurementReady() const override { return IsRuntimeAvailable(); }
@@ -269,7 +269,8 @@ struct AdaptiveBrightness : Feature
 	virtual void PostPostLoad() override;
 
 	bool IsRuntimeAvailable() const;
-	bool IsAdjustmentRuntimeActive() const;
+	/// Enables only Adaptive Balance adjustments; independent renderer features retain their state.
+	void SetEnabled(bool a_enabled);
 	bool IsRuntimeEnabled() const;
 	PerFrameData GetCommonBufferData() const;
 	bool NeedsVanillaPointLightData() const;

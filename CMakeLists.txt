@@ -1658,6 +1658,44 @@ if(BUILD_CONTROLLER_TESTS)
         set_tests_properties(${TEST_NAME} PROPERTIES LABELS "ControllerTests")
     endfunction()
 
+    set(_adaptive_balance_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/adaptive-balance-toggle"
+    )
+    set(_adaptive_balance_test_headers
+        "${_adaptive_balance_test_dir}/linear_lighting_members.h"
+        "${_adaptive_balance_test_dir}/adaptive_balance_members.h"
+        "${_adaptive_balance_test_dir}/adaptive_balance_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_adaptive_balance_test_headers}
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/extract_adaptive_balance_toggle.py"
+            --source-dir "${PROJECT_SOURCE_DIR}" --output-dir
+            "${_adaptive_balance_test_dir}"
+        DEPENDS
+            src/Features/AdaptiveBrightness.cpp
+            src/Features/AdaptiveBrightness.h
+            src/Features/LinearLighting.h
+            src/Features/Bloom.cpp
+            src/Features/WaterAppearance.cpp
+            tests/extract_adaptive_balance_toggle.py
+        VERBATIM
+    )
+    add_controller_test(
+        adaptive_balance_toggle_test
+        AdaptiveBalanceToggle
+        tests/adaptive_balance_toggle_test.cpp
+    )
+    target_sources(
+        adaptive_balance_toggle_test
+        PRIVATE ${_adaptive_balance_test_headers}
+    )
+    target_include_directories(
+        adaptive_balance_toggle_test
+        PRIVATE "${_adaptive_balance_test_dir}"
+    )
+
     add_controller_test(
         d3d_context_protection_test
         D3DContextProtection
@@ -3220,6 +3258,7 @@ if(BUILD_CONTROLLER_TESTS)
             vr_menu_positioning_policy_test
             menu_devbench_preflight_policy_test
             water_appearance_migration_test
+            adaptive_balance_toggle_test
             unified_water_flowmap_test
             generation_claim_test
             preset_compatibility_test

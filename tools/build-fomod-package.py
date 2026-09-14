@@ -608,8 +608,10 @@ def stage_package(
         validate_cache_source(source, variant.runtime, shader_cache_abi)
         sources[variant] = source
 
+    output_owned = False
     try:
         output.mkdir(parents=True)
+        output_owned = True
         shutil.copytree(core, output / CORE_DIRECTORY)
         for variant, source in sources.items():
             shutil.copytree(
@@ -631,7 +633,8 @@ def stage_package(
         )
         validate_staged_package(output, version, include_se_ae)
     except (OSError, SystemExit):
-        shutil.rmtree(output, ignore_errors=True)
+        if output_owned:
+            shutil.rmtree(output, ignore_errors=True)
         raise
 
 

@@ -77,17 +77,17 @@ def main() -> int:
         }
 
     standard_water = packaged_record("Water/1.pso", "1" * 32, "default", b"DXBC-standard")
-    horizon_water = packaged_record("Water/1.pso", "1" * 32, "legacy-horizon-fix", b"DXBC-horizon")
+    horizon_water = packaged_record("Water/1.pso", "2" * 32, "legacy-horizon-fix", b"DXBC-horizon")
     pair = [standard_water, horizon_water]
     inventory_cases = (
         ("preserved-pair-after-append", 1, [
             *pair,
-            packaged_record("Water/1.pso", "2" * 32, "default", b"DXBC-updated"),
+            packaged_record("Water/1.pso", "3" * 32, "default", b"DXBC-updated"),
         ], 0, [], True),
         ("unaffected-permutation", 1, [
             *pair,
             packaged_record("Water/2.pso", "1" * 32, "default", b"DXBC-identical"),
-            packaged_record("Water/2.pso", "1" * 32, "legacy-horizon-fix", b"DXBC-identical"),
+            packaged_record("Water/2.pso", "2" * 32, "legacy-horizon-fix", b"DXBC-identical"),
         ], 0, [], True),
         ("last-exact-record-wins", 1, [
             *pair, {**horizon_water, "bytecode": standard_water["bytecode"]},

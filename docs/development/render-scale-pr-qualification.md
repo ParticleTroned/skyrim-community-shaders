@@ -121,7 +121,7 @@ Each transition is a fail-fast sequence of checked top-level MCP calls:
 
 `qualification_wait` accepts the optional `milestone` value `strict`,
 `presentation`, or `cleanup`. Omitting it is exactly equivalent to selecting
-`strict`; the revision-5 runner therefore retains its existing combined
+`strict`; the revision-6 runner therefore retains its existing combined
 qualification semantics. Strict success requires presentation stability and
 drained cleanup at the same observation. Neither named milestone can turn a
 strict failure into a protocol pass.

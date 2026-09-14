@@ -1492,7 +1492,7 @@ complete pending target are counted there without creating another request
 event or transition metric. An automation client should:
 
 1. Reject unknown schema versions; schema v13 is supported only under its explicit legacy comparison policy, not for revision-6 qualification.
-2. Check `acceptance.accepted` before comparing performance.
+2. Preserve raw `acceptance.accepted` and apply the [documented comparison policy](vr-render-scale-comparison-reporting.md#separate-results-from-assessment) before assessing performance. Only the supported legacy two-frame diagnostic may normalize a raw rejection; other failed health gates remain failures.
 3. Require `memoryTrend.evaluated` for a memory comparison; a short diagnostic pass is not memory acceptance.
 4. Use `acceptance.gates` to classify a failed run instead of inferring failure from log text.
 5. Compare transition records by `transitionEpoch`, never by array position alone.

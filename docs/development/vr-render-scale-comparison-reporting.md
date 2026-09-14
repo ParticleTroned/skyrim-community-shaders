@@ -73,12 +73,17 @@ no classification, `diagnosticThresholdFrames` is absent, and legacy
 visible. Unknown classifications or schema versions fail closed. The producer
 retains `maximumAcceptedFrames` for old readers and adds
 `diagnosticThresholdFrames` with the same value.
+Historical comparison also accepts schema-v13 records with those explicit
+diagnostic fields. Neither v13 form qualifies for revision-6 PR qualification,
+which requires v14 for every assay and its baseline.
 Schema v14 additionally records each completed episode's frame range, QPC
 range, transition epoch, and submit-path reason mask. Its
 `presentation_stretch_attribution` health gate rejects missing or incoherent
 trace coverage and unattributed frames. Keep that gate distinct from the raw
 two-frame diagnostic in comparisons.
-Other gates remain health gates unless classified otherwise. Likewise, a
+Only the named two-frame gate may use `diagnostic_only`; that classification
+on any other gate is rejected. Unclassified other gates remain health gates.
+Likewise, a
 scaled-presentation gate that
 rejects `NativeOriginal` after a **proven** native-AA target is a labeled
 `CONTRACT_MISMATCH`; retain its observed values and native both-eye proof.

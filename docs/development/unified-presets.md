@@ -77,6 +77,13 @@ The generator and runtime loader both use settings-contract revision 5.
 The Release compatibility regression loads every generated tier to verify
 that the shipping loader accepts its metadata.
 
+The fingerprint covers complete inventoried source files, so edits outside
+settings methods can also invalidate it. Before refreshing the policy hash,
+review serialized keys, defaults, loading, saving and migrations. If those
+contracts are unchanged, retain the revision and base, regenerate the
+packages, and verify that only compatibility metadata changed in their
+settings. Never bypass the source check or refresh its hash automatically.
+
 CSX validates marked settings before canonicalization, migration, or merge.
 Malformed metadata, an unsupported compatibility-contract version, the wrong
 runtime, or a CSX version outside the declared range rejects the complete user

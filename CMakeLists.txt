@@ -1582,6 +1582,11 @@ endif()
 
 if(BUILD_CONTROLLER_TESTS)
     enable_testing()
+    get_property(
+        _targets_before_controller_tests
+        DIRECTORY
+        PROPERTY BUILDSYSTEM_TARGETS
+    )
 
     add_test(
         NAME ScreenshotApiContract
@@ -1646,6 +1651,14 @@ if(BUILD_CONTROLLER_TESTS)
         NvidiaPipelineContract
         PROPERTIES LABELS "ControllerTests"
     )
+
+    add_test(
+        NAME BuildProvenance
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/build_provenance_test.py"
+    )
+    set_tests_properties(BuildProvenance PROPERTIES LABELS "ControllerTests")
 
     function(add_controller_test TARGET_NAME TEST_NAME SOURCE_FILE)
         add_executable(${TARGET_NAME} EXCLUDE_FROM_ALL ${SOURCE_FILE})
@@ -2073,10 +2086,20 @@ if(BUILD_CONTROLLER_TESTS)
         SkylightingProbeSlice
         PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" TIMEOUT 30
     )
+    set(_settings_test_launcher)
+    if(MSVC)
+        find_program(CSX_PWSH NAMES pwsh REQUIRED)
+        set(_settings_test_launcher
+            "${CSX_PWSH}"
+            -NoProfile
+            -File
+            "${PROJECT_SOURCE_DIR}/tools/run-msvc-command.ps1"
+        )
+    endif()
     add_test(
         NAME SkylightingSettings
         COMMAND
-            "${Python3_EXECUTABLE}"
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
             "${PROJECT_SOURCE_DIR}/tests/skylighting_settings_test.py"
     )
     set_tests_properties(
@@ -3179,111 +3202,26 @@ if(BUILD_CONTROLLER_TESTS)
     add_test(NAME ApiFeatureContract COMMAND api_feature_contract_test)
     set_tests_properties(ApiFeatureContract PROPERTIES LABELS "ControllerTests")
 
-    add_custom_target(
-        controller_tests
-        DEPENDS
-            d3d_context_protection_test
-            vr_loading_menu_clear_test
-            scene_depth_plain_test
-            scene_depth_devbench_test
-            scene_light_snapshot_test
-            vr_scene_guards_test
-            ordinary_save_state_test
-            vr_ordinary_save_recovery_test
-            ordinary_save_presentation_test
-            foveated_save_reuse_test
-            foveated_mask_visualization_off_test
-            foveated_mask_visualization_on_test
-            pbr_material_registry_test
-            perf_mode_restart_state_test
-            motion_sharpening_policy_test
-            sharpener_bindings_test
-            skylighting_probe_slice_test
-            motion_sharpening_runtime_compile_test
-            motion_sharpening_settings_test
-            vr_vendor_relatch_policy_test
-            vr_relatch_drain_policy_test
-            vr_relatch_drain_controller_test
-            vr_relatch_release_policy_test
-            vr_relatch_promotion_on_test
-            vr_relatch_promotion_off_test
-            vr_relatch_native_boundary_test
-            vr_render_scale_frame_boundary_policy_test
-            vr_render_scale_authority_policy_test
-            vr_render_scale_mode_policy_test
-            upscaling_measurement_restore_test
-            upscaling_provider_selection_policy_test
-            vr_render_scale_qualification_policy_test
-            vr_render_scale_replacement_telemetry_policy_test
-            streamline_frame_token_publication_test
-            vr_submit_temporal_snapshot_test
-            vr_submit_color_contract_test
-            vr_submit_stereo_batch_test
-            main_thread_dispatch_policy_test
-            vr_render_scale_preparation_policy_test
-            vr_presentation_stretch_telemetry_policy_test
-            reflex_policy_test
-            light_limit_fix_vr_hook_policy_test
-            fsr_host_lifecycle_policy_test
-            fsr_runtime_lifecycle_policy_test
-            fsr_shared_guides_policy_test
-            fsr_shared_guide_interop_test
-            fsr_temporal_tuning_policy_test
-            fsr_temporal_tuning_serialization_test
-            fsr_temporal_tuning_provider_test
-            fsr_eye_dispatch_test
-            vr_submit_input_freshness_policy_test
-            vr_submit_input_freshness_composition_test
-            ocu_effect_foveation_policy_test
-            ocu_effect_foveation_client_test
-            ocu_effect_integration_test
-            accepted_draw_registry_test
-            accepted_draw_service_test
-            overlay_policy_test
-            performance_tuning_statistics_test
-            shader_cache_disable_policy_test
-            shader_cache_enable_policy_test
-            shader_cache_provenance_test
-            shader_source_provenance_test
-            shader_compile_identity_test
-            cache_invalidation_test
-            shader_compilation_scheduling_policy_test
-            volumetric_lighting_tuning_policy_test
-            vr_depth_culling_cache_refresh_policy_test
-            vr_depth_culling_enable_policy_test
-            vr_depth_culling_telemetry_policy_test
-            vr_depth_culling_temporal_policy_test
-            vr_wand_interaction_policy_test
-            vr_wand_surface_geometry_test
-            vr_menu_positioning_policy_test
-            menu_devbench_preflight_policy_test
-            water_appearance_migration_test
-            adaptive_balance_toggle_test
-            unified_water_flowmap_test
-            generation_claim_test
-            preset_compatibility_test
-            api_runtime_thread_affinity_test
-            api_service_foundation_test
-            api_service_registry_test
-			api_screenshot_contract_test
-			main_thread_dispatch_state_test
-            devbench_main_thread_dispatch_test
-			screenshot_api_policy_test
-            screenshot_manifest_snapshot_test
-            screenshot_capture_present_test
-            screenshot_dispatch_test
-            skylighting_lifecycle_test
-            api_upscaling_contract_test
-            api_upscaling_service_policy_test
-            api_shader_service_policy_test
-            api_shader_compatibility_registry_test
-            shader_cache_pack_test
-            api_weather_service_policy_test
-            api_profiler_contract_test
-            profiler_timing_test
-            ab_test_aggregator_test
-            api_editor_contract_test
-            api_feature_contract_test
+    # Derive the aggregate from this block so new test executables cannot be omitted.
+    get_property(_controller_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    list(REMOVE_ITEM _controller_targets ${_targets_before_controller_tests})
+    add_custom_target(controller_tests)
+    foreach(_target IN LISTS _controller_targets)
+        get_target_property(_type ${_target} TYPE)
+        if(_type STREQUAL "EXECUTABLE")
+            add_dependencies(controller_tests ${_target})
+        endif()
+    endforeach()
+
+    # Tests own their scratch files; inherited user temp paths may be inaccessible.
+    set(_controller_temp "${CMAKE_BINARY_DIR}/test-temp")
+    file(MAKE_DIRECTORY "${_controller_temp}")
+    get_property(_controller_tests DIRECTORY PROPERTY TESTS)
+    set_tests_properties(
+        ${_controller_tests}
+        PROPERTIES
+            ENVIRONMENT_MODIFICATION
+                "TEMP=set:${_controller_temp};TMP=set:${_controller_temp};TMPDIR=set:${_controller_temp}"
     )
 endif()
 

@@ -164,6 +164,51 @@ try {
                 throw "The CMake launcher did not initialize the missing MSVC environment."
             }
 
+            $selectedCmakeDirectory = Join-Path $testRoot "Selected CMake"
+            $shadowCmakeDirectory = Join-Path $testRoot "Visual Studio CMake"
+            New-Item -ItemType Directory -Path $selectedCmakeDirectory, $shadowCmakeDirectory | Out-Null
+            [IO.File]::WriteAllLines((Join-Path $selectedCmakeDirectory "cmake.cmd"), @(
+                '@echo off',
+                'if not "%~1"=="--version" exit /b 24',
+                'echo selected-cmake-wrapper',
+                'exit /b 0'
+            ))
+            [IO.File]::WriteAllLines((Join-Path $shadowCmakeDirectory "cmake.cmd"), @(
+                '@echo off', 'echo unexpected-visual-studio-cmake', 'exit /b 0'
+            ))
+            $shadowVsDevCmd = Join-Path $testRoot "Shadow-VsDevCmd.bat"
+            [IO.File]::WriteAllLines($shadowVsDevCmd, @(
+                Get-Content -LiteralPath $vsDevCmd
+                "set `"PATH=$shadowCmakeDirectory;%PATH%`""
+            ))
+            $selectedCmakePath = $env:PATH
+            try {
+                $env:PATH = "$selectedCmakeDirectory;$env:PATH"
+                $env:CSX_VSDEVCMD = $shadowVsDevCmd
+                $selectedOutput = @(& (Join-Path $PSHOME "pwsh.exe") -NoProfile -File $cmakeLauncher --version)
+                Assert-Equal -Expected 0 -Actual $LASTEXITCODE -Message "The selected CMake wrapper must succeed."
+                if ($selectedOutput -notcontains "selected-cmake-wrapper" -or $selectedOutput -contains "unexpected-visual-studio-cmake") {
+                    throw "Visual Studio initialization replaced the caller's selected CMake wrapper."
+                }
+                & (Join-Path $PSHOME "pwsh.exe") -NoProfile -File $cmakeLauncher --invalid-probe
+                Assert-Equal -Expected 24 -Actual $LASTEXITCODE -Message "The CMake wrapper must preserve arguments and failure codes."
+            } finally {
+                $env:PATH = $selectedCmakePath
+                $env:CSX_VSDEVCMD = $vsDevCmd
+            }
+
+            $commandProbe = Join-Path $testRoot "command probe.ps1"
+            [IO.File]::WriteAllLines($commandProbe, @(
+                'if ($env:CSX_MSVC_TEST_MARKER -ne "initialized") { exit 24 }',
+                'if ($args.Count -ne 1 -or $args[0] -ne "argument with spaces") { exit 25 }',
+                'exit 23'
+            ))
+            & (Join-Path $PSHOME "pwsh.exe") -NoProfile -File `
+                (Join-Path $repositoryRoot "tools/run-msvc-command.ps1") `
+                (Join-Path $PSHOME "pwsh.exe") -NoProfile -File $commandProbe "argument with spaces"
+            Assert-Equal -Expected 23 -Actual $LASTEXITCODE `
+                -Message "The MSVC command launcher must initialize the environment and preserve arguments and failure codes."
+
             $initializedWith = Initialize-CsxMsvcEnvironment -Required
 
             Assert-Equal -Expected $vsDevCmd -Actual $initializedWith `

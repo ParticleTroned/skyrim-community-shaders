@@ -9,11 +9,13 @@ authoritative identity for captured evidence.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
+import struct
 import sys
 from typing import Any, Iterable
 
@@ -265,6 +267,45 @@ def write_if_changed(path: Path, content: str) -> None:
     path.write_bytes(encoded)
 
 
+def windows_file_version(path: Path) -> str:
+    """Read the executable version without trusting CMake's cached detection."""
+    from ctypes import wintypes
+
+    version = ctypes.WinDLL("version", use_last_error=True)
+    version.GetFileVersionInfoSizeW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(wintypes.DWORD)]
+    version.GetFileVersionInfoSizeW.restype = wintypes.DWORD
+    version.GetFileVersionInfoW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p]
+    version.GetFileVersionInfoW.restype = wintypes.BOOL
+    version.VerQueryValueW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.UINT)]
+    version.VerQueryValueW.restype = wintypes.BOOL
+    size = version.GetFileVersionInfoSizeW(str(path), None)
+    if not size:
+        raise ctypes.WinError(ctypes.get_last_error())
+    buffer = ctypes.create_string_buffer(size)
+    if not version.GetFileVersionInfoW(str(path), 0, size, buffer):
+        raise ctypes.WinError(ctypes.get_last_error())
+    value = ctypes.c_void_p()
+    length = wintypes.UINT()
+    if not version.VerQueryValueW(buffer, "\\", ctypes.byref(value), ctypes.byref(length)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    if length.value < 52:
+        raise ValueError(f"Incomplete executable version: {path}")
+    fields = struct.unpack("<13I", ctypes.string_at(value, 52))
+    if fields[0] != 0xFEEF04BD:
+        raise ValueError(f"Invalid executable version signature: {path}")
+    high, low = fields[2:4]
+    return f"{high >> 16}.{high & 0xffff}.{low >> 16}.{low & 0xffff}"
+
+
+def compiler_version(compiler_id: str, configured_version: str, path: str) -> str:
+    if compiler_id == "MSVC" and os.name == "nt":
+        actual = windows_file_version(Path(path).resolve())
+        if actual != configured_version:
+            print(f"MSVC version refreshed: CMake cached {configured_version}; executable reports {actual}", file=sys.stderr)
+        return actual
+    return configured_version
+
+
 def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     source_dir = args.source_dir.resolve()
     source_dirty, source_dirty_digest = working_tree_state(source_dir)
@@ -288,7 +329,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     toolchain_file = Path(args.toolchain_file).resolve() if args.toolchain_file else None
     toolchain_identity = {
         "compilerId": args.compiler_id,
-        "compilerVersion": args.compiler_version,
+        "compilerVersion": compiler_version(args.compiler_id, args.compiler_version, args.compiler_path),
         "compilerSha256": sha256_file(Path(args.compiler_path))
         if args.compiler_path and Path(args.compiler_path).is_file()
         else None,
@@ -419,9 +460,23 @@ def verify(args: argparse.Namespace) -> int:
     return 0
 
 
+def snapshot(args: argparse.Namespace) -> int:
+    source_dir = args.source_dir.resolve()
+    dirty, digest = working_tree_state(source_dir)
+    print(json.dumps({
+        "source": {"commit": git(source_dir, "rev-parse", "HEAD"), "dirty": dirty, "dirtyDigest": digest if dirty else None},
+        "submodules": read_submodules(source_dir),
+    }, sort_keys=True))
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     subparsers = result.add_subparsers(dest="command", required=True)
+
+    snapshot_parser = subparsers.add_parser("snapshot", help="record current source and submodule identity")
+    snapshot_parser.add_argument("--source-dir", type=Path, required=True)
+    snapshot_parser.set_defaults(handler=snapshot)
 
     generate_parser = subparsers.add_parser("generate", help="generate the embedded header and base manifest")
     generate_parser.add_argument("--source-dir", type=Path, required=True)

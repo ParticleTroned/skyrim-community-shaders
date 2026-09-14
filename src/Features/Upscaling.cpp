@@ -33739,6 +33739,8 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 					.compositorCycleToken =
 						a_observation.compositorCycleToken,
 					.qpc = presentationQpc,
+					.transitionEpoch = a_observation.transitionEpoch,
+					.stretchReason = a_observation.stretchReason,
 				};
 			VRPresentationStretchTelemetryPolicy::Observe(
 				vrRenderScalePresentationStretchLifetimeTelemetry,
@@ -51403,6 +51405,16 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			eyeHeightIn,
 			submitPresentationContext || currentMenuPresentationContext || resolutionPlan.knownMenuContextActive || resolutionPlan.menuContextActive,
 			transitionPresentationCooldown);
+		if (a_path == VRRenderScalePresentationPath::PresentationStretch) {
+			a_presentationObservation.stretchReason =
+				(a_vendorResumeCooldownAtCycleStart || vendorResumeFrame != 0) ?
+					VRPresentationStretchTelemetryPolicy::StretchReason::VendorCooldown :
+				deferredDispatchAction == VRVendorRelatchPolicy::DeferredDispatchAction::PresentationStretch ?
+					VRPresentationStretchTelemetryPolicy::StretchReason::DeferredRetry :
+				a_presentationObservation.loadingOrMenuContext ?
+					VRPresentationStretchTelemetryPolicy::StretchReason::LoadingOrMenu :
+					VRPresentationStretchTelemetryPolicy::StretchReason::Unattributed;
+		}
 		if (maskDrawn && vrRenderScaleMode &&
 			!UpdateVRSubmitDesktopMirror(eyeIndex, currentFrame, a_compositorCycleToken, sourceTexture, sourceDesc, eyeWidthOut, eyeHeightOut))
 			return false;
@@ -53837,6 +53849,9 @@ void Upscaling::StartVRRenderScaleStressSession()
 		vrRenderScaleStressSessionActive.store(false, std::memory_order_release);
 		VRPresentationStretchTelemetryPolicy::Reset(
 			vrRenderScalePresentationStretchSessionTelemetry);
+		vrRenderScalePresentationStretchSessionTelemetry.captureEpisodeTrace = true;
+		vrRenderScalePresentationStretchSessionTelemetry.completedEpisodeTrace.reserve(
+			VRPresentationStretchTelemetryPolicy::kMaximumEpisodeTraceEntries);
 
 		auto& presentation =
 			vrRenderScaleTransitionController.presentation;
@@ -53943,6 +53958,10 @@ void Upscaling::StopVRRenderScaleStressSession()
 			stoppedTelemetry.incompleteStereoCycleAtStop;
 		vrRenderScaleStressSession.presentationStretchIncompleteStereoEyeMaskAtStop =
 			stoppedTelemetry.incompleteStereoEyeMaskAtStop;
+		vrRenderScaleStressSession.presentationStretchEpisodeTrace =
+			vrRenderScalePresentationStretchSessionTelemetry.completedEpisodeTrace;
+		vrRenderScaleStressSession.presentationStretchEpisodeTraceOverflow =
+			vrRenderScalePresentationStretchSessionTelemetry.episodeTraceOverflow;
 		PublishVRRenderScalePresentationStretchTelemetry(
 			vrRenderScaleTransitionController.presentation,
 			VRPresentationStretchTelemetryPolicy::Inspect(
@@ -53992,7 +54011,7 @@ void Upscaling::ResetVRRenderScaleStressSession()
 
 json Upscaling::BuildVRRenderScaleIterationRecord() const
 {
-	constexpr uint32_t kSchemaVersion = 13u;
+	constexpr uint32_t kSchemaVersion = 14u;
 	constexpr uint32_t kMinimumRequests = 2u;
 	constexpr uint32_t kMaximumRetriesPerTransition = 32u;
 	constexpr uint32_t kMaximumStableLatencyFrames = 120u;
@@ -54707,6 +54726,33 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	const uint64_t maximumObservedPresentationStretchFrames = std::max({ session.maximumPresentationStretchFrames,
 		session.presentationStretchActiveFrames,
 		session.presentationStretchActiveFramesAtStop });
+	json presentationStretchEpisodeTrace = json::array();
+	uint64_t tracedPresentationStretchFrames = 0;
+	uint64_t unattributedPresentationStretchFrames = 0;
+	bool presentationStretchEpochsCoherent = true;
+	for (const auto& episode : session.presentationStretchEpisodeTrace) {
+		tracedPresentationStretchFrames = VRPresentationStretchTelemetryPolicy::SaturatingAdd(
+			tracedPresentationStretchFrames, episode.frames);
+		unattributedPresentationStretchFrames = VRPresentationStretchTelemetryPolicy::SaturatingAdd(
+			unattributedPresentationStretchFrames, episode.unattributedFrames);
+		presentationStretchEpochsCoherent = presentationStretchEpochsCoherent && episode.epochCoherent;
+		presentationStretchEpisodeTrace.push_back({
+			{ "startFrame", episode.startFrame },
+			{ "endFrame", episode.endFrame },
+			{ "frames", episode.frames },
+			{ "transitionEpoch", episode.transitionEpoch },
+			{ "startQpc", episode.startQpc },
+			{ "endQpc", episode.endQpc },
+			{ "unattributedFrames", episode.unattributedFrames },
+			{ "reasonMask", episode.reasonMask },
+			{ "epochCoherent", episode.epochCoherent },
+		});
+	}
+	const bool presentationStretchTraceComplete =
+		session.presentationStretchEpisodeTraceOverflow == 0 &&
+		session.presentationStretchEpisodeTrace.size() == session.presentationStretchCompletedEpisodes &&
+		tracedPresentationStretchFrames == session.presentationStretchCompletedFrames &&
+		presentationStretchEpochsCoherent;
 	json presentationStretchCompletedMilliseconds = nullptr;
 	json presentationStretchMeanFrames = nullptr;
 	json presentationStretchMeanMilliseconds = nullptr;
@@ -54784,6 +54830,11 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 											{ "maximumObservedFrames", maximumObservedPresentationStretchFrames },
 											{ "maximumAcceptedFrames", VRPresentationStretchTelemetryPolicy::kPresentationStretchDiagnosticFrameThreshold },
 											{ "diagnosticThresholdFrames", VRPresentationStretchTelemetryPolicy::kPresentationStretchDiagnosticFrameThreshold },
+											{ "episodeTrace", presentationStretchEpisodeTrace },
+											{ "episodeTraceOverflow", session.presentationStretchEpisodeTraceOverflow },
+											{ "tracedFrames", tracedPresentationStretchFrames },
+											{ "unattributedFrames", unattributedPresentationStretchFrames },
+											{ "traceComplete", presentationStretchTraceComplete },
 											{ "episodeActive", session.presentationStretchEpisodeActive },
 											{ "activeFrames", session.presentationStretchActiveFrames },
 											{ "activeAtStop", session.presentationStretchEpisodeActiveAtStop },
@@ -55002,6 +55053,17 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 			{ "active", session.presentationStretchEpisodeActive },
 			{ "activeAtStop", session.presentationStretchEpisodeActiveAtStop } },
 		"every allowed episode completed or explicitly active while capture is running");
+	addGate(
+		"presentation_stretch_attribution",
+		presentationStretchTraceComplete && unattributedPresentationStretchFrames == 0,
+		{ { "completedEpisodes", session.presentationStretchCompletedEpisodes },
+			{ "traceEntries", session.presentationStretchEpisodeTrace.size() },
+			{ "completedFrames", session.presentationStretchCompletedFrames },
+			{ "tracedFrames", tracedPresentationStretchFrames },
+			{ "unattributedFrames", unattributedPresentationStretchFrames },
+			{ "traceOverflow", session.presentationStretchEpisodeTraceOverflow },
+			{ "epochCoherent", presentationStretchEpochsCoherent } },
+		{ { "traceComplete", true }, { "unattributedFrames", 0 } });
 	addGate(
 		"presentation_stretch_complete_stereo_at_stop",
 		!session.presentationStretchIncompleteStereoCycleAtStop,

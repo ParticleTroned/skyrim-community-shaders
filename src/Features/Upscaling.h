@@ -1189,6 +1189,8 @@ public:
 		bool vendorRuntimeFallback = false;
 		bool loadingOrMenuContext = false;
 		bool transitionCooldown = false;
+		VRPresentationStretchTelemetryPolicy::StretchReason stretchReason =
+			VRPresentationStretchTelemetryPolicy::StretchReason::Unattributed;
 	};
 
 	struct VRRenderScalePresentationEyeSnapshot
@@ -1578,6 +1580,8 @@ public:
 		uint64_t maximumPresentationStretchFrames = 0;
 		uint64_t maximumPresentationStretchQpcTicks = 0;
 		uint64_t presentationStretchQpcFrequency = 0;
+		std::vector<VRPresentationStretchTelemetryPolicy::EpisodeTrace> presentationStretchEpisodeTrace{};
+		uint64_t presentationStretchEpisodeTraceOverflow = 0;
 		// Stop closes an in-progress episode into the completed totals while
 		// retaining this tail evidence from immediately before closure.
 		bool presentationStretchEpisodeActiveAtStop = false;

@@ -47,8 +47,10 @@ Redirected menu capture is explicitly suppressed; skipped draws never reach
 native submission. Shadow/reflection depth targets do not qualify.
 Only a draw that passes the scene-depth filters can bind the rendering
 thread; rejected shadow or reflection draws cannot claim that identity.
-Draw IDs increase on the one bound rendering thread. Off-thread submissions
-are filtered and counted, not delivered with an incompatible lifetime.
+The completed-frame boundary retires the thread owner so a loading-to-gameplay
+thread change can recover on the next eligible scene draw. Within each frame,
+off-thread submissions are filtered and counted. Draw IDs remain monotonic
+across frame boundaries. Consumer callbacks cannot retire thread ownership.
 
 Each event borrows its geometry, depth, context, and arguments for the
 synchronous callback only. Consumers must not retain them. CSX does not
@@ -89,8 +91,9 @@ rejection, cross-thread rejection, nested dispatch, callback lifecycle,
 quiescent unregister, bounded registration, exception isolation, nested
 geometry scopes, mismatched restores, and scope overflow.
 `accepted_draw_service_test` exercises the production publication filter,
-including rejected worker-thread draws, unavailable depth, thread binding,
-menu suppression, and the empty-registry fast path. Both draw tests have
+including rejected worker-thread draws, unavailable depth, frame-boundary
+thread recovery, callback isolation, menu suppression, and the empty-registry
+fast path. Both draw tests have
 a 30-second CTest timeout.
 
 The local OCU integration harness compiles the unmodified OCU API client

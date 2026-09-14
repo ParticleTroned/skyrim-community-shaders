@@ -374,7 +374,7 @@ The existing comparison ledger gained one column containing all 66 strict
 timings, 528 numeric timing cells, and full numeric timing groups. All
 historical cells and the 887 existing metric rows were verified intact.
 
-## September 9â€“10: interrupted NVIDIA cadence run
+## September 9–10: interrupted NVIDIA cadence run
 
 Run `nv-mtuivutb` retained 39 transitions (33 + 6) on clean source
 `348803c1831c8cd71ceb75a58143ad0bcb00abb2`. Every retained render and
@@ -1964,74 +1964,3 @@ commands and limitations in
 [the correction report](pr73-owned-release-proof-20260911.md#final-clean-build-evidence).
 No new runtime measurements or visual qualification are claimed, and no
 runtime ledger cells were changed by this offline validation.
-
-## September 13: main-VR measured for PR82 against last PR73
-
-Run renderscale-tuning-nvidia-2026-09-13T18-46-33-800Z completed two 33-transition passes,
-66 terminal PASS and 66 Task 2 PASS, zero FAIL/INCONCLUSIVE. Full-history
-health is NO_COUNTED_FAILURES; reporting COMPLETE. Captures are inactive
-and the journal is flushed. Physical AIO DLL, manifest and build receipt
-agree with clean main-VR source e4cfd8f2f, Build ID 2f6432ddbcbd.
-This AIO does not contain PR82 head 76f9418ab and does not validate its
-accepted-draw or OCU gaze APIs.
-
-Only last PR73 source 554e484e3 is the user-selected baseline. Strict
-means are 917.809 / 897.031 ms versus 815.094 / 768.534 ms:
-+12.602% / +16.720%. Retries remain 15 / 15; stretch is 64 / 62 frames
-and 4716.293 / 4713.132 ms. All 33 selected stretch rows recovered;
-pass 1 row 1 adds one episode. No active tail or applicable gate failure.
-Memory and formal change assessment remain INCONCLUSIVE. Adapter LUID,
-scene and dependency records differ. Driver, fixture, tolerance and
-resolved GPU-sample evidence limit interpretation.
-
-[Ledger 0004](vr-render-scale-ledger-0004-pr82.csv) contains exactly
-these two runs. Both summaries and complete comparison reconstruct
-exactly; all 1,056 numeric timing cells match. Baseline cells are intact.
-Ledger finalization took 8.017 seconds, including
-4.433 seconds for comparison/audit. See the
-[full report](nvidia-renderscale-tuning-pr82-e4cfd8f2f-20260913.md) and linked tables/coverage receipt for every
-transition, pass, retry, memory boundary, gate, counter and limitation.
-
-## September 13: second main-VR run for PR82
-
-Run renderscale-tuning-nvidia-2026-09-13T19-20-24-614Z completed 66/66 transitions on the
-same PID 38084 and Build ID 2f6432ddbcbd as the first run. Both passes
-retain all terminal and Task 2 PASS results. Health is
-NO_COUNTED_FAILURES, reporting COMPLETE, captures inactive and journal
-flushed. Physical AIO/manifest/receipt identity was reverified.
-Measured source e4cfd8f2f remains distinct from PR82 implementation 76f9418ab.
-
-Strict means are 0.941 / 0.938 s: +15.437% / +22.059% versus PR73
-554e484e3 and +2.518% / +4.575% versus the first same-build run.
-Relative to PR73, 28/33 and 33/33 routes are slower. Retries are 14 / 15.
-Stretch is 59 / 62 frames over 4.780 / 4.870 s, with all 32 selected
-rows recovered. No active tail or applicable health-gate failure.
-Four of 64 between-transition QPC intervals exceed the 250 ms
-diagnostic allowance, peaking at 297.089 ms; all four are in pass 1.
-These gaps exclude the measured strict interval. Memory and both
-formal comparison assessments remain INCONCLUSIVE; no GPU/FPS claim.
-
-[Ledger 0005](vr-render-scale-ledger-0005-pr82.csv) preserves all three
-complete summaries, both comparisons and all prior cells. Both 1,056-cell
-timing audits pass. Full ledger reporting took 16.155 s.
-The [second-run report](nvidia-renderscale-tuning-pr82-e4cfd8f2f-20260913-repeat-192024.md) retains every route/pass, counter,
-memory boundary, retry and provenance limitation. PR82's tables retain
-PR73 and both new runs, using seconds for switch durations.
-
-## September 13: 25 COCs at ten-second pacing
-
-The e4cfd8f2f integration build (2f6432ddbcbd, PID 38084) completed all
-25 strict terminal checks in 321.316 s. Mean strict completion is
-3.267 s into Dragonsreach and 2.071 s into Windhelm. Twelve relatch
-requeues recovered; no counted device, OOM, lifecycle or fidelity failure.
-Cumulative acceptance remains false for metrics_complete, the fixed
-stretch cutoff and the vendor-only final-presentation gate. One superseded
-final preparation record and all raw gate values remain preserved.
-All owned captures are inactive, pending probe readbacks are zero, and
-the 300-frame profiler capture completed. Bounded trace/probe retention
-gaps remain explicit. This is completed_with_anomalies with an
-INCONCLUSIVE performance assessment.
-
-[Ledger 0006](vr-render-scale-ledger-0006-pr82.csv) and the [report](coc25-10s-pr82-e4cfd8f2f-20260913.md) preserve
-all timings, capture details and the historical COC comparison. The PR82
-NVIDIA tables retain PR73 and both September 13 tuning runs unchanged.

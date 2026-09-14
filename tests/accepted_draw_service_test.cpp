@@ -68,6 +68,10 @@ namespace globals::game
 {
 	Renderer* renderer = nullptr;
 }
+namespace CSX::Api
+{
+	void AdvanceAcceptedDrawFrame(ID3D11DeviceContext*) noexcept;
+}
 namespace
 {
 	using namespace CSXAcceptedDrawAPI;
@@ -81,7 +85,13 @@ namespace
 	thread_local DWORD currentThread = 1;
 	DWORD MockGetCurrentThreadId() { return currentThread; }
 	uint32_t callbacks = 0;
-	void __cdecl Observe(const Draw*, void*) { ++callbacks; }
+	bool resetDuringCallback = false;
+	void __cdecl Observe(const Draw* draw, void*)
+	{
+		++callbacks;
+		if (resetDuringCallback)
+			CSX::Api::AdvanceAcceptedDrawFrame(draw->context);
+	}
 	void NativeReplay(ID3D11DeviceContext*, const Arguments&) {}
 	void Require(bool condition, const char* message)
 	{
@@ -184,12 +194,42 @@ try {
 		"wrong-thread draw reached resource inspection or delivery");
 	publish();
 	Require(callbacks == 2, "accepted scene thread did not retain ownership");
+	CSX::Api::AdvanceAcceptedDrawFrame(&otherContext);
+	Require(renderThread == 1, "another context retired the scene thread");
+	ready = false;
+	CSX::Api::AdvanceAcceptedDrawFrame(&context);
+	Require(renderThread == 1, "unready frame transition retired the scene thread");
+	ready = true;
+	CSX::Api::AdvanceAcceptedDrawFrame(&context);
+	Require(!renderThread, "completed frame retained the loading/menu thread");
+	view.resource = &shadowDepth;
+	publish();
+	Require(!renderThread && callbacks == 2, "shadow draw claimed the new frame");
+	view.resource = &sceneDepth;
+	resetDuringCallback = true;
+	std::jthread gameplayWorker([&] {
+		currentThread = 2;
+		geometryScope.Begin(&pass);
+		geometryScope.Activate(&pass, &geometry);
+		publish();
+		geometryScope.End(&pass);
+	});
+	gameplayWorker.join();
+	Require(renderThread == 2 && callbacks == 3, "gameplay thread did not recover after frame transition, or callback retired its owner");
+	resetDuringCallback = false;
+	const auto inspectionsBeforeOldThread = context.inspections;
+	publish();
+	Require(wrongThreadDraws == 2 && callbacks == 3 && context.inspections == inspectionsBeforeOldThread,
+		"old loading/menu thread stole ownership during gameplay frame");
+	CSX::Api::AdvanceAcceptedDrawFrame(&context);
+	publish();
+	Require(renderThread == 1 && callbacks == 4, "second thread transition failed to recover");
 	Require(registry.Unregister(subscription) == Success, "unregister failed");
 	const auto inspectionsBeforeEmptyRegistry = context.inspections;
 	publish();
-	Require(callbacks == 2 && context.inspections == inspectionsBeforeEmptyRegistry, "empty registry inspected or delivered a draw");
+	Require(callbacks == 4 && context.inspections == inspectionsBeforeEmptyRegistry, "empty registry inspected or delivered a draw");
 	geometryScope.End(&pass);
-	std::cout << "Accepted draw service: filtering, thread ownership and empty-registry fast path passed\n";
+	std::cout << "Accepted draw service: filtering, frame-boundary thread recovery, callback isolation and empty-registry fast path passed\n";
 } catch (const std::exception& error) {
 	std::cerr << error.what() << '\n';
 	return 1;

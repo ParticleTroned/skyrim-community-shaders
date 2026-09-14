@@ -916,6 +916,8 @@ struct IDXGISwapChain_Present
 		}
 		globals::features::upscaling.PresentVRMenuDesktopMirror(This);
 		state->Reset();
+		if (globals::game::isVR)
+			CSX::Api::AdvanceAcceptedDrawFrame(globals::d3d::context);
 		menu->DrawOverlay();
 		globals::features::screenshotFeature.OnBeforePresent(This);
 		globals::features::screenshotFeature.DrawPostCaptureIndicator();

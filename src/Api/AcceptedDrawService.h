@@ -24,6 +24,11 @@ namespace CSX::Api
 	/** Publish only attributed immediate-context draws against the current main scene depth. */
 	void PublishAcceptedDraw(ID3D11DeviceContext* a_context,
 		const CSXAcceptedDrawAPI::Arguments& a_arguments, AcceptedDrawRegistry::NativeReplay a_replay) noexcept;
+	/** At the renderer's completed-frame boundary, retire this frame's thread owner.
+	 * The first eligible main-scene draw in the next frame claims ownership again.
+	 * Never call from a draw callback or an asynchronous load/menu notification.
+	 */
+	void AdvanceAcceptedDrawFrame(ID3D11DeviceContext* a_context) noexcept;
 	/** Redirected UI capture is never a main-scene accepted draw. */
 	class SuppressAcceptedDraw
 	{

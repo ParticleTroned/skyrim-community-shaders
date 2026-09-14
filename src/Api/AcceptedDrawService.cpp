@@ -138,6 +138,16 @@ namespace CSX::Api
 			a_replay);
 	}
 
+	void AdvanceAcceptedDrawFrame(ID3D11DeviceContext* a_context) noexcept
+	{
+		if (!ready.load(std::memory_order_acquire) || !a_context ||
+			a_context != immediate.load(std::memory_order_acquire) || AcceptedDrawRegistry::IsDispatching())
+			return;
+		// Scene submission can change threads between loading and gameplay.
+		// Retire ownership at frame boundaries; eligible scene draws reclaim it.
+		renderThread.store(0, std::memory_order_release);
+	}
+
 	const API* GetAcceptedDrawAPI() { return &api; }
 
 	void RegisterAcceptedDrawService()

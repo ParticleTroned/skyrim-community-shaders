@@ -220,7 +220,7 @@ private:
 	json NormalizeCaptureDescriptor(
 		const ScreenshotFeature& a_feature,
 		const json& a_request,
-		bool a_addSeparateEyeOutputs = false) const;
+		bool a_sequenceSettings = false) const;
 	json ValidateSettingsPatch(const json& a_patch) const;
 	void ApplySettingsPatch(ScreenshotFeature& a_feature, const json& a_patch) const;
 	json BuildSettings(const ScreenshotFeature& a_feature) const;

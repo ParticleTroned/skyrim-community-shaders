@@ -113,13 +113,14 @@ struct ScreenshotFeature : public Feature
 		uint32_t frameCount = 30;
 		uint32_t intervalFrames = 6;
 		uint32_t previewFramesPerSecond = 15;
-		bool saveSeparateEyes = true;
+		bool saveSeparateEyes = false;
 		bool writePreviewVideo = false;
 	};
 	SequenceDefaults sequenceDefaults{};
 
 private:
 	friend class ScreenshotApi;
+	nlohmann::json BuildCaptureDescriptor(CaptureEye a_eye, bool a_usePng, bool a_clipboard) const;
 	std::string uiSequenceRequestId;
 	std::chrono::steady_clock::time_point nextUiSequencePoll{};
 	struct StagedPlane

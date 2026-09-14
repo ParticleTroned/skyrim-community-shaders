@@ -88,6 +88,7 @@ foreach(_required_contract_text IN ITEMS
     maximumOutputsPerFrame retentionSeconds manifest_failed
 	DescribeCommittedArtifact BuildProvenance::GetProducer artifact_hash_failed
 	terminalOutcome completedUtc fallbacksPresent cancelled manifestChildren
+	screenshotEye frameCaptureEye frameCaptureUsePng a_sequenceSettings
 )
     string(FIND "${_implementation}" "${_required_contract_text}" _contract_position)
     if(_contract_position EQUAL -1)
@@ -128,6 +129,21 @@ string(FIND "${_feature_controls}" "RequestApiCapture(\"ui\")" _ui_v1_position)
 string(FIND "${_feature_controls}" "DispatchScreenshotServiceRequest" _control_dispatch_position)
 if(_ui_adapter_position EQUAL -1 OR _ui_v1_position EQUAL -1 OR _control_dispatch_position EQUAL -1)
     message(FATAL_ERROR "Native screenshot UI must submit through the public contract-v1 screenshot service")
+endif()
+foreach(_settings_migration_text IN ITEMS
+    "const bool hasCanonicalFrameCaptureEye"
+    "if (!hasCanonicalFrameCaptureEye)"
+    "frameCaptureEye == CaptureEye::Both"
+    "output[\"dominantEye\"] = vrFramedDominantEye"
+)
+    string(FIND "${_feature_controls}" "${_settings_migration_text}" _settings_migration_position)
+    if(_settings_migration_position EQUAL -1)
+        message(FATAL_ERROR "Screenshot settings migration is missing: ${_settings_migration_text}")
+    endif()
+endforeach()
+string(FIND "${_implementation}" "a_feature.sequenceDefaults.saveSeparateEyes =\n\t\t\ta_feature.frameCaptureEye == ScreenshotFeature::CaptureEye::Both" _legacy_eye_sync_position)
+if(_legacy_eye_sync_position EQUAL -1)
+    message(FATAL_ERROR "Sequence settings_apply must synchronize the legacy SeparateEyes mirror")
 endif()
 foreach(_acquisition_contract_text IN ITEMS
     BuildAcquisitionRecord publicationGeneration deviceIdentity
@@ -171,8 +187,12 @@ endif()
 
 file(READ "${PROJECT_ROOT}/src/XSEPlugin.cpp" _plugin_lifecycle)
 string(FIND "${_plugin_lifecycle}" "case SKSE::MessagingInterface::kPostLoad:" _postload_position)
+string(FIND "${_plugin_lifecycle}" "if (!RegisterCommunityShadersAPIMessageListener())" _api_listener_position)
 string(FIND "${_plugin_lifecycle}" "ScreenshotDevBenchBridge::Install();" _early_install_position)
-if(_postload_position EQUAL -1 OR _early_install_position LESS _postload_position)
+if(_postload_position EQUAL -1 OR _api_listener_position LESS _postload_position)
+	message(FATAL_ERROR "The wildcard CSX API listener must be registered during PostLoad after every plugin is loaded")
+endif()
+if(_early_install_position LESS _postload_position)
     message(FATAL_ERROR "Screenshot DevBench discovery must be attempted during PostLoad")
 endif()
 

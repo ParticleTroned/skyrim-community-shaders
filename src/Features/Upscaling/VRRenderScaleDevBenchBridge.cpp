@@ -1024,6 +1024,26 @@ namespace
 			{ "loadingPresentationActive", a_gate.loadingPresentationActive },
 			{ "raceSexPresentationActive", a_gate.raceSexPresentationActive },
 			{ "saveLoadProtectionActive", a_gate.saveLoadProtectionActive },
+			{ "ordinarySaveRecovery", {
+										  { "saveToken", a_gate.ordinarySaveToken },
+										  { "presentationReady", a_gate.ordinarySavePresentationReady },
+										  { "persistenceBlocked", a_gate.ordinarySavePersistenceBlocked },
+										  { "proofSaveToken", a_gate.ordinarySaveProof.identity.saveToken },
+										  { "contractGeneration", a_gate.ordinarySaveProof.identity.generation },
+										  { "resourceKey", a_gate.ordinarySaveProof.identity.resourceKey },
+										  { "method", a_gate.ordinarySaveProof.identity.method },
+										  { "commonResourceGeneration", a_gate.ordinarySaveProof.identity.commonResourceGeneration },
+										  { "intermediateGeneration", a_gate.ordinarySaveProof.identity.intermediateGeneration },
+										  { "firstFrame", a_gate.ordinarySaveProof.firstFrame },
+										  { "lastCompleteFrame", a_gate.ordinarySaveProof.lastCompleteFrame },
+										  { "stableFrames", a_gate.ordinarySaveProof.stableFrames },
+										  { "requiredStereoFrames", VROrdinarySaveRecovery::kRequiredStereoFrames },
+										  { "producerScope", a_gate.ordinarySaveProof.boundary.scopeToken },
+										  { "submitFlags", a_gate.ordinarySaveProof.boundary.submitFlags },
+										  { "qualifiedFrame", a_gate.ordinarySaveProof.qualifiedFrame },
+										  { "qualifiedCycle", a_gate.ordinarySaveProof.qualifiedCycle },
+										  { "lastObservedCycle", a_gate.ordinarySaveProof.cycle },
+									  } },
 			{ "completedWorldFrame", a_gate.completedWorldFrame },
 			{ "recoveryPending", a_gate.recoveryPending },
 			{ "relatchPending", a_gate.relatchPending },
@@ -6765,6 +6785,8 @@ namespace
 			{ "actions", RenderScaleActions() },
 		};
 		result["usage"] =
+			"status includes vendorWorkGate.ordinarySaveRecovery with save identity, "
+			"stereo recovery progress, presentation readiness and independent persistence protection. "
 			"qualification_dispatch accepts optional cocCellEditorId to execute "
 			"exactly one validated COC on its main-thread operation. When present, "
 			"the QPC timer is read immediately before that command and "
@@ -7630,10 +7652,17 @@ namespace VRRenderScaleDevBenchBridge
 				"blockingCleanupReadyQpc observes when guard eligibility verifies "
 				"blocking ownership obligations, not cleanup-only fence completion. Missing "
 				"timestamps/identities are null; opaque identities are decimal strings.";
+			const std::string ordinarySaveDescription =
+				" status.vendorWorkGate.ordinarySaveRecovery reports the ordinary save "
+				"token, unchanged resource identity, consecutive stereo frame proof, "
+				"presentation readiness and the independent persistence guard. "
+				"Six successfully prepared stereo world frames from matching outer "
+				"submit scopes permit reuse in the following compositor "
+				"cycle; loads, unknown engine state and resource changes revoke proof.";
 			descriptor["description"] =
-				descriptor["description"].get<std::string>() + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription;
+				descriptor["description"].get<std::string>() + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription + ordinarySaveDescription;
 			descriptor["inputSchema"]["properties"]["action"]["description"] =
-				"Select a diagnostic or control action." + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription;
+				"Select a diagnostic or control action." + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription + ordinarySaveDescription;
 			descriptor["inputSchema"]["properties"]["milestone"] = {
 				{ "type", "string" },
 				{ "enum", json::array({ "strict", "presentation", "cleanup" }) },

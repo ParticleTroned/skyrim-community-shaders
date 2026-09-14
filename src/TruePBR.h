@@ -67,6 +67,8 @@ public:
 	bool enableVerboseJsonLogging = false;
 
 	bool TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land);
+	/** @brief Reports whether the raw lighting technique uses custom material setup instead of native setup. */
+	[[nodiscard]] bool UsesCustomMaterialSetup(uint32_t rawTechnique) const;
 	bool BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material);
 
 	void SetShaderResouces(ID3D11DeviceContext* a_context);

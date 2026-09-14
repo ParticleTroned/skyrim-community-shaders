@@ -34,6 +34,8 @@ struct Float2
 	float x = 0;
 	float y = 0;
 };
+using float2 = Float2;
+constexpr uint32_t FFX_UPSCALER_VERSION = 4;
 struct Dimensions
 {
 	uint32_t width = 0;
@@ -74,6 +76,9 @@ namespace logger
 	{}
 	template <class... Args>
 	void critical(std::string_view, Args&&...)
+	{}
+	template <class... Args>
+	void error(std::string_view, Args&&...)
 	{}
 }
 namespace Util
@@ -123,11 +128,19 @@ namespace globals
 {
 	struct State
 	{
+		uint32_t frameCount = 1;
 		bool developerMode = true;
 		bool IsDeveloperMode() const { return developerMode; }
 	};
 	State testState;
 	State* state = &testState;
+	struct ShaderCache
+	{
+		bool compiling = false;
+		bool IsCompiling() const { return compiling; }
+	};
+	ShaderCache testShaderCache;
+	ShaderCache* shaderCache = &testShaderCache;
 	namespace features
 	{
 		extern Upscaling upscaling;
@@ -148,6 +161,10 @@ namespace globals
 		float* cameraNear = &testNear;
 	}
 }
+bool UseSplitPerEyeFSRContexts() { return globals::game::isVR; }
+bool ShouldEmitFidelityFXDiagLogs() { return false; }
+uint32_t UpscalerVersionToString(uint32_t a_version) { return a_version; }
+const char* GetHostFsrSdkLabel() { return "host FSR"; }
 
 struct FidelityFX
 {
@@ -175,7 +192,7 @@ struct FidelityFX
 	bool sharedGuidesQuarantined = false;
 	bool hostDispatchReady = true;
 	bool hostDispatchFault = false;
-	RuntimeDispatchPlan plan{
+	RuntimeDispatchPlan controlledPlan{
 		.valid = true,
 		.runtimeRequested = true,
 		.selected = true,
@@ -197,7 +214,33 @@ struct FidelityFX
 	FfxFsr3DispatchUpscaleDescription lastHostParameters{};
 	RuntimeUpscalerFramePath lastFramePath = RuntimeUpscalerFramePath::kInactive;
 
-	RuntimeDispatchPlan ResolveRuntimeDispatchPlan() const { return plan; }
+	static constexpr uint32_t Fsr3Version = 3;
+	bool useProductionDispatchPlan = false;
+	bool runtimeHostFallbackFrameValid = false;
+	uint32_t runtimeHostFallbackFrame = 0;
+	bool runtimeUpscalerSessionQuarantined = false;
+	bool runtimeFsr4Requested = false;
+	bool runtimeRequested = false;
+	bool compatibleRuntimeContexts = true;
+	uint32_t quarantineRetirements = 0;
+	LifecycleResult pendingFenceResult = LifecycleResult::Ready;
+	LifecycleResult PollPendingRuntimeUpscalerTeardownFence(const char*) { return pendingFenceResult; }
+	LifecycleResult RetireQuarantinedRuntimeUpscalerResources()
+	{
+		++quarantineRetirements;
+		return LifecycleResult::Ready;
+	}
+	bool ShouldRequestRuntimeFsr4() const { return runtimeFsr4Requested; }
+	bool ShouldUseRuntimeUpscalerForFSR() const { return runtimeRequested; }
+	bool CanUseRuntimeUpscalerPath() const { return !runtimeUpscalerSessionQuarantined; }
+	void GetRuntimeUpscaleSizes(float2& a_display, float2& a_render) const
+	{
+		a_display = { 3024, 1680 };
+		a_render = { 2568, 1428 };
+	}
+	bool AreRuntimeUpscalerContextsCompatible(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) const { return compatibleRuntimeContexts; }
+	RuntimeDispatchPlan ResolveRuntimeDispatchPlanUnderTest();
+	RuntimeDispatchPlan ResolveRuntimeDispatchPlan() { return useProductionDispatchPlan ? ResolveRuntimeDispatchPlanUnderTest() : controlledPlan; }
 	// Exercise the production gate on an otherwise eligible runtime; provider
 	// setup and GPU dispatch remain controlled test dependencies.
 	void ResolveEligibleRuntimeShaderGate(bool shaderCompilationActive, bool runtimeContextsCompatible)
@@ -205,7 +248,9 @@ struct FidelityFX
 		const bool exactCurrentProviderReady = false;
 		const bool awaitingInitialVRRenderScaleLatch = false;
 		const bool runtimePathEligible = true;
-		const bool runtimeUpscalerSessionQuarantined = false;
+		auto& plan = controlledPlan;
+		const bool existingResourcesOnly = plan.vendorLifecycleMutationDeferred;
+		plan.contextsCompatible = runtimeContextsCompatible;
 #include "fsr_runtime_gate_under_test.h"
 	}
 	LifecycleResult ExecuteRuntimeUpscalerBatch(const RuntimeDispatchPlan&, std::span<const UpscaleRegionParameters> a_regions)
@@ -258,6 +303,33 @@ struct FidelityFX
 
 struct Upscaling
 {
+	using UpscaleMethod = ::UpscaleMethod;
+	enum class VRRenderScaleBackendKind
+	{
+		FSRHost,
+		FSRRuntime,
+		FSR4Runtime
+	};
+	struct VRExistingVendorProviderSnapshot
+	{
+		VRRenderScaleBackendKind backend = VRRenderScaleBackendKind::FSRHost;
+		uint32_t displayEyeWidth = 1512, displayEyeHeight = 1680;
+		struct
+		{
+			uint32_t contextCount = 2;
+		} resources;
+	};
+	VRExistingVendorProviderSnapshot existingProvider;
+	bool ordinarySave = false;
+	bool lifecycleDeferred = false;
+	bool providerReady = true;
+	bool renderScaleLatched = true;
+	bool ShouldReuseOrdinarySaveResources() const { return ordinarySave; }
+	bool ShouldDeferVRVendorLifecycleMutation() const { return lifecycleDeferred; }
+	VRExistingVendorProviderSnapshot GetExistingVRVendorProviderSnapshot() const { return existingProvider; }
+	bool CanDispatchExistingVRVendorEvaluation(UpscaleMethod, const VRExistingVendorProviderSnapshot&) const { return providerReady; }
+	bool IsRenderScaleModeRequested() const { return true; }
+	bool IsVRRenderScaleModeLatched() const { return renderScaleLatched; }
 	static constexpr uint32_t kDLSSPresetK = 1;
 #include "fsr_eye_dispatch_params_under_test.h"
 	FidelityFX fidelityFX;
@@ -318,6 +390,7 @@ namespace
 	{
 		globals::features::upscaling = {};
 		globals::state = &globals::testState;
+		globals::testShaderCache = {};
 		globals::d3d::context = &globals::d3d::testContext;
 		return globals::features::upscaling;
 	}
@@ -353,6 +426,62 @@ namespace
 		a_provider.fsrContextDisplayHeight = 1680;
 	}
 
+	void OrdinarySaveRetainsFoveatedHostRegions()
+	{
+		using Backend = Upscaling::VRRenderScaleBackendKind;
+		for (auto backend : { Backend::FSRHost, Backend::FSRRuntime, Backend::FSR4Runtime }) {
+			const bool runtimeFallback = backend != Backend::FSRHost;
+			for (bool lifecycleDeferred : { false, true }) {
+				for (bool fullEye : { false, true }) {
+					auto& upscaling = Reset();
+					auto& provider = upscaling.fidelityFX;
+					EnableHost(provider);
+					upscaling.ordinarySave = true;
+					upscaling.lifecycleDeferred = lifecycleDeferred;
+					upscaling.existingProvider.backend = backend;
+					provider.runtimeRequested = !runtimeFallback;
+					provider.useProductionDispatchPlan = true;
+					const auto plan = provider.ResolveRuntimeDispatchPlan();
+					Require(plan.valid && plan.vendorLifecycleMutationDeferred == lifecycleDeferred &&
+								plan.selected == runtimeFallback &&
+								plan.runtimeFsr4Requested == (backend == Backend::FSR4Runtime),
+						"Ordinary save changed the published provider or imposed load-only region restrictions");
+					auto params = Region(0, 504);
+					if (!fullEye) {
+						params.outputWidth = 1008;
+						params.outputHeight = 1120;
+						params.dlssViewportRole = Streamline::DLSSViewportRole::FoveatedCenter;
+					}
+					const auto result = upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, params);
+					const bool canDispatch = fullEye || !lifecycleDeferred;
+					Require(result == (canDispatch ? Result::Ready : runtimeFallback ? Result::Deferred :
+																					   Result::Failed) &&
+								provider.hostCalls == static_cast<uint32_t>(canDispatch),
+						"Retained host center/full-eye admission changed across ordinary save and load gates");
+					if (canDispatch) {
+						Require(provider.lastHostParameters.upscaleSize.width == params.outputWidth &&
+									provider.lastHostParameters.upscaleSize.height == params.outputHeight,
+							"Host fallback replaced the foveated region with full-eye dimensions");
+					}
+				}
+			}
+		}
+		for (bool ordinarySave : { false, true }) {
+			auto& upscaling = Reset();
+			auto& provider = upscaling.fidelityFX;
+			upscaling.ordinarySave = ordinarySave;
+			upscaling.providerReady = false;
+			provider.runtimeRequested = true;
+			const auto plan = provider.ResolveRuntimeDispatchPlanUnderTest();
+			Require(plan.providerSetupDeferred == ordinarySave && plan.selected != ordinarySave,
+				"Ordinary save admitted a replacement runtime provider");
+			provider.runtimeUpscalerSessionQuarantined = true;
+			(void)provider.ResolveRuntimeDispatchPlanUnderTest();
+			Require(provider.quarantineRetirements == static_cast<uint32_t>(!ordinarySave),
+				"Ordinary save retired retained provider ownership");
+		}
+	}
+
 	void SubmitContractsReachHostDispatch()
 	{
 		auto& upscaling = Reset();
@@ -364,7 +493,7 @@ namespace
 					provider.hostCalls == 0 && provider.runtimeCalls == 0,
 			"Linear submit input reached a vendor dispatch");
 		upscaling.colorContract.transfer = VRSubmitColorContract::Transfer::Gamma;
-		provider.plan.runtimeRequested = false;
+		provider.controlledPlan.runtimeRequested = false;
 		upscaling.temporalSnapshot.valid = true;
 		upscaling.temporalSnapshot.scalars = { 0.25f, -0.5f, 2.0f, 20000.0f, 1.25f, 8.0f, false };
 		upscaling.historyResetRequested = true;
@@ -424,10 +553,10 @@ namespace
 		for (bool setupDeferred : { false, true }) {
 			auto& upscaling = Reset();
 			auto& provider = upscaling.fidelityFX;
-			provider.plan.selected = false;
-			provider.plan.providerSetupDeferred = setupDeferred;
-			provider.plan.deferred = !setupDeferred;
-			provider.plan.valid = setupDeferred;
+			provider.controlledPlan.selected = false;
+			provider.controlledPlan.providerSetupDeferred = setupDeferred;
+			provider.controlledPlan.deferred = !setupDeferred;
+			provider.controlledPlan.valid = setupDeferred;
 			Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(0, 504)) == Result::Deferred,
 				"Deferred teardown/provider setup became a vendor failure");
 			Require(provider.runtimeCalls == 0, "Deferred admission dispatched into the runtime");
@@ -437,8 +566,8 @@ namespace
 			auto& upscaling = Reset();
 			auto& provider = upscaling.fidelityFX;
 			EnableHost(provider);
-			provider.plan.selected = !setupDeferred;
-			provider.plan.providerSetupDeferred = setupDeferred;
+			provider.controlledPlan.selected = !setupDeferred;
+			provider.controlledPlan.providerSetupDeferred = setupDeferred;
 			Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(0, 1284)) == Result::Ready &&
 						provider.hostCalls == 1 && provider.hostEyeMask == 1 &&
 						provider.runtimeCalls == (setupDeferred ? 0u : 1u) &&
@@ -471,8 +600,8 @@ namespace
 					auto& upscaling = Reset();
 					auto& provider = upscaling.fidelityFX;
 					EnableHost(provider);
-					provider.plan.runtimeRequested = runtimeFallback;
-					provider.plan.selected = runtimeFallback;
+					provider.controlledPlan.runtimeRequested = runtimeFallback;
+					provider.controlledPlan.selected = runtimeFallback;
 					provider.hostDispatchReady = failure == 0;
 					provider.hostDispatchFault = failure == 2;
 					Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(eye, 1284)) ==
@@ -492,7 +621,7 @@ namespace
 			for (auto failure : { Lifecycle::Failed, Lifecycle::DeviceLost, Lifecycle::RuntimeDeviceLost }) {
 				auto& upscaling = Reset();
 				auto& provider = upscaling.fidelityFX;
-				provider.plan.runtimeFsr4Requested = fsr4;
+				provider.controlledPlan.runtimeFsr4Requested = fsr4;
 				provider.runtimeDispatchResult = failure;
 				Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(1, 504)) == Result::Failed &&
 							upscaling.failedEvaluations == 1 && upscaling.successfulEvaluations == 0 &&
@@ -507,8 +636,8 @@ namespace
 			auto& upscaling = Reset();
 			auto& provider = upscaling.fidelityFX;
 			EnableHost(provider);
-			provider.plan.selected = false;
-			provider.plan.runtimeRequested = false;
+			provider.controlledPlan.selected = false;
+			provider.controlledPlan.runtimeRequested = false;
 			provider.hostDispatchReady = false;
 			provider.hostDispatchFault = crashed;
 			Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(1, 504)) == Result::Failed &&
@@ -537,8 +666,8 @@ namespace
 			auto& upscaling = Reset();
 			auto& provider = upscaling.fidelityFX;
 			EnableHost(provider);
-			provider.plan.selected = !setupDeferred;
-			provider.plan.providerSetupDeferred = setupDeferred;
+			provider.controlledPlan.selected = !setupDeferred;
+			provider.controlledPlan.providerSetupDeferred = setupDeferred;
 			auto params = Region(0, 504);
 			params.outputWidth = 756;
 			params.outputHeight = 840;
@@ -579,7 +708,7 @@ namespace
 			auto& upscaling = Reset();
 			auto& provider = upscaling.fidelityFX;
 			EnableHost(provider);
-			provider.plan.vendorLifecycleMutationDeferred = true;
+			provider.controlledPlan.vendorLifecycleMutationDeferred = true;
 			auto params = Region(0, 504);
 			if (subextent) {
 				params.outputWidth = 756;
@@ -615,14 +744,14 @@ namespace
 			if (hostAvailable)
 				EnableHost(provider);
 			provider.ResolveEligibleRuntimeShaderGate(true, false);
-			Require(provider.plan.providerSetupDeferred && !provider.plan.selected &&
+			Require(provider.controlledPlan.providerSetupDeferred && !provider.controlledPlan.selected &&
 						!provider.runtimeHostFallbackForFrame,
 				"An unresolved setup gate selected host before a dispatch decision");
 			Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(0, 1284)) ==
 						(hostAvailable ? Result::Ready : Result::Deferred),
 				"Setup deferral did not distinguish a complete host provider");
 			provider.ResolveEligibleRuntimeShaderGate(false, false);
-			Require(!provider.plan.providerSetupDeferred && provider.plan.selected != hostAvailable,
+			Require(!provider.controlledPlan.providerSetupDeferred && provider.controlledPlan.selected != hostAvailable,
 				"Clearing the gate retained an unused host latch or mixed providers after host output");
 			provider.runtimeDispatchResult = Lifecycle::Ready;
 			Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(1, 1284)) == Result::Ready &&
@@ -698,8 +827,8 @@ namespace
 			region.renderHeight = 560;
 			region.displayWidth = 1512;
 			region.displayHeight = 1680;
-			provider.plan.contextCount = count;
-			Require(!provider.CanDispatchHostFallbackForRegions(std::span{ &region, 1u }, provider.plan),
+			provider.controlledPlan.contextCount = count;
+			Require(!provider.CanDispatchHostFallbackForRegions(std::span{ &region, 1u }, provider.controlledPlan),
 				"Invalid host context count was accepted");
 			provider.fsrContextCount = count;
 			Require(!provider.HasFSRResources(), "Invalid host context count indexed the context array");
@@ -832,7 +961,7 @@ void QuarantinedSharedGuidesRequireReplacement()
 	auto& upscaling = Reset();
 	auto& provider = upscaling.fidelityFX;
 	EnableHost(provider);
-	provider.plan.selected = false;
+	provider.controlledPlan.selected = false;
 	provider.sharedGuidesQuarantined = true;
 	Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(0, 1284)) == Result::Failed,
 		"Host fallback reused a quarantined direct guide");
@@ -844,6 +973,7 @@ void QuarantinedSharedGuidesRequireReplacement()
 
 int main()
 {
+	OrdinarySaveRetainsFoveatedHostRegions();
 	QuarantinedSharedGuidesRequireReplacement();
 	SubmitContractsReachHostDispatch();
 	ColdRuntimeWithoutPeerProof();

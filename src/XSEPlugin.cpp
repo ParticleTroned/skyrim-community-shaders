@@ -323,8 +323,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	case SKSE::MessagingInterface::kSaveGame:
 		{
 			if (errors.empty() && globals::state) {
-				const uint32_t frame = globals::state->frameCount;
-				globals::state->ExtendSaveLoadSafeMode(frame, State::kSaveLoadSafeModeGraceFrames);
+				const uint32_t frame = globals::state->frameCountAtomic.load(std::memory_order_acquire);
+				globals::state->NotifyOrdinarySave(frame);
 				globals::state->ExtendPersistentMutationBlock(frame, State::kSaveMutationBlockGraceFrames);
 			}
 

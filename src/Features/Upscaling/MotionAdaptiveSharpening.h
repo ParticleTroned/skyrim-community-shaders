@@ -20,6 +20,13 @@ namespace UpscalingSharpener
 		void Initialize();
 		void ClearShaderCache();
 
+		/** Checks optional resources or latched failure; the caller must also check its fixed fallback. */
+		bool CanApplyWithoutResourceCreation() const noexcept
+		{
+			return motionAdaptiveShaderFailed ||
+			       (motionAdaptiveComputeShader && motionAdaptiveConfigCB && motionAdaptiveConfigCB->CB());
+		}
+
 		/** Applies bounded per-eye motion adjustment or invokes the caller's fixed-strength pass. */
 		bool Apply(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAccessView* outputUAV,
 			float sharpness, float baseStrength, const MotionSharpening::Settings& settings,

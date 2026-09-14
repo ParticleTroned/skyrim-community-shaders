@@ -1409,12 +1409,22 @@ add_custom_command(
     OUTPUT ${CORE_PACKAGE}
     # The install step consumes the built DLL. Depend on the target itself so
     # a newly registered feature cannot be packaged with a stale core binary.
-    DEPENDS ${PROJECT_NAME} ${CORE_SOURCES}
+    DEPENDS
+        ${PROJECT_NAME}
+        ${CORE_SOURCES}
+        ${FFX_RUNTIME_FILES}
+        ${STREAMLINE_RUNTIME_FILES}
     COMMAND
         ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${FEATURE_PATH}
         --component SKSE
     COMMAND
         ${CMAKE_COMMAND} -E copy_directory ${CORE_FEATURE_PATHS} ${FEATURE_PATH}
+    COMMAND
+        ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${FEATURE_PATH}
+        --component FidelityFXRuntime
+    COMMAND
+        ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${FEATURE_PATH}
+        --component StreamlineRuntime
     COMMAND ${CMAKE_COMMAND} -E rm -f -- ${FEATURE_PATH}/Core
     COMMAND ${CMAKE_COMMAND} -E remove_directory "${FEATURE_PATH}/Shaders/Tests"
     COMMAND ${CMAKE_COMMAND} -E tar cfv ${CORE_PACKAGE} --format=7zip -- .
@@ -1588,6 +1598,13 @@ if(BUILD_CONTROLLER_TESTS)
             -P "${PROJECT_SOURCE_DIR}/tests/menu_devbench_preflight_contract_test.cmake"
     )
     add_test(
+        NAME FeaturePresetCompatibilityContract
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            -P "${PROJECT_SOURCE_DIR}/tests/feature_preset_compatibility_contract_test.cmake"
+    )
+    add_test(
         NAME PerformanceTuningDevBenchContract
         COMMAND
             "${CMAKE_COMMAND}"
@@ -1604,7 +1621,7 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(
         MenuDevBenchPreflightContract PerformanceTuningDevBenchContract
-        VRMenuUiContract
+        VRMenuUiContract FeaturePresetCompatibilityContract
         PROPERTIES LABELS "ControllerTests"
     )
     add_test(
@@ -1757,6 +1774,206 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_link_libraries(vr_scene_guards_test PRIVATE xbyak::xbyak)
     set_tests_properties(VRSceneGuards PROPERTIES TIMEOUT 30)
+
+    set(_native_lighting_material_guard_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/native-lighting-material-guard"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_native_lighting_material_guard_test_dir}/native_lighting_material_guard_under_test.h"
+            "${_native_lighting_material_guard_test_dir}/native_lighting_material_utilities_under_test.h"
+            "${_native_lighting_material_guard_test_dir}/native_lighting_material_types_under_test.h"
+            "${_native_lighting_material_guard_test_dir}/native_lighting_material_pbr_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_native_lighting_material_guard_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_native_lighting_material_guard.cmake"
+        DEPENDS
+            src/Hooks.cpp
+            src/TruePBR.cpp
+            src/TruePBR.h
+            src/ShaderCache.h
+            src/Utils/Game.h
+            src/Utils/D3D.h
+            extern/CommonLibSSE-NG/include/RE/B/BSLightingShader.h
+            tests/extract_native_lighting_material_guard.cmake
+        VERBATIM
+    )
+    add_controller_test(
+        native_lighting_material_guard_test
+        NativeLightingMaterialGuard
+        tests/native_lighting_material_guard_test.cpp
+    )
+    target_sources(
+        native_lighting_material_guard_test
+        PRIVATE
+            "${_native_lighting_material_guard_test_dir}/native_lighting_material_guard_under_test.h"
+            "${_native_lighting_material_guard_test_dir}/native_lighting_material_utilities_under_test.h"
+            "${_native_lighting_material_guard_test_dir}/native_lighting_material_types_under_test.h"
+            "${_native_lighting_material_guard_test_dir}/native_lighting_material_pbr_under_test.h"
+    )
+    target_include_directories(
+        native_lighting_material_guard_test
+        PRIVATE "${_native_lighting_material_guard_test_dir}"
+    )
+    set_tests_properties(NativeLightingMaterialGuard PROPERTIES TIMEOUT 30)
+
+    set(_ordinary_save_state_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/ordinary-save-state"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_ordinary_save_state_test_dir}/ordinary_save_state_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_ordinary_save_state_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_ordinary_save_state.cmake"
+        DEPENDS
+            src/State.h
+            src/State.cpp
+            tests/extract_ordinary_save_state.cmake
+        VERBATIM
+    )
+    add_controller_test(ordinary_save_state_test OrdinarySaveState tests/ordinary_save_state_test.cpp)
+    target_sources(
+        ordinary_save_state_test
+        PRIVATE
+            "${_ordinary_save_state_test_dir}/ordinary_save_state_under_test.h"
+    )
+    target_include_directories(
+        ordinary_save_state_test
+        PRIVATE "${_ordinary_save_state_test_dir}"
+    )
+    add_controller_test(vr_ordinary_save_recovery_test VROrdinarySaveRecovery tests/vr_ordinary_save_recovery_test.cpp)
+
+    set(_ordinary_save_presentation_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/ordinary-save-presentation"
+    )
+    set(_ordinary_save_presentation_headers
+        "${_ordinary_save_presentation_test_dir}/ordinary_save_presentation_under_test.h"
+        "${_ordinary_save_presentation_test_dir}/ordinary_save_submit_finish_under_test.h"
+        "${_ordinary_save_presentation_test_dir}/ordinary_save_submit_admission_under_test.h"
+        "${_ordinary_save_presentation_test_dir}/ordinary_save_preview_output_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_ordinary_save_presentation_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_ordinary_save_presentation_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_ordinary_save_presentation.cmake"
+        DEPENDS
+            src/Features/Upscaling.cpp
+            tests/extract_ordinary_save_presentation.cmake
+        VERBATIM
+    )
+    add_controller_test(ordinary_save_presentation_test OrdinarySavePresentation tests/ordinary_save_presentation_test.cpp)
+    target_sources(
+        ordinary_save_presentation_test
+        PRIVATE ${_ordinary_save_presentation_headers}
+    )
+    target_include_directories(
+        ordinary_save_presentation_test
+        PRIVATE "${_ordinary_save_presentation_test_dir}"
+    )
+    set_tests_properties(
+        OrdinarySaveState
+        OrdinarySavePresentation
+        PROPERTIES TIMEOUT 30
+    )
+
+    set(_foveated_mask_visualization_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/foveated-mask-visualization-test"
+    )
+    set(_foveated_mask_visualization_header
+        "${_foveated_mask_visualization_test_dir}/foveated_mask_visualization_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_foveated_mask_visualization_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_foveated_mask_visualization_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_foveated_mask_visualization.cmake"
+        DEPENDS
+            src/Features/Upscaling.cpp
+            tests/extract_foveated_mask_visualization.cmake
+        VERBATIM
+    )
+    foreach(_preview_variant IN ITEMS off on)
+        add_controller_test(foveated_mask_visualization_${_preview_variant}_test FoveatedMaskVisualization_${_preview_variant} tests/foveated_mask_visualization_test.cpp)
+        target_sources(
+            foveated_mask_visualization_${_preview_variant}_test
+            PRIVATE "${_foveated_mask_visualization_header}"
+        )
+        target_include_directories(
+            foveated_mask_visualization_${_preview_variant}_test
+            PRIVATE "${_foveated_mask_visualization_test_dir}"
+        )
+    endforeach()
+    target_compile_definitions(
+        foveated_mask_visualization_on_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
+
+    add_test(
+        NAME FoveatedMaskVisualizationIntegration
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/foveated_mask_visualization_source_test.py"
+    )
+    set_tests_properties(
+        FoveatedMaskVisualizationIntegration
+        PROPERTIES LABELS "ControllerTests"
+    )
+
+    set(_foveated_save_reuse_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/foveated-save-reuse-test"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_foveated_save_reuse_test_dir}/foveated_save_reuse_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_foveated_save_reuse_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_foveated_save_reuse.cmake"
+        DEPENDS
+            src/Features/Upscaling.cpp
+            tests/extract_foveated_save_reuse.cmake
+        VERBATIM
+    )
+    add_controller_test(foveated_save_reuse_test FoveatedSaveReuse tests/foveated_save_reuse_test.cpp)
+    target_sources(
+        foveated_save_reuse_test
+        PRIVATE
+            "${_foveated_save_reuse_test_dir}/foveated_save_reuse_under_test.h"
+    )
+    target_include_directories(
+        foveated_save_reuse_test
+        PRIVATE "${_foveated_save_reuse_test_dir}"
+    )
+
+    set(_fsr_save_reuse_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/fsr-save-reuse-test"
+    )
+    add_custom_command(
+        OUTPUT "${_fsr_save_reuse_test_dir}/fsr_save_reuse_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_fsr_save_reuse_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_fsr_save_reuse.cmake"
+        DEPENDS
+            src/Features/Upscaling/FidelityFX.cpp
+            tests/extract_fsr_save_reuse.cmake
+        VERBATIM
+    )
+    add_controller_test(fsr_save_reuse_test FSRSaveReuse tests/fsr_save_reuse_test.cpp)
+    target_sources(
+        fsr_save_reuse_test
+        PRIVATE "${_fsr_save_reuse_test_dir}/fsr_save_reuse_under_test.h"
+    )
+    target_include_directories(
+        fsr_save_reuse_test
+        PRIVATE "${_fsr_save_reuse_test_dir}"
+    )
 
     add_controller_test(
         pbr_material_registry_test
@@ -2146,6 +2363,11 @@ if(BUILD_CONTROLLER_TESTS)
         tests/reflex_policy_test.cpp
     )
     add_controller_test(
+        light_limit_fix_vr_hook_policy_test
+        LightLimitFixVRHookPolicy
+        tests/light_limit_fix_vr_hook_policy_test.cpp
+    )
+    add_controller_test(
         fsr_host_lifecycle_policy_test
         FSRHostLifecyclePolicy
         tests/fsr_host_lifecycle_policy_test.cpp
@@ -2472,6 +2694,26 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE "${PROJECT_SOURCE_DIR}/include" "${_ocu_effect_test_dir}"
     )
     set_tests_properties(AcceptedDrawService PROPERTIES TIMEOUT 30)
+    add_executable(
+        preset_compatibility_test
+        EXCLUDE_FROM_ALL
+        tests/preset_compatibility_test.cpp
+        src/PresetCompatibility.cpp
+    )
+    target_compile_features(preset_compatibility_test PRIVATE cxx_std_23)
+    target_include_directories(
+        preset_compatibility_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(preset_compatibility_test PRIVATE nlohmann_json::nlohmann_json)
+    if(MSVC)
+        target_compile_options(preset_compatibility_test PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(preset_compatibility_test PRIVATE -UNDEBUG)
+    endif()
+    add_test(NAME PresetCompatibility COMMAND preset_compatibility_test "${PROJECT_SOURCE_DIR}")
+    set_tests_properties(PresetCompatibility PROPERTIES LABELS "ControllerTests")
+
     add_executable(
         api_runtime_thread_affinity_test
         EXCLUDE_FROM_ALL
@@ -2883,6 +3125,12 @@ if(BUILD_CONTROLLER_TESTS)
             scene_depth_devbench_test
             scene_light_snapshot_test
             vr_scene_guards_test
+            ordinary_save_state_test
+            vr_ordinary_save_recovery_test
+            ordinary_save_presentation_test
+            foveated_save_reuse_test
+            foveated_mask_visualization_off_test
+            foveated_mask_visualization_on_test
             pbr_material_registry_test
             perf_mode_restart_state_test
             motion_sharpening_policy_test
@@ -2912,6 +3160,7 @@ if(BUILD_CONTROLLER_TESTS)
             vr_render_scale_preparation_policy_test
             vr_presentation_stretch_telemetry_policy_test
             reflex_policy_test
+            light_limit_fix_vr_hook_policy_test
             fsr_host_lifecycle_policy_test
             fsr_runtime_lifecycle_policy_test
             fsr_shared_guides_policy_test
@@ -2947,6 +3196,7 @@ if(BUILD_CONTROLLER_TESTS)
             menu_devbench_preflight_policy_test
             water_appearance_migration_test
             generation_claim_test
+            preset_compatibility_test
             api_runtime_thread_affinity_test
             api_service_foundation_test
             api_service_registry_test

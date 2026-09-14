@@ -2820,7 +2820,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		return false;
 	const bool vendorLifecycleMutationDeferred =
 		globals::game::isVR &&
-		upscaling.ShouldDeferVRVendorLifecycleMutation();
+		(upscaling.ShouldDeferVRVendorLifecycleMutation() || upscaling.ShouldReuseOrdinarySaveResources());
 	const bool existingProviderOnly =
 		vendorLifecycleMutationDeferred || useAuthoritativeProfile;
 	const auto existingProvider =
@@ -3166,7 +3166,7 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 				upscaling.GetActiveVRRenderScaleContractGeneration() :
 				0u;
 		const bool vendorLifecycleMutationDeferred =
-			upscaling.ShouldDeferVRVendorLifecycleMutation();
+			upscaling.ShouldDeferVRVendorLifecycleMutation() || upscaling.ShouldReuseOrdinarySaveResources();
 		const auto existingProvider =
 			vendorLifecycleMutationDeferred ?
 				upscaling.GetExistingVRVendorProviderSnapshot() :

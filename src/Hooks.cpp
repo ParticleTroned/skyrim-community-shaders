@@ -26,6 +26,7 @@
 #include "Features/ScreenshotFeature.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
+#include "Features/UnifiedWater.h"
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
@@ -46,6 +47,11 @@ std::unordered_map<void*, std::pair<std::unique_ptr<uint8_t[]>, size_t>> ShaderB
 namespace
 {
 	std::shared_mutex g_renderTargetRecreationMutex;
+
+	bool UseNativeWaterShaders(const RE::BSShader& shader)
+	{
+		return shader.shaderType.get() == RE::BSShader::Type::Water && globals::features::unifiedWater.RequiresVanillaWaterShaders();
+	}
 }
 
 void RegisterShaderBytecode(void* Shader, const void* Bytecode, size_t BytecodeLength)
@@ -716,7 +722,7 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 		phaseStartTicks = phaseEndTicks;
 	}
 
-	if (!shaderFound && shader->shaderType.get() != RE::BSShader::Type::Effect) {
+	if (!shaderFound && shader->shaderType.get() != RE::BSShader::Type::Effect && !UseNativeWaterShaders(*shader)) {
 		RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*shader, state->modifiedVertexDescriptor);
 		RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*shader, state->modifiedPixelDescriptor);
 		if (phaseDiagActive) {
@@ -1473,7 +1479,7 @@ namespace Hooks
 					auto currentShader = state->currentShader;
 					auto type = currentShader->shaderType.get();
 					if (type > 0 && type < RE::BSShader::Type::Total) {
-						if (state->enabledClasses[type - 1]) {
+						if (state->enabledClasses[type - 1] && !UseNativeWaterShaders(*currentShader)) {
 							RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*currentShader, state->modifiedVertexDescriptor);
 							if (vertexShader) {
 								globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
@@ -1506,7 +1512,7 @@ namespace Hooks
 					auto currentShader = state->currentShader;
 					auto type = currentShader->shaderType.get();
 					if (type > 0 && type < RE::BSShader::Type::Total) {
-						if (state->enabledClasses[type - 1]) {
+						if (state->enabledClasses[type - 1] && !UseNativeWaterShaders(*currentShader)) {
 							RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*currentShader, state->modifiedPixelDescriptor);
 							if (pixelShader) {
 								globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);

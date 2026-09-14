@@ -2664,6 +2664,31 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE nlohmann_json::nlohmann_json
     )
 
+    set(_flowmap_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/unified-water-flowmap"
+    )
+    set(_flowmap_test_header
+        "${_flowmap_test_dir}/unified_water_flowmap_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_flowmap_test_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_flowmap_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_unified_water_flowmap.cmake"
+        DEPENDS
+            src/Features/UnifiedWater/Flowmap.cpp
+            src/Features/UnifiedWater.cpp
+            src/Hooks.cpp
+            tests/extract_unified_water_flowmap.cmake
+        VERBATIM
+    )
+    add_controller_test(unified_water_flowmap_test UnifiedWaterFlowmap tests/unified_water_flowmap_test.cpp)
+    target_sources(unified_water_flowmap_test PRIVATE "${_flowmap_test_header}")
+    target_include_directories(
+        unified_water_flowmap_test
+        PRIVATE "${_flowmap_test_dir}"
+    )
     add_executable(
         accepted_draw_registry_test
         EXCLUDE_FROM_ALL
@@ -3195,6 +3220,7 @@ if(BUILD_CONTROLLER_TESTS)
             vr_menu_positioning_policy_test
             menu_devbench_preflight_policy_test
             water_appearance_migration_test
+            unified_water_flowmap_test
             generation_claim_test
             preset_compatibility_test
             api_runtime_thread_affinity_test

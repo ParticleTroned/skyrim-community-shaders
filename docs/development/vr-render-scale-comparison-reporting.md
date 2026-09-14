@@ -1,5 +1,8 @@
 # Upscaling and render-scale comparison reporting
 
+The separate physical-HMD [PR qualification](render-scale-pr-qualification.md)
+currently uses `csx-render-scale-pr-v1` revision 6.
+
 Every update to the existing
 [numbered ledger record](vr-render-scale-ledger.md) includes the
 detailed comparison below automatically. Do this after measurements and
@@ -63,9 +66,18 @@ Do not use the fixed two-frame stretch cutoff as a health or improvement
 gate when settling imposes the stretch. Preserve the producer's raw gate,
 label it `DIAGNOSTIC_ONLY`, and compare the measured episode count, total
 frames and duration instead. The updated producer marks this gate
-`diagnostic_only` and excludes it from capture acceptance; older receipts
-can still report it as failed. The producer retains `maximumAcceptedFrames`
-for old readers and adds `diagnosticThresholdFrames` with the same value.
+`diagnostic_only` and excludes it from capture acceptance. An older schema-v13
+receipt is interpreted as diagnostic only when the named two-frame gate has
+no classification, `diagnosticThresholdFrames` is absent, and legacy
+`maximumAcceptedFrames` is two; its raw failed result and raw rejection remain
+visible. Unknown classifications or schema versions fail closed. The producer
+retains `maximumAcceptedFrames` for old readers and adds
+`diagnosticThresholdFrames` with the same value.
+Schema v14 additionally records each completed episode's frame range, QPC
+range, transition epoch, and submit-path reason mask. Its
+`presentation_stretch_attribution` health gate rejects missing or incoherent
+trace coverage and unattributed frames. Keep that gate distinct from the raw
+two-frame diagnostic in comparisons.
 Other gates remain health gates unless classified otherwise. Likewise, a
 scaled-presentation gate that
 rejects `NativeOriginal` after a **proven** native-AA target is a labeled

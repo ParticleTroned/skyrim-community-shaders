@@ -1,5 +1,8 @@
 # VR render-scale iteration records
 
+The separate physical-HMD [PR qualification](render-scale-pr-qualification.md)
+currently uses `csx-render-scale-pr-v1` revision 6.
+
 The optional runtime FSR shared-guide path and its persistent in-game
 toggle are documented in [Runtime FSR shared guide inputs](fsr-shared-guides.md).
 The DevBench A/B action updates the same preference; Save Settings
@@ -574,7 +577,7 @@ The registered tool is `communityshaders.renderscale`:
     pressure, retirement queue, post-load recovery, backend generations,
     current metrics, both-eye fidelity, and compositor-accepted per-eye
     presentation paths;
--   `record` returns the complete schema-v13 record without changing capture
+-   `record` returns the complete schema-v14 record without changing capture
     state;
 -   `start` begins a new fixed-memory stress capture;
 -   `apply` uses the same latest-wins transition entrypoint as a CSX-menu change.
@@ -1476,7 +1479,9 @@ live paths under `controller.presentation`, session deltas under
 ## MCP contract
 
 Records use schema `community-shaders.vr-render-scale.iteration` and
-`schemaVersion: 13`. Schema v13 adds presentation-stretch episode duration,
+`schemaVersion: 14`. Schema v14 adds bounded episode attribution with frame,
+QPC, epoch, and reason evidence; missing attribution is a health failure.
+Schema v13 added presentation-stretch episode duration,
 active-at-stop evidence, and incomplete-stereo-cycle evidence at capture stop.
 An active tail or partial two-eye cycle is a hard failure. Schema v12 adds exact
 build provenance. Schema v11 adds Debug-only liveness-cue compile/success
@@ -1486,7 +1491,7 @@ thresholds and units are unchanged. Schema v10 added
 complete pending target are counted there without creating another request
 event or transition metric. An automation client should:
 
-1. Reject unknown schema versions.
+1. Reject unknown schema versions; schema v13 is supported only under its explicit legacy comparison policy, not for revision-6 qualification.
 2. Check `acceptance.accepted` before comparing performance.
 3. Require `memoryTrend.evaluated` for a memory comparison; a short diagnostic pass is not memory acceptance.
 4. Use `acceptance.gates` to classify a failed run instead of inferring failure from log text.

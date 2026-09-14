@@ -7659,10 +7659,18 @@ namespace VRRenderScaleDevBenchBridge
 				"Six successfully prepared stereo world frames from matching outer "
 				"submit scopes permit reuse in the following compositor "
 				"cycle; loads, unknown engine state and resource changes revoke proof.";
+			const std::string textureLifetimeDescription =
+				" Texture-lifetime status skips NiSourceTexture owner correlation "
+				"when no D3D textures are tracked; "
+				"capture.niSourceTextureOwnerScanSkipped reports this. Unsafe "
+				"renderer pointers are skipped during correlation. "
+				"capture.niSourceTextureInvalidRendererTextureCount counts skipped "
+				"owners; capture.niSourceTextureFirstInvalidRendererTexture "
+				"reports the first owner and raw renderer pointer, or null.";
 			descriptor["description"] =
-				descriptor["description"].get<std::string>() + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription + ordinarySaveDescription;
+				descriptor["description"].get<std::string>() + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription + ordinarySaveDescription + textureLifetimeDescription;
 			descriptor["inputSchema"]["properties"]["action"]["description"] =
-				"Select a diagnostic or control action." + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription + ordinarySaveDescription;
+				"Select a diagnostic or control action." + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription + ordinarySaveDescription + textureLifetimeDescription;
 			descriptor["inputSchema"]["properties"]["milestone"] = {
 				{ "type", "string" },
 				{ "enum", json::array({ "strict", "presentation", "cleanup" }) },

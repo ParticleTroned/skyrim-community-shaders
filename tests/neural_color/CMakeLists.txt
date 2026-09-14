@@ -19,6 +19,8 @@ target_include_directories(nr_adversarial_policy_test PRIVATE "${CMAKE_CURRENT_L
 add_test(NAME NRColorAdversarialPolicy COMMAND nr_adversarial_policy_test)
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
+    add_test(NAME NRColorFeatureRegistration
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/feature_registration_test.py" "${CMAKE_COMMAND}")
     add_test(NAME NRColorAdversarialAssessment
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/adversarial_assessment_test.py")
     add_test(NAME NRColorRunnerWorkflow

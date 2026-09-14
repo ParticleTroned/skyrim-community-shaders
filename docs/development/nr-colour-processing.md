@@ -298,3 +298,27 @@ behaviour. They do not establish the correct NVIDIA NR colour treatment,
 live exposure-hook timing, actual NGX inference, winning MO2/VFS files, or
 headset presentation. Deployment must retain the `1-2-0` colour package
 with the rebuilt DLL before those separate live checks.
+
+### Runtime feature registration correction
+
+The AIO built from `165e0841f` contained the colour INI and shaders, but
+the checked-in `include/FeatureVersions.h` omitted `NeuralColor`. That
+header takes precedence over CMake's generated registry, so the feature
+loader classified the installed `1-2-0` feature as unknown. The earlier
+asset and WARP checks did not exercise this registration requirement.
+
+`NeuralColor` is now registered at minimum version `1.2.0` and included in
+`FEATURE_CORE_NAMES`. Its existing `CORE` marker and
+`Shaders/Features/NeuralColor.ini` remain the package metadata.
+`CMakeLists.txt` invokes `cmake/ValidateNeuralColor.cmake` to require the
+INI, CORE marker, runtime registry entry, matching version, and core
+registration. Those inputs also trigger CMake reconfiguration when changed.
+
+The same guard is exercised by `NRColorFeatureRegistration` in the
+standalone suite. Six fixture tests cover complete registration, missing
+runtime/core entries, mismatched versions, missing required files, and an
+invalid INI. A generated header cannot hide a missing runtime entry. The
+guard rejected the previous source with `NeuralColor is missing from
+include/FeatureVersions.h`; all 13 standalone tests pass after correction.
+This verifies the registration contract without claiming a new live game
+or headset assessment.

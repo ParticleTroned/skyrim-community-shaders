@@ -250,6 +250,9 @@ endif()
 # #######################################################################################################################
 # # Feature version detection
 # #######################################################################################################################
+include(ValidateNeuralColor)
+csx_validate_neural_color("${CMAKE_CURRENT_SOURCE_DIR}")
+
 file(
     GLOB_RECURSE FEATURE_CONFIG_FILES
     LIST_DIRECTORIES false

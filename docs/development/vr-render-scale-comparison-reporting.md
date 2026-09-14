@@ -62,7 +62,12 @@ vendor fallback, lifecycle failures, or retries within the measured window.
 Do not use the fixed two-frame stretch cutoff as a health or improvement
 gate when settling imposes the stretch. Preserve the producer's raw gate,
 label it `DIAGNOSTIC_ONLY`, and compare the measured episode count, total
-frames and duration instead. Likewise, a scaled-presentation gate that
+frames and duration instead. The updated producer marks this gate
+`diagnostic_only` and excludes it from capture acceptance; older receipts
+can still report it as failed. The producer retains `maximumAcceptedFrames`
+for old readers and adds `diagnosticThresholdFrames` with the same value.
+Other gates remain health gates unless classified otherwise. Likewise, a
+scaled-presentation gate that
 rejects `NativeOriginal` after a **proven** native-AA target is a labeled
 `CONTRACT_MISMATCH`; retain its observed values and native both-eye proof.
 Do not apply that exception without the exact native terminal evidence.

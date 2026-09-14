@@ -7667,10 +7667,16 @@ namespace VRRenderScaleDevBenchBridge
 				"capture.niSourceTextureInvalidRendererTextureCount counts skipped "
 				"owners; capture.niSourceTextureFirstInvalidRendererTexture "
 				"reports the first owner and raw renderer pointer, or null.";
+			const std::string stressAcceptanceDescription =
+				" The record and stop actions retain the raw two-frame presentation "
+				"stretch result as a diagnostic_only gate; it does not reject the "
+				"stress capture. allowedPresentationStretch adds diagnosticThresholdFrames "
+				"while retaining maximumAcceptedFrames for older readers. Other "
+				"failed gates still reject the capture.";
 			descriptor["description"] =
-				descriptor["description"].get<std::string>() + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription + ordinarySaveDescription + textureLifetimeDescription;
+				descriptor["description"].get<std::string>() + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription + ordinarySaveDescription + textureLifetimeDescription + stressAcceptanceDescription;
 			descriptor["inputSchema"]["properties"]["action"]["description"] =
-				"Select a diagnostic or control action." + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription + ordinarySaveDescription + textureLifetimeDescription;
+				"Select a diagnostic or control action." + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription + ordinarySaveDescription + textureLifetimeDescription + stressAcceptanceDescription;
 			descriptor["inputSchema"]["properties"]["milestone"] = {
 				{ "type", "string" },
 				{ "enum", json::array({ "strict", "presentation", "cleanup" }) },

@@ -54782,7 +54782,8 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 											{ "meanCompletedFrames", presentationStretchMeanFrames },
 											{ "maximumCompletedFrames", session.maximumPresentationStretchFrames },
 											{ "maximumObservedFrames", maximumObservedPresentationStretchFrames },
-											{ "maximumAcceptedFrames", VRPresentationStretchTelemetryPolicy::kMaximumAcceptedPresentationStretchFrames },
+											{ "maximumAcceptedFrames", VRPresentationStretchTelemetryPolicy::kPresentationStretchDiagnosticFrameThreshold },
+											{ "diagnosticThresholdFrames", VRPresentationStretchTelemetryPolicy::kPresentationStretchDiagnosticFrameThreshold },
 											{ "episodeActive", session.presentationStretchEpisodeActive },
 											{ "activeFrames", session.presentationStretchActiveFrames },
 											{ "activeAtStop", session.presentationStretchEpisodeActiveAtStop },
@@ -54942,12 +54943,22 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	json gates = json::array();
 	json failureReasons = json::array();
 	bool accepted = true;
-	auto addGate = [&](const char* a_name, bool a_passed, const json& a_observed, const json& a_limit) {
-		gates.push_back({ { "name", a_name },
+	enum class GateClassification
+	{
+		Health,
+		DiagnosticOnly
+	};
+	auto addGate = [&](const char* a_name, bool a_passed, const json& a_observed,
+					   const json& a_limit,
+					   GateClassification a_classification = GateClassification::Health) {
+		json gate = { { "name", a_name },
 			{ "passed", a_passed },
 			{ "observed", a_observed },
-			{ "limit", a_limit } });
-		if (!a_passed) {
+			{ "limit", a_limit } };
+		if (a_classification == GateClassification::DiagnosticOnly)
+			gate["classification"] = "diagnostic_only";
+		gates.push_back(std::move(gate));
+		if (!a_passed && a_classification == GateClassification::Health) {
 			accepted = false;
 			failureReasons.push_back(a_name);
 		}
@@ -55008,12 +55019,13 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	addGate(
 		"presentation_stretch_frame_bound",
 		maximumObservedPresentationStretchFrames <=
-			VRPresentationStretchTelemetryPolicy::kMaximumAcceptedPresentationStretchFrames,
+			VRPresentationStretchTelemetryPolicy::kPresentationStretchDiagnosticFrameThreshold,
 		{ { "maximumCompletedFrames", session.maximumPresentationStretchFrames },
 			{ "activeFrames", session.presentationStretchActiveFrames },
 			{ "activeFramesAtStop", session.presentationStretchActiveFramesAtStop },
 			{ "maximumObservedFrames", maximumObservedPresentationStretchFrames } },
-		{ { "maximumFrames", VRPresentationStretchTelemetryPolicy::kMaximumAcceptedPresentationStretchFrames } });
+		{ { "maximumFrames", VRPresentationStretchTelemetryPolicy::kPresentationStretchDiagnosticFrameThreshold } },
+		GateClassification::DiagnosticOnly);
 	addGate(
 		"presentation_stretch_timing",
 		presentationStretchTimingAcceptable,

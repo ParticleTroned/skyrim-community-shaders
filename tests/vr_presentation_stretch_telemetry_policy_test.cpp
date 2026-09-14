@@ -253,7 +253,7 @@ namespace
 		       saturated.metrics.completedQpcTicks == maximum;
 	}
 
-	constexpr bool CoversPresentationStretchFrameAcceptanceBound()
+	constexpr bool CoversPresentationStretchDiagnosticFrameThreshold()
 	{
 		using namespace VRPresentationStretchTelemetryPolicy;
 		State state{};
@@ -261,14 +261,14 @@ namespace
 		Observe(state, { ObservationKind::AllowedStretch, 1, 80, 800, 1010 });
 		Observe(state, { ObservationKind::AllowedStretch, 0, 81, 801, 1100 });
 		Observe(state, { ObservationKind::AllowedStretch, 1, 81, 801, 1110 });
-		const auto accepted = Inspect(state, 1150);
+		const auto withinThreshold = Inspect(state, 1150);
 		Observe(state, { ObservationKind::AllowedStretch, 0, 82, 802, 1200 });
 		Observe(state, { ObservationKind::AllowedStretch, 1, 82, 802, 1210 });
-		const auto rejected = Stop(state, 1250);
-		return kMaximumAcceptedPresentationStretchFrames == 2 &&
-		       accepted.activeFrames <= kMaximumAcceptedPresentationStretchFrames &&
-		       rejected.snapshot.maximumFrames >
-		           kMaximumAcceptedPresentationStretchFrames;
+		const auto beyondThreshold = Stop(state, 1250);
+		return kPresentationStretchDiagnosticFrameThreshold == 2 &&
+		       withinThreshold.activeFrames <= kPresentationStretchDiagnosticFrameThreshold &&
+		       beyondThreshold.snapshot.maximumFrames >
+		           kPresentationStretchDiagnosticFrameThreshold;
 	}
 
 	static_assert(CoversPresentationStretchEpisodeLifecycle());
@@ -276,7 +276,7 @@ namespace
 	static_assert(CoversPresentationStretchCycleIdentityEdges());
 	static_assert(CoversPresentationStretchActiveAtStopAccounting());
 	static_assert(CoversPresentationStretchUnavailableTimingAndSaturation());
-	static_assert(CoversPresentationStretchFrameAcceptanceBound());
+	static_assert(CoversPresentationStretchDiagnosticFrameThreshold());
 }
 
 int main() {}

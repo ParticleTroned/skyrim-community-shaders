@@ -8,7 +8,8 @@ namespace VRPresentationStretchTelemetryPolicy
 {
 	inline constexpr std::uint64_t kCompositorCycleTokenMaximum =
 		std::numeric_limits<std::uint64_t>::max() >> 1u;
-	inline constexpr std::uint64_t kMaximumAcceptedPresentationStretchFrames = 2;
+	// Keep the legacy comparison for diagnostics without gating capture health.
+	inline constexpr std::uint64_t kPresentationStretchDiagnosticFrameThreshold = 2;
 	inline constexpr std::uint8_t kCompleteStereoEyeMask = 0x3;
 
 	enum class ObservationKind : std::uint8_t

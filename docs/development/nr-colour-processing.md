@@ -1,242 +1,242 @@
-# Shared Neural Rendering colour processing
+# Shared NR colour processing and automated assessment
 
-Source baseline: `face-of-gogh` at
-`1a5bda199f0bd8e710c720a77b8c6931b65e8708`.
-This is a source-level experiment. Windows compilation, WARP shader execution,
-NR runtime compatibility and in-game image quality still require validation.
-It is not a confirmed repair for the reported colour/lighting discrepancy.
-No NVIDIA binaries or runtime-admission changes accompany this work.
+This follow-up builds on `0a9b44744950677dbe128614219eecf1d0e38f24` on
+`work/face-of-gogh-colour-managed-20260914`. The underlying `face-of-gogh` base
+is `1a5bda199f0bd8e710c720a77b8c6931b65e8708`. It changes source code only;
+Windows compilation, the exposure hook's live timing, WARP and Skyrim/NGX
+validation are still required. No NVIDIA binaries or admission checks change.
 
-## Baseline audit and integration
+## What is shared
 
-The baseline already contains single-rectangle character compute, experimental
-multi-ROI, per-region histories, a deterministic CSX selection mask, and scalar
-raw-depth extraction. These remain intact. The existing final-LDR composite
-rejects nonfinite model values, clamps the model to UNORM range before mask and
-feather blending, and preserves destination alpha. Those guards remain intact.
+The existing renderer expands logical eyes into physical single/multi-ROI
+requests. `Color::Pipeline` snapshots their baselines, prepares input, reconstructs
+ALL successful regions privately, and then uses the existing commit boundary.
+Standard NR and character NR use exactly this path. Character selection happens
+once downstream; neither the capture nor colour shaders author a character mask.
+Existing raw-depth, guide, cluster-history, stereo fallback and final-LDR guards
+remain intact. Colour-enabled sequential stereo retains the atomic batch path.
 
-All existing renderer entry points converge on `Renderer::State::ApplyBatchLocked`.
-Logical eye requests expand into up to four physical evaluations (eight retained
-slots across main/submit routes). The new colour work executes after expansion,
-using the mapped physical region, before the existing logical output commit.
-It is independent of character eligibility or mask coverage. Normal NR and
-character NR therefore use the same processing; multi-ROI does not sample gaps
-between the initialized rectangles.
+Modes remain `legacy_raw` (compatibility default), `managed`, and
+`preserve_source`. Managed transfers the model residual relative to the actual
+quantized prepared input, not an independently recomputed proxy:
 
-The audited renderer takes matching colour/output formats and already maps
-output rectangles to colour and guide rectangles. Its colour transfer was a
-copy, not an exposure or gamma transform. Normal SR enables internal automatic
-exposure; this does not provide an accessible engine exposure texture to NR.
-The current API also does not carry a proven transfer function or pre-exposure
-contract. Consequently this implementation does **not** infer colour domain from
-DXGI format or from an insertion-point name.
+`candidate = baseline + inverse(neural) - inverse(prepared)`
 
-| Route | Retained behaviour | Colour interpretation |
-| --- | --- | --- |
-| Main / Upscaled Centre | Process after the caller's DLSS centre; existing later composition remains | Unknown/native unless explicitly asserted |
-| Submit / Upscaled Centre | Preserve existing private float NR conversion and final presentation path | Unknown/native unless explicitly asserted |
-| Main / Final LDR pre-UI | Preserve late capture, menu separation and final destination guards | Post-processing placement is known; transfer function is not inferred |
-| Submit / Final LDR pre-UI | Preserve late submit baseline and stereo commit | Same late profile, with frame/route provenance |
+Preserve Source adds bounded, edge-weighted high-frequency log-brightness detail
+to source RGB. Appearance mix accepts more of the reconstructed neural result,
+including tone and chroma, not merely hue. This is an image-space mitigation,
+not physical decomposition of reflections/shadows. Source alpha is retained.
+The unknown/native-domain brightness metric is not calibrated luminance.
 
-Colour-enabled processing requires equal colour/output dimensions, but guides
-may be lower resolution. This is checked explicitly. Legacy Raw retains the
-old validation behaviour. Encoded/proxy experiments require a supported float
-resource format; the code does not change engine/OpenVR formats or claim
-support for a new NVIDIA input format.
+## In-game controls: no editable configuration INI
 
-## Controls and deployment
+**Display > Neural Rendering Colour** provides:
 
-A core **Neural Rendering Colour** feature appears in the Display category,
-next to the existing Upscaling feature. These are general NR controls, not
-character-only settings. Install the new `NeuralColor.ini` and colour shaders
-along with the rebuilt plugin. The normal CMake feature/version/source discovery
-includes the new folder and C++ modules; no generated files are checked in.
+- **Enable colour processing**: retain the chosen mode/sliders while bypassing
+  their application. The ordinary NR master switch remains in Upscaling.
+- **Apply neural edit (A/B; inference stays running)**: show the untouched
+  baseline or the processed candidate without changing model input/history.
+  This is a visual comparison, NOT an NR-off performance measurement.
+- Mode, detail contribution, appearance mix and maximum detail stops.
+- **Capture engine HDR exposure**, separate early/late domain/codec/exposure
+  candidates, transport bypass, asynchronous measurements and override reset.
+- **Check installed colour shaders** and structured diagnostics.
 
-Persisted settings live under `Neural Rendering Colour`:
+Ordinary settings use the existing saved-settings JSON. Assessment profiles,
+exposure capture, transport bypass and A/B state are transient. Both UI and
+DevBench call the same compare-and-set registry; neither polls a configuration
+file or performs GPU work from a DevBench worker thread.
 
-- `legacy_raw`: compatibility default. No new colour dispatches or allocations
-  when diagnostics and bypass are off. Existing shared output gains SRV access
-  so the optional processing can read it.
-- `managed`: explicit preparation and matching output reconstruction, with
-  nonfinite/invalid-inverse fallback to the baseline. Identity is the default
-  transform; this is not automatic colour correction.
-- `preserve_source`: managed reconstruction plus bounded local detail transfer.
-  `detailStrength` is 0..2, `appearanceMix` 0..1, and `maximumDetailStops` 0..2.
+`Shaders/Features/NeuralColor.ini` is ONLY a feature/version manifest, now
+**1-1-0**. It is installed by the build; users do not edit it to assess colours.
+The separate older `work/face-of-gogh-colour-20260914` experiment used an editable
+`NRColor.ini`; that is not this branch's control interface.
 
-`appearanceMix=0` suppresses broad neural appearance changes while allowing
-bounded detail; `appearanceMix=1` accepts the reconstructed model appearance.
-This includes tone/luminance changes, not only chroma. Zero detail and zero
-appearance return the baseline at this stage. The detail filter removes a local
-low-frequency log-luminance residual and applies the remaining bounded scalar
-gain to baseline RGB. Its edge-aware samples stay within each physical ROI and
-fade near the ROI edge. It is an artistic mitigation, not a physical guarantee
-that every shadow/reflection remains correct. With an unknown domain, the
-luminance statistic is only a weighted native-value proxy, not measured light.
+## Automatic engine-exposure capture: concrete source evidence
 
-### Transient domain and encoding experiments
+The repository's `package/Shaders/ISHDR.hlsl`, BLEND permutation, reads AvgTex
+at pixel-shader slot **t2** and multiplies input colour by **AvgTex.y / AvgTex.x**
+when both components are nonzero. The zero-component branch leaves exposure at
+one. `Common/FrameBuffer.hlsli` subsequently applies `pow(abs(colour),
+FrameParams.x)`; its function name does NOT make that the IEC sRGB curve.
+FrameParams is at PS b12 c84 for VR and c42 for flat rendering in this source.
 
-Early-centre and late-pre-UI profiles are separate. They are never persisted.
-Each allows `unknown`, `linear` or `srgb` as an explicit source assertion.
-An assertion is reported as `manual_experiment`, not detected metadata.
-There is no per-face/per-eye automatic re-exposure.
+`ExposureCapture` observes the two known cinematic HDR tonemap effects through
+PRIMARY `BSShader::RestoreTechnique` slot 3, before chaining the previous hook.
+It obtains the concrete effect instances through the pinned CommonLib
+ImageSpaceManager API, not guessed module offsets. Installation runs from the
+normal render-thread EarlyPrepass. It never replaces a NVIDIA entry point.
 
-Transforms:
+Capture accepts a bound scalar 1x1 floating-point AvgTex view with at least two
+channels. `ColorExposureCS` writes raw average, raw target, ratio and validity
+into a private FP32 texture. Nonfinite input, unsupported resources and missing
+bindings are reported. The engine's zero-input unit fallback has a distinct
+validity code; it is never presented as a measured unit exposure. Ratios outside
+1/256..256 are outside the current experiment's supported range.
 
-1. `identity`: preserve source numbers; multiplier must be 1.
-2. `linear_to_srgb`: multiply by a manual diagnostic exposure and encode sRGB;
-   reconstruction decodes and divides by the same multiplier.
-3. `reversible_proxy`: multiply, divide RGB by `1 + max(RGB)`, then encode sRGB.
-   Reconstruction decodes, divides by `1 - max(decoded RGB)`, then divides by
-   the same exposure multiplier.
+Eight bounded records retain source-frame, capture epoch/sequence, resource/
+view/output formats and process-local shader/resource identities. Optional
+nonblocking readback also records the actual frame-gamma exponent. These are
+producer observations, not claims about NVIDIA's expected model domain.
 
-Nonidentity transforms require the explicit `linear` assertion. The multiplier
-is 1/256..256, not measured SR/engine exposure. The exposure-scaled nonnegative
-source must have maximum channel <=32 for these experiments. Proxy inverse
-requires a denominator >=1/64. Invalid inputs/inverses retain original pixels
-on reconstruction; invalid prepared inputs are finite black rather than NaNs.
-This bounded support is not lossless HDR coverage. Do not apply a scene-HDR
-proxy to already tone-mapped LDR merely because a texture is floating point.
+For a captured-exposure profile, preparation snapshots the matching source
+world frame into transaction-owned storage. Both eyes and all their regions
+reuse the first latched availability/value. An API toggle cannot switch that
+value halfway through a pair. Reconstruction uses this same immutable snapshot;
+there is no later lookup of a global/latest exposure and no per-face metering.
+Manual calibration is multiplied by the captured ratio on the GPU. No render-
+thread readback wait or new Flush is introduced.
 
-Reconstruction transfers the model residual relative to the **actual quantized
-prepared input**:
+**Timing qualification is essential.** If this RestoreTechnique boundary has
+already lost PS bindings, the capture is unavailable. If the HDR pass happens
+after an early NR invocation, that invocation cannot use a future exposure.
+The code reports the mismatch rather than borrowing a previous frame. A later
+insertion can be assessed separately. Different adaptation sources within one
+frame are marked ambiguous. The hook and these route conditions have not been
+qualified in a running Skyrim process here.
 
-`result = baseline + inverse(neural) - inverse(prepared)`
+Captured HDR exposure is NOT automatically DLSS SR's internal exposure, NR
+pre-exposure, or proof that the submitted colour has not already been exposed.
+The engine formula is now instrumented; model-domain and placement hypotheses
+are tested by the assessment runner rather than assumed from texture format.
 
-Thus a copied/identity model result returns the original baseline rather than
-accumulating a lossy packed-float forward/inverse round trip. Source alpha is
-preserved where the source format carries it. Genuine nonfinite baselines are
-sanitized, not passed into further arithmetic.
+## Profiles, history and resource ownership
 
-## Ownership, history and fallback
+Early `upscaled_center` and late `final_ldr_pre_ui` profiles are independent.
+Each declares an explicit domain candidate (`unknown`, `linear`, `srgb`), a
+transform (`identity`, `linear_to_srgb`, `reversible_proxy`), a calibration
+multiplier and exposure source (`manual`, `captured_hdr`). Identity requires
+manual multiplier one. Nonidentity requires the explicit linear candidate.
 
-A per-route transaction key (presentation frame, immutable source world frame,
-generation, insertion point) latches configuration for both eyes, even when they
-arrive through separate public calls. Each physical slot snapshots its colour
-baseline in a local ROI-sized texture. Prepared inputs and raw NR outputs remain
-private. Every physical reconstruction is queued before any caller output is
-committed. Existing caller-level stereo/menu fallback remains authoritative.
+The proxy uses exposure-scaled RGB / (1 + max RGB), then sRGB encoding. Its
+inverse has a guarded denominator. Supported scaled input max is 32; inverse
+denominator must be at least 1/64. Invalid input/inverse retains the baseline
+and is counted, so a fallback cannot masquerade as a successful zero-error
+round trip. This bounded proxy is not lossless HDR coverage. Do not infer a
+source domain merely from floating-point storage or the name Final LDR.
 
-Colour-enabled sequential stereo requests use the atomic batch path. Direct
-output requests still receive reconstructed colour through private staging;
-the UI/status states this explicitly rather than silently bypassing correction.
-Colour input interpretation changes increment per-insertion history epochs.
-Post-composite strength changes do not reset neural history. Bypass invalidates
-history so inference resumes with a reset. Existing cluster-specific history
-logic and provider rectangles are preserved.
+Input interpretation changes advance the existing per-insertion history epoch.
+A/B visibility and diagnostics do not. Normal variation of captured exposure
+does not change configuration revision or reset the network each frame.
+Local colour resources reuse 64-pixel-rounded capacities. Shared interop fences
+and the renderer's reset/unsafe-detach boundary govern lifetime. The new t3
+binding and predication are saved/restored. NR off performs no capture dispatch.
 
-ROI colour allocations round capacity up to 64 pixels and are retained/reused,
-not allocated per pixel or per frame. The colour pipeline saves/restores touched
-compute bindings and predication. GPU ordering uses existing shared-fence waits.
-New resources participate in reset and unsafe-detach paths. No new runtime
-`Flush` or synchronous readback is introduced by colour diagnostics.
+## DevBench API v2
 
-## Transport bypass and measurements
+Tool: **communityshaders.nr_color**. Actions: `status`, `configure`,
+`reset_experiments`, `assets`. Responses explicitly report `ok` and error codes
+so automation/dev can enforce semantic success. Configuration acknowledges
+registry state, not completed GPU work; require processed, fresh measurements.
 
-Transient `transportBypass` retains preparation, D3D11-to-D3D12 synchronization,
-a D3D12 subrect copy in place of inference, reconstruction and output commit.
-It still initializes the existing backend, so it requires a compatible local
-runtime; it is not a runtime-free interop test. No NGX evaluation success or NR
-GPU inference sample is invented for this copy-only submission. The dedicated
-copy scope supplies the submission metadata required by the existing interop.
+```json
+{"action":"configure","settings":{"enabled":true,"mode":"preserve_source"},"experiments":{"applyModelEdit":true,"diagnostics":true,"captureEngineExposure":true}}
+```
 
-Transient `diagnostics` uses a maximum of 4096 spatial samples per physical ROI,
-three readback buffers and nonblocking event/Map polling. Results retain the
-sample's source frame, slot, rectangle and configuration revision. Unavailable
-samples are dropped rather than blocking the render thread. Diagnostics are
-optional, not runtime-admission gates. Old samples can remain visible in status;
-always compare their revision/frame, not their position in the array.
+Display-only A/B, retaining real inference:
 
-The sixteen `values` entries are four float4 rows:
+```json
+{"action":"configure","experiments":{"applyModelEdit":false}}
+```
+
+Frame-matched exposure candidate (NOT an assertion that early input is linear):
+
+```json
+{"action":"configure","settings":{"enabled":true,"mode":"managed"},"experiments":{"upscaled_center":{"domain":"linear","transform":"reversible_proxy","exposureSource":"captured_hdr","exposureMultiplier":1.0},"applyModelEdit":true,"diagnostics":true}}
+```
+
+Use `expectedRevision` from status for automatic changes. Read-only provenance
+fields in profile status are not accepted as configure fields. The supplied
+runner projects only editable fields when restoring settings.
+
+Measurements retain the previous first sixteen values and append two float4s:
 
 | Indices | Meaning |
 | --- | --- |
-| 0..3 | Baseline mean RGB; valid baseline/result comparison count |
-| 4..7 | Reconstructed mean RGB; mean absolute RGB error |
-| 8..11 | Maximum absolute RGB error; result near-black count; result at/above-one count; raw NR outside-zero-to-one count |
-| 12..15 | Nonfinite baseline, raw NR and result sample counts; total sample count |
+| 0..3 | Baseline mean RGB; valid baseline/result comparisons |
+| 4..7 | Result mean RGB; mean absolute RGB difference |
+| 8..11 | Max absolute difference; result near-black count; result >=1 count; raw NR outside 0..1 count |
+| 12..15 | Nonfinite baseline/NR/result counts; total samples |
+| 16..19 | Invalid forward/inverse samples; effective exposure; effective-exposure-valid flag |
+| 20..23 | Captured average/target/ratio/validity (0 invalid, 1 ratio, 2 unit fallback) |
 
-Above-one is not necessarily clipping for HDR. These are source-value summaries,
-not calibrated display luminance. Preparation/reconstruction microseconds are
-**CPU enqueue times**. Existing profiler scopes mark the added passes; NR's
-existing D3D12 timestamps continue to measure real inference only. Retained
-colour texture bytes exclude provider backing storage and optional readback
-objects.
+Above-one is not necessarily HDR clipping. CPU enqueue measurements are not GPU
+timing. Optional capture/readback and colour passes have overhead to measure
+locally. Old samples remain visible with their original revision/frame; never
+accept them just because they occupy the latest array slot.
 
-## DevBench
+## Automated assessment using skyrim-vr-automation/dev
 
-The complementary `communityshaders.nr_color` tool avoids changing the existing
-render-scale API. It supports atomic `configure`, `status`, `reset_experiments`.
-Use `expectedRevision` for compare-and-set updates. The handler only changes a
-mutex-protected registry, never engine/GPU state from its worker thread.
+Reviewed automation/dev revision:
+`a4ab2cf6ea6c853926918e5626b8d17f15cf5d79`.
+`tools/nr-color/assess.py` uses that repo's existing **Invoke-DevBenchControl.ps1**
+and optional **Invoke-CaptureInteraction.ps1**. It does not implement another
+HTTP client, bypass runtime identity checks, edit MO2 profiles, launch Skyrim,
+move the camera, change cells or execute tfc1.
 
-Baseline-preserving appearance experiment (works for standard and character NR):
-
-```json
-{"action":"configure","settings":{"mode":"preserve_source","detailStrength":1.0,"appearanceMix":0.0,"maximumDetailStops":1.0}}
-```
-
-Transport test with identity processing and bounded measurements:
-
-```json
-{"action":"configure","settings":{"mode":"managed"},"experiments":{"transportBypass":true,"diagnostics":true}}
-```
-
-Explicit early linear-source proxy experiment; choose only after auditing the
-actual source colour domain:
-
-```json
-{"action":"configure","settings":{"mode":"managed"},"experiments":{"transportBypass":false,"upscaled_center":{"domain":"linear","transform":"reversible_proxy","exposureMultiplier":1.0}}}
-```
-
-Reset diagnostic overrides before comparing insertion points:
-
-```json
-{"action":"reset_experiments"}
-```
-
-Configuration requests validate names, types, finite ranges and profile
-compatibility before mutation. Persisted settings include only the mode/detail/
-appearance controls. Use the game's existing save-settings mechanism to save
-those controls. A successful configuration response does not establish that a
-subsequent shader/runtime evaluation succeeded; inspect processed/failure and
-source attribution in status.
-
-## Validation
-
-Standalone tests, independent of the Windows plugin build:
+First prepare an existing isolated test workspace, load a static scene, enable
+NR and choose its insertion point using your normal automation/UI. The script
+checks the expected cell/upscaling barrier; it does not set up or mutate the
+scene for you. Plan-only is the default:
 
 ```powershell
+python tools/nr-color/assess.py --include-captured
+```
+
+Live example; supply real paths/cell for the prepared workspace:
+
+```powershell
+python tools/nr-color/assess.py --live --confirm-static-scene --include-captured --capture-episodes --automation-root D:\Coding\GitHub\skyrim-vr-automation --runtime C:\YourTestWorkspace\runtime.json --evidence-dir C:\YourTestWorkspace\evidence\nr-colour-run-01 --expected-cell YourLoadedCell --insertion upscaled_center
+```
+
+The evidence directory must be NEW. Optional `--deployed-data` verifies shader
+hashes first. The controller's artifact/workspace proof can be supplied with
+`--artifact-path`, `--workspace-manifest`, `--expected-build-id` and
+`--expected-artifact-sha256`. No bypass permission flags are used.
+
+Each candidate gets a transport test and real-inference comparison, bounded
+warm-up/polling, fresh same-revision stereo/region measurements and validity
+checks. Captured candidates require matching source-frame exposure; missing
+exposure, invalid inverses and zero-error fallback are not a pass. Optional
+shown-edit and hidden-edit capture episodes retain state/frame manifests for
+visual review. Those images are separate live frames, not falsely labelled the
+exact same frame as a numeric sample. Keep camera/scene stable.
+
+The runner journals requests/responses, pins the returned runtime identity,
+uses semantic/performance-neutral guards, and never retries an indeterminate
+mutation. It restores only its owned configuration under a revision check;
+a concurrent UI/agent change is preserved and recovery evidence is retained.
+
+Output ranks **source RGB drift**, not physical material correctness. Successful
+inverse round trips cannot identify a model's expected colour domain: all
+consistent invertible candidate pairs can pass. `domainVerified` therefore
+remains false and no production profile is silently selected. Use the collected
+producer evidence and A/B images to adjudicate the candidates across scenes.
+This implements automatic data collection/assessment, not fabricated certainty.
+
+## Shader inventory, deployment and tests
+
+All required shaders are in the colour feature package: ColorPrepareCS,
+ColorReconstructCS, ColorMeasureCS, ColorExposureCS, plus ColorCommon.hlsli.
+Normal recursive source/feature discovery and shader-copy paths include them.
+Install the rebuilt plugin AND feature/shader files. The manifest is 1-1-0.
+
+```powershell
+python tools/nr-color/verify_assets.py
+python tools/nr-color/verify_assets.py --deployed-data C:\YourTestWorkspace\Data
 cmake -S tests/neural_color -B build/nr-color-tests
 cmake --build build/nr-color-tests --config Release
 ctest --test-dir build/nr-color-tests -C Release --output-on-failure
 ```
 
-The portable policy executable covers enums, finite/range checks, encoding/proxy
-round trips, residual identity, near-black/invalid cases and input-history
-identity. Python source-contract tests guard integration and ownership order;
-they do not prove C++/HLSL compilation. The Windows-only WARP test compiles all
-three compute shaders and exercises prepare/reconstruct, identity, alpha,
-nonzero ROI offsets, sentinels and appearance endpoints with mock model output.
-It does not execute NVIDIA NR or D3D12 interop.
+The verifier checks include closure, runtime shader paths and optional exact
+source/deployed SHA-256 parity. File presence alone is not shader compilation
+or proof of the winning MO2/VFS files; select the actual test Data root.
 
-Source-level checks and portable tests were run during authoring. The Windows
-plugin build, WARP execution and real NR tests are explicitly deferred to the
-user. Run the existing controller/depth/mask tests as well, then test matched
-NR-off, transport, raw, managed and preserve-source frames with character mode
-off/on, single/multi-ROI, early/late insertion and main/submit routes. Warm up
-histories consistently. Include bright highlights, dark interiors, moving
-characters, ROI edges, pauses and UI transitions. Differences in smaller-ROI
-NR candidates can arise from changed model context, not only colour conversion.
-
-## Evidence boundaries
-
-Streamline 2.14.1 publishes feature/tag identifiers, not a complete NR colour
-contract. SR exposure fields must not be mapped to invented NR keys. The
-September 13 OptiScaler HUD-less capture change (`731f3b7`) aligns its UNORM
-interop resource format; it is not evidence that arbitrary CSX HDR values must
-be sRGB-decoded. No blanket view-format or gamma change is made here.
-
-Future automatic exposure capture must prove the engine producer, units,
-pre-exposure relationship and same-source-frame lifetime before replacing the
-explicit Unknown/manual status. This experiment supplies real transport and
-comparison controls without claiming those missing facts have been established.
+Authoring validation: portable colour/exposure policy executables, Python
+assessment fixtures and source asset inventory were run. Two existing local
+source-contract subtests can run independently; the full old renderer/feature
+contract suite needs a complete checkout. Windows targets retain the original
+WARP suite and add production exposure/t3/A-B/96-byte statistics coverage.
+Windows plugin compilation, both WARP executions, PowerShell live orchestration,
+actual engine-hook timing and Skyrim image/performance testing are NOT claimed.

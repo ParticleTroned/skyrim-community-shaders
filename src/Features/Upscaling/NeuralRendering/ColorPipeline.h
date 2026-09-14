@@ -2,6 +2,7 @@
 
 #include "ColorPolicy.h"
 #include "ComputeSubrect.h"
+#include "ExposureCapture.h"
 #include <array>
 #include <cstdint>
 #include <mutex>
@@ -11,6 +12,7 @@
 
 namespace NeuralRendering::Color
 {
+	inline constexpr std::size_t kMeasurementValues = 24;
 	struct Observation
 	{
 		std::uint32_t frame = 0, sourceWorldFrame = 0, slot = 0, insertion = 0;
@@ -20,27 +22,25 @@ namespace NeuralRendering::Color
 		Mode mode = Mode::LegacyRaw;
 		Profile profile{};
 		bool bypass = false, atomicStereo = false, processed = false;
-		std::uint64_t preparationCpuMicroseconds = 0, reconstructionCpuMicroseconds = 0;
-		std::uint64_t retainedBytes = 0;
+		bool modelEditShown = true;
+		ExposureBindingState exposureState = ExposureBindingState::NotRequested;
+		ExposureEvidence exposure{};
+		std::uint64_t preparationCpuMicroseconds = 0, reconstructionCpuMicroseconds = 0, retainedBytes = 0;
 		std::string failure;
 	};
-
 	struct Measurement
 	{
 		Observation source{};
-		// Four float4 rows from the bounded GPU sampling pass.
-		std::array<float, 16> data{};
+		// First 16 entries retain API-v1 meanings. Last 8 expose codec validity
+		// and the exact exposure snapshot used by this measured transaction.
+		std::array<float, kMeasurementValues> data{};
 	};
-
 	struct Status
 	{
 		std::array<Observation, 8> slots{};
 		std::array<Measurement, 8> measurements{};
 		std::uint64_t prepared = 0, reconstructed = 0, failed = 0, bypassed = 0, samples = 0, dropped = 0;
 	};
-
-	// One snapshot per outer Renderer entry. Never query changing global colour
-	// settings halfway through a stereo/region transaction.
 	class Registry
 	{
 	public:
@@ -56,7 +56,6 @@ namespace NeuralRendering::Color
 		Configuration configuration_{};
 		Status status_{};
 	};
-
 	struct Texture
 	{
 		Microsoft::WRL::ComPtr<ID3D11Texture2D> resource;
@@ -64,7 +63,6 @@ namespace NeuralRendering::Color
 		Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> uav;
 		void Abandon() noexcept;
 	};
-
 	struct Readback
 	{
 		Microsoft::WRL::ComPtr<ID3D11Buffer> gpu, staging;
@@ -74,10 +72,10 @@ namespace NeuralRendering::Color
 		bool pending = false;
 		void Abandon() noexcept;
 	};
-
 	struct Work
 	{
 		Texture baseline, result;
+		ExposureBinding exposure;
 		std::array<Readback, 3> readbacks{};
 		std::uint32_t capacityWidth = 0, capacityHeight = 0;
 		DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
@@ -85,7 +83,6 @@ namespace NeuralRendering::Color
 		Observation observation{};
 		void Abandon() noexcept;
 	};
-
 	class Pipeline
 	{
 	public:
@@ -94,8 +91,7 @@ namespace NeuralRendering::Color
 			ID3D11Resource* prepared, ID3D11UnorderedAccessView* preparedUAV,
 			const Configuration&, Observation);
 		bool Reconstruct(ID3D11DeviceContext*, Work&, ID3D11Resource* neural,
-			ID3D11ShaderResourceView* neuralSRV, ID3D11ShaderResourceView* preparedSRV,
-			const Configuration&);
+			ID3D11ShaderResourceView* neuralSRV, ID3D11ShaderResourceView* preparedSRV, const Configuration&);
 		void Commit(ID3D11DeviceContext*, const Work&, ID3D11Resource* destination);
 		void Reset() noexcept;
 		void Abandon() noexcept;
@@ -105,7 +101,6 @@ namespace NeuralRendering::Color
 		void Measure(ID3D11DeviceContext*, Work&, ID3D11ShaderResourceView* neural);
 		Microsoft::WRL::ComPtr<ID3D11ComputeShader> prepare_, reconstruct_, measure_;
 		Microsoft::WRL::ComPtr<ID3D11Buffer> constants_;
-		bool compileFailed_ = false;
-		bool measureCompileAttempted_ = false;
+		bool compileFailed_ = false, measureCompileAttempted_ = false;
 	};
 }

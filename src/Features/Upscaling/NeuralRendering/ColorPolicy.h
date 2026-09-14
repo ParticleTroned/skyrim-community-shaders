@@ -8,10 +8,11 @@
 
 namespace NeuralRendering::Color
 {
-	// These are CSX colour experiments, NOT NVIDIA NGX/Streamline parameters.
+	// CSX processing choices, not NVIDIA NGX/Streamline parameters.
 	enum class Mode : std::uint32_t { LegacyRaw, Managed, PreserveSource, Count };
 	enum class Domain : std::uint32_t { Unknown, Linear, SRGB, Count };
 	enum class Transform : std::uint32_t { Identity, LinearToSRGB, ReversibleProxy, Count };
+	enum class ExposureSource : std::uint32_t { Manual, CapturedHDR, Count };
 
 	[[nodiscard]] inline bool Finite(float value) noexcept
 	{
@@ -25,6 +26,8 @@ namespace NeuralRendering::Color
 		float detailStrength = 1.0f;
 		float appearanceMix = 0.0f;
 		float maximumDetailStops = 1.0f;
+		// Disable colour processing without forgetting the selected mode/sliders.
+		bool enabled = true;
 		bool operator==(const Settings&) const = default;
 	};
 
@@ -32,8 +35,10 @@ namespace NeuralRendering::Color
 	{
 		Domain domain = Domain::Unknown;
 		Transform transform = Transform::Identity;
-		// Explicit diagnostic multiplier, not measured engine/SR exposure.
+		// A calibration factor, not a measurement. CapturedHDR multiplies it by
+		// the frame-matched GPU snapshot of ISHDR's AvgTex.y / AvgTex.x.
 		float exposureMultiplier = 1.0f;
+		ExposureSource exposureSource = ExposureSource::Manual;
 		bool operator==(const Profile&) const = default;
 	};
 
@@ -43,6 +48,10 @@ namespace NeuralRendering::Color
 		std::array<Profile, 2> profiles{};
 		bool transportBypass = false;
 		bool diagnostics = false;
+		bool captureEngineExposure = false;
+		// Unlike transportBypass, this keeps real inference running. It is a
+		// display comparison only and must not change the input-history epoch.
+		bool applyModelEdit = true;
 		bool operator==(const Experiments&) const = default;
 	};
 
@@ -52,9 +61,14 @@ namespace NeuralRendering::Color
 		Experiments experiments{};
 		std::uint64_t revision = 1;
 		std::array<std::uint64_t, 2> inputEpoch{ 1, 1 };
+		[[nodiscard]] Mode EffectiveMode() const noexcept
+		{
+			return settings.enabled ? settings.mode : Mode::LegacyRaw;
+		}
 		[[nodiscard]] bool Enabled() const noexcept
 		{
-			return settings.mode != Mode::LegacyRaw || experiments.transportBypass || experiments.diagnostics;
+			return EffectiveMode() != Mode::LegacyRaw || experiments.transportBypass ||
+			       experiments.diagnostics || experiments.captureEngineExposure || !experiments.applyModelEdit;
 		}
 	};
 
@@ -68,11 +82,13 @@ namespace NeuralRendering::Color
 
 	[[nodiscard]] inline bool Valid(const Profile& value) noexcept
 	{
-		if (value.domain >= Domain::Count || value.transform >= Transform::Count ||
+		if (value.domain >= Domain::Count || value.transform >= Transform::Count || value.exposureSource >= ExposureSource::Count ||
 			!Finite(value.exposureMultiplier) || value.exposureMultiplier < 1.0f / 256.0f || value.exposureMultiplier > 256.0f)
 			return false;
-		// Encoding/proxy experiments require an explicit linear-source assertion.
-		return value.transform == Transform::Identity ? value.exposureMultiplier == 1.0f : value.domain == Domain::Linear;
+		// Capturing an engine exposure does NOT prove a linear source domain.
+		return value.transform == Transform::Identity ?
+		           value.exposureMultiplier == 1.0f && value.exposureSource == ExposureSource::Manual :
+		           value.domain == Domain::Linear;
 	}
 
 	[[nodiscard]] inline bool Valid(const Experiments& value) noexcept
@@ -82,9 +98,16 @@ namespace NeuralRendering::Color
 
 	[[nodiscard]] inline Profile EffectiveProfile(const Configuration& value, std::uint32_t insertion) noexcept
 	{
-		if (value.settings.mode == Mode::LegacyRaw || insertion >= 2)
+		if (value.EffectiveMode() == Mode::LegacyRaw || insertion >= 2)
 			return {};
 		return value.experiments.profiles[insertion];
+	}
+
+	[[nodiscard]] inline bool NeedsExposureCapture(const Configuration& value) noexcept
+	{
+		return value.experiments.captureEngineExposure ||
+		       EffectiveProfile(value, 0).exposureSource == ExposureSource::CapturedHDR ||
+		       EffectiveProfile(value, 1).exposureSource == ExposureSource::CapturedHDR;
 	}
 
 	[[nodiscard]] inline bool ChangesInput(const Configuration& oldValue, const Configuration& newValue, std::uint32_t insertion) noexcept
@@ -107,10 +130,11 @@ namespace NeuralRendering::Color
 		return x <= 0.0031308f ? 12.92f * x : 1.055f * std::pow(x, 1.0f / 2.4f) - 0.055f;
 	}
 
-	// CPU reference for shader tests. False means no safe inverse; retain baseline.
+	// CPU reference. Resolve a captured exposure with ResolveExposureProfile
+	// before calling this; an unbound GPU-dependent profile must fail closed.
 	[[nodiscard]] inline bool Forward(RGB input, const Profile& profile, RGB& output) noexcept
 	{
-		if (!Valid(profile) || !Finite(input))
+		if (!Valid(profile) || profile.exposureSource != ExposureSource::Manual || !Finite(input))
 			return false;
 		output = input;
 		if (profile.transform == Transform::Identity)
@@ -122,7 +146,6 @@ namespace NeuralRendering::Color
 		if (!Finite(output))
 			return false;
 		const auto maximum = *std::max_element(output.begin(), output.end());
-		// Bound diagnostic encodings and avoid a near-singular packed-float proxy.
 		if (maximum > 32.0f)
 			return false;
 		if (profile.transform == Transform::ReversibleProxy) {
@@ -136,7 +159,7 @@ namespace NeuralRendering::Color
 
 	[[nodiscard]] inline bool Inverse(RGB input, const Profile& profile, RGB& output) noexcept
 	{
-		if (!Valid(profile) || !Finite(input))
+		if (!Valid(profile) || profile.exposureSource != ExposureSource::Manual || !Finite(input))
 			return false;
 		output = input;
 		if (profile.transform == Transform::Identity)

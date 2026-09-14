@@ -17,4 +17,5 @@ struct NeuralColor : Feature
 	void RestoreDefaultSettings() override;
 	void DrawSettings() override;
 	void DataLoaded() override;
+	void EarlyPrepass() override;
 };

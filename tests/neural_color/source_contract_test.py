@@ -41,7 +41,7 @@ class Contracts(unittest.TestCase):
         self.assertIn("&NeuralColor::Instance()", source)
         self.assertTrue((ROOT / "features/Neural Rendering Colour/CORE").exists())
         ini = ROOT / "features/Neural Rendering Colour/Shaders/Features/NeuralColor.ini"
-        self.assertIn("Version = 1-0-0", ini.read_text())
+        self.assertIn("Version = 1-1-0", ini.read_text())
         ui = (ROOT / "src/Features/NeuralColor.cpp").read_text()
         self.assertIn('"communityshaders.nr_color"', ui)
         save = ui[ui.index("void NeuralColor::SaveSettings"):ui.index("void NeuralColor::RestoreDefaultSettings")]

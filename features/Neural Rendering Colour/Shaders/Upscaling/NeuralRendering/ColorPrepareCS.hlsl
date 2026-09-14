@@ -8,8 +8,8 @@ void main(uint3 id : SV_DispatchThreadID)
 		return;
 	float4 original = Baseline.Load(int3(id.xy, 0));
 	float3 value;
-	// Invalid proxy inputs are excluded again during reconstruction. Black is
-	// used as the finite model input, not an undocumented fallback colour space.
+	// Missing/invalid captured exposure is excluded again in reconstruction and
+	// counted in diagnostics; black is finite input, not a guessed colour space.
 	bool valid = ForwardColor(original.rgb, value);
-	Prepared[RegionOffset + id.xy] = float4(valid ? value : 0.0, original.a);
+	Prepared[RegionOffset + id.xy] = float4(valid ? value : 0.0, isfinite(original.a) ? original.a : 0.0);
 }

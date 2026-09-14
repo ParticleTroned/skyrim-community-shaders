@@ -159,6 +159,13 @@ void CheckOff(AdaptiveBrightness& balance, const LinearLighting::Settings& indep
 
 int main()
 {
+	// Keep zero-identity guards exercised at runtime under Release optimization.
+	for (const auto& [identity, expected] : std::array<std::array<float, 2>, 6>{ { { 0.0f, 2.5f }, { -0.0f, 2.5f }, { 0.0001f, 2.5f },
+			 { -0.0001f, 2.5f }, { 1.0f, 1.0f }, { -1.0f, -1.0f } } }) {
+		volatile float runtimeIdentity = identity;
+		assert(Close(ApplyRelativeValue(2.0f, 0.5f, runtimeIdentity), expected));
+	}
+
 	AdaptiveBrightness balance;
 	auto& global = balance.settings.globalProfile;
 	global.brightness = 1.2f;

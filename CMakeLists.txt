@@ -1708,6 +1708,13 @@ if(BUILD_CONTROLLER_TESTS)
         adaptive_balance_toggle_test
         PRIVATE "${_adaptive_balance_test_dir}"
     )
+    if(MSVC)
+        # Extracted adjustment arithmetic must use the DLL's Release FP model.
+        target_compile_options(
+            adaptive_balance_toggle_test
+            PRIVATE "$<$<CONFIG:Release>:/fp:fast>"
+        )
+    endif()
 
     add_controller_test(
         d3d_context_protection_test

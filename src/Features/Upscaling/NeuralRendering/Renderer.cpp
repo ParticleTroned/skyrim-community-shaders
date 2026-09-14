@@ -1,5 +1,6 @@
 #include "Renderer.h"
 
+#include "ColorPipeline.h"
 #include "D3D12Interop.h"
 #include "PipelinePolicy.h"
 #include "Utils/D3D.h"
@@ -42,6 +43,30 @@ namespace NeuralRendering
 		static_assert(!IsSourceWorldFrameContinuous(41u, 41u));
 		static_assert(IsSourceWorldFrameContinuous(41u, 42u));
 		static_assert(!IsSourceWorldFrameContinuous(41u, 43u));
+
+		// Preparation and commit copies must not inherit an engine occlusion predicate.
+		class ColorPredicationGuard
+		{
+		public:
+			ColorPredicationGuard(ID3D11DeviceContext* a_context, bool a_active) :
+				context_(a_active ? a_context : nullptr)
+			{
+				if (context_) {
+					context_->GetPredication(&predicate_, &value_);
+					context_->SetPredication(nullptr, FALSE);
+				}
+			}
+			~ColorPredicationGuard()
+			{
+				if (context_) context_->SetPredication(predicate_.Get(), value_);
+			}
+			ColorPredicationGuard(const ColorPredicationGuard&) = delete;
+			ColorPredicationGuard& operator=(const ColorPredicationGuard&) = delete;
+		private:
+			ID3D11DeviceContext* context_;
+			ComPtr<ID3D11Predicate> predicate_;
+			BOOL value_ = FALSE;
+		};
 
 		struct CopyDepthGuideConstants
 		{
@@ -532,6 +557,7 @@ namespace NeuralRendering
 			DXGI_FORMAT controlMaskFormat = DXGI_FORMAT_UNKNOWN;
 			bool controlMaskPresent = false;
 			bool featureUpscaling = false;
+			bool colorProcessing = false;
 
 			bool operator==(const ResourceKey&) const = default;
 		};
@@ -618,7 +644,10 @@ namespace NeuralRendering
 		RendererSnapshot SnapshotLocked()
 		{
 			RefreshInteropTelemetryLocked();
-			return snapshot_;
+			auto result = snapshot_;
+			if (!result.detail.empty()) result.detail += "; ";
+			result.detail += colorPipeline_.Description();
+			return result;
 		}
 		bool IsFailureLatchedLocked() const noexcept { return failureLatched_; }
 		bool IsQuarantinedLocked() const noexcept { return quarantined_; }
@@ -669,6 +698,7 @@ namespace NeuralRendering
 		void SucceedLocked(std::uint32_t a_slot) noexcept;
 
 		D3D12Interop interop_;
+		ColorPipeline colorPipeline_;
 		std::array<Slot, Runtime::kFeatureSlotCount> slots_{};
 		ComPtr<ID3D11Device> device_;
 		ComPtr<ID3D11DeviceContext> context_;
@@ -964,6 +994,7 @@ namespace NeuralRendering
 			                         DXGI_FORMAT_UNKNOWN,
 			.controlMaskPresent = hasControlMask,
 			.featureUpscaling = a_args.featureUpscaling,
+			.colorProcessing = colorPipeline_.Settings(a_args.insertionPoint).Active(),
 		};
 		a_resources.historyKey = {
 			.resources = a_resources.resourceKey,
@@ -1327,6 +1358,7 @@ namespace NeuralRendering
 		}
 
 		slots_ = {};
+		colorPipeline_.ResetResources(a_resetShader);
 		device_.Reset();
 		context_.Reset();
 		if (a_resetShader) {
@@ -1353,6 +1385,7 @@ namespace NeuralRendering
 
 	void Renderer::State::AbandonSlotsLocked() noexcept
 	{
+		colorPipeline_.Abandon();
 		for (auto& slot : slots_) {
 			Abandon(slot.color);
 			Abandon(slot.depth);
@@ -1589,7 +1622,7 @@ namespace NeuralRendering
 			a_resources.resourceKey.outputWidth,
 			a_resources.resourceKey.outputHeight,
 			a_resources.resourceKey.outputFormat,
-			false);
+			a_resources.resourceKey.colorProcessing);
 		D3D11_TEXTURE2D_DESC controlMaskDesc{};
 		if (a_resources.resourceKey.controlMaskPresent) {
 			controlMaskDesc = MakeSharedDescription(
@@ -1725,6 +1758,8 @@ namespace NeuralRendering
 		if (!GetStereoPairContractViolation(a_args).empty()) {
 			return ApplyBatchLocked(a_args, a_outcome);
 		}
+		if (!colorPipeline_.LoadSettings())
+			return ApplyBatchLocked(a_args, a_outcome);
 
 		std::array<ValidatedResources, 2> resources{};
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
@@ -1852,6 +1887,10 @@ namespace NeuralRendering
 		snapshot_.motionVectorFormat = 0;
 		snapshot_.outputFormat = 0;
 		snapshot_.controlMaskFormat = 0;
+		if (!colorPipeline_.LoadSettings()) {
+			return FailLocked(RendererStage::Validation, E_INVALIDARG,
+				colorPipeline_.Description(), a_args.front().featureSlot, true);
+		}
 
 		if (a_args.size() == 2) {
 			SetActiveFeatureSlotLocked(a_args[1].featureSlot);
@@ -1932,6 +1971,9 @@ namespace NeuralRendering
 		}
 		snapshot_.lastCompletedStage = RendererStage::Validation;
 
+		ColorPredicationGuard colorPredicate(a_args.front().context,
+			std::ranges::any_of(std::span(resources.data(), a_args.size()),
+				[](const auto& resource) { return resource.resourceKey.colorProcessing; }));
 		activeStage_ = RendererStage::DeviceCompatibility;
 		SetActiveFeatureSlotLocked(a_args.front().featureSlot);
 		if (!EnsureBackendLocked(a_args.front()))
@@ -1943,6 +1985,13 @@ namespace NeuralRendering
 			if (!EnsureSlotLocked(a_args[index].featureSlot, resources[index]))
 				return false;
 			slots[index] = &slots_[a_args[index].featureSlot];
+			if (resources[index].resourceKey.colorProcessing &&
+				!colorPipeline_.Ensure(a_args[index].featureSlot, a_args[index].device,
+					slots[index]->color, slots[index]->output)) {
+				return FailLocked(RendererStage::ResourceCreation, E_FAIL,
+					"NR colour resources or shaders could not be created",
+					a_args[index].featureSlot, true);
+			}
 		}
 
 		const auto preparationStarted = std::chrono::steady_clock::now();
@@ -1954,6 +2003,12 @@ namespace NeuralRendering
 				slots[index]->color.resource11.Get(),
 				resources[index].color.texture.Get(),
 				resources[index].colorSubrect);
+			if (resources[index].resourceKey.colorProcessing &&
+				!colorPipeline_.Prepare(a_args[index], resources[index].colorSubrect, slots[index]->color)) {
+				return FailLocked(RendererStage::ColorInputCopy, E_FAIL,
+					"NR colour preparation failed before submission",
+					a_args[index].featureSlot, true);
+			}
 		}
 		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
 			return FailLocked(
@@ -2230,6 +2285,14 @@ namespace NeuralRendering
 				true,
 				!aborted);
 		}
+		// RoundTrip intentionally still executes NGX. Keep NGX outcome/timing
+		// attribution truthful; the additional diagnostic copies are outside its timer.
+		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			if (colorPipeline_.Settings(a_args[index].insertionPoint).roundTrip) {
+				colorPipeline_.RecordRoundTrip(commandList, slots[index]->color,
+					slots[index]->output, resources[index].outputSubrect);
+			}
+		}
 		TransitionResources(commandList, resourceSpan, false);
 		activeStage_ = RendererStage::CommandEnd;
 		if (!interop_.EndD3D12()) {
@@ -2258,12 +2321,25 @@ namespace NeuralRendering
 		// Both private inputs are prepared before submission and neither caller-owned
 		// output is written until every eye has recorded successfully.
 		const auto outputCommitStarted = std::chrono::steady_clock::now();
+		// Resolve every physical ROI privately BEFORE any caller destination is
+		// touched. Character strength remains solely owned by the existing composite.
+		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
+			if (resources[index].resourceKey.colorProcessing &&
+				!colorPipeline_.Resolve(a_args[index], resources[index].outputSubrect,
+					slots[index]->color, slots[index]->output)) {
+				return FailLocked(RendererStage::OutputCommit, E_FAIL,
+					"NR colour reconstruction failed before external commit",
+					a_args[index].featureSlot, true);
+			}
+		}
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
 			CopyTextureSubrect(
 				a_args.front().context,
 				resources[index].output.texture.Get(),
-				slots[index]->output.resource11.Get(),
+				resources[index].resourceKey.colorProcessing ?
+					colorPipeline_.Output(a_args[index].featureSlot) : slots[index]->output.resource11.Get(),
 				resources[index].outputSubrect);
 		}
 		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
@@ -2299,7 +2375,9 @@ namespace NeuralRendering
 
 	bool Renderer::State::ResetLocked(bool a_resetShader, bool a_destruction)
 	{
-		return TeardownBackendLocked(a_resetShader, a_destruction, false);
+		const bool reset = TeardownBackendLocked(a_resetShader, a_destruction, false);
+		if (reset) colorPipeline_.ReloadSettings();
+		return reset;
 	}
 
 	void Renderer::State::ShutdownForDestruction() noexcept

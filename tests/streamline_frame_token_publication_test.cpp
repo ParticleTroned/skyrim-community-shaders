@@ -6,6 +6,7 @@
 #include <array>
 #include <atomic>
 #include <future>
+#include <iostream>
 #include <optional>
 #include <thread>
 
@@ -186,6 +187,39 @@ namespace
 		return advanced && advanced->token == &next && advanced->acquired && acquisitions == 2;
 	}
 
+	bool TestLifecycleResetCannotReopenStaleFrame()
+	{
+		Coordinator coordinator;
+		Token current{ 11 };
+		Token stale{ 10 };
+		Token next{ 12 };
+		std::uint32_t acquisitions = 0;
+		const auto publish = [&](std::uint32_t frame, Token& token) {
+			return coordinator.Resolve(frame, [&](std::uint32_t) -> std::optional<Token*> {
+				++acquisitions;
+				return &token;
+			});
+		};
+
+		if (!publish(11, current))
+			return false;
+		// A relatch may reset caches after Reflex advances ahead of a render caller.
+		coordinator.Reset(StreamlineFrameTokenPublication::ResetScope::Lifecycle);
+		if (publish(10, stale) || acquisitions != 1) {
+			std::cerr << "Lifecycle reset reopened stale frame 10 after frame 11\n";
+			return false;
+		}
+		const auto reacquired = publish(11, current);
+		if (!reacquired || !reacquired->acquired || acquisitions != 2)
+			return false;
+		coordinator.Reset();
+		if (coordinator.Resolve(11, [](std::uint32_t) -> std::optional<Token*> { return std::nullopt; }) ||
+			publish(10, stale) || acquisitions != 2)
+			return false;
+		const auto advanced = publish(12, next);
+		return advanced && advanced->token == &next && advanced->acquired && acquisitions == 3;
+	}
+
 	bool TestFrameCounterWrapRemainsMonotonic()
 	{
 		Coordinator coordinator;
@@ -197,12 +231,17 @@ namespace
 			++acquisitions;
 			return &beforeWrap;
 		});
+		coordinator.Reset();
 		auto wrapped = coordinator.Resolve(0, [&](std::uint32_t) -> std::optional<Token*> {
 			++acquisitions;
 			return &afterWrap;
 		});
 
-		return first && wrapped && wrapped->token == &afterWrap && acquisitions == 2;
+		auto stale = coordinator.Resolve(UINT32_MAX, [&](std::uint32_t) -> std::optional<Token*> {
+			++acquisitions;
+			return &beforeWrap;
+		});
+		return first && wrapped && wrapped->token == &afterWrap && !stale && acquisitions == 2;
 	}
 
 	bool TestOptionalPipelinePolicies()
@@ -361,6 +400,7 @@ int main()
 	               TestFailureAndReset() &&
 	               TestStaleFrameCannotReplacePublication() &&
 	               TestDispatchFailureCannotReopenStaleFrame() &&
+	               TestLifecycleResetCannotReopenStaleFrame() &&
 	               TestFrameCounterWrapRemainsMonotonic() &&
 	               TestOptionalPipelinePolicies() &&
 	               TestProxyLifecycleAndPublicContracts() &&

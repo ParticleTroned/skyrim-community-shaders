@@ -13,6 +13,16 @@ implementation has no performance claim or runtime qualification result;
 new measurements must use the existing comparison ledger and reporting
 workflow.
 
+## September 15: Tasks 1–5 source-to-test audit
+
+The [Tasks 1–5 audit](vr-render-scale-tasks-1-5-audit.md) maps production
+owners, service paths, policy tests and telemetry. A failing regression
+demonstrated that Streamline lifecycle reset could reopen an older frame;
+reset now invalidates the token while preserving frame ordering. The
+existing ownership, milestones and Native-AA mechanisms remain in place.
+Exact-build runtime evidence remains pending. This source/test audit adds
+no performance measurement or numbered ledger snapshot.
+
 ## September 13: FOV mask preview admission
 
 FOV mask visualization now draws through presentation independently of

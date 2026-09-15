@@ -169,13 +169,17 @@ int main()
 	CHECK(Resolve(tiny, 710, state, reason, 256, 128).count == 0);
 	CHECK(reason == CharacterMultiRoiReason::InsufficientSavings);
 
-	// Partitioning supports vertical separation as well as horizontal separation.
-	const std::array vertical{
+	// Vertical separation must also pay the additional invocation reserve.
+	auto vertical = std::array{
 		CharacterMultiRoiActor{ 1, { 500, 20, 650, 170 } },
 		CharacterMultiRoiActor{ 2, { 500, 800, 650, 950 } },
 	};
-	const auto verticalPlan = Resolve(vertical, 711, state, reason);
-	CHECK(verticalPlan.count == 2 && Safe(verticalPlan, vertical));
+	CHECK(Resolve(vertical, 711, state, reason).count == 0);
+	CHECK(reason == CharacterMultiRoiReason::InsufficientSavings);
+	vertical[1].rect.minY += 1000;
+	vertical[1].rect.maxY += 1000;
+	const auto verticalPlan = Resolve(vertical, 711, state, reason, 1536, 2048);
+	CHECK(verticalPlan.count == 2 && Safe(verticalPlan, vertical, 1536, 2048));
 
 	// Many actors are grouped, never reduced to the best two faces.
 	const std::array groups{

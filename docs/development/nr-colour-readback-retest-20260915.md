@@ -108,3 +108,20 @@ preserved in the complete direct-MCP transcript. Transient approval
 service capacity errors cleared on retry of the authorized actions.
 All owned captures and recordings were inactive; the attached game
 was left running. No AIO validation campaign was run.
+
+## Validation after the implementation commit
+
+After committing d3e9cd7a9, these checks passed:
+
+-   `pwsh ./tools/cmake.ps1 --build build/nrc --config Release --target character_mask_bounds_gpu_test`: Release build passed.
+-   `ctest --test-dir build/nrc -C Release -R '^CharacterMaskBoundsGpu$' --output-on-failure`: 1/1 passed in 3.41 seconds; 294 WARP cases, including delayed stereo-fence completion and stale-signal rejection.
+-   `ctest --test-dir build/nrc -C Release -R '^(NeuralRenderingDevBenchContract|NeuralMultiRoiContract)$' --output-on-failure`: 2/2 passed in 1.46 seconds.
+-   `python tools/nr-color/verify_assets.py` from the source root: all six feature assets passed.
+-   `pwsh ./tools/cmake.ps1 -S build/nrc-src/tests/neural_color -B build/nr-color-tests`: standalone configuration passed.
+-   `pwsh ./tools/cmake.ps1 --build build/nr-color-tests --config Release`: standalone Release build passed.
+-   `ctest --test-dir build/nr-color-tests -C Release --output-on-failure`: 16/16 passed in 21.78 seconds.
+
+Scoped formatting hooks passed before the implementation commit. Logs
+are retained as `readback-*.log` in the evidence directory above. The
+full plugin build and AIO artifact identity are recorded in its local
+build receipt; none of these tests qualifies the new DLL in game.

@@ -61,11 +61,15 @@ one. `Common/FrameBuffer.hlsli` subsequently applies `pow(abs(colour),
 FrameParams.x)`; its function name does NOT make that the IEC sRGB curve.
 FrameParams is at PS b12 c84 for VR and c42 for flat rendering in this source.
 
-`ExposureCapture` observes the two known cinematic HDR tonemap effects through
-PRIMARY `BSShader::RestoreTechnique` slot 3, before chaining the previous hook.
-It obtains the concrete effect instances through the pinned CommonLib
-ImageSpaceManager API, not guessed module offsets. Installation runs from the
-normal render-thread EarlyPrepass. It never replaces a NVIDIA entry point.
+`ExposureCapture` observes the two known cinematic HDR tonemap effects after
+the engine flushes graphics bindings in `BSGraphics_SetDirtyStates`, before
+the HDR draw. Compute dispatches are excluded. It obtains the concrete effect
+instances through the pinned CommonLib ImageSpaceManager API during the
+normal render-thread EarlyPrepass. No additional engine vtable is patched.
+Status reports `producersRegistered`, `captureBoundary` and `lastBinding`
+(frame, dimensions, mip, sample/array counts, formats and identities), even
+for rejected bindings. The compatibility field `hooksInstalled` is now zero.
+Capture alone does not activate colour reconstruction in Legacy Raw mode.
 
 Capture accepts a bound scalar 1x1 floating-point AvgTex view with at least two
 channels. `ColorExposureCS` writes raw average, raw target, ratio and validity
@@ -87,13 +91,15 @@ there is no later lookup of a global/latest exposure and no per-face metering.
 Manual calibration is multiplied by the captured ratio on the GPU. No render-
 thread readback wait or new Flush is introduced.
 
-**Timing qualification is essential.** If this RestoreTechnique boundary has
-already lost PS bindings, the capture is unavailable. If the HDR pass happens
+**Timing qualification is essential.** Missing or unsupported draw bindings
+make capture unavailable. If the HDR pass happens
 after an early NR invocation, that invocation cannot use a future exposure.
 The code reports the mismatch rather than borrowing a previous frame. A later
 insertion can be assessed separately. Different adaptation sources within one
-frame are marked ambiguous. The hook and these route conditions have not been
-qualified in a running Skyrim process here.
+frame are marked ambiguous in both binding and readback evidence. The revised
+draw boundary and these route conditions still require in-game qualification;
+the previous RestoreTechnique observation rejected every tested binding.
+See [the null-driver retest](nr-colour-null-driver-retest-20260915.md).
 
 Captured HDR exposure is NOT automatically DLSS SR's internal exposure, NR
 pre-exposure, or proof that the submitted colour has not already been exposed.

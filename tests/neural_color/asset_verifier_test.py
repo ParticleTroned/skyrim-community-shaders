@@ -21,7 +21,7 @@ class AssetTests(unittest.TestCase):
         manifest = self.root / assets.FEATURE / "Shaders/Features/NeuralColor.ini"
         manifest.parent.mkdir(parents=True); manifest.write_text("[Info]\nVersion = 1-2-0\n")
         for name in assets.NAMES:
-            (self.shaders / name).write_text('#include "ColorCommon.hlsli"\n' if name.endswith(".hlsl") else "// fixture\n")
+            (self.shaders / name).write_text('#include "Upscaling/NeuralRendering/ColorCommon.hlsli"\n' if name.endswith(".hlsl") else "// fixture\n")
         self.producers = self.root / "src/Features/Upscaling/NeuralRendering"
         self.producers.mkdir(parents=True)
         paths = ['L"Data/' + (assets.SHADERS / name).as_posix() + '"' for name in assets.NAMES if name.endswith(".hlsl")]
@@ -37,7 +37,7 @@ class AssetTests(unittest.TestCase):
         self.assertTrue(assets.verify(self.root, self.deployed)["ok"])
 
     def test_present_but_unpackaged_transitive_include(self):
-        (self.shaders / "ColorCommon.hlsli").write_text('#include "Hidden.hlsli"\n')
+        (self.shaders / "ColorCommon.hlsli").write_text('#include "Upscaling/NeuralRendering/Hidden.hlsli"\n')
         (self.shaders / "Hidden.hlsli").write_text("// Not mapped for deployment\n")
         result = assets.verify(self.root)
         self.assertFalse(result["ok"])
@@ -46,6 +46,12 @@ class AssetTests(unittest.TestCase):
     def test_missing_include(self):
         (self.shaders / "ColorCommon.hlsli").write_text('#include "Missing.hlsli"\n')
         self.assertFalse(assets.verify(self.root)["ok"])
+
+    def test_sibling_include_is_not_the_runtime_search_path(self):
+        (self.shaders / "ColorPrepareCS.hlsl").write_text('#include "ColorCommon.hlsli"\n')
+        result = assets.verify(self.root)
+        self.assertFalse(result["ok"])
+        self.assertTrue(any("Unresolved shader include" in error for error in result["errors"]))
 
     def test_non_utf8_shader_is_structured_failure(self):
         (self.shaders / "ColorPrepareCS.hlsl").write_bytes(b"\xff\xff")

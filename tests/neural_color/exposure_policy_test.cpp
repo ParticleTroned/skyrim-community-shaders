@@ -74,6 +74,10 @@ int main()
 	Require(NeedsExposureCapture(b));
 	b = {};
 	Require(!b.Enabled());
+	b.experiments.captureEngineExposure = true;
+	Require(NeedsExposureCapture(b));
+	Require(!b.Enabled());
+	Require(!ChangesInput(Configuration{}, b, 0));
 	b.experiments.applyModelEdit = false;
 	Require(b.Enabled());
 	captured.transform = Transform::Identity;

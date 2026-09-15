@@ -91,7 +91,7 @@ namespace NeuralRendering::Color
 		[[nodiscard]] bool Enabled() const noexcept
 		{
 			return EffectiveMode() != Mode::LegacyRaw || experiments.transportBypass ||
-			       experiments.diagnostics || experiments.captureEngineExposure || !experiments.applyModelEdit;
+			       experiments.diagnostics || !experiments.applyModelEdit;
 		}
 	};
 

@@ -6,6 +6,7 @@
 #include <wrl/client.h>
 
 #include "Features/Upscaling/NeuralRendering/CharacterCategoryFormat.h"
+#include "ShaderPackageIncludes.h"
 
 #include <algorithm>
 #include <array>
@@ -89,44 +90,6 @@ namespace
 	};
 	static_assert(sizeof(BlendConstants) == 96);
 	using Color = std::array<float, 4>;
-
-	// The feature shader includes Common/ from the installed package root, not
-	// beside its source-tree location. Match that include layout without copying.
-	class PackageIncludes : public ID3DInclude
-	{
-	public:
-		explicit PackageIncludes(std::filesystem::path root) : root_(std::move(root)) {}
-		HRESULT __stdcall Open(D3D_INCLUDE_TYPE, LPCSTR name, LPCVOID,
-			LPCVOID* data, UINT* bytes) override
-		{
-			try {
-				std::ifstream file(root_ / name, std::ios::binary | std::ios::ate);
-				if (!file)
-					return E_FAIL;
-				const auto length = file.tellg();
-				if (length < 0 || static_cast<std::uint64_t>(length) > UINT_MAX)
-					return E_FAIL;
-				auto contents = std::make_unique<char[]>(static_cast<std::size_t>(length) + 1u);
-				file.seekg(0);
-				file.read(contents.get(), length);
-				if (!file)
-					return E_FAIL;
-				*bytes = static_cast<UINT>(length);
-				*data = contents.release();
-				return S_OK;
-			} catch (...) {
-				return E_FAIL;
-			}
-		}
-		HRESULT __stdcall Close(LPCVOID data) override
-		{
-			delete[] static_cast<const char*>(data);
-			return S_OK;
-		}
-
-	private:
-		std::filesystem::path root_;
-	};
 
 	MaskConstants Defaults(std::uint32_t width, std::uint32_t height)
 	{

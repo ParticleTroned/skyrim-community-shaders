@@ -119,9 +119,15 @@ namespace
 		for (const auto& e : capture.samples)
 			if (e.stamp.sequence)
 				samples.push_back(EvidenceJson(e));
-		return { { "requested", capture.requested }, { "hooksInstalled", capture.hooksInstalled }, { "epoch", capture.epoch },
+		const auto& b = capture.lastBinding;
+		return { { "requested", capture.requested }, { "hooksInstalled", 0 }, { "producersRegistered", capture.producersRegistered }, { "epoch", capture.epoch },
 			{ "captures", capture.captures }, { "rejected", capture.rejected }, { "droppedReadbacks", capture.dropped },
 			{ "lastReason", capture.lastReason }, { "samples", samples },
+			{ "captureBoundary", "after_SetDirtyStates_before_HDR_draw" },
+			{ "lastBinding", { { "frame", b.frame }, { "width", b.width }, { "height", b.height },
+								 { "mip", b.mip }, { "mipLevels", b.mipLevels }, { "arraySize", b.arraySize }, { "samples", b.samples },
+								 { "sourceFormat", b.sourceFormat }, { "viewFormat", b.viewFormat }, { "viewDimension", b.viewDimension },
+								 { "sourceIdentity", b.sourceIdentity }, { "shaderIdentity", b.shaderIdentity } } },
 			{ "formula", "ISHDR BLEND AvgTex.y / AvgTex.x; zero input has a distinct unmeasured unit fallback" } };
 	}
 	Json ObservationJson(const Observation& o)
@@ -258,7 +264,7 @@ namespace
 	Json Descriptor()
 	{
 		return Json::parse(R"schema({
-  "description": "NR colour v2: shared live controls, display-only A/B, frame-matched engine HDR exposure capture and bounded asynchronous measurements. status is observational; configure/reset change only the thread-safe registry. assets checks installed presence, not compilation. No NVIDIA ABI assumptions or game/profile mutations.",
+  "description": "NR colour v2: shared live controls, display-only A/B, frame-matched engine HDR exposure capture and bounded asynchronous measurements. status reports registered HDR producers and the last draw-boundary binding, including rejected texture dimensions, mip and formats. Capture alone does not enable colour reconstruction. configure/reset change only the thread-safe registry. assets checks installed presence, not compilation. No NVIDIA ABI assumptions or game/profile mutations.",
   "inputSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -426,7 +432,7 @@ void NeuralColor::LoadSettings(nlohmann::json& object)
 }
 void NeuralColor::SaveSettings(nlohmann::json& object) { object = SettingsJson(Registry::Instance().Snapshot().settings); }
 void NeuralColor::RestoreDefaultSettings() { (void)Registry::Instance().Configure({}, {}); }
-void NeuralColor::EarlyPrepass() { ExposureCapture::Instance().InstallHooks(); }
+void NeuralColor::EarlyPrepass() { ExposureCapture::Instance().RefreshProducers(); }
 void NeuralColor::DrawSettings()
 {
 	auto config = Registry::Instance().Snapshot();

@@ -1,4 +1,5 @@
 #include "Upscaling.h"
+#include "Upscaling/NeuralRendering/FramebufferTransaction.h"
 
 #include "Deferred.h"
 #include "Features/RenderDoc.h"
@@ -26128,6 +26129,7 @@ bool Upscaling::BuildPeripheryTAATileList(uint32_t eyeIndex, uint32_t outputWidt
 
 void Upscaling::AbandonFoveatedResourcesUnsafe()
 {
+	(void)neuralFinalLdrFramebuffer.release();
 	InvalidateFrameScopedUpscalingState();
 	// An unproven interop idle leaves every submitted foveated resource alive.
 	for (uint32_t eye = 0; eye < 2; ++eye) {
@@ -26176,6 +26178,7 @@ void Upscaling::DestroyFoveatedResources()
 	NeuralRendering::CharacterRendering::Instance().Invalidate();
 	if (!NeuralRendering::Renderer::Instance().Reset())
 		AbandonFoveatedResourcesUnsafe();
+	neuralFinalLdrFramebuffer.reset();
 	for (uint32_t i = 0; i < 2; ++i) {
 		foveatedCenterColorIn[i].reset();
 		foveatedCenterColorOut[i].reset();
@@ -28344,9 +28347,9 @@ void Upscaling::ApplyMainFinalLdrNeuralStereo() noexcept
 	D3D11_TEXTURE2D_DESC targetDesc{};
 	const auto outputLayout = ResolveVRSideBySideStereoLayout(
 		pending.outputWidthPerEye, pending.outputHeight);
+	const bool targetDescribed = finalTarget.texture && TryGetTexture2DDesc(finalTarget.texture, targetDesc);
 	const bool targetReady =
-		outputLayout.IsValid() && finalTarget.texture && finalTarget.UAV &&
-		TryGetTexture2DDesc(finalTarget.texture, targetDesc) &&
+		targetDescribed && outputLayout.IsValid() &&
 		targetDesc.Width == outputLayout.width &&
 		targetDesc.Height == outputLayout.height &&
 		targetDesc.ArraySize == 1u && targetDesc.MipLevels == 1u &&
@@ -28370,26 +28373,50 @@ void Upscaling::ApplyMainFinalLdrNeuralStereo() noexcept
 	route.colorBuffersHDRKnown = finalColorBuffersHDR.has_value();
 	route.colorBuffersHDR = finalColorBuffersHDR.value_or(false);
 
+	bool scratchReady = false;
+	try {
+		scratchReady = EnsureFoveatedTexture(neuralFinalLdrFramebuffer, finalTarget.texture,
+			targetDesc.Width, targetDesc.Height, false, true, true, false,
+			"NeuralColor::FinalLdrFramebuffer");
+	} catch (...) {
+		RequestHistoryReset();
+	}
+	if (!scratchReady) {
+		route.disposition = NeuralStereoPairDisposition::NormalDLSSPair;
+		route.fallbackReason = NeuralStereoFallbackReason::StereoPreflightFailed;
+		PublishNeuralStereoRouteSnapshot(route);
+		return;
+	}
+	NeuralRendering::FramebufferTransaction transaction(globals::d3d::context,
+		finalTarget.texture, neuralFinalLdrFramebuffer->resource.get());
+	if (!transaction.IsValid()) {
+		route.disposition = NeuralStereoPairDisposition::NormalDLSSPair;
+		route.fallbackReason = NeuralStereoFallbackReason::StereoPreflightFailed;
+		PublishNeuralStereoRouteSnapshot(route);
+		return;
+	}
+
 	std::array<FinalLdrNeuralEyeTarget, 2> targets{
 		FinalLdrNeuralEyeTarget{
-			.resource = finalTarget.texture,
-			.uav = finalTarget.UAV,
+			.resource = neuralFinalLdrFramebuffer->resource.get(),
+			.uav = neuralFinalLdrFramebuffer->uav.get(),
 			.subresource = 0,
 			.baseOffsetX = 0,
 		},
 		FinalLdrNeuralEyeTarget{
-			.resource = finalTarget.texture,
-			.uav = finalTarget.UAV,
+			.resource = neuralFinalLdrFramebuffer->resource.get(),
+			.uav = neuralFinalLdrFramebuffer->uav.get(),
 			.subresource = 0,
 			.baseOffsetX = pending.outputWidthPerEye,
 		},
 	};
 	FinalLdrNeuralResult result{};
-	const bool applied = ApplyFinalLdrNeuralStereo(
+	const bool pairApplied = ApplyFinalLdrNeuralStereo(
 		NeuralStereoRouteRole::Main, targets,
 		pending.inputWidthPerEye, pending.inputHeight,
 		pending.outputWidthPerEye, pending.outputHeight,
 		pending.generation, neuralSourceFrame, result);
+	const bool applied = transaction.Commit(pairApplied);
 	route.preparedEyeMask = result.preparedEyeMask;
 	route.attemptedEyeMask = result.attemptedEyeMask;
 	route.appliedEyeMask = result.appliedEyeMask;
@@ -28453,20 +28480,11 @@ void Upscaling::FinalizeMainFinalLdrNeuralPresentation() noexcept
 		auto& finalTarget = renderer->GetRuntimeData().renderTargets
 		                        [RE::RENDER_TARGETS::kVR_FRAMEBUFFER];
 		D3D11_TEXTURE2D_DESC targetDesc{};
-		D3D11_UNORDERED_ACCESS_VIEW_DESC targetUavDesc{};
-		winrt::com_ptr<ID3D11Resource> targetUavResource;
-		if (finalTarget.UAV) {
-			finalTarget.UAV->GetResource(targetUavResource.put());
-			finalTarget.UAV->GetDesc(&targetUavDesc);
-		}
 		const auto outputLayout = ResolveVRSideBySideStereoLayout(
 			pending.outputWidthPerEye, pending.outputHeight);
-		if (!finalTarget.texture || !finalTarget.UAV || !targetUavResource ||
+		if (!finalTarget.texture || !neuralFinalLdrFramebuffer ||
 			!outputLayout.IsValid() ||
 			GetCOMIdentityAddress(finalTarget.texture) != pending.targetIdentity ||
-			GetCOMIdentityAddress(targetUavResource.get()) != pending.targetIdentity ||
-			targetUavDesc.ViewDimension != D3D11_UAV_DIMENSION_TEXTURE2D ||
-			targetUavDesc.Texture2D.MipSlice != 0 ||
 			!TryGetTexture2DDesc(finalTarget.texture, targetDesc) ||
 			targetDesc.Width != outputLayout.width ||
 			targetDesc.Height != outputLayout.height ||
@@ -28553,17 +28571,24 @@ void Upscaling::FinalizeMainFinalLdrNeuralPresentation() noexcept
 				previousCB->Release();
 		});
 		context->OMSetRenderTargets(0, nullptr, nullptr);
+		NeuralRendering::FramebufferTransaction transaction(context, finalTarget.texture,
+			neuralFinalLdrFramebuffer->resource.get());
+		if (!transaction.IsValid())
+			return;
 
 		bool hmdMaskPairCleared = true;
 		for (uint32_t eye = 0; eye < 2; ++eye) {
 			const bool eyeCleared = ClearHMDMaskForEye(
-				HMDMaskClearPhase::PerEyeOutput, eye, finalTarget.UAV,
+				HMDMaskClearPhase::PerEyeOutput, eye, neuralFinalLdrFramebuffer->uav.get(),
 				depth.depthSRV, pending.inputWidthPerEye,
 				pending.inputHeight, pending.outputWidthPerEye,
 				pending.outputHeight, inputLayout.eyes[eye].minX,
 				outputLayout.eyes[eye].minX, 0u, 0u, true);
 			hmdMaskPairCleared = hmdMaskPairCleared && eyeCleared;
 		}
+		ID3D11UnorderedAccessView* unboundOutput = nullptr;
+		context->CSSetUnorderedAccessViews(0, 1, &unboundOutput, nullptr);
+		(void)transaction.Commit(hmdMaskPairCleared);
 		if (!hmdMaskPairCleared) {
 			static bool loggedFinalLdrMaskFailure = false;
 			LogWarnOnceFmt(

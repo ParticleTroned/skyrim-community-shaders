@@ -1921,6 +1921,7 @@ public:
 	eastl::unique_ptr<Texture2D> foveatedCenterColorOut[2];
 	eastl::unique_ptr<Texture2D> foveatedCenterNeuralOut[2];
 	eastl::unique_ptr<Texture2D> neuralFinalLdrColorIn[2];
+	eastl::unique_ptr<Texture2D> neuralFinalLdrFramebuffer;
 	eastl::unique_ptr<Texture2D> submitNeuralFloatColorIn[2];
 	eastl::unique_ptr<Texture2D> submitNeuralFloatColorOut[2];
 	eastl::unique_ptr<Texture2D> submitNeuralFloatStagedOut[2];

@@ -1,4 +1,5 @@
 // Standalone Windows WARP tests. No Skyrim, NVIDIA DLL or plugin build needed.
+#include "../ShaderPackageIncludes.h"
 #include "Features/Upscaling/NeuralRendering/ColorPolicy.h"
 #include <array>
 #include <cmath>
@@ -60,7 +61,8 @@ static Texture MakeTexture(ID3D11Device* device, const std::vector<Pixel>& pixel
 static ComPtr<ID3D11ComputeShader> Compile(ID3D11Device* device, const std::filesystem::path& path)
 {
 	ComPtr<ID3DBlob> bytecode, errors;
-	const auto result = D3DCompileFromFile(path.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+	PackageIncludes includes(path.parent_path().parent_path().parent_path());
+	const auto result = D3DCompileFromFile(path.c_str(), nullptr, &includes,
 		"main", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_IEEE_STRICTNESS, 0, &bytecode, &errors);
 	if (errors)
 		std::fprintf(stderr, "%.*s\n", static_cast<int>(errors->GetBufferSize()), static_cast<const char*>(errors->GetBufferPointer()));

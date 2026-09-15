@@ -1,4 +1,5 @@
 // Production exposure/prepare/reconstruct/measurement shaders on Windows WARP.
+#include "../ShaderPackageIncludes.h"
 #include "Features/Upscaling/NeuralRendering/ExposurePolicy.h"
 #include <array>
 #include <cmath>
@@ -46,7 +47,8 @@ static Texture Make(ID3D11Device* device, UINT size, Pixel value, DXGI_FORMAT fo
 static ComPtr<ID3D11ComputeShader> Compile(ID3D11Device* d, const std::filesystem::path& path)
 {
 	ComPtr<ID3DBlob> bytes, errors;
-	auto hr = D3DCompileFromFile(path.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "main", "cs_5_0",
+	PackageIncludes includes(path.parent_path().parent_path().parent_path());
+	auto hr = D3DCompileFromFile(path.c_str(), nullptr, &includes, "main", "cs_5_0",
 		D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_IEEE_STRICTNESS, 0, &bytes, &errors);
 	if (errors)
 		std::fprintf(stderr, "%.*s\n", static_cast<int>(errors->GetBufferSize()), static_cast<const char*>(errors->GetBufferPointer()));

@@ -64,9 +64,17 @@ namespace NeuralRendering::Color
 			desc.SampleDesc.Count = 1;
 			desc.Usage = D3D11_USAGE_DEFAULT;
 			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | (output ? D3D11_BIND_UNORDERED_ACCESS : 0u);
-			return SUCCEEDED(device->CreateTexture2D(&desc, nullptr, &texture.resource)) &&
-			       SUCCEEDED(device->CreateShaderResourceView(texture.resource.Get(), nullptr, &texture.srv)) &&
-			       (!output || SUCCEEDED(device->CreateUnorderedAccessView(texture.resource.Get(), nullptr, &texture.uav)));
+			const bool created = SUCCEEDED(device->CreateTexture2D(&desc, nullptr, &texture.resource)) &&
+			                     SUCCEEDED(device->CreateShaderResourceView(texture.resource.Get(), nullptr, &texture.srv)) &&
+			                     (!output || SUCCEEDED(device->CreateUnorderedAccessView(texture.resource.Get(), nullptr, &texture.uav)));
+			const char* name = output ? "NeuralColor::Reconstruction" : "NeuralColor::Baseline";
+			if (texture.resource)
+				Util::SetResourceName(texture.resource.Get(), "%s", name);
+			if (texture.srv)
+				Util::SetResourceName(texture.srv.Get(), "%s SRV", name);
+			if (texture.uav)
+				Util::SetResourceName(texture.uav.Get(), "%s UAV", name);
+			return created;
 		}
 		bool CreateReadback(ID3D11Device* device, Readback& readback)
 		{
@@ -83,14 +91,21 @@ namespace NeuralRendering::Color
 			if (FAILED(device->CreateBuffer(&desc, nullptr, &readback.gpu)) ||
 				FAILED(device->CreateUnorderedAccessView(readback.gpu.Get(), &view, &readback.uav)))
 				return false;
+			Util::SetResourceName(readback.gpu.Get(), "NeuralColor::Measurement");
+			Util::SetResourceName(readback.uav.Get(), "NeuralColor::Measurement UAV");
 			desc.Usage = D3D11_USAGE_STAGING;
 			desc.BindFlags = 0;
 			desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 			desc.MiscFlags = 0;
 			desc.StructureByteStride = 0;
 			D3D11_QUERY_DESC query{ D3D11_QUERY_EVENT, 0 };
-			return SUCCEEDED(device->CreateBuffer(&desc, nullptr, &readback.staging)) &&
-			       SUCCEEDED(device->CreateQuery(&query, &readback.ready));
+			const bool created = SUCCEEDED(device->CreateBuffer(&desc, nullptr, &readback.staging)) &&
+			                     SUCCEEDED(device->CreateQuery(&query, &readback.ready));
+			if (readback.staging)
+				Util::SetResourceName(readback.staging.Get(), "NeuralColor::MeasurementReadback");
+			if (readback.ready)
+				Util::SetResourceName(readback.ready.Get(), "NeuralColor::MeasurementReady");
+			return created;
 		}
 		std::uint64_t Elapsed(std::chrono::steady_clock::time_point start)
 		{
@@ -225,6 +240,7 @@ namespace NeuralRendering::Color
 			desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 			if (FAILED(device->CreateBuffer(&desc, nullptr, &constants_)))
 				return false;
+			Util::SetResourceName(constants_.Get(), "NeuralColor::Constants");
 		}
 		if (diagnostics && !measure_ && !measureCompileAttempted_) {
 			measureCompileAttempted_ = true;

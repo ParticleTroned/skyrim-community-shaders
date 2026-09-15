@@ -6,6 +6,11 @@
 #include <string>
 #include <wrl/client.h>
 
+namespace RE
+{
+	class BSShader;
+}
+
 namespace NeuralRendering::Color
 {
 	enum class ExposureBindingState : std::uint32_t
@@ -30,10 +35,17 @@ namespace NeuralRendering::Color
 		bool gammaKnown = false, readbackComplete = false;
 		const char* producer = "";  // Static producer label; no per-frame string allocation.
 	};
+	struct ExposureBindingObservation
+	{
+		std::uint32_t frame = 0, width = 0, height = 0, mip = 0, mipLevels = 0;
+		std::uint32_t arraySize = 0, samples = 0, sourceFormat = 0, viewFormat = 0, viewDimension = 0;
+		std::uint64_t sourceIdentity = 0, shaderIdentity = 0;
+	};
 	struct ExposureCaptureStatus
 	{
 		bool requested = false;
-		std::uint32_t hooksInstalled = 0;
+		std::uint32_t producersRegistered = 0;
+		ExposureBindingObservation lastBinding{};
 		std::uint64_t epoch = 0, captures = 0, rejected = 0, dropped = 0;
 		std::string lastReason;
 		std::array<ExposureEvidence, 8> samples{};
@@ -58,7 +70,10 @@ namespace NeuralRendering::Color
 	public:
 		static ExposureCapture& Instance();
 		void Request(bool) noexcept;
-		void InstallHooks() noexcept;
+		/// Resolve the exact HDR shader instances on the render thread.
+		void RefreshProducers() noexcept;
+		/// Observe flushed bindings before the engine issues the HDR draw.
+		void ObserveDraw(RE::BSShader*) noexcept;
 		ExposureCaptureStatus GetStatus() const;
 		bool Bind(ID3D11DeviceContext*, ExposureBinding&, const ExposureTransaction&);
 		void Reset() noexcept;    // Called after Renderer's existing idle/retirement boundary.

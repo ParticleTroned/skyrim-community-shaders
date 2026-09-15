@@ -1,4 +1,4 @@
-#include "ColorCommon.hlsli"
+#include "Upscaling/NeuralRendering/ColorCommon.hlsli"
 Texture2D<float4> Baseline : register(t0);
 Texture2D<float4> Neural : register(t1);
 Texture2D<float4> Result : register(t2);

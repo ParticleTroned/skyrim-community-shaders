@@ -37,7 +37,8 @@ def verify(root: Path, deployed_data: Path | None = None) -> dict:
                 continue
             if path.suffix in (".hlsl", ".hlsli"):
                 for include in re.findall(r'^\s*#\s*include\s+"([^"]+)"', text, re.M):
-                    dependency = (path.parent / include).resolve()
+                    # Util::CustomInclude resolves every include from Data/Shaders.
+                    dependency = (root / FEATURE / "Shaders" / include).resolve()
                     if not dependency.is_file():
                         errors.append(f"Unresolved shader include {include} from {source}")
                     elif dependency not in packaged:

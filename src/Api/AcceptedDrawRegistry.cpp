@@ -6,6 +6,24 @@ namespace CSX::Api
 	thread_local AcceptedDrawRegistry::Delivery AcceptedDrawRegistry::delivery{};
 	std::atomic_uintptr_t AcceptedDrawRegistry::nextToken{ 1 };
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	bool AcceptedDrawRegistry::InspectObservers(std::array<ObserverSnapshot, 8>& a_output)
+	{
+		a_output = {};
+		if (IsDispatching())
+			return false;
+		std::unique_lock lock(lifecycle, std::try_to_lock);
+		if (!lock.owns_lock())
+			return false;
+		for (std::size_t index = 0; index < slots.size(); ++index) {
+			const auto& slot = slots[index];
+			if (slot.state.load(std::memory_order_acquire) & kActive)
+				a_output[index] = { slot.id, reinterpret_cast<uintptr_t>(slot.observer) };
+		}
+		return true;
+	}
+#endif
+
 	uint32_t AcceptedDrawRegistry::Register(ObserverFn a_observer, void* a_user, uint64_t* a_subscription)
 	{
 		if (a_subscription)

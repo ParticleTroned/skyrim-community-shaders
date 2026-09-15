@@ -1671,6 +1671,8 @@ if(BUILD_CONTROLLER_TESTS)
         set_tests_properties(${TEST_NAME} PROPERTIES LABELS "ControllerTests")
     endfunction()
 
+    include("${PROJECT_SOURCE_DIR}/tests/gameft_stack_wait.cmake")
+
     set(_adaptive_balance_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/adaptive-balance-toggle"
     )

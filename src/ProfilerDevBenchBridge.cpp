@@ -5,8 +5,11 @@
 #	include "Api/DevBenchMainThreadDispatch.h"
 #	include "BuildProvenance.h"
 #	include "Api/AcceptedDrawService.h"
+#	include "Api/FeatureService.h"
+#	include "Diagnostics/DevBenchCpuSnapshot.h"
 #	include "Features/ScreenSpaceGI.h"
 #	include "Globals.h"
+#	include "PresetCompatibility.h"
 #	include "Profiler.h"
 #	include "State.h"
 
@@ -80,6 +83,60 @@ namespace
 		};
 	}
 
+	json BuildAcceptedDrawSnapshot()
+	{
+		const auto status = CSX::Api::InspectAcceptedDrawService();
+		return {
+			{ "action", "accepted_draws" }, { "ready", status.ready },
+			{ "subscribers", status.registry.subscribers }, { "events", status.registry.events },
+			{ "callbacks", status.registry.callbacks }, { "replays", status.registry.replays },
+			{ "rejected_replays", status.registry.rejectedReplays }, { "observer_faults", status.registry.observerFaults },
+			{ "filtered_draws", status.filteredDraws }, { "wrong_thread_draws", status.wrongThreadDraws },
+			{ "geometry_scope_errors", status.geometryScopeErrors }
+		};
+	}
+
+	json BuildCpuBurstSnapshot()
+	{
+		return RunOnMainThread([]() -> json {
+			LARGE_INTEGER begin{}, end{}, frequency{};
+			if (!QueryPerformanceCounter(&begin) || !QueryPerformanceFrequency(&frequency))
+				throw std::runtime_error("diagnostic clock unavailable");
+			const auto* api = CSX::Api::GetFeatureService001();
+			if (!api)
+				throw std::runtime_error("feature service unavailable");
+			auto& gi = globals::features::screenSpaceGI;
+			std::array<CSX::Api::AcceptedDrawRegistry::ObserverSnapshot, 8> observers;
+			const bool observerSnapshotComplete = CSX::Api::InspectAcceptedDrawObservers(observers);
+			json observerIdentities = json::array();
+			for (const auto& observer : observers) {
+				if (observer.subscription != 0)
+					observerIdentities.push_back({ { "subscription", observer.subscription }, { "callbackAddress", observer.callbackAddress } });
+			}
+			json result{
+				{ "action", "cpu_burst_snapshot" }, { "schema", "csx-cpu-burst-snapshot-v1" },
+				{ "devbenchOnly", true }, { "processId", GetCurrentProcessId() },
+				{ "mainThreadId", GetCurrentThreadId() }, { "vr", globals::game::isVR },
+				{ "frame", globals::state ? globals::state->frameCount : 0u },
+				{ "qpcBegin", begin.QuadPart }, { "qpcFrequency", frequency.QuadPart },
+				{ "featureState", CSX::Diagnostics::CaptureFeatureSettings(*api) },
+				{ "presetCompatibility", PresetCompatibility::ToJson(PresetCompatibility::GetPublished()) },
+				{ "acceptedDraws", BuildAcceptedDrawSnapshot() },
+				{ "acceptedDrawObserversComplete", observerSnapshotComplete },
+				{ "acceptedDrawObservers", std::move(observerIdentities) },
+				{ "profilerCapturing", globals::profiler && globals::profiler->IsEnabled() },
+				{ "ocu", { { "loaded", gi.loaded }, { "enabled", gi.settings.Enabled },
+							 { "requested", gi.settings.ExperimentalOCUEffectFoveation },
+							 { "active", gi.loaded && gi.settings.Enabled && gi.settings.ExperimentalOCUEffectFoveation && gi.ocuEffectActive.load(std::memory_order_relaxed) },
+							 { "status", gi.ocuEffectStatus.load(std::memory_order_relaxed) } } }
+			};
+			if (!QueryPerformanceCounter(&end))
+				throw std::runtime_error("diagnostic clock unavailable");
+			result["qpcEnd"] = end.QuadPart;
+			return result;
+		});
+	}
+
 	json BuildOCUEffectFoveationResult(const json& a_args)
 	{
 		const auto action = a_args.at("action").get<std::string>();
@@ -109,22 +166,15 @@ namespace
 		const std::string action = a_args.value("action", std::string("status"));
 		if (action == "ocu_foveation" || action == "set_ocu_foveation")
 			return BuildOCUEffectFoveationResult(a_args);
-		if (action == "accepted_draws") {
-			const auto status = CSX::Api::InspectAcceptedDrawService();
-			return {
-				{ "action", action }, { "ready", status.ready },
-				{ "subscribers", status.registry.subscribers }, { "events", status.registry.events },
-				{ "callbacks", status.registry.callbacks }, { "replays", status.registry.replays },
-				{ "rejected_replays", status.registry.rejectedReplays }, { "observer_faults", status.registry.observerFaults },
-				{ "filtered_draws", status.filteredDraws }, { "wrong_thread_draws", status.wrongThreadDraws },
-				{ "geometry_scope_errors", status.geometryScopeErrors }
-			};
-		}
+		if (action == "accepted_draws")
+			return BuildAcceptedDrawSnapshot();
+		if (action == "cpu_burst_snapshot")
+			return BuildCpuBurstSnapshot();
 		if (action != "status" && action != "enable" && action != "disable") {
 			return {
 				{ "error", "unknown action" },
 				{ "action", action },
-				{ "supported", json::array({ "status", "enable", "disable", "accepted_draws", "ocu_foveation", "set_ocu_foveation" }) },
+				{ "supported", json::array({ "status", "enable", "disable", "accepted_draws", "ocu_foveation", "set_ocu_foveation", "cpu_burst_snapshot" }) },
 			};
 		}
 
@@ -195,7 +245,7 @@ namespace
 			{ "registered", g_registered.load(std::memory_order_acquire) },
 			{ "tool", "communityshaders.profiler" },
 			{ "usage", R"(Invoke the top-level devbench tool with {"action":"status"} when exposed. If the client has not exposed dynamic tools, dispatch it through devbench scenario with a tool step: {"tool":"communityshaders.profiler","args":{"action":"status"}}.)" },
-			{ "actions", json::array({ "status", "enable", "disable", "accepted_draws", "ocu_foveation", "set_ocu_foveation" }) },
+			{ "actions", json::array({ "status", "enable", "disable", "accepted_draws", "ocu_foveation", "set_ocu_foveation", "cpu_burst_snapshot" }) },
 		};
 		BuildProvenance::AttachProducer(result);
 		const auto serialized = result.dump();
@@ -236,7 +286,7 @@ namespace ProfilerDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Inspect and control the CSX GPU/CPU profiler. accepted_draws reports VR accepted-draw API readiness, callbacks, isolated replays and faults without enabling capture. ocu_foveation reports requested and active peripheral GI sampling and its fallback reason without changing settings or enabling capture. set_ocu_foveation requires boolean enabled, stages this VR-only SSGI setting until settings are saved, and resets history on the next render pass. Timer values and statistics are self time with profiled descendants excluded; topLevelMs and resolvedTotalMs retain inclusive depth-zero GPU time. CPU totals sum CPU self time. Every response identifies the exact producing DLL. expectedBuildId makes captures fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","enable","disable","accepted_draws","ocu_foveation","set_ocu_foveation"],"default":"status","description":"Status reports timingSemantics=gpu_cpu_self_time."},"enabled":{"type":"boolean","description":"Required by set_ocu_foveation; stages optional peripheral sampling without saving settings."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
+			R"({"description":"Inspect and control the CSX GPU/CPU profiler. cpu_burst_snapshot is a DevBench-only read-only main-thread snapshot of effective feature settings, preset compatibility, accepted-draw counters, OCU state and QPC/process/thread identity; it does not enable profiling or stack recording. accepted_draws reports VR accepted-draw API readiness, callbacks, isolated replays and faults without enabling capture. ocu_foveation reports requested and active peripheral GI sampling and its fallback reason without changing settings or enabling capture. set_ocu_foveation requires boolean enabled, stages this VR-only SSGI setting until settings are saved, and resets history on the next render pass. Timer values and statistics are self time with profiled descendants excluded; topLevelMs and resolvedTotalMs retain inclusive depth-zero GPU time. CPU totals sum CPU self time. Every response identifies the exact producing DLL. expectedBuildId makes captures fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","enable","disable","accepted_draws","ocu_foveation","set_ocu_foveation","cpu_burst_snapshot"],"default":"status","description":"Status reports timingSemantics=gpu_cpu_self_time."},"enabled":{"type":"boolean","description":"Required by set_ocu_foveation; stages optional peripheral sampling without saving settings."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
 		devBench->RegisterTool(
 			"communityshaders.profiler",
 			descriptor,

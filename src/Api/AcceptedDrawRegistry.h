@@ -28,6 +28,15 @@ namespace CSX::Api
 		void Dispatch(CSXAcceptedDrawAPI::Draw a_draw, NativeReplay a_replay) noexcept;
 		/** Read diagnostic counters; concurrent updates need not form one coherent snapshot. */
 		Statistics Inspect() const;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		struct ObserverSnapshot
+		{
+			uint64_t subscription = 0;
+			uintptr_t callbackAddress = 0;
+		};
+		/** Copy active callback identities on request; never wait behind lifecycle work. */
+		bool InspectObservers(std::array<ObserverSnapshot, 8>& a_output);
+#endif
 		/** True throughout a callback and its replay on this thread, across registries. */
 		static bool IsDispatching() { return delivery.registry != nullptr; }
 

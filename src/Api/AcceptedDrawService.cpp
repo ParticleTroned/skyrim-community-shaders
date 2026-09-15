@@ -167,6 +167,12 @@ namespace CSX::Api
 	{
 		return { ready.load(), filteredDraws.load(), wrongThreadDraws.load(), geometryScopeErrors.load(), registry.Inspect() };
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	bool InspectAcceptedDrawObservers(std::array<AcceptedDrawRegistry::ObserverSnapshot, 8>& a_output)
+	{
+		return registry.InspectObservers(a_output);
+	}
+#endif
 }
 
 extern "C" __declspec(dllexport) const CSXAcceptedDrawAPI::API* __cdecl CSX_GetAcceptedDrawAPI(uint32_t a_version, uint32_t a_minimumTableSize) noexcept

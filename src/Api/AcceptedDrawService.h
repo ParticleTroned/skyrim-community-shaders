@@ -50,4 +50,8 @@ namespace CSX::Api
 	};
 	/** Read readiness and best-effort counters without enabling capture or taking GPU state. */
 	AcceptedDrawStatus InspectAcceptedDrawService();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** Inspect active callback identities for an explicit DevBench diagnostic request. */
+	bool InspectAcceptedDrawObservers(std::array<AcceptedDrawRegistry::ObserverSnapshot, 8>& a_output);
+#endif
 }

@@ -3140,7 +3140,8 @@ foreach(_insertion_point_contract IN ITEMS
     [[{ "insertionPointChanged", insertionPointChanged }]]
     [["insertion_point"]]
     [[const bool resetAttempted =]]
-    [[(enableStateChanged || insertionPointChanged || multiRoiChanged);]]
+    [[NeuralRendering::RequiresBackendRetirement(]]
+    [[enableStateChanged, multiRoiChanged, insertionPointChanged,]]
     [["insertionPoint":{"type":"string","enum":["upscaled_center","final_ldr_pre_ui"]}]]
 )
     string(FIND "${_bridge}" "${_insertion_point_contract}" _insertion_point_position)

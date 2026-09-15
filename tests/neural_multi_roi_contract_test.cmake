@@ -273,8 +273,9 @@ foreach(_transition_contract IN ITEMS
     [[const bool multiRoiChanged = a_previousSettings.neuralCharacterMultiRoiEnabled != settings.neuralCharacterMultiRoiEnabled;]]
     [[if (!multiRoiChanged && HasSameNeuralRenderingSettingsKey(a_previousSettings, settings))]]
     [[RequestHistoryReset();]]
-    [[!insertionPointChanged && !multiRoiChanged]]
-    [[NeuralRendering::Renderer::Instance().Reset();]]
+    [[NeuralRendering::RequiresBackendRetirement(]]
+    [[multiRoiChanged, insertionPointChanged,]]
+    [[neuralRenderer.Reset();]]
 )
     string(FIND "${_settings_transition_normalized}" "${_transition_contract}"
         _transition_contract_position)

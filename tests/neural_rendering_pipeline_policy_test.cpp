@@ -68,6 +68,13 @@ int main()
 	static_assert(
 		NeuralRendering::kDefaultInsertionPoint == InsertionPoint::UpscaledCenter);
 	static_assert(NeuralRendering::kInsertionPointCount == 2u);
+	static_assert(!NeuralRendering::RequiresBackendRetirement(false, false, true, false));
+	static_assert(NeuralRendering::RequiresBackendRetirement(false, false, true, true));
+	static_assert(NeuralRendering::RequiresBackendRetirement(true, false, false, false));
+	static_assert(NeuralRendering::RequiresBackendRetirement(false, true, false, false));
+	static_assert(NeuralRendering::RequiresBackendRetirement(true, true, true, false));
+	static_assert(!NeuralRendering::RequiresBackendRetirement(false, false, false, false));
+	static_assert(!NeuralRendering::RequiresBackendRetirement(false, false, false, true));
 	static_assert(static_cast<std::uint32_t>(InsertionPoint::UpscaledCenter) == 0u);
 	static_assert(static_cast<std::uint32_t>(InsertionPoint::FinalLdrPreUi) == 1u);
 	static_assert(NeuralRendering::IsValidInsertionPoint(InsertionPoint::UpscaledCenter));
@@ -172,36 +179,48 @@ int main()
 			return false;
 		auto invalid = plan;
 		invalid.count = 3u;
-		if (valid(invalid)) return false;
+		if (valid(invalid))
+			return false;
 		invalid = plan;
 		invalid.regions[1].baseX = 47u;  // One-pixel overlap.
-		if (valid(invalid)) return false;
+		if (valid(invalid))
+			return false;
 		invalid.regions[1].baseX = 48u;  // Touching exclusive bounds is valid.
-		if (!valid(invalid)) return false;
+		if (!valid(invalid))
+			return false;
 		invalid = plan;
 		invalid.regions[0].baseX = 15u;  // In texture, outside declared composite support.
-		if (valid(invalid)) return false;
+		if (valid(invalid))
+			return false;
 		invalid = plan;
 		invalid.regions[1].width = 33u;
-		if (valid(invalid)) return false;
+		if (valid(invalid))
+			return false;
 		invalid = plan;
 		invalid.regions[1].baseX = std::numeric_limits<std::uint32_t>::max();
-		if (valid(invalid)) return false;
+		if (valid(invalid))
+			return false;
 		invalid = plan;
 		invalid.regions[1].width = 0u;
-		if (valid(invalid)) return false;
+		if (valid(invalid))
+			return false;
 		invalid = plan;
 		invalid.historyKeys[1] = invalid.historyKeys[0];
-		if (valid(invalid)) return false;
+		if (valid(invalid))
+			return false;
 		invalid.historyKeys[1] = 0u;
-		if (valid(invalid)) return false;
+		if (valid(invalid))
+			return false;
 		invalid = plan;
 		invalid.clusterIdentities[1] = 0u;
-		if (valid(invalid)) return false;
+		if (valid(invalid))
+			return false;
 		invalid.clusterIdentities[1] = invalid.clusterIdentities[0];
-		if (valid(invalid)) return false;
+		if (valid(invalid))
+			return false;
 		plan.count = 1u;
-		if (!valid(plan)) return false;
+		if (!valid(plan))
+			return false;
 		// An absent plan keeps the legacy validator/path in charge, without new restrictions.
 		return GetCharacterRegionSubmissionViolation(0u, {}, {}, 0u, 0u, false).empty();
 	}());

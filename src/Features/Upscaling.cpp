@@ -16215,13 +16215,15 @@ bool Upscaling::HandleNeuralRenderingSettingsTransition(
 		                                          globals::state->frameCount :
 		                                          std::numeric_limits<uint32_t>::max();
 	}
-	if (a_previousSettings.neuralRenderingEnabled ==
-			settings.neuralRenderingEnabled &&
-		!insertionPointChanged && !multiRoiChanged) {
+	auto& neuralRenderer = NeuralRendering::Renderer::Instance();
+	if (!NeuralRendering::RequiresBackendRetirement(
+			a_previousSettings.neuralRenderingEnabled != settings.neuralRenderingEnabled,
+			multiRoiChanged, insertionPointChanged,
+			neuralRenderer.IsFailureLatched() || neuralRenderer.IsQuarantined())) {
 		return true;
 	}
 
-	const bool resetSucceeded = NeuralRendering::Renderer::Instance().Reset();
+	const bool resetSucceeded = neuralRenderer.Reset();
 	if (!resetSucceeded) {
 		logger::error(
 			"[DLSSNR] Backend retirement failed during {}; NR remains fail-closed",

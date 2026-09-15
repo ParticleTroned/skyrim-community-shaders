@@ -87,6 +87,31 @@ settings. Both Feature 18 and center-blend success counts were one per
 eye, but the published applied and committed masks were zero. This does
 not identify the failed handoff or justify suppressing the fallback.
 
+### Transition duration and backend lifetime
+
+Each switch retained one distinct error frame: 63554, 63613 and 63670.
+The next observed frame was a normal-DLSS bypass without an error; NR
+was observed again at 63557, 63616 and 63672. One error frame appeared
+in two responses with the same publication sequence. This is transient
+recovery, not a persistent failure or a measured one-refresh hitch.
+
+The respective post-switch main-thread status calls took 2462, 2353 and
+2371 ms. The same run's log shows runtime initialization followed by
+Feature 18 creation around two seconds later. These are operational
+timings from an unqualified profiling environment, not headset-visible
+durations or a controlled performance comparison. They nevertheless
+identify cold backend recreation as a stall that needs correction.
+
+Insertion-only changes now retain a healthy backend. The transition-frame
+block and history invalidation remain; the renderer's history key includes
+the insertion point and colour input epoch, and stereo history decisions
+remain synchronized. Resource-key changes still wait for GPU idle and
+retire incompatible slots before rebuilding. Master and multi-ROI changes
+still retire the full backend, as do insertion switches with a latched
+failure or quarantine. DevBench reports retirement separately from history
+reset. This removes an unconditional teardown; the new installed build
+must still demonstrate its actual recovery duration and fallback behavior.
+
 ## Baselines and limits
 
 The first baseline matrix stopped at an explicitly rejected no-op

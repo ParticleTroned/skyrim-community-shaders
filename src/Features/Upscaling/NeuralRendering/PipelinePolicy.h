@@ -46,6 +46,15 @@ namespace NeuralRendering
 	inline constexpr std::size_t kInsertionPointCount =
 		static_cast<std::size_t>(InsertionPoint::Count);
 
+	/** History keys separate insertion domains; healthy backends can retain resources. */
+	[[nodiscard]] constexpr bool RequiresBackendRetirement(
+		bool a_enableStateChanged, bool a_multiRoiChanged,
+		bool a_insertionPointChanged, bool a_backendFailed) noexcept
+	{
+		return a_enableStateChanged || a_multiRoiChanged ||
+		       (a_insertionPointChanged && a_backendFailed);
+	}
+
 	[[nodiscard]] constexpr bool IsValidInsertionPoint(
 		InsertionPoint a_insertionPoint) noexcept
 	{
@@ -460,7 +469,7 @@ namespace NeuralRendering
 		return a_leftSlot < 8u && a_rightSlot < 8u &&
 		       a_leftIdentity == a_rightIdentity &&
 		       IsOrderedStereoFeatureSlotPair(
-			       LogicalFeatureSlot(a_leftSlot), LogicalFeatureSlot(a_rightSlot));
+				   LogicalFeatureSlot(a_leftSlot), LogicalFeatureSlot(a_rightSlot));
 	}
 
 	/** Preserve logical-eye outcomes while exposing physical region counts in telemetry. */

@@ -9,10 +9,33 @@
 namespace NeuralRendering::Color
 {
 	// CSX processing choices, not NVIDIA NGX/Streamline parameters.
-	enum class Mode : std::uint32_t { LegacyRaw, Managed, PreserveSource, Count };
-	enum class Domain : std::uint32_t { Unknown, Linear, SRGB, Count };
-	enum class Transform : std::uint32_t { Identity, LinearToSRGB, ReversibleProxy, Count };
-	enum class ExposureSource : std::uint32_t { Manual, CapturedHDR, Count };
+	enum class Mode : std::uint32_t
+	{
+		LegacyRaw,
+		Managed,
+		PreserveSource,
+		Count
+	};
+	enum class Domain : std::uint32_t
+	{
+		Unknown,
+		Linear,
+		SRGB,
+		Count
+	};
+	enum class Transform : std::uint32_t
+	{
+		Identity,
+		LinearToSRGB,
+		ReversibleProxy,
+		Count
+	};
+	enum class ExposureSource : std::uint32_t
+	{
+		Manual,
+		CapturedHDR,
+		Count
+	};
 
 	[[nodiscard]] inline bool Finite(float value) noexcept
 	{
@@ -118,7 +141,13 @@ namespace NeuralRendering::Color
 
 	// Storage flags occupy previously unused ControlFlags bits; the CB stays 48 bytes.
 	// Keep values aligned with ColorCommon.hlsli (covered by contract tests).
-	enum class Storage : std::uint32_t { Float32 = 0, R11G11B10 = 0x100, Float16 = 0x200, UNorm = 0x300 };
+	enum class Storage : std::uint32_t
+	{
+		Float32 = 0,
+		R11G11B10 = 0x100,
+		Float16 = 0x200,
+		UNorm = 0x300
+	};
 	using RGB = std::array<float, 3>;
 	[[nodiscard]] inline bool Finite(const RGB& value) noexcept
 	{
@@ -126,11 +155,15 @@ namespace NeuralRendering::Color
 	}
 	[[nodiscard]] inline bool Representable(const RGB& value, Storage storage) noexcept
 	{
-		if (!Finite(value)) return false;
+		if (!Finite(value))
+			return false;
 		for (std::size_t i = 0; i < 3; ++i) {
-			if (storage == Storage::R11G11B10 && (value[i] < 0 || value[i] > (i == 2 ? 64512.0f : 65024.0f))) return false;
-			if (storage == Storage::Float16 && std::abs(value[i]) > 65504.0f) return false;
-			if (storage == Storage::UNorm && (value[i] < 0 || value[i] > 1)) return false;
+			if (storage == Storage::R11G11B10 && (value[i] < 0 || value[i] > (i == 2 ? 64512.0f : 65024.0f)))
+				return false;
+			if (storage == Storage::Float16 && std::abs(value[i]) > 65504.0f)
+				return false;
+			if (storage == Storage::UNorm && (value[i] < 0 || value[i] > 1))
+				return false;
 		}
 		return storage == Storage::Float32 || storage == Storage::R11G11B10 || storage == Storage::Float16 || storage == Storage::UNorm;
 	}
@@ -198,7 +231,8 @@ namespace NeuralRendering::Color
 	[[nodiscard]] inline RGB Reconstruct(const RGB& baseline, const RGB& prepared, const RGB& neural, const Profile& profile) noexcept
 	{
 		RGB check{}, inverseInput{}, inverseOutput{}, result{};
-		if (!Finite(baseline)) return {};
+		if (!Finite(baseline))
+			return {};
 		if (!Forward(baseline, profile, check) || !Inverse(prepared, profile, inverseInput) || !Inverse(neural, profile, inverseOutput))
 			return baseline;
 		for (std::size_t i = 0; i < result.size(); ++i)
@@ -211,7 +245,8 @@ namespace NeuralRendering::Color
 		if (!Finite(logResidual) || !Finite(lowFrequencyResidual) || !Finite(edgeWeight) || !Valid(settings))
 			return 1.0f;
 		const auto stops = std::clamp((logResidual - lowFrequencyResidual) * settings.detailStrength *
-			std::clamp(edgeWeight, 0.0f, 1.0f), -settings.maximumDetailStops, settings.maximumDetailStops);
+										  std::clamp(edgeWeight, 0.0f, 1.0f),
+			-settings.maximumDetailStops, settings.maximumDetailStops);
 		return std::exp2(stops);
 	}
 }

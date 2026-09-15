@@ -2,16 +2,20 @@
 #include "ExposurePolicy.h"
 #include <array>
 #include <cstdint>
-#include <string>
 #include <d3d11.h>
+#include <string>
 #include <wrl/client.h>
 
 namespace NeuralRendering::Color
 {
 	enum class ExposureBindingState : std::uint32_t
 	{
-		NotRequested, WaitingForHDRPass, StaleOrAmbiguous, ContextMismatch,
-		SnapshotQueued, ResourceFailure
+		NotRequested,
+		WaitingForHDRPass,
+		StaleOrAmbiguous,
+		ContextMismatch,
+		SnapshotQueued,
+		ResourceFailure
 	};
 	const char* ExposureBindingName(ExposureBindingState) noexcept;
 
@@ -40,7 +44,11 @@ namespace NeuralRendering::Color
 		Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srv;
 		ExposureEvidence evidence{};
 		ExposureBindingState state = ExposureBindingState::NotRequested;
-		void Abandon() noexcept { (void)resource.Detach(); (void)srv.Detach(); }
+		void Abandon() noexcept
+		{
+			(void)resource.Detach();
+			(void)srv.Detach();
+		}
 	};
 
 	// Only Request/GetStatus are called from UI/DevBench threads. Installation,

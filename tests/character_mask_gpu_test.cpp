@@ -186,11 +186,12 @@ namespace
 				"Create capture shader");
 			PackageIncludes includes(shaderDirectory);
 			const auto blendPath = shaderDirectory.parent_path().parent_path() /
-				"features/Upscaling/Shaders/Upscaling/FoveatedCenterBlendCS.hlsl";
+			                       "features/Upscaling/Shaders/Upscaling/FoveatedCenterBlendCS.hlsl";
 			auto blendBlob = Compile(blendPath, &includes);
 			ComPtr<ID3D11ShaderReflection> reflection;
 			Check(D3DReflect(blendBlob->GetBufferPointer(), blendBlob->GetBufferSize(),
-				__uuidof(ID3D11ShaderReflection), &reflection), "Reflect blend shader");
+					  __uuidof(ID3D11ShaderReflection), &reflection),
+				"Reflect blend shader");
 			auto* blendBuffer = reflection->GetConstantBufferByName("FoveatedCenterBlendCB");
 			D3D11_SHADER_BUFFER_DESC blendDesc{};
 			Check(blendBuffer->GetDesc(&blendDesc), "Reflect blend constants");
@@ -206,7 +207,8 @@ namespace
 			Require(boundsDesc.StartOffset == offsetof(BlendConstants, characterMaskBounds),
 				"BlendConstants bounds offset differs");
 			Check(device_->CreateComputeShader(blendBlob->GetBufferPointer(),
-				blendBlob->GetBufferSize(), nullptr, &blendShader_), "Create blend shader");
+					  blendBlob->GetBufferSize(), nullptr, &blendShader_),
+				"Create blend shader");
 		}
 
 		MaskResult Mask(const MaskConstants& constants, std::uint32_t packedWidth,
@@ -411,7 +413,7 @@ namespace
 			const Color neural{ 0.7f, 0.6f, 0.5f, 1.0f };
 			const Color untouched{ -2.0f, -2.0f, -2.0f, -2.0f };
 			const auto run = [&](const BlendConstants& constants,
-				const std::vector<Color>& neuralPixels, const std::vector<std::uint8_t>& maskPixels) {
+								 const std::vector<Color>& neuralPixels, const std::vector<std::uint8_t>& maskPixels) {
 				return Blend(constants, width, height, neuralPixels,
 					std::vector<Color>(width * height, baseline), maskPixels,
 					std::vector<Color>(width * 2 * height, untouched));
@@ -440,14 +442,15 @@ namespace
 							expected = baseline;
 							const auto eyeX = x - width;
 							const bool supported = eyeX >= 2 && eyeX < 6 && y >= 1 && y < 3;
-							const float weight = useFullNR ? 1.0f :
-								useMask && supported ? maskPixels[y * width + eyeX] / 255.0f : 0.0f;
+							const float weight = useFullNR            ? 1.0f :
+							                     useMask && supported ? maskPixels[y * width + eyeX] / 255.0f :
+							                                            0.0f;
 							for (std::size_t channel = 0; channel < 4; ++channel)
 								expected[channel] += weight * (neural[channel] - baseline[channel]);
 						}
 						for (std::size_t channel = 0; channel < 4; ++channel) {
 							Require(std::isfinite(pixels[y * width * 2 + x][channel]) &&
-								std::abs(pixels[y * width * 2 + x][channel] - expected[channel]) < 0.0001f,
+										std::abs(pixels[y * width * 2 + x][channel] - expected[channel]) < 0.0001f,
 								"Composite sampled poisoned NR/mask, lost precise strength, or touched other eye");
 						}
 					}
@@ -491,7 +494,7 @@ namespace
 					}
 					for (std::size_t channel = 0; channel < 4; ++channel) {
 						Require(std::isfinite(separated[y * width * 2 + x][channel]) &&
-							std::abs(separated[y * width * 2 + x][channel] - expected[channel]) < 0.0001f,
+									std::abs(separated[y * width * 2 + x][channel] - expected[channel]) < 0.0001f,
 							"Independent ROI composite leaked poisoned gap, mixed regions, or modified peer eye");
 					}
 				}
@@ -613,7 +616,8 @@ namespace
 		for (std::uint32_t y = 0; y < height; ++y) {
 			for (std::uint32_t x = 0; x < width * 2; ++x)
 				original[y * width * 2 + x] = Color{
-					(40.0f + x) / 255.0f, (70.0f + y) / 255.0f, 100.0f / 255.0f, (50.0f + x + y) / 255.0f };
+					(40.0f + x) / 255.0f, (70.0f + y) / 255.0f, 100.0f / 255.0f, (50.0f + x + y) / 255.0f
+				};
 			for (std::uint32_t x = 0; x < width; ++x) {
 				baseline[y * width + x] = Color{ 0.1f + x * 0.01f, 0.2f + y * 0.01f, 0.3f, 0.8f };
 				mask[y * width + x] = std::array<std::uint8_t, 4>{ 0, 64, 128, 255 }[x % 4];
@@ -675,7 +679,7 @@ namespace
 										featherPixels += fovWeight > 0.0f && fovWeight < 1.0f;
 										if (fovWeight > 0.0f) {
 											const auto sourceIndex = (localY + static_cast<std::uint32_t>(constants.sourceOffset[1])) * width +
-												localX + static_cast<std::uint32_t>(constants.sourceOffset[0]);
+											                         localX + static_cast<std::uint32_t>(constants.sourceOffset[0]);
 											Color selected = poison ? original[index] : neural[sourceIndex];
 											if (mode == 2) {
 												for (std::size_t channel = 0; channel < 3; ++channel)
@@ -684,18 +688,19 @@ namespace
 											const float strength = character ? mask[sourceIndex] / 255.0f : 1.0f;
 											for (std::size_t channel = 0; channel < (mode ? 3u : 4u); ++channel) {
 												const float center = character ? baseline[sourceIndex][channel] +
-													strength * (selected[channel] - baseline[sourceIndex][channel]) : selected[channel];
+												                                     strength * (selected[channel] - baseline[sourceIndex][channel]) :
+												                                 selected[channel];
 												expected[channel] += fovWeight * (center - expected[channel]);
 											}
 										}
 									}
 									for (std::size_t channel = 0; channel < 4; ++channel) {
 										Require(std::isfinite(actual[index][channel]) &&
-											std::abs(actual[index][channel] - expected[channel]) < (unorm ? 1.1f / 255.0f : 0.0002f),
+													std::abs(actual[index][channel] - expected[channel]) < (unorm ? 1.1f / 255.0f : 0.0002f),
 											"Final LDR mismatch: mode=" + std::to_string(mode) + " unorm=" + std::to_string(unorm) +
-											" eye=" + std::to_string(eye) + " character=" + std::to_string(character) +
-											" cropped=" + std::to_string(cropped) + " poison=" + std::to_string(poison) +
-											" x=" + std::to_string(x) + " y=" + std::to_string(y) + " channel=" + std::to_string(channel));
+												" eye=" + std::to_string(eye) + " character=" + std::to_string(character) +
+												" cropped=" + std::to_string(cropped) + " poison=" + std::to_string(poison) +
+												" x=" + std::to_string(x) + " y=" + std::to_string(y) + " channel=" + std::to_string(channel));
 									}
 								}
 							}

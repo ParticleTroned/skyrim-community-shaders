@@ -58,58 +58,58 @@
 
 #pragma comment(lib, "Psapi.lib")
 
-#define UPSCALING_SETTINGS_JSON_FIELDS(OP)         \
-	OP(upscaleMethod)                              \
-	OP(upscaleMethodNoDLSS)                        \
-	OP(qualityMode)                                \
-	OP(dlssPreset)                                 \
-	OP(renderScaleMode)                            \
-	OP(renderScaleLinkedToUpscaling)               \
-	OP(perfMode)                                   \
-	OP(frameLimitMode)                             \
-	OP(frameGenerationMode)                        \
-	OP(frameGenerationForceEnable)                 \
-	OP(frameGenerationAllowInMenus)                \
-	OP(streamlineLogLevel)                         \
-	OP(sharpnessFSR)                               \
-	OP(sharpnessDLSS)                              \
-	OP(dlssSharpener)                              \
-	OP(fsr4RuntimeEnable)                          \
-	OP(fsr4RuntimeSelectionSchemaVersion)          \
-	OP(foveatedVendorDispatch)                     \
-	OP(neuralRenderingEnabled)                     \
-	OP(neuralRenderingInsertionPoint)              \
-	OP(neuralRenderingBatchedStereo)               \
-	OP(neuralRenderingDirectCommit)                \
-	OP(neuralRenderingPreset)                      \
-	OP(neuralRenderingIntensity)                   \
-	OP(neuralRenderingLocalTone)                   \
-	OP(neuralRenderingLocalStructure)              \
-	OP(neuralRenderingSkinStructure)               \
-	OP(neuralRenderingStyle)                       \
-	OP(neuralRenderingAutoMask)                    \
-	OP(neuralRenderingUICorrection)                \
-	OP(neuralRenderingSingleSubrectScale)          \
-	OP(neuralRenderingBlendFeather)                \
-	OP(foveatedCenterOrigin)                       \
-	OP(foveatedHorizontalAnchor)                   \
-	OP(foveatedCenterArea)                         \
-	OP(foveatedCenterBlendFeather)                 \
-	OP(foveatedReconstructionGuardBandPixels)      \
-	OP(foveatedCenterHorizontalScale)              \
-	OP(foveatedLeftEyeMaskOffsetX)                 \
-	OP(foveatedLeftEyeMaskOffsetY)                 \
-	OP(foveatedRightEyeMaskOffsetX)                \
-	OP(foveatedRightEyeMaskOffsetY)                \
-	OP(periphery_taa_center_area)                  \
-	OP(foveatedPeripheryMaskVisualization)         \
-	OP(periphery_taa_enable)                       \
-	OP(periphery_taa_outer_scale)                  \
-	OP(periphery_taa_center_blend_feather)         \
-	OP(reflexLowLatencyMode)                       \
-	OP(reflexLowLatencyBoost)                      \
-	OP(reflexUseMarkersToOptimize)                 \
-	OP(reflexUseFPSLimit)                          \
+#define UPSCALING_SETTINGS_JSON_FIELDS(OP)    \
+	OP(upscaleMethod)                         \
+	OP(upscaleMethodNoDLSS)                   \
+	OP(qualityMode)                           \
+	OP(dlssPreset)                            \
+	OP(renderScaleMode)                       \
+	OP(renderScaleLinkedToUpscaling)          \
+	OP(perfMode)                              \
+	OP(frameLimitMode)                        \
+	OP(frameGenerationMode)                   \
+	OP(frameGenerationForceEnable)            \
+	OP(frameGenerationAllowInMenus)           \
+	OP(streamlineLogLevel)                    \
+	OP(sharpnessFSR)                          \
+	OP(sharpnessDLSS)                         \
+	OP(dlssSharpener)                         \
+	OP(fsr4RuntimeEnable)                     \
+	OP(fsr4RuntimeSelectionSchemaVersion)     \
+	OP(foveatedVendorDispatch)                \
+	OP(neuralRenderingEnabled)                \
+	OP(neuralRenderingInsertionPoint)         \
+	OP(neuralRenderingBatchedStereo)          \
+	OP(neuralRenderingDirectCommit)           \
+	OP(neuralRenderingPreset)                 \
+	OP(neuralRenderingIntensity)              \
+	OP(neuralRenderingLocalTone)              \
+	OP(neuralRenderingLocalStructure)         \
+	OP(neuralRenderingSkinStructure)          \
+	OP(neuralRenderingStyle)                  \
+	OP(neuralRenderingAutoMask)               \
+	OP(neuralRenderingUICorrection)           \
+	OP(neuralRenderingSingleSubrectScale)     \
+	OP(neuralRenderingBlendFeather)           \
+	OP(foveatedCenterOrigin)                  \
+	OP(foveatedHorizontalAnchor)              \
+	OP(foveatedCenterArea)                    \
+	OP(foveatedCenterBlendFeather)            \
+	OP(foveatedReconstructionGuardBandPixels) \
+	OP(foveatedCenterHorizontalScale)         \
+	OP(foveatedLeftEyeMaskOffsetX)            \
+	OP(foveatedLeftEyeMaskOffsetY)            \
+	OP(foveatedRightEyeMaskOffsetX)           \
+	OP(foveatedRightEyeMaskOffsetY)           \
+	OP(periphery_taa_center_area)             \
+	OP(foveatedPeripheryMaskVisualization)    \
+	OP(periphery_taa_enable)                  \
+	OP(periphery_taa_outer_scale)             \
+	OP(periphery_taa_center_blend_feather)    \
+	OP(reflexLowLatencyMode)                  \
+	OP(reflexLowLatencyBoost)                 \
+	OP(reflexUseMarkersToOptimize)            \
+	OP(reflexUseFPSLimit)                     \
 	OP(reflexFPSLimit)
 
 void to_json(json& a_json, const Upscaling::Settings& a_settings)
@@ -2925,7 +2925,7 @@ namespace
 		return a_method == a_target.method &&
 		       a_qualityMode == a_target.qualityMode &&
 		       a_renderScaleModePreference ==
-				   a_target.renderScaleModePreference &&
+		           a_target.renderScaleModePreference &&
 		       (a_target.method != Upscaling::UpscaleMethod::kDLSS || a_dlssPreset == a_target.dlssPreset);
 	}
 
@@ -3843,8 +3843,8 @@ namespace
 			!a_enclosure.Fits(a_width, a_height))
 			return false;
 		const auto regions = a_regions.count ?
-			std::span<const NeuralRendering::ComputeSubrect>(a_regions.regions.data(), a_regions.count) :
-			std::span<const NeuralRendering::ComputeSubrect>(&a_enclosure, 1);
+		                         std::span<const NeuralRendering::ComputeSubrect>(a_regions.regions.data(), a_regions.count) :
+		                         std::span<const NeuralRendering::ComputeSubrect>(&a_enclosure, 1);
 		// Validate every region before copying any part of the staged output.
 		for (const auto& region : regions) {
 			if (!region.Fits(a_width, a_height) ||
@@ -3853,8 +3853,12 @@ namespace
 		}
 		for (const auto& region : regions) {
 			const D3D11_BOX sourceBox{
-				region.baseX, region.baseY, 0u,
-				region.baseX + region.width, region.baseY + region.height, 1u,
+				region.baseX,
+				region.baseY,
+				0u,
+				region.baseX + region.width,
+				region.baseY + region.height,
+				1u,
 			};
 			a_context->CopySubresourceRegion(
 				a_destination, 0, region.baseX, region.baseY, 0,
@@ -14015,15 +14019,15 @@ void Upscaling::DrawVRRenderScaleLinkSetting(UpscaleMethod a_upscaleMethod)
 	bool linked = settings.renderScaleLinkedToUpscaling;
 	{
 		auto guard = Util::DisableGuard(!linked &&
-			(IsOpenCompositeUpscalingBlocked() || IsRenderDocUpscalingBlocked() || IsSubmitStageDeviceLost()));
+										(IsOpenCompositeUpscalingBlocked() || IsRenderDocUpscalingBlocked() || IsSubmitStageDeviceLost()));
 		if (ImGui::Checkbox("Link Render Scale to DLSS/FSR Upscaling", &linked)) {
 			if (!linked) {
 				// Unlinking preserves the current manual preference, including at DLAA.
 				settings.renderScaleLinkedToUpscaling = false;
 			} else if (!IsRenderScaleMethodEligible(a_upscaleMethod) ||
-			           ApplyCSMenuUpscalingTransition(
-				           a_upscaleMethod, true, GetEffectiveUpscalingQualityMode(),
-				           GetEffectiveDLSSPreset(), "render-scale link enabled")) {
+					   ApplyCSMenuUpscalingTransition(
+						   a_upscaleMethod, true, GetEffectiveUpscalingQualityMode(),
+						   GetEffectiveDLSSPreset(), "render-scale link enabled")) {
 				// Do not force a scaled quality preset when enabling the link at DLAA.
 				settings.renderScaleLinkedToUpscaling = true;
 			}
@@ -14228,11 +14232,12 @@ void Upscaling::DrawSettings()
 			if (ImGui::SliderInt("Render Scale", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)])) {
 				const bool enableRenderScaleMode = std::clamp(renderScaleMode, 0, 1) != 0;
 				if (ApplyCSMenuUpscalingTransition(
-					upscaleMethod,
-					enableRenderScaleMode,
-					renderScaleQualityMode,
-					GetEffectiveDLSSPreset(),
-					"upscaling menu render-scale mode change") && !enableRenderScaleMode) {
+						upscaleMethod,
+						enableRenderScaleMode,
+						renderScaleQualityMode,
+						GetEffectiveDLSSPreset(),
+						"upscaling menu render-scale mode change") &&
+					!enableRenderScaleMode) {
 					settings.renderScaleLinkedToUpscaling = false;
 				}
 			}
@@ -14839,11 +14844,12 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 			if (ImGui::SliderInt("Render Scale", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)])) {
 				const bool enableRenderScaleMode = std::clamp(renderScaleMode, 0, 1) != 0;
 				if (ApplyCSMenuUpscalingTransition(
-					upscaleMethod,
-					enableRenderScaleMode,
-					renderScaleQualityMode,
-					GetEffectiveDLSSPreset(),
-					"performance tuning render-scale mode change") && !enableRenderScaleMode) {
+						upscaleMethod,
+						enableRenderScaleMode,
+						renderScaleQualityMode,
+						GetEffectiveDLSSPreset(),
+						"performance tuning render-scale mode change") &&
+					!enableRenderScaleMode) {
 					settings.renderScaleLinkedToUpscaling = false;
 				}
 			}
@@ -17292,11 +17298,11 @@ void Upscaling::RestorePerformanceCostMeasurementState(const json& a_state)
 	                                       ClampUpscaleMethod(fallbackMethod, UpscaleMethod::kFSR);
 
 	if (!ApplyCSMenuUpscalingTransition(
-		targetMethod,
-		renderScaleMode,
-		qualityMode,
-		dlssPreset,
-		"performance cost measurement restore"))
+			targetMethod,
+			renderScaleMode,
+			qualityMode,
+			dlssPreset,
+			"performance cost measurement restore"))
 		return;
 
 	settings.upscaleMethod = static_cast<uint32_t>(ClampUpscaleMethod(primaryMethod, UpscaleMethod::kDLSS));
@@ -17520,7 +17526,7 @@ bool Upscaling::GetVRRenderScaleModePreference() const
 		return false;
 
 	return GetPendingVRRenderScaleDesiredProfile()
-		.renderScaleModePreference;
+	    .renderScaleModePreference;
 }
 
 bool Upscaling::GetVRRenderScalePreferenceForSelection(UpscaleMethod a_targetMethod) const
@@ -17540,7 +17546,7 @@ bool Upscaling::GetVRRenderScaleModeRequested() const
 		return false;
 
 	return GetPendingVRRenderScaleDesiredProfile()
-		.renderScaleModeEnabled;
+	    .renderScaleModeEnabled;
 }
 
 bool Upscaling::CanUseVRRenderScaleMode() const
@@ -25620,27 +25626,27 @@ namespace
 {
 	DXGI_FORMAT RawDepthViewFormat(DXGI_FORMAT a_format) noexcept
 	{
-	switch (a_format) {
-	case DXGI_FORMAT_R24G8_TYPELESS:
-	case DXGI_FORMAT_D24_UNORM_S8_UINT:
-		return DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
-	case DXGI_FORMAT_R32G8X24_TYPELESS:
-	case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
-		return DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
-	case DXGI_FORMAT_R32_TYPELESS:
-	case DXGI_FORMAT_D32_FLOAT:
-		return DXGI_FORMAT_R32_FLOAT;
-	case DXGI_FORMAT_R16_TYPELESS:
-	case DXGI_FORMAT_D16_UNORM:
-		return DXGI_FORMAT_R16_UNORM;
-	case DXGI_FORMAT_R24_UNORM_X8_TYPELESS:
-	case DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS:
-	case DXGI_FORMAT_R32_FLOAT:
-	case DXGI_FORMAT_R16_UNORM:
-		return a_format;
-	default:
-		return DXGI_FORMAT_UNKNOWN;
-	}
+		switch (a_format) {
+		case DXGI_FORMAT_R24G8_TYPELESS:
+		case DXGI_FORMAT_D24_UNORM_S8_UINT:
+			return DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+		case DXGI_FORMAT_R32G8X24_TYPELESS:
+		case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
+			return DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
+		case DXGI_FORMAT_R32_TYPELESS:
+		case DXGI_FORMAT_D32_FLOAT:
+			return DXGI_FORMAT_R32_FLOAT;
+		case DXGI_FORMAT_R16_TYPELESS:
+		case DXGI_FORMAT_D16_UNORM:
+			return DXGI_FORMAT_R16_UNORM;
+		case DXGI_FORMAT_R24_UNORM_X8_TYPELESS:
+		case DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS:
+		case DXGI_FORMAT_R32_FLOAT:
+		case DXGI_FORMAT_R16_UNORM:
+			return a_format;
+		default:
+			return DXGI_FORMAT_UNKNOWN;
+		}
 	}
 }
 
@@ -25733,13 +25739,22 @@ bool Upscaling::CopyRawDepthRegion(ID3D11Resource* source, Texture2D& destinatio
 		context->CSSetShaderResources(0, 1, &previousSource);
 		context->CSSetUnorderedAccessViews(0, 1, &previousOutput, nullptr);
 		context->OMSetRenderTargets(static_cast<UINT>(previousTargets.size()), previousTargets.data(), previousDepth);
-		if (previousShader) previousShader->Release();
-		for (UINT i = 0; i < previousInstanceCount; ++i) if (previousInstances[i]) previousInstances[i]->Release();
-		if (previousBuffer) previousBuffer->Release();
-		if (previousSource) previousSource->Release();
-		if (previousOutput) previousOutput->Release();
-		for (auto* target : previousTargets) if (target) target->Release();
-		if (previousDepth) previousDepth->Release();
+		if (previousShader)
+			previousShader->Release();
+		for (UINT i = 0; i < previousInstanceCount; ++i)
+			if (previousInstances[i])
+				previousInstances[i]->Release();
+		if (previousBuffer)
+			previousBuffer->Release();
+		if (previousSource)
+			previousSource->Release();
+		if (previousOutput)
+			previousOutput->Release();
+		for (auto* target : previousTargets)
+			if (target)
+				target->Release();
+		if (previousDepth)
+			previousDepth->Release();
 	});
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 	ID3D11UnorderedAccessView* nullOutput = nullptr;
@@ -26512,7 +26527,7 @@ bool Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, I
 	cbData.finalLdrColorMode = finalLdrColorMode;
 	if (characterMaskSRV) {
 		const auto support = NeuralRendering::CharacterRendering::Instance()
-			.GetMaskSupportRect(characterMaskSRV, rect.outputWidth, rect.outputHeight);
+		                         .GetMaskSupportRect(characterMaskSRV, rect.outputWidth, rect.outputHeight);
 		cbData.characterMaskBounds = {
 			support.baseX * cbData.invSourceDim.x,
 			support.baseY * cbData.invSourceDim.y,
@@ -26797,10 +26812,10 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 				DXGI_FORMAT_R32_FLOAT))
 			return false;
 	} else if (!foveatedCenterDepth[eyeIndex] || !foveatedCenterDepth[eyeIndex]->resource ||
-		!foveatedCenterDepth[eyeIndex]->srv || !foveatedCenterDepth[eyeIndex]->uav ||
-		foveatedCenterDepth[eyeIndex]->desc.Format != DXGI_FORMAT_R32_FLOAT ||
-		foveatedCenterDepth[eyeIndex]->desc.Width != centerInputAllocationWidth ||
-		foveatedCenterDepth[eyeIndex]->desc.Height != centerInputAllocationHeight) {
+			   !foveatedCenterDepth[eyeIndex]->srv || !foveatedCenterDepth[eyeIndex]->uav ||
+			   foveatedCenterDepth[eyeIndex]->desc.Format != DXGI_FORMAT_R32_FLOAT ||
+			   foveatedCenterDepth[eyeIndex]->desc.Width != centerInputAllocationWidth ||
+			   foveatedCenterDepth[eyeIndex]->desc.Height != centerInputAllocationHeight) {
 		return false;
 	}
 	if (!prepareFoveatedTexture(foveatedCenterMotionVectors[eyeIndex], motionVectorsIn, centerInputAllocationWidth, centerInputAllocationHeight, false, createFsrViews, false, false, ("Upscale_FoveatedCenter_MVec_" + suffix).c_str()))
@@ -27219,10 +27234,10 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 			if (!preparedSubrect.Fits(rect.outputWidth, rect.outputHeight))
 				return false;
 			const auto preparedRegions = characterVisualIsolation ?
-				NeuralRendering::CharacterRendering::Instance().GetPreparedComputeRegions(
-					featureSlot, currentFrame, neuralSourceFrame, neuralGeneration,
-					rect.outputWidth, rect.outputHeight) :
-				NeuralRendering::CharacterComputeRegionPlan{};
+			                                 NeuralRendering::CharacterRendering::Instance().GetPreparedComputeRegions(
+												 featureSlot, currentFrame, neuralSourceFrame, neuralGeneration,
+												 rect.outputWidth, rect.outputHeight) :
+			                                 NeuralRendering::CharacterComputeRegionPlan{};
 			if (useSubmitNeuralFloatBridge)
 				return CommitSubmitNeuralFloatOutput(
 					eyeIndex, directNeuralCommit, preparedSubrect, preparedRegions);
@@ -27738,7 +27753,19 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 	std::array<D3D11_UNORDERED_ACCESS_VIEW_DESC, 2> targetUavDescs{};
 	D3D11_FEATURE_DATA_FORMAT_SUPPORT2 formatSupport{};
 	HRESULT formatSupportResult = S_OK;
-	enum class LateStage : uint32_t { Preflight, Shader, Target, Formats, TypedUav, Resources, InputConversion, Evaluation, OutputCommit, Blend };
+	enum class LateStage : uint32_t
+	{
+		Preflight,
+		Shader,
+		Target,
+		Formats,
+		TypedUav,
+		Resources,
+		InputConversion,
+		Evaluation,
+		OutputCommit,
+		Blend
+	};
 	constexpr std::array stageNames{ "preflight", "shader", "target_contract", "eye_formats", "typed_uav", "resources", "input_conversion", "evaluation", "output_commit", "blend" };
 	LateStage lateStage = LateStage::Preflight;
 	uint32_t lateEye = 2u;
@@ -28102,17 +28129,17 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 				computeSubrect.baseX, computeSubrect.baseY, 0,
 				target.resource, target.subresource, &sourceBox);
 			if (!neuralFinalLdrColorIn[eye]->srv ||
-					!submitNeuralFloatColorIn[eye] ||
-					!submitNeuralFloatColorIn[eye]->uav ||
-					!DispatchSubmitStageColorRegion(
-						neuralFinalLdrColorIn[eye]->srv.get(),
-						submitNeuralFloatColorIn[eye]->uav.get(),
-						rect.outputWidth, rect.outputHeight,
-						computeSubrect.baseX, computeSubrect.baseY,
-						computeSubrect.width, computeSubrect.height,
-						computeSubrect.width, computeSubrect.height,
-						computeSubrect.baseX, computeSubrect.baseY,
-						"DLSS NR Final LDR Float Input")) {
+				!submitNeuralFloatColorIn[eye] ||
+				!submitNeuralFloatColorIn[eye]->uav ||
+				!DispatchSubmitStageColorRegion(
+					neuralFinalLdrColorIn[eye]->srv.get(),
+					submitNeuralFloatColorIn[eye]->uav.get(),
+					rect.outputWidth, rect.outputHeight,
+					computeSubrect.baseX, computeSubrect.baseY,
+					computeSubrect.width, computeSubrect.height,
+					computeSubrect.width, computeSubrect.height,
+					computeSubrect.baseX, computeSubrect.baseY,
+					"DLSS NR Final LDR Float Input")) {
 				return false;
 			}
 		}
@@ -30322,8 +30349,8 @@ bool Upscaling::AreVRPerEyeUpscalingResourcesReady(bool requireDepth, bool requi
 			return false;
 		}
 		if (requireDepth && (!vrIntermediateDepth[eye] || !vrIntermediateDepth[eye]->resource ||
-			!vrIntermediateDepth[eye]->srv || !vrIntermediateDepth[eye]->uav ||
-			vrIntermediateDepth[eye]->desc.Format != DXGI_FORMAT_R32_FLOAT)) {
+								!vrIntermediateDepth[eye]->srv || !vrIntermediateDepth[eye]->uav ||
+								vrIntermediateDepth[eye]->desc.Format != DXGI_FORMAT_R32_FLOAT)) {
 			return false;
 		}
 		if (requireLinearDepth && (!vrIntermediateLinearDepth[eye] || !vrIntermediateLinearDepth[eye]->resource)) {

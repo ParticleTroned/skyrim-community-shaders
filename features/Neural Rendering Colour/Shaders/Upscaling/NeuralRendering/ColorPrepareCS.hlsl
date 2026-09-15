@@ -1,9 +1,7 @@
 #include "ColorCommon.hlsli"
 Texture2D<float4> Baseline : register(t0);
 RWTexture2D<float4> Prepared : register(u0);
-[numthreads(8, 8, 1)]
-void main(uint3 id : SV_DispatchThreadID)
-{
+[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {
 	if (any(id.xy >= RegionSize))
 		return;
 	float4 original = Baseline.Load(int3(id.xy, 0));

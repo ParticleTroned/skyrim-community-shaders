@@ -199,6 +199,40 @@ namespace
 		}
 	}
 
+	void FrameCategoryTransitions()
+	{
+		CharacterCategoryFramePolicy policy;
+		CharacterSettings face{};
+		face.enabled = true;
+		face.skin = face.hair = false;
+		Require(GetEnabledCharacterCategoryMask(policy.Resolve(100, face)) == 2,
+			"Source authoring must latch the initial face-only selection");
+		auto expanded = face;
+		expanded.skin = expanded.hair = true;
+		expanded.faceStrength = 0.25f;
+		expanded.debugView = CharacterDebugView::RoiRectangles;
+		const auto peer = policy.Resolve(100, expanded);
+		Require(GetEnabledCharacterCategoryMask(peer) == 2 && peer.faceStrength == 1.0f,
+			"Capture and both eyes must retain the same frame's selection and strength");
+		Require(peer.debugView == CharacterDebugView::RoiRectangles,
+			"A diagnostic-only edit must not wait for category policy advancement");
+		Require(policy.Resolve(101, expanded) == expanded,
+			"Expanded categories must take effect on the next source frame");
+		Require(GetEnabledCharacterCategoryMask(policy.Resolve(100, expanded)) == 2,
+			"Retained source must not borrow a newer frame's expanded categories");
+		auto zero = expanded;
+		zero.faceStrength = zero.skinStrength = zero.hairStrength = 0.0f;
+		Require(policy.Resolve(101, zero).skinStrength == expanded.skinStrength,
+			"Zero-strength edits must not split the stereo selection policy");
+		Require(GetEnabledCharacterCategoryMask(policy.Resolve(102, zero)) == 0,
+			"Next-frame zero strength must produce empty selection");
+		policy = {};
+		Require(policy.Resolve(100, expanded) == expanded,
+			"A resource reset must begin a new category policy lifetime");
+		Require(policy.Resolve(UINT32_MAX, zero) == zero,
+			"Invalid source frames must not allocate a reusable policy entry");
+	}
+
 	void PolicyHelpers()
 	{
 		static_assert(CharacterPolicy::CategoryBit(CharacterCategory::None) == 0);
@@ -248,6 +282,7 @@ int main()
 		JsonFloatBounds();
 		VrSettingsMapping();
 		PolicyHelpers();
+		FrameCategoryTransitions();
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';
 		return 1;

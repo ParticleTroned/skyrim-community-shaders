@@ -3702,12 +3702,17 @@ namespace
 	}
 
 	NeuralRendering::CharacterSettings BuildCharacterSettings(
-		const Upscaling::Settings& a_settings) noexcept
+		const Upscaling::Settings& a_settings,
+		std::uint32_t a_sourceFrame = std::numeric_limits<std::uint32_t>::max()) noexcept
 	{
 		auto policy = NeuralRendering::GetUpscalingCharacterSettings(a_settings);
 		NeuralRendering::SanitizeCharacterSettings(policy);
 		policy.enabled = policy.enabled && a_settings.neuralRenderingEnabled;
-		return policy;
+		const auto frame = a_sourceFrame != std::numeric_limits<std::uint32_t>::max() ?
+		                       a_sourceFrame :
+		                   globals::state ? globals::state->frameCount :
+		                                    a_sourceFrame;
+		return NeuralRendering::CharacterRendering::Instance().ResolveCategorySettings(frame, policy);
 	}
 
 	bool UsesCharacterVisualIsolation(
@@ -3779,7 +3784,7 @@ namespace
 			.outputWidth = a_args.outputWidth,
 			.outputHeight = a_args.outputHeight,
 			.viewportCrop = a_args.viewportCrop,
-			.settings = BuildCharacterSettings(a_settings),
+			.settings = BuildCharacterSettings(a_settings, a_sourceWorldFrame),
 			.deferMaskRoiReadback = a_deferReadback,
 		};
 	}
@@ -3799,7 +3804,7 @@ namespace
 		a_args.computeSubrect = {};
 		a_args.computeRegions = {};
 		a_args.characterVisualIsolation = false;
-		const auto characterSettings = BuildCharacterSettings(a_settings);
+		const auto characterSettings = BuildCharacterSettings(a_settings, a_sourceWorldFrame);
 		if (!characterSettings.enabled || !UsesCharacterVisualIsolation(a_settings)) {
 			a_args.tuning.useAutoMask = true;
 			return true;

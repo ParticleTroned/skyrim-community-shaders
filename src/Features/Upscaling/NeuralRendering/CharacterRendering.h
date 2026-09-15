@@ -44,6 +44,8 @@ namespace NeuralRendering
 		std::uint32_t sourceWorldFrame = std::numeric_limits<std::uint32_t>::max();
 		std::uint64_t contentSerial = 0;
 		std::uint32_t featureSlot = 0;
+		std::uint32_t effectiveCategoryMask = 0;
+		std::array<float, 3> effectiveCategoryStrengths{};
 		std::uint32_t evaluationWidth = 0;
 		std::uint32_t evaluationHeight = 0;
 		std::uint32_t visibleFaces = 0;
@@ -63,6 +65,7 @@ namespace NeuralRendering
 		std::uint32_t maskRoiOccupiedTiles = 0;
 		ComputeSubrect maskRoiRequiredSubrect{};
 		double maskRoiReadbackWaitMs = 0.0;
+		double maskRoiPlanningCpuMs = 0.0;
 		std::string maskRoiLastFailure;
 		std::int32_t maskRoiLastFailureResult = 0;
 		std::uint32_t maskRoiLastFailureFrame = std::numeric_limits<std::uint32_t>::max();
@@ -242,6 +245,10 @@ namespace NeuralRendering
 
 		CharacterRendering(const CharacterRendering&) = delete;
 		CharacterRendering& operator=(const CharacterRendering&) = delete;
+
+		/** Defers category edits until the next source frame; retained frames keep their selection. */
+		[[nodiscard]] CharacterSettings ResolveCategorySettings(
+			std::uint32_t a_sourceFrame, const CharacterSettings& a_requested) noexcept;
 
 		/** Returns the same admission for every material of this actor/world frame. */
 		[[nodiscard]] bool ShouldAuthorActor(

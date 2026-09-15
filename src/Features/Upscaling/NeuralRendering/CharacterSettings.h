@@ -1,9 +1,11 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 
 namespace NeuralRendering
 {
@@ -209,4 +211,41 @@ namespace NeuralRendering
 		}
 		return result;
 	}
+
+	/** Keeps category selection and strength coherent across one source frame. */
+	class CharacterCategoryFramePolicy
+	{
+	public:
+		[[nodiscard]] CharacterSettings Resolve(std::uint32_t a_frame, CharacterSettings a_requested) noexcept
+		{
+			if (a_frame == std::numeric_limits<std::uint32_t>::max())
+				return a_requested;
+			const Entry* selected = nullptr;
+			for (const auto& entry : entries_)
+				if (entry.frame == a_frame)
+					selected = &entry;
+			if (!selected) {
+				auto& entry = entries_[next_];
+				entry = { a_frame, a_requested };
+				selected = &entry;
+				next_ = (next_ + 1) % entries_.size();
+			}
+			a_requested.faces = selected->settings.faces;
+			a_requested.skin = selected->settings.skin;
+			a_requested.hair = selected->settings.hair;
+			a_requested.faceStrength = selected->settings.faceStrength;
+			a_requested.skinStrength = selected->settings.skinStrength;
+			a_requested.hairStrength = selected->settings.hairStrength;
+			return a_requested;
+		}
+
+	private:
+		struct Entry
+		{
+			std::uint32_t frame = std::numeric_limits<std::uint32_t>::max();
+			CharacterSettings settings{};
+		};
+		std::array<Entry, CharacterPolicy::kPreparedFrameHistorySize> entries_{};
+		std::size_t next_ = 0;
+	};
 }

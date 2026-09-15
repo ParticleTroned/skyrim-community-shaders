@@ -398,6 +398,7 @@ namespace NeuralRendering
 			std::uint32_t maskRoiOccupiedTiles = 0;
 			ComputeSubrect maskRoiRequiredSubrect{};
 			double maskRoiReadbackWaitMs = 0.0;
+			double maskRoiPlanningCpuMs = 0.0;
 			const char* maskRoiLastFailure = "";
 			std::int32_t maskRoiLastFailureResult = 0;
 			std::uint32_t maskRoiLastFailureFrame = std::numeric_limits<std::uint32_t>::max();
@@ -1336,19 +1337,19 @@ namespace NeuralRendering
 			return true;
 		}
 
-		void ResolveCurrentMaskBounds(const CharacterMaskPrepareArgs& a_args, Slot& a_slot,
+		bool ReadCurrentMaskBounds(const CharacterMaskPrepareArgs& a_args, Slot& a_slot,
 			std::chrono::steady_clock::time_point a_deadline)
 		{
 			try {
 				if (!a_slot.maskBoundsResolvePending)
-					return;
+					return false;
 				if (!a_slot.maskBoundsPending || a_slot.contentSerial == 0 ||
 					a_slot.maskBoundsContentSerial != a_slot.contentSerial ||
 					a_slot.maskBoundsFrame != a_args.frameId ||
 					a_slot.maskBoundsSourceFrame != a_args.sourceWorldFrame ||
 					a_slot.maskBoundsGeneration != a_args.generation) {
 					RejectMaskBounds(a_args, a_slot, "queued_bounds_identity_mismatch", E_INVALIDARG);
-					return;
+					return false;
 				}
 				const auto readback = ReadCharacterMaskBounds(a_args.context,
 					a_slot.maskBoundsReady.Get(), a_slot.maskBoundsStaging.Get(),
@@ -1357,14 +1358,28 @@ namespace NeuralRendering
 				a_slot.maskBoundsResolvePending = false;
 				if (!readback.Ready()) {
 					RejectMaskBounds(a_args, a_slot, readback.Reason(), readback.result, readback.waitMs);
-					return;
+					return false;
 				}
 				a_slot.maskBoundsPending = false;
 				Increment(a_slot.maskRoiReadbackSuccesses);
+				return true;
+			} catch (...) {
+				return RejectMaskBounds(a_args, a_slot, "bounds_readback_failed", E_FAIL,
+					a_slot.maskRoiReadbackWaitMs);
+			}
+		}
+
+		void ResolveCurrentMaskBounds(const CharacterMaskPrepareArgs& a_args, Slot& a_slot)
+		{
+			try {
+				const auto planningStart = std::chrono::steady_clock::now();
 				const auto tight = ResolveCharacterMaskRoi(a_slot.maskBoundsTiles, a_slot.maskBoundsOwners,
 					a_args.outputWidth, a_args.outputHeight, a_args.sourceWorldFrame, a_slot.stableMaskRoi);
+				a_slot.maskRoiPlanningCpuMs = std::chrono::duration<double, std::milli>(
+					std::chrono::steady_clock::now() - planningStart)
+				                                  .count();
 				if (!tight.valid) {
-					RejectMaskBounds(a_args, a_slot, "invalid_current_bounds", E_INVALIDARG, readback.waitMs);
+					RejectMaskBounds(a_args, a_slot, "invalid_current_bounds", E_INVALIDARG, a_slot.maskRoiReadbackWaitMs);
 					return;
 				}
 				const bool admitted = a_slot.maskRoiAdmission.ObserveFresh(a_args.frameId);
@@ -1401,6 +1416,7 @@ namespace NeuralRendering
 			a_eye.maskRoiOccupiedTiles = a_slot.maskRoiOccupiedTiles;
 			a_eye.maskRoiRequiredSubrect = a_slot.maskRoiRequiredSubrect;
 			a_eye.maskRoiReadbackWaitMs = a_slot.maskRoiReadbackWaitMs;
+			a_eye.maskRoiPlanningCpuMs = a_slot.maskRoiPlanningCpuMs;
 			a_eye.maskRoiLastFailure = a_slot.maskRoiLastFailure;
 			a_eye.maskRoiLastFailureResult = a_slot.maskRoiLastFailureResult;
 			a_eye.maskRoiLastFailureFrame = a_slot.maskRoiLastFailureFrame;
@@ -1998,6 +2014,7 @@ namespace NeuralRendering
 		}
 
 		mutable std::mutex mutex_;
+		CharacterCategoryFramePolicy categoryFramePolicy_{};
 		mutable std::mutex rejectionFrameMutex_;
 		std::atomic<std::uint32_t> rejectionFrame_{
 			std::numeric_limits<std::uint32_t>::max()
@@ -2077,6 +2094,21 @@ namespace NeuralRendering
 	CharacterRendering::CharacterRendering() : state_(std::make_unique<State>()) {}
 
 	CharacterRendering::~CharacterRendering() = default;
+
+	CharacterSettings CharacterRendering::ResolveCategorySettings(
+		std::uint32_t a_sourceFrame, const CharacterSettings& a_requested) noexcept
+	{
+		if (!state_)
+			return a_requested;
+		try {
+			std::scoped_lock lock(state_->mutex_);
+			return state_->categoryFramePolicy_.Resolve(a_sourceFrame, a_requested);
+		} catch (...) {
+			auto disabled = a_requested;
+			disabled.enabled = false;
+			return disabled;
+		}
+	}
 
 	bool CharacterRendering::ShouldAuthorActor(
 		std::uint32_t a_frame,
@@ -2846,6 +2878,7 @@ namespace NeuralRendering
 				slot.maskRoiOccupiedTiles = 0;
 				slot.maskRoiRequiredSubrect = {};
 				slot.maskRoiReadbackWaitMs = 0.0;
+				slot.maskRoiPlanningCpuMs = 0.0;
 				slot.maskBoundsResolvePending = false;
 				if (cpuProvenEmpty || logicalEmptyCapture) {
 					float clearValue = 0.0f;
@@ -2885,7 +2918,8 @@ namespace NeuralRendering
 							!a_args.deferMaskRoiReadback) {
 							const auto deadline = std::chrono::steady_clock::now() + kCharacterMaskReadbackBudget;
 							a_args.context->Flush();
-							state_->ResolveCurrentMaskBounds(a_args, slot, deadline);
+							if (state_->ReadCurrentMaskBounds(a_args, slot, deadline))
+								state_->ResolveCurrentMaskBounds(a_args, slot);
 						}
 					} catch (...) {
 						state_->RejectMaskBounds(a_args, slot, "bounds_optimization_failed", E_FAIL);
@@ -2907,6 +2941,10 @@ namespace NeuralRendering
 				eye.sourceWorldFrame = sourceWorldFrame;
 				eye.contentSerial = slot.contentSerial;
 				eye.featureSlot = a_args.featureSlot;
+				eye.effectiveCategoryMask = GetEnabledCharacterCategoryMask(a_args.settings);
+				eye.effectiveCategoryStrengths = {
+					a_args.settings.faceStrength, a_args.settings.skinStrength, a_args.settings.hairStrength
+				};
 				eye.evaluationWidth = a_args.outputWidth;
 				eye.evaluationHeight = a_args.outputHeight;
 				eye.visibleFaces = plan.visibleFaces;
@@ -3092,11 +3130,17 @@ namespace NeuralRendering
 			const auto deadline = std::chrono::steady_clock::now() + kCharacterMaskReadbackBudget;
 			if (pending)
 				a_args.front().context->Flush();
+			// Read both eyes before CPU planning can spend the shared GPU deadline.
+			std::array<bool, 2> boundsReady{};
+			for (std::size_t index = 0; index < a_args.size(); ++index)
+				boundsReady[index] = state_->ReadCurrentMaskBounds(a_args[index],
+					state_->slots_[a_args[index].featureSlot], deadline);
 			std::uint64_t inferencePixels = 0;
 			for (std::size_t index = 0; index < a_args.size(); ++index) {
 				const auto& args = a_args[index];
 				auto& slot = state_->slots_[args.featureSlot];
-				state_->ResolveCurrentMaskBounds(args, slot, deadline);
+				if (boundsReady[index])
+					state_->ResolveCurrentMaskBounds(args, slot);
 				const bool wasRequired = slot.requiresEvaluation;
 				slot.requiresEvaluation = !(slot.zeroCoverageCpuProven || slot.maskRoiGpuProvenEmpty);
 				if (wasRequired && !slot.requiresEvaluation)
@@ -3245,6 +3289,7 @@ namespace NeuralRendering
 			return;
 		try {
 			std::scoped_lock lock(state_->mutex_);
+			state_->categoryFramePolicy_ = {};
 			state_->observations_.clear();
 			state_->observationKeys_.clear();
 			state_->unboundedCategoryMask_ = 0;

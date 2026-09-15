@@ -437,6 +437,8 @@ endforeach()
 foreach(_roi_history_identity_contract IN ITEMS
     [[ComputeSubrect computeSubrect{};]]
     [[.computeSubrect = a_resources.outputSubrect,]]
+    [[.insertionPoint = a_args.insertionPoint,]]
+    [[.colorInputEpoch = colorConfiguration_.inputEpoch[static_cast<std::size_t>(a_args.insertionPoint)],]]
     [[slot.historyKey != resources[index].historyKey]]
 )
     string(FIND
@@ -1969,7 +1971,11 @@ foreach(_current_mask_roi_contract IN ITEMS
     [[state_->QueueCurrentMaskBounds(a_args, slot, plan, sourceWorldFrame)]]
     [[!a_args.deferMaskRoiReadback]]
     [[const auto deadline = std::chrono::steady_clock::now() + kCharacterMaskReadbackBudget;]]
-    [[state_->ResolveCurrentMaskBounds(args, slot, deadline);]]
+    [[std::array<bool, 2> boundsReady{};]]
+    [[boundsReady[index] = state_->ReadCurrentMaskBounds(a_args[index],]]
+    [[state_->slots_[a_args[index].featureSlot], deadline);]]
+    [[if (boundsReady[index])]]
+    [[state_->ResolveCurrentMaskBounds(args, slot);]]
 )
     string(FIND "${_character_source}" "${_current_mask_roi_contract}" _current_mask_roi_position)
     if(_current_mask_roi_position EQUAL -1)

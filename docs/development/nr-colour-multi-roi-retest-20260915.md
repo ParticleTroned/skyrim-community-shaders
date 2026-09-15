@@ -173,3 +173,14 @@ commit 2a2f9d29b:
 Scoped formatting hooks passed for both source corrections. The replacement
 DLL build and its installed live verification are recorded separately in
 the local build receipt; these dry tests do not establish live capture.
+
+After transition correction 760070757, the
+`neural_rendering_pipeline_policy_test` Release target built, and
+`ctest --test-dir build/nrc -C Release -R '^NeuralRenderingPipelinePolicy$' --output-on-failure`
+passed 1/1. The first contract run found stale expectations for the former
+combined readback/planning call and direct renderer-reset expression.
+The corrected checks retain source-frame identity, shared readback deadline,
+multi-ROI retirement, and insertion/colour-epoch history invariants.
+`ctest --test-dir build/nrc -C Release -R '^(NeuralRenderingDevBenchContract|NeuralMultiRoiContract)$' --output-on-failure`
+then passed 2/2 in 1.23 seconds. Both the initial failures and successful
+rerun are retained under `transition-stall-fix` in the evidence directory.

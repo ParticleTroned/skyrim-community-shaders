@@ -292,7 +292,7 @@ string(FIND "${_settings_transition_normalized}"
     [[if (!multiRoiChanged && HasSameNeuralRenderingSettingsKey]]
     _same_key_early_return_position)
 string(FIND "${_settings_transition_normalized}"
-    [[NeuralRendering::Renderer::Instance().Reset();]]
+    [[neuralRenderer.Reset();]]
     _renderer_reset_position)
 if(NOT _multi_roi_changed_position LESS _same_key_early_return_position OR
    NOT _same_key_early_return_position LESS _renderer_reset_position)

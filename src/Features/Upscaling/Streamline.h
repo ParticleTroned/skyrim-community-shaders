@@ -166,6 +166,7 @@ public:
 	};
 	struct DLSSFrameConstantsCache
 	{
+		sl::Constants constants{};
 		bool valid = false;
 		uint32_t frame = 0;
 		std::uintptr_t frameToken = 0;

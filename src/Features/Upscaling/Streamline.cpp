@@ -1,4 +1,5 @@
 #include "Streamline.h"
+#include "StreamlineConstants.h"
 
 #include <algorithm>
 #include <array>
@@ -968,6 +969,7 @@ bool Streamline::CheckFrameConstants(
 
 	const auto makeFrameConstantsSignature = [&]() {
 		DLSSFrameConstantsCache signature{};
+		signature.constants = slConstants;
 		signature.valid = true;
 		signature.frame = diagnostics ? diagnostics->frame : state->frameCount;
 		signature.frameToken = reinterpret_cast<std::uintptr_t>(frameToken);
@@ -1018,13 +1020,16 @@ bool Streamline::CheckFrameConstants(
 		       a_cached.cropContinuous == a_signature.cropContinuous &&
 		       a_cached.jitterXQ == a_signature.jitterXQ &&
 		       a_cached.jitterYQ == a_signature.jitterYQ &&
-		       a_cached.historyResetRequested == a_signature.historyResetRequested;
+		       a_cached.historyResetRequested == a_signature.historyResetRequested &&
+		       UpscalingDLSS::SameStreamlineConstants(a_cached.constants, a_signature.constants);
 	};
 	const bool canAcceptDuplicateConstants =
 		diagnostics &&
-		diagnostics->submitStageVRDLSS &&
-		(diagnostics->viewportRole == DLSSViewportRole::FullEye ||
-			diagnostics->viewportRole == DLSSViewportRole::SubmitStageFoveatedCenter);
+		((diagnostics->submitStageVRDLSS &&
+			 (diagnostics->viewportRole == DLSSViewportRole::FullEye ||
+				 diagnostics->viewportRole == DLSSViewportRole::SubmitStageFoveatedCenter)) ||
+			(globals::game::isVR && !diagnostics->submitStageVRDLSS &&
+				diagnostics->viewportRole == DLSSViewportRole::FoveatedCenter));
 	DLSSFrameConstantsCache frameConstantsSignature{};
 	if (canAcceptDuplicateConstants)
 		frameConstantsSignature = makeFrameConstantsSignature();

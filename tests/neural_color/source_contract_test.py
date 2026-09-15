@@ -8,6 +8,29 @@ SHADERS = ROOT / "features/Neural Rendering Colour/Shaders/Upscaling/NeuralRende
 
 
 class Contracts(unittest.TestCase):
+    def test_exposure_observes_actual_draw_bindings(self):
+        hooks = (ROOT / "src/Globals.cpp").read_text()
+        self.assertEqual(hooks.count("ExposureCapture::Instance().ObserveDraw(This,"), 2)
+        self.assertNotIn("ObserveDraw", (ROOT / "src/Hooks.cpp").read_text())
+        capture = (NR / "ExposureCapture.cpp").read_text()
+        self.assertIn("ExposureDrawRejection", capture)
+        self.assertIn("c != globals::d3d::context", capture)
+        self.assertIn("ComputeStateGuard<1>", capture)
+
+    def test_history_reset_preserves_only_current_character_source(self):
+        upscaling = (ROOT / "src/Features/Upscaling.cpp").read_text()
+        reset = upscaling.split("void Upscaling::RequestHistoryReset() noexcept", 1)[1].split("\n}", 1)[0]
+        self.assertIn("CharacterRendering::Instance().Invalidate(globals::state ?", reset)
+        self.assertIn("globals::state->frameCount", reset)
+        char = (NR / "CharacterRendering.cpp").read_text()
+        invalidate = char.split("void CharacterRendering::Invalidate(", 1)[1].split("void CharacterRendering::ResetShaderCache", 1)[0]
+        self.assertIn("state_->capturedFrame_ != a_preserveCaptureFrame", invalidate)
+        self.assertIn("a_preserveCaptureFrame == std::numeric_limits<std::uint32_t>::max()", invalidate)
+        self.assertIn("state_->InvalidatePreparedMasks();", invalidate)
+        self.assertIn("~state_->capturedEnabledCategoryMask_", char)
+        self.assertIn("state_->capturedFrame_ != sourceWorldFrame", char)
+        self.assertEqual(char.count("state_->RecordPreparationFailure(a_args,"), 3)
+
     def test_shared_order_and_transaction(self):
         source = (NR / "Renderer.cpp").read_text(encoding="utf-8-sig")
         self.assertEqual(source.count("state_->CaptureColorConfiguration("), 3)

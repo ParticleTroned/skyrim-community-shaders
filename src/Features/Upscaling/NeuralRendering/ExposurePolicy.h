@@ -4,9 +4,27 @@
 
 namespace NeuralRendering::Color
 {
+	/// Require the live draw to use the selected engine pixel shader and AvgTex.
+	[[nodiscard]] constexpr const char* ExposureDrawRejection(std::uintptr_t expectedShader,
+		std::uintptr_t liveShader, std::uintptr_t averageView) noexcept
+	{
+		if (!liveShader)
+			return "HDR draw has no live pixel shader";
+		if (!expectedShader || liveShader != expectedShader)
+			return "HDR draw pixel shader does not match the selected engine technique";
+		if (!averageView)
+			return "HDR draw has no live AvgTex t2";
+		return nullptr;
+	}
+
 	// Float codes are also written by ColorExposureCS. UnitFallback reproduces
 	// ISHDR's zero-component branch; it is not a measured unit exposure.
-	enum class ExposureValidity : std::uint32_t { Invalid, Ratio, UnitFallback };
+	enum class ExposureValidity : std::uint32_t
+	{
+		Invalid,
+		Ratio,
+		UnitFallback
+	};
 	struct ExposureValue
 	{
 		float average = 0, target = 0, ratio = 1;
@@ -15,7 +33,8 @@ namespace NeuralRendering::Color
 	[[nodiscard]] inline ExposureValue EvaluateHDRExposure(float average, float target) noexcept
 	{
 		ExposureValue value{ average, target };
-		if (!Finite(average) || !Finite(target) || average < 0 || target < 0) return value;
+		if (!Finite(average) || !Finite(target) || average < 0 || target < 0)
+			return value;
 		if (average == 0 || target == 0) {
 			value.validity = ExposureValidity::UnitFallback;
 			return value;
@@ -27,13 +46,16 @@ namespace NeuralRendering::Color
 	}
 	[[nodiscard]] inline bool ResolveExposureProfile(const Profile& requested, const ExposureValue& captured, Profile& effective) noexcept
 	{
-		if (!Valid(requested)) return false;
+		if (!Valid(requested))
+			return false;
 		effective = requested;
-		if (requested.exposureSource == ExposureSource::Manual) return true;
+		if (requested.exposureSource == ExposureSource::Manual)
+			return true;
 		// Reject a zero/uninitialized adaptation texture rather than describing
 		// its unit fallback as measured exposure. The shader makes the same test.
 		if (captured.validity != ExposureValidity::Ratio || !Finite(captured.average) || !Finite(captured.target) ||
-			!Finite(captured.ratio) || captured.average <= 0 || captured.target <= 0 || captured.ratio <= 0) return false;
+			!Finite(captured.ratio) || captured.average <= 0 || captured.target <= 0 || captured.ratio <= 0)
+			return false;
 		effective.exposureSource = ExposureSource::Manual;
 		effective.exposureMultiplier *= captured.ratio;
 		return Valid(effective);
@@ -57,7 +79,12 @@ namespace NeuralRendering::Color
 		bool operator==(const ExposureTransaction&) const = default;
 	};
 
-	enum class ExposureLatchDecision : std::uint32_t { NewTransaction, Reuse, Reject };
+	enum class ExposureLatchDecision : std::uint32_t
+	{
+		NewTransaction,
+		Reuse,
+		Reject
+	};
 
 	// Shared by production Bind and the portable lifecycle tests. Capture epoch
 	// is intentionally NOT part of this key: a UI toggle or a late HDR callback
@@ -79,8 +106,12 @@ namespace NeuralRendering::Color
 			// generation, even when presentation/source frame numbers are identical.
 			if (occupied && (contextIdentity != context || deviceIdentity != device))
 				return ExposureLatchDecision::Reject;
-			if (occupied && key == next) return ExposureLatchDecision::Reuse;
-			key = next; contextIdentity = context; deviceIdentity = device; occupied = true;
+			if (occupied && key == next)
+				return ExposureLatchDecision::Reuse;
+			key = next;
+			contextIdentity = context;
+			deviceIdentity = device;
+			occupied = true;
 			return ExposureLatchDecision::NewTransaction;
 		}
 		void Clear() noexcept { *this = {}; }

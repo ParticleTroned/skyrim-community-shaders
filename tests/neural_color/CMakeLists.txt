@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
 project(NRColorTests LANGUAGES CXX)
 enable_testing()
+add_executable(nr_streamline_constants_test streamline_constants_test.cpp)
+target_compile_features(nr_streamline_constants_test PRIVATE cxx_std_20)
+target_include_directories(nr_streamline_constants_test PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/../../src"
+    "${CMAKE_CURRENT_LIST_DIR}/../../extern/Streamline-DX12/include")
+add_test(NAME NRStreamlineConstants COMMAND nr_streamline_constants_test)
 add_executable(nr_color_measurement_batch_test measurement_batch_test.cpp)
 target_compile_features(nr_color_measurement_batch_test PRIVATE cxx_std_20)
 target_include_directories(nr_color_measurement_batch_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../../src")

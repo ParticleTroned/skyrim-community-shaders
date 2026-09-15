@@ -37539,7 +37539,9 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 void Upscaling::RequestHistoryReset() noexcept
 {
 	historyResetRequested = true;
-	NeuralRendering::CharacterRendering::Instance().Invalidate();
+	NeuralRendering::CharacterRendering::Instance().Invalidate(globals::state ?
+																   globals::state->frameCount :
+																   std::numeric_limits<uint32_t>::max());
 	if (auto* state = globals::state; state && historyResetLatchedFrame == state->frameCount)
 		historyResetThisFrame = true;
 }

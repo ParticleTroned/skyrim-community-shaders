@@ -123,11 +123,12 @@ namespace
 		return { { "requested", capture.requested }, { "hooksInstalled", 0 }, { "producersRegistered", capture.producersRegistered }, { "epoch", capture.epoch },
 			{ "captures", capture.captures }, { "rejected", capture.rejected }, { "droppedReadbacks", capture.dropped },
 			{ "lastReason", capture.lastReason }, { "samples", samples },
-			{ "captureBoundary", "after_SetDirtyStates_before_HDR_draw" },
+			{ "captureBoundary", "D3D11_Draw_or_DrawIndexed_entry" },
 			{ "lastBinding", { { "frame", b.frame }, { "width", b.width }, { "height", b.height },
 								 { "mip", b.mip }, { "mipLevels", b.mipLevels }, { "arraySize", b.arraySize }, { "samples", b.samples },
 								 { "sourceFormat", b.sourceFormat }, { "viewFormat", b.viewFormat }, { "viewDimension", b.viewDimension },
-								 { "sourceIdentity", b.sourceIdentity }, { "shaderIdentity", b.shaderIdentity } } },
+								 { "sourceIdentity", b.sourceIdentity }, { "shaderIdentity", b.shaderIdentity },
+								 { "expectedShaderIdentity", b.expectedShaderIdentity }, { "viewIdentity", b.viewIdentity } } },
 			{ "formula", "ISHDR BLEND AvgTex.y / AvgTex.x; zero input has a distinct unmeasured unit fallback" } };
 	}
 	Json ObservationJson(const Observation& o)

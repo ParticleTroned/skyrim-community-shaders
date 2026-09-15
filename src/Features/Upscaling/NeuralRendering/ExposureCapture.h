@@ -40,6 +40,7 @@ namespace NeuralRendering::Color
 		std::uint32_t frame = 0, width = 0, height = 0, mip = 0, mipLevels = 0;
 		std::uint32_t arraySize = 0, samples = 0, sourceFormat = 0, viewFormat = 0, viewDimension = 0;
 		std::uint64_t sourceIdentity = 0, shaderIdentity = 0;
+		std::uint64_t expectedShaderIdentity = 0, viewIdentity = 0;
 	};
 	struct ExposureCaptureStatus
 	{
@@ -72,8 +73,8 @@ namespace NeuralRendering::Color
 		void Request(bool) noexcept;
 		/// Resolve the exact HDR shader instances on the render thread.
 		void RefreshProducers() noexcept;
-		/// Observe flushed bindings before the engine issues the HDR draw.
-		void ObserveDraw(RE::BSShader*) noexcept;
+		/// Observe live bindings at the immediate context's HDR draw boundary.
+		void ObserveDraw(ID3D11DeviceContext*, RE::BSShader*) noexcept;
 		ExposureCaptureStatus GetStatus() const;
 		bool Bind(ID3D11DeviceContext*, ExposureBinding&, const ExposureTransaction&);
 		void Reset() noexcept;    // Called after Renderer's existing idle/retirement boundary.

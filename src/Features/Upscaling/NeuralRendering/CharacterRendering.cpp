@@ -3,9 +3,9 @@
 #include "CharacterActorPolicy.h"
 #include "CharacterCategoryFormat.h"
 #include "CharacterComputeSubrect.h"
+#include "CharacterMaskReadback.h"
 #include "CharacterMaskRoi.h"
 #include "CharacterMaskRoiAdmission.h"
-#include "CharacterMaskReadback.h"
 #include "CharacterMaskWorkPolicy.h"
 
 #include "Globals.h"
@@ -2051,6 +2051,20 @@ namespace NeuralRendering
 		std::uint64_t nextPreparedContentSerial_ = 1;
 		ComPtr<ID3D11Device> device_;
 		bool shaderCompileFailed_ = false;
+		void RecordPreparationFailure(const CharacterMaskPrepareArgs& args, std::string detail)
+		{
+			Increment(snapshot_.preparationFailures);
+			auto& failure = snapshot_.lastPreparationFailure;
+			const bool changed = failure.sequence == 0 || failure.detail != detail;
+			failure = { std::move(detail), snapshot_.preparationFailures, args.generation,
+				args.frameId, args.sourceWorldFrame, capturedFrame_, args.featureSlot, args.eyeIndex,
+				GetEnabledCharacterCategoryMask(args.settings), capturedEnabledCategoryMask_ };
+			if (changed)
+				logger::warn("[DLSSNR][Character] Mask preparation failed frame={} sourceFrame={} capturedFrame={} slot={} generation={} requestedCategories=0x{:X} capturedCategories=0x{:X}: {}",
+					failure.frame, failure.sourceWorldFrame, failure.capturedFrame, failure.featureSlot,
+					failure.generation, failure.requestedCategories, failure.capturedCategories, failure.detail);
+		}
+
 		CharacterSnapshot snapshot_{};
 	};
 
@@ -2487,7 +2501,7 @@ namespace NeuralRendering
 			state_->snapshot_.enabled = a_args.settings.enabled;
 			const std::uint32_t sourceWorldFrame = a_args.sourceWorldFrame;
 			const auto fail = [&](std::string a_detail) {
-				Increment(state_->snapshot_.preparationFailures);
+				state_->RecordPreparationFailure(a_args, a_detail);
 				// A retained request is only a lookup against the immutable source
 				// mask.  Its failure must not destroy that source mask, because a
 				// later compositor cycle may still satisfy the exact contract.
@@ -3006,7 +3020,7 @@ namespace NeuralRendering
 			return true;
 		} catch (const std::exception& exception) {
 			std::scoped_lock lock(state_->mutex_);
-			Increment(state_->snapshot_.preparationFailures);
+			state_->RecordPreparationFailure(a_args, exception.what());
 			if (!retainedSource) {
 				state_->InvalidatePreparedSlot(
 					a_args.featureSlot, a_args.eyeIndex, a_args.frameId);
@@ -3017,7 +3031,7 @@ namespace NeuralRendering
 			return false;
 		} catch (...) {
 			std::scoped_lock lock(state_->mutex_);
-			Increment(state_->snapshot_.preparationFailures);
+			state_->RecordPreparationFailure(a_args, "unknown character-mask preparation exception");
 			if (!retainedSource) {
 				state_->InvalidatePreparedSlot(
 					a_args.featureSlot, a_args.eyeIndex, a_args.frameId);
@@ -3092,14 +3106,15 @@ namespace NeuralRendering
 				eye.computeRegions = slot.computeRegions;
 				eye.multiRoiReason = slot.multiRoiReason;
 				eye.multiRoiPixels = slot.computeRegions.count == 2 ?
-					slot.computeRegions.regions[0].Area() + slot.computeRegions.regions[1].Area() :
-					slot.computeSubrect.Area();
+				                         slot.computeRegions.regions[0].Area() + slot.computeRegions.regions[1].Area() :
+				                         slot.computeSubrect.Area();
 				if (slot.requiresEvaluation)
 					inferencePixels += eye.multiRoiPixels;
 				eye.computeSubrectPixels = slot.computeSubrect.Area();
 				const auto pixels = static_cast<std::uint64_t>(args.outputWidth) * args.outputHeight;
 				eye.computeSubrectCoveragePercent = pixels ?
-					100.0f * static_cast<float>(eye.computeSubrectPixels) / static_cast<float>(pixels) : 0.0f;
+				                                        100.0f * static_cast<float>(eye.computeSubrectPixels) / static_cast<float>(pixels) :
+				                                        0.0f;
 				eye.evaluationRequired = slot.requiresEvaluation;
 				eye.zeroCoverageBypassRequested = !slot.requiresEvaluation;
 				State::PublishMaskRoiSnapshot(slot, eye);
@@ -3261,7 +3276,7 @@ namespace NeuralRendering
 		}
 	}
 
-	void CharacterRendering::Invalidate() noexcept
+	void CharacterRendering::Invalidate(std::uint32_t a_preserveCaptureFrame) noexcept
 	{
 		if (!state_)
 			return;
@@ -3269,7 +3284,10 @@ namespace NeuralRendering
 			std::scoped_lock lock(state_->mutex_);
 			state_->actorAdmissions_.clear();
 			state_->InvalidateProjectionCache();
-			state_->InvalidateCaptureMetadata();
+			// Temporal history does not own the already captured source pixels.
+			if (a_preserveCaptureFrame == std::numeric_limits<std::uint32_t>::max() ||
+				state_->capturedFrame_ != a_preserveCaptureFrame)
+				state_->InvalidateCaptureMetadata();
 			state_->InvalidatePreparedMasks();
 			state_->snapshot_.status = "invalidated";
 			state_->snapshot_.detail.clear();

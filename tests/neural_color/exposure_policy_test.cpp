@@ -14,6 +14,12 @@ static void Require(bool value)
 }
 int main()
 {
+	Require(ExposureDrawRejection(1, 1, 2) == nullptr);
+	Require(ExposureDrawRejection(0, 1, 2) != nullptr);
+	Require(ExposureDrawRejection(1, 0, 2) != nullptr);
+	Require(ExposureDrawRejection(1, 2, 3) != nullptr);
+	Require(ExposureDrawRejection(1, 1, 0) != nullptr);
+	Require(ExposureDrawRejection(0, 0, 0) != nullptr);
 	for (float average : { 0.125f, 0.5f, 1.0f, 4.0f, 16.0f }) {
 		for (float target : { 0.0625f, 0.5f, 1.0f, 8.0f }) {
 			const auto value = EvaluateHDRExposure(average, target);

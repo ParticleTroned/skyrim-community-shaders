@@ -61,14 +61,19 @@ one. `Common/FrameBuffer.hlsli` subsequently applies `pow(abs(colour),
 FrameParams.x)`; its function name does NOT make that the IEC sRGB curve.
 FrameParams is at PS b12 c84 for VR and c42 for flat rendering in this source.
 
-`ExposureCapture` observes the two known cinematic HDR tonemap effects after
-the engine flushes graphics bindings in `BSGraphics_SetDirtyStates`, before
-the HDR draw. Compute dispatches are excluded. It obtains the concrete effect
+`ExposureCapture` observes the two known cinematic HDR tonemap effects at
+the immediate context's actual `Draw`/`DrawIndexed` entry, through the shared
+draw hooks. The live pixel shader must match the selected engine shader;
+unrelated draws cannot supply exposure through a stale technique pointer.
+Compute dispatches are excluded. It obtains the concrete effect
 instances through the pinned CommonLib ImageSpaceManager API during the
 normal render-thread EarlyPrepass. No additional engine vtable is patched.
 Status reports `producersRegistered`, `captureBoundary` and `lastBinding`
 (frame, dimensions, mip, sample/array counts, formats and identities), even
 for rejected bindings. The compatibility field `hooksInstalled` is now zero.
+`expectedShaderIdentity`, `shaderIdentity` and `viewIdentity` distinguish
+missing bindings from a shader mismatch. Actual capture timing still needs
+qualification on each running rendering path.
 Capture alone does not activate colour reconstruction in Legacy Raw mode.
 
 Capture accepts a bound scalar 1x1 floating-point AvgTex view with at least two

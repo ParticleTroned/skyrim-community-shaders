@@ -33,6 +33,7 @@
 #include "Features/UnderwaterDepthOfField.h"
 #include "Features/UnifiedWater.h"
 #include "Features/Upscaling.h"
+#include "Features/Upscaling/NeuralRendering/ExposureCapture.h"
 #include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/VolumetricShadows.h"
@@ -299,17 +300,37 @@ namespace globals
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	/**
- * @brief Installs hooks on the Map and Unmap methods of the provided D3D11 device context.
- *
- * This enables frame-buffer caching, the focused developer-mode VR menu draw trace,
- * and underwater fog/depth-of-field composition.
- */
+	struct ID3D11DeviceContext_DrawIndexed
+	{
+		static void thunk(ID3D11DeviceContext* This, UINT IndexCount, UINT StartIndexLocation, INT BaseVertexLocation)
+		{
+			UnderwaterDepthOfField::BeforeDraw();
+			if (globals::state)
+				NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, globals::state->currentShader);
+			func(This, IndexCount, StartIndexLocation, BaseVertexLocation);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_Draw
+	{
+		static void thunk(ID3D11DeviceContext* This, UINT VertexCount, UINT StartVertexLocation)
+		{
+			UnderwaterDepthOfField::BeforeDraw();
+			if (globals::state)
+				NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, globals::state->currentShader);
+			func(This, VertexCount, StartVertexLocation);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	/// Share draw hooks for underwater composition and live HDR observation.
 	void InstallD3DHooks(ID3D11DeviceContext* a_context)
 	{
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
 		Upscaling::InstallVRMenuPresentationTraceD3DHooks(a_context);
-		UnderwaterDepthOfField::InstallD3DHooks(a_context);
+		stl::detour_vfunc<12, ID3D11DeviceContext_DrawIndexed>(a_context);
+		stl::detour_vfunc<13, ID3D11DeviceContext_Draw>(a_context);
 	}
 }

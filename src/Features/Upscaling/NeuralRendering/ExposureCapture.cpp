@@ -122,15 +122,14 @@ namespace NeuralRendering::Color
 			}
 		}
 
-		void Capture(RE::BSShader* producer)
+		void Capture(ID3D11DeviceContext* c, RE::BSShader* producer)
 		{
 			if (!requested.load(std::memory_order_acquire))
 				return;
 			if (!globals::features::upscaling.settings.neuralRenderingEnabled)
 				return;
-			auto* c = globals::d3d::context;
 			auto* state = globals::state;
-			if (!c || !state || c->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
+			if (!c || c != globals::d3d::context || !state || c->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
 				return;
 			std::scoped_lock lock(mutex);
 			if (std::find(owners.begin(), owners.end(), producer) == owners.end())
@@ -151,8 +150,13 @@ namespace NeuralRendering::Color
 			status.lastBinding.frame = state->frameCount;
 			c->PSGetShaderResources(2, 1, &average);
 			c->PSGetShader(&ps, nullptr, nullptr);
-			if (!average || !ps) {
-				reject("HDR draw boundary has no live PS/AvgTex t2; no exposure assumed");
+			const auto* expected = *globals::game::currentPixelShader;
+			status.lastBinding.shaderIdentity = reinterpret_cast<std::uintptr_t>(ps.Get());
+			status.lastBinding.expectedShaderIdentity = expected ? reinterpret_cast<std::uintptr_t>(expected->shader) : 0;
+			status.lastBinding.viewIdentity = reinterpret_cast<std::uintptr_t>(average.Get());
+			if (const auto* why = ExposureDrawRejection(status.lastBinding.expectedShaderIdentity,
+					status.lastBinding.shaderIdentity, status.lastBinding.viewIdentity)) {
+				reject(why);
 				return;
 			}
 			D3D11_SHADER_RESOURCE_VIEW_DESC view{};
@@ -231,7 +235,7 @@ namespace NeuralRendering::Color
 			evidence.sourceViewFormat = static_cast<std::uint32_t>(view.Format);
 			evidence.sourceIdentity = reinterpret_cast<std::uintptr_t>(texture.Get());
 			evidence.shaderIdentity = reinterpret_cast<std::uintptr_t>(ps.Get());
-			evidence.producer = "ISHDR BLEND / AvgTex t2 / SetDirtyStates after engine flush, before draw";
+			evidence.producer = "ISHDR BLEND / AvgTex t2 / D3D11 Draw or DrawIndexed entry";
 			ComPtr<ID3D11RenderTargetView> target;
 			c->OMGetRenderTargets(1, &target, nullptr);
 			if (target) {
@@ -311,13 +315,13 @@ namespace NeuralRendering::Color
 	};
 
 	ExposureCapture::ExposureCapture() : state_(new State) {}
-	void ExposureCapture::ObserveDraw(RE::BSShader* shader) noexcept
+	void ExposureCapture::ObserveDraw(ID3D11DeviceContext* context, RE::BSShader* shader) noexcept
 	{
 		if (!state_->requested.load(std::memory_order_acquire) || !shader ||
 			std::find(owners.begin(), owners.end(), shader) == owners.end())
 			return;
 		try {
-			state_->Capture(shader);
+			state_->Capture(context, shader);
 		} catch (const std::exception& e) {
 			std::scoped_lock lock(state_->mutex);
 			++state_->status.rejected;

@@ -148,6 +148,14 @@ namespace NeuralRendering
 		std::array<std::uint32_t, 4> computeRegionCounts{};
 	};
 
+	struct CharacterPreparationFailure
+	{
+		std::string detail;
+		std::uint64_t sequence = 0, generation = 0;
+		std::uint32_t frame = 0, sourceWorldFrame = 0, capturedFrame = 0;
+		std::uint32_t featureSlot = 0, eye = 0, requestedCategories = 0, capturedCategories = 0;
+	};
+
 	struct CharacterSnapshot
 	{
 		std::string status = "idle";
@@ -185,6 +193,7 @@ namespace NeuralRendering
 		std::uint64_t preparationAttempts = 0;
 		std::uint64_t preparationSuccesses = 0;
 		std::uint64_t preparationFailures = 0;
+		CharacterPreparationFailure lastPreparationFailure{};
 		std::uint64_t readbackDrops = 0;
 		std::uint64_t provenEmptyFeatureBypassRequests = 0;
 		std::uint64_t provenEmptyFeatureBypasses = 0;
@@ -286,8 +295,8 @@ namespace NeuralRendering
 			std::uint32_t a_bypassedFeatureSlotMask) noexcept;
 		/** Invalidates observations, resources, compile state, and cached masks. */
 		void Reset() noexcept;
-		/** Invalidates region policy and cached contents without releasing resources. */
-		void Invalidate() noexcept;
+		/** Invalidate masks/history; optionally retain only this exact frame's immutable source capture. */
+		void Invalidate(std::uint32_t a_preserveCaptureFrame = std::numeric_limits<std::uint32_t>::max()) noexcept;
 		/** Drops only the runtime-compiled extraction shader. */
 		void ResetShaderCache() noexcept;
 

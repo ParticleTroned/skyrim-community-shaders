@@ -942,8 +942,6 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 	const auto callerRva = static_cast<uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - REL::Module::get().base());
 	if (!ShouldRecordCSFramePhaseDiag()) {
 		func(isCompute);
-		if (!isCompute)
-			NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(globals::state->currentShader);
 		globals::features::terrainBlending.OnSetDirtyStates(isCompute, callerRva);
 		globals::state->Draw();
 		return;
@@ -955,8 +953,6 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 	const uint64_t totalStartTicks = ReadFrameDiagCounterTicks();
 	uint64_t phaseStartTicks = totalStartTicks;
 	func(isCompute);
-	if (!isCompute)
-		NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(globals::state->currentShader);
 	uint64_t phaseEndTicks = ReadFrameDiagCounterTicks();
 	RecordCSFrameHookPhase(CSFrameHookPhase::SetDirtyStatesOriginal, frame, phaseEndTicks - phaseStartTicks);
 

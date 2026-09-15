@@ -614,26 +614,6 @@ namespace
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	struct ID3D11DeviceContext_DrawIndexed
-	{
-		static void thunk(ID3D11DeviceContext* This, UINT IndexCount, UINT StartIndexLocation, INT BaseVertexLocation)
-		{
-			RunPendingDepthOfFieldInputPass();
-			func(This, IndexCount, StartIndexLocation, BaseVertexLocation);
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct ID3D11DeviceContext_Draw
-	{
-		static void thunk(ID3D11DeviceContext* This, UINT VertexCount, UINT StartVertexLocation)
-		{
-			RunPendingDepthOfFieldInputPass();
-			func(This, VertexCount, StartVertexLocation);
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
 	struct DepthOfFieldFogged_Render
 	{
 		static void thunk(void* imageSpaceShader, RE::BSTriShape* shape, RE::ImageSpaceEffectParam* param)
@@ -664,13 +644,9 @@ namespace UnderwaterDepthOfField
 		stl::write_vfunc<0x1, DepthOfFieldMaskedFogged_Render>(RE::VTABLE_BSImagespaceShaderDepthOfFieldMaskedFogged[3]);
 	}
 
-	void InstallD3DHooks(ID3D11DeviceContext* a_context)
+	void BeforeDraw()
 	{
-		if (!a_context)
-			return;
-
-		stl::detour_vfunc<12, ID3D11DeviceContext_DrawIndexed>(a_context);
-		stl::detour_vfunc<13, ID3D11DeviceContext_Draw>(a_context);
+		RunPendingDepthOfFieldInputPass();
 	}
 
 	void RecordShaderConstants(const RE::ImageSpaceEffectDepthOfField* a_effect, RE::ImageSpaceEffectParam* a_param)

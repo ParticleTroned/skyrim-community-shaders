@@ -58,7 +58,8 @@ namespace NeuralRendering
 		CharacterComputeRegionPlan computeRegions{};
 		std::uint64_t multiRoiPixels = 0;
 		CharacterMultiRoiReason multiRoiReason = CharacterMultiRoiReason::Disabled;
-		/** Planner source and CPU time; legacy GPU-bounds evidence stays unavailable. */
+		CharacterMultiRoiDiagnostics multiRoiDiagnostics{};
+		/** Current-source GPU category bounds, or the reason for geometry fallback. */
 		std::string maskRoiStatus = "disabled";
 		bool maskRoiCurrentFrame = false;
 		bool maskRoiGpuProvenEmpty = false;
@@ -163,11 +164,22 @@ namespace NeuralRendering
 
 	struct CharacterSnapshot
 	{
+		/** Cumulative early reduction telemetry survives cleared per-eye snapshots. */
+		struct EarlyMaskBounds
+		{
+			std::uint64_t queued = 0, ringBusy = 0, polls = 0, pending = 0, ready = 0;
+			std::uint64_t used = 0, geometryFallbacks = 0, failures = 0;
+			std::uint32_t lastQueuedFrame = 0, lastUsedSourceFrame = 0, readbackBytes = 0;
+			double lastPollCpuMs = 0.0;
+			std::int32_t lastFailureResult = 0;
+			std::string lastFailure;
+		};
+		EarlyMaskBounds earlyMaskBounds{};
 		std::string status = "idle";
 		std::string detail;
 		std::string visualMaskMechanism = "csx_output_composite_r8";
 		std::string computeRoiReason =
-			"Current-frame projected geometry with no GPU readback wait; experimental multi-ROI evaluates up to two disjoint actor clusters per eye when coverage and the extra-evaluation area budget permit";
+			"Early current-source GPU category bounds with a nonblocking readback; geometry is only a coverage fallback when bounds are unavailable, and experimental multi-ROI uses up to two disjoint regions per eye";
 		bool enabled = false;
 		bool visualMaskImplemented = true;
 		bool visualMaskProviderValidated = false;

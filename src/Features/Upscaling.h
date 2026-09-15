@@ -341,6 +341,7 @@ public:
 			NeuralRendering::CharacterPolicy::kDefaultAdaptiveRoiSelection;
 		// Experimental: separate persistent Feature 18 instances for two regions.
 		bool neuralCharacterMultiRoiEnabled = false;
+		bool neuralCharacterMultiRoiSavingsGateEnabled = true;
 		uint neuralCharacterMinimumFacePixelSize =
 			NeuralRendering::CharacterPolicy::kDefaultMinimumFacePixelSize;
 		float neuralCharacterRoiMargin =

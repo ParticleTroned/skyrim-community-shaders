@@ -3,6 +3,8 @@
 #include "CharacterActorPolicy.h"
 #include "CharacterCategoryFormat.h"
 #include "CharacterComputeSubrect.h"
+#include "CharacterEarlyMaskBounds.h"
+#include "CharacterMaskReadback.h"
 #include "CharacterMaskWorkPolicy.h"
 
 #include "Globals.h"
@@ -145,6 +147,7 @@ namespace NeuralRendering
 			addFloat(a_settings.maximumDistanceMeters);
 			add(a_settings.adaptiveRoiSelection);
 			add(a_settings.multiRoi);
+			add(a_settings.multiRoiSavingsGate);
 			add(a_settings.minimumFacePixelSize);
 			addFloat(a_settings.roiMargin);
 			add(a_settings.roiHoldFrames);
@@ -333,6 +336,17 @@ namespace NeuralRendering
 			bool operator==(const ProjectionKey&) const = default;
 		};
 
+		struct EarlyMaskReadback
+		{
+			ComPtr<ID3D11Buffer> bounds, staging;
+			ComPtr<ID3D11UnorderedAccessView> uav;
+			ComPtr<ID3D11Query> query;
+			std::vector<CharacterMaskRoiTileBounds> tiles;
+			std::uint64_t captureSerial = 0;
+			std::uint32_t width = 0, height = 0, frame = 0, categories = 0;
+			bool pending = false, hasData = false;
+		};
+
 		struct Readback
 		{
 			ComPtr<ID3D11Buffer> staging;
@@ -409,7 +423,12 @@ namespace NeuralRendering
 			ComputeSubrect computeSubrect{};
 			CharacterComputeRegionPlan computeRegions{};
 			StableCharacterMultiRoi stableMultiRoi{};
+			StableCharacterMaskRoi stableMaskRoi{};
+			bool maskRoiCurrentFrame = false;
+			std::uint32_t maskRoiOccupiedTiles = 0;
+			ComputeSubrect maskRoiRequiredSubrect{};
 			CharacterMultiRoiReason multiRoiReason = CharacterMultiRoiReason::Disabled;
+			CharacterMultiRoiDiagnostics multiRoiDiagnostics{};
 			std::uint64_t multiRoiPolicyKey = 0;
 			ComputeSubrect maskWorkSubrect{};
 			ComputeSubrect previousMaskWorkSubrect{};
@@ -543,6 +562,7 @@ namespace NeuralRendering
 
 		void InvalidateCaptureMetadata() noexcept
 		{
+			earlyMaskCaptureSerial_ = 0;
 			capturedFrame_ = std::numeric_limits<std::uint32_t>::max();
 			capturedCategoriesEmpty_ = false;
 			capturedEyeWidth_ = 0;
@@ -572,8 +592,10 @@ namespace NeuralRendering
 			for (auto& slot : slots_) {
 				slot.prepared = false;
 				slot.computeRegions = {};
-				if (!a_preserveMultiRoiHistory)
+				if (!a_preserveMultiRoiHistory) {
 					slot.stableMultiRoi = {};
+					slot.stableMaskRoi = {};
+				}
 				slot.prepareKey = {};
 				slot.contentSerial = 0;
 				slot.zeroCoverageBypassResolved = false;
@@ -777,6 +799,7 @@ namespace NeuralRendering
 		{
 			if (device_ && !SameIdentity(device_.Get(), a_device)) {
 				slots_ = {};
+				ResetEarlyMaskBounds();
 				shader_.Reset();
 				constants_.Reset();
 				capturedCategories_.Reset();
@@ -1139,10 +1162,239 @@ namespace NeuralRendering
 			return true;
 		}
 
+		void ResetEarlyMaskBounds()
+		{
+			earlyMaskReadbacks_ = {};
+			earlyMaskShader_.Reset();
+			earlyMaskConstants_.Reset();
+			earlyMaskShaderFailed_ = false;
+			earlyMaskCaptureSerial_ = 0;
+		}
+
+		bool FailEarlyMaskBounds(const char* a_reason, HRESULT a_result)
+		{
+			auto& telemetry = snapshot_.earlyMaskBounds;
+			Increment(telemetry.failures);
+			telemetry.lastFailure = a_reason;
+			telemetry.lastFailureResult = static_cast<std::int32_t>(a_result);
+			return false;
+		}
+
+		bool EnsureEarlyMaskBounds(EarlyMaskReadback& a_readback, ID3D11Device* a_device)
+		{
+			if (!earlyMaskShader_) {
+				if (earlyMaskShaderFailed_)
+					return false;
+				earlyMaskShader_.Attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
+					L"Data\\Shaders\\DLSS5CharacterMaskBoundsCS.hlsl", { { "EARLY_CATEGORY_BOUNDS", "1" } }, "cs_5_0")));
+				if (!earlyMaskShader_) {
+					earlyMaskShaderFailed_ = true;
+					return FailEarlyMaskBounds("early_bounds_shader_failed", E_FAIL);
+				}
+				Util::SetResourceName(earlyMaskShader_.Get(), "DLSS5CharacterRendering::EarlyMaskBoundsCS");
+			}
+			if (!earlyMaskConstants_) {
+				D3D11_BUFFER_DESC desc{};
+				desc.ByteWidth = 3u * sizeof(std::array<std::uint32_t, 4>);
+				desc.Usage = D3D11_USAGE_DEFAULT;
+				desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+				const auto result = a_device->CreateBuffer(&desc, nullptr, &earlyMaskConstants_);
+				if (FAILED(result))
+					return FailEarlyMaskBounds("early_bounds_constants_failed", result);
+				Util::SetResourceName(earlyMaskConstants_.Get(), "DLSS5CharacterRendering::EarlyMaskBoundsCB");
+			}
+			if (a_readback.bounds && a_readback.width == capturedEyeWidth_ && a_readback.height == capturedHeight_)
+				return true;
+			if (!capturedEyeWidth_ || !capturedHeight_ ||
+				std::max(capturedEyeWidth_, capturedHeight_) > kCharacterMaskRoiMaximumExtent)
+				return FailEarlyMaskBounds("early_bounds_dimensions_invalid", E_INVALIDARG);
+			const auto columns = (capturedEyeWidth_ + 31u) / 32u;
+			const auto rows = (capturedHeight_ + 31u) / 32u;
+			EarlyMaskReadback created;
+			created.tiles.resize(static_cast<std::size_t>(columns) * rows * 2u);
+			D3D11_BUFFER_DESC desc{};
+			desc.ByteWidth = static_cast<UINT>(created.tiles.size() * sizeof(CharacterMaskRoiTileBounds));
+			desc.Usage = D3D11_USAGE_DEFAULT;
+			desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+			desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+			desc.StructureByteStride = sizeof(CharacterMaskRoiTileBounds);
+			auto result = a_device->CreateBuffer(&desc, nullptr, &created.bounds);
+			if (FAILED(result))
+				return FailEarlyMaskBounds("early_bounds_buffer_failed", result);
+			Util::SetResourceName(created.bounds.Get(), "DLSS5CharacterRendering::EarlyMaskBounds");
+			D3D11_UNORDERED_ACCESS_VIEW_DESC view{};
+			view.Format = DXGI_FORMAT_UNKNOWN;
+			view.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+			view.Buffer.NumElements = static_cast<UINT>(created.tiles.size());
+			result = a_device->CreateUnorderedAccessView(created.bounds.Get(), &view, &created.uav);
+			if (FAILED(result))
+				return FailEarlyMaskBounds("early_bounds_view_failed", result);
+			Util::SetResourceName(created.uav.Get(), "DLSS5CharacterRendering::EarlyMaskBounds UAV");
+			desc.Usage = D3D11_USAGE_STAGING;
+			desc.BindFlags = 0;
+			desc.MiscFlags = 0;
+			desc.StructureByteStride = 0;
+			desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+			result = a_device->CreateBuffer(&desc, nullptr, &created.staging);
+			if (FAILED(result))
+				return FailEarlyMaskBounds("early_bounds_staging_failed", result);
+			Util::SetResourceName(created.staging.Get(), "DLSS5CharacterRendering::EarlyMaskBoundsReadback");
+			const D3D11_QUERY_DESC query{ D3D11_QUERY_EVENT, 0 };
+			result = a_device->CreateQuery(&query, &created.query);
+			if (FAILED(result))
+				return FailEarlyMaskBounds("early_bounds_query_failed", result);
+			Util::SetResourceName(created.query.Get(), "DLSS5CharacterRendering::EarlyMaskBoundsReady");
+			created.width = capturedEyeWidth_;
+			created.height = capturedHeight_;
+			a_readback = std::move(created);
+			return true;
+		}
+
+		void QueueEarlyMaskBounds(ID3D11Device* a_device, ID3D11DeviceContext* a_context)
+		{
+			try {
+				EarlyMaskReadback* selected = nullptr;
+				for (auto& readback : earlyMaskReadbacks_) {
+					if (readback.pending) {
+						BOOL ready = FALSE;
+						const auto result = a_context->GetData(readback.query.Get(), &ready, sizeof(ready), D3D11_ASYNC_GETDATA_DONOTFLUSH);
+						if (FAILED(result)) {
+							(void)FailEarlyMaskBounds("early_bounds_retire_query_failed", result);
+							continue;
+						}
+						if (result != S_OK || !ready)
+							continue;
+						readback.pending = false;
+					}
+					selected = &readback;
+					break;
+				}
+				if (!selected) {
+					Increment(snapshot_.earlyMaskBounds.ringBusy);
+					return;
+				}
+				if (!EnsureEarlyMaskBounds(*selected, a_device))
+					return;
+				ComputeStateGuard stateGuard(a_context);
+				if (!stateGuard.Captured()) {
+					(void)FailEarlyMaskBounds("early_bounds_compute_state_unavailable", E_FAIL);
+					return;
+				}
+				const auto columns = (capturedEyeWidth_ + 31u) / 32u;
+				const auto rows = (capturedHeight_ + 31u) / 32u;
+				std::array<std::array<std::uint32_t, 4>, 3> constants{};
+				constants[0] = { capturedEyeWidth_, capturedHeight_, columns, capturedEnabledCategoryMask_ };
+				for (std::size_t eye = 0; eye < 2; ++eye) {
+					const auto& rect = capturedSourceRects_[eye];
+					constants[eye + 1] = { rect.baseX, rect.baseY, rect.width, rect.height };
+				}
+				a_context->UpdateSubresource(earlyMaskConstants_.Get(), 0, nullptr, constants.data(), 0, 0);
+				ID3D11Buffer* buffer = earlyMaskConstants_.Get();
+				ID3D11ShaderResourceView* source = capturedCategoriesSrv_.Get();
+				ID3D11UnorderedAccessView* destination = selected->uav.Get();
+				std::array<ID3D11UnorderedAccessView*, 2> nullUavs{};
+				a_context->CSSetUnorderedAccessViews(0, 2, nullUavs.data(), nullptr);
+				a_context->CSSetShader(earlyMaskShader_.Get(), nullptr, 0);
+				a_context->CSSetConstantBuffers(0, 1, &buffer);
+				a_context->CSSetShaderResources(0, 1, &source);
+				a_context->CSSetUnorderedAccessViews(0, 1, &destination, nullptr);
+				{
+					CS_PROFILE_SCOPE("Upscaling::DLSS5EarlyCharacterMaskBounds");
+					a_context->Dispatch(columns, rows, 2);
+				}
+				a_context->CSSetUnorderedAccessViews(0, 2, nullUavs.data(), nullptr);
+				a_context->CopyResource(selected->staging.Get(), selected->bounds.Get());
+				a_context->End(selected->query.Get());
+				selected->pending = true;
+				selected->hasData = false;
+				selected->captureSerial = earlyMaskCaptureSerial_;
+				selected->frame = capturedFrame_;
+				selected->categories = capturedEnabledCategoryMask_;
+				Increment(snapshot_.earlyMaskBounds.queued);
+				snapshot_.earlyMaskBounds.lastQueuedFrame = capturedFrame_;
+				snapshot_.earlyMaskBounds.readbackBytes = static_cast<std::uint32_t>(selected->tiles.size() * sizeof(CharacterMaskRoiTileBounds));
+			} catch (const std::exception& exception) {
+				(void)FailEarlyMaskBounds(exception.what(), E_FAIL);
+			}
+		}
+
+		bool TryApplyEarlyMaskBounds(const CharacterMaskPrepareArgs& a_args, Slot& a_slot, const ProjectedPlan& a_plan)
+		{
+			try {
+				EarlyMaskReadback* selected = nullptr;
+				for (auto& readback : earlyMaskReadbacks_) {
+					if (earlyMaskCaptureSerial_ != 0 && readback.captureSerial == earlyMaskCaptureSerial_ &&
+						readback.frame == a_args.sourceWorldFrame && readback.frame == capturedFrame_ &&
+						readback.width == capturedEyeWidth_ && readback.height == capturedHeight_ &&
+						readback.categories == GetEnabledCharacterCategoryMask(a_args.settings)) {
+						selected = &readback;
+						break;
+					}
+				}
+				if (!selected) {
+					a_slot.maskRoiStatus = "early_bounds_unavailable";
+					return false;
+				}
+				if (!selected->hasData) {
+					Increment(snapshot_.earlyMaskBounds.polls);
+					const auto result = PollCharacterMaskBounds(a_args.context, selected->query.Get(), selected->staging.Get(),
+						std::as_writable_bytes(std::span(selected->tiles)));
+					snapshot_.earlyMaskBounds.lastPollCpuMs = result.waitMs;
+					if (!result.Ready()) {
+						a_slot.maskRoiStatus = result.status == CharacterMaskReadbackStatus::Pending ? "early_bounds_pending" : "early_bounds_failed";
+						if (result.status == CharacterMaskReadbackStatus::Pending)
+							Increment(snapshot_.earlyMaskBounds.pending);
+						else
+							(void)FailEarlyMaskBounds(result.Reason(), result.result);
+						return false;
+					}
+					selected->pending = false;
+					selected->hasData = true;
+					Increment(snapshot_.earlyMaskBounds.ready);
+				}
+				const auto count = selected->tiles.size() / 2u;
+				std::vector<CharacterMaskRoiTileBounds> mapped;
+				const auto& input = a_args.viewportCrop.input;
+				if (!MapEarlyCharacterMaskBounds(std::span(selected->tiles).subspan(a_args.eyeIndex * count, count),
+						selected->width, selected->height, { input.left, input.top, input.Width(), input.Height() },
+						a_args.outputWidth, a_args.outputHeight, capturedJitterX_, capturedJitterY_,
+						a_args.settings.depthAwareFeather ? a_args.settings.featherRadius : 0u, mapped))
+					return FailEarlyMaskBounds("early_bounds_mapping_invalid", E_INVALIDARG);
+				std::vector<std::uint64_t> owners;
+				for (const auto& actor : a_plan.actorRegions)
+					owners.push_back(actor.identity);
+				const auto tight = ResolveCharacterMaskRoi(mapped, owners, a_args.outputWidth, a_args.outputHeight,
+					a_args.sourceWorldFrame, a_slot.stableMaskRoi, a_args.settings.multiRoiSavingsGate, a_args.settings.multiRoi);
+				if (!tight.valid)
+					return FailEarlyMaskBounds("early_bounds_plan_invalid", E_INVALIDARG);
+				if (tight.empty) {
+					a_slot.maskRoiStatus = "early_bounds_empty";
+					return false;
+				}
+				a_slot.computeSubrect = tight.computeSubrect;
+				a_slot.computeRegions = tight.computeRegions;
+				a_slot.multiRoiReason = a_args.settings.multiRoi ? tight.multiRoiReason : CharacterMultiRoiReason::Disabled;
+				a_slot.multiRoiDiagnostics = tight.diagnostics;
+				a_slot.maskRoiStatus = tight.computeRegions.count == 2 ? "gpu_source_split" : "gpu_source_single";
+				a_slot.maskRoiCurrentFrame = true;
+				a_slot.maskRoiRequiredSubrect = tight.requiredSubrect;
+				a_slot.maskRoiOccupiedTiles = tight.occupiedTiles;
+				Increment(snapshot_.earlyMaskBounds.used);
+				snapshot_.earlyMaskBounds.lastUsedSourceFrame = a_args.sourceWorldFrame;
+				return true;
+			} catch (const std::exception& exception) {
+				return FailEarlyMaskBounds(exception.what(), E_FAIL);
+			}
+		}
+
 		static void PublishMaskRoiSnapshot(const Slot& a_slot, CharacterEyeSnapshot& a_eye)
 		{
+			a_eye.multiRoiDiagnostics = a_slot.multiRoiDiagnostics;
 			a_eye.maskRoiStatus = a_slot.maskRoiStatus;
 			a_eye.maskRoiPlanningCpuMs = a_slot.maskRoiPlanningCpuMs;
+			a_eye.maskRoiCurrentFrame = a_slot.maskRoiCurrentFrame;
+			a_eye.maskRoiOccupiedTiles = a_slot.maskRoiOccupiedTiles;
+			a_eye.maskRoiRequiredSubrect = a_slot.maskRoiRequiredSubrect;
 		}
 
 		CharacterProjectionResult ProjectSphere(
@@ -1757,6 +2009,11 @@ namespace NeuralRendering
 		std::array<Slot, 4> slots_{};
 		std::array<std::uint32_t, 2> lastSlotForEye_{ 4, 4 };
 		std::uint32_t preparedFrameHistoryNext_ = 0;
+		std::array<EarlyMaskReadback, kReadbackLatency> earlyMaskReadbacks_{};
+		ComPtr<ID3D11ComputeShader> earlyMaskShader_;
+		ComPtr<ID3D11Buffer> earlyMaskConstants_;
+		std::uint64_t earlyMaskCaptureSerial_ = 0;
+		bool earlyMaskShaderFailed_ = false;
 		ComPtr<ID3D11ComputeShader> shader_;
 		ComPtr<ID3D11Buffer> constants_;
 		ComPtr<ID3D11Texture2D> capturedCategories_;
@@ -2206,6 +2463,8 @@ namespace NeuralRendering
 			state_->snapshot_.categoryCaptureReady = true;
 			state_->snapshot_.categoryCaptureEmpty = false;
 			Increment(state_->snapshot_.categoryCaptureSuccesses);
+			state_->earlyMaskCaptureSerial_ = state_->AllocatePreparedContentSerial();
+			state_->QueueEarlyMaskBounds(a_device, a_context);
 			state_->snapshot_.status = "captured";
 			state_->snapshot_.detail =
 				"same-frame post-terrain active-stereo categories, synchronized pre-decal depth, and render jitter captured";
@@ -2516,12 +2775,14 @@ namespace NeuralRendering
 				if (computeSubrectContractChanged) {
 					slot.stableComputeSubrect = {};
 					slot.stableMultiRoi = {};
+					slot.stableMaskRoi = {};
 					slot.computeSubrectGeneration = a_args.generation;
 					slot.computeSubrectCrop = a_args.viewportCrop;
 					slot.computeSubrectContractValid = true;
 				}
 				if (slot.multiRoiPolicyKey != key.settings) {
 					slot.stableMultiRoi = {};
+					slot.stableMaskRoi = {};
 					slot.multiRoiPolicyKey = key.settings;
 				}
 				const auto planningStart = std::chrono::steady_clock::now();
@@ -2551,7 +2812,18 @@ namespace NeuralRendering
 				}
 				slot.computeRegions = {};
 				slot.multiRoiReason = CharacterMultiRoiReason::Disabled;
-				if (a_args.settings.multiRoi) {
+				slot.multiRoiDiagnostics = {};
+				slot.multiRoiDiagnostics.savingsGateEnabled = a_args.settings.multiRoiSavingsGate;
+				slot.maskRoiCurrentFrame = false;
+				slot.maskRoiOccupiedTiles = 0;
+				slot.maskRoiRequiredSubrect = {};
+				slot.maskRoiStatus = "disabled";
+				const bool canUseEarlyBounds = authoredMode && !cpuProvenEmpty &&
+				                               a_args.settings.debugView == CharacterDebugView::Off;
+				const bool usedEarlyBounds = canUseEarlyBounds && state_->TryApplyEarlyMaskBounds(a_args, slot, plan);
+				if (canUseEarlyBounds && !usedEarlyBounds)
+					Increment(state_->snapshot_.earlyMaskBounds.geometryFallbacks);
+				if (!usedEarlyBounds && a_args.settings.multiRoi) {
 					if (!authoredMode || a_args.settings.debugView != CharacterDebugView::Off) {
 						slot.multiRoiReason = CharacterMultiRoiReason::DiagnosticMode;
 					} else if (cpuProvenEmpty) {
@@ -2561,7 +2833,9 @@ namespace NeuralRendering
 					} else {
 						slot.computeRegions = ResolveCharacterMultiRoi(
 							plan.actorRegions, plan.regions, a_args.outputWidth, a_args.outputHeight,
-							sourceWorldFrame, slot.stableMultiRoi, slot.multiRoiReason);
+							sourceWorldFrame, slot.stableMultiRoi, slot.multiRoiReason,
+							a_args.settings.multiRoiSavingsGate, slot.computeSubrect);
+						slot.multiRoiDiagnostics = slot.stableMultiRoi.diagnostics;
 						if (slot.computeRegions.count == 2) {
 							// Composition still receives the enclosure, but inference uses
 							// the separate rectangles. Never expose stale pixels in gaps.
@@ -2587,10 +2861,8 @@ namespace NeuralRendering
 				slot.feature18Disposition =
 					CharacterFeature18Disposition::Unresolved;
 				slot.zeroCoverageCpuProven = false;
-				slot.maskRoiStatus = !a_args.settings.multiRoi      ? "disabled" :
-				                     cpuProvenEmpty                 ? "cpu_proven_empty" :
-				                     slot.computeRegions.count == 2 ? "cpu_projected_split" :
-				                                                      "cpu_projected_single";
+				if (cpuProvenEmpty)
+					slot.maskRoiStatus = "cpu_proven_empty";
 				if (cpuProvenEmpty || logicalEmptyCapture) {
 					float clearValue = 0.0f;
 					switch (a_args.settings.maskTestMode) {
@@ -2976,6 +3248,7 @@ namespace NeuralRendering
 			state_->InvalidateProjectionCache();
 			state_->actorAdmissions_.clear();
 			state_->slots_ = {};
+			state_->ResetEarlyMaskBounds();
 			state_->shader_.Reset();
 			state_->constants_.Reset();
 			state_->shaderCompileFailed_ = false;
@@ -3025,6 +3298,7 @@ namespace NeuralRendering
 			return;
 		try {
 			std::scoped_lock lock(state_->mutex_);
+			state_->ResetEarlyMaskBounds();
 			state_->shader_.Reset();
 			state_->constants_.Reset();
 			state_->shaderCompileFailed_ = false;

@@ -819,6 +819,52 @@ namespace
 		};
 	}
 
+	json CharacterMultiRoiDiagnosticsJson(const NeuralRendering::CharacterMultiRoiDiagnostics& a_diagnostics)
+	{
+		const auto rectJson = [](const NeuralRendering::ComputeSubrect& rect) {
+			return json{
+				{ "baseX", rect.baseX },
+				{ "baseY", rect.baseY },
+				{ "width", rect.width },
+				{ "height", rect.height },
+				{ "pixels", rect.Area() },
+			};
+		};
+		const auto& cost = a_diagnostics.cost;
+		json candidates = json::array();
+		if (a_diagnostics.candidateAvailable)
+			for (const auto& rect : a_diagnostics.candidateRegions)
+				candidates.push_back(rectJson(rect));
+		return {
+			{ "savingsGateEnabled", a_diagnostics.savingsGateEnabled },
+			{ "singleFallback", a_diagnostics.singleRegion.IsValid() ? rectJson(a_diagnostics.singleRegion) : json(nullptr) },
+			{ "candidateRegions", std::move(candidates) },
+			{ "candidateAvailable", a_diagnostics.candidateAvailable },
+			{ "candidateOverlaps", a_diagnostics.candidateOverlaps },
+			{ "candidateCoversEligibility", a_diagnostics.candidateCoversEligibility },
+			{ "stabilizedCandidate", a_diagnostics.stabilizedCandidate },
+			{ "retaining", a_diagnostics.retaining },
+			{ "candidatesConsidered", a_diagnostics.candidatesConsidered },
+			{ "overlappingCandidates", a_diagnostics.overlappingCandidates },
+			{ "coverageRejectedCandidates", a_diagnostics.coverageRejectedCandidates },
+			{ "savingsRejectedCandidates", a_diagnostics.savingsRejectedCandidates },
+			{ "cost", cost.valid ? json{
+									   { "singlePixels", cost.singlePixels },
+									   { "splitPixels", cost.splitPixels },
+									   { "savedPixels", cost.savedPixels },
+									   { "additionalPixels", cost.additionalPixels },
+									   { "savedPercent", 100.0 * static_cast<double>(cost.savedPixels) / static_cast<double>(cost.singlePixels) },
+									   { "positiveSavings", cost.positiveSavings },
+									   { "extraEvaluationPixelReserve", NeuralRendering::CharacterMultiRoiDetail::kExtraEvaluationPixelReserve },
+									   { "requiredRelativePixels", cost.requiredRelativePixels },
+									   { "requiredSavingPixels", cost.requiredRelativePixels + NeuralRendering::CharacterMultiRoiDetail::kExtraEvaluationPixelReserve },
+									   { "meetsHeuristic", cost.meetsHeuristic },
+									   { "passesActiveSavingsGate", cost.positiveSavings && (!a_diagnostics.savingsGateEnabled || cost.meetsHeuristic) },
+								   } :
+								   json(nullptr) },
+		};
+	}
+
 	json CharacterRenderingStatusJson(const Upscaling& a_upscaling)
 	{
 		const auto& settings = a_upscaling.settings;
@@ -949,6 +995,7 @@ namespace
 				{ "multiRoiSplit", multiRoiSplit },
 				{ "multiRoiFallback", multiRoiFallback },
 				{ "multiRoiReason", NeuralRendering::GetCharacterMultiRoiReasonName(eye.multiRoiReason) },
+				{ "multiRoiDiagnostics", CharacterMultiRoiDiagnosticsJson(eye.multiRoiDiagnostics) },
 				{ "maskRoiStatus", eye.maskRoiStatus },
 				{ "maskRoiCurrentFrame", eye.maskRoiCurrentFrame },
 				{ "maskRoiGpuProvenEmpty", eye.maskRoiGpuProvenEmpty },
@@ -1248,6 +1295,7 @@ namespace
 							  { "maximumDistanceMeters", settings.neuralCharacterMaximumDistanceMeters },
 							  { "adaptiveRoiSelection", settings.neuralCharacterAdaptiveRoiSelectionEnabled },
 							  { "experimentalMultiRoi", settings.neuralCharacterMultiRoiEnabled },
+							  { "experimentalMultiRoiSavingsGate", settings.neuralCharacterMultiRoiSavingsGateEnabled },
 							  { "minimumFacePixelSize", settings.neuralCharacterMinimumFacePixelSize },
 							  { "roiMargin", settings.neuralCharacterRoiMargin },
 							  { "roiHoldFrames", settings.neuralCharacterRoiHoldFrames },
@@ -1325,10 +1373,12 @@ namespace
 													{ "privateSingleSubrectEnabled", dynamicCharacterRoiEnabled || privateSingleSubrectEnabled },
 													{ "privateSingleSubrectScale", settings.neuralRenderingSingleSubrectScale },
 													{ "privateSingleSubrectValidation", "ghidra_dataflow_and_gpu_timing_validated" },
-													{ "source", "current_frame_projected_face_skin_hair_bounds" },
+													{ "source", "early_current_source_gpu_category_bounds_with_geometry_fallback" },
 													{ "planningRequiresGpuReadback", false },
+													{ "planningWaitsForGpu", false },
+													{ "gpuBoundsReadbackOptional", true },
 													{ "splitExtraEvaluationPixelReserve", NeuralRendering::CharacterMultiRoiDetail::kExtraEvaluationPixelReserve },
-													{ "splitCostPolicy", "extra_invocation_reserve_plus_relative_area_savings_not_measured_gpu_break_even" },
+													{ "splitCostPolicy", "toggleable_reserve_plus_ceiling_relative_savings_against_actual_single_fallback_not_measured_gpu_break_even" },
 													{ "reason", snapshot.computeRoiReason },
 													{ "resolvedMode", dynamicCharacterMultiRegionEnabled ? "experimental_dynamic_character_up_to_two_regions_per_eye" : (dynamicCharacterSingleRectEnabled ? "dynamic_character_single_rect_inference" : (privateSingleSubrectEnabled ? "static_centered_single_rect_inference" : "full_frame_inference")) },
 													{ "inferenceRestrictedToRois", dynamicCharacterRoiEnabled || privateSingleSubrectEnabled },
@@ -1371,6 +1421,22 @@ namespace
 															   { "ambiguousFaceGen", snapshot.classificationRejections[3] },
 															   { "unsupportedMaterial", snapshot.classificationRejections[4] },
 														   } },
+							 { "earlyMaskBounds", {
+													  { "queued", snapshot.earlyMaskBounds.queued },
+													  { "ringBusy", snapshot.earlyMaskBounds.ringBusy },
+													  { "polls", snapshot.earlyMaskBounds.polls },
+													  { "pending", snapshot.earlyMaskBounds.pending },
+													  { "ready", snapshot.earlyMaskBounds.ready },
+													  { "used", snapshot.earlyMaskBounds.used },
+													  { "geometryFallbacks", snapshot.earlyMaskBounds.geometryFallbacks },
+													  { "failures", snapshot.earlyMaskBounds.failures },
+													  { "lastQueuedFrame", snapshot.earlyMaskBounds.lastQueuedFrame },
+													  { "lastUsedSourceFrame", snapshot.earlyMaskBounds.lastUsedSourceFrame },
+													  { "readbackBytes", snapshot.earlyMaskBounds.readbackBytes },
+													  { "lastPollCpuMs", snapshot.earlyMaskBounds.lastPollCpuMs },
+													  { "lastFailure", snapshot.earlyMaskBounds.lastFailure },
+													  { "lastFailureResult", snapshot.earlyMaskBounds.lastFailureResult },
+												  } },
 							 { "categoryCaptureAttempts", snapshot.categoryCaptureAttempts },
 							 { "categoryCaptureSuccesses", snapshot.categoryCaptureSuccesses },
 							 { "categoryCaptureFailures", snapshot.categoryCaptureFailures },
@@ -2198,6 +2264,7 @@ namespace
 		std::string_view{ "characterEnabled" },
 		std::string_view{ "characterVisualIsolationEnabled" },
 		std::string_view{ "experimentalMultiRoi" },
+		std::string_view{ "experimentalMultiRoiSavingsGate" },
 		std::string_view{ "characterFaces" },
 		std::string_view{ "characterSkin" },
 		std::string_view{ "characterHair" },
@@ -2237,6 +2304,7 @@ namespace
 		std::optional<bool> characterEnabled;
 		std::optional<bool> characterVisualIsolationEnabled;
 		std::optional<bool> experimentalMultiRoi;
+		std::optional<bool> experimentalMultiRoiSavingsGate;
 		std::optional<bool> characterFaces;
 		std::optional<bool> characterSkin;
 		std::optional<bool> characterHair;
@@ -2263,7 +2331,7 @@ namespace
 
 		[[nodiscard]] bool HasCharacterControls() const noexcept
 		{
-			return characterEnabled || characterVisualIsolationEnabled || experimentalMultiRoi ||
+			return characterEnabled || characterVisualIsolationEnabled || experimentalMultiRoi || experimentalMultiRoiSavingsGate ||
 			       characterFaces || characterSkin ||
 			       characterHair || characterFaceStrength ||
 			       characterSkinStrength || characterHairStrength ||
@@ -2486,6 +2554,7 @@ namespace
 			!parseBoolean("uiCorrection", a_request.uiCorrection) ||
 			!parseBoolean("characterEnabled", a_request.characterEnabled) ||
 			!parseBoolean("experimentalMultiRoi", a_request.experimentalMultiRoi) ||
+			!parseBoolean("experimentalMultiRoiSavingsGate", a_request.experimentalMultiRoiSavingsGate) ||
 			!parseBoolean(
 				"characterVisualIsolationEnabled",
 				a_request.characterVisualIsolationEnabled) ||
@@ -3900,6 +3969,8 @@ namespace
 					requestedSettings.neuralCharacterRenderingEnabled = *request.characterEnabled;
 				if (request.experimentalMultiRoi)
 					requestedSettings.neuralCharacterMultiRoiEnabled = *request.experimentalMultiRoi;
+				if (request.experimentalMultiRoiSavingsGate)
+					requestedSettings.neuralCharacterMultiRoiSavingsGateEnabled = *request.experimentalMultiRoiSavingsGate;
 				if (request.characterVisualIsolationEnabled) {
 					requestedSettings.neuralCharacterVisualIsolationEnabled =
 						*request.characterVisualIsolationEnabled;
@@ -4008,6 +4079,7 @@ namespace
 					requestedSettings.neuralCharacterVisualIsolationEnabled;
 				const bool characterSettingsChanged =
 					multiRoiChanged ||
+					previousSettings.neuralCharacterMultiRoiSavingsGateEnabled != requestedSettings.neuralCharacterMultiRoiSavingsGateEnabled ||
 					previousSettings.neuralCharacterRenderingEnabled != requestedSettings.neuralCharacterRenderingEnabled ||
 					characterVisualIsolationChanged ||
 					previousSettings.neuralCharacterFacesEnabled != requestedSettings.neuralCharacterFacesEnabled ||
@@ -4443,8 +4515,8 @@ namespace VRRenderScaleDevBenchBridge
 
 		static constexpr const char* descriptor =
 			R"({
-  "description":"Control and inspect Community Shaders VR render-scale stress iterations, DLSS Neural Rendering, character masking, and foveated-center tuning. nr_status returns the API-v9 NR runtime, routes, temporal admission, GPU telemetry, and frame-attributed per-eye character diagnostics. NR runtime admission is independent of Developer Mode and Streamline logging: any 310.8 runtime with the required exports and stable loaded-image identity is accepted, while SHA-256 is informational. Character diagnostics count authored face, skin, and hair pixels across the active low-resolution eye input, report visible/rejected evaluation pixels and exact frozen/current depth coordinates, and retain frame-keyed preparation history for asynchronous Feature 18 attribution. Same-frame category/depth capture is idempotent. Temporal history resets retain only current-frame authoring admissions and immutable category/depth source; stale admissions and prepared masks expire. Full resource invalidation still expires both authoring decisions and captured source. characterRendering.runtime.lastPreparationFailure preserves the failing frame, source frame, capture frame, generation, slot, category masks and reason after recovery. Feature 18 bypasses CPU-proven empty eyes; delayed GPU coverage samples are diagnostic and never suppress current-frame evaluation. Diagnostic coverage measurement runs only on policy changes or a fixed cadence. Experimental Multi-ROI uses current-frame projected geometry and never waits for GPU mask readback. Both prepared eye plans are validated together before inference. maskRoiStatus is cpu_projected_split, cpu_projected_single, cpu_proven_empty or disabled. maskRoiPlanningCpuMs reports geometry planning CPU time. Legacy GPU-bounds evidence remains unavailable: maskRoiCurrentFrame and maskRoiGpuProvenEmpty are false; maskRoiReadbackWaitMs, maskRoiReadbackFenceValue, occupied tiles and readback counters are zero. A split must cover all current eligibility and save a 65,536-pixel extra-invocation reserve plus 25% of single-region area (20% to retain a split). This is an area cost heuristic, not measured GPU break-even. Category switches and strengths latch by source frame for source capture and both eyes; effectiveCategoryMask and effectiveCategoryStrengths report the prepared policy. Edits take effect with the next source frame; uncertain coverage retains a conservative enclosure and multiRoiReason reports the split or fallback decision. Feature 18 always uses its working automatic-mask invocation; characterVisualIsolationEnabled=true unions the current per-eye projected face, skin, and hair eligibility bounds into one private Feature 18 compute subrect, while experimentalMultiRoi can evaluate two disjoint projected actor clusters through independent feature instances without waiting for resolved-mask readback. It composites the partial output over normal DLSS through CSX's exact per-eye R8_UNORM 0..1 selection mask. Feature 18 color, depth-guide, motion-vector, provider-output, and late-overlay work are restricted to that rectangle. The Upscaled-Center baseline composite still covers the existing center so normal DLSS fills pixels outside the exact mask. The private provider ControlMask ABI is not used and multi/sparse provider ROI remains unsupported. Character isolation forces the Upscaled Center route to staged output so normal DLSS remains available without an extra baseline copy; final-LDR and submit routes already preserve a separate baseline. nr_configure strictly accepts one or more NR or character controls through the in-game reset/history contract; useAutoMask=false is rejected. experimentalMultiRoi is a session-only boolean and always uses the same backend retirement and history reset as the menu, even when NR or character rendering is disabled. nr_status, nr_configure, nr_cycle_modes and nr_reset return explicit ok results; transition failure is never reported as success. Insertion-point-only switches retain a healthy backend and its compatible resources; history is invalidated and evaluation is blocked for the transition frame. Resource-key changes still retire incompatible slots through bounded GPU waits. Master or multi-ROI changes and insertion switches with a failed backend retain full retirement. resetAttempted identifies full backend retirement, independently of historyResetRequested. Debug-view-only changes are applied without a history reset. nr_cycle_modes preserves the four-lane stereo implementation cycle. foveation_configure atomically applies validated foveation controls on the main thread. nr_readiness is a read-only, versioned prepared-NR-scene quiescence check; it reports loading, compilation, target publication, device, resource-transition and scaled-profile/fidelity gates with reasons and full telemetry. A native controller may be settled in Idle or Active; loading and resource-transition gates remain mandatory. It does not qualify presentation or replace render-scale release qualification. Existing render-scale mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.",
-  "outputSchema":{"type":"object","properties":{"neuralRendering":{"type":"object","properties":{"characterRendering":{"type":"object","properties":{"runtime":{"type":"object","properties":{"lastPreparationFailure":{"type":["object","null"],"properties":{"sequence":{"type":"integer"},"detail":{"type":"string"},"frame":{"type":"integer"},"sourceWorldFrame":{"type":"integer"},"capturedFrame":{"type":"integer"},"generation":{"type":"integer"},"featureSlot":{"type":"integer"},"eye":{"type":"integer"},"requestedCategories":{"type":"integer"},"capturedCategories":{"type":"integer"}}},"eyes":{"type":"array","items":{"type":"object","properties":{"effectiveCategoryMask":{"type":"integer"},"effectiveCategoryStrengths":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"maskRoiStatus":{"type":"string","description":"Current geometry planner source; cpu_projected_split, cpu_projected_single, cpu_proven_empty or disabled."},"maskRoiReadbackWaitMs":{"type":"number","description":"Zero: ROI planning does not wait for GPU readback."},"maskRoiCurrentFrame":{"type":"boolean","description":"False: no current-mask GPU spatial evidence is consumed."},"maskRoiPlanningCpuMs":{"type":"number","description":"CPU time for current geometry ROI planning, without GPU readback."},"maskRoiReadbackFenceValue":{"type":"integer","minimum":0,"description":"Compatibility field, always zero: ROI planning does not issue a GPU readback."}}}}}}}}}},"resetAttempted":{"type":"boolean","description":"Full backend retirement was required; healthy insertion-only switches reset history without retirement."},"resetSucceeded":{"type":["boolean","null"],"description":"Full backend retirement result, or null when no retirement was attempted."},"historyResetRequested":{"type":"boolean","description":"Temporal history was invalidated independently of backend retirement."}}},
+  "description":"Control and inspect Community Shaders VR render-scale stress iterations, DLSS Neural Rendering, character masking, and foveated-center tuning. nr_status returns the API-v9 NR runtime, routes, temporal admission, GPU telemetry, and frame-attributed per-eye character diagnostics. NR runtime admission is independent of Developer Mode and Streamline logging: any 310.8 runtime with the required exports and stable loaded-image identity is accepted, while SHA-256 is informational. Character diagnostics count authored face, skin, and hair pixels across the active low-resolution eye input, report visible/rejected evaluation pixels and exact frozen/current depth coordinates, and retain frame-keyed preparation history for asynchronous Feature 18 attribution. Same-frame category/depth capture is idempotent. Temporal history resets retain only current-frame authoring admissions and immutable category/depth source; stale admissions and prepared masks expire. Full resource invalidation still expires both authoring decisions and captured source. characterRendering.runtime.lastPreparationFailure preserves the failing frame, source frame, capture frame, generation, slot, category masks and reason after recovery. Feature 18 bypasses CPU-proven empty eyes; delayed GPU coverage samples are diagnostic and never suppress current-frame evaluation. Diagnostic coverage measurement runs only on policy changes or a fixed cadence. Character ROI planning reduces enabled GPU category tags at the early post-terrain capture, before decals and subsequent rendering. A bounded three-entry staging ring never waits for reuse. Mask preparation makes one DONOTFLUSH query and at most one DO_NOT_WAIT map against the exact capture serial, source frame, dimensions and category policy. Matching ready bounds are mapped through the active crop, jitter, bilinear and feather footprints; geometry never constrains a valid mask-derived split. Later visibility/depth/distance tests can only remove coverage from this conservative category superset. Missing, pending or invalid GPU evidence retains current geometry coverage; stale masks never shrink the current ROI. Both prepared eye plans are validated together before inference. maskRoiStatus is gpu_source_split, gpu_source_single, early_bounds_unavailable, early_bounds_pending, early_bounds_failed, early_bounds_empty, cpu_proven_empty or disabled. maskRoiCurrentFrame identifies consumed current-source GPU evidence. maskRoiOccupiedTiles and maskRoiRequiredSubrect describe its mapped conservative coverage. maskRoiPlanningCpuMs includes mapping and planning CPU time. runtime.earlyMaskBounds provides cumulative queued, ringBusy, polls, pending, ready, used, geometryFallbacks and failures, plus source frames, readbackBytes, lastPollCpuMs and failure details. ready counts completed stereo buffers; used and geometryFallbacks count eye preparations. No result is admitted through a CPU wait. Legacy synchronous wait/fence/counters remain zero and GPU-proven empty bypass remains disabled. A split must cover all current eligibility with disjoint regions. experimentalMultiRoiSavingsGate is a session-only boolean, default true: require a 65,536-pixel extra-invocation reserve plus ceil(25% of the actual padded single-ROI fallback area), or ceil(20%) to retain a split. False allows any strictly smaller split while retaining coverage, disjointness and dimension checks. It changes history without retiring a healthy backend. multiRoiDiagnostics preserves candidate rectangles, exact area accounting, the active gate and rejection counts even on fallback; unavailable candidates have null costs. Costs describe the best coverage-valid disjoint search candidate, otherwise the best disjoint or overlapping candidate, or the final stabilized candidate when reached. This is an area cost heuristic, not measured GPU break-even. Category switches and strengths latch by source frame for source capture and both eyes; effectiveCategoryMask and effectiveCategoryStrengths report the prepared policy. Edits take effect with the next source frame; uncertain coverage retains a conservative enclosure and multiRoiReason reports the split or fallback decision. Feature 18 always uses its working automatic-mask invocation; characterVisualIsolationEnabled=true unions the current per-eye projected face, skin, and hair eligibility bounds into one private Feature 18 compute subrect, while experimentalMultiRoi can evaluate two disjoint mask-derived regions through independent feature instances; current projected geometry is used only when early GPU bounds are unavailable. It composites the partial output over normal DLSS through CSX's exact per-eye R8_UNORM 0..1 selection mask. Feature 18 color, depth-guide, motion-vector, provider-output, and late-overlay work are restricted to that rectangle. The Upscaled-Center baseline composite still covers the existing center so normal DLSS fills pixels outside the exact mask. The private provider ControlMask ABI is not used and multi/sparse provider ROI remains unsupported. Character isolation forces the Upscaled Center route to staged output so normal DLSS remains available without an extra baseline copy; final-LDR and submit routes already preserve a separate baseline. nr_configure strictly accepts one or more NR or character controls through the in-game reset/history contract; useAutoMask=false is rejected. experimentalMultiRoi is a session-only boolean and always uses the same backend retirement and history reset as the menu, even when NR or character rendering is disabled. nr_status, nr_configure, nr_cycle_modes and nr_reset return explicit ok results; transition failure is never reported as success. Insertion-point-only switches retain a healthy backend and its compatible resources; history is invalidated and evaluation is blocked for the transition frame. Resource-key changes still retire incompatible slots through bounded GPU waits. Master or multi-ROI changes and insertion switches with a failed backend retain full retirement. resetAttempted identifies full backend retirement, independently of historyResetRequested. Debug-view-only changes are applied without a history reset. nr_cycle_modes preserves the four-lane stereo implementation cycle. foveation_configure atomically applies validated foveation controls on the main thread. nr_readiness is a read-only, versioned prepared-NR-scene quiescence check; it reports loading, compilation, target publication, device, resource-transition and scaled-profile/fidelity gates with reasons and full telemetry. A native controller may be settled in Idle or Active; loading and resource-transition gates remain mandatory. It does not qualify presentation or replace render-scale release qualification. Existing render-scale mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.",
+  "outputSchema":{"type":"object","properties":{"neuralRendering":{"type":"object","properties":{"characterRendering":{"type":"object","properties":{"runtime":{"type":"object","properties":{"earlyMaskBounds":{"type":"object","description":"Cumulative early GPU reduction and nonblocking readback telemetry; ready counts stereo buffers, used/fallbacks count eye preparations.","properties":{"queued":{"type":"integer","minimum":0},"ringBusy":{"type":"integer","minimum":0},"polls":{"type":"integer","minimum":0},"pending":{"type":"integer","minimum":0},"ready":{"type":"integer","minimum":0},"used":{"type":"integer","minimum":0},"geometryFallbacks":{"type":"integer","minimum":0},"failures":{"type":"integer","minimum":0},"lastQueuedFrame":{"type":"integer","minimum":0},"lastUsedSourceFrame":{"type":"integer","minimum":0},"readbackBytes":{"type":"integer","minimum":0},"lastPollCpuMs":{"type":"number","minimum":0},"lastFailure":{"type":"string"},"lastFailureResult":{"type":"integer"}}},"lastPreparationFailure":{"type":["object","null"],"properties":{"sequence":{"type":"integer"},"detail":{"type":"string"},"frame":{"type":"integer"},"sourceWorldFrame":{"type":"integer"},"capturedFrame":{"type":"integer"},"generation":{"type":"integer"},"featureSlot":{"type":"integer"},"eye":{"type":"integer"},"requestedCategories":{"type":"integer"},"capturedCategories":{"type":"integer"}}},"eyes":{"type":"array","items":{"type":"object","properties":{"effectiveCategoryMask":{"type":"integer"},"effectiveCategoryStrengths":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"multiRoiDiagnostics":{"type":"object","description":"Current-source candidate evidence, including rejected splits. Costs use padded regions and the actual single-ROI fallback; this is not GPU break-even.","properties":{"savingsGateEnabled":{"type":"boolean"},"singleFallback":{"type":["object","null"]},"candidateRegions":{"type":"array","maxItems":2,"items":{"type":"object"}},"candidateAvailable":{"type":"boolean"},"candidateOverlaps":{"type":"boolean"},"candidateCoversEligibility":{"type":"boolean"},"stabilizedCandidate":{"type":"boolean"},"retaining":{"type":"boolean"},"candidatesConsidered":{"type":"integer","minimum":0},"overlappingCandidates":{"type":"integer","minimum":0},"coverageRejectedCandidates":{"type":"integer","minimum":0},"savingsRejectedCandidates":{"type":"integer","minimum":0},"cost":{"type":["object","null"],"properties":{"singlePixels":{"type":"integer","minimum":0},"splitPixels":{"type":"integer","minimum":0},"savedPixels":{"type":"integer","minimum":0},"additionalPixels":{"type":"integer","minimum":0},"extraEvaluationPixelReserve":{"type":"integer","minimum":0},"requiredRelativePixels":{"type":"integer","minimum":0},"requiredSavingPixels":{"type":"integer","minimum":0},"savedPercent":{"type":"number","minimum":0,"maximum":100},"positiveSavings":{"type":"boolean"},"meetsHeuristic":{"type":"boolean"},"passesActiveSavingsGate":{"type":"boolean"}}}}},"maskRoiStatus":{"type":"string","description":"gpu_source_split or gpu_source_single when early current-source GPU bounds are consumed; early_bounds_* explains geometry fallback; cpu_proven_empty or disabled otherwise."},"maskRoiReadbackWaitMs":{"type":"number","description":"Zero: ROI planning does not wait for GPU readback."},"maskRoiCurrentFrame":{"type":"boolean","description":"True when matching current-source GPU category bounds were consumed; these conservatively include the final mask sampling footprint."},"maskRoiPlanningCpuMs":{"type":"number","description":"CPU time for current mask-bound mapping or geometry fallback and ROI planning, with no GPU wait."},"maskRoiReadbackFenceValue":{"type":"integer","minimum":0,"description":"Compatibility field, always zero: ROI planning does not issue a GPU readback."}}}}}}}}}},"resetAttempted":{"type":"boolean","description":"Full backend retirement was required; healthy insertion-only switches reset history without retirement."},"resetSucceeded":{"type":["boolean","null"],"description":"Full backend retirement result, or null when no retirement was attempted."},"historyResetRequested":{"type":"boolean","description":"Temporal history was invalidated independently of backend retirement."}}},
   "inputSchema":{
     "type":"object",
     "properties":{
@@ -4470,6 +4542,7 @@ namespace VRRenderScaleDevBenchBridge
       "characterEnabled":{"type":"boolean"},
       "characterVisualIsolationEnabled":{"type":"boolean"},
       "experimentalMultiRoi":{"type":"boolean"},
+      "experimentalMultiRoiSavingsGate":{"type":"boolean","description":"Session-only area cost gate, default true. False admits any strictly smaller split; current coverage and disjoint bounds remain mandatory."},
       "characterFaces":{"type":"boolean"},
       "characterSkin":{"type":"boolean"},
       "characterHair":{"type":"boolean"},
@@ -4510,7 +4583,7 @@ namespace VRRenderScaleDevBenchBridge
     },
     "required":["action"],
     "allOf":[
-      {"if":{"properties":{"action":{"const":"nr_configure"}},"required":["action"]},"then":{"minProperties":2,"propertyNames":{"enum":["action","enabled","insertionPoint","preset","intensity","localToneStrength","localStructureStrength","skinStructureStrength","style","batchedStereo","directCommit","implementation","optimizedStereoPath","useAutoMask","uiCorrection","singleSubrectScale","characterEnabled","characterVisualIsolationEnabled","experimentalMultiRoi","characterFaces","characterSkin","characterHair","characterFaceStrength","characterSkinStrength","characterHairStrength","characterMaximumDistanceMeters","characterAdaptiveRoiSelection","characterMinimumFacePixelSize","characterRoiMargin","characterRoiHoldFrames","characterDepthAwareFeather","characterVisibilityDepthTest","characterFeatherRadius","characterFeatherDepthThreshold","characterDebugView","characterMaskTestMode"]}}},
+      {"if":{"properties":{"action":{"const":"nr_configure"}},"required":["action"]},"then":{"minProperties":2,"propertyNames":{"enum":["action","enabled","insertionPoint","preset","intensity","localToneStrength","localStructureStrength","skinStructureStrength","style","batchedStereo","directCommit","implementation","optimizedStereoPath","useAutoMask","uiCorrection","singleSubrectScale","characterEnabled","characterVisualIsolationEnabled","experimentalMultiRoi","experimentalMultiRoiSavingsGate","characterFaces","characterSkin","characterHair","characterFaceStrength","characterSkinStrength","characterHairStrength","characterMaximumDistanceMeters","characterAdaptiveRoiSelection","characterMinimumFacePixelSize","characterRoiMargin","characterRoiHoldFrames","characterDepthAwareFeather","characterVisibilityDepthTest","characterFeatherRadius","characterFeatherDepthThreshold","characterDebugView","characterMaskTestMode"]}}},
       {"if":{"properties":{"action":{"const":"foveation_configure"}},"required":["action"]},"then":{"propertyNames":{"enum":["action","foveatedEnabled","peripheryTaaEnabled","centerOrigin","horizontalAnchor","fovOnlyCenterScale","peripheryTaaCenterScale","peripheryTaaOuterScale","centerHorizontalScale","leftEyeOffsetX","leftEyeOffsetY","rightEyeOffsetX","rightEyeOffsetY","fovOnlyBlendFeather","peripheryTaaBlendFeather","neuralFinalLdrBlendFeather","reconstructionGuardBandPixels","maskVisualization"]},"anyOf":[{"required":["foveatedEnabled"]},{"required":["peripheryTaaEnabled"]},{"required":["centerOrigin"]},{"required":["horizontalAnchor"]},{"required":["fovOnlyCenterScale"]},{"required":["peripheryTaaCenterScale"]},{"required":["peripheryTaaOuterScale"]},{"required":["centerHorizontalScale"]},{"required":["leftEyeOffsetX"]},{"required":["leftEyeOffsetY"]},{"required":["rightEyeOffsetX"]},{"required":["rightEyeOffsetY"]},{"required":["fovOnlyBlendFeather"]},{"required":["peripheryTaaBlendFeather"]},{"required":["neuralFinalLdrBlendFeather"]},{"required":["reconstructionGuardBandPixels"]},{"required":["maskVisualization"]}]}},
       {"if":{"properties":{"action":{"const":"foveation_cycle"}},"required":["action"]},"then":{"required":["control"],"propertyNames":{"enum":["action","control","valueIndex"]}}},
       {"if":{"properties":{"action":{"const":"foveation_cycle"},"control":{"enum":["master","periphery_taa","center_origin","horizontal_anchor","center_horizontal_scale","mask_visualization"]}},"required":["action","control"]},"then":{"properties":{"valueIndex":{"maximum":1}}}}

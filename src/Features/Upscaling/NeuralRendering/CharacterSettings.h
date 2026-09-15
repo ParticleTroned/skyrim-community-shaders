@@ -121,6 +121,8 @@ namespace NeuralRendering
 			CharacterPolicy::kDefaultAdaptiveRoiSelection;
 		/** Experimental independent Feature 18 region handles; deliberately opt-in. */
 		bool multiRoi = false;
+		/** Session-only split cost heuristic; coverage and disjointness remain mandatory. */
+		bool multiRoiSavingsGate = true;
 		std::uint32_t minimumFacePixelSize =
 			CharacterPolicy::kDefaultMinimumFacePixelSize;
 		float roiMargin = CharacterPolicy::kDefaultRoiMargin;

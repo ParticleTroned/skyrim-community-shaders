@@ -212,6 +212,77 @@ namespace
 			context_->End(sample.query.Get());
 		}
 
+		void EarlyCategoryBoundsCases(const std::filesystem::path& shaderDirectory)
+		{
+			ComPtr<ID3DBlob> code, errors;
+			const D3D_SHADER_MACRO defines[]{ { "EARLY_CATEGORY_BOUNDS", "1" }, { nullptr, nullptr } };
+			const auto compiled = D3DCompileFromFile((shaderDirectory / "DLSS5CharacterMaskBoundsCS.hlsl").c_str(), defines,
+				D3D_COMPILE_STANDARD_FILE_INCLUDE, "main", "cs_5_0",
+				D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+				0, &code, &errors);
+			if (FAILED(compiled) && errors)
+				throw std::runtime_error(std::string(static_cast<const char*>(errors->GetBufferPointer()), errors->GetBufferSize()));
+			Check(compiled, "Compile early category bounds");
+			ComPtr<ID3D11ComputeShader> shader;
+			Check(device_->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &shader), "Create early bounds shader");
+			ComPtr<ID3D11ShaderReflection> reflection;
+			Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(&reflection)), "Reflect early bounds");
+			D3D11_SHADER_BUFFER_DESC reflected{};
+			Check(reflection->GetConstantBufferByName("CharacterMaskBoundsCB")->GetDesc(&reflected), "Reflect early bounds CB");
+			Require(reflected.Size == 48u, "Early bounds constants must match production ABI");
+			constexpr std::uint32_t width = 63, height = 49;
+			const std::array<Bounds, 2> valid{ Bounds{ 5, 7, 50, 35 }, Bounds{ 0, 0, width, height } };
+			const std::array<std::uint16_t, 6> codes{ 0, 21845, 43690, 65535, 257, 32768 };
+			std::vector<std::array<std::uint16_t, 2>> pixels(width * height * 2u);
+			for (std::uint32_t y = 0; y < height; ++y)
+				for (std::uint32_t x = 0; x < width * 2u; ++x)
+					pixels[y * width * 2u + x] = { 12345, codes[(x * 3u + y * 5u) % codes.size()] };
+			auto source = MakeTexture(width * 2u, height, NeuralRendering::kCharacterCategoryFormat, pixels);
+			for (std::uint32_t selection = 0; selection < 8; ++selection) {
+				auto sample = CreateSample("early stereo bounds", width, height * 2u, std::vector<std::uint8_t>(width * height * 2u));
+				std::vector<Bounds> expected;
+				for (std::uint32_t eye = 0; eye < 2; ++eye) {
+					std::vector<std::uint8_t> mask(width * height);
+					for (std::uint32_t y = 0; y < height; ++y)
+						for (std::uint32_t x = 0; x < width; ++x) {
+							const auto codeIndex = ((x + eye * width) * 3u + y * 5u) % codes.size();
+							const bool inside = x >= valid[eye][0] && y >= valid[eye][1] &&
+							                    x < valid[eye][0] + valid[eye][2] && y < valid[eye][1] + valid[eye][3];
+							mask[y * width + x] = inside && codeIndex >= 1 && codeIndex <= 3 && (selection & (1u << (codeIndex - 1u))) ? 1 : 0;
+						}
+					const auto eyeBounds = Reference(width, height, mask);
+					expected.insert(expected.end(), eyeBounds.begin(), eyeBounds.end());
+				}
+				Require(expected.size() == sample.expected.size(), "Early stereo staging extent");
+				const std::array<Bounds, 3> constants{ Bounds{ width, height, (width + 31u) / 32u, selection << 1u }, valid[0], valid[1] };
+				D3D11_BUFFER_DESC desc{};
+				desc.ByteWidth = sizeof(constants);
+				desc.Usage = D3D11_USAGE_IMMUTABLE;
+				desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+				const D3D11_SUBRESOURCE_DATA data{ constants.data(), 0, 0 };
+				ComPtr<ID3D11Buffer> cb;
+				Check(device_->CreateBuffer(&desc, &data, &cb), "Create early stereo CB");
+				context_->CSSetShader(shader.Get(), nullptr, 0);
+				context_->CSSetConstantBuffers(0, 1, cb.GetAddressOf());
+				context_->CSSetShaderResources(0, 1, source.srv.GetAddressOf());
+				context_->CSSetUnorderedAccessViews(0, 1, sample.outputView.GetAddressOf(), nullptr);
+				context_->Dispatch((width + 31u) / 32u, (height + 31u) / 32u, 2);
+				ID3D11UnorderedAccessView* empty = nullptr;
+				context_->CSSetUnorderedAccessViews(0, 1, &empty, nullptr);
+				context_->CopyResource(sample.staging.Get(), sample.output.Get());
+				context_->End(sample.query.Get());
+				context_->Flush();
+				std::vector<Bounds> actual(expected.size());
+				Require(Read(sample, actual, Clock::now() + std::chrono::seconds(2)).Ready(), "Early category readback");
+				Require(actual == expected, "Early category bounds must honor both eye strides, category toggles, exclusions and capture validity");
+				Require(NeuralRendering::PollCharacterMaskBounds(context_.Get(), sample.query.Get(), sample.staging.Get(),
+							std::as_writable_bytes(std::span(actual)))
+							.Ready(),
+					"Completed early result must support nonblocking readback");
+				++cases_;
+			}
+		}
+
 		void ConnectedPipelineCases(const std::filesystem::path& shaderDirectory)
 		{
 			// Reflected below against the production shader. Do not silently run
@@ -569,6 +640,14 @@ namespace
 				QueueGate gate;
 				gateQueue(gate);
 				Queue(right);
+				context_->Flush();
+				std::vector<Bounds> untouched(right.expected.size(), Bounds{ 81, 82, 83, 84 });
+				const auto beforePoll = untouched;
+				const auto pendingPoll = NeuralRendering::PollCharacterMaskBounds(context_.Get(), right.query.Get(), right.staging.Get(),
+					std::as_writable_bytes(std::span(untouched)));
+				Require(pendingPoll.status == CharacterMaskReadbackStatus::Pending && untouched == beforePoll,
+					"Nonblocking pending result must preserve destination while GPU is gated");
+				Require(pendingPoll.waitMs < 20.0, "Nonblocking poll must not consume the synchronous 50ms budget");
 				Check(context4->Signal(completionFence.Get(), 1), "Signal completion after both eye copies");
 				context_->Flush();
 				const NeuralRendering::CharacterMaskReadbackCompletion completion{ completionFence.Get(), 1 };
@@ -730,6 +809,7 @@ int wmain(int argc, wchar_t** argv)
 		Require(argc == 2, "Expected production shader directory");
 		Harness gpu(argv[1]);
 		gpu.ReadbackCases();
+		gpu.EarlyCategoryBoundsCases(argv[1]);
 		gpu.ConnectedPipelineCases(argv[1]);
 		gpu.Case("minimum positive R8 pixel", 1, 1, { 1 });
 		std::vector<std::uint8_t> tiny(33 * 17);

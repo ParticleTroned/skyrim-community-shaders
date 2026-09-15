@@ -31,6 +31,39 @@ namespace NeuralRendering
 		bool operator==(const CharacterMultiRoiActor&) const = default;
 	};
 
+	/** Area accounting uses padded provider rectangles, never semantic mask occupancy. */
+	struct CharacterMultiRoiCost
+	{
+		std::uint64_t singlePixels = 0;
+		std::uint64_t splitPixels = 0;
+		std::uint64_t savedPixels = 0;
+		std::uint64_t additionalPixels = 0;
+		std::uint64_t requiredRelativePixels = 0;
+		bool valid = false;
+		bool positiveSavings = false;
+		bool meetsHeuristic = false;
+		bool operator==(const CharacterMultiRoiCost&) const = default;
+	};
+
+	/** Current-source candidate evidence survives a single-region fallback. */
+	struct CharacterMultiRoiDiagnostics
+	{
+		ComputeSubrect singleRegion{};
+		std::array<ComputeSubrect, 2> candidateRegions{};
+		CharacterMultiRoiCost cost{};
+		std::uint32_t candidatesConsidered = 0;
+		std::uint32_t overlappingCandidates = 0;
+		std::uint32_t coverageRejectedCandidates = 0;
+		std::uint32_t savingsRejectedCandidates = 0;
+		bool savingsGateEnabled = true;
+		bool candidateAvailable = false;
+		bool candidateOverlaps = false;
+		bool candidateCoversEligibility = false;
+		bool stabilizedCandidate = false;
+		bool retaining = false;
+		bool operator==(const CharacterMultiRoiDiagnostics&) const = default;
+	};
+
 	enum class CharacterMultiRoiReason : std::uint32_t
 	{
 		Disabled,
@@ -90,6 +123,9 @@ namespace NeuralRendering
 		std::vector<CharacterMultiRoiActor> cachedActors;
 		std::vector<CharacterRect> cachedEligibility;
 		CharacterComputeRegionPlan cachedPlan{};
+		ComputeSubrect cachedSingleRegion{};
+		bool cachedSavingsGate = true;
+		CharacterMultiRoiDiagnostics diagnostics{};
 		CharacterMultiRoiReason cachedReason = CharacterMultiRoiReason::TooFewActors;
 		std::uint32_t frame = 0;
 		std::uint32_t width = 0;
@@ -150,23 +186,36 @@ namespace NeuralRendering
 			return true;
 		}
 
-		/** Charges an extra-invocation area reserve; this is not measured GPU break-even. */
-		[[nodiscard]] inline bool WorthSplitting(
+		/** Exact integer accounting; the reserve is a heuristic, not measured GPU cost. */
+		[[nodiscard]] inline CharacterMultiRoiCost CalculateSplitCost(
 			const std::array<ComputeSubrect, 2>& a_regions,
 			std::uint64_t a_singleArea, bool a_retaining) noexcept
 		{
+			CharacterMultiRoiCost cost{};
+			cost.singlePixels = a_singleArea;
+			const auto divisor = a_retaining ? 5u : 4u;
+			cost.requiredRelativePixels = a_singleArea / divisor + (a_singleArea % divisor != 0);
 			const auto firstArea = a_regions[0].Area();
 			const auto secondArea = a_regions[1].Area();
-			if (firstArea > a_singleArea || secondArea > a_singleArea - firstArea)
-				return false;
-			const auto area = firstArea + secondArea;
-			// Pay the extra invocation reserve before requiring 25% net area
-			// savings (20% for retention). Subtraction avoids overflow at large sizes.
-			const auto saved = a_singleArea - area;
-			const auto divisor = a_retaining ? 5u : 4u;
-			const auto requiredSaving = a_singleArea / divisor + (a_singleArea % divisor != 0);
-			return saved >= kExtraEvaluationPixelReserve &&
-			       saved - kExtraEvaluationPixelReserve >= requiredSaving;
+			if (!a_singleArea || !firstArea || !secondArea || secondArea > UINT64_MAX - firstArea)
+				return cost;
+			cost.valid = true;
+			cost.splitPixels = firstArea + secondArea;
+			cost.positiveSavings = cost.splitPixels < a_singleArea;
+			cost.savedPixels = cost.positiveSavings ? a_singleArea - cost.splitPixels : 0;
+			cost.additionalPixels = cost.splitPixels > a_singleArea ? cost.splitPixels - a_singleArea : 0;
+			cost.meetsHeuristic = cost.savedPixels >= kExtraEvaluationPixelReserve &&
+			                      cost.savedPixels - kExtraEvaluationPixelReserve >= cost.requiredRelativePixels;
+			return cost;
+		}
+
+		/** Disabling the heuristic still requires a strictly smaller total pixel area. */
+		[[nodiscard]] inline bool WorthSplitting(
+			const std::array<ComputeSubrect, 2>& a_regions,
+			std::uint64_t a_singleArea, bool a_retaining, bool a_savingsGate = true) noexcept
+		{
+			const auto cost = CalculateSplitCost(a_regions, a_singleArea, a_retaining);
+			return cost.valid && cost.positiveSavings && (!a_savingsGate || cost.meetsHeuristic);
 		}
 	}
 
@@ -176,18 +225,22 @@ namespace NeuralRendering
 	 * failure falls back to the legacy enclosure without dropping characters.
 	 * Persistent ownership is preferred over a marginally better spatial split.
 	 * A new ownership episode gets a new key; repeated source frames are idempotent.
+	 * Supply the actual single-region fallback for cost accounting; an omitted
+	 * rectangle derives a fresh padded enclosure from current eligibility.
 	 */
 	[[nodiscard]] inline CharacterComputeRegionPlan ResolveCharacterMultiRoi(
 		std::span<const CharacterMultiRoiActor> a_actors,
 		std::span<const CharacterRect> a_eligibility,
 		std::uint32_t a_width, std::uint32_t a_height, std::uint32_t a_sourceFrame,
-		StableCharacterMultiRoi& a_state, CharacterMultiRoiReason& a_reason)
+		StableCharacterMultiRoi& a_state, CharacterMultiRoiReason& a_reason,
+		bool a_savingsGate = true, ComputeSubrect a_singleRegion = {})
 	{
 		using namespace CharacterMultiRoiDetail;
 		// Capacity overflow retains ALL actors through the legacy enclosure. This
 		// bounds planner allocations/search work independently of material draws.
 		if (a_actors.size() > kMaximumActors) {
 			a_state = {};
+			a_state.diagnostics.savingsGateEnabled = a_savingsGate;
 			a_reason = CharacterMultiRoiReason::ActorCapacity;
 			return {};
 		}
@@ -196,6 +249,7 @@ namespace NeuralRendering
 		if (a_state.width != a_width || a_state.height != a_height)
 			a_state = {};
 		if (a_state.cacheValid && a_state.frame == a_sourceFrame &&
+			a_state.cachedSingleRegion == a_singleRegion && a_state.cachedSavingsGate == a_savingsGate &&
 			a_state.cachedActors == actors &&
 			std::ranges::equal(a_state.cachedEligibility, a_eligibility)) {
 			a_reason = a_state.cachedReason;
@@ -209,6 +263,11 @@ namespace NeuralRendering
 		a_state.width = a_width;
 		a_state.height = a_height;
 		a_state.cachedActors = actors;
+		a_state.cachedSingleRegion = a_singleRegion;
+		a_state.cachedSavingsGate = a_savingsGate;
+		a_state.diagnostics = {};
+		auto& diagnostics = a_state.diagnostics;
+		diagnostics.savingsGateEnabled = a_savingsGate;
 		a_state.cachedEligibility.assign(a_eligibility.begin(), a_eligibility.end());
 		a_state.cacheValid = true;
 		const auto fallback = [&](CharacterMultiRoiReason a_failure) {
@@ -230,9 +289,40 @@ namespace NeuralRendering
 		}
 		if (actors.size() < 2)
 			return fallback(CharacterMultiRoiReason::TooFewActors);
-		const auto single = BuildCharacterProviderComputeSubrect(Required(all, a_width, a_height), a_width, a_height);
-		if (!single.Fits(a_width, a_height))
+		const auto required = BuildCharacterComputeSubrect(a_eligibility, a_width, a_height);
+		const auto single = a_singleRegion == ComputeSubrect{} ?
+		                        BuildCharacterProviderComputeSubrect(required, a_width, a_height) :
+		                        a_singleRegion;
+		if (!single.Fits(a_width, a_height) || !ContainsComputeSubrect(single, required) ||
+			!ContainsComputeSubrect(single, Required(all, a_width, a_height)))
 			return fallback(CharacterMultiRoiReason::InvalidInput);
+		diagnostics.singleRegion = single;
+		int bestDiagnosticRank = -1;
+		const auto recordCandidate = [&](const std::array<ComputeSubrect, 2>& regions,
+										 bool retaining, bool stabilized) {
+			const bool overlaps = CharacterComputeRegionsOverlap(regions[0], regions[1]);
+			const bool covers = CoversEligibility(regions, a_eligibility, a_width, a_height);
+			const auto cost = CalculateSplitCost(regions, single.Area(), retaining);
+			const auto rank = overlaps ? 0 : covers ? 2 :
+			                                          1;
+			++diagnostics.candidatesConsidered;
+			diagnostics.overlappingCandidates += overlaps;
+			diagnostics.coverageRejectedCandidates += !overlaps && !covers;
+			diagnostics.savingsRejectedCandidates += !overlaps && covers &&
+			                                         !WorthSplitting(regions, single.Area(), retaining, a_savingsGate);
+			if (!stabilized && (rank < bestDiagnosticRank ||
+								   (rank == bestDiagnosticRank && diagnostics.cost.valid &&
+									   (!cost.valid || cost.splitPixels >= diagnostics.cost.splitPixels))))
+				return;
+			bestDiagnosticRank = rank;
+			diagnostics.candidateAvailable = true;
+			diagnostics.candidateRegions = regions;
+			diagnostics.candidateOverlaps = overlaps;
+			diagnostics.candidateCoversEligibility = covers;
+			diagnostics.stabilizedCandidate = stabilized;
+			diagnostics.retaining = retaining;
+			diagnostics.cost = cost;
+		};
 
 		struct Candidate
 		{
@@ -264,8 +354,9 @@ namespace NeuralRendering
 					BuildCharacterProviderComputeSubrect(Required(selected.bounds[0], a_width, a_height), a_width, a_height),
 					BuildCharacterProviderComputeSubrect(Required(selected.bounds[1], a_width, a_height), a_width, a_height),
 				};
+				recordCandidate(padded, true, false);
 				retaining = !CharacterComputeRegionsOverlap(padded[0], padded[1]) &&
-				            WorthSplitting(padded, single.Area(), true) &&
+				            WorthSplitting(padded, single.Area(), true, a_savingsGate) &&
 				            CoversEligibility(padded, a_eligibility, a_width, a_height);
 			}
 		}
@@ -273,7 +364,6 @@ namespace NeuralRendering
 			std::uint64_t bestArea = UINT64_MAX;
 			std::uint32_t bestAxis = 0;
 			std::size_t bestCut = 0;
-			CharacterMultiRoiReason failure = CharacterMultiRoiReason::NoDisjointSplit;
 			const auto spatialOrder = [](std::uint32_t axis, const auto& left, const auto& right) {
 				const auto center = [axis](const auto& actor) {
 					return axis == 0 ? static_cast<std::uint64_t>(actor.rect.minX) + actor.rect.maxX :
@@ -297,14 +387,11 @@ namespace NeuralRendering
 						BuildCharacterProviderComputeSubrect(Required(prefix, a_width, a_height), a_width, a_height),
 						BuildCharacterProviderComputeSubrect(Required(suffix[cut], a_width, a_height), a_width, a_height),
 					};
+					recordCandidate(padded, false, false);
 					if (CharacterComputeRegionsOverlap(padded[0], padded[1]))
 						continue;
-					if (!WorthSplitting(padded, single.Area(), false)) {
-						failure = CharacterMultiRoiReason::InsufficientSavings;
-						continue;
-					}
-					if (!CoversEligibility(padded, a_eligibility, a_width, a_height)) {
-						failure = CharacterMultiRoiReason::EligibilityBridge;
+					if (!CoversEligibility(padded, a_eligibility, a_width, a_height) ||
+						!WorthSplitting(padded, single.Area(), false, a_savingsGate)) {
 						continue;
 					}
 					const auto area = padded[0].Area() + padded[1].Area();
@@ -318,7 +405,9 @@ namespace NeuralRendering
 				}
 			}
 			if (bestArea == UINT64_MAX)
-				return fallback(failure);
+				return fallback(diagnostics.savingsRejectedCandidates  ? CharacterMultiRoiReason::InsufficientSavings :
+								diagnostics.coverageRejectedCandidates ? CharacterMultiRoiReason::EligibilityBridge :
+																		 CharacterMultiRoiReason::NoDisjointSplit);
 			auto ordered = actors;
 			std::ranges::sort(ordered, [&](const auto& left, const auto& right) {
 				return spatialOrder(bestAxis, left, right);
@@ -353,9 +442,10 @@ namespace NeuralRendering
 			if (!result.regions[index].Fits(a_width, a_height))
 				return fallback(CharacterMultiRoiReason::InvalidInput);
 		}
+		recordCandidate(result.regions, retaining, true);
 		if (CharacterComputeRegionsOverlap(result.regions[0], result.regions[1]))
 			return fallback(CharacterMultiRoiReason::StableRegionsOverlap);
-		if (!WorthSplitting(result.regions, single.Area(), retaining))
+		if (!WorthSplitting(result.regions, single.Area(), retaining, a_savingsGate))
 			return fallback(CharacterMultiRoiReason::InsufficientSavings);
 		if (!CoversEligibility(result.regions, a_eligibility, a_width, a_height))
 			return fallback(CharacterMultiRoiReason::EligibilityBridge);

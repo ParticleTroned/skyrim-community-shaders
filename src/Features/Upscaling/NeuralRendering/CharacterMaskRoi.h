@@ -33,6 +33,7 @@ namespace NeuralRendering
 		ComputeSubrect computeSubrect{};
 		CharacterComputeRegionPlan computeRegions{};
 		CharacterMultiRoiReason multiRoiReason = CharacterMultiRoiReason::InvalidInput;
+		CharacterMultiRoiDiagnostics diagnostics{};
 		std::uint32_t occupiedTiles = 0;
 		/** 0 = X, 1 = Y; only meaningful for a two-region result. */
 		std::uint32_t splitAxis = 0;
@@ -51,6 +52,8 @@ namespace NeuralRendering
 		std::uint32_t height = 0;
 		std::uint32_t frame = 0;
 		bool cacheValid = false;
+		bool cachedSavingsGate = true;
+		bool cachedAllowSplit = true;
 	};
 
 	namespace CharacterMaskRoiDetail
@@ -85,7 +88,7 @@ namespace NeuralRendering
 
 	/**
 	 * Accept only a fresh, completed reduction of the final quantized selection
-	 * mask. The caller owns freshness/synchronization and must never call this
+	 * mask or a proven current-source superset of its complete sampling support. The caller owns freshness/synchronization and must never call this
 	 * with stale tiles to justify excluding current-frame pixels. Timeouts should
 	 * retain this state but use the CPU fallback, not cachedResult's rectangles.
 	 * CPU eligibility rectangles are intentionally absent: they are conservative
@@ -95,7 +98,7 @@ namespace NeuralRendering
 		std::span<const CharacterMaskRoiTileBounds> a_tiles,
 		std::span<const std::uint64_t> a_actorLifetimeIds,
 		std::uint32_t a_width, std::uint32_t a_height, std::uint32_t a_sourceFrame,
-		StableCharacterMaskRoi& a_state)
+		StableCharacterMaskRoi& a_state, bool a_savingsGate = true, bool a_allowSplit = true)
 	{
 		using namespace CharacterMaskRoiDetail;
 		const auto invalid = [&]() {
@@ -118,6 +121,7 @@ namespace NeuralRendering
 		if (a_state.width != a_width || a_state.height != a_height)
 			a_state = {};
 		if (a_state.cacheValid && a_state.frame == a_sourceFrame &&
+			a_state.cachedSavingsGate == a_savingsGate && a_state.cachedAllowSplit == a_allowSplit &&
 			a_state.cachedOwners == owners && std::ranges::equal(a_state.cachedTiles, a_tiles))
 			return a_state.cachedResult;
 		// A changed same-frame policy must not age a history repeatedly. The
@@ -151,6 +155,7 @@ namespace NeuralRendering
 			occupied.push_back(rect);
 		}
 		CharacterMaskRoiResult result;
+		result.diagnostics.savingsGateEnabled = a_savingsGate;
 		result.valid = true;
 		result.empty = occupied.empty();
 		result.occupiedTiles = static_cast<std::uint32_t>(occupied.size());
@@ -164,8 +169,9 @@ namespace NeuralRendering
 				result.requiredSubrect, a_width, a_height, a_state.single);
 			if (!result.computeSubrect.Fits(a_width, a_height))
 				return invalid();
-			if (owners.size() >= 2) {
-				const auto freshSingle = BuildCharacterProviderComputeSubrect(result.requiredSubrect, a_width, a_height);
+			result.diagnostics.singleRegion = result.computeSubrect;
+			if (a_allowSplit && owners.size() >= 2) {
+				const auto singleFallback = result.computeSubrect;
 				Candidate best;
 				Candidate retained;
 				result.multiRoiReason = CharacterMultiRoiReason::NoDisjointSplit;
@@ -193,12 +199,28 @@ namespace NeuralRendering
 							BuildCharacterProviderComputeSubrect(padded[0], a_width, a_height),
 							BuildCharacterProviderComputeSubrect(padded[1], a_width, a_height),
 						};
-						if (CharacterComputeRegionsOverlap(provider[0], provider[1]))
-							continue;
 						const bool retaining = a_state.cachedResult.computeRegions.count == 2 &&
 						                       a_state.cachedResult.splitAxis == axis && a_state.cachedResult.splitTile == cut &&
 						                       a_state.cachedOwners == owners;
-						if (!CharacterMultiRoiDetail::WorthSplitting(provider, freshSingle.Area(), retaining)) {
+						const bool overlaps = CharacterComputeRegionsOverlap(provider[0], provider[1]);
+						const auto cost = CharacterMultiRoiDetail::CalculateSplitCost(provider, singleFallback.Area(), retaining);
+						auto& diagnostics = result.diagnostics;
+						++diagnostics.candidatesConsidered;
+						diagnostics.overlappingCandidates += overlaps;
+						const bool worthwhile = CharacterMultiRoiDetail::WorthSplitting(provider, singleFallback.Area(), retaining, a_savingsGate);
+						diagnostics.savingsRejectedCandidates += !overlaps && !worthwhile;
+						if (!diagnostics.candidateAvailable || (!overlaps && diagnostics.candidateOverlaps) ||
+							(overlaps == diagnostics.candidateOverlaps && cost.valid && cost.splitPixels < diagnostics.cost.splitPixels)) {
+							diagnostics.candidateAvailable = true;
+							diagnostics.candidateRegions = provider;
+							diagnostics.candidateOverlaps = overlaps;
+							diagnostics.candidateCoversEligibility = true;
+							diagnostics.retaining = retaining;
+							diagnostics.cost = cost;
+						}
+						if (overlaps)
+							continue;
+						if (!worthwhile) {
 							result.multiRoiReason = CharacterMultiRoiReason::InsufficientSavings;
 							continue;
 						}
@@ -218,7 +240,9 @@ namespace NeuralRendering
 						CharacterMultiRoiActor{ identities[1], best.bounds[1] },
 					};
 					result.computeRegions = ResolveCharacterMultiRoi(actors, occupied,
-						a_width, a_height, a_sourceFrame, a_state.multi, result.multiRoiReason);
+						a_width, a_height, a_sourceFrame, a_state.multi, result.multiRoiReason,
+						a_savingsGate, singleFallback);
+					result.diagnostics = a_state.multi.diagnostics;
 					if (result.computeRegions.count == 2) {
 						result.computeSubrect = UnionCharacterComputeSubrect(
 							result.computeRegions.regions[0], result.computeRegions.regions[1]);
@@ -233,6 +257,8 @@ namespace NeuralRendering
 			}
 		}
 		a_state.cachedTiles.assign(a_tiles.begin(), a_tiles.end());
+		a_state.cachedSavingsGate = a_savingsGate;
+		a_state.cachedAllowSplit = a_allowSplit;
 		a_state.cachedOwners = std::move(owners);
 		a_state.cachedResult = result;
 		a_state.width = a_width;

@@ -27,6 +27,7 @@ namespace
 		float neuralCharacterMaximumDistanceMeters = CharacterPolicy::kDefaultMaximumDistanceMeters;
 		bool neuralCharacterAdaptiveRoiSelectionEnabled = CharacterPolicy::kDefaultAdaptiveRoiSelection;
 		bool neuralCharacterMultiRoiEnabled = false;
+		bool neuralCharacterMultiRoiSavingsGateEnabled = true;
 		std::uint32_t neuralCharacterMinimumFacePixelSize = CharacterPolicy::kDefaultMinimumFacePixelSize;
 		float neuralCharacterRoiMargin = CharacterPolicy::kDefaultRoiMargin;
 		std::uint32_t neuralCharacterRoiHoldFrames = CharacterPolicy::kDefaultRoiHoldFrames;
@@ -63,7 +64,8 @@ namespace
 			"neuralCharacterSkinStrength": 0.5, "neuralCharacterHairStrength": 0.75,
 			"neuralCharacterMaximumDistanceMeters": 15.5,
 			"neuralCharacterAdaptiveRoiSelectionEnabled": true,
-			"neuralCharacterMultiRoiEnabled": true, "neuralCharacterMinimumFacePixelSize": 128,
+			"neuralCharacterMultiRoiEnabled": true, "neuralCharacterMultiRoiSavingsGateEnabled": false,
+			"neuralCharacterMinimumFacePixelSize": 128,
 			"neuralCharacterRoiMargin": 0.5, "neuralCharacterRoiHoldFrames": 12,
 			"neuralCharacterDepthAwareFeatherEnabled": true,
 			"neuralCharacterVisibilityDepthTestEnabled": false,
@@ -135,6 +137,8 @@ namespace
 				rejects(json{ { "neuralCharacterRenderingEnabled", true }, { key, wrong } });
 		}
 		rejects(json{ { "neuralCharacterRenderingEnabled", 1 } });
+		for (const auto& wrong : std::array<json, 5>{ 0, 1, "false", nullptr, json::array() })
+			rejects(json{ { "neuralCharacterRenderingEnabled", true }, { "neuralCharacterMultiRoiSavingsGateEnabled", wrong } });
 		rejects(json{ { "neuralCharacterRenderingEnabled", true }, { "neuralCharacterFaceStrength", "0.5" } });
 		rejects(json{ { "neuralCharacterRenderingEnabled", true }, { "neuralCharacterHairStrength", false } });
 		rejects(json{ { "neuralCharacterRenderingEnabled", true }, { "neuralCharacterVisualIsolationEnabled", 0 } });

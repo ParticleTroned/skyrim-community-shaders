@@ -237,10 +237,27 @@ the experiment off performs the bounded backend retirement/reset even when the
 master or Character NR switch is already off. This can briefly interrupt NR
 when changing the option; it is not tied to ordinary menu open/close events.
 
-The planner charges a 65,536-pixel reserve for the additional invocation, then
-requires net savings of at least 25% of a fresh single-region enclosure; it
-retains the split down to 20% net savings to reduce threshold oscillation.
-The reserve is additive, so a marginal area saving alone cannot admit a split.
+The default-on **Multi-ROI Savings Gate** charges a 65,536-pixel reserve
+per extra invocation per eye, plus `ceil(singlePixels / 4)` on entry or
+`ceil(singlePixels / 5)` to retain a split. `singlePixels` is the actual
+padded, stabilized single-region fallback for the same source frame;
+`splitPixels` sums the two padded regions, including their retained history
+envelopes when applicable. Savings are `singlePixels - splitPixels`.
+The reserve is additive, not a maximum or a percentage of the full screen.
+
+Disable the gate to try any strictly smaller split. Coverage, disjointness,
+valid dimensions, bounded actor counts and independent histories remain
+mandatory. No GPU mask readback is reintroduced. The gate is session only,
+defaults on when settings load, and is exposed through DevBench:
+
+```json
+{ "action": "nr_configure", "experimentalMultiRoiSavingsGate": false }
+```
+
+An active policy change invalidates prepared masks and temporal history without
+retiring a healthy backend. The current-frame planner cache includes both the
+gate and the fallback rectangle, so a same-frame reprepare cannot reuse an
+outdated decision. This setting does not enable Multi-ROI itself.
 This is a conservative area cost heuristic,
 **not measured GPU break-even**. Additional weight heaps, scratch, padding, input preparation and
 evaluation overhead may outweigh the skipped gap. Qualification must compare
@@ -814,53 +831,79 @@ called visually correct:
 5. CSX composite response to the `R8_UNORM` `0..1` selection mask;
 6. GPU cost versus evaluation dimensions, mask coverage, and actor count.
 
-## Nonblocking geometry ROI planning
+## Early GPU category bounds
 
-Experimental Multi-ROI builds up to two independent regions per eye from the
-current source frame's projected geometry. Every actor and every compacted
-eligibility rectangle must fit completely within one padded region. Uncertain
-projection, overlapping regions, a bridge between clusters, or insufficient
-net savings retains the conservative single enclosure. New actors and category
-expansion enter the plan immediately; delayed GPU evidence cannot narrow it.
-Two visible characters therefore do not guarantee two regions per eye.
+Character ROI planning reduces enabled face/skin/hair category tags on the GPU
+at the existing post-terrain capture hook, before decals and later rendering.
+One reduction produces stereo eye-local 32x32 tile enclosures, not an image
+readback. Only the current capture validity rectangles are read. Background,
+explicitly excluded materials and disabled categories produce no bounds.
 
-The render path issues no mask-bounds reduction, staging copy, completion fence,
-flush, or GPU-readiness polling. Exact GPU R8 mask authoring and compositing
-remain active. Optional coverage diagnostics retain their existing asynchronous
-ring and single nonblocking polls; they never select inference rectangles or
-suppress evaluation. Only current CPU-proven empty eyes bypass Feature 18.
-Retained-world menus continue to use the explicitly identified immutable source
-frame. Stereo finalization validates source, policy, generation, dimensions and
-depth identity for the entire batch before publishing either result.
+A three-entry staging ring retains capture serial, source frame, dimensions
+and category policy. Pending entries are never overwritten or waited upon.
+At mask preparation, one `DONOTFLUSH` query and at most one `DO_NOT_WAIT` map
+attempt to consume the matching source result. The readback helper uses an
+already-expired deadline, so its retry/yield branch cannot execute. A completed
+stereo buffer is copied once and shared by both eye preparations. No explicit
+flush, GPU completion fence, sleep or retry loop is introduced into rendering.
 
-This removes a measured synchronization cost at the expense of potentially
-larger rectangles than a current GPU-mask reduction could produce. The previous
-build 6b23081aa recorded mean summed per-eye waits of 10.169 ms for faces and
-11.636 ms for face/skin/hair in a fresh-load null-driver comparison. Those are
-old-build observations, not a prediction of frame-time savings: geometry can
-increase inference area or merge regions. See the implementation report
-`nr-nonblocking-roi-20260915.md` for evidence and the required live comparison.
-The standalone mask-bounds shader/readback tests remain reference diagnostics;
-the game does not invoke that path. This does not extend character NR to the
-unsupported flat SE/AE category/presentation routes described above.
+Ready category bounds are mapped through the actual input crop and output
+extent, with conservative guards for jitter, bilinear reconstruction, nearest
+category sampling and depth-aware feathering. Later eligibility, visibility,
+distance and depth rejection only remove coverage from this superset. Exact
+R8 mask authoring and output compositing remain authoritative. New characters
+and category changes require their current-source evidence; old frame bounds
+never justify dropping current pixels.
 
-DevBench keeps existing field names for compatibility:
+Both single and experimental multi-ROI use the ready mask-derived enclosure.
+Multi-ROI can split its disjoint support through independent Feature 18
+instances. Geometry bounds do not constrain a ready mask-derived split.
+Geometry remains only for existing actor admission/capture validity and the
+conservative fallback when early bounds are unavailable, pending, invalid or
+empty. Diagnostic/forced-mask modes retain their existing path. Only
+CPU-proven empty eyes bypass evaluation in this implementation.
 
--   `maskRoiStatus`: `cpu_projected_split`, `cpu_projected_single`,
-    `cpu_proven_empty`, or `disabled`; `multiRoiReason` explains the decision.
--   `maskRoiPlanningCpuMs`: CPU geometry planning time, without GPU waiting.
--   `maskRoiCurrentFrame` and `maskRoiGpuProvenEmpty`: false. They describe
-    current-mask GPU evidence, which this planner does not collect.
--   `maskRoiReadbackWaitMs`, `maskRoiReadbackFenceValue`, `maskRoiOccupiedTiles`
-    and the three readback counters: zero; `maskRoiRequiredSubrect` is invalid.
--   Legacy failure fields remain empty/zero with a null failure frame.
--   The compute-ROI capability reports `planningRequiresGpuReadback=false`,
-    its geometry source, and the extra-invocation pixel reserve. The reserve is
-    a heuristic, not an estimated number of GPU microseconds.
+The savings gate compares split pixels against the actual stabilized single
+mask-derived enclosure. Geometry fallback uses its actual stabilized enclosure.
+Disabling `experimentalMultiRoiSavingsGate` permits any strictly smaller split;
+it does not waive coverage, disjointness or history ownership. Matching
+dimensions, settings, source identity and the complete stereo preparation
+contract remain mandatory. No per-frame delay is added to obtain a split.
 
-For a split, `computeSubrectPixels` describes the outer enclosure, while
-`multiRoiPixels` and `multiRoiCoveragePercent` sum the evaluated rectangles.
-Mask occupancy is separate from inference area. Compare complete-frame time,
-aggregate Feature 18 GPU time, region count, VRAM and temporal image quality
-with the same scene/settings. No performance or headset-presentation pass is
-implied by compilation or standalone policy/GPU tests.
+`runtime.earlyMaskBounds` retains cumulative counters independently of transient
+eye snapshots: `queued`, `ringBusy`, `polls`, `pending`, `ready`, `used`,
+`geometryFallbacks`, and `failures`. `ready` counts stereo buffers; `used` and
+`geometryFallbacks` count eye preparations. `lastQueuedFrame`,
+`lastUsedSourceFrame`, `readbackBytes`, `lastPollCpuMs` and failure details
+support live attribution. Driver-call CPU time is distinct from an intentional
+readiness wait, which remains zero.
+
+Per-eye telemetry:
+
+-   `maskRoiStatus`: `gpu_source_split` or `gpu_source_single` on accepted
+    current-source evidence. `early_bounds_unavailable`, `early_bounds_pending`,
+    `early_bounds_failed` and `early_bounds_empty` describe geometry fallback.
+    `cpu_proven_empty` and `disabled` identify the other paths.
+-   `maskRoiCurrentFrame`: matching current-source GPU bounds were consumed.
+    `maskRoiOccupiedTiles` counts mapped output tiles, and
+    `maskRoiRequiredSubrect` encloses their conservative sampling support.
+-   `maskRoiPlanningCpuMs`: CPU mapping/planning time, with no GPU wait.
+-   `multiRoiDiagnostics`: actual single fallback, representative candidate
+    rectangles, overlap/coverage results, gate, and integer pixel costs.
+    Geometry search prefers the smallest coverage-valid disjoint candidate,
+    otherwise the smallest disjoint or overlapping candidate. Mask search
+    prefers the smallest disjoint candidate. Final stabilized candidate
+    diagnostics replace search evidence when reached. Counts describe planner
+    attempts, not unique regions. Missing/invalid costs are null;
+    `additionalPixels` reports extra work when a candidate exceeds the single
+    enclosure. Cost success alone does not override coverage or overlap.
+-   Legacy synchronous `maskRoiReadbackWaitMs`, fence values and counters remain
+    zero. `maskRoiGpuProvenEmpty` remains false; no new GPU-empty bypass is used.
+
+The prior synchronous implementation recorded summed per-eye waits of
+10.169 ms for faces and 11.636 ms for face/skin/hair. Its geometry-only successor
+eliminated those waits but lost tight mask-derived splits. See
+`nr-roi-savings-gate-20260915.md` for the preserved area audit and comparison.
+New scheduling availability and performance must be measured on the rebuilt
+DLL. Compilation, WARP tests and null-driver evidence do not qualify physical
+headset presentation or the unsupported flat character/presentation routes.

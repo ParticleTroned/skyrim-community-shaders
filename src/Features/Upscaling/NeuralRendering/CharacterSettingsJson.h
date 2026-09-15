@@ -30,6 +30,7 @@ namespace NeuralRendering
 			visit("neuralCharacterMaximumDistanceMeters", settings.neuralCharacterMaximumDistanceMeters, policy.maximumDistanceMeters);
 			visit("neuralCharacterAdaptiveRoiSelectionEnabled", settings.neuralCharacterAdaptiveRoiSelectionEnabled, policy.adaptiveRoiSelection);
 			visit("neuralCharacterMultiRoiEnabled", settings.neuralCharacterMultiRoiEnabled, policy.multiRoi);
+			visit("neuralCharacterMultiRoiSavingsGateEnabled", settings.neuralCharacterMultiRoiSavingsGateEnabled, policy.multiRoiSavingsGate);
 			visit("neuralCharacterMinimumFacePixelSize", settings.neuralCharacterMinimumFacePixelSize, policy.minimumFacePixelSize);
 			visit("neuralCharacterRoiMargin", settings.neuralCharacterRoiMargin, policy.roiMargin);
 			visit("neuralCharacterRoiHoldFrames", settings.neuralCharacterRoiHoldFrames, policy.roiHoldFrames);

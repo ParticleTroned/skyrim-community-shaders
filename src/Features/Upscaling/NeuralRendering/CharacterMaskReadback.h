@@ -23,6 +23,7 @@ namespace NeuralRendering
 		QueryFailed,
 		MapUnavailable,
 		FenceFailed,
+		Pending,
 	};
 
 	struct CharacterMaskReadbackResult
@@ -45,6 +46,8 @@ namespace NeuralRendering
 				return "current_map_unavailable";
 			case CharacterMaskReadbackStatus::FenceFailed:
 				return "completion_fence_failed";
+			case CharacterMaskReadbackStatus::Pending:
+				return "current_copy_pending";
 			}
 			return "query_failed";
 		}
@@ -133,5 +136,22 @@ namespace NeuralRendering
 			else
 				Sleep(1);
 		}
+	}
+
+	/** One DONOTFLUSH query and at most one DO_NOT_WAIT map; no retry or queue drain. */
+	[[nodiscard]] inline CharacterMaskReadbackResult PollCharacterMaskBounds(
+		ID3D11DeviceContext* a_context, ID3D11Query* a_query,
+		ID3D11Buffer* a_staging, std::span<std::byte> a_destination) noexcept
+	{
+		// An already expired deadline makes every not-ready path return on its
+		// first probe, before the shared reader's retry/yield branch is reachable.
+		auto result = ReadCharacterMaskBounds(a_context, a_query, a_staging, a_destination,
+			std::chrono::steady_clock::time_point::min());
+		if (result.status == CharacterMaskReadbackStatus::Timeout ||
+			(result.status == CharacterMaskReadbackStatus::MapUnavailable && result.result == DXGI_ERROR_WAS_STILL_DRAWING)) {
+			result.status = CharacterMaskReadbackStatus::Pending;
+			result.result = S_FALSE;
+		}
+		return result;
 	}
 }

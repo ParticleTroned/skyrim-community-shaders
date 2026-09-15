@@ -3986,6 +3986,7 @@ namespace
 		settings.neuralCharacterAdaptiveRoiSelectionEnabled =
 			NeuralRendering::CharacterPolicy::kDefaultAdaptiveRoiSelection;
 		settings.neuralCharacterMultiRoiEnabled = false;
+		settings.neuralCharacterMultiRoiSavingsGateEnabled = true;
 		settings.neuralCharacterMinimumFacePixelSize =
 			NeuralRendering::CharacterPolicy::kDefaultMinimumFacePixelSize;
 		settings.neuralCharacterRoiMargin =
@@ -4056,6 +4057,7 @@ namespace
 		o_json.erase("neuralCharacterMaximumDistanceMeters");
 		o_json.erase("neuralCharacterAdaptiveRoiSelectionEnabled");
 		o_json.erase("neuralCharacterMultiRoiEnabled");
+		o_json.erase("neuralCharacterMultiRoiSavingsGateEnabled");
 		o_json.erase("neuralCharacterMinimumFacePixelSize");
 		o_json.erase("neuralCharacterRoiMargin");
 		o_json.erase("neuralCharacterRoiHoldFrames");
@@ -5006,6 +5008,7 @@ namespace
 			addFloat(a_settings.neuralCharacterMaximumDistanceMeters);
 			add(a_settings.neuralCharacterAdaptiveRoiSelectionEnabled);
 			add(a_settings.neuralCharacterMultiRoiEnabled);
+			add(a_settings.neuralCharacterMultiRoiSavingsGateEnabled);
 			add(a_settings.neuralCharacterMinimumFacePixelSize);
 			addFloat(a_settings.neuralCharacterRoiMargin);
 			add(a_settings.neuralCharacterRoiHoldFrames);
@@ -15230,11 +15233,11 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 							&settings.neuralCharacterMultiRoiEnabled);
 						if (auto _tt = Util::HoverTooltipWrapper()) {
 							ImGui::TextUnformatted(
-								"Uses at most two persistent Feature 18 regions per eye, covering current-frame projected face/skin/hair geometry.");
+								"Uses at most two persistent Feature 18 regions per eye, derived from current-source GPU face/skin/hair category bounds when ready.");
 							ImGui::TextUnformatted(
-								"ROI planning never waits for GPU mask readback. Every current eligible geometry bound must remain covered; delayed mask diagnostics cannot exclude new pixels.");
+								"Early GPU bounds are read without waiting and expanded for crop, jitter, sampling and feathering. Geometry is only a fallback when matching GPU evidence is unavailable; stale masks cannot exclude new pixels.");
 							ImGui::TextUnformatted(
-								"A split must save a 65,536-pixel reserve for its extra invocation plus 25% of the single-region area (20% to retain a split). This is a cost heuristic, not a measured GPU break-even.");
+								"With the savings gate enabled, a split must save a 65,536-pixel reserve for its extra invocation plus 25% of the single-region area (20% to retain a split). This is a cost heuristic, not a measured GPU break-even.");
 							ImGui::TextUnformatted(
 								"Nearby, overlapping or insufficiently separated clusters use one enclosing region. Exact face/skin/hair compositing is unchanged.");
 							ImGui::TextUnformatted(
@@ -15245,6 +15248,15 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 								"Split regions use one atomic batch even with Sequential Stereo selected. Turning this off retires the extra runtime instances.");
 							ImGui::TextUnformatted(
 								"Debug views and forced-mask tests use the single-region fallback. Diagnostics report the active region count and fallback reason.");
+						}
+					}
+					{
+						auto guard = Util::DisableGuard(!settings.neuralCharacterMultiRoiEnabled);
+						ImGui::Checkbox("Multi-ROI Savings Gate", &settings.neuralCharacterMultiRoiSavingsGateEnabled);
+						if (auto _tt = Util::HoverTooltipWrapper()) {
+							ImGui::TextUnformatted("Requires the extra-invocation reserve plus relative savings against the actual padded single-ROI fallback.");
+							ImGui::TextUnformatted("Disable to try any smaller split. Complete coverage, disjoint bounds and valid dimensions remain mandatory. Extra invocations can still be slower.");
+							ImGui::TextUnformatted("Session only; enabled again when settings load. DevBench reports candidate rectangles, exact pixel costs and rejection counts.");
 						}
 					}
 					ImGui::Checkbox(
@@ -15487,6 +15499,15 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 							NeuralRendering::GetCharacterMultiRoiReasonName(eyeStatus.multiRoiReason),
 							eyeStatus.evaluationRequired ? std::max(1u, eyeStatus.computeRegions.count) : 0u,
 							static_cast<unsigned long long>(eyeStatus.multiRoiPixels));
+						const auto& splitDiagnostics = eyeStatus.multiRoiDiagnostics;
+						if (splitDiagnostics.candidateAvailable && splitDiagnostics.cost.valid) {
+							ImGui::TextDisabled("  Savings gate %s | single %llu -> split %llu px | saved %.1f%% | overlap %s",
+								splitDiagnostics.savingsGateEnabled ? "on" : "off",
+								static_cast<unsigned long long>(splitDiagnostics.cost.singlePixels),
+								static_cast<unsigned long long>(splitDiagnostics.cost.splitPixels),
+								100.0 * static_cast<double>(splitDiagnostics.cost.savedPixels) / static_cast<double>(splitDiagnostics.cost.singlePixels),
+								splitDiagnostics.candidateOverlaps ? "yes" : "no");
+						}
 						ImGui::TextDisabled(
 							"  Mask ROI: %s | current %s | %u occupied tiles | readback %.3f ms",
 							eyeStatus.maskRoiStatus.c_str(),

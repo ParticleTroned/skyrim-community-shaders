@@ -1,3 +1,4 @@
+#include "Features/Upscaling/NeuralRendering/CharacterEarlyMaskBounds.h"
 #include "Features/Upscaling/NeuralRendering/CharacterMaskRoi.h"
 #include "Features/Upscaling/NeuralRendering/CharacterMaskRoiAdmission.h"
 
@@ -319,5 +320,55 @@ int main()
 		CHECK(Covered(generatedResult, generated, width, height));
 		CHECK(ResolveCharacterMaskRoi(generated, reversedOwners, width, height, 400 + sample, state) == generatedResult);
 	}
+	// Match all possible authored taps, not just the center pixel, under crops,
+	// fractional jitter, scaling and the maximum depth-aware feather radius.
+	const std::array sourcePieces{ CharacterRect{ 0, 0, 1, 1 }, CharacterRect{ 16, 12, 17, 13 },
+		CharacterRect{ 41, 34, 44, 39 }, CharacterRect{ 66, 48, 67, 49 } };
+	const auto sourceTiles = Tiles(sourcePieces, 67, 49);
+	for (const auto crop : { ComputeSubrect{ 0, 0, 67, 49 }, ComputeSubrect{ 9, 7, 43, 35 } }) {
+		for (const auto radius : { 0u, 1u, 4u }) {
+			for (const auto jitter : { -2.75f, -0.45f, 0.0f, 0.45f, 2.75f }) {
+				std::vector<CharacterMaskRoiTileBounds> mapped;
+				CHECK(MapEarlyCharacterMaskBounds(sourceTiles, 67, 49, crop, 95, 73, jitter, -jitter, radius, mapped));
+				const auto selected = [&](int x, int y) {
+					x = crop.baseX + std::clamp(x, 0, static_cast<int>(crop.width) - 1);
+					y = crop.baseY + std::clamp(y, 0, static_cast<int>(crop.height) - 1);
+					return std::ranges::any_of(sourcePieces, [&](const auto& rect) {
+						return x >= static_cast<int>(rect.minX) && x < static_cast<int>(rect.maxX) &&
+						       y >= static_cast<int>(rect.minY) && y < static_cast<int>(rect.maxY);
+					});
+				};
+				for (std::uint32_t y = 0; y < 73; ++y) {
+					for (std::uint32_t x = 0; x < 95; ++x) {
+						const auto sx = (x + 0.5) * crop.width / 95.0 - 0.5 - jitter;
+						const auto sy = (y + 0.5) * crop.height / 73.0 - 0.5 + jitter;
+						const auto bx = static_cast<int>(std::floor(sx)), by = static_cast<int>(std::floor(sy));
+						bool positive = selected(bx, by) || selected(bx + 1, by) || selected(bx, by + 1) || selected(bx + 1, by + 1);
+						for (int dy = -static_cast<int>(radius); dy <= static_cast<int>(radius); ++dy)
+							for (int dx = -static_cast<int>(radius); dx <= static_cast<int>(radius); ++dx)
+								positive = positive || selected(static_cast<int>(std::floor(sx + 0.5)) + dx, static_cast<int>(std::floor(sy + 0.5)) + dy);
+						if (positive) {
+							const auto& tile = mapped[(y / 32u) * 3u + x / 32u];
+							CHECK(x >= tile.minX && x < tile.maxX && y >= tile.minY && y < tile.maxY);
+						}
+					}
+				}
+			}
+		}
+	}
+	std::vector<CharacterMaskRoiTileBounds> mapped;
+	CHECK(!MapEarlyCharacterMaskBounds(sourceTiles, 67, 49, { 0, 0, 68, 49 }, 95, 73, 0, 0, 0, mapped));
+	CHECK(!MapEarlyCharacterMaskBounds(sourceTiles, 67, 49, { 0, 0, 67, 49 }, 95, 73, 0, 0, 5, mapped));
+	CHECK(!MapEarlyCharacterMaskBounds(sourceTiles, 67, 49, { 0, 0, 67, 49 }, 95, 73,
+		std::numeric_limits<float>::quiet_NaN(), 0, 0, mapped));
+	auto badSource = sourceTiles;
+	badSource[0] = { 0, 0, 33, 1 };
+	CHECK(!MapEarlyCharacterMaskBounds(badSource, 67, 49, { 0, 0, 67, 49 }, 95, 73, 0, 0, 0, mapped));
+	CHECK(mapped.empty());
+	const auto separatedTiles = Tiles(std::array{ CharacterRect{ 100, 200, 200, 400 }, CharacterRect{ 1100, 200, 1200, 400 } });
+	state = {};
+	CHECK(ResolveCharacterMaskRoi(separatedTiles, kOwners, kWidth, kHeight, 1000, state, false, true).computeRegions.count == 2);
+	CHECK(ResolveCharacterMaskRoi(separatedTiles, kOwners, kWidth, kHeight, 1000, state, false, false).computeRegions.count == 0);
+	CHECK(ResolveCharacterMaskRoi(separatedTiles, kOwners, kWidth, kHeight, 1000, state, false, true).computeRegions.count == 2);
 	return 0;
 }

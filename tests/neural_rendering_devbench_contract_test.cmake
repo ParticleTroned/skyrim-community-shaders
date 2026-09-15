@@ -1951,7 +1951,10 @@ endforeach()
 foreach(_geometry_roi_contract IN ITEMS
     [[ResolveCharacterMultiRoi(]]
     [[plan.actorRegions, plan.regions, a_args.outputWidth, a_args.outputHeight,]]
-    [[sourceWorldFrame, slot.stableMultiRoi, slot.multiRoiReason);]]
+    [[sourceWorldFrame, slot.stableMultiRoi, slot.multiRoiReason,]]
+    [[a_args.settings.multiRoiSavingsGate, slot.computeSubrect);]]
+    [[slot.multiRoiDiagnostics = slot.stableMultiRoi.diagnostics;]]
+    [[a_eye.multiRoiDiagnostics = a_slot.multiRoiDiagnostics;]]
     [[slot.prepareKey.sourceWorldFrame != args.sourceWorldFrame]]
     [[slot.prepareKey.generation != args.generation]]
     [[slot.prepareKey.settings != BuildSettingsKey(args.settings)]]
@@ -1967,7 +1970,7 @@ foreach(_geometry_bridge_contract IN ITEMS
     [[{ "maskRoiReadbackFenceValue", eye.maskRoiReadbackFenceValue }]]
     [["maskRoiReadbackFenceValue":{"type":"integer","minimum":0]]
     [[{ "planningRequiresGpuReadback", false }]]
-    [[never waits for GPU mask readback]]
+    [[No result is admitted through a CPU wait]]
 )
     string(FIND "${_bridge}" "${_geometry_bridge_contract}" _geometry_bridge_position)
     if(_geometry_bridge_position EQUAL -1)

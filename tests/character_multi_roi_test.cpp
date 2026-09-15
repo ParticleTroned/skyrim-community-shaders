@@ -18,12 +18,13 @@ namespace
 
 	CharacterComputeRegionPlan Resolve(std::span<const CharacterMultiRoiActor> actors,
 		std::uint32_t frame, StableCharacterMultiRoi& state, CharacterMultiRoiReason& reason,
-		std::uint32_t width = 1536, std::uint32_t height = 1024)
+		std::uint32_t width = 1536, std::uint32_t height = 1024,
+		bool savingsGate = true, ComputeSubrect single = {})
 	{
 		std::vector<CharacterRect> eligibility;
 		for (const auto& actor : actors)
 			eligibility.push_back(actor.rect);
-		return ResolveCharacterMultiRoi(actors, eligibility, width, height, frame, state, reason);
+		return ResolveCharacterMultiRoi(actors, eligibility, width, height, frame, state, reason, savingsGate, single);
 	}
 
 	bool Safe(const CharacterComputeRegionPlan& plan, std::span<const CharacterMultiRoiActor> actors,
@@ -72,6 +73,28 @@ int main()
 	CHECK(CharacterMultiRoiDetail::WorthSplitting(retainCost, 1024u * 1024u, true));
 	CHECK(!CharacterMultiRoiDetail::WorthSplitting(enterCost, 1024, false));
 	CHECK(!CharacterMultiRoiDetail::WorthSplitting(enterCost, 0, true));
+	CHECK(CharacterMultiRoiDetail::WorthSplitting(marginalCost, 1024u * 1024u, false, false));
+	CHECK(!CharacterMultiRoiDetail::WorthSplitting(marginalCost, 768u * 1024u, false, false));
+	CHECK(!CharacterMultiRoiDetail::WorthSplitting(enterCost, 1024, false, false));
+	// Check exact one-pixel boundaries, including ceil rounding for entry/retention.
+	for (const bool retaining : { false, true }) {
+		for (const std::uint64_t single : { 200000u, 200001u, 200003u, 200004u, 1048576u }) {
+			const auto relative = retaining ? (single + 4) / 5 : (single + 3) / 4;
+			const auto maximumSplit = single - 65536 - relative;
+			std::array boundary{ ComputeSubrect{ 0, 0, 1, 1 },
+				ComputeSubrect{ 2, 0, static_cast<std::uint32_t>(maximumSplit - 1), 1 } };
+			const auto cost = CharacterMultiRoiDetail::CalculateSplitCost(boundary, single, retaining);
+			CHECK(cost.valid && cost.splitPixels == maximumSplit && cost.savedPixels == 65536 + relative);
+			CHECK(cost.requiredRelativePixels == relative && cost.meetsHeuristic);
+			++boundary[1].width;
+			CHECK(!CharacterMultiRoiDetail::WorthSplitting(boundary, single, retaining));
+			CHECK(CharacterMultiRoiDetail::WorthSplitting(boundary, single, retaining, false));
+		}
+	}
+	const auto maximum = std::numeric_limits<std::uint32_t>::max();
+	const std::array overflowing{ ComputeSubrect{ 0, 0, maximum, maximum }, ComputeSubrect{ 0, 0, maximum, maximum } };
+	CHECK(!CharacterMultiRoiDetail::CalculateSplitCost(overflowing, UINT64_MAX, false).valid);
+	CHECK(!CharacterMultiRoiDetail::WorthSplitting(overflowing, UINT64_MAX, false, false));
 	StableCharacterMultiRoi state;
 	CharacterMultiRoiReason reason;
 	const auto first = Resolve(separated, 100, state, reason);
@@ -121,6 +144,8 @@ int main()
 	const std::array bridge{ CharacterRect{ 100, 200, 1200, 400 } };
 	CHECK(ResolveCharacterMultiRoi(separated, bridge, 1536, 1024, 700, state, reason).count == 0);
 	CHECK(reason == CharacterMultiRoiReason::EligibilityBridge);
+	CHECK(ResolveCharacterMultiRoi(separated, bridge, 1536, 1024, 700, state, reason, false).count == 0);
+	CHECK(reason == CharacterMultiRoiReason::EligibilityBridge);
 	const auto reentry = Resolve(separated, 701, state, reason);
 	CHECK(reentry.count == 2 && reentry.historyKeys != firstKey);
 	CHECK(Safe(reentry, separated));
@@ -162,12 +187,18 @@ int main()
 	};
 	CHECK(Resolve(close, 709, state, reason).count == 0);
 	CHECK(reason == CharacterMultiRoiReason::NoDisjointSplit);
+	CHECK(Resolve(close, 709, state, reason, 1536, 1024, false).count == 0);
+	CHECK(reason == CharacterMultiRoiReason::NoDisjointSplit);
+	CHECK(state.diagnostics.candidateOverlaps && !state.diagnostics.savingsGateEnabled);
 	const std::array tiny{
 		CharacterMultiRoiActor{ 1, { 10, 20, 20, 30 } },
 		CharacterMultiRoiActor{ 2, { 200, 20, 210, 30 } },
 	};
 	CHECK(Resolve(tiny, 710, state, reason, 256, 128).count == 0);
 	CHECK(reason == CharacterMultiRoiReason::InsufficientSavings);
+	const auto ungatedTiny = Resolve(tiny, 710, state, reason, 256, 128, false);
+	CHECK(ungatedTiny.count == 2 && Safe(ungatedTiny, tiny, 256, 128));
+	CHECK(Resolve(tiny, 710, state, reason, 256, 128, true).count == 0);
 
 	// Vertical separation must also pay the additional invocation reserve.
 	auto vertical = std::array{
@@ -224,6 +255,60 @@ int main()
 	CHECK(Resolve(separated, 1, state, reason).count == 2);
 	CHECK(state.width == 1536 && state.height == 1024);
 
+	// Captured CSXTest01 eligibility bounds, with the actual retained fallback.
+	const std::array faceLeft{
+		CharacterMultiRoiActor{ 1, { 1056, 844, 1204, 964 } },
+		CharacterMultiRoiActor{ 2, { 764, 856, 872, 976 } },
+	};
+	const std::array faceRight{
+		CharacterMultiRoiActor{ 1, { 1040, 844, 1188, 964 } },
+		CharacterMultiRoiActor{ 2, { 752, 856, 860, 976 } },
+	};
+	const ComputeSubrect faceFallback{ 640, 768, 704, 256 };
+	for (const bool rightEye : { false, true }) {
+		state = {};
+		const auto& actors = rightEye ? faceRight : faceLeft;
+		CHECK(Resolve(actors, 36633, state, reason, 1512, 1680, true, faceFallback).count == 0);
+		CHECK(reason == CharacterMultiRoiReason::InsufficientSavings);
+		const auto diagnostics = state.diagnostics;
+		CHECK(diagnostics.cost.singlePixels == 180224);
+		CHECK(diagnostics.cost.splitPixels == (rightEye ? 131072u : 147456u));
+		CHECK(diagnostics.cost.savedPixels == (rightEye ? 49152u : 32768u));
+		CHECK(diagnostics.cost.requiredRelativePixels == 45056);
+		CHECK(!diagnostics.candidateOverlaps && diagnostics.candidateCoversEligibility);
+		const auto plan = Resolve(actors, 36633, state, reason, 1512, 1680, false, faceFallback);
+		CHECK(plan.count == 2 && Safe(plan, actors, 1512, 1680));
+		CHECK(state.diagnostics.stabilizedCandidate && !state.diagnostics.cost.meetsHeuristic);
+		CHECK(Resolve(actors, 36633, state, reason, 1512, 1680, true, faceFallback).count == 0);
+		// Same-frame baseline changes must invalidate the cache and use the real cost.
+		const ComputeSubrect largerFallback{ 512, 640, 896, 512 };
+		CHECK(Resolve(actors, 36633, state, reason, 1512, 1680, true, largerFallback).count == 2);
+		CHECK(state.diagnostics.cost.singlePixels == 458752);
+		CHECK(Resolve(actors, 36633, state, reason, 1512, 1680, true, faceFallback).count == 0);
+		CHECK(Resolve(actors, 36633, state, reason, 1512, 1680, false, { 0, 0, 10, 10 }).count == 0);
+		CHECK(reason == CharacterMultiRoiReason::InvalidInput);
+	}
+	const std::array allLeft{
+		CharacterMultiRoiActor{ 1, { 844, 780, 1512, 1624 } },
+		CharacterMultiRoiActor{ 2, { 612, 828, 932, 1200 } },
+	};
+	const std::array allRight{
+		CharacterMultiRoiActor{ 1, { 828, 780, 1512, 1624 } },
+		CharacterMultiRoiActor{ 2, { 592, 828, 912, 1200 } },
+	};
+	for (const bool rightEye : { false, true }) {
+		state = {};
+		for (const bool gate : { true, false }) {
+			CHECK(Resolve(rightEye ? allRight : allLeft, 38843, state, reason, 1512, 1680, gate,
+					  { rightEye ? 448u : 512u, 640, rightEye ? 1064u : 1000u, 1040 })
+					  .count == 0);
+			CHECK(reason == CharacterMultiRoiReason::NoDisjointSplit);
+			CHECK(state.diagnostics.candidateOverlaps && state.diagnostics.candidateAvailable);
+			CHECK(state.diagnostics.cost.additionalPixels == (rightEye ? 28672u : 95232u));
+			CHECK(state.diagnostics.overlappingCandidates == state.diagnostics.candidatesConsidered);
+		}
+	}
+
 	// Deterministic adversarial motion, additions, occlusion and frame reuse.
 	state = {};
 	std::uint32_t random = 0x18C0FFEE;
@@ -240,11 +325,12 @@ int main()
 			const auto y = nextRandom() % 800;
 			actors.push_back({ actor + 1u, { x, y, x + 20 + nextRandom() % 200, y + 20 + nextRandom() % 200 } });
 		}
-		const auto plan = Resolve(actors, frame, state, reason);
+		const bool gate = frame % 2 == 0;
+		const auto plan = Resolve(actors, frame, state, reason, 1536, 1024, gate);
 		CHECK(Safe(plan, actors));
-		CHECK(Resolve(actors, frame, state, reason) == plan);
+		CHECK(Resolve(actors, frame, state, reason, 1536, 1024, gate) == plan);
 		std::ranges::reverse(actors);
-		CHECK(Resolve(actors, frame, state, reason) == plan);
+		CHECK(Resolve(actors, frame, state, reason, 1536, 1024, gate) == plan);
 	}
 	return 0;
 }

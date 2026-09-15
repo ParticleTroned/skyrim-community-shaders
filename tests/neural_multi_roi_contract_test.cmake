@@ -56,6 +56,25 @@ file(READ "${_character_source_path}" _character_source)
 file(READ "${_renderer_source_path}" _renderer_source)
 file(READ "${_runtime_header_path}" _runtime_header)
 file(READ "${_devbench_bridge_path}" _devbench_bridge)
+
+# Early reduction must be optional and identify the exact immutable source.
+foreach(_early_bounds_contract IN ITEMS
+    [[state_->QueueEarlyMaskBounds(a_device, a_context);]]
+    [[state_->earlyMaskCaptureSerial_ = state_->AllocatePreparedContentSerial();]]
+    [[readback.captureSerial == earlyMaskCaptureSerial_]]
+    [[readback.frame == a_args.sourceWorldFrame && readback.frame == capturedFrame_]]
+    [[readback.categories == GetEnabledCharacterCategoryMask(a_args.settings)]]
+    [[PollCharacterMaskBounds(a_args.context, selected->query.Get(), selected->staging.Get(),]]
+    [[MapEarlyCharacterMaskBounds(]]
+    [[if (!usedEarlyBounds && a_args.settings.multiRoi)]]
+    [[Increment(state_->snapshot_.earlyMaskBounds.geometryFallbacks);]]
+)
+    string(FIND "${_character_source}" "${_early_bounds_contract}" _early_bounds_position)
+    if(_early_bounds_position EQUAL -1)
+        message(FATAL_ERROR "Early GPU bounds freshness/fallback contract missing: ${_early_bounds_contract}")
+    endif()
+endforeach()
+
 set(
     _contract_text
     "${_upscaling_header}\n${_upscaling_source}\n${_renderer_header}\n${_character_header}\n${_character_source}\n${_renderer_source}\n${_runtime_header}"
@@ -65,6 +84,12 @@ string(APPEND _contract_text "\n${_character_settings_json}")
 
 foreach(_settings_contract IN ITEMS
     [[bool neuralCharacterMultiRoiEnabled = false;]]
+    [[bool neuralCharacterMultiRoiSavingsGateEnabled = true;]]
+    [[visit("neuralCharacterMultiRoiSavingsGateEnabled", settings.neuralCharacterMultiRoiSavingsGateEnabled, policy.multiRoiSavingsGate);]]
+    [[settings.neuralCharacterMultiRoiSavingsGateEnabled = true;]]
+    [[o_json.erase("neuralCharacterMultiRoiSavingsGateEnabled");]]
+    [[add(a_settings.neuralCharacterMultiRoiSavingsGateEnabled);]]
+    [[add(a_settings.multiRoiSavingsGate);]]
     [[visit("neuralCharacterMultiRoiEnabled", settings.neuralCharacterMultiRoiEnabled, policy.multiRoi);]]
     [[NeuralRendering::ReadUpscalingCharacterSettingsJson(a_json, parsed);]]
     [[NeuralRendering::WriteUpscalingCharacterSettingsJson(a_json, a_settings);]]
@@ -92,6 +117,16 @@ foreach(_telemetry_contract IN ITEMS
     [["multiRoiPixels"]]
     [["multiRoiFallback"]]
     [["multiRoiReason"]]
+    [["multiRoiDiagnostics"]]
+    [["singleFallback"]]
+    [["candidateRegions"]]
+    [["requiredSavingPixels"]]
+    [["passesActiveSavingsGate"]]
+    [[std::string_view{ "experimentalMultiRoiSavingsGate" }]]
+    [[!parseBoolean("experimentalMultiRoiSavingsGate", a_request.experimentalMultiRoiSavingsGate)]]
+    [[requestedSettings.neuralCharacterMultiRoiSavingsGateEnabled = *request.experimentalMultiRoiSavingsGate;]]
+    [[previousSettings.neuralCharacterMultiRoiSavingsGateEnabled != requestedSettings.neuralCharacterMultiRoiSavingsGateEnabled]]
+    [["experimentalMultiRoiSavingsGate":{"type":"boolean"]]
     [[{ "maskRoiStatus", eye.maskRoiStatus }]]
     [[{ "maskRoiCurrentFrame", eye.maskRoiCurrentFrame }]]
     [[{ "maskRoiGpuProvenEmpty", eye.maskRoiGpuProvenEmpty }]]
@@ -187,7 +222,7 @@ string(REGEX REPLACE "[\r\n\t ]+" " "
     _character_source_normalized "${_character_source}")
 foreach(_history_contract IN ITEMS
     [[void InvalidatePreparedMasks(bool a_preserveMultiRoiHistory = false)]]
-    [[if (!a_preserveMultiRoiHistory) slot.stableMultiRoi = {};]]
+    [[if (!a_preserveMultiRoiHistory) { slot.stableMultiRoi = {}; slot.stableMaskRoi = {}; }]]
     [[state_->InvalidatePreparedMasks(true);]]
     [[if (slot.multiRoiPolicyKey != key.settings) { slot.stableMultiRoi = {};]]
 )
@@ -229,13 +264,15 @@ endif()
 
 foreach(_ui_contract IN ITEMS
     [["Experimental Multi-ROI"]]
+    [["Multi-ROI Savings Gate"]]
+    [[&settings.neuralCharacterMultiRoiSavingsGateEnabled]]
     [[&settings.neuralCharacterMultiRoiEnabled]]
     [[Uses at most two persistent Feature 18 regions per eye]]
     [[Multi-ROI uses separate feature instances.]]
-    [[current-frame projected face/skin/hair geometry]]
-    [[ROI planning never waits for GPU mask readback.]]
-    [[Every current eligible geometry bound must remain covered]]
-    [[delayed mask diagnostics cannot exclude new pixels]]
+    [[current-source GPU face/skin/hair category bounds when ready]]
+    [[Early GPU bounds are read without waiting]]
+    [[Geometry is only a fallback when matching GPU evidence is unavailable]]
+    [[stale masks cannot exclude new pixels]]
     [[65,536-pixel reserve for its extra invocation plus 25%]]
     [[This is not native sparse-ROI support.]]
     [[Compare summed planned pixels, not the enclosing rectangle]]

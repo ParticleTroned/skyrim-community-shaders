@@ -106,8 +106,18 @@ namespace NeuralRendering::Color
 	{
 		std::uint32_t frame = 0, sourceWorldFrame = 0, insertion = 0, route = 0;
 		std::uint64_t generation = 0;
+		ExposureSource source = ExposureSource::CapturedHDR;
 		bool operator==(const ExposureTransaction&) const = default;
 	};
+	/** Preserve the producer frame; history is explicit and exactly one frame old. */
+	[[nodiscard]] constexpr bool MatchesExposure(const ExposureStamp& stamp,
+		const ExposureTransaction& key, std::uint64_t epoch) noexcept
+	{
+		if (key.source == ExposureSource::CapturedHDRPrevious)
+			return key.sourceWorldFrame > 0 && key.sourceWorldFrame != std::numeric_limits<std::uint32_t>::max() &&
+			       MatchesExposure(stamp, key.sourceWorldFrame - 1, epoch);
+		return key.source == ExposureSource::CapturedHDR && MatchesExposure(stamp, key.sourceWorldFrame, epoch);
+	}
 
 	enum class ExposureLatchDecision : std::uint32_t
 	{
@@ -130,6 +140,7 @@ namespace NeuralRendering::Color
 			std::uintptr_t context, std::uintptr_t device) noexcept
 		{
 			if (!context || !device || next.route >= 2 || next.insertion >= 2 ||
+				next.source == ExposureSource::Manual || next.source >= ExposureSource::Count ||
 				next.sourceWorldFrame == std::numeric_limits<std::uint32_t>::max())
 				return ExposureLatchDecision::Reject;
 			// Do not allow any copy through resources belonging to another context

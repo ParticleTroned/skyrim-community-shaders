@@ -62,12 +62,18 @@ FrameParams.x)`; its function name does NOT make that the IEC sRGB curve.
 FrameParams is at PS b12 c84 for VR and c42 for flat rendering in this source.
 
 `ExposureCapture` observes the two known cinematic HDR tonemap effects at
-the immediate context's actual `Draw`/`DrawIndexed` entry, through the shared
-draw hooks. The live pixel shader must match the selected engine shader;
+the immediate context's seven direct, instanced, indirect and automatic draw
+entries, through the shared draw hooks. Existing ImageSpace Render/Dispatch
+wrappers establish an RAII producer scope, installed independently of the
+frame-annotation toggle. The live pixel shader must match its owned engine
+selection or the exact replacement association;
 unrelated draws cannot supply exposure through a stale technique pointer.
 Compute dispatches are excluded. It obtains the concrete effect
 instances through the pinned CommonLib ImageSpaceManager API during the
-normal render-thread EarlyPrepass. No additional engine vtable is patched.
+normal render-thread EarlyPrepass. Only the two HDR producers require the
+effect wrappers when annotations are disabled. Scope-entry counts, last
+producer frame and per-draw-form counts distinguish missing effect callbacks
+from missing draw observations.
 Status reports `producersRegistered`, `captureBoundary` and `lastBinding`
 (frame, dimensions, mip, sample/array counts, formats and identities), even
 for rejected bindings. The compatibility field `hooksInstalled` is now zero.
@@ -79,8 +85,10 @@ Capture alone does not activate colour reconstruction in Legacy Raw mode.
 Capture accepts a bound 1x1 or 2x2 floating-point AvgTex view with at least two
 channels and exactly one visible mip. The actual AvgSampler must use ordinary
 point/linear/anisotropic filtering and non-border addressing. The GPU reads
-every texel and admits a scalar only when all average/target components are
-identical. Spatially different texels are retained as evidence and rejected
+every texel and admits a scalar when all average/target components are
+identical, or every texel has finite positive `x == y`. The latter proves a
+unit ratio under the supported filtering, even if brightness differs across
+texels; it reports `measured_unit_ratio`. Other differing fields are rejected
 with validity 3 (`non_uniform_avgtex`); no average or selected texel is treated
 as the engine's scalar exposure. `ColorExposureCS` writes the scalar summary
 followed by four row-major per-texel records into a private 5x1 FP32 texture.
@@ -99,7 +107,10 @@ nonblocking readback also records the actual frame-gamma exponent. These are
 producer observations, not claims about NVIDIA's expected model domain.
 
 For a captured-exposure profile, preparation snapshots the matching source
-world frame into transaction-owned storage. Both eyes and all their regions
+world frame into transaction-owned storage. Explicit `captured_hdr_previous`
+instead requires exactly `sourceWorldFrame - 1`; it retains the actual producer
+stamp and reports `exposureAgeFrames = 1`. It cannot accept older frames,
+unknown/wrapped source frames, another epoch or an ambiguous source. Both eyes and all their regions
 reuse the first latched availability/value. An API toggle cannot switch that
 value halfway through a pair. Reconstruction uses this same immutable snapshot;
 there is no later lookup of a global/latest exposure and no per-face metering.
@@ -109,8 +120,11 @@ thread readback wait or new Flush is introduced.
 **Timing qualification is essential.** Missing or unsupported draw bindings
 make capture unavailable. If the HDR pass happens
 after an early NR invocation, that invocation cannot use a future exposure.
-The code reports the mismatch rather than borrowing a previous frame. A later
-insertion can be assessed separately. Different adaptation sources within one
+The strict `captured_hdr` mode reports that mismatch. The separate
+`captured_hdr_previous` experiment makes one-frame-latency exposure available
+for early insertion; this is not current-frame tonemap matching. During rapid
+adaptation it may differ from the exposure later applied by HDR. A later
+insertion can use the strict current-frame mode. Different adaptation sources within one
 frame are marked ambiguous in both binding and readback evidence. The revised
 draw boundary and these route conditions still require in-game qualification;
 the previous RestoreTechnique observation rejected every tested binding.
@@ -126,7 +140,8 @@ are tested by the assessment runner rather than assumed from texture format.
 Early `upscaled_center` and late `final_ldr_pre_ui` profiles are independent.
 Each declares an explicit domain candidate (`unknown`, `linear`, `srgb`), a
 transform (`identity`, `linear_to_srgb`, `reversible_proxy`), a calibration
-multiplier and exposure source (`manual`, `captured_hdr`). Identity requires
+multiplier and exposure source (`manual`, `captured_hdr`,
+`captured_hdr_previous`). Identity requires
 manual multiplier one. Nonidentity requires the explicit linear candidate.
 
 The proxy uses exposure-scaled RGB / (1 + max RGB), then sRGB encoding. Its
@@ -243,7 +258,7 @@ checks the expected cell/upscaling barrier; it does not set up or mutate the
 scene for you. Plan-only is the default:
 
 ```powershell
-python tools/nr-color/assess.py --include-captured
+python tools/nr-color/assess.py --include-captured --include-captured-previous
 ```
 
 Live example; supply real paths/cell for the prepared workspace:
@@ -259,7 +274,9 @@ hashes first. The controller's artifact/workspace proof can be supplied with
 
 Each candidate gets a transport test and real-inference comparison, bounded
 warm-up/polling, fresh same-revision stereo/region measurements and validity
-checks. Captured candidates require matching source-frame exposure; missing
+checks. `--include-captured-previous` explicitly adds two one-frame-history
+candidates; `--include-captured` retains its strict current-frame candidates.
+Captured candidates require their declared exact source-frame age; missing
 exposure, invalid inverses and zero-error fallback are not a pass. Optional
 shown-edit and hidden-edit capture episodes retain state/frame manifests for
 visual review. Those images are separate live frames, not falsely labelled the

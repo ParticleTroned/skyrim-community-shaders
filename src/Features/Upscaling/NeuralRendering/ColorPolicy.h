@@ -34,6 +34,7 @@ namespace NeuralRendering::Color
 	{
 		Manual,
 		CapturedHDR,
+		CapturedHDRPrevious,
 		Count
 	};
 
@@ -58,8 +59,8 @@ namespace NeuralRendering::Color
 	{
 		Domain domain = Domain::Unknown;
 		Transform transform = Transform::Identity;
-		// A calibration factor, not a measurement. CapturedHDR multiplies it by
-		// the frame-matched GPU snapshot of ISHDR's AvgTex.y / AvgTex.x.
+		// Captured sources multiply this calibration by a measured HDR ratio;
+		// Previous explicitly selects sourceWorldFrame - 1, never an arbitrary age.
 		float exposureMultiplier = 1.0f;
 		ExposureSource exposureSource = ExposureSource::Manual;
 		bool operator==(const Profile&) const = default;
@@ -129,8 +130,8 @@ namespace NeuralRendering::Color
 	[[nodiscard]] inline bool NeedsExposureCapture(const Configuration& value) noexcept
 	{
 		return value.experiments.captureEngineExposure ||
-		       EffectiveProfile(value, 0).exposureSource == ExposureSource::CapturedHDR ||
-		       EffectiveProfile(value, 1).exposureSource == ExposureSource::CapturedHDR;
+		       EffectiveProfile(value, 0).exposureSource != ExposureSource::Manual ||
+		       EffectiveProfile(value, 1).exposureSource != ExposureSource::Manual;
 	}
 
 	[[nodiscard]] inline bool ChangesInput(const Configuration& oldValue, const Configuration& newValue, std::uint32_t insertion) noexcept

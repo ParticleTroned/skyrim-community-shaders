@@ -10,12 +10,17 @@ SHADERS = ROOT / "features/Neural Rendering Colour/Shaders/Upscaling/NeuralRende
 class Contracts(unittest.TestCase):
     def test_exposure_observes_actual_draw_bindings(self):
         hooks = (ROOT / "src/Globals.cpp").read_text()
-        self.assertEqual(hooks.count("ExposureCapture::Instance().ObserveDraw(This,"), 2)
+        self.assertEqual(hooks.count("ExposureCapture::Instance().ObserveDraw(This,"), 7)
         self.assertNotIn("ObserveDraw", (ROOT / "src/Hooks.cpp").read_text())
         capture = (NR / "ExposureCapture.cpp").read_text()
         self.assertIn("ExposureDrawRejection", capture)
         self.assertIn("c != globals::d3d::context", capture)
         self.assertIn("ComputeStateGuard<1>", capture)
+        self.assertIn("auto* shader = activeHDRProducer", capture)
+        annotations = (ROOT / "src/FrameAnnotations.cpp").read_text()
+        install = annotations.split("void OnPostPostLoad()", 1)[1]
+        before_guard = install.split("if (!globals::state->frameAnnotations)", 1)[0]
+        self.assertEqual(before_guard.count("RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematic"), 4)
 
     def test_history_reset_preserves_only_current_character_source(self):
         upscaling = (ROOT / "src/Features/Upscaling.cpp").read_text()

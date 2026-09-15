@@ -104,6 +104,42 @@ static Pixel Read(ID3D11Device* d, ID3D11DeviceContext* c, ID3D11Texture2D* sour
 	c->Unmap(staging.Get(), 0);
 	return p;
 }
+static void VerifyUnitSampling(ID3D11Device* d, ID3D11DeviceContext* c, ID3D11ShaderResourceView* source)
+{
+	constexpr char code[] = R"(
+Texture2D<float4> Source : register(t0);
+SamplerState Filtering : register(s0);
+RWTexture2D<float4> Result : register(u0);
+[numthreads(64, 1, 1)] void main(uint3 id : SV_DispatchThreadID) {
+    float2 uv = (float2(id.x % 8, id.x / 8) - 2.5) / 3.0;
+    float2 raw = Source.SampleLevel(Filtering, uv, 0).xy;
+    Result[uint2(id.x, 0)] = float4(raw, raw.y / raw.x, 1);
+})";
+	ComPtr<ID3DBlob> bytes, errors;
+	Check(D3DCompile(code, sizeof(code) - 1, nullptr, nullptr, nullptr, "main", "cs_5_0",
+		D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_IEEE_STRICTNESS, 0, &bytes, &errors));
+	ComPtr<ID3D11ComputeShader> shader;
+	Check(d->CreateComputeShader(bytes->GetBufferPointer(), bytes->GetBufferSize(), nullptr, &shader));
+	auto output = Make(d, 64, {}, DXGI_FORMAT_R32G32B32A32_FLOAT, 1);
+	for (const auto filter : { D3D11_FILTER_MIN_MAG_MIP_POINT, D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT, D3D11_FILTER_ANISOTROPIC }) {
+		for (const auto address : { D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_TEXTURE_ADDRESS_WRAP, D3D11_TEXTURE_ADDRESS_MIRROR }) {
+			D3D11_SAMPLER_DESC desc{};
+			desc.Filter = filter;
+			desc.AddressU = desc.AddressV = desc.AddressW = address;
+			desc.MaxAnisotropy = 4;
+			desc.MaxLOD = D3D11_FLOAT32_MAX;
+			ComPtr<ID3D11SamplerState> sampler;
+			Check(d->CreateSamplerState(&desc, &sampler));
+			auto* pointer = sampler.Get();
+			c->CSSetSamplers(0, 1, &pointer);
+			Dispatch(c, shader.Get(), { source }, output.uav.Get());
+			for (UINT x = 0; x < 64; ++x) {
+				const auto value = Read(d, c, output.resource.Get(), x);
+				Require(value[0] > 0 && value[0] == value[1] && std::abs(value[2] - 1) < 1e-6f);
+			}
+		}
+	}
+}
 int main(int argc, char** argv)
 {
 	Require(argc == 2);
@@ -160,6 +196,25 @@ int main(int argc, char** argv)
 		c->UpdateSubresource(quad.resource.Get(), 0, nullptr, pixels.data(), 2 * sizeof(Pixel), 0);
 		Dispatch(c.Get(), capture.Get(), { quad.srv.Get() }, exposure.uav.Get());
 		Require(Read(d.Get(), c.Get(), exposure.resource.Get())[3] == 0);
+	}
+	const std::array<Pixel, 4> liveUnit{ { { 0.1044921875f, 0.1044921875f, 0, 0 }, { 0.10546875f, 0.10546875f, 0, 0 },
+		{ 0.111328125f, 0.111328125f, 0, 0 }, { 0.1123046875f, 0.1123046875f, 0, 0 } } };
+	c->UpdateSubresource(quad.resource.Get(), 0, nullptr, liveUnit.data(), 2 * sizeof(Pixel), 0);
+	Dispatch(c.Get(), capture.Get(), { quad.srv.Get() }, exposure.uav.Get());
+	Require(Read(d.Get(), c.Get(), exposure.resource.Get()) == Pixel{ liveUnit[0][0], liveUnit[0][1], 1, 1 });
+	VerifyUnitSampling(d.Get(), c.Get(), quad.srv.Get());
+	for (UINT changed = 0; changed < 4; ++changed) {
+		Require(Read(d.Get(), c.Get(), exposure.resource.Get(), 1 + changed) == Pixel{ liveUnit[changed][0], liveUnit[changed][1], 1, 1 });
+		for (const Pixel bad : { Pixel{ 0, 0, 0, 0 }, Pixel{ -1, -1, 0, 0 },
+				 Pixel{ liveUnit[changed][0], std::nextafter(liveUnit[changed][1], 1.0f), 0, 0 } }) {
+			auto pixels = liveUnit;
+			pixels[changed] = bad;
+			c->UpdateSubresource(quad.resource.Get(), 0, nullptr, pixels.data(), 2 * sizeof(Pixel), 0);
+			Dispatch(c.Get(), capture.Get(), { quad.srv.Get() }, exposure.uav.Get());
+			Require(Read(d.Get(), c.Get(), exposure.resource.Get())[3] != 1);
+		}
+		c->UpdateSubresource(quad.resource.Get(), 0, nullptr, liveUnit.data(), 2 * sizeof(Pixel), 0);
+		Dispatch(c.Get(), capture.Get(), { quad.srv.Get() }, exposure.uav.Get());
 	}
 	auto packedAverage = Make(d.Get(), 2, {}, DXGI_FORMAT_R11G11B10_FLOAT);
 	const Pixel packedValue{ 2, 0.5f, 0, 0 };
@@ -228,6 +283,13 @@ int main(int argc, char** argv)
 	RGB expected{};
 	Require(Forward({ b[0], b[1], b[2] }, resolved, expected));
 	auto p = Read(d.Get(), c.Get(), prepared.resource.Get());
+	for (unsigned i = 0; i < 3; ++i) Require(std::abs(p[i] - expected[i]) < 1e-5f);
+	c->UpdateSubresource(quad.resource.Get(), 0, nullptr, liveUnit.data(), 2 * sizeof(Pixel), 0);
+	Dispatch(c.Get(), capture.Get(), { quad.srv.Get() }, exposure.uav.Get());
+	Dispatch(c.Get(), prepare.Get(), { baseline.srv.Get(), nullptr, nullptr, exposure.srv.Get() }, prepared.uav.Get());
+	Require(ResolveExposureProfile({ Domain::Linear, Transform::LinearToSRGB, 1, ExposureSource::CapturedHDRPrevious }, EvaluateHDRExposure(liveUnit[0][0], liveUnit[0][1]), resolved));
+	Require(Forward({ b[0], b[1], b[2] }, resolved, expected));
+	p = Read(d.Get(), c.Get(), prepared.resource.Get());
 	for (unsigned i = 0; i < 3; ++i) Require(std::abs(p[i] - expected[i]) < 1e-5f);
 	Dispatch(c.Get(), reconstruct.Get(), { baseline.srv.Get(), prepared.srv.Get(), prepared.srv.Get(), exposure.srv.Get() }, result.uav.Get());
 	Require(Read(d.Get(), c.Get(), result.resource.Get()) == b);

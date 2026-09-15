@@ -19,7 +19,7 @@ namespace
 	constexpr std::array<const char*, 3> modes{ "legacy_raw", "managed", "preserve_source" };
 	constexpr std::array<const char*, 3> domains{ "unknown", "linear", "srgb" };
 	constexpr std::array<const char*, 3> transforms{ "identity", "linear_to_srgb", "reversible_proxy" };
-	constexpr std::array<const char*, 2> exposureSources{ "manual", "captured_hdr" };
+	constexpr std::array<const char*, 3> exposureSources{ "manual", "captured_hdr", "captured_hdr_previous" };
 
 	template <class T, std::size_t N>
 	T Parse(const Json& value, const std::array<const char*, N>& names)
@@ -84,8 +84,9 @@ namespace
 		return { { "domain", Name(profile.domain, domains) }, { "transform", Name(profile.transform, transforms) },
 			{ "exposureMultiplier", profile.exposureMultiplier }, { "exposureSource", Name(profile.exposureSource, exposureSources) },
 			{ "domainOrigin", profile.domain == Domain::Unknown ? "unknown" : "explicit_candidate" },
-			{ "exposureOrigin", profile.exposureSource == ExposureSource::CapturedHDR ? "frame_matched_engine_hdr_capture_required" :
-																						(profile.transform == Transform::Identity ? "not_applied" : "manual_calibration") },
+			{ "exposureOrigin", profile.exposureSource == ExposureSource::CapturedHDR         ? "frame_matched_engine_hdr_capture_required" :
+								profile.exposureSource == ExposureSource::CapturedHDRPrevious ? "previous_source_frame_hdr_capture_required" :
+																								(profile.transform == Transform::Identity ? "not_applied" : "manual_calibration") },
 			{ "nrModelDomainVerified", false }, { "srInternalExposureAvailable", false } };
 	}
 	void ReadProfile(const Json& object, Profile& profile)
@@ -104,7 +105,11 @@ namespace
 	}
 	Json EvidenceJson(const ExposureEvidence& e)
 	{
+		const bool spatialUnit = e.values[3] == 1.0f && e.values[2] == 1.0f &&
+		                         std::any_of(e.texels.begin(), e.texels.begin() + std::min<std::size_t>(e.sourceWidth * e.sourceHeight, e.texels.size()),
+									 [&](const auto& texel) { return texel[0] != e.values[0] || texel[1] != e.values[1]; });
 		const auto scalarStatus = !e.readbackComplete ? "pending" :
+		                          spatialUnit         ? "measured_unit_ratio" :
 		                          e.values[3] == 1.0f ? "measured_uniform_ratio" :
 		                          e.values[3] == 2.0f ? "unmeasured_unit_fallback" :
 		                          e.values[3] == 3.0f ? "non_uniform_avgtex" :
@@ -130,8 +135,11 @@ namespace
 		const auto& b = capture.lastBinding;
 		return { { "requested", capture.requested }, { "hooksInstalled", 0 }, { "producersRegistered", capture.producersRegistered }, { "epoch", capture.epoch },
 			{ "captures", capture.captures }, { "rejected", capture.rejected }, { "droppedReadbacks", capture.dropped },
+			{ "producerScopes", capture.producerScopes }, { "lastProducerFrame", capture.lastProducerFrame },
+			{ "drawCounts", capture.drawCounts },
+			{ "drawKinds", { "DrawIndexed", "Draw", "DrawIndexedInstanced", "DrawInstanced", "DrawAuto", "DrawIndexedInstancedIndirect", "DrawInstancedIndirect" } },
 			{ "lastReason", capture.lastReason }, { "samples", samples },
-			{ "captureBoundary", "D3D11_Draw_or_DrawIndexed_entry" },
+			{ "captureBoundary", "scoped_HDR_effect_D3D11_draw_entry" },
 			{ "lastBinding", { { "frame", b.frame }, { "width", b.width }, { "height", b.height },
 								 { "viewWidth", b.viewWidth }, { "viewHeight", b.viewHeight }, { "visibleMips", b.visibleMips },
 								 { "samplerIdentity", b.samplerIdentity }, { "samplerFilter", b.samplerFilter },
@@ -151,6 +159,9 @@ namespace
 			{ "sourceFormat", o.sourceFormat }, { "outputFormat", o.outputFormat }, { "effectiveMode", Name(o.mode, modes) },
 			{ "profile", ProfileJson(o.profile) }, { "transportBypass", o.bypass }, { "modelEditShown", o.modelEditShown },
 			{ "atomicColourBatch", o.atomicStereo }, { "processed", o.processed }, { "retainedColourTextureBytes", o.retainedBytes },
+			{ "exposureAgeFrames", o.exposureState == ExposureBindingState::SnapshotQueued && o.exposure.stamp.frame <= o.sourceWorldFrame ?
+									   Json(o.sourceWorldFrame - o.exposure.stamp.frame) :
+									   Json(nullptr) },
 			{ "preparationCpuMicroseconds", o.preparationCpuMicroseconds }, { "reconstructionCpuMicroseconds", o.reconstructionCpuMicroseconds },
 			{ "exposureBinding", ExposureBindingName(o.exposureState) }, { "exposure", EvidenceJson(o.exposure) }, { "failure", o.failure } };
 	}
@@ -296,7 +307,7 @@ namespace
 	Json Descriptor()
 	{
 		return Json::parse(R"schema({
-  "description": "NR colour v3: shared live controls, display-only A/B, engine HDR exposure capture and asynchronous measurements. measurementBatches retains up to four complete private-reconstruction batches, each with an immutable batch ID, expected physical-slot mask and matching frame/revision/generation. Pending readbacks drain even when a region becomes inactive; latest-per-slot measurements remain diagnostic compatibility fields. Complete batches do not prove outer stereo commit or headset presentation. status also reports registered HDR producers and rejected draw bindings. expectedShaderIdentity is the exact shader recorded by the engine/replacement binding hook for this context, producer, engine selection, frame and capture epoch, or the original engine shader when no matching association exists; the live draw must still match it. Capture accepts one visible mip of a 1x1 or 2x2 AvgTex with ordinary non-border sampling. GPU scalar validity requires identical average/target components in every texel; texels retain row-major per-texel average, target, ratio and validity, while scalarStatus distinguishes non_uniform_avgtex from a measured_uniform_ratio or an unmeasured_unit_fallback. A differing field is observed but never averaged into a correction. Capture alone does not enable reconstruction. configure/reset change only the registry. assets checks presence, not compilation. No NVIDIA ABI assumptions or game/profile mutations.",
+  "description": "NR colour v3: shared live controls, display-only A/B, engine HDR exposure capture and asynchronous measurements. measurementBatches retains up to four complete private-reconstruction batches, each with an immutable batch ID, expected physical-slot mask and matching frame/revision/generation. Pending readbacks drain even when a region becomes inactive; latest-per-slot measurements remain diagnostic compatibility fields. Complete batches do not prove outer stereo commit or headset presentation. status also reports registered HDR producers and rejected draw bindings. expectedShaderIdentity is the exact shader recorded by the engine/replacement binding hook for this context, producer, engine selection, frame and capture epoch, or the original engine shader when no matching association exists; the live draw must still match it. Capture accepts one visible mip of a 1x1 or 2x2 AvgTex with ordinary non-border sampling. Capture observes all seven draw forms inside an HDR effect scope, independently of frame annotations; producerScopes, lastProducerFrame and drawCounts expose callback coverage. captured_hdr requires the exact source frame. captured_hdr_previous explicitly requires sourceWorldFrame minus one for pre-HDR experiments; the producer stamp is unchanged and exposureAgeFrames reports the real age. Older, ambiguous and cross-epoch captures are rejected. GPU scalar validity requires identical raw pairs or finite positive x == y in every texel (measured_unit_ratio); texels retain row-major per-texel average, target, ratio and validity, while scalarStatus distinguishes non_uniform_avgtex from a measured_uniform_ratio or an unmeasured_unit_fallback. Other differing fields are observed but never averaged into a correction. Capture alone does not enable reconstruction. configure/reset change only the registry. assets checks presence, not compilation. No NVIDIA ABI assumptions or game/profile mutations.",
   "outputSchema": {
     "type": "object",
     "properties": {
@@ -304,6 +315,10 @@ namespace
       "engineCapture": {
         "type": "object",
         "properties": {
+          "producerScopes": { "type": "integer", "minimum": 0 },
+          "lastProducerFrame": { "type": "integer", "minimum": 0 },
+          "drawCounts": { "type": "array", "minItems": 7, "maxItems": 7, "items": { "type": "integer", "minimum": 0 } },
+          "drawKinds": { "type": "array", "minItems": 7, "maxItems": 7 },
           "samples": {
             "type": "array", "maxItems": 8,
             "items": {
@@ -314,7 +329,7 @@ namespace
                 "sourceMip": { "type": "integer", "minimum": 0 },
                 "sourceViewIdentity": { "type": "integer", "minimum": 0 },
                 "samplerIdentity": { "type": "integer", "minimum": 0 },
-                "scalarStatus": { "enum": ["pending", "measured_uniform_ratio", "unmeasured_unit_fallback", "non_uniform_avgtex", "invalid_values"] },
+                "scalarStatus": { "enum": ["pending", "measured_uniform_ratio", "measured_unit_ratio", "unmeasured_unit_fallback", "non_uniform_avgtex", "invalid_values"] },
                 "texels": {
                   "type": "array", "minItems": 4, "maxItems": 4,
                   "description": "Row-major average, target, ratio, validity for sourceWidth*sourceHeight texels; unused entries are invalid. Validity 0=invalid, 1=measured, 2=unit fallback. The scalar summary also uses 3=non-uniform.",
@@ -449,7 +464,8 @@ namespace
                 "type": "string",
                 "enum": [
                   "manual",
-                  "captured_hdr"
+                  "captured_hdr",
+                  "captured_hdr_previous"
                 ]
               }
             }
@@ -483,7 +499,8 @@ namespace
                 "type": "string",
                 "enum": [
                   "manual",
-                  "captured_hdr"
+                  "captured_hdr",
+                  "captured_hdr_previous"
                 ]
               }
             }
@@ -570,7 +587,7 @@ void NeuralColor::DrawSettings()
 				p.exposureSource = ExposureSource::Manual;
 			} else {
 				int source = static_cast<int>(p.exposureSource);
-				changed |= ImGui::Combo("Exposure source", &source, "Manual calibration\0Captured engine HDR (frame matched)\0");
+				changed |= ImGui::Combo("Exposure source", &source, "Manual calibration\0Captured engine HDR (current frame)\0Captured engine HDR (previous frame)\0");
 				p.exposureSource = static_cast<ExposureSource>(source);
 				float stops = std::log2(p.exposureMultiplier);
 				if (ImGui::SliderFloat("Calibration multiplier (EV)", &stops, -8, 8)) {

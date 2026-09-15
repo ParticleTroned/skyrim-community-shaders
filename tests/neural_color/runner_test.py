@@ -101,10 +101,12 @@ class Fixture:
         slots = [0, 1, 4, 5] if self.multi else [0, 1]
         groups = [sample(slot, self.frame, self.revision, s["experiments"]["transportBypass"],
                          s["experiments"]["applyModelEdit"] or self.hidden_ignored,
-                         p["exposureSource"] == "captured_hdr") for slot in slots]
+                         p["exposureSource"] != "manual") for slot in slots]
         for item in groups:
             item["source"]["insertionPoint"] = assess.PROFILE_NAMES.index(self.args.insertion)
             item["source"]["profile"] = copy.deepcopy(p)
+            if p["exposureSource"] == "captured_hdr_previous":
+                item["source"]["exposure"]["frame"] = self.frame - 1
             item["source"]["effectiveMode"] = self.state["settings"]["mode"]
         s["slots"] = [copy.deepcopy(item["source"]) for item in groups]
         s["measurements"] = [] if self.unavailable_identity and p["transform"] == "identity" else groups
@@ -205,6 +207,14 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(self.requests(), [])
         self.assertEqual(self.f.state, self.f.original)
         self.assertTrue((self.f.evidence / "preflight.json").is_file())
+
+    def test_explicit_previous_capture_campaign(self):
+        self.f.args.include_captured_previous = True
+        report = self.run_campaign()
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(len(report["candidates"]), 7)
+        self.assertTrue(report["restored"])
+        self.assertEqual(self.f.state, self.f.original)
 
     def test_visual_preflight_requires_screenshot_service(self):
         self.f.args.capture_episodes = True

@@ -27,6 +27,23 @@ def sample(slot=0, frame=100, captured=False):
 
 
 class AssessmentTests(unittest.TestCase):
+    def test_previous_capture_retains_real_frame_and_exact_age(self):
+        group = [sample(0, captured=True), sample(1, captured=True)]
+        for item in group:
+            item["source"]["profile"]["exposureSource"] = "captured_hdr_previous"
+            item["source"]["exposure"]["frame"] = 99
+        self.assertTrue(assess.assess_samples([group], True, True)["valid"])
+        for invalid_frame in (98, 100, 101):
+            bad = copy.deepcopy(group)
+            for item in bad:
+                item["source"]["exposure"]["frame"] = invalid_frame
+            self.assertFalse(assess.assess_samples([bad], True, True)["valid"])
+        strict = copy.deepcopy(group)
+        for item in strict:
+            item["source"]["profile"]["exposureSource"] = "captured_hdr"
+        self.assertFalse(assess.assess_samples([strict], True, True)["valid"])
+        self.assertEqual(len(assess.candidates(False, True)), 5)
+
     @staticmethod
     def batch(batch_id, frame, slots):
         manifest = {"measurementBatchId": batch_id, "expectedMeasurementSlotMask": sum(1 << s for s in slots),

@@ -305,8 +305,7 @@ namespace globals
 		static void thunk(ID3D11DeviceContext* This, UINT IndexCount, UINT StartIndexLocation, INT BaseVertexLocation)
 		{
 			UnderwaterDepthOfField::BeforeDraw();
-			if (globals::state)
-				NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, globals::state->currentShader);
+			NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::Indexed);
 			func(This, IndexCount, StartIndexLocation, BaseVertexLocation);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -317,9 +316,58 @@ namespace globals
 		static void thunk(ID3D11DeviceContext* This, UINT VertexCount, UINT StartVertexLocation)
 		{
 			UnderwaterDepthOfField::BeforeDraw();
-			if (globals::state)
-				NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, globals::state->currentShader);
+			NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::Direct);
 			func(This, VertexCount, StartVertexLocation);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_DrawIndexedInstanced
+	{
+		static void thunk(ID3D11DeviceContext* This, UINT indexCount, UINT instanceCount, UINT startIndex, INT baseVertex, UINT startInstance)
+		{
+			NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::IndexedInstanced);
+			func(This, indexCount, instanceCount, startIndex, baseVertex, startInstance);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_DrawInstanced
+	{
+		static void thunk(ID3D11DeviceContext* This, UINT vertexCount, UINT instanceCount, UINT startVertex, UINT startInstance)
+		{
+			NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::Instanced);
+			func(This, vertexCount, instanceCount, startVertex, startInstance);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_DrawAuto
+	{
+		static void thunk(ID3D11DeviceContext* This)
+		{
+			NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::Auto);
+			func(This);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_DrawIndexedInstancedIndirect
+	{
+		static void thunk(ID3D11DeviceContext* This, ID3D11Buffer* arguments, UINT offset)
+		{
+			NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::IndexedIndirect);
+			func(This, arguments, offset);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_DrawInstancedIndirect
+	{
+		static void thunk(ID3D11DeviceContext* This, ID3D11Buffer* arguments, UINT offset)
+		{
+			NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::Indirect);
+			func(This, arguments, offset);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -332,5 +380,10 @@ namespace globals
 		Upscaling::InstallVRMenuPresentationTraceD3DHooks(a_context);
 		stl::detour_vfunc<12, ID3D11DeviceContext_DrawIndexed>(a_context);
 		stl::detour_vfunc<13, ID3D11DeviceContext_Draw>(a_context);
+		stl::detour_vfunc<20, ID3D11DeviceContext_DrawIndexedInstanced>(a_context);
+		stl::detour_vfunc<21, ID3D11DeviceContext_DrawInstanced>(a_context);
+		stl::detour_vfunc<38, ID3D11DeviceContext_DrawAuto>(a_context);
+		stl::detour_vfunc<39, ID3D11DeviceContext_DrawIndexedInstancedIndirect>(a_context);
+		stl::detour_vfunc<40, ID3D11DeviceContext_DrawInstancedIndirect>(a_context);
 	}
 }

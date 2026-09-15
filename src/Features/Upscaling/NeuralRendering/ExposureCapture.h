@@ -13,6 +13,17 @@ namespace RE
 
 namespace NeuralRendering::Color
 {
+	enum class ExposureDrawKind : std::uint32_t
+	{
+		Indexed,
+		Direct,
+		IndexedInstanced,
+		Instanced,
+		Auto,
+		IndexedIndirect,
+		Indirect,
+		Count
+	};
 	enum class ExposureBindingState : std::uint32_t
 	{
 		NotRequested,
@@ -79,6 +90,9 @@ namespace NeuralRendering::Color
 		std::uint32_t producersRegistered = 0;
 		ExposureBindingObservation lastBinding{};
 		std::uint64_t epoch = 0, captures = 0, rejected = 0, dropped = 0;
+		std::uint64_t producerScopes = 0;
+		std::uint32_t lastProducerFrame = 0;
+		std::array<std::uint64_t, static_cast<std::size_t>(ExposureDrawKind::Count)> drawCounts{};
 		std::string lastReason;
 		std::array<ExposureEvidence, 8> samples{};
 	};
@@ -108,7 +122,10 @@ namespace NeuralRendering::Color
 		void ObservePixelShaderSelection(ID3D11DeviceContext*, RE::BSShader*,
 			const void* a_engineSelection, ID3D11PixelShader*) noexcept;
 		/// Observe live bindings at the immediate context's HDR draw boundary.
-		void ObserveDraw(ID3D11DeviceContext*, RE::BSShader*) noexcept;
+		void ObserveDraw(ID3D11DeviceContext*, ExposureDrawKind) noexcept;
+		/// Establish the exact engine effect owner for nested draw callbacks.
+		RE::BSShader* EnterProducer(RE::BSShader*) noexcept;
+		void LeaveProducer(RE::BSShader*) noexcept;
 		ExposureCaptureStatus GetStatus() const;
 		bool Bind(ID3D11DeviceContext*, ExposureBinding&, const ExposureTransaction&);
 		void Reset() noexcept;    // Called after Renderer's existing idle/retirement boundary.
@@ -117,5 +134,18 @@ namespace NeuralRendering::Color
 		ExposureCapture();
 		struct State;
 		State* state_;
+	};
+	/** Restore the enclosing producer even when an effect exits exceptionally. */
+	class ExposureProducerScope
+	{
+	public:
+		explicit ExposureProducerScope(RE::BSShader* producer) noexcept :
+			previous_(ExposureCapture::Instance().EnterProducer(producer)) {}
+		~ExposureProducerScope() { ExposureCapture::Instance().LeaveProducer(previous_); }
+		ExposureProducerScope(const ExposureProducerScope&) = delete;
+		ExposureProducerScope& operator=(const ExposureProducerScope&) = delete;
+
+	private:
+		RE::BSShader* previous_;
 	};
 }

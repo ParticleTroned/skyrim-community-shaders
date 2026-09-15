@@ -10,7 +10,10 @@ static unsigned checks = 0;
 static void Require(bool value, const char* message)
 {
 	++checks;
-	if (!value) { std::fprintf(stderr, "Lifecycle check %u: %s\n", checks, message); std::abort(); }
+	if (!value) {
+		std::fprintf(stderr, "Lifecycle check %u: %s\n", checks, message);
+		std::abort();
+	}
 }
 int main()
 {
@@ -51,9 +54,13 @@ int main()
 	ExposureTransaction key{ 20, 19, 0, 0, 1 };
 	Require(p.Begin(key, 0, 2) == Decision::Reject, "missing context");
 	Require(p.Begin(key, 1, 0) == Decision::Reject, "missing device");
-	key.route = 2; Require(p.Begin(key, 1, 2) == Decision::Reject, "invalid route");
-	key.route = 0; key.insertion = 2; Require(p.Begin(key, 1, 2) == Decision::Reject, "invalid insertion");
-	key.insertion = 0; key.sourceWorldFrame = 0xffffffffu;
+	key.route = 2;
+	Require(p.Begin(key, 1, 2) == Decision::Reject, "invalid route");
+	key.route = 0;
+	key.insertion = 2;
+	Require(p.Begin(key, 1, 2) == Decision::Reject, "invalid insertion");
+	key.insertion = 0;
+	key.sourceWorldFrame = 0xffffffffu;
 	Require(p.Begin(key, 1, 2) == Decision::Reject, "unknown source frame");
 	Require(!p.occupied, "invalid admissions cannot acquire a latch");
 	Require(!MatchesExposure({ 10, 0, 1, false }, 10, 0), "zero epoch is unknown");
@@ -62,5 +69,22 @@ int main()
 	Require(!MatchesExposure({ 9, 1, 1, false }, 10, 1), "old frame rejected");
 	Require(!MatchesExposure({ 11, 1, 1, false }, 10, 1), "future frame rejected");
 	Require(MatchesExposure({ 10, 1, 1, false }, 10, 1), "exact producer admitted");
+	ExposureTransaction history{ 11, 11, 0, 0, 1, ExposureSource::CapturedHDRPrevious };
+	const ExposureStamp previous{ 10, 1, 1, false };
+	Require(MatchesExposure(previous, history, 1), "explicit history selects exactly one source frame earlier");
+	Require(!MatchesExposure(previous, history, 2), "history cannot cross a capture epoch");
+	Require(!MatchesExposure({ 9, 1, 1, false }, history, 1), "two-frame history rejected");
+	Require(!MatchesExposure({ 11, 1, 1, false }, history, 1), "history cannot silently upgrade to current frame");
+	Require(!MatchesExposure({ 10, 1, 1, true }, history, 1), "ambiguous history rejected");
+	history.sourceWorldFrame = 0;
+	Require(!MatchesExposure(previous, history, 1), "history cannot underflow the source frame");
+	history.sourceWorldFrame = 0xffffffffu;
+	Require(!MatchesExposure(previous, history, 1), "unknown source frame cannot select history");
+	history.sourceWorldFrame = 11;
+	Require(p.Begin(history, 1, 2) == Decision::NewTransaction, "history starts a new stereo transaction");
+	Require(p.Begin(history, 1, 2) == Decision::Reuse, "history is frozen across eyes and regions");
+	history.source = ExposureSource::CapturedHDR;
+	Require(!MatchesExposure(previous, history, 1), "strict source never accepts previous exposure");
+	Require(p.Begin(history, 1, 2) == Decision::NewTransaction, "changing source policy cannot reuse history latch");
 	std::printf("Passed %u exposure-lifecycle admission checks (not a live GPU test)\n", checks);
 }

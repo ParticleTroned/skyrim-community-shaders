@@ -18,6 +18,7 @@ namespace NeuralRendering::Color
 	namespace
 	{
 		std::array<RE::BSShader*, 2> owners{};
+		thread_local RE::BSShader* activeHDRProducer = nullptr;
 		using SnapshotPixels = std::array<std::array<float, 4>, kExposureSnapshotPixels>;
 
 		SnapshotPixels InvalidSnapshot()
@@ -84,6 +85,8 @@ namespace NeuralRendering::Color
 		};
 		std::atomic_bool requested{ false };
 		std::atomic_uint64_t epoch{ 1 };
+		std::atomic_uint64_t producerScopes{ 0 };
+		std::atomic_uint32_t lastProducerFrame{ 0 };
 		mutable std::mutex mutex;
 		ExposureCaptureStatus status;
 		std::array<Entry, 8> entries{};
@@ -134,7 +137,7 @@ namespace NeuralRendering::Color
 			}
 		}
 
-		void Capture(ID3D11DeviceContext* c, RE::BSShader* producer)
+		void Capture(ID3D11DeviceContext* c, RE::BSShader* producer, ExposureDrawKind kind)
 		{
 			if (!requested.load(std::memory_order_acquire))
 				return;
@@ -146,6 +149,7 @@ namespace NeuralRendering::Color
 			std::scoped_lock lock(mutex);
 			if (std::find(owners.begin(), owners.end(), producer) == owners.end())
 				return;
+			++status.drawCounts[static_cast<std::size_t>(kind)];
 			const auto reject = [&](const char* why) { ++status.rejected; status.lastReason = why; };
 			ComPtr<ID3D11Device> d;
 			c->GetDevice(&d);
@@ -162,9 +166,11 @@ namespace NeuralRendering::Color
 			status.lastBinding.frame = state->frameCount;
 			c->PSGetShaderResources(2, 1, &average);
 			c->PSGetShader(&ps, nullptr, nullptr);
-			const auto* expected = *globals::game::currentPixelShader;
+			const auto* expected = globals::game::currentPixelShader ? *globals::game::currentPixelShader : nullptr;
 			status.lastBinding.shaderIdentity = reinterpret_cast<std::uintptr_t>(ps.Get());
-			status.lastBinding.expectedShaderIdentity = expected ? reinterpret_cast<std::uintptr_t>(expected->shader) : 0;
+			// A scoped effect cannot inherit another effect's cached engine selection.
+			const bool ownedSelection = expected && std::find(producer->pixelShaders.begin(), producer->pixelShaders.end(), expected) != producer->pixelShaders.end();
+			status.lastBinding.expectedShaderIdentity = ownedSelection ? reinterpret_cast<std::uintptr_t>(expected->shader) : 0;
 			if (const auto selected = shaderSelection.Match(reinterpret_cast<std::uintptr_t>(c),
 					reinterpret_cast<std::uintptr_t>(producer), reinterpret_cast<std::uintptr_t>(expected),
 					state->frameCount, epoch.load(std::memory_order_acquire)))
@@ -279,7 +285,7 @@ namespace NeuralRendering::Color
 			evidence.sourceHeight = status.lastBinding.viewHeight;
 			evidence.sourceMip = mip;
 			evidence.shaderIdentity = reinterpret_cast<std::uintptr_t>(ps.Get());
-			evidence.producer = "ISHDR BLEND / AvgTex t2 / D3D11 Draw or DrawIndexed entry";
+			evidence.producer = "ISHDR BLEND effect scope / AvgTex t2 / D3D11 draw entry";
 			ComPtr<ID3D11RenderTargetView> target;
 			c->OMGetRenderTargets(1, &target, nullptr);
 			if (target) {
@@ -381,13 +387,27 @@ namespace NeuralRendering::Color
 		}
 	}
 
-	void ExposureCapture::ObserveDraw(ID3D11DeviceContext* context, RE::BSShader* shader) noexcept
+	RE::BSShader* ExposureCapture::EnterProducer(RE::BSShader* producer) noexcept
 	{
-		if (!state_->requested.load(std::memory_order_acquire) || !shader ||
+		auto* previous = std::exchange(activeHDRProducer, producer);
+		if (producer && globals::state && state_->requested.load(std::memory_order_acquire)) {
+			state_->producerScopes.fetch_add(1, std::memory_order_relaxed);
+			state_->lastProducerFrame.store(globals::state->frameCount, std::memory_order_relaxed);
+		}
+		return previous;
+	}
+	void ExposureCapture::LeaveProducer(RE::BSShader* previous) noexcept
+	{
+		activeHDRProducer = previous;
+	}
+	void ExposureCapture::ObserveDraw(ID3D11DeviceContext* context, ExposureDrawKind kind) noexcept
+	{
+		auto* shader = activeHDRProducer;
+		if (!state_->requested.load(std::memory_order_acquire) || !shader || kind >= ExposureDrawKind::Count ||
 			std::find(owners.begin(), owners.end(), shader) == owners.end())
 			return;
 		try {
-			state_->Capture(context, shader);
+			state_->Capture(context, shader, kind);
 		} catch (const std::exception& e) {
 			std::scoped_lock lock(state_->mutex);
 			++state_->status.rejected;
@@ -448,6 +468,8 @@ namespace NeuralRendering::Color
 		auto status = state_->status;
 		status.requested = state_->requested.load(std::memory_order_acquire);
 		status.epoch = state_->epoch.load(std::memory_order_acquire);
+		status.producerScopes = state_->producerScopes.load(std::memory_order_relaxed);
+		status.lastProducerFrame = state_->lastProducerFrame.load(std::memory_order_relaxed);
 		return status;
 	}
 	bool ExposureCapture::Bind(ID3D11DeviceContext* c, ExposureBinding& output, const ExposureTransaction& key)
@@ -494,7 +516,7 @@ namespace NeuralRendering::Color
 			latch.value.evidence = {};
 			latch.value.state = ExposureBindingState::StaleOrAmbiguous;
 			const auto match = std::find_if(state_->entries.begin(), state_->entries.end(), [&](const State::Entry& e) {
-				return MatchesExposure(e.value.evidence.stamp, key.sourceWorldFrame, epoch);
+				return MatchesExposure(e.value.evidence.stamp, key, epoch);
 			});
 			if (!contextMatches) {
 				latch.value.state = state_->context ? ExposureBindingState::ContextMismatch : ExposureBindingState::WaitingForHDRPass;

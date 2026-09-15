@@ -58,6 +58,17 @@ int main()
 		}
 	}
 	Profile captured{ Domain::Linear, Transform::ReversibleProxy, 1, ExposureSource::CapturedHDR }, effective;
+	Profile history = captured;
+	history.exposureSource = ExposureSource::CapturedHDRPrevious;
+	Require(Valid(history));
+	Require(ResolveExposureProfile(history, EvaluateHDRExposure(2, 0.5f), effective));
+	Require(effective.exposureMultiplier == 0.25f);
+	Configuration historyConfiguration;
+	historyConfiguration.settings.mode = Mode::Managed;
+	historyConfiguration.experiments.profiles[0] = history;
+	Require(NeedsExposureCapture(historyConfiguration));
+	Require(ChangesInput(Configuration{}, historyConfiguration, 0));
+	Require(!ChangesInput(Configuration{}, historyConfiguration, 1));
 	for (auto values : { std::array<float, 2>{ 0, 1 }, { 1, 0 }, { 0, 0 } }) {
 		auto e = EvaluateHDRExposure(values[0], values[1]);
 		Require(e.validity == ExposureValidity::UnitFallback);

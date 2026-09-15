@@ -45,7 +45,7 @@ namespace NeuralRendering::Color
 			const auto& profile = work.observation.profile;
 			const std::uint32_t flags = (config.experiments.transportBypass ? 1u : 0u) |
 			                            (!config.experiments.applyModelEdit ? 2u : 0u) |
-			                            (profile.exposureSource == ExposureSource::CapturedHDR ? 4u : 0u) |
+			                            (profile.exposureSource != ExposureSource::Manual ? 4u : 0u) |
 			                            (NeedsExposureCapture(config) ? 8u : 0u) | static_cast<std::uint32_t>(OutputStorage(work.format));
 			return { roi.baseX, roi.baseY, roi.width, roi.height,
 				static_cast<std::uint32_t>(config.EffectiveMode()), static_cast<std::uint32_t>(profile.domain),
@@ -363,7 +363,8 @@ namespace NeuralRendering::Color
 		o.retainedBytes = 2 * pixelBytes * work.capacityWidth * work.capacityHeight;
 		ComputeStateGuard<5> guard(context);
 		if (NeedsExposureCapture(config)) {
-			const ExposureTransaction key{ o.frame, o.sourceWorldFrame, o.insertion, (o.slot % 4u) / 2u, o.generation };
+			const ExposureTransaction key{ o.frame, o.sourceWorldFrame, o.insertion, (o.slot % 4u) / 2u, o.generation,
+				o.profile.exposureSource == ExposureSource::Manual ? ExposureSource::CapturedHDR : o.profile.exposureSource };
 			if (!ExposureCapture::Instance().Bind(context, work.exposure, key))
 				return false;
 			o.exposureState = work.exposure.state;

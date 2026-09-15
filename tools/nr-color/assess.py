@@ -218,10 +218,12 @@ def assess_samples(groups: list[list[dict]], transport: bool, shown: bool = True
                 failures.append("invalid counts, nonfinite pixels, invalid codec or incomplete samples")
             if v[19] != 1 or not 1 / 256 <= v[18] <= 256:
                 failures.append("effective exposure invalid")
-            if s.get("profile", {}).get("exposureSource") == "captured_hdr":
+            if profile["exposureSource"] != "manual":
                 stamp = s.get("exposure", {})
+                age = 1 if profile["exposureSource"] == "captured_hdr_previous" else 0
                 if (s.get("exposureBinding") != "gpu_snapshot_queued" or v[23] != 1
-                        or stamp.get("frame") != s["sourceWorldFrame"] or stamp.get("ambiguous") is not False
+                        or s["sourceWorldFrame"] < age or stamp.get("frame") != s["sourceWorldFrame"] - age
+                        or stamp.get("ambiguous") is not False
                         or not integer(stamp.get("epoch")) or stamp.get("epoch", 0) == 0
                         or not integer(stamp.get("sequence")) or stamp.get("sequence", 0) == 0):
                     failures.append("missing/stale/ambiguous engine exposure")
@@ -257,7 +259,7 @@ def profile_valid(profile: Any) -> bool:
         return False
     if profile["domain"] not in ("unknown", "linear", "srgb") or profile["transform"] not in ("identity", "linear_to_srgb", "reversible_proxy"):
         return False
-    if profile["exposureSource"] not in ("manual", "captured_hdr") or not number(profile["exposureMultiplier"]) or not 1 / 256 <= profile["exposureMultiplier"] <= 256:
+    if profile["exposureSource"] not in ("manual", "captured_hdr", "captured_hdr_previous") or not number(profile["exposureMultiplier"]) or not 1 / 256 <= profile["exposureMultiplier"] <= 256:
         return False
     return (profile["exposureSource"] == "manual" and profile["exposureMultiplier"] == 1) if profile["transform"] == "identity" else profile["domain"] == "linear"
 
@@ -274,12 +276,16 @@ def frame_floor(status: dict, insertion: int) -> int | None:
     return newest
 
 
-def candidates(include_captured: bool) -> list[dict]:
+def candidates(include_captured: bool, include_previous: bool = False) -> list[dict]:
     choices = [dict(name="identity_native", domain="unknown", transform="identity", exposureSource="manual"),
                dict(name="linear_srgb", domain="linear", transform="linear_to_srgb", exposureSource="manual"),
                dict(name="linear_proxy", domain="linear", transform="reversible_proxy", exposureSource="manual")]
     if include_captured:
         choices += [dict(name="captured_" + transform, domain="linear", transform=transform, exposureSource="captured_hdr")
+                    for transform in ("linear_to_srgb", "reversible_proxy")]
+    if include_previous:
+        choices += [dict(name="captured_previous_" + transform, domain="linear", transform=transform,
+                         exposureSource="captured_hdr_previous")
                     for transform in ("linear_to_srgb", "reversible_proxy")]
     return choices
 
@@ -627,7 +633,7 @@ def run_live(args: argparse.Namespace, directory: Path) -> dict:
             owned_revision, current = expected, updated
             return updated
 
-        for candidate in candidates(args.include_captured):
+        for candidate in candidates(args.include_captured, getattr(args, "include_captured_previous", False)):
             controller.wait_scene()
             latest = controller.call({"action": "status"}, "candidate-owner")
             if latest.get("revision") != owned_revision or editable(latest) != editable(current):
@@ -725,6 +731,8 @@ def main() -> int:
     parser.add_argument("--warmup-frames", type=int, default=16)
     parser.add_argument("--timeout", type=float, default=30)
     parser.add_argument("--include-captured", action="store_true")
+    parser.add_argument("--include-captured-previous", action="store_true",
+                        help="Also assess explicit one-source-frame-old HDR exposure; never current-frame proof")
     parser.add_argument("--capture-episodes", action="store_true")
     parser.add_argument("--confirm-static-scene", action="store_true")
     parser.add_argument("--preflight-only", action="store_true", help="Inspect catalog and runtime identity without scene assumptions or mutations")
@@ -737,7 +745,7 @@ def main() -> int:
     if not 1 <= args.sample_frames <= 30 or not 0 <= args.warmup_frames <= 600 or not 1 <= args.timeout <= 300:
         parser.error("sample/warmup/timeout outside bounded test limits")
     if not args.live:
-        print(json.dumps({"mode": "plan_only", "candidates": candidates(args.include_captured),
+        print(json.dumps({"mode": "plan_only", "candidates": candidates(args.include_captured, getattr(args, "include_captured_previous", False)),
                           "insertion": args.insertion, "worldMutations": False, "domainVerified": False,
                           "requires": "Prepared static scene, identity-bound automation/dev runtime, new evidence directory and explicit --live"}, indent=2))
         return 0

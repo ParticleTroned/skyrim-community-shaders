@@ -330,7 +330,7 @@ int main()
 			for (const auto jitter : { -2.75f, -0.45f, 0.0f, 0.45f, 2.75f }) {
 				std::vector<CharacterMaskRoiTileBounds> mapped;
 				CHECK(MapEarlyCharacterMaskBounds(sourceTiles, 67, 49, crop, 95, 73, jitter, -jitter, radius, mapped));
-				const auto selected = [&](int x, int y) {
+				const auto sourceSelected = [&](int x, int y) {
 					x = crop.baseX + std::clamp(x, 0, static_cast<int>(crop.width) - 1);
 					y = crop.baseY + std::clamp(y, 0, static_cast<int>(crop.height) - 1);
 					return std::ranges::any_of(sourcePieces, [&](const auto& rect) {
@@ -343,10 +343,10 @@ int main()
 						const auto sx = (x + 0.5) * crop.width / 95.0 - 0.5 - jitter;
 						const auto sy = (y + 0.5) * crop.height / 73.0 - 0.5 + jitter;
 						const auto bx = static_cast<int>(std::floor(sx)), by = static_cast<int>(std::floor(sy));
-						bool positive = selected(bx, by) || selected(bx + 1, by) || selected(bx, by + 1) || selected(bx + 1, by + 1);
+						bool positive = sourceSelected(bx, by) || sourceSelected(bx + 1, by) || sourceSelected(bx, by + 1) || sourceSelected(bx + 1, by + 1);
 						for (int dy = -static_cast<int>(radius); dy <= static_cast<int>(radius); ++dy)
 							for (int dx = -static_cast<int>(radius); dx <= static_cast<int>(radius); ++dx)
-								positive = positive || selected(static_cast<int>(std::floor(sx + 0.5)) + dx, static_cast<int>(std::floor(sy + 0.5)) + dy);
+								positive = positive || sourceSelected(static_cast<int>(std::floor(sx + 0.5)) + dx, static_cast<int>(std::floor(sy + 0.5)) + dy);
 						if (positive) {
 							const auto& tile = mapped[(y / 32u) * 3u + x / 32u];
 							CHECK(x >= tile.minX && x < tile.maxX && y >= tile.minY && y < tile.maxY);

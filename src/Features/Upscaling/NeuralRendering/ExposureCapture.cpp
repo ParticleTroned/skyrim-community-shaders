@@ -84,6 +84,8 @@ namespace NeuralRendering::Color
 		ComPtr<ID3D11ComputeShader> shader;
 		bool compileAttempted = false;
 		std::uint64_t sequence = 0;
+		ExposureShaderSelection shaderSelection{};
+		ComPtr<ID3D11PixelShader> selectedPixelShader;
 
 		void Poll()
 		{
@@ -153,6 +155,10 @@ namespace NeuralRendering::Color
 			const auto* expected = *globals::game::currentPixelShader;
 			status.lastBinding.shaderIdentity = reinterpret_cast<std::uintptr_t>(ps.Get());
 			status.lastBinding.expectedShaderIdentity = expected ? reinterpret_cast<std::uintptr_t>(expected->shader) : 0;
+			if (const auto selected = shaderSelection.Match(reinterpret_cast<std::uintptr_t>(c),
+					reinterpret_cast<std::uintptr_t>(producer), reinterpret_cast<std::uintptr_t>(expected),
+					state->frameCount, epoch.load(std::memory_order_acquire)))
+				status.lastBinding.expectedShaderIdentity = selected;
 			status.lastBinding.viewIdentity = reinterpret_cast<std::uintptr_t>(average.Get());
 			if (const auto* why = ExposureDrawRejection(status.lastBinding.expectedShaderIdentity,
 					status.lastBinding.shaderIdentity, status.lastBinding.viewIdentity)) {
@@ -315,6 +321,28 @@ namespace NeuralRendering::Color
 	};
 
 	ExposureCapture::ExposureCapture() : state_(new State) {}
+	void ExposureCapture::ObservePixelShaderSelection(ID3D11DeviceContext* context, RE::BSShader* producer,
+		const void* engineSelection, ID3D11PixelShader* selected) noexcept
+	{
+		if (!state_->requested.load(std::memory_order_acquire) || !globals::state ||
+			context != globals::d3d::context || !producer ||
+			std::find(owners.begin(), owners.end(), producer) == owners.end())
+			return;
+		try {
+			std::scoped_lock lock(state_->mutex);
+			state_->selectedPixelShader = selected;
+			state_->shaderSelection = { reinterpret_cast<std::uintptr_t>(context),
+				reinterpret_cast<std::uintptr_t>(producer), reinterpret_cast<std::uintptr_t>(engineSelection),
+				reinterpret_cast<std::uintptr_t>(selected), globals::state->frameCount,
+				state_->epoch.load(std::memory_order_acquire) };
+		} catch (...) {
+			std::scoped_lock lock(state_->mutex);
+			state_->shaderSelection = {};
+			++state_->status.rejected;
+			state_->status.lastReason = "HDR shader selection observation failed";
+		}
+	}
+
 	void ExposureCapture::ObserveDraw(ID3D11DeviceContext* context, RE::BSShader* shader) noexcept
 	{
 		if (!state_->requested.load(std::memory_order_acquire) || !shader ||
@@ -466,6 +494,8 @@ namespace NeuralRendering::Color
 		std::scoped_lock lock(state_->mutex);
 		state_->entries = {};
 		state_->latches = {};
+		state_->shaderSelection = {};
+		state_->selectedPixelShader.Reset();
 		state_->shader.Reset();
 		state_->device.Reset();
 		state_->context.Reset();
@@ -475,6 +505,8 @@ namespace NeuralRendering::Color
 	void ExposureCapture::Abandon() noexcept
 	{
 		std::scoped_lock lock(state_->mutex);
+		state_->shaderSelection = {};
+		(void)state_->selectedPixelShader.Detach();
 		for (auto& e : state_->entries) {
 			e.value.Abandon();
 			(void)e.uav.Detach();

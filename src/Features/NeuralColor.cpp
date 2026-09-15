@@ -285,11 +285,25 @@ namespace
 	Json Descriptor()
 	{
 		return Json::parse(R"schema({
-  "description": "NR colour v3: shared live controls, display-only A/B, engine HDR exposure capture and asynchronous measurements. measurementBatches retains up to four complete private-reconstruction batches, each with an immutable batch ID, expected physical-slot mask and matching frame/revision/generation. Pending readbacks drain even when a region becomes inactive; latest-per-slot measurements remain diagnostic compatibility fields. Complete batches do not prove outer stereo commit or headset presentation. status also reports registered HDR producers and rejected draw bindings. Capture alone does not enable reconstruction. configure/reset change only the registry. assets checks presence, not compilation. No NVIDIA ABI assumptions or game/profile mutations.",
+  "description": "NR colour v3: shared live controls, display-only A/B, engine HDR exposure capture and asynchronous measurements. measurementBatches retains up to four complete private-reconstruction batches, each with an immutable batch ID, expected physical-slot mask and matching frame/revision/generation. Pending readbacks drain even when a region becomes inactive; latest-per-slot measurements remain diagnostic compatibility fields. Complete batches do not prove outer stereo commit or headset presentation. status also reports registered HDR producers and rejected draw bindings. expectedShaderIdentity is the exact shader recorded by the engine/replacement binding hook for this context, producer, engine selection, frame and capture epoch, or the original engine shader when no matching association exists; the live draw must still match it. Capture alone does not enable reconstruction. configure/reset change only the registry. assets checks presence, not compilation. No NVIDIA ABI assumptions or game/profile mutations.",
   "outputSchema": {
     "type": "object",
     "properties": {
       "apiVersion": { "const": 3 },
+      "engineCapture": {
+        "type": "object",
+        "properties": {
+          "lastBinding": {
+            "type": "object",
+            "properties": {
+              "expectedShaderIdentity": {
+                "type": "integer", "minimum": 0,
+                "description": "Exact recorded engine/replacement selection for this context, HDR producer, engine selection, frame and capture epoch; otherwise the original engine shader."
+              }
+            }
+          }
+        }
+      },
       "measurementBatches": {
         "type": "array", "maxItems": 4,
         "items": {

@@ -73,6 +73,9 @@ namespace NeuralRendering::Color
 		void Request(bool) noexcept;
 		/// Resolve the exact HDR shader instances on the render thread.
 		void RefreshProducers() noexcept;
+		/// Record the exact pixel shader selected by the engine/replacement binding hook.
+		void ObservePixelShaderSelection(ID3D11DeviceContext*, RE::BSShader*,
+			const void* a_engineSelection, ID3D11PixelShader*) noexcept;
 		/// Observe live bindings at the immediate context's HDR draw boundary.
 		void ObserveDraw(ID3D11DeviceContext*, RE::BSShader*) noexcept;
 		ExposureCaptureStatus GetStatus() const;

@@ -4,7 +4,27 @@
 
 namespace NeuralRendering::Color
 {
-	/// Require the live draw to use the selected engine pixel shader and AvgTex.
+	/** Exact engine-to-replacement selection; unrelated draws cannot inherit it. */
+	struct ExposureShaderSelection
+	{
+		std::uintptr_t context = 0, producer = 0, engineShader = 0, selectedShader = 0;
+		std::uint32_t frame = std::numeric_limits<std::uint32_t>::max();
+		std::uint64_t epoch = 0;
+
+		[[nodiscard]] constexpr std::uintptr_t Match(std::uintptr_t a_context,
+			std::uintptr_t a_producer, std::uintptr_t a_engineShader,
+			std::uint32_t a_frame, std::uint64_t a_epoch) const noexcept
+		{
+			return context && producer && engineShader && selectedShader && epoch &&
+			               frame != std::numeric_limits<std::uint32_t>::max() &&
+			               context == a_context && producer == a_producer && engineShader == a_engineShader &&
+			               frame == a_frame && epoch == a_epoch ?
+			           selectedShader :
+			           0;
+		}
+	};
+
+	/// Require the live draw to use the selected engine/replacement shader and AvgTex.
 	[[nodiscard]] constexpr const char* ExposureDrawRejection(std::uintptr_t expectedShader,
 		std::uintptr_t liveShader, std::uintptr_t averageView) noexcept
 	{

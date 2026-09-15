@@ -14,6 +14,18 @@ static void Require(bool value)
 }
 int main()
 {
+	constexpr ExposureShaderSelection selection{ 10, 20, 30, 40, 50, 60 };
+	Require(selection.Match(10, 20, 30, 50, 60) == 40);
+	Require(selection.Match(11, 20, 30, 50, 60) == 0);
+	Require(selection.Match(10, 21, 30, 50, 60) == 0);
+	Require(selection.Match(10, 20, 31, 50, 60) == 0);
+	Require(selection.Match(10, 20, 30, 51, 60) == 0);
+	Require(selection.Match(10, 20, 30, 50, 61) == 0);
+	Require(ExposureShaderSelection{}.Match(0, 0, 0, UINT32_MAX, 0) == 0);
+	Require(ExposureShaderSelection{ 10, 20, 30, 40, UINT32_MAX, 60 }.Match(10, 20, 30, UINT32_MAX, 60) == 0);
+	Require(ExposureShaderSelection{ 10, 20, 30, 0, 50, 60 }.Match(10, 20, 30, 50, 60) == 0);
+	Require(ExposureDrawRejection(selection.Match(10, 20, 30, 50, 60), 40, 70) == nullptr);
+	Require(ExposureDrawRejection(selection.Match(10, 20, 30, 50, 60), 41, 70) != nullptr);
 	Require(ExposureDrawRejection(1, 1, 2) == nullptr);
 	Require(ExposureDrawRejection(0, 1, 2) != nullptr);
 	Require(ExposureDrawRejection(1, 0, 2) != nullptr);

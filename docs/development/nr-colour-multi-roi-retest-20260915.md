@@ -101,6 +101,13 @@ Community Shaders binds a replacement while retaining the original
 engine selection pointer. Captured-exposure candidates and a production
 colour-domain verdict remain unqualified.
 
+The exposure binding hook now records the actual selected shader alongside
+its engine selection, HDR producer, context, frame and capture epoch.
+Draw-time validation accepts that exact replacement association and still
+requires the live shader and AvgTex view. Original engine bindings retain
+their existing validation. Source-frame exposure availability and resource
+shape checks remain unchanged; successful live capture needs another run.
+
 A controlled performance comparison was not run: the required neutral
 probe and ownership epoch were unavailable. NR diagnostic timers were
 retained without treating the colour/recording campaign as a benchmark.
@@ -120,5 +127,12 @@ The attached game was left running.
 
 The category policy regression exercises same-frame expansion, next-frame
 application, retained-source lookup, zero-strength transitions, resource
-reset and independent debug controls. Build and executable-test results
-will be recorded after the required source commit.
+reset and independent debug controls. After commit 0f8247a04:
+
+-   `pwsh ./tools/cmake.ps1 --build build/nrc --config Release --target character_settings_test character_mask_bounds_gpu_test`: passed.
+-   `ctest --test-dir build/nrc -C Release -R '^(CharacterSettings|CharacterMaskBoundsGpu)$' --output-on-failure`: 2/2 passed in 3.31 seconds, including production HLSL and bounded WARP readback checks.
+-   `python tools/nr-color/verify_assets.py` from the source root: passed.
+
+The exposure selection regression rejects mismatched producer, context,
+engine selection, frame, epoch and live replacement identities. Its
+executable results and the replacement DLL build remain pending.

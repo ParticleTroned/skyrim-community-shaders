@@ -721,6 +721,9 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 			*globals::game::currentPixelShader = pixelShader;
 			if (pixelShader)
 				globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
+			NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(
+				globals::d3d::context, shader, pixelShader,
+				pixelShader ? reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader) : nullptr);
 			state->settingCustomShader = false;
 			shaderFound = true;
 		}
@@ -1325,6 +1328,9 @@ namespace Hooks
 							if (pixelShader) {
 								globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
 								*globals::game::currentPixelShader = a_pixelShader;
+								NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(
+									globals::d3d::context, currentShader, a_pixelShader,
+									reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader));
 								return;
 							}
 						}
@@ -1336,6 +1342,9 @@ namespace Hooks
 
 			if (a_pixelShader)
 				globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(a_pixelShader->shader), NULL, NULL);
+			NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(
+				globals::d3d::context, state->currentShader, a_pixelShader,
+				a_pixelShader ? reinterpret_cast<ID3D11PixelShader*>(a_pixelShader->shader) : nullptr);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};

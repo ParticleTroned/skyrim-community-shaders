@@ -399,6 +399,7 @@ namespace NeuralRendering
 			ComputeSubrect maskRoiRequiredSubrect{};
 			double maskRoiReadbackWaitMs = 0.0;
 			double maskRoiPlanningCpuMs = 0.0;
+			std::uint64_t maskRoiReadbackFenceValue = 0;
 			const char* maskRoiLastFailure = "";
 			std::int32_t maskRoiLastFailureResult = 0;
 			std::uint32_t maskRoiLastFailureFrame = std::numeric_limits<std::uint32_t>::max();
@@ -1099,6 +1100,42 @@ namespace NeuralRendering
 			maskBoundsShader_.Reset();
 			maskBoundsConstants_.Reset();
 			maskBoundsShaderFailed_ = false;
+			maskBoundsFence_.Reset();
+			maskBoundsFenceValue_ = 0;
+			maskBoundsFenceUnsupported_ = false;
+		}
+
+		CharacterMaskReadbackCompletion SignalMaskBoundsCompletion(ID3D11DeviceContext* a_context)
+		{
+			if (maskBoundsFenceUnsupported_)
+				return {};
+			ComPtr<ID3D11DeviceContext4> context4;
+			auto result = a_context->QueryInterface(IID_PPV_ARGS(&context4));
+			if (result == E_NOINTERFACE) {
+				maskBoundsFenceUnsupported_ = true;
+				return {};
+			}
+			if (FAILED(result))
+				return { nullptr, 0, result };
+			if (!maskBoundsFence_) {
+				ComPtr<ID3D11Device5> device5;
+				result = device_.As(&device5);
+				if (result == E_NOINTERFACE) {
+					maskBoundsFenceUnsupported_ = true;
+					return {};
+				}
+				if (FAILED(result))
+					return { nullptr, 0, result };
+				result = device5->CreateFence(0, D3D11_FENCE_FLAG_NONE, IID_PPV_ARGS(&maskBoundsFence_));
+				if (FAILED(result))
+					return { nullptr, 0, result };
+				Util::SetResourceName(maskBoundsFence_.Get(), "DLSS5CharacterRendering::MaskReadbackFence");
+			}
+			if (maskBoundsFenceValue_ >= std::numeric_limits<std::uint64_t>::max() - 1u)
+				return { nullptr, 0, HRESULT_FROM_WIN32(ERROR_ARITHMETIC_OVERFLOW) };
+			const auto value = ++maskBoundsFenceValue_;
+			result = context4->Signal(maskBoundsFence_.Get(), value);
+			return { maskBoundsFence_.Get(), value, result };
 		}
 
 		bool EnsureMaskBoundsResources(Slot& a_slot, ID3D11Device* a_device)
@@ -1338,7 +1375,8 @@ namespace NeuralRendering
 		}
 
 		bool ReadCurrentMaskBounds(const CharacterMaskPrepareArgs& a_args, Slot& a_slot,
-			std::chrono::steady_clock::time_point a_deadline)
+			std::chrono::steady_clock::time_point a_deadline,
+			CharacterMaskReadbackCompletion a_completion)
 		{
 			try {
 				if (!a_slot.maskBoundsResolvePending)
@@ -1351,9 +1389,10 @@ namespace NeuralRendering
 					RejectMaskBounds(a_args, a_slot, "queued_bounds_identity_mismatch", E_INVALIDARG);
 					return false;
 				}
+				a_slot.maskRoiReadbackFenceValue = a_completion.value;
 				const auto readback = ReadCharacterMaskBounds(a_args.context,
 					a_slot.maskBoundsReady.Get(), a_slot.maskBoundsStaging.Get(),
-					std::as_writable_bytes(std::span(a_slot.maskBoundsTiles)), a_deadline);
+					std::as_writable_bytes(std::span(a_slot.maskBoundsTiles)), a_deadline, a_completion);
 				a_slot.maskRoiReadbackWaitMs = readback.waitMs;
 				a_slot.maskBoundsResolvePending = false;
 				if (!readback.Ready()) {
@@ -1417,6 +1456,7 @@ namespace NeuralRendering
 			a_eye.maskRoiRequiredSubrect = a_slot.maskRoiRequiredSubrect;
 			a_eye.maskRoiReadbackWaitMs = a_slot.maskRoiReadbackWaitMs;
 			a_eye.maskRoiPlanningCpuMs = a_slot.maskRoiPlanningCpuMs;
+			a_eye.maskRoiReadbackFenceValue = a_slot.maskRoiReadbackFenceValue;
 			a_eye.maskRoiLastFailure = a_slot.maskRoiLastFailure;
 			a_eye.maskRoiLastFailureResult = a_slot.maskRoiLastFailureResult;
 			a_eye.maskRoiLastFailureFrame = a_slot.maskRoiLastFailureFrame;
@@ -2042,6 +2082,9 @@ namespace NeuralRendering
 		ComPtr<ID3D11Buffer> constants_;
 		ComPtr<ID3D11ComputeShader> maskBoundsShader_;
 		ComPtr<ID3D11Buffer> maskBoundsConstants_;
+		ComPtr<ID3D11Fence> maskBoundsFence_;
+		std::uint64_t maskBoundsFenceValue_ = 0;
+		bool maskBoundsFenceUnsupported_ = false;
 		bool maskBoundsShaderFailed_ = false;
 		HRESULT maskBoundsResourceResult_ = S_OK;
 		ComPtr<ID3D11Texture2D> capturedCategories_;
@@ -2879,6 +2922,7 @@ namespace NeuralRendering
 				slot.maskRoiRequiredSubrect = {};
 				slot.maskRoiReadbackWaitMs = 0.0;
 				slot.maskRoiPlanningCpuMs = 0.0;
+				slot.maskRoiReadbackFenceValue = 0;
 				slot.maskBoundsResolvePending = false;
 				if (cpuProvenEmpty || logicalEmptyCapture) {
 					float clearValue = 0.0f;
@@ -2917,8 +2961,9 @@ namespace NeuralRendering
 						if (state_->QueueCurrentMaskBounds(a_args, slot, plan, sourceWorldFrame) &&
 							!a_args.deferMaskRoiReadback) {
 							const auto deadline = std::chrono::steady_clock::now() + kCharacterMaskReadbackBudget;
+							const auto completion = state_->SignalMaskBoundsCompletion(a_args.context);
 							a_args.context->Flush();
-							if (state_->ReadCurrentMaskBounds(a_args, slot, deadline))
+							if (state_->ReadCurrentMaskBounds(a_args, slot, deadline, completion))
 								state_->ResolveCurrentMaskBounds(a_args, slot);
 						}
 					} catch (...) {
@@ -3128,13 +3173,17 @@ namespace NeuralRendering
 				pending = pending || slot.maskBoundsResolvePending;
 			}
 			const auto deadline = std::chrono::steady_clock::now() + kCharacterMaskReadbackBudget;
-			if (pending)
+			CharacterMaskReadbackCompletion completion{};
+			if (pending) {
+				// One GPU signal covers both copies before either staging buffer is mapped.
+				completion = state_->SignalMaskBoundsCompletion(a_args.front().context);
 				a_args.front().context->Flush();
+			}
 			// Read both eyes before CPU planning can spend the shared GPU deadline.
 			std::array<bool, 2> boundsReady{};
 			for (std::size_t index = 0; index < a_args.size(); ++index)
 				boundsReady[index] = state_->ReadCurrentMaskBounds(a_args[index],
-					state_->slots_[a_args[index].featureSlot], deadline);
+					state_->slots_[a_args[index].featureSlot], deadline, completion);
 			std::uint64_t inferencePixels = 0;
 			for (std::size_t index = 0; index < a_args.size(); ++index) {
 				const auto& args = a_args[index];

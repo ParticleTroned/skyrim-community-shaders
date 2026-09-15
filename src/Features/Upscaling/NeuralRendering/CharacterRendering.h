@@ -66,6 +66,8 @@ namespace NeuralRendering
 		ComputeSubrect maskRoiRequiredSubrect{};
 		double maskRoiReadbackWaitMs = 0.0;
 		double maskRoiPlanningCpuMs = 0.0;
+		/** Shared post-copy GPU signal; zero uses event queries or has no pending copy. */
+		std::uint64_t maskRoiReadbackFenceValue = 0;
 		std::string maskRoiLastFailure;
 		std::int32_t maskRoiLastFailureResult = 0;
 		std::uint32_t maskRoiLastFailureFrame = std::numeric_limits<std::uint32_t>::max();

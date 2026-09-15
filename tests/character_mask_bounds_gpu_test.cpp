@@ -23,8 +23,8 @@
 #include <utility>
 #include <vector>
 
-#include "Features/Upscaling/NeuralRendering/CharacterMaskReadback.h"
 #include "Features/Upscaling/NeuralRendering/CharacterCategoryFormat.h"
+#include "Features/Upscaling/NeuralRendering/CharacterMaskReadback.h"
 
 namespace
 {
@@ -43,7 +43,7 @@ namespace
 	void Check(HRESULT result, const char* operation)
 	{
 		Require(SUCCEEDED(result), std::string(operation) + " failed: " +
-			std::to_string(static_cast<unsigned long>(result)));
+									   std::to_string(static_cast<unsigned long>(result)));
 	}
 
 	std::vector<Bounds> Reference(std::uint32_t width, std::uint32_t height,
@@ -93,7 +93,11 @@ namespace
 		{
 			ComPtr<ID3D12Fence> cpuFence;
 			ComPtr<ID3D11Fence> gpuFence;
-			~QueueGate() { if (cpuFence) cpuFence->Signal(1); }
+			~QueueGate()
+			{
+				if (cpuFence)
+					cpuFence->Signal(1);
+			}
 		};
 
 	public:
@@ -102,7 +106,7 @@ namespace
 			constexpr D3D_FEATURE_LEVEL requested = D3D_FEATURE_LEVEL_11_0;
 			D3D_FEATURE_LEVEL actual{};
 			Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0,
-				&requested, 1, D3D11_SDK_VERSION, &device_, &actual, &context_),
+					  &requested, 1, D3D11_SDK_VERSION, &device_, &actual, &context_),
 				"Create WARP device");
 			ComPtr<ID3DBlob> code, errors;
 			const auto path = shaderDirectory / "DLSS5CharacterMaskBoundsCS.hlsl";
@@ -116,7 +120,8 @@ namespace
 			Check(result, "Compile production mask-bounds shader");
 			ComPtr<ID3D11ShaderReflection> reflection;
 			Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(),
-				__uuidof(ID3D11ShaderReflection), &reflection), "Reflect mask-bounds shader");
+					  __uuidof(ID3D11ShaderReflection), &reflection),
+				"Reflect mask-bounds shader");
 			UINT threadsX{}, threadsY{}, threadsZ{};
 			reflection->GetThreadGroupSize(&threadsX, &threadsY, &threadsZ);
 			Require(threadsX == 8 && threadsY == 8 && threadsZ == 1, "Mask-bounds thread layout");
@@ -128,16 +133,17 @@ namespace
 			Check(cb->GetVariableByName("Size")->GetDesc(&sizeDesc), "Reflect Size");
 			Require(sizeDesc.StartOffset == 0 && sizeDesc.Size == sizeof(Bounds), "Mask-bounds Size ABI");
 			for (const auto& binding : std::array{
-				std::pair{ "CharacterSelectionMask", D3D_SIT_TEXTURE },
-				std::pair{ "TileBounds", D3D_SIT_UAV_RWSTRUCTURED },
-				std::pair{ "CharacterMaskBoundsCB", D3D_SIT_CBUFFER } }) {
+					 std::pair{ "CharacterSelectionMask", D3D_SIT_TEXTURE },
+					 std::pair{ "TileBounds", D3D_SIT_UAV_RWSTRUCTURED },
+					 std::pair{ "CharacterMaskBoundsCB", D3D_SIT_CBUFFER } }) {
 				D3D11_SHADER_INPUT_BIND_DESC desc{};
 				Check(reflection->GetResourceBindingDescByName(binding.first, &desc), "Reflect resource binding");
 				Require(desc.BindPoint == 0 && desc.BindCount == 1 && desc.Type == binding.second,
 					std::string("Mask-bounds binding: ") + binding.first);
 			}
 			Check(device_->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(),
-				nullptr, &shader_), "Create mask-bounds shader");
+					  nullptr, &shader_),
+				"Create mask-bounds shader");
 		}
 
 		Sample CreateSample(const std::string& name, std::uint32_t width, std::uint32_t height,
@@ -226,7 +232,8 @@ namespace
 				const auto result = D3DCompileFromFile(path.c_str(), nullptr,
 					D3D_COMPILE_STANDARD_FILE_INCLUDE, "main", "cs_5_0",
 					D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS |
-						D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &errors);
+						D3DCOMPILE_OPTIMIZATION_LEVEL3,
+					0, &code, &errors);
 				if (FAILED(result) && errors)
 					throw std::runtime_error(std::string(static_cast<const char*>(errors->GetBufferPointer()), errors->GetBufferSize()));
 				Check(result, "Compile connected production shader");
@@ -237,14 +244,18 @@ namespace
 			const auto depthCode = compile(L"DLSS5DepthRegionCS.hlsl");
 			ComPtr<ID3D11ComputeShader> captureShader, resolveShader, depthShader;
 			Check(device_->CreateComputeShader(captureCode->GetBufferPointer(), captureCode->GetBufferSize(),
-				nullptr, &captureShader), "Create connected capture shader");
+					  nullptr, &captureShader),
+				"Create connected capture shader");
 			Check(device_->CreateComputeShader(resolveCode->GetBufferPointer(), resolveCode->GetBufferSize(),
-				nullptr, &resolveShader), "Create connected mask shader");
+					  nullptr, &resolveShader),
+				"Create connected mask shader");
 			Check(device_->CreateComputeShader(depthCode->GetBufferPointer(), depthCode->GetBufferSize(),
-				nullptr, &depthShader), "Create connected raw-depth shader");
+					  nullptr, &depthShader),
+				"Create connected raw-depth shader");
 			ComPtr<ID3D11ShaderReflection> depthReflection;
 			Check(D3DReflect(depthCode->GetBufferPointer(), depthCode->GetBufferSize(),
-				IID_PPV_ARGS(&depthReflection)), "Reflect connected raw-depth shader");
+					  IID_PPV_ARGS(&depthReflection)),
+				"Reflect connected raw-depth shader");
 			auto* depthCb = depthReflection->GetConstantBufferByName("DepthRegionCB");
 			D3D11_SHADER_BUFFER_DESC depthCbDesc{};
 			Check(depthCb->GetDesc(&depthCbDesc), "Reflect depth-region constants");
@@ -256,24 +267,25 @@ namespace
 			}
 			ComPtr<ID3D11ShaderReflection> reflection;
 			Check(D3DReflect(resolveCode->GetBufferPointer(), resolveCode->GetBufferSize(),
-				IID_PPV_ARGS(&reflection)), "Reflect connected mask shader");
+					  IID_PPV_ARGS(&reflection)),
+				"Reflect connected mask shader");
 			auto* reflectedCb = reflection->GetConstantBufferByName("CharacterMaskCB");
 			D3D11_SHADER_BUFFER_DESC reflectedDesc{};
 			Check(reflectedCb->GetDesc(&reflectedDesc), "Reflect connected mask constants");
 			Require(reflectedDesc.Size == sizeof(MaskConstants), "Connected mask constants size");
 			for (const auto& field : std::array{
-				std::pair{ "OutputAndSourceSize", offsetof(MaskConstants, outputAndSourceSize) },
-				std::pair{ "SourceCrop", offsetof(MaskConstants, sourceCrop) },
-				std::pair{ "Options", offsetof(MaskConstants, options) },
-				std::pair{ "FeatherOptions", offsetof(MaskConstants, featherOptions) },
-				std::pair{ "VisibilityOptions", offsetof(MaskConstants, visibilityOptions) },
-				std::pair{ "DepthLinearization", offsetof(MaskConstants, depthLinearization) },
-				std::pair{ "CameraProjInverse", offsetof(MaskConstants, cameraProjInverse) },
-				std::pair{ "Jitter", offsetof(MaskConstants, jitter) },
-				std::pair{ "CategoryStrengths", offsetof(MaskConstants, categoryStrengths) },
-				std::pair{ "EligibilityRectangles", offsetof(MaskConstants, eligibilityRectangles) },
-				std::pair{ "DispatchRegion", offsetof(MaskConstants, dispatchRegion) },
-				std::pair{ "AuthoredRegion", offsetof(MaskConstants, authoredRegion) } }) {
+					 std::pair{ "OutputAndSourceSize", offsetof(MaskConstants, outputAndSourceSize) },
+					 std::pair{ "SourceCrop", offsetof(MaskConstants, sourceCrop) },
+					 std::pair{ "Options", offsetof(MaskConstants, options) },
+					 std::pair{ "FeatherOptions", offsetof(MaskConstants, featherOptions) },
+					 std::pair{ "VisibilityOptions", offsetof(MaskConstants, visibilityOptions) },
+					 std::pair{ "DepthLinearization", offsetof(MaskConstants, depthLinearization) },
+					 std::pair{ "CameraProjInverse", offsetof(MaskConstants, cameraProjInverse) },
+					 std::pair{ "Jitter", offsetof(MaskConstants, jitter) },
+					 std::pair{ "CategoryStrengths", offsetof(MaskConstants, categoryStrengths) },
+					 std::pair{ "EligibilityRectangles", offsetof(MaskConstants, eligibilityRectangles) },
+					 std::pair{ "DispatchRegion", offsetof(MaskConstants, dispatchRegion) },
+					 std::pair{ "AuthoredRegion", offsetof(MaskConstants, authoredRegion) } }) {
 				D3D11_SHADER_VARIABLE_DESC desc{};
 				Check(reflectedCb->GetVariableByName(field.first)->GetDesc(&desc), "Reflect connected constants field");
 				Require(desc.StartOffset == field.second, std::string("Connected constants offset: ") + field.first);
@@ -310,7 +322,7 @@ namespace
 			for (UINT y = 0; y < inputHeight; ++y) {
 				for (UINT x = 0; x < packedWidth; ++x) {
 					const float raw = 0.98f + static_cast<float>(x / inputWidth) * 0.003f +
-						static_cast<float>(x % inputWidth) * 0.00001f + static_cast<float>(y) * 0.000005f;
+					                  static_cast<float>(x % inputWidth) * 0.00001f + static_cast<float>(y) * 0.000005f;
 					depthPixels[y * packedWidth + x] = static_cast<std::uint32_t>(std::lround(raw * 16777215.0)) | (29u << 24u);
 				}
 			}
@@ -462,14 +474,15 @@ namespace
 					// Bounds' completed event covers this earlier texture copy too.
 					D3D11_MAPPED_SUBRESOURCE mapped{};
 					Check(context_->Map(depthReadbacks[eye].Get(), 0, D3D11_MAP_READ,
-						D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped), "Map copied D24 raw depth without waiting");
+							  D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped),
+						"Map copied D24 raw depth without waiting");
 					bool rawValuesMatch = true;
 					for (UINT y = 0; y < crop[3]; ++y) {
 						const auto* row = reinterpret_cast<const float*>(static_cast<const std::byte*>(mapped.pData) + y * mapped.RowPitch);
 						for (UINT x = 0; x < crop[2]; ++x) {
 							const auto sourcePixel = (y + crop[1]) * packedWidth + eye * inputWidth + x + crop[0];
 							const float expectedDepth = frame == 1 ? 0.0f :
-								static_cast<float>(depthPixels[sourcePixel] & 0x00ffffffu) / 16777215.0f;
+							                                         static_cast<float>(depthPixels[sourcePixel] & 0x00ffffffu) / 16777215.0f;
 							rawValuesMatch = rawValuesMatch && std::abs(row[x] - expectedDepth) <= 1.0e-7f;
 						}
 					}
@@ -480,10 +493,11 @@ namespace
 			}
 		}
 
-		auto Read(const Sample& sample, std::vector<Bounds>& destination, Clock::time_point deadline)
+		auto Read(const Sample& sample, std::vector<Bounds>& destination, Clock::time_point deadline,
+			NeuralRendering::CharacterMaskReadbackCompletion completion = {})
 		{
 			return NeuralRendering::ReadCharacterMaskBounds(context_.Get(), sample.query.Get(),
-				sample.staging.Get(), std::as_writable_bytes(std::span(destination)), deadline);
+				sample.staging.Get(), std::as_writable_bytes(std::span(destination)), deadline, completion);
 		}
 
 		void Case(const std::string& name, std::uint32_t width, std::uint32_t height,
@@ -516,17 +530,20 @@ namespace
 			Check(dxgiDevice->GetAdapter(&adapter), "Get WARP adapter");
 			ComPtr<ID3D12Device> fenceDevice;
 			Check(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0,
-				IID_PPV_ARGS(&fenceDevice)), "Create shared-fence WARP device");
+					  IID_PPV_ARGS(&fenceDevice)),
+				"Create shared-fence WARP device");
 			ComPtr<ID3D11Device5> device5;
 			ComPtr<ID3D11DeviceContext4> context4;
 			Check(device_.As(&device5), "Query fence-capable D3D11 device");
 			Check(context_.As(&context4), "Query fence-capable immediate context");
 			const auto gateQueue = [&](QueueGate& gate) {
 				Check(fenceDevice->CreateFence(0, D3D12_FENCE_FLAG_SHARED,
-					IID_PPV_ARGS(&gate.cpuFence)), "Create queued-work fence");
+						  IID_PPV_ARGS(&gate.cpuFence)),
+					"Create queued-work fence");
 				HANDLE shared = nullptr;
 				Check(fenceDevice->CreateSharedHandle(gate.cpuFence.Get(), nullptr,
-					GENERIC_ALL, nullptr, &shared), "Share queued-work fence");
+						  GENERIC_ALL, nullptr, &shared),
+					"Share queued-work fence");
 				const auto opened = device5->OpenSharedFence(shared, IID_PPV_ARGS(&gate.gpuFence));
 				CloseHandle(shared);
 				Check(opened, "Open queued-work fence on D3D11");
@@ -541,6 +558,66 @@ namespace
 			const auto left = CreateSample("queued left eye", 65, 49, leftPixels);
 			const auto right = CreateSample("queued right eye", 65, 49, rightPixels);
 			{
+				ComPtr<ID3D11Fence> completionFence;
+				Check(device5->CreateFence(0, D3D11_FENCE_FLAG_NONE, IID_PPV_ARGS(&completionFence)),
+					"Create stereo readback completion fence");
+				Queue(left);
+				context_->Flush();
+				std::vector<Bounds> actualLeft(left.expected.size()), actualRight(right.expected.size());
+				Require(Read(left, actualLeft, Clock::now() + NeuralRendering::kCharacterMaskReadbackBudget).Ready(),
+					"Left copy must finish before the delayed right copy is queued");
+				QueueGate gate;
+				gateQueue(gate);
+				Queue(right);
+				Check(context4->Signal(completionFence.Get(), 1), "Signal completion after both eye copies");
+				context_->Flush();
+				const NeuralRendering::CharacterMaskReadbackCompletion completion{ completionFence.Get(), 1 };
+				const std::vector<Bounds> sentinel(left.expected.size(), Bounds{ 91, 92, 93, 94 });
+				actualLeft = sentinel;
+				Require(Read(left, actualLeft, Clock::now() + std::chrono::milliseconds(2), completion).status ==
+								CharacterMaskReadbackStatus::Timeout &&
+							actualLeft == sentinel,
+					"A ready left query must not admit a staging Map while the stereo fence is pending");
+				Check(gate.cpuFence->Signal(1), "Release delayed right-eye copy");
+				const auto deadline = Clock::now() + NeuralRendering::kCharacterMaskReadbackBudget;
+				Require(Read(left, actualLeft, deadline, completion).Ready() &&
+							Read(right, actualRight, deadline, completion).Ready(),
+					"One fence must admit both current eye copies");
+				Require(actualLeft == left.expected && actualRight == right.expected, "Fenced stereo bounds must be exact");
+				Require(Read(right, actualRight, Clock::now() - std::chrono::milliseconds(1), completion).Ready(),
+					"A completed stereo fence remains readable after the deadline");
+				actualLeft = sentinel;
+				Require(Read(left, actualLeft, deadline, { completionFence.Get(), 0 }).status ==
+								CharacterMaskReadbackStatus::FenceFailed &&
+							actualLeft == sentinel,
+					"Fence value zero must not qualify a current copy");
+				Require(Read(left, actualLeft, deadline, { nullptr, 0, E_FAIL }).status ==
+								CharacterMaskReadbackStatus::FenceFailed &&
+							actualLeft == sentinel,
+					"A failed signal must not fall through to a ready per-eye query");
+				{
+					QueueGate nextGate;
+					gateQueue(nextGate);
+					const std::vector<std::uint8_t> empty(leftPixels.size());
+					context_->UpdateSubresource(left.mask.Get(), 0, nullptr, empty.data(), 65, 0);
+					Queue(left);
+					Queue(right);
+					Check(context4->Signal(completionFence.Get(), 2), "Signal next stereo copy epoch");
+					context_->Flush();
+					const NeuralRendering::CharacterMaskReadbackCompletion next{ completionFence.Get(), 2 };
+					Require(Read(left, actualLeft, Clock::now() + std::chrono::milliseconds(2), next).status ==
+									CharacterMaskReadbackStatus::Timeout &&
+								actualLeft == sentinel,
+						"The previous completed signal must not admit a newer copy");
+					Check(nextGate.cpuFence->Signal(1), "Release next stereo copy epoch");
+					Require(Read(left, actualLeft, Clock::now() + NeuralRendering::kCharacterMaskReadbackBudget, next).Ready() &&
+								actualLeft == std::vector<Bounds>(left.expected.size()),
+						"Only the fresh fenced copy may prove an empty mask");
+				}
+				context_->UpdateSubresource(left.mask.Get(), 0, nullptr, leftPixels.data(), 65, 0);
+				cases_ += 8;
+			}
+			{
 				QueueGate gate;
 				gateQueue(gate);
 				Queue(left);
@@ -550,7 +627,8 @@ namespace
 				// The gate is still closed, so this deterministically reproduces
 				// the old timeout without relying on worker-thread scheduling.
 				Require(Read(left, actualLeft, Clock::now() + std::chrono::milliseconds(2)).status ==
-					CharacterMaskReadbackStatus::Timeout, "Old 2ms deadline must reject queued work");
+							CharacterMaskReadbackStatus::Timeout,
+					"Old 2ms deadline must reject queued work");
 				std::atomic<HRESULT> signalResult{ E_PENDING };
 				std::jthread signal([&] {
 					std::this_thread::sleep_for(std::chrono::milliseconds(8));
@@ -569,7 +647,8 @@ namespace
 				// is already complete must still get one nonblocking readiness probe.
 				std::fill(actualRight.begin(), actualRight.end(), Bounds{});
 				Require(Read(right, actualRight, Clock::now() - std::chrono::milliseconds(1)).Ready() &&
-					actualRight == right.expected, "Already-ready second eye survives an expired shared deadline");
+							actualRight == right.expected,
+					"Already-ready second eye survives an expired shared deadline");
 				++cases_;
 			}
 
@@ -591,8 +670,10 @@ namespace
 				BOOL complete = FALSE;
 				while (!complete && Clock::now() < retireDeadline) {
 					Check(context_->GetData(left.query.Get(), &complete, sizeof(complete),
-						D3D11_ASYNC_GETDATA_DONOTFLUSH), "Retire old copy marker");
-					if (!complete) std::this_thread::yield();
+							  D3D11_ASYNC_GETDATA_DONOTFLUSH),
+						"Retire old copy marker");
+					if (!complete)
+						std::this_thread::yield();
 				}
 				Require(complete && actual == sentinel, "Retirement must not publish stale bounds");
 				const std::vector<std::uint8_t> empty(leftPixels.size());
@@ -600,14 +681,16 @@ namespace
 				Queue(left);
 				context_->Flush();
 				Require(Read(left, actual, Clock::now() + NeuralRendering::kCharacterMaskReadbackBudget).Ready() &&
-					actual == std::vector<Bounds>(left.expected.size()), "Only the new copy supplies current empty bounds");
+							actual == std::vector<Bounds>(left.expected.size()),
+					"Only the new copy supplies current empty bounds");
 				++cases_;
 
 				std::vector<Bounds> tooSmall(left.expected.size() - 1, Bounds{ 91, 92, 93, 94 });
 				const auto before = tooSmall;
 				const auto invalid = Read(left, tooSmall, Clock::now() + NeuralRendering::kCharacterMaskReadbackBudget);
 				Require(invalid.status == CharacterMaskReadbackStatus::MapUnavailable &&
-					invalid.result == E_INVALIDARG && tooSmall == before, "Reject incorrect destination size unchanged");
+							invalid.result == E_INVALIDARG && tooSmall == before,
+					"Reject incorrect destination size unchanged");
 				++cases_;
 			}
 		}

@@ -1973,13 +1973,35 @@ foreach(_current_mask_roi_contract IN ITEMS
     [[const auto deadline = std::chrono::steady_clock::now() + kCharacterMaskReadbackBudget;]]
     [[std::array<bool, 2> boundsReady{};]]
     [[boundsReady[index] = state_->ReadCurrentMaskBounds(a_args[index],]]
-    [[state_->slots_[a_args[index].featureSlot], deadline);]]
+    [[state_->slots_[a_args[index].featureSlot], deadline, completion);]]
+    [[completion = state_->SignalMaskBoundsCompletion(a_args.front().context);]]
+    [[result = context4->Signal(maskBoundsFence_.Get(), value);]]
+    [[a_eye.maskRoiReadbackFenceValue = a_slot.maskRoiReadbackFenceValue;]]
     [[if (boundsReady[index])]]
     [[state_->ResolveCurrentMaskBounds(args, slot);]]
 )
     string(FIND "${_character_source}" "${_current_mask_roi_contract}" _current_mask_roi_position)
     if(_current_mask_roi_position EQUAL -1)
         message(FATAL_ERROR "Current prepared-mask spatial evidence contract is missing: ${_current_mask_roi_contract}")
+    endif()
+endforeach()
+string(FIND "${_character_source}"
+    [[completion = state_->SignalMaskBoundsCompletion(a_args.front().context);]] _batch_signal)
+string(FIND "${_character_source}"
+    [[a_args.front().context->Flush();]] _batch_flush)
+string(FIND "${_character_source}"
+    [[boundsReady[index] = state_->ReadCurrentMaskBounds(a_args[index],]] _batch_read)
+if(NOT _batch_signal LESS _batch_flush OR NOT _batch_flush LESS _batch_read)
+    message(FATAL_ERROR "Stereo completion must be signaled and flushed before either staging read")
+endif()
+foreach(_readback_bridge_contract IN ITEMS
+    [[{ "maskRoiReadbackFenceValue", eye.maskRoiReadbackFenceValue }]]
+    [["maskRoiReadbackFenceValue":{"type":"integer","minimum":0]]
+    [[Neither staging buffer is mapped before that fence completes]]
+)
+    string(FIND "${_bridge}" "${_readback_bridge_contract}" _readback_bridge_position)
+    if(_readback_bridge_position EQUAL -1)
+        message(FATAL_ERROR "Readback completion telemetry contract is missing: ${_readback_bridge_contract}")
     endif()
 endforeach()
 foreach(_stale_zero_token IN ITEMS

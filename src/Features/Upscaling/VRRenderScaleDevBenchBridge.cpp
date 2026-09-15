@@ -9,6 +9,9 @@
 #	include "Features/VR.h"
 #	include "Globals.h"
 #	include "Profiler.h"
+#	include "BuildProvenance.h"
+#	include "ShaderCache.h"
+#	include "Menu.h"
 #	include "State.h"
 
 #	include <DevBenchAPI.h>
@@ -878,8 +881,8 @@ namespace
 			const auto exposedComputeRegionCount = std::min<std::size_t>(
 				reportedComputeRegionCount, eye.computeRegions.regions.size());
 			for (std::size_t regionIndex = 0;
-				 regionIndex < exposedComputeRegionCount;
-				 ++regionIndex) {
+				regionIndex < exposedComputeRegionCount;
+				++regionIndex) {
 				const auto& region = eye.computeRegions.regions[regionIndex];
 				computeRegions.push_back({
 					{ "region", regionIndex },
@@ -896,9 +899,9 @@ namespace
 				static_cast<std::uint64_t>(eye.evaluationWidth) *
 				eye.evaluationHeight;
 			const auto multiRoiCoveragePercent = evaluationPixels != 0 ?
-				static_cast<double>(eye.multiRoiPixels) * 100.0 /
-					static_cast<double>(evaluationPixels) :
-				0.0;
+			                                         static_cast<double>(eye.multiRoiPixels) * 100.0 /
+			                                             static_cast<double>(evaluationPixels) :
+			                                         0.0;
 			const bool multiRoiSplit =
 				eye.computeRegions.count == 2u &&
 				eye.multiRoiReason == NeuralRendering::CharacterMultiRoiReason::Split;
@@ -951,12 +954,12 @@ namespace
 				{ "maskRoiGpuProvenEmpty", eye.maskRoiGpuProvenEmpty },
 				{ "maskRoiOccupiedTiles", eye.maskRoiOccupiedTiles },
 				{ "maskRoiRequiredSubrect", {
-											  { "baseX", eye.maskRoiRequiredSubrect.baseX },
-											  { "baseY", eye.maskRoiRequiredSubrect.baseY },
-											  { "width", eye.maskRoiRequiredSubrect.width },
-											  { "height", eye.maskRoiRequiredSubrect.height },
-											  { "valid", eye.maskRoiRequiredSubrect.IsValid() },
-										  } },
+												{ "baseX", eye.maskRoiRequiredSubrect.baseX },
+												{ "baseY", eye.maskRoiRequiredSubrect.baseY },
+												{ "width", eye.maskRoiRequiredSubrect.width },
+												{ "height", eye.maskRoiRequiredSubrect.height },
+												{ "valid", eye.maskRoiRequiredSubrect.IsValid() },
+											} },
 				{ "maskRoiReadbackWaitMs", eye.maskRoiReadbackWaitMs },
 				{ "maskRoiLastFailure", eye.maskRoiLastFailure },
 				{ "maskRoiLastFailureResult", eye.maskRoiLastFailureResult },
@@ -1104,9 +1107,9 @@ namespace
 				currentPreparedCharacterSlotMask,
 				currentEvaluationRequiredCharacterSlotMask);
 		auto resolveExpectedPhysicalSlots = [&](
-			std::uint32_t a_logicalMask,
-			std::uint32_t& a_physicalMask,
-			std::uint32_t& a_evaluationCount) noexcept {
+												std::uint32_t a_logicalMask,
+												std::uint32_t& a_physicalMask,
+												std::uint32_t& a_evaluationCount) noexcept {
 			a_physicalMask = 0u;
 			a_evaluationCount = 0u;
 			if (!attributedPreparationFound ||
@@ -1157,8 +1160,8 @@ namespace
 			lastFeatureLogicalEyeCount == 1u;
 		const bool featureTimingLogicalEyeCountMatches =
 			lastFeatureLogicalEyeCount ==
-				static_cast<std::uint32_t>(
-					std::popcount(lastLogicalFeatureSlotMask));
+			static_cast<std::uint32_t>(
+				std::popcount(lastLogicalFeatureSlotMask));
 		const bool featureTimingPhysicalScopeMatches =
 			sampledScopeRegionCountsValid &&
 			lastFeatureSlotMask == sampledScopeExpectedPhysicalSlotMask &&
@@ -1171,8 +1174,8 @@ namespace
 			featureTimingLogicalEyeCountMatches &&
 			featureTimingPhysicalScopeMatches &&
 			(featureTimingIsStereoPair ?
-				 lastLogicalFeatureSlotMask == expectedFeatureSlotMask :
-				 featureTimingIsEyeSample);
+					lastLogicalFeatureSlotMask == expectedFeatureSlotMask :
+					featureTimingIsEyeSample);
 		const bool featureTimingMatchesPreparedMask =
 			attributedPreparationFound && expectedFeatureSlotMask != 0 &&
 			expectedFeatureRegionCountsValid && featureTimingSlotsMatch;
@@ -1399,15 +1402,15 @@ namespace
 														{ "sequentialStereo", ProfileTimerJson("Upscaling::DLSSNeuralRenderingSequentialStereo") },
 													} },
 							   { "lastFeature18GpuSample", {
-																	   { "available", rendererSnapshot.performance.lastFeatureFrameId != std::numeric_limits<std::uint32_t>::max() },
-																	   { "frame", rendererSnapshot.performance.lastFeatureFrameId != std::numeric_limits<std::uint32_t>::max() ? json(rendererSnapshot.performance.lastFeatureFrameId) : json(nullptr) },
-																	   { "gpuMicroseconds", rendererSnapshot.performance.lastFeatureGpuMicroseconds },
-																	   { "pixelCount", rendererSnapshot.performance.lastFeaturePixelCount },
-																	   { "evaluationCount", rendererSnapshot.performance.lastFeatureEvaluationCount },
-																	   { "slotMask", lastFeatureSlotMask },
-																	   { "physicalSlotMask", lastFeatureSlotMask },
-																	   { "logicalSlotMask", lastLogicalFeatureSlotMask },
-																	   { "logicalEyeCount", lastFeatureLogicalEyeCount },
+															   { "available", rendererSnapshot.performance.lastFeatureFrameId != std::numeric_limits<std::uint32_t>::max() },
+															   { "frame", rendererSnapshot.performance.lastFeatureFrameId != std::numeric_limits<std::uint32_t>::max() ? json(rendererSnapshot.performance.lastFeatureFrameId) : json(nullptr) },
+															   { "gpuMicroseconds", rendererSnapshot.performance.lastFeatureGpuMicroseconds },
+															   { "pixelCount", rendererSnapshot.performance.lastFeaturePixelCount },
+															   { "evaluationCount", rendererSnapshot.performance.lastFeatureEvaluationCount },
+															   { "slotMask", lastFeatureSlotMask },
+															   { "physicalSlotMask", lastFeatureSlotMask },
+															   { "logicalSlotMask", lastLogicalFeatureSlotMask },
+															   { "logicalEyeCount", lastFeatureLogicalEyeCount },
 															   { "insertionPoint", NeuralRendering::GetInsertionPointName(rendererSnapshot.performance.lastInsertionPoint) },
 															   { "preparedCharacterSlotMask", preparedCharacterSlotMask },
 															   { "evaluationRequiredCharacterSlotMask", evaluationRequiredCharacterSlotMask },
@@ -1417,23 +1420,23 @@ namespace
 															   { "successfulCharacterSlotMask", successfulCharacterSlotMask },
 															   { "bypassedCharacterSlotMask", bypassedCharacterSlotMask },
 															   { "abortedCharacterSlotMask", abortedCharacterSlotMask },
-																	   { "expectedFeatureSlotMask", expectedFeatureSlotMask },
-																	   { "expectedPhysicalFeatureSlotMask", expectedPhysicalFeatureSlotMask },
-																	   { "expectedFeatureEvaluationCount", expectedFeatureEvaluationCount },
-																	   { "expectedFeatureRegionCountsValid", expectedFeatureRegionCountsValid },
-																	   { "preparedFrameFound", attributedPreparationFound },
-																	   { "missingPreparedFeatureSlotMask", missingPreparedFeatureSlots },
-																	   { "missingExpectedFeatureSlotMask", missingExpectedFeatureSlots },
-																	   { "unexpectedFeatureSlotMask", unexpectedFeatureSlots },
-																	   { "missingExpectedPhysicalFeatureSlotMask", missingExpectedPhysicalFeatureSlots },
-																	   { "unexpectedPhysicalFeatureSlotMask", unexpectedPhysicalFeatureSlots },
-																	   { "sampledScopeExpectedPhysicalSlotMask", sampledScopeExpectedPhysicalSlotMask },
-																	   { "sampledScopeExpectedEvaluationCount", sampledScopeExpectedEvaluationCount },
-																	   { "sampledScopeRegionCountsValid", sampledScopeRegionCountsValid },
-																	   { "logicalEyeCountMatchesSlotMask", featureTimingLogicalEyeCountMatches },
-																	   { "physicalScopeMatchesPreparation", featureTimingPhysicalScopeMatches },
-																	   { "correlationScope", featureTimingIsStereoPair ? "stereo_pair" : (featureTimingIsEyeSample ? "eye_sample" : "invalid") },
-																	   { "coversPreparedStereoPair", featureTimingIsStereoPair && featureTimingMatchesPreparedMask && lastLogicalFeatureSlotMask == expectedFeatureSlotMask },
+															   { "expectedFeatureSlotMask", expectedFeatureSlotMask },
+															   { "expectedPhysicalFeatureSlotMask", expectedPhysicalFeatureSlotMask },
+															   { "expectedFeatureEvaluationCount", expectedFeatureEvaluationCount },
+															   { "expectedFeatureRegionCountsValid", expectedFeatureRegionCountsValid },
+															   { "preparedFrameFound", attributedPreparationFound },
+															   { "missingPreparedFeatureSlotMask", missingPreparedFeatureSlots },
+															   { "missingExpectedFeatureSlotMask", missingExpectedFeatureSlots },
+															   { "unexpectedFeatureSlotMask", unexpectedFeatureSlots },
+															   { "missingExpectedPhysicalFeatureSlotMask", missingExpectedPhysicalFeatureSlots },
+															   { "unexpectedPhysicalFeatureSlotMask", unexpectedPhysicalFeatureSlots },
+															   { "sampledScopeExpectedPhysicalSlotMask", sampledScopeExpectedPhysicalSlotMask },
+															   { "sampledScopeExpectedEvaluationCount", sampledScopeExpectedEvaluationCount },
+															   { "sampledScopeRegionCountsValid", sampledScopeRegionCountsValid },
+															   { "logicalEyeCountMatchesSlotMask", featureTimingLogicalEyeCountMatches },
+															   { "physicalScopeMatchesPreparation", featureTimingPhysicalScopeMatches },
+															   { "correlationScope", featureTimingIsStereoPair ? "stereo_pair" : (featureTimingIsEyeSample ? "eye_sample" : "invalid") },
+															   { "coversPreparedStereoPair", featureTimingIsStereoPair && featureTimingMatchesPreparedMask && lastLogicalFeatureSlotMask == expectedFeatureSlotMask },
 															   { "matchesPreparedCharacterMask", featureTimingMatchesPreparedMask },
 														   } },
 							   { "composite", ProfileTimerJson("Upscaling::DLSS5CharacterComposite") },
@@ -1614,8 +1617,8 @@ namespace
 			{ "safeControlContract", {
 										 { "useAutoMask", {
 															  { "fixed", true },
-															  { "requiredValue", !a_upscaling.settings.neuralCharacterRenderingEnabled },
-															  { "policy", "automatic_without_character_mask_manual_with_character_mask" },
+															  { "requiredValue", true },
+															  { "policy", "automatic_with_csx_character_output_isolation" },
 														  } },
 										 { "uiCorrection", { { "fixed", true }, { "requiredValue", false } } },
 									 } },
@@ -1820,11 +1823,11 @@ namespace
 			{ "frame", frame },
 			{ "modeStatus", Upscaling::GetVRRenderScaleModeStatusName(a_upscaling.GetVRRenderScaleModeStatus()) },
 			{ "renderScaleSelectionPolicy", {
-				{ "linkedToUpscaling", a_upscaling.settings.renderScaleLinkedToUpscaling },
-				{ "rememberedPreference", a_upscaling.GetVRRenderScaleModePreference() },
-				{ "requestedActive", a_upscaling.GetVRRenderScaleModeRequested() },
-				{ "physicallyActive", a_upscaling.IsVRRenderScaleModeLatched() },
-			} },
+												{ "linkedToUpscaling", a_upscaling.settings.renderScaleLinkedToUpscaling },
+												{ "rememberedPreference", a_upscaling.GetVRRenderScaleModePreference() },
+												{ "requestedActive", a_upscaling.GetVRRenderScaleModeRequested() },
+												{ "physicallyActive", a_upscaling.IsVRRenderScaleModeLatched() },
+											} },
 			{ "loadPresentationProbe", a_upscaling.BuildVRLoadPresentationProbeStatus() },
 			{ "neuralRendering", NeuralRenderingStatusJson(a_upscaling) },
 			{ "session", {
@@ -2009,10 +2012,16 @@ namespace
 		}
 
 		try {
+			if (output.contains("error")) {
+				output["ok"] = false;
+				if (output.contains("errorCode"))
+					output["code"] = output["errorCode"];
+			}
+			BuildProvenance::AttachProducer(output);
 			const std::string serialized = output.dump();
 			a_write(a_sink, serialized.c_str());
 		} catch (...) {
-			const char* fallback = R"({"error":"response serialization failed"})";
+			const char* fallback = R"({"ok":false,"error":"response serialization failed"})";
 			a_write(a_sink, fallback);
 		}
 	}
@@ -2180,6 +2189,7 @@ namespace
 		std::string_view{ "singleSubrectScale" },
 		std::string_view{ "characterEnabled" },
 		std::string_view{ "characterVisualIsolationEnabled" },
+		std::string_view{ "experimentalMultiRoi" },
 		std::string_view{ "characterFaces" },
 		std::string_view{ "characterSkin" },
 		std::string_view{ "characterHair" },
@@ -2218,6 +2228,7 @@ namespace
 		std::optional<float> singleSubrectScale;
 		std::optional<bool> characterEnabled;
 		std::optional<bool> characterVisualIsolationEnabled;
+		std::optional<bool> experimentalMultiRoi;
 		std::optional<bool> characterFaces;
 		std::optional<bool> characterSkin;
 		std::optional<bool> characterHair;
@@ -2244,7 +2255,7 @@ namespace
 
 		[[nodiscard]] bool HasCharacterControls() const noexcept
 		{
-			return characterEnabled || characterVisualIsolationEnabled ||
+			return characterEnabled || characterVisualIsolationEnabled || experimentalMultiRoi ||
 			       characterFaces || characterSkin ||
 			       characterHair || characterFaceStrength ||
 			       characterSkinStrength || characterHairStrength ||
@@ -2466,6 +2477,7 @@ namespace
 			!parseBoolean("useAutoMask", a_request.useAutoMask) ||
 			!parseBoolean("uiCorrection", a_request.uiCorrection) ||
 			!parseBoolean("characterEnabled", a_request.characterEnabled) ||
+			!parseBoolean("experimentalMultiRoi", a_request.experimentalMultiRoi) ||
 			!parseBoolean(
 				"characterVisualIsolationEnabled",
 				a_request.characterVisualIsolationEnabled) ||
@@ -3699,6 +3711,52 @@ namespace
 	json BuildRenderScaleResult(const json& a_args)
 	{
 		const std::string action = a_args.value("action", std::string("status"));
+		if (action == "nr_readiness") {
+			if (a_args.size() != 1)
+				return json{ { "ok", false }, { "error", "nr_readiness accepts only action" } };
+			return RunOnMainThread([]() {
+				auto& upscaling = globals::features::upscaling;
+				const auto snapshot = upscaling.GetVRRenderScaleTransitionSnapshot();
+				json reasons = json::array();
+				const auto require = [&](bool condition, const char* reason) {
+					if (!condition)
+						reasons.push_back(reason);
+				};
+				require(globals::game::isVR, "not_skyrim_vr");
+				require(globals::state && !globals::state->IsWorldLoadTransitionActive() &&
+							!globals::state->pendingPostLoadRuntimeReset && !globals::state->isLoadingMenuOpen,
+					"world_load_pending");
+				require(globals::shaderCache && !globals::shaderCache->IsCompiling(), "shaders_compiling");
+				require(!upscaling.IsSubmitStageDeviceLost(), "device_lost");
+				require(Hooks::GetCaptureRenderTargetGeneration() != 0, "targets_not_published");
+				require(!snapshot.metrics.current.valid && !snapshot.postLoadRecovery.active &&
+							!snapshot.memoryTrim.pending && !snapshot.retirement.fencePending &&
+							!snapshot.retirement.capacityBlocked && !snapshot.engineTargetRetirement.fencePending &&
+							!snapshot.engineTargetRetirement.capacityBlocked,
+					"resource_transition_pending");
+				const bool scaled = upscaling.IsVRRenderScaleModeLatched();
+				require(upscaling.GetVRRenderScaleModeRequested() == scaled, "mode_relatch_pending");
+				if (scaled) {
+					require(snapshot.state == Upscaling::VRRenderScaleTransitionState::Active,
+						"scaled_controller_not_active");
+					require(snapshot.requested.valid && snapshot.applied.valid && snapshot.stable.valid &&
+								snapshot.requested.requestID == snapshot.applied.requestID &&
+								snapshot.applied.requestID == snapshot.stable.requestID &&
+								snapshot.applied.contractGeneration == snapshot.stable.contractGeneration,
+						"profiles_not_settled");
+					require(snapshot.fidelity.bothEyesValid && snapshot.fidelity.lastMismatchMask == 0,
+						"stereo_fidelity_unavailable");
+				} else {
+					require(snapshot.state == Upscaling::VRRenderScaleTransitionState::Idle ||
+								snapshot.state == Upscaling::VRRenderScaleTransitionState::Active,
+						"native_controller_not_settled");
+				}
+				return json{ { "ok", true }, { "action", "nr_readiness" }, { "readinessVersion", 1 },
+					{ "ready", reasons.empty() }, { "reasons", reasons }, { "status", BuildStatus(upscaling) },
+					{ "targetGeneration", Hooks::GetCaptureRenderTargetGeneration() },
+					{ "scope", "prepared_nr_scene_quiescence" }, { "presentationQualified", false } };
+			});
+		}
 		if (action == "foveation_configure") {
 			FoveationConfigurationRequest request;
 			json error;
@@ -3771,6 +3829,7 @@ namespace
 				auto& upscaling = globals::features::upscaling;
 				return json{
 					{ "action", "nr_status" },
+					{ "ok", true },
 					{ "neuralRendering", NeuralRenderingStatusJson(upscaling) },
 				};
 			});
@@ -3831,6 +3890,8 @@ namespace
 				}
 				if (request.characterEnabled)
 					requestedSettings.neuralCharacterRenderingEnabled = *request.characterEnabled;
+				if (request.experimentalMultiRoi)
+					requestedSettings.neuralCharacterMultiRoiEnabled = *request.experimentalMultiRoi;
 				if (request.characterVisualIsolationEnabled) {
 					requestedSettings.neuralCharacterVisualIsolationEnabled =
 						*request.characterVisualIsolationEnabled;
@@ -3906,9 +3967,11 @@ namespace
 				}
 				requestedSettings.neuralRenderingAutoMask = requiredAutoMask;
 
-				const bool runtimeSettingsChanged =
-					!Upscaling::HasSameNeuralRenderingSettingsKey(
-						previousSettings, requestedSettings);
+				const bool multiRoiChanged = previousSettings.neuralCharacterMultiRoiEnabled !=
+				                             requestedSettings.neuralCharacterMultiRoiEnabled;
+				const bool runtimeSettingsChanged = multiRoiChanged ||
+				                                    !Upscaling::HasSameNeuralRenderingSettingsKey(
+														previousSettings, requestedSettings);
 
 				const bool enableStateChanged =
 					previousSettings.neuralRenderingEnabled !=
@@ -3936,6 +3999,7 @@ namespace
 					previousSettings.neuralCharacterVisualIsolationEnabled !=
 					requestedSettings.neuralCharacterVisualIsolationEnabled;
 				const bool characterSettingsChanged =
+					multiRoiChanged ||
 					previousSettings.neuralCharacterRenderingEnabled != requestedSettings.neuralCharacterRenderingEnabled ||
 					characterVisualIsolationChanged ||
 					previousSettings.neuralCharacterFacesEnabled != requestedSettings.neuralCharacterFacesEnabled ||
@@ -3994,7 +4058,7 @@ namespace
 											   "tuning";
 				const bool resetAttempted =
 					runtimeSettingsChanged &&
-					(enableStateChanged || insertionPointChanged);
+					(enableStateChanged || insertionPointChanged || multiRoiChanged);
 
 				settings = requestedSettings;
 				const bool transitionSucceeded =
@@ -4005,6 +4069,7 @@ namespace
 				json response{
 					{ "action", "nr_configure" },
 					{ "settingsChanged", true },
+					{ "ok", transitionSucceeded },
 					{ "runtimeSettingsChanged", runtimeSettingsChanged },
 					{ "insertionPointChanged", insertionPointChanged },
 					{ "implementationChanged", implementationChanged },
@@ -4094,6 +4159,7 @@ namespace
 													 "DevBench neural-rendering matrix cycle");
 				return json{
 					{ "action", "nr_cycle_modes" },
+					{ "ok", transitionSucceeded },
 					{ "previousIndex", previousIndex },
 					{ "currentIndex", currentIndex },
 					{ "nextIndex", (currentIndex + 1u) % matrixSize },
@@ -4125,6 +4191,7 @@ namespace
 				upscaling.RequestHistoryReset();
 				json response{
 					{ "action", "nr_reset" },
+					{ "ok", resetSucceeded },
 					{ "resetSucceeded", resetSucceeded },
 					{ "characterStateReset", true },
 					{ "historyResetRequested", true },
@@ -4338,7 +4405,7 @@ namespace
 		return {
 			{ "error", "unknown action" },
 			{ "action", action },
-			{ "supported", json::array({ "status", "record", "start", "apply", "stop", "reset", "probe_start", "probe_stop", "probe_record", "probe_reset", "nr_status", "nr_configure", "nr_cycle_modes", "nr_reset", "foveation_configure", "foveation_cycle" }) },
+			{ "supported", json::array({ "status", "record", "start", "apply", "stop", "reset", "probe_start", "probe_stop", "probe_record", "probe_reset", "nr_readiness", "nr_status", "nr_configure", "nr_cycle_modes", "nr_reset", "foveation_configure", "foveation_cycle" }) },
 		};
 	}
 
@@ -4365,11 +4432,11 @@ namespace VRRenderScaleDevBenchBridge
 
 		static constexpr const char* descriptor =
 			R"({
-  "description":"Control and inspect Community Shaders VR render-scale stress iterations, DLSS Neural Rendering, character masking, and foveated-center tuning. nr_status returns the API-v9 NR runtime, routes, temporal admission, GPU telemetry, and frame-attributed per-eye character diagnostics. NR runtime admission is independent of Developer Mode and Streamline logging: any 310.8 runtime with the required exports and stable loaded-image identity is accepted, while SHA-256 is informational. Character diagnostics count authored face, skin, and hair pixels across the active low-resolution eye input, report visible/rejected evaluation pixels and exact frozen/current depth coordinates, and retain frame-keyed preparation history for asynchronous Feature 18 attribution. Same-frame category/depth capture is idempotent. Feature 18 bypasses CPU-proven empty eyes or experimental current prepared-mask GPU-proven empty eyes; delayed GPU coverage samples are diagnostic and never suppress current-frame evaluation. Diagnostic coverage measurement runs only on policy changes or a fixed cadence. Experimental Multi-ROI queues both current prepared-mask reductions before one GPU flush and resolves them with a shared 50 ms readiness deadline; unavailable evidence retains conservative projected bounds and the last failure reason/HRESULT remains visible through retry backoff. Feature 18 always uses its working automatic-mask invocation; characterVisualIsolationEnabled=true unions the current per-eye projected face, skin, and hair eligibility bounds into one private Feature 18 compute subrect, while experimentalMultiRoi can tighten that enclosure from current resolved-mask spatial clusters or evaluate two disjoint clusters through independent feature instances. It composites the partial output over normal DLSS through CSX's exact per-eye R8_UNORM 0..1 selection mask. Feature 18 color, depth-guide, motion-vector, provider-output, and late-overlay work are restricted to that rectangle. The Upscaled-Center baseline composite still covers the existing center so normal DLSS fills pixels outside the exact mask. The private provider ControlMask ABI is not used and multi/sparse provider ROI remains unsupported. Character isolation forces the Upscaled Center route to staged output so normal DLSS remains available without an extra baseline copy; final-LDR and submit routes already preserve a separate baseline. nr_configure strictly accepts one or more NR or character controls through the in-game reset/history contract; useAutoMask=false is rejected. Debug-view-only changes are applied without a history reset. nr_cycle_modes preserves the four-lane stereo implementation cycle. foveation_configure atomically applies validated foveation controls on the main thread. Existing render-scale mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.",
+  "description":"Control and inspect Community Shaders VR render-scale stress iterations, DLSS Neural Rendering, character masking, and foveated-center tuning. nr_status returns the API-v9 NR runtime, routes, temporal admission, GPU telemetry, and frame-attributed per-eye character diagnostics. NR runtime admission is independent of Developer Mode and Streamline logging: any 310.8 runtime with the required exports and stable loaded-image identity is accepted, while SHA-256 is informational. Character diagnostics count authored face, skin, and hair pixels across the active low-resolution eye input, report visible/rejected evaluation pixels and exact frozen/current depth coordinates, and retain frame-keyed preparation history for asynchronous Feature 18 attribution. Same-frame category/depth capture is idempotent. Feature 18 bypasses CPU-proven empty eyes or experimental current prepared-mask GPU-proven empty eyes; delayed GPU coverage samples are diagnostic and never suppress current-frame evaluation. Diagnostic coverage measurement runs only on policy changes or a fixed cadence. Experimental Multi-ROI queues both current prepared-mask reductions before one GPU flush and resolves them with a shared 50 ms readiness deadline; unavailable evidence retains conservative projected bounds and the last failure reason/HRESULT remains visible through retry backoff. Feature 18 always uses its working automatic-mask invocation; characterVisualIsolationEnabled=true unions the current per-eye projected face, skin, and hair eligibility bounds into one private Feature 18 compute subrect, while experimentalMultiRoi can tighten that enclosure from current resolved-mask spatial clusters or evaluate two disjoint clusters through independent feature instances. It composites the partial output over normal DLSS through CSX's exact per-eye R8_UNORM 0..1 selection mask. Feature 18 color, depth-guide, motion-vector, provider-output, and late-overlay work are restricted to that rectangle. The Upscaled-Center baseline composite still covers the existing center so normal DLSS fills pixels outside the exact mask. The private provider ControlMask ABI is not used and multi/sparse provider ROI remains unsupported. Character isolation forces the Upscaled Center route to staged output so normal DLSS remains available without an extra baseline copy; final-LDR and submit routes already preserve a separate baseline. nr_configure strictly accepts one or more NR or character controls through the in-game reset/history contract; useAutoMask=false is rejected. experimentalMultiRoi is a session-only boolean and always uses the same backend retirement and history reset as the menu, even when NR or character rendering is disabled. nr_status, nr_configure, nr_cycle_modes and nr_reset return explicit ok results; transition failure is never reported as success. Debug-view-only changes are applied without a history reset. nr_cycle_modes preserves the four-lane stereo implementation cycle. foveation_configure atomically applies validated foveation controls on the main thread. nr_readiness is a read-only, versioned prepared-NR-scene quiescence check; it reports loading, compilation, target publication, device, resource-transition and scaled-profile/fidelity gates with reasons and full telemetry. A native controller may be settled in Idle or Active; loading and resource-transition gates remain mandatory. It does not qualify presentation or replace render-scale release qualification. Existing render-scale mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.",
   "inputSchema":{
     "type":"object",
     "properties":{
-      "action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","nr_status","nr_configure","nr_cycle_modes","nr_reset","foveation_configure","foveation_cycle"]},
+      "action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","nr_readiness","nr_status","nr_configure","nr_cycle_modes","nr_reset","foveation_configure","foveation_cycle"]},
       "method":{"type":"string","enum":["dlss","fsr"]},
       "enabled":{"type":"boolean"},
       "insertionPoint":{"type":"string","enum":["upscaled_center","final_ldr_pre_ui"]},
@@ -4390,6 +4457,7 @@ namespace VRRenderScaleDevBenchBridge
       "uiCorrection":{"type":"boolean"},
       "characterEnabled":{"type":"boolean"},
       "characterVisualIsolationEnabled":{"type":"boolean"},
+      "experimentalMultiRoi":{"type":"boolean"},
       "characterFaces":{"type":"boolean"},
       "characterSkin":{"type":"boolean"},
       "characterHair":{"type":"boolean"},
@@ -4430,7 +4498,7 @@ namespace VRRenderScaleDevBenchBridge
     },
     "required":["action"],
     "allOf":[
-      {"if":{"properties":{"action":{"const":"nr_configure"}},"required":["action"]},"then":{"minProperties":2,"propertyNames":{"enum":["action","enabled","insertionPoint","preset","intensity","localToneStrength","localStructureStrength","skinStructureStrength","style","batchedStereo","directCommit","implementation","optimizedStereoPath","useAutoMask","uiCorrection","singleSubrectScale","characterEnabled","characterVisualIsolationEnabled","characterFaces","characterSkin","characterHair","characterFaceStrength","characterSkinStrength","characterHairStrength","characterMaximumDistanceMeters","characterAdaptiveRoiSelection","characterMinimumFacePixelSize","characterRoiMargin","characterRoiHoldFrames","characterDepthAwareFeather","characterVisibilityDepthTest","characterFeatherRadius","characterFeatherDepthThreshold","characterDebugView","characterMaskTestMode"]}}},
+      {"if":{"properties":{"action":{"const":"nr_configure"}},"required":["action"]},"then":{"minProperties":2,"propertyNames":{"enum":["action","enabled","insertionPoint","preset","intensity","localToneStrength","localStructureStrength","skinStructureStrength","style","batchedStereo","directCommit","implementation","optimizedStereoPath","useAutoMask","uiCorrection","singleSubrectScale","characterEnabled","characterVisualIsolationEnabled","experimentalMultiRoi","characterFaces","characterSkin","characterHair","characterFaceStrength","characterSkinStrength","characterHairStrength","characterMaximumDistanceMeters","characterAdaptiveRoiSelection","characterMinimumFacePixelSize","characterRoiMargin","characterRoiHoldFrames","characterDepthAwareFeather","characterVisibilityDepthTest","characterFeatherRadius","characterFeatherDepthThreshold","characterDebugView","characterMaskTestMode"]}}},
       {"if":{"properties":{"action":{"const":"foveation_configure"}},"required":["action"]},"then":{"propertyNames":{"enum":["action","foveatedEnabled","peripheryTaaEnabled","centerOrigin","horizontalAnchor","fovOnlyCenterScale","peripheryTaaCenterScale","peripheryTaaOuterScale","centerHorizontalScale","leftEyeOffsetX","leftEyeOffsetY","rightEyeOffsetX","rightEyeOffsetY","fovOnlyBlendFeather","peripheryTaaBlendFeather","neuralFinalLdrBlendFeather","reconstructionGuardBandPixels","maskVisualization"]},"anyOf":[{"required":["foveatedEnabled"]},{"required":["peripheryTaaEnabled"]},{"required":["centerOrigin"]},{"required":["horizontalAnchor"]},{"required":["fovOnlyCenterScale"]},{"required":["peripheryTaaCenterScale"]},{"required":["peripheryTaaOuterScale"]},{"required":["centerHorizontalScale"]},{"required":["leftEyeOffsetX"]},{"required":["leftEyeOffsetY"]},{"required":["rightEyeOffsetX"]},{"required":["rightEyeOffsetY"]},{"required":["fovOnlyBlendFeather"]},{"required":["peripheryTaaBlendFeather"]},{"required":["neuralFinalLdrBlendFeather"]},{"required":["reconstructionGuardBandPixels"]},{"required":["maskVisualization"]}]}},
       {"if":{"properties":{"action":{"const":"foveation_cycle"}},"required":["action"]},"then":{"required":["control"],"propertyNames":{"enum":["action","control","valueIndex"]}}},
       {"if":{"properties":{"action":{"const":"foveation_cycle"},"control":{"enum":["master","periphery_taa","center_origin","horizontal_anchor","center_horizontal_scale","mask_visualization"]}},"required":["action","control"]},"then":{"properties":{"valueIndex":{"maximum":1}}}}

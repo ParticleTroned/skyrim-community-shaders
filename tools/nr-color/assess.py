@@ -66,7 +66,7 @@ def editable(status: dict) -> dict:
     return result
 
 
-def unwrap(receipt: dict) -> dict:
+def unwrap(receipt: dict, *, explicit_success: bool = True) -> dict:
     if not isinstance(receipt, dict):
         raise AssessmentError("Controller returned a non-object receipt")
     semantic = receipt.get("semantic") or {}
@@ -85,7 +85,7 @@ def unwrap(receipt: dict) -> dict:
     payload = content[0]
     if isinstance(payload, dict) and payload.get("type") == "text":
         payload = json.loads(payload["text"])
-    if not isinstance(payload, dict) or payload.get("ok") is not True:
+    if not isinstance(payload, dict) or (explicit_success and payload.get("ok") is not True):
         raise AssessmentError("NR colour API did not explicitly succeed")
     return payload
 
@@ -252,6 +252,7 @@ class Controller:
     def __init__(self, args: argparse.Namespace, directory: Path):
         self.args, self.directory, self.index = args, directory, 0
         self.expected_identity: dict | None = None
+        self.public_readiness = True
         self.script = args.automation_root / "tools/devbench-control/Invoke-DevBenchControl.ps1"
         self.capture_script = args.automation_root / "tools/capture-interaction-control/Invoke-CaptureInteraction.ps1"
         if not self.script.is_file():
@@ -299,14 +300,55 @@ class Controller:
 
     def bind_identity(self, receipt: dict) -> None:
         identity = receipt.get("runtimeIdentity")
-        if not isinstance(identity, dict) or not identity:
-            raise IdentityUncertain("Controller supplied no runtime identity for a qualified live run")
+        if not isinstance(identity, dict) or identity.get("verified") is not True or identity.get("complete") is not True:
+            raise IdentityUncertain("Controller supplied no complete verified runtime identity for a qualified live run")
+        process, build, artifact = (identity.get(key) for key in ("process", "build", "artifact"))
+        if not all(isinstance(value, dict) for value in (process, build, artifact)):
+            raise IdentityUncertain("Malformed controller process/build/artifact identity")
+        # The controller returns nested observations but accepts a flat pinned identity.
+        expected = {"listenerPid": identity.get("listenerPid"), "processPath": process.get("path"),
+                    "processStartTimeUtc": process.get("startTimeUtc"), "buildId": build.get("buildId"),
+                    "artifactPath": artifact.get("path"), "artifactSha256": artifact.get("sha256")}
+        if (not integer(expected["listenerPid"]) or expected["listenerPid"] == 0 or
+                any(not isinstance(value, str) or not value.strip() for key, value in expected.items() if key != "listenerPid")):
+            raise IdentityUncertain("Incomplete controller identity fields")
         if self.expected_identity is None:
-            self.expected_identity = copy.deepcopy(identity)
+            self.expected_identity = expected
         # Subsequent invocations carry ExpectedRuntimeIdentityJson; the controller,
         # not ad hoc equality of timestamp-bearing JSON, verifies stable identity.
 
-    def call(self, payload: dict, label: str, *, deadline: float | None = None) -> dict:
+    def preflight(self) -> dict:
+        command = [self.args.pwsh, "-NoProfile", "-File", str(self.script), "list",
+                   "-RuntimePath", str(self.args.runtime), "-EvidenceDirectory", str(self.directory / "controller"),
+                   "-EvidenceLabel", "preflight", "-MaxTransientRetries", "0", "-NoExit", "-Compact"]
+        command += self.identity_arguments()
+        receipt = self.invoke(command, "preflight", 45)
+        data = receipt.get("data") or {}
+        tools = data.get("tools") if isinstance(data, dict) else None
+        if receipt.get("ok") is not True or receipt.get("transportOk") is not True or not isinstance(tools, list):
+            raise AssessmentError("DevBench catalog preflight failed; inspect the preserved controller receipt")
+        names = {tool.get("name") for tool in tools if isinstance(tool, dict) and isinstance(tool.get("name"), str)}
+        self.public_readiness = "communityshaders.upscaling_api" in names
+        required = {TOOL, "communityshaders.profiler"}
+        required.update({"communityshaders.upscaling_api"} if self.public_readiness else
+                        {"communityshaders.renderscale", "inspect", "menu"})
+        if self.args.capture_episodes:
+            required.update(("communityshaders.screenshot", "record", "input"))
+        identity = receipt.get("runtimeIdentity") or {}
+        result = {"requiredTools": sorted(required), "missingTools": sorted(required - names),
+                  "availableTools": sorted(names), "identity": identity,
+                  "settingsChanged": False, "measurementsTaken": False}
+        atomic_json(self.directory / "preflight.json", result)
+        missing = result["missingTools"]
+        if isinstance(identity, dict):
+            missing = missing + ["runtime identity: " + str(field) for field in identity.get("missing", [])]
+        if missing:
+            raise AssessmentError("Live assessment preflight blocked: " + "; ".join(missing))
+        self.bind_identity(receipt)
+        return result
+
+    def call(self, payload: dict, label: str, *, deadline: float | None = None,
+             tool: str = TOOL, explicit_success: bool = True) -> dict:
         deadline = deadline if deadline is not None else time.monotonic() + 45
         remaining = deadline - time.monotonic()
         if remaining < 0.5:
@@ -314,18 +356,21 @@ class Controller:
         # Both the controller's integer budget and Python's hard envelope shrink.
         # Keep up to two seconds inside that envelope for controller cleanup.
         seconds = max(1, min(600, math.floor(remaining - 2)))
-        command = [self.args.pwsh, "-NoProfile", "-File", str(self.script), "call", "-Tool", TOOL,
+        command = [self.args.pwsh, "-NoProfile", "-File", str(self.script), "call", "-Tool", tool,
                    "-ArgumentsJson", json.dumps(payload, separators=(",", ":")), "-RuntimePath", str(self.args.runtime),
                    "-EvidenceDirectory", str(self.directory / "controller"), "-EvidenceLabel", label,
                    "-RequireSuccess", "-RequirePerformanceNeutral", "-MaxTransientRetries", "0", "-NoExit", "-Compact",
                    "-TimeoutSeconds", str(seconds), "-RequestTimeoutSeconds", str(min(15, seconds))]
         command += self.identity_arguments()
         receipt = self.invoke(command, label, remaining, deadline=deadline)
-        payload = unwrap(receipt)
+        payload = unwrap(receipt, explicit_success=explicit_success)
         self.bind_identity(receipt)
         return payload
 
     def wait_scene(self) -> None:
+        if not self.public_readiness:
+            self.wait_prepared_nr_scene()
+            return
         command = [self.args.pwsh, "-NoProfile", "-File", str(self.script), "wait", "-Condition", "upscalingStable",
                    "-ExpectedCell", self.args.expected_cell, "-RuntimePath", str(self.args.runtime),
                    "-TimeoutSeconds", "30", "-RequireSuccess", "-NoExit", "-Compact",
@@ -337,6 +382,52 @@ class Controller:
                 or semantic.get("known") is not True or semantic.get("ok") is not True):
             raise AssessmentError("Prepared scene/upscaling barrier failed; no scene mutation attempted")
         self.bind_identity(result)
+
+    def wait_prepared_nr_scene(self) -> None:
+        """Observe this branch's fixed NR scene; never claim render-scale qualification."""
+        deadline = time.monotonic() + 40
+        first = None
+        while time.monotonic() < deadline:
+            command = [self.args.pwsh, "-NoProfile", "-File", str(self.script), "wait",
+                       "-Condition", "noBlockingMenu", "-RuntimePath", str(self.args.runtime),
+                       "-TimeoutSeconds", str(max(1, min(15, math.floor(deadline - time.monotonic())))),
+                       "-RequireSuccess", "-RequirePerformanceNeutral", "-NoExit", "-Compact",
+                       "-MaxTransientRetries", "0", "-EvidenceDirectory", str(self.directory / "controller")]
+            command += self.identity_arguments()
+            receipt = self.invoke(command, "nr-menu-barrier", deadline - time.monotonic(), deadline=deadline)
+            semantic = receipt.get("semantic") or {}
+            if (receipt.get("ok") is not True or receipt.get("transportOk") is not True or
+                    semantic.get("known") is not True or semantic.get("ok") is not True):
+                raise AssessmentError("Prepared NR scene has a blocking menu")
+            self.bind_identity(receipt)
+            scene = self.call({"kind": "scene"}, "nr-scene", deadline=deadline,
+                              tool="inspect", explicit_success=False)
+            if (scene.get("playerLoaded") is not True or
+                    str((scene.get("cell") or {}).get("editorId", "")).casefold() != self.args.expected_cell.casefold()):
+                raise AssessmentError("Prepared NR scene does not match the loaded expected cell")
+            observation = self.call({"action": "nr_readiness"}, "nr-readiness", deadline=deadline,
+                                    tool="communityshaders.renderscale")
+            if (observation.get("readinessVersion") != 1 or type(observation.get("ready")) is not bool or
+                    not isinstance(observation.get("reasons"), list)):
+                raise AssessmentError("Missing or malformed prepared-NR readiness contract")
+            status = observation.get("status") or {}
+            controller = status.get("controller") or {}
+            frame = status.get("frame")
+            signature = (observation.get("targetGeneration"), controller.get("revision"), controller.get("targetEpoch"))
+            if not integer(frame) or not all(integer(value) for value in signature) or signature[0] == 0:
+                raise AssessmentError("Readiness observation has no typed frame/target identity")
+            if observation["ready"] and not observation["reasons"]:
+                if first is not None and first[0] == signature and frame >= first[1] + 5:
+                    atomic_json(self.directory / "prepared-nr-scene.json", {
+                        "scope": "prepared_nr_scene_quiescence", "presentationQualified": False,
+                        "firstFrame": first[1], "lastFrame": frame, "observation": observation, "scene": scene})
+                    return
+                if first is None or first[0] != signature or frame < first[1]:
+                    first = (signature, frame)
+            else:
+                first = None
+            time.sleep(min(0.25, max(0, deadline - time.monotonic())))
+        raise AssessmentError("Prepared NR scene did not become quiescent within its deadline")
 
     def episode(self, label: str, revision: int | None = None) -> dict:
         if not self.capture_script.is_file():
@@ -460,6 +551,10 @@ def run_live(args: argparse.Namespace, directory: Path) -> dict:
     owned_revision = None
     current = None
     try:
+        report["preflight"] = controller.preflight()
+        if getattr(args, "preflight_only", False):
+            report.update(ok=True, scope="preflight_only", conclusion="Catalog and runtime identity qualified; no settings changed or measurements taken.")
+            return report
         controller.wait_scene()
         assets = controller.call({"action": "assets"}, "assets")
         if not assets.get("allPresent"):
@@ -586,6 +681,7 @@ def main() -> int:
     parser.add_argument("--include-captured", action="store_true")
     parser.add_argument("--capture-episodes", action="store_true")
     parser.add_argument("--confirm-static-scene", action="store_true")
+    parser.add_argument("--preflight-only", action="store_true", help="Inspect catalog and runtime identity without scene assumptions or mutations")
     parser.add_argument("--live", action="store_true")
     args = parser.parse_args()
     if args.expected_physical_slots and len({slot % 4 // 2 for slot in args.expected_physical_slots}) != 1:
@@ -599,8 +695,10 @@ def main() -> int:
                           "insertion": args.insertion, "worldMutations": False, "domainVerified": False,
                           "requires": "Prepared static scene, identity-bound automation/dev runtime, new evidence directory and explicit --live"}, indent=2))
         return 0
-    if not all((args.automation_root, args.runtime, args.evidence_dir, args.expected_cell, args.confirm_static_scene)):
-        parser.error("--live requires automation-root, runtime, new evidence-dir, expected-cell and confirm-static-scene")
+    if not all((args.automation_root, args.runtime, args.evidence_dir)):
+        parser.error("--live requires automation-root, runtime and new evidence-dir")
+    if not args.preflight_only and not all((args.expected_cell, args.confirm_static_scene)):
+        parser.error("Live measurements require expected-cell and confirm-static-scene")
     args.automation_root, args.runtime = args.automation_root.resolve(), args.runtime.resolve()
     args.evidence_dir = args.evidence_dir.resolve()
     # Never reuse a prior run's evidence or overwrite a shared profile directory.

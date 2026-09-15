@@ -6,12 +6,14 @@
 #include "Utils/ExternalEmittance.h"
 
 #include "Feature.h"
+#include "Features/ScreenshotFeature.h"
 #include "Globals.h"
 #include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "TruePBR.h"
 #include "Util.h"
+#include "Utils/D3DContextProtection.h"
 
 #include "Features/CSUtility.h"
 #include "Features/InteriorSun.h"
@@ -871,6 +873,8 @@ struct IDXGISwapChain_Present
 			FlushCSFrameHookPhaseDiag(completedFrame, intervalMs);
 		}
 		globals::features::upscaling.PresentVRMenuDesktopMirror(This);
+		globals::features::screenshotFeature.OnBeforePresent(This);
+		globals::features::screenshotFeature.DrawPostCaptureIndicator();
 		state->Reset();
 		menu->DrawOverlay();
 
@@ -919,7 +923,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 	auto ret = ptrD3D11CreateDeviceAndSwapChain(pAdapter,
 		DriverType,
 		Software,
-		Flags,
+		Util::ThreadSafeDeviceFlags(Flags),
 		&featureLevel,
 		1,
 		SDKVersion,
@@ -929,7 +933,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 		pFeatureLevel,
 		ppImmediateContext);
 
-	return ret;
+	return Util::ProtectDeviceCreation(ret, ppDevice, ppImmediateContext, ppSwapChain);
 }
 
 void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
@@ -1003,6 +1007,13 @@ struct ID3D11Device_CreateSamplerState
 	static inline REL::Relocation<decltype(thunk)> func;
 };
 
+namespace
+{
+	std::shared_mutex captureRenderTargetMutex;
+	std::atomic<uint64_t> captureRenderTargetGeneration{ 0 };
+	uint64_t nextCaptureRenderTargetGeneration = 0;
+}
+
 struct BSShaderRenderTargets_Create
 {
 	/**
@@ -1026,11 +1037,14 @@ struct BSShaderRenderTargets_Create
 
 	static bool RecreateAndSetupFull()
 	{
+		const std::unique_lock lock(captureRenderTargetMutex);
+		captureRenderTargetGeneration.store(0, std::memory_order_release);
 		func();
 		globals::ReInit();
 		if (!CanSetupRenderingResources())
 			return false;
 		globals::state->Setup();
+		captureRenderTargetGeneration.store(++nextCaptureRenderTargetGeneration, std::memory_order_release);
 		return true;
 	}
 
@@ -1038,6 +1052,8 @@ struct BSShaderRenderTargets_Create
 		Hooks::VRRenderTargetRecreateCheckpoint a_afterEngineCreate,
 		void* a_context)
 	{
+		const std::unique_lock lock(captureRenderTargetMutex);
+		captureRenderTargetGeneration.store(0, std::memory_order_release);
 		func();
 		if (a_afterEngineCreate)
 			a_afterEngineCreate(a_context);
@@ -1045,6 +1061,7 @@ struct BSShaderRenderTargets_Create
 		if (!CanSetupRenderingResources())
 			return false;
 		globals::state->SetupRenderTargetResources();
+		captureRenderTargetGeneration.store(++nextCaptureRenderTargetGeneration, std::memory_order_release);
 		return true;
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
@@ -1099,6 +1116,12 @@ struct BSInputDeviceManager_PollInputDevices
 
 namespace Hooks
 {
+	std::shared_mutex& GetCaptureRenderTargetMutex() { return captureRenderTargetMutex; }
+	uint64_t GetCaptureRenderTargetGeneration()
+	{
+		return captureRenderTargetGeneration.load(std::memory_order_acquire);
+	}
+
 	bool RecreateRenderTargets()
 	{
 		if (!globals::game::renderer || !globals::state || !globals::d3d::device || !globals::d3d::context)

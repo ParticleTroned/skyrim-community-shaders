@@ -224,6 +224,23 @@ uses semantic/performance-neutral guards, and never retries an indeterminate
 mutation. It restores only its owned configuration under a revision check;
 a concurrent UI/agent change is preserved and recovery evidence is retained.
 
+Before any scene barrier or colour call, catalog preflight requires the NR
+tool, profiler, readiness services and a complete verified producer/artifact
+identity. The public upscaling barrier is used where available; this branch
+instead exposes `renderscale` action `nr_readiness` for a fixed prepared NR
+scene. It checks loading, compilation, target publication, device health,
+resource transitions and scaled profile/fidelity state. The runner also
+checks menus, the exact loaded cell and five advancing frames with unchanged
+target identity. This limited check does not qualify render-scale behaviour
+or headset presentation. Capture episodes also require the screenshot,
+recording and input tools. `--live --preflight-only` checks these prerequisites
+without requiring a static-scene assertion or changing settings. Supply the
+automation, runtime, evidence and artifact arguments as above; add
+`--capture-episodes` to include its catalog requirements. The preserved
+`preflight.json` lists absent services and identity fields. The nested
+controller identity is projected into the flat expected-identity contract
+before subsequent calls.
+
 Output ranks **source RGB drift**, not physical material correctness. Successful
 inverse round trips cannot identify a model's expected colour domain: all
 consistent invertible candidate pairs can pass. `domainVerified` therefore
@@ -322,3 +339,122 @@ guard rejected the previous source with `NeuralColor is missing from
 include/FeatureVersions.h`; all 13 standalone tests pass after correction.
 This verifies the registration contract without claiming a new live game
 or headset assessment.
+
+### Live DevBench preflight (2026-09-14)
+
+DevBench answered from SkyrimVR PID 36796, started at
+`2026-09-14T22:27:00.0957015Z`, with a loaded player in
+`WhiterunDragonsreach`. The selected MO2 task profile enabled AIO
+`CSX_AIO-CommunityShaders-f6335a034-20260914T221648Z`. Its physical DLL
+was 24,002,560 bytes with SHA-256
+`829ad286b604a3402828e45bb9c59bf1aabb595e2f4a3d0d81d760213f470ee1`,
+matching the preserved build receipt. All six deployed colour assets matched
+source. An exact loose-provider check found no competing enabled mod,
+Overwrite or unmanaged Data provider for the DLL, colour INI or measurement
+shader.
+
+The authoritative catalog exposed only `communityshaders.nr_color` and
+`communityshaders.renderscale` from CSX. That installed build has no producer registry,
+public upscaling API, versioned screenshot service or profiler bridge. Its
+AIO also lacks `CSX.BuildManifest.json`. The controller verified the process
+and physical DLL hash but correctly withheld complete producer identity;
+the NR status request was rejected before dispatch. No colour settings were
+changed, captures started, or performance measurements taken.
+
+This exposed an independent runner defect: its process double used a minimal
+identity unlike the real controller receipt. The runner now pins the required
+flat process/build/artifact fields and the fixture exercises that contract.
+Catalog preflight reports the missing services before any colour mutation.
+The runner workflow passes 39 tests and the adversarial assessment passes 10
+tests. Both are included in the 13-target standalone suite. These fixtures
+do not establish live rendering.
+
+Raw evidence is retained locally under
+`build/validation/nr-live-20260914`, including the catalog, scene/registrant
+receipts, exact providers and `campaign-preflight/report.json`. The toolkit's
+classification of observational NR status as mutation-capable is separately
+recorded as `AUTO-20260914-225819913-3E698F52`. No exposure timing, correct NR
+colour domain, stereo output commitment, headset presentation or performance
+result is established by this blocked preflight. Those tests require a build
+with the missing services and a subsequent game restart.
+
+### NR branch service backport
+
+The branch now includes the maintained screenshot coordinator, profiler and
+canonical build-provenance generator from `main-VR`, adapted to this branch's
+interfaces without merging its renderer history. The producer registry is
+`communityshaders.build_api`; capture and profiling use
+`communityshaders.screenshot` and `communityshaders.profiler`. The colour and
+render-scale receipts also identify their producing build.
+
+The DLL embeds a Build ID over source commit, dirty working-tree content,
+dependencies and build options. Its adjacent `CSX.BuildManifest.json` binds
+that identity to the linked DLL's SHA-256 and size. Packaging copies both.
+Runtime startup does not open or hash the virtual MO2 DLL path; the harness
+checks the physical enabled mod against the manifest and runtime producer.
+An uncommitted build is explicitly marked dirty; its commit alone is not
+sufficient to identify the compiled source.
+
+Stereo capture retains each submitted texture, observes only successful
+OpenVR calls, excludes post-load keepalive submissions, and stages only while
+its render-target generation and device remain current. Eye pairs must share
+one compositor cycle, publication generation and image contract. Target
+recreation and screenshot source retention/staging share a mutex; the hook
+releases it around the OpenVR call. Readback uses the immediate-context
+protection helper and bounded asynchronous capture/encoding cleanup. The VR
+capture indicator overlay is not included in this backport; capture state is
+available in the CS menu and API. Successful submissions remain evidence of
+compositor acceptance, not verified headset presentation.
+
+The profiler preserves this branch's GPU scope callers and supplies captured
+frame identity, slot counters, inclusive GPU totals and CPU self time. No
+colour algorithm, NVIDIA admission policy, model runtime or rendering default
+is changed. The existing `NeuralColor` version `1-2-0`, INI and core registration
+remain required by CMake and asset verification. Shader caches and FOMOD are
+excluded from the test AIO; existing installed caches are preserved.
+
+Focused support tests are available independently of the plugin build:
+
+```powershell
+pwsh ./tools/cmake.ps1 -S tests/devbench_support -B build/nr-devbench-tests `
+  -D 'nlohmann_json_DIR:PATH=<existing-vcpkg>/share/nlohmann_json'
+pwsh ./tools/cmake.ps1 --build build/nr-devbench-tests --config Release
+ctest --test-dir build/nr-devbench-tests -C Release --output-on-failure
+```
+
+These exercise main-thread cancellation/admission, screenshot pairing policy,
+manifest snapshots, cancellation dispatch, Present cleanup, WARP profiler
+timing, WARP context protection and build provenance. Run the original
+13-target `tests/neural_color` suite and asset verifier as well. A new game
+process must load the complete rebuilt package before the live identity,
+capture and profiler smoke checks can establish availability.
+
+### Live control findings and follow-up
+
+The rebuilt service backport passed all 13 colour tests and all nine support
+tests on Windows. Its live producer Build ID was
+`170e37a498dd1854cc0100032a275a9cad4a43c3ca32b500e414e3d8d5e25519`.
+The enabled AIO's physical DLL, adjacent manifest and eight package inputs
+matched the preserved build receipt. Build identity and required service
+discovery now pass in the loaded Dragonsreach session.
+
+The automatic control sweep exposed three reporting gaps. Native resolution
+can have a settled `Active` controller, so `nr_readiness` accepts native
+`Idle` or `Active` while retaining its loading, compilation, publication,
+device and resource-transition checks. The NR status, configuration, mode
+cycle and reset actions report explicit `ok` results. The automatic-mask
+contract always reports `requiredValue: true`, including character isolation.
+
+`nr_configure` also exposes the existing session-only `experimentalMultiRoi`
+boolean. It uses the menu's retirement/history transition even when the NR
+master or character switch hides that experiment from the rendering cache
+key. The default remains disabled and the setting is not persisted.
+
+After the user enabled FOV during the sweep, NR evaluation and output-commit
+counters advanced together with no observed latched backend failure. Earlier
+cases with FOV disabled prove configuration/readback only and require a
+repeat for active rendering coverage. These observations do not establish
+correct colour treatment, exposure-hook timing, image quality, physical
+headset presentation or performance. The observed null-HMD standing pose is
+valid at 1.73 m, but the managed pose provider is unavailable, so the complete
+automated presentation/performance prerequisites remain unmet.

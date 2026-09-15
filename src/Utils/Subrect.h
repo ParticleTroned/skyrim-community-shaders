@@ -21,6 +21,9 @@ namespace Util::Subrect
 		uint32_t h = 1;
 	};
 
+	/** Resolves a normalized crop against an arbitrary pixel size. */
+	PixelRegion ResolvePixelRegion(const UVRegion& uv, uint32_t width, uint32_t height);
+
 	struct Preset
 	{
 		std::string name;

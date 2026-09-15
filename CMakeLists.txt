@@ -131,6 +131,7 @@ message("\tParticle Lights fork version: ${CS_PL_FORK_VERSION}")
 # # Add CMake features
 # #######################################################################################################################
 include(XSEPlugin)
+include(BuildProvenance)
 
 # #######################################################################################################################
 # # Find dependencies
@@ -590,6 +591,11 @@ endfunction()
 install(CODE "file(REMOVE_RECURSE \${CMAKE_INSTALL_PREFIX})")
 install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION SKSE/Plugins COMPONENT SKSE)
 install(
+    FILES "${CSX_PROVENANCE_FINAL_MANIFEST}"
+    DESTINATION SKSE/Plugins
+    COMPONENT SKSE
+)
+install(
     FILES $<TARGET_PDB_FILE:${PROJECT_NAME}>
     DESTINATION SKSE/Plugins
     COMPONENT SKSE
@@ -810,6 +816,10 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
             ${CMAKE_COMMAND} -E copy_if_different
             "$<TARGET_FILE:${PROJECT_NAME}>"
             "${AIO_DIR}/SKSE/Plugins/$<TARGET_FILE_NAME:${PROJECT_NAME}>"
+        COMMAND
+            ${CMAKE_COMMAND} -E copy_if_different
+            "${CSX_PROVENANCE_FINAL_MANIFEST}"
+            "${AIO_DIR}/SKSE/Plugins/CSX.BuildManifest.json"
         COMMAND
             ${CMAKE_COMMAND} -E copy_if_different
             "$<TARGET_PDB_FILE:${PROJECT_NAME}>"
@@ -1094,6 +1104,10 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                     "${DEPLOY_TARGET}/SKSE/Plugins/$<TARGET_FILE_NAME:${PROJECT_NAME}>"
                 COMMAND
                     ${CMAKE_COMMAND} -E copy_if_different
+                    "${CSX_PROVENANCE_FINAL_MANIFEST}"
+                    "${DEPLOY_TARGET}/SKSE/Plugins/CSX.BuildManifest.json"
+                COMMAND
+                    ${CMAKE_COMMAND} -E copy_if_different
                     $<TARGET_PDB_FILE:${PROJECT_NAME}>
                     "${DEPLOY_TARGET}/SKSE/Plugins/$<TARGET_PDB_FILE_NAME:${PROJECT_NAME}>"
                 COMMAND
@@ -1227,6 +1241,10 @@ if(ZIP_TO_DIST)
         COMMAND
             ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${PROJECT_NAME}>
             "${ZIP_DIR}/SKSE/Plugins/"
+        COMMAND
+            ${CMAKE_COMMAND} -E copy_if_different
+            "${CSX_PROVENANCE_FINAL_MANIFEST}"
+            "${ZIP_DIR}/SKSE/Plugins/CSX.BuildManifest.json"
         COMMAND
             ${CMAKE_COMMAND} -E copy $<TARGET_PDB_FILE:${PROJECT_NAME}>
             "${ZIP_DIR}/SKSE/Plugins/"
@@ -1684,22 +1702,28 @@ if(BUILD_CONTROLLER_TESTS)
         EXCLUDE_FROM_ALL
         tests/world_load_transition_policy_test.cpp
     )
-    target_compile_features(world_load_transition_policy_test PRIVATE cxx_std_23)
+    target_compile_features(
+        world_load_transition_policy_test
+        PRIVATE cxx_std_23
+    )
     target_include_directories(
         world_load_transition_policy_test
         PRIVATE "${PROJECT_SOURCE_DIR}/src"
     )
-    add_test(NAME WorldLoadTransitionPolicy COMMAND world_load_transition_policy_test)
-    set_tests_properties(WorldLoadTransitionPolicy PROPERTIES LABELS "ControllerTests")
+    add_test(
+        NAME WorldLoadTransitionPolicy
+        COMMAND world_load_transition_policy_test
+    )
+    set_tests_properties(
+        WorldLoadTransitionPolicy
+        PROPERTIES LABELS "ControllerTests"
+    )
     add_executable(
         vr_render_scale_mode_policy_test
         EXCLUDE_FROM_ALL
         tests/vr_render_scale_mode_policy_test.cpp
     )
-    target_compile_features(
-        vr_render_scale_mode_policy_test
-        PRIVATE cxx_std_23
-    )
+    target_compile_features(vr_render_scale_mode_policy_test PRIVATE cxx_std_23)
     target_include_directories(
         vr_render_scale_mode_policy_test
         PRIVATE "${PROJECT_SOURCE_DIR}/src"
@@ -1714,10 +1738,14 @@ if(BUILD_CONTROLLER_TESTS)
     )
     add_test(
         NAME VRRenderScaleLinkContract
-        COMMAND ${CMAKE_COMMAND} -DPROJECT_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
-                -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/render_scale_link_contract_test.cmake
+        COMMAND
+            ${CMAKE_COMMAND} -DPROJECT_ROOT=${CMAKE_CURRENT_SOURCE_DIR} -P
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/render_scale_link_contract_test.cmake
     )
-    set_tests_properties(VRRenderScaleLinkContract PROPERTIES LABELS "ControllerTests")
+    set_tests_properties(
+        VRRenderScaleLinkContract
+        PROPERTIES LABELS "ControllerTests"
+    )
     add_executable(
         character_region_policy_test
         EXCLUDE_FROM_ALL
@@ -1735,13 +1763,27 @@ if(BUILD_CONTROLLER_TESTS)
     )
     foreach(_character_policy actor mask_work)
         set(_character_target "character_${_character_policy}_policy_test")
-        add_executable(${_character_target} EXCLUDE_FROM_ALL "tests/${_character_target}.cpp")
+        add_executable(
+            ${_character_target}
+            EXCLUDE_FROM_ALL
+            "tests/${_character_target}.cpp"
+        )
         target_compile_features(${_character_target} PRIVATE cxx_std_23)
-        target_include_directories(${_character_target} PRIVATE "${PROJECT_SOURCE_DIR}/src")
+        target_include_directories(
+            ${_character_target}
+            PRIVATE "${PROJECT_SOURCE_DIR}/src"
+        )
         add_test(NAME ${_character_target} COMMAND ${_character_target})
-        set_tests_properties(${_character_target} PROPERTIES LABELS "ControllerTests")
+        set_tests_properties(
+            ${_character_target}
+            PROPERTIES LABELS "ControllerTests"
+        )
     endforeach()
-    add_executable(character_mask_gpu_test EXCLUDE_FROM_ALL tests/character_mask_gpu_test.cpp)
+    add_executable(
+        character_mask_gpu_test
+        EXCLUDE_FROM_ALL
+        tests/character_mask_gpu_test.cpp
+    )
     target_compile_features(character_mask_gpu_test PRIVATE cxx_std_23)
     target_include_directories(
         character_mask_gpu_test
@@ -1756,13 +1798,25 @@ if(BUILD_CONTROLLER_TESTS)
         CharacterMaskGpu
         PROPERTIES LABELS "ControllerTests" TIMEOUT 60
     )
-    add_executable(character_mask_bounds_gpu_test EXCLUDE_FROM_ALL tests/character_mask_bounds_gpu_test.cpp)
+    add_executable(
+        character_mask_bounds_gpu_test
+        EXCLUDE_FROM_ALL
+        tests/character_mask_bounds_gpu_test.cpp
+    )
     target_compile_features(character_mask_bounds_gpu_test PRIVATE cxx_std_23)
-    target_include_directories(character_mask_bounds_gpu_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
-    target_link_libraries(character_mask_bounds_gpu_test PRIVATE d3d11 d3d12 d3dcompiler)
+    target_include_directories(
+        character_mask_bounds_gpu_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(
+        character_mask_bounds_gpu_test
+        PRIVATE d3d11 d3d12 d3dcompiler
+    )
     add_test(
         NAME CharacterMaskBoundsGpu
-        COMMAND character_mask_bounds_gpu_test "${PROJECT_SOURCE_DIR}/package/Shaders"
+        COMMAND
+            character_mask_bounds_gpu_test
+            "${PROJECT_SOURCE_DIR}/package/Shaders"
     )
     set_tests_properties(
         CharacterMaskBoundsGpu
@@ -1800,7 +1854,10 @@ if(BUILD_CONTROLLER_TESTS)
         tests/character_multi_roi_test.cpp
     )
     target_compile_features(character_multi_roi_test PRIVATE cxx_std_23)
-    target_include_directories(character_multi_roi_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_include_directories(
+        character_multi_roi_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
     add_test(NAME CharacterMultiRoi COMMAND character_multi_roi_test)
     set_tests_properties(CharacterMultiRoi PROPERTIES LABELS "ControllerTests")
     add_executable(
@@ -1809,15 +1866,22 @@ if(BUILD_CONTROLLER_TESTS)
         tests/character_mask_roi_test.cpp
     )
     target_compile_features(character_mask_roi_test PRIVATE cxx_std_23)
-    target_include_directories(character_mask_roi_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_include_directories(
+        character_mask_roi_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
     add_test(NAME CharacterMaskRoi COMMAND character_mask_roi_test)
     set_tests_properties(CharacterMaskRoi PROPERTIES LABELS "ControllerTests")
     add_test(
         NAME NeuralMultiRoiContract
-        COMMAND "${CMAKE_COMMAND}" -DPROJECT_ROOT=${PROJECT_SOURCE_DIR}
-            -P "${PROJECT_SOURCE_DIR}/tests/neural_multi_roi_contract_test.cmake"
+        COMMAND
+            "${CMAKE_COMMAND}" -DPROJECT_ROOT=${PROJECT_SOURCE_DIR} -P
+            "${PROJECT_SOURCE_DIR}/tests/neural_multi_roi_contract_test.cmake"
     )
-    set_tests_properties(NeuralMultiRoiContract PROPERTIES LABELS "ControllerTests")
+    set_tests_properties(
+        NeuralMultiRoiContract
+        PROPERTIES LABELS "ControllerTests"
+    )
     add_executable(
         compute_subrect_test
         EXCLUDE_FROM_ALL

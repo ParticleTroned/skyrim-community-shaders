@@ -29,6 +29,13 @@ def configuration():
                                 applyModelEdit=True)}
 
 
+def runtime_identity():
+    return {"verified": True, "complete": True, "listenerPid": 42,
+            "process": {"path": "C:/fixture/SkyrimVR.exe", "startTimeUtc": "2026-09-14T22:27:00Z"},
+            "build": {"buildId": "fixture-build"},
+            "artifact": {"path": "C:/fixture/CommunityShaders.dll", "sha256": "a" * 64}, "missing": []}
+
+
 def sample(slot=0, frame=100, revision=7, transport=True, shown=True, captured=False):
     values = [0.5, 0.4, 0.3, 64, 0.5, 0.4, 0.3, 0, 0, 0, 0, 0, 0, 0, 0, 64,
               0, 0, 1, 1, 1, 1, 1, 1]
@@ -60,6 +67,10 @@ class Fixture:
         self.hidden_ignored = False
         self.fail_stop = False
         self.multi = False
+        self.identity = runtime_identity()
+        self.readiness_override = {}
+        self.scene_cell = "FixtureCell"
+        self.tools = [assess.TOOL, "communityshaders.profiler", "communityshaders.upscaling_api", "communityshaders.screenshot", "record", "input"]
         self.steps = 0
         self.root = root
         for path in ("tools/devbench-control/Invoke-DevBenchControl.ps1", "tools/capture-interaction-control/Invoke-CaptureInteraction.ps1"):
@@ -113,11 +124,31 @@ class Fixture:
                                  (action == "stop" and self.fail_stop))}
         else:
             value = {"ok": True, "transportOk": True, "semantic": {"known": True, "ok": True},
-                     "runtimeIdentity": {"pid": 42, "buildId": "test-fixture"}}
-            if action == "wait":
+                     "runtimeIdentity": copy.deepcopy(self.identity)}
+            pinned = self.option(command, "-ExpectedRuntimeIdentityJson")
+            if pinned is not None:
+                expected = json.loads(pinned)
+                assert expected == {"listenerPid": 42, "processPath": "C:/fixture/SkyrimVR.exe",
+                                    "processStartTimeUtc": "2026-09-14T22:27:00Z", "buildId": "fixture-build",
+                                    "artifactPath": "C:/fixture/CommunityShaders.dll", "artifactSha256": "a" * 64}
+            if action == "list":
+                value["data"] = {"tools": [{"name": name} for name in self.tools]}
+            elif action == "wait":
                 value["data"] = {"observation": {"satisfied": True}}
             else:
                 req = json.loads(self.option(command, "-ArgumentsJson"))
+                tool = self.option(command, "-Tool")
+                if tool == "inspect":
+                    assert req == {"kind": "scene"}
+                    value["data"] = {"content": [{"playerLoaded": True, "cell": {"editorId": self.scene_cell}}]}
+                    return subprocess.CompletedProcess(command, 0, json.dumps(value), "")
+                if req["action"] == "nr_readiness":
+                    self.frame += 10
+                    payload = dict(ok=True, readinessVersion=1, ready=True, reasons=[], targetGeneration=7,
+                                   status=dict(frame=self.frame, controller=dict(revision=1, targetEpoch=2)))
+                    payload.update(self.readiness_override)
+                    value["data"] = {"content": [payload]}
+                    return subprocess.CompletedProcess(command, 0, json.dumps(value), "")
                 if req["action"] == "configure":
                     if req["expectedRevision"] != self.revision:
                         raise AssertionError("runner sent stale CAS")
@@ -163,6 +194,95 @@ class RunnerTests(unittest.TestCase):
         self.assertFalse(report["domainVerified"])
         self.assertTrue(all(c["classification"] == "candidate_for_visual_review" for c in report["candidates"]))
         self.assertEqual(self.requests()[-1][0], "restore")
+
+    def test_missing_live_services_fail_before_any_setting_call(self):
+        self.f.tools = [assess.TOOL, "record", "input"]
+        self.f.identity.update(complete=False, missing=["buildId"])
+        report = self.run_campaign()
+        self.assertFalse(report["ok"])
+        self.assertIn("communityshaders.renderscale", report["error"])
+        self.assertIn("runtime identity: buildId", report["error"])
+        self.assertEqual(self.requests(), [])
+        self.assertEqual(self.f.state, self.f.original)
+        self.assertTrue((self.f.evidence / "preflight.json").is_file())
+
+    def test_visual_preflight_requires_screenshot_service(self):
+        self.f.args.capture_episodes = True
+        self.f.tools.remove("communityshaders.screenshot")
+        report = self.run_campaign()
+        self.assertFalse(report["ok"])
+        self.assertIn("communityshaders.screenshot", report["error"])
+        self.assertEqual(self.requests(), [])
+
+    def use_branch_readiness(self):
+        self.f.tools.remove("communityshaders.upscaling_api")
+        self.f.tools += ["communityshaders.renderscale", "inspect", "menu"]
+
+    def test_branch_readiness_requires_advancing_frame_and_preserves_qualification_limit(self):
+        self.use_branch_readiness()
+        controller = assess.Controller(self.f.args, self.f.evidence)
+        controller.preflight()
+        controller.wait_scene()
+        evidence = json.loads((self.f.evidence / "prepared-nr-scene.json").read_text())
+        self.assertGreaterEqual(evidence["lastFrame"] - evidence["firstFrame"], 5)
+        self.assertFalse(evidence["presentationQualified"])
+        self.assertEqual(self.f.state, self.f.original)
+
+    def test_branch_readiness_rejects_wrong_cell_before_colour_changes(self):
+        self.use_branch_readiness()
+        self.f.scene_cell = "OtherCell"
+        report = self.run_campaign()
+        self.assertFalse(report["ok"])
+        self.assertIn("expected cell", report["error"])
+        self.assertEqual(self.f.state, self.f.original)
+
+    def test_branch_readiness_rejects_unversioned_or_untyped_observations(self):
+        self.use_branch_readiness()
+        controller = assess.Controller(self.f.args, self.f.evidence)
+        controller.preflight()
+        for override in ({"readinessVersion": None}, {"ready": "true"}, {"targetGeneration": False}):
+            self.f.readiness_override = override
+            with self.assertRaises(assess.AssessmentError):
+                controller.wait_scene()
+        self.assertEqual(self.f.state, self.f.original)
+
+    def test_branch_readiness_does_not_accept_resource_waiting_or_frozen_frames(self):
+        self.use_branch_readiness()
+        controller = assess.Controller(self.f.args, self.f.evidence)
+        controller.preflight()
+        for override in ({"ready": False, "reasons": ["resource_transition_pending"]},
+                         {"status": dict(frame=100, controller=dict(revision=1, targetEpoch=2))}):
+            self.f.readiness_override = override
+            with self.assertRaises(assess.AssessmentError):
+                controller.wait_scene()
+        self.assertEqual(self.f.state, self.f.original)
+
+    def test_missing_profiler_blocks_qualification_preflight(self):
+        self.f.tools.remove("communityshaders.profiler")
+        report = self.run_campaign()
+        self.assertFalse(report["ok"])
+        self.assertIn("communityshaders.profiler", report["error"])
+        self.assertEqual(self.requests(), [])
+
+    def test_preflight_only_never_waits_or_mutates(self):
+        self.f.args.preflight_only = True
+        report = self.run_campaign()
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(report["scope"], "preflight_only")
+        self.assertEqual(len(self.f.calls), 1)
+        self.assertFalse(report["preflight"]["measurementsTaken"])
+
+    def test_incomplete_or_unverified_identity_is_rejected(self):
+        for field, value in (("complete", False), ("verified", False), ("listenerPid", True)):
+            identity = runtime_identity()
+            identity[field] = value
+            controller = assess.Controller(self.f.args, self.f.evidence)
+            with self.assertRaises(assess.IdentityUncertain):
+                controller.bind_identity({"runtimeIdentity": identity})
+        identity = runtime_identity()
+        del identity["artifact"]["sha256"]
+        with self.assertRaises(assess.IdentityUncertain):
+            controller.bind_identity({"runtimeIdentity": identity})
 
     def test_unavailable_candidate_does_not_end_campaign(self):
         self.f.unavailable_identity = True

@@ -1,7 +1,21 @@
 #include "WinApi.h"
+#include <ShlObj.h>
 
 namespace Util
 {
+	namespace
+	{
+		std::optional<std::filesystem::path> GetKnownFolderPath(REFKNOWNFOLDERID a_folderId)
+		{
+			PWSTR path = nullptr;
+			if (FAILED(SHGetKnownFolderPath(a_folderId, KF_FLAG_DEFAULT, nullptr, &path)) || !path)
+				return std::nullopt;
+			const std::filesystem::path result(path);
+			CoTaskMemFree(path);
+			return result;
+		}
+	}
+
 	std::optional<REL::Version> GetDllVersion(const std::wstring& dllPath)
 	{
 		DWORD handle = 0;
@@ -68,5 +82,14 @@ namespace Util
 			return count > 0 ? count : fallback;
 		}();
 		return cached;
+	}
+	std::optional<std::filesystem::path> GetPicturesPath()
+	{
+		return GetKnownFolderPath(FOLDERID_Pictures);
+	}
+
+	std::optional<std::filesystem::path> GetVideosPath()
+	{
+		return GetKnownFolderPath(FOLDERID_Videos);
 	}
 }  // namespace Util

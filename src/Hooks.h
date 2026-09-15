@@ -1,5 +1,9 @@
 #pragma once
 
+#include <atomic>
+#include <cstdint>
+#include <shared_mutex>
+
 namespace Hooks
 {
 	struct BSShader_BeginTechnique
@@ -21,6 +25,10 @@ namespace Hooks
 
 	// Draw through the shared RenderPassImmediately call-site owner without re-entering particle/Terrain Blending routing.
 	void DrawRenderPassImmediately(RE::BSRenderPass* pass, uint32_t technique, bool alphaTest, uint32_t renderFlags);
+	/** Serializes screenshot source retention and staging with target recreation. */
+	std::shared_mutex& GetCaptureRenderTargetMutex();
+	/** Nonzero only after the current target creation and feature setup completed. */
+	uint64_t GetCaptureRenderTargetGeneration();
 	void Install();
 	void InstallEarlyHooks();
 	bool RecreateRenderTargets();

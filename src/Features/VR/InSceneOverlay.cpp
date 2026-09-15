@@ -1,3 +1,4 @@
+#include "Features/ScreenshotFeature.h"
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
 #include "Globals.h"
@@ -391,6 +392,15 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					compositorCycleToken))
 				return rejectQuarantinedSubmit(pTexture, pBounds);
 			const Upscaling::VRRenderScalePresentationObservation* probePresentationObservation = nullptr;
+			uint64_t captureEntryGeneration = 0;
+			winrt::com_ptr<ID3D11Texture2D> captureInputLifetime;
+			if (globals::features::screenshotFeature.HasPendingCapture() &&
+				pTexture && pTexture->handle && pTexture->eType == vr::TextureType_DirectX) {
+				const std::shared_lock sourceLock(Hooks::GetCaptureRenderTargetMutex());
+				captureEntryGeneration = Hooks::GetCaptureRenderTargetGeneration();
+				if (captureEntryGeneration != 0)
+					captureInputLifetime.copy_from(static_cast<ID3D11Texture2D*>(pTexture->handle));
+			}
 			auto submit = [&](const char* a_path,
 							  const vr::Texture_t* a_texture,
 							  const vr::VRTextureBounds_t* a_bounds,
@@ -409,7 +419,38 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					a_submitFlags,
 					a_probeObservation);
 #endif
+				winrt::com_ptr<ID3D11Texture2D> captureTexture;
+				uint64_t captureGeneration = 0;
+				std::uintptr_t captureDevice = 0;
+				vr::VRTextureBounds_t captureBounds{};
+				vr::EColorSpace captureColorSpace = vr::ColorSpace_Auto;
+				const bool hasCaptureBounds = a_bounds != nullptr;
+				if (captureInputLifetime && globals::features::screenshotFeature.HasPendingCapture() &&
+					a_postLoadKeepaliveToken == 0 &&
+					std::string_view(a_path) != "compositor-keepalive" &&
+					compositorCycleToken != 0 && a_texture && a_texture->handle &&
+					a_texture->eType == vr::TextureType_DirectX) {
+					const std::shared_lock sourceLock(Hooks::GetCaptureRenderTargetMutex());
+					captureGeneration = Hooks::GetCaptureRenderTargetGeneration();
+					if (captureGeneration == captureEntryGeneration) {
+						captureTexture.copy_from(static_cast<ID3D11Texture2D*>(a_texture->handle));
+						captureDevice = reinterpret_cast<std::uintptr_t>(globals::d3d::device);
+						captureColorSpace = a_texture->eColorSpace;
+						if (hasCaptureBounds)
+							captureBounds = *a_bounds;
+					}
+				}
 				const auto result = func(_this, eEye, a_texture, a_bounds, a_submitFlags);
+				if (result == vr::VRCompositorError_None && captureTexture) {
+					// Stage only while the retained source still belongs to this target generation.
+					const std::shared_lock sourceLock(Hooks::GetCaptureRenderTargetMutex());
+					if (captureGeneration == Hooks::GetCaptureRenderTargetGeneration() &&
+						captureDevice == reinterpret_cast<std::uintptr_t>(globals::d3d::device)) {
+						globals::features::screenshotFeature.ObserveAcceptedVRSubmit(
+							compositorCycleToken, captureGeneration, captureDevice, eEye,
+							captureTexture.get(), hasCaptureBounds ? &captureBounds : nullptr, captureColorSpace);
+					}
+				}
 				const auto keepaliveDisposition =
 					upscaling.CompleteVRPostLoadCompositorSubmit(
 						eEye,

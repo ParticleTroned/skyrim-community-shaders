@@ -1,4 +1,5 @@
 #include "Utils/Subrect.h"
+#include "Utils/NormalizedCoordinates.h"
 
 #include <algorithm>
 #include <imgui.h>
@@ -59,6 +60,26 @@ namespace
 
 namespace Util::Subrect
 {
+	PixelRegion ResolvePixelRegion(const UVRegion& uv, uint32_t width, uint32_t height)
+	{
+		if (width == 0 || height == 0) {
+			return { 0, 0, 0, 0 };
+		}
+
+		const UVRegion normalized = ClampUV(uv);
+		const uint32_t left = NormalizedCoordinates::ResolvePixelBoundary(normalized.x, width);
+		const uint32_t top = NormalizedCoordinates::ResolvePixelBoundary(normalized.y, height);
+		const uint32_t right = NormalizedCoordinates::ResolvePixelBoundary(normalized.x + normalized.w, width);
+		const uint32_t bottom = NormalizedCoordinates::ResolvePixelBoundary(normalized.y + normalized.h, height);
+
+		PixelRegion result;
+		result.x = std::min(width - 1, left);
+		result.y = std::min(height - 1, top);
+		result.w = std::clamp(right, result.x + 1, width) - result.x;
+		result.h = std::clamp(bottom, result.y + 1, height) - result.y;
+		return result;
+	}
+
 	void Controller::LoadSettings(const json& a_json)
 	{
 		if (a_json.contains("CropX"))

@@ -733,7 +733,7 @@ void State::UpdateSaveLoadSafeMode()
 
 void State::Reset()
 {
-	globals::profiler->EndFrame();
+	globals::profiler->EndFrame(frameCount);
 	Feature::ForEachLoadedFeature("Reset", [](Feature* feature) { feature->Reset(); });
 	if (!globals::game::ui->GameIsPaused())
 		timer += RE::GetSecondsSinceLastFrame();
@@ -1225,7 +1225,7 @@ void State::LoadFromJson(nlohmann::json& settings, bool a_loadFeatureSettings)
 	}
 }
 
-void State::Save(ConfigMode a_configMode)
+bool State::Save(ConfigMode a_configMode)
 {
 	const auto configPath = GetConfigPath(a_configMode);
 	json settings = json::object();
@@ -1240,33 +1240,34 @@ void State::Save(ConfigMode a_configMode)
 			settings = std::move(existingSettings);
 		} else {
 			logger::warn("Refusing to overwrite config which is not a JSON object: {}", configPath.string());
-			return;
+			return false;
 		}
 	} else if (readResult == Util::FileHelpers::JsonFileReadResult::Error) {
 		logger::warn("Refusing to overwrite unreadable config {}: {}", configPath.string(), readError);
-		return;
+		return false;
 	}
 
 	try {
 		SaveToJson(settings, a_configMode == ConfigMode::DEFAULT);
 	} catch (const std::exception& e) {
 		logger::warn("Failed to collect settings for {}: {}", configPath.string(), e.what());
-		return;
+		return false;
 	} catch (...) {
 		logger::warn("Failed to collect settings for {} due to an unknown error", configPath.string());
-		return;
+		return false;
 	}
 
 	std::string writeError;
 	if (!SettingsSerialization::WriteFileAtomic(configPath, settings, writeError)) {
 		logger::warn("Failed to save settings to {}: {}", configPath.string(), writeError);
-		return;
+		return false;
 	}
 
 	if (a_configMode == ConfigMode::USER)
 		SaveFeatureUserOverrides();
 
 	logger::info("Saving settings to {}", configPath.string());
+	return true;
 }
 
 bool State::ValidateCache(CSimpleIniA& a_ini)

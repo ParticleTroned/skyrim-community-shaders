@@ -1,3 +1,4 @@
+#include "BuildProvenance.h"
 #include "Deferred.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
@@ -7,7 +8,9 @@
 #include "Hooks.h"
 #include "Menu.h"
 #include "Menu/ThemeManager.h"
+#include "ProfilerDevBenchBridge.h"
 #include "SceneSettingsManager.h"
+#include "ScreenshotDevBenchBridge.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "VRAPI/CSpluginapi.h"
@@ -101,6 +104,7 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 	InitializeLog();
 	logger::info("Loaded {} {}", Plugin::NAME, Plugin::VERSION_LABEL);
 	SKSE::Init(a_skse);
+	BuildProvenance::LogRuntimeIdentity();
 	SKSE::AllocTrampoline(kTrampolineCapacity);
 	return Load();
 }
@@ -128,11 +132,17 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	case SKSE::MessagingInterface::kPostLoad:
 		{
 			RegisterCommunityShadersAPIMessageListener();
+			BuildProvenance::InstallDevBench();
+			ProfilerDevBenchBridge::Install();
+			ScreenshotDevBenchBridge::Install();
 			break;
 		}
 	case SKSE::MessagingInterface::kPostPostLoad:
 		{
 			if (errors.empty()) {
+				BuildProvenance::InstallDevBench();
+				ProfilerDevBenchBridge::Install();
+				ScreenshotDevBenchBridge::Install();
 				Deferred::Hooks::Install();
 				Hooks::Install();
 				EngineFix::InstallOnPostPostLoadFixes();

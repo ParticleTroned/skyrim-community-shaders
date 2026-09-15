@@ -65,10 +65,12 @@ Capture-only requests no longer enable raw-path colour reconstruction.
 
 ## Remaining qualification
 
-The revised DLL has not run in game. Transport identity, managed and
+At the end of this run, the revised DLL had not run in game. The subsequent
+[c45eb42 live retest](nr-colour-null-driver-c45eb42-20260915.md) records its
+results and remaining failures. Transport identity, managed and
 preserve-source inference, manual and captured exposure candidates, complete
 multi-ROI stereo evidence, final-LDR presentation and flat-rendering paths
-must be repeated with its new Build ID. No treatment was selected as the
+were still to be repeated with its new Build ID. No treatment was selected as the
 correct NVIDIA NR input domain. No production colour defaults changed.
 
 Two NR-disable transitions produced `eErrorDuplicatedConstants` for

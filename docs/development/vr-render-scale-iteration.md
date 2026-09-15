@@ -13,6 +13,19 @@ implementation has no performance claim or runtime qualification result;
 new measurements must use the existing comparison ledger and reporting
 workflow.
 
+## September 16: native submit boundary correction
+
+The [native submit ABI investigation](vr-submit-native-boundary.md) traces
+an incorrect raw-texture hook signature from PR65 through the measured
+`b46f8f34` head. The hook now models the descriptor created by the engine
+and reuses the existing freshness admission checks. A separate call guard
+prevents nested or null-boundary calls from creating deeper stereo owners;
+scope restoration preserves partially completed outer pairs on exceptions.
+Focused regressions and production translation-unit compilation validate
+the source correction. Exact-build runtime qualification and matched
+CPU/GPU recovery measurements remain pending. This source/test review adds
+no runtime measurement or numbered ledger snapshot.
+
 ## September 15: Tasks 1–5 source-to-test audit
 
 The [Tasks 1–5 audit](vr-render-scale-tasks-1-5-audit.md) maps production

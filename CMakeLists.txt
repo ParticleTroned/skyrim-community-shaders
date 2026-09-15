@@ -2289,7 +2289,9 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_include_directories(
         vr_relatch_native_boundary_test
-        PRIVATE "${_vr_relatch_native_test_dir}"
+        PRIVATE
+            "${_vr_relatch_native_test_dir}"
+            "${PROJECT_SOURCE_DIR}/extern/CommonLibSSE-NG/extern/openvr/headers"
     )
     set_tests_properties(VRRelatchNativeBoundary PROPERTIES TIMEOUT 15)
     add_controller_test(

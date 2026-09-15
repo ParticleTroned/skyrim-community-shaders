@@ -80,8 +80,12 @@ and 162 NR receipts. Character preparation failures stayed 1 to 1
 (previous DLL: three cycles added nine failures). Four receipts retained
 a normal-DLSS/neural-evaluation-failed disposition for three unique
 previous early frames despite successful per-eye evaluations. These
-stale-frame transition receipts remain unresolved; recovery is not a
-clean transition pass.
+previous-frame transition receipts remain unresolved; recovery is not a
+clean transition pass. Source review confirms that status reads preserve
+the published disposition; they do not reclassify it from the current
+settings. Both Feature 18 and center-blend success counts were one per
+eye, but the published applied and committed masks were zero. This does
+not identify the failed handoff or justify suppressing the fallback.
 
 ## Baselines and limits
 
@@ -134,5 +138,13 @@ reset and independent debug controls. After commit 0f8247a04:
 -   `python tools/nr-color/verify_assets.py` from the source root: passed.
 
 The exposure selection regression rejects mismatched producer, context,
-engine selection, frame, epoch and live replacement identities. Its
-executable results and the replacement DLL build remain pending.
+engine selection, frame, epoch and live replacement identities. After
+commit 2a2f9d29b:
+
+-   `pwsh ./tools/cmake.ps1 -S build/nrc-src/tests/neural_color -B build/nr-color-tests`: passed.
+-   `pwsh ./tools/cmake.ps1 --build build/nr-color-tests --config Release`: passed.
+-   `ctest --test-dir build/nr-color-tests -C Release --output-on-failure`: 16/16 passed in 20.96 seconds, including exposure policy, lifecycle, actual exposure HLSL on WARP, colour HLSL on WARP, and framebuffer restoration.
+
+Scoped formatting hooks passed for both source corrections. The replacement
+DLL build and its installed live verification are recorded separately in
+the local build receipt; these dry tests do not establish live capture.

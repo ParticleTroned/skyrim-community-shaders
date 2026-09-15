@@ -137,7 +137,7 @@ namespace NeuralRendering::Color
 			}
 		}
 
-		void Capture(ID3D11DeviceContext* c, RE::BSShader* producer, ExposureDrawKind kind)
+		void Capture(ID3D11DeviceContext* c, RE::BSShader* producer, std::optional<ExposureDrawKind> kind)
 		{
 			if (!requested.load(std::memory_order_acquire))
 				return;
@@ -149,7 +149,12 @@ namespace NeuralRendering::Color
 			std::scoped_lock lock(mutex);
 			if (std::find(owners.begin(), owners.end(), producer) == owners.end())
 				return;
-			++status.drawCounts[static_cast<std::size_t>(kind)];
+			if (kind) {
+				++status.drawCounts[static_cast<std::size_t>(*kind)];
+			} else {
+				++status.graphicsStateFlushes;
+				status.lastGraphicsStateFlushFrame = state->frameCount;
+			}
 			const auto reject = [&](const char* why) { ++status.rejected; status.lastReason = why; };
 			ComPtr<ID3D11Device> d;
 			c->GetDevice(&d);
@@ -160,12 +165,9 @@ namespace NeuralRendering::Color
 			device = d;
 			context = c;
 			Poll();
-			ComPtr<ID3D11ShaderResourceView> average;
-			ComPtr<ID3D11PixelShader> ps;
+			auto [average, ps] = ReadExposureDrawBindings(c);
 			status.lastBinding = {};
 			status.lastBinding.frame = state->frameCount;
-			c->PSGetShaderResources(2, 1, &average);
-			c->PSGetShader(&ps, nullptr, nullptr);
 			const auto* expected = globals::game::currentPixelShader ? *globals::game::currentPixelShader : nullptr;
 			status.lastBinding.shaderIdentity = reinterpret_cast<std::uintptr_t>(ps.Get());
 			// A scoped effect cannot inherit another effect's cached engine selection.
@@ -285,7 +287,8 @@ namespace NeuralRendering::Color
 			evidence.sourceHeight = status.lastBinding.viewHeight;
 			evidence.sourceMip = mip;
 			evidence.shaderIdentity = reinterpret_cast<std::uintptr_t>(ps.Get());
-			evidence.producer = "ISHDR BLEND effect scope / AvgTex t2 / D3D11 draw entry";
+			evidence.producer = kind ? "ISHDR BLEND effect scope / AvgTex t2 / D3D11 draw entry" :
+			                           "ISHDR BLEND effect scope / AvgTex t2 / finalized engine graphics bindings";
 			ComPtr<ID3D11RenderTargetView> target;
 			c->OMGetRenderTargets(1, &target, nullptr);
 			if (target) {
@@ -402,8 +405,18 @@ namespace NeuralRendering::Color
 	}
 	void ExposureCapture::ObserveDraw(ID3D11DeviceContext* context, ExposureDrawKind kind) noexcept
 	{
+		if (kind < ExposureDrawKind::Count)
+			Observe(context, kind);
+	}
+	void ExposureCapture::ObserveGraphicsStateFlush(ID3D11DeviceContext* context, bool isCompute) noexcept
+	{
+		if (!isCompute)
+			Observe(context, std::nullopt);
+	}
+	void ExposureCapture::Observe(ID3D11DeviceContext* context, std::optional<ExposureDrawKind> kind) noexcept
+	{
 		auto* shader = activeHDRProducer;
-		if (!state_->requested.load(std::memory_order_acquire) || !shader || kind >= ExposureDrawKind::Count ||
+		if (!state_->requested.load(std::memory_order_acquire) || !shader ||
 			std::find(owners.begin(), owners.end(), shader) == owners.end())
 			return;
 		try {

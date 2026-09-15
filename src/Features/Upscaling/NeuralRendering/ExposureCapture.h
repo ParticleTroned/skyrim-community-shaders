@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <d3d11.h>
+#include <optional>
 #include <string>
 #include <wrl/client.h>
 
@@ -13,6 +14,21 @@ namespace RE
 
 namespace NeuralRendering::Color
 {
+	struct ExposureDrawBindings
+	{
+		Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> average;
+		Microsoft::WRL::ComPtr<ID3D11PixelShader> shader;
+	};
+	/** Read the finalized HDR inputs without depending on a D3D11 draw entry point. */
+	[[nodiscard]] inline ExposureDrawBindings ReadExposureDrawBindings(ID3D11DeviceContext* context) noexcept
+	{
+		ExposureDrawBindings bindings;
+		if (context) {
+			context->PSGetShaderResources(2, 1, &bindings.average);
+			context->PSGetShader(&bindings.shader, nullptr, nullptr);
+		}
+		return bindings;
+	}
 	enum class ExposureDrawKind : std::uint32_t
 	{
 		Indexed,
@@ -92,6 +108,8 @@ namespace NeuralRendering::Color
 		std::uint64_t epoch = 0, captures = 0, rejected = 0, dropped = 0;
 		std::uint64_t producerScopes = 0;
 		std::uint32_t lastProducerFrame = 0;
+		std::uint64_t graphicsStateFlushes = 0;
+		std::uint32_t lastGraphicsStateFlushFrame = 0;
 		std::array<std::uint64_t, static_cast<std::size_t>(ExposureDrawKind::Count)> drawCounts{};
 		std::string lastReason;
 		std::array<ExposureEvidence, 8> samples{};
@@ -123,6 +141,8 @@ namespace NeuralRendering::Color
 			const void* a_engineSelection, ID3D11PixelShader*) noexcept;
 		/// Observe live bindings at the immediate context's HDR draw boundary.
 		void ObserveDraw(ID3D11DeviceContext*, ExposureDrawKind) noexcept;
+		/// Observe finalized graphics bindings inside the exact HDR producer scope.
+		void ObserveGraphicsStateFlush(ID3D11DeviceContext*, bool a_isCompute) noexcept;
 		/// Establish the exact engine effect owner for nested draw callbacks.
 		RE::BSShader* EnterProducer(RE::BSShader*) noexcept;
 		void LeaveProducer(RE::BSShader*) noexcept;
@@ -132,6 +152,7 @@ namespace NeuralRendering::Color
 		void Abandon() noexcept;  // Device-loss/unfenced path: do not release ownership.
 	private:
 		ExposureCapture();
+		void Observe(ID3D11DeviceContext*, std::optional<ExposureDrawKind>) noexcept;
 		struct State;
 		State* state_;
 	};

@@ -947,6 +947,7 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 		func(isCompute);
 		globals::features::terrainBlending.OnSetDirtyStates(isCompute, callerRva);
 		globals::state->Draw();
+		NeuralRendering::Color::ExposureCapture::Instance().ObserveGraphicsStateFlush(globals::d3d::context, isCompute);
 		return;
 	}
 
@@ -968,7 +969,8 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 	globals::state->Draw();
 	phaseEndTicks = ReadFrameDiagCounterTicks();
 	RecordCSFrameHookPhase(CSFrameHookPhase::StateDraw, frame, phaseEndTicks - phaseStartTicks);
-	RecordCSFrameHookPhase(CSFrameHookPhase::SetDirtyStatesTotal, frame, phaseEndTicks - totalStartTicks);
+	NeuralRendering::Color::ExposureCapture::Instance().ObserveGraphicsStateFlush(globals::d3d::context, isCompute);
+	RecordCSFrameHookPhase(CSFrameHookPhase::SetDirtyStatesTotal, frame, ReadFrameDiagCounterTicks() - totalStartTicks);
 }
 
 struct ID3D11Device_CreateVertexShader

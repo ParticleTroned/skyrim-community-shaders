@@ -1,5 +1,9 @@
 # NR colour exposure follow-up, 2026-09-15
 
+The subsequent live retest confirmed intermittent capture despite producer
+scope callbacks. The [draw-observation repair](nr-colour-draw-observation-fix-20260915.md)
+records the runtime method-table cause and the engine-boundary correction.
+
 ## Live retest of 9b9d88467
 
 The null-driver Dragonsreach run used source

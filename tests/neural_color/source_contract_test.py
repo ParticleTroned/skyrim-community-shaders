@@ -12,11 +12,23 @@ class Contracts(unittest.TestCase):
         hooks = (ROOT / "src/Globals.cpp").read_text()
         self.assertEqual(hooks.count("ExposureCapture::Instance().ObserveDraw(This,"), 7)
         self.assertNotIn("ObserveDraw", (ROOT / "src/Hooks.cpp").read_text())
+        engine_hook = (ROOT / "src/Hooks.cpp").read_text().split(
+            "void Hooks::BSGraphics_SetDirtyStates::thunk", 1)[1].split(
+            "struct ID3D11Device_CreateVertexShader", 1)[0]
+        branches = engine_hook.split("globals::state->Draw();")[1:]
+        self.assertEqual(len(branches), 2)
+        for branch in branches:
+            self.assertIn("ObserveGraphicsStateFlush(globals::d3d::context, isCompute)", branch)
         capture = (NR / "ExposureCapture.cpp").read_text()
         self.assertIn("ExposureDrawRejection", capture)
         self.assertIn("c != globals::d3d::context", capture)
         self.assertIn("ComputeStateGuard<1>", capture)
         self.assertIn("auto* shader = activeHDRProducer", capture)
+        self.assertIn("ReadExposureDrawBindings(c)", capture)
+        state_flush = capture.split("void ExposureCapture::ObserveGraphicsStateFlush", 1)[1].split(
+            "void ExposureCapture::Observe(", 1)[0]
+        self.assertIn("if (!isCompute)", state_flush)
+        self.assertIn("Observe(context, std::nullopt)", state_flush)
         annotations = (ROOT / "src/FrameAnnotations.cpp").read_text()
         install = annotations.split("void OnPostPostLoad()", 1)[1]
         before_guard = install.split("if (!globals::state->frameAnnotations)", 1)[0]

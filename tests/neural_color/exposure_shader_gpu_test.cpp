@@ -1,5 +1,6 @@
 // Production exposure/prepare/reconstruct/measurement shaders on Windows WARP.
 #include "../ShaderPackageIncludes.h"
+#include "Features/Upscaling/NeuralRendering/ComputeStateGuard.h"
 #include "Features/Upscaling/NeuralRendering/ExposureCapture.h"
 #include <array>
 #include <cmath>
@@ -140,6 +141,54 @@ RWTexture2D<float4> Result : register(u0);
 		}
 	}
 }
+static void VerifyFinalizedBindings(ID3D11Device* d, ID3D11DeviceContext* c, ID3D11ComputeShader* capture)
+{
+	constexpr char code[] = "float4 main() : SV_Target { return float4(1, 1, 1, 1); }";
+	ComPtr<ID3DBlob> bytes, errors;
+	Check(D3DCompile(code, sizeof(code) - 1, nullptr, nullptr, nullptr, "main", "ps_5_0", 0, 0, &bytes, &errors));
+	ComPtr<ID3D11PixelShader> pixelShader;
+	Check(d->CreatePixelShader(bytes->GetBufferPointer(), bytes->GetBufferSize(), nullptr, &pixelShader));
+	std::array<Texture, 2> sources{ Make(d, 2, {}), Make(d, 2, {}) };
+	auto snapshot = Make(d, kExposureSnapshotPixels, {}, DXGI_FORMAT_R32G32B32A32_FLOAT, 1);
+	auto frozen = Make(d, kExposureSnapshotPixels, {}, DXGI_FORMAT_R32G32B32A32_FLOAT, 1);
+	c->CSSetShader(nullptr, nullptr, 0);
+	for (UINT frame = 1; frame <= 64; ++frame) {
+		auto& source = sources[frame % sources.size()];
+		const Pixel raw{ static_cast<float>(frame), static_cast<float>(frame) / 4, 0, 0 };
+		std::array<Pixel, 4> pixels;
+		pixels.fill(raw);
+		c->UpdateSubresource(source.resource.Get(), 0, nullptr, pixels.data(), 2 * sizeof(Pixel), 0);
+		auto* view = source.srv.Get();
+		c->PSSetShader(pixelShader.Get(), nullptr, 0);
+		c->PSSetShaderResources(2, 1, &view);
+		const auto bindings = ReadExposureDrawBindings(c);
+		Require(bindings.average.Get() == view && bindings.shader.Get() == pixelShader.Get());
+		Require(!ExposureDrawRejection(reinterpret_cast<std::uintptr_t>(pixelShader.Get()),
+			reinterpret_cast<std::uintptr_t>(bindings.shader.Get()), reinterpret_cast<std::uintptr_t>(bindings.average.Get())));
+		{
+			ComputeStateGuard<1> guard(c);
+			Dispatch(c, capture, { bindings.average.Get() }, snapshot.uav.Get());
+			guard.Unbind();
+		}
+		c->CopyResource(frozen.resource.Get(), snapshot.resource.Get());
+		// Later source writes cannot change a queued stereo snapshot.
+		pixels.fill({ 128, 128, 0, 0 });
+		c->UpdateSubresource(source.resource.Get(), 0, nullptr, pixels.data(), 2 * sizeof(Pixel), 0);
+		for (UINT texel = 0; texel < kExposureSnapshotPixels; ++texel)
+			Require(Read(d, c, frozen.resource.Get(), texel) == Pixel{ raw[0], raw[1], 0.25f, 1 });
+		const auto restored = ReadExposureDrawBindings(c);
+		Require(restored.average.Get() == view && restored.shader.Get() == pixelShader.Get());
+		ComPtr<ID3D11ComputeShader> restoredCompute;
+		c->CSGetShader(&restoredCompute, nullptr, nullptr);
+		Require(!restoredCompute);
+	}
+	ID3D11ShaderResourceView* empty = nullptr;
+	c->PSSetShaderResources(2, 1, &empty);
+	c->PSSetShader(nullptr, nullptr, 0);
+	const auto missing = ReadExposureDrawBindings(c);
+	Require(!missing.average && !missing.shader);
+	Require(ExposureDrawRejection(reinterpret_cast<std::uintptr_t>(pixelShader.Get()), 0, 0));
+}
 int main(int argc, char** argv)
 {
 	Require(argc == 2);
@@ -165,6 +214,7 @@ int main(int argc, char** argv)
 	Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, &level, 1, D3D11_SDK_VERSION, &d, nullptr, &c));
 	const std::filesystem::path folder(argv[1]);
 	auto capture = Compile(d.Get(), folder / "ColorExposureCS.hlsl");
+	VerifyFinalizedBindings(d.Get(), c.Get(), capture.Get());
 	auto prepare = Compile(d.Get(), folder / "ColorPrepareCS.hlsl");
 	auto reconstruct = Compile(d.Get(), folder / "ColorReconstructCS.hlsl");
 	auto measure = Compile(d.Get(), folder / "ColorMeasureCS.hlsl");

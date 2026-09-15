@@ -65,18 +65,13 @@ Util::ImmediateContextProtectionStatus Util::InspectImmediateContextProtection(I
 	return InspectContext(a_context, multithread);
 }
 
-HRESULT Util::ProtectImmediateContext(ID3D11DeviceContext* a_context) noexcept
+HRESULT Util::ValidateImmediateContext(ID3D11DeviceContext* a_context) noexcept
 {
 	ComPtr<ID3D11Multithread> multithread;
-	const auto observation = InspectContext(a_context, multithread);
-	if (FAILED(observation.status))
-		return observation.status;
-	if (!observation.multithreadProtected)
-		multithread->SetMultithreadProtected(TRUE);
-	return multithread->GetMultithreadProtected() != FALSE ? S_OK : E_FAIL;
+	return InspectContext(a_context, multithread).status;
 }
 
-HRESULT Util::ProtectDeviceCreation(
+HRESULT Util::ValidateDeviceCreation(
 	HRESULT a_result,
 	ID3D11Device** a_device,
 	ID3D11DeviceContext** a_context,
@@ -89,24 +84,24 @@ HRESULT Util::ProtectDeviceCreation(
 
 	ComPtr<ID3D11DeviceContext> context;
 	ComPtr<ID3D11Device> device;
-	HRESULT protectionResult = S_OK;
+	HRESULT validationResult = S_OK;
 	if (a_context && *a_context) {
 		context = *a_context;
 	} else {
 		if (a_device && *a_device)
 			device = *a_device;
 		else
-			protectionResult = (*a_swapChain)->GetDevice(IID_PPV_ARGS(device.GetAddressOf()));
-		if (SUCCEEDED(protectionResult) && device)
+			validationResult = (*a_swapChain)->GetDevice(IID_PPV_ARGS(device.GetAddressOf()));
+		if (SUCCEEDED(validationResult) && device)
 			device->GetImmediateContext(context.GetAddressOf());
 	}
-	if (SUCCEEDED(protectionResult))
-		protectionResult = ProtectImmediateContext(context.Get());
-	if (SUCCEEDED(protectionResult))
+	if (SUCCEEDED(validationResult))
+		validationResult = ValidateImmediateContext(context.Get());
+	if (SUCCEEDED(validationResult))
 		return a_result;
 
 	ReleaseOutput(a_swapChain);
 	ReleaseOutput(a_context);
 	ReleaseOutput(a_device);
-	return protectionResult;
+	return validationResult;
 }

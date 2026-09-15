@@ -15692,7 +15692,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 			ppDevice,
 			pFeatureLevel,
 			ppImmediateContext);
-		return Util::ProtectDeviceCreation(result, ppDevice, ppImmediateContext, ppSwapChain);
+		return Util::ValidateDeviceCreation(result, ppDevice, ppImmediateContext, ppSwapChain);
 	}
 
 	try {
@@ -15762,8 +15762,8 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 			if (SUCCEEDED(proxyDeviceResult) && candidateDevice && candidateContext) {
 				try {
-					if (FAILED(Util::ProtectImmediateContext(candidateContext.get())))
-						throw std::runtime_error("proxy immediate-context protection failed");
+					if (FAILED(Util::ValidateImmediateContext(candidateContext.get())))
+						throw std::runtime_error("proxy immediate-context validation failed");
 					DXGI_SWAP_CHAIN_DESC proxyDesc = *pSwapChainDesc;
 					proxyDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 					proxyDesc.BufferCount = std::max(proxyDesc.BufferCount, 2u);
@@ -15835,7 +15835,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 		ppDevice,
 		pFeatureLevel,
 		ppImmediateContext);
-	ret = Util::ProtectDeviceCreation(ret, ppDevice, ppImmediateContext, ppSwapChain);
+	ret = Util::ValidateDeviceCreation(ret, ppDevice, ppImmediateContext, ppSwapChain);
 
 	if (FAILED(ret) || !ppDevice || !*ppDevice) {
 		return ret;

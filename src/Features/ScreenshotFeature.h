@@ -269,7 +269,7 @@ private:
 	winrt::com_ptr<ID3D11ShaderResourceView> previewCacheSRV;
 
 	bool QueueScreenshot(PendingScreenshot&& screenshot);
-	bool EnsureReadbackContextProtection(ID3D11DeviceContext* a_context);
+	bool ValidateReadbackContext(ID3D11DeviceContext* a_context);
 	bool TryReserveScreenshotSlot();
 	void ReleaseScreenshotSlot();
 	static void ReleaseScreenshotSlot(const std::shared_ptr<ScreenshotWorkerState>& a_state);

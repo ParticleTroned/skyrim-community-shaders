@@ -58,3 +58,11 @@ python tools/compare-render-scale-ledger.py --ledger docs/development/vr-render-
 This reads the selected files without changing them. Select disjoint run
 partitions when using multiple inputs; do not supply repeated baseline
 columns from different snapshots to the same audit.
+
+## September 15 graphics ownership implementation
+
+The [ownership review](graphics-context-ownership-review-20260915.md) records
+an offline correction and its validation limits. No new finalized runtime
+measurement is added by that correction; existing numbered snapshots remain
+immutable. Exact-build COC and performance results must receive a new
+numbered snapshot when measured and finalized.

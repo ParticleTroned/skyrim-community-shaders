@@ -9,6 +9,8 @@
 #include <span>
 #include <utility>
 
+#include "RendererOwnership.h"
+
 namespace Util::VRLoadingMenuClear
 {
 	enum class Installation
@@ -89,14 +91,9 @@ namespace Util::VRLoadingMenuClear
 	{
 		if (!a_lock)
 			return Result::MissingRenderer;
-		if (!TryEnterCriticalSection(a_lock))
+		const RendererOwnership ownership(a_lock);
+		if (!ownership)
 			return Result::Deferred;
-
-		struct ReleaseOwnership
-		{
-			CRITICAL_SECTION* lock;
-			~ReleaseOwnership() { LeaveCriticalSection(lock); }
-		} release{ a_lock };
 		std::forward<Callback>(a_clear)();
 		return Result::Executed;
 	}

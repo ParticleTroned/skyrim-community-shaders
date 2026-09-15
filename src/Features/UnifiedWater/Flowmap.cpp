@@ -1,6 +1,7 @@
 ﻿#include "Flowmap.h"
 
 #include "Utils/D3DContextProtection.h"
+#include "Utils/RendererContextAccess.h"
 #include "Utils/StringUtils.h"
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
@@ -217,8 +218,8 @@ bool Flowmap::GenerateFlowmap(bool useMips, std::filesystem::path& generatedPath
 		return false;
 	}
 
-	if (FAILED(Util::ProtectImmediateContext(ctx))) {
-		logger::error("[Unified Water] [Flowmap] Immediate-context protection is unavailable");
+	if (FAILED(Util::ValidateImmediateContext(ctx))) {
+		logger::error("[Unified Water] [Flowmap] Immediate context is not eligible for shared access");
 		return false;
 	}
 
@@ -375,10 +376,15 @@ bool Flowmap::GenerateFlowmap(bool useMips, std::filesystem::path& generatedPath
 	}
 
 	{
-		// Per-call protection and state restoration isolate this private work
-		// without holding the immediate context through texture I/O or encoding.
+		const Util::RendererOwnership ownership(Util::GetRendererContextLock(globals::game::renderer, ctx), true);
+		if (!ownership) {
+			logger::error("[Unified Water] [Flowmap] Renderer ownership is unavailable");
+			return false;
+		}
 		ctx->ExecuteCommandList(commandList.get(), TRUE);
+	}
 
+	{
 		// A new resource name avoids cached engine textures and preserves the old DDS.
 		const auto generation = static_cast<uint64_t>(t0.time_since_epoch().count());
 		const auto filename = std::format(L"Tamriel-Flowmap.{}.{}.{}.{}.{:016X}.dds", width, height, offsetX, offsetY, generation);

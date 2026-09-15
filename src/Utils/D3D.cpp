@@ -5,6 +5,7 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/Format.h"
+#include "Utils/RendererContextAccess.h"
 #include "Utils/ShaderInclude.h"
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
@@ -612,8 +613,13 @@ namespace Util
 		namespace fs = std::filesystem;
 
 		DirectX::ScratchImage cpuImage;
-		if (const auto hr = CaptureTexture(device, context, tex, cpuImage); FAILED(hr))
-			return hr;
+		{
+			const RendererOwnership ownership(GetRendererContextLock(globals::game::renderer, context), true);
+			if (!ownership)
+				return E_POINTER;
+			if (const auto hr = CaptureTexture(device, context, tex, cpuImage); FAILED(hr))
+				return hr;
+		}
 
 		const auto parent = path.parent_path();
 		std::error_code ec;

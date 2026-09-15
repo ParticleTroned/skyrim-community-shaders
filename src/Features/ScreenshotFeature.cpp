@@ -15,6 +15,7 @@
 #include "Utils/D3DContextProtection.h"
 #include "Utils/FileSystem.h"
 #include "Utils/NormalizedCoordinates.h"
+#include "Utils/RendererContextAccess.h"
 #include "Utils/WinApi.h"
 #include <DirectXTex.h>
 #include <PCH.h>
@@ -226,54 +227,29 @@ namespace
 		}
 		std::memset(destPixels, 0, image.GetPixelsSize());
 
-		D3D11_MAPPED_SUBRESOURCE mapped{};
 		HRESULT mapResult = E_FAIL;
 		const auto mapDeadline = std::chrono::steady_clock::now() + kReadbackMapTimeout;
 		do {
-			mapResult = context->Map(
-				stagingTexture,
-				0,
-				D3D11_MAP_READ,
-				D3D11_MAP_FLAG_DO_NOT_WAIT,
-				&mapped);
+			mapResult = Util::TryReadbackWithRendererOwnership(context, stagingTexture,
+				Util::GetRendererContextLock(globals::game::renderer, context), [&](const D3D11_MAPPED_SUBRESOURCE& mapped) -> HRESULT {
+					if (!mapped.pData || mapped.RowPitch == 0)
+						return E_FAIL;
+					// Bound row copies by the driver's mapped extent and both row pitches.
+					const size_t bytesPerRow = std::min<size_t>(destImage->rowPitch, mapped.RowPitch);
+					const size_t mappedDepth = mapped.DepthPitch != 0 ? mapped.DepthPitch : mapped.RowPitch * destImage->height;
+					const size_t rowsToCopy = std::min<size_t>(destImage->height, mappedDepth / mapped.RowPitch);
+					const auto* srcPixels = static_cast<const uint8_t*>(mapped.pData);
+					for (size_t row = 0; row < rowsToCopy; ++row)
+						memcpy(destPixels + row * destImage->rowPitch, srcPixels + row * mapped.RowPitch, bytesPerRow);
+					return S_OK;
+				});
 			if (mapResult != DXGI_ERROR_WAS_STILL_DRAWING) {
 				break;
 			}
 			std::this_thread::sleep_for(kReadbackMapRetryDelay);
 		} while (std::chrono::steady_clock::now() < mapDeadline);
 
-		if (FAILED(mapResult)) {
-			return false;
-		}
-
-		const auto unmap = [&]() { context->Unmap(stagingTexture, 0); };
-		if (!mapped.pData || mapped.RowPitch == 0) {
-			unmap();
-			return false;
-		}
-
-		// Driver-mapped region can be smaller than height * mapped.RowPitch
-		// (alignment quirks, partial mappings). Cap by mapped.DepthPitch and
-		// clamp each row's copy to whichever of source/dest pitches is smaller -
-		// stepping past either side hits unmapped memory and the worker crashes
-		// inside rep movsb (see crash 2026-05-19).
-		const size_t bytesPerRow = std::min<size_t>(destImage->rowPitch, mapped.RowPitch);
-		const size_t mappedDepth = mapped.DepthPitch != 0 ? mapped.DepthPitch :
-		                                                    mapped.RowPitch * destImage->height;
-		const size_t maxRowsBySize = mapped.RowPitch > 0 ? (mappedDepth / mapped.RowPitch) : 0;
-		const size_t rowsToCopy = std::min<size_t>(destImage->height, maxRowsBySize);
-
-		const auto* srcPixels = static_cast<const uint8_t*>(mapped.pData);
-
-		for (size_t row = 0; row < rowsToCopy; ++row) {
-			memcpy(
-				destPixels + row * destImage->rowPitch,
-				srcPixels + row * mapped.RowPitch,
-				bytesPerRow);
-		}
-
-		unmap();
-		return true;
+		return SUCCEEDED(mapResult);
 	}
 
 	void StripAlphaForBmp(DirectX::ScratchImage& image)
@@ -2743,9 +2719,9 @@ nlohmann::json ScreenshotFeature::BuildAcquisitionRecord(
 	};
 }
 
-bool ScreenshotFeature::EnsureReadbackContextProtection(ID3D11DeviceContext* a_context)
+bool ScreenshotFeature::ValidateReadbackContext(ID3D11DeviceContext* a_context)
 {
-	return SUCCEEDED(Util::ProtectImmediateContext(a_context));
+	return SUCCEEDED(Util::ValidateImmediateContext(a_context));
 }
 
 bool ScreenshotFeature::QueueScreenshot(PendingScreenshot&& screenshot)
@@ -3370,8 +3346,9 @@ bool ScreenshotFeature::StageTexturePlane(
 	if (!sourceDevice || !sourceContext) {
 		return false;
 	}
-	if (!EnsureReadbackContextProtection(sourceContext.get())) {
-		logger::error("Screenshot readback requires ID3D11Multithread protection.");
+	const Util::RendererOwnership ownership(Util::GetRendererContextLock(globals::game::renderer, sourceContext.get()));
+	if (!ownership || !ValidateReadbackContext(sourceContext.get())) {
+		logger::error("Screenshot staging requires ownership of the current renderer context.");
 		return false;
 	}
 

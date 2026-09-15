@@ -16,6 +16,7 @@
 #	include "ShaderCache.h"
 #	include "State.h"
 #	include "Utils/D3DContextProtection.h"
+#	include "Utils/RendererContextAccess.h"
 #	include "Utils/VRLoadingMenuClear.h"
 #	include "Utils/Form.h"
 #	include "VRAPI/CSserviceapi.h"
@@ -1451,9 +1452,10 @@ namespace
 	{
 		const auto observation = Util::InspectImmediateContextProtection(globals::d3d::context);
 		const auto loadingClear = Util::VRLoadingMenuClear::GetStatus();
-		const bool apiReady = SUCCEEDED(observation.status) && observation.multithreadProtected;
+		const bool apiReady = SUCCEEDED(observation.status);
+		const bool rendererOwnershipAvailable = Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context) != nullptr;
 		return {
-			{ "policy", "device_lifetime" },
+			{ "policy", "renderer_ownership" },
 			{ "contextAvailable", observation.contextAvailable },
 			{ "immediateContext", observation.immediateContext },
 			{ "deviceFlags", observation.deviceFlags },
@@ -1461,7 +1463,8 @@ namespace
 			{ "multithreadAvailable", observation.multithreadAvailable },
 			{ "multithreadProtected", observation.multithreadProtected },
 			{ "apiReady", apiReady },
-			{ "ready", apiReady && loadingClear.ready },
+			{ "rendererOwnershipAvailable", rendererOwnershipAvailable },
+			{ "ready", apiReady && rendererOwnershipAvailable && loadingClear.ready },
 			{ "hresult", static_cast<int32_t>(observation.status) },
 			{ "loadingMenuClear", {
 									  { "state", loadingClear.state },
@@ -7573,9 +7576,9 @@ namespace VRRenderScaleDevBenchBridge
 			descriptor["description"] = descriptor["description"].get<std::string>() +
 			                            " graphics_context_status reads the current immediate context on the main thread without changing protection. "
 			                            "graphicsContext reports device flags, interface availability, multithreadProtected, HRESULT and ready. "
-			                            "The device_lifetime policy is always enabled for SE, AE and VR, independently of diagnostic recording. "
-			                            "apiReady requires a multi-thread-capable device and active immediate-context protection; "
-			                            "ready additionally requires the applicable loading-menu guard to be installed. These are implementation readiness checks, "
+			                            "The renderer_ownership policy validates SE, AE and VR contexts without changing their API protection flag. "
+			                            "apiReady requires a compatible multi-thread-capable immediate context; rendererOwnershipAvailable reports its native renderer lock. "
+			                            "ready additionally requires that owner and the applicable loading-menu guard to be installed. These are implementation readiness checks, "
 			                            "not runtime stability or whole-pass isolation certification. loadingMenuClear separately reports the "
 			                            "VR loading-message renderer guard installation and attempted, executed, deferred and missingRenderer counters. "
 			                            "Contended loading-message clears remain pending for the native render-side clear. Counters are independently sampled. "

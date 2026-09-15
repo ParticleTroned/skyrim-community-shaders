@@ -985,10 +985,10 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 		pFeatureLevel,
 		ppImmediateContext);
 
-	const auto protectedResult = Util::ProtectDeviceCreation(ret, ppDevice, ppImmediateContext, ppSwapChain);
-	if (SUCCEEDED(ret) && FAILED(protectedResult))
-		logger::error("D3D11 immediate-context protection failed: 0x{:08X}", static_cast<uint32_t>(protectedResult));
-	return protectedResult;
+	const auto validationResult = Util::ValidateDeviceCreation(ret, ppDevice, ppImmediateContext, ppSwapChain);
+	if (SUCCEEDED(ret) && FAILED(validationResult))
+		logger::error("D3D11 immediate-context validation failed: 0x{:08X}", static_cast<uint32_t>(validationResult));
+	return validationResult;
 }
 
 void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
@@ -1335,12 +1335,12 @@ namespace Hooks
 
 			logger::info("Accessing render device information");
 			globals::ReInit();
-			const auto protectionResult = Util::ProtectImmediateContext(globals::d3d::context);
-			if (FAILED(protectionResult)) {
-				logger::critical("Renderer immediate-context protection failed: 0x{:08X}", static_cast<uint32_t>(protectionResult));
-				stl::report_and_fail("The graphics context cannot be protected for concurrent rendering. See CommunityShaders.log.");
+			const auto validationResult = Util::ValidateImmediateContext(globals::d3d::context);
+			if (FAILED(validationResult)) {
+				logger::critical("Renderer immediate-context validation failed: 0x{:08X}", static_cast<uint32_t>(validationResult));
+				stl::report_and_fail("The graphics context cannot support renderer-owned access. See CommunityShaders.log.");
 			}
-			logger::info("D3D11 immediate-context multithread protection enabled for the device lifetime");
+			logger::info("D3D11 immediate context validated; auxiliary access uses native renderer ownership");
 
 			logger::info("Detouring virtual function tables");
 			stl::detour_vfunc<8, IDXGISwapChain_Present>(globals::d3d::swapChain);

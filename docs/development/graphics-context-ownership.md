@@ -11,8 +11,8 @@ that this observed sequence caused the earlier malformed-command hang.
 ## Device and context protection
 
 Both device-creation hooks remove `D3D11_CREATE_DEVICE_SINGLETHREADED` while
-preserving other creation flags. Each successful context receives verified
-`ID3D11Multithread` protection before being returned to its caller. This also
+preserving other creation flags. Each successful immediate context is validated
+without enabling or disabling `ID3D11Multithread` API protection. This also
 covers the upscaling hook's RenderDoc bypass and the flat frame-generation
 proxy candidate, before backend initialization uses that candidate.
 
@@ -24,21 +24,28 @@ incompatible replacement context at renderer initialization reports a fatal
 initialization error instead of continuing with unsafe concurrent access.
 Deferred contexts and devices created as single-threaded are rejected.
 
-Protection belongs to the device lifetime. Screenshot readback and flowmap
-generation use the same helper and never restore an independently saved
-protection flag. Screenshot completion no longer changes the game's context
-protection; captured pixels, image formats and capture scheduling are
-unchanged. Flowmap generation records copies on its private deferred context
-and submits them with `ExecuteCommandList(..., TRUE)`, preserving immediate
-context state. Its subsequent staging readback operates on private textures.
-Per-call protection permits those operations without holding the context
-lock across texture loading, image encoding or filesystem I/O. The helper
-retains no global COM references.
+Auxiliary context operations acquire Skyrim's existing renderer critical
+section, the same owner used by native rendering and the loading-menu guard.
+They do not toggle or restore the API protection flag. Another module's
+enabled flag is left intact and remains visible in telemetry.
+
+Screenshot staging takes nonblocking, reentrant renderer ownership for its
+resolve/copy transaction. The worker tries that owner for each nonblocking
+staging Map, copies the mapped bytes and unmaps before releasing it. Renderer
+contention and a pending GPU copy use the existing 500 ms retry deadline;
+ownership is released before sleeping, encoding or writing files. Failure
+remains an explicit capture failure. An unknown/replaced context is rejected
+rather than assigning it the current renderer's lock.
+
+Flowmap generation records copies on its private deferred context. It acquires
+renderer ownership around `ExecuteCommandList(..., TRUE)` and separately around
+staging capture, preserving immediate-context state. Texture loading, encoding
+and filesystem I/O run outside renderer ownership. No new ownership operation
+is added to ordinary draw calls. The helpers retain no global COM references.
 
 Microsoft documents that the immediate context requires synchronization and
-that `ID3D11Multithread` adds overhead to each protected API call. Its setter
-returns the previous state; the implementation checks
-`GetMultithreadProtected` to verify the resulting state.
+that `ID3D11Multithread` adds overhead to each protected API call. Inspection
+uses `GetMultithreadProtected`; no production caller changes that flag.
 See [D3D11 threading protection](https://learn.microsoft.com/en-us/windows/win32/api/d3d11_4/nn-d3d11_4-id3d11multithread)
 and [device creation flags](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ne-d3d11-d3d11_create_device_flag).
 
@@ -61,9 +68,8 @@ blocking UI-to-render lock dependency and adds no new lock operation to each
 ordinary draw call. SE and AE do not install this VR call-site hook.
 
 The call site and target must match the validated runtime bytes before the
-hook is installed. An unsupported site is reported explicitly; permanent
-context protection still applies, but the loading-menu transaction guard
-must not be reported as active.
+hook is installed. An unsupported site is reported explicitly, and the
+loading-menu transaction guard must not be reported as active or ready.
 
 ## Verification through DevBench
 
@@ -74,12 +80,15 @@ does not enable, disable or repair protection.
 
 The object reports device flags, immediate-context and interface
 availability, `multithreadProtected`, the inspection HRESULT, `apiReady`
-and `ready`. `apiReady` requires a compatible device and active API
-protection. Aggregate `ready` additionally requires the applicable
-loading-menu guard to be ready. These are implementation readiness checks;
+and `ready`. The policy is `renderer_ownership`; `apiReady` requires a compatible
+multi-thread-capable immediate context, independently of its observed API
+protection flag. `rendererOwnershipAvailable` requires that context to match
+the current renderer and its native critical section. Aggregate `ready`
+additionally requires this owner and the applicable loading-menu guard to be
+ready. These are implementation readiness checks;
 they do not certify runtime stability, complete render-pass isolation or
 that an external module cannot subsequently change protection. The policy
-has no runtime off switch.
+has no runtime switch that disables the renderer ownership guards.
 
 `loadingMenuClear` reports the native guard's installation state,
 `applicable`, `ready`, and attempted, executed, deferred and missing-renderer
@@ -90,34 +99,47 @@ unbalanced.
 ## Validation and limits
 
 The native WARP test exercises the actual D3D11 interfaces, including
-initially unprotected contexts, independent device state, automatic locking
-of an API call against `Enter`, repeated users, creation outputs, rejected
-single-threaded/deferred contexts and failure cleanup. A concurrent command
-list test checks that state-restoring execution preserves another thread's
-viewport without an enclosing context transaction. The loading-menu
+initially unprotected contexts, unchanged external protection, independent
+device state, creation outputs, rejected single-threaded/deferred contexts
+and failure cleanup. It verifies that validation does not introduce automatic
+API locking. Concurrent renderer transactions and state-restoring command
+execution preserve another owner's viewport with API locking disabled.
+Staging readback tests cover contention, recursion, pixel contents and
+unmap/ownership release after a copy exception. The loading-menu
 admission test exercises validated native-call signatures, runtime rejection,
 installation readiness, critical-section contention, reentrant ownership,
 pending work and release on callback failure. Existing screenshot dispatch
 and presentation tests cover the affected adjacent contracts.
 
-Earlier checks in the investigation workspace are local investigation
-evidence, not build verification of this extracted production candidate.
-Candidate build and test results must be recorded separately before
-publication. Local evidence is retained under
-`artifacts/graphics-context-protection-20260912`.
+The originating-machine handover records PR93's merged production source
+`1e99de0cebc49c256ffb759b31c616b5154733bc` completing 70 alternating COCs
+between WindhelmExterior01 and WhiterunDragonsreach in one VR process:
+20 at 10-second waits, 25 at 5-second waits and 25 at 3-second waits. It reports
+verified destinations, player-loaded state and DLL identity. Those custom
+checks did not prove the earlier hang's cause, matched performance, stereo
+fidelity, strict cleanup or SE/AE runtime coverage. Their raw artifacts remain
+on that machine; this handover is not validation of the current candidate.
 
-In-game stability and performance remain pending qualification. The PR stays
-a draft until those checks are verified. **Performance neutrality is
-unverified.** Permanent API protection can add CPU cost even though the
-loading-menu guard itself runs only on the menu event. Compare the previous
-and candidate DLLs in the same scene, profile, runtime route, resolution and
-shader state, with warm caches and repeated fresh frame samples. Report
-whole-frame and CPU/GPU measurements separately; a CSX profiler total alone
-does not measure all engine calls. Keep diagnostic writer tracing disabled
-in both performance lanes. Run the 20-transition COC stability assay
-separately and preserve any fault, pacing interruption or incomplete run.
+The user's equally instrumented five-build investigation identified additional
+D3D11 critical-section execution at PR93. This motivates replacing permanent
+API locking while retaining transaction guards. Earlier DLSS regressions and
+scene-dependent CPU/GPU changes remain separate investigations. This source
+correction publishes no new runtime measurement or performance claim.
+
+The revised ownership candidate still requires exact-build COC and performance
+validation. Repeat the 20-transition assay with the retained loading-menu
+guard, including screenshot readback; verify no surviving stretch, incomplete
+stereo or cleanup debt. Exercise flowmap generation separately. Compare the
+same scene, profile, runtime route, resolution and shader state with warm
+caches; match tracing between performance lanes. Preserve every fault, pacing
+interruption and incomplete run. A successful COC run does not establish that
+all possible concurrent native or third-party writers obey the renderer lock.
 
 Driver instrumentation used for the investigation is maintained separately
 from this production change. Further tracing is needed only if runtime
 validation exposes an unresolved result that requires it to choose a safe
 correction.
+
+The [September 15 adversarial review](graphics-context-ownership-review-20260915.md)
+records the source-to-test audit, validation commands and remaining runtime
+evidence requirements for this correction.

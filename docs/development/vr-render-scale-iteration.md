@@ -1979,3 +1979,15 @@ commands and limitations in
 [the correction report](pr73-owned-release-proof-20260911.md#final-clean-build-evidence).
 No new runtime measurements or visual qualification are claimed, and no
 runtime ledger cells were changed by this offline validation.
+
+## September 15: graphics ownership correction under validation
+
+The [graphics ownership review](graphics-context-ownership-review-20260915.md)
+retains the VR loading-menu guard while replacing permanent D3D11 API
+protection with native renderer ownership for screenshot and flowmap work.
+It preserves render-scale scheduling, thresholds, backend selection and
+stereo qualification requirements. Source/controller validation does not
+establish the original hang's cause or certify a performance improvement.
+The exact corrected build still needs COC, capture, flowmap and matched
+performance evidence. No new runtime measurements or ledger cells are
+published by this implementation review.

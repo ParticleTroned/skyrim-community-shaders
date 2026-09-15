@@ -128,7 +128,10 @@ namespace NeuralRendering::Color
 	Status Registry::GetStatus() const
 	{
 		std::scoped_lock lock(mutex_);
-		return status_;
+		auto status = status_;
+		status.measurementBatches = measurementBatches_.Latest();
+		status.evictedIncompleteBatches = measurementBatches_.EvictedIncomplete();
+		return status;
 	}
 	bool Registry::Configure(const Settings& settings, const Experiments& experiments, std::uint64_t expectedRevision)
 	{
@@ -181,12 +184,16 @@ namespace NeuralRendering::Color
 			std::scoped_lock lock(mutex_);
 			if (measurement.source.slot >= status_.measurements.size())
 				return;
-			auto& previous = status_.measurements[measurement.source.slot];
-			if (previous.source.measurementOrder > measurement.source.measurementOrder) {
+			const auto& o = measurement.source;
+			const MeasurementBatchKey key{ o.measurementBatchId, o.revision, o.generation,
+				o.frame, o.sourceWorldFrame, o.insertion, o.expectedMeasurementSlotMask, o.atomicStereo };
+			if (!o.processed || !o.failure.empty() || !measurementBatches_.Record(key, o.slot, measurement)) {
 				++status_.dropped;
 				return;
 			}
-			previous = measurement;
+			auto& previous = status_.measurements[o.slot];
+			if (previous.source.measurementOrder <= o.measurementOrder)
+				previous = measurement;
 			++status_.samples;
 		} catch (...) { /* Optional diagnostics never alter rendering. */
 		}
@@ -326,6 +333,10 @@ namespace NeuralRendering::Color
 			Registry::Instance().Record(measurement);
 		}
 	}
+	std::uint64_t Pipeline::BeginMeasurementBatch() noexcept
+	{
+		return measurementBatchOrder_ == std::numeric_limits<std::uint64_t>::max() ? 0 : ++measurementBatchOrder_;
+	}
 	bool Pipeline::Prepare(ID3D11DeviceContext* context, Work& work, ID3D11Resource* original,
 		ID3D11Resource* prepared, ID3D11UnorderedAccessView* preparedUAV, const Configuration& config, Observation observation)
 	{
@@ -333,7 +344,6 @@ namespace NeuralRendering::Color
 		if (!context || !original || !prepared || !preparedUAV || !work.baseline.resource || !constants_ ||
 			measurementOrder_ == std::numeric_limits<std::uint64_t>::max())
 			return false;
-		Poll(context, work);
 		const auto start = std::chrono::steady_clock::now();
 		work.observation = std::move(observation);
 		work.configuration = config;

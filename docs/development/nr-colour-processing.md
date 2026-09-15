@@ -128,12 +128,37 @@ Local colour resources reuse 64-pixel-rounded capacities. Shared interop fences
 and the renderer's reset/unsafe-detach boundary govern lifetime. The new t3
 binding and predication are saved/restored. NR off performs no capture dispatch.
 
-## DevBench API v2
+## DevBench API v3
 
 Tool: **communityshaders.nr_color**. Actions: `status`, `configure`,
 `reset_experiments`, `assets`. Responses explicitly report `ok` and error codes
 so automation/dev can enforce semantic success. Configuration acknowledges
 registry state, not completed GPU work; require processed, fresh measurements.
+
+`measurementBatches` publishes up to four complete private reconstruction
+batches, newest submission first. Each batch fixes its `measurementBatchId`,
+`expectedMeasurementSlotMask`, frame, source-world frame, generation,
+revision, insertion point and `atomicColourBatch` before its readbacks are
+queued. Every enclosed measurement carries the same identity and membership.
+Changing character regions therefore do not borrow another frame's secondary
+slot or require a region that was absent from that batch.
+
+The renderer polls pending readbacks for all eight physical slots on each
+admitted batch, including currently inactive regions. Polling remains
+nonblocking and does not flush or wait on the GPU. A bounded 16-batch assembly
+history rejects duplicates, identity conflicts and missing members;
+`counts.evictedIncompleteBatches` preserves incomplete-history eviction.
+Batch IDs survive resource resets. Legacy `slots` and `measurements` arrays
+remain latest-per-slot diagnostics; API-v3 assessment never falls back to
+combining those arrays. The 24-float measurement layout remains version 2.
+
+An explicit `--expected-physical-slots` fixture must match the batch membership
+exactly. Without that option, the runner reports
+`regionCompleteness=immutable_batch_manifest`. It still requires fresh complete
+stereo groups and separate outer-renderer evidence. A mono batch or an empty
+eye is not silently promoted into measured stereo. Complete private readbacks
+do not prove external output commit, inference during transport bypass, or HMD
+presentation. API-v2 evidence retains the older conservative grouping rules.
 
 ```json
 {

@@ -134,6 +134,7 @@ namespace
 	{
 		return { { "frame", o.frame }, { "sourceWorldFrame", o.sourceWorldFrame }, { "physicalSlot", o.slot },
 			{ "insertionPoint", o.insertion }, { "generation", o.generation }, { "revision", o.revision },
+			{ "measurementBatchId", o.measurementBatchId }, { "expectedMeasurementSlotMask", o.expectedMeasurementSlotMask },
 			{ "rect", { o.rect.baseX, o.rect.baseY, o.rect.width, o.rect.height } },
 			{ "sourceFormat", o.sourceFormat }, { "outputFormat", o.outputFormat }, { "effectiveMode", Name(o.mode, modes) },
 			{ "profile", ProfileJson(o.profile) }, { "transportBypass", o.bypass }, { "modelEditShown", o.modelEditShown },
@@ -141,32 +142,51 @@ namespace
 			{ "preparationCpuMicroseconds", o.preparationCpuMicroseconds }, { "reconstructionCpuMicroseconds", o.reconstructionCpuMicroseconds },
 			{ "exposureBinding", ExposureBindingName(o.exposureState) }, { "exposure", EvidenceJson(o.exposure) }, { "failure", o.failure } };
 	}
+	Json MeasurementJson(const Measurement& m)
+	{
+		return { { "source", ObservationJson(m.source) }, { "values", m.data }, { "measurementVersion", 2 },
+			{ "invalidForwardSamples", m.data[16] }, { "invalidInverseSamples", m.data[17] },
+			{ "effectiveExposure", m.data[18] }, { "effectiveExposureValid", m.data[19] == 1.0f },
+			{ "capturedAverage", m.data[20] }, { "capturedTarget", m.data[21] }, { "capturedRatio", m.data[22] },
+			{ "capturedRatioValid", m.source.exposureState == ExposureBindingState::SnapshotQueued && m.data[23] == 1.0f } };
+	}
 	Json StatusJson()
 	{
 		const auto config = Registry::Instance().Snapshot();
 		const auto status = Registry::Instance().GetStatus();
-		Json slots = Json::array(), measurements = Json::array();
+		Json slots = Json::array(), measurements = Json::array(), batches = Json::array();
 		for (const auto& o : status.slots)
 			if (o.revision)
 				slots.push_back(ObservationJson(o));
 		for (const auto& m : status.measurements) {
 			if (!m.source.revision)
 				continue;
-			measurements.push_back({ { "source", ObservationJson(m.source) }, { "values", m.data }, { "measurementVersion", 2 },
-				{ "invalidForwardSamples", m.data[16] }, { "invalidInverseSamples", m.data[17] },
-				{ "effectiveExposure", m.data[18] }, { "effectiveExposureValid", m.data[19] == 1.0f },
-				{ "capturedAverage", m.data[20] }, { "capturedTarget", m.data[21] }, { "capturedRatio", m.data[22] },
-				{ "capturedRatioValid", m.source.exposureState == ExposureBindingState::SnapshotQueued && m.data[23] == 1.0f } });
+			measurements.push_back(MeasurementJson(m));
 		}
-		return { { "ok", true }, { "apiVersion", 2 }, { "revision", config.revision }, { "settings", SettingsJson(config.settings) },
+		for (const auto& batch : status.measurementBatches) {
+			if (!batch.Complete())
+				continue;
+			Json samples = Json::array();
+			for (std::uint32_t slot = 0; slot < batch.samples.size(); ++slot)
+				if ((batch.key.expectedSlotMask & (1u << slot)) != 0)
+					samples.push_back(MeasurementJson(batch.samples[slot]));
+			const auto& k = batch.key;
+			batches.push_back({ { "measurementBatchId", k.id }, { "expectedMeasurementSlotMask", k.expectedSlotMask },
+				{ "frame", k.frame }, { "sourceWorldFrame", k.sourceWorldFrame }, { "generation", k.generation },
+				{ "revision", k.revision }, { "insertionPoint", k.insertion }, { "atomicColourBatch", k.atomicStereo },
+				{ "measurements", std::move(samples) } });
+		}
+		return { { "ok", true }, { "apiVersion", 3 }, { "revision", config.revision }, { "settings", SettingsJson(config.settings) },
 			{ "effectiveMode", Name(config.EffectiveMode(), modes) },
 			{ "experiments", { { "upscaled_center", ProfileJson(config.experiments.profiles[0]) },
 								 { "final_ldr_pre_ui", ProfileJson(config.experiments.profiles[1]) },
 								 { "transportBypass", config.experiments.transportBypass }, { "diagnostics", config.experiments.diagnostics },
 								 { "captureEngineExposure", config.experiments.captureEngineExposure }, { "applyModelEdit", config.experiments.applyModelEdit } } },
 			{ "inputEpoch", config.inputEpoch }, { "slots", slots }, { "measurements", measurements }, { "engineCapture", CaptureJson() },
+			{ "measurementBatches", std::move(batches) },
 			{ "counts", { { "prepared", status.prepared }, { "reconstructed", status.reconstructed }, { "failed", status.failed },
-							{ "bypassed", status.bypassed }, { "samples", status.samples }, { "dropped", status.dropped } } },
+							{ "bypassed", status.bypassed }, { "samples", status.samples }, { "dropped", status.dropped },
+							{ "evictedIncompleteBatches", status.evictedIncompleteBatches } } },
 			{ "note", "Configuration acceptance is not render success. Require fresh matching-eye measurements. Capture is engine evidence, not a verified NR colour-space contract. CPU enqueue times are not GPU timings." } };
 	}
 	Json AssetsJson()
@@ -264,7 +284,31 @@ namespace
 	Json Descriptor()
 	{
 		return Json::parse(R"schema({
-  "description": "NR colour v2: shared live controls, display-only A/B, frame-matched engine HDR exposure capture and bounded asynchronous measurements. status reports registered HDR producers and the last draw-boundary binding, including rejected texture dimensions, mip and formats. Capture alone does not enable colour reconstruction. configure/reset change only the thread-safe registry. assets checks installed presence, not compilation. No NVIDIA ABI assumptions or game/profile mutations.",
+  "description": "NR colour v3: shared live controls, display-only A/B, engine HDR exposure capture and asynchronous measurements. measurementBatches retains up to four complete private-reconstruction batches, each with an immutable batch ID, expected physical-slot mask and matching frame/revision/generation. Pending readbacks drain even when a region becomes inactive; latest-per-slot measurements remain diagnostic compatibility fields. Complete batches do not prove outer stereo commit or headset presentation. status also reports registered HDR producers and rejected draw bindings. Capture alone does not enable reconstruction. configure/reset change only the registry. assets checks presence, not compilation. No NVIDIA ABI assumptions or game/profile mutations.",
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "apiVersion": { "const": 3 },
+      "measurementBatches": {
+        "type": "array", "maxItems": 4,
+        "items": {
+          "type": "object",
+          "required": ["measurementBatchId", "expectedMeasurementSlotMask", "frame", "sourceWorldFrame", "generation", "revision", "insertionPoint", "atomicColourBatch", "measurements"],
+          "properties": {
+            "measurementBatchId": { "type": "integer", "minimum": 1 },
+            "expectedMeasurementSlotMask": { "type": "integer", "minimum": 1, "maximum": 255 },
+            "frame": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+            "sourceWorldFrame": { "type": "integer", "minimum": 0, "maximum": 4294967294 },
+            "generation": { "type": "integer", "minimum": 0 },
+            "revision": { "type": "integer", "minimum": 1 },
+            "insertionPoint": { "enum": [0, 1] },
+            "atomicColourBatch": { "type": "boolean" },
+            "measurements": { "type": "array", "minItems": 1, "maxItems": 4, "items": { "type": "object" } }
+          }
+        }
+      }
+    }
+  },
   "inputSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -511,7 +555,7 @@ void NeuralColor::DataLoaded()
 	if (auto* host = DevBenchAPI::GetDevBenchInterface001()) {
 		static const std::string descriptor = Descriptor().dump();
 		host->RegisterTool("communityshaders.nr_color", descriptor.c_str(), &Handler, nullptr);
-		logger::info("[NRColor] Registered communityshaders.nr_color v2");
+		logger::info("[NRColor] Registered communityshaders.nr_color v3");
 	}
 #endif
 }

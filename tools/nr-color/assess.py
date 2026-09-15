@@ -92,12 +92,15 @@ def unwrap(receipt: dict, *, explicit_success: bool = True) -> dict:
 
 def fresh_groups(status: dict, revision: int, insertion: int, after_frame: int,
                  warmup: int = 0, expected_slots: set[int] | None = None) -> list[list[dict]]:
-    """Group only typed, frame-matched measurements; retain known secondary slots.
+    """Use immutable API-v3 batches; retain conservative grouping for older evidence.
 
-    API v2 does not publish an immutable per-transaction region manifest. An
-    explicitly supplied slot set is required to prove a fixed multi-ROI fixture;
-    otherwise this checks all regions visible in the retained observations.
+    API v2 cannot disambiguate changing region membership and therefore still
+    requires every secondary visible in its retained observations.
     """
+    if "apiVersion" in status and not integer(status["apiVersion"]):
+        return []
+    if status.get("apiVersion", 0) >= 3:
+        return fresh_batch_groups(status, revision, insertion, after_frame, warmup, expected_slots)
     groups: dict[tuple, dict[int, dict]] = {}
     duplicates: set[tuple] = set()
     for item in status.get("measurements", []):
@@ -142,6 +145,45 @@ def fresh_groups(status: dict, revision: int, insertion: int, after_frame: int,
         if not expected.issubset(items):
             continue
         output.append([items[slot] for slot in sorted(items)])
+    return output
+
+
+def fresh_batch_groups(status: dict, revision: int, insertion: int, after_frame: int,
+                       warmup: int, expected_slots: set[int] | None) -> list[list[dict]]:
+    """A complete private batch is distinct from outer stereo presentation."""
+    batches = status.get("measurementBatches")
+    if not isinstance(batches, list):
+        return []
+    ids = [b.get("measurementBatchId") for b in batches if isinstance(b, dict)
+           and integer(b.get("measurementBatchId"))]
+    fields = ("measurementBatchId", "expectedMeasurementSlotMask", "frame", "sourceWorldFrame",
+              "generation", "revision", "insertionPoint", "atomicColourBatch")
+    output = []
+    for batch in batches:
+        if not isinstance(batch, dict):
+            continue
+        batch_id, mask = batch.get("measurementBatchId"), batch.get("expectedMeasurementSlotMask")
+        if (not integer(batch_id) or batch_id == 0 or ids.count(batch_id) != 1
+                or not integer(mask, 255) or not mask or batch.get("atomicColourBatch") is not True
+                or any(not integer(batch.get(k)) for k in fields[:-1])):
+            continue
+        route = 0 if mask & ~0x33 == 0 else 1 if mask & ~0xcc == 0 else None
+        if route is None or mask & (3 << (route * 2)) != 3 << (route * 2):
+            continue
+        expected = {slot for slot in range(8) if mask & (1 << slot)}
+        if expected_slots is not None and expected != {s for s in expected_slots if s % 4 // 2 == route}:
+            continue
+        items = batch.get("measurements")
+        if not isinstance(items, list) or len(items) != len(expected):
+            continue
+        if any(not isinstance(item, dict) or not isinstance(item.get("source"), dict)
+               or any(type(item["source"].get(k)) is not type(batch[k]) or item["source"][k] != batch[k]
+                      for k in fields) for item in items):
+            continue
+        # Reuse freshness, finite-value, duplicate-slot and frame/route checks.
+        groups = fresh_groups({"measurements": items}, revision, insertion, after_frame, warmup, expected)
+        if len(groups) == 1 and {i["source"]["physicalSlot"] for i in groups[0]} == expected:
+            output.append(groups[0])
     return output
 
 
@@ -497,7 +539,7 @@ def collect(controller: Controller, revision: int, insertion: int, after_frame: 
     samples: dict[tuple, list[dict]] = {}
     observed_status = False
     selected_generation_route = None
-    expected_slots = set(getattr(args, "expected_physical_slots", None) or [])
+    expected_slots = set(getattr(args, "expected_physical_slots", None) or []) or None
     while time.monotonic() < deadline:
         # Leave tiny remainders unused; the outer hard deadline also caps subsecond calls.
         if deadline - time.monotonic() < 0.5:
@@ -562,6 +604,10 @@ def run_live(args: argparse.Namespace, directory: Path) -> dict:
         current = controller.call({"action": "status"}, "initial")
         if current.get("apiVersion", 0) < 2:
             raise AssessmentError("The running plugin does not expose NR colour API v2")
+        if current["apiVersion"] >= 3:
+            report["regionCompleteness"] = ("immutable_batch_manifest_with_fixture_slots"
+                                             if getattr(args, "expected_physical_slots", None)
+                                             else "immutable_batch_manifest")
         original = editable(current)
         atomic_json(directory / "original-configuration.json", {"revision": current["revision"], **original})
         owned_revision = current["revision"]

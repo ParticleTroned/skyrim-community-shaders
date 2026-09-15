@@ -27,6 +27,66 @@ def sample(slot=0, frame=100, captured=False):
 
 
 class AssessmentTests(unittest.TestCase):
+    @staticmethod
+    def batch(batch_id, frame, slots):
+        manifest = {"measurementBatchId": batch_id, "expectedMeasurementSlotMask": sum(1 << s for s in slots),
+                    "frame": frame, "sourceWorldFrame": frame, "generation": 4, "revision": 7,
+                    "insertionPoint": 0, "atomicColourBatch": True}
+        samples = [sample(s, frame) for s in slots]
+        for item in samples: item["source"].update(manifest)
+        return {**manifest, "measurements": samples}
+
+    def test_v3_changing_regions_keeps_complete_batches(self):
+        split = self.batch(1, 100, (0, 1, 4, 5))
+        asymmetric = self.batch(2, 101, (0, 1, 4))
+        single = self.batch(3, 102, (0, 1))
+        status = {"apiVersion": 3, "measurementBatches": [single, asymmetric, split],
+                  "slots": [i["source"] for i in split["measurements"]],
+                  "measurements": single["measurements"] + split["measurements"][2:]}
+        groups = assess.fresh_groups(status, 7, 0, 90)
+        self.assertEqual([[i["source"]["physicalSlot"] for i in g] for g in groups],
+                         [[0, 1], [0, 1, 4], [0, 1, 4, 5]])
+        self.assertTrue(assess.assess_samples(groups, True)["valid"])
+        self.assertEqual(len(assess.fresh_groups(status, 7, 0, 90, expected_slots={0, 1, 4, 5})), 1)
+
+    def test_v3_cannot_fall_back_to_latest_slot_mixture(self):
+        status = {"apiVersion": 3, "measurements": [sample(0), sample(1)]}
+        self.assertFalse(assess.fresh_groups(status, 7, 0, 90))
+        for version in (3.0, True, "3"):
+            self.assertFalse(assess.fresh_groups({**status, "apiVersion": version}, 7, 0, 90))
+        batch = self.batch(1, 100, (0, 1, 4, 5))
+        batch["measurements"].pop()
+        status["measurementBatches"] = [batch]
+        self.assertFalse(assess.fresh_groups(status, 7, 0, 90))
+
+    def test_v3_rejects_conflicting_manifest_or_region(self):
+        original = self.batch(1, 100, (0, 1, 4))
+        changes = {"measurementBatchId": 2, "expectedMeasurementSlotMask": 3, "frame": 101,
+                   "sourceWorldFrame": 101, "generation": 5, "revision": 8, "insertionPoint": 1,
+                   "atomicColourBatch": False, "physicalSlot": 5}
+        for field, value in changes.items():
+            bad = copy.deepcopy(original); bad["measurements"][-1]["source"][field] = value
+            self.assertFalse(assess.fresh_groups({"apiVersion": 3, "measurementBatches": [bad]}, 7, 0, 90), field)
+        for field in original.keys() - {"measurements"}:
+            bad = copy.deepcopy(original); bad.pop(field)
+            self.assertFalse(assess.fresh_groups({"apiVersion": 3, "measurementBatches": [bad]}, 7, 0, 90), field)
+        for bad in (self.batch(2, 100, (0, 0, 1)), self.batch(3, 100, (0, 1, 2)),
+                    self.batch(4, 100, (0, 4))):
+            self.assertFalse(assess.fresh_groups({"apiVersion": 3, "measurementBatches": [bad]}, 7, 0, 90))
+        self.assertFalse(assess.fresh_groups({"apiVersion": 3, "measurementBatches": [original, original]}, 7, 0, 90))
+        duplicate = copy.deepcopy(original)
+        duplicate["measurements"][2] = copy.deepcopy(duplicate["measurements"][0])
+        self.assertFalse(assess.fresh_groups({"apiVersion": 3, "measurementBatches": [duplicate]}, 7, 0, 90))
+
+    def test_v3_preserves_warmup_route_and_wrap_checks(self):
+        batch = self.batch(1, 2, (2, 3, 6))
+        status = {"apiVersion": 3, "measurementBatches": [batch]}
+        self.assertEqual(len(assess.fresh_groups(status, 7, 0, 0xfffffffc, 4)), 1)
+        self.assertFalse(assess.fresh_groups(status, 7, 0, 0xfffffffc, 6))
+        self.assertFalse(assess.fresh_groups(status, 8, 0, 0xfffffffc))
+        self.assertFalse(assess.fresh_groups(status, 7, 1, 0xfffffffc))
+        self.assertFalse(assess.fresh_groups(status, 7, 0, 0xfffffffc, expected_slots={0, 1}))
+
     def test_explicit_semantic_success_required(self):
         receipt = {"ok": True, "transportOk": True, "semantic": {"known": True, "ok": True},
                    "data": {"content": [{"ok": True, "apiVersion": 2}]}}

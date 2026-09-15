@@ -631,7 +631,8 @@ namespace NeuralRendering
 		void CaptureColorConfiguration(const RendererApplyArgs& args)
 		{
 			const auto route = args.featureSlot < Runtime::kFeatureSlotCount ?
-				ClassifyFeatureSlotMask(1u << args.featureSlot) : FeatureSlotRoute::Unexpected;
+			                       ClassifyFeatureSlotMask(1u << args.featureSlot) :
+			                       FeatureSlotRoute::Unexpected;
 			const std::size_t routeIndex = route == FeatureSlotRoute::Submit ? 1u : 0u;
 			const ColorTransactionKey key{ args.frameId, args.sourceWorldFrame, args.generation, args.insertionPoint };
 			if (!colorTransactionValid_[routeIndex] || key != colorTransactionKeys_[routeIndex]) {
@@ -1988,6 +1989,8 @@ namespace NeuralRendering
 		SetActiveFeatureSlotLocked(a_args.front().featureSlot);
 		if (!EnsureBackendLocked(a_args.front()))
 			return false;
+		for (auto& slot : slots_)
+			colorPipeline_.Poll(a_args.front().context, slot.colorWork);
 		activeStage_ = RendererStage::ResourceCreation;
 		std::array<Slot*, kMaximumRegionEvaluations> slots{};
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
@@ -2005,7 +2008,7 @@ namespace NeuralRendering
 					static_cast<std::uint32_t>(a_args[index].insertionPoint));
 				const auto format = resources[index].resourceKey.colorFormat;
 				const bool floatStorage = format == DXGI_FORMAT_R11G11B10_FLOAT ||
-					format == DXGI_FORMAT_R16G16B16A16_FLOAT || format == DXGI_FORMAT_R32G32B32A32_FLOAT;
+				                          format == DXGI_FORMAT_R16G16B16A16_FLOAT || format == DXGI_FORMAT_R32G32B32A32_FLOAT;
 				if (profile.transform != Color::Transform::Identity && !floatStorage)
 					return FailLocked(RendererStage::Validation, E_INVALIDARG,
 						"NR encoding/proxy experiment requires floating-point processing resources", a_args[index].featureSlot, false);
@@ -2020,6 +2023,10 @@ namespace NeuralRendering
 
 		const auto preparationStarted = std::chrono::steady_clock::now();
 		activeStage_ = RendererStage::ColorInputCopy;
+		std::uint32_t measurementSlotMask = 0;
+		for (const auto& args : a_args)
+			measurementSlotMask |= 1u << args.featureSlot;
+		const auto measurementBatchId = colorConfiguration_.Enabled() ? colorPipeline_.BeginMeasurementBatch() : 0;
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
 			if (colorConfiguration_.Enabled()) {
@@ -2033,6 +2040,8 @@ namespace NeuralRendering
 				observation.sourceFormat = static_cast<std::uint32_t>(resources[index].resourceKey.colorFormat);
 				observation.outputFormat = static_cast<std::uint32_t>(resources[index].resourceKey.outputFormat);
 				observation.atomicStereo = logicalEyeCount == 2u;
+				observation.measurementBatchId = measurementBatchId;
+				observation.expectedMeasurementSlotMask = measurementSlotMask;
 				if (!colorPipeline_.Prepare(a_args.front().context, slots[index]->colorWork,
 						resources[index].color.texture.Get(), slots[index]->color.resource11.Get(),
 						slots[index]->color.uav11.Get(), colorConfiguration_, observation)) {
@@ -2167,7 +2176,8 @@ namespace NeuralRendering
 			sharedResources[sharedResourceCount++] = {
 				.resource = slots[index]->output.resource12.Get(),
 				.featureState = colorConfiguration_.experiments.transportBypass ?
-					D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+				                    D3D12_RESOURCE_STATE_COPY_DEST :
+				                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
 			};
 			Add(pixelCount, resources[index].outputSubrect.Area());
 			featureSlotMask |= 1u << a_args[index].featureSlot;
@@ -2184,7 +2194,8 @@ namespace NeuralRendering
 			.logicalEyeCount = logicalEyeCount,
 		};
 		const bool timingStarted = colorConfiguration_.experiments.transportBypass ?
-			interop_.RecordTransportSubmission(timing) : interop_.BeginFeatureTiming(commandList, timing);
+		                               interop_.RecordTransportSubmission(timing) :
+		                               interop_.BeginFeatureTiming(commandList, timing);
 		if (!timingStarted) {
 			const bool aborted = interop_.AbortD3D12();
 			recordingGuard.active = interop_.IsRecording();

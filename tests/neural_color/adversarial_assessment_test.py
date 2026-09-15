@@ -50,6 +50,26 @@ class WorkflowTests(unittest.TestCase):
     setUp = runner.RunnerTests.setUp
     run_campaign = runner.RunnerTests.run_campaign
     requests = runner.RunnerTests.requests
+    def test_v3_campaign_uses_complete_batches(self):
+        original = self.f.status
+        def batched(label):
+            status = original(label)
+            status["apiVersion"] = 3
+            status["measurementBatches"] = []
+            items = status.get("measurements", [])
+            if items:
+                source = items[0]["source"]
+                key = {field: source[field] for field in ("frame", "sourceWorldFrame", "generation", "revision", "insertionPoint")}
+                key.update(measurementBatchId=source["frame"] + 1, expectedMeasurementSlotMask=3, atomicColourBatch=True)
+                for item in items: item["source"].update(key)
+                status["measurementBatches"] = [{**key, "measurements": items}]
+            return status
+        self.f.status = batched
+        report = self.run_campaign()
+        self.assertTrue(report["ok"], report.get("error"))
+        self.assertEqual(report["regionCompleteness"], "immutable_batch_manifest")
+        self.assertIs(report["outputCommitVerified"], False)
+
     def test_wrong_effective_profile_stops_campaign(self):
         original = self.f.status
         def wrong(label):

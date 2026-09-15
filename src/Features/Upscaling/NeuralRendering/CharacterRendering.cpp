@@ -3376,9 +3376,10 @@ namespace NeuralRendering
 			return;
 		try {
 			std::scoped_lock lock(state_->mutex_);
-			state_->actorAdmissions_.clear();
+			RetainCurrentCharacterAdmissions(state_->actorAdmissions_,
+				state_->observationFrame_, a_preserveCaptureFrame);
 			state_->InvalidateProjectionCache();
-			// Temporal history does not own the already captured source pixels.
+			// Temporal history does not own current authored pixels or admissions.
 			if (a_preserveCaptureFrame == std::numeric_limits<std::uint32_t>::max() ||
 				state_->capturedFrame_ != a_preserveCaptureFrame)
 				state_->InvalidateCaptureMetadata();

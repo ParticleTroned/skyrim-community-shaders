@@ -27,6 +27,13 @@ class Contracts(unittest.TestCase):
         self.assertIn("state_->capturedFrame_ != a_preserveCaptureFrame", invalidate)
         self.assertIn("a_preserveCaptureFrame == std::numeric_limits<std::uint32_t>::max()", invalidate)
         self.assertIn("state_->InvalidatePreparedMasks();", invalidate)
+        self.assertIn("RetainCurrentCharacterAdmissions(state_->actorAdmissions_", invalidate)
+        self.assertNotIn("state_->actorAdmissions_.clear()", invalidate)
+        authoring = upscaling.split("bool Upscaling::IsCharacterNeuralRenderingRouteRequested() const", 1)[1].split("\n}", 1)[0]
+        self.assertNotIn("IsNeuralRenderingInsertionTransitionBlocked", authoring)
+        self.assertIn("admission.sourceWorldFrame == admission.currentFrame", authoring)
+        claim = upscaling.split("bool Upscaling::TryClaimNeuralRenderingRoute(", 1)[1].split("\n}", 1)[0]
+        self.assertIn("IsNeuralRenderingInsertionTransitionBlocked()", claim)
         self.assertIn("~state_->capturedEnabledCategoryMask_", char)
         self.assertIn("state_->capturedFrame_ != sourceWorldFrame", char)
         self.assertEqual(char.count("state_->RecordPreparationFailure(a_args,"), 3)

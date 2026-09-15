@@ -76,9 +76,19 @@ missing bindings from a shader mismatch. Actual capture timing still needs
 qualification on each running rendering path.
 Capture alone does not activate colour reconstruction in Legacy Raw mode.
 
-Capture accepts a bound scalar 1x1 floating-point AvgTex view with at least two
-channels. `ColorExposureCS` writes raw average, raw target, ratio and validity
-into a private FP32 texture. Nonfinite input, unsupported resources and missing
+Capture accepts a bound 1x1 or 2x2 floating-point AvgTex view with at least two
+channels and exactly one visible mip. The actual AvgSampler must use ordinary
+point/linear/anisotropic filtering and non-border addressing. The GPU reads
+every texel and admits a scalar only when all average/target components are
+identical. Spatially different texels are retained as evidence and rejected
+with validity 3 (`non_uniform_avgtex`); no average or selected texel is treated
+as the engine's scalar exposure. `ColorExposureCS` writes the scalar summary
+followed by four row-major per-texel records into a private 5x1 FP32 texture.
+Unused records are invalid. This adds 64 bytes to each transaction snapshot.
+`engineCapture.samples` reports the source view dimensions/mip, sampler/view
+identities, texels and scalarStatus. `lastBinding` also reports sampler filter,
+address modes and visible mip count. Different views, samplers or shaders in
+one source frame are ambiguous even if the underlying texture is the same. Nonfinite input, unsupported resources and missing
 bindings are reported. The engine's zero-input unit fallback has a distinct
 validity code; it is never presented as a measured unit exposure. Ratios outside
 1/256..256 are outside the current experiment's supported range.

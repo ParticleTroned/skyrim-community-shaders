@@ -17035,6 +17035,7 @@ Upscaling::UpscaleMethod Upscaling::GetRuntimeUpscaleMethod() const
 
 bool Upscaling::IsCharacterNeuralRenderingRouteRequested() const
 {
+	// Insertion switches block evaluation, not collection of source categories.
 	const bool routeConfigured =
 		globals::game::isVR && loaded && settings.neuralRenderingEnabled &&
 		settings.neuralCharacterRenderingEnabled &&
@@ -17043,8 +17044,7 @@ bool Upscaling::IsCharacterNeuralRenderingRouteRequested() const
 		IsFoveatedVendorDispatchEnabled(UpscaleMethod::kDLSS) &&
 		!settings.foveatedPeripheryMaskVisualization &&
 		settings.frameGenerationMode == 0 &&
-		!IsFrameGenerationDx12PathActive() &&
-		!IsNeuralRenderingInsertionTransitionBlocked();
+		!IsFrameGenerationDx12PathActive();
 	if (!routeConfigured)
 		return false;
 	const bool hardMenuBlocked =

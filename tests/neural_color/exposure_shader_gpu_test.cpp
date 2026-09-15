@@ -1,6 +1,6 @@
 // Production exposure/prepare/reconstruct/measurement shaders on Windows WARP.
 #include "../ShaderPackageIncludes.h"
-#include "Features/Upscaling/NeuralRendering/ExposurePolicy.h"
+#include "Features/Upscaling/NeuralRendering/ExposureCapture.h"
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -28,12 +28,15 @@ struct Texture
 	ComPtr<ID3D11ShaderResourceView> srv;
 	ComPtr<ID3D11UnorderedAccessView> uav;
 };
-static Texture Make(ID3D11Device* device, UINT size, Pixel value, DXGI_FORMAT format = DXGI_FORMAT_R32G32B32A32_FLOAT)
+static Texture Make(ID3D11Device* device, UINT size, Pixel value, DXGI_FORMAT format = DXGI_FORMAT_R32G32B32A32_FLOAT, UINT height = 0)
 {
 	Texture t;
-	std::vector<Pixel> pixels(size * size, value);
+	if (!height)
+		height = size;
+	std::vector<Pixel> pixels(size * height, value);
 	D3D11_TEXTURE2D_DESC d{};
-	d.Width = d.Height = size;
+	d.Width = size;
+	d.Height = height;
 	d.MipLevels = d.ArraySize = d.SampleDesc.Count = 1;
 	d.Format = format;
 	d.Usage = D3D11_USAGE_DEFAULT;
@@ -68,10 +71,11 @@ static void Dispatch(ID3D11DeviceContext* c, ID3D11ComputeShader* cs, std::array
 	c->CSSetShaderResources(0, 5, views.data());
 	c->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
 }
-static Pixel Read(ID3D11Device* d, ID3D11DeviceContext* c, ID3D11Texture2D* source)
+static Pixel Read(ID3D11Device* d, ID3D11DeviceContext* c, ID3D11Texture2D* source, UINT x = 0)
 {
 	D3D11_TEXTURE2D_DESC desc{};
 	source->GetDesc(&desc);
+	Require(x < desc.Width);
 	desc.Usage = D3D11_USAGE_STAGING;
 	desc.BindFlags = 0;
 	desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
@@ -82,7 +86,7 @@ static Pixel Read(ID3D11Device* d, ID3D11DeviceContext* c, ID3D11Texture2D* sour
 	Check(c->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped));
 	Pixel p{};
 	if (desc.Format == DXGI_FORMAT_R32G32B32A32_FLOAT)
-		std::memcpy(p.data(), mapped.pData, sizeof(p));
+		std::memcpy(p.data(), static_cast<const char*>(mapped.pData) + x * sizeof(p), sizeof(p));
 	else {
 		Require(desc.Format == DXGI_FORMAT_R11G11B10_FLOAT);
 		unsigned packed;
@@ -103,6 +107,22 @@ static Pixel Read(ID3D11Device* d, ID3D11DeviceContext* c, ID3D11Texture2D* sour
 int main(int argc, char** argv)
 {
 	Require(argc == 2);
+	D3D11_SAMPLER_DESC sampler{};
+	sampler.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+	sampler.AddressU = sampler.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+	Require(SupportedExposureSampler(sampler));
+	for (auto address : { D3D11_TEXTURE_ADDRESS_WRAP, D3D11_TEXTURE_ADDRESS_MIRROR, D3D11_TEXTURE_ADDRESS_MIRROR_ONCE }) {
+		sampler.AddressU = sampler.AddressV = address;
+		Require(SupportedExposureSampler(sampler));
+	}
+	sampler.AddressV = D3D11_TEXTURE_ADDRESS_BORDER;
+	Require(!SupportedExposureSampler(sampler));
+	sampler.AddressU = D3D11_TEXTURE_ADDRESS_BORDER;
+	sampler.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+	Require(!SupportedExposureSampler(sampler));
+	sampler.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+	sampler.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR;
+	Require(!SupportedExposureSampler(sampler));
 	ComPtr<ID3D11Device> d;
 	ComPtr<ID3D11DeviceContext> c;
 	const D3D_FEATURE_LEVEL level = D3D_FEATURE_LEVEL_11_0;
@@ -112,9 +132,77 @@ int main(int argc, char** argv)
 	auto prepare = Compile(d.Get(), folder / "ColorPrepareCS.hlsl");
 	auto reconstruct = Compile(d.Get(), folder / "ColorReconstructCS.hlsl");
 	auto measure = Compile(d.Get(), folder / "ColorMeasureCS.hlsl");
-	auto average = Make(d.Get(), 1, { 2, 0.5f, 0, 0 }), exposure = Make(d.Get(), 1, {});
+	auto average = Make(d.Get(), 1, { 2, 0.5f, 0, 0 });
+	auto exposure = Make(d.Get(), kExposureSnapshotPixels, {}, DXGI_FORMAT_R32G32B32A32_FLOAT, 1);
 	Dispatch(c.Get(), capture.Get(), { average.srv.Get() }, exposure.uav.Get());
 	Require(Read(d.Get(), c.Get(), exposure.resource.Get()) == Pixel{ 2, 0.5f, 0.25f, 1 });
+	auto quad = Make(d.Get(), 2, { 2, 0.5f, 0, 0 });
+	Dispatch(c.Get(), capture.Get(), { quad.srv.Get() }, exposure.uav.Get());
+	for (UINT i = 0; i < kExposureSnapshotPixels; ++i)
+		Require(Read(d.Get(), c.Get(), exposure.resource.Get(), i) == Pixel{ 2, 0.5f, 0.25f, 1 });
+	for (UINT changed = 0; changed < 4; ++changed) {
+		for (const Pixel value : { Pixel{ 4, 1, 0, 0 }, Pixel{ 0, 1, 0, 0 },
+				 Pixel{ 2, std::nextafter(0.5f, 1.0f), 0, 0 } }) {
+			std::array<Pixel, 4> pixels;
+			pixels.fill({ 2, 0.5f, 0, 0 });
+			pixels[changed] = value;
+			c->UpdateSubresource(quad.resource.Get(), 0, nullptr, pixels.data(), 2 * sizeof(Pixel), 0);
+			Dispatch(c.Get(), capture.Get(), { quad.srv.Get() }, exposure.uav.Get());
+			Require(Read(d.Get(), c.Get(), exposure.resource.Get())[3] == 3);
+			const auto raw = Read(d.Get(), c.Get(), exposure.resource.Get(), 1 + changed);
+			Require(raw[0] == value[0] && raw[1] == value[1]);
+		}
+	}
+	for (float bad : { std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() }) {
+		std::array<Pixel, 4> pixels;
+		pixels.fill({ 2, 0.5f, 0, 0 });
+		pixels[3][0] = bad;
+		c->UpdateSubresource(quad.resource.Get(), 0, nullptr, pixels.data(), 2 * sizeof(Pixel), 0);
+		Dispatch(c.Get(), capture.Get(), { quad.srv.Get() }, exposure.uav.Get());
+		Require(Read(d.Get(), c.Get(), exposure.resource.Get())[3] == 0);
+	}
+	auto packedAverage = Make(d.Get(), 2, {}, DXGI_FORMAT_R11G11B10_FLOAT);
+	const Pixel packedValue{ 2, 0.5f, 0, 0 };
+	c->ClearUnorderedAccessViewFloat(packedAverage.uav.Get(), packedValue.data());
+	Dispatch(c.Get(), capture.Get(), { packedAverage.srv.Get() }, exposure.uav.Get());
+	for (UINT i = 0; i < kExposureSnapshotPixels; ++i)
+		Require(Read(d.Get(), c.Get(), exposure.resource.Get(), i) == Pixel{ 2, 0.5f, 0.25f, 1 });
+	auto oversized = Make(d.Get(), 4, { 2, 0.5f, 0, 0 });
+	Dispatch(c.Get(), capture.Get(), { oversized.srv.Get() }, exposure.uav.Get());
+	Require(Read(d.Get(), c.Get(), exposure.resource.Get())[3] == 0);
+	// Load coordinates are relative to the bound view, not the resource's mip 0.
+	std::array<Pixel, 16> mip0;
+	std::array<Pixel, 4> mip1;
+	mip0.fill({ 8, 2, 0, 0 });
+	mip1.fill({ 4, 0.5f, 0, 0 });
+	const Pixel mip2{ 2, 0.5f, 0, 0 };
+	const D3D11_SUBRESOURCE_DATA mipData[]{
+		{ mip0.data(), 4 * sizeof(Pixel), 0 },
+		{ mip1.data(), 2 * sizeof(Pixel), 0 },
+		{ mip2.data(), sizeof(Pixel), 0 }
+	};
+	D3D11_TEXTURE2D_DESC mipDesc{};
+	mipDesc.Width = mipDesc.Height = 4;
+	mipDesc.MipLevels = 3;
+	mipDesc.ArraySize = mipDesc.SampleDesc.Count = 1;
+	mipDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+	mipDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+	ComPtr<ID3D11Texture2D> mipTexture;
+	Check(d->CreateTexture2D(&mipDesc, mipData, &mipTexture));
+	D3D11_SHADER_RESOURCE_VIEW_DESC mipView{};
+	mipView.Format = mipDesc.Format;
+	mipView.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+	mipView.Texture2D = { 1, 1 };
+	ComPtr<ID3D11ShaderResourceView> mipSrv;
+	Check(d->CreateShaderResourceView(mipTexture.Get(), &mipView, &mipSrv));
+	Dispatch(c.Get(), capture.Get(), { mipSrv.Get() }, exposure.uav.Get());
+	Require(Read(d.Get(), c.Get(), exposure.resource.Get()) == Pixel{ 4, 0.5f, 0.125f, 1 });
+	mipSrv.Reset();
+	mipView.Texture2D.MipLevels = 2;
+	Check(d->CreateShaderResourceView(mipTexture.Get(), &mipView, &mipSrv));
+	Dispatch(c.Get(), capture.Get(), { mipSrv.Get() }, exposure.uav.Get());
+	Require(Read(d.Get(), c.Get(), exposure.resource.Get())[3] == 0);
+	Dispatch(c.Get(), capture.Get(), { average.srv.Get() }, exposure.uav.Get());
 	const Pixel b{ 0.18f, 0.09f, 0.01f, 0.375f };
 	auto baseline = Make(d.Get(), 8, b);
 	auto prepared = Make(d.Get(), 8, {}), result = Make(d.Get(), 8, {}), neural = Make(d.Get(), 8, { 0.8f, 0.2f, 0.1f, 0 });
@@ -148,6 +236,17 @@ int main(int argc, char** argv)
 	Dispatch(c.Get(), reconstruct.Get(), { baseline.srv.Get(), neural.srv.Get(), prepared.srv.Get(), exposure.srv.Get() }, result.uav.Get());
 	Require(Read(d.Get(), c.Get(), result.resource.Get()) == b);
 	const Pixel zero{ 0, 1, 0, 0 };
+	std::array<Pixel, 4> spatial;
+	spatial.fill({ 2, 0.5f, 0, 0 });
+	spatial[3] = { 4, 1, 0, 0 };
+	c->UpdateSubresource(quad.resource.Get(), 0, nullptr, spatial.data(), 2 * sizeof(Pixel), 0);
+	Dispatch(c.Get(), capture.Get(), { quad.srv.Get() }, exposure.uav.Get());
+	constants.flags = 12;
+	update();
+	Dispatch(c.Get(), prepare.Get(), { baseline.srv.Get(), nullptr, nullptr, exposure.srv.Get() }, prepared.uav.Get());
+	Require(Read(d.Get(), c.Get(), prepared.resource.Get())[0] == 0);
+	Dispatch(c.Get(), reconstruct.Get(), { baseline.srv.Get(), neural.srv.Get(), prepared.srv.Get(), exposure.srv.Get() }, result.uav.Get());
+	Require(Read(d.Get(), c.Get(), result.resource.Get()) == b);
 	c->UpdateSubresource(average.resource.Get(), 0, nullptr, zero.data(), sizeof(Pixel), 0);
 	Dispatch(c.Get(), capture.Get(), { average.srv.Get() }, exposure.uav.Get());
 	Require(Read(d.Get(), c.Get(), exposure.resource.Get())[3] == 2);

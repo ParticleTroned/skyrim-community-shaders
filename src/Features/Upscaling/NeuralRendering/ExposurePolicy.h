@@ -4,6 +4,15 @@
 
 namespace NeuralRendering::Color
 {
+	inline constexpr std::uint32_t kExposureTexelCount = 4;
+	inline constexpr std::uint32_t kExposureSnapshotPixels = 1 + kExposureTexelCount;
+
+	/** Only a single visible mip of a bounded adaptation view can prove a scalar. */
+	[[nodiscard]] constexpr bool SupportedExposureView(std::uint32_t width,
+		std::uint32_t height, std::uint32_t visibleMips) noexcept
+	{
+		return visibleMips == 1 && ((width == 1 && height == 1) || (width == 2 && height == 2));
+	}
 	/** Exact engine-to-replacement selection; unrelated draws cannot inherit it. */
 	struct ExposureShaderSelection
 	{
@@ -43,7 +52,8 @@ namespace NeuralRendering::Color
 	{
 		Invalid,
 		Ratio,
-		UnitFallback
+		UnitFallback,
+		NonUniform
 	};
 	struct ExposureValue
 	{

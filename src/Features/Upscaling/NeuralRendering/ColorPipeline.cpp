@@ -373,7 +373,7 @@ namespace NeuralRendering::Color
 			o.exposure = {};
 		}
 		if (work.exposure.resource)
-			o.retainedBytes += 4 * sizeof(float);
+			o.retainedBytes += kExposureSnapshotPixels * 4 * sizeof(float);
 		auto* exposure = NeedsExposureCapture(config) ? work.exposure.srv.Get() : nullptr;
 		context->CSSetShaderResources(3, 1, &exposure);
 		const auto& roi = o.rect;

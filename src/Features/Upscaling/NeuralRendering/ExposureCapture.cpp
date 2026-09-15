@@ -18,6 +18,14 @@ namespace NeuralRendering::Color
 	namespace
 	{
 		std::array<RE::BSShader*, 2> owners{};
+		using SnapshotPixels = std::array<std::array<float, 4>, kExposureSnapshotPixels>;
+
+		SnapshotPixels InvalidSnapshot()
+		{
+			SnapshotPixels pixels{};
+			pixels[0] = { 0, 0, 1, 0 };
+			return pixels;
+		}
 
 		bool ResourceOnDevice(ID3D11Resource* resource, ID3D11Device* device)
 		{
@@ -30,11 +38,12 @@ namespace NeuralRendering::Color
 		bool CreateValueTexture(ID3D11Device* device, ExposureBinding& value, bool uav, ComPtr<ID3D11UnorderedAccessView>& view)
 		{
 			D3D11_TEXTURE2D_DESC desc{};
-			desc.Width = desc.Height = desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+			desc.Width = kExposureSnapshotPixels;
+			desc.Height = desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
 			desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
 			desc.Usage = D3D11_USAGE_DEFAULT;
 			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | (uav ? D3D11_BIND_UNORDERED_ACCESS : 0u);
-			const std::array<float, 4> invalid{ 0, 0, 1, 0 };
+			const auto invalid = InvalidSnapshot();
 			D3D11_SUBRESOURCE_DATA initial{ invalid.data(), static_cast<UINT>(sizeof(invalid)), 0 };
 			ComPtr<ID3D11Texture2D> texture;
 			ComPtr<ID3D11ShaderResourceView> srv;
@@ -113,6 +122,7 @@ namespace NeuralRendering::Color
 				}
 				auto sample = e.pendingEvidence;
 				std::memcpy(sample.values.data(), mapped.pData, sizeof(sample.values));
+				std::memcpy(sample.texels.data(), static_cast<const char*>(mapped.pData) + sizeof(sample.values), sizeof(sample.texels));
 				context->Unmap(e.staging.Get(), 0);
 				sample.readbackComplete = true;
 				if (e.pendingGamma && e.gammaStaging && SUCCEEDED(context->Map(e.gammaStaging.Get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped))) {
@@ -188,9 +198,29 @@ namespace NeuralRendering::Color
 			status.lastBinding.arraySize = td.ArraySize;
 			status.lastBinding.samples = td.SampleDesc.Count;
 			status.lastBinding.sourceFormat = static_cast<std::uint32_t>(td.Format);
-			if (mip >= 32u || mip >= td.MipLevels || td.SampleDesc.Count != 1 || td.ArraySize != 1 ||
-				std::max(1u, td.Width >> mip) != 1u || std::max(1u, td.Height >> mip) != 1u) {
-				reject("AvgTex is not a scalar 1x1 adaptation view; spatial exposure not guessed");
+			if (mip >= 32u || mip >= td.MipLevels || td.SampleDesc.Count != 1 || td.ArraySize != 1) {
+				reject("AvgTex mip, array or sample layout is unsupported");
+				return;
+			}
+			status.lastBinding.viewWidth = std::max(1u, td.Width >> mip);
+			status.lastBinding.viewHeight = std::max(1u, td.Height >> mip);
+			status.lastBinding.visibleMips = std::min(view.Texture2D.MipLevels, td.MipLevels - mip);
+			if (!SupportedExposureView(status.lastBinding.viewWidth, status.lastBinding.viewHeight,
+					status.lastBinding.visibleMips)) {
+				reject("AvgTex requires one visible mip of a 1x1 or 2x2 adaptation view");
+				return;
+			}
+			ComPtr<ID3D11SamplerState> sampler;
+			c->PSGetSamplers(2, 1, &sampler);
+			D3D11_SAMPLER_DESC samplerDesc{};
+			if (sampler)
+				sampler->GetDesc(&samplerDesc);
+			status.lastBinding.samplerIdentity = reinterpret_cast<std::uintptr_t>(sampler.Get());
+			status.lastBinding.samplerFilter = static_cast<std::uint32_t>(samplerDesc.Filter);
+			status.lastBinding.samplerAddressU = static_cast<std::uint32_t>(samplerDesc.AddressU);
+			status.lastBinding.samplerAddressV = static_cast<std::uint32_t>(samplerDesc.AddressV);
+			if (!sampler || !SupportedExposureSampler(samplerDesc)) {
+				reject("AvgSampler requires a non-comparison filter and non-border addressing");
 				return;
 			}
 			switch (view.Format) {
@@ -211,13 +241,16 @@ namespace NeuralRendering::Color
 				if (!stamp.sequence || stamp.frame != frame || stamp.epoch != currentEpoch)
 					continue;
 				if (old.value.evidence.sourceIdentity != reinterpret_cast<std::uintptr_t>(texture.Get()) ||
+					old.value.evidence.sourceViewIdentity != reinterpret_cast<std::uintptr_t>(average.Get()) ||
+					old.value.evidence.samplerIdentity != reinterpret_cast<std::uintptr_t>(sampler.Get()) ||
+					old.value.evidence.shaderIdentity != reinterpret_cast<std::uintptr_t>(ps.Get()) ||
 					old.value.evidence.sourceViewFormat != static_cast<std::uint32_t>(view.Format)) {
 					old.value.evidence.stamp.ambiguous = true;
 					old.pendingEvidence.stamp.ambiguous = true;
 					for (auto& sample : status.samples)
 						if (sample.stamp.sequence == stamp.sequence)
 							sample.stamp.ambiguous = true;
-					reject("different AvgTex resources in one frame; automatic binding rejected");
+					reject("different AvgTex view, sampler or shader in one frame; automatic binding rejected");
 				}
 				return;  // Keep the first immutable exposure for this source frame.
 			}
@@ -240,6 +273,11 @@ namespace NeuralRendering::Color
 			evidence.sourceFormat = static_cast<std::uint32_t>(td.Format);
 			evidence.sourceViewFormat = static_cast<std::uint32_t>(view.Format);
 			evidence.sourceIdentity = reinterpret_cast<std::uintptr_t>(texture.Get());
+			evidence.sourceViewIdentity = reinterpret_cast<std::uintptr_t>(average.Get());
+			evidence.samplerIdentity = reinterpret_cast<std::uintptr_t>(sampler.Get());
+			evidence.sourceWidth = status.lastBinding.viewWidth;
+			evidence.sourceHeight = status.lastBinding.viewHeight;
+			evidence.sourceMip = mip;
 			evidence.shaderIdentity = reinterpret_cast<std::uintptr_t>(ps.Get());
 			evidence.producer = "ISHDR BLEND / AvgTex t2 / D3D11 Draw or DrawIndexed entry";
 			ComPtr<ID3D11RenderTargetView> target;
@@ -437,7 +475,7 @@ namespace NeuralRendering::Color
 			return false;
 		output.state = ExposureBindingState::WaitingForHDRPass;
 		const auto invalidate = [&]() {
-			const std::array<float, 4> invalid{ 0, 0, 1, 0 };
+			const auto invalid = InvalidSnapshot();
 			c->UpdateSubresource(output.resource.Get(), 0, nullptr, invalid.data(), static_cast<UINT>(sizeof(invalid)), 0);
 		};
 		if (contextMatches)

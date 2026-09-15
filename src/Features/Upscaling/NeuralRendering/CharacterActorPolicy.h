@@ -4,6 +4,7 @@
 
 #include <array>
 #include <span>
+#include <unordered_map>
 
 namespace NeuralRendering
 {
@@ -304,6 +305,18 @@ namespace NeuralRendering
 		bool sizeEligible = false;
 		bool adaptiveSelected = false;
 	};
+
+	/** Keep decisions that authored this frame; older admission history is invalid. */
+	template <class Admissions>
+	void RetainCurrentCharacterAdmissions(Admissions& a_admissions,
+		std::uint32_t a_observationFrame, std::uint32_t a_preserveFrame)
+	{
+		std::erase_if(a_admissions, [&](const auto& a_entry) {
+			return a_preserveFrame == std::numeric_limits<std::uint32_t>::max() ||
+			       a_observationFrame != a_preserveFrame || !a_entry.second.valid ||
+			       a_entry.second.frame != a_preserveFrame;
+		});
+	}
 
 	/** One actor-wide decision, made before any of its categories are authored. */
 	[[nodiscard]] inline bool ResolveCharacterActorAdmission(

@@ -3,6 +3,7 @@
 #include <array>
 #include <limits>
 #include <random>
+#include <unordered_map>
 
 namespace
 {
@@ -209,6 +210,40 @@ namespace
 int main()
 {
 	using namespace NeuralRendering;
+	struct Admission
+	{
+		std::uint32_t frame;
+		bool admitted;
+		bool valid;
+	};
+	// A reset between authoring and mask preparation cannot turn two actors
+	// into an empty plan, or re-admit an actor excluded during authoring.
+	std::unordered_map<unsigned, Admission> admissions{
+		{ 1, { 100, true, true } }, { 2, { 100, true, true } },
+		{ 3, { 100, false, true } }, { 4, { 99, true, true } },
+		{ 5, { 101, true, true } }, { 6, { 100, true, false } }
+	};
+	RetainCurrentCharacterAdmissions(admissions, 100, 100);
+	if (admissions.size() != 3 || !admissions.at(1).admitted ||
+		!admissions.at(2).admitted || admissions.at(3).admitted)
+		return 17;
+	RetainCurrentCharacterAdmissions(admissions, 100, 100);
+	if (admissions.size() != 3)
+		return 18;
+	RetainCurrentCharacterAdmissions(admissions, 100, 101);
+	if (!admissions.empty())
+		return 19;
+	admissions.emplace(1, Admission{ UINT32_MAX, true, true });
+	RetainCurrentCharacterAdmissions(admissions, UINT32_MAX, UINT32_MAX);
+	if (!admissions.empty())
+		return 20;
+	admissions.emplace(1, Admission{ 0, true, true });
+	RetainCurrentCharacterAdmissions(admissions, 0, 0);
+	if (admissions.size() != 1)
+		return 21;
+	RetainCurrentCharacterAdmissions(admissions, 0, UINT32_MAX);
+	if (!admissions.empty())
+		return 22;
 	std::array<CharacterClipPoint, 4> corners{
 		CharacterClipPoint{ -0.5f, -0.5f, 1.0f },
 		CharacterClipPoint{ 0.5f, -0.5f, 1.0f },

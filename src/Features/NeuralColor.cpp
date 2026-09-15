@@ -104,9 +104,17 @@ namespace
 	}
 	Json EvidenceJson(const ExposureEvidence& e)
 	{
+		const auto scalarStatus = !e.readbackComplete ? "pending" :
+		                          e.values[3] == 1.0f ? "measured_uniform_ratio" :
+		                          e.values[3] == 2.0f ? "unmeasured_unit_fallback" :
+		                          e.values[3] == 3.0f ? "non_uniform_avgtex" :
+		                                                "invalid_values";
 		return { { "frame", e.stamp.frame }, { "epoch", e.stamp.epoch }, { "sequence", e.stamp.sequence },
 			{ "ambiguous", e.stamp.ambiguous }, { "sourceFormat", e.sourceFormat }, { "sourceViewFormat", e.sourceViewFormat },
 			{ "outputViewFormat", e.outputViewFormat }, { "sourceIdentity", e.sourceIdentity }, { "shaderIdentity", e.shaderIdentity },
+			{ "sourceViewIdentity", e.sourceViewIdentity }, { "samplerIdentity", e.samplerIdentity },
+			{ "sourceWidth", e.sourceWidth }, { "sourceHeight", e.sourceHeight }, { "sourceMip", e.sourceMip },
+			{ "texels", e.texels }, { "scalarStatus", scalarStatus },
 			{ "producer", e.producer }, { "readbackComplete", e.readbackComplete }, { "rawValues", e.values },
 			{ "engineRatioValid", e.readbackComplete && !e.stamp.ambiguous && e.values[3] == 1.0f },
 			{ "frameGammaExponent", e.gammaKnown ? Json(e.frameGammaExponent) : Json(nullptr) },
@@ -125,6 +133,9 @@ namespace
 			{ "lastReason", capture.lastReason }, { "samples", samples },
 			{ "captureBoundary", "D3D11_Draw_or_DrawIndexed_entry" },
 			{ "lastBinding", { { "frame", b.frame }, { "width", b.width }, { "height", b.height },
+								 { "viewWidth", b.viewWidth }, { "viewHeight", b.viewHeight }, { "visibleMips", b.visibleMips },
+								 { "samplerIdentity", b.samplerIdentity }, { "samplerFilter", b.samplerFilter },
+								 { "samplerAddressU", b.samplerAddressU }, { "samplerAddressV", b.samplerAddressV },
 								 { "mip", b.mip }, { "mipLevels", b.mipLevels }, { "arraySize", b.arraySize }, { "samples", b.samples },
 								 { "sourceFormat", b.sourceFormat }, { "viewFormat", b.viewFormat }, { "viewDimension", b.viewDimension },
 								 { "sourceIdentity", b.sourceIdentity }, { "shaderIdentity", b.shaderIdentity },
@@ -285,7 +296,7 @@ namespace
 	Json Descriptor()
 	{
 		return Json::parse(R"schema({
-  "description": "NR colour v3: shared live controls, display-only A/B, engine HDR exposure capture and asynchronous measurements. measurementBatches retains up to four complete private-reconstruction batches, each with an immutable batch ID, expected physical-slot mask and matching frame/revision/generation. Pending readbacks drain even when a region becomes inactive; latest-per-slot measurements remain diagnostic compatibility fields. Complete batches do not prove outer stereo commit or headset presentation. status also reports registered HDR producers and rejected draw bindings. expectedShaderIdentity is the exact shader recorded by the engine/replacement binding hook for this context, producer, engine selection, frame and capture epoch, or the original engine shader when no matching association exists; the live draw must still match it. Capture alone does not enable reconstruction. configure/reset change only the registry. assets checks presence, not compilation. No NVIDIA ABI assumptions or game/profile mutations.",
+  "description": "NR colour v3: shared live controls, display-only A/B, engine HDR exposure capture and asynchronous measurements. measurementBatches retains up to four complete private-reconstruction batches, each with an immutable batch ID, expected physical-slot mask and matching frame/revision/generation. Pending readbacks drain even when a region becomes inactive; latest-per-slot measurements remain diagnostic compatibility fields. Complete batches do not prove outer stereo commit or headset presentation. status also reports registered HDR producers and rejected draw bindings. expectedShaderIdentity is the exact shader recorded by the engine/replacement binding hook for this context, producer, engine selection, frame and capture epoch, or the original engine shader when no matching association exists; the live draw must still match it. Capture accepts one visible mip of a 1x1 or 2x2 AvgTex with ordinary non-border sampling. GPU scalar validity requires identical average/target components in every texel; texels retain row-major per-texel average, target, ratio and validity, while scalarStatus distinguishes non_uniform_avgtex from a measured_uniform_ratio or an unmeasured_unit_fallback. A differing field is observed but never averaged into a correction. Capture alone does not enable reconstruction. configure/reset change only the registry. assets checks presence, not compilation. No NVIDIA ABI assumptions or game/profile mutations.",
   "outputSchema": {
     "type": "object",
     "properties": {
@@ -293,9 +304,35 @@ namespace
       "engineCapture": {
         "type": "object",
         "properties": {
+          "samples": {
+            "type": "array", "maxItems": 8,
+            "items": {
+              "type": "object",
+              "properties": {
+                "sourceWidth": { "type": "integer", "minimum": 1, "maximum": 2 },
+                "sourceHeight": { "type": "integer", "minimum": 1, "maximum": 2 },
+                "sourceMip": { "type": "integer", "minimum": 0 },
+                "sourceViewIdentity": { "type": "integer", "minimum": 0 },
+                "samplerIdentity": { "type": "integer", "minimum": 0 },
+                "scalarStatus": { "enum": ["pending", "measured_uniform_ratio", "unmeasured_unit_fallback", "non_uniform_avgtex", "invalid_values"] },
+                "texels": {
+                  "type": "array", "minItems": 4, "maxItems": 4,
+                  "description": "Row-major average, target, ratio, validity for sourceWidth*sourceHeight texels; unused entries are invalid. Validity 0=invalid, 1=measured, 2=unit fallback. The scalar summary also uses 3=non-uniform.",
+                  "items": { "type": "array", "minItems": 4, "maxItems": 4, "items": { "type": ["number", "null"] } }
+                }
+              }
+            }
+          },
           "lastBinding": {
             "type": "object",
             "properties": {
+              "viewWidth": { "type": "integer", "minimum": 0 },
+              "viewHeight": { "type": "integer", "minimum": 0 },
+              "visibleMips": { "type": "integer", "minimum": 0 },
+              "samplerIdentity": { "type": "integer", "minimum": 0 },
+              "samplerFilter": { "type": "integer", "minimum": 0 },
+              "samplerAddressU": { "type": "integer", "minimum": 0 },
+              "samplerAddressV": { "type": "integer", "minimum": 0 },
               "expectedShaderIdentity": {
                 "type": "integer", "minimum": 0,
                 "description": "Exact recorded engine/replacement selection for this context, HDR producer, engine selection, frame and capture epoch; otherwise the original engine shader."

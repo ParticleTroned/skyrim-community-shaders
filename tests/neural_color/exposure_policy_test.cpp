@@ -14,6 +14,11 @@ static void Require(bool value)
 }
 int main()
 {
+	Require(SupportedExposureView(1, 1, 1));
+	Require(SupportedExposureView(2, 2, 1));
+	for (auto shape : { std::array<unsigned, 3>{ 0, 0, 1 }, { 1, 2, 1 }, { 2, 1, 1 },
+			 { 3, 3, 1 }, { 2, 2, 0 }, { 2, 2, 2 }, { UINT32_MAX, 2, 1 } })
+		Require(!SupportedExposureView(shape[0], shape[1], shape[2]));
 	constexpr ExposureShaderSelection selection{ 10, 20, 30, 40, 50, 60 };
 	Require(selection.Match(10, 20, 30, 50, 60) == 40);
 	Require(selection.Match(11, 20, 30, 50, 60) == 0);

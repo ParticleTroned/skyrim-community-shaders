@@ -24,13 +24,41 @@ namespace NeuralRendering::Color
 	};
 	const char* ExposureBindingName(ExposureBindingState) noexcept;
 
+	/** Uniform texels remain scalar only under ordinary, non-border sampling. */
+	[[nodiscard]] inline bool SupportedExposureSampler(const D3D11_SAMPLER_DESC& sampler)
+	{
+		const auto address = [](D3D11_TEXTURE_ADDRESS_MODE mode) {
+			return mode == D3D11_TEXTURE_ADDRESS_CLAMP || mode == D3D11_TEXTURE_ADDRESS_WRAP ||
+			       mode == D3D11_TEXTURE_ADDRESS_MIRROR || mode == D3D11_TEXTURE_ADDRESS_MIRROR_ONCE;
+		};
+		if (!address(sampler.AddressU) || !address(sampler.AddressV))
+			return false;
+		switch (sampler.Filter) {
+		case D3D11_FILTER_MIN_MAG_MIP_POINT:
+		case D3D11_FILTER_MIN_MAG_POINT_MIP_LINEAR:
+		case D3D11_FILTER_MIN_POINT_MAG_LINEAR_MIP_POINT:
+		case D3D11_FILTER_MIN_POINT_MAG_MIP_LINEAR:
+		case D3D11_FILTER_MIN_LINEAR_MAG_MIP_POINT:
+		case D3D11_FILTER_MIN_LINEAR_MAG_POINT_MIP_LINEAR:
+		case D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT:
+		case D3D11_FILTER_MIN_MAG_MIP_LINEAR:
+		case D3D11_FILTER_ANISOTROPIC:
+			return true;
+		default:
+			return false;
+		}
+	}
+
 	struct ExposureEvidence
 	{
 		ExposureStamp stamp{};
 		std::uint32_t sourceFormat = 0, sourceViewFormat = 0, outputViewFormat = 0;
+		std::uint32_t sourceWidth = 0, sourceHeight = 0, sourceMip = 0;
 		// Process-local diagnostic identities, never accepted as addresses by the API.
 		std::uint64_t sourceIdentity = 0, shaderIdentity = 0;
+		std::uint64_t sourceViewIdentity = 0, samplerIdentity = 0;
 		std::array<float, 4> values{};
+		std::array<std::array<float, 4>, kExposureTexelCount> texels{};
 		float frameGammaExponent = 0;
 		bool gammaKnown = false, readbackComplete = false;
 		const char* producer = "";  // Static producer label; no per-frame string allocation.
@@ -39,6 +67,9 @@ namespace NeuralRendering::Color
 	{
 		std::uint32_t frame = 0, width = 0, height = 0, mip = 0, mipLevels = 0;
 		std::uint32_t arraySize = 0, samples = 0, sourceFormat = 0, viewFormat = 0, viewDimension = 0;
+		std::uint32_t viewWidth = 0, viewHeight = 0, visibleMips = 0;
+		std::uint32_t samplerFilter = 0, samplerAddressU = 0, samplerAddressV = 0;
+		std::uint64_t samplerIdentity = 0;
 		std::uint64_t sourceIdentity = 0, shaderIdentity = 0;
 		std::uint64_t expectedShaderIdentity = 0, viewIdentity = 0;
 	};

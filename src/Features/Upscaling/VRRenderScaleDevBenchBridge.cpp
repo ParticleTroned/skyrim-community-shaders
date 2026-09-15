@@ -1424,8 +1424,9 @@ namespace
 		}
 
 		LARGE_INTEGER driverVersion{};
+		// DXGI reports driver versions through IDXGIDevice; D3D11 interfaces are unsupported here.
 		const bool driverVersionAvailable =
-			SUCCEEDED(adapter->CheckInterfaceSupport(__uuidof(ID3D11Device), &driverVersion));
+			SUCCEEDED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &driverVersion));
 		const auto high = static_cast<uint32_t>(driverVersion.HighPart);
 		const auto low = static_cast<uint32_t>(driverVersion.LowPart);
 		const std::string driverVersionText = driverVersionAvailable ?

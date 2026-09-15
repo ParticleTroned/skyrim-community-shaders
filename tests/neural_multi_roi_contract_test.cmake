@@ -56,7 +56,6 @@ file(READ "${_character_source_path}" _character_source)
 file(READ "${_renderer_source_path}" _renderer_source)
 file(READ "${_runtime_header_path}" _runtime_header)
 file(READ "${_devbench_bridge_path}" _devbench_bridge)
-file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterMaskReadback.h" _mask_readback_source)
 set(
     _contract_text
     "${_upscaling_header}\n${_upscaling_source}\n${_renderer_header}\n${_character_header}\n${_character_source}\n${_renderer_source}\n${_runtime_header}"
@@ -140,7 +139,6 @@ foreach(_prepare_contract IN ITEMS
     [[GetPreparedComputeRegions(]]
     [[FindPreparedSlot(]]
     [[FinalizePreparedMasks(]]
-    [[deferMaskRoiReadback]]
 )
     string(FIND "${_contract_text}" "${_prepare_contract}"
         _prepare_contract_position)
@@ -151,23 +149,22 @@ foreach(_prepare_contract IN ITEMS
     endif()
 endforeach()
 
-# The production synchronization helper is also executed by the WARP queue
-# tests. Keep its crucial bounded/nonblocking contract wired into the runtime.
-foreach(_bounded_readback_contract IN ITEMS
-    [[std::chrono::milliseconds(50)]]
-    [[D3D11_ASYNC_GETDATA_DONOTFLUSH]]
-    [[D3D11_MAP_FLAG_DO_NOT_WAIT]]
-    [[Clock::now() >= a_deadline]]
+# ROI preparation must not reintroduce a GPU queue drain. Delayed diagnostic
+# sampling retains its existing single nonblocking poll contract separately.
+foreach(_blocking_roi_token IN ITEMS
+    [[ReadCharacterMaskBounds(]]
+    [[QueueCurrentMaskBounds(]]
+    [[ResolveCurrentMaskBounds(]]
+    [[deferMaskRoiReadback]]
+    [[->Flush(]]
+    [[Sleep(]]
+    [[YieldProcessor(]]
 )
-    string(FIND "${_mask_readback_source}" "${_bounded_readback_contract}" _bounded_readback_position)
-    if(_bounded_readback_position EQUAL -1)
-        message(FATAL_ERROR "Bounded mask readback contract missing: ${_bounded_readback_contract}")
+    string(FIND "${_character_source}" "${_blocking_roi_token}" _blocking_position)
+    if(NOT _blocking_position EQUAL -1)
+        message(FATAL_ERROR "ROI preparation must not wait on GPU bounds: ${_blocking_roi_token}")
     endif()
 endforeach()
-string(FIND "${_character_source}" [[ReadCharacterMaskBounds(]] _production_readback_position)
-if(_production_readback_position EQUAL -1)
-    message(FATAL_ERROR "Character ROI must use the GPU-tested bounded readback helper")
-endif()
 
 foreach(_execution_contract IN ITEMS
     [[static constexpr std::size_t kFeatureSlotCount = 8;]]
@@ -235,11 +232,11 @@ foreach(_ui_contract IN ITEMS
     [[&settings.neuralCharacterMultiRoiEnabled]]
     [[Uses at most two persistent Feature 18 regions per eye]]
     [[Multi-ROI uses separate feature instances.]]
-    [[resolved visible face/skin/hair mask]]
-    [[Both eye reductions are queued before one flush and share a bounded 50 ms GPU-readiness deadline.]]
-    [[Nonempty tightening starts after 3 fresh validated frames.]]
-    [[backs off for 30 evaluation frames]]
-    [[stale mask evidence is never accepted]]
+    [[current-frame projected face/skin/hair geometry]]
+    [[ROI planning never waits for GPU mask readback.]]
+    [[Every current eligible geometry bound must remain covered]]
+    [[delayed mask diagnostics cannot exclude new pixels]]
+    [[65,536-pixel reserve for its extra invocation plus 25%]]
     [[This is not native sparse-ROI support.]]
     [[Compare summed planned pixels, not the enclosing rectangle]]
 )

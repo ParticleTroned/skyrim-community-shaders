@@ -58,7 +58,7 @@ namespace NeuralRendering
 		CharacterComputeRegionPlan computeRegions{};
 		std::uint64_t multiRoiPixels = 0;
 		CharacterMultiRoiReason multiRoiReason = CharacterMultiRoiReason::Disabled;
-		/** Current prepared-mask spatial evidence, separate from delayed coverage diagnostics. */
+		/** Planner source and CPU time; legacy GPU-bounds evidence stays unavailable. */
 		std::string maskRoiStatus = "disabled";
 		bool maskRoiCurrentFrame = false;
 		bool maskRoiGpuProvenEmpty = false;
@@ -66,13 +66,13 @@ namespace NeuralRendering
 		ComputeSubrect maskRoiRequiredSubrect{};
 		double maskRoiReadbackWaitMs = 0.0;
 		double maskRoiPlanningCpuMs = 0.0;
-		/** Shared post-copy GPU signal; zero uses event queries or has no pending copy. */
+		/** Compatibility field: zero because ROI planning does not issue a GPU readback. */
 		std::uint64_t maskRoiReadbackFenceValue = 0;
 		std::string maskRoiLastFailure;
 		std::int32_t maskRoiLastFailureResult = 0;
 		std::uint32_t maskRoiLastFailureFrame = std::numeric_limits<std::uint32_t>::max();
 		double maskRoiLastFailureWaitMs = 0.0;
-		/** Slot-lifetime counters; resource recreation or reset starts a fresh lifetime. */
+		/** Compatibility counters: zero because current-frame GPU bounds are not requested. */
 		std::uint64_t maskRoiReadbackAttempts = 0;
 		std::uint64_t maskRoiReadbackSuccesses = 0;
 		std::uint64_t maskRoiReadbackFallbacks = 0;
@@ -167,7 +167,7 @@ namespace NeuralRendering
 		std::string detail;
 		std::string visualMaskMechanism = "csx_output_composite_r8";
 		std::string computeRoiReason =
-			"One projected-geometry enclosure per eye by default; experimental multi-ROI tightens from the current resolved mask and evaluates up to two disjoint spatial clusters, with conservative fallback";
+			"Current-frame projected geometry with no GPU readback wait; experimental multi-ROI evaluates up to two disjoint actor clusters per eye when coverage and the extra-evaluation area budget permit";
 		bool enabled = false;
 		bool visualMaskImplemented = true;
 		bool visualMaskProviderValidated = false;
@@ -226,8 +226,6 @@ namespace NeuralRendering
 		std::uint32_t outputHeight = 0;
 		UpscalingDLSS::ViewportCrop viewportCrop{};
 		CharacterSettings settings{};
-		/** Queue the current mask reduction; finalize the complete stereo pair before inference. */
-		bool deferMaskRoiReadback = false;
 	};
 
 	struct CharacterMaskPrepareResult
@@ -289,7 +287,7 @@ namespace NeuralRendering
 		bool PrepareMask(
 			const CharacterMaskPrepareArgs& a_args,
 			CharacterMaskPrepareResult& a_result) noexcept;
-		/** Resolves queued current-mask bounds with one flush and one bounded batch deadline. */
+		/** Validates and publishes the complete prepared eye batch without GPU synchronization. */
 		bool FinalizePreparedMasks(
 			std::span<const CharacterMaskPrepareArgs> a_args,
 			std::span<CharacterMaskPrepareResult> a_results) noexcept;

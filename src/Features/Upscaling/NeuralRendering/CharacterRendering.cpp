@@ -3,9 +3,6 @@
 #include "CharacterActorPolicy.h"
 #include "CharacterCategoryFormat.h"
 #include "CharacterComputeSubrect.h"
-#include "CharacterMaskReadback.h"
-#include "CharacterMaskRoi.h"
-#include "CharacterMaskRoiAdmission.h"
 #include "CharacterMaskWorkPolicy.h"
 
 #include "Globals.h"
@@ -378,35 +375,8 @@ namespace NeuralRendering
 			ComPtr<ID3D11UnorderedAccessView> coverageCounterUav;
 			std::array<Readback, kReadbackLatency> readbacks{};
 			std::uint32_t nextReadbackIndex = 0;
-			ComPtr<ID3D11Buffer> maskBounds;
-			ComPtr<ID3D11UnorderedAccessView> maskBoundsUav;
-			ComPtr<ID3D11Buffer> maskBoundsStaging;
-			ComPtr<ID3D11Query> maskBoundsReady;
-			bool maskBoundsPending = false;
-			bool maskBoundsResolvePending = false;
-			std::uint64_t maskBoundsContentSerial = 0;
-			std::uint64_t maskBoundsGeneration = 0;
-			std::uint32_t maskBoundsFrame = 0;
-			std::uint32_t maskBoundsSourceFrame = 0;
-			std::vector<std::uint64_t> maskBoundsOwners;
-			std::vector<CharacterMaskRoiTileBounds> maskBoundsTiles;
-			StableCharacterMaskRoi stableMaskRoi{};
-			CharacterMaskRoiAdmission maskRoiAdmission{};
 			const char* maskRoiStatus = "disabled";
-			bool maskRoiCurrentFrame = false;
-			bool maskRoiGpuProvenEmpty = false;
-			std::uint32_t maskRoiOccupiedTiles = 0;
-			ComputeSubrect maskRoiRequiredSubrect{};
-			double maskRoiReadbackWaitMs = 0.0;
 			double maskRoiPlanningCpuMs = 0.0;
-			std::uint64_t maskRoiReadbackFenceValue = 0;
-			const char* maskRoiLastFailure = "";
-			std::int32_t maskRoiLastFailureResult = 0;
-			std::uint32_t maskRoiLastFailureFrame = std::numeric_limits<std::uint32_t>::max();
-			double maskRoiLastFailureWaitMs = 0.0;
-			std::uint64_t maskRoiReadbackAttempts = 0;
-			std::uint64_t maskRoiReadbackSuccesses = 0;
-			std::uint64_t maskRoiReadbackFallbacks = 0;
 			PrepareKey prepareKey{};
 			std::uint64_t contentSerial = 0;
 			std::uint32_t width = 0;
@@ -601,16 +571,9 @@ namespace NeuralRendering
 			snapshot_.eyes = {};
 			for (auto& slot : slots_) {
 				slot.prepared = false;
-				// Keep an outstanding GPU copy alive for retirement, but it is no
-				// longer eligible to finalize once its prepared content is invalid.
-				slot.maskBoundsResolvePending = false;
 				slot.computeRegions = {};
 				if (!a_preserveMultiRoiHistory)
 					slot.stableMultiRoi = {};
-				if (!a_preserveMultiRoiHistory)
-					slot.stableMaskRoi = {};
-				if (!a_preserveMultiRoiHistory)
-					slot.maskRoiAdmission = {};
 				slot.prepareKey = {};
 				slot.contentSerial = 0;
 				slot.zeroCoverageBypassResolved = false;
@@ -816,7 +779,6 @@ namespace NeuralRendering
 				slots_ = {};
 				shader_.Reset();
 				constants_.Reset();
-				ResetMaskBoundsShader();
 				capturedCategories_.Reset();
 				capturedCategoriesSrv_.Reset();
 				capturedCategoriesUav_.Reset();
@@ -1095,203 +1057,6 @@ namespace NeuralRendering
 			return true;
 		}
 
-		void ResetMaskBoundsShader() noexcept
-		{
-			maskBoundsShader_.Reset();
-			maskBoundsConstants_.Reset();
-			maskBoundsShaderFailed_ = false;
-			maskBoundsFence_.Reset();
-			maskBoundsFenceValue_ = 0;
-			maskBoundsFenceUnsupported_ = false;
-		}
-
-		CharacterMaskReadbackCompletion SignalMaskBoundsCompletion(ID3D11DeviceContext* a_context)
-		{
-			if (maskBoundsFenceUnsupported_)
-				return {};
-			ComPtr<ID3D11DeviceContext4> context4;
-			auto result = a_context->QueryInterface(IID_PPV_ARGS(&context4));
-			if (result == E_NOINTERFACE) {
-				maskBoundsFenceUnsupported_ = true;
-				return {};
-			}
-			if (FAILED(result))
-				return { nullptr, 0, result };
-			if (!maskBoundsFence_) {
-				ComPtr<ID3D11Device5> device5;
-				result = device_.As(&device5);
-				if (result == E_NOINTERFACE) {
-					maskBoundsFenceUnsupported_ = true;
-					return {};
-				}
-				if (FAILED(result))
-					return { nullptr, 0, result };
-				result = device5->CreateFence(0, D3D11_FENCE_FLAG_NONE, IID_PPV_ARGS(&maskBoundsFence_));
-				if (FAILED(result))
-					return { nullptr, 0, result };
-				Util::SetResourceName(maskBoundsFence_.Get(), "DLSS5CharacterRendering::MaskReadbackFence");
-			}
-			if (maskBoundsFenceValue_ >= std::numeric_limits<std::uint64_t>::max() - 1u)
-				return { nullptr, 0, HRESULT_FROM_WIN32(ERROR_ARITHMETIC_OVERFLOW) };
-			const auto value = ++maskBoundsFenceValue_;
-			result = context4->Signal(maskBoundsFence_.Get(), value);
-			return { maskBoundsFence_.Get(), value, result };
-		}
-
-		bool EnsureMaskBoundsResources(Slot& a_slot, ID3D11Device* a_device)
-		{
-			maskBoundsResourceResult_ = S_OK;
-			if (!maskBoundsShader_) {
-				if (maskBoundsShaderFailed_) {
-					maskBoundsResourceResult_ = E_FAIL;
-					return false;
-				}
-				auto* compiled = static_cast<ID3D11ComputeShader*>(Util::CompileShader(
-					L"Data\\Shaders\\DLSS5CharacterMaskBoundsCS.hlsl", {}, "cs_5_0"));
-				if (!compiled) {
-					maskBoundsShaderFailed_ = true;
-					maskBoundsResourceResult_ = E_FAIL;
-					return false;
-				}
-				maskBoundsShader_.Attach(compiled);
-				D3D11_BUFFER_DESC constantsDesc{};
-				constantsDesc.ByteWidth = sizeof(std::uint32_t) * 4u;
-				constantsDesc.Usage = D3D11_USAGE_DEFAULT;
-				constantsDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-				if (FAILED(maskBoundsResourceResult_ = a_device->CreateBuffer(&constantsDesc, nullptr, &maskBoundsConstants_))) {
-					maskBoundsShader_.Reset();
-					maskBoundsShaderFailed_ = true;
-					return false;
-				}
-				Util::SetResourceName(maskBoundsShader_.Get(), "DLSS5CharacterRendering::MaskBoundsCS");
-			}
-			if (a_slot.maskBounds && a_slot.maskBoundsUav &&
-				a_slot.maskBoundsStaging && a_slot.maskBoundsReady)
-				return true;
-			const auto tilesX = (a_slot.width + kCharacterMaskRoiTileSize - 1u) / kCharacterMaskRoiTileSize;
-			const auto tilesY = (a_slot.height + kCharacterMaskRoiTileSize - 1u) / kCharacterMaskRoiTileSize;
-			const auto tileCount = static_cast<std::uint64_t>(tilesX) * tilesY;
-			if (!tileCount || tileCount > std::numeric_limits<UINT>::max() / sizeof(CharacterMaskRoiTileBounds)) {
-				maskBoundsResourceResult_ = E_INVALIDARG;
-				return false;
-			}
-			// Allocate transactionally. A failed optional allocation must not damage
-			// the already prepared mask or disable the normal CPU-bound NR path.
-			ComPtr<ID3D11Buffer> bounds, staging;
-			ComPtr<ID3D11UnorderedAccessView> uav;
-			ComPtr<ID3D11Query> ready;
-			D3D11_BUFFER_DESC desc{};
-			desc.ByteWidth = static_cast<UINT>(tileCount * sizeof(CharacterMaskRoiTileBounds));
-			desc.Usage = D3D11_USAGE_DEFAULT;
-			desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
-			desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-			desc.StructureByteStride = sizeof(CharacterMaskRoiTileBounds);
-			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-			uavDesc.Format = DXGI_FORMAT_UNKNOWN;
-			uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-			uavDesc.Buffer.NumElements = static_cast<UINT>(tileCount);
-			if (FAILED(maskBoundsResourceResult_ = a_device->CreateBuffer(&desc, nullptr, &bounds)) ||
-				FAILED(maskBoundsResourceResult_ = a_device->CreateUnorderedAccessView(bounds.Get(), &uavDesc, &uav)))
-				return false;
-			desc.Usage = D3D11_USAGE_STAGING;
-			desc.BindFlags = 0;
-			desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-			desc.MiscFlags = 0;
-			desc.StructureByteStride = 0;
-			D3D11_QUERY_DESC queryDesc{ D3D11_QUERY_EVENT, 0 };
-			if (FAILED(maskBoundsResourceResult_ = a_device->CreateBuffer(&desc, nullptr, &staging)) ||
-				FAILED(maskBoundsResourceResult_ = a_device->CreateQuery(&queryDesc, &ready)))
-				return false;
-			a_slot.maskBoundsTiles.resize(static_cast<std::size_t>(tileCount));
-			a_slot.maskBounds = std::move(bounds);
-			a_slot.maskBoundsUav = std::move(uav);
-			a_slot.maskBoundsStaging = std::move(staging);
-			a_slot.maskBoundsReady = std::move(ready);
-			Util::SetResourceName(a_slot.maskBounds.Get(), "DLSS5CharacterRendering::MaskTileBounds");
-			Util::SetResourceName(a_slot.maskBoundsStaging.Get(), "DLSS5CharacterRendering::MaskTileBoundsReadback");
-			return true;
-		}
-
-		bool RejectMaskBounds(const CharacterMaskPrepareArgs& a_args, Slot& a_slot,
-			const char* a_reason, HRESULT a_result = S_OK, double a_waitMs = 0.0)
-		{
-			a_slot.maskRoiStatus = a_reason;
-			a_slot.maskRoiLastFailure = a_reason;
-			a_slot.maskRoiLastFailureResult = static_cast<std::int32_t>(a_result);
-			a_slot.maskRoiLastFailureFrame = a_args.frameId;
-			a_slot.maskRoiLastFailureWaitMs = a_waitMs;
-			a_slot.maskBoundsResolvePending = false;
-			a_slot.maskRoiAdmission.Reject(a_args.frameId);
-			Increment(a_slot.maskRoiReadbackFallbacks);
-			return false;
-		}
-
-		bool QueueCurrentMaskBounds(const CharacterMaskPrepareArgs& a_args, Slot& a_slot,
-			const ProjectedPlan& a_plan, std::uint32_t a_sourceFrame)
-		{
-			if (!a_slot.maskRoiAdmission.CanAttempt(a_args.frameId)) {
-				a_slot.maskRoiStatus = "readback_retry_backoff";
-				return false;
-			}
-			Increment(a_slot.maskRoiReadbackAttempts);
-			const auto fallback = [&](const char* a_reason, HRESULT a_result = S_OK) {
-				return RejectMaskBounds(a_args, a_slot, a_reason, a_result);
-			};
-			if (a_args.context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
-				return fallback("deferred_context");
-			if (!EnsureMaskBoundsResources(a_slot, a_args.device))
-				return fallback("bounds_resources_unavailable", maskBoundsResourceResult_);
-			if (a_slot.maskBoundsPending) {
-				// A timed-out copy is retired, NEVER consumed as current coverage.
-				// Do not queue more copies behind a still-busy staging resource.
-				BOOL ready = FALSE;
-				const auto result = a_args.context->GetData(a_slot.maskBoundsReady.Get(),
-					&ready, sizeof(ready), D3D11_ASYNC_GETDATA_DONOTFLUSH);
-				if (result != S_OK || !ready)
-					return fallback(FAILED(result) ? "query_failed" : "previous_copy_pending", result);
-				a_slot.maskBoundsPending = false;
-			}
-			a_slot.maskBoundsResolvePending = false;
-			a_slot.maskBoundsOwners.clear();
-			a_slot.maskBoundsOwners.reserve(a_plan.actorRegions.size());
-			for (const auto& actor : a_plan.actorRegions)
-				a_slot.maskBoundsOwners.push_back(actor.identity);
-			{
-				ComputeStateGuard stateGuard(a_args.context);
-				if (!stateGuard.Captured())
-					return fallback("compute_state_unavailable");
-				const auto tilesX = (a_slot.width + kCharacterMaskRoiTileSize - 1u) / kCharacterMaskRoiTileSize;
-				const auto tilesY = (a_slot.height + kCharacterMaskRoiTileSize - 1u) / kCharacterMaskRoiTileSize;
-				const std::array<std::uint32_t, 4> sizes{ a_slot.width, a_slot.height, tilesX, 0 };
-				a_args.context->UpdateSubresource(maskBoundsConstants_.Get(), 0, nullptr, sizes.data(), 0, 0);
-				ID3D11Buffer* constants = maskBoundsConstants_.Get();
-				ID3D11ShaderResourceView* source = a_slot.maskSrv.Get();
-				ID3D11UnorderedAccessView* destination = a_slot.maskBoundsUav.Get();
-				// Clear conflicting mask UAV bindings before exposing it as an SRV.
-				std::array<ID3D11UnorderedAccessView*, 2> nullUavs{};
-				a_args.context->CSSetUnorderedAccessViews(0, 2, nullUavs.data(), nullptr);
-				a_args.context->CSSetShader(maskBoundsShader_.Get(), nullptr, 0);
-				a_args.context->CSSetConstantBuffers(0, 1, &constants);
-				a_args.context->CSSetShaderResources(0, 1, &source);
-				a_args.context->CSSetUnorderedAccessViews(0, 1, &destination, nullptr);
-				{
-					CS_PROFILE_SCOPE("Upscaling::DLSS5CharacterMaskBounds");
-					a_args.context->Dispatch(tilesX, tilesY, 1);
-				}
-				a_args.context->CSSetUnorderedAccessViews(0, 2, nullUavs.data(), nullptr);
-				a_args.context->CopyResource(a_slot.maskBoundsStaging.Get(), a_slot.maskBounds.Get());
-				a_args.context->End(a_slot.maskBoundsReady.Get());
-				a_slot.maskBoundsPending = true;
-			}
-			a_slot.maskBoundsResolvePending = true;
-			a_slot.maskBoundsContentSerial = a_slot.contentSerial;
-			a_slot.maskBoundsGeneration = a_args.generation;
-			a_slot.maskBoundsFrame = a_args.frameId;
-			a_slot.maskBoundsSourceFrame = a_sourceFrame;
-			a_slot.maskRoiStatus = "current_bounds_queued";
-			return true;
-		}
-
 		bool EnsureSlot(
 			Slot& a_slot,
 			ID3D11Device* a_device,
@@ -1374,96 +1139,10 @@ namespace NeuralRendering
 			return true;
 		}
 
-		bool ReadCurrentMaskBounds(const CharacterMaskPrepareArgs& a_args, Slot& a_slot,
-			std::chrono::steady_clock::time_point a_deadline,
-			CharacterMaskReadbackCompletion a_completion)
-		{
-			try {
-				if (!a_slot.maskBoundsResolvePending)
-					return false;
-				if (!a_slot.maskBoundsPending || a_slot.contentSerial == 0 ||
-					a_slot.maskBoundsContentSerial != a_slot.contentSerial ||
-					a_slot.maskBoundsFrame != a_args.frameId ||
-					a_slot.maskBoundsSourceFrame != a_args.sourceWorldFrame ||
-					a_slot.maskBoundsGeneration != a_args.generation) {
-					RejectMaskBounds(a_args, a_slot, "queued_bounds_identity_mismatch", E_INVALIDARG);
-					return false;
-				}
-				a_slot.maskRoiReadbackFenceValue = a_completion.value;
-				const auto readback = ReadCharacterMaskBounds(a_args.context,
-					a_slot.maskBoundsReady.Get(), a_slot.maskBoundsStaging.Get(),
-					std::as_writable_bytes(std::span(a_slot.maskBoundsTiles)), a_deadline, a_completion);
-				a_slot.maskRoiReadbackWaitMs = readback.waitMs;
-				a_slot.maskBoundsResolvePending = false;
-				if (!readback.Ready()) {
-					RejectMaskBounds(a_args, a_slot, readback.Reason(), readback.result, readback.waitMs);
-					return false;
-				}
-				a_slot.maskBoundsPending = false;
-				Increment(a_slot.maskRoiReadbackSuccesses);
-				return true;
-			} catch (...) {
-				return RejectMaskBounds(a_args, a_slot, "bounds_readback_failed", E_FAIL,
-					a_slot.maskRoiReadbackWaitMs);
-			}
-		}
-
-		void ResolveCurrentMaskBounds(const CharacterMaskPrepareArgs& a_args, Slot& a_slot)
-		{
-			try {
-				const auto planningStart = std::chrono::steady_clock::now();
-				const auto tight = ResolveCharacterMaskRoi(a_slot.maskBoundsTiles, a_slot.maskBoundsOwners,
-					a_args.outputWidth, a_args.outputHeight, a_args.sourceWorldFrame, a_slot.stableMaskRoi);
-				a_slot.maskRoiPlanningCpuMs = std::chrono::duration<double, std::milli>(
-					std::chrono::steady_clock::now() - planningStart)
-				                                  .count();
-				if (!tight.valid) {
-					RejectMaskBounds(a_args, a_slot, "invalid_current_bounds", E_INVALIDARG, a_slot.maskRoiReadbackWaitMs);
-					return;
-				}
-				const bool admitted = a_slot.maskRoiAdmission.ObserveFresh(a_args.frameId);
-				if (!admitted && !tight.empty) {
-					a_slot.maskRoiStatus = "current_bounds_warmup";
-					return;
-				}
-				// Coverage is proven by THIS resolved mask, not by broad geometry
-				// eligibility or an earlier frame's debug counters. Keep maskWorkSubrect
-				// unchanged: it defines authoring/dirty clearing, never inference cost.
-				a_slot.computeSubrect = tight.computeSubrect;
-				a_slot.computeRegions = tight.computeRegions;
-				a_slot.multiRoiReason = tight.multiRoiReason;
-				a_slot.maskRoiCurrentFrame = true;
-				a_slot.maskRoiGpuProvenEmpty = tight.empty;
-				a_slot.maskRoiOccupiedTiles = tight.occupiedTiles;
-				a_slot.maskRoiRequiredSubrect = tight.requiredSubrect;
-				a_slot.maskRoiStatus = tight.empty                     ? "current_mask_empty" :
-				                       tight.computeRegions.count == 2 ? "current_mask_split" :
-				                                                         "current_mask_single";
-			} catch (...) {
-				// Optional optimization failures retain the already valid CPU plan.
-				a_slot.stableMaskRoi = {};
-				RejectMaskBounds(a_args, a_slot, "bounds_optimization_failed", E_FAIL,
-					a_slot.maskRoiReadbackWaitMs);
-			}
-		}
-
 		static void PublishMaskRoiSnapshot(const Slot& a_slot, CharacterEyeSnapshot& a_eye)
 		{
 			a_eye.maskRoiStatus = a_slot.maskRoiStatus;
-			a_eye.maskRoiCurrentFrame = a_slot.maskRoiCurrentFrame;
-			a_eye.maskRoiGpuProvenEmpty = a_slot.maskRoiGpuProvenEmpty;
-			a_eye.maskRoiOccupiedTiles = a_slot.maskRoiOccupiedTiles;
-			a_eye.maskRoiRequiredSubrect = a_slot.maskRoiRequiredSubrect;
-			a_eye.maskRoiReadbackWaitMs = a_slot.maskRoiReadbackWaitMs;
 			a_eye.maskRoiPlanningCpuMs = a_slot.maskRoiPlanningCpuMs;
-			a_eye.maskRoiReadbackFenceValue = a_slot.maskRoiReadbackFenceValue;
-			a_eye.maskRoiLastFailure = a_slot.maskRoiLastFailure;
-			a_eye.maskRoiLastFailureResult = a_slot.maskRoiLastFailureResult;
-			a_eye.maskRoiLastFailureFrame = a_slot.maskRoiLastFailureFrame;
-			a_eye.maskRoiLastFailureWaitMs = a_slot.maskRoiLastFailureWaitMs;
-			a_eye.maskRoiReadbackAttempts = a_slot.maskRoiReadbackAttempts;
-			a_eye.maskRoiReadbackSuccesses = a_slot.maskRoiReadbackSuccesses;
-			a_eye.maskRoiReadbackFallbacks = a_slot.maskRoiReadbackFallbacks;
 		}
 
 		CharacterProjectionResult ProjectSphere(
@@ -2080,13 +1759,6 @@ namespace NeuralRendering
 		std::uint32_t preparedFrameHistoryNext_ = 0;
 		ComPtr<ID3D11ComputeShader> shader_;
 		ComPtr<ID3D11Buffer> constants_;
-		ComPtr<ID3D11ComputeShader> maskBoundsShader_;
-		ComPtr<ID3D11Buffer> maskBoundsConstants_;
-		ComPtr<ID3D11Fence> maskBoundsFence_;
-		std::uint64_t maskBoundsFenceValue_ = 0;
-		bool maskBoundsFenceUnsupported_ = false;
-		bool maskBoundsShaderFailed_ = false;
-		HRESULT maskBoundsResourceResult_ = S_OK;
 		ComPtr<ID3D11Texture2D> capturedCategories_;
 		ComPtr<ID3D11ShaderResourceView> capturedCategoriesSrv_;
 		ComPtr<ID3D11UnorderedAccessView> capturedCategoriesUav_;
@@ -2844,18 +2516,15 @@ namespace NeuralRendering
 				if (computeSubrectContractChanged) {
 					slot.stableComputeSubrect = {};
 					slot.stableMultiRoi = {};
-					slot.stableMaskRoi = {};
-					slot.maskRoiAdmission = {};
 					slot.computeSubrectGeneration = a_args.generation;
 					slot.computeSubrectCrop = a_args.viewportCrop;
 					slot.computeSubrectContractValid = true;
 				}
 				if (slot.multiRoiPolicyKey != key.settings) {
 					slot.stableMultiRoi = {};
-					slot.stableMaskRoi = {};
-					slot.maskRoiAdmission = {};
 					slot.multiRoiPolicyKey = key.settings;
 				}
+				const auto planningStart = std::chrono::steady_clock::now();
 				const auto requiredComputeSubrect = cpuProvenEmpty ?
 				                                        ComputeSubrect{} :
 				                                    fullOutputMask ?
@@ -2903,6 +2572,9 @@ namespace NeuralRendering
 				}
 				if (slot.computeRegions.count == 0)
 					slot.stableMultiRoi = {};
+				slot.maskRoiPlanningCpuMs = std::chrono::duration<double, std::milli>(
+					std::chrono::steady_clock::now() - planningStart)
+				                                .count();
 				if (!cpuProvenEmpty &&
 					!slot.computeSubrect.Fits(
 						a_args.outputWidth, a_args.outputHeight)) {
@@ -2915,15 +2587,10 @@ namespace NeuralRendering
 				slot.feature18Disposition =
 					CharacterFeature18Disposition::Unresolved;
 				slot.zeroCoverageCpuProven = false;
-				slot.maskRoiStatus = a_args.settings.multiRoi ? "not_applicable" : "disabled";
-				slot.maskRoiCurrentFrame = false;
-				slot.maskRoiGpuProvenEmpty = false;
-				slot.maskRoiOccupiedTiles = 0;
-				slot.maskRoiRequiredSubrect = {};
-				slot.maskRoiReadbackWaitMs = 0.0;
-				slot.maskRoiPlanningCpuMs = 0.0;
-				slot.maskRoiReadbackFenceValue = 0;
-				slot.maskBoundsResolvePending = false;
+				slot.maskRoiStatus = !a_args.settings.multiRoi      ? "disabled" :
+				                     cpuProvenEmpty                 ? "cpu_proven_empty" :
+				                     slot.computeRegions.count == 2 ? "cpu_projected_split" :
+				                                                      "cpu_projected_single";
 				if (cpuProvenEmpty || logicalEmptyCapture) {
 					float clearValue = 0.0f;
 					switch (a_args.settings.maskTestMode) {
@@ -2955,25 +2622,8 @@ namespace NeuralRendering
 						return fail("DLSS5 character-mask dispatch failed");
 					}
 				}
-				if (a_args.settings.multiRoi && authoredMode && !cpuProvenEmpty &&
-					!logicalEmptyCapture && a_args.settings.debugView == CharacterDebugView::Off) {
-					try {
-						if (state_->QueueCurrentMaskBounds(a_args, slot, plan, sourceWorldFrame) &&
-							!a_args.deferMaskRoiReadback) {
-							const auto deadline = std::chrono::steady_clock::now() + kCharacterMaskReadbackBudget;
-							const auto completion = state_->SignalMaskBoundsCompletion(a_args.context);
-							a_args.context->Flush();
-							if (state_->ReadCurrentMaskBounds(a_args, slot, deadline, completion))
-								state_->ResolveCurrentMaskBounds(a_args, slot);
-						}
-					} catch (...) {
-						state_->RejectMaskBounds(a_args, slot, "bounds_optimization_failed", E_FAIL);
-					}
-				} else {
-					slot.stableMaskRoi = {};
-					slot.maskRoiAdmission = {};
-				}
-				slot.requiresEvaluation = !(cpuProvenEmpty || slot.maskRoiGpuProvenEmpty);
+				// Current geometry covers every eligible mask pixel without waiting for
+				// GPU readback. Delayed diagnostic samples never narrow this frame.
 				slot.zeroCoverageBypassed = false;
 				slot.zeroCoverageCpuProven = cpuProvenEmpty;
 				if (!slot.requiresEvaluation)
@@ -3134,11 +2784,10 @@ namespace NeuralRendering
 			return false;
 		try {
 			std::scoped_lock lock(state_->mutex_);
-			bool pending = false;
 			std::uint32_t slotMask = 0;
 			std::uint32_t eyeMask = 0;
-			// Validate the entire batch before consuming any evidence. A new mask
-			// cannot inherit bounds from a previous frame/epoch or another depth guide.
+			// Validate both prepared eyes before publishing the batch. Each plan
+			// must belong to this source frame, policy, generation and depth guide.
 			for (const auto& args : a_args) {
 				if (!args.device || !args.context || args.context != a_args.front().context ||
 					args.device != a_args.front().device || args.frameId != a_args.front().frameId ||
@@ -3170,30 +2819,11 @@ namespace NeuralRendering
 					if (GetIdentityToken(depth.Get()) != slot.prepareKey.currentDepthIdentity)
 						return false;
 				}
-				pending = pending || slot.maskBoundsResolvePending;
 			}
-			const auto deadline = std::chrono::steady_clock::now() + kCharacterMaskReadbackBudget;
-			CharacterMaskReadbackCompletion completion{};
-			if (pending) {
-				// One GPU signal covers both copies before either staging buffer is mapped.
-				completion = state_->SignalMaskBoundsCompletion(a_args.front().context);
-				a_args.front().context->Flush();
-			}
-			// Read both eyes before CPU planning can spend the shared GPU deadline.
-			std::array<bool, 2> boundsReady{};
-			for (std::size_t index = 0; index < a_args.size(); ++index)
-				boundsReady[index] = state_->ReadCurrentMaskBounds(a_args[index],
-					state_->slots_[a_args[index].featureSlot], deadline, completion);
 			std::uint64_t inferencePixels = 0;
 			for (std::size_t index = 0; index < a_args.size(); ++index) {
 				const auto& args = a_args[index];
 				auto& slot = state_->slots_[args.featureSlot];
-				if (boundsReady[index])
-					state_->ResolveCurrentMaskBounds(args, slot);
-				const bool wasRequired = slot.requiresEvaluation;
-				slot.requiresEvaluation = !(slot.zeroCoverageCpuProven || slot.maskRoiGpuProvenEmpty);
-				if (wasRequired && !slot.requiresEvaluation)
-					Increment(state_->snapshot_.provenEmptyFeatureBypassRequests);
 				auto& eye = state_->snapshot_.eyes[args.eyeIndex];
 				eye.computeSubrect = slot.computeSubrect;
 				eye.computeRegions = slot.computeRegions;
@@ -3280,7 +2910,7 @@ namespace NeuralRendering
 					continue;
 				}
 				const bool bypassRequested =
-					!slot.requiresEvaluation && (slot.zeroCoverageCpuProven || slot.maskRoiGpuProvenEmpty);
+					!slot.requiresEvaluation && slot.zeroCoverageCpuProven;
 				const bool evaluated = (evaluatedMask & slotBit) != 0;
 				const bool successful = (successfulMask & slotBit) != 0;
 				const bool bypassed =
@@ -3314,7 +2944,7 @@ namespace NeuralRendering
 					break;
 				}
 				if (bypassed) {
-					if (slot.zeroCoverageCpuProven || slot.maskRoiGpuProvenEmpty)
+					if (slot.zeroCoverageCpuProven)
 						Increment(state_->snapshot_.provenEmptyFeatureBypasses);
 				}
 
@@ -3348,7 +2978,6 @@ namespace NeuralRendering
 			state_->slots_ = {};
 			state_->shader_.Reset();
 			state_->constants_.Reset();
-			state_->ResetMaskBoundsShader();
 			state_->shaderCompileFailed_ = false;
 			state_->capturedCategories_.Reset();
 			state_->capturedCategoriesSrv_.Reset();
@@ -3398,7 +3027,6 @@ namespace NeuralRendering
 			std::scoped_lock lock(state_->mutex_);
 			state_->shader_.Reset();
 			state_->constants_.Reset();
-			state_->ResetMaskBoundsShader();
 			state_->shaderCompileFailed_ = false;
 			state_->captureShader_.Reset();
 			state_->captureShaderCompileFailed_ = false;
@@ -3470,12 +3098,6 @@ namespace NeuralRendering
 					slot.width == a_width && slot.height == a_height) {
 					if (slot.maskUniform)
 						return slot.uniformMaskValue == 0.0f ? ComputeSubrect{} : full;
-					if (slot.maskRoiCurrentFrame) {
-						if (slot.maskRoiGpuProvenEmpty)
-							return {};
-						if (slot.maskRoiRequiredSubrect.Fits(a_width, a_height))
-							return ExpandCharacterWorkRect(slot.maskRoiRequiredSubrect, a_width, a_height, 1);
-					}
 					// Include the linear sampler footprint around the authored mask.
 					return slot.maskWorkSubrect.Fits(a_width, a_height) ?
 					           ExpandCharacterWorkRect(slot.maskWorkSubrect, a_width, a_height, 1) :

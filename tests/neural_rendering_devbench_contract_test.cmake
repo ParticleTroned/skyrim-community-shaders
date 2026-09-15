@@ -1936,8 +1936,7 @@ endforeach()
 foreach(_strict_zero_contract IN ITEMS
     [[const bool cpuProvenEmpty =]]
     [[slot.requiresEvaluation = !cpuProvenEmpty;]]
-    [[slot.requiresEvaluation = !(cpuProvenEmpty || slot.maskRoiGpuProvenEmpty);]]
-    [[!slot.requiresEvaluation && (slot.zeroCoverageCpuProven || slot.maskRoiGpuProvenEmpty)]]
+    [[!slot.requiresEvaluation && slot.zeroCoverageCpuProven]]
     [[slot.zeroCoverageBypassed = false;]]
     [[Increment(state_->snapshot_.provenEmptyFeatureBypassRequests);]]
 )
@@ -1949,59 +1948,30 @@ foreach(_strict_zero_contract IN ITEMS
         )
     endif()
 endforeach()
-foreach(_current_mask_roi_contract IN ITEMS
-    [[if (a_slot.maskBoundsPending)]]
-    [[return fallback(FAILED(result) ? "query_failed" : "previous_copy_pending", result);]]
-    [[ReadCharacterMaskBounds(a_args.context,]]
-    [[RejectMaskBounds(a_args, a_slot, readback.Reason(), readback.result, readback.waitMs);]]
-    [[a_slot.maskBoundsContentSerial != a_slot.contentSerial]]
-    [[a_slot.maskBoundsFrame != a_args.frameId]]
-    [[a_slot.maskBoundsSourceFrame != a_args.sourceWorldFrame]]
-    [[a_slot.maskBoundsGeneration != a_args.generation]]
-    [[a_slot.maskRoiLastFailure = a_reason;]]
-    [[a_slot.maskRoiLastFailureResult = static_cast<std::int32_t>(a_result);]]
-    [[a_slot.maskRoiLastFailureFrame = a_args.frameId;]]
-    [[a_slot.maskRoiLastFailureWaitMs = a_waitMs;]]
-    [[a_args.context->CopyResource(a_slot.maskBoundsStaging.Get(), a_slot.maskBounds.Get());]]
-    [[a_args.context->End(a_slot.maskBoundsReady.Get());]]
-    [[a_slot.maskRoiCurrentFrame = true;]]
-    [[a_slot.maskRoiGpuProvenEmpty = tight.empty;]]
-    [[slot.maskRoiCurrentFrame = false;]]
-    [[slot.maskRoiGpuProvenEmpty = false;]]
-    [[state_->QueueCurrentMaskBounds(a_args, slot, plan, sourceWorldFrame)]]
-    [[!a_args.deferMaskRoiReadback]]
-    [[const auto deadline = std::chrono::steady_clock::now() + kCharacterMaskReadbackBudget;]]
-    [[std::array<bool, 2> boundsReady{};]]
-    [[boundsReady[index] = state_->ReadCurrentMaskBounds(a_args[index],]]
-    [[state_->slots_[a_args[index].featureSlot], deadline, completion);]]
-    [[completion = state_->SignalMaskBoundsCompletion(a_args.front().context);]]
-    [[result = context4->Signal(maskBoundsFence_.Get(), value);]]
-    [[a_eye.maskRoiReadbackFenceValue = a_slot.maskRoiReadbackFenceValue;]]
-    [[if (boundsReady[index])]]
-    [[state_->ResolveCurrentMaskBounds(args, slot);]]
+foreach(_geometry_roi_contract IN ITEMS
+    [[ResolveCharacterMultiRoi(]]
+    [[plan.actorRegions, plan.regions, a_args.outputWidth, a_args.outputHeight,]]
+    [[sourceWorldFrame, slot.stableMultiRoi, slot.multiRoiReason);]]
+    [[slot.prepareKey.sourceWorldFrame != args.sourceWorldFrame]]
+    [[slot.prepareKey.generation != args.generation]]
+    [[slot.prepareKey.settings != BuildSettingsKey(args.settings)]]
+    [[GetIdentityToken(depth.Get()) != slot.prepareKey.currentDepthIdentity]]
+    [[a_eye.maskRoiPlanningCpuMs = a_slot.maskRoiPlanningCpuMs;]]
 )
-    string(FIND "${_character_source}" "${_current_mask_roi_contract}" _current_mask_roi_position)
-    if(_current_mask_roi_position EQUAL -1)
-        message(FATAL_ERROR "Current prepared-mask spatial evidence contract is missing: ${_current_mask_roi_contract}")
+    string(FIND "${_character_source}" "${_geometry_roi_contract}" _geometry_roi_position)
+    if(_geometry_roi_position EQUAL -1)
+        message(FATAL_ERROR "Current geometry ROI identity contract is missing: ${_geometry_roi_contract}")
     endif()
 endforeach()
-string(FIND "${_character_source}"
-    [[completion = state_->SignalMaskBoundsCompletion(a_args.front().context);]] _batch_signal)
-string(FIND "${_character_source}"
-    [[a_args.front().context->Flush();]] _batch_flush)
-string(FIND "${_character_source}"
-    [[boundsReady[index] = state_->ReadCurrentMaskBounds(a_args[index],]] _batch_read)
-if(NOT _batch_signal LESS _batch_flush OR NOT _batch_flush LESS _batch_read)
-    message(FATAL_ERROR "Stereo completion must be signaled and flushed before either staging read")
-endif()
-foreach(_readback_bridge_contract IN ITEMS
+foreach(_geometry_bridge_contract IN ITEMS
     [[{ "maskRoiReadbackFenceValue", eye.maskRoiReadbackFenceValue }]]
     [["maskRoiReadbackFenceValue":{"type":"integer","minimum":0]]
-    [[Neither staging buffer is mapped before that fence completes]]
+    [[{ "planningRequiresGpuReadback", false }]]
+    [[never waits for GPU mask readback]]
 )
-    string(FIND "${_bridge}" "${_readback_bridge_contract}" _readback_bridge_position)
-    if(_readback_bridge_position EQUAL -1)
-        message(FATAL_ERROR "Readback completion telemetry contract is missing: ${_readback_bridge_contract}")
+    string(FIND "${_bridge}" "${_geometry_bridge_contract}" _geometry_bridge_position)
+    if(_geometry_bridge_position EQUAL -1)
+        message(FATAL_ERROR "Geometry planner telemetry contract is missing: ${_geometry_bridge_contract}")
     endif()
 endforeach()
 foreach(_stale_zero_token IN ITEMS
@@ -3306,7 +3276,7 @@ foreach(_character_contract IN ITEMS
     [[{ "multiEvaluationMaximumRegionsPerEye", 2 }]]
     [[{ "multiEvaluationMechanism", "separate_persistent_feature18_instances" }]]
     [[{ "privateSingleSubrectValidation", "ghidra_dataflow_and_gpu_timing_validated" }]]
-    [[Feature 18 bypasses CPU-proven empty eyes or experimental current prepared-mask GPU-proven empty eyes; delayed GPU coverage samples are diagnostic and never suppress current-frame evaluation.]]
+    [[Feature 18 bypasses CPU-proven empty eyes; delayed GPU coverage samples are diagnostic and never suppress current-frame evaluation.]]
     [[unions the current per-eye projected face, skin, and hair eligibility bounds into one private Feature 18 compute subrect]]
     [[Feature 18 color, depth-guide, motion-vector, provider-output, and late-overlay work are restricted to that rectangle.]]
     [[const bool characterVisualIsolationChanged =]]

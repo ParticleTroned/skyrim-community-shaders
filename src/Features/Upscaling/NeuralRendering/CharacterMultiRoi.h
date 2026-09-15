@@ -50,17 +50,28 @@ namespace NeuralRendering
 		CharacterMultiRoiReason a_reason) noexcept
 	{
 		switch (a_reason) {
-		case CharacterMultiRoiReason::Disabled: return "disabled";
-		case CharacterMultiRoiReason::DiagnosticMode: return "diagnostic_mode";
-		case CharacterMultiRoiReason::UncertainCoverage: return "uncertain_coverage";
-		case CharacterMultiRoiReason::TooFewActors: return "too_few_actors";
-		case CharacterMultiRoiReason::ActorCapacity: return "actor_capacity";
-		case CharacterMultiRoiReason::InvalidInput: return "invalid_input";
-		case CharacterMultiRoiReason::NoDisjointSplit: return "no_disjoint_split";
-		case CharacterMultiRoiReason::InsufficientSavings: return "insufficient_area_savings";
-		case CharacterMultiRoiReason::EligibilityBridge: return "eligibility_bridges_clusters";
-		case CharacterMultiRoiReason::StableRegionsOverlap: return "stable_regions_overlap";
-		case CharacterMultiRoiReason::Split: return "split";
+		case CharacterMultiRoiReason::Disabled:
+			return "disabled";
+		case CharacterMultiRoiReason::DiagnosticMode:
+			return "diagnostic_mode";
+		case CharacterMultiRoiReason::UncertainCoverage:
+			return "uncertain_coverage";
+		case CharacterMultiRoiReason::TooFewActors:
+			return "too_few_actors";
+		case CharacterMultiRoiReason::ActorCapacity:
+			return "actor_capacity";
+		case CharacterMultiRoiReason::InvalidInput:
+			return "invalid_input";
+		case CharacterMultiRoiReason::NoDisjointSplit:
+			return "no_disjoint_split";
+		case CharacterMultiRoiReason::InsufficientSavings:
+			return "insufficient_area_savings";
+		case CharacterMultiRoiReason::EligibilityBridge:
+			return "eligibility_bridges_clusters";
+		case CharacterMultiRoiReason::StableRegionsOverlap:
+			return "stable_regions_overlap";
+		case CharacterMultiRoiReason::Split:
+			return "split";
 		}
 		return "invalid_input";
 	}
@@ -98,7 +109,7 @@ namespace NeuralRendering
 
 	namespace CharacterMultiRoiDetail
 	{
-		inline constexpr std::uint64_t kMinimumSavedPixels = 65536;
+		inline constexpr std::uint64_t kExtraEvaluationPixelReserve = 65536;
 		inline constexpr std::size_t kMaximumActors = 128;
 
 		[[nodiscard]] inline std::uint64_t ClusterIdentity(
@@ -139,7 +150,7 @@ namespace NeuralRendering
 			return true;
 		}
 
-		/** Conservative area heuristic, NOT a measured GPU cost model. */
+		/** Charges an extra-invocation area reserve; this is not measured GPU break-even. */
 		[[nodiscard]] inline bool WorthSplitting(
 			const std::array<ComputeSubrect, 2>& a_regions,
 			std::uint64_t a_singleArea, bool a_retaining) noexcept
@@ -149,10 +160,13 @@ namespace NeuralRendering
 			if (firstArea > a_singleArea || secondArea > a_singleArea - firstArea)
 				return false;
 			const auto area = firstArea + secondArea;
-			// Enter at >=25% and >=64K saved pixels; retain at >=20% to avoid chatter.
-			const auto requiredSaving = std::max(kMinimumSavedPixels,
-				a_retaining ? a_singleArea / 5u : a_singleArea / 4u);
-			return area <= a_singleArea && a_singleArea - area >= requiredSaving;
+			// Pay the extra invocation reserve before requiring 25% net area
+			// savings (20% for retention). Subtraction avoids overflow at large sizes.
+			const auto saved = a_singleArea - area;
+			const auto divisor = a_retaining ? 5u : 4u;
+			const auto requiredSaving = a_singleArea / divisor + (a_singleArea % divisor != 0);
+			return saved >= kExtraEvaluationPixelReserve &&
+			       saved - kExtraEvaluationPixelReserve >= requiredSaving;
 		}
 	}
 

@@ -6,7 +6,11 @@
 #include <limits>
 #include <vector>
 
-#define CHECK(condition) do { if (!(condition)) return __LINE__; } while (false)
+#define CHECK(condition)     \
+	do {                     \
+		if (!(condition))    \
+			return __LINE__; \
+	} while (false)
 
 namespace
 {
@@ -49,13 +53,32 @@ int main()
 		CharacterMultiRoiActor{ 11, { 100, 200, 200, 400 } },
 		CharacterMultiRoiActor{ 22, { 1100, 200, 1200, 400 } },
 	};
+	// An additional invocation must pay its reserve before net savings count.
+	const std::array marginalCost{
+		ComputeSubrect{ 0, 0, 384, 1024 },
+		ComputeSubrect{ 640, 0, 384, 1024 },
+	};
+	CHECK(!CharacterMultiRoiDetail::WorthSplitting(marginalCost, 1024u * 1024u, false));
+	const std::array enterCost{
+		ComputeSubrect{ 0, 0, 352, 1024 },
+		ComputeSubrect{ 672, 0, 352, 1024 },
+	};
+	CHECK(CharacterMultiRoiDetail::WorthSplitting(enterCost, 1024u * 1024u, false));
+	const std::array retainCost{
+		ComputeSubrect{ 0, 0, 376, 1024 },
+		ComputeSubrect{ 648, 0, 376, 1024 },
+	};
+	CHECK(!CharacterMultiRoiDetail::WorthSplitting(retainCost, 1024u * 1024u, false));
+	CHECK(CharacterMultiRoiDetail::WorthSplitting(retainCost, 1024u * 1024u, true));
+	CHECK(!CharacterMultiRoiDetail::WorthSplitting(enterCost, 1024, false));
+	CHECK(!CharacterMultiRoiDetail::WorthSplitting(enterCost, 0, true));
 	StableCharacterMultiRoi state;
 	CharacterMultiRoiReason reason;
 	const auto first = Resolve(separated, 100, state, reason);
 	CHECK(first.count == 2 && reason == CharacterMultiRoiReason::Split);
 	CHECK(Safe(first, separated));
 	CHECK(first.regions[0].Area() + first.regions[1].Area() <
-		UnionCharacterComputeSubrect(first.regions[0], first.regions[1]).Area());
+		  UnionCharacterComputeSubrect(first.regions[0], first.regions[1]).Area());
 	const auto firstKey = first.historyKeys;
 	const auto firstCount = state.clusters[0].stable.recentCount;
 	for (int replay = 0; replay < 500; ++replay) {
@@ -101,6 +124,14 @@ int main()
 	const auto reentry = Resolve(separated, 701, state, reason);
 	CHECK(reentry.count == 2 && reentry.historyKeys != firstKey);
 	CHECK(Safe(reentry, separated));
+
+	// A newly visible actor in the gap must be covered immediately, including
+	// reprepare of the same source frame; old cluster bounds cannot hide it.
+	auto entered = std::vector<CharacterMultiRoiActor>(separated.begin(), separated.end());
+	entered.push_back({ 33, { 620, 260, 750, 420 } });
+	const auto entryPlan = Resolve(entered, 701, state, reason);
+	CHECK(Safe(entryPlan, entered));
+	CHECK(Resolve(entered, 701, state, reason) == entryPlan);
 
 	// Offscreen/empty actors and invalid ownership never silently omit a region.
 	CHECK(Resolve({}, 702, state, reason).count == 0);
@@ -169,7 +200,7 @@ int main()
 	auto crossed = separated;
 	std::swap(crossed[0].rect, crossed[1].rect);
 	const auto crossing = Resolve(crossed, 801, state, reason);
-	CHECK(crossing.count == 0); // Immediate growth of old providers overlaps: merge.
+	CHECK(crossing.count == 0);  // Immediate growth of old providers overlaps: merge.
 	CHECK(reason == CharacterMultiRoiReason::StableRegionsOverlap);
 	const auto afterCross = Resolve(crossed, 802, state, reason);
 	CHECK(afterCross.count == 2 && Safe(afterCross, crossed));

@@ -3769,8 +3769,7 @@ namespace
 
 	NeuralRendering::CharacterMaskPrepareArgs BuildCharacterMaskPrepareArgs(
 		const Upscaling::Settings& a_settings, std::uint32_t a_eyeIndex,
-		std::uint32_t a_sourceWorldFrame, const NeuralRendering::RendererApplyArgs& a_args,
-		bool a_deferReadback)
+		std::uint32_t a_sourceWorldFrame, const NeuralRendering::RendererApplyArgs& a_args)
 	{
 		return {
 			.device = a_args.device,
@@ -3785,7 +3784,6 @@ namespace
 			.outputHeight = a_args.outputHeight,
 			.viewportCrop = a_args.viewportCrop,
 			.settings = BuildCharacterSettings(a_settings, a_sourceWorldFrame),
-			.deferMaskRoiReadback = a_deferReadback,
 		};
 	}
 
@@ -3794,8 +3792,7 @@ namespace
 		std::uint32_t a_eyeIndex,
 		std::uint32_t a_sourceWorldFrame,
 		bool& a_requiresEvaluation,
-		NeuralRendering::RendererApplyArgs& a_args,
-		bool a_deferReadback = false) noexcept
+		NeuralRendering::RendererApplyArgs& a_args) noexcept
 	{
 		a_requiresEvaluation = true;
 		a_args.controlMask = nullptr;
@@ -3818,7 +3815,7 @@ namespace
 			return false;
 		NeuralRendering::CharacterMaskPrepareResult result{};
 		const auto prepareArgs = BuildCharacterMaskPrepareArgs(
-			a_settings, a_eyeIndex, a_sourceWorldFrame, a_args, a_deferReadback);
+			a_settings, a_eyeIndex, a_sourceWorldFrame, a_args);
 		if (!NeuralRendering::CharacterRendering::Instance().PrepareMask(
 				prepareArgs, result) ||
 			!result.prepared) {
@@ -15233,17 +15230,17 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 							&settings.neuralCharacterMultiRoiEnabled);
 						if (auto _tt = Util::HoverTooltipWrapper()) {
 							ImGui::TextUnformatted(
-								"Uses at most two persistent Feature 18 regions per eye, tightened around spatial clusters of the resolved visible face/skin/hair mask.");
+								"Uses at most two persistent Feature 18 regions per eye, covering current-frame projected face/skin/hair geometry.");
 							ImGui::TextUnformatted(
-								"Both eye reductions are queued before one flush and share a bounded 50 ms GPU-readiness deadline. Unavailable evidence conservatively uses projected geometry bounds; stale mask evidence is never accepted.");
+								"ROI planning never waits for GPU mask readback. Every current eligible geometry bound must remain covered; delayed mask diagnostics cannot exclude new pixels.");
 							ImGui::TextUnformatted(
-								"Nonempty tightening starts after 3 fresh validated frames. A readback failure keeps the conservative plan and backs off for 30 evaluation frames; fresh empty masks may bypass immediately.");
+								"A split must save a 65,536-pixel reserve for its extra invocation plus 25% of the single-region area (20% to retain a split). This is a cost heuristic, not a measured GPU break-even.");
 							ImGui::TextUnformatted(
-								"Nearby or overlapping clusters use one enclosing region. Turning this off restores geometry-based ROI planning; exact face/skin/hair compositing is unchanged.");
+								"Nearby, overlapping or insufficiently separated clusters use one enclosing region. Exact face/skin/hair compositing is unchanged.");
 							ImGui::TextUnformatted(
 								"Experimental, off by default: extra instances increase VRAM; GPU savings and image stability need in-game validation.");
 							ImGui::TextUnformatted(
-								"This is not native sparse-ROI support. Compare summed planned pixels, not the enclosing rectangle, and include readback cost when measuring performance.");
+								"This is not native sparse-ROI support. Compare summed planned pixels, not the enclosing rectangle, and measure complete-frame time as well as NR GPU time.");
 							ImGui::TextUnformatted(
 								"Split regions use one atomic batch even with Sequential Stereo selected. Turning this off retires the extra runtime instances.");
 							ImGui::TextUnformatted(
@@ -27130,7 +27127,7 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 			bool characterEvaluationRequired = true;
 			if (!PrepareCharacterSelectionMask(
 					settings, eyeIndex, neuralSourceFrame,
-					characterEvaluationRequired, args, neuralBatchArgs != nullptr)) {
+					characterEvaluationRequired, args)) {
 				return false;
 			}
 			if (characterEvaluationRequired && !args.computeSubrect.IsValid()) {
@@ -27573,7 +27570,7 @@ namespace
 			std::array<NeuralRendering::CharacterMaskPrepareResult, 2> maskResults{};
 			for (std::uint32_t eye = 0; eye < prepareArgs.size(); ++eye)
 				prepareArgs[eye] = BuildCharacterMaskPrepareArgs(a_upscaling.settings, eye,
-					a_batchArgs[eye].sourceWorldFrame, a_batchArgs[eye], true);
+					a_batchArgs[eye].sourceWorldFrame, a_batchArgs[eye]);
 			if (!NeuralRendering::CharacterRendering::Instance().FinalizePreparedMasks(prepareArgs, maskResults))
 				return false;
 			for (std::uint32_t eye = 0; eye < maskResults.size(); ++eye) {
@@ -27582,9 +27579,8 @@ namespace
 				a_results[eye].bypassed = !maskResults[eye].requiresEvaluation;
 			}
 		}
-		// Staging uses conservative plans. Wait until both current masks are
-		// finalized before converting the exact region that inference will read.
-		// Final-LDR conversion is performed by its caller after rollback setup.
+		// Validate both eye plans before converting the regions inference will read.
+		// Final-LDR conversion follows rollback setup in its caller.
 		for (std::uint32_t eye = 0; eye < a_batchArgs.size(); ++eye) {
 			const auto& args = a_batchArgs[eye];
 			if (a_results[eye].bypassed || args.insertionPoint != NeuralRendering::InsertionPoint::UpscaledCenter)
@@ -28087,7 +28083,7 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 			bool characterEvaluationRequired = true;
 			if (!PrepareCharacterSelectionMask(
 					settings, eye, a_neuralSourceFrame,
-					characterEvaluationRequired, args, true)) {
+					characterEvaluationRequired, args)) {
 				return false;
 			}
 			if (characterEvaluationRequired && !args.computeSubrect.IsValid()) {

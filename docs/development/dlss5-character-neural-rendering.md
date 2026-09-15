@@ -21,17 +21,17 @@ the character category attachment or invoke this selective-NR route.
 The feature is split along the runtime contracts that must remain independently
 testable:
 
-| Concern                       | Owner                                                   | Contract                                                                                                                         |
+| Concern                       | Owner                                                   | Contract                                                                                                                                           |
 | ----------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Capability and initialization | `NeuralRendering::Runtime` and `Renderer`               | Admit 310.8 Feature 18 runtimes independently of logging/developer mode, report identity, and fail closed on invalid resources.  |
+| Capability and initialization | `NeuralRendering::Runtime` and `Renderer`               | Admit 310.8 Feature 18 runtimes independently of logging/developer mode, report identity, and fail closed on invalid resources.                    |
 | Character classification      | the core lighting hook and `CharacterCategoryAuthoring` | Classify actor-owned face, RGB-tint skin, and hair materials without treating generic skinned geometry as skin.                                    |
-| Semantic mask                 | `CharacterRendering` and `DLSS5CharacterMaskCS.hlsl`    | Resolve synchronized category and depth provenance into a dedicated per-eye `R8_UNORM` CSX selection texture.                    |
-| Per-eye resources             | `CharacterRendering` and `Renderer` feature slots       | Keep mask, provider resources, history, and statistics separate for each eye and insertion route.                                |
-| Feature 18 evaluation         | `Renderer` and `Runtime`                                | Bind color, depth, motion vectors, and output through the known-working automatic-mask invocation in one stereo transaction.     |
+| Semantic mask                 | `CharacterRendering` and `DLSS5CharacterMaskCS.hlsl`    | Resolve synchronized category and depth provenance into a dedicated per-eye `R8_UNORM` CSX selection texture.                                      |
+| Per-eye resources             | `CharacterRendering` and `Renderer` feature slots       | Keep mask, provider resources, history, and statistics separate for each eye and insertion route.                                                  |
+| Feature 18 evaluation         | `Renderer` and `Runtime`                                | Bind color, depth, motion vectors, and output through the known-working automatic-mask invocation in one stereo transaction.                       |
 | Compute ROI policy            | `CharacterRendering`, `Renderer`, and `Runtime`         | Select current per-eye actor bounds, union them into one guarded provider rectangle, and map it across color, depth, motion, and output resources. |
-| Composite and output          | Gogh route integration and `FoveatedCenterBlendCS.hlsl` | Select untouched DLSS outside the mask and Neural Rendering inside it before the existing feathered center composite.            |
-| UI and settings               | Upscaling settings UI                                   | Centralize category, strength, eligibility, mask-calibration, and debug controls.                                                |
-| Diagnostics and profiling     | DevBench bridge and CSX GPU profiler                    | Report per-eye coverage/regions/evaluation dimensions and separate capture, mask, evaluation, and composite costs.               |
+| Composite and output          | Gogh route integration and `FoveatedCenterBlendCS.hlsl` | Select untouched DLSS outside the mask and Neural Rendering inside it before the existing feathered center composite.                              |
+| UI and settings               | Upscaling settings UI                                   | Centralize category, strength, eligibility, mask-calibration, and debug controls.                                                                  |
+| Diagnostics and profiling     | DevBench bridge and CSX GPU profiler                    | Report per-eye coverage/regions/evaluation dimensions and separate capture, mask, evaluation, and composite costs.                                 |
 
 The architectural boundary is intentional: the unpublished provider
 `ControlMask` contract is not used. Deterministic CSX output compositing does
@@ -200,7 +200,7 @@ production capability.
 
 Location: **Upscaling > NVIDIA DLSS Neural Rendering > Character Selection >
 Character Rendering Advanced > Experimental Multi-ROI**. It is off by default
-and persisted as `neuralCharacterMultiRoiEnabled`. It requires Character NR and
+and session-only as `neuralCharacterMultiRoiEnabled`. It requires Character NR and
 Deterministic Mask Composite; it never binds the private NVIDIA `ControlMask` ABI.
 
 The saved September 5 live-module image was re-examined in Ghidra on September 8.
@@ -237,9 +237,11 @@ the experiment off performs the bounded backend retirement/reset even when the
 master or Character NR switch is already off. This can briefly interrupt NR
 when changing the option; it is not tied to ordinary menu open/close events.
 
-The planner enters a split only when its padded regions save at least 25% and
-65,536 pixels versus a fresh single-region enclosure; it retains the split down
-to 20% savings to reduce threshold oscillation. This is a conservative heuristic,
+The planner charges a 65,536-pixel reserve for the additional invocation, then
+requires net savings of at least 25% of a fresh single-region enclosure; it
+retains the split down to 20% net savings to reduce threshold oscillation.
+The reserve is additive, so a marginal area saving alone cannot admit a split.
+This is a conservative area cost heuristic,
 **not measured GPU break-even**. Additional weight heaps, scratch, padding, input preparation and
 evaluation overhead may outweigh the skipped gap. Qualification must compare
 complete-frame and aggregate Feature 18 GPU time, VRAM, and temporal image quality
@@ -381,9 +383,9 @@ Character category IDs are authored while the existing deferred geometry is
 drawn. In VR, `MASKS2` uses `R16G16_UNORM` to preserve the original
 16-bit inverse vertex AO precision alongside the category lane:
 
-| Channel | Meaning                                                                                         |
-| ------- | ----------------------------------------------------------------------------------------------- |
-| `x`     | inverse vertex AO at 16-bit UNORM precision                                                       |
+| Channel | Meaning                                                                                             |
+| ------- | --------------------------------------------------------------------------------------------------- |
+| `x`     | inverse vertex AO at 16-bit UNORM precision                                                         |
 | `y`     | normalized category code: none=`0`, excluded actor=`1/255`, face=`85/255`, skin=`170/255`, hair=`1` |
 
 All five normalized codes remain exactly representable in the 16-bit lane.
@@ -604,27 +606,27 @@ rectangle never overrides those gates.
 The character feature is disabled by default and lives under the existing
 Neural Rendering controls. Its central defaults are:
 
-| Setting                      | Default      |
+| Setting                      | Default                                     |
 | ---------------------------- | ------------------------------------------- |
-| Deterministic mask composite | On           |
-| Faces                        | On           |
-| Skin                         | On           |
-| Hair                         | Off          |
-| Face strength                | `1.0`        |
-| Skin strength                | `1.0`        |
-| Hair strength                | `0.65`       |
-| NR distance cull             | `10.0 m` (`0` disables, range `0..30 m`) |
-| Adaptive ROI performance     | Off          |
+| Deterministic mask composite | On                                          |
+| Faces                        | On                                          |
+| Skin                         | On                                          |
+| Hair                         | Off                                         |
+| Face strength                | `1.0`                                       |
+| Skin strength                | `1.0`                                       |
+| Hair strength                | `0.65`                                      |
+| NR distance cull             | `10.0 m` (`0` disables, range `0..30 m`)    |
+| Adaptive ROI performance     | Off                                         |
 | Experimental Multi-ROI       | Off; at most two persistent regions per eye |
-| Minimum projected size       | `64 px`      |
-| Rectangle margin             | `25%`        |
-| Rectangle hold               | `3 frames`   |
-| Compute ROI                  | Dynamic one-rectangle per eye |
-| Visibility depth test        | On           |
-| Depth-aware feather          | Off          |
-| Feather radius               | `1 input px` |
-| Relative depth threshold     | `0.002`      |
-| Debug view                   | Off          |
+| Minimum projected size       | `64 px`                                     |
+| Rectangle margin             | `25%`                                       |
+| Rectangle hold               | `3 frames`                                  |
+| Compute ROI                  | Dynamic one-rectangle per eye               |
+| Visibility depth test        | On                                          |
+| Depth-aware feather          | Off                                         |
+| Feather radius               | `1 input px`                                |
+| Relative depth threshold     | `0.002`                                     |
+| Debug view                   | Off                                         |
 
 Skyrim world units are converted with the repository's established game-unit
 conversion before applying the distance limit. The same limit is also applied
@@ -812,95 +814,53 @@ called visually correct:
 5. CSX composite response to the `R8_UNORM` `0..1` selection mask;
 6. GPU cost versus evaluation dimensions, mask coverage, and actor count.
 
-## Current prepared-mask ROI tightening experiment
+## Nonblocking geometry ROI planning
 
-The existing **Experimental Multi-ROI** toggle now also enables a current-mask
-spatial reduction before selecting one or two dense Feature 18 rectangles.
-No additional setting or default change is introduced. With
-`neuralCharacterMultiRoiEnabled=false`, the projected-geometry path described
-above is unchanged. This section supersedes the earlier actor-bound-only
-description for the enabled experiment; it does not extend the route to flat
-SE/AE, which still lacks the category/presentation integration described above.
+Experimental Multi-ROI builds up to two independent regions per eye from the
+current source frame's projected geometry. Every actor and every compacted
+eligibility rectangle must fit completely within one padded region. Uncertain
+projection, overlapping regions, a bridge between clusters, or insufficient
+net savings retains the conservative single enclosure. New actors and category
+expansion enter the plan immediately; delayed GPU evidence cannot narrow it.
+Two visible characters therefore do not guarantee two regions per eye.
 
-Geometry projection remains conservative authoring/eligibility support. After
-the exact selection mask is resolved, the experiment measures its occupied
-spatial tiles for the current prepared content. These tiles, rather than the
-entire skin/hair mesh bounding spheres plus actor margins, define the smaller
-required support. Spatial clustering can separate mask islands even when their
-original actor eligibility rectangles overlap. Two NPCs do not guarantee two
-provider evaluations: guarded clusters can overlap or offer insufficient area
-savings, in which case one enclosing rectangle remains appropriate. Provider
-context padding and temporal stability still apply; inference is not sparse
-within any retained rectangle, and mask occupancy is not equal to inference
-area.
+The render path issues no mask-bounds reduction, staging copy, completion fence,
+flush, or GPU-readiness polling. Exact GPU R8 mask authoring and compositing
+remain active. Optional coverage diagnostics retain their existing asynchronous
+ring and single nonblocking polls; they never select inference rectangles or
+suppress evaluation. Only current CPU-proven empty eyes bypass Feature 18.
+Retained-world menus continue to use the explicitly identified immutable source
+frame. Stereo finalization validates source, policy, generation, dimensions and
+depth identity for the entire batch before publishing either result.
 
-Reading the spatial evidence is explicitly an experiment with CPU/GPU
-synchronization cost. Stereo preparation queues both exact eye masks, bounds
-reductions, staging copies and completion queries before **one flush and one
-shared 50 ms current-frame readiness deadline**. It does not spend the first
-eye's wait before even submitting the second eye. Standalone single-eye callers
-use the same bounded resolve. Mapping stays nonblocking
-(`D3D11_MAP_FLAG_DO_NOT_WAIT`), and long waits yield the CPU rather than busy-spin.
-The deadline bounds intentional waiting, not total frame time or arbitrary
-driver-call latency. If evidence is unavailable or invalid, the conservative
-CPU geometry plan remains available. Copy/content identity is checked before
-consumption; previous-frame evidence never narrows a current mask. Both eyes
-are probed even if one used the deadline, so already-ready evidence is usable.
+This removes a measured synchronization cost at the expense of potentially
+larger rectangles than a current GPU-mask reduction could produce. The previous
+build 6b23081aa recorded mean summed per-eye waits of 10.169 ms for faces and
+11.636 ms for face/skin/hair in a fresh-load null-driver comparison. Those are
+old-build observations, not a prediction of frame-time savings: geometry can
+increase inference area or merge regions. See the implementation report
+`nr-nonblocking-roi-20260915.md` for evidence and the required live comparison.
+The standalone mask-bounds shader/readback tests remain reference diagnostics;
+the game does not invoke that path. This does not extend character NR to the
+unsupported flat SE/AE category/presentation routes described above.
 
-The previous 2 ms polling allowance could be exhausted by queued world rendering
-and earlier NR work, not by the tiny bounds copy itself. In the September 9 live
-test it produced zero successful readbacks (161 attempts per eye), perpetually
-retaining the 45.6% conservative enclosure. The corrected deadline is a bounded
-synchronization policy, **not a claim of net performance improvement**. Whole-frame
-qualification must include the CPU/GPU scheduling cost, not just fewer NR pixels.
+DevBench keeps existing field names for compatibility:
 
-To avoid switching between tight and conservative rectangles on alternating
-readback successes/timeouts, each slot requires **3 distinct forward fresh valid
-bounds frames** before applying a tighter nonempty ROI. Skipped renderer IDs
-without a failed read do not restart warmup; duplicates cannot advance it, and
-backward epochs cannot inherit admission. During this admission
-warmup, `maskRoiStatus=current_bounds_warmup` and the conservative CPU plan stays
-in use. A failed or unavailable readback, exhausted budget, resource failure,
-or invalid spatial result resets admission and starts a **30-evaluation-frame
-retry backoff**. During `maskRoiStatus=readback_retry_backoff`, no new readback is
-attempted and the conservative CPU plan remains authoritative. These are fixed
-experimental safeguards, not additional user settings; they reduce deadline
-oscillation, but do not establish flicker-free in-game output.
+-   `maskRoiStatus`: `cpu_projected_split`, `cpu_projected_single`,
+    `cpu_proven_empty`, or `disabled`; `multiRoiReason` explains the decision.
+-   `maskRoiPlanningCpuMs`: CPU geometry planning time, without GPU waiting.
+-   `maskRoiCurrentFrame` and `maskRoiGpuProvenEmpty`: false. They describe
+    current-mask GPU evidence, which this planner does not collect.
+-   `maskRoiReadbackWaitMs`, `maskRoiReadbackFenceValue`, `maskRoiOccupiedTiles`
+    and the three readback counters: zero; `maskRoiRequiredSubrect` is invalid.
+-   Legacy failure fields remain empty/zero with a null failure frame.
+-   The compute-ROI capability reports `planningRequiresGpuReadback=false`,
+    its geometry source, and the extra-invocation pixel reserve. The reserve is
+    a heuristic, not an estimated number of GPU microseconds.
 
-Fresh GPU evidence that the current prepared mask is entirely empty can bypass
-Feature 18 immediately for that exact content only, without waiting for the
-three-frame nonempty admission. This is separate from the delayed
-coverage-diagnostic readbacks: those remain informational and cannot suppress
-current evaluation. Prepared-content identity includes the source world frame,
-resource generation, dimensions, and content serial, including retained-world
-menu reuse. Debug/forced-mask modes retain their conservative diagnostic route.
-
-DevBench adds these fields directly under `runtime.eyes[]`:
-
-- `maskRoiStatus`: reduction/readback outcome, separate from the split decision.
-- `maskRoiCurrentFrame`: evidence belongs to this prepared content, not a delayed
-  coverage sample.
-- `maskRoiGpuProvenEmpty`: current-content GPU proof of an empty selection.
-- `maskRoiOccupiedTiles`: occupied spatial tiles, not selected pixel count.
-- `maskRoiRequiredSubrect`: the measured output-local required enclosure before
-  provider context/stability padding; `valid=false` for no valid rectangle.
-- `maskRoiReadbackWaitMs`: CPU readback/polling time, not Feature 18 GPU time.
-- `maskRoiLastFailure`, `maskRoiLastFailureResult`, `maskRoiLastFailureFrame`,
-  `maskRoiLastFailureWaitMs`: retained original failure, signed HRESULT, frame
-  and wait duration. These remain visible during backoff and subsequent success;
-  they describe the last failure, not necessarily the current frame's state.
-- `maskRoiReadbackAttempts`, `maskRoiReadbackSuccesses`, and
-  `maskRoiReadbackFallbacks`: slot-resource-lifetime counters; recreation/reset
-  begins a new lifetime. A readback success is not an NR evaluation success.
-
-`computeSubrectPixels` and `computeSubrectCoveragePercent` continue to describe
-the outer enclosure needed by composition. For a split, use **`multiRoiPixels`
-and `multiRoiCoveragePercent`**, which sum the separately evaluated rectangles,
-plus the actual region count and Feature 18 disposition. Do not mistake a
-successful tighter single region for a successful two-region split.
-
-This adds no native NVIDIA ROI-list contract and makes no promise of improved
-frame time. Validation must compare total frame cost, Feature 18 GPU cost,
-readback cost/fallback rate, VRAM, and temporal image quality with an unchanged
-scene and settings. Static support tests and compilation are not substitutes
-for in-game motion, split/merge, menu, eye-alignment, and insertion-route tests.
+For a split, `computeSubrectPixels` describes the outer enclosure, while
+`multiRoiPixels` and `multiRoiCoveragePercent` sum the evaluated rectangles.
+Mask occupancy is separate from inference area. Compare complete-frame time,
+aggregate Feature 18 GPU time, region count, VRAM and temporal image quality
+with the same scene/settings. No performance or headset-presentation pass is
+implied by compilation or standalone policy/GPU tests.

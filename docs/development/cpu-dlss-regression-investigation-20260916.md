@@ -1,5 +1,12 @@
 # CPU / DLSS regression investigation — 2026-09-16
 
+For the current cross-machine summary, read the
+[review handover](cpu-dlss-regression-handover-20260916.md). The sections
+below retain their original investigation chronology. The partial PR93
+reversal removed the large locking regression; the native stereo-hook fix
+corrected a bug without a demonstrated save-13 performance gain. Subsequent
+telemetry gating is committed and code-validated, but not benchmarked.
+
 Initial evidence and investigation plan only. No implementation, benchmark,
 build, deployment or settings change is part of this investigation.
 
@@ -589,4 +596,214 @@ before the subsequently authorized documentation commit:
 
 ```text
 ?? docs/development/cpu-dlss-regression-investigation-20260916.md
+```
+
+## Matched trace follow-up — 2026-09-16
+
+This section supplements the original investigation above. Historical
+measurements and their receipts remain unchanged. The analysis branch
+remains `perf/cpu-dlss-regression-20260916`, based on documentation commit
+`da783bd0a9e55b7e55210288f4301bba6837dc0c`. No production source, defaults,
+presets, rendering settings, saved measurement windows or protocol changed.
+No build, deployment, commit or push was performed for this follow-up.
+
+The immutable local outputs are in
+[cpu-dlss-cross-build-differential-20260916](../../build/bisect/measurements/cpu-dlss-cross-build-differential-20260916/analysis-report.md).
+Read the [full per-save comparison](../../build/bisect/measurements/cpu-dlss-cross-build-differential-20260916/per-save-cross-build.csv),
+[every CPU slow group](../../build/bisect/measurements/cpu-dlss-cross-build-differential-20260916/slow-group-attribution.csv),
+[thread running/ready/wait analysis](../../build/bisect/measurements/cpu-dlss-cross-build-differential-20260916/ready-wait-analysis.csv),
+[identity and clock evidence](../../build/bisect/measurements/cpu-dlss-cross-build-differential-20260916/evidence-verification.json),
+[validation receipt](../../build/bisect/measurements/cpu-dlss-cross-build-differential-20260916/validation.json)
+and [output hashes](../../build/bisect/measurements/cpu-dlss-cross-build-differential-20260916/output-manifest.json).
+These local artifacts are not versioned raw evidence.
+
+### Original trace gap and separate clean repeat
+
+The user deleted the original partial-reversal ETL, sampled/precise exports
+and raw fpsVR data. Their retained aggregate receipts remain usable only
+for the values they actually contain. New stack categories, private
+addresses and per-group attribution for that original run are unavailable,
+not zero. Original partial save 11 retains both its terminal incomplete
+stereo failure and 10,005.4254 ms reconstructed in a 10,000 ms window,
+exceeding the saved 5 ms tolerance by 0.4254 ms.
+
+The separate clean repeat is
+[gameft-sw-20260916T075210921Z-74778e53](../../build/bisect/measurements/gameft-sw-20260916T075210921Z-74778e53/provenance.json).
+Its source is `5614c45180096acf6edde0d2b972a27d6a56a91a`, Build ID
+`c2b3b90877a88ec2a4a0fb1251f5e70c6d3c4686cfb6cd39d9dbf831dbfaf281`,
+and DLL SHA-256
+`E2B89B03881C8AFA6B90F0F316B3B8C45F79FD677A61C8F5C013843F196358B4`.
+Benchmark PID 19804 and process-start ticks 639251418512056706 are retained.
+Its verified ETL SHA-256 is
+`F1CF37F7B662948FC1660CEBDAAE3C45395DB7BD7EF9B9BB6D932E77594605B7`.
+All six terminal health results and rendering-thread accounting checks pass.
+This repeat does not replace or repair the deleted original measurement.
+
+The earlier attempt `gameft-sw-20260916T074003659Z-81d118ac` overlapped
+offline export/analysis activity and is excluded from clean comparisons.
+The pause/interference records are preserved in the evidence verification.
+Owned analysis work was stopped before the clean repeat and resumed only
+after the user confirmed its completion.
+
+Exact saved final-ten-second CPU means, milliseconds:
+
+| Save / mode | Baseline | Original partial | Clean partial repeat | Latest hook | Latest minus baseline |
+| ----------- | -------: | ---------------: | -------------------: | ----------: | --------------------: |
+| 08 / DLAA   |    4.664 |            5.150 |                6.047 |       6.544 |                +1.880 |
+| 09 / DLAA   |    3.602 |            5.506 |                5.536 |       4.511 |                +0.909 |
+| 10 / DLAA   |    2.937 |            3.380 |                3.350 |       3.515 |                +0.578 |
+| 11 / DLSS   |    7.784 |          8.304\* |                7.884 |       8.192 |                +0.407 |
+| 12 / DLSS   |    6.854 |            7.093 |                7.607 |       7.328 |                +0.474 |
+| 13 / DLSS   |    8.675 |           15.826 |               13.449 |      13.480 |                +4.805 |
+
+`*` Original partial save 11 carries both warnings described above. Exact
+GPU means, P95/P99, spikes, groups and all six comparison directions are
+preserved in the complete CSV. No game-ft results are pooled with these
+gameft-sw values; the different saves are not interchangeable replicates.
+
+**The apparent 2.346 ms save-13 improvement from the hook correction is
+not repeatably established.** The unchanged partial DLL improves by
+2.377 ms in its repeat and is only 0.031 ms below latest. Both corrected
+builds still show the large baseline residual. This does not invalidate
+the ownership correction or establish its exact performance effect.
+
+### Execution attribution and live native snapshot
+
+Save 13 primarily executes more work: latest versus baseline rendering
+thread time per recorded frame changes by +1.7361 ms running,
+-0.0034 ms ready and -1.1293 ms waiting. These scheduler quantities are
+distinct from fpsVR CPU latency and cannot arithmetically decompose it.
+Native Skyrim leaf execution increases by about 1.3863 sampled ms/frame.
+Sustained presentation-mutex contention, scheduler ready delay and named
+Streamline/NGX CPU work are demoted as the main explanation of that residual.
+
+Material admission remains a worthwhile smaller optimisation target at
+about 0.03–0.13 sampled ms/frame. It is too small to explain the full
+residual, not too small to improve safely. The baseline lacks the same
+guard, so its equivalent-safety cost is unmeasured. Named light retention
+is roughly 0.014–0.022 ms/frame in latest; reference/lock inlining and the
+absence of the same baseline ownership path prevent a complete cost claim.
+No removal of either protection is justified.
+
+At the user's request, a new main-menu process, PID 21340, supplied live
+code bytes from the same partial-reversal Build ID. This is not benchmark
+PID 19804 or a dump of save-13 objects. Each captured code range was read
+twice with identical hashes. No static disk executable was imported.
+The reusable Ghidra project and snapshots are preserved at:
+
+```text
+D:\Coding\GitHub\GhidraProjects\CPU-DLSS-20260916-pid21340\NativeCPUHotRanges.gpr
+```
+
+Keep its `.gpr`, `.rep`, snapshots and metadata together. This is a
+targeted code snapshot with PE header and complete unwind directory, not
+a full-process dump. The [live-code evidence](../../build/bisect/measurements/cpu-dlss-cross-build-differential-20260916/native-live-evidence.json)
+and [sampled region weights](../../build/bisect/measurements/cpu-dlss-cross-build-differential-20260916/native-live-regions.csv)
+retain every matched caller stack and capture hash.
+
+Live RVA `0xDA54B0` performs six-plane bounding-sphere tests;
+`0xDA33C0` traverses compound-frustum operators. This semantic inference
+matches existing CommonLib layouts and live instructions, not private
+Skyrim symbols. Save 13 contributes respectively 0.5052 and 0.1214
+sampled ms/frame in latest, versus 0.5193 and 0.1169 in the clean partial
+repeat. No samples matched those exact ranges in baseline. The routines
+are disjoint, but zero matches are not proof of zero execution.
+
+Some parent stacks contain the native depth-render chain wrapped by
+VolumetricLighting and TerrainBlending. Many are incomplete. A wrapper's
+presence does not establish that feature as the cause. Nearby hot native
+code performs job dispatch and cooperative wait/help operations; its CPU
+samples remain executing work, not kernel blocked time.
+
+### Three-mode depth-culling control
+
+The user identified Legacy, Performance and Balanced as an additional
+candidate. All retained before/after settings select **Balanced**, with
+both culling preferences enabled and minimum occludee extent 10.
+The [settings evidence](../../build/bisect/measurements/cpu-dlss-cross-build-differential-20260916/depth-culling-settings.json)
+does not establish per-save effective activation or promotion counts.
+Those counters were not retained by these captures.
+
+Bounded recovery and Legacy were added on 2026-08-26, before baseline.
+Their policy and activation headers are unchanged between the compared
+sources. PR69 (`1afb9eca9c89814d794dae4d18eb1626aafd1209`) adds recovery
+telemetry. The current recovery scope has no DevBench compile guard;
+its timing/counter writer defaults enabled on motion-envelope misses.
+That existing production-cost path remains a separate measurement target.
+No instrumentation or source correction was made in this analysis.
+
+The [identically filtered temporal samples](../../build/bisect/measurements/cpu-dlss-cross-build-differential-20260916/depth-culling-sampled.csv)
+show no broad direct increase; latest save 13 has only three samples,
+about 0.0052 ms/frame. This does not bound downstream work: Balanced can
+promote up to 64 objects whose subsequent culling/rendering costs occur
+outside the recovery hook. A later render-scale interaction remains
+possible, but the native hotspot alone does not prove that relationship.
+
+The next one-variable sequence should use the exact latest DLL and vendor
+bundle with unchanged gameft-sw, save order `08, 11, 09, 12, 10, 13`:
+repeat Balanced, measure Performance, then repeat Balanced. Keep all
+other settings and telemetry state fixed. Record existing menu status
+and recovery counters outside measured holds; add no in-hold polling or
+window changes. Compare each save separately with health and visual
+artifacts retained. No new build is needed. A separate Balanced telemetry
+on/off pair can isolate PR69 observer cost; Performance versus Legacy
+can subsequently isolate producer-pose work. These are proposed controls,
+not a default change or an acceptable missing-geometry tradeoff.
+
+### Validation and remaining limits
+
+The immutable output audit passed: 558 comparison rows and six delta
+directions, 1,863 exact CPU slow groups, 2,899 thread/window rows and
+106,293 unresolved-symbol/address rows. All 24 windows remain exactly
+`[50,60)`. Selected live instruction samples matched original stack rows
+by timestamp, thread, count and weight. Retained receipt/raw fpsVR hashes
+match; system ready-interval coverage matches render-only exports.
+The original partial missing-data and save-11 warnings remain explicit.
+
+The original core extractions used `analyze(label, run)` from the saved
+`cross-build-differential-20260916.py` helper. The fresh repeat used an
+isolated derived run so its original receipts remained unchanged.
+Additional offline analysis and validation commands:
+
+```powershell
+python build/cpu-burst-diagnostics/cross-build-scheduler-20260916.py baseline
+python build/cpu-burst-diagnostics/cross-build-scheduler-20260916.py latest
+python build/cpu-burst-diagnostics/cross-build-scheduler-20260916.py repeat
+python build/cpu-burst-diagnostics/cross-build-addresses-20260916.py baseline
+python build/cpu-burst-diagnostics/cross-build-addresses-20260916.py latest
+python build/cpu-burst-diagnostics/cross-build-addresses-20260916.py repeat
+python build/cpu-burst-diagnostics/analyze-live-native-hotspots-20260916.py
+python build/cpu-burst-diagnostics/analyze-depth-culling-20260916.py
+python build/cpu-burst-diagnostics/write-cross-build-report-20260916.py
+python build/cpu-burst-diagnostics/finalize-cross-build-report-20260916.py
+```
+
+Export profiles/results and the isolated repeat-derived analysis remain
+in the local scratch evidence. Scripts refuse to overwrite finalized
+outputs; commands document execution, not an instruction to replay them
+against the same destination. No controller, shader or runtime tests
+were run because no production code changed.
+
+Remaining limits include deleted original partial raw data; incomplete
+private/inlined symbols and caller stacks; no historical live-byte or
+argument capture; sampling quantization and unequal frame counts; single
+baseline/latest observations; uncertain additional fpsVR-to-ETW latency
+and unavailable raw ETL header QPC; singleton groups without elapsed
+intervals; endpoint-only settings/health/observer evidence; incomplete
+recovery counters; scheduler concurrency without causal ownership; CPU
+traces without GPU packet attribution; vendor-version differences; and
+uncontrolled pose, scene, thermal and external-process variation.
+The report details each limitation. Current evidence prioritizes culling
+controls and safe material-admission investigation, but does not yet
+justify an implementation intended to remove the main regression.
+
+Final scoped documentation validation passed using
+`pwsh ./tools/pre-commit.ps1 run --files docs/development/cpu-dlss-regression-investigation-20260916.md`
+and `pwsh ./tools/git.ps1 diff --check`. Prettier formatted the appended
+section on its first pass; the second pass passed. No historical lines
+were changed. YAML, clang-format and gersemi had no applicable files.
+Final working-tree status contains only this uncommitted Markdown change:
+
+```text
+ M docs/development/cpu-dlss-regression-investigation-20260916.md
 ```

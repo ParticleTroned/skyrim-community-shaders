@@ -2,6 +2,14 @@
 
 Repository: `ParticleTroned/skyrim-community-shaders`
 
+The subsequent [eight-run depth-culling comparison](depth-culling-comparison-20260916/README.md)
+adds complete portable timing, health, WPR, settings and provenance records
+for the exact 503fbfc build. Its Balanced 1 reference is internal to that
+campaign; the historical baseline below remains unchanged. It also refines
+the native-frustum interpretation: increased rendering-thread samples do
+not necessarily mean increased all-thread work. The sections below retain
+the earlier cross-build findings and their distinct build identities.
+
 Investigation branch: `perf/cpu-dlss-regression-20260916`
 
 This handover summarizes existing measurements and analysis. It records no

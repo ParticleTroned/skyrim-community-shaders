@@ -7,7 +7,8 @@ low-frequency estimate sampled every second pixel. Increasing detail
 strength could not recover that lost signal.
 
 This is a shader-level correction, not a demonstrated improvement to the
-captured faces. The updated shader has not been deployed or tested in Skyrim.
+captured faces. The corrected build has now been deployed and exercised in
+the [focused HMD strength comparison](nr-colour-detail-hmd-comparison-20260916.md).
 
 ## Saved-image evidence
 
@@ -80,7 +81,7 @@ protection, is preserved. The regression reuses the existing WARP fixture
 and colour conversion helpers; no parallel production filter was added.
 Nine taps is a scope fact, not a measured performance claim.
 
-## Validation and next live comparison
+## Validation and live comparison
 
 Source checkout is `work/face-of-gogh-colour-managed-20260914`, starting
 from `fd6afdec41c21cd5d600ba2bf029b1509c878e62`. Local evidence is under
@@ -97,18 +98,15 @@ from `fd6afdec41c21cd5d600ba2bf029b1509c878e62`. Local evidence is under
 -   Existing HLSL X3571 and X4000 warnings remain in the saved compiler output.
     No warning-free compilation or live NGX/NVIDIA validation is claimed.
 
-The next live comparison is Preserve Source at detail strengths 0, 1 and
-2, appearance mix zero and maximum detail stops one, plus an
-inference-running display-hidden control. Keep the user's FOV 0.95,
-foveated dispatch enabled, peripheral TAA off and existing DLSS. Acquire
-nearby controls in both orders and assess colour, coherent detail and
-artefacts separately against source variation. Strength two is an
-experiment, not a new default. Noise amplification is not a detail win.
+The completed focused comparison used Preserve Source at detail strengths
+0, 1 and 2, appearance mix zero and maximum detail stops one, plus
+inference-running display-hidden controls. It retained the user's FOV
+0.95, foveated dispatch, peripheral TAA off and existing DLSS. Thirteen
+sequences produced 156 attributed stereo pairs in forward/reverse order.
+See the [HMD report](nr-colour-detail-hmd-comparison-20260916.md) for image
+findings, physical DLL/shader identity, restoration and retained limits.
 
-No direct `mcp__devbench_vr__` actions were exposed in this session's
-complete callable catalogue. The assessment skill requires rechecking
-after a host reload rather than switching the established live transport.
-Consequently no fresh HMD capture or in-game setting mutation was attempted.
-The installed AIO still contains the original shader; its hash matched the
-pre-change source. Runtime DLL identity and settings restoration remain
-those of the earlier completed comparison, not new verification claims.
+The installed AIO now contains the corrected shader. A plugin refresh and
+full host reload exposed the exact typed NR actions; all live work used
+the direct MCP lane. Strength two remains an experiment, not a new default.
+An increase in edge contrast alone does not demonstrate useful detail.

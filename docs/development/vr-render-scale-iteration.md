@@ -13,6 +13,24 @@ implementation has no performance claim or runtime qualification result;
 new measurements must use the existing comparison ledger and reporting
 workflow.
 
+## September 16: eight-run depth-culling comparison
+
+The [complete culling handover](depth-culling-comparison-20260916/README.md)
+preserves eight same-build `gameft-sw` runs, 48 save holds, full CPU/GPU
+tables and deltas, WPR execution/wait/context findings, settings and exact
+503fbfc build provenance in immutable ledger `0004-investigation`.
+All 48 final lifecycle results succeeded; earlier producer gates and the
+uncertain Balanced 2 Save 13 interaction remain visible. This is diagnostic
+performance evidence, not physical-HMD visual qualification.
+
+Disabling culling raised GPU time and lowered recorded FPS in all six
+saves against the preceding Legacy run. Keep depth culling enabled;
+Balanced remains the practical default without a proven overall speed
+winner among the enabled policies. Native frustum work persists with depth
+culling off. Broader CPU noise and the separate DLSS GPU residual remain
+targets. Save 13 is one diagnostic case, not the sole optimization target.
+No runtime code or protocol changes accompany this publication.
+
 ## September 16: native submit boundary correction
 
 The [native submit ABI investigation](vr-submit-native-boundary.md) traces

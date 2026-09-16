@@ -1,5 +1,8 @@
 # QASmoke HMD baseline follow-up
 
+The later [brighter-scene comparison](nr-colour-brighter-comparison-20260916.md)
+records the user-authorized exploratory NR comparison beyond the strict gate.
+
 The QASmoke retry admitted all 36 native stereo pairs against the frozen
 camera and provenance checks. Its unchanged NR-off references still failed
 255 of 288 regional gradient comparisons. Mean face brightness varied by

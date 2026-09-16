@@ -157,6 +157,7 @@ namespace NeuralRendering::Color
 		}
 		auto& capture = ExposureCapture::Instance();
 		configuration_ = next;
+		captureEvidenceEnabled_.store(next.experiments.captureFrameEvidence, std::memory_order_release);
 		capture.Request(NeedsExposureCapture(next));  // Atomic request only, no engine/GPU work.
 		return true;
 	}

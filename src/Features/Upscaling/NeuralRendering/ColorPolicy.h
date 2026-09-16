@@ -73,6 +73,8 @@ namespace NeuralRendering::Color
 		bool transportBypass = false;
 		bool diagnostics = false;
 		bool captureEngineExposure = false;
+		// CPU submission provenance; does not enable colour passes or reset inference.
+		bool captureFrameEvidence = false;
 		// Unlike transportBypass, this keeps real inference running. It is a
 		// display comparison only and must not change the input-history epoch.
 		bool applyModelEdit = true;

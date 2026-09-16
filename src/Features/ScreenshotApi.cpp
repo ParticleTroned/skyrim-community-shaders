@@ -959,6 +959,7 @@ ScreenshotApi::json ScreenshotApi::BuildCapabilities(const ScreenshotFeature&) c
 		{ "pathPolicies", { "settings_default", "game_relative", "absolute" } },
 		{ "optional", {
 						  { "separateEyeArtifacts", true },
+						  { "nrCaptureEvidenceSchemaVersion", 1 },
 						  { "clipboardFileReference", true },
 						  { "previewVideo", { { "available", false }, { "encoders", json::array() }, { "runsAfterFrameFinalization", true } } },
 					  } },

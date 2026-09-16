@@ -8,6 +8,7 @@
 #include "Upscaling/FoveatedCenterAlignment.h"
 #include "Upscaling/FoveatedRegionPlan.h"
 #include "Upscaling/LumaSharpen/LumaSharpen.h"
+#include "Upscaling/NeuralRendering/CaptureEvidence.h"
 #include "Upscaling/NeuralRendering/CharacterRendering.h"
 #include "Upscaling/NeuralRendering/PipelinePolicy.h"
 #include "Upscaling/RCAS/RCAS.h"
@@ -18,6 +19,7 @@
 #include <directx/d3d12.h>
 #include <filesystem>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <openvr.h>
 #include <optional>
@@ -382,9 +384,37 @@ public:
 		bool reflexUseMarkersToOptimize = true;
 		bool reflexUseFPSLimit = false;
 		float reflexFPSLimit = 60.0f;
+		bool operator==(const Settings&) const = default;
 	};
 
 	Settings settings;
+	struct NeuralCaptureRecord
+	{
+		bool begun = false;
+		std::uint32_t frame = 0;
+		std::uint64_t cycle = 0;
+		std::uint64_t exposureEpoch = 0;
+		Settings settings{};
+		NeuralRendering::Color::Configuration color{};
+		NeuralRendering::CaptureInputs inputs{};
+		NeuralStereoRouteSnapshot route{};
+		bool inputsMatched = false;
+		bool settingsChanged = false;
+		std::uint32_t viewSourceFrame = 0;
+		std::array<std::array<float, 16>, 2> view{}, projection{};
+		std::array<std::array<float, 4>, 2> positionAdjust{};
+	};
+	struct VRRenderScalePresentationObservation;
+	/** Freeze the engine framebuffer camera when its mapped buffer is published. */
+	void RecordNeuralCaptureCamera(uint32_t a_frame) noexcept;
+	/** Frozen render/route values; never reconstruct applied state from current settings. */
+	nlohmann::json GetNeuralCaptureStatus() const;
+	/** Current requested values for guarded diagnostic configuration changes. */
+	nlohmann::json GetNeuralRequestedConfiguration() const;
+	std::string GetNeuralRequestedConfigurationFingerprint() const;
+	nlohmann::json CaptureNeuralSubmission(vr::EVREye a_eye, uint64_t a_cycle,
+		ID3D11Texture2D* a_texture, std::string_view a_path,
+		const VRRenderScalePresentationObservation* a_observation) const;
 
 	/** @brief One unconditional Interior or Exterior Community Shaders profile from VRFpsStabilizer.ini. */
 	struct VRFpsStabilizerProfile
@@ -929,6 +959,8 @@ public:
 
 	struct VRRenderScalePresentationObservation
 	{
+		std::shared_ptr<const NeuralCaptureRecord> neuralCapture;
+		std::uintptr_t neuralCaptureTexture = 0;
 		bool valid = false;
 		VRRenderScalePresentationPath path = VRRenderScalePresentationPath::Unknown;
 		uint32_t eyeIndex = 0;
@@ -2156,6 +2188,7 @@ public:
 		uint64_t menuLayerGeneration = 0;
 		uint32_t presentedEyeMask = 0;
 		NeuralStereoRouteSnapshot publishedRoute{};
+		std::shared_ptr<const NeuralCaptureRecord> publishedCapture;
 		std::array<VRRenderScalePresentationObservation, 2> publishedPresentationObservations{};
 		vr::EColorSpace publishedColorSpace = vr::ColorSpace_Auto;
 		D3D11_TEXTURE2D_DESC publishedSourceDesc{};
@@ -2565,6 +2598,14 @@ private:
 		kNeuralPassTelemetryFrameCount>
 		neuralPassTelemetryFrames;
 	mutable std::mutex neuralStereoRouteSnapshotMutex;
+	mutable std::mutex neuralCaptureMutex;
+	std::array<NeuralCaptureRecord, 2> neuralCaptureBeginnings{};
+	NeuralCaptureRecord neuralCaptureCamera{};
+	std::array<std::shared_ptr<const NeuralCaptureRecord>, 2> neuralCaptureRecords{};
+	void BeginNeuralCaptureFrame(NeuralStereoRouteRole a_role, uint32_t a_frame, uint64_t a_cycle = 0) noexcept;
+	void RecordNeuralCaptureRoute(const NeuralStereoRouteSnapshot& a_route) noexcept;
+	void PinNeuralCapturePresentation(VRRenderScalePresentationObservation& a_observation, ID3D11Texture2D* a_output) const noexcept;
+	static nlohmann::json SerializeNeuralCaptureRecord(const NeuralCaptureRecord& a_record);
 	NeuralSubmitCycleSnapshot latestNeuralSubmitCycleSnapshot{};
 	uint64_t neuralStereoRouteSnapshotSequence = 0;
 	std::array<NeuralStereoRouteSnapshot, 2> neuralStereoRouteSnapshots{

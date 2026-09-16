@@ -261,6 +261,8 @@ namespace globals
 			frameBufferCached.nonVR = *frameBuffer;
 		}
 		mappedFrameBuffer = nullptr;
+		if (game::isVR && state)
+			features::upscaling.RecordNeuralCaptureCamera(state->frameCount);
 	}
 
 	/**

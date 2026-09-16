@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <d3d11.h>
+#include <limits>
 #include <optional>
 #include <string>
 #include <wrl/client.h>
@@ -90,6 +91,99 @@ namespace NeuralRendering::Color
 		bool gammaKnown = false, readbackComplete = false;
 		const char* producer = "";  // Static producer label; no per-frame string allocation.
 	};
+	struct ExposureEvidenceLookup
+	{
+		ExposureStamp key{};
+		std::optional<ExposureEvidence> evidence;
+		const char* reason = "evidence_not_retained";
+	};
+	/** Bounded CPU history; the capture owner provides synchronization. */
+	class ExposureEvidenceHistory
+	{
+	public:
+		static constexpr std::size_t Capacity = 4096;
+		static bool SameKey(const ExposureStamp& left, const ExposureStamp& right)
+		{
+			return left.frame == right.frame && left.epoch == right.epoch && left.sequence == right.sequence;
+		}
+		void Record(const ExposureEvidence& evidence, const char* reason)
+		{
+			records_[evidence.stamp.sequence % Capacity] = { evidence, reason };
+		}
+		bool Complete(const ExposureEvidence& evidence, const char* reason)
+		{
+			auto& record = records_[evidence.stamp.sequence % Capacity];
+			if (!evidence.stamp.sequence || !SameKey(record.evidence.stamp, evidence.stamp) ||
+				!SameSource(record.evidence, evidence))
+				return false;
+			const bool ambiguous = record.evidence.stamp.ambiguous;
+			record = { evidence, reason };
+			record.evidence.stamp.ambiguous |= ambiguous;
+			return true;
+		}
+		void MarkAmbiguous(const ExposureStamp& key)
+		{
+			auto& record = records_[key.sequence % Capacity];
+			if (key.sequence && SameKey(record.evidence.stamp, key))
+				record.evidence.stamp.ambiguous = true;
+		}
+		ExposureEvidenceLookup Get(const ExposureStamp& key) const
+		{
+			ExposureEvidenceLookup result{ key };
+			if (!key.epoch || !key.sequence || key.frame == std::numeric_limits<std::uint32_t>::max()) {
+				result.reason = "invalid_evidence_key";
+				return result;
+			}
+			const auto& record = records_[key.sequence % Capacity];
+			if (!SameKey(record.evidence.stamp, key)) {
+				if (record.evidence.stamp.sequence > key.sequence)
+					result.reason = "evidence_retention_expired";
+				return result;
+			}
+			result.key = record.evidence.stamp;
+			result.evidence = record.evidence;
+			result.reason = record.evidence.stamp.ambiguous ? "ambiguous_source_frame" : record.reason;
+			return result;
+		}
+		ExposureEvidenceLookup GetSourceFrame(std::uint32_t frame, std::uint64_t epoch) const
+		{
+			ExposureEvidenceLookup result{ { frame, epoch, 0, false } };
+			if (!epoch || frame == std::numeric_limits<std::uint32_t>::max()) {
+				result.reason = "invalid_source_frame_key";
+				return result;
+			}
+			result.reason = "source_frame_not_retained";
+			for (const auto& record : records_) {
+				const auto& key = record.evidence.stamp;
+				if (!key.sequence || key.frame != frame || key.epoch != epoch)
+					continue;
+				if (result.evidence) {
+					result.evidence.reset();
+					result.key.sequence = 0;
+					result.reason = "multiple_source_frame_snapshots";
+					return result;
+				}
+				result = Get(key);
+			}
+			return result;
+		}
+
+	private:
+		static bool SameSource(const ExposureEvidence& left, const ExposureEvidence& right)
+		{
+			return left.sourceFormat == right.sourceFormat && left.sourceViewFormat == right.sourceViewFormat &&
+			       left.outputViewFormat == right.outputViewFormat && left.sourceWidth == right.sourceWidth &&
+			       left.sourceHeight == right.sourceHeight && left.sourceMip == right.sourceMip &&
+			       left.sourceIdentity == right.sourceIdentity && left.sourceViewIdentity == right.sourceViewIdentity &&
+			       left.shaderIdentity == right.shaderIdentity && left.samplerIdentity == right.samplerIdentity;
+		}
+		struct RecordState
+		{
+			ExposureEvidence evidence{};
+			const char* reason = "evidence_not_retained";
+		};
+		std::array<RecordState, Capacity> records_{};
+	};
 	struct ExposureBindingObservation
 	{
 		std::uint32_t frame = 0, width = 0, height = 0, mip = 0, mipLevels = 0;
@@ -127,7 +221,7 @@ namespace NeuralRendering::Color
 		}
 	};
 
-	// Only Request/GetStatus are called from UI/DevBench threads. Installation,
+	// Request and CPU evidence/status reads support UI/DevBench threads. GPU
 	// capture, binding and resource retirement belong to the render thread.
 	class ExposureCapture
 	{
@@ -147,6 +241,10 @@ namespace NeuralRendering::Color
 		RE::BSShader* EnterProducer(RE::BSShader*) noexcept;
 		void LeaveProducer(RE::BSShader*) noexcept;
 		ExposureCaptureStatus GetStatus() const;
+		/// Read retained CPU evidence by exact frame, epoch and sequence without polling the GPU.
+		ExposureEvidenceLookup GetEvidence(const ExposureStamp&) const;
+		/// Pin a source-frame key; epoch zero selects the current epoch only for this lookup.
+		ExposureEvidenceLookup GetSourceFrameEvidence(std::uint32_t frame, std::uint64_t epoch = 0) const;
 		bool Bind(ID3D11DeviceContext*, ExposureBinding&, const ExposureTransaction&);
 		void Reset() noexcept;    // Called after Renderer's existing idle/retirement boundary.
 		void Abandon() noexcept;  // Device-loss/unfenced path: do not release ownership.

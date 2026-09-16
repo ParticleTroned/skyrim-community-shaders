@@ -1,4 +1,5 @@
 #include "ExposureCapture.h"
+#include "ColorPipeline.h"
 #include "ComputeStateGuard.h"
 #include "Features/Upscaling.h"
 #include "Globals.h"
@@ -91,6 +92,7 @@ namespace NeuralRendering::Color
 		ExposureCaptureStatus status;
 		std::array<Entry, 8> entries{};
 		std::array<Latch, 4> latches{};
+		ExposureEvidenceHistory retained;
 		ComPtr<ID3D11Device> device;
 		ComPtr<ID3D11DeviceContext> context;
 		ComPtr<ID3D11ComputeShader> shader;
@@ -98,6 +100,24 @@ namespace NeuralRendering::Color
 		std::uint64_t sequence = 0;
 		ExposureShaderSelection shaderSelection{};
 		ComPtr<ID3D11PixelShader> selectedPixelShader;
+
+		void Retain(const ExposureEvidence& evidence, const char* reason)
+		{
+			if (Registry::Instance().CaptureEvidenceEnabled())
+				retained.Record(evidence, reason);
+		}
+
+		void Complete(const ExposureEvidence& evidence, const char* reason)
+		{
+			(void)retained.Complete(evidence, reason);
+		}
+
+		void RetirePending(const char* reason)
+		{
+			for (const auto& e : entries)
+				if (e.pending)
+					Complete(e.pendingEvidence, reason);
+		}
 
 		void Poll()
 		{
@@ -111,6 +131,7 @@ namespace NeuralRendering::Color
 					continue;
 				if (FAILED(readyResult)) {
 					e.pending = false;
+					Complete(e.pendingEvidence, "readback_query_failed");
 					++status.dropped;
 					continue;
 				}
@@ -120,6 +141,7 @@ namespace NeuralRendering::Color
 					continue;
 				e.pending = false;
 				if (FAILED(hr)) {
+					Complete(e.pendingEvidence, "readback_map_failed");
 					++status.dropped;
 					continue;
 				}
@@ -133,6 +155,7 @@ namespace NeuralRendering::Color
 					context->Unmap(e.gammaStaging.Get(), 0);
 					sample.gammaKnown = Finite(sample.frameGammaExponent) && sample.frameGammaExponent > 0;
 				}
+				Complete(sample, sample.gammaKnown ? "readback_complete" : "readback_complete_gamma_unavailable");
 				status.samples[sample.stamp.sequence % status.samples.size()] = std::move(sample);
 			}
 		}
@@ -140,8 +163,6 @@ namespace NeuralRendering::Color
 		void Capture(ID3D11DeviceContext* c, RE::BSShader* producer, std::optional<ExposureDrawKind> kind)
 		{
 			if (!requested.load(std::memory_order_acquire))
-				return;
-			if (!globals::features::upscaling.settings.neuralRenderingEnabled)
 				return;
 			auto* state = globals::state;
 			if (!c || c != globals::d3d::context || !state || c->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
@@ -254,9 +275,11 @@ namespace NeuralRendering::Color
 					old.value.evidence.shaderIdentity != reinterpret_cast<std::uintptr_t>(ps.Get()) ||
 					old.value.evidence.sourceViewFormat != static_cast<std::uint32_t>(view.Format)) {
 					old.value.evidence.stamp.ambiguous = true;
-					old.pendingEvidence.stamp.ambiguous = true;
+					if (ExposureEvidenceHistory::SameKey(old.pendingEvidence.stamp, stamp))
+						old.pendingEvidence.stamp.ambiguous = true;
+					retained.MarkAmbiguous(stamp);
 					for (auto& sample : status.samples)
-						if (sample.stamp.sequence == stamp.sequence)
+						if (ExposureEvidenceHistory::SameKey(sample.stamp, stamp))
 							sample.stamp.ambiguous = true;
 					reject("different AvgTex view, sampler or shader in one frame; automatic binding rejected");
 				}
@@ -309,9 +332,11 @@ namespace NeuralRendering::Color
 			guard.Unbind();
 			e.value.evidence = evidence;
 			e.value.state = ExposureBindingState::SnapshotQueued;
+			Retain(evidence, "readback_pending");
 			++status.captures;
 			status.lastReason.clear();
 			if (e.pending) {
+				Complete(evidence, "readback_slot_busy");
 				++status.dropped;
 				return;
 			}
@@ -322,6 +347,7 @@ namespace NeuralRendering::Color
 				stage.BindFlags = 0;
 				stage.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 				if (FAILED(d->CreateTexture2D(&stage, nullptr, &e.staging))) {
+					Complete(evidence, "readback_allocation_failed");
 					++status.dropped;
 					return;
 				}
@@ -330,6 +356,7 @@ namespace NeuralRendering::Color
 			if (!e.ready) {
 				D3D11_QUERY_DESC query{ D3D11_QUERY_EVENT, 0 };
 				if (FAILED(d->CreateQuery(&query, &e.ready))) {
+					Complete(evidence, "readback_query_allocation_failed");
 					++status.dropped;
 					return;
 				}
@@ -485,6 +512,18 @@ namespace NeuralRendering::Color
 		status.lastProducerFrame = state_->lastProducerFrame.load(std::memory_order_relaxed);
 		return status;
 	}
+	ExposureEvidenceLookup ExposureCapture::GetEvidence(const ExposureStamp& key) const
+	{
+		std::scoped_lock lock(state_->mutex);
+		return state_->retained.Get(key);
+	}
+	ExposureEvidenceLookup ExposureCapture::GetSourceFrameEvidence(std::uint32_t frame, std::uint64_t epoch) const
+	{
+		std::scoped_lock lock(state_->mutex);
+		if (!epoch)
+			epoch = state_->epoch.load(std::memory_order_acquire);
+		return state_->retained.GetSourceFrame(frame, epoch);
+	}
 	bool ExposureCapture::Bind(ID3D11DeviceContext* c, ExposureBinding& output, const ExposureTransaction& key)
 	{
 		output.evidence = {};
@@ -565,6 +604,7 @@ namespace NeuralRendering::Color
 	void ExposureCapture::Reset() noexcept
 	{
 		std::scoped_lock lock(state_->mutex);
+		state_->RetirePending("resources_retired_before_readback");
 		state_->entries = {};
 		state_->latches = {};
 		state_->shaderSelection = {};
@@ -578,6 +618,7 @@ namespace NeuralRendering::Color
 	void ExposureCapture::Abandon() noexcept
 	{
 		std::scoped_lock lock(state_->mutex);
+		state_->RetirePending("device_abandoned_before_readback");
 		state_->shaderSelection = {};
 		(void)state_->selectedPixelShader.Detach();
 		for (auto& e : state_->entries) {

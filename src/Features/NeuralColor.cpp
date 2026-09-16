@@ -205,7 +205,9 @@ namespace
 			{ "experiments", { { "upscaled_center", ProfileJson(config.experiments.profiles[0]) },
 								 { "final_ldr_pre_ui", ProfileJson(config.experiments.profiles[1]) },
 								 { "transportBypass", config.experiments.transportBypass }, { "diagnostics", config.experiments.diagnostics },
-								 { "captureEngineExposure", config.experiments.captureEngineExposure }, { "applyModelEdit", config.experiments.applyModelEdit } } },
+								 { "captureEngineExposure", config.experiments.captureEngineExposure },
+								 { "captureFrameEvidence", config.experiments.captureFrameEvidence }, { "applyModelEdit", config.experiments.applyModelEdit } } },
+			{ "captureEvidenceSchemaVersion", 1 },
 			{ "inputEpoch", config.inputEpoch }, { "slots", slots }, { "measurements", measurements }, { "engineCapture", CaptureJson() },
 			{ "measurementBatches", std::move(batches) },
 			{ "counts", { { "prepared", status.prepared }, { "reconstructed", status.reconstructed }, { "failed", status.failed },
@@ -246,6 +248,28 @@ namespace
 			const auto action = request.at("action").get<std::string>();
 			if (action == "status" || action == "assets") {
 				Keys(request, { "action" });
+			} else if (action == "capture_diagnostics") {
+				Keys(request, { "action", "stamps" });
+				const auto& stamps = request.at("stamps");
+				if (!stamps.is_array() || stamps.empty() || stamps.size() > 64)
+					throw std::invalid_argument("stamps requires one to 64 exact exposure identities");
+				Json exposures = Json::array();
+				for (const auto& key : stamps) {
+					Keys(key, { "frame", "epoch", "sequence" });
+					for (const auto* field : { "frame", "epoch", "sequence" })
+						if (!key.at(field).is_number_unsigned() || key.at(field) == 0)
+							throw std::invalid_argument("exposure identities must be positive unsigned integers");
+					if (key.at("frame").get<uint64_t>() > UINT32_MAX)
+						throw std::invalid_argument("exposure frame exceeds uint32");
+					ExposureStamp stamp{};
+					stamp.frame = key.at("frame").get<uint32_t>();
+					stamp.epoch = key.at("epoch").get<uint64_t>();
+					stamp.sequence = key.at("sequence").get<uint64_t>();
+					const auto found = ExposureCapture::Instance().GetEvidence(stamp);
+					exposures.push_back({ { "key", key }, { "available", found.evidence && found.evidence->readbackComplete },
+						{ "reason", found.reason }, { "evidence", found.evidence ? EvidenceJson(*found.evidence) : Json(nullptr) } });
+				}
+				response = { { "ok", true }, { "apiVersion", 3 }, { "captureEvidenceSchemaVersion", 1 }, { "exposures", std::move(exposures) } };
 			} else if (action == "configure" || action == "reset_experiments") {
 				Keys(request, { "action", "settings", "experiments", "expectedRevision" });
 				auto config = Registry::Instance().Snapshot();
@@ -269,7 +293,7 @@ namespace
 						ReadSettings(request.at("settings"), config.settings);
 					if (request.contains("experiments")) {
 						const auto& e = request.at("experiments");
-						Keys(e, { "upscaled_center", "final_ldr_pre_ui", "transportBypass", "diagnostics", "captureEngineExposure", "applyModelEdit" });
+						Keys(e, { "upscaled_center", "final_ldr_pre_ui", "transportBypass", "diagnostics", "captureEngineExposure", "captureFrameEvidence", "applyModelEdit" });
 						if (e.contains("upscaled_center"))
 							ReadProfile(e.at("upscaled_center"), config.experiments.profiles[0]);
 						if (e.contains("final_ldr_pre_ui"))
@@ -280,6 +304,8 @@ namespace
 							config.experiments.diagnostics = e.at("diagnostics").get<bool>();
 						if (e.contains("captureEngineExposure"))
 							config.experiments.captureEngineExposure = e.at("captureEngineExposure").get<bool>();
+						if (e.contains("captureFrameEvidence"))
+							config.experiments.captureFrameEvidence = e.at("captureFrameEvidence").get<bool>();
 						if (e.contains("applyModelEdit"))
 							config.experiments.applyModelEdit = e.at("applyModelEdit").get<bool>();
 					}
@@ -290,7 +316,8 @@ namespace
 				}
 			} else
 				throw std::invalid_argument("unknown action");
-			response = action == "assets" ? AssetsJson() : StatusJson();
+			if (action != "capture_diagnostics")
+				response = action == "assets" ? AssetsJson() : StatusJson();
 			response["action"] = action;
 		} catch (const std::exception& error) {
 			response = { { "ok", false }, { "error", error.what() }, { "errorCode", errorCode } };
@@ -308,11 +335,13 @@ namespace
 	Json Descriptor()
 	{
 		return Json::parse(R"schema({
-  "description": "NR colour v3: shared live controls, display-only A/B, engine HDR exposure capture and asynchronous measurements. measurementBatches retains up to four complete private-reconstruction batches, each with an immutable batch ID, expected physical-slot mask and matching frame/revision/generation. Pending readbacks drain even when a region becomes inactive; latest-per-slot measurements remain diagnostic compatibility fields. Complete batches do not prove outer stereo commit or headset presentation. status also reports registered HDR producers and rejected draw bindings. expectedShaderIdentity is the exact shader recorded by the engine/replacement binding hook for this context, producer, engine selection, frame and capture epoch, or the original engine shader when no matching association exists; the live draw must still match it. Capture accepts one visible mip of a 1x1 or 2x2 AvgTex with ordinary non-border sampling. Capture observes finalized engine graphics bindings after BSGraphics_SetDirtyStates and CS state updates, before the HDR draw, as well as all seven D3D11 draw forms inside the exact HDR effect scope. The engine boundary remains valid when D3D11 replaces its per-context draw method entries. Compute flushes and unrelated effects are excluded. producerScopes, lastProducerFrame, graphicsStateFlushes, lastGraphicsStateFlushFrame and drawCounts expose the reached boundaries. Each snapshot producer identifies its actual capture boundary. captured_hdr requires the exact source frame. captured_hdr_previous explicitly requires sourceWorldFrame minus one for pre-HDR experiments; the producer stamp is unchanged and exposureAgeFrames reports the real age. Older, ambiguous and cross-epoch captures are rejected. GPU scalar validity requires identical raw pairs or finite positive x == y in every texel (measured_unit_ratio); texels retain row-major per-texel average, target, ratio and validity, while scalarStatus distinguishes non_uniform_avgtex from a measured_uniform_ratio or an unmeasured_unit_fallback. Other differing fields are observed but never averaged into a correction. Capture alone does not enable reconstruction. configure/reset change only the registry. assets checks presence, not compilation. No NVIDIA ABI assumptions or game/profile mutations.",
+  "description": "NR colour v3: opt-in captureFrameEvidence freezes CPU configuration and outer stereo outcomes for accepted HMD screenshots without enabling colour passes or changing input epochs. Shared live controls, display-only A/B, engine HDR exposure capture and asynchronous measurements. measurementBatches retains up to four complete private-reconstruction batches, each with an immutable batch ID, expected physical-slot mask and matching frame/revision/generation. Pending readbacks drain even when a region becomes inactive; latest-per-slot measurements remain diagnostic compatibility fields. Complete batches do not prove outer stereo commit or headset presentation. status also reports registered HDR producers and rejected draw bindings. expectedShaderIdentity is the exact shader recorded by the engine/replacement binding hook for this context, producer, engine selection, frame and capture epoch, or the original engine shader when no matching association exists; the live draw must still match it. Capture accepts one visible mip of a 1x1 or 2x2 AvgTex with ordinary non-border sampling. Capture observes finalized engine graphics bindings after BSGraphics_SetDirtyStates and CS state updates, before the HDR draw, as well as all seven D3D11 draw forms inside the exact HDR effect scope. The engine boundary remains valid when D3D11 replaces its per-context draw method entries. Compute flushes and unrelated effects are excluded. producerScopes, lastProducerFrame, graphicsStateFlushes, lastGraphicsStateFlushFrame and drawCounts expose the reached boundaries. Each snapshot producer identifies its actual capture boundary. captured_hdr requires the exact source frame. captured_hdr_previous explicitly requires sourceWorldFrame minus one for pre-HDR experiments; the producer stamp is unchanged and exposureAgeFrames reports the real age. Older, ambiguous and cross-epoch captures are rejected. GPU scalar validity requires identical raw pairs or finite positive x == y in every texel (measured_unit_ratio); texels retain row-major per-texel average, target, ratio and validity, while scalarStatus distinguishes non_uniform_avgtex from a measured_uniform_ratio or an unmeasured_unit_fallback. Other differing fields are observed but never averaged into a correction. Capture alone does not enable reconstruction. configure/reset change only the registry. assets checks presence, not compilation. No NVIDIA ABI assumptions or game/profile mutations.",
   "outputSchema": {
     "type": "object",
     "properties": {
       "apiVersion": { "const": 3 },
+      "captureEvidenceSchemaVersion": { "const": 1 },
+      "exposures": { "type": "array", "maxItems": 64, "items": { "type": "object" } },
       "engineCapture": {
         "type": "object",
         "properties": {
@@ -390,12 +419,24 @@ namespace
           "status",
           "configure",
           "reset_experiments",
+          "capture_diagnostics",
           "assets"
         ]
       },
       "expectedRevision": {
         "type": "integer",
         "minimum": 1
+      },
+      "stamps": {
+        "type": "array", "minItems": 1, "maxItems": 64,
+        "items": { "type": "object", "additionalProperties": false,
+          "required": ["frame", "epoch", "sequence"],
+          "properties": {
+            "frame": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+            "epoch": { "type": "integer", "minimum": 1 },
+            "sequence": { "type": "integer", "minimum": 1 }
+          }
+        }
       },
       "settings": {
         "type": "object",
@@ -515,6 +556,10 @@ namespace
           "captureEngineExposure": {
             "type": "boolean"
           },
+          "captureFrameEvidence": {
+            "type": "boolean",
+            "description": "Arm CPU-only frozen NR configuration/outcome evidence for HMD screenshots. Does not enable colour passes or change input epochs."
+          },
           "applyModelEdit": {
             "type": "boolean"
           }
@@ -526,6 +571,21 @@ namespace
 	}
 
 #endif
+}
+
+namespace NeuralRendering::Color
+{
+	nlohmann::json ConfigurationEvidenceJson(const Configuration& config)
+	{
+		return { { "settings", SettingsJson(config.settings) },
+			{ "experiments", { { "upscaled_center", ProfileJson(config.experiments.profiles[0]) },
+								 { "final_ldr_pre_ui", ProfileJson(config.experiments.profiles[1]) },
+								 { "transportBypass", config.experiments.transportBypass }, { "diagnostics", config.experiments.diagnostics },
+								 { "captureEngineExposure", config.experiments.captureEngineExposure },
+								 { "captureFrameEvidence", config.experiments.captureFrameEvidence }, { "applyModelEdit", config.experiments.applyModelEdit } } } };
+	}
+	nlohmann::json ObservationEvidenceJson(const Observation& observation) { return ObservationJson(observation); }
+	nlohmann::json ExposureEvidenceJson(const ExposureEvidence& evidence) { return EvidenceJson(evidence); }
 }
 
 NeuralColor& NeuralColor::Instance()
@@ -565,6 +625,7 @@ void NeuralColor::DrawSettings()
 	}
 	if (ImGui::TreeNode("Exposure capture and colour assessment")) {
 		changed |= ImGui::Checkbox("Capture engine HDR exposure", &config.experiments.captureEngineExposure);
+		changed |= ImGui::Checkbox("Capture HMD frame provenance", &config.experiments.captureFrameEvidence);
 		ImGui::TextWrapped("Captures the actual HDR-pass AvgTex.y/x and frame-gamma evidence. A matching source frame is required; capture arriving after early NR is unavailable, not silently taken from the previous frame. Capturing exposure does not identify NR's expected colour space.");
 		for (std::size_t i = 0; i < config.experiments.profiles.size(); ++i) {
 			ImGui::PushID(static_cast<int>(i));

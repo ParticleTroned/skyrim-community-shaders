@@ -29285,6 +29285,7 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 		GetLatchedNeuralRenderingInsertionPoint();
 	if (mainFinalLdrNeuralState.frame != state->frameCount)
 		mainFinalLdrNeuralState = {};
+	BeginNeuralCaptureFrame(NeuralStereoRouteRole::Main, state->frameCount);
 	const bool neuralHardMenuBlocked =
 		IsNeuralRenderingHardMenuBlocked(*this, state);
 	const auto neuralTemporalAdmission = BuildNeuralTemporalAdmission(
@@ -34717,6 +34718,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	const uint32_t eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
 	const uint32_t currentFrame = state->frameCount;
 	const uint32_t currentSubmitThreadId = GetCurrentThreadId();
+	BeginNeuralCaptureFrame(NeuralStereoRouteRole::Submit, currentFrame, a_compositorCycleToken);
 	const auto neuralInsertionPoint =
 		GetLatchedNeuralRenderingInsertionPoint();
 	const bool currentMenuPresentationContext =
@@ -35012,6 +35014,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			submitStageNeuralStereoState.settingsKey;
 		a_presentationObservation.retainedNeuralSubmitSourceProof =
 			submitStageNeuralStereoState.submitSourceProof;
+		PinNeuralCapturePresentation(a_presentationObservation, static_cast<ID3D11Texture2D*>(a_outputTexture.handle));
 		return true;
 	}
 
@@ -36255,6 +36258,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		};
 		submitStageNeuralStereoState.publishedRoute = route;
 		PublishNeuralStereoRouteSnapshot(route);
+		if (a_pairComplete) {
+			std::scoped_lock captureLock(neuralCaptureMutex);
+			submitStageNeuralStereoState.publishedCapture = neuralCaptureRecords[1];
+		}
 	};
 	if (neuralStereoDecisionChanged && !neuralSubmitSourceBatchEligible) {
 		const auto disposition =
@@ -37264,6 +37271,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			false);
 		if (retainedNeuralPairForPresentation)
 			stampRetainedNeuralObservation();
+		PinNeuralCapturePresentation(a_presentationObservation, static_cast<ID3D11Texture2D*>(a_outputTexture.handle));
 		return true;
 	}
 	UINT outputSubresource = 0;
@@ -37317,6 +37325,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		false);
 	if (retainedNeuralPairForPresentation)
 		stampRetainedNeuralObservation();
+	PinNeuralCapturePresentation(a_presentationObservation, static_cast<ID3D11Texture2D*>(a_outputTexture.handle));
 	return true;
 }
 
@@ -38199,6 +38208,7 @@ void Upscaling::PublishNeuralStereoRouteSnapshot(const NeuralStereoRouteSnapshot
 
 		auto snapshot = a_snapshot;
 		PopulateNeuralRoutePassTelemetry(snapshot);
+		RecordNeuralCaptureRoute(snapshot);
 		std::scoped_lock lock(neuralStereoRouteSnapshotMutex);
 		if (++neuralStereoRouteSnapshotSequence == 0)
 			++neuralStereoRouteSnapshotSequence;

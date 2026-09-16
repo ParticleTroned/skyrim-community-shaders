@@ -420,6 +420,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					a_probeObservation);
 #endif
 				winrt::com_ptr<ID3D11Texture2D> captureTexture;
+				nlohmann::json captureNeuralEvidence = nlohmann::json::object();
 				uint64_t captureGeneration = 0;
 				std::uintptr_t captureDevice = 0;
 				vr::VRTextureBounds_t captureBounds{};
@@ -438,6 +439,12 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						captureColorSpace = a_texture->eColorSpace;
 						if (hasCaptureBounds)
 							captureBounds = *a_bounds;
+						try {
+							captureNeuralEvidence = upscaling.CaptureNeuralSubmission(eEye, compositorCycleToken,
+								captureTexture.get(), a_path, a_probeObservation);
+						} catch (const std::exception& error) {
+							captureNeuralEvidence = { { "schemaVersion", 1 }, { "available", false }, { "reason", error.what() } };
+						}
 					}
 				}
 				const auto result = func(_this, eEye, a_texture, a_bounds, a_submitFlags);
@@ -448,7 +455,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						captureDevice == reinterpret_cast<std::uintptr_t>(globals::d3d::device)) {
 						globals::features::screenshotFeature.ObserveAcceptedVRSubmit(
 							compositorCycleToken, captureGeneration, captureDevice, eEye,
-							captureTexture.get(), hasCaptureBounds ? &captureBounds : nullptr, captureColorSpace);
+							captureTexture.get(), hasCaptureBounds ? &captureBounds : nullptr, captureColorSpace, captureNeuralEvidence);
 					}
 				}
 				const auto keepaliveDisposition =

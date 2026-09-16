@@ -5,6 +5,7 @@
 #include "ComputeSubrect.h"
 #include "ExposureCapture.h"
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <d3d11.h>
 #include <mutex>
@@ -53,6 +54,7 @@ namespace NeuralRendering::Color
 		static Registry& Instance();
 		Configuration Snapshot() const;
 		Status GetStatus() const;
+		bool CaptureEvidenceEnabled() const noexcept { return captureEvidenceEnabled_.load(std::memory_order_acquire); }
 		bool Configure(const Settings&, const Experiments&, std::uint64_t expectedRevision = 0);
 		void Record(const Observation&) noexcept;
 		void Record(const Measurement&) noexcept;
@@ -61,6 +63,7 @@ namespace NeuralRendering::Color
 	private:
 		mutable std::mutex mutex_;
 		Configuration configuration_{};
+		std::atomic_bool captureEvidenceEnabled_{ false };
 		Status status_{};
 		MeasurementBatchHistory<Measurement> measurementBatches_{};
 	};

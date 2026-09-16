@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../DLSSViewportCrop.h"
+#include "CaptureEvidence.h"
 #include "CharacterMultiRoi.h"
 #include "PipelinePolicy.h"
 #include "Runtime.h"
@@ -242,6 +243,8 @@ namespace NeuralRendering
 		using ApplyArgs = RendererApplyArgs;
 
 		static Renderer& Instance();
+		/** Snapshot both route transactions without querying current configuration. */
+		std::array<CaptureInputs, 2> GetCaptureInputs() const;
 
 		Renderer(const Renderer&) = delete;
 		Renderer& operator=(const Renderer&) = delete;

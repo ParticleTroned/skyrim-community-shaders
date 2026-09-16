@@ -29,6 +29,10 @@ target_include_directories(nr_adversarial_policy_test PRIVATE "${CMAKE_CURRENT_L
 add_test(NAME NRColorAdversarialPolicy COMMAND nr_adversarial_policy_test)
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
+    add_test(NAME NRHmdCaptureWorkflow
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/test_hmd_capture.py")
+    add_test(NAME NRHmdImageAssessment
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/test_hmd_assess.py")
     add_test(NAME NRColorFeatureRegistration
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/feature_registration_test.py" "${CMAKE_COMMAND}")
     add_test(NAME NRColorAdversarialAssessment
@@ -45,6 +49,11 @@ if(Python3_Interpreter_FOUND)
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/../../tools/nr-color/verify_assets.py")
 endif()
 if(WIN32)
+	add_executable(nr_exposure_evidence_test exposure_evidence_test.cpp)
+	target_compile_features(nr_exposure_evidence_test PRIVATE cxx_std_20)
+	target_compile_definitions(nr_exposure_evidence_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+	target_include_directories(nr_exposure_evidence_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../../src")
+	add_test(NAME NRExposureEvidence COMMAND nr_exposure_evidence_test)
 	add_executable(nr_framebuffer_gpu_test framebuffer_gpu_test.cpp)
 	target_compile_features(nr_framebuffer_gpu_test PRIVATE cxx_std_20)
 	target_compile_definitions(nr_framebuffer_gpu_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)

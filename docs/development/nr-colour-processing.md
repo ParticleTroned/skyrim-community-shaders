@@ -304,12 +304,17 @@ automation, runtime, evidence and artifact arguments as above; add
 controller identity is projected into the flat expected-identity contract
 before subsequent calls.
 
-Output ranks **source RGB drift**, not physical material correctness. Successful
-inverse round trips cannot identify a model's expected colour domain: all
-consistent invertible candidate pairs can pass. `domainVerified` therefore
-remains false and no production profile is silently selected. Use the collected
-producer evidence and A/B images to adjudicate the candidates across scenes.
-This implements automatic data collection/assessment, not fabricated certainty.
+Output ranks **private-buffer source RGB drift**, not HMD image quality or
+physical material correctness. Successful inverse round trips cannot identify
+a model's expected colour domain: all consistent invertible candidate pairs
+can pass. `domainVerified` therefore remains false and no production profile
+is silently selected. Complete the separate
+[automated HMD image assessment](nr-colour-hmd-assessment.md) using the existing
+VR automation capture and blinded visual-review tools. It requires distinct
+NR-off, Raw, Managed identity, conversion, Preserve Source and display-only
+references, calibrated regional measurements, and actual per-eye image review.
+The user is not required to decide which mode looks better. The numeric runner
+and its optional capture episodes alone do not complete that assessment.
 
 ## Shader inventory, deployment and tests
 

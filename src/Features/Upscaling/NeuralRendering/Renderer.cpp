@@ -634,6 +634,7 @@ namespace NeuralRendering
 			                       ClassifyFeatureSlotMask(1u << args.featureSlot) :
 			                       FeatureSlotRoute::Unexpected;
 			const std::size_t routeIndex = route == FeatureSlotRoute::Submit ? 1u : 0u;
+			captureRoute_ = routeIndex;
 			const ColorTransactionKey key{ args.frameId, args.sourceWorldFrame, args.generation, args.insertionPoint };
 			if (!colorTransactionValid_[routeIndex] || key != colorTransactionKeys_[routeIndex]) {
 				colorConfigurations_[routeIndex] = Color::Registry::Instance().Snapshot();
@@ -641,14 +642,51 @@ namespace NeuralRendering
 				colorTransactionValid_[routeIndex] = true;
 			}
 			colorConfiguration_ = colorConfigurations_[routeIndex];
+			auto& capture = captureInputs_[routeIndex];
+			if (!colorConfiguration_.experiments.captureFrameEvidence) {
+				capture = {};
+			} else if (!capture.Matches(static_cast<std::uint32_t>(routeIndex), args.frameId,
+						   args.sourceWorldFrame, args.generation, static_cast<std::uint32_t>(args.insertionPoint))) {
+				capture = {};
+				capture.valid = true;
+				capture.frame = args.frameId;
+				capture.sourceWorldFrame = args.sourceWorldFrame;
+				capture.generation = args.generation;
+				capture.insertion = static_cast<std::uint32_t>(args.insertionPoint);
+				capture.route = static_cast<std::uint32_t>(routeIndex);
+				capture.configuration = colorConfiguration_;
+			}
 		}
 		Color::Configuration colorConfiguration_{};
+		std::array<CaptureInputs, 2> captureInputs_{};
+		std::size_t captureRoute_ = 0;
+		void FinishCapture(const RendererApplyOutcome& outcome) noexcept
+		{
+			try {
+				for (auto& capture : std::span<CaptureInputs>(&captureInputs_[captureRoute_], 1)) {
+					if (!capture.valid || capture.configuration.revision != colorConfiguration_.revision)
+						continue;
+					capture.attemptedMask |= outcome.evaluationAttemptedFeatureSlotMask;
+					capture.succeededMask |= outcome.evaluationSucceededFeatureSlotMask;
+					for (std::size_t slot = 0; slot < capture.slots.size(); ++slot) {
+						const auto& observation = slots_[slot].colorWork.observation;
+						if ((capture.slotMask & (1u << slot)) != 0 && observation.revision == capture.configuration.revision &&
+							observation.frame == capture.frame && observation.sourceWorldFrame == capture.sourceWorldFrame &&
+							observation.generation == capture.generation && observation.insertion == capture.insertion)
+							capture.slots[slot] = observation;
+					}
+				}
+			} catch (...) {
+				for (auto& capture : captureInputs_)
+					capture.valid = false;
+			}
+		}
 		mutable std::mutex mutex_;
 
 	private:
 		ValidationFailure ValidateLocked(
 			const RendererApplyArgs& a_args,
-			ValidatedResources& a_resources) const;
+			ValidatedResources& a_resources);
 		bool ValidateD3D12FormatsLocked(
 			const ValidatedResources& a_resources,
 			std::string& a_detail) const;
@@ -720,7 +758,7 @@ namespace NeuralRendering
 
 	Renderer::State::ValidationFailure Renderer::State::ValidateLocked(
 		const RendererApplyArgs& a_args,
-		ValidatedResources& a_resources) const
+		ValidatedResources& a_resources)
 	{
 		a_resources = {};
 		const auto fail = [](std::string a_detail) {
@@ -1017,6 +1055,27 @@ namespace NeuralRendering
 			.useAutoMask = a_args.tuning.useAutoMask,
 			.uiCorrection = a_args.tuning.uiCorrection,
 		};
+		for (auto& capture : captureInputs_) {
+			if (!capture.Matches(a_args.featureSlot % 4u >= 2u ? 1u : 0u, a_args.frameId,
+					a_args.sourceWorldFrame, a_args.generation, static_cast<std::uint32_t>(a_args.insertionPoint)) ||
+				a_args.featureSlot >= capture.slots.size())
+				continue;
+			auto& observation = capture.slots[a_args.featureSlot];
+			observation.frame = a_args.frameId;
+			observation.sourceWorldFrame = a_args.sourceWorldFrame;
+			observation.generation = a_args.generation;
+			observation.insertion = capture.insertion;
+			observation.slot = a_args.featureSlot;
+			observation.revision = capture.configuration.revision;
+			observation.mode = capture.configuration.EffectiveMode();
+			observation.profile = Color::EffectiveProfile(capture.configuration, capture.insertion);
+			observation.bypass = capture.configuration.experiments.transportBypass;
+			observation.modelEditShown = capture.configuration.experiments.applyModelEdit;
+			observation.rect = a_resources.outputSubrect;
+			observation.sourceFormat = static_cast<std::uint32_t>(a_resources.resourceKey.colorFormat);
+			observation.outputFormat = static_cast<std::uint32_t>(a_resources.resourceKey.outputFormat);
+			capture.slotMask |= 1u << a_args.featureSlot;
+		}
 		return {};
 	}
 
@@ -1248,7 +1307,7 @@ namespace NeuralRendering
 			observation.rect = {};
 			observation.generation = snapshot_.generation;
 			observation.insertion = static_cast<std::uint32_t>(snapshot_.insertionPoint);
-			observation.mode = colorConfiguration_.settings.mode;
+			observation.mode = colorConfiguration_.EffectiveMode();
 			observation.processed = false;
 			Color::Registry::Instance().Record(observation);
 		}
@@ -2492,6 +2551,7 @@ namespace NeuralRendering
 			state_->CaptureColorConfiguration(a_args);
 			CS_PROFILE_SCOPE("Upscaling::DLSSNeuralRendering");
 			const bool succeeded = state_->ApplyLocked(a_args, outcome);
+			state_->FinishCapture(outcome);
 			if (a_outcome)
 				*a_outcome = outcome;
 			state_->SetActiveFeatureSlotLocked(Runtime::kFeatureSlotCount);
@@ -2504,6 +2564,7 @@ namespace NeuralRendering
 				failureFeatureSlot,
 				true,
 				failuresBefore);
+			state_->FinishCapture(outcome);
 			if (a_outcome)
 				*a_outcome = outcome;
 			state_->SetActiveFeatureSlotLocked(Runtime::kFeatureSlotCount);
@@ -2527,6 +2588,7 @@ namespace NeuralRendering
 			Increment(
 				succeeded ? state_->snapshot_.counters.stereoSuccesses :
 							state_->snapshot_.counters.stereoFailures);
+			state_->FinishCapture(outcome);
 			if (a_outcome)
 				*a_outcome = outcome;
 			state_->SetActiveFeatureSlotLocked(Runtime::kFeatureSlotCount);
@@ -2540,6 +2602,7 @@ namespace NeuralRendering
 				true,
 				failuresBefore);
 			Increment(state_->snapshot_.counters.stereoFailures);
+			state_->FinishCapture(outcome);
 			if (a_outcome)
 				*a_outcome = outcome;
 			state_->SetActiveFeatureSlotLocked(Runtime::kFeatureSlotCount);
@@ -2560,6 +2623,7 @@ namespace NeuralRendering
 			CS_PROFILE_SCOPE("Upscaling::DLSSNeuralRenderingSequentialStereo");
 			const bool succeeded =
 				state_->ApplySequentialStereoLocked(a_args, outcome);
+			state_->FinishCapture(outcome);
 			if (a_outcome)
 				*a_outcome = outcome;
 			state_->SetActiveFeatureSlotLocked(Runtime::kFeatureSlotCount);
@@ -2572,11 +2636,18 @@ namespace NeuralRendering
 				failureFeatureSlot,
 				true,
 				failuresBefore);
+			state_->FinishCapture(outcome);
 			if (a_outcome)
 				*a_outcome = outcome;
 			state_->SetActiveFeatureSlotLocked(Runtime::kFeatureSlotCount);
 			return false;
 		}
+	}
+
+	std::array<CaptureInputs, 2> Renderer::GetCaptureInputs() const
+	{
+		std::scoped_lock lock(state_->mutex_);
+		return state_->captureInputs_;
 	}
 
 	bool Renderer::Reset()

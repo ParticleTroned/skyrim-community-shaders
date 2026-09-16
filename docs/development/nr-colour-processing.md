@@ -28,6 +28,11 @@ including tone and chroma, not merely hue. This is an image-space mitigation,
 not physical decomposition of reflections/shadows. Source alpha is retained.
 The unknown/native-domain brightness metric is not calibrated luminance.
 
+The detail filter uses adjacent, ROI-clamped 3-by-3 samples. Spacing those
+samples two pixels apart cancels alternating fine detail before the strength
+control can recover it. The [detail investigation](nr-colour-detail-investigation-20260916.md)
+records the shader regression, correction and remaining HMD validation.
+
 ## In-game controls: no editable configuration INI
 
 **Display > Neural Rendering Colour** provides:

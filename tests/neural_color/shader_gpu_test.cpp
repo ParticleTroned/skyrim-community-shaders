@@ -106,6 +106,88 @@ static std::vector<Pixel> Read(ID3D11Device* device, ID3D11DeviceContext* contex
 	context->Unmap(staging.Get(), 0);
 	return result;
 }
+static void CheckFineDetail(ID3D11Device* device, ID3D11DeviceContext* context,
+	ID3D11ComputeShader* prepare, ID3D11ComputeShader* reconstruct, ID3D11Buffer* cb, unsigned domain)
+{
+	// Alternating detail must survive regardless of orientation or pixel parity.
+	const auto toWorking = [domain](float value) { return domain == 2 ? Decode(value) : value; };
+	const auto fromWorking = [domain](float value) { return domain == 2 ? Encode(value) : value; };
+	const Pixel source{ fromWorking(0.25f), fromWorking(0.125f), fromWorking(0.0625f), 0.375f };
+	const std::vector<Pixel> original(4096, source), sentinel(4096, Pixel{ -7, -7, -7, -7 });
+	auto baseline = MakeTexture(device, original);
+	const std::array strengths{ 0.0f, 1.0f, 2.0f, 2.0f, 2.0f };
+	const std::array limits{ 1.0f, 1.0f, 1.0f, 0.125f, 0.0f };
+	for (unsigned pattern = 0; pattern < 3; ++pattern) {
+		const auto isBright = [pattern](unsigned x, unsigned y) {
+			const unsigned column = pattern == 1 ? 0 : x;
+			const unsigned row = pattern == 0 ? 0 : y;
+			return ((column + row) & 1u) == 0;
+		};
+		Constants constants;
+		constants.mode = 2;
+		constants.domain = domain;
+		auto prepared = MakeTexture(device, sentinel);
+		Dispatch(context, prepare, cb, constants, { baseline.srv.Get(), nullptr, nullptr }, prepared.uav.Get());
+		auto input = sentinel;
+		for (unsigned y = 0; y < constants.height; ++y)
+			for (unsigned x = 0; x < constants.width; ++x) {
+				const float gain = std::exp2(isBright(x, y) ? 0.25f : -0.25f);
+				input[(y + constants.y) * 64 + x + constants.x] = { fromWorking(0.25f * gain), fromWorking(0.125f * gain), fromWorking(0.0625f * gain), 0.0f };
+			}
+		auto neural = MakeTexture(device, input);
+		std::array<std::vector<Pixel>, strengths.size()> outputs;
+		for (unsigned variant = 0; variant < outputs.size(); ++variant) {
+			constants.detail = strengths[variant];
+			constants.maximumStops = limits[variant];
+			auto result = MakeTexture(device, sentinel);
+			Dispatch(context, reconstruct, cb, constants,
+				{ baseline.srv.Get(), neural.srv.Get(), prepared.srv.Get() }, result.uav.Get());
+			outputs[variant] = Read(device, context, result.texture.Get());
+		}
+		const auto center = 8 * 64 + 8;
+		std::printf("Fine detail domain %u pattern %u: strength 0/1/2 = %.6f / %.6f / %.6f stops\n", domain, pattern,
+			std::log2(toWorking(outputs[0][center].r) / 0.25f), std::log2(toWorking(outputs[1][center].r) / 0.25f),
+			std::log2(toWorking(outputs[2][center].r) / 0.25f));
+		std::fflush(stdout);
+		for (unsigned y = 0; y < 64; ++y)
+			for (unsigned x = 0; x < 64; ++x) {
+				const auto index = y * 64 + x;
+				const bool inside = x < constants.width && y < constants.height;
+				for (unsigned variant = 0; variant < outputs.size(); ++variant) {
+					const auto value = outputs[variant][index];
+					if (!inside) {
+						Require(value.r == -7 && value.g == -7 && value.b == -7 && value.a == -7,
+							"detail must not write outside the physical ROI");
+						continue;
+					}
+					Require(value.a == source.a, "detail must preserve source alpha");
+					const float r = toWorking(value.r), g = toWorking(value.g), b = toWorking(value.b);
+					Require(std::abs(r - 2 * g) < 0.00002f &&
+								std::abs(r - 4 * b) < 0.00002f,
+						"detail must preserve source chroma");
+					Require(std::abs(std::log2(r / 0.25f)) <= limits[variant] + 0.00002f,
+						"detail must obey the configured stop bound");
+				}
+				if (!inside)
+					continue;
+				Require(outputs[0][index].r == source.r && outputs[0][index].g == source.g &&
+							outputs[0][index].b == source.b,
+					"zero strength must preserve source exactly");
+				if (x == 0 || y == 0 || x + 1 == constants.width || y + 1 == constants.height)
+					Require(std::abs(outputs[2][index].r - source.r) < 0.00002f, "physical ROI border must preserve source");
+				if (x < 4 || y < 4 || x + 4 >= constants.width || y + 4 >= constants.height)
+					continue;
+				const float sign = isBright(x, y) ? 1.0f : -1.0f;
+				const float stops1 = std::log2(toWorking(outputs[1][index].r) / 0.25f);
+				const float stops2 = std::log2(toWorking(outputs[2][index].r) / 0.25f);
+				Require(sign * stops1 > 0.05f, "alternating neural detail must not disappear");
+				Require(sign * stops2 > sign * stops1 + 0.04f,
+					"increasing detail strength must increase the retained fine detail");
+				Require(std::abs(std::log2(toWorking(outputs[3][index].r) / 0.25f) - sign * 0.125f) < 0.00002f,
+					"fine detail above the stop limit must saturate at that limit");
+			}
+	}
+}
 int main(int argc, char** argv)
 {
 	Require(argc == 2, "provide NR colour shader directory");
@@ -190,5 +272,7 @@ int main(int argc, char** argv)
 				Require(v.a == b.a, "neural alpha must not replace baseline alpha");
 			}
 	}
+	for (unsigned domain = 0; domain < 3; ++domain)
+		CheckFineDetail(device.Get(), context.Get(), prepare.Get(), reconstruct.Get(), cb.Get(), domain);
 	std::printf("Passed %u WARP shader checks; D3D12/NGX transport is not exercised by this test.\n", checks);
 }

@@ -47,12 +47,12 @@ float3 Candidate(uint2 local, float3 baseline)
 	if (DetailStrength > 0.0 && baseY > 1e-5 && neuralY > 1e-5 &&
 		all(baseWorking >= 0.0) && all(neuralWorking >= 0.0) && all(isfinite(baseWorking)) && all(isfinite(neuralWorking))) {
 		float residual = (log2(neuralY) - log2(baseY)), weightedResidual = 0.0, totalWeight = 0.0;
-		// Only initialized pixels of this physical ROI, never multi-ROI gaps.
+		// Adjacent taps avoid cancelling alternating detail; clamp to this ROI.
 		[unroll] for (int y = -1; y <= 1; ++y)
 		{
 			[unroll] for (int x = -1; x <= 1; ++x)
 			{
-				uint2 p = uint2(clamp(int2(local) + int2(x, y) * 2, int2(0, 0), int2(RegionSize) - 1));
+				uint2 p = uint2(clamp(int2(local) + int2(x, y), int2(0, 0), int2(RegionSize) - 1));
 				float3 b = ToWorking(Baseline.Load(int3(p, 0)).rgb);
 				float3 n = ToWorking(Candidate(p, Baseline.Load(int3(p, 0)).rgb));
 				float by = Luminance(b), ny = Luminance(n);

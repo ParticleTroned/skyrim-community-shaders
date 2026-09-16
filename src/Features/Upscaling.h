@@ -892,8 +892,10 @@ public:
 		uint64_t systemCommitLimitBytes = 0;
 		uint64_t systemCommitHeadroomBytes = 0;
 		double systemCommitRatio = 0.0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		bool processPrivateUsageValid = false;
 		uint64_t processPrivateUsageBytes = 0;
+#endif
 		VRRenderScaleMemoryPressure observedPressure = VRRenderScaleMemoryPressure::Unknown;
 		VRRenderScaleMemoryPressure pressure = VRRenderScaleMemoryPressure::Unknown;
 		uint32_t pressureSinceFrame = 0;
@@ -967,8 +969,10 @@ public:
 		uint64_t peakUsageBytes = 0;
 		uint64_t baselineSystemCommitBytes = 0;
 		uint64_t peakSystemCommitBytes = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		uint64_t baselineProcessPrivateUsageBytes = 0;
 		uint64_t peakProcessPrivateUsageBytes = 0;
+#endif
 		VRRenderScaleMemoryPressure peakPressure = VRRenderScaleMemoryPressure::Unknown;
 		bool cleanupArmed = false;
 		bool cleanupDrained = false;
@@ -1084,7 +1088,9 @@ public:
 		VRRenderScaleMemoryPressure peakPressure = VRRenderScaleMemoryPressure::Unknown;
 		uint64_t peakUsageBytes = 0;
 		uint64_t peakSystemCommitBytes = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		uint64_t peakProcessPrivateUsageBytes = 0;
+#endif
 		uint32_t peakRetiredSets = 0;
 		uint32_t memoryTrimCount = 0;
 		uint32_t memoryTrimFailures = 0;
@@ -1099,9 +1105,11 @@ public:
 	struct VRRenderScaleMetricsSnapshot
 	{
 		VRRenderScaleTransitionMetrics current{};
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		std::array<VRRenderScaleTransitionMetrics, kVRRenderScaleTransitionMetricRetentionCapacity> recent{};
 		uint32_t nextIndex = 0;
 		uint32_t count = 0;
+#endif
 	};
 
 	enum class VRRenderScaleFidelityMismatch : uint32_t
@@ -1232,6 +1240,7 @@ public:
 		uint64_t lastBothEyesVendorCycle = 0;
 		uint32_t consecutiveBothEyesVendorFrames = 0;
 		uint32_t lastFallbackFrame = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		uint32_t maximumConsecutivePresentationStretchFrames = 0;
 		uint64_t vendorEvaluatedEyeObservations = 0;
 		uint64_t validatedPresentationHoldEyeObservations = 0;
@@ -1253,6 +1262,7 @@ public:
 		uint64_t maximumPresentationStretchQpcTicks = 0;
 		// QPC ticks per second. Zero means millisecond conversion is unavailable.
 		uint64_t presentationStretchQpcFrequency = 0;
+#endif
 	};
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -1530,7 +1540,9 @@ public:
 		VRRenderScaleFailureKind failureKind = VRRenderScaleFailureKind::None;
 		uint64_t usageBytes = 0;
 		uint64_t systemCommitBytes = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		uint64_t processPrivateUsageBytes = 0;
+#endif
 		uint32_t retries = 0;
 		uint32_t failures = 0;
 		uint32_t fidelityMismatches = 0;
@@ -1651,6 +1663,7 @@ public:
 		VRRenderScaleMetricsSnapshot metrics{};
 		VRRenderScaleFidelitySnapshot fidelity{};
 		VRRenderScalePresentationSnapshot presentation{};
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		VRRenderScaleOwnerKey desiredOwner{};
 		VRRenderScaleOwnerKey physicalOwner{};
 		VRRenderScaleOwnerKey presentationOwner{};
@@ -1658,6 +1671,7 @@ public:
 			VRRenderScalePhysicalPhase::None;
 		VRRenderScalePresentationPhase presentationPhase =
 			VRRenderScalePresentationPhase::Idle;
+#endif
 	};
 
 	/** @brief Compact controller state consumed by the per-eye presentation path. */
@@ -1877,13 +1891,13 @@ public:
 	bool IsLatestVRRenderScaleRequest(uint64_t a_requestID) const;
 	/** @brief Returns one lock-consistent copy of requested, applying, applied, and stable state. */
 	VRRenderScaleTransitionSnapshot GetVRRenderScaleTransitionSnapshot() const;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	VRRenderScaleStressSessionSnapshot GetVRRenderScaleStressSessionSnapshot() const;
 	void StartVRRenderScaleStressSession();
 	void StopVRRenderScaleStressSession();
 	void ResetVRRenderScaleStressSession();
 	json BuildVRRenderScaleIterationRecord() const;
 	bool WriteVRRenderScaleIterationRecord() const;
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	/** @brief Resolves live render-scale owners for diagnostics without scheduling work. */
 	VRRenderScaleAuthorityDiagnosticSnapshot
 	GetVRRenderScaleAuthorityDiagnosticSnapshot() const;
@@ -2776,7 +2790,9 @@ public:
 	static void TraceVRMenuPresentationOpenVRSubmit(const char* a_path, vr::EVREye a_eye,
 		const vr::Texture_t* a_texture, const vr::VRTextureBounds_t* a_bounds, vr::EVRSubmitFlags a_flags,
 		vr::EVRCompositorError a_result) noexcept;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	static void InstallVRMenuPresentationTraceD3DHooks(ID3D11DeviceContext* a_context);
+#endif
 	/** Install only indexed scene submission hooks, without enabling developer tracing. */
 	static bool InstallAcceptedDrawD3DHooks(ID3D11DeviceContext* a_context);
 	static void DisableVRMenuPresentationTraceDiagnostics() noexcept;
@@ -3030,16 +3046,20 @@ public:
 	std::atomic<uint64_t> nextVRRenderScaleTransitionEpoch{ 1 };
 	mutable std::mutex vrRenderScaleTransitionControllerMutex;
 	VRRenderScaleTransitionSnapshot vrRenderScaleTransitionController{};
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	VRPresentationStretchTelemetryPolicy::State
 		vrRenderScalePresentationStretchLifetimeTelemetry{};
 	VRPresentationStretchTelemetryPolicy::State
 		vrRenderScalePresentationStretchSessionTelemetry{};
+#endif
 	// Hot-path atomic mirror; mutate with StoreVRRenderScaleTransitionStateLocked.
 	std::atomic<VRRenderScaleTransitionState> vrRenderScaleTransitionState{ VRRenderScaleTransitionState::Idle };
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	mutable std::mutex vrRenderScaleStressSessionMutex;
 	VRRenderScaleStressSessionSnapshot vrRenderScaleStressSession{};
 	std::atomic_bool vrRenderScaleStressSessionActive{ false };
 	std::atomic<uint64_t> nextVRRenderScaleStressSessionID{ 1 };
+#endif
 	std::atomic<uint32_t> pendingVRFpsStabilizerSyncFrame{ 0 };
 	std::atomic<uint32_t> vrFpsStabilizerSyncResolvedFrame{ 0 };
 	mutable std::mutex vrFpsStabilizerAPIProfileAdmissionMutex;
@@ -3542,13 +3562,12 @@ public:
 		uint64_t a_expectedEpoch = 0);
 	void RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind a_kind);
 	void ArchiveVRRenderScaleTransitionMetricsLocked(bool a_completed, bool a_superseded, uint32_t a_frame);
-	void RecordVRRenderScaleCoalescedDuplicate();
-	void RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_type, VRRenderScaleRetryKind a_retryKind = VRRenderScaleRetryKind::Other, VRRenderScaleFailureKind a_failureKind = VRRenderScaleFailureKind::None
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		, const char* a_reason = "unspecified",
-		std::source_location a_source = std::source_location::current()
+	void RecordVRRenderScaleCoalescedDuplicate();
+	void RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_type, VRRenderScaleRetryKind a_retryKind = VRRenderScaleRetryKind::Other, VRRenderScaleFailureKind a_failureKind = VRRenderScaleFailureKind::None,
+		const char* a_reason = "unspecified",
+		std::source_location a_source = std::source_location::current());
 #endif
-	);
 	bool HasVRRenderScaleMemoryReliefCleanupPending() const;
 	void ClearVRRenderScaleMemoryRelief();
 	bool ApplyVRRenderScaleMemoryReliefTransitionCleanup(const char* a_reason = nullptr, bool a_preserveVRIntermediateTextures = false);

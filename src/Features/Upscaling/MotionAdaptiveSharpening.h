@@ -3,7 +3,9 @@
 #include "MotionSharpeningPolicy.h"
 #include "SharpenerDispatch.h"
 
-#include <atomic>
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include <atomic>
+#endif
 #include <functional>
 #include <memory>
 #include <span>
@@ -33,8 +35,10 @@ namespace UpscalingSharpener
 			ID3D11ShaderResourceView* motionVectors, std::span<const MotionSharpening::Region> regions,
 			const std::function<bool()>& fallback);
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		/** Reports the last dispatch attempt for this sharpener, independently of current applicability. */
 		const char* GetStatus() const noexcept;
+#endif
 
 	private:
 		enum class MotionStatus : uint8_t
@@ -49,7 +53,9 @@ namespace UpscalingSharpener
 		};
 		bool EnsureResources();
 		const Pass pass;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		std::atomic<MotionStatus> motionStatus{ MotionStatus::NotDispatched };
+#endif
 		winrt::com_ptr<ID3D11ComputeShader> motionAdaptiveComputeShader;
 		std::unique_ptr<ConstantBuffer> motionAdaptiveConfigCB;
 		bool motionAdaptiveShaderFailed = false;

@@ -517,7 +517,7 @@ The VR render-scale controller can capture a bounded CSX-menu stress session and
 
 ## Capture workflow
 
-1. Enable CSX developer mode.
+1. Use a build configured with `DEVBENCH_BRIDGE=ON` and enable CSX developer mode. Production builds exclude stress capture and hot-path reporting; see [the diagnostics boundary](upscaling-diagnostics-boundary.md).
 2. Open **Upscaling > Render Pipeline > Render Scale Stress Capture**.
 3. Select **Start Capture**.
 4. Exercise the same fixed scenario for every candidate build. At minimum, perform two render-scale changes. Include repeated preset changes and a fast-travel cycle when evaluating memory recovery.
@@ -962,7 +962,7 @@ targets. Prefer a second late-use guard when the entry guard is installed but th
 faulting native instruction reloads a different live pointer later in the helper.
 
 Performance builds keep `kEnableVRMenuPresentationTraceDiagnostics` false.
-Changing it to true creates a dedicated forensic build with high-frequency D3D
+Changing it to true in a `DEVBENCH_BRIDGE=ON` build creates a dedicated forensic build with high-frequency D3D
 menu detours and must not be compared against normal optimization captures.
 
 The load-presentation probe is compiled only with `DEVBENCH_BRIDGE=ON`, requires

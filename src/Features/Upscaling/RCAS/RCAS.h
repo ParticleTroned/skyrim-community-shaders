@@ -50,7 +50,9 @@ public:
 		ID3D11ShaderResourceView* motionVectors, std::span<const MotionSharpening::Region> regions);
 
 	/** Reports the last attempted RCAS dispatch; applicability is determined by the active upscaler. */
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	const char* GetMotionAdaptiveStatus() const noexcept;
+#endif
 
 private:
 	UpscalingSharpener::MotionAdaptiveSharpening motionAdaptive{ UpscalingSharpener::Pass::RCAS };

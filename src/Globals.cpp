@@ -313,7 +313,9 @@ namespace globals
 	{
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		Upscaling::InstallVRMenuPresentationTraceD3DHooks(a_context);
+#endif
 		UnderwaterDepthOfField::InstallD3DHooks(a_context);
 	}
 }

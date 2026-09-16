@@ -1660,10 +1660,12 @@ void State::SetLogLevel(spdlog::level::level_enum a_level)
 	spdlog::flush_on(flushLevel);
 	logger::info("Log Level set to {} ({})", magic_enum::enum_name(logLevel), magic_enum::enum_integer(logLevel));
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	// Testers can enable debug logging after the D3D device was initialized.
 	// Install the otherwise dormant trace hooks at that point as well.
 	if (globals::game::isVR && IsDeveloperMode() && globals::d3d::context)
 		Upscaling::InstallVRMenuPresentationTraceD3DHooks(globals::d3d::context);
+#endif
 }
 
 spdlog::level::level_enum State::GetLogLevel()

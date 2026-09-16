@@ -68,7 +68,8 @@ namespace
 		std::scoped_lock lock(startupDiagnosticsMutex);
 		if (!settingsLatched) {
 			const auto& diagnosticSettings = globals::features::upscaling.settings;
-			diagnosticsRequested = diagnosticSettings.pipelineDiagnostics;
+			diagnosticsRequested = globals::state && globals::state->IsDeveloperMode() &&
+			                       diagnosticSettings.pipelineDiagnostics;
 			structuredRequested = diagnosticSettings.pipelineDiagnosticsStructured;
 			settingsLatched = true;
 		}

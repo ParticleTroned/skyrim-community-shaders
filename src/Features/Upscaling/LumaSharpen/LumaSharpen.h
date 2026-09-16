@@ -34,7 +34,9 @@ public:
 		float sharpness, float baseStrength, const MotionSharpening::Settings& settings,
 		ID3D11ShaderResourceView* motionVectors, std::span<const MotionSharpening::Region> regions);
 	/** Reports the last attempted Luma dispatch, independently of current upscaler selection. */
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	const char* GetMotionAdaptiveStatus() const noexcept;
+#endif
 
 private:
 	UpscalingSharpener::MotionAdaptiveSharpening motionAdaptive{ UpscalingSharpener::Pass::LumaSharpen };

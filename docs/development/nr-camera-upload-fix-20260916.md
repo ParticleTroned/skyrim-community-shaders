@@ -75,8 +75,13 @@ These test build directories are under the outer repository; both are
 configured exclusively against the NR task checkout. JUnit results and
 the exact capture regression output are retained beside the inspection.
 
-Build, test, archive and later live receipts belong in the evidence
-directory above. The older running DLL cannot validate the replacement;
-live native stereo camera attribution must be verified after installation.
+Build, test and archive receipts belong in the evidence directory above.
+The replacement passed live native stereo camera attribution after
+installation: the initial 24 valid scout pairs and all 36 baseline pairs
+retained fresh source-frame matrices. Later fixed-pose and outdoor captures
+also retained fresh matrices. The
+[live retest](nr-colour-hmd-retest-20260916.md) records the exact producer,
+physical DLL verification, stationary-scene variation and camera-tolerance
+limitations separately from the repaired upload observation.
 SE/AE live execution and target-branch integration are not claimed. This
 repair adds no renderer-ownership policy or performance qualification.

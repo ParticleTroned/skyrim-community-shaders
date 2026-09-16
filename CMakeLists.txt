@@ -2705,6 +2705,10 @@ if(BUILD_CONTROLLER_TESTS)
         VRDepthCullingTelemetryPolicy
         tests/vr_depth_culling_telemetry_policy_test.cpp
     )
+    target_compile_definitions(
+        vr_depth_culling_telemetry_policy_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
     add_controller_test(
         vr_depth_culling_temporal_policy_test
         VRDepthCullingTemporalPolicy

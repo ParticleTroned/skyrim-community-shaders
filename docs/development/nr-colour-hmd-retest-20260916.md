@@ -1,5 +1,8 @@
 # Native HMD colour retest: camera repaired, baseline variation
 
+The later [QASmoke follow-up](nr-colour-qasmoke-retest-20260916.md)
+records the lower-sunlight retry and the replacement game session.
+
 The replacement camera observer passed live Skyrim VR capture. The final
 menu-free, stationary scene still varied with NR off. No comparative NR
 colour candidates were dispatched, and no colour correction or winning

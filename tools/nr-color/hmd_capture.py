@@ -270,7 +270,7 @@ class Campaign:
                             if "planes" not in expected:
                                 expected["planes"] = {plane["eye"]: plane for plane in acquisition["planes"]}
                             pair = hmd.check_pair(child, path.parent, expected, candidate, self.plan["regionPolicy"],
-                                                  capture_diagnostics=entry["captureDiagnostics"])
+                                                  capture_diagnostics=entry["captureDiagnostics"], sequence=manifest)
                             pairs.append(pair)
                         except (hmd.EvidenceError, KeyError, TypeError) as error:
                             entry["excludedChildren"].append({"ordinal": child.get("ordinal"), "reason": str(error)})

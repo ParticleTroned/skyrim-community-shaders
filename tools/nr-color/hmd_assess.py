@@ -376,11 +376,20 @@ def check_camera(acquisition: dict, fixed_scene: dict) -> None:
 
 
 def check_pair(child: dict, base: Path, expected: dict, candidate: dict, policy: dict, *,
-               capture_diagnostics: dict | None = None) -> dict:
+               capture_diagnostics: dict | None = None, sequence: dict | None = None) -> dict:
     _, Image, _, _ = libraries()
     require(child.get("state") in ("completed", "completed_with_warnings"), "capture did not complete")
     require(bool(child.get("requestId")), "missing child request identity")
-    check_capture_descriptor(child["requested"])
+    requested = child["requested"]
+    if "source" not in requested and "capture" not in requested:
+        require(sequence is not None and bool(sequence.get("requestId")), "sequence parent required for abbreviated child request")
+        require(requested == {"action": "capture", "clientId": "sequence:" + sequence["requestId"],
+                              "commandId": "frame:" + str(child["ordinal"]), "contractMajor": 1},
+                "abbreviated child request does not match its sequence parent")
+        check_capture_descriptor(sequence["requested"])
+        check_capture_descriptor(sequence["effective"])
+    else:
+        check_capture_descriptor(requested)
     check_capture_descriptor(child["effective"])
     source = child["actual"]["source"]
     require(source.get("kind") == "hmd_submission" and source.get("fallback") == "reject"
@@ -575,7 +584,8 @@ def import_campaign(index_path: Path, output: Path) -> tuple[dict, dict, list, l
                     if source.is_file():
                         preserve(source, directory / f"P{child['ordinal']:04}-A{artifact_number:02}{source.suffix}")
                 try:
-                    pair = check_pair(child, manifest_path.parent, entry["expected"], candidate, policy, capture_diagnostics=diagnostics)
+                    pair = check_pair(child, manifest_path.parent, entry["expected"], candidate, policy,
+                                      capture_diagnostics=diagnostics, sequence=manifest)
                     check_camera(pair["acquisition"], plan["fixedScene"])
                     require(not pairs or pair["acquisition"]["monotonicTimestampUs"] > pairs[-1]["acquisition"]["monotonicTimestampUs"], "non-increasing acquisition timestamp")
                     require(not pairs or pair["acquisition"]["compositorCycle"] != pairs[-1]["acquisition"]["compositorCycle"], "duplicate submitted cycle")

@@ -193,6 +193,24 @@ class ImageEvidenceTests(unittest.TestCase):
     def test_raw_without_diagnostics_is_accepted(self):
         self.assertEqual(self.validate()["requestId"], self.pair["requestId"])
 
+    def test_abbreviated_sequence_child_requires_exact_parent(self):
+        parent = {"requestId": "parent-1", "requested": {"sequence": {"capture": descriptor()}},
+                  "effective": {"capture": descriptor()}}
+        self.pair["requested"] = {"action": "capture", "clientId": "sequence:parent-1",
+                                  "commandId": "frame:1", "contractMajor": 1}
+        with self.assertRaisesRegex(HMD.EvidenceError, "parent required"):
+            self.validate()
+        HMD.check_pair(self.pair, self.root, expected(), self.candidate, region_policy(), sequence=parent)
+        for field, value in (("clientId", "sequence:foreign"), ("commandId", "frame:2"), ("contractMajor", 2)):
+            original = self.pair["requested"][field]
+            self.pair["requested"][field] = value
+            with self.assertRaisesRegex(HMD.EvidenceError, "does not match"):
+                HMD.check_pair(self.pair, self.root, expected(), self.candidate, region_policy(), sequence=parent)
+            self.pair["requested"][field] = original
+        parent["requested"]["sequence"]["capture"]["source"]["fallback"] = "allow"
+        with self.assertRaisesRegex(HMD.EvidenceError, "reject fallback"):
+            HMD.check_pair(self.pair, self.root, expected(), self.candidate, region_policy(), sequence=parent)
+
     def test_nr_off_is_distinct_from_hidden_inference(self):
         for kind, apply in (("nr_off", True), ("raw", False)):
             with self.subTest(kind=kind):

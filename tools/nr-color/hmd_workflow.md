@@ -193,6 +193,11 @@ it is not a file SHA-256. The analyser compares the complete configuration as
 well as the opaque fingerprint. File integrity always uses SHA-256.
 
 The importer verifies actual `hmd_submission` with rejected fallback,
+including abbreviated sequence-child request metadata through the exact
+preserved parent request ID, child ordinal and contract version. Both parent
+requested/effective capture descriptors and the child's effective descriptor
+must retain the strict source and encoding policy; no manifest is rewritten.
+It verifies
 committed PNG size/hash/encoding/native extents, same acquisition and eye-pair
 provenance, exact colour configuration/revision/epoch, real inference versus
 disabled/source display, outer visible output outcome, and captured-exposure

@@ -1690,6 +1690,19 @@ namespace Hooks
 #endif
 	}
 
+	__declspec(noinline) void LogRejectedVRLightingMaterial(RE::BSRenderPass* a_pass, uint32_t a_technique,
+		VRLightingMaterialRejection a_rejection, const VRLightingMaterialSnapshot& a_snapshot)
+	{
+		static std::atomic<uint32_t> loggedReasons = 0;
+		const auto reasonBit = static_cast<uint32_t>(a_rejection);
+		if ((loggedReasons.load(std::memory_order_relaxed) & reasonBit) == 0 &&
+			(loggedReasons.fetch_or(reasonBit, std::memory_order_relaxed) & reasonBit) == 0) {
+			logger::warn("[LightingMaterial] Skipping malformed VR draw: reason={} pass={:X} material={:X} technique={:X} diffuseTarget={} indexRead={} targetCount={}",
+				reasonBit, reinterpret_cast<std::uintptr_t>(a_pass), reinterpret_cast<std::uintptr_t>(a_snapshot.material),
+				a_technique, a_snapshot.renderTargetIndex, a_snapshot.indexRead, Util::GetRenderTargetCount());
+		}
+	}
+
 	bool ShouldSkipInvalidVRLightingMaterial(RE::BSRenderPass* a_pass, uint32_t a_technique)
 	{
 		if (!REL::Module::IsVR())
@@ -1700,14 +1713,8 @@ namespace Hooks
 		if (rejection == VRLightingMaterialRejection::None)
 			return false;
 
-		static std::atomic<uint32_t> loggedReasons = 0;
-		const auto reasonBit = static_cast<uint32_t>(rejection);
-		if ((loggedReasons.load(std::memory_order_relaxed) & reasonBit) == 0 &&
-			(loggedReasons.fetch_or(reasonBit, std::memory_order_relaxed) & reasonBit) == 0) {
-			logger::warn("[LightingMaterial] Skipping malformed VR draw: reason={} pass={:X} material={:X} technique={:X} diffuseTarget={} indexRead={} targetCount={}",
-				reasonBit, reinterpret_cast<std::uintptr_t>(a_pass), reinterpret_cast<std::uintptr_t>(snapshot.material),
-				a_technique, snapshot.renderTargetIndex, snapshot.indexRead, Util::GetRenderTargetCount());
-		}
+		// Keep formatting and warning state out of successful draw admission.
+		LogRejectedVRLightingMaterial(a_pass, a_technique, rejection, snapshot);
 		return true;
 	}
 

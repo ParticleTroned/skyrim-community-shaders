@@ -3,11 +3,13 @@
 
 #include <array>
 #include <atomic>
+#include <barrier>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <thread>
 #include <utility>
 
 namespace
@@ -17,11 +19,12 @@ namespace
 	int particleCalls = 0;
 	int terrainCalls = 0;
 	int interiorCalls = 0;
-	int warnings = 0;
+	std::atomic<int> warnings = 0;
 	int failures = 0;
 	DWORD injectedShaderException = 0;
 	DWORD injectedNativeException = 0;
 	bool particleAccepted = true;
+	bool invalidateAfterNativeDraw = false;
 	bool argumentsPreserved = true;
 	void* expectedPass = nullptr;
 	constexpr uint32_t technique = 0x4800002D;
@@ -151,9 +154,12 @@ struct TerrainBlending
 	};
 	bool loaded = true;
 	RenderPassImmediatelyAction action = RenderPassImmediatelyAction::Draw;
-	RenderPassImmediatelyAction OnRenderPassImmediately(RE::BSRenderPass*, uint32_t, bool, uint32_t)
+	void (*onRenderPass)(RE::BSRenderPass*) = nullptr;
+	RenderPassImmediatelyAction OnRenderPassImmediately(RE::BSRenderPass* pass, uint32_t, bool, uint32_t)
 	{
 		++terrainCalls;
+		if (onRenderPass)
+			onRenderPass(pass);
 		return action;
 	}
 };
@@ -164,9 +170,12 @@ namespace globals::features
 	struct
 	{
 		bool loaded = true;
-		bool CheckParticleLights(RE::BSRenderPass*, uint32_t)
+		void (*onCheck)(RE::BSRenderPass*) = nullptr;
+		bool CheckParticleLights(RE::BSRenderPass* pass, uint32_t)
 		{
 			++particleCalls;
+			if (onCheck)
+				onCheck(pass);
 			return particleAccepted;
 		}
 	} lightLimitFix;
@@ -196,6 +205,8 @@ void NativeDraw(RE::BSRenderPass* pass, uint32_t currentTechnique, bool alphaTes
 		RaiseException(injectedNativeException, 0, 0, nullptr);
 	++nativeCalls;
 	argumentsPreserved &= pass == expectedPass && currentTechnique == expectedTechnique && alphaTest && currentFlags == renderFlags;
+	if (invalidateAfterNativeDraw)
+		static_cast<RE::BSLightingShaderMaterialBase*>(pass->shaderProperty->material)->diffuseRenderTargetSourceIndex = 1861746551;
 }
 
 static_assert(RE::BSLightingShader::kTechniqueIDBase == technique);
@@ -268,12 +279,32 @@ int main()
 
 	for (const auto index : { -1, 0, 113, 114, 115, 124 })
 		runIndex(index, true);
+	Check(warnings == 0, "Valid draws must not enter warning logging");
+	{
+		constexpr std::size_t callerCount = 8;
+		std::barrier start{ static_cast<std::ptrdiff_t>(callerCount) };
+		std::atomic<int> admittedInvalidPasses = 0;
+		{
+			std::array<std::jthread, callerCount> callers;
+			for (auto& caller : callers) {
+				caller = std::jthread([&] {
+					start.arrive_and_wait();
+					for (int repeat = 0; repeat < 32; ++repeat) {
+						if (!Hooks::ShouldSkipInvalidVRLightingMaterial(nullptr, technique))
+							++admittedInvalidPasses;
+					}
+				});
+			}
+		}
+		Check(admittedInvalidPasses == 0, "Concurrent malformed draws must remain rejected");
+		Check(warnings == 1, "Concurrent rejections must emit only one warning for their reason");
+	}
 	for (const auto index : { -2, 125, 1861746551, std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max() }) {
 		runIndex(index, false);
 		runIndex(index, false);
 		runIndex(-1, true);
 	}
-	Check(warnings == 1, "Repeated invalid indices must emit only one bounded reason warning");
+	Check(warnings == 2, "Repeated invalid indices must add only one bounded reason warning");
 
 	vrRuntime = false;
 	for (const auto index : { -2, 114, 115, 125, 1861746551 })
@@ -329,6 +360,32 @@ int main()
 	Hooks::BSBatchRenderer_RenderPassImmediately2::thunk(&pass, technique, true, renderFlags);
 	Check(nativeCalls == 2 && interiorCalls == 2 && terrainCalls == 1 && particleCalls == 1,
 		"Valid terrain double draws must retain both native submissions");
+	invalidateAfterNativeDraw = true;
+	ResetCalls();
+	Hooks::BSBatchRenderer_RenderPassImmediately2::thunk(&pass, technique, true, renderFlags);
+	Check(nativeCalls == 1 && interiorCalls == 1,
+		"A second terrain draw must reject material changes made during the first draw");
+	invalidateAfterNativeDraw = false;
+	material.diffuseRenderTargetSourceIndex = -1;
+
+	const auto invalidateMaterial = +[](RE::BSRenderPass* currentPass) {
+		static_cast<RE::BSLightingShaderMaterialBase*>(currentPass->shaderProperty->material)->diffuseRenderTargetSourceIndex = 1861746551;
+	};
+	globals::features::terrainBlending.action = TerrainBlending::RenderPassImmediatelyAction::Draw;
+	globals::features::lightLimitFix.onCheck = invalidateMaterial;
+	ResetCalls();
+	Hooks::BSBatchRenderer_RenderPassImmediately2::thunk(&pass, technique, true, renderFlags);
+	Check(nativeCalls == 0 && interiorCalls == 0 && particleCalls == 1,
+		"Material changes in a particle callback must not inherit earlier admission");
+	globals::features::lightLimitFix.onCheck = nullptr;
+	material.diffuseRenderTargetSourceIndex = -1;
+	globals::features::terrainBlending.onRenderPass = invalidateMaterial;
+	ResetCalls();
+	Hooks::BSBatchRenderer_RenderPassImmediately2::thunk(&pass, technique, true, renderFlags);
+	Check(nativeCalls == 0 && interiorCalls == 0 && terrainCalls == 1,
+		"Material changes in a terrain callback must not inherit earlier admission");
+	globals::features::terrainBlending.onRenderPass = nullptr;
+	material.diffuseRenderTargetSourceIndex = -1;
 	globals::features::terrainBlending.action = TerrainBlending::RenderPassImmediatelyAction::Skip;
 	ResetCalls();
 	Hooks::BSBatchRenderer_RenderPassImmediately2::thunk(&pass, technique, true, renderFlags);

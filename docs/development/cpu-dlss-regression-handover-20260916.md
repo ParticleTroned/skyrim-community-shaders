@@ -10,6 +10,12 @@ the native-frustum interpretation: increased rendering-thread samples do
 not necessarily mean increased all-thread work. The sections below retain
 the earlier cross-build findings and their distinct build identities.
 
+The subsequent [RC166 extension](rc166-comparison-20260916/README.md)
+preserves all eleven runs and separates repeat variation, fpsVR timing,
+WPR execution/ready/wait results and legacy health limitations. It is a
+whole-build comparison with original vendor DLLs, not an isolated test of
+culling, material guards or Streamline versions.
+
 Investigation branch: `perf/cpu-dlss-regression-20260916`
 
 This handover summarizes existing measurements and analysis. It records no

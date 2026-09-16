@@ -9,12 +9,13 @@ same PR. Earlier snapshots stay unchanged. See the
 
 ## Retained snapshots
 
-| Version | File                                                                         |                                                                    Size | Contents                                                                                                                             |
-| ------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------: | ------------------------------------------------------------------------------------------------------------------------------------ |
-| 0001    | [History 1](vr-render-scale-ledger-0001-history.csv)                         |                                           83,486,866 bytes / 79.619 MiB | Oldest retained runs plus intermediate runs selected to balance the archives; 22 run columns                                         |
-| 0002    | [History 2](vr-render-scale-ledger-0002-history.csv)                         |                                           83,607,079 bytes / 79.734 MiB | Remaining intermediate PR66/PR73 runs; 4 run columns                                                                                 |
-| 0003    | [PR73 and baselines](vr-render-scale-ledger-0003-pr73.csv)                   |                                           72,209,582 bytes / 68.864 MiB | Both PR65 baseline repeats, PR66 reference, latest PR73 measurement; 4 run columns                                                   |
-| 0004    | [Depth-culling investigation](vr-render-scale-ledger-0004-investigation.csv) | See [coverage receipt](depth-culling-comparison-20260916/coverage.json) | Eight same-build gameft-sw runs; 48 saves; complete summaries, producer final records, settings, provenance and derived WPR analysis |
+| Version | File                                                                          |                                                                    Size | Contents                                                                                                                                                     |
+| ------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 0001    | [History 1](vr-render-scale-ledger-0001-history.csv)                          |                                           83,486,866 bytes / 79.619 MiB | Oldest retained runs plus intermediate runs selected to balance the archives; 22 run columns                                                                 |
+| 0002    | [History 2](vr-render-scale-ledger-0002-history.csv)                          |                                           83,607,079 bytes / 79.734 MiB | Remaining intermediate PR66/PR73 runs; 4 run columns                                                                                                         |
+| 0003    | [PR73 and baselines](vr-render-scale-ledger-0003-pr73.csv)                    |                                           72,209,582 bytes / 68.864 MiB | Both PR65 baseline repeats, PR66 reference, latest PR73 measurement; 4 run columns                                                                           |
+| 0004    | [Depth-culling investigation](vr-render-scale-ledger-0004-investigation.csv)  | See [coverage receipt](depth-culling-comparison-20260916/coverage.json) | Eight same-build gameft-sw runs; 48 saves; complete summaries, producer final records, settings, provenance and derived WPR analysis                         |
+| 0005    | [RC166 and culling comparison](vr-render-scale-ledger-0005-investigation.csv) |         See [coverage receipt](rc166-comparison-20260916/coverage.json) | All eight prior runs plus three RC166 repeats; 66 saves; complete legacy receipts, provenance, matched WPR analysis and explicit health/coverage limitations |
 
 The archives differ by 120,213 bytes. The original three are plain CSV files below
 100 MiB. Their column headers retain exact run and compiled-source
@@ -26,7 +27,7 @@ Snapshot `0003` pins PR65 sources `348803c18` and `7c8e3e656`, PR66 source
 `renderscale-tuning-nvidia-2026-09-11T17-09-55-165Z`. The older PR73
 comparison source `269bded15` is retained in `0002`.
 
-The next finalized measurement uses `0005-pr<PR number>`. If one PR's
+The next finalized measurement uses `0006-pr<PR number>`. If one PR's
 complete evidence exceeds the file limit, use consecutive numbers with
 that PR identity and list its parts together here. Baselines may recur
 in later snapshots, but their copied cells must remain exact.
@@ -45,6 +46,15 @@ local. Historical snapshots `0001`–`0003` are unchanged.
 The tuning comparison wrapper discovers `prNUMBER` and `history`
 snapshots; it does not interpret this investigation schema as a tuning
 assay. Use the committed `verify.py` for its coverage audit.
+
+Snapshot `0005` extends the same investigation with the three user-labeled
+RC166 repeats. It preserves every `0004` cell unchanged and adds the exact
+`2eef86720` producer identity, original vendor-library hashes, all legacy
+health receipts and derived CPU stack/ready/wait results. See the
+[comparison and limitations](rc166-comparison-20260916/README.md) and run
+`python docs/development/rc166-comparison-20260916/verify.py` for the portable
+reconstruction, timing and historical-cell audit. These are whole-build
+comparisons, not an isolated culling or vendor-library experiment.
 
 ## Migration verification
 

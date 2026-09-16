@@ -13,6 +13,30 @@ implementation has no performance claim or runtime qualification result;
 new measurements must use the existing comparison ledger and reporting
 workflow.
 
+## September 16: three RC166 repeats added
+
+The [eleven-run comparison](rc166-comparison-20260916/README.md) adds three
+complete six-save repeats of the user-labeled RC166 build. The verified
+source is `2eef86720e5c6a48e6fa9ad93506a1f2093d0f2f`; its original Streamline
+2.13.0 / DLSS 310.8.0 libraries were retained. Immutable ledger `0005`
+preserves every prior `0004` cell and the complete new summaries, legacy
+receipts, provenance and matched WPR results.
+
+RC166 is not uniformly faster or quieter. DLAA CPU means and upper tails
+are higher than the recent main-VR Legacy run, while DLSS results vary by
+save and repeat. Save 13 CPU means span 6.002 ms across the three repeats.
+WPR and frame cadence distinguish execution costs from pacing; fpsVR CPU
+averages alone do not establish a reduction in CPU work. These whole-build
+results do not reverse the recommendation to retain enabled culling.
+
+The explicitly authorized older-producer compatibility path retains the
+60-second holds and final-ten-second calculations but uses an approximate
+loaded-player/menu-clear boundary and read-only legacy health receipts.
+All 54 late profile checks matched. Modern strict lifecycle evidence is
+unavailable, not passed. Repeat 1 Save 12 exceeds the saved scheduler
+coverage tolerance and remains flagged. No rendering code was changed or
+benchmark optimization claimed by this publication.
+
 ## September 16: eight-run depth-culling comparison
 
 The [complete culling handover](depth-culling-comparison-20260916/README.md)

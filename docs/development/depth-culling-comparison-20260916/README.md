@@ -1,5 +1,9 @@
 # Depth-culling comparison and investigation handover
 
+The subsequent [eleven-run comparison](../rc166-comparison-20260916/README.md)
+adds three RC166 repeats with their original vendor libraries. It retains
+all results below and documents the older producer's compatibility limits.
+
 **Keep depth culling enabled; continue with Balanced.** The eight-run
 campaign supports a net benefit from native depth culling in the tested
 scenes. Neither Legacy nor Performance demonstrated a repeatable overall

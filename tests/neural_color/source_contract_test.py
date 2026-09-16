@@ -8,6 +8,22 @@ SHADERS = ROOT / "features/Neural Rendering Colour/Shaders/Upscaling/NeuralRende
 
 
 class Contracts(unittest.TestCase):
+    def test_vr_camera_observes_validated_engine_upload(self):
+        source = (ROOT / "src/Globals.cpp").read_text()
+        observer = source.split("void ObserveVRFrameBufferUpload(", 1)[1].split(
+            "void InstallVRFrameBufferUploadHook()", 1)[0]
+        self.assertIn("if (context == d3d::context", observer)
+        self.assertIn("if (source)", observer)
+        self.assertLess(observer.index("game::mappedFrameBuffer = nullptr"), observer.index("if (source)"))
+        self.assertIn("resource == *game::perFrame && subresource == 0", observer)
+        self.assertLess(observer.index("CacheFramebuffer(source)"), observer.index("context->Unmap("))
+        install = source.split("void InstallVRFrameBufferUploadHook()", 1)[1].split("struct ID3D11DeviceContext_Map", 1)[0]
+        self.assertIn("if (!game::isVR || installed)", install)
+        self.assertIn("SKSE::RUNTIME_VR_1_4_15", install)
+        self.assertEqual(install.count("std::memcmp("), 3)
+        self.assertIn("sizeof(FrameBufferVR) == 0x570", install)
+        self.assertIn("write_call<6>(upload + 0x7A4, observer)", install)
+
     def test_exposure_observes_actual_draw_bindings(self):
         hooks = (ROOT / "src/Globals.cpp").read_text()
         self.assertEqual(hooks.count("ExposureCapture::Instance().ObserveDraw(This,"), 7)

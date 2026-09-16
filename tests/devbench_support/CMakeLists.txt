@@ -29,6 +29,13 @@ support_test(d3d_context_protection_test D3DContextProtectionWARP)
 target_sources(d3d_context_protection_test PRIVATE "${REPO}/src/Utils/D3DContextProtection.cpp")
 target_link_libraries(d3d_context_protection_test PRIVATE d3d11)
 
+find_path(DETOURS_INCLUDE_DIRS "detours/detours.h" REQUIRED)
+find_library(DETOURS_LIBRARY detours REQUIRED)
+find_path(XBYAK_INCLUDE_DIRS "xbyak/xbyak.h" REQUIRED)
+support_test(d3d_capture_hook_test D3DCaptureHooksWARP)
+target_include_directories(d3d_capture_hook_test PRIVATE "${DETOURS_INCLUDE_DIRS}" "${XBYAK_INCLUDE_DIRS}")
+target_link_libraries(d3d_capture_hook_test PRIVATE d3d11 "${DETOURS_LIBRARY}")
+
 foreach(kind IN ITEMS dispatch capture_present)
     set(dir "${CMAKE_CURRENT_BINARY_DIR}/generated/${kind}")
     execute_process(COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${REPO}"

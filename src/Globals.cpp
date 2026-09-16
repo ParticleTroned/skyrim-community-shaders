@@ -47,6 +47,9 @@
 #include "State.h"
 #include "TruePBR.h"
 #include "Utils/Game.h"
+#include "Utils/VRFrameBufferUpload.h"
+#include <array>
+#include <cstring>
 
 namespace globals
 {
@@ -245,24 +248,60 @@ namespace globals
 		}
 	}
 
-	/**
- * @brief Caches the current frame buffer data and clears the mapped pointer.
- *
- * Copies the contents of the mapped frame buffer into an internal cache and resets the mapped frame buffer pointer.
- */
-	void CacheFramebuffer()
+	/// Copy a proven upload source before Unmap invalidates its CPU access.
+	void CacheFramebuffer(const void* data)
 	{
 		using namespace game;
 		if (REL::Module::IsVR()) {
-			auto frameBufferVR = (FrameBufferVR*)mappedFrameBuffer->pData;
+			auto frameBufferVR = static_cast<const FrameBufferVR*>(data);
 			frameBufferCached.vr = *frameBufferVR;
 		} else {
-			auto frameBuffer = (FrameBuffer*)mappedFrameBuffer->pData;
+			auto frameBuffer = static_cast<const FrameBuffer*>(data);
 			frameBufferCached.nonVR = *frameBuffer;
 		}
 		mappedFrameBuffer = nullptr;
 		if (game::isVR && state)
 			features::upscaling.RecordNeuralCaptureCamera(state->frameCount);
+	}
+
+	void ObserveVRFrameBufferUpload(ID3D11DeviceContext* context, ID3D11Resource* resource,
+		UINT subresource, const void* source)
+	{
+		if (context == d3d::context && resource == *game::perFrame && subresource == 0) {
+			game::mappedFrameBuffer = nullptr;
+			if (source)
+				CacheFramebuffer(source);
+		}
+		context->Unmap(resource, subresource);
+	}
+
+	void InstallVRFrameBufferUploadHook()
+	{
+		static bool installed = false;
+		if (!game::isVR || installed)
+			return;
+		if (REL::Module::get().version() != SKSE::RUNTIME_VR_1_4_15) {
+			logger::error("VR frame-buffer upload observer unavailable for this runtime");
+			return;
+		}
+		const auto upload = REL::RelocationID(75472, 0).address();
+		constexpr std::array<std::uint8_t, 8> mapResult{ 0xFF, 0x50, 0x70, 0x48, 0x8B, 0x44, 0x24, 0x40 };
+		constexpr std::array<std::uint8_t, 10> sourceCopy{ 0x48, 0x8D, 0x4C, 0x24, 0x50, 0xBA, 0x0B, 0x00, 0x00, 0x00 };
+		constexpr std::array<std::uint8_t, 6> unmap{ 0x48, 0x8B, 0x01, 0xFF, 0x50, 0x78 };
+		if (std::memcmp(reinterpret_cast<const void*>(upload + 0x6FA), mapResult.data(), mapResult.size()) != 0 ||
+			std::memcmp(reinterpret_cast<const void*>(upload + 0x72C), sourceCopy.data(), sourceCopy.size()) != 0 ||
+			std::memcmp(reinterpret_cast<const void*>(upload + 0x7A4), unmap.data(), unmap.size()) != 0) {
+			logger::error("VR frame-buffer upload observer signature mismatch; retaining D3D observations");
+			return;
+		}
+		static_assert(sizeof(FrameBufferVR) == 0x570);
+		Util::VRFrameBufferUploadThunk code(reinterpret_cast<std::uintptr_t>(ObserveVRFrameBufferUpload));
+		code.ready();
+		auto& trampoline = SKSE::GetTrampoline();
+		const auto observer = reinterpret_cast<std::uintptr_t>(trampoline.allocate(code));
+		trampoline.write_call<6>(upload + 0x7A4, observer);
+		installed = true;
+		logger::info("Installed VR frame-buffer upload observer");
 	}
 
 	/**
@@ -296,7 +335,7 @@ namespace globals
 		static void thunk(ID3D11DeviceContext* This, ID3D11Resource* pResource, UINT Subresource)
 		{
 			if (*globals::game::perFrame.get() == pResource && globals::game::mappedFrameBuffer)
-				CacheFramebuffer();
+				CacheFramebuffer(globals::game::mappedFrameBuffer->pData);
 			func(This, pResource, Subresource);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -377,6 +416,7 @@ namespace globals
 	/// Share draw hooks for underwater composition and live HDR observation.
 	void InstallD3DHooks(ID3D11DeviceContext* a_context)
 	{
+		InstallVRFrameBufferUploadHook();
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
 		Upscaling::InstallVRMenuPresentationTraceD3DHooks(a_context);

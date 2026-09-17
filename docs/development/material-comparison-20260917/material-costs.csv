@@ -1,0 +1,1927 @@
+run,save,scope,category,frames,weightMs,sampleCount,msPerFrame,shareOfSampledExecutionPct
+Original traced baseline,08,render,legacy_guard_union,599,0.0,0,0.0,0.0
+Original traced baseline,08,render,expanded_guard_union,599,0.0,0,0.0,0.0
+Original traced baseline,08,render,expanded_guard_and_pbr_union,599,0.0,0,0.0,0.0
+Original traced baseline,08,render,named_material_leaf,599,0.0,0,0.0,0.0
+Original traced baseline,08,render,should_skip,599,0.0,0,0.0,0.0
+Original traced baseline,08,render,probe,599,0.0,0,0.0,0.0
+Original traced baseline,08,render,pbr_predicate,599,0.0,0,0.0,0.0
+Original traced baseline,08,render,rejection_logger,599,0.0,0,0.0,0.0
+Original traced baseline,08,render,logger_descendant_in_guard,599,0.0,0,0.0,0.0
+Original traced baseline,08,process,legacy_guard_union,599,0.0,0,0.0,0.0
+Original traced baseline,08,process,expanded_guard_union,599,0.0,0,0.0,0.0
+Original traced baseline,08,process,expanded_guard_and_pbr_union,599,0.0,0,0.0,0.0
+Original traced baseline,08,process,named_material_leaf,599,0.0,0,0.0,0.0
+Original traced baseline,08,process,should_skip,599,0.0,0,0.0,0.0
+Original traced baseline,08,process,probe,599,0.0,0,0.0,0.0
+Original traced baseline,08,process,pbr_predicate,599,0.0,0,0.0,0.0
+Original traced baseline,08,process,rejection_logger,599,0.0,0,0.0,0.0
+Original traced baseline,08,process,logger_descendant_in_guard,599,0.0,0,0.0,0.0
+Original traced baseline,11,render,legacy_guard_union,1048,0.0,0,0.0,0.0
+Original traced baseline,11,render,expanded_guard_union,1048,0.0,0,0.0,0.0
+Original traced baseline,11,render,expanded_guard_and_pbr_union,1048,0.0,0,0.0,0.0
+Original traced baseline,11,render,named_material_leaf,1048,0.0,0,0.0,0.0
+Original traced baseline,11,render,should_skip,1048,0.0,0,0.0,0.0
+Original traced baseline,11,render,probe,1048,0.0,0,0.0,0.0
+Original traced baseline,11,render,pbr_predicate,1048,0.0,0,0.0,0.0
+Original traced baseline,11,render,rejection_logger,1048,0.0,0,0.0,0.0
+Original traced baseline,11,render,logger_descendant_in_guard,1048,0.0,0,0.0,0.0
+Original traced baseline,11,process,legacy_guard_union,1048,0.0,0,0.0,0.0
+Original traced baseline,11,process,expanded_guard_union,1048,0.0,0,0.0,0.0
+Original traced baseline,11,process,expanded_guard_and_pbr_union,1048,0.0,0,0.0,0.0
+Original traced baseline,11,process,named_material_leaf,1048,0.0,0,0.0,0.0
+Original traced baseline,11,process,should_skip,1048,0.0,0,0.0,0.0
+Original traced baseline,11,process,probe,1048,0.0,0,0.0,0.0
+Original traced baseline,11,process,pbr_predicate,1048,0.0,0,0.0,0.0
+Original traced baseline,11,process,rejection_logger,1048,0.0,0,0.0,0.0
+Original traced baseline,11,process,logger_descendant_in_guard,1048,0.0,0,0.0,0.0
+Original traced baseline,09,render,legacy_guard_union,628,0.0,0,0.0,0.0
+Original traced baseline,09,render,expanded_guard_union,628,0.0,0,0.0,0.0
+Original traced baseline,09,render,expanded_guard_and_pbr_union,628,0.0,0,0.0,0.0
+Original traced baseline,09,render,named_material_leaf,628,0.0,0,0.0,0.0
+Original traced baseline,09,render,should_skip,628,0.0,0,0.0,0.0
+Original traced baseline,09,render,probe,628,0.0,0,0.0,0.0
+Original traced baseline,09,render,pbr_predicate,628,0.0,0,0.0,0.0
+Original traced baseline,09,render,rejection_logger,628,0.0,0,0.0,0.0
+Original traced baseline,09,render,logger_descendant_in_guard,628,0.0,0,0.0,0.0
+Original traced baseline,09,process,legacy_guard_union,628,0.0,0,0.0,0.0
+Original traced baseline,09,process,expanded_guard_union,628,0.0,0,0.0,0.0
+Original traced baseline,09,process,expanded_guard_and_pbr_union,628,0.0,0,0.0,0.0
+Original traced baseline,09,process,named_material_leaf,628,0.0,0,0.0,0.0
+Original traced baseline,09,process,should_skip,628,0.0,0,0.0,0.0
+Original traced baseline,09,process,probe,628,0.0,0,0.0,0.0
+Original traced baseline,09,process,pbr_predicate,628,0.0,0,0.0,0.0
+Original traced baseline,09,process,rejection_logger,628,0.0,0,0.0,0.0
+Original traced baseline,09,process,logger_descendant_in_guard,628,0.0,0,0.0,0.0
+Original traced baseline,12,render,legacy_guard_union,1058,0.0,0,0.0,0.0
+Original traced baseline,12,render,expanded_guard_union,1058,0.0,0,0.0,0.0
+Original traced baseline,12,render,expanded_guard_and_pbr_union,1058,0.0,0,0.0,0.0
+Original traced baseline,12,render,named_material_leaf,1058,0.0,0,0.0,0.0
+Original traced baseline,12,render,should_skip,1058,0.0,0,0.0,0.0
+Original traced baseline,12,render,probe,1058,0.0,0,0.0,0.0
+Original traced baseline,12,render,pbr_predicate,1058,0.0,0,0.0,0.0
+Original traced baseline,12,render,rejection_logger,1058,0.0,0,0.0,0.0
+Original traced baseline,12,render,logger_descendant_in_guard,1058,0.0,0,0.0,0.0
+Original traced baseline,12,process,legacy_guard_union,1058,0.0,0,0.0,0.0
+Original traced baseline,12,process,expanded_guard_union,1058,0.0,0,0.0,0.0
+Original traced baseline,12,process,expanded_guard_and_pbr_union,1058,0.0,0,0.0,0.0
+Original traced baseline,12,process,named_material_leaf,1058,0.0,0,0.0,0.0
+Original traced baseline,12,process,should_skip,1058,0.0,0,0.0,0.0
+Original traced baseline,12,process,probe,1058,0.0,0,0.0,0.0
+Original traced baseline,12,process,pbr_predicate,1058,0.0,0,0.0,0.0
+Original traced baseline,12,process,rejection_logger,1058,0.0,0,0.0,0.0
+Original traced baseline,12,process,logger_descendant_in_guard,1058,0.0,0,0.0,0.0
+Original traced baseline,10,render,legacy_guard_union,600,0.0,0,0.0,0.0
+Original traced baseline,10,render,expanded_guard_union,600,0.0,0,0.0,0.0
+Original traced baseline,10,render,expanded_guard_and_pbr_union,600,0.0,0,0.0,0.0
+Original traced baseline,10,render,named_material_leaf,600,0.0,0,0.0,0.0
+Original traced baseline,10,render,should_skip,600,0.0,0,0.0,0.0
+Original traced baseline,10,render,probe,600,0.0,0,0.0,0.0
+Original traced baseline,10,render,pbr_predicate,600,0.0,0,0.0,0.0
+Original traced baseline,10,render,rejection_logger,600,0.0,0,0.0,0.0
+Original traced baseline,10,render,logger_descendant_in_guard,600,0.0,0,0.0,0.0
+Original traced baseline,10,process,legacy_guard_union,600,0.0,0,0.0,0.0
+Original traced baseline,10,process,expanded_guard_union,600,0.0,0,0.0,0.0
+Original traced baseline,10,process,expanded_guard_and_pbr_union,600,0.0,0,0.0,0.0
+Original traced baseline,10,process,named_material_leaf,600,0.0,0,0.0,0.0
+Original traced baseline,10,process,should_skip,600,0.0,0,0.0,0.0
+Original traced baseline,10,process,probe,600,0.0,0,0.0,0.0
+Original traced baseline,10,process,pbr_predicate,600,0.0,0,0.0,0.0
+Original traced baseline,10,process,rejection_logger,600,0.0,0,0.0,0.0
+Original traced baseline,10,process,logger_descendant_in_guard,600,0.0,0,0.0,0.0
+Original traced baseline,13,render,legacy_guard_union,599,0.0,0,0.0,0.0
+Original traced baseline,13,render,expanded_guard_union,599,0.0,0,0.0,0.0
+Original traced baseline,13,render,expanded_guard_and_pbr_union,599,0.0,0,0.0,0.0
+Original traced baseline,13,render,named_material_leaf,599,0.0,0,0.0,0.0
+Original traced baseline,13,render,should_skip,599,0.0,0,0.0,0.0
+Original traced baseline,13,render,probe,599,0.0,0,0.0,0.0
+Original traced baseline,13,render,pbr_predicate,599,0.0,0,0.0,0.0
+Original traced baseline,13,render,rejection_logger,599,0.0,0,0.0,0.0
+Original traced baseline,13,render,logger_descendant_in_guard,599,0.0,0,0.0,0.0
+Original traced baseline,13,process,legacy_guard_union,599,0.0,0,0.0,0.0
+Original traced baseline,13,process,expanded_guard_union,599,0.0,0,0.0,0.0
+Original traced baseline,13,process,expanded_guard_and_pbr_union,599,0.0,0,0.0,0.0
+Original traced baseline,13,process,named_material_leaf,599,0.0,0,0.0,0.0
+Original traced baseline,13,process,should_skip,599,0.0,0,0.0,0.0
+Original traced baseline,13,process,probe,599,0.0,0,0.0,0.0
+Original traced baseline,13,process,pbr_predicate,599,0.0,0,0.0,0.0
+Original traced baseline,13,process,rejection_logger,599,0.0,0,0.0,0.0
+Original traced baseline,13,process,logger_descendant_in_guard,599,0.0,0,0.0,0.0
+Native-hook correction,08,render,legacy_guard_union,593,73.02120000000001,73,0.12313861720067455,0.8418963053292593
+Native-hook correction,08,render,expanded_guard_union,593,73.02120000000001,73,0.12313861720067455,0.8418963053292593
+Native-hook correction,08,render,expanded_guard_and_pbr_union,593,73.02120000000001,73,0.12313861720067455,0.8418963053292593
+Native-hook correction,08,render,named_material_leaf,593,71.0215,71,0.1197664418212479,0.8188408085452169
+Native-hook correction,08,render,should_skip,593,73.02120000000001,73,0.12313861720067455,0.8418963053292593
+Native-hook correction,08,render,probe,593,48.022099999999995,48,0.08098161888701517,0.5536697365169596
+Native-hook correction,08,render,pbr_predicate,593,0.0,0,0.0,0.0
+Native-hook correction,08,render,rejection_logger,593,0.0,0,0.0,0.0
+Native-hook correction,08,render,logger_descendant_in_guard,593,0.0,0,0.0,0.0
+Native-hook correction,08,process,legacy_guard_union,593,73.02120000000001,73,0.12313861720067455,0.25116944767535443
+Native-hook correction,08,process,expanded_guard_union,593,73.02120000000001,73,0.12313861720067455,0.25116944767535443
+Native-hook correction,08,process,expanded_guard_and_pbr_union,593,73.02120000000001,73,0.12313861720067455,0.25116944767535443
+Native-hook correction,08,process,named_material_leaf,593,71.0215,71,0.1197664418212479,0.24429112268868744
+Native-hook correction,08,process,should_skip,593,73.02120000000001,73,0.12313861720067455,0.25116944767535443
+Native-hook correction,08,process,probe,593,48.022099999999995,48,0.08098161888701517,0.1651805822584487
+Native-hook correction,08,process,pbr_predicate,593,0.0,0,0.0,0.0
+Native-hook correction,08,process,rejection_logger,593,0.0,0,0.0,0.0
+Native-hook correction,08,process,logger_descendant_in_guard,593,0.0,0,0.0,0.0
+Native-hook correction,11,render,legacy_guard_union,975,42.51500000000001,42,0.04360512820512821,0.47490715796846256
+Native-hook correction,11,render,expanded_guard_union,975,42.51500000000001,42,0.04360512820512821,0.47490715796846256
+Native-hook correction,11,render,expanded_guard_and_pbr_union,975,42.51500000000001,42,0.04360512820512821,0.47490715796846256
+Native-hook correction,11,render,named_material_leaf,975,38.516400000000004,38,0.039504000000000004,0.4302414220669526
+Native-hook correction,11,render,should_skip,975,42.51500000000001,42,0.04360512820512821,0.47490715796846256
+Native-hook correction,11,render,probe,975,32.35339999999999,32,0.033182974358974354,0.3613985944870481
+Native-hook correction,11,render,pbr_predicate,975,0.0,0,0.0,0.0
+Native-hook correction,11,render,rejection_logger,975,0.0,0,0.0,0.0
+Native-hook correction,11,render,logger_descendant_in_guard,975,0.0,0,0.0,0.0
+Native-hook correction,11,process,legacy_guard_union,975,42.51500000000001,42,0.04360512820512821,0.08653398541523703
+Native-hook correction,11,process,expanded_guard_union,975,42.51500000000001,42,0.04360512820512821,0.08653398541523703
+Native-hook correction,11,process,expanded_guard_and_pbr_union,975,42.51500000000001,42,0.04360512820512821,0.08653398541523703
+Native-hook correction,11,process,named_material_leaf,975,38.516400000000004,38,0.039504000000000004,0.0783953333140641
+Native-hook correction,11,process,should_skip,975,42.51500000000001,42,0.04360512820512821,0.08653398541523703
+Native-hook correction,11,process,probe,975,32.35339999999999,32,0.033182974358974354,0.06585131468266091
+Native-hook correction,11,process,pbr_predicate,975,0.0,0,0.0,0.0
+Native-hook correction,11,process,rejection_logger,975,0.0,0,0.0,0.0
+Native-hook correction,11,process,logger_descendant_in_guard,975,0.0,0,0.0,0.0
+Native-hook correction,09,render,legacy_guard_union,665,79.09889999999999,79,0.11894571428571427,1.1414249181171372
+Native-hook correction,09,render,expanded_guard_union,665,79.09889999999999,79,0.11894571428571427,1.1414249181171372
+Native-hook correction,09,render,expanded_guard_and_pbr_union,665,79.09889999999999,79,0.11894571428571427,1.1414249181171372
+Native-hook correction,09,render,named_material_leaf,665,75.1039,75,0.1129381954887218,1.0837756644880987
+Native-hook correction,09,render,should_skip,665,79.09889999999999,79,0.11894571428571427,1.1414249181171372
+Native-hook correction,09,render,probe,665,61.05809999999999,61,0.09181669172932329,0.8810898355462334
+Native-hook correction,09,render,pbr_predicate,665,0.0,0,0.0,0.0
+Native-hook correction,09,render,rejection_logger,665,0.0,0,0.0,0.0
+Native-hook correction,09,render,logger_descendant_in_guard,665,0.0,0,0.0,0.0
+Native-hook correction,09,process,legacy_guard_union,665,79.09889999999999,79,0.11894571428571427,0.4106390061646132
+Native-hook correction,09,process,expanded_guard_union,665,79.09889999999999,79,0.11894571428571427,0.4106390061646132
+Native-hook correction,09,process,expanded_guard_and_pbr_union,665,79.09889999999999,79,0.11894571428571427,0.4106390061646132
+Native-hook correction,09,process,named_material_leaf,665,75.1039,75,0.1129381954887218,0.3898991118092223
+Native-hook correction,09,process,should_skip,665,79.09889999999999,79,0.11894571428571427,0.4106390061646132
+Native-hook correction,09,process,probe,665,61.05809999999999,61,0.09181669172932329,0.3169808619626767
+Native-hook correction,09,process,pbr_predicate,665,0.0,0,0.0,0.0
+Native-hook correction,09,process,rejection_logger,665,0.0,0,0.0,0.0
+Native-hook correction,09,process,logger_descendant_in_guard,665,0.0,0,0.0,0.0
+Native-hook correction,12,render,legacy_guard_union,1003,28.084999999999997,28,0.02800099700897308,0.29458611762317505
+Native-hook correction,12,render,expanded_guard_union,1003,28.084999999999997,28,0.02800099700897308,0.29458611762317505
+Native-hook correction,12,render,expanded_guard_and_pbr_union,1003,28.084999999999997,28,0.02800099700897308,0.29458611762317505
+Native-hook correction,12,render,named_material_leaf,1003,26.0789,26,0.026000897308075775,0.27354395239035145
+Native-hook correction,12,render,should_skip,1003,28.084999999999997,28,0.02800099700897308,0.29458611762317505
+Native-hook correction,12,render,probe,1003,20.0737,20,0.020013659022931205,0.21055486378252908
+Native-hook correction,12,render,pbr_predicate,1003,0.0,0,0.0,0.0
+Native-hook correction,12,render,rejection_logger,1003,0.0,0,0.0,0.0
+Native-hook correction,12,render,logger_descendant_in_guard,1003,0.0,0,0.0,0.0
+Native-hook correction,12,process,legacy_guard_union,1003,28.084999999999997,28,0.02800099700897308,0.07882656648448642
+Native-hook correction,12,process,expanded_guard_union,1003,28.084999999999997,28,0.02800099700897308,0.07882656648448642
+Native-hook correction,12,process,expanded_guard_and_pbr_union,1003,28.084999999999997,28,0.02800099700897308,0.07882656648448642
+Native-hook correction,12,process,named_material_leaf,1003,26.0789,26,0.026000897308075775,0.07319601725804784
+Native-hook correction,12,process,should_skip,1003,28.084999999999997,28,0.02800099700897308,0.07882656648448642
+Native-hook correction,12,process,probe,1003,20.0737,20,0.020013659022931205,0.056341137533901915
+Native-hook correction,12,process,pbr_predicate,1003,0.0,0,0.0,0.0
+Native-hook correction,12,process,rejection_logger,1003,0.0,0,0.0,0.0
+Native-hook correction,12,process,logger_descendant_in_guard,1003,0.0,0,0.0,0.0
+Native-hook correction,10,render,legacy_guard_union,600,76.98410000000001,77,0.12830683333333334,1.108027248591891
+Native-hook correction,10,render,expanded_guard_union,600,76.98410000000001,77,0.12830683333333334,1.108027248591891
+Native-hook correction,10,render,expanded_guard_and_pbr_union,600,76.98410000000001,77,0.12830683333333334,1.108027248591891
+Native-hook correction,10,render,named_material_leaf,600,73.983,74,0.12330500000000001,1.064832607415997
+Native-hook correction,10,render,should_skip,600,76.98410000000001,77,0.12830683333333334,1.108027248591891
+Native-hook correction,10,render,probe,600,61.988200000000006,62,0.10331366666666668,0.892192214901049
+Native-hook correction,10,render,pbr_predicate,600,0.0,0,0.0,0.0
+Native-hook correction,10,render,rejection_logger,600,0.0,0,0.0,0.0
+Native-hook correction,10,render,logger_descendant_in_guard,600,0.0,0,0.0,0.0
+Native-hook correction,10,process,legacy_guard_union,600,76.98410000000001,77,0.12830683333333334,0.28970885408138114
+Native-hook correction,10,process,expanded_guard_union,600,76.98410000000001,77,0.12830683333333334,0.28970885408138114
+Native-hook correction,10,process,expanded_guard_and_pbr_union,600,76.98410000000001,77,0.12830683333333334,0.28970885408138114
+Native-hook correction,10,process,named_material_leaf,600,73.983,74,0.12330500000000001,0.2784150253299424
+Native-hook correction,10,process,should_skip,600,76.98410000000001,77,0.12830683333333334,0.28970885408138114
+Native-hook correction,10,process,probe,600,61.988200000000006,62,0.10331366666666668,0.2332758373296235
+Native-hook correction,10,process,pbr_predicate,600,0.0,0,0.0,0.0
+Native-hook correction,10,process,rejection_logger,600,0.0,0,0.0,0.0
+Native-hook correction,10,process,logger_descendant_in_guard,600,0.0,0,0.0,0.0
+Native-hook correction,13,render,legacy_guard_union,578,63.1177,63,0.10920017301038062,0.6685794894667233
+Native-hook correction,13,render,expanded_guard_union,578,63.1177,63,0.10920017301038062,0.6685794894667233
+Native-hook correction,13,render,expanded_guard_and_pbr_union,578,63.1177,63,0.10920017301038062,0.6685794894667233
+Native-hook correction,13,render,named_material_leaf,578,61.117000000000004,61,0.10573875432525952,0.6473869082323617
+Native-hook correction,13,render,should_skip,578,63.1177,63,0.10920017301038062,0.6685794894667233
+Native-hook correction,13,render,probe,578,56.1203,56,0.0970939446366782,0.5944589476916832
+Native-hook correction,13,render,pbr_predicate,578,0.0,0,0.0,0.0
+Native-hook correction,13,render,rejection_logger,578,0.0,0,0.0,0.0
+Native-hook correction,13,render,logger_descendant_in_guard,578,0.0,0,0.0,0.0
+Native-hook correction,13,process,legacy_guard_union,578,63.1177,63,0.10920017301038062,0.2372533591076856
+Native-hook correction,13,process,expanded_guard_union,578,63.1177,63,0.10920017301038062,0.2372533591076856
+Native-hook correction,13,process,expanded_guard_and_pbr_union,578,63.1177,63,0.10920017301038062,0.2372533591076856
+Native-hook correction,13,process,named_material_leaf,578,61.117000000000004,61,0.10573875432525952,0.22973292037866436
+Native-hook correction,13,process,should_skip,578,63.1177,63,0.10920017301038062,0.2372533591076856
+Native-hook correction,13,process,probe,578,56.1203,56,0.0970939446366782,0.21095080602003952
+Native-hook correction,13,process,pbr_predicate,578,0.0,0,0.0,0.0
+Native-hook correction,13,process,rejection_logger,578,0.0,0,0.0,0.0
+Native-hook correction,13,process,logger_descendant_in_guard,578,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,08,render,legacy_guard_union,604,63.04610000000002,63,0.1043809602649007,0.7294246541717423
+Partial PR93 reversal repeat,08,render,expanded_guard_union,604,63.04610000000002,63,0.1043809602649007,0.7294246541717423
+Partial PR93 reversal repeat,08,render,expanded_guard_and_pbr_union,604,63.04610000000002,63,0.1043809602649007,0.7294246541717423
+Partial PR93 reversal repeat,08,render,named_material_leaf,604,55.047300000000014,55,0.09113791390728479,0.6368809135789232
+Partial PR93 reversal repeat,08,render,should_skip,604,63.04610000000002,63,0.1043809602649007,0.7294246541717423
+Partial PR93 reversal repeat,08,render,probe,604,43.0524,43,0.07127880794701986,0.4981034827096919
+Partial PR93 reversal repeat,08,render,pbr_predicate,604,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,08,render,rejection_logger,604,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,08,render,logger_descendant_in_guard,604,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,08,process,legacy_guard_union,604,63.04610000000002,63,0.1043809602649007,0.21215477414281472
+Partial PR93 reversal repeat,08,process,expanded_guard_union,604,63.04610000000002,63,0.1043809602649007,0.21215477414281472
+Partial PR93 reversal repeat,08,process,expanded_guard_and_pbr_union,604,63.04610000000002,63,0.1043809602649007,0.21215477414281472
+Partial PR93 reversal repeat,08,process,named_material_leaf,604,55.047300000000014,55,0.09113791390728479,0.18523822248595495
+Partial PR93 reversal repeat,08,process,should_skip,604,63.04610000000002,63,0.1043809602649007,0.21215477414281472
+Partial PR93 reversal repeat,08,process,probe,604,43.0524,43,0.07127880794701986,0.1448744997439352
+Partial PR93 reversal repeat,08,process,pbr_predicate,604,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,08,process,rejection_logger,604,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,08,process,logger_descendant_in_guard,604,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,11,render,legacy_guard_union,1076,44.19239999999999,44,0.04107100371747211,0.4823556169962544
+Partial PR93 reversal repeat,11,render,expanded_guard_union,1076,44.19239999999999,44,0.04107100371747211,0.4823556169962544
+Partial PR93 reversal repeat,11,render,expanded_guard_and_pbr_union,1076,44.19239999999999,44,0.04107100371747211,0.4823556169962544
+Partial PR93 reversal repeat,11,render,named_material_leaf,1076,40.1825,40,0.037344330855018586,0.43858796037219056
+Partial PR93 reversal repeat,11,render,should_skip,1076,44.19239999999999,44,0.04107100371747211,0.4823556169962544
+Partial PR93 reversal repeat,11,render,probe,1076,34.1937,34,0.03177853159851301,0.37322080857533935
+Partial PR93 reversal repeat,11,render,pbr_predicate,1076,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,11,render,rejection_logger,1076,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,11,render,logger_descendant_in_guard,1076,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,11,process,legacy_guard_union,1076,44.19239999999999,44,0.04107100371747211,0.08567714169264722
+Partial PR93 reversal repeat,11,process,expanded_guard_union,1076,44.19239999999999,44,0.04107100371747211,0.08567714169264722
+Partial PR93 reversal repeat,11,process,expanded_guard_and_pbr_union,1076,44.19239999999999,44,0.04107100371747211,0.08567714169264722
+Partial PR93 reversal repeat,11,process,named_material_leaf,1076,40.1825,40,0.037344330855018586,0.0779030273545858
+Partial PR93 reversal repeat,11,process,should_skip,1076,44.19239999999999,44,0.04107100371747211,0.08567714169264722
+Partial PR93 reversal repeat,11,process,probe,1076,34.1937,34,0.03177853159851301,0.0662923597699123
+Partial PR93 reversal repeat,11,process,pbr_predicate,1076,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,11,process,rejection_logger,1076,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,11,process,logger_descendant_in_guard,1076,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,09,render,legacy_guard_union,727,87.1836,87,0.11992242090784044,1.0887051245174713
+Partial PR93 reversal repeat,09,render,expanded_guard_union,727,87.1836,87,0.11992242090784044,1.0887051245174713
+Partial PR93 reversal repeat,09,render,expanded_guard_and_pbr_union,727,87.1836,87,0.11992242090784044,1.0887051245174713
+Partial PR93 reversal repeat,09,render,named_material_leaf,727,82.1764,82,0.11303493810178818,1.0261777191398096
+Partial PR93 reversal repeat,09,render,should_skip,727,87.1836,87,0.11992242090784044,1.0887051245174713
+Partial PR93 reversal repeat,09,render,probe,727,65.18350000000001,65,0.08966093535075655,0.8139788960766084
+Partial PR93 reversal repeat,09,render,pbr_predicate,727,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,09,render,rejection_logger,727,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,09,render,logger_descendant_in_guard,727,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,09,process,legacy_guard_union,727,87.1836,87,0.11992242090784044,0.4045274318036113
+Partial PR93 reversal repeat,09,process,expanded_guard_union,727,87.1836,87,0.11992242090784044,0.4045274318036113
+Partial PR93 reversal repeat,09,process,expanded_guard_and_pbr_union,727,87.1836,87,0.11992242090784044,0.4045274318036113
+Partial PR93 reversal repeat,09,process,named_material_leaf,727,82.1764,82,0.11303493810178818,0.38129428065446114
+Partial PR93 reversal repeat,09,process,should_skip,727,87.1836,87,0.11992242090784044,0.4045274318036113
+Partial PR93 reversal repeat,09,process,probe,727,65.18350000000001,65,0.08966093535075655,0.30244809632741365
+Partial PR93 reversal repeat,09,process,pbr_predicate,727,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,09,process,rejection_logger,727,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,09,process,logger_descendant_in_guard,727,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,12,render,legacy_guard_union,995,28.118600000000004,28,0.02825989949748744,0.30025382962822006
+Partial PR93 reversal repeat,12,render,expanded_guard_union,995,28.118600000000004,28,0.02825989949748744,0.30025382962822006
+Partial PR93 reversal repeat,12,render,expanded_guard_and_pbr_union,995,28.118600000000004,28,0.02825989949748744,0.30025382962822006
+Partial PR93 reversal repeat,12,render,named_material_leaf,995,23.104200000000002,23,0.02322030150753769,0.24670945674736014
+Partial PR93 reversal repeat,12,render,should_skip,995,28.118600000000004,28,0.02825989949748744,0.30025382962822006
+Partial PR93 reversal repeat,12,render,probe,995,21.0886,21,0.02119457286432161,0.2251866348786099
+Partial PR93 reversal repeat,12,render,pbr_predicate,995,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,12,render,rejection_logger,995,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,12,render,logger_descendant_in_guard,995,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,12,process,legacy_guard_union,995,28.118600000000004,28,0.02825989949748744,0.079751544891566
+Partial PR93 reversal repeat,12,process,expanded_guard_union,995,28.118600000000004,28,0.02825989949748744,0.079751544891566
+Partial PR93 reversal repeat,12,process,expanded_guard_and_pbr_union,995,28.118600000000004,28,0.02825989949748744,0.079751544891566
+Partial PR93 reversal repeat,12,process,named_material_leaf,995,23.104200000000002,23,0.02322030150753769,0.06552942335264623
+Partial PR93 reversal repeat,12,process,should_skip,995,28.118600000000004,28,0.02825989949748744,0.079751544891566
+Partial PR93 reversal repeat,12,process,probe,995,21.0886,21,0.02119457286432161,0.059812665979112695
+Partial PR93 reversal repeat,12,process,pbr_predicate,995,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,12,process,rejection_logger,995,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,12,process,logger_descendant_in_guard,995,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,10,render,legacy_guard_union,600,81.07,81,0.13511666666666666,1.2282268497873607
+Partial PR93 reversal repeat,10,render,expanded_guard_union,600,81.07,81,0.13511666666666666,1.2282268497873607
+Partial PR93 reversal repeat,10,render,expanded_guard_and_pbr_union,600,81.07,81,0.13511666666666666,1.2282268497873607
+Partial PR93 reversal repeat,10,render,named_material_leaf,600,79.07539999999999,79,0.13179233333333332,1.198008257526526
+Partial PR93 reversal repeat,10,render,should_skip,600,81.07,81,0.13511666666666666,1.2282268497873607
+Partial PR93 reversal repeat,10,render,probe,600,75.0793,75,0.12513216666666668,1.1374665366132999
+Partial PR93 reversal repeat,10,render,pbr_predicate,600,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,10,render,rejection_logger,600,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,10,render,logger_descendant_in_guard,600,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,10,process,legacy_guard_union,600,81.07,81,0.13511666666666666,0.32219236232095727
+Partial PR93 reversal repeat,10,process,expanded_guard_union,600,81.07,81,0.13511666666666666,0.32219236232095727
+Partial PR93 reversal repeat,10,process,expanded_guard_and_pbr_union,600,81.07,81,0.13511666666666666,0.32219236232095727
+Partial PR93 reversal repeat,10,process,named_material_leaf,600,79.07539999999999,79,0.13179233333333332,0.3142653253666538
+Partial PR93 reversal repeat,10,process,should_skip,600,81.07,81,0.13511666666666666,0.32219236232095727
+Partial PR93 reversal repeat,10,process,probe,600,75.0793,75,0.12513216666666668,0.29838382914029665
+Partial PR93 reversal repeat,10,process,pbr_predicate,600,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,10,process,rejection_logger,600,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,10,process,logger_descendant_in_guard,600,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,13,render,legacy_guard_union,576,70.19220000000001,70,0.12186145833333335,0.7537350756756781
+Partial PR93 reversal repeat,13,render,expanded_guard_union,576,70.19220000000001,70,0.12186145833333335,0.7537350756756781
+Partial PR93 reversal repeat,13,render,expanded_guard_and_pbr_union,576,70.19220000000001,70,0.12186145833333335,0.7537350756756781
+Partial PR93 reversal repeat,13,render,named_material_leaf,576,64.17570000000002,64,0.11141614583333337,0.6891289359222197
+Partial PR93 reversal repeat,13,render,should_skip,576,70.19220000000001,70,0.12186145833333335,0.7537350756756781
+Partial PR93 reversal repeat,13,render,probe,576,52.08040000000001,52,0.09041736111111114,0.5592476690461274
+Partial PR93 reversal repeat,13,render,pbr_predicate,576,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,13,render,rejection_logger,576,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,13,render,logger_descendant_in_guard,576,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,13,process,legacy_guard_union,576,70.19220000000001,70,0.12186145833333335,0.2580215793750976
+Partial PR93 reversal repeat,13,process,expanded_guard_union,576,70.19220000000001,70,0.12186145833333335,0.2580215793750976
+Partial PR93 reversal repeat,13,process,expanded_guard_and_pbr_union,576,70.19220000000001,70,0.12186145833333335,0.2580215793750976
+Partial PR93 reversal repeat,13,process,named_material_leaf,576,64.17570000000002,64,0.11141614583333337,0.2359053494761876
+Partial PR93 reversal repeat,13,process,should_skip,576,70.19220000000001,70,0.12186145833333335,0.2580215793750976
+Partial PR93 reversal repeat,13,process,probe,576,52.08040000000001,52,0.09041736111111114,0.19144387926987377
+Partial PR93 reversal repeat,13,process,pbr_predicate,576,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,13,process,rejection_logger,576,0.0,0,0.0,0.0
+Partial PR93 reversal repeat,13,process,logger_descendant_in_guard,576,0.0,0,0.0,0.0
+Balanced 1,08,render,legacy_guard_union,600,77.05109999999998,77,0.12841849999999996,1.0180772527924369
+Balanced 1,08,render,expanded_guard_union,600,77.05109999999998,77,0.12841849999999996,1.0180772527924369
+Balanced 1,08,render,expanded_guard_and_pbr_union,600,77.05109999999998,77,0.12841849999999996,1.0180772527924369
+Balanced 1,08,render,named_material_leaf,600,73.04969999999997,73,0.12174949999999995,0.9652066991037335
+Balanced 1,08,render,should_skip,600,77.05109999999998,77,0.12841849999999996,1.0180772527924369
+Balanced 1,08,render,probe,600,58.030300000000004,58,0.09671716666666667,0.7667551586248733
+Balanced 1,08,render,pbr_predicate,600,0.0,0,0.0,0.0
+Balanced 1,08,render,rejection_logger,600,0.0,0,0.0,0.0
+Balanced 1,08,render,logger_descendant_in_guard,600,0.0,0,0.0,0.0
+Balanced 1,08,process,legacy_guard_union,600,77.05109999999998,77,0.12841849999999996,0.4291721256990175
+Balanced 1,08,process,expanded_guard_union,600,77.05109999999998,77,0.12841849999999996,0.4291721256990175
+Balanced 1,08,process,expanded_guard_and_pbr_union,600,77.05109999999998,77,0.12841849999999996,0.4291721256990175
+Balanced 1,08,process,named_material_leaf,600,73.04969999999997,73,0.12174949999999995,0.40688445759600467
+Balanced 1,08,process,should_skip,600,77.05109999999998,77,0.12841849999999996,0.4291721256990175
+Balanced 1,08,process,probe,600,58.030300000000004,58,0.09671716666666667,0.32322688716905673
+Balanced 1,08,process,pbr_predicate,600,0.0,0,0.0,0.0
+Balanced 1,08,process,rejection_logger,600,0.0,0,0.0,0.0
+Balanced 1,08,process,logger_descendant_in_guard,600,0.0,0,0.0,0.0
+Balanced 1,11,render,legacy_guard_union,1069,53.2296,53,0.04979382600561272,0.5690555730720804
+Balanced 1,11,render,expanded_guard_union,1069,53.2296,53,0.04979382600561272,0.5690555730720804
+Balanced 1,11,render,expanded_guard_and_pbr_union,1069,53.2296,53,0.04979382600561272,0.5690555730720804
+Balanced 1,11,render,named_material_leaf,1069,53.2296,53,0.04979382600561272,0.5690555730720804
+Balanced 1,11,render,should_skip,1069,53.2296,53,0.04979382600561272,0.5690555730720804
+Balanced 1,11,render,probe,1069,44.1611,44,0.04131066417212348,0.4721080013374786
+Balanced 1,11,render,pbr_predicate,1069,0.0,0,0.0,0.0
+Balanced 1,11,render,rejection_logger,1069,0.0,0,0.0,0.0
+Balanced 1,11,render,logger_descendant_in_guard,1069,0.0,0,0.0,0.0
+Balanced 1,11,process,legacy_guard_union,1069,53.2296,53,0.04979382600561272,0.1074595534483588
+Balanced 1,11,process,expanded_guard_union,1069,53.2296,53,0.04979382600561272,0.1074595534483588
+Balanced 1,11,process,expanded_guard_and_pbr_union,1069,53.2296,53,0.04979382600561272,0.1074595534483588
+Balanced 1,11,process,named_material_leaf,1069,53.2296,53,0.04979382600561272,0.1074595534483588
+Balanced 1,11,process,should_skip,1069,53.2296,53,0.04979382600561272,0.1074595534483588
+Balanced 1,11,process,probe,1069,44.1611,44,0.04131066417212348,0.08915212749651166
+Balanced 1,11,process,pbr_predicate,1069,0.0,0,0.0,0.0
+Balanced 1,11,process,rejection_logger,1069,0.0,0,0.0,0.0
+Balanced 1,11,process,logger_descendant_in_guard,1069,0.0,0,0.0,0.0
+Balanced 1,09,render,legacy_guard_union,960,106.32610000000005,106,0.11075635416666672,1.2275989892332142
+Balanced 1,09,render,expanded_guard_union,960,106.32610000000005,106,0.11075635416666672,1.2275989892332142
+Balanced 1,09,render,expanded_guard_and_pbr_union,960,106.32610000000005,106,0.11075635416666672,1.2275989892332142
+Balanced 1,09,render,named_material_leaf,960,101.33310000000003,101,0.10555531250000003,1.1699517911017914
+Balanced 1,09,render,should_skip,960,106.32610000000005,106,0.11075635416666672,1.2275989892332142
+Balanced 1,09,render,probe,960,82.235,82,0.08566145833333333,0.9494527014495341
+Balanced 1,09,render,pbr_predicate,960,0.0,0,0.0,0.0
+Balanced 1,09,render,rejection_logger,960,0.0,0,0.0,0.0
+Balanced 1,09,render,logger_descendant_in_guard,960,0.0,0,0.0,0.0
+Balanced 1,09,process,legacy_guard_union,960,106.32610000000005,106,0.11075635416666672,0.4630296076336623
+Balanced 1,09,process,expanded_guard_union,960,106.32610000000005,106,0.11075635416666672,0.4630296076336623
+Balanced 1,09,process,expanded_guard_and_pbr_union,960,106.32610000000005,106,0.11075635416666672,0.4630296076336623
+Balanced 1,09,process,named_material_leaf,960,101.33310000000003,101,0.10555531250000003,0.44128605801682425
+Balanced 1,09,process,should_skip,960,106.32610000000005,106,0.11075635416666672,0.4630296076336623
+Balanced 1,09,process,probe,960,82.235,82,0.08566145833333333,0.35811752508325045
+Balanced 1,09,process,pbr_predicate,960,0.0,0,0.0,0.0
+Balanced 1,09,process,rejection_logger,960,0.0,0,0.0,0.0
+Balanced 1,09,process,logger_descendant_in_guard,960,0.0,0,0.0,0.0
+Balanced 1,12,render,legacy_guard_union,911,54.09479999999999,54,0.05937958287596047,0.5714722048921205
+Balanced 1,12,render,expanded_guard_union,911,54.09479999999999,54,0.05937958287596047,0.5714722048921205
+Balanced 1,12,render,expanded_guard_and_pbr_union,911,54.09479999999999,54,0.05937958287596047,0.5714722048921205
+Balanced 1,12,render,named_material_leaf,911,53.0945,53,0.05828155872667398,0.5609047631684504
+Balanced 1,12,render,should_skip,911,54.09479999999999,54,0.05937958287596047,0.5714722048921205
+Balanced 1,12,render,probe,911,44.083099999999995,44,0.04838979143798024,0.4657058784851748
+Balanced 1,12,render,pbr_predicate,911,0.0,0,0.0,0.0
+Balanced 1,12,render,rejection_logger,911,0.0,0,0.0,0.0
+Balanced 1,12,render,logger_descendant_in_guard,911,0.0,0,0.0,0.0
+Balanced 1,12,process,legacy_guard_union,911,54.09479999999999,54,0.05937958287596047,0.14932722130804707
+Balanced 1,12,process,expanded_guard_union,911,54.09479999999999,54,0.05937958287596047,0.14932722130804707
+Balanced 1,12,process,expanded_guard_and_pbr_union,911,54.09479999999999,54,0.05937958287596047,0.14932722130804707
+Balanced 1,12,process,named_material_leaf,911,53.0945,53,0.05828155872667398,0.14656592041638208
+Balanced 1,12,process,should_skip,911,54.09479999999999,54,0.05937958287596047,0.14932722130804707
+Balanced 1,12,process,probe,911,44.083099999999995,44,0.04838979143798024,0.12169019627847351
+Balanced 1,12,process,pbr_predicate,911,0.0,0,0.0,0.0
+Balanced 1,12,process,rejection_logger,911,0.0,0,0.0,0.0
+Balanced 1,12,process,logger_descendant_in_guard,911,0.0,0,0.0,0.0
+Balanced 1,10,render,legacy_guard_union,894,147.99189999999993,148,0.16553903803131984,1.5367668647120616
+Balanced 1,10,render,expanded_guard_union,894,147.99189999999993,148,0.16553903803131984,1.5367668647120616
+Balanced 1,10,render,expanded_guard_and_pbr_union,894,147.99189999999993,148,0.16553903803131984,1.5367668647120616
+Balanced 1,10,render,named_material_leaf,894,134.9898999999999,135,0.15099541387024595,1.4017524296315855
+Balanced 1,10,render,should_skip,894,147.99189999999993,148,0.16553903803131984,1.5367668647120616
+Balanced 1,10,render,probe,894,108.99069999999996,109,0.12191353467561516,1.131773403286078
+Balanced 1,10,render,pbr_predicate,894,0.0,0,0.0,0.0
+Balanced 1,10,render,rejection_logger,894,0.0,0,0.0,0.0
+Balanced 1,10,render,logger_descendant_in_guard,894,0.0,0,0.0,0.0
+Balanced 1,10,process,legacy_guard_union,894,147.99189999999993,148,0.16553903803131984,0.41811495157215117
+Balanced 1,10,process,expanded_guard_union,894,147.99189999999993,148,0.16553903803131984,0.41811495157215117
+Balanced 1,10,process,expanded_guard_and_pbr_union,894,147.99189999999993,148,0.16553903803131984,0.41811495157215117
+Balanced 1,10,process,named_material_leaf,894,134.9898999999999,135,0.15099541387024595,0.3813809776158662
+Balanced 1,10,process,should_skip,894,147.99189999999993,148,0.16553903803131984,0.41811495157215117
+Balanced 1,10,process,probe,894,108.99069999999996,109,0.12191353467561516,0.30792659093041486
+Balanced 1,10,process,pbr_predicate,894,0.0,0,0.0,0.0
+Balanced 1,10,process,rejection_logger,894,0.0,0,0.0,0.0
+Balanced 1,10,process,logger_descendant_in_guard,894,0.0,0,0.0,0.0
+Balanced 1,13,render,legacy_guard_union,584,58.139799999999994,58,0.0995544520547945,0.609900613447363
+Balanced 1,13,render,expanded_guard_union,584,58.139799999999994,58,0.0995544520547945,0.609900613447363
+Balanced 1,13,render,expanded_guard_and_pbr_union,584,58.139799999999994,58,0.0995544520547945,0.609900613447363
+Balanced 1,13,render,named_material_leaf,584,58.13989999999999,58,0.09955462328767122,0.6099016624716346
+Balanced 1,13,render,should_skip,584,58.139799999999994,58,0.0995544520547945,0.609900613447363
+Balanced 1,13,render,probe,584,50.141299999999994,50,0.0858583904109589,0.5259944070851338
+Balanced 1,13,render,pbr_predicate,584,0.0,0,0.0,0.0
+Balanced 1,13,render,rejection_logger,584,0.0,0,0.0,0.0
+Balanced 1,13,render,logger_descendant_in_guard,584,0.0,0,0.0,0.0
+Balanced 1,13,process,legacy_guard_union,584,58.139799999999994,58,0.0995544520547945,0.23125796232276152
+Balanced 1,13,process,expanded_guard_union,584,58.139799999999994,58,0.0995544520547945,0.23125796232276152
+Balanced 1,13,process,expanded_guard_and_pbr_union,584,58.139799999999994,58,0.0995544520547945,0.23125796232276152
+Balanced 1,13,process,named_material_leaf,584,58.13989999999999,58,0.09955462328767122,0.2312583600846429
+Balanced 1,13,process,should_skip,584,58.139799999999994,58,0.0995544520547945,0.23125796232276152
+Balanced 1,13,process,probe,584,50.141299999999994,50,0.0858583904109589,0.19944297823890486
+Balanced 1,13,process,pbr_predicate,584,0.0,0,0.0,0.0
+Balanced 1,13,process,rejection_logger,584,0.0,0,0.0,0.0
+Balanced 1,13,process,logger_descendant_in_guard,584,0.0,0,0.0,0.0
+Performance,08,render,legacy_guard_union,599,70.15390000000001,70,0.11711836393989984,0.8488306903174986
+Performance,08,render,expanded_guard_union,599,70.15390000000001,70,0.11711836393989984,0.8488306903174986
+Performance,08,render,expanded_guard_and_pbr_union,599,70.15390000000001,70,0.11711836393989984,0.8488306903174986
+Performance,08,render,named_material_leaf,599,69.15460000000002,69,0.11545008347245411,0.8367396090114805
+Performance,08,render,should_skip,599,70.15390000000001,70,0.11711836393989984,0.8488306903174986
+Performance,08,render,probe,599,52.13820000000001,52,0.08704207011686145,0.6308488095161041
+Performance,08,render,pbr_predicate,599,0.0,0,0.0,0.0
+Performance,08,render,rejection_logger,599,0.0,0,0.0,0.0
+Performance,08,render,logger_descendant_in_guard,599,0.0,0,0.0,0.0
+Performance,08,process,legacy_guard_union,599,70.15390000000001,70,0.11711836393989984,0.2381058436933539
+Performance,08,process,expanded_guard_union,599,70.15390000000001,70,0.11711836393989984,0.2381058436933539
+Performance,08,process,expanded_guard_and_pbr_union,599,70.15390000000001,70,0.11711836393989984,0.2381058436933539
+Performance,08,process,named_material_leaf,599,69.15460000000002,69,0.11545008347245411,0.23471416953692403
+Performance,08,process,should_skip,599,70.15390000000001,70,0.11711836393989984,0.2381058436933539
+Performance,08,process,probe,599,52.13820000000001,52,0.08704207011686145,0.1769596572628582
+Performance,08,process,pbr_predicate,599,0.0,0,0.0,0.0
+Performance,08,process,rejection_logger,599,0.0,0,0.0,0.0
+Performance,08,process,logger_descendant_in_guard,599,0.0,0,0.0,0.0
+Performance,11,render,legacy_guard_union,989,54.96380000000003,55,0.05557512639029325,0.6028903588602639
+Performance,11,render,expanded_guard_union,989,54.96380000000003,55,0.05557512639029325,0.6028903588602639
+Performance,11,render,expanded_guard_and_pbr_union,989,54.96380000000003,55,0.05557512639029325,0.6028903588602639
+Performance,11,render,named_material_leaf,989,51.968400000000024,52,0.05254641051567242,0.5700342284447897
+Performance,11,render,should_skip,989,54.96380000000003,55,0.05557512639029325,0.6028903588602639
+Performance,11,render,probe,989,45.96810000000001,46,0.046479373104145606,0.5042177634210968
+Performance,11,render,pbr_predicate,989,0.0,0,0.0,0.0
+Performance,11,render,rejection_logger,989,0.0,0,0.0,0.0
+Performance,11,render,logger_descendant_in_guard,989,0.0,0,0.0,0.0
+Performance,11,process,legacy_guard_union,989,54.96380000000003,55,0.05557512639029325,0.10416475098393557
+Performance,11,process,expanded_guard_union,989,54.96380000000003,55,0.05557512639029325,0.10416475098393557
+Performance,11,process,expanded_guard_and_pbr_union,989,54.96380000000003,55,0.05557512639029325,0.10416475098393557
+Performance,11,process,named_material_leaf,989,51.968400000000024,52,0.05254641051567242,0.09848801292911982
+Performance,11,process,should_skip,989,54.96380000000003,55,0.05557512639029325,0.10416475098393557
+Performance,11,process,probe,989,45.96810000000001,46,0.046479373104145606,0.0871165328762685
+Performance,11,process,pbr_predicate,989,0.0,0,0.0,0.0
+Performance,11,process,rejection_logger,989,0.0,0,0.0,0.0
+Performance,11,process,logger_descendant_in_guard,989,0.0,0,0.0,0.0
+Performance,09,render,legacy_guard_union,883,75.25569999999999,75,0.08522729331823328,0.8953623528849641
+Performance,09,render,expanded_guard_union,883,75.25569999999999,75,0.08522729331823328,0.8953623528849641
+Performance,09,render,expanded_guard_and_pbr_union,883,75.25569999999999,75,0.08522729331823328,0.8953623528849641
+Performance,09,render,named_material_leaf,883,70.2473,70,0.07955526613816534,0.8357744039563242
+Performance,09,render,should_skip,883,75.25569999999999,75,0.08522729331823328,0.8953623528849641
+Performance,09,render,probe,883,56.18999999999999,56,0.06363533408833522,0.6685262459668322
+Performance,09,render,pbr_predicate,883,0.0,0,0.0,0.0
+Performance,09,render,rejection_logger,883,0.0,0,0.0,0.0
+Performance,09,render,logger_descendant_in_guard,883,0.0,0,0.0,0.0
+Performance,09,process,legacy_guard_union,883,75.25569999999999,75,0.08522729331823328,0.3298927417788516
+Performance,09,process,expanded_guard_union,883,75.25569999999999,75,0.08522729331823328,0.3298927417788516
+Performance,09,process,expanded_guard_and_pbr_union,883,75.25569999999999,75,0.08522729331823328,0.3298927417788516
+Performance,09,process,named_material_leaf,883,70.2473,70,0.07955526613816534,0.3079377960680922
+Performance,09,process,should_skip,883,75.25569999999999,75,0.08522729331823328,0.3298927417788516
+Performance,09,process,probe,883,56.18999999999999,56,0.06363533408833522,0.24631586923719628
+Performance,09,process,pbr_predicate,883,0.0,0,0.0,0.0
+Performance,09,process,rejection_logger,883,0.0,0,0.0,0.0
+Performance,09,process,logger_descendant_in_guard,883,0.0,0,0.0,0.0
+Performance,12,render,legacy_guard_union,876,42.13540000000001,42,0.04809977168949773,0.4451504616462802
+Performance,12,render,expanded_guard_union,876,42.13540000000001,42,0.04809977168949773,0.4451504616462802
+Performance,12,render,expanded_guard_and_pbr_union,876,42.13540000000001,42,0.04809977168949773,0.4451504616462802
+Performance,12,render,named_material_leaf,876,43.13540000000001,43,0.049241324200913254,0.4557152233821669
+Performance,12,render,should_skip,876,42.13540000000001,42,0.04809977168949773,0.4451504616462802
+Performance,12,render,probe,876,40.13790000000001,40,0.04581952054794521,0.42404735007884653
+Performance,12,render,pbr_predicate,876,0.0,0,0.0,0.0
+Performance,12,render,rejection_logger,876,0.0,0,0.0,0.0
+Performance,12,render,logger_descendant_in_guard,876,0.0,0,0.0,0.0
+Performance,12,process,legacy_guard_union,876,42.13540000000001,42,0.04809977168949773,0.12741324048831051
+Performance,12,process,expanded_guard_union,876,42.13540000000001,42,0.04809977168949773,0.12741324048831051
+Performance,12,process,expanded_guard_and_pbr_union,876,42.13540000000001,42,0.04809977168949773,0.12741324048831051
+Performance,12,process,named_material_leaf,876,43.13540000000001,43,0.049241324200913254,0.13043714059340766
+Performance,12,process,should_skip,876,42.13540000000001,42,0.04809977168949773,0.12741324048831051
+Performance,12,process,probe,876,40.13790000000001,40,0.04581952054794521,0.12137300002837895
+Performance,12,process,pbr_predicate,876,0.0,0,0.0,0.0
+Performance,12,process,rejection_logger,876,0.0,0,0.0,0.0
+Performance,12,process,logger_descendant_in_guard,876,0.0,0,0.0,0.0
+Performance,10,render,legacy_guard_union,883,115.02940000000001,115,0.13027112117780296,1.2007752394866473
+Performance,10,render,expanded_guard_union,883,115.02940000000001,115,0.13027112117780296,1.2007752394866473
+Performance,10,render,expanded_guard_and_pbr_union,883,115.02940000000001,115,0.13027112117780296,1.2007752394866473
+Performance,10,render,named_material_leaf,883,109.01930000000002,109,0.1234646659116648,1.138036676416348
+Performance,10,render,should_skip,883,115.02940000000001,115,0.13027112117780296,1.2007752394866473
+Performance,10,render,probe,883,101.01899999999999,101,0.11440430351075877,1.0545227039148393
+Performance,10,render,pbr_predicate,883,0.0,0,0.0,0.0
+Performance,10,render,rejection_logger,883,0.0,0,0.0,0.0
+Performance,10,render,logger_descendant_in_guard,883,0.0,0,0.0,0.0
+Performance,10,process,legacy_guard_union,883,115.02940000000001,115,0.13027112117780296,0.3067051753647385
+Performance,10,process,expanded_guard_union,883,115.02940000000001,115,0.13027112117780296,0.3067051753647385
+Performance,10,process,expanded_guard_and_pbr_union,883,115.02940000000001,115,0.13027112117780296,0.3067051753647385
+Performance,10,process,named_material_leaf,883,109.01930000000002,109,0.1234646659116648,0.2906803262873756
+Performance,10,process,should_skip,883,115.02940000000001,115,0.13027112117780296,0.3067051753647385
+Performance,10,process,probe,883,101.01899999999999,101,0.11440430351075877,0.269348967395905
+Performance,10,process,pbr_predicate,883,0.0,0,0.0,0.0
+Performance,10,process,rejection_logger,883,0.0,0,0.0,0.0
+Performance,10,process,logger_descendant_in_guard,883,0.0,0,0.0,0.0
+Performance,13,render,legacy_guard_union,556,85.09050000000002,85,0.15304046762589932,0.8732057761201661
+Performance,13,render,expanded_guard_union,556,85.09050000000002,85,0.15304046762589932,0.8732057761201661
+Performance,13,render,expanded_guard_and_pbr_union,556,85.09050000000002,85,0.15304046762589932,0.8732057761201661
+Performance,13,render,named_material_leaf,556,83.09000000000003,83,0.14944244604316553,0.8526764790173358
+Performance,13,render,should_skip,556,85.09050000000002,85,0.15304046762589932,0.8732057761201661
+Performance,13,render,probe,556,77.09040000000003,77,0.13865179856115115,0.7911080856666026
+Performance,13,render,pbr_predicate,556,0.0,0,0.0,0.0
+Performance,13,render,rejection_logger,556,0.0,0,0.0,0.0
+Performance,13,render,logger_descendant_in_guard,556,0.0,0,0.0,0.0
+Performance,13,process,legacy_guard_union,556,85.09050000000002,85,0.15304046762589932,0.31320475371571016
+Performance,13,process,expanded_guard_union,556,85.09050000000002,85,0.15304046762589932,0.31320475371571016
+Performance,13,process,expanded_guard_and_pbr_union,556,85.09050000000002,85,0.15304046762589932,0.31320475371571016
+Performance,13,process,named_material_leaf,556,83.09000000000003,83,0.14944244604316553,0.3058412277074216
+Performance,13,process,should_skip,556,85.09050000000002,85,0.15304046762589932,0.31320475371571016
+Performance,13,process,probe,556,77.09040000000003,77,0.13865179856115115,0.28375764328386344
+Performance,13,process,pbr_predicate,556,0.0,0,0.0,0.0
+Performance,13,process,rejection_logger,556,0.0,0,0.0,0.0
+Performance,13,process,logger_descendant_in_guard,556,0.0,0,0.0,0.0
+Legacy,08,render,legacy_guard_union,599,68.99210000000001,69,0.11517879799666111,0.8192855880877176
+Legacy,08,render,expanded_guard_union,599,68.99210000000001,69,0.11517879799666111,0.8192855880877176
+Legacy,08,render,expanded_guard_and_pbr_union,599,68.99210000000001,69,0.11517879799666111,0.8192855880877176
+Legacy,08,render,named_material_leaf,599,63.9904,64,0.10682871452420702,0.7598900815596028
+Legacy,08,render,should_skip,599,68.99210000000001,69,0.11517879799666111,0.8192855880877176
+Legacy,08,render,probe,599,51.985400000000006,52,0.08678697829716195,0.6173299408334466
+Legacy,08,render,pbr_predicate,599,0.0,0,0.0,0.0
+Legacy,08,render,rejection_logger,599,0.0,0,0.0,0.0
+Legacy,08,render,logger_descendant_in_guard,599,0.0,0,0.0,0.0
+Legacy,08,process,legacy_guard_union,599,68.99210000000001,69,0.11517879799666111,0.22589561307210126
+Legacy,08,process,expanded_guard_union,599,68.99210000000001,69,0.11517879799666111,0.22589561307210126
+Legacy,08,process,expanded_guard_and_pbr_union,599,68.99210000000001,69,0.11517879799666111,0.22589561307210126
+Legacy,08,process,named_material_leaf,599,63.9904,64,0.10682871452420702,0.2095189251918551
+Legacy,08,process,should_skip,599,68.99210000000001,69,0.11517879799666111,0.22589561307210126
+Legacy,08,process,probe,599,51.985400000000006,52,0.08678697829716195,0.17021186199287183
+Legacy,08,process,pbr_predicate,599,0.0,0,0.0,0.0
+Legacy,08,process,rejection_logger,599,0.0,0,0.0,0.0
+Legacy,08,process,logger_descendant_in_guard,599,0.0,0,0.0,0.0
+Legacy,11,render,legacy_guard_union,966,50.132900000000014,50,0.05189741200828159,0.5371158990383822
+Legacy,11,render,expanded_guard_union,966,50.132900000000014,50,0.05189741200828159,0.5371158990383822
+Legacy,11,render,expanded_guard_and_pbr_union,966,50.132900000000014,50,0.05189741200828159,0.5371158990383822
+Legacy,11,render,named_material_leaf,966,46.127600000000015,46,0.047751138716356126,0.49420375331335065
+Legacy,11,render,should_skip,966,50.132900000000014,50,0.05189741200828159,0.5371158990383822
+Legacy,11,render,probe,966,37.12400000000001,37,0.03843064182194618,0.39774061815496214
+Legacy,11,render,pbr_predicate,966,0.0,0,0.0,0.0
+Legacy,11,render,rejection_logger,966,0.0,0,0.0,0.0
+Legacy,11,render,logger_descendant_in_guard,966,0.0,0,0.0,0.0
+Legacy,11,process,legacy_guard_union,966,50.132900000000014,50,0.05189741200828159,0.10078835314142169
+Legacy,11,process,expanded_guard_union,966,50.132900000000014,50,0.05189741200828159,0.10078835314142169
+Legacy,11,process,expanded_guard_and_pbr_union,966,50.132900000000014,50,0.05189741200828159,0.10078835314142169
+Legacy,11,process,named_material_leaf,966,46.127600000000015,46,0.047751138716356126,0.09273600446745037
+Legacy,11,process,should_skip,966,50.132900000000014,50,0.05189741200828159,0.10078835314142169
+Legacy,11,process,probe,966,37.12400000000001,37,0.03843064182194618,0.07463495672546648
+Legacy,11,process,pbr_predicate,966,0.0,0,0.0,0.0
+Legacy,11,process,rejection_logger,966,0.0,0,0.0,0.0
+Legacy,11,process,logger_descendant_in_guard,966,0.0,0,0.0,0.0
+Legacy,09,render,legacy_guard_union,878,82.0491,82,0.09344999999999999,0.9939102132244867
+Legacy,09,render,expanded_guard_union,878,82.0491,82,0.09344999999999999,0.9939102132244867
+Legacy,09,render,expanded_guard_and_pbr_union,878,82.0491,82,0.09344999999999999,0.9939102132244867
+Legacy,09,render,named_material_leaf,878,78.0503,78,0.08889555808656036,0.9454703380687314
+Legacy,09,render,should_skip,878,82.0491,82,0.09344999999999999,0.9939102132244867
+Legacy,09,render,probe,878,67.0048,67,0.07631526195899772,0.8116695375703584
+Legacy,09,render,pbr_predicate,878,0.0,0,0.0,0.0
+Legacy,09,render,rejection_logger,878,0.0,0,0.0,0.0
+Legacy,09,render,logger_descendant_in_guard,878,0.0,0,0.0,0.0
+Legacy,09,process,legacy_guard_union,878,82.0491,82,0.09344999999999999,0.36769939958891823
+Legacy,09,process,expanded_guard_union,878,82.0491,82,0.09344999999999999,0.36769939958891823
+Legacy,09,process,expanded_guard_and_pbr_union,878,82.0491,82,0.09344999999999999,0.36769939958891823
+Legacy,09,process,named_material_leaf,878,78.0503,78,0.08889555808656036,0.3497789548908512
+Legacy,09,process,should_skip,878,82.0491,82,0.09344999999999999,0.36769939958891823
+Legacy,09,process,probe,878,67.0048,67,0.07631526195899772,0.30027903693734054
+Legacy,09,process,pbr_predicate,878,0.0,0,0.0,0.0
+Legacy,09,process,rejection_logger,878,0.0,0,0.0,0.0
+Legacy,09,process,logger_descendant_in_guard,878,0.0,0,0.0,0.0
+Legacy,12,render,legacy_guard_union,870,59.1787,59,0.06802149425287356,0.6179962390374683
+Legacy,12,render,expanded_guard_union,870,59.1787,59,0.06802149425287356,0.6179962390374683
+Legacy,12,render,expanded_guard_and_pbr_union,870,59.1787,59,0.06802149425287356,0.6179962390374683
+Legacy,12,render,named_material_leaf,870,56.1799,56,0.06457459770114943,0.5866801215555777
+Legacy,12,render,should_skip,870,59.1787,59,0.06802149425287356,0.6179962390374683
+Legacy,12,render,probe,870,53.1405,53,0.061081034482758624,0.5549400230246792
+Legacy,12,render,pbr_predicate,870,0.0,0,0.0,0.0
+Legacy,12,render,rejection_logger,870,0.0,0,0.0,0.0
+Legacy,12,render,logger_descendant_in_guard,870,0.0,0,0.0,0.0
+Legacy,12,process,legacy_guard_union,870,59.1787,59,0.06802149425287356,0.17297514314511753
+Legacy,12,process,expanded_guard_union,870,59.1787,59,0.06802149425287356,0.17297514314511753
+Legacy,12,process,expanded_guard_and_pbr_union,870,59.1787,59,0.06802149425287356,0.17297514314511753
+Legacy,12,process,named_material_leaf,870,56.1799,56,0.06457459770114943,0.16420986342008848
+Legacy,12,process,should_skip,870,59.1787,59,0.06802149425287356,0.17297514314511753
+Legacy,12,process,probe,870,53.1405,53,0.061081034482758624,0.1553259127744124
+Legacy,12,process,pbr_predicate,870,0.0,0,0.0,0.0
+Legacy,12,process,rejection_logger,870,0.0,0,0.0,0.0
+Legacy,12,process,logger_descendant_in_guard,870,0.0,0,0.0,0.0
+Legacy,10,render,legacy_guard_union,910,126.98769999999992,127,0.13954692307692299,1.3279000161329357
+Legacy,10,render,expanded_guard_union,910,126.98769999999992,127,0.13954692307692299,1.3279000161329357
+Legacy,10,render,expanded_guard_and_pbr_union,910,126.98769999999992,127,0.13954692307692299,1.3279000161329357
+Legacy,10,render,named_material_leaf,910,118.98389999999995,119,0.1307515384615384,1.2442049326789892
+Legacy,10,render,should_skip,910,126.98769999999992,127,0.13954692307692299,1.3279000161329357
+Legacy,10,render,probe,910,101.98359999999997,102,0.11206989010989007,1.0664341828798767
+Legacy,10,render,pbr_predicate,910,0.0,0,0.0,0.0
+Legacy,10,render,rejection_logger,910,0.0,0,0.0,0.0
+Legacy,10,render,logger_descendant_in_guard,910,0.0,0,0.0,0.0
+Legacy,10,process,legacy_guard_union,910,126.98769999999992,127,0.13954692307692299,0.3391366869973706
+Legacy,10,process,expanded_guard_union,910,126.98769999999992,127,0.13954692307692299,0.3391366869973706
+Legacy,10,process,expanded_guard_and_pbr_union,910,126.98769999999992,127,0.13954692307692299,0.3391366869973706
+Legacy,10,process,named_material_leaf,910,118.98389999999995,119,0.1307515384615384,0.3177615284947003
+Legacy,10,process,should_skip,910,126.98769999999992,127,0.13954692307692299,0.3391366869973706
+Legacy,10,process,probe,910,101.98359999999997,102,0.11206989010989007,0.2723600807957389
+Legacy,10,process,pbr_predicate,910,0.0,0,0.0,0.0
+Legacy,10,process,rejection_logger,910,0.0,0,0.0,0.0
+Legacy,10,process,logger_descendant_in_guard,910,0.0,0,0.0,0.0
+Legacy,13,render,legacy_guard_union,588,64.0744,64,0.10897006802721088,0.6918998282938514
+Legacy,13,render,expanded_guard_union,588,64.0744,64,0.10897006802721088,0.6918998282938514
+Legacy,13,render,expanded_guard_and_pbr_union,588,64.0744,64,0.10897006802721088,0.6918998282938514
+Legacy,13,render,named_material_leaf,588,61.0704,61,0.10386122448979591,0.6594614896719567
+Legacy,13,render,should_skip,588,64.0744,64,0.10897006802721088,0.6918998282938514
+Legacy,13,render,probe,588,55.01639999999999,55,0.09356530612244897,0.5940880868700424
+Legacy,13,render,pbr_predicate,588,0.0,0,0.0,0.0
+Legacy,13,render,rejection_logger,588,0.0,0,0.0,0.0
+Legacy,13,render,logger_descendant_in_guard,588,0.0,0,0.0,0.0
+Legacy,13,process,legacy_guard_union,588,64.0744,64,0.10897006802721088,0.29235128553117157
+Legacy,13,process,expanded_guard_union,588,64.0744,64,0.10897006802721088,0.29235128553117157
+Legacy,13,process,expanded_guard_and_pbr_union,588,64.0744,64,0.10897006802721088,0.29235128553117157
+Legacy,13,process,named_material_leaf,588,61.0704,61,0.10386122448979591,0.27864498064598126
+Legacy,13,process,should_skip,588,64.0744,64,0.10897006802721088,0.29235128553117157
+Legacy,13,process,probe,588,55.01639999999999,55,0.09356530612244897,0.2510224873786902
+Legacy,13,process,pbr_predicate,588,0.0,0,0.0,0.0
+Legacy,13,process,rejection_logger,588,0.0,0,0.0,0.0
+Legacy,13,process,logger_descendant_in_guard,588,0.0,0,0.0,0.0
+Balanced 2 uncertain,08,render,legacy_guard_union,600,67.005,67,0.111675,0.8331256580657577
+Balanced 2 uncertain,08,render,expanded_guard_union,600,67.005,67,0.111675,0.8331256580657577
+Balanced 2 uncertain,08,render,expanded_guard_and_pbr_union,600,67.005,67,0.111675,0.8331256580657577
+Balanced 2 uncertain,08,render,named_material_leaf,600,64.0044,64,0.106674,0.795816847535318
+Balanced 2 uncertain,08,render,should_skip,600,67.005,67,0.111675,0.8331256580657577
+Balanced 2 uncertain,08,render,probe,600,56.00299999999999,56,0.09333833333333331,0.6963291728774961
+Balanced 2 uncertain,08,render,pbr_predicate,600,0.0,0,0.0,0.0
+Balanced 2 uncertain,08,render,rejection_logger,600,0.0,0,0.0,0.0
+Balanced 2 uncertain,08,render,logger_descendant_in_guard,600,0.0,0,0.0,0.0
+Balanced 2 uncertain,08,process,legacy_guard_union,600,67.005,67,0.111675,0.22519288473832946
+Balanced 2 uncertain,08,process,expanded_guard_union,600,67.005,67,0.111675,0.22519288473832946
+Balanced 2 uncertain,08,process,expanded_guard_and_pbr_union,600,67.005,67,0.111675,0.22519288473832946
+Balanced 2 uncertain,08,process,named_material_leaf,600,64.0044,64,0.106674,0.2151083571665687
+Balanced 2 uncertain,08,process,should_skip,600,67.005,67,0.111675,0.22519288473832946
+Balanced 2 uncertain,08,process,probe,600,56.00299999999999,56,0.09333833333333331,0.18821695580927786
+Balanced 2 uncertain,08,process,pbr_predicate,600,0.0,0,0.0,0.0
+Balanced 2 uncertain,08,process,rejection_logger,600,0.0,0,0.0,0.0
+Balanced 2 uncertain,08,process,logger_descendant_in_guard,600,0.0,0,0.0,0.0
+Balanced 2 uncertain,11,render,legacy_guard_union,1028,54.1507,54,0.05267577821011673,0.5815415658951777
+Balanced 2 uncertain,11,render,expanded_guard_union,1028,54.1507,54,0.05267577821011673,0.5815415658951777
+Balanced 2 uncertain,11,render,expanded_guard_and_pbr_union,1028,54.1507,54,0.05267577821011673,0.5815415658951777
+Balanced 2 uncertain,11,render,named_material_leaf,1028,53.14490000000001,53,0.05169737354085604,0.5707399602469153
+Balanced 2 uncertain,11,render,should_skip,1028,54.1507,54,0.05267577821011673,0.5815415658951777
+Balanced 2 uncertain,11,render,probe,1028,42.120700000000014,42,0.04097344357976655,0.452347575093231
+Balanced 2 uncertain,11,render,pbr_predicate,1028,0.0,0,0.0,0.0
+Balanced 2 uncertain,11,render,rejection_logger,1028,0.0,0,0.0,0.0
+Balanced 2 uncertain,11,render,logger_descendant_in_guard,1028,0.0,0,0.0,0.0
+Balanced 2 uncertain,11,process,legacy_guard_union,1028,54.1507,54,0.05267577821011673,0.10617176032810739
+Balanced 2 uncertain,11,process,expanded_guard_union,1028,54.1507,54,0.05267577821011673,0.10617176032810739
+Balanced 2 uncertain,11,process,expanded_guard_and_pbr_union,1028,54.1507,54,0.05267577821011673,0.10617176032810739
+Balanced 2 uncertain,11,process,named_material_leaf,1028,53.14490000000001,53,0.05169737354085604,0.10419971644800964
+Balanced 2 uncertain,11,process,should_skip,1028,54.1507,54,0.05267577821011673,0.10617176032810739
+Balanced 2 uncertain,11,process,probe,1028,42.120700000000014,42,0.04097344357976655,0.08258487637744506
+Balanced 2 uncertain,11,process,pbr_predicate,1028,0.0,0,0.0,0.0
+Balanced 2 uncertain,11,process,rejection_logger,1028,0.0,0,0.0,0.0
+Balanced 2 uncertain,11,process,logger_descendant_in_guard,1028,0.0,0,0.0,0.0
+Balanced 2 uncertain,09,render,legacy_guard_union,1014,86.19399999999999,86,0.08500394477317554,0.9772719696847738
+Balanced 2 uncertain,09,render,expanded_guard_union,1014,86.19399999999999,86,0.08500394477317554,0.9772719696847738
+Balanced 2 uncertain,09,render,expanded_guard_and_pbr_union,1014,86.19399999999999,86,0.08500394477317554,0.9772719696847738
+Balanced 2 uncertain,09,render,named_material_leaf,1014,81.19009999999999,81,0.08006913214990137,0.9205374961819123
+Balanced 2 uncertain,09,render,should_skip,1014,86.19399999999999,86,0.08500394477317554,0.9772719696847738
+Balanced 2 uncertain,09,render,probe,1014,69.19139999999999,69,0.0682360946745562,0.7844956233989263
+Balanced 2 uncertain,09,render,pbr_predicate,1014,0.0,0,0.0,0.0
+Balanced 2 uncertain,09,render,rejection_logger,1014,0.0,0,0.0,0.0
+Balanced 2 uncertain,09,render,logger_descendant_in_guard,1014,0.0,0,0.0,0.0
+Balanced 2 uncertain,09,process,legacy_guard_union,1014,86.19399999999999,86,0.08500394477317554,0.3687082807964097
+Balanced 2 uncertain,09,process,expanded_guard_union,1014,86.19399999999999,86,0.08500394477317554,0.3687082807964097
+Balanced 2 uncertain,09,process,expanded_guard_and_pbr_union,1014,86.19399999999999,86,0.08500394477317554,0.3687082807964097
+Balanced 2 uncertain,09,process,named_material_leaf,1014,81.19009999999999,81,0.08006913214990137,0.3473033179651551
+Balanced 2 uncertain,09,process,should_skip,1014,86.19399999999999,86,0.08500394477317554,0.3687082807964097
+Balanced 2 uncertain,09,process,probe,1014,69.19139999999999,69,0.0682360946745562,0.29597700698304635
+Balanced 2 uncertain,09,process,pbr_predicate,1014,0.0,0,0.0,0.0
+Balanced 2 uncertain,09,process,rejection_logger,1014,0.0,0,0.0,0.0
+Balanced 2 uncertain,09,process,logger_descendant_in_guard,1014,0.0,0,0.0,0.0
+Balanced 2 uncertain,12,render,legacy_guard_union,974,69.0748,69,0.07091868583162217,0.7161556037956736
+Balanced 2 uncertain,12,render,expanded_guard_union,974,69.0748,69,0.07091868583162217,0.7161556037956736
+Balanced 2 uncertain,12,render,expanded_guard_and_pbr_union,974,69.0748,69,0.07091868583162217,0.7161556037956736
+Balanced 2 uncertain,12,render,named_material_leaf,974,65.0724,65,0.06680944558521561,0.6746594114269399
+Balanced 2 uncertain,12,render,should_skip,974,69.0748,69,0.07091868583162217,0.7161556037956736
+Balanced 2 uncertain,12,render,probe,974,53.0637,53,0.054480184804928125,0.5501552825796453
+Balanced 2 uncertain,12,render,pbr_predicate,974,0.0,0,0.0,0.0
+Balanced 2 uncertain,12,render,rejection_logger,974,0.0,0,0.0,0.0
+Balanced 2 uncertain,12,render,logger_descendant_in_guard,974,0.0,0,0.0,0.0
+Balanced 2 uncertain,12,process,legacy_guard_union,974,69.0748,69,0.07091868583162217,0.20841968417931284
+Balanced 2 uncertain,12,process,expanded_guard_union,974,69.0748,69,0.07091868583162217,0.20841968417931284
+Balanced 2 uncertain,12,process,expanded_guard_and_pbr_union,974,69.0748,69,0.07091868583162217,0.20841968417931284
+Balanced 2 uncertain,12,process,named_material_leaf,974,65.0724,65,0.06680944558521561,0.1963432258477754
+Balanced 2 uncertain,12,process,should_skip,974,69.0748,69,0.07091868583162217,0.20841968417931284
+Balanced 2 uncertain,12,process,probe,974,53.0637,53,0.054480184804928125,0.16010932489686255
+Balanced 2 uncertain,12,process,pbr_predicate,974,0.0,0,0.0,0.0
+Balanced 2 uncertain,12,process,rejection_logger,974,0.0,0,0.0,0.0
+Balanced 2 uncertain,12,process,logger_descendant_in_guard,974,0.0,0,0.0,0.0
+Balanced 2 uncertain,10,render,legacy_guard_union,953,115.10129999999992,115,0.12077785939139551,1.2068021478822542
+Balanced 2 uncertain,10,render,expanded_guard_union,953,115.10129999999992,115,0.12077785939139551,1.2068021478822542
+Balanced 2 uncertain,10,render,expanded_guard_and_pbr_union,953,115.10129999999992,115,0.12077785939139551,1.2068021478822542
+Balanced 2 uncertain,10,render,named_material_leaf,953,109.09869999999994,109,0.11447922350472187,1.1438667112461953
+Balanced 2 uncertain,10,render,should_skip,953,115.10129999999992,115,0.12077785939139551,1.2068021478822542
+Balanced 2 uncertain,10,render,probe,953,95.09729999999996,95,0.09978730325288558,0.997066287677056
+Balanced 2 uncertain,10,render,pbr_predicate,953,0.0,0,0.0,0.0
+Balanced 2 uncertain,10,render,rejection_logger,953,0.0,0,0.0,0.0
+Balanced 2 uncertain,10,render,logger_descendant_in_guard,953,0.0,0,0.0,0.0
+Balanced 2 uncertain,10,process,legacy_guard_union,953,115.10129999999992,115,0.12077785939139551,0.2919486054711113
+Balanced 2 uncertain,10,process,expanded_guard_union,953,115.10129999999992,115,0.12077785939139551,0.2919486054711113
+Balanced 2 uncertain,10,process,expanded_guard_and_pbr_union,953,115.10129999999992,115,0.12077785939139551,0.2919486054711113
+Balanced 2 uncertain,10,process,named_material_leaf,953,109.09869999999994,109,0.11447922350472187,0.27672331523372135
+Balanced 2 uncertain,10,process,should_skip,953,115.10129999999992,115,0.12077785939139551,0.2919486054711113
+Balanced 2 uncertain,10,process,probe,953,95.09729999999996,95,0.09978730325288558,0.24120947477628765
+Balanced 2 uncertain,10,process,pbr_predicate,953,0.0,0,0.0,0.0
+Balanced 2 uncertain,10,process,rejection_logger,953,0.0,0,0.0,0.0
+Balanced 2 uncertain,10,process,logger_descendant_in_guard,953,0.0,0,0.0,0.0
+Balanced 2 uncertain,13,render,legacy_guard_union,553,99.0866,99,0.17918010849909585,1.0150376810199813
+Balanced 2 uncertain,13,render,expanded_guard_union,553,99.0866,99,0.17918010849909585,1.0150376810199813
+Balanced 2 uncertain,13,render,expanded_guard_and_pbr_union,553,99.0866,99,0.17918010849909585,1.0150376810199813
+Balanced 2 uncertain,13,render,named_material_leaf,553,94.08559999999999,94,0.17013670886075946,0.9638077120556515
+Balanced 2 uncertain,13,render,should_skip,553,99.0866,99,0.17918010849909585,1.0150376810199813
+Balanced 2 uncertain,13,render,probe,553,77.07139999999998,77,0.13936962025316452,0.7895151829708897
+Balanced 2 uncertain,13,render,pbr_predicate,553,0.0,0,0.0,0.0
+Balanced 2 uncertain,13,render,rejection_logger,553,0.0,0,0.0,0.0
+Balanced 2 uncertain,13,render,logger_descendant_in_guard,553,0.0,0,0.0,0.0
+Balanced 2 uncertain,13,process,legacy_guard_union,553,99.0866,99,0.17918010849909585,0.36640265184486015
+Balanced 2 uncertain,13,process,expanded_guard_union,553,99.0866,99,0.17918010849909585,0.36640265184486015
+Balanced 2 uncertain,13,process,expanded_guard_and_pbr_union,553,99.0866,99,0.17918010849909585,0.36640265184486015
+Balanced 2 uncertain,13,process,named_material_leaf,553,94.08559999999999,94,0.17013670886075946,0.34790994282188276
+Balanced 2 uncertain,13,process,should_skip,553,99.0866,99,0.17918010849909585,0.36640265184486015
+Balanced 2 uncertain,13,process,probe,553,77.07139999999998,77,0.13936962025316452,0.28499479587952303
+Balanced 2 uncertain,13,process,pbr_predicate,553,0.0,0,0.0,0.0
+Balanced 2 uncertain,13,process,rejection_logger,553,0.0,0,0.0,0.0
+Balanced 2 uncertain,13,process,logger_descendant_in_guard,553,0.0,0,0.0,0.0
+Balanced 3,08,render,legacy_guard_union,600,69.02190000000003,69,0.11503650000000006,0.8170326857345779
+Balanced 3,08,render,expanded_guard_union,600,69.02190000000003,69,0.11503650000000006,0.8170326857345779
+Balanced 3,08,render,expanded_guard_and_pbr_union,600,69.02190000000003,69,0.11503650000000006,0.8170326857345779
+Balanced 3,08,render,named_material_leaf,600,65.02420000000002,65,0.1083736666666667,0.7697107260701651
+Balanced 3,08,render,should_skip,600,69.02190000000003,69,0.11503650000000006,0.8170326857345779
+Balanced 3,08,render,probe,600,44.016299999999994,44,0.0733605,0.5210339878371775
+Balanced 3,08,render,pbr_predicate,600,0.0,0,0.0,0.0
+Balanced 3,08,render,rejection_logger,600,0.0,0,0.0,0.0
+Balanced 3,08,render,logger_descendant_in_guard,600,0.0,0,0.0,0.0
+Balanced 3,08,process,legacy_guard_union,600,69.02190000000003,69,0.11503650000000006,0.2260303655413611
+Balanced 3,08,process,expanded_guard_union,600,69.02190000000003,69,0.11503650000000006,0.2260303655413611
+Balanced 3,08,process,expanded_guard_and_pbr_union,600,69.02190000000003,69,0.11503650000000006,0.2260303655413611
+Balanced 3,08,process,named_material_leaf,600,65.02420000000002,65,0.1083736666666667,0.21293884542492414
+Balanced 3,08,process,should_skip,600,69.02190000000003,69,0.11503650000000006,0.2260303655413611
+Balanced 3,08,process,probe,600,44.016299999999994,44,0.0733605,0.14414295142234865
+Balanced 3,08,process,pbr_predicate,600,0.0,0,0.0,0.0
+Balanced 3,08,process,rejection_logger,600,0.0,0,0.0,0.0
+Balanced 3,08,process,logger_descendant_in_guard,600,0.0,0,0.0,0.0
+Balanced 3,11,render,legacy_guard_union,1060,47.157900000000005,47,0.044488584905660385,0.5147566711849612
+Balanced 3,11,render,expanded_guard_union,1060,47.157900000000005,47,0.044488584905660385,0.5147566711849612
+Balanced 3,11,render,expanded_guard_and_pbr_union,1060,47.157900000000005,47,0.044488584905660385,0.5147566711849612
+Balanced 3,11,render,named_material_leaf,1060,46.09140000000001,46,0.043482452830188686,0.5031151860929879
+Balanced 3,11,render,should_skip,1060,47.157900000000005,47,0.044488584905660385,0.5147566711849612
+Balanced 3,11,render,probe,1060,38.09910000000001,38,0.03594254716981133,0.41587445350923075
+Balanced 3,11,render,pbr_predicate,1060,0.0,0,0.0,0.0
+Balanced 3,11,render,rejection_logger,1060,0.0,0,0.0,0.0
+Balanced 3,11,render,logger_descendant_in_guard,1060,0.0,0,0.0,0.0
+Balanced 3,11,process,legacy_guard_union,1060,47.157900000000005,47,0.044488584905660385,0.08499018850371057
+Balanced 3,11,process,expanded_guard_union,1060,47.157900000000005,47,0.044488584905660385,0.08499018850371057
+Balanced 3,11,process,expanded_guard_and_pbr_union,1060,47.157900000000005,47,0.044488584905660385,0.08499018850371057
+Balanced 3,11,process,named_material_leaf,1060,46.09140000000001,46,0.043482452830188686,0.08306809197186314
+Balanced 3,11,process,should_skip,1060,47.157900000000005,47,0.044488584905660385,0.08499018850371057
+Balanced 3,11,process,probe,1060,38.09910000000001,38,0.03594254716981133,0.06866399247680069
+Balanced 3,11,process,pbr_predicate,1060,0.0,0,0.0,0.0
+Balanced 3,11,process,rejection_logger,1060,0.0,0,0.0,0.0
+Balanced 3,11,process,logger_descendant_in_guard,1060,0.0,0,0.0,0.0
+Balanced 3,09,render,legacy_guard_union,1049,85.03010000000006,85,0.08105824594852246,0.9691861735148974
+Balanced 3,09,render,expanded_guard_union,1049,85.03010000000006,85,0.08105824594852246,0.9691861735148974
+Balanced 3,09,render,expanded_guard_and_pbr_union,1049,85.03010000000006,85,0.08105824594852246,0.9691861735148974
+Balanced 3,09,render,named_material_leaf,1049,81.02680000000004,81,0.07724194470924693,0.9235559436500355
+Balanced 3,09,render,should_skip,1049,85.03010000000006,85,0.08105824594852246,0.9691861735148974
+Balanced 3,09,render,probe,1049,74.02460000000002,74,0.0705668255481411,0.8437437897870383
+Balanced 3,09,render,pbr_predicate,1049,0.0,0,0.0,0.0
+Balanced 3,09,render,rejection_logger,1049,0.0,0,0.0,0.0
+Balanced 3,09,render,logger_descendant_in_guard,1049,0.0,0,0.0,0.0
+Balanced 3,09,process,legacy_guard_union,1049,85.03010000000006,85,0.08105824594852246,0.356210668128731
+Balanced 3,09,process,expanded_guard_union,1049,85.03010000000006,85,0.08105824594852246,0.356210668128731
+Balanced 3,09,process,expanded_guard_and_pbr_union,1049,85.03010000000006,85,0.08105824594852246,0.356210668128731
+Balanced 3,09,process,named_material_leaf,1049,81.02680000000004,81,0.07724194470924693,0.33943992261955536
+Balanced 3,09,process,should_skip,1049,85.03010000000006,85,0.08105824594852246,0.356210668128731
+Balanced 3,09,process,probe,1049,74.02460000000002,74,0.0705668255481411,0.31010609447668586
+Balanced 3,09,process,pbr_predicate,1049,0.0,0,0.0,0.0
+Balanced 3,09,process,rejection_logger,1049,0.0,0,0.0,0.0
+Balanced 3,09,process,logger_descendant_in_guard,1049,0.0,0,0.0,0.0
+Balanced 3,12,render,legacy_guard_union,963,62.248699999999985,62,0.06464039460020767,0.6558029575740243
+Balanced 3,12,render,expanded_guard_union,963,62.248699999999985,62,0.06464039460020767,0.6558029575740243
+Balanced 3,12,render,expanded_guard_and_pbr_union,963,62.248699999999985,62,0.06464039460020767,0.6558029575740243
+Balanced 3,12,render,named_material_leaf,963,59.23679999999998,59,0.06151277258566976,0.6240719667594818
+Balanced 3,12,render,should_skip,963,62.248699999999985,62,0.06464039460020767,0.6558029575740243
+Balanced 3,12,render,probe,963,43.225699999999996,43,0.044886500519210795,0.4553917094366229
+Balanced 3,12,render,pbr_predicate,963,0.0,0,0.0,0.0
+Balanced 3,12,render,rejection_logger,963,0.0,0,0.0,0.0
+Balanced 3,12,render,logger_descendant_in_guard,963,0.0,0,0.0,0.0
+Balanced 3,12,process,legacy_guard_union,963,62.248699999999985,62,0.06464039460020767,0.18003872993058753
+Balanced 3,12,process,expanded_guard_union,963,62.248699999999985,62,0.06464039460020767,0.18003872993058753
+Balanced 3,12,process,expanded_guard_and_pbr_union,963,62.248699999999985,62,0.06464039460020767,0.18003872993058753
+Balanced 3,12,process,named_material_leaf,963,59.23679999999998,59,0.06151277258566976,0.1713275656704835
+Balanced 3,12,process,should_skip,963,62.248699999999985,62,0.06464039460020767,0.18003872993058753
+Balanced 3,12,process,probe,963,43.225699999999996,43,0.044886500519210795,0.1250194803804834
+Balanced 3,12,process,pbr_predicate,963,0.0,0,0.0,0.0
+Balanced 3,12,process,rejection_logger,963,0.0,0,0.0,0.0
+Balanced 3,12,process,logger_descendant_in_guard,963,0.0,0,0.0,0.0
+Balanced 3,10,render,legacy_guard_union,980,117.06550000000001,117,0.11945459183673471,1.2360631348767
+Balanced 3,10,render,expanded_guard_union,980,117.06550000000001,117,0.11945459183673471,1.2360631348767
+Balanced 3,10,render,expanded_guard_and_pbr_union,980,117.06550000000001,117,0.11945459183673471,1.2360631348767
+Balanced 3,10,render,named_material_leaf,980,105.06050000000002,105,0.10720459183673471,1.109305568094046
+Balanced 3,10,render,should_skip,980,117.06550000000001,117,0.11945459183673471,1.2360631348767
+Balanced 3,10,render,probe,980,91.06850000000001,91,0.09292704081632655,0.9615678026277491
+Balanced 3,10,render,pbr_predicate,980,0.0,0,0.0,0.0
+Balanced 3,10,render,rejection_logger,980,0.0,0,0.0,0.0
+Balanced 3,10,render,logger_descendant_in_guard,980,0.0,0,0.0,0.0
+Balanced 3,10,process,legacy_guard_union,980,117.06550000000001,117,0.11945459183673471,0.28186206969447863
+Balanced 3,10,process,expanded_guard_union,980,117.06550000000001,117,0.11945459183673471,0.28186206969447863
+Balanced 3,10,process,expanded_guard_and_pbr_union,980,117.06550000000001,117,0.11945459183673471,0.28186206969447863
+Balanced 3,10,process,named_material_leaf,980,105.06050000000002,105,0.10720459183673471,0.2529572758253864
+Balanced 3,10,process,should_skip,980,117.06550000000001,117,0.11945459183673471,0.28186206969447863
+Balanced 3,10,process,probe,980,91.06850000000001,91,0.09292704081632655,0.21926832323760315
+Balanced 3,10,process,pbr_predicate,980,0.0,0,0.0,0.0
+Balanced 3,10,process,rejection_logger,980,0.0,0,0.0,0.0
+Balanced 3,10,process,logger_descendant_in_guard,980,0.0,0,0.0,0.0
+Balanced 3,13,render,legacy_guard_union,541,62.076800000000006,62,0.11474454713493532,0.6387564088716434
+Balanced 3,13,render,expanded_guard_union,541,62.076800000000006,62,0.11474454713493532,0.6387564088716434
+Balanced 3,13,render,expanded_guard_and_pbr_union,541,62.076800000000006,62,0.11474454713493532,0.6387564088716434
+Balanced 3,13,render,named_material_leaf,541,59.09120000000001,59,0.10922587800369687,0.6080352516224428
+Balanced 3,13,render,should_skip,541,62.076800000000006,62,0.11474454713493532,0.6387564088716434
+Balanced 3,13,render,probe,541,48.08130000000001,48,0.08887486136783736,0.4947458393776766
+Balanced 3,13,render,pbr_predicate,541,0.0,0,0.0,0.0
+Balanced 3,13,render,rejection_logger,541,0.0,0,0.0,0.0
+Balanced 3,13,render,logger_descendant_in_guard,541,0.0,0,0.0,0.0
+Balanced 3,13,process,legacy_guard_union,541,62.076800000000006,62,0.11474454713493532,0.21142168776429796
+Balanced 3,13,process,expanded_guard_union,541,62.076800000000006,62,0.11474454713493532,0.21142168776429796
+Balanced 3,13,process,expanded_guard_and_pbr_union,541,62.076800000000006,62,0.11474454713493532,0.21142168776429796
+Balanced 3,13,process,named_material_leaf,541,59.09120000000001,59,0.10922587800369687,0.20125330616297368
+Balanced 3,13,process,should_skip,541,62.076800000000006,62,0.11474454713493532,0.21142168776429796
+Balanced 3,13,process,probe,541,48.08130000000001,48,0.08887486136783736,0.16375569610388327
+Balanced 3,13,process,pbr_predicate,541,0.0,0,0.0,0.0
+Balanced 3,13,process,rejection_logger,541,0.0,0,0.0,0.0
+Balanced 3,13,process,logger_descendant_in_guard,541,0.0,0,0.0,0.0
+Balanced 4,08,render,legacy_guard_union,600,71.01399999999997,71,0.11835666666666661,0.838693496607126
+Balanced 4,08,render,expanded_guard_union,600,71.01399999999997,71,0.11835666666666661,0.838693496607126
+Balanced 4,08,render,expanded_guard_and_pbr_union,600,71.01399999999997,71,0.11835666666666661,0.838693496607126
+Balanced 4,08,render,named_material_leaf,600,70.02269999999999,70,0.11670449999999997,0.8269859901550655
+Balanced 4,08,render,should_skip,600,71.01399999999997,71,0.11835666666666661,0.838693496607126
+Balanced 4,08,render,probe,600,64.0167,64,0.1066945,0.7560535945623318
+Balanced 4,08,render,pbr_predicate,600,0.0,0,0.0,0.0
+Balanced 4,08,render,rejection_logger,600,0.0,0,0.0,0.0
+Balanced 4,08,render,logger_descendant_in_guard,600,0.0,0,0.0,0.0
+Balanced 4,08,process,legacy_guard_union,600,71.01399999999997,71,0.11835666666666661,0.2312827360546401
+Balanced 4,08,process,expanded_guard_union,600,71.01399999999997,71,0.11835666666666661,0.2312827360546401
+Balanced 4,08,process,expanded_guard_and_pbr_union,600,71.01399999999997,71,0.11835666666666661,0.2312827360546401
+Balanced 4,08,process,named_material_leaf,600,70.02269999999999,70,0.11670449999999997,0.22805420961969824
+Balanced 4,08,process,should_skip,600,71.01399999999997,71,0.11835666666666661,0.2312827360546401
+Balanced 4,08,process,probe,600,64.0167,64,0.1066945,0.20849350169247027
+Balanced 4,08,process,pbr_predicate,600,0.0,0,0.0,0.0
+Balanced 4,08,process,rejection_logger,600,0.0,0,0.0,0.0
+Balanced 4,08,process,logger_descendant_in_guard,600,0.0,0,0.0,0.0
+Balanced 4,11,render,legacy_guard_union,1118,44.066599999999994,44,0.03941556350626117,0.4726435501433381
+Balanced 4,11,render,expanded_guard_union,1118,44.066599999999994,44,0.03941556350626117,0.4726435501433381
+Balanced 4,11,render,expanded_guard_and_pbr_union,1118,44.066599999999994,44,0.03941556350626117,0.4726435501433381
+Balanced 4,11,render,named_material_leaf,1118,42.071,42,0.03763059033989266,0.45123941484208846
+Balanced 4,11,render,should_skip,1118,44.066599999999994,44,0.03941556350626117,0.4726435501433381
+Balanced 4,11,render,probe,1118,34.071,34,0.030474955277280856,0.3654341019487247
+Balanced 4,11,render,pbr_predicate,1118,0.0,0,0.0,0.0
+Balanced 4,11,render,rejection_logger,1118,0.0,0,0.0,0.0
+Balanced 4,11,render,logger_descendant_in_guard,1118,0.0,0,0.0,0.0
+Balanced 4,11,process,legacy_guard_union,1118,44.066599999999994,44,0.03941556350626117,0.08343043337795937
+Balanced 4,11,process,expanded_guard_union,1118,44.066599999999994,44,0.03941556350626117,0.08343043337795937
+Balanced 4,11,process,expanded_guard_and_pbr_union,1118,44.066599999999994,44,0.03941556350626117,0.08343043337795937
+Balanced 4,11,process,named_material_leaf,1118,42.071,42,0.03763059033989266,0.07965220286212524
+Balanced 4,11,process,should_skip,1118,44.066599999999994,44,0.03941556350626117,0.08343043337795937
+Balanced 4,11,process,probe,1118,34.071,34,0.030474955277280856,0.06450595906242945
+Balanced 4,11,process,pbr_predicate,1118,0.0,0,0.0,0.0
+Balanced 4,11,process,rejection_logger,1118,0.0,0,0.0,0.0
+Balanced 4,11,process,logger_descendant_in_guard,1118,0.0,0,0.0,0.0
+Balanced 4,09,render,legacy_guard_union,1030,80.35420000000002,80,0.07801378640776702,0.9357708032666451
+Balanced 4,09,render,expanded_guard_union,1030,80.35420000000002,80,0.07801378640776702,0.9357708032666451
+Balanced 4,09,render,expanded_guard_and_pbr_union,1030,80.35420000000002,80,0.07801378640776702,0.9357708032666451
+Balanced 4,09,render,named_material_leaf,1030,80.35270000000001,80,0.07801233009708738,0.9357533349052538
+Balanced 4,09,render,should_skip,1030,80.35420000000002,80,0.07801378640776702,0.9357708032666451
+Balanced 4,09,render,probe,1030,73.2893,73,0.07115466019417475,0.8534959856715655
+Balanced 4,09,render,pbr_predicate,1030,0.0,0,0.0,0.0
+Balanced 4,09,render,rejection_logger,1030,0.0,0,0.0,0.0
+Balanced 4,09,render,logger_descendant_in_guard,1030,0.0,0,0.0,0.0
+Balanced 4,09,process,legacy_guard_union,1030,80.35420000000002,80,0.07801378640776702,0.34619438942795344
+Balanced 4,09,process,expanded_guard_union,1030,80.35420000000002,80,0.07801378640776702,0.34619438942795344
+Balanced 4,09,process,expanded_guard_and_pbr_union,1030,80.35420000000002,80,0.07801378640776702,0.34619438942795344
+Balanced 4,09,process,named_material_leaf,1030,80.35270000000001,80,0.07801233009708738,0.3461879268960118
+Balanced 4,09,process,should_skip,1030,80.35420000000002,80,0.07801378640776702,0.34619438942795344
+Balanced 4,09,process,probe,1030,73.2893,73,0.07115466019417475,0.3157562948184675
+Balanced 4,09,process,pbr_predicate,1030,0.0,0,0.0,0.0
+Balanced 4,09,process,rejection_logger,1030,0.0,0,0.0,0.0
+Balanced 4,09,process,logger_descendant_in_guard,1030,0.0,0,0.0,0.0
+Balanced 4,12,render,legacy_guard_union,960,60.22610000000002,60,0.06273552083333335,0.6267119472737024
+Balanced 4,12,render,expanded_guard_union,960,60.22610000000002,60,0.06273552083333335,0.6267119472737024
+Balanced 4,12,render,expanded_guard_and_pbr_union,960,60.22610000000002,60,0.06273552083333335,0.6267119472737024
+Balanced 4,12,render,named_material_leaf,960,57.147500000000015,57,0.05952864583333335,0.5946760790890313
+Balanced 4,12,render,should_skip,960,60.22610000000002,60,0.06273552083333335,0.6267119472737024
+Balanced 4,12,render,probe,960,51.145700000000005,51,0.05327677083333334,0.5322214329281922
+Balanced 4,12,render,pbr_predicate,960,0.0,0,0.0,0.0
+Balanced 4,12,render,rejection_logger,960,0.0,0,0.0,0.0
+Balanced 4,12,render,logger_descendant_in_guard,960,0.0,0,0.0,0.0
+Balanced 4,12,process,legacy_guard_union,960,60.22610000000002,60,0.06273552083333335,0.17121819476495895
+Balanced 4,12,process,expanded_guard_union,960,60.22610000000002,60,0.06273552083333335,0.17121819476495895
+Balanced 4,12,process,expanded_guard_and_pbr_union,960,60.22610000000002,60,0.06273552083333335,0.17121819476495895
+Balanced 4,12,process,named_material_leaf,960,57.147500000000015,57,0.05952864583333335,0.16246597049004488
+Balanced 4,12,process,should_skip,960,60.22610000000002,60,0.06273552083333335,0.17121819476495895
+Balanced 4,12,process,probe,960,51.145700000000005,51,0.05327677083333334,0.14540331225150158
+Balanced 4,12,process,pbr_predicate,960,0.0,0,0.0,0.0
+Balanced 4,12,process,rejection_logger,960,0.0,0,0.0,0.0
+Balanced 4,12,process,logger_descendant_in_guard,960,0.0,0,0.0,0.0
+Balanced 4,10,render,legacy_guard_union,975,105.04749999999999,105,0.10774102564102563,1.0796761145354268
+Balanced 4,10,render,expanded_guard_union,975,105.04749999999999,105,0.10774102564102563,1.0796761145354268
+Balanced 4,10,render,expanded_guard_and_pbr_union,975,105.04749999999999,105,0.10774102564102563,1.0796761145354268
+Balanced 4,10,render,named_material_leaf,975,99.05279999999999,99,0.10159261538461538,1.0180627072310595
+Balanced 4,10,render,should_skip,975,105.04749999999999,105,0.10774102564102563,1.0796761145354268
+Balanced 4,10,render,probe,975,90.0513,90,0.09236030769230769,0.9255454693625653
+Balanced 4,10,render,pbr_predicate,975,0.0,0,0.0,0.0
+Balanced 4,10,render,rejection_logger,975,0.0,0,0.0,0.0
+Balanced 4,10,render,logger_descendant_in_guard,975,0.0,0,0.0,0.0
+Balanced 4,10,process,legacy_guard_union,975,105.04749999999999,105,0.10774102564102563,0.7206641925492058
+Balanced 4,10,process,expanded_guard_union,975,105.04749999999999,105,0.10774102564102563,0.7206641925492058
+Balanced 4,10,process,expanded_guard_and_pbr_union,975,105.04749999999999,105,0.10774102564102563,0.7206641925492058
+Balanced 4,10,process,named_material_leaf,975,99.05279999999999,99,0.10159261538461538,0.6795383624716245
+Balanced 4,10,process,should_skip,975,105.04749999999999,105,0.10774102564102563,0.7206641925492058
+Balanced 4,10,process,probe,975,90.0513,90,0.09236030769230769,0.6177847869059835
+Balanced 4,10,process,pbr_predicate,975,0.0,0,0.0,0.0
+Balanced 4,10,process,rejection_logger,975,0.0,0,0.0,0.0
+Balanced 4,10,process,logger_descendant_in_guard,975,0.0,0,0.0,0.0
+Balanced 4,13,render,legacy_guard_union,561,84.17690000000002,84,0.15004795008912658,0.8564946700372151
+Balanced 4,13,render,expanded_guard_union,561,84.17690000000002,84,0.15004795008912658,0.8564946700372151
+Balanced 4,13,render,expanded_guard_and_pbr_union,561,84.17690000000002,84,0.15004795008912658,0.8564946700372151
+Balanced 4,13,render,named_material_leaf,561,81.17780000000002,81,0.14470196078431377,0.8259790159217913
+Balanced 4,13,render,should_skip,561,84.17690000000002,84,0.15004795008912658,0.8564946700372151
+Balanced 4,13,render,probe,561,76.17920000000001,76,0.13579180035650626,0.7751185749023665
+Balanced 4,13,render,pbr_predicate,561,0.0,0,0.0,0.0
+Balanced 4,13,render,rejection_logger,561,0.0,0,0.0,0.0
+Balanced 4,13,render,logger_descendant_in_guard,561,0.0,0,0.0,0.0
+Balanced 4,13,process,legacy_guard_union,561,84.17690000000002,84,0.15004795008912658,0.3162455704453671
+Balanced 4,13,process,expanded_guard_union,561,84.17690000000002,84,0.15004795008912658,0.3162455704453671
+Balanced 4,13,process,expanded_guard_and_pbr_union,561,84.17690000000002,84,0.15004795008912658,0.3162455704453671
+Balanced 4,13,process,named_material_leaf,561,81.17780000000002,81,0.14470196078431377,0.304978202671991
+Balanced 4,13,process,should_skip,561,84.17690000000002,84,0.15004795008912658,0.3162455704453671
+Balanced 4,13,process,probe,561,76.17920000000001,76,0.13579180035650626,0.2861988806913976
+Balanced 4,13,process,pbr_predicate,561,0.0,0,0.0,0.0
+Balanced 4,13,process,rejection_logger,561,0.0,0,0.0,0.0
+Balanced 4,13,process,logger_descendant_in_guard,561,0.0,0,0.0,0.0
+Legacy 2,08,render,legacy_guard_union,600,84.00229999999999,84,0.14000383333333333,0.9869875366156489
+Legacy 2,08,render,expanded_guard_union,600,84.00229999999999,84,0.14000383333333333,0.9869875366156489
+Legacy 2,08,render,expanded_guard_and_pbr_union,600,84.00229999999999,84,0.14000383333333333,0.9869875366156489
+Legacy 2,08,render,named_material_leaf,600,72.98949999999999,73,0.12164916666666666,0.8575923135891267
+Legacy 2,08,render,should_skip,600,84.00229999999999,84,0.14000383333333333,0.9869875366156489
+Legacy 2,08,render,probe,600,59.991599999999984,60,0.09998599999999998,0.7048730987321936
+Legacy 2,08,render,pbr_predicate,600,0.0,0,0.0,0.0
+Legacy 2,08,render,rejection_logger,600,0.0,0,0.0,0.0
+Legacy 2,08,render,logger_descendant_in_guard,600,0.0,0,0.0,0.0
+Legacy 2,08,process,legacy_guard_union,600,84.00229999999999,84,0.14000383333333333,0.2857936496042271
+Legacy 2,08,process,expanded_guard_union,600,84.00229999999999,84,0.14000383333333333,0.2857936496042271
+Legacy 2,08,process,expanded_guard_and_pbr_union,600,84.00229999999999,84,0.14000383333333333,0.2857936496042271
+Legacy 2,08,process,named_material_leaf,600,72.98949999999999,73,0.12164916666666666,0.24832576712527787
+Legacy 2,08,process,should_skip,600,84.00229999999999,84,0.14000383333333333,0.2857936496042271
+Legacy 2,08,process,probe,600,59.991599999999984,60,0.09998599999999998,0.20410415321481606
+Legacy 2,08,process,pbr_predicate,600,0.0,0,0.0,0.0
+Legacy 2,08,process,rejection_logger,600,0.0,0,0.0,0.0
+Legacy 2,08,process,logger_descendant_in_guard,600,0.0,0,0.0,0.0
+Legacy 2,11,render,legacy_guard_union,1081,52.16310000000002,52,0.048254486586494005,0.5705222274817158
+Legacy 2,11,render,expanded_guard_union,1081,52.16310000000002,52,0.048254486586494005,0.5705222274817158
+Legacy 2,11,render,expanded_guard_and_pbr_union,1081,52.16310000000002,52,0.048254486586494005,0.5705222274817158
+Legacy 2,11,render,named_material_leaf,1081,49.13620000000002,49,0.04545439407955598,0.5374161864227218
+Legacy 2,11,render,should_skip,1081,52.16310000000002,52,0.048254486586494005,0.5705222274817158
+Legacy 2,11,render,probe,1081,42.143,42,0.03898519888991674,0.46092962712649244
+Legacy 2,11,render,pbr_predicate,1081,0.0,0,0.0,0.0
+Legacy 2,11,render,rejection_logger,1081,0.0,0,0.0,0.0
+Legacy 2,11,render,logger_descendant_in_guard,1081,0.0,0,0.0,0.0
+Legacy 2,11,process,legacy_guard_union,1081,52.16310000000002,52,0.048254486586494005,0.13138967066680338
+Legacy 2,11,process,expanded_guard_union,1081,52.16310000000002,52,0.048254486586494005,0.13138967066680338
+Legacy 2,11,process,expanded_guard_and_pbr_union,1081,52.16310000000002,52,0.048254486586494005,0.13138967066680338
+Legacy 2,11,process,named_material_leaf,1081,49.13620000000002,49,0.04545439407955598,0.12376544215773572
+Legacy 2,11,process,should_skip,1081,52.16310000000002,52,0.048254486586494005,0.13138967066680338
+Legacy 2,11,process,probe,1081,42.143,42,0.03898519888991674,0.1061508018294751
+Legacy 2,11,process,pbr_predicate,1081,0.0,0,0.0,0.0
+Legacy 2,11,process,rejection_logger,1081,0.0,0,0.0,0.0
+Legacy 2,11,process,logger_descendant_in_guard,1081,0.0,0,0.0,0.0
+Legacy 2,09,render,legacy_guard_union,1089,69.0824,69,0.06343654729109276,0.7999630927360776
+Legacy 2,09,render,expanded_guard_union,1089,69.0824,69,0.06343654729109276,0.7999630927360776
+Legacy 2,09,render,expanded_guard_and_pbr_union,1089,69.0824,69,0.06343654729109276,0.7999630927360776
+Legacy 2,09,render,named_material_leaf,1089,66.08130000000001,66,0.06068071625344354,0.7652108369138966
+Legacy 2,09,render,should_skip,1089,69.0824,69,0.06343654729109276,0.7999630927360776
+Legacy 2,09,render,probe,1089,59.06430000000001,59,0.05423719008264464,0.6839551043144348
+Legacy 2,09,render,pbr_predicate,1089,0.0,0,0.0,0.0
+Legacy 2,09,render,rejection_logger,1089,0.0,0,0.0,0.0
+Legacy 2,09,render,logger_descendant_in_guard,1089,0.0,0,0.0,0.0
+Legacy 2,09,process,legacy_guard_union,1089,69.0824,69,0.06343654729109276,0.2974330661505872
+Legacy 2,09,process,expanded_guard_union,1089,69.0824,69,0.06343654729109276,0.2974330661505872
+Legacy 2,09,process,expanded_guard_and_pbr_union,1089,69.0824,69,0.06343654729109276,0.2974330661505872
+Legacy 2,09,process,named_material_leaf,1089,66.08130000000001,66,0.06068071625344354,0.2845118825376188
+Legacy 2,09,process,should_skip,1089,69.0824,69,0.06343654729109276,0.2974330661505872
+Legacy 2,09,process,probe,1089,59.06430000000001,59,0.05423719008264464,0.25430031164288047
+Legacy 2,09,process,pbr_predicate,1089,0.0,0,0.0,0.0
+Legacy 2,09,process,rejection_logger,1089,0.0,0,0.0,0.0
+Legacy 2,09,process,logger_descendant_in_guard,1089,0.0,0,0.0,0.0
+Legacy 2,12,render,legacy_guard_union,913,57.055400000000006,57,0.062492223439211396,0.5948241580547484
+Legacy 2,12,render,expanded_guard_union,913,57.055400000000006,57,0.062492223439211396,0.5948241580547484
+Legacy 2,12,render,expanded_guard_and_pbr_union,913,57.055400000000006,57,0.062492223439211396,0.5948241580547484
+Legacy 2,12,render,named_material_leaf,913,53.056400000000004,53,0.05811215772179628,0.5531330682006602
+Legacy 2,12,render,should_skip,913,57.055400000000006,57,0.062492223439211396,0.5948241580547484
+Legacy 2,12,render,probe,913,48.04810000000001,48,0.05262661555312159,0.5009196435154316
+Legacy 2,12,render,pbr_predicate,913,0.0,0,0.0,0.0
+Legacy 2,12,render,rejection_logger,913,0.0,0,0.0,0.0
+Legacy 2,12,render,logger_descendant_in_guard,913,0.0,0,0.0,0.0
+Legacy 2,12,process,legacy_guard_union,913,57.055400000000006,57,0.062492223439211396,0.1763603158768382
+Legacy 2,12,process,expanded_guard_union,913,57.055400000000006,57,0.062492223439211396,0.1763603158768382
+Legacy 2,12,process,expanded_guard_and_pbr_union,913,57.055400000000006,57,0.062492223439211396,0.1763603158768382
+Legacy 2,12,process,named_material_leaf,913,53.056400000000004,53,0.05811215772179628,0.16399926147722874
+Legacy 2,12,process,should_skip,913,57.055400000000006,57,0.062492223439211396,0.1763603158768382
+Legacy 2,12,process,probe,913,48.04810000000001,48,0.05262661555312159,0.14851842408048863
+Legacy 2,12,process,pbr_predicate,913,0.0,0,0.0,0.0
+Legacy 2,12,process,rejection_logger,913,0.0,0,0.0,0.0
+Legacy 2,12,process,logger_descendant_in_guard,913,0.0,0,0.0,0.0
+Legacy 2,10,render,legacy_guard_union,1039,96.03869999999999,96,0.09243378248315687,1.002460298840759
+Legacy 2,10,render,expanded_guard_union,1039,96.03869999999999,96,0.09243378248315687,1.002460298840759
+Legacy 2,10,render,expanded_guard_and_pbr_union,1039,96.03869999999999,96,0.09243378248315687,1.002460298840759
+Legacy 2,10,render,named_material_leaf,1039,93.03869999999999,93,0.08954639076034648,0.9711460380633612
+Legacy 2,10,render,should_skip,1039,96.03869999999999,96,0.09243378248315687,1.002460298840759
+Legacy 2,10,render,probe,1039,82.031,82,0.07895187680461983,0.8562467086102407
+Legacy 2,10,render,pbr_predicate,1039,0.0,0,0.0,0.0
+Legacy 2,10,render,rejection_logger,1039,0.0,0,0.0,0.0
+Legacy 2,10,render,logger_descendant_in_guard,1039,0.0,0,0.0,0.0
+Legacy 2,10,process,legacy_guard_union,1039,96.03869999999999,96,0.09243378248315687,0.6717115939675921
+Legacy 2,10,process,expanded_guard_union,1039,96.03869999999999,96,0.09243378248315687,0.6717115939675921
+Legacy 2,10,process,expanded_guard_and_pbr_union,1039,96.03869999999999,96,0.09243378248315687,0.6717115939675921
+Legacy 2,10,process,named_material_leaf,1039,93.03869999999999,93,0.08954639076034648,0.6507290652379989
+Legacy 2,10,process,should_skip,1039,96.03869999999999,96,0.09243378248315687,0.6717115939675921
+Legacy 2,10,process,probe,1039,82.031,82,0.07895187680461983,0.5737392714057515
+Legacy 2,10,process,pbr_predicate,1039,0.0,0,0.0,0.0
+Legacy 2,10,process,rejection_logger,1039,0.0,0,0.0,0.0
+Legacy 2,10,process,logger_descendant_in_guard,1039,0.0,0,0.0,0.0
+Legacy 2,13,render,legacy_guard_union,572,65.0121,65,0.11365751748251748,0.6663502399613604
+Legacy 2,13,render,expanded_guard_union,572,65.0121,65,0.11365751748251748,0.6663502399613604
+Legacy 2,13,render,expanded_guard_and_pbr_union,572,65.0121,65,0.11365751748251748,0.6663502399613604
+Legacy 2,13,render,named_material_leaf,572,64.0111,64,0.11190751748251748,0.656090356182782
+Legacy 2,13,render,should_skip,572,65.0121,65,0.11365751748251748,0.6663502399613604
+Legacy 2,13,render,probe,572,56.010200000000005,56,0.09791993006993008,0.5740840583565797
+Legacy 2,13,render,pbr_predicate,572,0.0,0,0.0,0.0
+Legacy 2,13,render,rejection_logger,572,0.0,0,0.0,0.0
+Legacy 2,13,render,logger_descendant_in_guard,572,0.0,0,0.0,0.0
+Legacy 2,13,process,legacy_guard_union,572,65.0121,65,0.11365751748251748,0.16466725928923645
+Legacy 2,13,process,expanded_guard_union,572,65.0121,65,0.11365751748251748,0.16466725928923645
+Legacy 2,13,process,expanded_guard_and_pbr_union,572,65.0121,65,0.11365751748251748,0.16466725928923645
+Legacy 2,13,process,named_material_leaf,572,64.0111,64,0.11190751748251748,0.16213185547135445
+Legacy 2,13,process,should_skip,572,65.0121,65,0.11365751748251748,0.16466725928923645
+Legacy 2,13,process,probe,572,56.010200000000005,56,0.09791993006993008,0.1418666083120218
+Legacy 2,13,process,pbr_predicate,572,0.0,0,0.0,0.0
+Legacy 2,13,process,rejection_logger,572,0.0,0,0.0,0.0
+Legacy 2,13,process,logger_descendant_in_guard,572,0.0,0,0.0,0.0
+Depth off,08,render,legacy_guard_union,573,66.09530000000001,66,0.11534956369982549,0.6771632244469964
+Depth off,08,render,expanded_guard_union,573,66.09530000000001,66,0.11534956369982549,0.6771632244469964
+Depth off,08,render,expanded_guard_and_pbr_union,573,66.09530000000001,66,0.11534956369982549,0.6771632244469964
+Depth off,08,render,named_material_leaf,573,65.09670000000001,65,0.11360680628272253,0.6669323124769657
+Depth off,08,render,should_skip,573,66.09530000000001,66,0.11534956369982549,0.6771632244469964
+Depth off,08,render,probe,573,58.093800000000016,58,0.10138534031413615,0.5951858139440918
+Depth off,08,render,pbr_predicate,573,0.0,0,0.0,0.0
+Depth off,08,render,rejection_logger,573,0.0,0,0.0,0.0
+Depth off,08,render,logger_descendant_in_guard,573,0.0,0,0.0,0.0
+Depth off,08,process,legacy_guard_union,573,66.09530000000001,66,0.11534956369982549,0.2675430537743264
+Depth off,08,process,expanded_guard_union,573,66.09530000000001,66,0.11534956369982549,0.2675430537743264
+Depth off,08,process,expanded_guard_and_pbr_union,573,66.09530000000001,66,0.11534956369982549,0.2675430537743264
+Depth off,08,process,named_material_leaf,573,65.09670000000001,65,0.11360680628272253,0.26350088294676316
+Depth off,08,process,should_skip,573,66.09530000000001,66,0.11534956369982549,0.2675430537743264
+Depth off,08,process,probe,573,58.093800000000016,58,0.10138534031413615,0.23515427961375418
+Depth off,08,process,pbr_predicate,573,0.0,0,0.0,0.0
+Depth off,08,process,rejection_logger,573,0.0,0,0.0,0.0
+Depth off,08,process,logger_descendant_in_guard,573,0.0,0,0.0,0.0
+Depth off,11,render,legacy_guard_union,685,74.1442,74,0.10823970802919708,0.9073176271280203
+Depth off,11,render,expanded_guard_union,685,74.1442,74,0.10823970802919708,0.9073176271280203
+Depth off,11,render,expanded_guard_and_pbr_union,685,74.1442,74,0.10823970802919708,0.9073176271280203
+Depth off,11,render,named_material_leaf,685,72.1434,72,0.10531883211678832,0.8828334313533307
+Depth off,11,render,should_skip,685,74.1442,74,0.10823970802919708,0.9073176271280203
+Depth off,11,render,probe,685,61.070199999999986,61,0.08915357664233575,0.747328435025715
+Depth off,11,render,pbr_predicate,685,0.0,0,0.0,0.0
+Depth off,11,render,rejection_logger,685,0.0,0,0.0,0.0
+Depth off,11,render,logger_descendant_in_guard,685,0.0,0,0.0,0.0
+Depth off,11,process,legacy_guard_union,685,74.1442,74,0.10823970802919708,0.19761131569916915
+Depth off,11,process,expanded_guard_union,685,74.1442,74,0.10823970802919708,0.19761131569916915
+Depth off,11,process,expanded_guard_and_pbr_union,685,74.1442,74,0.10823970802919708,0.19761131569916915
+Depth off,11,process,named_material_leaf,685,72.1434,72,0.10531883211678832,0.1922787243373243
+Depth off,11,process,should_skip,685,74.1442,74,0.10823970802919708,0.19761131569916915
+Depth off,11,process,probe,685,61.070199999999986,61,0.08915357664233575,0.16276610405144837
+Depth off,11,process,pbr_predicate,685,0.0,0,0.0,0.0
+Depth off,11,process,rejection_logger,685,0.0,0,0.0,0.0
+Depth off,11,process,logger_descendant_in_guard,685,0.0,0,0.0,0.0
+Depth off,09,render,legacy_guard_union,980,83.15360000000003,83,0.08485061224489798,0.9082181379769675
+Depth off,09,render,expanded_guard_union,980,83.15360000000003,83,0.08485061224489798,0.9082181379769675
+Depth off,09,render,expanded_guard_and_pbr_union,980,83.15360000000003,83,0.08485061224489798,0.9082181379769675
+Depth off,09,render,named_material_leaf,980,78.15100000000002,78,0.07974591836734696,0.8535788673134775
+Depth off,09,render,should_skip,980,83.15360000000003,83,0.08485061224489798,0.9082181379769675
+Depth off,09,render,probe,980,62.04680000000001,62,0.0633130612244898,0.677685983089479
+Depth off,09,render,pbr_predicate,980,0.0,0,0.0,0.0
+Depth off,09,render,rejection_logger,980,0.0,0,0.0,0.0
+Depth off,09,render,logger_descendant_in_guard,980,0.0,0,0.0,0.0
+Depth off,09,process,legacy_guard_union,980,83.15360000000003,83,0.08485061224489798,0.3525178272608392
+Depth off,09,process,expanded_guard_union,980,83.15360000000003,83,0.08485061224489798,0.3525178272608392
+Depth off,09,process,expanded_guard_and_pbr_union,980,83.15360000000003,83,0.08485061224489798,0.3525178272608392
+Depth off,09,process,named_material_leaf,980,78.15100000000002,78,0.07974591836734696,0.33131001806610705
+Depth off,09,process,should_skip,980,83.15360000000003,83,0.08485061224489798,0.3525178272608392
+Depth off,09,process,probe,980,62.04680000000001,62,0.0633130612244898,0.26303855905803036
+Depth off,09,process,pbr_predicate,980,0.0,0,0.0,0.0
+Depth off,09,process,rejection_logger,980,0.0,0,0.0,0.0
+Depth off,09,process,logger_descendant_in_guard,980,0.0,0,0.0,0.0
+Depth off,12,render,legacy_guard_union,599,68.08169999999997,68,0.11365893155258759,0.7975258012424408
+Depth off,12,render,expanded_guard_union,599,68.08169999999997,68,0.11365893155258759,0.7975258012424408
+Depth off,12,render,expanded_guard_and_pbr_union,599,68.08169999999997,68,0.11365893155258759,0.7975258012424408
+Depth off,12,render,named_material_leaf,599,66.08199999999998,66,0.11032053422370615,0.7741008229480605
+Depth off,12,render,should_skip,599,68.08169999999997,68,0.11365893155258759,0.7975258012424408
+Depth off,12,render,probe,599,55.0274,55,0.09186544240400668,0.6446045159754867
+Depth off,12,render,pbr_predicate,599,0.0,0,0.0,0.0
+Depth off,12,render,rejection_logger,599,0.0,0,0.0,0.0
+Depth off,12,render,logger_descendant_in_guard,599,0.0,0,0.0,0.0
+Depth off,12,process,legacy_guard_union,599,68.08169999999997,68,0.11365893155258759,0.2756350970215157
+Depth off,12,process,expanded_guard_union,599,68.08169999999997,68,0.11365893155258759,0.2756350970215157
+Depth off,12,process,expanded_guard_and_pbr_union,599,68.08169999999997,68,0.11365893155258759,0.2756350970215157
+Depth off,12,process,named_material_leaf,599,66.08199999999998,66,0.11032053422370615,0.26753912551208037
+Depth off,12,process,should_skip,599,68.08169999999997,68,0.11365893155258759,0.2756350970215157
+Depth off,12,process,probe,599,55.0274,55,0.09186544240400668,0.22278354885147927
+Depth off,12,process,pbr_predicate,599,0.0,0,0.0,0.0
+Depth off,12,process,rejection_logger,599,0.0,0,0.0,0.0
+Depth off,12,process,logger_descendant_in_guard,599,0.0,0,0.0,0.0
+Depth off,10,render,legacy_guard_union,600,79.9858,80,0.13330966666666666,1.0777444183610934
+Depth off,10,render,expanded_guard_union,600,79.9858,80,0.13330966666666666,1.0777444183610934
+Depth off,10,render,expanded_guard_and_pbr_union,600,79.9858,80,0.13330966666666666,1.0777444183610934
+Depth off,10,render,named_material_leaf,600,78.9858,79,0.13164299999999998,1.0642702214616302
+Depth off,10,render,should_skip,600,79.9858,80,0.13330966666666666,1.0777444183610934
+Depth off,10,render,probe,600,73.986,74,0.12331,0.9969019318036935
+Depth off,10,render,pbr_predicate,600,0.0,0,0.0,0.0
+Depth off,10,render,rejection_logger,600,0.0,0,0.0,0.0
+Depth off,10,render,logger_descendant_in_guard,600,0.0,0,0.0,0.0
+Depth off,10,process,legacy_guard_union,600,79.9858,80,0.13330966666666666,0.4552805086445306
+Depth off,10,process,expanded_guard_union,600,79.9858,80,0.13330966666666666,0.4552805086445306
+Depth off,10,process,expanded_guard_and_pbr_union,600,79.9858,80,0.13330966666666666,0.4552805086445306
+Depth off,10,process,named_material_leaf,600,78.9858,79,0.13164299999999998,0.4495884919535113
+Depth off,10,process,should_skip,600,79.9858,80,0.13330966666666666,0.4552805086445306
+Depth off,10,process,probe,600,73.986,74,0.12331,0.42112954690175314
+Depth off,10,process,pbr_predicate,600,0.0,0,0.0,0.0
+Depth off,10,process,rejection_logger,600,0.0,0,0.0,0.0
+Depth off,10,process,logger_descendant_in_guard,600,0.0,0,0.0,0.0
+Depth off,13,render,legacy_guard_union,460,77.98820000000002,78,0.16953956521739136,0.7926055945709195
+Depth off,13,render,expanded_guard_union,460,77.98820000000002,78,0.16953956521739136,0.7926055945709195
+Depth off,13,render,expanded_guard_and_pbr_union,460,77.98820000000002,78,0.16953956521739136,0.7926055945709195
+Depth off,13,render,named_material_leaf,460,72.99400000000001,73,0.1586826086956522,0.7418488023843312
+Depth off,13,render,should_skip,460,77.98820000000002,78,0.16953956521739136,0.7926055945709195
+Depth off,13,render,probe,460,65.991,66,0.14345869565217392,0.6706762791208098
+Depth off,13,render,pbr_predicate,460,0.0,0,0.0,0.0
+Depth off,13,render,rejection_logger,460,0.0,0,0.0,0.0
+Depth off,13,render,logger_descendant_in_guard,460,0.0,0,0.0,0.0
+Depth off,13,process,legacy_guard_union,460,77.98820000000002,78,0.16953956521739136,0.31688786971720934
+Depth off,13,process,expanded_guard_union,460,77.98820000000002,78,0.16953956521739136,0.31688786971720934
+Depth off,13,process,expanded_guard_and_pbr_union,460,77.98820000000002,78,0.16953956521739136,0.31688786971720934
+Depth off,13,process,named_material_leaf,460,72.99400000000001,73,0.1586826086956522,0.29659503825114536
+Depth off,13,process,should_skip,460,77.98820000000002,78,0.16953956521739136,0.31688786971720934
+Depth off,13,process,probe,460,65.991,66,0.14345869565217392,0.26813989052841786
+Depth off,13,process,pbr_predicate,460,0.0,0,0.0,0.0
+Depth off,13,process,rejection_logger,460,0.0,0,0.0,0.0
+Depth off,13,process,logger_descendant_in_guard,460,0.0,0,0.0,0.0
+RC166 repeat 1,08,render,legacy_guard_union,654,0.0,0,0.0,0.0
+RC166 repeat 1,08,render,expanded_guard_union,654,0.0,0,0.0,0.0
+RC166 repeat 1,08,render,expanded_guard_and_pbr_union,654,0.0,0,0.0,0.0
+RC166 repeat 1,08,render,named_material_leaf,654,0.0,0,0.0,0.0
+RC166 repeat 1,08,render,should_skip,654,0.0,0,0.0,0.0
+RC166 repeat 1,08,render,probe,654,0.0,0,0.0,0.0
+RC166 repeat 1,08,render,pbr_predicate,654,0.0,0,0.0,0.0
+RC166 repeat 1,08,render,rejection_logger,654,0.0,0,0.0,0.0
+RC166 repeat 1,08,render,logger_descendant_in_guard,654,0.0,0,0.0,0.0
+RC166 repeat 1,08,process,legacy_guard_union,654,0.0,0,0.0,0.0
+RC166 repeat 1,08,process,expanded_guard_union,654,0.0,0,0.0,0.0
+RC166 repeat 1,08,process,expanded_guard_and_pbr_union,654,0.0,0,0.0,0.0
+RC166 repeat 1,08,process,named_material_leaf,654,0.0,0,0.0,0.0
+RC166 repeat 1,08,process,should_skip,654,0.0,0,0.0,0.0
+RC166 repeat 1,08,process,probe,654,0.0,0,0.0,0.0
+RC166 repeat 1,08,process,pbr_predicate,654,0.0,0,0.0,0.0
+RC166 repeat 1,08,process,rejection_logger,654,0.0,0,0.0,0.0
+RC166 repeat 1,08,process,logger_descendant_in_guard,654,0.0,0,0.0,0.0
+RC166 repeat 1,11,render,legacy_guard_union,875,0.0,0,0.0,0.0
+RC166 repeat 1,11,render,expanded_guard_union,875,0.0,0,0.0,0.0
+RC166 repeat 1,11,render,expanded_guard_and_pbr_union,875,0.0,0,0.0,0.0
+RC166 repeat 1,11,render,named_material_leaf,875,0.0,0,0.0,0.0
+RC166 repeat 1,11,render,should_skip,875,0.0,0,0.0,0.0
+RC166 repeat 1,11,render,probe,875,0.0,0,0.0,0.0
+RC166 repeat 1,11,render,pbr_predicate,875,0.0,0,0.0,0.0
+RC166 repeat 1,11,render,rejection_logger,875,0.0,0,0.0,0.0
+RC166 repeat 1,11,render,logger_descendant_in_guard,875,0.0,0,0.0,0.0
+RC166 repeat 1,11,process,legacy_guard_union,875,0.0,0,0.0,0.0
+RC166 repeat 1,11,process,expanded_guard_union,875,0.0,0,0.0,0.0
+RC166 repeat 1,11,process,expanded_guard_and_pbr_union,875,0.0,0,0.0,0.0
+RC166 repeat 1,11,process,named_material_leaf,875,0.0,0,0.0,0.0
+RC166 repeat 1,11,process,should_skip,875,0.0,0,0.0,0.0
+RC166 repeat 1,11,process,probe,875,0.0,0,0.0,0.0
+RC166 repeat 1,11,process,pbr_predicate,875,0.0,0,0.0,0.0
+RC166 repeat 1,11,process,rejection_logger,875,0.0,0,0.0,0.0
+RC166 repeat 1,11,process,logger_descendant_in_guard,875,0.0,0,0.0,0.0
+RC166 repeat 1,09,render,legacy_guard_union,1094,0.0,0,0.0,0.0
+RC166 repeat 1,09,render,expanded_guard_union,1094,0.0,0,0.0,0.0
+RC166 repeat 1,09,render,expanded_guard_and_pbr_union,1094,0.0,0,0.0,0.0
+RC166 repeat 1,09,render,named_material_leaf,1094,0.0,0,0.0,0.0
+RC166 repeat 1,09,render,should_skip,1094,0.0,0,0.0,0.0
+RC166 repeat 1,09,render,probe,1094,0.0,0,0.0,0.0
+RC166 repeat 1,09,render,pbr_predicate,1094,0.0,0,0.0,0.0
+RC166 repeat 1,09,render,rejection_logger,1094,0.0,0,0.0,0.0
+RC166 repeat 1,09,render,logger_descendant_in_guard,1094,0.0,0,0.0,0.0
+RC166 repeat 1,09,process,legacy_guard_union,1094,0.0,0,0.0,0.0
+RC166 repeat 1,09,process,expanded_guard_union,1094,0.0,0,0.0,0.0
+RC166 repeat 1,09,process,expanded_guard_and_pbr_union,1094,0.0,0,0.0,0.0
+RC166 repeat 1,09,process,named_material_leaf,1094,0.0,0,0.0,0.0
+RC166 repeat 1,09,process,should_skip,1094,0.0,0,0.0,0.0
+RC166 repeat 1,09,process,probe,1094,0.0,0,0.0,0.0
+RC166 repeat 1,09,process,pbr_predicate,1094,0.0,0,0.0,0.0
+RC166 repeat 1,09,process,rejection_logger,1094,0.0,0,0.0,0.0
+RC166 repeat 1,09,process,logger_descendant_in_guard,1094,0.0,0,0.0,0.0
+RC166 repeat 1,12,render,legacy_guard_union,875,0.0,0,0.0,0.0
+RC166 repeat 1,12,render,expanded_guard_union,875,0.0,0,0.0,0.0
+RC166 repeat 1,12,render,expanded_guard_and_pbr_union,875,0.0,0,0.0,0.0
+RC166 repeat 1,12,render,named_material_leaf,875,0.0,0,0.0,0.0
+RC166 repeat 1,12,render,should_skip,875,0.0,0,0.0,0.0
+RC166 repeat 1,12,render,probe,875,0.0,0,0.0,0.0
+RC166 repeat 1,12,render,pbr_predicate,875,0.0,0,0.0,0.0
+RC166 repeat 1,12,render,rejection_logger,875,0.0,0,0.0,0.0
+RC166 repeat 1,12,render,logger_descendant_in_guard,875,0.0,0,0.0,0.0
+RC166 repeat 1,12,process,legacy_guard_union,875,0.0,0,0.0,0.0
+RC166 repeat 1,12,process,expanded_guard_union,875,0.0,0,0.0,0.0
+RC166 repeat 1,12,process,expanded_guard_and_pbr_union,875,0.0,0,0.0,0.0
+RC166 repeat 1,12,process,named_material_leaf,875,0.0,0,0.0,0.0
+RC166 repeat 1,12,process,should_skip,875,0.0,0,0.0,0.0
+RC166 repeat 1,12,process,probe,875,0.0,0,0.0,0.0
+RC166 repeat 1,12,process,pbr_predicate,875,0.0,0,0.0,0.0
+RC166 repeat 1,12,process,rejection_logger,875,0.0,0,0.0,0.0
+RC166 repeat 1,12,process,logger_descendant_in_guard,875,0.0,0,0.0,0.0
+RC166 repeat 1,10,render,legacy_guard_union,882,0.0,0,0.0,0.0
+RC166 repeat 1,10,render,expanded_guard_union,882,0.0,0,0.0,0.0
+RC166 repeat 1,10,render,expanded_guard_and_pbr_union,882,0.0,0,0.0,0.0
+RC166 repeat 1,10,render,named_material_leaf,882,0.0,0,0.0,0.0
+RC166 repeat 1,10,render,should_skip,882,0.0,0,0.0,0.0
+RC166 repeat 1,10,render,probe,882,0.0,0,0.0,0.0
+RC166 repeat 1,10,render,pbr_predicate,882,0.0,0,0.0,0.0
+RC166 repeat 1,10,render,rejection_logger,882,0.0,0,0.0,0.0
+RC166 repeat 1,10,render,logger_descendant_in_guard,882,0.0,0,0.0,0.0
+RC166 repeat 1,10,process,legacy_guard_union,882,0.0,0,0.0,0.0
+RC166 repeat 1,10,process,expanded_guard_union,882,0.0,0,0.0,0.0
+RC166 repeat 1,10,process,expanded_guard_and_pbr_union,882,0.0,0,0.0,0.0
+RC166 repeat 1,10,process,named_material_leaf,882,0.0,0,0.0,0.0
+RC166 repeat 1,10,process,should_skip,882,0.0,0,0.0,0.0
+RC166 repeat 1,10,process,probe,882,0.0,0,0.0,0.0
+RC166 repeat 1,10,process,pbr_predicate,882,0.0,0,0.0,0.0
+RC166 repeat 1,10,process,rejection_logger,882,0.0,0,0.0,0.0
+RC166 repeat 1,10,process,logger_descendant_in_guard,882,0.0,0,0.0,0.0
+RC166 repeat 1,13,render,legacy_guard_union,568,0.0,0,0.0,0.0
+RC166 repeat 1,13,render,expanded_guard_union,568,0.0,0,0.0,0.0
+RC166 repeat 1,13,render,expanded_guard_and_pbr_union,568,0.0,0,0.0,0.0
+RC166 repeat 1,13,render,named_material_leaf,568,0.0,0,0.0,0.0
+RC166 repeat 1,13,render,should_skip,568,0.0,0,0.0,0.0
+RC166 repeat 1,13,render,probe,568,0.0,0,0.0,0.0
+RC166 repeat 1,13,render,pbr_predicate,568,0.0,0,0.0,0.0
+RC166 repeat 1,13,render,rejection_logger,568,0.0,0,0.0,0.0
+RC166 repeat 1,13,render,logger_descendant_in_guard,568,0.0,0,0.0,0.0
+RC166 repeat 1,13,process,legacy_guard_union,568,0.0,0,0.0,0.0
+RC166 repeat 1,13,process,expanded_guard_union,568,0.0,0,0.0,0.0
+RC166 repeat 1,13,process,expanded_guard_and_pbr_union,568,0.0,0,0.0,0.0
+RC166 repeat 1,13,process,named_material_leaf,568,0.0,0,0.0,0.0
+RC166 repeat 1,13,process,should_skip,568,0.0,0,0.0,0.0
+RC166 repeat 1,13,process,probe,568,0.0,0,0.0,0.0
+RC166 repeat 1,13,process,pbr_predicate,568,0.0,0,0.0,0.0
+RC166 repeat 1,13,process,rejection_logger,568,0.0,0,0.0,0.0
+RC166 repeat 1,13,process,logger_descendant_in_guard,568,0.0,0,0.0,0.0
+RC166 repeat 2,08,render,legacy_guard_union,662,0.0,0,0.0,0.0
+RC166 repeat 2,08,render,expanded_guard_union,662,0.0,0,0.0,0.0
+RC166 repeat 2,08,render,expanded_guard_and_pbr_union,662,0.0,0,0.0,0.0
+RC166 repeat 2,08,render,named_material_leaf,662,0.0,0,0.0,0.0
+RC166 repeat 2,08,render,should_skip,662,0.0,0,0.0,0.0
+RC166 repeat 2,08,render,probe,662,0.0,0,0.0,0.0
+RC166 repeat 2,08,render,pbr_predicate,662,0.0,0,0.0,0.0
+RC166 repeat 2,08,render,rejection_logger,662,0.0,0,0.0,0.0
+RC166 repeat 2,08,render,logger_descendant_in_guard,662,0.0,0,0.0,0.0
+RC166 repeat 2,08,process,legacy_guard_union,662,0.0,0,0.0,0.0
+RC166 repeat 2,08,process,expanded_guard_union,662,0.0,0,0.0,0.0
+RC166 repeat 2,08,process,expanded_guard_and_pbr_union,662,0.0,0,0.0,0.0
+RC166 repeat 2,08,process,named_material_leaf,662,0.0,0,0.0,0.0
+RC166 repeat 2,08,process,should_skip,662,0.0,0,0.0,0.0
+RC166 repeat 2,08,process,probe,662,0.0,0,0.0,0.0
+RC166 repeat 2,08,process,pbr_predicate,662,0.0,0,0.0,0.0
+RC166 repeat 2,08,process,rejection_logger,662,0.0,0,0.0,0.0
+RC166 repeat 2,08,process,logger_descendant_in_guard,662,0.0,0,0.0,0.0
+RC166 repeat 2,11,render,legacy_guard_union,1017,0.0,0,0.0,0.0
+RC166 repeat 2,11,render,expanded_guard_union,1017,0.0,0,0.0,0.0
+RC166 repeat 2,11,render,expanded_guard_and_pbr_union,1017,0.0,0,0.0,0.0
+RC166 repeat 2,11,render,named_material_leaf,1017,0.0,0,0.0,0.0
+RC166 repeat 2,11,render,should_skip,1017,0.0,0,0.0,0.0
+RC166 repeat 2,11,render,probe,1017,0.0,0,0.0,0.0
+RC166 repeat 2,11,render,pbr_predicate,1017,0.0,0,0.0,0.0
+RC166 repeat 2,11,render,rejection_logger,1017,0.0,0,0.0,0.0
+RC166 repeat 2,11,render,logger_descendant_in_guard,1017,0.0,0,0.0,0.0
+RC166 repeat 2,11,process,legacy_guard_union,1017,0.0,0,0.0,0.0
+RC166 repeat 2,11,process,expanded_guard_union,1017,0.0,0,0.0,0.0
+RC166 repeat 2,11,process,expanded_guard_and_pbr_union,1017,0.0,0,0.0,0.0
+RC166 repeat 2,11,process,named_material_leaf,1017,0.0,0,0.0,0.0
+RC166 repeat 2,11,process,should_skip,1017,0.0,0,0.0,0.0
+RC166 repeat 2,11,process,probe,1017,0.0,0,0.0,0.0
+RC166 repeat 2,11,process,pbr_predicate,1017,0.0,0,0.0,0.0
+RC166 repeat 2,11,process,rejection_logger,1017,0.0,0,0.0,0.0
+RC166 repeat 2,11,process,logger_descendant_in_guard,1017,0.0,0,0.0,0.0
+RC166 repeat 2,09,render,legacy_guard_union,1092,0.0,0,0.0,0.0
+RC166 repeat 2,09,render,expanded_guard_union,1092,0.0,0,0.0,0.0
+RC166 repeat 2,09,render,expanded_guard_and_pbr_union,1092,0.0,0,0.0,0.0
+RC166 repeat 2,09,render,named_material_leaf,1092,0.0,0,0.0,0.0
+RC166 repeat 2,09,render,should_skip,1092,0.0,0,0.0,0.0
+RC166 repeat 2,09,render,probe,1092,0.0,0,0.0,0.0
+RC166 repeat 2,09,render,pbr_predicate,1092,0.0,0,0.0,0.0
+RC166 repeat 2,09,render,rejection_logger,1092,0.0,0,0.0,0.0
+RC166 repeat 2,09,render,logger_descendant_in_guard,1092,0.0,0,0.0,0.0
+RC166 repeat 2,09,process,legacy_guard_union,1092,0.0,0,0.0,0.0
+RC166 repeat 2,09,process,expanded_guard_union,1092,0.0,0,0.0,0.0
+RC166 repeat 2,09,process,expanded_guard_and_pbr_union,1092,0.0,0,0.0,0.0
+RC166 repeat 2,09,process,named_material_leaf,1092,0.0,0,0.0,0.0
+RC166 repeat 2,09,process,should_skip,1092,0.0,0,0.0,0.0
+RC166 repeat 2,09,process,probe,1092,0.0,0,0.0,0.0
+RC166 repeat 2,09,process,pbr_predicate,1092,0.0,0,0.0,0.0
+RC166 repeat 2,09,process,rejection_logger,1092,0.0,0,0.0,0.0
+RC166 repeat 2,09,process,logger_descendant_in_guard,1092,0.0,0,0.0,0.0
+RC166 repeat 2,12,render,legacy_guard_union,675,0.0,0,0.0,0.0
+RC166 repeat 2,12,render,expanded_guard_union,675,0.0,0,0.0,0.0
+RC166 repeat 2,12,render,expanded_guard_and_pbr_union,675,0.0,0,0.0,0.0
+RC166 repeat 2,12,render,named_material_leaf,675,0.0,0,0.0,0.0
+RC166 repeat 2,12,render,should_skip,675,0.0,0,0.0,0.0
+RC166 repeat 2,12,render,probe,675,0.0,0,0.0,0.0
+RC166 repeat 2,12,render,pbr_predicate,675,0.0,0,0.0,0.0
+RC166 repeat 2,12,render,rejection_logger,675,0.0,0,0.0,0.0
+RC166 repeat 2,12,render,logger_descendant_in_guard,675,0.0,0,0.0,0.0
+RC166 repeat 2,12,process,legacy_guard_union,675,0.0,0,0.0,0.0
+RC166 repeat 2,12,process,expanded_guard_union,675,0.0,0,0.0,0.0
+RC166 repeat 2,12,process,expanded_guard_and_pbr_union,675,0.0,0,0.0,0.0
+RC166 repeat 2,12,process,named_material_leaf,675,0.0,0,0.0,0.0
+RC166 repeat 2,12,process,should_skip,675,0.0,0,0.0,0.0
+RC166 repeat 2,12,process,probe,675,0.0,0,0.0,0.0
+RC166 repeat 2,12,process,pbr_predicate,675,0.0,0,0.0,0.0
+RC166 repeat 2,12,process,rejection_logger,675,0.0,0,0.0,0.0
+RC166 repeat 2,12,process,logger_descendant_in_guard,675,0.0,0,0.0,0.0
+RC166 repeat 2,10,render,legacy_guard_union,945,0.0,0,0.0,0.0
+RC166 repeat 2,10,render,expanded_guard_union,945,0.0,0,0.0,0.0
+RC166 repeat 2,10,render,expanded_guard_and_pbr_union,945,0.0,0,0.0,0.0
+RC166 repeat 2,10,render,named_material_leaf,945,0.0,0,0.0,0.0
+RC166 repeat 2,10,render,should_skip,945,0.0,0,0.0,0.0
+RC166 repeat 2,10,render,probe,945,0.0,0,0.0,0.0
+RC166 repeat 2,10,render,pbr_predicate,945,0.0,0,0.0,0.0
+RC166 repeat 2,10,render,rejection_logger,945,0.0,0,0.0,0.0
+RC166 repeat 2,10,render,logger_descendant_in_guard,945,0.0,0,0.0,0.0
+RC166 repeat 2,10,process,legacy_guard_union,945,0.0,0,0.0,0.0
+RC166 repeat 2,10,process,expanded_guard_union,945,0.0,0,0.0,0.0
+RC166 repeat 2,10,process,expanded_guard_and_pbr_union,945,0.0,0,0.0,0.0
+RC166 repeat 2,10,process,named_material_leaf,945,0.0,0,0.0,0.0
+RC166 repeat 2,10,process,should_skip,945,0.0,0,0.0,0.0
+RC166 repeat 2,10,process,probe,945,0.0,0,0.0,0.0
+RC166 repeat 2,10,process,pbr_predicate,945,0.0,0,0.0,0.0
+RC166 repeat 2,10,process,rejection_logger,945,0.0,0,0.0,0.0
+RC166 repeat 2,10,process,logger_descendant_in_guard,945,0.0,0,0.0,0.0
+RC166 repeat 2,13,render,legacy_guard_union,588,0.0,0,0.0,0.0
+RC166 repeat 2,13,render,expanded_guard_union,588,0.0,0,0.0,0.0
+RC166 repeat 2,13,render,expanded_guard_and_pbr_union,588,0.0,0,0.0,0.0
+RC166 repeat 2,13,render,named_material_leaf,588,0.0,0,0.0,0.0
+RC166 repeat 2,13,render,should_skip,588,0.0,0,0.0,0.0
+RC166 repeat 2,13,render,probe,588,0.0,0,0.0,0.0
+RC166 repeat 2,13,render,pbr_predicate,588,0.0,0,0.0,0.0
+RC166 repeat 2,13,render,rejection_logger,588,0.0,0,0.0,0.0
+RC166 repeat 2,13,render,logger_descendant_in_guard,588,0.0,0,0.0,0.0
+RC166 repeat 2,13,process,legacy_guard_union,588,0.0,0,0.0,0.0
+RC166 repeat 2,13,process,expanded_guard_union,588,0.0,0,0.0,0.0
+RC166 repeat 2,13,process,expanded_guard_and_pbr_union,588,0.0,0,0.0,0.0
+RC166 repeat 2,13,process,named_material_leaf,588,0.0,0,0.0,0.0
+RC166 repeat 2,13,process,should_skip,588,0.0,0,0.0,0.0
+RC166 repeat 2,13,process,probe,588,0.0,0,0.0,0.0
+RC166 repeat 2,13,process,pbr_predicate,588,0.0,0,0.0,0.0
+RC166 repeat 2,13,process,rejection_logger,588,0.0,0,0.0,0.0
+RC166 repeat 2,13,process,logger_descendant_in_guard,588,0.0,0,0.0,0.0
+RC166 repeat 3,08,render,legacy_guard_union,663,0.0,0,0.0,0.0
+RC166 repeat 3,08,render,expanded_guard_union,663,0.0,0,0.0,0.0
+RC166 repeat 3,08,render,expanded_guard_and_pbr_union,663,0.0,0,0.0,0.0
+RC166 repeat 3,08,render,named_material_leaf,663,0.0,0,0.0,0.0
+RC166 repeat 3,08,render,should_skip,663,0.0,0,0.0,0.0
+RC166 repeat 3,08,render,probe,663,0.0,0,0.0,0.0
+RC166 repeat 3,08,render,pbr_predicate,663,0.0,0,0.0,0.0
+RC166 repeat 3,08,render,rejection_logger,663,0.0,0,0.0,0.0
+RC166 repeat 3,08,render,logger_descendant_in_guard,663,0.0,0,0.0,0.0
+RC166 repeat 3,08,process,legacy_guard_union,663,0.0,0,0.0,0.0
+RC166 repeat 3,08,process,expanded_guard_union,663,0.0,0,0.0,0.0
+RC166 repeat 3,08,process,expanded_guard_and_pbr_union,663,0.0,0,0.0,0.0
+RC166 repeat 3,08,process,named_material_leaf,663,0.0,0,0.0,0.0
+RC166 repeat 3,08,process,should_skip,663,0.0,0,0.0,0.0
+RC166 repeat 3,08,process,probe,663,0.0,0,0.0,0.0
+RC166 repeat 3,08,process,pbr_predicate,663,0.0,0,0.0,0.0
+RC166 repeat 3,08,process,rejection_logger,663,0.0,0,0.0,0.0
+RC166 repeat 3,08,process,logger_descendant_in_guard,663,0.0,0,0.0,0.0
+RC166 repeat 3,11,render,legacy_guard_union,1037,0.0,0,0.0,0.0
+RC166 repeat 3,11,render,expanded_guard_union,1037,0.0,0,0.0,0.0
+RC166 repeat 3,11,render,expanded_guard_and_pbr_union,1037,0.0,0,0.0,0.0
+RC166 repeat 3,11,render,named_material_leaf,1037,0.0,0,0.0,0.0
+RC166 repeat 3,11,render,should_skip,1037,0.0,0,0.0,0.0
+RC166 repeat 3,11,render,probe,1037,0.0,0,0.0,0.0
+RC166 repeat 3,11,render,pbr_predicate,1037,0.0,0,0.0,0.0
+RC166 repeat 3,11,render,rejection_logger,1037,0.0,0,0.0,0.0
+RC166 repeat 3,11,render,logger_descendant_in_guard,1037,0.0,0,0.0,0.0
+RC166 repeat 3,11,process,legacy_guard_union,1037,0.0,0,0.0,0.0
+RC166 repeat 3,11,process,expanded_guard_union,1037,0.0,0,0.0,0.0
+RC166 repeat 3,11,process,expanded_guard_and_pbr_union,1037,0.0,0,0.0,0.0
+RC166 repeat 3,11,process,named_material_leaf,1037,0.0,0,0.0,0.0
+RC166 repeat 3,11,process,should_skip,1037,0.0,0,0.0,0.0
+RC166 repeat 3,11,process,probe,1037,0.0,0,0.0,0.0
+RC166 repeat 3,11,process,pbr_predicate,1037,0.0,0,0.0,0.0
+RC166 repeat 3,11,process,rejection_logger,1037,0.0,0,0.0,0.0
+RC166 repeat 3,11,process,logger_descendant_in_guard,1037,0.0,0,0.0,0.0
+RC166 repeat 3,09,render,legacy_guard_union,1106,0.0,0,0.0,0.0
+RC166 repeat 3,09,render,expanded_guard_union,1106,0.0,0,0.0,0.0
+RC166 repeat 3,09,render,expanded_guard_and_pbr_union,1106,0.0,0,0.0,0.0
+RC166 repeat 3,09,render,named_material_leaf,1106,0.0,0,0.0,0.0
+RC166 repeat 3,09,render,should_skip,1106,0.0,0,0.0,0.0
+RC166 repeat 3,09,render,probe,1106,0.0,0,0.0,0.0
+RC166 repeat 3,09,render,pbr_predicate,1106,0.0,0,0.0,0.0
+RC166 repeat 3,09,render,rejection_logger,1106,0.0,0,0.0,0.0
+RC166 repeat 3,09,render,logger_descendant_in_guard,1106,0.0,0,0.0,0.0
+RC166 repeat 3,09,process,legacy_guard_union,1106,0.0,0,0.0,0.0
+RC166 repeat 3,09,process,expanded_guard_union,1106,0.0,0,0.0,0.0
+RC166 repeat 3,09,process,expanded_guard_and_pbr_union,1106,0.0,0,0.0,0.0
+RC166 repeat 3,09,process,named_material_leaf,1106,0.0,0,0.0,0.0
+RC166 repeat 3,09,process,should_skip,1106,0.0,0,0.0,0.0
+RC166 repeat 3,09,process,probe,1106,0.0,0,0.0,0.0
+RC166 repeat 3,09,process,pbr_predicate,1106,0.0,0,0.0,0.0
+RC166 repeat 3,09,process,rejection_logger,1106,0.0,0,0.0,0.0
+RC166 repeat 3,09,process,logger_descendant_in_guard,1106,0.0,0,0.0,0.0
+RC166 repeat 3,12,render,legacy_guard_union,854,0.0,0,0.0,0.0
+RC166 repeat 3,12,render,expanded_guard_union,854,0.0,0,0.0,0.0
+RC166 repeat 3,12,render,expanded_guard_and_pbr_union,854,0.0,0,0.0,0.0
+RC166 repeat 3,12,render,named_material_leaf,854,0.0,0,0.0,0.0
+RC166 repeat 3,12,render,should_skip,854,0.0,0,0.0,0.0
+RC166 repeat 3,12,render,probe,854,0.0,0,0.0,0.0
+RC166 repeat 3,12,render,pbr_predicate,854,0.0,0,0.0,0.0
+RC166 repeat 3,12,render,rejection_logger,854,0.0,0,0.0,0.0
+RC166 repeat 3,12,render,logger_descendant_in_guard,854,0.0,0,0.0,0.0
+RC166 repeat 3,12,process,legacy_guard_union,854,0.0,0,0.0,0.0
+RC166 repeat 3,12,process,expanded_guard_union,854,0.0,0,0.0,0.0
+RC166 repeat 3,12,process,expanded_guard_and_pbr_union,854,0.0,0,0.0,0.0
+RC166 repeat 3,12,process,named_material_leaf,854,0.0,0,0.0,0.0
+RC166 repeat 3,12,process,should_skip,854,0.0,0,0.0,0.0
+RC166 repeat 3,12,process,probe,854,0.0,0,0.0,0.0
+RC166 repeat 3,12,process,pbr_predicate,854,0.0,0,0.0,0.0
+RC166 repeat 3,12,process,rejection_logger,854,0.0,0,0.0,0.0
+RC166 repeat 3,12,process,logger_descendant_in_guard,854,0.0,0,0.0,0.0
+RC166 repeat 3,10,render,legacy_guard_union,939,0.0,0,0.0,0.0
+RC166 repeat 3,10,render,expanded_guard_union,939,0.0,0,0.0,0.0
+RC166 repeat 3,10,render,expanded_guard_and_pbr_union,939,0.0,0,0.0,0.0
+RC166 repeat 3,10,render,named_material_leaf,939,0.0,0,0.0,0.0
+RC166 repeat 3,10,render,should_skip,939,0.0,0,0.0,0.0
+RC166 repeat 3,10,render,probe,939,0.0,0,0.0,0.0
+RC166 repeat 3,10,render,pbr_predicate,939,0.0,0,0.0,0.0
+RC166 repeat 3,10,render,rejection_logger,939,0.0,0,0.0,0.0
+RC166 repeat 3,10,render,logger_descendant_in_guard,939,0.0,0,0.0,0.0
+RC166 repeat 3,10,process,legacy_guard_union,939,0.0,0,0.0,0.0
+RC166 repeat 3,10,process,expanded_guard_union,939,0.0,0,0.0,0.0
+RC166 repeat 3,10,process,expanded_guard_and_pbr_union,939,0.0,0,0.0,0.0
+RC166 repeat 3,10,process,named_material_leaf,939,0.0,0,0.0,0.0
+RC166 repeat 3,10,process,should_skip,939,0.0,0,0.0,0.0
+RC166 repeat 3,10,process,probe,939,0.0,0,0.0,0.0
+RC166 repeat 3,10,process,pbr_predicate,939,0.0,0,0.0,0.0
+RC166 repeat 3,10,process,rejection_logger,939,0.0,0,0.0,0.0
+RC166 repeat 3,10,process,logger_descendant_in_guard,939,0.0,0,0.0,0.0
+RC166 repeat 3,13,render,legacy_guard_union,591,0.0,0,0.0,0.0
+RC166 repeat 3,13,render,expanded_guard_union,591,0.0,0,0.0,0.0
+RC166 repeat 3,13,render,expanded_guard_and_pbr_union,591,0.0,0,0.0,0.0
+RC166 repeat 3,13,render,named_material_leaf,591,0.0,0,0.0,0.0
+RC166 repeat 3,13,render,should_skip,591,0.0,0,0.0,0.0
+RC166 repeat 3,13,render,probe,591,0.0,0,0.0,0.0
+RC166 repeat 3,13,render,pbr_predicate,591,0.0,0,0.0,0.0
+RC166 repeat 3,13,render,rejection_logger,591,0.0,0,0.0,0.0
+RC166 repeat 3,13,render,logger_descendant_in_guard,591,0.0,0,0.0,0.0
+RC166 repeat 3,13,process,legacy_guard_union,591,0.0,0,0.0,0.0
+RC166 repeat 3,13,process,expanded_guard_union,591,0.0,0,0.0,0.0
+RC166 repeat 3,13,process,expanded_guard_and_pbr_union,591,0.0,0,0.0,0.0
+RC166 repeat 3,13,process,named_material_leaf,591,0.0,0,0.0,0.0
+RC166 repeat 3,13,process,should_skip,591,0.0,0,0.0,0.0
+RC166 repeat 3,13,process,probe,591,0.0,0,0.0,0.0
+RC166 repeat 3,13,process,pbr_predicate,591,0.0,0,0.0,0.0
+RC166 repeat 3,13,process,rejection_logger,591,0.0,0,0.0,0.0
+RC166 repeat 3,13,process,logger_descendant_in_guard,591,0.0,0,0.0,0.0
+Current R1,08,render,legacy_guard_union,644,76.099,76,0.11816614906832298,0.8289051317700884
+Current R1,08,render,expanded_guard_union,644,76.099,76,0.11816614906832298,0.8289051317700884
+Current R1,08,render,expanded_guard_and_pbr_union,644,76.099,76,0.11816614906832298,0.8289051317700884
+Current R1,08,render,named_material_leaf,644,71.09639999999999,71,0.11039813664596272,0.774414523323288
+Current R1,08,render,should_skip,644,76.099,76,0.11816614906832298,0.8289051317700884
+Current R1,08,render,probe,644,61.031800000000004,61,0.09476987577639752,0.6647862944475706
+Current R1,08,render,pbr_predicate,644,0.0,0,0.0,0.0
+Current R1,08,render,rejection_logger,644,0.0,0,0.0,0.0
+Current R1,08,render,logger_descendant_in_guard,644,0.0,0,0.0,0.0
+Current R1,08,process,legacy_guard_union,644,76.099,76,0.11816614906832298,0.2330132351817653
+Current R1,08,process,expanded_guard_union,644,76.099,76,0.11816614906832298,0.2330132351817653
+Current R1,08,process,expanded_guard_and_pbr_union,644,76.099,76,0.11816614906832298,0.2330132351817653
+Current R1,08,process,named_material_leaf,644,71.09639999999999,71,0.11039813664596272,0.21769539906932883
+Current R1,08,process,should_skip,644,76.099,76,0.11816614906832298,0.2330132351817653
+Current R1,08,process,probe,644,61.031800000000004,61,0.09476987577639752,0.18687784552972397
+Current R1,08,process,pbr_predicate,644,0.0,0,0.0,0.0
+Current R1,08,process,rejection_logger,644,0.0,0,0.0,0.0
+Current R1,08,process,logger_descendant_in_guard,644,0.0,0,0.0,0.0
+Current R1,11,render,legacy_guard_union,1081,59.40320000000001,59,0.05495208140610547,0.6426148732556425
+Current R1,11,render,expanded_guard_union,1081,59.40320000000001,59,0.05495208140610547,0.6426148732556425
+Current R1,11,render,expanded_guard_and_pbr_union,1081,59.40320000000001,59,0.05495208140610547,0.6426148732556425
+Current R1,11,render,named_material_leaf,1081,54.33060000000001,54,0.050259574468085114,0.5877402502374116
+Current R1,11,render,should_skip,1081,59.40320000000001,59,0.05495208140610547,0.6426148732556425
+Current R1,11,render,probe,1081,47.336800000000004,47,0.043789824236817765,0.5120823748944112
+Current R1,11,render,pbr_predicate,1081,0.0,0,0.0,0.0
+Current R1,11,render,rejection_logger,1081,0.0,0,0.0,0.0
+Current R1,11,render,logger_descendant_in_guard,1081,0.0,0,0.0,0.0
+Current R1,11,process,legacy_guard_union,1081,59.40320000000001,59,0.05495208140610547,0.10870411841759983
+Current R1,11,process,expanded_guard_union,1081,59.40320000000001,59,0.05495208140610547,0.10870411841759983
+Current R1,11,process,expanded_guard_and_pbr_union,1081,59.40320000000001,59,0.05495208140610547,0.10870411841759983
+Current R1,11,process,named_material_leaf,1081,54.33060000000001,54,0.050259574468085114,0.09942157957987531
+Current R1,11,process,should_skip,1081,59.40320000000001,59,0.05495208140610547,0.10870411841759983
+Current R1,11,process,probe,1081,47.336800000000004,47,0.043789824236817765,0.08662336562188971
+Current R1,11,process,pbr_predicate,1081,0.0,0,0.0,0.0
+Current R1,11,process,rejection_logger,1081,0.0,0,0.0,0.0
+Current R1,11,process,logger_descendant_in_guard,1081,0.0,0,0.0,0.0
+Current R1,09,render,legacy_guard_union,1117,85.20669999999998,85,0.07628173679498655,0.9218848223188332
+Current R1,09,render,expanded_guard_union,1117,85.20669999999998,85,0.07628173679498655,0.9218848223188332
+Current R1,09,render,expanded_guard_and_pbr_union,1117,85.20669999999998,85,0.07628173679498655,0.9218848223188332
+Current R1,09,render,named_material_leaf,1117,78.2226,78,0.07002918531781557,0.8463210956687347
+Current R1,09,render,should_skip,1117,85.20669999999998,85,0.07628173679498655,0.9218848223188332
+Current R1,09,render,probe,1117,69.14349999999999,69,0.06190107430617725,0.748090739484128
+Current R1,09,render,pbr_predicate,1117,0.0,0,0.0,0.0
+Current R1,09,render,rejection_logger,1117,0.0,0,0.0,0.0
+Current R1,09,render,logger_descendant_in_guard,1117,0.0,0,0.0,0.0
+Current R1,09,process,legacy_guard_union,1117,85.20669999999998,85,0.07628173679498655,0.34581556438025673
+Current R1,09,process,expanded_guard_union,1117,85.20669999999998,85,0.07628173679498655,0.34581556438025673
+Current R1,09,process,expanded_guard_and_pbr_union,1117,85.20669999999998,85,0.07628173679498655,0.34581556438025673
+Current R1,09,process,named_material_leaf,1117,78.2226,78,0.07002918531781557,0.3174702525305061
+Current R1,09,process,should_skip,1117,85.20669999999998,85,0.07628173679498655,0.34581556438025673
+Current R1,09,process,probe,1117,69.14349999999999,69,0.06190107430617725,0.2806222805920929
+Current R1,09,process,pbr_predicate,1117,0.0,0,0.0,0.0
+Current R1,09,process,rejection_logger,1117,0.0,0,0.0,0.0
+Current R1,09,process,logger_descendant_in_guard,1117,0.0,0,0.0,0.0
+Current R1,12,render,legacy_guard_union,1013,55.2497,55,0.05454067127344521,0.5794530334300284
+Current R1,12,render,expanded_guard_union,1013,55.2497,55,0.05454067127344521,0.5794530334300284
+Current R1,12,render,expanded_guard_and_pbr_union,1013,55.2497,55,0.05454067127344521,0.5794530334300284
+Current R1,12,render,named_material_leaf,1013,47.2175,47,0.04661154985192498,0.49521216596619294
+Current R1,12,render,should_skip,1013,55.2497,55,0.05454067127344521,0.5794530334300284
+Current R1,12,render,probe,1013,42.191900000000004,42,0.041650444225074044,0.4425042025780488
+Current R1,12,render,pbr_predicate,1013,0.0,0,0.0,0.0
+Current R1,12,render,rejection_logger,1013,0.0,0,0.0,0.0
+Current R1,12,render,logger_descendant_in_guard,1013,0.0,0,0.0,0.0
+Current R1,12,process,legacy_guard_union,1013,55.2497,55,0.05454067127344521,0.15484553418276076
+Current R1,12,process,expanded_guard_union,1013,55.2497,55,0.05454067127344521,0.15484553418276076
+Current R1,12,process,expanded_guard_and_pbr_union,1013,55.2497,55,0.05454067127344521,0.15484553418276076
+Current R1,12,process,named_material_leaf,1013,47.2175,47,0.04661154985192498,0.13233409430774298
+Current R1,12,process,should_skip,1013,55.2497,55,0.05454067127344521,0.15484553418276076
+Current R1,12,process,probe,1013,42.191900000000004,42,0.041650444225074044,0.11824909988082516
+Current R1,12,process,pbr_predicate,1013,0.0,0,0.0,0.0
+Current R1,12,process,rejection_logger,1013,0.0,0,0.0,0.0
+Current R1,12,process,logger_descendant_in_guard,1013,0.0,0,0.0,0.0
+Current R1,10,render,legacy_guard_union,906,85.02969999999998,85,0.09385176600441499,0.8876687324272322
+Current R1,10,render,expanded_guard_union,906,85.02969999999998,85,0.09385176600441499,0.8876687324272322
+Current R1,10,render,expanded_guard_and_pbr_union,906,85.02969999999998,85,0.09385176600441499,0.8876687324272322
+Current R1,10,render,named_material_leaf,906,81.02999999999997,81,0.0894370860927152,0.8459138088053777
+Current R1,10,render,should_skip,906,85.02969999999998,85,0.09385176600441499,0.8876687324272322
+Current R1,10,render,probe,906,70.02859999999998,70,0.07729426048565119,0.7310645409269194
+Current R1,10,render,pbr_predicate,906,0.0,0,0.0,0.0
+Current R1,10,render,rejection_logger,906,0.0,0,0.0,0.0
+Current R1,10,render,logger_descendant_in_guard,906,0.0,0,0.0,0.0
+Current R1,10,process,legacy_guard_union,906,85.02969999999998,85,0.09385176600441499,0.2339463993314149
+Current R1,10,process,expanded_guard_union,906,85.02969999999998,85,0.09385176600441499,0.2339463993314149
+Current R1,10,process,expanded_guard_and_pbr_union,906,85.02969999999998,85,0.09385176600441499,0.2339463993314149
+Current R1,10,process,named_material_leaf,906,81.02999999999997,81,0.0894370860927152,0.22294182782985883
+Current R1,10,process,should_skip,906,85.02969999999998,85,0.09385176600441499,0.2339463993314149
+Current R1,10,process,probe,906,70.02859999999998,70,0.07729426048565119,0.1926731344485506
+Current R1,10,process,pbr_predicate,906,0.0,0,0.0,0.0
+Current R1,10,process,rejection_logger,906,0.0,0,0.0,0.0
+Current R1,10,process,logger_descendant_in_guard,906,0.0,0,0.0,0.0
+Current R1,13,render,legacy_guard_union,551,82.09190000000002,82,0.1489871143375681,0.8398875667340422
+Current R1,13,render,expanded_guard_union,551,82.09190000000002,82,0.1489871143375681,0.8398875667340422
+Current R1,13,render,expanded_guard_and_pbr_union,551,82.09190000000002,82,0.1489871143375681,0.8398875667340422
+Current R1,13,render,named_material_leaf,551,78.0919,78,0.14172758620689654,0.7989633066433853
+Current R1,13,render,should_skip,551,82.09190000000002,82,0.1489871143375681,0.8398875667340422
+Current R1,13,render,probe,551,70.08890000000001,70,0.12720308529945556,0.7170840932670044
+Current R1,13,render,pbr_predicate,551,0.0,0,0.0,0.0
+Current R1,13,render,rejection_logger,551,0.0,0,0.0,0.0
+Current R1,13,render,logger_descendant_in_guard,551,0.0,0,0.0,0.0
+Current R1,13,process,legacy_guard_union,551,82.09190000000002,82,0.1489871143375681,0.3019514565398003
+Current R1,13,process,expanded_guard_union,551,82.09190000000002,82,0.1489871143375681,0.3019514565398003
+Current R1,13,process,expanded_guard_and_pbr_union,551,82.09190000000002,82,0.1489871143375681,0.3019514565398003
+Current R1,13,process,named_material_leaf,551,78.0919,78,0.14172758620689654,0.2872386063541035
+Current R1,13,process,should_skip,551,82.09190000000002,82,0.1489871143375681,0.3019514565398003
+Current R1,13,process,probe,551,70.08890000000001,70,0.12720308529945556,0.2578018713450707
+Current R1,13,process,pbr_predicate,551,0.0,0,0.0,0.0
+Current R1,13,process,rejection_logger,551,0.0,0,0.0,0.0
+Current R1,13,process,logger_descendant_in_guard,551,0.0,0,0.0,0.0
+Current R2,08,render,legacy_guard_union,708,66.06279999999998,66,0.09330903954802257,0.7280833577128794
+Current R2,08,render,expanded_guard_union,708,66.06279999999998,66,0.09330903954802257,0.7280833577128794
+Current R2,08,render,expanded_guard_and_pbr_union,708,66.06279999999998,66,0.09330903954802257,0.7280833577128794
+Current R2,08,render,named_material_leaf,708,61.05889999999998,61,0.08624138418079093,0.6729349789935474
+Current R2,08,render,should_skip,708,66.06279999999998,66,0.09330903954802257,0.7280833577128794
+Current R2,08,render,probe,708,48.05419999999999,48,0.06787316384180789,0.5296091489946876
+Current R2,08,render,pbr_predicate,708,0.0,0,0.0,0.0
+Current R2,08,render,rejection_logger,708,0.0,0,0.0,0.0
+Current R2,08,render,logger_descendant_in_guard,708,0.0,0,0.0,0.0
+Current R2,08,process,legacy_guard_union,708,66.06279999999998,66,0.09330903954802257,0.3131765723948914
+Current R2,08,process,expanded_guard_union,708,66.06279999999998,66,0.09330903954802257,0.3131765723948914
+Current R2,08,process,expanded_guard_and_pbr_union,708,66.06279999999998,66,0.09330903954802257,0.3131765723948914
+Current R2,08,process,named_material_leaf,708,61.05889999999998,61,0.08624138418079093,0.289455139900253
+Current R2,08,process,should_skip,708,66.06279999999998,66,0.09330903954802257,0.3131765723948914
+Current R2,08,process,probe,708,48.05419999999999,48,0.06787316384180789,0.22780520421748082
+Current R2,08,process,pbr_predicate,708,0.0,0,0.0,0.0
+Current R2,08,process,rejection_logger,708,0.0,0,0.0,0.0
+Current R2,08,process,logger_descendant_in_guard,708,0.0,0,0.0,0.0
+Current R2,11,render,legacy_guard_union,1044,57.34689999999999,57,0.05492998084291187,0.6217647578801166
+Current R2,11,render,expanded_guard_union,1044,57.34689999999999,57,0.05492998084291187,0.6217647578801166
+Current R2,11,render,expanded_guard_and_pbr_union,1044,57.34689999999999,57,0.05492998084291187,0.6217647578801166
+Current R2,11,render,named_material_leaf,1044,55.346999999999994,55,0.05301436781609195,0.6000815049181529
+Current R2,11,render,should_skip,1044,57.34689999999999,57,0.05492998084291187,0.6217647578801166
+Current R2,11,render,probe,1044,49.343399999999995,49,0.04726379310344827,0.5349894615747626
+Current R2,11,render,pbr_predicate,1044,0.0,0,0.0,0.0
+Current R2,11,render,rejection_logger,1044,0.0,0,0.0,0.0
+Current R2,11,render,logger_descendant_in_guard,1044,0.0,0,0.0,0.0
+Current R2,11,process,legacy_guard_union,1044,57.34689999999999,57,0.05492998084291187,0.10983633466983272
+Current R2,11,process,expanded_guard_union,1044,57.34689999999999,57,0.05492998084291187,0.10983633466983272
+Current R2,11,process,expanded_guard_and_pbr_union,1044,57.34689999999999,57,0.05492998084291187,0.10983633466983272
+Current R2,11,process,named_material_leaf,1044,55.346999999999994,55,0.05301436781609195,0.10600593257824281
+Current R2,11,process,should_skip,1044,57.34689999999999,57,0.05492998084291187,0.10983633466983272
+Current R2,11,process,probe,1044,49.343399999999995,49,0.04726379310344827,0.09450725664591153
+Current R2,11,process,pbr_predicate,1044,0.0,0,0.0,0.0
+Current R2,11,process,rejection_logger,1044,0.0,0,0.0,0.0
+Current R2,11,process,logger_descendant_in_guard,1044,0.0,0,0.0,0.0
+Current R2,09,render,legacy_guard_union,1111,110.11280000000001,110,0.09911143114311431,1.204860171386259
+Current R2,09,render,expanded_guard_union,1111,110.11280000000001,110,0.09911143114311431,1.204860171386259
+Current R2,09,render,expanded_guard_and_pbr_union,1111,110.11280000000001,110,0.09911143114311431,1.204860171386259
+Current R2,09,render,named_material_leaf,1111,106.1169,106,0.09551476147614761,1.161136818979978
+Current R2,09,render,should_skip,1111,110.11280000000001,110,0.09911143114311431,1.204860171386259
+Current R2,09,render,probe,1111,85.11190000000002,85,0.07660837083708373,0.9312989808724341
+Current R2,09,render,pbr_predicate,1111,0.0,0,0.0,0.0
+Current R2,09,render,rejection_logger,1111,0.0,0,0.0,0.0
+Current R2,09,render,logger_descendant_in_guard,1111,0.0,0,0.0,0.0
+Current R2,09,process,legacy_guard_union,1111,110.11280000000001,110,0.09911143114311431,0.4439287317012168
+Current R2,09,process,expanded_guard_union,1111,110.11280000000001,110,0.09911143114311431,0.4439287317012168
+Current R2,09,process,expanded_guard_and_pbr_union,1111,110.11280000000001,110,0.09911143114311431,0.4439287317012168
+Current R2,09,process,named_material_leaf,1111,106.1169,106,0.09551476147614761,0.42781893502903257
+Current R2,09,process,should_skip,1111,110.11280000000001,110,0.09911143114311431,0.4439287317012168
+Current R2,09,process,probe,1111,85.11190000000002,85,0.07660837083708373,0.34313556479973994
+Current R2,09,process,pbr_predicate,1111,0.0,0,0.0,0.0
+Current R2,09,process,rejection_logger,1111,0.0,0,0.0,0.0
+Current R2,09,process,logger_descendant_in_guard,1111,0.0,0,0.0,0.0
+Current R2,12,render,legacy_guard_union,993,55.137800000000006,55,0.0555264853977845,0.5744386141333212
+Current R2,12,render,expanded_guard_union,993,55.137800000000006,55,0.0555264853977845,0.5744386141333212
+Current R2,12,render,expanded_guard_and_pbr_union,993,55.137800000000006,55,0.0555264853977845,0.5744386141333212
+Current R2,12,render,named_material_leaf,993,55.137800000000006,55,0.0555264853977845,0.5744386141333212
+Current R2,12,render,should_skip,993,55.137800000000006,55,0.0555264853977845,0.5744386141333212
+Current R2,12,render,probe,993,51.13820000000001,51,0.05149869083585097,0.5327698373397671
+Current R2,12,render,pbr_predicate,993,0.0,0,0.0,0.0
+Current R2,12,render,rejection_logger,993,0.0,0,0.0,0.0
+Current R2,12,render,logger_descendant_in_guard,993,0.0,0,0.0,0.0
+Current R2,12,process,legacy_guard_union,993,55.137800000000006,55,0.0555264853977845,0.15392951515189882
+Current R2,12,process,expanded_guard_union,993,55.137800000000006,55,0.0555264853977845,0.15392951515189882
+Current R2,12,process,expanded_guard_and_pbr_union,993,55.137800000000006,55,0.0555264853977845,0.15392951515189882
+Current R2,12,process,named_material_leaf,993,55.137800000000006,55,0.0555264853977845,0.15392951515189882
+Current R2,12,process,should_skip,993,55.137800000000006,55,0.0555264853977845,0.15392951515189882
+Current R2,12,process,probe,993,51.13820000000001,51,0.05149869083585097,0.1427637361617771
+Current R2,12,process,pbr_predicate,993,0.0,0,0.0,0.0
+Current R2,12,process,rejection_logger,993,0.0,0,0.0,0.0
+Current R2,12,process,logger_descendant_in_guard,993,0.0,0,0.0,0.0
+Current R2,10,render,legacy_guard_union,911,115.97979999999994,116,0.12731042810098786,1.2147257737174004
+Current R2,10,render,expanded_guard_union,911,115.97979999999994,116,0.12731042810098786,1.2147257737174004
+Current R2,10,render,expanded_guard_and_pbr_union,911,115.97979999999994,116,0.12731042810098786,1.2147257737174004
+Current R2,10,render,named_material_leaf,911,111.97869999999998,112,0.12291844127332599,1.1728198617118557
+Current R2,10,render,should_skip,911,115.97979999999994,116,0.12731042810098786,1.2147257737174004
+Current R2,10,render,probe,911,104.98139999999997,105,0.11523754116355649,1.0995329560918015
+Current R2,10,render,pbr_predicate,911,0.0,0,0.0,0.0
+Current R2,10,render,rejection_logger,911,0.0,0,0.0,0.0
+Current R2,10,render,logger_descendant_in_guard,911,0.0,0,0.0,0.0
+Current R2,10,process,legacy_guard_union,911,115.97979999999994,116,0.12731042810098786,0.31619621761059286
+Current R2,10,process,expanded_guard_union,911,115.97979999999994,116,0.12731042810098786,0.31619621761059286
+Current R2,10,process,expanded_guard_and_pbr_union,911,115.97979999999994,116,0.12731042810098786,0.31619621761059286
+Current R2,10,process,named_material_leaf,911,111.97869999999998,112,0.12291844127332599,0.30528800181541355
+Current R2,10,process,should_skip,911,115.97979999999994,116,0.12731042810098786,0.31619621761059286
+Current R2,10,process,probe,911,104.98139999999997,105,0.11523754116355649,0.28621123333084464
+Current R2,10,process,pbr_predicate,911,0.0,0,0.0,0.0
+Current R2,10,process,rejection_logger,911,0.0,0,0.0,0.0
+Current R2,10,process,logger_descendant_in_guard,911,0.0,0,0.0,0.0
+Current R2,13,render,legacy_guard_union,581,85.9991,86,0.14801910499139415,0.8827694623730947
+Current R2,13,render,expanded_guard_union,581,85.9991,86,0.14801910499139415,0.8827694623730947
+Current R2,13,render,expanded_guard_and_pbr_union,581,85.9991,86,0.14801910499139415,0.8827694623730947
+Current R2,13,render,named_material_leaf,581,85.00059999999999,85,0.14630051635111874,0.8725199910625864
+Current R2,13,render,should_skip,581,85.9991,86,0.14801910499139415,0.8827694623730947
+Current R2,13,render,probe,581,73.00119999999998,73,0.12564750430292596,0.7493477266226128
+Current R2,13,render,pbr_predicate,581,0.0,0,0.0,0.0
+Current R2,13,render,rejection_logger,581,0.0,0,0.0,0.0
+Current R2,13,render,logger_descendant_in_guard,581,0.0,0,0.0,0.0
+Current R2,13,process,legacy_guard_union,581,85.9991,86,0.14801910499139415,0.31712304555298315
+Current R2,13,process,expanded_guard_union,581,85.9991,86,0.14801910499139415,0.31712304555298315
+Current R2,13,process,expanded_guard_and_pbr_union,581,85.9991,86,0.14801910499139415,0.31712304555298315
+Current R2,13,process,named_material_leaf,581,85.00059999999999,85,0.14630051635111874,0.3134410609626252
+Current R2,13,process,should_skip,581,85.9991,86,0.14801910499139415,0.31712304555298315
+Current R2,13,process,probe,581,73.00119999999998,73,0.12564750430292596,0.2691930831022933
+Current R2,13,process,pbr_predicate,581,0.0,0,0.0,0.0
+Current R2,13,process,rejection_logger,581,0.0,0,0.0,0.0
+Current R2,13,process,logger_descendant_in_guard,581,0.0,0,0.0,0.0
+Current interrupted,08,render,legacy_guard_union,606,69.00749999999998,69,0.11387376237623759,0.731364528179715
+Current interrupted,08,render,expanded_guard_union,606,69.00749999999998,69,0.11387376237623759,0.731364528179715
+Current interrupted,08,render,expanded_guard_and_pbr_union,606,69.00749999999998,69,0.11387376237623759,0.731364528179715
+Current interrupted,08,render,named_material_leaf,606,67.00789999999999,67,0.11057409240924092,0.7101720996676235
+Current interrupted,08,render,should_skip,606,69.00749999999998,69,0.11387376237623759,0.731364528179715
+Current interrupted,08,render,probe,606,56.00749999999999,56,0.09242161716171617,0.5935861871829206
+Current interrupted,08,render,pbr_predicate,606,0.0,0,0.0,0.0
+Current interrupted,08,render,rejection_logger,606,0.0,0,0.0,0.0
+Current interrupted,08,render,logger_descendant_in_guard,606,0.0,0,0.0,0.0
+Current interrupted,08,process,legacy_guard_union,606,69.00749999999998,69,0.11387376237623759,0.2240101570358676
+Current interrupted,08,process,expanded_guard_union,606,69.00749999999998,69,0.11387376237623759,0.2240101570358676
+Current interrupted,08,process,expanded_guard_and_pbr_union,606,69.00749999999998,69,0.11387376237623759,0.2240101570358676
+Current interrupted,08,process,named_material_leaf,606,67.00789999999999,67,0.11057409240924092,0.21751911316369546
+Current interrupted,08,process,should_skip,606,69.00749999999998,69,0.11387376237623759,0.2240101570358676
+Current interrupted,08,process,probe,606,56.00749999999999,56,0.09242161716171617,0.1818099318217057
+Current interrupted,08,process,pbr_predicate,606,0.0,0,0.0,0.0
+Current interrupted,08,process,rejection_logger,606,0.0,0,0.0,0.0
+Current interrupted,08,process,logger_descendant_in_guard,606,0.0,0,0.0,0.0
+Current interrupted,11,render,legacy_guard_union,767,46.23609999999999,46,0.06028174706649282,0.5816073793886806
+Current interrupted,11,render,expanded_guard_union,767,46.23609999999999,46,0.06028174706649282,0.5816073793886806
+Current interrupted,11,render,expanded_guard_and_pbr_union,767,46.23609999999999,46,0.06028174706649282,0.5816073793886806
+Current interrupted,11,render,named_material_leaf,767,44.240700000000004,44,0.05768018252933508,0.5565070927115566
+Current interrupted,11,render,should_skip,767,46.23609999999999,46,0.06028174706649282,0.5816073793886806
+Current interrupted,11,render,probe,767,41.2406,41,0.05376870925684485,0.5187686091693897
+Current interrupted,11,render,pbr_predicate,767,0.0,0,0.0,0.0
+Current interrupted,11,render,rejection_logger,767,0.0,0,0.0,0.0
+Current interrupted,11,render,logger_descendant_in_guard,767,0.0,0,0.0,0.0
+Current interrupted,11,process,legacy_guard_union,767,46.23609999999999,46,0.06028174706649282,0.10702103530285838
+Current interrupted,11,process,expanded_guard_union,767,46.23609999999999,46,0.06028174706649282,0.10702103530285838
+Current interrupted,11,process,expanded_guard_and_pbr_union,767,46.23609999999999,46,0.06028174706649282,0.10702103530285838
+Current interrupted,11,process,named_material_leaf,767,44.240700000000004,44,0.05768018252933508,0.10240235479469868
+Current interrupted,11,process,should_skip,767,46.23609999999999,46,0.06028174706649282,0.10702103530285838
+Current interrupted,11,process,probe,767,41.2406,41,0.05376870925684485,0.09545813138459044
+Current interrupted,11,process,pbr_predicate,767,0.0,0,0.0,0.0
+Current interrupted,11,process,rejection_logger,767,0.0,0,0.0,0.0
+Current interrupted,11,process,logger_descendant_in_guard,767,0.0,0,0.0,0.0
+Current interrupted,09,render,legacy_guard_union,1104,88.26270000000002,88,0.07994809782608697,0.9302242590786491
+Current interrupted,09,render,expanded_guard_union,1104,88.26270000000002,88,0.07994809782608697,0.9302242590786491
+Current interrupted,09,render,expanded_guard_and_pbr_union,1104,88.26270000000002,88,0.07994809782608697,0.9302242590786491
+Current interrupted,09,render,named_material_leaf,1104,82.33450000000003,82,0.0745783514492754,0.8677453698913702
+Current interrupted,09,render,should_skip,1104,88.26270000000002,88,0.07994809782608697,0.9302242590786491
+Current interrupted,09,render,probe,1104,72.26390000000002,72,0.0654564311594203,0.7616086165008956
+Current interrupted,09,render,pbr_predicate,1104,0.0,0,0.0,0.0
+Current interrupted,09,render,rejection_logger,1104,0.0,0,0.0,0.0
+Current interrupted,09,render,logger_descendant_in_guard,1104,0.0,0,0.0,0.0
+Current interrupted,09,process,legacy_guard_union,1104,88.26270000000002,88,0.07994809782608697,0.3437991979627427
+Current interrupted,09,process,expanded_guard_union,1104,88.26270000000002,88,0.07994809782608697,0.3437991979627427
+Current interrupted,09,process,expanded_guard_and_pbr_union,1104,88.26270000000002,88,0.07994809782608697,0.3437991979627427
+Current interrupted,09,process,named_material_leaf,1104,82.33450000000003,82,0.0745783514492754,0.3207077855613237
+Current interrupted,09,process,should_skip,1104,88.26270000000002,88,0.07994809782608697,0.3437991979627427
+Current interrupted,09,process,probe,1104,72.26390000000002,72,0.0654564311594203,0.28148097510794307
+Current interrupted,09,process,pbr_predicate,1104,0.0,0,0.0,0.0
+Current interrupted,09,process,rejection_logger,1104,0.0,0,0.0,0.0
+Current interrupted,09,process,logger_descendant_in_guard,1104,0.0,0,0.0,0.0
+Current interrupted,12,render,legacy_guard_union,976,54.140100000000004,54,0.055471413934426235,0.5638681986869971
+Current interrupted,12,render,expanded_guard_union,976,54.140100000000004,54,0.055471413934426235,0.5638681986869971
+Current interrupted,12,render,expanded_guard_and_pbr_union,976,54.140100000000004,54,0.055471413934426235,0.5638681986869971
+Current interrupted,12,render,named_material_leaf,976,51.1383,51,0.05239579918032787,0.5326045039613015
+Current interrupted,12,render,should_skip,976,54.140100000000004,54,0.055471413934426235,0.5638681986869971
+Current interrupted,12,render,probe,976,46.0706,46,0.04720348360655738,0.47982449671184885
+Current interrupted,12,render,pbr_predicate,976,0.0,0,0.0,0.0
+Current interrupted,12,render,rejection_logger,976,0.0,0,0.0,0.0
+Current interrupted,12,render,logger_descendant_in_guard,976,0.0,0,0.0,0.0
+Current interrupted,12,process,legacy_guard_union,976,54.140100000000004,54,0.055471413934426235,0.16431119138301284
+Current interrupted,12,process,expanded_guard_union,976,54.140100000000004,54,0.055471413934426235,0.16431119138301284
+Current interrupted,12,process,expanded_guard_and_pbr_union,976,54.140100000000004,54,0.055471413934426235,0.16431119138301284
+Current interrupted,12,process,named_material_leaf,976,51.1383,51,0.05239579918032787,0.15520095083499894
+Current interrupted,12,process,should_skip,976,54.140100000000004,54,0.055471413934426235,0.16431119138301284
+Current interrupted,12,process,probe,976,46.0706,46,0.04720348360655738,0.1398208568829801
+Current interrupted,12,process,pbr_predicate,976,0.0,0,0.0,0.0
+Current interrupted,12,process,rejection_logger,976,0.0,0,0.0,0.0
+Current interrupted,12,process,logger_descendant_in_guard,976,0.0,0,0.0,0.0
+Current interrupted,10,render,legacy_guard_union,941,120.04309999999995,120,0.1275697130712008,1.2412206637100007
+Current interrupted,10,render,expanded_guard_union,941,120.04309999999995,120,0.1275697130712008,1.2412206637100007
+Current interrupted,10,render,expanded_guard_and_pbr_union,941,120.04309999999995,120,0.1275697130712008,1.2412206637100007
+Current interrupted,10,render,named_material_leaf,941,117.04439999999994,117,0.12438299681190217,1.210214729972308
+Current interrupted,10,render,should_skip,941,120.04309999999995,120,0.1275697130712008,1.2412206637100007
+Current interrupted,10,render,probe,941,103.04549999999998,103,0.10950637619553663,1.0654690182303597
+Current interrupted,10,render,pbr_predicate,941,0.0,0,0.0,0.0
+Current interrupted,10,render,rejection_logger,941,0.0,0,0.0,0.0
+Current interrupted,10,render,logger_descendant_in_guard,941,0.0,0,0.0,0.0
+Current interrupted,10,process,legacy_guard_union,941,120.04309999999995,120,0.1275697130712008,0.5024936629625616
+Current interrupted,10,process,expanded_guard_union,941,120.04309999999995,120,0.1275697130712008,0.5024936629625616
+Current interrupted,10,process,expanded_guard_and_pbr_union,941,120.04309999999995,120,0.1275697130712008,0.5024936629625616
+Current interrupted,10,process,named_material_leaf,941,117.04439999999994,117,0.12438299681190217,0.489941273469739
+Current interrupted,10,process,should_skip,941,120.04309999999995,120,0.1275697130712008,0.5024936629625616
+Current interrupted,10,process,probe,941,103.04549999999998,103,0.10950637619553663,0.4313426656493263
+Current interrupted,10,process,pbr_predicate,941,0.0,0,0.0,0.0
+Current interrupted,10,process,rejection_logger,941,0.0,0,0.0,0.0
+Current interrupted,10,process,logger_descendant_in_guard,941,0.0,0,0.0,0.0
+Current R3,08,render,legacy_guard_union,717,90.99270000000001,91,0.12690753138075317,0.9618528776834889
+Current R3,08,render,expanded_guard_union,717,90.99270000000001,91,0.12690753138075317,0.9618528776834889
+Current R3,08,render,expanded_guard_and_pbr_union,717,90.99270000000001,91,0.12690753138075317,0.9618528776834889
+Current R3,08,render,named_material_leaf,717,87.99380000000001,88,0.12272496513249652,0.9301525259532402
+Current R3,08,render,should_skip,717,90.99270000000001,91,0.12690753138075317,0.9618528776834889
+Current R3,08,render,probe,717,72.99860000000001,73,0.10181115760111578,0.7716433678401228
+Current R3,08,render,pbr_predicate,717,0.0,0,0.0,0.0
+Current R3,08,render,rejection_logger,717,0.0,0,0.0,0.0
+Current R3,08,render,logger_descendant_in_guard,717,0.0,0,0.0,0.0
+Current R3,08,process,legacy_guard_union,717,90.99270000000001,91,0.12690753138075317,0.2646184586234696
+Current R3,08,process,expanded_guard_union,717,90.99270000000001,91,0.12690753138075317,0.2646184586234696
+Current R3,08,process,expanded_guard_and_pbr_union,717,90.99270000000001,91,0.12690753138075317,0.2646184586234696
+Current R3,08,process,named_material_leaf,717,87.99380000000001,88,0.12272496513249652,0.2558972722473546
+Current R3,08,process,should_skip,717,90.99270000000001,91,0.12690753138075317,0.2646184586234696
+Current R3,08,process,probe,717,72.99860000000001,73,0.10181115760111578,0.21228930467687196
+Current R3,08,process,pbr_predicate,717,0.0,0,0.0,0.0
+Current R3,08,process,rejection_logger,717,0.0,0,0.0,0.0
+Current R3,08,process,logger_descendant_in_guard,717,0.0,0,0.0,0.0
+Current R3,11,render,legacy_guard_union,997,55.0813,55,0.05524704112337011,0.5955244389006658
+Current R3,11,render,expanded_guard_union,997,55.0813,55,0.05524704112337011,0.5955244389006658
+Current R3,11,render,expanded_guard_and_pbr_union,997,55.0813,55,0.05524704112337011,0.5955244389006658
+Current R3,11,render,named_material_leaf,997,57.08039999999998,57,0.057252156469408205,0.6171381790594185
+Current R3,11,render,should_skip,997,55.0813,55,0.05524704112337011,0.5955244389006658
+Current R3,11,render,probe,997,41.091499999999996,41,0.04121514543630892,0.4442704235572999
+Current R3,11,render,pbr_predicate,997,0.0,0,0.0,0.0
+Current R3,11,render,rejection_logger,997,0.0,0,0.0,0.0
+Current R3,11,render,logger_descendant_in_guard,997,0.0,0,0.0,0.0
+Current R3,11,process,legacy_guard_union,997,55.0813,55,0.05524704112337011,0.10467432937901151
+Current R3,11,process,expanded_guard_union,997,55.0813,55,0.05524704112337011,0.10467432937901151
+Current R3,11,process,expanded_guard_and_pbr_union,997,55.0813,55,0.05524704112337011,0.10467432937901151
+Current R3,11,process,named_material_leaf,997,57.08039999999998,57,0.057252156469408205,0.10847334014784922
+Current R3,11,process,should_skip,997,55.0813,55,0.05524704112337011,0.10467432937901151
+Current R3,11,process,probe,997,41.091499999999996,41,0.04121514543630892,0.07808866540327936
+Current R3,11,process,pbr_predicate,997,0.0,0,0.0,0.0
+Current R3,11,process,rejection_logger,997,0.0,0,0.0,0.0
+Current R3,11,process,logger_descendant_in_guard,997,0.0,0,0.0,0.0
+Current R3,09,render,legacy_guard_union,1100,95.1246,95,0.08647690909090909,0.9977670587338655
+Current R3,09,render,expanded_guard_union,1100,95.1246,95,0.08647690909090909,0.9977670587338655
+Current R3,09,render,expanded_guard_and_pbr_union,1100,95.1246,95,0.08647690909090909,0.9977670587338655
+Current R3,09,render,named_material_leaf,1100,91.1184,91,0.08283490909090908,0.9557458109104884
+Current R3,09,render,should_skip,1100,95.1246,95,0.08647690909090909,0.9977670587338655
+Current R3,09,render,probe,1100,82.11560000000001,82,0.07465054545454547,0.8613149562591235
+Current R3,09,render,pbr_predicate,1100,0.0,0,0.0,0.0
+Current R3,09,render,rejection_logger,1100,0.0,0,0.0,0.0
+Current R3,09,render,logger_descendant_in_guard,1100,0.0,0,0.0,0.0
+Current R3,09,process,legacy_guard_union,1100,95.1246,95,0.08647690909090909,0.3747979288908355
+Current R3,09,process,expanded_guard_union,1100,95.1246,95,0.08647690909090909,0.3747979288908355
+Current R3,09,process,expanded_guard_and_pbr_union,1100,95.1246,95,0.08647690909090909,0.3747979288908355
+Current R3,09,process,named_material_leaf,1100,91.1184,91,0.08283490909090908,0.35901320587783503
+Current R3,09,process,should_skip,1100,95.1246,95,0.08647690909090909,0.3747979288908355
+Current R3,09,process,probe,1100,82.11560000000001,82,0.07465054545454547,0.32354151091966005
+Current R3,09,process,pbr_predicate,1100,0.0,0,0.0,0.0
+Current R3,09,process,rejection_logger,1100,0.0,0,0.0,0.0
+Current R3,09,process,logger_descendant_in_guard,1100,0.0,0,0.0,0.0
+Current R3,12,render,legacy_guard_union,981,52.026799999999994,52,0.05303445463812436,0.5394483000889866
+Current R3,12,render,expanded_guard_union,981,52.026799999999994,52,0.05303445463812436,0.5394483000889866
+Current R3,12,render,expanded_guard_and_pbr_union,981,52.026799999999994,52,0.05303445463812436,0.5394483000889866
+Current R3,12,render,named_material_leaf,981,53.02669999999999,53,0.05405372069317022,0.5498159251448996
+Current R3,12,render,should_skip,981,52.026799999999994,52,0.05303445463812436,0.5394483000889866
+Current R3,12,render,probe,981,46.0229,46,0.04691427115188583,0.47719589077485874
+Current R3,12,render,pbr_predicate,981,0.0,0,0.0,0.0
+Current R3,12,render,rejection_logger,981,0.0,0,0.0,0.0
+Current R3,12,render,logger_descendant_in_guard,981,0.0,0,0.0,0.0
+Current R3,12,process,legacy_guard_union,981,52.026799999999994,52,0.05303445463812436,0.15211132274879738
+Current R3,12,process,expanded_guard_union,981,52.026799999999994,52,0.05303445463812436,0.15211132274879738
+Current R3,12,process,expanded_guard_and_pbr_union,981,52.026799999999994,52,0.05303445463812436,0.15211132274879738
+Current R3,12,process,named_material_leaf,981,53.02669999999999,53,0.05405372069317022,0.155034741287253
+Current R3,12,process,should_skip,981,52.026799999999994,52,0.05303445463812436,0.15211132274879738
+Current R3,12,process,probe,981,46.0229,46,0.04691427115188583,0.13455765481897075
+Current R3,12,process,pbr_predicate,981,0.0,0,0.0,0.0
+Current R3,12,process,rejection_logger,981,0.0,0,0.0,0.0
+Current R3,12,process,logger_descendant_in_guard,981,0.0,0,0.0,0.0
+Current R3,10,render,legacy_guard_union,914,98.0249,98,0.10724824945295405,1.0178312483389809
+Current R3,10,render,expanded_guard_union,914,98.0249,98,0.10724824945295405,1.0178312483389809
+Current R3,10,render,expanded_guard_and_pbr_union,914,98.0249,98,0.10724824945295405,1.0178312483389809
+Current R3,10,render,named_material_leaf,914,96.02550000000001,96,0.10506072210065646,0.9970706885431642
+Current R3,10,render,should_skip,914,98.0249,98,0.10724824945295405,1.0178312483389809
+Current R3,10,render,probe,914,87.02790000000003,87,0.0952165207877462,0.9036450544435141
+Current R3,10,render,pbr_predicate,914,0.0,0,0.0,0.0
+Current R3,10,render,rejection_logger,914,0.0,0,0.0,0.0
+Current R3,10,render,logger_descendant_in_guard,914,0.0,0,0.0,0.0
+Current R3,10,process,legacy_guard_union,914,98.0249,98,0.10724824945295405,0.40713064012585554
+Current R3,10,process,expanded_guard_union,914,98.0249,98,0.10724824945295405,0.40713064012585554
+Current R3,10,process,expanded_guard_and_pbr_union,914,98.0249,98,0.10724824945295405,0.40713064012585554
+Current R3,10,process,named_material_leaf,914,96.02550000000001,96,0.10506072210065646,0.3988264541295666
+Current R3,10,process,should_skip,914,98.0249,98,0.10724824945295405,0.40713064012585554
+Current R3,10,process,probe,914,87.02790000000003,87,0.0952165207877462,0.3614563711445659
+Current R3,10,process,pbr_predicate,914,0.0,0,0.0,0.0
+Current R3,10,process,rejection_logger,914,0.0,0,0.0,0.0
+Current R3,10,process,logger_descendant_in_guard,914,0.0,0,0.0,0.0
+Current R3,13,render,legacy_guard_union,558,87.1679,87,0.15621487455197133,0.8902613085595924
+Current R3,13,render,expanded_guard_union,558,87.1679,87,0.15621487455197133,0.8902613085595924
+Current R3,13,render,expanded_guard_and_pbr_union,558,87.1679,87,0.15621487455197133,0.8902613085595924
+Current R3,13,render,named_material_leaf,558,85.1686,85,0.15263189964157706,0.8698421010967168
+Current R3,13,render,should_skip,558,87.1679,87,0.15621487455197133,0.8902613085595924
+Current R3,13,render,probe,558,72.071,72,0.1291594982078853,0.7360739764202002
+Current R3,13,render,pbr_predicate,558,0.0,0,0.0,0.0
+Current R3,13,render,rejection_logger,558,0.0,0,0.0,0.0
+Current R3,13,render,logger_descendant_in_guard,558,0.0,0,0.0,0.0
+Current R3,13,process,legacy_guard_union,558,87.1679,87,0.15621487455197133,0.3228834921691448
+Current R3,13,process,expanded_guard_union,558,87.1679,87,0.15621487455197133,0.3228834921691448
+Current R3,13,process,expanded_guard_and_pbr_union,558,87.1679,87,0.15621487455197133,0.3228834921691448
+Current R3,13,process,named_material_leaf,558,85.1686,85,0.15263189964157706,0.31547777325319326
+Current R3,13,process,should_skip,558,87.1679,87,0.15621487455197133,0.3228834921691448
+Current R3,13,process,probe,558,72.071,72,0.1291594982078853,0.2669622207730418
+Current R3,13,process,pbr_predicate,558,0.0,0,0.0,0.0
+Current R3,13,process,rejection_logger,558,0.0,0,0.0,0.0
+Current R3,13,process,logger_descendant_in_guard,558,0.0,0,0.0,0.0

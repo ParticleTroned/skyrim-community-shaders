@@ -16,6 +16,8 @@ same PR. Earlier snapshots stay unchanged. See the
 | 0003    | [PR73 and baselines](vr-render-scale-ledger-0003-pr73.csv)                    |                                           72,209,582 bytes / 68.864 MiB | Both PR65 baseline repeats, PR66 reference, latest PR73 measurement; 4 run columns                                                                           |
 | 0004    | [Depth-culling investigation](vr-render-scale-ledger-0004-investigation.csv)  | See [coverage receipt](depth-culling-comparison-20260916/coverage.json) | Eight same-build gameft-sw runs; 48 saves; complete summaries, producer final records, settings, provenance and derived WPR analysis                         |
 | 0005    | [RC166 and culling comparison](vr-render-scale-ledger-0005-investigation.csv) |         See [coverage receipt](rc166-comparison-20260916/coverage.json) | All eight prior runs plus three RC166 repeats; 66 saves; complete legacy receipts, provenance, matched WPR analysis and explicit health/coverage limitations |
+| 0006    | [Material comparison, part 1](vr-render-scale-ledger-0006-investigation.csv)  |      See [coverage receipt](material-comparison-20260917/coverage.json) | Selected Balanced 1/3/4 cells, original traced reference, current R1/R2; complete receipts and WPR analysis                                                  |
+| 0007    | [Material comparison, part 2](vr-render-scale-ledger-0007-investigation.csv)  |      See [coverage receipt](material-comparison-20260917/coverage.json) | Current interrupted repeat and R3; missing Save 13 explicit; complete campaign comparisons/settings audit                                                    |
 
 The archives differ by 120,213 bytes. The original three are plain CSV files below
 100 MiB. Their column headers retain exact run and compiled-source
@@ -27,7 +29,7 @@ Snapshot `0003` pins PR65 sources `348803c18` and `7c8e3e656`, PR66 source
 `renderscale-tuning-nvidia-2026-09-11T17-09-55-165Z`. The older PR73
 comparison source `269bded15` is retained in `0002`.
 
-The next finalized measurement uses `0006-pr<PR number>`. If one PR's
+The next finalized measurement uses `0008-pr<PR number>`. If one PR's
 complete evidence exceeds the file limit, use consecutive numbers with
 that PR identity and list its parts together here. Baselines may recur
 in later snapshots, but their copied cells must remain exact.
@@ -55,6 +57,17 @@ health receipts and derived CPU stack/ready/wait results. See the
 `python docs/development/rc166-comparison-20260916/verify.py` for the portable
 reconstruction, timing and historical-cell audit. These are whole-build
 comparisons, not an isolated culling or vendor-library experiment.
+
+Snapshots `0006` and `0007` partition the same investigation's material
+candidate campaign into disjoint run columns below 100 MiB each. Together
+they retain 23 current windows, four selected reference runs, all available
+receipts, raw interrupted placeholders with explicit invalidity, and the
+matched timing/WPR comparison. Earlier numbered files and copied reference
+cells are unchanged. The [assessment](material-comparison-20260917/README.md)
+records the active FOV+TAA centre mismatch and the absence of a consistent
+material saving. Run `python docs/development/material-comparison-20260917/verify.py`
+to audit both partitions, receipt reconstruction, selected historical cells,
+window validity, late profiles and comparison arithmetic.
 
 ## Migration verification
 

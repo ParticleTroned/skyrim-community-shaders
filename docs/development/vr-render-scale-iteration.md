@@ -13,6 +13,24 @@ implementation has no performance claim or runtime qualification result;
 new measurements must use the existing comparison ledger and reporting
 workflow.
 
+## September 17: three material repeats and interrupted run
+
+The [material comparison](material-comparison-20260917/README.md) retains
+three complete repeats and five valid saves from the interrupted repeat:
+23 final-ten-second windows, 69 matching late profile checks and complete
+WPR analysis. The exact compiled source is `6588831aabf472dff76340ed58aaf07075fccacd`;
+the dirty build digest and interrupted provenance gap remain explicit.
+Immutable ledgers `0006`/`0007` preserve the selected reference cells and
+complete new receipts. R1 Save 12 remains flagged for scheduler coverage;
+interrupted Save 13 is unavailable, never zero or passed.
+
+No consistent material saving is demonstrated. CPU latency and CPU work
+diverge because waiting and frame cadence differ. Native execution in DLSS
+12/13 remains a concrete target, alongside the separate DLSS GPU residual.
+The active FOV+TAA centre differs between the later main-VR reference and
+the candidate, preventing an isolated material A/B conclusion. Source,
+settings and the saved protocol were not changed by this analysis.
+
 ## September 16: three RC166 repeats added
 
 The [eleven-run comparison](rc166-comparison-20260916/README.md) adds three

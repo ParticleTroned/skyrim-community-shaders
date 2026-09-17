@@ -1,0 +1,193 @@
+{
+    "schema": "material-comparison-validation-v1",
+    "recordedUtc": "2026-09-17T08:18:17.324656+01:00",
+    "branch": "perf/cpu-dlss-regression-20260916",
+    "repositoryHead": "10103b159410b7cf08349f2451d95d7c57580c2b",
+    "commands": [
+        {
+            "command": "python build/cpu-burst-diagnostics/material-repeat-wpr-20260917.py --run '<run label>'",
+            "runLabels": ["Current R1", "Current R2", "Current R3", "Current interrupted"],
+            "result": "PASS: four archived traces exported; interrupted precise export resumed after the previous process ended without an output receipt. Existing completed exports reused."
+        },
+        {
+            "command": "python build/cpu-burst-diagnostics/finalize-material-wpr-20260917.py",
+            "result": "PASS: 23 windows; zero lost events/buffers in four traces; scheduler 22 PASS and R1 Save 12 REVIEW_REQUIRED (+5.914100 ms)."
+        },
+        {
+            "command": "python build/cpu-burst-diagnostics/material-attribution-20260917.py",
+            "result": "PASS: 18 retained runs, 107 valid windows; same expanded material classifier; no missing input sets."
+        },
+        {
+            "command": "python build/cpu-burst-diagnostics/report-material-repeats-20260917.py",
+            "result": "PASS: saved fpsVR values retained; 3-complete-repeat statistics separate from interrupted sensitivity."
+        },
+        {
+            "command": "python build/cpu-burst-diagnostics/material-settings-audit-20260917.py",
+            "result": "PASS: active FOV+TAA mismatch retained, not repaired during analysis."
+        },
+        {
+            "command": "python build/cpu-burst-diagnostics/report-material-wpr-20260917.py",
+            "result": "PASS: 107 WPR rows, 1926 material detail rows, one current scheduler flag."
+        },
+        {
+            "command": "python docs/development/material-comparison-20260917/verify.py --local",
+            "result": "PASS: 23 windows; 69 late mode checks; 1314 source reconstructions; old ledgers and selected cells unchanged."
+        },
+        {
+            "command": "pwsh ./tools/pre-commit.ps1 run --files <changedFiles>",
+            "files": [
+                "docs/development/material-comparison-20260917/coverage.json",
+                "docs/development/material-comparison-20260917/material-costs.csv",
+                "docs/development/material-comparison-20260917/README.md",
+                "docs/development/material-comparison-20260917/settings-audit.json",
+                "docs/development/material-comparison-20260917/tables.md",
+                "docs/development/material-comparison-20260917/timing-comparison.json",
+                "docs/development/material-comparison-20260917/timing-deltas.csv",
+                "docs/development/material-comparison-20260917/verify.py",
+                "docs/development/material-comparison-20260917/wpr-comparison.json",
+                "docs/development/material-comparison-20260917/wpr-comparison.md",
+                "docs/development/material-comparison-20260917/wpr-metrics.csv",
+                "docs/development/vr-render-scale-ledger.md",
+                "docs/development/vr-render-scale-iteration.md",
+                "docs/development/vr-render-scale-ledger-0006-investigation.csv",
+                "docs/development/vr-render-scale-ledger-0007-investigation.csv"
+            ],
+            "result": "PASS after automatic line-ending/Prettier fixes. Trailing whitespace, line endings and Prettier passed; YAML, clang-format and gersemi skipped because no applicable files."
+        },
+        {
+            "command": "pwsh ./tools/git.ps1 diff --check",
+            "result": "PASS"
+        }
+    ],
+    "traceQuality": [
+        {
+            "label": "Current R1",
+            "traceQuality": {
+                "losses": {
+                    "Buffers": ["0"],
+                    "Events": ["0"]
+                },
+                "events": {
+                    "Sampled Profile": {
+                        "count": 2086830,
+                        "stacks": 2008525
+                    },
+                    "Thread: CSwitch": {
+                        "count": 102543967,
+                        "stacks": 82862894
+                    },
+                    "Thread: ReadyThread": {
+                        "count": 21240086,
+                        "stacks": 21240086
+                    }
+                },
+                "validated": true
+            },
+            "sampleExportExitCode": 0,
+            "schedulerExportExitCode": 0
+        },
+        {
+            "label": "Current R2",
+            "traceQuality": {
+                "losses": {
+                    "Buffers": ["0"],
+                    "Events": ["0"]
+                },
+                "events": {
+                    "Sampled Profile": {
+                        "count": 1933649,
+                        "stacks": 1862631
+                    },
+                    "Thread: CSwitch": {
+                        "count": 88421611,
+                        "stacks": 70252808
+                    },
+                    "Thread: ReadyThread": {
+                        "count": 19287935,
+                        "stacks": 19287935
+                    }
+                },
+                "validated": true
+            },
+            "sampleExportExitCode": 0,
+            "schedulerExportExitCode": 0
+        },
+        {
+            "label": "Current interrupted",
+            "traceQuality": {
+                "losses": {
+                    "Buffers": ["0"],
+                    "Events": ["0"]
+                },
+                "events": {
+                    "Sampled Profile": {
+                        "count": 3001007,
+                        "stacks": 2919598
+                    },
+                    "Thread: CSwitch": {
+                        "count": 88868482,
+                        "stacks": 71224914
+                    },
+                    "Thread: ReadyThread": {
+                        "count": 24628408,
+                        "stacks": 24628408
+                    }
+                },
+                "validated": true
+            },
+            "sampleExportExitCode": 0,
+            "schedulerExportExitCode": 0
+        },
+        {
+            "label": "Current R3",
+            "traceQuality": {
+                "losses": {
+                    "Buffers": ["0"],
+                    "Events": ["0"]
+                },
+                "events": {
+                    "Sampled Profile": {
+                        "count": 2104928,
+                        "stacks": 2026805
+                    },
+                    "Thread: CSwitch": {
+                        "count": 104945895,
+                        "stacks": 85355605
+                    },
+                    "Thread: ReadyThread": {
+                        "count": 20858540,
+                        "stacks": 20858540
+                    }
+                },
+                "validated": true
+            },
+            "sampleExportExitCode": 0,
+            "schedulerExportExitCode": 0
+        }
+    ],
+    "artifactHashes": {
+        "coverage.json": "158a4ca38e6df807342aab7b4de426fcf9dad89b21a8215c6a1778ee5c7bd702",
+        "material-costs.csv": "f72e5bf5e4ba127b568aa6e1c2e588d492a4226b42abdc27e89404e612a6df04",
+        "README.md": "1cbcfdedda086bddf768de6f6300cec6eb1a473fe6c298c7ed80b13b97a1de99",
+        "settings-audit.json": "a6ff7509b3d225148f55cbd6b236b566222832f1a87d6d2e4d247336cc2e831d",
+        "tables.md": "c3e03d2f2542074596d6dfe5fbf9e594c09e3ef058f768b66c232bb49af95953",
+        "timing-comparison.json": "0d42954de3fe3008690cf57409dc84de557917ab5e9c974324af1f2941ccea8f",
+        "timing-deltas.csv": "98ff9b0e035e624e46719fde8dd2fe73aaa1ba36d68eb0b3f1a5dfc96086b88e",
+        "verify.py": "bf47bcfa1323c045df87a303166766f3802ab80a59214dfa6135beeb51022880",
+        "wpr-comparison.json": "568683765e73b172be39ce0dfecab54277a0d668575f86813e704287e193d626",
+        "wpr-comparison.md": "d9fc2680c76e4332788f4100b77b27a5680ea18e53db84885c1bb1c11a66e908",
+        "wpr-metrics.csv": "bf3eb89b014c7f75008866af668ff8591643bcf479e3f8e9e7cb6829f7d54a60"
+    },
+    "renderingChanged": false,
+    "settingsChangedByAnalysis": false,
+    "protocolChangedByAnalysis": false,
+    "buildTests": "Not rerun: analysis/documentation only; no runtime code changes.",
+    "knownLimitations": [
+        "Active FOV+TAA centre differs against later main-VR reference.",
+        "Original reference has a different source/vendor bundle.",
+        "Interrupted Save 13 and completed post-run physical provenance unavailable.",
+        "One scheduler coverage failure retained; no tolerance change.",
+        "CPU sampling cannot assign GPU pass costs or prove per-spike causality."
+    ],
+    "publication": "Validation recorded before publication; this change contains only the comparison documents and evidence ledgers."
+}

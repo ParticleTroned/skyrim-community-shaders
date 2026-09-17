@@ -14,13 +14,17 @@
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Skylighting::Settings,
+	EnableSkylighting,
 	MaxZenith,
 	MinDiffuseVisibility,
 	MinSpecularVisibility)
 
 void Skylighting::LoadSettings(json& o_json)
 {
+	const bool wasEnabled = settings.EnableSkylighting;
 	settings = o_json;
+	if (settings.EnableSkylighting != wasEnabled)
+		queuedResetSkylighting = true;
 }
 
 void Skylighting::SaveSettings(json& o_json)
@@ -30,6 +34,8 @@ void Skylighting::SaveSettings(json& o_json)
 
 void Skylighting::RestoreDefaultSettings()
 {
+	if (!settings.EnableSkylighting)
+		queuedResetSkylighting = true;
 	settings = {};
 }
 
@@ -52,6 +58,9 @@ void Skylighting::ResetSkylighting()
 
 void Skylighting::DrawSettings()
 {
+	if (ImGui::Checkbox(T(TKEY("enabled"), "Enable Skylighting"), &settings.EnableSkylighting))
+		queuedResetSkylighting = true;
+
 	ImGui::Text("%s", T(TKEY("min_visibility_desc"), "Minimum visibility values. Diffuse darkens objects. Specular removes the sky from reflections."));
 	ImGui::SliderFloat(T(TKEY("diffuse_min_visibility"), "Diffuse Min Visibility"), &settings.MinDiffuseVisibility, 0.01f, 1.f, "%.2f");
 	ImGui::SliderFloat(T(TKEY("specular_min_visibility"), "Specular Min Visibility"), &settings.MinSpecularVisibility, 0.01f, 1.f, "%.2f");
@@ -225,12 +234,20 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 			((int)cellID.z - probeArrayDims[2] / 2) % probeArrayDims[2] },
 		.ValidMargin = { (int)cellIDDiff.x, (int)cellIDDiff.y, (int)cellIDDiff.z },
 		.MinDiffuseVisibility = settings.MinDiffuseVisibility,
-		.MinSpecularVisibility = settings.MinSpecularVisibility
+		.MinSpecularVisibility = settings.MinSpecularVisibility,
+		.Enabled = settings.EnableSkylighting && !queuedResetSkylighting
 	};
 }
 
 void Skylighting::Prepass()
 {
+	if (!settings.EnableSkylighting) {
+		ID3D11ShaderResourceView* nullProbe = nullptr;
+		globals::d3d::context->PSSetShaderResources(50, 1, &nullProbe);
+		globals::d3d::context->PSSetShaderResources(53, 1, &nullProbe);
+		return;
+	}
+
 	if (globals::state->isMapMenuOpen)
 		return;
 
@@ -411,6 +428,8 @@ RE::BSShaderProperty::RenderPassArray* Skylighting::BSLightingShaderProperty_Get
 	[[maybe_unused]] RE::BSGraphics::BSShaderAccumulator* accumulator)
 {
 	auto& skylighting = globals::features::skylighting;
+	if (!skylighting.settings.EnableSkylighting)
+		return func(property, geometry, renderMode, accumulator);
 
 	auto batch = accumulator->GetRuntimeData().batchRenderer;
 	batch->geometryGroups[14]->flags &= ~1;
@@ -565,7 +584,7 @@ void Skylighting::RenderOcclusion()
 		}
 	}
 
-	if (lastOcclusionRenderFrame == globals::state->frameCount)
+	if (!settings.EnableSkylighting || lastOcclusionRenderFrame == globals::state->frameCount)
 		return;
 
 	CS_GPU_PASS("Skylighting::SkylightingMask");

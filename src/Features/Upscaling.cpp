@@ -17909,12 +17909,11 @@ NeuralRendering::PipelineArrangement Upscaling::GetNeuralRenderingArrangement() 
 void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 {
 	const Settings previousSettings = settings;
-	if (ImGui::TreeNodeEx("NVIDIA DLSS Neural Rendering")) {
+	const bool showDiagnostics = globals::state && globals::state->IsDeveloperMode();
+	if (ImGui::TreeNodeEx("Neural Rendering", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth)) {
 		const bool dlssSelected = a_upscaleMethod == UpscaleMethod::kDLSS;
 		const bool foveatedRouteEnabled =
 			IsFoveatedVendorDispatchRequested(settings, a_upscaleMethod);
-		const bool routeAvailable = GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution ||
-		                            (dlssSelected && (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution || foveatedRouteEnabled));
 		{
 			auto guard = Util::DisableGuard(!NeuralRendering::IsRenderingConfigurationSupported(
 												globals::game::isVR, GetNeuralRenderingMode(), settings.neuralCharacterRenderingEnabled) &&
@@ -17923,17 +17922,26 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 		}
 		static constexpr const char* renderingModes[]{ "Full resolution", "Foveated", "Reduced resolution before DLSS" };
 		int renderingMode = static_cast<int>(GetNeuralRenderingMode());
-		if (ImGui::Combo("Rendering mode", &renderingMode, renderingModes, IM_ARRAYSIZE(renderingModes)) &&
+		if (ImGui::Combo("Rendering mode", &renderingMode, renderingModes, globals::game::isVR ? IM_ARRAYSIZE(renderingModes) : 1) &&
 			(globals::game::isVR || renderingMode == 0))
 			settings.neuralRenderingMode = static_cast<uint>(renderingMode);
 		if (!globals::game::isVR)
 			ImGui::TextDisabled("SE/AE supports full-resolution NR. Foveated, reduced-resolution and character NR require Skyrim VR.");
 		if (GetNeuralRenderingMode() != NeuralRendering::RenderingMode::Foveated)
 			ImGui::Checkbox("Restrict to FOV mask", &settings.neuralRenderingFovOnly);
+		{
+			auto guard = Util::DisableGuard(!globals::game::isVR && !settings.neuralCharacterRenderingEnabled);
+			ImGui::Checkbox("Characters only", &settings.neuralCharacterRenderingEnabled);
+		}
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Apply Neural Rendering only to selected face, skin and hair pixels. Combines with every rendering mode in VR.");
 		ImGui::TextWrapped("Full resolution runs on the final scene before UI. Foveated uses the current FOV pipeline. Reduced resolution runs NR at render resolution before DLSS; DLSS owns temporal reconstruction. Character selection combines with every mode.");
+		const bool routeAvailable = GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution ||
+		                            (dlssSelected && (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution || foveatedRouteEnabled));
 		if (!routeAvailable)
 			ImGui::TextDisabled("This mode requires NVIDIA DLSS; Foveated also requires the FOV route.");
-		ImGui::TextDisabled("Pipeline arrangement: %s", NeuralRendering::GetPipelineArrangementName(GetNeuralRenderingArrangement()));
+		if (showDiagnostics)
+			ImGui::TextDisabled("Pipeline arrangement: %s", NeuralRendering::GetPipelineArrangementName(GetNeuralRenderingArrangement()));
 
 		if (settings.neuralRenderingEnabled) {
 			ImGui::SeparatorText("Pipeline");
@@ -17966,70 +17974,73 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 										   "Placement: Render resolution, before DLSS" :
 										   "Placement: Final scene, before UI");
 			}
-			static constexpr const char* stereoSubmissionModes[]{
-				"Per-eye",
-				"Batched"
-			};
-			int stereoSubmission = settings.neuralRenderingBatchedStereo ? 1 : 0;
-			if (ImGui::Combo(
-					"Stereo Submission",
-					&stereoSubmission,
-					stereoSubmissionModes,
-					IM_ARRAYSIZE(stereoSubmissionModes))) {
-				settings.neuralRenderingBatchedStereo = stereoSubmission != 0;
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted(
-					"Per-eye submits one D3D12 Feature 18 transaction for each eye.");
-				ImGui::TextUnformatted(
-					"Batched evaluates both eyes in one command-list and fence transaction.");
-			}
-
-			static constexpr const char* outputCommitModes[]{
-				"Staged",
-				"Direct"
-			};
-			const bool requiresStagedOutput = reducedResolution ||
-			                                  (UsesCharacterVisualIsolation(settings) &&
-												  GetNeuralRenderingInsertionPoint() == NeuralRendering::InsertionPoint::UpscaledCenter);
-			int outputCommit = settings.neuralRenderingDirectCommit && !requiresStagedOutput ? 1 : 0;
-			{
-				auto guard = Util::DisableGuard(requiresStagedOutput);
+			if (showDiagnostics && ImGui::TreeNode("Execution diagnostics")) {
+				static constexpr const char* stereoSubmissionModes[]{
+					"Per-eye",
+					"Batched"
+				};
+				int stereoSubmission = settings.neuralRenderingBatchedStereo ? 1 : 0;
 				if (ImGui::Combo(
-						requiresStagedOutput ? "Output Commit (effective)" : "Output Commit",
-						&outputCommit,
-						outputCommitModes,
-						IM_ARRAYSIZE(outputCommitModes))) {
-					settings.neuralRenderingDirectCommit = outputCommit != 0;
+						"Stereo Submission",
+						&stereoSubmission,
+						stereoSubmissionModes,
+						IM_ARRAYSIZE(stereoSubmissionModes))) {
+					settings.neuralRenderingBatchedStereo = stereoSubmission != 0;
 				}
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted(
-					"Staged writes NR output privately, then publishes the completed image.");
-				ImGui::TextUnformatted(
-					"Direct writes successful NR output to the private output resources.");
-			}
-			if (requiresStagedOutput) {
-				ImGui::TextDisabled(reducedResolution ?
-										"Reduced resolution uses Staged output before DLSS." :
-										"Character selection uses Staged output to preserve unselected pixels.");
-				if (settings.neuralRenderingDirectCommit)
-					ImGui::TextDisabled("Saved preference: Direct, used when the selected route supports it.");
-			}
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted(
+						"Per-eye submits one D3D12 Feature 18 transaction for each eye.");
+					ImGui::TextUnformatted(
+						"Batched evaluates both eyes in one command-list and fence transaction.");
+				}
 
-			const bool batchedStereo = settings.neuralRenderingBatchedStereo;
-			const bool directCommit = settings.neuralRenderingDirectCommit && !requiresStagedOutput;
-			ImGui::TextColored(
-				routeAvailable ?
-					ImVec4(0.40f, 0.85f, 0.50f, 1.0f) :
-					ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
-				"Effective execution: %s",
-				NeuralRendering::GetImplementationDisplayName(
-					batchedStereo, directCommit));
-			ImGui::TextDisabled(
-				"Comparison role: %s",
-				NeuralRendering::GetImplementationPurpose(
-					batchedStereo, directCommit));
+				static constexpr const char* outputCommitModes[]{
+					"Staged",
+					"Direct"
+				};
+				const bool requiresStagedOutput = reducedResolution ||
+				                                  (UsesCharacterVisualIsolation(settings) &&
+													  GetNeuralRenderingInsertionPoint() == NeuralRendering::InsertionPoint::UpscaledCenter);
+				int outputCommit = settings.neuralRenderingDirectCommit && !requiresStagedOutput ? 1 : 0;
+				{
+					auto guard = Util::DisableGuard(requiresStagedOutput);
+					if (ImGui::Combo(
+							requiresStagedOutput ? "Output Commit (effective)" : "Output Commit",
+							&outputCommit,
+							outputCommitModes,
+							IM_ARRAYSIZE(outputCommitModes))) {
+						settings.neuralRenderingDirectCommit = outputCommit != 0;
+					}
+				}
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted(
+						"Staged writes NR output privately, then publishes the completed image.");
+					ImGui::TextUnformatted(
+						"Direct writes successful NR output to the private output resources.");
+				}
+				if (requiresStagedOutput) {
+					ImGui::TextDisabled(reducedResolution ?
+											"Reduced resolution uses Staged output before DLSS." :
+											"Character selection uses Staged output to preserve unselected pixels.");
+					if (settings.neuralRenderingDirectCommit)
+						ImGui::TextDisabled("Saved preference: Direct, used when the selected route supports it.");
+				}
+
+				const bool batchedStereo = settings.neuralRenderingBatchedStereo;
+				const bool directCommit = settings.neuralRenderingDirectCommit && !requiresStagedOutput;
+				ImGui::TextColored(
+					routeAvailable ?
+						ImVec4(0.40f, 0.85f, 0.50f, 1.0f) :
+						ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
+					"Effective execution: %s",
+					NeuralRendering::GetImplementationDisplayName(
+						batchedStereo, directCommit));
+				ImGui::TextDisabled(
+					"Comparison role: %s",
+					NeuralRendering::GetImplementationPurpose(
+						batchedStereo, directCommit));
+				ImGui::TreePop();
+			}
 
 			ImGui::SeparatorText("Image Tuning");
 			static constexpr const char* presets[]{
@@ -18062,32 +18073,23 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 			}
 			if (customTuningChanged)
 				settings.neuralRenderingPreset = 0;
-			ImGui::TextDisabled("UI correction inputs are not yet bound.");
 
-			ImGui::SeparatorText("Character Selection");
-			{
-				auto guard = Util::DisableGuard(!globals::game::isVR && !settings.neuralCharacterRenderingEnabled);
-				ImGui::Checkbox("Character Neural Rendering", &settings.neuralCharacterRenderingEnabled);
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted(
-					"Runs Feature 18 in bounded per-eye rectangles enclosing selected NPC materials.");
-				ImGui::TextUnformatted(
-					"An exact authored mask selects face, skin, and hair pixels from that partial output.");
-			}
 			if (settings.neuralCharacterRenderingEnabled) {
-				ImGui::Checkbox(
-					"Deterministic Mask Composite",
-					&settings.neuralCharacterVisualIsolationEnabled);
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted(
-						"Blends Feature 18 output over normal DLSS using the authored 0..1 category strength.");
-					ImGui::TextUnformatted(
-						"Frozen/current depth rejects later depth-writing occluders; translucent overlays remain approximate.");
-					ImGui::TextUnformatted(
-						"The private NVIDIA ControlMask ABI is not used for character selection.");
-					ImGui::TextUnformatted(
-						"Disable only to compare normal full-center Feature 18 output.");
+				ImGui::SeparatorText("Character selection");
+				const bool characterOverrideActive = settings.neuralCharacterMultiRoiEnabled ||
+				                                     settings.neuralCharacterDebugView != static_cast<uint>(NeuralRendering::CharacterDebugView::Off) ||
+				                                     settings.neuralCharacterMaskTestMode != static_cast<uint>(NeuralRendering::CharacterMaskTestMode::Authored) ||
+				                                     !settings.neuralCharacterVisualIsolationEnabled || !settings.neuralCharacterVisibilityDepthTestEnabled;
+				if (!showDiagnostics && characterOverrideActive) {
+					ImGui::TextWrapped("Character experiments are active. Set Log Level to Debug to inspect them.");
+					if (ImGui::Button("Restore normal character rendering")) {
+						settings.neuralCharacterMultiRoiEnabled = false;
+						settings.neuralCharacterMultiRoiSavingsGateEnabled = true;
+						settings.neuralCharacterDebugView = static_cast<uint>(NeuralRendering::CharacterDebugView::Off);
+						settings.neuralCharacterMaskTestMode = static_cast<uint>(NeuralRendering::CharacterMaskTestMode::Authored);
+						settings.neuralCharacterVisualIsolationEnabled = true;
+						settings.neuralCharacterVisibilityDepthTestEnabled = true;
+					}
 				}
 				ImGui::Checkbox("Faces", &settings.neuralCharacterFacesEnabled);
 				ImGui::SameLine();
@@ -18133,30 +18135,29 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 						"The range ends at %.0f m, beyond the useful face-detail range.",
 						NeuralRendering::CharacterPolicy::kMaximumDistanceMeters);
 				}
-				int minimumFacePixels = static_cast<int>(
-					settings.neuralCharacterMinimumFacePixelSize);
-				if (ImGui::SliderInt(
-						"Minimum Face Size", &minimumFacePixels,
-						static_cast<int>(
-							NeuralRendering::CharacterPolicy::kMinimumFacePixelSize),
-						static_cast<int>(
-							NeuralRendering::CharacterPolicy::kMaximumFacePixelSize),
-						"%d px")) {
-					settings.neuralCharacterMinimumFacePixelSize =
-						static_cast<uint>(minimumFacePixels);
-				}
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted(
-						"Admits a face at this size and retains it down to 75% to prevent boundary flicker.");
-				}
-				ImGui::TextDisabled(
-					"FaceGen RGB tint is split by face-node ancestry; generic skinned armor is excluded.");
-				ImGui::TextDisabled(
-					"Alpha-tested silhouettes are supported; alpha-blended character materials fail closed.");
-
-				if (ImGui::TreeNodeEx(
-						"Character Rendering Advanced",
-						ImGuiTreeNodeFlags_SpanAvailWidth)) {
+				if (showDiagnostics && ImGui::TreeNodeEx(
+										   "Character diagnostics and experiments",
+										   ImGuiTreeNodeFlags_SpanAvailWidth)) {
+					int minimumFacePixels = static_cast<int>(settings.neuralCharacterMinimumFacePixelSize);
+					if (ImGui::SliderInt("Minimum Face Size", &minimumFacePixels,
+							static_cast<int>(NeuralRendering::CharacterPolicy::kMinimumFacePixelSize),
+							static_cast<int>(NeuralRendering::CharacterPolicy::kMaximumFacePixelSize), "%d px"))
+						settings.neuralCharacterMinimumFacePixelSize = static_cast<uint>(minimumFacePixels);
+					if (auto tooltip = Util::HoverTooltipWrapper())
+						ImGui::TextUnformatted("Admits a face at this size and retains it down to 75% to prevent boundary flicker.");
+					ImGui::Checkbox(
+						"Deterministic Mask Composite",
+						&settings.neuralCharacterVisualIsolationEnabled);
+					if (auto _tt = Util::HoverTooltipWrapper()) {
+						ImGui::TextUnformatted(
+							"Blends Feature 18 output over normal DLSS using the authored 0..1 category strength.");
+						ImGui::TextUnformatted(
+							"Frozen/current depth rejects later depth-writing occluders; translucent overlays remain approximate.");
+						ImGui::TextUnformatted(
+							"The private NVIDIA ControlMask ABI is not used for character selection.");
+						ImGui::TextUnformatted(
+							"Disable only to compare normal full-center Feature 18 output.");
+					}
 					{
 						auto guard = Util::DisableGuard(
 							!settings.neuralCharacterVisualIsolationEnabled &&
@@ -18306,275 +18307,261 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 				}
 			}
 
-			ImGui::SeparatorText("Region Blending");
-			const bool finalLdrInsertion =
-				NeuralRendering::ClampInsertionPoint(
-					settings.neuralRenderingInsertionPoint) ==
-				NeuralRendering::InsertionPoint::FinalLdrPreUi;
-			{
-				auto featherGuard = Util::DisableGuard(
-					!routeAvailable || !finalLdrInsertion ||
-					settings.foveatedPeripheryMaskVisualization);
-				ImGui::SliderFloat(
-					"Final LDR Blend Feather",
-					&settings.neuralRenderingBlendFeather,
-					kPeripheryTAACenterBlendFeatherMin,
-					kPeripheryTAACenterBlendFeatherMax,
-					"%.3f");
-			}
-			settings.neuralRenderingBlendFeather =
-				ClampFoveatedBlendFeather(
-					settings.neuralRenderingBlendFeather);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted(
-					"Controls only the final-LDR Feature 18 center-to-periphery blend.");
-				if (!finalLdrInsertion) {
-					ImGui::TextUnformatted(
-						"Upscaled Center keeps the normal DLSS blend feather configured in VR > FOV.");
-				}
+			const bool maskedRegion = GetNeuralRenderingMode() == NeuralRendering::RenderingMode::Foveated || settings.neuralRenderingFovOnly;
+			if (maskedRegion && GetNeuralRenderingInsertionPoint() == NeuralRendering::InsertionPoint::FinalLdrPreUi) {
+				ImGui::SeparatorText("Region blending");
+				auto featherGuard = Util::DisableGuard(!routeAvailable || settings.foveatedPeripheryMaskVisualization);
+				ImGui::SliderFloat("FOV edge feather", &settings.neuralRenderingBlendFeather,
+					kPeripheryTAACenterBlendFeatherMin, kPeripheryTAACenterBlendFeatherMax, "%.3f");
+				if (auto tooltip = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted("Softens the boundary between the neural image and the surrounding scene.");
 			}
 
 			ImGui::SeparatorText("Runtime");
 			const auto neuralStatus =
 				NeuralRendering::Renderer::Instance().GetSnapshot();
-			ImGui::TextDisabled(
-				"Status: %s | Identity: %s",
-				neuralStatus.status.c_str(),
-				neuralStatus.trust.c_str());
-			ImGui::TextDisabled(
-				"Successful eyes: %llu | Renderer failures: %llu",
-				static_cast<unsigned long long>(neuralStatus.successes),
-				static_cast<unsigned long long>(neuralStatus.failures));
-			ImGui::TextDisabled(
-				"Any 310.8 nvngx_dlssnr.dll with the required exports is accepted; SHA-256 is diagnostic only.");
-			ImGui::TextColored(
-				Util::Colors::GetWarning(),
-				"Untrusted NR DLLs execute in-process. Developer Mode and Streamline logging do not restrict admission.");
+			ImGui::TextDisabled("Status: %s", neuralStatus.status.c_str());
+			if (showDiagnostics && ImGui::TreeNode("Runtime diagnostics")) {
+				ImGui::TextDisabled(
+					"Status: %s | Identity: %s",
+					neuralStatus.status.c_str(),
+					neuralStatus.trust.c_str());
+				ImGui::TextDisabled(
+					"Successful eyes: %llu | Renderer failures: %llu",
+					static_cast<unsigned long long>(neuralStatus.successes),
+					static_cast<unsigned long long>(neuralStatus.failures));
+				ImGui::TextDisabled(
+					"Any 310.8 nvngx_dlssnr.dll with the required exports is accepted; SHA-256 is diagnostic only.");
+				ImGui::TextColored(
+					Util::Colors::GetWarning(),
+					"Untrusted NR DLLs execute in-process. Developer Mode and Streamline logging do not restrict admission.");
 
-			if (settings.neuralCharacterRenderingEnabled) {
-				const auto characterStatus =
-					NeuralRendering::CharacterRendering::Instance().GetSnapshot();
-				ImGui::TextDisabled(
-					"Selection: CSX post-composite R8 mask; Feature 18 automatic mask remains enabled.");
-				const auto categoryCaptureFrame =
-					characterStatus.categoryCaptureReady ?
-						std::to_string(characterStatus.categoryCaptureFrame) :
-						std::string("n/a");
-				ImGui::TextDisabled(
-					"Character mask: %s | prepared %llu | failed %llu",
-					characterStatus.status.c_str(),
-					static_cast<unsigned long long>(
-						characterStatus.preparationSuccesses),
-					static_cast<unsigned long long>(
-						characterStatus.preparationFailures));
-				ImGui::TextDisabled(
-					"Category capture: %s | frame %s | success %llu | failed %llu | empty-copy bypass %llu",
-					characterStatus.categoryCaptureReady ?
-						(characterStatus.categoryCaptureEmpty ? "empty" : "ready") :
-						"unavailable",
-					categoryCaptureFrame.c_str(),
-					static_cast<unsigned long long>(
-						characterStatus.categoryCaptureSuccesses),
-					static_cast<unsigned long long>(
-						characterStatus.categoryCaptureFailures),
-					static_cast<unsigned long long>(
-						characterStatus.categoryCaptureEmptyBypasses));
-				for (uint32_t eye = 0; eye < characterStatus.eyes.size(); ++eye) {
-					const auto& eyeStatus = characterStatus.eyes[eye];
-					const auto* disposition =
-						NeuralRendering::GetCharacterFeature18DispositionName(
-							eyeStatus.feature18Disposition);
+				if (settings.neuralCharacterRenderingEnabled) {
+					const auto characterStatus =
+						NeuralRendering::CharacterRendering::Instance().GetSnapshot();
 					ImGui::TextDisabled(
-						"%s: %ux%u, face actors %u, selected actors %u, culled %u, mask %s%.2f%%, eligibility %.2f%%, request %s, outcome %s",
-						eye == 0 ? "Left" : "Right",
-						eyeStatus.evaluationWidth,
-						eyeStatus.evaluationHeight,
-						eyeStatus.visibleFaces,
-						eyeStatus.selectedCharacterRegions,
-						eyeStatus.adaptivelyCulledCharacterRegions,
-						eyeStatus.maskCoverageReady ? "" : "pending ",
-						eyeStatus.maskCoveragePercent,
-						eyeStatus.roiCoveragePercent,
-						eyeStatus.evaluationRequired ? "evaluate" : "empty bypass",
-						disposition);
-					if (eyeStatus.maskCoverageReady) {
-						ImGui::TextDisabled(
-							"  coverage sample: frame %u, slot %u, %ux%u",
-							eyeStatus.maskCoverageFrame,
-							eyeStatus.maskCoverageFeatureSlot,
-							eyeStatus.maskCoverageWidth,
-							eyeStatus.maskCoverageHeight);
-						ImGui::TextDisabled(
-							"  authored pixels F/S/H: %llu/%llu/%llu | selected: %llu/%llu/%llu | depth-rejected: %llu | distance-rejected: %llu",
-							static_cast<unsigned long long>(eyeStatus.authoredCategoryPixels[0]),
-							static_cast<unsigned long long>(eyeStatus.authoredCategoryPixels[1]),
-							static_cast<unsigned long long>(eyeStatus.authoredCategoryPixels[2]),
-							static_cast<unsigned long long>(eyeStatus.visibleCategoryPixels[0]),
-							static_cast<unsigned long long>(eyeStatus.visibleCategoryPixels[1]),
-							static_cast<unsigned long long>(eyeStatus.visibleCategoryPixels[2]),
-							static_cast<unsigned long long>(eyeStatus.visibilityRejectedPixels),
-							static_cast<unsigned long long>(eyeStatus.distanceRejectedPixels));
-						if (eyeStatus.zeroCoverageBypassed) {
-							ImGui::TextDisabled(
-								"  Feature 18 bypassed: current prepared-content evidence proves the selection is empty.");
-						}
-					}
+						"Selection: CSX post-composite R8 mask; Feature 18 automatic mask remains enabled.");
+					const auto categoryCaptureFrame =
+						characterStatus.categoryCaptureReady ?
+							std::to_string(characterStatus.categoryCaptureFrame) :
+							std::string("n/a");
 					ImGui::TextDisabled(
-						"  compute enclosure: (%u,%u) %ux%u, %.2f%% of eye",
-						eyeStatus.computeSubrect.baseX,
-						eyeStatus.computeSubrect.baseY,
-						eyeStatus.computeSubrect.width,
-						eyeStatus.computeSubrect.height,
-						eyeStatus.computeSubrectCoveragePercent);
-					if (settings.neuralCharacterMultiRoiEnabled) {
-						ImGui::TextDisabled(
-							"  Multi-ROI: %s | %u evaluations | %llu planned pixels",
-							NeuralRendering::GetCharacterMultiRoiReasonName(eyeStatus.multiRoiReason),
-							eyeStatus.evaluationRequired ? std::max(1u, eyeStatus.computeRegions.count) : 0u,
-							static_cast<unsigned long long>(eyeStatus.multiRoiPixels));
-						const auto& splitDiagnostics = eyeStatus.multiRoiDiagnostics;
-						if (splitDiagnostics.candidateAvailable && splitDiagnostics.cost.valid) {
-							ImGui::TextDisabled("  Savings gate %s | single %llu -> split %llu px | saved %.1f%% | overlap %s",
-								splitDiagnostics.savingsGateEnabled ? "on" : "off",
-								static_cast<unsigned long long>(splitDiagnostics.cost.singlePixels),
-								static_cast<unsigned long long>(splitDiagnostics.cost.splitPixels),
-								100.0 * static_cast<double>(splitDiagnostics.cost.savedPixels) / static_cast<double>(splitDiagnostics.cost.singlePixels),
-								splitDiagnostics.candidateOverlaps ? "yes" : "no");
-						}
-						ImGui::TextDisabled(
-							"  Mask ROI: %s | current %s | %u occupied tiles | readback %.3f ms",
-							eyeStatus.maskRoiStatus.c_str(),
-							eyeStatus.maskRoiCurrentFrame ? "yes" : "no",
-							eyeStatus.maskRoiOccupiedTiles,
-							eyeStatus.maskRoiReadbackWaitMs);
-						if (!eyeStatus.maskRoiLastFailure.empty()) {
-							ImGui::TextDisabled(
-								"  Last readback failure: %s | HRESULT 0x%08X | frame %u | %.3f ms",
-								eyeStatus.maskRoiLastFailure.c_str(),
-								static_cast<unsigned int>(eyeStatus.maskRoiLastFailureResult),
-								eyeStatus.maskRoiLastFailureFrame, eyeStatus.maskRoiLastFailureWaitMs);
-						}
-						for (uint32_t region = 0; region < eyeStatus.computeRegions.count; ++region) {
-							const auto& rect = eyeStatus.computeRegions.regions[region];
-							ImGui::TextDisabled(
-								"    region %u: (%u,%u) %ux%u",
-								region + 1u, rect.baseX, rect.baseY, rect.width, rect.height);
-						}
-					}
-					if (eyeStatus.depthCoordinatesValid) {
-						ImGui::TextDisabled(
-							"  depth map: frozen base (%u,%u), crop %ux%u; current local 0,0 %ux%u; jitter %.3f,%.3f",
-							eyeStatus.authoredEyeBaseX + eyeStatus.inputCropLeft,
-							eyeStatus.inputCropTop,
-							eyeStatus.inputCropWidth,
-							eyeStatus.inputCropHeight,
-							eyeStatus.currentDepthWidth,
-							eyeStatus.currentDepthHeight,
-							eyeStatus.capturedJitterX,
-							eyeStatus.capturedJitterY);
-					}
-				}
-				ImGui::TextDisabled(
-					"Feature 18 evaluates inside each active region; the exact mask controls compositing.");
-
-				const auto debugView =
-					NeuralRendering::ClampCharacterDebugView(
-						settings.neuralCharacterDebugView);
-				if (debugView != NeuralRendering::CharacterDebugView::Off) {
-					ImGui::SeparatorText("Last Character Debug Preview");
+						"Character mask: %s | prepared %llu | failed %llu",
+						characterStatus.status.c_str(),
+						static_cast<unsigned long long>(
+							characterStatus.preparationSuccesses),
+						static_cast<unsigned long long>(
+							characterStatus.preparationFailures));
 					ImGui::TextDisabled(
-						"Hard menu/loading contexts suppress Neural Rendering; safe late-menu continuity may update these images.");
-					for (uint32_t eye = 0; eye < 2; ++eye) {
-						ID3D11ShaderResourceView* preview = nullptr;
-						Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>
-							previewOwner;
-						if (debugView == NeuralRendering::CharacterDebugView::Dlss5Output) {
-							const bool finalLdr = NeuralRendering::ClampInsertionPoint(
-													  settings.neuralRenderingInsertionPoint) ==
-							                      NeuralRendering::InsertionPoint::FinalLdrPreUi;
-							const bool stagedIsolatedCenter =
-								!finalLdr &&
-								UsesCharacterVisualIsolation(settings);
-							const auto& output = finalLdr ?
-							                         submitNeuralFloatColorOut[eye] :
-							                         (stagedIsolatedCenter ?
-															 foveatedCenterNeuralOut[eye] :
-															 foveatedCenterColorOut[eye]);
-							preview = output && output->srv ? output->srv.get() : nullptr;
-						} else {
-							previewOwner =
-								NeuralRendering::CharacterRendering::Instance()
-									.GetDebugMaskSrv(eye);
-							preview = previewOwner.Get();
-						}
-						if (!preview) {
-							ImGui::TextDisabled(
-								"%s preview unavailable until the route completes.",
-								eye == 0 ? "Left" : "Right");
-							continue;
-						}
-
-						winrt::com_ptr<ID3D11Resource> previewResource;
-						winrt::com_ptr<ID3D11Texture2D> previewTexture;
-						preview->GetResource(previewResource.put());
-						if (!previewResource ||
-							FAILED(previewResource->QueryInterface(
-								__uuidof(ID3D11Texture2D), previewTexture.put_void()))) {
-							continue;
-						}
-						D3D11_TEXTURE2D_DESC previewDesc{};
-						previewTexture->GetDesc(&previewDesc);
-						const float width = std::min(
-							320.0f, static_cast<float>(previewDesc.Width));
-						const float height = previewDesc.Width ?
-						                         width * static_cast<float>(previewDesc.Height) /
-						                             static_cast<float>(previewDesc.Width) :
-						                         0.0f;
+						"Category capture: %s | frame %s | success %llu | failed %llu | empty-copy bypass %llu",
+						characterStatus.categoryCaptureReady ?
+							(characterStatus.categoryCaptureEmpty ? "empty" : "ready") :
+							"unavailable",
+						categoryCaptureFrame.c_str(),
+						static_cast<unsigned long long>(
+							characterStatus.categoryCaptureSuccesses),
+						static_cast<unsigned long long>(
+							characterStatus.categoryCaptureFailures),
+						static_cast<unsigned long long>(
+							characterStatus.categoryCaptureEmptyBypasses));
+					for (uint32_t eye = 0; eye < characterStatus.eyes.size(); ++eye) {
 						const auto& eyeStatus = characterStatus.eyes[eye];
-						const auto frameLabel = eyeStatus.frame ==
-						                                std::numeric_limits<std::uint32_t>::max() ?
-						                            std::string("n/a") :
-						                            std::to_string(eyeStatus.frame);
+						const auto* disposition =
+							NeuralRendering::GetCharacterFeature18DispositionName(
+								eyeStatus.feature18Disposition);
 						ImGui::TextDisabled(
-							"%s eye | frame %s | slot %u (%s) | %ux%u",
+							"%s: %ux%u, face actors %u, selected actors %u, culled %u, mask %s%.2f%%, eligibility %.2f%%, request %s, outcome %s",
 							eye == 0 ? "Left" : "Right",
-							frameLabel.c_str(),
-							eyeStatus.featureSlot,
-							eyeStatus.featureSlot < 2 ? "main" : "submit",
 							eyeStatus.evaluationWidth,
-							eyeStatus.evaluationHeight);
-						const ImVec2 origin = ImGui::GetCursorScreenPos();
-						ImGui::Image(preview, { width, height });
-						if (debugView ==
-								NeuralRendering::CharacterDebugView::RoiRectangles &&
-							eye < characterStatus.eyes.size()) {
-							if (eyeStatus.evaluationWidth && eyeStatus.evaluationHeight) {
-								const float scaleX = width /
-								                     static_cast<float>(eyeStatus.evaluationWidth);
-								const float scaleY = height /
-								                     static_cast<float>(eyeStatus.evaluationHeight);
-								for (const auto& rect : eyeStatus.regions) {
-									ImGui::GetWindowDrawList()->AddRect(
-										{ origin.x + rect.minX * scaleX,
-											origin.y + rect.minY * scaleY },
-										{ origin.x + rect.maxX * scaleX,
-											origin.y + rect.maxY * scaleY },
-										IM_COL32(255, 180, 32, 255), 0.0f, 0, 2.0f);
+							eyeStatus.evaluationHeight,
+							eyeStatus.visibleFaces,
+							eyeStatus.selectedCharacterRegions,
+							eyeStatus.adaptivelyCulledCharacterRegions,
+							eyeStatus.maskCoverageReady ? "" : "pending ",
+							eyeStatus.maskCoveragePercent,
+							eyeStatus.roiCoveragePercent,
+							eyeStatus.evaluationRequired ? "evaluate" : "empty bypass",
+							disposition);
+						if (eyeStatus.maskCoverageReady) {
+							ImGui::TextDisabled(
+								"  coverage sample: frame %u, slot %u, %ux%u",
+								eyeStatus.maskCoverageFrame,
+								eyeStatus.maskCoverageFeatureSlot,
+								eyeStatus.maskCoverageWidth,
+								eyeStatus.maskCoverageHeight);
+							ImGui::TextDisabled(
+								"  authored pixels F/S/H: %llu/%llu/%llu | selected: %llu/%llu/%llu | depth-rejected: %llu | distance-rejected: %llu",
+								static_cast<unsigned long long>(eyeStatus.authoredCategoryPixels[0]),
+								static_cast<unsigned long long>(eyeStatus.authoredCategoryPixels[1]),
+								static_cast<unsigned long long>(eyeStatus.authoredCategoryPixels[2]),
+								static_cast<unsigned long long>(eyeStatus.visibleCategoryPixels[0]),
+								static_cast<unsigned long long>(eyeStatus.visibleCategoryPixels[1]),
+								static_cast<unsigned long long>(eyeStatus.visibleCategoryPixels[2]),
+								static_cast<unsigned long long>(eyeStatus.visibilityRejectedPixels),
+								static_cast<unsigned long long>(eyeStatus.distanceRejectedPixels));
+							if (eyeStatus.zeroCoverageBypassed) {
+								ImGui::TextDisabled(
+									"  Feature 18 bypassed: current prepared-content evidence proves the selection is empty.");
+							}
+						}
+						ImGui::TextDisabled(
+							"  compute enclosure: (%u,%u) %ux%u, %.2f%% of eye",
+							eyeStatus.computeSubrect.baseX,
+							eyeStatus.computeSubrect.baseY,
+							eyeStatus.computeSubrect.width,
+							eyeStatus.computeSubrect.height,
+							eyeStatus.computeSubrectCoveragePercent);
+						if (settings.neuralCharacterMultiRoiEnabled) {
+							ImGui::TextDisabled(
+								"  Multi-ROI: %s | %u evaluations | %llu planned pixels",
+								NeuralRendering::GetCharacterMultiRoiReasonName(eyeStatus.multiRoiReason),
+								eyeStatus.evaluationRequired ? std::max(1u, eyeStatus.computeRegions.count) : 0u,
+								static_cast<unsigned long long>(eyeStatus.multiRoiPixels));
+							const auto& splitDiagnostics = eyeStatus.multiRoiDiagnostics;
+							if (splitDiagnostics.candidateAvailable && splitDiagnostics.cost.valid) {
+								ImGui::TextDisabled("  Savings gate %s | single %llu -> split %llu px | saved %.1f%% | overlap %s",
+									splitDiagnostics.savingsGateEnabled ? "on" : "off",
+									static_cast<unsigned long long>(splitDiagnostics.cost.singlePixels),
+									static_cast<unsigned long long>(splitDiagnostics.cost.splitPixels),
+									100.0 * static_cast<double>(splitDiagnostics.cost.savedPixels) / static_cast<double>(splitDiagnostics.cost.singlePixels),
+									splitDiagnostics.candidateOverlaps ? "yes" : "no");
+							}
+							ImGui::TextDisabled(
+								"  Mask ROI: %s | current %s | %u occupied tiles | readback %.3f ms",
+								eyeStatus.maskRoiStatus.c_str(),
+								eyeStatus.maskRoiCurrentFrame ? "yes" : "no",
+								eyeStatus.maskRoiOccupiedTiles,
+								eyeStatus.maskRoiReadbackWaitMs);
+							if (!eyeStatus.maskRoiLastFailure.empty()) {
+								ImGui::TextDisabled(
+									"  Last readback failure: %s | HRESULT 0x%08X | frame %u | %.3f ms",
+									eyeStatus.maskRoiLastFailure.c_str(),
+									static_cast<unsigned int>(eyeStatus.maskRoiLastFailureResult),
+									eyeStatus.maskRoiLastFailureFrame, eyeStatus.maskRoiLastFailureWaitMs);
+							}
+							for (uint32_t region = 0; region < eyeStatus.computeRegions.count; ++region) {
+								const auto& rect = eyeStatus.computeRegions.regions[region];
+								ImGui::TextDisabled(
+									"    region %u: (%u,%u) %ux%u",
+									region + 1u, rect.baseX, rect.baseY, rect.width, rect.height);
+							}
+						}
+						if (eyeStatus.depthCoordinatesValid) {
+							ImGui::TextDisabled(
+								"  depth map: frozen base (%u,%u), crop %ux%u; current local 0,0 %ux%u; jitter %.3f,%.3f",
+								eyeStatus.authoredEyeBaseX + eyeStatus.inputCropLeft,
+								eyeStatus.inputCropTop,
+								eyeStatus.inputCropWidth,
+								eyeStatus.inputCropHeight,
+								eyeStatus.currentDepthWidth,
+								eyeStatus.currentDepthHeight,
+								eyeStatus.capturedJitterX,
+								eyeStatus.capturedJitterY);
+						}
+					}
+					ImGui::TextDisabled(
+						"Feature 18 evaluates inside each active region; the exact mask controls compositing.");
+
+					const auto debugView =
+						NeuralRendering::ClampCharacterDebugView(
+							settings.neuralCharacterDebugView);
+					if (debugView != NeuralRendering::CharacterDebugView::Off) {
+						ImGui::SeparatorText("Last Character Debug Preview");
+						ImGui::TextDisabled(
+							"Hard menu/loading contexts suppress Neural Rendering; safe late-menu continuity may update these images.");
+						for (uint32_t eye = 0; eye < 2; ++eye) {
+							ID3D11ShaderResourceView* preview = nullptr;
+							Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>
+								previewOwner;
+							if (debugView == NeuralRendering::CharacterDebugView::Dlss5Output) {
+								const bool finalLdr = GetNeuralRenderingInsertionPoint() ==
+								                      NeuralRendering::InsertionPoint::FinalLdrPreUi;
+								const bool stagedIsolatedCenter =
+									!finalLdr &&
+									UsesCharacterVisualIsolation(settings);
+								const auto& output = finalLdr ?
+								                         submitNeuralFloatColorOut[eye] :
+								                         (stagedIsolatedCenter ?
+																 foveatedCenterNeuralOut[eye] :
+																 foveatedCenterColorOut[eye]);
+								preview = output && output->srv ? output->srv.get() : nullptr;
+							} else {
+								previewOwner =
+									NeuralRendering::CharacterRendering::Instance()
+										.GetDebugMaskSrv(eye);
+								preview = previewOwner.Get();
+							}
+							if (!preview) {
+								ImGui::TextDisabled(
+									"%s preview unavailable until the route completes.",
+									eye == 0 ? "Left" : "Right");
+								continue;
+							}
+
+							winrt::com_ptr<ID3D11Resource> previewResource;
+							winrt::com_ptr<ID3D11Texture2D> previewTexture;
+							preview->GetResource(previewResource.put());
+							if (!previewResource ||
+								FAILED(previewResource->QueryInterface(
+									__uuidof(ID3D11Texture2D), previewTexture.put_void()))) {
+								continue;
+							}
+							D3D11_TEXTURE2D_DESC previewDesc{};
+							previewTexture->GetDesc(&previewDesc);
+							const float width = std::min(
+								320.0f, static_cast<float>(previewDesc.Width));
+							const float height = previewDesc.Width ?
+							                         width * static_cast<float>(previewDesc.Height) /
+							                             static_cast<float>(previewDesc.Width) :
+							                         0.0f;
+							const auto& eyeStatus = characterStatus.eyes[eye];
+							const auto frameLabel = eyeStatus.frame ==
+							                                std::numeric_limits<std::uint32_t>::max() ?
+							                            std::string("n/a") :
+							                            std::to_string(eyeStatus.frame);
+							ImGui::TextDisabled(
+								"%s eye | frame %s | slot %u (%s) | %ux%u",
+								eye == 0 ? "Left" : "Right",
+								frameLabel.c_str(),
+								eyeStatus.featureSlot,
+								eyeStatus.featureSlot < 2 ? "main" : "submit",
+								eyeStatus.evaluationWidth,
+								eyeStatus.evaluationHeight);
+							const ImVec2 origin = ImGui::GetCursorScreenPos();
+							ImGui::Image(preview, { width, height });
+							if (debugView ==
+									NeuralRendering::CharacterDebugView::RoiRectangles &&
+								eye < characterStatus.eyes.size()) {
+								if (eyeStatus.evaluationWidth && eyeStatus.evaluationHeight) {
+									const float scaleX = width /
+									                     static_cast<float>(eyeStatus.evaluationWidth);
+									const float scaleY = height /
+									                     static_cast<float>(eyeStatus.evaluationHeight);
+									for (const auto& rect : eyeStatus.regions) {
+										ImGui::GetWindowDrawList()->AddRect(
+											{ origin.x + rect.minX * scaleX,
+												origin.y + rect.minY * scaleY },
+											{ origin.x + rect.maxX * scaleX,
+												origin.y + rect.maxY * scaleY },
+											IM_COL32(255, 180, 32, 255), 0.0f, 0, 2.0f);
+									}
 								}
 							}
 						}
 					}
 				}
-				if (ImGui::Button("Reset Character Mask Runtime")) {
+				ImGui::TreePop();
+			}
+			if (neuralStatus.quarantined)
+				ImGui::TextWrapped("Neural Rendering could not recover safely. Restart the game to try again.");
+			if ((showDiagnostics || neuralStatus.failureLatched) && !neuralStatus.quarantined &&
+				ImGui::Button("Reset Neural Rendering Runtime")) {
+				if (NeuralRendering::Renderer::Instance().Reset()) {
 					NeuralRendering::CharacterRendering::Instance().Reset();
 					RequestHistoryReset();
+				} else {
+					ImGui::TextWrapped("Neural Rendering is still busy or unavailable. Its resources have been retained.");
 				}
-			}
-			if (neuralStatus.failureLatched && !neuralStatus.quarantined &&
-				ImGui::Button("Reset Neural Rendering Runtime")) {
-				(void)NeuralRendering::Renderer::Instance().Reset();
-				NeuralRendering::CharacterRendering::Instance().Reset();
-				RequestHistoryReset();
 			}
 		}
 
@@ -18582,8 +18569,10 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 	}
 
 	SanitizeFoveatedSettings(settings);
-	(void)HandleNeuralRenderingSettingsTransition(
-		previousSettings, "upscaling Neural Rendering UI");
+	if (!HandleNeuralRenderingSettingsTransition(previousSettings, "Neural Rendering UI")) {
+		settings = previousSettings;
+		ImGui::TextWrapped("Neural Rendering could not apply these settings. The previous settings have been restored.");
+	}
 }
 
 void Upscaling::DrawFoveatedSetupInstructions()

@@ -1,5 +1,6 @@
 #include "NeuralRenderingFeature.h"
 #include "BuildProvenance.h"
+#include "State.h"
 #include "Upscaling.h"
 #include "Upscaling/NeuralRendering/CaptureEvidence.h"
 #include "Upscaling/NeuralRendering/ConfigurationSerialization.h"
@@ -655,21 +656,37 @@ void NeuralRenderingFeature::DrawSettings()
 	globals::features::upscaling.DrawNeuralRenderingSettings(
 		globals::features::upscaling.GetRuntimeUpscaleMethod());
 	ImGui::SeparatorText("Colour processing");
+	const bool showDiagnostics = globals::state && globals::state->IsDeveloperMode();
 	auto config = Registry::Instance().Snapshot();
 	bool changed = false;
-	ImGui::TextWrapped("Shared by standard NR, character ROI and multi-ROI. No configuration INI editing is needed. Use Save Settings for ordinary controls; assessment overrides are transient.");
+	ImGui::TextWrapped("Shared by all Neural Rendering modes and character selection.");
 	changed |= ImGui::Checkbox("Enable colour processing", &config.settings.enabled);
+	static constexpr const char* colourModes[]{ "Original", "Managed", "Preserve source" };
 	int mode = static_cast<int>(config.settings.mode);
-	changed |= ImGui::Combo("Colour processing", &mode, "Legacy Raw\0Managed (experimental)\0Preserve Source (experimental)\0");
+	changed |= ImGui::Combo("Colour mode", &mode, colourModes, IM_ARRAYSIZE(colourModes));
 	config.settings.mode = static_cast<Mode>(mode);
-	changed |= ImGui::Checkbox("Apply neural edit (A/B; inference stays running)", &config.experiments.applyModelEdit);
-	ImGui::TextWrapped("Uncheck Apply neural edit to show the untouched source without changing model input/history or skipping inference. This is not an NR-off performance measurement.");
+	ImGui::TextWrapped("Original uses the model output directly. Managed applies colour reconstruction. Preserve source keeps the scene's colour and adds neural detail.");
 	if (config.settings.mode == Mode::PreserveSource) {
 		changed |= ImGui::SliderFloat("Detail contribution", &config.settings.detailStrength, 0, 2);
 		changed |= ImGui::SliderFloat("Neural appearance mix", &config.settings.appearanceMix, 0, 1);
 		changed |= ImGui::SliderFloat("Maximum detail gain (stops)", &config.settings.maximumDetailStops, 0, 2);
 	}
-	if (ImGui::TreeNode("Exposure capture and colour assessment")) {
+	const bool outputOverrideActive = config.experiments.transportBypass || !config.experiments.applyModelEdit ||
+	                                  (config.EffectiveMode() != Mode::LegacyRaw &&
+										  std::any_of(config.experiments.profiles.begin(), config.experiments.profiles.end(),
+											  [](const Profile& profile) { return profile.transform != Transform::Identity; }));
+	if (!showDiagnostics && outputOverrideActive) {
+		ImGui::TextWrapped("Colour experiments are affecting the image. Set Log Level to Debug to inspect them.");
+		if (ImGui::Button("Restore normal colour processing")) {
+			config.experiments = {};
+			changed = true;
+		}
+	}
+	if (showDiagnostics && ImGui::TreeNode("Colour experiments and diagnostics")) {
+		ImGui::TextWrapped("Save Settings stores the colour mode and sliders. Assessment overrides are session only.");
+		changed |= ImGui::Checkbox("Apply neural edit (A/B; inference stays running)", &config.experiments.applyModelEdit);
+		ImGui::TextWrapped("Uncheck Apply neural edit to show the original image while inference keeps running. Use the main NR switch to measure NR-off performance.");
+		ImGui::SeparatorText("Exposure and assessment");
 		changed |= ImGui::Checkbox("Capture engine HDR exposure", &config.experiments.captureEngineExposure);
 		changed |= ImGui::Checkbox("Capture HMD frame provenance", &config.experiments.captureFrameEvidence);
 		ImGui::TextWrapped("Captures the actual HDR-pass AvgTex.y/x and frame-gamma evidence. A matching source frame is required; capture arriving after early NR is unavailable, not silently taken from the previous frame. Capturing exposure does not identify NR's expected colour space.");
@@ -711,20 +728,20 @@ void NeuralRenderingFeature::DrawSettings()
 			config.experiments = {};
 			changed = true;
 		}
+		if (ImGui::TreeNode("Colour diagnostics")) {
+			const auto text = StatusJson().dump(2);
+			ImGui::TextUnformatted(text.c_str());
+			ImGui::TreePop();
+		}
+		static std::string assets;
+		if (ImGui::Button("Check installed colour shaders"))
+			assets = AssetsJson().dump(2);
+		if (!assets.empty())
+			ImGui::TextUnformatted(assets.c_str());
 		ImGui::TreePop();
 	}
 	if (changed && !Registry::Instance().Configure(config.settings, config.experiments, config.revision))
 		ImGui::TextWrapped("Settings changed concurrently; retry after the next UI refresh.");
-	if (ImGui::TreeNode("Colour diagnostics")) {
-		const auto text = StatusJson().dump(2);
-		ImGui::TextUnformatted(text.c_str());
-		ImGui::TreePop();
-	}
-	static std::string assets;
-	if (ImGui::Button("Check installed colour shaders"))
-		assets = AssetsJson().dump(2);
-	if (!assets.empty())
-		ImGui::TextUnformatted(assets.c_str());
 }
 void NeuralRenderingFeature::DataLoaded()
 {

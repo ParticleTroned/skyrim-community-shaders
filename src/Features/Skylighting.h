@@ -66,6 +66,8 @@ public:
 		float MinDiffuseVisibility = 0.1f;
 		float MinSpecularVisibility = 0.1f;
 		uint ProbeGridQuality = 2;
+		bool EnableIncrementalProbeUpdates = false;
+		uint StableSliceCount = 16;
 	} settings;
 
 	struct SkylightingCB
@@ -87,6 +89,9 @@ public:
 		uint3 _pad2;
 		uint ArrayDims[3];
 		uint _pad3;
+		uint SliceStart;
+		uint SliceCount;
+		uint _pad4[2];
 	};
 	static_assert(sizeof(SkylightingCB) % 16 == 0);
 
@@ -175,6 +180,12 @@ private:
 	bool probeDataReady = false;
 	float3 previousProbeCell = {};
 	float3 pendingProbeCell = {};
+	uint sliceCursor = 0;
+	uint sliceCaptureMask = 0;
+	uint forcedFullUpdateFrames = 4;
+	uint dispatchSliceStart = 0;
+	uint dispatchSliceCount = 0;
+	uint lastProbeUpdateCapture = static_cast<uint>(-1);
 	static std::array<uint, 3> GetProbeArrayDims(uint quality);
 	void CreateProbeResources(const std::array<uint, 3>& dimensions);
 	void ApplyProbeGrid();

@@ -1,9 +1,12 @@
 #include "Profiler.h"
 #include "Utils/ProfilerTiming.h"
+#include "Utils/ResourceName.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
+#include <span>
 #include <unordered_map>
 
 namespace
@@ -71,8 +74,11 @@ float Profiler::RollingHistory::GetPercentile(float p) const
 
 void Profiler::ResetFrameState(FrameQueries& frame)
 {
+	CancelFrameCaptures(frame, "capture_reset");
 	frame.activeCount = 0;
+	frame.detailCount = 0;
 	frame.activeTimerStack.clear();
+	frame.activeDetailStack.clear();
 	frame.inFlight = false;
 	frame.cpuTimers.clear();
 	frame.captureSessionId = 0;
@@ -144,10 +150,15 @@ void Profiler::Initialize(ID3D11Device* device, ID3D11DeviceContext* a_context)
 void Profiler::Release()
 {
 	for (auto& frame : frames) {
+		CancelFrameCaptures(frame, "device_released");
 		frame.disjoint = nullptr;
 		frame.timers.clear();
+		frame.detailTimers.clear();
+		frame.activeTimerStack.clear();
+		frame.activeDetailStack.clear();
 		frame.cpuTimers.clear();
 		frame.activeCount = 0;
+		frame.detailCount = 0;
 		frame.inFlight = false;
 	}
 	results.clear();
@@ -181,6 +192,8 @@ void Profiler::SetUserEnabled(bool a_enabled)
 {
 	userEnabled.store(a_enabled, std::memory_order_release);
 	if (!a_enabled) {
+		for (auto& frame : frames)
+			CancelFrameCaptures(frame, "profiler_disabled");
 		captureRequested.store(false, std::memory_order_release);
 		captureActive.store(false, std::memory_order_release);
 		if (boundedCapture.state == CaptureSessionState::Running)
@@ -283,6 +296,15 @@ void Profiler::ClearTimersForFeature(const std::string& featureName)
 		});
 		for (auto& timer : frame.timers) {
 			if (timer.name.starts_with(prefix)) {
+				InvalidateCapture(timer.capture, "feature_timers_cleared");
+				timer.capture.reset();
+				timer.name.clear();
+			}
+		}
+		for (auto& timer : frame.detailTimers) {
+			if (timer.name.starts_with(prefix)) {
+				InvalidateCapture(timer.capture, "feature_timers_cleared");
+				timer.capture.reset();
 				timer.name.clear();
 			}
 		}
@@ -300,6 +322,8 @@ void Profiler::BeginFrame()
 		return;
 
 	auto& frame = frames[writeFrame];
+	if (!frame.disjoint)
+		return;
 	ResetFrameState(frame);
 	frame.inFlight = true;
 	if (boundedCapture.state == CaptureSessionState::Running &&
@@ -312,28 +336,43 @@ void Profiler::BeginFrame()
 	context->Begin(frame.disjoint.get());
 }
 
-bool Profiler::BeginPass(std::string_view name, bool fireCallbacks)
+bool Profiler::BeginPass(std::string_view name, bool fireCallbacks, const PassTimingHandle& capture)
 {
-	if (!initialized || !context)
+	auto claimedCapture = ClaimCapture(capture, false);
+	if (!initialized || !context || !IsUserEnabled())
 		return false;
 	if (!captureActive.load(std::memory_order_acquire))
 		return false;
 
 	if (!frameActive)
 		BeginFrame();
-	if (!frameActive)
+	if (!frameActive) {
+		InvalidateCapture(claimedCapture, frames[writeFrame].disjoint ? "query_ring_pending" : "query_creation_failed");
 		return false;
+	}
 
 	auto& frame = frames[writeFrame];
 	if (frame.activeCount >= kMaxTimers) {
 		slotRefusals++;
+		InvalidateCapture(claimedCapture, "query_capacity_exhausted");
+		return false;
+	}
+	if (!frame.timers[frame.activeCount].begin || !frame.timers[frame.activeCount].end) {
+		InvalidateCapture(claimedCapture, "query_creation_failed");
 		return false;
 	}
 
-	const uint32_t timerIndex = frame.activeCount++;
-	acquiredSlotsThisFrame++;
+	const uint32_t timerIndex = frame.activeCount;
 	auto& timer = frame.timers[timerIndex];
-	timer.name.assign(name);
+	try {
+		timer.name.assign(name);
+	} catch (const std::bad_alloc&) {
+		InvalidateCapture(claimedCapture, "timing_allocation_failed");
+		return false;
+	}
+	++frame.activeCount;
+	++acquiredSlotsThisFrame;
+	timer.capture = std::move(claimedCapture);
 	timer.cpuMs = 0.0f;
 	timer.cpuSelfMs = 0.0f;
 	timer.nestedCpuMs = 0.0;
@@ -378,9 +417,190 @@ void Profiler::EndPass(bool fireCallbacks)
 
 	context->End(timer.end.get());
 	timer.ended = true;
+	CompleteCapturedCpu(timer);
 
 	if (fireCallbacks && endPerfEvent)
 		endPerfEvent({});
+}
+
+Profiler::PassTimingHandle Profiler::ClaimCapture(const PassTimingHandle& capture, bool detailOnly) noexcept
+{
+	if (!capture)
+		return {};
+	bool accepted = false;
+	capture->Update([&](auto& result, bool& claimed) {
+		if (claimed || !result.captureId)
+			return;
+		claimed = accepted = true;
+		result.detailOnly = detailOnly;
+		const char* unavailable = !initialized || !context                       ? "profiler_uninitialized" :
+		                          !IsUserEnabled()                               ? "profiler_disabled" :
+		                          !captureActive.load(std::memory_order_acquire) ? "capture_inactive" :
+		                                                                           nullptr;
+		result.cpuReason = result.gpuReason = unavailable ? unavailable : "scope_pending";
+		result.cpuState = result.gpuState = unavailable ? Util::PassTimingState::Unavailable : Util::PassTimingState::Pending;
+	});
+	return accepted ? capture : PassTimingHandle{};
+}
+
+void Profiler::MarkCaptureUnavailable(const PassTimingHandle& capture, const char* reason, bool detailOnly) noexcept
+{
+	if (!capture)
+		return;
+	capture->Update([&](auto& result, bool& claimed) {
+		if (claimed || !result.captureId)
+			return;
+		claimed = true;
+		result.detailOnly = detailOnly;
+		result.cpuReason = result.gpuReason = reason;
+	});
+}
+
+void Profiler::InvalidateCapture(const PassTimingHandle& capture, const char* reason) noexcept
+{
+	if (!capture)
+		return;
+	capture->Update([&](auto& result, bool&) {
+		if (result.cpuState == Util::PassTimingState::Pending) {
+			result.cpuState = Util::PassTimingState::Unavailable;
+			result.cpuReason = reason;
+		}
+		if (result.gpuState == Util::PassTimingState::Pending) {
+			result.gpuState = Util::PassTimingState::Unavailable;
+			result.gpuReason = reason;
+		}
+	});
+}
+
+void Profiler::CancelFrameCaptures(FrameQueries& frame, const char* reason) noexcept
+{
+	for (auto timers : { std::span(frame.timers).first(frame.activeCount), std::span(frame.detailTimers).first(frame.detailCount) }) {
+		for (auto& timer : timers) {
+			InvalidateCapture(timer.capture, reason);
+			timer.capture.reset();
+		}
+	}
+}
+
+void Profiler::CompleteCapturedCpu(FrameQueries::TimerPair& timer) noexcept
+{
+	if (!timer.capture)
+		return;
+	timer.capture->Update([&](auto& result, bool&) {
+		if (result.cpuState != Util::PassTimingState::Pending)
+			return;
+		const bool valid = !timer.name.empty() && IsValidProfilerSample(timer.cpuMs);
+		result.cpuState = valid ? Util::PassTimingState::Ready : Util::PassTimingState::Failed;
+		result.cpuReason = valid ? "sample_ready" : "invalid_duration";
+		result.cpuInclusiveMs = valid ? timer.cpuMs : 0.0f;
+		result.cpuSelfMs = valid ? timer.cpuSelfMs : 0.0f;
+		result.gpuReason = "query_pending";
+	});
+}
+
+void Profiler::CompleteCapturedGpu(FrameQueries::TimerPair& timer, double inclusiveMs, double selfMs, const char* failure) noexcept
+{
+	if (!timer.capture)
+		return;
+	timer.capture->Update([&](auto& result, bool&) {
+		if (result.gpuState != Util::PassTimingState::Pending)
+			return;
+		const bool valid = Util::ProfilerTiming::IsValidSample(inclusiveMs);
+		result.gpuState = valid ? Util::PassTimingState::Ready : Util::PassTimingState::Failed;
+		result.gpuReason = valid ? "sample_ready" : failure;
+		result.gpuInclusiveMs = valid ? static_cast<float>(inclusiveMs) : 0.0f;
+		result.gpuSelfMs = valid ? static_cast<float>(selfMs) : 0.0f;
+	});
+}
+
+void Profiler::BindCapturedFrame(FrameQueries::TimerPair& timer, uint32_t frame) noexcept
+{
+	if (!timer.capture)
+		return;
+	timer.capture->Update([&](auto& result, bool&) {
+		result.capturedFrame = frame;
+		if (!timer.ended) {
+			result.cpuState = result.gpuState = Util::PassTimingState::Failed;
+			result.cpuReason = result.gpuReason = "scope_not_ended";
+		}
+	});
+}
+
+bool Profiler::BeginDetailPass(std::string_view name, const PassTimingHandle& capture) noexcept
+try {
+	auto claimedCapture = ClaimCapture(capture, true);
+	if (!claimedCapture || !initialized || !context || !IsEnabled())
+		return false;
+	if (!frameActive)
+		BeginFrame();
+	if (!frameActive) {
+		InvalidateCapture(claimedCapture, frames[writeFrame].disjoint ? "query_ring_pending" : "query_creation_failed");
+		return false;
+	}
+	auto& frame = frames[writeFrame];
+	if (frame.detailCount >= kMaxDetailTimers) {
+		InvalidateCapture(claimedCapture, "query_capacity_exhausted");
+		return false;
+	}
+	if (frame.detailTimers.empty()) {
+		frame.detailTimers.resize(kMaxDetailTimers);
+	}
+	frame.activeDetailStack.reserve(kMaxDetailTimers);
+	auto& timer = frame.detailTimers[frame.detailCount];
+	if (!timer.begin || !timer.end) {
+		winrt::com_ptr<ID3D11Device> device;
+		context->GetDevice(device.put());
+		D3D11_QUERY_DESC desc{ D3D11_QUERY_TIMESTAMP, 0 };
+		winrt::com_ptr<ID3D11Query> beginQuery, endQuery;
+		if (!device || FAILED(device->CreateQuery(&desc, beginQuery.put())) ||
+			FAILED(device->CreateQuery(&desc, endQuery.put()))) {
+			InvalidateCapture(claimedCapture, "query_creation_failed");
+			return false;
+		}
+		Util::SetResourceName(beginQuery.get(), "Profiler::DetailBegin[%u][%u]", writeFrame, frame.detailCount);
+		Util::SetResourceName(endQuery.get(), "Profiler::DetailEnd[%u][%u]", writeFrame, frame.detailCount);
+		timer.begin = std::move(beginQuery);
+		timer.end = std::move(endQuery);
+	}
+	try {
+		timer.name.assign(name);
+	} catch (const std::bad_alloc&) {
+		InvalidateCapture(claimedCapture, "timing_allocation_failed");
+		return false;
+	}
+	timer.capture = std::move(claimedCapture);
+	timer.cpuMs = timer.cpuSelfMs = 0.0f;
+	timer.nestedCpuMs = 0.0;
+	timer.parentSlot = frame.activeDetailStack.empty() ? -1 : static_cast<int32_t>(frame.activeDetailStack.back());
+	timer.ended = false;
+	context->End(timer.begin.get());
+	QueryPerformanceCounter(&timer.cpuBegin);
+	frame.activeDetailStack.push_back(frame.detailCount++);
+	return true;
+} catch (...) {
+	InvalidateCapture(capture, "timing_allocation_failed");
+	return false;
+}
+
+void Profiler::EndDetailPass() noexcept
+{
+	if (!initialized || !context || !frameActive)
+		return;
+	auto& frame = frames[writeFrame];
+	if (frame.activeDetailStack.empty())
+		return;
+	auto& timer = frame.detailTimers[frame.activeDetailStack.back()];
+	frame.activeDetailStack.pop_back();
+	LARGE_INTEGER cpuEnd;
+	QueryPerformanceCounter(&cpuEnd);
+	timer.cpuMs = static_cast<float>(static_cast<double>(cpuEnd.QuadPart - timer.cpuBegin.QuadPart) * cpuTicksToMs);
+	const auto completion = Util::ProfilerTiming::CompleteCpuScope(timer.name.empty() ? -1.0 : timer.cpuMs, timer.nestedCpuMs);
+	timer.cpuSelfMs = static_cast<float>(completion.selfMs);
+	if (!frame.activeDetailStack.empty())
+		frame.detailTimers[frame.activeDetailStack.back()].nestedCpuMs += completion.coveredMs;
+	context->End(timer.end.get());
+	timer.ended = true;
+	CompleteCapturedCpu(timer);
 }
 
 bool Profiler::BeginCpuPass(std::string_view name)
@@ -490,6 +710,10 @@ void Profiler::EndFrame(uint32_t a_frameCount)
 
 	StoreCompletedCpuTimers(frame);
 	frame.capturedFrame = a_frameCount;
+	for (auto timers : { std::span(frame.timers).first(frame.activeCount), std::span(frame.detailTimers).first(frame.detailCount) }) {
+		for (auto& timer : timers)
+			BindCapturedFrame(timer, a_frameCount);
+	}
 	// CPU-only instrumentation does not call BeginFrame(), so bind that query
 	// set to the bounded session here. GPU query sets are bound at BeginFrame()
 	// and can never be retroactively claimed by a session started mid-frame.
@@ -510,9 +734,6 @@ void Profiler::EndFrame(uint32_t a_frameCount)
 
 bool Profiler::CollectResults()
 {
-	if (framesSinceInit < kFrameLatency)
-		return true;
-
 	readFrame = writeFrame;
 	auto& frame = frames[readFrame];
 	if (!HasPendingFrameData(frame))
@@ -527,34 +748,65 @@ bool Profiler::CollectResults()
 
 	if (frame.inFlight) {
 		std::vector<Util::ProfilerTiming::Interval> intervals(frame.activeCount);
+		std::array<Util::ProfilerTiming::Interval, kMaxDetailTimers> detailStorage{};
+		const auto detailIntervals = std::span(detailStorage).first(frame.detailCount);
+		std::array<const char*, kMaxTimers> failureStorage{};
+		std::array<const char*, kMaxDetailTimers> detailFailureStorage{};
+		const auto failures = std::span(failureStorage).first(frame.activeCount);
+		const auto detailFailures = std::span(detailFailureStorage).first(frame.detailCount);
+		std::fill(failures.begin(), failures.end(), "invalid_duration");
+		std::fill(detailFailures.begin(), detailFailures.end(), "invalid_duration");
 		for (uint32_t i = 0; i < frame.activeCount; ++i)
 			intervals[i].parent = frame.timers[i].parentSlot;
+		for (uint32_t i = 0; i < frame.detailCount; ++i)
+			detailIntervals[i].parent = frame.detailTimers[i].parentSlot;
 		HRESULT hr = context->GetData(frame.disjoint.get(), &disjointData, sizeof(disjointData), D3D11_ASYNC_GETDATA_DONOTFLUSH);
 		if (hr == S_FALSE)
 			return false;
 		if (hr == S_OK && !disjointData.Disjoint && disjointData.Frequency > 0) {
 			const double ticksToMs = 1000.0 / static_cast<double>(disjointData.Frequency);
-			for (uint32_t i = 0; i < frame.activeCount; i++) {
-				auto& timer = frame.timers[i];
-				if (timer.name.empty() || !timer.ended)
-					continue;
-
-				UINT64 tsBegin = 0;
-				UINT64 tsEnd = 0;
-				const HRESULT beginHr = context->GetData(timer.begin.get(), &tsBegin, sizeof(tsBegin), D3D11_ASYNC_GETDATA_DONOTFLUSH);
-				const HRESULT endHr = context->GetData(timer.end.get(), &tsEnd, sizeof(tsEnd), D3D11_ASYNC_GETDATA_DONOTFLUSH);
-				if (beginHr == S_FALSE || endHr == S_FALSE)
-					return false;
-
-				if (beginHr == S_OK && endHr == S_OK && tsEnd >= tsBegin)
-					intervals[i].inclusiveMs = static_cast<double>(tsEnd - tsBegin) * ticksToMs;
-			}
+			const auto readTimers = [&](const auto& timers, auto& timings, auto& reasons) {
+				for (size_t i = 0; i < timings.size(); ++i) {
+					const auto& timer = timers[i];
+					if (timer.name.empty() || !timer.ended)
+						continue;
+					UINT64 tsBegin = 0;
+					UINT64 tsEnd = 0;
+					const HRESULT beginHr = context->GetData(timer.begin.get(), &tsBegin, sizeof(tsBegin), D3D11_ASYNC_GETDATA_DONOTFLUSH);
+					const HRESULT endHr = context->GetData(timer.end.get(), &tsEnd, sizeof(tsEnd), D3D11_ASYNC_GETDATA_DONOTFLUSH);
+					if (beginHr == S_FALSE || endHr == S_FALSE)
+						return false;
+					if (beginHr != S_OK || endHr != S_OK)
+						reasons[i] = "query_failed";
+					else if (tsEnd < tsBegin)
+						reasons[i] = "invalid_timestamp_order";
+					else
+						timings[i].inclusiveMs = static_cast<double>(tsEnd - tsBegin) * ticksToMs;
+				}
+				return true;
+			};
+			if (!readTimers(frame.timers, intervals, failures) || !readTimers(frame.detailTimers, detailIntervals, detailFailures))
+				return false;
 			gpuFrameResolved = true;
+		} else {
+			const char* reason = hr != S_OK ? "query_failed" : disjointData.Disjoint ? "gpu_clock_disjoint" :
+			                                                                           "invalid_gpu_frequency";
+			std::fill(failures.begin(), failures.end(), reason);
+			std::fill(detailFailures.begin(), detailFailures.end(), reason);
 		}
 
 		const auto selfTimes = Util::ProfilerTiming::ResolveSelfTimes(intervals);
+		try {
+			const auto detailSelfTimes = Util::ProfilerTiming::ResolveSelfTimes(detailIntervals);
+			for (uint32_t i = 0; i < frame.detailCount; ++i)
+				CompleteCapturedGpu(frame.detailTimers[i], detailIntervals[i].inclusiveMs, detailSelfTimes[i], detailFailures[i]);
+		} catch (const std::bad_alloc&) {
+			for (uint32_t i = 0; i < frame.detailCount; ++i)
+				InvalidateCapture(frame.detailTimers[i].capture, "timing_allocation_failed");
+		}
 		for (uint32_t i = 0; i < frame.activeCount; ++i) {
-			const auto& timer = frame.timers[i];
+			auto& timer = frame.timers[i];
+			CompleteCapturedGpu(timer, intervals[i].inclusiveMs, selfTimes[i], failures[i]);
 			if (timer.name.empty() || !timer.ended)
 				continue;
 			const bool gpuValid = Util::ProfilerTiming::IsValidSample(intervals[i].inclusiveMs);
@@ -633,8 +885,11 @@ bool Profiler::CollectResults()
 		RetireStaleTimers();
 
 	frame.cpuTimers.clear();
+	CancelFrameCaptures(frame, "capture_reset");
 	frame.activeCount = 0;
+	frame.detailCount = 0;
 	frame.activeTimerStack.clear();
+	frame.activeDetailStack.clear();
 
 	totalTimeMs = activeTotalMs;
 	cpuTotalTimeMs = activeCpuTotalMs;

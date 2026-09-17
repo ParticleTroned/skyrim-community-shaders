@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Utils/PassTimingCapture.h"
+
 #include <Tracy/Tracy.hpp>
 #include <Tracy/TracyD3D11.hpp>
 
@@ -13,10 +15,10 @@
 struct ScopedGpuPass
 {
 	/** @brief Opens a pass with a dynamic Tracy source location. */
-	explicit ScopedGpuPass(std::string_view a_name);
+	explicit ScopedGpuPass(std::string_view a_name, const Util::PassTimingHandle& a_capture = {}, bool a_detailOnly = false);
 #ifdef TRACY_ENABLE
 	/** @brief Opens a pass with an allocation-free static Tracy source location. */
-	ScopedGpuPass(const tracy::SourceLocationData* a_sourceLocation, std::string_view a_name);
+	ScopedGpuPass(const tracy::SourceLocationData* a_sourceLocation, std::string_view a_name, const Util::PassTimingHandle& a_capture = {}, bool a_detailOnly = false);
 #endif
 	~ScopedGpuPass();
 
@@ -32,6 +34,7 @@ private:
 #endif
 	bool annotationOpen = false;
 	bool profilerActive = false;
+	bool detailOnly = false;
 };
 
 #define CS_GPU_PASS_CONCAT_IMPL(a, b) a##b
@@ -58,6 +61,20 @@ private:
 #	define CS_GPU_PASS_SELECT(condition, firstName, secondName) \
 		ScopedGpuPass CS_GPU_PASS_CONCAT(cs_gpu_pass_, __LINE__) { (condition) ? std::string_view(firstName) : std::string_view(secondName) }
 #endif
+
+#ifdef TRACY_ENABLE
+#	define CS_GPU_CAPTURE_IMPL(name, handle, detail)                                                                                                        \
+		static constexpr tracy::SourceLocationData CS_GPU_PASS_CONCAT(cs_gpu_pass_source_, __LINE__){ name, __FUNCTION__, __FILE__, (uint32_t)__LINE__, 0 }; \
+		ScopedGpuPass CS_GPU_PASS_CONCAT(cs_gpu_pass_, __LINE__) { &CS_GPU_PASS_CONCAT(cs_gpu_pass_source_, __LINE__), name, handle, detail }
+#else
+#	define CS_GPU_CAPTURE_IMPL(name, handle, detail) \
+		ScopedGpuPass CS_GPU_PASS_CONCAT(cs_gpu_pass_, __LINE__) { name, handle, detail }
+#endif
+
+/** @brief Retains one existing pass's timing while preserving its legacy aggregate accounting. */
+#define CS_GPU_PASS_CAPTURE(name, handle) CS_GPU_CAPTURE_IMPL(name, handle, false)
+/** @brief Retains optional detail timing independently from legacy aggregate accounting. */
+#define CS_GPU_DETAIL_PASS(name, handle) CS_GPU_CAPTURE_IMPL(name, handle, true)
 
 /** @brief Instruments a pass whose name is generated at runtime. */
 #define CS_GPU_PASS_DYNAMIC(name) \

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Utils/PassTimingCapture.h"
+
 #include <atomic>
 #include <cstdint>
 #include <d3d11.h>
@@ -14,12 +16,16 @@ class Profiler
 {
 public:
 	static constexpr uint32_t kMaxTimers = 128;
+	static constexpr uint32_t kMaxDetailTimers = 64;
 	static constexpr uint32_t kFrameLatency = 3;
 	static constexpr uint32_t kHistorySize = 300;
 	// Retain intermittent passes while removing entries absent across sustained capture.
 	static constexpr uint64_t kTimerRetireCycles = 60;
 
 	using PerfEventCallback = std::function<void(std::string_view)>;
+	using PassTimingHandle = Util::PassTimingHandle;
+	/** @brief Records a scope that cannot enter the profiler without replacing an earlier invocation. */
+	static void MarkCaptureUnavailable(const PassTimingHandle& capture, const char* reason, bool detailOnly) noexcept;
 
 	struct RollingHistory
 	{
@@ -138,8 +144,11 @@ public:
 	}
 
 	void BeginFrame();
-	bool BeginPass(std::string_view name, bool fireCallbacks = true);
+	bool BeginPass(std::string_view name, bool fireCallbacks = true, const PassTimingHandle& capture = {});
 	void EndPass(bool fireCallbacks = true);
+	/** @brief Captures a detail scope without changing legacy nesting, slots, or aggregate rows. */
+	bool BeginDetailPass(std::string_view name, const PassTimingHandle& capture) noexcept;
+	void EndDetailPass() noexcept;
 	bool BeginCpuPass(std::string_view name);
 	void EndCpuPass();
 	void EndFrame(uint32_t a_frameCount);
@@ -222,11 +231,15 @@ private:
 			bool ended = false;
 			bool outermostGpuInRoot = true;
 			bool outermostCpuInRoot = true;
+			PassTimingHandle capture;
 		};
 		std::vector<TimerPair> timers;
+		std::vector<TimerPair> detailTimers;
 		std::vector<CompletedCpuTimer> cpuTimers;
 		std::vector<uint32_t> activeTimerStack;
+		std::vector<uint32_t> activeDetailStack;
 		uint32_t activeCount = 0;
+		uint32_t detailCount = 0;
 		uint32_t capturedFrame = 0;
 		uint64_t captureSessionId = 0;
 		bool inFlight = false;
@@ -304,6 +317,12 @@ private:
 	std::vector<TimerResult> boundedCaptureResults;
 
 	bool CollectResults();
+	PassTimingHandle ClaimCapture(const PassTimingHandle& capture, bool detailOnly) noexcept;
+	static void InvalidateCapture(const PassTimingHandle& capture, const char* reason) noexcept;
+	static void CompleteCapturedCpu(FrameQueries::TimerPair& timer) noexcept;
+	static void CompleteCapturedGpu(FrameQueries::TimerPair& timer, double inclusiveMs, double selfMs, const char* failure) noexcept;
+	static void BindCapturedFrame(FrameQueries::TimerPair& timer, uint32_t frame) noexcept;
+	static void CancelFrameCaptures(FrameQueries& frame, const char* reason) noexcept;
 	KnownTimer& GetOrCreateTimer(const std::string& name);
 	void RetireStaleTimers();
 	void RebuildTimerIndex();

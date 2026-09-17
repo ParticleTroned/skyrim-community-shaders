@@ -611,6 +611,13 @@ namespace NeuralRendering
 		return a_arrangement == PipelineArrangement::DlssThenNeural;
 	}
 
+	/** Submit float resources belong to NR output; pre-DLSS NR publishes the later DLSS output. */
+	[[nodiscard]] constexpr bool UsesSubmitNeuralFloatBridge(
+		bool a_submitStage, bool a_neuralActive, PipelineArrangement a_arrangement) noexcept
+	{
+		return a_submitStage && a_neuralActive && !RunsBeforeDlss(a_arrangement);
+	}
+
 	[[nodiscard]] constexpr bool ReplacesDlss(
 		PipelineArrangement a_arrangement = kPipelineArrangement) noexcept
 	{

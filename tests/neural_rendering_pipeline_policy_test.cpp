@@ -55,6 +55,31 @@ int main()
 	static_assert(!NeuralRendering::UsesFeatureUpscaling(PipelineArrangement::NeuralThenDlss));
 	static_assert(!NeuralRendering::RunsDlssAfterNeuralFailure(PipelineArrangement::NeuralThenDlss));
 
+	static_assert(NeuralRendering::UsesSubmitNeuralFloatBridge(true, true, PipelineArrangement::DlssThenNeural));
+	static_assert(!NeuralRendering::UsesSubmitNeuralFloatBridge(false, true, PipelineArrangement::DlssThenNeural));
+	static_assert(!NeuralRendering::UsesSubmitNeuralFloatBridge(true, false, PipelineArrangement::DlssThenNeural));
+	static_assert(!NeuralRendering::UsesSubmitNeuralFloatBridge(true, true, PipelineArrangement::NeuralThenDlss));
+	static_assert(!NeuralRendering::UsesSubmitNeuralFloatBridge(false, true, PipelineArrangement::NeuralThenDlss));
+	static_assert(!NeuralRendering::UsesSubmitNeuralFloatBridge(true, false, PipelineArrangement::NeuralThenDlss));
+	// Switching to C must select the final DLSS result even when an A/B float
+	// bridge allocation remains alive; a missing old allocation is also harmless.
+	constexpr auto reducedSubmitIgnoresPreviousBridge = []() {
+		for (const bool previousBridgeReady : { false, true }) {
+			for (const auto previousMode : { RenderingMode::FullResolution, RenderingMode::Foveated }) {
+				const auto previousArrangement = NeuralRendering::ResolvePipelineArrangement(previousMode);
+				const int previousOutput = NeuralRendering::UsesSubmitNeuralFloatBridge(true, true, previousArrangement) && previousBridgeReady ? 41 : -1;
+				const int currentOutput = NeuralRendering::UsesSubmitNeuralFloatBridge(true, true,
+											  NeuralRendering::ResolvePipelineArrangement(RenderingMode::ReducedResolution)) ?
+				                              previousOutput :
+				                              42;
+				if (currentOutput != 42)
+					return false;
+			}
+		}
+		return true;
+	};
+	static_assert(reducedSubmitIgnoresPreviousBridge());
+
 	static_assert(!NeuralRendering::RunsBeforeDlss(PipelineArrangement::NeuralReplacesDlss));
 	static_assert(!NeuralRendering::RunsAfterDlss(PipelineArrangement::NeuralReplacesDlss));
 	static_assert(NeuralRendering::ReplacesDlss(PipelineArrangement::NeuralReplacesDlss));

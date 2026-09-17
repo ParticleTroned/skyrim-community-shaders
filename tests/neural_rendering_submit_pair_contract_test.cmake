@@ -533,4 +533,16 @@ if(NOT _stale_token_position EQUAL -1)
     message(FATAL_ERROR "Submit path still depends on the obsolete untagged pair token")
 endif()
 
+foreach(_bridge_role IN ITEMS useSubmitNeuralFloatBridge useSubmitNeuralFloatOutput)
+    string(REGEX MATCH
+        "const bool ${_bridge_role}[ \t\r\n]*=[ \t\r\n]*NeuralRendering::UsesSubmitNeuralFloatBridge\\([^;]+;"
+        _bridge_selection "${_upscaling_source}"
+    )
+    if(NOT _bridge_selection MATCHES "GetNeuralRenderingArrangement\\(\\)")
+        message(FATAL_ERROR
+            "Submit NR bridge producer/consumer bypasses the current pipeline arrangement: ${_bridge_role}"
+        )
+    endif()
+endforeach()
+
 message(STATUS "Neural Rendering submit-pair contract passed")

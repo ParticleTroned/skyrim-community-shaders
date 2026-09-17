@@ -43433,8 +43433,8 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 		a_upscaleMethod == UpscaleMethod::kDLSS &&
 		dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter;
 	const bool useSubmitNeuralFloatBridge =
-		submitStageDLSSCenter && neuralRenderingRequested &&
-		!NeuralRendering::RunsBeforeDlss(GetNeuralRenderingArrangement());
+		NeuralRendering::UsesSubmitNeuralFloatBridge(
+			submitStageDLSSCenter, neuralRenderingRequested, GetNeuralRenderingArrangement());
 	const bool directNeuralCommit =
 		neuralRenderingRequested &&
 		neuralDirectCommit &&
@@ -45970,9 +45970,9 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 			return FidelityFX::UpscaleResult::Failed;
 		ID3D11ShaderResourceView* centerSRV = centerOutput->srv.get();
 		const bool useSubmitNeuralFloatOutput =
-			params.dlssViewportRole ==
-				Streamline::DLSSViewportRole::SubmitStageFoveatedCenter &&
-			neuralResult && neuralResult->applied;
+			NeuralRendering::UsesSubmitNeuralFloatBridge(
+				params.dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter,
+				neuralResult && neuralResult->applied, GetNeuralRenderingArrangement());
 		CharacterCompositeInputs characterComposite{};
 		const bool isolateCharacterOutput =
 			neuralResult && neuralResult->applied &&

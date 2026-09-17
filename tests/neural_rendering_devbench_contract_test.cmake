@@ -696,7 +696,7 @@ endforeach()
 
 foreach(_upscaled_center_float_contract IN ITEMS
     [[const bool submitStageDLSSCenter = a_upscaleMethod == UpscaleMethod::kDLSS && dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter]]
-    [[const bool useSubmitNeuralFloatBridge = submitStageDLSSCenter && neuralRenderingRequested && !NeuralRendering::RunsBeforeDlss(GetNeuralRenderingArrangement())]]
+    [[const bool useSubmitNeuralFloatBridge = NeuralRendering::UsesSubmitNeuralFloatBridge( submitStageDLSSCenter, neuralRenderingRequested, GetNeuralRenderingArrangement())]]
     [[args.insertionPoint = NeuralRendering::InsertionPoint::UpscaledCenter]]
     [[DispatchSubmitStageColorRegion( foveatedCenterColorOut[eyeIndex]->srv.get(), submitNeuralFloatColorIn[eyeIndex]->uav.get()]]
     [[args.colorInput = submitNeuralFloatColorIn[eyeIndex]->resource.get()]]
@@ -719,7 +719,7 @@ endforeach()
 
 foreach(_upscaled_center_composite_contract IN ITEMS
     [[if (params.centerAlreadyPrepared)]]
-    [[const bool useSubmitNeuralFloatOutput = params.dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter && neuralResult && neuralResult->applied]]
+    [[const bool useSubmitNeuralFloatOutput = NeuralRendering::UsesSubmitNeuralFloatBridge( params.dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter, neuralResult && neuralResult->applied, GetNeuralRenderingArrangement())]]
     [[centerSRV = submitNeuralFloatColorOut[eyeIndex]->srv.get()]]
     [[ResolveSubmitCharacterCompositeInputs(]]
     [[DispatchFoveatedBlendPass( centerSRV, outputColorUAV]]

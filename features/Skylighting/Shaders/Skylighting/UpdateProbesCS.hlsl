@@ -116,7 +116,10 @@ static const float3 noise3D[32] = {
 
 	bool advanceShadowHistory = false;
 	float shadowSample = 1.0;
-	if (onScreen) {
+	if (settings.ShadowDataAvailable == 0) {
+		outShadowBitmask[dtid] = 0xFFFFFFFFu;
+		outShadowVisibility[dtid] = 1.0;
+	} else if (onScreen) {
 		DirectionalShadowLightData shadowData = DirectionalShadowLights[0];
 
 		uint bitIndex = SharedData::FrameCountAlwaysActive % 32;

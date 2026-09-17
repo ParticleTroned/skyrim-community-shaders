@@ -31,6 +31,7 @@
 #include "Upscaling/NeuralRendering/CharacterRendering.h"
 #include "Upscaling/NeuralRendering/CharacterSettingsJson.h"
 #include "Upscaling/NeuralRendering/ComputeStateGuard.h"
+#include "Upscaling/NeuralRendering/ConfigurationSerialization.h"
 #include "Upscaling/NeuralRendering/PipelinePolicy.h"
 #include "Upscaling/NeuralRendering/Renderer.h"
 #include "Upscaling/NvidiaComIdentity.h"
@@ -17819,12 +17820,7 @@ bool Upscaling::HasSameNeuralRenderingSettingsKey(
 
 json Upscaling::GetNeuralRenderingConfiguration() const
 {
-	const json all = settings;
-	json result = json::object();
-	for (const auto& [name, value] : all.items())
-		if (name.starts_with("neural"))
-			result[name] = value;
-	return result;
+	return NeuralRendering::RenderingSettings(settings);
 }
 
 bool Upscaling::ApplyNeuralRenderingConfiguration(const json& a_configuration, std::string& a_error)
@@ -17869,15 +17865,15 @@ bool Upscaling::ApplyNeuralRenderingConfiguration(const json& a_configuration, s
 
 bool Upscaling::ResetNeuralRenderingConfiguration()
 {
-	const json defaults = Settings{};
-	json configuration = json::object();
-	for (const auto& [name, value] : defaults.items())
-		if (name.starts_with("neural"))
-			configuration[name] = value;
+	const auto configuration = NeuralRendering::RenderingSettings(Settings{});
 	std::string error;
 	const bool applied = ApplyNeuralRenderingConfiguration(configuration, error);
-	if (!applied)
+	if (applied) {
+		settings.neuralCharacterDebugView = static_cast<uint>(NeuralRendering::CharacterDebugView::Off);
+		settings.neuralCharacterMaskTestMode = static_cast<uint>(NeuralRendering::CharacterMaskTestMode::Authored);
+	} else {
 		logger::error("[NeuralRendering] Could not restore defaults: {}", error);
+	}
 	return applied;
 }
 
@@ -19835,6 +19831,7 @@ namespace
 void Upscaling::LoadSettings(json& o_json)
 {
 	const Settings previousSettings = settings;
+	const bool hasLegacyNeuralSettings = !NeuralRendering::RenderingSettings(o_json).empty();
 	const VRRenderScaleDesiredProfile currentDesiredProfile =
 		GetPendingVRRenderScaleDesiredProfile();
 	const bool hasLegacyOptimizedStereoPath =
@@ -19895,6 +19892,10 @@ void Upscaling::LoadSettings(json& o_json)
 		NeuralRendering::CharacterDebugView::Off);
 	settings.neuralCharacterMaskTestMode = static_cast<uint>(
 		NeuralRendering::CharacterMaskTestMode::Authored);
+	settings.neuralCharacterMultiRoiEnabled = false;
+	settings.neuralCharacterMultiRoiSavingsGateEnabled = true;
+	if (!hasLegacyNeuralSettings)
+		NeuralRendering::CopyRenderingSettings(settings, previousSettings);
 
 	if (settings.upscaleMethod > static_cast<uint>(UpscaleMethod::kDLSS)) {
 		logger::warn("[Upscaling] Loaded upscaleMethod {} out of range, clamping to {}", settings.upscaleMethod, static_cast<uint>(UpscaleMethod::kDLSS));
@@ -19930,7 +19931,8 @@ void Upscaling::LoadSettings(json& o_json)
 		previousSettings,
 		currentDesiredProfile,
 		"upscaling settings reload");
-	(void)HandleNeuralRenderingSettingsTransition(previousSettings, "upscaling settings reload");
+	if (!HandleNeuralRenderingSettingsTransition(previousSettings, "upscaling settings reload"))
+		NeuralRendering::CopyRenderingSettings(settings, previousSettings);
 	InvalidateFrameScopedUpscalingState();
 
 	auto iniSettingCollection = globals::game::iniPrefSettingCollection;
@@ -19945,13 +19947,9 @@ void Upscaling::RestoreDefaultSettings()
 	const Settings previousSettings = settings;
 	const VRRenderScaleDesiredProfile currentDesiredProfile =
 		GetPendingVRRenderScaleDesiredProfile();
-	json resetSettings = Settings{};
-	const auto neuralConfiguration = GetNeuralRenderingConfiguration();
-	for (const auto& [name, value] : neuralConfiguration.items())
-		resetSettings[name] = value;
-	settings = resetSettings.get<Settings>();
-	settings.neuralCharacterDebugView = previousSettings.neuralCharacterDebugView;
-	settings.neuralCharacterMaskTestMode = previousSettings.neuralCharacterMaskTestMode;
+	auto resetSettings = Settings{};
+	NeuralRendering::CopyRenderingSettings(resetSettings, previousSettings);
+	settings = std::move(resetSettings);
 	settings.foveatedVendorDispatch = false;
 	settings.foveatedPeripheryMaskVisualization = false;
 	settings.reflexLowLatencyMode = true;

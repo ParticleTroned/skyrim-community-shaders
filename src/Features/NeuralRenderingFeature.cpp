@@ -2,6 +2,7 @@
 #include "BuildProvenance.h"
 #include "Upscaling.h"
 #include "Upscaling/NeuralRendering/CaptureEvidence.h"
+#include "Upscaling/NeuralRendering/ConfigurationSerialization.h"
 #include "Upscaling/VRRenderScaleDevBenchBridge.h"
 #include <algorithm>
 #include <array>
@@ -80,15 +81,6 @@ namespace
 		return { { "schemaVersion", 1 }, { "enabled", settings.enabled }, { "mode", Name(settings.mode, modes) },
 			{ "detailStrength", settings.detailStrength }, { "appearanceMix", settings.appearanceMix },
 			{ "maximumDetailStops", settings.maximumDetailStops } };
-	}
-	Json PersistentRenderingSettings(Json rendering)
-	{
-		if (!rendering.is_object())
-			throw std::invalid_argument("rendering settings must be an object");
-		for (const auto* key : { "neuralCharacterMultiRoiEnabled", "neuralCharacterMultiRoiSavingsGateEnabled",
-				 "neuralCharacterDebugView", "neuralCharacterMaskTestMode" })
-			rendering.erase(key);
-		return rendering;
 	}
 	Json ProfileJson(const Profile& profile)
 	{
@@ -628,7 +620,7 @@ void NeuralRenderingFeature::LoadSettings(nlohmann::json& object)
 		}
 		if (object.contains("rendering")) {
 			std::string error;
-			if (!globals::features::upscaling.ApplyNeuralRenderingConfiguration(PersistentRenderingSettings(object.at("rendering")), error))
+			if (!globals::features::upscaling.ApplyNeuralRenderingConfiguration(NeuralRendering::PersistentRenderingSettings(object.at("rendering")), error))
 				throw std::invalid_argument(error);
 		}
 		if (!Registry::Instance().Configure(colour, {}))
@@ -639,7 +631,7 @@ void NeuralRenderingFeature::LoadSettings(nlohmann::json& object)
 }
 void NeuralRenderingFeature::SaveSettings(nlohmann::json& object)
 {
-	auto rendering = PersistentRenderingSettings(globals::features::upscaling.GetNeuralRenderingConfiguration());
+	auto rendering = NeuralRendering::PersistentRenderingSettings(globals::features::upscaling.GetNeuralRenderingConfiguration());
 	object = { { "schemaVersion", 1 },
 		{ "rendering", std::move(rendering) },
 		{ "colour", SettingsJson(Registry::Instance().Snapshot().settings) } };

@@ -37,6 +37,7 @@
 #include "Features/TerrainVariation.h"
 #include "Features/UnifiedWater.h"
 #include "Features/Upscaling.h"
+#include "Features/Upscaling/NeuralRendering/ConfigurationSerialization.h"
 #include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/VolumetricShadows.h"
@@ -172,15 +173,7 @@ void Feature::Load(json& o_json)
 		// No errors, load settings now
 		if (HasFeatureSettings()) {
 			if (GetShortName() == "NeuralRendering" && !o_json.contains(GetName())) {
-				json rendering = json::object();
-				if (const auto legacy = o_json.find("Upscaling"); legacy != o_json.end() && legacy->is_object()) {
-					for (const auto& [key, value] : legacy->items())
-						if (key.starts_with("neural"))
-							rendering[key] = value;
-				}
-				for (const auto* key : { "neuralCharacterMultiRoiEnabled", "neuralCharacterMultiRoiSavingsGateEnabled",
-						 "neuralCharacterDebugView", "neuralCharacterMaskTestMode" })
-					rendering.erase(key);
+				const auto rendering = NeuralRendering::RenderingSettings(o_json.value("Upscaling", json::object()));
 				if (!rendering.empty() || o_json.contains("Neural Rendering Colour"))
 					o_json[GetName()] = { { "schemaVersion", 1 }, { "rendering", std::move(rendering) },
 						{ "colour", o_json.value("Neural Rendering Colour", json::object()) } };

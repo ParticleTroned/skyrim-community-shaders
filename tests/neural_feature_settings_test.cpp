@@ -1,4 +1,5 @@
 #include "Features/Upscaling/NeuralRendering/ColorPolicy.h"
+#include "Features/Upscaling/NeuralRendering/ConfigurationSerialization.h"
 
 #include <algorithm>
 #include <array>
@@ -72,6 +73,16 @@ struct NeuralRenderingFeature
 
 #include "neural_feature_settings_under_test.h"
 
+struct IndependentSettings
+{
+	unsigned qualityMode = 0;
+	bool neuralRenderingEnabled = false;
+	float neuralRenderingIntensity = 0.8f;
+	unsigned neuralCharacterDebugView = 0;
+	unsigned neuralCharacterMaskTestMode = 0;
+};
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(IndependentSettings, qualityMode, neuralRenderingEnabled, neuralRenderingIntensity)
+
 int main()
 {
 	using Json = nlohmann::json;
@@ -109,4 +120,34 @@ int main()
 	feature.LoadSettings(saved);
 	require(backend.applies == priorApplies && backend.resets == 1 && colour.changes == priorChanges);
 	require(logger::warnings == 3);
+
+	for (const bool optimized : { false, true }) {
+		backend.accept = true;
+		Json legacy = { { "schemaVersion", 1 }, { "colour", Json::object() },
+			{ "rendering", { { "neuralRenderingOptimizedStereoPath", optimized },
+							   { "neuralRenderingDirectCommit", !optimized }, { "neuralRenderingIntensity", 1.25 },
+							   { "neuralCharacterDebugView", 2 } } } };
+		feature.LoadSettings(legacy);
+		require(backend.rendering.at("neuralRenderingBatchedStereo") == optimized);
+		require(backend.rendering.at("neuralRenderingDirectCommit") == !optimized);
+		require(backend.rendering.at("neuralRenderingIntensity") == 1.25);
+		require(!backend.rendering.contains("neuralRenderingOptimizedStereoPath"));
+		require(!backend.rendering.contains("neuralCharacterDebugView"));
+		const auto applies = backend.applies;
+		legacy["rendering"]["neuralRenderingOptimizedStereoPath"] = "invalid";
+		feature.LoadSettings(legacy);
+		require(backend.applies == applies);
+		legacy["rendering"]["neuralRenderingBatchedStereo"] = optimized;
+		feature.LoadSettings(legacy);
+		require(backend.applies == applies + 1 && backend.rendering.at("neuralRenderingBatchedStereo") == optimized);
+	}
+
+	IndependentSettings live{ 2, true, 1.75f, 2, 1 };
+	IndependentSettings upscalerEdit{ 4, false, 0.0f, 0, 0 };
+	NeuralRendering::CopyRenderingSettings(upscalerEdit, live);
+	require(upscalerEdit.qualityMode == 4 && upscalerEdit.neuralRenderingEnabled);
+	require(upscalerEdit.neuralRenderingIntensity == live.neuralRenderingIntensity);
+	require(upscalerEdit.neuralCharacterDebugView == 2 && upscalerEdit.neuralCharacterMaskTestMode == 1);
+	require(NeuralRendering::RenderingSettings(Json{ { "qualityMode", 4 } }).empty());
+	require(NeuralRendering::RenderingSettings(Json{ { "qualityMode", 4 }, { "neuralRenderingEnabled", false } }).size() == 1);
 }

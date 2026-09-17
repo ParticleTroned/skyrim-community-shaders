@@ -16,14 +16,18 @@
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Skylighting::Settings,
+	EnableSkylighting,
 	MaxZenith,
 	MinDiffuseVisibility,
 	MinSpecularVisibility)
 
 void Skylighting::LoadSettings(json& o_json)
 {
+	const bool wasEnabled = settings.EnableSkylighting;
 	settings = o_json;
 	settings.MaxZenith = Util::ClampFinite(settings.MaxZenith, 0.0f, std::numbers::pi_v<float> / 2.0f, Settings{}.MaxZenith);
+	if (settings.EnableSkylighting != wasEnabled)
+		queuedResetSkylighting = true;
 }
 
 void Skylighting::SaveSettings(json& o_json)
@@ -33,6 +37,8 @@ void Skylighting::SaveSettings(json& o_json)
 
 void Skylighting::RestoreDefaultSettings()
 {
+	if (!settings.EnableSkylighting)
+		queuedResetSkylighting = true;
 	settings = {};
 }
 
@@ -74,6 +80,9 @@ void Skylighting::ClearProbes()
 
 void Skylighting::DrawSettings()
 {
+	if (ImGui::Checkbox(T(TKEY("enabled"), "Enable Skylighting"), &settings.EnableSkylighting))
+		queuedResetSkylighting = true;
+
 	ImGui::Text("%s", T(TKEY("min_visibility_desc"), "Minimum visibility values. Diffuse darkens objects. Specular removes the sky from reflections."));
 	ImGui::SliderFloat(T(TKEY("diffuse_min_visibility"), "Diffuse Min Visibility"), &settings.MinDiffuseVisibility, 0.01f, 1.f, "%.2f");
 	ImGui::SliderFloat(T(TKEY("specular_min_visibility"), "Specular Min Visibility"), &settings.MinSpecularVisibility, 0.01f, 1.f, "%.2f");
@@ -248,7 +257,8 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 		.MinDiffuseVisibility = settings.MinDiffuseVisibility,
 		.MinSpecularVisibility = settings.MinSpecularVisibility,
 		.ShadowDataAvailable = HasShadowData(),
-		.ProbeDataReady = probeDataReady && HasProbeResources() && !queuedResetSkylighting.load()
+		.ProbeDataReady = probeDataReady && HasProbeResources() && !queuedResetSkylighting.load(),
+		.Enabled = settings.EnableSkylighting
 	};
 }
 
@@ -275,6 +285,14 @@ bool Skylighting::HasShadowData() const
 
 void Skylighting::Prepass()
 {
+	if (!settings.EnableSkylighting) {
+		ID3D11ShaderResourceView* nullProbe = nullptr;
+		globals::d3d::context->PSSetShaderResources(50, 1, &nullProbe);
+		globals::d3d::context->PSSetShaderResources(53, 1, &nullProbe);
+		globals::state->UpdateFeatureData(true);
+		return;
+	}
+
 	if (globals::state->isMapMenuOpen || !HasProbeResources())
 		return;
 
@@ -486,6 +504,8 @@ RE::BSShaderProperty::RenderPassArray* Skylighting::BSLightingShaderProperty_Get
 	[[maybe_unused]] RE::BSGraphics::BSShaderAccumulator* accumulator)
 {
 	auto& skylighting = globals::features::skylighting;
+	if (!skylighting.settings.EnableSkylighting)
+		return func(property, geometry, renderMode, accumulator);
 
 	auto batch = accumulator->GetRuntimeData().batchRenderer;
 	batch->geometryGroups[14]->flags &= ~1;
@@ -639,7 +659,7 @@ void Skylighting::RenderOcclusion()
 		}
 	}
 
-	if (!HasProbeResources())
+	if (!settings.EnableSkylighting || !HasProbeResources())
 		return;
 
 	if (queuedResetSkylighting.exchange(false))

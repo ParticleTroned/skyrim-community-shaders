@@ -55,7 +55,7 @@ class RegistrationTests(unittest.TestCase):
         self.assertIn("missing from FEATURE_CORE_NAMES", result.stderr)
 
     def test_version_mismatch(self):
-        for version in ("1-1-0", "1-3-0"):
+        for version in ("1-2-0", "1-4-0"):
             with self.subTest(version=version):
                 (self.root / MANIFEST).write_text(f"[Info]\nVersion = {version}\n")
                 result = self.validate()

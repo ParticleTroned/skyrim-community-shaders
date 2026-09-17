@@ -62,7 +62,7 @@ namespace
 	}
 	void ReadSettings(const Json& object, Settings& settings)
 	{
-		Keys(object, { "schemaVersion", "enabled", "mode", "detailStrength", "appearanceMix", "maximumDetailStops" });
+		Keys(object, { "schemaVersion", "enabled", "mode", "detailStrength", "appearanceMix", "maximumDetailStops", "lightingPreservation" });
 		if (object.contains("schemaVersion") && (!object.at("schemaVersion").is_number_integer() || object.at("schemaVersion") != 1))
 			throw std::invalid_argument("unsupported colour-settings schema");
 		if (object.contains("enabled"))
@@ -75,6 +75,14 @@ namespace
 			settings.appearanceMix = Number(object.at("appearanceMix"));
 		if (object.contains("maximumDetailStops"))
 			settings.maximumDetailStops = Number(object.at("maximumDetailStops"));
+		if (object.contains("lightingPreservation")) {
+			const auto& value = object.at("lightingPreservation");
+			const float number = Number(value);
+			// Check the JSON value before float rounding can hide an out-of-range input.
+			if (value < 0.0 || value > 1.0)
+				throw std::invalid_argument("lighting preservation outside supported range");
+			settings.lightingPreservation = number;
+		}
 		if (!Valid(settings))
 			throw std::invalid_argument("colour settings outside supported ranges");
 	}
@@ -82,7 +90,7 @@ namespace
 	{
 		return { { "schemaVersion", 1 }, { "enabled", settings.enabled }, { "mode", Name(settings.mode, modes) },
 			{ "detailStrength", settings.detailStrength }, { "appearanceMix", settings.appearanceMix },
-			{ "maximumDetailStops", settings.maximumDetailStops } };
+			{ "maximumDetailStops", settings.maximumDetailStops }, { "lightingPreservation", settings.lightingPreservation } };
 	}
 	Json ProfileJson(const Profile& profile)
 	{
@@ -164,7 +172,7 @@ namespace
 			{ "rect", { o.rect.baseX, o.rect.baseY, o.rect.width, o.rect.height } },
 			{ "sourceFormat", o.sourceFormat }, { "outputFormat", o.outputFormat }, { "effectiveMode", Name(o.mode, modes) },
 			{ "profile", ProfileJson(o.profile) }, { "transportBypass", o.bypass }, { "modelEditShown", o.modelEditShown },
-			{ "atomicColourBatch", o.atomicStereo }, { "processed", o.processed }, { "retainedColourTextureBytes", o.retainedBytes },
+			{ "lightingPreservation", o.lightingPreservation }, { "atomicColourBatch", o.atomicStereo }, { "processed", o.processed }, { "retainedColourTextureBytes", o.retainedBytes },
 			{ "exposureAgeFrames", o.exposureState == ExposureBindingState::SnapshotQueued && o.exposure.stamp.frame <= o.sourceWorldFrame ?
 									   Json(o.sourceWorldFrame - o.exposure.stamp.frame) :
 									   Json(nullptr) },
@@ -462,6 +470,12 @@ namespace
             "minimum": 0,
             "maximum": 1
           },
+          "lightingPreservation": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Fraction of the existing smooth luminance residual removed in Preserve Source; default 1. Reconstruction only; does not reset inference history."
+          },
           "maximumDetailStops": {
             "type": "number",
             "minimum": 0,
@@ -664,17 +678,38 @@ void NeuralRenderingFeature::DrawSettings()
 	const bool showDiagnostics = globals::state && globals::state->IsDeveloperMode();
 	auto config = Registry::Instance().Snapshot();
 	bool changed = false;
-	ImGui::TextWrapped("Shared by all Neural Rendering modes and character selection.");
+	ImGui::TextWrapped("These controls apply to full-resolution, FOV and before-upscaling NR, including characters.");
 	changed |= ImGui::Checkbox("Enable colour processing", &config.settings.enabled);
 	static constexpr const char* colourModes[]{ "Original", "Managed", "Preserve source" };
 	int mode = static_cast<int>(config.settings.mode);
 	changed |= ImGui::Combo("Colour mode", &mode, colourModes, IM_ARRAYSIZE(colourModes));
 	config.settings.mode = static_cast<Mode>(mode);
-	ImGui::TextWrapped("Original uses the model output directly. Managed applies colour reconstruction. Preserve source keeps the scene's colour and adds neural detail.");
+	ImGui::TextWrapped("Original uses the model output directly. Managed applies colour reconstruction. Preserve source lets you retain the scene's colour and lighting while adding neural detail.");
+	{
+		const bool preservationActive = config.EffectiveMode() == Mode::PreserveSource && config.settings.appearanceMix < 1.0f &&
+		                                config.settings.detailStrength > 0.0f && config.settings.maximumDetailStops > 0.0f;
+		auto preservationGuard = Util::DisableGuard(!preservationActive);
+		float preservationPercent = config.settings.lightingPreservation * 100.0f;
+		if (ImGui::SliderFloat("Lighting preservation", &preservationPercent, 0, 100, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) {
+			config.settings.lightingPreservation = preservationPercent / 100.0f;
+			changed = true;
+		}
+		ImGui::SetItemTooltip("100%% suppresses smooth neural brightness changes; 0%% allows them. Fine detail can remain at either end. Neural appearance mix independently blends in the model's colour and tone.");
+	}
+	if (config.settings.mode != Mode::PreserveSource)
+		ImGui::TextWrapped("Choose Preserve source to adjust lighting preservation.");
+	else if (!config.settings.enabled)
+		ImGui::TextWrapped("Enable colour processing to apply lighting preservation. Your settings are retained.");
+	else if (config.settings.appearanceMix == 1.0f)
+		ImGui::TextWrapped("Lower Neural appearance mix below 1 to use lighting preservation.");
+	else if (config.settings.detailStrength == 0.0f || config.settings.maximumDetailStops == 0.0f)
+		ImGui::TextWrapped("Raise Detail contribution and Maximum detail gain above zero to use lighting preservation.");
 	if (config.settings.mode == Mode::PreserveSource) {
 		changed |= ImGui::SliderFloat("Detail contribution", &config.settings.detailStrength, 0, 2);
+		ImGui::SetItemTooltip("Adjust the strength of retained neural brightness changes. Lower lighting preservation also allows broader changes.");
 		changed |= ImGui::SliderFloat("Neural appearance mix", &config.settings.appearanceMix, 0, 1);
 		changed |= ImGui::SliderFloat("Maximum detail gain (stops)", &config.settings.maximumDetailStops, 0, 2);
+		ImGui::SetItemTooltip("Limit brightening and darkening from preserved neural detail. Neural appearance mix can add changes beyond this limit.");
 	}
 	const bool outputOverrideActive = config.experiments.transportBypass || !config.experiments.applyModelEdit ||
 	                                  (config.EffectiveMode() != Mode::LegacyRaw &&

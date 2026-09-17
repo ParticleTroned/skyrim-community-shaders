@@ -213,3 +213,9 @@ build-artifact identity check, not verification of a running producer.
 These checks establish bounded policy, shader and tooling behavior. They
 do not establish physical-HMD image quality, NR provider compatibility or
 measured runtime performance for this port.
+
+## Lighting-preservation follow-up
+
+The [lighting-preservation integration and adversarial review](main-vr-nr-lighting-preservation-sync.md)
+records the subsequent source/automation sync, production slider wiring,
+preset completeness and evidence fixes, and current validation limits.

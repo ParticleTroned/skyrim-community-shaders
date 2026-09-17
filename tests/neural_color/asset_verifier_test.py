@@ -19,7 +19,7 @@ class AssetTests(unittest.TestCase):
         self.shaders.mkdir(parents=True)
         (self.root / assets.FEATURE / "CORE").touch()
         manifest = self.root / assets.FEATURE / "Shaders/Features/NeuralRendering.ini"
-        manifest.parent.mkdir(parents=True); manifest.write_text("[Info]\nVersion = 1-2-0\n")
+        manifest.parent.mkdir(parents=True); manifest.write_text("[Info]\nVersion = 1-3-0\n")
         for name in assets.NAMES:
             (self.shaders / name).write_text('#include "Upscaling/NeuralRendering/ColorCommon.hlsli"\n' if name.endswith(".hlsl") else "// fixture\n")
         self.producers = self.root / "src/Features/Upscaling/NeuralRendering"

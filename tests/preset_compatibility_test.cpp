@@ -78,6 +78,10 @@ int main(int argc, char** argv)
 	const auto invalid = PresetCompatibility::Evaluate(malformed, "CSX 3.19-VR");
 	assert(invalid.disposition == Disposition::kRejected);
 
+	auto previousSettings = CompatiblePreset();
+	previousSettings["Preset Compatibility"]["settingsContract"]["revision"] = PresetCompatibility::kSettingsContractRevision - 1;
+	assert(!PresetCompatibility::Evaluate(previousSettings, "CSX 3.19-VR").ShouldApply());
+
 	auto futureSettings = CompatiblePreset();
 	futureSettings["Preset Compatibility"]["settingsContract"]["revision"] = PresetCompatibility::kSettingsContractRevision + 1;
 	const auto unsupportedSettings = PresetCompatibility::Evaluate(futureSettings, "CSX 3.19-VR");

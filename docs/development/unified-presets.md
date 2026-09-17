@@ -64,7 +64,9 @@ The generator rejects:
 The current base includes the main-VR settings migrations for Adaptive
 Balance's unified global profile, separate exterior/interior godray profiles,
 wet-grass darkening, locked VR menu placement, depth-culling policy modes, and
-opt-in verbose PBR diagnostics. Their retired keys are explicitly rejected so
+opt-in verbose PBR diagnostics, and the independent Neural Rendering feature.
+Neural Rendering remains off in every tier, with all persistent rendering
+and colour defaults explicit, including lighting preservation at 100%. Their retired keys are explicitly rejected so
 a package cannot silently fall back through legacy migration on first load.
 
 ## CSX compatibility contract
@@ -73,7 +75,9 @@ The generated packages target CSX 3.19-VR only. Each `SettingsUser.json`
 contains a versioned `Preset Compatibility` object with a stable preset ID,
 package version, VR runtime, inclusive minimum `3.19`, exclusive maximum
 `3.20`, and the settings-contract fingerprint used to generate it.
-The generator and runtime loader both use settings-contract revision 5.
+The generator and runtime loader both use settings-contract revision 6. Revision 6 adds the independent Neural
+Rendering envelope; revision 5 marked packages must be regenerated for
+this build. Unmarked user settings retain the existing migration path.
 The Release compatibility regression loads every generated tier to verify
 that the shipping loader accepts its metadata.
 

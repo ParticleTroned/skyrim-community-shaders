@@ -154,15 +154,25 @@ int main()
 	backend.accept = true;
 	for (const Json disabled : { Json(true), Json(false), Json("invalid"), Json(nullptr) }) {
 		Json legacy = { { "Upscaling", { { "neuralRenderingEnabled", true } } },
-			{ "Neural Rendering Colour", { { "enabled", true }, { "mode", "managed" }, { "detailStrength", 1.25 } } },
+			{ "Neural Rendering Colour", { { "enabled", true }, { "mode", "managed" }, { "detailStrength", 1.25 },
+											 { "lightingPreservation", 0.37f } } },
 			{ "Disable at Boot", { { "NeuralColor", disabled } } } };
 		const auto migrated = NeuralRendering::LegacyColourSettings(legacy);
 		require(migrated.at("enabled") == (disabled != Json(true)));
 		require(migrated.at("mode") == "managed" && migrated.at("detailStrength") == 1.25);
+		require(migrated.at("lightingPreservation").get<float>() == 0.37f);
 		Json envelope = { { "schemaVersion", 1 }, { "rendering", NeuralRendering::RenderingSettings(legacy.at("Upscaling")) },
 			{ "colour", migrated } };
 		feature.LoadSettings(envelope);
 		require(backend.rendering.at("neuralRenderingEnabled") == true);
 		require(colour.Snapshot().settings.enabled == (disabled != Json(true)));
+		require(colour.Snapshot().settings.lightingPreservation == 0.37f);
+		Json roundTrip;
+		feature.SaveSettings(roundTrip);
+		require(roundTrip.at("colour").at("lightingPreservation").get<float>() == 0.37f);
+		feature.RestoreDefaultSettings();
+		feature.LoadSettings(roundTrip);
+		require(colour.Snapshot().settings.enabled == (disabled != Json(true)) &&
+				colour.Snapshot().settings.lightingPreservation == 0.37f);
 	}
 }

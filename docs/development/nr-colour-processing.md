@@ -22,8 +22,11 @@ quantized prepared input, not an independently recomputed proxy:
 
 `candidate = baseline + inverse(neural) - inverse(prepared)`
 
-Preserve Source adds bounded, edge-weighted high-frequency log-brightness detail
-to source RGB. Appearance mix accepts more of the reconstructed neural result,
+Preserve Source adds bounded, edge-weighted log-brightness changes to source
+RGB. Lighting preservation controls how much of the existing local smooth
+residual is removed: 100% retains the previous detail-only behaviour, 50%
+removes half, and 0% admits the full bounded luminance residual. The 3-by-3
+estimate and its spatial scale are unchanged. Appearance mix accepts more of the reconstructed neural result,
 including tone and chroma, not merely hue. This is an image-space mitigation,
 not physical decomposition of reflections/shadows. Source alpha is retained.
 The unknown/native-domain brightness metric is not calibrated luminance.
@@ -49,13 +52,23 @@ retained for provenance. The colour section provides:
 
 -   **Enable colour processing**: retain the chosen mode/sliders while bypassing
     their application. The NR master switch is in the same feature panel.
--   **Apply neural edit (A/B; inference stays running)**: show the untouched
-    baseline or the processed candidate without changing model input/history.
-    This is a visual comparison, NOT an NR-off performance measurement.
--   Mode, detail contribution, appearance mix and maximum detail stops.
--   **Capture engine HDR exposure**, separate early/late domain/codec/exposure
-    candidates, transport bypass, asynchronous measurements and override reset.
--   **Check installed colour shaders** and structured diagnostics.
+-   Colour mode and **Lighting preservation (0–100%)**, shared by full-resolution
+    NR with or without FOV restriction, NR through FOV, and NR before upscaling.
+    Character selection uses the same setting. The slider defaults to 100%.
+-   The slider remains visible with a notice when inactive. Choose **Preserve
+    source** and enable colour processing to use it. Full neural appearance
+    mixing or zero detail strength/gain also disables it while retaining its
+    value. Other controls remain available to resolve those conditions.
+-   Preserve-source detail contribution, neural appearance mix and maximum
+    detail gain. Unavailable FOV prerequisites disable dependent NR controls
+    with a setup notice; mode selection remains available for recovery.
+
+**Debug/Trace** additionally exposes A/B comparison, engine HDR exposure
+capture, separate early/late domain and exposure experiments, transport
+bypass, asynchronous measurements, asset checks and structured diagnostics.
+The A/B control keeps inference running and is not an NR-off performance
+measurement. See the [slider source implementation](nr-lighting-preservation-20260917.md)
+for its preserved upstream evidence.
 
 Ordinary settings use the existing saved-settings JSON. Assessment profiles,
 exposure capture, transport bypass and A/B state are transient. Both UI and
@@ -63,7 +76,7 @@ DevBench call the same compare-and-set registry; neither polls a configuration
 file or performs GPU work from a DevBench worker thread.
 
 `Shaders/Features/NeuralRendering.ini` is ONLY a feature/version manifest, now
-**1-2-0**. It is installed by the build; users do not edit it to assess colours.
+**1-3-0**. It is installed by the build; users do not edit it to assess colours.
 The separate older `work/face-of-gogh-colour-20260914` experiment used an editable
 `NRColor.ini`; that is not this branch's control interface.
 
@@ -336,7 +349,9 @@ and its optional capture episodes alone do not complete that assessment.
 All required shaders are in the colour feature package: ColorPrepareCS,
 ColorReconstructCS, ColorMeasureCS, ColorExposureCS, plus ColorCommon.hlsli.
 Normal recursive source/feature discovery and shader-copy paths include them.
-Install the rebuilt plugin AND feature/shader files. The manifest is 1-2-0.
+Install the rebuilt plugin AND feature/shader files. The current manifest is
+1-3-0; the shared colour constant buffer is now 64 bytes. Deploy the DLL and
+all colour shader assets together and invalidate the old feature shader cache.
 
 ```powershell
 python tools/nr-color/verify_assets.py
@@ -396,7 +411,7 @@ CMP0116 deprecation warning.
 These checks establish buildability and the exercised policy/shader
 behaviour. They do not establish the correct NVIDIA NR colour treatment,
 live exposure-hook timing, actual NGX inference, winning MO2/VFS files, or
-headset presentation. Deployment must retain the `1-2-0` colour package
+headset presentation. That deployment retained the `1-2-0` colour package
 with the rebuilt DLL before those separate live checks.
 
 ### Runtime feature registration correction
@@ -492,8 +507,9 @@ compositor acceptance, not verified headset presentation.
 The profiler preserves this branch's GPU scope callers and supplies captured
 frame identity, slot counters, inclusive GPU totals and CPU self time. No
 colour algorithm, NVIDIA admission policy, model runtime or rendering default
-is changed. The existing `NeuralColor` version `1-2-0`, INI and core registration
-remain required by CMake and asset verification. Shader caches and FOMOD are
+is changed. That backport used `NeuralColor` version `1-2-0`. The lighting-preservation
+extension requires `1-3-0`; its INI and core registration remain checked by
+CMake and asset verification. Shader caches and FOMOD are
 excluded from the test AIO; existing installed caches are preserved.
 
 Focused support tests are available independently of the plugin build:

@@ -12,6 +12,7 @@ import tempfile
 import unittest
 
 SOURCE = Path(__file__).resolve().parents[2] / "tools" / "nr-color" / "hmd_assess.py"
+sys.path.insert(0, str(SOURCE.parent))
 SPEC = importlib.util.spec_from_file_location("hmd_assess", SOURCE)
 HMD = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = HMD
@@ -103,6 +104,41 @@ def make_pair(root, ordinal=1, kind="raw", apply_edit=True, value=100, frame=100
                     "cameraEvidence": {**camera_plan(), "available": True, "sourceWorldFrame": frame - 1,
                         "provenance": "engine_cached_unjittered_world_matrices"}}},
             "artifacts": artifacts, "warnings": [], "errors": []}
+
+
+class LightingEvidenceTests(unittest.TestCase):
+    def test_new_setting_requires_exact_region_and_companion_values(self):
+        target = expected("preserve_source")
+        target["configuration"]["color"]["settings"]["lightingPreservation"] = 0.5
+        candidate = {"condition": "preserve_source", "applyModelEdit": True,
+                     "settings": {"settings": {"lightingPreservation": 0.5}}}
+        record = {"frame": 100, "sourceWorldFrame": 99, "colorRevision": 4, "inputEpoch": 2,
+                  "effectiveMode": "preserve_source", "applyModelEdit": True, "nrEnabled": True,
+                  "inferenceAttempted": True, "inferenceSucceeded": True, "outputCommitted": True,
+                  "disposition": "applied", "exposure": {},
+                  "physicalRegions": [{"lightingPreservation": 0.5}, {"lightingPreservation": 0.5}]}
+        evidence = {"schemaVersion": 1, "available": True, "transactionId": "fixture",
+                    "configurationFingerprint": target["configurationFingerprint"], "configuration": target["configuration"],
+                    "insertionPoint": 0, "left": copy.deepcopy(record), "right": copy.deepcopy(record)}
+        HMD.check_nr(evidence, target, candidate, {"engineFrame": 100})
+        for bad in (None, 0, 1, True, "0.5", float("nan")):
+            broken = copy.deepcopy(evidence)
+            broken["right"]["physicalRegions"][-1]["lightingPreservation"] = bad
+            with self.assertRaisesRegex(HMD.EvidenceError, "lighting preservation"):
+                HMD.check_nr(broken, target, candidate, {"engineFrame": 100})
+        missing = copy.deepcopy(evidence)
+        missing["right"]["physicalRegions"] = []
+        with self.assertRaisesRegex(HMD.EvidenceError, "lighting preservation"):
+            HMD.check_nr(missing, target, candidate, {"engineFrame": 100})
+        companion = {"measurementBatches": [{"measurements": [{"source": {"lightingPreservation": 1}}]}]}
+        with self.assertRaisesRegex(HMD.EvidenceError, "lighting preservation"):
+            HMD.check_nr(evidence, target, candidate, {"engineFrame": 100}, capture_diagnostics=companion)
+        absent = copy.deepcopy(evidence)
+        old_target = copy.deepcopy(target)
+        del old_target["configuration"]["color"]["settings"]["lightingPreservation"]
+        absent["configuration"] = old_target["configuration"]
+        with self.assertRaisesRegex(HMD.EvidenceError, "absent"):
+            HMD.check_nr(absent, old_target, candidate, {"engineFrame": 100})
 
 
 class PlanTests(unittest.TestCase):

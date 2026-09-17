@@ -74,3 +74,22 @@ target_sources(neural_full_resolution_fov_test PRIVATE
     "${_neural_full_resolution_fov_test_dir}/neural_full_resolution_fov_under_test.h"
     "${_neural_full_resolution_fov_test_dir}/neural_full_resolution_fov_types.h")
 target_include_directories(neural_full_resolution_fov_test PRIVATE "${_neural_full_resolution_fov_test_dir}")
+
+set(_neural_color_route_test_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_color_route_test")
+add_custom_command(
+    OUTPUT "${_neural_color_route_test_dir}/neural_color_route_latch_state.h"
+        "${_neural_color_route_test_dir}/neural_color_route_latch_pipeline.h"
+    COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_neural_color_route_test_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_neural_color_route_latch.cmake"
+    DEPENDS src/Features/Upscaling.cpp src/Features/Upscaling/NeuralRendering/Renderer.cpp
+        src/Features/Upscaling/NeuralRendering/ColorPipeline.cpp tests/extract_neural_color_route_latch.cmake
+    VERBATIM
+)
+add_controller_test(neural_color_route_latch_test NeuralColorRouteLatch tests/neural_color_route_latch_test.cpp)
+target_sources(neural_color_route_latch_test PRIVATE
+    "${_neural_color_route_test_dir}/neural_color_route_latch_state.h"
+    "${_neural_color_route_test_dir}/neural_color_route_latch_pipeline.h")
+target_include_directories(neural_color_route_latch_test PRIVATE "${_neural_color_route_test_dir}")
+target_link_libraries(neural_color_route_latch_test PRIVATE nlohmann_json::nlohmann_json)
+target_compile_definitions(neural_color_route_latch_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)

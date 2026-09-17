@@ -28,6 +28,7 @@ namespace NeuralRendering::Color
 		Profile profile{};
 		bool bypass = false, atomicStereo = false, processed = false;
 		bool modelEditShown = true;
+		float lightingPreservation = 1.0f;
 		ExposureBindingState exposureState = ExposureBindingState::NotRequested;
 		ExposureEvidence exposure{};
 		std::uint64_t preparationCpuMicroseconds = 0, reconstructionCpuMicroseconds = 0, retainedBytes = 0;

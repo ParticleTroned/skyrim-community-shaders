@@ -49,7 +49,8 @@
     "UnifiedWater": false,
     "Upscaling": false,
     "VolumetricLighting": false,
-    "Wetterness": false
+    "Wetterness": false,
+    "NeuralRendering": false
   },
   "RenderDoc": {
     "Capture Frame Count": 20,
@@ -104,6 +105,53 @@
     "streamlineLogLevel": 0,
     "upscaleMethod": 3,
     "upscaleMethodNoDLSS": 2
+  },
+  "Neural Rendering": {
+    "schemaVersion": 1,
+    "rendering": {
+      "neuralCharacterAdaptiveRoiSelectionEnabled": false,
+      "neuralCharacterDepthAwareFeatherEnabled": false,
+      "neuralCharacterDepthThreshold": 0.0020000000949949026,
+      "neuralCharacterFaceStrength": 1.0,
+      "neuralCharacterFacesEnabled": true,
+      "neuralCharacterFeatherRadius": 1,
+      "neuralCharacterHairEnabled": false,
+      "neuralCharacterHairStrength": 0.6499999761581421,
+      "neuralCharacterMaximumDistanceMeters": 10.0,
+      "neuralCharacterMinimumFacePixelSize": 64,
+      "neuralCharacterRenderingEnabled": false,
+      "neuralCharacterRoiHoldFrames": 3,
+      "neuralCharacterRoiMargin": 0.25,
+      "neuralCharacterSkinEnabled": true,
+      "neuralCharacterSkinStrength": 1.0,
+      "neuralCharacterVisibilityDepthTestEnabled": true,
+      "neuralCharacterVisualIsolationEnabled": true,
+      "neuralRenderingAutoMask": true,
+      "neuralRenderingBatchedStereo": true,
+      "neuralRenderingBlendFeather": 0.05000000074505806,
+      "neuralRenderingDirectCommit": true,
+      "neuralRenderingEnabled": false,
+      "neuralRenderingFovOnly": false,
+      "neuralRenderingInsertionPoint": 0,
+      "neuralRenderingIntensity": 0.800000011920929,
+      "neuralRenderingLocalStructure": 0.8999999761581421,
+      "neuralRenderingLocalTone": 0.75,
+      "neuralRenderingMode": 1,
+      "neuralRenderingPreset": 3,
+      "neuralRenderingSingleSubrectScale": 1.0,
+      "neuralRenderingSkinStructure": 0.8999999761581421,
+      "neuralRenderingStyle": 3,
+      "neuralRenderingUICorrection": false
+    },
+    "colour": {
+      "schemaVersion": 1,
+      "enabled": true,
+      "mode": "legacy_raw",
+      "detailStrength": 1.0,
+      "appearanceMix": 0.0,
+      "maximumDetailStops": 1.0,
+      "lightingPreservation": 1.0
+    }
   },
   "CS Editor": null,
   "CS Utility": {

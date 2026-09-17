@@ -69,6 +69,7 @@ using Upscaling = globals::features::Upscaling;
 float ClampFoveatedCenterScale(float value) { return FoveatedCommon::ClampCenterScale(value); }
 float ClampFoveatedCenterHorizontalScale(float value) { return FoveatedCommon::ClampCenterHorizontalScale(value); }
 float ClampFoveatedMaskOffsetAdjustment(float value) { return value; }
+constexpr int ImGuiSliderFlags_AlwaysClamp = 1;
 namespace ImGui
 {
 	std::vector<std::string> items;
@@ -77,6 +78,9 @@ namespace ImGui
 	int treeDepth = 0;
 	unsigned disableDepth = 0;
 	bool openTrees = true;
+	float sliderEditValue = 50.0f;
+	int comboEditValue = 0;
+	int lightingSliderFlags = 0;
 	void Record(const char* label)
 	{
 		items.emplace_back(label);
@@ -104,6 +108,7 @@ namespace ImGui
 		Record(label);
 	}
 	void TextUnformatted(const char* label) { Record(label); }
+	void SetItemTooltip(const char*) {}
 	void SeparatorText(const char* label) { Record(label); }
 	void Separator() {}
 	void PushID(int) {}
@@ -121,15 +126,21 @@ namespace ImGui
 		return true;
 	}
 	template <class... Args>
-	bool Combo(const char* label, Args&&...)
+	bool Combo(const char* label, int* value, Args&&...)
 	{
-		Record(label);
-		return false;
+		if (!Button(label))
+			return false;
+		*value = comboEditValue;
+		return true;
 	}
-	bool SliderFloat(const char* label, float*, float, float)
+	bool SliderFloat(const char* label, float* value, float minimum, float maximum, const char* = "%.3f", int flags = 0)
 	{
-		Record(label);
-		return false;
+		if (std::string_view(label) == "Lighting preservation")
+			lightingSliderFlags = flags;
+		if (!Button(label))
+			return false;
+		*value = (flags & ImGuiSliderFlags_AlwaysClamp) ? std::clamp(sliderEditValue, minimum, maximum) : sliderEditValue;
+		return true;
 	}
 	bool TreeNode(const char* label)
 	{
@@ -177,6 +188,8 @@ namespace NeuralRendering::Color
 		{
 			if (!accept || revision != configuration.revision || !Valid(settings) || !Valid(experiments))
 				return false;
+			if (settings == configuration.settings && experiments == configuration.experiments)
+				return true;
 			configuration.settings = settings;
 			configuration.experiments = experiments;
 			++configuration.revision;
@@ -214,6 +227,7 @@ int main()
 	auto& registry = Registry::Instance();
 	registry.configuration.settings.mode = Mode::PreserveSource;
 	registry.configuration.settings.detailStrength = 1.25f;
+	registry.configuration.settings.lightingPreservation = 0.37f;
 	const auto draw = [&](std::string_view click = {}) {
 		ImGui::Clear(click);
 		feature.DrawSettings();
@@ -275,6 +289,7 @@ int main()
 	require(globals::features::upscaling.draws > 0, "Feature must retain the main NR controls");
 
 	auto& upscaling = globals::features::upscaling;
+	globals::state = &state;
 	registry.configuration = {};
 	using ModeChoice = NeuralRendering::RenderingMode;
 	require(!NeuralRendering::IsRenderingModeSelectable(true, ModeChoice::Foveated, false), "Unavailable FOV cannot be newly selected");
@@ -299,10 +314,110 @@ int main()
 					"FOV-dependent colour options stay grey until the shared mask is available");
 				require((registry.configuration.settings.enabled == beforeFovEdit.settings.enabled) == blocked,
 					"Unavailable FOV must prevent mutations, without blocking ordinary full-image NR");
+				registry.configuration.settings = { .mode = Mode::PreserveSource, .lightingPreservation = 0.37f };
+				const auto beforeRedraw = registry.Snapshot();
+				draw();
+				require(registry.configuration.settings == beforeRedraw.settings &&
+							registry.configuration.revision == beforeRedraw.revision,
+					"Route availability and passive redraw must retain nondefault colour preferences");
+				for (const float percent : { 0.0f, 50.0f, 100.0f, -10.0f, 110.0f }) {
+					ImGui::sliderEditValue = percent;
+					const auto priorSlider = registry.Snapshot();
+					draw("Lighting preservation");
+					require(ImGui::Seen("Lighting preservation") && ImGui::Disabled("Lighting preservation") == blocked,
+						"The production slider must follow the same FOV prerequisites in every NR route");
+					require(ImGui::lightingSliderFlags == ImGuiSliderFlags_AlwaysClamp,
+						"Typed slider input must stay within the percentage range");
+					require(registry.configuration.settings.lightingPreservation ==
+								(blocked ? priorSlider.settings.lightingPreservation : std::clamp(percent, 0.0f, 100.0f) / 100.0f),
+						"Every NR route must write the shared lighting-preservation setting");
+					require(registry.configuration.revision == priorSlider.revision + (blocked ? 0 : 1),
+						"Blocked slider edits must not mutate the colour registry");
+				}
 			}
 		}
 	}
 	upscaling.settings.foveatedVendorDispatch = true;
+	upscaling.settings.neuralRenderingFovOnly = false;
+	upscaling.mode = ModeChoice::FullResolution;
+	const auto checkInactivePreservation = [&]() {
+		const auto prior = registry.Snapshot();
+		for (const auto level : { spdlog::level::info, spdlog::level::debug }) {
+			state.level = level;
+			draw("Lighting preservation");
+			require(ImGui::Disabled("Lighting preservation") && registry.configuration.settings == prior.settings &&
+						registry.configuration.experiments == prior.experiments && registry.configuration.revision == prior.revision,
+				"Inactive slider draws and edits must retain the complete nondefault configuration at every UI level");
+		}
+	};
+	for (const auto inactiveMode : { Mode::LegacyRaw, Mode::Managed }) {
+		registry.configuration.settings = { .mode = inactiveMode, .lightingPreservation = 0.37f };
+		checkInactivePreservation();
+		require(ImGui::Seen("Choose Preserve source to adjust lighting preservation."),
+			"Inactive colour modes must explain the disabled slider and retain its value");
+	}
+	for (const auto zeroControl : { &Settings::detailStrength, &Settings::maximumDetailStops }) {
+		registry.configuration.settings = { .mode = Mode::PreserveSource, .lightingPreservation = 0.37f };
+		registry.configuration.settings.*zeroControl = 0.0f;
+		checkInactivePreservation();
+		require(ImGui::Seen("Raise Detail contribution and Maximum detail gain above zero to use lighting preservation."),
+			"Zero-strength reconstruction must explain the ineffective slider");
+	}
+	registry.configuration.settings = { .mode = Mode::PreserveSource, .appearanceMix = 1.0f, .lightingPreservation = 0.37f };
+	checkInactivePreservation();
+	require(ImGui::Seen("Lower Neural appearance mix below 1 to use lighting preservation."),
+		"Full appearance mixing must explain why preservation is bypassed");
+	registry.configuration.settings = { .mode = Mode::PreserveSource, .enabled = false, .lightingPreservation = 0.37f };
+	checkInactivePreservation();
+	require(ImGui::Seen("Enable colour processing to apply lighting preservation. Your settings are retained."),
+		"Disabled colour processing must retain and explain the slider");
+	state.level = spdlog::level::info;
+	for (const bool enabled : { true, false, true }) {
+		const auto prior = registry.Snapshot();
+		draw("Enable colour processing");
+		auto expected = prior.settings;
+		expected.enabled = enabled;
+		require(registry.configuration.settings == expected && registry.configuration.revision == prior.revision + 1,
+			"Switching colour processing off and on must retain all remembered tuning");
+		require(ImGui::Disabled("Lighting preservation") == !enabled,
+			"The preservation control must follow the effective colour mode immediately");
+	}
+	for (const auto mode : { Mode::LegacyRaw, Mode::Managed, Mode::PreserveSource }) {
+		const auto prior = registry.Snapshot();
+		ImGui::comboEditValue = static_cast<int>(mode);
+		draw("Colour mode");
+		auto expected = prior.settings;
+		expected.mode = mode;
+		require(registry.configuration.settings == expected && registry.configuration.revision == prior.revision + 1,
+			"Actual colour-mode selections must preserve nondefault lighting preferences");
+		require(ImGui::Disabled("Lighting preservation") == (mode != Mode::PreserveSource),
+			"Changing colour mode must update slider availability in the same draw");
+	}
+	registry.configuration.settings.lightingPreservation = 0.3737f;
+	const auto beforePassiveDraw = registry.Snapshot();
+	draw();
+	require(registry.configuration.settings == beforePassiveDraw.settings &&
+				registry.configuration.revision == beforePassiveDraw.revision,
+		"Whole-percent display must not round a stored fractional percentage during redraw");
+	registry.accept = false;
+	ImGui::sliderEditValue = 83.0f;
+	draw("Lighting preservation");
+	require(registry.configuration.settings == beforePassiveDraw.settings &&
+				registry.configuration.experiments == beforePassiveDraw.experiments &&
+				registry.configuration.revision == beforePassiveDraw.revision,
+		"Rejected slider updates must not mutate any live configuration");
+	require(ImGui::Seen("Settings changed concurrently; retry after the next UI refresh."),
+		"Rejected slider updates must expose their retry path");
+	registry.accept = true;
+	registry.configuration.settings.detailStrength = 1.6f;
+	++registry.configuration.revision;
+	const auto beforeRetry = registry.Snapshot();
+	draw("Lighting preservation");
+	auto expectedRetry = beforeRetry.settings;
+	expectedRetry.lightingPreservation = 0.83f;
+	require(registry.configuration.settings == expectedRetry && registry.configuration.experiments == beforeRetry.experiments &&
+				registry.configuration.revision == beforeRetry.revision + 1,
+		"Retry must apply the slider to the refreshed configuration without losing intervening changes");
 	upscaling.loaded = false;
 	require(!upscaling.IsNeuralRenderingFovConfigurationAvailable(), "Unloaded upscaler cannot supply a shared FOV mask");
 	upscaling.loaded = true;

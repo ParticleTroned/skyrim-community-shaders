@@ -13,12 +13,14 @@ import json
 import math
 from pathlib import Path
 import subprocess
+import struct
 import time
 from typing import Any
 from verify_assets import verify
 
 TOOL = "communityshaders.nr_color"
 SETTING_KEYS = ("schemaVersion", "enabled", "mode", "detailStrength", "appearanceMix", "maximumDetailStops")
+OPTIONAL_SETTING_KEYS = ("lightingPreservation",)
 PROFILE_KEYS = ("domain", "transform", "exposureMultiplier", "exposureSource")
 EXPERIMENT_KEYS = ("transportBypass", "diagnostics", "captureEngineExposure", "applyModelEdit")
 PROFILE_NAMES = ("upscaled_center", "final_ldr_pre_ui")
@@ -61,9 +63,33 @@ def editable(status: dict) -> dict:
     """Never send read-only provenance fields from status back to configure."""
     result = {"settings": {key: status["settings"][key] for key in SETTING_KEYS},
               "experiments": {key: status["experiments"][key] for key in EXPERIMENT_KEYS}}
+    result["settings"].update({key: status["settings"][key] for key in OPTIONAL_SETTING_KEYS if key in status["settings"]})
     for name in PROFILE_NAMES:
         result["experiments"][name] = {key: status["experiments"][name][key] for key in PROFILE_KEYS}
     return result
+
+
+def lighting_evidence(settings: dict, observations: list[dict]) -> dict:
+    """Never infer the new control from old evidence or current menu state."""
+    if not isinstance(settings, dict) or not isinstance(observations, list) or any(
+            not isinstance(source, dict) for source in observations):
+        raise AssessmentError("malformed lighting preservation evidence")
+    key = "lightingPreservation"
+    if key not in settings:
+        if any(key in source for source in observations):
+            raise AssessmentError("lighting preservation setting missing for attributed samples")
+        return {"available": False, "value": None, "reason": "absent_legacy_evidence"}
+    expected = settings[key]
+    if not number(expected) or not 0 <= expected <= 1:
+        raise AssessmentError("invalid lighting preservation setting")
+    for source in observations:
+        applied = source.get(key)
+        # Signed zeros are equal at runtime; other values must round to the same float32.
+        if (not number(applied) or not 0 <= applied <= 1
+                or (applied != expected and struct.pack("f", applied) != struct.pack("f", expected))):
+            raise AssessmentError("missing or mismatched applied lighting preservation")
+    return {"available": True, "value": expected,
+            "reason": "configuration_only" if not observations else "latched_observations"}
 
 
 def unwrap(receipt: dict, *, explicit_success: bool = True) -> dict:
@@ -119,6 +145,10 @@ def fresh_groups(status: dict, revision: int, insertion: int, after_frame: int,
                 or not integer(source.get("generation"))
                 or not integer(source.get("sourceWorldFrame"), 0xfffffffe)
                 or not frame_advanced(source.get("sourceWorldFrame"), after_frame, warmup)):
+            continue
+        try:
+            lighting_evidence(status.get("settings", {}), [source])
+        except AssessmentError:
             continue
         if len(values) != 24 or not all(number(x) for x in values):
             continue
@@ -181,7 +211,7 @@ def fresh_batch_groups(status: dict, revision: int, insertion: int, after_frame:
                       for k in fields) for item in items):
             continue
         # Reuse freshness, finite-value, duplicate-slot and frame/route checks.
-        groups = fresh_groups({"measurements": items}, revision, insertion, after_frame, warmup, expected)
+        groups = fresh_groups({"measurements": items, "settings": status.get("settings", {})}, revision, insertion, after_frame, warmup, expected)
         if len(groups) == 1 and {i["source"]["physicalSlot"] for i in groups[0]} == expected:
             output.append(groups[0])
     return output
@@ -189,10 +219,18 @@ def fresh_batch_groups(status: dict, revision: int, insertion: int, after_frame:
 
 def assess_samples(groups: list[list[dict]], transport: bool, shown: bool = True) -> dict:
     failures: list[str] = []
+    lighting = []
     weighted_score = 0.0
     total_weight = 0.0
     count_indices = (3, 9, 10, 11, 12, 13, 14, 15, 16, 17)
     for group in groups:
+        sources = [item["source"] for item in group]
+        declared = {key: sources[0][key] for key in OPTIONAL_SETTING_KEYS if sources and key in sources[0]}
+        try:
+            lighting.append(lighting_evidence(declared, sources))
+        except AssessmentError as error:
+            failures.append(str(error))
+            lighting.append({"available": False, "value": None, "reason": str(error)})
         capture_sequences = set()
         for item in group:
             s, v = item["source"], item["values"]
@@ -251,6 +289,7 @@ def assess_samples(groups: list[list[dict]], transport: bool, shown: bool = True
     return {"valid": not failures, "reasons": sorted(set(failures)),
             "sourceDriftScore": weighted_score / total_weight if total_weight else None,
             "domainVerified": False,
+            "lightingPreservationEvidence": lighting,
             "meaning": "Sample-count-weighted source-relative RGB change, not physical lighting accuracy or domain proof"}
 
 

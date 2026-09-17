@@ -17,7 +17,7 @@ def colour():
     profile = {"domain": "unknown", "transform": "identity", "exposureMultiplier": 1,
                "exposureSource": "manual"}
     return {"settings": {"schemaVersion": 1, "enabled": False, "mode": "legacy_raw", "detailStrength": 1,
-                         "appearanceMix": 0, "maximumDetailStops": 1},
+                         "appearanceMix": 0, "maximumDetailStops": 1, "lightingPreservation": 0.5},
             "experiments": {"transportBypass": False, "diagnostics": False, "captureEngineExposure": True,
                             "captureFrameEvidence": False, "applyModelEdit": True,
                             "upscaled_center": copy.deepcopy(profile), "final_ldr_pre_ui": copy.deepcopy(profile)}}
@@ -129,6 +129,7 @@ class CaptureTests(unittest.TestCase):
             self.assertEqual((result["settings"]["enabled"], result["settings"]["mode"]), (enabled, mode))
             self.assertTrue(result["experiments"]["captureFrameEvidence"])
             self.assertFalse(result["experiments"]["diagnostics"])
+            self.assertEqual(result["settings"]["lightingPreservation"], 0.5)
         hidden = capture.candidate_colour(colour(), candidate("raw", False))
         self.assertFalse(hidden["experiments"]["applyModelEdit"])
         self.assertFalse(hidden["experiments"]["transportBypass"])
@@ -139,6 +140,15 @@ class CaptureTests(unittest.TestCase):
         result = capture.candidate_colour(initial, candidate("managed_identity"))
         self.assertEqual(result["experiments"]["upscaled_center"]["transform"], "identity")
         self.assertEqual(result["experiments"]["upscaled_center"]["exposureMultiplier"], 1)
+
+    def test_lighting_candidate_and_restoration_keep_selected_values(self):
+        trial = candidate("preserve_source")
+        trial["settings"] = {"settings": {"lightingPreservation": 0}}
+        self.runner.apply(trial)
+        self.assertEqual(self.controller.colour["settings"]["lightingPreservation"], 0)
+        self.runner.restore()
+        self.assertTrue(self.runner.index["restoration"]["performed"])
+        self.assertEqual(self.controller.colour["settings"]["lightingPreservation"], 0.5)
 
     def test_unrelated_settings_and_raw_diagnostics_rejected(self):
         changed = candidate()

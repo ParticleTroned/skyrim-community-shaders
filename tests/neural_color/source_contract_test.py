@@ -8,6 +8,35 @@ SHADERS = ROOT / "features/Neural Rendering/Shaders/Upscaling/NeuralRendering"
 
 
 class Contracts(unittest.TestCase):
+    def test_lighting_layout_and_latched_shared_path(self):
+        import hashlib
+        import json
+        fixture = ROOT / "tests/neural_color/fixtures/preserve-source-1-2-0"
+        manifest = json.loads((fixture / "baseline.json").read_text())
+        self.assertEqual(manifest["sourceCommit"], "d69bdb7ebc899ce24971eac59b007503e0dc08bb")
+        for name, digest in manifest["bytecodeSha256"].items():
+            self.assertEqual(hashlib.sha256((fixture / name).read_bytes()).hexdigest(), digest)
+        pipeline = (NR / "ColorPipeline.cpp").read_text()
+        self.assertIn("sizeof(Constants) == 64", pipeline)
+        self.assertIn("offsetof(Constants, exposure) == 32", pipeline)
+        self.assertIn("offsetof(Constants, lightingPreservation) == 48", pipeline)
+        constants = pipeline.split("Constants MakeConstants", 1)[1].split("bool CreateTexture", 1)[0]
+        self.assertIn("const auto& config = work.configuration", constants)
+        self.assertIn("config.settings.lightingPreservation, {}", constants)
+        self.assertNotIn("Registry", constants)
+        self.assertIn("requested.revision != work.configuration.revision", pipeline)
+        self.assertIn("readback.source = work.observation", pipeline)
+        self.assertIn("float3 NRColorPadding;", (SHADERS / "ColorCommon.hlsli").read_text())
+        self.assertNotIn("LightingPreservation", (SHADERS / "ColorExposureCS.hlsl").read_text())
+        renderer = (NR / "Renderer.cpp").read_text()
+        self.assertIn("observation.lightingPreservation = capture.configuration.settings.lightingPreservation", renderer)
+        ui = (ROOT / "src/Features/NeuralRenderingFeature.cpp").read_text()
+        self.assertIn('if (ImGui::SliderFloat("Lighting preservation"', ui)
+        self.assertEqual(ui.count("config.settings.lightingPreservation = preservationPercent / 100.0f"), 1)
+        descriptor = json.loads(ui.split('R"schema(', 1)[1].split(')schema"', 1)[0])
+        setting = descriptor["inputSchema"]["properties"]["settings"]["properties"]["lightingPreservation"]
+        self.assertEqual((setting["type"], setting["minimum"], setting["maximum"]), ("number", 0, 1))
+
     def test_vr_camera_observes_validated_engine_upload(self):
         source = (ROOT / "src/Globals.cpp").read_text()
         observer = source.split("void ObserveVRFrameBufferUpload(", 1)[1].split(
@@ -110,7 +139,7 @@ class Contracts(unittest.TestCase):
         self.assertIn("&NeuralRenderingFeature::Instance()", source)
         self.assertTrue((ROOT / "features/Neural Rendering/CORE").exists())
         ini = ROOT / "features/Neural Rendering/Shaders/Features/NeuralRendering.ini"
-        self.assertIn("Version = 1-2-0", ini.read_text())
+        self.assertIn("Version = 1-3-0", ini.read_text())
         ui = (ROOT / "src/Features/NeuralRenderingFeature.cpp").read_text()
         self.assertIn('"communityshaders.nr_color"', ui)
         save = ui[ui.index("void NeuralRenderingFeature::SaveSettings"):ui.index("void NeuralRenderingFeature::RestoreDefaultSettings")]

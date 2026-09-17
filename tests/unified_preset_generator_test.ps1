@@ -147,6 +147,12 @@ try {
         foreach ($disabledAtBootEntry in $settings.'Disable at Boot'.psobject.Properties) {
             Assert-True ($disabledAtBootEntry.Value -eq $false) "Feature was hard-disabled for $($tierProperty.Name): $($disabledAtBootEntry.Name)"
         }
+        $neural = $settings.'Neural Rendering'
+        Assert-True ($neural.schemaVersion -eq 1 -and $neural.colour.schemaVersion -eq 1) "Missing independent NR schema for $($tierProperty.Name)."
+        Assert-True ($neural.rendering.neuralRenderingEnabled -eq $false) "NR was enabled by a graphics tier: $($tierProperty.Name)."
+        Assert-True ($neural.colour.lightingPreservation -eq 1.0) "Lighting preservation default changed for $($tierProperty.Name)."
+        Assert-True ($null -eq $neural.psobject.Properties['experiments']) "Session-only colour experiments leaked into $($tierProperty.Name)."
+        Assert-True ($null -eq $settings.'Disable at Boot'.psobject.Properties['NeuralColor']) "Legacy NR boot key appeared in $($tierProperty.Name)."
         $maps[$tierProperty.Name] = Get-LeafMap $settings
     }
 
@@ -203,6 +209,17 @@ try {
     } -Pattern 'commonOverrides and tierOwnedPaths|common/operational path' -Message 'A case-variant operational tier path was accepted.'
     Assert-True ($baselineSnapshot -ceq (Get-PublicationSnapshot -OutputRoot $outputRoot -ReportPath $reportPath)) 'A rejected case-variant path mutated the published generation.'
     [System.IO.File]::WriteAllText($isolatedPolicyPath, $baselinePolicyText, $utf8)
+
+    $invalidBase = $baselineBaseText | ConvertFrom-Json -Depth 100
+    $invalidBase.'Neural Rendering'.colour.psobject.Properties.Remove('lightingPreservation')
+    Write-JsonFile -Path $isolatedBasePath -Value $invalidBase
+    $invalidPolicy = $baselinePolicyText | ConvertFrom-Json -Depth 100
+    $invalidPolicy.baseTemplate.sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $isolatedBasePath).Hash
+    Write-JsonFile -Path $isolatedPolicyPath -Value $invalidPolicy
+    $null = Invoke-ExpectedFailure -GeneratorPath $isolatedGenerator -Arguments @{
+        OutputRoot = $outputRoot; ReportPath = $reportPath
+    } -Pattern 'JSON path is absent.*Neural Rendering/colour/lightingPreservation' -Message 'A missing lighting-preservation default was accepted.'
+    Assert-True ($baselineSnapshot -ceq (Get-PublicationSnapshot -OutputRoot $outputRoot -ReportPath $reportPath)) 'Missing NR settings mutated the published generation.'
 
     $invalidBase = $baselineBaseText | ConvertFrom-Json -Depth 100
     $invalidBase.Advanced.psobject.Properties.Remove('Log Level')

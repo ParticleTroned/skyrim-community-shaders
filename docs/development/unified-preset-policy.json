@@ -15,16 +15,21 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "E0064B1E4D16B6D93C0D47161FFC21FFA139A5F072FA90D1356293CE00D366FE"
+        "sha256": "E6D844DE37498B5713875066EE8BEE81317CC1DF94F06CF94632BE47E8972824"
     },
     "runtimeSettingsContract": {
-        "revision": 5,
-        "sourceTreeSha256": "ED493BC258B902053E064AC48352E021A8B3E340F7824E9F571DFF18C571964F",
+        "revision": 6,
+        "sourceTreeSha256": "FED50F7DBFD9724CB7C58FF4E00781E6DB3DF62D5AED42C2C0028BBD28EA965F",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
                 "src/Feature.cpp",
                 "src/Feature.h",
+                "src/Features/Upscaling/NeuralRendering/CharacterSettings.h",
+                "src/Features/Upscaling/NeuralRendering/CharacterSettingsJson.h",
+                "src/Features/Upscaling/NeuralRendering/ColorPolicy.h",
+                "src/Features/Upscaling/NeuralRendering/ConfigurationSerialization.h",
+                "src/Features/Upscaling/NeuralRendering/PipelinePolicy.h",
                 "src/Features/VolumetricLightingTuning.h",
                 "src/Features/VolumetricLightingTuningMigration.h",
                 "src/Features/VR/MenuPositioningPolicy.h",
@@ -81,6 +86,8 @@
             "src/Features/LinearLighting.h",
             "src/Features/LODBlending.cpp",
             "src/Features/LODBlending.h",
+            "src/Features/NeuralRenderingFeature.cpp",
+            "src/Features/NeuralRenderingFeature.h",
             "src/Features/PerformanceOverlay.cpp",
             "src/Features/PerformanceOverlay.h",
             "src/Features/RenderDoc.cpp",
@@ -109,6 +116,11 @@
             "src/Features/UnifiedWater.h",
             "src/Features/Upscaling.cpp",
             "src/Features/Upscaling.h",
+            "src/Features/Upscaling/NeuralRendering/CharacterSettings.h",
+            "src/Features/Upscaling/NeuralRendering/CharacterSettingsJson.h",
+            "src/Features/Upscaling/NeuralRendering/ColorPolicy.h",
+            "src/Features/Upscaling/NeuralRendering/ConfigurationSerialization.h",
+            "src/Features/Upscaling/NeuralRendering/PipelinePolicy.h",
             "src/Features/VolumetricLighting.cpp",
             "src/Features/VolumetricLighting.h",
             "src/Features/VolumetricLightingTuning.h",
@@ -535,6 +547,9 @@
             ["Advanced", "Background Compiler Threads"],
             ["Advanced", "Compiler Threads"],
             ["VR", "EnableCurrentFrameDepthCulling"],
+            ["Neural Rendering Colour"],
+            ["Disable at Boot", "NeuralColor"],
+            ["Neural Rendering", "experiments"],
             ["Water Effects"],
             ["Wetness Effects"],
             ["Adaptive Balance", "rendererControlsEnabled"],
@@ -551,6 +566,10 @@
             ["Volumetric Lighting", "GodrayShaftIntensity"]
         ],
         "requiredValues": [
+            { "path": ["Neural Rendering", "schemaVersion"], "value": 1 },
+            { "path": ["Neural Rendering", "rendering", "neuralRenderingEnabled"], "value": false },
+            { "path": ["Neural Rendering", "colour", "schemaVersion"], "value": 1 },
+            { "path": ["Neural Rendering", "colour", "lightingPreservation"], "value": 1.0 },
             { "path": ["Screenshot", "SettingsSchemaVersion"], "value": 2 },
             { "path": ["Screenshot", "Sequence", "Schedule", "Basis"], "value": "game_frames" },
             { "path": ["Advanced", "PBR Verbose JSON Logging"], "value": false },

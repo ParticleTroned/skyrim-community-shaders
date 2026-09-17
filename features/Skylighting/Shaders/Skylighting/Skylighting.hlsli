@@ -101,7 +101,7 @@ namespace Skylighting
 		shadowVisibility = 1.0;
 #	endif
 
-		if (SharedData::InInterior || SharedData::skylightingSettings.Enabled == 0)
+		if (SharedData::InInterior || SharedData::skylightingSettings.Enabled == 0 || SharedData::skylightingSettings.ProbeDataReady == 0)
 			return scaledUnitSH;
 
 		positionMS.xyz += normalWS * CELL_SIZE * 0.5;  // Receiver normal bias
@@ -177,7 +177,7 @@ namespace Skylighting
 	{
 		sh2 scaledUnitSH = UNIT_SH / 1e-10;
 
-		if (SharedData::InInterior || SharedData::skylightingSettings.Enabled == 0)
+		if (SharedData::InInterior || SharedData::skylightingSettings.Enabled == 0 || SharedData::skylightingSettings.ProbeDataReady == 0)
 			return scaledUnitSH;
 
 		float3 positionMSAdjusted = positionMS - SharedData::skylightingSettings.PosOffset.xyz;

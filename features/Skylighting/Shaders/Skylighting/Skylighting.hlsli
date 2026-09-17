@@ -104,7 +104,7 @@ namespace Skylighting
 		shadowVisibility = 1.0;
 #	endif
 
-		if (SharedData::InInterior)
+		if (SharedData::InInterior || SharedData::skylightingSettings.ProbeDataReady == 0)
 			return scaledUnitSH;
 
 		const float3 ARRAY_SIZE = GetArraySize();
@@ -183,7 +183,7 @@ namespace Skylighting
 		const float3 ARRAY_SIZE = GetArraySize();
 		sh2 scaledUnitSH = UNIT_SH / 1e-10;
 
-		if (SharedData::InInterior)
+		if (SharedData::InInterior || SharedData::skylightingSettings.ProbeDataReady == 0)
 			return scaledUnitSH;
 
 		float3 positionMSAdjusted = positionMS - SharedData::skylightingSettings.PosOffset.xyz;

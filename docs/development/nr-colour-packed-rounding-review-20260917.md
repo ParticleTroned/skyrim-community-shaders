@@ -86,7 +86,7 @@ with the preserved HMD Python dependencies. Hardware execution used
 Exact output is retained under
 `build/validation/nr-packed-rounding-review-20260917`.
 
-The next check is the corrected DevBench AIO in a short counterbalanced
-HMD comparison, with FOV 0.95 and peripheral TAA off. Capture private
-same-frame measurements alongside final masked images to distinguish
-remaining reconstruction bias from later compositing and scene changes.
+The subsequent [corrected-build HMD check](nr-colour-packed-rounding-live-20260917.md)
+used FOV 0.95 and peripheral TAA off. It supports retaining the correction,
+while preserving the remaining final-face, detail and evidence-retention
+limitations separately from these standalone regression results.

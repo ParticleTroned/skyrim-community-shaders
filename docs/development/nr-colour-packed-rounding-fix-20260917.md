@@ -8,6 +8,8 @@ this numerical bias.
 
 The [adversarial review](nr-colour-packed-rounding-review-20260917.md)
 records the subsequent production-compiler coverage and scope checks.
+The [corrected-build HMD check](nr-colour-packed-rounding-live-20260917.md)
+records the subsequent live private residual and final-face limitations.
 
 The correction retains the adjacent-tap detail filter, existing defaults,
 input profiles, stop limits and character-mask policy. It does not establish
@@ -100,8 +102,9 @@ appearance endpoints, intermediate appearance mixing and invalid candidates.
 -   Source asset inventory and shared-route/controller contracts pass in that
     suite.
 -   Existing HLSL X3571/X4000 warnings remain; no warning-free build is claimed.
--   Skyrim/NGX, SE/AE/VR gameplay and a corrected-build HMD comparison have not
-    been rerun. The standalone GPU test is not a live game qualification.
+-   At implementation time, Skyrim/NGX and SE/AE/VR gameplay had not been
+    rerun. The subsequent VR HMD check is linked above; the standalone GPU
+    test itself is not a live game qualification.
 
 The shader executable accepts an optional explicit hardware adapter:
 
@@ -125,10 +128,10 @@ Implementation validation is under
 shader copies, the derived failing control, compiler output and test receipts.
 Raw image/measurement trees are not committed.
 
-Prepare a corrected DevBench-enabled AIO, then run a short counterbalanced
-Preserve Source shown/hidden comparison at existing default strength,
-FOV 0.95 and peripheral TAA off. Preserve fresh private measurement batches
-and exposure readbacks during capture. Recheck both the private signed bias
-and final face brightness before attributing the entire visual difference
-to this fix. Useful-detail, final masked-composite precision, exposure
-recovery and headset-rate temporal questions remain distinct follow-ups.
+The corrected DevBench AIO and short counterbalanced Preserve Source
+comparison are complete. The linked live report supports retaining the
+rounding fix, with a smaller private residual and no consistent face
+darkening across both orders. Exact screenshot/private-batch and exposure
+companions were missed; retain those automatically before a further
+masked-output assessment. Useful-detail, final masked-composite precision,
+exposure recovery and headset-rate temporal questions remain distinct.

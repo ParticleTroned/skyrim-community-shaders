@@ -116,7 +116,7 @@ AUTO_PLUGIN_DEPLOYMENT, ZIP_TO_DIST and AIO_ZIP_TO_DIST OFF.
 | Scoped pre-commit                                           | Passed applicable whitespace, line-ending, clang-format and prettier hooks; YAML/gersemi had no matched files |
 | git diff --check                                            | Passed                                                                                                        |
 | Rebuilt C++ screenshot/capture suite                        | 6/6 passed, 0.31 seconds                                                                                      |
-| Live Skyrim/NGX/HMD visual assessment                       | Not run                                                                                                       |
+| Live Skyrim/NGX/HMD visual assessment                       | Bright and partial dark results are recorded in the linked follow-up assessments below                        |
 
 The user subsequently authorized adversarial review, builds, an AIO and
 automation marketplace/cache refresh. Review evidence is retained under
@@ -197,6 +197,22 @@ clang-format --style=file --lines=15:20 --dry-run --Werror to retain
 unrelated legacy formatting; its only changes are the appended CB fields.
 
 ## Deployment and remaining live test
+
+The matching AIO was subsequently exercised in Skyrim VR. The
+[bright assessment](nr-lighting-bright-assessment-20260917.md) and
+[dark assessment](nr-lighting-dark-assessment-20260917.md) support regional
+source-colour retention at 100% within their stated limits. Useful added
+detail remains unestablished; later dark-scene camera drift prevents a
+complete repeated comparison. These are informed reviews under the user's
+waiver of blinding. Fast motion, HMD-rate flicker, deliberate exposure
+recovery, strong specular lighting and the character-mask route remain
+outside these two assessment blocks.
+
+The next capture should use a short NR-off / hidden-source / shown-100% /
+NR-off bracket, acquired consecutively before offline analysis, with
+camera-drift and recording-deadline checks. This is a capture-procedure
+adjustment using existing controls; it requires no AIO rebuild. The
+broader validation recipe below remains incomplete, not a claimed pass.
 
 Feature manifest, checked-in registry and normally generated metadata are
 1-3-0. The shared NRColorCB is 64 bytes: existing offsets remain unchanged,

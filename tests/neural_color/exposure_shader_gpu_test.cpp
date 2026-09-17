@@ -315,8 +315,12 @@ int main(int argc, char** argv)
 	{
 		unsigned x = 0, y = 0, w = 8, h = 8, mode = 1, domain = 1, transform = 1, flags = 12;
 		float multiplier = 1, detail = 1, appearance = 0, stops = 1;
+		float lightingPreservation = 1;
+		float padding[3]{};
 	} constants;
-	static_assert(sizeof(Constants) == 48);
+	static_assert(sizeof(Constants) == 64);
+	static_assert(offsetof(Constants, multiplier) == 32);
+	static_assert(offsetof(Constants, lightingPreservation) == 48);
 	D3D11_BUFFER_DESC desc{};
 	desc.ByteWidth = sizeof(Constants);
 	desc.Usage = D3D11_USAGE_DEFAULT;

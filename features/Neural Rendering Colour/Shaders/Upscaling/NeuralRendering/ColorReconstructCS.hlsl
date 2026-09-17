@@ -84,7 +84,14 @@ float3 RoundPreserveSourceForStorage(float3 value)
 		float lowFrequency = totalWeight > 0.0 ? weightedResidual / totalWeight : residual;
 		uint2 edge = min(local, RegionSize - 1u - local);
 		float edgeWeight = saturate(float(min(edge.x, edge.y)) / 4.0);
-		float stops = clamp((residual - lowFrequency) * DetailStrength * edgeWeight, -MaximumDetailStops, MaximumDetailStops);
+		float acceptedResidual;
+		if (LightingPreservation == 1.0)
+			acceptedResidual = residual - lowFrequency;
+		else if (LightingPreservation == 0.0)
+			acceptedResidual = residual;
+		else
+			acceptedResidual = residual - LightingPreservation * lowFrequency;
+		float stops = clamp(acceptedResidual * DetailStrength * edgeWeight, -MaximumDetailStops, MaximumDetailStops);
 		float3 detail = FromWorking(baseWorking * exp2(stops));
 		if (RepresentableRGB(detail))
 			preserved = detail;

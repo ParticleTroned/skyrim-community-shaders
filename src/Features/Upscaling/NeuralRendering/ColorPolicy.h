@@ -52,6 +52,7 @@ namespace NeuralRendering::Color
 		float maximumDetailStops = 1.0f;
 		// Disable colour processing without forgetting the selected mode/sliders.
 		bool enabled = true;
+		float lightingPreservation = 1.0f;
 		bool operator==(const Settings&) const = default;
 	};
 
@@ -103,7 +104,8 @@ namespace NeuralRendering::Color
 		return value.mode < Mode::Count &&
 		       Finite(value.detailStrength) && value.detailStrength >= 0.0f && value.detailStrength <= 2.0f &&
 		       Finite(value.appearanceMix) && value.appearanceMix >= 0.0f && value.appearanceMix <= 1.0f &&
-		       Finite(value.maximumDetailStops) && value.maximumDetailStops >= 0.0f && value.maximumDetailStops <= 2.0f;
+		       Finite(value.maximumDetailStops) && value.maximumDetailStops >= 0.0f && value.maximumDetailStops <= 2.0f &&
+		       Finite(value.lightingPreservation) && value.lightingPreservation >= 0.0f && value.lightingPreservation <= 1.0f;
 	}
 
 	[[nodiscard]] inline bool Valid(const Profile& value) noexcept
@@ -142,7 +144,7 @@ namespace NeuralRendering::Color
 		       oldValue.experiments.transportBypass != newValue.experiments.transportBypass;
 	}
 
-	// Storage flags occupy previously unused ControlFlags bits; the CB stays 48 bytes.
+	// Storage flags occupy ControlFlags bits independently of reconstruction controls.
 	// Keep values aligned with ColorCommon.hlsli (covered by contract tests).
 	enum class Storage : std::uint32_t
 	{
@@ -247,7 +249,14 @@ namespace NeuralRendering::Color
 	{
 		if (!Finite(logResidual) || !Finite(lowFrequencyResidual) || !Finite(edgeWeight) || !Valid(settings))
 			return 1.0f;
-		const auto stops = std::clamp((logResidual - lowFrequencyResidual) * settings.detailStrength *
+		float acceptedResidual;
+		if (settings.lightingPreservation == 1.0f)
+			acceptedResidual = logResidual - lowFrequencyResidual;
+		else if (settings.lightingPreservation == 0.0f)
+			acceptedResidual = logResidual;
+		else
+			acceptedResidual = logResidual - settings.lightingPreservation * lowFrequencyResidual;
+		const auto stops = std::clamp(acceptedResidual * settings.detailStrength *
 										  std::clamp(edgeWeight, 0.0f, 1.0f),
 			-settings.maximumDetailStops, settings.maximumDetailStops);
 		return std::exp2(stops);

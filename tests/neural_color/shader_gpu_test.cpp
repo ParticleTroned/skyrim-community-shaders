@@ -7,9 +7,11 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <d3d11.h>
 #include <d3dcompiler.h>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <string_view>
 #include <vector>
@@ -26,8 +28,12 @@ struct Constants
 	unsigned x = 5, y = 7, width = 17, height = 19;
 	unsigned mode = 1, domain = 1, transform = 0, bypass = 0;
 	float exposure = 1, detail = 1, appearance = 0, maximumStops = 1;
+	float lightingPreservation = 1;
+	float padding[3]{};
 };
-static_assert(sizeof(Constants) == 48);
+static_assert(sizeof(Constants) == 64);
+static_assert(offsetof(Constants, exposure) == 32);
+static_assert(offsetof(Constants, lightingPreservation) == 48);
 static unsigned checks = 0;
 static void Require(bool value, const char* message)
 {
@@ -237,10 +243,13 @@ static std::vector<Pixel> ReadStored(ID3D11Device* device, ID3D11DeviceContext* 
 	return Read(device, context, decoded.texture.Get());
 }
 static Texture StorePixels(ID3D11Device* device, ID3D11DeviceContext* context,
-	ID3D11ComputeShader* copy, ID3D11Buffer* cb, const std::vector<Pixel>& pixels)
+	ID3D11ComputeShader* copy, ID3D11Buffer* cb, const std::vector<Pixel>& pixels,
+	DXGI_FORMAT format = DXGI_FORMAT_R11G11B10_FLOAT)
 {
 	auto input = MakeTexture(device, pixels);
-	auto packed = MakeTexture(device, {}, DXGI_FORMAT_R11G11B10_FLOAT);
+	if (format == DXGI_FORMAT_R32G32B32A32_FLOAT)
+		return input;
+	auto packed = MakeTexture(device, {}, format);
 	Dispatch(context, copy, cb, FullTextureConstants(), { input.srv.Get() }, packed.uav.Get());
 	return packed;
 }
@@ -391,6 +400,8 @@ static void CheckPackedInvalidCandidates(ID3D11Device* device, ID3D11DeviceConte
 				"invalid packed candidates must retain source before storage rounding");
 	}
 }
+#include "lighting_preservation_gpu_checks.h"
+
 int main(int argc, char** argv)
 {
 	Require(argc == 2 || ((argc == 3 || argc == 4) && std::string_view(argv[2]) == "--hardware"), "provide NR colour shader directory and optional --hardware [adapter index]");
@@ -505,6 +516,7 @@ int main(int argc, char** argv)
 		const auto rounding = Compile(device.Get(), std::filesystem::path(__FILE__).parent_path() / "packed_rounding_test.hlsl",
 			directory.parent_path().parent_path(), flags);
 		std::printf("Packed shader compiler: %s\n", optimized ? "production optimization" : "IEEE strict");
+		CheckLightingPreservation(device.Get(), context.Get(), packedReconstruct.Get(), rounding.Get(), cb.Get(), optimized);
 		CheckPackedRounding(device.Get(), context.Get(), rounding.Get(), cb.Get());
 		CheckPackedDetail(device.Get(), context.Get(), packedReconstruct.Get(), rounding.Get(), cb.Get());
 		CheckPackedInvalidCandidates(device.Get(), context.Get(), packedReconstruct.Get(), rounding.Get(), cb.Get());

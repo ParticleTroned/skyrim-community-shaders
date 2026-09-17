@@ -57,7 +57,7 @@ namespace
 	}
 	void ReadSettings(const Json& object, Settings& settings)
 	{
-		Keys(object, { "schemaVersion", "enabled", "mode", "detailStrength", "appearanceMix", "maximumDetailStops" });
+		Keys(object, { "schemaVersion", "enabled", "mode", "detailStrength", "appearanceMix", "maximumDetailStops", "lightingPreservation" });
 		if (object.contains("schemaVersion") && (!object.at("schemaVersion").is_number_integer() || object.at("schemaVersion") != 1))
 			throw std::invalid_argument("unsupported colour-settings schema");
 		if (object.contains("enabled"))
@@ -70,6 +70,14 @@ namespace
 			settings.appearanceMix = Number(object.at("appearanceMix"));
 		if (object.contains("maximumDetailStops"))
 			settings.maximumDetailStops = Number(object.at("maximumDetailStops"));
+		if (object.contains("lightingPreservation")) {
+			const auto& value = object.at("lightingPreservation");
+			const float number = Number(value);
+			// Check the JSON value before float rounding can hide an out-of-range input.
+			if (value < 0.0 || value > 1.0)
+				throw std::invalid_argument("lighting preservation outside supported range");
+			settings.lightingPreservation = number;
+		}
 		if (!Valid(settings))
 			throw std::invalid_argument("colour settings outside supported ranges");
 	}
@@ -77,7 +85,7 @@ namespace
 	{
 		return { { "schemaVersion", 1 }, { "enabled", settings.enabled }, { "mode", Name(settings.mode, modes) },
 			{ "detailStrength", settings.detailStrength }, { "appearanceMix", settings.appearanceMix },
-			{ "maximumDetailStops", settings.maximumDetailStops } };
+			{ "maximumDetailStops", settings.maximumDetailStops }, { "lightingPreservation", settings.lightingPreservation } };
 	}
 	Json ProfileJson(const Profile& profile)
 	{
@@ -159,7 +167,7 @@ namespace
 			{ "rect", { o.rect.baseX, o.rect.baseY, o.rect.width, o.rect.height } },
 			{ "sourceFormat", o.sourceFormat }, { "outputFormat", o.outputFormat }, { "effectiveMode", Name(o.mode, modes) },
 			{ "profile", ProfileJson(o.profile) }, { "transportBypass", o.bypass }, { "modelEditShown", o.modelEditShown },
-			{ "atomicColourBatch", o.atomicStereo }, { "processed", o.processed }, { "retainedColourTextureBytes", o.retainedBytes },
+			{ "lightingPreservation", o.lightingPreservation }, { "atomicColourBatch", o.atomicStereo }, { "processed", o.processed }, { "retainedColourTextureBytes", o.retainedBytes },
 			{ "exposureAgeFrames", o.exposureState == ExposureBindingState::SnapshotQueued && o.exposure.stamp.frame <= o.sourceWorldFrame ?
 									   Json(o.sourceWorldFrame - o.exposure.stamp.frame) :
 									   Json(nullptr) },
@@ -457,6 +465,12 @@ namespace
             "minimum": 0,
             "maximum": 1
           },
+          "lightingPreservation": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Fraction of the existing smooth luminance residual removed in Preserve Source; default 1. Reconstruction only; does not reset inference history."
+          },
           "maximumDetailStops": {
             "type": "number",
             "minimum": 0,
@@ -629,9 +643,19 @@ void NeuralColor::DrawSettings()
 	changed |= ImGui::Checkbox("Apply neural edit (A/B; inference stays running)", &config.experiments.applyModelEdit);
 	ImGui::TextWrapped("Uncheck Apply neural edit to show the untouched source without changing model input/history or skipping inference. This is not an NR-off performance measurement.");
 	if (config.settings.mode == Mode::PreserveSource) {
+		float preservationPercent = config.settings.lightingPreservation * 100.0f;
+		if (ImGui::SliderFloat("Lighting preservation", &preservationPercent, 0, 100, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) {
+			config.settings.lightingPreservation = preservationPercent / 100.0f;
+			changed = true;
+		}
+		ImGui::SetItemTooltip("Suppress smooth neural brightness and tone changes. 100%% retains the existing Preserve Source behaviour; 0%% allows the full bounded neural brightness change. Appearance Mix independently admits neural colour and appearance. This is image-space processing, not physical separation of lighting from materials.");
+		if (config.settings.appearanceMix == 1.0f)
+			ImGui::TextWrapped("Appearance Mix is 1: lighting preservation is bypassed; its value is retained.");
 		changed |= ImGui::SliderFloat("Detail contribution", &config.settings.detailStrength, 0, 2);
+		ImGui::SetItemTooltip("Scales the accepted brightness residual, including broader changes below 100%% Lighting preservation.");
 		changed |= ImGui::SliderFloat("Neural appearance mix", &config.settings.appearanceMix, 0, 1);
 		changed |= ImGui::SliderFloat("Maximum detail gain (stops)", &config.settings.maximumDetailStops, 0, 2);
+		ImGui::SetItemTooltip("Bounds the preservation branch. Appearance Mix independently admits the full neural candidate, which can exceed this bound.");
 	}
 	if (ImGui::TreeNode("Exposure capture and colour assessment")) {
 		changed |= ImGui::Checkbox("Capture engine HDR exposure", &config.experiments.captureEngineExposure);

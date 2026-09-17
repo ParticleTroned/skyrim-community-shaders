@@ -27,6 +27,21 @@ def sample(slot=0, frame=100, captured=False):
 
 
 class AssessmentTests(unittest.TestCase):
+    def test_lighting_preservation_requires_sampled_value_in_every_region(self):
+        batch = self.batch(1, 100, (0, 1, 4, 5))
+        status = {"apiVersion": 3, "settings": {"lightingPreservation": 0.5}, "measurementBatches": [batch]}
+        self.assertFalse(assess.fresh_groups(status, 7, 0, 90))
+        for item in batch["measurements"]:
+            item["source"]["lightingPreservation"] = 0.5
+        self.assertEqual(len(assess.fresh_groups(status, 7, 0, 90)), 1)
+        for invalid in (None, True, "0.5", float("nan"), 1.0):
+            batch["measurements"][-1]["source"]["lightingPreservation"] = invalid
+            self.assertFalse(assess.fresh_groups(status, 7, 0, 90))
+        legacy = [sample(0), sample(1)]
+        result = assess.assess_samples([legacy], True)
+        self.assertTrue(all(row["reason"] == "absent_legacy_evidence" for row in result["lightingPreservationEvidence"]))
+        self.assertFalse(assess.lighting_evidence({}, [])["available"])
+
     def test_previous_capture_retains_real_frame_and_exact_age(self):
         group = [sample(0, captured=True), sample(1, captured=True)]
         for item in group:

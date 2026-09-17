@@ -19,8 +19,11 @@ namespace NeuralRendering::Color
 			std::uint32_t x, y, width, height;
 			std::uint32_t mode, domain, transform, flags;
 			float exposure, detail, appearance, maximumStops;
+			float lightingPreservation;
+			float padding[3]{};
 		};
-		static_assert(sizeof(Constants) == 48);
+		static_assert(sizeof(Constants) == 64);
+		static_assert(offsetof(Constants, lightingPreservation) == 48);
 		static_assert(offsetof(Constants, exposure) == 32);
 
 		Storage OutputStorage(DXGI_FORMAT format)
@@ -50,7 +53,8 @@ namespace NeuralRendering::Color
 			return { roi.baseX, roi.baseY, roi.width, roi.height,
 				static_cast<std::uint32_t>(config.EffectiveMode()), static_cast<std::uint32_t>(profile.domain),
 				static_cast<std::uint32_t>(profile.transform), flags, profile.exposureMultiplier,
-				config.settings.detailStrength, config.settings.appearanceMix, config.settings.maximumDetailStops };
+				config.settings.detailStrength, config.settings.appearanceMix, config.settings.maximumDetailStops,
+				config.settings.lightingPreservation, {} };
 		}
 		bool CreateTexture(ID3D11Device* device, Texture& texture,
 			std::uint32_t width, std::uint32_t height, DXGI_FORMAT format, bool output)
@@ -360,6 +364,7 @@ namespace NeuralRendering::Color
 		o.revision = config.revision;
 		o.bypass = config.experiments.transportBypass;
 		o.modelEditShown = config.experiments.applyModelEdit;
+		o.lightingPreservation = work.configuration.settings.lightingPreservation;
 		o.processed = false;
 		std::uint64_t pixelBytes = 4;
 		if (work.format == DXGI_FORMAT_R16G16B16A16_FLOAT || work.format == DXGI_FORMAT_R16G16B16A16_UNORM)

@@ -1,0 +1,18 @@
+{
+    "sourceCommit": "d69bdb7ebc899ce24971eac59b007503e0dc08bb",
+    "sourceSha256": {
+        "ColorReconstructCS.hlsl": "952ee5f4e5cc279463f93f3f8ac89a1d78a0bf179a74d1968eb9adcd7625d92e",
+        "ColorCommon.hlsli": "b5fd4d774597d19cf874eed4e0ff0877e0e213d38b81fab449c5f018d06c422e"
+    },
+    "compiler": "D3DCompileFromFile, d3dcompiler_47.dll, entry main, cs_5_0",
+    "compilerFileVersion": "10.0.19041.7663 (WinBuild.160101.0800)",
+    "flags": {
+        "strict": ["D3DCOMPILE_ENABLE_STRICTNESS", "D3DCOMPILE_IEEE_STRICTNESS"],
+        "optimized": ["D3DCOMPILE_ENABLE_STRICTNESS", "D3DCOMPILE_OPTIMIZATION_LEVEL3"]
+    },
+    "bytecodeSha256": {
+        "reconstruct-optimized.dxbc": "05d79efeb6646488be8909d8e42b58324e5c1f5624c246fb4326cd6223b556fc",
+        "reconstruct-strict.dxbc": "d716a0dcdafeaccf78593a9e66292bcdc21ba68d2bd54b469111d2f9d4f2dc8d"
+    },
+    "purpose": "Immutable pre-slider production bytecode; bind the unchanged first 48 bytes. No second production source implementation."
+}

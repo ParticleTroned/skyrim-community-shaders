@@ -46,8 +46,8 @@ def verify(root: Path, deployed_data: Path | None = None) -> dict:
                         # not a complete shader package. Every mapped include is
                         # itself scanned and hash-checked, closing dependencies.
                         errors.append(f"Shader include is not packaged: {include} from {source}")
-            if path.suffix == ".ini" and "Version = 1-2-0" not in text:
-                errors.append("NeuralColor manifest version is not 1-2-0")
+            if path.suffix == ".ini" and "Version = 1-3-0" not in text:
+                errors.append("NeuralColor manifest version is not 1-3-0")
             if deployed_data is not None:
                 deployed = deployed_data / target
                 row["deployedPresent"] = deployed.is_file()

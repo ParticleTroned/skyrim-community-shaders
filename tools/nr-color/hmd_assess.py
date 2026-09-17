@@ -24,6 +24,8 @@ import shutil
 import sys
 from typing import Any
 
+from assess import AssessmentError, lighting_evidence
+
 VERSION = "csx-nr-hmd-assessment-v1"
 EYES = ("left", "right")
 CLASSES = {"skin", "material", "shadow", "highlight", "background"}
@@ -301,6 +303,21 @@ def check_nr(evidence: dict, expected: dict, candidate: dict, acquisition: dict,
     configuration = evidence["configuration"]
     require(configuration["upscaling"].get("neuralRenderingEnabled") is nr_enabled, "configuration and NR master outcome disagree")
     colour = configuration["color"]
+    declared = candidate.get("settings", {}).get("settings", {})
+    if "lightingPreservation" in declared:
+        try:
+            lighting_evidence(declared, [colour["settings"]])
+        except AssessmentError as error:
+            raise EvidenceError("lighting preservation differs from declared candidate or is absent") from error
+    observations = [region for eye in EYES for region in evidence[eye].get("physicalRegions", [])]
+    if nr_enabled and kind in ("preserve_source", "managed_identity", "conversion") and "lightingPreservation" in colour["settings"]:
+        require(all(evidence[eye].get("physicalRegions") for eye in EYES), "lighting preservation observations missing for an eye")
+    observations.extend(item["source"] for batch in (capture_diagnostics or {}).get("measurementBatches", [])
+                        for item in batch.get("measurements", []))
+    try:
+        lighting_evidence(colour["settings"], observations)
+    except AssessmentError as error:
+        raise EvidenceError(str(error)) from error
     experiments = colour["experiments"]
     require(experiments.get("applyModelEdit") is candidate["applyModelEdit"]
             and experiments.get("transportBypass") is False and experiments.get("captureFrameEvidence") is True,
@@ -448,7 +465,10 @@ def check_pair(child: dict, base: Path, expected: dict, candidate: dict, policy:
     require(planes[0]["publicationGeneration"] == planes[1]["publicationGeneration"]
             and planes[0]["deviceIdentity"] == planes[1]["deviceIdentity"], "eye publication identity mismatch")
     return {"requestId": child["requestId"], "ordinal": child["ordinal"], "acquisition": acquisition,
-            "images": outputs, "captureDiagnostics": companions}
+            "images": outputs, "captureDiagnostics": companions,
+            "lightingPreservationEvidence": lighting_evidence(
+                acquisition["nrEvidence"]["configuration"]["color"]["settings"],
+                [region for eye in EYES for region in acquisition["nrEvidence"][eye].get("physicalRegions", [])])}
 
 
 def region_metrics(pixels: Any) -> dict:

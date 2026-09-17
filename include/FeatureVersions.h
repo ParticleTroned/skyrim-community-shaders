@@ -27,7 +27,7 @@ namespace FeatureVersions
         {"LODBlending"sv,          {1,0,0}},
         {"LightLimitFix"sv,        {3,5,0}},
         {"LinearLighting"sv,       {1,0,5}},
-        {"NeuralColor"sv,          {1,2,0}},
+        {"NeuralColor"sv,          {1,3,0}},
         {"PerformanceOverlay"sv,   {1,2,0}},
         {"RenderDoc"sv,            {1,1,0}},
         {"ScreenSpaceGI"sv,        {4,2,6}},

@@ -81,7 +81,7 @@ public:
 	struct SkylightingCB
 	{
 		REX::W32::XMFLOAT4X4 OcclusionViewProj;
-		float4 OcclusionDir;
+		float4 OcclusionSHBasis4Pi;
 
 		float3 PosOffset;  // cell origin in camera model space
 		uint _pad0;
@@ -130,7 +130,7 @@ public:
 	std::atomic_bool queuedResetSkylighting{ true };
 	bool inOcclusion = false;
 	REX::W32::XMFLOAT4X4 OcclusionTransform;
-	float4 OcclusionDir;
+	float4 OcclusionSHBasis4Pi;
 	uint frameCount = 0;
 
 	/** @brief Requests a probe rebuild on the render thread. */

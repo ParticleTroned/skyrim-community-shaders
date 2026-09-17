@@ -8,6 +8,7 @@
 #include "Utils/D3D.h"
 #include "Utils/DevBenchUx.h"
 #include "Utils/MathUtils.h"
+#include "Utils/SphericalHarmonics.h"
 
 #include <cmath>
 #include <memory>
@@ -365,7 +366,7 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 
 	return {
 		.OcclusionViewProj = OcclusionTransform,
-		.OcclusionDir = OcclusionDir,
+		.OcclusionSHBasis4Pi = OcclusionSHBasis4Pi,
 		.PosOffset = cellOrigin - eyePos,
 		.ArrayOrigin = {
 			static_cast<uint>((static_cast<int>(cellID.x) - static_cast<int>(probeArrayDims[0] / 2)) % static_cast<int>(probeArrayDims[0]) + static_cast<int>(probeArrayDims[0])) % probeArrayDims[0],
@@ -888,7 +889,8 @@ void Skylighting::RenderOcclusion()
 		precipitation->RenderMask(reinterpret_cast<RE::BSParticleShaderRainEmitter*>(&syntheticRain));
 	}
 
-	OcclusionDir = -float4{ direction.x, direction.y, direction.z, 0.0f };
+	const auto basis = SphericalHarmonics::Scale(SphericalHarmonics::Evaluate(-direction), 4.0f * std::numbers::pi_v<float>);
+	OcclusionSHBasis4Pi = { basis.c0, basis.c1[0], basis.c1[1], basis.c1[2] };
 	OcclusionTransform = reinterpret_cast<RE::BSParticleShaderRainEmitter*>(&syntheticRain)->occlusionProjection;
 	lastOcclusionRenderFrame = globals::state->frameCount;
 }

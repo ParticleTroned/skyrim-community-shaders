@@ -64,12 +64,13 @@ static Texture MakeTexture(ID3D11Device* device, const std::vector<Pixel>& pixel
 	return value;
 }
 static ComPtr<ID3D11ComputeShader> Compile(ID3D11Device* device, const std::filesystem::path& path,
-	const std::filesystem::path& shaderRoot = {})
+	const std::filesystem::path& shaderRoot = {},
+	UINT flags = D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_IEEE_STRICTNESS)
 {
 	ComPtr<ID3DBlob> bytecode, errors;
 	PackageIncludes includes(shaderRoot.empty() ? path.parent_path().parent_path().parent_path() : shaderRoot);
 	const auto result = D3DCompileFromFile(path.c_str(), nullptr, &includes,
-		"main", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_IEEE_STRICTNESS, 0, &bytecode, &errors);
+		"main", "cs_5_0", flags, 0, &bytecode, &errors);
 	if (errors)
 		std::fprintf(stderr, "%.*s\n", static_cast<int>(errors->GetBufferSize()), static_cast<const char*>(errors->GetBufferPointer()));
 	Check(result);
@@ -397,28 +398,25 @@ int main(int argc, char** argv)
 	ComPtr<ID3D11Device> device;
 	ComPtr<ID3D11DeviceContext> context;
 	const D3D_FEATURE_LEVEL levels[]{ D3D_FEATURE_LEVEL_11_0 };
-	Check(D3D11CreateDevice(nullptr, hardware ? D3D_DRIVER_TYPE_HARDWARE : D3D_DRIVER_TYPE_WARP, nullptr, 0, levels, 1,
-		D3D11_SDK_VERSION, &device, nullptr, &context));
-	ComPtr<IDXGIDevice> dxgiDevice;
 	ComPtr<IDXGIAdapter> adapter;
-	DXGI_ADAPTER_DESC adapterDesc{};
-	Check(device.As(&dxgiDevice));
-	Check(dxgiDevice->GetAdapter(&adapter));
 	if (argc == 4) {
 		unsigned index = 0;
 		const std::string_view text(argv[3]);
 		const auto parsed = std::from_chars(text.data(), text.data() + text.size(), index);
 		Require(parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size(), "hardware adapter index must be unsigned");
 		ComPtr<IDXGIFactory> factory;
-		Check(adapter->GetParent(IID_PPV_ARGS(&factory)));
-		adapter.Reset();
-		dxgiDevice.Reset();
-		context.Reset();
-		device.Reset();
+		Check(CreateDXGIFactory(IID_PPV_ARGS(&factory)));
 		Check(factory->EnumAdapters(index, &adapter));
-		Check(D3D11CreateDevice(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, 0, levels, 1,
-			D3D11_SDK_VERSION, &device, nullptr, &context));
 	}
+	auto driverType = hardware ? D3D_DRIVER_TYPE_HARDWARE : D3D_DRIVER_TYPE_WARP;
+	if (adapter)
+		driverType = D3D_DRIVER_TYPE_UNKNOWN;
+	Check(D3D11CreateDevice(adapter.Get(), driverType,
+		nullptr, 0, levels, 1, D3D11_SDK_VERSION, &device, nullptr, &context));
+	ComPtr<IDXGIDevice> dxgiDevice;
+	Check(device.As(&dxgiDevice));
+	Check(dxgiDevice->GetAdapter(&adapter));
+	DXGI_ADAPTER_DESC adapterDesc{};
 	Check(adapter->GetDesc(&adapterDesc));
 	std::printf("Shader test adapter: %ls (vendor %04x, device %04x)\n", adapterDesc.Description, adapterDesc.VendorId, adapterDesc.DeviceId);
 	const std::filesystem::path directory(argv[1]);
@@ -499,10 +497,17 @@ int main(int argc, char** argv)
 	}
 	for (unsigned domain = 0; domain < 3; ++domain)
 		CheckFineDetail(device.Get(), context.Get(), prepare.Get(), reconstruct.Get(), cb.Get(), domain);
-	const auto rounding = Compile(device.Get(), std::filesystem::path(__FILE__).parent_path() / "packed_rounding_test.hlsl",
-		directory.parent_path().parent_path());
-	CheckPackedRounding(device.Get(), context.Get(), rounding.Get(), cb.Get());
-	CheckPackedDetail(device.Get(), context.Get(), reconstruct.Get(), rounding.Get(), cb.Get());
-	CheckPackedInvalidCandidates(device.Get(), context.Get(), reconstruct.Get(), rounding.Get(), cb.Get());
+	// Production optimization must preserve the same packed rounding and fallback contract.
+	for (bool optimized : { false, true }) {
+		const UINT flags = D3DCOMPILE_ENABLE_STRICTNESS |
+		                   (optimized ? D3DCOMPILE_OPTIMIZATION_LEVEL3 : D3DCOMPILE_IEEE_STRICTNESS);
+		const auto packedReconstruct = optimized ? Compile(device.Get(), directory / "ColorReconstructCS.hlsl", {}, flags) : reconstruct;
+		const auto rounding = Compile(device.Get(), std::filesystem::path(__FILE__).parent_path() / "packed_rounding_test.hlsl",
+			directory.parent_path().parent_path(), flags);
+		std::printf("Packed shader compiler: %s\n", optimized ? "production optimization" : "IEEE strict");
+		CheckPackedRounding(device.Get(), context.Get(), rounding.Get(), cb.Get());
+		CheckPackedDetail(device.Get(), context.Get(), packedReconstruct.Get(), rounding.Get(), cb.Get());
+		CheckPackedInvalidCandidates(device.Get(), context.Get(), packedReconstruct.Get(), rounding.Get(), cb.Get());
+	}
 	std::printf("Passed %u %s shader checks; D3D12/NGX transport is not exercised by this test.\n", checks, hardware ? "hardware" : "WARP");
 }

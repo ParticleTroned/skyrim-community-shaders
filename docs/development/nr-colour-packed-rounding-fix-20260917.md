@@ -6,6 +6,9 @@ disappear while tiny negative changes stepped down to a lower representable
 value. Explicit nearest-value rounding before that packed store removes
 this numerical bias.
 
+The [adversarial review](nr-colour-packed-rounding-review-20260917.md)
+records the subsequent production-compiler coverage and scope checks.
+
 The correction retains the adjacent-tap detail filter, existing defaults,
 input profiles, stop limits and character-mask policy. It does not establish
 useful new neural detail or resolve the entire previously observed face

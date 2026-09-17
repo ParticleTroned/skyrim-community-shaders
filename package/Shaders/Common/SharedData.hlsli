@@ -196,7 +196,7 @@ namespace SharedData
 		uint SliceStart;
 		uint SliceCount;
 		float ProbeArrayWorldSize;
-		uint pad1;
+		uint EnableFastProbeSampling;
 	};
 
 	struct CloudShadowsSettings

@@ -34,6 +34,13 @@ struct FoveatedRegionPlan
 		{
 			return IsValid() ? maxY - minY : 0u;
 		}
+
+		/** Complete target coverage is required before omitting its background fill. */
+		[[nodiscard]] bool CoversExtent(uint32_t a_width, uint32_t a_height) const
+		{
+			return a_width && a_height && minX == 0u && minY == 0u &&
+			       maxX == a_width && maxY == a_height;
+		}
 	};
 
 	struct TextureRegion

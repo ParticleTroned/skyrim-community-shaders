@@ -614,9 +614,14 @@ namespace
 					constants.finalLdrColorMode = finalLdr;
 					constants.characterSelectionMode = character;
 					constants.characterMaskBounds[2] = constants.characterMaskBounds[3] = 1.0f;
+					std::vector<Color> destination(width * 2 * height, baseline);
+					if (!finalLdr) {
+						for (std::uint32_t y = 0; y < height; ++y)
+							for (std::uint32_t x = 0; x < width; ++x)
+								destination[y * width * 2 + eye * width + x] = { nan, nan, nan, nan };
+					}
 					const auto result = gpu.Blend(constants, width, height, model,
-						std::vector<Color>(width * height, baseline), mask,
-						std::vector<Color>(width * 2 * height, baseline));
+						std::vector<Color>(width * height, baseline), mask, destination);
 					for (std::uint32_t y = 0; y < height; ++y) {
 						for (std::uint32_t x = 0; x < width * 2; ++x) {
 							const bool selected = x / width == eye && (!character || x % width < 2 || x % width >= 6);

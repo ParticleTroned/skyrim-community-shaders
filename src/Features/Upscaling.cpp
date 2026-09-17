@@ -45910,6 +45910,18 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 		return FidelityFX::UpscaleResult::Failed;
 	};
 
+	const auto& preparedRect = foveatedRectCache.rects[eyeIndex];
+	const auto& preparedCenter = foveatedCenterColorOut[eyeIndex];
+	const bool skipPeripheryUnderlay =
+		!params.usePeripheryTAA && !params.visualizeMask && params.centerAlreadyPrepared &&
+		IsNeuralRenderingRequested() && GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution &&
+		!settings.neuralRenderingFovOnly && neuralResult && neuralResult->dlssEvaluated &&
+		eyePlan.visibleOutput.CoversExtent(params.outputWidthPerEye, params.outputHeight) &&
+		preparedRect.outputOffsetX == 0u && preparedRect.outputOffsetY == 0u &&
+		preparedRect.outputWidth == params.outputWidthPerEye && preparedRect.outputHeight == params.outputHeight &&
+		preparedCenter && preparedCenter->srv &&
+		preparedCenter->desc.Width == params.outputWidthPerEye && preparedCenter->desc.Height == params.outputHeight;
+
 	if (params.usePeripheryTAA) {
 		if (hasTaaOuterRegion) {
 			uint32_t tileCount = 0;
@@ -45954,7 +45966,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 		} else if (!dispatchPeripheryBand(0, 0, params.outputWidthPerEye, params.outputHeight)) {
 			return failAfterUnbind();
 		}
-	} else {
+	} else if (!skipPeripheryUnderlay) {
 		if (!dispatchPeripheryBand(0, 0, params.outputWidthPerEye, params.outputHeight))
 			return failAfterUnbind();
 	}

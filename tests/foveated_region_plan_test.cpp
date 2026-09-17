@@ -54,6 +54,20 @@ namespace
 
 int main()
 {
+	Require(FoveatedRegionPlan::Rect{ 0u, 0u, 9u, 5u }.CoversExtent(9u, 5u));
+	Require(!FoveatedRegionPlan::Rect{}.CoversExtent(0u, 0u));
+	Require(!FoveatedRegionPlan::Rect{ 1u, 0u, 9u, 5u }.CoversExtent(9u, 5u));
+	Require(!FoveatedRegionPlan::Rect{ 0u, 1u, 9u, 5u }.CoversExtent(9u, 5u));
+	Require(!FoveatedRegionPlan::Rect{ 0u, 0u, 8u, 5u }.CoversExtent(9u, 5u));
+	Require(!FoveatedRegionPlan::Rect{ 0u, 0u, 9u, 4u }.CoversExtent(9u, 5u));
+	Require(!FoveatedRegionPlan::Rect{ 0u, 0u, 10u, 5u }.CoversExtent(9u, 5u));
+	const auto fullImage = FoveatedRegionPlan::Build(9u, 5u, 17u, 11u, true,
+		1.0f, 0.0f, 1.0f, {}, 0u, 0.0f, 16u);
+	Require(fullImage.IsValid());
+	for (const auto& eye : fullImage.eyes) {
+		Require(eye.visibleOutput.CoversExtent(17u, 11u));
+		Require(eye.output.CoversExtent(17u, 11u));
+	}
 	const std::array<float2, 2> offsets{
 		float2{ -0.04f, 0.02f },
 		float2{ 0.04f, 0.02f }
@@ -73,6 +87,7 @@ int main()
 	for (std::size_t eyeIndex = 0; eyeIndex < guarded.eyes.size(); ++eyeIndex) {
 		const auto& baselineEye = baseline.eyes[eyeIndex];
 		const auto& guardedEye = guarded.eyes[eyeIndex];
+		Require(!guardedEye.visibleOutput.CoversExtent(1920u, 2160u));
 		Require(Equal(baselineEye.visibleOutput, guardedEye.visibleOutput));
 		Require(Equal(baselineEye.output, baselineEye.visibleOutput));
 		AssertVisibleMapsIntoWork(guardedEye);

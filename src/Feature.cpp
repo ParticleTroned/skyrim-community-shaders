@@ -176,7 +176,7 @@ void Feature::Load(json& o_json)
 				const auto rendering = NeuralRendering::RenderingSettings(o_json.value("Upscaling", json::object()));
 				if (!rendering.empty() || o_json.contains("Neural Rendering Colour"))
 					o_json[GetName()] = { { "schemaVersion", 1 }, { "rendering", std::move(rendering) },
-						{ "colour", o_json.value("Neural Rendering Colour", json::object()) } };
+						{ "colour", NeuralRendering::LegacyColourSettings(o_json) } };
 			}
 			if (o_json[GetName()].is_structured()) {
 				logger::info("Loading {} settings", GetName());

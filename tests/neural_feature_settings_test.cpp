@@ -150,4 +150,19 @@ int main()
 	require(upscalerEdit.neuralCharacterDebugView == 2 && upscalerEdit.neuralCharacterMaskTestMode == 1);
 	require(NeuralRendering::RenderingSettings(Json{ { "qualityMode", 4 } }).empty());
 	require(NeuralRendering::RenderingSettings(Json{ { "qualityMode", 4 }, { "neuralRenderingEnabled", false } }).size() == 1);
+
+	backend.accept = true;
+	for (const Json disabled : { Json(true), Json(false), Json("invalid"), Json(nullptr) }) {
+		Json legacy = { { "Upscaling", { { "neuralRenderingEnabled", true } } },
+			{ "Neural Rendering Colour", { { "enabled", true }, { "mode", "managed" }, { "detailStrength", 1.25 } } },
+			{ "Disable at Boot", { { "NeuralColor", disabled } } } };
+		const auto migrated = NeuralRendering::LegacyColourSettings(legacy);
+		require(migrated.at("enabled") == (disabled != Json(true)));
+		require(migrated.at("mode") == "managed" && migrated.at("detailStrength") == 1.25);
+		Json envelope = { { "schemaVersion", 1 }, { "rendering", NeuralRendering::RenderingSettings(legacy.at("Upscaling")) },
+			{ "colour", migrated } };
+		feature.LoadSettings(envelope);
+		require(backend.rendering.at("neuralRenderingEnabled") == true);
+		require(colour.Snapshot().settings.enabled == (disabled != Json(true)));
+	}
 }

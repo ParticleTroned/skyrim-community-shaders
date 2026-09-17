@@ -16,6 +16,19 @@ namespace NeuralRendering
 		return result;
 	}
 
+	/** Preserves legacy colour boot-disable without disabling independent rendering. */
+	inline nlohmann::json LegacyColourSettings(const nlohmann::json& settings)
+	{
+		auto colour = settings.value("Neural Rendering Colour", nlohmann::json::object());
+		const auto disabled = settings.find("Disable at Boot");
+		if (disabled != settings.end() && disabled->is_object()) {
+			const auto legacy = disabled->find("NeuralColor");
+			if (legacy != disabled->end() && legacy->is_boolean() && legacy->get<bool>() && colour.is_object())
+				colour["enabled"] = false;
+		}
+		return colour;
+	}
+
 	/** Migrates legacy lane selection without persisting session-only overrides. */
 	inline nlohmann::json PersistentRenderingSettings(nlohmann::json rendering)
 	{

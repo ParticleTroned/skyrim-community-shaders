@@ -195,7 +195,8 @@ namespace SharedData
 		uint4 ArrayDims;
 		uint SliceStart;
 		uint SliceCount;
-		uint2 pad1;
+		float ProbeArrayWorldSize;
+		uint pad1;
 	};
 
 	struct CloudShadowsSettings

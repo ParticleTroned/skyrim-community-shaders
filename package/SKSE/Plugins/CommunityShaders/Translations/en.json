@@ -2799,6 +2799,8 @@
     "feature.skylighting.max_zenith_tooltip": "Smaller angles creates more focused top-down shadow.",
     "feature.skylighting.min_visibility_desc": "Minimum visibility values. Diffuse darkens objects. Specular removes the sky from reflections.",
     "feature.skylighting.name": "Skylighting",
+    "feature.skylighting.probe_field_width": "Probe Field Width (Cells)",
+    "feature.skylighting.probe_field_width_desc": "Extends skylighting coverage without adding probes. Larger fields reduce spatial detail and rebuild the probe history.",
     "feature.skylighting.probe_grid": "Probe Grid",
     "feature.skylighting.probe_grid_high": "256 x 256 x 128",
     "feature.skylighting.probe_grid_low": "128 x 128 x 64",

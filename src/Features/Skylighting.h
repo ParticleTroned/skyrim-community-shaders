@@ -68,6 +68,9 @@ public:
 		uint ProbeGridQuality = 2;
 		bool EnableIncrementalProbeUpdates = false;
 		uint StableSliceCount = 16;
+		bool EnableReducedUpdateFrequency = false;
+		uint OcclusionUpdateInterval = 1;
+		uint ProbeUpdateInterval = 1;
 	} settings;
 
 	struct SkylightingCB
@@ -175,6 +178,8 @@ public:
 
 private:
 	bool HasShadowData() const;
+	float3 GetProbeCellSize() const;
+	float3 GetProbeCell(float3 eyePosition) const;
 	bool HasProbeResources() const;
 	void ClearProbes();
 	bool probeDataReady = false;
@@ -186,6 +191,9 @@ private:
 	uint dispatchSliceStart = 0;
 	uint dispatchSliceCount = 0;
 	uint lastProbeUpdateCapture = static_cast<uint>(-1);
+	uint lastProbeUpdateFrame = static_cast<uint>(-1);
+	uint occlusionCaptureCorner = 0;
+	uint nextOcclusionCorner = 0;
 	static std::array<uint, 3> GetProbeArrayDims(uint quality);
 	void CreateProbeResources(const std::array<uint, 3>& dimensions);
 	void ApplyProbeGrid();

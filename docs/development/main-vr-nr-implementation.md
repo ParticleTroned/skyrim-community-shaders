@@ -1,5 +1,9 @@
 # Neural Rendering port to the CPU/DLSS regression branch
 
+For subsequent work, read the [current progress and branch directive](main-vr-nr-progress.md):
+`main-vr-nr` remains the integration target; earlier branch-migration
+handover instructions are superseded. This report preserves port history.
+
 The subsequent [adversarial review](main-vr-nr-adversarial-review.md)
 records the topic fixes, production UI, shared FOV prerequisites and mask
 handling, OpenNR comparison, and final validated build identity. The

@@ -45325,19 +45325,21 @@ void Upscaling::FinalizeMainFinalLdrNeuralPresentation() noexcept
 
 		auto& depth = renderer->GetDepthStencilData().depthStencils
 		                  [RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-		const auto inputLayout = ResolveVRSideBySideStereoLayout(
-			pending.inputWidthPerEye, pending.inputHeight);
 		D3D11_TEXTURE2D_DESC depthDesc{};
 		winrt::com_ptr<ID3D11Resource> depthSrvResource;
 		if (depth.depthSRV)
 			depth.depthSRV->GetResource(depthSrvResource.put());
 		if (!depth.texture || !depth.depthSRV || !depthSrvResource ||
-			!inputLayout.IsValid() ||
 			GetCOMIdentityAddress(depthSrvResource.get()) !=
 				GetCOMIdentityAddress(depth.texture) ||
+			!mainFinalLdrDepthProof.SupportsOutputLayout(
+				pending.inputWidthPerEye, pending.inputHeight,
+				pending.outputWidthPerEye, pending.outputHeight,
+				pending.frame, GetCOMIdentityAddress(depth.texture)) ||
 			!TryGetTexture2DDesc(depth.texture, depthDesc) ||
-			depthDesc.Width < inputLayout.width ||
-			depthDesc.Height < inputLayout.height ||
+			depthDesc.Width != outputLayout.width ||
+			depthDesc.Height != outputLayout.height ||
+			depthDesc.ArraySize != 1 || depthDesc.MipLevels != 1 ||
 			depthDesc.SampleDesc.Count != 1) {
 			return;
 		}
@@ -45410,9 +45412,9 @@ void Upscaling::FinalizeMainFinalLdrNeuralPresentation() noexcept
 		for (uint32_t eye = 0; eye < 2; ++eye) {
 			const bool eyeCleared = ClearHMDMaskForEye(
 				HMDMaskClearPhase::PerEyeOutput, eye, neuralFinalLdrFramebuffer->uav.get(),
-				depth.depthSRV, pending.inputWidthPerEye,
-				pending.inputHeight, pending.outputWidthPerEye,
-				pending.outputHeight, inputLayout.eyes[eye].minX,
+				depth.depthSRV, pending.outputWidthPerEye,
+				pending.outputHeight, pending.outputWidthPerEye,
+				pending.outputHeight, outputLayout.eyes[eye].minX,
 				outputLayout.eyes[eye].minX, 0u, 0u, true);
 			hmdMaskPairCleared = hmdMaskPairCleared && eyeCleared;
 		}
@@ -65557,6 +65559,9 @@ void Upscaling::UpdateDepthUpscaleKernelState(JitterCB& a_jitterData, bool a_ena
 
 void Upscaling::UpscaleDepth()
 {
+	const bool neuralDepthProofRequested = globals::game::isVR && IsNeuralRenderingRequested();
+	if (neuralDepthProofRequested)
+		mainFinalLdrDepthProof = {};
 	// Optimization overview:
 	// 1) Early validation exits before issuing GPU work.
 	// 2) Wide-kernel depth mode uses hysteresis to avoid frequent toggles.
@@ -65699,6 +65704,8 @@ void Upscaling::UpscaleDepth()
 
 		context->PSSetShader(depthUpscalePS, nullptr, 0);
 		context->Draw(3, 0);
+		if (neuralDepthProofRequested)
+			mainFinalLdrDepthProof = { state->frameCount, GetCOMIdentityAddress(depth.texture) };
 
 		// Depth copy is also used on VR. The dynamic no-render-scale underwater
 		// repair needs the original dynamic depth until the mask pass completes.

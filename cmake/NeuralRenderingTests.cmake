@@ -31,6 +31,13 @@ target_sources(neural_full_resolution_preparation_test PRIVATE
     "${_neural_full_resolution_test_dir}/neural_full_resolution_preparation_under_test.h")
 target_include_directories(neural_full_resolution_preparation_test PRIVATE "${_neural_full_resolution_test_dir}")
 
+add_controller_test(neural_main_depth_presentation_test NeuralMainDepthPresentation
+    tests/neural_main_depth_presentation_test.cpp)
+add_test(NAME NeuralMainDepthPresentationContract COMMAND "${CMAKE_COMMAND}"
+    "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
+    "${PROJECT_SOURCE_DIR}/tests/neural_main_depth_presentation_contract_test.cmake")
+set_tests_properties(NeuralMainDepthPresentationContract PROPERTIES LABELS "ControllerTests")
+
 foreach(_test IN ITEMS character_mask character_mask_bounds)
     add_executable(${_test}_gpu_test EXCLUDE_FROM_ALL tests/${_test}_gpu_test.cpp)
     target_compile_features(${_test}_gpu_test PRIVATE cxx_std_23)

@@ -10,6 +10,7 @@
 #include "Upscaling/LumaSharpen/LumaSharpen.h"
 #include "Upscaling/NeuralRendering/CaptureEvidence.h"
 #include "Upscaling/NeuralRendering/CharacterRendering.h"
+#include "Upscaling/NeuralRendering/MainDepthPresentation.h"
 #include "Upscaling/NeuralRendering/PipelinePolicy.h"
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
@@ -3837,6 +3838,7 @@ public:
 		uint32_t outputWidthPerEye = 0;
 		uint32_t outputHeight = 0;
 	} mainFinalLdrPresentationState{};
+	NeuralRendering::MainDepthPresentationProof mainFinalLdrDepthProof{};
 	bool submitStageForceFullEyeVendorFallback = false;
 	std::atomic<uint32_t> submitStageVendorResumeFrame{ 0 };
 	std::atomic_bool submitStageVendorResumeProofDrivenRelease{ false };

@@ -9,7 +9,6 @@
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -45,6 +44,32 @@ namespace
 		Require(SUCCEEDED(result), std::string(operation) + " failed: " +
 									   std::to_string(static_cast<unsigned long>(result)));
 	}
+
+	// A completed staging copy lets the deadline test control readiness probes
+	// independently of CPU scheduling and GPU throughput.
+	struct TwoProbeFence final : ID3D11Fence
+	{
+		UINT probes = 0;
+		HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, void** object) override
+		{
+			if (object)
+				*object = nullptr;
+			return E_NOINTERFACE;
+		}
+		ULONG STDMETHODCALLTYPE AddRef() override { return 1; }
+		ULONG STDMETHODCALLTYPE Release() override { return 1; }
+		void STDMETHODCALLTYPE GetDevice(ID3D11Device** device) override
+		{
+			if (device)
+				*device = nullptr;
+		}
+		HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID, UINT*, void*) override { return E_NOTIMPL; }
+		HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID, UINT, const void*) override { return E_NOTIMPL; }
+		HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID, const IUnknown*) override { return E_NOTIMPL; }
+		HRESULT STDMETHODCALLTYPE CreateSharedHandle(const SECURITY_ATTRIBUTES*, DWORD, LPCWSTR, HANDLE*) override { return E_NOTIMPL; }
+		UINT64 STDMETHODCALLTYPE GetCompletedValue() override { return ++probes == 1 ? 0u : 1u; }
+		HRESULT STDMETHODCALLTYPE SetEventOnCompletion(UINT64, HANDLE) override { return E_NOTIMPL; }
+	};
 
 	std::vector<Bounds> Reference(std::uint32_t width, std::uint32_t height,
 		const std::vector<std::uint8_t>& pixels)
@@ -704,24 +729,52 @@ namespace
 				Queue(left);
 				Queue(right);
 				context_->Flush();  // Both eyes are submitted before the only flush.
-				std::vector<Bounds> actualLeft(left.expected.size()), actualRight(right.expected.size());
-				// The gate is still closed, so this deterministically reproduces
-				// the old timeout without relying on worker-thread scheduling.
-				Require(Read(left, actualLeft, Clock::now() + std::chrono::milliseconds(2)).status ==
-							CharacterMaskReadbackStatus::Timeout,
-					"Old 2ms deadline must reject queued work");
-				std::atomic<HRESULT> signalResult{ E_PENDING };
-				std::jthread signal([&] {
-					std::this_thread::sleep_for(std::chrono::milliseconds(8));
-					signalResult = gate.cpuFence->Signal(1);
-				});
+				const std::vector<Bounds> sentinel(left.expected.size(), Bounds{ 91, 92, 93, 94 });
+				auto actualLeft = sentinel;
+				auto actualRight = sentinel;
+				const auto expiredSharedDeadline = Clock::now() + std::chrono::milliseconds(2);
+				const auto pendingLeft = Read(left, actualLeft, expiredSharedDeadline);
+				const auto pendingRight = Read(right, actualRight, expiredSharedDeadline);
+				Require(pendingLeft.status == CharacterMaskReadbackStatus::Timeout &&
+							pendingRight.status == CharacterMaskReadbackStatus::Timeout &&
+							actualLeft == sentinel && actualRight == sentinel,
+					"Closed GPU gate must preserve both destinations at one shared deadline: left=" +
+						std::string(pendingLeft.Reason()) + " right=" + pendingRight.Reason());
+				Check(gate.cpuFence->Signal(1), "Release queued GPU work");
+				// Readiness setup has its own generous bound; it does not consume
+				// coverage or change the production reader's 50 ms budget.
+				const auto fixtureDeadline = Clock::now() + std::chrono::seconds(2);
+				bool copiesReady = false;
+				while (!copiesReady && Clock::now() < fixtureDeadline) {
+					BOOL leftReady = FALSE, rightReady = FALSE;
+					const auto leftQuery = context_->GetData(left.query.Get(), &leftReady, sizeof(leftReady), D3D11_ASYNC_GETDATA_DONOTFLUSH);
+					const auto rightQuery = context_->GetData(right.query.Get(), &rightReady, sizeof(rightReady), D3D11_ASYNC_GETDATA_DONOTFLUSH);
+					Check(leftQuery, "Probe queued left copy");
+					Check(rightQuery, "Probe queued right copy");
+					copiesReady = leftQuery == S_OK && leftReady && rightQuery == S_OK && rightReady;
+					if (!copiesReady)
+						std::this_thread::yield();
+				}
+				Require(copiesReady, "Queued-eye fixture did not complete within two seconds");
 				const auto deadline = Clock::now() + NeuralRendering::kCharacterMaskReadbackBudget;
 				const auto leftResult = Read(left, actualLeft, deadline);
 				const auto rightResult = Read(right, actualRight, deadline);
-				signal.join();
-				Check(signalResult.load(), "Release delayed GPU work from CPU thread");
-				Require(leftResult.Ready() && rightResult.Ready(), "Two queued eyes must share one readiness deadline");
+				Require(leftResult.Ready() && rightResult.Ready(),
+					"Completed queued eyes must share one readiness deadline: left=" + std::string(leftResult.Reason()) +
+						" (" + std::to_string(leftResult.waitMs) + " ms) right=" + rightResult.Reason() +
+						" (" + std::to_string(rightResult.waitMs) + " ms)");
 				Require(actualLeft == left.expected && actualRight == right.expected, "Queued eye bounds must be exact");
+				cases_ += 2;
+
+				TwoProbeFence sharedFence;
+				actualRight = sentinel;
+				const auto sharedResult = Read(right, actualRight, expiredSharedDeadline, { &sharedFence, 1 });
+				Require(sharedResult.status == CharacterMaskReadbackStatus::Timeout && sharedFence.probes == 1 && actualRight == sentinel,
+					"Expired shared deadline must permit only one pending readiness probe");
+				TwoProbeFence renewedFence;
+				const auto renewedResult = Read(right, actualRight, Clock::now() + std::chrono::seconds(2), { &renewedFence, 1 });
+				Require(renewedResult.Ready() && renewedFence.probes == 2 && actualRight == right.expected,
+					"Negative control must distinguish an incorrectly renewed per-eye deadline");
 				cases_ += 2;
 
 				// A previous eye can exhaust the shared deadline. A second eye that

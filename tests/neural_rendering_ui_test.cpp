@@ -293,11 +293,11 @@ int main()
 				upscaling.settings.neuralRenderingFovOnly = fovOnly;
 				upscaling.settings.foveatedVendorDispatch = available;
 				const bool blocked = !available && (mode == NeuralRendering::RenderingMode::Foveated || fovOnly);
-				const auto before = registry.Snapshot();
+				const auto beforeFovEdit = registry.Snapshot();
 				draw("Enable colour processing");
 				require(ImGui::Disabled("Colour mode") == blocked && ImGui::Disabled("Enable colour processing") == blocked,
 					"FOV-dependent colour options stay grey until the shared mask is available");
-				require((registry.configuration.settings.enabled == before.settings.enabled) == blocked,
+				require((registry.configuration.settings.enabled == beforeFovEdit.settings.enabled) == blocked,
 					"Unavailable FOV must prevent mutations, without blocking ordinary full-image NR");
 			}
 		}

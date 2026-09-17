@@ -1229,9 +1229,7 @@ if(ZIP_TO_DIST)
     add_custom_command(
         TARGET ${PROJECT_NAME}
         POST_BUILD
-        COMMAND
-            ${CMAKE_COMMAND} -E remove_directory "${ZIP_DIR}"
-            ${CMAKE_SOURCE_DIR}/dist
+        COMMAND ${CMAKE_COMMAND} -E remove_directory "${ZIP_DIR}"
         COMMAND
             ${CMAKE_COMMAND} -E make_directory "${ZIP_DIR}/SKSE/Plugins"
             ${CMAKE_SOURCE_DIR}/dist
@@ -1336,19 +1334,6 @@ if(ZIP_TO_DIST)
             )
         endif()
     endforeach()
-endif()
-
-# Create a AIO zip for easier testing
-if(AIO_ZIP_TO_DIST)
-    if(NOT ZIP_TO_DIST)
-        add_custom_command(
-            TARGET ${PROJECT_NAME}
-            POST_BUILD
-            COMMAND
-                ${CMAKE_COMMAND} -E remove_directory ${CMAKE_SOURCE_DIR}/dist
-            COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/dist
-        )
-    endif()
 endif()
 
 if(NOT DEFINED ENV{CommunityShadersOutputDir})

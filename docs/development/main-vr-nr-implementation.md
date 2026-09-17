@@ -1,5 +1,10 @@
 # Neural Rendering port to the CPU/DLSS regression branch
 
+The subsequent [adversarial review](main-vr-nr-adversarial-review.md)
+records the topic fixes, production UI, shared FOV prerequisites and mask
+handling, OpenNR comparison, and final validated build identity. The
+evidence below describes the initial port and remains historical.
+
 ## Scope and provenance
 
 `main-vr-nr` starts at the tip of

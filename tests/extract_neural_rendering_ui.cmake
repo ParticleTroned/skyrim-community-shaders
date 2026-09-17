@@ -20,6 +20,15 @@ extract("src/Features/NeuralRenderingFeature.cpp"
 extract("src/State.cpp"
     "bool State::IsDeveloperMode()"
     "void State::ModifyRenderTarget(" developer_mode)
+extract("src/Features/Upscaling.cpp"
+    "\tbool SupportsFoveatedVendorDispatch("
+    "\tbool ShouldUseReducedResolutionForUpscaling(" fov_request)
+extract("src/Features/Upscaling.cpp"
+    "\tstruct FoveatedMaskProfileParams"
+    "\tfloat FoveatedMaskDistanceUV(" fov_profile)
+extract("src/Features/Upscaling.cpp"
+    "bool Upscaling::IsNeuralRenderingFovConfigurationAvailable()"
+    "const char* Upscaling::GetFoveatedUpscalingModeName(" fov_readiness)
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 file(WRITE "${OUTPUT_DIRECTORY}/neural_rendering_ui_under_test.h"
-    "${developer_mode}\n${draw_settings}")
+    "${fov_request}\n${fov_profile}\n${fov_readiness}\n${developer_mode}\n${draw_settings}")

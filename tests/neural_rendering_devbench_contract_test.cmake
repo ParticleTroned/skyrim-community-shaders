@@ -749,7 +749,7 @@ foreach(_final_ldr_float_contract IN ITEMS
     [[switch (targetUavDescs[0].Format)]]
     [[case DXGI_FORMAT_R8G8B8A8_UNORM:]]
     [[finalLdrColorMode = 2u]]
-    [[characterMaskOwners[eye].Get(), finalLdrColorMode)]]
+    [[characterMaskOwners[eye].Get(), finalLdrColorMode, sharedFullResolutionFovMask && !FoveatedCommon::IsActiveCoverage(foveatedRectCache.centerScale))]]
 )
     string(FIND
         "${_final_ldr_section}"
@@ -869,6 +869,18 @@ endif()
 if(NOT _descriptor_schema_type STREQUAL "OBJECT")
     message(FATAL_ERROR "DevBench inputSchema must be an object")
 endif()
+foreach(_fov_field IN ITEMS required available reason)
+    string(JSON _fov_type GET "${_descriptor_json}"
+        outputSchema properties neuralRendering properties fovPrerequisite properties ${_fov_field} type)
+    if(_fov_field STREQUAL "reason")
+        set(_expected_fov_type "string")
+    else()
+        set(_expected_fov_type "boolean")
+    endif()
+    if(NOT _fov_type STREQUAL _expected_fov_type)
+        message(FATAL_ERROR "FOV prerequisite status must have a typed schema: ${_fov_field}")
+    endif()
+endforeach()
 string(JSON
     _descriptor_all_of_length
     LENGTH
@@ -1084,6 +1096,9 @@ foreach(_status_contract IN ITEMS
     [[{ "allowUnlistedPatchedOrUnsignedRuntime", true }]]
     [[{ "reason", "D3D11 profile components and asynchronous D3D12 Feature 18 samples are exposed separately; no uncorrelated sum is reported" }]]
     [[{ "foveation", FoveationStatusJson(a_upscaling) }]]
+    [[{ "fovPrerequisite", { { "required", fovRequired }, { "available", fovAvailable },]]
+    [[{ "errorCode", "fov_not_configured" }]]
+    [["fov_not_configured");]]
     [[{ "plan", FoveatedPlanJson(a_upscaling, activeProfile) }]]
     [[{ "observedFrame", observedFrame }]]
     [[{ "currentWorkFrame", std::move(currentWorkFrameJson) }]]

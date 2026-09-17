@@ -19,6 +19,12 @@ namespace NeuralRendering
 		ReducedResolution = 2,
 	};
 
+	/** Foveated NR and optional FOV restriction require the shared configured mask. */
+	[[nodiscard]] constexpr bool RequiresFoveatedMask(RenderingMode mode, bool fovOnly) noexcept
+	{
+		return mode == RenderingMode::Foveated || fovOnly;
+	}
+
 	[[nodiscard]] constexpr RenderingMode ClampRenderingMode(std::uint32_t a_value) noexcept
 	{
 		return a_value <= static_cast<std::uint32_t>(RenderingMode::ReducedResolution) ?
@@ -52,6 +58,13 @@ namespace NeuralRendering
 	[[nodiscard]] constexpr bool IsRenderingConfigurationSupported(bool isVR, RenderingMode mode, bool character) noexcept
 	{
 		return isVR || (mode == RenderingMode::FullResolution && !character);
+	}
+
+	/** Route choices remain escapable when a saved FOV prerequisite is unavailable. */
+	[[nodiscard]] constexpr bool IsRenderingModeSelectable(bool isVR, RenderingMode mode, bool fovAvailable) noexcept
+	{
+		return IsRenderingConfigurationSupported(isVR, mode, false) &&
+		       (mode != RenderingMode::Foveated || fovAvailable);
 	}
 
 	struct PipelineImplementation

@@ -2626,6 +2626,8 @@ public:
 	bool AdjustVRRenderScaleRenderTargetProperties(RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties) const;
 	bool UseActiveFoveatedPeripheryTAAProfile() const;
 	bool IsActiveUpscalingFoveatedProfileAvailable() const;
+	/** Tests the configured FOV prerequisite without the reduced-NR dispatch override. */
+	bool IsNeuralRenderingFovConfigurationAvailable() const;
 	enum class FoveatedUpscalingMode : uint8_t
 	{
 		Disabled,
@@ -2641,6 +2643,7 @@ public:
 		float vendorCenterScale = 1.0f;
 		// Shared HMD-visible/protected boundary used by VR foveation consumers.
 		float sharedVisibleScale = 1.0f;
+		float sharedVisibleFeather = FoveatedCommon::kCenterFeather;
 		float centerHorizontalScale = 1.0f;
 		std::array<float2, 2> centerOffsets{};
 	};
@@ -4055,7 +4058,7 @@ public:
 	float2 GetResolvedFoveatedMaskCenterOffset(uint32_t eyeIndex, bool usePeripheryTAAProfile = false) const;
 	std::array<float2, 2> GetResolvedFoveatedMaskCenterOffsets(bool usePeripheryTAAProfile = false) const;
 	bool GetRuntimeFoveatedRegionDimensions(uint32_t& a_inputWidthPerEye, uint32_t& a_inputHeight, uint32_t& a_outputWidthPerEye, uint32_t& a_outputHeight) const;
-	bool BuildFoveatedDispatchRects(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool isVR, float centerScale, float centerFeather, float centerHorizontalScale, UpscaleMethod a_upscaleMethod, bool usePeripheryTAAProfile = false);
+	bool BuildFoveatedDispatchRects(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool isVR, float centerScale, float centerFeather, float centerHorizontalScale, UpscaleMethod a_upscaleMethod, bool usePeripheryTAAProfile = false, const ActiveUpscalingFoveatedProfile* sharedMaskProfile = nullptr);
 	bool GetFoveatedEncodeRegions(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, UpscaleMethod a_upscaleMethod, bool usePeripheryTAAProfile, bool usePeripheryTAAPath, std::array<FoveatedEncodeRegion, 2>& outRegions);
 	bool EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool copyDepthInput = true, bool allowFoveatedRegionEncode = false, bool* encodedFoveatedRegions = nullptr, uint32_t contractGeneration = 0, uint32_t eyeMask = 0x3u);
 	bool StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight);

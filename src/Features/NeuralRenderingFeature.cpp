@@ -5,6 +5,7 @@
 #include "Upscaling/NeuralRendering/CaptureEvidence.h"
 #include "Upscaling/NeuralRendering/ConfigurationSerialization.h"
 #include "Upscaling/VRRenderScaleDevBenchBridge.h"
+#include "Utils/UI.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -655,6 +656,10 @@ void NeuralRenderingFeature::DrawSettings()
 {
 	globals::features::upscaling.DrawNeuralRenderingSettings(
 		globals::features::upscaling.GetRuntimeUpscaleMethod());
+	const auto& upscaling = globals::features::upscaling;
+	auto fovAvailabilityGuard = Util::DisableGuard(
+		NeuralRendering::RequiresFoveatedMask(upscaling.GetNeuralRenderingMode(), upscaling.settings.neuralRenderingFovOnly) &&
+		!upscaling.IsNeuralRenderingFovConfigurationAvailable());
 	ImGui::SeparatorText("Colour processing");
 	const bool showDiagnostics = globals::state && globals::state->IsDeveloperMode();
 	auto config = Registry::Instance().Snapshot();

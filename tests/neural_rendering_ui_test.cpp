@@ -1,4 +1,6 @@
+#include "Features/FoveatedCommon.h"
 #include "Features/Upscaling/NeuralRendering/ColorPolicy.h"
+#include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
 
 #include <nlohmann/json.hpp>
 #include <stdexcept>
@@ -28,30 +30,71 @@ struct State
 namespace globals
 {
 	State* state = nullptr;
+	namespace game
+	{
+		bool isVR = true;
+	}
 	namespace features
 	{
 		struct Upscaling
 		{
+			enum class UpscaleMethod
+			{
+				kNONE,
+				kTAA,
+				kFSR,
+				kDLSS
+			};
 			unsigned draws = 0;
-			int GetRuntimeUpscaleMethod() const { return 0; }
-			void DrawNeuralRenderingSettings(int) { ++draws; }
+			bool loaded = true;
+			struct Settings
+			{
+				bool neuralRenderingFovOnly = false;
+				bool foveatedVendorDispatch = true, periphery_taa_enable = false;
+				float periphery_taa_center_area = 0.3f, foveatedCenterArea = 0.3f;
+				float foveatedCenterHorizontalScale = 1.0f;
+				float foveatedLeftEyeMaskOffsetX = 0.0f, foveatedLeftEyeMaskOffsetY = 0.0f;
+				float foveatedRightEyeMaskOffsetX = 0.0f, foveatedRightEyeMaskOffsetY = 0.0f;
+			} settings;
+			NeuralRendering::RenderingMode mode = NeuralRendering::RenderingMode::FullResolution;
+			UpscaleMethod method = UpscaleMethod::kDLSS;
+			NeuralRendering::RenderingMode GetNeuralRenderingMode() const { return mode; }
+			bool IsNeuralRenderingFovConfigurationAvailable() const;
+			UpscaleMethod GetRuntimeUpscaleMethod() const { return method; }
+			void DrawNeuralRenderingSettings(UpscaleMethod) { ++draws; }
 		} upscaling;
 	}
 }
+using Upscaling = globals::features::Upscaling;
+float ClampFoveatedCenterScale(float value) { return FoveatedCommon::ClampCenterScale(value); }
+float ClampFoveatedCenterHorizontalScale(float value) { return FoveatedCommon::ClampCenterHorizontalScale(value); }
+float ClampFoveatedMaskOffsetAdjustment(float value) { return value; }
 namespace ImGui
 {
 	std::vector<std::string> items;
+	std::vector<bool> disabledItems;
 	std::string clicked;
 	int treeDepth = 0;
+	unsigned disableDepth = 0;
 	bool openTrees = true;
-	void Record(const char* label) { items.emplace_back(label); }
+	void Record(const char* label)
+	{
+		items.emplace_back(label);
+		disabledItems.push_back(disableDepth != 0);
+	}
 	bool Seen(std::string_view label)
 	{
 		return std::find(items.begin(), items.end(), label) != items.end();
 	}
+	bool Disabled(std::string_view label)
+	{
+		const auto item = std::find(items.begin(), items.end(), label);
+		return item != items.end() && disabledItems[static_cast<std::size_t>(item - items.begin())];
+	}
 	void Clear(std::string_view click = {})
 	{
 		items.clear();
+		disabledItems.clear();
 		clicked = click;
 		treeDepth = 0;
 	}
@@ -68,7 +111,7 @@ namespace ImGui
 	bool Button(const char* label)
 	{
 		Record(label);
-		return clicked == label;
+		return disableDepth == 0 && clicked == label;
 	}
 	bool Checkbox(const char* label, bool* value)
 	{
@@ -96,6 +139,25 @@ namespace ImGui
 		return openTrees;
 	}
 	void TreePop() { --treeDepth; }
+}
+namespace Util
+{
+	class DisableGuard
+	{
+		bool disabled_;
+
+	public:
+		explicit DisableGuard(bool disabled) : disabled_(disabled)
+		{
+			if (disabled_)
+				++ImGui::disableDepth;
+		}
+		~DisableGuard()
+		{
+			if (disabled_)
+				--ImGui::disableDepth;
+		}
+	};
 }
 #define IM_ARRAYSIZE(value) (sizeof(value) / sizeof((value)[0]))
 
@@ -156,6 +218,7 @@ int main()
 		ImGui::Clear(click);
 		feature.DrawSettings();
 		require(ImGui::treeDepth == 0, "UI tree scopes must be balanced");
+		require(ImGui::disableDepth == 0, "UI disable scopes must be balanced");
 	};
 	for (auto level : { spdlog::level::info, spdlog::level::warn, spdlog::level::err,
 			 spdlog::level::critical, spdlog::level::off }) {
@@ -210,4 +273,54 @@ int main()
 	draw();
 	require(!ImGui::Seen("Colour experiments and diagnostics"), "Missing state fails closed for diagnostics");
 	require(globals::features::upscaling.draws > 0, "Feature must retain the main NR controls");
+
+	auto& upscaling = globals::features::upscaling;
+	registry.configuration = {};
+	using ModeChoice = NeuralRendering::RenderingMode;
+	require(!NeuralRendering::IsRenderingModeSelectable(true, ModeChoice::Foveated, false), "Unavailable FOV cannot be newly selected");
+	require(NeuralRendering::IsRenderingModeSelectable(true, ModeChoice::Foveated, true), "Configured FOV enables the foveated choice");
+	for (const auto escape : { ModeChoice::FullResolution, ModeChoice::ReducedResolution })
+		require(NeuralRendering::IsRenderingModeSelectable(true, escape, false), "Non-FOV choices allow escape from an unavailable saved mode");
+	require(!NeuralRendering::IsRenderingModeSelectable(false, ModeChoice::ReducedResolution, true) &&
+				!NeuralRendering::IsRenderingModeSelectable(false, ModeChoice::Foveated, true) &&
+				NeuralRendering::IsRenderingModeSelectable(false, ModeChoice::FullResolution, false),
+		"Mode availability preserves flat-runtime support");
+	for (auto mode : { NeuralRendering::RenderingMode::FullResolution, NeuralRendering::RenderingMode::Foveated,
+			 NeuralRendering::RenderingMode::ReducedResolution }) {
+		for (const bool fovOnly : { false, true }) {
+			for (const bool available : { false, true }) {
+				upscaling.mode = mode;
+				upscaling.settings.neuralRenderingFovOnly = fovOnly;
+				upscaling.settings.foveatedVendorDispatch = available;
+				const bool blocked = !available && (mode == NeuralRendering::RenderingMode::Foveated || fovOnly);
+				const auto before = registry.Snapshot();
+				draw("Enable colour processing");
+				require(ImGui::Disabled("Colour mode") == blocked && ImGui::Disabled("Enable colour processing") == blocked,
+					"FOV-dependent colour options stay grey until the shared mask is available");
+				require((registry.configuration.settings.enabled == before.settings.enabled) == blocked,
+					"Unavailable FOV must prevent mutations, without blocking ordinary full-image NR");
+			}
+		}
+	}
+	upscaling.settings.foveatedVendorDispatch = true;
+	upscaling.loaded = false;
+	require(!upscaling.IsNeuralRenderingFovConfigurationAvailable(), "Unloaded upscaler cannot supply a shared FOV mask");
+	upscaling.loaded = true;
+	for (auto method : { Upscaling::UpscaleMethod::kNONE, Upscaling::UpscaleMethod::kTAA }) {
+		upscaling.method = method;
+		require(!upscaling.IsNeuralRenderingFovConfigurationAvailable(), "Unsupported methods cannot supply an active FOV mask");
+	}
+	for (auto method : { Upscaling::UpscaleMethod::kFSR, Upscaling::UpscaleMethod::kDLSS }) {
+		upscaling.method = method;
+		require(upscaling.IsNeuralRenderingFovConfigurationAvailable(), "A configured DLSS or FSR mask must remain available");
+	}
+	upscaling.settings.foveatedCenterArea = 1.0f;
+	require(!upscaling.IsNeuralRenderingFovConfigurationAvailable(), "Full coverage is not an active FOV mask");
+	upscaling.settings.periphery_taa_enable = true;
+	require(upscaling.IsNeuralRenderingFovConfigurationAvailable(), "FOV+TAA readiness follows its active centre profile");
+	upscaling.settings.periphery_taa_center_area = 1.0f;
+	require(!upscaling.IsNeuralRenderingFovConfigurationAvailable(), "Full-coverage FOV+TAA is also inactive");
+	globals::game::isVR = false;
+	upscaling.settings.periphery_taa_center_area = 0.3f;
+	require(!upscaling.IsNeuralRenderingFovConfigurationAvailable(), "Flat runtimes cannot supply the VR shared FOV mask");
 }

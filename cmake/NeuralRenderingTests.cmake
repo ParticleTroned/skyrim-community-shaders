@@ -57,3 +57,20 @@ endforeach()
 add_test(NAME NeuralRenderingRuntimeStaging COMMAND "${Python3_EXECUTABLE}"
     "${PROJECT_SOURCE_DIR}/tests/neural_rendering_runtime_test.py")
 set_tests_properties(NeuralRenderingRuntimeStaging PROPERTIES LABELS "ControllerTests" TIMEOUT 300)
+
+set(_neural_full_resolution_fov_test_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_full_resolution_fov_test")
+add_custom_command(
+    OUTPUT "${_neural_full_resolution_fov_test_dir}/neural_full_resolution_fov_under_test.h"
+        "${_neural_full_resolution_fov_test_dir}/neural_full_resolution_fov_types.h"
+    COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_neural_full_resolution_fov_test_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_neural_full_resolution_fov.cmake"
+    DEPENDS src/Features/Upscaling.cpp src/Features/Upscaling.h tests/extract_neural_full_resolution_fov.cmake
+    VERBATIM
+)
+add_controller_test(neural_full_resolution_fov_test NeuralFullResolutionFov
+    tests/neural_full_resolution_fov_test.cpp)
+target_sources(neural_full_resolution_fov_test PRIVATE
+    "${_neural_full_resolution_fov_test_dir}/neural_full_resolution_fov_under_test.h"
+    "${_neural_full_resolution_fov_test_dir}/neural_full_resolution_fov_types.h")
+target_include_directories(neural_full_resolution_fov_test PRIVATE "${_neural_full_resolution_fov_test_dir}")

@@ -41,7 +41,9 @@ character-category authoring are rejected explicitly on flat runtimes.
 The port preserves their ordinary renderer allocations and shader layout.
 
 `communityshaders.neural_rendering` exposes NR configuration, status,
-readiness and mode cycling. The existing `communityshaders.nr_color`
+readiness and stereo implementation-lane cycling. `nr_configure.mode`
+selects the A/B/C route; `nr_cycle_modes` cycles stereo implementation
+lanes. The existing `communityshaders.nr_color`
 interface and legacy NR actions on `communityshaders.renderscale` remain
 available for existing capture tools. Mode names and numeric values,
 FOV-only controls and other user inputs are validated before mutation.
@@ -99,6 +101,14 @@ The [capture notes](main-vr-nr-capture-notes.md),
 [route notes](main-vr-nr-routing-notes.md), and
 [integration assessment](main-vr-nr-integration-notes.md) record the detailed
 ownership, image-domain and adversarial findings.
+
+The final independent review found no remaining source-coordinate issue
+in A/B/C character selection: checked visible-rectangle containment makes
+the source offset nonnegative and keeps every dispatched texel inside the
+shared grid. Reduced-resolution selection occurs before vendor upscaling,
+so the fix does not remove required resize filtering. A separate final
+audit found no material omission in feature registration, migration,
+mode/FOV controls, character composition or DevBench exposure.
 
 ## Tooling refresh
 
@@ -172,6 +182,28 @@ The full shader commands used `hlslkit-compile`, SDK 10.0.28000 FXC,
 `--extra-includes build/ALL/aio/Shaders`, `--optimization-level 3` and
 `--jobs 2`. Logs and timing reports remain in the isolated worktree's
 `build/ALL/main-vr-nr-*.log` and `build/nr-shader-validation/`.
+
+### Final committed-source build
+
+`pwsh ./tools/cmake.ps1 --build build/ALL --config Release --target CommunityShaders -- /m:2`
+passed from clean commit `22e4ae29c6bc7f223cb225ab220f9d74a286d97b`
+with zero warnings and zero errors (98.93 seconds). The implementation
+merge is `19bb0320c7ff3b6cb116e2e86e1321fe36ad7ce4`, with the stated target
+and colour-managed source commits as its parents; `22e4ae29c` adds the
+adversarial ROI boundary fix. This subsequent report-only commit does not
+change the compiled source.
+
+The adjacent `build/ALL/Release/CSX.BuildManifest.json` reports:
+
+-   Build ID: `56b49e82b0eb4a70a0a6e8c311ae8ef28ec47451d597a357b4c97268b7dc7361`.
+-   Source: `22e4ae29c6bc7f223cb225ab220f9d74a286d97b`, `dirty: false`.
+-   DLL SHA-256: `24956c186345a24902c7dd22ef51b072aaf0c304aa722f87a0a7249cb6e1fb36`.
+-   DLL size: 30,336,000 bytes.
+
+The physical Release DLL hash and size were compared with that manifest
+and matched. The build log is `build/ALL/main-vr-nr-clean-build.log`.
+Scoped commit hooks passed. No DLL was deployed to the game, so this is a
+build-artifact identity check, not verification of a running producer.
 
 These checks establish bounded policy, shader and tooling behavior. They
 do not establish physical-HMD image quality, NR provider compatibility or

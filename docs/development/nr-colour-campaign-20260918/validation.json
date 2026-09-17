@@ -1,0 +1,27 @@
+{
+    "schema": "csx-nr-measurement-archive-audit-v1",
+    "passed": true,
+    "checkedPayloadRecords": 2907,
+    "checkedValueLeaves": 3029113,
+    "sourceBytesAndSHA256Verified": true,
+    "allEmittedValuesMatchOriginals": true,
+    "preservesFalseZeroNullEmpty": true,
+    "allSelectedStructuredAndTextSourcesAccountedFor": true,
+    "eachArchiveBelow100MiB": true,
+    "rawImagesRecapturedOrModified": false,
+    "gameOrBuildStarted": false,
+    "exporterSHA256": "473d8e16887ef8909bbb9d6af6042344490153efca5a7d28e2ae1b20143a8a4f",
+    "indexSHA256": "65549067722246f20621c38a8b4b31addc5e86da4f2fea9241ec12634a6ddfc4",
+    "finalSourceAndInventoryAudit": true,
+    "relativeReportLinksVerified": true,
+    "formats": {
+        "complete-text": 195,
+        "complete-json": 2639,
+        "recording-metadata-and-events": 72,
+        "unparsed-json-text": 1
+    },
+    "unparsedSourceFiles": [
+        "build/validation/nr-colour-followup-20260916T214643Z/live-sequences.json"
+    ],
+    "supportingInspectionRecordsVerified": 1
+}

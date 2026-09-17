@@ -1,0 +1,541 @@
+{
+    "schema": "csx-nr-measurement-archive-v1",
+    "snapshotDate": "2026-09-18",
+    "sourceBranch": "work/face-of-gogh-colour-managed-20260914",
+    "reportHeadBeforeArchive": "3bf7198071fe588dcd38092ef57b93a7b23bbcf8",
+    "scope": "Retained physical-HMD campaigns and directly related same-frame investigation, 2026-09-16 to 2026-09-17; earlier live context remains in indexed committed reports.",
+    "runs": [
+        {
+            "run": "nr-bright-two-characters-20260917T0723Z",
+            "archive": "runs/nr-bright-two-characters-20260917T0723Z.jsonl",
+            "records": 88,
+            "sourceBytes": 29084352,
+            "archiveBytes": 14602132,
+            "archiveSHA256": "6baebcbd40986b8faae0481274ea5a18055b6a2054aba94e358625bcfd15843f",
+            "formats": {
+                "complete-text": 5,
+                "complete-json": 82,
+                "recording-metadata-and-events": 1
+            },
+            "localRawReferences": {
+                "local-raw-capture-manifest": 17
+            }
+        },
+        {
+            "run": "nr-colour-followup-20260916T214643Z",
+            "archive": "runs/nr-colour-followup-20260916T214643Z.jsonl",
+            "records": 166,
+            "sourceBytes": 56906790,
+            "archiveBytes": 15613118,
+            "archiveSHA256": "79dd1ecd081f9eb4772410341298a855c473c72e51c1420b38b4f9dfac35dc15",
+            "formats": {
+                "complete-text": 14,
+                "complete-json": 149,
+                "unparsed-json-text": 1,
+                "recording-metadata-and-events": 2
+            },
+            "localRawReferences": {
+                "local-raw-capture-manifest": 15
+            }
+        },
+        {
+            "run": "nr-dark-two-characters-20260917T081914Z",
+            "archive": "runs/nr-dark-two-characters-20260917T081914Z.jsonl",
+            "records": 97,
+            "sourceBytes": 35468934,
+            "archiveBytes": 11469493,
+            "archiveSHA256": "a7ee44a04b617b13e258949d3d676b2099142e641ea321df183a44387f92592e",
+            "formats": {
+                "complete-text": 5,
+                "complete-json": 91,
+                "recording-metadata-and-events": 1
+            },
+            "localRawReferences": {
+                "local-raw-capture-manifest": 18
+            }
+        },
+        {
+            "run": "nr-detail-character-20260916T201940Z",
+            "archive": "runs/nr-detail-character-20260916T201940Z.jsonl",
+            "records": 169,
+            "sourceBytes": 30579471,
+            "archiveBytes": 10272502,
+            "archiveSHA256": "42dde1fbe9e5a9a482970e0104e2eea9696687e337d3407a7a0b95fa2bcb8c1a",
+            "formats": {
+                "complete-text": 14,
+                "complete-json": 154,
+                "recording-metadata-and-events": 1
+            },
+            "localRawReferences": {
+                "local-raw-capture-manifest": 14
+            }
+        },
+        {
+            "run": "nr-detail-live-20260916-admission",
+            "archive": "runs/nr-detail-live-20260916-admission.jsonl",
+            "records": 10,
+            "sourceBytes": 91394,
+            "archiveBytes": 93207,
+            "archiveSHA256": "7d002e041ea1c156a810dcc4427365b571122482aa988bb8dea59e0523b443a8",
+            "formats": {
+                "complete-json": 9,
+                "complete-text": 1
+            },
+            "localRawReferences": {}
+        },
+        {
+            "run": "nr-detail-live-20260916T2012Z",
+            "archive": "runs/nr-detail-live-20260916T2012Z.jsonl",
+            "records": 18,
+            "sourceBytes": 4137874,
+            "archiveBytes": 558835,
+            "archiveSHA256": "8fb08315eda8eac4d78d670f46b9d50cbb56ff163cf315fa7ece1665fde4b1c5",
+            "formats": {
+                "complete-json": 17,
+                "recording-metadata-and-events": 1
+            },
+            "localRawReferences": {
+                "local-raw-capture-manifest": 2
+            }
+        },
+        {
+            "run": "nr-hmd-brighter-20260916T125450Z",
+            "archive": "runs/nr-hmd-brighter-20260916T125450Z.jsonl",
+            "records": 39,
+            "sourceBytes": 15752739,
+            "archiveBytes": 1291287,
+            "archiveSHA256": "c49f3f5224f83d240f9816c71de08b00963223ed5df424f9d3d4b5814918b486",
+            "formats": {
+                "complete-json": 34,
+                "complete-text": 4,
+                "recording-metadata-and-events": 1
+            },
+            "localRawReferences": {
+                "local-raw-capture-manifest": 2
+            }
+        },
+        {
+            "run": "nr-hmd-brighter-20260916T125450Z-restart",
+            "archive": "runs/nr-hmd-brighter-20260916T125450Z-restart.jsonl",
+            "records": 265,
+            "sourceBytes": 31054173,
+            "archiveBytes": 16586267,
+            "archiveSHA256": "e49387b9d03df07419a86adb1329d3f0e913c42ea415cbcda9e893c199588bf0",
+            "formats": {
+                "complete-text": 14,
+                "complete-json": 250,
+                "recording-metadata-and-events": 1
+            },
+            "localRawReferences": {
+                "local-raw-capture-manifest": 18
+            }
+        },
+        {
+            "run": "nr-hmd-fixed-campaign-20260916T1100Z",
+            "archive": "runs/nr-hmd-fixed-campaign-20260916T1100Z.jsonl",
+            "records": 191,
+            "sourceBytes": 11211899,
+            "archiveBytes": 4389971,
+            "archiveSHA256": "d78ceec94680293f7efccc4942ad751e2dee6b8cb43a29a82434ee46c02ad20c",
+            "formats": {
+                "complete-json": 172,
+                "complete-text": 12,
+                "recording-metadata-and-events": 7
+            },
+            "localRawReferences": {
+                "local-raw-capture-manifest": 7
+            }
+        },
+        {
+            "run": "nr-hmd-fixedpose-20260916T1054Z",
+            "archive": "runs/nr-hmd-fixedpose-20260916T1054Z.jsonl",
+            "records": 16,
+            "sourceBytes": 121550,
+            "archiveBytes": 123949,
+            "archiveSHA256": "a5f5eeed270a80216951a6419b676a2c49bfd6fdbdd66e499460f52e1df169fe",
+            "formats": {
+                "complete-json": 16
+            },
+            "localRawReferences": {
+                "local-raw-capture-manifest": 1
+            }
+        },
+        {
+            "run": "nr-hmd-lower-sun-20260916T115411Z",
+            "archive": "runs/nr-hmd-lower-sun-20260916T115411Z.jsonl",
+            "records": 177,
+            "sourceBytes": 12398957,
+            "archiveBytes": 4924312,
+            "archiveSHA256": "3c4fd2174c32e33245985b9a504551e4fa48e7695f0da7f5a00d494a40881670",
+            "formats": {
+                "complete-text": 11,
+                "complete-json": 159,
+                "recording-metadata-and-events": 7
+            },
+            "localRawReferences": {
+                "local-raw-capture-manifest": 7
+            }
+        },
+        {
+            "run": "nr-hmd-new-scene-20260916T121535Z",
+            "archive": "runs/nr-hmd-new-scene-20260916T121535Z.jsonl",
+            "records": 143,
+            "sourceBytes": 6406897,
+            "archiveBytes": 1431740,
+            "archiveSHA256": "87d6ea01a798f3730cb4255a55fce46ccaa774295f2b73de0599dded8069563c",
+            "formats": {
+                "complete-json": 133,
+                "complete-text": 6,
+                "recording-metadata-and-events": 4
+            },
+            "localRawReferences": {
+                "local-raw-capture-manifest": 7
+            }
+        },
+        {
+            "run": "nr-hmd-new-scene-20260916T121535Z-fresh-reference",
+            "archive": "runs/nr-hmd-new-scene-20260916T121535Z-fresh-reference.jsonl",
+            "records": 166,
+            "sourceBytes": 9735266,
+            "archiveBytes": 3222079,
+            "archiveSHA256": "ce131461cf74cbe2db266860d5ff12e6f892c77ffe5dec41eb945a65543e3069",
+            "formats": {
+                "complete-text": 11,
+                "complete-json": 149,
+                "recording-metadata-and-events": 6
+            },
+            "localRawReferences": {
+                "local-raw-capture-manifest": 7
+            }
+        },
+        {
+            "run": "nr-hmd-outdoor-20260916T111347Z",
+            "archive": "runs/nr-hmd-outdoor-20260916T111347Z.jsonl",
+            "records": 201,
+            "sourceBytes": 8545363,
+            "archiveBytes": 4755360,
+            "archiveSHA256": "4a89399e70a0bd57485a95cf8d038f738ea676dd5cc170673bc11588028ae937",
+            "formats": {
+                "complete-json": 184,
+                "complete-text": 10,
+                "recording-metadata-and-events": 7
+            },
+            "localRawReferences": {
+                "local-raw-capture-manifest": 7
+            }
+        },
+        {
+            "run": "nr-hmd-outdoor-fixed-20260916T112605Z",
+            "archive": "runs/nr-hmd-outdoor-fixed-20260916T112605Z.jsonl",
+            "records": 171,
+            "sourceBytes": 20427996,
+            "archiveBytes": 4028148,
+            "archiveSHA256": "2d8f877b4083c8751f98d1185b9b89ca3610527c23c2181c83c3b454b6ac89a4",
+            "formats": {
+                "complete-json": 153,
+                "complete-text": 11,
+                "recording-metadata-and-events": 7
+            },
+            "localRawReferences": {
+                "local-raw-capture-manifest": 7
+            }
+        },
+        {
+            "run": "nr-hmd-outdoor-fixed-20260916T112605Z-precision",
+            "archive": "runs/nr-hmd-outdoor-fixed-20260916T112605Z-precision.jsonl",
+            "records": 176,
+            "sourceBytes": 15233585,
+            "archiveBytes": 4124704,
+            "archiveSHA256": "b6aed3169e38bd64c9ccd1f9cda0fc1565e4b54a51b4beeaba740b7b639b8934",
+            "formats": {
+                "complete-text": 12,
+                "complete-json": 158,
+                "recording-metadata-and-events": 6
+            },
+            "localRawReferences": {
+                "local-raw-capture-manifest": 6
+            }
+        },
+        {
+            "run": "nr-hmd-outdoor-fixed-20260916T112605Z-retry",
+            "archive": "runs/nr-hmd-outdoor-fixed-20260916T112605Z-retry.jsonl",
+            "records": 119,
+            "sourceBytes": 8912351,
+            "archiveBytes": 1095795,
+            "archiveSHA256": "d6baf33409f682c2792183cf634b4a126f89420aa109de5efd8f48b1f91030a8",
+            "formats": {
+                "complete-json": 112,
+                "complete-text": 4,
+                "recording-metadata-and-events": 3
+            },
+            "localRawReferences": {
+                "local-raw-capture-manifest": 6
+            }
+        },
+        {
+            "run": "nr-hmd-readiness-20260916T090800Z",
+            "archive": "runs/nr-hmd-readiness-20260916T090800Z.jsonl",
+            "records": 146,
+            "sourceBytes": 2613156,
+            "archiveBytes": 1539582,
+            "archiveSHA256": "1ea125f82ae8dfce9964c00f6441c0c8464a30902e79d540aaae984f31137fb0",
+            "formats": {
+                "complete-json": 138,
+                "complete-text": 6,
+                "recording-metadata-and-events": 2
+            },
+            "localRawReferences": {
+                "local-raw-capture-manifest": 3
+            }
+        },
+        {
+            "run": "nr-hmd-retest-20260916T1015Z",
+            "archive": "runs/nr-hmd-retest-20260916T1015Z.jsonl",
+            "records": 227,
+            "sourceBytes": 9132441,
+            "archiveBytes": 5536458,
+            "archiveSHA256": "5f277efac81f4db105a9b20195c188f5cb0b29cb014fd1d60c0ca614429b040b",
+            "formats": {
+                "complete-json": 208,
+                "complete-text": 12,
+                "recording-metadata-and-events": 7
+            },
+            "localRawReferences": {
+                "local-raw-capture-manifest": 10
+            }
+        },
+        {
+            "run": "nr-hmd-scene2-20260916T1039Z",
+            "archive": "runs/nr-hmd-scene2-20260916T1039Z.jsonl",
+            "records": 208,
+            "sourceBytes": 9779107,
+            "archiveBytes": 4677883,
+            "archiveSHA256": "fa90875eeeab11923246bb41e69ab162ac99f5ae006da5a60f47bb92f005b90a",
+            "formats": {
+                "complete-json": 190,
+                "complete-text": 11,
+                "recording-metadata-and-events": 7
+            },
+            "localRawReferences": {
+                "local-raw-capture-manifest": 8
+            }
+        },
+        {
+            "run": "nr-lighting-live-20260917",
+            "archive": "runs/nr-lighting-live-20260917.jsonl",
+            "records": 10,
+            "sourceBytes": 49028,
+            "archiveBytes": 46996,
+            "archiveSHA256": "f8c3dd07f2fcc412631ea9264f24ea6d2f3cda2dea61c59a9fe9272ce72d02bf",
+            "formats": {
+                "complete-json": 6,
+                "complete-text": 4
+            },
+            "localRawReferences": {}
+        },
+        {
+            "run": "nr-packed-rounding-live-20260917T023044Z",
+            "archive": "runs/nr-packed-rounding-live-20260917T023044Z.jsonl",
+            "records": 77,
+            "sourceBytes": 7999206,
+            "archiveBytes": 2340027,
+            "archiveSHA256": "5fd46d27b523402e9ab034e852e5516a41577d42b575f0abdeb91f61a5c6424f",
+            "formats": {
+                "complete-text": 8,
+                "complete-json": 68,
+                "recording-metadata-and-events": 1
+            },
+            "localRawReferences": {
+                "local-raw-capture-manifest": 6
+            }
+        },
+        {
+            "run": "nr-same-frame-bias-20260916T233000Z",
+            "archive": "runs/nr-same-frame-bias-20260916T233000Z.jsonl",
+            "records": 27,
+            "sourceBytes": 791465,
+            "archiveBytes": 478018,
+            "archiveSHA256": "bc83b5e2867488d58dec1c61696e5ebd6e92a0584e8cd8d0885e005027953d30",
+            "formats": {
+                "complete-text": 20,
+                "complete-json": 7
+            },
+            "localRawReferences": {}
+        }
+    ],
+    "narrativeReports": [
+        {
+            "path": "docs/development/nr-camera-upload-fix-20260916.md",
+            "bytes": 4920,
+            "sha256": "be9fa64d60fe482db390ce62302ae5e29c03bf49f54b82c6b8dc9fbb9f016b57"
+        },
+        {
+            "path": "docs/development/nr-capture-retention.md",
+            "bytes": 6116,
+            "sha256": "b55f6593021e7e400e02c0009b53895dd919d8f10f68006eee2790176cb30a1a"
+        },
+        {
+            "path": "docs/development/nr-colour-adversarial-review.md",
+            "bytes": 9534,
+            "sha256": "e2a41427e37105ceefb0703a40c75cf7ed35363964de124599fd275c030f8f0f"
+        },
+        {
+            "path": "docs/development/nr-colour-aio-packaging-review-20260917.md",
+            "bytes": 1668,
+            "sha256": "debead8745be9e3f39da9f2860ced313d01177136ef9b5252eb39cebf5a5123b"
+        },
+        {
+            "path": "docs/development/nr-colour-brighter-comparison-20260916.md",
+            "bytes": 12523,
+            "sha256": "919be83c0e756dd236d6a52bfb6afe80f02c4d8fffb0b30212c2efeff592d362"
+        },
+        {
+            "path": "docs/development/nr-colour-detail-hmd-comparison-20260916.md",
+            "bytes": 10198,
+            "sha256": "c1ce2bb373d9957272c8ce9d79e5e63f591eca8d13f7b257ad2f259d10f98850"
+        },
+        {
+            "path": "docs/development/nr-colour-detail-investigation-20260916.md",
+            "bytes": 6360,
+            "sha256": "c8a01bbcca54e3499e7c758fc5a536a7207e413e49053bcb0c242b3d6707b06f"
+        },
+        {
+            "path": "docs/development/nr-colour-draw-observation-fix-20260915.md",
+            "bytes": 4650,
+            "sha256": "fe795aaef3aa206c969a3045944532767503f9c61ea8aac959b7f8a2b16f91c4"
+        },
+        {
+            "path": "docs/development/nr-colour-dry-validation.md",
+            "bytes": 5999,
+            "sha256": "ca8e6e0995c1484b9dcc052d89910f417d9fe8a6479a2584c1d4b4d3ef0bf469"
+        },
+        {
+            "path": "docs/development/nr-colour-exposure-followup-20260915.md",
+            "bytes": 6324,
+            "sha256": "30fec45af8450f77c80aa706ade0f84ee92e67ef6ec07a33722a3eb69253d4ab"
+        },
+        {
+            "path": "docs/development/nr-colour-history-exposure-fix-20260915.md",
+            "bytes": 5655,
+            "sha256": "16574eee395ba8c301a51f39b120f211c45e8c20a71a7be8ad5718dc581a8a56"
+        },
+        {
+            "path": "docs/development/nr-colour-hmd-assessment.md",
+            "bytes": 16790,
+            "sha256": "947b7654e5b0656e4f00037a08617627d671553cc49a35a7afaf64aca1ec739b"
+        },
+        {
+            "path": "docs/development/nr-colour-hmd-attempt-20260916.md",
+            "bytes": 7901,
+            "sha256": "82d165fdbea572e8156257520c36e170c2649723fe4c724295f06cbf2ef52dff"
+        },
+        {
+            "path": "docs/development/nr-colour-hmd-prebuild-audit.md",
+            "bytes": 7620,
+            "sha256": "fba2179ca3dc45dd3dd616de4e2e6f706c299f415c2417f1448fc121f1643fb2"
+        },
+        {
+            "path": "docs/development/nr-colour-hmd-retest-20260916.md",
+            "bytes": 10059,
+            "sha256": "6547d02da22492556b04eb363c67e0be83823ebce8074f13e59be627380ee704"
+        },
+        {
+            "path": "docs/development/nr-colour-multi-roi-retest-20260915.md",
+            "bytes": 12183,
+            "sha256": "f3f141fa14d538cd576a959dbe2edb58aaa12db749fe68a19e0209d50c71cb65"
+        },
+        {
+            "path": "docs/development/nr-colour-null-driver-c45eb42-20260915.md",
+            "bytes": 20601,
+            "sha256": "3b6f992f3aec92d9997adc9c4331e0c289b077386fd5a6bbbae4b9f9a3d83606"
+        },
+        {
+            "path": "docs/development/nr-colour-null-driver-retest-20260915.md",
+            "bytes": 8175,
+            "sha256": "67d3673764a3bfb035957db69fad185750a71b481a8c65f7660c0abb2dddf92b"
+        },
+        {
+            "path": "docs/development/nr-colour-packed-rounding-fix-20260917.md",
+            "bytes": 7161,
+            "sha256": "331bb7f2803d5e126df586e0cf9349a3ae08f1e1071bc17a69305a0aee4bb782"
+        },
+        {
+            "path": "docs/development/nr-colour-packed-rounding-live-20260917.md",
+            "bytes": 12542,
+            "sha256": "31ff482770dac92afa1065084651fa9de4a85aedce1b4ef16108c7a0cbc8d0ec"
+        },
+        {
+            "path": "docs/development/nr-colour-packed-rounding-review-20260917.md",
+            "bytes": 5011,
+            "sha256": "57dcc50a0504ebc5a3257e45d8353e896885da3750d16d8b3e4c35ccd46d2ce5"
+        },
+        {
+            "path": "docs/development/nr-colour-processing.md",
+            "bytes": 32060,
+            "sha256": "11816f0d8b5b0dc45238e50d575ad7854f0fc4ac7fbd692a50a5d7ae2260988f"
+        },
+        {
+            "path": "docs/development/nr-colour-qasmoke-retest-20260916.md",
+            "bytes": 9839,
+            "sha256": "038a2a51f50b4ea75e528015ebd261431238ad4f9b0176fa95beca1b7096841f"
+        },
+        {
+            "path": "docs/development/nr-colour-readback-retest-20260915.md",
+            "bytes": 7907,
+            "sha256": "fa4872244aa1929ecdeb5807af0aeb737dd5f4d0a4cfb381433539d18aec39d6"
+        },
+        {
+            "path": "docs/development/nr-colour-transition-reproduction-20260915.md",
+            "bytes": 4997,
+            "sha256": "9859a59b2484d6bed02de6e248cb55da9bd8811dcef29dec1242c994b845ab8d"
+        },
+        {
+            "path": "docs/development/nr-lighting-bright-assessment-20260917.md",
+            "bytes": 9680,
+            "sha256": "b99f3246aba7ea34d97ecadb9fe6b24de7e00ad690fd32ef4ef587ffd27ec7cb"
+        },
+        {
+            "path": "docs/development/nr-lighting-dark-assessment-20260917.md",
+            "bytes": 12348,
+            "sha256": "d3e29ff77ec061116a59d0e114222e3ed37d81769b207df531204e08cd630439"
+        },
+        {
+            "path": "docs/development/nr-lighting-preservation-20260917.md",
+            "bytes": 14052,
+            "sha256": "3468bc330735ffd9161da4ef3743bd4fb939250e5c4655156f780ea933dd2611"
+        }
+    ],
+    "inventory": {
+        "path": "source-inventory.jsonl",
+        "records": 3075,
+        "sha256": "9199e337ab08321de7a91c22a537f2233c64108404666a41f3a26315e797fb70"
+    },
+    "totals": {
+        "runs": 23,
+        "payloadRecords": 2907,
+        "valueLeaves": 3029113,
+        "localRawCaptureReferences": 168,
+        "archiveBytes": 113201863
+    },
+    "limitations": [
+        "Original PNG pixels, binaries and full continuous pose/tracking arrays stay local.",
+        "Acquisition manifests are indexed, not copied as raw evidence trees.",
+        "Archived diagnostic passes are not automatically qualified visual results; read final exclusions and reports.",
+        "Superseded and interrupted analyses remain historical records.",
+        "Earlier C:/src/skyrim-community-shaders/build/validation/nr-live-20260915 raw files were unavailable at that path or the corresponding current worktree/root path; existing committed reports preserve their published results."
+    ],
+    "supportingEvidence": [
+        {
+            "source": {
+                "path": "build/validation/nr-camera-fix-20260916/live-map-hook-inspection.json",
+                "bytes": 3626,
+                "sha256": "36778954735d441114fa6874a816bbc071ef4277fb1c0220a82be2130d6ec39a"
+            },
+            "archive": "supporting/live-map-hook-inspection.json",
+            "archiveBytes": 4119,
+            "archiveSHA256": "8e03ca8dfa31a7d2eecb801e9460da899c4ab4714e28bc1f4c25c4dbbafeef5d",
+            "content": "complete parsed JSON; only formatting differs",
+            "scope": "read-only live camera Map/Unmap hook inspection"
+        }
+    ]
+}

@@ -1,11 +1,13 @@
 #pragma once
 #include "ExposurePolicy.h"
+#include "Utils/CaptureRetention.h"
 #include <array>
 #include <cstdint>
 #include <d3d11.h>
 #include <limits>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <wrl/client.h>
 
 namespace RE
@@ -102,6 +104,12 @@ namespace NeuralRendering::Color
 	{
 	public:
 		static constexpr std::size_t Capacity = 4096;
+		using Identity = std::tuple<std::uint32_t, std::uint64_t, std::uint64_t>;
+		using Retention = Util::CaptureRetention<Identity, ExposureEvidenceLookup>;
+		using Lease = Retention::Lease;
+		static Identity Key(const ExposureStamp& key) { return { key.frame, key.epoch, key.sequence }; }
+		/** The caller owns this exact CPU sample independently of rolling history. */
+		Lease Pin(const ExposureStamp& key) { return retained_.Pin(Key(key), Get(key)); }
 		static bool SameKey(const ExposureStamp& left, const ExposureStamp& right)
 		{
 			return left.frame == right.frame && left.epoch == right.epoch && left.sequence == right.sequence;
@@ -112,6 +120,15 @@ namespace NeuralRendering::Color
 		}
 		bool Complete(const ExposureEvidence& evidence, const char* reason)
 		{
+			retained_.Update(Key(evidence.stamp), [&](auto& pinned) {
+				if (!pinned.evidence || !SameSource(*pinned.evidence, evidence))
+					return;
+				const bool ambiguous = pinned.evidence->stamp.ambiguous;
+				pinned.evidence = evidence;
+				pinned.evidence->stamp.ambiguous |= ambiguous;
+				pinned.key = pinned.evidence->stamp;
+				pinned.reason = pinned.key.ambiguous ? "ambiguous_source_frame" : reason;
+			});
 			auto& record = records_[evidence.stamp.sequence % Capacity];
 			if (!evidence.stamp.sequence || !SameKey(record.evidence.stamp, evidence.stamp) ||
 				!SameSource(record.evidence, evidence))
@@ -123,6 +140,12 @@ namespace NeuralRendering::Color
 		}
 		void MarkAmbiguous(const ExposureStamp& key)
 		{
+			retained_.Update(Key(key), [](auto& pinned) {
+				pinned.key.ambiguous = true;
+				if (pinned.evidence)
+					pinned.evidence->stamp.ambiguous = true;
+				pinned.reason = "ambiguous_source_frame";
+			});
 			auto& record = records_[key.sequence % Capacity];
 			if (key.sequence && SameKey(record.evidence.stamp, key))
 				record.evidence.stamp.ambiguous = true;
@@ -183,6 +206,7 @@ namespace NeuralRendering::Color
 			const char* reason = "evidence_not_retained";
 		};
 		std::array<RecordState, Capacity> records_{};
+		Retention retained_;
 	};
 	struct ExposureBindingObservation
 	{
@@ -243,6 +267,8 @@ namespace NeuralRendering::Color
 		ExposureCaptureStatus GetStatus() const;
 		/// Read retained CPU evidence by exact frame, epoch and sequence without polling the GPU.
 		ExposureEvidenceLookup GetEvidence(const ExposureStamp&) const;
+		/** Keep an accepted capture's CPU evidence until its owner releases it. */
+		ExposureEvidenceHistory::Lease PinEvidence(const ExposureStamp&);
 		/// Pin a source-frame key; epoch zero selects the current epoch only for this lookup.
 		ExposureEvidenceLookup GetSourceFrameEvidence(std::uint32_t frame, std::uint64_t epoch = 0) const;
 		bool Bind(ID3D11DeviceContext*, ExposureBinding&, const ExposureTransaction&);

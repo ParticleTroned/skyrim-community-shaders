@@ -205,6 +205,33 @@ age where applicable. Camera matrices and world-position adjustments are
 checked against the fixed source frame. Requested cadence never substitutes
 for actual acquisition timestamps.
 
+With screenshot capability `nrCaptureDiagnostics.schemaVersion=1`,
+`captureFrameEvidence` pins CPU-only companions at the accepted stereo
+acquisition. Enable colour `diagnostics` for private measurements and
+`captureEngineExposure` for engine observations as before. Terminal
+receipts and sequence children include immutable
+`actual.captureDiagnostics`: exact `transactionId`, `exposures`,
+`measurementBatches` and per-key `measurementRequests`. Frozen
+`actual.acquisition.nrEvidence` is never rewritten. Private measurements
+still precede final masking and do not prove presentation.
+
+Capture ownership survives rolling-history eviction and source-configuration
+changes. Storage is bounded to 32 distinct keys per publisher; outstanding
+owners are never evicted. Completion uses existing render-thread readbacks.
+Finalization adds no GPU poll or wait and records unavailable/pending,
+invalid, retired or exhausted evidence explicitly. Success, failure,
+cancellation and shutdown terminal paths release the CPU ownership. Final
+JSON follows normal receipt and manifest retention.
+
+The importer prefers each child's transaction-matched companions. The
+controller runner avoids live exposure polling for those children, including
+explicit unavailable results; older captures retain exact-stamp lookup.
+Finalized matching companions override earlier valid stamps, preserving
+later ambiguity. Legacy lookup results stay separate from owned companions
+so repeated stamps cannot create false duplicate matches across captures.
+An acquisition can finish before a readback drains, so a committed PNG alone
+does not guarantee complete diagnostics.
+
 Pending exposure, unknown camera provenance, fallback or mismatched evidence
 is retained as an exclusion. Original artifacts remain unchanged. The
 analyser refuses to overwrite any existing analysis directory.

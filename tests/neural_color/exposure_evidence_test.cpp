@@ -34,6 +34,9 @@ int main()
 	sample.sourceFormat = sample.sourceViewFormat = 10;
 	sample.sourceWidth = sample.sourceHeight = 2;
 	history->Record(sample, "readback_pending");
+	auto captureLease = history->Pin(sample.stamp);
+	Require(captureLease && !captureLease->Snapshot().evidence->readbackComplete,
+		"accepted capture owns a pending exact exposure");
 	const auto pinned = history->GetSourceFrame(41, 7);
 	Require(pinned.evidence && pinned.key.sequence == 1 && !pinned.evidence->readbackComplete &&
 				Reason(pinned, "readback_pending"),
@@ -48,6 +51,7 @@ int main()
 	auto wrongSource = sample;
 	wrongSource.sourceViewIdentity = 999;
 	Require(!history->Complete(wrongSource, "readback_complete"), "completion cannot change pinned source-view identity");
+	Require(!captureLease->Snapshot().evidence->readbackComplete, "wrong-source readback cannot complete a capture lease");
 	Require(history->Complete(sample, "readback_complete"), "later render polling completes the queued exact sample");
 	const auto ready = history->Get(pinned.key);
 	Require(ready.evidence && ready.evidence->readbackComplete && ready.evidence->values == sample.values &&
@@ -75,7 +79,11 @@ int main()
 	}
 	Require(Reason(history->Get(sample.stamp), "evidence_retention_expired") && !history->Get(sample.stamp).evidence,
 		"bounded retention reports expiry instead of returning a replacement sample");
+	Require(captureLease->Snapshot().evidence->readbackComplete && captureLease->Snapshot().key.ambiguous &&
+				Reason(captureLease->Snapshot(), "ambiguous_source_frame"),
+		"capture ownership preserves completed evidence and ambiguity across history expiry");
 	Require(!history->Complete(sample, "readback_complete"), "late completion cannot overwrite an evicting capture");
+	Require(captureLease->Snapshot().key.ambiguous, "late completion cannot clear retained ambiguity");
 	const ExposureStamp newest{ static_cast<std::uint32_t>(ExposureEvidenceHistory::Capacity + 101), 9,
 		ExposureEvidenceHistory::Capacity + 1, false };
 	Require(history->Get(newest).evidence && !history->Get(newest).evidence->readbackComplete,
@@ -86,5 +94,23 @@ int main()
 	history->Record(duplicate, "readback_pending");
 	Require(Reason(history->GetSourceFrame(41, 8), "multiple_source_frame_snapshots"),
 		"multiple captures with one frame and epoch fail closed");
+	auto pending = sample;
+	pending.stamp = { 9090, 30, 9000, false };
+	pending.readbackComplete = false;
+	history->Record(pending, "readback_pending");
+	auto delayed = history->Pin(pending.stamp);
+	auto replacement = pending;
+	replacement.stamp.sequence += ExposureEvidenceHistory::Capacity;
+	history->Record(replacement, "readback_pending");
+	pending.readbackComplete = true;
+	Require(!history->Complete(pending, "readback_complete"), "late completion cannot change rolling replacement");
+	Require(delayed->Snapshot().evidence->readbackComplete &&
+				delayed->Snapshot().key.sequence == 9000,
+		"late completion still reaches its capture-owned sample");
+	auto retired = replacement;
+	history->Record(retired, "readback_pending");
+	auto retirement = history->Pin(retired.stamp);
+	Require(history->Complete(retired, "resources_retired_before_readback"), "retire pending lease");
+	Require(Reason(retirement->Snapshot(), "resources_retired_before_readback"), "capture retains retirement reason");
 	std::printf("Passed %u exposure evidence checks\n", checks);
 }

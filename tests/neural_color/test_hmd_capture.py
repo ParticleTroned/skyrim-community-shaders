@@ -312,6 +312,39 @@ class CaptureTests(unittest.TestCase):
         self.assertTrue(result["exposures"][0]["available"])
         self.assertEqual(manifest["children"][0]["actual"]["acquisition"]["nrEvidence"]["engineExposure"], stamp)
 
+    def test_capture_owned_diagnostics_need_no_live_polling(self):
+        stamp = {"frame": 150, "epoch": 2, "sequence": 8}
+        owned = {"schemaVersion": 1, "finalized": True, "transactionId": "tx",
+                 "measurementBatches": [], "measurementRequests": [],
+                 "exposures": [{"key": stamp, "available": False,
+                                "reason": "resources_retired_before_readback"}]}
+        manifest = {"children": [{"ordinal": 1, "actual": {
+            "acquisition": {"nrEvidence": {"transactionId": "tx", "engineExposure": stamp}},
+            "captureDiagnostics": owned}}]}
+        with patch.object(self.controller, "call", side_effect=AssertionError("unexpected live call")):
+            result = self.runner.exposure_diagnostics(manifest)
+        self.assertEqual(result["requests"], [])
+        self.assertEqual(result["exposures"], [])
+        self.assertEqual(result["captureOwned"][0]["diagnostics"], owned)
+
+    def test_legacy_lookup_remains_separate_from_owned_capture_with_same_stamp(self):
+        stamp = {"frame": 150, "epoch": 2, "sequence": 8}
+        owned = {"schemaVersion": 1, "finalized": True, "transactionId": "tx",
+                 "measurementBatches": [], "measurementRequests": [],
+                 "exposures": [{"key": stamp, "available": False, "reason": "readback_pending_at_capture_finalization"}]}
+        acquisition = {"nrEvidence": {"transactionId": "tx", "engineExposure": stamp}}
+        manifest = {"children": [
+            {"ordinal": 1, "actual": {"acquisition": acquisition, "captureDiagnostics": owned}},
+            {"ordinal": 2, "actual": {"acquisition": acquisition}}]}
+        completed = {"key": stamp, "available": True, "evidence": {
+            **stamp, "readbackComplete": True, "engineRatioValid": True, "ambiguous": False}}
+        reply = {"captureEvidenceSchemaVersion": 1, "exposures": [completed]}
+        with patch.object(self.controller, "call", return_value=reply) as mocked:
+            result = self.runner.exposure_diagnostics(manifest)
+        self.assertEqual(mocked.call_count, 1)
+        self.assertEqual(capture.hmd.resolved_exposure(stamp, result), completed["evidence"])
+        self.assertEqual(result["captureOwned"][0]["diagnostics"], owned)
+
     def test_host_version_mismatch_rejects_even_when_physical_hash_matches(self):
         host = self.directory / "devbench.dll"
         host.write_bytes(b"offline host artifact")

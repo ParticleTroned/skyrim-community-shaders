@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PipelinePolicy.h"
+#include "Utils/CaptureRetention.h"
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -36,6 +37,18 @@ namespace NeuralRendering::Color
 		std::uint32_t receivedSlotMask = 0;
 		bool invalid = false;
 
+		bool Record(const MeasurementBatchKey& identity, std::uint32_t slot, const Sample& sample)
+		{
+			if (invalid || !identity.Valid() || key != identity || slot >= samples.size() ||
+				(identity.expectedSlotMask & (1u << slot)) == 0 || (receivedSlotMask & (1u << slot)) != 0) {
+				invalid = true;
+				return false;
+			}
+			samples[slot] = sample;
+			receivedSlotMask |= 1u << slot;
+			return true;
+		}
+
 		[[nodiscard]] bool Complete() const noexcept
 		{
 			return key.Valid() && !invalid && receivedSlotMask == key.expectedSlotMask;
@@ -49,10 +62,30 @@ namespace NeuralRendering::Color
 		static_assert(Capacity > 0 && Published > 0 && Published <= Capacity);
 
 	public:
+		using Retention = Util::CaptureRetention<MeasurementBatchKey, MeasurementBatch<Sample>>;
+		using Lease = typename Retention::Lease;
+
+		/** Pin the exact batch before rolling diagnostic history can replace it. */
+		Lease Pin(const MeasurementBatchKey& key)
+		{
+			if (!key.Valid())
+				return {};
+			const auto& stored = batches_[(key.id - 1u) % Capacity];
+			MeasurementBatch<Sample> initial{};
+			initial.key = key;
+			if (stored.key == key)
+				initial = stored;
+			else if (stored.key.id >= key.id)
+				initial.invalid = true;
+			return retained_.Pin(key, std::move(initial));
+		}
+
 		bool Record(const MeasurementBatchKey& key, std::uint32_t slot, const Sample& sample)
 		{
 			if (!key.id)
 				return false;
+			retained_.UpdateIf([&](const auto& identity) { return identity.id == key.id; },
+				[&](auto& pinned) { pinned.Record(key, slot, sample); });
 			auto& batch = batches_[(key.id - 1u) % Capacity];
 			if (batch.key.id > key.id)
 				return false;
@@ -62,14 +95,7 @@ namespace NeuralRendering::Color
 				batch = {};
 				batch.key = key;
 			}
-			if (batch.invalid || !key.Valid() || batch.key != key || slot >= batch.samples.size() ||
-				(key.expectedSlotMask & (1u << slot)) == 0 || (batch.receivedSlotMask & (1u << slot)) != 0) {
-				batch.invalid = true;
-				return false;
-			}
-			batch.samples[slot] = sample;
-			batch.receivedSlotMask |= 1u << slot;
-			return true;
+			return batch.Record(key, slot, sample);
 		}
 
 		/** Return complete batches by submission order, never latest-per-slot mixtures. */
@@ -91,6 +117,7 @@ namespace NeuralRendering::Color
 
 	private:
 		std::array<MeasurementBatch<Sample>, Capacity> batches_{};
+		Retention retained_;
 		std::uint64_t evictedIncomplete_ = 0;
 	};
 }

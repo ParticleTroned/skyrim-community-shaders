@@ -327,7 +327,12 @@ class Campaign:
     def exposure_diagnostics(self, manifest: dict) -> dict:
         stamps = {}
         gaps = []
+        retained = []
         for child in manifest.get("children", []):
+            companion = hmd.captured_diagnostics(child)
+            if companion is not None:
+                retained.append({"ordinal": child.get("ordinal"), "diagnostics": companion})
+                continue
             evidence = child.get("actual", {}).get("acquisition", {}).get("nrEvidence", {})
             sources = [("engine", evidence.get("engineExposure", {}))]
             sources += [(eye, evidence.get(eye, {}).get("exposure", {})) for eye in hmd.EYES]
@@ -337,7 +342,8 @@ class Campaign:
                     stamps[tuple(stamp.values())] = stamp
                 else:
                     gaps.append({"ordinal": child.get("ordinal"), "role": role, "reason": "capture has no exact exposure stamp"})
-        result = {"requests": [], "responses": [], "exposures": [], "gaps": gaps}
+        result = {"requests": [], "responses": [], "exposures": [], "gaps": gaps,
+                  "captureOwned": retained}
         if not stamps:
             return result
         hmd.require(len(stamps) <= 64, "exposure stamp count exceeds the bounded diagnostics contract")

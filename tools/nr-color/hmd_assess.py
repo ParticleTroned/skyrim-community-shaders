@@ -270,9 +270,10 @@ def resolved_exposure(frozen: dict, diagnostics: dict | None = None) -> dict:
     require(isinstance(frozen, dict) and (diagnostics is None or isinstance(diagnostics, dict)), "invalid exposure evidence object")
     stamp = {name: frozen.get(name) for name in ("frame", "epoch", "sequence")}
     require(all(type(value) is int and value > 0 for value in stamp.values()), "exposure producer stamp unavailable")
-    if frozen.get("valid") is True or frozen.get("engineRatioValid") is True:
-        return frozen
     matches = [item for item in (diagnostics or {}).get("exposures", []) if item.get("key") == stamp]
+    if not matches and (frozen.get("valid") is True or frozen.get("engineRatioValid") is True):
+        require(frozen.get("ambiguous") is not True, "frozen exposure is ambiguous")
+        return frozen
     require(len(matches) == 1, "exact exposure companion missing or duplicated")
     match = matches[0]
     require(match.get("available") is True, "exposure companion unavailable: " + str(match.get("reason", "unspecified")))
@@ -375,6 +376,25 @@ def check_camera(acquisition: dict, fixed_scene: dict) -> None:
                     "camera " + kind + " drift exceeds frozen tolerance")
 
 
+def captured_diagnostics(child: dict) -> dict | None:
+    """Use only immutable companions belonging to this acquisition."""
+    actual = child.get("actual", {})
+    result = actual.get("captureDiagnostics")
+    if result is None:
+        return None
+    evidence = actual.get("acquisition", {}).get("nrEvidence", {})
+    require(isinstance(result, dict) and result.get("schemaVersion") == 1
+            and result.get("finalized") is True, "invalid capture-owned diagnostics")
+    require(bool(evidence.get("transactionId"))
+            and result.get("transactionId") == evidence["transactionId"],
+            "capture-owned diagnostics transaction mismatch")
+    require(isinstance(result.get("exposures"), list)
+            and isinstance(result.get("measurementBatches"), list)
+            and isinstance(result.get("measurementRequests"), list),
+            "capture-owned diagnostic collections missing")
+    return result
+
+
 def check_pair(child: dict, base: Path, expected: dict, candidate: dict, policy: dict, *,
                capture_diagnostics: dict | None = None, sequence: dict | None = None) -> dict:
     _, Image, _, _ = libraries()
@@ -399,7 +419,9 @@ def check_pair(child: dict, base: Path, expected: dict, candidate: dict, policy:
     require(acquisition.get("sourceKind") == "hmd_submission", "non-HMD acquisition")
     for key in ("engineFrame", "compositorCycle", "monotonicTimestampUs"):
         require(type(acquisition.get(key)) is int and acquisition[key] > 0, "missing actual acquisition " + key)
-    check_nr(acquisition.get("nrEvidence", {}), expected, candidate, acquisition, capture_diagnostics=capture_diagnostics)
+    companions = captured_diagnostics(child)
+    check_nr(acquisition.get("nrEvidence", {}), expected, candidate, acquisition,
+             capture_diagnostics=companions if companions is not None else capture_diagnostics)
     planes = acquisition["planes"]
     require(len(planes) == 2 and {plane.get("eye") for plane in planes} == set(EYES), "incoherent acquired eye pair")
     outputs = {}
@@ -425,7 +447,8 @@ def check_pair(child: dict, base: Path, expected: dict, candidate: dict, policy:
         outputs[eye] = {"path": str(path), "sha256": artifact["sha256"], "bytes": artifact["bytes"]}
     require(planes[0]["publicationGeneration"] == planes[1]["publicationGeneration"]
             and planes[0]["deviceIdentity"] == planes[1]["deviceIdentity"], "eye publication identity mismatch")
-    return {"requestId": child["requestId"], "ordinal": child["ordinal"], "acquisition": acquisition, "images": outputs}
+    return {"requestId": child["requestId"], "ordinal": child["ordinal"], "acquisition": acquisition,
+            "images": outputs, "captureDiagnostics": companions}
 
 
 def region_metrics(pixels: Any) -> dict:
@@ -754,7 +777,7 @@ def exposure_measurements(sequences: list) -> list[dict]:
                        "producerFrame": frozen.get("frame"), "epoch": frozen.get("epoch"), "sequence": frozen.get("sequence"),
                        "available": False, "capturedRatio": None, "ratioStep": None, "frameGammaExponent": None, "reason": ""}
                 try:
-                    measured = resolved_exposure(frozen, sequence.get("captureDiagnostics"))
+                    measured = resolved_exposure(frozen, pair.get("captureDiagnostics") or sequence.get("captureDiagnostics"))
                     row.update(available=True, frameGammaExponent=measured.get("frameGammaExponent"))
                     values = measured.get("rawValues", [])
                     if len(values) >= 3 and type(values[2]) in (int, float) and math.isfinite(values[2]):

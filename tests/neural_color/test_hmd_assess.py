@@ -293,6 +293,37 @@ class ImageEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(HMD.EvidenceError, "missing"):
             HMD.resolved_exposure(stamp, companion)
 
+    def test_capture_owned_companions_survive_without_live_lookup(self):
+        pinned = expected() | {"requiresCapturedExposure": True, "exposureAge": 1}
+        stamp = {"frame": 98, "epoch": 3, "sequence": 12}
+        evidence = self.pair["actual"]["acquisition"]["nrEvidence"]
+        for eye in HMD.EYES:
+            evidence[eye]["exposure"] = {**stamp, "valid": False, "sourceWorldFrame": 99, "age": 1}
+        companion = {"schemaVersion": 1, "finalized": True, "transactionId": evidence["transactionId"],
+                     "measurementBatches": [], "measurementRequests": [],
+                     "exposures": [{"key": stamp, "available": True, "evidence": {
+                         **stamp, "readbackComplete": True, "engineRatioValid": True, "ambiguous": False}}]}
+        self.pair["actual"]["captureDiagnostics"] = companion
+        original = copy.deepcopy(self.pair)
+        pair = HMD.check_pair(self.pair, self.root, pinned, self.candidate, region_policy())
+        self.assertEqual(pair["captureDiagnostics"], companion)
+        self.assertEqual(self.pair, original)
+        companion["transactionId"] = "unrelated"
+        with self.assertRaisesRegex(HMD.EvidenceError, "transaction mismatch"):
+            HMD.check_pair(self.pair, self.root, pinned, self.candidate, region_policy())
+
+    def test_completed_companion_overrides_earlier_valid_exposure(self):
+        stamp = {"frame": 98, "epoch": 3, "sequence": 12}
+        frozen = {**stamp, "valid": True, "engineRatioValid": True, "ambiguous": False}
+        completed = {**stamp, "readbackComplete": True, "engineRatioValid": False, "ambiguous": True}
+        companion = {"exposures": [{"key": stamp, "available": True, "evidence": completed}]}
+        with self.assertRaisesRegex(HMD.EvidenceError, "ambiguous"):
+            HMD.resolved_exposure(frozen, companion)
+        companion["exposures"][0].update(available=False, reason="resources_retired_before_readback")
+        with self.assertRaisesRegex(HMD.EvidenceError, "unavailable"):
+            HMD.resolved_exposure(frozen, companion)
+        self.assertEqual(HMD.resolved_exposure(frozen), frozen)
+
     def test_recording_scene_rejects_transition_and_time_drift(self):
         plan = HMD.make_plan(specification(), region_policy(), 7)
         recording = {"meta": {**plan["fixedScene"]["recordingScene"], "gameHour": 12}, "activityEvents": []}

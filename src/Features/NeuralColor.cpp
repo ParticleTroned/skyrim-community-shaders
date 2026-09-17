@@ -1,6 +1,6 @@
 #include "NeuralColor.h"
 #include "BuildProvenance.h"
-#include "Upscaling/NeuralRendering/ColorPipeline.h"
+#include "Upscaling/NeuralRendering/CaptureEvidence.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -190,15 +190,7 @@ namespace
 		for (const auto& batch : status.measurementBatches) {
 			if (!batch.Complete())
 				continue;
-			Json samples = Json::array();
-			for (std::uint32_t slot = 0; slot < batch.samples.size(); ++slot)
-				if ((batch.key.expectedSlotMask & (1u << slot)) != 0)
-					samples.push_back(MeasurementJson(batch.samples[slot]));
-			const auto& k = batch.key;
-			batches.push_back({ { "measurementBatchId", k.id }, { "expectedMeasurementSlotMask", k.expectedSlotMask },
-				{ "frame", k.frame }, { "sourceWorldFrame", k.sourceWorldFrame }, { "generation", k.generation },
-				{ "revision", k.revision }, { "insertionPoint", k.insertion }, { "atomicColourBatch", k.atomicStereo },
-				{ "measurements", std::move(samples) } });
+			batches.push_back(MeasurementBatchEvidenceJson(batch));
 		}
 		return { { "ok", true }, { "apiVersion", 3 }, { "revision", config.revision }, { "settings", SettingsJson(config.settings) },
 			{ "effectiveMode", Name(config.EffectiveMode(), modes) },
@@ -266,8 +258,7 @@ namespace
 					stamp.epoch = key.at("epoch").get<uint64_t>();
 					stamp.sequence = key.at("sequence").get<uint64_t>();
 					const auto found = ExposureCapture::Instance().GetEvidence(stamp);
-					exposures.push_back({ { "key", key }, { "available", found.evidence && found.evidence->readbackComplete },
-						{ "reason", found.reason }, { "evidence", found.evidence ? EvidenceJson(*found.evidence) : Json(nullptr) } });
+					exposures.push_back(ExposureLookupEvidenceJson(found));
 				}
 				response = { { "ok", true }, { "apiVersion", 3 }, { "captureEvidenceSchemaVersion", 1 }, { "exposures", std::move(exposures) } };
 			} else if (action == "configure" || action == "reset_experiments") {
@@ -335,7 +326,7 @@ namespace
 	Json Descriptor()
 	{
 		return Json::parse(R"schema({
-  "description": "NR colour v3: opt-in captureFrameEvidence freezes CPU configuration and outer stereo outcomes for accepted HMD screenshots without enabling colour passes or changing input epochs. Shared live controls, display-only A/B, engine HDR exposure capture and asynchronous measurements. measurementBatches retains up to four complete private-reconstruction batches, each with an immutable batch ID, expected physical-slot mask and matching frame/revision/generation. Pending readbacks drain even when a region becomes inactive; latest-per-slot measurements remain diagnostic compatibility fields. Complete batches do not prove outer stereo commit or headset presentation. status also reports registered HDR producers and rejected draw bindings. expectedShaderIdentity is the exact shader recorded by the engine/replacement binding hook for this context, producer, engine selection, frame and capture epoch, or the original engine shader when no matching association exists; the live draw must still match it. Capture accepts one visible mip of a 1x1 or 2x2 AvgTex with ordinary non-border sampling. Capture observes finalized engine graphics bindings after BSGraphics_SetDirtyStates and CS state updates, before the HDR draw, as well as all seven D3D11 draw forms inside the exact HDR effect scope. The engine boundary remains valid when D3D11 replaces its per-context draw method entries. Compute flushes and unrelated effects are excluded. producerScopes, lastProducerFrame, graphicsStateFlushes, lastGraphicsStateFlushFrame and drawCounts expose the reached boundaries. Each snapshot producer identifies its actual capture boundary. captured_hdr requires the exact source frame. captured_hdr_previous explicitly requires sourceWorldFrame minus one for pre-HDR experiments; the producer stamp is unchanged and exposureAgeFrames reports the real age. Older, ambiguous and cross-epoch captures are rejected. GPU scalar validity requires identical raw pairs or finite positive x == y in every texel (measured_unit_ratio); texels retain row-major per-texel average, target, ratio and validity, while scalarStatus distinguishes non_uniform_avgtex from a measured_uniform_ratio or an unmeasured_unit_fallback. Other differing fields are observed but never averaged into a correction. Capture alone does not enable reconstruction. configure/reset change only the registry. assets checks presence, not compilation. No NVIDIA ABI assumptions or game/profile mutations.",
+  "description": "NR colour v3: opt-in captureFrameEvidence freezes CPU configuration and outer stereo outcomes for accepted HMD screenshots without enabling colour passes or changing input epochs. Shared live controls, display-only A/B, engine HDR exposure capture and asynchronous measurements. Accepted screenshots additionally retain exact CPU companions in terminal actual.captureDiagnostics; callers need not poll rolling status to recover those captures. measurementBatches retains up to four complete private-reconstruction batches, each with an immutable batch ID, expected physical-slot mask and matching frame/revision/generation. Pending readbacks drain even when a region becomes inactive; latest-per-slot measurements remain diagnostic compatibility fields. Complete batches do not prove outer stereo commit or headset presentation. status also reports registered HDR producers and rejected draw bindings. expectedShaderIdentity is the exact shader recorded by the engine/replacement binding hook for this context, producer, engine selection, frame and capture epoch, or the original engine shader when no matching association exists; the live draw must still match it. Capture accepts one visible mip of a 1x1 or 2x2 AvgTex with ordinary non-border sampling. Capture observes finalized engine graphics bindings after BSGraphics_SetDirtyStates and CS state updates, before the HDR draw, as well as all seven D3D11 draw forms inside the exact HDR effect scope. The engine boundary remains valid when D3D11 replaces its per-context draw method entries. Compute flushes and unrelated effects are excluded. producerScopes, lastProducerFrame, graphicsStateFlushes, lastGraphicsStateFlushFrame and drawCounts expose the reached boundaries. Each snapshot producer identifies its actual capture boundary. captured_hdr requires the exact source frame. captured_hdr_previous explicitly requires sourceWorldFrame minus one for pre-HDR experiments; the producer stamp is unchanged and exposureAgeFrames reports the real age. Older, ambiguous and cross-epoch captures are rejected. GPU scalar validity requires identical raw pairs or finite positive x == y in every texel (measured_unit_ratio); texels retain row-major per-texel average, target, ratio and validity, while scalarStatus distinguishes non_uniform_avgtex from a measured_uniform_ratio or an unmeasured_unit_fallback. Other differing fields are observed but never averaged into a correction. Capture alone does not enable reconstruction. configure/reset change only the registry. assets checks presence, not compilation. No NVIDIA ABI assumptions or game/profile mutations.",
   "outputSchema": {
     "type": "object",
     "properties": {
@@ -586,6 +577,25 @@ namespace NeuralRendering::Color
 	}
 	nlohmann::json ObservationEvidenceJson(const Observation& observation) { return ObservationJson(observation); }
 	nlohmann::json ExposureEvidenceJson(const ExposureEvidence& evidence) { return EvidenceJson(evidence); }
+	nlohmann::json ExposureLookupEvidenceJson(const ExposureEvidenceLookup& lookup)
+	{
+		const auto& k = lookup.key;
+		return { { "key", { { "frame", k.frame }, { "epoch", k.epoch }, { "sequence", k.sequence } } },
+			{ "available", lookup.evidence && lookup.evidence->readbackComplete },
+			{ "reason", lookup.reason }, { "evidence", lookup.evidence ? EvidenceJson(*lookup.evidence) : Json(nullptr) } };
+	}
+	nlohmann::json MeasurementBatchEvidenceJson(const MeasurementBatch<Measurement>& batch)
+	{
+		Json samples = Json::array();
+		for (std::uint32_t slot = 0; slot < batch.samples.size(); ++slot)
+			if ((batch.receivedSlotMask & (1u << slot)) != 0)
+				samples.push_back(MeasurementJson(batch.samples[slot]));
+		const auto& k = batch.key;
+		return { { "measurementBatchId", k.id }, { "expectedMeasurementSlotMask", k.expectedSlotMask },
+			{ "frame", k.frame }, { "sourceWorldFrame", k.sourceWorldFrame }, { "generation", k.generation },
+			{ "revision", k.revision }, { "insertionPoint", k.insertion }, { "atomicColourBatch", k.atomicStereo },
+			{ "measurements", std::move(samples) } };
+	}
 }
 
 NeuralColor& NeuralColor::Instance()

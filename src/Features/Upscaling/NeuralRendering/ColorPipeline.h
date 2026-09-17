@@ -54,6 +54,8 @@ namespace NeuralRendering::Color
 		static Registry& Instance();
 		Configuration Snapshot() const;
 		Status GetStatus() const;
+		/** Retain only CPU measurement evidence for an accepted screenshot. */
+		MeasurementBatchHistory<Measurement>::Lease PinMeasurementBatch(const MeasurementBatchKey&);
 		bool CaptureEvidenceEnabled() const noexcept { return captureEvidenceEnabled_.load(std::memory_order_acquire); }
 		bool Configure(const Settings&, const Experiments&, std::uint64_t expectedRevision = 0);
 		void Record(const Observation&) noexcept;

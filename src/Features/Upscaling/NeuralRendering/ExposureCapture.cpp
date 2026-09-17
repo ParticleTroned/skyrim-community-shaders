@@ -524,6 +524,11 @@ namespace NeuralRendering::Color
 			epoch = state_->epoch.load(std::memory_order_acquire);
 		return state_->retained.GetSourceFrame(frame, epoch);
 	}
+	ExposureEvidenceHistory::Lease ExposureCapture::PinEvidence(const ExposureStamp& key)
+	{
+		std::scoped_lock lock(state_->mutex);
+		return state_->retained.Pin(key);
+	}
 	bool ExposureCapture::Bind(ID3D11DeviceContext* c, ExposureBinding& output, const ExposureTransaction& key)
 	{
 		output.evidence = {};

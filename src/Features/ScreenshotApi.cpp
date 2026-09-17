@@ -6,6 +6,7 @@
 #include "Globals.h"
 #include "ScreenshotDevBenchBridge.h"
 #include "State.h"
+#include "Utils/CaptureRetention.h"
 #include "Utils/WinApi.h"
 #include "VRAPI/CSpluginapi.h"
 
@@ -951,6 +952,10 @@ ScreenshotApi::json ScreenshotApi::BuildCapabilities(const ScreenshotFeature&) c
 {
 	return {
 		{ "schema", "urn:csx:devbench:screenshot:1" },
+		{ "nrCaptureDiagnostics", { { "schemaVersion", 1 }, { "location", "actual.captureDiagnostics" },
+									  { "retention", "capture_owned_until_terminal_then_immutable" }, { "cpuOnly", true },
+									  { "maximumPinnedMeasurementBatches", Util::kCaptureRetentionCapacity },
+									  { "maximumPinnedExposures", Util::kCaptureRetentionCapacity } } },
 		{ "sources", { "desktop_mirror", "hmd_submission" } },
 		{ "views", { "source_native", "left_eye", "right_eye", "side_by_side", "framed_left", "framed_right", "framed_combined" } },
 		{ "formats", { "png", "bmp" } },
@@ -1080,6 +1085,7 @@ void ScreenshotApi::TransitionLocked(RequestRecord& a_record, std::string a_stat
 		return;
 	a_record.state = std::move(a_state);
 	if (IsTerminal(a_record.state)) {
+		CSX::ScreenshotPolicy::FinalizeNeuralDiagnostics(a_record.diagnosticSnapshot, a_record.actual);
 		a_record.terminalUtc = CSX::Api::ServiceFoundation::TimestampUtc();
 		a_record.terminalAt = std::chrono::steady_clock::now();
 	}
@@ -1243,6 +1249,8 @@ void ScreenshotApi::OnSourceAcquired(std::string_view a_requestId, json a_acquis
 			};
 		}
 		record.actual["acquisition"] = a_acquisition;
+		record.diagnosticSnapshot = CSX::ScreenshotPolicy::RetainNeuralDiagnostics(
+			a_acquisition.value("nrEvidence", json::object()));
 		AppendEventLocked(record, "source.acquired", std::move(a_acquisition));
 	}
 }

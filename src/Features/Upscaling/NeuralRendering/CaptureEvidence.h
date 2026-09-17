@@ -32,4 +32,6 @@ namespace NeuralRendering::Color
 	nlohmann::json ConfigurationEvidenceJson(const Configuration& configuration);
 	nlohmann::json ObservationEvidenceJson(const Observation& observation);
 	nlohmann::json ExposureEvidenceJson(const ExposureEvidence& evidence);
+	nlohmann::json MeasurementBatchEvidenceJson(const MeasurementBatch<Measurement>& batch);
+	nlohmann::json ExposureLookupEvidenceJson(const ExposureEvidenceLookup& lookup);
 }

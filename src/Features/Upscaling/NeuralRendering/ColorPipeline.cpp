@@ -161,6 +161,11 @@ namespace NeuralRendering::Color
 		capture.Request(NeedsExposureCapture(next));  // Atomic request only, no engine/GPU work.
 		return true;
 	}
+	MeasurementBatchHistory<Measurement>::Lease Registry::PinMeasurementBatch(const MeasurementBatchKey& key)
+	{
+		std::scoped_lock lock(mutex_);
+		return measurementBatches_.Pin(key);
+	}
 	void Registry::Record(const Observation& observation) noexcept
 	{
 		try {

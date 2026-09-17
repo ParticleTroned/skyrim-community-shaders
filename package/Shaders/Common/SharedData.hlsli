@@ -192,6 +192,7 @@ namespace SharedData
 		uint ProbeDataReady;
 		uint Enabled;
 		uint3 pad0;
+		uint4 ArrayDims;
 	};
 
 	struct CloudShadowsSettings

@@ -13,6 +13,23 @@ float3 Candidate(uint2 local, float3 baseline)
 	return valid ? result : baseline;
 }
 
+// Packed inputs must be finite, nonnegative and within their format's range.
+float3 RoundPreserveSourceForStorage(float3 value)
+{
+	if ((ControlFlags & 0x300u) != 0x100u)
+		return value;
+	// Packed UAV stores can truncate: round once to the nearest value, ties to even.
+	const uint3 discardedBits = uint3(17u, 17u, 18u);
+	const uint3 discardedMask = (1u << discardedBits) - 1u;
+	uint3 bits = asuint(value);
+	uint3 bias = (discardedMask >> 1u) + ((bits >> discardedBits) & 1u);
+	float3 normal = asfloat((bits + bias) & ~discardedMask);
+	// Below 2^-14, packed subnormals use fixed 2^-20 / 2^-19 steps.
+	const float3 subnormalScale = float3(1048576.0, 1048576.0, 524288.0);
+	float3 subnormal = round(value * subnormalScale) / subnormalScale;
+	return value < (1.0 / 16384.0) ? subnormal : normal;
+}
+
 [numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {
 	uint2 local = id.xy;
 	if (any(local >= RegionSize))
@@ -73,5 +90,5 @@ float3 Candidate(uint2 local, float3 baseline)
 			preserved = detail;
 	}
 	float3 result = AppearanceMix <= 0.0 ? preserved : lerp(preserved, candidate, AppearanceMix);
-	Result[local] = float4(RepresentableRGB(result) ? result : baseline.rgb, baseline.a);
+	Result[local] = float4(RepresentableRGB(result) ? RoundPreserveSourceForStorage(result) : baseline.rgb, baseline.a);
 }

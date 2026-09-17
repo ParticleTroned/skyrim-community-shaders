@@ -33,6 +33,13 @@ samples two pixels apart cancels alternating fine detail before the strength
 control can recover it. The [detail investigation](nr-colour-detail-investigation-20260916.md)
 records the shader regression, correction and remaining HMD validation.
 
+For R11G11B10 output, the final Preserve Source result is explicitly rounded
+to the nearest representable value, ties to even, after range validation.
+This avoids one-sided darkening when a packed UAV store truncates tiny edits.
+Other storage formats and the existing early-return endpoints are unchanged.
+The [packed-rounding correction](nr-colour-packed-rounding-fix-20260917.md)
+records the same-frame evidence and WARP/hardware regressions.
+
 ## In-game controls: no editable configuration INI
 
 **Display > Neural Rendering Colour** provides:

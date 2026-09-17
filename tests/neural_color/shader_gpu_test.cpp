@@ -1,13 +1,17 @@
-// Standalone Windows WARP tests. No Skyrim, NVIDIA DLL or plugin build needed.
+// Standalone Windows shader tests: WARP by default, optional --hardware adapter.
 #include "../ShaderPackageIncludes.h"
 #include "Features/Upscaling/NeuralRendering/ColorPolicy.h"
+#include <algorithm>
 #include <array>
+#include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <d3d11.h>
 #include <d3dcompiler.h>
 #include <filesystem>
+#include <limits>
+#include <string_view>
 #include <vector>
 #include <wrl/client.h>
 
@@ -40,7 +44,8 @@ struct Texture
 	ComPtr<ID3D11ShaderResourceView> srv;
 	ComPtr<ID3D11UnorderedAccessView> uav;
 };
-static Texture MakeTexture(ID3D11Device* device, const std::vector<Pixel>& pixels)
+static Texture MakeTexture(ID3D11Device* device, const std::vector<Pixel>& pixels,
+	DXGI_FORMAT format = DXGI_FORMAT_R32G32B32A32_FLOAT)
 {
 	Texture value;
 	D3D11_TEXTURE2D_DESC desc{};
@@ -48,20 +53,21 @@ static Texture MakeTexture(ID3D11Device* device, const std::vector<Pixel>& pixel
 	desc.Height = 64;
 	desc.MipLevels = 1;
 	desc.ArraySize = 1;
-	desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+	desc.Format = format;
 	desc.SampleDesc.Count = 1;
 	desc.Usage = D3D11_USAGE_DEFAULT;
 	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 	D3D11_SUBRESOURCE_DATA data{ pixels.data(), 64u * sizeof(Pixel), 0 };
-	Check(device->CreateTexture2D(&desc, &data, &value.texture));
+	Check(device->CreateTexture2D(&desc, format == DXGI_FORMAT_R32G32B32A32_FLOAT ? &data : nullptr, &value.texture));
 	Check(device->CreateShaderResourceView(value.texture.Get(), nullptr, &value.srv));
 	Check(device->CreateUnorderedAccessView(value.texture.Get(), nullptr, &value.uav));
 	return value;
 }
-static ComPtr<ID3D11ComputeShader> Compile(ID3D11Device* device, const std::filesystem::path& path)
+static ComPtr<ID3D11ComputeShader> Compile(ID3D11Device* device, const std::filesystem::path& path,
+	const std::filesystem::path& shaderRoot = {})
 {
 	ComPtr<ID3DBlob> bytecode, errors;
-	PackageIncludes includes(path.parent_path().parent_path().parent_path());
+	PackageIncludes includes(shaderRoot.empty() ? path.parent_path().parent_path().parent_path() : shaderRoot);
 	const auto result = D3DCompileFromFile(path.c_str(), nullptr, &includes,
 		"main", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_IEEE_STRICTNESS, 0, &bytecode, &errors);
 	if (errors)
@@ -188,14 +194,233 @@ static void CheckFineDetail(ID3D11Device* device, ID3D11DeviceContext* context,
 			}
 	}
 }
+static std::vector<float> PackedValues(unsigned fractionBits)
+{
+	std::vector<float> values;
+	for (unsigned exponent = 0; exponent < 31; ++exponent)
+		for (unsigned fraction = 0; fraction < (1u << fractionBits); ++fraction)
+			values.push_back(std::ldexp(static_cast<float>(fraction + (exponent ? 1u << fractionBits : 0)),
+				static_cast<int>(exponent ? exponent : 1) - 15 - static_cast<int>(fractionBits)));
+	return values;
+}
+static float NearestPacked(float value, const std::vector<float>& values)
+{
+	// Enumerating representable neighbours keeps the oracle independent of shader bit rounding.
+	const auto upper = std::lower_bound(values.begin(), values.end(), value);
+	if (upper == values.begin())
+		return *upper;
+	if (upper == values.end())
+		return values.back();
+	const auto index = static_cast<std::size_t>(upper - values.begin());
+	const double below = static_cast<double>(value) - values[index - 1];
+	const double above = static_cast<double>(*upper) - value;
+	return below < above || (below == above && ((index - 1) & 1u) == 0) ? values[index - 1] : *upper;
+}
+static Constants FullTextureConstants()
+{
+	Constants constants;
+	constants.x = constants.y = 0;
+	constants.width = constants.height = 64;
+	constants.mode = 0;
+	return constants;
+}
+static std::vector<Pixel> ReadStored(ID3D11Device* device, ID3D11DeviceContext* context,
+	ID3D11ComputeShader* copy, ID3D11Buffer* cb, const Texture& texture)
+{
+	D3D11_TEXTURE2D_DESC desc{};
+	texture.texture->GetDesc(&desc);
+	if (desc.Format == DXGI_FORMAT_R32G32B32A32_FLOAT)
+		return Read(device, context, texture.texture.Get());
+	auto decoded = MakeTexture(device, std::vector<Pixel>(4096));
+	Dispatch(context, copy, cb, FullTextureConstants(), { texture.srv.Get() }, decoded.uav.Get());
+	return Read(device, context, decoded.texture.Get());
+}
+static Texture StorePixels(ID3D11Device* device, ID3D11DeviceContext* context,
+	ID3D11ComputeShader* copy, ID3D11Buffer* cb, const std::vector<Pixel>& pixels)
+{
+	auto input = MakeTexture(device, pixels);
+	auto packed = MakeTexture(device, {}, DXGI_FORMAT_R11G11B10_FLOAT);
+	Dispatch(context, copy, cb, FullTextureConstants(), { input.srv.Get() }, packed.uav.Get());
+	return packed;
+}
+static std::vector<float> PackedRoundingCases(const std::vector<float>& values)
+{
+	auto cases = values;
+	cases.push_back(std::numeric_limits<float>::denorm_min());
+	for (std::size_t i = 1; i < values.size(); ++i) {
+		const float midpoint = static_cast<float>((static_cast<double>(values[i - 1]) + values[i]) * 0.5);
+		cases.push_back(std::nextafter(midpoint, values[i - 1]));
+		cases.push_back(midpoint);
+		cases.push_back(std::nextafter(midpoint, values[i]));
+	}
+	return cases;
+}
+static void CheckPackedRounding(ID3D11Device* device, ID3D11DeviceContext* context,
+	ID3D11ComputeShader* rounding, ID3D11Buffer* cb)
+{
+	const auto redValues = PackedValues(6), blueValues = PackedValues(5);
+	const auto redCases = PackedRoundingCases(redValues), blueCases = PackedRoundingCases(blueValues);
+	for (std::size_t offset = 0; offset < redCases.size(); offset += 4096) {
+		std::vector<Pixel> inputs(4096);
+		for (std::size_t i = 0; i < inputs.size(); ++i)
+			inputs[i] = { redCases[(offset + i) % redCases.size()],
+				redCases[(redCases.size() - 1 - ((offset + i) % redCases.size()))],
+				blueCases[(offset + i) % blueCases.size()], 0.375f };
+		auto input = MakeTexture(device, inputs);
+		for (unsigned storage : { 0u, 0x100u, 0x200u, 0x300u }) {
+			auto constants = FullTextureConstants();
+			constants.mode = 1;
+			constants.bypass = storage;
+			for (bool packed : { false, true }) {
+				if (packed && storage != 0x100)
+					continue;
+				auto result = MakeTexture(device, std::vector<Pixel>(4096),
+					packed ? DXGI_FORMAT_R11G11B10_FLOAT : DXGI_FORMAT_R32G32B32A32_FLOAT);
+				Dispatch(context, rounding, cb, constants, { input.srv.Get() }, result.uav.Get());
+				const auto actual = ReadStored(device, context, rounding, cb, result);
+				for (std::size_t i = 0; i < inputs.size(); ++i) {
+					const auto& v = actual[i];
+					const auto& s = inputs[i];
+					const Pixel expected = storage == 0x100 ?
+					                           Pixel{ NearestPacked(s.r, redValues), NearestPacked(s.g, redValues), NearestPacked(s.b, blueValues), 0.375f } :
+					                           s;
+					Require(v.r == expected.r && v.g == expected.g && v.b == expected.b,
+						"packed rounding must match nearest-even across finite values, boundaries and subnormals");
+					if (!packed)
+						Require(v.a == expected.a, "rounding preserves alpha in formats with alpha");
+				}
+			}
+		}
+	}
+}
+static void CheckPackedDetail(ID3D11Device* device, ID3D11DeviceContext* context,
+	ID3D11ComputeShader* reconstruct, ID3D11ComputeShader* copy, ID3D11Buffer* cb)
+{
+	const auto redValues = PackedValues(6), blueValues = PackedValues(5);
+	for (bool ramp : { false, true }) {
+		std::vector<Pixel> source(4096);
+		for (unsigned y = 0; y < 64; ++y)
+			for (unsigned x = 0; x < 64; ++x)
+				source[y * 64 + x] = ramp ?
+				                         Pixel{ (64.f + x % 32) / 512.f, (64.f + y % 32) / 1024.f, (32.f + (x + y) % 16) / 1024.f, 1 } :
+				                         Pixel{ 0.15625f, 0.078125f, 0.0390625f, 1 };
+		auto baseline = StorePixels(device, context, copy, cb, source);
+		for (unsigned domain = 0; domain < 3; ++domain)
+			for (std::string_view edit : { "identity", "uniform_half", "tiny_checker", "checker", "hidden", "zero", "limit_zero", "appearance", "mixed_appearance", "managed", "raw", "transport" }) {
+				auto neuralPixels = source;
+				for (unsigned y = 0; y < 64; ++y)
+					for (unsigned x = 0; x < 64; ++x) {
+						const float amplitude = edit == "tiny_checker" ? 0.002f : 0.25f;
+						const float stops = edit == "identity" ? 0.f : edit == "uniform_half" ? -1.f :
+						                                                                        ((x + y) % 2 ? amplitude : -amplitude);
+						auto& v = neuralPixels[y * 64 + x];
+						v.r *= std::exp2(stops);
+						v.g *= std::exp2(stops);
+						v.b *= std::exp2(stops);
+					}
+				auto neural = StorePixels(device, context, copy, cb, neuralPixels);
+				auto constants = FullTextureConstants();
+				constants.mode = edit == "managed" ? 1u : edit == "raw" ? 0u :
+				                                                          2u;
+				constants.domain = domain;
+				constants.detail = edit == "zero" ? 0.f : 1.f;
+				constants.appearance = edit == "appearance" ? 1.f : edit == "mixed_appearance" ? 0.5f :
+				                                                                                 0.f;
+				constants.maximumStops = edit == "limit_zero" ? 0.f : 1.f;
+				const unsigned flags = edit == "hidden" ? 2u : edit == "transport" ? 1u :
+				                                                                     0u;
+				std::array<std::vector<Pixel>, 2> outputs;
+				for (unsigned packed = 0; packed < 2; ++packed) {
+					constants.bypass = flags | (packed ? 0x100u : 0u);
+					auto result = MakeTexture(device, std::vector<Pixel>(4096),
+						packed ? DXGI_FORMAT_R11G11B10_FLOAT : DXGI_FORMAT_R32G32B32A32_FLOAT);
+					Dispatch(context, reconstruct, cb, constants,
+						{ baseline.srv.Get(), neural.srv.Get(), baseline.srv.Get() }, result.uav.Get());
+					outputs[packed] = ReadStored(device, context, copy, cb, result);
+				}
+				const bool endpoint = edit == "appearance" || edit == "managed" || edit == "raw" || edit == "transport";
+				const auto candidate = endpoint ? ReadStored(device, context, copy, cb, neural) : source;
+				double signedLuma = 0;
+				unsigned positive = 0, negative = 0;
+				for (unsigned i = 0; i < 4096; ++i) {
+					const auto& f = outputs[0][i];
+					const auto& actual = outputs[1][i];
+					const auto expected = endpoint ? candidate[i] :
+					                                 Pixel{ NearestPacked(f.r, redValues), NearestPacked(f.g, redValues), NearestPacked(f.b, blueValues), 1 };
+					Require(actual.r == expected.r && actual.g == expected.g && actual.b == expected.b,
+						"production Preserve Source store must match nearest packed FP32 result and retain other endpoints");
+					if (edit == "identity" || edit == "hidden" || edit == "zero" || edit == "limit_zero")
+						Require(actual.r == source[i].r && actual.g == source[i].g && actual.b == source[i].b,
+							"packed identity, hidden and zero endpoints must remain exact");
+					const unsigned x = i % 64, y = i / 64;
+					if (x >= 4 && x < 60 && y >= 4 && y < 60) {
+						const double delta = 0.2126 * (actual.r - source[i].r) + 0.7152 * (actual.g - source[i].g) + 0.0722 * (actual.b - source[i].b);
+						signedLuma += delta;
+						positive += delta > 0;
+						negative += delta < 0;
+					}
+				}
+				if (domain == 0 && (edit == "tiny_checker" || edit == "uniform_half")) {
+					Require(signedLuma == 0 && positive == 0 && negative == 0,
+						"sub-precision detail and neutral residual must not create packed darkening");
+					std::printf("Packed %s %.*s: mean luma delta %.9f\n", ramp ? "ramp" : "flat",
+						static_cast<int>(edit.size()), edit.data(), signedLuma / 3136);
+				}
+				if (edit == "checker")
+					Require(positive > 0 && negative > 0, "packed alternating detail must retain both signs");
+			}
+	}
+}
+
+static void CheckPackedInvalidCandidates(ID3D11Device* device, ID3D11DeviceContext* context,
+	ID3D11ComputeShader* reconstruct, ID3D11ComputeShader* copy, ID3D11Buffer* cb)
+{
+	const Pixel source{ 0.15625f, 0.078125f, 0.0390625f, 1 };
+	auto baseline = StorePixels(device, context, copy, cb, std::vector<Pixel>(4096, source));
+	for (float invalid : { std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(), -1.f, 65504.f, 70000.f }) {
+		auto neural = MakeTexture(device, std::vector<Pixel>(4096, Pixel{ invalid, invalid, invalid, 1 }));
+		auto result = MakeTexture(device, {}, DXGI_FORMAT_R11G11B10_FLOAT);
+		auto constants = FullTextureConstants();
+		constants.mode = 2;
+		constants.bypass = 0x100;
+		Dispatch(context, reconstruct, cb, constants,
+			{ baseline.srv.Get(), neural.srv.Get(), baseline.srv.Get() }, result.uav.Get());
+		for (const auto& value : ReadStored(device, context, copy, cb, result))
+			Require(value.r == source.r && value.g == source.g && value.b == source.b,
+				"invalid packed candidates must retain source before storage rounding");
+	}
+}
 int main(int argc, char** argv)
 {
-	Require(argc == 2, "provide NR colour shader directory");
+	Require(argc == 2 || ((argc == 3 || argc == 4) && std::string_view(argv[2]) == "--hardware"), "provide NR colour shader directory and optional --hardware [adapter index]");
+	const bool hardware = argc >= 3;
 	ComPtr<ID3D11Device> device;
 	ComPtr<ID3D11DeviceContext> context;
 	const D3D_FEATURE_LEVEL levels[]{ D3D_FEATURE_LEVEL_11_0 };
-	Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, levels, 1,
+	Check(D3D11CreateDevice(nullptr, hardware ? D3D_DRIVER_TYPE_HARDWARE : D3D_DRIVER_TYPE_WARP, nullptr, 0, levels, 1,
 		D3D11_SDK_VERSION, &device, nullptr, &context));
+	ComPtr<IDXGIDevice> dxgiDevice;
+	ComPtr<IDXGIAdapter> adapter;
+	DXGI_ADAPTER_DESC adapterDesc{};
+	Check(device.As(&dxgiDevice));
+	Check(dxgiDevice->GetAdapter(&adapter));
+	if (argc == 4) {
+		unsigned index = 0;
+		const std::string_view text(argv[3]);
+		const auto parsed = std::from_chars(text.data(), text.data() + text.size(), index);
+		Require(parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size(), "hardware adapter index must be unsigned");
+		ComPtr<IDXGIFactory> factory;
+		Check(adapter->GetParent(IID_PPV_ARGS(&factory)));
+		adapter.Reset();
+		dxgiDevice.Reset();
+		context.Reset();
+		device.Reset();
+		Check(factory->EnumAdapters(index, &adapter));
+		Check(D3D11CreateDevice(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, 0, levels, 1,
+			D3D11_SDK_VERSION, &device, nullptr, &context));
+	}
+	Check(adapter->GetDesc(&adapterDesc));
+	std::printf("Shader test adapter: %ls (vendor %04x, device %04x)\n", adapterDesc.Description, adapterDesc.VendorId, adapterDesc.DeviceId);
 	const std::filesystem::path directory(argv[1]);
 	auto prepare = Compile(device.Get(), directory / "ColorPrepareCS.hlsl");
 	auto reconstruct = Compile(device.Get(), directory / "ColorReconstructCS.hlsl");
@@ -274,5 +499,10 @@ int main(int argc, char** argv)
 	}
 	for (unsigned domain = 0; domain < 3; ++domain)
 		CheckFineDetail(device.Get(), context.Get(), prepare.Get(), reconstruct.Get(), cb.Get(), domain);
-	std::printf("Passed %u WARP shader checks; D3D12/NGX transport is not exercised by this test.\n", checks);
+	const auto rounding = Compile(device.Get(), std::filesystem::path(__FILE__).parent_path() / "packed_rounding_test.hlsl",
+		directory.parent_path().parent_path());
+	CheckPackedRounding(device.Get(), context.Get(), rounding.Get(), cb.Get());
+	CheckPackedDetail(device.Get(), context.Get(), reconstruct.Get(), rounding.Get(), cb.Get());
+	CheckPackedInvalidCandidates(device.Get(), context.Get(), reconstruct.Get(), rounding.Get(), cb.Get());
+	std::printf("Passed %u %s shader checks; D3D12/NGX transport is not exercised by this test.\n", checks, hardware ? "hardware" : "WARP");
 }

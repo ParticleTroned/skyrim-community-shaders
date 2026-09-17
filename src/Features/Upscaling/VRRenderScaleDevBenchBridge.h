@@ -98,6 +98,9 @@ namespace VRRenderScaleDevBenchBridge
 	 */
 	void Install();
 
+	/** Registers the Neural Rendering feature's controls with the shared handler. */
+	void RegisterNeuralRenderingTool();
+
 	/** @brief Returns whether this binary contains devbench API support. */
 	bool IsBuilt();
 

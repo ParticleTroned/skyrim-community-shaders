@@ -7,9 +7,12 @@
 #include "Api/ScreenshotService.h"
 #include "Features/ScreenshotApi.h"
 #include "Features/ScreenshotApiPolicy.h"
+#include "Features/ScreenshotNeuralEvidence.h"
 #include "Features/VR.h"
 #include "Globals.h"
+#include "GpuPass.h"
 #include "Menu.h"
+#include "Profiler.h"
 #include "State.h"
 #include "Utils/D3D.h"
 #include "Utils/D3DContextProtection.h"
@@ -2711,11 +2714,16 @@ nlohmann::json ScreenshotFeature::BuildAcquisitionRecord(
 			{ "deviceIdentity", std::format("0x{:x}", plane.deviceIdentity) },
 		});
 	}
+	auto nrEvidence = CSX::ScreenshotPolicy::JoinNeuralEyeEvidence(
+		a_screenshot.planes[0].neuralEvidence,
+		a_screenshot.planeCount == 2 ? a_screenshot.planes[1].neuralEvidence : nlohmann::json::object());
 	return {
 		{ "sourceKind", a_sourceKind },
 		{ "engineFrame", a_engineFrame },
 		{ "compositorCycle", a_compositorCycle ? nlohmann::json(*a_compositorCycle) : nlohmann::json(nullptr) },
 		{ "planes", std::move(planes) },
+		{ "cameraEvidence", nrEvidence.value("cameraEvidence", nlohmann::json{ { "available", false }, { "reason", "neural_pair_evidence_unavailable" } }) },
+		{ "nrEvidence", std::move(nrEvidence) },
 	};
 }
 
@@ -3346,6 +3354,7 @@ bool ScreenshotFeature::StageTexturePlane(
 	if (!sourceDevice || !sourceContext) {
 		return false;
 	}
+	CS_GPU_PASS("Screenshot::Stage");
 	const Util::RendererOwnership ownership(Util::GetRendererContextLock(globals::game::renderer, sourceContext.get()));
 	if (!ownership || !ValidateReadbackContext(sourceContext.get())) {
 		logger::error("Screenshot staging requires ownership of the current renderer context.");
@@ -3588,7 +3597,8 @@ void ScreenshotFeature::ObserveAcceptedVRSubmit(
 	vr::EVREye a_eye,
 	ID3D11Texture2D* a_texture,
 	const vr::VRTextureBounds_t* a_bounds,
-	vr::EColorSpace a_colorSpace)
+	vr::EColorSpace a_colorSpace,
+	const nlohmann::json& a_neuralEvidence)
 {
 	if (!HasPendingCapture() ||
 		!globals::game::isVR ||
@@ -3639,6 +3649,7 @@ void ScreenshotFeature::ObserveAcceptedVRSubmit(
 			return;
 		}
 
+		plane.neuralEvidence = a_neuralEvidence;
 		if (singleEyeCapture) {
 			completedScreenshot.planes[0] = std::move(plane);
 			completedScreenshot.planeCount = 1;

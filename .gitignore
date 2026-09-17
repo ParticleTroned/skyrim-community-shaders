@@ -5,6 +5,9 @@ dist/
 /vcpkg/
 /vcpkg_installed/
 /*/vcpkg_cache/
+# Persistent local release archives; unlike dist/, CMake packaging does not own
+# or recreate this directory.
+/artifacts/releases/
 .idea/
 .vs*/
 CMakeUserPresets.json
@@ -29,3 +32,8 @@ features/Upscaling/Shaders/Upscaling/Streamline/sl.reflex.dll
 /.csx-unified-presets.lock
 /.csx-unified-presets.transaction.json
 /.csx-unified-presets.transaction.json.tmp
+# Developer-supplied Streamline and NGX runtimes never enter source control
+/features/Upscaling/Shaders/Upscaling/Streamline/**/*.[dD][lL][lL]
+tools/__pycache__/
+tools/nr-color/__pycache__/
+tests/neural_color/__pycache__/

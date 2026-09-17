@@ -1,3 +1,4 @@
+#include "Features/Upscaling/DLSSViewportCrop.h"
 #include "Features/Upscaling/FSRHostLifecyclePolicy.h"
 #include "Features/Upscaling/FSRRuntimeLifecyclePolicy.h"
 #include "Features/Upscaling/VRSubmitColorContract.h"

@@ -88,7 +88,8 @@ struct ScreenshotFeature : public Feature
 		vr::EVREye a_eye,
 		ID3D11Texture2D* a_texture,
 		const vr::VRTextureBounds_t* a_bounds,
-		vr::EColorSpace a_colorSpace);
+		vr::EColorSpace a_colorSpace,
+		const nlohmann::json& a_neuralEvidence = nlohmann::json::object());
 	/** Maintains readback protection and services capture immediately before Present. */
 	void OnBeforePresent(IDXGISwapChain* a_swapChain);
 	/** Draws the recording indicator only after this frame's source has been staged. */
@@ -124,6 +125,7 @@ private:
 	std::chrono::steady_clock::time_point nextUiSequencePoll{};
 	struct StagedPlane
 	{
+		nlohmann::json neuralEvidence = nlohmann::json::object();
 		winrt::com_ptr<ID3D11Texture2D> stagingTexture;
 		winrt::com_ptr<ID3D11DeviceContext> immediateContext;
 		DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;

@@ -1,4 +1,5 @@
 #include "Streamline.h"
+#include "StreamlineConstants.h"
 
 #include <algorithm>
 #include <array>
@@ -405,10 +406,39 @@ namespace
 		return hash;
 	}
 
+	sl::float4x4 ToStreamlineMatrix(const UpscalingDLSS::Matrix4x4& a_matrix)
+	{
+		sl::float4x4 result{};
+		float* values = &result[0].x;
+		for (std::size_t row = 0; row < 4; ++row) {
+			for (std::size_t column = 0; column < 4; ++column)
+				values[row * 4 + column] = a_matrix[row][column];
+		}
+		return result;
+	}
+
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	std::string FormatExtent(const sl::Extent& a_extent)
 	{
 		return std::format("top={} left={} width={} height={}", a_extent.top, a_extent.left, a_extent.width, a_extent.height);
+	}
+
+	std::string FormatViewportCrop(const UpscalingDLSS::ViewportCrop& a_crop)
+	{
+		return std::format(
+			"inputFull={}x{} input=[{},{},{},{}] outputFull={}x{} output=[{},{},{},{}]",
+			a_crop.fullInput.width,
+			a_crop.fullInput.height,
+			a_crop.input.left,
+			a_crop.input.top,
+			a_crop.input.right,
+			a_crop.input.bottom,
+			a_crop.fullOutput.width,
+			a_crop.fullOutput.height,
+			a_crop.output.left,
+			a_crop.output.top,
+			a_crop.output.right,
+			a_crop.output.bottom);
 	}
 
 	std::string DescribeTextureResource(ID3D11Resource* a_resource)
@@ -852,8 +882,15 @@ namespace
 			uint32_t extentOutHeight = 0;
 			int32_t viewportScaleXQ = 0;
 			int32_t viewportScaleYQ = 0;
-			int32_t pinholeOffsetXQ = 0;
-			int32_t pinholeOffsetYQ = 0;
+			int32_t motionVectorScaleXQ = 0;
+			int32_t motionVectorScaleYQ = 0;
+			UpscalingDLSS::ViewportCrop currentCrop{};
+			UpscalingDLSS::ViewportCrop previousCrop{};
+			uint64_t cropGeneration = 0;
+			uint32_t cropResetReason = 0;
+			bool cropContinuous = false;
+			bool cropSameFrameReplay = false;
+			bool cropReset = true;
 			bool croppedViewport = false;
 			int32_t resultCode = 0;
 			std::string resultLabel;
@@ -867,8 +904,8 @@ namespace
 		const char* label = a_diagnostics->label ? a_diagnostics->label : "DLSS Evaluate";
 		const int32_t viewportScaleXQ = QuantizeDLSSDiagnosticFloat(a_diagnostics->viewportScaleX);
 		const int32_t viewportScaleYQ = QuantizeDLSSDiagnosticFloat(a_diagnostics->viewportScaleY);
-		const int32_t pinholeOffsetXQ = QuantizeDLSSDiagnosticFloat(a_diagnostics->pinholeOffsetX);
-		const int32_t pinholeOffsetYQ = QuantizeDLSSDiagnosticFloat(a_diagnostics->pinholeOffsetY);
+		const int32_t motionVectorScaleXQ = QuantizeDLSSDiagnosticFloat(a_diagnostics->motionVectorScaleX);
+		const int32_t motionVectorScaleYQ = QuantizeDLSSDiagnosticFloat(a_diagnostics->motionVectorScaleY);
 		const bool signatureChanged =
 			!state.valid ||
 			state.requestedViewport != static_cast<uint32_t>(a_diagnostics->requestedViewport) ||
@@ -884,8 +921,15 @@ namespace
 			state.extentOutHeight != a_diagnostics->extentOut.height ||
 			state.viewportScaleXQ != viewportScaleXQ ||
 			state.viewportScaleYQ != viewportScaleYQ ||
-			state.pinholeOffsetXQ != pinholeOffsetXQ ||
-			state.pinholeOffsetYQ != pinholeOffsetYQ ||
+			state.motionVectorScaleXQ != motionVectorScaleXQ ||
+			state.motionVectorScaleYQ != motionVectorScaleYQ ||
+			state.currentCrop != a_diagnostics->currentCrop ||
+			state.previousCrop != a_diagnostics->previousCrop ||
+			state.cropGeneration != a_diagnostics->cropGeneration ||
+			state.cropResetReason != static_cast<uint32_t>(a_diagnostics->cropResetReason) ||
+			state.cropContinuous != a_diagnostics->cropContinuous ||
+			state.cropSameFrameReplay != a_diagnostics->cropSameFrameReplay ||
+			state.cropReset != a_diagnostics->cropReset ||
 			state.croppedViewport != a_diagnostics->croppedViewport ||
 			state.resultCode != a_resultCode ||
 			state.resultLabel != a_resultLabel ||
@@ -907,8 +951,15 @@ namespace
 			state.extentOutHeight = a_diagnostics->extentOut.height;
 			state.viewportScaleXQ = viewportScaleXQ;
 			state.viewportScaleYQ = viewportScaleYQ;
-			state.pinholeOffsetXQ = pinholeOffsetXQ;
-			state.pinholeOffsetYQ = pinholeOffsetYQ;
+			state.motionVectorScaleXQ = motionVectorScaleXQ;
+			state.motionVectorScaleYQ = motionVectorScaleYQ;
+			state.currentCrop = a_diagnostics->currentCrop;
+			state.previousCrop = a_diagnostics->previousCrop;
+			state.cropGeneration = a_diagnostics->cropGeneration;
+			state.cropResetReason = static_cast<uint32_t>(a_diagnostics->cropResetReason);
+			state.cropContinuous = a_diagnostics->cropContinuous;
+			state.cropSameFrameReplay = a_diagnostics->cropSameFrameReplay;
+			state.cropReset = a_diagnostics->cropReset;
 			state.croppedViewport = a_diagnostics->croppedViewport;
 			state.resultCode = a_resultCode;
 			state.resultLabel = a_resultLabel;
@@ -952,7 +1003,7 @@ namespace
 		const std::string result = FormatDLSSDiagnosticResult(a_resultCode, a_resultLabel);
 
 		logger::debug(
-			"[Streamline][DLSSDiag] stage={} result={} label='{}' frame={} eye={} role={} requestedViewport={} resolvedViewport={} frameToken=0x{:X} quality={} preset={} hdr={} output={}x{} extentIn=[{}] extentOut=[{}] viewportScale={:.6f}x{:.6f} croppedViewport={} pinhole={:.6f},{:.6f} jitter={:.6f},{:.6f} historyReset={} submitStageVR={} presentationActive={} renderScaleActive={} foveatedConfigured={} peripheryTAAConfigured={} optionsCache(valid={} viewport={} output={}x{} quality={} preset={} hdr={} legacy={}) plan(owner={} method={} quality={} display={}x{} render={}x{} final={}x{} foveated={} peripheryTAA={} menu={} knownMenu={} loading={})",
+			"[Streamline][DLSSDiag] stage={} result={} label='{}' frame={} eye={} role={} requestedViewport={} resolvedViewport={} frameToken=0x{:X} quality={} preset={} hdr={} output={}x{} extentIn=[{}] extentOut=[{}] viewportScale={:.6f}x{:.6f} croppedViewport={} cropGeneration={} cropContinuous={} cropSameFrameReplay={} cropReset={} cropResetReason={} mvecScale={:.6f}x{:.6f} currentCrop=[{}] previousCrop=[{}] jitter={:.6f},{:.6f} historyReset={} submitStageVR={} presentationActive={} renderScaleActive={} foveatedConfigured={} peripheryTAAConfigured={} optionsCache(valid={} viewport={} output={}x{} quality={} preset={} hdr={} legacy={}) plan(owner={} method={} quality={} display={}x{} render={}x{} final={}x{} foveated={} peripheryTAA={} menu={} knownMenu={} loading={})",
 			GetDLSSDiagnosticStageName(a_stage),
 			result,
 			label,
@@ -972,8 +1023,15 @@ namespace
 			a_diagnostics->viewportScaleX,
 			a_diagnostics->viewportScaleY,
 			a_diagnostics->croppedViewport,
-			a_diagnostics->pinholeOffsetX,
-			a_diagnostics->pinholeOffsetY,
+			a_diagnostics->cropGeneration,
+			a_diagnostics->cropContinuous,
+			a_diagnostics->cropSameFrameReplay,
+			a_diagnostics->cropReset,
+			UpscalingDLSS::GetCropHistoryResetReasonName(a_diagnostics->cropResetReason),
+			a_diagnostics->motionVectorScaleX,
+			a_diagnostics->motionVectorScaleY,
+			FormatViewportCrop(a_diagnostics->currentCrop),
+			FormatViewportCrop(a_diagnostics->previousCrop),
 			a_diagnostics->jitterX,
 			a_diagnostics->jitterY,
 			a_diagnostics->historyResetRequested,
@@ -1761,7 +1819,10 @@ std::optional<Streamline::FrameTokenSnapshot> Streamline::AcquireFrameToken(
 		});
 }
 
-bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameToken* frameToken, uint32_t eyeIndex, float viewportScaleX, float viewportScaleY, float pinholeOffsetX, float pinholeOffsetY, const DLSSDispatchDiagnostics* diagnostics
+bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameToken* frameToken,
+	uint32_t eyeIndex, const UpscalingDLSS::ViewportCrop& currentCrop,
+	const UpscalingDLSS::CropContinuityDecision& cropContinuity,
+	const DLSSDispatchDiagnostics* diagnostics
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	,
 	DLSSDevBenchTraceSignature* outFrameConstantsSignature
@@ -1778,8 +1839,6 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 		return false;
 	}
 
-	// In VR, we need to set constants for each viewport/eye separately
-	// In non-VR, this is called once per frame
 	auto state = globals::state;
 	auto& upscaling = globals::features::upscaling;
 	if (!state)
@@ -1793,36 +1852,37 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 #endif
 		return false;
 	}
-	bool applyCroppedConstantsCorrection = false;
-	float clampedViewportScaleX = std::clamp(viewportScaleX, 1e-4f, 1.0f);
-	float clampedViewportScaleY = std::clamp(viewportScaleY, 1e-4f, 1.0f);
-	float clampedPinholeOffsetX = std::isfinite(pinholeOffsetX) ? std::clamp(pinholeOffsetX, -1.0f, 1.0f) : 0.0f;
-	float clampedPinholeOffsetY = std::isfinite(pinholeOffsetY) ? std::clamp(pinholeOffsetY, -1.0f, 1.0f) : 0.0f;
-	if (!globals::game::isVR) {
-		clampedViewportScaleX = 1.0f;
-		clampedViewportScaleY = 1.0f;
-		clampedPinholeOffsetX = 0.0f;
-		clampedPinholeOffsetY = 0.0f;
+
+	const auto currentCropAffine = UpscalingDLSS::BuildClipCropAffine(currentCrop);
+	const auto previousCropAffine =
+		UpscalingDLSS::BuildClipCropAffine(cropContinuity.previousCrop);
+	const auto motionVectorScale =
+		UpscalingDLSS::BuildMotionVectorScale(currentCrop);
+	if (!currentCropAffine.valid || !previousCropAffine.valid ||
+		!motionVectorScale.valid || !cropContinuity.currentDescriptorValid) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		LogDLSSDispatchDiagnostics(
+			DLSSDiagnosticStage::SetConstants, "invalid_crop_metadata", diagnostics);
+#endif
+		return false;
 	}
 
 	sl::Constants slConstants = {};
-
-	// Calculate aspect ratio for the SINGLE EYE
-	float2 fullOutputSize = temporalSnapshot ?
-	                            float2{ static_cast<float>(temporalSnapshot->key.outputWidth) * 2.0f, static_cast<float>(temporalSnapshot->key.outputHeight) } :
-	                            upscaling.GetRuntimeResolutionPlan().finalOutputSize;
-	if (fullOutputSize.x <= 0.0f || fullOutputSize.y <= 0.0f)
-		fullOutputSize = state->screenSize;
-	float eyeWidth = fullOutputSize.x * (globals::game::isVR ? 0.5f : 1.0f);
-	float eyeHeight = fullOutputSize.y;
-	slConstants.cameraAspectRatio = (eyeWidth * clampedViewportScaleX) / (eyeHeight * clampedViewportScaleY);
-
 	slConstants.cameraFOV = temporalSnapshot ? temporalSnapshot->scalars.verticalFov : Util::GetVerticalFOVRad();
 	slConstants.cameraNear = temporalSnapshot ? temporalSnapshot->scalars.cameraNear : *globals::game::cameraNear;
 	slConstants.cameraFar = temporalSnapshot ? temporalSnapshot->scalars.cameraFar : *globals::game::cameraFar;
 
 	auto viewMatrix = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].viewInverse : globals::game::frameBufferCached.GetCameraViewInverse(eyeIndex)).Transpose();
-	auto cameraViewToClip = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].projectionUnjittered : globals::game::frameBufferCached.GetCameraProjUnjittered(eyeIndex)).Transpose();
+	auto fullCameraViewToClip = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].projectionUnjittered : globals::game::frameBufferCached.GetCameraProjUnjittered(eyeIndex)).Transpose();
+	sl::float4x4 fullCameraViewToClipSL = *(sl::float4x4*)&fullCameraViewToClip;
+	const auto currentCropMatrix = ToStreamlineMatrix(currentCropAffine.fullClipToCrop);
+	sl::matrixMul(
+		slConstants.cameraViewToClip,
+		fullCameraViewToClipSL,
+		currentCropMatrix);
+	slConstants.cameraAspectRatio = std::abs(
+		slConstants.cameraViewToClip[1].y /
+		slConstants.cameraViewToClip[0].x);
 
 	slConstants.cameraMotionIncluded = sl::Boolean::eTrue;
 	slConstants.cameraPinholeOffset = { 0.f, 0.f };
@@ -1831,37 +1891,11 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 	slConstants.cameraFwd = { viewMatrix._31, viewMatrix._32, viewMatrix._33 };
 	const auto& cameraPosition = temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].position : globals::game::frameBufferCached.GetCameraPosAdjust(eyeIndex);
 	slConstants.cameraPos = { cameraPosition.x, cameraPosition.y, cameraPosition.z };
-	slConstants.cameraViewToClip = *(sl::float4x4*)&cameraViewToClip;
 	slConstants.depthInverted = sl::Boolean::eFalse;
 
 	if (globals::game::isVR) {
-		const bool isCroppedViewport = clampedViewportScaleX < 0.999f || clampedViewportScaleY < 0.999f;
-		applyCroppedConstantsCorrection = isCroppedViewport;
-		if (applyCroppedConstantsCorrection) {
-			const float invScaleX = 1.0f / clampedViewportScaleX;
-			const float invScaleY = 1.0f / clampedViewportScaleY;
-
-			// Match projection to the cropped DLSS viewport so temporal reprojection
-			// operates in the same clip space as color/depth/mvec inputs.
-			slConstants.cameraViewToClip[0].x *= invScaleX;
-			slConstants.cameraViewToClip[0].y *= invScaleX;
-			slConstants.cameraViewToClip[0].z *= invScaleX;
-			slConstants.cameraViewToClip[0].w *= invScaleX;
-			slConstants.cameraViewToClip[1].x *= invScaleY;
-			slConstants.cameraViewToClip[1].y *= invScaleY;
-			slConstants.cameraViewToClip[1].z *= invScaleY;
-			slConstants.cameraViewToClip[1].w *= invScaleY;
-
-			// cameraFOV is vertical; scale by cropped Y region.
-			slConstants.cameraFOV = 2.0f * atanf(clampedViewportScaleY * tanf(slConstants.cameraFOV * 0.5f));
-			slConstants.cameraPinholeOffset = {
-				clampedPinholeOffsetX / clampedViewportScaleX,
-				clampedPinholeOffsetY / clampedViewportScaleY
-			};
-		}
-
-		// VR: compute clipToCameraView / clipToPrevClip / prevClipToClip from Skyrim's per-eye matrices.
-		// recalculateCameraMatrices() uses a single static prev-frame slot -- unusable for two viewports.
+		// Streamline's shared helper keeps one previous matrix, so VR owns one
+		// exact temporal transform per eye and per cropped viewport.
 		sl::matrixFullInvert(slConstants.clipToCameraView, slConstants.cameraViewToClip);
 
 		auto currViewProj = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].viewProjectionUnjittered : globals::game::frameBufferCached.GetCameraViewProjUnjittered(eyeIndex)).Transpose();
@@ -1872,39 +1906,50 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 
 		sl::float4x4 invCurrViewProj;
 		sl::matrixFullInvert(invCurrViewProj, currViewProjSL);
-		sl::matrixMul(slConstants.clipToPrevClip, invCurrViewProj, prevViewProjSL);
-
-		if (applyCroppedConstantsCorrection) {
-			const float invScaleX = 1.0f / clampedViewportScaleX;
-			const float invScaleY = 1.0f / clampedViewportScaleY;
-			const float leftFactors[4] = { clampedViewportScaleX, clampedViewportScaleY, 1.0f, 1.0f };
-			const float rightFactors[4] = { invScaleX, invScaleY, 1.0f, 1.0f };
-
-			// Conjugate clipToPrevClip into cropped clip-space basis:
-			// CTP_cropped = inv(S) * CTP * S
-			float* ctpValues = &slConstants.clipToPrevClip[0].x;
-			for (uint32_t row = 0; row < 4; ++row) {
-				for (uint32_t col = 0; col < 4; ++col) {
-					ctpValues[row * 4 + col] *= leftFactors[row] * rightFactors[col];
-				}
-			}
-		}
+		sl::float4x4 fullClipToPrevClip{};
+		sl::matrixMul(fullClipToPrevClip, invCurrViewProj, prevViewProjSL);
+		const auto currentCropInverse =
+			ToStreamlineMatrix(currentCropAffine.cropClipToFull);
+		const auto previousCropMatrix =
+			ToStreamlineMatrix(previousCropAffine.fullClipToCrop);
+		sl::float4x4 currentCropToPreviousFull{};
+		sl::matrixMul(
+			currentCropToPreviousFull,
+			currentCropInverse,
+			fullClipToPrevClip);
+		sl::matrixMul(
+			slConstants.clipToPrevClip,
+			currentCropToPreviousFull,
+			previousCropMatrix);
 
 		sl::matrixFullInvert(slConstants.prevClipToClip, slConstants.clipToPrevClip);
 	} else {
 		recalculateCameraMatrices(slConstants);
 	}
 
+	// The matrices are authoritative. Keep scalar FOV consistent with an
+	// off-axis crop without also encoding that offset as a pinhole shift.
+	const float projectionW = slConstants.cameraViewToClip[2].w;
+	const float projectionScaleY = slConstants.cameraViewToClip[1].y;
+	const float projectionOffsetY = slConstants.cameraViewToClip[2].y;
+	if (std::isfinite(projectionW) && std::isfinite(projectionScaleY) &&
+		std::isfinite(projectionOffsetY) && std::abs(projectionW) > 1e-6f &&
+		std::abs(projectionScaleY) > 1e-6f) {
+		const float scaleY = projectionScaleY / projectionW;
+		const float offsetY = projectionOffsetY / projectionW;
+		const float topAngle = std::atan((1.0f - offsetY) / scaleY);
+		const float bottomAngle = std::atan((-1.0f - offsetY) / scaleY);
+		const float croppedFOV = std::abs(topAngle - bottomAngle);
+		if (std::isfinite(croppedFOV) && croppedFOV > 1e-4f)
+			slConstants.cameraFOV = croppedFOV;
+	}
+
 	const auto jitter = upscaling.GetJitterForDispatch();
 	slConstants.jitterOffset = { -jitter.x, -jitter.y };
-	const bool requestHistoryReset = upscaling.ShouldResetHistoryThisFrame();
+	const bool requestHistoryReset =
+		upscaling.ShouldResetHistoryThisFrame() || cropContinuity.reset;
 	slConstants.reset = requestHistoryReset ? sl::Boolean::eTrue : sl::Boolean::eFalse;
-
-	if (globals::game::isVR && applyCroppedConstantsCorrection) {
-		slConstants.mvecScale = { 1.0f / clampedViewportScaleX, 1.0f / clampedViewportScaleY };
-	} else {
-		slConstants.mvecScale = { 1.0f, 1.0f };
-	}
+	slConstants.mvecScale = { motionVectorScale.x, motionVectorScale.y };
 	slConstants.motionVectors3D = sl::Boolean::eFalse;
 	slConstants.motionVectorsInvalidValue = FLT_MIN;
 	slConstants.orthographicProjection = sl::Boolean::eFalse;
@@ -1913,6 +1958,7 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 
 	const auto makeFrameConstantsSignature = [&]() {
 		DLSSFrameConstantsCache signature{};
+		signature.constants = slConstants;
 		signature.valid = true;
 		signature.frame = diagnostics ? diagnostics->frame : state->frameCount;
 		signature.frameToken = reinterpret_cast<std::uintptr_t>(frameToken);
@@ -1931,12 +1977,19 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 		signature.extentOutHeight = diagnostics ? diagnostics->extentOut.height : 0u;
 		signature.extentOutLeft = diagnostics ? diagnostics->extentOut.left : 0u;
 		signature.extentOutTop = diagnostics ? diagnostics->extentOut.top : 0u;
-		signature.viewportScaleXQ = QuantizeDLSSDiagnosticFloat(clampedViewportScaleX);
-		signature.viewportScaleYQ = QuantizeDLSSDiagnosticFloat(clampedViewportScaleY);
-		signature.pinholeOffsetXQ = QuantizeDLSSDiagnosticFloat(clampedPinholeOffsetX);
-		signature.pinholeOffsetYQ = QuantizeDLSSDiagnosticFloat(clampedPinholeOffsetY);
+		signature.viewportScaleXQ = QuantizeDLSSDiagnosticFloat(currentCropAffine.scaleX);
+		signature.viewportScaleYQ = QuantizeDLSSDiagnosticFloat(currentCropAffine.scaleY);
+		signature.pinholeOffsetXQ = QuantizeDLSSDiagnosticFloat(slConstants.cameraPinholeOffset.x);
+		signature.pinholeOffsetYQ = QuantizeDLSSDiagnosticFloat(slConstants.cameraPinholeOffset.y);
 		signature.jitterXQ = QuantizeDLSSDiagnosticFloat(jitter.x);
 		signature.jitterYQ = QuantizeDLSSDiagnosticFloat(jitter.y);
+		signature.currentCrop = currentCrop;
+		signature.previousCrop = cropContinuity.previousCrop;
+		signature.cropGeneration = diagnostics ? diagnostics->cropGeneration : 0u;
+		signature.cropResetReason = static_cast<uint32_t>(cropContinuity.reason);
+		signature.motionVectorScaleXQ = QuantizeDLSSDiagnosticFloat(motionVectorScale.x);
+		signature.motionVectorScaleYQ = QuantizeDLSSDiagnosticFloat(motionVectorScale.y);
+		signature.cropContinuous = cropContinuity.continuous;
 		signature.historyResetRequested = requestHistoryReset;
 		signature.constantsIdentity = ComputeConstantsIdentity(slConstants);
 		return signature;
@@ -1964,16 +2017,26 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 		       a_cached.viewportScaleYQ == a_signature.viewportScaleYQ &&
 		       a_cached.pinholeOffsetXQ == a_signature.pinholeOffsetXQ &&
 		       a_cached.pinholeOffsetYQ == a_signature.pinholeOffsetYQ &&
+		       a_cached.currentCrop == a_signature.currentCrop &&
+		       a_cached.previousCrop == a_signature.previousCrop &&
+		       a_cached.cropGeneration == a_signature.cropGeneration &&
+		       a_cached.cropResetReason == a_signature.cropResetReason &&
+		       a_cached.motionVectorScaleXQ == a_signature.motionVectorScaleXQ &&
+		       a_cached.motionVectorScaleYQ == a_signature.motionVectorScaleYQ &&
+		       a_cached.cropContinuous == a_signature.cropContinuous &&
 		       a_cached.jitterXQ == a_signature.jitterXQ &&
 		       a_cached.jitterYQ == a_signature.jitterYQ &&
 		       a_cached.historyResetRequested == a_signature.historyResetRequested &&
-		       a_cached.constantsIdentity == a_signature.constantsIdentity;
+		       a_cached.constantsIdentity == a_signature.constantsIdentity &&
+		       UpscalingDLSS::SameStreamlineConstants(a_cached.constants, a_signature.constants);
 	};
 	const bool canAcceptDuplicateConstants =
 		diagnostics &&
-		diagnostics->submitStageVRDLSS &&
-		(diagnostics->viewportRole == DLSSViewportRole::FullEye ||
-			diagnostics->viewportRole == DLSSViewportRole::SubmitStageFoveatedCenter);
+		((diagnostics->submitStageVRDLSS &&
+			 (diagnostics->viewportRole == DLSSViewportRole::FullEye ||
+				 diagnostics->viewportRole == DLSSViewportRole::SubmitStageFoveatedCenter)) ||
+			(globals::game::isVR && !diagnostics->submitStageVRDLSS &&
+				diagnostics->viewportRole == DLSSViewportRole::FoveatedCenter));
 	DLSSFrameConstantsCache frameConstantsSignature{};
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	const bool collectDevBenchTrace = outFrameConstantsSignature || IsDLSSDevBenchTraceActive();
@@ -2037,7 +2100,7 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 		if (diagnostics) {
 			if (ShouldEmitDLSSDiagnostic(DLSSDiagnosticStage::SetConstants, diagnostics, static_cast<int32_t>(res), resultLabel)) {
 				logger::error(
-					"[Streamline] Could not set constants for eye {}: result={} label='{}' role={} viewport={} frame={} extentIn={}x{} extentOut={}x{} output={}x{} scale={:.6f}x{:.6f} pinhole={:.6f},{:.6f} duplicateConstants={}",
+					"[Streamline] Could not set constants for eye {}: result={} label='{}' role={} viewport={} frame={} extentIn={}x{} extentOut={}x{} output={}x{} cropGeneration={} cropResetReason={} currentCrop=[{}] previousCrop=[{}] mvecScale={:.6f}x{:.6f} duplicateConstants={}",
 					eyeIndex,
 					FormatDLSSDiagnosticResult(static_cast<int32_t>(res), resultLabel),
 					diagnostics->label ? diagnostics->label : "DLSS Evaluate",
@@ -2050,10 +2113,12 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 					diagnostics->extentOut.height,
 					diagnostics->outputWidth,
 					diagnostics->outputHeight,
-					diagnostics->viewportScaleX,
-					diagnostics->viewportScaleY,
-					diagnostics->pinholeOffsetX,
-					diagnostics->pinholeOffsetY,
+					diagnostics->cropGeneration,
+					UpscalingDLSS::GetCropHistoryResetReasonName(diagnostics->cropResetReason),
+					FormatViewportCrop(diagnostics->currentCrop),
+					FormatViewportCrop(diagnostics->previousCrop),
+					diagnostics->motionVectorScaleX,
+					diagnostics->motionVectorScaleY,
 					lastDLSSFailureDuplicatedConstants);
 			}
 		} else {
@@ -2388,8 +2453,12 @@ bool Streamline::FreeVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t 
 
 	const uint32_t roleIndex = GetDLSSViewportRoleIndex(viewportRole);
 	auto& slot = vrDLSSViewportSlots[roleIndex][slotIndex];
-	if (!slot.valid)
+	if (!slot.valid) {
+		slot.generation = 0;
+		for (auto& cropHistory : slot.cropHistory)
+			cropHistory = {};
 		return true;
+	}
 
 	bool slotResourcesFreed = true;
 	for (uint32_t eye = 0; eye < 2; ++eye) {
@@ -2411,6 +2480,9 @@ bool Streamline::FreeVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t 
 	slot.qualityMode = 0;
 	slot.dlssPreset = 0;
 	slot.lastUse = 0;
+	slot.generation = 0;
+	for (auto& cropHistory : slot.cropHistory)
+		cropHistory = {};
 	return slotResourcesFreed;
 }
 
@@ -2419,7 +2491,8 @@ Streamline::DLSSViewportPreparationResult Streamline::PrepareVRDLSSViewport(
 	uint32_t qualityMode,
 	uint32_t dlssPreset
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	, VRRenderScaleRetryTelemetry::ViewportObservation* a_observation
+	,
+	VRRenderScaleRetryTelemetry::ViewportObservation* a_observation
 #endif
 )
 {
@@ -2471,9 +2544,10 @@ Streamline::DLSSViewportPreparationResult Streamline::PrepareVRDLSSViewport(
 				if (a_observation) {
 					a_observation->reason = "cache_hit_superseded_recycle";
 					a_observation->fenceResult = idleFenceResult == D3D11IdleFenceResult::Pending ?
-						VRRenderScaleRetryTelemetry::FenceResult::Pending :
-						idleFenceResult == D3D11IdleFenceResult::Ready ?
-						VRRenderScaleRetryTelemetry::FenceResult::Ready : VRRenderScaleRetryTelemetry::FenceResult::Failed;
+					                                 VRRenderScaleRetryTelemetry::FenceResult::Pending :
+					                             idleFenceResult == D3D11IdleFenceResult::Ready ?
+					                                 VRRenderScaleRetryTelemetry::FenceResult::Ready :
+					                                 VRRenderScaleRetryTelemetry::FenceResult::Failed;
 				}
 #endif
 				if (idleFenceResult == D3D11IdleFenceResult::Failed)
@@ -2520,9 +2594,10 @@ Streamline::DLSSViewportPreparationResult Streamline::PrepareVRDLSSViewport(
 			if (a_observation) {
 				a_observation->reason = "viewport_recycle_fence";
 				a_observation->fenceResult = idleFenceResult == D3D11IdleFenceResult::Pending ?
-					VRRenderScaleRetryTelemetry::FenceResult::Pending :
-					idleFenceResult == D3D11IdleFenceResult::Ready ?
-					VRRenderScaleRetryTelemetry::FenceResult::Ready : VRRenderScaleRetryTelemetry::FenceResult::Failed;
+				                                 VRRenderScaleRetryTelemetry::FenceResult::Pending :
+				                             idleFenceResult == D3D11IdleFenceResult::Ready ?
+				                                 VRRenderScaleRetryTelemetry::FenceResult::Ready :
+				                                 VRRenderScaleRetryTelemetry::FenceResult::Failed;
 			}
 #endif
 			if (idleFenceResult == D3D11IdleFenceResult::Pending) {
@@ -2567,10 +2642,15 @@ Streamline::DLSSViewportPreparationResult Streamline::PrepareVRDLSSViewport(
 	slot.qualityMode = clampedQualityMode;
 	slot.dlssPreset = clampedPreset;
 	slot.lastUse = 0;
+	if (++vrDLSSViewportGenerationCounter == 0)
+		++vrDLSSViewportGenerationCounter;
+	slot.generation = vrDLSSViewportGenerationCounter;
 	slot.resourcesAllocated[0] = false;
 	slot.resourcesAllocated[1] = false;
 	for (auto& optionsCache : slot.optionsCache)
 		optionsCache = {};
+	for (auto& cropHistory : slot.cropHistory)
+		cropHistory = {};
 
 	const uint32_t viewportBase =
 		kVRDLSSSlotViewportBase +
@@ -2738,16 +2818,73 @@ Streamline::DLSSOptionsCache& Streamline::GetDLSSOptionsCache(DLSSViewportRole v
 	return nonVRDLSSOptionsCache;
 }
 
+UpscalingDLSS::SuccessfulCropHistory* Streamline::GetDLSSCropHistory(
+	DLSSViewportRole viewportRole,
+	uint32_t eyeIndex,
+	uint32_t qualityMode,
+	uint32_t dlssPreset)
+{
+	if (!globals::game::isVR)
+		return &nonVRDLSSCropHistory;
+
+	const uint32_t eye = eyeIndex > 0 ? 1u : 0u;
+	const uint32_t clampedQualityMode =
+		std::min<uint32_t>(qualityMode, Upscaling::kQualityModeMaxIndex);
+	const uint32_t clampedPreset = Upscaling::ClampDLSSPresetUInt(dlssPreset);
+	const uint32_t roleIndex = GetDLSSViewportRoleIndex(viewportRole);
+	const int slotIndex = FindVRDLSSViewportSlot(
+		viewportRole, clampedQualityMode, clampedPreset);
+	if (slotIndex < 0)
+		return nullptr;
+
+	return &vrDLSSViewportSlots[roleIndex][slotIndex].cropHistory[eye];
+}
+
+uint64_t Streamline::GetDLSSViewportGeneration(
+	DLSSViewportRole viewportRole,
+	uint32_t qualityMode,
+	uint32_t dlssPreset) const
+{
+	if (!globals::game::isVR)
+		return 1;
+
+	const uint32_t clampedQualityMode =
+		std::min<uint32_t>(qualityMode, Upscaling::kQualityModeMaxIndex);
+	const uint32_t clampedPreset = Upscaling::ClampDLSSPresetUInt(dlssPreset);
+	const uint32_t roleIndex = GetDLSSViewportRoleIndex(viewportRole);
+	const int slotIndex = FindVRDLSSViewportSlot(
+		viewportRole, clampedQualityMode, clampedPreset);
+	if (slotIndex < 0)
+		return 0;
+
+	return vrDLSSViewportSlots[roleIndex][slotIndex].generation;
+}
+
 void Streamline::InvalidateDLSSOptionsCache()
 {
 	nonVRDLSSOptionsCache = {};
-	dlssFrameConstantsCache = {};
 	for (auto& roleSlots : vrDLSSViewportSlots) {
 		for (auto& slot : roleSlots) {
 			for (auto& optionsCache : slot.optionsCache)
 				optionsCache = {};
 		}
 	}
+	InvalidateDLSSCropHistory();
+}
+
+void Streamline::InvalidateDLSSCropHistory()
+{
+	nonVRDLSSCropHistory = {};
+	dlssFrameConstantsCache = {};
+	for (auto& roleSlots : vrDLSSViewportSlots) {
+		for (auto& slot : roleSlots) {
+			for (auto& cropHistory : slot.cropHistory)
+				cropHistory = {};
+		}
+	}
+
+	std::scoped_lock lock(dlssViewportCropTelemetryMutex);
+	dlssViewportCropTelemetry = {};
 }
 
 void Streamline::ResetDLSSIdleFences()
@@ -2761,6 +2898,7 @@ void Streamline::ResetFrameTracking(StreamlineFrameTokenPublication::ResetScope 
 {
 	frameTokenCoordinator.Reset(a_scope);
 	dlssFrameConstantsCache = {};
+	InvalidateDLSSCropHistory();
 }
 
 bool Streamline::HasDLSSResourcesPendingTeardown() const
@@ -2805,14 +2943,15 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,
 	ID3D11Resource* mvec, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask,
 	const sl::Extent& extentIn, const sl::Extent& extentOut, uint32_t outputWidth,
-	float pinholeOffsetX, float pinholeOffsetY, const char* label, DLSSViewportRole viewportRole,
-	bool useAuthoritativeProfile, uint32_t authoritativeQualityMode, uint32_t authoritativeDLSSPreset)
+	const char* label, DLSSViewportRole viewportRole,
+	bool useAuthoritativeProfile, uint32_t authoritativeQualityMode, uint32_t authoritativeDLSSPreset,
+	const UpscalingDLSS::ViewportCrop& viewportCrop)
 {
 	auto context = globals::d3d::context;
 	if (!initialized || !featureDLSS || !slEvaluateFeature || !context ||
 		!colorIn || !colorOut || !depth || !mvec || !reactiveMask || !transparencyMask)
 		return false;
-	if (globals::game::isVR && eyeIndex > 1)
+	if (eyeIndex >= kDLSSPassEyeCount)
 		return false;
 
 	sl::Resource colorInRes = { sl::ResourceType::eTex2d, colorIn, 0 };
@@ -2839,23 +2978,30 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		vendorLifecycleMutationDeferred && !useAuthoritativeProfile ?
 			upscaling.GetExistingVRVendorProviderSnapshot() :
 			Upscaling::VRExistingVendorProviderSnapshot{};
-	float viewportScaleX = 1.0f;
-	float viewportScaleY = 1.0f;
-	if (state) {
-		const auto& resolutionPlan = upscaling.GetRuntimeResolutionPlan();
-		auto fullOutputSize = temporalSnapshot ?
-		                          float2{ static_cast<float>(temporalSnapshot->key.outputWidth) * 2.0f, static_cast<float>(temporalSnapshot->key.outputHeight) } :
-		                          resolutionPlan.finalOutputSize;
-		if (fullOutputSize.x <= 0.0f || fullOutputSize.y <= 0.0f)
-			fullOutputSize = state->screenSize;
-
-		const float fullOutputWidth = globals::game::isVR ? (fullOutputSize.x * 0.5f) : fullOutputSize.x;
-		const float fullOutputHeight = fullOutputSize.y;
-		if (fullOutputWidth > 0.0f && fullOutputHeight > 0.0f) {
-			viewportScaleX = std::clamp(static_cast<float>(extentOut.width) / fullOutputWidth, 1e-4f, 1.0f);
-			viewportScaleY = std::clamp(static_cast<float>(extentOut.height) / fullOutputHeight, 1e-4f, 1.0f);
-		}
-	}
+	const UpscalingDLSS::ViewportCrop emptyCrop{};
+	const UpscalingDLSS::ViewportCrop currentCrop = viewportCrop == emptyCrop ?
+	                                                    UpscalingDLSS::ViewportCrop::Identity(
+															extentIn.width,
+															extentIn.height,
+															extentOut.width,
+															extentOut.height) :
+	                                                    viewportCrop;
+	const bool cropDescriptorValid = outputWidth == extentOut.width &&
+	                                 currentCrop.MatchesEvaluationExtents(
+										 extentIn.width,
+										 extentIn.height,
+										 extentOut.width,
+										 extentOut.height);
+	const auto motionVectorScale =
+		UpscalingDLSS::BuildMotionVectorScale(currentCrop);
+	const float viewportScaleX = cropDescriptorValid ?
+	                                 static_cast<float>(currentCrop.output.Width()) /
+	                                     static_cast<float>(currentCrop.fullOutput.width) :
+	                                 1.0f;
+	const float viewportScaleY = cropDescriptorValid ?
+	                                 static_cast<float>(currentCrop.output.Height()) /
+	                                     static_cast<float>(currentCrop.fullOutput.height) :
+	                                 1.0f;
 
 	const bool colorBuffersHDR = GetDLSSColorBuffersHDR(colorIn);
 	const bool useExistingDLSSProfile =
@@ -2877,10 +3023,20 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	const bool submitStageVRDLSS =
 		globals::game::isVR &&
 		upscaling.IsPresentationUpscalingActive();
+	const auto passRoute =
+		(submitStageVRDLSS ||
+			viewportRole == DLSSViewportRole::SubmitStageFoveatedCenter) ?
+			DLSSPassRoute::Submit :
+			DLSSPassRoute::Main;
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	const bool collectDLSSDiagnostics = ShouldLogDLSSDiagnostics() || IsDLSSDevBenchTraceActive();
 #endif
+	const bool collectPassTelemetry = upscaling.IsNeuralRenderingRequested()
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	                                  || collectDLSSDiagnostics
+#endif
+		;
 	DLSSDispatchDiagnostics diagnostics{};
 	DLSSDispatchDiagnostics* diagnosticsPtr = &diagnostics;
 	diagnostics.label = label ? label : "DLSS Evaluate";
@@ -2897,9 +3053,14 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	diagnostics.viewportRole = viewportRole;
 	diagnostics.viewportScaleX = viewportScaleX;
 	diagnostics.viewportScaleY = viewportScaleY;
-	diagnostics.croppedViewport = viewportScaleX < 0.999f || viewportScaleY < 0.999f;
-	diagnostics.pinholeOffsetX = pinholeOffsetX;
-	diagnostics.pinholeOffsetY = pinholeOffsetY;
+	diagnostics.croppedViewport = cropDescriptorValid && !currentCrop.IsIdentity();
+	diagnostics.currentCrop = currentCrop;
+	diagnostics.previousCrop = currentCrop;
+	diagnostics.cropResetReason = cropDescriptorValid ?
+	                                  UpscalingDLSS::CropHistoryResetReason::NoSuccessfulHistory :
+	                                  UpscalingDLSS::CropHistoryResetReason::InvalidDescriptor;
+	diagnostics.motionVectorScaleX = motionVectorScale.valid ? motionVectorScale.x : 1.0f;
+	diagnostics.motionVectorScaleY = motionVectorScale.valid ? motionVectorScale.y : 1.0f;
 	diagnostics.submitStageVRDLSS = submitStageVRDLSS;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	diagnostics.colorIn = colorIn;
@@ -2934,6 +3095,43 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		diagnostics.optionsCacheLegacyProfile = optionsCache.useLegacyProfile;
 	};
 #endif
+	const auto publishCropTelemetry = [&](bool a_evaluationSucceeded) {
+		if (!collectPassTelemetry)
+			return;
+		DLSSViewportCropTelemetrySnapshot snapshot{};
+		snapshot.valid = cropDescriptorValid;
+		snapshot.evaluationSucceeded = a_evaluationSucceeded;
+		snapshot.frame = diagnostics.frame;
+		snapshot.eyeIndex = eyeIndex;
+		snapshot.viewportRole = viewportRole;
+		snapshot.viewport = static_cast<uint32_t>(diagnostics.resolvedViewport);
+		snapshot.generation = diagnostics.cropGeneration;
+		snapshot.current = diagnostics.currentCrop;
+		snapshot.previous = diagnostics.previousCrop;
+		snapshot.continuous = diagnostics.cropContinuous;
+		snapshot.sameFrameReplay = diagnostics.cropSameFrameReplay;
+		snapshot.cropReset = diagnostics.cropReset;
+		snapshot.effectiveReset =
+			diagnostics.cropReset || upscaling.ShouldResetHistoryThisFrame();
+		snapshot.resetReason = diagnostics.cropResetReason;
+		snapshot.motionVectorScaleX = diagnostics.motionVectorScaleX;
+		snapshot.motionVectorScaleY = diagnostics.motionVectorScaleY;
+
+		std::scoped_lock lock(dlssViewportCropTelemetryMutex);
+		dlssViewportCropTelemetry[GetDLSSViewportRoleIndex(viewportRole)][eyeIndex] =
+			snapshot;
+	};
+
+	if (!cropDescriptorValid || !motionVectorScale.valid) {
+		publishCropTelemetry(false);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		LogDLSSDispatchDiagnostics(
+			DLSSDiagnosticStage::SetConstants,
+			"invalid_crop_descriptor",
+			diagnosticsPtr);
+#endif
+		return false;
+	}
 
 	if (existingProviderOnly) {
 		if (!TryResolveExistingVRDLSSViewport(
@@ -2959,7 +3157,42 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	diagnostics.resolvedViewport = vp;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	updateOptionsCacheDiagnostics();
+#endif
+	const uint64_t cropGeneration =
+		GetDLSSViewportGeneration(viewportRole, qualityMode, dlssPreset);
+	auto* cropHistory =
+		GetDLSSCropHistory(viewportRole, eyeIndex, qualityMode, dlssPreset);
+	if (!cropHistory || cropGeneration == 0) {
+		diagnostics.cropResetReason =
+			UpscalingDLSS::CropHistoryResetReason::InvalidGeneration;
+		publishCropTelemetry(false);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		LogDLSSDispatchDiagnostics(
+			DLSSDiagnosticStage::ResolveViewport,
+			"crop_history_unavailable",
+			diagnosticsPtr);
+#endif
+		return false;
+	}
 
+	const auto cropContinuity = UpscalingDLSS::EvaluateCropContinuity(
+		*cropHistory,
+		diagnostics.frame,
+		cropGeneration,
+		currentCrop);
+	diagnostics.cropGeneration = cropGeneration;
+	diagnostics.previousCrop = cropContinuity.previousCrop;
+	diagnostics.cropResetReason = cropContinuity.reason;
+	diagnostics.cropContinuous = cropContinuity.continuous;
+	diagnostics.cropSameFrameReplay = cropContinuity.sameFrameReplay;
+	diagnostics.cropReset = cropContinuity.reset;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	diagnostics.historyResetRequested =
+		upscaling.ShouldResetHistoryThisFrame() || cropContinuity.reset;
+#endif
+	publishCropTelemetry(false);
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	DLSSDevBenchTraceSignature devBenchFrameConstantsSignature{};
 	auto* devBenchFrameConstantsSignaturePtr = IsDLSSDevBenchTraceActive() ? &devBenchFrameConstantsSignature : nullptr;
 #endif
@@ -2979,10 +3212,8 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 			vp,
 			frameToken,
 			eyeIndex,
-			viewportScaleX,
-			viewportScaleY,
-			pinholeOffsetX,
-			pinholeOffsetY,
+			currentCrop,
+			cropContinuity,
 			diagnosticsPtr
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			,
@@ -3057,7 +3288,30 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 
 	emitPCLMarker(sl::PCLMarker::eRenderSubmitStart, "DLSS-EvaluateStart", 0);
 	InvalidateDLSSRelatchDrain();
+	if (collectPassTelemetry) {
+		std::scoped_lock lock(dlssPassTelemetryMutex);
+		auto& telemetry = dlssPassTelemetryFrames.GetOrCreate(diagnostics.frame);
+		auto& attempts = telemetry.attempts
+		                     [static_cast<std::size_t>(passRoute)][eyeIndex];
+		UpscalingTelemetry::SaturatingIncrement(attempts);
+	}
 	sl::Result evalResult = slEvaluateFeature(sl::kFeatureDLSS, *frameToken, inputs, _countof(inputs), context);
+	if (evalResult == sl::Result::eOk) {
+		*cropHistory = UpscalingDLSS::MakeSuccessfulCropHistory(
+			diagnostics.frame,
+			cropGeneration,
+			currentCrop,
+			cropContinuity);
+		publishCropTelemetry(true);
+		if (collectPassTelemetry) {
+			std::scoped_lock lock(dlssPassTelemetryMutex);
+			if (auto* telemetry = dlssPassTelemetryFrames.Find(diagnostics.frame)) {
+				auto& successes = telemetry->successes
+				                      [static_cast<std::size_t>(passRoute)][eyeIndex];
+				UpscalingTelemetry::SaturatingIncrement(successes);
+			}
+		}
+	}
 	emitPCLMarker(sl::PCLMarker::eRenderSubmitEnd, "DLSS-EvaluateEnd", 1);
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -3108,10 +3362,39 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	return evalResult == sl::Result::eOk;
 }
 
+Streamline::DLSSPassTelemetrySnapshot Streamline::GetDLSSPassTelemetrySnapshot(
+	uint32_t a_frame) const noexcept
+{
+	try {
+		std::scoped_lock lock(dlssPassTelemetryMutex);
+		if (const auto* telemetry = dlssPassTelemetryFrames.Find(a_frame))
+			return *telemetry;
+	} catch (...) {
+	}
+
+	DLSSPassTelemetrySnapshot snapshot{};
+	snapshot.frame = a_frame;
+	return snapshot;
+}
+
+Streamline::DLSSViewportCropTelemetrySnapshot
+Streamline::GetDLSSViewportCropTelemetrySnapshot(
+	DLSSViewportRole a_role,
+	uint32_t a_eyeIndex) const noexcept
+{
+	try {
+		std::scoped_lock lock(dlssViewportCropTelemetryMutex);
+		const uint32_t eye = std::min<uint32_t>(a_eyeIndex, 1u);
+		return dlssViewportCropTelemetry[GetDLSSViewportRoleIndex(a_role)][eye];
+	} catch (...) {
+		return {};
+	}
+}
+
 bool Streamline::UpscaleRegion(uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,
 	ID3D11Resource* mvec, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask,
 	uint32_t renderWidth, uint32_t renderHeight, uint32_t outputWidth, uint32_t outputHeight,
-	float pinholeOffsetX, float pinholeOffsetY)
+	const UpscalingDLSS::ViewportCrop& viewportCrop)
 {
 	if (!initialized || !featureDLSS || !colorIn || !colorOut || !depth || !mvec || !reactiveMask || !transparencyMask)
 		return false;
@@ -3120,7 +3403,21 @@ bool Streamline::UpscaleRegion(uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D1
 	sl::Extent extentIn{ 0u, 0u, renderWidth, renderHeight };
 	sl::Extent extentOut{ 0u, 0u, outputWidth, outputHeight };
 
-	return EvaluateDLSS(vp, eyeIndex, colorIn, colorOut, depth, mvec, reactiveMask, transparencyMask, extentIn, extentOut, outputWidth, pinholeOffsetX, pinholeOffsetY, "UpscaleRegion");
+	return EvaluateDLSS(
+		vp,
+		eyeIndex,
+		colorIn,
+		colorOut,
+		depth,
+		mvec,
+		reactiveMask,
+		transparencyMask,
+		extentIn,
+		extentOut,
+		outputWidth,
+		"UpscaleRegion",
+		DLSSViewportRole::FullEye,
+		false, 0u, Upscaling::kDLSSPresetK, viewportCrop);
 }
 
 bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors)
@@ -3303,8 +3600,6 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 					upscaling.vrIntermediateDepth[i]->resource.get(), upscaling.vrIntermediateMotionVectors[i]->resource.get(),
 					upscaling.vrIntermediateReactiveMask[i]->resource.get(), upscaling.vrIntermediateTransparencyMask[i]->resource.get(),
 					extentIn, extentOut, eyeWidthOut,
-					0.0f,
-					0.0f,
 					"VR prepared per-eye",
 					DLSSViewportRole::FullEye,
 					useAuthoritativeExistingProfile,
@@ -3354,8 +3649,6 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			depthTexture.texture, upscaling.vrIntermediateMotionVectors[0]->resource.get(),
 			upscaling.vrIntermediateReactiveMask[0]->resource.get(), upscaling.vrIntermediateTransparencyMask[0]->resource.get(),
 			extentIn, extentOut, eyeWidthOut,
-			0.0f,
-			0.0f,
 			"VR direct eye0 combined",
 			DLSSViewportRole::FullEye,
 			useAuthoritativeExistingProfile,
@@ -3369,8 +3662,6 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			upscaling.vrIntermediateDepth[1]->resource.get(), upscaling.vrIntermediateMotionVectors[1]->resource.get(),
 			upscaling.vrIntermediateReactiveMask[1]->resource.get(), upscaling.vrIntermediateTransparencyMask[1]->resource.get(),
 			extentIn, extentOut, eyeWidthOut,
-			0.0f,
-			0.0f,
 			"VR direct eye1 intermediate",
 			DLSSViewportRole::FullEye,
 			useAuthoritativeExistingProfile,
@@ -3421,8 +3712,6 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			a_upscalingTexture, colorOut,
 			depthTexture.texture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask,
 			extentIn, extentOut, (uint)screenSize.x,
-			0.0f,
-			0.0f,
 			"Non-VR main");
 		upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener && evaluated;
 		if (!evaluated) {

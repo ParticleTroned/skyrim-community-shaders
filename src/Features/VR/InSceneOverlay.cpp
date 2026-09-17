@@ -45,6 +45,7 @@ namespace
 	std::atomic<uint64_t> g_openVRSubmitCycleState{ 0 };
 	std::mutex g_openVRSubmitCyclePublishMutex;
 	std::mutex g_vrPostLoadCompositorSubmitMutex;
+	thread_local uint64_t g_neuralSubmitPairBoundaryToken = 0;
 	std::recursive_mutex g_vrRenderScalePresentationWorkMutex;
 	std::mutex g_presentedMenuSurfaceMutex;
 	std::atomic<uint64_t> g_vrSubmitPairBoundarySequence{ 0 };
@@ -734,7 +735,23 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					.thread = g_vrSubmitPairBoundaryState.thread,
 				};
 			}
-			func(_this, a_texture);
+			{
+				auto& upscaling = globals::features::upscaling;
+				const uint64_t previousNeuralBoundary = g_neuralSubmitPairBoundaryToken;
+				const uint64_t neuralBoundary = !nestedSubmit && a_texture &&
+				                                        upscaling.IsNeuralRenderingRequested() ?
+				                                    upscaling.BeginNeuralSubmitPairBoundary(
+														g_vrSubmitPairBoundaryState.compositorCycle,
+														reinterpret_cast<uintptr_t>(a_texture),
+														vr::Submit_Default) :
+				                                    0u;
+				g_neuralSubmitPairBoundaryToken = neuralBoundary;
+				const SKSE::stl::scope_exit endNeuralBoundary([&]() noexcept {
+					upscaling.EndNeuralSubmitPairBoundary(neuralBoundary);
+					g_neuralSubmitPairBoundaryToken = previousNeuralBoundary;
+				});
+				func(_this, a_texture);
+			}
 			const VRRenderScaleFrameBoundaryPolicy::PairIdentity completedIdentity{
 				.token = g_vrSubmitPairBoundaryState.token,
 				.compositorCycle =
@@ -813,6 +830,12 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 			const auto submitBoundaryIdentity =
 				VRSubmitInputFreshnessPolicy::ResolveSubmitBoundaryIdentity(
 					submitBoundaryObservation);
+			(void)upscaling.ObserveNeuralSubmitPairBoundaryEye(
+				g_neuralSubmitPairBoundaryToken,
+				compositorCycleToken,
+				eEye,
+				pTexture,
+				nSubmitFlags);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			VRRenderScaleDevBenchBridge::RecordSubmitBoundaryRejection(
 				VRSubmitInputFreshnessPolicy::ResolveOuterBoundaryRejection(
@@ -970,6 +993,20 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					submitPacket.valid,
 					a_probeObservation);
 #endif
+				nlohmann::json screenshotNeuralEvidence = nlohmann::json::object();
+				if (observeScreenshot && screenshotTextureLifetime &&
+					a_postLoadKeepaliveToken == 0 &&
+					std::string_view(a_path) != "compositor-keepalive") {
+					try {
+						screenshotNeuralEvidence = upscaling.CaptureNeuralSubmission(
+							submitPacket.eye, compositorCycleToken,
+							screenshotTextureLifetime.get(), a_path, a_probeObservation);
+					} catch (const std::exception& error) {
+						screenshotNeuralEvidence = {
+							{ "schemaVersion", 1 }, { "available", false }, { "reason", error.what() }
+						};
+					}
+				}
 				vr::EVRCompositorError result = submitPacket.captureError;
 				if (submitPacket.valid) {
 					result = func(
@@ -1021,7 +1058,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 							submitPacket.eye,
 							screenshotTextureLifetime.get(),
 							hasScreenshotBounds ? &retainedScreenshotBounds : nullptr,
-							screenshotColorSpace);
+							screenshotColorSpace,
+							screenshotNeuralEvidence);
 					}
 				}
 				uint64_t completionScopeEpoch =

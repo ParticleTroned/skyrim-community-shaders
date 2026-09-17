@@ -22,6 +22,8 @@
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
 #include "Features/Upscaling.h"
+#include "Features/Upscaling/NeuralRendering/CharacterCategoryFormat.h"
+#include "Features/Upscaling/NeuralRendering/CharacterRendering.h"
 #include "Features/VR.h"
 
 #include "Hooks.h"
@@ -258,8 +260,11 @@ void Deferred::SetupResources()
 		SetupRenderTarget(NORMALROUGHNESS, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R10G10B10A2_UNORM, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
 		// Masks
 		SetupRenderTarget(MASKS, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R11G11B10_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
-		// Masks2 (vertexAO; fp16 to allow blending)
-		SetupRenderTarget(MASKS2, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R16_UNORM, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+		// VR adds exact categories without reducing the original vertex AO precision.
+		const auto masks2Format = globals::game::isVR ?
+		                              NeuralRendering::kCharacterCategoryFormat :
+		                              DXGI_FORMAT_R16_UNORM;
+		SetupRenderTarget(MASKS2, texDesc, srvDesc, rtvDesc, uavDesc, masks2Format, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
 
 		// TAA Water Buffers
 		SetupRenderTarget(RE::RENDER_TARGETS::kWATER_1, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
@@ -993,12 +998,44 @@ void Deferred::Hooks::Main_RenderWorld_Start::thunk(RE::BSBatchRenderer* This, u
 void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumulator* This, uint32_t RenderFlags)
 {
 	auto deferred = globals::deferred;
+	auto renderer = globals::game::renderer;
 
 	if (globals::shaderCache->IsEnabled() && globals::state->inWorld) {
 		auto& terrainBlending = globals::features::terrainBlending;
+
 		// Defer terrain rendering until after everything else
 		if (terrainBlending.loaded && terrainBlending.settings.Enabled) {
 			terrainBlending.RenderTerrainBlendingPasses();
+		}
+
+		const auto& upscaling = globals::features::upscaling;
+		if (deferred && deferred->deferredPass &&
+			upscaling.IsCharacterNeuralRenderingRouteRequested() && renderer &&
+			globals::d3d::device && globals::d3d::context) {
+			std::uint32_t inputWidthPerEye = 0;
+			std::uint32_t inputHeight = 0;
+			std::uint32_t outputWidthPerEye = 0;
+			std::uint32_t outputHeight = 0;
+			if (upscaling.GetRuntimeFoveatedRegionDimensions(
+					inputWidthPerEye, inputHeight,
+					outputWidthPerEye, outputHeight)) {
+				auto& categorySource =
+					renderer->GetRuntimeData().renderTargets[MASKS2];
+				auto& depthSource = renderer->GetDepthStencilData()
+				                        .depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+				(void)NeuralRendering::CharacterRendering::Instance()
+					.CaptureAuthoredCategories(
+						globals::d3d::device,
+						globals::d3d::context,
+						categorySource.texture,
+						depthSource.depthSRV,
+						inputWidthPerEye,
+						inputHeight,
+						globals::state->frameCount,
+						upscaling.GetCharacterNeuralRenderingCategoryMask(),
+						upscaling.jitter.x,
+						upscaling.jitter.y);
+			}
 		}
 	}
 

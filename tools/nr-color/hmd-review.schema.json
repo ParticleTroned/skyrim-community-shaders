@@ -1,0 +1,72 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Blinded NR HMD image assessment",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "comparisonId",
+        "presentationPass",
+        "replicate",
+        "inspectedImageIds",
+        "missingImageIds",
+        "objectives",
+        "exclusions",
+        "uncertainties",
+        "untestedConditions",
+        "imageAssessment"
+    ],
+    "properties": {
+        "comparisonId": { "type": "string" },
+        "presentationPass": { "type": "integer", "enum": [1, 2] },
+        "replicate": { "type": "integer", "enum": [1, 2, 3] },
+        "inspectedImageIds": { "type": "array", "items": { "type": "string" } },
+        "missingImageIds": { "type": "array", "items": { "type": "string" } },
+        "objectives": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "colourFidelity",
+                "usefulNeuralDetail",
+                "temporalStability",
+                "stereoConsistency"
+            ],
+            "properties": {
+                "colourFidelity": { "$ref": "#/$defs/objective" },
+                "usefulNeuralDetail": { "$ref": "#/$defs/objective" },
+                "temporalStability": { "$ref": "#/$defs/objective" },
+                "stereoConsistency": { "$ref": "#/$defs/objective" }
+            }
+        },
+        "exclusions": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
+        "uncertainties": { "type": "array", "items": { "type": "string" } },
+        "untestedConditions": { "type": "array", "items": { "type": "string" } },
+        "imageAssessment": { "type": "string" }
+    },
+    "$defs": {
+        "evidence": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["eye", "regionId", "imageIds", "finding"],
+            "properties": {
+                "eye": { "type": "string", "enum": ["left", "right", "both"] },
+                "regionId": { "type": "string" },
+                "imageIds": { "type": "array", "items": { "type": "string" } },
+                "finding": { "type": "string" }
+            }
+        },
+        "objective": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["verdict", "confidence", "baselineVariation", "evidence"],
+            "properties": {
+                "verdict": {
+                    "type": "string",
+                    "enum": ["first_better", "tie", "second_better", "indeterminate"]
+                },
+                "confidence": { "type": "string", "enum": ["high", "medium", "low"] },
+                "baselineVariation": { "type": "string" },
+                "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } }
+            }
+        }
+    }
+}

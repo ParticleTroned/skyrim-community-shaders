@@ -139,6 +139,20 @@
                 "AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES": "ON",
                 "CSX_VERSION": "3.15-SE"
             }
+        },
+        {
+            "name": "Internal-DLSSNR-AIO",
+            "description": "Configure a DevBench AIO with the standard DLSS runtime and an optional local NR provider.",
+            "inherits": "ALL",
+            "binaryDir": "${sourceDir}/build/gnr",
+            "cacheVariables": {
+                "BUILD_SHADER_TESTS": "OFF",
+                "CSX_LOCAL_DLSSNR_RUNTIME_FILE": {
+                    "type": "FILEPATH",
+                    "value": "$env{CSX_LOCAL_DLSSNR_RUNTIME_FILE}"
+                },
+                "DEVBENCH_BRIDGE": "ON"
+            }
         }
     ],
     "buildPresets": [
@@ -197,6 +211,13 @@
             "configurePreset": "AIO-Release",
             "configuration": "Release",
             "targets": ["CommunityShaders", "AIO"]
+        },
+        {
+            "name": "Internal-DLSSNR-AIO",
+            "description": "Build the internal DevBench DLSS NR AIO archive",
+            "configurePreset": "Internal-DLSSNR-AIO",
+            "configuration": "Release",
+            "targets": ["Package-AIO-Manual"]
         }
     ]
 }

@@ -1,0 +1,401 @@
+# DLSS Neural Rendering experiments
+
+These branches exercise NVIDIA NGX Feature 18 through an isolated D3D12
+interop service. Normal DLSS remains on the existing Streamline D3D11 path.
+Feature 18 is not exposed by the public Streamline 2.12 headers, so this code
+does not register an invented Streamline feature or tag contract.
+
+This is internal research, not a redistributable or release-ready integration.
+The repository does not grant rights to NVIDIA binaries. At the user's explicit
+request, these experiment branches can produce an internal AIO that contains a
+hash-pinned runtime set from paths supplied through the CMake cache. Do not
+commit those DLLs or publish, redistribute, or attach the resulting AIO to a
+release.
+
+## Branch contracts
+
+| Branch      | Fixed center-pipeline arrangement              | Failure behavior                                |
+| ----------- | ---------------------------------------------- | ----------------------------------------------- |
+| `paintball` | normal DLSS, then Feature 18                   | retain the completed DLSS center                |
+| `paint`     | Feature 18 at low resolution, then normal DLSS | send the original low-resolution center to DLSS |
+| `ball`      | Feature 18 replaces normal DLSS                | run normal DLSS for that center                 |
+
+The arrangement relative to normal DLSS is compiled into each branch; it is not
+a saved setting. Gogh's DLSS-then-Neural route additionally exposes a saved
+insertion-point setting. `Upscaled Centre` retains the original placement ahead
+of feathering and sharpening. Experimental `Final LDR before UI` keeps the same
+center-region restriction but evaluates Feature 18 after scene post-processing
+and sharpening, immediately before UI composition.
+
+## Runtime admission boundary
+
+Normal DLSS stays separate from Neural Rendering. For this internal test, CMake
+copies a matched Streamline 2.13 core/plugin set and NVIDIA-signed 310.8
+`nvngx_dlss.dll` from the user-supplied local runtime directory. CSX remains
+compiled against the Streamline 2.12 headers, so unchanged normal-DLSS operation
+is the first runtime compatibility gate. Feature 18 is loaded directly from
+`nvngx_dlssnr.dll`; it does not use or require `sl.dlss_nr.dll` or a Streamline
+Neural Rendering plugin.
+
+The direct loader recognizes three tested `nvngx_dlssnr.dll` SHA-256 identities:
+
+-   tested signed 310.8 identity:
+    `E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E`
+-   tested patched 310.8 identity:
+    `8270B350CD82DE5CE89806872CDD6B6A9249B80836B91BBEB3573470744CC206`
+-   alternate tested patched 310.8 identity:
+    `CEB6432F6FBDF44D886014BCD47241932BF8B67439FEEF9BBDD0961436662650`
+
+The hash is computed before `LoadLibraryExW` and reported diagnostically, but it
+is not an admission allowlist. This internal branch accepts any runtime whose
+version resource reports 310.8.x and which exports the required NGX entrypoints.
+Developer Mode and the Streamline log level do not affect that decision. The
+loader keeps its pre-load file handle locked and verifies that the loaded module
+is the same file that was inspected, but it does not establish publisher trust
+or certify an unlisted binary as malware-free. An accepted untrusted DLL executes
+inside the game process; only use binaries obtained and inspected by the tester.
+
+The runtime DLL does not necessarily export the NGX parameter allocator. When
+it does, its already verified runtime identity is also the parameter-core
+identity. Otherwise, before calling NGX initialization, CSX requires exactly
+one loaded exporter whose locked file identity resolves below
+`System32\\DriverStore\\FileRepository`, whose basename is `nvngx.dll` or the
+DriverStore alias `_nvngx.dll`, and whose Authenticode signature passes an
+offline, no-UI verification. Current DriverStore binaries can carry a Microsoft
+WHCP signature, so CSX checks the file's NVIDIA product metadata separately:
+`CompanyName` must be `NVIDIA Corporation`, `ProductName` must be `NGX`, and
+`OriginalFilename` must be `nvngx.dll`. Version metadata is an additional
+identity check, not proof of the signer's publisher. CSX retains both the module
+reference and a file handle that denies writes and deletion across initialization
+and for the complete NGX parameter lifetime. Any sibling `nvngx.dll` or
+`_nvngx.dll` beside `nvngx_dlssnr.dll` is rejected before the first vendor
+initialization call. The selected core path, SHA-256, trust result, and selection
+source are exposed by `nr_status`; ambiguity or any failed check is a closed-gate
+failure.
+
+During NGX initialization, the implementation replaces
+`nvngx_dlssnr.dll`'s imported `GetModuleFileNameW` function for the admitted
+runtime lifetime. A query that passes the CSX module handle is reported as the
+sibling `nvngx.dll` path; other queries call the original function. Each NGX
+operation first verifies that the import still points at that narrow proxy.
+The CSX module is pinned for the process lifetime before the import is changed.
+The original target is restored before the admitted runtime is unloaded, while
+the permanent pin also covers a concurrent caller that fetched the proxy target
+immediately before restoration. Import exchange is accepted only when both the
+pointer exchange and page-protection restoration succeed; a displaced or
+un-restorable import fails closed while retaining the runtime and proxy target
+instead of leaving a dangling function pointer. This caller-path substitution
+can affect vendor caller validation; it is not a signature or
+authentication mechanism. It requires explicit legal and license review before
+any distribution or use beyond this internal experiment.
+
+Runtime staging is disabled by default. The source and default package retain
+`Shaders/Upscaling/Streamline` with its README and license notices but contain
+no NVIDIA DLLs. DLLs copied into that source directory are ignored by Git and
+excluded from packages. A user who does not stage at build time can instead
+copy a compatible runtime pack into the same directory in the completed mod or
+AIO output.
+
+Private local staging is enabled with `CSX_STAGE_LOCAL_DLSS_RUNTIME=ON` plus
+the `CSX_LOCAL_DLSS_RUNTIME_DIRECTORY` and
+`CSX_LOCAL_DLSSNR_RUNTIME_FILE` CMake cache paths. It stages exactly seven
+files: the six hash-pinned normal-DLSS runtime modules and the selected 310.8
+`nvngx_dlssnr.dll`. Configuration fails if a source is absent or a normal-DLSS
+file does not match its declared SHA-256. The selected NR file is fingerprinted
+into the generated transaction manifest, so later replacement is rejected until
+CMake is configured again. Local staging performs no download and never writes
+a runtime into the source checkout.
+
+For reproducible internal comparisons, the
+`Internal-DLSSNR-AIO` configure and build presets read those two paths from
+process environment variables with the same names. Set one shared
+`CSX_LOCAL_DLSS_RUNTIME_DIRECTORY` for every experiment worktree and select
+the NR binary separately with `CSX_LOCAL_DLSSNR_RUNTIME_FILE`:
+
+```powershell
+$env:CSX_LOCAL_DLSS_RUNTIME_DIRECTORY = '<normal-runtime-directory>'
+$env:CSX_LOCAL_DLSSNR_RUNTIME_FILE = '<path-to-nvngx_dlssnr.dll>'
+cmake --preset Internal-DLSSNR-AIO
+cmake --build --preset Internal-DLSSNR-AIO
+```
+
+The preset enables DevBench and local staging, disables official fetching and
+the package shader tests for this internal iteration build, and retains the
+normal-DLSS fail-closed hash checks. Its short `build/gnr` binary directory keeps
+FidelityFX shader-permutation outputs below legacy Windows path limits. Keep
+machine-specific paths in the process environment or an ignored
+`CMakeUserPresets.json`, never in the tracked preset. The resulting archive is
+still internal-only and must not be redistributed. Run the configure command
+before every build whose runtime source paths may have changed; invoking only
+the build preset does not reread environment variables. Expanded paths remain
+in the ignored build cache and staging manifest. Missing sources, changed
+post-configure identities, normal-runtime hash mismatches, or concurrent
+official acquisition fail closed.
+
+The verified official acquisition path from `main-VR` is retained behind the
+explicit `CSX_FETCH_OFFICIAL_STREAMLINE_RUNTIME=ON` network opt-in. It downloads
+the pinned NVIDIA Streamline 2.12 SDK release and stages only the six public
+normal-DLSS runtime modules; it does not supply Feature 18. This path can be
+advanced when an official Neural Rendering SDK is released. Official fetching
+and private local staging are mutually exclusive.
+
+The reference NR identity is the malware-screened but modified `8270...206`
+file previously selected by `CSX_LOCAL_DLSSNR_RUNTIME_FILE`. Its embedded
+NVIDIA signature
+reports `HashMismatch`. Local staging still pins its exact SHA-256 for a
+reproducible archive, while runtime admission accepts other 310.8 builds and
+reports their hash as unlisted. The signed `E16B...FC8E` identity and alternate
+patched identity remain recognized for separately selected tests but are not
+staged by this build. Hash pinning and prior screening do not certify a binary
+as malware-free. Consult the license accompanying each NVIDIA binary.
+Do not publish or redistribute the generated AIO.
+
+The base bridge binds color, depth, motion vectors, and output only. The
+`face-of-gogh` experiment keeps that working automatic-mask invocation and adds
+an engine-authored CSX output-selection composite documented in
+[DLSS 5 character Neural Rendering](dlss5-character-neural-rendering.md).
+UI correction remains fixed off. A Neural Rendering center is committed only
+when both eyes succeed in the same stereo transaction. Otherwise both eyes
+retain the arrangement's normal-DLSS fallback.
+
+## Working reference and deliberate divergence
+
+The comparison baseline is YtzyFvra's working `feature/dlssnr-vr` branch at
+commit `05e037cad2add33a434c09d7b1260d09d331b6a4`. Its VR route runs Feature 18
+over an already assembled LDR stereo image immediately before UI, and commit
+`3d6748f16` batches both eyes into one D3D12 command list to reduce queue waits.
+Its later fixes establish that before-UI ordering and stereo batching are
+separate concerns: the latter is a performance change, not the prerequisite
+that made the placement correct.
+
+The default `Upscaled Centre` insertion remains inside CSX's center transaction,
+ahead of feathering, sharpening, UI, HMD masking, and submission. Gogh's
+experimental `Final LDR before UI` insertion moves Feature 18 to the closest
+safe CSX equivalent of the reference boundary while preserving the foveated
+center area. It never falls back to the other insertion point: an unavailable
+or failed late transaction retains the normal DLSS result for both eyes so an
+automated A/B test keeps its requested identity.
+
+Both Main and Submit Final LDR routes copy the requested region into a
+target-format baseline, convert its color to `R11G11B10_FLOAT`, and evaluate
+Feature 18 using the same floating-point color input/output contract. The
+target-format baseline remains available for character compositing and exact
+rollback. This also keeps finite model highlights available until the late
+composite performs the conversion appropriate to the presentation target.
+
+The Final LDR composite preserves the destination alpha and substitutes the
+original destination RGB when the sampled model RGB contains a non-finite
+component. For a normalized unsigned presentation target, it also clamps model
+RGB to `0..1` before character selection or foveated feathering. Clamping only
+the final texture store would let an out-of-range model highlight increase the
+feathered result first. Floating-point presentation targets retain finite model
+RGB outside `0..1`. This conversion is local to Final LDR; the ordinary center
+blend and Feature 18's raw output retain their existing behavior.
+
+Batched evaluation records both Feature 18 slots into one D3D12 command list
+and fence transaction; per-eye evaluation uses one transaction per slot. Staged
+output preserves the original intermediate `NeuralOut` pair before resolving it
+into the selected insertion point's outputs. Direct output targets those private
+outputs and avoids the extra center-sized copy. A failed direct pair restores or
+retains the complete normal-DLSS pair, so a partial NR result cannot remain
+visible.
+
+The Neural Rendering controls live in the `NVIDIA DLSS Neural Rendering`
+dropdown in Upscaling, between Frame Generation and NVIDIA Reflex. `Insertion
+Point` selects `Upscaled Centre` (the default) or experimental `Final LDR
+(Pre-UI)`. Stereo submission and output commit remain independent controls:
+
+| Stereo submission | Output commit | Comparison role                  |
+| ----------------- | ------------- | -------------------------------- |
+| Per-eye           | Staged        | Original baseline                |
+| Batched           | Staged        | Isolates stereo batching benefit |
+| Per-eye           | Direct        | Isolates direct-commit benefit   |
+| Batched           | Direct        | Fully optimized path             |
+
+Changing the insertion point or either implementation axis invalidates the NR
+settings key and requests a synchronized temporal-history reset without
+changing Feature 18 tuning values. An insertion-point transition retires the
+backend and suppresses NR for the transition frame so both eyes switch together.
+
+## First runtime validation
+
+Use `communityshaders.renderscale` Neural Rendering status and reset actions to
+preserve the exact runtime and parameter-core paths, versions, hashes and trust
+decisions; load/init/create/evaluate/rollback stages; NGX and HRESULT results;
+proxy hits; D3D formats; per-slot dimensions; stereo eye masks; current-frame
+and current-cycle freshness; submit admission reason; and fallback counters.
+The stereo route reports prepared and attempted masks separately. Prepared
+means the complete renderer arguments exist for that eye; attempted means the
+renderer actually entered NVIDIA Feature 18 evaluation. A prepared eye with no
+attempt reached a validation, trust, initialization, or latched-failure gate,
+which can be diagnosed from the renderer and runtime failure stages.
+Final LDR failures also write a `[DLSSNR] Final-LDR failed` log entry once per
+route and stage for the process lifetime. It identifies the eye, evaluation and
+source frames, target/UAV formats and dimensions, and typed-UAV query result.
+Stages distinguish late preflight, shader/target validation, resource setup,
+input conversion, evaluation, output commit, and blending. The Main route also
+reports an unavailable or mismatched framebuffer target. These logs explain
+failures before the renderer is called, when its last failure stage may still
+be `none`; ordinary route ineligibility and no-character bypasses remain quiet.
+Performance telemetry labels D3D11 preparation and output commit as CPU enqueue
+time, while Feature 18 duration uses D3D12 GPU timestamps and separately reports
+readback failures, command submissions, and bounded backpressure waits. API v7
+also stamps the actual insertion point at the evaluation boundary and keeps
+cumulative GPU samples and time for each insertion point, independent of the
+existing Main/Submit route attribution.
+Each route also reports per-eye attempts and successes for normal DLSS,
+Feature 18, the normal centre blend, and the late-NR blend. These are physical
+per-frame counters rather than route-transaction flags, so rejected cached
+pairs do not erase work already submitted. The
+`unexpectedPassEyeMask` identifies an eye whenever any one pass kind executes
+more than once, making fallback reevaluation distinct from ordinary steady
+state.
+
+Feature 18 is admitted from one immutable stereo-route snapshot. Main-route
+evaluation requires the current world render to have started; submit-route
+evaluation additionally requires that world render to have completed. During a
+safe ordinary pause, either route may continue from the most recently completed
+world frame when the render and completion markers identify the same retained
+frame. Main-menu and actual world-loading boundaries remain fail-closed.
+
+The current `frame` remains the Feature 18 evaluation and presentation identity,
+while `sourceWorldFrame` identifies the immutable world color, depth, motion,
+and character-mask inputs being consumed. A retained Tween or game-menu frame
+reuses the exact character mask and compute rectangle prepared for that source
+frame instead of reprojecting it with a newer HMD pose. Feature 18 history is
+reset when the same frozen source is evaluated again so its old motion vectors
+are not accumulated repeatedly.
+
+| Submit context                             | NR behavior | Presentation requirement                            |
+| ------------------------------------------ | ----------- | --------------------------------------------------- |
+| Gameplay                                   | Allow       | Current world frame is complete                     |
+| CS menu only                               | Allow       | Retain the scene; CS overlay remains after NR       |
+| Tween, game, or dialogue menu              | Allow       | Retain the scene and use the sealed late menu layer |
+| Game menu without a sealed layer           | Block       | Fail closed instead of omitting UI                  |
+| Closed menu, tracking tail only            | Allow       | No live menu or pending UI work requires a layer    |
+| Ordinary save or its persistence grace     | Allow       | Same scene and valid world inputs remain available  |
+| Game menu and CS menu together             | Block       | Combined ordering is not proven safe                |
+| Main menu, loading, or new-game transition | Block       | Hard presentation-safety boundary                   |
+
+A hard presentation context reports `menu_context`, a disallowed pause reports
+`game_paused`, and an incomplete world frame reports `temporal_source_stale`.
+An old frame is admitted only while paused continuity is allowed and its render
+and completion markers agree. Crossing a true admission boundary requests one
+route-history reset; opening a menu whose continuity remains admitted does not
+trigger that reset merely because the game is paused.
+
+The menu-close dropout reported in `7c81d9090` came from treating the 30-frame
+presentation cleanup tail as a live menu. Closing a menu invalidates its old
+layer, so requiring that layer throughout the tail suppressed NR even after a
+new world frame completed. Fresh and cached submit decisions now use live
+menus and actual pending UI work to decide whether a late layer is required.
+An empty tracking tail does not delay NR. Remaining nested menus, captured
+closing UI, and unfinished menu transactions still require the isolated layer.
+This covers the existing dialogue, console, Journal/save, Sleep/Wait, inventory,
+magic, container/activation, barter, crafting, book, training, message-box,
+tutorial, and other registered game-menu routes through the same policy.
+Custom menus using a different rendering path need their own live validation.
+
+Ordinary saves also used to trigger a separate 120-frame dropout: both the
+engine's saving flag and SKSE's save notification extended the shared save/load
+safe mode, which rendering incorrectly treated as world replacement. State now
+tracks actual loading, form initialization, deferred initialization, and player
+positioning independently. Pre-load, post-load, and new-game notifications keep
+that world-transition guard; a save does not start or prolong it. Disk-cache
+persistence and settings/resource mutations retain the broader save/load guard
+and its grace period. Fresh-world validation and immutable paused-source reuse
+still apply while a save is in progress.
+
+Known game-menu layers are composited after NR. The CS overlay is drawn still
+later, after `SubmitVRUpscaledFrame` returns and before the final OpenVR submit,
+so a CS-only frame does not require the known-menu layer bridge. The combined
+CS-menu plus game-menu case remains blocked because opening the CS menu
+invalidates the committed game-menu layer.
+The menu-continuity exception keeps foveated submit dispatch active only when
+NR is otherwise eligible; Render Scale without NR retains its existing menu
+fallback behavior.
+
+`nr_status` reports `hardMenuBlocked`, `lateMenuCompositeReady`,
+`csOverlayOpen`, and `menuContinuityAllowed` for each route snapshot.
+Its temporal admission data also reports `pausedContinuityAllowed`,
+`retainedWorldFrame`, and `sourceWorldFrame`; the legacy
+`pausedSubmitContinuityAllowed` JSON name is retained as an alias.
+Character-eye telemetry reports both the current evaluation `frame` and its
+correlated `sourceWorldFrame`, making frozen-input reuse distinguishable from
+current-world evaluation.
+`knownMenuContext` remains available as an observation and must not be treated
+as the submit hard-block decision. A retained submit pair also binds the menu
+query epoch, CS-overlay state, late-composite use, and menu-layer generation.
+Any change to that signature between eye submissions rejects the cached pair
+instead of presenting eyes produced under different UI contexts. If the first
+eye of an otherwise unchanged retained pair has already been presented, the
+peer may still complete that exact pair.
+
+`nr_status.settings.implementation` reports one of
+`per_eye_staged_commit`, `stereo_batched_staged_commit`,
+`per_eye_direct_commit`, or `stereo_batched_direct_commit`. The same status
+includes the independent booleans, display modes, and comparison purpose.
+
+`nr_configure` can select `insertionPoint` as `upscaled_center` or
+`final_ldr_pre_ui`, select a lane atomically with `implementation`, or control
+the implementation axes independently with `batchedStereo` and `directCommit`.
+It also exposes the menu's `enabled`, `preset`, `intensity`,
+`localToneStrength`, `localStructureStrength`, `skinStructureStrength`, and
+`style` controls.
+Preset selection applies the same values as the in-game UI; subsequent tuning
+overrides select Custom. `nr_cycle_modes` advances through the four lanes, or
+selects an exact lane with `matrixIndex` 0 through 3. `nr_reset` operates the
+runtime-reset button. The
+deprecated `optimizedStereoPath` alias remains accepted only by itself and sets
+both axes for compatibility. Invalid preset, style, and tuning ranges are
+rejected rather than silently clamped so automated comparisons retain their
+requested identity.
+
+`foveation_configure` applies one or more FOV controls atomically on the main
+thread. It covers the master and FOV + TAA switches, center origin and anchor,
+both center scales, the visible outer scale, horizontal expansion, four
+per-eye offsets, all three blend feathers, the reconstruction guard, and mask
+visualization. `foveation_cycle` advances one named axis or selects its exact
+`valueIndex`; `nr_status.foveation.cycleMatrix` is the authoritative value
+matrix. The outer-scale values are derived from the current center-scale floor.
+Selecting a larger center through the cycle action raises the outer scale in
+the same transaction, while an invalid direct configuration is rejected.
+
+Foveation actions reject fields that do not belong to the selected action.
+Every successful mutation invalidates the cached resolution plan and requests
+a temporal-history reset. `effectiveNotBeforeFrame` records the mutation frame,
+while `measurementSafeFromFrame` identifies the following frame as the first
+unambiguous comparison boundary. Inspect
+`nr_status.foveation.plan` before attributing visual or timing results: it
+reports the actual latched input, visible output, guarded work output, source
+offsets, effective feathers, and `matchesRequestedSettings`. A pending or
+mismatched plan is not evidence for the requested configuration.
+If a main-thread task outlives the bounded response window,
+`mainThreadTaskClaimed=true` and `mutationOutcome=indeterminate` mean callers
+must query status before retrying the mutation.
+
+Validate in this order:
+
+1. Confirm unchanged normal foveated DLSS with Neural Rendering disabled.
+2. Enable Neural Rendering and prove both eye/role slots reach runtime probe.
+3. Prove D3D11-to-D3D12 shared copies and Feature 18 evaluation without a
+   fallback or device-removal signal.
+4. Confirm both centers complete in the same compositor cycle and at the
+   selected insertion point: before feathering for `upscaled_center`, or after
+   scene processing and sharpening but before UI for `final_ldr_pre_ui`.
+5. Exercise camera cuts, loads, menus, render-scale transitions, quality/preset
+   changes, enable/disable, and backend reset.
+
+For Final LDR comparisons, first disable character NR and hold the scene,
+camera, FOV mode, center scale, and Feature 18 tuning fixed. Check the Main route
+with presentation Render Scale disabled, then the Submit route with it enabled;
+use each route's fresh snapshot and slot evidence rather than combining their
+cumulative counters. FOV foveation remains an independent admission condition.
+Exercise direct and staged output with both per-eye and batched submission.
+Inspect fractional feather pixels around bright model output, target alpha,
+and both eyes' late-blend counts. A successful model evaluation alone does not
+prove that its result reached the final target.
+
+Feature 18 and its `DLSSNR.*` parameter names are private, version-specific
+contracts. A successful build proves only API compatibility; a controlled VR
+run is required before calling any arrangement working.

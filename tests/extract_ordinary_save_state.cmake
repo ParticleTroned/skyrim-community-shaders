@@ -25,7 +25,7 @@ extract_between("src/State.h" "bool pendingPostLoadRuntimeReset" "bool activeRef
 set(_output "${_output}\nprivate:\n")
 extract_between("src/State.h" "mutable std::mutex saveLoadSafeModeMutex" "uint64_t BeginRenderTargetResourcePublication()")
 set(_output "${_output}\n};\nnamespace {\n")
-extract_between("src/State.cpp" "void StoreMax(" "void ForceDisableAtBootFeature(")
+extract_between("src/State.cpp" "void ExtendFrameDeadline(" "void ForceDisableAtBootFeature(")
 set(_output "${_output}\n}\n")
 extract_between("src/State.cpp" "bool State::IsSaveLoadSafeModeActive()" "void State::Reset()")
 file(WRITE "${OUTPUT_DIRECTORY}/ordinary_save_state_under_test.h" "${_output}")

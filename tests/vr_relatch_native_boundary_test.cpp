@@ -46,6 +46,7 @@ VRRenderScaleFrameBoundaryPolicy::PairCompletion g_vrRelatchPairCompletion;
 std::recursive_mutex g_vrRenderScalePresentationWorkMutex;
 std::atomic<uint64_t> g_vrSubmitPairBoundarySequence{ 0 }, g_openVRSubmitCycleState{ 20 };
 uint32_t observedThread = 1, nativeDepth = 0, returnedEyes = 0;
+uint64_t g_neuralSubmitPairBoundaryToken = 0;
 uint32_t GetCurrentThreadId() { return observedThread; }
 namespace globals
 {
@@ -58,10 +59,30 @@ namespace globals
 	{
 		struct Upscaling
 		{
-			uint32_t calls = 0;
+			uint32_t calls = 0, neuralBegins = 0, neuralEnds = 0;
+			uint64_t activeNeuralBoundary = 0;
+			bool neuralEnabled = true, invalidNeuralEnd = false;
+			bool IsNeuralRenderingRequested() const { return neuralEnabled; }
+			uint64_t BeginNeuralSubmitPairBoundary(uint64_t cycle, uintptr_t texture, vr::EVRSubmitFlags flags)
+			{
+				if (nativeDepth != 0 || !g_vrSubmitPairBoundaryState.active || !texture ||
+					cycle != g_vrSubmitPairBoundaryState.compositorCycle || flags != vr::Submit_Default)
+					throw std::runtime_error("NR boundary must follow the native outer-pair proof");
+				++neuralBegins;
+				return activeNeuralBoundary = neuralBegins + 100;
+			}
+			void EndNeuralSubmitPairBoundary(uint64_t token) noexcept
+			{
+				if (!token)
+					return;
+				invalidNeuralEnd |= nativeDepth != 0 || token != activeNeuralBoundary;
+				++neuralEnds;
+				activeNeuralBoundary = 0;
+			}
 			void ServiceVRRenderScaleRelatchAtFrameBoundary()
 			{
-				if (nativeDepth != 0 || returnedEyes < 2 || g_vrSubmitPairBoundaryState.active || g_vrRelatchPairCompletion.identity.token != 0)
+				if (nativeDepth != 0 || returnedEyes < 2 || g_vrSubmitPairBoundaryState.active ||
+					activeNeuralBoundary != 0 || g_vrRelatchPairCompletion.identity.token != 0)
 					throw std::runtime_error("Relatch ran before native/eye return or before boundary ownership was cleared");
 				++calls;
 			}
@@ -122,6 +143,9 @@ namespace
 		                       (scenario == Scenario::NullTexture || scenario == Scenario::NullOuterThenNested);
 		if (a_this != &nativeInstance || a_texture != (nullOuter ? nullptr : &texture))
 			throw std::runtime_error("Native submit did not receive the original instance and raw texture");
+		const bool expectNeuralBoundary = nativeDepth == 1 && a_texture && globals::features::upscaling.neuralEnabled;
+		if ((g_neuralSubmitPairBoundaryToken != 0) != expectNeuralBoundary)
+			throw std::runtime_error("NR token escaped its enabled non-nested native scope");
 		if (scenario == Scenario::ThrowingNative ||
 			(scenario == Scenario::NestedThrowThenComplete && nativeDepth == 2))
 			throw NativeFailure();
@@ -132,6 +156,7 @@ namespace
 			(scenario == Scenario::DeepNestedThenComplete && nativeDepth < 3)) {
 			const auto savedBoundary = g_vrSubmitPairBoundaryState;
 			const auto savedCompletion = g_vrRelatchPairCompletion;
+			const auto savedNeuralBoundary = g_neuralSubmitPairBoundaryToken;
 			bool caught = false;
 			try {
 				BSOpenVR_Submit::thunk(&nativeInstance, &texture);
@@ -141,6 +166,7 @@ namespace
 				caught = true;
 			}
 			if (caught != (scenario == Scenario::NestedThrowThenComplete) ||
+				g_neuralSubmitPairBoundaryToken != savedNeuralBoundary ||
 				g_vrSubmitPairBoundaryState.active != savedBoundary.active ||
 				g_vrSubmitPairBoundaryState.token != savedBoundary.token ||
 				g_vrRelatchPairCompletion.identity.token != savedCompletion.identity.token ||
@@ -179,7 +205,8 @@ namespace
 			scenario = sample;
 			g_vrSubmitPairBoundaryState = {};
 			g_vrRelatchPairCompletion = {};
-			globals::features::upscaling.calls = 0;
+			globals::features::upscaling = {};
+			g_neuralSubmitPairBoundaryToken = 700;
 			globals::state->frameCount = 100;
 			g_openVRSubmitCycleState = 20;
 			observedThread = 1;
@@ -192,6 +219,11 @@ namespace
 				"Native callback service did not match the exact completed, unchanged outer stereo owner");
 			Require(!g_vrSubmitPairBoundaryState.active && g_vrRelatchPairCompletion.identity.token == 0 && nativeDepth == 0,
 				"Native submit failed to restore the previous boundary state");
+			const auto& nr = globals::features::upscaling;
+			const bool hasTexture = sample != Scenario::NullTexture && sample != Scenario::NullOuterThenNested;
+			Require(nr.neuralBegins == (hasTexture ? 1u : 0u) && nr.neuralEnds == nr.neuralBegins &&
+						!nr.invalidNeuralEnd && nr.activeNeuralBoundary == 0 && g_neuralSubmitPairBoundaryToken == 700,
+				"NR did not release and restore exactly one outer pair scope");
 		}
 	}
 
@@ -200,7 +232,8 @@ namespace
 		scenario = Scenario::ThrowingNative;
 		g_vrSubmitPairBoundaryState = {};
 		g_vrRelatchPairCompletion = {};
-		globals::features::upscaling.calls = 0;
+		globals::features::upscaling = {};
+		g_neuralSubmitPairBoundaryToken = 700;
 		bool caught = false;
 		try {
 			BSOpenVR_Submit::thunk(&nativeInstance, &texture);
@@ -211,6 +244,26 @@ namespace
 					!g_vrSubmitPairBoundaryState.active && g_vrSubmitPairBoundaryState.token == 0 &&
 					g_vrRelatchPairCompletion.identity.token == 0 && g_vrRelatchPairCompletion.completedEyeMask == 0,
 			"A throwing native call leaked its boundary ownership");
+		const auto& nr = globals::features::upscaling;
+		Require(nr.neuralBegins == 1 && nr.neuralEnds == 1 && !nr.invalidNeuralEnd &&
+					nr.activeNeuralBoundary == 0 && g_neuralSubmitPairBoundaryToken == 700,
+			"A throwing native call leaked its NR ownership");
+	}
+
+	void DisabledNeuralPreservesNativePair()
+	{
+		scenario = Scenario::Complete;
+		g_vrSubmitPairBoundaryState = {};
+		g_vrRelatchPairCompletion = {};
+		globals::features::upscaling = {};
+		globals::features::upscaling.neuralEnabled = false;
+		g_neuralSubmitPairBoundaryToken = 700;
+		returnedEyes = 0;
+		BSOpenVR_Submit::thunk(&nativeInstance, &texture);
+		const auto& nr = globals::features::upscaling;
+		Require(nr.calls == 1 && nr.neuralBegins == 0 && nr.neuralEnds == 0 &&
+					g_neuralSubmitPairBoundaryToken == 700,
+			"Disabled NR changed native pair service or created NR boundary work");
 	}
 }
 
@@ -220,6 +273,7 @@ int main()
 	try {
 		NativeFailureClearsOwnership();
 		NativePairOwnsOnePostReturnService();
+		DisabledNeuralPreservesNativePair();
 	} catch (const std::exception& error) {
 		std::fprintf(stderr, "%s\n", error.what());
 		return 1;

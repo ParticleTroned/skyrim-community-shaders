@@ -22,6 +22,7 @@
 #include "Features/LODBlending.h"
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
+#include "Features/NeuralRenderingFeature.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
@@ -170,6 +171,20 @@ void Feature::Load(json& o_json)
 	} else {
 		// No errors, load settings now
 		if (HasFeatureSettings()) {
+			if (GetShortName() == "NeuralRendering" && !o_json.contains(GetName())) {
+				json rendering = json::object();
+				if (const auto legacy = o_json.find("Upscaling"); legacy != o_json.end() && legacy->is_object()) {
+					for (const auto& [key, value] : legacy->items())
+						if (key.starts_with("neural"))
+							rendering[key] = value;
+				}
+				for (const auto* key : { "neuralCharacterMultiRoiEnabled", "neuralCharacterMultiRoiSavingsGateEnabled",
+						 "neuralCharacterDebugView", "neuralCharacterMaskTestMode" })
+					rendering.erase(key);
+				if (!rendering.empty() || o_json.contains("Neural Rendering Colour"))
+					o_json[GetName()] = { { "schemaVersion", 1 }, { "rendering", std::move(rendering) },
+						{ "colour", o_json.value("Neural Rendering Colour", json::object()) } };
+			}
 			if (o_json[GetName()].is_structured()) {
 				logger::info("Loading {} settings", GetName());
 				try {
@@ -278,6 +293,7 @@ namespace
 			&globals::features::ibl,
 			&globals::features::extendedTranslucency,
 			&globals::features::upscaling,
+			&NeuralRenderingFeature::Instance(),
 			&globals::features::renderDoc,
 			&globals::features::csEditor,
 			&globals::features::weatherPicker,

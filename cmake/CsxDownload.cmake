@@ -46,6 +46,8 @@ function(csx_download_verified_asset URL DESTINATION EXPECTED_SHA256)
         EXPECTED_HASH "SHA256=${EXPECTED_SHA256}"
         STATUS _download_status
         TLS_VERIFY ON
+        TIMEOUT 600
+        INACTIVITY_TIMEOUT 60
     )
     list(GET _download_status 0 _status_code)
     list(GET _download_status 1 _status_message)

@@ -181,6 +181,8 @@ public:
 	static constexpr uint32_t kSaveMutationBlockGraceFrames = 60;
 
 	bool IsSaveLoadSafeModeActive() const;
+	/** Returns whether actual world replacement or its completion grace is active. */
+	bool IsWorldLoadTransitionActive() const;
 	// Current engine-owned save/load work only. Unlike IsSaveLoadSafeModeActive,
 	// this excludes the fixed post-event grace used for mutation/persistence safety.
 	bool IsEngineSaveLoadActivityActive() const;
@@ -191,6 +193,7 @@ public:
 	void NotifyOrdinarySave(uint32_t a_currentFrame);
 	void BeginSaveLoadSafeMode(uint32_t a_currentFrame);
 	void ExtendSaveLoadSafeMode(uint32_t a_currentFrame, uint32_t a_frameCount = kSaveLoadSafeModeGraceFrames);
+	void ExtendSaveGamePersistenceSafeMode(uint32_t a_currentFrame, uint32_t a_frameCount = kSaveLoadSafeModeGraceFrames);
 	void BeginPersistentMutationBlock(uint32_t a_currentFrame, uint32_t a_frameCount = kSaveMutationBlockGraceFrames);
 	void ExtendPersistentMutationBlock(uint32_t a_currentFrame, uint32_t a_frameCount = kSaveMutationBlockGraceFrames);
 	void UpdateSaveLoadSafeMode();
@@ -336,7 +339,12 @@ public:
 		GrassSphereNormal = 1 << 5,
 		IsFemale = 1 << 6,
 		SuppressExternalEmittance = 1 << 7,
-		AdditiveLighting = 1 << 8
+		AdditiveLighting = 1 << 8,
+		CharacterCategoryMask = 0b11 << 9,
+		CharacterExcluded = 1 << 11,
+		CharacterFace = 0b01 << 9,
+		CharacterSkin = 0b10 << 9,
+		CharacterHair = 0b11 << 9
 	};
 
 	enum class ExtraFeatureDescriptors : uint32_t
@@ -359,6 +367,11 @@ public:
 	std::atomic_bool engineSaveLoadActivityActive{ false };
 	std::atomic_uint32_t saveLoadSafeModeStartFrame{ 0 };
 	std::atomic_uint32_t saveLoadSafeModeEndFrame{ 0 };
+	// The save/load mutex also serializes world-transition expiry with callbacks.
+	// Save-only events retain their persistence grace without replacing the world.
+	std::atomic_bool worldLoadTransitionActive{ false };
+	std::atomic_uint32_t worldLoadTransitionStartFrame{ 0 };
+	std::atomic_uint32_t worldLoadTransitionEndFrame{ 0 };
 	std::atomic_bool persistentMutationBlocked{ false };
 	std::atomic_uint32_t persistentMutationBlockEndFrame{ 0 };
 	bool activeReflections = false;

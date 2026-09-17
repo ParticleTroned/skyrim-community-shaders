@@ -28,6 +28,13 @@
 
 ## Quick Links
 
+### Experimental rendering
+
+-   **[Neural Rendering port](./main-vr-nr-implementation.md)** - separate feature, route variants, integration findings and validation for `main-vr-nr`
+-   **[DLSS Neural Rendering experiments](./dlss-neural-rendering-experiments.md)** - Feature 18 capability and integration findings
+-   **[DLSS 5 character Neural Rendering](./dlss5-character-neural-rendering.md)** - character-mask architecture, private API boundary, and validation plan
+-   **[NR colour HMD assessment](./nr-colour-hmd-assessment.md)** - automated per-eye image review, distinct baselines, regional measurements and blinding
+
 ### Common Tasks
 
 -   **One-time developer setup:** `pwsh ./tools/setup-dev.ps1`

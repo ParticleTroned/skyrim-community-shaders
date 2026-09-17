@@ -1,6 +1,8 @@
 #include "Hooks.h"
 #include "Api/AcceptedDrawService.h"
 
+#include "Utils/CharacterCategoryAuthoring.h"
+
 #include "ShaderTools/BSShaderHooks.h"
 #include "Utils/D3DContextProtection.h"
 #include "Utils/ExternalEmittance.h"
@@ -28,6 +30,7 @@
 #include "Features/TerrainHelper.h"
 #include "Features/UnifiedWater.h"
 #include "Features/Upscaling.h"
+#include "Features/Upscaling/NeuralRendering/ExposureCapture.h"
 #include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
 
@@ -743,6 +746,9 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 			*globals::game::currentPixelShader = pixelShader;
 			if (pixelShader)
 				globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
+			NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(
+				globals::d3d::context, shader, pixelShader,
+				pixelShader ? reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader) : nullptr);
 			state->settingCustomShader = false;
 			shaderFound = true;
 		}
@@ -798,6 +804,7 @@ namespace LightingExtensions
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
 			globals::state->UpdateLightingShaderPermutation(pass);
+			CharacterCategoryAuthoring::Update(pass);
 
 			if (globals::game::isVR)
 				CSX::Api::BeginAcceptedDrawGeometry(pass);
@@ -998,6 +1005,7 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 		func(isCompute);
 		globals::features::terrainBlending.OnSetDirtyStates(isCompute, callerRva);
 		globals::state->Draw();
+		NeuralRendering::Color::ExposureCapture::Instance().ObserveGraphicsStateFlush(globals::d3d::context, isCompute);
 		return;
 	}
 
@@ -1019,7 +1027,8 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 	globals::state->Draw();
 	phaseEndTicks = ReadFrameDiagCounterTicks();
 	RecordCSFrameHookPhase(CSFrameHookPhase::StateDraw, frame, phaseEndTicks - phaseStartTicks);
-	RecordCSFrameHookPhase(CSFrameHookPhase::SetDirtyStatesTotal, frame, phaseEndTicks - totalStartTicks);
+	NeuralRendering::Color::ExposureCapture::Instance().ObserveGraphicsStateFlush(globals::d3d::context, isCompute);
+	RecordCSFrameHookPhase(CSFrameHookPhase::SetDirtyStatesTotal, frame, ReadFrameDiagCounterTicks() - totalStartTicks);
 }
 
 struct ID3D11Device_CreateVertexShader
@@ -1517,6 +1526,9 @@ namespace Hooks
 							if (pixelShader) {
 								globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
 								*globals::game::currentPixelShader = a_pixelShader;
+								NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(
+									globals::d3d::context, currentShader, a_pixelShader,
+									reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader));
 								return;
 							}
 						}
@@ -1528,6 +1540,9 @@ namespace Hooks
 
 			if (a_pixelShader)
 				globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(a_pixelShader->shader), NULL, NULL);
+			NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(
+				globals::d3d::context, state->currentShader, a_pixelShader,
+				a_pixelShader ? reinterpret_cast<ID3D11PixelShader*>(a_pixelShader->shader) : nullptr);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};

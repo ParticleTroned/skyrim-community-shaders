@@ -45,9 +45,14 @@ namespace RE
 		constexpr int DIRTY_RENDERTARGET = 1;
 	}
 }
+constexpr uint32_t MASKS2 = 0;
+struct Device
+{};
 struct Renderer
 {
 	std::array<DepthStencil, 2> depthStencils;
+	std::array<DepthStencil, 1> renderTargets{};
+	Renderer& GetRuntimeData() { return *this; }
 	Renderer& GetDepthStencilData() { return *this; }
 };
 struct Context
@@ -61,6 +66,57 @@ struct Context
 	}
 	void OMSetRenderTargets(int, void*, void*) { ++unbinds; }
 };
+struct Upscaling
+{
+	bool characters = false;
+	bool dimensionsAvailable = true;
+	struct
+	{
+		float x = 0.25f, y = -0.5f;
+	} jitter;
+	bool IsCharacterNeuralRenderingRouteRequested() const { return characters; }
+	uint32_t GetCharacterNeuralRenderingCategoryMask() const { return 7; }
+	bool GetRuntimeFoveatedRegionDimensions(uint32_t& iw, uint32_t& ih, uint32_t& ow, uint32_t& oh) const
+	{
+		iw = 64;
+		ih = 48;
+		ow = 128;
+		oh = 96;
+		return dimensionsAvailable;
+	}
+};
+namespace NeuralRendering
+{
+	struct CharacterRendering
+	{
+		int captures = 0;
+		Texture* categories = nullptr;
+		ID3D11ShaderResourceView* depth = nullptr;
+		uint32_t width = 0, height = 0, frame = 0, mask = 0;
+		float jitterX = 0, jitterY = 0;
+		std::function<void()> observe = [] {};
+		static CharacterRendering& Instance()
+		{
+			static CharacterRendering instance;
+			return instance;
+		}
+		bool CaptureAuthoredCategories(Device*, Context*, Texture* source, ID3D11ShaderResourceView* depthSource,
+			uint32_t w, uint32_t h, uint32_t f, uint32_t m, float x, float y)
+		{
+			++captures;
+			categories = source;
+			depth = depthSource;
+			width = w;
+			height = h;
+			frame = f;
+			mask = m;
+			jitterX = x;
+			jitterY = y;
+			observe();
+			return true;
+		}
+	};
+}
 struct State
 {
 	uint32_t frameCount = 1;
@@ -131,10 +187,12 @@ namespace globals
 	namespace d3d
 	{
 		inline Context* context;
+		inline Device* device;
 	}
 	namespace features
 	{
 		inline TerrainBlending terrainBlending;
+		inline Upscaling upscaling;
 	}
 }
 struct Feature
@@ -161,7 +219,8 @@ void Check(bool condition, const char* message)
 
 struct Fixture
 {
-	Texture main{ 42 }, copy{ 7 };
+	Texture main{ 42 }, copy{ 7 }, categories{ 5 };
+	Device device;
 	ID3D11ShaderResourceView mainSrv, copySrv, blendSrv, blend16Srv, alternateSrv;
 	BlendedTexture blend{ { &blendSrv } }, blend16{ { &blend16Srv } };
 	Renderer renderer{ { DepthStencil{ &main, &mainSrv }, DepthStencil{ &copy, &copySrv } } };
@@ -178,6 +237,10 @@ struct Fixture
 		globals::game::renderer = &renderer;
 		globals::game::stateUpdateFlags = &flags;
 		globals::d3d::context = &context;
+		globals::d3d::device = &device;
+		globals::features::upscaling = {};
+		NeuralRendering::CharacterRendering::Instance() = {};
+		renderer.renderTargets[MASKS2].texture = &categories;
 		globals::features::terrainBlending = {};
 		auto& terrain = globals::features::terrainBlending;
 		terrain.blendedDepthTexture = &blend;
@@ -316,6 +379,44 @@ void TestUnavailableResources()
 	}
 }
 
+void TestCharacterCaptureOrderingAndAdmission()
+{
+	for (int blocked = 0; blocked < 7; ++blocked) {
+		Fixture f;
+		f.Start();
+		globals::features::upscaling.characters = blocked != 1;
+		if (blocked == 2)
+			f.shaderCache.enabled = false;
+		if (blocked == 3)
+			f.state.inWorld = false;
+		if (blocked == 4)
+			f.deferred.deferredPass = false;
+		if (blocked == 5)
+			globals::d3d::device = nullptr;
+		if (blocked == 6)
+			globals::features::upscaling.dimensionsAvailable = false;
+		globals::features::terrainBlending.render = [&] { f.main.content = 60; };
+		bool decalsRan = false, deferredEnded = false;
+		auto& capture = NeuralRendering::CharacterRendering::Instance();
+		capture.observe = [&] {
+			Check(f.main.content == 60 && !decalsRan && !deferredEnded,
+				"Authored categories must be captured after terrain and before decals/composite");
+		};
+		Deferred::Hooks::Main_RenderWorld_BlendedDecals::func = [&](auto...) { decalsRan = true; };
+		f.deferred.end = [&] { deferredEnded = true; };
+		f.Decals();
+		Check(capture.captures == (blocked == 0 ? 1 : 0), "Character capture admission ignored a required producer/resource gate");
+		Check(f.context.copies == 1 && f.deferred.IsSceneDepthFinal(), "Character capture must preserve final scene depth publication");
+		if (blocked == 0) {
+			Check(capture.categories == &f.categories && capture.depth == &f.mainSrv,
+				"Character capture must consume authored masks and current main depth");
+			Check(capture.width == 64 && capture.height == 48 && capture.frame == f.state.frameCount &&
+					  capture.mask == 7 && capture.jitterX == 0.25f && capture.jitterY == -0.5f,
+				"Character capture lost its frame, extent, category, or jitter identity");
+		}
+	}
+}
+
 int main()
 {
 	try {
@@ -324,6 +425,7 @@ int main()
 		TestFallbacks();
 		TestRedirection();
 		TestUnavailableResources();
+		TestCharacterCaptureOrderingAndAdmission();
 		std::cout << "Scene depth: source selection, invalidation, fallback ordering, restoration and missing resources passed\n";
 		return 0;
 	} catch (const std::exception& error) {

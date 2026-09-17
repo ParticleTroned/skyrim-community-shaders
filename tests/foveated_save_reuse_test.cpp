@@ -87,6 +87,8 @@ namespace
 	uint32_t shaderRequests = 0;
 	uint32_t packetInvalidations = 0;
 	uint32_t historyDestructions = 0;
+	uint32_t neuralResets = 0;
+	uint32_t unsafeAbandons = 0;
 
 	void Require(bool condition)
 	{
@@ -97,8 +99,27 @@ namespace
 	auto Counters()
 	{
 		return std::array{ textureCreations, textureDestructions, viewCreations,
-			bufferCreations, shaderRequests, packetInvalidations, historyDestructions };
+			bufferCreations, shaderRequests, packetInvalidations, historyDestructions,
+			neuralResets, unsafeAbandons };
 	}
+}
+
+namespace NeuralRendering
+{
+	struct Renderer
+	{
+		bool resetSafe = true;
+		static Renderer& Instance()
+		{
+			static Renderer renderer;
+			return renderer;
+		}
+		bool Reset()
+		{
+			++neuralResets;
+			return resetSafe;
+		}
+	};
 }
 
 struct Texture2D
@@ -258,11 +279,12 @@ public:
 	{}
 	void MarkSubmitStageDeviceLostIfDeviceRemoved(const char*) {}
 	void DestroyPeripheryTAAResources() { ++historyDestructions; }
-	auto CreateTextureFromSource(ID3D11Resource* source, uint32_t width, uint32_t height, bool, bool, bool, const char*, bool)
+	void AbandonFoveatedResourcesUnsafe() { ++unsafeAbandons; }
+	auto CreateTextureFromSource(ID3D11Resource*, uint32_t width, uint32_t height, bool, bool, bool, const char*, bool, bool, DXGI_FORMAT format)
 	{
-		return MakeTexture(width, height, source->desc.Format);
+		return MakeTexture(width, height, format);
 	}
-	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>&, ID3D11Resource*, uint32_t, uint32_t, bool, bool, bool, bool, const char*);
+	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>&, ID3D11Resource*, uint32_t, uint32_t, bool, bool, bool, bool, const char*, DXGI_FORMAT = DXGI_FORMAT_UNKNOWN);
 	bool EnsureFoveatedDispatchShaders(bool, bool, const char*, const char*);
 	bool EnsurePeripheryTAAResources(uint32_t, uint32_t, ID3D11Resource*);
 	bool EnsurePeripheryTAATileBuffer(uint32_t, uint32_t);
@@ -313,6 +335,15 @@ namespace
 		std::unique_ptr<Texture2D> texture;
 		Require(upscaling.EnsureFoveatedTexture(texture, &source, 100, 80, false, true, true, true, "test"));
 		Require(texture != nullptr);
+		NeuralRendering::Renderer::Instance().resetSafe = false;
+		const auto* identity = texture.get();
+		const auto creations = textureCreations;
+		Require(!upscaling.EnsureFoveatedTexture(texture, &source, 50, 40, false, true, true, true, "unsafe"));
+		Require(texture.get() == identity && textureCreations == creations);
+		Require(unsafeAbandons == 1);
+		NeuralRendering::Renderer::Instance().resetSafe = true;
+		Require(upscaling.EnsureFoveatedTexture(texture, &source, 100, 80, false, true, true, true, "format", 9));
+		Require(texture->desc.Format == 9);
 	}
 
 	void TestShaders()

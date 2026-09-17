@@ -1,0 +1,89 @@
+{
+    "pid": 31920,
+    "context": "0x247a73a3100",
+    "vtable": "0x247a73a3108",
+    "methods": {
+        "Map": {
+            "active": {
+                "address": "0x7fffa6b65ff0",
+                "module": "d3d11.dll",
+                "rva": "0x175ff0",
+                "bytes": "48895c241048896c2418565741564883ec40488d9940ffffff488bfa488bf148"
+            },
+            "startupTarget": {
+                "address": "0x7fffa6b1c360",
+                "module": "d3d11.dll",
+                "rva": "0x12c360",
+                "bytes": "e9733eeebfcccccccc4c8d1db0570a00480fbe82b10000004881c140ffffff4c"
+            },
+            "trampoline": {
+                "address": "0x7fff66a00180",
+                "module": null,
+                "rva": null,
+                "bytes": "4883ec484c8b542478ff2539000000cccccccccccccccccccccccccccccc09cc"
+            },
+            "trampoline128": "4883ec484c8b542478ff2539000000cccccccccccccccccccccccccccccc09cc4883ec484c8b542478cccccccccccccccccccccccccccccccccccccccccc09cc244900000000000069c3b1a6ff7f0000908da762ff7f0000ff25f2ffffffcccc480fbe82b1000000ff253a000000cccccccccccccccccccccccccccccccc08cc",
+            "thunk": {
+                "address": "0x7fff62a78d90",
+                "module": "CommunityShaders.dll",
+                "rva": "0x188d90",
+                "bytes": "48895c2408574883ec308b442460488bfa488b5c24684c8b1573465f0148895c"
+            }
+        },
+        "Unmap": {
+            "active": {
+                "address": "0x7fffa6b95a30",
+                "module": "d3d11.dll",
+                "rva": "0x1a5a30",
+                "bytes": "488bc4488958104889681848897020574883ec20488da940ffffff488bda488b"
+            },
+            "startupTarget": {
+                "address": "0x7fffa6b1c5f0",
+                "module": "d3d11.dll",
+                "rva": "0x12c5f0",
+                "bytes": "e9433ceebfcccccc4c8d0d41560a004881c140ffffff498b04c148ff25475b0b"
+            },
+            "trampoline": {
+                "address": "0x7fff66a001e0",
+                "module": null,
+                "rva": null,
+                "bytes": "480fbe82b1000000ff253a000000cccccccccccccccccccccccccccccccc08cc"
+            },
+            "trampoline128": "480fbe82b1000000ff253a000000cccccccccccccccccccccccccccccccc08cc480fbe82b1000000cccccccccccccccccccccccccccccccccccccccccccc08cc4000000000000000f8c5b1a6ff7f0000e08da762ff7f0000ff25f2ffffffcccc4883ec38488b81f0040000ff2537000000cccccccccccccccccccccccccc0bcc",
+            "thunk": {
+                "address": "0x7fff62a78de0",
+                "module": "CommunityShaders.dll",
+                "rva": "0x188de0",
+                "bytes": "48894c24085355565741544155415641574883ec28458be04c8bfa4c8be9488b"
+            }
+        },
+        "DrawIndexed": {
+            "active": {
+                "address": "0x7fffa6b574e0",
+                "module": "d3d11.dll",
+                "rva": "0x1674e0",
+                "bytes": "48895c241048896c2418565741564883ec30488d9940ffffff8bea4c8bf1488b"
+            },
+            "startupTarget": {
+                "address": "0x7fffa6b1dc30",
+                "module": "d3d11.dll",
+                "rva": "0x12dc30",
+                "bytes": "e96326eebfcccccccccccc4881c1309e0000ff1510450b004883c438c3cccccc"
+            },
+            "trampoline": {
+                "address": "0x7fff66a00240",
+                "module": null,
+                "rva": null,
+                "bytes": "4883ec38488b81f0040000ff2537000000cccccccccccccccccccccccccc0bcc"
+            },
+            "trampoline128": "4883ec38488b81f0040000ff2537000000cccccccccccccccccccccccccc0bcc4883ec38488b81f0040000cccccccccccccccccccccccccccccccccccccc0bcc245b0000000000003bdcb1a6ff7f0000a090a762ff7f0000ff25f2ffffffcccc488b81f8040000ff253b000000cccccccccccccccccccccccccccccccccc07cc",
+            "thunk": {
+                "address": "0x7fff62a790a0",
+                "module": "CommunityShaders.dll",
+                "rva": "0x1890a0",
+                "bytes": "488bc4448948204489401889501048894808555356574154415541564157488d"
+            }
+        }
+    },
+    "perFrameReferences": []
+}

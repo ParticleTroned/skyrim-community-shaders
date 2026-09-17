@@ -1,0 +1,37 @@
+{
+    "schema": "csx-nr-measurement-archive-audit-v1",
+    "passed": true,
+    "checkedPayloadRecords": 2907,
+    "checkedValueLeaves": 3029113,
+    "sourceBytesAndSHA256Verified": true,
+    "allEmittedValuesMatchOriginals": false,
+    "preservesFalseZeroNullEmpty": true,
+    "allSelectedStructuredAndTextSourcesAccountedFor": true,
+    "eachArchiveBelow100MiB": true,
+    "rawImagesRecapturedOrModified": false,
+    "gameOrBuildStarted": false,
+    "exporterSHA256": "473d8e16887ef8909bbb9d6af6042344490153efca5a7d28e2ae1b20143a8a4f",
+    "indexSHA256": "7302d197ddcc7ffdf4769dfddce667d4f50fd764cdebf1f8a7379ccaabbcdcfd",
+    "finalSourceAndInventoryAudit": true,
+    "relativeReportLinksVerified": true,
+    "formats": {
+        "complete-text": 195,
+        "complete-json": 2639,
+        "recording-metadata-and-events": 72,
+        "unparsed-json-text": 1
+    },
+    "unparsedSourceFiles": [
+        "build/validation/nr-colour-followup-20260916T214643Z/live-sequences.json"
+    ],
+    "supportingInspectionRecordsVerified": 1,
+    "originalExportAudit": "Source equality and source hash checks describe the original export before privacy redaction.",
+    "privacyRedactionAudit": {
+        "passed": true,
+        "changedRecords": 79,
+        "removedPathOccurrences": 79,
+        "onlyLocalNrDllPathBytesChangedInPayloads": true,
+        "remainingMatchingPaths": 0,
+        "allShardHashesAndSizesVerified": true,
+        "allPayloadRecordsParsed": 2907
+    }
+}

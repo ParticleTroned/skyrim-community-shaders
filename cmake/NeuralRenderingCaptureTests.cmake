@@ -6,12 +6,14 @@ function(csx_add_neural_rendering_capture_tests repository_root register_test)
         screenshot_neural_diagnostics_test
         neural_rendering_request_test
         neural_feature_settings_test
+        neural_settings_key_test
     )
     set(test_names
         ScreenshotNeuralEvidence
         ScreenshotNeuralDiagnostics
         NeuralRenderingRequest
         NeuralFeatureSettings
+        NeuralSettingsKey
     )
     foreach(target test_name IN ZIP_LISTS targets test_names)
         cmake_language(CALL ${register_test}
@@ -24,7 +26,7 @@ function(csx_add_neural_rendering_capture_tests repository_root register_test)
     target_sources(screenshot_neural_diagnostics_test PRIVATE
         "${repository_root}/src/Features/ScreenshotNeuralDiagnostics.cpp")
 
-    foreach(kind IN ITEMS neural_rendering_request neural_feature_settings)
+    foreach(kind IN ITEMS neural_rendering_request neural_feature_settings neural_settings_key)
         set(output_directory "${CMAKE_CURRENT_BINARY_DIR}/generated/${kind}")
         set(extractor "${repository_root}/tests/extract_${kind}.cmake")
         execute_process(COMMAND "${CMAKE_COMMAND}"
@@ -36,5 +38,7 @@ function(csx_add_neural_rendering_capture_tests repository_root register_test)
     endforeach()
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         "${repository_root}/src/Features/Upscaling/VRRenderScaleDevBenchBridge.cpp"
-        "${repository_root}/src/Features/NeuralRenderingFeature.cpp")
+        "${repository_root}/src/Features/NeuralRenderingFeature.cpp"
+        "${repository_root}/src/Features/Upscaling.cpp"
+        "${repository_root}/src/Features/Upscaling.h")
 endfunction()

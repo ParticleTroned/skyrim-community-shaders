@@ -6645,8 +6645,9 @@ namespace
 		if (!enabled)
 			return hash;
 
-		const auto insertionPoint = NeuralRendering::ClampInsertionPoint(
-			a_settings.neuralRenderingInsertionPoint);
+		const auto mode = NeuralRendering::ClampRenderingMode(a_settings.neuralRenderingMode);
+		const auto insertionPoint = NeuralRendering::ResolveInsertionPoint(
+			mode, a_settings.neuralRenderingInsertionPoint);
 		add(static_cast<uint64_t>(insertionPoint));
 		add(a_settings.neuralRenderingBatchedStereo);
 		add(a_settings.neuralRenderingDirectCommit);
@@ -6688,14 +6689,12 @@ namespace
 
 		const bool foveatedRequested = a_settings.foveatedVendorDispatch;
 		add(foveatedRequested);
-		if (!foveatedRequested)
+		if (!foveatedRequested && mode != NeuralRendering::RenderingMode::Foveated && !a_settings.neuralRenderingFovOnly)
 			return hash;
 
 		const bool visualizeMask =
 			a_settings.foveatedPeripheryMaskVisualization;
 		add(visualizeMask);
-		if (visualizeMask)
-			return hash;
 
 		add(ClampFoveatedReconstructionGuardBandPixels(
 			a_settings.foveatedReconstructionGuardBandPixels));

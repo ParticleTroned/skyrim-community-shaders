@@ -45060,14 +45060,16 @@ void Upscaling::PrepareMainFullResolutionNeuralFrame() noexcept
 		GetNeuralRenderingMode() != NeuralRendering::RenderingMode::FullResolution ||
 		IsPresentationUpscalingActive())
 		return;
-	if (mainFinalLdrNeuralState.ready && mainFinalLdrNeuralState.frame == globals::state->frameCount)
+	if (mainFullResolutionNeuralPreparationFrame == globals::state->frameCount)
 		return;
+	mainFullResolutionNeuralPreparationFrame = globals::state->frameCount;
 	mainFinalLdrNeuralState = {};
 	try {
 		const bool menuBlocked = IsNeuralRenderingHardMenuBlocked(*this, globals::state);
 		const auto admission = BuildNeuralTemporalAdmission(NeuralStereoRouteRole::Main, menuBlocked, !menuBlocked);
 		uint32_t inputWidth = 0, inputHeight = 0, outputWidth = 0, outputHeight = 0;
-		if (!admission.admitted || IsNeuralRenderingInsertionTransitionBlocked() ||
+		if (!admission.admitted || admission.sourceWorldFrame != globals::state->frameCount ||
+			IsNeuralRenderingInsertionTransitionBlocked() ||
 			settings.frameGenerationMode != 0 || IsFrameGenerationDx12PathActive() ||
 			!GetRuntimeFoveatedRegionDimensions(inputWidth, inputHeight, outputWidth, outputHeight) ||
 			!PrepareFullResolutionNeuralInputs(inputWidth, inputHeight, outputWidth, outputHeight))
@@ -45098,7 +45100,6 @@ void Upscaling::PrepareMainFullResolutionNeuralFrame() noexcept
 
 void Upscaling::ApplyMainFinalLdrNeuralStereo() noexcept
 {
-	PrepareMainFullResolutionNeuralFrame();
 	if (!globals::state || !IsNeuralRenderingRequested() || !mainFinalLdrNeuralState.ready)
 		return;
 
@@ -66171,8 +66172,10 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	// OCU ASW.
 	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA) {
 		upscaling.PerformUpscaling();
-	} else if (globals::game::isVR) {
-		upscaling.UpscaleDepth();
+	} else {
+		upscaling.PrepareMainFullResolutionNeuralFrame();
+		if (globals::game::isVR)
+			upscaling.UpscaleDepth();
 	}
 
 	if (upscaleMethod == UpscaleMethod::kDLSS)

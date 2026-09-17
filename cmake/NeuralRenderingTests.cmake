@@ -16,6 +16,21 @@ foreach(_test IN ITEMS character_settings character_multi_roi character_mask_roi
 endforeach()
 target_link_libraries(character_settings_test PRIVATE nlohmann_json::nlohmann_json)
 
+set(_neural_full_resolution_test_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_full_resolution_test")
+add_custom_command(
+    OUTPUT "${_neural_full_resolution_test_dir}/neural_full_resolution_preparation_under_test.h"
+    COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_neural_full_resolution_test_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_neural_full_resolution_preparation.cmake"
+    DEPENDS src/Features/Upscaling.cpp tests/extract_neural_full_resolution_preparation.cmake
+    VERBATIM
+)
+add_controller_test(neural_full_resolution_preparation_test NeuralFullResolutionPreparation
+    tests/neural_full_resolution_preparation_test.cpp)
+target_sources(neural_full_resolution_preparation_test PRIVATE
+    "${_neural_full_resolution_test_dir}/neural_full_resolution_preparation_under_test.h")
+target_include_directories(neural_full_resolution_preparation_test PRIVATE "${_neural_full_resolution_test_dir}")
+
 foreach(_test IN ITEMS character_mask character_mask_bounds)
     add_executable(${_test}_gpu_test EXCLUDE_FROM_ALL tests/${_test}_gpu_test.cpp)
     target_compile_features(${_test}_gpu_test PRIVATE cxx_std_23)

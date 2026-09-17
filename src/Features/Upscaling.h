@@ -3825,6 +3825,8 @@ public:
 		uint32_t outputHeight = 0;
 		NeuralStereoRouteSnapshot route{};
 	} mainFinalLdrNeuralState{};
+	// A failed or consumed preparation cannot be retried after scene/UI mutations.
+	uint32_t mainFullResolutionNeuralPreparationFrame = std::numeric_limits<uint32_t>::max();
 	struct MainFinalLdrPresentationState
 	{
 		bool hmdMaskRepairReady = false;

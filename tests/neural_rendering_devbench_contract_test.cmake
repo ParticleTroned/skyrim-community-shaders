@@ -285,7 +285,9 @@ foreach(_render_scale_preference_contract IN ITEMS
 endforeach()
 
 foreach(_selection_composite_contract IN ITEMS
-    [[CharacterMask.SampleLevel(LinearSampler, centerUV, 0)]]
+    [[CharacterMask.Load(sourcePos)]]
+    [[BaselineCenterColor.Load(sourcePos)]]
+    [[CenterColor.Load(sourcePos)]]
     [[centerColor = baselineColor;]]
     [[if (characterWeight > 0.0)]]
     [[centerColor = lerp(baselineColor, neuralColor, characterWeight);]]

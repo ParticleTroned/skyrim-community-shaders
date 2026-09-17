@@ -55,16 +55,16 @@ float4 PrepareFinalLdrModelColor(float4 modelColor, float4 originalColor)
 	float2 centerUV = (float2(localPos) + SourceOffset + 0.5) * InvSourceDim;
 	float4 centerColor = 0.0;
 	if (CharacterSelectionMode != 0) {
-		// Feature 18 uses its normal automatic mask. CSX's authored strength is
-		// authoritative when selecting its output over the normal-DLSS baseline.
-		// Do not even sample the partial Feature 18 output outside that mask.
+		// Character inputs share this integer texel grid. Filtering can pull
+		// unproduced ROI neighbours into an otherwise valid selected texel.
+		int3 sourcePos = int3(localPos + uint2(SourceOffset + 0.5), 0);
 		float characterWeight = 0.0;
 		[branch] if (all(centerUV >= CharacterMaskBounds.xy) && all(centerUV < CharacterMaskBounds.zw))
-			characterWeight = saturate(CharacterMask.SampleLevel(LinearSampler, centerUV, 0));
-		float4 baselineColor = BaselineCenterColor.SampleLevel(LinearSampler, centerUV, 0);
+			characterWeight = saturate(CharacterMask.Load(sourcePos));
+		float4 baselineColor = BaselineCenterColor.Load(sourcePos);
 		centerColor = baselineColor;
 		if (characterWeight > 0.0) {
-			float4 neuralColor = CenterColor.SampleLevel(LinearSampler, centerUV, 0);
+			float4 neuralColor = CenterColor.Load(sourcePos);
 			if (FinalLdrColorMode != 0)
 				neuralColor = PrepareFinalLdrModelColor(neuralColor, originalColor);
 			centerColor = lerp(baselineColor, neuralColor, characterWeight);

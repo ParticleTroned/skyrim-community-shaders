@@ -626,7 +626,11 @@ namespace
 								                                                  baseline[channel] + strength * (neural[channel] - baseline[channel]);
 								Require(std::isfinite(result[y * width * 2 + x][channel]) &&
 											std::abs(result[y * width * 2 + x][channel] - expected) < 0.0002f,
-									"Full-image corners, opposite eye, or reduced ROI baseline changed");
+									"Full-image blend mismatch: eye=" + std::to_string(eye) +
+										" character=" + std::to_string(character) + " finalLdr=" + std::to_string(finalLdr) +
+										" x=" + std::to_string(x) + " y=" + std::to_string(y) + " channel=" + std::to_string(channel) +
+										" mask=" + std::to_string(mask[y * width + x % width]) +
+										" actual=" + std::to_string(result[y * width * 2 + x][channel]) + " expected=" + std::to_string(expected));
 							}
 						}
 					}

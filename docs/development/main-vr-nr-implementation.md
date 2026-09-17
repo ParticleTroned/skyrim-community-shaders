@@ -87,6 +87,13 @@ this change. See the [runtime packaging instructions](../../features/Upscaling/S
 -   Source profiler macros and several presentation interfaces differed
     from the newer target. The port uses target profiling and presentation
     contracts while retaining NR-specific evidence.
+-   An adversarial 9-by-5 GPU case poisoned unused ROI texels with NaN.
+    Bilinear sampling at a selected ROI boundary returned NaN instead of
+    the expected 0.7. Character mask, baseline and candidate inputs share
+    an integer texel grid, so their composite now uses exact texel loads.
+    Ordinary scaled sampling is unchanged. Eight odd-dimension cases and
+    104 final-LDR cases verify coverage, opposite-eye preservation and
+    zero-weight rejection of unproduced candidate pixels.
 
 The [capture notes](main-vr-nr-capture-notes.md),
 [route notes](main-vr-nr-routing-notes.md), and
@@ -139,15 +146,32 @@ disabled. AIO staging is enabled to assemble shaders inside the isolated
 -   The NR capture, evidence, request-parser and persistence tests are also
     registered in the main `controller_tests` target through a shared CMake
     module; the standalone harness uses the same registration.
--   The intermediate universal Release build passed with zero warnings and
-    zero errors. Final framebuffer, effective-UI and capture-fingerprint
-    changes are covered by the subsequent final-build record.
--   The ten optimized VR foveated compute shader variants passed FXC
-    compilation with zero warnings and zero errors.
+-   The universal Release DLL and controller-test build passed, including
+    the final framebuffer, effective-UI and capture-fingerprint changes.
+-   `ctest --test-dir build/ALL -C Release -L ControllerTests -E '^NeuralRenderingRuntimeStaging$' --output-on-failure -j 2`
+    passed all 140 tests after the ROI boundary fix (7.10 seconds).
+    The runtime-staging fixture was already tested separately below.
+-   Full FXC validation passed 3,425 flat and 3,605 VR shader permutations
+    with zero errors and zero new warnings. Each matrix suppressed 696
+    known X1519 warnings using the repository's validation configuration.
+-   After refreshing `prepare_shaders`, the ten optimized VR foveated
+    compute variants passed FXC again after the ROI fix, with zero warnings
+    and zero errors. This matrix includes the modified composite shader.
 -   `python tests/neural_rendering_runtime_test.py` passed the optional
     provider lifecycle, failed-hash transaction, missing-provider and
     outside-build-path rejection scenarios (168.613 seconds while the
     universal build was active).
+
+The full shader commands used `hlslkit-compile`, SDK 10.0.28000 FXC,
+`--shader-dir build/ALL/aio/Shaders`, `--max-warnings 0`,
+`--suppress-warnings X1519` and `--jobs 4`. Their configurations were
+`.github/configs/shader-validation.yaml` and
+`.github/configs/shader-validation-vr.yaml`. Compute validation used
+`.github/configs/runtime-foveated-compute-shaders-vr.yaml`,
+`--shader-dir build/ALL/aio/Shaders/Upscaling`,
+`--extra-includes build/ALL/aio/Shaders`, `--optimization-level 3` and
+`--jobs 2`. Logs and timing reports remain in the isolated worktree's
+`build/ALL/main-vr-nr-*.log` and `build/nr-shader-validation/`.
 
 These checks establish bounded policy, shader and tooling behavior. They
 do not establish physical-HMD image quality, NR provider compatibility or

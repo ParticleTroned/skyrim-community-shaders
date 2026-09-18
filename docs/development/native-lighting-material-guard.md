@@ -57,6 +57,14 @@ and decisions without bringing the warning implementation into its caller.
 This is a code-generation optimization candidate, not a measured frame-time
 saving. It does not remove the material guard's full sampled CPU cost.
 
+`ShouldSkipInvalidVRLightingMaterial` owns the narrow access-violation
+handler around its inlined `ProbeVRLightingMaterial` call. The reader must
+only run inside that protected admission entry. Runtime selection, warning
+logging, feature callbacks and native drawing remain outside the handler.
+This permits one protected admission function instead of an additional
+out-of-line probe call. Snapshot values remain initialized before probing;
+rejection logs use those captured scalars without rereading rejected data.
+
 Admission is never cached by material address. The second immediate hook
 rechecks through the shared draw entry after particle/terrain callbacks
 and between terrain double draws. Deferred terrain replay uses that same
@@ -124,3 +132,99 @@ The universal SE/AE/VR Release DLL and both test groups built successfully.
 The focused test passed; full CTest passed 124/124 with no failed or skipped
 tests in 60.42 seconds. Scoped formatting and diff checks passed. This was
 local build/controller/shader validation, not an in-game performance run.
+
+## Inlined protected admission (2026-09-18)
+
+The matched-pose WPR cohort still observes about 0.048–0.146 ms per recorded
+frame in the material-guard union. That measures the complete sampled
+context, not removable overhead or a promised saving. The original
+baseline lacks an equivalent guard; it is not a material-only control.
+
+Before editing, the verified tested DLL
+`c758beea6c304dedb91d23f8f26868b23d380c8597eb2c016c8a593fd05f5cb6`
+and its PDB were preserved locally. MSVC 14.51 Release disassembly showed
+an outlined 115-byte admission function calling a 260-byte protected
+probe. Successful lighting checks initialized three diagnostic fields and
+updated all three after reading the material.
+
+A rejected local candidate delayed publishing diagnostics until rejection.
+Its generated code spilled extra local state to retain access-violation
+details, so that candidate was discarded. The retained change instead
+moves the unchanged exception filter to the admission owner and explicitly
+inlines the same probe. Ordinary `inline` did not remove the call in the
+Release DLL; `__forceinline` did. The generated admission body is 384 bytes
+and has no outlined probe call. This removes a call boundary, not all
+snapshot stores, and does not reduce total function bytes versus 115+260.
+In-game performance benefit remains unmeasured.
+
+All admission sites, read ordering, pointer predicates, render-target bounds,
+PBR ownership decisions, warning limits and SE/AE bypass behavior remain
+unchanged. There is no material cache, new instrumentation, renderer lock,
+render-scale change or altered callback/replay schedule. The existing
+mutation, protected-page and exception tests exercise production code.
+Additional tests preserve rejection diagnostic values and require a fault
+in warning logging to propagate outside the material-read handler.
+
+Local DLL/PDB copies, symbol addresses, before/after disassembly and build
+logs are under `build/validation/material-guard-hotpath-20260918/`.
+
+Validation completed on the investigation branch:
+
+```powershell
+pwsh ./tools/cmake.ps1 --build --preset CSmain -- /m:1
+pwsh ./tools/cmake.ps1 --build build/ALL --config Release --target controller_tests shader_tests -- /m:1
+ctest --test-dir build/ALL -C Release -N
+ctest --test-dir build/ALL -C Release --output-on-failure --no-tests=error --timeout 300 --output-log build/validation/material-guard-hotpath-20260918/ctest.log
+pwsh ./tools/pre-commit.ps1 run --files src/Hooks.cpp tests/native_lighting_material_guard_test.cpp docs/development/native-lighting-material-guard.md
+pwsh ./tools/git.ps1 diff --check
+```
+
+The universal SE/AE/VR Release DLL and both test groups built. All 124
+CTests passed in 51.28 seconds, with no failures or skipped tests, including
+the material guard and shader tests. Scoped formatting and diff checks
+passed. No in-game assay or deployment was performed.
+
+The inspected candidate has Build ID
+`74b7d64d6da24a442022e2870ab34967eb770dc00a0e1277fbfef6aab1bbf50c`,
+DLL SHA-256
+`f3d3ed6febcde047b3d10216cc6cff7aec09b7eca5a0957807c6cb1e9aa4658e`
+and PDB SHA-256
+`430bbc05a3733b19dc8ffaf37cdb27a4016088d3757024d1c0a6dc380f5d6664`.
+It is an uncommitted working-tree build based on
+`60179f5b5289eaf8d42ffe030425f063edf3c6eb`, with DevBench enabled and Tracy
+disabled; it is not represented as a clean commit or production-off build.
+
+### Adversarial review
+
+The review found no admission-policy defect in this refactor. It checked
+the production caller chain, extracted controller fixtures and Release
+DLL disassembly. No further production change was justified.
+
+| Area         | Review result                                                                                                                                                                                                                          |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Scope        | Only the probe/SEH boundary changes. Native renderer ownership, light lifetime, draw routing, shaders, settings and render scale are unchanged.                                                                                        |
+| Correctness  | Pointer checks, target bounds, incoming-technique PBR ownership and rejection reasons retain their order and decisions. SE/AE still bypass material reads.                                                                             |
+| Robustness   | Only access violations from the protected probe become `Unreadable`. Initialized scalar snapshots survive rejection; warning logging does not dereference rejected objects. Callbacks and native draws remain outside this handler.    |
+| Revalidation | The second hook, terrain double draws and deferred replay retain every existing check. No admission is cached across callbacks or by pointer identity.                                                                                 |
+| DRY          | Target-count and pointer predicates and PBR ownership still use their existing shared implementations. The controller test extracts the production code, including those helpers.                                                      |
+| Performance  | The compiled VR admission path removes one nested probe call. It retains snapshot stores and runtime selection; total guard code grows from 375 to 384 bytes. This does not prove a frame-time saving or SE/AE performance neutrality. |
+
+Review closed an exception-boundary coverage gap: the test now injects a
+runtime-selection access violation and a terrain-callback access
+violation, and checks native access-violation propagation through all
+four draw entrypoints. Together with warning-fault and non-AV probe-fault
+cases, these prevent accidental expansion of the snapshot handler.
+The existing particle callback's separate exception policy is unchanged.
+
+The reviewed production source is byte-identical to the inspected DLL's
+source above. Only controller coverage and this review record changed
+after that build. In-game malformed-material/visual checks and matched
+performance measurements remain pending; controller success does not
+establish CTD resolution or recovered CPU time.
+
+Review validation rebuilt `native_lighting_material_guard_test` and ran
+the focused test, then reran the complete CTest command above with
+`review-ctest.log` as its output log: 124/124 passed in 48.45 seconds,
+with no failed or skipped tests. The focused build and test are recorded
+in `review-focused-build.log` and `review-focused-test.log` beside it.
+Scoped pre-commit and `git diff --check` also passed.

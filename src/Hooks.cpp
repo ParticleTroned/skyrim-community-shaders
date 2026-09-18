@@ -1657,40 +1657,30 @@ namespace Hooks
 		bool indexRead = false;
 	};
 
-	VRLightingMaterialRejection ProbeVRLightingMaterial(RE::BSRenderPass* a_pass, uint32_t a_technique, VRLightingMaterialSnapshot& a_snapshot)
+	__forceinline VRLightingMaterialRejection ProbeVRLightingMaterial(RE::BSRenderPass* a_pass, uint32_t a_technique, VRLightingMaterialSnapshot& a_snapshot)
 	{
-#if defined(_MSC_VER)
-		__try
-#endif
-		{
-			if (!Util::IsLikelyValidPointer(a_pass))
-				return VRLightingMaterialRejection::InvalidPass;
-			if (!Util::IsLikelyValidPointer(a_pass->shader))
-				return VRLightingMaterialRejection::InvalidShader;
-			if (a_pass->shader->shaderType.get() != RE::BSShader::Type::Lighting)
-				return VRLightingMaterialRejection::None;
-			if (!Util::IsLikelyValidPointer(a_pass->shaderProperty))
-				return VRLightingMaterialRejection::InvalidProperty;
+		if (!Util::IsLikelyValidPointer(a_pass))
+			return VRLightingMaterialRejection::InvalidPass;
+		if (!Util::IsLikelyValidPointer(a_pass->shader))
+			return VRLightingMaterialRejection::InvalidShader;
+		if (a_pass->shader->shaderType.get() != RE::BSShader::Type::Lighting)
+			return VRLightingMaterialRejection::None;
+		if (!Util::IsLikelyValidPointer(a_pass->shaderProperty))
+			return VRLightingMaterialRejection::InvalidProperty;
 
-			a_snapshot.material = static_cast<const RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
-			if (!Util::IsLikelyValidPointer(a_snapshot.material))
-				return VRLightingMaterialRejection::InvalidMaterial;
-			a_snapshot.renderTargetIndex = a_snapshot.material->diffuseRenderTargetSourceIndex;
-			a_snapshot.indexRead = true;
-			if (a_snapshot.renderTargetIndex == -1 || Util::IsValidRenderTargetIndex(a_snapshot.renderTargetIndex))
-				return VRLightingMaterialRejection::None;
+		a_snapshot.material = static_cast<const RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
+		if (!Util::IsLikelyValidPointer(a_snapshot.material))
+			return VRLightingMaterialRejection::InvalidMaterial;
+		a_snapshot.renderTargetIndex = a_snapshot.material->diffuseRenderTargetSourceIndex;
+		a_snapshot.indexRead = true;
+		if (a_snapshot.renderTargetIndex == -1 || Util::IsValidRenderTargetIndex(a_snapshot.renderTargetIndex))
+			return VRLightingMaterialRejection::None;
 
-			// The shader's current technique can still belong to the previous draw at admission.
-			if (a_technique >= RE::BSLightingShader::kTechniqueIDBase &&
-				globals::features::truePBR.UsesCustomMaterialSetup(a_technique - RE::BSLightingShader::kTechniqueIDBase))
-				return VRLightingMaterialRejection::None;
-			return VRLightingMaterialRejection::InvalidRenderTarget;
-		}
-#if defined(_MSC_VER)
-		__except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
-			return VRLightingMaterialRejection::Unreadable;
-		}
-#endif
+		// The shader's current technique can still belong to the previous draw at admission.
+		if (a_technique >= RE::BSLightingShader::kTechniqueIDBase &&
+			globals::features::truePBR.UsesCustomMaterialSetup(a_technique - RE::BSLightingShader::kTechniqueIDBase))
+			return VRLightingMaterialRejection::None;
+		return VRLightingMaterialRejection::InvalidRenderTarget;
 	}
 
 	__declspec(noinline) void LogRejectedVRLightingMaterial(RE::BSRenderPass* a_pass, uint32_t a_technique,
@@ -1712,7 +1702,18 @@ namespace Hooks
 			return false;
 
 		VRLightingMaterialSnapshot snapshot;
-		const auto rejection = ProbeVRLightingMaterial(a_pass, a_technique, snapshot);
+		VRLightingMaterialRejection rejection;
+#if defined(_MSC_VER)
+		__try
+#endif
+		{
+			rejection = ProbeVRLightingMaterial(a_pass, a_technique, snapshot);
+		}
+#if defined(_MSC_VER)
+		__except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
+			rejection = VRLightingMaterialRejection::Unreadable;
+		}
+#endif
 		if (rejection == VRLightingMaterialRejection::None)
 			return false;
 

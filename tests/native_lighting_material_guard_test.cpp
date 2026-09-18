@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <barrier>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -20,8 +21,17 @@ namespace
 	int terrainCalls = 0;
 	int interiorCalls = 0;
 	std::atomic<int> warnings = 0;
+	struct WarningSnapshot
+	{
+		std::uintptr_t material = 0;
+		int32_t index = -1;
+		bool indexRead = false;
+	};
+	std::array<WarningSnapshot, 6> warningSnapshots;
 	int failures = 0;
+	DWORD injectedRuntimeException = 0;
 	DWORD injectedShaderException = 0;
+	DWORD injectedWarningException = 0;
 	DWORD injectedNativeException = 0;
 	bool particleAccepted = true;
 	bool invalidateAfterNativeDraw = false;
@@ -50,7 +60,12 @@ namespace REL
 {
 	struct Module
 	{
-		static bool IsVR() { return vrRuntime; }
+		static bool IsVR()
+		{
+			if (injectedRuntimeException)
+				RaiseException(injectedRuntimeException, 0, 0, nullptr);
+			return vrRuntime;
+		}
 	};
 	template <class Signature>
 	struct Relocation
@@ -137,10 +152,13 @@ namespace Util
 
 namespace logger
 {
-	template <class... Args>
-	void warn(const char*, Args&&...)
+	void warn(const char*, uint32_t reason, std::uintptr_t, std::uintptr_t material, uint32_t,
+		int32_t index, bool indexRead, int)
 	{
+		warningSnapshots.at(std::countr_zero(reason)) = { material, index, indexRead };
 		++warnings;
+		if (injectedWarningException)
+			RaiseException(injectedWarningException, 0, 0, nullptr);
 	}
 }
 
@@ -229,10 +247,10 @@ bool ProbeExceptionReachesCaller(RE::BSRenderPass* pass, DWORD exceptionCode)
 	return false;
 }
 
-bool NativeExceptionReachesCaller(RE::BSRenderPass* pass, DWORD exceptionCode)
+bool DrawExceptionReachesCaller(decltype(Hooks::DrawRenderPassImmediately)* entry, RE::BSRenderPass* pass, DWORD exceptionCode)
 {
 	__try {
-		Hooks::BSBatchRenderer_RenderPassImmediately2::thunk(pass, technique, true, renderFlags);
+		entry(pass, technique, true, renderFlags);
 	} __except (GetExceptionCode() == exceptionCode ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
 		return true;
 	}
@@ -255,6 +273,9 @@ int main()
 	RE::BSShaderProperty property;
 	property.material = &material;
 	RE::BSRenderPass pass{ &shader, &property };
+	injectedRuntimeException = EXCEPTION_ACCESS_VIOLATION;
+	Check(ProbeExceptionReachesCaller(&pass, injectedRuntimeException), "Runtime selection faults must propagate outside the protected material reads");
+	injectedRuntimeException = 0;
 
 	auto run = [&](RE::BSRenderPass* currentPass, bool allowed, uint32_t drawTechnique = technique) {
 		expectedTechnique = drawTechnique;
@@ -298,7 +319,18 @@ int main()
 		}
 		Check(admittedInvalidPasses == 0, "Concurrent malformed draws must remain rejected");
 		Check(warnings == 1, "Concurrent rejections must emit only one warning for their reason");
+		const auto& invalidPassWarning = warningSnapshots[0];
+		Check(invalidPassWarning.material == 0 && invalidPassWarning.index == -1 && !invalidPassWarning.indexRead,
+			"A rejected pass must log initialized diagnostics without reading a material");
 	}
+	material.diffuseRenderTargetSourceIndex = 1861746551;
+	injectedWarningException = EXCEPTION_ACCESS_VIOLATION;
+	Check(ProbeExceptionReachesCaller(&pass, injectedWarningException), "Warning faults must propagate outside the protected material reads");
+	injectedWarningException = 0;
+	const auto& invalidIndexWarning = warningSnapshots[4];
+	Check(invalidIndexWarning.material == reinterpret_cast<std::uintptr_t>(&material) &&
+			  invalidIndexWarning.index == 1861746551 && invalidIndexWarning.indexRead,
+		"Index rejection must log the material and index from the protected snapshot");
 	for (const auto index : { -2, 125, 1861746551, std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max() }) {
 		runIndex(index, false);
 		runIndex(index, false);
@@ -341,6 +373,10 @@ int main()
 	if (inaccessible) {
 		property.material = static_cast<RE::BSShaderMaterial*>(inaccessible);
 		run(&pass, false);
+		const auto& unreadableWarning = warningSnapshots[5];
+		Check(unreadableWarning.material == reinterpret_cast<std::uintptr_t>(inaccessible) &&
+				  unreadableWarning.index == -1 && !unreadableWarning.indexRead,
+			"A faulting index read must preserve the observed pointer without logging an unread index");
 		property.material = &material;
 		pass.shaderProperty = static_cast<RE::BSShaderProperty*>(inaccessible);
 		run(&pass, false);
@@ -472,8 +508,15 @@ int main()
 	Check(ProbeExceptionReachesCaller(&pass, injectedShaderException), "Non-AV snapshot exceptions must propagate");
 	injectedShaderException = 0;
 	injectedNativeException = EXCEPTION_ACCESS_VIOLATION;
-	Check(NativeExceptionReachesCaller(&pass, injectedNativeException), "Native AVs must propagate outside narrow guard");
+	for (auto entry : entries)
+		Check(DrawExceptionReachesCaller(entry, &pass, injectedNativeException), "Native AVs must propagate outside the guard at every draw entry");
 	injectedNativeException = 0;
+	globals::features::terrainBlending.onRenderPass = +[](RE::BSRenderPass*) {
+		RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 0, nullptr);
+	};
+	Check(DrawExceptionReachesCaller(Hooks::BSBatchRenderer_RenderPassImmediately2::thunk, &pass, EXCEPTION_ACCESS_VIOLATION),
+		"Terrain callback faults must propagate outside the protected material reads");
+	globals::features::terrainBlending.onRenderPass = nullptr;
 
 	SYSTEM_INFO info{};
 	GetSystemInfo(&info);

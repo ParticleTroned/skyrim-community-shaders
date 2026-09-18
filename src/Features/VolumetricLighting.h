@@ -99,9 +99,14 @@ public:
 	RE::BSImagespaceShader* GetOrCreateRaymarchCS(RE::BSComputeShader* computeShader);
 	RE::BSImagespaceShader* GetOrCreateBlurHCS(RE::BSComputeShader* computeShader);
 	RE::BSImagespaceShader* GetOrCreateBlurVCS(RE::BSComputeShader* computeShader);
+	/** @brief Whether the current render area is safe for replacement blur dispatch. */
+	bool HasValidBlurDimensions() const { return blurDimensionsValid; }
+	/** @brief Bind active blur bounds at b1 after selecting a replacement shader. */
 	void SetDimensionsCB() const;
-	void SetGroupCountsHCS(uint32_t& threadGroupCountX) const;
-	void SetGroupCountsVCS(uint32_t& threadGroupCountY) const;
+	/** @brief Set both active-area dispatch axes, keeping horizontal VR groups within each eye. */
+	void SetGroupCountsHCS(uint32_t& threadGroupCountX, uint32_t& threadGroupCountY) const;
+	/** @brief Set both active-area dispatch axes for the vertical blur. */
+	void SetGroupCountsVCS(uint32_t& threadGroupCountX, uint32_t& threadGroupCountY) const;
 
 	// hooks
 
@@ -138,6 +143,7 @@ private:
 	bool TryGetActiveGodrayProfile(GodrayProfile& profile) const;
 	void SanitizeSettings();
 	void SetupVL();
+	void UpdateBlurDimensions();
 	void ClearVolumetricLightingTargets();
 	static int32_t ClampQualityIndex(int32_t quality);
 	static TextureSize ClampTextureSize(const TextureSize& size);
@@ -180,6 +186,9 @@ private:
 	STATIC_ASSERT_ALIGNAS_16(VLData);
 	VLData vlData = VLData();
 	ConstantBuffer* vlDataCB = nullptr;
+	bool blurDimensionsValid = false;
+	int32_t fullScreenX = 0;
+	int32_t fullScreenY = 0;
 
 	static constexpr int32_t BlurThreadGroupSizeX = 256;
 	static constexpr int32_t BlurThreadGroupSizeY = 256;

@@ -243,3 +243,55 @@ quality or telemetry overhead across that matrix.
 No replacement Skyrim measurement was launched, no live producer was
 changed and nothing was deployed or pushed. The existing local runs above
 cannot be retroactively upgraded into transaction-complete evidence.
+
+## Final local validation
+
+Implementation commit `27f46d09d44208cca118c15c471223c8f34f0c15`
+includes the NR integration and adversarial corrections. It follows
+`3d0979188` (generic retained profiler samples) and preserves Task 0
+`c23499f9e` and reviewed implementation `8551db2a3`. A final `ls-remote`
+check still found origin at the reviewed reference. Before this validation
+documentation update, the worktree was clean, three commits ahead and zero
+behind. Nothing was pushed.
+
+The clean-source command was:
+
+```powershell
+& ./tools/validate-local.ps1 -OutputDirectory build/validation/nr-transaction-clean-27f46d09d-20260918
+```
+
+It passed on 18 September 2026, 00:11:17–00:17:55 UTC, taking 398.743
+seconds. The retained summary reports **157/157 passed**, zero failed,
+skipped, missing, unbuilt or disabled tests. This includes controller,
+source-contract, WARP and shader tests. Universal Release DLL build,
+preset-generator tests, preset freshness, whitespace and manifest checks
+all passed. Initial and final source/submodule snapshots match and are
+clean. The documentation-only follow-up does not change compiled source.
+
+| Producer field | Verified value                                                     |
+| -------------- | ------------------------------------------------------------------ |
+| Source commit  | `27f46d09d44208cca118c15c471223c8f34f0c15` (clean)                 |
+| Build ID       | `172e18c4dc07de4b326e935321e8d6630ebdaf4c94cbc837d2f897ca382f4576` |
+| DLL SHA-256    | `85550f6be4838f2311bd507dd2da70746e6195d23d5cd1c276e5a6add8cddf30` |
+| DLL bytes      | 30,625,792                                                         |
+| Toolchain      | CMake 4.4.1, MSVC 19.51.36252.0, Windows SDK 10.0.28000.0          |
+
+The manifest and complete logs remain in the validation directory above;
+the verified artifact is `build/ALL/Release/CommunityShaders.dll`. This is
+a local build identity, not an installed or running game identity.
+
+Supplementary validation is retained under
+`build/validation/nr-transaction-20260918`: the rebuilt colour suite passed
+**21/21 CTest entries**, including the **26/26** transaction join cases.
+Its Python HMD image assessment ran 34 cases with **8 passed and 26 skipped
+for missing image dependencies**. Those nested skips are not covered by the
+main suite's zero-skip result. The focused final review suite passed 6/6;
+retained-profiler WARP passed 1/1. Scoped hooks passed.
+
+Earlier local prechecks exposed C4267 and C4458 warnings-as-errors and two
+stale source-signature assertions. They were corrected; the clean run above
+supersedes those failed checks. Earlier logs remain in the supplementary
+directory without treating failed prechecks as successful runs. Runtime settings keys, defaults,
+loading, saving and migrations are unchanged. Contract revision 6 and its
+base remain; regeneration updates fingerprints only, with all three preset
+payloads verified equal after excluding `Preset Compatibility` metadata.

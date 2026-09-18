@@ -107,7 +107,11 @@ Work continued on the existing `main-vr-nr` worktree from Task 0 commit
 The worktree was clean; the only intervening local commit was Task 0's
 documentation checkpoint. No history was reset or reconciled. Local
 commit `3d0979188` adds retained profiler evidence; NR integration and its
-tests are a separate change. The branch directive above remains in force.
+tests are separate commit `27f46d09d44208cca118c15c471223c8f34f0c15`.
+At final verification, this implementation HEAD was clean, three ahead and
+zero behind; `ls-remote` confirmed origin still at the reviewed reference.
+The following documentation update records validation only. The branch
+directive above remains in force.
 
 | State        | Task 1 position                                                                                                                                                                                                                                                                                                                            |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -120,3 +124,10 @@ The [transaction report](main-vr-nr-transaction-telemetry.md) records the
 historical run identity, missing evidence, implementation contract,
 adversarial corrections and exact validation scope. No pushes, deployment
 or live-game mutation are part of this task.
+
+Clean-source `validate-local.ps1` passed **157/157**, with zero missing,
+disabled or skipped tests, plus preset and DLL/manifest checks. Build ID:
+`172e18c4dc07de4b326e935321e8d6630ebdaf4c94cbc837d2f897ca382f4576`.
+The supplementary colour suite passed 21/21 CTest entries, including 26/26
+transaction joins; its nested Python image tests retain 26 dependency
+skips. Live matrix acceptance and telemetry overhead remain unmeasured.

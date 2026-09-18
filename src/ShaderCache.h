@@ -146,29 +146,6 @@ namespace ShaderConstants
 		const int32_t PreviousWorldMat = -1;
 	};
 
-	struct GrassPS
-	{
-		static const GrassPS& Get()
-		{
-			static GrassPS instance = REL::Module::IsVR() ? GetVR() : GetFlat();
-			return instance;
-		}
-
-		static GrassPS GetFlat()
-		{
-			return GrassPS{};
-		}
-
-		static GrassPS GetVR()
-		{
-			return GrassPS{};
-		}
-
-		const int32_t PBRFlags = 0;
-		const int32_t PBRParams1 = 1;
-		const int32_t PBRParams2 = 2;
-	};
-
 	struct EffectPS
 	{
 		static const EffectPS& Get()
@@ -800,7 +777,6 @@ namespace SIE
 		enum class GrassShaderTechniques
 		{
 			RenderDepth = 8,
-			TruePbr = 9,
 		};
 
 		enum class GrassShaderFlags

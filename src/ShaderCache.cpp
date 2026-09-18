@@ -1390,8 +1390,6 @@ namespace SIE
 			size_t lastIndex = 0;
 			if (technique == static_cast<uint32_t>(ShaderCache::GrassShaderTechniques::RenderDepth)) {
 				defines[lastIndex++] = { "RENDER_DEPTH", nullptr };
-			} else if (technique == static_cast<uint32_t>(ShaderCache::GrassShaderTechniques::TruePbr)) {
-				defines[lastIndex++] = { "TRUE_PBR", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::GrassShaderFlags::AlphaTest)) {
 				defines[lastIndex++] = { "DO_ALPHA_TEST", nullptr };
@@ -1994,16 +1992,6 @@ namespace SIE
 			} else {
 				grassVS.insert({ "ShadowClampValue", 14 });
 			}
-
-			const auto& grassPSConstants = ShaderConstants::GrassPS::Get();
-
-			auto& grassPS = result[static_cast<size_t>(RE::BSShader::Type::Grass)]
-								  [static_cast<size_t>(ShaderClass::Pixel)];
-			grassPS = {
-				{ "PBRFlags", grassPSConstants.PBRFlags },
-				{ "PBRParams1", grassPSConstants.PBRParams1 },
-				{ "PBRParams2", grassPSConstants.PBRParams2 },
-			};
 
 			auto& particleVS = result[static_cast<size_t>(RE::BSShader::Type::Particle)]
 									 [static_cast<size_t>(ShaderClass::Vertex)];

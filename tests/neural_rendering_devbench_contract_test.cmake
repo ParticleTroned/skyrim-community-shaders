@@ -1525,7 +1525,7 @@ foreach(_source_contract IN ITEMS
     [[static std::once_flag installed;]]
     [[std::call_once(installed,]]
     [[CaptureAuthoredCategories(]]
-    [[CS_GPU_PASS("Upscaling::DLSS5CharacterCategoryCapture")]]
+    [[CS_GPU_PASS_CAPTURE("Upscaling::DLSS5CharacterCategoryCapture", evidence ? evidence->captureTiming : Util::PassTimingHandle{})]]
     [[static_cast<std::int32_t>(a_frame - observationFrame_) <= 0]]
     [[character category capture arrived after a newer observation frame]]
     [[capturedFrame_ != sourceWorldFrame]]
@@ -3424,7 +3424,7 @@ set(_previous_region_stage -1)
 foreach(_region_stage IN ITEMS
     [[GetStereoPairContractViolation(stereoArgs)]]
     [[physical.featureSlot = PhysicalRegionFeatureSlot(logical.featureSlot, region);]]
-    [[EnsureBackendLocked(a_args.front())]]
+    [[EnsureBackendLocked(a_args.front(), execution)]]
     [[activeStage_ = RendererStage::ColorInputCopy;]]
     [[activeStage_ = RendererStage::ControlMaskCopy;]]
     [[Runtime::Instance().Execute(]]

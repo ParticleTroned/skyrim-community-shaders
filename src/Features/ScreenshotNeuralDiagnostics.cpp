@@ -30,6 +30,7 @@ namespace CSX::ScreenshotPolicy
 			std::vector<Exposure> exposures;
 			std::vector<Batch> batches;
 			bool diagnostics = false;
+			DiagnosticSnapshot execution;
 
 			void PinExposure(const Json& source)
 			{
@@ -91,17 +92,20 @@ namespace CSX::ScreenshotPolicy
 					if (batch.Complete())
 						result["measurementBatches"].push_back(MeasurementBatchEvidenceJson(batch));
 				}
+				if (execution)
+					result["executionEvidence"] = execution();
 				return result;
 			}
 		};
 	}
 
-	DiagnosticSnapshot RetainNeuralDiagnostics(const nlohmann::json& evidence)
+	DiagnosticSnapshot RetainNeuralDiagnostics(const nlohmann::json& evidence, DiagnosticSnapshot execution)
 	{
 		try {
 			if (!evidence.is_object() || !evidence.value("available", false))
 				return {};
 			Companions companions;
+			companions.execution = std::move(execution);
 			companions.transaction = evidence.at("transactionId").get<std::string>();
 			companions.diagnostics = evidence.at("configuration").at("color").at("experiments").at("diagnostics").get<bool>();
 			companions.PinExposure(evidence.value("engineExposure", Json::object()));

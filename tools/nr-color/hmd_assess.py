@@ -25,6 +25,7 @@ import sys
 from typing import Any
 
 from assess import AssessmentError, lighting_evidence
+from transaction_evidence import TransactionEvidenceError, join_execution_evidence
 
 VERSION = "csx-nr-hmd-assessment-v1"
 EYES = ("left", "right")
@@ -289,6 +290,12 @@ def resolved_exposure(frozen: dict, diagnostics: dict | None = None) -> dict:
 
 def check_nr(evidence: dict, expected: dict, candidate: dict, acquisition: dict, *,
              capture_diagnostics: dict | None = None, require_exposure: bool = True) -> None:
+    try:
+        execution = join_execution_evidence(evidence, capture_diagnostics)
+    except TransactionEvidenceError as error:
+        raise EvidenceError("NR execution attribution: " + str(error)) from error
+    require(execution is None or execution["available"],
+            "NR execution attribution unavailable: " + (execution["reason"] if execution else "missing record"))
     require(evidence.get("schemaVersion") == 1 and evidence.get("available") is True,
             "NR attribution unavailable: " + str(evidence.get("reason", "missing record")))
     require(bool(evidence.get("transactionId")), "missing NR transaction")

@@ -28,6 +28,10 @@ namespace CSX::ScreenshotPolicy
 			if (!left.contains(key) || !right.contains(key) || left.at(key) != right.at(key))
 				return unavailable("eye_transaction_mismatch");
 		}
+		if ((left.contains("publicationSequence") || right.contains("publicationSequence")) &&
+			(!left.contains("publicationSequence") || !right.contains("publicationSequence") ||
+				left.at("publicationSequence") != right.at("publicationSequence")))
+			return unavailable("eye_publication_mismatch");
 		if (!left.contains("left") || !right.contains("right"))
 			return unavailable("eye_outcome_missing");
 		auto result = left;

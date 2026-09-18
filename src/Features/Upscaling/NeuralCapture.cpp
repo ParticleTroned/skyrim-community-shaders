@@ -1,8 +1,12 @@
 #include "Features/Upscaling.h"
+#include "Features/Upscaling/NeuralRendering/CharacterPreparationEvidence.h"
+#include "Features/Upscaling/NeuralRendering/CharacterPreparationEvidenceJson.h"
+#include "Features/Upscaling/NeuralRendering/ExecutionEvidenceJson.h"
 #include "Features/Upscaling/NeuralRendering/Renderer.h"
 #include "Globals.h"
 #include "State.h"
 #include "Utils/ContentHash.h"
+#include <algorithm>
 #include <cstring>
 #include <memory>
 
@@ -65,16 +69,26 @@ void Upscaling::BeginNeuralCaptureFrame(NeuralStereoRouteRole role, uint32_t fra
 		if (index >= neuralCaptureBeginnings.size())
 			return;
 		const auto color = NeuralRendering::Color::Registry::Instance().Snapshot();
+		const auto captureEpoch = NeuralRendering::Color::Registry::Instance().CaptureEpoch();
 		const auto exposureEpoch = NeuralRendering::Color::ExposureCapture::Instance().GetSourceFrameEvidence(frame).key.epoch;
 		std::scoped_lock lock(neuralCaptureMutex);
 		auto& begin = neuralCaptureBeginnings[index];
-		if (begin.begun && begin.frame == frame && begin.cycle == cycle)
+		if (begin.begun && begin.frame == frame && begin.cycle == cycle && begin.captureEpoch == captureEpoch)
 			return;
+		if (!neuralCaptureConfigurationEpoch || neuralCaptureConfigurationSettings != settings || neuralCaptureConfigurationColorRevision != color.revision) {
+			neuralCaptureConfigurationSettings = settings;
+			neuralCaptureConfigurationColorRevision = color.revision;
+			neuralCaptureConfigurationEpoch = NeuralRendering::NextExecutionSubmissionId();
+		}
 		begin = {};
 		begin.begun = true;
 		begin.frame = frame;
 		begin.cycle = cycle;
 		begin.exposureEpoch = exposureEpoch;
+		begin.sourceTransactionId = NeuralRendering::NextExecutionSubmissionId();
+		begin.captureEpoch = captureEpoch;
+		begin.configurationEpoch = neuralCaptureConfigurationEpoch;
+		begin.evidenceFailuresAtBegin = neuralCaptureEvidenceFailures.load(std::memory_order_relaxed);
 		begin.settings = settings;
 		begin.color = color;
 		begin.viewSourceFrame = neuralCaptureCamera.viewSourceFrame;
@@ -82,8 +96,83 @@ void Upscaling::BeginNeuralCaptureFrame(NeuralStereoRouteRole role, uint32_t fra
 		begin.projection = neuralCaptureCamera.projection;
 		begin.positionAdjust = neuralCaptureCamera.positionAdjust;
 	} catch (...) {
-		// Missing evidence is rejected by the importer; rendering remains independent.
+		neuralCaptureEvidenceFailures.fetch_add(1, std::memory_order_relaxed);
 	}
+}
+
+void Upscaling::SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& args,
+	const UpscalingDLSS::ViewportCrop& dlssCrop, const std::array<uint32_t, 2>& colorOrigin,
+	const std::array<uint32_t, 2>& guideOrigin) noexcept
+try {
+	if (!NeuralRendering::Color::Registry::Instance().CaptureEvidenceEnabled())
+		return;
+	const auto role = NeuralRendering::ClassifyFeatureSlotMask(1u << args.featureSlot);
+	const auto index = role == NeuralRendering::FeatureSlotRoute::Main ? 0u : 1u;
+	const auto dispatchJitter = GetJitterForDispatch();
+	std::scoped_lock lock(neuralCaptureMutex);
+	auto& begin = neuralCaptureBeginnings[index];
+	if (!begin.begun || begin.frame != args.frameId ||
+		begin.captureEpoch != NeuralRendering::Color::Registry::Instance().CaptureEpoch())
+		return;
+	NeuralRendering::ExecutionContext context;
+	context.sourceTransactionId = begin.sourceTransactionId;
+	context.captureEpoch = begin.captureEpoch;
+	context.configurationEpoch = begin.configurationEpoch;
+	context.renderingMode = NeuralRendering::ClampRenderingMode(begin.settings.neuralRenderingMode);
+	context.fovOnly = begin.settings.neuralRenderingFovOnly;
+	context.dlssViewportCrop = dlssCrop;
+	context.jitterPixels = { dispatchJitter.x, dispatchJitter.y };
+	context.sourceColorOrigin = colorOrigin;
+	context.sourceGuideOrigin = guideOrigin;
+	context.inputPreparation = std::make_shared<Util::PassTimingCapture>();
+	context.sourceContext = *context.renderingMode == NeuralRendering::RenderingMode::ReducedResolution ?
+	                            "render_resolution_before_dlss" :
+	                        args.insertionPoint == NeuralRendering::InsertionPoint::FinalLdrPreUi ?
+	                            "final_ldr_before_ui" :
+	                            "dlss_output_center";
+	begin.sourceContexts[args.featureSlot & 1u] = context;
+	args.executionContext = std::move(context);
+} catch (...) {
+	args.executionContext = {};
+	neuralCaptureEvidenceFailures.fetch_add(1, std::memory_order_relaxed);
+}
+
+Util::PassTimingHandle Upscaling::CaptureNeuralStage(NeuralStereoRouteRole role, uint32_t eye,
+	uint32_t frame, uint32_t world, uint64_t generation, const char* name,
+	std::optional<uint64_t> pixels, std::optional<uint64_t> bytes) noexcept
+try {
+	if (!NeuralRendering::Color::Registry::Instance().CaptureEvidenceEnabled())
+		return {};
+	std::scoped_lock lock(neuralCaptureMutex);
+	auto& begin = neuralCaptureBeginnings[static_cast<size_t>(role)];
+	if (!begin.begun || begin.frame != frame || begin.captureEpoch != NeuralRendering::Color::Registry::Instance().CaptureEpoch())
+		return {};
+	if (begin.stageCount == begin.stages.size()) {
+		++begin.droppedStages;
+		return {};
+	}
+	auto timing = std::make_shared<Util::PassTimingCapture>();
+	begin.stages[begin.stageCount++] = { name, eye, frame, world, generation, pixels, bytes, timing };
+	return timing;
+} catch (...) {
+	neuralCaptureEvidenceFailures.fetch_add(1, std::memory_order_relaxed);
+	return {};
+}
+
+void Upscaling::RecordNeuralStageWork(const Util::PassTimingHandle& capture, uint64_t pixels, std::optional<uint64_t> bytes) noexcept
+try {
+	if (!capture)
+		return;
+	std::scoped_lock lock(neuralCaptureMutex);
+	for (auto& begin : neuralCaptureBeginnings)
+		for (uint32_t i = 0; i < begin.stageCount; ++i)
+			if (begin.stages[i].timing == capture) {
+				begin.stages[i].dirtyPixels = pixels;
+				begin.stages[i].copiedLogicalBytes = bytes;
+				return;
+			}
+} catch (...) {
+	neuralCaptureEvidenceFailures.fetch_add(1, std::memory_order_relaxed);
 }
 
 void Upscaling::RecordNeuralCaptureRoute(const NeuralStereoRouteSnapshot& route) noexcept
@@ -95,18 +184,42 @@ void Upscaling::RecordNeuralCaptureRoute(const NeuralStereoRouteSnapshot& route)
 		if (index >= neuralCaptureBeginnings.size())
 			return;
 		const auto inputs = NeuralRendering::Renderer::Instance().GetCaptureInputs();
+		std::array<std::shared_ptr<const NeuralRendering::CharacterPreparationEvidence>, 2> characters;
+		for (uint32_t eye = 0; eye < 2; ++eye)
+			characters[eye] = NeuralRendering::CharacterRendering::Instance().GetPreparationEvidence(
+				route.frame, route.temporalAdmission.sourceWorldFrame, route.generation, static_cast<uint32_t>(index) * 2 + eye);
+		std::array<Streamline::DLSSViewportCropTelemetrySnapshot, 6> dlss{};
+		for (uint32_t viewport = 0; viewport < 3; ++viewport)
+			for (uint32_t eye = 0; eye < 2; ++eye)
+				dlss[viewport * 2 + eye] = streamline.GetDLSSViewportCropTelemetrySnapshot(
+					static_cast<Streamline::DLSSViewportRole>(viewport), eye);
 		std::scoped_lock lock(neuralCaptureMutex);
 		auto record = neuralCaptureBeginnings[index];
 		record.route = route;
+		record.sourceEvidenceFailures = neuralCaptureEvidenceFailures.load(std::memory_order_relaxed) - record.evidenceFailuresAtBegin;
+		for (uint32_t eye = 0; eye < 2; ++eye)
+			if (characters[eye] && characters[eye]->key.captureEpoch == record.captureEpoch)
+				record.characters[eye] = characters[eye];
+		for (size_t i = 0; i < dlss.size(); ++i) {
+			const auto& observation = dlss[i];
+			if (observation.valid && observation.frame == route.frame &&
+				observation.captureEpoch == record.captureEpoch && observation.compositorCycle == record.cycle &&
+				static_cast<uint32_t>(observation.route) == index)
+				record.dlssObservations[i] = observation;
+		}
 		record.settingsChanged = record.settings != settings;
 		record.inputsMatched = inputs[index].Matches(static_cast<uint32_t>(index), route.frame,
 			route.temporalAdmission.sourceWorldFrame, route.generation, route.insertionPoint);
+		record.inputsMatched = record.inputsMatched && inputs[index].sourceTransactionId == record.sourceTransactionId &&
+		                       inputs[index].captureEpoch == record.captureEpoch;
 		if (record.inputsMatched) {
 			record.inputs = inputs[index];
+			record.settingsChanged |= record.color.revision != record.inputs.configuration.revision;
 			record.color = record.inputs.configuration;
 		}
 		neuralCaptureRecords[index] = std::make_shared<const NeuralCaptureRecord>(std::move(record));
 	} catch (...) {
+		neuralCaptureEvidenceFailures.fetch_add(1, std::memory_order_relaxed);
 		std::scoped_lock lock(neuralCaptureMutex);
 		const auto index = static_cast<size_t>(route.role);
 		if (index < neuralCaptureRecords.size())
@@ -123,15 +236,17 @@ nlohmann::json Upscaling::SerializeNeuralCaptureRecord(const NeuralCaptureRecord
 	const auto configuration = ConfigurationJson(record.settings, color);
 	const auto fingerprint = Util::ContentHash::HashString(configuration.dump()).ToHex();
 	const bool available = record.begun && record.frame == route.frame && route.valid && !record.settingsChanged &&
-	                       color.experiments.captureFrameEvidence && (!route.requested || record.inputsMatched);
-	const char* reason = available ? "" : !record.begun                        ? "frame_not_observed" :
-	                                  record.settingsChanged                   ? "settings_changed_during_frame" :
-	                                  !record.inputsMatched && route.requested ? "renderer_transaction_unmatched" :
-	                                                                             "frame_evidence_unavailable";
+	                       color.experiments.captureFrameEvidence && record.sourceTransactionId != 0;
+	const char* reason = available ? "" : !record.begun      ? "frame_not_observed" :
+	                                  record.settingsChanged ? "settings_changed_during_frame" :
+	                                                           "frame_evidence_unavailable";
 	const bool cameraValid = record.viewSourceFrame != 0 && record.viewSourceFrame == world;
 	Json result{
 		{ "schemaVersion", 1 }, { "available", available }, { "reason", reason },
-		{ "transactionId", std::format("{}:{}:{}:{}:{}:{}", static_cast<uint32_t>(route.role), route.frame, world, route.generation, route.insertionPoint, fingerprint) },
+		{ "transactionId", std::format("{}:{}:{}:{}:{}:{}:{}:{}:{}", record.sourceTransactionId, static_cast<uint32_t>(route.role),
+							   route.frame, world, route.generation, route.insertionPoint, record.cycle, record.captureEpoch, fingerprint) },
+		{ "sourceTransactionId", record.sourceTransactionId }, { "captureEpoch", record.captureEpoch },
+		{ "configurationEpoch", record.configurationEpoch }, { "publicationSequence", route.sequence },
 		{ "configurationFingerprint", fingerprint }, { "configurationFingerprintAlgorithm", "xxh3-128-json" },
 		{ "configuration", configuration }, { "route", GetNeuralStereoRouteRoleName(route.role) },
 		{ "generation", route.generation }, { "insertionPoint", route.insertionPoint },
@@ -140,6 +255,77 @@ nlohmann::json Upscaling::SerializeNeuralCaptureRecord(const NeuralCaptureRecord
 								{ "sourceWorldFrame", record.viewSourceFrame }, { "view", record.view }, { "projection", record.projection },
 								{ "positionAdjust", record.positionAdjust },
 								{ "provenance", "engine_cached_unjittered_world_matrices" } } }
+	};
+	Json executions = Json::array(), stages = Json::array(), dlss = Json::array();
+	for (const auto& execution : record.inputs.executions) {
+		if (!execution || execution->Descriptor().context.sourceTransactionId != record.sourceTransactionId ||
+			execution->Descriptor().context.captureEpoch != record.captureEpoch)
+			continue;
+		auto value = NeuralRendering::Evidence::ExecutionJson(*execution);
+		value["colourExposureConfiguration"] = ConfigurationEvidenceJson(color);
+		value["configurationFingerprint"] = fingerprint;
+		executions.push_back(std::move(value));
+	}
+	for (uint32_t i = 0; i < record.stageCount; ++i) {
+		const auto& stage = record.stages[i];
+		stages.push_back({ { "name", stage.name }, { "eye", stage.eye }, { "frame", stage.frame },
+			{ "sourceWorldFrame", stage.sourceWorldFrame }, { "generation", stage.generation },
+			{ "matchesProducer", stage.frame == route.frame && stage.sourceWorldFrame == world && stage.generation == route.generation },
+			{ "dirtyDispatchPixels", NeuralRendering::Evidence::OptionalJson(stage.dirtyPixels) },
+			{ "copiedLogicalBytes", NeuralRendering::Evidence::OptionalJson(stage.copiedLogicalBytes) },
+			{ "timing", NeuralRendering::Evidence::PassTimingJson(stage.timing) } });
+	}
+	for (const auto& observation : record.dlssObservations) {
+		if (!observation.valid)
+			continue;
+		dlss.push_back({ { "eye", observation.eyeIndex }, { "viewportRole", static_cast<uint32_t>(observation.viewportRole) },
+			{ "frame", observation.frame }, { "compositorCycle", observation.compositorCycle }, { "captureEpoch", observation.captureEpoch },
+			{ "generation", observation.generation }, { "viewport", observation.viewport },
+			{ "evaluationSucceeded", observation.evaluationSucceeded }, { "effectiveReset", observation.effectiveReset },
+			{ "cropResetReason", static_cast<uint32_t>(observation.resetReason) },
+			{ "grid", NeuralRendering::Evidence::ViewportJson(observation.current) },
+			{ "motionVectorScale", { observation.motionVectorScaleX, observation.motionVectorScaleY } } });
+	}
+	const auto mode = NeuralRendering::ClampRenderingMode(record.settings.neuralRenderingMode);
+	const bool rendererEvidenceAvailable = record.inputsMatched && !executions.empty();
+	const auto workOutcome = [&](uint32_t eye) {
+		const uint32_t bit = 1u << eye;
+		return !route.requested || color.experiments.transportBypass || (route.bypassedEyeMask & bit) ? "NoWork" :
+		       (route.appliedEyeMask & bit)                                                           ? "successful" :
+		       (route.attemptedEyeMask & bit)                                                         ? "failed" :
+		                                                                                                "unavailable";
+	};
+	result["executionEvidence"] = {
+		{ "schemaVersion", 1 }, { "sourceTransactionId", record.sourceTransactionId },
+		{ "publicationSequence", route.sequence },
+		{ "frame", route.frame }, { "sourceWorldFrame", world }, { "generation", route.generation },
+		{ "route", GetNeuralStereoRouteRoleName(route.role) }, { "logicalEyeCount", globals::game::isVR ? 2u : 1u },
+		{ "mode", NeuralRendering::GetRenderingModeName(mode) }, { "fovOnly", record.settings.neuralRenderingFovOnly },
+		{ "characterSelectionEnabled", record.settings.neuralCharacterRenderingEnabled && record.settings.neuralCharacterVisualIsolationEnabled },
+		{ "captureEpoch", record.captureEpoch }, { "configurationEpoch", record.configurationEpoch },
+		{ "sourceContext", mode == NeuralRendering::RenderingMode::ReducedResolution                                     ? "render_resolution_before_dlss" :
+						   route.insertionPoint == static_cast<uint32_t>(NeuralRendering::InsertionPoint::FinalLdrPreUi) ? "final_ldr_before_ui" :
+																														   "dlss_output_center" },
+		{ "rendererEvidenceAvailable", rendererEvidenceAvailable },
+		{ "rendererEvidenceIncomplete", record.inputs.executionEvidenceFailures != 0 || record.sourceEvidenceFailures != 0 ||
+											record.droppedStages != 0 || (route.attemptedEyeMask != 0 && !rendererEvidenceAvailable) },
+		{ "retainedExecutionCount", record.inputs.executionCount }, { "executionEvidenceFailures", record.inputs.executionEvidenceFailures },
+		{ "sourceEvidenceFailures", record.sourceEvidenceFailures },
+		{ "rendererEvidenceReason", rendererEvidenceAvailable ? "" : !route.attemptedEyeMask ? "no_renderer_evaluation" :
+																 !record.inputsMatched       ? "renderer_transaction_unmatched" :
+																							   "renderer_attempt_without_retained_execution" },
+		{ "sourceContexts", { NeuralRendering::Evidence::ContextJson(record.sourceContexts[0]), NeuralRendering::Evidence::ContextJson(record.sourceContexts[1]) } },
+		{ "executions", std::move(executions) }, { "sourceStages", std::move(stages) }, { "droppedStageCount", record.droppedStages },
+		{ "dlssDispatches", std::move(dlss) },
+		{ "characters", { NeuralRendering::Evidence::CharacterPreparationJson(record.characters[0]), NeuralRendering::Evidence::CharacterPreparationJson(record.characters[1]) } },
+		{ "workOutcome", { workOutcome(0), workOutcome(1) } },
+		{ "producerBoundary", { { "pairComplete", route.pairComplete }, { "committedEyeMask", route.committedEyeMask },
+								  { "bypassedEyeMask", route.bypassedEyeMask }, { "disposition", GetNeuralStereoPairDispositionName(route.disposition) },
+								  { "outcome", !route.requested || route.bypassedEyeMask == NeuralRendering::RequiredEyeMask(globals::game::isVR) ? "NoWork" :
+											   route.disposition == NeuralStereoPairDisposition::NeuralPair                                       ? "successful" :
+																																					"fallback" } } },
+		{ "timingPolicy", "inclusive_scopes_overlap_do_not_sum_cpu_gpu_or_distinct_queue_clocks" },
+		{ "bytePolicy", "logical_texel_bytes_exclude_driver_alignment_residency_and_private_provider_allocations" }
 	};
 	const auto engineExposure = ExposureCapture::Instance().GetSourceFrameEvidence(world, record.exposureEpoch);
 	result["engineExposure"] = engineExposure.evidence ? ExposureEvidenceJson(*engineExposure.evidence) :
@@ -175,7 +361,7 @@ nlohmann::json Upscaling::SerializeNeuralCaptureRecord(const NeuralCaptureRecord
 			{ "inferenceAttempted", (route.attemptedEyeMask & bit) != 0 },
 			{ "inferenceSucceeded", (route.appliedEyeMask & bit) != 0 },
 			{ "pipelineCommitted", (route.committedEyeMask & bit) != 0 },
-			{ "outputCommitted", (route.committedEyeMask & bit) != 0 && color.experiments.applyModelEdit && !color.experiments.transportBypass },
+			{ "outputCommitted", (route.committedEyeMask & route.appliedEyeMask & bit) != 0 && color.experiments.applyModelEdit && !color.experiments.transportBypass },
 			{ "disposition", GetNeuralStereoPairDispositionName(route.disposition) },
 			{ "exposure", std::move(exposure) }, { "physicalRegions", std::move(observations) }
 		};
@@ -194,7 +380,30 @@ nlohmann::json Upscaling::GetNeuralCaptureStatus() const
 	for (const auto& record : records)
 		if (record)
 			routes.push_back(SerializeNeuralCaptureRecord(*record));
-	return { { "schemaVersion", 1 }, { "enabled", NeuralRendering::Color::Registry::Instance().CaptureEvidenceEnabled() }, { "routes", std::move(routes) } };
+	return { { "schemaVersion", 1 }, { "enabled", NeuralRendering::Color::Registry::Instance().CaptureEvidenceEnabled() },
+		{ "evidenceFailureCount", neuralCaptureEvidenceFailures.load(std::memory_order_relaxed) }, { "routes", std::move(routes) } };
+}
+
+std::function<nlohmann::json()> Upscaling::PinNeuralExecutionDiagnostics(uint64_t transaction, uint64_t publication) const
+{
+	std::scoped_lock lock(neuralCaptureMutex);
+	std::shared_ptr<const NeuralCaptureRecord> record;
+	for (const auto& candidate : neuralCaptureRecords)
+		if (candidate && candidate->sourceTransactionId == transaction && candidate->route.sequence == publication)
+			record = candidate;
+	const auto& retained = submitStageNeuralStereoState.publishedCapture;
+	if (!record && retained && retained->sourceTransactionId == transaction && retained->route.sequence == publication)
+		record = retained;
+	if (!record)
+		return [] { return Unavailable("source_transaction_not_retained"); };
+	const auto lease = neuralExecutionRetention.Pin({ transaction, publication }, std::move(record));
+	if (!lease)
+		return [] { return Unavailable("capture_retention_capacity_exhausted"); };
+	return [lease] {
+		auto result = SerializeNeuralCaptureRecord(*lease->Snapshot()).at("executionEvidence");
+		result["finalized"] = true;
+		return result;
+	};
 }
 
 void Upscaling::PinNeuralCapturePresentation(VRRenderScalePresentationObservation& observation, ID3D11Texture2D* output) const noexcept

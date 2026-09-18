@@ -164,5 +164,26 @@ int main()
 			Require(std::abs(DetailGain(residual, residual, 1, settings) - std::exp2((1 - preservation) * residual * 0.75f)) < 1e-6f,
 				"CPU analytic constant residual reference");
 	}
+	auto& registry = Registry::Instance();
+	auto captureConfig = registry.Snapshot();
+	captureConfig.experiments.captureFrameEvidence = false;
+	Require(registry.Configure(captureConfig.settings, captureConfig.experiments), "stop capture");
+	const auto beforeCapture = registry.CaptureEpoch();
+	captureConfig.experiments.captureFrameEvidence = true;
+	Require(registry.Configure(captureConfig.settings, captureConfig.experiments), "start capture");
+	Require(registry.CaptureEpoch() == beforeCapture + 1, "capture start creates new epoch");
+	Require(registry.Configure(captureConfig.settings, captureConfig.experiments), "unchanged capture configure");
+	Require(registry.CaptureEpoch() == beforeCapture + 1, "noop configure must retain capture epoch");
+	captureConfig.settings.detailStrength = captureConfig.settings.detailStrength == 1.0f ? 0.5f : 1.0f;
+	Require(registry.Configure(captureConfig.settings, captureConfig.experiments), "settings edit while capturing");
+	Require(registry.CaptureEpoch() == beforeCapture + 1, "settings edit must not restart capture");
+	captureConfig.experiments.captureFrameEvidence = false;
+	Require(registry.Configure(captureConfig.settings, captureConfig.experiments), "second stop capture");
+	Require(registry.CaptureEpoch() == beforeCapture + 1, "stop retains prior identity");
+	captureConfig.experiments.captureFrameEvidence = true;
+	Require(!registry.Configure(captureConfig.settings, captureConfig.experiments, registry.Snapshot().revision + 1), "stale CAS rejects restart");
+	Require(registry.CaptureEpoch() == beforeCapture + 1, "rejected restart must not consume epoch");
+	Require(registry.Configure(captureConfig.settings, captureConfig.experiments), "restart capture");
+	Require(registry.CaptureEpoch() == beforeCapture + 2, "same-frame restart cannot reuse identity");
 	std::printf("Passed %u production settings/registry/evidence checks\n", checks);
 }

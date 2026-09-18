@@ -59,7 +59,7 @@ file(READ "${_devbench_bridge_path}" _devbench_bridge)
 
 # Early reduction must be optional and identify the exact immutable source.
 foreach(_early_bounds_contract IN ITEMS
-    [[state_->QueueEarlyMaskBounds(a_device, a_context);]]
+    [[state_->QueueEarlyMaskBounds(a_device, a_context, evidence.get());]]
     [[state_->earlyMaskCaptureSerial_ = state_->AllocatePreparedContentSerial();]]
     [[readback.captureSerial == earlyMaskCaptureSerial_]]
     [[readback.frame == a_args.sourceWorldFrame && readback.frame == capturedFrame_]]

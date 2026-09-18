@@ -1,5 +1,8 @@
 #include "Features/ScreenshotNeuralDiagnostics.h"
 #include "Features/Upscaling/NeuralRendering/CaptureEvidence.h"
+#include <cstdint>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -54,8 +57,15 @@ int main()
 	const Json evidence{ { "available", true }, { "transactionId", "capture-tx" },
 		{ "configuration", { { "color", { { "experiments", { { "diagnostics", true } } } } } } },
 		{ "engineExposure", stamp }, { "left", eye }, { "right", eye } };
-	auto snapshot = CSX::ScreenshotPolicy::RetainNeuralDiagnostics(evidence);
+	int executionReads = 0;
+	auto delayedGpuMicroseconds = std::make_shared<std::optional<uint64_t>>();
+	std::weak_ptr<std::optional<uint64_t>> retainedTiming = delayedGpuMicroseconds;
+	auto snapshot = CSX::ScreenshotPolicy::RetainNeuralDiagnostics(evidence, [&, timing = delayedGpuMicroseconds] {
+		++executionReads;
+		return Json{ { "submissionId", 72 }, { "gpuMicroseconds", *timing ? Json(**timing) : Json(nullptr) } };
+	});
 	require(static_cast<bool>(snapshot));
+	require(executionReads == 0);
 	Json actual{ { "acquisition", { { "nrEvidence", evidence } } } };
 	const auto frozen = actual["acquisition"];
 	Measurement left, right;
@@ -75,6 +85,9 @@ int main()
 	pending.readbackComplete = true;
 	exposures.Complete(pending, "readback_complete");
 	batches.Record(key, 1, right);
+	*delayedGpuMicroseconds = 42;
+	delayedGpuMicroseconds.reset();
+	require(!retainedTiming.expired());
 	std::thread consumer([&] { CSX::ScreenshotPolicy::FinalizeNeuralDiagnostics(snapshot, actual); });
 	consumer.join();
 	require(!snapshot && actual["acquisition"] == frozen);
@@ -83,17 +96,21 @@ int main()
 	require(sealed["measurementBatches"][0]["left"] == 12 && sealed["measurementBatches"][0]["right"] == 13);
 	require(sealed["exposures"].size() == 1 && sealed["exposures"][0]["available"] == true);
 	require(sealed["measurementRequests"][0]["available"] == true);
+	require(sealed["executionEvidence"]["submissionId"] == 72 && sealed["executionEvidence"]["gpuMicroseconds"] == 42);
+	require(executionReads == 1 && retainedTiming.expired());
 	CSX::ScreenshotPolicy::FinalizeNeuralDiagnostics(snapshot, actual);
 	require(actual["captureDiagnostics"] == sealed);
+	require(executionReads == 1);
 	exposures.MarkAmbiguous(pending.stamp);
 	require(actual["captureDiagnostics"] == sealed);
 
 	auto malformed = evidence;
 	malformed["right"]["physicalRegions"][0]["generation"] = 999;
-	auto failed = CSX::ScreenshotPolicy::RetainNeuralDiagnostics(malformed);
+	auto failed = CSX::ScreenshotPolicy::RetainNeuralDiagnostics(malformed, [&] { ++executionReads; return Json::object(); });
 	Json failedActual;
 	CSX::ScreenshotPolicy::FinalizeNeuralDiagnostics(failed, failedActual);
 	require(failedActual["captureDiagnostics"]["reason"] == "companion_retention_failed");
+	require(executionReads == 1 && !failedActual["captureDiagnostics"].contains("executionEvidence"));
 	require(!CSX::ScreenshotPolicy::RetainNeuralDiagnostics(Json{ { "available", false } }));
 	auto malformedAvailability = CSX::ScreenshotPolicy::RetainNeuralDiagnostics(Json{ { "available", "invalid" } });
 	CSX::ScreenshotPolicy::FinalizeNeuralDiagnostics(malformedAvailability, failedActual);
@@ -109,6 +126,7 @@ int main()
 	CSX::ScreenshotPolicy::FinalizeNeuralDiagnostics(baselineSnapshot, baselineActual);
 	require(baselineActual["captureDiagnostics"]["measurementRequests"].empty());
 	require(baselineActual["captureDiagnostics"]["exposures"].size() == 1);
+	require(!baselineActual["captureDiagnostics"].contains("executionEvidence"));
 	auto noMeasurements = evidence;
 	noMeasurements["configuration"]["color"]["experiments"]["diagnostics"] = false;
 	auto noMeasurementsSnapshot = CSX::ScreenshotPolicy::RetainNeuralDiagnostics(noMeasurements);
@@ -147,5 +165,13 @@ int main()
 	CSX::ScreenshotPolicy::DiagnosticSnapshot throwing = []() -> Json { throw std::runtime_error("test serialization"); };
 	CSX::ScreenshotPolicy::FinalizeNeuralDiagnostics(throwing, terminal);
 	require(!throwing && terminal["captureDiagnostics"]["reason"] == "companion_finalization_failed");
+	auto throwingExecution = CSX::ScreenshotPolicy::RetainNeuralDiagnostics(baseline, [&]() -> Json {
+		++executionReads;
+		throw std::runtime_error("execution serialization");
+	});
+	CSX::ScreenshotPolicy::FinalizeNeuralDiagnostics(throwingExecution, terminal);
+	require(!throwingExecution && executionReads == 2 && terminal["captureDiagnostics"]["reason"] == "companion_finalization_failed");
+	CSX::ScreenshotPolicy::FinalizeNeuralDiagnostics(throwingExecution, terminal);
+	require(executionReads == 2);
 	return 0;
 }

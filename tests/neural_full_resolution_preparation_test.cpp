@@ -21,6 +21,21 @@ struct Upscaling
 	{
 		Main
 	};
+	enum class NeuralStereoPairDisposition
+	{
+		Unknown,
+		NormalDLSSPair
+	};
+	enum class NeuralStereoFallbackReason
+	{
+		None,
+		RouteIneligible,
+		MenuContext,
+		GamePaused,
+		TemporalSourceStale,
+		FrameGeneration,
+		StereoPreflightFailed
+	};
 	struct Settings
 	{
 		uint32_t frameGenerationMode = 0;
@@ -29,13 +44,19 @@ struct Upscaling
 	struct NeuralStereoRouteSnapshot
 	{
 		bool valid = false;
+		NeuralStereoRouteRole role = NeuralStereoRouteRole::Main;
 		uint32_t frame = 0;
 		uint64_t generation = 0;
 		uint32_t arrangement = 0;
 		uint32_t insertionPoint = 0;
 		bool requested = false, eligible = false, sourceBatchEligible = false, sourceSignatureProven = false;
-		bool frameGenerationGatePassed = false;
+		bool frameGenerationActive = false, frameGenerationGatePassed = false;
+		bool hardMenuBlocked = false, menuContinuityAllowed = false;
+		bool pairComplete = false;
 		NeuralRendering::TemporalAdmissionResult temporalAdmission{};
+		NeuralStereoPairDisposition disposition = NeuralStereoPairDisposition::Unknown;
+		NeuralStereoFallbackReason fallbackReason = NeuralStereoFallbackReason::None;
+		uint32_t preparedEyeMask = 0, attemptedEyeMask = 0, appliedEyeMask = 0, bypassedEyeMask = 0, committedEyeMask = 0;
 	};
 	struct MainFinalLdrNeuralState
 	{
@@ -51,7 +72,9 @@ struct Upscaling
 	NeuralRendering::RenderingMode mode = NeuralRendering::RenderingMode::FullResolution;
 	bool requested = true, presentation = false, hardMenu = false, transition = false, frameGeneration = false;
 	bool dimensionsAvailable = true, guidePreparationSucceeds = true, guidePreparationThrows = false;
-	uint32_t guideCopies = 0, captureFrames = 0, resets = 0;
+	bool guidePreparationThrowsUnknown = false;
+	uint32_t guideCopies = 0, captureFrames = 0, resets = 0, publications = 0;
+	NeuralStereoRouteSnapshot publishedRoute{};
 	uint32_t width = 1200, height = 900;
 	NeuralRendering::TemporalAdmissionInputs world{
 		.worldFrameStateAvailable = true,
@@ -80,14 +103,22 @@ struct Upscaling
 		oh = height;
 		return dimensionsAvailable;
 	}
-	bool PrepareFullResolutionNeuralInputs(uint32_t, uint32_t, uint32_t, uint32_t)
+	bool PrepareFullResolutionNeuralInputs(uint32_t, uint32_t, uint32_t, uint32_t, NeuralStereoRouteRole, uint32_t, uint64_t)
 	{
 		++guideCopies;
 		if (guidePreparationThrows)
 			throw std::runtime_error("guide allocation failed");
+		if (guidePreparationThrowsUnknown)
+			throw 1;
 		return guidePreparationSucceeds;
 	}
 	void BeginNeuralCaptureFrame(NeuralStereoRouteRole, uint32_t) { ++captureFrames; }
+	void PublishNeuralStereoRouteSnapshot(const NeuralStereoRouteSnapshot& route) noexcept
+	{
+		++publications;
+		publishedRoute = route;
+	}
+	static NeuralStereoFallbackReason GetNeuralTemporalFallbackReason(const NeuralRendering::TemporalAdmissionResult&) noexcept;
 	void RequestHistoryReset() { ++resets; }
 	void PrepareMainFullResolutionNeuralFrame() noexcept;
 };
@@ -112,6 +143,25 @@ namespace
 		upscaling.world.lastWorldRenderFrame = state.frameCount;
 		upscaling.world.lastCompletedWorldRenderFrame = state.frameCount;
 	}
+	void RequireNoAttemptFallback(const Upscaling& upscaling, const State& state, Upscaling::NeuralStereoFallbackReason reason)
+	{
+		const auto& route = upscaling.publishedRoute;
+		Require(route.valid && route.role == Upscaling::NeuralStereoRouteRole::Main && route.frame == state.frameCount &&
+					route.generation == std::max<uint64_t>(upscaling.vrDLSSRuntimeResourceGeneration, 1u) &&
+					route.arrangement == static_cast<uint32_t>(upscaling.GetNeuralRenderingArrangement()) &&
+					route.insertionPoint == static_cast<uint32_t>(NeuralRendering::InsertionPoint::FinalLdrPreUi),
+			"Preparation fallback must carry the current route identity");
+		Require(route.requested && !route.eligible && !route.sourceBatchEligible && !route.sourceSignatureProven &&
+					!route.pairComplete && route.preparedEyeMask == 0 && route.attemptedEyeMask == 0 && route.appliedEyeMask == 0 &&
+					route.bypassedEyeMask == 0 && route.committedEyeMask == 0 &&
+					route.disposition == Upscaling::NeuralStereoPairDisposition::NormalDLSSPair && route.fallbackReason == reason,
+			"Failed preparation must report its reason without claiming an NR attempt, bypass or commit");
+		Require(route.temporalAdmission.currentFrame == state.frameCount && route.hardMenuBlocked == upscaling.hardMenu &&
+					route.menuContinuityAllowed == !upscaling.hardMenu &&
+					route.frameGenerationActive == (upscaling.frameGeneration || upscaling.settings.frameGenerationMode != 0) &&
+					route.frameGenerationGatePassed == !route.frameGenerationActive,
+			"Preparation fallback must preserve the current admission and frame-generation evidence");
+	}
 }
 
 int main()
@@ -126,6 +176,7 @@ int main()
 		Require(first.frame == 1 && first.sourceWorldFrame == 1 && first.generation == 5 &&
 					first.settingsKey == 12 && first.inputWidthPerEye == 600 && first.outputWidthPerEye == 1200,
 			"Prepared identity must match the captured scene");
+		Require(upscaling.publications == 0, "Successful preparation must await the actual final-LDR transaction");
 		upscaling.PrepareMainFullResolutionNeuralFrame();
 		Require(upscaling.guideCopies == 1, "Repeated producer hook must reuse preparation");
 		upscaling.mainFinalLdrNeuralState = {};
@@ -147,20 +198,26 @@ int main()
 					upscaling.mainFinalLdrNeuralState.outputWidthPerEye == 1600 && upscaling.mainFinalLdrNeuralState.generation == 6,
 			"Next fresh frame must capture the changed configuration");
 
-		for (int failure = 0; failure < 3; ++failure) {
+		for (int failure = 0; failure < 4; ++failure) {
 			NextFrame(upscaling, state);
 			upscaling.dimensionsAvailable = failure != 0;
 			upscaling.guidePreparationSucceeds = failure != 1;
 			upscaling.guidePreparationThrows = failure == 2;
+			upscaling.guidePreparationThrowsUnknown = failure == 3;
+			const auto publications = upscaling.publications;
 			upscaling.PrepareMainFullResolutionNeuralFrame();
+			Require(upscaling.publications == publications + 1, "Each failed preparation must publish once");
+			RequireNoAttemptFallback(upscaling, state, Upscaling::NeuralStereoFallbackReason::StereoPreflightFailed);
 			const auto copies = upscaling.guideCopies;
 			upscaling.dimensionsAvailable = upscaling.guidePreparationSucceeds = true;
 			upscaling.guidePreparationThrows = false;
+			upscaling.guidePreparationThrowsUnknown = false;
 			upscaling.PrepareMainFullResolutionNeuralFrame();
 			Require(!upscaling.mainFinalLdrNeuralState.ready && upscaling.guideCopies == copies,
 				"Failed preparation must wait for another fresh frame");
+			Require(upscaling.publications == publications + 1, "Same-frame retry must not publish another route");
 		}
-		Require(upscaling.resets == 1, "Preparation exception must reset history");
+		Require(upscaling.resets == 2, "Only preparation exceptions must reset history");
 
 		NextFrame(upscaling, state);
 		upscaling.world.gamePaused = true;
@@ -172,11 +229,15 @@ int main()
 		upscaling.PrepareMainFullResolutionNeuralFrame();
 		Require(!upscaling.mainFinalLdrNeuralState.ready && upscaling.guideCopies == copies,
 			"Retained framebuffer must not become new scene input");
+		RequireNoAttemptFallback(upscaling, state, Upscaling::NeuralStereoFallbackReason::TemporalSourceStale);
+		Require(upscaling.publishedRoute.temporalAdmission.admitted &&
+					upscaling.publishedRoute.temporalAdmission.sourceWorldFrame == state.frameCount - 1,
+			"Retained-world refusal must preserve its actual source frame and admission");
 		NextFrame(upscaling, state);
 		upscaling.PrepareMainFullResolutionNeuralFrame();
 		Require(upscaling.mainFinalLdrNeuralState.ready, "Paused fresh world remains valid");
 
-		for (int gate = 0; gate < 6; ++gate) {
+		for (int gate = 0; gate < 8; ++gate) {
 			NextFrame(upscaling, state);
 			upscaling.mainFinalLdrNeuralState = {};
 			upscaling.requested = gate != 0;
@@ -185,11 +246,28 @@ int main()
 			upscaling.transition = gate == 3;
 			upscaling.frameGeneration = gate == 4;
 			upscaling.hardMenu = gate == 5;
+			upscaling.settings.frameGenerationMode = gate == 6 ? 1u : 0u;
+			upscaling.world.worldFrameStateAvailable = gate != 7;
 			const auto before = upscaling.guideCopies;
+			const auto publications = upscaling.publications;
+			const auto captures = upscaling.captureFrames;
 			upscaling.PrepareMainFullResolutionNeuralFrame();
 			Require(!upscaling.mainFinalLdrNeuralState.ready && upscaling.guideCopies == before,
 				"Ineligible route must not capture guides");
+			if (gate < 3) {
+				Require(upscaling.publications == publications && upscaling.captureFrames == captures,
+					"Disabled or differently owned routes must not begin or publish Main preparation");
+			} else {
+				Require(upscaling.publications == publications + 1 && upscaling.captureFrames == captures + 1,
+					"An active route refused before guide preparation must publish its capture decision");
+				const auto reason = gate == 3 ? Upscaling::NeuralStereoFallbackReason::RouteIneligible :
+				                    gate == 5 ? Upscaling::NeuralStereoFallbackReason::MenuContext :
+				                    gate == 7 ? Upscaling::NeuralStereoFallbackReason::TemporalSourceStale :
+				                                Upscaling::NeuralStereoFallbackReason::FrameGeneration;
+				RequireNoAttemptFallback(upscaling, state, reason);
+			}
 		}
+		Require(upscaling.resets == 2, "Observational fallback publication must not reset temporal histories");
 		std::cout << "Full-resolution preparation lifecycle passed\n";
 		return 0;
 	} catch (const std::exception& error) {

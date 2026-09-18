@@ -4,6 +4,7 @@
 #include "ColorPolicy.h"
 #include "ComputeSubrect.h"
 #include "ExposureCapture.h"
+#include "Utils/PassTimingCapture.h"
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -32,6 +33,8 @@ namespace NeuralRendering::Color
 		ExposureBindingState exposureState = ExposureBindingState::NotRequested;
 		ExposureEvidence exposure{};
 		std::uint64_t preparationCpuMicroseconds = 0, reconstructionCpuMicroseconds = 0, retainedBytes = 0;
+		std::uint64_t copiedLogicalBytes = 0;
+		Util::PassTimingHandle preparationPass, reconstructionPass;
 		std::string failure;
 	};
 	struct Measurement
@@ -58,6 +61,7 @@ namespace NeuralRendering::Color
 		/** Retain only CPU measurement evidence for an accepted screenshot. */
 		MeasurementBatchHistory<Measurement>::Lease PinMeasurementBatch(const MeasurementBatchKey&);
 		bool CaptureEvidenceEnabled() const noexcept { return captureEvidenceEnabled_.load(std::memory_order_acquire); }
+		std::uint64_t CaptureEpoch() const noexcept { return captureEpoch_.load(std::memory_order_acquire); }
 		bool Configure(const Settings&, const Experiments&, std::uint64_t expectedRevision = 0);
 		void Record(const Observation&) noexcept;
 		void Record(const Measurement&) noexcept;
@@ -67,6 +71,7 @@ namespace NeuralRendering::Color
 		mutable std::mutex mutex_;
 		Configuration configuration_{};
 		std::atomic_bool captureEvidenceEnabled_{ false };
+		std::atomic<std::uint64_t> captureEpoch_{ 0 };
 		Status status_{};
 		MeasurementBatchHistory<Measurement> measurementBatches_{};
 	};

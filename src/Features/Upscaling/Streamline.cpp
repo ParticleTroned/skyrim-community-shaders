@@ -3106,6 +3106,9 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		snapshot.viewportRole = viewportRole;
 		snapshot.viewport = static_cast<uint32_t>(diagnostics.resolvedViewport);
 		snapshot.generation = diagnostics.cropGeneration;
+		snapshot.captureEpoch = NeuralRendering::Color::Registry::Instance().CaptureEpoch();
+		snapshot.compositorCycle = temporalSnapshot ? temporalSnapshot->key.compositorCycle : 0;
+		snapshot.route = passRoute;
 		snapshot.current = diagnostics.currentCrop;
 		snapshot.previous = diagnostics.previousCrop;
 		snapshot.continuous = diagnostics.cropContinuous;

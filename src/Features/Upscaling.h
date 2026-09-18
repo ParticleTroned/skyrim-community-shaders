@@ -25,6 +25,7 @@
 #include "Upscaling/VRSubmitStereoBatch.h"
 #include "Upscaling/VRSubmitTemporalSnapshot.h"
 #include "Upscaling/VRVendorRelatchPolicy.h"
+#include "Utils/CaptureRetention.h"
 #include "Utils/LazyShader.h"
 #include "VR/InSceneOverlaySubmitPolicy.h"
 #include <array>
@@ -33,6 +34,7 @@
 #include <directx/d3d12.h>
 #include <dxgi1_5.h>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -541,12 +543,27 @@ public:
 	};
 
 	Settings settings;
+	struct NeuralCaptureStage
+	{
+		const char* name = "";
+		uint32_t eye = 0, frame = 0, sourceWorldFrame = 0;
+		uint64_t generation = 0;
+		std::optional<uint64_t> dirtyPixels, copiedLogicalBytes;
+		Util::PassTimingHandle timing;
+	};
 	struct NeuralCaptureRecord
 	{
 		bool begun = false;
 		std::uint32_t frame = 0;
 		std::uint64_t cycle = 0;
 		std::uint64_t exposureEpoch = 0;
+		std::uint64_t sourceTransactionId = 0, captureEpoch = 0, configurationEpoch = 0;
+		std::array<NeuralRendering::ExecutionContext, 2> sourceContexts{};
+		std::array<Streamline::DLSSViewportCropTelemetrySnapshot, 6> dlssObservations{};
+		std::array<std::shared_ptr<const NeuralRendering::CharacterPreparationEvidence>, 2> characters{};
+		std::array<NeuralCaptureStage, 16> stages{};
+		uint32_t stageCount = 0, droppedStages = 0;
+		uint64_t evidenceFailuresAtBegin = 0, sourceEvidenceFailures = 0;
 		Settings settings{};
 		NeuralRendering::Color::Configuration color{};
 		NeuralRendering::CaptureInputs inputs{};
@@ -565,6 +582,8 @@ public:
 	/** Current requested values for guarded diagnostic configuration changes. */
 	nlohmann::json GetNeuralRequestedConfiguration() const;
 	std::string GetNeuralRequestedConfigurationFingerprint() const;
+	/** Retain the exact source transaction through screenshot finalization. */
+	std::function<nlohmann::json()> PinNeuralExecutionDiagnostics(std::uint64_t a_sourceTransactionId, std::uint64_t a_publicationSequence) const;
 	nlohmann::json CaptureNeuralSubmission(vr::EVREye a_eye, uint64_t a_cycle,
 		ID3D11Texture2D* a_texture, std::string_view a_path,
 		const VRRenderScalePresentationObservation* a_observation) const;
@@ -4205,7 +4224,8 @@ public:
 		uint32_t a_neuralSourceFrame,
 		FinalLdrNeuralResult& a_result) noexcept;
 	/** Prepares current raw guides and the shared region plan for a full-resolution NR pass. */
-	bool PrepareFullResolutionNeuralInputs(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight);
+	bool PrepareFullResolutionNeuralInputs(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight,
+		NeuralStereoRouteRole a_role, uint32_t a_sourceWorldFrame, uint64_t a_generation);
 	/** Freezes full-mode guides before the engine replaces raw depth with upscaled depth. */
 	void PrepareMainFullResolutionNeuralFrame() noexcept;
 	void ApplyMainFinalLdrNeuralStereo() noexcept;
@@ -4330,7 +4350,25 @@ private:
 	std::array<NeuralCaptureRecord, 2> neuralCaptureBeginnings{};
 	NeuralCaptureRecord neuralCaptureCamera{};
 	std::array<std::shared_ptr<const NeuralCaptureRecord>, 2> neuralCaptureRecords{};
+	struct NeuralCapturePublicationKey
+	{
+		uint64_t transaction = 0, publication = 0;
+		bool operator==(const NeuralCapturePublicationKey&) const = default;
+	};
+	mutable Util::CaptureRetention<NeuralCapturePublicationKey, std::shared_ptr<const NeuralCaptureRecord>> neuralExecutionRetention;
+	std::uint64_t neuralCaptureConfigurationEpoch = 0;
+	Settings neuralCaptureConfigurationSettings{};
+	uint64_t neuralCaptureConfigurationColorRevision = 0;
+	std::atomic_uint64_t neuralCaptureEvidenceFailures{ 0 };
 	void BeginNeuralCaptureFrame(NeuralStereoRouteRole a_role, uint32_t a_frame, uint64_t a_cycle = 0) noexcept;
+	void SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& a_args,
+		const UpscalingDLSS::ViewportCrop& a_dlssCrop, const std::array<uint32_t, 2>& a_colorOrigin,
+		const std::array<uint32_t, 2>& a_guideOrigin) noexcept;
+	Util::PassTimingHandle CaptureNeuralStage(NeuralStereoRouteRole a_role, uint32_t a_eye,
+		uint32_t a_frame, uint32_t a_sourceWorldFrame, uint64_t a_generation, const char* a_name,
+		std::optional<uint64_t> a_dirtyPixels = {}, std::optional<uint64_t> a_copiedLogicalBytes = {}) noexcept;
+	void RecordNeuralStageWork(const Util::PassTimingHandle& a_capture, uint64_t a_pixels,
+		std::optional<uint64_t> a_copiedLogicalBytes = {}) noexcept;
 	void RecordNeuralCaptureRoute(const NeuralStereoRouteSnapshot& a_route) noexcept;
 	void PinNeuralCapturePresentation(VRRenderScalePresentationObservation& a_observation, ID3D11Texture2D* a_output) const noexcept;
 	static nlohmann::json SerializeNeuralCaptureRecord(const NeuralCaptureRecord& a_record);

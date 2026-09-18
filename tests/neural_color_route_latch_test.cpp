@@ -21,6 +21,13 @@ namespace NeuralRendering::Color
 		++snapshots;
 		return liveConfiguration;
 	}
+	bool Registry::Configure(const Settings& settings, const Experiments& experiments, std::uint64_t)
+	{
+		liveConfiguration.settings = settings;
+		liveConfiguration.experiments = experiments;
+		captureEvidenceEnabled_.store(experiments.captureFrameEvidence, std::memory_order_release);
+		return true;
+	}
 }
 
 namespace NeuralRendering
@@ -34,6 +41,7 @@ namespace NeuralRendering
 		std::uint32_t featureSlot = 0, frameId = 40, sourceWorldFrame = 39;
 		std::uint64_t generation = 7;
 		InsertionPoint insertionPoint = InsertionPoint::UpscaledCenter;
+		ExecutionContext executionContext{};
 	};
 	struct LatchState
 	{
@@ -87,6 +95,7 @@ namespace
 		Color::liveConfiguration.settings.mode = Color::Mode::PreserveSource;
 		Color::liveConfiguration.settings.lightingPreservation = 0.25f;
 		Color::liveConfiguration.experiments.captureFrameEvidence = true;
+		Color::Registry::Instance().Configure(Color::liveConfiguration.settings, Color::liveConfiguration.experiments);
 		Color::liveConfiguration.revision = 14;
 		Color::snapshots = 0;
 		state.CaptureColorConfiguration(args);
@@ -207,6 +216,45 @@ int main()
 		args.featureSlot = 1;
 		interleaved.CaptureColorConfiguration(args);
 		Require(interleaved.colorConfiguration_.settings.lightingPreservation == 0.0f, "Interleaved submit cannot replace the main transaction");
+		args.executionContext.sourceTransactionId = 10;
+		args.executionContext.captureEpoch = 1;
+		const auto snapshotsBeforeCapture = NeuralRendering::Color::snapshots;
+		interleaved.CaptureColorConfiguration(args);
+		Require(interleaved.colorConfiguration_.settings.lightingPreservation == 0.0f &&
+					interleaved.captureInputs_[0].sourceTransactionId == 10 && interleaved.captureInputs_[0].captureEpoch == 1,
+			"Capture identity must update without changing the rendered colour transaction");
+		interleaved.captureInputs_[0].executionEvidenceFailures = 2;
+		NeuralRendering::Color::liveConfiguration.settings.lightingPreservation = 0.25f;
+		args.executionContext.captureEpoch = 2;
+		interleaved.CaptureColorConfiguration(args);
+		Require(interleaved.colorConfiguration_.settings.lightingPreservation == 0.0f &&
+					interleaved.captureInputs_[0].captureEpoch == 2 && interleaved.captureInputs_[0].executionEvidenceFailures == 0,
+			"Capture restart must clear observational results while keeping the same rendered configuration");
+		NeuralRendering::Color::liveConfiguration.settings.lightingPreservation = 0.5f;
+		args.executionContext.sourceContext = "retained_world";
+		interleaved.CaptureColorConfiguration(args);
+		Require(interleaved.colorConfiguration_.settings.lightingPreservation == 0.0f,
+			"Optional source telemetry must not alter rendering configuration");
+		auto captureExperiments = NeuralRendering::Color::liveConfiguration.experiments;
+		captureExperiments.captureFrameEvidence = false;
+		NeuralRendering::Color::Registry::Instance().Configure(NeuralRendering::Color::liveConfiguration.settings, captureExperiments);
+		interleaved.CaptureColorConfiguration(args);
+		Require(!interleaved.captureInputs_[0].valid && interleaved.colorConfiguration_.settings.lightingPreservation == 0.0f,
+			"Capture disarming must release observation without changing rendered colour");
+		captureExperiments.captureFrameEvidence = true;
+		NeuralRendering::Color::Registry::Instance().Configure(NeuralRendering::Color::liveConfiguration.settings, captureExperiments);
+		args.executionContext.captureEpoch = 3;
+		++args.executionContext.sourceTransactionId;
+		interleaved.CaptureColorConfiguration(args);
+		Require(interleaved.captureInputs_[0].valid && interleaved.captureInputs_[0].captureEpoch == 3 &&
+					interleaved.captureInputs_[0].sourceTransactionId == 11 &&
+					interleaved.captureInputs_[0].configuration.settings.lightingPreservation == 0.0f &&
+					NeuralRendering::Color::snapshots == snapshotsBeforeCapture,
+			"Same-frame capture restart must identify a new observation without rereading colour settings");
+		++args.frameId;
+		interleaved.CaptureColorConfiguration(args);
+		Require(interleaved.colorConfiguration_.settings.lightingPreservation == 0.5f,
+			"The next rendered transaction must still observe colour edits made during capture toggles");
 		std::cout << "Passed " << transactions << " CPU colour transaction/constant cases, reconstruction preflight, and route isolation (no game rendering)\n";
 		return 0;
 	} catch (const std::exception& error) {

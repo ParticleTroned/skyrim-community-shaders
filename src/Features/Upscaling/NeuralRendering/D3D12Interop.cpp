@@ -39,6 +39,18 @@ namespace NeuralRendering
 			HANDLE handle_ = nullptr;
 		};
 
+		struct ExecutionWaitScope
+		{
+			std::shared_ptr<ExecutionEvidence>& current;
+			ExecutionWaitScope(std::shared_ptr<ExecutionEvidence>& value, const std::shared_ptr<ExecutionEvidence>& evidence) : current(value)
+			{
+				current = evidence;
+				if (current)
+					current->Update([](auto& result) { if (!result.cpuWaitMicroseconds) result.cpuWaitMicroseconds = 0; });
+			}
+			~ExecutionWaitScope() { current.reset(); }
+		};
+
 		std::wstring WidenName(std::string_view a_name)
 		{
 			return { a_name.begin(), a_name.end() };
@@ -119,7 +131,7 @@ namespace NeuralRendering
 			return RecordFailureLocked(E_UNEXPECTED, "CreateTimingResources state");
 
 		D3D12_QUERY_HEAP_DESC queryDescription{};
-		queryDescription.Count = static_cast<UINT>(kCommandContextCount * 2u);
+		queryDescription.Count = static_cast<UINT>(kCommandContextCount * kQueriesPerContext);
 		queryDescription.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
 		HRESULT result = device12_->CreateQueryHeap(
 			&queryDescription, IID_PPV_ARGS(&timestampQueryHeap_));
@@ -173,8 +185,8 @@ namespace NeuralRendering
 		}
 		const std::uint64_t timingFenceValue = commandContext.fenceValue;
 
-		const SIZE_T offset = sizeof(std::uint64_t) * a_index * 2u;
-		const D3D12_RANGE readRange{ offset, offset + sizeof(std::uint64_t) * 2u };
+		const SIZE_T offset = sizeof(std::uint64_t) * a_index * kQueriesPerContext;
+		const D3D12_RANGE readRange{ offset, offset + sizeof(std::uint64_t) * kQueriesPerContext };
 		void* mapped = nullptr;
 		const HRESULT mapResult = timestampReadback_->Map(0, &readRange, &mapped);
 		if (SUCCEEDED(mapResult) && mapped) {
@@ -183,6 +195,19 @@ namespace NeuralRendering
 			const bool validTimestamps = timestamps[1] >= timestamps[0];
 			const std::uint64_t elapsedTicks =
 				validTimestamps ? timestamps[1] - timestamps[0] : 0;
+			if (const auto& execution = commandContext.timing.execution) {
+				execution->Update([&](auto& evidence) {
+					const auto resolved = [&](std::uint32_t query) -> ExecutionTiming {
+						return ResolveExecutionGpuTiming(timestamps[query], timestamps[query + 1u], timestampFrequency_);
+					};
+					if (evidence.batchGpu.state == ExecutionTimingState::Pending)
+						evidence.batchGpu = resolved(0);
+					for (std::uint32_t region = 0; region < kMaximumExecutionRegions; ++region)
+						if ((commandContext.evaluationTimingMask & (1u << region)) != 0 &&
+							evidence.regions[region].evaluationGpu.state == ExecutionTimingState::Pending)
+							evidence.regions[region].evaluationGpu = resolved(2u + region * 2u);
+				});
+			}
 			const D3D12_RANGE writtenRange{ 0, 0 };
 			timestampReadback_->Unmap(0, &writtenRange);
 
@@ -241,22 +266,32 @@ namespace NeuralRendering
 			}
 			IncrementSaturating(telemetry_.featureGpuReadbackFailures);
 		}
+		// A completed command cannot produce a missing end timestamp later.
+		if (commandContext.timing.execution)
+			commandContext.timing.execution->FailPendingTimings();
 		commandContext.timing = {};
 		commandContext.timingPending = false;
+		commandContext.evaluationTimingOpenMask = commandContext.evaluationTimingMask = 0;
 	}
 
 	void D3D12Interop::CollectCompletedTimingsLocked(
 		std::uint64_t a_completedValue) noexcept
 	{
-		if (a_completedValue == UINT64_MAX)
+		if (a_completedValue == UINT64_MAX) {
+			for (const auto& context : commandContexts_)
+				if (context.timing.execution)
+					context.timing.execution->FailPendingTimings();
 			return;
+		}
 		for (std::size_t index = 0; index < commandContexts_.size(); ++index)
 			CollectCompletedTimingLocked(index, a_completedValue);
 	}
 
-	bool D3D12Interop::Initialize(IDXGIAdapter* a_adapter, ID3D11Device* a_device, ID3D11DeviceContext* a_context)
+	bool D3D12Interop::Initialize(IDXGIAdapter* a_adapter, ID3D11Device* a_device, ID3D11DeviceContext* a_context,
+		const std::shared_ptr<ExecutionEvidence>& a_evidence)
 	{
 		std::scoped_lock lock(mutex_);
+		ExecutionWaitScope waitEvidenceGuard{ waitEvidence_, a_evidence };
 		if (!ShutdownLocked())
 			return false;
 		if (!a_adapter || !a_device || !a_context)
@@ -435,8 +470,15 @@ namespace NeuralRendering
 		if (FAILED(result))
 			return RecordFailureLocked(result, a_operation);
 
+		const auto cpuWaitStarted = waitEvidence_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		const DWORD waitResult = WaitForSingleObject(waitEvent.Get(), a_timeoutMilliseconds);
 		const DWORD waitError = waitResult == WAIT_FAILED ? GetLastError() : ERROR_SUCCESS;
+		if (waitEvidence_) {
+			const auto elapsed = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now() - cpuWaitStarted)
+					.count());
+			waitEvidence_->RecordCpuWait({ a_operation, elapsed, waitResult, waitError, a_timeoutMilliseconds });
+		}
 		completedValue = fence12_->GetCompletedValue();
 		if (completedValue == UINT64_MAX) {
 			(void)waitEvent.Release();
@@ -471,9 +513,10 @@ namespace NeuralRendering
 		});
 	}
 
-	bool D3D12Interop::BeginD3D12(ID3D12GraphicsCommandList** a_commandList)
+	bool D3D12Interop::BeginD3D12(ID3D12GraphicsCommandList** a_commandList, const std::shared_ptr<ExecutionEvidence>& a_evidence)
 	{
 		std::scoped_lock lock(mutex_);
+		ExecutionWaitScope waitEvidenceGuard{ waitEvidence_, a_evidence };
 		if (a_commandList)
 			*a_commandList = nullptr;
 		if (!initialized_ || recording_ || !a_commandList || unfencedSubmission_)
@@ -527,6 +570,7 @@ namespace NeuralRendering
 		commandContext.fenceValue = 0;
 		commandContext.timing = {};
 		commandContext.timingPending = false;
+		commandContext.evaluationTimingOpenMask = commandContext.evaluationTimingMask = 0;
 		const std::uint64_t readyValue = ++fenceValue_;
 		HRESULT result = context11_->Signal(fence11_.Get(), readyValue);
 		if (FAILED(result))
@@ -590,16 +634,69 @@ namespace NeuralRendering
 		auto& commandContext = commandContexts_[recordingContext_];
 		commandContext.timing = a_timing;
 		commandContext.timingPending = false;
+		commandContext.evaluationTimingOpenMask = commandContext.evaluationTimingMask = 0;
 		featureTimingOpen_ = true;
+		if (a_timing.execution)
+			a_timing.execution->Update([&](auto& evidence) {
+				evidence.batchGpu = { timestampQueryHeap_ && timestampReadback_ && timestampFrequency_ ?
+										  ExecutionTimingState::Pending :
+										  ExecutionTimingState::Unavailable,
+					std::nullopt };
+			});
 		if (!timestampQueryHeap_ || !timestampReadback_ || !timestampFrequency_)
 			return true;
 
 		a_commandList->EndQuery(
 			timestampQueryHeap_.Get(),
 			D3D12_QUERY_TYPE_TIMESTAMP,
-			static_cast<UINT>(recordingContext_ * 2u));
+			static_cast<UINT>(recordingContext_ * kQueriesPerContext));
 		timingRecording_ = true;
 		return true;
+	}
+
+	void D3D12Interop::BeginEvaluationTiming(ID3D12GraphicsCommandList* a_commandList, std::uint32_t a_region) noexcept
+	{
+		try {
+			std::scoped_lock lock(mutex_);
+			if (!recording_ || recordingContext_ >= commandContexts_.size() || a_region >= kMaximumExecutionRegions)
+				return;
+			auto& context = commandContexts_[recordingContext_];
+			if (!context.timing.execution || a_commandList != context.commandList.Get())
+				return;
+			const bool available = featureTimingOpen_ && timingRecording_ && timestampQueryHeap_ && timestampReadback_ &&
+			                       timestampFrequency_ && recordingThread_ == std::this_thread::get_id() &&
+			                       ((context.evaluationTimingOpenMask | context.evaluationTimingMask) & (1u << a_region)) == 0;
+			context.timing.execution->Update([&](auto& evidence) {
+				evidence.regions[a_region].evaluationGpu = { available ? ExecutionTimingState::Pending :
+																		 ExecutionTimingState::Unavailable,
+					std::nullopt };
+			});
+			if (!available)
+				return;
+			a_commandList->EndQuery(timestampQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
+				ExecutionEvaluationQuery(static_cast<std::uint32_t>(recordingContext_), a_region));
+			context.evaluationTimingOpenMask |= 1u << a_region;
+		} catch (...) {
+			executionTimingFailed_.store(true, std::memory_order_relaxed);
+		}
+	}
+
+	void D3D12Interop::EndEvaluationTiming(ID3D12GraphicsCommandList* a_commandList, std::uint32_t a_region) noexcept
+	{
+		try {
+			std::scoped_lock lock(mutex_);
+			if (!recording_ || recordingContext_ >= commandContexts_.size() || a_region >= kMaximumExecutionRegions)
+				return;
+			auto& context = commandContexts_[recordingContext_];
+			if (a_commandList != context.commandList.Get() || (context.evaluationTimingOpenMask & (1u << a_region)) == 0)
+				return;
+			const auto query = ExecutionEvaluationQuery(static_cast<std::uint32_t>(recordingContext_), a_region);
+			a_commandList->EndQuery(timestampQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, query + 1u);
+			context.evaluationTimingOpenMask &= ~(1u << a_region);
+			context.evaluationTimingMask |= 1u << a_region;
+		} catch (...) {
+			executionTimingFailed_.store(true, std::memory_order_relaxed);
+		}
 	}
 
 	bool D3D12Interop::EndFeatureTiming(ID3D12GraphicsCommandList* a_commandList)
@@ -621,7 +718,7 @@ namespace NeuralRendering
 		if (!timingRecording_)
 			return RecordFailureLocked(E_UNEXPECTED, "EndFeatureTiming timestamp not recording");
 
-		const UINT queryIndex = static_cast<UINT>(recordingContext_ * 2u);
+		const UINT queryIndex = static_cast<UINT>(recordingContext_ * kQueriesPerContext);
 		a_commandList->EndQuery(
 			timestampQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, queryIndex + 1u);
 		a_commandList->ResolveQueryData(
@@ -631,6 +728,13 @@ namespace NeuralRendering
 			2u,
 			timestampReadback_.Get(),
 			sizeof(std::uint64_t) * queryIndex);
+		for (std::uint32_t region = 0; region < kMaximumExecutionRegions; ++region) {
+			if ((commandContexts_[recordingContext_].evaluationTimingMask & (1u << region)) == 0)
+				continue;
+			const auto query = ExecutionEvaluationQuery(static_cast<std::uint32_t>(recordingContext_), region);
+			a_commandList->ResolveQueryData(timestampQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, query, 2u,
+				timestampReadback_.Get(), sizeof(std::uint64_t) * query);
+		}
 		commandContexts_[recordingContext_].timingPending = true;
 		timingRecording_ = false;
 		featureTimingCompleted_ = true;
@@ -660,6 +764,8 @@ namespace NeuralRendering
 		recordingContext_ = kCommandContextCount;
 		recordingThread_ = {};
 		if (FAILED(closeResult)) {
+			if (commandContext.timing.execution)
+				commandContext.timing.execution->FailPendingTimings();
 			commandContext.usable = false;
 			commandContext.allocator.Reset();
 			commandContext.commandList.Reset();
@@ -672,6 +778,8 @@ namespace NeuralRendering
 		const std::uint64_t completeValue = ++fenceValue_;
 		const HRESULT signalResult = queue12_->Signal(fence12_.Get(), completeValue);
 		if (FAILED(signalResult)) {
+			if (commandContext.timing.execution)
+				commandContext.timing.execution->FailPendingTimings();
 			commandContext.usable = false;
 			unfencedSubmission_ = true;
 			return RecordFailureLocked(signalResult, "ID3D12CommandQueue::Signal(submission)");
@@ -716,6 +824,8 @@ namespace NeuralRendering
 		recordingContext_ = kCommandContextCount;
 		recordingThread_ = {};
 		commandContext.fenceValue = 0;
+		if (commandContext.timing.execution)
+			commandContext.timing.execution->FailPendingTimings();
 		commandContext.timing = {};
 		commandContext.timingPending = false;
 		featureTimingOpen_ = false;
@@ -783,14 +893,18 @@ namespace NeuralRendering
 		return true;
 	}
 
-	bool D3D12Interop::WaitForIdle()
+	bool D3D12Interop::WaitForIdle(const std::shared_ptr<ExecutionEvidence>& a_evidence)
 	{
 		std::scoped_lock lock(mutex_);
+		ExecutionWaitScope waitEvidenceGuard{ waitEvidence_, a_evidence };
 		return WaitForIdleLocked();
 	}
 
 	void D3D12Interop::ReleaseObjectsLocked()
 	{
+		for (const auto& context : commandContexts_)
+			if (context.timing.execution)
+				context.timing.execution->FailPendingTimings();
 		for (const auto& pending : pendingFenceEvents_) {
 			if (pending.event)
 				CloseHandle(pending.event);
@@ -823,6 +937,9 @@ namespace NeuralRendering
 
 	void D3D12Interop::AbandonObjectsLocked() noexcept
 	{
+		for (const auto& context : commandContexts_)
+			if (context.timing.execution)
+				context.timing.execution->FailPendingTimings();
 		// A bounded wait failure leaves ownership intentionally leaked so in-flight GPU work cannot dereference freed objects.
 		// Pending event registrations are leaked with the fence to prevent handle reuse.
 		pendingFenceEvents_.clear();
@@ -877,9 +994,10 @@ namespace NeuralRendering
 		return true;
 	}
 
-	bool D3D12Interop::Shutdown()
+	bool D3D12Interop::Shutdown(const std::shared_ptr<ExecutionEvidence>& a_evidence)
 	{
 		std::scoped_lock lock(mutex_);
+		ExecutionWaitScope waitEvidenceGuard{ waitEvidence_, a_evidence };
 		return ShutdownLocked();
 	}
 
@@ -926,6 +1044,10 @@ namespace NeuralRendering
 	D3D12InteropTelemetry D3D12Interop::GetTelemetry()
 	{
 		std::scoped_lock lock(mutex_);
+		if (executionTimingFailed_.exchange(false, std::memory_order_relaxed))
+			for (const auto& context : commandContexts_)
+				if (context.timing.execution)
+					context.timing.execution->FailPendingTimings();
 		if (fence12_)
 			CollectCompletedTimingsLocked(fence12_->GetCompletedValue());
 		return telemetry_;

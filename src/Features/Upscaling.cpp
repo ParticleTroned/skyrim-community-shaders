@@ -5267,6 +5267,7 @@ namespace
 		}
 
 		a_requiresEvaluation = result.requiresEvaluation;
+		a_args.characterEvidence = result.evidence;
 		a_args.computeSubrect = result.computeSubrect;
 		a_args.computeRegions = result.computeRegions;
 		a_args.characterVisualIsolation = true;
@@ -43814,6 +43815,11 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 			args.outputWidth = a_neuralOutputWidth;
 			args.outputHeight = a_neuralOutputHeight;
 			args.viewportCrop = vendorParams.dlssViewportCrop;
+			SetNeuralExecutionContext(args, vendorParams.dlssViewportCrop,
+				NeuralRendering::RunsBeforeDlss(GetNeuralRenderingArrangement()) ?
+					std::array<uint32_t, 2>{ colorInputBaseOffsetX + rect.inputOffsetX, rect.inputOffsetY } :
+					std::array<uint32_t, 2>{ rect.outputOffsetX, rect.outputOffsetY },
+				{ depthInputBaseOffsetX + rect.inputOffsetX, rect.inputOffsetY });
 			if (NeuralRendering::RunsBeforeDlss(GetNeuralRenderingArrangement())) {
 				args.viewportCrop.fullOutput = args.viewportCrop.fullInput;
 				args.viewportCrop.output = args.viewportCrop.input;
@@ -43851,6 +43857,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 			if (neuralResult)
 				neuralResult->bypassed = !characterEvaluationRequired;
 			if (characterEvaluationRequired && useSubmitNeuralFloatBridge && !neuralBatchArgs) {
+				CS_GPU_DETAIL_PASS("NeuralRendering::InputPreparation", args.executionContext.inputPreparation);
 				const auto colorSubrect = NeuralRendering::MapComputeSubrect(
 					args.computeSubrect,
 					args.outputWidth,
@@ -44156,21 +44163,28 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 				return FidelityFX::UpscaleResult::Failed;
 		}
 	}
-	const bool blended = DispatchFoveatedBlendPass(
-		centerSRV,
-		outputUAV,
-		outputWidthPerEye,
-		outputHeight,
-		rect,
-		blendVisibleOutput,
-		centerScale,
-		centerHorizontalScale,
-		centerOffset,
-		centerBlendFeather,
-		0,
-		characterComposite.baseline,
-		characterComposite.mask.Get());
+	const auto compositeTiming = neuralAppliedForComposite ? CaptureNeuralStage(routeRole, eyeIndex,
+																 currentFrame, neuralSourceFrame, neuralGeneration, "composite") :
+	                                                         Util::PassTimingHandle{};
+	const bool blended = [&]() {
+		CS_GPU_DETAIL_PASS("NeuralRendering::CapturedComposite", compositeTiming);
+		return DispatchFoveatedBlendPass(
+			centerSRV,
+			outputUAV,
+			outputWidthPerEye,
+			outputHeight,
+			rect,
+			blendVisibleOutput,
+			centerScale,
+			centerHorizontalScale,
+			centerOffset,
+			centerBlendFeather,
+			0,
+			characterComposite.baseline,
+			characterComposite.mask.Get());
+	}();
 	if (blended) {
+		RecordNeuralStageWork(compositeTiming, static_cast<uint64_t>(blendVisibleOutput.Width()) * blendVisibleOutput.Height());
 		RecordNeuralPassTelemetry(
 			routeRole,
 			eyeIndex,
@@ -44210,7 +44224,9 @@ bool Upscaling::PrepareReducedResolutionNeuralOutput(uint32_t eye, const NeuralR
 	winrt::com_ptr<ID3D11SamplerState> previousSampler;
 	context->CSGetSamplers(0, 1, previousSampler.put());
 	auto restoreSampler = ScopeExit([&]() { auto* sampler = previousSampler.get(); context->CSSetSamplers(0, 1, &sampler); });
-	CS_GPU_PASS("NeuralRendering::ReducedCharacterSelection");
+	const auto capture = CaptureNeuralStage(args.featureSlot < 2 ? NeuralStereoRouteRole::Main : NeuralStereoRouteRole::Submit,
+		eye, args.frameId, args.sourceWorldFrame, args.generation, "pre_upscale_selection");
+	CS_GPU_PASS_CAPTURE("NeuralRendering::ReducedCharacterSelection", capture);
 	context->CopyResource(selected->resource.get(), args.colorInput);
 	FoveatedDispatchRect rect{};
 	rect.inputWidth = rect.outputWidth = args.outputWidth;
@@ -44222,6 +44238,11 @@ bool Upscaling::PrepareReducedResolutionNeuralOutput(uint32_t eye, const NeuralR
 				mask ? foveatedCenterColorIn[eye]->srv.get() : nullptr, mask.Get(), 0u, true))
 			return false;
 	}
+	uint64_t dispatchedPixels = 0;
+	for (const auto& region : regions)
+		dispatchedPixels += region.Area();
+	RecordNeuralStageWork(capture, dispatchedPixels,
+		NeuralRendering::LogicalTextureBytes(selected->desc.Format, selected->desc.Width, selected->desc.Height));
 	return true;
 }
 
@@ -44333,6 +44354,7 @@ namespace
 			for (std::uint32_t eye = 0; eye < (globals::game::isVR ? 2u : 1u); ++eye) {
 				a_batchArgs[eye].computeSubrect = maskResults[eye].computeSubrect;
 				a_batchArgs[eye].computeRegions = maskResults[eye].computeRegions;
+				a_batchArgs[eye].characterEvidence = maskResults[eye].evidence;
 				a_results[eye].bypassed = !maskResults[eye].requiresEvaluation;
 			}
 		}
@@ -44348,6 +44370,7 @@ namespace
 			const auto& source = a_upscaling.foveatedCenterColorOut[eye];
 			const auto region = NeuralRendering::MapComputeSubrect(args.computeSubrect,
 				args.outputWidth, args.outputHeight, args.colorWidth, args.colorHeight);
+			CS_GPU_DETAIL_PASS("NeuralRendering::InputPreparation", args.executionContext.inputPreparation);
 			if (!source || !source->srv || !destination->uav ||
 				!region.Fits(args.colorWidth, args.colorHeight) ||
 				!a_upscaling.DispatchSubmitStageColorRegion(source->srv.get(), destination->uav.get(),
@@ -44828,6 +44851,9 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 					rect.outputOffsetY + rect.outputHeight,
 				},
 			};
+			SetNeuralExecutionContext(args, args.viewportCrop,
+				{ target.baseOffsetX + rect.outputOffsetX, rect.outputOffsetY },
+				{ eye * a_inputWidthPerEye + rect.inputOffsetX, rect.inputOffsetY });
 			const auto featureUpscaling =
 				NeuralRendering::ResolveFeatureUpscaling(
 					args.guideWidth, args.guideHeight,
@@ -44887,6 +44913,7 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 			const auto& computeSubrect = neuralArgs[eye].computeSubrect;
 			if (!computeSubrect.Fits(rect.outputWidth, rect.outputHeight))
 				return false;
+			CS_GPU_DETAIL_PASS("NeuralRendering::InputPreparation", neuralArgs[eye].executionContext.inputPreparation);
 			const D3D11_BOX sourceBox{
 				target.baseOffsetX + rect.outputOffsetX + computeSubrect.baseX,
 				rect.outputOffsetY + computeSubrect.baseY,
@@ -44997,27 +45024,33 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 				true,
 				false,
 				globals::state->frameCount);
-			const bool blended = DispatchFoveatedBlendPass(
-				submitNeuralFloatColorOut[eye]->srv.get(),
-				a_targets[eye].uav,
-				a_outputWidthPerEye, a_outputHeight, rect,
-				blendVisibleOutput,
-				foveatedRectCache.centerScale,
-				foveatedRectCache.centerHorizontalScale,
-				foveatedRectCache.plan.eyes[eye].centerOffset,
-				sharedFullResolutionFovMask ?
-					foveatedRectCache.centerFeather :
-					ClampFoveatedBlendFeather(settings.neuralRenderingBlendFeather),
-				a_targets[eye].baseOffsetX,
-				baselineCenterSRVs[eye],
-				characterMaskOwners[eye].Get(),
-				finalLdrColorMode,
-				sharedFullResolutionFovMask && !FoveatedCommon::IsActiveCoverage(foveatedRectCache.centerScale));
+			const auto capture = CaptureNeuralStage(a_role, eye, globals::state->frameCount,
+				a_neuralSourceFrame, a_generation, "composite");
+			const bool blended = [&]() {
+				CS_GPU_DETAIL_PASS("NeuralRendering::CapturedComposite", capture);
+				return DispatchFoveatedBlendPass(
+					submitNeuralFloatColorOut[eye]->srv.get(),
+					a_targets[eye].uav,
+					a_outputWidthPerEye, a_outputHeight, rect,
+					blendVisibleOutput,
+					foveatedRectCache.centerScale,
+					foveatedRectCache.centerHorizontalScale,
+					foveatedRectCache.plan.eyes[eye].centerOffset,
+					sharedFullResolutionFovMask ?
+						foveatedRectCache.centerFeather :
+						ClampFoveatedBlendFeather(settings.neuralRenderingBlendFeather),
+					a_targets[eye].baseOffsetX,
+					baselineCenterSRVs[eye],
+					characterMaskOwners[eye].Get(),
+					finalLdrColorMode,
+					sharedFullResolutionFovMask && !FoveatedCommon::IsActiveCoverage(foveatedRectCache.centerScale));
+			}();
 			if (!blended) {
 				restoreCommittedCenters();
 				RequestHistoryReset();
 				return false;
 			}
+			RecordNeuralStageWork(capture, static_cast<uint64_t>(blendVisibleOutput.Width()) * blendVisibleOutput.Height());
 			RecordNeuralPassTelemetry(
 				a_role,
 				eye,
@@ -45049,7 +45082,7 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 }
 
 bool Upscaling::PrepareFullResolutionNeuralInputs(uint32_t inputWidthPerEye, uint32_t inputHeight,
-	uint32_t outputWidthPerEye, uint32_t outputHeight)
+	uint32_t outputWidthPerEye, uint32_t outputHeight, NeuralStereoRouteRole role, uint32_t sourceWorldFrame, uint64_t generation)
 {
 	auto* renderer = globals::game::renderer;
 	auto* context = globals::d3d::context;
@@ -45074,7 +45107,9 @@ bool Upscaling::PrepareFullResolutionNeuralInputs(uint32_t inputWidthPerEye, uin
 			settings.neuralRenderingFovOnly ? &sharedMaskProfile : nullptr))
 		return false;
 	NeuralRendering::Color::ComputeStateGuard<1> stateGuard(context);
-	CS_GPU_PASS("NeuralRendering::PrepareFullResolutionGuides");
+	const auto capture = CaptureNeuralStage(role, 2u, globals::state->frameCount,
+		sourceWorldFrame, generation, "full_resolution_guide_preparation");
+	CS_GPU_PASS_CAPTURE("NeuralRendering::PrepareFullResolutionGuides", capture);
 	for (uint32_t eye = 0; eye < eyeCount; ++eye) {
 		const auto& rect = foveatedRectCache.rects[eye];
 		const std::string suffix = eye == 0 ? "Left" : "Right";
@@ -45103,36 +45138,60 @@ void Upscaling::PrepareMainFullResolutionNeuralFrame() noexcept
 		return;
 	mainFullResolutionNeuralPreparationFrame = globals::state->frameCount;
 	mainFinalLdrNeuralState = {};
+	NeuralStereoRouteSnapshot route{};
+	route.valid = true;
+	route.role = NeuralStereoRouteRole::Main;
+	route.frame = globals::state->frameCount;
+	route.generation = std::max<uint64_t>(vrDLSSRuntimeResourceGeneration, 1u);
+	route.insertionPoint = static_cast<uint32_t>(NeuralRendering::InsertionPoint::FinalLdrPreUi);
+	route.requested = true;
+	const auto publishPreparationFallback = [&](NeuralStereoFallbackReason reason) noexcept {
+		route.disposition = NeuralStereoPairDisposition::NormalDLSSPair;
+		route.fallbackReason = reason;
+		PublishNeuralStereoRouteSnapshot(route);
+	};
 	try {
+		route.arrangement = static_cast<uint32_t>(GetNeuralRenderingArrangement());
 		const bool menuBlocked = IsNeuralRenderingHardMenuBlocked(*this, globals::state);
 		const auto admission = BuildNeuralTemporalAdmission(NeuralStereoRouteRole::Main, menuBlocked, !menuBlocked);
-		uint32_t inputWidth = 0, inputHeight = 0, outputWidth = 0, outputHeight = 0;
-		if (!admission.admitted || admission.sourceWorldFrame != globals::state->frameCount ||
-			IsNeuralRenderingInsertionTransitionBlocked() ||
-			settings.frameGenerationMode != 0 || IsFrameGenerationDx12PathActive() ||
-			!GetRuntimeFoveatedRegionDimensions(inputWidth, inputHeight, outputWidth, outputHeight) ||
-			!PrepareFullResolutionNeuralInputs(inputWidth, inputHeight, outputWidth, outputHeight))
-			return;
 		BeginNeuralCaptureFrame(NeuralStereoRouteRole::Main, globals::state->frameCount);
-		const uint64_t generation = std::max<uint64_t>(vrDLSSRuntimeResourceGeneration, 1u);
-		NeuralStereoRouteSnapshot route{};
-		route.valid = true;
-		route.frame = globals::state->frameCount;
-		route.generation = generation;
-		route.arrangement = static_cast<uint32_t>(GetNeuralRenderingArrangement());
-		route.insertionPoint = static_cast<uint32_t>(NeuralRendering::InsertionPoint::FinalLdrPreUi);
-		route.requested = route.eligible = route.sourceBatchEligible = route.sourceSignatureProven = true;
-		route.frameGenerationGatePassed = true;
+		route.hardMenuBlocked = menuBlocked;
+		route.menuContinuityAllowed = !menuBlocked;
 		route.temporalAdmission = admission;
+		route.frameGenerationActive = settings.frameGenerationMode != 0 || IsFrameGenerationDx12PathActive();
+		route.frameGenerationGatePassed = !route.frameGenerationActive;
+		if (!admission.admitted || admission.sourceWorldFrame != globals::state->frameCount) {
+			publishPreparationFallback(!admission.admitted ? GetNeuralTemporalFallbackReason(admission) :
+															 NeuralStereoFallbackReason::TemporalSourceStale);
+			return;
+		}
+		if (IsNeuralRenderingInsertionTransitionBlocked()) {
+			publishPreparationFallback(NeuralStereoFallbackReason::RouteIneligible);
+			return;
+		}
+		if (route.frameGenerationActive) {
+			publishPreparationFallback(NeuralStereoFallbackReason::FrameGeneration);
+			return;
+		}
+		uint32_t inputWidth = 0, inputHeight = 0, outputWidth = 0, outputHeight = 0;
+		if (!GetRuntimeFoveatedRegionDimensions(inputWidth, inputHeight, outputWidth, outputHeight) ||
+			!PrepareFullResolutionNeuralInputs(inputWidth, inputHeight, outputWidth, outputHeight,
+				NeuralStereoRouteRole::Main, admission.sourceWorldFrame, route.generation)) {
+			publishPreparationFallback(NeuralStereoFallbackReason::StereoPreflightFailed);
+			return;
+		}
+		route.eligible = route.sourceBatchEligible = route.sourceSignatureProven = true;
 		mainFinalLdrNeuralState = { true, globals::state->frameCount, NeuralRendering::GetTemporalSourceFrame(admission),
-			generation, BuildNeuralRenderingSettingsKey(settings), inputWidth, inputHeight, outputWidth, outputHeight, route };
+			route.generation, BuildNeuralRenderingSettingsKey(settings), inputWidth, inputHeight, outputWidth, outputHeight, route };
 	} catch (const std::exception& error) {
 		static bool loggedPreparationFailure = false;
 		LogWarnOnce(loggedPreparationFailure, "[NeuralRendering] Full-resolution guide preparation failed", error);
 		RequestHistoryReset();
+		publishPreparationFallback(NeuralStereoFallbackReason::StereoPreflightFailed);
 		return;
 	} catch (...) {
 		RequestHistoryReset();
+		publishPreparationFallback(NeuralStereoFallbackReason::StereoPreflightFailed);
 		return;
 	}
 }
@@ -46107,21 +46166,28 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 					return FidelityFX::UpscaleResult::Failed;
 			}
 		}
-		const bool blended = DispatchFoveatedBlendPass(
-			centerSRV,
-			outputColorUAV,
-			params.outputWidthPerEye,
-			params.outputHeight,
-			rect,
-			blendVisibleOutput,
-			params.centerScale,
-			params.centerHorizontalScale,
-			centerOffset,
-			centerBlendFeather,
-			0,
-			characterComposite.baseline,
-			characterComposite.mask.Get());
+		const auto capture = neuralResult && neuralResult->applied ? CaptureNeuralStage(routeRole, eyeIndex,
+																		 frame, params.neuralSourceFrame, params.neuralGeneration, "composite") :
+		                                                             Util::PassTimingHandle{};
+		const bool blended = [&]() {
+			CS_GPU_DETAIL_PASS("NeuralRendering::CapturedComposite", capture);
+			return DispatchFoveatedBlendPass(
+				centerSRV,
+				outputColorUAV,
+				params.outputWidthPerEye,
+				params.outputHeight,
+				rect,
+				blendVisibleOutput,
+				params.centerScale,
+				params.centerHorizontalScale,
+				centerOffset,
+				centerBlendFeather,
+				0,
+				characterComposite.baseline,
+				characterComposite.mask.Get());
+		}();
 		if (blended) {
+			RecordNeuralStageWork(capture, static_cast<uint64_t>(blendVisibleOutput.Width()) * blendVisibleOutput.Height());
 			RecordNeuralPassTelemetry(
 				routeRole,
 				eyeIndex,
@@ -57529,7 +57595,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			}
 			const bool lateNeuralGuidesReady = !fullResolutionNeural ||
 			                                   (stereoBatchSucceeded && PrepareFullResolutionNeuralInputs(
-																			eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut));
+																			eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut,
+																			NeuralStereoRouteRole::Submit, neuralSourceWorldFrame,
+																			std::max<uint64_t>(activeContractGeneration, 1u)));
 			if (!lateNeuralGuidesReady)
 				neuralPairFallbackReason = NeuralStereoFallbackReason::StereoPreflightFailed;
 			if (stereoBatchSucceeded && finalLdrInsertion && lateNeuralGuidesReady) {
@@ -60461,12 +60529,14 @@ void Upscaling::PublishNeuralStereoRouteSnapshot(const NeuralStereoRouteSnapshot
 
 		auto snapshot = a_snapshot;
 		PopulateNeuralRoutePassTelemetry(snapshot);
+		{
+			std::scoped_lock lock(neuralStereoRouteSnapshotMutex);
+			if (++neuralStereoRouteSnapshotSequence == 0)
+				++neuralStereoRouteSnapshotSequence;
+			snapshot.sequence = neuralStereoRouteSnapshotSequence;
+			neuralStereoRouteSnapshots[index] = snapshot;
+		}
 		RecordNeuralCaptureRoute(snapshot);
-		std::scoped_lock lock(neuralStereoRouteSnapshotMutex);
-		if (++neuralStereoRouteSnapshotSequence == 0)
-			++neuralStereoRouteSnapshotSequence;
-		snapshot.sequence = neuralStereoRouteSnapshotSequence;
-		neuralStereoRouteSnapshots[index] = snapshot;
 	} catch (...) {
 		// Route telemetry is observational and cannot affect render submission.
 	}

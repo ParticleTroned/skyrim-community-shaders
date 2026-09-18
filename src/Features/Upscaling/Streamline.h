@@ -87,6 +87,8 @@ public:
 		bool valid = false;
 		bool evaluationSucceeded = false;
 		uint32_t frame = 0;
+		uint64_t captureEpoch = 0, compositorCycle = 0;
+		DLSSPassRoute route = DLSSPassRoute::Main;
 		uint32_t eyeIndex = 0;
 		DLSSViewportRole viewportRole = DLSSViewportRole::FullEye;
 		uint32_t viewport = UINT32_MAX;

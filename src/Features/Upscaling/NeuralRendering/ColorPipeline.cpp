@@ -149,6 +149,10 @@ namespace NeuralRendering::Color
 			return true;
 		if (configuration_.revision == std::numeric_limits<std::uint64_t>::max())
 			return false;
+		const bool beginCapture = experiments.captureFrameEvidence && !configuration_.experiments.captureFrameEvidence;
+		const auto captureEpoch = captureEpoch_.load(std::memory_order_relaxed);
+		if (beginCapture && captureEpoch == std::numeric_limits<std::uint64_t>::max())
+			return false;
 		auto next = configuration_;
 		next.settings = settings;
 		next.experiments = experiments;
@@ -162,6 +166,8 @@ namespace NeuralRendering::Color
 		}
 		auto& capture = ExposureCapture::Instance();
 		configuration_ = next;
+		if (beginCapture)
+			captureEpoch_.store(captureEpoch + 1, std::memory_order_release);
 		captureEvidenceEnabled_.store(next.experiments.captureFrameEvidence, std::memory_order_release);
 		capture.Request(NeedsExposureCapture(next));  // Atomic request only, no engine/GPU work.
 		return true;
@@ -373,6 +379,7 @@ namespace NeuralRendering::Color
 		if (work.format == DXGI_FORMAT_R32G32B32A32_FLOAT)
 			pixelBytes = 16;
 		o.retainedBytes = 2 * pixelBytes * work.capacityWidth * work.capacityHeight;
+		CS_GPU_DETAIL_PASS("Upscaling::NRColorPreparation", o.preparationPass);
 		ComputeStateGuard<5> guard(context);
 		if (NeedsExposureCapture(config)) {
 			const ExposureTransaction key{ o.frame, o.sourceWorldFrame, o.insertion, (o.slot % 4u) / 2u, o.generation,
@@ -392,8 +399,10 @@ namespace NeuralRendering::Color
 		const auto& roi = o.rect;
 		D3D11_BOX box{ roi.baseX, roi.baseY, 0, roi.baseX + roi.width, roi.baseY + roi.height, 1 };
 		context->CopySubresourceRegion(work.baseline.resource.Get(), 0, 0, 0, 0, original, 0, &box);
+		o.copiedLogicalBytes = roi.Area() * pixelBytes;
 		if (o.profile.transform == Transform::Identity) {
 			context->CopySubresourceRegion(prepared, 0, roi.baseX, roi.baseY, 0, original, 0, &box);
+			o.copiedLogicalBytes += roi.Area() * pixelBytes;
 		} else {
 			const auto constants = MakeConstants(work);
 			context->UpdateSubresource(constants_.Get(), 0, nullptr, &constants, 0, 0);
@@ -418,6 +427,7 @@ namespace NeuralRendering::Color
 			!work.prepared || requested.revision != work.configuration.revision)
 			return false;
 		const auto& config = work.configuration;  // The same immutable settings as Prepare.
+		CS_GPU_DETAIL_PASS("Upscaling::NRColorReconstruction", work.observation.reconstructionPass);
 		const auto start = std::chrono::steady_clock::now();
 		ComputeStateGuard<5> guard(context);
 		const auto& roi = work.observation.rect;
@@ -429,6 +439,10 @@ namespace NeuralRendering::Color
 		if (config.EffectiveMode() == Mode::LegacyRaw && !config.experiments.transportBypass && config.experiments.applyModelEdit) {
 			D3D11_BOX box{ roi.baseX, roi.baseY, 0, roi.baseX + roi.width, roi.baseY + roi.height, 1 };
 			context->CopySubresourceRegion(work.result.resource.Get(), 0, 0, 0, 0, neural, 0, &box);
+			const std::uint64_t pixelBytes = work.format == DXGI_FORMAT_R32G32B32A32_FLOAT                                                  ? 16u :
+			                                 work.format == DXGI_FORMAT_R16G16B16A16_FLOAT || work.format == DXGI_FORMAT_R16G16B16A16_UNORM ? 8u :
+			                                                                                                                                  4u;
+			work.observation.copiedLogicalBytes += roi.Area() * pixelBytes;
 		} else {
 			ID3D11ShaderResourceView* sources[]{ work.baseline.srv.Get(), neuralSRV, preparedSRV, exposure };
 			auto* destination = work.result.uav.Get();

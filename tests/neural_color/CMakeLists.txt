@@ -29,6 +29,8 @@ target_include_directories(nr_adversarial_policy_test PRIVATE "${CMAKE_CURRENT_L
 add_test(NAME NRColorAdversarialPolicy COMMAND nr_adversarial_policy_test)
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
+    add_test(NAME NRExecutionEvidenceJoin
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/transaction_evidence_test.py")
     add_test(NAME NRHmdCaptureWorkflow
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/test_hmd_capture.py")
     add_test(NAME NRHmdImageAssessment

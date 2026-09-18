@@ -1,4 +1,5 @@
 #include "Runtime.h"
+#include "D3D12Interop.h"
 
 #include "Util.h"
 
@@ -11,6 +12,7 @@
 #include <array>
 #include <atomic>
 #include <bcrypt.h>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <cwctype>
@@ -1478,10 +1480,15 @@ namespace NeuralRendering
 		const ComputeSubrect& a_outputSubrect,
 		float a_motionVectorScaleX, float a_motionVectorScaleY,
 		bool a_featureUpscaling, const Tuning& a_tuning, bool a_reset,
-		bool* a_evaluationAttempted)
+		bool* a_evaluationAttempted,
+		RuntimeExecutionEvidence* a_evidence,
+		D3D12Interop* a_timingInterop,
+		std::uint32_t a_timingRegion)
 	{
 		if (a_evaluationAttempted)
 			*a_evaluationAttempted = false;
+		if (a_evidence)
+			*a_evidence = {};
 		std::scoped_lock lock(mutex_);
 		const bool hasControlMask = a_controlMask != nullptr;
 		const bool controlMaskContractValid =
@@ -1554,6 +1561,8 @@ namespace NeuralRendering
 			a_colorWidth, a_colorHeight, a_guideWidth, a_guideHeight,
 			a_outputWidth, a_outputHeight, a_featureUpscaling);
 		if (featureHandles_[a_slot] && configurationChanged) {
+			if (a_evidence)
+				a_evidence->createReason = "live_configuration_change_rejected";
 			SetFailureLocked(
 				RuntimeStatus::FeatureConfigurationChanged,
 				RuntimeFailureStage::FeatureConfiguration,
@@ -1587,8 +1596,20 @@ namespace NeuralRendering
 			parameters->Set("DLSSNR.Hint.Render.Preset", 0u);
 
 			NVSDK_NGX_Handle* handle = nullptr;
+			const auto createStarted = a_evidence ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+			if (a_evidence) {
+				a_evidence->createAttempted = true;
+				a_evidence->createReason = "missing_feature";
+			}
 			const auto createResult = createFeature(
 				a_commandList, kFeatureDlssNr, parameters, &handle);
+			if (a_evidence) {
+				a_evidence->createCpuMicroseconds = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+					std::chrono::steady_clock::now() - createStarted)
+						.count());
+				a_evidence->createSucceeded = !NVSDK_NGX_FAILED(createResult) && handle;
+				a_evidence->createResult = static_cast<std::uint32_t>(createResult);
+			}
 			ngxResult_ = static_cast<std::uint32_t>(createResult);
 			lastPathProxyHits_ = pathProxy.Hits();
 			if (NVSDK_NGX_FAILED(createResult) || !handle) {
@@ -1685,9 +1706,23 @@ namespace NeuralRendering
 
 		if (a_evaluationAttempted)
 			*a_evaluationAttempted = true;
+		if (a_timingInterop)
+			a_timingInterop->BeginEvaluationTiming(a_commandList, a_timingRegion);
+		const auto evaluateStarted = a_evidence ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+		if (a_evidence)
+			a_evidence->evaluateAttempted = true;
 		const auto evaluateResult = evaluateFeature(
 			a_commandList, static_cast<NVSDK_NGX_Handle*>(featureHandles_[a_slot]),
 			parameters, nullptr);
+		if (a_evidence) {
+			a_evidence->evaluateCpuMicroseconds = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now() - evaluateStarted)
+					.count());
+			a_evidence->evaluateSucceeded = !NVSDK_NGX_FAILED(evaluateResult);
+			a_evidence->evaluateResult = static_cast<std::uint32_t>(evaluateResult);
+		}
+		if (a_timingInterop)
+			a_timingInterop->EndEvaluationTiming(a_commandList, a_timingRegion);
 		ngxResult_ = static_cast<std::uint32_t>(evaluateResult);
 		lastPathProxyHits_ = pathProxy.Hits();
 		if (NVSDK_NGX_FAILED(evaluateResult)) {

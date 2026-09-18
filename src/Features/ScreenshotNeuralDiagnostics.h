@@ -10,7 +10,7 @@ namespace CSX::ScreenshotPolicy
 	using DiagnosticSnapshot = std::function<nlohmann::json()>;
 
 	/** Pin exact CPU companions at acquisition; snapshot and release at terminal. */
-	DiagnosticSnapshot RetainNeuralDiagnostics(const nlohmann::json& evidence);
+	DiagnosticSnapshot RetainNeuralDiagnostics(const nlohmann::json& evidence, DiagnosticSnapshot execution = {});
 
 	/** Seal once before the terminal receipt/manifest, including failure paths. */
 	inline void FinalizeNeuralDiagnostics(DiagnosticSnapshot& pending, nlohmann::json& actual)

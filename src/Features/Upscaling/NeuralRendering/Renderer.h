@@ -185,6 +185,8 @@ namespace NeuralRendering
 		std::uint64_t generation = 0;
 		InsertionPoint insertionPoint = kDefaultInsertionPoint;
 		ID3D11Resource* colorInput = nullptr;
+		ExecutionContext executionContext{};
+		std::shared_ptr<const CharacterPreparationEvidence> characterEvidence;
 		ID3D11Resource* depthGuide = nullptr;
 		ID3D11ShaderResourceView* depthGuideSRV = nullptr;
 		ID3D11Resource* motionVectors = nullptr;

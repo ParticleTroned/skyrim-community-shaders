@@ -8,6 +8,7 @@ function(csx_add_neural_rendering_capture_tests repository_root register_test)
         neural_feature_settings_test
         neural_rendering_ui_test
         neural_settings_key_test
+        neural_transaction_evidence_test
     )
     set(test_names
         ScreenshotNeuralEvidence
@@ -16,6 +17,7 @@ function(csx_add_neural_rendering_capture_tests repository_root register_test)
         NeuralFeatureSettings
         NeuralRenderingUI
         NeuralSettingsKey
+        NeuralTransactionEvidence
     )
     foreach(target test_name IN ZIP_LISTS targets test_names)
         cmake_language(CALL ${register_test}

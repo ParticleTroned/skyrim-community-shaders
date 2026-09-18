@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ExecutionEvidence.h"
 #include "PipelinePolicy.h"
 
 #include <array>
@@ -28,6 +29,7 @@ namespace NeuralRendering
 		InsertionPoint insertionPoint = kDefaultInsertionPoint;
 		// Two regions in one eye are not a stereo submission.
 		std::uint32_t logicalEyeCount = 1;
+		std::shared_ptr<ExecutionEvidence> execution;
 	};
 
 	struct D3D12InteropTelemetry
@@ -88,22 +90,26 @@ namespace NeuralRendering
 		D3D12Interop(const D3D12Interop&) = delete;
 		D3D12Interop& operator=(const D3D12Interop&) = delete;
 
-		bool Initialize(IDXGIAdapter* a_adapter, ID3D11Device* a_device, ID3D11DeviceContext* a_context);
+		bool Initialize(IDXGIAdapter* a_adapter, ID3D11Device* a_device, ID3D11DeviceContext* a_context,
+			const std::shared_ptr<ExecutionEvidence>& a_evidence = {});
 		bool CreateSharedTexture(const D3D11_TEXTURE2D_DESC& a_sourceDesc, SharedTexture& a_texture, const char* a_name);
 
-		bool BeginD3D12(ID3D12GraphicsCommandList** a_commandList);
+		bool BeginD3D12(ID3D12GraphicsCommandList** a_commandList, const std::shared_ptr<ExecutionEvidence>& a_evidence = {});
 		/** Opens the required Feature 18 submission-metadata scope and optional GPU timestamp. */
 		bool BeginFeatureTiming(
 			ID3D12GraphicsCommandList* a_commandList,
 			const D3D12InteropSubmissionTiming& a_timing);
 		/** Closes the Feature 18 scope; EndD3D12 requires exactly one completed scope. */
 		bool EndFeatureTiming(ID3D12GraphicsCommandList* a_commandList);
+		/** Optional timestamps around the NGX evaluate call, excluding feature creation. */
+		void BeginEvaluationTiming(ID3D12GraphicsCommandList* a_commandList, std::uint32_t a_region) noexcept;
+		void EndEvaluationTiming(ID3D12GraphicsCommandList* a_commandList, std::uint32_t a_region) noexcept;
 		/** Completes a copy-only diagnostic scope without claiming an inference sample. */
 		bool RecordTransportSubmission(const D3D12InteropSubmissionTiming& a_timing);
 		bool EndD3D12();
 		bool AbortD3D12();
-		bool WaitForIdle();
-		bool Shutdown();
+		bool WaitForIdle(const std::shared_ptr<ExecutionEvidence>& a_evidence = {});
+		bool Shutdown(const std::shared_ptr<ExecutionEvidence>& a_evidence = {});
 		/** Permanently detaches unsafe interop ownership without releasing it. */
 		void AbandonUnsafe() noexcept;
 
@@ -122,6 +128,7 @@ namespace NeuralRendering
 			std::uint64_t fenceValue = 0;
 			D3D12InteropSubmissionTiming timing{};
 			bool timingPending = false;
+			std::uint32_t evaluationTimingOpenMask = 0, evaluationTimingMask = 0;
 			bool usable = true;
 		};
 
@@ -141,6 +148,7 @@ namespace NeuralRendering
 
 		bool CreateCommandContextLocked(std::size_t a_index);
 		bool CreateTimingResourcesLocked();
+		static constexpr std::uint32_t kQueriesPerContext = kExecutionTimestampQueriesPerContext;
 		void CollectCompletedTimingLocked(
 			std::size_t a_index,
 			std::uint64_t a_completedValue) noexcept;
@@ -172,6 +180,8 @@ namespace NeuralRendering
 		std::size_t recordingContext_ = kCommandContextCount;
 		std::thread::id recordingThread_{};
 		D3D12InteropTelemetry telemetry_{};
+		std::shared_ptr<ExecutionEvidence> waitEvidence_;
+		std::atomic_bool executionTimingFailed_{ false };
 		std::uint64_t timestampFrequency_ = 0;
 		HRESULT lastError_ = S_OK;
 		std::string lastOperation_;

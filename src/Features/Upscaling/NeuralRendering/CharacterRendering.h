@@ -3,6 +3,7 @@
 #include "../DLSSViewportCrop.h"
 #include "CharacterActorPolicy.h"
 #include "CharacterMultiRoi.h"
+#include "CharacterPreparationEvidence.h"
 #include "CharacterRegionPolicy.h"
 #include "CharacterSettings.h"
 #include "ComputeSubrect.h"
@@ -152,6 +153,8 @@ namespace NeuralRendering
 		std::array<std::uint32_t, 4> heights{};
 		/** Expected physical evaluations: zero for bypass, one legacy, two split. */
 		std::array<std::uint32_t, 4> computeRegionCounts{};
+		/** Optional immutable preparation records; delayed completions retain their own identity. */
+		std::array<std::shared_ptr<const CharacterPreparationEvidence>, 4> preparationEvidence{};
 	};
 
 	struct CharacterPreparationFailure
@@ -247,6 +250,7 @@ namespace NeuralRendering
 		/** Output-local rectangle supplied to the private Feature 18 subrect ABI. */
 		ComputeSubrect computeSubrect{};
 		CharacterComputeRegionPlan computeRegions{};
+		std::shared_ptr<const CharacterPreparationEvidence> evidence;
 	};
 
 	/** Owns character observations, stable per-eye regions, and R8 selection masks. */
@@ -320,6 +324,10 @@ namespace NeuralRendering
 		void ResetShaderCache() noexcept;
 
 		[[nodiscard]] CharacterSnapshot GetSnapshot() const;
+		/** Retrieve only the exact retained preparation, never the latest eye or frame alone. */
+		[[nodiscard]] std::shared_ptr<const CharacterPreparationEvidence> GetPreparationEvidence(
+			std::uint32_t a_frame, std::uint32_t a_sourceWorldFrame,
+			std::uint64_t a_generation, std::uint32_t a_featureSlot) const noexcept;
 		[[nodiscard]] Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>
 		GetDebugMaskSrv(
 			std::uint32_t a_eyeIndex) const noexcept;

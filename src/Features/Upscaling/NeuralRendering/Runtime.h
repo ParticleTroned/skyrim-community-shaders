@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ExecutionEvidence.h"
+
 #include "ComputeSubrect.h"
 
 #include <array>
@@ -17,6 +19,7 @@ struct ID3D12Resource;
 
 namespace NeuralRendering
 {
+	class D3D12Interop;
 	enum class RuntimeStatus
 	{
 		NotProbed,
@@ -135,7 +138,10 @@ namespace NeuralRendering
 			bool a_featureUpscaling,
 			const Tuning& a_tuning,
 			bool a_reset,
-			bool* a_evaluationAttempted = nullptr);
+			bool* a_evaluationAttempted = nullptr,
+			RuntimeExecutionEvidence* a_evidence = nullptr,
+			D3D12Interop* a_timingInterop = nullptr,
+			std::uint32_t a_timingRegion = 0);
 
 		bool ResetFeature(std::uint32_t a_slot);
 		bool ResetFeatures();

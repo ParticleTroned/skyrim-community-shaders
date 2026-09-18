@@ -31,6 +31,14 @@ int main()
 		require(rejected.at("submissions").at("right") == changed);
 	}
 	require(!CSX::ScreenshotPolicy::JoinNeuralEyeEvidence(left, Json::object()).at("available"));
+	auto laterPublication = right;
+	laterPublication["publicationSequence"] = 7;
+	require(!CSX::ScreenshotPolicy::JoinNeuralEyeEvidence(left, laterPublication).at("available"));
+	left["publicationSequence"] = 6;
+	require(!CSX::ScreenshotPolicy::JoinNeuralEyeEvidence(left, laterPublication).at("available"));
+	left["publicationSequence"] = 7;
+	require(CSX::ScreenshotPolicy::JoinNeuralEyeEvidence(left, laterPublication).at("available"));
+	left.erase("publicationSequence");
 	for (const auto& malformed : { Json(nullptr), Json::array(), Json("invalid"), Json{ { "available", "invalid" } } }) {
 		const auto rejected = CSX::ScreenshotPolicy::JoinNeuralEyeEvidence(left, malformed);
 		require(!rejected.at("available") && rejected.at("reason") == "eye_evidence_malformed");

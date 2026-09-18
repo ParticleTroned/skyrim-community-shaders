@@ -6,12 +6,14 @@
 #include "CharacterEarlyMaskBounds.h"
 #include "CharacterMaskReadback.h"
 #include "CharacterMaskWorkPolicy.h"
+#include "ColorPipeline.h"
 
 #include "Globals.h"
 #include "GpuPass.h"
 #include "Profiler.h"
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
+#include "Utils/PassTimingCapture.h"
 
 #include <algorithm>
 #include <array>
@@ -41,6 +43,21 @@ namespace NeuralRendering
 		constexpr std::uint32_t kRegionQuantization = 4;
 		constexpr float kVisibilityDepthThreshold = 0.001f;
 		constexpr std::uint32_t kDiagnosticCounterCount = 9;
+
+		template <class T, class... Args>
+		std::shared_ptr<T> AllocateEvidence(Args&&... args) noexcept
+		{
+			try {
+				return std::make_shared<T>(std::forward<Args>(args)...);
+			} catch (...) {
+				return {};
+			}
+		}
+
+		double ElapsedMilliseconds(std::chrono::steady_clock::time_point start) noexcept
+		{
+			return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+		}
 
 		// Camera-relative bounds must use the origin belonging to the cached
 		// view-projection, not a live shadow-state pose that can already be newer.
@@ -291,6 +308,41 @@ namespace NeuralRendering
 	class CharacterRendering::State
 	{
 	public:
+		struct DetectionScope
+		{
+			State& state;
+			bool armed;
+			std::chrono::steady_clock::time_point started{};
+			DetectionScope(State& owner, std::uint32_t frame) : state(owner),
+																armed(Color::Registry::Instance().CaptureEvidenceEnabled())
+			{
+				if (!armed)
+					return;
+				const auto epoch = Color::Registry::Instance().CaptureEpoch();
+				if (state.detectionFrame_ != frame || state.detectionEpoch_ != epoch) {
+					state.detectionFrame_ = frame;
+					state.detectionEpoch_ = epoch;
+					state.detectionCalls_ = 0;
+					state.detectionCpuMs_ = 0.0;
+				}
+				started = std::chrono::steady_clock::now();
+			}
+			~DetectionScope()
+			{
+				if (armed) {
+					Increment(state.detectionCalls_);
+					state.detectionCpuMs_ += ElapsedMilliseconds(started);
+				}
+			}
+		};
+		struct PreparationEvidenceScope
+		{
+			State& state;
+			CharacterPreparationEvidence* previous;
+			PreparationEvidenceScope(State& owner, CharacterPreparationEvidence* evidence) :
+				state(owner), previous(owner.activePreparationEvidence_) { state.activePreparationEvidence_ = evidence; }
+			~PreparationEvidenceScope() { state.activePreparationEvidence_ = previous; }
+		};
 		struct Observation
 		{
 			std::uint32_t actorFormId = 0;
@@ -350,6 +402,7 @@ namespace NeuralRendering
 
 		struct Readback
 		{
+			std::shared_ptr<CharacterMaskSupportCapture> supportEvidence;
 			ComPtr<ID3D11Buffer> staging;
 			ComPtr<ID3D11Query> ready;
 			std::uint32_t frame = 0;
@@ -383,6 +436,7 @@ namespace NeuralRendering
 
 		struct Slot
 		{
+			std::shared_ptr<CharacterMaskSupportCapture> supportEvidence;
 			ComPtr<ID3D11Texture2D> mask;
 			ComPtr<ID3D11ShaderResourceView> maskSrv;
 			ComPtr<ID3D11UnorderedAccessView> maskUav;
@@ -487,6 +541,51 @@ namespace NeuralRendering
 			actorAdmissions_.reserve(256);
 		}
 
+		static void RetireCoverageEvidence(Slot& slot) noexcept
+		{
+			for (auto& readback : slot.readbacks)
+				if (readback.pending && readback.supportEvidence)
+					readback.supportEvidence->Fail("coverage_resources_retired");
+		}
+
+		void CaptureLogicalBytes(CharacterSourceEvidence& evidence) const noexcept
+		{
+			evidence.logicalTextureBytes = 0;
+			for (auto* texture : { capturedCategories_.Get(), capturedDepth_.Get() }) {
+				if (!texture)
+					continue;
+				D3D11_TEXTURE2D_DESC desc{};
+				texture->GetDesc(&desc);
+				evidence.logicalTextureBytes += static_cast<std::uint64_t>(desc.Width) * desc.Height * 4u;
+			}
+			for (const auto& readback : earlyMaskReadbacks_) {
+				for (auto* buffer : { readback.bounds.Get(), readback.staging.Get() }) {
+					if (!buffer)
+						continue;
+					D3D11_BUFFER_DESC desc{};
+					buffer->GetDesc(&desc);
+					evidence.logicalBoundsBytes += desc.ByteWidth;
+				}
+			}
+		}
+
+		void PublishPreparationEvidence(const std::shared_ptr<CharacterPreparationEvidence>& evidence,
+			std::chrono::steady_clock::time_point started) noexcept
+		{
+			if (!evidence)
+				return;
+			evidence->preparationCpuMs = ElapsedMilliseconds(started);
+			const auto slot = evidence->key.featureSlot;
+			if (slot >= latestPreparationEvidence_.size())
+				return;
+			latestPreparationEvidence_[slot] = evidence;
+			if (!evidence->prepared)
+				return;
+			for (auto& entry : snapshot_.preparedFrames)
+				if (entry.frame == evidence->key.frame && entry.contentSerials[slot] == evidence->key.contentSerial)
+					entry.preparationEvidence[slot] = evidence;
+		}
+
 		[[nodiscard]] bool BeginObservationFrame(std::uint32_t a_frame)
 		{
 			if (observationFrame_ == a_frame)
@@ -563,6 +662,7 @@ namespace NeuralRendering
 
 		void InvalidateCaptureMetadata() noexcept
 		{
+			sourceEvidence_.reset();
 			earlyMaskCaptureSerial_ = 0;
 			capturedFrame_ = std::numeric_limits<std::uint32_t>::max();
 			capturedCategoriesEmpty_ = false;
@@ -589,6 +689,7 @@ namespace NeuralRendering
 
 		void InvalidatePreparedMasks(bool a_preserveMultiRoiHistory = false) noexcept
 		{
+			latestPreparationEvidence_ = {};
 			lastSlotForEye_ = { 4, 4 };
 			snapshot_.eyes = {};
 			for (auto& slot : slots_) {
@@ -745,7 +846,10 @@ namespace NeuralRendering
 		{
 			const std::array<float, 4> clear{ a_value, a_value, a_value, a_value };
 			if (!a_slot.maskUniform || a_slot.uniformMaskValue != a_value) {
+				CS_GPU_DETAIL_PASS("Upscaling::DLSS5CharacterMaskClear", activePreparationEvidence_ ? activePreparationEvidence_->maskTiming : Util::PassTimingHandle{});
 				a_context->ClearUnorderedAccessViewFloat(a_slot.maskUav.Get(), clear.data());
+				if (activePreparationEvidence_)
+					activePreparationEvidence_->clearedPixels += static_cast<std::uint64_t>(a_width) * a_height;
 			}
 			a_slot.maskInitialized = true;
 			a_slot.maskUniform = true;
@@ -800,6 +904,8 @@ namespace NeuralRendering
 		void AdoptDevice(ID3D11Device* a_device)
 		{
 			if (device_ && !SameIdentity(device_.Get(), a_device)) {
+				for (auto& slot : slots_)
+					RetireCoverageEvidence(slot);
 				slots_ = {};
 				ResetEarlyMaskBounds();
 				shader_.Reset();
@@ -1092,6 +1198,7 @@ namespace NeuralRendering
 			if (a_slot.mask && a_slot.width == a_width && a_slot.height == a_height)
 				return true;
 
+			RetireCoverageEvidence(a_slot);
 			a_slot = {};
 			D3D11_TEXTURE2D_DESC textureDesc{};
 			textureDesc.Width = a_width;
@@ -1254,7 +1361,7 @@ namespace NeuralRendering
 			return true;
 		}
 
-		void QueueEarlyMaskBounds(ID3D11Device* a_device, ID3D11DeviceContext* a_context)
+		void QueueEarlyMaskBounds(ID3D11Device* a_device, ID3D11DeviceContext* a_context, CharacterSourceEvidence* evidence = nullptr)
 		{
 			try {
 				EarlyMaskReadback* selected = nullptr;
@@ -1303,7 +1410,7 @@ namespace NeuralRendering
 				a_context->CSSetShaderResources(0, 1, &source);
 				a_context->CSSetUnorderedAccessViews(0, 1, &destination, nullptr);
 				{
-					CS_GPU_PASS("Upscaling::DLSS5EarlyCharacterMaskBounds");
+					CS_GPU_PASS_CAPTURE("Upscaling::DLSS5EarlyCharacterMaskBounds", evidence ? evidence->boundsTiming : Util::PassTimingHandle{});
 					a_context->Dispatch(columns, rows, capturedEyeCount_);
 				}
 				a_context->CSSetUnorderedAccessViews(0, 2, nullUavs.data(), nullptr);
@@ -1317,6 +1424,10 @@ namespace NeuralRendering
 				Increment(snapshot_.earlyMaskBounds.queued);
 				snapshot_.earlyMaskBounds.lastQueuedFrame = capturedFrame_;
 				snapshot_.earlyMaskBounds.readbackBytes = static_cast<std::uint32_t>(selected->tiles.size() * sizeof(CharacterMaskRoiTileBounds));
+				if (evidence)
+					evidence->boundsReadbackBytes = snapshot_.earlyMaskBounds.readbackBytes;
+				if (evidence)
+					evidence->boundsDispatchedThreads = static_cast<std::uint64_t>(columns) * rows * capturedEyeCount_ * 64u;
 			} catch (const std::exception& exception) {
 				(void)FailEarlyMaskBounds(exception.what(), E_FAIL);
 			}
@@ -1345,6 +1456,10 @@ namespace NeuralRendering
 					const auto result = PollCharacterMaskBounds(a_args.context, selected->query.Get(), selected->staging.Get(),
 						std::as_writable_bytes(std::span(selected->tiles)));
 					snapshot_.earlyMaskBounds.lastPollCpuMs = result.waitMs;
+					if (activePreparationEvidence_) {
+						activePreparationEvidence_->boundsPollCpuAvailable = true;
+						activePreparationEvidence_->boundsPollCpuMs = result.waitMs;
+					}
 					if (!result.Ready()) {
 						a_slot.maskRoiStatus = result.status == CharacterMaskReadbackStatus::Pending ? "early_bounds_pending" : "early_bounds_failed";
 						if (result.status == CharacterMaskReadbackStatus::Pending)
@@ -1357,6 +1472,8 @@ namespace NeuralRendering
 					selected->hasData = true;
 					Increment(snapshot_.earlyMaskBounds.ready);
 				}
+				if (activePreparationEvidence_)
+					activePreparationEvidence_->boundsReady = true;
 				const auto count = selected->tiles.size() / selected->eyeCount;
 				std::vector<CharacterMaskRoiTileBounds> mapped;
 				const auto& input = a_args.viewportCrop.input;
@@ -1692,6 +1809,8 @@ namespace NeuralRendering
 					if (queryResult == S_FALSE)
 						continue;
 					if (FAILED(queryResult)) {
+						if (readback.supportEvidence)
+							readback.supportEvidence->Fail("coverage_query_failed");
 						readback.pending = false;
 						Increment(snapshot_.readbackDrops);
 						continue;
@@ -1703,6 +1822,8 @@ namespace NeuralRendering
 					if (mapResult == DXGI_ERROR_WAS_STILL_DRAWING)
 						continue;
 					if (FAILED(mapResult)) {
+						if (readback.supportEvidence)
+							readback.supportEvidence->Fail("coverage_map_failed");
 						readback.pending = false;
 						Increment(snapshot_.readbackDrops);
 						continue;
@@ -1710,6 +1831,8 @@ namespace NeuralRendering
 					std::array<std::uint32_t, kDiagnosticCounterCount> counters{};
 					std::memcpy(counters.data(), mapped.pData, sizeof(counters));
 					a_context->Unmap(readback.staging.Get(), 0);
+					if (readback.supportEvidence)
+						readback.supportEvidence->Complete(counters[MaskPixels]);
 					const bool sampleIsNewest =
 						!slot.maskCoverageReady ||
 						readback.serial >= slot.maskCoverageSerial;
@@ -1901,6 +2024,8 @@ namespace NeuralRendering
 				a_args.context->ClearUnorderedAccessViewFloat(
 					a_slot.maskUav.Get(), clearMask.data());
 				a_slot.maskInitialized = true;
+				if (activePreparationEvidence_)
+					activePreparationEvidence_->clearedPixels += static_cast<std::uint64_t>(a_args.outputWidth) * a_args.outputHeight;
 			}
 			if (measureCoverage) {
 				const std::array<UINT, 4> clear{};
@@ -1946,11 +2071,16 @@ namespace NeuralRendering
 				return false;
 #endif
 			{
-				CS_GPU_PASS("Upscaling::DLSS5CharacterMask");
+				CS_GPU_PASS_CAPTURE("Upscaling::DLSS5CharacterMask", activePreparationEvidence_ ? activePreparationEvidence_->maskTiming : Util::PassTimingHandle{});
 				a_args.context->Dispatch(
 					(dispatchWidth + 7u) / 8u,
 					(dispatchHeight + 7u) / 8u,
 					1);
+			}
+			if (activePreparationEvidence_) {
+				activePreparationEvidence_->dirtyDispatchRect = { dispatchOffsetX, dispatchOffsetY, dispatchWidth, dispatchHeight };
+				activePreparationEvidence_->dispatchedPixels = static_cast<std::uint64_t>(dispatchWidth) * dispatchHeight;
+				activePreparationEvidence_->dispatchedThreads = static_cast<std::uint64_t>((dispatchWidth + 7u) / 8u) * ((dispatchHeight + 7u) / 8u) * 64u;
 			}
 			a_slot.maskUniform = false;
 			a_slot.previousMaskWorkSubrect = a_slot.maskWorkSubrect;
@@ -1959,6 +2089,11 @@ namespace NeuralRendering
 			a_args.context->CSSetUnorderedAccessViews(
 				0, static_cast<UINT>(nullUavs.size()), nullUavs.data(), nullptr);
 			if (measureCoverage) {
+				coverageReadback->supportEvidence = a_slot.supportEvidence;
+				if (coverageReadback->supportEvidence)
+					coverageReadback->supportEvidence->Pending();
+				if (activePreparationEvidence_)
+					activePreparationEvidence_->copiedReadbackBytes = kDiagnosticCounterCount * sizeof(std::uint32_t);
 				a_args.context->CopyResource(
 					coverageReadback->staging.Get(), a_slot.coverageCounter.Get());
 				a_args.context->End(coverageReadback->ready.Get());
@@ -2006,6 +2141,13 @@ namespace NeuralRendering
 		std::array<Slot, 4> slots_{};
 		std::array<std::uint32_t, 2> lastSlotForEye_{ 4, 4 };
 		std::uint32_t preparedFrameHistoryNext_ = 0;
+		std::shared_ptr<const CharacterSourceEvidence> sourceEvidence_;
+		std::array<std::shared_ptr<const CharacterPreparationEvidence>, 4> latestPreparationEvidence_{};
+		CharacterPreparationEvidence* activePreparationEvidence_ = nullptr;
+		std::uint32_t detectionFrame_ = std::numeric_limits<std::uint32_t>::max();
+		std::uint64_t detectionCalls_ = 0;
+		std::uint64_t detectionEpoch_ = 0;
+		double detectionCpuMs_ = 0.0;
 		std::array<EarlyMaskReadback, kReadbackLatency> earlyMaskReadbacks_{};
 		ComPtr<ID3D11ComputeShader> earlyMaskShader_;
 		ComPtr<ID3D11Buffer> earlyMaskConstants_;
@@ -2089,6 +2231,7 @@ namespace NeuralRendering
 			return false;
 		try {
 			std::scoped_lock lock(state_->mutex_);
+			State::DetectionScope detection(*state_, a_frame);
 			if (!state_->BeginObservationFrame(a_frame))
 				return false;
 			if (!state_->actorAdmissions_.contains(a_actorFormId) &&
@@ -2192,6 +2335,7 @@ namespace NeuralRendering
 		}
 		try {
 			std::scoped_lock lock(state_->mutex_);
+			State::DetectionScope detection(*state_, a_frame);
 			if (!state_->BeginObservationFrame(a_frame))
 				return false;
 			const auto admission = state_->actorAdmissions_.find(a_actorFormId);
@@ -2260,8 +2404,28 @@ namespace NeuralRendering
 	{
 		if (!state_)
 			return false;
+		auto evidence = Color::Registry::Instance().CaptureEvidenceEnabled() ? AllocateEvidence<CharacterSourceEvidence>() : nullptr;
+		const auto evidenceStarted = evidence ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+		if (evidence) {
+			evidence->sourceWorldFrame = a_frame;
+			evidence->captureEpoch = Color::Registry::Instance().CaptureEpoch();
+			evidence->eyeWidth = a_sourceEyeWidth;
+			evidence->height = a_sourceHeight;
+			evidence->eyeCount = globals::game::isVR ? 2u : 1u;
+			evidence->jitterX = a_jitterX;
+			evidence->jitterY = a_jitterY;
+			evidence->captureTiming = AllocateEvidence<Util::PassTimingCapture>();
+			evidence->boundsTiming = AllocateEvidence<Util::PassTimingCapture>();
+		}
 		try {
 			std::scoped_lock lock(state_->mutex_);
+			if (evidence) {
+				evidence->detectionCpuAvailable = state_->detectionFrame_ == a_frame && state_->detectionEpoch_ == evidence->captureEpoch;
+				if (evidence->detectionCpuAvailable) {
+					evidence->detectionCpuMs = state_->detectionCpuMs_;
+					evidence->detectionCalls = state_->detectionCalls_;
+				}
+			}
 			Increment(state_->snapshot_.categoryCaptureAttempts);
 			const auto fail = [&](std::string a_detail) {
 				Increment(state_->snapshot_.categoryCaptureFailures);
@@ -2332,6 +2496,12 @@ namespace NeuralRendering
 					"no enabled NPC character materials were observed; semantic snapshot bypassed";
 				Increment(state_->snapshot_.categoryCaptureSuccesses);
 				Increment(state_->snapshot_.categoryCaptureEmptyBypasses);
+				if (evidence) {
+					evidence->empty = true;
+					state_->CaptureLogicalBytes(*evidence);
+					evidence->captureCpuMs = ElapsedMilliseconds(evidenceStarted);
+				}
+				state_->sourceEvidence_ = std::move(evidence);
 				return true;
 			}
 
@@ -2428,7 +2598,7 @@ namespace NeuralRendering
 				ComputeStateGuard computeState(a_context);
 				if (!computeState.Captured())
 					return fail("character category capture could not preserve compute state");
-				CS_GPU_PASS("Upscaling::DLSS5CharacterCategoryCapture");
+				CS_GPU_PASS_CAPTURE("Upscaling::DLSS5CharacterCategoryCapture", evidence ? evidence->captureTiming : Util::PassTimingHandle{});
 				std::array<ID3D11ShaderResourceView*, 2> srvs{
 					state_->captureSourceCategoriesSrv_.Get(), a_depthSource
 				};
@@ -2449,6 +2619,10 @@ namespace NeuralRendering
 					};
 					a_context->UpdateSubresource(captureCB, 0, nullptr, constants.data(), 0, 0);
 					a_context->Dispatch((rect.width + 7u) / 8u, (rect.height + 7u) / 8u, 1);
+					if (evidence) {
+						evidence->dispatchedPixels += rect.Area();
+						evidence->dispatchedThreads += static_cast<std::uint64_t>((rect.width + 7u) / 8u) * ((rect.height + 7u) / 8u) * 64u;
+					}
 				}
 			}
 			state_->capturedSourceRects_ = sourceRects;
@@ -2465,7 +2639,15 @@ namespace NeuralRendering
 			state_->snapshot_.categoryCaptureEmpty = false;
 			Increment(state_->snapshot_.categoryCaptureSuccesses);
 			state_->earlyMaskCaptureSerial_ = state_->AllocatePreparedContentSerial();
-			state_->QueueEarlyMaskBounds(a_device, a_context);
+			state_->QueueEarlyMaskBounds(a_device, a_context, evidence.get());
+			if (evidence) {
+				evidence->captureSerial = state_->earlyMaskCaptureSerial_;
+				evidence->copiedRects = sourceRects;
+				state_->CaptureLogicalBytes(*evidence);
+				evidence->copiedLogicalBytes = evidence->dispatchedPixels * 8u;
+				evidence->captureCpuMs = ElapsedMilliseconds(evidenceStarted);
+			}
+			state_->sourceEvidence_ = std::move(evidence);
 			state_->snapshot_.status = "captured";
 			state_->snapshot_.detail =
 				"same-frame post-terrain active-view categories, synchronized pre-decal depth, and render jitter captured";
@@ -2496,6 +2678,14 @@ namespace NeuralRendering
 		a_result = {};
 		if (!state_)
 			return false;
+		auto evidence = Color::Registry::Instance().CaptureEvidenceEnabled() ? AllocateEvidence<CharacterPreparationEvidence>() : nullptr;
+		const auto evidenceStarted = evidence ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+		if (evidence) {
+			evidence->key = { a_args.frameId, a_args.sourceWorldFrame, a_args.eyeIndex, a_args.featureSlot,
+				a_args.generation, 0, BuildSettingsKey(a_args.settings), Color::Registry::Instance().CaptureEpoch(), a_args.viewportCrop };
+			evidence->reused = true;
+			evidence->maskTiming = AllocateEvidence<Util::PassTimingCapture>();
+		}
 		const auto invalidFrame =
 			std::numeric_limits<std::uint32_t>::max();
 		const bool retainedSource =
@@ -2504,10 +2694,23 @@ namespace NeuralRendering
 			a_args.sourceWorldFrame < a_args.frameId;
 		try {
 			std::scoped_lock lock(state_->mutex_);
+			State::PreparationEvidenceScope evidenceScope(*state_, evidence.get());
+			if (evidence) {
+				evidence->key.jitterX = state_->capturedJitterX_;
+				evidence->key.jitterY = state_->capturedJitterY_;
+				if (state_->sourceEvidence_ && state_->sourceEvidence_->sourceWorldFrame == a_args.sourceWorldFrame &&
+					state_->sourceEvidence_->captureEpoch == evidence->key.captureEpoch)
+					evidence->source = state_->sourceEvidence_;
+			}
 			Increment(state_->snapshot_.preparationAttempts);
 			state_->snapshot_.enabled = a_args.settings.enabled;
 			const std::uint32_t sourceWorldFrame = a_args.sourceWorldFrame;
 			const auto fail = [&](std::string a_detail) {
+				if (evidence) {
+					evidence->outcome = "failed";
+					state_->PublishPreparationEvidence(evidence, evidenceStarted);
+					a_result.evidence = evidence;
+				}
 				state_->RecordPreparationFailure(a_args, a_detail);
 				// A retained request is only a lookup against the immutable source
 				// mask.  Its failure must not destroy that source mask, because a
@@ -2721,6 +2924,8 @@ namespace NeuralRendering
 					"DLSS5 character-mask GPU resources could not be created");
 			} else if (!slot.prepared || slot.contentSerial == 0 ||
 					   slot.prepareKey != key) {
+				if (evidence)
+					evidence->reused = false;
 				auto sourceArgs = a_args;
 				sourceArgs.frameId = sourceWorldFrame;
 				auto plan = state_->BuildPlan(sourceArgs);
@@ -2851,12 +3056,24 @@ namespace NeuralRendering
 				slot.maskRoiPlanningCpuMs = std::chrono::duration<double, std::milli>(
 					std::chrono::steady_clock::now() - planningStart)
 				                                .count();
+				if (evidence) {
+					evidence->roiPlanningCpuAvailable = true;
+					evidence->roiPlanningCpuMs = slot.maskRoiPlanningCpuMs;
+					evidence->boundsUsed = usedEarlyBounds;
+					evidence->boundsStatus = slot.maskRoiStatus;
+				}
 				if (!cpuProvenEmpty &&
 					!slot.computeSubrect.Fits(
 						a_args.outputWidth, a_args.outputHeight)) {
 					return fail("character compute ROI is invalid");
 				}
 				slot.contentSerial = state_->AllocatePreparedContentSerial();
+				if (evidence) {
+					evidence->key.contentSerial = slot.contentSerial;
+					slot.supportEvidence = AllocateEvidence<CharacterMaskSupportCapture>(evidence->key);
+				} else {
+					slot.supportEvidence.reset();
+				}
 				slot.requiresEvaluation = !cpuProvenEmpty;
 				slot.zeroCoverageBypassResolved = false;
 				slot.zeroCoverageBypassed = false;
@@ -3005,6 +3222,24 @@ namespace NeuralRendering
 			a_result.requiresEvaluation = slot.requiresEvaluation;
 			a_result.computeSubrect = slot.computeSubrect;
 			a_result.computeRegions = slot.computeRegions;
+			if (evidence) {
+				evidence->key.contentSerial = slot.contentSerial;
+				evidence->support = slot.supportEvidence;
+				if (evidence->support && evidence->support->Key().captureEpoch != evidence->key.captureEpoch)
+					evidence->support.reset();
+				evidence->computeSubrect = slot.computeSubrect;
+				evidence->computeRegions = slot.computeRegions;
+				evidence->requiresEvaluation = slot.requiresEvaluation;
+				evidence->prepared = true;
+				evidence->outcome = slot.requiresEvaluation ? "success" : "no_work";
+				evidence->logicalMaskBytes = slot.mask ? static_cast<std::uint64_t>(slot.width) * slot.height : 0;
+				evidence->logicalDiagnosticBytes = slot.coverageCounter ? kDiagnosticCounterCount * sizeof(std::uint32_t) : 0;
+				for (const auto& readback : slot.readbacks)
+					if (readback.staging)
+						evidence->logicalDiagnosticBytes += kDiagnosticCounterCount * sizeof(std::uint32_t);
+				state_->PublishPreparationEvidence(evidence, evidenceStarted);
+				a_result.evidence = evidence;
+			}
 			Increment(state_->snapshot_.preparationSuccesses);
 			state_->snapshot_.status = "ready";
 			state_->snapshot_.detail = std::format(
@@ -3028,6 +3263,12 @@ namespace NeuralRendering
 		} catch (const std::exception& exception) {
 			std::scoped_lock lock(state_->mutex_);
 			state_->RecordPreparationFailure(a_args, exception.what());
+			if (evidence) {
+				evidence->prepared = false;
+				evidence->outcome = "failed";
+				state_->PublishPreparationEvidence(evidence, evidenceStarted);
+				a_result.evidence = evidence;
+			}
 			if (!retainedSource) {
 				state_->InvalidatePreparedSlot(
 					a_args.featureSlot, a_args.eyeIndex, a_args.frameId);
@@ -3039,6 +3280,12 @@ namespace NeuralRendering
 		} catch (...) {
 			std::scoped_lock lock(state_->mutex_);
 			state_->RecordPreparationFailure(a_args, "unknown character-mask preparation exception");
+			if (evidence) {
+				evidence->prepared = false;
+				evidence->outcome = "failed";
+				state_->PublishPreparationEvidence(evidence, evidenceStarted);
+				a_result.evidence = evidence;
+			}
 			if (!retainedSource) {
 				state_->InvalidatePreparedSlot(
 					a_args.featureSlot, a_args.eyeIndex, a_args.frameId);
@@ -3118,7 +3365,7 @@ namespace NeuralRendering
 				state_->RecordPreparedFrame(args.frameId, args.sourceWorldFrame, args.generation,
 					args.featureSlot, slot.contentSerial, args.outputWidth, args.outputHeight,
 					slot.requiresEvaluation, slot.computeRegions.count);
-				a_results[index] = { true, slot.requiresEvaluation, slot.computeSubrect, slot.computeRegions };
+				a_results[index] = { true, slot.requiresEvaluation, slot.computeSubrect, slot.computeRegions, a_results[index].evidence };
 			}
 			state_->snapshot_.status = "ready";
 			state_->snapshot_.detail = std::format(
@@ -3249,6 +3496,8 @@ namespace NeuralRendering
 			state_->observationFrame_ = std::numeric_limits<std::uint32_t>::max();
 			state_->InvalidateProjectionCache();
 			state_->actorAdmissions_.clear();
+			for (auto& slot : state_->slots_)
+				State::RetireCoverageEvidence(slot);
 			state_->slots_ = {};
 			state_->ResetEarlyMaskBounds();
 			state_->shader_.Reset();
@@ -3322,6 +3571,40 @@ namespace NeuralRendering
 		auto snapshot = state_->snapshot_;
 		state_->PublishClassificationRejections(snapshot);
 		return snapshot;
+	}
+
+	std::shared_ptr<const CharacterPreparationEvidence> CharacterRendering::GetPreparationEvidence(
+		std::uint32_t a_frame, std::uint32_t a_sourceWorldFrame,
+		std::uint64_t a_generation, std::uint32_t a_featureSlot) const noexcept
+	{
+		if (!state_ || a_featureSlot >= 4 || !Color::Registry::Instance().CaptureEvidenceEnabled())
+			return {};
+		try {
+			std::scoped_lock lock(state_->mutex_);
+			const auto epoch = Color::Registry::Instance().CaptureEpoch();
+			const auto matches = [&](const std::shared_ptr<const CharacterPreparationEvidence>& evidence) {
+				if (!evidence || evidence->key.frame != a_frame || evidence->key.sourceWorldFrame != a_sourceWorldFrame ||
+					evidence->key.generation != a_generation || evidence->key.featureSlot != a_featureSlot ||
+					evidence->key.captureEpoch != epoch)
+					return false;
+				if (!evidence->prepared)
+					return true;
+				const auto& slot = state_->slots_[a_featureSlot];
+				return slot.prepared && slot.contentSerial == evidence->key.contentSerial &&
+				       slot.prepareKey.sourceWorldFrame == a_sourceWorldFrame && slot.prepareKey.generation == a_generation &&
+				       slot.prepareKey.crop == evidence->key.crop && slot.prepareKey.settings == evidence->key.settingsKey &&
+				       slot.prepareKey.captureJitterX == evidence->key.jitterX && slot.prepareKey.captureJitterY == evidence->key.jitterY;
+			};
+			const auto& latest = state_->latestPreparationEvidence_[a_featureSlot];
+			if (matches(latest))
+				return latest;
+			for (const auto& frame : state_->snapshot_.preparedFrames) {
+				const auto& evidence = frame.preparationEvidence[a_featureSlot];
+				if (matches(evidence))
+					return evidence;
+			}
+		} catch (...) {}
+		return {};
 	}
 
 	ComPtr<ID3D11ShaderResourceView> CharacterRendering::GetDebugMaskSrv(

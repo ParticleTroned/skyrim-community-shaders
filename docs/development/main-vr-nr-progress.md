@@ -23,7 +23,7 @@ source before editing. Do not automatically push, deploy or alter a live
 game. Do not edit agent policy or unrelated rendering. This document
 records the user's task directive without changing repository policy.
 
-## Verified checkpoint
+## Task 0 verified checkpoint
 
 -   Existing worktree: `C:/src/skyrim-community-shaders/build/worktrees/main-vr-nr`.
 -   Reviewed reference and actual implementation HEAD:
@@ -98,3 +98,25 @@ The lighting report separately records 20/20 colour tests. These are
 existing results, not reruns for this documentation change. This change
 uses scoped documentation hooks and link/diff checks; it does not require
 a new renderer build or live-game run.
+
+## Task 1: transaction telemetry
+
+Work continued on the existing `main-vr-nr` worktree from Task 0 commit
+`c23499f9efbc9f193fd9e8b7ccfa7a9a95bcbf33`. A fresh targeted fetch found
+`origin/main-vr-nr` still at `8551db2a31f4fcfd32015a6377da5e5735c1aabf`.
+The worktree was clean; the only intervening local commit was Task 0's
+documentation checkpoint. No history was reset or reconciled. Local
+commit `3d0979188` adds retained profiler evidence; NR integration and its
+tests are a separate change. The branch directive above remains in force.
+
+| State        | Task 1 position                                                                                                                                                                                                                                                                                                                            |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Completed    | Inspected the newest local NR run and matching producer manifest before adding telemetry. Added immutable source/publication/region identities, delayed per-call GPU samples, CPU stages and waits, physical work/capacity and byte accounting, explicit outcomes and source-boundary evidence through existing DevBench/capture services. |
+| Experimental | Detailed telemetry is opt-in. D3D11 samples require the existing active profiler capture; mask support requires its existing coverage readback. Pending or disabled observations remain unavailable. No new capture/control system is introduced.                                                                                          |
+| Blocked      | No source/build blocker remains established. Live acceptance needs a separately authorized producer deployment and run; none was attempted and provider readiness was not inferred.                                                                                                                                                        |
+| Unmeasured   | No complete live A/B/C × character/FOV transaction matrix, native Feature 18 stage performance, telemetry overhead, headset quality or real-scene stability has been measured for Task 1. Serializer/CPU/WARP fixtures do not substitute for these observations.                                                                           |
+
+The [transaction report](main-vr-nr-transaction-telemetry.md) records the
+historical run identity, missing evidence, implementation contract,
+adversarial corrections and exact validation scope. No pushes, deployment
+or live-game mutation are part of this task.

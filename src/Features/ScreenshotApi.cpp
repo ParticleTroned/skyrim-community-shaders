@@ -3,6 +3,7 @@
 #include "BuildProvenance.h"
 #include "Features/ScreenshotApiPolicy.h"
 #include "Features/ScreenshotFeature.h"
+#include "Features/Upscaling.h"
 #include "Globals.h"
 #include "ScreenshotDevBenchBridge.h"
 #include "State.h"
@@ -1249,8 +1250,21 @@ void ScreenshotApi::OnSourceAcquired(std::string_view a_requestId, json a_acquis
 			};
 		}
 		record.actual["acquisition"] = a_acquisition;
-		record.diagnosticSnapshot = CSX::ScreenshotPolicy::RetainNeuralDiagnostics(
-			a_acquisition.value("nrEvidence", json::object()));
+		const auto evidence = a_acquisition.value("nrEvidence", json::object());
+		const auto transaction = evidence.is_object() && evidence.contains("sourceTransactionId") &&
+		                                 evidence.at("sourceTransactionId").is_number_unsigned() ?
+		                             evidence.at("sourceTransactionId").get<uint64_t>() :
+		                             0;
+		const auto publication = evidence.is_object() && evidence.contains("publicationSequence") &&
+		                                 evidence.at("publicationSequence").is_number_unsigned() ?
+		                             evidence.at("publicationSequence").get<uint64_t>() :
+		                             0;
+		try {
+			record.diagnosticSnapshot = CSX::ScreenshotPolicy::RetainNeuralDiagnostics(evidence,
+				transaction && publication ? globals::features::upscaling.PinNeuralExecutionDiagnostics(transaction, publication) : CSX::ScreenshotPolicy::DiagnosticSnapshot{});
+		} catch (...) {
+			record.actual["captureDiagnostics"] = { { "schemaVersion", 1 }, { "finalized", true }, { "available", false }, { "reason", "companion_retention_failed" } };
+		}
 		AppendEventLocked(record, "source.acquired", std::move(a_acquisition));
 	}
 }

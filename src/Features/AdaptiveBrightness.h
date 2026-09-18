@@ -88,6 +88,7 @@ struct AdaptiveBrightness : Feature
 		bool waterAdvanced = false;
 
 		float skyBrightnessMult = 1.0f;
+		float skySaturation = 1.0f;
 		float directionalLightMult = 1.0f;
 		float pointLightMult = 1.0f;
 		float linearPointLightMult = 1.0f;
@@ -163,9 +164,12 @@ struct AdaptiveBrightness : Feature
 		float linearSpotlightMult;
 		float omnidirectionalBulbMult;
 		float linearOmnidirectionalBulbMult;
+		float skySaturation;
+		float3 pad{};
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
-	static_assert(sizeof(PerFrameData) == 32);
+	static_assert(sizeof(PerFrameData) == 48);
+	static_assert(offsetof(PerFrameData, skySaturation) == 32);
 
 	struct alignas(16) VanillaPointLightData
 	{

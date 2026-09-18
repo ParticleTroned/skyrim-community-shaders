@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -127,6 +128,98 @@ const std::vector<const AdaptiveBrightness::LocationOverride*>& AdaptiveBrightne
 
 bool Close(float a, float b) { return std::abs(a - b) < 0.00001f; }
 
+void CheckVisualControls()
+{
+	WaterAppearance::Profile invalid;
+	invalid.CausticsStrength = std::numeric_limits<float>::quiet_NaN();
+	invalid.CausticsTiling = -1.0f;
+	invalid.CausticsSpeed = 4.0f;
+	invalid.CausticsDispersion = std::numeric_limits<float>::infinity();
+	invalid.ParallaxStrength = -2.0f;
+	invalid.ParallaxQuality = std::numeric_limits<int>::max();
+	WaterAppearance::SanitizeProfile(invalid);
+	assert(invalid.CausticsStrength == 1.0f && invalid.CausticsTiling == 0.25f);
+	assert(invalid.CausticsSpeed == 3.0f && invalid.CausticsDispersion == 1.0f);
+	assert(invalid.ParallaxStrength == 0.0f && invalid.ParallaxQuality == 64);
+	invalid.ParallaxQuality = -1;
+	WaterAppearance::SanitizeProfile(invalid);
+	assert(invalid.ParallaxQuality == 4);
+
+	AdaptiveBrightness balance;
+	balance.SetEnabled(true);
+	assert(!balance.GetEffectiveWaterAppearanceSettings().Enabled);
+	assert(balance.GetCommonBufferData().skySaturation == 1.0f);
+	auto& global = balance.settings.globalProfile;
+	global.advanced = true;
+	global.skySaturation = 1.5f;
+	global.water.CausticsStrength = 1.2f;
+	global.water.CausticsTiling = 2.0f;
+	global.water.CausticsSpeed = 2.0f;
+	global.water.CausticsDispersion = 0.8f;
+	global.water.ParallaxStrength = 0.6f;
+	AdaptiveBrightness::ProfileSettings day, night;
+	day.advanced = night.advanced = true;
+	day.skySaturation = 0.5f;
+	night.skySaturation = 1.0f;
+	day.water.CausticsStrength = 0.5f;
+	night.water.CausticsStrength = 1.5f;
+	day.water.ParallaxQuality = 32;
+	night.water.ParallaxQuality = 8;
+	balance.testProfileBlend = { &day, &night, 0.5f };
+	auto water = balance.GetEffectiveWaterAppearanceSettings();
+	assert(water.Enabled && Close(water.CausticsStrength, 1.2f));
+	assert(water.CausticsTiling == 2.0f && water.CausticsSpeed == 2.0f);
+	assert(water.CausticsDispersion == 0.8f && water.ParallaxStrength == 0.6f);
+	assert(water.ParallaxQuality == 20);
+	balance.testProfileBlend.factor = 0.3f;
+	assert(balance.GetEffectiveWaterAppearanceSettings().ParallaxQuality == 25);
+	balance.testProfileBlend.factor = 0.5f;
+	assert(Close(balance.GetCommonBufferData().skySaturation, 1.125f));
+	day.advanced = false;
+	assert(Close(balance.GetCommonBufferData().skySaturation, 1.5f));
+	day.advanced = true;
+
+	AdaptiveBrightness::LocationOverride location;
+	location.profile.advanced = true;
+	location.profile.skySaturation = 0.5f;
+	location.profile.water.CausticsStrength = 0.5f;
+	location.profile.water.ParallaxQuality = 8;
+	balance.testLocationLayers = { &location };
+	for (bool layered : { false, true }) {
+		location.layered = layered;
+		water = balance.GetEffectiveWaterAppearanceSettings();
+		assert(Close(water.CausticsStrength, 0.6f));
+		assert(water.ParallaxQuality == (layered ? 10u : 8u));
+		assert(Close(balance.GetCommonBufferData().skySaturation, layered ? 0.5625f : 0.75f));
+	}
+	balance.testLocationLayers.clear();
+	day.water.ParallaxQuality = night.water.ParallaxQuality = 64;
+	global.water.ParallaxQuality = 64;
+	assert(balance.GetEffectiveWaterAppearanceSettings().ParallaxQuality == 64);
+	global.skySaturation = std::numeric_limits<float>::quiet_NaN();
+	ClampProfileSettings(global);
+	assert(global.skySaturation == 1.0f);
+	global.skySaturation = 20.0f;
+	ClampProfileSettings(global);
+	assert(global.skySaturation == 2.0f);
+
+	// Wind scales the composed base; switching it off preserves that base.
+	balance.testProfileBlend = {};
+	global.water.WaveAmplitude = 0.8f;
+	global.waterWind = { true, true, 0.65f, 1.35f };
+	for (const float wind : { 0.0f, 1.0f }) {
+		globals::game::sky->windSpeed = wind;
+		balance.ResetWaterWindSmoothing();
+		assert(Close(balance.GetEffectiveWaterAppearanceSettings().WaveAmplitude, wind == 0.0f ? 0.52f : 1.08f));
+	}
+	global.water.WaveAmplitude = 2.0f;
+	assert(balance.GetEffectiveWaterAppearanceSettings().WaveAmplitude == 2.0f);
+	global.waterWind.enabled = false;
+	global.water.WaveAmplitude = 0.8f;
+	assert(balance.GetEffectiveWaterAppearanceSettings().WaveAmplitude == 0.8f);
+	globals::game::sky->windSpeed = 0.8f;
+}
+
 void CheckOff(AdaptiveBrightness& balance, const LinearLighting::Settings& independentLighting)
 {
 	assert(!balance.IsRuntimeEnabled());
@@ -134,6 +227,7 @@ void CheckOff(AdaptiveBrightness& balance, const LinearLighting::Settings& indep
 	const auto profileResolutions = balance.profileResolutions;
 	const auto lights = balance.GetCommonBufferData();
 	assert(lights.skyBrightness == 1.0f && lights.directionalLightMult == 1.0f);
+	assert(lights.skySaturation == 1.0f);
 	assert(lights.pointLightMult == 1.0f && lights.linearPointLightMult == 1.0f);
 	assert(lights.spotlightMult == 1.0f && lights.linearSpotlightMult == 1.0f);
 	assert(lights.omnidirectionalBulbMult == 1.0f && lights.linearOmnidirectionalBulbMult == 1.0f);
@@ -144,6 +238,9 @@ void CheckOff(AdaptiveBrightness& balance, const LinearLighting::Settings& indep
 	assert(water.GlobalReflectionAmount == 1.0f && water.RefractionAmount == 1.0f);
 	assert(water.SunSpecularMultiplier == 1.0f && water.Muddiness == 1.0f);
 	assert(water.FresnelMin == 0.0f && water.FresnelMax == 1.0f);
+	assert(water.CausticsStrength == 1.0f && water.CausticsTiling == 1.0f);
+	assert(water.CausticsSpeed == 1.0f && water.CausticsDispersion == 1.0f);
+	assert(water.ParallaxStrength == 1.0f && water.ParallaxQuality == 16);
 	const auto linear = balance.GetEffectiveLinearLightingSettings(independentLighting, true);
 	assert(!linear.hasColorAdjustments);
 	assert(linear.settings.skyGamma == independentLighting.skyGamma);
@@ -160,6 +257,7 @@ void CheckOff(AdaptiveBrightness& balance, const LinearLighting::Settings& indep
 
 int main()
 {
+	CheckVisualControls();
 	// Keep zero-identity guards exercised at runtime under Release optimization.
 	for (const auto& [identity, expected] : std::array<std::array<float, 2>, 6>{ { { 0.0f, 2.5f }, { -0.0f, 2.5f }, { 0.0001f, 2.5f },
 			 { -0.0001f, 2.5f }, { 1.0f, 1.0f }, { -1.0f, -1.0f } } }) {
@@ -171,6 +269,14 @@ int main()
 	auto& global = balance.settings.globalProfile;
 	global.brightness = 1.2f;
 	global.skyBrightnessMult = 1.3f;
+	global.advanced = true;
+	global.skySaturation = 0.8f;
+	global.water.CausticsStrength = 1.5f;
+	global.water.CausticsTiling = 2.0f;
+	global.water.CausticsSpeed = 0.0f;
+	global.water.CausticsDispersion = 0.5f;
+	global.water.ParallaxStrength = 0.0f;
+	global.water.ParallaxQuality = 32;
 	global.water.WaterBrightness = 0.8f;
 	global.water.WaveAmplitude = 0.6f;
 	global.bloom.EnhancementIntensity = 0.3f;
@@ -213,6 +319,10 @@ int main()
 		const auto after = balance.GetEffectiveWaterAppearanceSettings();
 		assert(Close(after.WaveAmplitude, before.WaveAmplitude));
 		assert(Close(after.WaterBrightness, before.WaterBrightness));
+		assert(after.CausticsStrength == before.CausticsStrength && after.CausticsTiling == before.CausticsTiling);
+		assert(after.CausticsSpeed == before.CausticsSpeed && after.CausticsDispersion == before.CausticsDispersion);
+		assert(after.ParallaxStrength == before.ParallaxStrength && after.ParallaxQuality == before.ParallaxQuality);
+		assert(balance.GetCommonBufferData().skySaturation == beforeLight.skySaturation);
 		assert(Close(balance.GetEffectiveSharedLightingSettings().directionalLightMult, beforeLight.directionalLightMult));
 	}
 	balance.testProfileBlend = {};

@@ -7,6 +7,7 @@
 #include "State.h"
 #include "Utils/D3D.h"
 #include "Utils/FileSystem.h"
+#include "Utils/Finite.h"
 #include "Utils/Form.h"
 #include "Utils/Game.h"
 #include "Utils/PointLightFlags.h"
@@ -48,6 +49,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	bloomAdvanced,
 	waterAdvanced,
 	skyBrightnessMult,
+	skySaturation,
 	directionalLightMult,
 	pointLightMult,
 	linearPointLightMult,
@@ -113,6 +115,7 @@ namespace
 	constexpr float kGammaOffsetMin = -1.0f;
 	constexpr float kGammaOffsetMax = 1.0f;
 	constexpr float kGlobalSkyBrightnessMax = 2.0f;
+	constexpr float kSkySaturationMax = 2.0f;
 	constexpr float kGlobalLightingMultiplierMax = 5.0f;
 	constexpr float kWaterWindMultiplierMin = 0.0f;
 	constexpr float kWaterWindMultiplierMax = 2.0f;
@@ -321,6 +324,7 @@ namespace
 		};
 
 		a_settings.skyBrightness = clamp(a_settings.skyBrightness, kGlobalSkyBrightnessMax, defaults.skyBrightness);
+		a_settings.skySaturation = clamp(a_settings.skySaturation, kSkySaturationMax, defaults.skySaturation);
 		a_settings.directionalLightMult = clamp(a_settings.directionalLightMult, kGlobalLightingMultiplierMax, defaults.directionalLightMult);
 		a_settings.pointLightMult = clamp(a_settings.pointLightMult, kGlobalLightingMultiplierMax, defaults.pointLightMult);
 		a_settings.linearPointLightMult = clamp(a_settings.linearPointLightMult, kGlobalLightingMultiplierMax, defaults.linearPointLightMult);
@@ -623,6 +627,7 @@ namespace
 	{
 		a_profile.brightness = ClampBrightness(a_profile.brightness);
 		a_profile.skyBrightnessMult = ClampMultiplier(a_profile.skyBrightnessMult);
+		a_profile.skySaturation = Util::ClampFinite(a_profile.skySaturation, 0.0f, kSkySaturationMax, 1.0f);
 		a_profile.directionalLightMult = ClampMultiplier(a_profile.directionalLightMult);
 		a_profile.pointLightMult = ClampMultiplier(a_profile.pointLightMult);
 		a_profile.linearPointLightMult = ClampMultiplier(a_profile.linearPointLightMult);
@@ -2017,6 +2022,9 @@ void AdaptiveBrightness::DrawLightingSettings(
 	ImGui::Indent();
 	ImGui::SeparatorText("Direct Lighting");
 	ImGui::SliderFloat("Sky Brightness", &a_profile.skyBrightnessMult, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat("Sky Saturation", &a_profile.skySaturation, 0.0f, kSkySaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Scales sky color saturation for this layer. One preserves the current colors; zero makes them monochrome.");
 	ImGui::SliderFloat("Directional Light", &a_profile.directionalLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	ImGui::SliderFloat("Point Lights", &a_profile.pointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
@@ -2074,9 +2082,15 @@ void AdaptiveBrightness::DrawWaterSettings(
 	if (!a_showAdvancedControls)
 		return;
 
+	ImGui::SeparatorText("Waves and Wind");
+	WaterAppearance::DrawWaveAmplitudeControl(a_profile.water);
+	DrawHintText("Wind Response multiplies Base Wave Amplitude between the calm and strong-wind scales. With wind off, only the base applies.");
+	DrawWaterWindSettings(a_profile, a_globalLayer);
+
+	ImGui::Separator();
 	ImGui::Checkbox("Show Detailed Water Controls", &a_profile.waterAdvanced);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Shows detailed water color, surface, reflection, refraction, and clarity adjustments for this layer.");
+		ImGui::Text("Shows detailed water color, surface, reflection, refraction, clarity, caustics, and parallax adjustments for this layer.");
 	if (a_profile.waterAdvanced) {
 		ImGui::Indent();
 		ImGui::SliderFloat("Water Color Gamma", &a_profile.waterGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
@@ -2085,9 +2099,6 @@ void AdaptiveBrightness::DrawWaterSettings(
 		WaterAppearance::DrawAdvancedProfileSettings(a_profile.water);
 		ImGui::Unindent();
 	}
-
-	ImGui::SeparatorText("Wind Response");
-	DrawWaterWindSettings(a_profile, a_globalLayer);
 }
 
 void AdaptiveBrightness::DrawWaterWindSettings(ProfileSettings& a_profile, bool a_globalLayer)
@@ -2117,10 +2128,10 @@ void AdaptiveBrightness::DrawWaterWindSettings(ProfileSettings& a_profile, bool 
 	ImGui::BeginDisabled(layerDisabled);
 	ImGui::SliderFloat("Calm Wave Scale", &waterWind.calmWaveMultiplier, kWaterWindMultiplierMin, kWaterWindMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Multiplies Wave Amplitude at zero wind after the earlier layers are composed.");
+		ImGui::Text("Multiplies Base Wave Amplitude in calm weather after profile layers are composed. The final amplitude is capped at 2.");
 	ImGui::SliderFloat("Strong Wind Wave Scale", &waterWind.strongWindWaveMultiplier, kWaterWindMultiplierMin, kWaterWindMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Multiplies Wave Amplitude at maximum wind after the earlier layers are composed.");
+		ImGui::Text("Multiplies Base Wave Amplitude at maximum wind after profile layers are composed. The final amplitude is capped at 2.");
 
 	const float windSpeed = GetSmoothedWaterWindSpeed();
 	const float waveMultiplier = GetWaterWindWaveMultiplier(waterWind, windSpeed);
@@ -3337,6 +3348,7 @@ SharedLightingSettings AdaptiveBrightness::ApplyProfile(const SharedLightingSett
 	};
 
 	out.skyBrightness = ClampMultiplier(out.skyBrightness * advancedMult(a_profile.skyBrightnessMult));
+	out.skySaturation = Util::ClampFinite(out.skySaturation * advancedMult(a_profile.skySaturation), 0.0f, kSkySaturationMax, 1.0f);
 	out.directionalLightMult = ClampMultiplier(out.directionalLightMult * masterScale(0.70f) * advancedMult(a_profile.directionalLightMult));
 
 	const float pointLightBrightness = masterScale(0.75f);
@@ -3397,7 +3409,13 @@ WaterAppearance::Profile AdaptiveBrightness::ApplyProfile(
 		ApplyRelativeValue(base.WaveAmplitude, layer.WaveAmplitude, identity.WaveAmplitude),
 		ApplyRelativeValue(base.FresnelMin, layer.FresnelMin, identity.FresnelMin),
 		ApplyRelativeValue(base.FresnelMax, layer.FresnelMax, identity.FresnelMax),
-		ApplyRelativeValue(base.Muddiness, layer.Muddiness, identity.Muddiness)
+		ApplyRelativeValue(base.Muddiness, layer.Muddiness, identity.Muddiness),
+		ApplyRelativeValue(base.CausticsStrength, layer.CausticsStrength, identity.CausticsStrength),
+		ApplyRelativeValue(base.CausticsTiling, layer.CausticsTiling, identity.CausticsTiling),
+		ApplyRelativeValue(base.CausticsSpeed, layer.CausticsSpeed, identity.CausticsSpeed),
+		ApplyRelativeValue(base.CausticsDispersion, layer.CausticsDispersion, identity.CausticsDispersion),
+		ApplyRelativeValue(base.ParallaxStrength, layer.ParallaxStrength, identity.ParallaxStrength),
+		static_cast<int>(std::lround(ApplyRelativeValue(static_cast<float>(base.ParallaxQuality), static_cast<float>(layer.ParallaxQuality), static_cast<float>(identity.ParallaxQuality))))
 	};
 	WaterAppearance::SanitizeProfile(out);
 	return out;
@@ -3463,6 +3481,7 @@ SharedLightingSettings AdaptiveBrightness::LerpSettings(const SharedLightingSett
 	};
 
 	out.skyBrightness = lerp(a_a.skyBrightness, a_b.skyBrightness);
+	out.skySaturation = lerp(a_a.skySaturation, a_b.skySaturation);
 	out.directionalLightMult = lerp(a_a.directionalLightMult, a_b.directionalLightMult);
 	out.pointLightMult = lerp(a_a.pointLightMult, a_b.pointLightMult);
 	out.linearPointLightMult = lerp(a_a.linearPointLightMult, a_b.linearPointLightMult);
@@ -3652,6 +3671,7 @@ AdaptiveBrightness::PerFrameData AdaptiveBrightness::GetCommonBufferData() const
 
 	PerFrameData data{};
 	data.skyBrightness = effectiveSettings.skyBrightness;
+	data.skySaturation = effectiveSettings.skySaturation;
 	data.directionalLightMult = effectiveSettings.directionalLightMult;
 	data.pointLightMult = effectiveSettings.pointLightMult;
 	data.linearPointLightMult = effectiveSettings.linearPointLightMult;

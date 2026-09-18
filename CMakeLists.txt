@@ -1730,6 +1730,8 @@ if(BUILD_CONTROLLER_TESTS)
     target_link_libraries(d3d_context_protection_test PRIVATE d3d11 dxgi user32)
     set_tests_properties(D3DContextProtection PROPERTIES TIMEOUT 60)
 
+    include("${PROJECT_SOURCE_DIR}/tests/virtual_function_hook.cmake")
+
     add_controller_test(
         vr_loading_menu_clear_test
         VRLoadingMenuClear

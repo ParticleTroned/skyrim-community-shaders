@@ -75,9 +75,9 @@ the sample lock. Large status replies still have a cost.
 | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `traversalDetails.samples`                                         | Thread/frame/generation/context, owner/object/caller addresses, raw four-word bounding sphere, native completion and acceptance. Addresses are not lifetime IDs.                                                                                                             |
 | `structure.header`                                                 | Plane/operator array addresses, storage/used counts, first operator, prethreaded byte, validity.                                                                                                                                                                             |
-| `structure.operatorSlots`                                          | Up to 128 raw three-word slots. Some slots are operands, not independent instructions.                                                                                                                                                                                       |
+| `structure.operatorSlots`                                          | Up to 256 raw three-word body slots. Some slots are operands, not independent instructions. Storage beyond the body is not copied as additional instructions.                                                                                                                |
 | `steps`                                                            | Up to 128 path steps (observed sphere calls plus verified control fall-throughs): operator index/opcode, plane-set index, true/false successor indices, native result and active mask before/after.                                                                          |
-| `planeSets`                                                        | Up to 32 distinct visited plane sets, copied before their first sampled test. The 28 raw uint32 words preserve six float4 plane equations and trailing mask/state bytes without float/NaN JSON conversion.                                                                   |
+| `planeSets`                                                        | Up to 128 distinct visited plane sets, copied before their first sampled test. The 28 raw uint32 words preserve six float4 plane equations and trailing mask/state bytes without float/NaN JSON conversion.                                                                  |
 | `sphereTotals`                                                     | All matched sphere calls/results for the sampled object, even if its detail trace exceeds a limit.                                                                                                                                                                           |
 | `terminalOperator`, `terminalOpcode`, `terminalVerified`           | Whether the observed final branch reaches native accept/reject consistent with the unchanged native return.                                                                                                                                                                  |
 | `completionKind`                                                   | Native return consistent with zero-bound rejection, empty-program acceptance, operator terminal, or explicitly unverified.                                                                                                                                                   |
@@ -131,6 +131,15 @@ are explicitly labelled `verified_control_fallthrough`, with null rawResult.
 Only sphere branches contain an observed native boolean. Unknown opcodes
 stop reconstruction. No visibility calculation is replayed or substituted.
 
+Native dispatch can reach terminal slots beyond the constructed body count.
+Diagnostic instruction reads admit only opcodes 2 and 3 in that trailing
+allocated storage; ordinary instructions and operands remain body-bounded.
+Unreadable, out-of-storage or nonterminal trailing slots invalidate the
+reconstruction. `detailOperatorLimit`, `detailStepLimit` and
+`detailPlaneLimit` advertise the independent capture bounds. Construction
+plane copies use the same plane limit. Older schema-2 receipts retain
+their original advertised bounds and evidence limitations.
+
 Only those four verified construction paths are hooked. Other builders,
 threading/relinking and job transfer are not exhaustively observed. In
 particular, no hook was invented for `0xDA41E0`, absent from this captured
@@ -159,6 +168,11 @@ milliseconds saved**. Those need downstream caller/renderer evidence or a
 controlled culling A/B. Neither two eyes nor changing bounds/planes imply
 redundant work. Worker pass and verified eye attribution remain unresolved.
 Source inspection alone cannot establish runtime cost.
+
+The measured follow-up and production optimization priorities are in
+[the accepting-path investigation](frustum-optimization-investigation-20260918.md).
+That report distinguishes native CPU work from diagnostic cost and does
+not infer GPU savings from object rejection counts.
 
 Use unchanged enabled generations at both window endpoints, including
 `collectionGenerationAtEnd`, and retain snapshot/frame boundaries and loss

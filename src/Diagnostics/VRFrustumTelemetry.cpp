@@ -499,7 +499,7 @@ namespace VRFrustumTelemetry
 		const bool installed = g_installed.load(std::memory_order_acquire);
 		json result{ { "schemaVersion", 2 }, { "installed", installed }, { "active", installed && (control & 1) != 0 }, { "installError", g_installError.load() },
 			{ "enabled", (control & 1) != 0 }, { "detailEnabled", (control & 2) != 0 }, { "collectionGeneration", Generation(control) },
-			{ "threadCapacity", ThreadCapacity }, { "rowsPerThread", RowCapacity }, { "detailInterval", DetailInterval }, { "constructionDetailInterval", ConstructionInterval }, { "detailStepLimit", DetailSteps }, { "detailPlaneLimit", DetailPlanes },
+			{ "threadCapacity", ThreadCapacity }, { "rowsPerThread", RowCapacity }, { "detailInterval", DetailInterval }, { "constructionDetailInterval", ConstructionInterval }, { "detailStepLimit", DetailSteps }, { "detailOperatorLimit", DetailOperators }, { "detailPlaneLimit", DetailPlanes },
 			{ "threadOverflowCalls", g_threadOverflowCalls.load(std::memory_order_relaxed) }, { "threadOverflowPassEntries", g_threadOverflowPassEntries.load(std::memory_order_relaxed) }, { "threads", json::array() },
 			{ "counterSemantics", "cumulative independent atomics; compound-owned sphere calls publish on compound return/unwind; in-flight counts may be absent; compare only unchanged enabled generation" },
 			{ "eyeAttribution", "unknown: raw rendererCameraIndex is not a verified eye; asynchronous workers do not inherit pass context" },

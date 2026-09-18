@@ -38,7 +38,7 @@ namespace VRFrustumTelemetry
 		RawFalse,
 		Count
 	};
-	inline constexpr std::size_t CounterCount = static_cast<std::size_t>(Counter::Count), RowCapacity = 128, ProbeLimit = 8, DetailSteps = 128, DetailPlanes = 32, DetailRingCapacity = 4;
+	inline constexpr std::size_t CounterCount = static_cast<std::size_t>(Counter::Count), RowCapacity = 128, ProbeLimit = 8, DetailSteps = 128, DetailOperators = 256, DetailPlanes = DetailSteps, DetailRingCapacity = 4;
 	inline constexpr std::uint32_t DetailInterval = 256, ConstructionInterval = 16, UnknownIndex = UINT32_MAX;
 	inline constexpr std::int64_t UnknownCameraIndex = -1;
 	inline constexpr std::uint64_t InitialControl = 7;
@@ -263,10 +263,20 @@ namespace VRFrustumTelemetry
 		std::uintptr_t a;
 		return h.valid && i < h.operatorCount && ArrayAddress(h.operators, i, sizeof(op), a) && read(a, &op, sizeof(op));
 	}
+	/** Native branch targets can name terminal slots beyond the constructed body. */
+	template <class Read>
+	bool ReadInstruction(const NativeHeader& h, std::uint32_t i, NativeOperator& op, Read&& read)
+	{
+		if (i < h.operatorCount)
+			return ReadOperator(h, i, op, read);
+		std::uintptr_t address;
+		return h.valid && i < h.operatorStorage && ArrayAddress(h.operators, i, sizeof(op), address) &&
+		       read(address, &op, sizeof(op)) && (op.opcode == 2 || op.opcode == 3);
+	}
 	struct Structure
 	{
 		NativeHeader header;
-		std::array<NativeOperator, DetailSteps> operators{};
+		std::array<NativeOperator, DetailOperators> operators{};
 		std::uint32_t start = 0, copied = 0;
 		bool readFault = false, truncated = false;
 	};
@@ -281,7 +291,7 @@ namespace VRFrustumTelemetry
 			return s;
 		}
 		const auto remaining = s.header.operatorCount - start;
-		const auto n = remaining < DetailSteps ? remaining : static_cast<std::uint32_t>(DetailSteps);
+		const auto n = remaining < DetailOperators ? remaining : static_cast<std::uint32_t>(DetailOperators);
 		if (n) {
 			std::uintptr_t begin, end;
 			if (!ArrayAddress(s.header.operators, start, sizeof(NativeOperator), begin) || !ArrayAddress(s.header.operators, start + n - 1, sizeof(NativeOperator), end) || !read(begin, s.operators.data(), n * sizeof(NativeOperator)))
@@ -366,7 +376,7 @@ namespace VRFrustumTelemetry
 		bool ReadNextObservedOperator(NativeOperator& op, Read&& read)
 		{
 			while (chainValid) {
-				if (!ReadOperator(structure.header, cursor, op, read)) {
+				if (!ReadInstruction(structure.header, cursor, op, read)) {
 					readFault = true;
 					chainValid = false;
 					return false;

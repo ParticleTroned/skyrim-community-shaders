@@ -282,30 +282,32 @@ namespace
 		detail = memory->Start();
 		Check(!detail.BeforeSphere(Routine::SphereNotFullyInside, Memory::Planes, *memory) && detail.stepLimit && detail.stepCount == DetailSteps, "cyclic control graph was not bounded");
 
-		memory->Init(80, 40);
+		memory->Init(static_cast<std::uint32_t>((DetailPlanes + 1) * 2), static_cast<std::uint32_t>(DetailPlanes + 1));
 		detail = memory->Start();
-		for (std::uint32_t i = 0; i < 33; ++i) {
-			memory->Op(i * 2, { 7, (i + 1) * 2, 79 });
+		for (std::uint32_t i = 0; i < DetailSteps; ++i) {
+			memory->Op(i * 2, { 7, (i + 1) * 2, 0 });
 			memory->Op(i * 2 + 1, { i, 0, 0 });
 			Check(detail.BeforeSphere(Routine::SphereIntersect, Memory::Planes + i * 0x70, *memory), "plane-limit fixture invalid");
 			detail.AfterSphere(Memory::Planes + i * 0x70, true, *memory);
 		}
-		Check(detail.planeLimit && detail.planeCount == DetailPlanes && detail.stepCount == 33, "plane limit stopped aggregate/operator evidence");
-		memory->Init(200, 1);
+		Check(!detail.BeforeSphere(Routine::SphereIntersect, Memory::Planes + DetailSteps * 0x70, *memory), "unbounded distinct-plane trace");
+		Check(detail.planeCount == DetailPlanes && detail.stepLimit, "plane/step capacity was not bounded");
+		memory->Init(400, 1);
 		auto structure = ReadStructure(Memory::Owner, *memory);
-		Check(structure.truncated && structure.copied == DetailSteps, "large operator storage not bounded");
+		Check(structure.truncated && structure.copied == DetailOperators, "large operator storage not bounded");
+		memory->Init(200, 1);
 		memory->Op(180, { 7, 197, 198 });
 		auto appendedOps = ReadStructure(Memory::Owner, *memory, 180);
 		Check(appendedOps.start == 180 && appendedOps.copied == 20 && !appendedOps.truncated && appendedOps.operators[0].onTrue == 197, "appended operators outside prefix lost");
 		Check(ReadStructure(Memory::Owner, *memory, 201).readFault, "invalid appended operator range accepted");
 
-		memory->Init(80, 40);
+		memory->Init(80, static_cast<std::uint32_t>(DetailPlanes + 1));
 		auto header = ReadHeader(Memory::Owner, *memory);
-		auto appended = ReadPlanes(header, 38, *memory);
-		Check(appended.count == 2 && appended.planes[0].index == 38 && !appended.truncated && !appended.readFault, "appended plane range wrong");
+		auto appended = ReadPlanes(header, static_cast<std::uint32_t>(DetailPlanes - 1), *memory);
+		Check(appended.count == 2 && appended.planes[0].index == DetailPlanes - 1 && !appended.truncated && !appended.readFault, "appended plane range wrong");
 		auto limited = ReadPlanes(header, 0, *memory);
 		Check(limited.count == DetailPlanes && limited.truncated, "construction plane copy unbounded");
-		Check(ReadPlanes(header, 41, *memory).readFault, "invalid appended plane start accepted");
+		Check(ReadPlanes(header, static_cast<std::uint32_t>(DetailPlanes + 2), *memory).readFault, "invalid appended plane start accepted");
 	}
 
 	void TestChangingNativeEvidence()
@@ -343,6 +345,66 @@ namespace
 		Check(detail.completionKind == CompletionKind::Unverified, "unretained sphere call falsely classified as an early return");
 	}
 
+	void TestAllocatedTerminalSlots()
+	{
+		auto memory = std::make_unique<Memory>();
+		// Native dispatch follows terminal slots beyond the body count, inside storage.
+		for (bool accepted : { false, true }) {
+			memory->Init(2, 1);
+			memory->Put(Memory::Owner + 0x28, 5u);
+			memory->Put(Memory::Owner + 0xC5, std::uint8_t{ 1 });
+			memory->Op(0, { 8, 3, 4 });
+			memory->Op(3, { 2, 0, 0 });
+			memory->Op(4, { 3, 0, 0 });
+			auto detail = memory->Start();
+			Check(detail.BeforeSphere(Routine::SphereNotFullyInside, Memory::Planes, *memory), "trailing-terminal fixture rejected its sphere step");
+			detail.AfterSphere(Memory::Planes, accepted, *memory);
+			detail.Finish(accepted, *memory);
+			Check(detail.terminalVerified && !detail.readFault && detail.chainValid, "allocated native terminal outside body count was rejected");
+			Check(detail.cursor == (accepted ? 3u : 4u), "native terminal index changed");
+		}
+		memory->Init(2, 1);
+		memory->Put(Memory::Owner + 0x28, 5u);
+		memory->Op(0, { 8, 3, 4 });
+		memory->Op(3, { 7, 4, 4 });
+		auto detail = memory->Start();
+		detail.BeforeSphere(Routine::SphereNotFullyInside, Memory::Planes, *memory);
+		detail.AfterSphere(Memory::Planes, true, *memory);
+		detail.Finish(true, *memory);
+		Check(!detail.terminalVerified && !detail.chainValid, "unused nonterminal storage was treated as a valid program");
+		memory->Op(3, { 2, 0, 0 });
+		memory->Put(Memory::Owner + 0x28, 3u);
+		detail = memory->Start();
+		detail.BeforeSphere(Routine::SphereNotFullyInside, Memory::Planes, *memory);
+		detail.AfterSphere(Memory::Planes, true, *memory);
+		detail.Finish(true, *memory);
+		Check(!detail.terminalVerified && detail.readFault, "terminal outside allocated storage was read");
+	}
+
+	void TestCapturedProgramCoverage()
+	{
+		auto memory = std::make_unique<Memory>();
+		memory->Init(200, 83);
+		memory->Put(Memory::Owner + 0x28, 210u);
+		memory->Put(Memory::Owner + 0xC5, std::uint8_t{ 1 });
+		for (std::uint32_t i = 0; i < 83; ++i) {
+			memory->Op(i * 2, { 8, i == 82 ? 201u : (i + 1) * 2, 202 });
+			memory->Op(i * 2 + 1, { i, 0, 0 });
+		}
+		memory->Op(201, { 2, 0, 0 });
+		memory->Op(202, { 3, 0, 0 });
+		auto detail = memory->Start();
+		Check(!detail.structure.truncated && detail.structure.copied == 200, "captured exterior program prefix is incomplete");
+		for (std::uint32_t i = 0; i < 83; ++i) {
+			Check(detail.BeforeSphere(Routine::SphereNotFullyInside, Memory::Planes + i * 0x70, *memory), "captured long chain stopped early");
+			detail.AfterSphere(Memory::Planes + i * 0x70, true, *memory);
+		}
+		detail.Finish(true, *memory);
+		Check(detail.terminalVerified && detail.planeCount == 83 && !detail.planeLimit && !detail.readFault, "captured exterior plane coverage is incomplete");
+		const auto constructed = ReadPlanes(detail.structure.header, 0, *memory);
+		Check(constructed.count == 83 && !constructed.truncated, "construction sample omitted captured plane sets");
+	}
+
 	void TestConcurrentPublication()
 	{
 		auto counters = std::make_unique<ThreadCounters>();
@@ -376,5 +438,7 @@ int main()
 	TestContexts();
 	TestNativeReads();
 	TestChangingNativeEvidence();
+	TestAllocatedTerminalSlots();
 	TestConcurrentPublication();
+	TestCapturedProgramCoverage();
 }

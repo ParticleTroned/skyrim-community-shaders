@@ -26,6 +26,7 @@
 #include "Features/ScreenshotFeature.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
+#include "Features/TerrainVariation.h"
 #include "Features/UnifiedWater.h"
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
@@ -798,6 +799,7 @@ namespace LightingExtensions
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
 			globals::state->UpdateLightingShaderPermutation(pass);
+			globals::features::terrainVariation.UpdateMeshPermutation(pass);
 
 			if (globals::game::isVR)
 				CSX::Api::BeginAcceptedDrawGeometry(pass);

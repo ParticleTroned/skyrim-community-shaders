@@ -138,6 +138,14 @@ evidence. A generated ETL alone does not prove complete or symbolized stacks.
    retaining boundary uncertainty. Report top stacks, wait causes, thread IDs,
    symbol gaps and lost events separately from fpsVR frame-time statistics.
 
+Scheduler reconstruction accepts an absolute accounting error of **10 ms**
+per **10,000 ms** tail window, including the boundary. Use the shared
+`tools/gameft-sw-analysis/scheduler_coverage.py` policy in the sibling
+`skyrim-vr-automation` repository. Preserve measured durations and signed
+errors. Reports must name the applied policy/tolerance; historical receipts
+keep their original verdicts. This user-requested rule replaces the former
+5 ms tolerance as of 2026-09-18 and does not change timing or health rules.
+
 After presenting the timing table, inspect trace finalization without another
 live game call:
 

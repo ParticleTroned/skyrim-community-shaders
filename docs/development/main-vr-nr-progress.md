@@ -131,3 +131,22 @@ disabled or skipped tests, plus preset and DLL/manifest checks. Build ID:
 The supplementary colour suite passed 21/21 CTest entries, including 26/26
 transaction joins; its nested Python image tests retain 26 dependency
 skips. Live matrix acceptance and telemetry overhead remain unmeasured.
+
+### Existing HMD evidence reconciled
+
+The user's follow-up identified latest perf-branch commit
+`60179f5b5289eaf8d42ffe030425f063edf3c6eb`. It already belongs to this
+branch's ancestry; its [HMD material/CPU/DLSS comparison](material-comparison-20260917/README.md)
+and ledgers 0006/0007 are unchanged here. These retain measured performance
+and complete portable receipts, even though external raw trace paths are
+unavailable on this machine. The earlier raw-NR inventory was too narrow
+to serve as an index of all prior HMD evidence.
+
+The portable audit passed 1,314 receipt reconstructions, 23 candidate
+windows and 69 late profile checks; it preserves one scheduler coverage
+flag and the missing interrupted Save 13. These historical whole-frame and
+WPR measurements inform future comparisons. Task 1's new NR per-region GPU
+timings and overhead remain unmeasured. The [transaction report](main-vr-nr-transaction-telemetry.md#retained-hmd-cpudlss-analysis)
+records exact producer identity, findings and scope. No new measurements,
+settings changes, branch migration, build, deployment or push occurred in
+this evidence review.

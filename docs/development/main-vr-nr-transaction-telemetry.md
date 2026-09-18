@@ -2,8 +2,8 @@
 
 ## Existing local runtime evidence
 
-The bounded local inventory on 18 September 2026 found the newest complete
-local NR measurement under:
+The bounded local raw-capture inventory on 18 September 2026 found the
+newest complete locally available NR run under:
 
 `C:/src/skyrim-community-shaders/build/validation/nr-live-20260915/roi-performance-dd47c7c61-20260915T212211Z`
 
@@ -66,11 +66,73 @@ The durable journal is
 `C:/Users/quartus/AppData/Local/CSX-VR-Automation/profiler-captures/f90d5bfa71cf6feb3dfcf91ec897b832/transaction.journal.json`.
 That failed capture supplies no completed profiler baseline.
 
-Reports dated 17 September describe bright/dark color experiments on
-another machine and refer to unavailable local `D:/` evidence. They do not
-replace the retained local measurement above. The integrated branch's
-subsequent successful builds and unit/WARP tests are implementation
-validation, not additional Skyrim runtime measurements.
+Reports dated 17 September also describe bright/dark color experiments on
+another machine and refer to raw `D:/` evidence unavailable here. That raw
+file limitation does not invalidate portable measurements retained in Git.
+The HMD CPU/DLSS analysis below is part of the existing evidence base. The
+integrated branch's subsequent builds and unit/WARP tests retain their
+separate implementation-validation scope.
+
+### Retained HMD CPU/DLSS analysis
+
+Following the user's pointer, a fresh fetch verified the latest
+`perf/cpu-dlss-regression-20260916` commit as
+`60179f5b5289eaf8d42ffe030425f063edf3c6eb`, dated 17 September 2026.
+It is already an ancestor of Task 1 documentation HEAD `7eaf87aa5`.
+Its [material-repeat report](material-comparison-20260917/README.md),
+[timing tables](material-comparison-20260917/tables.md),
+[WPR analysis](material-comparison-20260917/wpr-comparison.md) and immutable
+ledgers [0006](vr-render-scale-ledger-0006-investigation.csv) and
+[0007](vr-render-scale-ledger-0007-investigation.csv) are present unchanged.
+No checkout, merge or reconstruction of a replacement campaign is needed.
+
+This is substantial prior HMD performance evidence: three complete repeats
+and one interrupted repeat retain 23 valid ten-second windows, 69 late
+DLAA/DLSS mode checks, and comparisons with the original traced and later
+Balanced references. The wider WPR comparison covers 107 windows across
+18 retained runs. Its measured candidate compiled source is
+`6588831aabf472dff76340ed58aaf07075fccacd`, with Build ID
+`b78946fd101bdb509c418e23b7e3cd1b2d8a27e2fdaf8c270be05a56c472c733`,
+DLL SHA-256 `c758beea6c304dedb91d23f8f26868b23d380c8597eb2c016c8a593fd05f5cb6`
+and explicitly dirty digest
+`0a05e13e172fc466fc282a19879bea1f895a641f493829275aa9555db21848eb`.
+The reporting commit must not replace that producer identity.
+
+The retained analysis establishes the following constraints for NR work:
+
+-   No consistent material-change time saving is demonstrated. Relative to
+    the original traced reference, median DLSS GPU means rise by 0.392,
+    1.148 and 2.849 ms for saves 11, 12 and 13 respectively.
+-   fpsVR CPU latency, sampled work, scheduler execution, ready delay and
+    blocked waits have different meanings. Their deltas cannot be summed
+    into a single inferred CPU cost. Native visibility/rendering work is a
+    measured investigation target; the material change is not a proven cause.
+-   Active FOV+TAA centre differs between the candidate/original reference
+    (0.30) and later Balanced reference (0.60), with outer scale 0.70. The
+    later comparison therefore cannot isolate the material change. Source,
+    vendor bundle and settings identities must accompany future comparisons.
+-   Interrupted Save 13 has no valid window; its placeholders remain excluded.
+    Scheduler coverage passes 22/23 windows, retaining R1 Save 12 as
+    `REVIEW_REQUIRED`. Terminal success does not establish full-history or
+    physical-HMD visual qualification.
+-   WPR supplies CPU attribution and scheduling; fpsVR supplies whole-frame
+    timing. The report explicitly lacks GPU pass durations for inference,
+    preparation and composition. Task 1's new NR transaction and per-region
+    timing matrix therefore still needs its own producer-matched evidence.
+
+The existing portable audit was rerun here, without `--local`:
+
+```powershell
+python docs/development/material-comparison-20260917/verify.py
+```
+
+It passed: 1,314 receipt reconstructions, 23 candidate windows, 69 late
+profile checks, 107 WPR windows, 22 passing scheduler windows and one
+retained flag; historical cells are unchanged. Output is retained at
+`build/validation/nr-hmd-evidence-audit-20260918.log`. This validates the
+committed ledger reconstructions and comparisons. It does not rehash the
+original external raw traces or constitute a new HMD run. The original
+reports and ledgers remain authoritative and unmodified.
 
 ## Backend execution and timing contract
 

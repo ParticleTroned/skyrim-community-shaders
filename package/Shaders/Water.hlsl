@@ -1632,114 +1632,115 @@ DiffuseOutput GetWaterDiffuseColor(
 			FrameBuffer::DynamicResolutionParams1.xy / VPOSOffset.xy,
 			eyeIndex, refractionMinUV, refractionMaxUV))
 		return GetWaterDiffuseColorWithoutRefraction(normal, viewDirection, fresnel, waterColumnDepthUnits);
-
-	float2 fallbackRefractionUV = FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy * VPOSOffset.xy + VPOSOffset.zw;
-	refractionUvRaw = WaterRefraction::ClampUV(refractionUvRaw, fallbackRefractionUV, refractionMinUV, refractionMaxUV);
+	else {
+		float2 fallbackRefractionUV = FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy * VPOSOffset.xy + VPOSOffset.zw;
+		refractionUvRaw = WaterRefraction::ClampUV(refractionUvRaw, fallbackRefractionUV, refractionMinUV, refractionMaxUV);
 
 #				if defined(VR)
-	float2 refractionUvRawNoStereo = Stereo::ConvertFromStereoUV(refractionUvRaw, eyeIndex, 1);
+		float2 refractionUvRawNoStereo = Stereo::ConvertFromStereoUV(refractionUvRaw, eyeIndex, 1);
 #				endif
 
-	float2 screenPosition = FrameBuffer::DynamicResolutionParams1.xy * (FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy);
+		float2 screenPosition = FrameBuffer::DynamicResolutionParams1.xy * (FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy);
 
-	float2 refractionScreenPosition = FrameBuffer::DynamicResolutionParams1.xy * (refractionUvRaw / VPOSOffset.xy);
-	float4 refractionWorldPosition = float4(input.WPosition.xyz * depth / viewPosition.z, 0);
-	float refractionWaterColumnDepthUnits = waterColumnDepthUnits;
+		float2 refractionScreenPosition = FrameBuffer::DynamicResolutionParams1.xy * (refractionUvRaw / VPOSOffset.xy);
+		float4 refractionWorldPosition = float4(input.WPosition.xyz * depth / viewPosition.z, 0);
+		float refractionWaterColumnDepthUnits = waterColumnDepthUnits;
 
 #				if defined(DEPTH) && !defined(VERTEX_ALPHA_DEPTH)
-	float refractionRawDepth = GetRawScreenDepthWater(refractionScreenPosition);
-	float refractionDepth = ResolveScreenDepthWater(refractionRawDepth);
+		float refractionRawDepth = GetRawScreenDepthWater(refractionScreenPosition);
+		float refractionDepth = ResolveScreenDepthWater(refractionRawDepth);
 
 #					if !defined(VR)
-	float refractionDepthMul = length(float3((((VPOSOffset.zw + refractionUvRaw) * 2 - 1)) * refractionDepth / ProjData.xy, refractionDepth));
+		float refractionDepthMul = length(float3((((VPOSOffset.zw + refractionUvRaw) * 2 - 1)) * refractionDepth / ProjData.xy, refractionDepth));
 #					else
-	float refractionDepthMul = CalculateDepthMultFromUV(refractionUvRawNoStereo, refractionDepth, eyeIndex);
+		float refractionDepthMul = CalculateDepthMultFromUV(refractionUvRawNoStereo, refractionDepth, eyeIndex);
 #					endif  //VR
 
-	float3 refractionDepthAdjustedViewDirection = -viewDirection * refractionDepthMul;
-	float refractionViewSurfaceAngle = dot(refractionDepthAdjustedViewDirection, ReflectPlane[eyeIndex].xyz);
+		float3 refractionDepthAdjustedViewDirection = -viewDirection * refractionDepthMul;
+		float refractionViewSurfaceAngle = dot(refractionDepthAdjustedViewDirection, ReflectPlane[eyeIndex].xyz);
 
-	float refractionPlaneMul = (1 - ReflectPlane[eyeIndex].w / refractionViewSurfaceAngle);
-	float candidateRefractionWaterColumnDepthUnits =
-		refractionPlaneMul * abs(refractionViewSurfaceAngle);
-	float4 unclampedRefractionDistanceMul =
-		refractionPlaneMul *
-		float4(
-			length(refractionDepthAdjustedViewDirection).xx,
-			abs(refractionViewSurfaceAngle).xx) /
-		FogParam.z;
-	bool refractionDepthValid =
-		isfinite(refractionPlaneMul) &&
-		refractionPlaneMul >= 0.0 &&
-		isfinite(candidateRefractionWaterColumnDepthUnits) &&
-		all(isfinite(unclampedRefractionDistanceMul));
+		float refractionPlaneMul = (1 - ReflectPlane[eyeIndex].w / refractionViewSurfaceAngle);
+		float candidateRefractionWaterColumnDepthUnits =
+			refractionPlaneMul * abs(refractionViewSurfaceAngle);
+		float4 unclampedRefractionDistanceMul =
+			refractionPlaneMul *
+			float4(
+				length(refractionDepthAdjustedViewDirection).xx,
+				abs(refractionViewSurfaceAngle).xx) /
+			FogParam.z;
+		bool refractionDepthValid =
+			isfinite(refractionPlaneMul) &&
+			refractionPlaneMul >= 0.0 &&
+			isfinite(candidateRefractionWaterColumnDepthUnits) &&
+			all(isfinite(unclampedRefractionDistanceMul));
 
-	if (!refractionDepthValid) {
-		refractionUvRaw = fallbackRefractionUV;
-	} else {
-		depth = refractionDepth;
-		distanceMul = saturate(unclampedRefractionDistanceMul);
-		refractionWaterColumnDepthUnits =
-			candidateRefractionWaterColumnDepthUnits;
+		if (!refractionDepthValid) {
+			refractionUvRaw = fallbackRefractionUV;
+		} else {
+			depth = refractionDepth;
+			distanceMul = saturate(unclampedRefractionDistanceMul);
+			refractionWaterColumnDepthUnits =
+				candidateRefractionWaterColumnDepthUnits;
 
 #					if defined(VR)
-		refractionWorldPosition = mul(FrameBuffer::CameraViewProjInverse[eyeIndex], float4((refractionUvRawNoStereo * 2 - 1), refractionRawDepth, 1));
+			refractionWorldPosition = mul(FrameBuffer::CameraViewProjInverse[eyeIndex], float4((refractionUvRawNoStereo * 2 - 1), refractionRawDepth, 1));
 #					else
-		refractionWorldPosition = mul(FrameBuffer::CameraViewProjInverse[eyeIndex], float4((refractionUvRaw * 2 - 1) * float2(1, -1), refractionRawDepth, 1));
+			refractionWorldPosition = mul(FrameBuffer::CameraViewProjInverse[eyeIndex], float4((refractionUvRaw * 2 - 1) * float2(1, -1), refractionRawDepth, 1));
 #					endif
-		refractionWorldPosition.xyz /= refractionWorldPosition.w;
-	}
+			refractionWorldPosition.xyz /= refractionWorldPosition.w;
+		}
 
 #					if defined(HORIZON_FIX)
-	if (refractionRawDepth >= HorizonFix::EmptyDepthThreshold)
-		distanceMul = 1.0.xxxx;
+		if (refractionRawDepth >= HorizonFix::EmptyDepthThreshold)
+			distanceMul = 1.0.xxxx;
 #					endif
 #				endif
 
-	// The bounds already select the eye; inferring it again from a distorted UV can cross the seam.
-	float2 refractionUV = FrameBuffer::DynamicResolutionParams1.xy *
-	                      WaterRefraction::ClampUV(refractionUvRaw, fallbackRefractionUV, refractionMinUV, refractionMaxUV);
-	float3 refractionColor = RefractionTex.Sample(RefractionSampler, refractionUV).xyz;
-	float3 refractionDiffuseColor = lerp(Color::Water(ShallowColor.xyz), Color::Water(DeepColor.xyz), distanceMul.y);
+		// The bounds already select the eye; inferring it again from a distorted UV can cross the seam.
+		float2 refractionUV = FrameBuffer::DynamicResolutionParams1.xy *
+		                      WaterRefraction::ClampUV(refractionUvRaw, fallbackRefractionUV, refractionMinUV, refractionMaxUV);
+		float3 refractionColor = RefractionTex.Sample(RefractionSampler, refractionUV).xyz;
+		float3 refractionDiffuseColor = lerp(Color::Water(ShallowColor.xyz), Color::Water(DeepColor.xyz), distanceMul.y);
 #				if defined(UNIFIED_WATER)
-	refractionDiffuseColor = ApplyUnifiedWaterBaseTint(refractionDiffuseColor);
+		refractionDiffuseColor = ApplyUnifiedWaterBaseTint(refractionDiffuseColor);
 #				endif
-	float skylightingDiffuse = 1.0;
+		float skylightingDiffuse = 1.0;
 
-	if (!(Permutation::PixelShaderDescriptor & Permutation::WaterFlags::Interior)) {
+		if (!(Permutation::PixelShaderDescriptor & Permutation::WaterFlags::Interior)) {
 #				if defined(SKYLIGHTING)
-		float3 skylightingPosition = lerp(input.WPosition.xyz, refractionWorldPosition.xyz, noise);
+			float3 skylightingPosition = lerp(input.WPosition.xyz, refractionWorldPosition.xyz, noise);
 
 #					if defined(VR)
-		float3 positionMSSkylight = skylightingPosition + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
+			float3 positionMSSkylight = skylightingPosition + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
 #					else
-		float3 positionMSSkylight = skylightingPosition;
+			float3 positionMSSkylight = skylightingPosition;
 #					endif
 
-		sh2 skylightingSH = Skylighting::SampleNoBias(positionMSSkylight);
-		skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, float3(0, 0, 1), Skylighting::GetFadeOutFactor(input.WPosition.xyz));
+			sh2 skylightingSH = Skylighting::SampleNoBias(positionMSSkylight);
+			skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, float3(0, 0, 1), Skylighting::GetFadeOutFactor(input.WPosition.xyz));
 
-		float3 refractionDiffuseColorSkylight = Skylighting::MixDiffuse(skylightingDiffuse);
-		refractionDiffuseColor = Color::LinearToSkyrimGamma(Color::SkyrimGammaToLinear(refractionDiffuseColor) * refractionDiffuseColorSkylight);
+			float3 refractionDiffuseColorSkylight = Skylighting::MixDiffuse(skylightingDiffuse);
+			refractionDiffuseColor = Color::LinearToSkyrimGamma(Color::SkyrimGammaToLinear(refractionDiffuseColor) * refractionDiffuseColorSkylight);
 #				endif
-	}
+		}
 
 #				if defined(UNDERWATER)
-	float refractionMul = 0;
+		float refractionMul = 0;
 #				else
-	float refractionMul = 1 - pow(saturate((-distanceMul.x * FogParam.z + FogParam.z) / FogParam.w), FogNearColor.w);
+		float refractionMul = 1 - pow(saturate((-distanceMul.x * FogParam.z + FogParam.z) / FogParam.w), FogNearColor.w);
 #				endif
 
-	DiffuseOutput output;
-	output.refractionColor = refractionColor;
-	output.refractionDiffuseColor = refractionDiffuseColor;
-	output.depth = depth;
-	output.refractionMul = refractionMul;
-	float3 refractedViewDelta = refractionWorldPosition.xyz - input.WPosition.xyz;
-	output.refractedViewDirection = dot(refractedViewDelta, refractedViewDelta) > 1e-6 ? normalize(refractedViewDelta) : viewDirection;
-	output.skylightingDiffuse = skylightingDiffuse;
-	output.waterColumnDepthUnits = refractionWaterColumnDepthUnits;
-	return output;
+		DiffuseOutput output;
+		output.refractionColor = refractionColor;
+		output.refractionDiffuseColor = refractionDiffuseColor;
+		output.depth = depth;
+		output.refractionMul = refractionMul;
+		float3 refractedViewDelta = refractionWorldPosition.xyz - input.WPosition.xyz;
+		output.refractedViewDirection = dot(refractedViewDelta, refractedViewDelta) > 1e-6 ? normalize(refractedViewDelta) : viewDirection;
+		output.skylightingDiffuse = skylightingDiffuse;
+		output.waterColumnDepthUnits = refractionWaterColumnDepthUnits;
+		return output;
+	}
 #			else
 	return GetWaterDiffuseColorWithoutRefraction(normal, viewDirection, fresnel, waterColumnDepthUnits);
 #			endif

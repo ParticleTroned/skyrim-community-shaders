@@ -3,6 +3,7 @@
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
 #	include "Globals.h"
+#	include "Features/VRFrustumFastPath.h"
 #	include "State.h"
 #	include <cstring>
 #	include <memory>
@@ -141,6 +142,7 @@ namespace VRFrustumTelemetry
 			}
 			static __declspec(noinline) bool Detailed(void* owner, void* object, ThreadSlot& slot, RowKey key, std::uint64_t control, std::uint32_t frame)
 			{
+				VRFrustumFastPath::NativeScope nativeScope;
 				Detail detail;
 				detail.owner = reinterpret_cast<std::uintptr_t>(owner);
 				detail.object = reinterpret_cast<std::uintptr_t>(object);
@@ -343,6 +345,7 @@ namespace VRFrustumTelemetry
 	}
 	void SetEnabled(bool enabled) { SetControlBit(1, enabled); }
 	void SetDetailEnabled(bool enabled) { SetControlBit(2, enabled); }
+	void AdvanceCollectionGeneration() { g_control.fetch_add(4, std::memory_order_relaxed); }
 
 	void Install()
 	{
@@ -360,7 +363,7 @@ namespace VRFrustumTelemetry
 		// Prefixes and signatures come from the retained live VR 1.4.15 snapshot.
 		constexpr std::array<std::uint8_t, 16> compoundPrefix{ 0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x83, 0xBA, 0xF0, 0x00, 0x00, 0x00, 0x00, 0x48, 0x8B, 0xD9 };
 		constexpr std::array<std::uint8_t, 14> spherePrefix{ 0x41, 0x83, 0x78, 0x60, 0x00, 0x4C, 0x8B, 0xD2, 0x0F, 0x84, 0x81, 0x00, 0x00, 0x00 };
-		if (!MatchesPrefix(base + 0xDA33C0, compoundPrefix) ||
+		if ((!VRFrustumFastPath::IsInstalled() && !MatchesPrefix(base + 0xDA33C0, compoundPrefix)) ||
 			!MatchesPrefix(base + 0xDA5410, spherePrefix) || !MatchesPrefix(base + 0xDA54B0, spherePrefix)) {
 			g_installError.store(ERROR_INVALID_DATA);
 			return;

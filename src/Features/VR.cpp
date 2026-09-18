@@ -1,6 +1,7 @@
 #include "VR.h"
 #include "Diagnostics/VRPipelineDiagnostics.h"
 #include "DynamicCubemaps.h"
+#include "Features/VRFrustumFastPath.h"
 #include "FoveatedCommon.h"
 #include "GpuPass.h"
 #include "LocationContext.h"
@@ -440,6 +441,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableDepthBufferCullingExterior,
 	DepthCullingPerformanceMode,
 	DepthCullingLegacyMode,
+	FrustumFastPathEnabled,
 	MinOccludeeBoxExtent,
 	UnlockMenuPositionAndSize,
 	VRMenuScale,
@@ -623,6 +625,7 @@ void VR::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 	settings.EnableDepthBufferCullingInterior = a_enabled ? defaults.EnableDepthBufferCullingInterior : false;
 	settings.DepthCullingPerformanceMode = a_enabled ? defaults.DepthCullingPerformanceMode : true;
 	settings.DepthCullingLegacyMode = false;
+	settings.FrustumFastPathEnabled = false;
 	ApplyDepthCullingMode();
 	screenSpaceShadows.bendSettings.EnableFoveated = a_enabled ? screenSpaceShadowsDefaults.EnableFoveated : 0u;
 	screenSpaceShadows.enableStereoSync = false;
@@ -655,6 +658,7 @@ json VR::CapturePerformanceCostMeasurementState() const
 		{ "EnableDepthBufferCullingInterior", settings.EnableDepthBufferCullingInterior },
 		{ "DepthCullingPerformanceMode", settings.DepthCullingPerformanceMode },
 		{ "DepthCullingLegacyMode", settings.DepthCullingLegacyMode },
+		{ "FrustumFastPathEnabled", settings.FrustumFastPathEnabled },
 		{ "EnableSSShadowsFoveated", globals::features::screenSpaceShadows.bendSettings.EnableFoveated != 0 },
 		{ "EnableSSShadowsStereoSync", globals::features::screenSpaceShadows.enableStereoSync },
 		{ "EnableSSShadowsStereoReproject", globals::features::screenSpaceShadows.useStereoReproject },
@@ -685,6 +689,7 @@ void VR::RestorePerformanceCostMeasurementState(const json& a_state)
 	settings.EnableDepthBufferCullingInterior = a_state.value("EnableDepthBufferCullingInterior", settings.EnableDepthBufferCullingInterior);
 	settings.DepthCullingPerformanceMode = a_state.value("DepthCullingPerformanceMode", settings.DepthCullingPerformanceMode);
 	settings.DepthCullingLegacyMode = a_state.value("DepthCullingLegacyMode", settings.DepthCullingLegacyMode);
+	settings.FrustumFastPathEnabled = a_state.value("FrustumFastPathEnabled", settings.FrustumFastPathEnabled);
 	globals::features::screenSpaceShadows.bendSettings.EnableFoveated =
 		a_state.value("EnableSSShadowsFoveated", globals::features::screenSpaceShadows.bendSettings.EnableFoveated != 0) ? 1u : 0u;
 	globals::features::screenSpaceShadows.enableStereoSync = a_state.value("EnableSSShadowsStereoSync", globals::features::screenSpaceShadows.enableStereoSync);
@@ -1970,6 +1975,18 @@ namespace
 				}
 				ImGui::EndTable();
 			}
+		}
+
+		{
+			auto guard = Util::DisableGuard(!VRFrustumFastPath::IsInstalled() && !settings.FrustumFastPathEnabled);
+			if (ImGui::Checkbox("Experimental Frustum Fast Path", &settings.FrustumFastPathEnabled))
+				a_vr.SetFrustumFastPathEnabled(settings.FrustumFastPathEnabled);
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Off by default. Try reducing CPU work in eligible depth-pass frustum tests while preserving native visibility and plane masks. Other paths use the native evaluator.");
+			ImGui::TextUnformatted("Applies immediately. Save settings to keep this choice. Performance and visual validation are still pending.");
+			if (!VRFrustumFastPath::IsInstalled())
+				ImGui::TextUnformatted("Unavailable: the native VR implementation could not be verified.");
 		}
 
 		if (exteriorChanged || interiorChanged)
@@ -4614,8 +4631,15 @@ void VR::SetDepthCullingLegacyMode(bool a_enabled)
 	SetDepthCullingMode(mode);
 }
 
+void VR::SetFrustumFastPathEnabled(bool a_enabled)
+{
+	settings.FrustumFastPathEnabled = a_enabled;
+	VRFrustumFastPath::SetEnabled(a_enabled);
+}
+
 void VR::ApplyDepthCullingMode()
 {
+	SetFrustumFastPathEnabled(settings.FrustumFastPathEnabled);
 	SetDepthCullingMode(GetDepthCullingMode());
 }
 

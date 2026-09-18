@@ -6,6 +6,13 @@ ownership, render scale, quality, renderer locks or depth-culling policy.
 SE and AE install no native frustum hooks. Production builds without the
 bridge contain none of this storage, instrumentation or diagnostic reads.
 
+The separate, default-off [frustum fast-path experiment](vr-frustum-fast-path.md)
+has a production checkbox. Its verification and counters remain DevBench-only.
+Detailed telemetry samples force native evaluation; aggregate sphere counts
+exclude calls bypassed by the experiment. Changing its enable/verification
+mode advances collection generation. Do not mix counter intervals across
+modes or interpret bypassed sphere calls as objects or draws eliminated.
+
 ## Why schema 2 replaces schema 1
 
 The first measured build (`37ce48ff668609d96c82f86875eafbf5c5a1a706`)

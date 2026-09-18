@@ -2719,6 +2719,20 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE DEVBENCH_BRIDGE_ENABLED
     )
     add_controller_test(
+        vr_frustum_fast_path_test
+        VRFrustumFastPath
+        tests/vr_frustum_fast_path_test.cpp
+    )
+    target_compile_definitions(
+        vr_frustum_fast_path_test
+        PRIVATE
+            FRUSTUM_CASES="${PROJECT_SOURCE_DIR}/tests/data/vr_frustum_fast_path_cases.json"
+    )
+    target_link_libraries(
+        vr_frustum_fast_path_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    add_controller_test(
         vr_frustum_telemetry_off_test
         VRFrustumTelemetryOff
         tests/vr_frustum_telemetry_off_test.cpp

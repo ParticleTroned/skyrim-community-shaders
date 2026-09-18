@@ -6,6 +6,7 @@
 
 #include "Features/TerrainBlending.h"
 #include "Features/Upscaling.h"
+#include "Features/VRFrustumFastPath.h"
 #include "GpuPass.h"
 #include "State.h"
 #include "Util.h"
@@ -471,6 +472,7 @@ namespace FrameAnnotations
 
 	void OnPostPostLoad()
 	{
+		VRFrustumFastPath::Install();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		VRFrustumTelemetry::Install();
 #endif

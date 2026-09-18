@@ -177,6 +177,8 @@ public:
 	void SetDepthCullingPerformanceMode(bool a_enabled);
 	/** Select the native-result Legacy path and clear Performance Mode when enabled. */
 	void SetDepthCullingLegacyMode(bool a_enabled);
+	/** Select the native-equivalent experimental frustum evaluator. */
+	void SetFrustumFastPathEnabled(bool a_enabled);
 	/** Normalize persisted toggles and publish one effective temporal policy. */
 	void ApplyDepthCullingMode();
 	void TryApplyDepthBufferCullingCacheRefresh();
@@ -233,6 +235,7 @@ public:
 		bool EnableDepthBufferCullingExterior = true;  ///< Master depth-culling option; enabled in exteriors
 		bool EnableDepthBufferCullingInterior = true;  ///< Also enable depth culling in interiors
 		bool DepthCullingPerformanceMode = false;      ///< Accept native stale results instead of bounded recovery
+		bool FrustumFastPathEnabled = false;           ///< Experimental CPU traversal shortcut; no visibility cache
 		bool DepthCullingLegacyMode = false;           ///< Use native results without temporal pose capture or recovery
 		float MinOccludeeBoxExtent = 10.0f;            ///< Minimum bounding box size for occlusion culling
 

@@ -11,6 +11,8 @@ namespace VRFrustumTelemetry
 	void Install();
 	/** Toggle collection only; cumulative counters remain monotonic. */
 	void SetEnabled(bool a_enabled);
+	/** Toggle bounded detail samples independently of aggregate counts. */
+	void SetDetailEnabled(bool a_enabled);
 	/** Return bounded per-thread/pass/caller counters, coverage and attribution limits. */
 	nlohmann::json GetStatus();
 	/** Mark calling-thread pass context; renderer boundaries may sample the raw camera index. */

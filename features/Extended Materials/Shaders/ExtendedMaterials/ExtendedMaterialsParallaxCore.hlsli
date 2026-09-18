@@ -5,10 +5,10 @@
 float SampleMeshParallaxHeight(Texture2D<float4> tex, SamplerState samp, float2 uv, float mipLevel, uint channel, bool applyMeshTV, StochasticOffsets meshOffset)
 {
 #	if defined(TERRAIN_VARIATION)
-	[branch] if (applyMeshTV)
-		return StochasticHeightChannel(tex, samp, uv, mipLevel, channel, meshOffset);
+	[branch] if (applyMeshTV) return StochasticHeightChannel(tex, samp, uv, mipLevel, channel, meshOffset);
+	else
 #	endif
-	return tex.SampleLevel(samp, uv, mipLevel)[channel];
+		return tex.SampleLevel(samp, uv, mipLevel)[channel];
 }
 #endif
 
